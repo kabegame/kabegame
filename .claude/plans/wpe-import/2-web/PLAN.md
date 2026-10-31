@@ -1,6 +1,6 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归 2026-10-29 完成）；Phase 6b 已实现（2026-10-29，静态检查与单测通过；真机回归待重编 CEF 后进行）；Phase 6c 已实现（2026-10-30，Windows 真机 9/12 通过）；Phase 6d 方案已写（2026-10-30）；Phase 7 已实现（2026-10-31，静态检查与单测通过；真机回归待完全重启 dev 后进行）；Phase 8 为实现清单
+> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归 2026-10-29 完成）；Phase 6b 已实现（2026-10-29，静态检查与单测通过；真机回归待重编 CEF 后进行）；Phase 6c 已实现（2026-10-30，Windows 真机 9/12 通过）；Phase 6d 方案已写（2026-10-30）；Phase 7 已实现（2026-10-31，真机回归完成）；Phase 8 方案已写（2026-10-31，按 B 段 iframe 统一后的代码重写；关键决策 1 / 2 / 3 / 5 待确认）
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
@@ -12,10 +12,11 @@
 > - [`phase-4-file-host-input.md`](phase-4-file-host-input.md)：Phase 4 点级方案——桌面 `file://` 宿主与鼠标转发。
 > - [`phase-5-shim-host.md`](phase-5-shim-host.md)：Phase 5 点级方案——运行时垫片、`file:` 来源判定与受限 IPC、拉取 / 推送协议、预览桥。
 > - [`phase-6a-file-preview.md`](phase-6a-file-preview.md)：Phase 6a 点级方案——预览 iframe 改走 `file://`，与桌面共用运行时目录拦截。
-> - [`phase-6b-file-media.md`](phase-6b-file-media.md)：Phase 6b 点级方案——图库媒体改走 `file://`（CEF 补丁 0006 子资源工厂、按 frame 分档的运行时闸门、插件详情 iframe 收紧、删除 `/proxy`）。
-> - [`phase-6c-no-http.md`](phase-6c-no-http.md)：Phase 6c 点级方案——桌面完全摆脱本地 HTTP 服务（0006 私有 CORS 列表 + 跨源白名单放开 `fetch(file:)`、Tauri 命令 `read_plugin_file` 替代 `/plugin_file`、拖出 / 复制改 `file://`、删除 `start_http_server`）。
-> - [`phase-6d-windows-drag-out.md`](phase-6d-windows-drag-out.md)：Phase 6d 点级方案——Windows 拖出放弃 `DownloadURL`，改走 CEF 补丁 0003 的真实文件链路（aura 钩子放宽到 Windows、清 `html` / `download_metadata`、不打 `x-renderer-taint`；运行时 / 应用 cfg 去平台限制；前端 `effectAllowed=copy`、Web 保留 `DownloadURL`；resolver `is_file()`）。
+> - [`phase-6b-file-media.md`](phase-6b-file-media.md)：Phase 6b 点级方案——图库媒体改走 `file://`（CEF 补丁 06 子资源工厂、按 frame 分档的运行时闸门、插件详情 iframe 收紧、删除 `/proxy`）。
+> - [`phase-6c-no-http.md`](phase-6c-no-http.md)：Phase 6c 点级方案——桌面完全摆脱本地 HTTP 服务（06 私有 CORS 列表 + 跨源白名单放开 `fetch(file:)`、Tauri 命令 `read_plugin_file` 替代 `/plugin_file`、拖出 / 复制改 `file://`、删除 `start_http_server`）。
+> - [`phase-6d-windows-drag-out.md`](phase-6d-windows-drag-out.md)：Phase 6d 点级方案——Windows 拖出放弃 `DownloadURL`，改走 CEF 补丁 03 的真实文件链路（aura 钩子放宽到 Windows、清 `html` / `download_metadata`、不打 `x-renderer-taint`；运行时 / 应用 cfg 去平台限制；前端 `effectAllowed=copy`、Web 保留 `DownloadURL`；resolver `is_file()`）。
 > - [`phase-7-user-properties.md`](phase-7-user-properties.md)：Phase 7 点级方案——用户属性存储、属性面板、显示条件、本地化、`file` / `directory` 属性。
+> - [`phase-8-audio-media.md`](phase-8-audio-media.md)：Phase 8 点级方案——Channel 订阅（预览与桌面的网页壁纸 iframe 直接订阅、按 frame 释放，tauri 补丁 18 增补公开 `CallerFrame`）、WASAPI 回环频谱、系统媒体会话、「媒体集成」设置。
 > - `phase-N-<名称>.md`：其余 Phase 开工前的点级方案（待写）。
 
 ## 总体设计思路
@@ -123,7 +124,7 @@ function isVideoTarget(target: WallpaperTarget): boolean {
 }
 ```
 
-**f. CEF 运行时的 IPC 垫片只注入主 frame**（`src-tauri/tauri-runtime-cef/src/ipc.rs:61`）
+**f. CEF 运行时的 IPC 垫片只注入主 frame**（`src-tauri/tauri-runtime-kbcef/src/ipc.rs:61`）
 ```rust
     pending.webview_attributes.initialization_scripts.insert(
         0,
@@ -155,15 +156,15 @@ Tauri 自身的 `__TAURI_INTERNALS__` 初始化脚本是否同样只进主 frame
 | Phase 1 | 接口整理（公开资料 + 本机样例 + 运行环境调研） | `API.md` 与兼容矩阵；三个难点的方案建议 | — |
 | Phase 2 | 壁纸窗口 Vue 化 | 同 `index.html` 分发；`WallpaperStage`（纯渲染）/ `WallpaperWindow`（IPC 根）；删除 `wallpaper.html` / `wallpaper.ts`；壁纸行为不变 | — |
 | Phase 3 | Web 导入 + 预览内嵌 | `x-wpe/web` 入库；`WallpaperStage` 加跨源 iframe 分支；`ImageContent` 对非视频 WPE 行切到 `WpeWallpaperContent`；预览「桌面画布」；`/wpe` 补网页 MIME；CSP `frame-src` 放行本地 HTTP 源 | Phase 2 |
-| Phase 4 | 桌面 `file://` 宿主 + 鼠标转发 | CEF 补丁 0004 按浏览器开文件访问；壁纸窗口对网页壁纸主 frame 导航到 `file://` 入口、切走导航回应用页；运行时按壁纸目录拦截 `file:` 请求、`file://` 文档不注入 Tauri 脚本；Windows 桌面鼠标移动 / 左键点击转发 | Phase 3 |
+| Phase 4 | 桌面 `file://` 宿主 + 鼠标转发 | CEF 补丁 04 按浏览器开文件访问；壁纸窗口对网页壁纸主 frame 导航到 `file://` 入口、切走导航回应用页；运行时按壁纸目录拦截 `file:` 请求、`file://` 文档不注入 Tauri 脚本；Windows 桌面鼠标移动 / 左键点击转发 | Phase 3 |
 | Phase 5 | 运行时垫片与宿主协议 | all-frames 垫片；`file:` 来源判定 + `wpe-web-capability`；桌面「拉取命令 + `listen` 推送」、预览「`postMessage` ↔ 父页面调命令」；作者默认值与界面语言 | Phase 4 |
 | Phase 6 | 桌面窗口收尾（暂时跳过） | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 5 |
-| Phase 6a | 预览 iframe 改 `file://` | 主窗口登记两项文件访问能力（0004 + CEF 补丁 0005）、`set_wpe_web_preview` 设根目录并返回入口、前端给 iframe 赋 `src`、CSP `file:`；预览与桌面同一套 Rust 拦截，`localStorage` 同源；删除 `/wpe` 目录服务 | Phase 5 |
-| Phase 6b | 图库媒体改 `file://` | CEF 补丁 0006 给应用页主 frame 加 `file:` 子资源工厂；运行时闸门按发起 frame 分档（应用页主 frame 免检、子 frame 导航与 `file:` 文档按根目录）；三个桌面平台与壁纸窗口都登记 0005；前端桌面媒体 URL 改 `file:///`、`fetch` / 拖出 / `/plugin_file` 走显式 HTTP 出口；插件详情 iframe 去 `allow-same-origin` + 内层 CSP；删除 `/proxy` | Phase 6a |
-| Phase 6c | 桌面零 HTTP | 修订 0006（工厂带该文档 origin 的私有 CORS 列表）+ 运行时登记 CEF 跨源白名单（应用 origin → `file`）放开 `fetch(file:)`；插件文件改 Tauri 命令 `read_plugin_file`（IPC 原始字节、前端按坐标缓存 blob / 文本，不加新 scheme；核心层纯函数与 Android / Web 的 axum 共用）；复制兜底与 Windows 拖出改 `file://`；删除 `start_http_server` / 桌面版 `get_http_server_base_url`；关闭无人使用的 Tauri asset 协议（`protocol-asset` feature + `assetProtocol` 配置 + runtime scheme 列表）；CSP `connect-src` 去 `127.0.0.1`、加 `file:` | Phase 6b |
-| Phase 6d | Windows 拖出走真实文件 | CEF 补丁 0003 的 aura 钩子放宽到 `IS_WIN`，delegate 注入文件时另清 `html` / `download_metadata`、不打 Windows 的 `chromium/x-renderer-taint`；运行时 `on_start_dragging` 与应用 resolver 安装去掉 Linux / macOS 限制；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`；resolver 收紧为普通文件 | Phase 6c |
+| Phase 6a | 预览 iframe 改 `file://` | 主窗口登记两项文件访问能力（04 + CEF 补丁 05）、`set_wpe_web_preview` 设根目录并返回入口、前端给 iframe 赋 `src`、CSP `file:`；预览与桌面同一套 Rust 拦截，`localStorage` 同源；删除 `/wpe` 目录服务 | Phase 5 |
+| Phase 6b | 图库媒体改 `file://` | CEF 补丁 06 给应用页主 frame 加 `file:` 子资源工厂；运行时闸门按发起 frame 分档（应用页主 frame 免检、子 frame 导航与 `file:` 文档按根目录）；三个桌面平台与壁纸窗口都登记 05；前端桌面媒体 URL 改 `file:///`、`fetch` / 拖出 / `/plugin_file` 走显式 HTTP 出口；插件详情 iframe 去 `allow-same-origin` + 内层 CSP；删除 `/proxy` | Phase 6a |
+| Phase 6c | 桌面零 HTTP | 修订 06（工厂带该文档 origin 的私有 CORS 列表）+ 运行时登记 CEF 跨源白名单（应用 origin → `file`）放开 `fetch(file:)`；插件文件改 Tauri 命令 `read_plugin_file`（IPC 原始字节、前端按坐标缓存 blob / 文本，不加新 scheme；核心层纯函数与 Android / Web 的 axum 共用）；复制兜底与 Windows 拖出改 `file://`；删除 `start_http_server` / 桌面版 `get_http_server_base_url`；关闭无人使用的 Tauri asset 协议（`protocol-asset` feature + `assetProtocol` 配置 + runtime scheme 列表）；CSP `connect-src` 去 `127.0.0.1`、加 `file:` | Phase 6b |
+| Phase 6d | Windows 拖出走真实文件 | CEF 补丁 03 的 aura 钩子放宽到 `IS_WIN`，delegate 注入文件时另清 `html` / `download_metadata`、不打 Windows 的 `chromium/x-renderer-taint`；运行时 `on_start_dragging` 与应用 resolver 安装去掉 Linux / macOS 限制；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`；resolver 收紧为普通文件 | Phase 6c |
 | Phase 7 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性（两种宿主都生效） | Phase 6a |
-| Phase 8 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 6 |
+| Phase 8 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 5（不依赖 Phase 6） |
 | — | RGB 外设、鼠标交互 | 空实现 / 暂不做（见待定决策） | — |
 
 Phase 2 不涉及 Web 壁纸，但它是后面所有渲染的落点；Phase 3 落地后，Web 壁纸在预览和桌面里都能显示「无属性」状态的页面，用来验证目录服务、MIME 和隔离；Phase 5 再补属性。
@@ -285,7 +286,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 
 ### Phase 4 — 桌面 `file://` 宿主 + 鼠标转发
 点级方案见 [phase-4-file-host-input.md](phase-4-file-host-input.md)。要点：
-- CEF 补丁 0004（已写、已编译）：建窗 `extra_info` 的 `kabegame.allow_file_access_from_file_urls` 按浏览器打开文件访问偏好。
+- CEF 补丁 04（已写、已编译）：建窗 `extra_info` 的 `kabegame.allow_file_access_from_file_urls` 按浏览器打开文件访问偏好。
 - 运行时：按 label 登记「允许 `file://` 文档」的窗口与当前允许根目录；`file:` 资源请求越界取消；`file://` 文档不注入初始化脚本；
   公开鼠标注入 API。
 - 应用：Rust 侧 `WpeWebHost` 是壁纸窗口导航的唯一属主——当前壁纸是 `x-wpe/web` 就导航到 `file://` 入口，否则导航回应用页；
@@ -305,7 +306,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - 运行时把 `file:` 文档的 IPC `Origin` 写成远程 `file:` 来源（否则回退到应用页、被当成本地来源拿到全部权限；起初按 frame URL 改写，导航后有竞态，Phase 7 回归后改为按发起方 origin `request_initiator` 覆写），
   并删除 Phase 4 的「`file:` 文档不注入初始化脚本」规则。
 - 新增 `wpe-web-capability`（壁纸窗口 + 远程 `file:///*`）：只开 `wpe_web_pull_state` 与事件 `listen` / `unlisten`。
-- Tauri 不在导航时清 JS 事件监听：补丁 0011 加 `clear_js_listeners()`，`WallpaperWindow` 每次导航成功后调用。
+- Tauri 不在导航时清 JS 事件监听：补丁 11 加 `clear_js_listeners()`，`WallpaperWindow` 每次导航成功后调用。
 - 状态 `{ imageId, user, general: { language } }` 只在 Rust 侧计算；`fps`、暂停留给 Phase 6。
 
 ### Phase 6 — 桌面窗口收尾
@@ -324,7 +325,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 点级方案见 [phase-6a-file-preview.md](phase-6a-file-preview.md)。HTTP 页面引用 `file:` 在渲染进程就被拦、Rust 侧无钩子，
 所以预览也改成 `file:` 文档：主窗口 `allow_file_documents("main")`，预览挂载 / 卸载经 `set_wpe_web_preview` 设 / 清根目录，
 垫片按「非顶层 `file:`」判定预览，桥 `postMessage` 用 `"*"`。IPC 三道闸门不受 scheme 影响。真机证实应用页给子 frame 赋
-`file:` 的 `src` 同样被 `CanDisplay` 拦下（浏览器侧还有 `FilterURL` 改写成 `about:blank#blocked`）；改为 CEF 补丁 0005
+`file:` 的 `src` 同样被 `CanDisplay` 拦下（浏览器侧还有 `FilterURL` 改写成 `about:blank#blocked`）；改为 CEF 补丁 05
 （主窗口建窗前 `allow_app_local_resources("main")`，渲染侧 `GrantLoadLocalResources`、浏览器侧 `GrantRequestScheme(file)`），
 该命令设好根目录后返回入口、前端赋 `src`；`WallpaperTarget.webEntry` 随之删除（见 phase-6a「实施记录」，含已撤掉的
 浏览器进程导航绕行）。
@@ -332,13 +333,13 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 其它平台对 `x-wpe/*` 只显示预览图。
 
 ### Phase 6b — 图库媒体改 `file://`
-> 状态：已实现（2026-10-29），静态检查与单测通过；真机回归（需用户重编 CEF 带上 0006 后完全重启 dev）见 `versions/latest/regression.md`。依赖 Phase 6a。
+> 状态：已实现（2026-10-29），静态检查与单测通过；真机回归（需用户重编 CEF 带上 06 后完全重启 dev）见 `versions/latest/regression.md`。依赖 Phase 6a。
 
-点级方案见 [phase-6b-file-media.md](phase-6b-file-media.md)。0005 落地后实测应用页 `<img src=file:>` 已过 `CanDisplay`
+点级方案见 [phase-6b-file-media.md](phase-6b-file-media.md)。05 落地后实测应用页 `<img src=file:>` 已过 `CanDisplay`
 但报 `ERR_UNKNOWN_URL_SCHEME`（非 `file:` 文档没有 `file:` 子资源工厂）。用户定下的形态：**主 frame 完全放开，子 frame 按根目录限制**。
-CEF 补丁 0006 在 `ChromeContentBrowserClientCef` 覆写 `RegisterNonNetworkSubresourceURLLoaderFactories`，沿用 0005 的键；运行时
+CEF 补丁 06 在 `ChromeContentBrowserClientCef` 覆写 `RegisterNonNetworkSubresourceURLLoaderFactories`，沿用 05 的键；运行时
 `resource_request_handler` 按 `frame.is_main()` / `is_navigation` / `request_initiator` 分三档，不按 frame id 建表（导航换进程会换 id）。
-三个桌面平台与壁纸窗口都登记 0005。前端桌面媒体 URL 直接 `file:///`，仍需 `fetch` 或交给外部的路径（Web 下载、复制兜底、
+三个桌面平台与壁纸窗口都登记 05。前端桌面媒体 URL 直接 `file:///`，仍需 `fetch` 或交给外部的路径（Web 下载、复制兜底、
 Windows 拖出 `DownloadURL`、`/plugin_file`）走显式 `*ToHttpUrl`；本地 HTTP 服务不退役。插件详情 EJS iframe 去掉 `allow-same-origin`、
 加内层 CSP（`connect-src 'none'`，元素级远程图片照常），不再继承应用页的 `file:` 显示权；`/proxy` 开放代理删除（用户确认不需要 fetch 代理端点）。
 
@@ -348,11 +349,11 @@ Windows 拖出 `DownloadURL`、`/plugin_file`）走显式 `*ToHttpUrl`；本地 
 点级方案见 [phase-6c-no-http.md](phase-6c-no-http.md)。用户要求桌面不再起本地 HTTP、应用页能 `fetch(file:)` 读字节。调研：渲染侧
 已通（CEF Chrome runtime 的 extensions `Dispatcher` 把 `file` 注册为 fetch-API scheme），卡在浏览器侧两道 CORS 闸——CEF
 `ProxyURLLoaderFactory` 的跨源白名单（运行时建窗时 `CefAddCrossOriginWhitelistEntry(应用 origin, "file", "", true)`）与
-`FileURLLoaderFactory` 自己的列表（0006 改为给工厂实例一份只含该文档 origin 的私有列表；`nullptr` 不放行且 DCHECK）。不需要第三个补丁。
+`FileURLLoaderFactory` 自己的列表（06 改为给工厂实例一份只含该文档 origin 的私有列表；`nullptr` 不放行且 DCHECK）。不需要第三个补丁。
 `/plugin_file` 改 Tauri 命令 `read_plugin_file`（用户指定不加新 scheme，2026-10-30）：返回 `tauri::ipc::Response` 原始字节，CEF
 runtime 的 `ipc://` 主通道原生支持 raw 响应；前端按坐标缓存 blob URL / 文本，`PluginDocRenderer` 与 banner 走马灯改成先取 URL 再渲染，
 门禁由 ACL 现成提供；读取逻辑抽成核心层纯函数与 Android / Web 的 axum 共用。复制兜底直接 `fetch(file:)`，Windows 拖出 `DownloadURL`
-带 `file://`（真机失败：延迟渲染下载能完成，资源管理器仍拿不到文件；已另立 Phase 6d 把 0003 扩到 Windows）；6b 的 `*ToHttpUrl` 出口撤回；CSP `connect-src` 去 `127.0.0.1`、加 `file:`；
+带 `file://`（真机失败：延迟渲染下载能完成，资源管理器仍拿不到文件；已另立 Phase 6d 把 03 扩到 Windows）；6b 的 `*ToHttpUrl` 出口撤回；CSP `connect-src` 去 `127.0.0.1`、加 `file:`；
 顺带关掉 Tauri asset 协议（用户指定：`protocol-asset` feature、`assetProtocol` 配置、runtime 的 `asset` scheme，前端从未使用而它对所有 webview 开放 `**`）。
 
 ### Phase 6d — Windows 拖出走真实文件
@@ -360,7 +361,7 @@ runtime 的 `ipc://` 主通道原生支持 raw 响应；前端按坐标缓存 bl
 
 点级方案见 [phase-6d-windows-drag-out.md](phase-6d-windows-drag-out.md)。两轮 `DEBUG-dragout` 插桩证实 Windows 的 `DownloadURL`
 延迟渲染下载能跑完（文件落在 `%TEMP%\chrome_drag…`），资源管理器松手后仍没有文件；运行时下载处理器还会把强制临时路径改成相对建议名。
-用户决定放弃这条路，改把 0003 扩到 Windows：Windows 与 Linux 共用 `web_contents_view_aura.cc`，内层补丁把钩子门控放宽到 `IS_WIN`，
+用户决定放弃这条路，改把 03 扩到 Windows：Windows 与 Linux 共用 `web_contents_view_aura.cc`，内层补丁把钩子门控放宽到 `IS_WIN`，
 delegate 注入文件时另清 `html`（`CF_HTML`）与 `download_metadata`（第二份延迟渲染 `CF_HDROP`），Windows 不打跨进程可见的
 `chromium/x-renderer-taint`。CEF API 与 cef-rs 三平台 bindings 不变；运行时 `on_start_dragging` 与应用 resolver 安装去掉 Linux / macOS 限制，
 resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`。
@@ -385,12 +386,14 @@ resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台
 - 不做：视频行的属性面板（`get_current_wallpaper_target` 不改）、紧凑布局、目录监视。
 
 ### Phase 8 — 音频可视化与媒体集成
-- **新增**（后端，Windows 优先）
-  - 系统音频回环采集（WASAPI loopback）→ 每声道 64 段频谱、约 30 次每秒；只在当前壁纸声明了
-    `supportsaudioprocessing` 时启动，切走或暂停即停止。
+点级方案见 [phase-8-audio-media.md](phase-8-audio-media.md)。
+- **新增**（后端，Windows）
+  - 系统音频回环采集（WASAPI loopback）→ 每声道 64 段频谱、约 30 次每秒；只在有页面订阅、且该壁纸声明了
+    `supportsaudioprocessing` 时运行，最后一个订阅离开即停止。
   - 系统媒体会话（`GlobalSystemMediaTransportControlsSessionManager`）：标题 / 艺人 / 封面 / 播放状态 / 进度，
     变化时推送；封面主色由 Kabegame 计算。
-  - 数据经 Tauri 事件推到壁纸窗口，再由 `WpeWebHost` 转给 iframe。
+  - 传输：预览与桌面的网页壁纸 iframe 在页面登记监听时直接调 `wpe_web_media_subscribe`，交出 Tauri Channel，
+    数据只推回该 frame；订阅归属调用方 frame，`SubframeDestroyed` 即释放（tauri 补丁 18 增补公开 `ipc::CallerFrame`）。
 - **新增**（设置）
   - 「媒体集成」开关，对应页面收到的 `{ enabled }`。
 - **不做**：Linux / macOS 的音频与媒体集成（WPE 本身不支持这些平台），注册函数照常存在、永不回调。
@@ -417,7 +420,7 @@ resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台
    本 Phase 不支持；背景层退回缩略图；web 层不参与双层过渡；加 `sandbox`；IPC 主 frame / 白名单源校验纳入 Phase 3。
 
 8. **桌面网页壁纸走 `file://` 主 frame**（2026-10-27）：用户确认安全面可接受。壁纸窗口显示 `x-wpe/web` 时主 frame 直接导航到
-   壁纸目录的入口 `file://`，与 WPE 进程模型一致；文件访问由 CEF 补丁 0004 只对壁纸窗口开启，越界读取由运行时按壁纸目录拦截。
+   壁纸目录的入口 `file://`，与 WPE 进程模型一致；文件访问由 CEF 补丁 04 只对壁纸窗口开启，越界读取由运行时按壁纸目录拦截。
    图库预览仍用 HTTP 跨源 iframe（2026-10-28 追记：Phase 6a 起预览也改 `file:` iframe，见 [phase-6a-file-preview.md](phase-6a-file-preview.md)）。先导实验与补丁依据见 [API.md §5.2](API.md)。
 9. **桌面鼠标转发第一版只做移动 + 左键**（2026-10-27）：照 WPE 的轮询方式，不装键盘钩子，不转发滚轮。
 10. **宿主协议不照搬 WPE，自己用 Tauri 实现**（2026-10-27）：
@@ -439,7 +442,8 @@ resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台
    2026-10-28 追记：Phase 6a 把预览也改成 `file:` 源后与桌面同源，`kb-wpe` 不再需要。
 5. ~~**用户属性存储**~~ 已定（2026-10-26）：见已确认决策 6。
 6. ~~**桌面鼠标交互**~~ 已定（2026-10-27）：见已确认决策 9，Phase 4 实现。
-7. **Phase 8 是否纳入第二阶段**：音频与媒体集成成本最高、Rust 侧全新，可以推到 Scene 之后。
+7. ~~**Phase 8 是否纳入第二阶段**~~ 已定（2026-10-31）：纳入，并在 Phase 6 之前先做（没有多显示器，Phase 6 继续跳过）。
+   原文：音频与媒体集成成本最高、Rust 侧全新，可以推到 Scene 之后。
 
 ## 待验证
 

@@ -1,18 +1,18 @@
 # Phase 6c — 桌面完全摆脱本地 HTTP 服务：`fetch(file:)` 放开、插件文件走 Tauri 命令
 
-> 状态：代码与文档已实施（2026-10-30），待 CEF 补丁管理器重放与真机验证。上级：[PLAN.md](PLAN.md)。**依赖 Phase 6b 落地**（补丁 0006、按 frame 分档的闸门、
-> `*ToHttpUrl` 出口、插件 iframe 收紧、`/proxy` 删除）——本 Phase 以 6b 之后的代码为基线，并修订 6b 的两处产物（0006 的
+> 状态：代码与文档已实施（2026-10-30），待 CEF 补丁管理器重放与真机验证。上级：[PLAN.md](PLAN.md)。**依赖 Phase 6b 落地**（补丁 06、按 frame 分档的闸门、
+> `*ToHttpUrl` 出口、插件 iframe 收紧、`/proxy` 删除）——本 Phase 以 6b 之后的代码为基线，并修订 6b 的两处产物（06 的
 > CORS 列表参数、前端 `*ToHttpUrl` 出口）。
 >
 > 起因（用户，2026-10-29）：桌面 standard 版（Windows / macOS / Linux，CEF）**完全不再启动本地 HTTP 服务**，应用页允许
-> `fetch(file://…)` 动态读本地文件。调研结论（见「现状锚点」）：放开 `fetch(file:)` 不需要第三个 CEF 补丁，只需修订 0006 的
+> `fetch(file://…)` 动态读本地文件。调研结论（见「现状锚点」）：放开 `fetch(file:)` 不需要第三个 CEF 补丁，只需修订 06 的
 > CORS 列表并在运行时登记一条 CEF 跨源白名单；本地 HTTP 剩余的三个用途（`/plugin_file`、复制兜底的 `fetch`、Windows 拖出的
 > `DownloadURL`）分别改走 Tauri 命令（IPC 原始字节 + 前端 blob URL，不加新 scheme）、`fetch(file:)`、`file://` URL。
 >
 > **不动**：Android（Kotlin loopback + Rust `/plugin_file` 转发）、Web 版（`file_routes_web`、CDN）、桌面应用 Web 服务器
 > （`web_server_service.rs` 的 `file_routes_media()`，供 MCP / 外部客户端）。
 >
-> **不做**：Windows 真实文件拖出（把补丁 0003 的 aura 段扩到 Windows）——先验证 `DownloadURL` 直接带 `file://` 能否成立，不行再
+> **不做**：Windows 真实文件拖出（把补丁 03 的 aura 段扩到 Windows）——先验证 `DownloadURL` 直接带 `file://` 能否成立，不行再
 > 单独立项（本文末「备选」）。顺带关闭无人使用、却对所有 webview 开放 `**` 的 Tauri asset 协议（点 4b）。
 
 ## 总体设计思路
@@ -21,17 +21,17 @@
 兜底 `fetch`、Windows 拖出写进 `DownloadURL` 的地址。本 Phase 把这三样各自换掉，然后把 `start_http_server` 整个删掉。
 
 **`fetch(file:)` 怎么放开。** 渲染进程这一侧其实已经通了：CEF Chrome runtime 的 extensions `Dispatcher` 无条件把 `file` 注册为
-支持 Fetch API 的 scheme，`fetch()` 走 `PerformHTTPFetch`、mode 保持 `cors`；0005 又放开了 `CanDisplay`。真机报的
-`Cross origin requests are only supported for protocol schemes` 来自浏览器侧。0006 之后请求会先后过两道门：
+支持 Fetch API 的 scheme，`fetch()` 走 `PerformHTTPFetch`、mode 保持 `cors`；05 又放开了 `CanDisplay`。真机报的
+`Cross origin requests are only supported for protocol schemes` 来自浏览器侧。06 之后请求会先后过两道门：
 1. CEF `ProxyURLLoaderFactory` 在 `Restart` 里对跨源、非 no-cors、非 CORS-enabled scheme 的请求查 CEF 自己的跨源白名单，
    没有就直接报 `kCorsDisabledScheme`——连 `OnBeforeResourceLoad` 都到不了。运行时在建主窗口时登记
    `CefAddCrossOriginWhitelistEntry(<应用 origin>, "file", "", allow_subdomains=true)`（空 host + 允许子域 = 任意 host，`file:///`
    与 UNC 都匹配）。
 2. `FileURLLoaderFactory` 自己判 CORS：initiator 不是 `file` 同源时查它持有的 `SharedCorsOriginAccessList`；传 `nullptr` 不放行
-   （且 debug 构建 DCHECK），profile 的共享列表 CEF 从不写入、也不放行。所以 0006 改为给这个工厂实例 `Create()` 一份**私有**
+   （且 debug 构建 DCHECK），profile 的共享列表 CEF 从不写入、也不放行。所以 06 改为给这个工厂实例 `Create()` 一份**私有**
    列表，只登记「该 frame 的 origin → `file` scheme 任意 host」，不碰 profile 共享列表、不扩散到网络服务。
 两道都过后 `response_type = kBasic`，`Response.type` 为 `"basic"`，body 可读；XHR 同理。副作用只有一个：跨源白名单按 origin
-全局生效，应用 origin 在任何渲染进程里的 `CanDisplay(file:)` 都为真——但只有带 0005 / 0006 的 browser 有 `file` 工厂与请求权，
+全局生效，应用 origin 在任何渲染进程里的 `CanDisplay(file:)` 都为真——但只有带 05 / 06 的 browser 有 `file` 工厂与请求权，
 别处拿不到字节；应用 origin 只属于我们自己的页面。生产 CSP 的 `connect-src` 必须显式加 `file:`（`*` 不匹配 `file:`；dev 桌面
 没有 Tauri 注入的 CSP，容易漏测）。
 
@@ -45,8 +45,8 @@ surf / crawler 窗口根本调不到），不需要 CORS 头。代价：`pluginF
 
 **拖出与复制。** 6b 为了保 HTTP 做的 `*ToHttpUrl` 出口在本 Phase 撤回：复制兜底直接 `fetch(fileToUrl(...))`（现在能读字节）；
 Windows 拖出回到用媒体元素的 `currentSrc`（已是 `file://`）写 `DownloadURL`——`PrepareDragForDownload` → `DragDownloadFile` →
-`DownloadManager::DownloadUrl` 会按发起 frame 调 `RegisterNonNetworkSubresourceURLLoaderFactories`，0006 的工厂对主 frame 同样
-生效，下载是 no-cors、不受 CORS 列表影响。这一条只有真机能证实，失败的备选是把补丁 0003 扩到 Windows（文末）。
+`DownloadManager::DownloadUrl` 会按发起 frame 调 `RegisterNonNetworkSubresourceURLLoaderFactories`，06 的工厂对主 frame 同样
+生效，下载是 no-cors、不受 CORS 列表影响。这一条只有真机能证实，失败的备选是把补丁 03 扩到 Windows（文末）。
 
 **删 HTTP 服务。** `start_http_server` 只在 `lib.rs` 一处启动、挂的是 `file_routes()`；`file_routes_media()`（Web 服务器）与
 `file_routes_web()`（Web 版）都不依赖它。删掉 `start_http_server` / `HTTP_SERVER_PORT` / `file_routes` / 桌面版
@@ -88,7 +88,7 @@ Windows 拖出回到用媒体元素的 `currentSrc`（已是 `file://`）写 `Do
 ```
 `CreateFileURLLoaderFactory(profile_path, list)` 每次 `new` 一个实例，列表是实例成员，不影响 profile 共享列表。`file_url_loader.h:74-77` 关于「nullptr 放行所有 CORS」的注释与代码矛盾，以代码为准。
 
-**d. 6b 的 0006 传的是 profile 共享列表**（`third-patches/cef/0006-app-page-file-subresources.patch`，6b 落地后的形态）
+**d. 6b 的 06 传的是 profile 共享列表**（`third-patches/cef/06-app-page-file-subresources.patch`，6b 落地后的形态）
 ```cpp
   content::BrowserContext* browser_context = rfh->GetBrowserContext();
   factories->emplace(url::kFileScheme,
@@ -98,7 +98,7 @@ Windows 拖出回到用媒体元素的 `currentSrc`（已是 `file://`）写 `Do
 
 **e. `OriginAccessEntry` 对 `file:///` 的匹配**（`services/network/public/cpp/cors/origin_access_entry.cc:91-115`）：scheme 相等 → 空 host + `kAllowSubdomains` 直接 `kMatchesOrigin`（含 UNC）；`url::Origin` 对 `file:` 是非 opaque 元组 `("file", "" | UNC 主机, 0)`，序列化 `file://`。
 
-**f. IPC 原始字节响应**（`src-tauri/tauri-runtime-cef/src/ipc.rs:3-5`；`third/tauri/crates/tauri/src/ipc/mod.rs:190-200`）
+**f. IPC 原始字节响应**（`src-tauri/tauri-runtime-kbcef/src/ipc.rs:3-5`；`third/tauri/crates/tauri/src/ipc/mod.rs:190-200`）
 ```rust
 //! Tauri 2 的命令 IPC 有两条上游通道:`fetch(ipc://localhost/<cmd>)` 自定义协议
 //! (主通道,JSON 与 raw 二进制 body 都走它,…)                                  // 现状：raw 响应可用，前端 invoke 得到 ArrayBuffer
@@ -159,12 +159,12 @@ img-src * data: blob: file:; media-src * data: blob: file:; connect-src 'self' i
 
 **k. Windows 拖出**（`apps/kabegame/src/components/image/ImageContent.vue:258-269`，6b 之后改为按 `sourceOf` tag 取 `*ToHttpUrl`）；`PrepareDragForDownload`（`web_contents_view_aura.cc:204-248`，`#if BUILDFLAG(IS_WIN)`）只消费 `download_metadata`，经 `DragDownloadFile` 交给 `DownloadManager`，后者按发起 frame 调 `RegisterNonNetworkSubresourceURLLoaderFactories`（`download_manager_impl.cc:1481-1489`）。
 
-## 点 1 — 修订补丁 0006：工厂带私有 CORS 列表（`third/cef/libcef/browser/chrome/chrome_content_browser_client_cef.cc`）
+## 点 1 — 修订补丁 06：工厂带私有 CORS 列表（`third/cef/libcef/browser/chrome/chrome_content_browser_client_cef.cc`）
 
-- **修改** 0006 的覆写：`emplace` 前为本次的 `request_initiator_origin` 新建一份 `SharedCorsOriginAccessList`，登记
+- **修改** 06 的覆写：`emplace` 前为本次的 `request_initiator_origin` 新建一份 `SharedCorsOriginAccessList`，登记
   「该 origin → `file` scheme，空 host，允许子域，任意端口」。`SetForOrigin` 与工厂都在 UI 线程。`request_initiator_origin`
   为空（不该发生于主 frame 提交）时退回共享列表。
-- **修改** 补丁文件与 `third-patches/cef/README.md` 0006 条目（去掉「shared CORS list left empty on purpose」，改成「每个工厂实例一份私有列表，只放行该文档 origin 的 CORS 模式 `file:` 请求；客户端还需 `CefAddCrossOriginWhitelistEntry` 过 proxy 的闸」）。
+- **修改** 补丁文件与 `third-patches/cef/README.md` 06 条目（去掉「shared CORS list left empty on purpose」，改成「每个工厂实例一份私有列表，只放行该文档 origin 的 CORS 模式 `file:` 请求；客户端还需 `CefAddCrossOriginWhitelistEntry` 过 proxy 的闸」）。
 
 ```cpp
 #include "content/public/browser/shared_cors_origin_access_list.h"   // 新增
@@ -199,10 +199,10 @@ img-src * data: blob: file:; media-src * data: blob: file:; connect-src 'self' i
 ```
 > `SharedCorsOriginAccessList::Create()` 的声明在 `content/public/browser/shared_cors_origin_access_list.h`；`SetForOrigin(origin, allow, block, closure)` 的签名以该头文件为准（实施时核对）。
 
-## 点 2 — 运行时：跨源白名单（`src-tauri/tauri-runtime-cef/src/`）
+## 点 2 — 运行时：跨源白名单（`src-tauri/tauri-runtime-kbcef/src/`）
 
 - **新增** `file_access.rs`：`app_fetch_origins: Mutex<HashSet<String>>` 去重表；`grant_app_fetch_file(origin: &str) -> bool`，调 `cef::add_cross_origin_whitelist_entry(origin, "file", None, 1)`，已登记的 origin 直接返回。
-- **修改** `webview.rs` `create_cef_browser_view`：label 登记了 0005 时，从 `pending.url` 取 origin（`url::Url::parse` → `origin().ascii_serialization()`；dev `http://localhost:1420`，Windows 生产 `http://tauri.localhost`，Linux / macOS 生产 `tauri://localhost`），调 `grant_app_fetch_file`。主窗口与壁纸窗口同源，第二次是 no-op。
+- **修改** `webview.rs` `create_cef_browser_view`：label 登记了 05 时，从 `pending.url` 取 origin（`url::Url::parse` → `origin().ascii_serialization()`；dev `http://localhost:1420`，Windows 生产 `http://tauri.localhost`，Linux / macOS 生产 `tauri://localhost`），调 `grant_app_fetch_file`。主窗口与壁纸窗口同源，第二次是 no-op。
   > 不做成 app 侧 API：生产 origin 由 Tauri 的 `window_origin` 推导，运行时在建窗时拿 `pending.url` 最直接。
   > 移除不做：CEF 的 remove 会清掉该 origin 的**全部**条目；窗口销毁也不撤，进程内常驻。
 - **修改** `runtime.rs:72-89` LNA 注释：本地 HTTP 媒体服务已删，保留关闭 LNA / PNA 的理由改为 dev 的 debug ingest（`POST http://localhost:1420/__kabegame_debug/ingest`）与 Windows 形态的 Tauri 协议域名（`http://tauri.localhost` / `http://ipc.localhost`）。不加新 scheme。
@@ -215,7 +215,7 @@ static APP_FETCH_ORIGINS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 /// 让 `origin` 的页面能以 CORS 模式读 `file:`（`fetch` / XHR 拿到字节）。CEF 的 `ProxyURLLoaderFactory` 对跨源、
 /// 非 no-cors 的 `file:` 请求先查 CEF 跨源白名单，没有就报 `kCorsDisabledScheme`，到不了 `OnBeforeResourceLoad`；
-/// 这里登记「origin → file，任意 host」。字节能否真的读到仍由补丁 0006 给该 browser 主 frame 的 `file:` 工厂
+/// 这里登记「origin → file，任意 host」。字节能否真的读到仍由补丁 06 给该 browser 主 frame 的 `file:` 工厂
 /// （带该 origin 的私有 CORS 列表）决定，没有工厂的页面只是多了渲染侧的 `CanDisplay(file:)`，拿不到数据。
 pub(crate) fn grant_app_fetch_file(origin: &str) -> bool {
     let Ok(mut set) = APP_FETCH_ORIGINS.get_or_init(|| Mutex::new(HashSet::new())).lock() else { return false };
@@ -227,7 +227,7 @@ pub(crate) fn grant_app_fetch_file(origin: &str) -> bool {
 ```
 ```rust
 // webview.rs —— create_cef_browser_view，写 extra_info 键之后
-        // 登记了 0005 的 webview：它的应用 origin 还要进 CEF 跨源白名单，`fetch(file:)` 才过得了 proxy 的 CORS 闸
+        // 登记了 05 的 webview：它的应用 origin 还要进 CEF 跨源白名单，`fetch(file:)` 才过得了 proxy 的 CORS 闸
         if crate::file_access::app_page_open(&webview_label) {
             if let Some(origin) = url::Url::parse(&pending_url).ok().map(|u| u.origin().ascii_serialization()) {
                 if !crate::file_access::grant_app_fetch_file(&origin) {
@@ -356,26 +356,26 @@ export function invalidatePluginFiles(pluginId: string) {
 
 - **修改** `src-tauri/kabegame/Cargo.toml`：两处 tauri `features` 列表删 `"protocol-asset"`。
 - **修改** `tauri.conf.json.handlebars`：删 `assetProtocol` 整块（`dangerousDisableAssetCspModification` 保留，它管的是 CSP 注入，与 asset 协议无关）；重新生成 gitignored 的 `tauri.conf.json`。
-- **修改** `src-tauri/tauri-runtime-cef/src/runtime.rs:1009`：scheme 列表 `["tauri", "asset"]` 改为 `["tauri"]`，74 行注释同步。
+- **修改** `src-tauri/tauri-runtime-kbcef/src/runtime.rs:1009`：scheme 列表 `["tauri", "asset"]` 改为 `["tauri"]`，74 行注释同步。
 - 验证：`check-kabegame` 通过；`grep -rn "protocol-asset\|assetProtocol\|asset://" src-tauri apps` 为空；真机在任意窗口顶层 `fetch("http://asset.localhost/C:/Windows/win.ini")`（Linux / macOS 为 `asset://localhost/...`）报网络错误而不是返回内容。
 
 ## 点 5 — 文档 / 回归 / changelog
 
-- `third-patches/cef/README.md`：0006 条目按点 1 改写。
+- `third-patches/cef/README.md`：06 条目按点 1 改写。
 - `cocs/plugins/PLUGIN_FILE_ENDPOINT.md`：标题下加「桌面走命令 `read_plugin_file`（IPC 原始字节 + 前端按坐标缓存 blob / 文本）、Android / Web 走 HTTP，共用核心层 `read_plugin_file`」；ETag / 304、CORS、`get_http_server_base_url`（仅 Android）各段分平台改写。`cocs/plugins/PLUGIN_ASSETS.md:135, 168, 231, 247`、`PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md:15, 55, 136`、`PLUGIN_STORE_CACHE.md:104` 的 `/plugin_file` 字样同步。
 - `cocs/web/CDN_MEDIA.md:9`、`cocs/mcp/MCP_SERVER.md:14, 31`、`cocs/wpe/WPE_IMPORT.md:119, 274-275, 415-427`、`cocs/storage/DB_MIGRATIONS_AND_BACKFILLS.md:133`：去掉「桌面本地 HTTP 服务」的描述，`fetch(file:)` 与跨源白名单写进 WPE_IMPORT 的闸门一节。
-- `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md:18-21, 112-114, 197` 与 `src-tauri/tauri-runtime-cef/README.md:327-334`：Windows 的 `DownloadURL` 改为 `file://`（按真机结果写）。
-- `src-tauri/tauri-runtime-cef/README.md` 文件访问一节：加跨源白名单。
+- `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md:18-21, 112-114, 197` 与 `src-tauri/tauri-runtime-kbcef/README.md:327-334`：Windows 的 `DownloadURL` 改为 `file://`（按真机结果写）。
+- `src-tauri/tauri-runtime-kbcef/README.md` 文件访问一节：加跨源白名单。
 - `apps/docs/src/content/docs/guide/android.md:79, 102`：平台对照表里桌面三端的「HTTP 文件服务」改为「无（应用 Web 服务器按需开启）」。
 - `cocs/README.md`：PLUGIN_FILE_ENDPOINT、拖出文档、CEF 补丁条目摘要同步。
 - `.claude/plans/wpe-import/2-web/PLAN.md`：Phase 6c 行、状态、文档列表。
 - `versions/latest/regression.md`：新增「Phase 6c：桌面零 HTTP / `fetch(file:)` / 插件文件命令」小节，用例见下。
-- `versions/latest/changelog.md`：用户可见——桌面不再监听本地端口、插件文档 / 配图改由应用内协议读取；内部——0006 修订、跨源白名单、`start_http_server` 删除。
+- `versions/latest/changelog.md`：用户可见——桌面不再监听本地端口、插件文档 / 配图改由应用内协议读取；内部——06 修订、跨源白名单、`start_http_server` 删除。
 
 ## 验证
 
 **A. 静态**
-1. `deno task patch cef --check` → `deno task patch cef`：0006 新版应用成功。
+1. `deno task patch cef --check` → `deno task patch cef`：06 新版应用成功。
 2. `check-kabegame` 0 error；`cargo check` 的 `web` feature（`deno task check -c kabegame --mode web` 或等价）与 `--mode android` 各跑一次，确认 `plugin_file_routes` 的 cfg 没把 Web / Android 编译掉。
 3. 单测：`file_access`（新增 `grant_app_fetch_file_dedups`，白名单调用在非 CEF 进程里返回 0 也不 panic）；`kabegame-core` `package_file`（`from_query` 四种组合、`read_plugin_file` 的 ETag 命中不读条目、白名单外 404）；前端 vitest `fileUrl.test.ts` / `pluginFiles.test.ts`。
 4. `grep -rn "start_http_server\|HTTP_SERVER_PORT\|ToHttpUrl\|/plugin_file" apps src-tauri cocs`：桌面路径只剩 Android / Web 分支与历史说明。
@@ -384,7 +384,7 @@ export function invalidatePluginFiles(pluginId: string) {
 **B. 真机（Windows，用户重编 CEF 并完全重启 dev；Linux / macOS 待测）**
 1. `fetch(file:)`：主窗口顶层 `fetch("file:///D:/Codes/kabegame/docs/images/icon.png")` → `status 200`、`type "basic"`、`blob().size > 0`；XHR 同样；stderr 无 `deny file:`（主 frame 免检）。
 2. 复制到剪贴板：对一张 `localPath` 为空、只有缩略图的行（或临时构造）走兜底 `fetch(file:)` 成功写入剪贴板；常规行仍走后端命令。
-3. WPE 预览 iframe 内 `fetch("file:///C:/Windows/win.ini")` 仍被闸门拒（`deny file: … OutsideRoot`）；入口同目录 `fetch` 200（0004 路径不变）。
+3. WPE 预览 iframe 内 `fetch("file:///C:/Windows/win.ini")` 仍被闸门拒（`deny file: … OutsideRoot`）；入口同目录 `fetch` 200（04 路径不变）。
 4. 插件文件：插件详情页的文档插图、banner、`kbDoc` / `kbChangelog` 文本、EJS 模板都正常；CDP `Network` 里图片地址为 `blob:http://localhost:1420/…`、IPC 是 `ipc://localhost/read_plugin_file` 的二进制响应；商店来源与预览各试一个；错误路径（白名单外、版本不符）命令返回 `Err` 且前端走现有错误显示；切换插件版本 / 删除插件后旧 blob URL 已 revoke（再访问报错）、重开详情页重新读取。
 5. 命令的门禁：在畅游窗口顶层 `invoke("read_plugin_file", …)` 被 ACL 拒（命令不在该窗口 capability 里）。
 6. 插件 iframe（6b 的 opaque srcdoc）里拿不到 `__TAURI_INTERNALS__`，`fetch("ipc://localhost/read_plugin_file")` 被 `connect-src 'none'` 拒。
@@ -397,14 +397,14 @@ export function invalidatePluginFiles(pluginId: string) {
 
 ## 风险与备注
 
-- **跨源白名单是 origin 级全局的**：应用 origin 在所有渲染进程里 `CanDisplay(file:)` / `CanRequest(file:)` 为真，但没有 0005 / 0006 的 browser 既无 `file` 请求权也无工厂，拿不到字节；应用 origin 只有我们自己的页面在用。dev 的 `http://localhost:1420` 若被浏览器里的其它页面冒用，也只在本进程的 CEF 里有意义。
-- **0006 私有列表的 API 细节**（`SharedCorsOriginAccessList::Create` / `SetForOrigin` 签名、`CorsOriginPattern::New` 参数顺序）以 `D:\Codes\cefbuild` 源码为准，补丁代理实施时核对。
+- **跨源白名单是 origin 级全局的**：应用 origin 在所有渲染进程里 `CanDisplay(file:)` / `CanRequest(file:)` 为真，但没有 05 / 06 的 browser 既无 `file` 请求权也无工厂，拿不到字节；应用 origin 只有我们自己的页面在用。dev 的 `http://localhost:1420` 若被浏览器里的其它页面冒用，也只在本进程的 CEF 里有意义。
+- **06 私有列表的 API 细节**（`SharedCorsOriginAccessList::Create` / `SetForOrigin` 签名、`CorsOriginPattern::New` 参数顺序）以 `D:\Codes\cefbuild` 源码为准，补丁代理实施时核对。
 - **Windows `DownloadURL` + `file://`** 未经证实；备选见下。
 - **blob URL 的生命周期**：按坐标缓存、`invalidatePluginFiles` 时 revoke；详情页反复开关不重复读 zip，但插件很多且都看过时 blob 会常驻到版本变化，插件文件小（单个 ≤ 2MB）可接受。`<img src=blob:>` 不再有 ETag / 304，命令每次都读 zip 条目，只在缓存未命中时发生。
 - **文档渲染变异步**：`PluginDocRenderer` 先取全部配图 URL 再渲染，插图多时首帧会晚一点；失败的 key 走现有「加载失败」文案，不阻塞正文。
 
 ### 备选：Windows 真实文件拖出（仅当验证 7 失败时立项，不在本 Phase 内）
-把补丁 0003 的 Chromium 内层 `web_contents_view_aura.cc` 的 `#if BUILDFLAG(IS_LINUX)` 扩成 `IS_LINUX || IS_WIN`，Windows 分支额外清
+把补丁 03 的 Chromium 内层 `web_contents_view_aura.cc` 的 `#if BUILDFLAG(IS_LINUX)` 扩成 `IS_LINUX || IS_WIN`，Windows 分支额外清
 `download_metadata`（否则延迟渲染的 CF_HDROP 会压过真实文件）与 `html`，并跳过 `MarkRendererTaintedFromOrigin`（Windows 上
 taint 会以 `chromium/x-renderer-taint` 跨进程，接收方 `FilterDropData` 会丢掉文件）；`webview.rs:1132`、`lib.rs:287`、
 `ImageContent.vue:258` 的平台门控加 Windows；cef-rs 绑定不用改。需要重编 Windows CEF。
@@ -415,7 +415,7 @@ taint 会以 `chromium/x-renderer-taint` 跨进程，接收方 `FilterDropData` 
   - 沙箱里 Git 子进程 `EPERM`、esbuild `spawn EPERM`、`cef-dll-sys` 的 cmake 卡住，codex 自报的四项验证没做成；沙箱外全部补跑：
     `deno task patch cef --check` OK、`deno task patch cef` 6 patches applied、`deno task check -c kabegame` 0 error、
     `file_access` 13 passed、`package_file` 9 passed、vitest 7 passed。结果已写进 `versions/latest/regression.md` 的 S2–S5 行。
-  - codex 手工生成的 0006 误以 vendor 基线为底，带进了 0004 的 hunk，序列预检失败；改用 `deno task patch cef --gen --from 0005 --out …`
+  - codex 手工生成的 06 误以 vendor 基线为底，带进了 04 的 hunk，序列预检失败；改用 `deno task patch cef --gen --from 05 --out …`
     重新生成（该模式由 6b 期间加进 `scripts/patch-manager.ts`，`third-patches/AGENTS.md` 有说明）。
   - codex 把 23 个已跟踪文件写成了 CRLF（仓库 `.gitattributes` 为 `eol=lf`），已统一转回 LF；`git ls-files --eol -m` 无 `w/crlf`。
   - 与计划的偏差（codex 自报，已核）：`PluginDocPanel` 用 `useBannerPreviewImages`，选择器与插件浏览器保留同步取值、由 `assetPath.ts`

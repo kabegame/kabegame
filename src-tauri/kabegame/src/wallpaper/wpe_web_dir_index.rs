@@ -1,7 +1,7 @@
 //! 网页壁纸目录索引：库内每张网页壁纸（`x-wpe/web`）的目录 → 图片 id 与用户选的文件 / 目录。
 //!
 //! 它是两处的唯一数据源，只在内存里、不落库：
-//! - CEF runtime 的 `file:` 闸门（[`tauri_runtime_cef::set_file_scope_resolver`]）：`file:` 文档只能访问
+//! - CEF runtime 的 `file:` 闸门（[`tauri_runtime_kbcef::set_file_scope_resolver`]）：`file:` 文档只能访问
 //!   它自己所在的网页壁纸目录与这张壁纸的用户选择，应用页发起的子 frame 导航只能落进库里某个网页壁纸目录；
 //! - [`crate::commands::wpe_web::wpe_web_pull_state`]：按调用方文档路径认出是哪张壁纸。
 //!
@@ -25,7 +25,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::{Arc, OnceLock, RwLock};
-use tauri_runtime_cef::{file_path_key, FileAccessScope, FileGrant};
+use tauri_runtime_kbcef::{file_path_key, FileAccessScope, FileGrant};
 use tokio::sync::{broadcast, mpsc};
 
 /// 按壁纸目录索引的库内网页壁纸。
@@ -255,7 +255,7 @@ pub fn init_wpe_web_dir_index() {
         Err(error) => tracing::error!("网页壁纸目录索引初始化失败: {error}"),
     }
     // 3. 注册给 runtime：之后每个要过闸门的 file: 请求都查这张表；注册之前一律拒绝
-    tauri_runtime_cef::set_file_scope_resolver(Arc::new(|path| {
+    tauri_runtime_kbcef::set_file_scope_resolver(Arc::new(|path| {
         WpeWebDirIndex::global().access_scope_of(path)
     }));
     // 4. 后台跟随事件

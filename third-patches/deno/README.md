@@ -26,29 +26,29 @@ upstream source for `deno_core` 0.405.0.
 All four patches touch `libs/core` (the `deno_core` crate). See
 [cocs/crawler/V8_RUNTIME.md](../../cocs/crawler/V8_RUNTIME.md).
 
-- `0001-embed-extension-js-sources.patch` — changes extension source inclusion from upstream
+- `01-embed-extension-js-sources.patch` — changes extension source inclusion from upstream
   `mode=loaded` (an absolute build-time path read from disk at runtime) to `mode=included`
   (`include_str!`). Kabegame runs snapshotless, so paths recorded on the build machine do not exist
   on a cross-compiled Android device and otherwise fail with `os error 2`. Because
   `[patch.crates-io] deno_core` also routes the `deno_web`, `deno_crypto`, and `deno_webidl`
-  `extension!` macros through this crate, their sources are covered too. Patch 0005 feature-gates
+  `extension!` macros through this crate, their sources are covered too. Patch 05 feature-gates
   this behavior instead of leaving it unconditional.
-- `0002-shared-v8-platform-init.patch` — changes `runtime/setup.rs` so ordinary runtimes and
+- `02-shared-v8-platform-init.patch` — changes `runtime/setup.rs` so ordinary runtimes and
   `JsRuntimeForSnapshot` share one process-wide V8 platform initialization, while global V8 flags
   no longer depend on the `snapshot` argument. Device-side baseline snapshot generation therefore
   cannot install deterministic flags (`--predictable --random-seed=42`) app-wide merely by winning
   the one-time initialization race.
-- `0003-android-bionic-errno.patch` — changes `uv_compat/tty.rs` to add an Android-specific
+- `03-android-bionic-errno.patch` — changes `uv_compat/tty.rs` to add an Android-specific
   `errno_location()` backed by Bionic's `__errno()`; glibc uses `__errno_location`. Without it the
   Android target reaches the platform `compile_error!`.
-- `0005-embed-ext-sources-feature-gate.patch` — follows up 0001 by adding the
+- `05-embed-ext-sources-feature-gate.patch` — follows up 01 by adding the
   `embed_ext_sources` Cargo feature and selecting `mode=included` only when that feature is enabled.
   Kabegame-core enables it for its snapshotless runtime, including Android cross-compilation;
   consumers that leave it disabled retain upstream `mode=loaded`. This keeps the embedding change
   explicit instead of changing the default behavior of every `deno_core` consumer.
 
-The former `0004-node-modules-suffix-env.patch` and
-`0006-node-modules-suffix-keep-alias-dir.patch` were removed. They were CLI-only patches outside
+The former `04-node-modules-suffix-env.patch` and
+`06-node-modules-suffix-keep-alias-dir.patch` were removed. They were CLI-only patches outside
 `libs/core`, whose sole purpose was the `DENO_NODE_MODULES_SUFFIX` mechanism. That mechanism became
 fully dormant after the Docker channel stopped using it on 2026-07-27 and the Ubuntu 22.04 guest
 stopped using it on 2026-08-06. The custom-built Deno CLI has also been retired, so those patches no

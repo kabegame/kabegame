@@ -250,7 +250,7 @@ pub async fn surf_start_session<R: Runtime>(
                     // Services),Deny 后 window.open() 返回 null,页面会在
                     // popup.postMessage 处抛 "Cannot read properties of null" 并白屏。
                     // 放行为真实弹窗。(CEF runtime 该闭包不被调用,弹窗裁决见
-                    // tauri-runtime-cef 的 PopupToNavigationLifeSpanHandler。)
+                    // tauri-runtime-kbcef 的 PopupToNavigationLifeSpanHandler。)
                     if matches!(scheme, "http" | "https") && features.size().is_some() {
                         return NewWindowResponse::Allow;
                     }

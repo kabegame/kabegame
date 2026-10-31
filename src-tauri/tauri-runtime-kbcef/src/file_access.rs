@@ -6,7 +6,7 @@
 //!    以 `file://` 加载的页面可以用 `fetch` / XHR 读其它本地文件（Wallpaper Engine 网页壁纸
 //!    就是这么运行的）。Chromium 的 `allow_file_access_from_file_urls` 偏好本身放开的是**任意**
 //!    本地文件；
-//! 2. **应用页加载本地资源**（[`ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY`]，补丁 0005 + 0006）：最外层主
+//! 2. **应用页加载本地资源**（[`ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY`]，补丁 05 + 0006）：最外层主
 //!    frame 里的非 `file:` 文档（应用页）可以加载 `file:`：给 `<iframe>` 赋 `src = file:…`（0005），
 //!    以及 `<img>` / `<video>` / CSS `url()` 这类子资源（0006 补上 `file:` 子资源工厂）。
 //!    应用页 `fetch` / XHR `file:` 还需要私有 CORS 列表与运行时跨源白名单。
@@ -60,11 +60,11 @@ pub(crate) fn grant_app_fetch_file(origin: &str) -> bool {
     added
 }
 
-/// 建 browser 时 `extra_info` 里的 bool 键；CEF 补丁 0004 读它打开文件访问偏好。
+/// 建 browser 时 `extra_info` 里的 bool 键；CEF 补丁 04 读它打开文件访问偏好。
 pub(crate) const ALLOW_FILE_ACCESS_EXTRA_INFO_KEY: &str =
     "kabegame.allow_file_access_from_file_urls";
 
-/// 建 browser 时 `extra_info` 里的 bool 键；CEF 补丁 0005 读它允许应用页加载本地资源
+/// 建 browser 时 `extra_info` 里的 bool 键；CEF 补丁 05 读它允许应用页加载本地资源
 /// （渲染侧 `SecurityOrigin::GrantLoadLocalResources`、浏览器侧 `GrantRequestScheme(file)`）。
 /// 键名必须与补丁里的字面量一致。
 pub(crate) const ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY: &str = "kabegame.allow_local_resources";
@@ -220,7 +220,7 @@ fn file_url_path(url: &str) -> Option<PathBuf> {
     parsed.to_file_path().ok()
 }
 
-/// 根据 CEF 补丁 0007 的文档头和父文档头识别发起方；无法归属时拒绝。
+/// 根据 CEF 补丁 07 的文档头和父文档头识别发起方；无法归属时拒绝。
 pub(crate) fn classify_file_requester(
     frame_is_main: bool,
     is_navigation: bool,

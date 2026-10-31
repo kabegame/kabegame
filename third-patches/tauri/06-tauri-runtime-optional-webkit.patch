@@ -6,7 +6,7 @@ index 08a9dc274..fa3182536 100644
  gtk = { version = "0.18", features = ["v3_24"] }
  webkit2gtk = { version = "=2.0", features = ["v2_40"] }
  percent-encoding = "2"
-+# kabegame fork(0006): wry runtime 依赖 tauri-runtime 的 webkit2gtk 字段,在此显式开启 `webkit`。
++# kabegame fork(06): wry runtime 依赖 tauri-runtime 的 webkit2gtk 字段,在此显式开启 `webkit`。
 +tauri-runtime = { workspace = true, features = ["webkit"] }
  
  [target.'cfg(target_vendor = "apple")'.dependencies]

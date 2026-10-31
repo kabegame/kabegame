@@ -262,7 +262,7 @@ export class ModePlugin extends BasePlugin {
         // CEF_PATH,否则 cef-dll-sys 会下载官方无 H.264 的 CEF 覆盖 target 目录
         // (见 .cursor/rules/cef-path-set.mdc)。
         // 默认按 bin/{platform}/{arch}/cef-build 解析，也可由 CEF_PATH 覆盖。
-        // 只有主 app 组件链接 CEF(cef-dll-sys 在 tauri-runtime-cef 依赖链里);
+        // 只有主 app 组件链接 CEF(cef-dll-sys 在 tauri-runtime-kbcef 依赖链里);
         // kabegame-cli 是 headless,不检查也不注入 CEF_PATH(web-release 容器等
         // 无 CEF runtime 的环境要能单独构建 cli)。
         if (

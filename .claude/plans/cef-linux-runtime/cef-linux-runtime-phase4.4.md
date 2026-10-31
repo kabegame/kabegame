@@ -18,7 +18,7 @@
 
 ## 点 4 — 清理与门控回归
 - **决定** `KABEGAME_CEF_URL` 钩子:保留为 dev 钩子(标注)或删除。
-- **回归** `cargo check`/构建在 **Android / Windows / macOS** 未触达 `tauri-runtime-cef`,行为与改造前一致。
+- **回归** `cargo check`/构建在 **Android / Windows / macOS** 未触达 `tauri-runtime-kbcef`,行为与改造前一致。
 - **更新** README §9 / 本计划落地记录。
 
 ## 验收
@@ -38,14 +38,14 @@
 
 - CEF runtime 已接上 `PendingWebview.on_page_load_handler`:主 frame 的 load start / load end 分别触发 `PageLoadEvent::Started` / `Finished`,覆盖 Tauri 全局 `on_page_load` 与 plugin page-load hook 的事件入口。
 - `tauri.conf.json.handlebars` 的 CSP 已补 `cef-ipc:` 到 `default-src` / `connect-src`;`http://127.0.0.1:*`、`img-src *`、`media-src *` 已能覆盖本地 http_server 的缩略图/视频资源请求。
-- `KABEGAME_CEF_URL` 已不在当前源码中,本计划的现状锚点为过期信息;本次仅清理 CEF cache 目录名,从诊断期 `tauri-runtime-cef-phase3` 改为稳定的 `kabegame-cef`。
-- Android 目标依赖图检查:`cargo tree -p kabegame --features android --target aarch64-linux-android -i tauri-runtime-cef` 返回 `package ID specification tauri-runtime-cef did not match any packages`,说明该 target 的 kabegame 依赖图未包含 CEF runtime。
+- `KABEGAME_CEF_URL` 已不在当前源码中,本计划的现状锚点为过期信息;本次仅清理 CEF cache 目录名,从诊断期 `tauri-runtime-kbcef-phase3` 改为稳定的 `kabegame-cef`。
+- Android 目标依赖图检查:`cargo tree -p kabegame --features android --target aarch64-linux-android -i tauri-runtime-kbcef` 返回 `package ID specification tauri-runtime-kbcef did not match any packages`,说明该 target 的 kabegame 依赖图未包含 CEF runtime。
 - Windows/macOS 目标依赖图检查已尝试并按权限要求提权重试,但当前环境的 crates.io 访问被本地代理 `127.0.0.1:20171` 阻断,缺失 target crates 无法下载;平台门控仍由 `Cargo.toml` 的 `target_os = "linux"` 依赖门控与 Android 依赖图结果覆盖。
 
 ## 验证记录(2026-06-25)
 
-- `cargo fmt --package tauri-runtime-cef`
-- `cargo check -p tauri-runtime-cef --features cef-backend`
+- `cargo fmt --package tauri-runtime-kbcef`
+- `cargo check -p tauri-runtime-kbcef --features cef-backend`
 - `FFMPEG_PKG_CONFIG_PATH=/home/cm/code/kabegame/third/FFmpeg-build/install/lib/pkgconfig cargo check -p kabegame --features standard`
 
 以上检查通过;输出仍包含仓库既有 warning。未启动 GUI 做人工 smoke,因为本仓库规约要求默认用 lint/check 诊断,不跑完整构建。

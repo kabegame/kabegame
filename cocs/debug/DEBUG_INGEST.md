@@ -198,7 +198,7 @@ KABEGAME_DEBUG_TEE_CONSOLE=true
 skill 寄存 CEF 的 CDP（Chrome DevTools Protocol）端口。
 
 dev 下 `scripts/plugins/component-plugin.ts` 注入 `KABEGAME_CEF_DEBUG_PORT=random`，
-`src-tauri/tauri-runtime-cef/src/runtime.rs` 的 `remote_debugging_port()` 让内核分配一个
+`src-tauri/tauri-runtime-kbcef/src/runtime.rs` 的 `remote_debugging_port()` 让内核分配一个
 空闲回环端口（结果 memoize 在 `OnceLock`），`src-tauri/kabegame/src/debug_ingest.rs` 的
 `spawn_cdp_register()` 轮询 `/json/version` 直到 CDP 真的应答，然后把端口 POST 给 Vite。
 

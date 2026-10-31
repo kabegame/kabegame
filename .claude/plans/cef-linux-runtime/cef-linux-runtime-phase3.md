@@ -1,6 +1,6 @@
 # Phase 3 — 接入 Tauri:前端在 CEF(软件 OSR)里跑起来
 
-> 父计划:[cef-linux-runtime.md](cef-linux-runtime.md)。背景/调研见 `src-tauri/tauri-runtime-cef/README.md`。
+> 父计划:[cef-linux-runtime.md](cef-linux-runtime.md)。背景/调研见 `src-tauri/tauri-runtime-kbcef/README.md`。
 >
 > **渲染层(2026-06-20 决策)**:用**软件 OSR**(`examples/minimal.rs` 那条:CEF windowless → `on_paint` BGRA → blit 到 tao 窗口)。GPU(修 cef-rs dmabuf 导入器或转路线 A)**推迟**,见 README §9.2.2。
 >
@@ -82,7 +82,7 @@ pub trait Runtime<T: UserEvent>: Sized + 'static {
 - **修改** `src-tauri/kabegame/Cargo.toml`:
   ```toml
   [target.'cfg(target_os = "linux")'.dependencies]
-  tauri-runtime-cef = { path = "../tauri-runtime-cef", features = ["cef-backend"] }
+  tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", features = ["cef-backend"] }
   ```
 - **修改** kabegame 入口:Linux → `tauri::Builder::<Cef<_>>::new()`;其余 → `Builder::default()`。
   - CEF 子进程派发(`execute_process`)必须在 `main` 最早、`Builder` 之前;非浏览器进程 `exit`。
@@ -99,18 +99,18 @@ pub trait Runtime<T: UserEvent>: Sized + 'static {
 
 ## 参考
 - wry 实现范文(窗口半边照抄):`/home/cm/code/tauri-tauri-v2.10.0/crates/tauri-runtime-wry/src/lib.rs`
-- 本仓库已验证的 OSR 闭环:`src-tauri/tauri-runtime-cef/examples/minimal.rs`
+- 本仓库已验证的 OSR 闭环:`src-tauri/tauri-runtime-kbcef/examples/minimal.rs`
 - trait 契约:`tauri-runtime/src/{lib,window,webview}.rs`
 
 ## Phase 3 落地记录(2026-06-20)
 
 已完成的可验证范围:
 
-- `src-tauri/tauri-runtime-cef` 已实现 `tauri_runtime::Runtime` / `RuntimeHandle` / `EventLoopProxy` / `WindowDispatch` / `WindowBuilder` / `WebviewDispatch` 的 Linux CEF 后端。
+- `src-tauri/tauri-runtime-kbcef` 已实现 `tauri_runtime::Runtime` / `RuntimeHandle` / `EventLoopProxy` / `WindowDispatch` / `WindowBuilder` / `WebviewDispatch` 的 Linux CEF 后端。
 - runtime 在 `new_any_thread` 中初始化 CEF(windowless + external pump + no_sandbox + disable-gpu),并在 `run_return` 的 tao 循环里执行 `cef::do_message_loop_work()`。
 - 窗口半边使用 tao；支持 Tauri 创建窗口、基础窗口 getter/setter、窗口事件转发、Linux `gtk_window/default_vbox/raw_window_handle` 回调。
 - webview 半边接入软件 OSR:windowless browser + `RenderHandler::on_paint` BGRA 缓冲 + `softbuffer` blit 到 tao 顶层窗口；支持基础 `navigate` / `reload` / `eval_script` / `set_size` / resize。
-- kabegame Linux standard/light 入口已门控到 `tauri::Builder::<tauri_runtime_cef::Cef<tauri::EventLoopMessage>>::new()`；CEF 子进程派发已放到 `main` 最早位置。
+- kabegame Linux standard/light 入口已门控到 `tauri::Builder::<tauri_runtime_kbcef::Cef<tauri::EventLoopMessage>>::new()`；CEF 子进程派发已放到 `main` 最早位置。
 
 当前有意保留的缺口:
 
@@ -121,7 +121,7 @@ pub trait Runtime<T: UserEvent>: Sized + 'static {
 
 验证:
 
-- `cargo check -p tauri-runtime-cef --features cef-backend` 通过。
+- `cargo check -p tauri-runtime-kbcef --features cef-backend` 通过。
 - `cargo check -p kabegame --features standard` 在进入 kabegame 代码前被 `rusty_ffmpeg` build script 阻断:当前 shell 未设置 `FFMPEG_PKG_CONFIG_PATH` / `FFMPEG_LIBS_DIR` / `FFMPEG_LINK_MODE`。项目的 bun 构建插件会设置这些变量；直接 cargo 检查需要同等环境。
 
 ---

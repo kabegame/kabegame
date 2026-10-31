@@ -1,4 +1,4 @@
-# Phase 6d：Windows 拖出改走 0003 真实文件链路
+# Phase 6d：Windows 拖出改走 03 真实文件链路
 
 > 状态：方案已写（2026-10-30）。前置：Phase 6c 已实现（桌面图库媒体走 `file://`，本地 HTTP 已退役）。
 >
@@ -6,7 +6,7 @@
 > Chromium 的 `DragDownloadFile` 下载**能跑完**（第二轮 `complete=true`，文件落在
 > `%TEMP%\chrome_drag…\<名>.jpg`），但资源管理器松手后仍然没有文件；第一轮还暴露了运行时
 > `TauriCefDownloadHandler` 会把拖拽下载的强制临时路径改成相对的建议名、让下载以 `interrupted` 收尾。
-> 用户决定不再修 `DownloadURL` 这条延迟渲染下载链路，改把 0003 的真实文件拖出扩到 Windows。
+> 用户决定不再修 `DownloadURL` 这条延迟渲染下载链路，改把 03 的真实文件拖出扩到 Windows。
 
 ## 总体设计思路
 
@@ -16,9 +16,9 @@ Windows 不再用「`DownloadURL` → OLE 延迟渲染 → `DragDownloadFile` �
 直接把库内原图的路径写成 `CF_HDROP`。资源管理器收到的就是一份普通的文件拖放，松手即复制，不再有下载、
 临时目录与「谁来决定目标路径」的问题。
 
-Windows 与 Linux 共用同一个 `web_contents_view_aura.cc`，0003 的 Linux 钩子本来就写在这个文件里、只是被
+Windows 与 Linux 共用同一个 `web_contents_view_aura.cc`，03 的 Linux 钩子本来就写在这个文件里、只是被
 `#if BUILDFLAG(IS_LINUX)` 关着，所以 Chromium 侧的主体改动只是把门控放宽；CEF API（`OnStartDragging` /
-`GetCustomData`）、cef-rs 三平台 bindings（0006 / 0007 / 0008 早已同步布局）与运行时的 `on_start_dragging`
+`GetCustomData`）、cef-rs 三平台 bindings（06 / 07 / 08 早已同步布局）与运行时的 `on_start_dragging`
 都已经是平台无关的，缺的只是运行时与应用里两个 `cfg` 没带 `windows`。
 
 Windows 有三处与 Linux 不同、必须跟 macOS 对齐的地方，全部在 Chromium 内层补丁里处理：
@@ -130,7 +130,7 @@ void OSExchangeDataProviderWin::SetFilenames(const std::vector<FileInfo>& filena
   virtual void OnStartDragging(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDragData> dragData) {}
 ```
 
-**e. 运行时起手侧只编 Linux / macOS**（`src-tauri/tauri-runtime-cef/src/webview.rs:1151-1194`）
+**e. 运行时起手侧只编 Linux / macOS**（`src-tauri/tauri-runtime-kbcef/src/webview.rs:1151-1194`）
 ```rust
             fn on_start_dragging(&self, _browser: Option<&mut Browser>, drag_data: Option<&mut DragData>) {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]   // 现状：Windows 空实现
@@ -147,7 +147,7 @@ void OSExchangeDataProviderWin::SetFilenames(const std::vector<FileInfo>& filena
     // 只在 Linux / macOS 的 CEF standard 模式安装 resolver:不安装即关闭真实文件
     // 注入,Windows 的 DownloadURL 虚拟文件路径因此完全不受影响。   // 现状注释
     #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "standard"))]
-    tauri_runtime_cef::set_drag_file_resolver(|label, image_id| {
+    tauri_runtime_kbcef::set_drag_file_resolver(|label, image_id| {
         if label != "main" { return None; }
         crate::drag_export::authorize_drag_image(image_id)
     });
@@ -179,7 +179,7 @@ const onDragStart = (slot: MediaSlot, event: DragEvent) => {
 
 **h. 文档与回归把 Windows 写成「仍走 DownloadURL、待真机验证」**：`AGENTS.md:53`（「Windows 拖出传 `file://` 的
 `DownloadURL`（真机待验证）」）、`cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`（标题 Linux / macOS；多处「Windows 不走本链路」）、
-`cocs/README.md:142`、`third-patches/cef/README.md:19`（「on Linux and macOS」）、`src-tauri/tauri-runtime-cef/README.md:42`、
+`cocs/README.md:142`、`third-patches/cef/README.md:19`（「on Linux and macOS」）、`src-tauri/tauri-runtime-kbcef/README.md:42`、
 `cocs/wpe/WPE_IMPORT.md`（6b 节「Windows 拖出使用 `file://`」）、`versions/latest/regression.md` 6b / 6c 两处「7 Windows 拖出」行、
 `versions/latest/changelog.md:12`（「拖出待真机验证」）。
 
@@ -253,37 +253,37 @@ void PrepareDragData(RenderFrameHost& source_rfh,
 
 - **修改** `OnStartDragging` 文档：`Currently called on Linux and macOS for windowed browsers.` →
   `Currently called on Linux, macOS and Windows for windowed browsers.`。
-  > 说明：注释行数不变，不影响 0004–0006 的上下文；`GetCustomData`、`ChromeWebContentsViewDelegateCef::GetDragFilenames`、
-  > cef-rs 0006 / 0007 / 0008 bindings 全部不动（Windows 的 `_cef_drag_handler_t` / `_cef_drag_data_t` 布局早已含这两个槽）。
+  > 说明：注释行数不变，不影响 04–06 的上下文；`GetCustomData`、`ChromeWebContentsViewDelegateCef::GetDragFilenames`、
+  > cef-rs 06 / 07 / 08 bindings 全部不动（Windows 的 `_cef_drag_handler_t` / `_cef_drag_data_t` 布局早已含这两个槽）。
 
-## 点 3 — 补丁文件再生成（`third-patches/cef/0003-drag-source-filenames.patch`）
+## 点 3 — 补丁文件再生成（`third-patches/cef/03-drag-source-filenames.patch`）
 
-内层 Chromium 补丁是 0003 的一个**文件内容**，不能手改 hunk 计数。流程（Claude 执行 git 相关步骤；构建树里的 Chromium
+内层 Chromium 补丁是 03 的一个**文件内容**，不能手改 hunk 计数。流程（Claude 执行 git 相关步骤；构建树里的 Chromium
 文件改动直接留在那里供用户重编，`build-chromium.ts` 以 `--no-chromium-update` 跑，不会再碰这些文件）：
 
 1. 在构建树 `D:\Codes\cefbuild\chromium_git\chromium\src` 按点 1 改 `content/browser/web_contents/web_contents_view_aura.cc` 与
-   `content/public/browser/web_contents_view_delegate.h`（这两个文件当前就是「上游 + 0003 内层补丁」的状态，`git status` 为 `M`）。
+   `content/public/browser/web_contents_view_delegate.h`（这两个文件当前就是「上游 + 03 内层补丁」的状态，`git status` 为 `M`）。
 2. `cd …\src\cef && python tools/patch_updater.py --resave --patch kabegame_drag_source_filenames`
    → 重写构建树 `cef/patch/patches/kabegame_drag_source_filenames.patch`（不用 `python -I`，脚本要从自身目录导 `exec_util`）。
 3. 把它拷回 `third/cef/patch/patches/kabegame_drag_source_filenames.patch`；按点 2 改 `third/cef/include/cef_drag_handler.h`。
-4. 重生成 0003：`deno task patch cef -r` → 手工 `git -C third/cef apply` 0001、0002（或 `deno task patch cef` 后
-   `git -C third/cef checkout` 掉 0004–0006 涉及的文件——以 patch-manager 实际提供的能力为准）→
-   `deno task patch cef --gen --from 0002 --out third-patches/cef/0003-drag-source-filenames.patch`。
+4. 重生成 03：`deno task patch cef -r` → 手工 `git -C third/cef apply` 01、02（或 `deno task patch cef` 后
+   `git -C third/cef checkout` 掉 04–06 涉及的文件——以 patch-manager 实际提供的能力为准）→
+   `deno task patch cef --gen --from 02 --out third-patches/cef/03-drag-source-filenames.patch`。
 5. `deno task patch cef --check` 全系列干跑通过，`deno task patch cef` 重新应用六个补丁，`git -C third/cef status` 与应用前一致。
 6. 用户重编：MSYS2 `CEFBUILD=D:/Codes/cefbuild deno task build:chromium`（`stageCefPatchesAsCommit` 会把 `third/cef` 工作树固化进
    `kabegame-build`，automate-git 因 cef 哈希变化整树重拷 `src/cef`，Chromium 侧两个文件靠第 1 步已经改好的工作树编译）。
 
-- **修改** `third-patches/cef/README.md:19` 的 0003 条目：平台改成 Linux、macOS、Windows；补一句 Windows 半边（aura 共用钩子，
+- **修改** `third-patches/cef/README.md:19` 的 03 条目：平台改成 Linux、macOS、Windows；补一句 Windows 半边（aura 共用钩子，
   另清 `html` / `download_metadata`、不打 `chromium/x-renderer-taint`，`CF_HDROP` 由 `OSExchangeDataProviderWin::SetFilenames` 产出）。
 
-## 点 4 — 运行时（`src-tauri/tauri-runtime-cef/src/webview.rs`、`README.md`）
+## 点 4 — 运行时（`src-tauri/tauri-runtime-kbcef/src/webview.rs`、`README.md`）
 
 - **修改** `on_start_dragging` 的 `#[cfg(any(target_os = "linux", target_os = "macos"))]` → 去掉 cfg（三个桌面平台都是 CEF；本 crate
   本来只在桌面编译），`add_file` 前的注释补 Windows：落地文件名来自 `CF_HDROP` 的路径本身，同样忽略 `display_name`。
 ```rust
             fn on_start_dragging(&self, _browser: Option<&mut Browser>, drag_data: Option<&mut DragData>) {
                 // 三个桌面平台共用：Linux / Windows 走 aura 推模型（OSExchangeData），macOS 走
-                // WebDragSource 拉模型；哪个平台真会回调由 CEF 补丁 0003 决定，未带补丁的 CEF 不会进来。
+                // WebDragSource 拉模型；哪个平台真会回调由 CEF 补丁 03 决定，未带补丁的 CEF 不会进来。
                 let Some(drag_data) = drag_data else { return };            // 修改：不再包在 cfg 块里
                 // …原逻辑不变
             }
@@ -298,7 +298,7 @@ void PrepareDragData(RenderFrameHost& source_rfh,
     // 门控集中在此处一次完成;CEF API 与三份 cef-rs bindings 保持相同 struct 布局。
     // label 白名单（原注释保留）
     #[cfg(feature = "standard")]                                             // 修改：去掉 any(linux, macos)
-    tauri_runtime_cef::set_drag_file_resolver(|label, image_id| { /* 不变 */ });
+    tauri_runtime_kbcef::set_drag_file_resolver(|label, image_id| { /* 不变 */ });
 ```
   > 说明：`standard` feature 只在桌面存在（Android / web 不开），所以等价于「三个桌面平台」；若 `standard` 在 Android 也会开，
   > 则写成 `all(not(target_os = "android"), feature = "standard")`——执行时以 `Cargo.toml` 的 feature 定义为准。
@@ -337,24 +337,24 @@ const onDragStart = (slot: MediaSlot, event: DragEvent) => {
 
 ## 点 7 — 文档、回归与 changelog
 
-- `AGENTS.md:53`：「Windows 拖出传 `file://` 的 `DownloadURL`（真机待验证）」→「三个桌面平台的拖出都走 CEF 补丁 0003 的真实文件链路
+- `AGENTS.md:53`：「Windows 拖出传 `file://` 的 `DownloadURL`（真机待验证）」→「三个桌面平台的拖出都走 CEF 补丁 03 的真实文件链路
   （Windows 为 `CF_HDROP`），Web 版保留 `DownloadURL`」。
 - `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`（文件名不改，链接多处引用）：标题改「CEF 拖出真实本地文件（Linux / macOS / Windows）」；
   「适用范围」删除 Windows 例外段，补 Windows 的 `CF_HDROP` 推模型；「载荷模型」补「Windows 与 Linux 同为 aura 推模型」；
   「为什么注入文件后必须清理旧载荷」补 Windows 的 `download_metadata`（第二份延迟渲染 `CF_HDROP`）与 `html`（`CF_HTML`）；
   「污染标记」一节改为「macOS 与 Windows 都必须摘掉」（Windows 为 `chromium/x-renderer-taint` 自定义剪贴板格式），并记一句
-  Windows 没有 0003 时的历史（`DownloadURL` 延迟渲染下载能完成但资源管理器拿不到文件，CEF Chrome 风格下
+  Windows 没有 03 时的历史（`DownloadURL` 延迟渲染下载能完成但资源管理器拿不到文件，CEF Chrome 风格下
   `CefDownloadManagerDelegateImpl::DetermineDownloadTarget` 也不认强制路径）；「四层实现」表平台列加 Windows；
   「平台门控与 ABI」改三平台；「排查入口」第 2 条改三平台，第 6 条补 Windows（用最小 Win32 / .NET 接收器或 `ClipSpy` 类工具
   列 IDataObject 格式：应有 `CF_HDROP`，不应有 `chromium/x-renderer-taint`、`CF_HTML`、`FileGroupDescriptorW`）；`effectAllowed=copy`
   与 resolver `is_file()` 各记一句。
 - `cocs/README.md:142`：条目主题补 Windows。
 - `cocs/wpe/WPE_IMPORT.md` 6b 节、`.claude/plans/wpe-import/2-web/PLAN.md`（6b / 6c 表行与正文里「Windows 拖出 `DownloadURL`」）→
-  指向 6d。`third-patches/cef/README.md`：点 3。`src-tauri/tauri-runtime-cef/README.md`：点 4。
+  指向 6d。`third-patches/cef/README.md`：点 3。`src-tauri/tauri-runtime-kbcef/README.md`：点 4。
 - `versions/latest/regression.md`：6b / 6c 两处「7 Windows 拖出」行备注改「由 Phase 6d 取代（`DownloadURL` 路线放弃）」；新增小节
   「Phase 6d：Windows 拖出真实本地文件」，用例见下。
 - `versions/latest/changelog.md`：用户可见一行（Windows 从图库拖图 / 视频到资源管理器等程序得到的是库内原文件，只复制不移动）+
-  内部一行（0003 扩到 Windows：aura 钩子放宽、清 `html` / `download_metadata`、不打 `x-renderer-taint`；运行时 / 应用 cfg；
+  内部一行（03 扩到 Windows：aura 钩子放宽、清 `html` / `download_metadata`、不打 `x-renderer-taint`；运行时 / 应用 cfg；
   前端 `effectAllowed=copy`、Web 保留 `DownloadURL`；resolver `is_file()`）。
 
 ## 验证
@@ -365,7 +365,7 @@ const onDragStart = (slot: MediaSlot, event: DragEvent) => {
 2. 构建树 `git -C D:/Codes/cefbuild/chromium_git/chromium/src diff --stat` 只多 `web_contents_view_aura.cc` /
    `web_contents_view_delegate.h` 两个文件的本次改动；用 `git apply --check -R` 以新内层补丁反向干跑确认两者一致。
 3. `check-kabegame` 0 error（`CARGO_TARGET_DIR=D:/Codes/kabegame/target-check`）；`grep -rn "DownloadURL" apps/kabegame/src` 只剩
-   `IS_WEB` 分支；`grep -rn "any(target_os = \"linux\", target_os = \"macos\")" src-tauri/kabegame/src/lib.rs src-tauri/tauri-runtime-cef/src/webview.rs`
+   `IS_WEB` 分支；`grep -rn "any(target_os = \"linux\", target_os = \"macos\")" src-tauri/kabegame/src/lib.rs src-tauri/tauri-runtime-kbcef/src/webview.rs`
    为空。
 4. 单测：`kabegame drag_export`（若加了目录用例）。
 
@@ -400,17 +400,17 @@ Linux / macOS：复跑 v4.5.0「Linux / macOS 拖出真实本地文件」矩阵�
 - **`PrepareDragData` 签名加默认参数**：`web_contents_view_aura.cc` 内其它调用点只有 `StartDragging` 一处；上游 re-vendor 时
   这是内层补丁里的新 hunk，上下文漂移按 `third-patches/cef/README.md` 流程处理。
 - **ChromeOS 不开**，`IS_CHROMEOS` 与现状一致不进门控。
-- 0003 真机此前只在 Linux / macOS 验证过；Windows 第一次走 aura 推模型，用例 6 / 7 / 14 是新增风险点（污染标记、`CF_HTML`）。
+- 03 真机此前只在 Linux / macOS 验证过；Windows 第一次走 aura 推模型，用例 6 / 7 / 14 是新增风险点（污染标记、`CF_HTML`）。
 
 ## 实施记录
 
 - 2026-10-30：主仓库部分（点 4–7，不含 `third/`、`third-patches/cef/*.patch` 与构建树）由 Claude 子代理实施；点 1–3 的 Chromium
-  内层补丁、`third/cef` 与 0003 再生成由另一人并行负责，本记录不覆盖。
-  - **点 4**：`tauri-runtime-cef/src/webview.rs` 的 `on_start_dragging` 去掉 `#[cfg(any(linux, macos))]` 块、块内代码反缩进一级，
-    逻辑不变；开头补「三平台共用：Linux / Windows aura 推模型、macOS 拉模型，回调与否由 0003 决定」，`add_file` 前的注释改为三个平台
+  内层补丁、`third/cef` 与 03 再生成由另一人并行负责，本记录不覆盖。
+  - **点 4**：`tauri-runtime-kbcef/src/webview.rs` 的 `on_start_dragging` 去掉 `#[cfg(any(linux, macos))]` 块、块内代码反缩进一级，
+    逻辑不变；开头补「三平台共用：Linux / Windows aura 推模型、macOS 拉模型，回调与否由 03 决定」，`add_file` 前的注释改为三个平台
     （Windows 取 `CF_HDROP` 路径本身）。`README.md` 「文件拖放」行改三个桌面平台。
   - **点 5**：`kabegame/src/lib.rs` 的 resolver 门控改为 `all(not(target_os = "android"), feature = "standard")`：`standard` feature 本身
-    不按 target 限制，而 `tauri-runtime-cef` 只在三个桌面 target 段声明、`mod drag_export` 门控是 `not(target_os = "android")`，
+    不按 target 限制，而 `tauri-runtime-kbcef` 只在三个桌面 target 段声明、`mod drag_export` 门控是 `not(target_os = "android")`，
     显式排除 Android 与两者对齐（方案的 `#[cfg(feature = "standard")]` 在有人给 Android 开 `standard` 时会编译失败）。
     `drag_export.rs` 抽出纯函数 `authorized_file_path(path) -> Option<PathBuf>`（`metadata().is_file()`，跟随符号链接），
     `authorize_drag_image` 改为调用它；新增 3 个单测（目录被拒 / 普通文件放行 / 不存在被拒），用 `std::env::temp_dir()` 下按
@@ -422,14 +422,14 @@ Linux / macOS：复跑 v4.5.0「Linux / macOS 拖出真实本地文件」矩阵�
   - **点 7**：`AGENTS.md`、`cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`（整篇按清单改写：标题、适用范围、Windows 放弃 `DownloadURL`
     的历史小节、两种载荷模型、Windows 清理理由、污染标记一节改三平台对照并附 Windows 的 `kMarkRendererTainted` 片段、四层表、
     两道安全门补 `is_file()`、平台门控、排查入口第 2 / 5 / 6 / 7 条与新增第 8 条 `effectAllowed`）、`cocs/README.md`、
-    `cocs/wpe/WPE_IMPORT.md`（四处）、`third-patches/cef/README.md`（0003 条目与 0006 条目末句）、`versions/latest/regression.md`
+    `cocs/wpe/WPE_IMPORT.md`（四处）、`third-patches/cef/README.md`（03 条目与 06 条目末句）、`versions/latest/regression.md`
     （6b / 6c 两处「7 Windows 拖出」备注加前缀，文末新增 Phase 6d 小节）、`versions/latest/changelog.md`（用户侧第 12 行去掉
     「Windows 拖出改用 `file://`（待真机验证）」并新增一行，Internal 新增一行）。
 - 与方案的偏差 / 超出清单的同步：
   - resolver 门控见上（多了 `not(target_os = "android")`）。
-  - 为避免文档自相矛盾，额外改了清单外几处同样写着「Windows 拖出走 `DownloadURL`」的地方：`tauri-runtime-cef/README.md` 「当前限制」
+  - 为避免文档自相矛盾，额外改了清单外几处同样写着「Windows 拖出走 `DownloadURL`」的地方：`tauri-runtime-kbcef/README.md` 「当前限制」
     里的拖出条目、`cocs/web/CDN_MEDIA.md` 第 9 行、`cocs/README.md` 中 WPE_IMPORT 与 third-patches/cef 两个条目、
-    `third-patches/cef/README.md` 0006 条目末句（「Windows `DownloadURL` still needs device verification」）。
+    `third-patches/cef/README.md` 06 条目末句（「Windows `DownloadURL` still needs device verification」）。
   - `versions/latest/regression.md` 新小节表头沿用本文件所有小节的 `| 状态 | 项目 | … |`（`是否完成 | 标题` 是 v4.5.0 的写法）；
     除 16 条真机用例外，加了已在本环境完成的静态行 S1–S4（`[x]`）。
   - 未改 `.claude/plans/wpe-import/2-web/PLAN.md`（点 7 提到它的 6b / 6c 正文；不在本次分派范围，6d 表行已有人写好），
@@ -447,6 +447,6 @@ Linux / macOS：复跑 v4.5.0「Linux / macOS 拖出真实本地文件」矩阵�
     `TypeError … Received 'file:///__vue-jsx-ssr-register-helper'`。只 `import "@kabegame/element-plus"` 的最小探针测试也报同一个错，
     说明是 `@vitejs/plugin-vue-jsx` 的 SSR 辅助虚拟模块在本机 Vitest 下解析失败，任何经 import 图引入组件库的测试都会加载失败；
     这三个文件经未改动的 `services/albums.ts`、`utils/kameMessage.ts` 等就会引入组件库。
-- 无法验证：Windows 真机拖放（CDP 起不了系统拖放，且需要先重编带新 0003 的 CEF 并完全重启 dev）——回归新小节 1–14 全部 `[ ]`；
+- 无法验证：Windows 真机拖放（CDP 起不了系统拖放，且需要先重编带新 03 的 CEF 并完全重启 dev）——回归新小节 1–14 全部 `[ ]`；
   Linux / macOS 复跑两条同样待真机；Web 版 `IS_WEB` 分支本轮没有起 Web dev 验证；`deno task check --mode web` 未跑
   （`drag_export` 模块在 web 构建里仍编译、resolver 不安装，预计多一条与此前同类的 dead_code warning）。

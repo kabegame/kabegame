@@ -11,7 +11,7 @@
 
 ```
 CEF content 层（Rust）
-  TauriCefDragHandler                      src-tauri/tauri-runtime-cef/src/webview.rs
+  TauriCefDragHandler                      src-tauri/tauri-runtime-kbcef/src/webview.rs
   └─ WindowEvent::DragDrop(Enter/Over/Drop/Leave)
        │  Enter 的 position 恒为 (0,0)（见下）；Over/Drop 带真实 client 坐标 × scale factor
        ▼
@@ -38,7 +38,7 @@ CEF content 层（Rust）
 
 `<DragFileZone>` **只是个注册表条目**：`onMounted` 把根元素和响应式 props 登记进模块级 Map，
 `onBeforeUnmount` 注销。它不绑 `dragover`/`drop`，因为原生 drag 事件根本到不了 DOM —— CEF 在
-content 层（`ChromeWebContentsViewDelegateCef::OnPerformingDrop`，见 `third-patches/cef/0002`）
+content 层（`ChromeWebContentsViewDelegateCef::OnPerformingDrop`，见 `third-patches/cef/02`）
 就把 drop 拦掉并 veto 了，渲染进程收不到任何拖放事件。坐标命中是唯一可用的路由手段。
 
 注册表存的是**响应式 props 本身**，命中时读到的 `disabled` / `plan` 永远是最新值；页面不需要再写
@@ -176,5 +176,5 @@ local-import 的结果保持扁平，不再为拖入目录创建同步画册或�
 - `apps/kabegame/src/components/common/form/KbPath.vue` —— 插件路径变量热区（单文件 / 单文件夹）
 - `apps/kabegame/src/utils/dragExport.ts`、`components/image/ImageContent.vue` —— 内部拖拽标记
 - `src-tauri/kabegame/src/commands/misc.rs` —— `get_file_drop_kinds`
-- `src-tauri/tauri-runtime-cef/src/webview.rs` —— `TauriCefDragHandler`
-- `third-patches/cef/0002-drag-drop-client-events.patch` —— CEF 侧的 over/leave/drop 回调
+- `src-tauri/tauri-runtime-kbcef/src/webview.rs` —— `TauriCefDragHandler`
+- `third-patches/cef/02-drag-drop-client-events.patch` —— CEF 侧的 over/leave/drop 回调

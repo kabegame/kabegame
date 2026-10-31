@@ -341,7 +341,7 @@ web 与 Android 不开放；路径白名单与 `/file` 完全一致（必须真�
 本节验证的是浏览器进程授权并注入真实本地路径的新链路，与上一节的 ozone 会话探测和
 `/download` URL 文件名修复是两批独立改动，不能用上一节的结果代替。
 
-**前置条件：必须先应用 `third-patches/cef/0003-drag-source-filenames.patch`，用它重新构建
+**前置条件：必须先应用 `third-patches/cef/03-drag-source-filenames.patch`，用它重新构建
 CEF/Chromium，再用该 CEF 构建并运行应用。** 如果仍使用旧 CEF，新的 delegate 回调根本不会被
 调用，拖拽会退化成 Blink 为 `<img>` 自动填充的缩略图载荷——前端在 Linux 与 macOS 上均已
 不再写 `DownloadURL` / `text/uri-list` / `text/plain`，没有 HTTP URL 兜底了。这表示前置条件

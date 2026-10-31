@@ -174,7 +174,7 @@ Kabegame が役に立ったら、Star を付けていただけると嬉しいで
 Kabegame は Vue 3、Tauri 2、Rust で構築され、ライブラリクエリ、プラグインランタイム、デスクトップブラウザ機能についていくつかの拡張を行っています：
 
 - [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)：ログイン状態やページ操作を必要とするプラグインを実ページ環境で実行します。
-- [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)：デスクトップ向けにカスタマイズした CEF Tauri runtime。
+- [tauri-runtime-kbcef](./src-tauri/tauri-runtime-kbcef/)：デスクトップ向けにカスタマイズした CEF Tauri runtime。
 - [PathQL](./src-tauri/pathql-rs/)：パスによる組み合わせフィルタ、並べ替え、ページングと Provider DSL を備えたデータベースクエリエンジン。
 
 プロジェクト構成、プロセスモデル、主要モジュールは[アーキテクチャとプロジェクト構成](https://kabegame.com/dev-contrib/architecture/)を参照してください。

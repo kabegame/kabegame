@@ -156,7 +156,7 @@
 
   // ---- 传输：iframe 自己直接 invoke / listen，事件只投递到本 frame ----
   // 权限只来自 wpe-web-capability（listen 只放行 wallpaper-ping / setting-change / image-changed /
-  // images-change，新增监听要同步改 capability）。来源由 CEF 补丁 0007 在建工厂时确定，首批请求即可用，不做重试。
+  // images-change，新增监听要同步改 capability）。来源由 CEF 补丁 07 在建工厂时确定，首批请求即可用，不做重试。
   var transport = {
     pull: function () {
       return internals.invoke("wpe_web_pull_state");

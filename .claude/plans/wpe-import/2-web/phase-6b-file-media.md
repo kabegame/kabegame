@@ -1,8 +1,8 @@
-# Phase 6b — 图库媒体改走 `file://`（CEF 补丁 0006 + 按 frame 分档的运行时闸门）
+# Phase 6b — 图库媒体改走 `file://`（CEF 补丁 06 + 按 frame 分档的运行时闸门）
 
-> 状态：已实现（2026-10-29，补丁 0006 + 点 2–7；check 0 error、单测通过），真机待用户重编 CEF 后按 `versions/latest/regression.md` 6b 小节验证。上级：[PLAN.md](PLAN.md)。依赖 Phase 6a（补丁 0005、`set_wpe_web_preview` 返回入口、前端赋 `src`）。
+> 状态：已实现（2026-10-29，补丁 06 + 点 2–7；check 0 error、单测通过），真机待用户重编 CEF 后按 `versions/latest/regression.md` 6b 小节验证。上级：[PLAN.md](PLAN.md)。依赖 Phase 6a（补丁 05、`set_wpe_web_preview` 返回入口、前端赋 `src`）。
 >
-> 起因：0005 落地后实测（2026-10-29），应用页 `<img src="file:…">` 已过渲染侧 `CanDisplay`、请求真的发出，但报
+> 起因：05 落地后实测（2026-10-29），应用页 `<img src="file:…">` 已过渲染侧 `CanDisplay`、请求真的发出，但报
 > `ERR_UNKNOWN_URL_SCHEME`——非 `file:` 文档没有 `file:` 的子资源 URLLoaderFactory。用户希望的形态（2026-10-29）：
 > **主 frame 完全放开，子 frame 按根目录限制**，运行时用一张按 frame 分档的 handler 表决定挂不挂闸门；图库图片、缩略图、
 > 兼容副本直接走 `file://`。三个桌面平台一起开（用户确认）。
@@ -28,7 +28,7 @@
 
 | 发起方 | 判定依据（`resource_request_handler` 的参数） | 处理 |
 | --- | --- | --- |
-| 应用页主 frame 的子资源 | `!is_navigation && frame.is_main()`，发起方 origin 与 frame 文档都不是 `file:`，label 登记了 0005 | **不挂闸门**，放行 |
+| 应用页主 frame 的子资源 | `!is_navigation && frame.is_main()`，发起方 origin 与 frame 文档都不是 `file:`，label 登记了 05 | **不挂闸门**，放行 |
 | 子 frame 导航到 `file:`（iframe 赋 `src`） | `is_navigation && !frame.is_main()` | 目标必须在该 label 的根目录内 |
 | `file:` 文档自己的子资源（WPE 页 fetch 同目录、嵌套 `keyframes.html`，壁纸窗口整窗 `file:` 时的主 frame） | frame 文档 / 发起方 origin 是 `file:` | 只许根目录内，和现在一样 |
 | 主 frame 导航到 `file:` | `is_navigation && frame.is_main()` | 按根目录（壁纸窗口由 Rust 导航，主窗口不会发生） |
@@ -39,20 +39,20 @@ identifier 随之变化；而 frame 自己的文档 origin 天然说明了它属
 `CefFrame::GetURL()` 的缓存更可靠，两者一起判、任一是 `file:` 就走闸门。
 
 **主 frame 完全放开**是用户决策：应用页是我们自己的代码，CSP 的 `script-src 'self'` / `style-src 'self'` 已经挡住
-`<script src=file:>` 与 `<link href=file:>`，剩下的只是显示型元素；0005 / 0006 都不放开 `CanRequest` 与 CORS，`fetch(file:)`
+`<script src=file:>` 与 `<link href=file:>`，剩下的只是显示型元素；05 / 06 都不放开 `CanRequest` 与 CORS，`fetch(file:)`
 失败、画到 canvas 会被污染，所以放开的是「能显示」而不是「能读到字节」。同源别名（不带 sandbox 或带 `allow-same-origin`
 的 `about:blank` / `srcdoc` 子 frame）会继承这项能力，因此本 Phase 顺手把唯一的一个——插件详情 EJS iframe——改成 opaque origin
 并加内层 CSP，让它既不继承 `file:` 显示权，也不能发脚本请求。
 
-CEF 补丁 0006 只补缺的那一层：`ChromeContentBrowserClientCef` 覆写 `RegisterNonNetworkSubresourceURLLoaderFactories`，对
-「非弹窗、带 `kabegame.allow_local_resources`、最外层主 frame」的文档塞一个 `file:` 工厂。键沿用 0005，语义正好是「应用页可加载本地
+CEF 补丁 06 只补缺的那一层：`ChromeContentBrowserClientCef` 覆写 `RegisterNonNetworkSubresourceURLLoaderFactories`，对
+「非弹窗、带 `kabegame.allow_local_resources`、最外层主 frame」的文档塞一个 `file:` 工厂。键沿用 05，语义正好是「应用页可加载本地
 资源」；`file:` 文档 content 自己已经塞过，`emplace` 不覆盖。这个工厂会被 Chromium 用 `WillCreateURLLoaderFactory` 包装，也就是
-CEF 的 `ProxyURLLoaderFactory`，所以上面那张表在 `OnBeforeResourceLoad` 真能看到主 frame 的 `file:` 子资源（0006 之前它们走默认网络工厂的代理，
+CEF 的 `ProxyURLLoaderFactory`，所以上面那张表在 `OnBeforeResourceLoad` 真能看到主 frame 的 `file:` 子资源（06 之前它们走默认网络工厂的代理，
 放行后才在网络服务里报错）。
 
 前端只换 URL 形态：桌面 CEF 下 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 直接产出 `file:///` URL；Android、Web 不变。
 仍需 HTTP 的四条路（下载 / 复制兜底的 `fetch`、Windows 拖出的 `DownloadURL`、`/plugin_file`、Web 服务器）改用显式的
-`*ToHttpUrl`，不再复用显示 URL。壁纸窗口的 Vue 页同样显示图片 / 视频，所以也登记 0005（0004 仍只 Windows 且只为 WPE）。
+`*ToHttpUrl`，不再复用显示 URL。壁纸窗口的 Vue 页同样显示图片 / 视频，所以也登记 05（04 仍只 Windows 且只为 WPE）。
 
 数据流变化：桌面图库每张图从 `http://127.0.0.1:P/thumbnail/<编码路径>`（axum 读文件、整块进内存、手写 Range）变成
 `file:///<路径>`（Chromium `FileURLLoader`，原生 Range、不经 TCP）。本地 HTTP 服务保留但只剩非显示用途。
@@ -84,7 +84,7 @@ Chromium 侧只给 `file:` 前驱文档加 `file:` 工厂（`content/browser/ren
 ```
 Chrome 层已覆写（`chrome/browser/chrome_content_browser_client.cc:6549`），加 IWA / `chrome-extension:` / `chrome:` 工厂，CEF 覆写**必须先调父类**。
 
-**b. 0005 的键读法**（`third-patches/cef/0005-app-page-local-resources.patch`，落在 `browser_info.cc` 匿名命名空间）
+**b. 05 的键读法**（`third-patches/cef/05-app-page-local-resources.patch`，落在 `browser_info.cc` 匿名命名空间）
 ```cpp
 bool AllowsLocalResources(const CefRefPtr<CefDictionaryValue>& extra_info) {   // 现状：只有 browser_info.cc 能用
   if (!extra_info) { return false; }
@@ -93,7 +93,7 @@ bool AllowsLocalResources(const CefRefPtr<CefDictionaryValue>& extra_info) {   /
 }
 ```
 
-**c. 运行时闸门不看 frame**（`src-tauri/tauri-runtime-cef/src/webview.rs:788-818`）
+**c. 运行时闸门不看 frame**（`src-tauri/tauri-runtime-kbcef/src/webview.rs:788-818`）
 ```rust
             fn resource_request_handler(
                 &self,
@@ -116,17 +116,17 @@ bool AllowsLocalResources(const CefRefPtr<CefDictionaryValue>& extra_info) {   /
 ```
 `file_access.rs` 的 `FilePolicy { file_documents, app_local_resources, root }`，`root` 注释是「当前允许的根目录（None = 拒绝所有 file: 请求）」。
 
-**d. 能力只在 Windows 登记，壁纸窗口没有 0005**
+**d. 能力只在 Windows 登记，壁纸窗口没有 05**
 ```rust
 // src-tauri/kabegame/src/startup.rs:170-174
     #[cfg(target_os = "windows")]
     {
-        tauri_runtime_cef::allow_file_documents("main");       // 0004
-        tauri_runtime_cef::allow_app_local_resources("main");  // 0005   现状：只有 Windows
+        tauri_runtime_kbcef::allow_file_documents("main");       // 04
+        tauri_runtime_kbcef::allow_app_local_resources("main");  // 05   现状：只有 Windows
     }
 // src-tauri/kabegame/src/wallpaper/manager/window.rs:64-68
         #[cfg(target_os = "windows")]
-        tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL);   // 现状：壁纸窗口只有 0004
+        tauri_runtime_kbcef::allow_file_documents(WALLPAPER_LABEL);   // 现状：壁纸窗口只有 04
 ```
 
 **e. 前端媒体 URL 一律走本地 HTTP**（`apps/kabegame/src/utils/fileUrl.ts:30-34, 55-80`）
@@ -172,12 +172,12 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response { /* �
         .route("/proxy", get(handle_proxy_query))   // 现状：file_routes / file_routes_web（debug 与 release）三处挂载；前端无任何引用
 ```
 
-## 点 1 — CEF 补丁 0006：应用页的 `file:` 子资源工厂（`third/cef/libcef/browser/chrome/chrome_content_browser_client_cef.{h,cc}`）
+## 点 1 — CEF 补丁 06：应用页的 `file:` 子资源工厂（`third/cef/libcef/browser/chrome/chrome_content_browser_client_cef.{h,cc}`）
 
 - **新增**
   - `.h`：在 `WillCreateURLLoaderFactory` 声明前加覆写声明。
-  - `.cc`：include、匿名命名空间里的键判断（与 0005 同一字面量，复制一份，不改 `browser_info.cc`，两个补丁互不依赖）、覆写实现。
-  > 判断条件与 0005 浏览器侧对齐：`RenderFrameHost::FromID` 取不到（worker / service worker 传 `kRoutingIdNone`）直接返回；
+  - `.cc`：include、匿名命名空间里的键判断（与 05 同一字面量，复制一份，不改 `browser_info.cc`，两个补丁互不依赖）、覆写实现。
+  > 判断条件与 05 浏览器侧对齐：`RenderFrameHost::FromID` 取不到（worker / service worker 传 `kRoutingIdNone`）直接返回；
   > `GetParentOrOuterDocument() != nullptr`（子 frame、fenced frame）返回；`CefBrowserHostBase::GetBrowserForHost(rfh)` 取 browser，
   > 弹窗或无键返回。不判断文档 scheme：`file:` 文档 content 已经 `emplace` 过 `file` 键，再 `emplace` 是 no-op。
   > 不用 `IsInPrimaryMainFrame`：提交中的 RFH 可能还是 speculative。
@@ -202,7 +202,7 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response { /* �
 #include "url/url_constants.h"                               // 新增
 
 namespace {                                                  // 文件里若已有匿名命名空间就并入
-// Kabegame: same key as CefBrowserInfo::MaybeCreateFrame (patch 0005) and
+// Kabegame: same key as CefBrowserInfo::MaybeCreateFrame (patch 05) and
 // CefRenderManager::MaybeCreateBrowser; the name must match.
 bool AllowsLocalResources(const CefRefPtr<CefDictionaryValue>& extra_info) {
   if (!extra_info) {
@@ -225,7 +225,7 @@ void ChromeContentBrowserClientCef::
   ChromeContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
       render_process_id, render_frame_id, request_initiator_origin, factories);
 
-  // Kabegame: patch 0005 lets the app page pass SecurityOrigin::CanDisplay()
+  // Kabegame: patch 05 lets the app page pass SecurityOrigin::CanDisplay()
   // and FilterURL for file: URLs, but content only hands a file: subresource
   // factory to documents with a file: precursor scheme
   // (RenderFrameHostImpl::CommitNavigation), so <img src="file:..."> in an
@@ -256,26 +256,26 @@ void ChromeContentBrowserClientCef::
 }
 ```
 
-- **新增** `third-patches/cef/0006-app-page-file-subresources.patch`，生成步骤与 0005 相同：`deno task patch cef`（确认 0001–0005 干净）→ `git -C third/cef add -A` → 改两个文件 → `git -C third/cef diff --full-index` 写成补丁 → `git -C third/cef reset` → `deno task patch cef --check` → `deno task patch cef`。只改 `//cef`，无 C API / 胶水 / `patch.cfg` 变化。0004 也改 `chrome_content_browser_client_cef.cc`，hunk 不重叠。
-- **修改** `third-patches/cef/README.md`，0005 条目后追加：
+- **新增** `third-patches/cef/06-app-page-file-subresources.patch`，生成步骤与 05 相同：`deno task patch cef`（确认 01–05 干净）→ `git -C third/cef add -A` → 改两个文件 → `git -C third/cef diff --full-index` 写成补丁 → `git -C third/cef reset` → `deno task patch cef --check` → `deno task patch cef`。只改 `//cef`，无 C API / 胶水 / `patch.cfg` 变化。04 也改 `chrome_content_browser_client_cef.cc`，hunk 不重叠。
+- **修改** `third-patches/cef/README.md`，05 条目后追加：
 
 ```md
-- `0006-app-page-file-subresources.patch` — completes 0005 for subresources. Patch 0005 lets the app page pass `CanDisplay` and `FilterURL`, but `RenderFrameHostImpl::CommitNavigation` only hands a `file:` subresource URLLoaderFactory to documents with a `file:` precursor scheme, so `<img src="file:...">` in an `http(s)` / custom-scheme page still ends in `ERR_UNKNOWN_URL_SCHEME`. `ChromeContentBrowserClientCef::RegisterNonNetworkSubresourceURLLoaderFactories` (new override, parent called first so Chrome's IWA / extension factories stay) adds `content::CreateFileURLLoaderFactory` for the outermost main frame of a non-popup browser created with the same bool `extra_info` key `kabegame.allow_local_resources`; `emplace` is a no-op for `file:` documents. The factory is wrapped by `WillCreateURLLoaderFactory` like any other, so the client's `OnBeforeResourceLoad` still sees every request — Kabegame lets the app page's own subresources through and confines `file:` frames to their directory there. CORS-mode `file:` requests from a non-`file:` initiator (`fetch` / XHR, `crossorigin` elements, `@font-face`) are still rejected by `FileURLLoaderFactory` (`kCorsDisabledScheme`); the shared CORS origin access list is left empty on purpose. Known side effect: a main-frame-initiated `file:` download also gets this factory. `//cef` only; no public API, C API or `libcef_dll` glue changes.
+- `06-app-page-file-subresources.patch` — completes 05 for subresources. Patch 05 lets the app page pass `CanDisplay` and `FilterURL`, but `RenderFrameHostImpl::CommitNavigation` only hands a `file:` subresource URLLoaderFactory to documents with a `file:` precursor scheme, so `<img src="file:...">` in an `http(s)` / custom-scheme page still ends in `ERR_UNKNOWN_URL_SCHEME`. `ChromeContentBrowserClientCef::RegisterNonNetworkSubresourceURLLoaderFactories` (new override, parent called first so Chrome's IWA / extension factories stay) adds `content::CreateFileURLLoaderFactory` for the outermost main frame of a non-popup browser created with the same bool `extra_info` key `kabegame.allow_local_resources`; `emplace` is a no-op for `file:` documents. The factory is wrapped by `WillCreateURLLoaderFactory` like any other, so the client's `OnBeforeResourceLoad` still sees every request — Kabegame lets the app page's own subresources through and confines `file:` frames to their directory there. CORS-mode `file:` requests from a non-`file:` initiator (`fetch` / XHR, `crossorigin` elements, `@font-face`) are still rejected by `FileURLLoaderFactory` (`kCorsDisabledScheme`); the shared CORS origin access list is left empty on purpose. Known side effect: a main-frame-initiated `file:` download also gets this factory. `//cef` only; no public API, C API or `libcef_dll` glue changes.
 ```
 
-## 点 2 — 运行时：按 frame 分档的闸门（`src-tauri/tauri-runtime-cef/src/`）
+## 点 2 — 运行时：按 frame 分档的闸门（`src-tauri/tauri-runtime-kbcef/src/`）
 
 - **修改** `file_access.rs`
   - `FilePolicy.root` 注释改为「子 frame 与 `file:` 文档的根目录（`None` = 这类请求全拒）」。
-  - 新增 `app_page_open(label) -> bool`：label 登记了 0005（`app_local_resources`）。
+  - 新增 `app_page_open(label) -> bool`：label 登记了 05（`app_local_resources`）。
   - 模块注释改成三档表（主 frame 应用页放行 / 子 frame 导航按根 / `file:` 文档按根）。
   - 新增单测 `app_page_open_follows_registration`。
 - **修改** `webview.rs` 的 `resource_request_handler`：用上 `frame`、`is_navigation`、`request_initiator`。
-- **修改** `lib.rs` 分节注释：`allow_app_local_resources` 的文档补「同时表示该 label 的应用页子资源不过目录闸门（0006）」。
+- **修改** `lib.rs` 分节注释：`allow_app_local_resources` 的文档补「同时表示该 label 的应用页子资源不过目录闸门（06）」。
 
 ```rust
 // file_access.rs —— 新增
-/// label 的应用页（最外层主 frame 的非 `file:` 文档）发起的 `file:` 子资源是否免检：登记了 0005 即免检。
+/// label 的应用页（最外层主 frame 的非 `file:` 文档）发起的 `file:` 子资源是否免检：登记了 05 即免检。
 /// 子 frame 导航与 `file:` 文档的请求不受此影响，仍按根目录裁决。
 pub(crate) fn app_page_open(webview_label: &str) -> bool {
     policies()
@@ -305,7 +305,7 @@ pub(crate) fn app_page_open(webview_label: &str) -> bool {
                         return None;
                     }
                     // 按发起 frame 分档（见 file_access 模块注释）：
-                    // - 应用页主 frame 的子资源：登记了 0005 的 label 免检（图库媒体走 file://）；
+                    // - 应用页主 frame 的子资源：登记了 05 的 label 免检（图库媒体走 file://）；
                     // - 子 frame 的导航、file: 文档（含壁纸窗口整窗 file: 时的主 frame）的子资源：按根目录。
                     // 发起方 origin 是建工厂时钉死的文档 origin（子 frame 导航为 "null"），比 frame.url() 的
                     // 缓存可靠；两者任一是 file: 就走闸门。
@@ -327,21 +327,21 @@ pub(crate) fn app_page_open(webview_label: &str) -> bool {
 ```
 > `FileDocumentGuardHandler` 不改。`is_main()` / `url()` 的 cef-rs 签名以绑定为准（`ImplFrame`，`is_main` 返回 `c_int`）。
 
-## 点 3 — 应用后端：三个桌面平台都登记 0005，壁纸窗口也登记（`src-tauri/kabegame/src/`）
+## 点 3 — 应用后端：三个桌面平台都登记 05，壁纸窗口也登记（`src-tauri/kabegame/src/`）
 
-- **修改** `startup.rs:163-174`：0004 仍 `cfg(target_os = "windows")`（WPE 预览只有 Windows）；0005 改为所有桌面平台（沿用文件里其它 `tauri_runtime_cef::` 调用的 cfg 写法，实施时 `grep -n tauri_runtime_cef startup.rs` 对齐）。注释改成「图库媒体与 WPE 预览」两个用途。
-- **修改** `wallpaper/manager/window.rs:64-68`：壁纸窗口追加 `allow_app_local_resources(WALLPAPER_LABEL)`（所有桌面平台；壁纸窗口的 Vue 页同样用 `<img>` / `<video>` 显示图库媒体）。0004 不变。
+- **修改** `startup.rs:163-174`：04 仍 `cfg(target_os = "windows")`（WPE 预览只有 Windows）；05 改为所有桌面平台（沿用文件里其它 `tauri_runtime_kbcef::` 调用的 cfg 写法，实施时 `grep -n tauri_runtime_kbcef startup.rs` 对齐）。注释改成「图库媒体与 WPE 预览」两个用途。
+- **修改** `wallpaper/manager/window.rs:64-68`：壁纸窗口追加 `allow_app_local_resources(WALLPAPER_LABEL)`（所有桌面平台；壁纸窗口的 Vue 页同样用 `<img>` / `<video>` 显示图库媒体）。04 不变。
 - `commands/wpe_web.rs`、`wallpaper/window.rs` 不改：根目录语义（子 frame / `file:` 文档）与现在一致。
 
 ```rust
 // startup.rs
     // 主窗口的两类本地文件用途，都由 CEF 补丁按 browser 开启、运行时按发起 frame 分档拦截：
-    // - 图库媒体走 file://（补丁 0005 + 0006）：应用页主 frame 的 <img> / <video> 子资源免检，三个桌面平台都开；
-    // - WPE 网页壁纸预览（补丁 0004 + 0005，只有 Windows）：file: iframe 及其子资源按 set_wpe_web_preview 设的根目录拦截。
+    // - 图库媒体走 file://（补丁 05 + 06）：应用页主 frame 的 <img> / <video> 子资源免检，三个桌面平台都开；
+    // - WPE 网页壁纸预览（补丁 04 + 05，只有 Windows）：file: iframe 及其子资源按 set_wpe_web_preview 设的根目录拦截。
     #[cfg(not(target_os = "android"))]                   // 修改：所有桌面平台（以文件既有 cfg 写法为准）
-    tauri_runtime_cef::allow_app_local_resources("main");
+    tauri_runtime_kbcef::allow_app_local_resources("main");
     #[cfg(target_os = "windows")]
-    tauri_runtime_cef::allow_file_documents("main");
+    tauri_runtime_kbcef::allow_file_documents("main");
 ```
 
 ## 点 4 — 前端：桌面媒体 URL 改 `file://`，保留 HTTP 的路径显式化（`apps/kabegame/src/`）
@@ -423,14 +423,14 @@ const DESCRIPTION_CSP =
 
 ## 点 7 — 文档 / 回归 / changelog
 
-- `AGENTS.md`：WPE 那条括号里追加「图库媒体在桌面 CEF 直接走 `file://`（补丁 0006 + 应用页主 frame 免检），子 frame 与 `file:` 文档仍按根目录」。
-- `cocs/README.md`：`third-patches/cef/README.md` 条目改「六个 patch」并加 0006 一句；WPE 条目同步；`tauri-runtime-cef/README.md` 条目加「按 frame 分档」。
-- `cocs/wpe/WPE_IMPORT.md`：闸门一节改成三档表；`src-tauri/tauri-runtime-cef/README.md`：文件访问一节同上。
+- `AGENTS.md`：WPE 那条括号里追加「图库媒体在桌面 CEF 直接走 `file://`（补丁 06 + 应用页主 frame 免检），子 frame 与 `file:` 文档仍按根目录」。
+- `cocs/README.md`：`third-patches/cef/README.md` 条目改「六个 patch」并加 06 一句；WPE 条目同步；`tauri-runtime-kbcef/README.md` 条目加「按 frame 分档」。
+- `cocs/wpe/WPE_IMPORT.md`：闸门一节改成三档表；`src-tauri/tauri-runtime-kbcef/README.md`：文件访问一节同上。
 - `cocs/web/CDN_MEDIA.md`：桌面端一行改「桌面 CEF 走 `file://`，`/file` 等 HTTP 路由只剩非显示用途」。
 - `cocs/plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md`：见点 5。
 - `.claude/plans/wpe-import/2-web/PLAN.md`：阶段表加 Phase 6b 行、状态行、文档列表。
-- `versions/latest/regression.md`：新增小节「Phase 6b：图库媒体走 file:// / 补丁 0006 / 插件 iframe 收紧」，用例见下；Linux / macOS 行标「待测」。
-- `versions/latest/changelog.md`：一条用户可见（桌面图库媒体改由浏览器直接读本地文件、不再经本地 HTTP；插件详情页更严格的隔离），一条内部（CEF 补丁 0006、`/proxy` 删除）。
+- `versions/latest/regression.md`：新增小节「Phase 6b：图库媒体走 file:// / 补丁 06 / 插件 iframe 收紧」，用例见下；Linux / macOS 行标「待测」。
+- `versions/latest/changelog.md`：一条用户可见（桌面图库媒体改由浏览器直接读本地文件、不再经本地 HTTP；插件详情页更严格的隔离），一条内部（CEF 补丁 06、`/proxy` 删除）。
 
 ## 验证
 
@@ -444,7 +444,7 @@ const DESCRIPTION_CSP =
 1. 画廊网格：缩略图加载，CDP `Network` 里请求是 `file:///…/thumbnails/<uuid>.jpg` 且 200；stderr 没有 `deny file:`。
 2. 预览原图 / PhotoSwipe：`file:///<下载目录>/…` 200；视频原图播放并拖动进度条（Range 由 `FileURLLoader` 原生处理）；WPE 视频行 `compatible_path`（创意工坊目录内）正常播放。
 3. 壁纸窗口：图片 / 视频壁纸经 `file://` 显示；平铺模式 CSS 背景图正常。
-4. WPE 预览 iframe 仍受限：`fetch('../796697921/project.json')`、`<img src="file:///C:/Windows/…">` 在 iframe 内被 `deny file:`；入口与同目录子资源照常（6a / 0005 用例 1–4 复跑）。
+4. WPE 预览 iframe 仍受限：`fetch('../796697921/project.json')`、`<img src="file:///C:/Windows/…">` 在 iframe 内被 `deny file:`；入口与同目录子资源照常（6a / 05 用例 1–4 复跑）。
 5. 应用页主 frame 放开：顶层 `<img src="file:///D:/Codes/kabegame/docs/images/icon.png">` 能显示（预览未打开也行）；顶层 `fetch(file:)` 仍失败（CORS）；把它画到 canvas 后 `toBlob` 抛 `SecurityError`（污染）。
 6. 插件详情 iframe：pixiv / bilibili 详情配图照常；在 iframe 里 `fetch("https://example.com")` 被 CSP 拒；`window.parent.document` 与 `window.parent.__TAURI_INTERNALS__` 为 `SecurityError`；插一个 `<iframe src="file:///…">` 被 CSP `frame-src` 拒（即便绕过 CSP，opaque origin 也过不了 `CanDisplay`）；`__bridge.fetch` 仍工作（pixiv 模板的 blob 图显示）；外链点击仍能打开；`kabegame-server` 插件对畅游 / 网页收集来源的快照（嵌套 `sandbox=""` srcdoc iframe）照常显示。
 7. Windows 拖出到资源管理器：仍得到文件（`DownloadURL` 为 `http://127.0.0.1:P/…`）。
@@ -458,7 +458,7 @@ const DESCRIPTION_CSP =
 - **CSP `*` 是否匹配 `file:`**：推断不匹配，显式加 `file:` 后无论哪种都成立。
 - **`frame.url()` 为空**：新建 OOPIF 的 `CefFrameHostImpl` 刚构造时 `url_` 为空，但那时 `is_main()` 为 false，仍走闸门；主 frame 子资源在提交后才发，`url_` 已刷新。`request_initiator` 是主判据。
 - **壁纸窗口整窗 `file:` 时**：主 frame 的 initiator 是 `file://`，自动落到闸门档；切回应用页后 initiator 变回应用 origin，媒体免检。
-- **0006 的工厂只被文档子资源用到**（2026-10-29 实施时核对源码更正）：`DownloadManagerImpl` 对 `file:` 先自建 content 自带的工厂（`download_manager_impl.cc:1452`）才调钩子，DevTools `NetworkHandler` 对 `file:` 跳过钩子，worker / service worker 传 `kRoutingIdNone` 取不到 RFH；原先写的「主 frame 发起的 `file:` 下载也能拿到工厂」不成立。
+- **06 的工厂只被文档子资源用到**（2026-10-29 实施时核对源码更正）：`DownloadManagerImpl` 对 `file:` 先自建 content 自带的工厂（`download_manager_impl.cc:1452`）才调钩子，DevTools `NetworkHandler` 对 `file:` 跳过钩子，worker / service worker 传 `kRoutingIdNone` 取不到 RFH；原先写的「主 frame 发起的 `file:` 下载也能拿到工厂」不成立。
 - **Linux / macOS**：`pathToFileUrl` 的 POSIX 分支与 `file_access` 的路径比较键在 CI 单测覆盖，真机留待下次上机；`startup.rs` 的 cfg 以文件既有写法为准。
 - **插件模板**：没有模板受 `connect-src 'none'` 影响（调研：无裸 `fetch` / XHR）；`base-uri 'none'` 不影响 `document.baseURI` 继承父页（srcdoc 规则），实施时真机确认 `__bridge` 的相对 href 解析仍正常。
 - **以后收紧 `img-src` 到 `data: blob:`**：要先把 14 个模板的远程 `<img>` 改经 `__bridge.fetch`，属插件仓库任务，不在本 Phase。

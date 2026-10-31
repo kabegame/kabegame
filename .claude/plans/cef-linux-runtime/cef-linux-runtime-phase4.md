@@ -37,4 +37,4 @@
 
 ## 参考
 - IPC 范文:`tauri/src/ipc/protocol.rs`、`tauri-runtime-wry/src/lib.rs`(`ipc_handler` ~4588)
-- 已实现:`src-tauri/tauri-runtime-cef/src/protocol.rs`(uri_scheme_protocols)、`ipc.rs`(占位)
+- 已实现:`src-tauri/tauri-runtime-kbcef/src/protocol.rs`(uri_scheme_protocols)、`ipc.rs`(占位)

@@ -602,7 +602,7 @@ mod minimal_windowed {
             root_cache_path: CefString::from(
                 std::env::var_os("CEF_WINDOWED_CACHE_DIR")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| std::env::temp_dir().join("tauri-runtime-cef-windowed"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("tauri-runtime-kbcef-windowed"))
                     .to_str()
                     .unwrap_or(""),
             ),
@@ -632,7 +632,7 @@ mod minimal_windowed {
                 .canonicalize()
                 .expect("CEF framework not found in app bundle Frameworks/");
             settings.framework_dir_path = CefString::from(framework_dir.to_string_lossy().as_ref());
-            if let Some(main_bundle) = tauri_runtime_cef::macos_unbundled_main_bundle() {
+            if let Some(main_bundle) = tauri_runtime_kbcef::macos_unbundled_main_bundle() {
                 settings.main_bundle_path = CefString::from(main_bundle.to_string_lossy().as_ref());
             }
         }

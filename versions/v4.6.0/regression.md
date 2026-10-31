@@ -387,12 +387,12 @@ Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上�
 | [x] | 静态检查 | 仓库 / Linux standard | `deno task check -c kabegame` | `vue-tsc` 与 Rust `cargo check` 无 error | 已运行；仅有既存 warning |
 | [ ] | dev helper 静态 vcruntime | 未安装 VC++ 运行库的 Windows | `deno task dev -c kabegame`，等待 dev 期预构建并启动 `kabegame-cef-helper` | helper 正常启动，不报缺少 `VCRUNTIME140.dll` | 0010 已删除，验证上游 `staticVCRuntime=true` 默认值 |
 | [ ] | Linux `tauri build` | Linux | 构建 deb，检查 Cargo 产物与包内 `files` | `kabegame-cef-helper` 被编译并安装到 `/usr/lib/kabegame/`，可随主程序启动 | |
-| [ ] | Windows `tauri build` | Windows | 构建 NSIS 并安装，检查安装根目录后卸载 | helper 被编译并由 NSIS 安装到主 exe 同级；卸载后 helper 无残留 | 顶层 `bins` / patch 0009 |
+| [ ] | Windows `tauri build` | Windows | 构建 NSIS 并安装，检查安装根目录后卸载 | helper 被编译并由 NSIS 安装到主 exe 同级；卸载后 helper 无残留 | 顶层 `bins` / patch 09 |
 | [ ] | macOS `tauri build` | macOS | 构建 `.app`，检查 `macOS.files` 与启动链路 | helper 被编译并打入配置位置，主程序可正常派生 | |
 | [ ] | NSIS 安装生命周期 | Windows | 分别做同版覆盖安装、低版→高版升级、卸载 | 配置/数据符合现有策略，旧 exe 与 helper 均被替换或清理，不出现文件占用失败 | |
 | [ ] | NSIS 降级拦截 | Windows | 对更高版本分别运行普通、静默与被动模式的低版安装包 | 三种模式均拦截降级；静默/被动模式不绕过版本判定 | |
-| [ ] | Android USB dev + HMR | Android USB 真机 | `deno task dev -c kabegame --mode android`，检查 devUrl、`adb reverse`，修改前端源码 | 保留 localhost，自动建立 `adb reverse tcp:1420 tcp:1420`，页面和 HMR WebSocket 均走 USB 回环且连续热更新 | patch 0005 |
-| [ ] | Android `tauri android check` | Android NDK | `deno task check -c kabegame --mode android --skip vue` | fork CLI 执行 `tauri android check`，共用 cargo-mobile2 工具链并无 Rust error | patch 0004 |
+| [ ] | Android USB dev + HMR | Android USB 真机 | `deno task dev -c kabegame --mode android`，检查 devUrl、`adb reverse`，修改前端源码 | 保留 localhost，自动建立 `adb reverse tcp:1420 tcp:1420`，页面和 HMR WebSocket 均走 USB 回环且连续热更新 | patch 05 |
+| [ ] | Android `tauri android check` | Android NDK | `deno task check -c kabegame --mode android --skip vue` | fork CLI 执行 `tauri android check`，共用 cargo-mobile2 工具链并无 Rust error | patch 04 |
 | [ ] | Android Picker 导入 | Android USB 真机 | 多选图片和视频，再通过 SAF 选择文件夹导入 | 多选结果全部入库；`content://` 视频和 SAF 目录均可读，无序列化或权限异常 | |
 | [ ] | Android 压缩包导出 | Android USB 真机 | 选择多张图片导出压缩包到 Pictures | Pictures 中生成可打开的压缩包，文件齐全且无 `content://` 错误 | |
 | [ ] | Android 返回键退出 | Android USB 真机 | 从主界面按返回键退出，再从桌面图标重新启动 | `exit_app → app.exit(0)` 完整退出，无白屏/残留 Activity，重启正常 | 上游 2.12 会 `finishAffinity()` |
@@ -401,11 +401,11 @@ Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上�
 | [ ] | 畅游窗口生命周期 | 桌面 CEF | 反复打开/关闭畅游窗口，记录监听器数与内存 | 监听器不累积，关闭后内存回落，不影响主窗口 | |
 | [ ] | 畅游一键下载 Channel | 桌面 CEF | 对多张媒体执行一键下载，观察 Channel 进度直到完成 | 进度单调、连续到达完成值，无中途停更、跳回或关窗后残留回调 | |
 | [ ] | `dynamic-acl` / capability 拒绝 | 桌面 CEF / Android | 从未授权窗口调用受限命令，再从已授权窗口调用 | 未授权调用按 capability 拒绝，已授权调用正常；不出现全放行或全拒绝 | |
-| [ ] | deb 无 WebKit Depends | Linux | 构建 deb 后读取 control `Depends` | 仍不含 `libwebkit2gtk-*`，依赖无重复 | patch 0002 + 0006 |
+| [ ] | deb 无 WebKit Depends | Linux | 构建 deb 后读取 control `Depends` | 仍不含 `libwebkit2gtk-*`，依赖无重复 | patch 02 + 0006 |
 
 ## CEF runtime 适配 Tauri 2.12
 
-`tauri-runtime-cef` 已同步 `tauri-runtime` 2.12.2（Tauri 2.12.4）的 trait：app handle 的显示器查询返回 `Result`；指定显示器全屏会在 CEF UI 线程退出旧全屏、移动到目标显示器并重新全屏；CEF 无法在创建 HWND 时注入 `WS_EX_NOREDIRECTIONBITMAP`，因此该 builder 选项明确保留为 no-op。新增的权限请求 handler 转发到 CEF 权限回调，macOS 启动激活策略与不再受 feature 门控的透明窗口签名也已同步。
+`tauri-runtime-kbcef` 已同步 `tauri-runtime` 2.12.2（Tauri 2.12.4）的 trait：app handle 的显示器查询返回 `Result`；指定显示器全屏会在 CEF UI 线程退出旧全屏、移动到目标显示器并重新全屏；CEF 无法在创建 HWND 时注入 `WS_EX_NOREDIRECTIONBITMAP`，因此该 builder 选项明确保留为 no-op。新增的权限请求 handler 转发到 CEF 权限回调，macOS 启动激活策略与不再受 feature 门控的透明窗口签名也已同步。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -416,7 +416,7 @@ Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上�
 
 ## CEF IPC 恢复 fetch 主通道
 
-删除 `tauri-runtime-cef` 的 `force_postmessage_ipc_transport`：不再把上游 `ipc-protocol.js` 的 `customProtocolIpcFailed` 预置为 `true`，invoke 回到上游 `fetch(ipc://localhost/<cmd>)` 主通道，响应直接作为 fetch body 返回，DevTools Network 面板可见。原注释所称「`Tauri-*` 头触发 CORS 预检、CEF 收不到」经实测不成立：CEF scheme handler 处理的请求不发预检，只在响应上校验 ACAO，Tauri `ipc` handler 已返回 `*`。fetch 失败时上游脚本仍自动回退 `window.ipc.postMessage`（`cef-ipc://` JSON 桥）。第三方页面实测（`connect-src 'self'` 严格 CSP 下）标准 invoke 照样走 `ipc://` 并携带 raw body，因此删除 runtime 注入的 `__kb_raw_invoke__` 与 `cef-ipc://localhost/raw` 帧化通道；`media_download.js` 的分块写与 `bootstrap.js` 的 `Kabegame.fs` 写入改用标准 `invoke(cmd, Uint8Array, { headers })`。
+删除 `tauri-runtime-kbcef` 的 `force_postmessage_ipc_transport`：不再把上游 `ipc-protocol.js` 的 `customProtocolIpcFailed` 预置为 `true`，invoke 回到上游 `fetch(ipc://localhost/<cmd>)` 主通道，响应直接作为 fetch body 返回，DevTools Network 面板可见。原注释所称「`Tauri-*` 头触发 CORS 预检、CEF 收不到」经实测不成立：CEF scheme handler 处理的请求不发预检，只在响应上校验 ACAO，Tauri `ipc` handler 已返回 `*`。fetch 失败时上游脚本仍自动回退 `window.ipc.postMessage`（`cef-ipc://` JSON 桥）。第三方页面实测（`connect-src 'self'` 严格 CSP 下）标准 invoke 照样走 `ipc://` 并携带 raw body，因此删除 runtime 注入的 `__kb_raw_invoke__` 与 `cef-ipc://localhost/raw` 帧化通道；`media_download.js` 的分块写与 `bootstrap.js` 的 `Kabegame.fs` 写入改用标准 `invoke(cmd, Uint8Array, { headers })`。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |

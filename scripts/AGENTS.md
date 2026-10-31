@@ -15,7 +15,7 @@ deno task dev -c kabegame --data prod      # 使用系统数据目录开发（�
 deno task dev:frontend            # 仅启动前端（不含 Tauri，端口 1420）
 ```
 
-桌面三平台的 `deno task dev -c kabegame` 统一走 `tauri dev`；`kabegame-cef-helper` bin 在 dev 下由 ComponentPlugin `beforeBuild` 在主程序编译前先行构建（`tauri dev` 走 `cargo run`，无法同调用多编一个 bin）；build 下由 tauri.conf.json 顶层 `bins`（fork patch 0009，见 cocs/tauri/TAURI_CLI_FORK.md）驱动 `tauri build` 随主编译一并产出——cargo 收到逐个 `--bin` 而非 `--bins` 全量（cef-example 不进 release），Windows 的 helper 由 NSIS 原生装到安装根（不再 stage 进 resources/bin）。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。
+桌面三平台的 `deno task dev -c kabegame` 统一走 `tauri dev`；`kabegame-cef-helper` bin 在 dev 下由 ComponentPlugin `beforeBuild` 在主程序编译前先行构建（`tauri dev` 走 `cargo run`，无法同调用多编一个 bin）；build 下由 tauri.conf.json 顶层 `bins`（fork patch 09，见 cocs/tauri/TAURI_CLI_FORK.md）驱动 `tauri build` 随主编译一并产出——cargo 收到逐个 `--bin` 而非 `--bins` 全量（cef-example 不进 release），Windows 的 helper 由 NSIS 原生装到安装根（不再 stage 进 resources/bin）。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。
 
 ### 构建
 ```bash
@@ -45,7 +45,7 @@ deno task build:web                    # Web 发布版（demo.kabegame.com）：
 
 `kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime`、`ipc-client` 和 `ipc-server` feature。`plugin run <id|path.kgpg>` 优先在同数据目录的主程序中执行（因此 app 模式支持 WebView）；回退本地模式时才在 CLI 进程初始化任务与事件运行时、执行 V8 插件。两种模式都支持已安装 id 与临时 `.kgpg` 路径，并在固定进度条上方渲染任务日志。CLI 没有运行时 `--data` 参数，数据目录只由构建时的 `kabegame_data` cfg 决定：插件开发请用 `deno task b -c kabegame-cli`（不带 `--release` 默认即 `--data dev`）构建并搭配 `kabegame-plugin` skill；需要强制隔离运行时加 `--via local`。参见 `apps/docs/src/content/docs/reference/cli.md` 与 `cocs/cli/CLI_IPC.md`。
 
-在 macOS 上，两个二进制文件都是位于 `target/<profile>` 中的扁平 Cargo 产物；CEF framework 通过 cef-dll-sys 创建的 `target/Frameworks` 符号链接进行解析。参见 `src-tauri/tauri-runtime-cef/README.md`。
+在 macOS 上，两个二进制文件都是位于 `target/<profile>` 中的扁平 Cargo 产物；CEF framework 通过 cef-dll-sys 创建的 `target/Frameworks` 符号链接进行解析。参见 `src-tauri/tauri-runtime-kbcef/README.md`。
 
 ### 类型检查
 **用 `check-kabegame` skill**（`.claude/skills/check-kabegame/`），不要手敲这些命令。
@@ -122,8 +122,8 @@ deno task pathql:generate        # 生成 PathQL 客户端 packages/kabegame-pat
 deno task patch deno             # 将 third/deno 重置到干净基线，然后应用完整补丁序列
 deno task patch deno -r          # 将 third/deno 重置到干净基线
 deno task patch --all --check    # 试运行所有由补丁管理器管理的 third-patches/* 序列
-deno task patch cef --gen --from 0005 --out third-patches/cef/0006-xxx.patch
-                                 # 把 third/cef 工作树里「系列到 0005 之外」的剩余改动导出成新补丁；
+deno task patch cef --gen --from 05 --out third-patches/cef/06-xxx.patch
+                                 # 把 third/cef 工作树里「系列到 05 之外」的剩余改动导出成新补丁；
                                  # 不 reset、只读工作树（临时 GIT_INDEX_FILE）；省略 --out 写 stdout，
                                  # 省略 --from 取系列最后一个，--from none 以纯净基线为底
 deno task build:ffmpeg           # 从源码构建 x264（third/x264）+ FFmpeg libav* 库（本机）
@@ -141,7 +141,7 @@ CEFBUILD=~/kabegame-cefbuild deno task build:chromium  # 从 third/cef 构建 CE
                                  # 边界，因此放在本仓库下的 workspace 会将裸导入解析到
                                  # <repo>/node_modules，并导致 //ui/webui/resources/tools/eslint:build_ts 失败。
                                  # 预检保护会拒绝默认 CHROMIUM_DIR（third/chromium/）；
-                                 # 参见 src-tauri/tauri-runtime-cef/README.md。请用同卷 mv 移动现有 checkout
+                                 # 参见 src-tauri/tauri-runtime-kbcef/README.md。请用同卷 mv 移动现有 checkout
                                  # （即时重命名，无需复制 60GB）。
 deno task build:ffmpeg --target android  # 通过环境中的 NDK（NDK_HOME 等）交叉编译 aarch64 FFmpeg
                                  # 输出到已被 git 忽略的 bin/android/arm64/FFmpeg-build/（可通过

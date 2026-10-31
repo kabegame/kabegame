@@ -20,7 +20,7 @@ const OUR_TARGETS: &[&str] = &[
     "kabegame_core",
     "kabegame_cli",
     "pathql_rs",
-    "tauri_runtime_cef",
+    "tauri_runtime_kbcef",
     "tauri_plugin_pathes",
 ];
 

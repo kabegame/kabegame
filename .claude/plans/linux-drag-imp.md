@@ -168,11 +168,11 @@ Rust 侧拿 id 查库还原成路径，再 `SetFilenames()`。
 
 **为什么没有时序问题**：从 `PrepareDragData` 到 `StartDragAndDrop` 是同一个同步调用栈，中间没有任何 IPC，也不需要 `preventDefault()`。
 
-**patch 面**：一个 Chromium 侧 patch（走 CEF 的 `patch/patch.cfg` + `patch/patches/`，由我们的 `third-patches/cef/0003-*.patch` 添加）+ CEF C API + Rust 胶水。
+**patch 面**：一个 Chromium 侧 patch（走 CEF 的 `patch/patch.cfg` + `patch/patches/`，由我们的 `third-patches/cef/03-*.patch` 添加）+ CEF C API + Rust 胶水。
 
 **信任对象**：**谁都不信。**
 
-**代价**：Chromium 侧 patch 的漂移风险高于纯 CEF patch（0001/0002 只碰 CEF 自己的 C++）。每次升 Chromium 都要跟。以及需要重编 CEF（数小时）。
+**代价**：Chromium 侧 patch 的漂移风险高于纯 CEF patch（01/02 只碰 CEF 自己的 C++）。每次升 Chromium 都要跟。以及需要重编 CEF（数小时）。
 
 ---
 
@@ -180,7 +180,7 @@ Rust 侧拿 id 查库还原成路径，再 `SetFilenames()`。
 
 **机制**：前端 `dragstart` 里 `preventDefault()` 取消 Blink 的拖拽，走 Tauri 命令回到 Rust，由 Rust 构造 `OSExchangeData` 并直接调 `DesktopDragDropClientOzone::StartDragAndDrop`。
 
-**patch 面**：**只需 CEF 侧 patch**（新增一个 `CefBrowserHost` 方法），不碰 Chromium 源码——和现有 0001/0002 同层，维护成本更低。
+**patch 面**：**只需 CEF 侧 patch**（新增一个 `CefBrowserHost` 方法），不碰 Chromium 源码——和现有 01/02 同层，维护成本更低。
 
 **信任对象**：谁都不信（同 D，也是 id→路径）。
 

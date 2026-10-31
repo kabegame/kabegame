@@ -132,7 +132,7 @@ bootstrap 的四个占位符分别承载冻结配置 JSON、公共参数 JSON、
 
 安卓的宿主页面停靠在主界面下，app 退后台后页面会被 Chromium 冻结、心跳必然停止：`CrawlerPlugin.subscribeHost` 把 `ProcessLifecycleOwner` 的前后台切换推给 core（`crawler::webview::set_host_visible`），看门狗在宿主不可见期间**不计时**，回到前台重新进入循环并重置期限。
 
-渲染进程真崩溃时心跳同样停止，由同一条超时路径在 ≤120 秒内兜底；安卓上另有 `onRenderProcessGone` 立即以 `renderGone` 结束任务（见 [ANDROID_WEBVIEW_CRAWLER.md](ANDROID_WEBVIEW_CRAWLER.md)）。可见窗口（主窗口/Surf）则由 `tauri-runtime-cef` 的 `RequestHandler` 用 CEF 内置检测处理：`on_render_process_unresponsive` 直接 terminate 渲染进程、`on_render_process_terminated` 自动 `reload` 恢复（`crawler-*` 窗口在这两个回调里被排除）。
+渲染进程真崩溃时心跳同样停止，由同一条超时路径在 ≤120 秒内兜底；安卓上另有 `onRenderProcessGone` 立即以 `renderGone` 结束任务（见 [ANDROID_WEBVIEW_CRAWLER.md](ANDROID_WEBVIEW_CRAWLER.md)）。可见窗口（主窗口/Surf）则由 `tauri-runtime-kbcef` 的 `RequestHandler` 用 CEF 内置检测处理：`on_render_process_unresponsive` 直接 terminate 渲染进程、`on_render_process_terminated` 自动 `reload` 恢复（`crawler-*` 窗口在这两个回调里被排除）。
 
 ### 3.6 下载与媒体
 
@@ -141,7 +141,7 @@ bootstrap 的四个占位符分别承载冻结配置 JSON、公共参数 JSON、
 `data:` / 普通 `blob:` / MSE `blob:` 保持对插件相同的 `downloadImage(url, opts)` 调用形状，但内部不再走专用媒体上传命令：
 
 1. `media_capture.js` 维护 Blob/MSE 捕获表并按清晰度分组、累计覆盖区间；MSE 下载前由 `ensureCaptured` 以正常倍速跳到缺口补拉、侦测换集并选定每路清晰度（无可驱动的 `<video>` 时直接按现有覆盖选），之后检查 DRM、截断和空数据（细节见 `cocs/downloader-tasks/DOWNLOADER_FLOW.md`）。
-2. `media_download.js` 通过 `crawl_fs_get_root` 在当前任务 VFS 的 `tmp/media-*` 建子目录，以 8 MiB Raw IPC 分块写每条流；`crawl_fs_fwrite` 的短写会循环补齐。raw 分块直接用标准 invoke 传 `Uint8Array`（Tauri `InvokeBody::Raw`），CEF 桌面三平台（包括 Windows）经 `fetch(ipc://)` 主通道携带，`ipc` scheme 绕过页面 CSP（见 `tauri-runtime-cef/src/ipc.rs`）。
+2. `media_download.js` 通过 `crawl_fs_get_root` 在当前任务 VFS 的 `tmp/media-*` 建子目录，以 8 MiB Raw IPC 分块写每条流；`crawl_fs_fwrite` 的短写会循环补齐。raw 分块直接用标准 invoke 传 `Uint8Array`（Tauri `InvokeBody::Raw`），CEF 桌面三平台（包括 Windows）经 `fetch(ipc://)` 主通道携带，`ipc` scheme 绕过页面 CSP（见 `tauri-runtime-kbcef/src/ipc.rs`）。
 3. 多 SourceBuffer 显式调用 `crawl_ffmpeg_mux`，容器规则为全部流 MIME 都含 `webm` 才封 WebM，否则 MP4（WebM 只收 VP8/VP9/AV1 + Opus/Vorbis；YouTube 常见 H.264 视频 + Opus 音频，封 WebM 会在写头时 `EINVAL`，MP4 可 stream copy）。
 4. `bootstrap.js` 注入的 `window.__kb_media_submit__` 把最终虚拟绝对路径作为 `crawl_download_image.url` 提交。宿主将其解析为内部 `task-vfs://`，scheme downloader 从 VFS 流式读取并进入 `DownloadSink` / 统一后处理。
 5. `finally` 递归删除本次 `tmp/media-*` 子目录。`crawl_download_image` 会等待下载完成，因此清理不会早于 task-vfs 读取。

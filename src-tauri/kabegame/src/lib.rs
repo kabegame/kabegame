@@ -62,7 +62,7 @@ use commands::*;
     any(target_os = "linux", target_os = "windows", target_os = "macos"),
     feature = "standard"
 ))]
-pub(crate) type AppRuntime = tauri_runtime_cef::Cef<tauri::EventLoopMessage>;
+pub(crate) type AppRuntime = tauri_runtime_kbcef::Cef<tauri::EventLoopMessage>;
 #[cfg(all(
     not(feature = "web"),
     not(all(
@@ -230,7 +230,7 @@ fn init_pre(
     ))]
     {
         let app_handle = app_handle.clone();
-        tauri_runtime_cef::set_already_running_app_relaunch_handler(move |argv| {
+        tauri_runtime_kbcef::set_already_running_app_relaunch_handler(move |argv| {
             let app_handle = app_handle.clone();
             // 回调在 CEF UI 线程（主线程）上；窗口操作转投异步上下文，与 IPC 处理器一致。
             tauri::async_runtime::spawn(async move {
@@ -282,13 +282,13 @@ fn init_post(
     // 三个桌面平台(Windows / macOS / Linux)的 CEF standard 模式都安装 resolver:不安装
     // 即关闭真实文件注入。平台启用门控集中在此处一次完成;CEF API 与三份 cef-rs
     // bindings 保持相同 struct 布局,避免按平台分叉 ABI 并成倍增加维护成本。
-    // `standard` feature 本身不按 target 限制,而 `tauri-runtime-cef` 与 `drag_export`
+    // `standard` feature 本身不按 target 限制,而 `tauri-runtime-kbcef` 与 `drag_export`
     // 只在桌面存在,故显式排除 Android。
     //
     // label 使用白名单而不是黑名单:漏加白名单只会造成拖拽不可用这一可见 bug;
     // 黑名单漏加则会让第三方页面静默获得图库文件导出能力。目前只有 main 渲染图库。
     #[cfg(all(not(target_os = "android"), feature = "standard"))]
-    tauri_runtime_cef::set_drag_file_resolver(|label, image_id| {
+    tauri_runtime_kbcef::set_drag_file_resolver(|label, image_id| {
         if label != "main" {
             return None;
         }
@@ -577,7 +577,7 @@ pub(crate) fn configure_app(
     }
 
     builder
-        // 主窗口与壁纸窗口的应用页免 ACL（tauri 补丁 0017）：只认本地来源的主 frame，导航到外部 /
+        // 主窗口与壁纸窗口的应用页免 ACL（tauri 补丁 17）：只认本地来源的主 frame，导航到外部 /
         // `file:` 页面或请求来自子 frame 时照常按 capability 判定。应用命令因此不再逐条登记权限；
         // 插件权限仍留在 main-capability，插件命令的作用域靠它们传下去。
         // 壁纸窗口的 label 即 `wallpaper::manager::window::WALLPAPER_LABEL`，该模块只在 Windows / macOS

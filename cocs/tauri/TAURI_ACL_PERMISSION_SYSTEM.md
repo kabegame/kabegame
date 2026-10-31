@@ -19,10 +19,10 @@
 - `src-tauri/kabegame/permissions/*.toml`（只剩 `crawler` / `surf` / `surf-navbar` / `wpe-web`）
 - `src-tauri/kabegame/build.rs`
 - `src-tauri/kabegame/src/lib.rs`（`configure_app`：`acl_exempt_webview` 与 `generate_handler!`）
-- `src-tauri/tauri-runtime-cef/src/protocol.rs`（`attach_request_frame`：`IpcFrame` + 子 frame 的 `SubframeId`）、
+- `src-tauri/tauri-runtime-kbcef/src/protocol.rs`（`attach_request_frame`：`IpcFrame` + 子 frame 的 `SubframeId`）、
   `ipc.rs`（`cef-ipc` 回退通道带上 frame）、`runtime.rs`（`EvalInSubframe`）、`webview.rs`（`on_frame_destroyed`）、
   `subprocess.rs`（子 frame 注入桥脚本）
-- `third-patches/tauri/0014`–`0019`（见 [third-patches/tauri/README.md](../../third-patches/tauri/README.md)）
+- `third-patches/tauri/14`–`19`（见 [third-patches/tauri/README.md](../../third-patches/tauri/README.md)）
 
 参考（工作区 Tauri 源码，`deno task patch tauri` 套上补丁后）：
 
@@ -157,7 +157,7 @@ if (plugin_command.is_some() || has_app_acl_manifest || !is_local)
 - 仅为单个新命令快速加一条 app 级 permission，就立刻挂到全局 capability。
 - 未评估 `main` 窗口现有命令集合就切换到严格 ACL。
 
-## 事件投递按接收方身份（tauri 补丁 0014）
+## 事件投递按接收方身份（tauri 补丁 14）
 
 JS `listen` 时前端传的 `target`（默认 `{ kind: "Any" }`）后端不再读取也不保存。`emit_to` 的目标只和**接收方 webview 的身份**比较：
 webview 自己的 label 作为 `Webview{label}`、所在窗口的 label 作为 `Window{label}`，webview 与窗口同名时再加
@@ -177,7 +177,7 @@ webview 自己的 label 作为 `Webview{label}`、所在窗口的 label 作为 `
 看本窗口任一 webview 是否监听了它。`unlisten` 只在调用方 webview 自己的监听表里删除，猜到别人的监听 id 也退订不掉。
 Rust 侧 `listen` / `listen_any` 的语义不变。
 
-## listen 作用域（tauri 补丁 0015）
+## listen 作用域（tauri 补丁 15）
 
 `core:event:allow-listen` 可以带事件名作用域，`event` 写完整事件名，末尾 `*` 表示前缀匹配：
 
@@ -194,17 +194,17 @@ Rust 侧 `listen` / `listen_any` 的语义不变。
 ``event `<name>` is not allowed to be listened by ACL``。核心插件的权限没有 scope schema，capability 里 `allow` 的条目按任意
 JSON 校验，tauri-build 不报错——**拼错键名不会有构建期提示**，写完在真机上验一次。
 
-## frames 维度（tauri 补丁 0016）
+## frames 维度（tauri 补丁 16）
 
 ACL 的判定维度在「来源（`local` / `remote.urls`）+ window / webview label」之外加上**发起请求的 frame**。capability 新增字段
 `frames`：`"main"`（默认，只认最外层主 frame）、`"sub"`（只认 iframe）、`"any"`（都认，也包括 runtime 给不出 frame 的请求）。
-现有 capability 一行不改就只认主 frame；补丁 0019 起 CEF 下每个子 frame 都有 IPC 桥（见「子 frame IPC」），`frames` 是子 frame
+现有 capability 一行不改就只认主 frame；补丁 19 起 CEF 下每个子 frame 都有 IPC 桥（见「子 frame IPC」），`frames` 是子 frame
 能做什么的唯一闸门。显式 deny 不看 frame。
 
 frame 由 runtime 从浏览器进程取得、放进 `http::Request` 的 extension（`tauri::webview::IpcFrame`），页面能伪造请求头，
 但伪造不了 extension：
 
-- 桌面 CEF：`tauri-runtime-cef` 的 `protocol::attach_request_frame` 给每个自定义协议请求插入 `IpcFrame`（主 frame → `Main`，
+- 桌面 CEF：`tauri-runtime-kbcef` 的 `protocol::attach_request_frame` 给每个自定义协议请求插入 `IpcFrame`（主 frame → `Main`，
   子 frame → `Sub`，CEF 没给出 frame 时 → `Unknown`，只有 `frames: "any"` 能匹配）；`cef-ipc` 回退通道重新构造请求时把它带上。
   CEF 只对 service worker 与 `CefURLRequest` 给不出 frame；dedicated worker 的请求记在创建它的 frame 上，子 frame 借 worker 绕不过去。
   子 frame 另带路由用的 `SubframeId`（见「子 frame IPC」）；回退通道放行所有 CEF 给出了 frame 的请求，交给 ACL 判定。
@@ -219,7 +219,7 @@ debug-assertions 编译时存在；本仓根 `Cargo.toml` 的 `[profile.dev.pack
 `ResolvedCommand` 的部分字段只在 tauri-utils 开 debug-assertions 时存在，要开就得整套 tauri crate 一起开。判断是不是 frame
 维度拒的，用对照组：同一个 invoke key、同一个命令，在主 frame 发出放行、换到 iframe 发出被拒，就是 frame 不匹配。
 
-## 特赦 webview（tauri 补丁 0017）
+## 特赦 webview（tauri 补丁 17）
 
 `Builder::acl_exempt_webview(label)` 登记的 webview（label 精确匹配，不支持 glob），**只要请求同时满足「本地来源」与「主 frame」**：
 
@@ -242,15 +242,15 @@ frame 始终是应用页（网页壁纸是子 frame 里的 iframe，窗口不再
 | 畅游外部页面里的任何 iframe（含第三方广告） | 子 | 拒绝（有桥，`surf-capability` 只认主 frame） | 拒绝 | 拒绝 |
 | CEF 给不出 frame 的请求 | Unknown | 拒绝，除非 capability 写了 `frames: "any"` | 同左 | 同左 |
 
-## 子 frame IPC（tauri 补丁 0018–0019）
+## 子 frame IPC（tauri 补丁 18–19）
 
 frame 是 IPC 的基本单位：子 frame 有自己的 Tauri 桥，Tauri 送回页面的东西都送到发起调用的那个 frame。
 
 - **注入**：Tauri 把自己的四段桥脚本（`isTauri` / internals、invoke 脚本、metadata、`init.js`）另交给 runtime
-  （`WebviewAttributes::subframe_bridge_scripts`，补丁 0019）；CEF runtime 在渲染进程里**无条件**先把它们（连同 `cef-ipc`
+  （`WebviewAttributes::subframe_bridge_scripts`，补丁 19）；CEF runtime 在渲染进程里**无条件**先把它们（连同 `cef-ipc`
   回退 shim）注入每个子 frame，再跑原有的初始化脚本。注入范围不从 capability 推断：规则只有一条，每个子 frame 都有桥，
   能调什么只看 ACL。插件初始化脚本与 isolation pattern 不进子 frame。wry 不上报 frame，必须忽略这份脚本（Android 不变：
-  子 frame 没有桥）。代价是 invoke key 对所有子 frame 可见，包括畅游页里的第三方 iframe——补丁 0016 之后 key 只能拿到该 frame
+  子 frame 没有桥）。代价是 invoke key 对所有子 frame 可见，包括畅游页里的第三方 iframe——补丁 16 之后 key 只能拿到该 frame
   自己的 capability，不再是闸门。
 - **路由**：子 frame 的请求在 `IpcFrame::Sub` 旁再带一个不透明的 `SubframeId`（CEF 的 frame identifier，放在请求 extension 里，
   页面伪造不了）；主 frame 不带，按 webview 寻址（CEF 的主 frame id 跨源导航会变，`clear_js_listeners` 等语义也按 webview 定义）。
@@ -267,18 +267,18 @@ frame 是 IPC 的基本单位：子 frame 有自己的 Tauri 桥，Tauri 送回�
   | `cef-ipc` 回退通道的响应 | `webview.eval`（不变） | `eval_script_in_subframe(id)` |
   | `ipc://` 主通道响应 | HTTP 响应（不变） | HTTP 响应（不变） |
 
-  JS 监听表按「webview → frame → 事件」三级存储：接收方判定不变（补丁 0014 的 webview 身份），投递按 frame 展开，主 frame 与
+  JS 监听表按「webview → frame → 事件」三级存储：接收方判定不变（补丁 14 的 webview 身份），投递按 frame 展开，主 frame 与
   子 frame 同时监听同一事件时各收一次；`unlisten` 只在调用方 frame 的表里删，猜到别人的 id 也退订不掉。命令里自己反序列化的
   `JavaScriptChannelId::channel_on(webview)` 仍指主 frame。
 - **Channel 取数**：`plugin:__TAURI_CHANNEL__|fetch` 是唯一绕过 ACL 的命令，大数据队列的 id 按 webview 顺序递增、可以被猜到；
   队列条目记下它要送达的 frame，只有发起方 frame 与条目一致时才取出，否则按 `data not found` 处理。
 - **生命周期**：runtime 在子 frame 销毁时上报 `WebviewEvent::SubframeDestroyed`（CEF 的 `FrameHandler::OnFrameDestroyed`），
   Tauri 删掉该 frame 的全部监听与未取走的 Channel 数据。同一 frame 内重新导航后旧条目还在、投递进新文档时找不到 id 等于空操作，
-  直到 frame 销毁；主 frame 的清理仍靠补丁 0011 的 `clear_js_listeners`（清整个 webview 的全部 frame）。CEF 跨源加载子 frame
+  直到 frame 销毁；主 frame 的清理仍靠补丁 11 的 `clear_js_listeners`（清整个 webview 的全部 frame）。CEF 跨源加载子 frame
   时先建、后销毁的临时 frame 也会报一次，删除是空操作。
 - **关闭拦截只看主 frame**：`tauri://close-requested` 的监听只有在主 frame 才算数，子 frame 是客人，不能阻止窗口关闭。
 - **调用方来源**：命令可以收 `tauri::ipc::CallerOrigin(Url)`，即 ACL 判定所用的来源（请求的 `Origin`）。普通页面只有
-  scheme + host + port；`file:` frame 的完整文档 URL 由 CEF 0007 建工厂时捕获，再由 runtime 写入 `Origin`，`wpe_web_pull_state` 靠它认出调用的
+  scheme + host + port；`file:` frame 的完整文档 URL 由 CEF 07 建工厂时捕获，再由 runtime 写入 `Origin`，`wpe_web_pull_state` 靠它认出调用的
   是哪张网页壁纸（`Url::to_file_path` 不看 scheme，用之前先确认是 `file:`）。
 - **来源回退**：`cef-ipc` 的 `Origin` 不合法时，所有 frame 都用 `kabegame-unattributed://ipc/` 交给 ACL 拒绝；不读取 frame URL 或应用页初始 URL。
 
@@ -288,7 +288,7 @@ frame 是 IPC 的基本单位：子 frame 有自己的 Tauri 桥，Tauri 送回�
 
 `file:` 文档的 `Origin` 请求头是 `null`。CEF runtime 的 `cef-ipc` 回退通道过去拿不到合法 Origin 时会退到 webview
 初始 URL（应用页），请求被 Tauri 判成 `Origin::Local`，于是本地 capability（`main-capability`）的全部命令都能调。
-现在 CEF 补丁 0007 在建工厂时捕获所属文档 URL 与父文档 URL；运行时以浏览器给出的 `request_initiator` 判来源，仅在它是 `file:` 时用完整文档 URL 细化身份（`protocol::ipc_origin`）。无法归属写 `null` 并拒绝，不能用 `frame.url()`：它要到导航完成才刷新。网页壁纸 iframe 以 `Origin::Remote { url: file:///… }` 匹配 `remote.urls` 和 `frames: "sub"`，只得 `wpe-web-capability`。新命令加进 `permissions/wpe-web.toml`，监听加进 `wpe-web.json` 的 `allow-listen`。本地特赦不覆盖它。
+现在 CEF 补丁 07 在建工厂时捕获所属文档 URL 与父文档 URL；运行时以浏览器给出的 `request_initiator` 判来源，仅在它是 `file:` 时用完整文档 URL 细化身份（`protocol::ipc_origin`）。无法归属写 `null` 并拒绝，不能用 `frame.url()`：它要到导航完成才刷新。网页壁纸 iframe 以 `Origin::Remote { url: file:///… }` 匹配 `remote.urls` 和 `frames: "sub"`，只得 `wpe-web-capability`。新命令加进 `permissions/wpe-web.toml`，监听加进 `wpe-web.json` 的 `allow-listen`。本地特赦不覆盖它。
 
 ## 快速排查清单
 

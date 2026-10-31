@@ -244,7 +244,7 @@ function mount() {
   bar.append(back, forward, reload, address, devtools, openInBrowser, collect);
   root.appendChild(bar);
 
-  // 后端用 emit_to(<label>-navbar) 定向投递，只送到本导航栏（tauri 补丁 0014 按接收方身份投递）
+  // 后端用 emit_to(<label>-navbar) 定向投递，只送到本导航栏（tauri 补丁 14 按接收方身份投递）
   listen<string>("surf-url-changed", (event) => {
     if (typeof event.payload === "string" && event.payload) {
       setInputUrl(address, event.payload);

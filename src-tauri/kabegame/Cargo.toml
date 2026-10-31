@@ -84,7 +84,7 @@ windows-sys = {workspace = true, features = [
 ] }
 winreg = "0.55"
 winver = "1"
-tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
+tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri = { version = "2.12.4", default-features = false, features = [
@@ -96,11 +96,11 @@ tauri = { version = "2.12.4", default-features = false, features = [
 arboard = "3.6"
 gtk = { version = "0.18", features = ["v3_24"], optional = true }
 libc = "0.2"
-tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
+tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3"
-tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
+tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
   "NSColor",
@@ -134,7 +134,7 @@ standard = [
     "dep:gtk",
     "kabegame-core/virtual-driver",
     "dep:tauri",
-    "dep:tauri-runtime-cef",
+    "dep:tauri-runtime-kbcef",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
     "dep:tauri-plugin-global-shortcut",

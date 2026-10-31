@@ -65,7 +65,7 @@ index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b
 +    factories->erase(url::kFileScheme);
 +  }
 +
-   // Kabegame: patch 0005 lets the app page pass SecurityOrigin::CanDisplay()
+   // Kabegame: patch 05 lets the app page pass SecurityOrigin::CanDisplay()
    // and FilterURL for file: URLs, but content only hands a file: subresource
    // factory to documents with a file: precursor scheme
 @@ -607,10 +643,28 @@ void ChromeContentBrowserClientCef::WillCreateURLLoaderFactory(
@@ -223,7 +223,7 @@ index 9ae90f21b8d6557012d6ec464087acdb291ec950..9fa49b05bae0bf47f11231f6857626ae
  
  namespace net_service {
  
-+// Kabegame: patch 0007 reserves these headers for browser-side attribution.
++// Kabegame: patch 07 reserves these headers for browser-side attribution.
 +inline constexpr char kKabegameHeaderPrefix[] = "Sec-Kabegame-";
 +inline constexpr char kKabegameDocumentUrlHeader[] = "Sec-Kabegame-Document-Url";
 +inline constexpr char kKabegameParentDocumentUrlHeader[] =

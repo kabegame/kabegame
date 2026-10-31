@@ -1,4 +1,4 @@
-//! # tauri-runtime-cef
+//! # tauri-runtime-kbcef
 //!
 //! 一个面向 **桌面端** 的 Tauri CEF(Chromium Embedded Framework)
 //! webview 后端。
@@ -27,7 +27,7 @@
 //!   tauri (framework)
 //!        │  Runtime / WebviewDispatch / WindowDispatch traits
 //!        ▼
-//!   tauri-runtime-cef   ← THIS CRATE (adapter)
+//!   tauri-runtime-kbcef   ← THIS CRATE (adapter)
 //!        │  calls
 //!        ▼
 //!   cef (cef-rs)        ← engine binding (prebuilt Chromium)
@@ -66,9 +66,9 @@ pub fn start_download(webview_label: &str, url: &str) -> Result<(), String> {
 //
 // 应用在建窗前按 label 登记能力，启动时注册访问范围解析器。两项能力都写进建 browser 时的
 // `extra_info`，由 CEF 补丁只给这个 browser 打开：
-// - 文件文档（`kabegame.allow_file_access_from_file_urls`，补丁 0004）：`file://` 页面可以
+// - 文件文档（`kabegame.allow_file_access_from_file_urls`，补丁 04）：`file://` 页面可以
 //   `fetch` / XHR 读本地文件（WPE 网页壁纸读同目录文件）；
-// - 应用页加载本地资源（`kabegame.allow_local_resources`，补丁 0005 + 0006）：最外层主 frame 里的
+// - 应用页加载本地资源（`kabegame.allow_local_resources`，补丁 05 + 0006）：最外层主 frame 里的
 //   非 `file:` 文档可以给 `<iframe>` 赋 `src = file:…`（WPE 网页壁纸 iframe，0005），也可以用 `<img>` /
 //   `<video>` / CSS `url()` 加载 `file:` 子资源（图库媒体，0006 补上子资源工厂）；应用页 `fetch(file:)` 还需
 //   0006 私有 CORS 列表和运行时跨源白名单。
@@ -79,17 +79,17 @@ pub fn start_download(webview_label: &str, url: &str) -> Result<(), String> {
 // 判成远程 `file:`，权限由应用的 ACL 限定。
 
 /// 建窗前给 `webview_label` 登记「文件文档」能力：该 label 的 browser 在 `extra_info` 里带
-/// `kabegame.allow_file_access_from_file_urls = true`（CEF 补丁 0004 据此打开文件访问偏好），
+/// `kabegame.allow_file_access_from_file_urls = true`（CEF 补丁 04 据此打开文件访问偏好），
 /// 并启用 `file:` 闸门（解析器注册之前拒绝所有要过闸门的 `file:` 请求）。
 pub fn allow_file_documents(webview_label: &str) {
     file_access::allow_file_documents(webview_label)
 }
 
 /// 建窗前给 `webview_label` 登记「应用页加载本地资源」能力：该 label 的 browser 在 `extra_info`
-/// 里带 `kabegame.allow_local_resources = true`，CEF 补丁 0005 据此让最外层主 frame 的非 `file:`
+/// 里带 `kabegame.allow_local_resources = true`，CEF 补丁 05 据此让最外层主 frame 的非 `file:`
 /// 文档能加载 `file:`（渲染侧放过 `CanDisplay`，浏览器侧给所在进程 `file` 请求权；弹窗里提交的文档、
 /// 子 frame 不授，弹窗的初始 `about:blank` 按 Blink 规则从 opener 继承但仍过同一闸门）。0005 只放开显示与
-/// 导航；CEF 补丁 0006 再给同一主 frame 塞带私有 CORS 列表的 `file:` 子资源工厂，运行时为应用 origin
+/// 导航；CEF 补丁 06 再给同一主 frame 塞带私有 CORS 列表的 `file:` 子资源工厂，运行时为应用 origin
 /// 登记跨源白名单，让 `<img>` / `<video>` 与 `fetch(file:)` 都能读取。同时表示该 label 的应用页（主 frame
 /// 非 `file:` 文档）发起的 `file:` 子资源**不过闸门**；子 frame 导航与 `file:` 文档的请求仍按解析器给出的
 /// 访问范围裁决。同样启用 `file:` 闸门。

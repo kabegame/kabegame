@@ -112,14 +112,14 @@ true）、网页壁纸入口（`web_entry`）与网页壁纸目录索引都按 `
   `/wpe/<id>/` 目录服务，CEF 的 `<video>` 跟随它的 307 后报 `MEDIA_ELEMENT_ERROR: Format error`（直接请求入口文件可正常
   播放，2026-10-25 真机 4K H.264 实测），所以视频从没用过它。
 - **网页**：桌面壁纸窗口与图库预览都以 `WallpaperStage` web 层里的 `file:` iframe 加载入口（第六节「网页壁纸 iframe」），
-  页面相对资源自然落在壁纸目录里；文件边界是 `tauri-runtime-cef` 的 `file:` 闸门按网页壁纸目录索引裁决（文档只能访问它自己
+  页面相对资源自然落在壁纸目录里；文件边界是 `tauri-runtime-kbcef` 的 `file:` 闸门按网页壁纸目录索引裁决（文档只能访问它自己
   所在的壁纸目录与这张壁纸的用户选择，第六节「网页壁纸目录索引」），两个窗口同一份机制。MIME 由 Chromium 按扩展名判定；
   `file:` 不走 HTTP 缓存，壁纸目录里的文件原地变化（创意工坊更新、作者或用户手改）后重新加载即读到新内容。
 - **`/wpe/<id>/<rel>` HTTP 目录服务已在第二阶段 Phase 6a 删除**（连同 `/wpe` 专属网页 MIME 表、HTML 产出点与 CSP
   `frame-src` 对 `http://127.0.0.1:*` 的放行）：Web 发布版不提供网页壁纸，应用 Web 服务器（MCP / 外部集成）也不需要把
   壁纸目录暴露出去，预览改走 `file:` 后它没有使用方。Android / Web 的媒体与插件文件 HTTP 路由照旧
   （Phase 6b 起桌面图库显示改走 `file://`，这三个媒体路由在桌面只剩下载 / 复制兜底等非显示用途；Windows 拖出自
-  Phase 6d 起改走 CEF 补丁 0003 的真实文件链路，不再用媒体 URL，见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`）。
+  Phase 6d 起改走 CEF 补丁 03 的真实文件链路，不再用媒体 URL，见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`）。
 - 作者脚本常用 javascript-obfuscator 的 `selfDefending`：对函数 `toString()` 做正则比对，代码被格式化（换行 / 缩进）
   就故意进入死循环，页面 `load` 永不触发。任何改写作者 js 的逻辑（zcompat 替换）都不能改变被检测函数的原文；同一
   `file:` 源的页面可能共用一个渲染进程，一个卡死的页面会连带后续网页壁纸一起超时。
@@ -172,22 +172,22 @@ Web 发布版与 Android 硬门控为主窗口。
 
 WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://` 从壁纸目录直接加载，靠关掉同源策略读同目录文件。Kabegame 在
 两个地方显示网页壁纸，**都是 `WallpaperStage` web 层里的 `file:` iframe**，组件与代码路径同一套：图库预览在主窗口（`main`），
-桌面在壁纸窗口（`wallpaper`）。tauri 补丁 0018 / 0019 之前，子 frame 没有 IPC，预览 iframe 只能 `postMessage` 请主窗口代办、
+桌面在壁纸窗口（`wallpaper`）。tauri 补丁 18 / 19 之前，子 frame 没有 IPC，预览 iframe 只能 `postMessage` 请主窗口代办、
 桌面则把整个壁纸窗口导航到 `file://`；现在 frame 是 IPC 的基本单位，两种宿主合成一种（见 [ACL 文档](../tauri/TAURI_ACL_PERMISSION_SYSTEM.md)「子 frame IPC」）。
 
 - **加载**：`WallpaperStage` 建 iframe、插入 DOM 后直接 `frame.src = target.webEntry`，没有命令往返、没有要维护的状态
   （入口由 `build_wallpaper_target` 现算，见上）。壁纸窗口本身始终停在应用页，不再导航。
 - **能力登记**（Windows）：主窗口（`startup.rs`）与壁纸窗口（`wallpaper/manager/window.rs`）建窗前都
-  `tauri_runtime_cef::allow_file_documents(label)`（CEF 补丁 [`0004`](../../third-patches/cef/README.md)：建窗 `extra_info` 带
+  `tauri_runtime_kbcef::allow_file_documents(label)`（CEF 补丁 [`04`](../../third-patches/cef/README.md)：建窗 `extra_info` 带
   `kabegame.allow_file_access_from_file_urls`，只给这个 browser 的 `file:` 文档打开 `allow_file_access_from_file_urls`，页面
-  才能 fetch 同目录文件；偏好对应用页的 http / tauri 源没有作用）与 `allow_app_local_resources(label)`（补丁 0005，三个桌面平台
-  都登记：应用页能给 iframe 赋 `file:` 的 `src`；同时供图库媒体走 `file://`，见下「图库媒体」）。非 Windows 不登记 0004，
+  才能 fetch 同目录文件；偏好对应用页的 http / tauri 源没有作用）与 `allow_app_local_resources(label)`（补丁 05，三个桌面平台
+  都登记：应用页能给 iframe 赋 `file:` 的 `src`；同时供图库媒体走 `file://`，见下「图库媒体」）。非 Windows 不登记 04，
   `webEntry` 恒为空。`allow_universal_access_from_file_urls` 仍关闭，`file:` iframe 碰不到父页面 DOM。
-- **应用页直接赋 `src`，靠 CEF 补丁 0005**：应用页是 `http://localhost:1420` / `tauri` 源，Chromium 有两道互相独立的关
+- **应用页直接赋 `src`，靠 CEF 补丁 05**：应用页是 `http://localhost:1420` / `tauri` 源，Chromium 有两道互相独立的关
   拦住它嵌 `file:`——渲染进程 Blink 的 `SecurityOrigin::CanDisplay(file:)` 对非本地源返回 false（控制台
   `Not allowed to load local resource`，iframe 停在 `about:blank`）；浏览器进程 `RenderFrameHostImpl::BeginNavigation` 的
   `FilterURL` 对没有 `file` 请求权的进程把 URL 改写成 `about:blank#blocked`。补丁
-  [`0005`](../../third-patches/cef/README.md) 按建窗 `extra_info` 的 bool 键 `kabegame.allow_local_resources` 在两道关各开
+  [`05`](../../third-patches/cef/README.md) 按建窗 `extra_info` 的 bool 键 `kabegame.allow_local_resources` 在两道关各开
   一道门：渲染侧 `CefRenderFrameObserver::DidCommitProvisionalLoad` 在**最外层主 frame 每次提交非 `file:` 文档**时调
   `blink_glue::GrantLoadLocalResources`；浏览器侧 `CefBrowserInfo::MaybeCreateFrame` 给最外层主 frame 的 RFH 所在进程
   `ChildProcessSecurityPolicy::GrantRequestScheme(file)`。弹窗提交的任何文档、DevTools、OOPIF、fenced frame 一律不授；同源别名的
@@ -199,11 +199,11 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
   都走这条，`ImageContent` 退回作者预览图）；否则建 iframe、插入 DOM、赋 `src`。`load` 时 `isInitialBlank`（仍可读且是
   `about:blank`）的初始空文档忽略；仍可读却不是初始文档（例如浏览器侧缺授权时改写出的 `about:blank#blocked`）记
   `wpe web entry blocked: <href>`；读 `location` 抛错（已是跨源 `file:` 页面）才算加载完成。8s 超时仍停在初始 `about:blank`
-  记 `wpe web entry not navigated (CEF patch 0005/0007 missing?)`，否则记 `wpe web entry load timeout`。切换壁纸一律
+  记 `wpe web entry not navigated (CEF patch 05/07 missing?)`，否则记 `wpe web entry load timeout`。切换壁纸一律
   `teardownWeb`（先 `about:blank` 再移除，frame 销毁）后重建 iframe，不在原 iframe 上改 `src`：闸门把「原 iframe 的 `file:`
   文档发起的导航」算作这个文档发起，跨到另一张壁纸会被拒。
 - **CSP**：`tauri.conf.json.handlebars` 的 `frame-src 'self' blob: data: about: file:`（生成的 `tauri.conf.json` 被 gitignore）。
-- **IPC**：CEF 给每个子 frame 注入桥；CEF 补丁 0007 在建子资源工厂时捕获文档 URL 与父文档 URL，运行时按 initiator 与完整文档 URL 合成 `Origin`。`file:` iframe 只匹配绑定 `main` / `wallpaper` 且 `frames: "sub"` 的 `wpe-web-capability`。回退通道来源不合法时用占位来源交给 ACL 拒绝。历史上按 `frame.url()` 读取会遇到首批请求竞态。
+- **IPC**：CEF 给每个子 frame 注入桥；CEF 补丁 07 在建子资源工厂时捕获文档 URL 与父文档 URL，运行时按 initiator 与完整文档 URL 合成 `Origin`。`file:` iframe 只匹配绑定 `main` / `wallpaper` 且 `frames: "sub"` 的 `wpe-web-capability`。回退通道来源不合法时用占位来源交给 ACL 拒绝。历史上按 `frame.url()` 读取会遇到首批请求竞态。
 - **事件只投递到这个 iframe**：监听登记在调用方 frame 的表里，投递 eval 进这个 frame；iframe 销毁时 runtime 报
   `SubframeDestroyed`，Tauri 删掉它的全部监听，切换壁纸不会积累监听，也不再需要按导航调 `clear_js_listeners()`。
 - **`localStorage`**：Chromium 按顶层站点分区存储，预览与桌面的顶层都是应用页，所以两处是**同一分区、互通**。以前桌面顶层是
@@ -247,25 +247,25 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
 不再经本地 HTTP：前端直接把 `file:///…` 交给 `<img>` / `<video>` / CSS `url()`，由 Chromium 的 `FileURLLoader` 读文件
 （原生 Range、不经 TCP、不整块读进内存）。Android 与 Web 不变。
 
-- **CEF 补丁 0006**：0005 只放过 `CanDisplay` 与导航；content 只给 `file:` 前驱文档塞 `file:` 子资源工厂
-  （`RenderFrameHostImpl::CommitNavigation`），所以只有 0005 时应用页的 `<img src="file:…">` 请求发得出去、却以
-  `ERR_UNKNOWN_URL_SCHEME` 失败。补丁 [`0006`](../../third-patches/cef/README.md) 覆写
+- **CEF 补丁 06**：05 只放过 `CanDisplay` 与导航；content 只给 `file:` 前驱文档塞 `file:` 子资源工厂
+  （`RenderFrameHostImpl::CommitNavigation`），所以只有 05 时应用页的 `<img src="file:…">` 请求发得出去、却以
+  `ERR_UNKNOWN_URL_SCHEME` 失败。补丁 [`06`](../../third-patches/cef/README.md) 覆写
   `ChromeContentBrowserClientCef::RegisterNonNetworkSubresourceURLLoaderFactories`（先调父类），按同一键
   `kabegame.allow_local_resources` 给非弹窗 browser 的最外层主 frame 加 `content::CreateFileURLLoaderFactory`。工厂照常经
   `WillCreateURLLoaderFactory` 包成 CEF 的代理工厂，每个请求仍到 `OnBeforeResourceLoad`。Phase 6c 给每个工厂实例创建只允许该文档 origin 读 `file:` 的私有 CORS 列表；运行时还调用 `CefAddCrossOriginWhitelistEntry(origin, "file", "", true)` 通过 CEF proxy 的跨源闸门，profile 的共享列表不变。
 - **登记**：`allow_app_local_resources` 给主窗口（`startup.rs`，三个桌面平台）与壁纸窗口（`wallpaper/manager/window.rs`，
-  它的 Vue 页同样显示图片 / 视频；窗口壁纸模式只有 Windows / macOS）登记；`allow_file_documents`（0004）仍只 Windows、只为 WPE。
-- **运行时按发起方分档**（`tauri-runtime-cef` 的 `resource_request_handler` + `file_access::classify_file_requester`；登记了任一
+  它的 Vue 页同样显示图片 / 视频；窗口壁纸模式只有 Windows / macOS）登记；`allow_file_documents`（04）仍只 Windows、只为 WPE。
+- **运行时按发起方分档**（`tauri-runtime-kbcef` 的 `resource_request_handler` + `file_access::classify_file_requester`；登记了任一
   能力的 label 的 `file:` 请求才进入分档）。不免检的请求在 `OnBeforeResourceLoad` 里向应用注册的解析器要访问范围
   （`set_file_scope_resolver`，即网页壁纸目录索引），再经 `check_file_request` 判定（百分号解码成路径，必须是普通文件，拒绝
   符号链接 / 目录 / 不存在，canonicalize 后必须落在范围的根目录或放行项内，Windows 大小写不敏感）：
 
   | 发起方 | 判定 | 处理 |
   | --- | --- | --- |
-  | 应用页主 frame 的子资源（图库媒体） | 非导航、主 frame，initiator 与 0007 文档头都不是 `file:` | 登记 0005 即免检 |
-  | `file:` 文档自己的请求 | 0007 文档头是 `file:` | 按该文档解析壁纸目录与用户选择 |
-  | 壁纸页面嵌的新 iframe 导航 | 子 frame 导航、0007 父文档头是 `file:` | 同上，按父文档解析 |
-  | 应用页给 iframe 赋 `src` | 子 frame 导航、0007 父文档头已知且不是 `file:` | 目标须落进库里**某个**网页壁纸目录：按目标路径解析，只取壁纸目录、不带用户选择 |
+  | 应用页主 frame 的子资源（图库媒体） | 非导航、主 frame，initiator 与 07 文档头都不是 `file:` | 登记 05 即免检 |
+  | `file:` 文档自己的请求 | 07 文档头是 `file:` | 按该文档解析壁纸目录与用户选择 |
+  | 壁纸页面嵌的新 iframe 导航 | 子 frame 导航、07 父文档头是 `file:` | 同上，按父文档解析 |
+  | 应用页给 iframe 赋 `src` | 子 frame 导航、07 父文档头已知且不是 `file:` | 目标须落进库里**某个**网页壁纸目录：按目标路径解析，只取壁纸目录、不带用户选择 |
   | 主 frame 导航到 `file:`、其它 | — | 拒绝 |
 
   拒绝时日志记 `deny file: <url> (outside <root>; grants N; <原因>; requester …) webview '<label>'`（info 级）。不按 frame id
@@ -273,10 +273,10 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
   文档 URL 就说明了它属于哪张壁纸。解析器注册之前（启动早期）所有不免检的请求都被拒绝；那时只有应用页主 frame 的子资源，
   它免检。
 - **主 frame 边界**：应用页主 frame 的 `file:` 子资源免检，`fetch(file:)` / XHR 可取得字节；生产 CSP `connect-src file:` 明确允许。
-  应用页能把库里任一网页壁纸目录加载进子 frame（只有它的主 frame 有补丁 0005 的本地资源授权，其它子 frame 的文档本来就加载
+  应用页能把库里任一网页壁纸目录加载进子 frame（只有它的主 frame 有补丁 05 的本地资源授权，其它子 frame 的文档本来就加载
   不了 `file:`）；`file:` 文档只能访问自己的壁纸。插件详情 EJS iframe 为 opaque origin，内层 CSP 禁止读取 IPC 与本地文件
   （它也有 IPC 桥，但没有任何 capability 匹配它）。
-- **前端**：桌面 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 都返回 `file://`；复制兜底直接 `fetch(file:)`。Windows 拖出曾写当前媒体元素 `file://` 的 `DownloadURL`，已由 Phase 6d 取代：三个桌面平台都只写 image id、走 CEF 补丁 0003 的真实文件链路（Windows 为 `CF_HDROP`，见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`），Web 版保留 `DownloadURL`。插件文件改由 Tauri `read_plugin_file` 命令返回原始字节，图片缓存为 `blob:` URL。Android / Web 的 HTTP 文件路由、桌面可选应用 Web 服务器的 `file_routes_media()` 保留；桌面启动时不再开启本地 HTTP 文件服务。
+- **前端**：桌面 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 都返回 `file://`；复制兜底直接 `fetch(file:)`。Windows 拖出曾写当前媒体元素 `file://` 的 `DownloadURL`，已由 Phase 6d 取代：三个桌面平台都只写 image id、走 CEF 补丁 03 的真实文件链路（Windows 为 `CF_HDROP`，见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`），Web 版保留 `DownloadURL`。插件文件改由 Tauri `read_plugin_file` 命令返回原始字节，图片缓存为 `blob:` URL。Android / Web 的 HTTP 文件路由、桌面可选应用 Web 服务器的 `file_routes_media()` 保留；桌面启动时不再开启本地 HTTP 文件服务。
 
 ### 网页壁纸目录索引
 
@@ -284,7 +284,7 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
 放行**，外加图片 id → 目录键。只在内存里、不落库，是 `file:` 闸门与 `wpe_web_pull_state` 的唯一数据源（取代原来按 webview
 存的「根目录 + 追加放行」与 `set_wpe_web_preview`）。
 
-- **键**：与闸门同一套规范化，`tauri_runtime_cef::file_path_key`（canonicalize、去 Windows `\\?\` 前缀、Windows 不分大小写、去尾
+- **键**：与闸门同一套规范化，`tauri_runtime_kbcef::file_path_key`（canonicalize、去 Windows `\\?\` 前缀、Windows 不分大小写、去尾
   分隔符），两边不各写一份。查找沿路径的祖先向上，第一个在表里的目录就是所属壁纸（文档在壁纸子目录里也能找到）。目录已不
   存在时不登记。
 - **建表时机**：桌面 Windows 在 `core_init::init_heavy_globals` 里 `Storage::init_global()` 之后、进入 `Services` 阶段之前调用
@@ -321,7 +321,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   `en-us`）。`fps` 留给 Phase 6（推 0 会让按 `1000 / fps` 算间隔的页面停住）。Rust 不带版本号。
 - **一种传输**：iframe 自己就是调用方，直接 `invoke` / `listen`，预览与桌面逐字节同一份：
   - `pull()` = `invoke("wpe_web_pull_state")`：命令不接收 id、不看 webview，参数只有 `tauri::ipc::CallerOrigin`（ACL 判定所用的
-    调用方来源；运行时由 initiator 与 0007 文档 URL 合成完整来源，页面伪造不了）。它把来源还原成文档路径（只认 `file:`），
+    调用方来源；运行时由 initiator 与 07 文档 URL 合成完整来源，页面伪造不了）。它把来源还原成文档路径（只认 `file:`），
     在网页壁纸目录索引里找到所在的那张，按 id 组装状态，返回前用同一份 metadata 覆盖这张壁纸的放行；页面拿不到别的图片的
     metadata。不在任何网页壁纸里、不是 `file:` 来源都报错。
   - `listen(names, onEvent)` = 逐个 `plugin:event|listen`（`core:event:allow-listen`），事件只投递到本 frame；失败记录日志，等待下一次相关事件。
@@ -342,13 +342,13 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   - 页面回调抛错只记 `console.error("[kb-wpe] …")`，不影响后续投递。
 - **监听随 frame 清理**：监听按「webview → frame → 事件」登记，iframe 销毁时 runtime 报 `SubframeDestroyed`，Tauri 删掉该
   frame 的全部监听。同一 frame 内重新导航后旧条目还在、投递进新文档时找不到 id 等于空操作，直到 frame 销毁；`WallpaperStage`
-  每次切换都销毁重建 iframe，不会积累。补丁 0011 的 `clear_js_listeners()` 只剩看门狗整页重载时调用。
+  每次切换都销毁重建 iframe，不会积累。补丁 11 的 `clear_js_listeners()` 只剩看门狗整页重载时调用。
 - **可见事件**：网页壁纸只能监听 `wpe-web.json` 作用域里的四个事件（`wallpaper-ping`、`setting-change`、`image-changed`、
-  `images-change`，tauri 补丁 0015），其它事件名（如 `images-added`）`listen` 被 ACL 拒绝；垫片新增监听要同步改 capability。
+  `images-change`，tauri 补丁 15），其它事件名（如 `images-added`）`listen` 被 ACL 拒绝；垫片新增监听要同步改 capability。
   命令层只开拉取状态与 ping 应答两个命令。
 - **不做**（后续 Phase）：暂停冻结与 `setPaused`、`fps`；音频与媒体数据（Phase 8，数据回程沿用 `listen`）；Web 发布版 /
   Android / macOS / Linux 不渲染网页壁纸。
-- **待真机确认**（Windows）：iframe 统一后的整条链路见 `versions/latest/regression.md`「frame 级 IPC（tauri 补丁 0018–0019）」。
+- **待真机确认**（Windows）：iframe 统一后的整条链路见 `versions/latest/regression.md`「frame 级 IPC（tauri 补丁 18–19）」。
 
 ### 桌面鼠标转发（Windows）
 
@@ -358,7 +358,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 窗口里的 web 层 iframe，所以壁纸窗口给 `WallpaperStage` 传 `interactive`，iframe 接收指针事件。
 
 - 光标在壁纸窗口客户区内：`ScreenToClient` 得物理坐标，除以 `GetDpiForWindow / 96` 得视图坐标，坐标变化就经
-  `tauri_runtime_cef::inject_mouse` 注入 `Move`（不带按键标志，与 WE 一致：带左键会让页面图片拖动启动 OLE 拖放并挂住 UI 线程）；离开客户区时注入一次 `Leave`。
+  `tauri_runtime_kbcef::inject_mouse` 注入 `Move`（不带按键标志，与 WE 一致：带左键会让页面图片拖动启动 OLE 拖放并挂住 UI 线程）；离开客户区时注入一次 `Leave`。
 - 左键按下沿：光标在客户区内，且 `WindowFromPoint` 命中窗口的根窗口（`GetAncestor(GA_ROOT)`）类名是 `Progman` /
   `WorkerW`（桌面图标层或壁纸层本身，即点在桌面空白处或图标上）才注入 `LeftDown`；抬起沿只要按下被转发过就注入
   `LeftUp`，停止转发时也会补发，保证成对。点在别的应用窗口上不转发。
@@ -374,7 +374,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   `sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-forms"`（不给 top-navigation / popups / modals /
   downloads）、`allow="autoplay; fullscreen"`、`referrerpolicy="no-referrer"`。
 - **不参与 base / top 双层过渡**：一次只存在一个 iframe。切入时等页面 `load`（8s 无 load 记 `wpe web entry load timeout`，
-  仍停在初始 `about:blank` 时记 `wpe web entry not navigated (CEF patch 0005/0007 missing?)`，都不销毁）后整层淡入（none 直接显示；fade / slide / zoom 用与媒体层相同的曲线）盖住媒体层，淡入完成再清空媒体层；
+  仍停在初始 `about:blank` 时记 `wpe web entry not navigated (CEF patch 05/07 missing?)`，都不销毁）后整层淡入（none 直接显示；fade / slide / zoom 用与媒体层相同的曲线）盖住媒体层，淡入完成再清空媒体层；
   切走时新媒体先按「首帧直设」放到 base，web 层淡出后 **销毁** iframe（先 `about:blank` 再移除），让渲染进程回收；
   web → web 先淡出销毁旧页面再加载新页面。target 置 null、组件卸载时立即销毁；frame 销毁后它的监听随 `SubframeDestroyed` 清掉。
 - `paused` 对 web 层只做 `visibility: hidden`（省合成，不冻结脚本；冻结留给后续垫片）；`interactive` 决定 iframe 的
@@ -400,7 +400,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 
 ### IPC 纵深防御
 
-tauri 补丁 0019 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包括预览 / 桌面的网页壁纸 iframe、插件详情 EJS iframe、
+tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包括预览 / 桌面的网页壁纸 iframe、插件详情 EJS iframe、
 畅游页里的第三方 iframe），invoke key 不再是闸门，ACL 是唯一闸门：
 
 - 子 frame 的请求记为 `IpcFrame::Sub` 并带 `SubframeId`，只匹配 `frames` 为 `sub` / `any` 的 capability；本应用只有
@@ -437,7 +437,7 @@ tauri 补丁 0019 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（�
 - 图库预览与桌面的网页壁纸 iframe 顶层都是应用页，Chromium 按顶层站点分区存储，两处 `localStorage` / `indexedDB` 是**同一分区、
   互通**，跨重启稳定。iframe 统一之前桌面顶层是 `file://`，那时桌面里存下的页面数据不会带过来。
 - 应用背景层对网页壁纸退回作者预览静态图。
-- 未带 CEF 补丁 0007 的构建会拒绝网页壁纸 iframe 导航并退回作者预览图；`file:` 文档的 worker 不能读取 `file:`。
+- 未带 CEF 补丁 07 的构建会拒绝网页壁纸 iframe 导航并退回作者预览图；`file:` 文档的 worker 不能读取 `file:`。
 - 图库媒体走 `file://`（Phase 6b）的真机验证只在 Windows 做；Linux / macOS 待测。Phase 6c 的 `fetch(file:)`、XHR 改动仍待重编 CEF 后真机验证；Windows `DownloadURL` 拖出路线已放弃，由 Phase 6d 的真实文件链路取代（同样待重编 CEF 后真机验证）。
 - `wcc_v` 图像滤镜预设（WPE 浏览属性）未实现，忽略。
 - 创意工坊取消订阅后目录消失：行仍在，`local_exists` 为 false，图库标记缺失。
@@ -457,11 +457,11 @@ tauri 补丁 0019 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（�
   `teardownWeb` / `isInitialBlank` / `isShowingWeb`）、`views/WallpaperWindow.vue`（`acceptTarget`、ping 让给垫片）
 - 网页壁纸目录索引：`src-tauri/kabegame/src/wallpaper/wpe_web_dir_index.rs`、`core_init.rs`（建表时机）、
   `kabegame-core/src/storage/images.rs`（`list_wpe_web_rows`）
-- `src-tauri/tauri-runtime-cef/src/{protocol.rs,ipc.rs}`（`IpcFrame` / `SubframeId`、`IpcResourceRequestHandler`、`ipc_origin`、0007 文档头与回退通道占位来源）、`file_access.rs` / `webview.rs` / `subprocess.rs` / `runtime.rs`（两项能力 + 按发起方分档的闸门、
+- `src-tauri/tauri-runtime-kbcef/src/{protocol.rs,ipc.rs}`（`IpcFrame` / `SubframeId`、`IpcResourceRequestHandler`、`ipc_origin`、07 文档头与回退通道占位来源）、`file_access.rs` / `webview.rs` / `subprocess.rs` / `runtime.rs`（两项能力 + 按发起方分档的闸门、
   `classify_file_requester` / `set_file_scope_resolver` / `file_path_key`、`extra_info_keys` 写建窗键、子 frame 桥注入、
-  `EvalInSubframe`、`on_frame_destroyed`、鼠标注入）、`third-patches/cef/0004-per-browser-file-access.patch`、
-  `third-patches/cef/0005-app-page-local-resources.patch`、`third-patches/cef/0006-app-page-file-subresources.patch`、`third-patches/cef/0007-document-url-headers.patch`、
-  `third-patches/tauri/0018-tauri-frame-scoped-ipc.patch`、`third-patches/tauri/0019-tauri-subframe-ipc-injection.patch`
+  `EvalInSubframe`、`on_frame_destroyed`、鼠标注入）、`third-patches/cef/04-per-browser-file-access.patch`、
+  `third-patches/cef/05-app-page-local-resources.patch`、`third-patches/cef/06-app-page-file-subresources.patch`、`third-patches/cef/07-document-url-headers.patch`、
+  `third-patches/tauri/18-tauri-frame-scoped-ipc.patch`、`third-patches/tauri/19-tauri-subframe-ipc-injection.patch`
 - 图库媒体 `file://`（Phase 6b）：`apps/kabegame/src/utils/fileUrl.ts`（`pathToFileUrl`、`fetch(file:)`）、
   `composables/useImageOperations.ts`（下载 / 复制兜底）、`components/image/ImageContent.vue`（拖出：桌面写 image id、Web 写 `DownloadURL`，见 Phase 6d）、
   `components/common/ImagePluginDescriptionPanel.vue`（opaque origin + `DESCRIPTION_CSP`）、`src-tauri/kabegame/src/http_server.rs`
@@ -469,7 +469,7 @@ tauri 补丁 0019 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（�
 - 运行时垫片与宿主协议：`src-tauri/kabegame/src/webview_js/wpe_shim.js`、`commands/wpe_web.rs`（`WpeWebState`、
   `wpe_web_pull_state` / `caller_document`、`remote.urls` 匹配单测）、`capabilities/wpe-web.json`、`permissions/wpe-web.toml`、
   `kabegame-core/src/wpe/properties.rs`（`resolve_web_user_props` / `wpe_language_code`）、
-  `third-patches/tauri/0011-tauri-webview-clear-js-listeners.patch`（看门狗重载时清主 frame 监听）
+  `third-patches/tauri/11-tauri-webview-clear-js-listeners.patch`（看门狗重载时清主 frame 监听）
 - 桌面网页壁纸：`src-tauri/kabegame/src/wallpaper/manager/window.rs`（`set_wallpaper_path` 开关鼠标转发、`WALLPAPER_LABEL`）、
   `wallpaper/window.rs`（`WallpaperWindow`：`set_mouse_forwarding`、看门狗）、`wallpaper/input_forward.rs`
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、

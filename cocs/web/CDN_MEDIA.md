@@ -6,7 +6,7 @@ Web release 不由 Kabegame 进程读取媒体文件：`/file`、`/thumbnail`、
 - `thumbnail_path` → `/thumbnails/<文件名>`
 - `compatible_path`、`wallpaper_compatible_path` → `/compatibles/<文件名>`
 
-桌面端、Android 和 debug Web 不做 CDN 转写。桌面 CEF 的图库显示直接用 `file://`（`apps/kabegame/src/utils/fileUrl.ts` 的 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl`，CEF 补丁 0006 + 应用页主 frame 免检，见 `cocs/wpe/WPE_IMPORT.md`），桌面 `fetch(file:)` 可直接读字节，复制兜底使用 `file://`，三个桌面平台的拖出走 CEF 补丁 0003 的真实文件链路（不经媒体 URL）；桌面不再启动本地 HTTP 文件服务。Android 与 debug Web 仍通过 `/file`、`/thumbnail`、`/compatible` 路由显示。路径已经是 HTTP(S) URL 时原样透传。
+桌面端、Android 和 debug Web 不做 CDN 转写。桌面 CEF 的图库显示直接用 `file://`（`apps/kabegame/src/utils/fileUrl.ts` 的 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl`，CEF 补丁 06 + 应用页主 frame 免检，见 `cocs/wpe/WPE_IMPORT.md`），桌面 `fetch(file:)` 可直接读字节，复制兜底使用 `file://`，三个桌面平台的拖出走 CEF 补丁 03 的真实文件链路（不经媒体 URL）；桌面不再启动本地 HTTP 文件服务。Android 与 debug Web 仍通过 `/file`、`/thumbnail`、`/compatible` 路由显示。路径已经是 HTTP(S) URL 时原样透传。
 
 ## 线上存储约束
 

@@ -796,7 +796,7 @@ mod imp {
             // Referer = 当前主框架页(即用户正在浏览的来源页),还原浏览器从页面 P
             // 点击下载图片时本应带的 Referer(策略 ORIGIN:仅发送来源页 origin)。
             //
-            // 请求归属只在此处读取 CEF 补丁 0007 的文档头。
+            // 请求归属只在此处读取 CEF 补丁 07 的文档头。
             fn resource_request_handler(
                 &self,
                 browser: Option<&mut Browser>,
@@ -1177,7 +1177,7 @@ mod imp {
                 drag_data: Option<&mut DragData>,
             ) {
                 // 三个桌面平台共用:Linux / Windows 走 aura 推模型(OSExchangeData),macOS 走
-                // WebDragSource 拉模型;哪个平台真会回调由 CEF 补丁 0003 决定,未带补丁的 CEF
+                // WebDragSource 拉模型;哪个平台真会回调由 CEF 补丁 03 决定,未带补丁的 CEF
                 // 不会进来。
                 let Some(drag_data) = drag_data else { return };
                 let custom_data = drag_data
@@ -1588,7 +1588,7 @@ mod imp {
             ))))
         })?;
         // Tauri 的 IPC 桥(含本 runtime 的回退 shim):渲染进程无条件注入每个子 frame,先于其它初始化脚本;
-        // 子 frame 能调什么由 ACL 决定(见 tauri 补丁 0019 与 subprocess.rs)。
+        // 子 frame 能调什么由 ACL 决定(见 tauri 补丁 19 与 subprocess.rs)。
         let subframe_bridge_scripts =
             std::mem::take(&mut pending.webview_attributes.subframe_bridge_scripts);
         let subframe_bridge_payload = crate::subprocess::encode_subframe_bridge_scripts(
@@ -1606,9 +1606,9 @@ mod imp {
             )
             .map_err(|error| Error::CreateWebview(Box::new(io::Error::other(error))))?;
         // 登记过文件访问能力的 webview：同一个字典里按能力带上 bool 键（值都为 true）——
-        // `kabegame.allow_file_access_from_file_urls`（CEF 补丁 0004：只给这个 browser 打开
-        // `allow_file_access_from_file_urls`）与 `kabegame.allow_local_resources`（补丁 0005：
-        // 应用页可加载 `file:`；补丁 0006 按同一键给最外层主 frame 补 `file:` 子资源工厂）。弹窗路径
+        // `kabegame.allow_file_access_from_file_urls`（CEF 补丁 04：只给这个 browser 打开
+        // `allow_file_access_from_file_urls`）与 `kabegame.allow_local_resources`（补丁 05：
+        // 应用页可加载 `file:`；补丁 06 按同一键给最外层主 frame 补 `file:` 子资源工厂）。弹窗路径
         // （on_before_popup）另建字典、不带这些键，能力不随弹窗扩散；DevTools 窗口会复制本字典，但
         // 0005 / 0006 都不授弹窗。弹窗的初始 `about:blank` 空文档会按 Blink 自身规则从 opener 继承
         // `CanDisplay(file:)`，它沿用本窗口的 client，`file:` 子 frame 照样过下面的闸门（弹窗没有

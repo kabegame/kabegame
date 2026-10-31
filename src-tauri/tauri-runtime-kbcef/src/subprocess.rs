@@ -197,7 +197,7 @@ wrap_render_process_handler! {
                 return;
             };
             let is_main_frame = frame.is_main() == 1;
-            // 每个子 frame 都注入 IPC 桥，来源按 initiator 与 CEF 补丁 0007 的文档 URL
+            // 每个子 frame 都注入 IPC 桥，来源按 initiator 与 CEF 补丁 07 的文档 URL
             // 合成（protocol::ipc_origin）；权限由 ACL 决定，脚本按地址自行判断是否启用。
             let source_url = frame.url();
             let source_url = CefString::from(&source_url);

@@ -174,7 +174,7 @@ Kabegame이 도움이 되었다면 Star를 눌러 주세요. 더 많은 사용�
 Kabegame은 Vue 3, Tauri 2, Rust로 구축되었으며, 라이브러리 쿼리, 플러그인 런타임, 데스크톱 브라우저 기능에 여러 확장을 더했습니다:
 
 - [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs): 로그인 상태나 페이지 상호작용이 필요한 플러그인을 실제 페이지 환경에서 실행합니다.
-- [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/): 데스크톱에 맞춰 커스터마이즈한 CEF Tauri runtime.
+- [tauri-runtime-kbcef](./src-tauri/tauri-runtime-kbcef/): 데스크톱에 맞춰 커스터마이즈한 CEF Tauri runtime.
 - [PathQL](./src-tauri/pathql-rs/): 경로 조합 필터, 정렬, 페이지네이션과 Provider DSL을 갖춘 데이터베이스 쿼리 엔진.
 
 프로젝트 구조, 프로세스 모델, 주요 모듈은 [아키텍처와 프로젝트 구조](https://kabegame.com/dev-contrib/architecture/)를 참고하세요.

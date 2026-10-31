@@ -168,7 +168,7 @@ host 的 debug 迭代不会污染 guest 的 release 产物。真正要防的是�
 `../../target/release/kabegame-cef-helper`——修复 = component-plugin 往模板注入
 `targetDir`（= `TARGET_DIR`），模板改用 `{{targetDir}}/release/kabegame-cef-helper`。
 这份 files-map copy 是 Linux release 唯一被使用的 helper（`helper_path()` 硬编码
-`/usr/lib/kabegame/`）；tauri 自动塞进 `/usr/bin` 的辅助 bin 已由 fork patch 0008
+`/usr/lib/kabegame/`）；tauri 自动塞进 `/usr/bin` 的辅助 bin 已由 fork patch 08
 收敛为只打包 default-run（见 `third-patches/tauri/README.md`）。
 > 注：本条在共用 `target/` 之后仍然成立且更重要——路径必须来自 `TARGET_DIR` 而不是硬编码。
 
@@ -203,7 +203,7 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
   `bin/{platform}/{arch}/{repo}-build`；CEF distrib 即 `repoBuildDir("cef")`。
 - `CHROMIUM_DIR` —— chromium checkout 工作区的默认值 `third/chromium`。实际构建须用 `CEFBUILD`
   覆盖到仓库外（任何 `node_modules` 之外），否则 `checkNoNodeModulesAncestor()` 护栏拦下；
-  成因见 [../../src-tauri/tauri-runtime-cef/README.md](../../src-tauri/tauri-runtime-cef/README.md)。
+  成因见 [../../src-tauri/tauri-runtime-kbcef/README.md](../../src-tauri/tauri-runtime-kbcef/README.md)。
 - `requireUbuntu2204(what)` —— 构建属地守卫。
 
 ## 涉及文件
@@ -220,5 +220,5 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
 - `src-tauri/kabegame/tauri.conf.json.handlebars` —— helper 源路径 `{{targetDir}}/release/...`。
 - `src-crawler-plugins/package-plugin.ts` —— 打包 `.kgpg` 的 `CLI_EXE` 按 `CARGO_TARGET_DIR` 定位。
 - `scripts/build-ffmpeg.ts` —— x264+FFmpeg 源码构建（Linux 目标带属地守卫）。
-- `src-tauri/tauri-runtime-cef/README.md`、`../../third-patches/cef/README.md` —— CEF 构建/直链。
+- `src-tauri/tauri-runtime-kbcef/README.md`、`../../third-patches/cef/README.md` —— CEF 构建/直链。
 - `.vm/run-build.sh` —— guest 内的一键构建脚本（git 本地忽略；环境由 guest 自备，仓库不下发 env 脚本）。

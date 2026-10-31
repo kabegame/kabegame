@@ -309,7 +309,7 @@ export class ComponentPlugin extends BasePlugin {
     });
 
     // 桌面端 CEF helper 的编译方式:
-    //   - build(三平台):由 tauri.conf.json 顶层 `bins`(fork patch 0009,
+    //   - build(三平台):由 tauri.conf.json 顶层 `bins`(fork patch 09,
     //     见 cocs/tauri/TAURI_CLI_FORK.md)驱动,`tauri build` 把清单逐个
     //     `--bin` 传给 cargo,helper 随主编译一并产出;Windows 由 NSIS 原生
     //     装到安装根,macOS/Linux 走 bundle files 映射,均无需预构建/stage。

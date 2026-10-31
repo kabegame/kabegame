@@ -15,7 +15,7 @@
  *   web 层淡出后 **销毁** iframe（先置 about:blank 再移除），让渲染进程回收。
  * - 网页壁纸 iframe 直接赋入口 `file://` 的 `src`：应用页是 http / tauri 源，Chromium 默认会在渲染进程用
  *   `SecurityOrigin::CanDisplay` 拦下（`Not allowed to load local resource`，iframe 停在 about:blank），
- *   主窗口与壁纸窗口靠 CEF 补丁 0005/0007（建窗前 `allow_app_local_resources`）放行；没有该补丁时 8s 超时报
+ *   主窗口与壁纸窗口靠 CEF 补丁 05/0007（建窗前 `allow_app_local_resources`）放行；没有该补丁时 8s 超时报
  *   `not navigated`。补丁只开门，能加载哪些文件由运行时闸门按库内网页壁纸目录裁决（iframe 导航须落进某个
  *   网页壁纸目录，壁纸页面只能读自己的目录）；所以切换壁纸一律销毁重建 iframe，不在原 iframe 上改 `src`。
  * - DOM 仍按原实现命令式操作：模板 ref 只在 onMounted 时取一次元素，存到普通变量里
@@ -563,10 +563,10 @@ async function createWebFrame(entry: string | null | undefined): Promise<void> {
   webLoadTimer = window.setTimeout(() => {
     webLoadTimer = null;
     if (frame !== webFrameEl) return;
-    // 仍停在初始 about:blank：导航根本没启动，多半是 CEF 没带补丁 0005，赋 `file:` 的 src 被 `CanDisplay` 拦下
+    // 仍停在初始 about:blank：导航根本没启动，多半是 CEF 没带补丁 05，赋 `file:` 的 src 被 `CanDisplay` 拦下
     setLastError(
       isInitialBlank(frame)
-        ? "wpe web entry not navigated (CEF patch 0005/0007 missing?)"
+        ? "wpe web entry not navigated (CEF patch 05/0007 missing?)"
         : "wpe web entry load timeout",
     );
     updateDebugPanel();

@@ -428,7 +428,7 @@ fn comparable(path: &Path) -> String {
 }
 
 /// 页面读本地文件的白名单：项目目录 ∪ 用户选的文件 ∪ 用户选的目录。运行时的闸门不依赖 core，
-/// 在 `tauri-runtime-cef` 的 `file_access` 里按同一规则另写一份，这里是规则的参照实现。
+/// 在 `tauri-runtime-kbcef` 的 `file_access` 里按同一规则另写一份，这里是规则的参照实现。
 pub fn file_allowed(project_dir: &Path, raw: &Value, target: &Path) -> bool {
     if target.is_symlink() || !target.is_file() {
         return false;

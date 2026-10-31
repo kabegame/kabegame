@@ -1653,7 +1653,7 @@ mod imp {
     /// `CefCToCppRefCounted::Wrap` 会 `LOG(FATAL)`:
     /// `Cannot wrap struct with invalid base.size value (got 80, expected 56)`。
     ///
-    /// 声明 LAST 是既有的错误配对,只是在 patch 0002 给 `CefDragHandler` 加出
+    /// 声明 LAST 是既有的错误配对,只是在 patch 02 给 `CefDragHandler` 加出
     /// 第一个「已发布版与 experimental 不同尺寸的 client 侧结构体」之前一直没被踩到。
     fn create_cef_app() -> cef::App {
         let _ = api_hash(sys::CEF_API_VERSION, 0);

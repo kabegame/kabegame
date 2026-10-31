@@ -1,7 +1,7 @@
 /**
  * 编译带专利编码（H.264/AAC/MP4）的 CEF（Chromium Embedded Framework）。
  * 官方 Spotify 预编译版用 ffmpeg_branding=Chromium，不含 H.264/AAC；这里用
- * proprietary_codecs=true + ffmpeg_branding=Chrome 自己编一份，供 tauri-runtime-cef 使用。
+ * proprietary_codecs=true + ffmpeg_branding=Chrome 自己编一份，供 tauri-runtime-kbcef 使用。
  *
  * 用法：
  *   deno task build:chromium

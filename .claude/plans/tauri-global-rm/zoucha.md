@@ -2,7 +2,7 @@
 
 2026-10-27。范围：爬虫窗口（`crawler-*`），**桌面 CEF 与 Android WebView 都要覆盖**。畅游窗口（`surf-*`）是同一个问题，见 §5。
 
-实现只放在跨平台的共享层：`third-patches/tauri`（初始化脚本的组装、`scripts/*.js`、Rust → 页面的 eval 目标），以及 `webview_js/` 和建窗处的脚本组装。**不改 `tauri-runtime-cef`**：CEF 和 Android 拿到的是同一份脚本。
+实现只放在跨平台的共享层：`third-patches/tauri`（初始化脚本的组装、`scripts/*.js`、Rust → 页面的 eval 目标），以及 `webview_js/` 和建窗处的脚本组装。**不改 `tauri-runtime-kbcef`**：CEF 和 Android 拿到的是同一份脚本。
 
 ## 0. 结论
 
@@ -67,7 +67,7 @@ pub async fn crawl_exit<R: Runtime>(webview: WebviewWindow<R>) -> Result<(), Str
 | G2 | `__kb_media_submit__` | `bootstrap.js:33` | 普通赋值，可写可枚举 | 直接调用可提交任意 VFS 文件入库；替换它可以劫持 `media_download.js:175` 的每次提交（篡改路径、metadata、标签，或直接吞掉） | 高 |
 | G3 | `__kb_native_download_finished__` | `bootstrap.js:47` | 普通赋值，可写 | 伪造调用会让插件的 `onNativeDownload` 收到假路径；替换它可以吞掉真实的下载终态。这也是 Rust 的推送入口，见 §2 | 高 |
 | G4 | `__kb_media_download__` | `media_download.js:660` | 不可写但可调用 | 触发下载并提交入库 | 高 |
-| G5 | `ipc` | CEF：垫片 `tauri-runtime-cef/src/ipc.rs:42`。Android：`addWebMessageListener("ipc")`（`ContentWebView.kt:33`），由 WebView 注入 | CEF 上 `configurable: true`；Android 上能否删除待真机确认 | 站点替换或直接调用它，就能拿到出站消息。Android 上每条消息的正文都带 invoke key（见 H6）；CEF 上只有降级后才带 | 严重 |
+| G5 | `ipc` | CEF：垫片 `tauri-runtime-kbcef/src/ipc.rs:42`。Android：`addWebMessageListener("ipc")`（`ContentWebView.kt:33`），由 WebView 注入 | CEF 上 `configurable: true`；Android 上能否删除待真机确认 | 站点替换或直接调用它，就能拿到出站消息。Android 上每条消息的正文都带 invoke key（见 H6）；CEF 上只有降级后才带 | 严重 |
 | G6 | `__kb_media__` | `media_capture.js:609` | 不可写 | 调 `evict` 丢弃已捕获的 MSE 分片，让下载失败或残缺 | 中 |
 | G7 | `__TAURI_EVENT_PLUGIN_INTERNALS__` | `event/init.js:6` | 不可删 | 事件权限删掉后已经用不上，只剩探测作用 | 低 |
 | G8 | `isTauri` | `manager/webview.rs:170` | 不可删 | 只能用于探测 | 低 |

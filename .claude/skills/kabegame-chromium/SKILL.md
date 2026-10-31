@@ -8,7 +8,7 @@ description: 连上跑起来的 kabegame app（桌面 CEF，或经 adb 连 Andro
 让 agent 真正"看到"并操作跑起来的 kabegame app——桌面端（CEF）与 Android dev 包
 （系统 WebView，见下文「Android」）共用同一套 `cdp.mjs`。
 
-kabegame 桌面端跑在自建 CEF runtime（`src-tauri/tauri-runtime-cef/`）上，本质是
+kabegame 桌面端跑在自建 CEF runtime（`src-tauri/tauri-runtime-kbcef/`）上，本质是
 Chromium，所以支持 **CDP（Chrome DevTools Protocol）**。dev 下调试端口默认开启且
 **端口随机**，app 起来后把实际端口 POST 给 vite dev server，本 skill 只认死端口
 **1420** 去要号，再用 `playwright-core` 的 `connectOverCDP` 连上去截图 / 执行 JS /
@@ -165,7 +165,7 @@ $S screen /tmp/full.png --android   # adb screencap 整屏（含系统栏 / 原�
 1. `scripts/plugins/component-plugin.ts` — dev（且非 CLI）注入
    `KABEGAME_CEF_DEBUG_PORT=random`。**只在 dev 注入**，build/打包路径不经过这里。
    显式设了这个 env（含 `=0` 关闭）时尊重用户的值。
-2. `src-tauri/tauri-runtime-cef/src/runtime.rs` — `remote_debugging_port()` 解析
+2. `src-tauri/tauri-runtime-kbcef/src/runtime.rs` — `remote_debugging_port()` 解析
    `random` → 内核分配空闲回环端口，结果 memoize 在 `OnceLock`（每次重算会让
    `CefSettings` 里 bind 的端口和事后上报的对不上）。command-line hook 用的是
    `remote_debugging_requested()`（纯 env 判断，不分配端口）——它在每个子进程都跑，
@@ -244,4 +244,4 @@ $S screen /tmp/full.png --android   # adb screencap 整屏（含系统栏 / 原�
 - `.cursor/rules/debug-empirically.mdc` —— 调试要跑真东西，lint 证明不了运行时行为。
 - `cocs/debug/DEBUG_INGEST.md` —— 另一条调试路子：前端/Rust 插桩事件汇总到 NDJSON，
   与本 skill 共用 `scripts/vite-debug-server.ts` 这个 vite 侧通道。
-- `src-tauri/tauri-runtime-cef/README.md` —— CEF backend 架构。
+- `src-tauri/tauri-runtime-kbcef/README.md` —— CEF backend 架构。

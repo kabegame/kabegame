@@ -54,13 +54,13 @@ git diff --no-index .claude/skills/run-codex/examples/add.mjs ignore/codex-smoke
 
 ```bash
 node .claude/skills/run-codex/driver.mjs --schema .claude/skills/run-codex/examples/schema.json --quiet \
-  "分析 src-tauri/tauri-runtime-cef 这个 crate：component 填 crate 名，risk 填改动它的风险等级，files 填最核心的 2 个源文件路径。"
+  "分析 src-tauri/tauri-runtime-kbcef 这个 crate：component 填 crate 名，risk 填改动它的风险等级，files 填最核心的 2 个源文件路径。"
 ```
 
 最终答案就是符合 schema 的裸 JSON，可以直接 `| jq`：
 
 ```json
-{"component":"tauri-runtime-cef","risk":"high","files":["src-tauri/tauri-runtime-cef/src/runtime.rs","src-tauri/tauri-runtime-cef/src/webview.rs"]}
+{"component":"tauri-runtime-kbcef","risk":"high","files":["src-tauri/tauri-runtime-kbcef/src/runtime.rs","src-tauri/tauri-runtime-kbcef/src/webview.rs"]}
 ```
 
 ### 长任务描述放文件

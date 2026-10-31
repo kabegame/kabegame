@@ -42,7 +42,7 @@
   FindClose $0
 
   ; kabegame-cef-helper.exe is no longer staged under resources\bin: it is a
-  ; first-class bundle binary (tauri.conf.json top-level `bins`, fork patch 0009)
+  ; first-class bundle binary (tauri.conf.json top-level `bins`, fork patch 09)
   ; that NSIS installs directly to $INSTDIR and deletes on uninstall.
 
   ; Move the CEF runtime from resources/cef to install root. libcef.dll is
@@ -109,7 +109,7 @@
   Delete "$INSTDIR\debug.log"
   RMDir /r "$INSTDIR\locales"
   ; kabegame-cef-helper.exe: deleted by the generated uninstaller's native
-  ; binaries section (it is a bundle binary since fork patch 0009).
+  ; binaries section (it is a bundle binary since fork patch 09).
 
   ; Remove folder attributes (best-effort).
   SetFileAttributes "$INSTDIR" NORMAL

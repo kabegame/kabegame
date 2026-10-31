@@ -234,14 +234,14 @@ function formatNumber(v: number): string {
 ```
 现有 float 调用方（`PluginVar.vue`）都不传 `step`。
 
-**g. 运行时 `file:` 策略只有一个根目录**（`src-tauri/tauri-runtime-cef/src/file_access.rs:73`、`webview.rs:1057`；2026-10-31 按 6b 之后的代码重写）
+**g. 运行时 `file:` 策略只有一个根目录**（`src-tauri/tauri-runtime-kbcef/src/file_access.rs:73`、`webview.rs:1057`；2026-10-31 按 6b 之后的代码重写）
 ```rust
 /// 一个 label 的 `file:` 访问策略。
 #[derive(Debug, Default)]
 struct FilePolicy {
-    /// 建窗带 0004 键：`file:` 文档可读本地文件。
+    /// 建窗带 04 键：`file:` 文档可读本地文件。
     file_documents: bool,
-    /// 建窗带 0005 键：应用页可加载 `file:`。
+    /// 建窗带 05 键：应用页可加载 `file:`。
     app_local_resources: bool,
     /// 子 frame 与 `file:` 文档的根目录（`None` = 这类请求全拒）；应用页主 frame 的子资源
     /// 免检时不看它。
@@ -559,7 +559,7 @@ pub async fn set_wpe_web_user_properties(
 - **新增**（`src-tauri/kabegame-i18n/locales/*.yml`）
   - `wpe.schemeColor`，五种语言。
 
-## 点 4 — 运行时：`file:` 放行加「追加放行」（`tauri-runtime-cef/src/file_access.rs`、`webview.rs`、`lib.rs`）
+## 点 4 — 运行时：`file:` 放行加「追加放行」（`tauri-runtime-kbcef/src/file_access.rs`、`webview.rs`、`lib.rs`）
 
 - **修改**
   - 现有 `FilePolicy`（6b 引入，含 `file_documents` / `app_local_resources` / `root`）增加 `grants` 字段，其余字段不动。
@@ -614,7 +614,7 @@ pub(crate) fn check_file_request(url: &str, access: &FileAccess) -> Result<PathB
     - `files` 是 `list_directory_files(dir, 10000)` 的结果，路径统一 `/` 分隔，与 `user` 里的值同形；
     - 列举在 blocking 线程里做。
   - `wpe_web_pull_state` 在返回之前，用组装状态时读到的同一份 metadata 算 `user_file_grants(raw)`（点 1），调
-    `tauri_runtime_cef::grant_file_documents(label, &dir, &paths)`。`dir` 就是这次状态对应的壁纸目录。
+    `tauri_runtime_kbcef::grant_file_documents(label, &dir, &paths)`。`dir` 就是这次状态对应的壁纸目录。
     - `build_wpe_web_state` 因此改成同时返回 metadata 原文，不再为放行另读一次；
   - `get_wpe_web_state` 改为接 `webview` 参数，对调用方 label（主窗口）做同样的 `grant_file_documents(label, &dir, &grants)`；
     根目录不等于 `dir`（预览已切走）时运行时自动忽略。
@@ -638,7 +638,7 @@ pub async fn wpe_web_pull_state<R: tauri::Runtime>(webview: tauri::Webview<R>) -
     let (state, raw) = build_wpe_web_state_with_raw(&image.id).await?      // 修改：同时拿到 metadata 原文
         .ok_or_else(|| "web wallpaper row missing".to_string())?;
     let grants: Vec<PathBuf> = user_file_grants(&raw).into_iter().map(|g| g.path).collect();   // 新增：与端点同一份白名单
-    if let Err(error) = tauri_runtime_cef::grant_file_documents(webview.label(), &dir, &grants) {
+    if let Err(error) = tauri_runtime_kbcef::grant_file_documents(webview.label(), &dir, &grants) {
         eprintln!("[wpe-web] 追加放行失败: {error}");                        // 新增：放行失败不影响其余属性
     }
     Ok(state)
@@ -991,7 +991,7 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
     - `file` / `directory`：共用白名单、按调用方 label 的追加放行（桌面与预览同一套，预览根目录来自 Phase 6a）；
   - `cocs/README.md`：WPE 条目补「用户属性面板 / `userProperties` / 追加放行」，以及对应的适用场景。
   - `AGENTS.md`：WPE 那条补一句「用户属性存 metadata `userProperties`，改写走 `rewrite_image_metadata` + `metadataId` 补丁」。
-  - `src-tauri/tauri-runtime-cef/README.md`：`file:` 策略一节补 `grant_file_documents`。
+  - `src-tauri/tauri-runtime-kbcef/README.md`：`file:` 策略一节补 `grant_file_documents`。
   - `API.md`：兼容矩阵里的 `applyUserProperties` 增量推送（触发）、`localization`、`condition`、`file`、`directory` 改成「已完成（7）」；
     `wallpaperRequestRandomFileForProperty` 也一并改。
     - 难点一标记已解决：两种宿主同一套追加放行（已于 2026-10-28 追记）；

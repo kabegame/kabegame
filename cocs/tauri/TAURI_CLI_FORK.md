@@ -3,8 +3,8 @@
 kabegame 使用自有 fork 的 `cargo-tauri`，替代全局安装版。源码是**上游 tauri monorepo**
 （[tauri-apps/tauri](https://github.com/tauri-apps/tauri)，submodule 挂载于 `third/tauri`，
 pin tag `tauri-v2.12.4`）的 `crates/tauri-cli` 子 crate，fork 差异以 patch 形式存放于
-`third-patches/tauri/`（`0001`–`0005`、`0008`、`0009` 为 tauri-cli，`0006` 为
-tauri-runtime / tauri-runtime-wry，`0007` 为 tauri-utils，`0010`–`0013` 为 tauri），构建前先
+`third-patches/tauri/`（`01`–`05`、`08`、`09` 为 tauri-cli，`06` 为
+tauri-runtime / tauri-runtime-wry，`07` 为 tauri-utils，`10`–`13` 为 tauri），构建前先
 `deno task patch tauri` 应用。基线 **Tauri 2.12.4 / tauri-cli 2.12.3**。
 
 > 不再有独立的 `kabegame/tauri-cli` fork 仓或 vendored `third/tauri-runtime` 拷贝：
@@ -26,7 +26,7 @@ dev/prod 并存隔离），而 Java 包/源码树固定 `app.kabegame`。stock C
 identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 auto-launch 传相对形式
 `.MainActivity`（被 `am` 按 applicationId 展开 → 类不存在）。
 
-## fork 相对上游的 patch（tauri-cli 共 7 个：0001–0005、0008、0009）
+## fork 相对上游的 patch（tauri-cli 共 7 个：01–05、08、09）
 
 1. **`TAURI_ANDROID_PACKAGE` 解耦**（`src/mobile/{mod,android/{mod,dev,run}}.rs`）
    - `get_config`：包/目录改按 `android_package`（env 覆盖，未设或空回退 identifier =
@@ -85,7 +85,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      恒真）,此 patch 在 Windows 开发机上不生效——kabegame 桌面开发机为 Linux,如需 Windows
      跑 android dev 再议。模拟器行为与 stock 一致（本就走 localhost 分支）。
 
-6. **多 bin 时只自动打包 default-run**（`src/interface/rust.rs` `get_binaries`,patch **0008**）
+6. **多 bin 时只自动打包 default-run**（`src/interface/rust.rs` `get_binaries`,patch **08**）
    - stock `get_binaries` 把所有 `[[bin]]`（按 `required-features` 过滤）+ `src/bin/` 目录
      扫描结果全部塞进打包清单,kabegame 的辅助 bin（`kabegame-cef-helper`，历史上还包括
      现已迁到 Cargo examples 的 `cef-example`）
@@ -103,7 +103,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      default-run 收敛。上游新增的两条 fixture 去掉 `default-run`，fork 另有
      `get_binaries_only_keeps_default_run_for_multiple_bins` 回归测试。
 
-7. **顶层 `bins` 配置驱动桌面编译清单（不再 `--bins` 全量编译）**（`crates/tauri-utils/src/config.rs` + `src/interface/{rust,mod}.rs` + CLI 内嵌 `config.schema.json`（含 schema-generator 同名产物）,patch **0009**）
+7. **顶层 `bins` 配置驱动桌面编译清单（不再 `--bins` 全量编译）**（`crates/tauri-utils/src/config.rs` + `src/interface/{rust,mod}.rs` + CLI 内嵌 `config.schema.json`（含 schema-generator 同名产物）,patch **09**）
    - 注意:CLI 在 serde 反序列化**之前**先按内嵌 JSON schema 校验 tauri.conf.json,漏改
      schema 会报 `Additional properties are not allowed ('bins' was unexpected)`——两处
      (结构体 + schema)必须同 patch。
@@ -112,7 +112,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      (tauri-utils `Config` 加字段——`deny_unknown_fields` 下不打 patch 则配置解析直接报错;
      运行时嵌入恒为 `None`,仅 CLI 构建期读取):声明了就逐个翻译成 `--bin <name>` 传给
      cargo（配置内去重）;**未声明回退 `get_binaries()` 的打包清单**
-     (经 0008 过滤,即仅 default-run 主 bin);清单为空回退上游 `--bins`。仅桌面生效
+     (经 08 过滤,即仅 default-run 主 bin);清单为空回退上游 `--bins`。仅桌面生效
      (mobile 仍走 `--lib`;`tauri dev` 是 `cargo run`,不经此路径)。
    - 已知边界：不对 `build.runner.args` 里原有的 `--bin` 去重；kabegame 不配置
      runner，因此不影响当前构建。
@@ -120,48 +120,48 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      `$INSTDIR` 根(主 exe 旁)、卸载时自动删除——kabegame 的 `kabegame-cef-helper.exe`
      因此不再经 resources/bin stage + installer hook 搬运,Windows build 也不再需要
      ComponentPlugin 预构建。macOS/Linux 安装布局各异(`Contents/MacOS`、
-     `/usr/lib/kabegame`),仍由 `macOS.files` / deb `files` 显式声明(0008 语义不变)。
+     `/usr/lib/kabegame`),仍由 `macOS.files` / deb `files` 显式声明(08 语义不变)。
    - kabegame 接线:`tauri.conf.json.handlebars` 桌面(非 android)渲染
      `"bins": ["kabegame", "kabegame-cef-helper"]`;ComponentPlugin 仅在 **dev** 预构建
      helper(`cargo run` 无法同调用多编一个 bin)。
 
 ## 库 crate patch（经 root `[patch.crates-io]` 生效,非 CLI）
 
-- **0006 `tauri-runtime` optional webkit**（`crates/tauri-runtime/{Cargo.toml,src/webview.rs}`）
+- **06 `tauri-runtime` optional webkit**（`crates/tauri-runtime/{Cargo.toml,src/webview.rs}`）
   - `webkit2gtk` 依赖改 optional,藏到新增的 `webkit` feature 后;`webview.rs` 里 Linux/BSD
     的 `webkit2gtk::WebView` 字段用 `#[cfg(all(feature = "webkit", any(linux...)))]` 门控
     （三处）。
-  - 动机:kabegame Linux 是 CEF runtime（`tauri-runtime-cef`）,不应链接 webkit2gtk;
-    不开 feature 即零 webkit 依赖,与 patch 0002 的 `TAURI_NO_WEBKIT_DEPS`（打包依赖侧）配套。
+  - 动机:kabegame Linux 是 CEF runtime（`tauri-runtime-kbcef`）,不应链接 webkit2gtk;
+    不开 feature 即零 webkit 依赖,与 patch 02 的 `TAURI_NO_WEBKIT_DEPS`（打包依赖侧）配套。
   - `crates/tauri-runtime-wry/Cargo.toml` 在 Linux/BSD 上显式开启
     `tauri-runtime/webkit`，使上游 wry runtime 仍可在 monorepo 内构建，同时 CEF 自定义
     runtime 可不开 WebKit。
-- **旧 0010（静态 vcruntime）已删除（上游已覆盖）**，编号现由下文的 `tauri` 移动端响应 Channel patch 使用
+- **旧 10（静态 vcruntime）已删除（上游已覆盖）**，编号现由下文的 `tauri` 移动端响应 Channel patch 使用
   - Tauri 2.12 起，没有 `STATIC_VCRUNTIME` env 时，`tauri-build` 会读
     `build.windows.staticVCRuntime`，其默认值为 `true`。因此裸 `cargo build` 的
     `kabegame-cef-helper` 也会静态链接 vcruntime，不再需要 fork patch。
-- **0007 `tauri-utils` 空 glob resources 跳过**（`crates/tauri-utils/src/resources.rs`）
+- **07 `tauri-utils` 空 glob resources 跳过**（`crates/tauri-utils/src/resources.rs`）
   - resource glob pattern（如 `resources/**/*`）匹配不到任何文件时,stock 直接
     `GlobPathNotFound` 硬错终止构建;patch 改为静默跳过、继续下一个 pattern
     （`ResourcePathsIter::next_pattern`）。
   - 动机:可选资源目录（构建流程里可能尚未生成/为空）不该炸 bundle。
-- **0010 `tauri` 移动端响应 Channel 不登记**（`crates/tauri/src/ipc/channel.rs`）：每次 IPC 的一次性响应
+- **10 `tauri` 移动端响应 Channel 不登记**（`crates/tauri/src/ipc/channel.rs`）：每次 IPC 的一次性响应
   Channel 改用不进 `CHANNELS` 表的 `new_unregistered`，详见
   [third-patches/tauri/README.md](../../third-patches/tauri/README.md)。
-- **0011 `tauri` `clear_js_listeners()`**（`crates/tauri/src/event/listener.rs` + `webview/{mod.rs,webview_window.rs}`）
+- **11 `tauri` `clear_js_listeners()`**（`crates/tauri/src/event/listener.rs` + `webview/{mod.rs,webview_window.rs}`）
   - `Listeners::remove_webview_js_listeners` 改 `pub(crate)`，新增公开的 `Webview::clear_js_listeners()` /
     `WebviewWindow::clear_js_listeners()`：丢弃本 webview 里由 JS 注册的全部事件监听（Rust 侧 `listen` 不受影响）。
   - 动机：JS 监听按 webview label 记录、只在销毁 webview 时清理；壁纸窗口在应用页与 WPE 网页壁纸的 `file://` 入口之间
-    反复导航，旧文档的监听会一直留在 Rust 侧，之后每个这类事件仍向新文档 eval 投递脚本。补丁 0018 起网页壁纸改成 iframe、
+    反复导航，旧文档的监听会一直留在 Rust 侧，之后每个这类事件仍向新文档 eval 投递脚本。补丁 18 起网页壁纸改成 iframe、
     壁纸窗口不再导航（子 frame 的监听随 `SubframeDestroyed` 清理），现在只有壁纸窗口 ping 看门狗整页重载后调用它
     （见 [../wpe/WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「ping 看门狗」）。它清的是整个 webview 的全部 frame。
-- **0012 `tauri` IPC fetch 固定 `referrerPolicy: 'origin'`**（`crates/tauri/scripts/ipc-protocol.js`）
+- **12 `tauri` IPC fetch 固定 `referrerPolicy: 'origin'`**（`crates/tauri/scripts/ipc-protocol.js`）
   - 自定义协议 IPC 的 `fetch` 加 `referrerPolicy: 'origin'`，让 `Origin` 头总是文档 origin。
   - 动机：旧 Windows IPC 端点是 `http://ipc.localhost`，https 页面（畅游站点）按默认
     `strict-origin-when-cross-origin` 发它属于降级，CEF 把 `Origin` 发成 `null`（页面声明 `no-referrer` 时 http 页面也一样），
     Tauri `ipc` handler 回 500「Origin header is not a valid URL」；500 让 fetch 正常 resolve，脚本不回退 `postMessage`，
-    该页的 invoke 全部失败。runtime 的 `cef-ipc` 回退 shim（`tauri-runtime-cef/src/ipc.rs`）同样设置。
-- **0013 `tauri` Windows 原生自定义协议**（`crates/tauri/src` 与 `scripts/core.js`）
+    该页的 invoke 全部失败。runtime 的 `cef-ipc` 回退 shim（`tauri-runtime-kbcef/src/ipc.rs`）同样设置。
+- **13 `tauri` Windows 原生自定义协议**（`crates/tauri/src` 与 `scripts/core.js`）
   - Windows 的应用页与 IPC 分别使用 `tauri://localhost`、`ipc://localhost`；只有 Android 保留
     `http(s)://<scheme>.localhost` 绕行。Windows 的 `use_https_scheme` 不再影响协议地址。
   - 此补丁依赖 Kabegame 的 CEF runtime；打补丁后的 Tauri 在 Windows 上不能配 wry/WebView2。
@@ -204,7 +204,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
 1. `deno task patch tauri -r` 还原 submodule 到上游纯净树。
 2. 把 `third/tauri` submodule bump 到新的上游 tag（选 `tauri`/`tauri-runtime` 版本与 app
    解析一致的），提交新的 submodule 指针。
-3. 逐个 `git apply --check third-patches/tauri/NNNN-*.patch` 核对漂移并修复，逐一核对 patch 点：
+3. 逐个 `git apply --check third-patches/tauri/NN-*.patch` 核对漂移并修复，逐一核对 patch 点：
    - `mobile/android/mod.rs` 的 `get_config`（identifier→包/目录派生处）
    - `mobile/mod.rs` 的 `ensure_init`（Android「项目过期」检查的 java_folder 派生，应用 `android_package`）
    - `mobile/android/{dev,run}.rs` 的 `"{...}.MainActivity"`（上游已是全限定形式，改喂 `android_package`）
@@ -216,26 +216,26 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      cargo-mobile2 `Target::check` 是否漂移；漂移则对照当版 `build.rs` 重裁 `check.rs`）
    - `mobile/android/dev.rs` `run_dev` 开头的网络改写条件（删物理设备触发；确认
      `android_studio_script.rs` 的 localhost `adb_forward_port` 分支仍在）
-   - `interface/rust.rs` 的 `get_binaries`（多 bin 收敛 default-run;0008）
+   - `interface/rust.rs` 的 `get_binaries`（多 bin 收敛 default-run;08）
      ：先核对当版上游的 bin 发现规则和新增测试，再将 default-run 过滤作用于
      完整列表；上游 fixture 若需测原行为，不得被 fork 的 `default-run` 误过滤
-   - `interface/{rust,mod}.rs` 与 schema 的顶层 `bins`（0009）：确认上游新增的
+   - `interface/{rust,mod}.rs` 与 schema 的顶层 `bins`（09）：确认上游新增的
      `BuildOptions` 字段和 runner args 合并顺序；当前已知不对 runner 里的 `--bin` 去重
    - `tauri-runtime` 的 `Cargo.toml`（`webkit` feature + `webkit2gtk` optional）与
      `webview.rs`（三处 `#[cfg(all(feature = "webkit", any(linux...)))]` 门控），以及
-     `tauri-runtime-wry/Cargo.toml` 在 Linux/BSD 开启 `tauri-runtime/webkit`（0006）
-   - `tauri-utils` 的 `resources.rs` `ResourcePathsIter::next_pattern`（空 glob 静默跳过;0007）
+     `tauri-runtime-wry/Cargo.toml` 在 Linux/BSD 开启 `tauri-runtime/webkit`（06）
+   - `tauri-utils` 的 `resources.rs` `ResourcePathsIter::next_pattern`（空 glob 静默跳过;07）
      ；若上游新增 `GlobPathNotFound` 断言，应随 patch 语义删除
    - 上游若迁移 edition 2024，patch 中的 `set_var` 需同步改为 `unsafe` 调用；
      `image::resize_exact` 等 API 如改为返回 `Result`，必须同步传递错误
    - Android 构建流程若新增 `check_java_gradle_versions` 模块，或
      `BuildOptions::no_binary_patching` 等字段，要对照当版 `build.rs` 重裁 `check.rs`
    - 核对 `tauri-build` 的 `build.windows.staticVCRuntime` 默认值；上游默认为
-     `true` 时不要恢复已删除的旧 0010（静态 vcruntime）
-   - `tauri` 的 `event/listener.rs` `remove_webview_js_listeners` 与 `js_event_listeners` 结构（0011）：
-     上游若已提供按 webview 清 JS 监听的公开接口，删掉 0011 改用它
-   - `tauri` 的 `scripts/ipc-protocol.js` 自定义协议 `fetch` 的 init 对象（0012）：上游若已固定 referrer 策略或改为不依赖 `Origin` 头，删掉 0012
-   - `tauri` 的 `protocol::origin`、`window_origin`、`protocol/isolation.rs` 的 `frame-src`、`is_local_url`、`scripts/core.js` 的 `convertFileSrc`（0013）：确认 Windows 仍走原生 scheme，Android 仍走 localhost 绕行
+     `true` 时不要恢复已删除的旧 10（静态 vcruntime）
+   - `tauri` 的 `event/listener.rs` `remove_webview_js_listeners` 与 `js_event_listeners` 结构（11）：
+     上游若已提供按 webview 清 JS 监听的公开接口，删掉 11 改用它
+   - `tauri` 的 `scripts/ipc-protocol.js` 自定义协议 `fetch` 的 init 对象（12）：上游若已固定 referrer 策略或改为不依赖 `Origin` 头，删掉 12
+   - `tauri` 的 `protocol::origin`、`window_origin`、`protocol/isolation.rs` 的 `frame-src`、`is_local_url`、`scripts/core.js` 的 `convertFileSrc`（13）：确认 Windows 仍走原生 scheme，Android 仍走 localhost 绕行
 4. 重新生成编号 patch 文件并更新 `third-patches/tauri/README.md`；如新 tag 的 `tauri-utils`
    版本与 crates.io 最新不一致，`cargo update -p tauri-utils --precise <monorepo 版本>` 重钉。
 5. 主仓库更新 submodule 指针；跑一次

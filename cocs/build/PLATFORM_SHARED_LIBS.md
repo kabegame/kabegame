@@ -72,7 +72,7 @@ headers / cmake / libcef_dll / CREDITS.html 三平台都取 distrib(`findDistrib
   - os-plugin 的 Linux/Windows 收集仍按同一份白名单挑一次:对自编目录是幂等的重复工作,留着给「`CEF_PATH` 指向未经裁剪的目录」兜底。**macOS 没有这层兜底**(没有逐文件收集那一跳),完全依赖导出期裁剪 —— 这也是历史上 228 个 `.lproj` 会原样进 dmg 的原因。
   - 改白名单后**必须重跑 `deno task build:chromium`** 才对已有 `cef-build` 生效(不重编 Chromium,只重走导出)。裁剪不影响签名:自编 framework 是 linker-signed adhoc,`Sealed Resources=none`,签名只覆盖 Mach-O。也不会触发 cef-dll-sys 的「下载官方无 H.264 CEF」回退 —— `check_archive_json` 只校验 `archive.json` 里的版本号,不看文件清单。
 - Windows 必须搬到 exe 同目录:`libcef.dll` 是 load-time 链接,CEF 要求 dll/pak/dat/locales 与 exe 同层;NSIS 现有 `resources\bin\*.dll` move loop 只搬 DLL,CEF 用独立的 `resources\cef` move 段(含非 DLL 文件与 locales 子目录),卸载时在 PREUNINSTALL 里显式删除非 DLL 残留(icudtl.dat、*.pak、locales/ 等)。
-- Windows exe 还必须内嵌含 `<compatibility>` supportedOS 的 application manifest,否则 GPU 进程崩溃循环 —— 见 [tauri-runtime-cef README](../../src-tauri/tauri-runtime-cef/README.md) 的 Windows 注意事项。
+- Windows exe 还必须内嵌含 `<compatibility>` supportedOS 的 application manifest,否则 GPU 进程崩溃循环 —— 见 [tauri-runtime-kbcef README](../../src-tauri/tauri-runtime-kbcef/README.md) 的 Windows 注意事项。
 - 运行时资源定位:dev 下 cef-dll-sys build.rs 已把 runtime 拷进 `target/{debug,release}/`;安装态 Linux 走 `<exe>/../lib/kabegame`,Windows 走 CEF 默认(exe 同目录)。
 
 ## 虚拟盘驱动/系统依赖安装策略
@@ -89,7 +89,7 @@ headers / cmake / libcef_dll / CREDITS.html 三平台都取 distrib(`findDistrib
 
 - `linuxBins`:`bin/linux/` 下所有文件相对路径组成的字符串数组(如 `["libx264.so.163", ...]`),模板用 `{{#each linuxBins}}` 遍历生成 deb files entries。
 - `macosFrameworks`:CEF framework 绝对路径组成的字符串数组(如 `["<CEF_PATH>/Chromium Embedded Framework.framework"]`,build 期注入；dev/check 为 `[]`),模板用 `{{#each macosFrameworks}}` 拼出 frameworks 数组。
-macOS 的 CEF helper **不经模板变量注入**:三平台统一为 exe 旁的单一扁平 `kabegame-cef-helper`(无 `.app` 变体,见 `src-tauri/tauri-runtime-cef/README.md` 的「CEF fork 与 patch」)。build 下三平台由 `tauri.conf.json` **顶层 `bins` 配置**(fork patch 0009,见 [../tauri/TAURI_CLI_FORK.md](../tauri/TAURI_CLI_FORK.md))驱动:`tauri build` 把清单逐个 `--bin` 传给 cargo(不再 `--bins` 全量编译,Cargo examples 不进 release),helper 随主编译一并产出;macOS 模板把 release 产物映射到 `Contents/MacOS/`,Linux 映射到 `/usr/lib/kabegame/`,**Windows 则由 NSIS 原生把 `bins` 里的辅助 bin 装到 `$INSTDIR` 根(主 exe 旁)并随卸载删除**——不再预构建、不再 stage 进 `resources/bin`、installer hook 不再搬运 helper。dev 仍由 ComponentPlugin `beforeBuild` 预构建(`tauri dev` 走 `cargo run`,无法同调用多编 bin)。
+macOS 的 CEF helper **不经模板变量注入**:三平台统一为 exe 旁的单一扁平 `kabegame-cef-helper`(无 `.app` 变体,见 `src-tauri/tauri-runtime-kbcef/README.md` 的「CEF fork 与 patch」)。build 下三平台由 `tauri.conf.json` **顶层 `bins` 配置**(fork patch 09,见 [../tauri/TAURI_CLI_FORK.md](../tauri/TAURI_CLI_FORK.md))驱动:`tauri build` 把清单逐个 `--bin` 传给 cargo(不再 `--bins` 全量编译,Cargo examples 不进 release),helper 随主编译一并产出;macOS 模板把 release 产物映射到 `Contents/MacOS/`,Linux 映射到 `/usr/lib/kabegame/`,**Windows 则由 NSIS 原生把 `bins` 里的辅助 bin 装到 `$INSTDIR` 根(主 exe 旁)并随卸载删除**——不再预构建、不再 stage 进 `resources/bin`、installer hook 不再搬运 helper。dev 仍由 ComponentPlugin `beforeBuild` 预构建(`tauri dev` 走 `cargo run`,无法同调用多编 bin)。
 
 `tauri.conf.json.handlebars` 用 `{{#each linuxBins}}` 遍历注入 files entries,渲染出的 `tauri.conf.json`:
 

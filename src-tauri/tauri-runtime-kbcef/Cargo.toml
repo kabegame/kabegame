@@ -1,5 +1,5 @@
 [package]
-name = "tauri-runtime-cef"
+name = "tauri-runtime-kbcef"
 version = "0.1.0"
 description = "CEF (Chromium) webview backend for Tauri on desktop"
 authors = ["kabegame"]

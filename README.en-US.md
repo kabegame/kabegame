@@ -174,7 +174,7 @@ If Kabegame helps you, a Star is welcome. It helps more users and potential plug
 Kabegame is built with Vue 3, Tauri 2, and Rust, with several extensions for library queries, the plugin runtime, and desktop browser capabilities:
 
 - [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs): run plugins that need a login state or page interaction in a real page environment.
-- [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/): a CEF Tauri runtime customized for the desktop.
+- [tauri-runtime-kbcef](./src-tauri/tauri-runtime-kbcef/): a CEF Tauri runtime customized for the desktop.
 - [PathQL](./src-tauri/pathql-rs/): a database query engine combining path-based filtering, sorting, pagination, and the Provider DSL.
 
 See [Architecture and project structure](https://kabegame.com/dev-contrib/architecture/) for the project layout, process model, and key modules.

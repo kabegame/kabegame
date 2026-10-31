@@ -39,7 +39,7 @@ index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05f
  }
  #endif
  
-+// Kabegame: same key as CefBrowserInfo::MaybeCreateFrame (patch 0005) and
++// Kabegame: same key as CefBrowserInfo::MaybeCreateFrame (patch 05) and
 +// CefRenderManager::MaybeCreateBrowser; the name must match.
 +bool AllowsLocalResources(const CefRefPtr<CefDictionaryValue>& extra_info) {
 +  if (!extra_info) {
@@ -67,7 +67,7 @@ index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05f
 +  ChromeContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
 +      render_process_id, render_frame_id, request_initiator_origin, factories);
 +
-+  // Kabegame: patch 0005 lets the app page pass SecurityOrigin::CanDisplay()
++  // Kabegame: patch 05 lets the app page pass SecurityOrigin::CanDisplay()
 +  // and FilterURL for file: URLs, but content only hands a file: subresource
 +  // factory to documents with a file: precursor scheme
 +  // (RenderFrameHostImpl::CommitNavigation), so <img src="file:..."> in an

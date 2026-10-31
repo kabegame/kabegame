@@ -5,7 +5,7 @@
 > `file://` 宿主」）。下文点 3、点 5 中关于 `WpeWebHost` 的描述仅作历史记录。
 >
 > 状态：方案（2026-10-27）。上级：[PLAN.md](PLAN.md)（已确认决策 8、9）。前置：Phase 3 已完成；CEF 补丁
-> [0004](../../../../third-patches/cef/0004-per-browser-file-access.patch) 已写入并由用户编译完成。
+> [04](../../../../third-patches/cef/04-per-browser-file-access.patch) 已写入并由用户编译完成。
 >
 > 范围：桌面壁纸窗口以 `file://` 承载 `x-wpe/web`；运行时按窗口开文件访问并按壁纸目录拦截；Windows 桌面鼠标移动 / 左键转发；
 > 删除 `DEBUG-WPE-FILE` / `DEBUG-WPE-INPUT` 临时代码。**不做**：WPE 垫片与作者默认值推送（Phase 5）、暂停冻结 / FPS（Phase 6）、
@@ -21,7 +21,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
 `WallpaperWindow.vue` 只需在拿到网页壁纸时什么都不做，不会和 Rust 抢导航；页面卸载、Vue 应用重启和 ready 握手都是现有链路。
 
 `file://` 文档读同目录文件需要 Chromium 的 `allow_file_access_from_file_urls` 偏好。先导实验证明只开这一项就足以让 kaguya
-这类依赖 `fetch` 的壁纸完整运行，但它同时允许读任意本地文件。所以安全边界分两层，都只作用于壁纸窗口：CEF 补丁 0004 让偏好按
+这类依赖 `fetch` 的壁纸完整运行，但它同时允许读任意本地文件。所以安全边界分两层，都只作用于壁纸窗口：CEF 补丁 04 让偏好按
 浏览器开启（建窗时 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`），运行时在 `OnBeforeResourceLoad` 里对
 这类浏览器的 `file:` 请求做目录约束——只放行当前壁纸目录内的普通文件，拒绝越界、符号链接和目录，当前没有网页壁纸时一律拒绝。
 这与 WPE 自己的资源拦截器（API.md §4.1）是同一套规则。`file://` 文档的 Origin 是 `null`，`cef-ipc` 入口本来就拒绝它；运行时再让
@@ -47,7 +47,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
 
 ## 现状锚点
 
-**a. dev 下的临时全局文件访问开关**（`src-tauri/tauri-runtime-cef/src/runtime.rs`，`on_before_command_line_processing`）
+**a. dev 下的临时全局文件访问开关**（`src-tauri/tauri-runtime-kbcef/src/runtime.rs`，`on_before_command_line_processing`）
 ```rust
                 apply_windowed_gpu_mode(cl);
                 // DEBUG-WPE-FILE 临时先导实验（仅 dev）：全局打开 file:// 页面读同源 file:// 的偏好，……验证完删除
@@ -55,7 +55,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
                 cl.append_switch(Some(&CefString::from("allow-file-access-from-files")));   // 现状：对 dev 所有窗口生效
 ```
 
-**b. 建 browser 时 `extra_info` 只装初始化脚本**（`src-tauri/tauri-runtime-cef/src/webview.rs:1445`、`:1498`）
+**b. 建 browser 时 `extra_info` 只装初始化脚本**（`src-tauri/tauri-runtime-kbcef/src/webview.rs:1445`、`:1498`）
 ```rust
         let mut initialization_scripts_extra_info =
             crate::subprocess::initialization_scripts_extra_info(&initialization_scripts_payload)
@@ -71,7 +71,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
         )
 ```
 
-**c. 资源请求处理器只管下载 Referer**（`src-tauri/tauri-runtime-cef/src/webview.rs:770`、`:958`）
+**c. 资源请求处理器只管下载 Referer**（`src-tauri/tauri-runtime-kbcef/src/webview.rs:770`、`:958`）
 ```rust
             ) -> Option<ResourceRequestHandler> {
                 if is_download != 1 {
@@ -90,7 +90,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
         }
 ```
 
-**d. 渲染进程按 browser 注入初始化脚本，不看文档 scheme**（`src-tauri/tauri-runtime-cef/src/subprocess.rs:88`）
+**d. 渲染进程按 browser 注入初始化脚本，不看文档 scheme**（`src-tauri/tauri-runtime-kbcef/src/subprocess.rs:88`）
 ```rust
             let is_main_frame = frame.is_main() == 1;
             let source_url = CefString::from(&frame.url()).to_string();
@@ -103,7 +103,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
             }
 ```
 
-**e. 鼠标注入只是调试实验**（`src-tauri/tauri-runtime-cef/src/webview.rs:111`、`src-tauri/kabegame/src/commands/window.rs`）
+**e. 鼠标注入只是调试实验**（`src-tauri/tauri-runtime-kbcef/src/webview.rs:111`、`src-tauri/kabegame/src/commands/window.rs`）
 ```rust
     // DEBUG-WPE-INPUT 临时实验：经 CefBrowserHost 直接向某个 webview 注入鼠标事件，……验证完删除。
     pub(crate) fn debug_inject_mouse(webview_label: &str, kind: &str, x: i32, y: i32) -> std::result::Result<(), String> {
@@ -148,13 +148,13 @@ pub async fn debug_wpe_open_file_window<R: tauri::Runtime>(app: tauri::AppHandle
 
 ---
 
-## 点 1 — 运行时：按 label 的文件文档策略（`tauri-runtime-cef/src/lib.rs`、`webview.rs`、`subprocess.rs`）
+## 点 1 — 运行时：按 label 的文件文档策略（`tauri-runtime-kbcef/src/lib.rs`、`webview.rs`、`subprocess.rs`）
 - **新增**
   - 进程级登记表 `FILE_DOCUMENT_POLICIES: Mutex<HashMap<String, Option<PathBuf>>>`（label → 当前允许根目录）。
   - 公开 API：
 ```rust
 /// 新增：建窗前登记。该 label 的 browser 在 extra_info 里带 `kabegame.allow_file_access_from_file_urls = true`
-/// （CEF 补丁 0004 据此打开文件访问偏好），并启用 file: 目录约束；初始根目录为空（拒绝所有 file: 请求）。
+/// （CEF 补丁 04 据此打开文件访问偏好），并启用 file: 目录约束；初始根目录为空（拒绝所有 file: 请求）。
 pub fn allow_file_documents(webview_label: &str);
 /// 新增：设置 / 清空允许的根目录。Some(dir) 只放行 dir 内的普通文件；None 拒绝所有 file: 请求。未登记的 label 返回 Err。
 pub fn set_file_document_root(webview_label: &str, root: Option<PathBuf>) -> Result<(), String>;
@@ -179,7 +179,7 @@ pub fn set_file_document_root(webview_label: &str, root: Option<PathBuf>) -> Res
 - **删除**
   - 现状锚点 a 的 `DEBUG-WPE-FILE` 全局开关。
 
-## 点 2 — 运行时：正式的鼠标注入 API（`tauri-runtime-cef/src/lib.rs`、`webview.rs`）
+## 点 2 — 运行时：正式的鼠标注入 API（`tauri-runtime-kbcef/src/lib.rs`、`webview.rs`）
 - **修改**
   - `debug_inject_mouse` 改名为 `inject_mouse`，去掉 `DEBUG-WPE-INPUT` 注释，参数改成类型化：
 ```rust
@@ -208,7 +208,7 @@ pub fn inject_mouse(webview_label: &str, input: MouseInjection) -> Result<(), St
     - `wallpaper_window_ready`（应用页启动完成后检查一次：开机即为网页壁纸时由此切去 `file://`）；
     - 窗口销毁（`cleanup`）时把状态复位为 `App`、根目录清空。
 - **修改**
-  - `wallpaper/manager/window.rs::create_window`：建窗前调用 `tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL)`
+  - `wallpaper/manager/window.rs::create_window`：建窗前调用 `tauri_runtime_kbcef::allow_file_documents(WALLPAPER_LABEL)`
     （`#[cfg(feature = "standard")]` 等现有 CEF 门控）。
   - `commands/window.rs::wallpaper_window_ready`：`mark_ready()` 之后调用 `WpeWebHost::sync`。
 - **说明**
@@ -251,19 +251,19 @@ function acceptTarget(target: WallpaperTarget | null) {
 
 ## 点 7 — 文档与回归
 - **修改**
-  - `cocs/wpe/WPE_IMPORT.md`：新增「桌面网页壁纸：`file://` 宿主」与「桌面鼠标转发」两节（导航属主、补丁 0004、目录拦截规则、
+  - `cocs/wpe/WPE_IMPORT.md`：新增「桌面网页壁纸：`file://` 宿主」与「桌面鼠标转发」两节（导航属主、补丁 04、目录拦截规则、
     初始化脚本隔离、转发规则与平台范围、已知边界：跨源 http 仍受 CORS、样式 / 音量对网页壁纸不生效、无键盘 / 滚轮）。
-  - `src-tauri/tauri-runtime-cef/README.md`：文件文档策略与鼠标注入两组公开 API。
-  - `AGENTS.md` 文件类型段：`x-wpe/web` 行改为「桌面经 `file://` 加载（补丁 0004 + 目录拦截），图库预览经 `/wpe/<imageId>/` 跨源 iframe」。
+  - `src-tauri/tauri-runtime-kbcef/README.md`：文件文档策略与鼠标注入两组公开 API。
+  - `AGENTS.md` 文件类型段：`x-wpe/web` 行改为「桌面经 `file://` 加载（补丁 04 + 目录拦截），图库预览经 `/wpe/<imageId>/` 跨源 iframe」。
   - `cocs/README.md` 的 WPE 条目同步主题与适用场景。
   - `versions/latest/regression.md` 新增一节，`changelog.md` 补一行。
 - **新增**（运行时单元测试）
   - 目录约束判定函数抽成纯函数并测试：目录内文件放行、`..` 越界拒绝、兄弟壁纸目录拒绝、目录本身拒绝、root 为 None 全拒、百分号编码路径解码。
 
 ## 验收
-- `check-kabegame` 通过；`test-kabegame` 跑 `tauri-runtime-cef` 的新单测。
+- `check-kabegame` 通过；`test-kabegame` 跑 `tauri-runtime-kbcef` 的新单测。
 - 真机（用户已在跑 dev，Rust 改动后 dev 自行重建，**不 sleep 轮询**，连不上就记为未验证）：
-  1. 先确认 dev 用的是新编译的 CEF（临时全局开关已删，若 kaguya 仍能 `fetch` 即证明 0004 生效）。
+  1. 先确认 dev 用的是新编译的 CEF（临时全局开关已删，若 kaguya 仍能 `fetch` 即证明 04 生效）。
   2. 把 kaguya（`3679122549`）设为壁纸：`targets` 里壁纸窗口 URL 变为其 `file:///…/index.html`；页面内 `fetch('data.json')` 200、
      `fetch('file:///C:/Windows/win.ini')` 失败、`fetch('../796697921/project.json')` 失败、`typeof __TAURI_INTERNALS__ === 'undefined'`。
   3. 主窗口（应用页）里 `fetch('file:///C:/Windows/win.ini')` 失败——偏好与约束只作用于壁纸窗口。

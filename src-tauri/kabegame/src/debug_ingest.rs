@@ -189,7 +189,7 @@ const CDP_REGISTER_PATH: &str = "/__kabegame_cdp/register";
     feature = "standard"
 ))]
 pub fn spawn_cdp_register() {
-    let Some(port) = tauri_runtime_cef::remote_debugging_port() else {
+    let Some(port) = tauri_runtime_kbcef::remote_debugging_port() else {
         return;
     };
     spawn_task(async move {

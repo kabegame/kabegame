@@ -5,7 +5,7 @@ import { IS_WEB } from "@/env";
 /**
  * 树内节点拖拽：接口学 vscode ITreeDragAndDrop，运输层为 pointer 事件状态机。
  *
- * 不用 HTML5 DnD：本 runtime（tauri-runtime-cef）在 content 层 veto 了 OS 级
+ * 不用 HTML5 DnD：本 runtime（tauri-runtime-kbcef）在 content 层 veto 了 OS 级
  * 拖放会话（见 cocs/ui/FILE_DROP_ZONES.md），页内 drag 事件不可靠；pointer
  * 是普通输入事件，不经过 CEF 的 drag 管线。命中不用 elementFromPoint
  * （浮影遮挡），用容器 rect + scrollTop + 等高行直接算行下标。

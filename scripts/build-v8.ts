@@ -8,9 +8,9 @@
  * 构建树 = `third/rusty_v8` 子模块本身（denoland/rusty_v8，pin v149.4.0 = Cargo.lock 的 v8）。它是
  * 一棵「就地复用」的完整树：nested submodules（v8 / build / third_party/*）与已编译的 target/ 都在其中，
  * 所以复用构建（增量、不重新拉取、不从零重编）。补丁全部是 third-patches/rusty_v8/ 顶层 *.patch，均由
- * `git -C third/rusty_v8 apply` 应用（0002 路径带 `build/` 前缀，git apply 会跨进嵌套 build 子模块）：
- *   third-patches/rusty_v8/0001-ninja-jobserver-fd.patch    → build.rs（ninja jobserver 修复）
- *   third-patches/rusty_v8/0002-android-ndk-build-gn.patch  → build/config/android/BUILD.gn（NDK 字面量）
+ * `git -C third/rusty_v8 apply` 应用（02 路径带 `build/` 前缀，git apply 会跨进嵌套 build 子模块）：
+ *   third-patches/rusty_v8/01-ninja-jobserver-fd.patch    → build.rs（ninja jobserver 修复）
+ *   third-patches/rusty_v8/02-android-ndk-build-gn.patch  → build/config/android/BUILD.gn（NDK 字面量）
  * 本脚本幂等应用它们。`deno task patch rusty_v8` 因胖树常驻脏态会被 patch-manager 跳过。
  * 另有 3 处非 diff 的 fixup（simdutf checkout / host sysroot / android_toolchain ndk symlink）只在「首次
  * 拉取 nested submodules」时做；复用树里已就绪。见 third-patches/rusty_v8/README.md 与
@@ -346,7 +346,7 @@ function main(): void {
 
   ensureNestedBuildTree();
 
-  // 全部顶层 *.patch 都打到 third/rusty_v8；0002 的路径带 build/ 前缀，
+  // 全部顶层 *.patch 都打到 third/rusty_v8；02 的路径带 build/ 前缀，
   // git apply 会跨进嵌套 build 子模块。
   log("ensuring kabegame patches …");
   if (!fs.existsSync(PATCH_DIR) || !fs.statSync(PATCH_DIR).isDirectory()) {
@@ -354,6 +354,12 @@ function main(): void {
   }
   const patchFiles = fs.readdirSync(PATCH_DIR)
     .filter((name) => name.endsWith(".patch"))
+    .map((name) => {
+      if (!/^\d{2}-.+\.patch$/.test(name)) {
+        die(`补丁文件名须为两位编号加名称: ${name}`);
+      }
+      return name;
+    })
     .sort()
     .map((name) => path.join(PATCH_DIR, name));
   for (const patchFile of patchFiles) applyPatch(SUB, patchFile);

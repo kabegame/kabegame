@@ -47,7 +47,7 @@
   - `InnerSize/OuterSize` → `View::size()`;`InnerPosition/OuterPosition` → `View::position()`。
   - `IsMaximized/IsMinimized/IsFullscreen/IsVisible/IsAlwaysOnTop` → 对应 `is_*()`;`IsFocused` → `is_active()`。
 - `WindowMessage::Center`(原 **no-op**)→ windowed 调 `Window::center_window(None)`。OSR(tao)无原生 center,维持原样。
-- `cargo fmt` + `cargo check -p tauri-runtime-cef --features cef-backend` 通过(仅余既有 `protocol.rs` macro unused warning)。
+- `cargo fmt` + `cargo check -p tauri-runtime-kbcef --features cef-backend` 通过(仅余既有 `protocol.rs` macro unused warning)。
 
 ### 映射 / 降级矩阵(windowed,CEF Views)
 **✅ 可保持(直接映射)**:show/hide/close、set_title、maximize/minimize/unmaximize/unminimize(restore)、set_fullscreen、set_always_on_top、focus(activate)、center(center_window)、set_size/set_position(set_bounds);getter:size/position/scale_factor、is_maximized/minimized/fullscreen/focused(active)/visible/always_on_top。

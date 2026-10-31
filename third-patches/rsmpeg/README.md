@@ -7,8 +7,8 @@
 
 ## Patches
 
-- `0001-rusty-ffmpeg-0-17-and-ffmpeg8-1-feature.patch` — bumps the `rusty_ffmpeg` dependency to `0.17.0` so it resolves through the root `[patch.crates-io]` override to `third/rusty_ffmpeg`, and adds the `ffmpeg8_1` feature (`["ffmpeg8", "rusty_ffmpeg/ffmpeg8_1"]`) matching the FFmpeg n8.1.x submodule.
-- `0002-remove-avdevice.patch` — removes the `avdevice` module (`src/avdevice/` + the `pub mod avdevice;` re-export); the project's FFmpeg build disables libavdevice.
+- `01-rusty-ffmpeg-0-17-and-ffmpeg8-1-feature.patch` — bumps the `rusty_ffmpeg` dependency to `0.17.0` so it resolves through the root `[patch.crates-io]` override to `third/rusty_ffmpeg`, and adds the `ffmpeg8_1` feature (`["ffmpeg8", "rusty_ffmpeg/ffmpeg8_1"]`) matching the FFmpeg n8.1.x submodule.
+- `02-remove-avdevice.patch` — removes the `avdevice` module (`src/avdevice/` + the `pub mod avdevice;` re-export); the project's FFmpeg build disables libavdevice.
 
 The crate is consumed as a `[patch.crates-io]` path override in the root
 `Cargo.toml` (not a workspace member). Apply this series manually before any

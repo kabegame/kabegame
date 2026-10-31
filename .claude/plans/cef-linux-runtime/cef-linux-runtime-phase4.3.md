@@ -48,8 +48,8 @@
 
 - 判定结果:Tauri 2.11 在 `prepare_pending_webview` 后同时存在 `uri_scheme_protocols` 与 `ipc_handler`;命令 IPC 前端优先走 `fetch(ipc://localhost/<cmd>)`,失败后降级 `window.ipc.postMessage(...)`。
 - 主路径:保留并确认 `protocol.rs` 注册 `pending.uri_scheme_protocols` 的全部 scheme,`ipc://` POST/body/header 原样转 `http::Request<Vec<u8>>` 给 Tauri IPC protocol handler,`Tauri-Invoke-Key` 等 header 不做重写。
-- 后备路径:新增 `src-tauri/tauri-runtime-cef/src/ipc.rs` 的 `cef-ipc://` bridge,在 webview 初始化脚本中提供 `window.ipc.postMessage`,再把 JSON body 转成 `http::Request<String>` 调 `pending.ipc_handler`。回包仍由 Tauri handler 通过 `webview.eval(...)` 调 `runCallback`。
+- 后备路径:新增 `src-tauri/tauri-runtime-kbcef/src/ipc.rs` 的 `cef-ipc://` bridge,在 webview 初始化脚本中提供 `window.ipc.postMessage`,再把 JSON body 转成 `http::Request<String>` 调 `pending.ipc_handler`。回包仍由 Tauri handler 通过 `webview.eval(...)` 调 `runCallback`。
 - 诊断:在 `create_cef_webview` 打印一次 `protocols=[...]` 与 `ipc_handler=true/false`,方便运行期确认实际 IPC 形态。
 - 验证:
-  - `cargo check -p tauri-runtime-cef --features cef-backend`
+  - `cargo check -p tauri-runtime-kbcef --features cef-backend`
   - `FFMPEG_PKG_CONFIG_PATH=/home/cm/code/kabegame/third/FFmpeg-build/install/lib/pkgconfig cargo check -p kabegame --features standard`

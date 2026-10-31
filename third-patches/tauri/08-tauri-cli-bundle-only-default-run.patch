@@ -23,7 +23,7 @@ index 5d560dbef..a8e645e8a 100644
  
    #[test]
    fn get_binaries_ignores_src_bin_with_disabled_required_features() {
-+    // kabegame fork(0008): 此上游测试只验证完整收集，不声明 default-run，避免启用打包过滤。
++    // kabegame fork(08): 此上游测试只验证完整收集，不声明 default-run，避免启用打包过滤。
      let cargo_toml = r#"
        [package]
        name = "app"
@@ -36,7 +36,7 @@ index 5d560dbef..a8e645e8a 100644
  
    #[test]
    fn get_binaries_keeps_src_bin_when_bin_has_no_path() {
-+    // kabegame fork(0008): 此上游测试只验证完整收集，不声明 default-run，避免启用打包过滤。
++    // kabegame fork(08): 此上游测试只验证完整收集，不声明 default-run，避免启用打包过滤。
      let cargo_toml = r#"
        [package]
        name = "app"
@@ -51,7 +51,7 @@ index 5d560dbef..a8e645e8a 100644
  
 +  #[test]
 +  fn get_binaries_only_keeps_default_run_for_multiple_bins() {
-+    // kabegame fork(0008): 多 bin 且声明 default-run 时，打包清单只保留主 binary。
++    // kabegame fork(08): 多 bin 且声明 default-run 时，打包清单只保留主 binary。
 +    let cargo_toml = r#"
 +      [package]
 +      name = "app"

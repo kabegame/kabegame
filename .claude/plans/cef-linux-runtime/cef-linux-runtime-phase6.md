@@ -16,7 +16,7 @@
 
 ## 现状锚点
 
-### a. CEF 初始化与资源路径(`src-tauri/tauri-runtime-cef/src/runtime.rs:1053`)
+### a. CEF 初始化与资源路径(`src-tauri/tauri-runtime-kbcef/src/runtime.rs:1053`)
 ```rust
 fn initialize_cef(app: &mut cef::App) -> Result<()> {
     let args = Args::new();
@@ -48,7 +48,7 @@ fn initialize_cef(app: &mut cef::App) -> Result<()> {
 ```rust
 // main.rs:Tauri 启动前最早期
 #[cfg(all(target_os = "linux", not(feature = "web"), any(feature = "standard", feature = "light")))]
-tauri_runtime_cef::execute_cef_subprocess_and_exit();   // 子进程在此 cef_execute_process 后退出
+tauri_runtime_kbcef::execute_cef_subprocess_and_exit();   // 子进程在此 cef_execute_process 后退出
 ```
 > 关键:CEF 初始化发生在 **Tauri app 构建之前**,因此 **不能用 `tauri-plugin-pathes`/`AppPaths`**(此时还没有 app)。本期的路径计算只能 `std::env::current_exe()` 自算 —— 是 CLAUDE.md「路径逻辑归 tauri-plugin-pathes」规则在 CEF 早期初始化下的**唯一例外**,需在代码注释里写明理由。
 
@@ -232,7 +232,7 @@ fuser = { version = "0.16", features = ["libfuse"], optional = true }     # macO
 
 ## 锚点
 
-- `src-tauri/tauri-runtime-cef/src/runtime.rs:1053`(`initialize_cef` / CEF_PATH / root_cache_path)
+- `src-tauri/tauri-runtime-kbcef/src/runtime.rs:1053`(`initialize_cef` / CEF_PATH / root_cache_path)
 - `src-tauri/kabegame/src/main.rs`(`execute_cef_subprocess_and_exit`,早于 Tauri)
 - `src-tauri/kabegame/build.rs:51`(rpath `$ORIGIN/../lib/kabegame` + SQLite 版本脚本)
 - `scripts/plugins/os-plugin.ts:154`(`bundleLibs`)/`:173`(`verifyFFmpegBuildArtifacts`)/`:254`(`collectLinuxSharedLibs`)
@@ -256,7 +256,7 @@ fuser = { version = "0.16", features = ["libfuse"], optional = true }     # macO
 
 ### 校验
 ```sh
-cargo check -p tauri-runtime-cef --features cef-backend            # ✅ 干净
+cargo check -p tauri-runtime-kbcef --features cef-backend            # ✅ 干净
 FUSE3_STATIC=1 FFMPEG_PKG_CONFIG_PATH=… FFMPEG_LINK_MODE=static \
   cargo check -p kabegame-core --features virtual-driver           # ✅ 干净(fuser+libfuse FFI 编过)
 bunx tsc --noEmit -p tsconfig.json                                 # ✅ 改动的 4 个 plugin 无类型错误

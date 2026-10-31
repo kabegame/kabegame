@@ -51,8 +51,8 @@
 - 清理:删除旧的 `wait_for_windowed_context_initialized` 10s 等待路径;OSR 的 tao window / input / softbuffer fallback 保留。
 - 验证:
   ```sh
-  cargo fmt -p tauri-runtime-cef --check
-  env CEF_PATH=/home/cm/.local/share/cef cargo check -p tauri-runtime-cef --features cef-backend
+  cargo fmt -p tauri-runtime-kbcef --check
+  env CEF_PATH=/home/cm/.local/share/cef cargo check -p tauri-runtime-kbcef --features cef-backend
   ```
   通过;仅余既有 `protocol.rs` macro unused warning。
 

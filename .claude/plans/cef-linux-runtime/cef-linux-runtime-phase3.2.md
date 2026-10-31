@@ -62,8 +62,8 @@
 
 验证:
 
-- `cargo check -p tauri-runtime-cef --all-targets --features cef-backend` 通过。
+- `cargo check -p tauri-runtime-kbcef --all-targets --features cef-backend` 通过。
 - `cargo clippy` 在排除 Phase 3 骨架既有的三类告警后以 `-D warnings` 通过。
-- `CEF_PATH=/home/cm/.local/share/cef cargo test -p tauri-runtime-cef \
+- `CEF_PATH=/home/cm/.local/share/cef cargo test -p tauri-runtime-kbcef \
   --features cef-backend --lib`:6 tests passed。
 - 实际 kabegame 点击/滚动/中文输入验收与候选窗位置调优归 Phase 3.3 的端到端启动。

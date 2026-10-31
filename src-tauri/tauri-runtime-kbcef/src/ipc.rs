@@ -6,7 +6,7 @@
 //! 主通道直接由 Tauri 注册的 `ipc` scheme handler 承接:CEF scheme handler 处理的
 //! 请求不发 CORS 预检,只在响应上校验 ACAO,Tauri 的 `ipc` handler 已返回 `*`;
 //! `ipc` scheme 注册时带 `CSP_BYPASSING`,第三方页面的严格 CSP 也拦不住它。
-//! 三平台主通道都是 `ipc://localhost/<cmd>`。tauri 补丁 0012 给主通道 fetch 加了
+//! 三平台主通道都是 `ipc://localhost/<cmd>`。tauri 补丁 12 给主通道 fetch 加了
 //! `referrerPolicy: 'origin'`,防止 `no-referrer` 页面发出 `Origin: null`；下面的回退 shim 也照此设置。
 //!
 //! 本模块只补 CEF 缺的回退通道:提供 `window.ipc.postMessage` 实现 —— 经 CEF 自有的
@@ -20,7 +20,7 @@
 //! Tauri ACL 按 frame 匹配 capability 的 `frames`(默认只认主 frame),响应送回发起调用的 frame。
 //! 回退通道重新构造请求时把两个 extension 一并带上;CEF 未给出 frame 时记为 `Unknown`。
 //!
-//! 来源判定：只取协议层按发起方与 CEF 补丁 0007 文档 URL 算好的 Origin。无法解析时
+//! 来源判定：只取协议层按发起方与 CEF 补丁 07 文档 URL 算好的 Origin。无法解析时
 //! 统一用占位来源交给 ACL 拒绝，绝不回退到 frame URL 或 webview 初始 URL。
 
 use std::{borrow::Cow, sync::Mutex};
@@ -56,7 +56,7 @@ const POST_MESSAGE_SHIM: &str = r#"
           method: 'POST',
           body: String(data),
           headers: { 'Content-Type': 'application/json' },
-          // 与 tauri 补丁 0012 给主通道加的一致：站点的 referrer 策略不影响 Origin 头
+          // 与 tauri 补丁 12 给主通道加的一致：站点的 referrer 策略不影响 Origin 头
           referrerPolicy: 'origin'
         }).catch((error) => {
           console.error('CEF IPC postMessage failed', error)

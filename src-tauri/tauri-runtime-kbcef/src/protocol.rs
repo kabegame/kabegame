@@ -42,7 +42,7 @@ pub(crate) struct WebviewProtocols {
 
 // browser id (i32) -> 该 browser 对应的 webview label + 各 scheme handler
 static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = OnceLock::new();
-/// 发起请求的 frame 身份，经请求 extension 交给 Tauri。文档 URL 只从 CEF 补丁 0007 的头读取。
+/// 发起请求的 frame 身份，经请求 extension 交给 Tauri。文档 URL 只从 CEF 补丁 07 的头读取。
 #[derive(Debug, Clone)]
 pub(crate) struct RequestFrame {
     pub(crate) is_main: bool,
@@ -206,7 +206,7 @@ wrap_resource_request_handler! {
 pub(crate) fn report_missing_document_patch() {
     static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        tracing::warn!("CEF patch 0007 missing (no {DOCUMENT_URL_HEADER}): IPC and file: access of file: documents are denied until CEF is rebuilt");
+        tracing::warn!("CEF patch 07 missing (no {DOCUMENT_URL_HEADER}): IPC and file: access of file: documents are denied until CEF is rebuilt");
     }
 }
 

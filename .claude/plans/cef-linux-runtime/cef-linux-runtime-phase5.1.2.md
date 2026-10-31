@@ -31,20 +31,20 @@
 - **完成**:windowed `WindowDelegate` 与 `BrowserViewDelegate` 均返回 `RuntimeStyle::ALLOY`。
 
 ## 完成记录(2026-06-26)
-- `src-tauri/tauri-runtime-cef/src/runtime.rs`
+- `src-tauri/tauri-runtime-kbcef/src/runtime.rs`
   - `create_window_now` / `create_webview_now` 按 `WindowMode` 分流。
   - 新增 windowed window state,基础 getter/setter 覆盖 title/size/show/hide/close/focus/fullscreen/maximize/minimize/always_on_top。
   - windowed `run_loop` 保留 tao `run_return` 消费 `EventLoopProxy` 消息,同时每轮泵 GLib + CEF。
   - CEF Views 创建前等待 `BrowserProcessHandler::on_context_initialized`;否则 `create_window` 阶段太早会导致 windowed 主窗口不显示。
   - `window_create_top_level` 返回后同步保存 CEF `Window`、attach `BrowserView`、设置初始大小并显式 `show`,避免完全依赖 `on_window_created` 回调时序导致主窗口不 materialize。
   - OSR path 保留 tao window + OSR browser + softbuffer blit。
-- `src-tauri/tauri-runtime-cef/src/webview.rs`
+- `src-tauri/tauri-runtime-kbcef/src/webview.rs`
   - 新增 `ViewsClient` / `ViewsBrowserViewDelegate` / `create_cef_browser_view`。
   - `CefWebviewState` 可表示 OSR 或 BrowserView;windowed 不再需要 OSR frame/input/surface。
 - 验证:
   ```sh
-  cargo fmt -p tauri-runtime-cef
-  env CEF_PATH=/home/cm/.local/share/cef cargo check -p tauri-runtime-cef --features cef-backend
+  cargo fmt -p tauri-runtime-kbcef
+  env CEF_PATH=/home/cm/.local/share/cef cargo check -p tauri-runtime-kbcef --features cef-backend
   ```
   通过;仅余既有 `protocol.rs` macro unused warning。
 

@@ -54,7 +54,7 @@ tauri::Builder::default()
 - 现象:fd 急涨、X 连接耗尽崩溃。strace 定位主进程几百次 `XOpenDisplay` 不关,栈在 `webview::blit` → softbuffer。
 - 误区:先以为是 blit 每帧 `Context::new`(已改成缓存复用),但 minimal 实测 softbuffer 每帧建/弃**不泄漏**;真因不在此。
 - 根因(blit 加诊断打印 softbuffer 错误后定位):**`init_crawler_window` 启动时隐藏创建的 crawler 窗口**,其 tao 窗口未实现 → `window_handle()` = `RawWindowHandle(Unavailable)` → blit 对它 `Surface::new` 每帧失败,而失败前 `Context::new` 开的 X 连接不回收 → 每帧泄漏一个,几百帧打满 X。
-- ✅ 修复(`tauri-runtime-cef/src/webview.rs::blit`):创建 Context **之前**先 `window_handle().is_err()` 判断,隐藏/未实现窗口直接跳过,根本不开连接。验证:fd 稳定 171/172、存活无崩、错误页正确渲染。
+- ✅ 修复(`tauri-runtime-kbcef/src/webview.rs::blit`):创建 Context **之前**先 `window_handle().is_err()` 判断,隐藏/未实现窗口直接跳过,根本不开连接。验证:fd 稳定 171/172、存活无崩、错误页正确渲染。
 - 顺带:`CefWebviewState` 持久化 softbuffer `Surface`(每窗口一次性创建后复用,参考 wry),消除每帧重建开销。
 
 ## 风险

@@ -6,8 +6,8 @@
  *   deno task patch cef              # 套用:先 reset 回纯净基线,再依次应用整个系列
  *   deno task patch cef --reverse    # 移除:reset 回纯净基线,就这样
  *   deno task patch --all --check    # 一次性 worktree 里预检,不动真实工作区
- *   deno task patch cef --gen --from 0005 --out third-patches/cef/0006-xxx.patch
- *                                    # 生成:把工作树里「系列到 0005 为止之外」的剩余改动导出成新 patch
+ *   deno task patch cef --gen --from 05 --out third-patches/cef/06-xxx.patch
+ *                                    # 生成:把工作树里「系列到 05 为止之外」的剩余改动导出成新 patch
  *
  * `--gen` 是唯一**不 reset** 的模式:它的输入正是子模块工作树里尚未成为 patch 的改动,reset 会把
  * 它们丢掉。它在 `GIT_INDEX_FILE` 指向的临时 index 里 `read-tree HEAD` + `apply --cached` 前缀
@@ -45,7 +45,7 @@ const THIRD_PATCHES_DIR = path.join(ROOT, "third-patches");
  * `rusty_v8` 是**就地复用的胖构建树**:嵌套子模块(v8/build/third_party/*)与几十 GB 的
  * 已编译 `target/` 都在其中,还带若干非 diff 形式的 fixup。对它 `reset --hard` 会重置
  * 嵌套子模块指针并抹掉构建状态,代价是从零重编。它的 patch 由 `scripts/build-v8.ts`
- * 在构建流程里幂等应用(含跨嵌套子模块的 0002),见 third-patches/rusty_v8/README.md。
+ * 在构建流程里幂等应用(含跨嵌套子模块的 02),见 third-patches/rusty_v8/README.md。
  *
  * 注:`cef` 曾经也在此列——它的 patch 一度以提交形式挂在自建分支 `kabegame-7827` 上,
  * 而 gitlink 指向那个只存在于本地的提交(clone 后 `submodule update` 必然失败)。现已
@@ -169,11 +169,17 @@ export function listPatches(patchDir: string): string[] {
     return [];
   }
 
-  return globSync("*.patch", {
+  const patches = globSync("*.patch", {
     cwd: patchDir,
     absolute: true,
     nodir: true,
-  }).sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
+  });
+  for (const patch of patches) {
+    if (!/^\d{2}-.+\.patch$/.test(path.basename(patch))) {
+      throw new Error(`补丁文件名须为两位编号加名称: ${patch}`);
+    }
+  }
+  return patches.sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
 
 export function isRepo(sub: string): boolean {
@@ -380,7 +386,7 @@ export function processRepo(
 /**
  * 解析 `--from <x>`,返回作为基线要先套用的前缀系列(第一个到 x,含 x)。
  *
- * x 可以是完整文件名、去掉 `.patch` 的名字或 4 位编号;`none` 表示只以纯净基线为底。
+ * x 可以是完整文件名、去掉 `.patch` 的名字或 2 位编号;`none` 表示只以纯净基线为底。
  * 省略时取系列的最后一个(空系列即纯净基线)。
  */
 export function resolveGenBase(plan: RepoPlan, from?: string): string[] {
@@ -396,7 +402,7 @@ export function resolveGenBase(plan: RepoPlan, from?: string): string[] {
   const names = plan.patches.map((patch) => path.basename(patch));
   const matched = names.flatMap((name, index) =>
     name === wanted || name === `${wanted}.patch` ||
-      (/^\d{4}$/.test(wanted) && name.startsWith(`${wanted}-`))
+      (/^\d{2}$/.test(wanted) && name.startsWith(`${wanted}-`))
       ? [index]
       : []
   );
@@ -702,7 +708,7 @@ export function main(argv = process.argv): void {
     )
     .option(
       "--from <patch>",
-      "--gen 的基线：系列套用到该 patch 为止（文件名 / 去掉 .patch 的名字 / 4 位编号；none = 纯净基线），默认最后一个",
+      "--gen 的基线：系列套用到该 patch 为止（文件名 / 去掉 .patch 的名字 / 2 位编号；none = 纯净基线），默认最后一个",
     )
     .option(
       "--out <path>",

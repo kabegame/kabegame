@@ -603,7 +603,7 @@ const isPreviewStatic = computed(() => !isPreviewVideo.value && !isPreviewWallpa
    - 另：是否加 `allow-downloads`？WPE 页面不下载文件，默认不加。
 6. **IPC 纵深防御（API.md 第八节第 4 条）**
    - 现状：子 frame POST `cef-ipc://` 会被转交给 Tauri，只靠调用密钥挡住。
-   - 选项：在 `tauri-runtime-cef/src/ipc.rs` 的 `post_message_request` 校验 Origin 为应用源（`http://tauri.localhost` / `http://localhost:1420` dev）或
+   - 选项：在 `tauri-runtime-kbcef/src/ipc.rs` 的 `post_message_request` 校验 Origin 为应用源（`http://tauri.localhost` / `http://localhost:1420` dev）或
      请求来自主 frame，否则 400。改动约 20 行，影响所有窗口（畅游注入脚本走的是同一通道，需确认其 Origin 是站点源 → 必须按「主 frame」而非「应用源」判）。
    - 推荐：**纳入 Phase 3**，按「主 frame 或白名单源」校验，因为 Phase 3 是第一次在应用里长期跑第三方页面；但这是运行时代码，范围由用户定。
 7. **兼容补丁（zcompat）与「显示条件要 JS 求值」是否影响 Phase 3**

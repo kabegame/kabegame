@@ -360,8 +360,8 @@ V.evalCondition = function (e) {
   `WebPreferences`，命令行开关只决定默认值。
 - CEF 每次计算偏好都走 `ChromeContentBrowserClientCef::OverrideWebPreferences`（`libcef/browser/chrome/chrome_content_browser_client_cef.cc`），
   其中 `CefBrowserHostBase::GetBrowserForContents(web_contents)` 按浏览器拿到 `browser`，`browser->browser_info()->extra_info()`
-  可读到建窗时传入的字典（运行时已用 `extra_info` 传初始化脚本，见 `tauri-runtime-cef/src/subprocess.rs`）。
-- CEF 的 `cef_browser_settings_t` 不含这三项（只认全局命令行，`renderer_prefs.cc` 的 `SetDefaultPrefs`）。所以需要补丁 0004：在
+  可读到建窗时传入的字典（运行时已用 `extra_info` 传初始化脚本，见 `tauri-runtime-kbcef/src/subprocess.rs`）。
+- CEF 的 `cef_browser_settings_t` 不含这三项（只认全局命令行，`renderer_prefs.cc` 的 `SetDefaultPrefs`）。所以需要补丁 04：在
   `OverrideWebPreferences` 里读 `extra_info` 标记并打开文件访问偏好。不改公开 API 结构，不需要重新生成 capi / cef-rs 绑定，但要重编 CEF。
 
 **先导实验**：dev 下临时全局追加 `--allow-file-access-from-files`（即上述偏好的全局来源，`runtime.rs` 带 `DEBUG-WPE-FILE`），
@@ -376,7 +376,7 @@ V.evalCondition = function (e) {
 | `fetch('https://example.com/')` | `Failed to fetch`（跨源 http 仍受 CORS 约束） |
 
 结论：
-- **只开 `allow_file_access_from_file_urls` 就足以让依赖 `fetch` 的网页壁纸跑起来**，0004 补丁的偏好部分只需这一项。
+- **只开 `allow_file_access_from_file_urls` 就足以让依赖 `fetch` 的网页壁纸跑起来**，04 补丁的偏好部分只需这一项。
 - 打开后页面能读任意本地文件，所以照 WPE 做资源拦截（§4.1 的 `FUN_140016950`），实现见 §5.3。
 - 跨源 http 请求仍被 CORS 拦。WPE 是全局 `--disable-web-security`；Kabegame 若要支持，需要在补丁里另改网络服务的
   `URLLoaderFactoryParams.disable_web_security`（Chromium 侧，当前读全局命令行），**第一版不做**，记入已知边界。
@@ -385,9 +385,9 @@ V.evalCondition = function (e) {
 
 | 项 | 桌面壁纸窗口 | 图库预览 |
 |---|---|---|
-| 页面加载 | 壁纸窗口主 frame 整窗导航到入口 `file://`，切走时导航回应用页；导航收在窗口模式的 `WindowWallpaperManager::set_wallpaper_path`，状态随 `WallpaperWindow` 对象走；每次导航成功后 `clear_js_listeners()` 清掉旧文档的 JS 事件监听（tauri 补丁 0011） | 主窗口应用页里的 sandbox `file:` iframe：`set_wpe_web_preview` 设好根目录后返回入口、前端赋 `src`（应用页能加载 `file:` iframe 靠 CEF 补丁 0005，主窗口建窗前 `allow_app_local_resources("main")`）；Phase 6a 之前是本地 HTTP 源的 `/wpe/<id>/`（已删除） |
-| 文件访问 | CEF 补丁 0004：建窗 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`，只对该浏览器打开偏好 | 同一补丁：主窗口建窗前 `allow_file_documents("main")`，偏好只作用于 `file:` 文档；另有 CEF 补丁 0005（`allow_app_local_resources("main")` → `kabegame.allow_local_resources`）让应用页能加载 `file:` iframe，只放开 `CanDisplay` 与导航、不放开 fetch |
-| 越界拦截 | `tauri-runtime-cef/src/file_access.rs` 的 `check_file_request`，在 `on_before_resource_load` 里取消：不在当前壁纸目录内（两端都 `canonicalize`）、符号链接、目录、不存在的 `file:` 请求 | 同一函数按 `main` 的根目录拦截；根目录由 `set_wpe_web_preview` 在预览挂载 / 卸载时设 / 清，不预览时为空、拒绝全部 `file:` |
+| 页面加载 | 壁纸窗口主 frame 整窗导航到入口 `file://`，切走时导航回应用页；导航收在窗口模式的 `WindowWallpaperManager::set_wallpaper_path`，状态随 `WallpaperWindow` 对象走；每次导航成功后 `clear_js_listeners()` 清掉旧文档的 JS 事件监听（tauri 补丁 11） | 主窗口应用页里的 sandbox `file:` iframe：`set_wpe_web_preview` 设好根目录后返回入口、前端赋 `src`（应用页能加载 `file:` iframe 靠 CEF 补丁 05，主窗口建窗前 `allow_app_local_resources("main")`）；Phase 6a 之前是本地 HTTP 源的 `/wpe/<id>/`（已删除） |
+| 文件访问 | CEF 补丁 04：建窗 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`，只对该浏览器打开偏好 | 同一补丁：主窗口建窗前 `allow_file_documents("main")`，偏好只作用于 `file:` 文档；另有 CEF 补丁 05（`allow_app_local_resources("main")` → `kabegame.allow_local_resources`）让应用页能加载 `file:` iframe，只放开 `CanDisplay` 与导航、不放开 fetch |
+| 越界拦截 | `tauri-runtime-kbcef/src/file_access.rs` 的 `check_file_request`，在 `on_before_resource_load` 里取消：不在当前壁纸目录内（两端都 `canonicalize`）、符号链接、目录、不存在的 `file:` 请求 | 同一函数按 `main` 的根目录拦截；根目录由 `set_wpe_web_preview` 在预览挂载 / 卸载时设 / 清，不预览时为空、拒绝全部 `file:` |
 | MIME | 由 Chromium 按扩展名判定；`file:` 不走 HTTP 缓存 | 同左（Phase 6a 删除了 `/wpe` 专属 MIME 表与 `serve_wpe_html`） |
 | Tauri 脚本 | `file:` 主 frame 照常注入（Phase 5 删除了 Phase 4 的跳过规则）；Tauri 自身脚本只进主 frame，页面的嵌套 iframe 拿不到 invoke key；all-frames 的 WPE 垫片按地址自判启用 | Tauri 脚本只注入主 frame，`file:` iframe 里没有；all-frames 垫片在父窗口即 top 的 `file:` 子 frame 里启用 |
 | IPC | `file:` 文档 Origin 为 `null`；运行时在协议层按发起方 origin（factory 级 `request_initiator`）覆写 IPC 请求的 `Origin`，`file:` 文档写成 `file:///`（起初按 frame URL 改写，导航后新文档最早的请求读到空串或旧地址，Phase 7 回归后改掉），两条通道都判成远程 `file:///`，只有 `wpe-web-capability` 生效（`wpe_web_pull_state` + 事件 `listen` / `unlisten`）。Phase 4 写的「`cef-ipc` 入口直接拒绝」不成立：回退通道会退到应用页 URL、被当成本地来源 | `cef-ipc` 只收主 frame 或与 webview 初始 URL 同源的子 frame（`ipc.rs`）；iframe 碰不到 IPC，拉取与 listen 经 `postMessage` 由宿主页代办（`wpeWebBridge.ts` + `useTauriProxy`，回消息目标源用 `"*"`、只认 `event.source`）；即便到 ACL，`file:` 来源只匹配绑定在 `wallpaper` 的 `wpe-web-capability`，在 `main` 里零授权 |
@@ -410,7 +410,7 @@ V.evalCondition = function (e) {
 | 接口 / 能力 | 优先级 | Phase | 实现方式 |
 |---|---|---|---|
 | 垫片先于页面脚本执行 | P0 | 已完成（5） | Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口各挂同一份垫片；CEF `on_context_created` 在页面脚本之前执行。垫片按 `location` 自判，只在顶层 `file:` 文档或父窗口即 top 的 `file:` 子 frame 里定义接口，应用页和其它 iframe 里什么都不做。桌面 `file:` 文档照常注入 Tauri 脚本，运行时按发起方 origin 把 IPC 来源写成 `file:///`，ACL 只给 `wpe-web-capability`。不改写 HTML 响应 |
-| 页面读同目录资源 | P0 | 已完成 | 两种宿主同一机制：补丁 0004 按窗口开文件访问 + 运行时按根目录拦截（预览 Phase 6a 起） |
+| 页面读同目录资源 | P0 | 已完成 | 两种宿主同一机制：补丁 04 按窗口开文件访问 + 运行时按根目录拦截（预览 Phase 6a 起） |
 | `applyUserProperties` 首推作者默认值 | P0 | 已完成（5） | 状态里的 `user` 为 `{ key: { type, value } }`（只含带 `value` 的条目）。垫片拉取：桌面调 `wpe_web_pull_state`，预览 `postMessage` 给父页面、由父页面调 `get_wpe_web_state`。`load` 后首次全量投递，之后重拉时按键差异投递；首次投递后页面换 listener 时补投全量 |
 | `applyUserProperties` 增量推送 | P1 | 已完成（投递 5 / 触发 7，触发待真机） | 用户改属性 = 新 metadata 行 + `metadataId` 补丁；垫片订阅补丁后重拉，只推值变化的键 |
 | `applyGeneralProperties({ fps })` | P1 | 6 | 有了帧率设置再推。不推 0：按 `1000 / fps` 算间隔的页面会停住，而不推时页面保留自己的默认值 |
@@ -455,7 +455,7 @@ WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>
 **2026-10-28 定案**：B 不可行——HTTP 页面的 `file:` 子资源在渲染进程 `SecurityOrigin::CanDisplay` 就被拦，CEF 浏览器进程无钩子
 （`add_cross_origin_whitelist_entry` 只管脚本跨源访问，不查本地 scheme 分支）。改为 [Phase 6a](phase-6a-file-preview.md)：预览 iframe 也走
 `file://`，两种宿主共用运行时目录拦截与 Phase 7 的追加放行。
-**现状（Phase 6a 落地后）：两种宿主同一机制**——都是 `file:` 文档 + 补丁 0004 按窗口开文件访问 + 运行时按调用方 label 的根目录拦截，
+**现状（Phase 6a 落地后）：两种宿主同一机制**——都是 `file:` 文档 + 补丁 04 按窗口开文件访问 + 运行时按调用方 label 的根目录拦截，
 Phase 7 的「根目录 + 用户选的文件 / 目录」追加放行只写一份。
 
 ### 难点二：`localStorage` 的源（已解决，Phase 6a）
@@ -472,7 +472,7 @@ Phase 7 的「根目录 + 用户选的文件 / 目录」追加放行只写一份
 
 **推荐**：C。预览是临时查看，桌面才是长期运行的地方；`kb-wpe` 是否保留在 Phase 5 方案里定。
 **2026-10-28 定案**：Phase 6a 把预览改成 `file:` iframe 后与桌面同源，`localStorage` 跨重启稳定，难点自然消失，`kb-wpe` 不再需要。
-**2026-10-29 更正**：同源但 Chromium 按顶层站点分区存储，预览（顶层 `localhost:1420`）与桌面（顶层 `file://`）互不可见；稳定性成立，「互通」不成立（regression 0005 小节用例 12）。
+**2026-10-29 更正**：同源但 Chromium 按顶层站点分区存储，预览（顶层 `localhost:1420`）与桌面（顶层 `file://`）互不可见；稳定性成立，「互通」不成立（regression 05 小节用例 12）。
 
 ### 难点三：鼠标交互
 

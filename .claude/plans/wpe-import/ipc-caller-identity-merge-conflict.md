@@ -25,7 +25,7 @@ IO 线程上新文档最早的几个请求，读到的是空串或上一个文�
 
 ### B 段（main，e0b35e8f）：`Origin` = frame 当前的完整 URL
 
-协议层把 `file:` frame 发出的请求的 `Origin` 改写成 frame URL（`src-tauri/tauri-runtime-cef/src/protocol.rs`）：
+协议层把 `file:` frame 发出的请求的 `Origin` 改写成 frame URL（`src-tauri/tauri-runtime-kbcef/src/protocol.rs`）：
 ```rust
 // GlobalSchemeHandlerFactory::create：在 IO 线程读 frame.url()（就是这里有竞态）
 let request_frame = frame.map(|frame| RequestFrame {
@@ -39,14 +39,14 @@ fn attach_request_frame(request: &mut HttpRequest<Vec<u8>>, frame: Option<&Reque
         pin_file_frame_origin(request, frame);   // file: frame → Origin = frame.url（完整文档 URL）
         request.extensions_mut().insert(frame.clone());
         if let Some(id) = frame.subframe_id() {
-            request.extensions_mut().insert(id); // 子 frame 的路由标识（0018）
+            request.extensions_mut().insert(id); // 子 frame 的路由标识（18）
         }
     }
     request.extensions_mut().insert(frame.map_or(IpcFrame::Unknown, RequestFrame::ipc_frame));
 }
 ```
 
-Tauri（补丁 0018，`third/tauri/crates/tauri/src/webview/mod.rs` 的 `on_message`）把同一个 URL 交给两处：
+Tauri（补丁 18，`third/tauri/crates/tauri/src/webview/mod.rs` 的 `on_message`）把同一个 URL 交给两处：
 ```rust
 let is_local = self.is_local_url(&request.url);          // 来源：本地 / 远程
 message.caller_origin = Some(request.url.clone());       // 身份：命令参数 tauri::ipc::CallerOrigin
@@ -67,7 +67,7 @@ pub async fn wpe_web_pull_state(caller: tauri::ipc::CallerOrigin) -> Result<WpeW
 > 为什么非要身份：B 段删掉了按窗口登记的壁纸根目录，主窗口和壁纸窗口都能装网页壁纸 iframe。命令也不接收 id（页面可以伪造），
 > 只能从浏览器侧的信息推出调用方是哪张壁纸。
 
-回退通道 `cef-ipc` 在 B 段的取值顺序（`src-tauri/tauri-runtime-cef/src/ipc.rs` 的 `post_message_request`）是：
+回退通道 `cef-ipc` 在 B 段的取值顺序（`src-tauri/tauri-runtime-kbcef/src/ipc.rs` 的 `post_message_request`）是：
 `Origin` → frame URL → 子 frame 用占位来源 `kabegame-unattributed://subframe/`（交给 ACL 拒绝，页面的 Promise 会被 reject，不会挂起）→
 主 frame 或 frame 未知时用 webview 初始 URL。
 
@@ -92,7 +92,7 @@ pub async fn wpe_web_pull_state(caller: tauri::ipc::CallerOrigin) -> Result<WpeW
 - **Referer**：
   - `file:` 文档本来就不发 Referer。Blink 只给 http(s) 和登记过的 scheme 生成。
   - 跨源请求在默认策略下只送 origin。
-  - 最关键：页面可以用 `fetch(url, { referrer })` 把它设成任意同源 URL。0004 打开了 `allow_file_access_from_file_urls`，所有 `file:` 地址互相同源，恶意壁纸可以冒充库里另一张壁纸。
+  - 最关键：页面可以用 `fetch(url, { referrer })` 把它设成任意同源 URL。04 打开了 `allow_file_access_from_file_urls`，所有 `file:` 地址互相同源，恶意壁纸可以冒充库里另一张壁纸。
   - 以上按 Chromium 源码推断，未实测。
 - **`request_initiator` 本身**：它是 `std::optional<url::Origin>`，只有 scheme / host / port。CEF 文档也写明它是「origin (scheme + domain)」。`ResourceRequest` 里其它和发起方有关的字段（`site_for_cookies`、`isolation_info`）也只到 origin 或站点这一层。
 - **垫片把 `location.href` 当参数传上来**：页面可以伪造，同上。
@@ -149,16 +149,16 @@ attach_request_frame(&mut request, self.request_frame.as_ref());
 - **`wpe_web.rs` 测试**：
   - 对方新增的 `preview_root_rejects_wallpaper_window` 测的是 `check_preview_label`，这个函数 B 段已经删了，测试也去掉。
   - 保留对方在 capability 测试里加的 `file:///` 和 `file://localhost/` 两条断言；文档注释改成「绑定 `main` + `wallpaper`、`frames: "sub"`」。
-- **文档**：`cocs/README.md`、`cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md`、`cocs/wpe/WPE_IMPORT.md`、`src-tauri/tauri-runtime-cef/README.md`、`versions/latest/regression.md`。
+- **文档**：`cocs/README.md`、`cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md`、`cocs/wpe/WPE_IMPORT.md`、`src-tauri/tauri-runtime-kbcef/README.md`、`versions/latest/regression.md`。
   - 两边的内容都要保留，再统一成合并后的说法：iframe 形态、目录索引、来源用 initiator、身份按选定的方案。
   - 对方回归表里「壁纸窗口整窗导航」「`clear_js_listeners`」「预览代办白名单」这些描述，在 B 段已经不成立，需要改写或注明已被替代。
 - 24ee52ce 里不冲突、会自动合入的部分：WPE 滑块按步长对齐（`user_props.rs`、`KbNumber` 的 `stepStrictly`、`WpePropertyField`）。
 
 ## 合并后要验证
 
-- 单测：`tauri-runtime-cef`（initiator 换算、细化规则、回退通道），以及 `kabegame --lib wpe_web`。
+- 单测：`tauri-runtime-kbcef`（initiator 换算、细化规则、回退通道），以及 `kabegame --lib wpe_web`。
 - **Windows 真机**（B 段回归 W1、W7、W8、W10、W11 原本就在等这个修复）：
   - 桌面和预览的 `file:` iframe 在网页壁纸之间、普通图片与网页壁纸之间各切 10 次以上，回放新文档的 console：
     listen 每次都立即成功；pull 允许出现 `[kb-wpe] pull retry`，但最终必须成功，并且拉到的是**这一张**的状态。
-  - 子 frame 的 `request_initiator` 在 0004 打开时也是 `"file://"`。对方只验证过主 frame，需要实测确认。
+  - 子 frame 的 `request_initiator` 在 04 打开时也是 `"file://"`。对方只验证过主 frame，需要实测确认。
   - 用 `fetch(ipc://…)` 强制失败，验证 `cef-ipc` 回退通道同样能认出壁纸。

@@ -20,10 +20,10 @@ all app builds, and this submodule is only the from-source archive's build tree.
 Both are flat top-level `*.patch`, applied with `git -C third/rusty_v8 apply` (`build-v8.ts` does this
 idempotently — skip if already applied):
 
-- `0001-ninja-jobserver-fd.patch` → `build.rs`: `ninja()` drops `CARGO_MAKEFLAGS` / `MAKEFLAGS`. Cargo
+- `01-ninja-jobserver-fd.patch` → `build.rs`: `ninja()` drops `CARGO_MAKEFLAGS` / `MAKEFLAGS`. Cargo
   injects its jobserver via those into build scripts, but the fds don't survive into ninja-spawned
   rustc, which then aborts on a dead descriptor.
-- `0002-android-ndk-build-gn.patch` → `build/config/android/BUILD.gn`: new config.gni dropped
+- `02-android-ndk-build-gn.patch` → `build/config/android/BUILD.gn`: new config.gni dropped
   `android_ndk_version`; use the literal `ANDROID_NDK_VERSION_ROLL=r26c_1`. The path is prefixed
   `build/` so `git -C third/rusty_v8 apply` reaches **into the nested `build` submodule's working
   tree** — no separate per-submodule invocation, no nested patch folders.

@@ -27,7 +27,7 @@
 
 ### 级别
 
-- 本仓库的 target（`kabegame*`、`pathql_rs`、`tauri_runtime_cef`、`tauri_plugin_pathes`）与前端（`webview`）：release 为 info，dev 为 debug。
+- 本仓库的 target（`kabegame*`、`pathql_rs`、`tauri_runtime_kbcef`、`tauri_plugin_pathes`）与前端（`webview`）：release 为 info，dev 为 debug。
 - 其余依赖：warn。`tauri_plugin_tracing` 设为 info，只为让它 `log` 命令外层的 span（带窗口 label 字段 `w`）对过滤器可见。
 - 后端级别不提供设置项，查看器只在前端过滤。需要更细的日志时用环境变量 `KABEGAME_LOG` 覆盖，语法同 `tracing_subscriber::filter::Targets`，只覆盖其中提到的 target，例如：
 
@@ -93,5 +93,5 @@ Web 的 super 只是 `?super=1` 查询参数，没有认证；日志的暴露范
 - 前端连续快速打日志时，记录顺序（seq）可能与调用顺序不一致：每条日志是一次独立的异步 IPC，到达后端的先后不保证。需要严格顺序的排查请用 debug ingest 并按事件自带的 `ts` 排序。
 
 - Android 不挂控制台层（stderr 不进 logcat），只有文件与查看器。
-- CEF helper 子进程（`kabegame-cef-helper`）不装订阅器；`tauri-runtime-cef/src/subprocess.rs` 仍用 `eprintln!`。
+- CEF helper 子进程（`kabegame-cef-helper`）不装订阅器；`tauri-runtime-kbcef/src/subprocess.rs` 仍用 `eprintln!`。
 - 第二实例在 `try_forward_to_existing_instance_and_exit` 里转发后直接退出，早于订阅器安装，那条提示仍是 `println!`。

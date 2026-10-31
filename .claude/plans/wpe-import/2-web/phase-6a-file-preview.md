@@ -8,7 +8,7 @@
 > `add_cross_origin_whitelist_entry` 管的是脚本跨源访问，不查本地 scheme 这条分支。所以 HTTP 源下要么改页面文本，
 > 要么没有 Rust 侧拦截点。用户选择：预览 iframe 也改成 `file://`，让它和桌面壁纸窗口走同一条 Rust 拦截路。
 >
-> 依赖：Phase 4（补丁 0004、`file_access.rs`）、Phase 5（垫片、宿主桥）。Phase 7 依赖本 Phase。
+> 依赖：Phase 4（补丁 04、`file_access.rs`）、Phase 5（垫片、宿主桥）。Phase 7 依赖本 Phase。
 >
 > 范围：
 > - 主窗口登记文件文档策略；预览挂载 / 卸载时设置 / 清空根目录；
@@ -25,7 +25,7 @@
 
 ## 总体设计思路
 
-桌面壁纸窗口在 Phase 4 已经证明了一套模型：`file://` 文档 + 补丁 0004 按浏览器打开 `allow_file_access_from_file_urls`
+桌面壁纸窗口在 Phase 4 已经证明了一套模型：`file://` 文档 + 补丁 04 按浏览器打开 `allow_file_access_from_file_urls`
 + 运行时 `FileDocumentGuardHandler` 按当前根目录拦截每个 `file:` 请求。本 Phase 把图库预览也搬到这套模型上：
 主窗口建窗前登记为「允许 `file:` 文档」的 webview，预览 iframe 直接加载壁纸入口的 `file://`，根目录在预览挂载时设为该壁纸目录、
 卸载时清空。于是两种宿主的本地文件边界完全一样，Phase 7 的「根目录 + 用户选的文件 / 目录」追加放行只需写一份。
@@ -84,14 +84,14 @@ pub struct WallpaperTarget {
 **c. 只有壁纸窗口登记了文件文档策略**（`src-tauri/kabegame/src/wallpaper/manager/window.rs:93`、`startup.rs:163`）
 ```rust
 // 壁纸窗口：建窗前登记
-tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL);
-// 主窗口：没有登记。它的 browser 没有 0004 的偏好，file: 请求也不经 FileDocumentGuardHandler
+tauri_runtime_kbcef::allow_file_documents(WALLPAPER_LABEL);
+// 主窗口：没有登记。它的 browser 没有 04 的偏好，file: 请求也不经 FileDocumentGuardHandler
 let builder = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))
     // …
     .initialization_script_for_all_frames(crate::commands::wpe_web::WPE_SHIM_JS);
 ```
 
-**d. 运行时按 label 分发闸门**（`src-tauri/tauri-runtime-cef/src/webview.rs:802`）
+**d. 运行时按 label 分发闸门**（`src-tauri/tauri-runtime-kbcef/src/webview.rs:802`）
 ```rust
 if is_file_request && crate::file_access::is_file_document_webview(&self.label) {
     return Some(FileDocumentGuardHandler::new(self.label.clone()));   // 现状：机制已通用，只缺主窗口登记
@@ -138,7 +138,7 @@ pub struct WallpaperTarget {
 ## 点 2 — 主窗口登记文件文档策略 + 预览根目录命令（`startup.rs`、`commands/wpe_web.rs`、`permissions/main.toml`）
 
 - **修改**（`startup.rs` `create_main_window`）
-  - 建窗前 `tauri_runtime_cef::allow_file_documents("main")`。注释写明：只给图库预览的 `file:` iframe 用，根目录由 `set_wpe_web_preview` 管，
+  - 建窗前 `tauri_runtime_kbcef::allow_file_documents("main")`。注释写明：只给图库预览的 `file:` iframe 用，根目录由 `set_wpe_web_preview` 管，
     不预览时为空、拒绝全部 `file:`。
   - 垫片那条注释改成「只在预览的 `file:` 直接子 iframe 里启用」。
 - **新增**（`commands/wpe_web.rs`）
@@ -219,7 +219,7 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
 ## 点 5c — 平台限定：WPE 只提供 Windows 桌面（`discover.rs`、`manager/window.rs`、`startup.rs`、`commands/wpe_web.rs`）
 
 现状：`kabegame_core::wpe::discover::platform_supported()` 是 `cfg!(any(windows, linux))`；桌面 `file://` 宿主（`show_web`）、
-`web_entry`、预览命令都没有平台门控，只有鼠标转发是 `cfg(target_os = "windows")`。macOS / Linux 上这套 `file:` 文档 + 补丁 0004 的路径从未真机验证。
+`web_entry`、预览命令都没有平台门控，只有鼠标转发是 `cfg(target_os = "windows")`。macOS / Linux 上这套 `file:` 文档 + 补丁 04 的路径从未真机验证。
 
 - **修改**
   - `platform_supported()` 改为 `cfg!(target_os = "windows")`；Linux 的 Steam 路径探测代码保留但不再进入（注释写明「暂只支持 Windows」）。
@@ -227,7 +227,7 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
   - `web_entry()`（点 1 移动后的那份）整个函数 `#[cfg(target_os = "windows")]`，其它平台提供同签名的 `Ok(None)` 版本：
     `set_wallpaper_path` 对网页壁纸自然走 `show_app`（只显示应用页，Vue 对 `x-wpe/web` 目标按预览图处理），`WallpaperTarget.web_entry` 为 `None`。
   - `allow_file_documents(WALLPAPER_LABEL)`、`allow_file_documents("main")` 两处登记都 `#[cfg(target_os = "windows")]`：
-    非 Windows 的 browser 不带 0004 的偏好，`file:` 请求也不经闸门（本来就不会有 `file:` 文档）。
+    非 Windows 的 browser 不带 04 的偏好，`file:` 请求也不经闸门（本来就不会有 `file:` 文档）。
   - `set_wpe_web_preview` 非 Windows 直接 `Err("WPE web wallpapers are Windows-only for now")`；前端 `getWebUrl` 已因 `webEntry` 缺失先报错，命令只是兜底。
   - 不动 `WpeWallpaperContent` / `ImageContent`：`webEntry` 缺失时 `WallpaperStage` 报错 → `error` 事件 → 预览图回退，这条链 Phase 3 已有。
 - **不改**：`kabegame-core::wpe` 的入库模型、`read_project`、属性解析保持跨平台编译（CLI / 测试用）。
@@ -241,7 +241,7 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
     「图库预览在主窗口里以 `file:` iframe 加载入口，主窗口同样登记文件文档策略、按预览中的壁纸目录拦截；Web 版 / Android 只显示预览图」。
   - `cocs/mcp/MCP_SERVER.md`：媒体路由里若列了 `/wpe`，删掉。
   - `AGENTS.md`、`cocs/wpe/WPE_IMPORT.md`、`apps/docs`（若已有 WPE 页面）：写明「WPE 壁纸目前只提供 Windows 桌面；macOS / Linux / Android / Web 不发现、不导入、不渲染」。
-  - `src-tauri/tauri-runtime-cef/README.md`：文件文档策略一节补「主窗口也登记」。
+  - `src-tauri/tauri-runtime-kbcef/README.md`：文件文档策略一节补「主窗口也登记」。
   - `API.md`：§5.3 对照表预览列；难点一改为「两种宿主同一机制」；难点二标记已解决（同源）；第八节不变。
   - `PLAN.md`：路线表插入 Phase 6a；Phase 7 依赖改为 6a；待定决策 4（`kb-wpe`）标记不再需要；已确认决策 7、8 里「预览仍用 HTTP iframe」加注。
   - `versions/latest/regression.md`：新增 Phase 6a 一节；`versions/latest/changelog.md` 加一行开发向说明（用户不可见的变化）。
@@ -259,7 +259,7 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
   5. 预览切图 web → 图片 → web、web → 另一张 web：根目录随之换；旧壁纸目录的请求在新预览里被拒。
   6. 隔离：预览 iframe 里 `window.__TAURI_INTERNALS__` 为 `undefined`；`window.parent.document` 抛 `SecurityError`；
      伪造 `fetch("cef-ipc://localhost/", POST)` 不触发任何命令。
-  7. `localStorage`：预览里写一个键，切到桌面壁纸（同一张）能读到。（2026-10-29 实测：读不到，按顶层站点分区；见 regression 0005 小节用例 12）
+  7. `localStorage`：预览里写一个键，切到桌面壁纸（同一张）能读到。（2026-10-29 实测：读不到，按顶层站点分区；见 regression 05 小节用例 12）
   8. Slideshow 在预览里能跑（无属性状态，与 Phase 3 相同）；`keyframes.html` 子页面照常加载。
   9. 应用背景层（`App.vue`）对网页壁纸仍只用缩略图，不受影响。
   10. 壁纸窗口（`wallpaper` label）调 `set_wpe_web_preview` 被拒（单测或 CDP 在壁纸窗口 invoke）。
@@ -274,10 +274,10 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
 - **现象**：按点 3 实施后真机预览 kaguya，iframe 停在 `about:blank`，控制台 `Not allowed to load local resource`。
   应用页是 `http://localhost:1420`，页面脚本给子 frame 设 `src = "file:///…"` 是**渲染进程发起**的导航，Blink 在
   `FrameLoader` 里对带发起文档的请求做 `SecurityOrigin::CanDisplay`，http 源不能显示本地资源，导航在渲染进程就被丢弃；
-  主窗口登记的文件文档策略、补丁 0004 的偏好、`OnBeforeResourceLoad` 闸门都在这之后，碰不到它。本 Phase 起因里
+  主窗口登记的文件文档策略、补丁 04 的偏好、`OnBeforeResourceLoad` 闸门都在这之后，碰不到它。本 Phase 起因里
   「HTTP 页面引用 `file:` 被 `CanDisplay` 拦下」同样适用于 iframe 导航本身——方案阶段漏判了这一点。
 - **修法**（只改应用与运行时公开 API，不动 `third/`、CEF / tauri 补丁）：
-  - 运行时新增 `tauri_runtime_cef::navigate_frame(label, frame_name, url)`：CEF UI 线程上按 label 取 browser →
+  - 运行时新增 `tauri_runtime_kbcef::navigate_frame(label, frame_name, url)`：CEF UI 线程上按 label 取 browser →
     `frame_by_name` → `load_url`，同步等回执（同 `start_download`），找不到 webview / browser / frame 返回 Err。
   - `set_wpe_web_preview(Some(id))` 在 `set_file_document_root` 之后调 `navigate_frame(label, "kb-wpe-preview", 入口)`；
     入口与根目录同取 `wallpaper::web_entry`。`None` 分支不变。名字常量 Rust（`commands/wpe_web.rs`）与前端
@@ -296,7 +296,7 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
   说明这一层生效，只能改 CEF：给子 frame 的 `LoadURL` 加一条走 `NavigationController::LoadURLWithParams`（`frame_tree_node_id`
   指向该子 frame、`is_renderer_initiated = false`）的真正浏览器发起导航，需要新补丁。
 
-**2026-10-29 真机偏差：浏览器进程导航把渲染进程杀掉、整窗刷新循环，改为 CEF 补丁 0005 + 前端赋 `src`。**
+**2026-10-29 真机偏差：浏览器进程导航把渲染进程杀掉、整窗刷新循环，改为 CEF 补丁 05 + 前端赋 `src`。**
 
 - **现象**：按上一段修法真机预览，主窗口的渲染进程被杀，随后整窗 reload，预览重新挂载后再次触发，循环不止。
   推断：子 frame 的 `CefFrame::LoadURL` 在渲染端走 `blink_glue::StartNavigation`，以**无发起
@@ -305,7 +305,7 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
   另一层是上一段担心的浏览器侧 `FilterURL`：没有 `file` 请求权的进程发起的 `file:` 导航会被改写成 `about:blank#blocked`。
   两道关（渲染进程 `CanDisplay`、浏览器进程 `FilterURL`）互相独立，都不能靠调用方式绕开。
 - **修法**（用户决定不绕过，做正规补丁）：
-  - CEF 补丁 `third-patches/cef/0005-app-page-local-resources.patch`（只改 `//cef`）：建窗 `extra_info` 的 bool 键
+  - CEF 补丁 `third-patches/cef/05-app-page-local-resources.patch`（只改 `//cef`）：建窗 `extra_info` 的 bool 键
     `kabegame.allow_local_resources`；渲染侧 `CefRenderManager::MaybeCreateBrowser` 读键存进 `CefBrowserImpl`，
     `CefRenderFrameObserver::DidCommitProvisionalLoad` 在最外层主 frame 每次提交非 `file:` 文档时调
     `blink_glue::GrantLoadLocalResources`（`SecurityOrigin::GrantLoadLocalResources`，只影响 `CanDisplay`，`CanRequest` 不变）；
@@ -319,12 +319,12 @@ frame-src 'self' blob: data: about: file:          // 新增 file:；删除 http
     清根目录后返回 `None`。
   - 前端：`setWpeWebPreview(imageId): Promise<string | null>`；`createWebFrame` 插入 DOM、挂宿主桥后
     `const entry = await setWpeWebPreview(imageId)`，token 校验、没有入口则 `teardownWeb` 并抛错，然后 `frame.src = entry`。
-    8s 超时仍停在初始 `about:blank` 记 `wpe web entry not navigated (CEF patch 0005 missing?)`，否则 `load timeout`；
+    8s 超时仍停在初始 `about:blank` 记 `wpe web entry not navigated (CEF patch 05 missing?)`，否则 `load timeout`；
     `load` 时同源可读的非初始文档仍记 `wpe web entry blocked: <href>`。
 - **删除**：运行时 `navigate_frame`（`webview.rs` 与 `lib.rs` 导出）、Rust / 前端两份 `WPE_PREVIEW_FRAME_NAME`
   （`kb-wpe-preview`）与 iframe 的 `name`、前端 `WEB_NAV_KICK_MS` / `webKickTimer` 3s 补发、`set_wpe_web_preview` 里的
   `spawn_blocking(navigate_frame)`。
 - **本次不动**：`on_render_process_terminated` 的无条件 `reload()`（触发源已去除，熔断留后续）；`wpe_shim.js` 与 CSP
-  `frame-src … file:`。图库图片 / 缩略图走 `file://`、退役本地 HTTP 媒体服务留给后续 0006（`FilePolicy` 届时扩授权集）。
+  `frame-src … file:`。图库图片 / 缩略图走 `file://`、退役本地 HTTP 媒体服务留给后续 06（`FilePolicy` 届时扩授权集）。
 - **验证**：静态检查与单测已过；真机要等用户重编 CEF（`CEFBUILD=D:/Codes/cefbuild deno task build:chromium`）并完全重启
-  dev，用例见 `versions/latest/regression.md`「CEF 补丁 0005：应用页加载本地资源」。
+  dev，用例见 `versions/latest/regression.md`「CEF 补丁 05：应用页加载本地资源」。

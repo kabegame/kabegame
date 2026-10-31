@@ -5,7 +5,7 @@
 > **目标**:在 Linux 真正 `bun dev -c kabegame` 用 CEF 启动并看到 kabegame 前端;确认其余平台不受影响。把"能编译"推进到"能运行 + 截图"。
 
 ## 现状锚点
-**a. crate 自身可检查**:`cargo check -p tauri-runtime-cef --features cef-backend` 通过。
+**a. crate 自身可检查**:`cargo check -p tauri-runtime-kbcef --features cef-backend` 通过。
 **b. kabegame 检查被 FFmpeg build script 卡**(phase3 落地记录):
 ```text
 cargo check -p kabegame --features standard  →  rusty_ffmpeg build script 失败
@@ -22,7 +22,7 @@ cargo check -p kabegame --features standard  →  rusty_ffmpeg build script 失�
 - **诊断**:沿用 §DEBUG_INGEST 或日志;窗口标题/类名定位 + `import` 截图(tao X11 窗口可截,见 minimal 经验)。
 
 ## 点 3 — 平台门控回归
-- **任务**:确认 `cargo check`/构建在 **Android / Windows / macOS** 路径**不编译** `tauri-runtime-cef`(target-cfg 依赖 + 入口 cfg 分流),行为与改造前一致。
+- **任务**:确认 `cargo check`/构建在 **Android / Windows / macOS** 路径**不编译** `tauri-runtime-kbcef`(target-cfg 依赖 + 入口 cfg 分流),行为与改造前一致。
 
 ## 验收
 - `bun dev -c kabegame`(Linux)用 CEF 渲染出 kabegame 前端(交互依赖 3.2,IPC 依赖 Phase 4)。

@@ -4516,7 +4516,7 @@ dependencies = [
  "tauri-plugin-tracing",
  "tauri-plugin-wallpaper",
  "tauri-plugin-wemt",
- "tauri-runtime-cef",
+ "tauri-runtime-kbcef",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -8793,7 +8793,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tauri-runtime-cef"
+name = "tauri-runtime-kbcef"
 version = "0.1.0"
 dependencies = [
  "ash",

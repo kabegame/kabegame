@@ -27,7 +27,7 @@ pub fn get_app_logs(since_seq: Option<u64>, limit: Option<usize>) -> Vec<LogReco
 /// 攒批经 `on_logs` 推回调用的页面。
 ///
 /// 用 Channel 而不是全局事件：Channel 只回到开启查看器的那个页面，日志不会进入事件系统。
-/// （tauri 补丁 0014 起 `emit_to("main", ..)` 也只会送到主窗口；补丁 0015 起其它窗口只能监听
+/// （tauri 补丁 14 起 `emit_to("main", ..)` 也只会送到主窗口；补丁 15 起其它窗口只能监听
 /// capability 里列出的事件名。）
 #[tauri::command]
 pub fn start_app_log_stream(on_logs: Channel<Vec<LogRecord>>) {

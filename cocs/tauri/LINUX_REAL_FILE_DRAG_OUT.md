@@ -6,9 +6,9 @@
 ## 适用范围与生效条件
 
 这条链路为三个桌面平台的 CEF standard 模式启用。运行时使用的 CEF 必须由包含
-`third-patches/cef/0003-drag-source-filenames.patch` 的源码重新构建；只更新 Rust、前端或
+`third-patches/cef/03-drag-source-filenames.patch` 的源码重新构建；只更新 Rust、前端或
 cef-rs bindings，不会让已经编好的旧 CEF 获得新的 Chromium/CEF 回调。Windows 半边是
-Phase 6d 才加进同一份 0003 的，此前编好的 Windows CEF 必须重编才有调用点。
+Phase 6d 才加进同一份 03 的，此前编好的 Windows CEF 必须重编才有调用点。
 
 桌面上前端**只**写自定义 mime 里的 image id，不再写 `DownloadURL` / `text/uri-list` /
 `text/plain`。链路一旦生效，Chromium 会把 URL、text、file_contents 等渲染器载荷一并清掉，
@@ -79,7 +79,7 @@ ImageContent.vue: image id（effectAllowed = copy）
 Linux 与 Windows 是**推**，而且共用同一个 `content/browser/web_contents/web_contents_view_aura.cc`：
 `PrepareDragData()` 把所有格式一次性写进 `OSExchangeDataProvider`（Linux 是 X11 / Wayland 的
 provider，Windows 是 `OSExchangeDataProviderWin`，背后就是一个 OLE `IDataObject`），
-`StartDragging` 只需在写入前把 filenames 换掉。0003 的钩子写在这个文件里，Windows 半边只是把
+`StartDragging` 只需在写入前把 filenames 换掉。03 的钩子写在这个文件里，Windows 半边只是把
 门控从 `IS_LINUX` 放宽到 `IS_LINUX || IS_WIN`；Windows 上 filenames 由 `SetFilenames` 写成
 `CF_HDROP`（真实路径），资源管理器收到的就是一份普通的文件拖放，松手即复制，没有下载、
 临时目录或「谁决定目标路径」的问题。`IS_CHROMEOS` 不进门控。
@@ -224,12 +224,12 @@ enter 快照）已覆盖这一情形，拖回本应用全程静默。
 
 | 层 | 职责 | 维护位置 |
 | --- | --- | --- |
-| Chromium patch | 在 Linux / Windows（共用 aura）与 macOS `StartDragging` 的平台载荷生成前调用 delegate；注入成功时改写 `DropData` 并清理 URL、text、缩略图字节与 download metadata（Windows / macOS 另清 `html`）；Windows 不打 `chromium/x-renderer-taint`；macOS 另需让 `WebDragSource` 声明并提供 `public.file-url`、并摘掉 renderer 污染标记 | `third-patches/cef/0003-drag-source-filenames.patch` 内的 `patch/patches/kabegame_drag_source_filenames.patch` 与 `patch/patch.cfg`；目标文件为 `content/public/browser/web_contents_view_delegate.{h,cc}`、`content/browser/web_contents/web_contents_view_aura.cc`（Linux / Windows）、`content/browser/web_contents/web_contents_view_mac.mm`、`content/app_shim_remote_cocoa/web_drag_source_mac.mm`（macOS） |
-| CEF API | 将 delegate 接到 `CefDragHandler::OnStartDragging`（Linux / macOS / Windows），并用 `CefDragData::GetCustomData` 暴露页面自定义格式 | 同一个 `third-patches/cef/0003-drag-source-filenames.patch`；涉及 `include/cef_drag_{handler,data}.h`、`libcef/common/drag_data_impl.{h,cc}`、`libcef/browser/chrome/chrome_web_contents_view_delegate_cef.{h,cc}` |
-| cef-rs bindings | 保持 C ABI struct 布局和安全 wrapper 与 CEF 一致（Linux / Windows / macOS 三份，Windows 接入时不改） | `third-patches/cef-rs/0006-drag-source-bindings-linux.patch`、`0007-drag-source-bindings-windows.patch`、`0008-drag-source-bindings-macos.patch` |
-| Rust + 前端 | 前端声明 id 并设 `effectAllowed=copy`（Web 版另走 `DownloadURL`）；runtime 读取 id 并调用 resolver（不带平台 cfg）；app 校验 label、DB 与普通文件后返回路径（三个桌面平台安装 resolver） | `apps/kabegame/src/components/image/ImageContent.vue`、`apps/kabegame/src/utils/dragExport.ts`、`src-tauri/tauri-runtime-cef/src/{webview,runtime,lib}.rs`、`src-tauri/kabegame/src/{drag_export,lib}.rs` |
+| Chromium patch | 在 Linux / Windows（共用 aura）与 macOS `StartDragging` 的平台载荷生成前调用 delegate；注入成功时改写 `DropData` 并清理 URL、text、缩略图字节与 download metadata（Windows / macOS 另清 `html`）；Windows 不打 `chromium/x-renderer-taint`；macOS 另需让 `WebDragSource` 声明并提供 `public.file-url`、并摘掉 renderer 污染标记 | `third-patches/cef/03-drag-source-filenames.patch` 内的 `patch/patches/kabegame_drag_source_filenames.patch` 与 `patch/patch.cfg`；目标文件为 `content/public/browser/web_contents_view_delegate.{h,cc}`、`content/browser/web_contents/web_contents_view_aura.cc`（Linux / Windows）、`content/browser/web_contents/web_contents_view_mac.mm`、`content/app_shim_remote_cocoa/web_drag_source_mac.mm`（macOS） |
+| CEF API | 将 delegate 接到 `CefDragHandler::OnStartDragging`（Linux / macOS / Windows），并用 `CefDragData::GetCustomData` 暴露页面自定义格式 | 同一个 `third-patches/cef/03-drag-source-filenames.patch`；涉及 `include/cef_drag_{handler,data}.h`、`libcef/common/drag_data_impl.{h,cc}`、`libcef/browser/chrome/chrome_web_contents_view_delegate_cef.{h,cc}` |
+| cef-rs bindings | 保持 C ABI struct 布局和安全 wrapper 与 CEF 一致（Linux / Windows / macOS 三份，Windows 接入时不改） | `third-patches/cef-rs/06-drag-source-bindings-linux.patch`、`07-drag-source-bindings-windows.patch`、`08-drag-source-bindings-macos.patch` |
+| Rust + 前端 | 前端声明 id 并设 `effectAllowed=copy`（Web 版另走 `DownloadURL`）；runtime 读取 id 并调用 resolver（不带平台 cfg）；app 校验 label、DB 与普通文件后返回路径（三个桌面平台安装 resolver） | `apps/kabegame/src/components/image/ImageContent.vue`、`apps/kabegame/src/utils/dragExport.ts`、`src-tauri/tauri-runtime-kbcef/src/{webview,runtime,lib}.rs`、`src-tauri/kabegame/src/{drag_export,lib}.rs` |
 
-`third-patches/cef/0003` 中的 Chromium 内层 patch 与 CEF API 是同一功能的两半，必须同进
+`third-patches/cef/03` 中的 Chromium 内层 patch 与 CEF API 是同一功能的两半，必须同进
 同退。只更新其中一半，要么没有调用点，要么没有 client API。
 
 ## 两道安全门
@@ -252,18 +252,18 @@ enter 快照）已覆盖这一情形，拖回本应用全程静默。
 `src-tauri/kabegame/src/lib.rs` 在 `not(target_os = "android") + feature = "standard"`（即
 Windows / macOS / Linux 三个桌面平台的 CEF standard 构建；`standard` 与 `web` 互斥）时调用
 `set_drag_file_resolver()`。未安装 resolver 等价于关闭功能。runtime 的 `on_start_dragging`
-不带平台 cfg，哪个平台真会回调由 CEF 补丁 0003 决定，未带补丁的 CEF 不会进来。
+不带平台 cfg，哪个平台真会回调由 CEF 补丁 03 决定，未带补丁的 CEF 不会进来。
 
 CEF API 声明和 cef-rs struct 字段不能按平台条件删减。Linux、Windows 与 macOS bindings 若看到
 不同的 `_cef_drag_handler_t` / `_cef_drag_data_t` 布局，字段 offset 和 size 就会与实际 libcef
-不一致。为此，`0006`、`0007`、`0008` 同步维护三个桌面平台的 ABI——这也是 macOS 与 Windows
+不一致。为此，`06`、`07`、`08` 同步维护三个桌面平台的 ABI——这也是 macOS 与 Windows
 接入时**都不需要动 bindings 层**的原因：布局早就是一致的，缺的只是 Chromium 侧的调用点。
 
 ## 排查入口
 
 拖出没有得到真实文件时，按以下顺序检查：
 
-1. **CEF 是否真的重编过。** 确认运行时 CEF 包含 `third-patches/cef/0003`（Windows 需要带 Phase 6d
+1. **CEF 是否真的重编过。** 确认运行时 CEF 包含 `third-patches/cef/03`（Windows 需要带 Phase 6d
    之后的版本）；旧 CEF 只会交付 Blink 为 `<img>` 自动填充的缩略图载荷，看起来像“新代码没生效”。
 2. **resolver 是否安装。** 当前进程必须是 Windows、macOS 或 Linux 的 CEF standard 构建，并走到
    `set_drag_file_resolver()`。web、Android 或非 standard 模式不会安装。

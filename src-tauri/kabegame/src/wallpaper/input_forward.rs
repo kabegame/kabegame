@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use tauri_runtime_cef::MouseInjection;
+use tauri_runtime_kbcef::MouseInjection;
 use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
@@ -93,7 +93,7 @@ fn cursor_over_desktop(point: POINT) -> bool {
 }
 
 fn inject(label: &str, input: MouseInjection) {
-    if let Err(error) = tauri_runtime_cef::inject_mouse(label, input) {
+    if let Err(error) = tauri_runtime_kbcef::inject_mouse(label, input) {
         tracing::warn!("注入鼠标事件失败: {error}");
     }
 }

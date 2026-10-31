@@ -87,7 +87,7 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
         // CEF 内部会同步等待 UI 线程投递结果，必须放到 blocking 线程。
         // 若等待超时但 Requested 迟到，worker 已取走 completion；回调会拒绝该请求。
         tauri::async_runtime::spawn_blocking(move || {
-            tauri_runtime_cef::start_download(&label, &url).map_err(|error| error.to_string())
+            tauri_runtime_kbcef::start_download(&label, &url).map_err(|error| error.to_string())
         })
         .await
         .map_err(|error| format!("Native download dispatch task failed: {error}"))?
@@ -161,14 +161,14 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
     };
 
     // 主窗口的两类本地文件用途，都由 CEF 补丁按 browser 开启、运行时按发起 frame 分档拦截：
-    // - 图库媒体走 file://（补丁 0005 + 0006）：应用页主 frame 的 <img> / <video> / CSS url() 子资源
+    // - 图库媒体走 file://（补丁 05 + 0006）：应用页主 frame 的 <img> / <video> / CSS url() 子资源
     //   免检，三个桌面平台都开（本函数已按非 Android、非 web 门控）；应用页 fetch `file:` 还需 0006 私有 CORS 列表与运行时跨源白名单；
-    // - WPE 网页壁纸预览（补丁 0004 + 0005，只有 Windows）：`file:` iframe 及其子资源由运行时闸门按
+    // - WPE 网页壁纸预览（补丁 04 + 0005，只有 Windows）：`file:` iframe 及其子资源由运行时闸门按
     //   网页壁纸目录索引裁决（`wallpaper::wpe_web_dir_index`）：iframe 导航须落进库里某个网页壁纸目录，
     //   壁纸文档只能访问它自己的目录与它的用户选择。
-    tauri_runtime_cef::allow_app_local_resources("main"); // 0005：应用页加载 file:（0006 补子资源工厂）
+    tauri_runtime_kbcef::allow_app_local_resources("main"); // 0005：应用页加载 file:（0006 补子资源工厂）
     #[cfg(target_os = "windows")]
-    tauri_runtime_cef::allow_file_documents("main"); // 0004：iframe 里的 file 文档 fetch 同目录
+    tauri_runtime_kbcef::allow_file_documents("main"); // 0004：iframe 里的 file 文档 fetch 同目录
 
     let builder =
         WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))

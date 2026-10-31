@@ -66,7 +66,7 @@ frame.load_url(Some(&CefString::from(url.as_str())));  // 现状:dev 靠 Vite de
 
 验证:
 
-- `cargo check -p tauri-runtime-cef --all-targets --features cef-backend` 通过。
+- `cargo check -p tauri-runtime-kbcef --all-targets --features cef-backend` 通过。
 - 精确的 render-process `on_context_created` document-start 注入仍按本计划原取舍保留为
   后续优化;当前 browser-process 注入满足 Phase 3.1 的最小实现边界。
 - CEF scheme factory 当前属于 global request context,与 Phase 3 的

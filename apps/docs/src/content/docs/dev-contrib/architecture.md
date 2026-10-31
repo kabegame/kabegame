@@ -17,7 +17,7 @@ Kabegame 是一个由 Deno 构建系统编排的 monorepo。Vue 前端、Tauri �
 │   ├── kabegame-core/            # 爬虫、插件、存储等共享 Rust 核心
 │   ├── kabegame/                 # 桌面与 Android Tauri GUI
 │   ├── kabegame-cli/             # 无界面命令行工具
-│   ├── tauri-runtime-cef/        # 自研桌面 Tauri CEF runtime
+│   ├── tauri-runtime-kbcef/        # 自研桌面 Tauri CEF runtime
 │   ├── pathql-rs/                # PathQL 查询引擎
 │   └── tauri-plugin-*/           # picker、pathes、share、wallpaper、task-notification
 ├── src-crawler-plugins/          # JS/TS 爬虫插件及 .kgpg 打包流程
@@ -45,4 +45,4 @@ Kabegame 是一个由 Deno 构建系统编排的 monorepo。Vue 前端、Tauri �
 
 爬虫插件的两个后端有不同使用边界，选型和开发循环见[插件开发指南](/dev/overview/)；完整构建入口见[从源码构建](/dev-contrib/building/)。
 
-其中 `tauri-runtime-cef`（桌面 CEF runtime）、`WebviewHandler`（WebView 爬虫）与 `pathql-rs`（PathQL 路径折叠查询引擎，配合 Provider DSL）是几处自研核心，深入设计见 [`cocs/`](https://github.com/kabegame/kabegame/tree/main/cocs)（如 [`cocs/provider-dsl/`](https://github.com/kabegame/kabegame/tree/main/cocs/provider-dsl)）。
+其中 `tauri-runtime-kbcef`（桌面 CEF runtime）、`WebviewHandler`（WebView 爬虫）与 `pathql-rs`（PathQL 路径折叠查询引擎，配合 Provider DSL）是几处自研核心，深入设计见 [`cocs/`](https://github.com/kabegame/kabegame/tree/main/cocs)（如 [`cocs/provider-dsl/`](https://github.com/kabegame/kabegame/tree/main/cocs/provider-dsl)）。

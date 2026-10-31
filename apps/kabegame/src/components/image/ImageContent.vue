@@ -221,7 +221,7 @@ const dragFileName = (sourceUrl: string): string => {
  * 原生拖拽起手。两条路径互斥，不共用载荷：
  *
  * - **桌面三平台（Windows / macOS / Linux）** 只写自定义 mime 里的 image id，浏览器进程
- *   据此查库换成库内原文件（CEF 补丁 0003，见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`；
+ *   据此查库换成库内原文件（CEF 补丁 03，见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`；
  *   Windows 落地为 `CF_HDROP`）。这里**不写** URL：注入文件成功时 Chromium 会把
  *   url_infos / text / file_contents / html / download_metadata 一并清掉，写了也留不下；
  *   Windows 上 `DownloadURL` 还会多出一份延迟渲染的 `CF_HDROP` 与真实文件抢格式。

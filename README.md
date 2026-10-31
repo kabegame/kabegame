@@ -174,7 +174,7 @@ sudo apt install ./Kabegame-standard_*_amd64.deb
 Kabegame 使用 Vue 3、Tauri 2 与 Rust 构建，并针对图库查询、插件运行时和桌面浏览器能力做了多项扩展：
 
 - [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)：基于真实页面环境运行需要登录态或页面交互的插件。
-- [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)：为桌面端定制的 CEF Tauri runtime。
+- [tauri-runtime-kbcef](./src-tauri/tauri-runtime-kbcef/)：为桌面端定制的 CEF Tauri runtime。
 - [PathQL](./src-tauri/pathql-rs/)：用路径组合过滤、排序、分页和 Provider DSL 的数据库查询引擎。
 
 项目结构、进程模型与关键模块见[架构与项目结构](https://kabegame.com/dev-contrib/architecture/)。

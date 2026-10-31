@@ -2,9 +2,9 @@
 
 > **范围**:仅 **Linux 桌面**替换 webview 后端为 CEF(Chromium)。Windows(WebView2,本就是 Chromium)/ macOS(WKWebView)/ Android(系统 WebView)**全程不动**。
 >
-> **形态**:独立适配器 crate `src-tauri/tauri-runtime-cef/`,在 `tauri-runtime` 的 trait 契约上用 `cef`(tauri-apps/cef-rs)实现后端 —— 与官方 `tauri-runtime-wry` 对等。**不 fork Tauri**。
+> **形态**:独立适配器 crate `src-tauri/tauri-runtime-kbcef/`,在 `tauri-runtime` 的 trait 契约上用 `cef`(tauri-apps/cef-rs)实现后端 —— 与官方 `tauri-runtime-wry` 对等。**不 fork Tauri**。
 >
-> **背景 / 技术调研 / 决策论证**:已完整固化在 `src-tauri/tauri-runtime-cef/README.md`,本文件不重复,只做**执行拆解**。本文件是**根计划**,后续按需细化为 `cef-linux-runtime-phaseN.md`。
+> **背景 / 技术调研 / 决策论证**:已完整固化在 `src-tauri/tauri-runtime-kbcef/README.md`,本文件不重复,只做**执行拆解**。本文件是**根计划**,后续按需细化为 `cef-linux-runtime-phaseN.md`。
 >
 > 每个 Phase 设计为**可独立完成的提交单元**:完成后分支应可编译、Linux 之外平台不受影响。
 
@@ -21,7 +21,7 @@ Linux WebKitGTK 在 NVIDIA 上不丝滑、且在普通 UI 交互(下拉框)时 `
 ```
 tauri(框架)
    │  Runtime / WebviewDispatch / WindowDispatch … traits
-tauri-runtime-cef ★本项目(适配器)
+tauri-runtime-kbcef ★本项目(适配器)
    │  调用
 cef(cef-rs,预编译 Chromium 内核)
 ```
@@ -39,7 +39,7 @@ cef(cef-rs,预编译 Chromium 内核)
 1. **依赖门控**(`src-tauri/kabegame/Cargo.toml`):
    ```toml
    [target.'cfg(target_os = "linux")'.dependencies]
-   tauri-runtime-cef = { path = "../tauri-runtime-cef" }
+   tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef" }
    ```
 2. **代码门控**(kabegame 入口):Linux → `Builder::<Cef<_>>`;其余 → `Builder::default()`(Wry)。
 3. 任何 Phase 都**不得**让 Android / Windows / macOS 编译到 `cef` 或下载 Chromium。
@@ -64,9 +64,9 @@ cef(cef-rs,预编译 Chromium 内核)
 
 - **目标**:建立 crate 结构与文档地基,不引入 CEF 构建负担。
 - **交付物**
-  - `src-tauri/tauri-runtime-cef/`:`Cargo.toml`(`cef` 挂默认关闭的 `cef-backend` feature)、`src/{lib,runtime,webview,window}.rs`(与 wry 对齐的类型脚手架 + 方法清单注释)、`README.md`。
+  - `src-tauri/tauri-runtime-kbcef/`:`Cargo.toml`(`cef` 挂默认关闭的 `cef-backend` feature)、`src/{lib,runtime,webview,window}.rs`(与 wry 对齐的类型脚手架 + 方法清单注释)、`README.md`。
   - 根 `Cargo.toml` workspace `members` 已加入。
-- **验收**:`cargo check -p tauri-runtime-cef` 通过且**不下载 Chromium**(已验证 ✅)。
+- **验收**:`cargo check -p tauri-runtime-kbcef` 通过且**不下载 Chromium**(已验证 ✅)。
 
 ### ✅ Phase 1 — 环境验证(脱离 Tauri)— 已完成 2026-06-19
 
@@ -80,8 +80,8 @@ cef(cef-rs,预编译 Chromium 内核)
 
 ### ✅ Phase 2 — 最小运行时闭环(开 `cef-backend`)— 已完成 2026-06-20(**改走 OSR**)
 
-- **目标**:`tauri-runtime-cef` 自己能起一个窗口 + CEF 浏览器,加载本地 HTML(仍不接 Tauri 框架)。
-- **结果**:`cargo run -p tauri-runtime-cef --example minimal --features cef-backend` 在 tao 窗口里渲染出本地 HTML(中文/emoji/UA=Chrome149,截图已验)。
+- **目标**:`tauri-runtime-kbcef` 自己能起一个窗口 + CEF 浏览器,加载本地 HTML(仍不接 Tauri 框架)。
+- **结果**:`cargo run -p tauri-runtime-kbcef --example minimal --features cef-backend` 在 tao 窗口里渲染出本地 HTML(中文/emoji/UA=Chrome149,截图已验)。
 - **关键转向(原计划的 parent 子窗口方案被否)**:本机 NVIDIA+XWayland 上,把 CEF parent 进 tao 的 GTK/X11 子窗口 → GPU 进程 SIGSEGV + 软件呈现器对子窗口 `XGetWindowAttributes` 失败(只出背景)。对照实验定位:问题在"X11 子窗口呈现",CEF 自建窗口则一切正常。→ **改用 OSR**:CEF windowless 软件光栅到 BGRA buffer(`on_paint`)→ `softbuffer` blit 到 tao 顶层窗口,绕开两个崩溃点。详见 README §9。
 - **GPU(已 spike,结论须谨慎,2026-06-20)**:`examples/minimal.rs` 是**软件 OSR**(`--disable-gpu`)✅ 正确显示。GPU 加速 OSR 已搬进 `examples/minimal_gpu.rs`(wgpu+Vulkan dmabuf,`--use-angle=vulkan`):**CEF 在 GPU 持续出帧、dmabuf 零拷贝导入 OK、0 错误、不崩**,但**最终合成上屏纯黑**。根因:cef-rs `osr_texture_import::dmabuf` 创建 VkImage 时 initialLayout=UNDEFINED、无 layout 转换/外部队列族 ownership/同步 → wgpu 采样时被 NVIDIA 丢内容。属 **cef-rs 导入器缺陷**,要修需较深 Vulkan 工作。详见 README §9.2.2。
   - **当前能"GPU + 正确显示"的唯一已证路径 = 路线 A(CEF 自建窗口,Phase 1 已证)**;软件 OSR 显示正确但无 GPU;dmabuf OSR 待修。**Phase 3 渲染层方向需据此重新决策。**
@@ -138,11 +138,11 @@ cef(cef-rs,预编译 Chromium 内核)
 
 - 在 `cocs/README.md` 增补条目,指向本 crate README + 本计划(届时流程已成型)。
 - README 路线图勾选、构建前置条件补全。
-- 评估是否把 `tauri-runtime-cef` 拆为独立 repo(若需复用);当前 YAGNI,留在 monorepo。
+- 评估是否把 `tauri-runtime-kbcef` 拆为独立 repo(若需复用);当前 YAGNI,留在 monorepo。
 
 ## 关键参考
 
-- 本项目 README:`src-tauri/tauri-runtime-cef/README.md`(背景/调研/决策)
+- 本项目 README:`src-tauri/tauri-runtime-kbcef/README.md`(背景/调研/决策)
 - 只读范文源码:`/home/cm/code/tauri-tauri-v2.10.0/crates/tauri-runtime{,-wry}/`
 - 官方 cef-rs:<https://github.com/tauri-apps/cef-rs>(crate `cef` 149)
 - 同类适配器范例:<https://github.com/versotile-org/tauri-runtime-verso>

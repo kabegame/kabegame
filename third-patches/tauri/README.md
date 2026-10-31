@@ -19,21 +19,21 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
 
 `tauri-cli` (fork of `cargo-tauri`, see [cocs/tauri/TAURI_CLI_FORK.md](../../cocs/tauri/TAURI_CLI_FORK.md)):
 
-- `0001-tauri-cli-android-package-decouple.patch` — `TAURI_ANDROID_PACKAGE` env decouples the
+- `01-tauri-cli-android-package-decouple.patch` — `TAURI_ANDROID_PACKAGE` env decouples the
   Android Java package (source dir / generated Kotlin package / JNI) from `identifier`
   (applicationId). Touches `mobile/mod.rs` (`ensure_init` java-folder), `mobile/android/mod.rs`
   (`android_package`/`get_config`), and `mobile/android/{dev,run}.rs` (fully-qualified
   `{android_package}.MainActivity` for auto-launch).
-- `0002-tauri-cli-no-webkit-deps.patch` — `TAURI_NO_WEBKIT_DEPS` skips the deb/rpm
+- `02-tauri-cli-no-webkit-deps.patch` — `TAURI_NO_WEBKIT_DEPS` skips the deb/rpm
   `libwebkit2gtk` dependency injection (kabegame bundles CEF) and dedups `depends_deb`/`depends_rpm`.
-- `0003-tauri-cli-icns-inset.patch` — macOS `.icns` gets dock inset padding
+- `03-tauri-cli-icns-inset.patch` — macOS `.icns` gets dock inset padding
   (`resize_exact_inset` + `MACOS_ICON_CONTENT_SCALE`); `.ico`/png/android stay full-frame.
-- `0004-tauri-cli-android-check-subcommand.patch` — adds `tauri android check`
+- `04-tauri-cli-android-check-subcommand.patch` — adds `tauri android check`
   (`mobile/android/check.rs` + dispatch) for a fast `cargo check --target aarch64-linux-android`
   reusing cargo-mobile2's NDK toolchain; no APK/AAB, no frontend.
-- `0005-tauri-cli-android-dev-localhost.patch` — a physical device no longer forces the LAN IP;
+- `05-tauri-cli-android-dev-localhost.patch` — a physical device no longer forces the LAN IP;
   a localhost devUrl is kept so `adb reverse` tunnels HTTP + HMR WebSocket over USB loopback.
-- `0008-tauri-cli-bundle-only-default-run.patch` — when `get_binaries` collects more than one
+- `08-tauri-cli-bundle-only-default-run.patch` — when `get_binaries` collects more than one
   binary and `default-run` is declared, only the `default-run` (main) binary is auto-bundled
   into install dirs (`/usr/bin`, .app, NSIS). Auxiliary `[[bin]]`/`src/bin/` targets
   (`kabegame-cef-helper`, `cef-example`) must be shipped explicitly via bundle `files`
@@ -42,7 +42,7 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   which preserves `src/bin` when a pathless `[[bin]]` exists and does not re-add bins disabled
   by `required-features`. The two new upstream fixtures omit `default-run`; the fork adds
   `get_binaries_only_keeps_default_run_for_multiple_bins` as its dedicated regression test.
-- `0009-tauri-config-bins-compile-list.patch` — adds a top-level `bins: string[]` config
+- `09-tauri-config-bins-compile-list.patch` — adds a top-level `bins: string[]` config
   (field on tauri-utils `Config`, embedded as `None` at runtime; the struct is
   `deny_unknown_fields`, so configs using `bins` require this patch to parse). Also updates
   the CLI-embedded `crates/tauri-cli/config.schema.json` (and the identical
@@ -51,7 +51,7 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   "Additional properties are not allowed". Desktop
   `tauri build` no longer passes `--bins` to cargo: it passes one `--bin <name>` per
   configured entry; with no `bins` config it falls
-  back to the `get_binaries()` bundle list (i.e. only the default-run binary after 0008),
+  back to the `get_binaries()` bundle list (i.e. only the default-run binary after 08),
   and to upstream `--bins` if that list is empty. On Windows the configured auxiliary bins
   are additionally added to the bundle as non-main binaries, so NSIS installs them next to
   the main exe and deletes them on uninstall (no resources staging / installer-hook moves).
@@ -63,14 +63,14 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
 
 `tauri-utils` (library, consumed via `[patch.crates-io]`):
 
-- `0007-tauri-utils-skip-empty-glob-resources.patch` — empty glob resource patterns (e.g.
+- `07-tauri-utils-skip-empty-glob-resources.patch` — empty glob resource patterns (e.g.
   `resources/**/*` when the `resources/` directory does not exist) are silently skipped
   instead of failing the build with `GlobPathNotFound`. Allows builds where optional resource
   directories are absent.
 
 `tauri-runtime` (library, consumed via `[patch.crates-io]`):
 
-- `0006-tauri-runtime-optional-webkit.patch` — makes `webkit2gtk` optional behind a new
+- `06-tauri-runtime-optional-webkit.patch` — makes `webkit2gtk` optional behind a new
   `webkit` feature and gates the Linux/BSD `webkit2gtk::WebView` fields in `webview.rs` behind
   it, so the Linux CEF build does not link `webkit2gtk`. `tauri-runtime-wry` explicitly enables
   `tauri-runtime/webkit` on Linux/BSD, keeping the upstream wry runtime buildable in the
@@ -78,7 +78,7 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
 
 `tauri` (library, consumed via `[patch.crates-io]`):
 
-- `0010-tauri-mobile-unregistered-response-channel.patch` — on mobile every `Channel` is put into
+- `10-tauri-mobile-unregistered-response-channel.patch` — on mobile every `Channel` is put into
   the global `CHANNELS` table (`plugin/mobile.rs`) so native plugins can push to it by id, and
   that table is never pruned. `Channel::from_callback_fn` builds a one-shot channel for the
   response of **every** IPC call, so each invoke leaked one entry plus the `Webview` it
@@ -86,17 +86,17 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   `Channel::new_unregistered` and uses it for these response channels only; channels created by
   `channel_on` / `Channel::new` (the ones native plugins look up) are still registered.
   Re-check on bump: `ipc/channel.rs` `new_with_id` / `from_callback_fn`.
-- `0011-tauri-webview-clear-js-listeners.patch` — JS event listeners (`plugin:event|listen`) are
+- `11-tauri-webview-clear-js-listeners.patch` — JS event listeners (`plugin:event|listen`) are
   tracked per webview label and only dropped when the webview is destroyed, so navigating a
   long-lived webview to another document keeps the old document's listeners and every later
   matching event is still `eval`-ed into the new document. The patch makes
   `Listeners::remove_webview_js_listeners` `pub(crate)` and adds public
   `Webview::clear_js_listeners()` / `WebviewWindow::clear_js_listeners()` (Rust-side `listen`
   handlers are untouched). Kabegame calls it after the wallpaper window's ping watchdog reloads
-  the page (`wallpaper/window.rs`); since 0018 web wallpapers are iframes and the wallpaper window no
+  the page (`wallpaper/window.rs`); since 18 web wallpapers are iframes and the wallpaper window no
   longer navigates (a subframe's listeners go with `SubframeDestroyed`). It drops the listeners of
   every frame of the webview. Re-check on bump: `event/listener.rs` `remove_webview_js_listeners`.
-- `0012-tauri-ipc-origin-referrer-policy.patch` — the custom-protocol IPC `fetch` in
+- `12-tauri-ipc-origin-referrer-policy.patch` — the custom-protocol IPC `fetch` in
   `scripts/ipc-protocol.js` gets `referrerPolicy: 'origin'`. The `ipc` handler rejects a request
   whose `Origin` header does not parse as a URL (`parse_invoke_request`, HTTP 500 "Origin header
   is not a valid URL"). Chromium-based webviews send `Origin: null` under `no-referrer`; platforms
@@ -106,9 +106,9 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   document's origin is always sent (verified in CEF: default / `no-referrer` → 500, `origin` /
   `unsafe-url` → 200). Opaque origins (`file:`, sandboxed frames) still send `null`; the CEF
   runtime rewrites `file:` frames itself. The CEF runtime's `cef-ipc` postMessage shim
-  (`tauri-runtime-cef/src/ipc.rs`) sets the same policy. Re-check on bump:
+  (`tauri-runtime-kbcef/src/ipc.rs`) sets the same policy. Re-check on bump:
   `scripts/ipc-protocol.js` `fetch(...convertFileSrc(cmd, 'ipc'), {...})`.
-- `0013-tauri-windows-native-custom-protocol.patch` — Windows uses native
+- `13-tauri-windows-native-custom-protocol.patch` — Windows uses native
   `tauri://localhost` and `ipc://localhost` with Kabegame's CEF runtime. The four Rust
   URL branches (`protocol::origin`, `window_origin`, isolation `frame-src`, and
   `is_local_url`) keep the HTTP localhost workaround only on Android; `core.js`
@@ -116,11 +116,11 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   A Tauri tree with this patch cannot use the Windows wry/WebView2 runtime.
   Re-check these five anchors when updating Tauri.
 
-0014–0017 make both directions of the event system and the ACL depend only on what the backend
+14–17 make both directions of the event system and the ACL depend only on what the backend
 knows about the caller (webview label, origin, frame), never on parameters sent from JS. Design
 and app usage: [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md).
 
-- `0014-tauri-event-receiver-identity.patch` — JS event delivery is decided by who the receiving
+- `14-tauri-event-receiver-identity.patch` — JS event delivery is decided by who the receiving
   webview is. Upstream stores the `target` each JS `listen` sends (default `Any`) and
   `emit_js_filter` matches the `emit_to` filter against it, letting every `Any` listener bypass
   `emit_to` (two surf navbars received each other's URL). Now `js_event_listeners` keeps only
@@ -139,7 +139,7 @@ and app usage: [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAUR
   `manager::window::tests`. Re-check on bump: `event/listener.rs` `emit_js_filter` /
   `listen_js` / `unlisten_js`, `event/plugin.rs` `listen`, `manager/window.rs` `has_js_listener`,
   `manager/mod.rs` `emit_to` `filter_target`, `event/mod.rs` `listen_js_script`.
-- `0015-tauri-event-listen-scope.patch` — `listen` takes `CommandScope<ListenScope>`
+- `15-tauri-event-listen-scope.patch` — `listen` takes `CommandScope<ListenScope>`
   (`tauri::ListenScope { event }`, exported at the crate root; trailing `*` = prefix match) and
   rejects event names the scope does not match with
   ``event `<name>` is not allowed to be listened by ACL``. Capabilities restrict it with
@@ -148,7 +148,7 @@ and app usage: [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAUR
   `CommandScope` semantics: deny first, and once any applicable grant carries an allow scope the
   name must match one; grants without a scope do not restrict. Tests: `event::plugin::tests`
   (end-to-end through `on_message` with a mock ACL). Re-check on bump: `event/plugin.rs` `listen`.
-- `0016-tauri-acl-frame.patch` — adds the frame as an ACL dimension. `tauri_runtime::webview::IpcFrame`
+- `16-tauri-acl-frame.patch` — adds the frame as an ACL dimension. `tauri_runtime::webview::IpcFrame`
   (`Main` default / `Sub` / `Unknown`, re-exported as `tauri::webview::IpcFrame`) is put by the runtime
   into the `http::Request` extensions (pages cannot forge extensions, unlike headers); `InvokeRequest`
   gets `frame`, read in `ipc/protocol.rs` (`parse_invoke_request` and `handle_ipc_message`,
@@ -165,7 +165,7 @@ and app usage: [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAUR
   `ipc::protocol`, `event::plugin` (subframe rejected). Re-check on bump: `Capability` /
   `ResolvedCommand` fields and `ToTokens`, `resolve_access`, `InvokeRequest`, every
   `InvokeRequest { .. }` / `Capability { .. }` literal.
-- `0017-tauri-acl-exempt-webview.patch` — `Builder::acl_exempt_webview(label)` (stored on the
+- `17-tauri-acl-exempt-webview.patch` — `Builder::acl_exempt_webview(label)` (stored on the
   builder, applied to `context.runtime_authority_mut()` in `build`) →
   `RuntimeAuthority::exempt_webview` / `is_exempt(webview, origin, frame)`: exact label, local origin
   **and** main frame. `on_message` still resolves the ACL (granted command scopes still reach
@@ -177,16 +177,16 @@ and app usage: [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAUR
   `event::plugin::tests::exempt_*`. Re-check on bump: `webview/mod.rs` `on_message` rejection
   condition, `app.rs` `Builder::build`, `ipc/mod.rs` `InvokeMessage`.
 
-The CEF runtime side (`src-tauri/tauri-runtime-cef`, not a patch) inserts `IpcFrame` on every
+The CEF runtime side (`src-tauri/tauri-runtime-kbcef`, not a patch) inserts `IpcFrame` on every
 custom-protocol request (`protocol::attach_request_frame`; no CEF frame → `Unknown`) and carries
 it through the rebuilt `cef-ipc` fallback request (`ipc::post_message_request`).
 
-0018–0019 make the frame the unit of IPC: subframes get Tauri's bridge, and everything Tauri sends
+18–19 make the frame the unit of IPC: subframes get Tauri's bridge, and everything Tauri sends
 back to a page (listener registrations, events, channel messages, postMessage responses) goes to
 the frame that made the call. Design and app usage: the "子 frame IPC" section of
 [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md).
 
-- `0018-tauri-frame-scoped-ipc.patch` — frame-scoped delivery. tauri-runtime:
+- `18-tauri-frame-scoped-ipc.patch` — frame-scoped delivery. tauri-runtime:
   `webview::SubframeId(Arc<str>)` (opaque, runtime-defined, re-exported as `tauri::webview::SubframeId`)
   travels in the request extensions next to `IpcFrame`, subframe requests only;
   `WebviewDispatch::eval_script_in_subframe` (default: `Error::SubframeEvalUnsupported`, so wry is
@@ -201,7 +201,7 @@ the frame that made the call. Design and app usage: the "子 frame IPC" section 
   `ipc::CallerOrigin(Url)`. `js_event_listeners` is keyed webview → frame → event;
   `listen` / `unlisten` take `CallerFrameAddress` (an unaddressable caller cannot listen; unlisten
   only touches the caller frame's table), `listen_js` evals the registration into the caller frame,
-  `emit_js_filter` keeps the 0014 receiver check and delivers per frame (`emit_js_to_frame`).
+  `emit_js_filter` keeps the 14 receiver check and delivers per frame (`emit_js_to_frame`).
   `remove_subframe_js_listeners` runs on `SubframeDestroyed` (`manager/webview.rs`
   `on_webview_event`, which also drops that frame's queued channel data); `clear_js_listeners`
   still drops every frame of the webview. Close-request interception only counts main-frame
@@ -223,7 +223,7 @@ the frame that made the call. Design and app usage: the "子 frame IPC" section 
   `emit_js_filter`, `ipc/channel.rs` `channel_on` / `from_callback_fn` / `fetch` / `CommandArg`,
   `ipc/protocol.rs` `handle_ipc_message` responder, `manager/window.rs` `has_js_listener`, the
   exhaustive matches on `WebviewEvent`.
-- `0019-tauri-subframe-ipc-injection.patch` — the bridge for subframes. tauri-runtime:
+- `19-tauri-subframe-ipc-injection.patch` — the bridge for subframes. tauri-runtime:
   `WebviewAttributes.subframe_bridge_scripts: Vec<String>`. `manager/webview.rs`
   `prepare_pending_webview` builds Tauri's four bridge scripts (`isTauri` / internals, invoke
   script, metadata, `init.js`) once, keeps adding them as main-frame-only initialization scripts and
@@ -233,7 +233,7 @@ the frame that made the call. Design and app usage: the "子 frame IPC" section 
   isolation pattern stay out. Test: `manager::webview::tests::subframe_bridge_scripts_are_the_main_frame_bridge`.
   Re-check on bump: the script list in `prepare_pending_webview`, `WebviewAttributes::new`.
 
-The CEF runtime side of 0018–0019 (not a patch): `protocol::attach_request_frame` also inserts
+The CEF runtime side of 18–19 (not a patch): `protocol::attach_request_frame` also inserts
 `SubframeId(frame.identifier())` for subframes, `ipc::post_message_request` carries it and accepts
 every request CEF attributes to a frame (the ACL decides), `WebviewMessage::EvalInSubframe` resolves
 the frame with `frame_by_identifier`, a `FrameHandler` reports `on_frame_destroyed` for non-main

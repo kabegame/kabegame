@@ -6,7 +6,7 @@
 
 ## 现状盘点(Phase 3/4 已顺带完成的"功能对齐")
 
-实测代码(`src-tauri/tauri-runtime-cef/src/`),原 Phase 5 清单**大部分已落地**:
+实测代码(`src-tauri/tauri-runtime-kbcef/src/`),原 Phase 5 清单**大部分已落地**:
 
 - **WindowDispatch**:`window.rs` 近全量 —— 装饰/全屏/置顶/置底/任务栏跳过/最大最小化/`start_dragging`/`start_resize_dragging`/进度条/badge/光标/主题/透明/多显示器/约束。**无 stub**。
 - **WebviewDispatch**:`webview.rs` —— cookies(get/set/delete/for_url)、devtools(open/close/is_open)、`set_zoom`、`set_background_color`、`clear_all_browsing_data`、`eval_script(_with_callback)`、navigate/reload、auto_resize、IME/键鼠输入。**仅 `print` / `reparent` 仍 `unsupported()`**。

@@ -27,7 +27,7 @@ index 1943cbbbe..779d16af4 100644
        main.set_name(main_binary_name.to_owned());
      }
  
-+    // kabegame fork(0009-tauri-config-bins-compile-list): Windows 下把顶层
++    // kabegame fork(09-tauri-config-bins-compile-list): Windows 下把顶层
 +    // `bins` 配置声明的辅助 bin 以非 main binary 挂进 bundle——NSIS 模板的
 +    // binaries 段原生把它们装到 $INSTDIR 根(主 exe 旁)并在卸载时删除,
 +    // 应用无需再经 resources + installer hook 搬运。macOS/Linux 的辅助 bin
@@ -54,7 +54,7 @@ index a8e645e8a..d65c389cd 100644
  pub struct Rust {
    app_settings: Arc<RustAppSettings>,
    config_features: Vec<String>,
-+  // kabegame fork(0009): 顶层 bins 配置与 tauri_dir,供 build_options 桌面分支
++  // kabegame fork(09): 顶层 bins 配置与 tauri_dir,供 build_options 桌面分支
 +  // 决定 cargo --bin 清单(回退 get_binaries 需要 tauri_dir)。
 +  config_bins: Option<Vec<String>>,
 +  tauri_dir: PathBuf,
@@ -75,7 +75,7 @@ index a8e645e8a..d65c389cd 100644
        }
      } else {
 -      args.push("--bins".into());
-+      // kabegame fork(0009-tauri-config-bins-compile-list): 桌面不再无差别
++      // kabegame fork(09-tauri-config-bins-compile-list): 桌面不再无差别
 +      // `--bins` 编译 package 里全部 bin(会把示例类不出货的 bin 一起编进
 +      // release)。改为:tauri.conf.json 顶层 `bins` 显式声明要编译的 bin
 +      // (逐个翻译成 cargo 的 `--bin <name>`);未声明时回退到 get_binaries()

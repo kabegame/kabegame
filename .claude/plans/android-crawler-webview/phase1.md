@@ -1,7 +1,7 @@
 # 安卓 WebView 爬虫插件 Phase 1：宿主 Activity + 垫在主界面下的内容页
 
 > 前置：安卓畅游 Phase 2 已落地（外部页面作为 Activity 的 Tauri 主 webview、主框架 IPC、`releaseContent`、
-> tauri 补丁 0011、raw body base64、页面下载补头），以及 2026-10-18 的三处修复（主界面 / 畅游重建释放旧 webview、
+> tauri 补丁 11、raw body base64、页面下载补头），以及 2026-10-18 的三处修复（主界面 / 畅游重建释放旧 webview、
 > 畅游 binding 交接、`onRenderProcessGone`）。
 > 决策依据：2026-10-18 真机原型（vivo V2429A，Android 16，WebView 155），结论见文末「原型实测」。
 > 范围：`crawl.js` 插件与网页收集的 `webview` 后端在安卓上能跑；插件可 `requestShowWebview()` 让用户在
@@ -87,7 +87,7 @@ use kabegame_core::crawler::webview::{crawler_window_label, set_webview_handler,
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 struct AppCrawlerWebViewHandler<R: Runtime> { app: AppHandle<R> }
-// 现状：create_crawler_window 建隐藏的 1920×1080 CEF 窗口；start_native_download 调 tauri_runtime_cef
+// 现状：create_crawler_window 建隐藏的 1920×1080 CEF 窗口；start_native_download 调 tauri_runtime_kbcef
 ```
 
 **d. 下载队列把 WebView 任务的下载交给 CEF**（`kabegame-core/src/crawler/downloader/queue.rs:944`）

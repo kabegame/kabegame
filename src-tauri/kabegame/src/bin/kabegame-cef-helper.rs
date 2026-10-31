@@ -3,5 +3,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    tauri_runtime_cef::run_cef_subprocess();
+    tauri_runtime_kbcef::run_cef_subprocess();
 }

@@ -99,7 +99,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口才能完成初始化。�
 
 ## 现状锚点
 
-**a. 协议层只记 frame 是否为主 frame**（`tauri-runtime-cef/src/protocol.rs`）
+**a. 协议层只记 frame 是否为主 frame**（`tauri-runtime-kbcef/src/protocol.rs`）
 ```rust
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RequestFrame {
@@ -115,7 +115,7 @@ if let Some(is_main) = self.main_frame {
 }
 ```
 
-**b. `cef-ipc` 回退通道的来源判定**（`tauri-runtime-cef/src/ipc.rs`）
+**b. `cef-ipc` 回退通道的来源判定**（`tauri-runtime-kbcef/src/ipc.rs`）
 ```rust
 let uri = request
     .headers()
@@ -127,7 +127,7 @@ let uri = request
 ```
 Tauri 的 `ipc://` 主通道（`tauri/src/ipc/protocol.rs` 的 `parse_invoke_request`）同样读 `Origin`。值是 `null` 时报「Origin header is not a valid URL」，前端随即改走上面的回退通道。
 
-**c. `file:` 文档跳过所有初始化脚本**（`tauri-runtime-cef/src/subprocess.rs`，Phase 4）
+**c. `file:` 文档跳过所有初始化脚本**（`tauri-runtime-kbcef/src/subprocess.rs`，Phase 4）
 ```rust
 // 开了文件访问的 browser 承载的是外部本地页面（WPE 网页壁纸）：`file:` 文档
 // 不注入任何初始化脚本，页面看不到 `__TAURI_INTERNALS__`。
@@ -231,7 +231,7 @@ export type ImageFieldPatch = { id: string } & Partial<ImageInfo>;   // ImageInf
 // setting-change 的 payload：{ changes: { <key>: <value> } }（emit_setting_change 构造），language 变化即 changes.language
 ```
 
-## 点 1 — 运行时：`file:` frame 的 IPC 来源按 frame URL 判定（`tauri-runtime-cef/src/protocol.rs`、`ipc.rs`）
+## 点 1 — 运行时：`file:` frame 的 IPC 来源按 frame URL 判定（`tauri-runtime-kbcef/src/protocol.rs`、`ipc.rs`）
 - **修改**
   - `RequestFrame` 增加 `url`，scheme factory 在 `create` 里读 `frame.url()`。
   - `CefResourceHandler::open`：frame URL 是 `file:` 时，把请求的 `Origin` 头改写成 frame URL，再交给协议 handler。
@@ -288,11 +288,11 @@ let uri = request
   - `protocol.rs`：`file:` frame 的 `null` / 缺失 `Origin` 被改写；`http:` frame 的 `Origin` 不变。
   - `ipc.rs`：缺 `Origin`、已知 frame URL 时，uri 取 frame URL 而不是 fallback。
 
-## 点 2 — 运行时：删除「`file:` 文档不注入初始化脚本」（`tauri-runtime-cef/src/subprocess.rs`）
+## 点 2 — 运行时：删除「`file:` 文档不注入初始化脚本」（`tauri-runtime-kbcef/src/subprocess.rs`）
 - **删除**
   - `InitializationRenderProcessHandler::file_document_browsers` 字段、`on_browser_created` 里的登记与 `on_browser_destroyed` 里的移除。
   - `on_context_created` 里的整段跳过逻辑（现状锚点 c）；`allows_file_documents` 若因此不再使用，一并删除。
-    > 说明：文件访问偏好（补丁 0004）与 `file:` 目录拦截不受影响，二者读的是浏览器进程侧的登记，不经过这里。
+    > 说明：文件访问偏好（补丁 04）与 `file:` 目录拦截不受影响，二者读的是浏览器进程侧的登记，不经过这里。
 ```rust
 fn on_context_created(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, context: Option<&mut V8Context>) {
     // …取 scripts、is_main_frame、source_url
@@ -306,7 +306,7 @@ fn on_context_created(&self, browser: Option<&mut Browser>, frame: Option<&mut F
 }
 ```
 - **修改**
-  - `tauri-runtime-cef/README.md`、`src/lib.rs` 中「`file:` 文档不注入」的描述，改为「照常注入，由 ACL 按远程 `file:` 来源限权」。
+  - `tauri-runtime-kbcef/README.md`、`src/lib.rs` 中「`file:` 文档不注入」的描述，改为「照常注入，由 ACL 按远程 `file:` 来源限权」。
 
 ## 点 3 — 权限：`wpe-web-capability`（`kabegame/capabilities/`、`permissions/`、`tauri.conf.json.handlebars`）
 - **新增** `capabilities/wpe-web.json`
@@ -458,7 +458,7 @@ fn web_wallpaper_dir(&self, label: &str) -> Option<PathBuf> {    // 新增
     多显示器时，每块屏的窗口各自回答自己的目录。
   - 锁内只读字段，不调会同步等主线程的窗口 getter。`label()` 是本地字段，不等主线程，与 Phase 4 收回后的锁约定一致。
 
-## 点 7 — 导航后清掉旧文档的 JS 事件监听（新增 `third-patches/tauri/0011-tauri-webview-clear-js-listeners.patch`；修改 `wallpaper/window.rs`）
+## 点 7 — 导航后清掉旧文档的 JS 事件监听（新增 `third-patches/tauri/11-tauri-webview-clear-js-listeners.patch`；修改 `wallpaper/window.rs`）
 - **新增**（Tauri 补丁，`crates/tauri`）
 ```rust
 // crates/tauri/src/event/listener.rs
@@ -511,7 +511,7 @@ pub fn show_app(&mut self) {
   > - 放在 `navigate` 成功之后：导航失败时页面没换，不能拿走它仍在用的监听。
   > - 只处理 manager 发起的导航。页面自己 `location.reload()` 会留下一组垫片监听，量很小，不额外处理。
   > - `cleanup()` 销毁窗口时 Tauri 自己会清，不用调。
-- **修改** `third-patches/tauri/README.md`：补丁列表加 0011。
+- **修改** `third-patches/tauri/README.md`：补丁列表加 11。
 
 ## 点 8 — 垫片 `wpe_shim.js` 与注入（新增 `kabegame/src/webview_js/wpe_shim.js`；修改 `startup.rs`、`wallpaper/manager/window.rs`）
 - **新增** `webview_js/wpe_shim.js`
@@ -875,8 +875,8 @@ function teardownWeb() {
       - 接受的全局事件可见性。
   - `cocs/README.md`：WPE 条目补垫片与协议。适用场景里「页面里出现 `__TAURI_INTERNALS__`」改为「页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应」。
   - `AGENTS.md`：WPE 那条里的「`file:` 文档不注入初始化脚本」改为「`file:` 文档照常注入 Tauri 脚本，IPC 按远程 `file:` 来源只给 `wpe-web-capability`」。
-  - `src-tauri/tauri-runtime-cef/README.md`：协议层 `Origin` 改写与删除注入跳过。
-  - `third-patches/tauri/README.md`：补丁列表加 0011 `clear_js_listeners`（与点 7 同一处，实施时一起写）。
+  - `src-tauri/tauri-runtime-kbcef/README.md`：协议层 `Origin` 改写与删除注入跳过。
+  - `third-patches/tauri/README.md`：补丁列表加 11 `clear_js_listeners`（与点 7 同一处，实施时一起写）。
   - `API.md` §8 落地表与 `PLAN.md` Phase 5 段：标记已完成。
     > 说明：两处的 pull / listen、重拉触发、宿主代办与 Phase 7 的触发方式已随本次修订（2026-10-28）改好，实施时只改状态。
   - `versions/latest/regression.md`：
@@ -943,14 +943,14 @@ function teardownWeb() {
   `file://localhost/…` 归一后的形式），不匹配 `http://127.0.0.1/`、本地 HTTP 预览源与应用页。按方案原写法使用。
 - **点 5**：`commands/wpe_web.rs` 与两条命令只在非 Android 编译（`#[cfg(not(target_os = "android"))]`），与 capability
   只进桌面分支一致；`get_wpe_web_state` 仍登记在 `main.toml`。
-- **点 7**：补丁里的文档注释用英文（与上游及 0001–0010 一致）。`deno task patch tauri --check` 预检 0001–0011 通过；
+- **点 7**：补丁里的文档注释用英文（与上游及 01–10 一致）。`deno task patch tauri --check` 预检 01–11 通过；
   三个文件不被前序补丁触碰，补丁直接取自 `git -C third/tauri diff -- <三个文件>`。
 - **点 9**：`createWebFrame` 挂新桥前先 `dispose()` 旧桥（防御性，正常路径 `teardownWeb` 已释放）。
 - **点 10**：
   - 生成文件 `src-tauri/kabegame/tauri.conf.json`（gitignore）同步加了 `wpe-web-capability`：`deno task check` 不渲染
     handlebars 模板，不同步的话 cargo check 不会校验新 capability；dev / build 启动时会重新渲染。
   - `API.md` §6 的 `setPaused` 行 Phase 列从「5（垫片）/ 6（触发）」改为 6，与本方案「不做：暂停冻结与 `setPaused`」一致。
-  - 顺带修正文档冲突：`cocs/surf/ANDROID_SURF.md` 与 `cocs/README.md` 把响应 Channel 补丁写成 0011，实际文件是 0010，
-    新的 0011 是本 Phase 的 `clear_js_listeners`；`cocs/tauri/TAURI_CLI_FORK.md` 补了 0010 / 0011 条目与升级复查点；
+  - 顺带修正文档冲突：`cocs/surf/ANDROID_SURF.md` 与 `cocs/README.md` 把响应 Channel 补丁写成 11，实际文件是 10，
+    新的 11 是本 Phase 的 `clear_js_listeners`；`cocs/tauri/TAURI_CLI_FORK.md` 补了 10 / 11 条目与升级复查点；
     `cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md` 补了远程 `file:` 来源一节。
   - Phase 4 回归的「初始化脚本隔离」行改为新期望并取消勾选（原结果保留在备注里）。

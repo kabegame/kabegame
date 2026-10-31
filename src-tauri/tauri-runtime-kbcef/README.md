@@ -1,4 +1,4 @@
-# tauri-runtime-cef
+# tauri-runtime-kbcef
 
 Windows、macOS 与 Linux 桌面端的 Tauri runtime 适配器：统一使用 CEF/Chromium 作为 WebView 后端。
 
@@ -10,7 +10,7 @@ CEF runtime 只支持一个渲染路径：**CEF Views/windowed**。
 
 ```text
 Tauri Builder
-  -> tauri-runtime-cef
+  -> tauri-runtime-kbcef
     -> CEF Views Window
       -> CEF BrowserView
         -> Chromium GPU composition
@@ -30,7 +30,7 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 
 | Tauri 能力 | CEF 实现 |
 | --- | --- |
-| 前端资源 | 三个平台统一由全局 scheme handler factory 服务原生 `tauri://localhost`；Windows 依赖 tauri 补丁 0013，拉取后须重新应用补丁序列 |
+| 前端资源 | 三个平台统一由全局 scheme handler factory 服务原生 `tauri://localhost`；Windows 依赖 tauri 补丁 13，拉取后须重新应用补丁序列 |
 | `invoke()` | 三个平台的普通 invoke 都走上游 `fetch(ipc://localhost/<cmd>)` 主通道，直接由 Tauri 注册的 `ipc` scheme handler 承接，请求与响应在 DevTools Network 面板可见（CEF scheme handler 处理的请求不发 CORS 预检、只在响应上校验 ACAO，Tauri `ipc` handler 返回 `*`；2026-10 Linux 实测首帧起全部 200、无回退）；fetch 失败时上游脚本自动回退 `window.ipc.postMessage`，由 shim 经 `cef-ipc://` JSON 桥转给 `ipc_handler`（JSON 通道，`Uint8Array` 会退化成数字数组）；**二进制 body**（`InvokeBody::Raw`，如 `crawl_fs_fwrite` 流式写）直接用标准 `invoke(cmd, Uint8Array, { headers })` 走主通道；`ipc` / `cef-ipc` scheme 注册带 `CSP_BYPASSING`，Windows / macOS / Linux 上第三方页面的严格 CSP 都拦不住 IPC（Linux 已实测，Windows 待真机验证） |
 | 初始化脚本 | browser 创建时通过版本化 `extra_info` 传给 renderer，在每个新 V8 context 的 `RenderProcessHandler::on_context_created` 中同步执行，保证首次加载、刷新与跨页面导航均为 document-start。CEF 对隔离世界（DevTools、CDP `Page.createIsolatedWorld` 等）也回调该函数，运行时只在回调上下文与 `frame.v8_context()`（主世界）相同时注入；否则隔离世界与页面共享 DOM，监听与 IPC 上报会重复一份（例如畅游右键菜单叠两层） |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
@@ -39,10 +39,10 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events；指定显示器全屏先退出旧全屏、移动到命中显示器，再进入 CEF Views 全屏 |
 | Linux 窗口身份 | CEF Views 默认不设 X11 `WM_CLASS` / Wayland app_id，桌面环境无法把窗口关联到 `.desktop`（任务栏双条目、StartupNotify 转圈超时）；`WindowDelegate::get_linux_window_properties` 显式提供（优先 `RuntimeInitArgs::app_id`，回退可执行文件名），deb 模板 `StartupWMClass={{exec}}` 与之匹配 |
 | Raw window handle | Linux 返回 Xlib window，Windows 返回 Win32 HWND（+HINSTANCE）；macOS CEF Views 暂不暴露 NSView，返回 unavailable |
-| 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在三个桌面平台上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件（Linux / Windows 走 aura 推模型，Windows 落地为 `CF_HDROP`；macOS 走 `WebDragSource` 拉模型），**依赖带 Chromium 内层 patch 的 `third-patches/cef/0003`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
-| 文件访问：两项能力与文档闸门 | 建窗前按 label 登记 `allow_file_documents`（CEF 0004）和 `allow_app_local_resources`（0005/0006）；CEF 0007 在建工厂时捕获文档与父文档 URL。应用页主 frame 的图库媒体子资源免检；`file:` 文档按自身路径、应用页发起的子 frame 导航按目标路径向应用注册的 `set_file_scope_resolver` 取访问范围。未知归属拒绝；worker 的 `file:` 工厂已由 0007 移除。 |
-| `file:` 文档的 IPC 来源 | `GetResourceRequestHandler` 读取 0007 文档头，按 initiator 与文档 URL 经 `ipc_origin` 算一次 `Origin`，`IpcResourceRequestHandler::GetResourceHandler` 直接交出 Tauri 协议 handler；认不出为 `null`。scheme factory 只兜底未归属 IPC，并以 `null` 失败关闭；`cef-ipc` 不合法 Origin 用 `kabegame-unattributed://ipc/` 交给 ACL 拒绝。 |
-| 子 frame IPC（tauri 补丁 0018–0019） | CEF 给每个子 frame 注入 Tauri 桥，请求带 `IpcFrame::Sub` 与 `SubframeId`，响应、监听、事件与 Channel 送回调用方；销毁时清监听。回退通道 `Origin` 不合法时所有 frame 使用 `kabegame-unattributed://ipc/`，由 ACL 拒绝。 |
+| 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/02`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在三个桌面平台上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件（Linux / Windows 走 aura 推模型，Windows 落地为 `CF_HDROP`；macOS 走 `WebDragSource` 拉模型），**依赖带 Chromium 内层 patch 的 `third-patches/cef/03`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
+| 文件访问：两项能力与文档闸门 | 建窗前按 label 登记 `allow_file_documents`（CEF 04）和 `allow_app_local_resources`（05/06）；CEF 07 在建工厂时捕获文档与父文档 URL。应用页主 frame 的图库媒体子资源免检；`file:` 文档按自身路径、应用页发起的子 frame 导航按目标路径向应用注册的 `set_file_scope_resolver` 取访问范围。未知归属拒绝；worker 的 `file:` 工厂已由 07 移除。 |
+| `file:` 文档的 IPC 来源 | `GetResourceRequestHandler` 读取 07 文档头，按 initiator 与文档 URL 经 `ipc_origin` 算一次 `Origin`，`IpcResourceRequestHandler::GetResourceHandler` 直接交出 Tauri 协议 handler；认不出为 `null`。scheme factory 只兜底未归属 IPC，并以 `null` 失败关闭；`cef-ipc` 不合法 Origin 用 `kabegame-unattributed://ipc/` 交给 ACL 拒绝。 |
+| 子 frame IPC（tauri 补丁 18–19） | CEF 给每个子 frame 注入 Tauri 桥，请求带 `IpcFrame::Sub` 与 `SubframeId`，响应、监听、事件与 Channel 送回调用方；销毁时清监听。回退通道 `Origin` 不合法时所有 frame 使用 `kabegame-unattributed://ipc/`，由 ACL 拒绝。 |
 | 鼠标注入（公开 API） | `inject_mouse(label, MouseInjection::{Move, Leave, LeftDown, LeftUp} { x, y })`：坐标是视图 DIP，经 `CefBrowserHost::SendMouseMoveEvent` / `SendMouseClickEvent(LEFT, click_count=1)` 直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序。只 `post_task` 到 UI 线程、不等回执（移动是高频的），找不到 browser 静默返回 `Ok`；`Move` / `Leave` 一律不带按键标志（同 WE 的 `modifiers=0`）：Blink 只对带左键的移动做拖动处理，带上会让拖动页面图片启动阻塞 UI 线程的 Win32 OLE 拖放，而真实抬起发生在 Explorer、本线程收不到，拖放挂住。Kabegame 用它做 Windows 桌面鼠标转发（`kabegame/src/wallpaper/input_forward.rs`） |
 | 渲染进程看门狗 | `TauriCefRequestHandler` 对所有 webview 无条件挂载（导航闸门为可选字段）。`on_render_process_unresponsive`（渲染进程 5s 未回执输入、再 1s 主线程 ping 无应答；`runtime.rs` 以 `--enable-features=RendererHangWatcher:delay/5s` 把 Chromium 桌面默认的 15s 改为 5s）直接 `terminate()`；只对可见窗口、且有待回执输入时计时，DevTools / CDP 附着期间 Chromium 会忽略；`on_render_process_terminated`（含真崩溃）自动 `browser.reload()` 恢复。`crawler-*` 标签的隐藏爬虫窗口在两个回调中均被排除——其卡死由 kabegame-core 调度器的 60s/120s 心跳看门狗判定并结束任务（见 `cocs/crawler/CRAWLER_JS_FLOW.md` 3.6） |
 
@@ -51,17 +51,17 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 `src-tauri/kabegame/Cargo.toml` 在 Windows、macOS 与 Linux 声明本 crate；应用入口在桌面 `standard` 下使用：
 
 ```rust
-tauri::Builder::<tauri_runtime_cef::Cef<tauri::EventLoopMessage>>::new()
+tauri::Builder::<tauri_runtime_kbcef::Cef<tauri::EventLoopMessage>>::new()
 ```
 
 Android 不会把 CEF 放入 Kabegame 的依赖树。
 
 ## macOS 运行模型
 
-- libcef 由**构建期直链**（`third/cef-rs` 的 cef-dll-sys，经 `third-patches/cef-rs/0001`）：framework 的 install_name `@executable_path/../Frameworks/Chromium Embedded Framework.framework/...` 写入 exe 的 LC_LOAD_DYLIB，dev 经 cef-dll-sys build.rs 创建的 `target/Frameworks` 符号链接（→ `$CEF_PATH`）解析，release 经 bundle `Contents/Frameworks/` 解析。dyld 在 `main` 前完成绑定——不存在 `LibraryLoader` 加载顺序问题，`cef_load_library` 在 fork 里是 no-op stub。
+- libcef 由**构建期直链**（`third/cef-rs` 的 cef-dll-sys，经 `third-patches/cef-rs/01`）：framework 的 install_name `@executable_path/../Frameworks/Chromium Embedded Framework.framework/...` 写入 exe 的 LC_LOAD_DYLIB，dev 经 cef-dll-sys build.rs 创建的 `target/Frameworks` 符号链接（→ `$CEF_PATH`）解析，release 经 bundle `Contents/Frameworks/` 解析。dyld 在 `main` 前完成绑定——不存在 `LibraryLoader` 加载顺序问题，`cef_load_library` 在 fork 里是 no-op stub。
 - browser 主进程 dev 下直接裸跑 `target/debug/kabegame`（不再生成 `gen/Kabegame.app`）；release 打包仍是 `.app`。裸跑时 `src-tauri/kabegame/macos/embedded-Info.plist` 经 `-sectcreate __TEXT __info_plist` 内嵌进 exe，提供 Retina/进程名/GPU 切换元数据（bundle 内运行时以 bundle 的 Info.plist 为准）。
 - `dispatch_cef_subprocess()` 创建实现 `CefAppProtocol` 的 `KabegameCefApplication`。macOS browser 主进程不调用 `execute_process`。
-- `Settings.browser_subprocess_path` 指向 exe 旁的扁平 `kabegame-cef-helper`（与 Linux/Windows 相同布局）；renderer/GPU/utility 全部由它承载，helper 与 browser 复用 runtime 内唯一的 `CefRuntimeApp` 和 renderer initialization-script handler。**release（bundled）依赖 `third-patches/cef/0001-flat-subprocess-path.patch`**（见「CEF 依赖与 patch」），否则 Chromium 会把路径改写为 5 个 helper `.app` 变体；dev 裸跑时 `AmIBundled()==false`，stock CEF 本就不做变体改写。
+- `Settings.browser_subprocess_path` 指向 exe 旁的扁平 `kabegame-cef-helper`（与 Linux/Windows 相同布局）；renderer/GPU/utility 全部由它承载，helper 与 browser 复用 runtime 内唯一的 `CefRuntimeApp` 和 renderer initialization-script handler。**release（bundled）依赖 `third-patches/cef/01-flat-subprocess-path.patch`**（见「CEF 依赖与 patch」），否则 Chromium 会把路径改写为 5 个 helper `.app` 变体；dev 裸跑时 `AmIBundled()==false`，stock CEF 本就不做变体改写。
 - runtime 使用 `external_message_pump=1`，每轮非阻塞排空 NSApplication event queue，再执行 `do_message_loop_work()`。
 - `framework_dir_path` 仍显式设为 canonicalize 后的真实路径（dev 的 `target/Frameworks` 是符号链接），与 dyld 实际加载路径一致；留空或不一致会导致 GPU 合成黑屏（JS/输入正常、画面全黑）。
 
@@ -91,14 +91,14 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   `set_already_running_app_relaunch_handler` 注册的处理器——kabegame 在 `init` 里把它接到
   `ensure_main_window` + `.kgpg` 导入事件，与 IPC `AppShowWindow`/`AppImportPlugin` 同语义。
 - **三平台原生 scheme**：Windows、macOS、Linux 都由 CEF 直接承接 `tauri://localhost`、
-  `ipc://localhost` 等逻辑 scheme；Windows 依赖 `third-patches/tauri/0013`。
+  `ipc://localhost` 等逻辑 scheme；Windows 依赖 `third-patches/tauri/13`。
   runtime 与 tauri 补丁须同时生效，否则旧 Tauri 仍生成 `http://tauri.localhost` 而 CEF 不再注册该映射，页面无法加载。
-- **IPC `Origin`**：`third-patches/tauri/0012` 给主通道 fetch 固定 `referrerPolicy: 'origin'`，
+- **IPC `Origin`**：`third-patches/tauri/12` 给主通道 fetch 固定 `referrerPolicy: 'origin'`，
   防止声明 `no-referrer` 的页面送出 `Origin: null`；`ipc.rs` 的 `cef-ipc` shim 同样设置。
-  `file:` 与沙箱 frame 的请求头可能是 `null`；两条通道的 `Origin` 最终都由运行时按 initiator 和 0007 文档头覆写（见上表
+  `file:` 与沙箱 frame 的请求头可能是 `null`；两条通道的 `Origin` 最终都由运行时按 initiator 和 07 文档头覆写（见上表
   「`file:` 文档的 IPC 来源」）。**不要用 `frame.url()` 判来源**：它是 UI 线程缓存，到 `DidFinishNavigation` 才刷新，
   IO 线程上主 frame 的请求还会换成浏览器当前的主 frame，新文档最早的请求读到空串或上一个文档的地址（CEF #4034）。
-  `request_initiator` 与 0007 文档头在建工厂时固定，没有这个竞态。
+  `request_initiator` 与 07 文档头在建工厂时固定，没有这个竞态。
 - `WindowBuilder::owner` / `parent` 通过创建后的 `SetWindowLongPtrW(GWLP_HWNDPARENT)` /
   `SetParent` 尽力实现（CEF Views 不暴露创建参数）；kabegame 当前无调用方。
   `shadow` 无运行时等价物，no-op。`no_redirection_bitmap` 必须在 CEF 创建 HWND 时设置，
@@ -107,10 +107,10 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
 
 ## 开发与校验
 
-`tauri-runtime-cef` crate 本身就是 CEF 后端，不再需要额外 backend feature：
+`tauri-runtime-kbcef` crate 本身就是 CEF 后端，不再需要额外 backend feature：
 
 ```bash
-CEF_PATH=... cargo check -p tauri-runtime-cef
+CEF_PATH=... cargo check -p tauri-runtime-kbcef
 ```
 
 `cef-rs` 默认下载对应的官方预编译 CEF（**不含 H.264/AAC**）；必须设置 `CEF_PATH` 指向自编运行时目录（见 `.cursor/rules/cef-path-set.mdc`）。默认目录统一为 `bin/{platform}/{arch}/cef-build`（`scripts/plugins/mode-plugin.ts`）。
@@ -166,23 +166,23 @@ submodule 的 gitlink 永远不提交本地改动：
 
 - **`third/cef-rs`**跟随官方 `tauri-apps/cef-rs` 的 `149-wrapper-path` 分支，pin 在
   `ed6cd5b`。Kabegame 的改动位于 `third-patches/cef-rs/`：
-  - `0001-direct-link-cef-framework-macos.patch`：cef-dll-sys 在 macOS 改为构建期直链
+  - `01-direct-link-cef-framework-macos.patch`：cef-dll-sys 在 macOS 改为构建期直链
     framework(`rustc-link-lib=framework`)、提供 no-op `cef_load_library` stub、
     不再跑 cmake 编 `cef_dll_wrapper`。
-  - `0002-recreate-env-gate.patch`：创建/校正 `target/Frameworks` 符号链接，并用
+  - `02-recreate-env-gate.patch`：创建/校正 `target/Frameworks` 符号链接，并用
     `CEF_PATH`/`FLATPAK` 门控「是否允许改指向已存在的链接」——没配置时只在缺失或悬空
     才建，避免后台 `cargo check`(rust-analyzer)把运行时 framework 悄悄换成官方无编解码器的构建。
-  - `0003-drag-handler-bindings-macos.patch`：重新生成的 macOS bindings，带上
-    `third-patches/cef/0002` 给 `CefDragHandler` 加的三个回调。
-  - `0004-drag-handler-bindings-linux.patch`：Linux x86_64 bindings，同步 0002 的
+  - `03-drag-handler-bindings-macos.patch`：重新生成的 macOS bindings，带上
+    `third-patches/cef/02` 给 `CefDragHandler` 加的三个回调。
+  - `04-drag-handler-bindings-linux.patch`：Linux x86_64 bindings，同步 02 的
     `OnDragOver` / `OnDragLeave` / `OnDrop`。
-  - `0005-drag-handler-bindings-windows.patch`：Windows x86_64 bindings，同步 0002 的
+  - `05-drag-handler-bindings-windows.patch`：Windows x86_64 bindings，同步 02 的
     三个落点侧回调。
-  - `0006-drag-source-bindings-linux.patch`：Linux x86_64 bindings，加入 0003 的
+  - `06-drag-source-bindings-linux.patch`：Linux x86_64 bindings，加入 03 的
     `CefDragHandler::OnStartDragging` 与 `CefDragData::GetCustomData`。
-  - `0007-drag-source-bindings-windows.patch`：Windows x86_64 bindings，同步 0003
+  - `07-drag-source-bindings-windows.patch`：Windows x86_64 bindings，同步 03
     新增的两个起手侧 API，以保持 CEF struct 布局一致。
-  - `0008-drag-source-bindings-macos.patch`：macOS aarch64/x86_64 bindings，同步 0003
+  - `08-drag-source-bindings-macos.patch`：macOS aarch64/x86_64 bindings，同步 03
     新增的两个起手侧 API。
 
   根 `Cargo.toml` 以 `[patch.crates-io]` 同时接入 `cef-dll-sys = { path = "third/cef-rs/sys" }`
@@ -190,20 +190,20 @@ submodule 的 gitlink 永远不提交本地改动：
   registry 会让新回调在 Rust 侧不存在、且两份 bindings 对同一个 C 结构体的字段数不一致。
   与 `third/cef` 不同，这里的 bindings **必须**进 patch series：`{cef,sys}/src/bindings/*.rs`
   是入库源码、被上面的 path patch 直接编译，不打就编不过。当前应用使用的 Linux x86_64、
-  Windows x86_64 与 macOS aarch64/x86_64 bindings 均已同步，`tauri-runtime-cef` 可在三个
+  Windows x86_64 与 macOS aarch64/x86_64 bindings 均已同步，`tauri-runtime-kbcef` 可在三个
   桌面平台构建；新增其它 target 时仍须为对应 triple 生成 bindings。
 - **`third/cef`**直接跟随官方 `chromiumembedded/cef` 的 `7827` 分支，pin 在
   `0d0eeb611`（Chromium 149.0.7827.201）。Kabegame 的改动位于
   `third-patches/cef/`：
-  - `0001-flat-subprocess-path.patch`：向 CEF patch 配置加入
+  - `01-flat-subprocess-path.patch`：向 CEF patch 配置加入
     `kabegame_flat_subprocess_path`，令 `ChildProcessHost::GetChildPath()` 读到显式
     `--browser-subprocess-path` 时原样返回，跳过 macOS helper `.app` 变体改写。
     **只影响 release(bundled)**；dev 裸跑不依赖。
-  - `0002-drag-drop-client-events.patch`：给 `CefDragHandler` 补 `OnDragOver` /
+  - `02-drag-drop-client-events.patch`：给 `CefDragHandler` 补 `OnDragOver` /
     `OnDragLeave` / `OnDrop`（`added=experimental`），让 client 能观察完整拖放序列
     并消费落点。详见 `third-patches/cef/README.md`。生成的 C API 与 `libcef_dll`
     胶水不入 patch——它们由 `cef_create_projects.sh` 里的 `version_manager.py` 产出。
-  - `0003-drag-source-filenames.patch`：在 Linux 与 macOS Chromium 的起手侧加入
+  - `03-drag-source-filenames.patch`：在 Linux 与 macOS Chromium 的起手侧加入
     `WebContentsViewDelegate::GetDragFilenames`，并通过 CEF 的
     `CefDragHandler::OnStartDragging` / `CefDragData::GetCustomData` 暴露给 client，允许
     app 将前端声明的图片 id 授权为真实本地文件。macOS 侧还需教 `WebDragSource`
@@ -319,18 +319,18 @@ CEFBUILD=~/kabegame-cefbuild deno task build:chromium
 同步更新 `third-patches/<dir>/README.md` 的 vendor base。cef-rs 侧还要重跑
 `update-bindings` 并把结果作为新编号 patch 追加。
 
-应用页 `fetch(file:)` 还需运行时对该 origin 登记 CEF 跨源白名单；补丁 0006 的私有 CORS 列表只授予该文档 origin，profile 共享列表不变。
+应用页 `fetch(file:)` 还需运行时对该 origin 登记 CEF 跨源白名单；补丁 06 的私有 CORS 列表只授予该文档 origin，profile 共享列表不变。
 
 ## 当前限制
 
 - CEF Views 对部分 Tauri window API 没有等价能力；运行时对这些 API 返回保守值或 no-op。
 - Linux CEF 的 GL 后端固定 ANGLE/GL；ozone 后端由 `linux_ozone_platform()` 按会话探测（`WAYLAND_DISPLAY` 有值走原生 Wayland，否则 X11），`GDK_BACKEND` 与 `--ozone-platform` 取同一个值，`KABEGAME_OZONE_PLATFORM=x11|wayland` 可强制覆盖。**不要在别处另行判断后端。**
 - 三个桌面平台在 **CEF standard** 模式下都安装拖出 resolver；当使用已重编且包含
-  `third-patches/cef/0003-drag-source-filenames.patch` 的 CEF 时，图库拖出会交付真实本地
+  `third-patches/cef/03-drag-source-filenames.patch` 的 CEF 时，图库拖出会交付真实本地
   文件路径（Windows 为 `CF_HDROP`），绘图软件、浏览器上传框、文件管理器与资源管理器不再依赖
   目标端下载 URL。桌面前端因此**只**写自定义 mime 里的 image id 并设 `effectAllowed = "copy"`，
   不再写 `DownloadURL` / `text/uri-list` / `text/plain`（写了也会被 Chromium 一并清掉）。代价是
-  没有 URL 兜底：resolver 未安装、id 未获授权或仍在用未包含 0003 的旧 CEF 时，目标端拿到的是
+  没有 URL 兜底：resolver 未安装、id 未获授权或仍在用未包含 03 的旧 CEF 时，目标端拿到的是
   Blink 为 `<img>` 自动填充的缩略图载荷。Windows 半边是 Phase 6d 加入的，旧的 Windows CEF 需重编；
   Web 版不经 CEF，仍写 `DownloadURL`。详见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`。
 - Wayland 会话下**不能**用 `KABEGAME_OZONE_PLATFORM=x11` 退回 X11：XWayland 客户端往原生

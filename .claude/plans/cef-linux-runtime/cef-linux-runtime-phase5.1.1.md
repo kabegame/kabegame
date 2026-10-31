@@ -33,10 +33,10 @@ windowless_rendering_enabled: 1,                                     // 现状:O
 - **完成**:CEF settings 按模式分支;windowed 模式由 `browser_process_handler.on_context_initialized` 创建 `BrowserView + Window` 顶层窗口。
 
 ## 完成记录(2026-06-26)
-- `src-tauri/tauri-runtime-cef/src/runtime.rs` 增加 `WindowMode`、windowed CEF app handler、Views 顶层窗口 delegate/client、GLib pump helper 和 windowed `run_loop` 分支。
+- `src-tauri/tauri-runtime-kbcef/src/runtime.rs` 增加 `WindowMode`、windowed CEF app handler、Views 顶层窗口 delegate/client、GLib pump helper 和 windowed `run_loop` 分支。
 - 固定 URL 默认 `https://example.com`;可用 `KABEGAME_CEF_WINDOWED_URL` 覆盖,并兼容实验变量 `CEF_WINDOWED_URL`。
 - 默认 OSR fallback 未变;windowed 必须显式设置 `KABEGAME_CEF_WINDOW_MODE=windowed`。
-- 验证:`env CEF_PATH=/home/cm/.local/share/cef cargo check -p tauri-runtime-cef --features cef-backend` 通过。当前仅余既有 `protocol.rs` macro unused warning。
+- 验证:`env CEF_PATH=/home/cm/.local/share/cef cargo check -p tauri-runtime-kbcef --features cef-backend` 通过。当前仅余既有 `protocol.rs` macro unused warning。
 - GUI 交互验收需用 runtime/app 入口运行,并显式打开 windowed 模式,例如:
   ```sh
   CEF_PATH=/home/cm/.local/share/cef \
