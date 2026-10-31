@@ -1,0 +1,245 @@
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b743bdf7c 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -38,6 +38,7 @@
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/client_certificate_delegate.h"
+ #include "content/public/browser/file_url_loader.h"
++#include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/navigation_throttle.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+@@ -47,8 +48,10 @@
+ #include "content/public/browser/shared_cors_origin_access_list.h"
+ #include "services/network/public/mojom/cors_origin_pattern.mojom.h"
+ #include "content/public/browser/weak_document_ptr.h"
++#include "ipc/constants.mojom.h"
+ #include "content/public/common/content_switches.h"
+ #include "net/ssl/ssl_cert_request_info.h"
++#include "net/base/net_errors.h"
+ #include "net/ssl/ssl_private_key.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
+@@ -64,6 +67,32 @@
+ 
+ namespace {
+ 
++// Kabegame: avoid querying error state before a host has committed a URL.
++GURL CommittedDocumentURL(content::RenderFrameHost* rfh) {
++  if (!rfh) {
++    return GURL();
++  }
++  const GURL& url = rfh->GetLastCommittedURL();
++  if (url.is_empty() || rfh->IsErrorDocument()) {
++    return GURL();
++  }
++  return url;
++}
++
++// Kabegame: a single pending navigation identifies the document whose
++// subresource factory is being created. Multiple candidates are ambiguous.
++GURL SubresourceDocumentURL(content::RenderFrameHost* rfh) {
++  const auto pending = rfh->GetPendingCommitCrossDocumentNavigations();
++  if (pending.size() > 1) {
++    return GURL();
++  }
++  if (pending.size() == 1) {
++    content::NavigationHandle& navigation = *pending.front();
++    return navigation.GetNetErrorCode() == net::OK ? navigation.GetURL() : GURL();
++  }
++  return CommittedDocumentURL(rfh);
++}
++
+ class CefSelectClientCertificateCallbackImpl
+     : public CefSelectClientCertificateCallback {
+  public:
+@@ -486,6 +515,13 @@ void ChromeContentBrowserClientCef::
+   ChromeContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+       render_process_id, render_frame_id, request_initiator_origin, factories);
+ 
++  // Kabegame: worker file: factories bypass the CEF request proxy and its
++  // access gate. Remove them before the frame-specific app factory is added.
++  if (render_frame_id == IPC::mojom::kRoutingIdNone && request_initiator_origin &&
++      request_initiator_origin->scheme() == url::kFileScheme) {
++    factories->erase(url::kFileScheme);
++  }
++
+   // Kabegame: patch 0005 lets the app page pass SecurityOrigin::CanDisplay()
+   // and FilterURL for file: URLs, but content only hands a file: subresource
+   // factory to documents with a file: precursor scheme
+@@ -607,10 +643,28 @@ void ChromeContentBrowserClientCef::WillCreateURLLoaderFactory(
+   DCHECK(!cef_override->overriding_factory);
+   DCHECK(!cef_override->overridden_factory_receiver);
+ 
++  GURL document_url;
++  GURL parent_document_url;
++  if (frame) {
++    switch (type) {
++      case URLLoaderFactoryType::kDocumentSubResource:
++        document_url = SubresourceDocumentURL(frame);
++        parent_document_url = CommittedDocumentURL(frame->GetParent());
++        break;
++      case URLLoaderFactoryType::kNavigation:
++        document_url = CommittedDocumentURL(frame);
++        parent_document_url = CommittedDocumentURL(frame->GetParent());
++        break;
++      default:
++        break;
++    }
++  }
++
+   auto request_handler = net_service::CreateInterceptedRequestHandler(
+       browser_context, frame, render_process_id,
+       type == URLLoaderFactoryType::kNavigation,
+-      type == URLLoaderFactoryType::kDownload, request_initiator);
++      type == URLLoaderFactoryType::kDownload, request_initiator,
++      document_url, parent_document_url);
+ 
+   net_service::ProxyURLLoaderFactory::CreateProxy(
+       browser_context, factory_builder, header_client,
+diff --git a/libcef/browser/net_service/resource_request_handler_wrapper.cc b/libcef/browser/net_service/resource_request_handler_wrapper.cc
+index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8e4e3e341 100644
+--- a/libcef/browser/net_service/resource_request_handler_wrapper.cc
++++ b/libcef/browser/net_service/resource_request_handler_wrapper.cc
+@@ -5,8 +5,10 @@
+ #include "cef/libcef/browser/net_service/resource_request_handler_wrapper.h"
+ 
+ #include <memory>
++#include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/strings/string_util.h"
+ #include "cef/libcef/browser/browser_host_base.h"
+ #include "cef/libcef/browser/context.h"
+ #include "cef/libcef/browser/iothread_state.h"
+@@ -44,6 +46,20 @@ namespace net_service {
+ 
+ namespace {
+ 
++// Kabegame: discard even forged or obsolete attribution headers on every pass.
++void StripKabegameHeaders(net::HttpRequestHeaders& headers) {
++  std::vector<std::string> names;
++  for (const auto& header : headers.GetHeaderVector()) {
++    if (base::StartsWith(header.key, kKabegameHeaderPrefix,
++                         base::CompareCase::INSENSITIVE_ASCII)) {
++      names.push_back(header.key);
++    }
++  }
++  for (const auto& name : names) {
++    headers.RemoveHeader(name);
++  }
++}
++
+ const int kLoadNoCookiesFlags =
+     net::LOAD_DO_NOT_SEND_COOKIES | net::LOAD_DO_NOT_SAVE_COOKIES;
+ 
+@@ -256,6 +272,8 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+                     bool is_navigation,
+                     bool is_download,
+                     const url::Origin& request_initiator,
++                    const GURL& document_url,
++                    const GURL& parent_document_url,
+                     const base::RepeatingClosure& unhandled_request_callback) {
+       CEF_REQUIRE_UIT();
+ 
+@@ -283,6 +301,11 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+       is_navigation_ = is_navigation;
+       is_download_ = is_download;
+       request_initiator_ = request_initiator.Serialize();
++      // Kabegame: capture on UI at factory creation, then read on IO.
++      document_url_ = document_url.is_valid() ? document_url.spec() : std::string();
++      parent_document_url_ = parent_document_url.is_valid()
++                                 ? parent_document_url.spec()
++                                 : std::string();
+       unhandled_request_callback_ = unhandled_request_callback;
+ 
+       // Default values for standard headers.
+@@ -323,6 +346,8 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+     bool is_navigation_ = true;
+     bool is_download_ = false;
+     CefString request_initiator_;
++    std::string document_url_;
++    std::string parent_document_url_;
+     base::RepeatingClosure unhandled_request_callback_;
+ 
+     // Default values for standard headers.
+@@ -578,6 +603,15 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+     request->headers.SetHeaderIfMissing(net::HttpRequestHeaders::kUserAgent,
+                                         init_state_->user_agent_);
+ 
++    // Kabegame: expose factory attribution only to non-network requests.
++    StripKabegameHeaders(request->headers);
++    if (!request->url.SchemeIsHTTPOrHTTPS()) {
++      request->headers.SetHeader(kKabegameDocumentUrlHeader,
++                                 init_state_->document_url_);
++      request->headers.SetHeader(kKabegameParentDocumentUrlHeader,
++                                 init_state_->parent_document_url_);
++    }
++
+     const bool is_external = IsExternalRequest(request);
+ 
+     // External requests will not have a default handler.
+@@ -1350,7 +1384,9 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
+     int render_process_id,
+     bool is_navigation,
+     bool is_download,
+-    const url::Origin& request_initiator) {
++    const url::Origin& request_initiator,
++    const GURL& document_url,
++    const GURL& parent_document_url) {
+   CEF_REQUIRE_UIT();
+   CHECK(browser_context);
+ 
+@@ -1379,6 +1415,7 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
+       std::make_unique<InterceptedRequestHandlerWrapper::InitState>();
+   init_state->Initialize(browser_context, browserPtr, framePtr, global_id,
+                          is_navigation, is_download, request_initiator,
++                         document_url, parent_document_url,
+                          base::RepeatingClosure());
+ 
+   auto wrapper = std::make_unique<InterceptedRequestHandlerWrapper>();
+@@ -1460,6 +1497,7 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
+       std::make_unique<InterceptedRequestHandlerWrapper::InitState>();
+   init_state->Initialize(browser_context, browserPtr, framePtr, global_id,
+                          is_navigation, is_download, request_initiator,
++                         GURL(), GURL(),
+                          unhandled_request_callback);
+ 
+   auto wrapper = std::make_unique<InterceptedRequestHandlerWrapper>();
+diff --git a/libcef/browser/net_service/resource_request_handler_wrapper.h b/libcef/browser/net_service/resource_request_handler_wrapper.h
+index 9ae90f21b8d6557012d6ec464087acdb291ec950..9fa49b05bae0bf47f11231f6857626ae0a6008ea 100644
+--- a/libcef/browser/net_service/resource_request_handler_wrapper.h
++++ b/libcef/browser/net_service/resource_request_handler_wrapper.h
+@@ -7,6 +7,7 @@
+ 
+ #include "base/functional/callback_forward.h"
+ #include "content/public/browser/web_contents.h"
++#include "url/gurl.h"
+ 
+ namespace content {
+ class BrowserContext;
+@@ -23,6 +24,12 @@ class Origin;
+ 
+ namespace net_service {
+ 
++// Kabegame: patch 0007 reserves these headers for browser-side attribution.
++inline constexpr char kKabegameHeaderPrefix[] = "Sec-Kabegame-";
++inline constexpr char kKabegameDocumentUrlHeader[] = "Sec-Kabegame-Document-Url";
++inline constexpr char kKabegameParentDocumentUrlHeader[] =
++    "Sec-Kabegame-Parent-Document-Url";
++
+ class InterceptedRequestHandler;
+ 
+ // Create an InterceptedRequestHandler that will delegate to a
+@@ -34,7 +41,9 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
+     int render_process_id,
+     bool is_navigation,
+     bool is_download,
+-    const url::Origin& request_initiator);
++    const url::Origin& request_initiator,
++    const GURL& document_url,
++    const GURL& parent_document_url);
+ 
+ // Create an InterceptedRequestHandler that will delegate to a
+ // CefResourceRequestHandler. The resulting object should be passed to
