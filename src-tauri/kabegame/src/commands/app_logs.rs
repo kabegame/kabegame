@@ -26,8 +26,9 @@ pub fn get_app_logs(since_seq: Option<u64>, limit: Option<usize>) -> Vec<LogReco
 /// 查看器打开时调用：替换掉之前的推送任务（页面重载后旧 Channel 已失效），日志每 200ms
 /// 攒批经 `on_logs` 推回调用的页面。
 ///
-/// 不用 `emit_to("main", ..)`：Tauri 对 `listen` 时没指定 target 的监听者一律放行，
-/// 畅游导航栏、爬虫窗口这些带事件监听权限的页面也会收到日志。Channel 只回到调用方。
+/// 用 Channel 而不是全局事件：Channel 只回到开启查看器的那个页面，日志不会进入事件系统。
+/// （tauri 补丁 0014 起 `emit_to("main", ..)` 也只会送到主窗口；补丁 0015 起其它窗口只能监听
+/// capability 里列出的事件名。）
 #[tauri::command]
 pub fn start_app_log_stream(on_logs: Channel<Vec<LogRecord>>) {
     let mut forwarder = FORWARDER.lock().unwrap_or_else(|e| e.into_inner());

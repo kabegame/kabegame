@@ -69,7 +69,7 @@ v031 迁移（`storage/migrations/v031_label_albums.rs`，`init.rs` 同步）：
 依次退化为 `name (key)`、`key`、`key (2)`、`key (3)`…，插件创建永不因撞名失败。
 
 命令接线与 `rename_album` 同一组位置：`kabegame-core/src/commands/album.rs`、
-`kabegame/src/commands/album.rs`、`lib.rs` 注册、`permissions/main.toml`、`web/dispatch.rs`（两个写命令要求 super）、
+`kabegame/src/commands/album.rs`、`lib.rs` 注册（主窗口免 ACL，无需权限文件）、`web/dispatch.rs`（两个写命令要求 super）、
 IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
 
 ## 标签来源

@@ -42,6 +42,8 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 主进程内部，HTTP、Tauri、Web JSON-RPC 与 app IPC 只是协议入口，统一复用共享命令层，不建立平行业务后端；桌面端应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
+**IPC 权限与事件**——主窗口与壁纸窗口的本地应用页免 ACL（`lib.rs` 的 `Builder::acl_exempt_webview("main" / "wallpaper")`，tauri 补丁 0017，只认本地来源的主 frame），新增只给它们用的命令只需注册进 `generate_handler!`；畅游、爬虫、网页壁纸调用的命令仍要写进对应 `permissions/*.toml`，它们能 `listen` 的事件名由 capability 里 `core:event:allow-listen` 的 `{ "event": … }` 作用域限定（补丁 0015）。capability 默认只对主 frame 生效（`frames`，补丁 0016，frame 由 runtime 经请求 extension 上报，页面无法伪造）。JS 事件按接收方 webview 身份投递，前端 `listen` 传 `target` 没有作用，`emit_to(<label>)` 只送到该 label 的 webview / 窗口（补丁 0014）。详见 [ACL 文档](cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md)。
+
 **第三方补丁序列**——工作流与目录级约束见 [third-patches/AGENTS.md](third-patches/AGENTS.md)。一般预期third是脏的，third-patches才是我们工作的地方，除非bump跟上游。
 
 **组件库与 packages 子仓库**——维护边界和目录级约束见 [packages/AGENTS.md](packages/AGENTS.md)。

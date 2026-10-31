@@ -1,0 +1,446 @@
+diff --git a/crates/tauri/src/app.rs b/crates/tauri/src/app.rs
+index 923cf8ca88cae9eb24a06f7d71e344c5932c133a..0056dfcea4d83cd15068564a8941cca8b59caf75 100644
+--- a/crates/tauri/src/app.rs
++++ b/crates/tauri/src/app.rs
+@@ -1616,6 +1616,9 @@ pub struct Builder<R: Runtime> {
+   /// The device event filter.
+   device_event_filter: DeviceEventFilter,
+ 
++  /// Webview labels exempted from the ACL, see [`Self::acl_exempt_webview`].
++  acl_exempt_webviews: Vec<String>,
++
+   pub(crate) invoke_key: String,
+ }
+ 
+@@ -1686,6 +1689,7 @@ impl<R: Runtime> Builder<R> {
+       window_event_listeners: Vec::new(),
+       webview_event_listeners: Vec::new(),
+       device_event_filter: Default::default(),
++      acl_exempt_webviews: Vec::new(),
+       invoke_key,
+     }
+   }
+@@ -2371,6 +2375,29 @@ tauri::Builder::default()
+     self
+   }
+ 
++  /// Exempts the webview with this exact label (no glob) from the ACL.
++  ///
++  /// Only requests from the **local app origin in the webview's top-level frame** are exempt:
++  /// they are never rejected by the ACL (commands a capability denies included), and `listen`
++  /// is not limited by the event name scope of `core:event:allow-listen`. The ACL is still
++  /// resolved for them, so the scopes of granted commands (e.g. plugin URL or path scopes) reach
++  /// the commands as usual; a command without a grant gets empty scopes, so keep granting the
++  /// plugin permissions the webview relies on. Requests from a remote origin (the webview
++  /// navigated away from the app) or from any subframe are checked against the capabilities.
++  ///
++  /// Use it for webviews that only ever load the app's own frontend and need every command,
++  /// instead of listing every app command in a permission.
++  ///
++  /// # Examples
++  /// ```
++  /// tauri::Builder::default()
++  ///   .acl_exempt_webview("main");
++  /// ```
++  pub fn acl_exempt_webview(mut self, label: impl Into<String>) -> Self {
++    self.acl_exempt_webviews.push(label.into());
++    self
++  }
++
+   /// Builds the application.
+   ///
+   /// This creates the underlying webview runtime (the event loop), registers the core plugins and
+@@ -2405,7 +2432,7 @@ tauri::Builder::default()
+     feature = "tracing",
+     tracing::instrument(name = "app::build", skip_all)
+   )]
+-  pub fn build(mut self, context: Context<R>) -> crate::Result<App<R>> {
++  pub fn build(mut self, mut context: Context<R>) -> crate::Result<App<R>> {
+     #[cfg(target_os = "macos")]
+     if self.menu.is_none() && self.enable_macos_default_menu {
+       self.menu = Some(Box::new(|app_handle| {
+@@ -2413,6 +2440,10 @@ tauri::Builder::default()
+       }));
+     }
+ 
++    for label in std::mem::take(&mut self.acl_exempt_webviews) {
++      context.runtime_authority_mut().exempt_webview(label);
++    }
++
+     let manager = Arc::new(AppManager::with_handlers(
+       context,
+       self.plugins,
+diff --git a/crates/tauri/src/event/plugin.rs b/crates/tauri/src/event/plugin.rs
+index 8b77d3d2f4a01a5ef81e385b7cfa506a526ddde2..1aa4b212f85b16b9d5868013588c4ba6e2cbb5ef 100644
+--- a/crates/tauri/src/event/plugin.rs
++++ b/crates/tauri/src/event/plugin.rs
+@@ -8,7 +8,7 @@ use crate::plugin::{Builder, TauriPlugin};
+ use crate::{AppHandle, Emitter, Manager, Webview};
+ use crate::{
+   EventId, Result, Runtime, command,
+-  ipc::{CallbackFn, CommandScope},
++  ipc::{AclExempt, CallbackFn, CommandScope},
+ };
+ 
+ use super::EventName;
+@@ -19,15 +19,17 @@ use super::ListenScope;
+ /// `emit_to` only if it is the target itself (see [`crate::Emitter::emit_to`]).
+ ///
+ /// The event name must pass the [`ListenScope`] of the `core:event:allow-listen` grants
+-/// that apply to the request.
++/// that apply to the request, unless the request is exempt from the ACL
++/// (see [`crate::Builder::acl_exempt_webview`]).
+ #[command(root = "crate")]
+ async fn listen<R: Runtime>(
+   webview: Webview<R>,
+   event: EventName,
+   handler: CallbackFn,
+   scope: CommandScope<ListenScope>,
++  exempt: AclExempt,
+ ) -> Result<EventId> {
+-  if !scope.matches(event.as_str()) {
++  if !exempt.0 && !scope.matches(event.as_str()) {
+     return Err(listen_denied(event.as_str()));
+   }
+   webview.listen_js(event.as_str_event(), handler)
+@@ -110,7 +112,7 @@ mod tests {
+   };
+ 
+   use crate::{
+-    WebviewWindow, WebviewWindowBuilder,
++    App, WebviewWindow, WebviewWindowBuilder,
+     ipc::{CallbackFn, InvokeBody},
+     test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets},
+     webview::{InvokeRequest, IpcFrame},
+@@ -123,6 +125,16 @@ mod tests {
+   fn app_with_listen_grants(
+     grants: Vec<Option<(serde_json::Value, serde_json::Value)>>,
+   ) -> WebviewWindow<MockRuntime> {
++    window(&app_with(grants, false, &[]), "main")
++  }
++
++  /// Like [`app_with_listen_grants`]; `deny_listen` also denies the command for the local origin,
++  /// `exempt` lists the webviews exempted with [`crate::Builder::acl_exempt_webview`].
++  fn app_with(
++    grants: Vec<Option<(serde_json::Value, serde_json::Value)>>,
++    deny_listen: bool,
++    exempt: &[&str],
++  ) -> App<MockRuntime> {
+     let mut command_scope = BTreeMap::new();
+     let mut resolved = Vec::new();
+     for (index, grant) in grants.into_iter().enumerate() {
+@@ -149,17 +161,40 @@ mod tests {
+       });
+     }
+ 
++    let denied_commands = if deny_listen {
++      [(
++        LISTEN.to_string(),
++        vec![ResolvedCommand {
++          context: ExecutionContext::Local,
++          windows: vec!["*".parse().unwrap()],
++          ..Default::default()
++        }],
++      )]
++      .into_iter()
++      .collect()
++    } else {
++      Default::default()
++    };
++
+     let mut context = mock_context(noop_assets());
+     *context.runtime_authority_mut() = crate::runtime_authority!(
+       Default::default(),
+       Resolved {
+         allowed_commands: [(LISTEN.to_string(), resolved)].into_iter().collect(),
++        denied_commands,
+         command_scope,
+         ..Default::default()
+       }
+     );
+-    let app = mock_builder().build(context).unwrap();
+-    WebviewWindowBuilder::new(&app, "main", Default::default())
++    let mut builder = mock_builder();
++    for label in exempt {
++      builder = builder.acl_exempt_webview(*label);
++    }
++    builder.build(context).unwrap()
++  }
++
++  fn window(app: &App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
++    WebviewWindowBuilder::new(app, label, Default::default())
+       .build()
+       .unwrap()
+   }
+@@ -172,6 +207,15 @@ mod tests {
+     webview: &WebviewWindow<MockRuntime>,
+     event: &str,
+     frame: IpcFrame,
++  ) -> Result<(), String> {
++    listen_request(webview, event, "tauri://localhost", frame)
++  }
++
++  fn listen_request(
++    webview: &WebviewWindow<MockRuntime>,
++    event: &str,
++    url: &str,
++    frame: IpcFrame,
+   ) -> Result<(), String> {
+     get_ipc_response(
+       webview,
+@@ -179,7 +223,7 @@ mod tests {
+         cmd: LISTEN.into(),
+         callback: CallbackFn(0),
+         error: CallbackFn(1),
+-        url: "tauri://localhost".parse().unwrap(),
++        url: url.parse().unwrap(),
+         body: InvokeBody::Json(json!({ "event": event, "handler": 7 })),
+         headers: Default::default(),
+         invoke_key: INVOKE_KEY.to_string(),
+@@ -249,4 +293,61 @@ mod tests {
+     assert!(denied.contains("from sub frame"), "{denied}");
+     assert!(listen_from(&webview, "images-added", IpcFrame::Unknown).is_err());
+   }
++
++  #[test]
++  fn exempt_webview_needs_local_origin_and_main_frame() {
++    // no grant at all: only the exemption can let the request through
++    let app = app_with(vec![], false, &["main"]);
++    let main = window(&app, "main");
++    let other = window(&app, "other");
++
++    assert!(listen(&main, "images-added").is_ok());
++    // another webview is not exempt
++    assert!(listen(&other, "images-added").is_err());
++    // the exempt webview's subframes and unattributed requests are not exempt
++    assert!(listen_from(&main, "images-added", IpcFrame::Sub).is_err());
++    assert!(listen_from(&main, "images-added", IpcFrame::Unknown).is_err());
++    // nor is remote content loaded into the exempt webview
++    assert!(listen_request(&main, "images-added", "https://example.com", IpcFrame::Main).is_err());
++    assert!(
++      listen_request(
++        &main,
++        "images-added",
++        "file:///C:/wallpaper/index.html",
++        IpcFrame::Main
++      )
++      .is_err()
++    );
++  }
++
++  #[test]
++  fn exempt_webview_skips_the_listen_scope() {
++    let scoped = || {
++      vec![Some((
++        json!([{ "event": "setting-change" }]),
++        json!([{ "event": "app-log" }]),
++      ))]
++    };
++
++    let app = app_with(scoped(), false, &["main"]);
++    let main = window(&app, "main");
++    assert!(listen(&main, "images-added").is_ok());
++    assert!(listen(&main, "app-log").is_ok());
++    // a subframe gets no grant at all (frames default to main)
++    assert!(listen_from(&main, "setting-change", IpcFrame::Sub).is_err());
++
++    // without the exemption the same grant restricts the event names
++    let main = window(&app_with(scoped(), false, &[]), "main");
++    assert!(listen(&main, "setting-change").is_ok());
++    assert!(listen(&main, "images-added").is_err());
++  }
++
++  #[test]
++  fn exempt_webview_overrides_an_explicit_deny() {
++    let app = app_with(vec![None], true, &["main"]);
++    assert!(listen(&window(&app, "main"), "images-added").is_ok());
++
++    let main = window(&app_with(vec![None], true, &[]), "main");
++    assert!(listen(&main, "images-added").is_err());
++  }
+ }
+diff --git a/crates/tauri/src/ipc/authority.rs b/crates/tauri/src/ipc/authority.rs
+index 3ada91a97c02107f7fa7dbe0b30c09e97826af88..c267e0e23017d7e4c33911ca1b37812db1d85d05 100644
+--- a/crates/tauri/src/ipc/authority.rs
++++ b/crates/tauri/src/ipc/authority.rs
+@@ -2,7 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // SPDX-License-Identifier: MIT
+ 
+-use std::collections::BTreeMap;
++use std::collections::{BTreeMap, BTreeSet};
+ use std::fmt::{Debug, Display};
+ use std::sync::Arc;
+ 
+@@ -32,6 +32,7 @@ pub struct RuntimeAuthority {
+   has_app_acl: bool,
+   allowed_commands: BTreeMap<String, Vec<ResolvedCommand>>,
+   denied_commands: BTreeMap<String, Vec<ResolvedCommand>>,
++  exempt_webviews: BTreeSet<String>,
+   pub(crate) scope_manager: ScopeManager,
+ }
+ 
+@@ -138,6 +139,7 @@ impl RuntimeAuthority {
+       has_app_acl: resolved_acl.has_app_acl,
+       allowed_commands: resolved_acl.allowed_commands,
+       denied_commands: resolved_acl.denied_commands,
++      exempt_webviews: BTreeSet::new(),
+       scope_manager: ScopeManager {
+         command_scope: resolved_acl.command_scope,
+         global_scope: resolved_acl.global_scope,
+@@ -151,6 +153,27 @@ impl RuntimeAuthority {
+     self.has_app_acl
+   }
+ 
++  /// Exempts the webview with this exact label from the ACL.
++  ///
++  /// Requests from the **local origin in the top-level frame** of the webview are no longer
++  /// rejected by the ACL, not even for commands a capability denies, and `listen` ignores the
++  /// event name scope. The ACL is still resolved, so commands granted by a capability still receive
++  /// their scopes; a command without a grant gets empty scopes. Requests from a remote origin or
++  /// from a subframe of the same webview are checked as usual, so navigating the webview to other
++  /// content does not carry the exemption over.
++  ///
++  /// See [`crate::Builder::acl_exempt_webview`].
++  pub fn exempt_webview(&mut self, label: impl Into<String>) {
++    self.exempt_webviews.insert(label.into());
++  }
++
++  /// Whether a request is exempt from the ACL, see [`Self::exempt_webview`].
++  pub(crate) fn is_exempt(&self, webview: &str, origin: &Origin, frame: IpcFrame) -> bool {
++    matches!(origin, Origin::Local)
++      && frame == IpcFrame::Main
++      && self.exempt_webviews.contains(webview)
++  }
++
+   #[doc(hidden)]
+   pub fn __allow_command(&mut self, command: String, context: ExecutionContext) {
+     self.allowed_commands.insert(
+@@ -673,6 +696,18 @@ impl<'a, R: Runtime, T: ScopeObject> CommandArg<'a, R> for CommandScope<T> {
+   }
+ }
+ 
++/// Whether the request is exempt from the ACL (see [`RuntimeAuthority::exempt_webview`]).
++///
++/// Command argument for crate commands that apply their own ACL checks on top of the command
++/// grant, such as the event name scope of `listen`. Read from the invoke message, never from the payload.
++pub(crate) struct AclExempt(pub(crate) bool);
++
++impl<'a, R: Runtime> CommandArg<'a, R> for AclExempt {
++  fn from_command(command: CommandItem<'a, R>) -> Result<Self, InvokeError> {
++    Ok(Self(command.message.acl_exempt))
++  }
++}
++
+ /// Global access scope that can be retrieved directly in the command function.
+ #[derive(Debug)]
+ pub struct GlobalScope<T: ScopeObject>(ScopeValue<T>);
+@@ -1781,4 +1816,29 @@ mod tests {
+       );
+     }
+   }
++
++  #[test]
++  fn exemption_needs_label_local_origin_and_main_frame() {
++    let mut authority = RuntimeAuthority::new(Default::default(), Resolved::default());
++    authority.exempt_webview("main");
++
++    let remote = Origin::Remote {
++      url: "file:///C:/wallpaper/index.html".parse().unwrap(),
++    };
++
++    assert!(authority.is_exempt("main", &Origin::Local, IpcFrame::Main));
++    // label: exact match, no glob
++    assert!(!authority.is_exempt("main-2", &Origin::Local, IpcFrame::Main));
++    assert!(!authority.is_exempt("surf-x", &Origin::Local, IpcFrame::Main));
++    // origin: the webview navigated to remote content
++    assert!(!authority.is_exempt("main", &remote, IpcFrame::Main));
++    // frame: subframes and unattributed requests of the same webview
++    assert!(!authority.is_exempt("main", &Origin::Local, IpcFrame::Sub));
++    assert!(!authority.is_exempt("main", &Origin::Local, IpcFrame::Unknown));
++
++    // patterns are taken literally
++    authority.exempt_webview("surf-*");
++    assert!(!authority.is_exempt("surf-x", &Origin::Local, IpcFrame::Main));
++    assert!(authority.is_exempt("surf-*", &Origin::Local, IpcFrame::Main));
++  }
+ }
+diff --git a/crates/tauri/src/ipc/mod.rs b/crates/tauri/src/ipc/mod.rs
+index 824ec6b0586bd88c19918339bc127d914451bd75..22aea3b37a699d40263e2f76bda645288de436d3 100644
+--- a/crates/tauri/src/ipc/mod.rs
++++ b/crates/tauri/src/ipc/mod.rs
+@@ -31,6 +31,7 @@ mod command;
+ pub(crate) mod format_callback;
+ pub(crate) mod protocol;
+ 
++pub(crate) use authority::AclExempt;
+ pub use authority::{
+   CommandScope, GlobalScope, Origin, RuntimeAuthority, ScopeObject, ScopeObjectMatch, ScopeValue,
+ };
+@@ -504,6 +505,8 @@ pub struct InvokeMessage<R: Runtime> {
+   pub(crate) payload: InvokeBody,
+   /// The request headers.
+   pub(crate) headers: HeaderMap,
++  /// Whether the request is exempt from the ACL, see [`RuntimeAuthority::exempt_webview`].
++  pub(crate) acl_exempt: bool,
+ }
+ 
+ impl<R: Runtime> Clone for InvokeMessage<R> {
+@@ -513,6 +516,7 @@ impl<R: Runtime> Clone for InvokeMessage<R> {
+       command: self.command.clone(),
+       payload: self.payload.clone(),
+       headers: self.headers.clone(),
++      acl_exempt: self.acl_exempt,
+     }
+   }
+ }
+@@ -530,6 +534,7 @@ impl<R: Runtime> InvokeMessage<R> {
+       command,
+       payload,
+       headers,
++      acl_exempt: false,
+     }
+   }
+ 
+diff --git a/crates/tauri/src/webview/mod.rs b/crates/tauri/src/webview/mod.rs
+index 9e1e4bc2afed4f6d32afe32a2bb99679be9e1c4e..00031eece81e33c33a8e10fea52409fba043ee8d 100644
+--- a/crates/tauri/src/webview/mod.rs
++++ b/crates/tauri/src/webview/mod.rs
+@@ -2073,7 +2073,7 @@ tauri::Builder::default()
+         url: request.url.clone(),
+       }
+     };
+-    let (resolved_acl, has_app_acl_manifest) = {
++    let (resolved_acl, has_app_acl_manifest, acl_exempt) = {
+       let runtime_authority = manager.runtime_authority.lock().unwrap();
+       let acl = runtime_authority.resolve_access(
+         &request.cmd,
+@@ -2082,7 +2082,9 @@ tauri::Builder::default()
+         &acl_origin,
+         request.frame,
+       );
+-      (acl, runtime_authority.has_app_manifest())
++      let acl_exempt =
++        runtime_authority.is_exempt(message.webview.label(), &acl_origin, request.frame);
++      (acl, runtime_authority.has_app_manifest(), acl_exempt)
+     };
+ 
+     let mut invoke = Invoke {
+@@ -2090,6 +2092,8 @@ tauri::Builder::default()
+       resolver: resolver.clone(),
+       acl: resolved_acl,
+     };
++    // commands with their own ACL checks (e.g. the `listen` event name scope) skip them as well
++    invoke.message.acl_exempt = acl_exempt;
+ 
+     let plugin_command = request.cmd.strip_prefix("plugin:").map(|raw_command| {
+       let mut tokens = raw_command.split('|');
+@@ -2107,6 +2111,8 @@ tauri::Builder::default()
+       // TODO: Remove this special check in v3
+       && request.cmd != crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND
+       && invoke.acl.is_none()
++      // the local top-level document of an exempt webview, see `Builder::acl_exempt_webview`
++      && !acl_exempt
+     {
+       #[cfg(debug_assertions)]
+       {

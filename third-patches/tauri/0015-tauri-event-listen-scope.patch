@@ -1,0 +1,236 @@
+diff --git a/crates/tauri/src/event/mod.rs b/crates/tauri/src/event/mod.rs
+index 1da2988a978f268a951c785c5fcf79484c003879..a05bc4318669f7950e0f7253073a7aacbc402b54 100644
+--- a/crates/tauri/src/event/mod.rs
++++ b/crates/tauri/src/event/mod.rs
+@@ -18,6 +18,37 @@ use crate::ipc::CallbackFn;
+ /// Unique id of an event.
+ pub type EventId = u32;
+ 
++/// Scope entry of the `core:event:allow-listen` permission: which event names a webview may listen to.
++///
++/// `event` is a full event name; a trailing `*` matches every event name starting with the part before it.
++/// As with other command scopes, a `deny` entry wins over any `allow` entry, and once any `allow`
++/// entry applies to the request the event must match one of them. A grant without a scope does not
++/// restrict event names.
++///
++/// ```json
++/// {
++///   "identifier": "core:event:allow-listen",
++///   "allow": [{ "event": "surf-*" }],
++///   "deny": [{ "event": "surf-internal" }]
++/// }
++/// ```
++#[derive(Debug, Clone, Deserialize)]
++pub struct ListenScope {
++  /// Event name, or an event name prefix followed by `*`.
++  pub event: String,
++}
++
++impl crate::ipc::ScopeObjectMatch for ListenScope {
++  type Input = str;
++
++  fn matches(&self, input: &str) -> bool {
++    match self.event.strip_suffix('*') {
++      Some(prefix) => input.starts_with(prefix),
++      None => input == self.event,
++    }
++  }
++}
++
+ /// Event Target
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+ #[serde(tag = "kind")]
+diff --git a/crates/tauri/src/event/plugin.rs b/crates/tauri/src/event/plugin.rs
+index 2da9eddf5aebfe600f4659e627ec7fa6fc90efed..1135ac237d952d6c2a9e706b2682f38429aa718f 100644
+--- a/crates/tauri/src/event/plugin.rs
++++ b/crates/tauri/src/event/plugin.rs
+@@ -6,22 +6,39 @@ use serialize_to_javascript::{DefaultTemplate, Template, default_template};
+ 
+ use crate::plugin::{Builder, TauriPlugin};
+ use crate::{AppHandle, Emitter, Manager, Webview};
+-use crate::{EventId, Result, Runtime, command, ipc::CallbackFn};
++use crate::{
++  EventId, Result, Runtime, command,
++  ipc::{CallbackFn, CommandScope},
++};
+ 
+ use super::EventName;
+ use super::EventTarget;
++use super::ListenScope;
+ 
+ /// The `target` the JS API still sends is ignored: a webview receives an event targeted with
+ /// `emit_to` only if it is the target itself (see [`crate::Emitter::emit_to`]).
++///
++/// The event name must pass the [`ListenScope`] of the `core:event:allow-listen` grants
++/// that apply to the request.
+ #[command(root = "crate")]
+ async fn listen<R: Runtime>(
+   webview: Webview<R>,
+   event: EventName,
+   handler: CallbackFn,
++  scope: CommandScope<ListenScope>,
+ ) -> Result<EventId> {
++  if !scope.matches(event.as_str()) {
++    return Err(listen_denied(event.as_str()));
++  }
+   webview.listen_js(event.as_str_event(), handler)
+ }
+ 
++fn listen_denied(event: &str) -> crate::Error {
++  crate::Error::Anyhow(anyhow::anyhow!(
++    "event `{event}` is not allowed to be listened by ACL"
++  ))
++}
++
+ #[command(root = "crate")]
+ async fn unlisten<R: Runtime>(
+   webview: Webview<R>,
+@@ -81,3 +98,135 @@ pub(crate) fn init<R: Runtime, M: Manager<R>>(manager: &M) -> TauriPlugin<R> {
+     )
+     .build()
+ }
++
++#[cfg(test)]
++mod tests {
++  use std::collections::BTreeMap;
++
++  use serde_json::json;
++  use tauri_utils::acl::{
++    ExecutionContext,
++    resolved::{Resolved, ResolvedCommand, ResolvedScope},
++  };
++
++  use crate::{
++    WebviewWindow, WebviewWindowBuilder,
++    ipc::{CallbackFn, InvokeBody},
++    test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets},
++    webview::InvokeRequest,
++  };
++
++  const LISTEN: &str = "plugin:event|listen";
++
++  /// One `core:event:allow-listen` grant per entry, for the `main` window: `None` is a grant without
++  /// a scope, `Some((allow, deny))` a grant extended with that scope.
++  fn app_with_listen_grants(
++    grants: Vec<Option<(serde_json::Value, serde_json::Value)>>,
++  ) -> WebviewWindow<MockRuntime> {
++    let mut command_scope = BTreeMap::new();
++    let mut resolved = Vec::new();
++    for (index, grant) in grants.into_iter().enumerate() {
++      let scope_id = grant.map(|(allow, deny)| {
++        let id = index as u64 + 1;
++        let values = |v: serde_json::Value| match v {
++          serde_json::Value::Array(items) => items.into_iter().map(Into::into).collect(),
++          _ => unreachable!(),
++        };
++        command_scope.insert(
++          id,
++          ResolvedScope {
++            allow: values(allow),
++            deny: values(deny),
++          },
++        );
++        id
++      });
++      resolved.push(ResolvedCommand {
++        context: ExecutionContext::Local,
++        windows: vec!["main".parse().unwrap()],
++        scope_id,
++        ..Default::default()
++      });
++    }
++
++    let mut context = mock_context(noop_assets());
++    *context.runtime_authority_mut() = crate::runtime_authority!(
++      Default::default(),
++      Resolved {
++        allowed_commands: [(LISTEN.to_string(), resolved)].into_iter().collect(),
++        command_scope,
++        ..Default::default()
++      }
++    );
++    let app = mock_builder().build(context).unwrap();
++    WebviewWindowBuilder::new(&app, "main", Default::default())
++      .build()
++      .unwrap()
++  }
++
++  fn listen(webview: &WebviewWindow<MockRuntime>, event: &str) -> Result<(), String> {
++    get_ipc_response(
++      webview,
++      InvokeRequest {
++        cmd: LISTEN.into(),
++        callback: CallbackFn(0),
++        error: CallbackFn(1),
++        url: "tauri://localhost".parse().unwrap(),
++        body: InvokeBody::Json(json!({ "event": event, "handler": 7 })),
++        headers: Default::default(),
++        invoke_key: INVOKE_KEY.to_string(),
++      },
++    )
++    .map(|_| ())
++    .map_err(|e| e.to_string())
++  }
++
++  #[test]
++  fn listen_scope_exact_prefix_and_deny() {
++    let webview = app_with_listen_grants(vec![Some((
++      json!([{ "event": "surf-url-changed" }, { "event": "app-*" }]),
++      json!([{ "event": "app-log*" }]),
++    ))]);
++
++    assert!(listen(&webview, "surf-url-changed").is_ok());
++    // exact entries do not match longer names
++    assert!(listen(&webview, "surf-url-changed-2").is_err());
++    // a trailing `*` is a prefix match
++    assert!(listen(&webview, "app-import-plugin").is_ok());
++    assert!(listen(&webview, "app-").is_ok());
++    // deny wins over allow, prefixes included
++    let denied = listen(&webview, "app-log").unwrap_err();
++    assert!(
++      denied.contains("is not allowed to be listened by ACL"),
++      "{denied}"
++    );
++    assert!(listen(&webview, "app-logs").is_err());
++    // not listed
++    assert!(listen(&webview, "images-added").is_err());
++  }
++
++  #[test]
++  fn listen_without_scope_is_unrestricted() {
++    let webview = app_with_listen_grants(vec![None]);
++    assert!(listen(&webview, "images-added").is_ok());
++    assert!(listen(&webview, "anything/at:all").is_ok());
++  }
++
++  #[test]
++  fn deny_only_scope_blocks_just_the_denied_events() {
++    let webview = app_with_listen_grants(vec![Some((json!([]), json!([{ "event": "app-log" }])))]);
++    assert!(listen(&webview, "images-added").is_ok());
++    assert!(listen(&webview, "app-log").is_err());
++  }
++
++  #[test]
++  fn any_scoped_grant_restricts_the_request() {
++    // one unscoped and one scoped grant apply to the same webview: the scope still applies
++    let webview = app_with_listen_grants(vec![
++      None,
++      Some((json!([{ "event": "setting-change" }]), json!([]))),
++    ]);
++    assert!(listen(&webview, "setting-change").is_ok());
++    assert!(listen(&webview, "images-added").is_err());
++  }
++}
+diff --git a/crates/tauri/src/lib.rs b/crates/tauri/src/lib.rs
+index b34a3125e0f106cb2cfac051a09039963ac40667..a792ae4167882edadaba925e94288810c3478f48 100644
+--- a/crates/tauri/src/lib.rs
++++ b/crates/tauri/src/lib.rs
+@@ -215,7 +215,7 @@ pub use runtime::ActivationPolicy;
+ pub use self::utils::TitleBarStyle;
+ 
+ use self::event::EventName;
+-pub use self::event::{Event, EventId, EventTarget};
++pub use self::event::{Event, EventId, EventTarget, ListenScope};
+ use self::manager::EmitPayload;
+ pub use {
+   self::app::{

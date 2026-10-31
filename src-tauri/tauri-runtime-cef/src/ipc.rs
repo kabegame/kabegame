@@ -20,6 +20,11 @@
 //! 放行不扩大攻击面);其余返回 400。frame 身份由 scheme factory 的 `frame.is_main()` 提供
 //! (见 [`crate::protocol::RequestFrame`]);CEF 未给出 frame 时维持原行为。
 //!
+//! frame 位置:主通道与回退通道的请求都带 [`IpcFrame`] extension(见
+//! `crate::protocol::attach_request_frame`),Tauri ACL 按它匹配 capability 的 `frames`(默认只认
+//! 主 frame)。回退通道重新构造请求时把它一并带上;上面放行的同源子 frame 记为 `sub`,所以默认
+//! capability 对它不生效;请求里没有它时记为 `Unknown`。
+//!
 //! 来源判定:Tauri 按交给 `ipc_handler` 的请求 URI 区分本地 / 远程来源。取值顺序是
 //! `Origin` 头 → 发起请求的 frame URL → webview 初始 URL;`file:` 文档(WPE 网页壁纸)的
 //! `Origin` 已在协议层改写成 frame URL,所以它总被判成远程 `file:` 来源,只拿到
@@ -32,7 +37,7 @@ use http::{
     Request as HttpRequest, Response as HttpResponse, StatusCode,
 };
 use tauri_runtime::{
-    webview::{DetachedWebview, InitializationScript, PendingWebview},
+    webview::{DetachedWebview, InitializationScript, IpcFrame, PendingWebview},
     UserEvent,
 };
 
@@ -136,11 +141,19 @@ fn post_message_request(
         return Err(format!("CEF IPC postMessage origin is not an absolute URL: {uri}"));
     }
 
+    // 重新构造请求会丢掉全部 extension:把 Tauri ACL 要用的 frame 位置带过去
+    let ipc_frame = request
+        .extensions()
+        .get::<IpcFrame>()
+        .copied()
+        .unwrap_or(IpcFrame::Unknown);
+
     let body = String::from_utf8(request.into_body())
         .map_err(|_| "CEF IPC postMessage body must be UTF-8".to_string())?;
 
     HttpRequest::builder()
         .uri(http_uri_for(&uri))
+        .extension(ipc_frame)
         .body(body)
         .map_err(|error| format!("invalid CEF IPC postMessage request: {error}"))
 }
@@ -208,9 +221,31 @@ mod tests {
         }
         let mut request = builder.body(b"{}".to_vec()).unwrap();
         if let Some(frame) = frame {
+            // 与协议层 `attach_request_frame` 一致:两种 extension 一起插
+            request.extensions_mut().insert(frame.ipc_frame());
             request.extensions_mut().insert(frame);
         }
         request
+    }
+
+    fn ipc_frame_of(request: &HttpRequest<String>) -> Option<IpcFrame> {
+        request.extensions().get::<IpcFrame>().copied()
+    }
+
+    #[test]
+    fn ipc_frame_survives_the_rebuilt_request() {
+        // 主 frame
+        let rebuilt =
+            post_message_request(request(Some("https://example.com"), Some(true)), APP).unwrap();
+        assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Main));
+        // 放行的同源子 frame 记为 sub,默认 capability 不对它生效
+        let rebuilt =
+            post_message_request(request(Some("tauri://localhost"), Some(false)), APP).unwrap();
+        assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Sub));
+        // 没有 frame 信息:Unknown
+        let rebuilt =
+            post_message_request(request(Some("https://example.com"), None), APP).unwrap();
+        assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Unknown));
     }
 
     const APP: &str = "tauri://localhost/";

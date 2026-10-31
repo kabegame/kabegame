@@ -171,3 +171,15 @@ index 5733abf71..d7972447f 100644
          version,
          identifier,
          app,
+diff --git a/crates/tauri/src/test/mod.rs b/crates/tauri/src/test/mod.rs
+index 9ad062c9b7143c1ef98e9cb6c5780aa9addb4460..01b9f812eedad55c21a86b793471e6475fc2418f 100644
+--- a/crates/tauri/src/test/mod.rs
++++ b/crates/tauri/src/test/mod.rs
+@@ -112,6 +112,7 @@ pub fn mock_context<R: Runtime, A: Assets<R>>(assets: A) -> crate::Context<R> {
+       schema: None,
+       product_name: Default::default(),
+       main_binary_name: Default::default(),
++      bins: None,
+       version: Default::default(),
+       identifier: Default::default(),
+       app: AppConfig {

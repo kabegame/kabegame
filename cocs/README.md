@@ -114,7 +114,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览「桌面画布」`WallpaperDesktopCanvas`、`get_wallpaper_target_for_image`、背景层退回预览图，以及 `cef-ipc` 只收主 frame 的纵深防御；
     **图库预览 `file:` iframe**（Phase 6a，`/wpe` HTTP 目录服务随之删除）：主窗口建窗前 `allow_file_documents("main")` 与 `allow_app_local_resources("main")`、预览挂载 / 卸载经 `set_wpe_web_preview` 设 / 清根目录（拒绝壁纸窗口、前端串行调用）、CSP `frame-src … file:`、两种宿主对照表（同一套运行时目录拦截，`localStorage` 同源）；
     **桌面 `file://` 宿主与鼠标转发**：`WindowWallpaperManager::set_wallpaper_path` 按路径判定并导航自己的窗口（网页壁纸时整窗导航到入口 `file://`、切走导航回 `mount()` 时记住的应用页，幂等；入口、根目录与转发线程随 `WallpaperWindow` 对象走、`Drop` 清理）、CEF 补丁 0004 按窗口开文件访问 + `OnBeforeResourceLoad` 按壁纸目录拦截 `file:` 请求，以及 Windows 轮询式鼠标移动 / 左键转发（`input_forward`，`inject_mouse`）；
-    **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（远程 `file:` 来源只得 `wpe-web-capability`）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及接受的全局事件可见性；
+    **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（远程 `file:` 来源只得 `wpe-web-capability`）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及桌面网页壁纸只能监听四个事件（`allow-listen` 作用域，tauri 补丁 0015）、预览代办按白名单登记；
     **图库媒体走 `file://` 与按发起 frame 分档的闸门**（Phase 6b，CEF 补丁 0006）：三个桌面平台的主窗口与壁纸窗口都登记 0005，应用页主 frame 的 `<img>` / `<video>` / CSS 子资源免检，子 frame 导航与 `file:` 文档仍按根目录；前端 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 在桌面产出 `file://`，下载 / 复制兜底直接 `fetch(file:)`、Windows 拖出自 Phase 6d 起改走 0003 真实文件链路（`CF_HDROP`）；插件详情 EJS iframe 改 opaque origin + 内层 CSP；删除桌面本地 HTTP 服务；插件文件改由 Tauri 原始字节命令读取，0006 的私有 CORS 列表与运行时跨源白名单开放 `fetch(file:)`。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
@@ -210,8 +210,15 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## Tauri（`tauri/`）
 
 - [tauri/TAURI_ACL_PERMISSION_SYSTEM.md](tauri/TAURI_ACL_PERMISSION_SYSTEM.md)
-  - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘。
-  - 适用场景：新增 `#[tauri::command]` 后补 `permissions/*.toml` 白名单、新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
+  - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘，以及 tauri 补丁 0014–0017 带来的四项规则：
+    JS 事件按接收方 webview 身份投递（忽略前端 `listen` 传的 `target`，`emit_to(App)` 不再送给 JS，`unlisten` 只作用于调用方 webview）、
+    `core:event:allow-listen` 的事件名作用域（`{ "event": "x" }`，末尾 `*` 前缀匹配，deny 优先）、capability 的 `frames` 维度
+    （`main` 默认 / `sub` / `any`，frame 由 runtime 经请求 extension 上报，CEF 给不出时记 `Unknown`，Android 缺省按主 frame）、
+    特赦 webview（`Builder::acl_exempt_webview`，本应用为 `main` / `wallpaper`，只认本地来源主 frame，显式 deny 与 listen 作用域都跳过，
+    ACL 照常解析以传递插件作用域）；`permissions/main.toml` 已删除，各窗口的权限文件与判定结果表。
+  - 适用场景：新增 `#[tauri::command]`（主窗口只需注册，畅游 / 爬虫 / 网页壁纸要补对应 `permissions/*.toml`）、新增窗口 IPC 权限或
+    事件监听、调整 capability/permission、排查“命令不可用/全部被拒绝”、`listen` 被拒、`emit_to` 定向事件送错或收不到、
+    子 frame 调 IPC 被拒（拒绝文案不带 frame，用主 frame 对照组判断）。
 
 - [tauri/TAURI_CLI_FORK.md](tauri/TAURI_CLI_FORK.md)
   - 主题：fork 的 `cargo-tauri`（上游 tauri monorepo `third/tauri` + `third-patches/tauri` patch series，基线 2.12.4；先 `deno task patch tauri`）。顶层 `bins` 配置（patch 0009）驱动桌面 `tauri build` 的 cargo `--bin` 编译清单（不再 `--bins` 全量编译；未配置回退 get_binaries 打包清单），Windows 下辅助 bin 由 NSIS 原生装到安装根。`TAURI_ANDROID_PACKAGE` 将 Android Java 包（源码目录/生成 Kotlin/JNI）与 identifier（applicationId，按 mode：dev=`app.kabegame.dev` / prod=`app.kabegame`）解耦，auto-launch 改传全限定类名；`TAURI_NO_WEBKIT_DEPS` 跳过 Linux deb/rpm 的 webkit 依赖注入并对依赖去重。含 TauriCliPlugin 接线（PATH 前置 + dev/build 前增量构建）与升级 re-vendor 流程。整个 tauri 栈经 `[patch.crates-io]` 指向 `third/tauri/crates/*`（单一来源，另见 [../third-patches/tauri/README.md](../third-patches/tauri/README.md)）。

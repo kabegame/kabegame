@@ -105,7 +105,7 @@ pub async fn wpe_web_pull_state<R: tauri::Runtime>(
 /// `SecurityOrigin::CanDisplay`，浏览器侧给主 frame 进程 `file` 请求权）。补丁只开门，加载哪些文件
 /// 仍由这里设的根目录裁决，所以必须先设根目录、再交出入口。
 ///
-/// 只给主窗口（`permissions/main.toml`，不进 `wpe-web.toml`）。`main-capability` 也绑定壁纸窗口的应用页，
+/// 只给主窗口：主窗口应用页免 ACL，命令不进 `wpe-web.toml`，网页壁纸页面调不到。壁纸窗口的应用页同样免 ACL，
 /// 所以按 label 拒绝壁纸窗口：那里的根目录由 `WallpaperWindow` 随导航管理。
 #[tauri::command]
 pub async fn set_wpe_web_preview<R: tauri::Runtime>(

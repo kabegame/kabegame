@@ -215,10 +215,12 @@ Kabegame 在桌面上照此做：
     的 frame URL，`file:` frame 的请求把 `Origin` 改写成 frame URL；`cef-ipc` 的来源取值顺序为「`Origin` 头 → frame URL
     → 初始 URL」。两条通道都判成 `Origin::Remote { url: file:///… }`。
   - 对这个来源生效的只有 `capabilities/wpe-web.json` 的 `wpe-web-capability`：`windows: ["wallpaper"]`、
-    `remote.urls: ["file:///*"]`、`local: false`（应用页回到壁纸窗口时仍只受 `main-capability` 约束），权限只有
-    `core:event:allow-listen` / `allow-unlisten` 与 `permissions/wpe-web.toml` 的 `wpe_web_pull_state`、`wallpaper_pong`；不给
-    `core:default`，页面拿不到窗口、路径、应用信息等核心命令。`main-capability` 是 `local: true`，对远程来源不生效，
-    `get_settings` 等应用命令一律被 ACL 拒绝（`Command … not allowed by ACL`）。
+    `remote.urls: ["file:///*"]`、`local: false`（应用页回到壁纸窗口时由特赦与 `main-capability` 管），权限只有
+    带事件名作用域的 `core:event:allow-listen`（`wallpaper-ping` / `setting-change` / `image-changed` / `images-change`）、
+    `allow-unlisten` 与 `permissions/wpe-web.toml` 的 `wpe_web_pull_state`、`wallpaper_pong`；不给 `core:default`，页面拿不到
+    窗口、路径、应用信息等核心命令。`main-capability` 是 `local: true`，壁纸窗口的特赦（`acl_exempt_webview("wallpaper")`）
+    也只认本地来源，对远程 `file:` 都不生效，`get_settings` 等应用命令一律被 ACL 拒绝（`Command … not allowed by ACL`）。
+    `frames` 省略即 `main`：网页壁纸里再嵌的 `file:` iframe 一项权限也没有（见 [ACL 文档](../tauri/TAURI_ACL_PERMISSION_SYSTEM.md)）。
 - 网页壁纸只在窗口模式出现；导航本身不经过 Vue，切换没有过渡动画（WPE 也是直接切换）；壁纸样式、音量、倍速对
   `file://` 页面不生效。
 
@@ -284,9 +286,9 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
   > 无发起文档的 `StartNavigation`，真机上渲染进程被杀（推断为 `VerifyBeginNavigationCommonParams` 判 bad message），
   > 再被 `on_render_process_terminated` 的无条件 `reload()` 放大成整窗刷新循环。该绕行、命名 frame 与 3s 补发已删除
   > （经过见 `.claude/plans/wpe-import/2-web/phase-6a-file-preview.md` 实施记录），不要再从后端导航子 frame。
-- **根目录由预览组件经命令设置，命令返回入口**：`set_wpe_web_preview(imageId | null)`（`commands/wpe_web.rs`，只在
-  `permissions/main.toml`，**不**进 `wpe-web.toml`）。按调用方 webview 的 label 生效，拒绝壁纸窗口（`main-capability`
-  也绑定壁纸窗口的应用页，那里的根目录由 `WallpaperWindow` 随导航管理）；`Some(id)` 要求行是 `x-wpe/web`，目录与入口
+- **根目录由预览组件经命令设置，命令返回入口**：`set_wpe_web_preview(imageId | null)`（`commands/wpe_web.rs`，主窗口应用页
+  免 ACL 直接调用，**不**进 `wpe-web.toml`）。按调用方 webview 的 label 生效，拒绝壁纸窗口（壁纸窗口的应用页同样免 ACL，
+  那里的根目录由 `WallpaperWindow` 随导航管理）；`Some(id)` 要求行是 `x-wpe/web`，目录与入口
   都取 `wallpaper::web_entry`（规范化目录 + 目录内入口，入口一定落在根内，`project.json` 读取放 blocking 线程），先
   `set_file_document_root` 再返回入口的 `file://` 字符串（`Some(id)` → `Some(入口)`，命令本身不导航）；`None` 只清空
   根目录、返回 `null`；非 Windows 直接报错。
@@ -397,8 +399,10 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   `WebviewWindow::clear_js_listeners()`，`WallpaperWindow::show_web` / `show_app` 在 `navigate` 投递成功之后调用（导航失败时
   页面没换，不动监听；新文档要加载、执行脚本才会 listen，晚于清理）。页面自己 `location.reload()` 留下的一组垫片监听不额外
   处理；销毁窗口时 Tauri 自己会清。
-- **接受的取舍**：`core:event:allow-listen` 没有按事件名的作用域，桌面网页壁纸因此能订阅应用的全部全局事件；预览的宿主
-  代办同样不限事件名。这是用户确认过的取舍，也算开放给壁纸的一项能力；可见事件现在还包括默认种类 `wallpaper-ping`，不含 opt-in 的 `wallpaper-pong`。命令层只开拉取状态与 ping 应答两个命令。
+- **可见事件**：桌面网页壁纸只能监听 `wpe-web.json` 作用域里的四个事件（`wallpaper-ping`、`setting-change`、`image-changed`、
+  `images-change`，tauri 补丁 0015），其它事件名 `listen` 被 ACL 拒绝；垫片新增监听要同步改 capability。预览的宿主代办
+  （`wpeWebBridge.ts`）只接受白名单 `setting-change` / `image-changed` / `images-change`——主窗口免 ACL，宿主自己的 listen
+  不受作用域限制，白名单是预览 iframe 唯一的闸门。命令层只开拉取状态与 ping 应答两个命令。
 - **不做**（后续 Phase）：暂停冻结与 `setPaused`、`fps`（Phase 6）；用户改属性的存储与面板、`file` / `directory` 属性
   （Phase 7，保存时发 `metadataId` 补丁，垫片已订阅并重拉）；音频与媒体数据（Phase 8，数据回程沿用 `listen` /
   `useTauriProxy`）；Web 发布版 / Android / macOS / Linux 不渲染网页壁纸。
@@ -473,8 +477,8 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
 - 网页壁纸只收到作者默认值（`applyUserProperties`）与界面语言（`applyGeneralProperties({ language })`）；用户改属性、
   `fps`、`setPaused`、音频与媒体数据尚未实现（注册函数只收下回调）；`file` / `directory` 类型属性不支持（例如 Slideshow
   显示「未选择目录」）。
-- 桌面网页壁纸能订阅应用的全部全局事件（`core:event:allow-listen` 无事件名作用域，已接受的取舍），应用命令只开
-  `wpe_web_pull_state`。
+- 桌面网页壁纸只能监听四个事件（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开 `wpe_web_pull_state` 与
+  `wallpaper_pong`。
 - 桌面 `file://` 页面里跨源 `http(s)` 请求仍受 CORS 约束（WPE 是全局 `--disable-web-security`，Kabegame 不放开）；
   壁纸样式 / 音量 / 倍速对桌面网页壁纸不生效；桌面只转发鼠标移动与左键（Windows），无键盘 / 滚轮 / 右键。
 - 图库预览与桌面壁纸是同一个 `file://` 源，各自的 `localStorage` / `indexedDB` 跨重启稳定，但 Chromium 按顶层站点分区存储，预览（顶层 `localhost:1420`）与桌面（顶层 `file://`）**不互通**（2026-10-29 真机两个方向都读不到对方写的键）（Phase 6a 起；此前预览是随机端口的
@@ -492,7 +496,7 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
 - `src-tauri/kabegame-core/src/crawler/wpe_import.rs`、`plugin/builtin.rs`、`task_scheduler/mod.rs`
 - `src-tauri/kabegame-core/src/media/image_type.rs`、`storage/images.rs`、`storage/organize.rs`
 - `src-tauri/kabegame/src/http_server.rs`（`/file` 对 WPE 行 404）、`commands/wallpaper.rs`（`WallpaperTarget`）、
-  `wallpaper/mod.rs`（`web_entry`，Windows 门控）、`wallpaper/rotator.rs`、`permissions/main.toml`、
+  `wallpaper/mod.rs`（`web_entry`，Windows 门控）、`wallpaper/rotator.rs`、`capabilities/wpe-web.json`、
   `tauri.conf.json.handlebars`（CSP `frame-src … file:`）
 - 图库预览 `file:` iframe：`src-tauri/kabegame/src/startup.rs`（`allow_file_documents("main")` +
   `allow_app_local_resources("main")`）、`commands/wpe_web.rs`（`set_wpe_web_preview` 设根目录并返回入口）、

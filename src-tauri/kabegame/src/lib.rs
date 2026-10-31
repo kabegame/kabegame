@@ -577,6 +577,13 @@ pub(crate) fn configure_app(
     }
 
     builder
+        // 主窗口与壁纸窗口的应用页免 ACL（tauri 补丁 0017）：只认本地来源的主 frame，导航到外部 /
+        // `file:` 页面或请求来自子 frame 时照常按 capability 判定。应用命令因此不再逐条登记权限；
+        // 插件权限仍留在 main-capability，插件命令的作用域靠它们传下去。
+        // 壁纸窗口的 label 即 `wallpaper::manager::window::WALLPAPER_LABEL`，该模块只在 Windows / macOS
+        // 编译，这里写字面量；没有壁纸窗口的平台多登记一个 label 没有影响。
+        .acl_exempt_webview("main")
+        .acl_exempt_webview("wallpaper")
         .setup(|app| {
             if let Err(e) = init(app) {
                 #[cfg(not(feature = "web"))]
@@ -591,7 +598,8 @@ pub(crate) fn configure_app(
             crate::debug_ingest::spawn_cdp_register();
             Ok(())
         })
-        // 维护这些命令还要维护 permissions/main.toml
+        // 主窗口 / 壁纸窗口免 ACL，新增命令只需注册在这里；畅游、爬虫、网页壁纸要调用的命令另需写进
+        // 对应的 permissions/*.toml（见 cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md）
         .invoke_handler(tauri::generate_handler![
             // --- Albums ---
             get_albums,

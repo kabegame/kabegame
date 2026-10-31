@@ -1,6 +1,6 @@
 {
   "identifier": "main-capability",
-  "description": "Main capability for Kabegame (workspace kabegame)",
+  "description": "Main and wallpaper windows. Their local top-level pages are exempt from the ACL (Builder::acl_exempt_webview), so app commands are not listed; the plugin permissions stay to pass plugin command scopes",
   "local": true,
   "windows": ["wallpaper", "main"],
   "permissions": [
@@ -15,7 +15,6 @@
     "clipboard-manager:default",
     "clipboard-manager:allow-write-text",
     "pathes:default",
-    "tracing:allow-log",
-    "main"
+    "tracing:allow-log"
   ]
 }

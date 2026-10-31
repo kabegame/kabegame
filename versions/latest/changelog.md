@@ -35,8 +35,10 @@
 - 修复下载时偶发「UNIQUE constraint failed: images.local_path」：同一帖子多张同名图片并发下载不再互相覆盖、丢图，会依次存成 `name.jpg`、`name(1).jpg`……；下载目录同时是文件夹画册时，新下载的图片也会立刻进入该画册，不再与文件夹同步抢着入库。
 - Windows 桌面版畅游打开 https 网站时，地址同步、一键下载、右键下载图片和页面内提示等功能全部失效的问题。
 - 畅游时（尤其开着开发者工具）右键图片不再叠出两个「下载图片」菜单、要点两次才关闭；页面加载时的地址上报等也不再重复发送。
+- 安全加固：畅游导航栏、桌面网页壁纸等页面只能监听为它们开放的应用事件，发给某个窗口的事件不会再被其它窗口收到；页面里嵌入的子页面（iframe）不再沿用所在页面的应用权限。
 
 ### Internal
+- 新增 tauri 补丁 0014–0017（拉取后须重新应用 tauri 补丁序列）：JS 事件按接收方 webview 身份投递并忽略前端 `listen` 传的 `target`、`unlisten` 只作用于调用方 webview；`core:event:allow-listen` 支持事件名作用域；capability 新增 `frames`（默认只认主 frame，frame 由 CEF runtime 经请求 extension 上报）；新增 `Builder::acl_exempt_webview`，主窗口与壁纸窗口的本地应用页免 ACL，删除约 200 条的 `permissions/main.toml`，新增只给主界面用的命令只需注册进 `generate_handler!`。补丁 0009 顺带补上 `mock_context` 缺的 `bins` 字段，`cargo test -p tauri` 可以编译。
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 0013：Windows 改用原生 `tauri://localhost` / `ipc://localhost`；CEF runtime 删除 `http://<scheme>.localhost` 映射并统一三平台 scheme。拉取后须重新应用 tauri 补丁序列。
 - CEF 补丁 0006 改用每工厂私有 CORS 列表，运行时登记应用 origin 到 `file:` 的跨源白名单；删除桌面 `start_http_server` 并关闭 Tauri asset 协议。

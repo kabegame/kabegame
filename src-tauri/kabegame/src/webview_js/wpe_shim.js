@@ -167,7 +167,8 @@
     })
     .then(pull);
 
-  // 桌面：主 frame 有 Tauri 脚本，直接 invoke / listen；权限只来自 wpe-web-capability
+  // 桌面：主 frame 有 Tauri 脚本，直接 invoke / listen；权限只来自 wpe-web-capability（listen 只放行
+  // wallpaper-ping / setting-change / image-changed / images-change，新增监听要同步改 capability）
   function tauriTransport(internals) {
     if (!internals) return null;
     return {
@@ -179,7 +180,6 @@
           names.map(function (name) {
             return internals.invoke("plugin:event|listen", {
               event: name,
-              target: { kind: "Any" },
               handler: internals.transformCallback(function (event) {
                 onEvent({ name: name, payload: event.payload });
               }),

@@ -1,0 +1,1035 @@
+diff --git a/crates/tauri-cli/src/acl/capability/new.rs b/crates/tauri-cli/src/acl/capability/new.rs
+index 0f83b84137370f31e5ff075454e52f35d7f5bee1..111bd77e7200d2621e962fa65e9839b7923974da 100644
+--- a/crates/tauri-cli/src/acl/capability/new.rs
++++ b/crates/tauri-cli/src/acl/capability/new.rs
+@@ -102,6 +102,7 @@ pub fn command(options: Options) -> Result<()> {
+     local: true,
+     windows,
+     webviews: Vec::new(),
++    frames: Default::default(),
+     permissions,
+     platforms: None,
+   };
+diff --git a/crates/tauri-cli/src/migrate/migrations/v1/config.rs b/crates/tauri-cli/src/migrate/migrations/v1/config.rs
+index df5326a5919edebf80468808cf1745e73cdb4d9e..490498beaa1d0bf480c486c1fce79d90aed0b10c 100644
+--- a/crates/tauri-cli/src/migrate/migrations/v1/config.rs
++++ b/crates/tauri-cli/src/migrate/migrations/v1/config.rs
+@@ -55,6 +55,7 @@ pub fn migrate(tauri_dir: &Path) -> Result<MigratedConfig> {
+         remote: None,
+         windows: vec!["main".into()],
+         webviews: vec![],
++        frames: Default::default(),
+         permissions,
+         platforms: None,
+       })
+diff --git a/crates/tauri-runtime/src/webview.rs b/crates/tauri-runtime/src/webview.rs
+index a6adcfa53a4cbdb4a8ec35118f51f81d7877d662..87a26fd9d905daedc739fc670386e80bd2527604 100644
+--- a/crates/tauri-runtime/src/webview.rs
++++ b/crates/tauri-runtime/src/webview.rs
+@@ -932,6 +932,23 @@ impl WebviewAttributes {
+ /// IPC handler.
+ pub type WebviewIpcHandler<T, R> = Box<dyn Fn(DetachedWebview<T, R>, Request<String>) + Send>;
+ 
++/// The frame an IPC request comes from.
++///
++/// A runtime that knows it puts it into the extensions of the `http::Request` handed to the
++/// `ipc` custom protocol or to the [`WebviewIpcHandler`]. Extensions do not travel with the
++/// request bytes, so a page cannot forge them, unlike the request headers. A request without
++/// it counts as [`Self::Main`]: only runtimes that never accept IPC from subframes may leave it out.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
++pub enum IpcFrame {
++  /// The top-level frame of the webview.
++  #[default]
++  Main,
++  /// A subframe (iframe) of the webview.
++  Sub,
++  /// The runtime cannot tell which frame sent the request (e.g. a service worker sent it).
++  Unknown,
++}
++
+ /// An initialization script
+ #[derive(Debug, Clone)]
+ pub struct InitializationScript {
+diff --git a/crates/tauri-utils/src/acl/capability.rs b/crates/tauri-utils/src/acl/capability.rs
+index 242b961d8ded804b32c077ba5eaf7a3e6f47d143..9ecdf373ddc57b29640d09520d9fce7e51df5dab 100644
+--- a/crates/tauri-utils/src/acl/capability.rs
++++ b/crates/tauri-utils/src/acl/capability.rs
+@@ -172,6 +172,16 @@ pub struct Capability {
+   /// `["sub-webview-one", "sub-webview-two"]`
+   #[serde(default, skip_serializing_if = "Vec::is_empty")]
+   pub webviews: Vec<String>,
++  /// Which frames of the matching webviews the capability applies to. Defaults to `main`.
++  ///
++  /// It applies only when [`Self::local`] / [`Self::remote`], and [`Self::windows`] / [`Self::webviews`]
++  /// match as well. The frame of a request is reported by the runtime, not by the page.
++  ///
++  /// ## Example
++  ///
++  /// `"sub"`
++  #[serde(default, skip_serializing_if = "CapabilityFrames::is_default")]
++  pub frames: CapabilityFrames,
+   /// List of permissions attached to this capability.
+   ///
+   /// Must include the plugin name as prefix in the form of `${plugin-name}:${permission-name}`.
+@@ -234,6 +244,28 @@ fn default_capability_local() -> bool {
+   true
+ }
+ 
++/// The frames of a webview a [`Capability`] applies to.
++#[derive(
++  Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
++)]
++#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
++#[serde(rename_all = "lowercase")]
++pub enum CapabilityFrames {
++  /// Only the top-level frame (default).
++  #[default]
++  Main,
++  /// Only subframes (iframes).
++  Sub,
++  /// The top-level frame, subframes, and requests the runtime cannot attribute to a frame.
++  Any,
++}
++
++impl CapabilityFrames {
++  fn is_default(&self) -> bool {
++    *self == Self::default()
++  }
++}
++
+ /// Configuration for remote URLs that are associated with the capability.
+ #[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq, PartialOrd, Ord, Hash)]
+ #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+@@ -343,6 +375,18 @@ mod build {
+     }
+   }
+ 
++  impl ToTokens for CapabilityFrames {
++    fn to_tokens(&self, tokens: &mut TokenStream) {
++      let prefix = quote! { ::tauri::utils::acl::capability::CapabilityFrames };
++
++      tokens.append_all(match self {
++        Self::Main => quote! { #prefix::Main },
++        Self::Sub => quote! { #prefix::Sub },
++        Self::Any => quote! { #prefix::Any },
++      });
++    }
++  }
++
+   impl ToTokens for PermissionEntry {
+     fn to_tokens(&self, tokens: &mut TokenStream) {
+       let prefix = quote! { ::tauri::utils::acl::capability::PermissionEntry };
+@@ -369,6 +413,7 @@ mod build {
+       let local = self.local;
+       let windows = vec_lit(&self.windows, str_lit);
+       let webviews = vec_lit(&self.webviews, str_lit);
++      let frames = self.frames;
+       let permissions = vec_lit(&self.permissions, identity);
+       let platforms = opt_vec_lit(self.platforms.as_ref(), identity);
+ 
+@@ -381,6 +426,7 @@ mod build {
+         local,
+         windows,
+         webviews,
++        frames,
+         permissions,
+         platforms
+       );
+@@ -392,7 +438,7 @@ mod build {
+ mod tests {
+   use crate::acl::{Identifier, Scopes};
+ 
+-  use super::{Capability, CapabilityFile, PermissionEntry};
++  use super::{Capability, CapabilityFile, CapabilityFrames, PermissionEntry};
+ 
+   #[test]
+   fn permission_entry_de() {
+@@ -429,6 +475,7 @@ mod tests {
+       local: true,
+       windows: vec![],
+       webviews: vec![],
++      frames: Default::default(),
+       permissions: vec![],
+       platforms: None,
+     };
+@@ -454,4 +501,41 @@ mod tests {
+       }
+     );
+   }
++
++  #[test]
++  fn capability_frames_de() {
++    let parse = |extra: &str| {
++      serde_json::from_str::<Capability>(&format!(
++        r#"{{ "identifier": "test", "windows": ["main"], "permissions": [] {extra} }}"#
++      ))
++    };
++
++    // omitted means main, and main is not written back
++    let capability = parse("").unwrap();
++    assert_eq!(capability.frames, CapabilityFrames::Main);
++    assert!(
++      !serde_json::to_string(&capability)
++        .unwrap()
++        .contains("frames")
++    );
++
++    assert_eq!(
++      parse(r#", "frames": "main""#).unwrap().frames,
++      CapabilityFrames::Main
++    );
++    assert_eq!(
++      parse(r#", "frames": "sub""#).unwrap().frames,
++      CapabilityFrames::Sub
++    );
++    let any = parse(r#", "frames": "any""#).unwrap();
++    assert_eq!(any.frames, CapabilityFrames::Any);
++    assert!(
++      serde_json::to_string(&any)
++        .unwrap()
++        .contains(r#""frames":"any""#)
++    );
++
++    assert!(parse(r#", "frames": "all""#).is_err());
++    assert!(parse(r#", "frames": "Sub""#).is_err());
++  }
+ }
+diff --git a/crates/tauri-utils/src/acl/resolved.rs b/crates/tauri-utils/src/acl/resolved.rs
+index 124d242dd5442ef13be3ad1c2871e0b07a3f86d0..44651747aafe1055459ae557bff077943c5e6f7d 100644
+--- a/crates/tauri-utils/src/acl/resolved.rs
++++ b/crates/tauri-utils/src/acl/resolved.rs
+@@ -11,7 +11,7 @@ use crate::platform::Target;
+ use super::{
+   APP_ACL_KEY, Commands, Error, ExecutionContext, Identifier, Permission, PermissionSet, Scopes,
+   Value,
+-  capability::{Capability, PermissionEntry},
++  capability::{Capability, CapabilityFrames, PermissionEntry},
+   has_app_manifest,
+   manifest::Manifest,
+ };
+@@ -62,6 +62,8 @@ pub struct ResolvedCommand {
+   pub windows: Vec<glob::Pattern>,
+   /// The list of webview label patterns that was resolved for this command.
+   pub webviews: Vec<glob::Pattern>,
++  /// The frames of the matching webviews this command is resolved for.
++  pub frames: CapabilityFrames,
+   /// The reference of the scope that is associated with this command. See [`Resolved#structfield.command_scopes`].
+   pub scope_id: Option<ScopeKey>,
+ }
+@@ -75,6 +77,7 @@ impl ResolvedCommand {
+     #[cfg_attr(not(debug_assertions), allow(unused))] referenced_by: ResolvedCommandReference,
+     windows: Vec<glob::Pattern>,
+     webviews: Vec<glob::Pattern>,
++    frames: CapabilityFrames,
+     scope_id: Option<ScopeKey>,
+   ) -> Self {
+     Self {
+@@ -83,6 +86,7 @@ impl ResolvedCommand {
+       referenced_by,
+       windows,
+       webviews,
++      frames,
+       scope_id,
+     }
+   }
+@@ -94,6 +98,7 @@ impl fmt::Debug for ResolvedCommand {
+       .field("context", &self.context)
+       .field("windows", &self.windows)
+       .field("webviews", &self.webviews)
++      .field("frames", &self.frames)
+       .field("scope_id", &self.scope_id)
+       .finish()
+   }
+@@ -302,6 +307,7 @@ fn resolve_command(
+       },
+       windows: parse_glob_patterns(capability.windows.clone())?,
+       webviews: parse_glob_patterns(capability.webviews.clone())?,
++      frames: capability.frames,
+       scope_id,
+     });
+   }
+@@ -538,6 +544,7 @@ mod build {
+         let w = window.as_str();
+         quote!(#w.parse().unwrap())
+       });
++      let frames = &self.frames;
+       let scope_id = opt_lit(self.scope_id.as_ref());
+ 
+       tokens.append_all(quote! {
+@@ -546,6 +553,7 @@ mod build {
+           #referenced_by,
+           #windows,
+           #webviews,
++          #frames,
+           #scope_id
+         )
+       })
+@@ -785,4 +793,64 @@ mod tests {
+       Some(11)
+     );
+   }
++
++  #[test]
++  fn resolve_carries_capability_frames() {
++    use super::{Capability, CapabilityFrames, Resolved, Target};
++    use std::collections::BTreeMap;
++
++    let acl: BTreeMap<String, Manifest> = [(
++      "http".to_string(),
++      Manifest {
++        permissions: [(
++          "allow-fetch".to_string(),
++          serde_json::from_value::<Permission>(serde_json::json!({
++            "identifier": "allow-fetch",
++            "commands": { "allow": ["fetch"], "deny": ["fetch-cancel"] }
++          }))
++          .unwrap(),
++        )]
++        .into(),
++        ..Default::default()
++      },
++    )]
++    .into();
++    let capability = |identifier: &str, frames: Option<&str>| {
++      let mut value = serde_json::json!({
++        "identifier": identifier,
++        "windows": ["main"],
++        "permissions": ["http:allow-fetch"]
++      });
++      if let Some(frames) = frames {
++        value["frames"] = frames.into();
++      }
++      (
++        identifier.to_string(),
++        serde_json::from_value::<Capability>(value).unwrap(),
++      )
++    };
++    let capabilities: BTreeMap<String, Capability> = [
++      capability("a-default", None),
++      capability("b-sub", Some("sub")),
++      capability("c-any", Some("any")),
++    ]
++    .into();
++
++    let resolved = Resolved::resolve(&acl, capabilities, Target::current()).unwrap();
++    let frames =
++      |cmds: &[super::ResolvedCommand]| cmds.iter().map(|c| c.frames).collect::<Vec<_>>();
++    let expected = vec![
++      CapabilityFrames::Main,
++      CapabilityFrames::Sub,
++      CapabilityFrames::Any,
++    ];
++    assert_eq!(
++      frames(&resolved.allowed_commands["plugin:http|fetch"]),
++      expected
++    );
++    assert_eq!(
++      frames(&resolved.denied_commands["plugin:http|fetch-cancel"]),
++      expected
++    );
++  }
+ }
+diff --git a/crates/tauri/src/event/plugin.rs b/crates/tauri/src/event/plugin.rs
+index 1135ac237d952d6c2a9e706b2682f38429aa718f..8b77d3d2f4a01a5ef81e385b7cfa506a526ddde2 100644
+--- a/crates/tauri/src/event/plugin.rs
++++ b/crates/tauri/src/event/plugin.rs
+@@ -113,7 +113,7 @@ mod tests {
+     WebviewWindow, WebviewWindowBuilder,
+     ipc::{CallbackFn, InvokeBody},
+     test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets},
+-    webview::InvokeRequest,
++    webview::{InvokeRequest, IpcFrame},
+   };
+ 
+   const LISTEN: &str = "plugin:event|listen";
+@@ -165,6 +165,14 @@ mod tests {
+   }
+ 
+   fn listen(webview: &WebviewWindow<MockRuntime>, event: &str) -> Result<(), String> {
++    listen_from(webview, event, IpcFrame::Main)
++  }
++
++  fn listen_from(
++    webview: &WebviewWindow<MockRuntime>,
++    event: &str,
++    frame: IpcFrame,
++  ) -> Result<(), String> {
+     get_ipc_response(
+       webview,
+       InvokeRequest {
+@@ -175,6 +183,7 @@ mod tests {
+         body: InvokeBody::Json(json!({ "event": event, "handler": 7 })),
+         headers: Default::default(),
+         invoke_key: INVOKE_KEY.to_string(),
++        frame,
+       },
+     )
+     .map(|_| ())
+@@ -229,4 +238,15 @@ mod tests {
+     assert!(listen(&webview, "setting-change").is_ok());
+     assert!(listen(&webview, "images-added").is_err());
+   }
++
++  #[test]
++  fn grants_for_the_main_frame_do_not_reach_subframes() {
++    // the grant comes from a capability without `frames`, i.e. `main`
++    let webview = app_with_listen_grants(vec![None]);
++    assert!(listen_from(&webview, "images-added", IpcFrame::Main).is_ok());
++
++    let denied = listen_from(&webview, "images-added", IpcFrame::Sub).unwrap_err();
++    assert!(denied.contains("from sub frame"), "{denied}");
++    assert!(listen_from(&webview, "images-added", IpcFrame::Unknown).is_err());
++  }
+ }
+diff --git a/crates/tauri/src/ipc/authority.rs b/crates/tauri/src/ipc/authority.rs
+index f51575a473554ae3e8c012c77d05df0403d0c811..3ada91a97c02107f7fa7dbe0b30c09e97826af88 100644
+--- a/crates/tauri/src/ipc/authority.rs
++++ b/crates/tauri/src/ipc/authority.rs
+@@ -14,13 +14,14 @@ use tauri_utils::acl::capability::CapabilityFile;
+ use tauri_utils::acl::manifest::Manifest;
+ use tauri_utils::acl::{
+   APP_ACL_KEY, ExecutionContext, Value,
++  capability::CapabilityFrames,
+   resolved::{Resolved, ResolvedCommand, ResolvedScope, ScopeKey},
+ };
+ 
+ use url::Url;
+ 
+ use crate::{AppHandle, Manager, StateManager, Webview};
+-use crate::{Runtime, ipc::InvokeError, sealed::ManagerBase};
++use crate::{Runtime, ipc::InvokeError, sealed::ManagerBase, webview::IpcFrame};
+ 
+ use super::{CommandArg, CommandItem};
+ 
+@@ -66,6 +67,23 @@ impl Origin {
+   }
+ }
+ 
++/// Whether a command resolved for `allowed` frames applies to a request from `frame`.
++fn frames_match(allowed: CapabilityFrames, frame: IpcFrame) -> bool {
++  match allowed {
++    CapabilityFrames::Any => true,
++    CapabilityFrames::Main => frame == IpcFrame::Main,
++    CapabilityFrames::Sub => frame == IpcFrame::Sub,
++  }
++}
++
++fn frame_name(frame: IpcFrame) -> &'static str {
++  match frame {
++    IpcFrame::Main => "main",
++    IpcFrame::Sub => "sub",
++    IpcFrame::Unknown => "unknown",
++  }
++}
++
+ /// This is used internally by [`crate::generate_handler!`] for constructing [`RuntimeAuthority`]
+ /// to only include the raw ACL when it's needed
+ ///
+@@ -226,6 +244,7 @@ impl RuntimeAuthority {
+     window: &str,
+     webview: &str,
+     origin: &Origin,
++    frame: IpcFrame,
+   ) -> String {
+     fn print_references(resolved: &[ResolvedCommand]) -> String {
+       resolved
+@@ -271,6 +290,12 @@ impl RuntimeAuthority {
+             s.push_str(&format!("webviews: {webviews}, "));
+           }
+ 
++          match cmd.frames {
++            CapabilityFrames::Main => {}
++            CapabilityFrames::Sub => s.push_str("frames: sub, "),
++            CapabilityFrames::Any => s.push_str("frames: any, "),
++          }
++
+           match &cmd.context {
+             ExecutionContext::Local => s.push_str("URL: local"),
+             ExecutionContext::Remote { url } => s.push_str(&format!("URL: {}", url.as_str())),
+@@ -340,7 +365,7 @@ impl RuntimeAuthority {
+       if let Some(resolved) = self.allowed_commands.get(&command) {
+         let resolved_matching_origin = resolved
+           .iter()
+-          .filter(|cmd| origin.matches(&cmd.context))
++          .filter(|cmd| origin.matches(&cmd.context) && frames_match(cmd.frames, frame))
+           .collect::<Vec<&ResolvedCommand>>();
+         if resolved_matching_origin
+           .iter()
+@@ -352,11 +377,12 @@ impl RuntimeAuthority {
+           "allowed".to_string()
+         } else {
+           format!(
+-            "{command_pretty_name} not allowed on window \"{window}\", webview \"{webview}\", URL: {}\n\n{}\n\nreferenced by: {}",
++            "{command_pretty_name} not allowed on window \"{window}\", webview \"{webview}\", URL: {}, from {} frame\n\n{}\n\nreferenced by: {}",
+             match origin {
+               Origin::Local => "local",
+               Origin::Remote { url } => url.as_str(),
+             },
++            frame_name(frame),
+             print_allowed_on(resolved),
+             print_references(resolved)
+           )
+@@ -457,14 +483,18 @@ impl RuntimeAuthority {
+ 
+   /// Checks if the given IPC execution is allowed and returns the [`ResolvedCommand`] if it is.
+   ///
++  /// A command is allowed when a capability that allows it matches the origin, the frame and the
++  /// window or webview label.
++  ///
+   /// A command is denied when a capability that denies it matches the given origin
+-  /// (execution context), window and webview labels are not taken into account for denial.
++  /// (execution context); window and webview labels and the frame are not taken into account for denial.
+   pub fn resolve_access(
+     &self,
+     command: &str,
+     window: &str,
+     webview: &str,
+     origin: &Origin,
++    frame: IpcFrame,
+   ) -> Option<Vec<ResolvedCommand>> {
+     if self.is_denied(command, origin) {
+       None
+@@ -474,6 +504,7 @@ impl RuntimeAuthority {
+           .iter()
+           .filter(|cmd| {
+             origin.matches(&cmd.context)
++              && frames_match(cmd.frames, frame)
+               && (cmd.webviews.iter().any(|w| w.matches(webview))
+                 || cmd.windows.iter().any(|w| w.matches(window)))
+           })
+@@ -844,7 +875,7 @@ mod tests {
+     resolved::{Resolved, ResolvedCommand},
+   };
+ 
+-  use crate::ipc::Origin;
++  use crate::{ipc::Origin, webview::IpcFrame};
+ 
+   use super::RuntimeAuthority;
+ 
+@@ -875,7 +906,8 @@ mod tests {
+         command,
+         &window.replace('*', "something"),
+         webview,
+-        &Origin::Local
++        &Origin::Local,
++        IpcFrame::Main
+       ),
+       Some(resolved_cmd)
+     );
+@@ -909,7 +941,8 @@ mod tests {
+         command,
+         window,
+         &webview.replace('*', "something"),
+-        &Origin::Local
++        &Origin::Local,
++        IpcFrame::Main
+       ),
+       Some(resolved_cmd)
+     );
+@@ -948,7 +981,8 @@ mod tests {
+         webview,
+         &Origin::Remote {
+           url: url.parse().unwrap()
+-        }
++        },
++        IpcFrame::Main
+       ),
+       Some(resolved_cmd)
+     );
+@@ -987,7 +1021,8 @@ mod tests {
+         webview,
+         &Origin::Remote {
+           url: url.replace('*', "studio").parse().unwrap()
+-        }
++        },
++        IpcFrame::Main
+       ),
+       Some(resolved_cmd)
+     );
+@@ -1021,7 +1056,8 @@ mod tests {
+           webview,
+           &Origin::Remote {
+             url: "https://tauri.app".parse().unwrap()
+-          }
++          },
++          IpcFrame::Main
+         )
+         .is_none()
+     );
+@@ -1063,7 +1099,7 @@ mod tests {
+ 
+     assert!(
+       authority
+-        .resolve_access(command, window, webview, &Origin::Local)
++        .resolve_access(command, window, webview, &Origin::Local, IpcFrame::Main)
+         .is_none()
+     );
+   }
+@@ -1128,14 +1164,15 @@ mod tests {
+           webview,
+           &Origin::Remote {
+             url: url.parse().unwrap()
+-          }
++          },
++          IpcFrame::Main
+         )
+         .is_none()
+     );
+ 
+     // the local app must not be affected by a deny entry of a remote capability
+     let resolved = authority
+-      .resolve_access(command, window, webview, &Origin::Local)
++      .resolve_access(command, window, webview, &Origin::Local, IpcFrame::Main)
+       .expect("local origin must not be denied by a remote capability");
+     assert_eq!(resolved.len(), 1);
+     assert_eq!(resolved[0].context, ExecutionContext::Local);
+@@ -1198,6 +1235,7 @@ mod tests {
+         &Origin::Remote {
+           url: url.parse().unwrap(),
+         },
++        IpcFrame::Main,
+       )
+       .expect("remote origin must not be denied by a local capability");
+     assert_eq!(resolved.len(), 1);
+@@ -1211,7 +1249,7 @@ mod tests {
+     // the local app is denied even though it has an allow entry
+     assert!(
+       authority
+-        .resolve_access(command, window, webview, &Origin::Local)
++        .resolve_access(command, window, webview, &Origin::Local, IpcFrame::Main)
+         .is_none()
+     );
+   }
+@@ -1295,7 +1333,14 @@ mod tests {
+ 
+     // only the capability denying the local context is referenced
+     assert_eq!(
+-      authority.resolve_access_message(plugin_name, command_name, window, webview, &Origin::Local),
++      authority.resolve_access_message(
++        plugin_name,
++        command_name,
++        window,
++        webview,
++        &Origin::Local,
++        IpcFrame::Main
++      ),
+       "myplugin.my-command explicitly denied on origin local\n\nreferenced by: capability: localcap, permission: deny-command"
+     );
+ 
+@@ -1308,7 +1353,8 @@ mod tests {
+         webview,
+         &Origin::Remote {
+           url: remote_url.parse().unwrap()
+-        }
++        },
++        IpcFrame::Main
+       ),
+       "myplugin.my-command explicitly denied on origin remote: http://localhost:8080/\n\nreferenced by: capability: remotecap, permission: deny-command"
+     );
+@@ -1322,6 +1368,7 @@ mod tests {
+       &Origin::Remote {
+         url: "http://localhost:123".parse().unwrap(),
+       },
++      IpcFrame::Main,
+     );
+     assert!(
+       !message.contains("explicitly denied"),
+@@ -1412,7 +1459,8 @@ mod tests {
+         command_allowed_on_window,
+         window,
+         webview,
+-        &Origin::Local
++        &Origin::Local,
++        IpcFrame::Main
+       ),
+       "unknown-plugin.my-command-window not allowed. Plugin not found"
+     );
+@@ -1424,7 +1472,8 @@ mod tests {
+         "unknown-command",
+         window,
+         webview,
+-        &Origin::Local
++        &Origin::Local,
++        IpcFrame::Main
+       ),
+       "myplugin.unknown-command not allowed. Command not found"
+     );
+@@ -1436,9 +1485,10 @@ mod tests {
+         command_allowed_on_window,
+         "other-window",
+         "any-webview",
+-        &Origin::Local
++        &Origin::Local,
++        IpcFrame::Main
+       ),
+-      "myplugin.my-command-window not allowed on window \"other-window\", webview \"any-webview\", URL: local\n\nallowed on: [windows: \"main-*\", URL: local]\n\nreferenced by: capability: maincap, permission: allow-command"
++      "myplugin.my-command-window not allowed on window \"other-window\", webview \"any-webview\", URL: local, from main frame\n\nallowed on: [windows: \"main-*\", URL: local]\n\nreferenced by: capability: maincap, permission: allow-command"
+     );
+ 
+     // window matches, but not origin
+@@ -1450,9 +1500,10 @@ mod tests {
+         "any-webview",
+         &Origin::Remote {
+           url: "http://localhst".parse().unwrap()
+-        }
++        },
++        IpcFrame::Main
+       ),
+-      "myplugin.my-command-window not allowed on window \"main-*\", webview \"any-webview\", URL: http://localhst/\n\nallowed on: [windows: \"main-*\", URL: local]\n\nreferenced by: capability: maincap, permission: allow-command"
++      "myplugin.my-command-window not allowed on window \"main-*\", webview \"any-webview\", URL: http://localhst/, from main frame\n\nallowed on: [windows: \"main-*\", URL: local]\n\nreferenced by: capability: maincap, permission: allow-command"
+     );
+ 
+     // window/webview do not match
+@@ -1462,9 +1513,10 @@ mod tests {
+         command_allowed_on_webview_window,
+         "other-window",
+         "other-webview",
+-        &Origin::Local
++        &Origin::Local,
++        IpcFrame::Main
+       ),
+-      "myplugin.my-command-webview-window not allowed on window \"other-window\", webview \"other-webview\", URL: local\n\nallowed on: [windows: \"main-*\", webviews: \"webview-*\", URL: local], [windows: \"main-*\", webviews: \"webview-*\", URL: http://localhost:8080]\n\nreferenced by: capability: maincap, permission: allow-command || capability: maincap, permission: allow-command"
++      "myplugin.my-command-webview-window not allowed on window \"other-window\", webview \"other-webview\", URL: local, from main frame\n\nallowed on: [windows: \"main-*\", webviews: \"webview-*\", URL: local], [windows: \"main-*\", webviews: \"webview-*\", URL: http://localhost:8080]\n\nreferenced by: capability: maincap, permission: allow-command || capability: maincap, permission: allow-command"
+     );
+ 
+     // window/webview matches, but not origin
+@@ -1476,9 +1528,10 @@ mod tests {
+         webview,
+         &Origin::Remote {
+           url: "http://localhost:123".parse().unwrap()
+-        }
++        },
++        IpcFrame::Main
+       ),
+-      "myplugin.my-command-webview-window not allowed on window \"main-*\", webview \"webview-*\", URL: http://localhost:123/\n\nallowed on: [windows: \"main-*\", webviews: \"webview-*\", URL: local], [windows: \"main-*\", webviews: \"webview-*\", URL: http://localhost:8080]\n\nreferenced by: capability: maincap, permission: allow-command || capability: maincap, permission: allow-command"
++      "myplugin.my-command-webview-window not allowed on window \"main-*\", webview \"webview-*\", URL: http://localhost:123/, from main frame\n\nallowed on: [windows: \"main-*\", webviews: \"webview-*\", URL: local], [windows: \"main-*\", webviews: \"webview-*\", URL: http://localhost:8080]\n\nreferenced by: capability: maincap, permission: allow-command || capability: maincap, permission: allow-command"
+     );
+   }
+ 
+@@ -1614,4 +1667,118 @@ mod tests {
+     );
+     assert_eq!(scope_ids(&authority, "plugin:http|fetch"), [2].into());
+   }
++
++  #[test]
++  fn frames_match_table() {
++    use super::frames_match;
++    use tauri_utils::acl::capability::CapabilityFrames;
++
++    let table = [
++      (CapabilityFrames::Main, IpcFrame::Main, true),
++      (CapabilityFrames::Main, IpcFrame::Sub, false),
++      (CapabilityFrames::Main, IpcFrame::Unknown, false),
++      (CapabilityFrames::Sub, IpcFrame::Main, false),
++      (CapabilityFrames::Sub, IpcFrame::Sub, true),
++      (CapabilityFrames::Sub, IpcFrame::Unknown, false),
++      (CapabilityFrames::Any, IpcFrame::Main, true),
++      (CapabilityFrames::Any, IpcFrame::Sub, true),
++      (CapabilityFrames::Any, IpcFrame::Unknown, true),
++    ];
++    for (allowed, frame, expected) in table {
++      assert_eq!(
++        frames_match(allowed, frame),
++        expected,
++        "{allowed:?} vs {frame:?}"
++      );
++    }
++  }
++
++  #[test]
++  fn resolve_access_filters_by_frame() {
++    use tauri_utils::acl::capability::CapabilityFrames;
++
++    let command = "my-command";
++    let resolved = |frames| ResolvedCommand {
++      windows: vec![Pattern::new("main").unwrap()],
++      frames,
++      ..Default::default()
++    };
++    let authority_for = |frames| {
++      RuntimeAuthority::new(
++        Default::default(),
++        Resolved {
++          allowed_commands: [(command.to_string(), vec![resolved(frames)])]
++            .into_iter()
++            .collect(),
++          ..Default::default()
++        },
++      )
++    };
++    let access = |authority: &RuntimeAuthority, frame| {
++      authority
++        .resolve_access(command, "main", "main", &Origin::Local, frame)
++        .is_some()
++    };
++
++    // the default capability only applies to the main frame
++    let main = authority_for(CapabilityFrames::default());
++    assert!(access(&main, IpcFrame::Main));
++    assert!(!access(&main, IpcFrame::Sub));
++    assert!(!access(&main, IpcFrame::Unknown));
++
++    let sub = authority_for(CapabilityFrames::Sub);
++    assert!(!access(&sub, IpcFrame::Main));
++    assert!(access(&sub, IpcFrame::Sub));
++    assert!(!access(&sub, IpcFrame::Unknown));
++
++    let any = authority_for(CapabilityFrames::Any);
++    assert!(access(&any, IpcFrame::Main));
++    assert!(access(&any, IpcFrame::Sub));
++    assert!(access(&any, IpcFrame::Unknown));
++
++    // the message names the frame of the rejected request and the frames of the grants
++    let message = sub.resolve_access_message(
++      tauri_utils::acl::APP_ACL_KEY,
++      command,
++      "main",
++      "main",
++      &Origin::Local,
++      IpcFrame::Main,
++    );
++    assert!(message.contains("from main frame"), "{message}");
++    assert!(message.contains("frames: sub"), "{message}");
++  }
++
++  #[test]
++  fn deny_applies_to_every_frame() {
++    use tauri_utils::acl::capability::CapabilityFrames;
++
++    let command = "my-command";
++    let resolved = |frames| ResolvedCommand {
++      windows: vec![Pattern::new("main").unwrap()],
++      frames,
++      ..Default::default()
++    };
++    let authority = RuntimeAuthority::new(
++      Default::default(),
++      Resolved {
++        allowed_commands: [(command.to_string(), vec![resolved(CapabilityFrames::Any)])]
++          .into_iter()
++          .collect(),
++        // denied by a capability that only applies to subframes
++        denied_commands: [(command.to_string(), vec![resolved(CapabilityFrames::Sub)])]
++          .into_iter()
++          .collect(),
++        ..Default::default()
++      },
++    );
++    for frame in [IpcFrame::Main, IpcFrame::Sub, IpcFrame::Unknown] {
++      assert!(
++        authority
++          .resolve_access(command, "main", "main", &Origin::Local, frame)
++          .is_none(),
++        "{frame:?}"
++      );
++    }
++  }
+ }
+diff --git a/crates/tauri/src/ipc/capability_builder.rs b/crates/tauri/src/ipc/capability_builder.rs
+index 53dfcc45b5464462de287644b24dfe843568c5d5..12ae410f63cf0a5bde10566265fadee6b7889ed0 100644
+--- a/crates/tauri/src/ipc/capability_builder.rs
++++ b/crates/tauri/src/ipc/capability_builder.rs
+@@ -6,7 +6,7 @@ use serde::Serialize;
+ use tauri_utils::{
+   acl::{
+     Scopes,
+-    capability::{Capability, CapabilityFile, PermissionEntry},
++    capability::{Capability, CapabilityFile, CapabilityFrames, PermissionEntry},
+   },
+   platform::Target,
+ };
+@@ -36,6 +36,7 @@ impl CapabilityBuilder {
+       local: true,
+       windows: Vec::new(),
+       webviews: Vec::new(),
++      frames: CapabilityFrames::default(),
+       permissions: Vec::new(),
+       platforms: None,
+     })
+@@ -85,6 +86,12 @@ impl CapabilityBuilder {
+     self
+   }
+ 
++  /// Which frames of the linked webviews this capability applies to. Defaults to [`CapabilityFrames::Main`].
++  pub fn frames(mut self, frames: CapabilityFrames) -> Self {
++    self.0.frames = frames;
++    self
++  }
++
+   /// Add a new permission to this capability.
+   pub fn permission(mut self, permission: impl Into<String>) -> Self {
+     let permission = permission.into();
+diff --git a/crates/tauri/src/ipc/protocol.rs b/crates/tauri/src/ipc/protocol.rs
+index fe8d9a91b237cf2037d751d2b43831ebce354937..4cfab7f7ae905c03ca94d49b1239aa3910db56e8 100644
+--- a/crates/tauri/src/ipc/protocol.rs
++++ b/crates/tauri/src/ipc/protocol.rs
+@@ -8,7 +8,7 @@ use crate::{
+   Runtime,
+   ipc::InvokeResponseBody,
+   manager::AppManager,
+-  webview::{InvokeRequest, UriSchemeProtocolHandler},
++  webview::{InvokeRequest, IpcFrame, UriSchemeProtocolHandler},
+ };
+ use http::{
+   HeaderValue, Method, Request, StatusCode,
+@@ -306,6 +306,7 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+         body: message.payload.into(),
+         headers: options.headers.0,
+         invoke_key: message.invoke_key,
++        frame: request_frame(request.extensions()),
+       };
+ 
+       #[cfg(feature = "tracing")]
+@@ -544,11 +545,18 @@ fn parse_invoke_request<R: Runtime>(
+     body,
+     headers: parts.headers,
+     invoke_key,
++    frame: request_frame(&parts.extensions),
+   };
+ 
+   Ok(payload)
+ }
+ 
++/// The frame the runtime reported in the request extensions; requests without it count as the
++/// main frame (see [`IpcFrame`]).
++fn request_frame(extensions: &http::Extensions) -> IpcFrame {
++  extensions.get::<IpcFrame>().copied().unwrap_or_default()
++}
++
+ #[cfg(test)]
+ mod tests {
+   use std::str::FromStr;
+@@ -622,6 +630,8 @@ mod tests {
+     assert_eq!(invoke_request.url, url.parse().unwrap());
+     assert_eq!(invoke_request.headers, headers);
+     assert_eq!(invoke_request.body, InvokeBody::Raw(body));
++    // no frame reported by the runtime: main frame
++    assert_eq!(invoke_request.frame, IpcFrame::Main);
+ 
+     let body = json!({
+       "key": 1,
+@@ -636,11 +646,24 @@ mod tests {
+     let mut request = Request::builder().uri(format!("ipc://localhost/{cmd}"));
+     *request.headers_mut().unwrap() = headers.clone();
+ 
+-    let request = request.body(serde_json::to_vec(&body).unwrap()).unwrap();
++    let mut request = request.body(serde_json::to_vec(&body).unwrap()).unwrap();
++    request.extensions_mut().insert(IpcFrame::Sub);
+     let invoke_request = super::parse_invoke_request(&manager, request).unwrap();
+ 
+     assert_eq!(invoke_request.headers, headers);
+     assert_eq!(invoke_request.body, InvokeBody::Json(body));
++    // the frame comes from the request extensions, never from a header
++    assert_eq!(invoke_request.frame, IpcFrame::Sub);
++  }
++
++  #[test]
++  fn request_frame_reads_extensions() {
++    let mut extensions = http::Extensions::new();
++    assert_eq!(super::request_frame(&extensions), IpcFrame::Main);
++    extensions.insert(IpcFrame::Unknown);
++    assert_eq!(super::request_frame(&extensions), IpcFrame::Unknown);
++    extensions.insert(IpcFrame::Sub);
++    assert_eq!(super::request_frame(&extensions), IpcFrame::Sub);
+   }
+ 
+   #[test]
+diff --git a/crates/tauri/src/test/mod.rs b/crates/tauri/src/test/mod.rs
+index 000734d0f24949797e4be1c457114247ad06f4df..027063432df0b39fa89b3fac5c09b2c8721e81ed 100644
+--- a/crates/tauri/src/test/mod.rs
++++ b/crates/tauri/src/test/mod.rs
+@@ -44,6 +44,7 @@
+ //!             body: tauri::ipc::InvokeBody::default(),
+ //!             headers: Default::default(),
+ //!             invoke_key: tauri::test::INVOKE_KEY.to_string(),
++//!             frame: Default::default(),
+ //!         },
+ //!     ).map(|b| b.deserialize::<String>().unwrap());
+ //! }
+@@ -226,6 +227,7 @@ pub fn mock_app() -> App<MockRuntime> {
+ ///             body: tauri::ipc::InvokeBody::default(),
+ ///             headers: Default::default(),
+ ///             invoke_key: tauri::test::INVOKE_KEY.to_string(),
++///             frame: Default::default(),
+ ///         },
+ ///       Ok("pong")
+ ///     );
+@@ -289,6 +291,7 @@ pub fn assert_ipc_response<
+ ///             body: tauri::ipc::InvokeBody::default(),
+ ///             headers: Default::default(),
+ ///             invoke_key: tauri::test::INVOKE_KEY.to_string(),
++///             frame: Default::default(),
+ ///         },
+ ///     );
+ ///     assert!(res.is_ok());
+diff --git a/crates/tauri/src/webview/mod.rs b/crates/tauri/src/webview/mod.rs
+index 73a3fea54a2590602a7e6c406e08646a99b426b0..9e1e4bc2afed4f6d32afe32a2bb99679be9e1c4e 100644
+--- a/crates/tauri/src/webview/mod.rs
++++ b/crates/tauri/src/webview/mod.rs
+@@ -19,7 +19,7 @@ use http::HeaderMap;
+ use serde::Serialize;
+ use tauri_macros::default_runtime;
+ pub use tauri_runtime::webview::{
+-  NewWindowFeatures, PageLoadEvent, PermissionKind, PermissionResponse, ScrollBarStyle,
++  IpcFrame, NewWindowFeatures, PageLoadEvent, PermissionKind, PermissionResponse, ScrollBarStyle,
+ };
+ // Remove this re-export in v3
+ pub use tauri_runtime::Cookie;
+@@ -147,6 +147,9 @@ pub struct InvokeRequest {
+   pub headers: HeaderMap,
+   /// The invoke key. Must match what was passed to the app manager.
+   pub invoke_key: String,
++  /// The frame that requested this command, as reported by the runtime.
++  /// Capabilities apply to it according to their `frames` setting.
++  pub frame: IpcFrame,
+ }
+ 
+ /// The platform webview handle. Accessed with [`Webview#method.with_webview`];
+@@ -1596,7 +1599,14 @@ impl<R: Runtime> Webview<R> {
+       .runtime_authority
+       .lock()
+       .unwrap()
+-      .resolve_access(&cmd_name, self.window().label(), self.label(), &origin);
++      .resolve_access(
++        &cmd_name,
++        self.window().label(),
++        self.label(),
++        &origin,
++        // the webview's current document is its top-level frame
++        IpcFrame::Main,
++      );
+ 
+     if let Some(access) = resolved_access {
+       let scope_ids = access
+@@ -2070,6 +2080,7 @@ tauri::Builder::default()
+         message.webview.window_ref().label(),
+         message.webview.label(),
+         &acl_origin,
++        request.frame,
+       );
+       (acl, runtime_authority.has_app_manifest())
+     };
+@@ -2113,6 +2124,7 @@ tauri::Builder::default()
+               invoke.message.webview.window().label(),
+               invoke.message.webview.label(),
+               &acl_origin,
++              request.frame,
+             ),
+         );
+       }
+@@ -2817,6 +2829,7 @@ mod tests {
+         body: crate::ipc::InvokeBody::default(),
+         headers: Default::default(),
+         invoke_key: INVOKE_KEY.to_string(),
++        frame: Default::default(),
+       },
+     );
+     assert!(
+@@ -2837,6 +2850,7 @@ mod tests {
+         body: crate::ipc::InvokeBody::default(),
+         headers: Default::default(),
+         invoke_key: INVOKE_KEY.to_string(),
++        frame: Default::default(),
+       },
+     );
+     // The local request should either succeed or fail for a reason OTHER
