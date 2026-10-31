@@ -416,6 +416,7 @@
 </template>
 
 <script setup lang="ts">
+import { imageTitleName, useWindowTitlePart } from "@/composables/useWindowTitle";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import type { Component, Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
@@ -812,17 +813,8 @@ const syncKamechanVisibilityForPreview = (hidden: boolean) => {
   kameMessageStore.setKamechanHidden(kamechanHideOwner, hidden);
 };
 
-const previewDialogTitle = computed(() => {
-  const img = previewImage.value;
-  if (img?.displayName) return img.displayName;
-  if (!img?.localPath) {
-    return "图片预览";
-  }
-  // 从路径中提取文件名（支持 Windows 和 Unix 路径分隔符）
-  const path = img.localPath;
-  const fileName = path.split(/[/\\]/).pop() || path;
-  return fileName || "图片预览";
-});
+useWindowTitlePart("preview", () => (previewVisible.value ? imageTitleName(previewImage.value) : ""));
+const previewDialogTitle = computed(() => imageTitleName(previewImage.value) || "图片预览");
 
 const isTextInputLike = (target: EventTarget | null) => {
   const el = target as HTMLElement | null;

@@ -44,6 +44,8 @@ mod vd_listener;
 mod wallpaper;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 mod web_server_service;
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
+mod window_title;
 
 // ---- local-only imports ----
 #[cfg(not(feature = "web"))]

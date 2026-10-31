@@ -7,7 +7,6 @@ pub(crate) use super::surf_common::{
 use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::storage::Storage;
-use kabegame_i18n::t;
 use std::collections::HashMap;
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::Emitter;
@@ -201,9 +200,13 @@ pub async fn surf_start_session<R: Runtime>(
         let host_for_plugin_id = host.clone();
         let record_id_for_download = record.id.clone();
         let navbar_label = surf_navbar_label(&host);
+        let title_kind = crate::window_title::WebPageWindow::Surf { host: host.clone() };
         // 注入脚本的单一来源（安卓同一份，只是多一层顶层守卫、少一段 URL 上报）。
         let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
-            .title(t!("surf.windowTitle", host = host.as_str()))
+            .title(crate::window_title::initial_title(&title_kind))
+            .on_document_title_changed(move |window, title| {
+                crate::window_title::on_page_title(&window, title_kind.clone(), title);
+            })
             .inner_size(1200.0, 800.0)
             .devtools(true);
         for script in surf_initialization_scripts() {

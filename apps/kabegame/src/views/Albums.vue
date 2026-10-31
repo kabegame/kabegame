@@ -307,6 +307,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowTitlePart } from "@/composables/useWindowTitle";
 import { albumRotationPath, rotationAlbumIdFromPath } from "@/utils/wallpaperRotationPath";
 import { ref, computed, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
@@ -441,6 +442,7 @@ const selectedAlbumName = computed(() => {
   if (selectedAlbumId.value === HIDDEN_ALBUM_ID) return t("albums.hiddenAlbumName");
   return selectedAlbum.value?.name ?? "";
 });
+useWindowTitlePart("subject", () => (selectedAlbumId.value ? selectedAlbumName.value : ""));
 
 // ---------- 右栏（画册信息面板）派生数据 ----------
 const selectedAlbumStats = computed(() => {

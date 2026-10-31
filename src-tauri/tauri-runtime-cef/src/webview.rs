@@ -599,6 +599,9 @@ mod imp {
 
     type PageLoadHandler = Rc<Box<dyn Fn(Url, PageLoadEvent) + Send>>;
 
+    // 与 PageLoadHandler 一样，文档标题回调只在 CEF UI 线程调用。
+    type TauriDocumentTitleFn = Rc<Box<dyn Fn(String) + Send>>;
+
     type TauriDownloadFn =
         Arc<dyn for<'a> Fn(tauri_runtime::webview::DownloadEvent<'a>) -> bool + Send + Sync>;
 
@@ -614,6 +617,19 @@ mod imp {
             CefString::from(&item.url()).to_string()
         } else {
             original
+        }
+    }
+
+    wrap_display_handler! {
+        pub(crate) struct TauriCefDisplayHandler {
+            handler: TauriDocumentTitleFn,
+        }
+        impl DisplayHandler {
+            // 真实弹窗与 DevTools 沿用本 client，它们的标题不能写进 opener 窗口。
+            fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
+                if browser.map_or(true, |b| b.is_popup() != 0) { return; }
+                (self.handler)(title.map(CefString::to_string).unwrap_or_default());
+            }
         }
     }
 
@@ -1281,6 +1297,7 @@ mod imp {
     wrap_client! {
         pub(crate) struct ViewsClient {
             load_handler: LoadHandler,
+            display_handler: Option<DisplayHandler>,
             keyboard_handler: KeyboardHandler,
             context_menu_handler: ContextMenuHandler,
             download_handler: Option<DownloadHandler>,
@@ -1292,6 +1309,7 @@ mod imp {
         }
         impl Client {
             fn load_handler(&self) -> Option<LoadHandler> { Some(self.load_handler.clone()) }
+            fn display_handler(&self) -> Option<DisplayHandler> { self.display_handler.clone() }
             fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(self.keyboard_handler.clone()) }
             fn context_menu_handler(&self) -> Option<ContextMenuHandler> { Some(self.context_menu_handler.clone()) }
             fn download_handler(&self) -> Option<DownloadHandler> { self.download_handler.clone() }
@@ -1630,6 +1648,11 @@ mod imp {
             }
         }
         let on_page_load = pending.on_page_load_handler.take().map(Rc::new);
+        let display_handler = pending
+            .document_title_changed_handler
+            .take()
+            .map(Rc::new)
+            .map(TauriCefDisplayHandler::new);
         let download_handler = pending
             .download_handler
             .take()
@@ -1668,6 +1691,7 @@ mod imp {
             });
         let mut client = ViewsClient::new(
             InitializationLoadHandler::new(on_page_load),
+            display_handler,
             DevToolsKeyboardHandler::new(),
             DisabledContextMenuHandler::new(),
             download_handler,

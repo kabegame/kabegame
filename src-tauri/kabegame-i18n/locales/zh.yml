@@ -50,6 +50,8 @@ dialog:
   initFatalError: "初始化过程中出现了致命错误！: {detail}"
 
 window:
+  surfSection: 畅游
+  crawlerFallback: WebView
   wallpaperTitle: Kabegame 壁纸
   crawlerTitle: Kabegame 爬虫
 
@@ -109,7 +111,6 @@ vd:
   hiddenAlbum: 隐藏画册
 
 surf:
-  windowTitle: "畅游 - {host}"
   toolbar:
     back: "后退"
     forward: "前进"

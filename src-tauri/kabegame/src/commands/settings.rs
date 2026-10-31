@@ -332,6 +332,8 @@ pub fn set_language<R: tauri::Runtime>(
     if let Err(e) = crate::tray::update_tray_menu(&app) {
         tracing::warn!("语言切换后刷新菜单失败: {}", e);
     }
+    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
+    crate::window_title::refresh_all(&app);
     #[cfg(target_os = "android")]
     let _ = &app;
 
