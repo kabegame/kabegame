@@ -2,7 +2,8 @@
 // 只在一种文档里启用：顶层的直接子 frame、且是 file:（WallpaperStage web 层的网页壁纸 iframe，图库预览与
 // 桌面同一份）。其它文档（应用页、更深的嵌套 iframe）第一行就返回，不定义任何全局。
 // 协议见 cocs/wpe/WPE_IMPORT.md「运行时垫片与宿主协议」：垫片向宿主拉取完整状态、订阅事件后重拉，
-// 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。
+// 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。音频与媒体是例外：页面登记监听后垫片向宿主订阅，
+// 宿主经 Channel 推（「音频与媒体集成」）。
 (function () {
   "use strict";
   var direct = window !== window.top && window.parent === window.top && location.protocol === "file:";
@@ -14,20 +15,68 @@
   // ---- WPE 全局接口（API.md §3.2 / §3.4）----
   window.wallpaperMediaIntegration = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
   var registered = {};
-  [
-    "wallpaperRegisterAudioListener",
-    "wallpaperRegisterMediaStatusListener",
-    "wallpaperRegisterMediaPropertiesListener",
-    "wallpaperRegisterMediaThumbnailListener",
-    "wallpaperRegisterMediaPlaybackListener",
-    "wallpaperRegisterMediaTimelineListener",
-  ].forEach(function (name) {
+  var subscribed = {}; // audio / media 是否已向宿主订阅
+  var lastMedia = {}; // 媒体每类最后一条（音频不缓存），晚登记的回调补一次
+  // 宿主消息 type → 注册函数名
+  var MEDIA_LISTENERS = {
+    status: "wallpaperRegisterMediaStatusListener",
+    properties: "wallpaperRegisterMediaPropertiesListener",
+    thumbnail: "wallpaperRegisterMediaThumbnailListener",
+    playback: "wallpaperRegisterMediaPlaybackListener",
+    timeline: "wallpaperRegisterMediaTimelineListener",
+  };
+  var MEDIA_TYPES = {}; // 注册函数名 → 宿主消息 type
+  Object.keys(MEDIA_LISTENERS).forEach(function (type) {
+    MEDIA_TYPES[MEDIA_LISTENERS[type]] = type;
+  });
+  ["wallpaperRegisterAudioListener"].concat(Object.values(MEDIA_LISTENERS)).forEach(function (name) {
     registered[name] = [];
-    // 可多次注册、全部保留；Phase 8 起才有数据回调
+    // 可多次注册、全部保留；每类第一次登记即向宿主订阅（WPE 同样在登记之后才送数据）。
+    // 只会被页面脚本调用，那时垫片已整体执行完、transport 已就绪
     window[name] = function (cb) {
-      if (typeof cb === "function") registered[name].push(cb);
+      if (typeof cb !== "function") return;
+      registered[name].push(cb);
+      var kind = name === "wallpaperRegisterAudioListener" ? "audio" : "media";
+      if (!subscribed[kind]) {
+        subscribed[kind] = true;
+        // 壁纸没声明 supportsaudioprocessing 时被拒：照 WPE 永不回调，不报错
+        transport.subscribe(kind, onMedia).catch(function () {});
+      }
+      var type = MEDIA_TYPES[name];
+      if (type && lastMedia[type]) {
+        var last = lastMedia[type];
+        queueMicrotask(function () {
+          invokeListener(cb, last);
+        });
+      }
     };
   });
+  function invokeListener(cb, value) {
+    try {
+      cb(value);
+    } catch (error) {
+      console.error("[kb-wpe] media listener", error);
+    }
+  }
+  // 宿主经 Channel 送来的一条：音频按帧回调，媒体去掉 type 后交给对应的监听
+  function onMedia(message) {
+    if (!message) return;
+    if (message.type === "audio") {
+      // 每个回调一份新数组：页面可能就地改写
+      registered.wallpaperRegisterAudioListener.forEach(function (cb) {
+        invokeListener(cb, message.data.slice());
+      });
+      return;
+    }
+    var name = MEDIA_LISTENERS[message.type];
+    if (!name) return;
+    var payload = Object.assign({}, message);
+    delete payload.type;
+    lastMedia[message.type] = payload;
+    registered[name].forEach(function (cb) {
+      invokeListener(cb, payload);
+    });
+  }
   var randomQueue = [];
   window.wallpaperRequestRandomFileForProperty = function (key, cb) {
     if (typeof cb !== "function") return;
@@ -156,10 +205,28 @@
 
   // ---- 传输：iframe 自己直接 invoke / listen，事件只投递到本 frame ----
   // 权限只来自 wpe-web-capability（listen 只放行 wallpaper-ping / setting-change / image-changed /
-  // images-change，新增监听要同步改 capability）。来源由 CEF 补丁 07 在建工厂时确定，首批请求即可用，不做重试。
+  // images-change，新增监听要同步改 capability；另可订阅音频 / 媒体，数据经 Channel 只回本 frame，
+  // frame 销毁即由宿主释放）。来源由 CEF 补丁 07 在建工厂时确定，首批请求即可用，不做重试。
   var transport = {
     pull: function () {
       return internals.invoke("wpe_web_pull_state");
+    },
+    // 手写 Tauri Channel 的序号协议（同 @tauri-apps/api 的 Channel）：消息带 index，大消息由 Tauri 生成的脚本
+    // 在本 frame 里 fetch 取回后才回调，可能晚到，先存后按序投递；结束标记忽略（WPE 没有退订）
+    subscribe: function (kind, onMessage) {
+      var next = 0;
+      var pending = {};
+      var id = internals.transformCallback(function (raw) {
+        if (!raw || "end" in raw) return;
+        pending[raw.index] = raw.message;
+        while (next in pending) {
+          var message = pending[next];
+          delete pending[next];
+          next++;
+          onMessage(message);
+        }
+      });
+      return internals.invoke("wpe_web_media_subscribe", { kind: kind, channel: "__CHANNEL__:" + id });
     },
     listen: function (names, onEvent) {
       return Promise.all(

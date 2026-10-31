@@ -109,6 +109,8 @@
   "wallpaperVolumeDesc": "動画壁紙の音量（0～1）",
   "wallpaperVideoPlaybackRate": "動画再生速度",
   "wallpaperVideoPlaybackRateDesc": "0.25～3",
+  "wpeMediaIntegration": "Web 壁紙のメディア連携",
+  "wpeMediaIntegrationDesc": "Web 壁紙が再生中の曲名、カバー画像、再生位置を読み取れます",
   "wallpaperModeLabel": "壁紙モード",
   "wallpaperModeDesc": "ネイティブ：システムAPI；ウィンドウ：スタンドアロンウィンドウ（トランジション、動画など）",
   "wallpaperDisabled": "壁紙を無効化",

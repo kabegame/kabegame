@@ -25,6 +25,7 @@
  */
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl } from "@/utils/fileUrl";
+import { resetVideoElement } from "@/utils/videoElement";
 import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
 
 type Phase = "idle" | "prep" | "enter";
@@ -816,18 +817,7 @@ function handleImageError(type: "base" | "top") {
   updateDebugPanel();
 }
 
-function resetVideoElement(el: HTMLVideoElement | null) {
-  if (!el) return;
-  try {
-    el.pause();
-    el.removeAttribute("src");
-    el.load();
-  } catch {
-    // ignore
-  }
-}
-
-/** 播放成功后取消静音并应用当前音量设置 */
+/**播放成功后取消静音并应用当前音量设置 */
 function unmuteVideo(el: HTMLVideoElement | null) {
   if (!el) return;
   const v = Math.min(1, Math.max(0, Number.isFinite(props.volume) ? props.volume : 1));

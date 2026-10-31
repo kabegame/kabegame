@@ -423,15 +423,61 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 `file` 与 `directory` 仅使用用户所选路径；无作者默认值时清空路径会删除该用户键，垫片向页面补发空路径以撤销旧值。core 生成文件 / 目录放行项（`user_file_grants`），网页壁纸目录索引按这张壁纸当前的 metadata **覆盖**它的放行（`metadataId` 补丁到达时、`wpe_web_pull_state` 返回前各写一次，见上「网页壁纸目录索引」）：改了目录属性，旧目录立即不可读；另一张网页壁纸读不到这张的用户选择。预览与桌面共用这套闸门。目录属性递归列举浏览器安全的媒体文件，最多 10000 个；垫片对 `fetchall` 发送文件增删回调，对 `ondemand` 随机返回一个文件。
 
+### 音频与媒体集成（第二阶段 Phase 8）
+
+WPE 的音频与媒体数据是「页面登记、宿主推送」：页面调 `wallpaperRegisterAudioListener` / `wallpaperRegisterMedia*Listener`
+之后才开始收数据。垫片在页面第一次登记某类监听时调 `wpe_web_media_subscribe({ kind: "audio" | "media", channel })`，
+交出一个 Tauri Channel（手写 `{ message, index }` 序号协议，乱序先存、按序投递），之后每类监听都从这条 Channel 回调；
+媒体每类缓存最后一条，晚登记的回调补一次。预览（主窗口）与桌面（壁纸窗口）的 iframe 走同一条路，命令同
+`wpe_web_pull_state` 按 `CallerOrigin` 经网页壁纸目录索引认出是哪张；`audio` 只对 `general.supportsaudioprocessing: true`
+的壁纸放行（照 WPE），被拒时页面永远收不到音频回调，与 WPE 一致。不用全局事件：每秒 30 帧的频谱不进事件系统，
+tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
+
+**订阅归属调用方 frame**（`wpe_media/mod.rs` 的 `WpeMediaHub`，键是 `(webview label, SubframeId, 类型)`，`SubframeId` 来自
+补丁 18 公开的命令参数 `tauri::ipc::CallerFrame`）：
+- `WebviewEvent::SubframeDestroyed` → `release_frame`（`lib.rs` 的全局 `on_webview_event`）。主窗口刷新、看门狗整页重载、
+  关预览、网页壁纸之间切换都会销毁旧 iframe，不需要在导航入口或宿主页另外释放；旧 frame 的销毁事件晚到只删旧 id，
+  碰不到新 iframe 的订阅。
+- 同一 frame 再订阅同一类替换旧条（页面自己刷新、frame 不换）。窗口销毁（`WindowEvent::Destroyed`）删整个 label。
+- 发送失败只作兜底：Channel 发往已销毁子 frame 时运行时静默丢弃（`EvalInSubframe` 找不到 frame），`send` 照样成功，
+  大于 8 KB 的消息（封面）还会存进 Channel 数据队列等页面来取。所以 frame 级释放必须靠销毁事件。
+- 没有退订命令：WPE 没有取消登记的接口。
+
+有 `audio` 订阅才开采集线程，有 `media` 订阅且设置「媒体集成」（`wpeMediaIntegration`，默认开，仅 Windows 有开关）打开
+才开媒体会话监视；最后一个订阅离开即停（`info!` 记启停，增删订阅 `debug!` 记 label / frame / 类型 / 订阅数）。停止线程
+（丢弃句柄会 join）一律在订阅表的锁外，采集线程自己触发的停止不 join 自己。
+
+- **音频**（`wpe_media/audio.rs` + `spectrum.rs`）：WASAPI 共享模式回环读默认输出设备（`eRender` / `eConsole`）的混音，
+  每 10ms 读包、每 33ms 出一帧 128 个浮点（左 0–63、右 64–127，低频在前）。推送定时器与采集包解耦：静音标志的包或这段时间
+  没有包（系统静音时回环不送包）都按静音补零，页面收到逐帧衰减到 0 的数据，「空闲」判断才生效；打不开设备也照样推静音帧。
+  默认设备每秒比对 id、`AUDCLNT_E_DEVICE_INVALIDATED` 立即重开。只处理 32 位浮点与 16 位整数混音格式。
+  频谱算法自定（WPE 未公开）：Hann 窗 → 2048 点实数 FFT（`realfft`）→ 64 个对数频段（30 Hz – 16 kHz，不超过奈奎斯特的
+  95%）取段内峰值 → dB + 高频补偿（相对 1 kHz 每倍频程 +3 dB）→ `(dB − (−70)) / 60` 映射、上限 1.2 → 上升即时、下降每帧
+  保留 0.75。常数集中在 `SpectrumTuning`，真机按样本调。
+- **媒体**（`wpe_media/media.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话，WinRT 事件只发信号，读取与比较在
+  线程里做，变化才推：`Properties`（标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`）、
+  `Thumbnail`（封面字节哈希变了才解码，长边缩到 512 的 PNG data URL；五个颜色由 64×64 缩图的量化直方图取三个主色，文字色取
+  对比度 ≥ 4.5 的次色 / 第三色否则黑白，高对比色取黑白里对比更高的，格式 `rgb(r, g, b)`）、`Playback`（Playing 1、Paused 2、
+  其余 0）、`Timeline`（秒；播放中每秒按 `LastUpdatedTime` 外推；播放状态切换时不重读时间轴，按旧状态外推的位置作新基准，
+  因为很多播放器的读数停在上次跳转；播放器不给时间轴就不推）。没有会话时推 `Playback 0` 与空属性、
+  空封面。新订阅先收 `Status { enabled }`，监视在运行时再补发快照；关「媒体集成」推 `{ enabled: false }` 并停监视、清快照。
+
+Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSession` 在应用页主 frame 把 `navigator.mediaSession` 设成
+当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，
+Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网页壁纸收到的是 Kabegame 自己的会话（图片名 + 应用图标）。
+
+只有 Windows 有数据源（`realfft` 与 `windows` 的音频 / WinRT feature 都只在 Windows 依赖段），其它平台命令直接返回错误。
+
 ## 七、已知边界
 
 - **WPE 壁纸目前只提供 Windows 桌面**：macOS / Linux / Android / Web 不自动发现、不渲染网页壁纸（`web_entry` 与网页壁纸目录
   索引都按 Windows 门控），`x-wpe/*` 行只显示作者预览图。
 - 只导入 `video` 与 `web`；`scene` / `application` 只占位并计入跳过。
 - 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言（`applyGeneralProperties({ language })`）；
-  `fps`、`setPaused`、音频与媒体数据尚未实现（注册函数只收下回调）。目录内容不监视，下次状态拉取时更新。
-- 网页壁纸只能监听四个事件（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开 `wpe_web_pull_state` 与
-  `wallpaper_pong`。
+  `fps`、`setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
+  WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
+- 网页壁纸只能监听四个事件（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开 `wpe_web_pull_state`、
+  `wallpaper_pong` 与 `wpe_web_media_subscribe`。
 - 网页壁纸页面里跨源 `http(s)` 请求仍受 CORS 约束（WPE 是全局 `--disable-web-security`，Kabegame 不放开）；
   壁纸样式 / 音量 / 倍速对网页壁纸不生效；桌面只转发鼠标移动与左键（Windows），无键盘 / 滚轮 / 右键。
 - 图库预览与桌面的网页壁纸 iframe 顶层都是应用页，Chromium 按顶层站点分区存储，两处 `localStorage` / `indexedDB` 是**同一分区、
@@ -469,6 +515,9 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 - 运行时垫片与宿主协议：`src-tauri/kabegame/src/webview_js/wpe_shim.js`、`commands/wpe_web.rs`（`WpeWebState`、
   `wpe_web_pull_state` / `caller_document`、`remote.urls` 匹配单测）、`capabilities/wpe-web.json`、`permissions/wpe-web.toml`、
   `kabegame-core/src/wpe/properties.rs`（`resolve_web_user_props` / `wpe_language_code`）、
+  音频与媒体：`src-tauri/kabegame/src/wpe_media/{mod.rs,spectrum.rs,audio.rs,media.rs,colors.rs}`、`commands/wpe_web.rs`
+  （`wpe_web_media_subscribe`）、`lib.rs`（`on_webview_event` / `WindowEvent::Destroyed` 释放）、`commands/settings.rs`
+  （`wpeMediaIntegration`）、
   `third-patches/tauri/11-tauri-webview-clear-js-listeners.patch`（看门狗重载时清主 frame 监听）
 - 桌面网页壁纸：`src-tauri/kabegame/src/wallpaper/manager/window.rs`（`set_wallpaper_path` 开关鼠标转发、`WALLPAPER_LABEL`）、
   `wallpaper/window.rs`（`WallpaperWindow`：`set_mouse_forwarding`、看门狗）、`wallpaper/input_forward.rs`

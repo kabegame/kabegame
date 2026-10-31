@@ -109,6 +109,8 @@
   "wallpaperVolumeDesc": "Volume for video wallpaper (0–1)",
   "wallpaperVideoPlaybackRate": "Video playback rate",
   "wallpaperVideoPlaybackRateDesc": "0.25–3",
+  "wpeMediaIntegration": "Web wallpaper media integration",
+  "wpeMediaIntegrationDesc": "Web wallpapers can read the title, cover art and progress of what is playing",
   "wallpaperModeLabel": "Wallpaper mode",
   "wallpaperModeDesc": "Native: system API; Window: standalone window (transitions, video, etc.)",
   "wallpaperDisabled": "Disable wallpaper",

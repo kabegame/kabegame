@@ -109,6 +109,8 @@
   "wallpaperVolumeDesc": "동영상 배경화면 음량 (0–1)",
   "wallpaperVideoPlaybackRate": "동영상 재생 속도",
   "wallpaperVideoPlaybackRateDesc": "0.25–3",
+  "wpeMediaIntegration": "웹 배경화면 미디어 연동",
+  "wpeMediaIntegrationDesc": "웹 배경화면이 재생 중인 곡 제목, 커버 이미지, 재생 위치를 읽을 수 있습니다",
   "wallpaperModeLabel": "배경화면 모드",
   "wallpaperModeDesc": "네이티브: 시스템 API; 창: 독립 창 (전환, 동영상 등)",
   "wallpaperDisabled": "배경화면 끄기",

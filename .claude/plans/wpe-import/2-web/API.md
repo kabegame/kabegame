@@ -420,8 +420,8 @@ V.evalCondition = function (e) {
 | `condition` 显隐 | P1 | 已完成（7，待真机） | 照 WPE 的 `$parse.readOnly` 白名单自写解释器，不 eval，失败当 true（第一节） |
 | `file` 属性 | P2 | 已完成（7，待真机） | 见难点一；kaguya 的 `custom_user_bg` 即此类。拉取状态时按调用方 label 追加放行用户选的文件 |
 | `directory` 属性：`fetchall` / `ondemand` | P2 | 已完成（7，待真机） | 见难点一；目录文件列表（递归、`browser_safe`、最多 10000）进状态，垫片对 `fetchall` 按差异回调增删、对 `ondemand` 随机取一个回给 `wallpaperRequestRandomFileForProperty`。不监视目录，内容变化在下次拉取时体现 |
-| `wallpaperRegisterAudioListener` | P1 | 已完成（空实现，5）/ 8 | WASAPI 回环 + FFT，128 浮点、约 30Hz、`NaN` 置 0 |
-| 媒体集成 5 个注册函数 | P2 | 已完成（空实现，5）/ 8 | 系统媒体会话；`thumbnail` 用 `data:image/png;base64,` 前缀 |
+| `wallpaperRegisterAudioListener` | P1 | 已完成（8，待真机） | WASAPI 回环 + FFT，128 浮点、约 30Hz、`NaN` 置 0 |
+| 媒体集成 5 个注册函数 | P2 | 已完成（8，待真机） | 系统媒体会话；`thumbnail` 用 `data:image/png;base64,` 前缀 |
 | `wallpaperMediaIntegration` 常量 | P1 | 已完成（5） | 垫片直接定义 `{ PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 }` |
 | `wallpaperPluginListener` / `wpPlugins.led` / `window.cue` | 空实现 | 已完成（5） | 不调用 `onPluginLoaded`；`wpPlugins`、`cue` 不定义，页面按文档会先检查插件已加载 |
 | `wallpaperGetUtilities` | 空实现 | 已完成（5） | 空对象 |
@@ -505,6 +505,7 @@ Phase 7 的「根目录 + 用户选的文件 / 目录」追加放行只写一份
 - 滑块 Precision 是否另有字段（kaguya 只用了 `step`）。
 - `fileType` 的取值格式，以及它和 `filter` 的关系（kaguya 用的是 `filter`）。
 - Kabegame 壁纸窗口挂在 WorkerW 下时，是否被 Chromium 判为遮挡而降频。
+- 封面回调五个颜色的格式（官方未写；Phase 8 暂用 CSS `rgb(r, g, b)`，页面若做字符串拼接会出错）与 WPE 频谱的具体算法（Phase 8 自定、真机调参）。
 
 ## 资料来源
 

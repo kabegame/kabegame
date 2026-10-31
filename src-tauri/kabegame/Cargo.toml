@@ -70,7 +70,19 @@ windows = {version = "0.52", features = [
   "Win32_Foundation",
   "Win32_System_Com",
   "Win32_UI_Shell",
+  # 网页壁纸音频：WASAPI 回环采集（IMMDevice::Activate 需要 StructuredStorage / Variant）
+  "Win32_Media_Audio",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  # 网页壁纸媒体集成：系统媒体会话（SMTC）与封面流
+  "Foundation",
+  "Foundation_Collections",
+  "Media",
+  "Media_Control",
+  "Storage_Streams",
 ] }
+# 网页壁纸音频频谱的实数 FFT
+realfft = "3.4"
 windows-sys = {workspace = true, features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",

@@ -109,6 +109,8 @@
   "wallpaperVolumeDesc": "视频壁纸播放时的音量（0～1），与预览内音量逻辑一致",
   "wallpaperVideoPlaybackRate": "视频播放速率",
   "wallpaperVideoPlaybackRateDesc": "0.25～3",
+  "wpeMediaIntegration": "网页壁纸媒体集成",
+  "wpeMediaIntegrationDesc": "网页壁纸可读取正在播放的歌曲名、封面与播放进度",
   "wallpaperModeLabel": "壁纸模式",
   "wallpaperModeDesc": "原生模式使用系统壁纸接口；窗口模式以独立窗口显示壁纸（支持过渡效果、视频壁纸等）",
   "wallpaperDisabled": "关闭壁纸",

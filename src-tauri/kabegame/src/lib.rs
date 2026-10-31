@@ -44,6 +44,8 @@ mod vd_listener;
 mod wallpaper;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 mod web_server_service;
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
+mod wpe_media;
 
 // ---- local-only imports ----
 #[cfg(not(feature = "web"))]
@@ -554,6 +556,10 @@ pub(crate) fn configure_app(
                 }
             }
             tauri::WindowEvent::Destroyed => {
+                // 窗口没了：它的网页壁纸音频 / 媒体订阅随之作废（frame 级的释放见 on_webview_event）
+                if let Some(hub) = wpe_media::WpeMediaHub::existing() {
+                    hub.release_label(window.label());
+                }
                 if window.label().starts_with("surf-") {
                     if let Some(host) = commands::surf::host_from_surf_label(window.label()) {
                         if let Ok(Some(record)) =
@@ -573,6 +579,16 @@ pub(crate) fn configure_app(
                 }
             }
             _ => {}
+        });
+        // 网页壁纸的音频 / 媒体订阅归属 iframe，frame 销毁即释放：Channel 发往已销毁的 frame 会被静默丢弃、
+        // 发送不会失败，大消息还会留在 Tauri 的 Channel 数据队列里。主窗口刷新、看门狗重载、关预览、
+        // 网页壁纸之间切换都会销毁旧 iframe。
+        builder = builder.on_webview_event(|webview, event| {
+            if let tauri::WebviewEvent::SubframeDestroyed(frame) = event {
+                if let Some(hub) = wpe_media::WpeMediaHub::existing() {
+                    hub.release_frame(webview.label(), frame);
+                }
+            }
         });
     }
 
@@ -756,6 +772,8 @@ pub(crate) fn configure_app(
             set_fast_folder_sync,
             get_surf_freeze_page,
             set_surf_freeze_page,
+            get_wpe_media_integration,
+            set_wpe_media_integration,
             #[cfg(not(target_os = "android"))]
             get_web_server_enabled,
             #[cfg(not(target_os = "android"))]
@@ -920,6 +938,8 @@ pub(crate) fn configure_app(
             set_wpe_web_user_properties,
             #[cfg(not(target_os = "android"))]
             wpe_web_pull_state,
+            #[cfg(not(target_os = "android"))]
+            wpe_web_media_subscribe,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

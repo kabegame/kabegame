@@ -100,6 +100,11 @@ pub fn get_surf_freeze_page() -> bool {
 }
 
 #[tauri::command]
+pub fn get_wpe_media_integration() -> bool {
+    Settings::global().get_wpe_media_integration()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -452,6 +457,18 @@ pub fn set_fast_folder_sync(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn set_surf_freeze_page(enabled: bool) -> Result<(), String> {
     Settings::global().set_surf_freeze_page(enabled)
+}
+
+/// 网页壁纸「媒体集成」：写设置后同步启停媒体会话监视，并向已订阅的页面推 `{ enabled }`。
+#[tauri::command]
+pub fn set_wpe_media_integration(enabled: bool) -> Result<(), String> {
+    Settings::global().set_wpe_media_integration(enabled)?;
+    // 订阅表还没创建时不用通知：创建时会读到新值
+    #[cfg(not(target_os = "android"))]
+    if let Some(hub) = crate::wpe_media::WpeMediaHub::existing() {
+        hub.set_media_enabled(enabled);
+    }
+    Ok(())
 }
 
 #[tauri::command]

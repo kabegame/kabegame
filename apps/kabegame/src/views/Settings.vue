@@ -269,6 +269,14 @@
                 </SettingRow>
 
                 <SettingRow
+                  v-if="IS_WINDOWS"
+                  :label="$t('settings.wpeMediaIntegration')"
+                  :description="$t('settings.wpeMediaIntegrationDesc')"
+                >
+                  <SettingSwitchControl setting-key="wpeMediaIntegration" />
+                </SettingRow>
+
+                <SettingRow
                   v-if="IS_WINDOWS || IS_MACOS || IS_LINUX"
                   :label="$t('settings.wallpaperModeLabel')"
                   :description="$t('settings.wallpaperModeDesc')"

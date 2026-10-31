@@ -49,6 +49,8 @@ export interface AppSettings {
   wallpaperVolume: number;
   /** 视频壁纸播放速率 0.25～3 */
   wallpaperVideoPlaybackRate: number;
+  /** 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（仅 Windows 桌面） */
+  wpeMediaIntegration: boolean;
   windowState: {
     x: number | null;
     y: number | null;

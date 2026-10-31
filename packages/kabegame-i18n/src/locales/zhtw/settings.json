@@ -109,6 +109,8 @@
   "wallpaperVolumeDesc": "影片壁紙播放時的音量（0～1）",
   "wallpaperVideoPlaybackRate": "影片播放速率",
   "wallpaperVideoPlaybackRateDesc": "0.25～3",
+  "wpeMediaIntegration": "網頁桌布媒體整合",
+  "wpeMediaIntegrationDesc": "網頁桌布可讀取正在播放的歌曲名稱、封面與播放進度",
   "wallpaperModeLabel": "壁紙模式",
   "wallpaperModeDesc": "原生模式使用系統壁紙介面；視窗模式以獨立視窗顯示壁紙",
   "wallpaperDisabled": "關閉壁紙",

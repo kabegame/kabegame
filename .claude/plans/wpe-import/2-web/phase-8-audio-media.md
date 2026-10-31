@@ -1,6 +1,7 @@
 # Phase 8 — 音频可视化与媒体集成
 
-> 状态：方案（2026-10-31；同日按 B 段 iframe 统一与 CEF 补丁 07 之后的代码重写），决策 1 / 2 / 3 / 5 待确认（见文末）；调用方 frame 并入 tauri 补丁 18（决策 6）。
+> 状态：方案（2026-10-31；同日按 B 段 iframe 统一与 CEF 补丁 07 之后的代码重写），关键决策全部已定（见文末）：1 / 2 / 3 / 5 按推荐执行，调用方 frame 并入 tauri 补丁 18（决策 6）。已实现（2026-10-31，静态检查与单测通过；真机回归见 `versions/latest/regression.md`「网页壁纸音频与媒体集成（Phase 8）」，待完全重启 dev）。
+> 实现与方案的差异：封面三主色改用量化直方图（每通道 16 级、按像素占比，近色跳过）而非中位切分；设置 descriptor 只在 `IS_WINDOWS && !IS_WEB` 时注册（同 `surfFreezePage` 的条件注册），Web 不加 readonly；频谱输出上限 1.2；没有媒体会话时同时推空属性与空封面。B2 时间轴在播放状态切换时不重读旧读数，先按旧状态外推并重定基准，真正的时间轴更新仍由 `TimelinePropertiesChanged` 读取。Kabegame 自身会话不过滤；主窗口预览期间由 `usePreviewMediaSession` 设置当前图片名与应用图标。
 > 上级：[PLAN.md](PLAN.md)。
 >
 > 用户决定（2026-10-31）：
@@ -460,7 +461,7 @@ impl Drop for AudioCapture { /* 置停止标志并 join */ }
   - 没有会话：推 `Playback { state: 0 }`，属性清空。
 - **新增** `colors.rs`：
 ```rust
-/// 封面的三个主色（按像素占比排序的简单中位切分）、与主色对比足够的文字色、黑白中对比更高的那个。
+/// 封面的三个主色（量化直方图按像素占比排序，近色跳过）、与主色对比足够的文字色、黑白中对比更高的那个。
 /// 输出 CSS `rgb(r, g, b)` 字符串（官方文档没写格式，页面通常直接赋给 style）。
 pub fn thumbnail_colors(rgba: &image::RgbaImage) -> ThumbnailColors;
 ```
@@ -622,7 +623,7 @@ commands.allow = ["wpe_web_pull_state", "wallpaper_pong", "wpe_web_media_subscri
 - **新增** `SettingKey::WpeMediaIntegration`（键名 `wpeMediaIntegration`，`bool`，默认值见决策 2）：枚举、默认值、
   全部键列表、从 JSON 读取、键名五处照 `WallpaperVolume`；`get_` / `set_`，setter 发 `setting-change`；
   `kabegame/src/commands/settings.rs` 两个命令、`lib.rs` 注册；setter 之后调 `WpeMediaHub::global().set_media_enabled(v)`（Windows）。
-- **修改** `settingsDescriptors.ts` 加 `tauri("wpeMediaIntegration", …)`，`settings.ts` 类型加字段，Web 版 `readonly(…, false)`。
+- **修改** `settingsDescriptors.ts` 加 `tauri("wpeMediaIntegration", …)`，`settings.ts` 类型加字段；descriptor 只在 `IS_WINDOWS && !IS_WEB` 时注册（同 `surfFreezePage`）。
 - **修改** `Settings.vue` 壁纸分区加一行开关（`v-if="IS_WINDOWS"`），文案说明「网页壁纸可读取正在播放的歌曲名、封面与进度」。
 - **新增** i18n `settings.wpeMediaIntegration` / `settings.wpeMediaIntegrationDesc`（5 种语言）。
 - Phase 6 落地暂停条件后，暂停期间 `WpeMediaHub` 停推（采集可保留），本 Phase 不做。
@@ -683,12 +684,12 @@ commands.allow = ["wpe_web_pull_state", "wallpaper_pong", "wpe_web_media_subscri
 
 ## 关键决策
 
-1. **传输**（待确认）：Channel（推荐）vs Tauri 事件。Channel 只回到订阅的 frame、不进事件系统，有日志流的先例，受限页面的大消息也能收；
+1. **传输**（已定 2026-10-31，按推荐用 Channel）：Channel（推荐）vs Tauri 事件。Channel 只回到订阅的 frame、不进事件系统，有日志流的先例，受限页面的大消息也能收；
    事件则要给 `wpe-web-capability` 加 listen 作用域，同窗口里任何监听者都能收到，而订阅命令照样要写。
-2. **「媒体集成」默认值**（待确认）：打开（推荐，与 WPE 默认一致，壁纸开箱即显示歌名封面）vs 关闭（隐私优先，用户手动开）。
-3. **频谱算法**（待确认）：自定算法 + 用「音域回响」等样本真机调参（推荐）vs 先用 REA 静态分析 `wallpaper64.exe` 的频谱实现再照搬
+2. **「媒体集成」默认值**（已定 2026-10-31，按推荐默认打开）：打开（推荐，与 WPE 默认一致，壁纸开箱即显示歌名封面）vs 关闭（隐私优先，用户手动开）。
+3. **频谱算法**（已定 2026-10-31，按推荐自定算法 + 真机调参）：自定算法 + 用「音域回响」等样本真机调参（推荐）vs 先用 REA 静态分析 `wallpaper64.exe` 的频谱实现再照搬
    （更接近 WPE 观感，但多一轮逆向）。
 4. ~~**预览是否也收数据**~~ 已定（2026-10-31）：两边都收。B 段之后预览与桌面走同一条路，不用写桥。
-5. **FFT 依赖**（待确认）：新增 `realfft`（推荐）vs 手写 radix-2 FFT（无新依赖，约 60 行，要自己测正确性）。
+5. **FFT 依赖**（已定 2026-10-31，按推荐新增 `realfft`）：新增 `realfft`（推荐）vs 手写 radix-2 FFT（无新依赖，约 60 行，要自己测正确性）。
 6. ~~**调用方 frame 从哪来**~~ 已定（2026-10-31）：并入 tauri 补丁 18，公开 `CallerFrame`（frame 级 IPC 与
    `CallerFrameAddress` 都是 18 引入的）。未选：另起补丁 20；宿主页销毁 iframe 时代为释放（有先后竞争、管不到页面自刷新）。

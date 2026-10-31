@@ -124,6 +124,8 @@ pub enum SettingKey {
     WallpaperVolume,
     /// 视频壁纸播放速率（0.25～3）
     WallpaperVideoPlaybackRate,
+    /// 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（标题、封面、进度），仅 Windows 生效
+    WpeMediaIntegration,
     /// 窗口状态（窗口位置、大小、是否最大化）
     WindowState,
     /// 当前壁纸图片ID
@@ -351,6 +353,7 @@ impl Settings {
             SettingKey::WallpaperDisabled => SettingValue::Bool(false),
             SettingKey::WallpaperVolume => SettingValue::F64(1.0),
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
+            SettingKey::WpeMediaIntegration => SettingValue::Bool(true),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
             #[cfg(feature = "virtual-driver")]
@@ -448,6 +451,7 @@ impl Settings {
             SettingKey::WallpaperDisabled,
             SettingKey::WallpaperVolume,
             SettingKey::WallpaperVideoPlaybackRate,
+            SettingKey::WpeMediaIntegration,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
             #[cfg(feature = "virtual-driver")]
@@ -586,6 +590,9 @@ impl Settings {
             }
             SettingKey::FastFolderSync => Ok(SettingValue::Bool(json.as_bool().unwrap_or(true))),
             SettingKey::SurfFreezePage => Ok(SettingValue::Bool(json.as_bool().unwrap_or(true))),
+            SettingKey::WpeMediaIntegration => {
+                Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
+            }
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
@@ -782,6 +789,7 @@ impl Settings {
             SettingKey::WallpaperDisabled => "wallpaperDisabled".to_string(),
             SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
+            SettingKey::WpeMediaIntegration => "wpeMediaIntegration".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
             #[cfg(feature = "virtual-driver")]
@@ -1127,6 +1135,13 @@ impl Settings {
             .get(&SettingKey::WallpaperVideoPlaybackRate)
             .map(|c| c.load().as_f64().unwrap_or(1.0).clamp(0.25, 3.0))
             .unwrap_or(1.0)
+    }
+
+    pub fn get_wpe_media_integration(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::WpeMediaIntegration)
+            .map(|c| c.load().as_bool().unwrap_or(true))
+            .unwrap_or(true)
     }
 
     pub fn get_window_state(&self) -> Option<WindowState> {
@@ -1611,6 +1626,16 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperVideoPlaybackRate, &new_value);
+        Ok(())
+    }
+
+    pub fn set_wpe_media_integration(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::WpeMediaIntegration) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WpeMediaIntegration, &new_value);
         Ok(())
     }
 

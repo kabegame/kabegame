@@ -211,6 +211,11 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(tauri("fastFolderSync", "get_fast_folder_sync", "set_fast_folder_sync", "enabled"));
   }
 
+  // 网页壁纸媒体集成：WPE 网页壁纸只支持 Windows 桌面
+  if (IS_WINDOWS && !IS_WEB) {
+    entries.push(tauri("wpeMediaIntegration", "get_wpe_media_integration", "set_wpe_media_integration", "enabled"));
+  }
+
   // 冻结网页：畅游一键下载（桌面）与网页收集（桌面 + Android 的 V8 后端）共用
   if (!IS_WEB) {
     entries.push(tauri("surfFreezePage", "get_surf_freeze_page", "set_surf_freeze_page", "enabled"));

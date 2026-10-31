@@ -78,7 +78,7 @@
       <video
         v-else
         :key="`video:${videoSlot.src}`"
-        ref="videoEl"
+        :ref="setVideoEl"
         :src="videoSlot.src"
         class="ic-img ic-video"
         :style="{ objectFit: fit }"
@@ -103,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch, watchEffect } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch, watchEffect, type ComponentPublicInstance } from "vue";
 import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
@@ -122,6 +122,7 @@ import { sendDebugEvent } from "../../debugIngest";
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { compatibleToUrl, fileNameFromUrlOrPath, fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
+import { resetVideoElement } from "../../utils/videoElement";
 import { IS_ANDROID, IS_WEB } from "../../env";
 
 /**
@@ -163,6 +164,8 @@ import { IS_ANDROID, IS_WEB } from "../../env";
  *       stale error 事件永久烧毁链环，但若 exhaustion error 在元素仍 connected 时
  *       到达（链的最后一环），仍会短暂显示 failed 状态直到下次导航。
  *       调试会话 video-pageflip-001 实测 52 次 exhaustion 事件。
+ *       现在旧元素在换源与卸载时立即释放（见 setVideoEl），不再等 GC；
+ *       翻页高峰是否仍会耗尽未重新实测。
  * 潜在修复方向（尚未实施）：
  *   1. 链最后一环失败时启动延迟重试（~500 ms），等旧槽释放后再尝试一次；
  *   2. 懒加载视频元素（poster 占位，hover/click 时再挂载 <video>），
@@ -408,6 +411,15 @@ const onImgError = (slot: typeof thumbSlot, e: Event) => {
 const origEngaged = computed(() => props.prefer === "original" || thumbSlot.dead);
 
 const videoEl = ref<HTMLVideoElement | null>(null);
+// 换源（:key 换掉元素）、切出视频形态、卸载时立即释放旧 <video>：只从 DOM 移除的元素要等 GC 才释放播放器，
+// 期间占着媒体播放位，也作为暂停的播放器留在系统媒体会话里（预览切走后系统媒体浮窗仍停在旧视频）。
+// 用函数 ref：Vue 卸载元素时同步传 null（旧元素随即移除）；watch 可能来不及观察到被换掉的元素
+const setVideoEl = (el: Element | ComponentPublicInstance | null) => {
+  const next = el instanceof HTMLVideoElement ? el : null;
+  if (videoEl.value && videoEl.value !== next) resetVideoElement(videoEl.value);
+  videoEl.value = next;
+};
+onBeforeUnmount(() => setVideoEl(null));
 /** wallpaper 形态：壁纸目标取不到（行已删 / IPC 失败）时置 true，显示丢失态。 */
 const wallpaperFailed = ref(false);
 

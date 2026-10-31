@@ -11,6 +11,7 @@
 //! 按自己的拉取编号丢弃。
 
 use crate::wallpaper::wpe_web_dir_index::WpeWebDirIndex;
+use crate::wpe_media::{WpeMediaHub, WpeMediaKind, WpeMediaMessage};
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::media::image_type::wpe_kind;
 use kabegame_core::settings::Settings;
@@ -293,6 +294,54 @@ pub async fn wpe_web_pull_state(caller: tauri::ipc::CallerOrigin) -> Result<WpeW
     Ok(state)
 }
 
+/// 网页壁纸订阅音频（`audio`）或媒体会话（`media`）数据，经 `channel` 推回调用的 iframe。
+///
+/// 预览（主窗口）与桌面（壁纸窗口）的网页壁纸 iframe 走同一条路：按调用方文档认出是哪张（同
+/// [`wpe_web_pull_state`]）；订阅归属调用方 frame，frame 销毁即释放（`lib.rs` 的 `on_webview_event`），
+/// 同一 frame 再订阅同一类替换旧条，所以没有退订命令。只接受子 frame：两个窗口的主 frame 是应用页。
+/// `audio` 只对 `general.supportsaudioprocessing: true` 的壁纸放行（照 WPE）。WPE 网页壁纸只支持 Windows，
+/// 其它平台返回错误。
+#[tauri::command]
+pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    caller: tauri::ipc::CallerOrigin,
+    frame: tauri::ipc::CallerFrame,
+    kind: WpeMediaKind,
+    channel: tauri::ipc::Channel<WpeMediaMessage>,
+) -> Result<(), String> {
+    let tauri::ipc::CallerFrame::Sub(frame) = frame else {
+        return Err("only web wallpaper frames can subscribe".to_string());
+    };
+    if !cfg!(target_os = "windows") {
+        return Err("web wallpaper media is only available on Windows".to_string());
+    }
+    let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
+    let id = WpeWebDirIndex::global()
+        .image_id_of(&doc)
+        .ok_or("not inside a web wallpaper")?;
+    if kind == WpeMediaKind::Audio && !supports_audio_processing(&id).await? {
+        return Err("this wallpaper does not process audio".to_string());
+    }
+    WpeMediaHub::global().subscribe(webview.label(), frame, kind, Box::new(channel));
+    Ok(())
+}
+
+/// 壁纸是否声明处理音频：读图片 metadata（即 `project.json` 原文）的 `general.supportsaudioprocessing`。
+async fn supports_audio_processing(image_id: &str) -> Result<bool, String> {
+    let id = image_id.to_string();
+    let raw = tauri::async_runtime::spawn_blocking(move || Storage::global().get_metadata(&id))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(raw.as_ref().is_some_and(declares_audio_processing))
+}
+
+/// 只有显式 `true` 才算（缺失按 `false`，与 WPE 一致）。
+fn declares_audio_processing(raw: &Value) -> bool {
+    raw.pointer("/general/supportsaudioprocessing")
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
 /// 调用方来源对应的本地文档路径；只认 `file:`（`Url::to_file_path` 本身不看 scheme，`tauri://localhost/`
 /// 也会被转成 `/`）。
 fn caller_document(origin: &url::Url) -> Option<std::path::PathBuf> {
@@ -307,6 +356,23 @@ mod tests {
     use std::str::FromStr;
     use tauri::utils::acl::RemoteUrlPattern;
     use url::Url;
+
+    /// 音频订阅只认显式 `general.supportsaudioprocessing: true`。
+    #[test]
+    fn audio_processing_needs_explicit_true() {
+        use super::declares_audio_processing;
+        use serde_json::json;
+        assert!(declares_audio_processing(
+            &json!({ "general": { "supportsaudioprocessing": true } })
+        ));
+        assert!(!declares_audio_processing(
+            &json!({ "general": { "supportsaudioprocessing": false } })
+        ));
+        assert!(!declares_audio_processing(&json!({ "general": {} })));
+        assert!(!declares_audio_processing(
+            &json!({ "general": { "supportsaudioprocessing": "true" } })
+        ));
+    }
 
     /// `wpe-web-capability` 匹配预览与桌面的网页壁纸 iframe，只绑定 main 和 wallpaper 的子 frame。
     #[test]

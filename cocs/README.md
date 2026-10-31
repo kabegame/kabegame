@@ -117,6 +117,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（只在顶层直接子 `file:` iframe 且有子 frame 桥时启用）、一种传输（直接 `invoke("wpe_web_pull_state")` 与 `listen`，命令按 `CallerOrigin` 的文档 URL 认出是哪张，事件只投递到本 frame、frame 销毁时随 `SubframeDestroyed` 清掉，首批请求由 CEF 07 文档头直接归属）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、运行时按 initiator 与 CEF 07 文档 URL 合成 IPC `Origin`（远程 `file:` 来源 + `frames: "sub"` 只得 `wpe-web-capability`，绑定 `main` 与 `wallpaper`），以及网页壁纸只能监听四个事件（`allow-listen` 作用域，tauri 补丁 15）；
     **图库媒体走 `file://` 与按发起 frame 分档的闸门**（Phase 6b，CEF 补丁 06）：三个桌面平台的主窗口与壁纸窗口都登记 05，应用页主 frame 的 `<img>` / `<video>` / CSS 子资源免检，子 frame 导航与 `file:` 文档按网页壁纸目录索引裁决；前端 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 在桌面产出 `file://`，下载 / 复制兜底直接 `fetch(file:)`、Windows 拖出自 Phase 6d 起改走 03 真实文件链路（`CF_HDROP`）；插件详情 EJS iframe 改 opaque origin + 内层 CSP；删除桌面本地 HTTP 服务；插件文件改由 Tauri 原始字节命令读取，06 的私有 CORS 列表与运行时跨源白名单开放 `fetch(file:)`。
     **用户属性面板**（Phase 7）：作者属性在预览右栏 / 设置页「当前壁纸」编辑，用户值存图片 metadata 顶层 `userProperties`（只存与默认值不同的键），写入经 `Storage::rewrite_image_metadata` 事务改写（新行 + 改指 + 删无引用旧行、沿用搜索词）后发 `metadataId` 补丁，垫片与面板都按它重拉；属性定义在 core `wpe::user_props` 解析一次，WPE 内置 `ui_` 词条只读读取用户 WPE 安装目录的 `locale\ui_<码>.json`；显示条件是照 WPE `$parse.readOnly` 的白名单解释器（不 eval、失败当显示）；`file` / `directory` 的放行由网页壁纸目录索引按当前 metadata 覆盖（`metadataId` 补丁到达与 `wpe_web_pull_state` 返回前各写一次，改目录后旧目录立即不可读），目录文件列表进状态，垫片实现目录回调与 `wallpaperRequestRandomFileForProperty`。
+    **音频与媒体集成**（Phase 8，只 Windows）：页面登记音频 / 媒体监听时垫片调 `wpe_web_media_subscribe` 交出 Tauri Channel（只回本 frame），订阅按 `(label, SubframeId, 类型)` 归属调用方 frame（tauri 补丁 18 公开 `ipc::CallerFrame`），`SubframeDestroyed` 即释放、同 frame 同类替换、窗口销毁释放整个 label（Channel 发往已销毁 frame 被静默丢弃、发送不失败，不能靠发送失败）；`WpeMediaHub` 有订阅才开 WASAPI 回环（33ms 一帧、定时器与采集包解耦、静音补零衰减）与 SMTC 监视（设置「媒体集成」`wpeMediaIntegration` 默认开），自定频谱算法常数在 `SpectrumTuning`，封面 PNG data URL 与量化直方图配色 `rgb()`；`audio` 只对 `supportsaudioprocessing: true` 放行。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 页面 `fetch` 同目录文件失败或越界读被放行（`deny file:` 日志，看 `requester`）/ 新导入的网页壁纸被闸门拒绝（目录索引没跟上）/ 预览画布比例或交互 / 切走后渲染进程未回收、非 Windows 平台的 WPE 行为；
@@ -124,7 +125,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     排查壁纸或网页壁纸卡死、白屏不自动恢复（ping 由谁应答）；
     排查网页壁纸 iframe 的事件监听残留、切换后仍在投递；
     排查桌面图库图片 / 视频不显示（`ERR_UNKNOWN_URL_SCHEME`、图库媒体被误判 `deny file:`）、下载拿到 `file://`、插件详情模板的请求被 CSP 拒绝。
-    排查属性改了页面不变 / 预览与桌面不同步 / 草稿串到下一张、属性标签显示 `ui_` 键名、显示条件显隐与 WPE 不一致、`file` / `directory` 属性选的文件被 `deny file:` 或目录回调不触发。
+    排查属性改了页面不变 / 预览与桌面不同步 / 草稿串到下一张、属性标签显示 `ui_` 键名、显示条件显隐与 WPE 不一致、`file` / `directory` 属性选的文件被 `deny file:` 或目录回调不触发；
+    排查网页壁纸频谱不动 / 一直满格 / 静音后不回落、没有歌名封面或进度、切走壁纸后仍在采集或订阅数不降、音频订阅被拒。
 
 ## 下载与任务（`downloader-tasks/`）
 
