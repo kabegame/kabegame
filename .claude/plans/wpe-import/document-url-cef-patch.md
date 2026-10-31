@@ -98,7 +98,8 @@ UI：NavigationRequest::CommitNavigation
    │   ├ DocumentAttribution::of_request(request)        ← 私有头只在这里读一次
    │   ├ origin = ipc_origin(initiator, &doc)            ← Origin 只在这里算
    │   └ 返回 IpcResourceRequestHandler { scheme, origin }
-   ├ ShouldInterceptRequest：OnBeforeResourceLoad 用默认实现（RV_CONTINUE）
+   ├ ShouldInterceptRequest：OnBeforeResourceLoad 显式返回 CONTINUE
+   │   （更正：原写「默认实现 RV_CONTINUE」，但 cef-rs 默认返回 RV_CANCEL，见回归 D12）
    ├ ContinueShouldInterceptRequest
    │   └ IpcResourceRequestHandler::resource_handler(browser, frame)
    │       ├ lookup_protocol(browser.id, scheme) → label + protocol（与 scheme factory 共用）

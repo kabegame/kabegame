@@ -121,7 +121,9 @@ fn run_sender(rx: std::sync::mpsc::Receiver<Value>) {
     };
     // reqwest 0.11 构造 Client 时需要处在 Tokio runtime 上下文里。
     let _runtime_guard = runtime.enter();
+    // 只连本机 dev server：不走 HTTP_PROXY
     let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_millis(800))
         .build()
     else {
@@ -212,7 +214,9 @@ pub fn spawn_cdp_register() {}
     feature = "standard"
 ))]
 async fn register_cdp_port(port: u16) -> Result<(), String> {
+    // 只连本机回环：不走 HTTP_PROXY，否则探测与上报都被代理带走（「never became ready」）
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_millis(800))
         .build()
         .map_err(|error| error.to_string())?;

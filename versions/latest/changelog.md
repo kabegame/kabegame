@@ -90,7 +90,8 @@
 ### Fixed
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 0012：`ipc-protocol.js` 的自定义协议 IPC fetch 固定 `referrerPolicy: 'origin'`（Windows 上 https 页面请求 `http://ipc.localhost` 时 CEF 把 `Origin` 发成 `null`，Tauri 回 500 且不回退 postMessage）；`tauri-runtime-cef` 的 `cef-ipc` 回退 shim 同样设置。
-- CEF 运行时 IPC 链路拉直：`ipc` / `cef-ipc` 由 `IpcResourceRequestHandler::GetResourceHandler` 直接交出 Tauri 协议 handler；`ipc_origin` 按 initiator 与 CEF 0007 的完整文档 URL 算一次 `Origin`，认不出写 `null`。删除 `IpcInitiatorHandler`、`Sec-Kabegame-Initiator-Origin` 与 `pin_file_frame_origin`；回退通道不合法来源统一用占位来源交给 ACL 拒绝。
+- CEF 运行时 IPC 链路拉直：`ipc` / `cef-ipc` 由 `IpcResourceRequestHandler::GetResourceHandler` 直接交出 Tauri 协议 handler；`ipc_origin` 按 initiator 与 CEF 0007 的完整文档 URL 算一次 `Origin`，认不出写 `null`。删除 `IpcInitiatorHandler`、`Sec-Kabegame-Initiator-Origin` 与 `pin_file_frame_origin`；回退通道不合法来源统一用占位来源交给 ACL 拒绝。`IpcResourceRequestHandler` 显式让 `on_before_resource_load` 返回 `CONTINUE`：cef-rs 的默认实现是 `RV_CANCEL`，不实现会取消全部 IPC 请求。
+- dev 下 CDP 端口登记与 debug ingest 的 reqwest 客户端不再走 `HTTP_PROXY`：终端设了代理时，登记曾报 `never became ready`，skill 找不到 app。
 - 新增 CEF 补丁 0007（需重编 CEF）：建子资源 / 导航工厂时捕获文档与父文档 URL，对非 http(s) 请求写入两个私有归属头；`file:` 闸门按文档头分档，移除 worker 的 `file:` 工厂和垫片首批请求退避重试。
 
 ### Internal

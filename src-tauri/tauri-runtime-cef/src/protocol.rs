@@ -172,6 +172,18 @@ wrap_resource_request_handler! {
         origin: String,
     }
     impl ResourceRequestHandler {
+        // 必须显式放行：cef-rs 的默认实现返回 `ReturnValue::default()`，即 RV_CANCEL（不是 C++ 的
+        // RV_CONTINUE），不实现就会取消每个 IPC 请求，页面只看到 `Failed to fetch`。
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut cef::Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            ReturnValue::CONTINUE
+        }
+
         fn resource_handler(
             &self,
             browser: Option<&mut Browser>,
