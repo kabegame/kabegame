@@ -28,7 +28,12 @@
       if (typeof cb === "function") registered[name].push(cb);
     };
   });
-  window.wallpaperRequestRandomFileForProperty = function () {}; // file / directory 属性暂不支持
+  var randomQueue = [];
+  window.wallpaperRequestRandomFileForProperty = function (key, cb) {
+    if (typeof cb !== "function") return;
+    if (!latest) return void randomQueue.push([key, cb]);
+    answerRandom(key, cb);
+  };
   window.wallpaperGetUtilities = function () {
     return {};
   };
@@ -58,19 +63,46 @@
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
-  function call(name, arg) {
+  function call(name) {
     var target = listener;
     if (target && typeof target[name] === "function") {
       try {
-        target[name](arg);
+        target[name].apply(target, Array.prototype.slice.call(arguments, 1));
       } catch (error) {
         console.error("[kb-wpe] " + name, error);
       }
     }
   }
+  function fetchallFiles(dirs, key) {
+    var dir = dirs && dirs[key];
+    return dir && dir.mode !== "ondemand" ? dir.files : [];
+  }
+  function deliverDirectories(prev, next) {
+    var keys = {};
+    Object.keys(prev || {}).concat(Object.keys(next || {})).forEach(function (key) { keys[key] = true; });
+    Object.keys(keys).forEach(function (key) {
+      var before = new Set(fetchallFiles(prev, key));
+      var after = fetchallFiles(next, key);
+      var afterSet = new Set(after);
+      var removed = Array.from(before).filter(function (file) { return !afterSet.has(file); });
+      var added = after.filter(function (file) { return !before.has(file); });
+      if (removed.length) call("userDirectoryFilesRemoved", key, removed);
+      if (added.length) call("userDirectoryFilesAddedOrChanged", key, added);
+    });
+  }
+  function answerRandom(key, cb) {
+    var dir = latest.directories && latest.directories[key];
+    var files = dir ? dir.files : [];
+    if (!files.length) return;
+    var file = files[Math.floor(Math.random() * files.length)];
+    setTimeout(function () {
+      try { cb(key, file); } catch (error) { console.error("[kb-wpe] random file", error); }
+    }, 0);
+  }
   function deliverFull(state) {
     call("applyUserProperties", clone(state.user));
     call("applyGeneralProperties", clone(state.general));
+    deliverDirectories(null, state.directories);
     delivered = state;
   }
   function changedUser(prev, next) {
@@ -80,10 +112,17 @@
         (out || (out = {}))[key] = clone(next[key]);
       }
     });
+    // 无默认值的 file / directory 重置后键会消失；页面仍需收到空路径以撤销旧选择。
+    Object.keys(prev).forEach(function (key) {
+      if (!(key in next) && (prev[key].type === "file" || prev[key].type === "directory")) {
+        (out || (out = {}))[key] = { type: prev[key].type, value: "" };
+      }
+    });
     return out;
   }
   function receive(next) {
     latest = next;
+    randomQueue.splice(0).forEach(function (request) { answerRandom(request[0], request[1]); });
     // load 之前只记下来，不提前回调（为 WPE 写的页面默认回调时 DOM 已就绪）
     if (!loaded) return;
     if (!delivered) return deliverFull(next);
@@ -93,6 +132,7 @@
     if (JSON.stringify(delivered.general) !== JSON.stringify(next.general)) {
       call("applyGeneralProperties", clone(next.general));
     }
+    deliverDirectories(delivered.directories, next.directories);
     delivered = next;
   }
   window.addEventListener("load", function () {

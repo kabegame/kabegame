@@ -208,7 +208,15 @@
                   <button type="button" class="setting-current-wallpaper-path" @click="openCurrentWallpaperPath">
                     {{ currentWallpaperPath }}
                   </button>
+                  <el-button v-if="currentWallpaperIsWeb" size="small" @click="wpePropsOpen = true">
+                    {{ $t("settings.wallpaperCurrentProperties") }}
+                  </el-button>
                 </SettingRow>
+                <WpeWebPropertiesDialog
+                  v-model="wpePropsOpen"
+                  :image-id="currentWallpaperImageId"
+                  :title="currentWallpaperName"
+                />
 
                 <SettingRow
                   :label="$t('settings.wallpaperRotationInterval')"
@@ -381,6 +389,9 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { trackEvent } from "@/track/umami";
 import SettingRow from "@/components/settings/SettingRow.vue";
+import WpeWebPropertiesDialog from "@/components/wallpaper/WpeWebPropertiesDialog.vue";
+import { fetchImageById } from "@/utils/imageRow";
+import { isWpeWebType } from "@/utils/mediaMime";
 import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
@@ -567,12 +578,35 @@ const wallpaperRotationPathDisplay = computed(
 );
 const rotationIntervalMin = computed(() => (IS_ANDROID ? 15 : 1));
 const currentWallpaperPath = ref<string | null>(null);
+const currentWallpaperIsWeb = ref(false);
+/** 当前网页壁纸的显示名，作属性弹窗标题（面板自带「壁纸属性」标题栏） */
+const currentWallpaperName = ref<string | null>(null);
+const currentWallpaperImageId = computed(() => {
+  const id = settingsStore.values.currentWallpaperImageId;
+  return typeof id === "string" ? id : null;
+});
+const wpePropsOpen = ref(false);
+let wallpaperLookup = 0;
 async function refreshCurrentWallpaperPath() {
+  const lookup = ++wallpaperLookup;
+  const id = currentWallpaperImageId.value;
+  currentWallpaperIsWeb.value = false;
   try {
     const path = await invoke<string | null>("get_current_wallpaper_path");
     currentWallpaperPath.value = path && path.trim() ? path : null;
   } catch {
     currentWallpaperPath.value = null;
+  }
+  if (id) {
+    try {
+      const image = await fetchImageById(id);
+      if (lookup === wallpaperLookup) {
+        currentWallpaperIsWeb.value = isWpeWebType(image?.type);
+        currentWallpaperName.value = image?.displayName || null;
+      }
+    } catch {
+      if (lookup === wallpaperLookup) currentWallpaperIsWeb.value = false;
+    }
   }
 }
 async function openCurrentWallpaperPath() {

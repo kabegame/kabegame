@@ -188,6 +188,9 @@ webview:
     captureMissing: "找不到該影片的擷取資料"
     captureEmpty: "擷取資料中沒有媒體內容"
 
+wpe:
+  schemeColor: 主題配色
+
 crawler:
   toolbar:
     collapse: "收合"

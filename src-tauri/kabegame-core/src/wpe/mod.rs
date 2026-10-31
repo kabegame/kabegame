@@ -7,10 +7,12 @@
 //! 本模块只做只读解析与目录展开，不写库、不复制或转码用户目录里的任何文件。
 
 pub mod discover;
+pub mod locale;
 pub mod project;
 pub mod properties;
 pub mod recognize;
 pub mod scan;
+pub mod user_props;
 
 pub use project::{read_project, WpeKind, WpeProject, WpeSkip, WPE_PROJECT_FILE};
 
@@ -48,12 +50,8 @@ pub fn is_safe_relative_path(rel: &str) -> bool {
         return false;
     }
     use std::path::Component;
-    path.components().all(|component| {
-        matches!(
-            component,
-            Component::Normal(_) | Component::CurDir
-        )
-    })
+    path.components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
 #[cfg(test)]

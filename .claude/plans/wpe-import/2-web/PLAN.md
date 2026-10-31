@@ -1,6 +1,6 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归 2026-10-29 完成）；Phase 6b 已实现（2026-10-29，静态检查与单测通过；真机回归待重编 CEF 后进行）；Phase 6c 已实现（2026-10-30，Windows 真机 9/12 通过）；Phase 6d 方案已写（2026-10-30）；Phase 7 方案已写（2026-10-28，关键决策待确认）；Phase 8 为实现清单
+> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归 2026-10-29 完成）；Phase 6b 已实现（2026-10-29，静态检查与单测通过；真机回归待重编 CEF 后进行）；Phase 6c 已实现（2026-10-30，Windows 真机 9/12 通过）；Phase 6d 方案已写（2026-10-30）；Phase 7 已实现（2026-10-31，静态检查与单测通过；真机回归待完全重启 dev 后进行）；Phase 8 为实现清单
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
@@ -366,7 +366,7 @@ delegate 注入文件时另清 `html`（`CF_HTML`）与 `download_metadata`（�
 resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`。
 
 ### Phase 7 — 用户属性
-> 状态：方案已写（2026-10-28），关键决策待确认。Phase 6 暂时跳过，本 Phase 依赖 Phase 6a。
+> 状态：已实现（2026-10-31）：关键决策全部按推荐项确认，codex 实施、Claude 验收（静态检查与单测通过）；真机回归见 `versions/latest/regression.md`，需完全重启 dev（改了垫片与 runtime）。Phase 6 暂时跳过，本 Phase 依赖 Phase 6a。
 
 点级方案见 [phase-7-user-properties.md](phase-7-user-properties.md)。面板不复刻 WPE 属性页，用 Kabegame 自己的表单组件（用户指定）。要点：
 - 用户值存图片 metadata 顶层 `userProperties`（已确认决策 6），只存与作者默认值不同的键。

@@ -367,5 +367,12 @@
   "searchSummaryNone": "선택한 범위가 없어 검색으로 필터링하지 않습니다.",
   "slideshowPlayPrev": "이전 방향 자동 재생",
   "slideshowPlayNext": "다음 방향 자동 재생",
-  "slideshowStop": "자동 재생 중지"
+  "slideshowStop": "자동 재생 중지",
+  "wpePropsTitle": "배경화면 속성",
+  "wpePropsResetAll": "모두 초기화",
+  "wpePropsReset": "기본값으로 복원",
+  "wpePropsModified": "이 그룹에 변경 사항 있음",
+  "wpePropsEmpty": "조정할 수 있는 속성이 없습니다",
+  "wpePropsLoadFailed": "배경화면 속성을 불러오지 못했습니다",
+  "wpePropsSaveFailed": "배경화면 속성을 저장하지 못했습니다"
 }

@@ -368,5 +368,12 @@
   "searchSummaryNone": "未勾选任何范围，不做搜索过滤。",
   "slideshowPlayPrev": "向前自动播放",
   "slideshowPlayNext": "向后自动播放",
-  "slideshowStop": "停止自动播放"
+  "slideshowStop": "停止自动播放",
+  "wpePropsTitle": "壁纸属性",
+  "wpePropsResetAll": "全部重置",
+  "wpePropsReset": "恢复默认",
+  "wpePropsModified": "本组有改动",
+  "wpePropsEmpty": "这张壁纸没有可调属性",
+  "wpePropsLoadFailed": "加载壁纸属性失败",
+  "wpePropsSaveFailed": "保存壁纸属性失败"
 }

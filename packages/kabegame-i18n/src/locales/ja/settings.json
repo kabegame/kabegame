@@ -245,5 +245,6 @@
   "quickDrawerTitleDefault": "設定",
   "quickEmpty": "このページにはクイック設定がありません",
   "mcpSelectAll": "すべて選択",
-  "mcpClearAll": "すべて解除"
+  "mcpClearAll": "すべて解除",
+  "wallpaperCurrentProperties": "壁紙のプロパティ"
 }

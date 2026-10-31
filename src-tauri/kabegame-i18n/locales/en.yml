@@ -188,6 +188,9 @@ webview:
     captureMissing: "No capture data found for this video"
     captureEmpty: "The capture contains no media data"
 
+wpe:
+  schemeColor: Scheme Color
+
 crawler:
   toolbar:
     collapse: "Collapse"

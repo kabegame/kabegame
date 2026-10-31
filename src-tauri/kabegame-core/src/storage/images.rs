@@ -702,6 +702,54 @@ impl Storage {
         Ok(deleted)
     }
 
+    /// 在一个事务里改写一张图的 metadata。调用方保证改动不涉及可搜索文本；
+    /// 新行沿用旧行的插件、模板和搜索词映射。事件由调用方在提交后发送。
+    pub fn rewrite_image_metadata(
+        &self,
+        image_id: &str,
+        edit: impl FnOnce(&Value) -> Result<Option<Value>, String>,
+    ) -> Result<Option<i64>, String> {
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin rewrite metadata: {e}"))?;
+        let old: Option<(i64, String)> = tx.query_row(
+            "SELECT metadata.id, metadata.data FROM images JOIN metadata ON metadata.id = images.metadata_id WHERE images.id = ?1",
+            params![image_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(|e| format!("read image metadata: {e}"))?;
+        let (old_id, old_data) =
+            old.ok_or_else(|| format!("image metadata missing: {image_id}"))?;
+        let raw: Value =
+            serde_json::from_str(&old_data).map_err(|e| format!("parse metadata: {e}"))?;
+        let Some(next) = edit(&raw)? else {
+            return Ok(None);
+        };
+        super::page_snapshot::validate(&next)?;
+        let serialized =
+            serde_json::to_string(&next).map_err(|e| format!("serialize metadata: {e}"))?;
+        tx.execute(
+            "INSERT INTO metadata (data, plugin_id, plugin_version, template) SELECT ?1, plugin_id, plugin_version, template FROM metadata WHERE id = ?2",
+            params![serialized, old_id],
+        ).map_err(|e| format!("insert rewritten metadata: {e}"))?;
+        let new_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO metadata_search_terms (metadata_id, term_id) SELECT ?1, term_id FROM metadata_search_terms WHERE metadata_id = ?2",
+            params![new_id, old_id],
+        ).map_err(|e| format!("copy metadata search terms: {e}"))?;
+        tx.execute(
+            "UPDATE images SET metadata_id = ?1 WHERE id = ?2",
+            params![new_id, image_id],
+        )
+        .map_err(|e| format!("repoint image metadata: {e}"))?;
+        tx.execute(
+            "DELETE FROM metadata WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM images WHERE metadata_id = ?1) AND NOT EXISTS (SELECT 1 FROM task_failed_images WHERE metadata_id = ?1)",
+            params![old_id],
+        ).map_err(|e| format!("gc old metadata: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit rewrite metadata: {e}"))?;
+        Ok(Some(new_id))
+    }
+
     /// 去重命中时把旧图改挂到新 metadata；`plugin_id` / `post_url` 为 Some 时同步覆盖，None 保留原值。
     /// `task_id` / `surf_record_id` 不动。旧 metadata 行改挂后无人引用则 GC。
     pub fn rebind_image_metadata(
@@ -1564,6 +1612,136 @@ mod rebind_image_metadata_tests {
             .unwrap();
         assert!(!unique_old_exists);
         assert!(shared_old_exists);
+    }
+}
+
+#[cfg(test)]
+mod rewrite_image_metadata_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn storage() -> Storage {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;
+            CREATE TABLE metadata (id INTEGER PRIMARY KEY, data TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version INTEGER NOT NULL, template TEXT);
+            CREATE TABLE images (id TEXT PRIMARY KEY, metadata_id INTEGER);
+            CREATE TABLE task_failed_images (metadata_id INTEGER);
+            CREATE TABLE search_terms (id INTEGER PRIMARY KEY, text TEXT NOT NULL UNIQUE);
+            CREATE TABLE metadata_search_terms (metadata_id INTEGER NOT NULL REFERENCES metadata(id) ON DELETE CASCADE, term_id INTEGER NOT NULL, PRIMARY KEY(metadata_id, term_id));
+            INSERT INTO metadata VALUES (1, '{\"title\":\"author\"}', 'wpe-import', 0, NULL);
+            INSERT INTO images VALUES ('one', 1);
+            INSERT INTO search_terms VALUES (1, 'author');
+            INSERT INTO metadata_search_terms VALUES (1, 1);") .unwrap();
+        Storage::from_test_connection(conn)
+    }
+
+    #[test]
+    fn rewrite_image_metadata_copies_terms_and_gcs_old_row() {
+        let storage = storage();
+        let new_id = storage
+            .rewrite_image_metadata("one", |raw| {
+                let mut next = raw.clone();
+                next["userProperties"] = json!({"color":"1 0 0"});
+                Ok(Some(next))
+            })
+            .unwrap()
+            .unwrap();
+        let conn = storage.db.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT metadata_id FROM images WHERE id='one'", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            new_id
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM metadata WHERE id=1", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT term_id FROM metadata_search_terms WHERE metadata_id=?1",
+                [new_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn rewrite_image_metadata_preserves_shared_row_and_rolls_back() {
+        let storage = storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute("INSERT INTO images VALUES ('two', 1)", [])
+                .unwrap();
+        }
+        assert_eq!(
+            storage.rewrite_image_metadata("one", |_| Ok(None)).unwrap(),
+            None
+        );
+        assert!(storage
+            .rewrite_image_metadata("one", |_| Err("bad".into()))
+            .is_err());
+        {
+            let conn = storage.db.lock().unwrap();
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM metadata", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+        let new_id = storage
+            .rewrite_image_metadata("one", |raw| {
+                let mut next = raw.clone();
+                next["userProperties"] = json!({"x":1});
+                Ok(Some(next))
+            })
+            .unwrap()
+            .unwrap();
+        let conn = storage.db.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT metadata_id FROM images WHERE id='two'", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM metadata", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_ne!(new_id, 1);
+    }
+
+    #[test]
+    fn rewrite_image_metadata_keeps_failed_image_reference() {
+        let storage = storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute("INSERT INTO task_failed_images VALUES (1)", [])
+                .unwrap();
+        }
+        storage
+            .rewrite_image_metadata("one", |raw| {
+                let mut next = raw.clone();
+                next["userProperties"] = json!({"x": 1});
+                Ok(Some(next))
+            })
+            .unwrap();
+        let conn = storage.db.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM metadata WHERE id=1", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 }
 

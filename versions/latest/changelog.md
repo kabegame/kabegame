@@ -4,8 +4,9 @@
 
 ### Added
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
+- 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加任意壁纸目录或 Steam 库；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
-- 「壁纸」导入支持 Wallpaper Engine 网页壁纸：原地引用壁纸目录；预览以主屏比例的「桌面画布」运行页面并可交互，也可在窗口模式设为桌面壁纸（暂不支持 WPE 属性、`file` / `directory` 类属性，应用背景显示作者预览图）。
+- 「壁纸」导入支持 Wallpaper Engine 网页壁纸：原地引用壁纸目录；预览以主屏比例的「桌面画布」运行页面并可交互，也可在窗口模式设为桌面壁纸（应用背景显示作者预览图）。
 - 桌面网页壁纸改为像 Wallpaper Engine 一样以 `file://` 直接加载壁纸目录：依赖读取同目录数据文件的壁纸（如歌单、字幕类）现在能完整运行；文件访问只对壁纸窗口开启，且只能读当前壁纸目录内的文件。Windows 上桌面的鼠标移动与左键点击会转发给网页壁纸（不拦截桌面本身的点击，桌面框选不受影响）。预览网页壁纸时，鼠标移到画布左右边缘中段即可唤出切换箭头。预览网页壁纸时右键菜单无法弹出（右键会被壁纸页面接收），菜单里的操作改为按原顺序排在底部工具条里。
 - 网页壁纸可读取作者默认属性与界面语言：桌面壁纸与图库预览里的 Wallpaper Engine 网页壁纸会在加载完成后收到 `project.json` 里作者设定的属性值，以及当前界面语言（切换语言后页面随之更新）；依赖这些属性才开始绘制的壁纸现在能正常显示。暂不支持在应用里修改属性、帧率上限、暂停与音频可视化。
 
@@ -39,6 +40,7 @@
 
 ### Internal
 - 新增 tauri 补丁 0014–0017（拉取后须重新应用 tauri 补丁序列）：JS 事件按接收方 webview 身份投递并忽略前端 `listen` 传的 `target`、`unlisten` 只作用于调用方 webview；`core:event:allow-listen` 支持事件名作用域；capability 新增 `frames`（默认只认主 frame，frame 由 CEF runtime 经请求 extension 上报）；新增 `Builder::acl_exempt_webview`，主窗口与壁纸窗口的本地应用页免 ACL，删除约 200 条的 `permissions/main.toml`，新增只给主界面用的命令只需注册进 `generate_handler!`。补丁 0009 顺带补上 `mock_context` 缺的 `bins` 字段，`cargo test -p tauri` 可以编译。
+- WPE 网页壁纸用户属性：值存图片 metadata 的 `userProperties`，经新增的 `Storage::rewrite_image_metadata` 事务改写并发 `metadataId` 补丁驱动垫片与面板重拉；CEF 运行时文件策略新增 `grant_file_documents`，按窗口与当前根目录追加放行用户选的文件 / 目录（换根清空）；显示条件解释器 `utils/wpeProperties.ts`、WPE 内置词表只读读取安装目录。
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 0013：Windows 改用原生 `tauri://localhost` / `ipc://localhost`；CEF runtime 删除 `http://<scheme>.localhost` 映射并统一三平台 scheme。拉取后须重新应用 tauri 补丁序列。
 - CEF 补丁 0006 改用每工厂私有 CORS 列表，运行时登记应用 origin 到 `file:` 的跨源白名单；删除桌面 `start_http_server` 并关闭 Tauri asset 协议。

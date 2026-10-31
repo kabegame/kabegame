@@ -17,11 +17,11 @@
 //! | 发起方 | 处理 |
 //! | --- | --- |
 //! | 应用页主 frame 的子资源（非导航、主 frame，发起方 origin 与 frame 文档都不是 `file:`） | 登记了 0005 即**免检**（[`app_page_open`]；图库媒体走 `file://`） |
-//! | 子 frame 导航到 `file:`（给 iframe 赋 `src`）；主 frame 导航到 `file:`（壁纸窗口由 Rust 导航） | 过闸门：按根目录 |
-//! | `file:` 文档自己的子资源（WPE 页 fetch 同目录、嵌套页；壁纸窗口整窗 `file:` 时的主 frame） | 过闸门：按根目录 |
+//! | 子 frame 导航到 `file:`（给 iframe 赋 `src`）；主 frame 导航到 `file:`（壁纸窗口由 Rust 导航） | 过闸门：按根目录与追加放行 |
+//! | `file:` 文档自己的子资源（WPE 页 fetch 同目录、嵌套页；壁纸窗口整窗 `file:` 时的主 frame） | 过闸门：按根目录与追加放行 |
 //!
-//! 闸门经 [`check_file_request`] 判定，只放行当前根目录内的普通文件（拒绝越界、符号链接、
-//! 目录、不存在）；没有根目录时一律拒绝。两项能力与根目录并在同一张 label 表里，「进表即开闸门」
+//! 闸门经 [`check_file_request`] 判定，只放行当前根目录或用户追加放行项内的普通文件（拒绝越界、符号链接、
+//! 目录、不存在）；没有根目录与追加放行时拒绝。两项能力与根目录并在同一张 label 表里，「进表即开闸门」
 //! 由结构保证；免检只是闸门前按发起方的一档分流，不改根目录语义。
 //!
 //! 运行时只提供机制；哪个窗口开哪项能力、放行哪个目录由应用决定。
@@ -78,6 +78,22 @@ struct FilePolicy {
     /// 子 frame 与 `file:` 文档的根目录（`None` = 这类请求全拒）；应用页主 frame 的子资源
     /// 免检时不看它。
     root: Option<PathBuf>,
+    /// 追加放行（[`grant_file_documents`]）：只增不减，换根即清空。
+    grants: Vec<Grant>,
+}
+
+/// 追加放行的一项（已 canonicalize）：文件只放行它本身，目录放行其中的普通文件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Grant {
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
+
+/// 闸门裁决用的快照：根目录 + 追加放行。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FileAccess {
+    pub root: Option<PathBuf>,
+    pub grants: Vec<Grant>,
 }
 
 /// label → 策略。进表即开闸门。
@@ -138,6 +154,46 @@ pub(crate) fn set_file_document_root(
         ));
     };
     policy.root = root;
+    policy.grants.clear();
+    Ok(())
+}
+
+/// 当前页面的根仍匹配时追加用户选的文件或目录，旧页面的在途拉取会被忽略。
+pub(crate) fn grant_file_documents(
+    webview_label: &str,
+    for_root: &Path,
+    paths: &[PathBuf],
+) -> Result<(), String> {
+    let mut map = policies()
+        .lock()
+        .map_err(|_| "file document policy mutex poisoned".to_string())?;
+    let policy = map
+        .get_mut(webview_label)
+        .ok_or_else(|| format!("webview '{webview_label}' 未登记文件访问策略"))?;
+    let Some(current_root) = policy.root.as_deref().and_then(canonical_path) else {
+        return Ok(());
+    };
+    if !canonical_path(for_root).is_some_and(|root| path_key(&current_root) == path_key(&root)) {
+        return Ok(());
+    }
+    for path in paths {
+        let Ok(meta) = std::fs::symlink_metadata(path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() || !(meta.is_file() || meta.is_dir()) {
+            continue;
+        }
+        let Some(path) = canonical_path(path) else {
+            continue;
+        };
+        let grant = Grant {
+            path,
+            is_dir: meta.is_dir(),
+        };
+        if !policy.grants.contains(&grant) {
+            policy.grants.push(grant);
+        }
+    }
     Ok(())
 }
 
@@ -161,11 +217,13 @@ pub(crate) fn app_page_open(webview_label: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// label 当前允许的根目录；未登记或未设置都是 `None`。
-pub(crate) fn file_document_root(webview_label: &str) -> Option<PathBuf> {
+/// label 当前的根目录与追加放行；未登记返回 `None`。
+pub(crate) fn file_document_access(webview_label: &str) -> Option<FileAccess> {
     policies().lock().ok().and_then(|map| {
-        map.get(webview_label)
-            .and_then(|policy| policy.root.clone())
+        map.get(webview_label).map(|policy| FileAccess {
+            root: policy.root.clone(),
+            grants: policy.grants.clone(),
+        })
     })
 }
 
@@ -179,7 +237,7 @@ pub(crate) fn is_file_url(url: &str) -> bool {
 /// 拒绝原因（写进日志）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FileDeny {
-    /// 当前没有允许的根目录。
+    /// 当前没有允许的根目录或追加放行。
     NoRoot,
     /// URL 不是合法的本地 `file:` 地址。
     InvalidUrl,
@@ -189,20 +247,20 @@ pub(crate) enum FileDeny {
     Symlink,
     /// 目标不是普通文件（目录等）。
     NotFile,
-    /// 规范化后位于根目录之外。
+    /// 规范化后位于根目录与追加放行之外。
     OutsideRoot,
 }
 
-/// `file:` 资源请求判定：只放行 `root` 内的普通文件，返回其规范化路径。
+/// `file:` 资源请求判定：只放行根目录或追加放行项内的普通文件，返回其规范化路径。
 ///
 /// - URL → 本地路径用 `url::Url::to_file_path`（百分号解码；查询串与片段不参与）；
 /// - `symlink_metadata` 必须是普通文件（符号链接、目录、不存在一律拒绝）；
 /// - 目标与根目录都 `canonicalize`（解析 `..` 与中间层链接），去掉 Windows `\\?\` 前缀，
 ///   按路径比较键（Windows 大小写不敏感）判定目标位于根目录之内。
-pub(crate) fn check_file_request(url: &str, root: Option<&Path>) -> Result<PathBuf, FileDeny> {
-    let Some(root) = root else {
+pub(crate) fn check_file_request(url: &str, access: &FileAccess) -> Result<PathBuf, FileDeny> {
+    if access.root.is_none() && access.grants.is_empty() {
         return Err(FileDeny::NoRoot);
-    };
+    }
     let parsed = url::Url::parse(url).map_err(|_| FileDeny::InvalidUrl)?;
     if parsed.scheme() != "file" {
         return Err(FileDeny::InvalidUrl);
@@ -216,8 +274,19 @@ pub(crate) fn check_file_request(url: &str, root: Option<&Path>) -> Result<PathB
         return Err(FileDeny::NotFile);
     }
     let target = canonical_path(&path).ok_or(FileDeny::NotFound)?;
-    let root = canonical_path(root).ok_or(FileDeny::OutsideRoot)?;
-    if !is_inside(&target, &root) {
+    let root_allowed = access
+        .root
+        .as_deref()
+        .and_then(canonical_path)
+        .is_some_and(|root| is_inside(&target, &root));
+    let grant_allowed = access.grants.iter().any(|grant| {
+        if grant.is_dir {
+            is_inside(&target, &grant.path)
+        } else {
+            path_key(&target) == path_key(&grant.path)
+        }
+    });
+    if !root_allowed && !grant_allowed {
         return Err(FileDeny::OutsideRoot);
     }
     Ok(target)
@@ -262,6 +331,20 @@ fn is_inside(target: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_file_request(url: &str, root: Option<&Path>) -> Result<PathBuf, FileDeny> {
+        super::check_file_request(
+            url,
+            &FileAccess {
+                root: root.map(Path::to_path_buf),
+                grants: Vec::new(),
+            },
+        )
+    }
+
+    fn file_document_root(label: &str) -> Option<PathBuf> {
+        file_document_access(label).and_then(|access| access.root)
+    }
 
     #[test]
     fn grant_app_fetch_file_dedups() {
@@ -505,5 +588,62 @@ mod tests {
         allow_app_local_resources(docs);
         assert!(app_page_open(docs));
         assert_eq!(file_document_root(docs), Some(PathBuf::from("/tmp/docs")));
+    }
+
+    #[test]
+    fn file_and_directory_grants_are_scoped_and_reset() {
+        let (base, wp, sibling) = fixture("grants");
+        let label = "file-access-test-grants";
+        allow_file_documents(label);
+        set_file_document_root(label, Some(wp.clone())).unwrap();
+        let file = sibling.join("project.json");
+        let other = sibling.join("other.txt");
+        fs::write(&other, "other").unwrap();
+        grant_file_documents(label, &base.join("wrong"), &[file.clone()]).unwrap();
+        assert!(file_document_access(label).unwrap().grants.is_empty());
+        grant_file_documents(label, &wp, &[file.clone()]).unwrap();
+        grant_file_documents(label, &wp, &[file.clone()]).unwrap();
+        let access = file_document_access(label).unwrap();
+        assert_eq!(access.grants.len(), 1);
+        assert!(super::check_file_request(&file_url(&file), &access).is_ok());
+        assert_eq!(
+            super::check_file_request(&file_url(&other), &access),
+            Err(FileDeny::OutsideRoot)
+        );
+        grant_file_documents(label, &wp, &[sibling.clone()]).unwrap();
+        assert!(super::check_file_request(
+            &file_url(&other),
+            &file_document_access(label).unwrap()
+        )
+        .is_ok());
+        assert_eq!(
+            super::check_file_request(
+                &file_url(&base.join("outside.txt")),
+                &file_document_access(label).unwrap()
+            ),
+            Err(FileDeny::OutsideRoot)
+        );
+        set_file_document_root(label, None).unwrap();
+        assert!(file_document_access(label).unwrap().grants.is_empty());
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn grant_without_root_works() {
+        let (base, wp, _) = fixture("grant-no-root");
+        // Grant 只经 grant_file_documents 创建，路径都是 canonical_path（Windows 已去掉 `\\?\`）
+        let access = FileAccess {
+            root: None,
+            grants: vec![Grant {
+                path: canonical_path(&wp.join("index.html")).unwrap(),
+                is_dir: false,
+            }],
+        };
+        assert!(super::check_file_request(&file_url(&wp.join("index.html")), &access).is_ok());
+        assert_eq!(
+            super::check_file_request(&file_url(&wp.join("data.json")), &access),
+            Err(FileDeny::OutsideRoot)
+        );
+        let _ = fs::remove_dir_all(base);
     }
 }
