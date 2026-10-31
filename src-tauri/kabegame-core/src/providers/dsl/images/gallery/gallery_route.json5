@@ -91,7 +91,7 @@
                 // as 必须是 "type" 而不是 "media_type":ImageInfo 的该字段是
                 // `#[serde(rename = "type", alias = "media_type")]` —— 两个键名都吃,
                 // 下游列举 SQL(gallery_media_type_provider)也按 `sub.type` 读。
-                "sql": "COALESCE(images.type, 'image')",
+                "sql": "images.type",
                 "as": "type",
                 "in_need": true,
             },

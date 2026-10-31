@@ -2,12 +2,15 @@
 
 本文记录 Kabegame 开发期的 runtime debug ingest 机制。它参考 Cursor Debug Mode 的思路：在运行时代码里临时插桩，把调试事件发送到开发服务器，由开发服务器 tee 到 NDJSON 文件，之后再让人或 agent 读取日志定位问题。
 
+插桩本身就是 tracing 日志（见 [APP_LOGGING.md](APP_LOGGING.md)）：Rust 用 `kb_debug!` 打一条 `kabegame::debug` 的 TRACE 事件，Tauri 前端的 `sendDebugEvent` 经 `tauri-plugin-tracing` 打一条 `kb-debug {json}` 的 trace 日志。主程序 debug 构建里有一个订阅它们的 tracing 层（`DebugIngestLayer`），攒批后用 NDJSON 发给 dev server。这类 TRACE 事件不进控制台、文件与「查看日志」。
+
 ## 涉及文件
 
 - `scripts/vite-debug-server.ts`：Vite dev server middleware，负责接收 debug 事件并写入文件。
 - `vite.config.pub.ts`：挂载 `kabegameDebugServer()`。
-- `packages/core/src/debugIngest.ts`：前端插桩 helper。
-- `src-tauri/kabegame/src/debug_ingest.rs`：Rust 后端插桩 helper。
+- `apps/kabegame/src/debugIngest.ts`：前端插桩 helper（Tauri 下走 `tauri-plugin-tracing`，Web dev 直接 POST）。
+- `src-tauri/kabegame-core/src/logging/mod.rs`：Rust 插桩宏 `kb_debug!`（core 与主程序都能用）。
+- `src-tauri/kabegame/src/debug_ingest.rs`：`DebugIngestLayer`（订阅 debug 事件、后台线程批量发送）与 dev host 推导。
 - `src-tauri/kabegame/src/lib.rs`：后端启动后发送 `backend_started` smoke event。
 
 ## 核心语义
@@ -117,8 +120,9 @@ await sendDebugEvent(
 说明：
 
 - `sendDebugEvent()` 只在 `IS_DEV` 下发送。
-- 请求失败会被吞掉，不影响应用行为。
-- Android 上 WebView 请求经 `shouldInterceptRequest` 代理，POST body 到不了 dev server（落成 `debug-default.ndjson` 里的空事件）。所以 `IS_ANDROID` 时事件 JSON 改放在 `event` 查询参数里；middleware 在 body 为空时读这个参数。
+- Tauri（桌面 / Android）下它只是一条 trace 日志：`trace("kb-debug " + JSON)`，由后端 `DebugIngestLayer` 原样转发（`ts`、`session_id`、`source` 都取前端自带的值）。所以 Android 不再受 WebView `shouldInterceptRequest` 吞 POST body 的影响——请求是 Rust 侧 reqwest 发出的。Android 后端用构建脚本注入的 `KABEGAME_DEV_SERVER_HOST` 访问开发机。
+- Web dev 没有 Tauri 插件，仍直接 POST 给 Vite 中间件。
+- 失败会被吞掉，不影响应用行为。
 - 如果不显式传 `sessionId`，会优先读取 URL query `debug_session`，其次使用 `sessionStorage` 自动生成的 session。
 
 可以这样让一次前端复现使用固定 session：
@@ -129,10 +133,10 @@ http://localhost:1420/gallery?debug_session=preview-debug-001
 
 ## Rust 后端插桩
 
-使用 `src-tauri/kabegame/src/debug_ingest.rs`：
+使用 `kabegame_core::kb_debug!`（core 与主程序都能用，主程序里同样写全路径）：
 
 ```rust
-crate::debug_ingest::spawn_debug_event(
+kabegame_core::kb_debug!(
     "preview-debug-001",
     "backend_query_image",
     serde_json::json!({
@@ -142,25 +146,12 @@ crate::debug_ingest::spawn_debug_event(
 );
 ```
 
-需要等待发送结果时使用 async 方法：
-
-```rust
-crate::debug_ingest::send_debug_event(
-    "preview-debug-001",
-    "backend_query_image_done",
-    serde_json::json!({
-        "image_id": image_id,
-        "elapsed_ms": elapsed_ms,
-    }),
-)
-.await?;
-```
-
 说明：
 
-- debug build 下才真正发送；release 下是 no-op。
+- 宏展开为一条 `target: "kabegame::debug"` 的 TRACE 事件（字段 `session_id` / `name` / `payload`），`ts` 取事件产生时刻。发布版（`cfg!(debug_assertions)` 为假）不发出。
+- 发送是异步批量的：`DebugIngestLayer` 把事件丢进 channel，专用线程取走已到达的事件（一批至多 200 条）用 `application/x-ndjson` POST。不再提供「等待发送结果」的 async 版本；日志行到达顺序不等于调用顺序，排先后看 `ts`。
 - 默认目标由环境推导：优先 `KABEGAME_DEBUG_INGEST_URL`；其次用 `KABEGAME_DEV_SERVER_HOST` / `TAURI_DEV_HOST` / `VITE_DEV_SERVER_HOST` 加端口拼出 URL；桌面兜底 `127.0.0.1`，Android 兜底 `10.0.2.2`。
-- 发送失败只输出 `[kabegame-debug] failed to send debug event: ...`，不应改变业务流程。
+- 发送失败只往 stderr 打一次 `[kabegame-debug] failed to send debug events to ...`（这里是日志管线自身，不经 tracing），不改变业务流程。
 
 ## 环境变量
 
@@ -168,7 +159,7 @@ crate::debug_ingest::send_debug_event(
 KABEGAME_DEBUG_INGEST=false
 ```
 
-关闭 Vite middleware 与 Rust 发送逻辑。
+关闭 Vite middleware；主程序启动时读到它则不挂 `DebugIngestLayer`。
 
 ```text
 KABEGAME_DEBUG_INGEST_URL=http://127.0.0.1:1420/__kabegame_debug/ingest
@@ -228,7 +219,7 @@ GET  http://127.0.0.1:1420/__kabegame_cdp            → {"ok":true,"port":51234
 ## 推荐排查流程
 
 1. 选择一个短 session id，例如 `preview-debug-001`。
-2. 在可疑前端路径和 Rust 路径插入 `sendDebugEvent` / `spawn_debug_event`。
+2. 在可疑前端路径和 Rust 路径插入 `sendDebugEvent` / `kb_debug!`。
 3. 启动 `deno task dev -c kabegame`。
 4. 复现问题。
 5. 读取 `.kabegame/debug/debug-preview-debug-001.ndjson`。

@@ -1,13 +1,21 @@
 {
   "identifier": "wpe-web-capability",
-  "description": "Desktop WPE web wallpaper page (file:// main frame): pull state and listen events only",
+  "description": "Desktop WPE web wallpaper page (file:// top-level frame of the wallpaper window): pull state, answer pings, listen to four events. Subframes of the page get nothing (frames defaults to main)",
   "local": false,
   "windows": ["wallpaper"],
   "remote": {
     "urls": ["file:///*"]
   },
   "permissions": [
-    "core:event:allow-listen",
+    {
+      "identifier": "core:event:allow-listen",
+      "allow": [
+        { "event": "wallpaper-ping" },
+        { "event": "setting-change" },
+        { "event": "image-changed" },
+        { "event": "images-change" }
+      ]
+    },
     "core:event:allow-unlisten",
     "wpe-web"
   ]

@@ -110,8 +110,8 @@ wrap_render_process_handler! {
             };
             let is_main_frame = frame.is_main() == 1;
             // `file:` 文档（桌面 WPE 网页壁纸）也照常注入：Tauri 自身脚本只进主 frame，
-            // IPC 权限由 ACL 按远程 `file:` 来源限定（运行时把 `file:` frame 的 Origin 改写成
-            // frame URL，见 `protocol::pin_file_frame_origin`）；all-frames 脚本自己按地址判断是否启用。
+            // IPC 权限由 ACL 按远程 `file:` 来源限定（浏览器进程按发起方 origin 把 `file:` 文档的
+            // Origin 写成 `file:///`，见 `protocol::INITIATOR_ORIGIN_HEADER`）；all-frames 脚本自己按地址判断是否启用。
             let source_url = frame.url();
             let source_url = CefString::from(&source_url);
             for (index, script) in scripts.iter().enumerate() {

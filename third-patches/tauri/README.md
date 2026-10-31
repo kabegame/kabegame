@@ -57,7 +57,9 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   the main exe and deletes them on uninstall (no resources staging / installer-hook moves).
   Mobile is untouched (`--lib`); `tauri dev` (cargo run) does not use this path. Known
   limitation: existing `--bin` values in `build.runner.args` are not deduplicated; kabegame
-  does not configure a runner, so this does not affect its builds.
+  does not configure a runner, so this does not affect its builds. The patch also adds
+  `bins: None` to the `Config` literal of `crates/tauri/src/test/mod.rs` (`mock_context`);
+  without it `cargo test -p tauri` does not compile.
 
 `tauri-utils` (library, consumed via `[patch.crates-io]`):
 
@@ -112,6 +114,71 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   `convertFileSrc` does the same. `use_https_scheme` has no effect on Windows.
   A Tauri tree with this patch cannot use the Windows wry/WebView2 runtime.
   Re-check these five anchors when updating Tauri.
+
+0014–0017 make both directions of the event system and the ACL depend only on what the backend
+knows about the caller (webview label, origin, frame), never on parameters sent from JS. Design
+and app usage: [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md).
+
+- `0014-tauri-event-receiver-identity.patch` — JS event delivery is decided by who the receiving
+  webview is. Upstream stores the `target` each JS `listen` sends (default `Any`) and
+  `emit_js_filter` matches the `emit_to` filter against it, letting every `Any` listener bypass
+  `emit_to` (two surf navbars received each other's URL). Now `js_event_listeners` keeps only
+  `HashSet<EventId>` per webview label and event; `emit_js_filter` keeps the webviews whose
+  `receiver_identities` (`Webview{label}`, `Window{window label}`, plus `WebviewWindow{label}`
+  when both labels are equal) satisfy the filter, computed before locking the JS listeners
+  (`window_label()` locks the webview's window while the caller holds the webviews lock, the
+  same order as `Window::webviews()`). The `listen` command no longer takes `target` (the JS API
+  still sends it; extra keys are ignored) and `listen_js_script` no longer writes it.
+  `unlisten_js(webview_label, ..)` only touches the caller's own listeners (ids are a guessable
+  global counter). `Window::has_js_listener` (close-request interception) counts any JS listener
+  in any webview of the window (`Listeners::has_js_listener_in`). Rust-side handlers keep
+  `match_any_or_filter` unchanged. Effects: `emit_to(App)` no longer reaches JS; a webview also
+  receives `Window{its window}` events. Tests: `event::listener` (cross-webview unlisten,
+  identities), `manager::test::js_emit_to_uses_receiver_identity`,
+  `manager::window::tests`. Re-check on bump: `event/listener.rs` `emit_js_filter` /
+  `listen_js` / `unlisten_js`, `event/plugin.rs` `listen`, `manager/window.rs` `has_js_listener`,
+  `manager/mod.rs` `emit_to` `filter_target`, `event/mod.rs` `listen_js_script`.
+- `0015-tauri-event-listen-scope.patch` — `listen` takes `CommandScope<ListenScope>`
+  (`tauri::ListenScope { event }`, exported at the crate root; trailing `*` = prefix match) and
+  rejects event names the scope does not match with
+  ``event `<name>` is not allowed to be listened by ACL``. Capabilities restrict it with
+  `{ "identifier": "core:event:allow-listen", "allow": [{ "event": "…" }], "deny": [...] }`;
+  core permissions have no scope schema, so tauri-build accepts any JSON there. Usual
+  `CommandScope` semantics: deny first, and once any applicable grant carries an allow scope the
+  name must match one; grants without a scope do not restrict. Tests: `event::plugin::tests`
+  (end-to-end through `on_message` with a mock ACL). Re-check on bump: `event/plugin.rs` `listen`.
+- `0016-tauri-acl-frame.patch` — adds the frame as an ACL dimension. `tauri_runtime::webview::IpcFrame`
+  (`Main` default / `Sub` / `Unknown`, re-exported as `tauri::webview::IpcFrame`) is put by the runtime
+  into the `http::Request` extensions (pages cannot forge extensions, unlike headers); `InvokeRequest`
+  gets `frame`, read in `ipc/protocol.rs` (`parse_invoke_request` and `handle_ipc_message`,
+  `request_frame`), missing = `Main`. `tauri_utils::acl::capability::CapabilityFrames`
+  (`main` default / `sub` / `any`) is a new `Capability.frames` field (omitted when `main`),
+  copied into `ResolvedCommand.frames` (`ResolvedCommand::new` and both `ToTokens` impls gain it);
+  `RuntimeAuthority::resolve_access(.., frame)` requires `frames_match`, denies ignore the frame.
+  `resolve_command_scope` passes `Main`; the debug rejection message names the caller's frame and
+  prints `frames: sub|any` for non-main grants. Other `Capability` literals updated:
+  `ipc/capability_builder.rs` (new `.frames()`), `tauri-cli` `acl/capability/new.rs` and
+  `migrate/migrations/v1/config.rs`. Upstream's checked-in schemas are not regenerated (apps get
+  the field in their build-time `gen/schemas`). Tests: `tauri-utils` `acl::capability` /
+  `acl::resolved`, `ipc::authority` (frames table, filtering, deny on every frame),
+  `ipc::protocol`, `event::plugin` (subframe rejected). Re-check on bump: `Capability` /
+  `ResolvedCommand` fields and `ToTokens`, `resolve_access`, `InvokeRequest`, every
+  `InvokeRequest { .. }` / `Capability { .. }` literal.
+- `0017-tauri-acl-exempt-webview.patch` — `Builder::acl_exempt_webview(label)` (stored on the
+  builder, applied to `context.runtime_authority_mut()` in `build`) →
+  `RuntimeAuthority::exempt_webview` / `is_exempt(webview, origin, frame)`: exact label, local origin
+  **and** main frame. `on_message` still resolves the ACL (granted command scopes still reach
+  commands) but does not reject an exempt request, explicit denies included; it sets the
+  crate-private `InvokeMessage.acl_exempt`, read by the crate-only command argument
+  `ipc::AclExempt`, so `listen` skips the `ListenScope` check. Navigating the webview to remote or
+  `file:` content, or calling from a subframe, falls back to the capabilities. Tests:
+  `ipc::authority::tests::exemption_needs_label_local_origin_and_main_frame`,
+  `event::plugin::tests::exempt_*`. Re-check on bump: `webview/mod.rs` `on_message` rejection
+  condition, `app.rs` `Builder::build`, `ipc/mod.rs` `InvokeMessage`.
+
+The CEF runtime side (`src-tauri/tauri-runtime-cef`, not a patch) inserts `IpcFrame` on every
+custom-protocol request (`protocol::attach_request_frame`; no CEF frame → `Unknown`) and carries
+it through the rebuilt `cef-ipc` fallback request (`ipc::post_message_request`).
 
 Apply the whole series manually before building against `third/tauri`:
 

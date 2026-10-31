@@ -70,8 +70,8 @@ ALTER TABLE image_metadata ADD COLUMN search_text TEXT NOT NULL DEFAULT '';
 
     match result {
         Ok((metadata_count, image_metadata_count)) => {
-            println!("[v027] backfilled {metadata_count} metadata rows");
-            println!("[v027] backfilled {image_metadata_count} image_metadata rows");
+            tracing::info!("backfilled {metadata_count} metadata rows");
+            tracing::info!("backfilled {image_metadata_count} image_metadata rows");
             Ok(())
         }
         Err(error) => {

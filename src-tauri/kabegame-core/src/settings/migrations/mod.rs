@@ -77,9 +77,7 @@ fn run_migrations(json: &mut Value, migrations: &[Migration]) -> Result<bool, St
     let latest = migrations.last().map(|m| m.version).unwrap_or(0);
     let mut current = current_version(json);
     if current > latest {
-        eprintln!(
-            "[settings-migration] schemaVersion v{current} 高于当前支持的 v{latest}，跳过迁移"
-        );
+        tracing::warn!("schemaVersion v{current} 高于当前支持的 v{latest}，跳过迁移");
         return Ok(false);
     }
     if current == latest {
@@ -89,7 +87,7 @@ fn run_migrations(json: &mut Value, migrations: &[Migration]) -> Result<bool, St
     let mut working = json.clone();
     for m in migrations {
         if m.version > current {
-            println!("[settings-migration] v{:03}: {}", m.version, m.name);
+            tracing::info!("v{:03}: {}", m.version, m.name);
             (m.up)(&mut working).map_err(|e| format!("v{:03} {}: {e}", m.version, m.name))?;
             set_version(&mut working, m.version);
             current = m.version;

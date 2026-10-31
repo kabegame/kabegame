@@ -193,7 +193,7 @@ async fn build_compatible_path(
         }),
         Ok(None) => None,
         Err(e) => {
-            eprintln!("[local-import] compatible generation failed: {e}");
+            tracing::warn!("compatible generation failed: {e}");
             None
         }
     }

@@ -176,10 +176,7 @@ pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
         let mut current = plugin;
         loop {
             if let Err(error) = run_metadata_migrations_for_plugin(&current) {
-                eprintln!(
-                    "[metadata-migration] plugin `{}` migration runner failed: {}",
-                    current.id, error
-                );
+                tracing::warn!("plugin `{}` migration runner failed: {}", current.id, error);
             }
             let Some(next) = service.take_pending_or_finish_runner(&plugin_id) else {
                 break;
@@ -231,10 +228,7 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
         }
         Err(error) => {
             if let Err(gc_error) = gc_result {
-                eprintln!(
-                    "[metadata-migration] plugin `{}` search term gc failed: {}",
-                    plugin.id, gc_error
-                );
+                tracing::warn!("plugin `{}` search term gc failed: {}", plugin.id, gc_error);
             }
             run_guard.finish(Some(error.clone()));
             return Err(error);
@@ -294,9 +288,7 @@ async fn run_metadata_migrations(
     let exports = match engine.load_script(script).await {
         Ok(exports) => Some(exports),
         Err(error) => {
-            eprintln!(
-                "[metadata-migration] plugin `{plugin_id}` script load failed: {error}; stamping all rows"
-            );
+            tracing::warn!("plugin `{plugin_id}` script load failed: {error}; stamping all rows");
             None
         }
     };
@@ -312,8 +304,8 @@ async fn run_metadata_migrations(
                 Some(function) => match engine.call_migrate(function, data.clone()).await {
                     Ok(migrated) => Some(migrated),
                     Err(error) => {
-                        eprintln!(
-                            "[metadata-migration] plugin `{plugin_id}` row {row_id} migrate failed: {error}"
+                        tracing::warn!(
+                            "plugin `{plugin_id}` row {row_id} migrate failed: {error}"
                         );
                         None
                     }
@@ -333,14 +325,14 @@ async fn run_metadata_migrations(
                     Ok(inputs) => {
                         let (specs, rejected) = validate_labels(&inputs, plugin_id);
                         for (index, reason) in rejected {
-                            eprintln!(
-                                "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels[{index}] skipped: {reason}"
+                            tracing::warn!(
+                                "plugin `{plugin_id}` row {row_id} provideLabels[{index}] skipped: {reason}"
                             );
                         }
                         labels = specs;
                     }
-                    Err(error) => eprintln!(
-                        "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels failed: {error}"
+                    Err(error) => tracing::warn!(
+                        "plugin `{plugin_id}` row {row_id} provideLabels failed: {error}"
                     ),
                 }
             }
@@ -360,15 +352,15 @@ async fn run_metadata_migrations(
                             .map_err(|e| format!("serialize provideSearchTextList result: {e}"))?;
                         let (terms, rejected) = validate_search_text_values(Some(&value))?;
                         for (index, reason) in rejected {
-                            eprintln!(
-                                "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList[{index}] skipped: {reason}"
+                            tracing::warn!(
+                                "plugin `{plugin_id}` row {row_id} provideSearchTextList[{index}] skipped: {reason}"
                             );
                         }
                         terms
                     }
                     Err(error) => {
-                        eprintln!(
-                            "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList failed: {error}"
+                        tracing::warn!(
+                            "plugin `{plugin_id}` row {row_id} provideSearchTextList failed: {error}"
                         );
                         None
                     }
@@ -458,9 +450,7 @@ impl MigrationRun {
         let image_ids = match storage.image_ids_by_metadata_ids(&labelled) {
             Ok(image_ids) => image_ids,
             Err(error) => {
-                eprintln!(
-                    "[metadata-migration] plugin `{plugin_id}` label image lookup failed: {error}"
-                );
+                tracing::warn!("plugin `{plugin_id}` label image lookup failed: {error}");
                 return;
             }
         };
@@ -478,9 +468,7 @@ impl MigrationRun {
             Ok(applied) => {
                 for (spec, error) in applied.skipped {
                     let path = format!("{}/{}", spec.segments.join("/"), spec.key);
-                    eprintln!(
-                        "[metadata-migration] plugin `{plugin_id}` label `{path}` skipped: {error}"
-                    );
+                    tracing::warn!("plugin `{plugin_id}` label `{path}` skipped: {error}");
                 }
                 for album_id in applied.album_ids {
                     if !self.touched.contains(&album_id) {
@@ -489,7 +477,7 @@ impl MigrationRun {
                 }
             }
             Err(error) => {
-                eprintln!("[metadata-migration] plugin `{plugin_id}` label apply failed: {error}")
+                tracing::warn!("plugin `{plugin_id}` label apply failed: {error}")
             }
         }
     }

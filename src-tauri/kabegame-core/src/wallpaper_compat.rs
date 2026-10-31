@@ -8,8 +8,8 @@ pub async fn ensure_native_wallpaper_path(file_path: &str) -> String {
     match resolve_native_wallpaper_path(file_path).await {
         Ok(path) => path,
         Err(e) => {
-            eprintln!(
-                "[wallpaper-compat] failed to resolve native wallpaper path ({}): {e}",
+            tracing::warn!(
+                "failed to resolve native wallpaper path ({}): {e}",
                 file_path
             );
             file_path.to_string()

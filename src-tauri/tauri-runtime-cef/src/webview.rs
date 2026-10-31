@@ -741,8 +741,10 @@ mod imp {
                 1
             }
 
-            // 渲染进程约 15s 未回执输入事件(Chromium hung-renderer 判定,只有可见
-            // 窗口会有输入)。爬虫隐藏窗口的卡死由调度器心跳看门狗负责,不在此处理
+            // 渲染进程 5s(runtime.rs 的 RendererHangWatcher 参数)+ 1s ping 未回执
+            // 输入事件(Chromium hung-renderer 判定,只有可见窗口会有输入;DevTools /
+            // CDP 附着时 Chromium 不报)。爬虫隐藏窗口的卡死由调度器心跳看门狗负责,不在此处理
+            // 壁纸窗口没有输入，卡死由应用层 wallpaper::ping 看门狗负责。
             // ("crawler-" 前缀与 kabegame-core crawler_window_label 约定一致,
             // 标签特判先例见 ViewsBrowserViewDelegate 的 "-navbar")。
             fn on_render_process_unresponsive(
@@ -754,8 +756,8 @@ mod imp {
                     return 0;
                 }
                 let Some(callback) = callback else { return 0 };
-                eprintln!(
-                    "[CEF] renderer unresponsive for webview '{}', terminating for reload",
+                tracing::warn!(
+                    "renderer unresponsive for webview '{}', terminating for reload",
                     self.label
                 );
                 // 杀掉渲染进程 → 触发 on_render_process_terminated → reload 恢复
@@ -772,8 +774,8 @@ mod imp {
                 error_code: ::std::os::raw::c_int,
                 error_string: Option<&CefString>,
             ) {
-                eprintln!(
-                    "[CEF] renderer terminated for webview '{}': {status:?} ({error_code}) {}",
+                tracing::warn!(
+                    "renderer terminated for webview '{}': {status:?} ({error_code}) {}",
                     self.label,
                     error_string.map(|s| s.to_string()).unwrap_or_default()
                 );
@@ -1097,9 +1099,10 @@ mod imp {
                             .as_deref()
                             .map(|root| root.display().to_string())
                             .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[cef-runtime] deny file: {url} (outside {root}; grants {}; {reason:?}) webview '{}'",
-                            access.grants.len(), self.label
+                        tracing::info!(
+                            "deny file: {url} (outside {root}; grants {}; {reason:?}) webview '{}'",
+                            access.grants.len(),
+                            self.label
                         );
                         ReturnValue::CANCEL
                     }
@@ -1373,8 +1376,8 @@ mod imp {
                         &self.initialization_scripts_payload,
                     ) {
                         Ok(initialization_scripts) => *extra_info = Some(initialization_scripts),
-                        Err(error) => eprintln!(
-                            "[cef-runtime] failed to attach popup initialization scripts: {error}"
+                        Err(error) => tracing::warn!(
+                            "failed to attach popup initialization scripts: {error}"
                         ),
                     }
                 }

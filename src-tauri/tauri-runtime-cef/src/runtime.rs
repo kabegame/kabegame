@@ -79,6 +79,10 @@ mod imp {
         "PrivateNetworkAccessSendPreflights",
         "BlockInsecurePrivateNetworkRequests",
     ];
+    // Chromium 桌面默认 15s(Android 5s)无输入回执才判渲染进程卡死,之后再等 1s
+    // 主线程 ping。我们的 on_render_process_unresponsive 直接 terminate + reload,
+    // 15s 体感太长,改用 Android 的 5s。
+    const RENDERER_HANG_WATCHER_FEATURE: &str = "RendererHangWatcher:delay/5s";
 
     fn windowed_quit() -> Arc<AtomicBool> {
         WINDOWED_QUIT
@@ -106,16 +110,25 @@ mod imp {
         })
     }
 
-    fn disable_chrome_only_features(command_line: &CommandLine) {
-        let switch = CefString::from("disable-features");
+    /// 把 `features` 合并进 `--enable-features` / `--disable-features`。同名开关
+    /// 重复 append 时后写的整串会覆盖先写的,所以必须读出已有值再追加;已有同名
+    /// 特性(忽略 `:参数` 后缀)时保留命令行上的写法。
+    fn merge_feature_switch(command_line: &CommandLine, switch_name: &str, features: &[&str]) {
+        let switch = CefString::from(switch_name);
         let mut value = if command_line.has_switch(Some(&switch)) == 1 {
             CefString::from(&command_line.switch_value(Some(&switch))).to_string()
         } else {
             String::new()
         };
+        fn feature_name(entry: &str) -> &str {
+            entry.split(':').next().unwrap_or(entry)
+        }
 
-        for feature in CHROME_ONLY_DISABLED_FEATURES {
-            if value.split(',').any(|entry| entry == *feature) {
+        for feature in features {
+            if value
+                .split(',')
+                .any(|entry| feature_name(entry) == feature_name(feature))
+            {
                 continue;
             }
             if !value.is_empty() {
@@ -175,8 +188,8 @@ mod imp {
                 Ok(0) => None,
                 Ok(port) => Some(port),
                 Err(_) => {
-                    eprintln!(
-                        "[cef-runtime] WARN: KABEGAME_CEF_DEBUG_PORT={raw:?} is not a valid port \
+                    tracing::warn!(
+                        "KABEGAME_CEF_DEBUG_PORT={raw:?} is not a valid port \
                          (expected an integer, `random` or `auto`); \
                          remote debugging stays disabled"
                     );
@@ -193,13 +206,13 @@ mod imp {
     fn pick_free_loopback_port() -> Option<u16> {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
             .inspect_err(|error| {
-                eprintln!("[cef-runtime] WARN: cannot allocate a free CDP port: {error}");
+                tracing::warn!("cannot allocate a free CDP port: {error}");
             })
             .ok()?;
         listener
             .local_addr()
             .inspect_err(|error| {
-                eprintln!("[cef-runtime] WARN: cannot read probe socket addr: {error}");
+                tracing::warn!("cannot read probe socket addr: {error}");
             })
             .ok()
             .map(|addr| addr.port())
@@ -222,10 +235,7 @@ mod imp {
                     Some(&CefString::from(angle_backend)),
                 );
                 if angle_backend == "vulkan" {
-                    command_line.append_switch_with_value(
-                        Some(&CefString::from("enable-features")),
-                        Some(&CefString::from("Vulkan")),
-                    );
+                    merge_feature_switch(command_line, "enable-features", &["Vulkan"]);
                 }
             }
         }
@@ -266,9 +276,7 @@ mod imp {
                 return "x11";
             }
             if !forced.is_empty() {
-                eprintln!(
-                    "[cef-runtime] WARN: 无法识别 KABEGAME_OZONE_PLATFORM={forced:?},改为按会话探测"
-                );
+                tracing::warn!("无法识别 KABEGAME_OZONE_PLATFORM={forced:?},改为按会话探测");
             }
             // 判据取 WAYLAND_DISPLAY 而不是 XDG_SESSION_TYPE:前者直接表示「能否真的
             // 连上合成器」,后者在部分登录管理器下缺失或与实际不符,不能单独作准。
@@ -975,7 +983,7 @@ mod imp {
             // so CefAppProtocol setup has no runtime loader ordering constraint.
             crate::app_mac::init_cef_app_mac();
         }
-        eprintln!("[cef-runtime] browser initialization (CEF Views/windowed)");
+        tracing::debug!("browser initialization (CEF Views/windowed)");
         let mut app = create_cef_app();
         initialize_cef(&mut app).expect("failed to initialize CEF before Tauri startup");
         PREPARED_CEF_APP.with(|prepared| prepared.replace(Some(app)));
@@ -1051,7 +1059,8 @@ mod imp {
                 // CEF WebContents are not Chrome browser tabs. Some Chrome UI
                 // features assume tabs::TabInterface exists and crash on SPA
                 // soft navigations when variations enable them.
-                disable_chrome_only_features(cl);
+                merge_feature_switch(cl, "disable-features", CHROME_ONLY_DISABLED_FEATURES);
+                merge_feature_switch(cl, "enable-features", &[RENDERER_HANG_WATCHER_FEATURE]);
                 #[cfg(target_os = "linux")]
                 {
                     // 禁用 zygote:Linux 下渲染进程默认从 zygote fork,**不会**重新
@@ -1177,9 +1186,9 @@ mod imp {
 
                 if self.initially_visible {
                     window.show();
-                    eprintln!("[cef-runtime] windowed top-level CEF window shown");
+                    tracing::debug!("windowed top-level CEF window shown");
                 } else {
-                    eprintln!("[cef-runtime] windowed top-level CEF window created (not shown)");
+                    tracing::debug!("windowed top-level CEF window created (not shown)");
                 }
             }
 
@@ -1458,11 +1467,11 @@ mod imp {
                 let runtime_style = browser
                     .and_then(|browser| browser.host())
                     .map(|host| host.runtime_style());
-                eprintln!("[cef-runtime] windowed browser created; runtime_style={runtime_style:?}");
+                tracing::debug!("windowed browser created; runtime_style={runtime_style:?}");
             }
 
             fn on_before_close(&self, _browser: Option<&mut Browser>) {
-                eprintln!("[cef-runtime] windowed browser closed; quitting external pump");
+                tracing::debug!("windowed browser closed; quitting external pump");
                 self.quit.store(true, Ordering::Release);
                 quit_message_loop();
             }
@@ -1481,8 +1490,8 @@ mod imp {
                 error_text: Option<&CefString>,
                 failed_url: Option<&CefString>,
             ) {
-                eprintln!(
-                    "[cef-runtime] windowed load error: code={:?} text={} url={}",
+                tracing::warn!(
+                    "windowed load error: code={:?} text={} url={}",
                     error_code,
                     error_text.map(CefString::to_string).unwrap_or_default(),
                     failed_url.map(CefString::to_string).unwrap_or_default()
@@ -1516,7 +1525,7 @@ mod imp {
                         list.into_iter().collect()
                     })
                     .unwrap_or_default();
-                eprintln!("[cef-runtime] already-running relaunch intercepted; argv={argv:?}");
+                tracing::debug!("already-running relaunch intercepted; argv={argv:?}");
                 if let Some(handler) = ALREADY_RUNNING_RELAUNCH_HANDLER.get() {
                     handler(argv);
                 }
@@ -1535,7 +1544,7 @@ mod imp {
                         .unwrap_or_else(|_| "https://example.com".to_string())
                         .as_str(),
                 );
-                eprintln!("[cef-runtime] windowed url={url}");
+                tracing::debug!("windowed url={url}");
 
                 *self.client.borrow_mut() = Some(WindowedClient::new(
                     WindowedLifeSpanHandler::new(self.quit.clone()),
@@ -1553,8 +1562,8 @@ mod imp {
                     None,
                     Some(&mut browser_view_delegate),
                 );
-                eprintln!(
-                    "[cef-runtime] windowed browser_view created = {}",
+                tracing::debug!(
+                    "windowed browser_view created = {}",
                     browser_view.is_some()
                 );
 
@@ -1599,8 +1608,8 @@ mod imp {
                         None,
                     );
                 let window = window_create_top_level(Some(&mut window_delegate));
-                eprintln!(
-                    "[cef-runtime] windowed window_create_top_level = {}",
+                tracing::debug!(
+                    "windowed window_create_top_level = {}",
                     window.is_some()
                 );
             }
@@ -1644,8 +1653,8 @@ mod imp {
                     .to_string()
             })
             .unwrap_or_default();
-        eprintln!(
-            "[cef-runtime] cef_execute_process pid={} type={process_type} args={:?}",
+        tracing::debug!(
+            "cef_execute_process pid={} type={process_type} args={:?}",
             std::process::id(),
             std::env::args().collect::<Vec<_>>()
         );
@@ -1809,7 +1818,7 @@ mod imp {
     fn initialize_cef(app: &mut cef::App) -> Result<()> {
         let args = Args::new();
         WINDOWED_CONTEXT_INITIALIZED.store(false, Ordering::Release);
-        eprintln!("[cef-runtime] cef_initialize backend=windowed");
+        tracing::debug!("cef_initialize backend=windowed");
         let mut settings = Settings {
             no_sandbox: 1,
             external_message_pump: 1,
@@ -1835,8 +1844,8 @@ mod imp {
         // ComponentPlugin 注入 random）。
         if let Some(port) = remote_debugging_port() {
             settings.remote_debugging_port = port as i32;
-            eprintln!(
-                "[cef-runtime] remote debugging (CDP) listening on 127.0.0.1:{port} \
+            tracing::info!(
+                "remote debugging (CDP) listening on 127.0.0.1:{port} \
                  — anyone on this machine can drive this browser"
             );
         }
@@ -1848,8 +1857,8 @@ mod imp {
                     CefString::from(dir.join("locales").to_string_lossy().as_ref());
             }
             None => {
-                eprintln!(
-                    "[cef-runtime] WARN: CEF resource dir not found \
+                tracing::warn!(
+                    "CEF resource dir not found \
                      (no CEF_PATH, no <exe>/../lib/kabegame/icudtl.dat); \
                      relying on CEF default next to executable"
                 );
@@ -1888,8 +1897,8 @@ mod imp {
             // 开机自启竞态双开时 systemd/桌面会记一次 crash(曾以 status=101 退出)。
             let exit_code = get_exit_code();
             if exit_code == Resultcode::NORMAL_EXIT_PROCESS_NOTIFIED.get_raw() as i32 {
-                eprintln!(
-                    "[cef-runtime] another instance owns this CEF profile; \
+                tracing::info!(
+                    "another instance owns this CEF profile; \
                      launch forwarded to it, exiting cleanly"
                 );
                 std::process::exit(0);
@@ -2151,8 +2160,8 @@ mod imp {
         if let Some(app_id) = args.app_id.clone() {
             let _ = LINUX_WINDOW_CLASS.set(app_id);
         }
-        eprintln!(
-            "[cef-runtime] runtime init backend=windowed initialized={}",
+        tracing::debug!(
+            "runtime init backend=windowed initialized={}",
             CEF_INITIALIZED.with(Cell::get)
         );
         if !CEF_INITIALIZED.with(Cell::get) {
@@ -2181,8 +2190,8 @@ mod imp {
         #[cfg(target_os = "macos")]
         crate::app_mac::install_app_delegate();
         let monitors = cef_monitor_snapshot().unwrap_or_else(|| tao_monitor_snapshot(&event_loop));
-        eprintln!(
-            "[cef-runtime] monitor snapshot source={} primary={:?}",
+        tracing::debug!(
+            "monitor snapshot source={} primary={:?}",
             if monitors.primary.is_some() {
                 "cef"
             } else {
@@ -2419,9 +2428,7 @@ mod imp {
             after_window_creation: Option<Box<dyn Fn(RawWindow) + Send>>,
         ) -> Result<DetachedWindow<T, Cef<T>>> {
             if after_window_creation.is_some() {
-                eprintln!(
-                    "[cef-runtime] windowed mode cannot expose a tao RawWindow during create_window"
-                );
+                tracing::warn!("windowed mode cannot expose a tao RawWindow during create_window");
             }
 
             let label = pending.label.clone();
@@ -2524,7 +2531,7 @@ mod imp {
                 Some(close_requester),
             );
             let window = window_create_top_level(Some(&mut delegate)).ok_or_else(|| {
-                eprintln!("[cef-runtime] CEF failed to create a top-level Views window");
+                tracing::warn!("CEF failed to create a top-level Views window");
                 Error::CreateWindow
             })?;
             if attrs.always_on_top {
@@ -2544,7 +2551,7 @@ mod imp {
             if attrs.visible {
                 window.show();
             }
-            eprintln!("[cef-runtime] windowed top-level CEF window created and attached");
+            tracing::debug!("windowed top-level CEF window created and attached");
 
             let mut webviews = Vec::new();
             if let Some(id) = webview_id {
@@ -2677,7 +2684,7 @@ mod imp {
         /// Linux 上必须持续泵 GLib/X11；Windows 上必须持续泵 Win32 messages。
         /// Tauri runtime 消息从 `CefContext` 队列 drain。
         fn run_loop<F: FnMut(RunEvent<T>) + 'static>(mut self, mut callback: F, once: bool) -> i32 {
-            eprintln!("[cef-runtime] windowed pure CEF platform pump started");
+            tracing::debug!("windowed pure CEF platform pump started");
             let runtime_ptr = &mut self as *mut Self;
             self.context
                 .main_runtime
@@ -2702,8 +2709,8 @@ mod imp {
 
                 if matches!(control_flow, ControlFlow::Exit) || once || quit.load(Ordering::Acquire)
                 {
-                    eprintln!(
-                        "[cef-runtime] run loop exiting (control_flow_exit={} once={once} quit={})",
+                    tracing::debug!(
+                        "run loop exiting (control_flow_exit={} once={once} quit={})",
                         matches!(control_flow, ControlFlow::Exit),
                         quit.load(Ordering::Acquire),
                     );
@@ -2715,7 +2722,7 @@ mod imp {
             }
 
             callback(RunEvent::Exit);
-            eprintln!("[cef-runtime] RunEvent::Exit dispatched; closing remaining CEF windows");
+            tracing::debug!("RunEvent::Exit dispatched; closing remaining CEF windows");
 
             // `cef_shutdown()` 前必须先销毁所有 CEF 窗口/浏览器,否则 CEF 内部的
             // ObserverList 仍挂着 observer,shutdown 时 CHECK `observers_.empty()`
@@ -2771,10 +2778,10 @@ mod imp {
                     std::thread::sleep(Duration::from_millis(1));
                 }
             }
-            eprintln!("[cef-runtime] windows destroyed; calling cef shutdown");
+            tracing::debug!("windows destroyed; calling cef shutdown");
 
             shutdown();
-            eprintln!("[cef-runtime] CEF shutdown complete");
+            tracing::debug!("CEF shutdown complete");
             self.context
                 .main_runtime
                 .store(std::ptr::null_mut(), Ordering::Release);
@@ -3348,9 +3355,7 @@ mod imp {
             let deadline = Instant::now() + Duration::from_secs(10);
             while !WINDOWED_CONTEXT_INITIALIZED.load(Ordering::Acquire) {
                 if Instant::now() >= deadline {
-                    eprintln!(
-                        "[cef-runtime] timed out waiting for windowed CEF context initialization"
-                    );
+                    tracing::warn!("timed out waiting for windowed CEF context initialization");
                     return Err(Error::CreateWindow);
                 }
                 pump_platform_messages();

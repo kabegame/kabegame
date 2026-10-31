@@ -53,7 +53,7 @@ impl SubscriptionManager {
         }
 
         let event_kinds = if kinds.is_empty() {
-            AppEventKind::ALL.to_vec()
+            AppEventKind::default_kinds()
         } else {
             kinds
         };
@@ -80,8 +80,8 @@ impl SubscriptionManager {
                 cancel_tx,
             },
         );
-        eprintln!(
-            "[DEBUG] SubscriptionManager::subscribe client_id={}, 订阅 {} 种事件, 当前总订阅数: {}",
+        tracing::debug!(
+            "SubscriptionManager::subscribe client_id={}, 订阅 {} 种事件, 当前总订阅数: {}",
             client_id,
             kinds_count,
             subs.len()
@@ -125,16 +125,16 @@ impl SubscriptionManager {
         if let Some(state) = subs.remove(client_id) {
             let receiver_count = state.cancel_tx.receiver_count();
             let _ = state.cancel_tx.send(());
-            eprintln!(
-                "[DEBUG] SubscriptionManager::unsubscribe client_id={}, 发送取消信号给 {} 个转发任务, 剩余订阅数: {}",
+            tracing::debug!(
+                "SubscriptionManager::unsubscribe client_id={}, 发送取消信号给 {} 个转发任务, 剩余订阅数: {}",
                 client_id,
                 receiver_count,
                 subs.len()
             );
             true
         } else {
-            eprintln!(
-                "[DEBUG] SubscriptionManager::unsubscribe client_id={} 不存在订阅",
+            tracing::debug!(
+                "SubscriptionManager::unsubscribe client_id={} 不存在订阅",
                 client_id
             );
             false

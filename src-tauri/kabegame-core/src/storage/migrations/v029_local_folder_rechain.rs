@@ -29,8 +29,8 @@ pub fn up(conn: &Connection) -> Result<(), String> {
 
     match result {
         Ok((lifted, rechained, stripped, rebuilt)) => {
-            println!(
-                "[v029] lifted {lifted} normal albums, rechained {rechained} local folder albums, stripped {stripped} names, rebuilt {rebuilt} ancestor paths"
+            tracing::info!(
+                "lifted {lifted} normal albums, rechained {rechained} local folder albums, stripped {stripped} names, rebuilt {rebuilt} ancestor paths"
             );
             Ok(())
         }

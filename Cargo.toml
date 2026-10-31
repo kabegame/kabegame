@@ -85,6 +85,14 @@ tauri-plugin-wallpaper = {path = "./src-tauri/tauri-plugin-wallpaper"}
 tauri-plugin-wemt = {path = "./src-tauri/tauri-plugin-wemt"}
 tar = "0.4"
 tokio = {version = "1", features = ["full"]}
+# 应用日志（见 cocs/debug/APP_LOGGING.md）：全进程一个订阅器，按层过滤，不用 env-filter。
+# tracing-log：tauri / wry / tao 等用 `log` crate 的依赖也进入同一管线。
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "std", "fmt", "registry", "ansi", "tracing-log", "smallvec",
+] }
 url = "2.5"
 uuid = {version = "1.6", features = ["v4", "serde"]}
 windows-sys = {version = "0.52", features = [

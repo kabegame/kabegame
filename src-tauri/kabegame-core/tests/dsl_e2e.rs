@@ -222,7 +222,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             metadata_id INTEGER,
             thumbnail_path TEXT NOT NULL DEFAULT '',
             hash TEXT NOT NULL DEFAULT '',
-            type TEXT DEFAULT 'image',
+            type TEXT DEFAULT 'image/jpg',
             width INTEGER,
             height INTEGER,
             display_name TEXT NOT NULL DEFAULT '',
@@ -2774,7 +2774,7 @@ fn image_collection_paths_decode_into_image_info() {
                 .unwrap_or_else(|e| panic!("{path} row failed to decode as ImageInfo: {e}"));
             assert!(
                 image.media_type.as_deref().is_some_and(|t| !t.is_empty()),
-                "{path} decoded with media_type = {:?}; the COALESCE default was lost",
+                "{path} decoded with media_type = {:?}; images.type 必须非空（不变量见 v049）",
                 image.media_type
             );
         }
@@ -3208,4 +3208,86 @@ fn wallpaper_rotation_image_only_tail_keeps_view_order() {
         "native",
     );
     assert_eq!(rank(&runtime, &album_eff, "118"), None);
+}
+
+/// 对实际 DSL 生成的 SQL 检查计划，防止后续改写过滤条件后绕过迁移里的 SQL 回归。
+#[test]
+fn media_type_pagination_preserves_crawled_at_index() {
+    let conn = fixture_db();
+    conn.lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE INDEX idx_images_type ON images(type);
+         CREATE INDEX idx_crawled_at ON images(crawled_at DESC);",
+        )
+        .unwrap();
+    let runtime = build_runtime_with(conn.clone());
+    for path in [
+        "images://gallery/media-type/image/_kb_desc/_kb_x100x/1",
+        "images://gallery/media-type/video/_kb_desc/_kb_x100x/1",
+        "images://gallery/media-type/image/jpeg/_kb_desc/_kb_x100x/1",
+    ] {
+        let resolved = runtime.resolve(path).unwrap();
+        let mut ctx = TemplateContext::default();
+        ctx.globals = runtime.globals().clone();
+        let (sql, params) = resolved
+            .composed
+            .build_sql(&ctx, SqlDialect::Sqlite)
+            .unwrap();
+        let db = conn.lock().unwrap();
+        let mut stmt = db.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let plan: Vec<String> = stmt
+            .query_map(
+                rusqlite::params_from_iter(local_params_for(&params)),
+                |row| row.get(3),
+            )
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter().any(|line| line.contains("idx_crawled_at")),
+            "{path}: {plan:?}"
+        );
+        // 同时间戳的 id 次排序可能已有 LAST TERM 临时排序；只拒绝整批排序。
+        assert!(
+            !plan
+                .iter()
+                .any(|line| line == "USE TEMP B-TREE FOR ORDER BY"
+                    || line.contains("idx_images_type")),
+            "{path}: {plan:?}"
+        );
+    }
+}
+
+#[test]
+fn media_type_wpe_video_remains_image_and_lists_subtype() {
+    let conn = fixture_db();
+    conn.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO images(id, local_path, plugin_id, crawled_at, type)
+         VALUES(9999, '/tmp/wpe', '', 1, 'x-wpe/video')",
+            [],
+        )
+        .unwrap();
+    let runtime = build_runtime_with(conn);
+    assert_eq!(
+        ids(runtime
+            .fetch("images://gallery/media-type/image/video")
+            .unwrap()),
+        ["9999"]
+    );
+    assert!(
+        !ids(runtime.fetch("images://gallery/media-type/video").unwrap())
+            .contains(&"9999".to_string())
+    );
+    let formats = runtime.list("images://gallery/media-type/image").unwrap();
+    let wpe = formats.iter().find(|entry| entry.name == "video").unwrap();
+    assert_eq!(
+        wpe.meta
+            .as_ref()
+            .and_then(|meta| meta.get("count"))
+            .and_then(|value| value.as_u64()),
+        Some(1)
+    );
 }

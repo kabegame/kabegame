@@ -131,6 +131,24 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
+    /// 发送壁纸窗口存活探测，经默认事件流交给页面。
+    pub fn emit_wallpaper_ping(&self, label: &str, seq: u64) {
+        let event = std::sync::Arc::new(AppEvent::WallpaperPing {
+            label: label.to_string(),
+            seq,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送壁纸窗口应答，仅推给显式订阅的后端看门狗。
+    pub fn emit_wallpaper_pong(&self, label: &str, seq: u64) {
+        let event = std::sync::Arc::new(AppEvent::WallpaperPong {
+            label: label.to_string(),
+            seq,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
     /// 发送通用事件（用于扩展）
     pub fn emit(&self, event: &str, payload: serde_json::Value) {
         let event = std::sync::Arc::new(AppEvent::Generic {
@@ -546,6 +564,10 @@ impl GlobalEmitter {
     }
 
     pub fn emit_download_removed(&self, _id: u64) {}
+
+    pub fn emit_wallpaper_ping(&self, _label: &str, _seq: u64) {}
+
+    pub fn emit_wallpaper_pong(&self, _label: &str, _seq: u64) {}
 
     pub fn emit(&self, _event: &str, _payload: serde_json::Value) {}
 

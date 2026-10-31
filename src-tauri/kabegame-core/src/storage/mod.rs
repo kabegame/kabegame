@@ -284,8 +284,8 @@ fn disable_sqlite_memstatus() {
             )
         };
         if rc != rusqlite::ffi::SQLITE_OK {
-            eprintln!(
-                "[storage] 关闭 SQLite 内存统计失败（rc={rc}，SQLite 已先行初始化），并发读会在全局分配锁上互相拖慢"
+            tracing::warn!(
+                "关闭 SQLite 内存统计失败（rc={rc}，SQLite 已先行初始化），并发读会在全局分配锁上互相拖慢"
             );
         }
     });

@@ -194,7 +194,7 @@ pub async fn surf_start_session<R: Runtime>(
         // 复用窗口时导航到本次请求的 URL,否则传入的 url 被静默丢弃。
         if let Ok(webview) = surf_content_webview(&app, Some(&host)) {
             if let Err(error) = webview.navigate(parsed) {
-                eprintln!("复用畅游窗口导航失败: {error}");
+                tracing::warn!("复用畅游窗口导航失败: {error}");
             }
         }
     } else {

@@ -36,10 +36,7 @@ fn installed_var_defs() -> HashMap<String, Vec<VarDefinition>> {
             Ok(defs) => {
                 all.insert(plugin_id.to_string(), defs);
             }
-            Err(error) => eprintln!(
-                "[db-migration] v041 读取插件变量失败 {}: {error}",
-                path.display()
-            ),
+            Err(error) => tracing::warn!("v041 读取插件变量失败 {}: {error}", path.display()),
         }
     }
     all
@@ -120,10 +117,7 @@ fn migrate_default_config_files(defs_by_plugin: &HashMap<String, Vec<VarDefiniti
             fs::write(&path, output).map_err(|error| format!("写入默认配置失败: {error}"))
         })();
         if let Err(error) = result {
-            eprintln!(
-                "[db-migration] v041 迁移默认配置失败 {}: {error}",
-                path.display()
-            );
+            tracing::warn!("v041 迁移默认配置失败 {}: {error}", path.display());
         }
     }
 }

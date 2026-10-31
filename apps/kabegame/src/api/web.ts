@@ -24,6 +24,11 @@ function sseUrl(): string {
   return `${API_ROOT}events${qsSuper()}`;
 }
 
+/** 应用日志 SSE（只对 super 开放，见 services/appLogs.ts）。 */
+export function logSseUrl(): string {
+  return `${API_ROOT}logs${qsSuper()}`;
+}
+
 let rpcIdCounter = 0;
 
 export async function invoke<T>(method: string, params?: Record<string, unknown>): Promise<T> {

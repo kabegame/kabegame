@@ -42,11 +42,14 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 主进程内部，HTTP、Tauri、Web JSON-RPC 与 app IPC 只是协议入口，统一复用共享命令层，不建立平行业务后端；桌面端应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
+**IPC 权限与事件**——主窗口与壁纸窗口的本地应用页免 ACL（`lib.rs` 的 `Builder::acl_exempt_webview("main" / "wallpaper")`，tauri 补丁 0017，只认本地来源的主 frame），新增只给它们用的命令只需注册进 `generate_handler!`；畅游、爬虫、网页壁纸调用的命令仍要写进对应 `permissions/*.toml`，它们能 `listen` 的事件名由 capability 里 `core:event:allow-listen` 的 `{ "event": … }` 作用域限定（补丁 0015）。capability 默认只对主 frame 生效（`frames`，补丁 0016，frame 由 runtime 经请求 extension 上报，页面无法伪造）。JS 事件按接收方 webview 身份投递，前端 `listen` 传 `target` 没有作用，`emit_to(<label>)` 只送到该 label 的 webview / 窗口（补丁 0014）。详见 [ACL 文档](cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md)。
+
 **第三方补丁序列**——工作流与目录级约束见 [third-patches/AGENTS.md](third-patches/AGENTS.md)。一般预期third是脏的，third-patches才是我们工作的地方，除非bump跟上游。
 
 **组件库与 packages 子仓库**——维护边界和目录级约束见 [packages/AGENTS.md](packages/AGENTS.md)。
 
 **文件类型的唯一事实来源：**
+- `images.type` 一定非空、小写、去掉首尾空白且形如「主类/子类」（两段非空），所有生产写入必须经 Rust `normalize_stored_media_type`（当前由 `Storage::add_image` 调用），不能依赖遗留数据库默认值。查询直接读列，不再包 `LOWER` / `COALESCE`；按 type 过滤的排序分页查询保持 `CASE` / `SUBSTR` 等不可走 `idx_images_type` 的形态，避免整体排序，详见 `cocs/provider-dsl/RULES.md`。
 - `kabegame_core::media::image_type::MEDIA_FORMATS` 是唯一的格式表，包含格式键、标准 MIME 值、扩展名、别名和支持标志。`images.type` 存储 `image/jpg` 和 `video/mov` 等格式键；仅在需要标准 MIME 的边界（HTTP Content-Type / Android MediaStore）使用 `mime_from_format`。
 - 在 Rust 中使用 `kabegame_core::media::image_type::*`（例如 `is_image_by_path`、`supported_image_extensions`），不要硬编码扩展名或 MIME 值。前端使用 `get_supported_image_types` Tauri 命令；其 `mimeByExt` 的值仍为标准 MIME。
 - `supported_video_extensions()` 始终返回内置视频列表。前端 `isVideoMediaType` 通过检查 `type.startsWith("video/")` 决定图库展示。
@@ -156,9 +159,11 @@ struct Foo {
 
 对插件的更改要写到 [插件changelog](./src-crawler-plugins/CHANGELOG.md)，总插件仓库版本号 4.5.1.x 表示在主应用发版 4.5.1 和 4.5.2 之间的迭代版本。如果主应用发版到 4.5.2 就会跟着更新到 4.5.2，然后如果继续更新就是 4.5.2.1。src-crawler-plugins/package.json 里的 version 是其最新版本，所以changelog.md要比较才知道顶部版本是最新还是需要新加一节，注意不要改 version，改了之后commit 会打新tag。
 
+**应用日志一律用 `tracing` 宏**（`error!` / `warn!` / `info!` / `debug!` / `trace!`，不加 `[模块]` 前缀，模块路径即 target），不要再写 `println!` / `eprintln!`；前端用 `@/utils/logger`。日志按天写入 `<data_dir>/logs/`，经事件循环的 opt-in `log` 事件推给工具箱「查看日志」、`kabegame-cli log tail` 与 Web super 的 `/logs`；事件管线上的逐事件日志只能用 `trace!`，否则会自激放大。细节见 [cocs/debug/APP_LOGGING.md](cocs/debug/APP_LOGGING.md)。
+
 在需要真测的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序操作界面，只有在需要打开外部网站或调试web版本才允许用 ageng-browser。
 
-**观测运行时调用（IPC、事件、加载次数）一律用 debug ingest 插桩**（[cocs/debug/DEBUG_INGEST.md](cocs/debug/DEBUG_INGEST.md)：前端 `sendDebugEvent`、Rust `spawn_debug_event`，固定 `session_id`，读 `.kabegame/debug/debug-<session_id>.ndjson`）。**不要**经 CDP 去包装 `window.__TAURI_INTERNALS__.invoke` 来计数——它是不可写、不可配置的属性，赋值在非严格模式下静默失败，计数永远为空，会被误读成「没有发生调用」；CEF 下普通 invoke 也不走 `fetch`，抓网络请求同样看不全。上报是异步的，日志行的到达顺序不等于调用顺序，排先后要看事件自带的 `ts`。临时插桩统一带 `// DEBUG-<主题>` 注释，验证完删除。
+**观测运行时调用（IPC、事件、加载次数）一律用 debug ingest 插桩**（[cocs/debug/DEBUG_INGEST.md](cocs/debug/DEBUG_INGEST.md)：前端 `sendDebugEvent`、Rust `kabegame_core::kb_debug!`——两者都只是 trace 日志，由 debug 构建的订阅层转发到 dev server——固定 `session_id`，读 `.kabegame/debug/debug-<session_id>.ndjson`）。**不要**经 CDP 去包装 `window.__TAURI_INTERNALS__.invoke` 来计数——它是不可写、不可配置的属性，赋值在非严格模式下静默失败，计数永远为空，会被误读成「没有发生调用」；CEF 下普通 invoke 也不走 `fetch`，抓网络请求同样看不全。上报是异步的，日志行的到达顺序不等于调用顺序，排先后要看事件自带的 `ts`。临时插桩统一带 `// DEBUG-<主题>` 注释，验证完删除。
 
 为 README、教程或操作指南编辑真实界面截图时，用 `.claude/skills/annotate-ui-screenshots` 技能添加短标签和箭头、生成带 `-annotated` 后缀的资源，并同步精简与图片重复的正文。保持真实 UI，不使用生成式重绘。
 

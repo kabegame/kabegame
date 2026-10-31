@@ -369,7 +369,7 @@ fn apply_backend_lifecycle(
     old_mode: &str,
     mode: &str,
 ) -> Result<(), String> {
-    eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode);
+    tracing::debug!("set_wallpaper_mode: 开始应用模式 {}", mode);
     controller
         .manager_for_mode(mode)
         .init()
@@ -379,14 +379,14 @@ fn apply_backend_lifecycle(
         controller
             .manager_for_mode("window")
             .cleanup()
-            .unwrap_or_else(|e| eprintln!("[WARN] 清理 window 资源失败: {}", e));
+            .unwrap_or_else(|e| tracing::warn!("清理 window 资源失败: {}", e));
     }
     #[cfg(target_os = "linux")]
     if old_mode == "plasma-plugin" && mode != "plasma-plugin" {
         controller
             .manager_for_mode("plasma-plugin")
             .cleanup()
-            .unwrap_or_else(|e| eprintln!("[WARN] 清理 plasma-plugin 资源失败: {}", e));
+            .unwrap_or_else(|e| tracing::warn!("清理 plasma-plugin 资源失败: {}", e));
     }
     Ok(())
 }
@@ -448,8 +448,8 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
     let resolved_wallpaper = if current_is_wpe && mode != "window" {
         match pick_random_gallery_wallpaper(&mode) {
             Some(p) => {
-                eprintln!(
-                    "[WARN] set_wallpaper_mode: 当前壁纸是 WPE 目录型壁纸，切到 {} 模式改用兜底图片: {}",
+                tracing::warn!(
+                    "set_wallpaper_mode: 当前壁纸是 WPE 目录型壁纸，切到 {} 模式改用兜底图片: {}",
                     mode, p
                 );
                 p
@@ -467,8 +467,8 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
     } else if Path::new(&current_cleaned).exists() {
         current_cleaned.clone()
     } else if let Some(p) = pick_random_gallery_wallpaper(&mode) {
-        eprintln!(
-            "[WARN] set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
+        tracing::warn!(
+            "set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
             p, current_wallpaper
         );
         p
@@ -479,8 +479,8 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
         match settings.swap_style_transition_for_mode_switch(&old_mode, &mode) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!(
-                    "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
+                tracing::warn!(
+                    "set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
                     e
                 );
                 (cur_style.clone(), cur_transition.clone())
@@ -580,17 +580,17 @@ pub async fn set_wallpaper_disabled<R: tauri::Runtime>(
         // 少了这行，关掉再打开壁纸就永远显示不出来。
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if let Err(e) = WallpaperController::global().init() {
-            eprintln!("[WARN] set_wallpaper_disabled: 初始化壁纸后端失败: {}", e);
+            tracing::warn!("set_wallpaper_disabled: 初始化壁纸后端失败: {}", e);
         }
 
         // 恢复上次壁纸（复用启动恢复逻辑）
         if let Err(e) = crate::startup::init_wallpaper_on_startup().await {
-            eprintln!("[WARN] set_wallpaper_disabled: 恢复壁纸失败: {}", e);
+            tracing::warn!("set_wallpaper_disabled: 恢复壁纸失败: {}", e);
         }
         // 之前开启过轮播则恢复轮播
         if settings.get_wallpaper_rotation_enabled() {
             if let Err(e) = rotator.ensure_running().await {
-                eprintln!("[WARN] set_wallpaper_disabled: 恢复轮播失败: {}", e);
+                tracing::warn!("set_wallpaper_disabled: 恢复轮播失败: {}", e);
             }
         }
     }

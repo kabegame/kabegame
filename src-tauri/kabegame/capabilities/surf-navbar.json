@@ -1,10 +1,14 @@
 {
   "identifier": "surf-navbar-capability",
-  "description": "Surf navbar webview (local tauri:// page only; external content never receives this capability)",
+  "description": "Surf navbar webview (local tauri:// page only; external content never receives this capability). It only listens to the two events the backend emits to it",
   "webviews": ["surf-*-navbar"],
   "permissions": [
     "surf",
     "surf-navbar",
-    "core:event:default"
+    {
+      "identifier": "core:event:allow-listen",
+      "allow": [{ "event": "surf-url-changed" }, { "event": "surf-collect-state" }]
+    },
+    "core:event:allow-unlisten"
   ]
 }

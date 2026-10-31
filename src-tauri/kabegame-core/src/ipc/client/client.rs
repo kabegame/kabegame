@@ -25,7 +25,6 @@ use super::connection::{ConnectionStatus, PersistentConnection};
 use crate::commands::task::{PluginRunOutput, PluginRunParams};
 use crate::ipc::events::{AppEvent, AppEventKind};
 use crate::ipc::ipc::{IpcRequest, IpcResponse};
-use crate::ipc_dbg;
 use tokio::sync::{mpsc::UnboundedReceiver, watch};
 
 /// IPC 客户端（基于持久连接）
@@ -864,6 +863,18 @@ impl IpcClient {
         self.request_data(IpcRequest::GetActiveDownloads).await
     }
 
+    /// 主程序环形缓冲里 `since_seq` 之后最新的至多 `limit` 条日志（见 `IpcRequest::AppLogs`）。
+    pub async fn app_logs(
+        &self,
+        since_seq: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::logging::LogRecord>, String> {
+        let data = self
+            .request_data(IpcRequest::AppLogs { since_seq, limit })
+            .await?;
+        serde_json::from_value(data).map_err(|e| format!("解析日志失败: {e}"))
+    }
+
     pub async fn organize_start(
         &self,
         dedupe: bool,
@@ -979,12 +990,12 @@ impl IpcClient {
         Fut: std::future::Future<Output = ()> + Send,
     {
         let mut event_rx = self.subscribe_events(kinds).await?;
-        ipc_dbg!("[DEBUG] IpcClient::subscribe_events_stream 订阅成功，开始接收事件流");
+        tracing::trace!("IpcClient::subscribe_events_stream 订阅成功，开始接收事件流");
 
         // 持续接收事件
         while let Some(event) = event_rx.recv().await {
-            ipc_dbg!(
-                "[DEBUG] IpcClient::subscribe_events_stream 收到事件: {:?}",
+            tracing::trace!(
+                "IpcClient::subscribe_events_stream 收到事件: {:?}",
                 event
             );
             let raw = serde_json::to_value(&*event)
@@ -992,7 +1003,7 @@ impl IpcClient {
             on_event(raw).await;
         }
 
-        ipc_dbg!("[DEBUG] IpcClient::subscribe_events_stream 事件流结束");
+        tracing::trace!("IpcClient::subscribe_events_stream 事件流结束");
         Ok(())
     }
 }

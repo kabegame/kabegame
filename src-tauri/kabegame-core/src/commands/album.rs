@@ -200,8 +200,8 @@ pub async fn add_local_folder_album(
         return Err(t!("albums.localFolderErrors.nameNoSlash").to_string());
     }
     if let Some(deprecated_parent_id) = parent_id.as_deref() {
-        eprintln!(
-            "[deprecated] add_local_folder_album parent_id={deprecated_parent_id} is ignored; hierarchy is derived from sync_folder"
+        tracing::warn!(
+            "add_local_folder_album parent_id={deprecated_parent_id} is ignored; hierarchy is derived from sync_folder"
         );
     }
 

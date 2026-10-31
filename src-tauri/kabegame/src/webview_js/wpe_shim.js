@@ -144,6 +144,23 @@
   var transport = desktop ? tauriTransport(window.__TAURI_INTERNALS__) : parentTransport();
   if (!transport) return;
 
+  // ---- ping 应答（只桌面 file:// 主 frame）：后端每 10s 发一次 ping ----
+  // 只应答本窗口；连续 3 次不应答会整页重载。预览 iframe 碰不到 IPC，不参与。
+  if (desktop) {
+    var internals = window.__TAURI_INTERNALS__;
+    var meta = internals.metadata || {};
+    var selfLabel = meta.currentWebview ? meta.currentWebview.label : null;
+    transport
+      .listen(["wallpaper-ping"], function (event) {
+        var payload = event.payload || {};
+        if (payload.label !== selfLabel) return;
+        internals.invoke("wallpaper_pong", { seq: payload.seq }).catch(function () {});
+      })
+      .catch(function (error) {
+        console.warn("[kb-wpe] listen ping", error);
+      });
+  }
+
   // 拉取编号：某次结果落地后，丢弃更早发出、更晚返回的结果
   var issued = 0;
   var applied = 0;
@@ -190,7 +207,8 @@
     })
     .then(pull);
 
-  // 桌面：主 frame 有 Tauri 脚本，直接 invoke / listen；权限只来自 wpe-web-capability
+  // 桌面：主 frame 有 Tauri 脚本，直接 invoke / listen；权限只来自 wpe-web-capability（listen 只放行
+  // wallpaper-ping / setting-change / image-changed / images-change，新增监听要同步改 capability）
   function tauriTransport(internals) {
     if (!internals) return null;
     return {
@@ -202,7 +220,6 @@
           names.map(function (name) {
             return internals.invoke("plugin:event|listen", {
               event: name,
-              target: { kind: "Any" },
               handler: internals.transformCallback(function (event) {
                 onEvent({ name: name, payload: event.payload });
               }),

@@ -24,9 +24,16 @@ export function setWpeWebPreview(imageId: string | null): Promise<string | null>
 }
 
 /**
+ * 预览 iframe 能请宿主代为监听的事件：垫片只听这三个（`wallpaper-ping` 只在桌面壁纸窗口应答，预览不需要）。
+ * 主窗口免 ACL，宿主页的 listen 不受 capability 的事件名作用域限制，所以这里是预览 iframe 唯一的闸门；
+ * 与 `capabilities/wpe-web.json` 给桌面网页壁纸开的事件保持一致（那边多一个 ping）。
+ */
+const PREVIEW_EVENTS: ReadonlySet<string> = new Set(["setting-change", "image-changed", "images-change"]);
+
+/**
  * 预览 iframe 的宿主端：替网页壁纸垫片（`webview_js/wpe_shim.js`）拉取状态、代为 listen。
  * - `pull { id }` → 用主窗口权限调 `get_wpe_web_state`，回 `state { id, state | error }`；
- * - `listen { events }` → `tauriProxy.listen`，事件逐条回 `event { name, payload }`。
+ * - `listen { events }` → 只登记 `PREVIEW_EVENTS` 里的事件，经 `tauriProxy.listen`，事件逐条回 `event { name, payload }`。
  * 只认本 iframe（`event.source`）；回消息的目标源用 `"*"`：`file:` 源在 `postMessage` 的目标匹配上不可靠，
  * 而发出的只有本张壁纸的状态与转发的事件。外部页面不接触 IPC。
  */
@@ -52,8 +59,10 @@ export function attachWpeWebBridge(frame: HTMLIFrameElement, imageId: string) {
     if (event.source !== frame.contentWindow || data?.kbWpe !== 1) return;
     if (data.type === "pull" && typeof data.id === "number") void pull(data.id);
     else if (data.type === "listen" && Array.isArray(data.events)) {
-      // 不限能登记的事件名，与桌面 `core:event:allow-listen` 一致（已接受的取舍）
-      tauriProxy.listen(data.events.filter((name: unknown): name is string => typeof name === "string" && name !== ""));
+      // 主窗口免 ACL，宿主的 listen 没有事件名限制：白名单是预览 iframe 唯一的闸门
+      tauriProxy.listen(
+        data.events.filter((name: unknown): name is string => typeof name === "string" && PREVIEW_EVENTS.has(name)),
+      );
     }
   }
   window.addEventListener("message", onMessage);

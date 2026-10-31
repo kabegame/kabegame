@@ -109,18 +109,19 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 - [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
   - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
     **只提供 Windows 桌面**（`platform_supported` 只对 Windows 为 true，桌面 `file://` 宿主与预览 `file:` iframe 都按 Windows 门控）、Steam 库发现与任意文件夹识别、`wpe-import` 内建任务与「壁纸」收集入口、
-    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
+    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WallpaperStage` 独立 web 层（sandbox `file:` iframe，`set_wpe_web_preview` 设根目录后返回入口、前端赋 `src`，由补丁 0005 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览「桌面画布」`WallpaperDesktopCanvas`、`get_wallpaper_target_for_image`、背景层退回预览图，以及 `cef-ipc` 只收主 frame 的纵深防御；
     **图库预览 `file:` iframe**（Phase 6a，`/wpe` HTTP 目录服务随之删除）：主窗口建窗前 `allow_file_documents("main")` 与 `allow_app_local_resources("main")`、预览挂载 / 卸载经 `set_wpe_web_preview` 设 / 清根目录（拒绝壁纸窗口、前端串行调用）、CSP `frame-src … file:`、两种宿主对照表（同一套运行时目录拦截，`localStorage` 同源）；
     **桌面 `file://` 宿主与鼠标转发**：`WindowWallpaperManager::set_wallpaper_path` 按路径判定并导航自己的窗口（网页壁纸时整窗导航到入口 `file://`、切走导航回 `mount()` 时记住的应用页，幂等；入口、根目录与转发线程随 `WallpaperWindow` 对象走、`Drop` 清理）、CEF 补丁 0004 按窗口开文件访问 + `OnBeforeResourceLoad` 按壁纸目录拦截 `file:` 请求，以及 Windows 轮询式鼠标移动 / 左键转发（`input_forward`，`inject_mouse`）；
-    **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时按发起方 origin（factory 级 `request_initiator`，不读有竞态的 `frame.url()`）覆写 IPC `Origin`（`file:` 写成 `file:///`，远程 `file:` 来源只得 `wpe-web-capability`；`cef-ipc` 遇不合法 `Origin` 即拒，不退到应用页）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及接受的全局事件可见性；
+    **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时按发起方 origin（factory 级 `request_initiator`，不读有竞态的 `frame.url()`）覆写 IPC `Origin`（`file:` 写成 `file:///`，远程 `file:` 来源只得 `wpe-web-capability`；`cef-ipc` 遇不合法 `Origin` 即拒，不退到应用页）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及桌面网页壁纸只能监听四个事件（`allow-listen` 作用域，tauri 补丁 0015）、预览代办按白名单登记；
     **图库媒体走 `file://` 与按发起 frame 分档的闸门**（Phase 6b，CEF 补丁 0006）：三个桌面平台的主窗口与壁纸窗口都登记 0005，应用页主 frame 的 `<img>` / `<video>` / CSS 子资源免检，子 frame 导航与 `file:` 文档仍按根目录；前端 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 在桌面产出 `file://`，下载 / 复制兜底直接 `fetch(file:)`、Windows 拖出自 Phase 6d 起改走 0003 真实文件链路（`CF_HDROP`）；插件详情 EJS iframe 改 opaque origin + 内层 CSP；删除桌面本地 HTTP 服务；插件文件改由 Tauri 原始字节命令读取，0006 的私有 CORS 列表与运行时跨源白名单开放 `fetch(file:)`。
     **用户属性面板**（Phase 7）：作者属性在预览右栏 / 设置页「当前壁纸」编辑，用户值存图片 metadata 顶层 `userProperties`（只存与默认值不同的键），写入经 `Storage::rewrite_image_metadata` 事务改写（新行 + 改指 + 删无引用旧行、沿用搜索词）后发 `metadataId` 补丁，垫片与面板都按它重拉；属性定义在 core `wpe::user_props` 解析一次，WPE 内置 `ui_` 词条只读读取用户 WPE 安装目录的 `locale\ui_<码>.json`；显示条件是照 WPE `$parse.readOnly` 的白名单解释器（不 eval、失败当显示）；`file` / `directory` 由拉取状态的命令按调用方 label 经运行时 `grant_file_documents` 追加放行（核对当前根目录、只增不减、换根清空），目录文件列表进状态，垫片实现目录回调与 `wallpaperRequestRandomFileForProperty`。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 预览页面 `fetch` 同目录文件失败或越界读被放行 / 关闭预览后根目录未清空 / 预览画布比例或交互 / 切走后渲染进程未回收、子 frame 伪造 `cef-ipc` 请求、非 Windows 平台的 WPE 行为；
     排查桌面网页壁纸不显示 / `fetch` 同目录文件失败 / 越界 `file:` 被放行或误拒（`deny file:` 日志）/ 页面调用应用命令被 ACL 拒绝 / 收不到属性（导航后 listen / pull 报 `Origin header is not a valid URL`）/ 改语言后页面没反应 / 切回图片壁纸后窗口停在 `file://` / 桌面点击或移动不触发页面事件；
+    排查壁纸或网页壁纸卡死、白屏不自动恢复；
     排查壁纸窗口导航后旧文档的事件监听残留、预览 iframe 收不到属性或关闭预览后仍在转发事件；
     排查桌面图库图片 / 视频不显示（`ERR_UNKNOWN_URL_SCHEME`、图库媒体被误判 `deny file:`）、下载拿到 `file://`、插件详情模板的请求被 CSP 拒绝。
     排查属性改了页面不变 / 预览与桌面不同步 / 草稿串到下一张、属性标签显示 `ui_` 键名、显示条件显隐与 WPE 不一致、`file` / `directory` 属性选的文件被 `deny file:` 或目录回调不触发。
@@ -211,8 +212,15 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## Tauri（`tauri/`）
 
 - [tauri/TAURI_ACL_PERMISSION_SYSTEM.md](tauri/TAURI_ACL_PERMISSION_SYSTEM.md)
-  - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘。
-  - 适用场景：新增 `#[tauri::command]` 后补 `permissions/*.toml` 白名单、新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
+  - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘，以及 tauri 补丁 0014–0017 带来的四项规则：
+    JS 事件按接收方 webview 身份投递（忽略前端 `listen` 传的 `target`，`emit_to(App)` 不再送给 JS，`unlisten` 只作用于调用方 webview）、
+    `core:event:allow-listen` 的事件名作用域（`{ "event": "x" }`，末尾 `*` 前缀匹配，deny 优先）、capability 的 `frames` 维度
+    （`main` 默认 / `sub` / `any`，frame 由 runtime 经请求 extension 上报，CEF 给不出时记 `Unknown`，Android 缺省按主 frame）、
+    特赦 webview（`Builder::acl_exempt_webview`，本应用为 `main` / `wallpaper`，只认本地来源主 frame，显式 deny 与 listen 作用域都跳过，
+    ACL 照常解析以传递插件作用域）；`permissions/main.toml` 已删除，各窗口的权限文件与判定结果表。
+  - 适用场景：新增 `#[tauri::command]`（主窗口只需注册，畅游 / 爬虫 / 网页壁纸要补对应 `permissions/*.toml`）、新增窗口 IPC 权限或
+    事件监听、调整 capability/permission、排查“命令不可用/全部被拒绝”、`listen` 被拒、`emit_to` 定向事件送错或收不到、
+    子 frame 调 IPC 被拒（拒绝文案不带 frame，用主 frame 对照组判断）。
 
 - [tauri/TAURI_CLI_FORK.md](tauri/TAURI_CLI_FORK.md)
   - 主题：fork 的 `cargo-tauri`（上游 tauri monorepo `third/tauri` + `third-patches/tauri` patch series，基线 2.12.4；先 `deno task patch tauri`）。顶层 `bins` 配置（patch 0009）驱动桌面 `tauri build` 的 cargo `--bin` 编译清单（不再 `--bins` 全量编译；未配置回退 get_binaries 打包清单），Windows 下辅助 bin 由 NSIS 原生装到安装根。`TAURI_ANDROID_PACKAGE` 将 Android Java 包（源码目录/生成 Kotlin/JNI）与 identifier（applicationId，按 mode：dev=`app.kabegame.dev` / prod=`app.kabegame`）解耦，auto-launch 改传全限定类名；`TAURI_NO_WEBKIT_DEPS` 跳过 Linux deb/rpm 的 webkit 依赖注入并对依赖去重。含 TauriCliPlugin 接线（PATH 前置 + dev/build 前增量构建）与升级 re-vendor 流程。整个 tauri 栈经 `[patch.crates-io]` 指向 `third/tauri/crates/*`（单一来源，另见 [../third-patches/tauri/README.md](../third-patches/tauri/README.md)）。
@@ -232,8 +240,12 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 ## 调试（`debug/`）
 
+- [debug/APP_LOGGING.md](debug/APP_LOGGING.md)
+  - 主题：应用日志框架。全进程一个 tracing 订阅器（`kabegame_core::logging`），控制台 / 按天滚动文件（`<data_dir>/logs/kabegame.<UTC 日期>.log`，同步写、保留 14 个）/ `AppLogLayer`（2000 条环形缓冲 + 广播）/ debug ingest 四层各带过滤器；后端级别固定（release info、dev debug、依赖 warn），`KABEGAME_LOG` 用 `Targets` 语法覆盖；`AppEvent::Log` 是 opt-in 事件（「订阅全部」用 `default_kinds()` 不含它），三个出口先订阅再拉历史、按 seq 去重：Tauri `get_app_logs` + `start_app_log_stream` / `stop_app_log_stream`（经调用页传入的 Channel 批量推送，不用全局事件——Tauri 对未指定 target 的 `listen` 一律放行）、Web super 的 `/logs` SSE 与 `get_app_logs` RPC、IPC `AppLogs` + `SubscribeEvents ["log"]`（CLI `log tail`）；事件管线上逐事件日志只能 `trace!` 的防回环约束；前端 `logger` 经 `tauri-plugin-tracing`（只注册命令、权限只给主窗口）、未捕获异常入日志；控制台与文件共用 `format.rs` 单行格式（前端日志同样记为 `webview:<窗口>`）；写日志的定级与 target 约定。
+  - 适用场景：新增或修改日志输出、排查「查看日志」看不到 / 刷屏 / 自激放大、日志文件位置与切分、`KABEGAME_LOG` 调级、CLI `log tail`、Web 端日志暴露范围、前端日志进不了后端。
+
 - [debug/DEBUG_INGEST.md](debug/DEBUG_INGEST.md)
-  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。同一 middleware 还兼职 **CDP 端口寄存**（`/__kabegame_cdp/register` 登记 + `/__kabegame_cdp` 查询），把 CEF 随机分配的调试端口交给 `kabegame-chromium` skill。
+  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。插桩只是 trace 日志（Rust `kabegame_core::kb_debug!`、Tauri 前端经 `tauri-plugin-tracing` 打 `kb-debug {json}`），由主程序 debug 构建的 `DebugIngestLayer` 订阅并批量 NDJSON 转发；Web dev 前端仍直接 POST。同一 middleware 还兼职 **CDP 端口寄存**（`/__kabegame_cdp/register` 登记 + `/__kabegame_cdp` 查询），把 CEF 随机分配的调试端口交给 `kabegame-chromium` skill。
   - 适用场景：仿 Cursor Debug Mode 的插桩式排查；需要把前端和 Rust 后端运行时状态汇总到同一个 NDJSON 会话文件；用 curl 验证 debug endpoint 或读取 session 日志；排查 CDP 端口发现（skill 连不上跑起来的 app）。
 
 ## 组件库（`ui/`）
@@ -296,6 +308,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 - [storage/DB_MIGRATIONS_AND_BACKFILLS.md](storage/DB_MIGRATIONS_AND_BACKFILLS.md)
   - 主题：数据库两类迁移——同步 schema 迁移（`user_version` 顺序）与可恢复的异步回填作业（`Backfill` 注册表 + `backfill_jobs` 表，按批 `BEGIN IMMEDIATE` 提交、同事务写回 rowid 游标与进度、崩溃续跑，`BackfillCtx` 的 `with_conn` / `block_on` / `commit`）；`Migration.min_backfill_version` 的同步排干语义与「回填只碰引入时就存在的列」不变量、空迁移登记作业、全新安装不登记、平台门控（被依赖时标记跳过）、CLI 只跑阻塞阶段、`BackfillService` 后台按序运行与忙碌卡片 / `backfill-finished`、失败下次启动重试、`KABEGAME_BACKFILL_SYNC_THROUGH` 调试开关；以及三段式启动（`init_pre` 主线程建窗 → 线程内 `init_heavy_globals` → 主线程 `init_post` → 后台回填 → `Ready`）、`startup_state` watch / `startup-progress` / `get_startup_state`，前端启动页（Init app）mount / unmount 与不安装 i18n 的原因。
+  - v049 同步规范化 `images.type` 并建索引；迁移 SQL 与 Rust 写入口的格式表外规则有比对测试，分页执行计划约束见 `provider-dsl/RULES.md` §2.2。
   - 适用场景：新增需要补算数据的迁移或回填作业；某个迁移要改动回填读写的列；排查启动卡在启动页、启动页报错、回填不前进 / 重复处理 / 失败重试、忙碌卡片不消失；调整桌面 / Android 启动顺序或主线程要求。
 
 ## 维护规则

@@ -17,7 +17,7 @@ pub fn get_ipc_client() -> &'static IpcClient {
         let client_clone = client.clone();
         tokio::spawn(async move {
             if let Err(e) = client_clone.connection.clone().connect().await {
-                crate::ipc_dbg!("IPC 客户端初始化连接失败: {}", e);
+                tracing::trace!("IPC 客户端初始化连接失败: {}", e);
             }
         });
         client

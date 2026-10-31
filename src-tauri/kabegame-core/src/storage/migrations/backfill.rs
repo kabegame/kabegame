@@ -235,7 +235,7 @@ fn record_failure(conn: &Connection, job_id: &str, error: &str) {
           WHERE id = ?3",
         params![error, now_ms(), job_id],
     ) {
-        eprintln!("[backfill] {job_id} record failure failed: {e}");
+        tracing::warn!("{job_id} record failure failed: {e}");
     }
 }
 
@@ -253,10 +253,7 @@ pub(crate) fn enqueue_introduced_at_in(
             params![job.id, i64::from(version), total as i64, now_ms()],
         )
         .map_err(|e| format!("enqueue backfill {}: {e}", job.id))?;
-        println!(
-            "[backfill] enqueued {} (v{version:03}, total {total})",
-            job.id
-        );
+        tracing::info!("enqueued {} (v{version:03}, total {total})", job.id);
     }
     Ok(())
 }

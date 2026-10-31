@@ -357,7 +357,7 @@ async fn on_page_download<R: Runtime>(
     let success = match download_to_file(&parsed, &headers, &destination).await {
         Ok(()) => true,
         Err(error) => {
-            eprintln!("[crawler] 页面自发下载失败 {}: {error}", parsed.as_str());
+            tracing::warn!("页面自发下载失败 {}: {error}", parsed.as_str());
             false
         }
     };
@@ -452,7 +452,7 @@ async fn ensure_host_subscription<R: Runtime>(app: &AppHandle<R>) {
     let plugin = app.state::<CrawlerAndroid<R>>().0.clone();
     match try_subscribe_host(&plugin).await {
         Ok(()) => HOST_SUBSCRIBED.store(true, Ordering::Relaxed),
-        Err(error) => eprintln!("[crawler] 订阅前后台事件失败，将在下个任务重试: {error}"),
+        Err(error) => tracing::warn!("订阅前后台事件失败，将在下个任务重试: {error}"),
     }
 }
 

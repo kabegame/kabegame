@@ -36,5 +36,25 @@
   "metadataMigrationTitle": "플러그인 데이터 마이그레이션",
   "backfillTitle": "데이터베이스 업데이트",
   "backfillWaiting": "대기 중",
-  "backfillFailed": "데이터베이스 백그라운드 업데이트 실패 ({name}). 다음 실행 시 이어서 진행합니다"
+  "backfillFailed": "데이터베이스 백그라운드 업데이트 실패 ({name}). 다음 실행 시 이어서 진행합니다",
+  "viewLogs": "로그 보기",
+  "logs": {
+    "title": "앱 로그",
+    "sourceAll": "전체",
+    "sourceBackend": "백엔드",
+    "sourceFrontend": "프론트엔드",
+    "targetPlaceholder": "모듈 접두사",
+    "searchPlaceholder": "로그 검색",
+    "count": "{total}개 중 {shown}개 표시",
+    "follow": "자동 스크롤",
+    "copy": "복사",
+    "copyLine": "이 줄 복사",
+    "clear": "지우기",
+    "openDir": "로그 폴더 열기",
+    "copied": "복사됨",
+    "copyFailed": "복사 실패",
+    "openDirFailed": "로그 폴더를 열지 못했습니다: {detail}",
+    "empty": "로그가 없습니다",
+    "loadFailed": "로그를 불러오지 못했습니다: {detail}"
+  }
 }

@@ -60,7 +60,7 @@ struct RotationSource {
 /// 把设置路径换成新的默认随机路径（位置随之置为从头开始）。
 fn fall_back_to_default(reason: &str) -> Result<String, String> {
     let path = rotation_path::default_path();
-    eprintln!("[WALLPAPER_ROTATOR] {reason}，回落默认路径 {path}");
+    tracing::warn!("{reason}，回落默认路径 {path}");
     Settings::global().set_wallpaper_rotation_path(Some(path.clone()))?;
     Ok(path)
 }
@@ -213,7 +213,7 @@ async fn advance_and_apply() -> Result<bool, String> {
         .await
         .map_err(|e| format!("轮播选图任务失败: {e}"))??;
     let Some((image, next_position)) = picked else {
-        eprintln!("[WALLPAPER_ROTATOR] 轮播路径下没有可用图片，跳过本轮");
+        tracing::warn!("轮播路径下没有可用图片，跳过本轮");
         return Ok(false);
     };
 
@@ -228,7 +228,7 @@ async fn advance_and_apply() -> Result<bool, String> {
     manager
         .set_wallpaper(&image.local_path, &style, &transition)
         .await?;
-    eprintln!("[WALLPAPER_ROTATOR] 壁纸已更换: {}", image.local_path);
+    tracing::info!("壁纸已更换: {}", image.local_path);
 
     let _ = settings.set_current_wallpaper_image_id(Some(image.id.clone()));
     let now_ts = std::time::SystemTime::now()
@@ -357,7 +357,7 @@ mod android_queue {
 pub fn refresh_android_queue() {
     #[cfg(target_os = "android")]
     if let Err(e) = android_queue::refill() {
-        eprintln!("[WALLPAPER_ROTATOR] 刷新 Android 轮播队列失败: {e}");
+        tracing::warn!("刷新 Android 轮播队列失败: {e}");
     }
 }
 
@@ -419,7 +419,7 @@ impl WallpaperRotator {
         tauri::async_runtime::spawn(async move {
             // 线程启动成功，设置状态为“运行中”
             state.store(STATE_RUNNING, Ordering::Release);
-            println!("[WALLPAPER_ROTATOR] start");
+            tracing::debug!("start");
             // 从用户设置中读取初始 interval
             let initial_interval_secs = Settings::global()
                 .get_wallpaper_rotation_interval_minutes()
@@ -442,7 +442,7 @@ impl WallpaperRotator {
                 // 检查状态：如果是 Stopping 或 running=false，则退出
                 let current_state = state.load(Ordering::Acquire);
                 if current_state == STATE_STOPPING || !running.load(Ordering::Relaxed) {
-                    eprintln!("状态变化，退出轮播线程");
+                    tracing::debug!("状态变化，退出轮播线程");
                     break;
                 }
 
@@ -482,7 +482,7 @@ impl WallpaperRotator {
                 }
 
                 if let Err(e) = advance_and_apply().await {
-                    eprintln!("[WALLPAPER_ROTATOR] 轮播切换失败: {}", e);
+                    tracing::warn!("轮播切换失败: {}", e);
                 }
 
                 // 本轮执行完后，让下一次从“现在”开始计时，确保手动切换/模式切换会重置计时器

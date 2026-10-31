@@ -116,10 +116,7 @@ impl JsPluginRuntime {
         // it now that the isolate exists and attach the crypto globals the prelude
         // deliberately omits.
         runtime.execute_script("<kabegame_crypto_init>", CRYPTO_INIT_SCRIPT)?;
-        eprintln!(
-            "[v8-runtime] initialized in {} ms",
-            started.elapsed().as_millis()
-        );
+        tracing::debug!("initialized in {} ms", started.elapsed().as_millis());
         Ok(Self { runtime })
     }
 

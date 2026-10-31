@@ -92,7 +92,7 @@ pub fn validate_dsl(runtime: &ProviderRuntime) {
     let cfg = ValidateConfig::with_default_reserved();
     if let Err(errs) = runtime.validate(&cfg) {
         for e in &errs {
-            eprintln!("[DSL validate] {}", e);
+            tracing::error!("{}", e);
         }
         panic!("DSL validation failed ({} errors)", errs.len());
     }

@@ -241,7 +241,7 @@ async fn run_listener(
                     merge_change(&mut pending, path, hint);
                 }
                 Some(RawMsg::Overflow { detail }) => {
-                    eprintln!("[local_folder.fs_listener] event queue overflow: {detail}");
+                    tracing::warn!("event queue overflow: {detail}");
                 }
                 None => break,
             },
@@ -292,11 +292,11 @@ async fn reconcile(platform: &mut PlatformImpl, desired: &mut HashMap<String, Pa
         {
             Ok(Ok(next)) => next,
             Ok(Err(err)) => {
-                eprintln!("[local_folder.fs_listener] list albums failed: {err}");
+                tracing::warn!("list albums failed: {err}");
                 return;
             }
             Err(err) => {
-                eprintln!("[local_folder.fs_listener] reconcile task panicked: {err}");
+                tracing::warn!("reconcile task panicked: {err}");
                 return;
             }
         };
@@ -323,10 +323,7 @@ async fn reconcile(platform: &mut PlatformImpl, desired: &mut HashMap<String, Pa
                     &id,
                     &crate::local_folder::FolderStatus::now_denied(err.clone()),
                 );
-                eprintln!(
-                    "[local_folder.fs_listener] add watch {} failed: {err}",
-                    path.display()
-                );
+                tracing::warn!("add watch {} failed: {err}", path.display());
             }
         }
     }
@@ -385,7 +382,7 @@ fn persist_folder_status(album_id: &str, status: &crate::local_folder::FolderSta
 
     let status_json = status.to_json();
     if let Err(err) = Storage::global().update_album_folder_status(album_id, Some(&status_json)) {
-        eprintln!("[local_folder.fs_listener] persist status for {album_id} failed: {err}");
+        tracing::warn!("persist status for {album_id} failed: {err}");
         return;
     }
     GlobalEmitter::global().emit_album_patches(vec![crate::emitter::AlbumFieldPatch::new(

@@ -15,6 +15,108 @@
 | [x] | 4 畅游 | 同上 | example.com、x.com 畅游页：地址上报、右键下载、一键下载；页面插 `no-referrer` 后再调 | 都正常；`read_plugin_file` 等应用命令仍被 ACL 拒绝 | 2026-10-31 Claude 经 CDP 实测：example.com：启动期 `surf_collect_attach` / `surf_report_url` / `get_webview_i18n` 各一次、都是 200，`read_plugin_file` 被 ACL 拒绝，插 `no-referrer` 后与 raw body（octet-stream）invoke 正常；x.com 开着 DevTools：右键配图只出一个菜单，点一次「下载图片」收起并提示「下载成功」。一键下载未单独测（与右键下载同一条页面 IPC 通道） |
 | [x] | 5 opaque 来源被拒 | 同上 | 畅游页里建 `sandbox="allow-scripts"` 的 iframe 或用 CSP sandbox 页面发 `cef-ipc` | 回 400，不再借 frame URL 放行 | 行为变化，已与用户确认；2026-10-31 Claude 经 CDP 实测：畅游打开 `https://httpbin.org/response-headers?Content-Security-Policy=sandbox%20allow-scripts`（顶层主 frame 沙箱，`self.origin` 为 `null`，Tauri 脚本仍注入）：主通道 invoke 回 500「Origin header is not a valid URL」，强制回退后 `cef-ipc` 回 400、invoke 无回调；修复前会借 frame URL 按远程 httpbin 来源放行 |
 
+## `images.type` 规范化与索引（v049）
+
+2026-10-31：新增同步迁移 v049，自包含规则修正历史残留并创建 `idx_images_type`；Rust 写入口始终返回非空小写「主类/子类」，查询直接读列。分类仍以 `video/*` 判定（`x-wpe/video` 归图片），保留 CASE / SUBSTR，使画廊排序分页继续沿 `idx_crawled_at` 读取。数据库不加触发器或 CHECK，遗留默认值不用于生产写入。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 写入口规范化与规则比对 | macOS 单测 | `test-kabegame kabegame-core --lib image_type` | 空值、旧类别、无斜杠、缺主类 / 子类及未知类型均得到合规格式键；格式表外 ASCII 用例与迁移 SQL 一致 | 5 通过 |
+| [x] | 历史修正、幂等与索引 | macOS 单测 | `test-kabegame kabegame-core --lib migrations` | v049 修正残留、保留合规别名；重跑不改行；等值查询走 type 索引，分类分页走抓取时间索引 | 50 通过，含 v049 的 2 项 |
+| [x] | 实际 DSL 与格式语义 | macOS e2e | `test-kabegame kabegame-core --test dsl_e2e` | 图片 / 视频 / 格式筛选、画册和虚拟盘列举不变；生成 SQL 不走 type 索引排序；WPE video 仍归图片 | 60 通过，含新增 2 项；允许既有 id 次排序的 LAST TERM 临时排序；scratch 测试提供 SNAP_DB / PQ_PATH 后 1 通过 |
+| [x] | 真实数据库副本升级 | macOS，dev / prod 数据库的 SQLite backup 副本 | 在副本执行 `run_pending`，比较升级前后 PathQL 分类与格式列举、全部 id/type，并检查索引 | dev v48 与 prod v46 均升级至 v49；修正 0 行；所有计数与格式相同，索引存在 | 临时 core 探针执行真实 `run_pending`：dev 5,302 行从 v48、prod 64,151 行从 v46 升至 v49，均修正 0 行，PathQL 分类 / 格式列表及每行 id/type 完全一致；另对旧 / 新 SQL 逐行比对分类结果和格式计数，一致。原库未改动；证据 `.kabegame/debug/type-index/` |
+| [ ] | core 全量单测 | macOS | `test-kabegame kabegame-core` | 全部通过 | 413 通过、4 失败：`replace_image_thumbnail_path_deletes_old_independent_thumbnail`、`parses_new_library_folders_format`、`parses_old_library_folders_format`、`relative_paths_reject_traversal_and_absolute`；与本文件「应用日志」已记录的 4 个既有失败一致。cargo 默认在 lib 失败后停止，两个集成 target 已另行执行 |
+| [x] | 编译检查 | macOS standard | `check-kabegame --skip vue` | Rust 检查通过 | 0 error；仅有仓库既有 warning |
+| [ ] | 画廊过滤面板与虚拟盘真机 | macOS dev CEF | 点击图片 / 视频与各格式筛选，查看结果数；打开虚拟盘「按媒体」 | 面板计数与结果一致；目录及分类与升级前一致 | 当前没有运行中的应用，CDP 未发现 |
+| [ ] | 下载与本地导入 | macOS dev CEF | 下载一张图并导入本地文件，再检查库中 type | 两条新记录都满足不变量，原有预览正常 | 当前没有运行中的应用，未执行 |
+| [ ] | 真机分页 SQL | macOS dev CEF，`KABEGAME_SQL_DEBUG=1` | 打开媒体分类过滤并分页，检查实际 SQL 计划 | 走 `idx_crawled_at`，无 type 索引后的临时排序 | 当前没有运行中的应用；单测覆盖执行计划 |
+
+## 事件监听权限 + 特赦 webview + ACL 的 frame 维度（tauri 补丁 0014–0017）
+
+2026-10-31：四个 tauri 补丁让事件与 ACL 只看后端知道的调用方身份。0014：JS 事件按接收方 webview 身份投递（webview label、所在窗口 label，同名时再加 WebviewWindow），`listen` 不再读取前端传的 `target`，`emit_to(App)` 不再送给 JS，`unlisten` 只在调用方 webview 的表里删除，窗口关闭拦截看本窗口任一 webview；0015：`core:event:allow-listen` 支持 `{ "event": … }` 作用域（末尾 `*` 前缀匹配，deny 优先）；0016：capability 新增 `frames`（`main` 默认 / `sub` / `any`），`InvokeRequest.frame` 取自请求 extension 的 `IpcFrame`（缺省按主 frame）；0017：`Builder::acl_exempt_webview`，本地来源主 frame 免 ACL（显式 deny 与 listen 作用域都跳过，ACL 照常解析）。`tauri-runtime-cef` 给每个自定义协议请求插 `IpcFrame`（无 CEF frame 记 `Unknown`），`cef-ipc` 回退通道重建请求时带上。应用侧：特赦 `main` / `wallpaper`，删除 `permissions/main.toml`，`main-capability` 去掉 `"main"`；`surf-navbar` 的 `core:event:default` 换成只能听 `surf-url-changed` / `surf-collect-state` 的 allow-listen + allow-unlisten；`wpe-web` 的 allow-listen 限定 `wallpaper-ping` / `setting-change` / `image-changed` / `images-change`；导航栏前端去掉 `{ target }` 绕法；预览代办（`wpeWebBridge.ts`）只登记三事件白名单；`wpe_shim.js` 去掉 `target`。另把 `mock_context` 缺的 `bins: None` 并入补丁 0009（字段由它引入，否则 `cargo test -p tauri` 编不过）。真机：2026-10-31 在 macOS dev（CEF）上验证 M1–M9，均通过；本仓 dev profile 下 tauri 关闭了 debug-assertions，拒绝信息只有 `Command … not allowed by ACL`，不带 URL / frame，frame 维度靠主 frame 对照组判定。Windows / Android / Linux 项待验证。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 补丁序列 | macOS 本地 | 依次 `--gen --from 0013/0014/0015/0016` 生成 0014–0017；`deno task patch tauri --check`；`--gen --from 0017` | 预检通过；系列之外没有剩余改动 | 2026-10-31 macOS：`tauri: OK dry-run`；`--gen --from 0017` 输出 0 行。0014 涉及 7 个文件（event / manager / webview / lib.rs），0015 3 个，0016 11 个（含 tauri-runtime / tauri-utils / tauri-cli），0017 5 个 |
+| [x] | S2 tauri 上游单测 | macOS，`third/tauri` 工作区 | `cargo test -p tauri --lib`；`cargo test -p tauri-utils --lib` | 全部通过 | 2026-10-31 macOS：tauri 99 passed / 0 failed，tauri-utils 44 passed / 0 failed。新增用例：`event::listener` 跨 webview 退订、接收方身份；`manager::test::js_emit_to_uses_receiver_identity`（AnyLabel / Window / Webview / WebviewWindow / App / Any）；`manager::window::tests`（关闭拦截）；`event::plugin::tests`（作用域精确 / 前缀 / deny / 混合授权、子 frame 被拒、特赦三条件、特赦跳过作用域与显式 deny）；`ipc::authority` frames 3×3 表、按 frame 过滤与拒绝信息、deny 对所有 frame 生效、`is_exempt` 三条件；`ipc::protocol` frame 来自 extension；tauri-utils `capability_frames_de`、`resolve_carries_capability_frames` |
+| [x] | S3 上游其它 crate 编译 | macOS，`third/tauri` 工作区 | `cargo check -p tauri-cli`；`cargo check -p tauri-utils --features build,schema`；`cargo check -p tauri-build -p tauri-codegen` | 0 error | 2026-10-31 macOS：均通过（`ToTokens` 与 schema 派生能编译） |
+| [x] | S4 CEF runtime 单测 | 带环境注入的 test-kabegame | `driver.sh kabegame -p tauri-runtime-cef --lib`，再对编好的 `tauri_runtime_cef-*` 测试二进制加 `DYLD_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 直接运行 | 主 frame / 子 frame / 无 frame 的 extension 分别为 Main / Sub / Unknown；`cef-ipc` 重建后保留 | 2026-10-31 macOS：driver 编译通过，但同一次 cargo test 先跑的 kabegame 测试二进制因找不到 CEF framework SIGABRT（既有问题）；直接运行 32 passed / 0 failed，含新增 `protocol::tests::request_frame_is_reported_to_tauri_acl`、`request_frame_still_pins_file_origin`、`ipc::tests::ipc_frame_survives_the_rebuilt_request` |
+| [x] | S5 应用单测 | 同上 | 对 `kabegame-*` 测试二进制加 `DYLD_FRAMEWORK_PATH` 直接运行 | 全部通过 | 2026-10-31 macOS：52 passed / 0 failed（含 `wpe_web` 的 `file:///*` 匹配） |
+| [x] | S6 编译、生成物与格式 | 带环境注入的 check-kabegame | `driver.sh`（vue-tsc + cargo check）；读 `gen/schemas`；改动文件 rustfmt / Prettier | 0 error；构建期 ACL 反映新配置 | 2026-10-31 macOS：vue-tsc 0 error、cargo 0 error。`capabilities.json` 中 surf-navbar / wpe-web 的 allow-listen 带作用域、main-capability 不再有 `main`；`acl-manifests.json` 的 app 权限只剩 crawler / surf / surf-navbar / wpe-web；`desktop-schema.json` 含 `frames`。`third/tauri` 三个 crate 整体 `rustfmt --check` 通过；应用侧新增行符合 rustfmt（`tauri-runtime-cef` 两个文件与 `wpe_web.rs` 的剩余差异在改动前就存在）；`surf-navbar.ts` / `wpeWebBridge.ts` Prettier 通过 |
+| [ ] | S7 Android 静态检查 | macOS | `driver.sh --mode android --skip vue` | Android 仍编译（wry 不上报 frame，按主 frame 处理；主界面靠特赦） | 2026-10-31：报 `rusty_v8 Android 自建产物缺失: bin/android/arm64/rusty_v8-build/`，未进入编译；本机也没有 aarch64-linux-android 的 Rust 目标。改动的移动端路径只有 `InvokeMessage` 的 `Clone`，未实测 |
+| [x] | M1 主窗口主要页面 | macOS dev（CEF），kabegame-chromium | 删除 main.toml 后依次打开画廊、画册、任务抽屉、插件、设置，做一次收藏 / 改名 / 启动任务 | 全部正常，日志与 console 无 `not allowed by ACL` | 2026-10-31 macOS：dev 构建晚于全部改动（二进制含 ``is not allowed to be listened by ACL``）。屏幕锁定、主窗口文档 hidden 不出帧，CDP 驱动时用截图泵帧推进 CSS 过渡。依次进入画廊、画册、源（`/plugins`）、设置、畅游、运行配置，打开任务抽屉，均正常渲染；画廊右键「收藏」图 8974 后菜单变「取消收藏」，再取消恢复原状；新建画册「ACL回归测试画册」→ 信息面板「重命名」→ 右键「删除」；经 crawler store `addTask` 启动 nekos-moe dry-run 任务，完成并经事件进抽屉（10 → 11，标「空跑」）。console 只有既有的 Vite `fs` 外部化警告；本次启动以来日志无 `not allowed by ACL` / WARN / ERROR。测试画册、任务已删除 |
+| [x] | M2 主窗口 listen 不受限 | 同上 | 主窗口 console：`__TAURI_INTERNALS__.invoke('plugin:event\|listen', { event: 'images-added', handler: __TAURI_INTERNALS__.transformCallback(() => {}) })`，再换 `app-log`、`surf-url-changed` | 都返回监听 id | 2026-10-31 macOS：三个事件分别返回监听 id 42 / 43 / 44，随后 `plugin:event\|unlisten` 均成功 |
+| [x] | M3 壁纸窗口 | macOS dev，窗口模式 | 设一张图片壁纸，CDP 连 wallpaper target；debug ingest 临时插桩记录 ping / pong（`// DEBUG-acl-exempt`，验完删除） | 应用页正常渲染，ping 逐个应答 | 2026-10-31 macOS：壁纸窗口（窗口模式）正常显示图片壁纸；画廊右键「抱到桌面上」设图 8974，壁纸窗口 `img.base` 换成 768 宽 PNG，再用 `setWallpaperOrBackground('8270')` 恢复原图（1500 宽）。`// DEBUG-acl-regression` 插桩记录 ping seq 166–180 共 15 个，每个都有 `pong_ok`（3–5ms），无 `pong_err`，日志无「未应答」；插桩已删除 |
+| [x] | M4 畅游两窗口地址栏不串 | macOS dev | 同时开两个畅游窗口（不同站点）分别导航几次 | 各自导航栏地址只随本窗口变化；一键下载转圈只出现在对应窗口 | 2026-10-31 macOS：example.com / example.org 两窗口，各做 2 次整页导航、1 次 pushState、1 次回首页。导航栏地址记录分别只有 `https://example.com/` → `?n=1` → `/spa-a` → `?n=2` → `/` 与 example.org 的对应序列，没有串入，每次变化只出现一次；点 A 导航栏的一键下载，只有 A 的 `aria-busy` true → false（页面无媒体，立即结束），B 不变；点 B 时反之 |
+| [x] | M5 导航栏只能听两个事件 | 同上 | 导航栏 webview console 里 listen `images-added`，再 listen `surf-url-changed` | 前者报 ``event `images-added` is not allowed to be listened by ACL``，后者成功 | 2026-10-31 macOS：`images-added` 报 ``event `images-added` is not allowed to be listened by ACL``，带 `target: { kind: 'Any' }` 也一样；`app-log`、`surf-url-changed-x` 同样被拒；`surf-url-changed` / `surf-collect-state` 返回 id 49 / 50，unlisten 成功；`plugin:event\|emit` 报 `not allowed by ACL` |
+| [x] | M6 外部页面调主窗口命令 | 同上 | 畅游外部页面 console invoke `get_plugins` | `not allowed by ACL` | 2026-10-31 macOS：example.com 内容页 `get_plugins` 报 `Command get_plugins not allowed by ACL`，`surf_open_in_browser`、`surf_collect_toggle`、`plugin:event\|listen` 也被拒。报错里没有 URL：tauri 以 path 补丁引入、不是工作区成员，根 `Cargo.toml` 的 `[profile.dev.package."*"] debug-assertions = false` 让它走 release 文案，`resolve_access_message`（带 URL / frame）在 dev 构建里不存在，二进制里搜不到 `not allowed on window` |
+| [x] | M7 畅游子 frame | 同上 | 外部页面里建同源 iframe；在主 frame 读 invoke key（它是 `ipc-protocol.js` 闭包里的常量，不在 `window` 上：临时包装可写的 `window.fetch`，从一次 invoke 的请求头 `Tauri-Invoke-Key` 取，取到后还原），先在主 frame 发一次作对照，再 CDP 切到 iframe 执行上下文直接 `fetch('ipc://localhost/surf_report_url', { method: 'POST', headers: { 'Tauri-Invoke-Key': key, 'Tauri-Callback': '1', 'Tauri-Error': '2', 'Content-Type': 'application/json' }, body: '{"url":"x"}' })` | 主 frame 放行；iframe 发同样请求被拒（拒绝文案不带 frame，以对照组判定） | 2026-10-31 macOS：主 frame 包装 `window.fetch` 取到 key 后已还原。主 frame 直接 fetch `surf_report_url` 返回 200、`Tauri-Response: ok`；同源 iframe（`https://example.com/?acl-iframe=1`）、srcdoc iframe 和跨源 OOPIF（`https://example.org/`）发同样请求，均返回 `Tauri-Response: error`、`"Command surf_report_url not allowed by ACL"`。同一 key、同一命令，只换发起 frame，结果就从放行变成拒绝，说明拒绝来自 frame 维度 |
+| [x] | M8 主窗口子 frame 不特赦 | 同上 | 主窗口建 srcdoc iframe（同源），在其上下文用主 frame 的 invoke key 直接 fetch `ipc://localhost/get_plugins` | 主 frame 放行；iframe 被拒，说明特赦只认主 frame | 2026-10-31 macOS：主窗口主 frame 直接 fetch `get_plugins` 返回 ok；srcdoc iframe（origin `http://localhost:1420`）返回 `"Command get_plugins not allowed by ACL"`，`plugin:event\|listen` 同样被拒。另：主 frame 创建的 dedicated worker 请求被放行，子 frame 创建的被拒，说明 CEF 把 dedicated worker 请求归到创建它的 frame，不记为 `Unknown` |
+| [x] | M9 关闭行为 | macOS dev | 点主窗口关闭；运行一个 WebView 插件后关闭爬虫窗口 | 主窗口只隐藏到托盘；爬虫窗口只隐藏 | 2026-10-31 macOS：主窗口调 `plugin:window\|close`（走 CloseRequested，与点关闭按钮同一处理；屏幕锁定，点不了原生按钮），`is_visible` 由 true 变 false，`get_all_windows` 里仍有 main、页面存活，show 后恢复；x-webview dry-run 任务的 `crawler-<id>` 窗口先 `show_crawler_window` 再 close，`is_visible` 变 false，窗口仍在，任务仍是 running；取消任务后窗口随之销毁，测试任务已删除 |
+| [ ] | M10 预览代办白名单 | Windows dev | 图库预览网页壁纸；CDP 在预览 iframe 里 `parent.postMessage({ kbWpe: 1, type: 'listen', events: ['images-added', 'setting-change'] }, '*')`，再触发新增图片与改语言 | iframe 只收到 `setting-change` 转发 | 未测（2026-10-31）：网页壁纸只在 Windows 提供，macOS 不挂载预览 `file:` iframe，`wpeWebBridge` 没有宿主，需在 Windows dev 上测 |
+| [ ] | W1 网页壁纸拉状态与事件 | Windows dev，窗口模式 | 设一张网页壁纸，看属性、ping 应答；切换界面语言 | 页面收到作者属性；ping 逐个应答；改语言后页面更新 | 未测（2026-10-31）：本机为 macOS，网页壁纸只在 Windows 提供 |
+| [ ] | W2 网页壁纸只能听四个事件 | 同上 | wallpaper target console：listen `images-added` 与 `image-changed` | 前者被 ACL 拒绝，后者成功 | 未测（2026-10-31）：本机为 macOS，网页壁纸只在 Windows 提供 |
+| [ ] | W3 网页壁纸里的 `file:` iframe | 同上 | 在网页壁纸里建 `file:` iframe（同目录），用主 frame 的 invoke key 在 iframe 上下文 fetch `ipc://localhost/wpe_web_pull_state` | 主 frame 放行；iframe 被拒 | 未测（2026-10-31）：本机为 macOS，网页壁纸只在 Windows 提供，判定方法同 M7 |
+| [ ] | A1 Android | Android dev | 主界面主要页面、畅游与 WebView 爬虫各走一遍 | 主界面命令与事件正常（wry 不上报 frame，按主 frame 特赦）；畅游 / 爬虫行为不变 | 未测（2026-10-31）：本机缺 `bin/android/arm64/rusty_v8-build/`，编不出 Android 包（见 S7） |
+| [ ] | L1 Linux / Windows 桌面冒烟 | Linux、Windows CEF dev | 同 M1、M4 | 正常 | 未测（2026-10-31）：本机为 macOS |
+
+## 壁纸窗口 ping 看门狗
+
+后端随 `WallpaperWindow` 启动 ping 看门狗，每 10s 经全局事件发 `wallpaper-ping`，应用页与 Windows 网页壁纸垫片按 label 过滤并调用 `wallpaper_pong`；pong 为 opt-in。连续 3 次未应答重载当前文档，重载后仍无应答则按 3 → 6 → 12……退避至 60，有效应答恢复阈值 3；导航 / 重载用 floor 作废旧应答。页面不计时，sleep 循环不补 tick，init 看门狗与 CEF 无响应恢复链路继续各司其职。以下用例待使用带环境注入的脚本和真机验证。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 事件协议单测 | 带环境注入的 test-kabegame | 运行 kabegame-core 的 `ipc::events` 用例 | 默认种类含 ping、不含 pong；两事件序列化、反序列化与名称正反映射一致 | 2026-10-30 macOS：`ipc::events` 5 个通过 |
+| [x] | ping 状态机单测 | 带环境注入的 test-kabegame | 运行 kabegame 的 `wallpaper::ping` 用例 | 持续应答不重载；无应答第 40s 重载；停止应答、label 隔离、reset 迟到应答、3 → 6 → 12 退避 / 60 上限 / 应答恢复、睡眠不补 tick、句柄丢弃退出均通过 | 2026-10-30 macOS：9 个通过。`test-kabegame kabegame` 能编译，但测试二进制在 `target/debug/deps/` 下按 `@executable_path/../Frameworks` 找不到 CEF framework（SIGABRT，与本次无关），改为对已编好的二进制加 `DYLD_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 直接运行 |
+| [x] | 编译与格式 | 带环境注入的 check-kabegame | 运行 vue-tsc 与 cargo check；逐个检查改动 Rust 文件的 rustfmt 和前端 Prettier | 无新增错误，改动文件格式正确 | 2026-10-30 macOS：vue-tsc 0 error、cargo check 0 error，改动文件无新增 warning；rustfmt `--check` 与 Prettier `--check` 均通过。Windows 专属分支本机编不到 |
+| [ ] | 正常不误报与序号往返 | macOS dev，窗口模式 | 用 kabegame-chromium 连 wallpaper target；以 `// DEBUG-wallpaper-ping` 临时 debug ingest 插桩记录 ping / pong，空闲 3 分钟后删除插桩 | 序号逐个对应，日志无「ping 未应答」 | |
+| [ ] | 遮挡不误报 | macOS dev，窗口模式 | 用最大化 / 全屏窗口覆盖桌面 6 分钟以上，CDP 读取 `document.visibilityState`，观察日志 | 状态为 hidden 且无未应答；若连续未应答则停下报告，不调大阈值掩盖 | |
+| [ ] | JS 卡死自动恢复 | macOS dev，窗口模式 | CDP 注入 `setTimeout(() => { const t = Date.now(); while (Date.now() - t < 300_000) {} }, 3000)` 后立刻断开 CDP，观察日志 | 先 3 条 warn，再 error / reload，随后 wallpaper 的 renderer unresponsive → terminated → 重载并恢复应答；reload 后 60s 内既无 unresponsive 也无恢复则报告、另补重建窗口兜底 | |
+| [ ] | 事件不外溢 | macOS dev + CLI / SSE | CLI 订阅全部事件或接 SSE，保持窗口模式 | 能看到 wallpaper-ping，看不到 wallpaper-pong | |
+| [ ] | 睡眠唤醒 | macOS dev，窗口模式 | 人工让 Mac 睡眠 1 分钟后唤醒，观察日志 | 最多一条未应答 warn，不 reload | |
+| [ ] | 网页壁纸正常与遮挡应答 | Windows dev，窗口模式 | 确认垫片 selfLabel 非空，分别空闲 3 分钟、覆盖桌面 6 分钟以上 | 仅应答本窗口，正常 / hidden 均不误报 | |
+| [ ] | 网页壁纸 JS 卡死恢复 | Windows dev，窗口模式 | 网页壁纸注入有界忙循环后立刻断开 CDP，观察日志 | 连续未应答后自动重载并恢复应答；遵守上述 60s 证伪判据 | |
+| [ ] | 网页壁纸与图片切换 | Windows dev，窗口模式 | 网页壁纸与图片来回切换，观察日志 | 新文档重新监听，旧应答作废，没有多余 reload | |
+| [ ] | 网页壁纸睡眠唤醒 | Windows dev，窗口模式 | 睡眠 1 分钟后唤醒，观察日志 | 不补发错过的 tick，最多一条 warn，不 reload | |
+
+## CEF 渲染进程卡死判定改为 5 秒
+
+2026-10-30：`tauri-runtime-cef` 在 `on_before_command_line_processing` 里合并追加 `--enable-features=RendererHangWatcher:delay/5s`，把 Chromium 桌面默认的 15s hang monitor 延迟改为 5s（Android 默认值），判定仍是「延迟到期 → 主线程 ping 1s 无应答」；`disable_chrome_only_features` 泛化为 `merge_feature_switch`，vulkan 分支的 `enable-features=Vulkan` 也改为合并，避免两处各写一次互相覆盖。`on_render_process_unresponsive` / `on_render_process_terminated` 未改。静态验证：改动文件 rustfmt 无差异；dev 自动重编通过，二进制含该开关串。测法：CDP 给主窗口挂一个 Ctrl+Shift+H 的 keydown 监听（先 `sendBeacon` 到 debug ingest 记按键时刻，再进 60s 有界忙循环）后立即断开 CDP（DevTools 附着时 Chromium 不报无响应），人工按键，后台脚本盯日志与渲染进程。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 改动前基线 | macOS 桌面 CEF dev | 主窗口在最前，按热键进入忙循环 | 约 16s 后 `renderer unresponsive for webview 'main'`，紧接 `terminated … RESULT_CODE_HUNG`，页面重载 | 2026-10-30：约 10:38:15 卡住，10:38:31.684 报无响应、+25ms 终止，重载后标记与横幅消失、`/gallery` 正常 |
+| [x] | 5s 判定并重载 | macOS 桌面 CEF dev | 同上 | 约 6s 报无响应并重载，页面恢复可用 | 2026-10-30：按键 15:12:36.815，无响应 15:12:42.815（正好 6.000s），+25ms 终止，15:12:42.842 新页面开始加载，画廊正常渲染 |
+| [ ] | 正常重负载不误杀 | 桌面 CEF | 画廊每页 1000 条来回翻页、冷启动大库、慢机器上操作 | 日志无 `renderer unresponsive`，页面不被重载 | 未验证 |
+| [ ] | Windows / Linux | Windows、Linux 桌面 CEF | 同「5s 判定并重载」 | 约 6s 自动重载 | 未验证：本机为 macOS |
+| [ ] | vulkan 模式开关合并 | Linux，`KABEGAME_CEF_GPU_MODE=vulkan` | 启动后看 GPU 是否走 Vulkan，并按热键测卡死 | Vulkan 与 5s 判定同时生效 | 未验证 |
+| [ ] | 爬虫窗口仍排除 | 桌面 CEF | 运行 WebView 爬虫任务时让其页面卡死 | 不 terminate / reload，由调度器心跳超时结束任务 | 未验证：回调代码未改 |
+
+## 应用日志（tracing + 按天落盘 + 事件循环广播 + 查看日志）
+
+2026-10-29：`kabegame_core::logging` 装配全进程唯一 tracing 订阅器（控制台 / `<data_dir>/logs/kabegame.<UTC 日期>.log` / `AppLogLayer` / debug ingest），约 380 处打印改为分级宏；`AppEventKind::Log` 为 opt-in，「订阅全部」改用 `default_kinds()`；出口为 Tauri `get_app_logs` + `set_app_log_stream`（`app-logs` 只发主窗口）、Web super `/logs` SSE + `get_app_logs` RPC、IPC `AppLogs`（CLI `log tail`）；前端经 `tauri-plugin-tracing` 写日志；debug ingest 改为 trace 日志 + 订阅层转发。静态验证：check-kabegame 的 cargo check（`kabegame` standard / web、`kabegame-cli`）0 error；vue-tsc 只有既有的 `vite.config.ts(74,20)` `isProd` 错误。单测：`kabegame-core` 新增 logging 8 个、事件 1 个全部通过；core 全量 392 通过、4 失败，均为既有失败（3 个 `wpe` Windows 路径用例在 macOS 上跑、1 个 `local_folder` 缩略图删除用例对应「只删 thumbnails_dir 内文件」规则），与本次无关。Android / Windows / Linux 专属文件的打印替换在 macOS 上编不到，只做了同参数宏替换。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 环形缓冲与过滤 | macOS 单测 | `test-kabegame kabegame-core --lib logging` | seq 递增、满容量淘汰最旧；since / limit 返回最新尾部；空 target 按 webview 级别；`KABEGAME_LOG` 叠加默认级别、非法级别报错 | 2026-10-29：8 个通过 |
+| [x] | 日志层记录与防重入 | macOS 单测 | 同上 | message 与字段（task_id、count）正确入记录；层内再打的日志被丢弃；带 `log{w=main}` span 的空 target 事件记为 `webview:main`、插件的空名位置字段被丢弃 | 2026-10-29 通过 |
+| [x] | Log 事件 opt-in | macOS 单测 | `ipc::events` | `default_kinds()` 不含 `Log`；`AppEvent::Log` 序列化为 `{"type":"log",seq,…}` 并能往返 | 2026-10-29 通过 |
+| [x] | 启动日志落盘 | 桌面 dev | 启动 app，打开 `.kabegame/debug/data/logs/` | 有 `kabegame.<UTC 日期>.log`，含 `Settings initialized` 等启动行，无 ANSI 转义 | 2026-10-29 macOS dev：生成 `kabegame.2026-10-29.log`，0 处 ANSI；同进程多次重启追加写入 |
+| [x] | 查看日志：历史与实时 | 桌面 dev | 工具箱 → 维护 →「查看日志」；随后跑一次整理或插件任务 | 弹窗先显示启动以来的历史；任务期间新日志实时追加并自动滚到底；手动上翻后自动滚动关闭 | 2026-10-29 CDP：入口在亀ちゃん工具箱维护分组；打开即显示启动以来 35 条；打开期间收到 3 条 `app-logs`。自动滚动未单独验证。2026-10-29 代理实测：连打 100 条与 2 秒内分散 50 条 `logger.info` 后列表都停在底部（scrollTop = max）且开关保持开启；把列表滚到顶后开关自动关闭，再来 30 条滚动位置仍为 0；重新打开开关立即跳到底。另：前端连续快速打日志时 seq 顺序与调用顺序不一致（180 条里 68 条错位），属异步 IPC 到达顺序 |
+| [ ] | 查看日志：筛选 | 桌面 dev | 依次切换级别（勾 DEBUG）、来源（前端 / 后端）、模块前缀（如 `kabegame_core::crawler`）、关键字 | 列表与「显示 N / 共 M 条」随筛选变化；点一行在下方显示完整消息与字段 | 2026-10-29 CDP：关键字筛到 2 条，勾 DEBUG 后 3 条，点行显示详情。来源与模块前缀未单独点测。2026-10-29 代理实测：来源「前端」184 条全为 `webview:main`、「后端」15 条无 `webview`；前缀选 `kabegame::core_init` / `kabegame_core::ipc` 后可见行全部以该前缀开头；勾 DEBUG 199→216，TRACE 无新增（dev 阈值 debug，缓冲里没有 TRACE）。失败：点模块前缀下拉的 × 清除后 `targetPrefix` 变成 `undefined`，`filtered` 里 `.trim()` 抛 TypeError（日志里有 `[vue] component update: Cannot read properties of undefined (reading 'trim')`），此后切来源 / 级别列表与计数都冻结不变，直到组件重建。另：前缀 `kabegame` 也会命中 `kabegame_core::*`（`startsWith` 不按 `::` 分段）。已修复（待 dev 复测）：模块前缀清除后按空串处理；前缀改为按 `::` 分段匹配，CLI `--target` 同规则 |
+| [ ] | 关闭即退订 | 桌面 dev | 关闭弹窗后持续产生日志，再打开 | 关闭期间后端停止推送；再打开时补拉关闭期间的历史，不重复 | 2026-10-29 CDP：关闭后打日志收到 0 条 `app-logs`；重开补到关闭期间那条，seq 无重复。实时推送已从全局事件 `app-logs` 改为 Channel（`start_app_log_stream` / `stop_app_log_stream { streamId }`），待 dev 复测 |
+| [x] | 复制 / 清空 / 打开目录 | 桌面 dev | 点「复制」「清空」「打开日志目录」 | 剪贴板为筛选后的行；清空后不回填旧日志；Finder / 资源管理器打开 logs 目录 | 2026-10-29：`pbpaste` 为筛选后的行；清空后关闭重开仍为 0 条、新日志照常进来；`open_logs_dir` 成功打开 Finder |
+| [ ] | 前端日志与未捕获异常 | 桌面 dev（devtools） | 执行 `logger.info("x")`；再 `setTimeout(() => { throw new Error("boom") })` | 查看器与日志文件出现 `webview:main` 的 INFO「x」与 ERROR「[window] boom…」 | 2026-10-29 CDP 通过。实测发现对象参数被插件转成 `[object Object]`、插件的调用位置总指向 `logger.ts`，已改为 `logger` 先序列化参数、后端丢弃该位置字段，复测对象显示为 JSON。2026-10-29 代理实测（未改状态，供复核）：查看器里 target 为 `webview:main`，但日志文件里前端日志 0 处 `webview:main`，行形如 `INFO log{w=main}: : agent-c7-marker =logger.ts:30:22)#    at eval …`，即 target 为空、空名位置字段也没丢弃——补 `webview:<label>` 与丢字段只在 `AppLogLayer` 做了，文件层仍是默认 fmt。已修复（待 dev 复测）：控制台与文件改用共用的 `logging/format.rs` 单行格式，前端日志记为 `webview:main`、不打印 span 与位置字段；单测 `formats_frontend_event_with_webview_target_and_no_span` 通过 |
+| [ ] | 畅游窗口无日志权限 | 桌面 dev | 在畅游页面 devtools 里调 `plugin:tracing\|log` | 被 ACL 拒绝；畅游内容页、畅游导航栏、爬虫窗口都收不到实时日志 | 2026-10-29 代理实测：example.com 畅游内容页有 `__TAURI_INTERNALS__`，`plugin:tracing\|log`、`get_app_logs`、`set_app_log_stream`、`plugin:event\|listen` 均报 `not allowed by ACL`，主窗口查看器与日志文件里没有这条探针日志，内容页收到 0 条 `app-logs`。但同一窗口的 `surf-navbar`（自有页面，有 `core:event:default`）用全局 `listen("app-logs")` 收到了主窗口的日志批次：Tauri 的 `match_any_or_filter` 对 target=Any 的监听者直接放行，`emit_to("main")` 挡不住；`crawler-*` 同样有 `core:event:allow-listen` 且允许远程 URL，未实测。已修复（待 dev 复测）：实时日志改经查看器传入的 Channel 推回调用页，不再发全局事件 |
+| [x] | debug ingest | 桌面 dev | 前端调用 `sendDebugEvent("probe", {a:1}, {sessionId:"log-probe"})`；查看 `backend_started` | `.kabegame/debug/debug-log-probe.ndjson` 有 source=frontend 的 `probe`，`ts` 为调用时刻；后端会话文件有 source=rust 的 `backend_started`；这两类事件不出现在查看器里 | 2026-10-29 通过。首次启动发现发送线程在 Tokio runtime 外构造 reqwest Client 而 panic（panic hook 已把它记进日志），已改为先 `runtime.enter()`，复测 `backend_started` 落盘。2026-10-29 代理实测：`sendDebugEvent("agent-probe", {x:1}, {sessionId:"agent-probe"})` 后 `debug-agent-probe.ndjson` 有一条 source=frontend、ts 与调用时刻一致的记录；`get_app_logs`（217 条）与当天日志文件里 `kb-debug` / `agent-probe` 均为 0 |
+| [ ] | debug ingest（Android） | Android dev | 前端调用 `sendDebugEvent` | 事件经后端转发落盘，不再出现空事件 | |
+| [x] | CLI log tail | 桌面 dev + dev CLI | `kabegame-cli log tail --level debug --history 50`，同时在 app 里操作；再退出 app | 先输出最近 50 条再持续跟随；退出 app 后提示连接断开；app 未运行时直接报错不回退本地 | 2026-10-29：历史、`--target` / `--level` 筛选、跟随（实时收到前端 `logger.info`）、`--via local` 报错均通过。实测修了两处：漏初始化 AppPaths 导致 panic；`--history` 改为按筛选后计数。退出 app / app 未运行两条未测。2026-10-29 代理实测：`log tail --level trace` 跟随中在主窗口 `exit_app`，CLI 收到 CEF 关闭的 DEBUG 行后打印「与主程序的连接已断开」并以退出码 1 结束；app 未运行时 `log tail`（默认 `--via auto`，含 `--no-follow`）直接报「日志只能从运行中的主程序读取：连接 Kabegame IPC 服务失败…Connection refused」，退出码 1，没有回退本地 |
+| [x] | 防自激 | 桌面 dev + dev CLI | 查看器勾 DEBUG + TRACE，同时 `kabegame-cli log tail --level trace` 跟随；空闲 10 秒后再触发操作 | 空闲时查看器与 CLI 都不增长；操作后增量与操作相称 | 2026-10-29 代理实测：空闲约 13 秒查看器 +0 条、CLI +0 行；一条 `logger.info` 加两次设置修改 → 两侧各 +1（就是那条日志）；再起一个 CLI 连接 → 两侧各 +3 条 `kabegame_core::ipc` DEBUG；每次之后 5 秒空闲均为 0 |
+| [x] | `KABEGAME_LOG` 调级 | 桌面 dev | `KABEGAME_LOG=kabegame_core::ipc=trace` 启动，用 CLI 发一个请求 | 控制台 / 文件出现 IPC 逐帧 trace 日志；不设时没有 | 2026-10-29 用 dev CLI 验证（同一订阅器）：设置后 stderr 出现 `kabegame_core::ipc::client::connection` 的 TRACE，不设为 0 条；非法值记一条 WARN 并退回默认 |
+| [ ] | Web super 日志 | web dev | 非 super 与 `?super=1` 分别打开工具箱；`curl -N 'http://127.0.0.1:7490/logs?super=1'` | 非 super 无「查看日志」，`/logs` 返回 403、`get_app_logs` 返回 forbidden；super 下可查看并实时滚动 | 2026-10-29 借桌面端应用 Web 服务器（同一套路由）验证了后端：无 super 时 `/logs` 403、RPC forbidden；super 下 RPC 返回历史、SSE 实时收到日志。Web 前端工具箱入口未测 |
+| [x] | 原有事件不受影响 | 桌面 dev | 下载、删图、画册增删、设置修改 | 画廊 / 任务 / 画册照常刷新（`default_kinds` 替换 `ALL` 未漏种类）；CLI `plugin run` 任务日志照常 | 2026-10-29：设置修改的 `setting-change` 照常到前端（2 次切换收到 2 条），画廊正常加载。下载 / 删图 / 画册未测。2026-10-29 代理实测（均未手动刷新）：本地导入 4 张 PNG，画廊页头 212 / 4189 在 1.6 秒内逐张涨到 216 / 4193，任务抽屉显示「本地导入 完成 ✓4」，3 条 `task-log` 实时到达且任务日志弹窗完整；新建画册 0.1~0.2 秒出现在树里、加 4 张后树计数与画册页头都变 4、改名 0.1 秒同步、删除 0.1~0.4 秒从树中消失；后端改 `networkRetryCount` 2→3→2，设置页输入框约 50 ms 同步；删除 4 张后 0.1 秒回落到 212 / 4189。dev CLI `plugin run manyacg --via app`（随机 2 个作品）两次均 completed，进度条正常绘制，任务日志经 `suspend` 打在进度条上方 |
+| [ ] | 发布版级别 | 桌面 release 包 | 安装后启动，查看日志文件 | 只有 INFO 及以上；无 DEBUG 行 | |
+
 ## WPE 壁纸导入（第二阶段 Phase 7：用户属性面板）
 
 2026-10-31：`x-wpe/web` 壁纸的作者属性可在预览详情栏和设置页编辑。用户值写入图片 metadata 的 `userProperties`，每次改写新建 metadata 行并广播 `metadataId` 补丁；桌面与预览页面重拉并按键差异更新。文件与目录属性由当前窗口的文件策略追加放行，换壁纸根目录时清空。真机项留给 Claude 在沙箱外执行，修改垫片或 runtime 后须完全重启 dev。
@@ -222,6 +324,7 @@
 | [ ] | 站点不能订阅事件 | 桌面 CEF dev | 任务运行中经 CDP 在爬虫窗口执行 `__TAURI_INTERNALS__.invoke('plugin:event\|listen', { event: 'images-added', target: { kind: 'Any' }, handler: __TAURI_INTERNALS__.transformCallback(() => {}) })` | Promise 被 ACL 拒绝（`event.listen not allowed`） | 未验证 |
 | [ ] | 站点不能伪造事件 | 桌面 CEF dev | 同上执行 `invoke('plugin:event\|emit', { event: 'app-import-plugin', payload: { kgpgPath: 'x' } })` | 被 ACL 拒绝，主窗口不弹导入对话框 | 未验证 |
 | [ ] | Android WebView 爬虫 | Android dev | 跑一个 WebView 插件 | 同桌面，任务成功结束（安卓同样使用 `crawler-capability`） | 未验证 |
+
 ## 下载落盘先占坑（消除 `images.local_path` UNIQUE 冲突）
 
 2026-10-29：下载目标文件名从 `exists()` 查询改为原子创建 + 原生占用标记（Unix `flock`、Windows 只共享读的 share mode）：`occupy_unique_path` / `occupy_unique_download_path[_with_name]` 返回 `OccupiedFile` 守卫，后处理持有到 `add_image` 结束；溢写文件在 Unix 同设备上「锁源 → 硬链接 → 删源名」零拷贝，Windows / 跨设备经句柄复制；本地导入复制进目标目录同样占坑；文件夹同步给新文件建行前探测标记、命中放弃，探测未命中再按路径查一次；下载器对新建文件入库后按直接父目录补挂文件夹画册。不改 SQL。静态验证：check-kabegame driver 的 cargo check（`kabegame` 与 `kabegame-cli`）0 error；vue-tsc 报 1 个既有错误（`apps/kabegame/vite.config.ts(74,20)` 的 `isProd` 未定义，来自 HEAD 合并提交，本次未改前端）。Windows 分支本机（macOS）无法编译，只核对了 `windows-sys` 0.52 常量类型。真机（macOS dev，CDP + dev CLI 经 IPC 交给 app）：用临时 V8 插件 `collide-test` 从本地 HTTP 服务一次入队 16 个 `…/set<n>/img.png`（同名、内容各异）制造碰撞，结果见各行备注；测试图片、画册与插件已清理。
@@ -242,6 +345,19 @@
 | [ ] | 畅游下载 | macOS 桌面 CEF | 畅游窗口一键下载 / 右键下载图片与视频 | 照常入库，下载目录无残留 `.kabegame-occupy-*` 或 `.part` | 未验证：走 relocate 分支，代码未改 |
 | [ ] | Windows 读写与删除 | Windows 桌面 CEF | 下载图片与大视频；构造一次后处理失败（如去重兜底命中） | 缩略图 / 尺寸 / 兼容副本照常生成；失败分支能删掉新建文件（先 drop 守卫再删）；溢写文件经句柄复制后源 `.part` 被删 | 未验证：本机为 macOS，Windows 分支未编译 |
 | [ ] | 不支持硬链接的盘 | Linux / macOS，FAT / exFAT 下载目录 | 下载目录设在 U 盘上下载几张同名图 | 退回 `create_new` + 上锁，照常换名入库，无残留临时文件 | 未验证 |
+
+## Windows 安装程序不再弹命令行窗口
+
+2026-10-29：`src-tauri/kabegame/nsis/installer-hooks.nsh` 的安装 / 卸载钩子不再 `ExecWait cmd.exe /C move|attrib`（每个 DLL、CEF 文件、locale pak 各起一次 cmd，安装末尾连续闪出几十个黑窗口），移动改为 `KABEGAME_MOVE_FILE` 宏（`Delete` 目标 + `Rename`，同卷 `MoveFile`，失败时 `DetailPrint` 报错），属性改为 `SetFileAttributes`。本机（macOS）无 `makensis`，未编译、未真机运行。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 打包通过 | Windows 构建机 | `deno task b -c kabegame --release` 产出 NSIS 安装包 | `makensis` 无报错（宏内 `${If} ${Errors}` 可用） | 未验证 |
+| [ ] | 全新安装无黑窗口 | Windows | 在干净目录运行安装包，点开「显示细节」 | 全程不闪 cmd 窗口；细节里每个文件一行 `Move …`，无 `Move failed`；`$INSTDIR` 下有 `libcef.dll`、`*.pak`、`locales\*.pak`、`dokan2.dll`，`resources\cef` 已删除 | 未验证 |
+| [ ] | 覆盖安装 | Windows（已装旧版） | 不卸载直接运行新安装包 | 旧 DLL / pak 被覆盖，无 `Move failed`；应用能正常启动（CEF 加载正常） | 未验证 |
+| [ ] | 目录图标 | Windows | 安装后在资源管理器里看安装目录 | 文件夹显示应用图标；`desktop.ini` 为隐藏 + 系统，目录带系统 + 只读属性 | 未验证 |
+| [ ] | 卸载 | Windows | 从「应用和功能」卸载 | 不闪 cmd 窗口；安装目录被完整删除，无残留 `desktop.ini` | 未验证 |
+| [ ] | 带空格的安装路径 | Windows | 安装到 `C:\Program Files\Kabe Game Test` | 同全新安装，各文件正常搬运 | 未验证 |
 
 ## 合并：WPE 与路径轮播 / 基本信息芯片
 

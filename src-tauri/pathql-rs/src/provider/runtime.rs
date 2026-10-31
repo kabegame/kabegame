@@ -414,16 +414,18 @@ impl ProviderRuntime {
         let mut group_stack = GroupStack::default();
 
         if dbg_enabled() {
-            eprintln!(
-                "[pathql] resolve({:?}) — segments={:?} cache_start_idx={}",
-                path, segments, start_idx
+            tracing::debug!(
+                "resolve({:?}) — segments={:?} cache_start_idx={}",
+                path,
+                segments,
+                start_idx
             );
         }
 
         // 早退: 完整路径已缓存
         if start_idx == segments.len() {
             if dbg_enabled() {
-                eprintln!("[pathql]   ← full-path cache hit, return");
+                tracing::debug!("← full-path cache hit, return");
             }
             // 完整路径能命中缓存 ⇒ 它是深度 0 的边界 (组内不写缓存), 故无未闭合组。
             if let Some(error) = composed.fold_errors.first() {
@@ -578,8 +580,8 @@ impl ProviderRuntime {
                 loop {
                     let resolved = resolve_provider.resolve(seg, &seg_composed, &ctx);
                     if dbg_enabled() {
-                        eprintln!(
-                            "[pathql]   step seg={:?} at path={:?} → {}",
+                        tracing::debug!(
+                            "step seg={:?} at path={:?} → {}",
                             seg,
                             path_so_far,
                             match &resolved {

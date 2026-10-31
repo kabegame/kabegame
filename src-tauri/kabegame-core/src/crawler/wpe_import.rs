@@ -189,7 +189,7 @@ async fn backfill_compatible_path(
     let probe = crate::media::dimensions::probe_media_sync(entry);
     let path = resolve_compatible_path(task_id, entry, probe.as_ref(), dir_string).await;
     if let Err(error) = Storage::global().replace_image_compatible_path(&existing.id, &path) {
-        eprintln!("[wpe-import] compatible_path backfill failed for {}: {error}", existing.id);
+        tracing::warn!("compatible_path backfill failed for {}: {error}", existing.id);
         return;
     }
     GlobalEmitter::global().emit_image_fields(

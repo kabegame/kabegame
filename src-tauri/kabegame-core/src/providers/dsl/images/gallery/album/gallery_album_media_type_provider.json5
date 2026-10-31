@@ -4,8 +4,9 @@
     "properties": {
         "kind": { "type": "string", "default": "image", "optional": false }
     },
+    // 保持 CASE 包裹，避免分页走低选择性的 idx_images_type 再整体排序，见 RULES.md。
     "query": {
-        "where": "CASE ${properties.kind} WHEN 'video' THEN (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') ELSE NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') END"
+        "where": "CASE ${properties.kind} WHEN 'video' THEN images.type GLOB 'video/*' ELSE NOT (images.type GLOB 'video/*') END"
     },
     "resolve": {
         "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },

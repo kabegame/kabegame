@@ -57,10 +57,10 @@ fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, 
         match reqwest::Proxy::all(proxy_url) {
             Ok(proxy) => {
                 client_builder = client_builder.proxy(proxy);
-                eprintln!("网络代理已配置 (async): {}", proxy_url);
+                tracing::debug!("网络代理已配置 (async): {}", proxy_url);
             }
             Err(e) => {
-                eprintln!("代理配置无效 ({}), 将使用直连 (async): {}", proxy_url, e);
+                tracing::warn!("代理配置无效 ({}), 将使用直连 (async): {}", proxy_url, e);
             }
         }
     }

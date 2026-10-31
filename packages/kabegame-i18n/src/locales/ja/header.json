@@ -36,5 +36,25 @@
   "metadataMigrationTitle": "プラグインデータを移行中",
   "backfillTitle": "データベースを更新中",
   "backfillWaiting": "待機中",
-  "backfillFailed": "データベースのバックグラウンド更新に失敗しました（{name}）。次回起動時に再開します"
+  "backfillFailed": "データベースのバックグラウンド更新に失敗しました（{name}）。次回起動時に再開します",
+  "viewLogs": "ログを表示",
+  "logs": {
+    "title": "アプリログ",
+    "sourceAll": "すべて",
+    "sourceBackend": "バックエンド",
+    "sourceFrontend": "フロントエンド",
+    "targetPlaceholder": "モジュール接頭辞",
+    "searchPlaceholder": "ログを検索",
+    "count": "{total} 件中 {shown} 件を表示",
+    "follow": "自動スクロール",
+    "copy": "コピー",
+    "copyLine": "この行をコピー",
+    "clear": "クリア",
+    "openDir": "ログフォルダを開く",
+    "copied": "コピーしました",
+    "copyFailed": "コピーに失敗しました",
+    "openDirFailed": "ログフォルダを開けませんでした：{detail}",
+    "empty": "ログはありません",
+    "loadFailed": "ログの読み込みに失敗しました：{detail}"
+  }
 }

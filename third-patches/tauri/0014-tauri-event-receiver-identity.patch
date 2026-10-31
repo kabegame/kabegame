@@ -1,0 +1,523 @@
+diff --git a/crates/tauri/src/event/listener.rs b/crates/tauri/src/event/listener.rs
+index 308b195f17df9e0151b8695e97356813a03bc6c8..b7b0c14055cd5f95bdaf0f33d30ad3a4f2a0a3e9 100644
+--- a/crates/tauri/src/event/listener.rs
++++ b/crates/tauri/src/event/listener.rs
+@@ -43,25 +43,15 @@ impl Handler {
+   }
+ }
+ 
+-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+-struct JsHandler {
+-  target: EventTarget,
+-  id: EventId,
+-}
+-
+-impl JsHandler {
+-  fn new(target: EventTarget, id: EventId) -> Self {
+-    Self { target, id }
+-  }
+-}
+-
+ type WebviewLabel = String;
+ 
+ /// Holds event handlers and pending event handlers, along with the salts associating them.
+ struct InnerListeners {
+   pending: Mutex<Vec<Pending>>,
+   handlers: Mutex<HashMap<crate::EventName, HashMap<EventId, Handler>>>,
+-  js_event_listeners: Mutex<HashMap<WebviewLabel, HashMap<crate::EventName, HashSet<JsHandler>>>>,
++  /// JS listeners per webview label and event name. Only the listener id is kept: delivery is decided
++  /// by who the receiving webview is (see [`receiver_identities`]), not by a target sent from JS.
++  js_event_listeners: Mutex<HashMap<WebviewLabel, HashMap<crate::EventName, HashSet<EventId>>>>,
+   function_name: &'static str,
+   listeners_object_name: &'static str,
+   next_event_id: Arc<AtomicU32>,
+@@ -241,7 +231,6 @@ impl Listeners {
+     &self,
+     event: crate::EventName<&str>,
+     source_webview_label: &str,
+-    target: EventTarget,
+     id: EventId,
+   ) {
+     let event = event.into_owned();
+@@ -251,19 +240,27 @@ impl Listeners {
+       .or_default()
+       .entry(event)
+       .or_default()
+-      .insert(JsHandler::new(target, id));
++      .insert(id);
+   }
+ 
+-  pub(crate) fn unlisten_js(&self, event: crate::EventName<&str>, id: EventId) {
++  /// Removes a JS listener registered from the given webview.
++  ///
++  /// Only the calling webview's own listeners are looked at: listener ids are a global counter,
++  /// so another webview must not be able to drop them by guessing the id.
++  pub(crate) fn unlisten_js(
++    &self,
++    webview_label: &str,
++    event: crate::EventName<&str>,
++    id: EventId,
++  ) {
+     let event = event.into_owned();
+     let mut js_listeners = self.inner.js_event_listeners.lock().unwrap();
+-    let js_listeners = js_listeners.values_mut();
+-    for js_listeners in js_listeners {
+-      if let Some(handlers) = js_listeners.get_mut(&event) {
+-        handlers.retain(|h| h.id != id);
++    if let Some(events) = js_listeners.get_mut(webview_label) {
++      if let Some(ids) = events.get_mut(&event) {
++        ids.remove(&id);
+ 
+-        if handlers.is_empty() {
+-          js_listeners.remove(&event);
++        if ids.is_empty() {
++          events.remove(&event);
+         }
+       }
+     }
+@@ -291,24 +288,29 @@ impl Listeners {
+     self.remove_listeners_for_target(EventTarget::webview_window(label));
+   }
+ 
+-  pub(crate) fn has_js_listener<F: Fn(&EventTarget) -> bool>(
++  /// Whether any of the given webviews registered a JS listener for the event.
++  pub(crate) fn has_js_listener_in<S: AsRef<str>>(
+     &self,
+     event: crate::EventName<&str>,
+-    filter: F,
++    webview_labels: &[S],
+   ) -> bool {
+     let event = event.into_owned();
+     let js_listeners = self.inner.js_event_listeners.lock().unwrap();
+-    js_listeners.values().any(|events| {
+-      events
+-        .get(&event)
+-        .map(|handlers| handlers.iter().any(|handler| filter(&handler.target)))
+-        .unwrap_or(false)
++    webview_labels.iter().any(|label| {
++      js_listeners
++        .get(label.as_ref())
++        .and_then(|events| events.get(&event))
++        .is_some_and(|ids| !ids.is_empty())
+     })
+   }
+ 
++  /// Delivers the event to the JS listeners of every webview the filter accepts.
++  ///
++  /// The filter is applied to the identities of the receiving webview (see [`receiver_identities`]),
++  /// never to anything sent from JS: a webview receives a targeted event only if it is the target.
+   pub(crate) fn emit_js_filter<'a, R, I, F>(
+     &self,
+-    mut webviews: I,
++    webviews: I,
+     emit_args: &EmitArgs,
+     filter: Option<F>,
+   ) -> crate::Result<()>
+@@ -317,15 +319,21 @@ impl Listeners {
+     I: Iterator<Item = &'a Webview<R>>,
+     F: Fn(&EventTarget) -> bool,
+   {
++    // Pick the receivers before locking the JS listeners: `receiver_identities` locks the webview's
++    // window. The caller holds the webviews lock, the same order as `Window::webviews()`.
++    let receivers = webviews
++      .filter(|webview| {
++        filter
++          .as_ref()
++          .is_none_or(|f| receiver_identities(webview).iter().any(f))
++      })
++      .collect::<Vec<_>>();
++
+     let event = &emit_args.event;
+     let js_listeners = self.inner.js_event_listeners.lock().unwrap();
+-    webviews.try_for_each(|webview| {
+-      if let Some(handlers) = js_listeners.get(webview.label()).and_then(|s| s.get(event)) {
+-        let ids = handlers
+-          .iter()
+-          .filter(|handler| match_any_or_filter(&handler.target, &filter))
+-          .map(|handler| handler.id)
+-          .collect::<Vec<_>>();
++    receivers.into_iter().try_for_each(|webview| {
++      if let Some(ids) = js_listeners.get(webview.label()).and_then(|s| s.get(event)) {
++        let ids = ids.iter().copied().collect::<Vec<_>>();
+         webview.emit_js(emit_args, &ids)?;
+       }
+ 
+@@ -342,6 +350,25 @@ impl Listeners {
+   }
+ }
+ 
++/// Every identity a webview has as an event receiver: its own label as a webview, the label of the
++/// window hosting it, and, when the window hosts only this webview under the same label, the
++/// webview window. An `emit_to` target is delivered if it accepts any of them.
++fn receiver_identities<R: Runtime>(webview: &Webview<R>) -> Vec<EventTarget> {
++  receiver_identities_for(webview.label(), &webview.window_label())
++}
++
++fn receiver_identities_for(webview_label: &str, window_label: &str) -> Vec<EventTarget> {
++  let mut identities = vec![
++    EventTarget::webview(webview_label),
++    EventTarget::window(window_label),
++  ];
++  if webview_label == window_label {
++    identities.push(EventTarget::webview_window(webview_label));
++  }
++  identities
++}
++
++/// Rust-side handlers keep their registration target: `Any` (e.g. `listen_any`) receives everything.
+ #[inline(always)]
+ fn match_any_or_filter<F: Fn(&EventTarget) -> bool>(
+   target: &EventTarget,
+@@ -496,17 +523,12 @@ mod test {
+     let labeled = listeners.listen(event.clone(), EventTarget::labeled(webview_label), event_fn);
+ 
+     let id = listeners.next_event_id();
+-    listeners.listen_js(
+-      event.as_str_event(),
+-      webview_label,
+-      EventTarget::webview(webview_label),
+-      id,
+-    );
+-    assert!(listeners.has_js_listener(event.as_str_event(), |_| true));
++    listeners.listen_js(event.as_str_event(), webview_label, id);
++    assert!(listeners.has_js_listener_in(event.as_str_event(), &[webview_label]));
+ 
+     listeners.remove_webview_listeners(webview_label);
+ 
+-    assert!(!listeners.has_js_listener(event.as_str_event(), |_| true));
++    assert!(!listeners.has_js_listener_in(event.as_str_event(), &[webview_label]));
+ 
+     let lock = listeners.inner.handlers.lock().unwrap();
+     let remaining: HashSet<EventId> = lock.get(&event).unwrap().keys().copied().collect();
+@@ -522,4 +544,57 @@ mod test {
+     assert!(remaining.contains(&any));
+     assert!(remaining.contains(&labeled));
+   }
++
++  #[test]
++  fn unlisten_js_only_touches_the_calling_webview() {
++    let listeners = Listeners::default();
++    let event = crate::EventName::new("test-event".to_owned()).unwrap();
++
++    let a = listeners.next_event_id();
++    listeners.listen_js(event.as_str_event(), "a", a);
++    let b = listeners.next_event_id();
++    listeners.listen_js(event.as_str_event(), "b", b);
++
++    // webview `a` guesses `b`'s id: nothing happens
++    listeners.unlisten_js("a", event.as_str_event(), b);
++    assert!(listeners.has_js_listener_in(event.as_str_event(), &["a"]));
++    assert!(listeners.has_js_listener_in(event.as_str_event(), &["b"]));
++
++    // `b` drops its own listener; `a` keeps its own
++    listeners.unlisten_js("b", event.as_str_event(), b);
++    assert!(!listeners.has_js_listener_in(event.as_str_event(), &["b"]));
++    assert!(listeners.has_js_listener_in(event.as_str_event(), &["a"]));
++
++    listeners.unlisten_js("a", event.as_str_event(), a);
++    assert!(!listeners.has_js_listener_in(event.as_str_event(), &["a", "b"]));
++    // the emptied event key is removed
++    assert!(
++      listeners
++        .inner
++        .js_event_listeners
++        .lock()
++        .unwrap()
++        .values()
++        .all(|events| events.is_empty())
++    );
++  }
++
++  #[test]
++  fn receiver_identities_cover_webview_window_and_both() {
++    assert_eq!(
++      receiver_identities_for("multi-a", "multi"),
++      [
++        EventTarget::webview("multi-a"),
++        EventTarget::window("multi")
++      ]
++    );
++    assert_eq!(
++      receiver_identities_for("solo", "solo"),
++      [
++        EventTarget::webview("solo"),
++        EventTarget::window("solo"),
++        EventTarget::webview_window("solo")
++      ]
++    );
++  }
+ }
+diff --git a/crates/tauri/src/event/mod.rs b/crates/tauri/src/event/mod.rs
+index 05dfd04f096815a72f46bad38cc6e4b55f7053a6..1da2988a978f268a951c785c5fcf79484c003879 100644
+--- a/crates/tauri/src/event/mod.rs
++++ b/crates/tauri/src/event/mod.rs
+@@ -166,7 +166,6 @@ impl Event {
+ 
+ pub(crate) fn listen_js_script(
+   listeners_object_name: &str,
+-  serialized_target: &str,
+   event: EventName<&str>,
+   event_id: EventId,
+   handler: CallbackFn,
+@@ -182,7 +181,6 @@ pub(crate) fn listen_js_script(
+       }}
+       const eventListeners = window['{listeners_object_name}']['{event}']
+       const listener = {{
+-        target: {serialized_target},
+         handlerId: {handler_id}
+       }};
+       Object.defineProperty(eventListeners, '{event_id}', {{ value: listener, configurable: true }});
+diff --git a/crates/tauri/src/event/plugin.rs b/crates/tauri/src/event/plugin.rs
+index fdbbf58dd72e5e805bae3edec9d0528580ce64e1..2da9eddf5aebfe600f4659e627ec7fa6fc90efed 100644
+--- a/crates/tauri/src/event/plugin.rs
++++ b/crates/tauri/src/event/plugin.rs
+@@ -11,14 +11,15 @@ use crate::{EventId, Result, Runtime, command, ipc::CallbackFn};
+ use super::EventName;
+ use super::EventTarget;
+ 
++/// The `target` the JS API still sends is ignored: a webview receives an event targeted with
++/// `emit_to` only if it is the target itself (see [`crate::Emitter::emit_to`]).
+ #[command(root = "crate")]
+ async fn listen<R: Runtime>(
+   webview: Webview<R>,
+   event: EventName,
+-  target: EventTarget,
+   handler: CallbackFn,
+ ) -> Result<EventId> {
+-  webview.listen_js(event.as_str_event(), target, handler)
++  webview.listen_js(event.as_str_event(), handler)
+ }
+ 
+ #[command(root = "crate")]
+diff --git a/crates/tauri/src/lib.rs b/crates/tauri/src/lib.rs
+index 46b6307853b2e391969890c36631d569716d310a..b34a3125e0f106cb2cfac051a09039963ac40667 100644
+--- a/crates/tauri/src/lib.rs
++++ b/crates/tauri/src/lib.rs
+@@ -986,6 +986,12 @@ pub trait Emitter<R: Runtime>: sealed::ManagerBase<R> {
+ 
+   /// Emits an event to all [targets](EventTarget) matching the given target.
+   ///
++  /// JavaScript listeners are matched by the webview that registered them, not by the target the
++  /// JavaScript side passed to `listen`: a webview is a receiver as [`EventTarget::Webview`] with its
++  /// own label, as [`EventTarget::Window`] with the label of its window and, when the webview and
++  /// its window share the label, as [`EventTarget::WebviewWindow`]. It receives the event if the
++  /// target accepts any of these. [`EventTarget::App`] is never delivered to JavaScript.
++  ///
+   /// # Examples
+   /// ```
+   /// use tauri::{Emitter, EventTarget};
+diff --git a/crates/tauri/src/manager/mod.rs b/crates/tauri/src/manager/mod.rs
+index 941020c7231347e2f764173e1184bbce36add49d..f56fc32dd25b1732923e0e6e619335a376a2e706 100644
+--- a/crates/tauri/src/manager/mod.rs
++++ b/crates/tauri/src/manager/mod.rs
+@@ -1038,4 +1038,89 @@ mod test {
+     }
+     assert_events("emit_to", &received, &[other_webview_listen_id]);
+   }
++
++  /// JS listeners receive `emit_to` events by the identity of their webview, whatever target the
++  /// JS side sent: the webview label, the hosting window label and, for a webview window, both.
++  #[test]
++  fn js_emit_to_uses_receiver_identity() {
++    use crate::sealed::ManagerBase;
++
++    let app = mock_app();
++
++    // A window hosting two webviews, plus a regular webview window.
++    let multi = WindowBuilder::new(&app, "multi").build().unwrap();
++    let multi_a = multi
++      .add_child(
++        WebviewBuilder::new("multi-a", Default::default()),
++        crate::LogicalPosition::new(0, 0),
++        multi.inner_size().unwrap(),
++      )
++      .unwrap();
++    let multi_b = multi
++      .add_child(
++        WebviewBuilder::new("multi-b", Default::default()),
++        crate::LogicalPosition::new(0, 0),
++        multi.inner_size().unwrap(),
++      )
++      .unwrap();
++    let solo = WebviewWindowBuilder::new(&app, "solo", Default::default())
++      .build()
++      .unwrap()
++      .webview;
++
++    let webviews = [&multi_a, &multi_b, &solo];
++    let listeners = app.manager().listeners();
++    let event = crate::EventName::new(TEST_EVENT_NAME).unwrap();
++    for webview in webviews {
++      // registered as a JS `listen` would be, with no target stored
++      listeners.listen_js(
++        event.as_str_event(),
++        webview.label(),
++        listeners.next_event_id(),
++      );
++    }
++
++    let mut n = 0;
++    let mut delivered_to = |target: EventTarget| {
++      n += 1;
++      let payload = format!("payload-{n}");
++      app.emit_to(target, TEST_EVENT_NAME, &payload).unwrap();
++      webviews
++        .iter()
++        .filter(|webview| {
++          webview
++            .webview
++            .dispatcher
++            .last_evaluated_script()
++            .is_some_and(|script| script.contains(&payload))
++        })
++        .map(|webview| webview.label().to_string())
++        .collect::<Vec<_>>()
++    };
++
++    assert_eq!(
++      delivered_to(EventTarget::labeled("multi")),
++      ["multi-a", "multi-b"]
++    );
++    assert_eq!(delivered_to(EventTarget::labeled("multi-a")), ["multi-a"]);
++    assert_eq!(delivered_to(EventTarget::labeled("solo")), ["solo"]);
++    assert_eq!(
++      delivered_to(EventTarget::window("multi")),
++      ["multi-a", "multi-b"]
++    );
++    assert_eq!(delivered_to(EventTarget::window("solo")), ["solo"]);
++    assert_eq!(delivered_to(EventTarget::webview("multi-b")), ["multi-b"]);
++    assert_eq!(delivered_to(EventTarget::webview("solo")), ["solo"]);
++    assert_eq!(delivered_to(EventTarget::webview_window("solo")), ["solo"]);
++    // no webview is both named and hosted by "multi"
++    assert!(delivered_to(EventTarget::webview_window("multi")).is_empty());
++    assert!(delivered_to(EventTarget::webview_window("multi-a")).is_empty());
++    // the app is not a JS receiver
++    assert!(delivered_to(EventTarget::App).is_empty());
++    assert!(delivered_to(EventTarget::labeled("nobody")).is_empty());
++    assert_eq!(
++      delivered_to(EventTarget::Any),
++      ["multi-a", "multi-b", "solo"]
++    );
++  }
+ }
+diff --git a/crates/tauri/src/manager/window.rs b/crates/tauri/src/manager/window.rs
+index 93f7db6c69cc1cea950aac214febba9b68f5e08c..9cc02f820804f40779d4cba05e56f4da72f3bf42 100644
+--- a/crates/tauri/src/manager/window.rs
++++ b/crates/tauri/src/manager/window.rs
+@@ -152,14 +152,19 @@ impl<R: Runtime> Window<R> {
+       })
+   }
+ 
+-  /// Checks whether has js listener for [`EventTarget::Window`] or [`EventTarget::WebviewWindow`]
++  /// Checks whether any webview of this window has a JS listener for the event.
++  ///
++  /// Window events are delivered to every webview of the window, so any of them counts.
+   fn has_js_listener(&self, event: EventName<&str>) -> bool {
+-    let window_label = self.label();
+-    let listeners = self.manager().listeners();
+-    listeners.has_js_listener(event, |target| match target {
+-      EventTarget::Window { label } | EventTarget::WebviewWindow { label } => label == window_label,
+-      _ => false,
+-    })
++    let labels = self
++      .webviews()
++      .iter()
++      .map(|webview| webview.label().to_string())
++      .collect::<Vec<_>>();
++    self
++      .manager()
++      .listeners()
++      .has_js_listener_in(event, &labels)
+   }
+ }
+ 
+@@ -290,3 +295,45 @@ struct ScaleFactorChanged {
+   scale_factor: f64,
+   size: PhysicalSize<u32>,
+ }
++
++#[cfg(test)]
++mod tests {
++  use super::WINDOW_CLOSE_REQUESTED_EVENT;
++  use crate::{
++    WebviewWindowBuilder, sealed::ManagerBase, test::mock_app, webview::WebviewBuilder,
++    window::WindowBuilder,
++  };
++
++  /// A window intercepts its close request when any of its webviews listens to the event,
++  /// whatever target the JS side sent.
++  #[test]
++  fn has_js_listener_counts_every_webview_of_the_window() {
++    let app = mock_app();
++    let multi = WindowBuilder::new(&app, "multi").build().unwrap();
++    let child = multi
++      .add_child(
++        WebviewBuilder::new("multi-child", Default::default()),
++        crate::LogicalPosition::new(0, 0),
++        multi.inner_size().unwrap(),
++      )
++      .unwrap();
++    let other = WebviewWindowBuilder::new(&app, "other", Default::default())
++      .build()
++      .unwrap();
++
++    let listeners = app.manager().listeners();
++    listeners.listen_js(
++      WINDOW_CLOSE_REQUESTED_EVENT,
++      other.label(),
++      listeners.next_event_id(),
++    );
++    assert!(!multi.has_js_listener(WINDOW_CLOSE_REQUESTED_EVENT));
++
++    listeners.listen_js(
++      WINDOW_CLOSE_REQUESTED_EVENT,
++      child.label(),
++      listeners.next_event_id(),
++    );
++    assert!(multi.has_js_listener(WINDOW_CLOSE_REQUESTED_EVENT));
++  }
++}
+diff --git a/crates/tauri/src/webview/mod.rs b/crates/tauri/src/webview/mod.rs
+index 80bb313264dc34ad9543e47dd7de99c92aa99cb3..73a3fea54a2590602a7e6c406e08646a99b426b0 100644
+--- a/crates/tauri/src/webview/mod.rs
++++ b/crates/tauri/src/webview/mod.rs
+@@ -2210,10 +2210,12 @@ tauri::Builder::default()
+   }
+ 
+   /// Register a JS event listener and return its identifier.
++  ///
++  /// Which emits reach it is decided by this webview's identity as a receiver,
++  /// see [`crate::Emitter::emit_to`].
+   pub(crate) fn listen_js(
+     &self,
+     event: EventName<&str>,
+-    target: EventTarget,
+     handler: CallbackFn,
+   ) -> crate::Result<EventId> {
+     let listeners = self.manager().listeners();
+@@ -2222,22 +2224,21 @@ tauri::Builder::default()
+ 
+     self.eval(crate::event::listen_js_script(
+       listeners.listeners_object_name(),
+-      &serde_json::to_string(&target)?,
+       event,
+       id,
+       handler,
+     ))?;
+ 
+-    listeners.listen_js(event, self.label(), target, id);
++    listeners.listen_js(event, self.label(), id);
+ 
+     Ok(id)
+   }
+ 
+-  /// Unregister a JS event listener.
++  /// Unregister a JS event listener registered from this webview.
+   pub(crate) fn unlisten_js(&self, event: EventName<&str>, id: EventId) -> crate::Result<()> {
+     let listeners = self.manager().listeners();
+ 
+-    listeners.unlisten_js(event, id);
++    listeners.unlisten_js(self.label(), event, id);
+ 
+     Ok(())
+   }

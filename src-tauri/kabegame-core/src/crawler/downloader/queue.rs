@@ -852,9 +852,11 @@ impl DownloadQueue {
             };
             let current = download.state;
             if !current.can_transition_to(next) {
-                eprintln!(
-                    "[DownloadQueue] Illegal state transition: {:?} -> {:?} (id={})",
-                    current, next, id
+                tracing::warn!(
+                    "Illegal state transition: {:?} -> {:?} (id={})",
+                    current,
+                    next,
+                    id
                 );
                 return false;
             }
@@ -1062,7 +1064,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             if let Err(error) =
                                 crate::storage::image_events::emit_membership_added(album_id, &ids)
                             {
-                                eprintln!("[album-event] 发射队列去重成员事件失败: {error}");
+                                tracing::warn!("发射队列去重成员事件失败: {error}");
                             }
                         }
                     }

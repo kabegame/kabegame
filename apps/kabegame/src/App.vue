@@ -158,6 +158,7 @@
     <TaskDrawer v-model="taskDrawerVisible" />
     <AutoConfigDialog />
     <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
+    <AppLogDialog />
     <CrawlerDialog v-model="crawlerDrawerVisible" />
     <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
     <LocalImportDialog
@@ -202,6 +203,7 @@ import LocalImportDialog from "./components/LocalImportDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
 import OrganizeDialog from "./components/OrganizeDialog.vue";
+import AppLogDialog from "./components/logs/AppLogDialog.vue";
 import FrameMonitor from "./components/common/FrameMonitor.vue";
 import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";

@@ -1,5 +1,4 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@/api/rpc";
 
 const params = new URLSearchParams(location.search);
@@ -245,25 +244,18 @@ function mount() {
   bar.append(back, forward, reload, address, devtools, openInBrowser, collect);
   root.appendChild(bar);
 
-  // target 必须显式给本 navbar 的 webview label:后端用 emit_to(<label>-navbar) 定向,
-  // 但 JS listen 不传 target 时注册的是 EventTarget::Any,而 tauri 的
-  // match_any_or_filter 对 Any 的 handler 无条件放行(绕过 emit_to 的 label 过滤)。
-  // 多开畅游窗口时,每个 navbar 都会收到别的窗口的 URL,地址栏被最后一次事件覆盖。
-  listen<string>(
-    "surf-url-changed",
-    (event) => {
-      if (typeof event.payload === "string" && event.payload) {
-        setInputUrl(address, event.payload);
-      }
-    },
-    { target: getCurrentWebview().label },
-  ).then((unlisten) => {
+  // 后端用 emit_to(<label>-navbar) 定向投递，只送到本导航栏（tauri 补丁 0014 按接收方身份投递）
+  listen<string>("surf-url-changed", (event) => {
+    if (typeof event.payload === "string" && event.payload) {
+      setInputUrl(address, event.payload);
+    }
+  }).then((unlisten) => {
     unlistenUrlChanged = unlisten;
   }, showError);
 
-  listen<{ running?: boolean }>("surf-collect-state", (event) => setCollectRunning(event.payload?.running === true), {
-    target: getCurrentWebview().label,
-  }).then((unlisten) => {
+  listen<{ running?: boolean }>("surf-collect-state", (event) =>
+    setCollectRunning(event.payload?.running === true),
+  ).then((unlisten) => {
     unlistenCollectState = unlisten;
   }, showError);
 }

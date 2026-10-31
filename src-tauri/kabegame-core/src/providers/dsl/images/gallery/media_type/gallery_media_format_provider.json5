@@ -5,6 +5,6 @@
         "format": { "type": "string", "default": "", "optional": false }
     },
     "query": {
-        "where": "LOWER(CASE WHEN INSTR(COALESCE(images.type, ''), '/') > 0 THEN SUBSTR(COALESCE(images.type, ''), INSTR(COALESCE(images.type, ''), '/') + 1) ELSE COALESCE(images.type, '') END) = ${properties.format}"
+        "where": "SUBSTR(images.type, INSTR(images.type, '/') + 1) = ${properties.format}"
     }
 }

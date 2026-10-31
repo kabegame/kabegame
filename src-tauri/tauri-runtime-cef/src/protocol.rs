@@ -21,7 +21,10 @@ use std::{
 
 use cef::{self, *};
 use http::{header::CONTENT_TYPE, Request as HttpRequest, Response as HttpResponse};
-use tauri_runtime::{webview::PendingWebview, Error, Result, UserEvent};
+use tauri_runtime::{
+    webview::{IpcFrame, PendingWebview},
+    Error, Result, UserEvent,
+};
 
 use crate::Cef;
 
@@ -40,8 +43,11 @@ pub(crate) struct WebviewProtocols {
 // browser id (i32) -> 该 browser 对应的 webview label + 各 scheme handler
 static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = OnceLock::new();
 /// 发起请求的 frame 身份,由 scheme factory 的 `create(browser, frame, ..)` 取得,经
-/// `http::Request` 的 extension 交给协议 handler。CEF 对非 frame 发起的请求(如
-/// `CefURLRequest`)给 `frame = NULL`,此时不插入该 extension。
+/// `http::Request` 的 extension 交给协议 handler。CEF 对非 frame 发起的请求(service worker、
+/// `CefURLRequest`)给 `frame = NULL`,此时不插入该 extension;dedicated worker 的请求记在创建它的
+/// frame 上。
+///
+/// 另有给 Tauri ACL 用的 [`IpcFrame`] extension,每个请求都插(见 [`attach_request_frame`])。
 ///
 /// 不记 frame 的 URL:CEF 的 `frame.url()` 是 UI 线程缓存,到 `DidFinishNavigation` 才刷新,而 IO
 /// 线程上主 frame 的请求每次都换成浏览器当前的主 frame;新文档最早的请求读到的是空串或上一个文档
@@ -49,6 +55,17 @@ static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = Once
 #[derive(Debug, Clone)]
 pub(crate) struct RequestFrame {
     pub(crate) is_main: bool,
+}
+
+impl RequestFrame {
+    /// 对应的 Tauri ACL frame 位置:capability 的 `frames` 据此匹配。
+    pub(crate) fn ipc_frame(&self) -> IpcFrame {
+        if self.is_main {
+            IpcFrame::Main
+        } else {
+            IpcFrame::Sub
+        }
+    }
 }
 
 /// IPC 请求(`ipc` / `cef-ipc`)的发起方 origin,由 `GetResourceRequestHandler` 的 `request_initiator`
@@ -150,9 +167,7 @@ wrap_resource_handler! {
                 }
             };
             apply_initiator_origin(&mut request);
-            if let Some(frame) = &self.request_frame {
-                request.extensions_mut().insert(frame.clone());
-            }
+            attach_request_frame(&mut request, self.request_frame.as_ref());
 
             self.state.lock().unwrap().open_in_progress = true;
             let state = self.state.clone();
@@ -378,6 +393,19 @@ fn apply_initiator_origin(request: &mut HttpRequest<Vec<u8>>) {
     }
 }
 
+/// 把发起请求的 frame 交给协议 handler:`RequestFrame`(运行时内部用)与 Tauri ACL 用的
+/// [`IpcFrame`]。extension 由浏览器进程填入、不随请求字节传递,页面无法伪造(请求头可以)。
+/// CEF 没给出 frame 时记为 [`IpcFrame::Unknown`],只有写了 `frames: "any"` 的 capability 能匹配;
+/// 不能留空,Tauri 把缺这个 extension 的请求当主 frame。
+fn attach_request_frame(request: &mut HttpRequest<Vec<u8>>, frame: Option<&RequestFrame>) {
+    if let Some(frame) = frame {
+        request.extensions_mut().insert(frame.clone());
+    }
+    request
+        .extensions_mut()
+        .insert(frame.map_or(IpcFrame::Unknown, RequestFrame::ipc_frame));
+}
+
 fn request_to_http(request: &cef::Request) -> std::result::Result<HttpRequest<Vec<u8>>, ()> {
     let cef_method = request.method();
     let method = CefString::from(&cef_method)
@@ -540,6 +568,46 @@ mod tests {
         let mut request = request_with_origin(None);
         apply_initiator_origin(&mut request);
         assert_eq!(origin_of(&request), None);
+    }
+
+    fn ipc_frame_of(request: &HttpRequest<Vec<u8>>) -> Option<IpcFrame> {
+        request.extensions().get::<IpcFrame>().copied()
+    }
+
+    #[test]
+    fn request_frame_is_reported_to_tauri_acl() {
+        // 主 frame
+        let mut request = request_with_origin(Some("tauri://localhost"));
+        attach_request_frame(&mut request, Some(&RequestFrame { is_main: true }));
+        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Main));
+        assert!(request
+            .extensions()
+            .get::<RequestFrame>()
+            .is_some_and(|f| f.is_main));
+
+        // 子 frame
+        let mut request = request_with_origin(Some("tauri://localhost"));
+        attach_request_frame(&mut request, Some(&RequestFrame { is_main: false }));
+        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Sub));
+        assert!(request
+            .extensions()
+            .get::<RequestFrame>()
+            .is_some_and(|f| !f.is_main));
+
+        // CEF 没给出 frame:记为 Unknown(不能缺省,缺省会被 Tauri 当成主 frame)
+        let mut request = request_with_origin(Some("tauri://localhost"));
+        attach_request_frame(&mut request, None);
+        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Unknown));
+        assert!(request.extensions().get::<RequestFrame>().is_none());
+    }
+
+    #[test]
+    fn request_frame_does_not_touch_origin() {
+        // 来源只由发起方 origin 决定（`apply_initiator_origin`），frame 位置不改 Origin
+        let mut request = request_with_origin(Some("null"));
+        attach_request_frame(&mut request, Some(&RequestFrame { is_main: true }));
+        assert_eq!(origin_of(&request), Some("null"));
+        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Main));
     }
 
     #[test]

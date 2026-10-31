@@ -120,6 +120,9 @@ app_event_kinds! {
     PluginDeleted,
     PluginChanged,
     DownloadRemoved,
+    Log,
+    WallpaperPing,
+    WallpaperPong,
 }
 
 impl AppEventKind {
@@ -161,6 +164,9 @@ impl AppEventKind {
             AppEventKind::PluginDeleted => "plugin-deleted",
             AppEventKind::PluginChanged => "plugin-changed",
             AppEventKind::DownloadRemoved => "download-removed",
+            AppEventKind::Log => "log",
+            AppEventKind::WallpaperPing => "wallpaper-ping",
+            AppEventKind::WallpaperPong => "wallpaper-pong",
         }
         .to_string()
     }
@@ -197,9 +203,22 @@ impl AppEventKind {
             "plugin-deleted" => Some(AppEventKind::PluginDeleted),
             "plugin-changed" => Some(AppEventKind::PluginChanged),
             "download-removed" => Some(AppEventKind::DownloadRemoved),
+            "log" => Some(AppEventKind::Log),
+            "wallpaper-ping" => Some(AppEventKind::WallpaperPing),
+            "wallpaper-pong" => Some(AppEventKind::WallpaperPong),
             "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(AppEventKind::TasksChange),
             _ => None,
         }
+    }
+
+    /// 只有显式点名才订阅的种类：日志、壁纸窗口 ping 应答。「订阅全部」不包含它们。
+    pub const fn is_opt_in(self) -> bool {
+        matches!(self, AppEventKind::Log | AppEventKind::WallpaperPong)
+    }
+
+    /// 「订阅全部」的实际集合：ALL 去掉 opt-in 种类。
+    pub fn default_kinds() -> Vec<AppEventKind> {
+        Self::ALL.into_iter().filter(|k| !k.is_opt_in()).collect()
     }
 
     /// 从字符串解析事件类型（用于 IPC 协议，支持 JSON 格式和 kebab-case）
@@ -438,6 +457,23 @@ pub enum AppEvent {
     DownloadRemoved {
         id: u64,
     },
+
+    /// 后端看门狗对壁纸窗口的 ping；页面只应答 label 等于自己窗口的那条。
+    WallpaperPing {
+        label: String,
+        seq: u64,
+    },
+    /// 壁纸窗口的应答（opt-in，只给后端看门狗）；label 取自调用方 webview。
+    WallpaperPong {
+        label: String,
+        seq: u64,
+    },
+
+    /// 应用日志（opt-in：只推给显式订阅 `log` 的客户端）
+    Log {
+        #[serde(flatten)]
+        record: crate::logging::LogRecord,
+    },
 }
 
 #[cfg(test)]
@@ -467,6 +503,75 @@ mod tests {
             AppEventKind::from_event_name("plugin-changed"),
             Some(AppEventKind::PluginChanged)
         );
+    }
+
+    #[test]
+    fn log_event_is_opt_in_and_flattens_record() {
+        assert!(!AppEventKind::default_kinds().contains(&AppEventKind::Log));
+        assert_eq!(AppEventKind::default_kinds().len(), AppEventKind::COUNT - 2);
+        let record = crate::logging::LogRecord {
+            seq: 3,
+            ts: 10,
+            level: "INFO".into(),
+            target: "kabegame".into(),
+            message: "hi".into(),
+            fields: Default::default(),
+        };
+        let payload = serde_json::to_value(AppEvent::Log {
+            record: record.clone(),
+        })
+        .unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({"type":"log","seq":3,"ts":10,"level":"INFO","target":"kabegame","message":"hi"})
+        );
+        let decoded: AppEvent = serde_json::from_value(payload).unwrap();
+        assert_eq!(decoded.kind(), AppEventKind::Log);
+        assert!(matches!(decoded, AppEvent::Log { record: r } if r == record));
+        assert_eq!(
+            AppEventKind::from_event_name("log"),
+            Some(AppEventKind::Log)
+        );
+    }
+
+    #[test]
+    fn wallpaper_ping_is_default_and_pong_is_opt_in() {
+        let defaults = AppEventKind::default_kinds();
+        assert!(defaults.contains(&AppEventKind::WallpaperPing));
+        assert!(!defaults.contains(&AppEventKind::WallpaperPong));
+        assert!(!AppEventKind::WallpaperPing.is_opt_in());
+        assert!(AppEventKind::WallpaperPong.is_opt_in());
+
+        for (event, kind, name) in [
+            (
+                AppEvent::WallpaperPing {
+                    label: "wallpaper".into(),
+                    seq: 1,
+                },
+                AppEventKind::WallpaperPing,
+                "wallpaper-ping",
+            ),
+            (
+                AppEvent::WallpaperPong {
+                    label: "wallpaper".into(),
+                    seq: 1,
+                },
+                AppEventKind::WallpaperPong,
+                "wallpaper-pong",
+            ),
+        ] {
+            assert_eq!(event.kind(), kind);
+            let payload = serde_json::to_value(event).unwrap();
+            assert_eq!(
+                payload,
+                serde_json::json!({"type": name, "label": "wallpaper", "seq": 1})
+            );
+            let decoded: AppEvent = serde_json::from_value(payload.clone()).unwrap();
+            assert_eq!(decoded.kind(), kind);
+            assert_eq!(serde_json::to_value(decoded).unwrap(), payload);
+            assert_eq!(kind.as_event_name(), name);
+            assert_eq!(AppEventKind::from_event_name(name), Some(kind));
+        }
     }
 
     #[test]
@@ -546,6 +651,9 @@ impl AppEvent {
             AppEvent::PluginDeleted { .. } => AppEventKind::PluginDeleted,
             AppEvent::PluginChanged { .. } => AppEventKind::PluginChanged,
             AppEvent::DownloadRemoved { .. } => AppEventKind::DownloadRemoved,
+            AppEvent::Log { .. } => AppEventKind::Log,
+            AppEvent::WallpaperPing { .. } => AppEventKind::WallpaperPing,
+            AppEvent::WallpaperPong { .. } => AppEventKind::WallpaperPong,
         }
     }
 }
@@ -646,15 +754,13 @@ impl EventListener {
                 match status_rx.changed().await {
                     Ok(()) => {
                         let status = *status_rx.borrow();
-                        crate::ipc_dbg!("[DEBUG] EventListener 连接状态变化: {:?}", status);
+                        tracing::trace!("EventListener 连接状态变化: {:?}", status);
 
                         match status {
                             crate::ipc::client::ConnectionStatus::Connected => {
                                 // 连接上：启动事件订阅任务
                                 if event_task_handle.is_none() {
-                                    crate::ipc_dbg!(
-                                        "[DEBUG] EventListener 连接已建立，开始订阅事件"
-                                    );
+                                    tracing::trace!("EventListener 连接已建立，开始订阅事件");
 
                                     let callbacks_clone = callbacks.clone();
                                     let default_emitter_clone = default_emitter.clone();
@@ -669,7 +775,7 @@ impl EventListener {
                                                 let default_emitter = default_emitter_clone.clone();
 
                                                 async move {
-                                                    crate::ipc_dbg!("[DEBUG] EventListener 收到事件: {:?}", raw);
+                                                    tracing::trace!("EventListener 收到事件: {:?}", raw);
 
                                                     // 从 payload 解析事件类型
                                                     let kind = if let Some(type_val) = raw.get("type") {
@@ -685,7 +791,7 @@ impl EventListener {
                                                     let kind = match kind {
                                                         Some(k) => k,
                                                         None => {
-                                                            crate::ipc_dbg!("[ipc-events] 无法解析事件类型，raw: {:?}", raw);
+                                                            tracing::trace!("无法解析事件类型，raw: {:?}", raw);
                                                             return;
                                                         }
                                                     };
@@ -731,7 +837,7 @@ impl EventListener {
                                             })
                                             .await;
 
-                                        crate::ipc_dbg!("[DEBUG] EventListener 事件流已结束");
+                                        tracing::trace!("EventListener 事件流已结束");
                                     });
 
                                     event_task_handle = Some(task);
@@ -740,9 +846,7 @@ impl EventListener {
                             crate::ipc::client::ConnectionStatus::Disconnected => {
                                 // 断开连接：停止并释放事件订阅任务
                                 if let Some(handle) = event_task_handle.take() {
-                                    crate::ipc_dbg!(
-                                        "[DEBUG] EventListener 连接已断开，停止事件订阅"
-                                    );
+                                    tracing::trace!("EventListener 连接已断开，停止事件订阅");
                                     handle.abort();
                                 }
                             }
@@ -753,7 +857,7 @@ impl EventListener {
                     }
                     Err(_) => {
                         // 连接状态通道已关闭，退出循环
-                        crate::ipc_dbg!("[DEBUG] EventListener 连接状态通道已关闭，退出监听循环");
+                        tracing::trace!("EventListener 连接状态通道已关闭，退出监听循环");
                         // 取消当前事件订阅任务
                         if let Some(handle) = event_task_handle.take() {
                             handle.abort();
@@ -763,7 +867,7 @@ impl EventListener {
                 }
             }
 
-            crate::ipc_dbg!("[DEBUG] EventListener 主循环已退出");
+            tracing::trace!("EventListener 主循环已退出");
         });
 
         Ok(())

@@ -36,5 +36,25 @@
   "metadataMigrationTitle": "Migrating plugin data",
   "backfillTitle": "Updating database",
   "backfillWaiting": "Queued",
-  "backfillFailed": "Background database update failed ({name}); it will resume on next launch"
+  "backfillFailed": "Background database update failed ({name}); it will resume on next launch",
+  "viewLogs": "View logs",
+  "logs": {
+    "title": "App logs",
+    "sourceAll": "All",
+    "sourceBackend": "Backend",
+    "sourceFrontend": "Frontend",
+    "targetPlaceholder": "Module prefix",
+    "searchPlaceholder": "Search logs",
+    "count": "Showing {shown} of {total}",
+    "follow": "Auto-scroll",
+    "copy": "Copy",
+    "copyLine": "Copy line",
+    "clear": "Clear",
+    "openDir": "Open log folder",
+    "copied": "Copied",
+    "copyFailed": "Copy failed",
+    "openDirFailed": "Failed to open log folder: {detail}",
+    "empty": "No logs",
+    "loadFailed": "Failed to load logs: {detail}"
+  }
 }

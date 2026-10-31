@@ -42,8 +42,8 @@ pub fn up(conn: &Connection) -> Result<(), String> {
 
     match result {
         Ok(updated) => {
-            println!(
-                "[v038] rewrote {updated}/{} image_metadata search_text",
+            tracing::info!(
+                "rewrote {updated}/{} image_metadata search_text",
                 rows.len()
             );
             Ok(())

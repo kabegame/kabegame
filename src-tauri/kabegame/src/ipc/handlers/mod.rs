@@ -77,6 +77,13 @@ pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
     if matches!(req, IpcRequest::GetActiveDownloads) {
         return handle_get_active_downloads().await;
     }
+    if let IpcRequest::AppLogs { since_seq, limit } = req {
+        let logs = kabegame_core::logging::recent_logs(
+            since_seq,
+            limit.unwrap_or(kabegame_core::logging::RECENT_CAPACITY),
+        );
+        return IpcResponse::ok_with_data("ok", serde_json::to_value(logs).unwrap_or_default());
+    }
     if let IpcRequest::OrganizeStart {
         dedupe,
         dedupe_keep_new,

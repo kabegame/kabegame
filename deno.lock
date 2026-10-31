@@ -10,6 +10,7 @@
     "npm:@astrojs/starlight@0.33": "0.33.2_astro@5.18.1__@types+node@22.20.1__sass@1.102.0_@types+node@22.20.1_sass@1.102.0",
     "npm:@ctrl/tinycolor@^4.2.0": "4.2.0",
     "npm:@floating-ui/dom@^1.7.4": "1.7.4",
+    "npm:@fltsci/tauri-plugin-tracing@~0.3.4": "0.3.4",
     "npm:@panzoom/panzoom@^4.6.1": "4.6.1",
     "npm:@popperjs/core@^2.11.8": "2.11.8",
     "npm:@tauri-apps/api@2": "2.11.1",
@@ -911,6 +912,12 @@
     "@floating-ui/utils@0.2.10": {
       "integrity": "sha512-aGTxbpbg8/b5JfU1HXSrbH3wXZuLPJcNEcZQFMxLs3oSzgtVu6nFPkbbGGUvBcUjKV2YyB9Wxxabo+HEH9tcRQ=="
     },
+    "@fltsci/tauri-plugin-tracing@0.3.4": {
+      "integrity": "sha512-MLwqLBzlL6Np782W3eGQ+nbd8geUHLTyGV+xUVkYwj21LChU828JEWCOE2asXzRJjJGftM8ICKIFjsC8ftkJiA==",
+      "dependencies": [
+        "@tauri-apps/api@2.11.0"
+      ]
+    },
     "@humanwhocodes/config-array@0.13.0": {
       "integrity": "sha512-DZLEEqFWQFiyK6h5YIeynKx7JlvCYWL0cImfSRXZ9l4Sg2efkFGTuFf6vzXjK1cq6IYkU+Eg/JizXw+TD2vRNw==",
       "dependencies": [
@@ -1635,25 +1642,28 @@
     "@standard-schema/spec@1.1.0": {
       "integrity": "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="
     },
+    "@tauri-apps/api@2.11.0": {
+      "integrity": "sha512-7CinYODhky9lmO23xHnUFv0Xt43fbtWMyxZcLcRBlFkcgXKuEirBvHpmtJ89YMhyeGcq20Wuc47Fa4XjyniywA=="
+    },
     "@tauri-apps/api@2.11.1": {
       "integrity": "sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA=="
     },
     "@tauri-apps/plugin-clipboard-manager@2.3.2": {
       "integrity": "sha512-CUlb5Hqi2oZbcZf4VUyUH53XWPPdtpw43EUpCza5HWZJwxEoDowFzNUDt1tRUXA8Uq+XPn17Ysfptip33sG4eQ==",
       "dependencies": [
-        "@tauri-apps/api"
+        "@tauri-apps/api@2.11.1"
       ]
     },
     "@tauri-apps/plugin-dialog@2.7.2": {
       "integrity": "sha512-pX0IGm1I3I6wc+zeKYcq1GSqogK6okCNX5fOdaNU5ab1AjGS6l1E5wFNjEb7meg7ZFSp0JUs+0jQGQNyOvLrsg==",
       "dependencies": [
-        "@tauri-apps/api"
+        "@tauri-apps/api@2.11.1"
       ]
     },
     "@tauri-apps/plugin-opener@2.5.4": {
       "integrity": "sha512-1HnPkb+AmgO29HBazm4uPLKB+r7zzcTBW1d0fyYp1uP+jwtpoiNDGKMMzz58SFp49nOIrxdE3aUJtT57lfO9CQ==",
       "dependencies": [
-        "@tauri-apps/api"
+        "@tauri-apps/api@2.11.1"
       ]
     },
     "@tybys/wasm-util@0.10.3": {
@@ -6320,7 +6330,7 @@
     "tauri-plugin-android-battery-optimization-api@0.1.0": {
       "integrity": "sha512-G52vDORre5zfrh61wG6ukQeeUAStuyXMYigbxFuH9SjifQV3VSVRhH4UTCL4vPRn8MWK1eMFewNLM7ZPJ7NQEA==",
       "dependencies": [
-        "@tauri-apps/api"
+        "@tauri-apps/api@2.11.1"
       ]
     },
     "text-table@0.2.0": {
@@ -7095,6 +7105,7 @@
       "apps/kabegame": {
         "packageJson": {
           "dependencies": [
+            "npm:@fltsci/tauri-plugin-tracing@~0.3.4",
             "npm:@panzoom/panzoom@^4.6.1",
             "npm:@tauri-apps/api@^2.11.0",
             "npm:@tauri-apps/plugin-dialog@2",

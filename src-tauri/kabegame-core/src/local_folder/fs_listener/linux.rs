@@ -35,10 +35,7 @@ impl PlatformImpl {
                     .expect("spawn inotify reader"),
             )
         } else {
-            eprintln!(
-                "[local_folder.fs_listener.linux] inotify_init1 failed: {}",
-                std::io::Error::last_os_error()
-            );
+            tracing::warn!("inotify_init1 failed: {}", std::io::Error::last_os_error());
             None
         };
         Self {

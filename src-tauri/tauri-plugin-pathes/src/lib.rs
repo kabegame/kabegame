@@ -150,16 +150,18 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 #[cfg(target_os = "android")]
 pub fn seed_bundled_plugins<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(pathes) = app.try_state::<mobile::Pathes<R>>() else {
-        eprintln!("[plugin] seed_bundled_plugins: pathes 插件未初始化");
+        tracing::warn!("seed_bundled_plugins: pathes 插件未初始化");
         return;
     };
     let target_dir = kabegame_core::app_paths::AppPaths::global().plugins_dir();
     match pathes.seed_bundled_plugins(target_dir.to_string_lossy().into_owned()) {
         Ok(res) if res.skipped => {}
-        Ok(res) => eprintln!(
-            "[plugin] seed_bundled_plugins: 版本 {}，复制 {} 个，失败 {} 个",
-            res.version, res.copied, res.failed
+        Ok(res) => tracing::info!(
+            "seed_bundled_plugins: 版本 {}，复制 {} 个，失败 {} 个",
+            res.version,
+            res.copied,
+            res.failed
         ),
-        Err(e) => eprintln!("[plugin] seed_bundled_plugins: {e}"),
+        Err(e) => tracing::warn!("seed_bundled_plugins: {e}"),
     }
 }

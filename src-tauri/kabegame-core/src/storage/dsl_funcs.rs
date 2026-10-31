@@ -48,8 +48,8 @@ fn profile_get_plugin_call(plugin_id: &str, locale: Option<&str>, started: Insta
     let calls = GET_PLUGIN_PROFILE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
     let total_us = GET_PLUGIN_PROFILE_MICROS.fetch_add(last_us, Ordering::Relaxed) + last_us;
     if calls <= 20 || calls % 100 == 0 {
-        eprintln!(
-            "[pathql-profile] host_fn=get_plugin calls={calls} last_us={last_us} total_ms={} plugin_id={plugin_id:?} locale={locale:?} result_null={}",
+        tracing::debug!(
+            "host_fn=get_plugin calls={calls} last_us={last_us} total_ms={} plugin_id={plugin_id:?} locale={locale:?} result_null={}",
             total_us / 1000,
             result == "null",
         );

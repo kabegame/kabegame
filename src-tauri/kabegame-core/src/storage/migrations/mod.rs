@@ -79,6 +79,7 @@ mod v045_schedule_spec_v2;
 mod v046_album_images_foreign_keys;
 mod v047_metadata_template;
 mod v048_backfill_jobs;
+pub(crate) mod v049_images_type_normalized;
 
 use backfill::{Backfill, BackfillCtx};
 use rusqlite::Connection;
@@ -374,13 +375,19 @@ const MIGRATIONS: &[Migration] = &[
         up: v048_backfill_jobs::up,
         min_backfill_version: None,
     },
+    Migration {
+        version: 49,
+        name: "images_type_normalized",
+        up: v049_images_type_normalized::up,
+        min_backfill_version: None,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 48;
+pub const LATEST_VERSION: u32 = 49;
 
 pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
@@ -411,7 +418,7 @@ fn sync_through_from_env() -> Option<u32> {
     match value.trim().parse() {
         Ok(version) => Some(version),
         Err(_) => {
-            eprintln!("[db-migration] ignore invalid {BACKFILL_SYNC_THROUGH_ENV}={value}");
+            tracing::warn!("ignore invalid {BACKFILL_SYNC_THROUGH_ENV}={value}");
             None
         }
     }
@@ -440,7 +447,7 @@ fn run_pending_with(
         if let Some(limit) = max_option(m.min_backfill_version, sync_through) {
             drain_backfills_through(conn, registry, limit, progress)?;
         }
-        println!("[db-migration] v{:03}: {}", m.version, m.name);
+        tracing::info!("v{:03}: {}", m.version, m.name);
         progress(StartupProgress::Schema {
             version: m.version,
             name: m.name,
@@ -473,9 +480,10 @@ fn drain_backfills_through(
 ) -> Result<(), String> {
     let pending = backfill::pending_jobs_in(conn, registry)?;
     for job in pending.iter().filter(|job| job.introduced_at <= limit) {
-        println!(
-            "[backfill] draining {} (v{:03}) before continuing",
-            job.job.id, job.introduced_at
+        tracing::info!(
+            "draining {} (v{:03}) before continuing",
+            job.job.id,
+            job.introduced_at
         );
         progress(StartupProgress::Backfill {
             id: job.job.id,
@@ -521,7 +529,7 @@ fn skip_gated_jobs_through(
             )
             .map_err(|e| format!("skip gated backfill {}: {e}", job.id))?;
         if changed > 0 {
-            println!("[backfill] {} skipped on this platform", job.id);
+            tracing::info!("{} skipped on this platform", job.id);
         }
     }
     Ok(())

@@ -4,22 +4,38 @@
 ;
 ; Goal: make the install directory show the app icon in Windows Explorer
 ; by writing desktop.ini and setting required folder/file attributes.
+;
+; Only native NSIS instructions are used here (Rename / SetFileAttributes):
+; spawning cmd.exe for move/attrib flashes one console window per file.
+
+; Move a file within $INSTDIR, overwriting the destination (like `move /Y`).
+; Rename is MoveFile, so source and destination must be on the same volume,
+; which always holds inside $INSTDIR. It fails if the destination exists,
+; hence the Delete first.
+!macro KABEGAME_MOVE_FILE SRC DST
+  Delete "${DST}"
+  ClearErrors
+  Rename "${SRC}" "${DST}"
+  ${If} ${Errors}
+    DetailPrint "Move failed: ${SRC} -> ${DST}"
+  ${Else}
+    DetailPrint "Move ${SRC} -> ${DST}"
+  ${EndIf}
+!macroend
 
 !macro NSIS_HOOK_POSTINSTALL
   ; Create / update desktop.ini
   WriteINIStr "$INSTDIR\desktop.ini" ".ShellClassInfo" "IconResource" "${MAINBINARYNAME}.exe,0"
 
   ; Mark desktop.ini as hidden + system
-  ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib +h +s $\"$INSTDIR\desktop.ini$\"'
+  SetFileAttributes "$INSTDIR\desktop.ini" HIDDEN|SYSTEM
 
   ; Move extra executables/DLLs from resources/bin to install root ($INSTDIR).
   ; We intentionally avoid Tauri sidecar/externalBin and instead ship exe as resources.
-  ; Move each *.dll with FindFirst/FindNext to avoid cmd for-loop quoting issues when $INSTDIR has spaces.
   FindFirst $0 $1 "$INSTDIR\resources\bin\*.dll"
   dll_move_loop:
     StrCmp $1 "" dll_move_done
-    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\bin\$1$\" $\"$INSTDIR$\"' $2
-    DetailPrint "Move $1 -> $INSTDIR (exit $2)"
+    !insertmacro KABEGAME_MOVE_FILE "$INSTDIR\resources\bin\$1" "$INSTDIR\$1"
     FindNext $0 $1
     Goto dll_move_loop
   dll_move_done:
@@ -39,8 +55,7 @@
     StrCmp $1 "." cef_move_next
     StrCmp $1 ".." cef_move_next
     StrCmp $1 "locales" cef_move_next
-    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\cef\$1$\" $\"$INSTDIR$\"' $2
-    DetailPrint "Move CEF $1 -> $INSTDIR (exit $2)"
+    !insertmacro KABEGAME_MOVE_FILE "$INSTDIR\resources\cef\$1" "$INSTDIR\$1"
   cef_move_next:
     FindNext $0 $1
     Goto cef_move_loop
@@ -51,8 +66,7 @@
   FindFirst $0 $1 "$INSTDIR\resources\cef\locales\*.pak"
   cef_locale_move_loop:
     StrCmp $1 "" cef_locale_move_done
-    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\cef\locales\$1$\" $\"$INSTDIR\locales$\"' $2
-    DetailPrint "Move CEF locale $1 -> $INSTDIR\locales (exit $2)"
+    !insertmacro KABEGAME_MOVE_FILE "$INSTDIR\resources\cef\locales\$1" "$INSTDIR\locales\$1"
     FindNext $0 $1
     Goto cef_locale_move_loop
   cef_locale_move_done:
@@ -64,13 +78,13 @@
   cef_all_done:
 
   ; Mark install dir as system + readonly so Explorer applies desktop.ini customization
-  ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib +s +r $\"$INSTDIR$\"'
+  SetFileAttributes "$INSTDIR" SYSTEM|READONLY
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   ; Remove our customization to avoid leaving extra files/attributes that can prevent clean uninstall.
   IfFileExists "$INSTDIR\desktop.ini" 0 +3
-    ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -h -s $\"$INSTDIR\desktop.ini$\"'
+    SetFileAttributes "$INSTDIR\desktop.ini" NORMAL
     Delete "$INSTDIR\desktop.ini"
 
   ; Delete all DLLs we moved from resources/bin (dokan2.dll and other bin/*.dll)
@@ -98,13 +112,7 @@
   ; binaries section (it is a bundle binary since fork patch 0009).
 
   ; Remove folder attributes (best-effort).
-  ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'
+  SetFileAttributes "$INSTDIR" NORMAL
 
   ; .kgpg 关联交由 Tauri bundler 根据 tauri.conf.json > bundle > fileAssociations 处理
 !macroend
-
-
-
-
-
-

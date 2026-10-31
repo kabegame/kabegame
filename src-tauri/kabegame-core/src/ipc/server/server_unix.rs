@@ -2,7 +2,6 @@
 
 use crate::ipc::ipc::{encode_frame, read_one_frame, unix_socket_path, write_all};
 use crate::ipc::{IpcRequest, IpcResponse};
-use crate::ipc_dbg;
 use tokio::io::split;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::{timeout, Duration};
@@ -52,11 +51,11 @@ where
         Err(e) => {
             // 绑定失败，检查是否已有应用实例在运行。
             if check_existing_app_instance().await {
-                eprintln!(
+                tracing::error!(
                     "错误: 无法绑定 Unix socket {}，因为已有 Kabegame 实例正在运行。",
                     path.display()
                 );
-                eprintln!("请先停止正在运行的 Kabegame，或确保只有一个应用实例。");
+                tracing::error!("请先停止正在运行的 Kabegame，或确保只有一个应用实例。");
                 return Err(format!("另一个 Kabegame 实例正在运行: {}", e));
             }
             // 如果没有其他应用实例，可能是权限等原因导致绑定失败。
@@ -70,7 +69,7 @@ where
             .await
             .map_err(|e| format!("ipc accept failed: {}", e))?;
 
-        ipc_dbg!("[DEBUG] IPC 服务器接受新连接（持久连接模式）");
+        tracing::trace!("IPC 服务器接受新连接（持久连接模式）");
 
         // 为每个连接 spawn 一个任务来处理多个请求
         let handler = handler.clone();
@@ -83,7 +82,7 @@ where
 
             connection_handler::handle_connection(read_half, write_half, handler, client_id).await;
 
-            ipc_dbg!("[DEBUG] IPC 服务器连接处理完成");
+            tracing::trace!("IPC 服务器连接处理完成");
         });
     }
 }

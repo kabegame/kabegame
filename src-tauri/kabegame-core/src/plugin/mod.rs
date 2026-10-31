@@ -359,7 +359,7 @@ impl PluginManager {
 
         let user_dir = app_paths.plugins_dir();
         if let Err(e) = tokio::fs::create_dir_all(&user_dir).await {
-            eprintln!("[plugin] seed_bundled_plugins: 创建用户插件目录失败: {e}");
+            tracing::warn!("seed_bundled_plugins: 创建用户插件目录失败: {e}");
             return;
         }
 
@@ -368,7 +368,7 @@ impl PluginManager {
                 Ok(Some(e)) => e,
                 Ok(None) => break,
                 Err(e) => {
-                    eprintln!("[plugin] seed_bundled_plugins: 读取目录项失败: {e}");
+                    tracing::warn!("seed_bundled_plugins: 读取目录项失败: {e}");
                     break;
                 }
             };
@@ -384,8 +384,8 @@ impl PluginManager {
             // 预置版本始终覆盖用户目录中的同名旧版本（应用更新场景）
             if dst.exists() {
                 if let Err(e) = tokio::fs::remove_file(&dst).await {
-                    eprintln!(
-                        "[plugin] seed_bundled_plugins: 删除旧插件文件失败 {}: {e}",
+                    tracing::warn!(
+                        "seed_bundled_plugins: 删除旧插件文件失败 {}: {e}",
                         dst.display()
                     );
                     continue;
@@ -397,16 +397,16 @@ impl PluginManager {
             }
             // rename 失败（如跨盘/跨卷）：回退为 copy + remove_file
             if let Err(e) = tokio::fs::copy(&src, &dst).await {
-                eprintln!(
-                    "[plugin] seed_bundled_plugins: 搬运插件失败 {} -> {}: {e}",
+                tracing::warn!(
+                    "seed_bundled_plugins: 搬运插件失败 {} -> {}: {e}",
                     src.display(),
                     dst.display()
                 );
                 continue;
             }
             if let Err(e) = tokio::fs::remove_file(&src).await {
-                eprintln!(
-                    "[plugin] seed_bundled_plugins: 清理源文件失败 {}: {e}",
+                tracing::warn!(
+                    "seed_bundled_plugins: 清理源文件失败 {}: {e}",
                     src.display()
                 );
             }
@@ -581,7 +581,7 @@ impl PluginManager {
         }
         fs::remove_file(&path).map_err(|e| format!("Failed to delete plugin file: {}", e))?;
         if let Err(e) = crate::storage::Storage::global().plugin_data().delete(id) {
-            eprintln!("[plugin-data] cleanup failed for {id}: {e}");
+            tracing::warn!("cleanup failed for {id}: {e}");
         }
         let app_paths = crate::app_paths::AppPaths::global();
         for (kind, dir) in [
@@ -593,11 +593,11 @@ impl PluginManager {
                 Ok(path) => {
                     if let Err(e) = fs::remove_dir_all(path) {
                         if e.kind() != std::io::ErrorKind::NotFound {
-                            eprintln!("[{kind}] cleanup failed for {id}: {e}");
+                            tracing::warn!("[{kind}] cleanup failed for {id}: {e}");
                         }
                     }
                 }
-                Err(e) => eprintln!("[{kind}] cleanup failed for {id}: {e}"),
+                Err(e) => tracing::warn!("[{kind}] cleanup failed for {id}: {e}"),
             }
         }
         // 删除后局部刷新缓存（避免前端仍看到旧列表/旧图标）
@@ -1046,7 +1046,7 @@ impl PluginManager {
                 Ok(mut plugins) => all_plugins.append(&mut plugins),
                 Err(e) => {
                     let error_msg = format!("源 '{}' 加载失败: {}", source.name, e);
-                    eprintln!("{}", error_msg);
+                    tracing::warn!("{}", error_msg);
                     errors.push(error_msg);
                     // 继续处理其他源，不中断整个流程
                 }
@@ -1079,7 +1079,7 @@ impl PluginManager {
 
         // 如果有部分源失败，但仍然有成功的源，返回成功但记录错误（通过日志）
         if !errors.is_empty() {
-            eprintln!(
+            tracing::warn!(
                 "部分商店源加载失败，但仍有可用插件：\n{}",
                 errors.join("\n")
             );
@@ -1106,7 +1106,7 @@ impl PluginManager {
         let cache_row = match storage.get_source_cache_row(&source.id) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("读取商店源缓存元数据失败 ({}): {}", source.name, e);
+                tracing::warn!("读取商店源缓存元数据失败 ({}): {}", source.name, e);
                 None
             }
         };
@@ -1135,7 +1135,7 @@ impl PluginManager {
             return self.fetch_plugins_from_source(source).await;
         }
 
-        println!(
+        tracing::debug!(
             "从缓存加载商店源 '{}' 的插件列表（{} 个插件）",
             source.name,
             resolved_plugins.len()
@@ -1213,10 +1213,10 @@ impl PluginManager {
             match reqwest::Proxy::all(proxy_url) {
                 Ok(proxy) => {
                     client_builder = client_builder.proxy(proxy);
-                    println!("插件商店网络代理已配置: {}", proxy_url);
+                    tracing::debug!("插件商店网络代理已配置: {}", proxy_url);
                 }
                 Err(e) => {
-                    println!("插件商店代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                    tracing::warn!("插件商店代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
                 }
             }
         }
@@ -1267,9 +1267,9 @@ impl PluginManager {
             .plugin_sources()
             .save_source_cache(source.id.clone(), json_str)
         {
-            eprintln!("保存商店缓存失败 ({}): {}", source.name, e);
+            tracing::warn!("保存商店缓存失败 ({}): {}", source.name, e);
         } else {
-            println!(
+            tracing::debug!(
                 "已缓存商店源 '{}' 的 index.json（{} 个插件）",
                 source.name,
                 resolved_plugins.len()
@@ -1291,10 +1291,10 @@ impl PluginManager {
             match reqwest::Proxy::all(proxy_url) {
                 Ok(proxy) => {
                     client_builder = client_builder.proxy(proxy);
-                    println!("插件源验证网络代理已配置: {}", proxy_url);
+                    tracing::debug!("插件源验证网络代理已配置: {}", proxy_url);
                 }
                 Err(e) => {
-                    println!("插件源验证代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                    tracing::warn!("插件源验证代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
                 }
             }
         }
@@ -1500,7 +1500,7 @@ impl PluginManager {
                 Err(e) => {
                     last_err = e;
                     if attempt + 1 < MAX_DOWNLOAD_ATTEMPTS {
-                        eprintln!(
+                        tracing::warn!(
                             "插件下载失败（第 {} 次），400ms 后重试: {}",
                             attempt + 1,
                             last_err
@@ -1550,10 +1550,10 @@ impl PluginManager {
             match reqwest::Proxy::all(proxy_url) {
                 Ok(proxy) => {
                     client_builder = client_builder.proxy(proxy);
-                    println!("插件下载网络代理已配置: {}", proxy_url);
+                    tracing::debug!("插件下载网络代理已配置: {}", proxy_url);
                 }
                 Err(e) => {
-                    println!("插件下载代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                    tracing::warn!("插件下载代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
                 }
             }
         }
@@ -1597,9 +1597,10 @@ impl PluginManager {
                 Err(e) => {
                     if received > 0 && resume_attempts < MAX_RESUME_ATTEMPTS {
                         resume_attempts += 1;
-                        eprintln!(
+                        tracing::warn!(
                             "插件下载续传请求失败（第 {} 次），400ms 后重试: {}",
-                            resume_attempts, e
+                            resume_attempts,
+                            e
                         );
                         tokio::time::sleep(Duration::from_millis(400)).await;
                         continue 'resume;
@@ -1637,7 +1638,7 @@ impl PluginManager {
                 }
             } else {
                 if received > 0 {
-                    eprintln!("服务端未返回 206，回退为整包重下: {}", response.status());
+                    tracing::debug!("服务端未返回 206，回退为整包重下: {}", response.status());
                     buffer.clear();
                     received = 0;
                 }
@@ -1662,9 +1663,10 @@ impl PluginManager {
                     Err(e) => {
                         if resume_attempts < MAX_RESUME_ATTEMPTS {
                             resume_attempts += 1;
-                            eprintln!(
+                            tracing::warn!(
                                 "插件下载读流失败，基于已下载字节续传（第 {} 次）: {}",
-                                resume_attempts, e
+                                resume_attempts,
+                                e
                             );
                             tokio::time::sleep(Duration::from_millis(400)).await;
                             continue 'resume;
@@ -1984,22 +1986,19 @@ impl PluginManager {
                     continue;
                 }
                 let Some(plugin_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-                    eprintln!(
-                        "[plugin] 跳过无法解析文件名为插件 ID 的 kgpg: {}",
-                        path.display()
-                    );
+                    tracing::warn!("跳过无法解析文件名为插件 ID 的 kgpg: {}", path.display());
                     continue;
                 };
                 if let Err(reason) = crate::app_paths::validate_plugin_id(plugin_id) {
-                    eprintln!(
-                        "[plugin] 跳过插件 ID \"{plugin_id}\" 不合规的 kgpg {}: {reason}",
+                    tracing::warn!(
+                        "跳过插件 ID \"{plugin_id}\" 不合规的 kgpg {}: {reason}",
                         path.display()
                     );
                     continue;
                 }
                 // 与内建插件同名的 kgpg 直接跳过（parse_kgpg 会拒绝它；这里先跳，避免一颗文件炸掉整次刷新）
                 if builtin::builtin_plugins().contains_key(plugin_id) {
-                    eprintln!("[plugin] 跳过与内建插件同名的 kgpg: {}", path.display());
+                    tracing::warn!("跳过与内建插件同名的 kgpg: {}", path.display());
                     continue;
                 }
                 let plugin = self.install_plugin_from_kgpg(&path).await?;
@@ -2055,8 +2054,8 @@ impl PluginManager {
                             .unwrap_or("")
                             .to_string();
                         if let Err(reason) = crate::app_paths::validate_plugin_id(&stem) {
-                            eprintln!(
-                                "[plugin] 跳过插件 ID \"{stem}\" 不合规的 kgpg {}: {reason}",
+                            tracing::warn!(
+                                "跳过插件 ID \"{stem}\" 不合规的 kgpg {}: {reason}",
                                 path.display()
                             );
                             continue;
@@ -2371,19 +2370,17 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         let asset_file = match archive.by_name(&asset_path) {
             Ok(file) => file,
             Err(_) => {
-                eprintln!("[WARN] kbAssets 项 {asset_path:?} 不在包内，已跳过");
+                tracing::warn!("kbAssets 项 {asset_path:?} 不在包内，已跳过");
                 continue;
             }
         };
         let asset_size = usize::try_from(asset_file.size()).unwrap_or(usize::MAX);
         if asset_size > assets::ASSET_MAX_FILE_SIZE {
-            eprintln!(
-                "[WARN] 资源 {asset_path:?} 超过单文件 2 MB 上限，已跳过: {asset_size} bytes"
-            );
+            tracing::warn!("资源 {asset_path:?} 超过单文件 2 MB 上限，已跳过: {asset_size} bytes");
             continue;
         }
         if asset_total_size.saturating_add(asset_size) > assets::ASSET_MAX_TOTAL_SIZE {
-            eprintln!("[WARN] 资源总量超过 10 MB 上限，已跳过 {asset_path:?}: {asset_size} bytes");
+            tracing::warn!("资源总量超过 10 MB 上限，已跳过 {asset_path:?}: {asset_size} bytes");
             continue;
         }
         asset_total_size += asset_size;
@@ -3506,7 +3503,7 @@ pub fn extract_kgpg_filename_from_url(url_str: &str) -> Option<String> {
     }
     let stem = file_name.trim_end_matches(".kgpg");
     if let Err(reason) = crate::app_paths::validate_plugin_id(stem) {
-        eprintln!("[plugin] 跳过 URL 中不合规的插件 ID \"{stem}\": {reason}");
+        tracing::warn!("跳过 URL 中不合规的插件 ID \"{stem}\": {reason}");
         return None;
     }
     Some(stem.to_string())

@@ -82,9 +82,10 @@ impl BackfillService {
             let id = job.job.id;
             self.update(id, |state| state.running = true);
             GlobalEmitter::global().emit_busy_tasks_change("backfill");
-            println!(
-                "[backfill] start {id} (processed {}/{:?})",
-                job.progress.processed, job.progress.total
+            tracing::info!(
+                "start {id} (processed {}/{:?})",
+                job.progress.processed,
+                job.progress.total
             );
             let ctx = BackfillCtx::background(id, &storage.db, handle.clone());
             let result = backfill::run_to_completion(&ctx, job, &mut |progress, outcome| {
@@ -96,8 +97,8 @@ impl BackfillService {
             let finished = self.remove(id);
             let error = result.err();
             match &error {
-                None => println!("[backfill] {id} done"),
-                Some(error) => eprintln!("[backfill] {id} failed: {error}"),
+                None => tracing::info!("{id} done"),
+                Some(error) => tracing::warn!("{id} failed: {error}"),
             }
             GlobalEmitter::global().emit(
                 "backfill-finished",
