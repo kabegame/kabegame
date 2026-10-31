@@ -1054,17 +1054,17 @@ mod imp {
                     return ReturnValue::CANCEL;
                 };
                 let url = CefString::from(&request.url()).to_string();
-                let root = crate::file_access::file_document_root(&self.label);
-                match crate::file_access::check_file_request(&url, root.as_deref()) {
+                let access = crate::file_access::file_document_access(&self.label).unwrap_or_default();
+                match crate::file_access::check_file_request(&url, &access) {
                     Ok(_) => ReturnValue::CONTINUE,
                     Err(reason) => {
-                        let root = root
+                        let root = access.root
                             .as_deref()
                             .map(|root| root.display().to_string())
                             .unwrap_or_else(|| "<none>".to_string());
                         eprintln!(
-                            "[cef-runtime] deny file: {url} (outside {root}; {reason:?}) webview '{}'",
-                            self.label
+                            "[cef-runtime] deny file: {url} (outside {root}; grants {}; {reason:?}) webview '{}'",
+                            access.grants.len(), self.label
                         );
                         ReturnValue::CANCEL
                     }

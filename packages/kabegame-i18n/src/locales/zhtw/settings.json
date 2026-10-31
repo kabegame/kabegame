@@ -245,5 +245,6 @@
   "quickDrawerTitleDefault": "設定",
   "quickEmpty": "此頁面暫無可快捷調整的設定",
   "mcpSelectAll": "全選",
-  "mcpClearAll": "清空"
+  "mcpClearAll": "清空",
+  "wallpaperCurrentProperties": "桌布屬性"
 }

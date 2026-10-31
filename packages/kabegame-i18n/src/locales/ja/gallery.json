@@ -367,5 +367,12 @@
   "searchSummaryNone": "範囲が選択されていないため、検索で絞り込みません。",
   "slideshowPlayPrev": "前方向に自動再生",
   "slideshowPlayNext": "次方向に自動再生",
-  "slideshowStop": "自動再生を停止"
+  "slideshowStop": "自動再生を停止",
+  "wpePropsTitle": "壁紙のプロパティ",
+  "wpePropsResetAll": "すべてリセット",
+  "wpePropsReset": "既定値に戻す",
+  "wpePropsModified": "このグループに変更あり",
+  "wpePropsEmpty": "調整できるプロパティはありません",
+  "wpePropsLoadFailed": "壁紙のプロパティを読み込めませんでした",
+  "wpePropsSaveFailed": "壁紙のプロパティを保存できませんでした"
 }

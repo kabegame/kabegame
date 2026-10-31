@@ -435,14 +435,21 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
 
 **待真机校准**：`fill`（WPE）→ `contain` 的几何、`wec_*` 的 −1…1 与 CSS filter 量纲。
 
+### 用户属性（第二阶段 Phase 7）
+
+`x-wpe/web` 的用户改动存于该图片 metadata 顶层的 `userProperties` 对象，只保存与作者默认值不同的键。写命令 `set_wpe_web_user_properties` 在 `Storage::rewrite_image_metadata` 的单个事务中读取旧数据、插入新 metadata 行、只改指这张图片并清理无引用旧行；搜索词映射、插件信息和模板沿用旧行。提交后广播 `metadataId` 字段补丁。`get_wpe_web_properties` 返回有序、已本地化的属性视图；桌面与预览的状态拉取按「作者默认值 + 用户值」组装。
+
+预览右栏和设置页当前网页壁纸都可打开属性面板。面板本地草稿立即改变显示条件，300ms 防抖后串行提交；同张图片的 `metadataId` 补丁和界面语言变化触发重读。条件由受限解释器处理字面量、运算、三元、数组、`<key>.value` 及五个字符串 / 数组方法；不认识的条件默认显示，不执行任意脚本。属性说明和标签经 HTML 白名单净化。
+
+`file` 与 `directory` 仅使用用户所选路径；无作者默认值时清空路径会删除该用户键，垫片向页面补发空路径以撤销旧值。core 生成文件 / 目录放行项，运行时 `grant_file_documents(label, for_root, paths)` 在当前根目录仍匹配时追加到该窗口的 `FilePolicy`。桌面壁纸窗口与 Phase 6a 的预览 `file:` iframe 共用这套闸门；预览根目录由 `set_wpe_web_preview` 设置。更换根目录会清空旧放行项；同一根目录内修改属性时，追加放行只增不减，旧路径在下一次导航前仍可能通过运行时闸门。目录属性递归列举浏览器安全的媒体文件，最多 10000 个；垫片对 `fetchall` 发送文件增删回调，对 `ondemand` 随机返回一个文件。
+
 ## 七、已知边界
 
 - **WPE 壁纸目前只提供 Windows 桌面**：macOS / Linux / Android / Web 不自动发现、不渲染网页壁纸（桌面 `file://` 宿主与
   预览 `file:` iframe 都按 Windows 门控），`x-wpe/*` 行只显示作者预览图。
 - 只导入 `video` 与 `web`；`scene` / `application` 只占位并计入跳过。
-- 网页壁纸只收到作者默认值（`applyUserProperties`）与界面语言（`applyGeneralProperties({ language })`）；用户改属性、
-  `fps`、`setPaused`、音频与媒体数据尚未实现（注册函数只收下回调）；`file` / `directory` 类型属性不支持（例如 Slideshow
-  显示「未选择目录」）。
+- 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言（`applyGeneralProperties({ language })`）；
+  `fps`、`setPaused`、音频与媒体数据尚未实现（注册函数只收下回调）。目录内容不监视，下次状态拉取时更新。
 - 桌面网页壁纸能订阅应用的全部全局事件（`core:event:allow-listen` 无事件名作用域，已接受的取舍），应用命令只开
   `wpe_web_pull_state`。
 - 桌面 `file://` 页面里跨源 `http(s)` 请求仍受 CORS 约束（WPE 是全局 `--disable-web-security`，Kabegame 不放开）；
@@ -458,7 +465,7 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
 
 ## 八、涉及文件
 
-- `src-tauri/kabegame-core/src/wpe/`（discover / recognize / project / properties / scan）
+- `src-tauri/kabegame-core/src/wpe/`（discover / recognize / project / properties / user_props / locale / scan）
 - `src-tauri/kabegame-core/src/crawler/wpe_import.rs`、`plugin/builtin.rs`、`task_scheduler/mod.rs`
 - `src-tauri/kabegame-core/src/media/image_type.rs`、`storage/images.rs`、`storage/organize.rs`
 - `src-tauri/kabegame/src/http_server.rs`（`/file` 对 WPE 行 404）、`commands/wallpaper.rs`（`WallpaperTarget`）、

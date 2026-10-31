@@ -369,5 +369,12 @@
   "searchSummaryNone": "未勾選任何範圍，不進行搜尋篩選。",
   "slideshowPlayPrev": "向前自動播放",
   "slideshowPlayNext": "向後自動播放",
-  "slideshowStop": "停止自動播放"
+  "slideshowStop": "停止自動播放",
+  "wpePropsTitle": "桌布屬性",
+  "wpePropsResetAll": "全部重設",
+  "wpePropsReset": "恢復預設",
+  "wpePropsModified": "本組有變更",
+  "wpePropsEmpty": "這張桌布沒有可調屬性",
+  "wpePropsLoadFailed": "載入桌布屬性失敗",
+  "wpePropsSaveFailed": "儲存桌布屬性失敗"
 }

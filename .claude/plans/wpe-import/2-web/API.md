@@ -412,14 +412,14 @@ V.evalCondition = function (e) {
 | 垫片先于页面脚本执行 | P0 | 已完成（5） | Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口各挂同一份垫片；CEF `on_context_created` 在页面脚本之前执行。垫片按 `location` 自判，只在顶层 `file:` 文档或父窗口即 top 的 `file:` 子 frame 里定义接口，应用页和其它 iframe 里什么都不做。桌面 `file:` 文档照常注入 Tauri 脚本，运行时把 IPC 来源改写成 frame URL，ACL 只给 `wpe-web-capability`。不改写 HTML 响应 |
 | 页面读同目录资源 | P0 | 已完成 | 两种宿主同一机制：补丁 0004 按窗口开文件访问 + 运行时按根目录拦截（预览 Phase 6a 起） |
 | `applyUserProperties` 首推作者默认值 | P0 | 已完成（5） | 状态里的 `user` 为 `{ key: { type, value } }`（只含带 `value` 的条目）。垫片拉取：桌面调 `wpe_web_pull_state`，预览 `postMessage` 给父页面、由父页面调 `get_wpe_web_state`。`load` 后首次全量投递，之后重拉时按键差异投递；首次投递后页面换 listener 时补投全量 |
-| `applyUserProperties` 增量推送 | P1 | 已完成（投递，5）/ 7（触发） | 用户改属性 = 新 metadata 行 + `metadataId` 补丁；垫片订阅补丁后重拉，只推值变化的键 |
+| `applyUserProperties` 增量推送 | P1 | 已完成（投递 5 / 触发 7，触发待真机） | 用户改属性 = 新 metadata 行 + `metadataId` 补丁；垫片订阅补丁后重拉，只推值变化的键 |
 | `applyGeneralProperties({ fps })` | P1 | 6 | 有了帧率设置再推。不推 0：按 `1000 / fps` 算间隔的页面会停住，而不推时页面保留自己的默认值 |
 | `applyGeneralProperties` 的 `language` | P2 | 已完成（5） | 推 Kabegame 当前语言，字段名 `language`，值用 WPE 语言码（`zh-chs` / `zh-cht` / `en-us` / `ja-jp` / `ko-kr`，§3.1）；语言变化时垫片收到 `setting-change`（预览由父页面代为 listen 转发）后重拉 |
 | `setPaused` + 冻结计时 / 动画 / 媒体 | P1 | 6（垫片与触发；Phase 5 方案移出） | 垫片照搬 WPE 的 `___wpxPause` 思路（§4.4）；宿主按壁纸窗口的暂停条件触发 |
-| `localization` 文案 | P1 | 7 | 照 WPE：当前语言（WPE 内置词表覆盖项目 `ui_` 词条）→ `en-us` → 原文；内置词表运行时只读取 WPE 安装目录的 `locale\ui_<码>.json` |
-| `condition` 显隐 | P1 | 7 | 照 WPE 的 `$parse.readOnly` 白名单自写解释器，不 eval，失败当 true（第一节） |
-| `file` 属性 | P2 | 7 | 见难点一；kaguya 的 `custom_user_bg` 即此类 |
-| `directory` 属性：`fetchall` / `ondemand` | P2 | 7 | 见难点一；`fetchall` 需要宿主监视目录并推增删 |
+| `localization` 文案 | P1 | 已完成（7，待真机） | 照 WPE：当前语言（WPE 内置词表覆盖项目 `ui_` 词条）→ `en-us` → 原文；内置词表运行时只读取 WPE 安装目录的 `locale\ui_<码>.json` |
+| `condition` 显隐 | P1 | 已完成（7，待真机） | 照 WPE 的 `$parse.readOnly` 白名单自写解释器，不 eval，失败当 true（第一节） |
+| `file` 属性 | P2 | 已完成（7，待真机） | 见难点一；kaguya 的 `custom_user_bg` 即此类。拉取状态时按调用方 label 追加放行用户选的文件 |
+| `directory` 属性：`fetchall` / `ondemand` | P2 | 已完成（7，待真机） | 见难点一；目录文件列表（递归、`browser_safe`、最多 10000）进状态，垫片对 `fetchall` 按差异回调增删、对 `ondemand` 随机取一个回给 `wallpaperRequestRandomFileForProperty`。不监视目录，内容变化在下次拉取时体现 |
 | `wallpaperRegisterAudioListener` | P1 | 已完成（空实现，5）/ 8 | WASAPI 回环 + FFT，128 浮点、约 30Hz、`NaN` 置 0 |
 | 媒体集成 5 个注册函数 | P2 | 已完成（空实现，5）/ 8 | 系统媒体会话；`thumbnail` 用 `data:image/png;base64,` 前缀 |
 | `wallpaperMediaIntegration` 常量 | P1 | 已完成（5） | 垫片直接定义 `{ PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 }` |

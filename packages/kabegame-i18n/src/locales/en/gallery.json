@@ -365,5 +365,12 @@
   "searchSummaryNone": "No field checked; search is not filtering.",
   "slideshowPlayPrev": "Autoplay backward",
   "slideshowPlayNext": "Autoplay forward",
-  "slideshowStop": "Stop autoplay"
+  "slideshowStop": "Stop autoplay",
+  "wpePropsTitle": "Wallpaper Properties",
+  "wpePropsResetAll": "Reset All",
+  "wpePropsReset": "Reset to Default",
+  "wpePropsModified": "Changed in this group",
+  "wpePropsEmpty": "This wallpaper has no adjustable properties",
+  "wpePropsLoadFailed": "Failed to load wallpaper properties",
+  "wpePropsSaveFailed": "Failed to save wallpaper properties"
 }

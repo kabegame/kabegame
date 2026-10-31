@@ -27,6 +27,10 @@ export function isWpeVideoType(t: string | undefined): boolean {
   return wpeKind(t) === "video";
 }
 
+export function isWpeWebType(t: string | undefined): boolean {
+  return wpeKind(t) === "web";
+}
+
 /**
  * 交给壁纸组件（`WpeWallpaperContent` → `WallpaperStage`）渲染原图形态的 WPE 类型：
  * web，以及未来的 scene 等非视频类型。缩略位仍是作者 `preview.*`。

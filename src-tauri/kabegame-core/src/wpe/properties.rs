@@ -89,9 +89,7 @@ impl Default for WpeVideoProps {
 }
 
 fn properties(raw: &Value) -> Option<&serde_json::Map<String, Value>> {
-    raw.get("general")?
-        .get("properties")?
-        .as_object()
+    raw.get("general")?.get("properties")?.as_object()
 }
 
 fn prop_value<'a>(props: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a Value> {
@@ -108,7 +106,9 @@ fn prop_f32(props: &serde_json::Map<String, Value>, key: &str) -> Option<f32> {
 
 fn prop_i64(props: &serde_json::Map<String, Value>, key: &str) -> Option<i64> {
     match prop_value(props, key)? {
-        Value::Number(number) => number.as_i64().or_else(|| number.as_f64().map(|v| v as i64)),
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|v| v as i64)),
         Value::String(text) => text.trim().parse::<i64>().ok(),
         _ => None,
     }
@@ -195,30 +195,32 @@ pub fn resolve_video_props_from_raw(raw: &Value) -> WpeVideoProps {
         rate: prop_f32(props, "rate")
             .map(|value| value / 100.0)
             .filter(|rate| rate.is_finite() && *rate > 0.0),
-        volume: prop_f32(props, "volume")
-            .map(|value| (value / 100.0).clamp(0.0, 1.0)),
+        volume: prop_f32(props, "volume").map(|value| (value / 100.0).clamp(0.0, 1.0)),
         color,
     }
 }
 
-/// 网页壁纸推给页面的用户属性：`general.properties` 中带 `value` 的条目，形如 `{ key: { type, value } }`。
-/// 没有 `value` 的纯展示条目（分组、说明行）与没有默认值的 `file` 属性不推。作者默认值层；
-/// Phase 7 的用户值在调用方叠加。
+/// 网页壁纸用户属性：作者默认值叠加本张图片的用户值。
 pub fn resolve_web_user_props(raw: &Value) -> serde_json::Map<String, Value> {
+    use super::user_props::{parse_defs, user_values, WpePropKind};
     let mut out = serde_json::Map::new();
-    let Some(props) = properties(raw) else {
-        return out;
-    };
-    for (key, prop) in props {
-        let Some(value) = prop.get("value") else {
+    let user = user_values(raw);
+    for def in parse_defs(raw) {
+        if matches!(def.kind, WpePropKind::Group | WpePropKind::Text) {
+            continue;
+        }
+        let Some(mut value) = user.get(&def.key).cloned().or(def.default) else {
             continue;
         };
-        let mut entry = serde_json::Map::new();
-        if let Some(kind) = prop.get("type") {
-            entry.insert("type".into(), kind.clone());
+        if matches!(def.kind, WpePropKind::File | WpePropKind::Directory) {
+            if let Some(path) = value.as_str() {
+                value = Value::String(path.replace('\\', "/"));
+            }
         }
-        entry.insert("value".into(), value.clone());
-        out.insert(key.clone(), Value::Object(entry));
+        out.insert(
+            def.key,
+            serde_json::json!({ "type": def.kind, "value": value }),
+        );
     }
     out
 }
@@ -367,7 +369,10 @@ mod tests {
             ]
         );
         // 只保留 type 与 value，展示字段（text / min / max / step / order）不推
-        assert_eq!(props["audio_sensitivity"], json!({ "type": "slider", "value": 1 }));
+        assert_eq!(
+            props["audio_sensitivity"],
+            json!({ "type": "slider", "value": 1 })
+        );
         assert_eq!(
             props["schemecolor"],
             json!({
@@ -386,8 +391,24 @@ mod tests {
         let props = resolve_web_user_props(&json!({
             "general": { "properties": { "x": { "value": false } } }
         }));
-        assert_eq!(props["x"], json!({ "value": false }));
+        assert!(props.is_empty());
         assert!(resolve_web_user_props(&json!({ "type": "web" })).is_empty());
+    }
+
+    #[test]
+    fn web_user_props_overlay_and_file_without_default() {
+        let mut raw = kaguya_raw();
+        raw["userProperties"] =
+            json!({"playback_rate": 1.5, "custom_user_bg": "C:\\Users\\me\\wall.png"});
+        let props = resolve_web_user_props(&raw);
+        assert_eq!(
+            props["playback_rate"],
+            json!({"type":"slider", "value":1.5})
+        );
+        assert_eq!(
+            props["custom_user_bg"],
+            json!({"type":"file", "value":"C:/Users/me/wall.png"})
+        );
     }
 
     #[test]

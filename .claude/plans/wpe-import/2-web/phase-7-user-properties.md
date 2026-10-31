@@ -1,6 +1,17 @@
 # Phase 7 — 用户属性（属性面板）
 
-> 状态：方案（2026-10-28），关键决策见文末，待用户确认。上级：[PLAN.md](PLAN.md)。
+> 状态：已实现（2026-10-31）；关键决策全部按推荐项确认（见文末）。静态检查与单测通过，真机回归待做（`versions/latest/regression.md`）。上级：[PLAN.md](PLAN.md)。
+>
+> 2026-10-31 验收补改（与方案的差异）：
+> - 显示条件解释器：一元 `! + -` 原先在 `primary` 里只吃紧跟的原子，`!a.value.endsWith('x')` 被算成对取反结果调方法，改为比成员 / 调用低一级（同 JS）；
+>   运行期出错不再缓存成失败（只缓存解析结果）；数组字面量允许负数。
+> - 内置词表：创意工坊根也能推出 `<库>/steamapps/common/wallpaper_engine`，不只靠项目根往上找。
+> - `list_directory_files`：按文件名有序遍历、够数即停，不再走完整棵树再截断。
+> - 垫片：没有默认值的 `file` / `directory` 重置后键会从状态里消失，垫片补推空路径让页面撤销旧选择（codex 补的，方案未写）。
+> - `resolve_web_user_props`：没有 `type` 的带值条目不再推（定义解析只认已知类型）。
+> - 验证项 8 的预期按点 4「只增不减」改正。
+>
+> 2026-10-31 修订：6b 之后运行时已有 `FilePolicy` 结构（能力位 + 根目录），现状锚点 g 与点 4 按现有代码重写：在 `FilePolicy` 上加 `grants`，闸门改读 `FileAccess` 快照。
 >
 > Phase 6（FPS、暂停、多显示器）暂时跳过。本 Phase 只依赖 Phase 5：垫片已经订阅了本张图片的 `metadataId` 补丁，
 > 补丁一到就重拉状态，用户属性按键差异投递。
@@ -223,10 +234,23 @@ function formatNumber(v: number): string {
 ```
 现有 float 调用方（`PluginVar.vue`）都不传 `step`。
 
-**g. 运行时 `file:` 策略只有一个根目录**（`src-tauri/tauri-runtime-cef/src/file_access.rs`、`webview.rs:1033`）
+**g. 运行时 `file:` 策略只有一个根目录**（`src-tauri/tauri-runtime-cef/src/file_access.rs:73`、`webview.rs:1057`；2026-10-31 按 6b 之后的代码重写）
 ```rust
-/// label → 当前允许的根目录（`None` = 拒绝所有 `file:` 请求）。
-static FILE_DOCUMENT_POLICIES: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+/// 一个 label 的 `file:` 访问策略。
+#[derive(Debug, Default)]
+struct FilePolicy {
+    /// 建窗带 0004 键：`file:` 文档可读本地文件。
+    file_documents: bool,
+    /// 建窗带 0005 键：应用页可加载 `file:`。
+    app_local_resources: bool,
+    /// 子 frame 与 `file:` 文档的根目录（`None` = 这类请求全拒）；应用页主 frame 的子资源
+    /// 免检时不看它。
+    root: Option<PathBuf>,              // 现状：只有根目录，没有追加放行
+}
+static FILE_POLICIES: OnceLock<Mutex<HashMap<String, FilePolicy>>> = OnceLock::new();
+
+pub(crate) fn set_file_document_root(webview_label: &str, root: Option<PathBuf>) -> Result<(), String>;
+pub(crate) fn file_document_root(webview_label: &str) -> Option<PathBuf>;
 
 pub(crate) fn check_file_request(url: &str, root: Option<&Path>) -> Result<PathBuf, FileDeny> {
     let Some(root) = root else {
@@ -236,7 +260,8 @@ pub(crate) fn check_file_request(url: &str, root: Option<&Path>) -> Result<PathB
 }
 ```
 ```rust
-// webview.rs on_before_resource_load
+// webview.rs FileDocumentGuardHandler::on_before_resource_load（应用页主 frame 的子资源在 :820 已按 6b 免检，到这里的
+// 是子 frame 导航与 `file:` 文档的请求：桌面壁纸窗口的页面、预览 iframe 的页面）
 let root = crate::file_access::file_document_root(&self.label);
 match crate::file_access::check_file_request(&url, root.as_deref()) {
 ```
@@ -537,8 +562,9 @@ pub async fn set_wpe_web_user_properties(
 ## 点 4 — 运行时：`file:` 放行加「追加放行」（`tauri-runtime-cef/src/file_access.rs`、`webview.rs`、`lib.rs`）
 
 - **修改**
-  - 每个 label 的策略从 `Option<PathBuf>` 换成 `FilePolicy { root, grants }`。
-  - `set_file_document_root` 同时清空 `grants`。它的调用方是导航：`show_web` 设新根，`show_app` 清空。
+  - 现有 `FilePolicy`（6b 引入，含 `file_documents` / `app_local_resources` / `root`）增加 `grants` 字段，其余字段不动。
+  - `set_file_document_root` 同时清空 `grants`。调用方：桌面导航（`show_web` 设新根，`show_app` 清空）、预览 `set_wpe_web_preview`（挂载设根、卸载清空）。
+  - `file_document_root` 换成 `file_document_access(label) -> Option<FileAccess>`，返回 `root` 与 `grants` 的快照（`FilePolicy` 本身带能力位，不整份拷出）。
   - `check_file_request(url, &FilePolicy)` 放行的条件是以下任一成立：
     - 位于 `root` 内；
     - 规范化后等于某个文件 grant；
@@ -552,21 +578,27 @@ pub async fn set_wpe_web_user_properties(
     - 去重后追加，只增不减。
   - `lib.rs` 公开 `grant_file_documents`，文档注释写明「只给嵌入方放行用户为当前页面选的文件」。
 ```rust
-/// 一个窗口的 `file:` 放行策略。
-#[derive(Debug, Clone, Default)]
-pub(crate) struct FilePolicy {
-    /// 当前允许的根目录（网页壁纸目录）；None = 没有根。
-    pub root: Option<PathBuf>,
-    /// 追加放行：文件只放行它本身，目录放行其中的普通文件。已 canonicalize；只增不减，换根即清空。
-    pub grants: Vec<Grant>,                                   // 新增
+/// 追加放行的一项：文件只放行它本身，目录放行其中的普通文件。路径已 canonicalize。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Grant { pub path: PathBuf, pub is_dir: bool }    // 新增
+
+#[derive(Debug, Default)]
+struct FilePolicy {
+    file_documents: bool,
+    app_local_resources: bool,
+    root: Option<PathBuf>,
+    /// 追加放行：只增不减，换根即清空。只放用户为当前页面选的文件 / 目录。
+    grants: Vec<Grant>,                                       // 新增
 }
 
-static FILE_DOCUMENT_POLICIES: OnceLock<Mutex<HashMap<String, FilePolicy>>> = OnceLock::new();   // 修改：值类型
+/// 闸门裁决用的快照：根目录 + 追加放行。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FileAccess { pub root: Option<PathBuf>, pub grants: Vec<Grant> }   // 新增
 
 pub(crate) fn set_file_document_root(webview_label: &str, root: Option<PathBuf>) -> Result<(), String>;   // 修改：同时清空 grants
 pub(crate) fn grant_file_documents(webview_label: &str, for_root: &Path, paths: &[PathBuf]) -> Result<(), String>; // 新增
-pub(crate) fn file_document_policy(webview_label: &str) -> Option<FilePolicy>;   // 修改：替代 file_document_root
-pub(crate) fn check_file_request(url: &str, policy: &FilePolicy) -> Result<PathBuf, FileDeny>;   // 修改：签名
+pub(crate) fn file_document_access(webview_label: &str) -> Option<FileAccess>;   // 修改：替代 file_document_root
+pub(crate) fn check_file_request(url: &str, access: &FileAccess) -> Result<PathBuf, FileDeny>;   // 修改：签名
 ```
 - **新增**（测试）
   - 文件 grant 只放行它本身，同目录别的文件仍是 `OutsideRoot`；
@@ -996,21 +1028,22 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
   6. 切换界面语言：面板重读，不丢草稿。
   7. `file`：kaguya 的 `custom_user_bg` 选一张壁纸目录之外的图，预览与桌面的背景都换成它，stderr 没有对它的 `deny file:`；清空后恢复作者默认。
   8. `directory`（本次修订的主要目标）：Slideshow 的 `customdirectory` 选一个文件夹，预览与桌面的幻灯片都显示其中的图片；
-     换文件夹后旧文件夹的图在两边都停止出现，旧路径的请求有 `deny file:` 日志。
+     换文件夹后旧文件夹的图在两边都停止出现（页面收到 `userDirectoryFilesRemoved`）。追加放行只增不减（点 4），旧文件夹在本次导航前仍可读；
+     关掉预览重开、桌面切走再切回之后，旧路径的请求才有 `deny file:` 日志（2026-10-31 验收时按点 4 改正，原写法与只增不减矛盾）。
   8b. 白名单：预览 iframe 里 CDP `fetch` 目录属性之外的文件、文件属性同目录的兄弟文件、`C:/Windows/win.ini`，都被拒并有 `deny` 日志；
      项目目录内文件、当前选的文件、目录里的文件都成功。
   9. 设置页：当前壁纸是网页壁纸时出现「壁纸属性」按钮，弹窗里改，预览面板随之更新；当前壁纸不是网页壁纸时没有按钮。
   10. 预览里改完立刻切到下一张：改动落在原图上，没有串到下一张。
   11. 下拉、取色的弹层不被预览弹窗遮住（预览 `el-dialog` 的 `z-index` 是显式值），被遮住就给弹层设 `popper-class` / `z-index`。
 
-## 关键决策（待确认）
+## 关键决策（2026-10-31 全部确认，均按推荐项）
 
-1. **范围只做 `x-wpe/web`**（推荐）。视频行的 `general.properties` 也有对齐、倍速等，但它们与 Kabegame 的壁纸样式、音量、倍速设置重叠，放进来要先定两者的优先级。
+1. **范围只做 `x-wpe/web`**（推荐，**已定**）。视频行的 `general.properties` 也有对齐、倍速等，但它们与 Kabegame 的壁纸样式、音量、倍速设置重叠，放进来要先定两者的优先级。
 2. ~~**显示条件用自写的受限解析器**~~ **已定**（2026-10-28 静态分析）：WPE 自己就是白名单解释器（`$parse.readOnly`），不认识的一律当 true。
    Kabegame 照同一份白名单实现（点 8），连「失败当 true」也一致。否则同一张壁纸在两边的显隐会不同。
-3. **本地化在 Rust**（推荐）。语言映射只有 `wpe_language_code` 一份；代价是语言变化时面板要重读一次。
+3. **本地化在 Rust**（推荐，**已定**）。语言映射只有 `wpe_language_code` 一份；代价是语言变化时面板要重读一次。
    查找顺序照 WPE：当前语言 → `en-us` → 原文，每级里 WPE 内置词条覆盖项目词条。
-4. **WPE 内置词条从用户的 WPE 安装目录只读读取**（推荐）。词条只决定显示文字，不影响取值和显隐。
+4. **WPE 内置词条从用户的 WPE 安装目录只读读取**（推荐，**已定**：运行时只读读取 `locale\ui_<码>.json`）。词条只决定显示文字，不影响取值和显隐。
    属性可以引用 WPE 整张界面词表（3325 个 `ui_` 键），不只是专给属性用的 52 个 `ui_browse_properties_*`。
    本机统计（API.md 第一节）：
    - web 与 video 壁纸只用到 `ui_browse_properties_scheme_color`；
@@ -1020,11 +1053,11 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
      导入 WPE 壁纸的用户几乎都装着 WPE；没装时 `scheme_color` 退回 Kabegame 自己的翻译，其余显示原文；
    - Kabegame 自己翻一份常用词条：web 眼下只需要 `scheme_color` 一条，但到 scene 要补几十条、维护五种语言，说法也和 WPE 不一致；
    - 只显示原文键名：零成本，但 `ui_browse_properties_scheme_color` 这种键名直接露给用户。
-5. **写入节奏：草稿即时 + 300ms 防抖串行写**（推荐）。拖滑块期间页面约每 300ms 跟一次，每次写一行新 metadata。备选是只在松手 / 失焦时提交：写得更少，但拖动时页面不跟。
-6. **改回默认值就删键**（推荐）。`userProperties` 只反映「用户改过什么」，「全部重置」后 metadata 与导入时一致。
-7. **用户值不进搜索**（推荐）。改写时搜索词沿用旧行；用户填的文本、选的路径搜不到。
+5. **写入节奏：草稿即时 + 300ms 防抖串行写**（推荐，**已定**）。拖滑块期间页面约每 300ms 跟一次，每次写一行新 metadata。备选是只在松手 / 失焦时提交：写得更少，但拖动时页面不跟。
+6. **改回默认值就删键**（推荐，**已定**）。`userProperties` 只反映「用户改过什么」，「全部重置」后 metadata 与导入时一致。
+7. **用户值不进搜索**（推荐，**已定**）。改写时搜索词沿用旧行；用户填的文本、选的路径搜不到。
 8. ~~**`file` / `directory` 只在桌面生效**~~ **已定**（2026-10-28，用户指定）：桌面与预览都生效，经 Phase 6a 同一套运行时拦截 + 本 Phase 的追加放行。
    - 目录递归列举，只留 `browser_safe` 格式，最多 10000 个；
    - 不监视目录变化。
    WPE 自己是否递归、推给页面的 `directory` 值是什么格式都没确认，第一版推路径字符串。
-9. **不认 WPE 的 `editable`**：滑块总带输入框。
+9. **不认 WPE 的 `editable`**：滑块总带输入框（**已定**）。

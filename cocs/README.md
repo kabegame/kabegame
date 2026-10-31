@@ -116,12 +116,14 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     **桌面 `file://` 宿主与鼠标转发**：`WindowWallpaperManager::set_wallpaper_path` 按路径判定并导航自己的窗口（网页壁纸时整窗导航到入口 `file://`、切走导航回 `mount()` 时记住的应用页，幂等；入口、根目录与转发线程随 `WallpaperWindow` 对象走、`Drop` 清理）、CEF 补丁 0004 按窗口开文件访问 + `OnBeforeResourceLoad` 按壁纸目录拦截 `file:` 请求，以及 Windows 轮询式鼠标移动 / 左键转发（`input_forward`，`inject_mouse`）；
     **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（远程 `file:` 来源只得 `wpe-web-capability`）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及接受的全局事件可见性；
     **图库媒体走 `file://` 与按发起 frame 分档的闸门**（Phase 6b，CEF 补丁 0006）：三个桌面平台的主窗口与壁纸窗口都登记 0005，应用页主 frame 的 `<img>` / `<video>` / CSS 子资源免检，子 frame 导航与 `file:` 文档仍按根目录；前端 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 在桌面产出 `file://`，下载 / 复制兜底直接 `fetch(file:)`、Windows 拖出自 Phase 6d 起改走 0003 真实文件链路（`CF_HDROP`）；插件详情 EJS iframe 改 opaque origin + 内层 CSP；删除桌面本地 HTTP 服务；插件文件改由 Tauri 原始字节命令读取，0006 的私有 CORS 列表与运行时跨源白名单开放 `fetch(file:)`。
+    **用户属性面板**（Phase 7）：作者属性在预览右栏 / 设置页「当前壁纸」编辑，用户值存图片 metadata 顶层 `userProperties`（只存与默认值不同的键），写入经 `Storage::rewrite_image_metadata` 事务改写（新行 + 改指 + 删无引用旧行、沿用搜索词）后发 `metadataId` 补丁，垫片与面板都按它重拉；属性定义在 core `wpe::user_props` 解析一次，WPE 内置 `ui_` 词条只读读取用户 WPE 安装目录的 `locale\ui_<码>.json`；显示条件是照 WPE `$parse.readOnly` 的白名单解释器（不 eval、失败当显示）；`file` / `directory` 由拉取状态的命令按调用方 label 经运行时 `grant_file_documents` 追加放行（核对当前根目录、只增不减、换根清空），目录文件列表进状态，垫片实现目录回调与 `wallpaperRequestRandomFileForProperty`。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 预览页面 `fetch` 同目录文件失败或越界读被放行 / 关闭预览后根目录未清空 / 预览画布比例或交互 / 切走后渲染进程未回收、子 frame 伪造 `cef-ipc` 请求、非 Windows 平台的 WPE 行为；
     排查桌面网页壁纸不显示 / `fetch` 同目录文件失败 / 越界 `file:` 被放行或误拒（`deny file:` 日志）/ 页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应 / 切回图片壁纸后窗口停在 `file://` / 桌面点击或移动不触发页面事件；
     排查壁纸窗口导航后旧文档的事件监听残留、预览 iframe 收不到属性或关闭预览后仍在转发事件；
     排查桌面图库图片 / 视频不显示（`ERR_UNKNOWN_URL_SCHEME`、图库媒体被误判 `deny file:`）、下载拿到 `file://`、插件详情模板的请求被 CSP 拒绝。
+    排查属性改了页面不变 / 预览与桌面不同步 / 草稿串到下一张、属性标签显示 `ui_` 键名、显示条件显隐与 WPE 不一致、`file` / `directory` 属性选的文件被 `deny file:` 或目录回调不触发。
 
 ## 下载与任务（`downloader-tasks/`）
 

@@ -188,6 +188,9 @@ webview:
     captureMissing: "找不到该视频的捕获数据"
     captureEmpty: "捕获数据中没有媒体内容"
 
+wpe:
+  schemeColor: 主题配色
+
 crawler:
   toolbar:
     collapse: "收起"

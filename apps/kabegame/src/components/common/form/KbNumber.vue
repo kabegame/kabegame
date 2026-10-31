@@ -15,7 +15,7 @@
     :model-value="numberValue"
     :min="effectiveMin"
     :max="effectiveMax"
-    :step="1"
+    :step="sliderStep"
     :title="placeholder || '请选择'"
     :placeholder="placeholder"
     @update:model-value="$emit('update:modelValue', $event)"
@@ -53,7 +53,7 @@
     :min="hasFiniteMin ? (min as number) : -Infinity"
     :max="hasFiniteMax ? (max as number) : Infinity"
     :step-size="sliderStep"
-    :precision="type === 'float' ? 2 : 0"
+    :precision="type === 'float' ? fractionDigits : 0"
     @update:model-value="$emit('update:modelValue', $event)"
   />
 </template>
@@ -73,7 +73,7 @@ const props = defineProps<{
   min?: number;
   max?: number;
   placeholder?: string;
-  /** 以下仅 int 模式生效：按钮步进量（默认 1）、禁用 */
+  /** 步进量：float 模式同时决定滑杆步长与显示的小数位。 */
   step?: number;
   disabled?: boolean;
 }>();
@@ -97,10 +97,20 @@ const effectiveMin = computed(() => (hasFiniteMin.value ? (props.min as number) 
 const effectiveMax = computed(() => (hasFiniteMax.value ? (props.max as number) : 100));
 
 const isFloat = computed(() => props.type === "float");
+const explicitStep = computed(() =>
+  typeof props.step === "number" && Number.isFinite(props.step) && props.step > 0 ? props.step : undefined,
+);
+const fractionDigits = computed(() => {
+  if (explicitStep.value === undefined) return 2;
+  const text = String(explicitStep.value);
+  if (text.includes("e-")) return Math.min(10, Number(text.split("e-")[1]));
+  return Math.min(10, text.split(".")[1]?.length ?? 0);
+});
 
 /** 滑杆/步进器的步进粒度：int 恒为 1；float 按有效范围的 ~1% 取，且不小于 0.01 */
 const sliderStep = computed(() => {
   if (!isFloat.value) return 1;
+  if (explicitStep.value !== undefined) return explicitStep.value;
   const span = effectiveMax.value - effectiveMin.value;
   const raw = span > 0 ? Math.max(span / 100, 0.01) : 0.01;
   // 截到 6 位：span / 100 常带浮点噪声（0.8 / 100 → 0.008000000000000002），
@@ -109,7 +119,7 @@ const sliderStep = computed(() => {
 });
 
 function formatNumber(v: number): string {
-  return isFloat.value ? v.toFixed(2) : String(Math.round(v));
+  return isFloat.value ? v.toFixed(fractionDigits.value) : String(Math.round(v));
 }
 
 function clamp(v: number): number {

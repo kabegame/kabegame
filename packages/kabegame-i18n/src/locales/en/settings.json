@@ -245,5 +245,6 @@
   "quickDrawerTitleDefault": "Settings",
   "quickEmpty": "No quick settings on this page",
   "mcpSelectAll": "Select all",
-  "mcpClearAll": "Clear all"
+  "mcpClearAll": "Clear all",
+  "wallpaperCurrentProperties": "Wallpaper Properties"
 }

@@ -105,6 +105,15 @@ pub fn set_file_document_root(
     file_access::set_file_document_root(webview_label, root)
 }
 
+/// 只给嵌入方放行用户为当前页面选的文件或目录；当前根不匹配时忽略。
+pub fn grant_file_documents(
+    webview_label: &str,
+    for_root: &std::path::Path,
+    paths: &[std::path::PathBuf],
+) -> Result<(), String> {
+    file_access::grant_file_documents(webview_label, for_root, paths)
+}
+
 // ---- 鼠标注入 ----
 
 /// 注入到 webview 的鼠标事件；坐标是视图坐标（DIP，相对 browser 视图左上角）。

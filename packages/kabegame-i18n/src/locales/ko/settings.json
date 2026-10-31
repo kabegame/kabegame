@@ -245,5 +245,6 @@
   "quickDrawerTitleDefault": "설정",
   "quickEmpty": "이 페이지에는 빠른 설정이 없습니다",
   "mcpSelectAll": "모두 선택",
-  "mcpClearAll": "모두 해제"
+  "mcpClearAll": "모두 해제",
+  "wallpaperCurrentProperties": "배경화면 속성"
 }

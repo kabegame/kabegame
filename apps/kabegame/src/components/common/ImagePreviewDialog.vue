@@ -390,7 +390,12 @@
           @wheel.stop
         >
           <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
-            <ImagePluginDescriptionPanel :image="previewImage" fill-when-expanded />
+            <WpeWebPropertiesPanel
+              v-if="previewImage && isWpeWebType(previewImage.type)"
+              :image-id="previewImage.id"
+              fill-when-expanded
+            />
+            <ImagePluginDescriptionPanel v-else :image="previewImage" fill-when-expanded />
           </div>
         </KbResizable>
       </div>
@@ -429,6 +434,7 @@ import ImageBasicInfoPanel, {
 } from "./ImageBasicInfoPanel.vue";
 import ImageNativeMetadataPanel from "./ImageNativeMetadataPanel.vue";
 import ImagePluginDescriptionPanel from "./ImagePluginDescriptionPanel.vue";
+import WpeWebPropertiesPanel from "../wallpaper/WpeWebPropertiesPanel.vue";
 import KbResizable from "./KbResizable.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
@@ -450,6 +456,7 @@ import {
   isNativeMetadataEligible,
   isVideoPlaybackType,
   isWpeVideoType,
+  isWpeWebType,
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";

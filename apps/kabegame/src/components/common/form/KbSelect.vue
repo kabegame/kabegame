@@ -1,7 +1,7 @@
 <template>
   <!-- 选项少时用分段器：一眼看全部选项，省一次点击展开 -->
   <KbSegmentedControl
-    v-if="!isCompact && normalizedOptions.length > 0 && normalizedOptions.length <= 4"
+    v-if="segmented && !isCompact && normalizedOptions.length > 0 && normalizedOptions.length <= 4"
     :model-value="valueForSelect ?? SEGMENT_NONE"
     :options="normalizedOptions"
     @update:model-value="$emit('update:modelValue', $event)"
@@ -56,8 +56,10 @@ const props = withDefaults(
     options?: VarOption[];
     placeholder?: string;
     allowUnset?: boolean;
+    /** 选项少时是否用分段器；放进窄容器、选项文案又长时传 false，始终用下拉 */
+    segmented?: boolean;
   }>(),
-  { allowUnset: false },
+  { allowUnset: false, segmented: true },
 );
 
 defineEmits<{

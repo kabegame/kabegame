@@ -188,6 +188,9 @@ webview:
     captureMissing: "この動画のキャプチャデータが見つかりません"
     captureEmpty: "キャプチャにメディアデータがありません"
 
+wpe:
+  schemeColor: テーマカラー
+
 crawler:
   toolbar:
     collapse: "閉じる"

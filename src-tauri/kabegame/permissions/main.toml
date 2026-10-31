@@ -158,6 +158,8 @@ commands.allow = [
   "wpe_scan",
   "wpe_recognize_dir",
   "get_wpe_web_state",
+  "get_wpe_web_properties",
+  "set_wpe_web_user_properties",
   "set_wpe_web_preview",
   "set_wallpaper_rotation_enabled",
   "get_wallpaper_rotation_enabled",
