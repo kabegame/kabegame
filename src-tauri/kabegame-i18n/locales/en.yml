@@ -50,6 +50,8 @@ dialog:
   initFatalError: "A fatal error occurred during initialization!: {detail}"
 
 window:
+  surfSection: Surf
+  crawlerFallback: WebView
   wallpaperTitle: Kabegame Wallpaper
   crawlerTitle: Kabegame Crawler
 
@@ -109,7 +111,6 @@ vd:
   hiddenAlbum: Hidden Album
 
 surf:
-  windowTitle: "Surf - {host}"
   toolbar:
     back: "Back"
     forward: "Forward"

@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
-import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@/env";
 import { trackPage } from "@/track/umami";
 
@@ -76,11 +75,6 @@ const router = createRouter({
 });
 
 router.beforeEach((to, from, next) => {
-  const titleKey = to.meta.title as string | undefined;
-  if (titleKey && typeof titleKey === "string") {
-    document.title = i18n.global.t(titleKey) as string;
-  }
-
   // Why: <router-link to="/other"> 默认不带 query 会丢 super；仅跨路径透传，
   // 同路径（SuperModeToggle 的 setSuper 关闭、页内 query 更新）不干预，允许显式关闭。
   if (IS_WEB && from.path !== to.path && from.query.super === "1" && to.query.super !== "1") {

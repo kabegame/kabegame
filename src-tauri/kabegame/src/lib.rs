@@ -45,6 +45,8 @@ mod wallpaper;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 mod web_server_service;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
+mod window_title;
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 mod wpe_media;
 
 // ---- local-only imports ----

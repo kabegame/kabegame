@@ -173,6 +173,11 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
     let builder =
         WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))
             .title(t!("common.appName"))
+            .on_document_title_changed(|window, title| {
+                if !title.trim().is_empty() {
+                    let _ = window.set_title(&title);
+                }
+            })
             .inner_size(width, height)
             .min_inner_size(min_w, min_h)
             .position(x, y)
@@ -752,9 +757,15 @@ pub fn create_crawler_window<R: Runtime>(
     let target_url =
         url::Url::parse(target).map_err(|e| format!("Invalid crawler URL '{}': {}", target, e))?;
     let task_id_for_download = task_id.to_string();
+    let title_kind = crate::window_title::WebPageWindow::Crawler {
+        task_id: task_id.to_string(),
+    };
     let mut builder =
         WebviewWindowBuilder::new(&app_handle, &label, WebviewUrl::External(target_url))
-            .title(t!("window.crawlerTitle"))
+            .title(crate::window_title::initial_title(&title_kind))
+            .on_document_title_changed(move |window, title| {
+                crate::window_title::on_page_title(&window, title_kind.clone(), title);
+            })
             .visible(false)
             .skip_taskbar(true)
             .resizable(false)

@@ -79,6 +79,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowTitlePart } from "@/composables/useWindowTitle";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { WarningFilled } from "@kabegame/element-plus-icons";
@@ -122,6 +123,7 @@ const { plugin, loading, showSkeleton, reload } = usePluginDetailLoader({
   active: activeRef,
   onLoadFailure: () => goBack(),
 });
+useWindowTitlePart("subject", () => (plugin.value ? pluginName(plugin.value) : ""));
 
 const goBack = () => {
   if (window.history.length > 1) router.back();

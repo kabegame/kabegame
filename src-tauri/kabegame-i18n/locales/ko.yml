@@ -50,6 +50,8 @@ dialog:
   initFatalError: "초기화 중 치명적 오류가 발생했습니다!: {detail}"
 
 window:
+  surfSection: 서핑
+  crawlerFallback: WebView
   wallpaperTitle: Kabegame 배경화면
   crawlerTitle: Kabegame 크롤러
 
@@ -109,7 +111,6 @@ vd:
   hiddenAlbum: 숨김 앨범
 
 surf:
-  windowTitle: "서핑 - {host}"
   toolbar:
     back: "뒤로"
     forward: "앞으로"

@@ -50,6 +50,8 @@ dialog:
   initFatalError: "初期化中に致命的なエラーが発生しました！: {detail}"
 
 window:
+  surfSection: サーフ
+  crawlerFallback: WebView
   wallpaperTitle: Kabegame 壁紙
   crawlerTitle: Kabegame クローラー
 
@@ -109,7 +111,6 @@ vd:
   hiddenAlbum: 非表示アルバム
 
 surf:
-  windowTitle: "サーフ - {host}"
   toolbar:
     back: "戻る"
     forward: "進む"

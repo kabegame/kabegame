@@ -61,6 +61,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowTitlePart } from "@/composables/useWindowTitle";
 import { onActivated, onMounted, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
@@ -133,6 +134,7 @@ onUnmounted(() => {
 
 // 与畅游列表/详情一致：优先展示用户起的名字，没起过才退回 host
 const recordTitle = computed(() => record.value?.name || record.value?.host || t("surf.surfImagesTitle"));
+useWindowTitlePart("subject", () => record.value?.name || record.value?.host);
 
 /**
  * 副标题只给总图片数，与画册详情页一致——直接复用 ImageGrid 已经算好的 totalCount，

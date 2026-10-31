@@ -89,6 +89,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowTitlePart } from "@/composables/useWindowTitle";
 import { ref, computed, onActivated, onDeactivated, onMounted, onUnmounted, watch } from "vue";
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
@@ -267,6 +268,7 @@ const taskName = computed(() => {
   if (!tsk) return "";
   return tsk.pluginId ? pluginStore.pluginLabel(tsk.pluginId) : t("tasks.task");
 });
+useWindowTitlePart("subject", () => taskName.value);
 
 const taskStatusFromStore = computed(() => task.value?.status ?? "");
 

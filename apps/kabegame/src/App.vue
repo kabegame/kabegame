@@ -207,6 +207,7 @@ import AppLogDialog from "./components/logs/AppLogDialog.vue";
 import FrameMonitor from "./components/common/FrameMonitor.vue";
 import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
+import { useWindowTitleSync } from "./composables/useWindowTitle";
 import { useFileDrop } from "./composables/useFileDrop";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -249,7 +250,7 @@ import { useOrganizeStore, type OrganizeOptions } from "./stores/organize";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
-const { locale } = useI18n();
+const { locale, t } = useI18n();
 
 /** Element Plus 组件（含 DatePicker 面板文案）与 vue-i18n 语言对齐 */
 const elementPlusLocale = computed(() => {
@@ -333,6 +334,7 @@ const downloadStateStore = useDownloadStateStore();
 
 const router = useRouter();
 const route = useRoute();
+useWindowTitleSync(() => (typeof route.meta.title === "string" ? t(route.meta.title) : ""));
 // 桌面端设置是弹窗、不是路由目的地：打开时侧栏仍高亮当前页面，
 // 「设置」自身的按下态由底部常驻区 dock-row 的 is-active 表达。
 const settingsModal = useModal();
