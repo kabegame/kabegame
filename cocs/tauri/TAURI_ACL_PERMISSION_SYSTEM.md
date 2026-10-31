@@ -280,6 +280,9 @@ frame 是 IPC 的基本单位：子 frame 有自己的 Tauri 桥，Tauri 送回�
 - **调用方来源**：命令可以收 `tauri::ipc::CallerOrigin(Url)`，即 ACL 判定所用的来源（请求的 `Origin`）。普通页面只有
   scheme + host + port；`file:` frame 的完整文档 URL 由 CEF 07 建工厂时捕获，再由 runtime 写入 `Origin`，`wpe_web_pull_state` 靠它认出调用的
   是哪张网页壁纸（`Url::to_file_path` 不看 scheme，用之前先确认是 `file:`）。
+- **调用方 frame**：命令可以收 `tauri::ipc::CallerFrame`（`Main` / `Sub(SubframeId)`，取不到 frame 时与 Channel 参数一样报错），
+  读自 runtime 上报、不读载荷。应用按调用方 frame 保存的东西（例如网页壁纸的音频 / 媒体订阅，Channel 只投递到这个 frame）
+  要在全局 `on_webview_event` 收到 `SubframeDestroyed` 时释放：Channel 发往已销毁的子 frame 会被静默丢弃、发送照样成功。
 - **来源回退**：`cef-ipc` 的 `Origin` 不合法时，所有 frame 都用 `kabegame-unattributed://ipc/` 交给 ACL 拒绝；不读取 frame URL 或应用页初始 URL。
 
 已知限制：同源子 frame 仍可以直接用父页面的 `__TAURI_INTERNALS__`，请求会记为主 frame（见「frames 维度」）。

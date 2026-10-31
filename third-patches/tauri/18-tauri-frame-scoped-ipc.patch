@@ -85,15 +85,17 @@ index e3beefd3e471db50876fb563c92aa3abf9fefd7b..1b68d9381731805c715a4eb5f1edff69
  
  /// The drag drop event payload.
 diff --git a/crates/tauri/src/app.rs b/crates/tauri/src/app.rs
-index 0056dfcea4d83cd15068564a8941cca8b59caf75..dc3df51a09b176209275a41742c604976480619c 100644
+index 0056dfcea4d83cd15068564a8941cca8b59caf75..e74d55a58bb2d7cce3ac0a8e02c84fae0f23a372 100644
 --- a/crates/tauri/src/app.rs
 +++ b/crates/tauri/src/app.rs
-@@ -202,12 +202,16 @@ impl From<RuntimeWindowEvent> for WindowEvent {
+@@ -202,12 +202,18 @@ impl From<RuntimeWindowEvent> for WindowEvent {
  pub enum WebviewEvent {
    /// An event associated with the drag and drop action.
    DragDrop(DragDropEvent),
-+  /// A subframe of the webview was destroyed. Tauri drops the JS event listeners it registered;
-+  /// apps do not need to handle it. Only runtimes that report subframes emit it.
++  /// A subframe of the webview was destroyed. Tauri drops what it kept for the frame (its JS event
++  /// listeners and unfetched channel data); apps that keep something per
++  /// [`CallerFrame`](crate::ipc::CallerFrame) release it here. Only runtimes that report subframes
++  /// emit it.
 +  SubframeDestroyed(crate::webview::SubframeId),
  }
  
@@ -1215,7 +1217,7 @@ index 7782275d9199856139b0035023aa587fc9d9fb44..1e8db5b0068e194452b7745d3b98195c
 +  }
  }
 diff --git a/crates/tauri/src/ipc/mod.rs b/crates/tauri/src/ipc/mod.rs
-index 22aea3b37a699d40263e2f76bda645288de436d3..850982cb81aaabf687b265ff162977090c9c994e 100644
+index 22aea3b37a699d40263e2f76bda645288de436d3..473cfac15b2fcfbc77a3d93aee43681c0778effa 100644
 --- a/crates/tauri/src/ipc/mod.rs
 +++ b/crates/tauri/src/ipc/mod.rs
 @@ -21,7 +21,10 @@ pub use serialize_to_javascript::Options as SerializeOptions;
@@ -1261,7 +1263,7 @@ index 22aea3b37a699d40263e2f76bda645288de436d3..850982cb81aaabf687b265ff16297709
      }
    }
  
-@@ -585,6 +598,47 @@ impl<R: Runtime> InvokeMessage<R> {
+@@ -585,6 +598,86 @@ impl<R: Runtime> InvokeMessage<R> {
    }
  }
  
@@ -1306,11 +1308,50 @@ index 22aea3b37a699d40263e2f76bda645288de436d3..850982cb81aaabf687b265ff16297709
 +  }
 +}
 +
++/// The frame that made the call, for app commands that keep something per calling frame, for
++/// example a subscription whose [`Channel`] delivers to that frame, and drop it on
++/// [`WebviewEvent::SubframeDestroyed`](crate::WebviewEvent::SubframeDestroyed).
++///
++/// Read from the invoke message (reported by the runtime), never from the payload. Fails like a
++/// [`Channel`] argument when the calling frame cannot be addressed: a subframe the runtime gave no
++/// id for, or a request without a frame.
++///
++/// # Examples
++///
++/// ```rust
++/// #[tauri::command]
++/// fn which_frame(frame: tauri::ipc::CallerFrame) -> String {
++///   match frame {
++///     tauri::ipc::CallerFrame::Main => "main".into(),
++///     tauri::ipc::CallerFrame::Sub(id) => id.0.to_string(),
++///   }
++/// }
++/// ```
++#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++pub enum CallerFrame {
++  /// The main frame of the webview.
++  Main,
++  /// A subframe, with the id the runtime reported for it.
++  Sub(crate::webview::SubframeId),
++}
++
++impl<'a, R: Runtime> CommandArg<'a, R> for CallerFrame {
++  fn from_command(command: CommandItem<'a, R>) -> Result<Self, InvokeError> {
++    match &command.message.caller_address {
++      Some(FrameAddress::Main) => Ok(Self::Main),
++      Some(FrameAddress::Sub(id)) => Ok(Self::Sub(id.clone())),
++      None => Err(InvokeError::from(
++        "the calling frame of this invoke cannot be addressed",
++      )),
++    }
++  }
++}
++
  /// The `Callback` type is the return value of the `transformCallback` JavaScript function.
  #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
  pub struct CallbackFn(pub u32);
 diff --git a/crates/tauri/src/ipc/protocol.rs b/crates/tauri/src/ipc/protocol.rs
-index 4cfab7f7ae905c03ca94d49b1239aa3910db56e8..a38b230caad0662b504d2da8b414fa38e69e36d9 100644
+index 4cfab7f7ae905c03ca94d49b1239aa3910db56e8..a69f9d0faa32fc27bc54160eb338665e1ee620eb 100644
 --- a/crates/tauri/src/ipc/protocol.rs
 +++ b/crates/tauri/src/ipc/protocol.rs
 @@ -8,7 +8,7 @@ use crate::{
@@ -1520,7 +1561,7 @@ index 4cfab7f7ae905c03ca94d49b1239aa3910db56e8..a38b230caad0662b504d2da8b414fa38
    #[test]
    fn parse_invoke_request_empty_path() {
      let context = generate_context!("test/fixture/src-tauri/tauri.conf.json", crate, test = true);
-@@ -808,4 +884,112 @@ mod tests {
+@@ -808,4 +884,160 @@ mod tests {
      assert_eq!(invoke_request.headers, headers);
      assert_eq!(invoke_request.body, InvokeBody::Json(body_json));
    }
@@ -1631,6 +1672,54 @@ index 4cfab7f7ae905c03ca94d49b1239aa3910db56e8..a38b230caad0662b504d2da8b414fa38
 +    .deserialize::<String>()
 +    .unwrap();
 +    assert_eq!(response, "tauri://localhost");
++  }
++
++  #[crate::command(root = "crate")]
++  fn caller_frame(frame: crate::ipc::CallerFrame) -> String {
++    match frame {
++      crate::ipc::CallerFrame::Main => "main".into(),
++      crate::ipc::CallerFrame::Sub(id) => id.0.to_string(),
++    }
++  }
++
++  /// `CallerFrame` is the frame the runtime reported for the request, never the payload; a caller
++  /// that cannot be addressed is rejected.
++  #[test]
++  fn caller_frame_is_the_reported_frame() {
++    use crate::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
++
++    let app = mock_builder()
++      .invoke_handler(crate::generate_handler![caller_frame])
++      .build(mock_context(noop_assets()))
++      .unwrap();
++    let window = crate::WebviewWindowBuilder::new(&app, "main", Default::default())
++      .build()
++      .unwrap();
++    let call = |frame: IpcFrame, subframe_id: Option<SubframeId>| {
++      get_ipc_response(
++        &window,
++        InvokeRequest {
++          cmd: "caller_frame".into(),
++          callback: CallbackFn(0),
++          error: CallbackFn(1),
++          url: "tauri://localhost".parse().unwrap(),
++          body: InvokeBody::Json(json!({ "frame": "evil" })),
++          headers: Default::default(),
++          invoke_key: INVOKE_KEY.to_string(),
++          frame,
++          subframe_id,
++        },
++      )
++      .map(|body| body.deserialize::<String>().unwrap())
++    };
++
++    assert_eq!(
++      call(IpcFrame::Sub, Some(SubframeId::new("frame-a"))).unwrap(),
++      "frame-a"
++    );
++    assert_eq!(call(IpcFrame::Main, None).unwrap(), "main");
++    assert!(call(IpcFrame::Sub, None).is_err());
++    assert!(call(IpcFrame::Unknown, None).is_err());
 +  }
  }
 diff --git a/crates/tauri/src/manager/mod.rs b/crates/tauri/src/manager/mod.rs

@@ -198,7 +198,9 @@ the frame that made the call. Design and app usage: the "子 frame IPC" section 
   through the webview because a runtime may renumber it on cross-origin navigation).
   `on_message` stores `InvokeMessage.caller_address` and `caller_origin` (the ACL origin, i.e. the
   request `Origin`). Command arguments: crate-only `ipc::CallerFrameAddress`, public
-  `ipc::CallerOrigin(Url)`. `js_event_listeners` is keyed webview → frame → event;
+  `ipc::CallerOrigin(Url)` and public `ipc::CallerFrame { Main, Sub(SubframeId) }` (unaddressable
+  caller → error, like a `Channel` argument), for app commands that keep something per calling
+  frame (e.g. a channel subscription) and release it on `WebviewEvent::SubframeDestroyed`. `js_event_listeners` is keyed webview → frame → event;
   `listen` / `unlisten` take `CallerFrameAddress` (an unaddressable caller cannot listen; unlisten
   only touches the caller frame's table), `listen_js` evals the registration into the caller frame,
   `emit_js_filter` keeps the 14 receiver check and delivers per frame (`emit_js_to_frame`).
@@ -217,12 +219,13 @@ the frame that made the call. Design and app usage: the "子 frame IPC" section 
   `event::listener::test::js_listeners_are_scoped_per_frame`,
   `event::plugin::tests::{listen_needs_an_addressable_frame, subframe_listeners_are_registered_and_delivered_in_their_frame, subframe_cannot_unlisten_another_frames_listener}`,
   `ipc::channel::tests::{queue_entries_are_scoped_to_the_owning_frame, purge_removes_only_the_destroyed_frame_entries, subframe_channel_is_delivered_and_fetched_by_its_frame_only}`,
-  `ipc::protocol::tests::{subframe_id_is_only_kept_for_subframes, caller_address_follows_frame_and_id, post_message_responses_go_back_to_the_calling_frame, caller_origin_is_the_request_origin}`,
+  `ipc::protocol::tests::{subframe_id_is_only_kept_for_subframes, caller_address_follows_frame_and_id, post_message_responses_go_back_to_the_calling_frame, caller_origin_is_the_request_origin, caller_frame_is_the_reported_frame}`,
   `manager::window::tests`. Re-check on bump: every `InvokeRequest { .. }` literal,
   `webview/mod.rs` `on_message` / `listen_js` / `unlisten_js`, `event/listener.rs`
   `emit_js_filter`, `ipc/channel.rs` `channel_on` / `from_callback_fn` / `fetch` / `CommandArg`,
   `ipc/protocol.rs` `handle_ipc_message` responder, `manager/window.rs` `has_js_listener`, the
-  exhaustive matches on `WebviewEvent`.
+  exhaustive matches on `WebviewEvent`, `ipc/mod.rs` `CallerFrameAddress` / `CallerFrame` against
+  `FrameAddress::of_caller`.
 - `19-tauri-subframe-ipc-injection.patch` — the bridge for subframes. tauri-runtime:
   `WebviewAttributes.subframe_bridge_scripts: Vec<String>`. `manager/webview.rs`
   `prepare_pending_webview` builds Tauri's four bridge scripts (`isTauri` / internals, invoke
