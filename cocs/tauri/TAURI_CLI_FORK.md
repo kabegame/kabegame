@@ -152,8 +152,9 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
   - `Listeners::remove_webview_js_listeners` 改 `pub(crate)`，新增公开的 `Webview::clear_js_listeners()` /
     `WebviewWindow::clear_js_listeners()`：丢弃本 webview 里由 JS 注册的全部事件监听（Rust 侧 `listen` 不受影响）。
   - 动机：JS 监听按 webview label 记录、只在销毁 webview 时清理；壁纸窗口在应用页与 WPE 网页壁纸的 `file://` 入口之间
-    反复导航，旧文档的监听会一直留在 Rust 侧，之后每个这类事件仍向新文档 eval 投递脚本。`WallpaperWindow::show_web` /
-    `show_app` 在 `navigate` 成功后调用（见 [../wpe/WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「运行时垫片与宿主协议」）。
+    反复导航，旧文档的监听会一直留在 Rust 侧，之后每个这类事件仍向新文档 eval 投递脚本。补丁 0018 起网页壁纸改成 iframe、
+    壁纸窗口不再导航（子 frame 的监听随 `SubframeDestroyed` 清理），现在只有壁纸窗口 ping 看门狗整页重载后调用它
+    （见 [../wpe/WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「ping 看门狗」）。它清的是整个 webview 的全部 frame。
 - **0012 `tauri` IPC fetch 固定 `referrerPolicy: 'origin'`**（`crates/tauri/scripts/ipc-protocol.js`）
   - 自定义协议 IPC 的 `fetch` 加 `referrerPolicy: 'origin'`，让 `Origin` 头总是文档 origin。
   - 动机：旧 Windows IPC 端点是 `http://ipc.localhost`，https 页面（畅游站点）按默认

@@ -9,6 +9,9 @@ pub mod window_mount_macos;
 // 桌面网页壁纸（x-wpe/web）的 Windows 桌面鼠标转发
 #[cfg(target_os = "windows")]
 pub mod input_forward;
+// 网页壁纸目录索引：file: 闸门与 wpe_web_pull_state 的数据源（挂接点只在 Windows）
+#[cfg(not(target_os = "android"))]
+pub mod wpe_web_dir_index;
 
 // 轮播器
 pub use rotator::WallpaperRotator;
@@ -24,13 +27,11 @@ use url::Url;
 
 /// `path` 若是网页壁纸（`x-wpe/web`）目录，解析出规范化目录与入口的 `file://` URL；其它路径返回 `None`。
 ///
-/// 桌面壁纸窗口（`WindowWallpaperManager::set_wallpaper_path` 据此整窗导航）与图库预览
-/// （`set_wpe_web_preview` 据此设根目录并返回入口，前端给 `file:` iframe 赋 `src`）共用这一份算法。
-/// WPE 网页壁纸暂只支持 Windows：其它平台恒为 `Ok(None)`，壁纸窗口停在应用页、预览退回作者预览图。
+/// 壁纸目标（`commands::wallpaper::build_wallpaper_target` 据此给出 `webEntry`，图库预览与桌面壁纸窗口的
+/// `WallpaperStage` 拿同一份目标给 `file:` iframe 赋 `src`）与窗口模式壁纸管理器（据此开关鼠标转发）共用
+/// 这一份算法。WPE 网页壁纸暂只支持 Windows：其它平台恒为 `Ok(None)`，预览与桌面都退回作者预览图。
 ///
 /// 只读一个小的 `project.json`，不 await，调用方可在锁内同步执行。
-// 调用方是窗口模式壁纸管理器（Windows / macOS 才编译）与预览命令（Windows），其它平台没有调用方。
-#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 pub(crate) fn web_entry(path: &Path) -> Result<Option<(PathBuf, Url)>, String> {
     web_entry_on_platform(cfg!(target_os = "windows"), path)
 }

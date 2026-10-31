@@ -13,22 +13,20 @@
 //! `cef-ipc://` 自定义协议 POST,转发给 Tauri `PendingWebview` 的 `ipc_handler`
 //! (JSON 通道,`Uint8Array` payload 会退化成数字数组,不能承载二进制)。
 //!
-//! 纵深防御:`cef-ipc` scheme handler 本身不区分 frame,子 frame(例如图库里跨源 iframe
-//! 承载的 WPE 网页壁纸)也能 POST 进来,此前只靠 Tauri 的 invoke key 挡住。现在只接受
-//! **主 frame**(畅游窗口的注入脚本跑在主 frame,Origin 是站点源,所以不能按「应用源」判),
-//! 或与该 webview 初始 URL **同源**的子 frame(同源子 frame 本来就能被主 frame 脚本完全访问,
-//! 放行不扩大攻击面);其余返回 400。frame 身份由 scheme factory 的 `frame.is_main()` 提供
-//! (见 [`crate::protocol::RequestFrame`]);CEF 未给出 frame 时维持原行为。
-//!
-//! frame 位置:主通道与回退通道的请求都带 [`IpcFrame`] extension(见
-//! `crate::protocol::attach_request_frame`),Tauri ACL 按它匹配 capability 的 `frames`(默认只认
-//! 主 frame)。回退通道重新构造请求时把它一并带上;上面放行的同源子 frame 记为 `sub`,所以默认
-//! capability 对它不生效;请求里没有它时记为 `Unknown`。
+//! 子 frame:Tauri 的 IPC 桥(连同本模块的回退 shim)无条件注入每个子 frame(见
+//! `subprocess.rs` 与 `WebviewAttributes::subframe_bridge_scripts`),子 frame 能调什么完全由 ACL 决定。
+//! 所以回退通道放行所有 CEF 给出了 frame 的请求,不再要求子 frame 与初始 URL 同源:请求带着
+//! [`IpcFrame`] 与子 frame 的 [`SubframeId`] extension(见 `crate::protocol::attach_request_frame`),
+//! Tauri ACL 按 frame 匹配 capability 的 `frames`(默认只认主 frame),响应送回发起调用的 frame。
+//! 回退通道重新构造请求时把两个 extension 一并带上;CEF 未给出 frame 时记为 `Unknown`。
 //!
 //! 来源判定:Tauri 按交给 `ipc_handler` 的请求 URI 区分本地 / 远程来源。取值顺序是
-//! `Origin` 头 → 发起请求的 frame URL → webview 初始 URL;`file:` 文档(WPE 网页壁纸)的
-//! `Origin` 已在协议层改写成 frame URL,所以它总被判成远程 `file:` 来源,只拿到
-//! `remote.urls` 匹配它的 capability,不会退到应用页 URL 被当成本地来源。
+//! `Origin` 头 → 发起请求的 frame URL;都拿不到时主 frame(以及 CEF 没给出 frame 的请求)退到 webview
+//! 初始 URL,子 frame **不再**退到初始 URL——初始 URL 是应用页,退过去会把子 frame 判成本地来源。子 frame
+//! 改用占位来源 [`UNATTRIBUTED_SUBFRAME_ORIGIN`](装不进 `http::Uri` 的来源同样如此):
+//! 它不匹配任何 capability,请求在 Tauri 的 ACL 被拒,错误回调送回发起调用的 frame——页面的 Promise 会
+//! reject,而不是像回 400 那样永远挂起。`file:` 文档(WPE 网页壁纸)的 `Origin` 已在协议层改写成 frame
+//! URL,所以它总被判成远程 `file:` 来源,只拿到 `remote.urls` 匹配它的 capability。
 
 use std::{borrow::Cow, sync::Mutex};
 
@@ -37,16 +35,17 @@ use http::{
     Request as HttpRequest, Response as HttpResponse, StatusCode,
 };
 use tauri_runtime::{
-    webview::{DetachedWebview, InitializationScript, IpcFrame, PendingWebview},
+    webview::{DetachedWebview, InitializationScript, IpcFrame, PendingWebview, SubframeId},
     UserEvent,
 };
 
-use crate::{
-    protocol::{web_origin, RequestFrame},
-    Cef,
-};
+use crate::{protocol::RequestFrame, Cef};
 
 pub(crate) const CEF_IPC_SCHEME: &str = "cef-ipc";
+
+/// 认不出来源的子 frame 交给 Tauri 的占位来源:不是已注册的自定义协议(Tauri 判成远程),不匹配任何
+/// capability 的 `remote.urls`,于是请求在 ACL 被拒。不要给任何 capability 配匹配一切的远程模式。
+pub(crate) const UNATTRIBUTED_SUBFRAME_ORIGIN: &str = "kabegame-unattributed://subframe/";
 
 const POST_MESSAGE_SHIM: &str = r#"
 ;(() => {
@@ -89,6 +88,11 @@ pub(crate) fn install_post_message_bridge<T: UserEvent>(
             for_main_frame_only: true,
         },
     );
+    // 子 frame 同样拿到回退通道:与 Tauri 的桥一起无条件注入,权限只看 ACL
+    pending
+        .webview_attributes
+        .subframe_bridge_scripts
+        .insert(0, POST_MESSAGE_SHIM.to_string());
 
     let ipc_handler = Mutex::new(ipc_handler);
     pending.register_uri_scheme_protocol(CEF_IPC_SCHEME, move |_label, request, responder| {
@@ -112,50 +116,59 @@ fn post_message_request(
         return Err("CEF IPC postMessage only accepts POST".to_string());
     }
 
-    if let Some(frame) = request.extensions().get::<RequestFrame>() {
-        if !frame.is_main && !is_same_origin_as(&request, fallback_url) {
-            return Err("CEF IPC postMessage is only accepted from the main frame".to_string());
-        }
-    }
-
     // Tauri 的 handle_ipc_message 会对该 URI 做 `Url::parse(...).expect(...)`;
     // opaque origin(错误页、Cloudflare 拦截页、沙箱 iframe)的 Origin 头是字面量
     // "null",能过 http::Uri 但过不了 url::Url,必须在此过滤,否则整个进程 abort。
-    // 回退顺序:Origin 头 → 发起请求的 frame URL → webview 初始 URL。已知 frame 时不再
-    // 退回初始 URL(应用页):那会让任意 opaque 来源被 Tauri 判成本地来源(`file:` frame
-    // 的 Origin 已在协议层改写,见 `crate::protocol::pin_file_frame_origin`)。
-    let frame_url = request
-        .extensions()
-        .get::<RequestFrame>()
-        .and_then(|frame| frame.url.clone());
-    let uri = request
+    // 回退顺序:Origin 头 → 发起请求的 frame URL → (仅主 frame / 未知 frame)webview 初始 URL。
+    // 子 frame 两者都拿不到时用占位来源、交给 ACL 拒绝:初始 URL 是应用页,退过去会让子 frame 被 Tauri
+    // 判成本地来源(`file:` frame 的 Origin 已在协议层改写,见 `crate::protocol::pin_file_frame_origin`)。
+    let frame = request.extensions().get::<RequestFrame>().cloned();
+    let is_subframe = frame.as_ref().is_some_and(|frame| !frame.is_main);
+    let origin = request
         .headers()
         .get(http::header::ORIGIN)
         .and_then(|value| value.to_str().ok())
         .filter(|value| url::Url::parse(value).is_ok())
-        .map(str::to_string)
-        .or(frame_url.filter(|url| url::Url::parse(url).is_ok()))
-        .unwrap_or_else(|| fallback_url.to_string());
+        .map(str::to_string);
+    let frame_url = frame
+        .as_ref()
+        .and_then(|frame| frame.url.clone())
+        .filter(|url| url::Url::parse(url).is_ok());
+    let uri = match origin.or(frame_url) {
+        Some(uri) => uri,
+        None if is_subframe => UNATTRIBUTED_SUBFRAME_ORIGIN.to_string(),
+        None => fallback_url.to_string(),
+    };
 
     if url::Url::parse(&uri).is_err() {
         return Err(format!("CEF IPC postMessage origin is not an absolute URL: {uri}"));
     }
+    // 装不进 `http::Uri` 的来源:子 frame 同样交给 ACL 拒绝,而不是回 400 让页面挂起
+    let mut http_uri = http_uri_for(&uri);
+    if is_subframe && http_uri.parse::<http::Uri>().is_err() {
+        http_uri = UNATTRIBUTED_SUBFRAME_ORIGIN.to_string();
+    }
 
-    // 重新构造请求会丢掉全部 extension:把 Tauri ACL 要用的 frame 位置带过去
+    // 重新构造请求会丢掉全部 extension:把 Tauri 要用的 frame 位置与子 frame 标识带过去
     let ipc_frame = request
         .extensions()
         .get::<IpcFrame>()
         .copied()
         .unwrap_or(IpcFrame::Unknown);
+    let subframe_id = request.extensions().get::<SubframeId>().cloned();
 
     let body = String::from_utf8(request.into_body())
         .map_err(|_| "CEF IPC postMessage body must be UTF-8".to_string())?;
 
-    HttpRequest::builder()
-        .uri(http_uri_for(&uri))
+    let mut rebuilt = HttpRequest::builder()
+        .uri(http_uri)
         .extension(ipc_frame)
         .body(body)
-        .map_err(|error| format!("invalid CEF IPC postMessage request: {error}"))
+        .map_err(|error| format!("invalid CEF IPC postMessage request: {error}"))?;
+    if let Some(subframe_id) = subframe_id {
+        rebuilt.extensions_mut().insert(subframe_id);
+    }
+    Ok(rebuilt)
 }
 
 /// `http::Uri` 不接受空 authority，`file:///D:/…` 装不进请求 URI；改写成等价的
@@ -168,23 +181,6 @@ fn http_uri_for(url: &str) -> String {
         }
         _ => url.to_string(),
     }
-}
-
-/// 请求的 `Origin` 是否与 webview 初始 URL 同源(子 frame 白名单)。缺 Origin、opaque
-/// (`null`)或解析失败一律视为不同源。
-fn is_same_origin_as(request: &HttpRequest<Vec<u8>>, initial_url: &str) -> bool {
-    let Some(origin) = request
-        .headers()
-        .get(http::header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| url::Url::parse(value).ok())
-    else {
-        return false;
-    };
-    let Ok(initial) = url::Url::parse(initial_url) else {
-        return false;
-    };
-    web_origin(&origin).is_some_and(|origin| Some(origin) == web_origin(&initial))
 }
 
 fn text_response(status: StatusCode, message: String) -> HttpResponse<Cow<'static, [u8]>> {
@@ -209,7 +205,14 @@ mod tests {
     use super::*;
 
     fn request(origin: Option<&str>, frame: Option<bool>) -> HttpRequest<Vec<u8>> {
-        request_from(origin, frame.map(|is_main| RequestFrame { is_main, url: None }))
+        request_from(
+            origin,
+            frame.map(|is_main| RequestFrame {
+                is_main,
+                url: None,
+                id: (!is_main).then(|| "2-5".to_string()),
+            }),
+        )
     }
 
     fn request_from(origin: Option<&str>, frame: Option<RequestFrame>) -> HttpRequest<Vec<u8>> {
@@ -221,8 +224,11 @@ mod tests {
         }
         let mut request = builder.body(b"{}".to_vec()).unwrap();
         if let Some(frame) = frame {
-            // 与协议层 `attach_request_frame` 一致:两种 extension 一起插
+            // 与协议层 `attach_request_frame` 一致:frame 位置、子 frame 标识与 RequestFrame 一起插
             request.extensions_mut().insert(frame.ipc_frame());
+            if let Some(id) = frame.subframe_id() {
+                request.extensions_mut().insert(id);
+            }
             request.extensions_mut().insert(frame);
         }
         request
@@ -232,20 +238,27 @@ mod tests {
         request.extensions().get::<IpcFrame>().copied()
     }
 
+    fn subframe_id_of(request: &HttpRequest<String>) -> Option<SubframeId> {
+        request.extensions().get::<SubframeId>().cloned()
+    }
+
     #[test]
-    fn ipc_frame_survives_the_rebuilt_request() {
-        // 主 frame
+    fn frame_and_subframe_id_survive_the_rebuilt_request() {
+        // 主 frame:没有子 frame 标识
         let rebuilt =
             post_message_request(request(Some("https://example.com"), Some(true)), APP).unwrap();
         assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Main));
-        // 放行的同源子 frame 记为 sub,默认 capability 不对它生效
+        assert_eq!(subframe_id_of(&rebuilt), None);
+        // 子 frame:记为 sub 并带上标识,默认 capability 不对它生效,响应送回它
         let rebuilt =
             post_message_request(request(Some("tauri://localhost"), Some(false)), APP).unwrap();
         assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Sub));
+        assert_eq!(subframe_id_of(&rebuilt), Some(SubframeId::new("2-5")));
         // 没有 frame 信息:Unknown
         let rebuilt =
             post_message_request(request(Some("https://example.com"), None), APP).unwrap();
         assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Unknown));
+        assert_eq!(subframe_id_of(&rebuilt), None);
     }
 
     const APP: &str = "tauri://localhost/";
@@ -256,30 +269,74 @@ mod tests {
         assert!(post_message_request(request(Some("https://example.com"), Some(true)), APP).is_ok());
     }
 
+    /// 跨源子 frame 不再被回退通道挡住：由 ACL 按 `Sub` 判定。
     #[test]
-    fn cross_origin_subframe_is_rejected() {
-        // 图库里承载 WPE 网页壁纸的跨源 iframe
-        assert!(post_message_request(request(Some("http://127.0.0.1:33050"), Some(false)), APP).is_err());
-        assert!(post_message_request(request(Some("null"), Some(false)), APP).is_err());
-        assert!(post_message_request(request(None, Some(false)), APP).is_err());
-        assert!(post_message_request(request(Some("tauri://evil"), Some(false)), APP).is_err());
-        assert!(post_message_request(request(Some("ipc://localhost"), Some(false)), APP).is_err());
+    fn cross_origin_subframe_is_accepted_as_sub() {
+        for origin in [
+            "http://127.0.0.1:33050",
+            "tauri://evil",
+            "https://example.org",
+        ] {
+            let rebuilt = post_message_request(request(Some(origin), Some(false)), APP).unwrap();
+            assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Sub), "{origin}");
+            // 来源是子 frame 自己的 Origin,不会变成应用页
+            assert!(!tauri_url(rebuilt).starts_with(APP), "{origin}");
+        }
+        // 同源子 frame 同样记为 sub
+        let rebuilt =
+            post_message_request(request(Some("tauri://localhost"), Some(false)), APP).unwrap();
+        assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Sub));
     }
 
+    /// 子 frame 没有可用的 Origin、也没有 frame URL:交给 ACL 拒绝(占位来源),不退到应用页初始 URL。
     #[test]
-    fn same_origin_subframe_is_accepted() {
-        assert!(post_message_request(request(Some("tauri://localhost"), Some(false)), APP).is_ok());
+    fn subframe_without_origin_or_frame_url_is_rejected() {
+        for origin in [None, Some("null")] {
+            let rebuilt = post_message_request(request(origin, Some(false)), APP).unwrap();
+            assert_eq!(ipc_frame_of(&rebuilt), Some(IpcFrame::Sub));
+            assert_eq!(subframe_id_of(&rebuilt), Some(SubframeId::new("2-5")));
+            assert_eq!(tauri_url(rebuilt), UNATTRIBUTED_SUBFRAME_ORIGIN);
+        }
+        // opaque 来源的 srcdoc iframe:用 frame URL `about:srcdoc`,Tauri 判成远程来源、ACL 拒绝
+        let srcdoc = Some(RequestFrame {
+            is_main: false,
+            url: Some("about:srcdoc".to_string()),
+            id: Some("2-7".to_string()),
+        });
+        let rebuilt = post_message_request(request_from(Some("null"), srcdoc), APP).unwrap();
+        assert_eq!(tauri_url(rebuilt), "about:srcdoc");
+        // 占位来源不是本地来源:不是应用页初始 URL 的 scheme / host
+        let placeholder = url::Url::parse(UNATTRIBUTED_SUBFRAME_ORIGIN).unwrap();
+        let app = url::Url::parse(APP).unwrap();
+        assert_ne!(placeholder.scheme(), app.scheme());
+        // 有 frame URL 时用它(sandbox iframe 的 Origin 是 null)
+        let sub_at = |url: &str| {
+            Some(RequestFrame {
+                is_main: false,
+                url: Some(url.to_string()),
+                id: Some("2-6".to_string()),
+            })
+        };
+        let rebuilt = post_message_request(
+            request_from(Some("null"), sub_at("https://ads.example/x")),
+            APP,
+        )
+        .unwrap();
+        assert_eq!(tauri_url(rebuilt), "https://ads.example/x");
     }
 
     #[test]
     fn unknown_frame_keeps_previous_behavior() {
         assert!(post_message_request(request(Some("https://example.com"), None), APP).is_ok());
+        let rebuilt = post_message_request(request(None, None), APP).unwrap();
+        assert_eq!(tauri_url(rebuilt), APP);
     }
 
     fn main_frame_at(url: &str) -> Option<RequestFrame> {
         Some(RequestFrame {
             is_main: true,
             url: Some(url.to_string()),
+            id: Some("1-1".to_string()),
         })
     }
 
@@ -313,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_frame_url_falls_back_to_initial_url() {
+    fn unknown_main_frame_url_falls_back_to_initial_url() {
         let request = post_message_request(request(None, Some(true)), APP).unwrap();
         assert_eq!(tauri_url(request), APP);
     }

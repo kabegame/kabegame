@@ -19,6 +19,7 @@ mod imp {
         dpi::{PhysicalPosition, PhysicalSize, Rect as RuntimeRect, Size},
         webview::{
             DetachedWebview, PageLoadEvent, PendingWebview, PermissionKind, PermissionResponse,
+            SubframeId,
         },
         window::{DragDropEvent, WebviewEvent, WindowEvent, WindowId},
         Cookie, Error, Result, UserEvent, WebviewDispatch, WebviewEventId,
@@ -287,6 +288,9 @@ mod imp {
         }
         fn eval_script<S: Into<String>>(&self, script: S) -> Result<()> {
             self.send(runtime::WebviewMessage::Eval(script.into()))
+        }
+        fn eval_script_in_subframe(&self, id: &SubframeId, script: String) -> Result<()> {
+            self.send(runtime::WebviewMessage::EvalInSubframe(id.clone(), script))
         }
         fn reparent(&self, _: WindowId) -> Result<()> {
             unsupported()
@@ -813,15 +817,21 @@ mod imp {
                     {
                         return None;
                     }
-                    // 按发起 frame 分档：
+                    // 按发起方分档（见 file_access 模块注释）：
                     // - 应用页主 frame 的子资源：登记了 0005 的 label 免检（图库媒体走 file://，补丁 0006）；
-                    // - 子 frame 的导航、主 frame 的导航、file: 文档（含壁纸窗口整窗 file: 时的主 frame）
-                    //   的子资源：按根目录。
+                    // - 其余：认出发起方（file: 文档 / 应用页发起的子 frame 导航 / 无法归属），交给闸门
+                    //   按应用解析器给出的访问范围裁决。
                     // 发起方 origin 是建工厂时钉死的文档 origin（子 frame 导航为 "null"），比 frame.url()
-                    // 的缓存可靠；两者任一是 file: 就走闸门。
+                    // 的缓存可靠；两者任一是 file: 就不免检。
                     let frame_is_main = frame.as_ref().is_some_and(|frame| frame.is_main() == 1);
                     let frame_url = frame
+                        .as_ref()
                         .map(|frame| CefString::from(&frame.url()).to_string())
+                        .unwrap_or_default();
+                    let parent_url = frame
+                        .as_ref()
+                        .and_then(|frame| frame.parent())
+                        .map(|parent| CefString::from(&parent.url()).to_string())
                         .unwrap_or_default();
                     let initiator = request_initiator
                         .map(|initiator| initiator.to_string())
@@ -835,7 +845,14 @@ mod imp {
                     if app_page_subresource && crate::file_access::app_page_open(&self.label) {
                         return None;
                     }
-                    return Some(FileDocumentGuardHandler::new(self.label.clone()));
+                    let requester = crate::file_access::classify_file_requester(
+                        frame_is_main,
+                        is_navigation != 0,
+                        &frame_url,
+                        &parent_url,
+                        &initiator,
+                    );
+                    return Some(FileDocumentGuardHandler::new(self.label.clone(), requester));
                 }
                 let referrer = browser
                     .and_then(|b| b.main_frame())
@@ -1038,11 +1055,12 @@ mod imp {
         }
     }
 
-    // 开了文件访问的 webview 的 `file:` 请求闸门：每次请求时读取该 label 当前允许的
-    // 根目录（壁纸切换时由应用更新），只放行根目录内的普通文件。
+    // 开了文件访问的 webview 的 `file:` 请求闸门：每次请求时按发起方向应用注册的解析器要访问范围
+    // （库内网页壁纸的目录 + 用户选择），只放行范围内的普通文件。
     wrap_resource_request_handler! {
         pub(crate) struct FileDocumentGuardHandler {
             label: String,
+            requester: crate::file_access::FileRequester,
         }
         impl ResourceRequestHandler {
             fn on_before_resource_load(
@@ -1056,7 +1074,9 @@ mod imp {
                     return ReturnValue::CANCEL;
                 };
                 let url = CefString::from(&request.url()).to_string();
-                let access = crate::file_access::file_document_access(&self.label).unwrap_or_default();
+                let access =
+                    crate::file_access::registered_scope_for_request(&self.requester, &url)
+                        .unwrap_or_default();
                 match crate::file_access::check_file_request(&url, &access) {
                     Ok(_) => ReturnValue::CONTINUE,
                     Err(reason) => {
@@ -1065,8 +1085,9 @@ mod imp {
                             .map(|root| root.display().to_string())
                             .unwrap_or_else(|| "<none>".to_string());
                         tracing::info!(
-                            "deny file: {url} (outside {root}; grants {}; {reason:?}) webview '{}'",
+                            "deny file: {url} (outside {root}; grants {}; {reason:?}; requester {:?}) webview '{}'",
                             access.grants.len(),
+                            self.requester,
                             self.label
                         );
                         ReturnValue::CANCEL
@@ -1268,6 +1289,7 @@ mod imp {
             request_handler: Option<RequestHandler>,
             life_span_handler: Option<LifeSpanHandler>,
             drag_handler: Option<DragHandler>,
+            frame_handler: FrameHandler,
         }
         impl Client {
             fn load_handler(&self) -> Option<LoadHandler> { Some(self.load_handler.clone()) }
@@ -1278,6 +1300,30 @@ mod imp {
             fn request_handler(&self) -> Option<RequestHandler> { self.request_handler.clone() }
             fn life_span_handler(&self) -> Option<LifeSpanHandler> { self.life_span_handler.clone() }
             fn drag_handler(&self) -> Option<DragHandler> { self.drag_handler.clone() }
+            fn frame_handler(&self) -> Option<FrameHandler> { Some(self.frame_handler.clone()) }
+        }
+    }
+
+    wrap_frame_handler! {
+        // 子 frame 销毁时向该 webview 的事件回调发 `WebviewEvent::SubframeDestroyed`,Tauri 据此删掉这个
+        // frame 登记的 JS 监听与未取走的 Channel 数据。主 frame 不报:它按 webview 寻址,清理靠
+        // `clear_js_listeners`。CEF 跨源加载子 frame 时先建、后销毁的临时 frame(从未 attach、没登记过
+        // 监听)也会报一次,Tauri 侧删除是空操作;沿用本 client 的弹窗里的 frame 同理。
+        pub(crate) struct SubframeLifecycleHandler {
+            emitter: runtime::WebviewEventEmitter,
+        }
+        impl FrameHandler {
+            fn on_frame_destroyed(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>) {
+                let Some(frame) = frame else { return };
+                if frame.is_main() == 1 {
+                    return;
+                }
+                let id = CefString::from(&frame.identifier()).to_string();
+                if id.is_empty() {
+                    return;
+                }
+                (self.emitter)(WebviewEvent::SubframeDestroyed(SubframeId::new(id)));
+            }
         }
     }
 
@@ -1317,6 +1363,7 @@ mod imp {
         // redirect_tab_popups 区分。devtools 走 on_before_dev_tools_popup,不受影响。
         pub(crate) struct PopupToNavigationLifeSpanHandler {
             initialization_scripts_payload: String,
+            subframe_bridge_payload: String,
             redirect_tab_popups: bool,
         }
         impl LifeSpanHandler {
@@ -1339,6 +1386,7 @@ mod imp {
                 if let Some(extra_info) = extra_info {
                     match crate::subprocess::initialization_scripts_extra_info(
                         &self.initialization_scripts_payload,
+                        &self.subframe_bridge_payload,
                     ) {
                         Ok(initialization_scripts) => *extra_info = Some(initialization_scripts),
                         Err(error) => tracing::warn!(
@@ -1512,6 +1560,7 @@ mod imp {
         mut pending: PendingWebview<T, Cef<T>>,
     ) -> Result<(CefWebviewState, BrowserView)> {
         let context_for_drag = context.clone();
+        let frame_events = runtime::webview_event_emitter(webview_id, context.clone());
         let detached = detached_webview(pending.label.clone(), window_id, webview_id, context);
         let initial_url = pending.url.clone();
         ipc::install_post_message_bridge(&mut pending, detached, initial_url);
@@ -1540,9 +1589,24 @@ mod imp {
                 "failed to encode CEF initialization scripts: {error}"
             ))))
         })?;
+        // Tauri 的 IPC 桥(含本 runtime 的回退 shim):渲染进程无条件注入每个子 frame,先于其它初始化脚本;
+        // 子 frame 能调什么由 ACL 决定(见 tauri 补丁 0019 与 subprocess.rs)。
+        let subframe_bridge_scripts =
+            std::mem::take(&mut pending.webview_attributes.subframe_bridge_scripts);
+        let subframe_bridge_payload = crate::subprocess::encode_subframe_bridge_scripts(
+            &subframe_bridge_scripts,
+        )
+        .map_err(|error| {
+            Error::CreateWebview(Box::new(io::Error::other(format!(
+                "failed to encode CEF subframe bridge scripts: {error}"
+            ))))
+        })?;
         let mut initialization_scripts_extra_info =
-            crate::subprocess::initialization_scripts_extra_info(&initialization_scripts_payload)
-                .map_err(|error| Error::CreateWebview(Box::new(io::Error::other(error))))?;
+            crate::subprocess::initialization_scripts_extra_info(
+                &initialization_scripts_payload,
+                &subframe_bridge_payload,
+            )
+            .map_err(|error| Error::CreateWebview(Box::new(io::Error::other(error))))?;
         // 登记过文件访问能力的 webview：同一个字典里按能力带上 bool 键（值都为 true）——
         // `kabegame.allow_file_access_from_file_urls`（CEF 补丁 0004：只给这个 browser 打开
         // `allow_file_access_from_file_urls`）与 `kabegame.allow_local_resources`（补丁 0005：
@@ -1588,6 +1652,7 @@ mod imp {
         let redirect_tab_popups = pending.new_window_handler.take().is_some();
         let life_span_handler = Some(PopupToNavigationLifeSpanHandler::new(
             initialization_scripts_payload,
+            subframe_bridge_payload,
             redirect_tab_popups,
         ));
         // 与 wry 后端一致:`drag_drop_handler_enabled` 为 false 时不挂 handler,
@@ -1612,6 +1677,7 @@ mod imp {
             request_handler,
             life_span_handler,
             drag_handler,
+            SubframeLifecycleHandler::new(frame_events),
         );
         let mut delegate = ViewsBrowserViewDelegate::new(webview_label, pending_protocols);
         let url = pending.url.clone();

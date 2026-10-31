@@ -40,12 +40,13 @@ pub struct WallpaperTarget {
     #[serde(rename = "type")]
     pub media_type: Option<String>,
     /// 浏览器兼容副本：普通视频仅在不可直接播放时有值；WPE 视频始终有值；WPE 网页为空
-    /// （页面以入口 `file://` 加载：桌面由 `WindowWallpaperManager` 整窗导航，图库预览由
-    /// `set_wpe_web_preview` 设好根目录后返回入口、前端给 iframe 赋 `src`，入口都由
-    /// `wallpaper::web_entry` 现算）。
+    /// （页面以入口 `file://` 加载，见 `web_entry`）。
     pub compatible_path: Option<String>,
     /// 目录型 WPE 视频壁纸的作者默认播放属性；其它类型为 null。
     pub wpe_video: Option<WpeVideoProps>,
+    /// 网页壁纸（`x-wpe/web`）的入口 `file://`，由 `wallpaper::web_entry` 现算：图库预览与桌面壁纸窗口的
+    /// `WallpaperStage` 直接把它赋给 web 层 iframe 的 `src`。其它类型、非 Windows、读 `project.json` 失败为 None。
+    pub web_entry: Option<String>,
 }
 
 pub async fn get_current_wallpaper_target_from_settings(
@@ -79,6 +80,7 @@ async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
     } else {
         None
     };
+    let web_entry = web_entry_of(&info).await;
 
     WallpaperTarget {
         id: info.id,
@@ -86,6 +88,27 @@ async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
         media_type: info.media_type,
         compatible_path: info.compatible_path,
         wpe_video,
+        web_entry,
+    }
+}
+
+/// 网页壁纸的入口 `file://`（读一个小的 `project.json`，放 blocking 线程）；其它类型不读盘。
+async fn web_entry_of(info: &ImageInfo) -> Option<String> {
+    let kind = kabegame_core::media::image_type::wpe_kind(info.media_type.as_deref());
+    if kind.as_deref() != Some("web") {
+        return None;
+    }
+    let dir = std::path::PathBuf::from(&info.local_path);
+    match tokio::task::spawn_blocking(move || crate::wallpaper::web_entry(&dir)).await {
+        Ok(Ok(entry)) => entry.map(|(_, entry)| entry.to_string()),
+        Ok(Err(error)) => {
+            tracing::warn!("网页壁纸 {} 没有可用入口: {error}", info.id);
+            None
+        }
+        Err(error) => {
+            tracing::warn!("读取网页壁纸 {} 入口失败: {error}", info.id);
+            None
+        }
     }
 }
 

@@ -915,13 +915,9 @@ pub(crate) fn configure_app(
             wpe_scan,
             wpe_recognize_dir,
             #[cfg(not(target_os = "android"))]
-            get_wpe_web_state,
-            #[cfg(not(target_os = "android"))]
             get_wpe_web_properties,
             #[cfg(not(target_os = "android"))]
             set_wpe_web_user_properties,
-            #[cfg(not(target_os = "android"))]
-            set_wpe_web_preview,
             #[cfg(not(target_os = "android"))]
             wpe_web_pull_state,
             get_busy_tasks_snapshot,

@@ -65,6 +65,11 @@ pub fn init_heavy_globals() -> Result<(), String> {
 
     // 迁移与阻塞回填的进度由 Storage::new() 直接写进 startup_state。
     Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
+    // 网页壁纸目录索引（file: 闸门与网页壁纸拉取的数据源）：必须先于任何网页壁纸 iframe 就绪。
+    // 主窗口要等启动页 Ready 才会打开预览、壁纸窗口在 init_post 才建，所以放在这里而不是 init_post。
+    // 网页壁纸只在 Windows 提供。
+    #[cfg(all(not(feature = "web"), target_os = "windows"))]
+    crate::wallpaper::wpe_web_dir_index::init_wpe_web_dir_index();
     startup_state::set(StartupPhase::Services);
     let failed_count = Storage::global()
         .mark_pending_running_tasks_as_failed()

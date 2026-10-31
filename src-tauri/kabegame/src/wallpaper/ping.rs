@@ -33,7 +33,9 @@ impl Pinger {
         Self { reset }
     }
 
-    /// 导航成功后重新起算，并作废旧文档的迟到应答。
+    /// 重新起算，并作废之前文档的迟到应答。壁纸窗口不再导航（网页壁纸是 iframe），目前没有调用方；
+    /// 整页重载由看门狗自己处理。
+    #[allow(dead_code)]
     pub fn reset(&self) {
         let _ = self.reset.send(());
     }

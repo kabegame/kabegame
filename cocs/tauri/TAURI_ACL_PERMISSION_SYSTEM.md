@@ -6,7 +6,7 @@
 
 - 需要给某个窗口（如 `surf`）新增 IPC 权限，或新增一个 `#[tauri::command]`。
 - 出现 `invoke` 命令被拒绝、提示命令不可用/找不到，或 `listen` 报 ``event `x` is not allowed to be listened by ACL``。
-- `emit_to` 定向事件送错 / 收不到，子 frame（iframe）调用 IPC 被拒。
+- `emit_to` 定向事件送错 / 收不到，子 frame（iframe）调用 IPC 被拒、收不到事件或 Channel 消息。
 - 调整 `capabilities/*.json`、`permissions/*.toml`、`tauri.conf.json` 时做变更评估。
 
 ## 涉及文件
@@ -19,14 +19,18 @@
 - `src-tauri/kabegame/permissions/*.toml`（只剩 `crawler` / `surf` / `surf-navbar` / `wpe-web`）
 - `src-tauri/kabegame/build.rs`
 - `src-tauri/kabegame/src/lib.rs`（`configure_app`：`acl_exempt_webview` 与 `generate_handler!`）
-- `src-tauri/tauri-runtime-cef/src/protocol.rs`（`attach_request_frame`）、`ipc.rs`（`cef-ipc` 回退通道带上 frame）
-- `third-patches/tauri/0014`–`0017`（见 [third-patches/tauri/README.md](../../third-patches/tauri/README.md)）
+- `src-tauri/tauri-runtime-cef/src/protocol.rs`（`attach_request_frame`：`IpcFrame` + 子 frame 的 `SubframeId`）、
+  `ipc.rs`（`cef-ipc` 回退通道带上 frame）、`runtime.rs`（`EvalInSubframe`）、`webview.rs`（`on_frame_destroyed`）、
+  `subprocess.rs`（子 frame 注入桥脚本）
+- `third-patches/tauri/0014`–`0019`（见 [third-patches/tauri/README.md](../../third-patches/tauri/README.md)）
 
 参考（工作区 Tauri 源码，`deno task patch tauri` 套上补丁后）：
 
 - `third/tauri/crates/tauri/src/webview/mod.rs`（`on_message`）
 - `third/tauri/crates/tauri/src/ipc/authority.rs`（`resolve_access`、`is_exempt`）
-- `third/tauri/crates/tauri/src/event/{listener.rs,plugin.rs}`（投递与 `listen`）
+- `third/tauri/crates/tauri/src/event/{listener.rs,plugin.rs}`（按 frame 的投递与 `listen`）
+- `third/tauri/crates/tauri/src/ipc/{channel.rs,protocol.rs}`（Channel 与回退响应按 frame 回送）
+- `third/tauri/crates/tauri/src/manager/webview.rs`（`subframe_bridge_scripts`、`SubframeDestroyed` 清理）
 - `third/tauri/crates/tauri-build/src/acl.rs`
 - `third/tauri/crates/tauri-utils/src/acl/{capability.rs,resolved.rs,build.rs}`
 
@@ -50,12 +54,12 @@
 - `capabilities/surf.json`：畅游内容页（远程站点），只有 `surf` 命令组，没有事件权限。
 - `capabilities/surf-navbar.json`：畅游导航栏（本地页面），`surf` + `surf-navbar` 两组命令，`listen` 只能听
   `surf-url-changed` / `surf-collect-state`，外加 `allow-unlisten`。
-- `capabilities/wpe-web.json`：桌面壁纸窗口里 `file://` 加载的 WPE 网页壁纸（`wpe-web-capability`，`local: false`、
-  `remote.urls: ["file:///*"]`），`listen` 只能听 `wallpaper-ping` / `setting-change` / `image-changed` / `images-change`，
-  外加 `allow-unlisten` 与 `permissions/wpe-web.toml` 的 `wpe_web_pull_state` / `wallpaper_pong`；只在桌面分支的
-  `tauri.conf.json.handlebars` 里启用。`frames` 省略即 `main`，网页壁纸里再嵌的 `file:` iframe 拿不到这些权限。
-  它只绑定 `wallpaper` 窗口：图库预览的 `file:` iframe 在主窗口里是子 frame，零授权；预览根目录命令
-  `set_wpe_web_preview` 由主窗口应用页调用（免 ACL，命令内按 label 拒绝壁纸窗口），不进 `wpe-web.toml`。
+- `capabilities/wpe-web.json`：WPE 网页壁纸页面，即 `WallpaperStage` web 层里的 `file:` iframe（`wpe-web-capability`，
+  `windows: ["main", "wallpaper"]`——图库预览在主窗口、桌面在壁纸窗口，同一份；`frames: "sub"`——只给 iframe，两个窗口的
+  主 frame 都是应用页、靠特赦；`local: false`、`remote.urls: ["file:///*"]`）。`listen` 只能听 `wallpaper-ping` /
+  `setting-change` / `image-changed` / `images-change`，外加 `allow-unlisten` 与 `permissions/wpe-web.toml` 的
+  `wpe_web_pull_state` / `wallpaper_pong`；只在桌面分支的 `tauri.conf.json.handlebars` 里启用。网页壁纸里再嵌的 `file:`
+  iframe 同样匹配（同一作者的内容，信任级别相同）。
 
 ### 3) build 入口
 
@@ -131,7 +135,7 @@ if (plugin_command.is_some() || has_app_acl_manifest || !is_local)
 | 畅游内容页（远程站点，注入脚本） | `surf.toml` | `surf-capability` |
 | 畅游导航栏（本地页面） | `surf-navbar.toml`（另有 `surf` 组） | `surf-navbar-capability` |
 | WebView 爬虫页面 | `crawler.toml` | `crawler-capability` |
-| 桌面 WPE 网页壁纸（`file://` 主 frame） | `wpe-web.toml` | `wpe-web-capability` |
+| WPE 网页壁纸（预览 / 桌面的 `file:` iframe） | `wpe-web.toml` | `wpe-web-capability`（`frames: "sub"`） |
 
 漏登记在编译期毫无征兆，只在运行时报 `Command <name> not allowed by ACL`。改完 `.toml` 需要重新编译
 （`build.rs` 重新生成授权数据），dev 下重启 `tauri dev` 即可。
@@ -194,7 +198,8 @@ JSON 校验，tauri-build 不报错——**拼错键名不会有构建期提示*
 
 ACL 的判定维度在「来源（`local` / `remote.urls`）+ window / webview label」之外加上**发起请求的 frame**。capability 新增字段
 `frames`：`"main"`（默认，只认最外层主 frame）、`"sub"`（只认 iframe）、`"any"`（都认，也包括 runtime 给不出 frame 的请求）。
-默认 `main` 与「子 frame 原本就没有 IPC」一致，现有 capability 一行不改就收紧成只认主 frame。显式 deny 不看 frame。
+现有 capability 一行不改就只认主 frame；补丁 0019 起 CEF 下每个子 frame 都有 IPC 桥（见「子 frame IPC」），`frames` 是子 frame
+能做什么的唯一闸门。显式 deny 不看 frame。
 
 frame 由 runtime 从浏览器进程取得、放进 `http::Request` 的 extension（`tauri::webview::IpcFrame`），页面能伪造请求头，
 但伪造不了 extension：
@@ -202,7 +207,7 @@ frame 由 runtime 从浏览器进程取得、放进 `http::Request` 的 extensio
 - 桌面 CEF：`tauri-runtime-cef` 的 `protocol::attach_request_frame` 给每个自定义协议请求插入 `IpcFrame`（主 frame → `Main`，
   子 frame → `Sub`，CEF 没给出 frame 时 → `Unknown`，只有 `frames: "any"` 能匹配）；`cef-ipc` 回退通道重新构造请求时把它带上。
   CEF 只对 service worker 与 `CefURLRequest` 给不出 frame；dedicated worker 的请求记在创建它的 frame 上，子 frame 借 worker 绕不过去。
-  回退通道本来就只接受主 frame 与同源子 frame，后者现在记为 `Sub`，默认 capability 对它不生效。
+  子 frame 另带路由用的 `SubframeId`（见「子 frame IPC」）；回退通道放行所有 CEF 给出了 frame 的请求，交给 ACL 判定。
 - Android（wry）：不上报，请求里没有这个 extension 时 Tauri 按主 frame 处理（wry 的 IPC 只收主框架消息）。
 
 平台限制：同源子 frame 可以直接用父页面的 `__TAURI_INTERNALS__`，这样发出的请求在浏览器看来就是父 frame 发的，记为主 frame。
@@ -221,32 +226,77 @@ debug-assertions 编译时存在；本仓根 `Cargo.toml` 的 `[profile.dev.pack
 - invoke 不因 ACL 被拒，显式 deny 也一样；
 - `listen` 不受事件名作用域限制。
 
-ACL 仍照常解析：已授权命令的作用域照常传给命令，未授权的命令拿到空作用域。本应用特赦 `main` 与 `wallpaper`。壁纸窗口导航到
-网页壁纸后主 frame 是远程 `file:` 来源，不再特赦，只剩 `wpe-web-capability`；任何子 frame 也不特赦（图库预览 iframe、插件详情
-iframe 本来就拿不到 invoke key）。
+ACL 仍照常解析：已授权命令的作用域照常传给命令，未授权的命令拿到空作用域。本应用特赦 `main` 与 `wallpaper`，两个窗口的主
+frame 始终是应用页（网页壁纸是子 frame 里的 iframe，窗口不再导航）；任何子 frame 都不特赦。
 
 | 请求方 | frame | invoke 应用命令 | listen `images-added` | listen `setting-change` |
 | --- | --- | --- | --- | --- |
 | 主窗口 / 壁纸窗口应用页 | 主 | 放行（特赦） | 放行 | 放行 |
-| 壁纸窗口网页壁纸（`file:`） | 主 | 只有 `wpe_web_pull_state` / `wallpaper_pong` | 拒绝 | 放行 |
-| 网页壁纸里的 `file:` iframe | 子 | 拒绝（frames 不匹配） | 拒绝 | 拒绝 |
-| 主窗口里同源 iframe 直接 fetch `ipc://` | 子 | 拒绝（特赦只认主 frame） | 拒绝 | 拒绝 |
+| 预览网页壁纸 `file:` iframe（主窗口） | 子 | 只有 `wpe_web_pull_state` / `wallpaper_pong`（`wpe-web-capability`） | 拒绝 | 放行 |
+| 桌面网页壁纸 `file:` iframe（壁纸窗口） | 子 | 同上 | 拒绝 | 放行 |
+| 网页壁纸里再嵌的 `file:` iframe | 子 | 同上（同一份 capability） | 拒绝 | 放行 |
+| 插件详情 EJS iframe（`about:srcdoc`，opaque） | 子 | 拒绝（有桥，没有 capability 匹配） | 拒绝 | 拒绝 |
+| 主窗口里同源 iframe | 子 | 拒绝（特赦只认主 frame） | 拒绝 | 拒绝 |
 | 畅游导航栏 | 主 | `surf` / `surf-navbar` 两组 | 拒绝 | 拒绝（只能听两个 surf 事件） |
 | 畅游外部页面 | 主 | 只有 `surf` 组 | 拒绝（没有事件权限） | 拒绝 |
+| 畅游外部页面里的任何 iframe（含第三方广告） | 子 | 拒绝（有桥，`surf-capability` 只认主 frame） | 拒绝 | 拒绝 |
 | CEF 给不出 frame 的请求 | Unknown | 拒绝，除非 capability 写了 `frames: "any"` | 同左 | 同左 |
 
-图库预览的网页壁纸 iframe 经 `postMessage` 请主窗口代为监听（`wpeWebBridge.ts`），主窗口特赦后宿主的 listen 没有事件名限制，
-所以代办只接受白名单 `setting-change` / `image-changed` / `images-change`，这是预览 iframe 唯一的闸门。
+## 子 frame IPC（tauri 补丁 0018–0019）
+
+frame 是 IPC 的基本单位：子 frame 有自己的 Tauri 桥，Tauri 送回页面的东西都送到发起调用的那个 frame。
+
+- **注入**：Tauri 把自己的四段桥脚本（`isTauri` / internals、invoke 脚本、metadata、`init.js`）另交给 runtime
+  （`WebviewAttributes::subframe_bridge_scripts`，补丁 0019）；CEF runtime 在渲染进程里**无条件**先把它们（连同 `cef-ipc`
+  回退 shim）注入每个子 frame，再跑原有的初始化脚本。注入范围不从 capability 推断：规则只有一条，每个子 frame 都有桥，
+  能调什么只看 ACL。插件初始化脚本与 isolation pattern 不进子 frame。wry 不上报 frame，必须忽略这份脚本（Android 不变：
+  子 frame 没有桥）。代价是 invoke key 对所有子 frame 可见，包括畅游页里的第三方 iframe——补丁 0016 之后 key 只能拿到该 frame
+  自己的 capability，不再是闸门。
+- **路由**：子 frame 的请求在 `IpcFrame::Sub` 旁再带一个不透明的 `SubframeId`（CEF 的 frame identifier，放在请求 extension 里，
+  页面伪造不了）；主 frame 不带，按 webview 寻址（CEF 的主 frame id 跨源导航会变，`clear_js_listeners` 等语义也按 webview 定义）。
+  Tauri 用 `FrameAddress { Main, Sub(SubframeId) }` 表示投递目标，存在 `InvokeMessage` 上显式传递（不让 `Webview` 隐式携带，
+  免得命令存下的 `Webview` 之后 eval 进一个已销毁的 frame）。`IpcFrame::Unknown` 与没有 id 的 `Sub` 没法回送：`listen` 报
+  ``event `<name>` cannot be listened: the calling frame cannot receive events``，Channel 参数报错，回退响应丢弃。
+- **四类回送数据**都 eval 到调用方 frame（主 frame 仍是原来的 `webview.eval`，子 frame 经 runtime 的
+  `eval_script_in_subframe`，frame 已销毁时静默丢弃）：
+
+  | 来源 | 主 frame 发起 | 子 frame 发起 |
+  | --- | --- | --- |
+  | `listen` 登记 / 事件投递 | `webview.eval`（不变） | `eval_script_in_subframe(id)` |
+  | Channel 消息（命令参数里的 Channel） | `webview.eval`（不变） | `eval_script_in_subframe(id)` |
+  | `cef-ipc` 回退通道的响应 | `webview.eval`（不变） | `eval_script_in_subframe(id)` |
+  | `ipc://` 主通道响应 | HTTP 响应（不变） | HTTP 响应（不变） |
+
+  JS 监听表按「webview → frame → 事件」三级存储：接收方判定不变（补丁 0014 的 webview 身份），投递按 frame 展开，主 frame 与
+  子 frame 同时监听同一事件时各收一次；`unlisten` 只在调用方 frame 的表里删，猜到别人的 id 也退订不掉。命令里自己反序列化的
+  `JavaScriptChannelId::channel_on(webview)` 仍指主 frame。
+- **Channel 取数**：`plugin:__TAURI_CHANNEL__|fetch` 是唯一绕过 ACL 的命令，大数据队列的 id 按 webview 顺序递增、可以被猜到；
+  队列条目记下它要送达的 frame，只有发起方 frame 与条目一致时才取出，否则按 `data not found` 处理。
+- **生命周期**：runtime 在子 frame 销毁时上报 `WebviewEvent::SubframeDestroyed`（CEF 的 `FrameHandler::OnFrameDestroyed`），
+  Tauri 删掉该 frame 的全部监听与未取走的 Channel 数据。同一 frame 内重新导航后旧条目还在、投递进新文档时找不到 id 等于空操作，
+  直到 frame 销毁；主 frame 的清理仍靠补丁 0011 的 `clear_js_listeners`（清整个 webview 的全部 frame）。CEF 跨源加载子 frame
+  时先建、后销毁的临时 frame 也会报一次，删除是空操作。
+- **关闭拦截只看主 frame**：`tauri://close-requested` 的监听只有在主 frame 才算数，子 frame 是客人，不能阻止窗口关闭。
+- **调用方来源**：命令可以收 `tauri::ipc::CallerOrigin(Url)`，即 ACL 判定所用的来源（请求的 `Origin`）。普通页面只有
+  scheme + host + port；`file:` frame 的 `Origin` 被 CEF runtime 改写成完整文档 URL，`wpe_web_pull_state` 靠它认出调用的
+  是哪张网页壁纸（`Url::to_file_path` 不看 scheme，用之前先确认是 `file:`）。
+- **来源回退**：`cef-ipc` 回退通道里子 frame 拿不到可用的 `Origin` 时用 frame URL，都没有时用占位来源
+  `kabegame-unattributed://subframe/`（不匹配任何 capability，ACL 拒绝、错误回调送回调用方，页面的 Promise 会 reject），
+  **不再**退到 webview 初始 URL（应用页）把子 frame 判成本地来源。不要给任何 capability 配匹配一切的远程模式。
+
+已知限制：同源子 frame 仍可以直接用父页面的 `__TAURI_INTERNALS__`，那样发出的请求记为主 frame（见「frames 维度」）。CEF 只在
+导航完成后刷新 frame URL，新文档最早的几个请求可能读到旧地址：`file:` iframe 的 `Origin` 改写与 `CallerOrigin` 依赖它，
+Chromium 侧修复落地前网页壁纸垫片靠退避重试兜底。
 
 ## 远程 `file:` 来源（WPE 网页壁纸）
 
 `file:` 文档的 `Origin` 请求头是 `null`。CEF runtime 的 `cef-ipc` 回退通道过去拿不到合法 Origin 时会退到 webview
 初始 URL（应用页），请求被 Tauri 判成 `Origin::Local`，于是本地 capability（`main-capability`）的全部命令都能调。
 现在 `tauri-runtime-cef` 在协议层把 `file:` frame 的 `Origin` 改写成 frame URL（`protocol::pin_file_frame_origin`），
-Tauri 判成 `Origin::Remote { url: file:///… }`，只有 `remote.urls` 匹配它的 capability 生效。`RemoteUrlPattern`
-对 `file:///*` 的匹配有单测（`kabegame/src/commands/wpe_web.rs`）。给网页壁纸开新命令时只加进
-`permissions/wpe-web.toml`，新监听只加进 `wpe-web.json` 的 `allow-listen` 作用域；不要加 `core:default` 或把壁纸窗口的本地
-capability 改成也接受远程来源。特赦只认本地来源，所以网页壁纸页面不受特赦影响。
+Tauri 判成 `Origin::Remote { url: file:///… }`，只有 `remote.urls` 匹配它的 capability 生效（网页壁纸 iframe 还要
+`frames: "sub"`）。`RemoteUrlPattern` 对 `file:///*` 的匹配有单测（`kabegame/src/commands/wpe_web.rs`）。给网页壁纸开新命令时
+只加进 `permissions/wpe-web.toml`，新监听只加进 `wpe-web.json` 的 `allow-listen` 作用域；不要加 `core:default` 或把本地
+capability 改成也接受远程来源。特赦只认本地来源的主 frame，所以网页壁纸页面不受特赦影响。
 
 ## 快速排查清单
 
@@ -256,6 +306,8 @@ capability 改成也接受远程来源。特赦只认本地来源，所以网页
    `location.href` 与 `window === top`：不是主 frame（iframe 里调的）或页面已导航到外部内容，就不特赦。
 2. 其它页面：看命令有没有进对应 `permissions/*.toml` 的 `commands.allow`（见「新增一个 `#[tauri::command]` 时」）。
 3. 同一命令在主 frame 放行、在 iframe 被拒：capability 默认只认主 frame，需要时显式写 `frames`。
+4. iframe 里 `listen` 报 ``cannot be listened: the calling frame cannot receive events``：runtime 没给出这个 frame 的
+   `SubframeId`（或请求根本没有 frame，如 service worker），Tauri 无处回送。
 
 `listen` 报 ``is not allowed to be listened by ACL``：把事件名加进该窗口 capability 的 `core:event:allow-listen` 作用域。
 定向事件收不到：确认 `emit_to` 的目标是接收方 webview 或其窗口的 label（见「事件投递按接收方身份」）。

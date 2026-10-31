@@ -22,7 +22,7 @@ use std::{
 use cef::{self, *};
 use http::{header::CONTENT_TYPE, Request as HttpRequest, Response as HttpResponse};
 use tauri_runtime::{
-    webview::{IpcFrame, PendingWebview},
+    webview::{IpcFrame, PendingWebview, SubframeId},
     Error, Result, UserEvent,
 };
 
@@ -47,12 +47,16 @@ static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = Once
 /// `CefURLRequest`)给 `frame = NULL`,此时不插入该 extension;dedicated worker 的请求记在创建它的
 /// frame 上。
 ///
-/// 另有给 Tauri ACL 用的 [`IpcFrame`] extension,每个请求都插(见 [`attach_request_frame`])。
+/// 另有给 Tauri ACL 用的 [`IpcFrame`] extension,每个请求都插;子 frame 再插路由用的
+/// [`SubframeId`](见 [`attach_request_frame`])。
 #[derive(Debug, Clone)]
 pub(crate) struct RequestFrame {
     pub(crate) is_main: bool,
     /// 发起请求的 frame 当前 URL;`file:` 文档据此改写 `Origin`,IPC 来源判成远程 `file:`。
     pub(crate) url: Option<String>,
+    /// CEF 的 frame 标识(`CefFrame::GetIdentifier`);子 frame 据此收回监听登记、事件、Channel 消息与
+    /// 回退响应(`WebviewMessage::EvalInSubframe` 用同一个标识找回 frame)。
+    pub(crate) id: Option<String>,
 }
 
 impl RequestFrame {
@@ -63,6 +67,14 @@ impl RequestFrame {
         } else {
             IpcFrame::Sub
         }
+    }
+
+    /// 子 frame 的路由标识;主 frame 与 CEF 没给出标识时为 None。
+    pub(crate) fn subframe_id(&self) -> Option<SubframeId> {
+        if self.is_main {
+            return None;
+        }
+        self.id.as_deref().map(SubframeId::new)
     }
 }
 
@@ -119,6 +131,7 @@ wrap_scheme_handler_factory! {
             let request_frame = frame.map(|frame| RequestFrame {
                 is_main: frame.is_main() == 1,
                 url: Some(CefString::from(&frame.url()).to_string()).filter(|url| !url.is_empty()),
+                id: Some(CefString::from(&frame.identifier()).to_string()).filter(|id| !id.is_empty()),
             });
             Some(CefResourceHandler::new(
                 label,
@@ -359,14 +372,18 @@ pub(crate) fn web_origin(url: &url::Url) -> Option<String> {
     Some(format!("{}://{host}{port}", url.scheme()))
 }
 
-/// 把发起请求的 frame 交给协议 handler:`RequestFrame`(运行时内部用)与 Tauri ACL 用的
-/// [`IpcFrame`]。extension 由浏览器进程填入、不随请求字节传递,页面无法伪造(请求头可以)。
-/// CEF 没给出 frame 时记为 [`IpcFrame::Unknown`],只有写了 `frames: "any"` 的 capability 能匹配;
-/// 不能留空,Tauri 把缺这个 extension 的请求当主 frame。
+/// 把发起请求的 frame 交给协议 handler:`RequestFrame`(运行时内部用)、Tauri ACL 用的
+/// [`IpcFrame`],以及子 frame 的 [`SubframeId`](Tauri 据此把数据送回这个 frame)。extension 由浏览器进程
+/// 填入、不随请求字节传递,页面无法伪造(请求头可以)。CEF 没给出 frame 时记为 [`IpcFrame::Unknown`],只有
+/// 写了 `frames: "any"` 的 capability 能匹配;不能留空,Tauri 把缺这个 extension 的请求当主 frame。
+/// 主 frame 不插 [`SubframeId`]:Tauri 按 webview 寻址主 frame,CEF 的主 frame 标识跨源导航后会变。
 fn attach_request_frame(request: &mut HttpRequest<Vec<u8>>, frame: Option<&RequestFrame>) {
     if let Some(frame) = frame {
         pin_file_frame_origin(request, frame);
         request.extensions_mut().insert(frame.clone());
+        if let Some(id) = frame.subframe_id() {
+            request.extensions_mut().insert(id);
+        }
     }
     request
         .extensions_mut()
@@ -495,6 +512,7 @@ mod tests {
         RequestFrame {
             is_main: true,
             url: Some(url.to_string()),
+            id: Some("1-1".to_string()),
         }
     }
 
@@ -534,6 +552,7 @@ mod tests {
             &RequestFrame {
                 is_main: true,
                 url: None,
+                id: None,
             },
         );
         assert_eq!(origin_of(&request), Some("null"));
@@ -554,11 +573,15 @@ mod tests {
             .get::<RequestFrame>()
             .is_some_and(|f| f.is_main));
 
-        // 子 frame
+        // 主 frame 不带路由标识(Tauri 按 webview 寻址主 frame)
+        assert!(request.extensions().get::<SubframeId>().is_none());
+
+        // 子 frame:另带 CEF 的 frame 标识
         let mut request = request_with_origin(Some("tauri://localhost"));
         let sub = RequestFrame {
             is_main: false,
             url: Some("tauri://localhost/frame.html".to_string()),
+            id: Some("3-7".to_string()),
         };
         attach_request_frame(&mut request, Some(&sub));
         assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Sub));
@@ -566,12 +589,24 @@ mod tests {
             .extensions()
             .get::<RequestFrame>()
             .is_some_and(|f| !f.is_main));
+        assert_eq!(
+            request.extensions().get::<SubframeId>(),
+            Some(&SubframeId::new("3-7"))
+        );
+
+        // 子 frame 但 CEF 没给出标识:不插(Tauri 无处回送,监听与 Channel 会被拒)
+        let mut request = request_with_origin(Some("tauri://localhost"));
+        let anonymous = RequestFrame { id: None, ..sub };
+        attach_request_frame(&mut request, Some(&anonymous));
+        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Sub));
+        assert!(request.extensions().get::<SubframeId>().is_none());
 
         // CEF 没给出 frame:记为 Unknown(不能缺省,缺省会被 Tauri 当成主 frame)
         let mut request = request_with_origin(Some("tauri://localhost"));
         attach_request_frame(&mut request, None);
         assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Unknown));
         assert!(request.extensions().get::<RequestFrame>().is_none());
+        assert!(request.extensions().get::<SubframeId>().is_none());
     }
 
     #[test]

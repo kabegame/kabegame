@@ -1,4 +1,4 @@
-//! 按 webview label 的 `file:` 访问策略：两项能力 + 按发起 frame 分档的闸门。
+//! `file:` 访问策略：按 webview label 登记的两项能力 + 按发起 frame 分档的闸门 + 由应用推出的访问范围。
 //!
 //! 两项能力都是建 browser 时写进 `extra_info` 的 bool 键，由 CEF 补丁按 browser 开启：
 //!
@@ -11,26 +11,30 @@
 //!    以及 `<img>` / `<video>` / CSS `url()` 这类子资源（0006 补上 `file:` 子资源工厂）。
 //!    应用页 `fetch` / XHR `file:` 还需要私有 CORS 列表与运行时跨源白名单。
 //!
-//! 补丁只开门，不管哪些文件能进来。带任一能力的 browser 的每个 `file:` 资源请求都按**发起 frame**
-//! 分档（`webview.rs` 的 `resource_request_handler`）：
+//! 补丁只开门，不管哪些文件能进来。带任一能力的 browser 的每个 `file:` 资源请求都按**发起方**分档
+//! （`webview.rs` 的 `resource_request_handler` 调 [`classify_file_requester`]）：
 //!
 //! | 发起方 | 处理 |
 //! | --- | --- |
 //! | 应用页主 frame 的子资源（非导航、主 frame，发起方 origin 与 frame 文档都不是 `file:`） | 登记了 0005 即**免检**（[`app_page_open`]；图库媒体走 `file://`） |
-//! | 子 frame 导航到 `file:`（给 iframe 赋 `src`）；主 frame 导航到 `file:`（壁纸窗口由 Rust 导航） | 过闸门：按根目录与追加放行 |
-//! | `file:` 文档自己的子资源（WPE 页 fetch 同目录、嵌套页；壁纸窗口整窗 `file:` 时的主 frame） | 过闸门：按根目录与追加放行 |
+//! | `file:` 文档自己的请求（子资源、自身导航、它嵌的新 iframe） | 只能访问**它自己所在**的网页壁纸：解析器按文档路径给出的范围 |
+//! | 应用页发起的子 frame 导航（给 iframe 赋 `src`） | 目标须落进库里**某个**网页壁纸目录：解析器按目标路径给出的范围 |
+//! | 主 frame 导航到 `file:`、无法归属的请求 | 拒绝 |
 //!
-//! 闸门经 [`check_file_request`] 判定，只放行当前根目录或用户追加放行项内的普通文件（拒绝越界、符号链接、
-//! 目录、不存在）；没有根目录与追加放行时拒绝。两项能力与根目录并在同一张 label 表里，「进表即开闸门」
-//! 由结构保证；免检只是闸门前按发起方的一档分流，不改根目录语义。
+//! 访问范围（[`FileAccessScope`]：壁纸目录 + 用户为它选的文件 / 目录）不在运行时里存，而是每次请求时由应用
+//! 注册的解析器（[`set_file_scope_resolver`]）现算：给定一个本地路径，返回包含它的网页壁纸的范围。解析器
+//! 注册之前一律拒绝。判定经 [`check_file_request`]，只放行范围内的普通文件（拒绝越界、符号链接、目录、
+//! 不存在）。运行时只提供机制；哪个窗口开哪项能力、库里有哪些壁纸由应用决定。
 //!
-//! 运行时只提供机制；哪个窗口开哪项能力、放行哪个目录由应用决定。
+//! 已知限制：CEF 只在导航完成后刷新 frame URL，新文档最早的几个请求可能读到旧地址（空串 / `about:blank`）。
+//! 这类请求的发起方 origin 是 `file:` 却认不出是哪个文档，暂按目标路径解析（只放行库内壁纸目录、不含用户
+//! 选择），待 Chromium 补丁让 frame URL 及时刷新后自然走「文档自己的范围」。
 
 use cef::CefString;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, RwLock},
 };
 
 /// 已登记的应用 origin；CEF 白名单在进程内常驻。
@@ -68,53 +72,34 @@ pub(crate) const ALLOW_FILE_ACCESS_EXTRA_INFO_KEY: &str =
 /// 键名必须与补丁里的字面量一致。
 pub(crate) const ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY: &str = "kabegame.allow_local_resources";
 
-/// 一个 label 的 `file:` 访问策略。
-#[derive(Debug, Default)]
-struct FilePolicy {
+/// 一个 label 登记的能力。只有开关，不存目录：访问范围由解析器现算。
+#[derive(Debug, Default, Clone, Copy)]
+struct FileCapabilities {
     /// 建窗带 0004 键：`file:` 文档可读本地文件。
     file_documents: bool,
     /// 建窗带 0005 键：应用页可加载 `file:`。
     app_local_resources: bool,
-    /// 子 frame 与 `file:` 文档的根目录（`None` = 这类请求全拒）；应用页主 frame 的子资源
-    /// 免检时不看它。
-    root: Option<PathBuf>,
-    /// 追加放行（[`grant_file_documents`]）：只增不减，换根即清空。
-    grants: Vec<Grant>,
 }
 
-/// 追加放行的一项（已 canonicalize）：文件只放行它本身，目录放行其中的普通文件。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Grant {
-    pub path: PathBuf,
-    pub is_dir: bool,
+/// label → 能力。进表即开闸门。
+static FILE_CAPABILITIES: OnceLock<Mutex<HashMap<String, FileCapabilities>>> = OnceLock::new();
+
+fn capabilities() -> &'static Mutex<HashMap<String, FileCapabilities>> {
+    FILE_CAPABILITIES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 闸门裁决用的快照：根目录 + 追加放行。
-#[derive(Debug, Clone, Default)]
-pub(crate) struct FileAccess {
-    pub root: Option<PathBuf>,
-    pub grants: Vec<Grant>,
-}
-
-/// label → 策略。进表即开闸门。
-static FILE_POLICIES: OnceLock<Mutex<HashMap<String, FilePolicy>>> = OnceLock::new();
-
-fn policies() -> &'static Mutex<HashMap<String, FilePolicy>> {
-    FILE_POLICIES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 建窗前登记 label 的「文件文档」能力（0004）。已登记的保留当前根目录与其它能力不变。
+/// 建窗前登记 label 的「文件文档」能力（0004）。已登记的保留其它能力不变。
 pub(crate) fn allow_file_documents(webview_label: &str) {
-    if let Ok(mut map) = policies().lock() {
+    if let Ok(mut map) = capabilities().lock() {
         map.entry(webview_label.to_string())
             .or_default()
             .file_documents = true;
     }
 }
 
-/// 建窗前登记 label 的「应用页加载本地资源」能力（0005）。已登记的保留当前根目录与其它能力不变。
+/// 建窗前登记 label 的「应用页加载本地资源」能力（0005）。已登记的保留其它能力不变。
 pub(crate) fn allow_app_local_resources(webview_label: &str) {
-    if let Ok(mut map) = policies().lock() {
+    if let Ok(mut map) = capabilities().lock() {
         map.entry(webview_label.to_string())
             .or_default()
             .app_local_resources = true;
@@ -124,107 +109,180 @@ pub(crate) fn allow_app_local_resources(webview_label: &str) {
 /// 建 browser 时要写进 `extra_info` 的 bool 键（值都为 true），顺序固定为 0004、0005；
 /// 未登记的 label 为空。
 pub(crate) fn extra_info_keys(webview_label: &str) -> Vec<&'static str> {
-    let Ok(map) = policies().lock() else {
+    let Ok(map) = capabilities().lock() else {
         return Vec::new();
     };
-    let Some(policy) = map.get(webview_label) else {
+    let Some(caps) = map.get(webview_label) else {
         return Vec::new();
     };
     let mut keys = Vec::with_capacity(2);
-    if policy.file_documents {
+    if caps.file_documents {
         keys.push(ALLOW_FILE_ACCESS_EXTRA_INFO_KEY);
     }
-    if policy.app_local_resources {
+    if caps.app_local_resources {
         keys.push(ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY);
     }
     keys
 }
 
-/// 设置 / 清空允许的根目录；未登记的 label 返回 Err。
-pub(crate) fn set_file_document_root(
-    webview_label: &str,
-    root: Option<PathBuf>,
-) -> Result<(), String> {
-    let mut map = policies()
-        .lock()
-        .map_err(|_| "file document policy mutex poisoned".to_string())?;
-    let Some(policy) = map.get_mut(webview_label) else {
-        return Err(format!(
-            "webview '{webview_label}' 未登记文件访问策略（需在建窗前调用 allow_file_documents / allow_app_local_resources）"
-        ));
-    };
-    policy.root = root;
-    policy.grants.clear();
-    Ok(())
-}
-
-/// 当前页面的根仍匹配时追加用户选的文件或目录，旧页面的在途拉取会被忽略。
-pub(crate) fn grant_file_documents(
-    webview_label: &str,
-    for_root: &Path,
-    paths: &[PathBuf],
-) -> Result<(), String> {
-    let mut map = policies()
-        .lock()
-        .map_err(|_| "file document policy mutex poisoned".to_string())?;
-    let policy = map
-        .get_mut(webview_label)
-        .ok_or_else(|| format!("webview '{webview_label}' 未登记文件访问策略"))?;
-    let Some(current_root) = policy.root.as_deref().and_then(canonical_path) else {
-        return Ok(());
-    };
-    if !canonical_path(for_root).is_some_and(|root| path_key(&current_root) == path_key(&root)) {
-        return Ok(());
-    }
-    for path in paths {
-        let Ok(meta) = std::fs::symlink_metadata(path) else {
-            continue;
-        };
-        if meta.file_type().is_symlink() || !(meta.is_file() || meta.is_dir()) {
-            continue;
-        }
-        let Some(path) = canonical_path(path) else {
-            continue;
-        };
-        let grant = Grant {
-            path,
-            is_dir: meta.is_dir(),
-        };
-        if !policy.grants.contains(&grant) {
-            policy.grants.push(grant);
-        }
-    }
-    Ok(())
-}
-
 /// label 是否登记过任一能力，即它的 `file:` 请求是否要过闸门。
 pub(crate) fn is_file_document_webview(webview_label: &str) -> bool {
-    policies()
+    capabilities()
         .lock()
         .map(|map| map.contains_key(webview_label))
         .unwrap_or(false)
 }
 
 /// label 的应用页（最外层主 frame 的非 `file:` 文档）发起的 `file:` 子资源是否免检：登记了 0005 即免检。
-/// 子 frame 导航与 `file:` 文档的请求不受此影响，仍按根目录裁决。
+/// 子 frame 导航与 `file:` 文档的请求不受此影响，仍按解析器给出的范围裁决。
 pub(crate) fn app_page_open(webview_label: &str) -> bool {
-    policies()
+    capabilities()
         .lock()
         .map(|map| {
             map.get(webview_label)
-                .is_some_and(|policy| policy.app_local_resources)
+                .is_some_and(|caps| caps.app_local_resources)
         })
         .unwrap_or(false)
 }
 
-/// label 当前的根目录与追加放行；未登记返回 `None`。
-pub(crate) fn file_document_access(webview_label: &str) -> Option<FileAccess> {
-    policies().lock().ok().and_then(|map| {
-        map.get(webview_label).map(|policy| FileAccess {
-            root: policy.root.clone(),
-            grants: policy.grants.clone(),
+/// 放行的一项（已 canonicalize、去掉 Windows `\\?\` 前缀）：文件只放行它本身，目录放行其中的普通文件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileGrant {
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
+
+impl FileGrant {
+    /// 由用户选的路径建一项放行：必须存在、不是符号链接，且与 `is_dir` 一致（文件 / 目录）；
+    /// 路径规范化成与闸门比较时同一形式。不满足返回 None。
+    pub fn new(path: &Path, is_dir: bool) -> Option<Self> {
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        if meta.file_type().is_symlink()
+            || meta.is_dir() != is_dir
+            || !(meta.is_file() || meta.is_dir())
+        {
+            return None;
+        }
+        Some(Self {
+            path: canonical_path(path)?,
+            is_dir,
         })
-    })
+    }
+}
+
+/// 一张网页壁纸能访问的范围：壁纸目录（`root`）+ 用户为它选的文件 / 目录（`grants`）。
+/// 默认值（无根、无放行）拒绝一切。
+#[derive(Debug, Clone, Default)]
+pub struct FileAccessScope {
+    pub root: Option<PathBuf>,
+    pub grants: Vec<FileGrant>,
+}
+
+/// 应用注册的访问范围解析器：给定本地路径，返回包含它的网页壁纸的范围；不在任何网页壁纸里返回 None。
+pub type FileScopeResolver = Arc<dyn Fn(&Path) -> Option<FileAccessScope> + Send + Sync>;
+
+static FILE_SCOPE_RESOLVER: RwLock<Option<FileScopeResolver>> = RwLock::new(None);
+
+/// 注册（或替换）访问范围解析器。应用启动时注册一次；注册之前所有要过闸门的 `file:` 请求都被拒绝。
+/// 解析器在 CEF IO 线程上同步调用，不能阻塞（只读内存表，不碰数据库）。
+pub fn set_file_scope_resolver(resolver: FileScopeResolver) {
+    if let Ok(mut slot) = FILE_SCOPE_RESOLVER.write() {
+        *slot = Some(resolver);
+    }
+}
+
+fn resolve_file_scope(path: &Path) -> Option<FileAccessScope> {
+    let resolver = FILE_SCOPE_RESOLVER.read().ok()?.clone()?;
+    resolver(path)
+}
+
+/// 路径的比较键：与闸门同一套规范化（`canonicalize`、去 Windows `\\?\` 前缀、Windows 不分大小写、
+/// 去尾分隔符）。应用拿它给目录建索引，保证与闸门对同一路径算出的键相同。路径不存在返回 None。
+pub fn file_path_key(path: &Path) -> Option<String> {
+    canonical_path(path).map(|path| path_key(&path))
+}
+
+/// 发起一个 `file:` 请求的一方，决定按哪个路径去解析访问范围。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FileRequester {
+    /// `file:` 文档：只能访问它自己所在的网页壁纸（按文档路径解析）。
+    Document(PathBuf),
+    /// 应用页发起的子 frame 导航，以及认不出文档的 `file:` 请求：目标须落进库里某个网页壁纸目录
+    /// （按目标路径解析，只看壁纸目录）。
+    Target,
+    /// 无法归属（主 frame 导航到 `file:` 等）：拒绝。
+    Deny,
+}
+
+/// `file:` URL 对应的本地路径；不是合法的本地 `file:` 地址返回 None。
+fn file_url_path(url: &str) -> Option<PathBuf> {
+    let parsed = url::Url::parse(url).ok()?;
+    if parsed.scheme() != "file" {
+        return None;
+    }
+    parsed.to_file_path().ok()
+}
+
+/// 给不免检的 `file:` 请求认发起方。参数都来自浏览器进程（页面无法伪造）：
+/// - `frame_url`：发起请求的 frame 当前 URL（导航请求是被导航的 frame）；
+/// - `parent_url`：它父 frame 的 URL（主 frame 为空）；
+/// - `initiator`：发起方文档的 origin。
+///
+/// 规则：frame 当前是 `file:` 文档 → 这个文档（子资源、自身导航；应用页把它的 `src` 直接换成另一张壁纸
+/// 也算它发起，会被拒，`WallpaperStage` 每次切换都重建 iframe）。子 frame 导航且父 frame 是 `file:` 文档
+/// → 父文档（壁纸页面嵌的 iframe 只能落在自己的目录里）。其余子 frame 导航 → 应用页发起，按目标。
+/// 非导航请求认不出文档但发起方 origin 是 `file:` → CEF 尚未刷新 frame URL，暂按目标（见模块注释）。
+pub(crate) fn classify_file_requester(
+    frame_is_main: bool,
+    is_navigation: bool,
+    frame_url: &str,
+    parent_url: &str,
+    initiator: &str,
+) -> FileRequester {
+    if let Some(doc) = file_url_path(frame_url) {
+        return FileRequester::Document(doc);
+    }
+    if is_navigation {
+        if frame_is_main {
+            return FileRequester::Deny;
+        }
+        if let Some(parent) = file_url_path(parent_url) {
+            return FileRequester::Document(parent);
+        }
+        return FileRequester::Target;
+    }
+    if is_file_url(initiator) {
+        return FileRequester::Target;
+    }
+    FileRequester::Deny
+}
+
+/// 按发起方取访问范围：文档按文档路径；目标按目标路径，且只认壁纸目录、不带用户选择（应用页与认不出的
+/// 文档都不该读到某张壁纸的用户选择）。
+pub(crate) fn scope_for_request(
+    requester: &FileRequester,
+    url: &str,
+    resolver: &dyn Fn(&Path) -> Option<FileAccessScope>,
+) -> Option<FileAccessScope> {
+    match requester {
+        FileRequester::Document(doc) => resolver(doc),
+        FileRequester::Target => {
+            let target = file_url_path(url)?;
+            resolver(&target).map(|scope| FileAccessScope {
+                root: scope.root,
+                grants: Vec::new(),
+            })
+        }
+        FileRequester::Deny => None,
+    }
+}
+
+/// [`scope_for_request`] 用已注册的解析器。
+pub(crate) fn registered_scope_for_request(
+    requester: &FileRequester,
+    url: &str,
+) -> Option<FileAccessScope> {
+    scope_for_request(requester, url, &resolve_file_scope)
 }
 
 /// URL 是否为 `file:` scheme（大小写不敏感，不解析其余部分）。
@@ -237,7 +295,7 @@ pub(crate) fn is_file_url(url: &str) -> bool {
 /// 拒绝原因（写进日志）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FileDeny {
-    /// 当前没有允许的根目录或追加放行。
+    /// 没有访问范围（不在库内网页壁纸里、发起方无法归属或解析器未注册）。
     NoRoot,
     /// URL 不是合法的本地 `file:` 地址。
     InvalidUrl,
@@ -247,17 +305,17 @@ pub(crate) enum FileDeny {
     Symlink,
     /// 目标不是普通文件（目录等）。
     NotFile,
-    /// 规范化后位于根目录与追加放行之外。
+    /// 规范化后位于根目录与放行项之外。
     OutsideRoot,
 }
 
-/// `file:` 资源请求判定：只放行根目录或追加放行项内的普通文件，返回其规范化路径。
+/// `file:` 资源请求判定：只放行范围内（根目录或放行项）的普通文件，返回其规范化路径。
 ///
 /// - URL → 本地路径用 `url::Url::to_file_path`（百分号解码；查询串与片段不参与）；
 /// - `symlink_metadata` 必须是普通文件（符号链接、目录、不存在一律拒绝）；
 /// - 目标与根目录都 `canonicalize`（解析 `..` 与中间层链接），去掉 Windows `\\?\` 前缀，
 ///   按路径比较键（Windows 大小写不敏感）判定目标位于根目录之内。
-pub(crate) fn check_file_request(url: &str, access: &FileAccess) -> Result<PathBuf, FileDeny> {
+pub(crate) fn check_file_request(url: &str, access: &FileAccessScope) -> Result<PathBuf, FileDeny> {
     if access.root.is_none() && access.grants.is_empty() {
         return Err(FileDeny::NoRoot);
     }
@@ -335,15 +393,11 @@ mod tests {
     fn check_file_request(url: &str, root: Option<&Path>) -> Result<PathBuf, FileDeny> {
         super::check_file_request(
             url,
-            &FileAccess {
+            &FileAccessScope {
                 root: root.map(Path::to_path_buf),
                 grants: Vec::new(),
             },
         )
-    }
-
-    fn file_document_root(label: &str) -> Option<PathBuf> {
-        file_document_access(label).and_then(|access| access.root)
     }
 
     #[test]
@@ -495,6 +549,8 @@ mod tests {
                 check_file_request(&file_url(&link), Some(&wp)),
                 Err(FileDeny::Symlink)
             );
+            // 符号链接也不能作为放行项
+            assert!(FileGrant::new(&link, false).is_none());
         }
         let _ = fs::remove_dir_all(base);
     }
@@ -509,29 +565,24 @@ mod tests {
     }
 
     #[test]
-    fn policy_registry_requires_registration() {
-        let label = "file-access-test-label";
-        assert!(set_file_document_root(label, None).is_err());
-        allow_file_documents(label);
-        assert!(is_file_document_webview(label));
-        assert_eq!(file_document_root(label), None);
-        set_file_document_root(label, Some(PathBuf::from("/tmp/x"))).unwrap();
-        assert_eq!(file_document_root(label), Some(PathBuf::from("/tmp/x")));
-        // 再次登记不清空根目录
-        allow_file_documents(label);
-        assert_eq!(file_document_root(label), Some(PathBuf::from("/tmp/x")));
-        set_file_document_root(label, None).unwrap();
-        assert_eq!(file_document_root(label), None);
-    }
-
-    #[test]
-    fn extra_info_keys_follow_registration() {
-        // 未登记：不写键、不开闸门
+    fn capability_registry_drives_keys_and_exemption() {
+        // 未登记：不写键、不开闸门、不免检
         let none = "file-access-test-keys-none";
         assert!(extra_info_keys(none).is_empty());
         assert!(!is_file_document_webview(none));
+        assert!(!app_page_open(none));
 
-        // 只登记 0005：写 0005 键，同样开闸门、可设根目录
+        // 只登记 0004：开闸门，但应用页子资源不免检
+        let docs = "file-access-test-keys-docs";
+        allow_file_documents(docs);
+        assert_eq!(
+            extra_info_keys(docs),
+            vec![ALLOW_FILE_ACCESS_EXTRA_INFO_KEY]
+        );
+        assert!(is_file_document_webview(docs));
+        assert!(!app_page_open(docs));
+
+        // 只登记 0005：写 0005 键，同样开闸门，应用页子资源免检
         let local = "file-access-test-keys-local";
         allow_app_local_resources(local);
         assert_eq!(
@@ -539,12 +590,12 @@ mod tests {
             vec![ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY]
         );
         assert!(is_file_document_webview(local));
-        set_file_document_root(local, Some(PathBuf::from("/tmp/local"))).unwrap();
-        assert_eq!(file_document_root(local), Some(PathBuf::from("/tmp/local")));
+        assert!(app_page_open(local));
 
-        // 两项都登记：顺序固定为 0004、0005，与登记先后无关
+        // 两项都登记：顺序固定为 0004、0005，与登记先后无关；重复登记不变
         let both = "file-access-test-keys-both";
         allow_app_local_resources(both);
+        allow_file_documents(both);
         allow_file_documents(both);
         assert_eq!(
             extra_info_keys(both),
@@ -553,97 +604,227 @@ mod tests {
                 ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY
             ]
         );
-
-        // 已有根目录时再登记任一能力，不清根目录
-        set_file_document_root(both, Some(PathBuf::from("/tmp/both"))).unwrap();
-        allow_file_documents(both);
-        allow_app_local_resources(both);
-        assert_eq!(file_document_root(both), Some(PathBuf::from("/tmp/both")));
-        assert_eq!(extra_info_keys(both).len(), 2);
+        assert!(app_page_open(both));
     }
 
     #[test]
-    fn app_page_open_follows_registration() {
-        // 未登记：不免检
-        let none = "file-access-test-open-none";
-        assert!(!app_page_open(none));
-
-        // 只登记 0004：开闸门，但应用页子资源不免检
-        let docs = "file-access-test-open-docs";
-        allow_file_documents(docs);
-        assert!(is_file_document_webview(docs));
-        assert!(!app_page_open(docs));
-
-        // 登记 0005：免检，与根目录的设 / 清无关
-        let local = "file-access-test-open-local";
-        allow_app_local_resources(local);
-        assert!(app_page_open(local));
-        set_file_document_root(local, Some(PathBuf::from("/tmp/open"))).unwrap();
-        assert!(app_page_open(local));
-        set_file_document_root(local, None).unwrap();
-        assert!(app_page_open(local));
-
-        // 已登记 0004 再补登 0005：免检，根目录不受影响
-        set_file_document_root(docs, Some(PathBuf::from("/tmp/docs"))).unwrap();
-        allow_app_local_resources(docs);
-        assert!(app_page_open(docs));
-        assert_eq!(file_document_root(docs), Some(PathBuf::from("/tmp/docs")));
-    }
-
-    #[test]
-    fn file_and_directory_grants_are_scoped_and_reset() {
+    fn grants_cover_files_and_directories() {
         let (base, wp, sibling) = fixture("grants");
-        let label = "file-access-test-grants";
-        allow_file_documents(label);
-        set_file_document_root(label, Some(wp.clone())).unwrap();
         let file = sibling.join("project.json");
         let other = sibling.join("other.txt");
         fs::write(&other, "other").unwrap();
-        grant_file_documents(label, &base.join("wrong"), &[file.clone()]).unwrap();
-        assert!(file_document_access(label).unwrap().grants.is_empty());
-        grant_file_documents(label, &wp, &[file.clone()]).unwrap();
-        grant_file_documents(label, &wp, &[file.clone()]).unwrap();
-        let access = file_document_access(label).unwrap();
-        assert_eq!(access.grants.len(), 1);
-        assert!(super::check_file_request(&file_url(&file), &access).is_ok());
+        // 类型不符、不存在的路径不成为放行项
+        assert!(FileGrant::new(&file, true).is_none());
+        assert!(FileGrant::new(&sibling, false).is_none());
+        assert!(FileGrant::new(&base.join("missing"), false).is_none());
+
+        let only_file = FileAccessScope {
+            root: Some(wp.clone()),
+            grants: vec![FileGrant::new(&file, false).unwrap()],
+        };
+        assert!(super::check_file_request(&file_url(&file), &only_file).is_ok());
         assert_eq!(
-            super::check_file_request(&file_url(&other), &access),
+            super::check_file_request(&file_url(&other), &only_file),
             Err(FileDeny::OutsideRoot)
         );
-        grant_file_documents(label, &wp, &[sibling.clone()]).unwrap();
-        assert!(super::check_file_request(
-            &file_url(&other),
-            &file_document_access(label).unwrap()
-        )
-        .is_ok());
+        let dir = FileAccessScope {
+            root: None,
+            grants: vec![FileGrant::new(&sibling, true).unwrap()],
+        };
+        assert!(super::check_file_request(&file_url(&other), &dir).is_ok());
         assert_eq!(
-            super::check_file_request(
-                &file_url(&base.join("outside.txt")),
-                &file_document_access(label).unwrap()
-            ),
+            super::check_file_request(&file_url(&base.join("outside.txt")), &dir),
             Err(FileDeny::OutsideRoot)
         );
-        set_file_document_root(label, None).unwrap();
-        assert!(file_document_access(label).unwrap().grants.is_empty());
         let _ = fs::remove_dir_all(base);
     }
 
     #[test]
-    fn grant_without_root_works() {
-        let (base, wp, _) = fixture("grant-no-root");
-        // Grant 只经 grant_file_documents 创建，路径都是 canonical_path（Windows 已去掉 `\\?\`）
-        let access = FileAccess {
-            root: None,
-            grants: vec![Grant {
-                path: canonical_path(&wp.join("index.html")).unwrap(),
-                is_dir: false,
-            }],
-        };
-        assert!(super::check_file_request(&file_url(&wp.join("index.html")), &access).is_ok());
+    fn path_key_matches_for_the_same_directory() {
+        let (base, wp, _) = fixture("key");
+        let via_parent = wp.join("sub dir").join("..");
+        assert_eq!(file_path_key(&wp), file_path_key(&via_parent));
+        assert!(file_path_key(&base.join("missing")).is_none());
+        let key = file_path_key(&wp).unwrap();
+        assert!(!key.ends_with('/') && !key.ends_with('\\'));
+        assert!(!key.starts_with(r"\\?\"));
+        #[cfg(windows)]
+        {
+            // Windows 不分大小写：大小写不同的同一目录得到同一个键
+            let upper = PathBuf::from(wp.to_string_lossy().to_uppercase());
+            assert_eq!(file_path_key(&upper), Some(key.clone()));
+            assert_eq!(key, key.to_ascii_lowercase());
+        }
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn requester_classification() {
+        const APP: &str = "http://localhost:1420/index.html";
+        // 按本平台的绝对路径造 URL（Windows 的 `file:` 路径必须带盘符）
+        let wp = std::env::temp_dir().join("wp");
+        let doc_url = file_url(&wp.join("index.html"));
+        let page_url = file_url(&wp.join("sub").join("page.html"));
+        let doc = || FileRequester::Document(file_url_path(&doc_url).unwrap());
+        // file: 文档的子资源与自身导航：这个文档
         assert_eq!(
-            super::check_file_request(&file_url(&wp.join("data.json")), &access),
-            Err(FileDeny::OutsideRoot)
+            classify_file_requester(false, false, &doc_url, APP, "file://"),
+            doc()
         );
+        assert_eq!(
+            classify_file_requester(false, true, &doc_url, APP, "null"),
+            doc()
+        );
+        // 壁纸页面嵌的新 iframe：父文档
+        assert_eq!(
+            classify_file_requester(false, true, "", &doc_url, "file://"),
+            doc()
+        );
+        assert_eq!(
+            classify_file_requester(false, true, "about:blank", &page_url, "null"),
+            FileRequester::Document(file_url_path(&page_url).unwrap())
+        );
+        // 应用页给 iframe 赋 src：按目标
+        assert_eq!(
+            classify_file_requester(false, true, "", APP, "http://localhost:1420"),
+            FileRequester::Target
+        );
+        assert_eq!(
+            classify_file_requester(false, true, "about:blank", APP, "null"),
+            FileRequester::Target
+        );
+        // CEF 还没刷新 frame URL 的 file: 文档请求：按目标
+        assert_eq!(
+            classify_file_requester(false, false, "about:blank", APP, "file://"),
+            FileRequester::Target
+        );
+        // 主 frame 导航到 file:、非 file: 文档的子资源：拒绝
+        assert_eq!(
+            classify_file_requester(true, true, APP, "", "null"),
+            FileRequester::Deny
+        );
+        assert_eq!(
+            classify_file_requester(
+                false,
+                false,
+                "https://example.com/",
+                APP,
+                "https://example.com"
+            ),
+            FileRequester::Deny
+        );
+    }
+
+    /// 两张库内网页壁纸 `wp` / `sibling`；`wp` 的用户选了 `picked` 目录，`sibling` 的用户选了 `secret.txt`。
+    fn library(
+        base: &Path,
+        wp: &Path,
+        sibling: &Path,
+    ) -> impl Fn(&Path) -> Option<FileAccessScope> {
+        let picked = base.join("picked");
+        fs::create_dir_all(&picked).unwrap();
+        fs::write(picked.join("photo.jpg"), "jpg").unwrap();
+        fs::write(base.join("secret.txt"), "secret").unwrap();
+        let wp_scope = FileAccessScope {
+            root: Some(canonical_path(wp).unwrap()),
+            grants: vec![FileGrant::new(&picked, true).unwrap()],
+        };
+        let sibling_scope = FileAccessScope {
+            root: Some(canonical_path(sibling).unwrap()),
+            grants: vec![FileGrant::new(&base.join("secret.txt"), false).unwrap()],
+        };
+        let wp = file_path_key(wp).unwrap();
+        let sibling = file_path_key(sibling).unwrap();
+        move |path: &Path| {
+            let key = file_path_key(path)?;
+            if key == wp || key.starts_with(&format!("{wp}{}", std::path::MAIN_SEPARATOR)) {
+                Some(wp_scope.clone())
+            } else if key == sibling
+                || key.starts_with(&format!("{sibling}{}", std::path::MAIN_SEPARATOR))
+            {
+                Some(sibling_scope.clone())
+            } else {
+                None
+            }
+        }
+    }
+
+    fn allowed(
+        requester: &FileRequester,
+        url: &str,
+        resolver: &dyn Fn(&Path) -> Option<FileAccessScope>,
+    ) -> bool {
+        let scope = scope_for_request(requester, url, resolver).unwrap_or_default();
+        super::check_file_request(url, &scope).is_ok()
+    }
+
+    /// 闸门的五种情况：自己目录内放行、自己的用户选择放行、跨到另一张壁纸被拒、另一张壁纸的用户选择被拒、
+    /// 应用页导航到库外目录被拒。
+    #[test]
+    fn gate_scopes_documents_to_their_own_wallpaper() {
+        let (base, wp, sibling) = fixture("gate");
+        let resolver = library(&base, &wp, &sibling);
+        let doc = FileRequester::Document(wp.join("index.html"));
+
+        // 1. 自己目录内
+        assert!(allowed(&doc, &file_url(&wp.join("data.json")), &resolver));
+        assert!(allowed(
+            &doc,
+            &file_url(&wp.join("sub dir").join("歌 词.txt")),
+            &resolver
+        ));
+        // 2. 自己用户属性选中的目录里的文件
+        assert!(allowed(
+            &doc,
+            &file_url(&base.join("picked").join("photo.jpg")),
+            &resolver
+        ));
+        // 3. 另一张壁纸的目录
+        assert!(!allowed(
+            &doc,
+            &file_url(&sibling.join("project.json")),
+            &resolver
+        ));
+        // 4. 另一张壁纸的用户选择
+        assert!(!allowed(
+            &doc,
+            &file_url(&base.join("secret.txt")),
+            &resolver
+        ));
+        // 5. 应用页导航：库内壁纸目录放行，库外与任何用户选择都拒绝
+        let target = FileRequester::Target;
+        assert!(allowed(
+            &target,
+            &file_url(&wp.join("index.html")),
+            &resolver
+        ));
+        assert!(allowed(
+            &target,
+            &file_url(&sibling.join("project.json")),
+            &resolver
+        ));
+        assert!(!allowed(
+            &target,
+            &file_url(&base.join("outside.txt")),
+            &resolver
+        ));
+        assert!(!allowed(
+            &target,
+            &file_url(&base.join("picked").join("photo.jpg")),
+            &resolver
+        ));
+        // 库外文档、拒绝档：什么都读不到
+        let stranger = FileRequester::Document(base.join("outside.txt"));
+        assert!(!allowed(
+            &stranger,
+            &file_url(&wp.join("data.json")),
+            &resolver
+        ));
+        assert!(!allowed(
+            &FileRequester::Deny,
+            &file_url(&wp.join("data.json")),
+            &resolver
+        ));
         let _ = fs::remove_dir_all(base);
     }
 }

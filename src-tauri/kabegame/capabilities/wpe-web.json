@@ -1,8 +1,9 @@
 {
   "identifier": "wpe-web-capability",
-  "description": "Desktop WPE web wallpaper page (file:// top-level frame of the wallpaper window): pull state, answer pings, listen to four events. Subframes of the page get nothing (frames defaults to main)",
+  "description": "WPE web wallpaper pages: the file: iframe of WallpaperStage in the main window (gallery preview) and in the wallpaper window (desktop). Pull state, answer pings, listen to four events. Only subframes match: both windows' main frames are app pages, covered by the ACL exemption",
   "local": false,
-  "windows": ["wallpaper"],
+  "windows": ["main", "wallpaper"],
+  "frames": "sub",
   "remote": {
     "urls": ["file:///*"]
   },

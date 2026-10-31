@@ -10,7 +10,6 @@ import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { IS_DEV } from "@/env";
 import WallpaperStage from "@/components/wallpaper/WallpaperStage.vue";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
-import { wpeKind } from "@/utils/mediaMime";
 import {
   FRAME_MONITOR_SAMPLE_MS,
   getFrameMonitorLevel,
@@ -50,12 +49,11 @@ const windowError = ref("");
 const windowErrorAt = ref(0);
 
 /**
- * 接收当前壁纸目标。桌面网页壁纸（`x-wpe/web`）由 Rust 的 `WindowWallpaperManager::set_wallpaper_path`
- * 把整个窗口导航到 `file://` 入口，这里不渲染、保持现有画面，避免与 Rust 抢导航。
+ * 接收当前壁纸目标，交给 `WallpaperStage` 渲染。网页壁纸（`x-wpe/web`）同样在这里渲染：它是 web 层里的
+ * `file:` iframe（与图库预览同一套），窗口本身不导航；后端只按当前壁纸开关桌面鼠标转发。
  */
 function acceptTarget(target: WallpaperTarget | null) {
   if (!target?.path) return;
-  if (wpeKind(target.type) === "web") return;
   state.target = target;
 }
 
@@ -89,12 +87,15 @@ let unlistenSettingChange: UnlistenFn | null = null;
 // ---- ping 应答 ----
 // 后端每 10s 发一次 ping，连续 3 次没应答就重载。页面不计时，避免 hidden 定时器节流。
 // 挂载即应答：ping 只管「活着」，init 有没有跑通仍归 init 看门狗。
+// 网页壁纸显示期间不应答，交给 web 层 iframe 里的垫片：页面卡死就不应答，照样触发整页重载。
+// 切换的短暂间隙最多漏一两次（阈值 3 次），不会误触发重载。
 let unlistenPing: UnlistenFn | null = null;
 
 async function listenPing() {
   const label = getCurrentWebviewWindow().label;
   unlistenPing = await listen<{ label: string; seq: number }>("wallpaper-ping", (event) => {
     if (event.payload.label !== label) return; // 只应答本窗口
+    if (stage.value?.isShowingWeb()) return; // 网页壁纸显示期间由 iframe 应答
     invoke("wallpaper_pong", { seq: event.payload.seq }).catch(() => {});
   });
 }
@@ -241,6 +242,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="wallpaper-root relative w-screen h-screen overflow-hidden bg-transparent">
+    <!-- interactive：网页壁纸 iframe 要接收后端从桌面注入的鼠标事件 -->
     <WallpaperStage
       ref="stage"
       :target="state.target"
@@ -248,6 +250,7 @@ onBeforeUnmount(() => {
       :transition="state.transition"
       :volume="state.volume"
       :playback-rate="state.playbackRate"
+      interactive
     />
     <!-- 调试面板（开发模式），内容与原实现一致 -->
     <div v-if="IS_DEV" class="debug-panel">

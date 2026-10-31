@@ -25,7 +25,7 @@ export interface WpeVideoProps {
 
 /**
  * 壁纸目标（后端 `WallpaperTarget`）：普通文件按扩展名 / 类型播图或播视频，目录型 WPE 视频播 `compatiblePath`；
- * WPE 网页（`x-wpe/web`）没有可播放媒体，入口由后端在 `set_wpe_web_preview` 里按 id 现算并返回。
+ * WPE 网页（`x-wpe/web`）没有可播放媒体，web 层 iframe 直接加载 `webEntry`（预览与桌面同一份目标）。
  */
 export interface WallpaperTarget {
   id: string;
@@ -33,6 +33,8 @@ export interface WallpaperTarget {
   type?: string;
   compatiblePath?: string;
   wpeVideo?: WpeVideoProps | null;
+  /** 网页壁纸的入口 `file://`（后端 `wallpaper::web_entry` 现算）；其它类型、非 Windows 为空。 */
+  webEntry?: string | null;
 }
 
 /** `WallpaperStage` 暴露给调试面板的只读状态。 */
