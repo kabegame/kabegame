@@ -4,16 +4,16 @@
     "properties": {
         "kind": { "type": "string", "default": "image", "optional": false }
     },
-    // WHERE 按 kind 分支: image = 非 video 媒体, video = video / video/* 媒体。
-    // 用 CASE 单条 SQL 同时表达两分支, kind 作为 bind 参数。
+    // type 已规范化，video/* 归视频，x-wpe/video 仍归图片。
+    // 保持 CASE 包裹，避免分页走低选择性的 idx_images_type 再整体排序，见 RULES.md。
     "query": {
-        "where": "CASE ${properties.kind} WHEN 'video' THEN (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') ELSE NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') END"
+        "where": "CASE ${properties.kind} WHEN 'video' THEN images.type GLOB 'video/*' ELSE NOT (images.type GLOB 'video/*') END"
     },
     "list": {
         "${fmt.format}": {
             // 列名统一为 type（原 media_type），读 gallery_route 投影的 `type` 列。
             // 分组计数 count 随列举带出，list(with_count=false) 即可拿到每种格式的行数。
-            "sql": "SELECT format, cnt AS count FROM (SELECT LOWER(SUBSTR(COALESCE(sub.type, ''), INSTR(COALESCE(sub.type, ''), '/') + 1)) AS format, COUNT(*) AS cnt FROM (${composed}) AS sub WHERE LOWER(COALESCE(sub.type, '')) LIKE '%/%' GROUP BY format) WHERE format != '' AND cnt > 0 ORDER BY format ASC",
+            "sql": "SELECT SUBSTR(sub.type, INSTR(sub.type, '/') + 1) AS format, COUNT(*) AS count FROM (${composed}) AS sub GROUP BY format ORDER BY format ASC",
             "data_var": "fmt",
             "provider": "gallery_media_format_provider",
             "properties": {

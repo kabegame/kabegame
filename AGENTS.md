@@ -49,6 +49,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 **组件库与 packages 子仓库**——维护边界和目录级约束见 [packages/AGENTS.md](packages/AGENTS.md)。
 
 **文件类型的唯一事实来源：**
+- `images.type` 一定非空、小写、去掉首尾空白且形如「主类/子类」（两段非空），所有生产写入必须经 Rust `normalize_stored_media_type`（当前由 `Storage::add_image` 调用），不能依赖遗留数据库默认值。查询直接读列，不再包 `LOWER` / `COALESCE`；按 type 过滤的排序分页查询保持 `CASE` / `SUBSTR` 等不可走 `idx_images_type` 的形态，避免整体排序，详见 `cocs/provider-dsl/RULES.md`。
 - `kabegame_core::media::image_type::MEDIA_FORMATS` 是唯一的格式表，包含格式键、标准 MIME 值、扩展名、别名和支持标志。`images.type` 存储 `image/jpg` 和 `video/mov` 等格式键；仅在需要标准 MIME 的边界（HTTP Content-Type / Android MediaStore）使用 `mime_from_format`。
 - 在 Rust 中使用 `kabegame_core::media::image_type::*`（例如 `is_image_by_path`、`supported_image_extensions`），不要硬编码扩展名或 MIME 值。前端使用 `get_supported_image_types` Tauri 命令；其 `mimeByExt` 的值仍为标准 MIME。
 - `supported_video_extensions()` 始终返回内置视频列表。前端 `isVideoMediaType` 通过检查 `type.startsWith("video/")` 决定图库展示。

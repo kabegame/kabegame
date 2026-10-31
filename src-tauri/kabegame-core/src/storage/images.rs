@@ -950,8 +950,13 @@ impl Storage {
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        image.media_type =
-            crate::media::image_type::normalize_stored_media_type(image.media_type.take());
+        image.media_type = Some(crate::media::image_type::normalize_stored_media_type(
+            image.media_type.take(),
+        ));
+        debug_assert!(image
+            .media_type
+            .as_deref()
+            .is_some_and(crate::media::image_type::is_stored_media_type));
 
         let thumbnail_path = if image.thumbnail_path.trim().is_empty() {
             image.local_path.clone()

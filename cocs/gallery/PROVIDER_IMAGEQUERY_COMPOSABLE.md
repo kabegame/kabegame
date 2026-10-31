@@ -68,7 +68,7 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 - `date_filter(ym)`
 - `date_range_filter(start, end)`
 - `surf_record_filter(id)`
-- `media_type_filter(media_type)`：`COALESCE(images.type, 'image') = ?`（`image` / `video`）；别名 `by_media_type` 带默认按抓取时间排序
+- 媒体分类：`CASE ? WHEN 'video' THEN images.type GLOB 'video/*' ELSE NOT (images.type GLOB 'video/*') END`；保留 CASE，避免排序分页改走低选择性的 type 索引。
 
 这类组件定义“保留哪些记录”，通常由 root/provider 路径语义贡献。
 
@@ -107,9 +107,9 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 `_kb_desc`。另支持 `image-only` / `video-only` 根段，在画册内叠加媒体类型过滤。语义与根级
 `all` / `wallpaper-order` 对齐。前端路径拼装见 [`apps/kabegame/src/utils/albumPath.ts`](/apps/kabegame/src/utils/albumPath.ts)。
 
-画廊根级另有 `media-type/image`、`media-type/video`（`MainMediaTypeGroupProvider`）；虚拟盘中文根目录在 `RootProvider` 中为「按种类」→「图片」/「视频」（`MediaTypeGroupProvider`）。
+画廊根级由 `gallery_media_type_router` 列举 `media-type/image`、`media-type/video`，以 `CASE WHEN sub.type GLOB 'video/*'` 分组计数；虚拟盘复用媒体分类与格式 provider，中文根目录为「按媒体」→「图片」/「视频」。`x-wpe/video` 仍归图片。
 
-`images.type` 现存格式键，因此格式细分值使用规范后缀（如 `jpg` / `mov` / `mkv`），不再显示旧标准 MIME 的 `jpeg` / `quicktime` / `x-matroska` 子类型。
+`images.type` 由 Rust 写入口保证非空、小写且为「主类/子类」。格式列举直接按 `SUBSTR(sub.type, INSTR(sub.type, '/') + 1)` 分组计数，格式过滤同样直接取子类，不再做 LOWER / COALESCE 或过滤空格式。新入库使用规范后缀（如 `jpg` / `mov` / `mkv`）；v049 不归并已合规的历史别名（例如 `image/jpeg`）。执行计划约束见 `cocs/provider-dsl/RULES.md` §2.2。
 
 ## desc 子目录统一规则
 

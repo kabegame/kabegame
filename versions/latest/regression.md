@@ -1,5 +1,21 @@
 # v4.7.0 regression
 
+## `images.type` 规范化与索引（v049）
+
+2026-10-31：新增同步迁移 v049，自包含规则修正历史残留并创建 `idx_images_type`；Rust 写入口始终返回非空小写「主类/子类」，查询直接读列。分类仍以 `video/*` 判定（`x-wpe/video` 归图片），保留 CASE / SUBSTR，使画廊排序分页继续沿 `idx_crawled_at` 读取。数据库不加触发器或 CHECK，遗留默认值不用于生产写入。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 写入口规范化与规则比对 | macOS 单测 | `test-kabegame kabegame-core --lib image_type` | 空值、旧类别、无斜杠、缺主类 / 子类及未知类型均得到合规格式键；格式表外 ASCII 用例与迁移 SQL 一致 | 5 通过 |
+| [x] | 历史修正、幂等与索引 | macOS 单测 | `test-kabegame kabegame-core --lib migrations` | v049 修正残留、保留合规别名；重跑不改行；等值查询走 type 索引，分类分页走抓取时间索引 | 50 通过，含 v049 的 2 项 |
+| [x] | 实际 DSL 与格式语义 | macOS e2e | `test-kabegame kabegame-core --test dsl_e2e` | 图片 / 视频 / 格式筛选、画册和虚拟盘列举不变；生成 SQL 不走 type 索引排序；WPE video 仍归图片 | 60 通过，含新增 2 项；允许既有 id 次排序的 LAST TERM 临时排序；scratch 测试提供 SNAP_DB / PQ_PATH 后 1 通过 |
+| [x] | 真实数据库副本升级 | macOS，dev / prod 数据库的 SQLite backup 副本 | 在副本执行 `run_pending`，比较升级前后 PathQL 分类与格式列举、全部 id/type，并检查索引 | dev v48 与 prod v46 均升级至 v49；修正 0 行；所有计数与格式相同，索引存在 | 临时 core 探针执行真实 `run_pending`：dev 5,302 行从 v48、prod 64,151 行从 v46 升至 v49，均修正 0 行，PathQL 分类 / 格式列表及每行 id/type 完全一致；另对旧 / 新 SQL 逐行比对分类结果和格式计数，一致。原库未改动；证据 `.kabegame/debug/type-index/` |
+| [ ] | core 全量单测 | macOS | `test-kabegame kabegame-core` | 全部通过 | 413 通过、4 失败：`replace_image_thumbnail_path_deletes_old_independent_thumbnail`、`parses_new_library_folders_format`、`parses_old_library_folders_format`、`relative_paths_reject_traversal_and_absolute`；与本文件「应用日志」已记录的 4 个既有失败一致。cargo 默认在 lib 失败后停止，两个集成 target 已另行执行 |
+| [x] | 编译检查 | macOS standard | `check-kabegame --skip vue` | Rust 检查通过 | 0 error；仅有仓库既有 warning |
+| [ ] | 画廊过滤面板与虚拟盘真机 | macOS dev CEF | 点击图片 / 视频与各格式筛选，查看结果数；打开虚拟盘「按媒体」 | 面板计数与结果一致；目录及分类与升级前一致 | 当前没有运行中的应用，CDP 未发现 |
+| [ ] | 下载与本地导入 | macOS dev CEF | 下载一张图并导入本地文件，再检查库中 type | 两条新记录都满足不变量，原有预览正常 | 当前没有运行中的应用，未执行 |
+| [ ] | 真机分页 SQL | macOS dev CEF，`KABEGAME_SQL_DEBUG=1` | 打开媒体分类过滤并分页，检查实际 SQL 计划 | 走 `idx_crawled_at`，无 type 索引后的临时排序 | 当前没有运行中的应用；单测覆盖执行计划 |
+
 ## 事件监听权限 + 特赦 webview + ACL 的 frame 维度（tauri 补丁 0014–0017）
 
 2026-10-31：四个 tauri 补丁让事件与 ACL 只看后端知道的调用方身份。0014：JS 事件按接收方 webview 身份投递（webview label、所在窗口 label，同名时再加 WebviewWindow），`listen` 不再读取前端传的 `target`，`emit_to(App)` 不再送给 JS，`unlisten` 只在调用方 webview 的表里删除，窗口关闭拦截看本窗口任一 webview；0015：`core:event:allow-listen` 支持 `{ "event": … }` 作用域（末尾 `*` 前缀匹配，deny 优先）；0016：capability 新增 `frames`（`main` 默认 / `sub` / `any`），`InvokeRequest.frame` 取自请求 extension 的 `IpcFrame`（缺省按主 frame）；0017：`Builder::acl_exempt_webview`，本地来源主 frame 免 ACL（显式 deny 与 listen 作用域都跳过，ACL 照常解析）。`tauri-runtime-cef` 给每个自定义协议请求插 `IpcFrame`（无 CEF frame 记 `Unknown`），`cef-ipc` 回退通道重建请求时带上。应用侧：特赦 `main` / `wallpaper`，删除 `permissions/main.toml`，`main-capability` 去掉 `"main"`；`surf-navbar` 的 `core:event:default` 换成只能听 `surf-url-changed` / `surf-collect-state` 的 allow-listen + allow-unlisten；`wpe-web` 的 allow-listen 限定 `wallpaper-ping` / `setting-change` / `image-changed` / `images-change`；导航栏前端去掉 `{ target }` 绕法；预览代办（`wpeWebBridge.ts`）只登记三事件白名单；`wpe_shim.js` 去掉 `target`。另把 `mock_context` 缺的 `bins: None` 并入补丁 0009（字段由它引入，否则 `cargo test -p tauri` 编不过）。真机：2026-10-31 在 macOS dev（CEF）上验证 M1–M9，均通过；本仓 dev profile 下 tauri 关闭了 debug-assertions，拒绝信息只有 `Command … not allowed by ACL`，不带 URL / frame，frame 维度靠主 frame 对照组判定。Windows / Android / Linux 项待验证。

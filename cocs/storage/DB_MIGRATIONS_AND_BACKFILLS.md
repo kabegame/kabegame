@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS backfill_jobs (
 );
 ```
 
+## v049：媒体类型规范化与索引
+
+v049 在同步迁移事务内创建 `idx_images_type`，并一次性修正 `images.type` 的空值、首尾空格、大小写和缺失主类 / 子类。
+迁移规则自包含，不依赖运行时格式表，也不归并已合规别名（`image/jpeg` 保持原样）。之后所有生产写入经 Rust
+`normalize_stored_media_type`；格式表外 ASCII 输入有 SQL / Rust 规则逐条比对测试，另有迁移幂等与执行计划回归。
+发布态回填注册表没有作业读写该列，`min_backfill_version` 为 `None`；新库在 `init` 同步创建索引。
+遗留 schema 默认值 `image` 保留，但生产写入必须显式提供规范化值。分页索引用法见 `../provider-dsl/RULES.md` §2.2。
+
 ## 执行模型
 
 作业按批推进。作业拿到的不是裸 `&Connection`，而是 `BackfillCtx`：

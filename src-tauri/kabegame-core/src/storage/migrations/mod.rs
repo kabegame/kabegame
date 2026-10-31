@@ -79,6 +79,7 @@ mod v045_schedule_spec_v2;
 mod v046_album_images_foreign_keys;
 mod v047_metadata_template;
 mod v048_backfill_jobs;
+pub(crate) mod v049_images_type_normalized;
 
 use backfill::{Backfill, BackfillCtx};
 use rusqlite::Connection;
@@ -374,13 +375,19 @@ const MIGRATIONS: &[Migration] = &[
         up: v048_backfill_jobs::up,
         min_backfill_version: None,
     },
+    Migration {
+        version: 49,
+        name: "images_type_normalized",
+        up: v049_images_type_normalized::up,
+        min_backfill_version: None,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 48;
+pub const LATEST_VERSION: u32 = 49;
 
 pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

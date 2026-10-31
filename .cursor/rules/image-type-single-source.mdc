@@ -45,3 +45,10 @@ if ["jpg", "jpeg", "png"].contains(&ext) { ... }
 ## 前端
 
 前端需要「支持的图片类型列表」时，应通过 Tauri 命令 **`get_supported_image_types`** 获取（该命令内部从 `image_type` 读取），不要在 TS/Vue 里维护一份重复的后缀或 MIME 列表。
+
+## `images.type` 存储不变量
+
+- `images.type` 一定非空、小写、去掉首尾空白，形如「主类/子类」且两段都非空。
+- 由 Rust 的 `normalize_stored_media_type` 保证，所有生产写入必须经此函数（当前唯一写入口为 `Storage::add_image`）；数据库不加触发器或 CHECK。遗留 schema 默认值 `image` 不满足不变量，不能依赖它写入。
+- 查询直接读列，不再包 `LOWER` / `COALESCE`。分类按 `video/*` 判断，`x-wpe/video` 仍归图片；格式取第一个斜杠后的子类。
+- `idx_images_type` 只服务高选择性的等值读取。按 type 过滤且带排序分页的查询保持 `CASE` / `SUBSTR` 等不可走该索引的形态，必要时用 `+images.type`；原因与执行计划约束见 `cocs/provider-dsl/RULES.md`。

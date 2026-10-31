@@ -15,11 +15,7 @@ list:
       FROM (SELECT 0 AS ord, 'image' AS kind UNION ALL SELECT 1, 'video') AS k
       LEFT JOIN (
         SELECT
-          CASE
-            WHEN LOWER(COALESCE(sub.type, '')) = 'video' OR LOWER(COALESCE(sub.type, '')) LIKE 'video/%'
-              THEN 'video'
-            ELSE 'image'
-          END AS kind,
+          CASE WHEN sub.type GLOB 'video/*' THEN 'video' ELSE 'image' END AS kind,
           COUNT(*) AS count
         FROM (${composed}) AS sub
         GROUP BY kind

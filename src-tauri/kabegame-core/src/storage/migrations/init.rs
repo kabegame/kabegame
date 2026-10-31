@@ -84,6 +84,7 @@ CREATE TABLE images (
     metadata_id           INTEGER REFERENCES metadata(id),
     thumbnail_path        TEXT    NOT NULL DEFAULT '',
     hash                  TEXT    NOT NULL DEFAULT '',
+    -- 遗留默认值不满足格式键不变量；写入必须显式给出 Rust 规范化后的 type。
     type                  TEXT    DEFAULT 'image',
     width                 INTEGER,
     height                INTEGER,
@@ -100,6 +101,8 @@ CREATE TABLE images (
         CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END
     ) VIRTUAL
 );
+-- 同 v049；按 type 过滤的分页查询不要写成可走此索引的形态。
+CREATE INDEX idx_images_type                   ON images(type);
 CREATE INDEX idx_crawled_at                    ON images(crawled_at DESC);
 CREATE INDEX idx_plugin_id                     ON images(plugin_id);
 CREATE INDEX idx_task_id                       ON images(task_id);

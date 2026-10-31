@@ -222,7 +222,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             metadata_id INTEGER,
             thumbnail_path TEXT NOT NULL DEFAULT '',
             hash TEXT NOT NULL DEFAULT '',
-            type TEXT DEFAULT 'image',
+            type TEXT DEFAULT 'image/jpg',
             width INTEGER,
             height INTEGER,
             display_name TEXT NOT NULL DEFAULT '',

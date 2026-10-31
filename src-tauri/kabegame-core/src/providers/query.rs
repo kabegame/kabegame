@@ -600,7 +600,9 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
         width: i("width").map(|v| v as u32),
         height: i("height").map(|v| v as u32),
         display_name: s("display_name").unwrap_or_default(),
-        media_type: crate::media::image_type::normalize_stored_media_type(s("type")),
+        media_type: Some(crate::media::image_type::normalize_stored_media_type(s(
+            "type",
+        ))),
         last_set_wallpaper_at: i("last_set_wallpaper_at")
             .filter(|&t| t >= 0)
             .map(|t| t as u64),
@@ -658,7 +660,7 @@ mod tests {
                 metadata_id INTEGER,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
                 hash TEXT NOT NULL DEFAULT '',
-                type TEXT DEFAULT 'image',
+                type TEXT DEFAULT 'image/jpg',
                 width INTEGER,
                 height INTEGER,
                 display_name TEXT NOT NULL DEFAULT '',

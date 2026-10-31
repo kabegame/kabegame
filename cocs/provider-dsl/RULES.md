@@ -210,6 +210,20 @@ COUNT，把整个结构重跑 N 次。
 
 ---
 
+### 2.2 低选择性列的过滤形态
+
+`images.type` 由 Rust 写入口 `normalize_stored_media_type` 保证非空、小写、去掉首尾空白，且形如「主类/子类」、两段非空。
+v049 一次性修正历史残留；所有生产写入必须经该函数，不依赖 schema 的遗留默认值 `image`，数据库不加触发器或 CHECK。
+查询直接读列，不再包 `LOWER` / `COALESCE`；分类用 `video/*` 判断（`x-wpe/video` 仍归图片），格式用 `SUBSTR` 取第一个斜杠后的子类。
+
+`idx_images_type` 供 `type = ?` 的高选择性读取使用，如网页壁纸 `x-wpe/web`。type 只有十几种值，本库不跑 `ANALYZE`；
+低选择性的 type 过滤若同时带 `ORDER BY … LIMIT`，不能写成可走此索引的形态：分类保持 `CASE` 包裹，格式保持 `SUBSTR` 表达式，
+必要时用 `+images.type` 禁用该列索引。计划阶段在本机 6.4 万行库的实测中，裸 `type = 'image/jpg' ORDER BY crawled_at DESC LIMIT 100`
+走 type 索引再整体排序约 15 ms；禁用 type 索引后沿 `idx_crawled_at` 取满即停，约 1 ms。
+迁移单测与实际 DSL 生成 SQL 的 e2e 回归都检查执行计划，后续改写过滤条件时必须保留这一约束。
+
+---
+
 ## 3. ContribQuery 各字段累积规则
 
 每个 provider 的 `query` 在路径上贡献片段。引擎按字段类型不同处理：

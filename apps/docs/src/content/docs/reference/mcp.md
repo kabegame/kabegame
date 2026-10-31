@@ -147,7 +147,7 @@ images://gallery/plugin/<pluginId>/_kb_desc/_kb_x100x/1
 
 `id`、`url`、`localPath`、`pluginId`、`taskId`、`surfRecordId`、`crawledAt`（unix 秒）、`metadataId`、`pluginVersion`、`thumbnailPath`、`favorite`、`isHidden`、`localExists`、`hash`、`width`、`height`、`displayName`、`type`、`lastSetWallpaperAt`、`size`（字节）、`albumOrder`、`compatiblePath`、`postUrl`。
 
-`type` 是入库前经 `normalize_stored_media_type` 归一化的**存储格式 key**，例如 `image/jpg`、`video/mp4`；只有历史空值才回落为 `image`。序列化 key 是 `type`，不是 `mediaType`。
+`type` 是入库前经 `normalize_stored_media_type` 归一化的**存储格式 key**，例如 `image/jpg`、`video/mp4`；`type` 总是非空、小写的「主类/子类」格式键。序列化 key 是 `type`，不是 `mediaType`。
 
 :::caution
 `favorite`、`isHidden`、`albumOrder` 只在 `images://gallery/...` 路径上计算。在原始单图路径 `images://id_{id}` 上，它们恒为 `false`、`false`、`null`；需要这些画廊衍生字段时，请改读 `images://gallery/by_id/{id}`。

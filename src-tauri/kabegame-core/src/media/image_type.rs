@@ -417,25 +417,36 @@ pub fn default_video_format() -> &'static str {
     "video/mp4"
 }
 
-/// 将数据库/API 中的 `type` 规范为格式键；未知特殊值仅转小写后透传。
-pub fn normalize_stored_media_type(media_type: Option<String>) -> Option<String> {
+/// `images.type` 的唯一规范化入口：返回值一定非空、小写、形如「主类/子类」且两段都非空。
+/// 所有写入 `images.type` 的路径都必须经过它（查询层据此直接读列，不再包 LOWER / COALESCE）。
+pub fn normalize_stored_media_type(media_type: Option<String>) -> String {
     let raw = media_type.unwrap_or_default();
-    let s = raw.trim();
-    if s.is_empty() {
-        return Some(default_image_format().to_string());
-    }
-    let lower = s.to_lowercase();
-    if lower == "image" {
-        return Some(default_image_format().to_string());
+    let lower = raw.trim().to_lowercase();
+    if lower.is_empty() || lower == "image" {
+        return default_image_format().to_string();
     }
     if lower == "video" {
-        return Some(default_video_format().to_string());
+        return default_video_format().to_string();
     }
-    Some(
-        media_format(&lower)
-            .map(|format| format.key.to_string())
-            .unwrap_or(lower),
-    )
+    if let Some(format) = media_format(&lower) {
+        return format.key.to_string();
+    }
+    // 格式表外的值按 v049 的同一条规则兜底
+    match lower.find('/') {
+        None => format!("image/{lower}"),
+        Some(0) => default_image_format().to_string(),
+        Some(_) if lower.ends_with('/') => default_image_format().to_string(),
+        Some(_) => lower,
+    }
+}
+
+/// 是否满足 `images.type` 的不变量（测试与断言用）。
+pub fn is_stored_media_type(value: &str) -> bool {
+    value == value.trim().to_lowercase()
+        && !value.ends_with('/')
+        && value
+            .find('/')
+            .is_some_and(|slash| slash > 0 && slash + 1 < value.len())
 }
 
 /// 判断扩展名是否为支持的视频类型。
@@ -541,6 +552,75 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stored_media_type_always_satisfies_invariant() {
+        for (input, expected) in [
+            (None, "image/jpg"),
+            (Some(""), "image/jpg"),
+            (Some(" IMAGE "), "image/jpg"),
+            (Some("Video"), "video/mp4"),
+            (Some("gif"), "image/gif"),
+            (Some("/webp"), "image/jpg"),
+            (Some("image/"), "image/jpg"),
+            (Some("x-wpe/web"), "x-wpe/web"),
+            (Some("image/jpeg"), "image/jpg"),
+            (Some("text/plain"), "text/plain"),
+            (Some("\tTEXT/PLAIN\n"), "text/plain"),
+            (Some("自定义/格式"), "自定义/格式"),
+        ] {
+            let actual = normalize_stored_media_type(input.map(str::to_owned));
+            assert_eq!(actual, expected, "input={input:?}");
+            assert!(is_stored_media_type(&actual), "input={input:?}: {actual}");
+        }
+        for invalid in [
+            "",
+            "image",
+            "/jpg",
+            "image/",
+            "image//",
+            "image/jpg/",
+            " Image/jpg",
+            "IMAGE/JPG",
+            "image/jpg ",
+        ] {
+            assert!(!is_stored_media_type(invalid), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn stored_media_type_fallback_matches_v049_sql() {
+        use crate::storage::migrations::v049_images_type_normalized::NORMALIZED_TYPE_SQL;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE images (type TEXT)")
+            .unwrap();
+        let sql = format!("SELECT {NORMALIZED_TYPE_SQL} FROM images");
+        // 已知别名由运行时格式表归并，迁移只保证形态；只对未命中格式表的 ASCII 输入比较。
+        for input in [
+            None,
+            Some(""),
+            Some("  "),
+            Some("image"),
+            Some("VIDEO"),
+            Some(" GIF "),
+            Some("/webp"),
+            Some("image/"),
+            Some("/"),
+            Some("text/plain"),
+            Some(" CUSTOM/FORMAT "),
+            Some("custom/format/extra"),
+        ] {
+            assert!(input.is_none_or(|value| media_format(value).is_none()));
+            conn.execute("DELETE FROM images", []).unwrap();
+            conn.execute("INSERT INTO images(type) VALUES (?1)", [input])
+                .unwrap();
+            let migrated: String = conn.query_row(&sql, [], |row| row.get(0)).unwrap();
+            let written = normalize_stored_media_type(input.map(str::to_owned));
+            assert_eq!(migrated, written, "input={input:?}");
+            assert!(is_stored_media_type(&migrated));
+        }
+    }
+
+    #[test]
     fn builtin_image_support_includes_modern_and_heif_formats() {
         let extensions = supported_image_extensions();
         assert!(extensions.iter().any(|ext| ext == "webp"));
@@ -586,12 +666,12 @@ mod tests {
         assert_eq!(ext_from_mime("video/x-matroska").as_deref(), Some("mkv"));
         assert_eq!(mime_from_format("image/jpg"), Some("image/jpeg"));
         assert_eq!(
-            normalize_stored_media_type(Some("image/jpeg".to_string())).as_deref(),
-            Some("image/jpg")
+            normalize_stored_media_type(Some("image/jpeg".to_string())),
+            "image/jpg"
         );
         assert_eq!(
-            normalize_stored_media_type(Some("text/plain".to_string())).as_deref(),
-            Some("text/plain")
+            normalize_stored_media_type(Some("text/plain".to_string())),
+            "text/plain"
         );
     }
 
@@ -604,14 +684,18 @@ mod tests {
         assert!(!format.is_image());
         assert!(!format.is_video());
         assert_eq!(
-            normalize_stored_media_type(Some("x-wpe/video".to_string())).as_deref(),
-            Some("x-wpe/video")
+            normalize_stored_media_type(Some("x-wpe/video".to_string())),
+            "x-wpe/video"
         );
         assert!(media_format("x-wpe/web").is_some());
         assert!(media_format("x-wpe/scene").is_some());
         // 目录型条目不得进入按扩展名摄入的列表。
-        assert!(!supported_media_extensions().iter().any(|ext| ext == "x-wpe/video"));
-        assert!(!mime_by_ext().values().any(|m| m == "application/x-wpe-project"));
+        assert!(!supported_media_extensions()
+            .iter()
+            .any(|ext| ext == "x-wpe/video"));
+        assert!(!mime_by_ext()
+            .values()
+            .any(|m| m == "application/x-wpe-project"));
 
         assert_eq!(wpe_kind(Some("x-wpe/video")).as_deref(), Some("video"));
         assert!(is_wpe_type(Some("X-WPE/VIDEO")));
