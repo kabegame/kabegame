@@ -57,6 +57,7 @@
 ## 开发侧
 
 ### Added
+- 新增场景壁纸的 WebGPU 渲染器（`apps/kabegame/src/wpe-scene/render/`）与渲染组件 `WpeSceneView.vue`：RGBA8 / BC3 纹理、std140 uniform 与内置 uniform、混合照 linux-wallpaperengine，cover 铺到画布；组件自读用户属性、属性改了即重编译，不能渲染时通知调用方退回预览图。`get_wpe_web_properties` / `set_wpe_web_user_properties` 也接受场景壁纸。新增开发依赖 `@webgpu/types`。尚未接进壁纸窗口与预览（P1-5）。
 - 新增场景壁纸的前端编译管线（`apps/kabegame/src/wpe-scene/compile/`）：按项目散文件 → `scene.pkg` → WPE `assets/` 查资源，解析场景 / 模型 / 材质 json 与 `.tex`（视频纹理只记 MP4 区间），经 `wpesl2wgsl` 翻译着色器，产出渲染器的唯一输入 `SceneBundle`，未实现的能力列进 `unsupported`；`compileSceneInWorker` 在 Worker 里编译，由主线程代读 `file:`。本机 29 张样本中 eagleflag / deep_space / beach 三张可编译、其余都正确报出不支持项。尚无使用方（渲染器在后续阶段）。
 - 壁纸目标新增 `sceneAssets`：场景壁纸（`x-wpe/scene`）的 `<WPE 安装目录>/assets` 路径列表，供前端解析内置着色器与资源；WPE 安装目录的发现（`wpe::discover::engine_dirs`）从 `locale.rs` 挪到 `discover.rs` 共用。
 - 新增场景壁纸 `scene.pkg` 读取（`apps/kabegame/src/wpe-scene/compile/pkg.ts`，移植自 linux-wallpaperengine）：目录表与条目都经带 `Range` 头的 `fetch(file:)` 按区间读，不整包加载；本机 5 个创意工坊包全部解析通过。尚未接入导入与渲染。

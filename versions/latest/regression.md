@@ -1,5 +1,24 @@
 # v4.7.0 regression
 
+## 场景壁纸 P1-4：WebGPU 渲染器
+
+`apps/kabegame/src/wpe-scene/render/` 把 `SceneBundle` 画到画布：RGBA8 / BC3 纹理连同 mip 上传，std140 打包 uniform（内置 uniform 照 linux-wallpaperengine `CPass.cpp`，材质与用户值优先），混合照 LWE，场景分辨率离屏目标再 cover 铺到画布，`paused` / 页面隐藏时停帧并冻结 `g_Time`。
+每个着色器模块开头加 `diagnostic(off, derivative_uniformity);`（HLSL 允许分支里隐式求导）。组件 `components/wallpaper/WpeSceneView.vue` 自读用户属性、在 Worker 里编译、按本张的 `metadataId` 补丁重编译，不能渲染时 emit `fallback(reasons)`。
+`get_wpe_web_properties` / `set_wpe_web_user_properties` 放宽为也接受 `x-wpe/scene`（属性格式与网页壁纸相同）。尚未接进 `WallpaperStage`（P1-5），网格、预览与桌面仍显示预览图。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测 | Windows | `apps/kabegame` 下 `KABEGAME_WPE_ROOT=<WPE 安装目录> npx vitest run src/wpe-scene` | uniform 打包、矩阵 / 四边形 / cover、BC 行跨度与 mip 物理尺寸、混合映射、时钟等通过；原有编译管线与语料用例照过 | 2026-11-01：4 个文件 69 passed（Claude 独立复跑） |
+| [x] | S2 类型与格式 | Windows | `vue-tsc --noEmit`；Prettier；`check-kabegame --skip vue` | 0 error | 2026-11-01：vue-tsc 0、cargo 0 error；新增 / 修改的 ts、vue、package.json 格式通过 |
+| [x] | D1 三张 P1 样本 | Windows dev | 主窗口临时画布渲染 eagleflag / deep_space / beach，对照各自 `preview.jpg` | 构图、朝向、颜色与预览图一致；无 WebGPU 校验错误 | 2026-11-01：适配器 nvidia lovelace、有 `texture-compression-bc`。eagleflag、deep_space 一致；beach 比作者 `preview.jpg` 暗、少光晕，但与 WPE 桌面实拍一致（见 D6），预览图另有后期。Claude 另独立渲染 eagleflag 与 beach，无错误、无告警 |
+| [x] | D2 动画 | Windows dev | 同上隔约 1 秒截两帧 | 旗帜摆动、流动 / 摇摆在动 | 2026-11-01：变化像素 eagleflag 33.5%、deep_space 16%、beach 19% |
+| [x] | D3 用户属性覆盖 | Windows dev | 给 eagleflag 传 `userProperties: { flagcolor2: "0 0 1" }` | 星形变蓝 | 2026-11-01：通过（只走编译参数，未写数据库） |
+| [x] | D4 组件行为 | Windows dev | 临时挂载 `WpeSceneView`：正常样本、`paused`、模拟页面隐藏、伪造 `metadataId` 补丁、换到 retro 再换回 | 首帧 emit `ready`；暂停时画面不变、恢复继续；补丁触发重编译且不重复 `ready`；retro emit `fallback`（`combo:dots`、`object:model`、`shader:retro:unsupported`），换回能再 `ready` | 2026-11-01：全部符合；`ready` 约 230–265 ms。修了响应式 target 交给 Worker 无法克隆的问题 |
+| [x] | D5 全语料 Tint | Windows dev | 29 张样本 bundle 的 program，以及 wasm 翻译成功的 153 对着色器，逐个 `createShaderModule` + `getCompilationInfo` | 0 error | 2026-11-01：bundle 46 个 program / 92 个模块、语料 306 个模块，都是 0 error 0 warning。不加前言时只有 `depthparallax` 片元报 `textureSample must only be called from uniform control flow` |
+| [x] | D6 beach 与 WPE 实机对照 | Windows | 在 Wallpaper Engine 里把 beach 设为桌面壁纸并截全屏（3840×2160），与 Kabegame 渲染（16:9 画布）缩放到同尺寸对照 | 构图、亮度与光晕一致 | 2026-11-01：用户截桌面、Claude 对照：棕榈 / 树干 / 山线 / 水面高光位置重合；平均亮度 122.5 对 123.9，上下四段亮度差都在 5 以内，平均像素差 10.1（含云层滚动与摇摆相位、桌面图标）。作者 `preview.jpg` 更亮、带光晕且偏移约 30 px，不能当基准 |
+| [ ] | D7 设备丢失重建 | Windows dev | 触发 GPU 设备丢失 | 重建一次后继续渲染，一分钟内再丢则 `fallback` | 未测：真机无法主动触发 |
+| [ ] | D8 指针 | Windows dev | `interactive` 时移动指针 | `g_PointerPosition` 跟随 | 未测：P1 样本不用指针，只有单测 |
+
 ## 场景壁纸 P1-3：前端编译管线
 
 `apps/kabegame/src/wpe-scene/compile/` 把一张场景壁纸编译成渲染器的唯一输入 `SceneBundle`（图层、着色器程序、纹理、`unsupported` 能力键）：

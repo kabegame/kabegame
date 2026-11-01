@@ -33,6 +33,7 @@
     "npm:@vue/tsconfig@~0.5.1": "0.5.1",
     "npm:@vueuse/core@^14.1.0": "14.4.0_vue@3.5.40__typescript@5.9.3",
     "npm:@vueuse/core@^14.4.0": "14.4.0_vue@3.5.40__typescript@5.9.3",
+    "npm:@webgpu/types@~0.1.60": "0.1.74",
     "npm:agent-browser@~0.33.2": "0.33.2",
     "npm:astro@5": "5.18.1_@types+node@22.20.1_sass@1.102.0",
     "npm:async-validator@^4.2.5": "4.2.5",
@@ -2218,6 +2219,9 @@
       "dependencies": [
         "vue"
       ]
+    },
+    "@webgpu/types@0.1.74": {
+      "integrity": "sha512-lgiI4hbuLcI9unnm2cL/tvCaQU45dp0xcLWJh5uB/9MBGvIA4F8XIk7nSiBeg+K4xWGYwgZKn80LmERI5CxoTA=="
     },
     "abbrev@2.0.0": {
       "integrity": "sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ=="
@@ -7116,6 +7120,7 @@
             "npm:@vue/test-utils@^2.4.6",
             "npm:@vue/tsconfig@~0.5.1",
             "npm:@vueuse/core@^14.1.0",
+            "npm:@webgpu/types@~0.1.60",
             "npm:axios@^1.6.7",
             "npm:dayjs@^1.11.20",
             "npm:dexie@^4.2.0",

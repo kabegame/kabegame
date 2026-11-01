@@ -135,7 +135,9 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     - **输出**：WGSL 与反射（共用的 std140 uniform 块、纹理绑定 `1 + 2n` / `2 + 2n`、location、COMBO 来源）。
     - **语料**：本机语料 2026-11-01 为 153/167。
     - **`scene.pkg`**：移植自 linux-wallpaperengine 的目录表读取，前端经带 `Range` 头的 `fetch(file:)` 按条目区间读（`wpe-scene/compile/pkg.ts`）。
-  - 适用场景：开发 scene 渲染的任一 Phase；读创意工坊场景的 `scene.pkg`；改着色器翻译规则；排查某个 WPE 着色器翻译失败或输出的 WGSL 被拒；调整 wasm 构建链。
+    - **编译管线**（`wpe-scene/compile/`）：资源按项目散文件 → `scene.pkg` → WPE `assets/` 查找（`file:` 响应没有长度，散文件不探测大小），产出渲染器唯一输入 `SceneBundle` 与 `unsupported` 能力键；Worker 编译、主线程代读文件，读取错误回传时保留类型。
+    - **渲染器**（`wpe-scene/render/` + `components/wallpaper/WpeSceneView.vue`）：WebGPU，RGBA8 / BC3 纹理、std140 uniform 打包与内置 uniform、混合照 LWE，场景分辨率离屏目标再 cover 到画布；Tint 前言 `diagnostic(off, derivative_uniformity)`；`WpeSceneView` 自读用户属性、按 `metadataId` 补丁重编译，不能渲染时 emit `fallback(reasons)`。
+  - 适用场景：开发 scene 渲染的任一 Phase；读创意工坊场景的 `scene.pkg`；改着色器翻译规则；排查某个 WPE 着色器翻译失败或输出的 WGSL 被拒；调整 wasm 构建链；排查场景资源找不到、编译慢或请求过多、`unsupported` 误报 / 漏报；排查场景画面与预览图不一致、动画不动、属性不生效、WebGPU / BC 不可用或 Tint 报错导致退回预览图。
 
 ## 下载与任务（`downloader-tasks/`）
 

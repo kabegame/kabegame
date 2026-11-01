@@ -143,7 +143,8 @@ fn properties_view(
     }
 }
 
-/// 属性面板读视图；行不存在或不是 `x-wpe/web` 返回 None。只给主窗口（不进 `wpe-web.toml`）。
+/// 属性面板读视图；行不存在或不是 `x-wpe/web` / `x-wpe/scene` 返回 None。只给主窗口（不进 `wpe-web.toml`）。
+/// 场景壁纸的用户属性与网页壁纸同一格式（`project.json` 的 `general.properties` + metadata 的 `userProperties`）。
 #[tauri::command]
 pub async fn get_wpe_web_properties(
     image_id: String,
@@ -151,7 +152,7 @@ pub async fn get_wpe_web_properties(
     let Some(info) = Storage::find_image_by_id(&image_id).map_err(|e| e.to_string())? else {
         return Ok(None);
     };
-    if wpe_kind(info.media_type.as_deref()).as_deref() != Some("web") {
+    if !has_user_properties(info.media_type.as_deref()) {
         return Ok(None);
     }
     let id = image_id.clone();
@@ -175,8 +176,8 @@ pub async fn set_wpe_web_user_properties(
     let info = Storage::find_image_by_id(&image_id)
         .map_err(|e| e.to_string())?
         .ok_or("image not found")?;
-    if wpe_kind(info.media_type.as_deref()).as_deref() != Some("web") {
-        return Err("not a web wallpaper".into());
+    if !has_user_properties(info.media_type.as_deref()) {
+        return Err("not a web or scene wallpaper".into());
     }
     let id = image_id.clone();
     let changed = tauri::async_runtime::spawn_blocking(move || {
@@ -192,7 +193,12 @@ pub async fn set_wpe_web_user_properties(
     }
     get_wpe_web_properties(image_id)
         .await?
-        .ok_or_else(|| "web wallpaper row missing".to_string())
+        .ok_or_else(|| "wpe wallpaper row missing".to_string())
+}
+
+/// 带作者用户属性的 WPE 类型：网页与场景。
+fn has_user_properties(media_type: Option<&str>) -> bool {
+    matches!(wpe_kind(media_type).as_deref(), Some("web" | "scene"))
 }
 
 fn path_for_page(path: &Path) -> String {

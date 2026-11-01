@@ -1,0 +1,278 @@
+/**
+ * 场景渲染器：持有设备、画布上下文、时钟与帧循环，当前场景（`GpuScene`）可无缝替换。
+ *
+ * - **铺放**：场景先画进场景分辨率的离屏目标，再按 cover（等比盖满、居中裁切）铺到画布。三屏等宽高比差很多的场景
+ *   在 WPE 里怎么处理还没对照过，P1 先统一 cover。
+ * - **帧循环**：`requestAnimationFrame`，默认上限 60 fps（`maxFps`）。`paused` 或 `document.hidden` 时停循环、冻结时钟，
+ *   恢复后 `g_Time` 从冻结处继续（见 `clock.ts`）。暂停期间画布尺寸变了会补画一帧（同一时刻），避免空白。
+ * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
+ * - **失败**：运行期出现未捕获的校验错误时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
+ */
+import type { SceneBundle } from "../compile/bundle";
+import { FrameThrottle, PausableClock } from "./clock";
+import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
+import { oneLine, SceneRenderError } from "./errors";
+import { canvasToScenePointer, coverUv, type CoverUv } from "./layout";
+import { GpuScene } from "./scene";
+import { daytimeOf } from "./uniforms";
+
+/** cover 铺放：全屏三角形，按 `offset + uv * scale` 采样离屏目标，输出不透明。 */
+const BLIT_WGSL = /* wgsl */ `
+struct Cover { offset: vec2<f32>, scale: vec2<f32> }
+@group(0) @binding(0) var<uniform> cover: Cover;
+@group(0) @binding(1) var sceneTexture: texture_2d<f32>;
+@group(0) @binding(2) var sceneSampler: sampler;
+struct VsOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
+@vertex fn vs(@builtin(vertex_index) index: u32) -> VsOut {
+  let p = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
+  var out: VsOut;
+  out.position = vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+  out.uv = cover.offset + vec2<f32>(p.x, 1.0 - p.y) * cover.scale;
+  return out;
+}
+@fragment fn fs(in: VsOut) -> @location(0) vec4<f32> {
+  return vec4<f32>(textureSample(sceneTexture, sceneSampler, in.uv).rgb, 1.0);
+}
+`;
+
+export interface SceneRendererOptions {
+  /** 帧率上限；≤ 0 不限（跟随 rAF）。默认 60。 */
+  maxFps?: number;
+  /** 运行期失败（未捕获的校验错误等），渲染已停止。 */
+  onError?: (reasons: string[]) => void;
+  /** 设备丢失（非 `destroy()` 引起），渲染已停止；调用方可以重建渲染器。 */
+  onLost?: (reasons: string[]) => void;
+}
+
+export class SceneRenderer {
+  private readonly context: GPUCanvasContext;
+  private readonly format: GPUTextureFormat;
+  private readonly clock = new PausableClock();
+  private readonly throttle: FrameThrottle;
+  private readonly blitPipeline: GPURenderPipeline;
+  private readonly blitSampler: GPUSampler;
+  private readonly coverBuffer: GPUBuffer;
+  private readonly observer: ResizeObserver | null;
+  private scene: GpuScene | null = null;
+  private blitBindGroup: GPUBindGroup | null = null;
+  private cover: CoverUv = { offset: [0, 0], scale: [1, 1] };
+  private coverKey = "";
+  private pointer: [number, number] = [0.5, 0.5];
+  private pointerLast: [number, number] = [0.5, 0.5];
+  private paused = false;
+  private failed = false;
+  private lost = false;
+  private destroyed = false;
+  private raf = 0;
+  private loadSerial = 0;
+  /** Tint 的非错误消息（warning / info），调用方记日志用。 */
+  readonly warnings: string[] = [];
+
+  private constructor(
+    private readonly gpu: Gpu,
+    private readonly canvas: HTMLCanvasElement,
+    private readonly options: SceneRendererOptions,
+  ) {
+    const device = gpu.device;
+    this.throttle = new FrameThrottle(options.maxFps ?? 60);
+    const context = canvas.getContext("webgpu");
+    if (!context) throw new SceneRenderError(["webgpu:canvas-context"]);
+    this.context = context;
+    this.format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({ device, format: this.format, alphaMode: "opaque" });
+    const module = device.createShaderModule({ label: "scene cover blit", code: BLIT_WGSL });
+    this.blitPipeline = device.createRenderPipeline({
+      label: "scene cover blit",
+      layout: "auto",
+      vertex: { module, entryPoint: "vs" },
+      fragment: { module, entryPoint: "fs", targets: [{ format: this.format }] },
+      primitive: { topology: "triangle-list" },
+    });
+    this.blitSampler = device.createSampler({
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge",
+    });
+    this.coverBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.onuncapturederror = (event) => this.fail([`webgpu:validation:${oneLine(event.error.message)}`]);
+    void device.lost.then((info) => {
+      if (this.destroyed || info.reason === "destroyed") return;
+      this.lost = true;
+      this.stop();
+      this.options.onLost?.([`webgpu:device-lost:${info.reason}:${oneLine(info.message)}`]);
+    });
+    this.observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => this.resize());
+    this.observer?.observe(canvas);
+    document.addEventListener("visibilitychange", this.onVisibility);
+    this.resize();
+  }
+
+  /** 取设备并在画布上建 WebGPU 上下文；失败抛 `SceneRenderError`。 */
+  static async create(canvas: HTMLCanvasElement, options: SceneRendererOptions = {}): Promise<SceneRenderer> {
+    const gpu = await acquireGpu();
+    try {
+      return new SceneRenderer(gpu, canvas, options);
+    } catch (error) {
+      gpu.device.destroy();
+      throw error instanceof SceneRenderError
+        ? error
+        : new SceneRenderError([`webgpu:context:${oneLine(String(error))}`]);
+    }
+  }
+
+  get adapterInfo(): GpuAdapterInfo {
+    return this.gpu.info;
+  }
+
+  get device(): GPUDevice {
+    return this.gpu.device;
+  }
+
+  /**
+   * 建好新场景后替换当前场景，画出第一帧并等 GPU 完成后返回。失败抛 `SceneRenderError`，当前场景保持不变。
+   * 并发调用时只有最后一次生效，被取代的调用抛 `AbortError`。
+   */
+  async load(bundle: SceneBundle): Promise<void> {
+    if (this.destroyed) throw new DOMException("渲染器已销毁", "AbortError");
+    if (this.lost) throw new SceneRenderError(["webgpu:device-lost"]);
+    const serial = ++this.loadSerial;
+    const scene = await GpuScene.build(this.gpu.device, bundle, this.gpu.features, this.warnings);
+    if (this.destroyed || serial !== this.loadSerial) {
+      scene.destroy();
+      throw new DOMException("已被新的场景取代", "AbortError");
+    }
+    const old = this.scene;
+    this.scene = scene;
+    this.blitBindGroup = this.gpu.device.createBindGroup({
+      layout: this.blitPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.coverBuffer } },
+        { binding: 1, resource: scene.targetView! },
+        { binding: 2, resource: this.blitSampler },
+      ],
+    });
+    this.coverKey = "";
+    old?.destroy();
+    this.failed = false;
+    this.render();
+    await this.gpu.device.queue.onSubmittedWorkDone();
+    if (this.failed) throw new SceneRenderError(["webgpu:first-frame"]);
+    this.sync();
+  }
+
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    this.sync();
+  }
+
+  /** 画布上的指针位置（0…1，左上为原点）；换算到场景后供 `g_PointerPosition` 使用。 */
+  setPointer(x: number, y: number): void {
+    this.pointerLast = this.pointer;
+    this.pointer = canvasToScenePointer(this.cover, x, y);
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.stop();
+    this.observer?.disconnect();
+    document.removeEventListener("visibilitychange", this.onVisibility);
+    this.scene?.destroy();
+    this.scene = null;
+    this.blitBindGroup = null;
+    try {
+      this.context.unconfigure();
+    } catch {
+      // 画布已脱离文档时 unconfigure 可能抛错，设备随后销毁即可
+    }
+    this.gpu.device.destroy();
+  }
+
+  private readonly onVisibility = () => this.sync();
+
+  private get shouldRun(): boolean {
+    return !this.destroyed && !this.lost && !this.failed && !this.paused && !document.hidden && this.scene !== null;
+  }
+
+  /** 按 paused / hidden 启停循环与时钟。 */
+  private sync(): void {
+    if (this.shouldRun) {
+      this.clock.resume();
+      if (!this.raf) {
+        this.throttle.reset();
+        this.raf = requestAnimationFrame(this.frame);
+      }
+    } else this.stop();
+  }
+
+  private stop(): void {
+    this.clock.pause();
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
+  }
+
+  private readonly frame = (now: number) => {
+    this.raf = 0;
+    if (!this.shouldRun) return;
+    this.raf = requestAnimationFrame(this.frame);
+    if (this.throttle.ready(now)) this.render();
+  };
+
+  private fail(reasons: string[]): void {
+    if (this.destroyed || this.failed) return;
+    this.failed = true;
+    this.stop();
+    this.options.onError?.(reasons);
+  }
+
+  /** 画布像素尺寸跟随布局尺寸 × DPR；暂停时补画一帧。 */
+  private resize(): void {
+    if (this.destroyed) return;
+    const dpr = window.devicePixelRatio || 1;
+    const max = this.gpu.device.limits.maxTextureDimension2D;
+    const width = Math.min(max, Math.max(1, Math.round(this.canvas.clientWidth * dpr)));
+    const height = Math.min(max, Math.max(1, Math.round(this.canvas.clientHeight * dpr)));
+    if (this.canvas.width === width && this.canvas.height === height) return;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    if (this.scene && !this.shouldRun) this.render();
+  }
+
+  private render(): void {
+    const scene = this.scene;
+    if (!scene || !this.blitBindGroup || this.destroyed || this.lost || this.failed) return;
+    const device = this.gpu.device;
+    const key = `${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}`;
+    if (key !== this.coverKey) {
+      this.coverKey = key;
+      this.cover = coverUv(scene.width, scene.height, this.canvas.width, this.canvas.height);
+      device.queue.writeBuffer(this.coverBuffer, 0, new Float32Array([...this.cover.offset, ...this.cover.scale]));
+    }
+    scene.update({
+      time: this.clock.seconds(),
+      daytime: daytimeOf(new Date()),
+      pointer: this.pointer,
+      pointerLast: this.pointerLast,
+    });
+    this.pointerLast = this.pointer;
+    const encoder = device.createCommandEncoder({ label: "scene frame" });
+    scene.encode(encoder);
+    const pass = encoder.beginRenderPass({
+      label: "scene cover",
+      colorAttachments: [
+        {
+          view: this.context.getCurrentTexture().createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+    });
+    pass.setPipeline(this.blitPipeline);
+    pass.setBindGroup(0, this.blitBindGroup);
+    pass.draw(3);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+  }
+}

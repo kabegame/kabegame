@@ -1,7 +1,7 @@
 # WPE Scene 壁纸 · 阶段 3 计划（多 Phase）
 
 > 状态（2026-11-01）：决策 D1–D7 全部按推荐确认。**P1-0（着色器翻译器 `wpesl2wgsl` + wasm 构建链）已完成**，结果见点 P1-0；
-> **`scene.pkg` 读取（`wpe-scene/compile/pkg.ts`）已完成**：本机创意工坊 scene 全是 pkg，原 P9 的 pkg 提前进 P1-3。**P1-1（scene 入库）已完成并真机验证**（29 张：默认 16 + 工坊 13）。**P1-2（WPE 安装目录交给前端）已完成**。**P1-3（前端编译管线）已完成**，本机 29 张语料与 CEF 里的 Worker 编译都验证过。下一步 P1-4。
+> **`scene.pkg` 读取（`wpe-scene/compile/pkg.ts`）已完成**：本机创意工坊 scene 全是 pkg，原 P9 的 pkg 提前进 P1-3。**P1-1（scene 入库）已完成并真机验证**（29 张：默认 16 + 工坊 13）。**P1-2（WPE 安装目录交给前端）已完成**。**P1-3（前端编译管线）已完成**，本机 29 张语料与 CEF 里的 Worker 编译都验证过。**P1-4（WebGPU 渲染器 + `WpeSceneView.vue`）已完成**：P1 三张真机渲染，全语料 Tint 0 error；beach 与 WPE 桌面实拍一致（作者 `preview.jpg` 另有后期，不能当基准）。下一步 P1-5。
 > 上级：[../PLAN.md](../PLAN.md) 决策 9（Scene 走 WebGPU）。调研：[RESEARCH.md](RESEARCH.md)（格式、方言、WebGPU 可行性）。
 > 翻译器契约：[src-tauri/wpesl2wgsl/README.md](../../../../src-tauri/wpesl2wgsl/README.md)；场景文档：[cocs/wpe/WPE_SCENE.md](../../../../cocs/wpe/WPE_SCENE.md)。
 > 本文件取代调研 §5–§7 里与现架构不符的部分。调研写于网页壁纸改成 `file:` iframe 之前，其中的 `/wpe/<id>/` HTTP 路由、
@@ -329,7 +329,17 @@ export interface SceneBundle {
 }
 ```
 
-**点 P1-4 渲染器（新增 `apps/kabegame/src/wpe-scene/render/`、`WpeSceneView.vue`）**
+**点 P1-4 渲染器（新增 `apps/kabegame/src/wpe-scene/render/`、`WpeSceneView.vue`）——已完成（2026-11-01，opus 子代理实现 + Claude 复核）**
+- 落地：`math` / `layout`（四边形、模型与视图投影、cover、指针，移植 LWE `CImage` / `Camera`）、`textures`（RGBA8 / BC3 全 mip）、`uniforms`（std140 + 内置 uniform 照 `CPass.cpp`）、
+  `programs`（Tint 检查、绑定布局、混合）、`scene`（`GpuScene`）、`renderer`（设备、cover、帧循环、无缝换场景、设备丢失）、`clock`、`errors`（退回原因键）；`WpeSceneView.vue` emit `ready` / `fallback(reasons)`。
+  `get_wpe_web_properties` / `set_wpe_web_user_properties` 放宽到 `x-wpe/scene`。开发依赖 `@webgpu/types`（TS 5.9 的 lib.dom 没有 WebGPU 类型）。
+- 与原方案的差异 / 实现选择：
+  - **相机**：正交场景直接用 `ortho(0…w, 0…h)`，不用 `eye`。LWE 的 `ortho·translate(eye)` 与 `lookAt` 恰好抵消；eagleflag 的 eye 是编辑器残留偏移，预览图里画面没有平移。
+  - **Tint 前言**：每个模块开头加 `diagnostic(off, derivative_uniformity);`。HLSL 允许分支里隐式求导，WGSL 不允许；不加时语料里 `effects/depthparallax` 被拒。
+  - **`g_Time`**：暂停 / 页面隐藏时冻结，恢复后接着走，换属性重编译不重置；默认上限 60 fps。
+  - **多 pass 材质**以 `render:multi-pass` 退回（ping-pong 留到 P2）；只处理 z 轴旋转。
+- 对照基准：作者 `preview.jpg` 不可靠（beach 的预览图更亮、带光晕、偏移约 30 px），以 WPE 桌面实拍为准；beach 与实拍亮度差在 1–2%、几何重合。
+- 未决：P1-5 要确认壁纸窗口里 `document.hidden` 的取值，否则桌面可能一直停帧。
 - **新增** `WpeSceneView.vue`：自取数据的子组件，地位等同 web 层的 iframe。
   - 收 `target / paused / interactive`，自己读用户属性（沿用 Phase 7 读 metadata 的命令），自己 listen 本张的
     `image-changed { metadataId }`，收到后重新编译。
