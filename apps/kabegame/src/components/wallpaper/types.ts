@@ -35,6 +35,8 @@ export interface WallpaperTarget {
   wpeVideo?: WpeVideoProps | null;
   /** 网页壁纸的入口 `file://`（后端 `wallpaper::web_entry` 现算）；其它类型、非 Windows 为空。 */
   webEntry?: string | null;
+  /** 场景壁纸（`x-wpe/scene`）解析内置资源的 `<WPE 安装目录>/assets` 绝对路径，按顺序查找；其它类型、非 Windows 为空。 */
+  sceneAssets?: string[];
 }
 
 /** `WallpaperStage` 暴露给调试面板的只读状态。 */

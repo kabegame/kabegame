@@ -22,6 +22,7 @@ import { Skip, SkipPlugin } from "./plugins/skip-plugin.ts";
 import { ReleasePlugin } from "./plugins/release-plugin.ts";
 import { DataPlugin } from "./plugins/data-plugin.ts";
 import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.ts";
+import { Wpesl2wgslPlugin } from "./plugins/wpesl2wgsl-plugin.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -190,6 +191,9 @@ export class BuildSystem {
 
     // fork 的 cargo-tauri(third/tauri/crates/tauri-cli):PATH 前置 + dev/build 前确保构建
     this.use(new TauriCliPlugin());
+
+    // wpesl2wgsl 的 wasm：不带 --skip vue 时拷进前端，缺了只告警
+    this.use(new Wpesl2wgslPlugin());
   }
 
   commonBefore(): void {

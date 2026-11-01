@@ -12,6 +12,7 @@ members = [
   "src-tauri/tauri-plugin-wallpaper",
   "src-tauri/tauri-plugin-task-notification",
   "src-tauri/tauri-plugin-wemt",
+  "src-tauri/wpesl2wgsl",
 ]
 # Keep the vendored cef-rs workspace as the owner of its inherited metadata.
 # third/deno is the upstream denoland/deno monorepo (submodule, pinned v2.9.0 + third-patches/deno):
@@ -169,3 +170,12 @@ overflow-checks = false
 # 给 deno_core 单独恢复 debug_assertions，使调用点与导出点一致。release 下两侧同为 off，无此问题。
 [profile.dev.package.deno_core]
 debug-assertions = true
+
+# wpesl2wgsl 编到 wasm32-unknown-unknown 专用（`deno task build:wpesl2wgsl`）：按体积优化。
+# lto / panic 只能按 profile 设，不能按 package 覆盖，所以单开一个 profile，不影响其它 crate。
+[profile.wpesl2wgsl]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

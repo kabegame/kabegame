@@ -1,0 +1,17 @@
+[package]
+name = "wpesl2wgsl"
+version.workspace = true
+edition.workspace = true
+description = "Wallpaper Engine shader language (WPESL) -> WGSL translator, compiled to wasm for the scene renderer"
+publish = false
+
+[lib]
+# cdylib：`deno task build:wpesl2wgsl` 编到 wasm32-unknown-unknown；rlib：原生 cargo test
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# wgsl-in 本身不用：naga 30.0.1 的 glsl-in 依赖 `front::interpolator`，而该模块只在
+# spv-in / wgsl-in 下编译，只开 glsl-in 会编译失败；wgsl-in 依赖最少，用它补上。
+naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-in", "wgsl-out"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

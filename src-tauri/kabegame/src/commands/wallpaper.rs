@@ -36,7 +36,7 @@ pub async fn get_current_wallpaper_path_from_settings<R: tauri::Runtime>(
 pub struct WallpaperTarget {
     pub id: String,
     pub path: String,
-    /// `images.type`（如 `video/mp4`、`x-wpe/video`、`x-wpe/web`）。
+    /// `images.type`（如 `video/mp4`、`x-wpe/video`、`x-wpe/web`、`x-wpe/scene`）。
     #[serde(rename = "type")]
     pub media_type: Option<String>,
     /// 浏览器兼容副本：普通视频仅在不可直接播放时有值；WPE 视频始终有值；WPE 网页为空
@@ -47,10 +47,13 @@ pub struct WallpaperTarget {
     /// 网页壁纸（`x-wpe/web`）的入口 `file://`，由 `wallpaper::web_entry` 现算：图库预览与桌面壁纸窗口的
     /// `WallpaperStage` 直接把它赋给 web 层 iframe 的 `src`。其它类型、非 Windows、读 `project.json` 失败为 None。
     pub web_entry: Option<String>,
+    /// 场景壁纸（`x-wpe/scene`）解析内置资源的 `<WPE 安装目录>/assets` 绝对路径，按顺序查找
+    /// （`wpe::discover::scene_asset_dirs`）。其它类型、非 Windows、没找到 WPE 安装目录为空。
+    pub scene_assets: Vec<String>,
 }
 
-pub async fn get_current_wallpaper_target_from_settings(
-) -> Result<Option<WallpaperTarget>, String> {
+pub async fn get_current_wallpaper_target_from_settings() -> Result<Option<WallpaperTarget>, String>
+{
     let Some(id) = Settings::global().get_current_wallpaper_image_id() else {
         return Ok(None);
     };
@@ -65,22 +68,24 @@ pub async fn get_current_wallpaper_target_from_settings(
 /// WPE 视频的作者属性取自图片 metadata（导入时写入的 `project.json` 原文），不重读磁盘——
 /// 用户属性以后也作为同一份元数据里的一段合并进来；其它类型 `wpe_video` 为 None。
 async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
-    let wpe_video = if kabegame_core::media::image_type::is_wpe_video_type(info.media_type.as_deref())
-    {
-        let image_id = info.id.clone();
-        let raw = tokio::task::spawn_blocking(move || Storage::global().get_metadata(&image_id))
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .flatten();
-        Some(
-            raw.map(|raw| kabegame_core::wpe::properties::resolve_video_props_from_raw(&raw))
-                .unwrap_or_default(),
-        )
-    } else {
-        None
-    };
+    let wpe_video =
+        if kabegame_core::media::image_type::is_wpe_video_type(info.media_type.as_deref()) {
+            let image_id = info.id.clone();
+            let raw =
+                tokio::task::spawn_blocking(move || Storage::global().get_metadata(&image_id))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .flatten();
+            Some(
+                raw.map(|raw| kabegame_core::wpe::properties::resolve_video_props_from_raw(&raw))
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
     let web_entry = web_entry_of(&info).await;
+    let scene_assets = scene_assets_of(&info).await;
 
     WallpaperTarget {
         id: info.id,
@@ -89,6 +94,7 @@ async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
         compatible_path: info.compatible_path,
         wpe_video,
         web_entry,
+        scene_assets,
     }
 }
 
@@ -110,6 +116,25 @@ async fn web_entry_of(info: &ImageInfo) -> Option<String> {
             None
         }
     }
+}
+
+/// 场景壁纸的 `<WPE 安装目录>/assets`（发现 Steam 库要读注册表与 `libraryfolders.vdf`，放 blocking 线程）；
+/// 其它类型不读盘。
+async fn scene_assets_of(info: &ImageInfo) -> Vec<String> {
+    let kind = kabegame_core::media::image_type::wpe_kind(info.media_type.as_deref());
+    if kind.as_deref() != Some("scene") {
+        return Vec::new();
+    }
+    let dirs = tokio::task::spawn_blocking(kabegame_core::wpe::discover::scene_asset_dirs)
+        .await
+        .unwrap_or_default();
+    // 非 Windows 本来就为空（发现按平台门控），不告警
+    if dirs.is_empty() && kabegame_core::wpe::discover::platform_supported() {
+        tracing::warn!("场景壁纸 {} 找不到 WPE 安装目录的 assets", info.id);
+    }
+    dirs.into_iter()
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// 图库预览 / 应用背景按 id 取壁纸目标，与当前壁纸共用 [`build_wallpaper_target`]，
@@ -473,7 +498,8 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
             Some(p) => {
                 tracing::warn!(
                     "set_wallpaper_mode: 当前壁纸是 WPE 目录型壁纸，切到 {} 模式改用兜底图片: {}",
-                    mode, p
+                    mode,
+                    p
                 );
                 p
             }
@@ -492,7 +518,8 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
     } else if let Some(p) = pick_random_gallery_wallpaper(&mode) {
         tracing::warn!(
             "set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
-            p, current_wallpaper
+            p,
+            current_wallpaper
         );
         p
     } else {

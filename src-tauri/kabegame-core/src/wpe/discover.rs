@@ -320,9 +320,7 @@ pub fn discover_roots() -> Vec<WpeRoot> {
         }
     };
     for steam_root in steam_install_roots() {
-        let vdf = steam_root
-            .join("steamapps")
-            .join("libraryfolders.vdf");
+        let vdf = steam_root.join("steamapps").join("libraryfolders.vdf");
         let Ok(text) = std::fs::read_to_string(&vdf) else {
             continue;
         };
@@ -350,6 +348,46 @@ pub fn discover_roots() -> Vec<WpeRoot> {
         }
     }
     roots
+}
+
+/// 各 Steam 库里的 WPE 安装目录 `<库>/steamapps/common/wallpaper_engine`（去重、保持发现顺序）。
+/// 项目根（defaultprojects / myprojects）在安装目录之内；创意工坊根在
+/// `<库>/steamapps/workshop/content/431960`，往上三级是 `steamapps`。
+pub fn engine_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for root in discover_roots() {
+        let engine = match root.kind {
+            WpeRootKind::Workshop => root
+                .path
+                .ancestors()
+                .nth(3)
+                .map(|steamapps| steamapps.join("common").join("wallpaper_engine")),
+            WpeRootKind::DefaultProjects | WpeRootKind::MyProjects => root
+                .path
+                .ancestors()
+                .find(|part| {
+                    part.file_name()
+                        .is_some_and(|name| name == "wallpaper_engine")
+                })
+                .map(Path::to_path_buf),
+        };
+        if let Some(engine) = engine {
+            if !dirs.contains(&engine) {
+                dirs.push(engine);
+            }
+        }
+    }
+    dirs
+}
+
+/// 场景壁纸解析内置资源（`shaders/common*.h`、内置着色器与 effect、工具材质……）的 `<WPE 安装目录>/assets`。
+/// 只列存在的目录，顺序同 [`engine_dirs`]；非 Windows 为空（[`discover_roots`] 已按平台门控）。
+pub fn scene_asset_dirs() -> Vec<PathBuf> {
+    engine_dirs()
+        .into_iter()
+        .map(|engine| engine.join("assets"))
+        .filter(|assets| assets.is_dir())
+        .collect()
 }
 
 #[cfg(test)]

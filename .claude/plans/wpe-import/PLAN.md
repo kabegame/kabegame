@@ -276,8 +276,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
 |---|---|---|---|---|
 | 1 | `x-wpe/video` | 预览图（gif 原样）+ 入口视频 | 窗口模式播放入口视频 | 发现与导入、目录服务、类型分流、删除护栏 |
 | 2 | `x-wpe/web` | 预览图 + 内嵌壁纸本体 | 壁纸本体内跨源 iframe 加载入口页 | WPE Web API 垫片（`wallpaperPropertyListener`、音频、媒体集成），用户属性 |
-| 3 | `x-wpe/scene`（静态 / 简单图层） | 预览图 | 渲染器 | 资源定位与解包（`scene.pkg` / `.tex`）、场景图、图层合成；WebGPU 渲染（壁纸本体内 canvas） |
-| 4 | `x-wpe/scene`（特效） | — | — | 着色器方言翻译到 WGSL、粒子、SceneScript；REA 对照 `wallpaper64.exe` |
+| 3 | `x-wpe/scene` | 预览图 + 内嵌渲染 | WebGPU 渲染器（`WallpaperStage` 的 scene 层） | 按本机 16 个样本的复杂度分 P1–P9：着色器翻译（wasm `wpesl2wgsl`）、`.tex`、场景图、effect 链、SceneScript、粒子、模型与光照；`scene.pkg` 按需（原阶段 3 / 4 已合并，见 3-scene 决策 D6） |
 | — | `application` | 不导入 | — | 外部 exe，不支持 |
 
 每个阶段一个子目录，阶段内再按 Phase 推进；本文件只放总体设计、现状锚点、路线与跨阶段决策：
@@ -286,8 +285,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
 |---|---|---|
 | 1 Video | [1-video/PLAN.md](1-video/PLAN.md) | 已实现，初步真机测试完成 |
 | 2 Web | [2-web/PLAN.md](2-web/PLAN.md) | Phase 1 完成（[API.md](2-web/API.md)）；Phase 2 壁纸窗口 Vue 化方案已写，实施中 |
-| 3 Scene | [3-scene/RESEARCH.md](3-scene/RESEARCH.md) | 前期调研完成（格式 / 方言 / WebGPU 可行性 / Phase 拆分 / 关键决策待确认） |
-| 4 Scene 特效 | `4-scene-fx/`（未建） | — |
+| 3 Scene | [3-scene/PLAN.md](3-scene/PLAN.md)（调研 [3-scene/RESEARCH.md](3-scene/RESEARCH.md)） | 决策 D1–D6 已确认；P1-0（着色器翻译器 `wpesl2wgsl` + wasm 构建链）已完成，下一步 P1-1 起做导入与前端 |
 
 ---
 

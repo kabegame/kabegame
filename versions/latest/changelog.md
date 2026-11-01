@@ -3,6 +3,7 @@
 ## 用户侧
 
 ### Added
+- 「壁纸」收集现在也会导入 Wallpaper Engine 场景壁纸（含创意工坊打包的 `scene.pkg`），暂时显示作者预览图，渲染能力会逐步加入。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - Windows 上的 Wallpaper Engine 网页壁纸支持音频可视化与媒体集成：声明了音频处理的壁纸会随系统正在播放的声音跳动；壁纸可显示正在播放的歌曲名、歌手、封面、播放状态与进度（来自系统媒体控制，网易云、Spotify、浏览器等均可）。桌面与图库预览都生效。设置页壁纸分区新增「网页壁纸媒体集成」开关（默认开启），关闭后壁纸读不到歌曲信息。
@@ -56,6 +57,10 @@
 ## 开发侧
 
 ### Added
+- 新增场景壁纸的前端编译管线（`apps/kabegame/src/wpe-scene/compile/`）：按项目散文件 → `scene.pkg` → WPE `assets/` 查资源，解析场景 / 模型 / 材质 json 与 `.tex`（视频纹理只记 MP4 区间），经 `wpesl2wgsl` 翻译着色器，产出渲染器的唯一输入 `SceneBundle`，未实现的能力列进 `unsupported`；`compileSceneInWorker` 在 Worker 里编译，由主线程代读 `file:`。本机 29 张样本中 eagleflag / deep_space / beach 三张可编译、其余都正确报出不支持项。尚无使用方（渲染器在后续阶段）。
+- 壁纸目标新增 `sceneAssets`：场景壁纸（`x-wpe/scene`）的 `<WPE 安装目录>/assets` 路径列表，供前端解析内置着色器与资源；WPE 安装目录的发现（`wpe::discover::engine_dirs`）从 `locale.rs` 挪到 `discover.rs` 共用。
+- 新增场景壁纸 `scene.pkg` 读取（`apps/kabegame/src/wpe-scene/compile/pkg.ts`，移植自 linux-wallpaperengine）：目录表与条目都经带 `Range` 头的 `fetch(file:)` 按区间读，不整包加载；本机 5 个创意工坊包全部解析通过。尚未接入导入与渲染。
+- 新增 `wpesl2wgsl`（`src-tauri/wpesl2wgsl`）：把 Wallpaper Engine 着色器（WPESL）原文翻成 WGSL，编成 wasm 供场景壁纸渲染器使用，不链进应用。`deno task build:wpesl2wgsl` 构建，需要 rustup 目标 `wasm32-unknown-unknown`。kabegame 命令不带 `--skip vue` 时自动拷进前端，缺失只告警。本机语料 167 个着色器对通过 153 个。详见 `src-tauri/wpesl2wgsl/README.md`。
 - 日志框架改用 `tracing`：`kabegame_core::logging` 装配全进程唯一订阅器（控制台 / 按天滚动文件 / `AppLogLayer` 环形缓冲与广播 / debug ingest 四层各带过滤器），约 380 处 `println!` / `eprintln!` 按语义改为分级宏；`KABEGAME_LOG` 用 `Targets` 语法临时调级（取代 `KABEGAME_IPC_DEBUG`）。事件循环新增 opt-in 的 `log` 事件，经 Tauri `get_app_logs` / `start_app_log_stream` / `stop_app_log_stream`（经 Channel 推送）、Web super 的 `/logs` SSE、IPC `AppLogs` 推给订阅方；CLI 新增 `kabegame-cli log tail`。引入 `tauri-plugin-tracing`，前端用 `@/utils/logger` 写日志，未捕获异常自动记录。详见 `cocs/debug/APP_LOGGING.md`。
 - WPE 网页壁纸用户属性：值存图片 metadata 的 `userProperties`，经新增的 `Storage::rewrite_image_metadata` 事务改写并发 `metadataId` 补丁驱动垫片与面板重拉；CEF 运行时文件策略新增 `grant_file_documents`，按窗口与当前根目录追加放行用户选的文件 / 目录（换根清空）；显示条件解释器 `utils/wpeProperties.ts`、WPE 内置词表只读读取安装目录。
 

@@ -24,6 +24,7 @@
     "build:ffmpeg": "deno run -A scripts/build-ffmpeg.ts",
     "build:chromium": "deno run -A scripts/build-chromium.ts",
     "build:v8": "deno run -A scripts/build-v8.ts",
+    "build:wpesl2wgsl": "deno run -A scripts/build-wpesl2wgsl.ts",
     "build:web": "deno run -A scripts/build-web.ts",
     "pathql:generate": "deno run -A scripts/generate-pathql-client.ts",
     "prepare": "husky",

@@ -1,12 +1,14 @@
 //! 内建 `wpe-import` 任务：把 Wallpaper Engine 壁纸目录原地引用入库。
 //!
-//! 入库 `video` 与 `web` 两类：`local_path` 存壁纸目录本身，`type` 为 `x-wpe/video` /
-//! `x-wpe/web`，缩略图直接引用 WPE 自带的 `preview.*`。
+//! 入库 `video`、`web` 与 `scene` 三类：`local_path` 存壁纸目录本身，`type` 为 `x-wpe/video` /
+//! `x-wpe/web` / `x-wpe/scene`，缩略图直接引用 WPE 自带的 `preview.*`。
 //!
 //! - 视频行的 `compatible_path` 始终有值：浏览器能播时就是入口视频本身，不能播时才在
 //!   `compatibles_dir` 生成兼容副本；所有播放端（预览、应用背景、壁纸窗口）统一走 `/compatible`。
 //! - 网页行没有可播放媒体，`compatible_path` 留空、宽高留空；`hash` / `size` 取入口 html。
 //!   页面以入口的 `file://` 从原目录加载（桌面壁纸窗口与图库预览同一套运行时目录拦截，暂只支持 Windows）。
+//! - 场景行同样没有可播放媒体、宽高留空；`hash` / `size` 取入口 json，入口打包在 `scene.pkg` 里时取包。
+//!   渲染在前端（阶段 3），Rust 不解析场景与包。
 //!
 //! 不复制、不转码、不改写用户目录里的任何文件。
 
@@ -23,9 +25,9 @@ use crate::storage::image_events::emit_membership_added;
 use crate::storage::labels::{validate_labels, LabelInput};
 use crate::storage::{ImageInfo, Storage};
 use crate::wpe::discover::WpeRootKind;
+use crate::wpe::normalize_local_dir;
 use crate::wpe::project::{read_project, WpeKind, WpeProject, WpeSkip};
 use crate::wpe::scan::collect_selected_dirs;
-use crate::wpe::normalize_local_dir;
 
 /// 内建任务 / 插件 id。
 pub use crate::wpe::WPE_IMPORT_PLUGIN_ID;
@@ -145,7 +147,11 @@ enum ImportOutcome {
 fn canonical_string(path: &std::path::Path) -> String {
     path.canonicalize()
         .ok()
-        .map(|path| path.to_string_lossy().trim_start_matches("\\\\?\\").to_string())
+        .map(|path| {
+            path.to_string_lossy()
+                .trim_start_matches("\\\\?\\")
+                .to_string()
+        })
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
@@ -182,14 +188,21 @@ async fn backfill_compatible_path(
     entry: &std::path::Path,
     dir_string: &str,
 ) {
-    let current = existing.compatible_path.as_deref().map(str::trim).unwrap_or("");
+    let current = existing
+        .compatible_path
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
     if !current.is_empty() && std::path::Path::new(current).is_file() {
         return;
     }
     let probe = crate::media::dimensions::probe_media_sync(entry);
     let path = resolve_compatible_path(task_id, entry, probe.as_ref(), dir_string).await;
     if let Err(error) = Storage::global().replace_image_compatible_path(&existing.id, &path) {
-        tracing::warn!("compatible_path backfill failed for {}: {error}", existing.id);
+        tracing::warn!(
+            "compatible_path backfill failed for {}: {error}",
+            existing.id
+        );
         return;
     }
     GlobalEmitter::global().emit_image_fields(
@@ -198,7 +211,7 @@ async fn backfill_compatible_path(
     );
 }
 
-/// 视频 / 网页两类壁纸共用的行组装：来源字段、作者预览图、创意工坊链接与 metadata。
+/// 各类壁纸共用的行组装：来源字段、作者预览图、创意工坊链接与 metadata。
 /// 调用方各自覆盖 `media_type` / `width` / `height` / `compatible_path`。
 fn base_image_info(
     project: &WpeProject,
@@ -247,7 +260,7 @@ fn base_image_info(
     }
 }
 
-/// 写库、广播、挂画册与标签、记日志：两类壁纸新增行之后的公共步骤。
+/// 写库、广播、挂画册与标签、记日志：各类壁纸新增行之后的公共步骤。
 fn finish_insert(
     task_id: &str,
     project: &WpeProject,
@@ -303,7 +316,8 @@ async fn import_wpe_video(
         .unwrap_or((None, None));
     let size = std::fs::metadata(&entry).ok().map(|meta| meta.len());
 
-    let compatible_path = Some(resolve_compatible_path(task_id, &entry, probe.as_ref(), &dir_string).await);
+    let compatible_path =
+        Some(resolve_compatible_path(task_id, &entry, probe.as_ref(), &dir_string).await);
     let metadata_id = insert_project_metadata(project)?;
 
     let image = ImageInfo {
@@ -345,6 +359,34 @@ async fn import_wpe_web(
     finish_insert(task_id, project, album_id, image)
 }
 
+/// 导入一个场景壁纸目录（幂等：已入库只补画册成员）。与网页行一样没有可播放媒体与固有尺寸；
+/// `hash` / `size` 取入口 json，创意工坊发布的场景入口打包在 `scene.pkg` 里时取包。
+async fn import_wpe_scene(
+    task_id: &str,
+    project: &WpeProject,
+    album_id: Option<&str>,
+) -> Result<ImportOutcome, String> {
+    let dir_string = project.dir_string();
+    let content = project
+        .content_path()
+        .ok_or_else(|| "缺少入口文件".to_string())?;
+
+    if let Some(existing) = Storage::find_image_by_path(&dir_string).map_err(|e| e.to_string())? {
+        join_album(task_id, album_id, &existing.id)?;
+        return Ok(ImportOutcome::Existing);
+    }
+
+    let hash = compute_file_hash(&content).await?;
+    let size = std::fs::metadata(&content).ok().map(|meta| meta.len());
+    let metadata_id = insert_project_metadata(project)?;
+
+    let image = ImageInfo {
+        media_type: Some("x-wpe/scene".to_string()),
+        ..base_image_info(project, task_id, metadata_id, hash, size)
+    };
+    finish_insert(task_id, project, album_id, image)
+}
+
 /// 按类型分派到对应的导入函数；调用方保证 `project.kind.is_supported()`。
 async fn import_wpe_project(
     task_id: &str,
@@ -354,6 +396,7 @@ async fn import_wpe_project(
     match project.kind {
         WpeKind::Video => import_wpe_video(task_id, project, album_id).await,
         WpeKind::Web => import_wpe_web(task_id, project, album_id).await,
+        WpeKind::Scene => import_wpe_scene(task_id, project, album_id).await,
         kind => Err(format!("暂不支持的壁纸类型：{}", kind.as_str())),
     }
 }
@@ -420,8 +463,12 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
                     );
                     run.record_dry_run_skip();
                 } else {
-                    match import_wpe_project(&task_id, project, run.params.output_album_id.as_deref())
-                        .await
+                    match import_wpe_project(
+                        &task_id,
+                        project,
+                        run.params.output_album_id.as_deref(),
+                    )
+                    .await
                     {
                         Ok(ImportOutcome::Imported) => imported += 1,
                         Ok(ImportOutcome::Existing) => {

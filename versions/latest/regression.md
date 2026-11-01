@@ -1,5 +1,89 @@
 # v4.7.0 regression
 
+## 场景壁纸 P1-3：前端编译管线
+
+`apps/kabegame/src/wpe-scene/compile/` 把一张场景壁纸编译成渲染器的唯一输入 `SceneBundle`（图层、着色器程序、纹理、`unsupported` 能力键）：
+- **资源查找**：`SceneFs` 依次查项目散文件 → `scene.pkg` → `sceneAssets`。散文件不探测大小：json / shader 直接整读，`.tex` 用首个 4 KiB 区间读兼做存在判断；
+  查找结果与内容在一次编译内缓存，pkg 相邻小条目共用 64 KiB 窗口。
+- **解析**：`.tex` 只解析容器头与 mip 表；视频纹理只记下 MP4 区间。着色器交给 `wpesl2wgsl`。
+- **能力表**：`features.ts` 只放行 P1 实现的能力，其余一律记进 `unsupported`，非空就退回预览图。
+- **Worker**：`compileSceneInWorker` 在 Worker 里编译；主线程代读 `file:`，并把编译好的 wasm Module 交给 Worker。
+
+还没有使用方，渲染器是 P1-4。计划见 `.claude/plans/wpe-import/3-scene/PLAN.md` 点 P1-3，文档见 `cocs/wpe/WPE_SCENE.md`「编译管线」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测 | Windows | `npx vitest run src/wpe-scene`（`apps/kabegame`） | 路径越界拒绝、用户值 / 条件 / 脚本默认值、shader 用户属性缺失回退、能力表、LZ4、TEXB0001–0004、视频区间、来源优先级、查找缓存、Worker 往返后的「不存在」错误、Range 被忽略时取消流都通过 | 2026-11-01：40 passed（含 pkg 与翻译器既有用例） |
+| [x] | S2 本机语料 | Windows | 同上，设 `KABEGAME_WPE_ROOT=<WPE 安装目录>` | 全部样本经 `FetchSceneReader`（Node 假 fetch，语义对齐 CEF）编译：P1 三张 `unsupported` 为空且纹理 mip 齐全，其余每张非空；没有单字节探测；单张读取 < 64 MiB、请求 ≤ 150 | 2026-11-01：29 张（默认 16 + 工坊 13）。最大读取 deep_space 7.6 MB；请求最多 3219908811 的 150 次（正好压线），P1 三张 34–59 次；视频纹理本体未读。工坊目录只读 |
+| [x] | S3 类型与格式 | Windows | `vue-tsc --noEmit`、Prettier | 0 error、格式通过 | 2026-11-01：通过 |
+| [x] | D1 `file:` 响应头 | Windows dev | 主窗口经 CDP 对 `file:` 整读、`Range`、`HEAD` | 记录是否带 `Content-Length` | 2026-11-01：三种都只有 `content-type` 与 `last-modified`，没有 `Content-Length`，所以不能靠响应头取文件大小。单次 Range 请求约 2.25 ms，文件不存在约 1.6 ms |
+| [x] | D2 Worker 编译 | Windows dev | 主窗口经 CDP 动态导入 `client.ts`，对 eagleflag / deep_space / beach / 3656079027 / 3146703458 调 `compileSceneInWorker` | Worker 拿到 wasm Module、经主线程读 `file:`；P1 三张 `unsupported` 为空、DXT5 / RGBA 的 mip 以 `Uint8Array` 回传；工坊两张只读纹理头 | 2026-11-01 Claude：五张全部成功，每张 164–350 ms（去掉大小探测前 0.7–1.2 s）。复核时发现一个 bug：Worker 收到的读取错误被重建成普通 `Error`，任何一次未命中都会让编译失败。已改为回传错误类型名并在 Worker 端还原（`protocol.ts`），修后复测通过 |
+| [ ] | M1 发布版 Worker | Windows release | 安装包里打开场景壁纸预览（P1-5 接入后） | module Worker 在应用页的自定义 scheme 下能起来 | 未测：P1-4 / P1-5 接入后才有入口 |
+
+## 场景壁纸 P1-2：WPE 安装目录交给前端
+
+场景壁纸要从 WPE 安装目录的 `assets/` 读内置着色器、effect 与工具材质。壁纸目标（`get_wallpaper_target_for_image` / 当前壁纸）新增 `sceneAssets`：
+只对 `x-wpe/scene` 计算，值是各 Steam 库里 WPE 安装目录下存在的 `assets` 绝对路径（`kabegame_core::wpe::discover::scene_asset_dirs`，
+`engine_dirs` 由 `locale.rs` 挪进 `discover.rs` 共用）；其它类型与非 Windows 为空数组。前端还没有使用方（P1-3 的资源解析层）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 检查 | Windows | `check-kabegame`；`test-kabegame kabegame-core --lib wpe` | 0 error，改动文件无新 warning；wpe 单测照过 | 2026-11-01：vue-tsc 0 / cargo 0 error；32 passed |
+| [x] | D1 场景目标 | Windows dev | 主窗口 `get_wallpaper_target_for_image` 取一张场景壁纸 | `sceneAssets` 为 `["<库>\steamapps\common\wallpaper_engine\assets"]` | 2026-11-01 Claude 经 CDP：12906（超时空辉夜姬，工坊 pkg）与 12885（eagleflag，默认项目）都返回 `["D:\Applications\Steam\steamapps\common\wallpaper_engine\assets"]`；dev 重编后首次调用约 30 秒内可用 |
+| [x] | D2 其它类型 | Windows dev | 同上取网页 / 视频 / 图片 | `sceneAssets` 为空数组，`webEntry` 等其它字段不变 | 2026-11-01：网页 12094（`webEntry` 照旧是 `file:///…`）、WPE 视频 12091（`wpeVideo` 照旧有值）、普通图片 5217 的 `sceneAssets` 都是 `[]` |
+| [x] | D3 `ui_` 词条不受影响 | Windows dev | 预览一张网页壁纸的属性面板 | `ui_` 开头的属性名仍显示译文（`locale.rs` 改用 `discover::engine_dirs`） | 2026-11-01：`get_wpe_web_properties`（12096，3677233365）里 `schemecolor` 的标签是「主题配色」，即 `ui_browse_properties_scheme_color` 仍从 WPE 安装目录的 `locale` 词表译出 |
+| [ ] | M 非 Windows | macOS / Linux | 取一张场景壁纸的目标 | `sceneAssets` 为空、日志没有「找不到 WPE 安装目录」告警 | 未测 |
+
+## 场景壁纸 P1-1：scene 入库
+
+`wpe-import` 开始导入场景壁纸（`x-wpe/scene`）：创意工坊发布形态的入口打包在 `scene.pkg` 里，目录里有包就算入口存在，`hash` / `size` 取包；
+没有 `type` 但入口是 `.json` 的默认项目（audiophile、techno）按场景处理。渲染器（P1-5）接入前，场景行在网格、预览与应用背景里显示作者预览图，
+设为桌面壁纸还不能渲染。扫描结果新增 `scene` 计数，导入对话框显示「场景 n」。计划见 `.claude/plans/wpe-import/3-scene/PLAN.md` 点 P1-1。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 core 单测 | Windows | `test-kabegame kabegame-core --lib wpe` | 只有 `scene.pkg` 的场景可入库且 `content_path` 取包；散文件入口优先；无 `type` + `.json` 入口为场景；只有包不能让其它类型通过；扫描计数含 scene | 2026-11-01：32 passed（新增 `scene_entry_may_be_packed`、`missing_type_with_json_entry_is_scene`，`counts_total_video_and_imported` 加了包形态的场景） |
+| [x] | S2 前端检查 | Windows | `vue-tsc --noEmit`、Prettier | 0 error | 2026-11-01：通过 |
+| [x] | D1 扫描计数 | Windows dev | 打开「壁纸」收集对话框（或 `wpe_scan`） | 创意工坊来源「场景 13」，默认项目来源「场景 16」（含无 `type` 的 audiophile / techno），待导入数相应增加 | 2026-11-01 Claude 经 CDP 调 `wpe_scan`：创意工坊 scene 13、pending 13（视频 / 网页都已入库），默认项目 scene 16、pending 16。导入期间用户还在订阅，工坊场景数从 10 增到 13 |
+| [x] | D2 导入工坊场景 | Windows dev | 勾选创意工坊来源导入 | 13 张场景入库：`type = x-wpe/scene`，`local_path` 是壁纸目录，缩略图是作者 `preview.*`，`size` 等于 `scene.pkg` 大小，宽高为空 | 2026-11-01 Claude 经 `start_task` 导入两个来源（与对话框勾选相同）：任务 29 成功、约 8 秒（含 712 MB 的包）。只读查 dev 库：13 行工坊场景的 `size` 全部等于 `scene.pkg` 大小，`thumbnail_path` 是 `preview.gif` / `preview.jpg`，宽高与 `compatible_path` 为空。WPE 目录只读 |
+| [x] | D3 导入默认项目 | Windows dev | 勾选默认项目来源导入 | 16 张场景入库（sheep 是 application，仍跳过） | 2026-11-01 同一任务：16 行，入口是散文件，`size` 取入口 json；audiophile、techno 已入库 |
+| [x] | D4 幂等 | Windows dev | 再导入一次 | 全部计为已存在，不新增行 | 2026-11-01：再跑一次，任务成功数 0，`x-wpe/scene` 仍是 29 行 |
+| [x] | D5 显示 | Windows dev | 网格、预览弹窗、应用背景里打开场景行 | 显示作者预览图，不报壁纸组件错误 | 2026-11-01 Claude 经 CDP：网格缩略图正常；双击 MGS4（12900）打开预览弹窗，显示 `preview.gif`、没有壁纸组件、无错误提示；测完关闭弹窗。应用背景未单独测 |
+
+## 场景壁纸：`scene.pkg` 读取
+
+创意工坊发布的场景把 `scene.json` 与资源打进 `scene.pkg`（本机 5 张工坊 scene 全是这种形态）。
+`apps/kabegame/src/wpe-scene/compile/pkg.ts` 的 `ScenePkg` 移植自 linux-wallpaperengine 的目录表读取：只读 64 KiB 起的目录表，条目经带 `Range` 头的 `fetch(file:)` 按区间读，不整包加载（最大的包 336 MB）。
+计划见 `.claude/plans/wpe-import/3-scene/PLAN.md`，文档见 `cocs/wpe/WPE_SCENE.md`。本轮只有读取模块，还没接入导入与渲染。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测 | Windows | `npx vitest run src/wpe-scene/compile/pkg.test.ts`（`apps/kabegame`） | 目录表与条目读取、按区间读、目录表加倍重读、同名取第一条、非 PKGV 头、目录表 / 条目截断、读取方忽略区间都按预期 | 2026-11-01：8 passed |
+| [x] | S2 本机工坊语料 | Windows | 同上，设 `KABEGAME_WPE_ROOT=<WPE 安装目录>` | 每个工坊 `scene.pkg`：版本形如 `PKGV\d{4}`；最后一个条目结束在文件末尾；`scene.json` 能解析；首个 `.tex` 的魔数为 `TEXV0005` | 2026-11-01：5 passed（`PKGV0018` / `0021` / `0022` / `0024`，41–140 个条目，27–336 MB）。工坊目录只读 |
+| [x] | S3 类型与格式 | Windows | `vue-tsc --noEmit`、Prettier | 0 error、格式通过 | 2026-11-01：两项通过 |
+| [x] | D1 `Range` 读 `file:` | Windows dev | 主窗口经 CDP `fetch(file:///…/scene.pkg, { headers: { Range } })` | 只返回请求区间；条目偏移从目录表结束处算起 | 2026-11-01：`bytes=0-15` 返回 16 字节（约 5 ms），`bytes=6781-6800` 正是 `scene.json` 开头；状态都是 200、没有 `Content-Range` 头；跨过末尾截短，起点越界 `Failed to fetch`，后缀与开区间可用 |
+
+## 场景壁纸 P1-0：着色器翻译器 `wpesl2wgsl` 与 wasm 构建链
+
+WPE 着色器（WPESL）原文交给 `src-tauri/wpesl2wgsl`。它在内部完成预处理与改写，经 naga 翻成 WGSL，编成 wasm 给前端渲染器用，不链进应用。
+- 构建：`deno task build:wpesl2wgsl`，产物 `bin/wasm/wpesl2wgsl/wpesl2wgsl.wasm`。
+- 进前端：kabegame 命令不带 `--skip vue` 时由 `Wpesl2wgslPlugin` 拷到 `apps/kabegame/src/wpe-scene/wpesl2wgsl/`，缺失只告警。
+- 契约见 `src-tauri/wpesl2wgsl/README.md`，计划见 `.claude/plans/wpe-import/3-scene/PLAN.md`。
+- 语料测试只读访问本机 WPE 安装目录（`KABEGAME_WPE_ROOT`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 crate 单测 | Windows | `cargo test -p wpesl2wgsl --lib`（`CARGO_TARGET_DIR=target-check`） | 预处理、改写、naga 阶段、端到端、C ABI 全部通过 | 2026-11-01：24 passed；端到端用例的输出 WGSL 经 naga `wgsl-in` 回读通过 |
+| [x] | S2 本机语料 | Windows | `KABEGAME_WPE_ROOT=<WPE 安装目录> cargo test -p wpesl2wgsl --test corpus -- --nocapture` | P1 门槛（`flag` TINT=1、`genericimage`、deep_space / beach 的 `flowimage` / `swayimage`）全过；输出 WGSL 回读 0 失败 | 2026-11-01：167 对通过 153 对（91.6%），回读 0 失败。剩余失败：`#require LightingV1` 6、阴影 GS 的 `gl_ViewportIndex` 3、HLSL 隐式截断 / varying 类型不一致 2、`BONECOUNT` 1、`sampler2DBackBuffer` 1、编辑器专用 1，均不在 P1–P6 样本内。本轮修正：uniform 标量数组在 WGSL 里步长不合法（audiophile / demon_core），改为补成 vec4 数组 |
+| [x] | S3 wasm 构建 | Windows | `deno task build:wpesl2wgsl` | 产物写入 `bin/wasm/wpesl2wgsl/`，没有导入项 | 2026-11-01：1454 KiB；`WebAssembly.Module.imports` 为空，导出 `memory / wpesl_alloc / wpesl_free / wpesl_translate` |
+| [ ] | S4 缺 wasm 目标 | Windows | 未装 `wasm32-unknown-unknown` 时运行 `deno task build:wpesl2wgsl` | 报错并给出 `rustup target add wasm32-unknown-unknown` | 未实测：本机本轮已装上该目标 |
+| [x] | S5 拷进前端 | Windows | `deno task test -c kabegame --skip cargo` | 日志「[Wpesl2wgslPlugin] 复制 …」；前端副本与 `bin/wasm/` 都被 git 忽略；内容相同时不重写 | 2026-11-01：首次与重建后都打出复制日志；之后再跑 check 没有复制日志；`git check-ignore` 命中 `.gitignore` 两条新规则 |
+| [x] | S6 缺产物告警 | Windows | 把产物挪开后运行 `check-kabegame --skip cargo` | 黄字告警「未找到 …先运行 deno task build:wpesl2wgsl」，vue-tsc 照常通过 | 2026-11-01：告警出现，vue-tsc 0 error；测完已放回产物 |
+| [x] | S7 `--skip vue` 不复制 | Windows | `check-kabegame --skip vue` | 没有 Wpesl2wgslPlugin 输出；主程序 cargo check 照常 | 2026-11-01：无插件输出，cargo 0 error（新 crate 进 workspace 不影响 `kabegame`） |
+| [x] | S8 前端胶水 | Windows | `npx vitest run src/wpe-scene`（`apps/kabegame`） | 补头文件重试、缺失清单、失败诊断带 GLSL 三项通过 | 2026-11-01：3 passed。同轮全量 vitest 另有 `KameToolboxBubble.test.ts` 的 i18n mock 失败，与本次无关（该文件未改动） |
+| [ ] | D1 浏览器接受 WGSL | Windows dev | 在应用页用 wasm 翻译本机语料，逐份 `device.createShaderModule` + `getCompilationInfo()` | 没有 error 级消息 | 待真机：本轮 dev 未运行；P1 第一项真机用例 |
+| [ ] | M 其它平台 | macOS / Linux | `rustup target add wasm32-unknown-unknown` 后 `deno task build:wpesl2wgsl`，再 `check-kabegame` | 构建与检查通过 | 未测 |
+
 ## 网页壁纸音频与媒体集成（Phase 8）
 
 页面登记音频 / 媒体监听后，垫片调 `wpe_web_media_subscribe` 交出 Tauri Channel；订阅按调用方 frame 归属（tauri 补丁 18 增补公开 `tauri::ipc::CallerFrame`），`SubframeDestroyed` 即释放。后端 `wpe_media`：WASAPI 回环 + 自定频谱、SMTC 媒体会话、封面配色；设置「网页壁纸媒体集成」（`wpeMediaIntegration`，默认开）。只 Windows 有数据源。方案见 `.claude/plans/wpe-import/2-web/phase-8-audio-media.md`。订阅数看日志里「网页壁纸媒体订阅」/「释放网页壁纸媒体订阅」的 `subscriptions` 字段，采集与监视启停看「网页壁纸音频采集已启动 / 已停止」「网页壁纸媒体会话监视已启动 / 已停止」。

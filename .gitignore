@@ -58,6 +58,9 @@ src-tauri/kabegame/resources/cef/
 /bin/windows/swscale-*.dll
 /bin/windows/swresample-*.dll
 /bin/windows/libx264-*.dll
+# wpesl2wgsl 的 wasm（deno task build:wpesl2wgsl 复现），以及拷进前端的副本
+/bin/wasm/
+apps/kabegame/src/wpe-scene/wpesl2wgsl/*.wasm
 /bin/linux/
 /bin/macos/
 # Android 自建 V8 产物落在 bin/android/arm64/rusty_v8-build/，由

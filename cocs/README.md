@@ -128,6 +128,15 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     排查属性改了页面不变 / 预览与桌面不同步 / 草稿串到下一张、属性标签显示 `ui_` 键名、显示条件显隐与 WPE 不一致、`file` / `directory` 属性选的文件被 `deny file:` 或目录回调不触发；
     排查网页壁纸频谱不动 / 一直满格 / 静音后不回落、没有歌名封面或进度、切走壁纸后仍在采集或订阅数不降、音频订阅被拒。
 
+- [wpe/WPE_SCENE.md](wpe/WPE_SCENE.md)
+  - 主题：场景壁纸（`x-wpe/scene`）的前端渲染路线：WebGPU 在 `WallpaperStage` 的 scene 层、前端 `fetch(file:)` 读资源、前端编译，Rust 只做导入；以及着色器翻译器 `wpesl2wgsl` 的摘要。翻译器的完整契约见 [../src-tauri/wpesl2wgsl/README.md](../src-tauri/wpesl2wgsl/README.md)：
+    - **构建**：编成 wasm、不链进应用；`deno task build:wpesl2wgsl` 产出到 `bin/wasm/wpesl2wgsl/`，kabegame 命令不带 `--skip vue` 时拷进前端，缺失只告警。
+    - **输入**：WPESL 原文、头文件（缺失时返回 `missing` 让调用方重试）、COMBO 与绑定的纹理。
+    - **输出**：WGSL 与反射（共用的 std140 uniform 块、纹理绑定 `1 + 2n` / `2 + 2n`、location、COMBO 来源）。
+    - **语料**：本机语料 2026-11-01 为 153/167。
+    - **`scene.pkg`**：移植自 linux-wallpaperengine 的目录表读取，前端经带 `Range` 头的 `fetch(file:)` 按条目区间读（`wpe-scene/compile/pkg.ts`）。
+  - 适用场景：开发 scene 渲染的任一 Phase；读创意工坊场景的 `scene.pkg`；改着色器翻译规则；排查某个 WPE 着色器翻译失败或输出的 WGSL 被拒；调整 wasm 构建链。
+
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)

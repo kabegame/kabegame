@@ -10,6 +10,10 @@ use super::is_safe_relative_path;
 
 pub const WPE_PROJECT_FILE: &str = "project.json";
 
+/// 创意工坊发布的场景壁纸把 `scene.json` 与项目资源打进这个包，目录里只剩 `project.json` 与预览图。
+/// Rust 不解析它，包内读取在前端（`apps/kabegame/src/wpe-scene/compile/pkg.ts`）。
+pub const WPE_SCENE_PKG: &str = "scene.pkg";
+
 /// `project.json` 的 `type`：WPE 壁纸类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -42,9 +46,9 @@ impl WpeKind {
         }
     }
 
-    /// Kabegame 已支持入库的类型（目前 video 与 web）；scene 落地时只需在这里加一项。
+    /// Kabegame 已支持入库的类型。scene 入库后先显示预览图，渲染能力随阶段 3 逐步解锁。
     pub fn is_supported(&self) -> bool {
-        matches!(self, Self::Video | Self::Web)
+        matches!(self, Self::Video | Self::Web | Self::Scene)
     }
 
     /// 目录型格式键；是否已支持入库见 [`WpeKind::is_supported`]。
@@ -83,9 +87,19 @@ impl WpeProject {
         self.dir.to_string_lossy().into_owned()
     }
 
-    /// 入口文件的绝对路径（仅在 `file` 校验通过时有值）。
+    /// 入口文件的绝对路径（仅在 `file` 校验通过时有值）。打包的场景壁纸入口在 `scene.pkg` 里，这个路径不存在。
     pub fn entry_path(&self) -> Option<PathBuf> {
         self.file.as_ref().map(|file| self.dir.join(file))
+    }
+
+    /// 取 hash / size 的文件：入口是散文件时就是入口；场景壁纸的入口打包在 `scene.pkg` 里时取包本身。
+    pub fn content_path(&self) -> Option<PathBuf> {
+        let entry = self.entry_path()?;
+        if entry.is_file() {
+            return Some(entry);
+        }
+        let pkg = self.dir.join(WPE_SCENE_PKG);
+        (self.kind == WpeKind::Scene && pkg.is_file()).then_some(pkg)
     }
 
     /// 预览图的绝对路径。
@@ -106,7 +120,7 @@ impl WpeProject {
 pub enum WpeSkip {
     /// 目录里没有 `project.json`。
     NoProject,
-    /// 类型不受支持（scene / application / 其它；目前只导入 video 与 web）。
+    /// 类型不受支持（application / 其它；导入 video、web 与 scene）。
     Unsupported(WpeKind),
     /// 声明了入口但入口文件不存在。
     MissingEntry(String),
@@ -184,13 +198,11 @@ pub fn read_project(dir: &Path) -> Result<WpeProject, WpeSkip> {
 
     let text = std::fs::read_to_string(&project_path)
         .map_err(|error| WpeSkip::Invalid(format!("读取失败：{error}")))?;
-    let raw: Value =
-        serde_json::from_str(&text).map_err(|error| WpeSkip::Invalid(format!("JSON 无效：{error}")))?;
+    let raw: Value = serde_json::from_str(&text)
+        .map_err(|error| WpeSkip::Invalid(format!("JSON 无效：{error}")))?;
     if !raw.is_object() {
         return Err(WpeSkip::Invalid("根节点不是对象".to_string()));
     }
-
-    let kind = WpeKind::parse(read_string(&raw, "type").as_deref().unwrap_or("other"));
 
     let file = read_string(&raw, "file");
     if let Some(file) = file.as_deref() {
@@ -198,6 +210,18 @@ pub fn read_project(dir: &Path) -> Result<WpeProject, WpeSkip> {
             return Err(WpeSkip::Invalid(format!("入口路径越界：{file}")));
         }
     }
+
+    // 部分默认项目（audiophile、techno）没有 `type`，但入口是场景 json，WPE 照场景处理
+    let kind = match read_string(&raw, "type") {
+        Some(kind) => WpeKind::parse(&kind),
+        None if file
+            .as_deref()
+            .is_some_and(|file| file.to_ascii_lowercase().ends_with(".json")) =>
+        {
+            WpeKind::Scene
+        }
+        None => WpeKind::Other,
+    };
 
     // 预览是可选项：声明了但不存在或越界时按「无预览」处理，不让整张壁纸失败。
     let preview = read_string(&raw, "preview").and_then(|preview| {
@@ -208,12 +232,16 @@ pub fn read_project(dir: &Path) -> Result<WpeProject, WpeSkip> {
         }
     });
 
-    // 已支持入库的类型都要求入口文件存在（video 是视频文件，web 是入口 html）。
+    // 已支持入库的类型都要求入口文件存在（video 是视频文件，web 是入口 html，scene 是场景 json）。
+    // 创意工坊发布的场景把入口打进 `scene.pkg`：有包就算入口存在，包里是否真有入口交给前端编译时判断。
     if kind.is_supported() {
         let Some(file) = file.as_deref() else {
-            return Err(WpeSkip::MissingEntry("project.json 未声明 file".to_string()));
+            return Err(WpeSkip::MissingEntry(
+                "project.json 未声明 file".to_string(),
+            ));
         };
-        if !dir.join(file).is_file() {
+        let packed = kind == WpeKind::Scene && dir.join(WPE_SCENE_PKG).is_file();
+        if !dir.join(file).is_file() && !packed {
             return Err(WpeSkip::MissingEntry(file.to_string()));
         }
     }
@@ -245,10 +273,8 @@ mod tests {
     use std::fs;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "kabegame-wpe-test-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kabegame-wpe-test-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -350,6 +376,61 @@ mod tests {
             Err(WpeSkip::MissingEntry(file)) => assert_eq!(file, "index.html"),
             other => panic!("expected MissingEntry, got {other:?}"),
         }
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn scene_entry_may_be_packed() {
+        let dir = temp_dir("scene");
+        fs::write(
+            dir.join(WPE_PROJECT_FILE),
+            r#"{"file":"scene.json","type":"Scene"}"#,
+        )
+        .unwrap();
+        // 既没有散文件入口也没有包
+        match read_project(&dir) {
+            Err(WpeSkip::MissingEntry(file)) => assert_eq!(file, "scene.json"),
+            other => panic!("expected MissingEntry, got {other:?}"),
+        }
+
+        // 创意工坊形态：只有 scene.pkg，hash / size 取包
+        fs::write(dir.join(WPE_SCENE_PKG), b"PKGV").unwrap();
+        let project = read_project(&dir).expect("packed scene should parse");
+        assert_eq!(project.kind, WpeKind::Scene);
+        assert!(project.kind.is_supported());
+        assert_eq!(project.kind.media_type(), Some("x-wpe/scene"));
+        assert_eq!(
+            project.content_path(),
+            Some(project.dir.join(WPE_SCENE_PKG))
+        );
+
+        // 散文件入口优先
+        fs::write(dir.join("scene.json"), b"{}").unwrap();
+        let project = read_project(&dir).unwrap();
+        assert_eq!(project.content_path(), Some(project.dir.join("scene.json")));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn missing_type_with_json_entry_is_scene() {
+        let dir = temp_dir("untyped");
+        fs::write(dir.join("techno.json"), b"{}").unwrap();
+        fs::write(dir.join(WPE_PROJECT_FILE), r#"{"file":"techno.json"}"#).unwrap();
+        assert_eq!(read_project(&dir).unwrap().kind, WpeKind::Scene);
+
+        // 没有 type、入口也不是 json：仍是不支持的其它类型
+        fs::write(dir.join("sheep.exe"), b"x").unwrap();
+        fs::write(dir.join(WPE_PROJECT_FILE), r#"{"file":"sheep.exe"}"#).unwrap();
+        assert_eq!(read_project(&dir).unwrap().kind, WpeKind::Other);
+
+        // 只有 pkg 不能让其它类型通过：`content_path` 只为场景取包
+        fs::write(dir.join(WPE_SCENE_PKG), b"PKGV").unwrap();
+        fs::write(
+            dir.join(WPE_PROJECT_FILE),
+            r#"{"file":"index.html","type":"web"}"#,
+        )
+        .unwrap();
+        assert!(matches!(read_project(&dir), Err(WpeSkip::MissingEntry(_))));
         fs::remove_dir_all(dir).ok();
     }
 }

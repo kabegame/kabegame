@@ -17,10 +17,10 @@ Kabegame 把整个目录作为一行 `images`：
 | 列 | 值 |
 |---|---|
 | `local_path` | 壁纸目录的绝对路径（规范化、无 `\\?\`、无尾斜杠） |
-| `type` | `x-wpe/video` / `x-wpe/web` 已入库；`x-wpe/scene` 只是占位 |
+| `type` | `x-wpe/video` / `x-wpe/web` / `x-wpe/scene` 都已入库；场景壁纸的渲染器在阶段 3 逐步落地（见 [WPE_SCENE.md](WPE_SCENE.md)），之前只显示作者预览图 |
 | `thumbnail_path` | `<目录>/<preview>`，直接引用 WPE 自带预览图，不生成缩略图 |
 | `compatible_path` | 视频行**始终有值**：浏览器能播时就是入口视频本身（`<目录>/<file>` 绝对路径）；解不了的编码在 `compatibles_dir` 生成 H.264 MP4，生成失败也回落到入口视频。**网页行为空**（没有可播放媒体，页面以入口的 `file://` 加载，见第六节） |
-| `hash` / `size` / `width` / `height` | 入口文件的哈希、大小；视频行带探测尺寸，网页行宽高为空（页面没有固有尺寸） |
+| `hash` / `size` / `width` / `height` | 入口文件的哈希、大小（创意工坊场景的入口打包在 `scene.pkg` 里，取包本身，`WpeProject::content_path`）；视频行带探测尺寸，网页与场景行宽高为空 |
 | `post_url` | 有 workshop id 时是创意工坊页面地址 |
 | `metadata` | `project.json` 原文（`plugin_id = wpe-import`），供详情展示 |
 
@@ -78,7 +78,9 @@ true）、网页壁纸入口（`web_entry`）与网页壁纸目录索引都按 `
   创意工坊根、`projects/`、`defaultprojects` / `myprojects`、WPE 安装目录、Steam 库根与
   `steamapps/`；其它目录向下最多两层找 `project.json`。
 - `project.rs`：解析 `project.json`。`type` 归一为 `Video / Web / Scene / Application / Other`，
-  `WpeKind::is_supported()`（目前 video 与 web）是「可导入」口径的唯一来源，已支持的类型都要求入口文件存在；
+  `WpeKind::is_supported()`（video、web 与 scene）是「可导入」口径的唯一来源，已支持的类型都要求入口文件存在；
+  场景例外：目录里有 `scene.pkg`（创意工坊发布形态）就算入口存在，Rust 不解析包。没有 `type` 但 `file` 是 `.json` 的
+  （默认项目 audiophile、techno）按场景处理；
   `file` / `preview` 必须是目录内相对路径（拒绝绝对路径与 `..`）；`preview` 缺失或越界归为
   `None`；`workshopid` 缺失时用 `431960/<纯数字目录名>` 回退，便于拼创意工坊链接。
   跳过原因 `WpeSkip::{NoProject, Unsupported, MissingEntry, Invalid}` 计入任务日志与统计。
@@ -384,7 +386,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 
 ### 图库接入
 
-- `ImageContent` 新增 `wallpaper` 形态：**非视频** WPE 行（`isWpeWallpaperContentType`：web，以及未来的 scene）在
+- `ImageContent` 新增 `wallpaper` 形态：**网页** WPE 行（`isWpeWallpaperContentType`；场景壁纸在 `WallpaperStage` 有 scene 层之前按图片显示作者预览图）在
   `prefer="original"` 时交给 `components/wallpaper/WpeWallpaperContent.vue`（按 id 调 `get_wallpaper_target_for_image`，
   样式 / 过渡 / 音量 / 倍速跟随壁纸设置，渲染 `WallpaperStage`），缩略形态仍是作者 `preview.*`；该形态不构建缩略 / 原图链，
   丢失态只看 `localExists === false` 或目标取不到（页面加载超时不算丢失）。`x-wpe/video` 不走这里，仍是 `<video>` 链。
@@ -472,7 +474,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 
 - **WPE 壁纸目前只提供 Windows 桌面**：macOS / Linux / Android / Web 不自动发现、不渲染网页壁纸（`web_entry` 与网页壁纸目录
   索引都按 Windows 门控），`x-wpe/*` 行只显示作者预览图。
-- 只导入 `video` 与 `web`；`scene` / `application` 只占位并计入跳过。
+- 导入 `video`、`web` 与 `scene`；`application` 只占位并计入跳过。场景壁纸在渲染器落地前，预览与应用背景显示作者预览图，设为桌面壁纸还不能渲染。
 - 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言（`applyGeneralProperties({ language })`）；
   `fps`、`setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
   WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`；回环会采到 Kabegame 自己的声音（与 WPE 一致）。

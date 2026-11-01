@@ -62,6 +62,29 @@ export function isArchDirName(name: string): boolean {
   return ARCH_DIR_NAMES.includes(name);
 }
 
+/**
+ * wpesl2wgsl（WPE 着色器 → WGSL 翻译器）的 wasm 产物：`deno task build:wpesl2wgsl` 写入，
+ * kabegame 命令不带 `--skip vue` 时由 Wpesl2wgslPlugin 拷进前端。与平台无关，所以不按 platform/arch 分目录。
+ */
+export const WPESL2WGSL_WASM: string = path.join(
+  ROOT,
+  "bin",
+  "wasm",
+  "wpesl2wgsl",
+  "wpesl2wgsl.wasm",
+);
+
+/** 前端引用 wpesl2wgsl wasm 的位置（git 忽略），见 apps/kabegame/src/wpe-scene/wpesl2wgsl/index.ts。 */
+export const WPESL2WGSL_FE_WASM: string = path.join(
+  ROOT,
+  "apps",
+  "kabegame",
+  "src",
+  "wpe-scene",
+  "wpesl2wgsl",
+  "wpesl2wgsl.wasm",
+);
+
 /** chromium checkout 工作区（build-chromium 的构建根，原仓库外 cefbuild）。 */
 export const CHROMIUM_DIR: string = path.join(THIRD_DIR, "chromium");
 

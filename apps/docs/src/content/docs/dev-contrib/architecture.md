@@ -19,6 +19,7 @@ Kabegame 是一个由 Deno 构建系统编排的 monorepo。Vue 前端、Tauri �
 │   ├── kabegame-cli/             # 无界面命令行工具
 │   ├── tauri-runtime-kbcef/        # 自研桌面 Tauri CEF runtime
 │   ├── pathql-rs/                # PathQL 查询引擎
+│   ├── wpesl2wgsl/               # WPE 着色器 → WGSL 翻译器（编成 wasm，给场景壁纸渲染器用）
 │   └── tauri-plugin-*/           # picker、pathes、share、wallpaper、task-notification
 ├── src-crawler-plugins/          # JS/TS 爬虫插件及 .kgpg 打包流程
 ├── scripts/                      # Deno + Tapable 构建系统与依赖构建脚本

@@ -143,6 +143,13 @@ CEFBUILD=~/kabegame-cefbuild deno task build:chromium  # 从 third/cef 构建 CE
                                  # 预检保护会拒绝默认 CHROMIUM_DIR（third/chromium/）；
                                  # 参见 src-tauri/tauri-runtime-kbcef/README.md。请用同卷 mv 移动现有 checkout
                                  # （即时重命名，无需复制 60GB）。
+deno task build:wpesl2wgsl       # 把 src-tauri/wpesl2wgsl（WPE 着色器 → WGSL）编成 wasm，
+                                 # 输出 bin/wasm/wpesl2wgsl/wpesl2wgsl.wasm（已被 git 忽略，与平台无关）。
+                                 # 需要 rustup 目标 wasm32-unknown-unknown（缺失时报错并给出 rustup target add 命令）；
+                                 # 用根 Cargo.toml 的 [profile.wpesl2wgsl]（按体积优化、panic = abort）。
+                                 # kabegame 的 dev / start / build / check / test 不带 --skip vue 时，
+                                 # Wpesl2wgslPlugin 把它拷进 apps/kabegame/src/wpe-scene/wpesl2wgsl/；缺失只告警。
+                                 # 见 cocs/wpe/WPE_SCENE.md。
 deno task build:ffmpeg --target android  # 通过环境中的 NDK（NDK_HOME 等）交叉编译 aarch64 FFmpeg
                                  # 输出到已被 git 忽略的 bin/android/arm64/FFmpeg-build/（可通过
                                  # 命令重现，不提交）。执行 Android Cargo 构建/检查前必须先运行此命令。

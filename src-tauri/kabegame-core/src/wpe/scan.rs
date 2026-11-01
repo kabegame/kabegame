@@ -26,6 +26,8 @@ pub struct WpeSourceInfo {
     pub video: usize,
     /// 入口文件存在的 `web` 壁纸数量。
     pub web: usize,
+    /// 入口存在（散文件或 `scene.pkg`）的 `scene` 壁纸数量。
+    pub scene: usize,
     /// Kabegame 已支持的类型（[`WpeKind::is_supported`]）中尚未入库、本次导入会新增的数量。
     pub pending: usize,
     /// 已在库中的数量（按 `local_path` 命中）。
@@ -41,6 +43,7 @@ impl WpeSourceInfo {
             total: 0,
             video: 0,
             web: 0,
+            scene: 0,
             pending: 0,
             imported: 0,
         }
@@ -70,6 +73,7 @@ pub struct DirCounts {
     pub total: usize,
     pub video: usize,
     pub web: usize,
+    pub scene: usize,
     /// 已支持的类型且尚未入库。
     pub pending: usize,
     pub imported: usize,
@@ -80,6 +84,7 @@ impl WpeSourceInfo {
         self.total += counts.total;
         self.video += counts.video;
         self.web += counts.web;
+        self.scene += counts.scene;
         self.pending += counts.pending;
         self.imported += counts.imported;
     }
@@ -101,6 +106,7 @@ pub fn count_dirs(dirs: &[PathBuf], imported: &HashSet<String>) -> DirCounts {
             match project.kind {
                 WpeKind::Video => counts.video += 1,
                 WpeKind::Web => counts.web += 1,
+                WpeKind::Scene => counts.scene += 1,
                 _ => {}
             }
             if project.kind.is_supported() && !already {
@@ -204,10 +210,8 @@ mod tests {
     use std::fs;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "kabegame-wpe-scan-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kabegame-wpe-scan-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -233,17 +237,30 @@ mod tests {
         wallpaper(&content.join("3"), "video", "missing.mp4");
         wallpaper(&content.join("4"), "web", "index.html");
         wallpaper(&content.join("5"), "scene", "scene.json");
+        // 创意工坊形态的场景：入口在 scene.pkg 里
+        fs::create_dir_all(content.join("6")).unwrap();
+        fs::write(
+            content.join("6").join("project.json"),
+            r#"{"type":"scene","file":"scene.json"}"#,
+        )
+        .unwrap();
+        fs::write(content.join("6").join("scene.pkg"), b"PKGV").unwrap();
         let dirs = expand_dir(&content);
         fs::remove_file(content.join("3").join("missing.mp4")).unwrap();
 
-        let imported = HashSet::from([path_key(&normalize_local_dir(&content.join("2")).unwrap().to_string_lossy())]);
+        let imported = HashSet::from([path_key(
+            &normalize_local_dir(&content.join("2"))
+                .unwrap()
+                .to_string_lossy(),
+        )]);
         let counts = count_dirs(&dirs, &imported);
-        assert_eq!(counts.total, 5);
-        // 1 是唯一入口存在的 video；3 的入口已删；2、4 是 web，其中 2 已入库；5 是暂不支持的 scene。
+        assert_eq!(counts.total, 6);
+        // 1 是唯一入口存在的 video；3 的入口已删；2、4 是 web，其中 2 已入库；5（散文件）与 6（scene.pkg）是 scene。
         assert_eq!(counts.video, 1);
         assert_eq!(counts.web, 2);
-        // pending = 未入库的已支持类型：1（video）+ 4（web）。
-        assert_eq!(counts.pending, 2);
+        assert_eq!(counts.scene, 2);
+        // pending = 未入库的已支持类型：1（video）+ 4（web）+ 5、6（scene）。
+        assert_eq!(counts.pending, 4);
         assert_eq!(counts.imported, 1);
         fs::remove_dir_all(root).ok();
     }

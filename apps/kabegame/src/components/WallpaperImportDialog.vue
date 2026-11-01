@@ -89,7 +89,9 @@
             <el-icon :size="18"><Folder /></el-icon>
           </div>
           <div class="flex-1 min-w-0 flex flex-col gap-1">
-            <span class="font-semibold text-sm text-[var(--anime-text-primary)]">{{ $t("gallery.wpeSourceCustom") }}</span>
+            <span class="font-semibold text-sm text-[var(--anime-text-primary)]">
+              {{ $t("gallery.wpeSourceCustom") }}
+            </span>
             <span class="text-xs truncate text-[var(--el-text-color-secondary)]" :title="source.paths[0]">
               {{ source.paths[0] }}
             </span>
@@ -179,7 +181,9 @@ interface WpeSourceInfo {
   video: number;
   /** 入口存在的网页壁纸数量。 */
   web: number;
-  /** 已支持的类型（视频 / 网页）中尚未入库的数量。 */
+  /** 入口存在（散文件或 `scene.pkg`）的场景壁纸数量。 */
+  scene: number;
+  /** 已支持的类型（视频 / 网页 / 场景）中尚未入库的数量。 */
   pending: number;
   imported: number;
 }
@@ -271,6 +275,7 @@ function statChips(source: WpeSourceInfo): { tone: "plain" | "primary" | "muted"
   const kinds = [
     { n: source.video ?? 0, kind: t("gallery.wpeKindVideo") },
     { n: source.web ?? 0, kind: t("gallery.wpeKindWeb") },
+    { n: source.scene ?? 0, kind: t("gallery.wpeKindScene") },
   ]
     .filter((item) => item.n > 0)
     .map((item) => t("gallery.wpeStatKinds", item));
