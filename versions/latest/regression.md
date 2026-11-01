@@ -1,5 +1,28 @@
 # v4.7.0 regression
 
+## 场景宿主 P3-0 MVP：`apps/wpe-scene` 的 `file:` iframe
+
+按 PLAN P3-0「形态更新」搭出场景宿主，渲染器没有迁移（`WpeSceneView` 照旧在应用页）。场景宿主当作一种特殊的网页壁纸。
+- **宿主**：独立的纯 TS + Vite 项目 `apps/wpe-scene`，构建进 `resource_dir/wpe-scene`（dev 直接写 `target/debug/resources`，prod 进 `src-tauri/kabegame/resources` 打包），现在只有一块 WebGPU 画布逐帧清屏。
+- **地址**：`get_wpe_scene_host_url` 返回 `index.html` 的 `file:///` 地址，应用页赋给 iframe（sandbox 同网页壁纸）。
+- **`file:` 范围**：宿主目录 + WPE 安装目录的 `assets` / `config.json` + 库内全部场景目录（随图片事件维护）。
+- **IPC**：网页壁纸的命令与事件经 `wpe-web-capability`（`file:///*`）照常可用；场景专用命令 `get_wpe_scene_postprocess` 由按确切地址运行时注册的 `wpe-scene-host-capability` 放行。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测 | Windows | `test-kabegame kabegame wallpaper::wpe_`；`test-kabegame kabegame-core --lib wpe_web_rows_tests` | 宿主范围（含前缀相同的兄弟目录、场景目录本身不算宿主）、WPE 放行项、盘符大写、capability 只匹配宿主入口（含空格与 URLPattern 特殊字符）；场景目录只进放行表；场景行查询走 `idx_images_type` | 2026-11-02：kabegame 13 passed、core 3 passed |
+| [x] | S2 检查 | Windows | `check-kabegame --skip vue`；宿主 `typecheck`（tsc）；单独 `vite build`；Prettier / rustfmt（新文件） | 0 error；宿主能单独构建 | 2026-11-02：cargo 0 error；宿主 tsc 0 error，`vite build` 通过、产物 JS 0.8 kB |
+| [x] | D1 加载与渲染 | Windows dev，主窗口 | 应用页 `invoke("get_wpe_scene_host_url")`，建 iframe 赋地址 | 宿主加载，画布在画 | 2026-11-02 CDP：地址 `file:///D:/Codes/kabegame/target/debug/resources/wpe-scene/index.html`；`<script type="module" crossorigin>` 照常执行；纯 TS 宿主同一帧读回清屏色 `[28, 28, 40, 255]` |
+| [x] | D2 读文件 | Windows dev | 宿主里 `fetch(file:)` | razer_vortex `scene.json`、`genericimage2.frag`、WPE `config.json`、工坊 `scene.pkg`（整读与 `Range`）、宿主文件能读；`win.ini`、数据目录文件、网页壁纸文件、视频壁纸目录、WPE 目录里 `assets` 之外的文件读不到 | 2026-11-02：全部符合；拒绝的是 `TypeError: Failed to fetch`，日志 `OutsideRoot; requester Document(…\wpe-scene\index.html)` |
+| [x] | D3 IPC | Windows dev | 宿主里 invoke / listen；应用页改一次「场景后处理」再改回 | `get_wpe_scene_postprocess`、`wallpaper_pong` 成功，`setting-change` / `image-changed` / `images-change` / `wallpaper-ping` 能监听且收到 `setting-change`；网页壁纸以外的命令与事件被拒；网页壁纸 iframe 不受影响 | 2026-11-02：符合；`wpe_web_pull_state` 过 ACL 后报 `not inside a web wallpaper`（场景的状态拉取待渲染器迁移时设计）；`get_supported_image_types` / `images-added` 被拒；同窗口网页壁纸照常拉状态、调 `get_wpe_scene_postprocess` 被拒；设置已改回「跟随 WPE」 |
+| [x] | D4 隔离 | Windows dev | 宿主读 `parent.document`；宿主忙等 3 s | 跨源被拒；父页面不卡 | 2026-11-02：`SecurityError`；独立 OOPIF，父页面计时器最大间隔 29 ms |
+| [x] | D5 dev 迭代 | Windows dev | 改宿主后 `deno task --cwd apps/wpe-scene build`，重载 iframe | 新产物生效，不重编 Rust | 2026-11-02：新文件即可访问，Rust 没有重编 |
+| [x] | D6 rAF | Windows dev，窗口可见 | 宿主与主页面同时测 2 s rAF | 宿主与主页面帧率相当 | 2026-11-02 复核：两边都是 144 fps、最大间隔 7 ms（首测时窗口被遮挡，两边都只有约 1 fps） |
+| [ ] | D7 壁纸窗口 | Windows dev，窗口模式 | 在壁纸窗口里建宿主 iframe，重复 D1–D4 | 同主窗口 | 未测：当前不是窗口模式，没有改用户的壁纸设置 |
+| [ ] | D8 安装包 | Windows release | 安装后在主窗口建宿主 iframe | 地址在安装目录 `resources/wpe-scene`，capability 匹配、能读文件 | 未测 |
+| [x] | D9 宿主内嵌 frame | Windows dev | 宿主里建子 frame，分别导航到 `about:blank`、`srcdoc`、`blob:`、宿主目录里别的文件、场景目录里的文件，经子 frame 的桥 invoke / listen | 权限不超过宿主自己（网页壁纸的命令与事件 + 场景专用命令） | 2026-11-02：`about:blank` 同宿主；`srcdoc` / `blob:` 报 `Origin header is not a valid URL`；宿主目录别的文件与场景目录文件只匹配 `wpe-web-capability`，没有场景专用命令 |
+| [x] | D10 同窗口 `file:` frame（已知限制） | Windows dev | 主窗口同时建宿主与网页壁纸 iframe，宿主经 `top.frames` 访问网页壁纸 | 与网页壁纸之间相同：可达（2026-11-02 定为接受） | 2026-11-02：同源同进程，宿主能读它的 DOM、以它的身份 `wpe_web_pull_state`、借它的 `fetch` 读它的目录 |
+
 ## 场景壁纸 P2b：泛光与 HDR
 
 依据 WPE 2.8.42 的逆向与 RenderDoc 抓帧逐位核对（`.claude/plans/wpe-import/3-scene/p2-REPORT.md` A1–A4、J5，PLAN P2b）。

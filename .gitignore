@@ -45,6 +45,8 @@ src-tauri/kabegame/resources/bin/*
 src-tauri/kabegame/resources/plugins/
 # Windows CEF runtime,由 os-plugin collectWindowsCefRuntime() 构建期生成
 src-tauri/kabegame/resources/cef/
+# 场景宿主 apps/wpe-scene 的 prod 产物，由 WpeSceneHostPlugin 在 build 时生成（dev 产物直接写进 target/）
+src-tauri/kabegame/resources/wpe-scene/
 
 
 # bin/{platform}/ 根部是 os-plugin 构建期生成的运行时暂存：Linux/macOS 全部生成，

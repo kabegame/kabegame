@@ -12,6 +12,9 @@ pub mod input_forward;
 // 网页壁纸目录索引：file: 闸门与 wpe_web_pull_state 的数据源（挂接点只在 Windows）
 #[cfg(not(target_os = "android"))]
 pub mod wpe_web_dir_index;
+// 场景宿主（apps/wpe-scene 的 file: iframe）：地址、file: 访问范围与运行时 capability（挂接点只在 Windows）
+#[cfg(not(target_os = "android"))]
+pub mod wpe_scene_host;
 
 // 轮播器
 pub use rotator::WallpaperRotator;

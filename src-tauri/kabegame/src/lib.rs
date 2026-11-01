@@ -214,6 +214,13 @@ fn init_pre(
     #[cfg(not(feature = "web"))]
     start_startup_progress_forwarder(app_handle.clone());
 
+    // 场景宿主（apps/wpe-scene 的 file: iframe）的 capability：按宿主 index.html 的确切地址注册，
+    // 要先于任何宿主 iframe 调 IPC。场景壁纸只在 Windows 提供。
+    #[cfg(all(not(feature = "web"), target_os = "windows"))]
+    if let Err(e) = crate::wallpaper::wpe_scene_host::register_capability(app_handle) {
+        tracing::warn!("场景宿主 capability 注册失败: {e}");
+    }
+
     // 命令行带 --minimized 时不创建主窗口，避免窗口闪现；托盘/IPC 显示时由 ensure_main_window 再创建
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     if !startup::is_auto_startup() {
@@ -942,6 +949,8 @@ pub(crate) fn configure_app(
             wpe_web_pull_state,
             #[cfg(not(target_os = "android"))]
             wpe_web_media_subscribe,
+            #[cfg(not(target_os = "android"))]
+            get_wpe_scene_host_url,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

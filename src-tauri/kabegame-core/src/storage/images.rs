@@ -402,19 +402,23 @@ fn first_gallery_image_at(path: &str) -> Result<Option<ImageInfo>, String> {
     Ok(image)
 }
 
-/// [`Storage::list_wpe_web_rows`] 的查询：保持 `type = ?1` 的等值形态，才能走 `idx_images_type`。
-const LIST_WPE_WEB_ROWS_SQL: &str =
+/// [`Storage::list_wpe_web_rows`] / [`Storage::list_wpe_scene_rows`] 的查询：保持 `type = ?1` 的等值形态，
+/// 才能走 `idx_images_type`。
+const LIST_WPE_ROWS_SQL: &str =
     "SELECT CAST(id AS TEXT), local_path FROM images WHERE type = ?1 ORDER BY id";
 
-fn wpe_web_type_key() -> &'static str {
-    crate::wpe::WpeKind::Web
-        .media_type()
-        .expect("WpeKind::Web has a format key")
+/// 目录型 WPE 壁纸的类型键（`x-wpe/web` / `x-wpe/scene` …），取自 [`crate::wpe::WpeKind::media_type`]。
+fn wpe_type_key(kind: crate::wpe::WpeKind) -> &'static str {
+    kind.media_type()
+        .expect("directory WPE kinds have a format key")
 }
 
-fn query_wpe_web_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<(String, String)>> {
-    let mut stmt = conn.prepare_cached(LIST_WPE_WEB_ROWS_SQL)?;
-    let rows = stmt.query_map(params![wpe_web_type_key()], |row| {
+fn query_wpe_rows(
+    conn: &rusqlite::Connection,
+    kind: crate::wpe::WpeKind,
+) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare_cached(LIST_WPE_ROWS_SQL)?;
+    let rows = stmt.query_map(params![wpe_type_key(kind)], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
     rows.collect()
@@ -1421,7 +1425,16 @@ impl Storage {
     /// 不在 SQL 里写字面量。网页壁纸只有几十到几百行，metadata 由调用方按行读取。
     pub fn list_wpe_web_rows(&self) -> Result<Vec<(String, String)>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        query_wpe_web_rows(&conn).map_err(|e| format!("Failed to list web wallpapers: {}", e))
+        query_wpe_rows(&conn, crate::wpe::WpeKind::Web)
+            .map_err(|e| format!("Failed to list web wallpapers: {}", e))
+    }
+
+    /// 库内全部场景壁纸（`x-wpe/scene`）行的 `(id, local_path)`，供场景宿主的 `file:` 访问范围启动时全量建表
+    /// （宿主能读库里所有场景壁纸目录）。查询形态同 [`Self::list_wpe_web_rows`]。
+    pub fn list_wpe_scene_rows(&self) -> Result<Vec<(String, String)>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        query_wpe_rows(&conn, crate::wpe::WpeKind::Scene)
+            .map_err(|e| format!("Failed to list scene wallpapers: {}", e))
     }
 
     pub fn pick_existing_gallery_image_id(&self, mode: &str) -> Result<Option<String>, String> {
@@ -2114,6 +2127,7 @@ mod wpe_web_rows_tests {
             "x-wpe/video",
             "x-wpe/web",
             "video/mp4",
+            "x-wpe/scene",
         ]
         .into_iter()
         .enumerate()
@@ -2131,11 +2145,20 @@ mod wpe_web_rows_tests {
     fn lists_only_web_wallpapers() {
         let conn = library();
         assert_eq!(
-            query_wpe_web_rows(&conn).unwrap(),
+            query_wpe_rows(&conn, crate::wpe::WpeKind::Web).unwrap(),
             vec![
                 ("2".to_string(), "/lib/1".to_string()),
                 ("4".to_string(), "/lib/3".to_string())
             ]
+        );
+    }
+
+    #[test]
+    fn lists_only_scene_wallpapers() {
+        let conn = library();
+        assert_eq!(
+            query_wpe_rows(&conn, crate::wpe::WpeKind::Scene).unwrap(),
+            vec![("6".to_string(), "/lib/5".to_string())]
         );
     }
 
@@ -2144,9 +2167,11 @@ mod wpe_web_rows_tests {
     fn list_uses_the_type_index() {
         let conn = library();
         let plan: Vec<String> = conn
-            .prepare(&format!("EXPLAIN QUERY PLAN {LIST_WPE_WEB_ROWS_SQL}"))
+            .prepare(&format!("EXPLAIN QUERY PLAN {LIST_WPE_ROWS_SQL}"))
             .unwrap()
-            .query_map(params![wpe_web_type_key()], |row| row.get(3))
+            .query_map(params![wpe_type_key(crate::wpe::WpeKind::Web)], |row| {
+                row.get(3)
+            })
             .unwrap()
             .map(Result::unwrap)
             .collect();

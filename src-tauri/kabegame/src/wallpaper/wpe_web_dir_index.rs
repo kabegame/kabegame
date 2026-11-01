@@ -14,6 +14,10 @@
 //! 页面重拉）；`wpe_web_pull_state` 在把状态交给页面之前按同一份 metadata 覆盖（页面拿到新路径时闸门一定
 //! 已经认它）。两条路写的都是「这张壁纸当前 metadata 算出的放行」，先后到达结果相同。
 //!
+//! 同一张表还顺带记着库内每张场景壁纸（`x-wpe/scene`）的目录：场景宿主（[`super::wpe_scene_host`]）的
+//! `file:` 访问范围放行库里全部场景壁纸目录，要和网页壁纸目录一样随图片事件维护。场景目录**不**构成网页壁纸
+//! 范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
+//!
 //! 本体与单测跨平台编译；只有初始化的挂接点（`core_init` 里的调用）限 Windows，因为网页壁纸只在 Windows 提供。
 
 use kabegame_core::ipc::events::{AppEvent, AppEventKind, ArcAppEvent, ImageFieldPatch};
@@ -39,6 +43,17 @@ struct DirIndexMaps {
     entry_by_dir_key: HashMap<String, WpeWebDirEntry>,
     /// 图片 id → 目录键：删除事件只带 id。
     dir_key_by_image_id: HashMap<String, String>,
+    /// 场景壁纸：图片 id → 目录放行项（已规范化）。只供场景宿主的访问范围使用。
+    scene_dir_by_image_id: HashMap<String, FileGrant>,
+}
+
+/// 一次全量扫描的结果。
+#[derive(Default)]
+struct LibraryRows {
+    /// 网页壁纸：`(id, local_path, metadata)`。
+    web: Vec<(String, String, Option<Value>)>,
+    /// 场景壁纸：`(id, local_path)`。
+    scenes: Vec<(String, String)>,
 }
 
 /// 一张库内网页壁纸：图片 id、壁纸目录、按当前用户属性算出的放行（已转成闸门比较用的形式）。
@@ -61,6 +76,10 @@ fn is_wpe_web(media_type: Option<&str>) -> bool {
     wpe_kind(media_type).as_deref() == Some("web")
 }
 
+fn is_wpe_scene(media_type: Option<&str>) -> bool {
+    wpe_kind(media_type).as_deref() == Some("scene")
+}
+
 impl DirIndexMaps {
     /// 沿 `key` 的祖先向上找，第一个在表里的目录就是它所属的壁纸（文档在壁纸子目录里也能找到）。
     fn entry_containing(&self, key: &str) -> Option<&WpeWebDirEntry> {
@@ -79,6 +98,7 @@ impl DirIndexMaps {
     }
 
     fn remove(&mut self, image_id: &str) {
+        self.scene_dir_by_image_id.remove(image_id);
         let Some(key) = self.dir_key_by_image_id.remove(image_id) else {
             return;
         };
@@ -118,10 +138,16 @@ impl WpeWebDirIndex {
     }
 
     /// 包含 `path` 的网页壁纸的访问范围：壁纸目录 + 这张壁纸的用户选择；不在任何网页壁纸里返回 None。
+    /// 运行时解析器经场景宿主先算好比较键、再调 [`Self::access_scope_of_key`]，这个按路径的入口只给单测用。
+    #[cfg(test)]
     pub fn access_scope_of(&self, path: &Path) -> Option<FileAccessScope> {
-        let key = file_path_key(path)?;
+        self.access_scope_of_key(&file_path_key(path)?)
+    }
+
+    /// 同 [`Self::access_scope_of`]，参数是已算好的路径比较键（[`file_path_key`]）。
+    pub fn access_scope_of_key(&self, key: &str) -> Option<FileAccessScope> {
         let maps = self.inner.read().ok()?;
-        let entry = maps.entry_containing(&key)?;
+        let entry = maps.entry_containing(key)?;
         Some(FileAccessScope {
             root: Some(entry.dir.clone()),
             grants: entry.grants.clone(),
@@ -136,11 +162,23 @@ impl WpeWebDirIndex {
             .map(|entry| entry.image_id.clone())
     }
 
+    /// 表里是否有这张壁纸（网页或场景）。
     pub fn contains_image(&self, image_id: &str) -> bool {
         self.inner
             .read()
-            .map(|maps| maps.dir_key_by_image_id.contains_key(image_id))
+            .map(|maps| {
+                maps.dir_key_by_image_id.contains_key(image_id)
+                    || maps.scene_dir_by_image_id.contains_key(image_id)
+            })
             .unwrap_or(false)
+    }
+
+    /// 库内全部场景壁纸目录的放行项（目录，顺序不定）。场景宿主的访问范围每次请求现取。
+    pub fn scene_dir_grants(&self) -> Vec<FileGrant> {
+        self.inner
+            .read()
+            .map(|maps| maps.scene_dir_by_image_id.values().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// 用这张壁纸当前 metadata 算出的用户选择**覆盖**它的放行（不是追加：改了目录属性，旧目录立即不可读）。
@@ -181,6 +219,19 @@ impl WpeWebDirIndex {
         }
     }
 
+    /// 登记 / 更新一张场景壁纸的目录。目录已不存在、不是目录或是符号链接时不登记，原有条目一并删除。
+    fn upsert_scene(&self, image_id: &str, local_path: &str) {
+        let grant = FileGrant::new(Path::new(local_path), true);
+        let Ok(mut maps) = self.inner.write() else {
+            return;
+        };
+        maps.remove(image_id);
+        if let Some(grant) = grant {
+            maps.scene_dir_by_image_id
+                .insert(image_id.to_string(), grant);
+        }
+    }
+
     fn remove(&self, image_id: &str) {
         if let Ok(mut maps) = self.inner.write() {
             maps.remove(image_id);
@@ -188,9 +239,14 @@ impl WpeWebDirIndex {
     }
 
     /// 用一次全量扫描的结果整张替换。
-    fn replace_all(&self, rows: Vec<(String, String, Option<Value>)>) {
+    fn replace_all(&self, rows: LibraryRows) {
         let mut maps = DirIndexMaps::default();
-        for (image_id, local_path, metadata) in rows {
+        for (image_id, local_path) in rows.scenes {
+            if let Some(grant) = FileGrant::new(Path::new(&local_path), true) {
+                maps.scene_dir_by_image_id.insert(image_id, grant);
+            }
+        }
+        for (image_id, local_path, metadata) in rows.web {
             let dir = PathBuf::from(&local_path);
             let Some(key) = file_path_key(&dir) else {
                 continue;
@@ -214,17 +270,22 @@ impl WpeWebDirIndex {
     }
 }
 
-/// 全量读取库内网页壁纸：行走 `idx_images_type`，metadata 按行读（只有几十到几百行）。阻塞调用。
-fn scan_library() -> Result<Vec<(String, String, Option<Value>)>, String> {
+/// 全量读取库内网页壁纸与场景壁纸：行走 `idx_images_type`，网页壁纸的 metadata 按行读（只有几十到几百行）。
+/// 阻塞调用。
+fn scan_library() -> Result<LibraryRows, String> {
     let storage = Storage::global();
-    Ok(storage
+    let web = storage
         .list_wpe_web_rows()?
         .into_iter()
         .map(|(image_id, local_path)| {
             let metadata = storage.get_metadata(&image_id).ok().flatten();
             (image_id, local_path, metadata)
         })
-        .collect())
+        .collect();
+    Ok(LibraryRows {
+        web,
+        scenes: storage.list_wpe_scene_rows()?,
+    })
 }
 
 const FOLLOWED_KINDS: [AppEventKind; 4] = [
@@ -248,16 +309,15 @@ pub fn init_wpe_web_dir_index() {
     // 2. 全量建表；失败就保持空表：闸门全拒、拉取报错，网页壁纸加载不出来，但不放宽
     match scan_library() {
         Ok(rows) => {
-            let count = rows.len();
+            let (web, scenes) = (rows.web.len(), rows.scenes.len());
             index.replace_all(rows);
-            tracing::info!("网页壁纸目录索引已建立: {count} 张");
+            tracing::info!("网页壁纸目录索引已建立: 网页壁纸 {web} 张，场景壁纸 {scenes} 张");
         }
         Err(error) => tracing::error!("网页壁纸目录索引初始化失败: {error}"),
     }
-    // 3. 注册给 runtime：之后每个要过闸门的 file: 请求都查这张表；注册之前一律拒绝
-    tauri_runtime_kbcef::set_file_scope_resolver(Arc::new(|path| {
-        WpeWebDirIndex::global().access_scope_of(path)
-    }));
+    // 3. 注册给 runtime：之后每个要过闸门的 file: 请求都查这张表；注册之前一律拒绝。
+    //    场景宿主目录优先（它的范围另算，见 wpe_scene_host），其它路径按网页壁纸目录
+    tauri_runtime_kbcef::set_file_scope_resolver(Arc::new(super::wpe_scene_host::access_scope_of));
     // 4. 后台跟随事件
     tauri::async_runtime::spawn(follow_events(receivers));
 }
@@ -298,13 +358,13 @@ async fn follow_events(receivers: Vec<broadcast::Receiver<(u64, ArcAppEvent)>>) 
 async fn handle_event(event: &AppEvent) {
     let index = WpeWebDirIndex::global();
     match event {
-        // 新增行带完整 ImageInfo：只看 x-wpe/web，再按 id 读行与 metadata（各订阅之间不保证先后，
-        // 按库里的当前状态落地，与到达顺序无关）
+        // 新增行带完整 ImageInfo：只看 x-wpe/web 与 x-wpe/scene，再按 id 读行与 metadata（各订阅之间
+        // 不保证先后，按库里的当前状态落地，与到达顺序无关）
         AppEvent::ImagesAdded { images, .. } => {
-            for image in images
-                .iter()
-                .filter(|image| is_wpe_web(image.media_type.as_deref()))
-            {
+            for image in images.iter().filter(|image| {
+                let media_type = image.media_type.as_deref();
+                is_wpe_web(media_type) || is_wpe_scene(media_type)
+            }) {
                 refresh(image.id.clone()).await;
             }
         }
@@ -322,7 +382,7 @@ async fn handle_event(event: &AppEvent) {
     }
 }
 
-/// 只处理表里已有的壁纸，且补丁带 `metadataId`（改写了用户属性）或 `localPath` 时，重读这一行。
+/// 只处理表里已有的壁纸（网页或场景），且补丁带 `metadataId`（改写了用户属性）或 `localPath` 时，重读这一行。
 async fn on_patch(patch: &ImageFieldPatch) {
     if WpeWebDirIndex::global().contains_image(&patch.id)
         && (patch.fields.contains_key("metadataId") || patch.fields.contains_key("localPath"))
@@ -331,25 +391,39 @@ async fn on_patch(patch: &ImageFieldPatch) {
     }
 }
 
-/// 读这一行与它的 metadata 后 upsert；行已不存在或不再是 x-wpe/web 就 remove。
+/// 按 id 重读的一行。
+enum RefreshedRow {
+    Web(String, Option<Value>),
+    Scene(String),
+    /// 行已不存在，或不再是网页 / 场景壁纸。
+    Gone,
+}
+
+/// 读这一行（网页壁纸连同 metadata）后 upsert；行已不存在或不再是 x-wpe/web、x-wpe/scene 就 remove。
 async fn refresh(image_id: String) {
     let read = tokio::task::spawn_blocking(move || {
-        let row = Storage::find_image_by_id(&image_id)?;
-        let found = row
-            .filter(|info| is_wpe_web(info.media_type.as_deref()))
-            .map(|info| {
+        let row = match Storage::find_image_by_id(&image_id)? {
+            Some(info) if is_wpe_web(info.media_type.as_deref()) => {
                 let metadata = Storage::global().get_metadata(&info.id).ok().flatten();
-                (info.local_path, metadata)
-            });
-        Ok::<_, String>((image_id, found))
+                RefreshedRow::Web(info.local_path, metadata)
+            }
+            Some(info) if is_wpe_scene(info.media_type.as_deref()) => {
+                RefreshedRow::Scene(info.local_path)
+            }
+            _ => RefreshedRow::Gone,
+        };
+        Ok::<_, String>((image_id, row))
     })
     .await;
     let index = WpeWebDirIndex::global();
     match read {
-        Ok(Ok((image_id, Some((local_path, metadata))))) => {
+        Ok(Ok((image_id, RefreshedRow::Web(local_path, metadata)))) => {
             index.upsert(&image_id, &local_path, metadata.as_ref())
         }
-        Ok(Ok((image_id, None))) => index.remove(&image_id),
+        Ok(Ok((image_id, RefreshedRow::Scene(local_path)))) => {
+            index.upsert_scene(&image_id, &local_path)
+        }
+        Ok(Ok((image_id, RefreshedRow::Gone))) => index.remove(&image_id),
         Ok(Err(error)) => tracing::trace!("网页壁纸目录索引读行失败: {error}"),
         Err(error) => tracing::trace!("网页壁纸目录索引读行任务失败: {error}"),
     }
@@ -513,13 +587,49 @@ mod tests {
         let base = fixture("replace-all");
         let index = WpeWebDirIndex::new();
         index.upsert("old", &path_str(&base.join("wp-b")), None);
-        index.replace_all(vec![
-            ("1".into(), path_str(&base.join("wp-a")), None),
-            ("gone".into(), path_str(&base.join("missing")), None),
-        ]);
+        index.upsert_scene("old-scene", &path_str(&base.join("picked-a")));
+        index.replace_all(LibraryRows {
+            web: vec![
+                ("1".into(), path_str(&base.join("wp-a")), None),
+                ("gone".into(), path_str(&base.join("missing")), None),
+            ],
+            scenes: vec![
+                ("s".into(), path_str(&base.join("picked-b"))),
+                ("s-gone".into(), path_str(&base.join("missing"))),
+            ],
+        });
         assert!(index.contains_image("1"));
+        assert!(index.contains_image("s"));
         assert!(!index.contains_image("old"));
+        assert!(!index.contains_image("old-scene"));
         assert!(!index.contains_image("gone"));
+        assert!(!index.contains_image("s-gone"));
+        let _ = fs::remove_dir_all(base);
+    }
+
+    /// 场景目录只进场景放行表，不构成网页壁纸范围；按 id 删除、目录消失时不登记。
+    #[test]
+    fn scene_dirs_are_grants_not_web_scopes() {
+        let base = fixture("scenes");
+        let index = WpeWebDirIndex::new();
+        let scene = base.join("wp-b");
+        index.upsert_scene("s", &path_str(&scene));
+        let grants = index.scene_dir_grants();
+        assert_eq!(grants.len(), 1);
+        assert!(grants[0].is_dir);
+        assert_eq!(file_path_key(&grants[0].path), file_path_key(&scene));
+        // 场景目录里的文档没有网页壁纸范围
+        assert!(index.access_scope_of(&scene.join("index.html")).is_none());
+        assert!(index.image_id_of(&scene.join("index.html")).is_none());
+        assert!(index.contains_image("s"));
+        index.remove("s");
+        assert!(index.scene_dir_grants().is_empty());
+        assert!(!index.contains_image("s"));
+        index.upsert_scene("missing", &path_str(&base.join("missing")));
+        assert!(!index.contains_image("missing"));
+        // 不是目录（文件）也不登记
+        index.upsert_scene("file", &path_str(&base.join("wp-b/index.html")));
+        assert!(!index.contains_image("file"));
         let _ = fs::remove_dir_all(base);
     }
 

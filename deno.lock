@@ -7141,6 +7141,15 @@
           ]
         }
       },
+      "apps/wpe-scene": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@webgpu/types@~0.1.60",
+            "npm:typescript@^5.9.3",
+            "npm:vite@6"
+          ]
+        }
+      },
       "packages/kabegame-element-plus": {
         "packageJson": {
           "dependencies": [
