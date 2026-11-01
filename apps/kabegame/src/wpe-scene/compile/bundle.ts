@@ -1,3 +1,4 @@
+import { compileBloom, type SceneBloom } from "./bloom";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import {
   checkEffectFeatures,
@@ -23,13 +24,15 @@ import {
   type SceneValue,
 } from "./model";
 import {
+  bloomParams,
   readWpePostprocessing,
   resolvePostprocessLevel,
   scenePostprocessState,
+  type BloomParams,
   type ScenePostprocessSetting,
   type ScenePostprocessState,
 } from "./postprocess";
-import { ShaderCompiler, type ShaderTextureSlot } from "./shader";
+import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
 import { FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 
@@ -44,6 +47,8 @@ export interface SceneGeneral {
   skylight: number[];
   /** 本次编译解析出的后处理档位与场景实际的泛光 / HDR 状态（`postprocess.ts`）。 */
   postprocess: ScenePostprocessState;
+  /** 场景的泛光参数（缺键已补 WPE 默认值，原值未换算）；泛光关着时也给出，渲染器只在 `bundle.bloom` 存在时用。 */
+  bloom: BloomParams;
 }
 export interface SceneMip {
   width: number;
@@ -130,6 +135,8 @@ export interface SceneLayer {
   size: number[];
   alpha: number;
   color: number[];
+  /** 对象 `brightness`（默认 1）：只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效。 */
+  brightness: number;
   visible: boolean;
   /** 基础材质的 pass。 */
   passes: ScenePass[];
@@ -144,6 +151,8 @@ export interface SceneBundle {
   layers: SceneLayer[];
   programs: TranslateResult[];
   textures: SceneTexture[];
+  /** 泛光链（`bloom.ts`）；泛光实际关着（档位关闭、`general.bloom` 为 false 或场景没有对象）时为 null，渲染路径与 P2a 相同。 */
+  bloom: SceneBloom | null;
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
 }
@@ -240,25 +249,7 @@ function mergeTextures(base: unknown[] | undefined, override: unknown[] | undefi
   }
   return slots;
 }
-export function shaderUniforms(
-  result: TranslateResult | null,
-  pass: MaterialPass,
-  properties: Record<string, SceneScalar>,
-): Record<string, number[]> {
-  const values: Record<string, number[]> = {};
-  if (!result?.ok) return values;
-  for (const uniform of result.uniforms ?? []) {
-    const material = uniform.meta?.material;
-    if (typeof material !== "string") continue;
-    const property = Object.entries(pass.usershadervalues ?? {}).find(([, target]) => target === material)?.[0];
-    const raw =
-      (property ? properties[property] : undefined) ??
-      resolveValue(pass.constantshadervalues?.[material], properties) ??
-      (uniform.meta?.default as SceneScalar | undefined);
-    if (raw !== undefined) values[uniform.name] = numbers(raw);
-  }
-  return values;
-}
+export { shaderUniforms };
 
 /** 编译一个材质 pass 的上下文：effect 目录（资源查找）、本 effect 的 fbo，以及由渲染图填的槽位及其格式。 */
 interface PassContext {
@@ -285,8 +276,6 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const setting = input.postprocess ?? "follow";
   const wpeSetting = setting === "follow" ? await readWpePostprocessing(input.reader, input.sceneAssets) : null;
   const postprocess = scenePostprocessState(resolvePostprocessLevel(setting, wpeSetting), general, properties);
-  if (postprocess.bloom) unsupported.add("postprocess:bloom");
-  if (postprocess.hdr) unsupported.add("postprocess:hdr");
   const projection =
     general.orthogonalprojection && typeof general.orthogonalprojection === "object"
       ? (general.orthogonalprojection as { width?: number; height?: number })
@@ -305,15 +294,27 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ambient: numbers(resolveValue(general.ambientcolor as SceneValue, properties), [0, 0, 0]),
       skylight: numbers(resolveValue(general.skylightcolor as SceneValue, properties), [0, 0, 0]),
       postprocess,
+      bloom: bloomParams(general, properties),
     },
     layers: [],
     programs: [],
     textures: [],
+    bloom: null,
     unsupported: [],
   };
   const shader = new ShaderCompiler(fs, input.translator, unsupported);
   const textureIndex = new Map<string, number>();
   const programIndex = new Map<TranslateResult, number>();
+  /** 翻译结果 → `bundle.programs` 下标（同一份结果只放一次）。 */
+  const addProgram = (result: TranslateResult): number => {
+    let index = programIndex.get(result);
+    if (index === undefined) {
+      index = bundle.programs.length;
+      programIndex.set(result, index);
+      bundle.programs.push(result);
+    }
+    return index;
+  };
   const shouldDecode = () => input.force === true || unsupported.size === 0;
   /** 已确定退回且不需要列全时，停止编译后面的图层 / effect。 */
   const settled = () => unsupported.size > 0 && !input.force && !input.exhaustive;
@@ -410,12 +411,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         const texture = await getTexture(fallback, scope);
         if (texture) slots[binding.slot] = texture.index;
       }
-      const old = programIndex.get(result);
-      program = old ?? bundle.programs.length;
-      if (old === undefined) {
-        programIndex.set(result, program);
-        bundle.programs.push(result);
-      }
+      program = addProgram(result);
     }
     return {
       program,
@@ -441,6 +437,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       size: numbers(resolveValue(object.size, properties)),
       alpha: asNumber(resolveValue(object.alpha, properties), 1),
       color: numbers(resolveValue(object.color, properties), [1, 1, 1]),
+      brightness: asNumber(resolveValue(object.brightness as SceneValue, properties), 1),
       visible: resolveValue(object.visible, properties) !== false,
       passes: [],
       colorBlendMode: Math.trunc(asNumber(resolveValue(object.colorBlendMode as SceneValue, properties), 0)),
@@ -576,6 +573,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
     }
   }
+  // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光、场景 bloom 生效且对象列表非空（A1）
+  if (postprocess.bloom && scene.objects.length > 0 && !settled())
+    bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
   bundle.unsupported = [...unsupported].sort();
   return bundle;

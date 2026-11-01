@@ -6,12 +6,13 @@
  *   其它非空值当「开启」；缺键时配置加载先补成 `disabled`。`displayhdr` 按「超高」处理（我们输出到普通画布）；读不到也按 `disabled`。
  * - 泛光实际开启 = 档位不是关闭，且 `general.bloom` 的生效值不是 false（缺键即开：场景构造默认标志 0x26）。
  *   WPE 的 setter 对 bool 或带 bool `value` 的对象都改位；绑定用户属性时取属性当前值（运行时随属性变是推断）。
- * - HDR 实际开启 = 档位为超高，且 `general.bloom`、`general.hdr` 都显式是 bool `true`（缺键或写成属性对象都不算）。
- *
- * P2a 只实现两者都关的情况；实际开启时编译期记 `postprocess:bloom` / `postprocess:hdr`（P2b 去掉）。
+ * - HDR 实际开启 = 档位为超高，且 `general.bloom`、`general.hdr` 的生效值都是 true（生效值规则同泛光，缺键不算）。
+ *   G3 曾推断写成属性对象不算，工坊 3286859278 的超高档抓帧（`bloom` 为 `{user, value: true}`）证伪了这一点（J5）；
+ *   取 JSON 的 `value` 还是属性当前值那张抓帧分不出（属性在默认值），按当前值。
+ * - 泛光参数（`bloom*`）缺键取 WPE 场景构造函数的默认值（A2 / PLAN P2b），写成属性对象时取生效值。渲染见 `render/bloom.ts`。
  */
 import type { SceneReader } from "./fs";
-import { resolveValue, type SceneScalar, type SceneValue } from "./model";
+import { numbers, resolveValue, type SceneScalar, type SceneValue } from "./model";
 
 /** 设置的取值；默认 `follow`。 */
 export type ScenePostprocessSetting = "follow" | "disabled" | "enabled" | "ultra";
@@ -70,22 +71,78 @@ export function scenePostprocessState(
   general: Record<string, unknown> | undefined,
   properties: Record<string, SceneScalar> = {},
 ): ScenePostprocessState {
-  const bloomKey = general?.bloom;
-  const bloom = level !== "disabled" && bloomFlag(bloomKey, properties) !== false;
-  const hdr = level === "ultra" && bloomKey === true && general?.hdr === true;
+  const bloomKey = flagValue(general?.bloom, properties);
+  const bloom = level !== "disabled" && bloomKey !== false;
+  // HDR 的判定读的是场景 JSON（G3），缺键不算；写成属性对象时取生效值（J5 更正）
+  const hdr = level === "ultra" && bloomKey === true && flagValue(general?.hdr, properties) === true;
   return { level, bloom, hdr };
 }
 
 /**
- * `general.bloom` 的生效值（setter `FUN_14019b4e0`）：bool 原样；带 `user` 的对象取属性当前值，否则取对象的 `value`；
- * 结果不是 bool 时 WPE 不改位，返回 undefined（保留默认开）。
+ * `general.bloom` / `general.hdr` 的生效值（setter `FUN_14019b4e0` / `FUN_14019b6f0`）：bool 原样；带 `user` 的对象取属性当前值，
+ * 否则取对象的 `value`；结果不是 bool 时 WPE 不改位，返回 undefined（泛光保留默认开、HDR 保留默认关）。
  */
-function bloomFlag(value: unknown, properties: Record<string, SceneScalar>): boolean | undefined {
+function flagValue(value: unknown, properties: Record<string, SceneScalar>): boolean | undefined {
   if (typeof value === "boolean") return value;
   if (!value || typeof value !== "object") return undefined;
   const resolved =
     "user" in value ? resolveValue(value as SceneValue, properties) : (value as { value?: unknown }).value;
   return typeof resolved === "boolean" ? resolved : undefined;
+}
+
+/** 场景 `general` 里的泛光参数（已取生效值、缺键补默认值），原值，不做 HDR 换算（换算在 `render/bloom.ts`）。 */
+export interface BloomParams {
+  /** LDR：`bloomstrength` / `bloomthreshold`，原样写给 `downsample_quarter_bloom`。 */
+  strength: number;
+  threshold: number;
+  /** `bloomtint`：LDR / HDR 的第一个下采样材质。 */
+  tint: [number, number, number];
+  /** HDR：`bloomhdrstrength` / `bloomhdrthreshold` / `bloomhdrfeather` / `bloomhdrscatter` / `bloomhdriterations`。 */
+  hdrStrength: number;
+  hdrThreshold: number;
+  hdrFeather: number;
+  hdrScatter: number;
+  hdrIterations: number;
+}
+
+/** 缺键默认值：WPE 场景构造函数 `FUN_140186c90` 写死的值（A2，字节级核对）。 */
+export const BLOOM_DEFAULTS: Readonly<BloomParams> = {
+  strength: 2,
+  threshold: 0.65,
+  tint: [1, 1, 1],
+  hdrStrength: 2,
+  hdrThreshold: 1,
+  hdrFeather: 0.1,
+  hdrScatter: 1.619,
+  hdrIterations: 8,
+};
+
+/**
+ * 读 `general` 的泛光参数：数字、`"r g b"` 字符串或属性对象（取生效值，同 `resolveValue`）都认；
+ * 取不到合法数字的保留默认值。`bloomhdriterations` 是整数字段（场景 `+0x3d4`），截断小数。
+ */
+export function bloomParams(
+  general: Record<string, unknown> | undefined,
+  properties: Record<string, SceneScalar> = {},
+): BloomParams {
+  const read = (key: string, fallback: number): number => {
+    const value = numbers(resolveValue(general?.[key] as SceneValue | undefined, properties))[0];
+    return value !== undefined && Number.isFinite(value) ? value : fallback;
+  };
+  const tint = numbers(resolveValue(general?.bloomtint as SceneValue | undefined, properties));
+  return {
+    strength: read("bloomstrength", BLOOM_DEFAULTS.strength),
+    threshold: read("bloomthreshold", BLOOM_DEFAULTS.threshold),
+    tint:
+      tint.length >= 3 && tint.slice(0, 3).every(Number.isFinite)
+        ? [tint[0], tint[1], tint[2]]
+        : [...BLOOM_DEFAULTS.tint],
+    hdrStrength: read("bloomhdrstrength", BLOOM_DEFAULTS.hdrStrength),
+    hdrThreshold: read("bloomhdrthreshold", BLOOM_DEFAULTS.hdrThreshold),
+    hdrFeather: read("bloomhdrfeather", BLOOM_DEFAULTS.hdrFeather),
+    hdrScatter: read("bloomhdrscatter", BLOOM_DEFAULTS.hdrScatter),
+    hdrIterations: Math.trunc(read("bloomhdriterations", BLOOM_DEFAULTS.hdrIterations)),
+  };
 }
 
 /** `<WPE 安装目录>/assets` → `<WPE 安装目录>/config.json`。 */

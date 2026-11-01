@@ -1,9 +1,34 @@
 import { translateWithIncludes, type TranslateResult, type Wpesl2wgsl } from "../wpesl2wgsl";
 import type { ResourceScope, SceneFs } from "./fs";
+import { numbers, resolveValue, type MaterialPass, type SceneScalar } from "./model";
 
 export interface ShaderTextureSlot {
   slot: number;
   format?: number;
+}
+
+/**
+ * 一个材质 pass 的材质常量（带 `meta.material` 的 uniform）：用户属性（`usershadervalues`）→ 材质
+ * `constantshadervalues` → 着色器注解 `default`，按 uniform 名给出。
+ */
+export function shaderUniforms(
+  result: TranslateResult | null,
+  pass: MaterialPass,
+  properties: Record<string, SceneScalar>,
+): Record<string, number[]> {
+  const values: Record<string, number[]> = {};
+  if (!result?.ok) return values;
+  for (const uniform of result.uniforms ?? []) {
+    const material = uniform.meta?.material;
+    if (typeof material !== "string") continue;
+    const property = Object.entries(pass.usershadervalues ?? {}).find(([, target]) => target === material)?.[0];
+    const raw =
+      (property ? properties[property] : undefined) ??
+      resolveValue(pass.constantshadervalues?.[material], properties) ??
+      (uniform.meta?.default as SceneScalar | undefined);
+    if (raw !== undefined) values[uniform.name] = numbers(raw);
+  }
+  return values;
 }
 export class ShaderCompiler {
   private readonly cache = new Map<string, Promise<TranslateResult | null>>();

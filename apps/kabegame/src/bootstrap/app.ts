@@ -17,7 +17,7 @@ import "vant/lib/toast/style";
 import "@/styles/vant-theme.css";
 import { vPullToRefresh } from "@/directives/pullToRefresh";
 import { vHscrollFade } from "@/directives/hscrollFade";
-import { IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
+import { IS_ANDROID, IS_DEV, IS_MACOS, IS_WEB } from "@/env";
 import { Toast, Picker, Popup, Button } from "vant";
 import "vant/lib/picker/style";
 import "vant/lib/popup/style";
@@ -29,10 +29,14 @@ import { setCrawlerBeforeAddTaskGuard } from "@/stores/crawler";
 import { i18n } from "@kabegame/i18n";
 import { logger } from "@/utils/logger";
 import { runInitScreen } from "./initScreen";
+import { installSceneDevProbe } from "@/wpe-scene/dev/install";
 
 if (IS_ANDROID) {
   document.documentElement.classList.add("platform-android");
 }
+
+// 场景渲染器的 dev 探针（`window.__kabegameSceneProbe`，见 wpe-scene/dev/install.ts）；release 里整段连同模块被摇掉
+if (IS_DEV && !IS_WEB) installSceneDevProbe();
 
 const describeError = (error: unknown) =>
   error instanceof Error ? `${error.message}\n${error.stack ?? ""}`.trim() : String(error);

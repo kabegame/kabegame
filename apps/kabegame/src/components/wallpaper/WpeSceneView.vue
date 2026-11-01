@@ -13,6 +13,7 @@
  * - `interactive` 时把指针位置交给渲染器（`g_PointerPosition`），P1 的样本都不用。
  * - 后处理档位（设置「场景后处理」`wpeScenePostprocess`）每次加载都经 IPC 读一次，跟随 WPE 时由编译管线读 WPE 的
  *   `config.json`；监听 `setting-change`，档位变了就重新判定、重新加载（壁纸窗口不装 settings store，这里自己读）。
+ *   泛光 / HDR 由编译结果决定（`bundle.bloom`）；HDR 切换要换场景目标格式，重新加载时整份 `GpuScene` 重建，不复用旧目标。
  * - FreeImage 纹理（4K PNG）的解码结果按目标缓存（`TextureDecodeCache`），改属性重新编译时不再重复解码。
  * - dev 强制渲染（D4）：`localStorage["kabegame-dev-scene-force-render"] = "1"` 时有不支持项也照常渲染，看半成品。
  */
@@ -222,19 +223,23 @@ async function reload() {
     if (id !== generation) return;
     current.setPaused(props.paused);
     for (const warning of current.warnings.splice(0)) logger.debug(`场景着色器 ${target.id}：${warning}`);
+    const stats = current.sceneStats;
+    const post = bundle.general.postprocess;
+    const detail =
+      `后处理 ${post.level}（${bundle.bloom ? (bundle.bloom.hdr ? "泛光 + HDR" : "泛光") : "无泛光"}）` +
+      (stats
+        ? `，目标 ${stats.width}×${stats.height} ${stats.format}、渲染目标约 ${Math.round(stats.targetBytes / 2 ** 20)} MiB`
+        : "");
     if (state !== "ready") {
       state = "ready";
       lastFallback = "";
       logger.info(
         `场景壁纸 ${target.id} 开始渲染：${bundle.layers.length} 层、${bundle.programs.length} 个程序，` +
-          `后处理 ${bundle.general.postprocess.level}，用时 ${Math.round(performance.now() - started)} ms`,
+          `${detail}，用时 ${Math.round(performance.now() - started)} ms`,
       );
       emit("ready");
     } else
-      logger.debug(
-        `场景壁纸 ${target.id} 重新加载：后处理 ${bundle.general.postprocess.level}，` +
-          `用时 ${Math.round(performance.now() - started)} ms`,
-      );
+      logger.debug(`场景壁纸 ${target.id} 重新加载：${detail}，用时 ${Math.round(performance.now() - started)} ms`);
   } catch (error) {
     if (id !== generation || isAbort(error)) return;
     fallback(reasonsOf(error, "render"));

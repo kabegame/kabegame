@@ -406,6 +406,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   - 场景实际状态：**泛光** = 档位不是关闭，且 `general.bloom` 的生效值不为 false（缺键即开，构造默认标志 0x26，`FUN_140186c90`；
     setter `FUN_14019b4e0` 对 bool 或带 bool `value` 的对象都改位，写成属性对象时取绑定属性的当前值）；
     **HDR** = 档位为超高，且 `general.bloom`、`general.hdr` 都显式为 bool `true`（缺键或写成属性对象都不算）。
+    （P2b 更正：属性对象也算，见 P2b「更正 HDR 判定」。）
   - P2a 只实现「泛光关、HDR 关」：泛光或 HDR 实际开启时记 `postprocess:bloom` / `postprocess:hdr`，P2b 去掉；`general.bloom` / `general.hdr` 键本身不再记。
 - **修改** 能力表（`compile/features.ts`）只报真正改变画面的特性：
   - `copybackground` 只对 passthrough 模型（`composelayer` / `fullscreenlayer` / `projectlayer`，仍报 `model:passthrough`）生效，普通图像模型上忽略；
@@ -546,7 +547,76 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
     - 无泛光时 `combine_srgb` 等价于 `saturate(scene)`。
 - **新增** 缺键默认值（场景构造函数）：strength 2、threshold 0.65、hdrstrength 2、hdrthreshold 1、feather 0.1、scatter 1.619、iterations 8、tint (1,1,1)；
   `clearenabled` 默认开，清屏色为 (clearcolor, 1)，与图层同一编码空间。
-- **验收**：用户把 WPE 后处理临时调到「开启」/「超高」后截图对照；bedroom 在 dev 强制渲染下构图与泛光和 WPE 一致。
+- **抓帧证实与补充**（`p2-REPORT.md` J5，bedroom 开启 / 超高档）：
+  - 上面的链路、RT 尺寸与格式、`g_BloomStrength` / `blend` / `scatter` / `g_RenderVar0` 数值逐位一致；HDR 下后备缓冲、合成 RT 都是 RGBA16F，`g_Color4` 乘了 brightness。
+  - **`g_RenderVar0` 用名义尺寸**：第 i 级的纹素 = 场景尺寸 / 2^(i+1)，不按向下取整后的 RT 尺寸算（L7 实际 15×8，偏移仍按 3840/256、2160/256）；RT 尺寸 floor(场景 / 除数)、至少 2。
+  - 上采样混合 **SrcAlpha / One**（着色器输出 a = 1，即加法）；泛光链与 combine 的所有 pass 都只写 RGB（write mask 7），线性过滤 + Clamp。
+  - 快照只拷一次（泛光链开始前的 `ResolveSubresource`），combine 读快照与 L0 / `_rt_Bloom`，写回场景目标。
+  - LDR 泛光的第一步着色器（assets 原样翻译）是 `saturate(max(rgb) − threshold)·rgb` → `2·c − luma` → `× strength × tint`，常量是场景原值，不做换算。
+- **更正 HDR 判定**（`32868-ghost-rider` 超高档抓帧）：工坊 3286859278 的 `general.bloom` 写成属性对象 `{user: "postprocessing", value: true}`、`hdr: true`，
+  WPE 照样走 HDR（后备缓冲 RGBA16F、1/2 金字塔与 `combine_hdr_upsample`）。G3「属性对象不算」的推断不成立：
+  **HDR = 档位为超高，且 `general.bloom` 与 `general.hdr` 的生效值都为 true**（生效值规则与泛光相同：bool 原样，属性对象取绑定属性的当前值或对象的 `value`）。
+  取 JSON 的 `value` 还是用户当前值没法从这张抓帧区分（属性在默认值），按当前值实现；`hdr` 写成属性对象的样本本机没有，按同一规则（推断）。
+- **验收方法（D13）**：bedroom 的颜色要 P3 才对得上、LDR 泛光又全黑，所以 P2b 用**链路隔离验证**：
+  从抓帧导出 WPE 泛光链的输入（整帧快照）与最终后备缓冲，喂给我们的泛光 + combine，逐像素比较；整张场景我们能不能渲染无关。
+  要一个只在 dev 构建里存在的测试入口。
+- **基准抓帧**（`A:\`，均为用户 2026-11-01 所抓）：
+
+  | 目录 | 档位 | 用途 |
+  |---|---|---|
+  | `A:\neo-sunset\enabled\` | 开启 | LDR 泛光主基准（threshold 0.36、strength 0.5） |
+  | `A:\shimmering-particles\{enabled,highres}\` | 开启 / 超高 | LDR 第二样本；HDR 第二样本（scatter 1.13、**feather 0**、threshold 0.7、`bloomhdrstrength` 绑属性 glow、`bloomstrength` 绑只有 `applyUserProperties` 的脚本） |
+  | `A:\bedroom\{enabled,highres}\` | 开启 / 超高 | HDR 主基准（N = 8）；开启档泛光全黑（threshold 1），用来验证「泛光为 0 时 combine 不改画面」 |
+  | `A:\32868-ghost-rider\highres\` | 超高 | `bloom` 为属性对象时仍走 HDR |
+
+- **范围**：预览、应用背景与桌面同档（D13），不为预览降档；HDR 时的显存（4K 一个实例约多 160 MB）靠预览分辨率优化缓解。
+- **验收**：
+  - 链路隔离：以上每组抓帧，我们的泛光链中间结果（L0 / `_rt_Bloom`）与最终输出对 WPE 逐像素比较，给出平均差、p99、最大差；
+    HDR 输出按 sRGB 编码 WPE 的线性后备缓冲后再比（等价于我们画布上的 `saturate(scene + bloom)`）。
+  - 单测：档位 / 泛光 / HDR 判定（含属性对象）、金字塔级数与名义纹素、参数换算（含 feather 0、iterations 小于可用级数）、RT 尺寸取整。
+  - bedroom 在超高档 dev 强制渲染下构图与 WPE 一致（颜色因脚本不同）；关闭档画面与 P2a 逐像素相同（不回归）；vortex、P1 三张不回归。
+  - 三档切换：bedroom 退回原因只剩 `value:script`；性能记录：4K 超高档单实例的帧时间与显存。
+- **落地（2026-11-01，opus 子代理实现）**：
+  - 编译：`compile/postprocess.ts`（HDR 改生效值规则；`bloomParams` 与缺键默认值 `BLOOM_DEFAULTS`）、新增 `compile/bloom.ts`（LDR 四个 / HDR 五个 util 材质表、`compileBloom`、只在泛光 pass 放行的 `POSTPROCESS_UNIFORMS = {g_RenderVar0}`）、`bundle.ts`（`bundle.bloom`、`general.bloom`、`layer.brightness`、与图层共用的 `addProgram`；去掉 `postprocess:*`）、`shaderUniforms` 挪进 `shader.ts`、`features.ts` 的 `checkProgramFeatures` 加 `extra`、`model.ts` 的宽松 JSON。
+  - 渲染：新增 `render/bloom.ts`（纯函数 `planBloom` / `bloomLevels` / `bloomIterations` / `bloomTargetSize` / `hdrBloomConstants`，GPU 侧 `BloomChain`）；`scene.ts` 按 HDR 选场景目标 / 快照 / 合成 RT 格式、图层颜色乘 `brightness`（`uniforms.ts` 的 `colorScale`）、全部图层之后的 `bloom` 步骤（拷快照 → 链 → combine 写回场景目标）、`targetBytes` 显存估算；`renderer.ts` 的 `sceneStats`；`WpeSceneView` 日志带泛光 / HDR、目标格式与显存。
+  - dev 测试入口（D13）：`wpe-scene/dev/`（`probe.ts` 的 `renderFrame` 按固定 `g_Time` 渲染并同步读回场景目标、`bloomProbe.ts` 的链路隔离、`install.ts`），`bootstrap/app.ts` 里 `IS_DEV` 门控；生产模式 `vite build` 确认整块被摇掉。
+  - 验收：
+    - 链路隔离（6 组抓帧，输入为 RenderDoc 导出的快照，参数取抓帧常量缓冲；差值为 RGB 逐通道）：
+
+      | 抓帧 | 第一步 | `_rt_Bloom` / L0 | 最终输出 |
+      |---|---|---|---|
+      | neon_sunset 开启 | 1/4：max 1/255，0.0084% 通道差 1 | max 1/255，0.0072% | max 1/255，0.0069% |
+      | shimmering 开启 | 1/4：max 1/255，1 个通道 | 逐值相同 | 逐值相同 |
+      | bedroom 开启 | — | 全 0，与 WPE 相同 | 与输入逐字节相同（泛光为 0） |
+      | bedroom 超高 | L0 下采样后逐值相同 | 上采样后 max 3.8e−6（1 个像素差 1 个 FP16 ulp，相对 9.7e−4） | max 1/255，0.43% 通道 |
+      | shimmering 超高（feather 0） | 逐值相同 | 逐值相同 | max 1/255，0.54% |
+      | 工坊 3286859278 超高 | 逐值相同 | 逐值相同 | max 1/255，0.88% |
+
+      平均差都 < 0.009/255，p99 都是 0。HDR 最终输出把 WPE 的线性 FP16 后备缓冲按 sRGB 编码成 8 位后再比；剩下的 ±1 来自两边在不同空间存 FP16 的舍入（我们存编码值，WPE 存线性值），量级与 DWM 自己的 8 位转换相当。
+    - 参数换算与抓帧常量逐位相等（`g_BloomStrength` 0.1310582309961319 / 0.6489394307136536 / 0.28125885128974915，`blend` 两组），在 `render/bloom.test.ts` 里断言。
+    - 关闭档：bedroom（强制）/ vortex / eagleflag / deep_space / beach 的离屏目标与改动前的 P2a 渲染器逐字节相同（同 `g_Time`，SHA-256）；超高档下 `bloom: false` 的 vortex 与 P1 三张也相同；bedroom 开启档（threshold 1，泛光全 0）与关闭档相同。
+    - 三档切换（真 app，预览 bedroom + 应用背景 vortex）：每次重新判定、重新加载，bedroom 退回原因都只剩 `value:script`。
+    - bedroom 超高档强制渲染：「18 层、12 个程序，泛光 + HDR，3840×2160 rgba16float」，构图、光晕位置与范围同 WPE 抓帧，灯色因脚本不同。
+    - 性能（NVIDIA Lovelace，4K，`renderFrame` 连续 120 帧、每帧编码 + 提交 + 等 GPU 完成）：关闭 / 开启 / 超高平均 5.2 / 5.2 / 6.4 ms，p95 8.4 / 9.5 / 10.9 ms；渲染目标显存约 70 / 73 / 161 MiB（超高多出的是 FP16 场景目标与快照各 63 MiB、金字塔约 21 MiB）。预览开着 bedroom 超高档时主窗口 rAF 143 fps（关闭档 139 fps）。
+- **与规格的差异 / 实现选择**：
+  - **HDR 收尾**用 `combine_hdr_upsample_linear`（同一份 `combine_hdr` 的 `LINEAR=1`，也是 WPE assets 原件）输出 `saturate(scene + bloom)`，而不是 `combine_hdr_upsample` 再在 cover 时编码：sRGB 编码是 `lin()` 的精确反函数，两者单调、把 [0, 1] 映到 [0, 1]，encode(saturate(lin(x))) = saturate(x)，画布上逐值相等；少一次 pow 往返，cover 不用分 HDR / LDR 两种着色器。实测最终输出与 WPE 只差 FP16 舍入（上表）。
+  - 快照与图层的 `_rt_FullFrameBuffer` 共用一张纹理，泛光在全部图层之后再拷一次（WPE 也是此处一次 `ResolveSubresource`）。
+  - 金字塔只建 N 级（WPE resize 时预建全部可用级）：画面无差别，`bloomhdriterations` 小时省显存。
+  - 「屏幕尺寸」取场景目标尺寸（P2a 起的约定）：场景分辨率与窗口相同时与 WPE 等价；shimmering_particles 是 5760×1080，WPE 按窗口 3840×2160 画场景与泛光，我们按场景分辨率，泛光核的像素尺度不同（见遗留）。
+  - 参数按 float32 逐步计算（`Math.fround`），与抓帧逐位一致；`g_RenderVar0` 也按 float32 写。
+  - 翻译器的槽位格式（`TEX<n>FORMAT`）：泛光槽按 WPE 的 RT 枚举给 `rgb888` / `rgb161616f`；图层材质里合成 RT 槽在 HDR 下仍给 `rgba8888`（着色器不按它分支）。
+  - `g_CompositeColor` 不乘 brightness（I4 表里没有它，保持 P2a 取值）。
+  - 场景没有对象时不跑泛光链；HDR 而无泛光（只有这种情况）不画 `combine_srgb`，8 位画布本来就截断，等价于 `saturate(scene)`。
+  - 规格外：场景 / 材质 / effect JSON 改用宽松解析（去对象 / 数组结尾的逗号）。新订阅的工坊 3286859278 自带 `effects/fluidsimulation/effect.json` 有尾逗号，WPE 照常加载，我们原来在 `exhaustive` 编译时直接抛错、语料测试整个失败。
+- **遗留**：
+  - 本机能实时渲染的场景（vortex、P1 三张）都是 `bloom: false`，用户在真机上暂时看不到泛光；开着泛光的 bedroom 要 P3、shimmering_particles 要 P4、neon_sunset 要 P5。
+  - shimmering_particles 的 `bloomstrength` 绑了只导出 `applyUserProperties` 的脚本：WPE 抓帧里是 1.0（glow 默认 2 × 0.5，推断 WPE 加载时以全部属性调一次 `applyUserProperties`），我们按 D10 取 `value` 1.12。P3 脚本宿主要核对这个初始调用。
+  - 场景分辨率与窗口不同的场景（三屏 5760×1080）WPE 按窗口尺寸画，泛光半径按窗口像素；我们按场景分辨率再 cover。要与超宽场景的铺放一起对照 WPE。
+  - 桌面壁纸窗口本次没测（当前不是窗口模式，没有改用户的壁纸设置）；与预览共用 `WpeSceneView`，同一条 `setting-change` 通路。
+  - HDR 显存：4K 单实例多约 91 MiB，预览分辨率优化（按画布尺寸降场景目标）还没做。
+  - HDR 下 effect 的 `copy` 两端格式不同（合成 RT 为 `rgba16float`、fbo 写死 `rgba8888`）时报 `render:copy-format` 退回；WPE 的 `CopyResource` 也要求格式兼容，实际行为未知，没有样本。
+  - 帧时间是串行测量（每帧等 GPU 完成），没有用 timestamp query 单独量泛光链的 GPU 时间。
+  - `displayhdr` 按超高处理，HDR 显示器输出（`combine_dhdr_upsample`、FP16 交换链）不做（D9）。
 
 ### P2 仍未知（按 LWE 约定实现，靠截图兜底）
 - `g_ParallaxPosition` 的计算细节（视差功能关闭时用不到）。
@@ -712,6 +782,8 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   现在可以运行 WPE、在其中切换壁纸与设置、用 RenderDoc 等工具附加进程抓帧，拿每个 pass、中间纹理与 uniform 的真值核对实现；
   不改动、不删除用户的壁纸、工程与创意工坊内容；为对照临时改的 WPE 设置用完恢复并记录。D8 的静态逆向结论可以用动态抓帧复核。
 - **D11 P2 拆分（2026-11-01）**：P2a 渲染图与 `disabled` 档，P2b 泛光与 HDR；属性绑定表挪到 P3，和脚本每帧改 uniform 共用一条通路。
+- **D13 P2b 验收与范围（2026-11-01）**：P2b 现在做（不等 P3）；用 RenderDoc 抓帧做链路隔离验证（WPE 的泛光链输入 → 我们的泛光 + combine → 对比 WPE 输出），
+  需要一个只在 dev 构建里的测试入口；预览、应用背景与桌面同一档位。
 
 ---
 

@@ -2,7 +2,8 @@
  * 场景渲染器：持有设备、画布上下文、时钟与帧循环，当前场景（`GpuScene`）可无缝替换。
  *
  * - **铺放**：场景先画进场景分辨率的离屏目标，再按 cover（等比盖满、居中裁切）铺到画布。三屏等宽高比差很多的场景
- *   在 WPE 里怎么处理还没对照过，P1 先统一 cover。
+ *   在 WPE 里怎么处理还没对照过，P1 先统一 cover。HDR 场景的离屏目标是 `rgba16float`，泛光 combine 已截到 [0, 1]，
+ *   画布（8 位）上直接按编码值输出（见 `compile/bloom.ts`）。
  * - **帧循环**：`requestAnimationFrame`，默认上限 60 fps（`maxFps`）。`paused` 或 `document.hidden` 时停循环、冻结时钟，
  *   恢复后 `g_Time` 从冻结处继续（见 `clock.ts`）。暂停期间画布尺寸变了会补画一帧（同一时刻），避免空白。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
@@ -140,6 +141,14 @@ export class SceneRenderer {
 
   get device(): GPUDevice {
     return this.gpu.device;
+  }
+
+  /** 当前场景的离屏目标与渲染目标类显存估算（日志用）；没有场景为 null。 */
+  get sceneStats(): { width: number; height: number; format: GPUTextureFormat; targetBytes: number } | null {
+    const scene = this.scene;
+    return scene
+      ? { width: scene.width, height: scene.height, format: scene.format, targetBytes: scene.targetBytes }
+      : null;
   }
 
   /**

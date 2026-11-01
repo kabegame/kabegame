@@ -68,7 +68,7 @@ describe("场景后处理档位", () => {
     expect(resolvePostprocessLevel("follow", null)).toBe("disabled");
     expect(resolvePostprocessLevel(undefined, "high")).toBe("enabled");
   });
-  it("场景实际状态：泛光缺键即开；HDR 要超高且 bloom、hdr 都显式为 true", () => {
+  it("场景实际状态：泛光缺键即开；HDR 要超高且 bloom、hdr 的生效值都为 true", () => {
     expect(scenePostprocessState("disabled", { bloom: true, hdr: true })).toEqual({
       level: "disabled",
       bloom: false,
@@ -79,11 +79,17 @@ describe("场景后处理档位", () => {
     expect(scenePostprocessState("enabled", { bloom: true, hdr: true })).toMatchObject({ bloom: true, hdr: false });
     expect(scenePostprocessState("ultra", { bloom: true, hdr: true })).toMatchObject({ bloom: true, hdr: true });
     expect(scenePostprocessState("ultra", { hdr: true })).toMatchObject({ bloom: true, hdr: false });
-    // 写成属性对象：泛光取生效值，HDR 一律不算（只认原始 bool true）
+    // 写成属性对象：泛光与 HDR 都取生效值（P2b 更正，工坊 3286859278 超高档抓帧）
     expect(scenePostprocessState("ultra", { bloom: { user: "x", value: true }, hdr: true })).toMatchObject({
       bloom: true,
-      hdr: false,
+      hdr: true,
     });
+    expect(
+      scenePostprocessState("ultra", { bloom: { user: "x", value: true }, hdr: true }, { x: false }),
+    ).toMatchObject({ bloom: false, hdr: false });
+    expect(
+      scenePostprocessState("ultra", { bloom: true, hdr: { user: "h", value: false } }, { h: true }),
+    ).toMatchObject({ hdr: true });
     expect(scenePostprocessState("enabled", { bloom: { user: "x", value: false } })).toMatchObject({ bloom: false });
     expect(scenePostprocessState("enabled", { bloom: { user: "x", value: false } }, { x: true })).toMatchObject({
       bloom: true,
@@ -479,17 +485,9 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P2a 样本", () => {
     // vortex 本身 bloom: false：开启 / 超高都不报后处理
     expect((await compile("razer_vortex", { postprocess: "ultra" })).unsupported).toEqual([]);
   }, 60000);
-  it("razer_bedroom：关闭档只剩 value:script；开启 / 超高另报 postprocess:*；强制渲染时 passthrough 用 genericimage3", async () => {
-    expect((await compile("razer_bedroom", { postprocess: "disabled" })).unsupported).toEqual(["value:script"]);
-    expect((await compile("razer_bedroom", { postprocess: "enabled" })).unsupported).toEqual([
-      "postprocess:bloom",
-      "value:script",
-    ]);
-    expect((await compile("razer_bedroom", { postprocess: "ultra" })).unsupported).toEqual([
-      "postprocess:bloom",
-      "postprocess:hdr",
-      "value:script",
-    ]);
+  it("razer_bedroom：三档都只剩 value:script（泛光 / HDR 是 P2b）；强制渲染时 passthrough 用 genericimage3", async () => {
+    for (const postprocess of ["disabled", "enabled", "ultra"] as const)
+      expect((await compile("razer_bedroom", { postprocess, exhaustive: true })).unsupported).toEqual(["value:script"]);
     const forced = await compile("razer_bedroom", { postprocess: "disabled", force: true });
     const blended = forced.layers.filter((layer) => layer.colorBlendMode !== 0);
     expect(blended.map((layer) => layer.colorBlendMode).sort()).toEqual([11, 11, 11, 11, 11, 12]);

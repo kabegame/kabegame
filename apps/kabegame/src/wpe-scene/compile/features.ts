@@ -95,7 +95,7 @@ const ENGINE_COMBOS = new Set([
  * - `ambientcolor` / `skylightcolor`：只进 `g_LightAmbientColor` / `g_LightSkylightColor`，渲染器照写。
  * - `norecompile`、`camerapreview`：编辑器选项。
  * - `camerafade`：加载时的淡入，不改变稳定画面。
- * - `bloom`、`hdr` 与全部 `bloom*` 调节项：由后处理档位裁决（`postprocess:bloom` / `postprocess:hdr`，见 `postprocess.ts`）。
+ * - `bloom`、`hdr` 与全部 `bloom*` 调节项：由后处理档位裁决（`postprocess.ts`），泛光 / HDR 由 `bloom.ts` 与 `render/bloom.ts` 实现。
  * - `farz` / `fov` / `nearz`：正交投影不用；透视另报 `camera:perspective`。
  * - `supportsvideo`：只决定 D3D 设备的视频支持标志（G2 0x8000）；视频纹理另报 `tex:video`。
  * `cameraparallax*` / `camerashake*` 的调节项只在主开关打开时起作用，主开关打开时另报；`zoom` 为 1 时是恒等。
@@ -123,7 +123,7 @@ const NEUTRAL_GENERAL = new Set([
  * - `copybackground`：只对 passthrough 模型生效（B9），普通图像模型上没有渲染效果；passthrough 模型另报 `model:passthrough`。
  * - `solid`：渲染路径不读（B9，推断与鼠标命中有关）。
  * - `ledsource`：Razer Chroma 外设灯效的取色来源，不参与渲染。
- * - `brightness`：只在 HDR 下乘进颜色（B10），HDR 由后处理档位裁决。
+ * - `brightness`：只在 HDR 下乘进颜色（B10，`render/uniforms.ts` 的 `colorScale`），LDR 下不生效。
  * - `locktransforms`：编辑器锁定。
  * - `parallaxDepth`：只在 `general.cameraparallax` 打开时起作用，那时已报 `general:cameraparallax`。
  * `alignment` 为 `center`、`perspective` 为 false 时中性，其余取值另报。
@@ -281,10 +281,17 @@ export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>):
   scanValue(pass.constantshadervalues as Record<string, SceneValue> | undefined, unsupported);
 }
 
-/** 翻译结果里依赖引擎、渲染器还不提供的部分：内置 uniform 与 COMBO。 */
-export function checkProgramFeatures(result: TranslateResult, unsupported: Set<string>): void {
+/**
+ * 翻译结果里依赖引擎、渲染器还不提供的部分：内置 uniform 与 COMBO。`extra` 是这类 pass 另外由渲染器写的引擎 uniform
+ * （泛光链的 `g_RenderVar0`，见 `bloom.ts` 的 `POSTPROCESS_UNIFORMS`；图层材质里它没有意义，照报）。
+ */
+export function checkProgramFeatures(
+  result: TranslateResult,
+  unsupported: Set<string>,
+  extra: ReadonlySet<string> = new Set(),
+): void {
   for (const uniform of result.uniforms ?? [])
-    if (typeof uniform.meta?.material !== "string" && !isEngineUniform(uniform.name))
+    if (typeof uniform.meta?.material !== "string" && !isEngineUniform(uniform.name) && !extra.has(uniform.name))
       unsupported.add(`uniform:${uniform.name}`);
   for (const combo of result.combos ?? [])
     if (combo.value !== 0 && ENGINE_COMBOS.has(combo.name.toUpperCase()))

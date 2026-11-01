@@ -656,3 +656,44 @@ J2 受视频压缩与相位扫描步长（0.2 s）限制。用户用 RenderDoc �
 - 对照实验：把 Kabegame 静态纹理采样器临时改成「线性即 8x 各向异性」，四项统计完全不变——放大为主的本场景里各向异性没有可测影响，P2a 维持现状（有完整 mip 链时已用 8x）。
 
 其余与 J1 一致：uniform（速度 0.3、亮度 1、长度 1、模式 0、`g_Texture0Resolution` 取图像尺寸）、混合（基础 pass 不混合写四通道、上屏借基础材质 blend 且 write_mask=7）逐项吻合。D7 验收通过。
+
+### J4. 更正（2026-11-01）：快照用 `ResolveSubresource` 与 MSAA 无关
+
+B8 / A3 写的「源为 MSAA 时 `ResolveSubresource`，否则 `CopyResource`」与抓帧不符。`A:\bedroom\{disabled,enabled,highres}\` 三档抓帧（WPE MSAA 关闭，后备缓冲 3840×2160 R8G8B8A8_UNORM、`msaa_samples` = 1）里，6 个混合模式图层（cbm 11 ×5、12 ×1）上屏前的整帧快照全是 `ResolveSubresource`（disabled 帧 event 174 / 404 / 466 / 528 / 590 / 690）。对 Kabegame 没有影响（一律 `copyTextureToTexture`），只是不能再据此推断开了 MSAA。
+
+### J5. P2b 规格的抓帧核对（2026-11-01，bedroom 三档）
+
+抓帧：`A:\bedroom\enabled\enabled-frame22.rdc`（后处理「开启」）、`A:\bedroom\highres\highres-frame1452.rdc`（「超高」）。
+
+**开启档（LDR 泛光）**，场景画完后：
+
+| event | 动作 | 目标 | 要点 |
+|---|---|---|---|
+| 772 | `ResolveSubresource` | `3875`，3840×2160 RGBA8 | 整帧快照 |
+| 786 | `downsample_quarter_bloom` | 960×540 RGBA8 | 4 tap 平均 → `saturate(max(rgb) − threshold)·rgb` → `2·c − luma`（加饱和）→ `× strength × tint`，a = 1；常量取场景原值 strength 1、threshold 1、tint (1,1,1) |
+| 799 | `downsample_eighth_blur_v` | 480×270 RGBA8 | |
+| 812 | `blur_h_bloom` | 480×270 RGBA8（`_rt_Bloom`） | |
+| 826 | `combine_ldr` | 后备缓冲 | `scene + bloom`，只写 RGB |
+
+- 全部线性过滤、Clamp、不混合、write mask = RGB。链路与 A1 一致。
+- **bedroom 的 LDR 泛光全黑**（960×540 与 `_rt_Bloom` 的 min / max 都是 0）：`bloomthreshold` = 1.0，LDR 值不超过 1，`max − 1` 恒为 0。所以 bedroom 的「开启」档与「关闭」档画面相同，验证不了 LDR 泛光。
+
+**超高档（HDR）**：后备缓冲本身是 **R16G16B16A16_FLOAT**，场景直接画进它；合成 RT 也是 RGBA16F（如 wave 层 128×8）。
+
+- **brightness**：wave 层基础 pass 的 `g_Color4` = (3, 3, 3, 1)，与 `brightness` 3 一致（B10 证实）。场景快照最大值 (4, 16, 8.8)。
+- 772 快照到 `3515`（RGBA16F）后：
+  - 788 `hdr_downsample_bloom` → 1920×1080：`g_BloomStrength` = 0.131058、`g_BloomBlendParams` = (1, 0.9, 0.2, 2.49975)、tint (1,1,1)、`g_RenderVar0` = (1/3840, 1/2160, −, −)。与 A2 公式（scatter 1.62、N = 8）逐位一致。
+  - 803–893：再 7 次下采样，共 8 级（L7 = 15×8）。
+  - 910–1006：7 次上采样。混合 **SrcAlpha / One**（着色器 a = 1，即加法），只写 RGB，`g_BloomScatter` = 1.62。910 读 L7（15×8）写 L6（30×16），用 bicubic。
+  - `g_RenderVar0` 用**名义尺寸**：910 为 (128/3840, 128/2160)，不是按实际 RT 30×16 算的 1/30、1/16。RT 尺寸向下取整（2160/256 → 8），纹素偏移不随取整变。
+  - 1025 `combine_hdr_upsample` → 后备缓冲：`out = saturate(lin(scene + 0.25·Σ4 tap bloom)) · RV0.x`，RV0 = (1, 1, 上一步的 zw)，`g_TexelSize` = (1/3840, 1/2160)，只写 RGB。L0 泛光最大值 (1.47, 3.89, 2.30)。
+- 结论：A1–A3、B10、G5 的 HDR 部分全部证实；新增「RV0 用名义尺寸」「上采样混合 SrcAlpha/One」两条实现细节。
+
+**本机样本的泛光参数**（只读扫描，工坊已有 22 张）：
+- LDR 泛光看得见（threshold < 1）：neon_sunset（0.36 / 0.5）、shimmering_particles（0.36，strength 绑脚本，脚本只有 `applyUserProperties`）、工坊 3409595232（0.0 / 0.16，`bloom` 绑属性）、3445915391（0.79，tint 暗红，`bloom` 绑属性）、3286859278；3D 的 arsenal / demon_core / dna_fragment 用默认值 0.65。
+- 实际会走 HDR（`bloom`、`hdr` 都是 bool true）：只有 razer_bedroom 与 shimmering_particles（scatter 1.13、**feather 0**、threshold 0.7、`bloomhdrstrength` 绑属性 glow）。
+- 3286859278：`hdr: true`，但 `bloom` 写成属性对象 `{user: "postprocessing", value: true}`。按 G3 推断它在超高档也不走 HDR，可以用抓帧（后备缓冲格式）坐实。
+
+**更正 G3（`A:\32868-ghost-rider\highres\highres-frame137.rdc`，工坊 3286859278，超高档）**：
+该场景 `general.bloom` = `{user: "postprocessing", value: true}`、`hdr: true`。抓帧里后备缓冲 `5352` 为 RGBA16F，event 2437 是 `combine_hdr_upsample`（读 3840×2160 RGBA16F 快照与 1920×1080 RGBA16F L0），说明 WPE 照样走 HDR。
+G3「`general.bloom` 写成属性对象时不开 HDR」的推断不成立：HDR 判定也接受属性对象，取它的生效值。属性在默认值，这张抓帧区分不了取 JSON 的 `value` 还是用户当前值。

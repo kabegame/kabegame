@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, type SceneBundle, type SceneTexture } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
+import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { FrameThrottle, PausableClock } from "./clock";
 import { reasonsOf, SceneRenderError } from "./errors";
@@ -404,10 +405,12 @@ describe("可渲染性自查", () => {
       ambient: [0, 0, 0],
       skylight: [0, 0, 0],
       postprocess: { level: "disabled", bloom: false, hdr: false },
+      bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },
     layers: [],
     programs: [{ ok: true } as TranslateResult],
     textures: [texture({ format: 4, mips: [{ width: 4, height: 4, bytes: new Uint8Array(16) }] })],
+    bloom: null,
     unsupported: [],
   };
   const pass = {
@@ -430,6 +433,7 @@ describe("可渲染性自查", () => {
     size: [1, 1],
     alpha: 1,
     color: [1, 1, 1],
+    brightness: 1,
     visible: true,
     passes: [pass],
     colorBlendMode: 0,

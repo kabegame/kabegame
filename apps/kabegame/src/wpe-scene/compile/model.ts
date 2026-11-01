@@ -88,24 +88,45 @@ export interface SceneEffectInstance extends JsonObject {
   }[];
 }
 
+/**
+ * WPE 的 JSON 读取比 `JSON.parse` 宽松：工坊 3286859278 自带的 `effects/fluidsimulation/effect.json` 在 `]` 前有尾逗号，
+ * WPE 照常加载。严格解析失败时去掉对象 / 数组结尾的逗号（字符串内的不动）再试一次，仍失败就抛原错误。
+ */
+export function parseWpeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const relaxed = text.replace(
+      /("(?:\\[\s\S]|[^"\\])*")|,(\s*[\]}])/g,
+      (match, string: string | undefined, end) => string ?? end,
+    );
+    if (relaxed === text) throw error;
+    try {
+      return JSON.parse(relaxed);
+    } catch {
+      throw error;
+    }
+  }
+}
+
 export function parseProject(text: string): ProjectJson {
-  return JSON.parse(text) as ProjectJson;
+  return parseWpeJson(text) as ProjectJson;
 }
 export function parseScene(text: string): SceneJson {
-  const scene = JSON.parse(text) as SceneJson;
+  const scene = parseWpeJson(text) as SceneJson;
   scene.objects ??= [];
   return scene;
 }
 export function parseModel(text: string): ModelJson {
-  return JSON.parse(text) as ModelJson;
+  return parseWpeJson(text) as ModelJson;
 }
 export function parseMaterial(text: string): MaterialJson {
-  const material = JSON.parse(text) as MaterialJson;
+  const material = parseWpeJson(text) as MaterialJson;
   material.passes ??= [];
   return material;
 }
 export function parseEffect(text: string): EffectJson {
-  const effect = JSON.parse(text) as EffectJson;
+  const effect = parseWpeJson(text) as EffectJson;
   effect.passes ??= [];
   effect.fbos ??= [];
   return effect;

@@ -1,5 +1,28 @@
 # v4.7.0 regression
 
+## 场景壁纸 P2b：泛光与 HDR
+
+依据 WPE 2.8.42 的逆向与 RenderDoc 抓帧逐位核对（`.claude/plans/wpe-import/3-scene/p2-REPORT.md` A1–A4、J5，PLAN P2b）。
+- **何时跑**：「场景后处理」不是关闭、`general.bloom` 生效值不是 false、场景有对象时，全部图层之后拷一次整帧快照跑泛光链，combine 写回场景目标；泛光关着时渲染路径与 P2a 完全相同。HDR = 超高档且 `bloom`、`hdr` 的生效值都为 true（属性对象也认）。
+- **LDR**：`downsample_quarter_bloom`（1/4）→ `downsample_eighth_blur_v`（1/8）→ `blur_h_bloom`（`_rt_Bloom`）→ `combine_ldr`，RGBA8，参数原值写入。
+- **HDR**：场景目标 / 快照 / 合成 RT 改 `rgba16float`，图层颜色乘 `brightness`；最多 8 级金字塔（名义纹素 `g_RenderVar0`、SrcAlpha / One 上采样、最粗两级 bicubic），参数按 float32 换算；收尾用 `combine_hdr` 的 `LINEAR` 变体，8 位画布上与 WPE 的 `saturate(lin(scene + bloom))` 逐值等价。
+- 着色器全部用 WPE `assets/materials/util/` 原件翻译；场景 / 材质 / effect JSON 容忍尾逗号（工坊 3286859278 的 fluidsimulation）。
+- dev 探针 `window.__kabegameSceneProbe`（`wpe-scene/dev/`）：`bloom` 做链路隔离验证、`renderFrame` 按固定时刻渲染读回；生产构建里整块被摇掉。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测与语料 | Windows | `apps/kabegame` 下 `KABEGAME_WPE_ROOT=<WPE 安装目录> npx vitest run src/wpe-scene` | 档位 / 泛光 / HDR 判定（含属性对象）、参数缺键默认值、金字塔级数与名义纹素、RT 取整、参数换算（含 feather 0、iterations 小于可用级数）与抓帧常量逐位相等、LDR / HDR 步骤序列、bloom pass 自查；语料：bedroom 开启 / 超高档泛光着色器全部翻译通过、只剩 `value:script`，工坊 3286859278 超高档判为 HDR | 2026-11-01：8 个文件 147 passed（新增 `render/bloom.test.ts` 13 个、`compile/p2b.test.ts` 16 个；p2a 两个用例按新 HDR 规则改写）。语料里新订阅的工坊 3286859278 带尾逗号的 effect.json 曾让 `exhaustive` 编译抛错，已加宽松 JSON |
+| [x] | S2 检查 | Windows | `check-kabegame`（vue-tsc + cargo check）；Prettier | 0 error | 2026-11-01：vue-tsc 0、cargo 0 error；未改 Rust |
+| [x] | S3 探针不进 release | Windows | 生产模式 `vite build` 到临时目录，搜 `__kabegameSceneProbe` / 探针字符串 | 搜不到 | 2026-11-01：搜不到；泛光材质路径照常在 worker 包里 |
+| [x] | D1 链路隔离：LDR | Windows dev | dev 探针 `bloom`：输入 RenderDoc 导出的快照（neon_sunset、shimmering_particles、bedroom 开启档），参数取抓帧常量 | `_rt_4FrameBuffer`、`_rt_Bloom`、最终输出与 WPE 逐像素一致；bedroom 泛光为 0 时输出等于输入 | 2026-11-01：neon 三张最大差 1/255（0.0072–0.0084% 的通道），shimmering 1/4 只有 1 个通道差 1、`_rt_Bloom` 与输出逐值相同；bedroom `_rt_Bloom` 全 0、输出与输入逐字节相同 |
+| [x] | D2 链路隔离：HDR | Windows dev | 同上，bedroom / shimmering_particles（feather 0）/ 工坊 3286859278 超高档的 RGBA16F 快照 | L0（下采样后、上采样累加后）按浮点一致；最终输出把 WPE 的线性后备缓冲按 sRGB 编码成 8 位后一致 | 2026-11-01：三组 L0 下采样后逐值相同；上采样后 shimmering / 工坊逐值相同，bedroom 一个像素差 1 个 FP16 ulp（相对 9.7e-4）；最终输出最大差 1/255，占 0.43% / 0.54% / 0.88% 的通道（两边在不同空间存 FP16 的舍入），均值差 < 0.005/255 |
+| [x] | D3 关闭档不回归 | Windows dev | dev 探针 `renderFrame`（`g_Time` 3.25 s、关闭档）渲染 bedroom（强制）/ vortex / eagleflag / deep_space / beach，与改动前 P2a 渲染器同条件的输出比 | 离屏目标逐字节相同 | 2026-11-01：五张 SHA-256 全部相同；超高档下 vortex 与 P1 三张（`bloom: false`）也相同；bedroom 开启档（threshold 1，泛光全 0）与关闭档相同 |
+| [x] | D4 三档切换 | Windows dev | 预览 bedroom（12888），IPC 依次设关闭 / 开启 / 超高 / 跟随 WPE | 每次重新判定、重新加载；退回原因只剩 `value:script` | 2026-11-01：四次都只报 `value:script`，应用背景的 vortex 同时在 0.26–0.62 s 内重载；测完设回「跟随 WPE」 |
+| [x] | D5 bedroom 超高档强制渲染 | Windows dev | `localStorage["kabegame-dev-scene-force-render"]="1"`，超高档预览 bedroom | 构图与 WPE 抓帧一致（灯色因脚本不同）；灯带、霓虹字有 HDR 光晕；关闭档无光晕 | 2026-11-01：日志「18 层、12 个程序，后处理 ultra（泛光 + HDR），目标 3840×2160 rgba16float、渲染目标约 161 MiB」；截图光晕位置与范围同 WPE 抓帧；测完删掉开关、设回「跟随 WPE」 |
+| [x] | D6 性能 | Windows dev，NVIDIA Lovelace | `renderFrame` 的 `profile`：bedroom 4K 连续 120 帧，每帧编码 + 提交 + 等 GPU 完成；预览开着时主窗口 rAF | 超高档帧时间与显存可接受 | 2026-11-01：关闭 / 开启 / 超高平均 5.2 / 5.2 / 6.4 ms（p95 8.4 / 9.5 / 10.9 ms）；渲染目标约 70 / 73 / 161 MiB；主窗口 rAF 关闭 139 fps、超高 143 fps |
+| [ ] | D7 桌面 | Windows dev，窗口模式 | 桌面壁纸设为场景，切档位 | 与预览同档、同时重载 | 未测：本次没有壁纸窗口（不是窗口模式），没有改用户的壁纸设置；与预览共用 `WpeSceneView` |
+| [ ] | D8 能看到泛光的场景 | Windows | 解锁一张开着泛光、无需脚本的场景 | 光晕与 WPE 实拍一致 | 本机能渲染的场景都是 `bloom: false`；有泛光的 bedroom 要 P3，neon_sunset 要 P5、shimmering_particles 要 P4 |
+
 ## 场景壁纸 P2a：图层渲染图、effect 链、混合模式、后处理档位
 
 依据对 WPE 2.8.42 的只读逆向（`.claude/plans/wpe-import/3-scene/p2-REPORT.md`）。

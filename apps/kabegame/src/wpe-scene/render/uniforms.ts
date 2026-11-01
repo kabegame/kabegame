@@ -137,8 +137,10 @@ export interface StaticBuiltinInput {
   effectModelViewProjection?: Mat4;
   effectTextureProjection?: Mat4;
   layer: Pick<SceneLayer, "alpha" | "color">;
+  /** 颜色系数 k：HDR 下为图层 `brightness`，否则 1（p2-REPORT B10，J5 抓帧证实）。缺省 1。 */
+  colorScale?: number;
   /** 按槽位：该 pass 绑定的纹理（场景纹理或合成 RT / fbo / 快照的尺寸）；未绑定为 undefined。 */
-  textures: readonly (Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> | undefined)[];
+  textures: readonly (TextureSize | undefined)[];
   /**
    * 屏幕尺寸：`g_TexelSize` / `g_TexelSizeHalf` / `g_Screen` 用。WPE 取窗口（后备缓冲）尺寸，画合成 RT、fbo 时也不随目标变；
    * 我们取场景目标尺寸，与窗口同分辨率时等价。
@@ -149,15 +151,40 @@ export interface StaticBuiltinInput {
   skylight?: readonly number[];
 }
 
+type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
+
 /** 空纹理槽的 `g_Texture<n>Resolution` / `g_Texture<n>Texel`（WPE `FUN_1400d8300`）。 */
 const EMPTY_RESOLUTION = [2, 2, 2, 2];
 const EMPTY_TEXEL = [0.5, 0.5, 2, 2];
 
+/** 屏幕尺寸相关的内置 uniform：WPE 取窗口尺寸，画合成 RT、fbo、泛光 pass 时也不随目标变（I4）。 */
+export function screenBuiltins([width, height]: readonly [number, number]): Record<string, number[]> {
+  return {
+    g_TexelSize: [1 / width, 1 / height],
+    g_TexelSizeHalf: [0.5 / width, 0.5 / height],
+    g_Screen: [width, height, width / height],
+  };
+}
+
+/** 每个槽位的 `g_Texture<n>Resolution` / `g_Texture<n>Texel`；未绑定的槽取空槽值。 */
+export function textureBuiltins(textures: readonly (TextureSize | undefined)[]): Record<string, number[]> {
+  const values: Record<string, number[]> = {};
+  textures.forEach((texture, slot) => {
+    values[`g_Texture${slot}Resolution`] = texture
+      ? [texture.textureWidth, texture.textureHeight, texture.width, texture.height]
+      : EMPTY_RESOLUTION;
+    values[`g_Texture${slot}Texel`] = texture
+      ? [1 / texture.textureWidth, 1 / texture.textureHeight, texture.textureWidth, texture.textureHeight]
+      : EMPTY_TEXEL;
+  });
+  return values;
+}
+
 /** 每帧不变的内置 uniform（变换、纹理分辨率、对象颜色等），取值照 WPE `FUN_1400d8300`（PLAN P2a「内置 uniform」）。 */
 export function staticBuiltins(input: StaticBuiltinInput): Record<string, number[]> {
-  const [width, height] = input.screenSize;
-  // 颜色 k = 1：brightness 只在 HDR 下乘进来（p2-REPORT B10），HDR 是 P2b
-  const color = [input.layer.color[0] ?? 1, input.layer.color[1] ?? 1, input.layer.color[2] ?? 1];
+  // g_Color4 = (color · k, alpha)：k 在 HDR 下是 brightness，否则 1（B10）
+  const k = input.colorScale ?? 1;
+  const color = [(input.layer.color[0] ?? 1) * k, (input.layer.color[1] ?? 1) * k, (input.layer.color[2] ?? 1) * k];
   const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const inverse = (m: Mat4) => Array.from(invert(m) ?? identity);
   const effectModel = input.effectModel ?? input.model;
@@ -185,10 +212,9 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
     g_Alpha: [input.layer.alpha],
     g_Color: color,
     g_Color4: [...color, input.layer.alpha],
-    g_CompositeColor: color,
-    g_TexelSize: [1 / width, 1 / height],
-    g_TexelSizeHalf: [0.5 / width, 0.5 / height],
-    g_Screen: [width, height, width / height],
+    // 没逆向到来源（I4 表里没有），保持 P2a 的取值：对象颜色，不乘 k
+    g_CompositeColor: [input.layer.color[0] ?? 1, input.layer.color[1] ?? 1, input.layer.color[2] ?? 1],
+    ...screenBuiltins(input.screenSize),
     g_TextureReductionScale: [1],
     // 非 spritesheet 时的恒等帧变换：v = translation + u * rotation.xy + v * rotation.zw
     g_Texture0Rotation: [1, 0, 0, 1],
@@ -196,14 +222,7 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
   };
   if (input.ambient) values.g_LightAmbientColor = [...input.ambient];
   if (input.skylight) values.g_LightSkylightColor = [...input.skylight];
-  input.textures.forEach((texture, slot) => {
-    values[`g_Texture${slot}Resolution`] = texture
-      ? [texture.textureWidth, texture.textureHeight, texture.width, texture.height]
-      : EMPTY_RESOLUTION;
-    values[`g_Texture${slot}Texel`] = texture
-      ? [1 / texture.textureWidth, 1 / texture.textureHeight, texture.textureWidth, texture.textureHeight]
-      : EMPTY_TEXEL;
-  });
+  Object.assign(values, textureBuiltins(input.textures));
   return values;
 }
 

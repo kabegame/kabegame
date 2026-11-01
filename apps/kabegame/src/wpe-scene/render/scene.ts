@@ -10,10 +10,14 @@
  * - 合成 RT 按尺寸与采样方式跨图层共享（WPE `sc.<W>.<H>…`，p2-REPORT B5）：图层依次画，每层的基础 pass 先整张覆盖。
  *   非 unique 的 fbo 按名字、尺寸、格式、寻址共享，unique 的每层独占（B6）。
  * - `swap` 只改 fbo 名 → 实体的对应（`FboBindings`），跨帧保留；引用 fbo 的 bind group 按当前对应取（缓存）。
+ * - 泛光（`bundle.bloom`，P2b）：全部图层之后拷一次快照、跑 `BloomChain`，combine 写回场景目标；没有泛光时不多任何拷贝或 pass。
+ * - HDR：场景目标、快照、合成 RT 都是 `rgba16float`（`*_backbuffer` fbo 编译期已换算），图层颜色乘 `brightness`（B10）。
  */
+import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { SceneBundle, SceneLayer, SceneTexture } from "../compile/bundle";
 import { FBO_FORMATS } from "../compile/tex";
 import type { TextureBinding } from "../wpesl2wgsl";
+import { BloomChain } from "./bloom";
 import { oneLine, SceneRenderError } from "./errors";
 import { FboBindings, fboSize, planLayer, type DrawStep, type TargetRef, type TextureRef } from "./graph";
 import { layerModelMatrix, layerQuad, sceneTargetSize, sceneViewProjection } from "./layout";
@@ -24,6 +28,21 @@ import { frameBuiltins, staticBuiltins, UniformBlock, type FrameInput, type Unif
 
 /** 离屏目标格式：WPE 在 gamma 空间混合，用非 sRGB 格式。合成 RT 在 LDR 下也是它（B5）。 */
 export const SCENE_TARGET_FORMAT: GPUTextureFormat = "rgba8unorm";
+/** HDR 下的场景目标、快照与合成 RT（A4，J5 抓帧：后备缓冲与合成 RT 都是 RGBA16F）。 */
+export const HDR_TARGET_FORMAT: GPUTextureFormat = "rgba16float";
+
+export function sceneTargetFormat(hdr: boolean): GPUTextureFormat {
+  return hdr ? HDR_TARGET_FORMAT : SCENE_TARGET_FORMAT;
+}
+
+/** 每像素字节（显存估算用）。 */
+function texelBytes(format: GPUTextureFormat): number {
+  if (format === "rgba16float") return 8;
+  if (format === "rg16float") return 4;
+  if (format === "r16float" || format === "rg8unorm") return 2;
+  if (format === "r8unorm") return 1;
+  return 4;
+}
 
 /** 画进合成 RT 的基础 pass 用的正交深度范围（图层 z 为 0）。 */
 const FILL_DEPTH = 10000;
@@ -64,7 +83,8 @@ type Op =
   | { kind: "draw"; draw: Draw }
   | { kind: "snapshot" }
   | { kind: "copy"; resources: LayerResources; effect: number; source: TextureRef; target: TargetRef }
-  | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string };
+  | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string }
+  | { kind: "bloom"; chain: BloomChain };
 
 /** 渲染器能画的 bundle 结构；不能画的整理成原因键（编译期能力表之外的渲染器自查）。 */
 export function checkRenderable(
@@ -76,6 +96,11 @@ export function checkRenderable(
   for (const feature of requiredFeatures(bundle.textures))
     if (!features.has(feature))
       reasons.add(feature === "texture-compression-bc" ? "webgpu:no-bc" : `webgpu:${feature}`);
+  if (bundle.bloom)
+    for (const name of Object.keys(bundle.bloom.hdr ? HDR_BLOOM_MATERIALS : LDR_BLOOM_MATERIALS)) {
+      const pass = bundle.bloom.passes[name as keyof typeof bundle.bloom.passes];
+      if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
+    }
   for (const layer of bundle.layers) {
     if (!layer.visible || !layer.passes.length) continue;
     const plan = planLayer(layer, bundle.textures);
@@ -102,9 +127,19 @@ export class GpuScene {
   targetView: GPUTextureView | null = null;
   width = 0;
   height = 0;
+  /** 场景目标、快照与合成 RT 的格式（HDR 为 `rgba16float`）。 */
+  format: GPUTextureFormat = SCENE_TARGET_FORMAT;
+  /** 渲染目标类资源（场景目标、快照、合成 RT、fbo、泛光 RT）的显存估算，字节；不含场景纹理。 */
+  targetBytes = 0;
+  private bloom: BloomChain | null = null;
   private clear: GPUColor = { r: 0, g: 0, b: 0, a: 1 };
 
   private constructor(private readonly device: GPUDevice) {}
+
+  /** 离屏场景目标（dev 探针同步读回用）。 */
+  get targetTexture(): GPUTexture | null {
+    return this.target;
+  }
 
   /**
    * 建全部资源。失败时已建的资源都会释放，抛 `SceneRenderError`；`warnings` 收集 Tint 的非错误消息。
@@ -165,6 +200,7 @@ export class GpuScene {
           GPUTextureUsage.COPY_DST,
       }),
     );
+    this.targetBytes += width * height * texelBytes(format);
     return { texture, view: texture.createView(), width, height, format, sampler };
   }
 
@@ -172,16 +208,19 @@ export class GpuScene {
     const device = this.device;
     const { general } = bundle;
     const [width, height] = sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D);
+    const hdr = general.postprocess.hdr;
+    const format = (this.format = sceneTargetFormat(hdr));
     this.width = width;
     this.height = height;
     this.target = this.own(
       device.createTexture({
         label: "scene target",
         size: { width, height },
-        format: SCENE_TARGET_FORMAT,
+        format,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
       }),
     );
+    this.targetBytes += width * height * texelBytes(format);
     this.targetView = this.target.createView();
     const [r = 0, g = 0, b = 0] = general.clearEnabled ? general.clearColor : [];
     this.clear = { r, g, b, a: 1 };
@@ -205,6 +244,8 @@ export class GpuScene {
     for (const plan of plans)
       for (const step of plan.steps)
         if (step.kind === "draw" && step.pass.program !== null) used.add(step.pass.program);
+    for (const pass of Object.values(bundle.bloom?.passes ?? {}))
+      if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
     const settled = await Promise.allSettled(
       [...used].map((index) => createProgram(device, bundle.programs[index], index, warnings)),
     );
@@ -227,29 +268,32 @@ export class GpuScene {
       return pipeline;
     };
 
-    // 快照：有图层要 `_rt_FullFrameBuffer` 才建
-    const wantsSnapshot = plans.some((plan) =>
-      plan.steps.some(
-        (step) =>
-          step.kind === "snapshot" ||
-          (step.kind === "draw" && Object.values(step.inputs).some((ref) => ref.kind === "framebuffer")),
-      ),
-    );
+    // 快照：有图层要 `_rt_FullFrameBuffer`、或要跑泛光链才建（两者共用一张，泛光在全部图层之后再拷一次）
+    const wantsSnapshot =
+      !!bundle.bloom ||
+      plans.some((plan) =>
+        plan.steps.some(
+          (step) =>
+            step.kind === "snapshot" ||
+            (step.kind === "draw" && Object.values(step.inputs).some((ref) => ref.kind === "framebuffer")),
+        ),
+      );
     if (wantsSnapshot) {
       const texture = this.own(
         device.createTexture({
           label: "_rt_FullFrameBuffer",
           size: { width, height },
-          format: SCENE_TARGET_FORMAT,
+          format,
           usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         }),
       );
+      this.targetBytes += width * height * texelBytes(format);
       this.snapshot = {
         texture,
         view: texture.createView(),
         width,
         height,
-        format: SCENE_TARGET_FORMAT,
+        format,
         sampler: sampler({ magFilter: "linear", minFilter: "linear" }),
       };
     }
@@ -281,7 +325,7 @@ export class GpuScene {
               `composite ${key} #${pool.length}`,
               cw,
               ch,
-              SCENE_TARGET_FORMAT,
+              format,
               sampler({ addressModeU: address, addressModeV: address, magFilter: filter, minFilter: filter }),
             ),
           );
@@ -293,10 +337,10 @@ export class GpuScene {
           new Map(
             effect.fbos.map((fbo) => {
               const [fw, fh] = fboSize(fbo, compositeSize);
-              const format = (FBO_FORMATS[fbo.format]?.gpu ?? "rgba8unorm") as GPUTextureFormat;
+              const fboFormat = (FBO_FORMATS[fbo.format]?.gpu ?? "rgba8unorm") as GPUTextureFormat;
               const key = fbo.unique
                 ? `unique|${layer.id}|${effect.id}|${fbo.name}`
-                : `${fbo.name}|${fw}x${fh}|${format}|${fbo.repeat}`;
+                : `${fbo.name}|${fw}x${fh}|${fboFormat}|${fbo.repeat}`;
               let id = fboPool.get(key);
               if (id === undefined) {
                 const address: GPUAddressMode = fbo.repeat ? "repeat" : "clamp-to-edge";
@@ -304,7 +348,7 @@ export class GpuScene {
                   `fbo ${key}`,
                   fw,
                   fh,
-                  format,
+                  fboFormat,
                   sampler({ addressModeU: address, addressModeV: address, magFilter: "linear", minFilter: "linear" }),
                 );
                 id = this.targets.length;
@@ -371,8 +415,31 @@ export class GpuScene {
         }
       }
     });
+    // 泛光：全部图层之后（A1 / A3）
+    if (bundle.bloom && this.snapshot) {
+      const chain = await BloomChain.create({
+        device,
+        bloom: bundle.bloom,
+        params: general.bloom,
+        programs,
+        format,
+        width,
+        height,
+        source: this.snapshot.view,
+        pipelineFor: (program, blending, target) => pipelineFor(program, blending, target, false),
+        own: (resource) => this.own(resource),
+      });
+      this.bloom = chain;
+      this.targetBytes += chain.bytes;
+      this.ops.push({ kind: "bloom", chain });
+    }
     await Promise.all(drawTasks);
     device.queue.submit([setup.finish()]);
+  }
+
+  /** 泛光链（dev 探针用）；没有泛光时为 null。 */
+  get bloomChain(): BloomChain | null {
+    return this.bloom;
   }
 
   /** 着色器声明了、材质没绑的槽位用的占位纹理（全 0，同 D3D 空 SRV 的读数）与默认采样器。 */
@@ -470,6 +537,8 @@ export class GpuScene {
         ...matrices,
         modelViewProjectionInverse: invert(matrices.modelViewProjection),
         layer,
+        // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
+        colorScale: bundle.general.postprocess.hdr ? layer.brightness : 1,
         textures: Array.from({ length: slots }, (_, slot) => sizeOf(step.inputs[slot])),
         screenSize: [this.width, this.height],
         eye: bundle.general.camera.eye,
@@ -526,9 +595,7 @@ export class GpuScene {
       : device.createBindGroup({ label, layout: program.bindGroupLayout, entries: entries(resolveNow) });
 
     const toScene = step.target.kind === "scene";
-    const format = toScene
-      ? SCENE_TARGET_FORMAT
-      : (this.resolveTarget(step.target, resources)?.format ?? SCENE_TARGET_FORMAT);
+    const format = toScene ? this.format : (this.resolveTarget(step.target, resources)?.format ?? this.format);
     return {
       label,
       step,
@@ -574,10 +641,21 @@ export class GpuScene {
     }
   }
 
-  /** 按图层顺序执行全部步骤，结果在离屏场景目标里。 */
-  encode(encoder: GPUCommandEncoder): void {
+  /**
+   * 按图层顺序执行全部步骤，结果在离屏场景目标里。`afterBloomStep`：泛光链每步之后调用（dev 探针读回中间结果用）。
+   */
+  encode(encoder: GPUCommandEncoder, afterBloomStep?: Parameters<BloomChain["encode"]>[2]): void {
     if (!this.targetView || !this.target) return;
     const sceneView = this.targetView;
+    const sceneTexture = this.target;
+    const snapshot = () => {
+      if (this.snapshot)
+        encoder.copyTextureToTexture(
+          { texture: sceneTexture },
+          { texture: this.snapshot.texture },
+          { width: this.width, height: this.height },
+        );
+    };
     let open: GPURenderPassEncoder | null = null;
     let cleared = false;
     const begin = (): GPURenderPassEncoder => {
@@ -622,12 +700,13 @@ export class GpuScene {
         // 快照要包含清屏色：本帧还没画过场景就先清一次
         if (!cleared) begin();
         end();
-        if (this.snapshot)
-          encoder.copyTextureToTexture(
-            { texture: this.target },
-            { texture: this.snapshot.texture },
-            { width: this.width, height: this.height },
-          );
+        snapshot();
+      } else if (op.kind === "bloom") {
+        // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
+        if (!cleared) begin();
+        end();
+        snapshot();
+        op.chain.encode(encoder, sceneView, afterBloomStep);
       } else if (op.kind === "copy") {
         end();
         const source = this.resolveTexture(op.source, op.resources);
@@ -652,6 +731,7 @@ export class GpuScene {
     this.target = null;
     this.targetView = null;
     this.snapshot = null;
+    this.bloom = null;
   }
 }
 

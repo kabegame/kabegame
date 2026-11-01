@@ -39,6 +39,7 @@ function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
     size: [200, 100],
     alpha: 1,
     color: [1, 1, 1],
+    brightness: 1,
     visible: true,
     passes: [pass({ blending: "translucent", textures: { 0: 0 } })],
     colorBlendMode: 0,
