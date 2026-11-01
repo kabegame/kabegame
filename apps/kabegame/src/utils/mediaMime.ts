@@ -31,12 +31,21 @@ export function isWpeWebType(t: string | undefined): boolean {
   return wpeKind(t) === "web";
 }
 
+export function isWpeSceneType(t: string | undefined): boolean {
+  return wpeKind(t) === "scene";
+}
+
 /**
- * 交给壁纸组件（`WpeWallpaperContent` → `WallpaperStage`）渲染原图形态的 WPE 类型。缩略位仍是作者 `preview.*`。
- * 目前只有 web：`WallpaperStage` 还没有 scene 层（阶段 3 P1-5），场景壁纸在那之前按图片显示作者预览图。
+ * 交给壁纸组件（`WpeWallpaperContent` → `WallpaperStage`）渲染原图形态的 WPE 类型：网页（web 层 iframe）与场景
+ * （scene 层 WebGPU，不能渲染时显示作者预览图）。缩略位仍是作者 `preview.*`。
  */
 export function isWpeWallpaperContentType(t: string | undefined): boolean {
-  return isWpeWebType(t);
+  return isWpeWebType(t) || isWpeSceneType(t);
+}
+
+/** 带作者用户属性、能打开属性面板的 WPE 类型：网页与场景（与后端 `wpe_web.rs` 的 `has_user_properties` 一致）。 */
+export function hasWpeUserProperties(t: string | undefined): boolean {
+  return isWpeWebType(t) || isWpeSceneType(t);
 }
 
 /**

@@ -18,10 +18,10 @@
           :native-drag="false"
           :key="`bg-${bgImageToken}`"
           :image="bgImage"
-          :prefer="bgPrefer"
+          prefer="original"
           class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
           :style="bgImageStyle"
-          :video-playing="bgVisible && bgMediaType === 'video'"
+          :video-playing="bgVisible"
           video-muted
           video-loop
           reset-video-on-pause
@@ -216,7 +216,7 @@ import { fetchImageById } from "@/utils/imageRow";
 import { IS_MACOS, IS_ANDROID, IS_WEB } from "@/env";
 import { initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { ImageInfo } from "@/types/image";
-import { isVideoPlaybackType, isWpeWallpaperContentType } from "@/utils/mediaMime";
+import { isVideoPlaybackType } from "@/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { usePluginMarketStore } from "./stores/pluginMarket";
 import { useFailedImagesStore } from "./stores/failedImages";
@@ -400,20 +400,12 @@ let bgResolveToken = 0;
 const isVideoBackground = (image: ImageInfo | undefined) => isVideoPlaybackType(image?.type);
 
 /**
- * 非视频 WPE 壁纸（web / scene）的背景退回作者预览静态图：背景层应静音、不交互、低开销，
- * 而第三方页面无法从外部静音、会持续跑脚本，主界面的交互层也会时有时无地遮挡它的指针事件。
+ * 背景与预览走同一个 `ImageContent`（原图形态），不按类型分支：图片 / 视频照常显示，网页与场景壁纸
+ * 由 `ImageContent` 的 wallpaper 形态实时渲染，与桌面一致（不交互）。`video-muted` 让 `WallpaperStage` 的音量为 0：
+ * 视频静音，网页壁纸经垫片的音量协议静音（见 cocs/wpe/WPE_IMPORT.md「音量」）。
  */
-const isWallpaperContentBackground = (image: ImageInfo | null | undefined) => isWpeWallpaperContentType(image?.type);
-
-const hasAppBackgroundSource = (image: ImageInfo | null | undefined) => {
-  if (isWallpaperContentBackground(image)) {
-    // 只有独立的作者预览图可用（缺 preview 时不显示背景，而不是去渲染页面）
-    return !!image?.thumbnailPath && image.thumbnailPath !== image.localPath;
-  }
-  return !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
-};
-
-const bgPrefer = computed(() => (isWallpaperContentBackground(bgImage.value) ? "thumbnail" : "original"));
+const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
+  !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
 
 const shouldShowAppBackground = () =>
   !!settingsStore.values.appBackgroundEnabled &&

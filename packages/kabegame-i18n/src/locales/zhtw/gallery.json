@@ -63,7 +63,7 @@
   "wpeSectionSources": "桌布來源",
   "wpeRescan": "重新掃描",
   "wpeNoSources": "未發現 Wallpaper Engine 桌布。可點「新增資料夾」選擇工作坊內容目錄或 Wallpaper Engine 安裝目錄。",
-  "wpeScanHint": "自動尋找本機的 Wallpaper Engine 桌布，原地引用、不複製檔案；目前支援影片、網頁與場景桌布（場景桌布暫時只顯示預覽圖）。",
+  "wpeScanHint": "自動尋找本機的 Wallpaper Engine 桌布，原地引用、不複製檔案；目前支援影片、網頁與場景桌布（場景桌布暫時只能渲染一小部分，其餘顯示預覽圖）。",
   "wpeUnsupported": "未辨識到 Wallpaper Engine 桌布目錄",
   "wpeNoSelection": "請至少選擇一個來源或新增一個資料夾",
   "wpeNothingNew": "本機可匯入的桌布都已匯入；可新增其他資料夾",

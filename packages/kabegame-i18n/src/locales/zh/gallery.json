@@ -61,7 +61,7 @@
   "wpeSectionSources": "壁纸来源",
   "wpeRescan": "重新扫描",
   "wpeNoSources": "未发现 Wallpaper Engine 壁纸。可点「添加文件夹」选择创意工坊内容目录或 Wallpaper Engine 安装目录。",
-  "wpeScanHint": "自动查找本机的 Wallpaper Engine 壁纸，原地引用、不复制文件；目前支持视频、网页与场景壁纸（场景壁纸暂时只显示预览图）。",
+  "wpeScanHint": "自动查找本机的 Wallpaper Engine 壁纸，原地引用、不复制文件；目前支持视频、网页与场景壁纸（场景壁纸暂时只能渲染一小部分，其余显示预览图）。",
   "wpeUnsupported": "未识别到 Wallpaper Engine 壁纸目录",
   "wpeNoSelection": "请至少选择一个来源或添加一个文件夹",
   "wpeNothingNew": "本机可导入的壁纸都已导入；可添加其他文件夹",

@@ -3,7 +3,8 @@
 // 桌面同一份）。其它文档（应用页、更深的嵌套 iframe）第一行就返回，不定义任何全局。
 // 协议见 cocs/wpe/WPE_IMPORT.md「运行时垫片与宿主协议」：垫片向宿主拉取完整状态、订阅事件后重拉，
 // 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。音频与媒体是例外：页面登记监听后垫片向宿主订阅，
-// 宿主经 Channel 推（「音频与媒体集成」）。
+// 宿主经 Channel 推（「音频与媒体集成」）。音量也是例外：不走 IPC，垫片经 postMessage 向父页面
+// （WallpaperStage）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」）。
 (function () {
   "use strict";
   var direct = window !== window.top && window.parent === window.top && location.protocol === "file:";
@@ -11,6 +12,312 @@
   var internals = window.__TAURI_INTERNALS__;
   if (!direct || !internals || window.__kbWpeShim) return;
   Object.defineProperty(window, "__kbWpeShim", { value: true });
+
+  // ---- 音量：宿主音量乘到页面的两条出声路径上（HTMLMediaElement、Web Audio）----
+  // 要在页面脚本之前改好原型，所以放在最前面，出错也不影响后面的属性投递。消息类型的字面量与
+  // apps/kabegame/src/components/wallpaper/wpeWebVolume.ts 一致（单测核对）。对配合的页面尽力而为，不是安全边界：
+  // 页面从嵌套 frame 拿到原始原型就能绕过，嵌套 frame 自己发的声音也管不到。
+  try {
+    installVolume();
+  } catch (error) {
+    console.warn("[kb-wpe] volume", error);
+  }
+
+  function installVolume() {
+    var VOLUME_REQUEST = "kabegame:wpe-volume-request";
+    var VOLUME_MESSAGE = "kabegame:wpe-volume";
+    var host = window.parent;
+    // 收到父页面第一次回复之前按静音：页面一开始就放的声音不会先响一下
+    var hostVolume = 0;
+
+    function clamp01(value) {
+      return value > 0 ? (value < 1 ? value : 1) : 0; // NaN 也落到 0
+    }
+    function weak(value) {
+      return typeof WeakRef === "function"
+        ? new WeakRef(value)
+        : {
+            deref: function () {
+              return value;
+            },
+          };
+    }
+    // 弱引用列表：逐个应用、顺手丢掉已回收的
+    function each(list, fn) {
+      for (var i = list.length - 1; i >= 0; i--) {
+        var value = list[i].deref();
+        if (value) fn(value);
+        else list.splice(i, 1);
+      }
+    }
+
+    var media = installMediaVolume();
+    var audio = installAudioVolume();
+
+    // ---- HTMLMediaElement（<audio> / <video>，含不在 DOM 里的 new Audio()）----
+    // 原生值 = 页面自己设的值 × 宿主音量；页面读 volume / muted 拿到的是自己设的值。
+    function installMediaVolume() {
+      var Media = window.HTMLMediaElement;
+      var proto = Media && Media.prototype;
+      var volumeDesc = proto && Object.getOwnPropertyDescriptor(proto, "volume");
+      var mutedDesc = proto && Object.getOwnPropertyDescriptor(proto, "muted");
+      if (!volumeDesc || !volumeDesc.get || !volumeDesc.set || !mutedDesc || !mutedDesc.get || !mutedDesc.set) {
+        return null;
+      }
+      var pageState = new WeakMap(); // 元素 → 页面自己设的 { volume, muted }
+      var routed = new WeakSet(); // 接进实时 AudioContext 的元素：声音走主增益，元素上不再乘宿主音量，免得乘两次
+      var elements = [];
+
+      // 写原生值；返回原生值是否真的变了（没变时原生不发 volumechange）
+      function apply(el, state) {
+        var factor = routed.has(el) ? 1 : hostVolume;
+        var volume = clamp01(state.volume * factor);
+        var muted = state.muted || factor === 0;
+        var changed = false;
+        if (volumeDesc.get.call(el) !== volume) {
+          volumeDesc.set.call(el, volume);
+          changed = true;
+        }
+        if (mutedDesc.get.call(el) !== muted) {
+          mutedDesc.set.call(el, muted);
+          changed = true;
+        }
+        return changed;
+      }
+      // 第一次碰到元素时它还没被改过，原生值就是页面的（含 HTML 的 muted 属性）；原生 getter 顺带做 this 校验
+      function adopt(el) {
+        var state = pageState.get(el);
+        if (state) return state;
+        state = { volume: volumeDesc.get.call(el), muted: mutedDesc.get.call(el) };
+        pageState.set(el, state);
+        elements.push(weak(el));
+        apply(el, state);
+        return state;
+      }
+      // 页面改了自己的值、原生值却没变（例如宿主音量为 0）：照原生补一个 volumechange
+      function changedByPage(el, state) {
+        if (apply(el, state)) return;
+        setTimeout(function () {
+          el.dispatchEvent(new Event("volumechange"));
+        }, 0);
+      }
+      function toVolume(value) {
+        var v = +value;
+        if (v !== v || v === Infinity || v === -Infinity) {
+          throw new TypeError(
+            "Failed to set the 'volume' property on 'HTMLMediaElement': The provided double value is non-finite.",
+          );
+        }
+        if (v < 0 || v > 1) {
+          throw new DOMException(
+            "Failed to set the 'volume' property on 'HTMLMediaElement': The volume provided (" +
+              v +
+              ") is outside the range [0, 1].",
+            "IndexSizeError",
+          );
+        }
+        return v;
+      }
+      var accessors = Object.getOwnPropertyDescriptors({
+        get volume() {
+          return adopt(this).volume;
+        },
+        set volume(value) {
+          var state = adopt(this);
+          var v = toVolume(value);
+          if (state.volume === v) return;
+          state.volume = v;
+          changedByPage(this, state);
+        },
+        get muted() {
+          return adopt(this).muted;
+        },
+        set muted(value) {
+          var state = adopt(this);
+          var muted = !!value;
+          if (state.muted === muted) return;
+          state.muted = muted;
+          changedByPage(this, state);
+        },
+      });
+      Object.defineProperty(proto, "volume", accessors.volume);
+      Object.defineProperty(proto, "muted", accessors.muted);
+
+      var nativePlay = proto.play;
+      if (typeof nativePlay === "function") {
+        proto.play = function play() {
+          try {
+            adopt(this);
+          } catch (error) {
+            // 不是媒体元素：交给原生 play 照常报错
+          }
+          return nativePlay.apply(this, arguments);
+        };
+      }
+      // DOM 里的元素不经 play() 也会出声（autoplay）：加载一开始就接管。媒体事件不冒泡，捕获阶段在 window 上收得到
+      ["loadstart", "play"].forEach(function (type) {
+        window.addEventListener(
+          type,
+          function (event) {
+            if (event.target instanceof Media) adopt(event.target);
+          },
+          true,
+        );
+      });
+
+      return {
+        route: function (el) {
+          if (!(el instanceof Media) || routed.has(el)) return;
+          var state = adopt(el);
+          routed.add(el);
+          apply(el, state);
+        },
+        refresh: function () {
+          each(elements, function (el) {
+            apply(el, pageState.get(el));
+          });
+        },
+      };
+    }
+
+    // ---- Web Audio：连到 context.destination 的连接改接到每个实时 context 一个主增益节点 ----
+    // 宿主音量只改主增益的 gain，不 suspend：页面的音频时钟照常走。AudioWorkletNode 等所有节点都继承
+    // AudioNode.prototype.connect，一并接管；OfflineAudioContext 渲染到缓冲区、不出声，不接管。
+    function installAudioVolume() {
+      var Node = window.AudioNode;
+      var proto = Node && Node.prototype;
+      var nativeConnect = proto && proto.connect;
+      var nativeDisconnect = proto && proto.disconnect;
+      var Destination = window.AudioDestinationNode;
+      var Base = window.BaseAudioContext || window.AudioContext;
+      var nativeCreateGain = Base && Base.prototype.createGain;
+      var realtime = [window.AudioContext, window.webkitAudioContext].filter(function (C) {
+        return typeof C === "function";
+      });
+      if (
+        typeof nativeConnect !== "function" ||
+        typeof nativeDisconnect !== "function" ||
+        typeof Destination !== "function" ||
+        typeof nativeCreateGain !== "function" ||
+        !realtime.length
+      ) {
+        return null;
+      }
+      var masters = new WeakMap(); // 实时 context → 主增益
+      var gains = [];
+
+      function isRealtime(context) {
+        for (var i = 0; i < realtime.length; i++) if (context instanceof realtime[i]) return true;
+        return false;
+      }
+      // 是实时 context 的 destination 就返回它的 context
+      function realtimeContextOf(node) {
+        if (!(node instanceof Destination)) return null;
+        var context = node.context;
+        return isRealtime(context) ? context : null;
+      }
+      function masterOf(context, destination) {
+        var gain = masters.get(context);
+        if (gain) return gain;
+        gain = nativeCreateGain.call(context);
+        gain.gain.value = hostVolume;
+        nativeConnect.call(gain, destination);
+        masters.set(context, gain);
+        gains.push(weak(gain));
+        return gain;
+      }
+      // input 下标：主增益与 destination 都只有一个输入，指定了别的就交给原生照原样报 IndexSizeError
+      function otherInput(args) {
+        return args.length > 2 && (args[2] >>> 0) !== 0;
+      }
+
+      proto.connect = function connect(destination) {
+        var context = realtimeContextOf(destination);
+        if (!context || otherInput(arguments)) return nativeConnect.apply(this, arguments);
+        var gain;
+        try {
+          gain = masterOf(context, destination);
+        } catch (error) {
+          console.warn("[kb-wpe] master gain", error);
+          return nativeConnect.apply(this, arguments);
+        }
+        if (arguments.length > 1) nativeConnect.call(this, gain, arguments[1]);
+        else nativeConnect.call(this, gain);
+        return destination; // 页面拿到的仍是它连的 destination
+      };
+      proto.disconnect = function disconnect(destination) {
+        var context = arguments.length ? realtimeContextOf(destination) : null;
+        var gain = context && masters.get(context);
+        // 没有主增益说明从没连过 destination：交给原生照原样报错
+        if (!gain || otherInput(arguments)) return nativeDisconnect.apply(this, arguments);
+        if (arguments.length > 1) return nativeDisconnect.call(this, gain, arguments[1]);
+        return nativeDisconnect.call(this, gain);
+      };
+
+      // 媒体元素接进实时 context 后声音从图里出，宿主音量由主增益乘，元素上不再乘
+      var AudioContextProto = window.AudioContext && window.AudioContext.prototype;
+      var nativeCreateSource = AudioContextProto && AudioContextProto.createMediaElementSource;
+      if (media && typeof nativeCreateSource === "function") {
+        AudioContextProto.createMediaElementSource = function createMediaElementSource() {
+          var node = nativeCreateSource.apply(this, arguments);
+          media.route(node.mediaElement);
+          return node;
+        };
+      }
+      var NativeSource = window.MediaElementAudioSourceNode;
+      if (media && typeof NativeSource === "function" && typeof Reflect === "object") {
+        var Source = function MediaElementAudioSourceNode(context, options) {
+          // 不带 new 调用时原生报错
+          if (!new.target) return NativeSource.apply(this, arguments);
+          var node = Reflect.construct(NativeSource, arguments, new.target);
+          if (isRealtime(node.context)) media.route(node.mediaElement);
+          return node;
+        };
+        Source.prototype = NativeSource.prototype;
+        Object.setPrototypeOf(Source, Object.getPrototypeOf(NativeSource));
+        Object.defineProperty(NativeSource.prototype, "constructor", {
+          value: Source,
+          writable: true,
+          configurable: true,
+        });
+        window.MediaElementAudioSourceNode = Source;
+      }
+
+      return {
+        refresh: function () {
+          each(gains, function (gain) {
+            gain.gain.value = hostVolume;
+          });
+        },
+      };
+    }
+
+    // ---- 父页面消息：只认 isTrusted 且来自父窗口、带固定类型标记的；页面伪造不了 isTrusted ----
+    // source / data 用垫片启动时的原生 getter 读，页面改 MessageEvent.prototype 也改不了判断
+    var messageProto = window.MessageEvent && window.MessageEvent.prototype;
+    var sourceDesc = messageProto && Object.getOwnPropertyDescriptor(messageProto, "source");
+    var dataDesc = messageProto && Object.getOwnPropertyDescriptor(messageProto, "data");
+    function read(event, desc, name) {
+      return desc && desc.get ? desc.get.call(event) : event[name];
+    }
+    window.addEventListener(
+      "message",
+      function (event) {
+        if (!event.isTrusted || read(event, sourceDesc, "source") !== host) return;
+        var data = read(event, dataDesc, "data");
+        if (!data || typeof data !== "object" || data.type !== VOLUME_MESSAGE || typeof data.volume !== "number") {
+          return;
+        }
+        // 宿主自己的消息不交给页面（捕获阶段、最先登记，页面的 message 监听都在后面）
+        event.stopImmediatePropagation();
+        hostVolume = clamp01(data.volume);
+        if (media) media.refresh();
+        if (audio) audio.refresh();
+      },
+      true,
+    );
+    host.postMessage({ type: VOLUME_REQUEST }, "*");
+  }
 
   // ---- WPE 全局接口（API.md §3.2 / §3.4）----
   window.wallpaperMediaIntegration = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };

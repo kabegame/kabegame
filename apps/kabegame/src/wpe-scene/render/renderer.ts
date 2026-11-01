@@ -35,6 +35,9 @@ struct VsOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32
 }
 `;
 
+/** 帧循环里按显示尺寸核对画布的间隔：transform 变化不触发 ResizeObserver，这样最多晚这么久跟上。 */
+const SIZE_CHECK_INTERVAL_MS = 250;
+
 export interface SceneRendererOptions {
   /** 帧率上限；≤ 0 不限（跟随 rAF）。默认 60。 */
   maxFps?: number;
@@ -64,6 +67,8 @@ export class SceneRenderer {
   private lost = false;
   private destroyed = false;
   private raf = 0;
+  /** 上次按显示尺寸核对画布的时刻（帧循环里节流核对，见 `resize`）。 */
+  private sizeCheckedAt = 0;
   private loadSerial = 0;
   /** Tint 的非错误消息（warning / info），调用方记日志用。 */
   readonly warnings: string[] = [];
@@ -216,7 +221,13 @@ export class SceneRenderer {
     this.raf = 0;
     if (!this.shouldRun) return;
     this.raf = requestAnimationFrame(this.frame);
-    if (this.throttle.ready(now)) this.render();
+    if (!this.throttle.ready(now)) return;
+    // 祖先的 CSS transform 变化（如预览「桌面画布」随弹窗缩放）不触发 ResizeObserver，帧循环里定期按显示尺寸核对
+    if (now - this.sizeCheckedAt >= SIZE_CHECK_INTERVAL_MS) {
+      this.sizeCheckedAt = now;
+      this.resize();
+    }
+    this.render();
   };
 
   private fail(reasons: string[]): void {
@@ -226,13 +237,17 @@ export class SceneRenderer {
     this.options.onError?.(reasons);
   }
 
-  /** 画布像素尺寸跟随布局尺寸 × DPR；暂停时补画一帧。 */
+  /**
+   * 画布像素尺寸跟随**显示**尺寸 × DPR；暂停时补画一帧。用 `getBoundingClientRect`（含祖先 CSS transform），
+   * 而不是布局尺寸：预览「桌面画布」按桌面尺寸布局、再整体缩小显示，按布局尺寸会在 4K 上渲染只显示约 1/4 面积的画面。
+   */
   private resize(): void {
     if (this.destroyed) return;
     const dpr = window.devicePixelRatio || 1;
     const max = this.gpu.device.limits.maxTextureDimension2D;
-    const width = Math.min(max, Math.max(1, Math.round(this.canvas.clientWidth * dpr)));
-    const height = Math.min(max, Math.max(1, Math.round(this.canvas.clientHeight * dpr)));
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.min(max, Math.max(1, Math.round(rect.width * dpr)));
+    const height = Math.min(max, Math.max(1, Math.round(rect.height * dpr)));
     if (this.canvas.width === width && this.canvas.height === height) return;
     this.canvas.width = width;
     this.canvas.height = height;

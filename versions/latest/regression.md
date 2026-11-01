@@ -1,5 +1,47 @@
 # v4.7.0 regression
 
+## 网页壁纸音量
+
+网页壁纸接入壁纸音量设置，并按 iframe 单独控制：应用背景静音，桌面与预览跟随 `wallpaperVolume`。
+- **协议**：垫片（`wpe_shim.js`）经 postMessage 向父页面（`WallpaperStage`）要音量（`kabegame:wpe-volume-request`），父页面回复当前 `volume` prop（`kabegame:wpe-volume`，`paused` 时为 0），变化时主动推。收到第一次回复前垫片按静音。宿主消息校验 `isTrusted` 与 `source === window.parent`。
+- **接管**：`<audio>` / `<video>` 的原生音量 = 页面值 × 宿主音量（页面读到自己设的值）；Web Audio 连到实时 context `destination` 的连接改接到主增益节点。不能用 CEF 整窗口静音：会连预览视频一起静掉。
+- **文案**：设置「视频壁纸音量」改为「壁纸音量」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 检查 | Windows | `vitest src/wpe-scene src/components/wallpaper`；`vue-tsc`；Prettier；`check-kabegame --skip vue` | 全过 | 2026-11-01：7 个文件 95 passed（新增 `wpeWebVolume.test.ts` 在 node:vm 里直接跑垫片原文、`WallpaperStage.webVolume.test.ts`），其余 0 error（Claude 独立复跑） |
+| [x] | D1 桌面跟随音量 | Windows dev | 桌面为 12098（Unity，AudioContext），`wallpaperVolume` 1 → 0.5 → 0 → 1 | 主增益随设置变化；媒体元素原生值 = 页面值 × 设置值 | 2026-11-01 代理读数：1 / 0.5 / 0 / 1；`new Audio()` 设 0.8 时原生 0.8 / 0.4，页面始终读到 0.8 |
+| [x] | D2 预览 | Windows dev | 预览 12097（`<audio>`、`<video>` 与 AudioContext） | 按设置音量出声；设置为 0 时原生静音、页面读值不变 | 2026-11-01 代理：audio 页面 0.125 → 原生 0.0625（设置 0.5）；设置 0 时原生 0 + muted |
+| [x] | D3 应用背景静音 | Windows dev | 开启应用背景，当前壁纸为网页壁纸 | 宿主音量 0、主增益 0 | 2026-11-01 代理：始终 0；换壁纸重建 iframe 后桌面回 1、背景回 0 |
+| [x] | D4 Web Audio 兼容 | Windows dev | 预览 iframe 里建临时 AudioContext，测 `connect` 返回值、`createMediaElementSource` / `new MediaElementAudioSourceNode`、错误语义 | 与原生一致；接进 context 的元素不重复乘音量 | 2026-11-01 代理：`connect` 返回 destination；元素原生值保持页面值；重复断开 InvalidAccessError、input 1 IndexSizeError |
+| [ ] | D5 实际听感 | Windows dev | 播放带音乐的网页壁纸，开关应用背景、调壁纸音量 | 应用背景不出声，桌面音量跟随设置 | 未测：代理只读了数值，没有实听，也没有点页面自己的播放按钮（会改写它 localStorage 里的播放状态） |
+| [ ] | D6 回复前静音 | Windows dev | 打开一张开场就放声音的网页壁纸 | 开头不先响一下 | 只有单测 |
+
+## 场景壁纸 P1-5：接入 `WallpaperStage`
+
+`WallpaperStage` 新增 scene 层，挂 `WpeSceneView`，行为照 web 层：独立一层、淡入淡出、切走即卸载、同一时间只有一个场景。`isWpeWallpaperContentType` 改为认网页与场景，图库预览与桌面壁纸窗口实时渲染场景。
+- **加载**：编译期间保持加载态，桌面上保留上一张壁纸。能渲染就直接淡入实时画面；不能渲染（或 10 秒内没有结果）才显示作者预览图（壁纸目标新增 `previewPath`）。
+- **重编译**：改属性触发的重编译期间画面保持旧场景。
+- **其它**：壁纸样式对场景不生效，固定 cover。属性面板对场景也显示，隐藏 `file` / `directory`。应用背景不再按类型分支，网页与场景壁纸都实时渲染。画布像素按显示尺寸（含 CSS transform）× DPR，预览「桌面画布」不再按 4K 渲染。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 检查 | Windows | `vitest src/wpe-scene src/components/wallpaper`（设 `KABEGAME_WPE_ROOT`）；`vue-tsc`；Prettier；`check-kabegame --skip vue`；`rustfmt --check` | 全过 | 2026-11-01：5 个文件 82 passed（新增 `WallpaperStage.scene.test.ts` 13 个），其余 0 error（Claude 独立复跑） |
+| [x] | D1 预览实时渲染 | Windows dev | 预览 eagleflag（12885）/ deep_space（12881）/ beach（12880） | 实时画面在动；「桌面画布」形态正常 | 2026-11-01 代理：隔 1 秒两帧，beach 变化 17.2%、deep_space 4.8%（动得慢） |
+| [x] | D2 加载不跳 | Windows dev | 打开一张能渲染的场景 | 结果出来前只有加载态，不先闪预览图 | 2026-11-01 代理逐帧：beach 0–719 ms 只有加载态，首帧后直接淡入；会退回的 audiophile 119 ms 退回后才显示预览图 |
+| [x] | D3 退回预览图 | Windows dev | 预览 12906（工坊）、12900（MGS4，gif 预览） | 显示预览图、gif 在动，无报错提示 | 2026-11-01 代理：两张都符合 |
+| [x] | D4 来回切换 | Windows dev | 在场景、网页壁纸、WPE 视频、普通图片之间切换 | 同时最多一个场景、一个画布，切走后画布归零 | 2026-11-01 代理：每 50 ms 采样，符合。有一次 eagleflag 首帧用了 3.9 s（从 CORSAIR 网页壁纸切来），重跑 312 ms，未复现 |
+| [x] | D5 属性即时生效 | Windows dev | 预览右栏改 eagleflag 的 Accent 2，再「全部重置」 | 画面立即变色，重编译期间画面不闪；重置后还原 | 2026-11-01 代理：蓝 / 绿两次都符合，已重置（metadata 行 id 由 19652 变为 19679，内容与导入时相同） |
+| [x] | D6 桌面实时渲染 | Windows dev，窗口模式 | `set_wallpaper_by_image_id` 设 eagleflag | 桌面场景在动；壁纸窗口不被判为隐藏 | 2026-11-01 代理：壁纸窗口 `visibilityState` 为 `visible`，rAF 144 帧 / 秒，1 秒变化 32.8%；Kabegame 窗口压在 WPE 窗口之上。测完还原为 12880、轮播与样式不变 |
+| [x] | D7 桌面图片 → 场景 | Windows dev | 从图片壁纸设为场景 | 编译期间保留原图，首帧后场景盖上 | 2026-11-01 代理：符合 |
+| [ ] | D8 桌面场景 → 场景 | Windows dev | 从一个场景设为另一个场景 | 无空档 | **已知问题**：同一时间只允许一个场景，旧场景先卸载，eagleflag → 12906 露出约 215 ms、12906 → beach 约 387 ms 窗口背后的内容 |
+| [ ] | D9 过渡 | Windows dev | 过渡设为 fade / slide / zoom 后在场景与其它类型间切换 | 过渡正常 | 未真机测（真机过渡为 none），只有单测 |
+| [ ] | D10 超时退回 | Windows dev | 让编译 10 秒内没有结果 | 显示预览图并就绪，迟到的首帧仍切成实时画面 | 未真机测，只有单测 |
+| [ ] | D11 设置页属性按钮 | Windows dev | 当前壁纸为场景时打开设置页「当前壁纸」 | 显示属性按钮，可改属性 | 未真机测 |
+| [x] | D12 应用背景 | Windows dev | 开启应用背景，当前壁纸设为场景 beach | 背景实时渲染、不可交互 | 2026-11-01 代理：有 `live` 类、没有退回预览图；层与画布 `pointer-events: none`，窗口中心命中画廊元素；画布 1850×1191 ≈ 显示尺寸 × DPR 1.5（含 1.04 放大） |
+| [x] | D13 预览画布尺寸 | Windows dev | 预览 beach（「桌面画布」），读 canvas 的 `width/height` 与显示尺寸；拖动改变窗口大小 | 画布像素约等于显示尺寸 × DPR，不再是 3840×2160；改窗口大小后 250 ms 内跟上 | 2026-11-01 代理：1071×602 = 显示 714×401.6 × 1.5；缩小 / 恢复窗口后分别 107.5 ms、140.6 ms 跟上 |
+| [ ] | M 非 Windows | macOS / Linux | 预览一张场景 | 显示预览图（`sceneAssets` 为空 → `assets:missing` 退回） | 未测 |
+
 ## 场景壁纸 P1-4：WebGPU 渲染器
 
 `apps/kabegame/src/wpe-scene/render/` 把 `SceneBundle` 画到画布：RGBA8 / BC3 纹理连同 mip 上传，std140 打包 uniform（内置 uniform 照 linux-wallpaperengine `CPass.cpp`，材质与用户值优先），混合照 LWE，场景分辨率离屏目标再 cover 铺到画布，`paused` / 页面隐藏时停帧并冻结 `g_Time`。

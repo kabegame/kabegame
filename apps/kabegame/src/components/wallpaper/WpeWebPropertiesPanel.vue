@@ -129,13 +129,23 @@ import { useI18n } from "@kabegame/i18n";
 import { ArrowRight, Loading, RefreshLeft } from "@kabegame/element-plus-icons";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
+import { isWpeSceneType } from "@/utils/mediaMime";
 import { evaluateWpeCondition, sanitizeWpeLabel, wpeLabelText } from "@/utils/wpeProperties";
 import WpePropertyField from "./WpePropertyField.vue";
 
-const props = withDefaults(defineProps<{ imageId: string; collapsible?: boolean; fillWhenExpanded?: boolean }>(), {
-  collapsible: true,
-  fillWhenExpanded: true,
-});
+/**
+ * 网页与场景壁纸共用的属性面板。`imageType` 传图片的 `type`：场景壁纸（`x-wpe/scene`）不显示 `file` / `directory`
+ * 属性——场景渲染器不读用户选的文件，这两类的放行也只对网页壁纸生效（网页壁纸目录索引只收 `x-wpe/web` 行）。
+ * 本机语料里场景没有这两类；场景特有的 `scenetexture` / `replacetexture` 后端解析时已跳过，面板看不到。
+ */
+const props = withDefaults(
+  defineProps<{ imageId: string; imageType?: string | null; collapsible?: boolean; fillWhenExpanded?: boolean }>(),
+  {
+    imageType: null,
+    collapsible: true,
+    fillWhenExpanded: true,
+  },
+);
 const { t } = useI18n();
 const { view, loading, error, valueOf, isModified, set, reset, resetAll, reload } = useWpeWebProperties(
   toRef(props, "imageId"),
@@ -161,12 +171,20 @@ type Section = {
   modifiedCount: number;
 };
 
+const isScene = computed(() => isWpeSceneType(props.imageType ?? undefined));
+
+/** 这张壁纸用得上的条目：场景去掉 `file` / `directory`（见 props 注释） */
+const usableItems = computed(() => {
+  const items = view.value?.items ?? [];
+  return isScene.value ? items.filter((item) => item.kind !== "file" && item.kind !== "directory") : items;
+});
+
 /** 照 WPE 分段：遇到 group 开新段；组条件为假整段隐藏，段内条目再各自按条件隐藏，全隐藏的段不显示 */
 const sections = computed<Section[]>(() => {
   const all: { key: string; group: WpeWebPropertyItem | null; items: WpeWebPropertyItem[] }[] = [
     { key: "_first", group: null, items: [] },
   ];
-  for (const item of view.value?.items ?? []) {
+  for (const item of usableItems.value) {
     if (item.kind === "group") all.push({ key: item.key, group: item, items: [] });
     else all[all.length - 1].items.push(item);
   }
@@ -186,7 +204,7 @@ const sections = computed<Section[]>(() => {
     .filter((section) => section.items.length > 0);
 });
 
-const anyModified = computed(() => view.value?.items.some(isModified) ?? false);
+const anyModified = computed(() => usableItems.value.some(isModified));
 
 /** 开关与取色和标签同一行，其余字段放在标签下方（侧栏窄） */
 function isInline(item: WpeWebPropertyItem): boolean {

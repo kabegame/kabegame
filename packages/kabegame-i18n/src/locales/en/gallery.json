@@ -61,7 +61,7 @@
   "wpeSectionSources": "Sources",
   "wpeRescan": "Rescan",
   "wpeNoSources": "No Wallpaper Engine wallpapers found. Use \"Add folder\" to pick the Workshop content folder or the Wallpaper Engine install folder.",
-  "wpeScanHint": "Finds Wallpaper Engine wallpapers on this PC and references them in place without copying. Video, web and scene wallpapers are supported for now (scene wallpapers show only their preview image for now).",
+  "wpeScanHint": "Finds Wallpaper Engine wallpapers on this PC and references them in place without copying. Video, web and scene wallpapers are supported for now (only a few scene wallpapers can be rendered for now; the rest show their preview image).",
   "wpeUnsupported": "Not a Wallpaper Engine wallpaper folder",
   "wpeNoSelection": "Select at least one source or add a folder",
   "wpeNothingNew": "All importable wallpapers on this PC are already imported; you can add another folder",

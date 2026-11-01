@@ -1,7 +1,7 @@
 # WPE Scene 壁纸 · 阶段 3 计划（多 Phase）
 
 > 状态（2026-11-01）：决策 D1–D7 全部按推荐确认。**P1-0（着色器翻译器 `wpesl2wgsl` + wasm 构建链）已完成**，结果见点 P1-0；
-> **`scene.pkg` 读取（`wpe-scene/compile/pkg.ts`）已完成**：本机创意工坊 scene 全是 pkg，原 P9 的 pkg 提前进 P1-3。**P1-1（scene 入库）已完成并真机验证**（29 张：默认 16 + 工坊 13）。**P1-2（WPE 安装目录交给前端）已完成**。**P1-3（前端编译管线）已完成**，本机 29 张语料与 CEF 里的 Worker 编译都验证过。**P1-4（WebGPU 渲染器 + `WpeSceneView.vue`）已完成**：P1 三张真机渲染，全语料 Tint 0 error；beach 与 WPE 桌面实拍一致（作者 `preview.jpg` 另有后期，不能当基准）。下一步 P1-5。
+> **`scene.pkg` 读取（`wpe-scene/compile/pkg.ts`）已完成**：本机创意工坊 scene 全是 pkg，原 P9 的 pkg 提前进 P1-3。**P1-1（scene 入库）已完成并真机验证**（29 张：默认 16 + 工坊 13）。**P1-2（WPE 安装目录交给前端）已完成**。**P1-3（前端编译管线）已完成**，本机 29 张语料与 CEF 里的 Worker 编译都验证过。**P1-4（WebGPU 渲染器 + `WpeSceneView.vue`）已完成**：P1 三张真机渲染，全语料 Tint 0 error；beach 与 WPE 桌面实拍一致（作者 `preview.jpg` 另有后期，不能当基准）。**P1-5（接入 `WallpaperStage`）已完成**：图库预览与桌面实时渲染，加载期间不闪预览图；场景 → 场景切换有 0.2–0.4 秒空档待定。
 > 上级：[../PLAN.md](../PLAN.md) 决策 9（Scene 走 WebGPU）。调研：[RESEARCH.md](RESEARCH.md)（格式、方言、WebGPU 可行性）。
 > 翻译器契约：[src-tauri/wpesl2wgsl/README.md](../../../../src-tauri/wpesl2wgsl/README.md)；场景文档：[cocs/wpe/WPE_SCENE.md](../../../../cocs/wpe/WPE_SCENE.md)。
 > 本文件取代调研 §5–§7 里与现架构不符的部分。调研写于网页壁纸改成 `file:` iframe 之前，其中的 `/wpe/<id>/` HTTP 路由、
@@ -356,7 +356,19 @@ export interface SceneBundle {
   - `frame.ts`：rAF 循环。`paused` 时停循环，`document.hidden` 时降频。
 - 场景按正交尺寸铺满画布。WPE 对宽高比不一致时的行为（例如三屏 5760×1080 放到单屏上怎么处理）要对照预览图，P1 先按 cover 实现。
 
-**点 P1-5 `WallpaperStage` 接 scene 层（`WallpaperStage.vue`）**
+**点 P1-5 `WallpaperStage` 接 scene 层（`WallpaperStage.vue`）——已完成（2026-11-01，opus 子代理实现 + Claude 复核）**
+- 落地：
+  - scene 层挂 `WpeSceneView`，类型判定拆到 `targetKind.ts`（有单测）。web / scene 两层共用淡入淡出等待逻辑。
+  - `WallpaperTarget.previewPath` 取场景行的缩略图。
+  - `isWpeWallpaperContentType` 认网页与场景。
+  - 属性面板对场景也显示，隐藏 `file` / `directory`。
+- 与原方案的差异：
+  - **加载态**（用户要求）：结果出来前保持加载态，桌面保留上一张。能渲染直接淡入；不能渲染或 10 秒超时才显示预览图。预览图不再垫底，避免先闪预览图再跳成实时画面。
+  - **应用背景不分支**（用户决定）：与预览同走 `ImageContent` 原图形态，网页与场景都实时渲染；网页壁纸页面的声音无法从外部静音。
+  - **`document.hidden` 不是问题**：壁纸窗口挂在 WorkerW 下时 `visibilityState` 为 `visible`，rAF 144 帧 / 秒，渲染器没改。
+- 未决：
+  - 场景 → 场景切换会露出 0.2–0.4 秒窗口背后的内容，因为同一时间只允许一个场景。网页 → 网页也有同样的空档。
+  - ~~预览「桌面画布」按 4K 渲染~~：已改为按显示尺寸（`getBoundingClientRect` × DPR，帧循环每 250 ms 核对）。
 - **修改** `MediaType` 加 `"scene"`，新增 `isSceneTarget`、`enterScene` 与 `teardownScene`。切入切出照 web 层：独立层、淡入淡出、
   切走即销毁、一次只存在一个。`unsupported` 非空或 WebGPU 不可用时，退回预览图（行的缩略图就是 `preview.*`）。
 ```ts
@@ -427,6 +439,10 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   - `localStorage.get/set`（`LOCATION_GLOBAL / SCREEN`），持久化位置在本 Phase 定。
 - **新增** 文本图层：从项目 otf 建 `FontFace`，用 `OffscreenCanvas` 栅格化成纹理，脚本改文本时重绘。
 - **新增** 声音图层：WebAudio 播放 `sounds/*`，接 `playbackmode / volume`；桌面是否出声跟随现有壁纸音量设置。
+  - 音量按实例控制：`WallpaperStage` 把已有的 `volume` prop 透传给 `WpeSceneView`，场景的全部声音都经同一个主音量节点出。
+    - 应用背景（`video-muted` → 音量 0）、静音的预览只把主音量设为 0，声音图层照常推进，脚本读到的播放状态不变。
+    - 音量为 0 时不解码、不建 `AudioContext`，等音量大于 0 时再建。
+  - 声音由我们自己的代码播放（脚本只能经暴露的 API 控制声音图层），不存在网页壁纸那种无法从外部静音的问题。
 - **新增** spritesheet（`TEXS` 帧表、COMBO `spritesheet`）、`godrays`（多 pass、多 fbo）、`camerafade`。
 - **验收**：dino_run 可玩，计分显示正确，切换 `dino / level / show_score / god_rays / follow_cursor` 生效，重启后最高分仍在。
 

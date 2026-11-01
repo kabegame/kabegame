@@ -390,9 +390,11 @@
           @wheel.stop
         >
           <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
+            <!-- 网页与场景壁纸：作者属性面板（改动经 metadataId 补丁让页面 / 场景重读） -->
             <WpeWebPropertiesPanel
-              v-if="previewImage && isWpeWebType(previewImage.type)"
+              v-if="previewImage && hasWpeUserProperties(previewImage.type)"
               :image-id="previewImage.id"
+              :image-type="previewImage.type"
               fill-when-expanded
             />
             <ImagePluginDescriptionPanel v-else :image="previewImage" fill-when-expanded />
@@ -455,10 +457,10 @@ import { compatibleToUrl, fileToUrl, thumbnailToUrl } from "../../utils/fileUrl"
 import { fetchImageById } from "../../utils/imageRow";
 import { batchWindow, imagePatches$, on, triggers$ } from "../../services/kbEvents";
 import {
+  hasWpeUserProperties,
   isNativeMetadataEligible,
   isVideoPlaybackType,
   isWpeVideoType,
-  isWpeWebType,
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";

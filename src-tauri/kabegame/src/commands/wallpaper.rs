@@ -50,6 +50,9 @@ pub struct WallpaperTarget {
     /// 场景壁纸（`x-wpe/scene`）解析内置资源的 `<WPE 安装目录>/assets` 绝对路径，按顺序查找
     /// （`wpe::discover::scene_asset_dirs`）。其它类型、非 Windows、没找到 WPE 安装目录为空。
     pub scene_assets: Vec<String>,
+    /// 场景壁纸（`x-wpe/scene`）退回用的预览图：行的 `thumbnail_path`（导入时就是作者的 `preview.*`）。
+    /// 不能渲染（含超时）时 `WallpaperStage` 才显示它，编译期间保持加载态；其它类型、缩略图为空时为 None。
+    pub preview_path: Option<String>,
 }
 
 pub async fn get_current_wallpaper_target_from_settings() -> Result<Option<WallpaperTarget>, String>
@@ -86,6 +89,7 @@ async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
         };
     let web_entry = web_entry_of(&info).await;
     let scene_assets = scene_assets_of(&info).await;
+    let preview_path = scene_preview_of(&info);
 
     WallpaperTarget {
         id: info.id,
@@ -95,7 +99,19 @@ async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
         wpe_video,
         web_entry,
         scene_assets,
+        preview_path,
     }
+}
+
+/// 场景壁纸退回用的预览图（行的缩略图）；其它类型不填。缩略图为空、或作者没有 preview 时回落成的
+/// 壁纸目录本身（与 `local_path` 相同）都不填。
+fn scene_preview_of(info: &ImageInfo) -> Option<String> {
+    let kind = kabegame_core::media::image_type::wpe_kind(info.media_type.as_deref());
+    if kind.as_deref() != Some("scene") {
+        return None;
+    }
+    let thumbnail = info.thumbnail_path.trim();
+    (!thumbnail.is_empty() && thumbnail != info.local_path.trim()).then(|| thumbnail.to_string())
 }
 
 /// 网页壁纸的入口 `file://`（读一个小的 `project.json`，放 blocking 线程）；其它类型不读盘。
