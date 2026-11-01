@@ -4,6 +4,7 @@
 
 ### Added
 - 「壁纸」收集现在也会导入 Wallpaper Engine 场景壁纸（含创意工坊打包的 `scene.pkg`）。少数简单场景（如自带的 eagleflag、deep_space、beach）已能在图库预览和桌面实时渲染，属性面板改颜色等即时生效；其余场景显示作者预览图，渲染能力会逐步加入。
+- 场景壁纸支持图层效果链与颜色混合模式，自带的 Razer Vortex 现在可实时渲染；设置页壁纸分区新增「场景后处理」（跟随 WPE / 关闭 / 开启 / 超高，默认跟随 Wallpaper Engine 自己的后处理设置）。目前只能渲染关闭时的效果，开着泛光的场景暂时显示预览图。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - Windows 上的 Wallpaper Engine 网页壁纸支持音频可视化与媒体集成：声明了音频处理的壁纸会随系统正在播放的声音跳动；壁纸可显示正在播放的歌曲名、歌手、封面、播放状态与进度（来自系统媒体控制，网易云、Spotify、浏览器等均可）。桌面与图库预览都生效。设置页壁纸分区新增「网页壁纸媒体集成」开关（默认开启），关闭后壁纸读不到歌曲信息。
@@ -57,6 +58,7 @@
 ## 开发侧
 
 ### Added
+- 场景壁纸 P2a：图层渲染图（`wpe-scene/render/graph.ts`：合成 RT ping-pong、effect.json 的 `fbos` / `bind` / `target` / `compose` / `copy` / `swap`、最后一个 effect 借基础材质 blend 上屏、colorBlendMode 31 additive / 其它 passthrough、`_rt_FullFrameBuffer` 用 `copyTextureToTexture` 快照）；能力表改为只报真正改变画面的特性（着色器改核内置 uniform 与引擎 COMBO，effect 逐项检查，只导出 `applyUserProperties` 的脚本按 `value` 静态处理）；FreeImage `.tex` 主线程解码并跨重新编译缓存；内置 uniform 按 WPE 校正（空槽分辨率、`Texel`、`g_Screen`、`g_Time` 回绕、窗口坐标的指针、效果矩阵）；新设置 `wpeScenePostprocess`（core `SettingKey::WpeScenePostprocess`）；确定退回的场景不再编译完整个场景；dev 下 `localStorage["kabegame-dev-scene-force-render"] = "1"` 强制渲染半成品。依据 `.claude/plans/wpe-import/3-scene/p2-REPORT.md`。
 - 新增场景壁纸的 WebGPU 渲染器（`apps/kabegame/src/wpe-scene/render/`）与渲染组件 `WpeSceneView.vue`：RGBA8 / BC3 纹理、std140 uniform 与内置 uniform、混合照 linux-wallpaperengine，cover 铺到画布；组件自读用户属性、属性改了即重编译，不能渲染时通知调用方退回预览图。`get_wpe_web_properties` / `set_wpe_web_user_properties` 也接受场景壁纸。新增开发依赖 `@webgpu/types`。尚未接进壁纸窗口与预览（P1-5）。
 - 新增场景壁纸的前端编译管线（`apps/kabegame/src/wpe-scene/compile/`）：按项目散文件 → `scene.pkg` → WPE `assets/` 查资源，解析场景 / 模型 / 材质 json 与 `.tex`（视频纹理只记 MP4 区间），经 `wpesl2wgsl` 翻译着色器，产出渲染器的唯一输入 `SceneBundle`，未实现的能力列进 `unsupported`；`compileSceneInWorker` 在 Worker 里编译，由主线程代读 `file:`。本机 29 张样本中 eagleflag / deep_space / beach 三张可编译、其余都正确报出不支持项。尚无使用方（渲染器在后续阶段）。
 - 壁纸目标新增 `sceneAssets`：场景壁纸（`x-wpe/scene`）的 `<WPE 安装目录>/assets` 路径列表，供前端解析内置着色器与资源；WPE 安装目录的发现（`wpe::discover::engine_dirs`）从 `locale.rs` 挪到 `discover.rs` 共用。

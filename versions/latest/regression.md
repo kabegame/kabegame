@@ -1,5 +1,28 @@
 # v4.7.0 regression
 
+## 场景壁纸 P2a：图层渲染图、effect 链、混合模式、后处理档位
+
+依据对 WPE 2.8.42 的只读逆向（`.claude/plans/wpe-import/3-scene/p2-REPORT.md`）。
+- **渲染图**（`wpe-scene/render/graph.ts`）：没有启用 effect、colorBlendMode ∈ {0, 31} 的图层照旧直接上屏；其余「基础 pass 关混合画满合成 RT（图像尺寸）→ effect 在合成 RT 与 fbo 间 ping-pong → 最后一个启用 effect 的最后一个绘制 pass 借基础材质的 blend 上屏」。colorBlendMode 31 改 additive，其它非 0 值由 passthrough 材质上屏（`scene.json` `version` > 2 用 genericimage4）。`_rt_FullFrameBuffer` 是 `copyTextureToTexture` 快照，每图层至多一次。
+- **能力表**：只报真正改变画面的特性；着色器改核内置 uniform、引擎 COMBO 与 `_rt_*` 纹理；effect 逐项检查；只导出 `applyUserProperties` 的脚本按 `value` 静态处理。确定退回的场景不再编译完整个场景。
+- **FreeImage `.tex`**：PNG / JPG mip 由主线程解码并跨重新编译缓存；纹理尺寸取头里的图像尺寸（UV 为 1）。
+- **设置「场景后处理」**（壁纸分区，仅 Windows）：跟随 WPE（默认，读 WPE 的 `config.json`）/ 关闭 / 开启 / 超高。P2a 只画泛光、HDR 都关的情况，实际开着时报 `postprocess:bloom` / `postprocess:hdr` 并退回预览图。
+- **内置 uniform 校正**：空槽 `g_Texture<n>Resolution` = (2,2,2,2)、新增 `g_Texture<n>Texel` / `g_Screen` / `g_Frametime` / `g_PointerState`、`g_Time` 5 天回绕、`g_Daytime` 精确到毫秒、`g_PointerPosition` 改为窗口归一化坐标（左上原点）、效果矩阵按 effect / 上屏 pass 分别取值。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测与语料 | Windows | `apps/kabegame` 下 `KABEGAME_WPE_ROOT=<WPE 安装目录> npx vitest run src/wpe-scene` | 合成 RT 计数与上屏 pass、swap 下标交换、copy、快照时机、能力表裁决、档位解析、脚本静态规则、FreeImage 区间与缓存、内置 uniform 表一致；语料里 eagleflag / deep_space / beach / razer_vortex 为空、razer_bedroom 只剩 `value:script`、其余非空，快速路径每张不超过 150 次请求 | 2026-11-01：6 个文件 109 passed（新增 `render/graph.test.ts` 18 个、`compile/p2a.test.ts` 21 个）；全前端 vitest 655 passed，4 个文件是既有失败（i18n mock、vue-jsx SSR 路径） |
+| [x] | S2 检查 | Windows | `check-kabegame`（vue-tsc + cargo check）；`test-kabegame kabegame-core --lib settings`；Prettier；rustfmt | 0 error；新增 `wpe_scene_postprocess_rejects_unknown_values` 通过 | 2026-11-01：vue-tsc 0、cargo 0 error；core settings 15 passed |
+| [x] | S3 能力表前后对比 | Windows | 语料表改动前后对比（`exhaustive`） | 新解锁 razer_vortex；bedroom 34 → 1 项；其余场景只少了噪音项，新增的都是真不支持（`tex:format:8/9`、`uniform:g_AudioSpectrum*`、`g_ParallaxPosition`、工坊着色器翻译失败、引用别的图层合成 RT） | 2026-11-01 |
+| [x] | D1 vortex 预览 | Windows dev | 图库预览 razer_vortex（12889） | 实时渲染：中间 Razer 标志与漩涡底图，THS 层在中间、色带沿径向滚动 | 2026-11-01 Claude 经 CDP：画布带 `live`、没有预览图；隔 1 秒两帧变化 15.8%；日志「3 层、3 个程序，后处理 disabled，用时 310 ms」，无 Tint 告警 |
+| [x] | D2 vortex 桌面 | Windows dev，窗口模式 | 设为桌面壁纸 | 同上，桌面在动 | 2026-11-01：壁纸窗口 3840×2160 画布 `live`、`media: scene`、rAF 141–144；页面内把画布画到 2D 画布取两帧，变化 22.7% |
+| [x] | D3 P1 不回归 | Windows dev | 主窗口临时画布渲染 eagleflag / deep_space / beach | 与 P1 一致（仍走直接上屏） | 2026-11-01：三张都无告警、在动（变化 50.8% / 2.0% / 26.0%）。一度发现 deep_space 的 Background 缩成中间一小块（没写 size 时先取了 480×270 的遮罩纹理尺寸），已改回先取模型 width / height 并加单测 |
+| [~] | D4 改属性不重解码 | Windows dev | 同一张场景改属性后重新编译 | 不重新解码底图 PNG | 2026-11-01：页面里用同一份 `TextureDecodeCache` 编译 vortex 两次（第二次改速度），解码仍是 7 次，第二次 149 ms（第一次 296 ms）。没有在属性面板里实改（会写图片 metadata）；「模式」要等 P3 脚本宿主才生效 |
+| [x] | D5 三档切换 | Windows dev | 设置里「场景后处理」切到开启 / 超高 / 关闭 / 跟随 WPE | 正在显示的场景立即重新判定、重新加载；bedroom 开启 / 超高时多出 `postprocess:*`；vortex（`bloom: false`）各档都实时渲染 | 2026-11-01：IPC 依次切四档、设置弹窗点「开启」再点回「跟随 WPE」，每次桌面、预览、应用背景三个实例都在 0.25–0.7 s 内重载，跟随时解析为 WPE 的 `disabled`；bedroom 四档的退回原因分别为 `value:script` / `+postprocess:bloom` / `+bloom、hdr` / `value:script`。测完设置为「跟随 WPE」 |
+| [x] | D6 bedroom 强制渲染 | Windows dev | dev 强制渲染 bedroom | 构图与 WPE 一致（灯光颜色因脚本取静态值而不同）；colorBlendMode 11 / 12 的灯光按混合模式叠到墙上 | 2026-11-01：主窗口临时画布 `force`，与作者 `preview.gif` 构图一致：灯带、左侧光晕、台灯粉光都在；霓虹字取脚本的静态值为红色（GIF 为绿色）；没有改 localStorage |
+| [x] | D7 与 WPE 实拍对照 | Windows | 用户在 WPE（后处理 disabled）里录 vortex 桌面，与 Kabegame 同尺寸画面对照 | 构图、颜色一致 | 2026-11-01：两边时钟起点不同，按 `g_Time` 相位扫描找最接近的时刻（t≈4.9 s）再比，1920 全图平均差 1.76、95% 像素差 ≤ 6，中心图标外框同为 297×277；后又用 RenderDoc 抓 4 帧、按常量缓冲里的精确 `g_Time` 钉时钟逐像素比：3840×2160 平均差 0.27–0.29/255、99% 像素差 ≤ 3、差 >16 仅 0.04%（各向异性采样在 frac 接缝的行为差异，不可见）；详见 `.claude/plans/wpe-import/3-scene/p2-REPORT.md` J2/J3 节 |
+| [ ] | M 非 Windows | macOS / Linux | 设置页 | 不显示「场景后处理」 | 未测 |
+
 ## 网页壁纸音量
 
 网页壁纸接入壁纸音量设置，并按 iframe 单独控制：应用背景静音，桌面与预览跟随 `wallpaperVolume`。

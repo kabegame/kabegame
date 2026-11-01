@@ -391,17 +391,169 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 
 ---
 
-## P2 — genericimage2、effect 链与合成语义（razer_vortex · razer_bedroom 静态）
+## P2 — effect 链、合成语义与后处理（razer_vortex；razer_bedroom 完整要等 P3）
 
-- **新增** 每个图层两张合成纹理（`_rt_imageLayerComposite_<id>_a/_b`）做 ping-pong；effect.json 的 `passes / fbos / bind / target`、
-  `previous`，fbo 按 `scale` 分配；effect 条目的 `combos / constantshadervalues / textures` 覆盖与 `{user}` 绑定。
-- **新增** `_rt_FullFrameBuffer`、`copybackground`、`solid`；`colorBlendMode` 与 `BLENDMODE` COMBO（对照 `common_blending.h`）；
-  场景级 hdr + bloom 链（`_rt_Bloom` 等）。
-- **新增** `.tex` 的 FreeImage 形态：mip 数据本身是 PNG / JPG，交给 `createImageBitmap` 解码。
-- **新增** bundle 加绑定表（属性名 → 图层 / pass / uniform）：用户改属性时渲染器直接改 uniform，只有影响 COMBO 的属性才重新编译。
-- **修改** `visible` 支持 `{user, condition}`。
-- 脚本绑定先取 `value` 默认值，不列入 `unsupported`，样本以静态形态通过。
-- **验收**：两张静态画面与预览图一致；改 `light_speed` 之外的属性生效（`light_speed` 只被脚本读取，P3 才生效）。
+**实现依据**：WPE 2.8.42 `wallpaper64.exe`（SHA-256 `40e2ce02…5cd993b0`）的只读静态逆向（2026-11-01，REA + Ghidra，见 D8；两轮报告全文与主会话核对记录见 [p2-REPORT.md](p2-REPORT.md)）。
+下文的函数名是 Ghidra 自动名，用来回查证据；与 LWE 冲突时以 WPE 为准。两张样本的脚本：vortex 的 3 处脚本都只导出
+`applyUserProperties`，bedroom 的 6 处都导出每帧 `update`。
+
+### P2a — 渲染图、effect 链、混合模式、后处理档位（`disabled` 档完整）
+
+- **新增** 设置「场景后处理」`跟随 WPE`（默认）/ `关闭` / `开启` / `超高`（D9）。
+  - 跟随 WPE：只读 WPE 安装目录的 `config.json` 的 `postprocessing`。WPE 只认 `disabled` / `ultra` / `displayhdr`，其它非空值当「开启」，
+    缺失当 `disabled`（`FUN_140046f20` 填默认值，`FUN_14010df40` 判定）；`displayhdr` 按「超高」处理（我们输出到普通画布）；读不到也按 `disabled`。
+  - 每次加载场景时解析档位；改设置后正在显示的场景重新判定、重新加载。
+  - 场景实际状态：**泛光** = 档位不是关闭，且 `general.bloom` 的生效值不为 false（缺键即开，构造默认标志 0x26，`FUN_140186c90`；
+    setter `FUN_14019b4e0` 对 bool 或带 bool `value` 的对象都改位，写成属性对象时取绑定属性的当前值）；
+    **HDR** = 档位为超高，且 `general.bloom`、`general.hdr` 都显式为 bool `true`（缺键或写成属性对象都不算）。
+  - P2a 只实现「泛光关、HDR 关」：泛光或 HDR 实际开启时记 `postprocess:bloom` / `postprocess:hdr`，P2b 去掉；`general.bloom` / `general.hdr` 键本身不再记。
+- **修改** 能力表（`compile/features.ts`）只报真正改变画面的特性：
+  - `copybackground` 只对 passthrough 模型（`composelayer` / `fullscreenlayer` / `projectlayer`，仍报 `model:passthrough`）生效，普通图像模型上忽略；
+    `solid` 不参与渲染（推断与交互有关），忽略。
+  - `brightness` 只在 HDR 下乘进颜色，P2a 不乘、不报。
+  - `colorBlendMode`：0 普通；31 改成 additive；其它值走 passthrough（见下）。
+  - effect 不再整条报 `effect:<name>`，改为逐项检查它的材质、着色器与字段。
+  - 其余噪音项（关闭的 cameraparallax / camerashake、`zoom` 1、`ledsource`、零 `parallaxDepth`、居中 `alignment`、`autosize`、
+    `camerafade`、`preview`、正交投影下的 `farz` / `fov` / `nearz` 等）逐项给出依据再放行，拿不准的继续报。
+- **修改** 脚本绑定（D10）：只导出 `applyUserProperties`、没有 `update` / `init` 的脚本按 `value` 静态处理、不报；其余报 `value:script`（P3）。
+  已知限制：用户属性对这类脚本的影响 P3 才生效（vortex 切换 mode 不变色）。
+- **新增** 图层渲染图（`FUN_1401ea500` 分配、`FUN_1401e8aa0` 执行、`FUN_1401ebf60` effect pass）：
+  - **合成 RT**：只有存在启用的 effect 或走 passthrough 时才分配，最多 2 张 ping-pong。
+    - 尺寸取基础材质槽 0 纹理的**图像**尺寸（精灵表取单帧，没有纹理取图层 `size`），再取 max(4, ·)；UV 缩放 = 图像尺寸 / 纹理尺寸（`FUN_1402091e0`）。
+    - 格式：LDR `rgba8unorm`，HDR `rgba16float`（P2b）。WPE 按尺寸跨图层共享池（`sc.<W>.<H>…`），可作为优化。
+  - **基础 pass**：关闭混合（不透明写入、保留 alpha），正交投影画满合成 RT；`g_Color4 = (color · k, alpha)`，HDR 时 k = brightness，否则 k = 1。
+    颜色只在基础 pass 设置一次（`FUN_140208670`）。
+  - **effect**：未启用的（`visible` 为 false 或绑定结果为 false）整步跳过，也不计入上屏计数。
+    运行时切换可见性会重算合成次数与 pass 数，有变化就重算尺寸、几何、合成 RT 与 passthrough 材质（`FUN_1401e6300` → `FUN_1402065e0`）；
+    「最后一个启用 effect」每帧按计数判定。
+  - **effect.json 的 `fbos`**：
+    - `format`：`rgba_backbuffer` / `rgb_backbuffer` 随 HDR 变化，其它名字查格式表，不认识的按 rgba8888；
+    - `scale`：整数除数，默认 1；`width` / `height`：≤4096 时覆盖尺寸；
+      `fit`（≤4096 时生效）：W' / H' 取 width / height 或合成 RT 尺寸，W' < H' 时 h = min(fit, H')、w = W'/H'·h，否则 w = min(fit, W')、h = H'/W'·w，
+      截断成整数后再除以 scale；width / height / fit 缺省 0xffff，即不生效；
+    - `unique`：每层独占，否则同尺寸共享；`clear`：`"r g b [a]"`，创建或 resize 后清成该色；`uvs: "repeat"`：重复寻址，否则 clamp；
+    - 尺寸 = 合成 RT ÷ scale，最小 2。
+  - **effect.json 的 `passes`**：
+    - `command`：缺省为绘制；`copy` = 把 `source` 整张复制到 `target`；`swap` = 不做 GPU 工作，只交换后续 pass 里引用这两个 fbo 的下标；
+    - `target` 缺省为合成链；`compose: true` 写入合成 ping-pong；
+    - `bind [{name, index}]`：找不到的名字（如 `previous`）= 当前合成 RT。
+  - **材质 `textures` 里的 `null`**：由运行时填。没有 `bind` 时槽 0 = 上一步输出；有 `bind` 时只按 bind 赋值，不自动填槽 0。
+  - **effect 实例**：`combos` / `constantshadervalues` / `textures` 覆盖与 `{user}` 绑定照旧（`light_speed` 经用户绑定驱动 scroll 的 speedx / speedy）。
+  - **上屏**：只有最后一个启用 effect 的最后一个绘制 pass，用图层世界四边形、场景视图投影 × 图层模型矩阵画到场景，
+    并借用基础材质的 blend 与深度状态（`FUN_140209160`）；其余 pass 画全屏四边形到各自目标。
+    效果矩阵见下方「内置 uniform」。
+  - **colorBlendMode ∉ {0, 31}**（`FUN_1401e6f50`、`FUN_1401ebbc0`）：
+    - 合成 RT 数 +1，所有 effect 都留在合成 RT；
+    - 最后用 passthrough 材质上屏：场景 `scene.json` 顶层 `version` > 2 时用 `effectpassthrough_4.json`（genericimage4），否则用 `effectpassthrough.json`（genericimage3），
+      缺键按 0（`FUN_1401ecae0` → 0x1401853b0）。这与显卡、画质设置无关。
+      本机默认样本都 ≤1，走 genericimage3；本机工坊 13 张里 11 张 ≥3，走 genericimage4，它无条件 `#require LightingV1`，要等 W1 打桩才能翻译；
+    - combos 为 `BLENDMODE = cbm`、`FOG_COMPUTED = 1`，颜色 (1,1,1,1)，blend 取基础材质的，用图层几何上屏；没有 effect 时也走「基础 pass → 合成 RT → passthrough」。
+  - **`_rt_FullFrameBuffer`**：场景目标的整帧快照，用 `copyTextureToTexture` 拷到独立纹理，**绝不采样正在写的目标**（LWE 的 GL 反馈环在 WebGPU 里是校验错误）。
+    - 拷贝时机，三处都要求本图层还没拷过：
+      - 图层开始时：基础材质需要帧缓冲或 cbm ∉ {0,31}；且图层非 fullscreen、或 cbm ∉ {0,31}、或有子层；且没有父层、或父层不是 passthrough 模型；
+      - 需要帧缓冲的 effect 的第一个 pass 之前；
+      - 最终上屏 pass 之前。
+    - 内容 = 画到本图层之前的场景。
+    - `g_Texture4` 等注解为 `"default": "_rt_FullFrameBuffer"` 的槽绑定它。
+    - 「需要帧缓冲」由材质创建时算出（`FUN_1401515b0`）：材质的某个纹理槽最终解析到的名字是 `_rt_FullFrameBuffer`。
+      解析顺序为材质 `textures` 里给的名字，没给取着色器注解的 `default`，都没有则为 `error`。
+      effect 里任一 pass 的材质需要，该 effect 就需要（`FUN_1401e7170`）。
+      同一张表里 `_rt_Reflection`、`_rt_MipMappedFrameBuffer` 各有自己的标志位，P2 用不到。
+  - **颜色空间**：全程在 sRGB 编码空间计算。LDR 场景画完直接上画布，没有合成步骤。
+- **新增** `.tex` 的 FreeImage 形态（`freeimage` ≠ −1，mip 数据是 PNG / JPG）：
+  - 用 `createImageBitmap` 解码（`colorSpaceConversion: "none"`、`premultiplyAlpha: "none"`）。
+  - 纹理尺寸：WPE 解码前把头里的纹理尺寸强制改成图像尺寸（`FUN_14015c8d0`），所以 UV 缩放为 1。
+    例如头写 4096×4096、图像 3840×2160 时，两组尺寸都是 3840×2160，两组尺寸都取头字段、不取解码结果。
+  - 解码后的纹理跨重新编译缓存，改属性时不重复解码 4K PNG。
+- **新增** 内置 uniform 取值（`FUN_1400d8300`，P1 已有的按此校正）：
+  - `g_Color4` = (color · k, alpha)；`g_Alpha` = alpha；`g_Color` = color · k。
+  - 纹理：
+    - `g_TextureNResolution` = (纹理宽, 纹理高, 图像宽, 图像高)，空槽 (2,2,2,2)；
+    - `g_TextureNTexel` = (1/纹理宽, 1/纹理高, 纹理宽, 纹理高)，空槽 (0.5,0.5,2,2)；
+    - `g_TextureNMipMapInfo` = max(0, mip 信息)，空槽 1。
+  - 屏幕：
+    - `g_TexelSize` = 1 / 屏幕尺寸，`g_TexelSizeHalf` = 0.5 / 屏幕尺寸，`g_Screen` = (w, h, w/h)；
+    - 屏幕尺寸是窗口（后备缓冲）尺寸，在合成 RT、fbo、泛光 pass 里也**不随目标变**。我们按场景目标尺寸取，窗口与场景分辨率相同时等价。
+  - 时间：
+    - `g_Time` = 逐帧累加的秒数，超过 432000 归零；`g_Frametime` = 本帧 dt；
+    - `g_Daytime` = 本地时间的一天中占比，h/24 + m/1440 + s/86400 + ms/8.64e7，范围 [0,1)。
+  - 指针：
+    - `g_PointerPosition` = 光标的窗口归一化坐标，原点左上、y 向下；`g_PointerPositionLast` = 上一帧的值；
+    - `g_PointerState` = (按下, 按下, 本帧刚按下, 0)。
+  - 效果矩阵：着色器能力位 4 才写，w、h 取图层 `size`。
+    - 效果 pass：`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)；`g_EffectModelViewProjectionMatrix` = 图层开始时的 MVP × 同一缩放；
+      `g_EffectTextureProjectionMatrix` 与后者相同。
+    - 上屏 pass：前两者不缩放，纹理投影 = MVP × scale(w/2, h/2)。
+    - 各 `…Inverse` 由对应矩阵求逆。
+- **验收**：
+  - razer_vortex 的 `unsupported` 为空，桌面与预览都渲染，与 WPE 真机截图一致（用户当前 WPE 后处理为 `disabled`，vortex 本身 `bloom: false`）。
+  - razer_bedroom 仍退回预览图，`unsupported` 只剩 `value:script`（档位不是关闭时另有 `postprocess:*`）；dev 强制渲染下构图与 WPE 一致，颜色因脚本不同。
+  - eagleflag / deep_space / beach 不回归。
+  - 本机默认样本与工坊样本的 `unsupported` 前后对比：列出新解锁的场景并抽查。
+  - 单测覆盖：合成 RT 计数与上屏 pass 选择、`swap` 下标交换、`copy`、快照时机、能力表裁决、档位解析、脚本静态规则。
+  - 三档切换后，正在显示的场景按规则重新判定。
+- **落地（2026-11-01，opus 子代理实现）**：
+  - 编译：`compile/postprocess.ts`（档位）、`compile/decode.ts`（FreeImage 主线程解码与缓存）、`features.ts` 重写、`bundle.ts` 增加 effect / passthrough / 注解默认纹理 / `needsFramebuffer` / `passthroughMaterial`、`tex.ts` 的 `encoded` 与 `freeImageTextureSize`、`fs.ts` 的 `location` 与 `readScoped`。
+  - 渲染：`render/graph.ts`（`planLayer`、`fboSize`、`FboBindings`）、`scene.ts` 按步骤执行（`drawMatrices`）、`uniforms.ts` 按「内置 uniform」校正、`textures.ts` 位图上传、`programs.ts` 管线按目标格式与是否写 alpha。
+  - 设置：core `SettingKey::WpeScenePostprocess` + `get/set_wpe_scene_postprocess`，前端 descriptor、设置页壁纸分区一行、五种语言；`WpeSceneView` 每次重载读设置、订阅 `setting-change` 重载，按目标持有纹理解码缓存。
+  - 验收：vortex 解锁并在预览 / 应用背景 / 桌面实时渲染；bedroom 只剩 `value:script`；P1 三张不回归；单测 / 语料 / 检查全过（见回归文档「场景壁纸 P2a」）。与 WPE 实拍的对照待主会话。
+- **与规格的差异 / 实现选择**：
+  - **合成 RT 计数**按「写进合成链的次数」算：基础 pass、每个 effect 的最后一个绘制 pass、每个 `compose` pass 各一次，上屏的不算，min(2, ·)。正常 effect 下等于 WPE 的 `min(2, passthrough + Σ(1 + compose))`；一个 effect 里有多个无 target、非 compose 的绘制 pass 时（WPE 公式没覆盖），这里每个都 ping-pong 一次（推断）。
+  - **合成 RT 池**按尺寸 + 采样方式跨图层共享，passthrough 下第 0 张也不独占（WPE 是 `_rt_imageLayerComposite_<id>_a`）；图层依次画、基础 pass 整张覆盖，画面没有差别。非 unique fbo 按名字、尺寸、格式、寻址共享。
+  - **没有 bind 时槽 0 = 上一步输出**按字面无条件覆盖材质槽 0；有 bind 时 bind 覆盖材质值。`compose: true` 即使写了 target 也写合成链。
+  - **copy** 用 `copyTextureToTexture`，要求两端格式相同（不同就 `render:copy-format` 退回），尺寸取交集；D3D `CopyResource` 要求同尺寸，WPE 遇到不同尺寸的行为未知。
+  - **fbo `scale`** 在 width / height / fit 之后统一整除（规格「截断成整数后再除以 scale」只写了 fit 的情形）。
+  - **着色器能力检查**不再按名字白名单：没有 `meta.material` 的 uniform 必须在 `ENGINE_UNIFORMS` 里（`uniform:<名>`），值非 0 的引擎 COMBO 报 `combo:<名>`，`_rt_*` 只认快照与本 effect 的 fbo。着色器声明了、材质没给的槽位按注解 `default` 绑定纹理（同 LWE；如 tint 的 `util/white`）。
+  - **effect 资源查找**（规格没写）：effect.json 来自 assets 时先查 effect 目录，来自项目 / pkg 时先查根下的项目 / pkg 文件、再查 effect 目录、最后根下的 assets（razer 系项目自带的 `effects/tint` 与 assets 里内置的同名目录并存）。头文件不按 effect 查。
+  - **快速退回**（规格没写）：运行时一旦 `unsupported` 非空就不再编译后面的图层与 effect，退回的工坊场景从约 250 次读取降到 2–4 次，预览图更早出现；代价是日志里的清单只是部分。`exhaustive` 列全，语料测试与能力表统计用它。
+  - **size 回退顺序**：没写 `size` 时先取模型 width / height，再取基础纹理的图像尺寸（与 LWE 相反）；按 LWE 的顺序 deep_space 的 Background（槽 0 是 480×270 遮罩、模型 1920×1080）会缩成一小块，P1 一直按模型取。
+  - **内置 uniform 校正**（P1 已有、取值有变）：`g_Texture<n>Resolution` 空槽由 0 改为 (2,2,2,2)；`g_TexelSize` 由场景分辨率改为场景目标尺寸（不超设备上限时相同）；`g_Daytime` 由 `(时×60+分)/1440` 改为精确到毫秒；`g_PointerPosition` 由场景坐标（左下原点、按 cover 换算）改为画布归一化坐标（左上原点、y 向下）；`g_Time` 加 432000 秒回绕；效果矩阵按 effect / 上屏 pass 分别取值（P1 的直接上屏与基础 pass 沿用原值，纹理投影单位阵）。新增 `g_Texture<n>Texel`、`g_Screen`、`g_Frametime`、`g_PointerState`（不跟踪按键，恒 0）、`g_ModelMatrixInverse` 与效果矩阵的 Inverse。`g_Texture<n>MipMapInfo` 没做，用到照报。
+  - **dev 强制渲染**（D4 原本未落地）：`localStorage["kabegame-dev-scene-force-render"] = "1"`，只在 dev 构建生效，渲染器自查仍生效。
+  - **config.json 多用户**：取第一个有 `general.user.postprocessing` 的 Steam 用户（WPE 按当前登录用户，我们拿不到）。
+- **遗留**：
+  - 与 WPE 实拍的 vortex 对照：**已完成**（2026-11-01，按相位扫描对齐后 1920 全图平均差 1.76、95% 像素差 ≤ 6，见 `p2-REPORT.md` J 节）；
+    vortex 的「模式」属性要 P3 脚本宿主才生效。
+  - **ledsource 图层走 passthrough**（RenderDoc 抓帧证实，`p2-REPORT.md` J 节）：vortex 的 led 层 colorBlendMode 为 0，WPE 仍是
+    「基础 pass → 合成 RT → effect 画进第二张合成 RT → passthrough 上屏」，触发它的应是逆向里含义未知的图层标志 0x100（推断即 `ledsource`）。
+    我们按普通图层处理（effect 最后一步直接上屏），能力表也把 `ledsource` 当中性放行。这层在屏幕外，画面无差别；
+    遇到屏幕内的 ledsource 图层前要对齐：确认 0x100 的置位属性，`needsComposite` / `isPassthroughBlend` 把它算进 passthrough。
+  - effect 可见性的运行时切换：现在改属性整场重编译，计数随之重算，没有 WPE 那种不重编的切换。
+  - 精灵表单帧（合成 RT 尺寸、`SPRITESHEET` 仍报）；基础材质多 pass 仍报 `render:multi-pass`。
+  - `g_EffectTextureProjectionMatrix` 只在 effect / 上屏 pass 按规格取值；没有样本用到，没验证。
+  - 主窗口临时画布测试时第一张样本有一次用了约 160 秒才出第一帧（编译 248 ms），之后各张都在 2 s 内，未复现；疑与窗口当时被遮挡、rAF 暂停有关，未定位。
+  - P1-5 的场景 → 场景空档仍在。
+
+### P2b — 泛光与 HDR（`开启` / `超高` 档）
+
+- **新增** LDR 泛光（`FUN_140183610` LDR 分支）：
+  - 链路：`downsample_quarter_bloom`（`_rt_FullFrameBuffer` → `_rt_4FrameBuffer`，1/4）→ `downsample_eighth_blur_v`（→ `_rt_8FrameBuffer`，1/8，13 tap）
+    → `blur_h_bloom`（→ `_rt_Bloom`，1/8）→ `combine_ldr`（`scene + bloom`，a = 1，不截断）。
+  - `bloomstrength` / `bloomthreshold` / `bloomtint` 原样写进第一个下采样材质；RT 为 `rgba8unorm`，尺寸 max(2, W / 除数)，线性过滤 + clamp。
+- **新增** HDR（`FUN_140183610` HDR 分支、`FUN_140184020` 参数）：
+  - 场景目标、合成 RT、`*_backbuffer` fbo 都用 `rgba16float`；brightness 乘进 `g_Color4`。
+  - **金字塔**：
+    - L0 = 1/2（`hdr_downsample_bloom` 从场景下采样），之后逐级 1/2；
+    - 可用级数 = min(w,h) 逐次减半仍 ≥1 的次数，最多 8；N = min(`bloomhdriterations`, 可用级数)，至少 1；
+    - 上采样用 additive 混合，u ≥ N−2 用 `hdr_upsample_cubic`，否则用 `hdr_upsample`。
+  - **`g_RenderVar0`** = (tx, ty, −tx, −ty)：下采样取源纹素，上采样取目标纹素。
+  - **参数换算**：
+    - `g_BloomStrength = bloomhdrstrength / (1 + scatter^(max(N,2)−2))`；
+    - `blend = (t, t−k, 2k, 0.25/(k+1e−5))`，t = bloomhdrthreshold，k = t·bloomhdrfeather；
+    - `scatter` 写给两个上采样材质。
+  - **收尾**：
+    - 有泛光时 WPE 用 `combine_hdr_upsample` 输出 `saturate(lin(scene + bloom)) · RV0.x`，SDR 显示时 RV0.x = 1（设备虚表 +0x158）。
+      `lin()` 是 sRGB 解码，FP16 交换链再按线性显示，所以在普通画布上等价于 `saturate(scene + bloom)`；
+    - 无泛光时 `combine_srgb` 等价于 `saturate(scene)`。
+- **新增** 缺键默认值（场景构造函数）：strength 2、threshold 0.65、hdrstrength 2、hdrthreshold 1、feather 0.1、scatter 1.619、iterations 8、tint (1,1,1)；
+  `clearenabled` 默认开，清屏色为 (clearcolor, 1)，与图层同一编码空间。
+- **验收**：用户把 WPE 后处理临时调到「开启」/「超高」后截图对照；bedroom 在 dev 强制渲染下构图与泛光和 WPE 一致。
+
+### P2 仍未知（按 LWE 约定实现，靠截图兜底）
+- `g_ParallaxPosition` 的计算细节（视差功能关闭时用不到）。
+- `solid`：渲染侧没有读取点，推断只与交互 / 命中检测有关。
+- 材质 `+0x1f8` bit2（「材质自带尺寸」）的置位点；精灵表单帧尺寸的细节（TEXS 帧表）。
+- 渲染标志 0x1800000 的设置者（壁纸进程里没有，推断属于编辑器）。
+- 图层标志 0x100（触发 passthrough）由哪个属性置位：RenderDoc 抓帧里只有 `ledsource` 图层走了 passthrough，推断是它；可用 REA 查图层属性表里写 `+0x304` 0x100 的 setter 坐实。
 
 ## P3 — SceneScript 基础（razer_vortex · razer_bedroom 完整）
 
@@ -412,6 +564,8 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   - API 适配对象：`engine.frametime / runtime / userProperties`、`thisObject` / `thisLayer` 属性代理，`console` 进应用日志。
 - **新增** 每帧协议：渲染器发 `{ time, frametime, input, changedProps }`，宿主回 `{ bindingId → value, objectProps }`，
   渲染器等到回包再画这一帧，取不到就沿用上一帧。脚本报错只禁用该段并记日志，不影响渲染。
+- **新增**（自 P2 挪来，D11）bundle 绑定表（属性名 / 脚本绑定 → 图层 / pass / uniform）：脚本每帧的值与用户改属性都直接改 uniform，
+  只有影响 COMBO 的属性才重新编译。
 - **验收**：vortex 切换 mode 后颜色模式跟着变；bedroom 的灯光按 `light_speed` 变色循环。
 
 ## P4 — 粒子（shimmering_particles）
@@ -529,7 +683,9 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 
   两者都只在 `KABEGAME_WPE_ROOT` 指向 WPE 安装目录时运行，没有就跳过，CI 不依赖本机文件。
   断言已解锁样本的 `unsupported` 为空、它们用到的 shader 变体全部翻译通过。
-- **对照图**：用项目自带的 `preview.jpg` / `preview.gif`。需要逐帧对照时请用户在 WPE 里截图，我们不运行 WPE。
+- **对照图**：作者的 `preview.jpg` / `preview.gif` 常经过后期处理，只作粗对照；以 WPE 的实际画面为准（D12：可以自己运行 WPE 截图，
+  逐 pass 核对时用 RenderDoc 抓帧）。截图前确认 WPE 的后处理档位（用户当前为 `disabled`，不画泛光、不走 HDR），对照泛光时临时调高、用完恢复。
+  我们这边用「指定 `g_Time` 渲染 + 同步读回」扫描相位，与 WPE 静帧找最接近的时刻再比，绕开两边时钟起点不同。
 - **许可**：Kabegame 本身是 GPLv3，可以移植 linux-wallpaperengine（GPLv3）的代码，在文件头注明出处与原文件路径（如 `pkg.ts`）；
   RePKG 是 MIT；naga 是 MIT / Apache-2.0。
   WPE 自带的 shader、脚本模块和工具材质都在运行时从用户的安装目录读取，不随应用分发。
@@ -548,6 +704,14 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **D6 阶段合并**：上级计划的阶段 3 / 4 合并成本阶段，不再新建 `4-scene-fx/`。
 - **D7 工坊排在 3D 之前（2026-11-01 确认）**：本机已有工坊 scene（2026-11-01 为 13 张），按 D5 的约定排成 P6 → W1–W6 → P7–P8。
   理由：工坊是用户实际订阅的内容，而 3D 默认样本是 WPE 自带的演示；W1 的 `LightingV1` 打桩、W2 的音频订阅也是 P7 / P8 的前置。
+- **D8 合成语义以 WPE 逆向为准（2026-11-01）**：用户同意对 WPE 程序做只读静态逆向（复制到 scratchpad 分析副本，不运行、不附加进程、不写安装目录）；
+  计划里只写行为、常量与地址，不搬运反编译代码。LWE 只作参考。
+- **D9 后处理档位（2026-11-01）**：Kabegame 设置「场景后处理」，默认跟随 WPE 的 `postprocessing`，也可固定为关闭 / 开启 / 超高；同时充当集显的性能开关。
+- **D10 脚本静态规则（2026-11-01）**：P3 之前，带 `update` / `init` 的脚本绑定整张退回；只导出 `applyUserProperties` 的按 `value` 静态显示。
+- **D12 WPE 访问约定修订（2026-11-01）**：早先「只读、不运行、不附加 WPE」是代理自己加的，用户明确为了产品质量放开。
+  现在可以运行 WPE、在其中切换壁纸与设置、用 RenderDoc 等工具附加进程抓帧，拿每个 pass、中间纹理与 uniform 的真值核对实现；
+  不改动、不删除用户的壁纸、工程与创意工坊内容；为对照临时改的 WPE 设置用完恢复并记录。D8 的静态逆向结论可以用动态抓帧复核。
+- **D11 P2 拆分（2026-11-01）**：P2a 渲染图与 `disabled` 档，P2b 泛光与 HDR；属性绑定表挪到 P3，和脚本每帧改 uniform 共用一条通路。
 
 ---
 
@@ -558,7 +722,8 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   真正的光照留给 P8，另有阴影与工坊着色器里 HLSL 的隐式截断。翻译器的语料测试还没覆盖 pkg 里的工坊着色器，W1 补上。
   后者需要类型信息，规则改写做不到，遇到时再评估：要么扩展翻译器，要么在 naga 的 IR 上处理。
 - **浏览器 WGSL 校验**：naga 输出、naga 回读都通过，但 Tint 还没验证过（P1 真机首项）。
-- **合成语义没有规格**：`colorBlendMode` 数值表、`copybackground`、fbo 缩放、bloom 链都只能对照预览图和 LWE 的行为。
+- **合成语义**：效果链、混合模式、`copybackground`、fbo、泛光与 HDR 已由 WPE 逆向取得规格（P2，D8）；剩余未知见「P2 仍未知」。
+  WPE 版本升级可能改变这些行为，逆向结论绑定 2.8.42。
 - **粒子与脚本语义**：算子公式、`update` 的调用时机都靠对照；脚本跨 realm 后，`createLayer` 返回的是下一帧才生效的代理，与 WPE 的同步语义可能有差别（P6 验证）。
 - **GPU 与主线程开销**：预览与桌面同时渲染 4K 场景；壁纸窗口在 WorkerW 下的 WebGPU 行为未验证。
   首次打开的大头是 GPU 进程编译 pipeline，靠 Chromium 的 GPU 着色器磁盘缓存与翻译结果缓存缓解。

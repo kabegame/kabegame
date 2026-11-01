@@ -1,5 +1,6 @@
 /**
- * 纹理上传：RGBA8888（格式 0）与 DXT5（格式 4 → `bc3-rgba-unorm`）连同全部 mip 直接交给 GPU，不做 CPU 解码。
+ * 纹理上传：RGBA8888（格式 0）与 DXT5（格式 4 → `bc3-rgba-unorm`）连同全部 mip 直接交给 GPU，不做 CPU 解码；
+ * FreeImage 形态（PNG / JPG）由主线程解成 `ImageBitmap`（`compile/decode.ts`），这里 `copyExternalImageToTexture`。
  * 采样方式照 linux-wallpaperengine（GPLv3）`src/WallpaperEngine/Render/CTexture.cpp` 的 `setupOpenGLParameters`：
  * ClampUVs → clamp，否则 repeat；NoInterpolation → nearest，否则线性 + 三线性 mip + 8 倍各向异性。
  *
@@ -74,10 +75,30 @@ export function planTextureUpload(texture: SceneTexture): MipCopyLayout[] {
     if (mip.width !== mipSize(base.width, level) || mip.height !== mipSize(base.height, level))
       throw new SceneRenderError([`webgpu:texture-mip:${texture.path}:${level}`]);
     const layout = mipCopyLayout(texture.format, mip.width, mip.height);
-    if (mip.bytes.byteLength < layout.byteLength)
+    if (!mip.bytes || mip.bytes.byteLength < layout.byteLength)
       throw new SceneRenderError([`webgpu:texture-data:${texture.path}:${level}`]);
     return layout;
   });
+}
+
+/**
+ * 主线程解码的位图（FreeImage 形态）的上传计划：GPU 纹理按「纹理尺寸」（`textureWidth / textureHeight`）建，
+ * 第 l 级位图拷到第 l 级 mip 的左上角，所以位图不能超过该级尺寸。返回 mip 级数。
+ */
+export function planBitmapUpload(
+  texture: Pick<SceneTexture, "path" | "format" | "textureWidth" | "textureHeight" | "mips">,
+): number {
+  if (texture.format !== 0) throw new SceneRenderError([`webgpu:texture-format:${texture.format}:${texture.path}`]);
+  if (!texture.mips.length) throw new SceneRenderError([`webgpu:texture-empty:${texture.path}`]);
+  texture.mips.forEach((mip, level) => {
+    if (
+      !mip.bitmap ||
+      mip.width > mipSize(texture.textureWidth, level) ||
+      mip.height > mipSize(texture.textureHeight, level)
+    )
+      throw new SceneRenderError([`webgpu:texture-mip:${texture.path}:${level}`]);
+  });
+  return texture.mips.length;
 }
 
 export function samplerDescriptor(
@@ -100,6 +121,25 @@ export function samplerDescriptor(
 
 /** 建 GPU 纹理并写入全部 mip。 */
 export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUTexture {
+  if (texture.mips[0]?.bitmap) {
+    const levels = planBitmapUpload(texture);
+    const gpu = device.createTexture({
+      label: texture.path,
+      size: { width: texture.textureWidth, height: texture.textureHeight },
+      format: "rgba8unorm",
+      mipLevelCount: levels,
+      // copyExternalImageToTexture 要求目标带 RENDER_ATTACHMENT
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    texture.mips.forEach((mip, level) =>
+      device.queue.copyExternalImageToTexture(
+        { source: mip.bitmap! },
+        { texture: gpu, mipLevel: level, premultipliedAlpha: false },
+        { width: mip.width, height: mip.height },
+      ),
+    );
+    return gpu;
+  }
   const plan = planTextureUpload(texture);
   const base = texture.mips[0];
   const gpu = device.createTexture({
@@ -110,7 +150,7 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
   });
   plan.forEach((layout, level) => {
-    const bytes = texture.mips[level].bytes;
+    const bytes = texture.mips[level].bytes!;
     device.queue.writeTexture(
       { texture: gpu, mipLevel: level },
       bytes as Uint8Array<ArrayBuffer>,

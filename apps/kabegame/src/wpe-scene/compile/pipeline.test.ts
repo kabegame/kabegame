@@ -93,6 +93,7 @@ function memoryFile(bytes: Uint8Array) {
     source: "project" as const,
     path: "x.tex",
     size: bytes.length,
+    location: { path: "x.tex", offset: 0 },
     async readRange(start: number, end: number) {
       return bytes.slice(start, end);
     },
@@ -145,7 +146,8 @@ describe("场景编译基础", () => {
       { general: { bloom: true }, objects: [{ id: 2, particle: "particles/a.json", parent: 1 }] },
       keys,
     );
-    expect(keys).toEqual(new Set(["camera:perspective", "general:bloom", "object:particle", "object:parent"]));
+    // general.bloom 交给后处理档位裁决（postprocess:*），不再按键报
+    expect(keys).toEqual(new Set(["camera:perspective", "object:particle", "object:parent"]));
   });
   it("LZ4 已知向量及损坏输入", () => {
     expect(decodeLz4Block(new Uint8Array([0x40, 65, 66, 67, 68]), 4)).toEqual(new Uint8Array([65, 66, 67, 68]));
@@ -368,24 +370,43 @@ if (root && existsSync(workshop))
 const wasm = join(__dirname, "..", "wpesl2wgsl", "wpesl2wgsl.wasm");
 
 describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
-  it("全部场景编译、P1 解锁、读取及请求次数有界", async () => {
+  it("全部场景编译、P1 / P2a 解锁、读取及请求次数有界", async () => {
     const translator = await Wpesl2wgsl.fromBytes(readFileSync(wasm));
     const rows: { sample: string; unsupported: string; calls: number; misses: number; bytes: number }[] = [];
-    for (const name of ["eagleflag", "deep_space", "beach"])
+    const unlocked = ["eagleflag", "deep_space", "beach", "razer_vortex"];
+    for (const name of [...unlocked, "razer_bedroom"])
       expect(
         projects.some((dir) => dir.split(/[\\/]/).at(-1) === name),
         name,
       ).toBe(true);
+    const failures: string[] = [];
+    const check = (ok: boolean, message: string) => {
+      if (!ok) failures.push(message);
+    };
     try {
       for (const dir of projects) {
+        // 运行时的形态：确定退回就停（统计请求与读取量）
         const tally: FetchTally = { calls: 0, misses: 0, bytes: 0, singleByteRanges: 0 };
         vi.stubGlobal("fetch", nodeFetch(tally));
+        // 后处理固定为关闭，结果不随本机 WPE 设置变化（档位裁决另有单测）
+        const fast = await compileScene({
+          projectDir: dir,
+          sceneAssets: [join(root!, "assets")],
+          reader: new FetchSceneReader(),
+          translator,
+          postprocess: "disabled",
+        });
+        // 列全不支持项（能力表统计）
+        vi.stubGlobal("fetch", nodeFetch({ calls: 0, misses: 0, bytes: 0, singleByteRanges: 0 }));
         const bundle = await compileScene({
           projectDir: dir,
           sceneAssets: [join(root!, "assets")],
           reader: new FetchSceneReader(),
           translator,
+          postprocess: "disabled",
+          exhaustive: true,
         });
+        check(fast.unsupported.length > 0 === bundle.unsupported.length > 0, `${dir}: 快速路径与完整编译的结论不同`);
         const sample = dir.split(/[\\/]/).at(-1)!;
         rows.push({
           sample,
@@ -394,30 +415,38 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
           misses: tally.misses,
           bytes: tally.bytes,
         });
-        if (["eagleflag", "deep_space", "beach"].includes(sample)) {
-          expect(bundle.unsupported, sample).toEqual([]);
-          expect(bundle.programs.length, sample).toBeGreaterThan(0);
-          expect(
-            bundle.textures.every((texture) => texture.width > 0 && texture.height > 0 && texture.mips.length > 0),
-            sample,
-          ).toBe(true);
-          const expected: Record<string, [string, number, number, number]> = {
-            eagleflag: ["materials/eagle.tex", 2048, 1024, 10],
-            deep_space: ["materials/galaxy_2_base.tex", 1920, 1080, 11],
-            beach: ["materials/beach.tex", 1536, 1024, 1],
-          };
+        if (unlocked.includes(sample)) {
+          check(bundle.unsupported.length === 0, `${sample}: ${bundle.unsupported.join(", ")}`);
+          check(bundle.programs.length > 0, `${sample}: 没有程序`);
+          // FreeImage 形态的 mip 由主线程解码，这里只有区间
+          check(
+            bundle.textures.every(
+              (texture) => texture.width > 0 && texture.height > 0 && (texture.mips.length > 0 || !!texture.encoded),
+            ),
+            `${sample}: 纹理缺 mip`,
+          );
+        } else check(bundle.unsupported.length > 0, `${sample}: 意外解锁`);
+        if (sample === "razer_bedroom")
+          check(bundle.unsupported.join(",") === "value:script", `razer_bedroom: ${bundle.unsupported.join(", ")}`);
+        const expected: Record<string, [string, number, number, number]> = {
+          eagleflag: ["materials/eagle.tex", 2048, 1024, 10],
+          deep_space: ["materials/galaxy_2_base.tex", 1920, 1080, 11],
+          beach: ["materials/beach.tex", 1536, 1024, 1],
+        };
+        if (expected[sample]) {
           const [path, width, height, mipCount] = expected[sample];
           const texture = bundle.textures.find((item) => item.path === path);
-          expect(texture, sample).toMatchObject({ width, height });
-          expect(texture?.mips, sample).toHaveLength(mipCount);
-        } else expect(bundle.unsupported.length, sample).toBeGreaterThan(0);
-        expect(tally.bytes, sample).toBeLessThan(64 * 1024 * 1024);
-        expect(tally.singleByteRanges, sample).toBe(0);
-        expect(tally.calls, sample).toBeLessThanOrEqual(150);
+          check(texture?.width === width && texture.height === height, `${sample}: ${path} 尺寸`);
+          check(texture?.mips.length === mipCount, `${sample}: ${path} mip 数`);
+        }
+        check(tally.bytes < 64 * 1024 * 1024, `${sample}: 读取 ${tally.bytes} 字节`);
+        check(tally.singleByteRanges === 0, `${sample}: 单字节探测`);
+        check(tally.calls <= 150, `${sample}: ${tally.calls} 次请求`);
       }
     } finally {
       vi.unstubAllGlobals();
     }
     console.table(rows);
+    expect(failures).toEqual([]);
   }, 120000);
 });

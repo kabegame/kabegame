@@ -105,6 +105,11 @@ pub fn get_wpe_media_integration() -> bool {
 }
 
 #[tauri::command]
+pub fn get_wpe_scene_postprocess() -> String {
+    Settings::global().get_wpe_scene_postprocess()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -459,6 +464,12 @@ pub fn set_fast_folder_sync(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn set_surf_freeze_page(enabled: bool) -> Result<(), String> {
     Settings::global().set_surf_freeze_page(enabled)
+}
+
+/// 场景壁纸「场景后处理」档位：写设置并广播 `setting-change`，正在显示的场景据此重新判定、重新加载。
+#[tauri::command]
+pub fn set_wpe_scene_postprocess(value: String) -> Result<(), String> {
+    Settings::global().set_wpe_scene_postprocess(value)
 }
 
 /// 网页壁纸「媒体集成」：写设置后同步启停媒体会话监视，并向已订阅的页面推 `{ enabled }`。

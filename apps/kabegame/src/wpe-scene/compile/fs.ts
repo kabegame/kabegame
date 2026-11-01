@@ -9,7 +9,17 @@ export interface SceneFile {
   size: number | null;
   /** 散文件首个区间读的结果，供 .tex 解析器复用。 */
   head?: Uint8Array;
+  /**
+   * 文件内容在磁盘上的位置：`path` 是要读的真实文件（散文件本身或 `scene.pkg`），`offset` 是内容起点。
+   * 主线程按它直接区间读（FreeImage `.tex` 的 PNG / JPG mip 由主线程解码，Worker 不读这段字节）。
+   */
+  location: { path: string; offset: number };
   readRange(start: number, end: number): Promise<Uint8Array>;
+}
+/** effect 资源的查找范围：`dir` 是 effect.json 所在目录（如 `effects/tint`），`first` = effect.json 来自 assets。 */
+export interface ResourceScope {
+  dir: string;
+  first: boolean;
 }
 export interface SceneReader {
   readWhole(path: string): Promise<Uint8Array>;
@@ -112,7 +122,14 @@ export class SceneFs {
   }
 
   private loose(source: "project" | "assets", path: string, head?: Uint8Array): SceneFile {
-    return { source, path, size: null, head, readRange: (start, end) => this.reader.readRange(path, start, end) };
+    return {
+      source,
+      path,
+      size: null,
+      head,
+      location: { path, offset: 0 },
+      readRange: (start, end) => this.reader.readRange(path, start, end),
+    };
   }
 
   private fromPkg(pkg: ScenePkg, rel: string): SceneFile | null {
@@ -124,6 +141,7 @@ export class SceneFs {
       source: "pkg",
       path: `${path}:${rel}`,
       size: entry.length,
+      location: { path, offset },
       readRange: (start, end) => this.readPkgRange(offset + start, offset + end),
     };
   }
@@ -232,8 +250,30 @@ export class SceneFs {
     return { source: file.source, bytes };
   }
 
-  async text(rel: string): Promise<string | null> {
-    const file = await this.read(rel);
+  async text(rel: string, scope?: ResourceScope | null): Promise<string | null> {
+    const file = scope ? await this.readScoped(rel, scope) : await this.read(rel);
     return file ? new TextDecoder().decode(file.bytes).replace(/^\uFEFF/, "") : null;
+  }
+
+  /**
+   * effect \u5185\u5F15\u7528\u7684\u76F8\u5BF9\u8DEF\u5F84\u3002WPE \u5185\u7F6E effect \u7684\u8D44\u6E90\u653E\u5728 effect.json \u6240\u5728\u76EE\u5F55\u4E0B\uFF08`assets/effects/tint/materials/\u2026`\u3001
+   * `\u2026/shaders/\u2026`\uFF09\uFF1B\u9879\u76EE\u81EA\u5E26\u7684 effect\uFF08\u5982 razer \u7CFB\u7684 `effects/tint/effect.json`\uFF09\u5219\u628A\u6750\u8D28\u4E0E\u7740\u8272\u5668\u653E\u5728\u9879\u76EE\u6839\uFF0C
+   * \u800C assets \u7684\u540C\u540D effect \u76EE\u5F55\u91CC\u53C8\u6709\u4E00\u4EFD\u5185\u7F6E\u7248\u672C\u3002
+   * - effect.json \u6765\u81EA assets\uFF08`scope.first`\uFF09\uFF1A\u5148\u67E5 effect \u76EE\u5F55\uFF0C\u518D\u67E5\u6839\uFF1B
+   * - \u6765\u81EA\u9879\u76EE / pkg\uFF1A\u5148\u67E5\u6839\u4E0B\u7684\u9879\u76EE / pkg \u6587\u4EF6\uFF0C\u518D\u67E5 effect \u76EE\u5F55\uFF0C\u6700\u540E\u624D\u662F\u6839\u4E0B\u7684 assets \u6587\u4EF6\u3002
+   */
+  async readScoped(rel: string, scope: ResourceScope): Promise<{ source: SceneSource; bytes: Uint8Array } | null> {
+    if (scope.first) return (await this.read(`${scope.dir}/${rel}`)) ?? (await this.read(rel));
+    const direct = await this.read(rel);
+    if (direct && direct.source !== "assets") return direct;
+    return (await this.read(`${scope.dir}/${rel}`)) ?? direct;
+  }
+
+  async resolveScoped(rel: string, scope: ResourceScope | null | undefined): Promise<SceneFile | null> {
+    if (!scope) return this.resolve(rel);
+    if (scope.first) return (await this.resolve(`${scope.dir}/${rel}`)) ?? (await this.resolve(rel));
+    const direct = await this.resolve(rel);
+    if (direct && direct.source !== "assets") return direct;
+    return (await this.resolve(`${scope.dir}/${rel}`)) ?? direct;
   }
 }

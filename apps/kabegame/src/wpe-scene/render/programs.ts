@@ -224,15 +224,20 @@ export async function createProgram(
   };
 }
 
+/**
+ * `blending` 为 null 时关闭混合（基础 pass 画进合成 RT，B7）。`writeAlpha`：画到场景目标时为 false（见文件头），
+ * 画进合成 RT / fbo 时为 true（合成链要带着 alpha 走到上屏那一步）。
+ */
 export async function createPipeline(
   device: GPUDevice,
   program: GpuProgram,
-  blending: string,
+  blending: string | null,
   format: GPUTextureFormat,
+  writeAlpha = false,
 ): Promise<GPURenderPipeline> {
   try {
     return await device.createRenderPipelineAsync({
-      label: `scene program ${program.index} ${blending}`,
+      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}`,
       layout: program.pipelineLayout,
       vertex: {
         module: program.vertex,
@@ -242,8 +247,8 @@ export async function createPipeline(
       fragment: {
         module: program.fragment,
         entryPoint: program.result.fragment?.entryPoint ?? "main",
-        // 0x7 = RED | GREEN | BLUE：不写 alpha（见文件头）
-        targets: [{ format, blend: blendState(blending), writeMask: 0x7 }],
+        // 0x7 = RED | GREEN | BLUE，0xf 再加 ALPHA
+        targets: [{ format, blend: blending ? blendState(blending) : undefined, writeMask: writeAlpha ? 0xf : 0x7 }],
       },
       primitive: { topology: "triangle-strip", cullMode: "none" },
     });

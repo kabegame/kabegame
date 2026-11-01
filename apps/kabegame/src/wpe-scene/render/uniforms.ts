@@ -11,7 +11,7 @@
  */
 import type { SceneLayer, SceneTexture } from "../compile/bundle";
 import type { UniformLayout } from "../wpesl2wgsl";
-import { normalMatrix, type Mat4 } from "./math";
+import { invert, normalMatrix, type Mat4 } from "./math";
 
 /** 翻译器结果里还带 `declared`（WPESL 声明类型），胶水的类型定义没有列出。 */
 export type UniformEntry = UniformLayout & { declared?: string };
@@ -127,31 +127,58 @@ export interface StaticBuiltinInput {
   modelViewProjectionInverse: Mat4 | null;
   model: Mat4;
   viewProjection: Mat4;
+  /**
+   * 效果矩阵（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：效果 pass 画全屏四边形时
+   * `g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)、`g_EffectModelViewProjectionMatrix` = 图层 MVP × 同一缩放，
+   * 纹理投影与后者相同；上屏 pass 前两者不缩放，纹理投影 = MVP × scale(w/2, h/2)。缺省：前两者同 `model` / `modelViewProjection`，
+   * 纹理投影为单位阵（基础 pass）。
+   */
+  effectModel?: Mat4;
+  effectModelViewProjection?: Mat4;
+  effectTextureProjection?: Mat4;
   layer: Pick<SceneLayer, "alpha" | "color">;
-  /** 按槽位：该 pass 绑定的场景纹理；未绑定为 undefined。 */
+  /** 按槽位：该 pass 绑定的纹理（场景纹理或合成 RT / fbo / 快照的尺寸）；未绑定为 undefined。 */
   textures: readonly (Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> | undefined)[];
-  sceneSize: [number, number];
+  /**
+   * 屏幕尺寸：`g_TexelSize` / `g_TexelSizeHalf` / `g_Screen` 用。WPE 取窗口（后备缓冲）尺寸，画合成 RT、fbo 时也不随目标变；
+   * 我们取场景目标尺寸，与窗口同分辨率时等价。
+   */
+  screenSize: [number, number];
   eye: readonly number[];
   ambient?: readonly number[];
   skylight?: readonly number[];
 }
 
-/** 每帧不变的内置 uniform（变换、纹理分辨率、对象颜色等）。 */
+/** 空纹理槽的 `g_Texture<n>Resolution` / `g_Texture<n>Texel`（WPE `FUN_1400d8300`）。 */
+const EMPTY_RESOLUTION = [2, 2, 2, 2];
+const EMPTY_TEXEL = [0.5, 0.5, 2, 2];
+
+/** 每帧不变的内置 uniform（变换、纹理分辨率、对象颜色等），取值照 WPE `FUN_1400d8300`（PLAN P2a「内置 uniform」）。 */
 export function staticBuiltins(input: StaticBuiltinInput): Record<string, number[]> {
-  const [width, height] = input.sceneSize;
+  const [width, height] = input.screenSize;
+  // 颜色 k = 1：brightness 只在 HDR 下乘进来（p2-REPORT B10），HDR 是 P2b
   const color = [input.layer.color[0] ?? 1, input.layer.color[1] ?? 1, input.layer.color[2] ?? 1];
-  const mvp = Array.from(input.modelViewProjection);
   const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const inverse = (m: Mat4) => Array.from(invert(m) ?? identity);
+  const effectModel = input.effectModel ?? input.model;
+  const effectMvp = input.effectModelViewProjection ?? input.modelViewProjection;
   const values: Record<string, number[]> = {
-    g_ModelViewProjectionMatrix: mvp,
-    g_EffectModelViewProjectionMatrix: mvp,
+    g_ModelViewProjectionMatrix: Array.from(input.modelViewProjection),
     g_ModelViewProjectionMatrixInverse: Array.from(input.modelViewProjectionInverse ?? identity),
     g_ModelMatrix: Array.from(input.model),
-    g_EffectModelMatrix: Array.from(input.model),
+    g_ModelMatrixInverse: inverse(input.model),
     g_NormalModelMatrix: normalMatrix(input.model),
     g_ViewProjectionMatrix: Array.from(input.viewProjection),
-    g_EffectTextureProjectionMatrix: identity,
-    g_EffectTextureProjectionMatrixInverse: identity,
+    g_EffectModelMatrix: Array.from(effectModel),
+    g_EffectModelMatrixInverse: inverse(effectModel),
+    g_EffectModelViewProjectionMatrix: Array.from(effectMvp),
+    g_EffectModelViewProjectionMatrixInverse: inverse(effectMvp),
+    g_EffectTextureProjectionMatrix: input.effectTextureProjection
+      ? Array.from(input.effectTextureProjection)
+      : identity,
+    g_EffectTextureProjectionMatrixInverse: input.effectTextureProjection
+      ? inverse(input.effectTextureProjection)
+      : identity,
     g_EyePosition: [input.eye[0] ?? 0, input.eye[1] ?? 0, input.eye[2] ?? 0],
     g_Brightness: [1],
     g_UserAlpha: [input.layer.alpha],
@@ -161,6 +188,7 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
     g_CompositeColor: color,
     g_TexelSize: [1 / width, 1 / height],
     g_TexelSizeHalf: [0.5 / width, 0.5 / height],
+    g_Screen: [width, height, width / height],
     g_TextureReductionScale: [1],
     // 非 spritesheet 时的恒等帧变换：v = translation + u * rotation.xy + v * rotation.zw
     g_Texture0Rotation: [1, 0, 0, 1],
@@ -169,36 +197,46 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
   if (input.ambient) values.g_LightAmbientColor = [...input.ambient];
   if (input.skylight) values.g_LightSkylightColor = [...input.skylight];
   input.textures.forEach((texture, slot) => {
-    if (texture)
-      values[`g_Texture${slot}Resolution`] = [
-        texture.textureWidth,
-        texture.textureHeight,
-        texture.width,
-        texture.height,
-      ];
+    values[`g_Texture${slot}Resolution`] = texture
+      ? [texture.textureWidth, texture.textureHeight, texture.width, texture.height]
+      : EMPTY_RESOLUTION;
+    values[`g_Texture${slot}Texel`] = texture
+      ? [1 / texture.textureWidth, 1 / texture.textureHeight, texture.textureWidth, texture.textureHeight]
+      : EMPTY_TEXEL;
   });
   return values;
 }
 
+/** `g_Time` 超过 5 天（432000 s）归零（p2-REPORT C「时间」）。 */
+export const TIME_WRAP_SECONDS = 432000;
+
 export interface FrameInput {
-  /** 秒。 */
+  /** 秒，已按 `TIME_WRAP_SECONDS` 回绕。 */
   time: number;
-  /** 一天中的位置 0…1（LWE：`(时 * 60 + 分) / 1440`）。 */
+  /** 与上一帧的间隔（秒）。 */
+  frametime: number;
+  /** 本地时间在一天中的占比 [0, 1)（`daytimeOf`）。 */
   daytime: number;
+  /** 光标在画布上的归一化坐标：原点左上、y 向下。 */
   pointer: [number, number];
   pointerLast: [number, number];
 }
 
-/** 每帧变化的内置 uniform。 */
+/**
+ * 每帧变化的内置 uniform。`g_PointerState` = (按下, 按下, 本帧刚按下, 0)：渲染器还不跟踪按键（P6 接输入），恒为 0。
+ */
 export function frameBuiltins(frame: FrameInput): Record<string, number[]> {
   return {
     g_Time: [frame.time],
+    g_Frametime: [frame.frametime],
     g_Daytime: [frame.daytime],
     g_PointerPosition: frame.pointer,
     g_PointerPositionLast: frame.pointerLast,
+    g_PointerState: [0, 0, 0, 0],
   };
 }
 
+/** 本地时间的一天中占比：h/24 + m/1440 + s/86400 + ms/8.64e7，范围 [0, 1)。 */
 export function daytimeOf(date: Date): number {
-  return (date.getHours() * 60 + date.getMinutes()) / (24 * 60);
+  return date.getHours() / 24 + date.getMinutes() / 1440 + date.getSeconds() / 86400 + date.getMilliseconds() / 8.64e7;
 }

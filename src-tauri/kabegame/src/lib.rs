@@ -98,8 +98,6 @@ use kabegame_core::storage::organize::OrganizeService;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
-#[cfg(not(target_os = "android"))]
-use axum::{routing::get, Router};
 use std::net::SocketAddr;
 
 /// 启动分三段（见 `cocs/storage/DB_MIGRATIONS_AND_BACKFILLS.md`）：
@@ -776,6 +774,8 @@ pub(crate) fn configure_app(
             set_surf_freeze_page,
             get_wpe_media_integration,
             set_wpe_media_integration,
+            get_wpe_scene_postprocess,
+            set_wpe_scene_postprocess,
             #[cfg(not(target_os = "android"))]
             get_web_server_enabled,
             #[cfg(not(target_os = "android"))]

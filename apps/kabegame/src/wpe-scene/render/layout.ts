@@ -24,15 +24,15 @@ export interface QuadVertex {
 }
 
 /**
- * 纹理在填充尺寸里的有效区域（LWE：`getRealWidth() / getTextureWidth(0)`）。WPE 把非 2 的幂图像放进更大的纹理
- * （如 1920×1080 → 2048×2048），图层四边形只采样左上角的实际图像。
+ * 纹理在填充尺寸里的有效区域 = 图像尺寸 / 纹理尺寸（WPE `FUN_1402091e0` 的 UV 缩放，p2-REPORT B5 / B12；
+ * LWE：`getRealWidth() / getTextureWidth(0)`）。WPE 把非 2 的幂图像放进更大的纹理（如 1920×1080 → 2048×2048），
+ * 图层四边形只采样左上角的实际图像。FreeImage 形态的「纹理尺寸」取哪个字段见 `compile/tex.ts` 的 `freeImageTextureSize`。
  */
 export function textureUvExtent(
-  texture: Pick<SceneTexture, "width" | "height" | "mips"> | undefined,
+  texture: Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> | undefined,
 ): [number, number] {
-  const base = texture?.mips[0];
-  if (!texture || !base || base.width <= 0 || base.height <= 0) return [1, 1];
-  return [texture.width / base.width, texture.height / base.height];
+  if (!texture || texture.textureWidth <= 0 || texture.textureHeight <= 0) return [1, 1];
+  return [texture.width / texture.textureWidth, texture.height / texture.textureHeight];
 }
 
 /**

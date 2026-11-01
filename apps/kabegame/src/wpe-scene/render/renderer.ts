@@ -12,9 +12,9 @@ import type { SceneBundle } from "../compile/bundle";
 import { FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, SceneRenderError } from "./errors";
-import { canvasToScenePointer, coverUv, type CoverUv } from "./layout";
+import { coverUv, type CoverUv } from "./layout";
 import { GpuScene } from "./scene";
-import { daytimeOf } from "./uniforms";
+import { daytimeOf, TIME_WRAP_SECONDS } from "./uniforms";
 
 /** cover 铺放：全屏三角形，按 `offset + uv * scale` 采样离屏目标，输出不透明。 */
 const BLIT_WGSL = /* wgsl */ `
@@ -47,6 +47,11 @@ export interface SceneRendererOptions {
   onLost?: (reasons: string[]) => void;
 }
 
+export interface SceneLoadOptions {
+  /** dev 强制渲染（D4）：不因 `bundle.unsupported` 拒绝，渲染器自查仍然生效。 */
+  ignoreUnsupported?: boolean;
+}
+
 export class SceneRenderer {
   private readonly context: GPUCanvasContext;
   private readonly format: GPUTextureFormat;
@@ -60,8 +65,11 @@ export class SceneRenderer {
   private blitBindGroup: GPUBindGroup | null = null;
   private cover: CoverUv = { offset: [0, 0], scale: [1, 1] };
   private coverKey = "";
+  /** 光标在画布上的归一化坐标（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
   private pointer: [number, number] = [0.5, 0.5];
   private pointerLast: [number, number] = [0.5, 0.5];
+  /** 上一帧的时钟读数（秒），算 `g_Frametime`。 */
+  private lastTime: number | null = null;
   private paused = false;
   private failed = false;
   private lost = false;
@@ -138,11 +146,11 @@ export class SceneRenderer {
    * 建好新场景后替换当前场景，画出第一帧并等 GPU 完成后返回。失败抛 `SceneRenderError`，当前场景保持不变。
    * 并发调用时只有最后一次生效，被取代的调用抛 `AbortError`。
    */
-  async load(bundle: SceneBundle): Promise<void> {
+  async load(bundle: SceneBundle, options: SceneLoadOptions = {}): Promise<void> {
     if (this.destroyed) throw new DOMException("渲染器已销毁", "AbortError");
     if (this.lost) throw new SceneRenderError(["webgpu:device-lost"]);
     const serial = ++this.loadSerial;
-    const scene = await GpuScene.build(this.gpu.device, bundle, this.gpu.features, this.warnings);
+    const scene = await GpuScene.build(this.gpu.device, bundle, this.gpu.features, this.warnings, options);
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
       throw new DOMException("已被新的场景取代", "AbortError");
@@ -171,10 +179,10 @@ export class SceneRenderer {
     this.sync();
   }
 
-  /** 画布上的指针位置（0…1，左上为原点）；换算到场景后供 `g_PointerPosition` 使用。 */
+  /** 画布上的指针位置（0…1，左上为原点、y 向下），原样作为 `g_PointerPosition`（WPE 取窗口归一化坐标）。 */
   setPointer(x: number, y: number): void {
     this.pointerLast = this.pointer;
-    this.pointer = canvasToScenePointer(this.cover, x, y);
+    this.pointer = [x, y];
   }
 
   destroy(): void {
@@ -264,8 +272,12 @@ export class SceneRenderer {
       this.cover = coverUv(scene.width, scene.height, this.canvas.width, this.canvas.height);
       device.queue.writeBuffer(this.coverBuffer, 0, new Float32Array([...this.cover.offset, ...this.cover.scale]));
     }
+    const seconds = this.clock.seconds();
+    const frametime = this.lastTime === null ? 0 : Math.max(0, seconds - this.lastTime);
+    this.lastTime = seconds;
     scene.update({
-      time: this.clock.seconds(),
+      time: seconds % TIME_WRAP_SECONDS,
+      frametime,
       daytime: daytimeOf(new Date()),
       pointer: this.pointer,
       pointerLast: this.pointerLast,

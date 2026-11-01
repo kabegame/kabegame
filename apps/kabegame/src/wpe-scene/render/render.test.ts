@@ -27,8 +27,16 @@ import {
   translation,
 } from "./math";
 import { bindGroupLayoutEntries, blendState, vertexPacking } from "./programs";
+import { planLayer } from "./graph";
 import { checkRenderable } from "./scene";
-import { mipCopyLayout, mipSize, planTextureUpload, requiredFeatures, samplerDescriptor } from "./textures";
+import {
+  mipCopyLayout,
+  mipSize,
+  planBitmapUpload,
+  planTextureUpload,
+  requiredFeatures,
+  samplerDescriptor,
+} from "./textures";
 import {
   daytimeOf,
   declaredComponents,
@@ -99,11 +107,14 @@ describe("矩阵", () => {
 
 describe("场景几何", () => {
   it("填充纹理的有效区域", () => {
-    expect(
-      textureUvExtent(
-        texture({ width: 1920, height: 1080, mips: [{ width: 2048, height: 2048, bytes: new Uint8Array() }] }),
-      ),
-    ).toEqual([1920 / 2048, 1080 / 2048]);
+    // 图像尺寸 / 纹理尺寸（FreeImage 形态的纹理尺寸已在编译期改成图像尺寸，UV 为 1）
+    expect(textureUvExtent(texture({ width: 1920, height: 1080, textureWidth: 2048, textureHeight: 2048 }))).toEqual([
+      1920 / 2048,
+      1080 / 2048,
+    ]);
+    expect(textureUvExtent(texture({ width: 3840, height: 2160, textureWidth: 3840, textureHeight: 2160 }))).toEqual([
+      1, 1,
+    ]);
     expect(textureUvExtent(undefined)).toEqual([1, 1]);
   });
   it("四边形：三角形带顺序，顶边 v = 0", () => {
@@ -277,15 +288,26 @@ describe("uniform 打包", () => {
       viewProjection: identity(),
       layer: { alpha: 0.5, color: [1, 0.5, 0.25] },
       textures: [undefined, { width: 1920, height: 1080, textureWidth: 2048, textureHeight: 2048 }],
-      sceneSize: [1920, 1080],
+      screenSize: [1920, 1080],
       eye: [0, 0, 1],
     });
     expect(values.g_Texture1Resolution).toEqual([2048, 2048, 1920, 1080]);
-    expect(values.g_Texture0Resolution).toBeUndefined();
+    expect(values.g_Texture1Texel).toEqual([1 / 2048, 1 / 2048, 2048, 2048]);
+    // 空槽（WPE `FUN_1400d8300`）
+    expect(values.g_Texture0Resolution).toEqual([2, 2, 2, 2]);
+    expect(values.g_Texture0Texel).toEqual([0.5, 0.5, 2, 2]);
     expect(values.g_Color4).toEqual([1, 0.5, 0.25, 0.5]);
     expect(values.g_TexelSize).toEqual([1 / 1920, 1 / 1080]);
-    expect(frameBuiltins({ time: 3, daytime: 0.5, pointer: [0.1, 0.2], pointerLast: [0, 0] }).g_Time).toEqual([3]);
-    expect(daytimeOf(new Date(2026, 0, 1, 12, 30))).toBeCloseTo(750 / 1440);
+    expect(values.g_Screen).toEqual([1920, 1080, 1920 / 1080]);
+    const frame = frameBuiltins({ time: 3, frametime: 0.016, daytime: 0.5, pointer: [0.1, 0.2], pointerLast: [0, 0] });
+    expect(frame.g_Time).toEqual([3]);
+    expect(frame.g_Frametime).toEqual([0.016]);
+    expect(frame.g_PointerState).toEqual([0, 0, 0, 0]);
+    // h/24 + m/1440 + s/86400 + ms/8.64e7
+    expect(daytimeOf(new Date(2026, 0, 1, 12, 30, 15, 500))).toBeCloseTo(
+      0.5 + 30 / 1440 + 15 / 86400 + 500 / 8.64e7,
+      9,
+    );
   });
 });
 
@@ -379,6 +401,9 @@ describe("可渲染性自查", () => {
       clearColor: [0, 0, 0],
       clearEnabled: true,
       camera: { eye: [], center: [], up: [] },
+      ambient: [0, 0, 0],
+      skylight: [0, 0, 0],
+      postprocess: { level: "disabled", bloom: false, hdr: false },
     },
     layers: [],
     programs: [{ ok: true } as TranslateResult],
@@ -392,7 +417,9 @@ describe("可渲染性自查", () => {
     depthtest: "disabled",
     depthwrite: "disabled",
     textures: { 0: 0 },
+    runtime: {},
     uniforms: {},
+    framebuffer: false,
   };
   const layer = {
     id: 1,
@@ -405,6 +432,9 @@ describe("可渲染性自查", () => {
     color: [1, 1, 1],
     visible: true,
     passes: [pass],
+    colorBlendMode: 0,
+    effects: [],
+    passthrough: null,
   };
   it("缺 BC、多 pass、缺程序、unsupported 原样带上", () => {
     const bc = new Set(["texture-compression-bc"]);
@@ -500,4 +530,49 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P1 样本的渲染准备", (
     },
     60000,
   );
+});
+
+describe.skipIf(!root || !existsSync(wasm))("本机 P2a 样本的渲染准备", () => {
+  it("razer_vortex：每层基础 pass → 合成 RT → tint 上屏，合成 RT 按图像尺寸", async () => {
+    const translator = await Wpesl2wgsl.fromBytes(readFileSync(wasm));
+    const bundle = await compileScene({
+      projectDir: join(root!, "projects", "defaultprojects", "razer_vortex"),
+      sceneAssets: [join(root!, "assets")],
+      reader,
+      translator,
+      postprocess: "disabled",
+    });
+    expect(bundle.unsupported).toEqual([]);
+    // 主线程解码的替身：位图尺寸就是 mip 表里的尺寸
+    for (const texture of bundle.textures)
+      if (texture.encoded)
+        texture.mips = texture.encoded.mips.map((_, level) => ({
+          width: mipSize(texture.textureWidth, level),
+          height: mipSize(texture.textureHeight, level),
+          bitmap: {} as ImageBitmap,
+        }));
+    expect(checkRenderable(bundle, new Set(["texture-compression-bc"]))).toEqual([]);
+    const vortex = bundle.textures.find((t) => t.path === "materials/vortex.tex")!;
+    expect(planBitmapUpload(vortex)).toBe(7);
+    const plans = bundle.layers.map((layer) => planLayer(layer, bundle.textures));
+    expect(plans.map((plan) => plan.composite)).toEqual([
+      { count: 1, width: 3840, height: 2160 },
+      { count: 1, width: 219, height: 216 },
+      { count: 1, width: 64, height: 32 },
+    ]);
+    for (const [index, plan] of plans.entries()) {
+      const steps = plan.steps.filter((step) => step.kind === "draw");
+      expect(steps.map((step) => step.role)).toEqual(["base", "final"]);
+      // 上屏借基础材质的 blend：vortex 是 normal，THS / led 是 translucent
+      expect(steps[1].blending).toBe(bundle.layers[index].passes[0].blending);
+      expect(steps[0].blending).toBeNull();
+      const program = bundle.programs[steps[1].pass.program!];
+      const block = new UniformBlock((program.uniforms ?? []) as UniformEntry[], program.uniformBlockSize);
+      expect(block.has("g_Texture0Resolution")).toBe(true);
+      expect(program.textures?.map((t) => t.slot)).toEqual([0, 1]);
+    }
+    // THS：219×216 放在 256×256 里，基础 pass 只采样有效区域
+    const ths = plans[1].steps.find((step) => step.kind === "draw" && step.role === "base");
+    if (ths?.kind === "draw") close(ths.uv, [219 / 256, 216 / 256]);
+  }, 60000);
 });

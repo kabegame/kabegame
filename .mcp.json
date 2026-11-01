@@ -7,6 +7,10 @@
     "agent-browser": {
       "command": "deno",
       "args": ["run", "-A", "npm:agent-browser", "mcp"]
+    },
+    "renderdoc": {
+      "command": "uv",
+      "args": ["--directory", "ignore/RenderDocMCP", "run", "renderdoc-mcp"]
     }
   }
 }

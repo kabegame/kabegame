@@ -1,4 +1,5 @@
 import type { SceneBundle } from "./bundle";
+import type { ScenePostprocessSetting } from "./postprocess";
 
 /** 主线程读文件失败时回传给 Worker 的错误。保留类型名：SceneFs 靠 `TypeError("Failed to fetch")` 判断文件不存在。 */
 export interface FileError {
@@ -12,6 +13,8 @@ export type WorkerRequest =
       projectDir: string;
       sceneAssets: string[];
       userProperties: Record<string, unknown>;
+      postprocess: ScenePostprocessSetting;
+      force: boolean;
       module: WebAssembly.Module | null;
     }
   | { type: "file-result"; id: number; bytes?: Uint8Array; error?: FileError };

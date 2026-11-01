@@ -126,6 +126,8 @@ pub enum SettingKey {
     WallpaperVideoPlaybackRate,
     /// 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（标题、封面、进度），仅 Windows 生效
     WpeMediaIntegration,
+    /// 场景壁纸后处理档位：follow（跟随 WPE 的 postprocessing）/ disabled / enabled / ultra，仅 Windows 生效
+    WpeScenePostprocess,
     /// 窗口状态（窗口位置、大小、是否最大化）
     WindowState,
     /// 当前壁纸图片ID
@@ -354,6 +356,9 @@ impl Settings {
             SettingKey::WallpaperVolume => SettingValue::F64(1.0),
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WpeMediaIntegration => SettingValue::Bool(true),
+            SettingKey::WpeScenePostprocess => {
+                SettingValue::String(DEFAULT_WPE_SCENE_POSTPROCESS.to_string())
+            }
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
             #[cfg(feature = "virtual-driver")]
@@ -452,6 +457,7 @@ impl Settings {
             SettingKey::WallpaperVolume,
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WpeMediaIntegration,
+            SettingKey::WpeScenePostprocess,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
             #[cfg(feature = "virtual-driver")]
@@ -593,6 +599,12 @@ impl Settings {
             SettingKey::WpeMediaIntegration => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
+            SettingKey::WpeScenePostprocess => Ok(SettingValue::String(
+                json.as_str()
+                    .filter(|value| is_wpe_scene_postprocess(value))
+                    .unwrap_or(DEFAULT_WPE_SCENE_POSTPROCESS)
+                    .to_string(),
+            )),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
@@ -790,6 +802,7 @@ impl Settings {
             SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WpeMediaIntegration => "wpeMediaIntegration".to_string(),
+            SettingKey::WpeScenePostprocess => "wpeScenePostprocess".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
             #[cfg(feature = "virtual-driver")]
@@ -1142,6 +1155,14 @@ impl Settings {
             .get(&SettingKey::WpeMediaIntegration)
             .map(|c| c.load().as_bool().unwrap_or(true))
             .unwrap_or(true)
+    }
+
+    pub fn get_wpe_scene_postprocess(&self) -> String {
+        Self::cells()
+            .get(&SettingKey::WpeScenePostprocess)
+            .and_then(|c| c.load().as_string())
+            .filter(|value| is_wpe_scene_postprocess(value))
+            .unwrap_or_else(|| DEFAULT_WPE_SCENE_POSTPROCESS.to_string())
     }
 
     pub fn get_window_state(&self) -> Option<WindowState> {
@@ -1639,6 +1660,20 @@ impl Settings {
         Ok(())
     }
 
+    /// 场景后处理档位；只接受 `follow` / `disabled` / `enabled` / `ultra`。
+    pub fn set_wpe_scene_postprocess(&self, value: String) -> Result<(), String> {
+        if !is_wpe_scene_postprocess(&value) {
+            return Err(format!("无效的场景后处理档位：{value}"));
+        }
+        let cells = Self::cells();
+        let new_value = SettingValue::String(value);
+        if let Some(cell) = cells.get(&SettingKey::WpeScenePostprocess) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WpeScenePostprocess, &new_value);
+        Ok(())
+    }
+
     pub fn save_window_state(&self, window_state: WindowState) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::OptionWindowState(Some(window_state));
@@ -1830,9 +1865,45 @@ impl Settings {
     }
 }
 
+/// 场景后处理档位的默认值：跟随 WPE 安装目录 `config.json` 的 `postprocessing`（前端 `wpe-scene/compile/postprocess.ts` 解析）。
+const DEFAULT_WPE_SCENE_POSTPROCESS: &str = "follow";
+
+fn is_wpe_scene_postprocess(value: &str) -> bool {
+    matches!(value, "follow" | "disabled" | "enabled" | "ultra")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wpe_scene_postprocess_rejects_unknown_values() {
+        assert!(is_wpe_scene_postprocess("follow"));
+        assert!(is_wpe_scene_postprocess("ultra"));
+        assert!(!is_wpe_scene_postprocess("displayhdr"));
+        assert!(!is_wpe_scene_postprocess(""));
+        // 设置文件里的非法值读回默认值
+        assert_eq!(
+            Settings::json_value_to_setting_value(
+                SettingKey::WpeScenePostprocess,
+                &serde_json::json!("high")
+            )
+            .unwrap()
+            .as_string()
+            .as_deref(),
+            Some("follow")
+        );
+        assert_eq!(
+            Settings::json_value_to_setting_value(
+                SettingKey::WpeScenePostprocess,
+                &serde_json::json!("disabled")
+            )
+            .unwrap()
+            .as_string()
+            .as_deref(),
+            Some("disabled")
+        );
+    }
 
     #[test]
     fn legacy_rotation_settings_migrate_with_backup() {

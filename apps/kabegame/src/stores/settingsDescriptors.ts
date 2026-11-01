@@ -214,6 +214,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   // 网页壁纸媒体集成：WPE 网页壁纸只支持 Windows 桌面
   if (IS_WINDOWS && !IS_WEB) {
     entries.push(tauri("wpeMediaIntegration", "get_wpe_media_integration", "set_wpe_media_integration", "enabled"));
+    entries.push(tauri("wpeScenePostprocess", "get_wpe_scene_postprocess", "set_wpe_scene_postprocess", "value"));
   }
 
   // 冻结网页：畅游一键下载（桌面）与网页收集（桌面 + Android 的 V8 后端）共用

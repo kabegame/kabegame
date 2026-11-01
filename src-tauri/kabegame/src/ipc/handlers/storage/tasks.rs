@@ -51,13 +51,6 @@ pub async fn delete_task(task_id: &str) -> IpcResponse {
     }
 }
 
-pub async fn get_task_image_ids(task_id: &str) -> IpcResponse {
-    match Storage::get_task_image_ids(task_id) {
-        Ok(ids) => IpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default()),
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
 pub async fn get_task_failed_images(task_id: &str) -> IpcResponse {
     match Storage::get_task_failed_images(task_id) {
         Ok(images) => {

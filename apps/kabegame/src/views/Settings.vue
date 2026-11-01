@@ -278,6 +278,14 @@
                 </SettingRow>
 
                 <SettingRow
+                  v-if="IS_WINDOWS"
+                  :label="$t('settings.wpeScenePostprocess')"
+                  :description="$t('settings.wpeScenePostprocessDesc')"
+                >
+                  <SettingRadioControl setting-key="wpeScenePostprocess" :options="wpeScenePostprocessOptions" />
+                </SettingRow>
+
+                <SettingRow
                   v-if="IS_WINDOWS || IS_MACOS || IS_LINUX"
                   :label="$t('settings.wallpaperModeLabel')"
                   :description="$t('settings.wallpaperModeDesc')"
@@ -465,6 +473,12 @@ const galleryLayoutDirectionOptions = computed(() => [
 const imageFitOptions = computed(() => [
   { label: t("settings.imageFitContain"), value: "fit" },
   { label: t("settings.imageFitCover"), value: "fill" },
+]);
+const wpeScenePostprocessOptions = computed(() => [
+  { label: t("settings.wpeScenePostprocessFollow"), value: "follow" },
+  { label: t("settings.wpeScenePostprocessDisabled"), value: "disabled" },
+  { label: t("settings.wpeScenePostprocessEnabled"), value: "enabled" },
+  { label: t("settings.wpeScenePostprocessUltra"), value: "ultra" },
 ]);
 const linkOpenModeOptions = computed(() => [
   { label: t("settings.linkOpenSurf"), value: "surf" },

@@ -28,6 +28,20 @@ export const TEX_FORMATS: Record<number, string> = {
   14: "rgba16f",
   15: "rgb16f",
 };
+/**
+ * effect fbo 的格式名（effect.json `fbos[].format`，B6）→ `.tex` 格式枚举（翻译器的 `TEX<n>FORMAT`）与 WebGPU 格式。
+ * `rgb888` / `rgb161616f` 在 DXGI 里也是四通道。
+ */
+export const FBO_FORMATS: Record<string, { tex: number; gpu: string }> = {
+  rgba8888: { tex: 0, gpu: "rgba8unorm" },
+  rgb888: { tex: 1, gpu: "rgba8unorm" },
+  rg88: { tex: 8, gpu: "rg8unorm" },
+  r8: { tex: 9, gpu: "r8unorm" },
+  rg1616f: { tex: 10, gpu: "rg16float" },
+  r16f: { tex: 11, gpu: "r16float" },
+  rgba16161616f: { tex: 14, gpu: "rgba16float" },
+  rgb161616f: { tex: 15, gpu: "rgba16float" },
+};
 export interface TexMip {
   width: number;
   height: number;
@@ -55,8 +69,16 @@ export interface TexResult {
   gifWidth?: number;
   gifHeight?: number;
   videoRange?: { start: number; end: number };
+  /**
+   * FreeImage 形态（`freeImageFormat` 为 2 JPEG / 13 PNG）：每个 mip 的数据是一整份图片文件。Worker 不读这些字节，
+   * 只给出它们在磁盘上的位置（`SceneFile.location`），由主线程区间读、`createImageBitmap` 解码并跨重新编译缓存。
+   */
+  encoded?: { mime: "image/png" | "image/jpeg"; path: string; mips: { start: number; end: number }[] };
   unsupported: string[];
 }
+
+/** FreeImage 格式枚举（FIF_*）→ MIME；只认浏览器能解码的两种。 */
+const FREE_IMAGE_MIME: Record<number, "image/png" | "image/jpeg"> = { 2: "image/jpeg", 13: "image/png" };
 
 class Cursor {
   pos = 0;
@@ -179,10 +201,12 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   if (flags & TEX_FLAGS.video) unsupported.push("tex:video");
   if (flags & TEX_FLAGS.animated) unsupported.push("tex:animation");
   if (format !== 0 && format !== 4) unsupported.push(`tex:format:${format}`);
-  if (freeImageFormat !== -1) unsupported.push(`tex:freeimage:${freeImageFormat}`);
+  const freeImageMime = FREE_IMAGE_MIME[freeImageFormat];
+  if (freeImageFormat !== -1 && !freeImageMime) unsupported.push(`tex:freeimage:${freeImageFormat}`);
   if (flags & TEX_FLAGS.clampBorder) unsupported.push("tex:clamp-border");
   if (flags & TEX_FLAGS.alphaPriority) unsupported.push("tex:alpha-priority");
-  const shouldDecode = decode && unsupported.length === 0;
+  // FreeImage 的 mip 交给主线程解码，这里永远不读字节
+  const shouldDecode = decode && unsupported.length === 0 && !freeImageMime;
   const images: TexImage[] = [];
   for (let image = 0; image < imageCount; image++) {
     const mipCount = await c.u32();
@@ -211,6 +235,8 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
         uncompressedSize: compression ? uncompressedSize : length,
       };
       if (compression > 1) unsupported.push(`tex:compression:${compression}`);
+      // LZ4 包着的图片文件没见过；主线程按原样解码，遇到先报
+      if (freeImageMime && compression === 1) unsupported.push("tex:freeimage-lz4");
       if (shouldDecode && compression <= 1) {
         const bytes = await c.bytes(length);
         mip.bytes = compression === 1 ? decodeLz4Block(bytes, uncompressedSize) : bytes;
@@ -238,6 +264,17 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   const first = images[0]?.mips[0];
   const videoRange =
     flags & TEX_FLAGS.video && first ? { start: first.offset, end: first.offset + first.length } : undefined;
+  const encoded =
+    freeImageMime && !(flags & TEX_FLAGS.video) && images[0]
+      ? {
+          mime: freeImageMime,
+          path: file.location.path,
+          mips: images[0].mips.map((mip) => ({
+            start: file.location.offset + mip.offset,
+            end: file.location.offset + mip.offset + mip.length,
+          })),
+        }
+      : undefined;
   return {
     format,
     flags,
@@ -253,6 +290,16 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
     gifWidth,
     gifHeight,
     videoRange,
+    encoded,
     unsupported,
   };
+}
+
+/**
+ * FreeImage 形态的「纹理尺寸」（`g_Texture<n>Resolution.xy`、UV 上界的分母，渲染器也按它建 GPU 纹理）：WPE 解码前把头里的
+ * 纹理尺寸强制改成头里的图像尺寸（`FUN_14015c8d0`），所以 UV 缩放为 1。razer_vortex 的头写 4096×4096、图像 3840×2160，
+ * 两组尺寸都是 3840×2160；两组都取头字段、不取解码结果。渲染器把解码结果拷到这个尺寸纹理的左上角。
+ */
+export function freeImageTextureSize(tex: Pick<TexResult, "width" | "height">): [number, number] {
+  return [tex.width, tex.height];
 }

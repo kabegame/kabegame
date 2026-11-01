@@ -1,12 +1,23 @@
 import { WPESL2WGSL_WASM_URL } from "../wpesl2wgsl";
 import { FetchSceneReader, type SceneReader } from "./fs";
 import type { SceneBundle } from "./bundle";
+import { decodeEncodedTextures, type TextureDecodeCache } from "./decode";
+import type { ScenePostprocessSetting } from "./postprocess";
 import { encodeFileError, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 export interface WorkerCompileInput {
   projectDir: string;
   sceneAssets: string[];
   userProperties?: Record<string, unknown>;
+  /** 设置「场景后处理」；缺省跟随 WPE。 */
+  postprocess?: ScenePostprocessSetting;
+  /** dev 强制渲染（D4）：有不支持项也解码纹理。 */
+  force?: boolean;
+  /**
+   * FreeImage 纹理的解码缓存（`decode.ts`）。给了就在主线程解码这些纹理：`unsupported` 为空或 `force` 时才解，
+   * 否则渲染器不会用它们。
+   */
+  textureCache?: TextureDecodeCache;
   signal?: AbortSignal;
   reader?: SceneReader;
 }
@@ -24,6 +35,15 @@ async function getModule(): Promise<WebAssembly.Module | null> {
 }
 
 export async function compileSceneInWorker(input: WorkerCompileInput): Promise<SceneBundle> {
+  const bundle = await compileInWorker(input);
+  if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
+  if (input.textureCache && (input.force || !bundle.unsupported.length))
+    await decodeEncodedTextures(bundle, input.textureCache);
+  if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
+  return bundle;
+}
+
+async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> {
   if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
   const module = await getModule();
   if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
@@ -70,6 +90,8 @@ export async function compileSceneInWorker(input: WorkerCompileInput): Promise<S
       projectDir: input.projectDir,
       sceneAssets: input.sceneAssets,
       userProperties: input.userProperties ?? {},
+      postprocess: input.postprocess ?? "follow",
+      force: input.force === true,
       module,
     };
     worker.postMessage(request);
