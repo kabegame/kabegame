@@ -41,7 +41,6 @@
     "@vitejs/plugin-vue-jsx": "^4.2.0",
     "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.5.1",
-    "@webgpu/types": "^0.1.60",
     "happy-dom": "^20.7.0",
     "sass": "^1.97.1",
     "typescript": "^5.4.5",

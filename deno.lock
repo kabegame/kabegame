@@ -7120,7 +7120,6 @@
             "npm:@vue/test-utils@^2.4.6",
             "npm:@vue/tsconfig@~0.5.1",
             "npm:@vueuse/core@^14.1.0",
-            "npm:@webgpu/types@~0.1.60",
             "npm:axios@^1.6.7",
             "npm:dayjs@^1.11.20",
             "npm:dexie@^4.2.0",

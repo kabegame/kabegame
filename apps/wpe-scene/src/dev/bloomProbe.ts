@@ -14,7 +14,7 @@ import { compileBloom, type BloomPassName } from "../compile/bloom";
 import { FetchSceneReader, SceneFs } from "../compile/fs";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import { ShaderCompiler } from "../compile/shader";
-import { fileToUrl } from "@/utils/fileUrl";
+import { fileToUrl } from "../fileUrl";
 import { loadWpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { BloomChain, type BloomStep } from "../render/bloom";
 import { acquireGpu } from "../render/device";

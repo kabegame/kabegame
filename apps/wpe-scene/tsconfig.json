@@ -4,5 +4,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["vite/client", "@webgpu/types"]
   },
-  "include": ["src/**/*.ts", "./*.ts"]
+  "include": ["src/**/*.ts", "./*.ts", "src/**/*.d.ts"]
 }

@@ -20,8 +20,10 @@ function outDir(): string {
   return path.join(target, "debug", "resources", "wpe-scene");
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  define: { __SCENE_DEV__: JSON.stringify(mode === "development") },
   base: "./",
+  worker: { format: "iife" },
   build: {
     outDir: outDir(),
     // outDir 在项目根之外，Vite 默认不清空，这里显式清掉旧的哈希文件
@@ -30,4 +32,4 @@ export default defineConfig({
     // Chromium 原生支持 modulepreload，不要 polyfill（它会额外 fetch 每个 chunk）
     modulePreload: { polyfill: false },
   },
-});
+}));

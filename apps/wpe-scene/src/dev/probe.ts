@@ -1,7 +1,7 @@
 /**
  * 场景渲染器的 dev 探针（只在 dev 构建安装，见 `install.ts`）。
  *
- * 挂在主窗口的 `window.__kabegameSceneProbe`，经 CDP（`kabegame-chromium` skill）在真 app 里调用：
+ * 挂在场景宿主 frame 的 `window.__kabegameSceneProbe`，经 CDP 在真 app 里调用：
  * - `renderFrame`：按指定 `g_Time` 渲染一帧场景、同步读回离屏场景目标，给出 SHA-256 与 PNG，用来做逐像素回归
  *   （例如关闭档前后两版渲染器的输出是否逐字节相同）；
  * - `bloom`：泛光链的链路隔离验证（`bloomProbe.ts`）；

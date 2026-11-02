@@ -4,7 +4,7 @@ import { compositeSize, FboBindings, fboSize, planLayer, type DrawStep, type Lay
 import { transformPoint } from "./math";
 import { drawMatrices } from "./scene";
 
-vi.mock("@/utils/fileUrl", () => ({ fileToUrl: (path: string) => path }));
+vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
 function pass(partial: Partial<ScenePass> = {}): ScenePass {
   return {

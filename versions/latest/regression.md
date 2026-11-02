@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 场景宿主 P3-0b：渲染器迁移
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 前端与构建 | Windows | `deno task test -c kabegame --skip cargo`；宿主 `typecheck` / `vite build --mode development`；检查 Worker 产物 | 两个 Vitest 目录通过；Worker 单文件、无 chunk import | 2026-11-02 主会话沙箱外：`deno task test -c kabegame --skip cargo` 依次跑完两个目录：`apps/kabegame` 60 个文件 582 passed，`apps/wpe-scene` 8 个文件 147 passed（设了 `KABEGAME_WPE_ROOT`，语料测试照跑）；此前就有的 `KameToolboxBubble.test.ts` 加载失败（`@kabegame/i18n` mock 只给了 `useI18n`，导入链在模块加载时读 `i18n.global`）一并修好，改为只替换 `useI18n`；Worker 产物 32.55 kB、无 `import`；dev 构建带探针、production 构建没有；宿主 tsc、应用 vue-tsc 0 error |
+| [x] | D1 画面 | Windows dev，主窗口 | P1 三张、vortex、bedroom 强制渲染，固定 `g_Time` 比较 P2a / P2b SHA-256 | 与迁移前一致 | 2026-11-02 CDP：宿主里的探针按 P2b 基准参数（`g_Time` 3.25 s，关闭档与超高档各五张：bedroom / vortex / eagleflag / deep_space / beach）渲染，10 个离屏目标的 SHA-256 与 `9a5d0e2f` 时的基准全部相同（含超高档 bedroom 的 `rgba16float` 目标） |
+| [ ] | D2 三处与生命周期 | Windows dev | 预览、应用背景、桌面各显示场景；改属性、换场景、退回、迟到首帧、暂停恢复 | 属性只重编译不重建设备；`g_Time` 暂停冻结；状态与过渡一致 | 2026-11-02 部分：图库预览经 `WpeSceneView` 建宿主 iframe，vortex 实时渲染（截图核对），bedroom / shimmering_particles 按不支持项退回；改一项属性只「重新加载」、不再报 `ready`，测完改回；暂停时宿主每秒 GPU 提交 60 → 0，恢复回 60。应用背景与桌面未测 |
+| [ ] | D3 ping | Windows dev，窗口模式 | 场景启动、宿主脚本死循环、宿主产物缺失 | 启动后由垫片应答；卡死约 30 s 重载；缺失时预览图且不循环重载 | 未测：要把桌面壁纸设成场景，没有改用户的壁纸设置 |
+| [ ] | D4 日志与内存 | Windows dev | 观察开始渲染、退回、设备丢失日志；同时开预览、背景、桌面 | target 为 `kabegame::wpe_scene_host`；记录每个宿主进程内存 | 2026-11-02 部分：开始渲染 / 退回预览图都以 `kabegame::wpe_scene_host: main: …` 进了应用日志；设备丢失与内存未测 |
+| [x] | D5 宿主帧循环（发现） | Windows dev，主窗口 | 宿主里统计 2 s 的 rAF 回调与 `GPUQueue.submit` | 渲染不超过帧率上限 | 2026-11-02：CEF 下 `file:` 子 frame 的 rAF 每帧被回调多次（时间戳相同；主页面 144 次/秒，宿主 432 次/秒，次数随同进程 `file:` frame 增多），渲染器的帧率闸门按时间戳跳过重复回调，GPU 提交稳定 60 次/秒，无重复渲染。网页壁纸若按回调次数推进动画会变快，另查 |
+
 ## 场景宿主 P3-0a：宿主与应用通路
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |

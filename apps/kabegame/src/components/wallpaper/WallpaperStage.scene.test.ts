@@ -11,7 +11,7 @@ const stub = vi.hoisted(() => ({
     id: string;
     aliveAtMount: number;
     unmounted: boolean;
-    emit: (event: "ready" | "fallback", ...args: unknown[]) => void;
+    emit: (event: "ready" | "fallback" | "alive", ...args: unknown[]) => void;
   }[],
 }));
 
@@ -19,14 +19,14 @@ vi.mock("./WpeSceneView.vue", async () => {
   const { defineComponent, h, onBeforeUnmount } = await import("vue");
   return {
     default: defineComponent({
-      props: { target: { type: Object, required: true }, paused: Boolean, interactive: Boolean },
-      emits: ["ready", "fallback"],
+      props: { target: { type: Object, required: true }, paused: Boolean, volume: Number, interactive: Boolean },
+      emits: ["ready", "fallback", "alive"],
       setup(props, { emit }) {
         const record = {
           id: (props.target as WallpaperTarget).id,
           aliveAtMount: stub.scenes.filter((scene) => !scene.unmounted).length,
           unmounted: false,
-          emit: emit as (event: "ready" | "fallback", ...args: unknown[]) => void,
+          emit: emit as (event: "ready" | "fallback" | "alive", ...args: unknown[]) => void,
         };
         stub.scenes.push(record);
         onBeforeUnmount(() => {
@@ -118,6 +118,23 @@ describe("targetKind", () => {
 });
 
 describe("WallpaperStage scene 层：loading → ready / fallback", () => {
+  it("场景垫片请求音量后才委托 ping，切走时收回", async () => {
+    const wrapper = mountStage(scene("a"));
+    const delegatesPing = () => (wrapper.vm as unknown as { delegatesPing: () => boolean }).delegatesPing();
+    await settle();
+    expect(delegatesPing()).toBe(false);
+    stub.scenes[0].emit("alive");
+    await settle();
+    expect(delegatesPing()).toBe(true);
+    // 场景出结果之前 Stage 还在等它，切换会排队；先出首帧，切到图片时才真正卸载场景
+    stub.scenes[0].emit("ready");
+    await settle();
+    await wrapper.setProps({ target: image("b") });
+    await settle();
+    expect(stub.scenes[0].unmounted).toBe(true);
+    expect(delegatesPing()).toBe(false);
+  });
+
   it("结果出来前不显示预览图、不发 ready、不淡入", async () => {
     const wrapper = mountStage(scene("a"));
     await settle();

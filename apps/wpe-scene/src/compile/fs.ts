@@ -1,4 +1,4 @@
-import { fileToUrl } from "@/utils/fileUrl";
+import { fileToUrl } from "../fileUrl";
 import { ScenePkg } from "./pkg";
 
 export type SceneSource = "project" | "pkg" | "assets";

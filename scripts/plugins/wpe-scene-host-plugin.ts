@@ -44,12 +44,12 @@ export class WpeSceneHostPlugin extends BasePlugin {
       rmSync(stale, { recursive: true, force: true });
       this.log(`删除上次 prod 构建留下的 ${path.relative(ROOT, stale)}`);
     }
-    this.buildInto(path.join(TARGET_DIR, "debug", "resources", SCENE_HOST_DIR_NAME));
+    this.buildInto(path.join(TARGET_DIR, "debug", "resources", SCENE_HOST_DIR_NAME), true);
   }
 
-  private buildInto(outDir: string): void {
+  private buildInto(outDir: string, dev = false): void {
     process.env.KABEGAME_WPE_SCENE_OUT_DIR = outDir;
     this.log(`构建场景宿主 → ${path.relative(ROOT, outDir)}`);
-    run("build", [], { bin: "deno-task", cwd: SCENE_HOST_APP_DIR });
+    run("build", dev ? ["--mode", "development"] : [], { bin: "deno-task", cwd: SCENE_HOST_APP_DIR });
   }
 }

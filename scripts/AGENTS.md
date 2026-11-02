@@ -17,7 +17,7 @@ deno task dev:frontend            # 仅启动前端（不含 Tauri，端口 1420
 
 桌面三平台的 `deno task dev -c kabegame` 统一走 `tauri dev`；`kabegame-cef-helper` bin 在 dev 下由 ComponentPlugin `beforeBuild` 在主程序编译前先行构建（`tauri dev` 走 `cargo run`，无法同调用多编一个 bin）；build 下由 tauri.conf.json 顶层 `bins`（fork patch 09，见 cocs/tauri/TAURI_CLI_FORK.md）驱动 `tauri build` 随主编译一并产出——cargo 收到逐个 `--bin` 而非 `--bins` 全量（cef-example 不进 release），Windows 的 helper 由 NSIS 原生装到安装根（不再 stage 进 resources/bin）。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。
 
-场景宿主 `apps/wpe-scene`（P3-0）：桌面 dev / build 不带 `--skip vue` 时由 `WpeSceneHostPlugin` 先构建。dev 直接写进 `<target>/debug/resources/wpe-scene`（不经 tauri-build 复制，改宿主后跑 `deno task --cwd apps/wpe-scene build` 或 `watch`、重载 iframe 即生效，不重编 Rust），并删掉 `src-tauri/kabegame/resources/wpe-scene` 的 prod 残留；build 写进 `src-tauri/kabegame/resources/wpe-scene` 随安装包分发。见 `cocs/wpe/WPE_SCENE.md`「场景宿主」。
+场景宿主 `apps/wpe-scene`（P3-0）：桌面 dev / build 不带 `--skip vue` 时由 `WpeSceneHostPlugin` 先构建。dev 用 `--mode development` 直接写进 `<target>/debug/resources/wpe-scene`（不经 tauri-build 复制，改宿主后跑 `deno task --cwd apps/wpe-scene build --mode development` 或带同一 mode 的 `watch`、重载 iframe 即生效，不重编 Rust），并删掉 `src-tauri/kabegame/resources/wpe-scene` 的 prod 残留；build 写进 `src-tauri/kabegame/resources/wpe-scene` 随安装包分发。见 `cocs/wpe/WPE_SCENE.md`「场景宿主」。
 
 ### 构建
 ```bash
@@ -83,19 +83,18 @@ kabegame-core），剩余参数自动补 `--` 传给 cargo test；全量套件�
 **前端**（vitest）：
 
 ```bash
-deno task test -c kabegame --skip cargo             # 跑应用查询模型与 Vue 组件的 Vitest 测试
+deno task test -c kabegame --skip cargo             # 依次跑 apps/kabegame 与 apps/wpe-scene 的 Vitest
 deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑哪
 ```
 
-前端只有 `apps/kabegame` 一个应用包（原 `@kabegame/core` 已并入它的 `src/`），
+前端测试覆盖 `apps/kabegame` 应用和独立的纯 TS 场景宿主 `apps/wpe-scene`；
 `kabegame-core` 现在只是 Rust crate `src-tauri/kabegame-core`，没有前端那一半。
 
-测试文件就近放（`src/**/*.test.ts`）。各包自己的 `vitest.config.ts` **从
-`vite.config.pub.ts` 取 `define` / `resolve` / `css`**——平台常量（`__WEB__` 等）由
-ModePlugin 注入的环境变量算出，测试环境必须与应用一致，不要在测试配置里另写一套。
-新增前端包要接测试时：在 `Component.feTestDir` 登记目录、给 package.json 补 `test`
-脚本、拷一份 `vitest.config.ts`，并补一个两行 re-export 的 `uno.config.ts`（UnoCSS
-按 cwd 查找它，缺了会刷 config-not-found 并退回默认配置）。
+测试文件就近放（`src/**/*.test.ts`）。应用包的 `vitest.config.ts` 从
+`vite.config.pub.ts` 取 `define` / `resolve` / `css`，平台常量由 ModePlugin 注入；
+纯 TS 的 `apps/wpe-scene` 用自己的 node 环境配置，不加载 UnoCSS。
+新增前端包要接测试时，在 `Component.feTestDirs` 登记目录、给 package.json 补 `test`
+脚本，并按实际运行环境配置 `vitest.config.ts`。
 
 ### 数据目录模式（`--data`）
 - `dev`（`deno task dev` 与不带 `--release` 的 `deno task b` 的默认值）：使用仓库内的 `.kabegame/debug/data`、`.kabegame/debug/cache` 和 `.kabegame/debug/tmp` 目录——与已安装应用隔离

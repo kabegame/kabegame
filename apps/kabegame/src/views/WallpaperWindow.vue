@@ -95,7 +95,7 @@ async function listenPing() {
   const label = getCurrentWebviewWindow().label;
   unlistenPing = await listen<{ label: string; seq: number }>("wallpaper-ping", (event) => {
     if (event.payload.label !== label) return; // 只应答本窗口
-    if (stage.value?.isShowingWeb()) return; // 网页壁纸显示期间由 iframe 应答
+    if (stage.value?.delegatesPing()) return; // 网页或已启动的场景宿主由垫片应答
     invoke("wallpaper_pong", { seq: event.payload.seq }).catch(() => {});
   });
 }

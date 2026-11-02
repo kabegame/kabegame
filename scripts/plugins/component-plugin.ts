@@ -92,25 +92,25 @@ export class Component {
   }
 
   /**
-   * 该组件的前端测试目录(vitest)。返回 null 表示这个组件没有前端测试。
+   * 该组件的前端测试目录(vitest),按顺序依次跑。空列表表示这个组件没有前端测试。
    *
-   * 只有 kabegame 有前端:应用内的 Vue/查询测试都在 `apps/kabegame` 下
-   * (原 `@kabegame/core` 包已并入该目录)。kabegame-core 现在是纯 Rust crate,
-   * kabegame-cli 无前端测试,两者该步自动跳过。
+   * 只有 kabegame 有前端:应用内的 Vue/查询测试在 `apps/kabegame` 下
+   * (原 `@kabegame/core` 包已并入该目录),场景宿主的编译 / 渲染测试在 `apps/wpe-scene` 下。
+   * kabegame-core 现在是纯 Rust crate,kabegame-cli 无前端测试,两者该步自动跳过。
    */
-  static feTestDir(comp: string): string | null {
+  static feTestDirs(comp: string): string[] {
     switch (comp) {
       case this.MAIN: {
-        return this.appFeDir(comp);
+        return [this.appFeDir(comp), path.join(SRC_FE_DIR, "wpe-scene")];
       }
       default: {
-        return null;
+        return [];
       }
     }
   }
 
-  get feTestDir(): string | null {
-    return Component.feTestDir(this.comp);
+  get feTestDirs(): string[] {
+    return Component.feTestDirs(this.comp);
   }
 }
 

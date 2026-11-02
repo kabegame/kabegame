@@ -9,7 +9,7 @@ import { decodeFileError, encodeFileError } from "./protocol";
 import { decodeLz4Block, parseTex } from "./tex";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
 
-vi.mock("@/utils/fileUrl", () => ({ fileToUrl: (path: string) => path }));
+vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
 interface FetchTally {
   calls: number;

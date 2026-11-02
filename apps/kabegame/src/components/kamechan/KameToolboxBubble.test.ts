@@ -9,8 +9,10 @@ const CustomTool = defineComponent({
   template: '<button type="button">整理</button>',
 });
 
-vi.mock("@kabegame/i18n", () => ({
-  useI18n: () => ({ t: (key: string) => key }),
+// 只替换 useI18n；其它导出保留真实实现：导入链上的 utils/backfillName.ts 在模块加载时就读 i18n.global
+vi.mock(import("@kabegame/i18n"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useI18n: (() => ({ t: (key: string) => key })) as never,
 }));
 vi.mock("@/header/globalToolsRegistry", () => ({
   useGlobalTools: () => ({

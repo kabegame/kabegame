@@ -74,7 +74,7 @@ describe("WallpaperStage web 层的音量消息", () => {
 
     request(frame.contentWindow);
     expect(posts).toHaveBeenCalledTimes(1);
-    expect(posts.mock.calls[0]).toEqual([{ type: WPE_VOLUME_MESSAGE, volume: 0.6 }, "*"]);
+    expect(posts.mock.calls[0]).toEqual([{ type: WPE_VOLUME_MESSAGE, volume: 0.6, paused: false }, "*"]);
   });
 
   it("volume / paused 变化时主动推；paused 时为 0", async () => {
@@ -86,6 +86,8 @@ describe("WallpaperStage web 层的音量消息", () => {
     await wrapper.setProps({ paused: true });
     await wrapper.setProps({ paused: false });
     expect(posts.mock.calls.map(([message]) => (message as { volume: number }).volume)).toEqual([0.3, 0, 0.3]);
+    // 垫片据此调页面的 setPaused
+    expect(posts.mock.calls.map(([message]) => (message as { paused: boolean }).paused)).toEqual([false, true, false]);
   });
 
   it("同一窗口里两个 Stage 各答各的 iframe", async () => {
@@ -97,7 +99,11 @@ describe("WallpaperStage web 层的音量消息", () => {
 
     request(frameOf(background).contentWindow);
     request(frameOf(preview).contentWindow);
-    expect(backgroundPosts.mock.calls.map(([message]) => message)).toEqual([{ type: WPE_VOLUME_MESSAGE, volume: 0 }]);
-    expect(previewPosts.mock.calls.map(([message]) => message)).toEqual([{ type: WPE_VOLUME_MESSAGE, volume: 0.8 }]);
+    expect(backgroundPosts.mock.calls.map(([message]) => message)).toEqual([
+      { type: WPE_VOLUME_MESSAGE, volume: 0, paused: false },
+    ]);
+    expect(previewPosts.mock.calls.map(([message]) => message)).toEqual([
+      { type: WPE_VOLUME_MESSAGE, volume: 0.8, paused: false },
+    ]);
   });
 });

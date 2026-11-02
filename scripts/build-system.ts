@@ -449,7 +449,8 @@ export class BuildSystem {
    * 不触发 beforeBuild/afterBuild 构建生命周期（插件打包、CEF helper 预构建等）。
    *
    * 与 check 命令一致，用 `--skip vue` / `--skip cargo` 各自关掉一侧。前端测试只对
-   * 有前端包的组件存在（见 `Component.feTestDir`），其余组件该步自动跳过。
+   * 有前端包的组件存在（见 `Component.feTestDirs`，kabegame 依次跑应用与场景宿主两个目录，
+   * 任一失败即中止），其余组件该步自动跳过。
    */
   async test(options: BuildOptions): Promise<void> {
     //@ts-ignore
@@ -465,9 +466,10 @@ export class BuildSystem {
     // 在 packages/<pkg> 下直接跑 `deno task test:watch`。
     const extraArgs = this.options.args || [];
 
-    const feTestDir = component.feTestDir;
-    if (!this.context.skip?.isVue && feTestDir) {
-      run("test", [], { bin: "deno-task", cwd: feTestDir });
+    if (!this.context.skip?.isVue) {
+      for (const feTestDir of component.feTestDirs) {
+        run("test", [], { bin: "deno-task", cwd: feTestDir });
+      }
     }
 
     if (!this.context.skip?.isCargo) {

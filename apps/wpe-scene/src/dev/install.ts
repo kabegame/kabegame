@@ -1,6 +1,5 @@
 /**
- * 安装场景渲染器的 dev 探针：`window.__kabegameSceneProbe`（`bootstrap/app.ts` 里 `IS_DEV` 门控，release 里
- * `IS_DEV` 是编译期常量 false，调用与这几个模块一起被摇掉）。经 CDP（`kabegame-chromium` skill）在真 app 里调用。
+ * 安装场景宿主的 dev 探针：由 main.ts 的构建模式常量门控，release 构建会摇掉。
  */
 import { runBloomProbe } from "./bloomProbe";
 import { probeChunk, probeKeys, renderFrame } from "./probe";

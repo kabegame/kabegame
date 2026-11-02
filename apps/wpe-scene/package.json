@@ -5,7 +5,8 @@
   "scripts": {
     "build": "vite build --config vite.config.ts",
     "watch": "vite build --config vite.config.ts --watch",
-    "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+    "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1"

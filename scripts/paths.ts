@@ -64,7 +64,7 @@ export function isArchDirName(name: string): boolean {
 
 /**
  * wpesl2wgsl（WPE 着色器 → WGSL 翻译器）的 wasm 产物：`deno task build:wpesl2wgsl` 写入，
- * kabegame 命令不带 `--skip vue` 时由 Wpesl2wgslPlugin 拷进前端。与平台无关，所以不按 platform/arch 分目录。
+ * kabegame 命令不带 `--skip vue` 时由 Wpesl2wgslPlugin 拷进场景宿主。与平台无关，所以不按 platform/arch 分目录。
  */
 export const WPESL2WGSL_WASM: string = path.join(
   ROOT,
@@ -74,13 +74,12 @@ export const WPESL2WGSL_WASM: string = path.join(
   "wpesl2wgsl.wasm",
 );
 
-/** 前端引用 wpesl2wgsl wasm 的位置（git 忽略），见 apps/kabegame/src/wpe-scene/wpesl2wgsl/index.ts。 */
+/** 场景宿主引用 wpesl2wgsl wasm 的位置（git 忽略），见 apps/wpe-scene/src/wpesl2wgsl/index.ts。 */
 export const WPESL2WGSL_FE_WASM: string = path.join(
   ROOT,
   "apps",
-  "kabegame",
-  "src",
   "wpe-scene",
+  "src",
   "wpesl2wgsl",
   "wpesl2wgsl.wasm",
 );

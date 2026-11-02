@@ -11,7 +11,7 @@ import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { staticBuiltins } from "../render/uniforms";
 import { identity } from "../render/math";
 
-vi.mock("@/utils/fileUrl", () => ({ fileToUrl: (path: string) => path }));
+vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
 function memoryReader(files: Record<string, string>): SceneReader & { reads: string[] } {
   const reads: string[] = [];

@@ -48,7 +48,7 @@ import {
   type UniformEntry,
 } from "./uniforms";
 
-vi.mock("@/utils/fileUrl", () => ({ fileToUrl: (path: string) => path }));
+vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
 function close(actual: ArrayLike<number>, expected: number[], digits = 5) {
   expect(Array.from(actual).length).toBe(expected.length);

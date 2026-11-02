@@ -12,11 +12,11 @@
  *   自己当前 iframe 的请求、回复自己的 `volume`（`paused` 时为 0），`volume` / `paused` 变化时再推
  *   （协议见 `wpeWebVolume.ts`）。
  * - 铺满父元素（父元素需有确定尺寸），可放在任意尺寸容器里。
- * - WPE 网页壁纸（`x-wpe/web`）走独立的 web 层：一次只存在一个 `file:` iframe（不透明源，与应用页隔离），
+ * - WPE 网页壁纸（`x-wpe/web`）走独立的 web 层：一次只存在一个 `file:` iframe（与应用页跨源），
  *   不参与 base / top 双层过渡；切入时等页面 load 后整层淡入盖住媒体层，切走时新媒体先直设到 base、
  *   web 层淡出后 **销毁** iframe（先置 about:blank 再移除），让渲染进程回收。
- * - WPE 场景壁纸（`x-wpe/scene`）走独立的 scene 层，切入切出照 web 层：一次只存在一个 `WpeSceneView`（它自己读属性、
- *   编译、持有 GPU 设备，地位等同 iframe），不参与双层过渡，切走即卸载（终止编译、销毁设备）。状态流转
+ * - WPE 场景壁纸（`x-wpe/scene`）走独立的 scene 层，切入切出照 web 层：一次只存在一个 `WpeSceneView`
+ *   iframe 外壳，宿主负责读属性、编译与 GPU 设备；切走即卸载宿主。状态流转
  *   loading → live / fallback：结果出来前什么都不显示、不发 `ready`（图库保持加载态，桌面保留上一张壁纸）；首帧出来
  *   就淡入实时画面并发 `ready`；不能渲染（或 `SCENE_RESULT_TIMEOUT_MS` 内没有结果）才显示作者预览图（目标的
  *   `previewPath`），预览图加载完才发 `ready`。`fallback` 不是错误，原因只记进调试状态。场景固定 cover 铺满，
@@ -39,18 +39,12 @@ import { resetVideoElement } from "@/utils/videoElement";
 import { isSceneTarget, isVideoTarget, isWebTarget, isWpeTarget } from "./targetKind";
 import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
 import { clampWallpaperVolume, isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
+import { WEB_SANDBOX } from "./webSandbox";
 import WpeSceneView from "./WpeSceneView.vue";
 
 type Phase = "idle" | "prep" | "enter";
 type MediaType = "image" | "video" | "web" | "scene";
 
-/**
- * WPE 网页壁纸 iframe 的 sandbox：
- * - `allow-same-origin` 必须有，否则页面变成 opaque origin，`localStorage` 抛错、相对资源的 Cookie 语义改变；
- * - 不给 top-navigation / popups / modals / downloads：壁纸页面不需要导航父窗口、弹窗或下载，
- *   `alert` 在壁纸里也不该出现。
- */
-const WEB_SANDBOX = "allow-scripts allow-same-origin allow-pointer-lock allow-forms";
 /** iframe 没有 error 事件（404 也会触发 load），只能靠超时兜底。 */
 const WEB_LOAD_TIMEOUT_MS = 8_000;
 /** web / scene 层淡入 / 淡出的兜底时长（略长于 CSS 过渡）。 */
@@ -197,6 +191,8 @@ const sceneMountKey = ref(0);
 const scenePreviewSrc = ref("");
 /** 首帧已出：画布可见（盖住可能已显示的预览图）；退回时置 false 露出预览图。 */
 const sceneLive = ref(false);
+/** 垫片第一次请求音量后，场景宿主接管桌面 ping。 */
+let sceneAlive = false;
 let sceneToken = 0;
 let sceneVisible = false;
 /**
@@ -872,6 +868,7 @@ function onSceneResultTimeout() {
  * 卸载场景：清掉 sceneTarget 让 WpeSceneView 卸载（它终止编译、销毁 GPU 资源与设备），同时打断进行中的进入 / 离开。
  */
 function teardownScene() {
+  sceneAlive = false;
   sceneToken += 1;
   clearSceneResultTimer();
   settleSceneShow();
@@ -896,6 +893,7 @@ function teardownScene() {
  */
 async function enterScene(next: WallpaperTarget, normalizedPath: string) {
   setLastError("");
+  sceneAlive = false;
   if (sceneTarget.value) {
     if (sceneVisible && props.transition !== "none") {
       const leaving = sceneToken;
@@ -1723,14 +1721,14 @@ function debugState(): Readonly<WallpaperStageDebugState> {
 }
 
 /**
- * 当前是否在显示 web 层（网页壁纸 iframe 存在，含加载中）。壁纸窗口据此决定 `wallpaper-ping` 由谁应答：
- * web 层显示期间交给 iframe 里的垫片，页面卡死就不应答、照样触发重载。
+ * 壁纸窗口的 `wallpaper-ping` 是否交给 iframe 里的垫片应答：网页壁纸 iframe 存在（含加载中），或场景宿主的垫片已经
+ * 发过音量请求（`alive`）。页面卡死就不应答、照样触发重载；宿主没起来（没构建、加载失败）时仍由应用页应答。
  */
-function isShowingWeb(): boolean {
-  return !!webFrameEl;
+function delegatesPing(): boolean {
+  return !!webFrameEl || (sceneTarget.value !== null && sceneAlive);
 }
 
-defineExpose({ debugState, isShowingWeb });
+defineExpose({ debugState, delegatesPing });
 </script>
 
 <template>
@@ -1788,7 +1786,9 @@ defineExpose({ debugState, isShowingWeb });
         <WpeSceneView
           :target="sceneTarget"
           :paused="paused"
+          :volume="volume"
           :interactive="interactive"
+          @alive="sceneAlive = true"
           @ready="onSceneReady"
           @fallback="onSceneFallback"
         />
