@@ -632,6 +632,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - 总述、已定决策与实测记录：[phase-3-0-scene-host.md](phase-3-0-scene-host.md)
 - 3-0a 宿主与应用的通路：[phase-3-0a-host-channel.md](phase-3-0a-host-channel.md)
 - 3-0b 渲染器迁进宿主：[phase-3-0b-renderer-move.md](phase-3-0b-renderer-move.md)
+- 3-0c 子 frame 不再跨窗口复用渲染进程（CEF 08，全局）、同进程 iframe 每帧只派发一次 rAF（CEF 09）：[phase-3-0c-frame-process.md](phase-3-0c-frame-process.md)
 
 ## P3 — SceneScript 基础（razer_vortex · razer_bedroom 完整）
 

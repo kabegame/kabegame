@@ -59,6 +59,7 @@
 ## 开发侧
 
 ### Added
+- 场景宿主 P3-0c：CEF 补丁 08 让 `ChromeContentBrowserClientCef::ShouldEmbeddedFramesTryToReuseExistingProcess` 无条件返回 false，子 frame 不再跨 browser 复用同站点渲染进程（两个窗口的 `file:` 宿主 / 网页壁纸各自一个进程，畅游 / 爬虫的第三方 iframe 同样生效，主 frame 复用不变）；CEF 补丁 09（Chromium 内层 `kabegame_raf_local_root_only`）让每个 frame widget 只服务自己 local root 的文档，同一页面里多个同进程 iframe 的 rAF 不再每帧重复派发。
 - 场景宿主 P3-0b：编译、WebGPU 渲染与 dev 探针迁入 `apps/wpe-scene` 的 `SceneHost`，应用页 `WpeSceneView` 改为 iframe 外壳；宿主垫片接管 ping，独立 Vitest 纳入 `deno task test -c kabegame`。
 - 场景宿主 P3-0 MVP：新增独立前端项目 `apps/wpe-scene`（纯 TS + Vite，构建进 `resource_dir/wpe-scene`：dev 由 `WpeSceneHostPlugin` 直接写 `target/debug/resources`、prod 进 `src-tauri/kabegame/resources` 打包），主窗口 / 壁纸窗口的应用页经 `get_wpe_scene_host_url` 拿 `file:` 地址当 iframe 加载；`file:` 解析器给宿主目录专门范围（WPE `assets` / `config.json` + 库内全部场景目录，网页壁纸目录索引顺带维护场景行，core 新增 `Storage::list_wpe_scene_rows`）；场景宿主当作一种特殊的网页壁纸，网页壁纸的命令与事件经 `wpe-web-capability` 照常可用，场景专用命令（`get_wpe_scene_postprocess`）由按宿主入口确切地址运行时注册的 `wpe-scene-host-capability` 放行。渲染器尚未迁移，实测见 `cocs/wpe/WPE_SCENE.md`「场景宿主」。
 - 场景宿主 P3-0a：宿主与应用之间的通路。`wpe_web_pull_state` 认宿主入口文档带来的 `imageId`（只认库内场景壁纸，`directories` 为空、不写 grants），垫片在地址带 `kbScene` 时传它；新增宿主命令 `wpe_scene_target`（场景目录与 `sceneAssets`）、`wpe_scene_report`（`ready` / `fallback` 以 `wpe-scene-status` 事件回到调用方窗口，`log` 写 `kabegame::wpe_scene_host`）；音量消息新增 `paused`，垫片转成 `wallpaperPropertyListener.setPaused`（网页壁纸也会收到）；场景壁纸也开桌面鼠标转发。渲染器迁移留待 P3-0b。

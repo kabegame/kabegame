@@ -1,0 +1,45 @@
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+index 34b8930461e95321ed3283e2a2a456fd93e061e4..b51e0e3818c5fe66dab05bfbe1cdc5b7d3c00ada 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -565,6 +565,25 @@ void ChromeContentBrowserClientCef::
+           browser_context->GetPath(), std::move(access_list)));
+ }
+ 
++bool ChromeContentBrowserClientCef::
++    ShouldEmbeddedFramesTryToReuseExistingProcess(
++    content::RenderFrameHost* /*outermost_main_frame*/) {
++  // Kabegame: a new SiteInstance of an embedded frame that needs a dedicated
++  // process gets kReusePendingOrCommittedSiteSubframe unless this returns false
++  // (RenderFrameHostManager::GetSiteInstanceForNavigation). That policy joins
++  // any process of the BrowserContext already hosting the same site, across
++  // BrowsingInstances, and every file: URL is one site, so a hung file: iframe
++  // in one browser froze the file: iframes of every other browser. Returning
++  // false for every browser keeps the default policy for embedded frames:
++  // frames of one BrowsingInstance still share their SiteInstance's process,
++  // but they no longer join a process of another browser. Chrome's base
++  // implementation returns false only for frames inside extension pages; an
++  // unconditional false covers that case. Unlike the DisableProcessReuse
++  // feature, this leaves main-frame process reuse
++  // (GetProcessReusePolicyForMainFrame) untouched.
++  return false;
++}
++
+ void ChromeContentBrowserClientCef::WillCreateURLLoaderFactory(
+     content::BrowserContext* browser_context,
+     content::RenderFrameHost* frame,
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.h b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+index 2a3ec84af6e2ea0d8d5375c35549662ad5800c98..ecf9e372204eb1c9254f99000118289418d76b6c 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.h
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+@@ -76,6 +76,10 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
+       int render_frame_id,
+       const std::optional<url::Origin>& request_initiator_origin,
+       NonNetworkURLLoaderFactoryMap* factories) override;
++  // Kabegame: embedded frames never reuse a same-site renderer process of
++  // another browser (always returns false). See the .cc for details.
++  bool ShouldEmbeddedFramesTryToReuseExistingProcess(
++      content::RenderFrameHost* outermost_main_frame) override;
+   void WillCreateURLLoaderFactory(
+       content::BrowserContext* browser_context,
+       content::RenderFrameHost* frame,

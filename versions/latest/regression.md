@@ -1,15 +1,34 @@
 # v4.7.0 regression
 
+## 场景宿主 P3-0c：子 frame 不跨窗口复用进程与 rAF 去重
+
+2026-11-03 Windows dev：CEF 08 关闭子 frame 跨 browser 复用同站点渲染进程；CEF 09 让每个 frame widget 只服务自身 local root 的文档。验收前须由用户重编 CEF，并完全退出、重启 dev。下表数值来自本次真机与静态检查。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 补丁 08 | Windows，CEF 补丁树 | 从 07 生成 08；检查 01–08；重应用后检查残留 | 08 只改 CEF 两处文件；序列可重放 | 2026-11-03：`08-no-embedded-frame-process-reuse.patch` 45 行，只改 `chrome_content_browser_client_cef.{h,cc}`；01–08 `--check` 通过，重应用后 `--gen --from 08` 无残留。开工前发现 `third/cef` 注释还是「patch 0005 / 0007」（10-31 编号改两位后未重应用），已重新应用 01–07 |
+| [x] | S2 补丁 09 | Windows，Chromium 构建树 | 按上游加 `views_widget.patch` 的底稿生成内层补丁；检查叠加与 01–09 | 内层补丁可正向应用，CEF 原补丁可反向检查；序列无残留 | 2026-11-03：`kabegame_raf_local_root_only.patch` 156 行、无 CR；正向 `git apply -p0 --check` 通过，`views_widget.patch` 反向检查仍通过；09 含 `patch.cfg` 一条与新内层文件；01–09 `--check` 通过，重应用无残留；`--gen --from none` 并集 23 个文件，其中 3 个新建内层补丁 |
+| [x] | B1 CEF 重编 | Windows dev | 用户退出 dev、重编 CEF、重启；核对 DLL 与内层补丁 | 构建成功，运行时加载新 DLL | 首次链接 `bootstrapc.exe` 时 `lld-link` 报 `LLVM ERROR: out of memory`（0xc000001d），与补丁无关：提交上限 73.8 GB、空闲已用约 46 GB，siso 为 Local:24；`NINJA_JOBS` 的 `NINJA_CORE_LIMIT` 不约束 siso，可手动设 `SISO_LIMITS=local=12`，用户决定不改脚本。退出 dev 释放内存后重跑成功：`page_animator.obj` 23:24 编出、`libcef.dll` 23:29；`target/debug/libcef.dll` 与导出目录哈希一致；09 首次构建已正向应用，重跑日志为 `already applied`，构建树内层补丁反向检查通过 |
+| [x] | D1 进程分布 | Windows dev | CDP 页面级 tracing 读取宿主与应用页进程 | 两窗口的 `file:` 宿主分进程，主窗口两宿主同进程 | 重编前三个宿主同在 29500；重编后壁纸窗口宿主 61204、主窗口两个宿主 74360，主窗口应用页 25184、壁纸窗口应用页 32780 |
+| [ ] | D2 重载不回流 | Windows dev | 桌面换场景后重查宿主进程 | 壁纸宿主不回流到主窗口宿主进程 | 部分：换场景后新宿主仍在壁纸窗口进程 61204，不在主窗口宿主进程 74360；壁纸窗口整窗重载未测 |
+| [x] | D3 rAF 去重 | Windows dev，144 Hz | 同测主窗口两个宿主、壁纸宿主和应用页 | 同进程多个 iframe 每帧各一次 rAF | 主窗口 vortex 预览与应用背景两个宿主各 144.5 次/秒，不同时间戳各 144.5 个/秒；壁纸宿主 144.5、应用页 144.5。修复前主窗口两个宿主各 288.5 / 289 次/秒，时间戳 144.5 个/秒 |
+| [x] | D4 local 子 frame | Windows dev | 在预览宿主内临时建 `about:blank` 子 iframe 测 rAF，测完移除 | 同一 local root 的子 frame 不漏帧 | 子 frame 与宿主都是 145 次/秒 |
+| [x] | D5 网页壁纸 | Windows dev，主窗口 | 预览 corsair_collection（12094），应用背景为 vortex 宿主 | 两个同进程 iframe 各每帧一次 | 两者同在进程 74360，各 144.5 次/秒；修复前此布局为 288 次/秒 |
+| [x] | D6 隐藏与恢复 | Windows dev | 用户两次最小化主窗口并恢复 | 主窗口宿主随遮挡节流，桌面宿主保持满速；恢复后回到满速 | 最小化期间主窗口应用页及其宿主均降到 1 次/秒，`visibilityState` 仍为 `visible`（与基线遮挡节流相同）；桌面宿主始终 144–145，恢复后主窗口回到 144 |
+| [x] | D7 场景回归与淡入 | Windows dev | 观察 vortex 宿主 rAF / GPU 提交；tracing 按 frame 对照首帧与 `live` | 实时渲染、淡入未被限流拖慢 | vortex 预览宿主 144 次 rAF/秒、`GPUQueue.submit` 60 次/秒；桌面与应用背景新宿主首次 rAF 在 930175 / 930176 ms，场景层出现 `live` 类在 930177 ms，之后无大于 40 ms 的间隔；预览路径同样。透明度为 0 的宿主现仅 1.5–2 次 rAF/秒，原因未查清 |
+| [x] | D8 内存 | Windows dev | 读取两个 `file:` 宿主进程私有内存 | 记录拆分后的实际开销 | 壁纸宿主进程 30 MB（显示的 12888 退回预览图、不渲染），主窗口宿主进程 84 MB（12888 + 实时 vortex）；多一个进程约 30 MB |
+| [x] | D9 畅游 | Windows dev | 打开 MDN `<iframe>` 页面，读各 frame 进程并直接截图 | 第三方 iframe 分进程且页面正常显示 | 单个畅游窗口中，主 frame 74120、`mdnplay.dev` 运行器 95976、嵌套 OpenStreetMap 47020、example.org 46188，`about:srcdoc` 也独立进程；直接截图地图正常。两个畅游窗口同站点的跨窗口分布及爬虫窗口未测。Playwright 连接会重建该页 iframe，立即截图空白不属于补丁问题；已关闭会话并删除本次新建的畅游记录 |
+
 ## 场景宿主 P3-0b：渲染器迁移
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | S1 前端与构建 | Windows | `deno task test -c kabegame --skip cargo`；宿主 `typecheck` / `vite build --mode development`；检查 Worker 产物 | 两个 Vitest 目录通过；Worker 单文件、无 chunk import | 2026-11-02 主会话沙箱外：`deno task test -c kabegame --skip cargo` 依次跑完两个目录：`apps/kabegame` 60 个文件 582 passed，`apps/wpe-scene` 8 个文件 147 passed（设了 `KABEGAME_WPE_ROOT`，语料测试照跑）；此前就有的 `KameToolboxBubble.test.ts` 加载失败（`@kabegame/i18n` mock 只给了 `useI18n`，导入链在模块加载时读 `i18n.global`）一并修好，改为只替换 `useI18n`；Worker 产物 32.55 kB、无 `import`；dev 构建带探针、production 构建没有；宿主 tsc、应用 vue-tsc 0 error |
 | [x] | D1 画面 | Windows dev，主窗口 | P1 三张、vortex、bedroom 强制渲染，固定 `g_Time` 比较 P2a / P2b SHA-256 | 与迁移前一致 | 2026-11-02 CDP：宿主里的探针按 P2b 基准参数（`g_Time` 3.25 s，关闭档与超高档各五张：bedroom / vortex / eagleflag / deep_space / beach）渲染，10 个离屏目标的 SHA-256 与 `9a5d0e2f` 时的基准全部相同（含超高档 bedroom 的 `rgba16float` 目标） |
-| [ ] | D2 三处与生命周期 | Windows dev | 预览、应用背景、桌面各显示场景；改属性、换场景、退回、迟到首帧、暂停恢复 | 属性只重编译不重建设备；`g_Time` 暂停冻结；状态与过渡一致 | 2026-11-02 部分：图库预览经 `WpeSceneView` 建宿主 iframe，vortex 实时渲染（截图核对），bedroom / shimmering_particles 按不支持项退回；改一项属性只「重新加载」、不再报 `ready`，测完改回；暂停时宿主每秒 GPU 提交 60 → 0，恢复回 60。应用背景与桌面未测 |
-| [ ] | D3 ping | Windows dev，窗口模式 | 场景启动、宿主脚本死循环、宿主产物缺失 | 启动后由垫片应答；卡死约 30 s 重载；缺失时预览图且不循环重载 | 未测：要把桌面壁纸设成场景，没有改用户的壁纸设置 |
-| [ ] | D4 日志与内存 | Windows dev | 观察开始渲染、退回、设备丢失日志；同时开预览、背景、桌面 | target 为 `kabegame::wpe_scene_host`；记录每个宿主进程内存 | 2026-11-02 部分：开始渲染 / 退回预览图都以 `kabegame::wpe_scene_host: main: …` 进了应用日志；设备丢失与内存未测 |
-| [x] | D5 宿主帧循环（发现） | Windows dev，主窗口 | 宿主里统计 2 s 的 rAF 回调与 `GPUQueue.submit` | 渲染不超过帧率上限 | 2026-11-02：CEF 下 `file:` 子 frame 的 rAF 每帧被回调多次（时间戳相同；主页面 144 次/秒，宿主 432 次/秒，次数随同进程 `file:` frame 增多），渲染器的帧率闸门按时间戳跳过重复回调，GPU 提交稳定 60 次/秒，无重复渲染。网页壁纸若按回调次数推进动画会变快，另查 |
+| [ ] | D2 三处与生命周期 | Windows dev | 预览、应用背景、桌面各显示场景；改属性、换场景、退回、迟到首帧、暂停恢复 | 属性只重编译不重建设备；`g_Time` 暂停冻结；状态与过渡一致 | 2026-11-02 部分：图库预览经 `WpeSceneView` 建宿主 iframe，vortex 实时渲染（截图核对），bedroom / shimmering_particles 按不支持项退回；改一项属性只「重新加载」、不再报 `ready`，测完改回；暂停时宿主每秒 GPU 提交 60 → 0，恢复回 60。之后（桌面壁纸设为 vortex、窗口模式）：壁纸窗口、应用背景、预览三个宿主同时实时渲染，截图核对壁纸窗口与预览画面正常（壁纸窗口调试面板 `media: scene`），三者每秒 GPU 提交各约 61–62 次；连读 12 帧，每隔一两帧出一次完整画面（只读一帧可能碰上没渲染的帧，读到单色）。换场景、迟到首帧未单独测 |
+| [ ] | D3 ping | Windows dev，窗口模式 | 场景启动、宿主脚本死循环、宿主产物缺失 | 启动后由垫片应答；卡死约 30 s 重载；缺失时预览图且不循环重载 | 2026-11-02 部分：**缺失**通过——临时把 `target/debug/resources/wpe-scene` 改名后重载壁纸窗口，日志 `场景宿主不可用: scene host is not built`，显示作者预览图，45 s 内没有任何「ping 未应答」（应用页继续应答，没有重载循环）；目录改回、再重载后恢复渲染。桌面显示场景期间也一直没有未应答，但由宿主还是应用页应答没有区分；**宿主卡死后整窗重载**未测 |
+| [ ] | D4 日志与内存 | Windows dev | 观察开始渲染、退回、设备丢失日志；同时开预览、背景、桌面 | target 为 `kabegame::wpe_scene_host`；记录每个宿主进程内存 | 2026-11-02 部分：开始渲染 / 退回预览图都以 `kabegame::wpe_scene_host: main: …` 进了应用日志（壁纸窗口的记为 `wallpaper: …`）。内存：壁纸窗口、应用背景、预览三个宿主**共用一个 `file:` 渲染进程**（撤掉壁纸窗口的宿主后没有进程退出，恢复后也没有新进程，该进程私有内存 41–55 MB）；一个 4K vortex 宿主约占显存 120 MiB（RTX 4070 整卡 2256 → 2376 MiB，日志估算渲染目标 63 MiB）。设备丢失未测 → P3-0c |
+| [x] | D5 宿主帧循环（发现） | Windows dev，主窗口 | 宿主里统计 2 s 的 rAF 回调与 `GPUQueue.submit` | 渲染不超过帧率上限 | 2026-11-02：`file:` 子 frame 的 rAF 每帧被回调多次（时间戳相同；当时主页面 144 次/秒，宿主 432 次/秒），渲染器的帧率闸门按时间戳跳过重复回调，GPU 提交稳定 60 次/秒，无重复渲染。之后查明倍数等于同一页面里同进程的 iframe 数（Chromium 每个 iframe widget 每帧各跑一次整页的 rAF 派发）：三个宿主同进程时，主窗口两个宿主各 288.5 次/秒，壁纸窗口唯一的宿主 144.5 次/秒。网页壁纸若按回调次数推进动画，在主窗口两个 iframe 同时播放时会快一倍，计划在 Blink 层去重 → P3-0c |
 
 ## 场景宿主 P3-0a：宿主与应用通路
 

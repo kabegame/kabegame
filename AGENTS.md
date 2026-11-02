@@ -37,7 +37,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 | 进程 | 平台 | 职责 |
 |---|---|---|
 | `kabegame`（主应用） | 全平台 | **唯一的业务状态属主**：Storage、PathQL 查询引擎、任务调度（V8 插件在本进程内每任务独占线程运行）、事件广播、虚拟盘挂载（Dokan / FUSE 在进程内）。桌面端同时是 CEF browser 进程，并开 app IPC 服务端（Windows named pipe / Unix socket）与可选的应用 Web 服务器。启动时若检测到同数据目录已有实例，经 IPC 转发「显示窗口」/「导入 `.kgpg`」后立即退出 |
-| `kabegame-cef-helper` | 桌面 standard | CEF 子进程，全部是主进程的直接子进程，由 `browser_subprocess_path` 派生、`--type=` 区分角色：`gpu-process`、`utility`（NetworkService / StorageService，按需再起 AudioService / VideoCaptureService 等）、`renderer`（每个 browser / 站点一个），**不持有任何业务状态**。CEF profile 目录 dev 为 `~/.cache/kabegame-cef-dev`、prod 为 `~/.cache/kabegame-cef`，所以 dev 与已安装版可同时运行、各带一套 helper。主界面、畅游窗口、WebView 爬虫任务窗口（`crawler-<task_id>`）都是主进程里的 CEF browser，页面跑在 helper renderer 中，经 Tauri IPC 回到主进程。位于 exe 旁（Linux release 为 `/usr/lib/kabegame/`）；Linux 禁用 zygote，每个 renderer 独立启动 helper |
+| `kabegame-cef-helper` | 桌面 standard | CEF 子进程，全部是主进程的直接子进程，由 `browser_subprocess_path` 派生、`--type=` 区分角色：`gpu-process`、`utility`（NetworkService / StorageService，按需再起 AudioService / VideoCaptureService 等）、`renderer`（每个 browser / 站点一个；子 frame 不跨 browser 复用 renderer，CEF 08，包括畅游与爬虫窗口里的第三方 iframe），**不持有任何业务状态**。CEF profile 目录 dev 为 `~/.cache/kabegame-cef-dev`、prod 为 `~/.cache/kabegame-cef`，所以 dev 与已安装版可同时运行、各带一套 helper。主界面、畅游窗口、WebView 爬虫任务窗口（`crawler-<task_id>`）都是主进程里的 CEF browser，页面跑在 helper renderer 中，经 Tauri IPC 回到主进程。位于 exe 旁（Linux release 为 `/usr/lib/kabegame/`）；Linux 禁用 zygote，每个 renderer 独立启动 helper |
 | `kabegame-cli` | 桌面 | 独立进程。碰数据库或主程序运行时状态的操作优先经 app IPC 交给主程序；主程序未运行、协议不兼容或数据目录不同时才在本进程初始化，可用 `--via auto\|app\|local` 控制。`pathql query` 是只读例外：忽略 `--via`，总在本进程以不迁移的只读 Storage 执行 |
 | 外部集成 | 桌面 | 通过 app IPC 或应用 Web 服务器（JSON-RPC / SSE / 媒体 / MCP）连接主程序，不直接碰数据库 |
 

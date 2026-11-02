@@ -1,8 +1,9 @@
 # P3-0 — 场景宿主：渲染器与脚本同处一个隔离 realm（架构试验，2026-11-02 提出）
 
-> 总计划见 [PLAN.md](PLAN.md)。实施拆成两步：
+> 总计划见 [PLAN.md](PLAN.md)。实施拆成三步：
 > - [phase-3-0a-host-channel.md](phase-3-0a-host-channel.md)：宿主与应用之间的通路（后端命令、垫片拉取、控制与状态事件）；
-> - [phase-3-0b-renderer-move.md](phase-3-0b-renderer-move.md)：渲染器迁进宿主、应用页改成 iframe 外壳。
+> - [phase-3-0b-renderer-move.md](phase-3-0b-renderer-move.md)：渲染器迁进宿主、应用页改成 iframe 外壳；
+> - [phase-3-0c-frame-process.md](phase-3-0c-frame-process.md)：子 frame 不再跨窗口复用渲染进程（CEF 08，全局）、同进程 iframe 每帧只派发一次 rAF（CEF 09）。
 > 本文件是 P3-0 的总述、已定决策与阶段 0 / MVP 的实测记录。
 
 > **形态更新（2026-11-02，用户定）**：宿主不再用 `index.html?window=…` 分支的不透明源 iframe——下面「阶段 0 实测」证明那条路
@@ -96,7 +97,7 @@
 | Tauri IPC | `get_wpe_scene_postprocess` 成功；未放行的报 `Command <name> not allowed by ACL`；`setting-change` 改一次再改回收到两条；其它事件报 ``event `<name>` is not allowed to be listened by ACL`` |
 | `parent.document` | `SecurityError: … Blocked a frame with origin "file://" from accessing a cross-origin frame.` |
 | `localStorage` | 可用，与全部网页壁纸共用 `file://` 存储区（允许） |
-| 进程隔离 | 独立 OOPIF；宿主忙等 3 s，父页面计时器最大间隔 29 ms |
+| 进程隔离 | 独立 OOPIF；宿主忙等 3 s，父页面计时器最大间隔 29 ms。但宿主之间不隔离：P3-0b 实测壁纸窗口、应用背景、预览三个宿主共用一个 `file:` 渲染进程（CDP tracing 证实同一 pid），后续处理见 [3-0c](phase-3-0c-frame-process.md)：跨窗口分进程，同窗口仍同进程 |
 
 遗留：
 - 壁纸窗口没测（当前不是窗口模式）。
@@ -127,7 +128,8 @@
     - 借它的 `fetch` 读它的目录。宿主自己直接读被拒。
   - 网页壁纸之间本来如此，宿主只是加入了同一个池。
   - 根治要让每个 `file:` iframe 各自成进程或来源，要动 CEF / Chromium，并重看补丁 04 的同源与访问语义，成本高。
-  - 与 WPE 的「每张壁纸各自进程」不一致；在 P3 跑第三方脚本前定是接受还是根治。
+  - WPE 自己的进程模型未确认（场景在 `wallpaper64.exe` 里原生渲染，网页壁纸由带 CEF 的 `webwallpaper64.exe` 承载，是否每张一个进程不知道）；在 P3 跑第三方脚本前定是接受还是根治。
+  - 进程层面：跨窗口的共用由 [3-0c](phase-3-0c-frame-process.md) 的 CEF 补丁 08 拆开；同一窗口里的 `file:` frame 同源、同 BrowsingInstance，仍同进程、互相可达，本缺口不变。
 - **用户裁定（2026-11-02）**：
   - 缺口 1 不成立：场景宿主是一种特殊的网页壁纸，本来就要应答 ping / pong、跟随用户属性，子 frame 拿到的网页壁纸权限也是宿主自己该有的。已撤掉宿主侧的 deny 及其对齐单测；修法 a / b 不做。
   - 缺口 2 接受。

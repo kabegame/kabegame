@@ -1,0 +1,180 @@
+diff --git a/patch/patch.cfg b/patch/patch.cfg
+index d610d7463c5e1730e45a57b3657ca513a81fc544..2bf5afde20a7822cc0704b51d4b18b5e25d36370 100644
+--- a/patch/patch.cfg
++++ b/patch/patch.cfg
+@@ -901,5 +901,13 @@ patches = [
+     # a drag of real local files (renderer-supplied filenames are always
+     # cleared by RenderWidgetHostImpl::FilterDropData).
+     'name': 'kabegame_drag_source_filenames',
++  },
++  {
++    # kabegame: each frame widget's BeginMainFrame services only the documents
++    # of its own local root, so N same-process OOPIFs of one page no longer run
++    # every document's animation frame callbacks N times per frame.
++    # web_frame_widget_impl.cc is also modified by views_widget.patch; this
++    # patch is relative to that state. Do not resave it with patch_updater.py.
++    'name': 'kabegame_raf_local_root_only',
+   }
+ ]
+diff --git a/patch/patches/kabegame_raf_local_root_only.patch b/patch/patches/kabegame_raf_local_root_only.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae7515d831
+--- /dev/null
++++ b/patch/patches/kabegame_raf_local_root_only.patch
+@@ -0,0 +1,156 @@
++--- third_party/blink/renderer/core/page/page_animator.h
+++++ third_party/blink/renderer/core/page/page_animator.h
++@@ -35,12 +35,19 @@
++   void ScheduleVisualUpdate(LocalFrame*);
++   void ServiceScriptedAnimations(
++       base::TimeTicks monotonic_animation_start_time);
+++  // Kabegame: Page::Animate() for one frame widget. Runs the same steps but
+++  // services only the documents |local_root|'s widget controls (|local_root|
+++  // and its local descendants). Called from WebFrameWidgetImpl::BeginMainFrame.
+++  void AnimateForLocalRoot(base::TimeTicks monotonic_frame_begin_time,
+++                           LocalFrame& local_root);
++   // Invokes callbacks, dispatches events, etc. The order is defined by HTML:
++   // https://html.spec.whatwg.org/C/#event-loop-processing-model
++   static void ServiceScriptedAnimations(
++       base::TimeTicks monotonic_time_now,
++       const ControllersVector& documents_vector);
++-  void PostAnimate();
+++  // Kabegame: with |local_root|, only unlocks the clocks of the documents that
+++  // widget controls.
+++  void PostAnimate(LocalFrame* local_root = nullptr);
++ 
++   bool IsServicingAnimations() const { return servicing_animations_; }
++ 
++@@ -74,6 +81,10 @@
++   void ReportFrameAnimations(cc::AnimationHost* animation_host);
++ 
++  private:
+++  // Body of ServiceScriptedAnimations(base::TimeTicks) for |documents|.
+++  void ServiceScriptedAnimationsForDocuments(
+++      base::TimeTicks monotonic_animation_start_time,
+++      const DocumentsVector& documents);
++   Member<Page> page_;
++   bool servicing_animations_;
++   bool updating_layout_and_style_for_painting_;
++--- third_party/blink/renderer/core/page/page_animator.cc
+++++ third_party/blink/renderer/core/page/page_animator.cc
++@@ -18,6 +18,7 @@
++ #include "third_party/blink/renderer/core/frame/local_frame.h"
++ #include "third_party/blink/renderer/core/frame/local_frame_view.h"
++ #include "third_party/blink/renderer/core/loader/document_loader.h"
+++#include "third_party/blink/renderer/core/page/autoscroll_controller.h"
++ #include "third_party/blink/renderer/core/page/chrome_client.h"
++ #include "third_party/blink/renderer/core/page/page.h"
++ #include "third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.h"
++@@ -52,6 +53,23 @@
++   return documents;
++ }
++ 
+++// Kabegame: the documents a frame widget controls: |frame| (a local root on the
+++// first call) and its local descendants, in the same tree order as
+++// GetAllDocuments(). A RemoteFrame child ends the walk: descendants below it
+++// belong to another local root (another widget, maybe another process).
+++// Mirrors ForEachLocalFrameControlledByWidget() in web_frame_widget_impl.cc.
+++void CollectWidgetDocuments(LocalFrame& frame, DocumentsVector& documents) {
+++  Document* document = frame.GetDocument();
+++  bool can_throttle =
+++      document->View() && document->View()->CanThrottleRendering();
+++  documents.emplace_back(std::make_pair(document, can_throttle));
+++  for (Frame* child = frame.FirstChild(); child; child = child->NextSibling()) {
+++    if (auto* local_child = DynamicTo<LocalFrame>(child)) {
+++      CollectWidgetDocuments(*local_child, documents);
+++    }
+++  }
+++}
+++
++ }  // namespace
++ 
++ PageAnimator::PageAnimator(Page& page)
++@@ -65,6 +83,29 @@
++ 
++ void PageAnimator::ServiceScriptedAnimations(
++     base::TimeTicks monotonic_animation_start_time) {
+++  ServiceScriptedAnimationsForDocuments(monotonic_animation_start_time,
+++                                        GetAllDocuments(page_->MainFrame()));
+++}
+++
+++void PageAnimator::AnimateForLocalRoot(
+++    base::TimeTicks monotonic_frame_begin_time,
+++    LocalFrame& local_root) {
+++  DCHECK(local_root.IsLocalRoot());
+++  // Same steps as Page::Animate(); keep in sync. Only the document set differs.
+++  page_->GetAutoscrollController().Animate();
+++  DocumentsVector documents;
+++  CollectWidgetDocuments(local_root, documents);
+++  ServiceScriptedAnimationsForDocuments(monotonic_frame_begin_time, documents);
+++  // The ValidationMessage overlay manages its own internal Page that isn't
+++  // hooked up the normal BeginMainFrame flow, so we manually tick its
+++  // animations here.
+++  page_->GetValidationMessageClient().ServiceScriptedAnimations(
+++      monotonic_frame_begin_time);
+++}
+++
+++void PageAnimator::ServiceScriptedAnimationsForDocuments(
+++    base::TimeTicks monotonic_animation_start_time,
+++    const DocumentsVector& documents) {
++   base::AutoReset<bool> servicing(&servicing_animations_, true);
++ 
++   // Once we are inside a frame's lifecycle, the AnimationClock should hold its
++@@ -72,7 +113,6 @@
++   Clock().SetAllowedToDynamicallyUpdateTime(false);
++   Clock().UpdateTime(monotonic_animation_start_time);
++ 
++-  DocumentsVector documents = GetAllDocuments(page_->MainFrame());
++   for (const auto& [document, can_throttle] : documents) {
++     static TimeClamper time_clamper;
++     base::TimeTicks animation_time = document->Timeline().CalculateZeroTime();
++@@ -311,7 +351,7 @@
++   }
++ }
++ 
++-void PageAnimator::PostAnimate() {
+++void PageAnimator::PostAnimate(LocalFrame* local_root) {
++   // If we don't have an imminently incoming frame, we need to let the
++   // AnimationClock update its own time to properly service out-of-lifecycle
++   // events such as setInterval (see https://crbug.com/995806). This isn't a
++@@ -319,7 +359,12 @@
++   // RAF we will be getting a new frame and thus don't need to unlock the clock.
++   if (!next_frame_has_pending_raf_) {
++     Clock().SetAllowedToDynamicallyUpdateTime(true);
++-    DocumentsVector documents = GetAllDocuments(page_->MainFrame());
+++    DocumentsVector documents;
+++    if (local_root) {
+++      CollectWidgetDocuments(*local_root, documents);
+++    } else {
+++      documents = GetAllDocuments(page_->MainFrame());
+++    }
++     for (const auto& [document, can_throttle] : documents) {
++       document->GetAnimationClock().SetAllowedToDynamicallyUpdateTime(true);
++     }
++--- third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
+++++ third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
++@@ -1684,7 +1684,7 @@
++   }
++ 
++   if (Page* page = local_root_frame->GetPage()) {
++-    page->Animator().PostAnimate();
+++    page->Animator().PostAnimate(local_root_frame);
++   }
++ }
++ 
++@@ -2656,7 +2656,14 @@
++             LocalFrameUkmAggregator::kAnimate));
++   }
++ 
++-  GetPage()->Animate(last_frame_time);
+++  // Kabegame: Page::Animate() walks every local frame of the page in this
+++  // renderer, so with N local roots of one page in this process (e.g. N
+++  // same-site OOPIFs) every document ran its animation frame callbacks N times
+++  // per frame.
+++  // Service only the documents this widget controls; the other local roots are
+++  // serviced by their own widgets, which their documents schedule.
+++  GetPage()->Animator().AnimateForLocalRoot(last_frame_time,
+++                                            *LocalRootImpl()->GetFrame());
++   // Animate can cause the local frame to detach.
++   if (!LocalRootImpl())
++     return;
