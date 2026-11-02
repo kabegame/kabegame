@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 场景宿主 P3-0a：宿主与应用通路
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测与检查 | Windows | `wpe_` Rust 单测、宿主 tsc / build、前端 vitest / vue-tsc、格式检查 | 0 error | 2026-11-02 主会话沙箱外重跑：`kabegame wpe_` 37 passed；`check-kabegame` 0 error；`wpeWebVolume.test.ts` 11 passed；宿主 tsc 0 error、`vite build` 通过；rustfmt / Prettier / `node --check` 通过 |
+| [x] | D1 属性与拒绝 | Windows dev，主窗口 | 两个宿主 iframe 分别带 `kbScene` / `kbInstance`；改一项属性后恢复；另用网页壁纸 id、不存在的 id、缺 id 拉取 | 首包 `user[key].value` 与属性面板同形，更新只推变化键；非法 id 与缺 id 拒绝；网页壁纸传 id 仍按文档认图 | 2026-11-02 CDP（shimmering_particles 12892）：6 个属性逐键相同、`directories` 为空；`count` 1 → 1.1 两个实例都只收到 `count`，已改回 1；网页壁纸 id / 不存在的 id 报 `not a scene wallpaper in the library`，缺 id 报 `the scene host must pass imageId`，`wpe_scene_target` 同样拒绝网页壁纸；corsair_collection 带场景 id 拉取仍返回 12094 |
+| [x] | D2 状态与日志 | Windows dev，主窗口 | 各实例报 `ready` / `fallback`，宿主报日志 | `wpe-scene-status` 仅到调用方窗口，应用页按实例认领；日志出现在应用日志 | 2026-11-02 CDP：实例 a、b 各收到一条 `ready`；日志 `INFO kabegame::wpe_scene_host: main: applyUserProperties count,glow,…`。最初的 target `wpe_scene_host` 不带 `kabegame` 前缀，被日志过滤器当依赖只放行 warn，已改为 `kabegame::wpe_scene_host` |
+| [x] | D3 暂停与音量 | Windows dev，主窗口 | 给两个宿主分别推 `paused`；网页壁纸 iframe 推 `paused` | 只有被推的实例收到 `setPaused`；网页壁纸 `setPaused` 收到变化；页面起来时不收到多余的 `setPaused(false)` | 2026-11-02 CDP：实例 a 收到 `[true, false]`、b 没有；网页壁纸收到 `[true, false]`；三个 iframe 各发一次音量请求并得到回复 |
+| [ ] | D4 桌面鼠标 | Windows dev，窗口模式 | 桌面壁纸设为场景，检查鼠标转发 | 场景可接收指针 | 未测：当前不是窗口模式，没有改用户设置 |
+
+
 ## 场景宿主 P3-0 MVP：`apps/wpe-scene` 的 `file:` iframe
 
 按 PLAN P3-0「形态更新」搭出场景宿主，渲染器没有迁移（`WpeSceneView` 照旧在应用页）。场景宿主当作一种特殊的网页壁纸。

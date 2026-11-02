@@ -115,7 +115,11 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
         // 重新开启壁纸、改样式都会走到这里。
         self.warn_if_window_missing("set_wallpaper_path");
         // 判定在窗口锁外做（读 project.json），开关在锁内同步完成；锁内不调会同步等主线程的 getter。
-        let is_web = web_entry(Path::new(file_path))?.is_some();
+        let path = Path::new(file_path);
+        let is_web = web_entry(path)?.is_some();
+        let is_scene = path.is_dir()
+            && kabegame_core::wpe::read_project(path)
+                .is_ok_and(|project| project.kind == kabegame_core::wpe::WpeKind::Scene);
         let mut guard = self
             .wallpaper_window
             .lock()
@@ -124,7 +128,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
             // 尚未 init：什么都不做，不兜底建窗。
             return Ok(());
         };
-        wp.set_mouse_forwarding(is_web);
+        wp.set_mouse_forwarding(is_web || is_scene);
         Ok(())
     }
 

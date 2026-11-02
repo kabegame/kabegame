@@ -70,7 +70,7 @@ pub async fn get_current_wallpaper_target_from_settings() -> Result<Option<Wallp
 /// 由图片行组装壁纸目标（当前壁纸、图库预览、应用背景共用）：
 /// WPE 视频的作者属性取自图片 metadata（导入时写入的 `project.json` 原文），不重读磁盘——
 /// 用户属性以后也作为同一份元数据里的一段合并进来；其它类型 `wpe_video` 为 None。
-async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
+pub(crate) async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
     let wpe_video =
         if kabegame_core::media::image_type::is_wpe_video_type(info.media_type.as_deref()) {
             let image_id = info.id.clone();

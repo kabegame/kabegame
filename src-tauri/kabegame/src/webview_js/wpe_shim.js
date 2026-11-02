@@ -12,6 +12,8 @@
   var internals = window.__TAURI_INTERNALS__;
   if (!direct || !internals || window.__kbWpeShim) return;
   Object.defineProperty(window, "__kbWpeShim", { value: true });
+  // 宿主的暂停状态（音量消息里的 paused）：页面起来时默认在播，只在状态变化时调 setPaused
+  var hostPaused = false;
 
   // ---- 音量：宿主音量乘到页面的两条出声路径上（HTMLMediaElement、Web Audio）----
   // 要在页面脚本之前改好原型，所以放在最前面，出错也不影响后面的属性投递。消息类型的字面量与
@@ -311,6 +313,12 @@
         // 宿主自己的消息不交给页面（捕获阶段、最先登记，页面的 message 监听都在后面）
         event.stopImmediatePropagation();
         hostVolume = clamp01(data.volume);
+        var paused = data.paused === true;
+        if (hostPaused !== paused) {
+          hostPaused = paused;
+          // 首次投递之前到达的留给 deliverFull 补
+          if (delivered) call("setPaused", paused);
+        }
         if (media) media.refresh();
         if (audio) audio.refresh();
       },
@@ -472,6 +480,7 @@
     call("applyGeneralProperties", clone(state.general));
     deliverDirectories(null, state.directories);
     delivered = state;
+    if (hostPaused) call("setPaused", true);
   }
   function changedUser(prev, next) {
     var out = null;
@@ -516,7 +525,8 @@
   // frame 销毁即由宿主释放）。来源由 CEF 补丁 07 在建工厂时确定，首批请求即可用，不做重试。
   var transport = {
     pull: function () {
-      return internals.invoke("wpe_web_pull_state");
+      var sceneImage = new URLSearchParams(location.search).get("kbScene");
+      return internals.invoke("wpe_web_pull_state", sceneImage ? { imageId: sceneImage } : {});
     },
     // 手写 Tauri Channel 的序号协议（同 @tauri-apps/api 的 Channel）：消息带 index，大消息由 Tauri 生成的脚本
     // 在本 frame 里 fetch 取回后才回调，可能晚到，先存后按序投递；结束标记忽略（WPE 没有退订）

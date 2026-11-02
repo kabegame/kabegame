@@ -23,6 +23,8 @@ export interface WpeVolumeMessage {
   type: typeof WPE_VOLUME_MESSAGE;
   /** 0…1：页面的生效音量 = 页面自己设的音量 × 这个值。 */
   volume: number;
+  /** 垫片转交给 wallpaperPropertyListener.setPaused。 */
+  paused: boolean;
 }
 
 export function isWpeVolumeRequest(data: unknown): data is WpeVolumeRequest {
@@ -42,6 +44,6 @@ export function webHostVolume(volume: number, paused: boolean): number {
   return paused ? 0 : clampWallpaperVolume(volume);
 }
 
-export function wpeVolumeMessage(volume: number): WpeVolumeMessage {
-  return { type: WPE_VOLUME_MESSAGE, volume };
+export function wpeVolumeMessage(volume: number, paused: boolean): WpeVolumeMessage {
+  return { type: WPE_VOLUME_MESSAGE, volume, paused };
 }

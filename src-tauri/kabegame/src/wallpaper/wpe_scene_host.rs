@@ -53,6 +53,15 @@ pub fn host_dir() -> PathBuf {
     AppPaths::global().resource_dir.join(SCENE_HOST_DIR_NAME)
 }
 
+/// 只认宿主入口文档，不把宿主目录中的其它文件当成可拉取场景状态的页面。
+pub fn is_host_document(path: &Path) -> bool {
+    is_host_document_in(path, &host_dir())
+}
+
+fn is_host_document_in(path: &Path, dir: &Path) -> bool {
+    file_path_key(path) == file_path_key(&dir.join(SCENE_HOST_ENTRY))
+}
+
 /// 宿主 `index.html` 的 `file:///` 地址。应用页赋给 iframe 的地址、宿主的 IPC 来源与 capability 地址
 /// 都是它，必须逐字一致，所以只从这里生成。
 fn host_entry_url() -> Option<String> {
@@ -363,5 +372,18 @@ mod tests {
             url,
             "file:///D:/Apps/Kabegame/resources/wpe-scene/index.html"
         );
+    }
+
+    #[test]
+    fn only_entry_is_a_host_document() {
+        let base = fixture("host-document");
+        let dir = base.join("resources/wpe-scene");
+        assert!(is_host_document_in(&dir.join("index.html"), &dir));
+        assert!(!is_host_document_in(&dir.join("assets/index.js"), &dir));
+        assert!(!is_host_document_in(
+            &base.join("resources/wpe-scene2/index.html"),
+            &dir
+        ));
+        let _ = fs::remove_dir_all(base);
     }
 }

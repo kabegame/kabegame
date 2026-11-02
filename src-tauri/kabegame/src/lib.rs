@@ -951,6 +951,10 @@ pub(crate) fn configure_app(
             wpe_web_media_subscribe,
             #[cfg(not(target_os = "android"))]
             get_wpe_scene_host_url,
+            #[cfg(not(target_os = "android"))]
+            wpe_scene_target,
+            #[cfg(not(target_os = "android"))]
+            wpe_scene_report,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

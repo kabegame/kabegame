@@ -534,7 +534,7 @@ function applyWebInteractive() {
 }
 
 /**
- * paused 对 web 层只做 visibility: hidden（省掉合成，不冻结页面脚本；冻结留给后续垫片），页面音量随之按 0
+ * paused 对 web 层做 visibility: hidden，并由垫片通知页面的 `setPaused`；页面音量随之按 0
  * （见 `postWebVolume`）。
  */
 function applyWebPaused() {
@@ -549,8 +549,8 @@ function postWebVolume() {
   const target = webFrameEl?.contentWindow;
   if (!target) return;
   try {
-    // 对方是跨源的 `file:` 文档；消息只有一个音量数字，不限定 targetOrigin
-    target.postMessage(wpeVolumeMessage(webHostVolume(props.volume, props.paused)), "*");
+    // 对方是跨源的 `file:` 文档；消息携带音量与暂停状态，不限定 targetOrigin。
+    target.postMessage(wpeVolumeMessage(webHostVolume(props.volume, props.paused), props.paused), "*");
   } catch (error) {
     logger.warn(`网页壁纸音量发送失败: ${error}`);
   }

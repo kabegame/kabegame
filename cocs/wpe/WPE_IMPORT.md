@@ -311,6 +311,8 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
 
 ### 运行时垫片与宿主协议
 
+P3-0a 起场景宿主复用这份垫片。地址带 `kbScene` 时，拉取 `wpe_web_pull_state` 会传 `imageId`；后端只在调用文档是场景宿主入口、id 是库内场景壁纸时按 id 返回状态，`directories` 为空且不写用户文件 grants。普通网页壁纸仍按文档目录认图，传入的 `imageId` 被忽略。父页面的 `kabegame:wpe-volume` 消息另带 `paused`（旧消息缺字段按 `false`），垫片只在状态变化时调 `wallpaperPropertyListener.setPaused`（页面起来时按未暂停，不会收到多余的 `setPaused(false)`）；首次全量属性交付之前就已暂停的，交付后补调一次 `setPaused(true)`。网页壁纸也适用。
+
 WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关键的是 `window.wallpaperPropertyListener.applyUserProperties`：
 宿主把作者默认值推给它之后，多数壁纸才开始画。Kabegame 用一份 JS 垫片 `webview_js/wpe_shim.js` 定义这组接口并投递属性，
 **不照搬 WPE 的「宿主拼 JS、加载完成前排队」**（`API.md` §4.8），改成垫片驱动：垫片向宿主**拉取**完整状态、**订阅**
@@ -327,10 +329,10 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   属性不推）；`language` 是界面语言换成的 WPE 语言码（`wpe_language_code`：`zh-chs` / `zh-cht` / `ja-jp` / `ko-kr`，其余
   `en-us`）。`fps` 留给 Phase 6（推 0 会让按 `1000 / fps` 算间隔的页面停住）。Rust 不带版本号。
 - **一种传输**：iframe 自己就是调用方，直接 `invoke` / `listen`，预览与桌面逐字节同一份：
-  - `pull()` = `invoke("wpe_web_pull_state")`：命令不接收 id、不看 webview，参数只有 `tauri::ipc::CallerOrigin`（ACL 判定所用的
+  - `pull()` = `invoke("wpe_web_pull_state", { imageId? })`：普通网页壁纸不传 id；场景宿主从地址的 `kbScene` 传 id。命令按 `tauri::ipc::CallerOrigin`（ACL 判定所用的
     调用方来源；运行时由 initiator 与 07 文档 URL 合成完整来源，页面伪造不了）。它把来源还原成文档路径（只认 `file:`），
     在网页壁纸目录索引里找到所在的那张，按 id 组装状态，返回前用同一份 metadata 覆盖这张壁纸的放行；页面拿不到别的图片的
-    metadata。不在任何网页壁纸里、不是 `file:` 来源都报错。
+    metadata。宿主入口文档按传入 id 读取库内场景壁纸；其它不在网页壁纸里的文档、非 `file:` 来源都报错。
   - `listen(names, onEvent)` = 逐个 `plugin:event|listen`（`core:event:allow-listen`），事件只投递到本 frame；失败记录日志，等待下一次相关事件。
 - **ping 应答**：垫片监听 `wallpaper-ping`，从 `__TAURI_INTERNALS__.metadata.currentWebview.label` 取自身 label、过滤后调用
   `wallpaper_pong(seq)`；不等 load 或属性拉取成功。只有壁纸窗口里的 iframe 应答（预览的 label 是 `main`）。`wallpaper_pong`

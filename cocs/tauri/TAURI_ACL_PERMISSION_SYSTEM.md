@@ -64,8 +64,8 @@
 - **运行时注册** `wpe-scene-host-capability`（场景宿主 `apps/wpe-scene`，P3-0，`wallpaper/wpe_scene_host.rs` 的
   `register_capability`，`init_pre` 里 `add_capability`，只 Windows）：`remote.urls` 只有宿主 `index.html` 的**确切**
   `file:///` 地址（运行时由 `resource_dir` 算出，URLPattern 特殊字符逐个转义；盘符冒号不转义会被当成具名组而解析失败），
-  不用路径通配——工坊内容可以造同名目录冒充；`frames: "sub"`，窗口 main / wallpaper，`local: false`。权限只有
-  `permissions/wpe-scene-host.toml`（场景专用命令，现在是 `get_wpe_scene_postprocess`）。场景宿主是一种特殊的网页壁纸：
+    不用路径通配——工坊内容可以造同名目录冒充；`frames: "sub"`，窗口 main / wallpaper，`local: false`。权限只有
+  `permissions/wpe-scene-host.toml`（场景专用命令：`get_wpe_scene_postprocess`、`wpe_scene_target`、`wpe_scene_report`）。状态事件 `wpe-scene-status` 由后端 `emit_to` 调用方 webview label，应用页按实例号认领。场景宿主是一种特殊的网页壁纸：
   它同样匹配 `wpe-web-capability` 的 `file:///*`，网页壁纸的命令与四个事件都从那里拿（应答 ping、按 `image-changed`
   跟随用户属性等），这里不重复。
 
@@ -244,7 +244,7 @@ frame 始终是应用页（网页壁纸是子 frame 里的 iframe，窗口不再
 | 预览网页壁纸 `file:` iframe（主窗口） | 子 | 只有 `wpe_web_pull_state` / `wallpaper_pong`（`wpe-web-capability`） | 拒绝 | 放行 |
 | 桌面网页壁纸 `file:` iframe（壁纸窗口） | 子 | 同上 | 拒绝 | 放行 |
 | 网页壁纸里再嵌的 `file:` iframe | 子 | 同上（同一份 capability） | 拒绝 | 放行 |
-| 场景宿主 `file:` iframe（主窗口 / 壁纸窗口） | 子 | 网页壁纸的命令（`wpe-web-capability`）+ `get_wpe_scene_postprocess`（`wpe-scene-host-capability`） | 拒绝 | 放行（同网页壁纸的四个事件） |
+| 场景宿主 `file:` iframe（主窗口 / 壁纸窗口） | 子 | 网页壁纸的命令（`wpe-web-capability`）+ `get_wpe_scene_postprocess` / `wpe_scene_target` / `wpe_scene_report`（`wpe-scene-host-capability`） | 拒绝 | 放行（同网页壁纸的四个事件） |
 | 插件详情 EJS iframe（`about:srcdoc`，opaque） | 子 | 拒绝（有桥，没有 capability 匹配） | 拒绝 | 拒绝 |
 | 主窗口里同源 iframe | 子 | 拒绝（特赦只认主 frame） | 拒绝 | 拒绝 |
 | 畅游导航栏 | 主 | `surf` / `surf-navbar` 两组 | 拒绝 | 拒绝（只能听两个 surf 事件） |

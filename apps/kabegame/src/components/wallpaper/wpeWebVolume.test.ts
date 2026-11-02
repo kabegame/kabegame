@@ -35,7 +35,7 @@ describe("wpeWebVolume 协议", () => {
     expect(clampWallpaperVolume(Number.NaN)).toBe(1);
     expect(webHostVolume(0.6, false)).toBe(0.6);
     expect(webHostVolume(0.6, true)).toBe(0);
-    expect(wpeVolumeMessage(0.3)).toEqual({ type: WPE_VOLUME_MESSAGE, volume: 0.3 });
+    expect(wpeVolumeMessage(0.3, true)).toEqual({ type: WPE_VOLUME_MESSAGE, volume: 0.3, paused: true });
   });
 });
 
@@ -185,7 +185,7 @@ type Fakes = ReturnType<typeof createFakes>;
 /** 页面眼里的媒体元素：volume / muted 走垫片装的访问器（假类型上没有声明这两个属性）。 */
 type PageMedia = InstanceType<Fakes["FakeMediaElement"]> & { volume: number; muted: boolean };
 
-function createShimEnv() {
+function createShimEnv(initialState: unknown = null) {
   const fakes = createFakes();
   const {
     FakeMediaElement,
@@ -205,9 +205,10 @@ function createShimEnv() {
   const sandbox: Record<string, unknown> = {
     top: host,
     parent: host,
-    location: { protocol: "file:" },
+    location: { protocol: "file:", search: "" },
+    URLSearchParams,
     __TAURI_INTERNALS__: {
-      invoke: vi.fn(() => Promise.resolve(null)),
+      invoke: vi.fn((command: string) => Promise.resolve(command === "wpe_web_pull_state" ? initialState : null)),
       transformCallback: () => 1,
       metadata: { currentWebview: { label: "wallpaper" } },
     },
@@ -260,6 +261,23 @@ const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 describe("wpe_shim 音量接管", () => {
+  it("暂停消息在首次全量属性交付后补调，此后只在变化时调用", async () => {
+    const env = createShimEnv({ imageId: "scene", user: {}, general: {}, directories: {} });
+    const setPaused = vi.fn();
+    const applyUserProperties = vi.fn();
+    env.sandbox.wallpaperPropertyListener = { setPaused, applyUserProperties };
+    env.sendFromHost(wpeVolumeMessage(0, true));
+    expect(setPaused).not.toHaveBeenCalled();
+    env.dispatch("load", {});
+    await tick();
+    expect(applyUserProperties).toHaveBeenCalledOnce();
+    expect(setPaused).toHaveBeenCalledTimes(1);
+    expect(setPaused).toHaveBeenCalledWith(true);
+    env.sendFromHost(wpeVolumeMessage(0, true));
+    expect(setPaused).toHaveBeenCalledTimes(1);
+    env.sendFromHost({ type: WPE_VOLUME_MESSAGE, volume: 1 });
+    expect(setPaused).toHaveBeenLastCalledWith(false);
+  });
   it("启动即向父页面请求音量，安装过程不报错", () => {
     const env = createShimEnv();
     expect(env.hostPosts.map((post) => [plain(post.data), post.origin])).toEqual([[{ type: WPE_VOLUME_REQUEST }, "*"]]);
@@ -274,7 +292,7 @@ describe("wpe_shim 音量接管", () => {
     expect(el.muted).toBe(false);
     expect([el.nativeVolume, el.nativeMuted]).toEqual([0, true]);
 
-    env.sendFromHost(wpeVolumeMessage(0.5));
+    env.sendFromHost(wpeVolumeMessage(0.5, false));
     expect([el.nativeVolume, el.nativeMuted]).toEqual([0.5, false]);
 
     el.volume = 0.4;
@@ -288,14 +306,14 @@ describe("wpe_shim 音量接管", () => {
     expect(el.nativeMuted).toBe(false);
 
     // 宿主推 0（应用背景 / 暂停）：原生静音，页面值不变
-    env.sendFromHost(wpeVolumeMessage(0));
+    env.sendFromHost(wpeVolumeMessage(0, false));
     expect([el.nativeVolume, el.nativeMuted]).toEqual([0, true]);
     expect([el.volume, el.muted]).toEqual([0.4, false]);
   });
 
   it("页面先在原生上设好的值（HTML muted 属性等）第一次接管时当作页面值保留", () => {
     const env = createShimEnv();
-    env.sendFromHost(wpeVolumeMessage(0.8));
+    env.sendFromHost(wpeVolumeMessage(0.8, false));
     const el = new env.FakeMediaElement() as PageMedia;
     el.nativeVolume = 0.5;
     el.nativeMuted = true;
@@ -338,14 +356,14 @@ describe("wpe_shim 音量接管", () => {
     const env = createShimEnv();
     const el = new env.FakeMediaElement() as PageMedia;
     void el.volume;
-    env.sendFromHost(wpeVolumeMessage(1), { isTrusted: false });
-    env.sendFromHost(wpeVolumeMessage(1), { source: env.sandbox });
+    env.sendFromHost(wpeVolumeMessage(1, false), { isTrusted: false });
+    env.sendFromHost(wpeVolumeMessage(1, false), { source: env.sandbox });
     env.sendFromHost({ type: "other", volume: 1 });
     env.sendFromHost({ type: WPE_VOLUME_MESSAGE, volume: "1" });
     expect(el.nativeVolume).toBe(0);
     expect(env.pageMessages).toHaveLength(4);
 
-    const event = env.sendFromHost(wpeVolumeMessage(1));
+    const event = env.sendFromHost(wpeVolumeMessage(1, false));
     expect(el.nativeVolume).toBe(1);
     expect(event.stopped).toBe(true);
     expect(env.pageMessages).toHaveLength(4);
@@ -361,7 +379,7 @@ describe("wpe_shim 音量接管", () => {
     expect(gain.outputs.map((o) => o.node)).toEqual([ctx.destination]);
     expect(gain.gain.value).toBe(0);
 
-    env.sendFromHost(wpeVolumeMessage(0.7));
+    env.sendFromHost(wpeVolumeMessage(0.7, false));
     expect(gain.gain.value).toBe(0.7);
 
     // AudioWorklet 等节点同走 AudioNode.prototype.connect，共用同一个主增益
@@ -388,7 +406,7 @@ describe("wpe_shim 音量接管", () => {
 
   it("接进实时 context 的媒体元素不再乘宿主音量（由主增益乘一次）", () => {
     const env = createShimEnv();
-    env.sendFromHost(wpeVolumeMessage(0.5));
+    env.sendFromHost(wpeVolumeMessage(0.5, false));
     const ctx = new env.FakeAudioContext();
 
     const viaFactory = new env.FakeMediaElement() as PageMedia;
@@ -405,7 +423,7 @@ describe("wpe_shim 音量接管", () => {
     expect(node).toBeInstanceOf(env.FakeSourceNode);
     expect(viaConstructor.nativeVolume).toBe(1);
 
-    env.sendFromHost(wpeVolumeMessage(0));
+    env.sendFromHost(wpeVolumeMessage(0, false));
     expect([viaFactory.nativeVolume, viaFactory.nativeMuted]).toEqual([0.6, false]);
   });
 });

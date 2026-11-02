@@ -7,6 +7,9 @@
     "watch": "vite build --config vite.config.ts --watch",
     "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1"
+  },
   "devDependencies": {
     "@webgpu/types": "^0.1.60",
     "typescript": "^5.9.3",

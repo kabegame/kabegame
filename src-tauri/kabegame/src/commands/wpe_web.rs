@@ -1,4 +1,4 @@
-//! WPE 网页壁纸（`x-wpe/web`）的宿主协议：页面里的垫片（`webview_js/wpe_shim.js`）向宿主
+//! WPE 网页壁纸（`x-wpe/web`）与场景宿主的状态协议：页面里的垫片（`webview_js/wpe_shim.js`）向宿主
 //! **拉取**完整状态，自己订阅应用事件、看到相关变化就重拉，差异与投递时机全由垫片决定。
 //!
 //! 网页壁纸一律是 `WallpaperStage` web 层里的 `file:` iframe（图库预览在主窗口，桌面在壁纸窗口），垫片只有
@@ -10,6 +10,7 @@
 //! 状态只在这里计算、每次都读图片当前的 metadata；宿主不推状态、不排队、不记版本号，乱序由垫片
 //! 按自己的拉取编号丢弃。
 
+use crate::wallpaper::wpe_scene_host;
 use crate::wallpaper::wpe_web_dir_index::WpeWebDirIndex;
 use crate::wpe_media::{WpeMediaHub, WpeMediaKind, WpeMediaMessage};
 use kabegame_core::emitter::GlobalEmitter;
@@ -103,6 +104,15 @@ fn properties_view(
     raw: &Value,
 ) -> WpeWebPropertiesView {
     let language = wpe_language_code(Settings::global().get_resolved_language());
+    properties_view_for_language(image_id, metadata_id, raw, language)
+}
+
+fn properties_view_for_language(
+    image_id: String,
+    metadata_id: Option<i64>,
+    raw: &Value,
+    language: &str,
+) -> WpeWebPropertiesView {
     let user = user_values(raw);
     let items = parse_defs(raw)
         .into_iter()
@@ -141,6 +151,22 @@ fn properties_view(
         metadata_id,
         items,
     }
+}
+
+/// 场景宿主的属性值直接取面板同一份归一化结果，避免作者默认值与面板形态分叉。
+fn scene_user_from_view(view: WpeWebPropertiesView) -> serde_json::Map<String, Value> {
+    view.items
+        .into_iter()
+        .filter(|item| !matches!(item.kind, WpePropKind::Group | WpePropKind::Text))
+        .filter_map(|item| {
+            item.value.map(|value| {
+                (
+                    item.key,
+                    serde_json::json!({ "type": item.kind, "value": value }),
+                )
+            })
+        })
+        .collect()
 }
 
 /// 属性面板读视图；行不存在或不是 `x-wpe/web` / `x-wpe/scene` 返回 None。只给主窗口（不进 `wpe-web.toml`）。
@@ -214,7 +240,7 @@ pub struct WpeWebGeneral {
 }
 
 /// 按 id 组装状态，每次都读图片当前的 metadata（导入时存的 `project.json` 原文）；
-/// 行不存在或不是 `x-wpe/web` 返回 None。metadata 读取放 blocking 线程。
+/// 行不存在或不是 `x-wpe/web` / `x-wpe/scene` 返回 None。场景的 directories 为空。
 pub async fn build_wpe_web_state(image_id: &str) -> Result<Option<WpeWebState>, String> {
     Ok(build_wpe_web_state_with_raw(image_id)
         .await?
@@ -229,7 +255,7 @@ async fn build_wpe_web_state_with_raw(
     else {
         return Ok(None);
     };
-    if wpe_kind(info.media_type.as_deref()).as_deref() != Some("web") {
+    if !has_user_properties(info.media_type.as_deref()) {
         return Ok(None);
     }
     let id = info.id.clone();
@@ -237,36 +263,49 @@ async fn build_wpe_web_state_with_raw(
         .await
         .map_err(|error| error.to_string())??;
     // metadata 缺失时按「作者没有声明属性」处理，页面照常收到空的用户属性。
-    let user = raw.as_ref().map(resolve_web_user_props).unwrap_or_default();
+    let is_scene = wpe_kind(info.media_type.as_deref()).as_deref() == Some("scene");
+    let user = if is_scene {
+        scene_user_from_view(properties_view(
+            info.id.clone(),
+            info.metadata_id,
+            raw.as_ref().unwrap_or(&Value::Null),
+        ))
+    } else {
+        raw.as_ref().map(resolve_web_user_props).unwrap_or_default()
+    };
     let raw = raw.unwrap_or_default();
-    let directories = tauri::async_runtime::spawn_blocking({
-        let raw = raw.clone();
-        move || {
-            let values = user_values(&raw);
-            parse_defs(&raw)
-                .into_iter()
-                .filter(|def| def.kind == WpePropKind::Directory)
-                .filter_map(|def| {
-                    let path = values.get(&def.key)?.as_str()?;
-                    if path.is_empty() {
-                        return None;
-                    }
-                    Some((
-                        def.key,
-                        WpeWebDirectory {
-                            mode: def.mode.unwrap_or_else(|| "fetchall".into()),
-                            files: list_directory_files(Path::new(path), 10000)
-                                .iter()
-                                .map(|p| path_for_page(p))
-                                .collect(),
-                        },
-                    ))
-                })
-                .collect::<BTreeMap<_, _>>()
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let directories = if is_scene {
+        BTreeMap::new()
+    } else {
+        tauri::async_runtime::spawn_blocking({
+            let raw = raw.clone();
+            move || {
+                let values = user_values(&raw);
+                parse_defs(&raw)
+                    .into_iter()
+                    .filter(|def| def.kind == WpePropKind::Directory)
+                    .filter_map(|def| {
+                        let path = values.get(&def.key)?.as_str()?;
+                        if path.is_empty() {
+                            return None;
+                        }
+                        Some((
+                            def.key,
+                            WpeWebDirectory {
+                                mode: def.mode.unwrap_or_else(|| "fetchall".into()),
+                                files: list_directory_files(Path::new(path), 10000)
+                                    .iter()
+                                    .map(|p| path_for_page(p))
+                                    .collect(),
+                            },
+                        ))
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
     Ok(Some((
         WpeWebState {
             image_id: info.id,
@@ -280,24 +319,37 @@ async fn build_wpe_web_state_with_raw(
     )))
 }
 
-/// 网页壁纸页面（`file:` iframe，wpe-web-capability，`frames: "sub"`）拉取状态。不接收 id、不看 webview：
+/// 网页壁纸页面（`file:` iframe，wpe-web-capability，`frames: "sub"`）拉取状态。普通网页壁纸不看传入的 id：
 /// 按调用方自己的文档 URL（CEF runtime 把 `file:` frame 的 `Origin` 改写成完整文档 URL，页面伪造不了）
-/// 在网页壁纸目录索引里找到它所在的那张，页面拿不到别的图片的 metadata。
+/// 在网页壁纸目录索引里找到它所在的那张，页面拿不到别的图片的 metadata。场景宿主的确切入口文档
+/// 则必须传库内场景壁纸的 id；不写用户文件 grants。
 ///
 /// 返回之前用同一份 metadata 覆盖这张壁纸的 `file:` 放行：页面只能从拉取结果得知用户新选的路径，拿到时
 /// 闸门一定已经认它；撤销旧选择由目录索引跟随 `metadataId` 补丁完成。
 #[tauri::command]
-pub async fn wpe_web_pull_state(caller: tauri::ipc::CallerOrigin) -> Result<WpeWebState, String> {
+pub async fn wpe_web_pull_state(
+    caller: tauri::ipc::CallerOrigin,
+    image_id: Option<String>,
+) -> Result<WpeWebState, String> {
     let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
     let index = WpeWebDirIndex::global();
-    let id = index
-        .image_id_of(&doc)
-        .ok_or("not inside a web wallpaper")?;
-    let (state, raw) = build_wpe_web_state_with_raw(&id)
-        .await?
-        .ok_or_else(|| "web wallpaper row missing".to_string())?;
-    index.replace_grants(&id, user_file_grants(&raw));
-    Ok(state)
+    if let Some(id) = index.image_id_of(&doc) {
+        let (state, raw) = build_wpe_web_state_with_raw(&id)
+            .await?
+            .ok_or_else(|| "web wallpaper row missing".to_string())?;
+        index.replace_grants(&id, user_file_grants(&raw));
+        return Ok(state);
+    }
+    if wpe_scene_host::is_host_document(&doc) {
+        let id = image_id.ok_or("the scene host must pass imageId")?;
+        if !index.is_scene(&id) {
+            return Err("not a scene wallpaper in the library".into());
+        }
+        return build_wpe_web_state(&id)
+            .await?
+            .ok_or_else(|| "scene wallpaper row missing".into());
+    }
+    Err("not inside a web wallpaper".into())
 }
 
 /// 网页壁纸订阅音频（`audio`）或媒体会话（`media`）数据，经 `channel` 推回调用的 iframe。
@@ -425,5 +477,35 @@ mod tests {
                 "{origin}"
             );
         }
+    }
+
+    #[test]
+    fn scene_user_values_match_property_items() {
+        use serde_json::json;
+        let raw = json!({
+            "general": { "properties": {
+                "speed": { "type": "slider", "value": 1, "min": 0, "max": 3 },
+                "enabled": { "type": "bool", "value": false },
+                "default_bool": { "type": "bool", "value": 0 },
+                "label": { "type": "text", "value": "read only" }
+            } },
+            "userProperties": { "speed": 1.5, "enabled": true }
+        });
+        let view = super::properties_view_for_language("scene".into(), None, &raw, "en-us");
+        let state_user = super::scene_user_from_view(super::properties_view_for_language(
+            "scene".into(),
+            None,
+            &raw,
+            "en-us",
+        ));
+        for item in view.items {
+            if let Some(entry) = state_user.get(&item.key) {
+                assert_eq!(entry.get("value"), item.value.as_ref(), "{}", item.key);
+            }
+        }
+        assert_eq!(state_user["speed"]["value"], json!(1.5));
+        assert_eq!(state_user["enabled"]["value"], json!(true));
+        assert_eq!(state_user["default_bool"]["value"], json!(false));
+        assert!(!state_user.contains_key("label"));
     }
 }

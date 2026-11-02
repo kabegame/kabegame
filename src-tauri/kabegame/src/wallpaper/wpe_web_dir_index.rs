@@ -173,6 +173,14 @@ impl WpeWebDirIndex {
             .unwrap_or(false)
     }
 
+    /// id 是否对应当前索引中的库内场景壁纸。
+    pub fn is_scene(&self, image_id: &str) -> bool {
+        self.inner
+            .read()
+            .map(|maps| maps.scene_dir_by_image_id.contains_key(image_id))
+            .unwrap_or(false)
+    }
+
     /// 库内全部场景壁纸目录的放行项（目录，顺序不定）。场景宿主的访问范围每次请求现取。
     pub fn scene_dir_grants(&self) -> Vec<FileGrant> {
         self.inner
@@ -600,6 +608,8 @@ mod tests {
         });
         assert!(index.contains_image("1"));
         assert!(index.contains_image("s"));
+        assert!(index.is_scene("s"));
+        assert!(!index.is_scene("1"));
         assert!(!index.contains_image("old"));
         assert!(!index.contains_image("old-scene"));
         assert!(!index.contains_image("gone"));
@@ -625,6 +635,7 @@ mod tests {
         index.remove("s");
         assert!(index.scene_dir_grants().is_empty());
         assert!(!index.contains_image("s"));
+        assert!(!index.is_scene("s"));
         index.upsert_scene("missing", &path_str(&base.join("missing")));
         assert!(!index.contains_image("missing"));
         // 不是目录（文件）也不登记

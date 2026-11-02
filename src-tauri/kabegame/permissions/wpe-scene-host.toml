@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "wpe-scene-host"
 description = "WPE scene host page (apps/wpe-scene, file: iframe): scene-only commands, referenced by the runtime capability registered for the exact host URL (wallpaper/wpe_scene_host.rs). The host also matches wpe-web-capability (file:///*) and gets the web wallpaper commands and events from it"
-commands.allow = ["get_wpe_scene_postprocess"]
+commands.allow = ["get_wpe_scene_postprocess", "wpe_scene_target", "wpe_scene_report"]
