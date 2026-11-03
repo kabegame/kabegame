@@ -138,6 +138,7 @@ function synthetic(
     bloom: null,
     unsupported: [],
     bindings: [],
+    scripts: { list: [] },
   };
 }
 

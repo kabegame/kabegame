@@ -133,6 +133,7 @@ export class SceneState {
   write(binding: SceneBinding, raw: SceneScalar): WriteResult {
     const { target } = binding;
     if (target.kind === "recompile") return "recompile";
+    if (target.kind === "script-property") return "applied";
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
       if (layer) {

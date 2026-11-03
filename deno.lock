@@ -7145,6 +7145,7 @@
           "dependencies": [
             "npm:@tauri-apps/api@^2.11.1",
             "npm:@webgpu/types@~0.1.60",
+            "npm:es-module-lexer@1.7.0",
             "npm:typescript@^5.9.3",
             "npm:vite@6"
           ]

@@ -9,7 +9,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1"
+    "@tauri-apps/api": "^2.11.1",
+    "es-module-lexer": "1.7.0"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.60",

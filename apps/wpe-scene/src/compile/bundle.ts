@@ -7,6 +7,7 @@ import {
   type RecompileReason,
   type SceneBinding,
   type TargetKey,
+  valueTypeOf,
 } from "./bindings";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import {
@@ -41,6 +42,7 @@ import {
   type ScenePostprocessState,
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
+import { collectScripts, type SceneScripts } from "./scripts";
 import { FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 
@@ -176,6 +178,7 @@ export interface SceneBundle {
    * 按登记顺序；同一属性可以有多条。
    */
   bindings: SceneBinding[];
+  scripts: SceneScripts;
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -299,6 +302,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   if (!sceneText) throw new Error(`缺少场景入口：${project.file}`);
   const scene = parseScene(sceneText);
   const properties = currentProperties(project, input.userProperties ?? {});
+  const scripts = await collectScripts(scene, properties, bindings.list);
   checkSceneFeatures(scene, unsupported);
   const general = scene.general ?? {},
     camera = scene.camera ?? {};
@@ -353,6 +357,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     unsupported: [],
     // 同一个数组随编译继续填充，最后就是全部登记项
     bindings: bindings.list,
+    scripts,
   };
   const shader = new ShaderCompiler(fs, input.translator, unsupported);
   const textureIndex = new Map<string, number>();
@@ -447,6 +452,17 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
     }
     const result = pass.shader ? await shader.compile(pass.shader, pass.combos ?? {}, formats, scope) : null;
+    if (result?.ok) {
+      for (const script of scripts.list) {
+        if (script.owner.kind !== "material" || script.owner.pass !== context.key || script.target.kind !== "constant")
+          continue;
+        const material = script.target.material;
+        const uniforms = (result.uniforms ?? []).filter((uniform) => uniform.meta?.material === material);
+        script.target.uniforms = uniforms.map((uniform) => uniform.name);
+        if (uniforms[0]) script.target.type = valueTypeOf(uniforms[0]);
+        script.valueType = script.target.type;
+      }
+    }
     if (!pass.shader) unsupported.add("shader:missing");
     let program: number | null = null;
     if (result?.ok) {

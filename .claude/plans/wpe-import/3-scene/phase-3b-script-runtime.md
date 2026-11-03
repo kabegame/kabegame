@@ -153,24 +153,26 @@ export interface SceneScript {
   layer: number | null;
   /** JSON 的 scriptproperties，按当前属性解析过（{user} 取当前值，带 condition 的取布尔）；没有为 null。 */
   scriptProperties: Record<string, SceneScalar> | null;
-  /** 静态 import 的说明符（原样大小写）；非裸名（./、/、带 scheme）记进 errors，这段不加载（B：只能导入 jsmodules）。 */
+  /**
+   * 导入说明符（原样大小写，es-module-lexer 扫出，含字面量动态 `import('…')`；注释与字符串里的不算）。
+   * 非裸名（./、/、带 scheme）记进 errors、不进 import map：解析失败，这段整段不用（B：只能导入 jsmodules）。
+   */
   imports: string[];
   errors: string[];
 }
 export interface SceneScripts {
   /** 遍历顺序：general → objects 依序（对象自身属性 → 基础材质常量 → effect 的 visible 与各 pass 常量）。 */
   list: SceneScript[];
-  /** 小写模块名 → 源码；读不到为 null（导入它的脚本求值失败）。 */
-  modules: Record<string, string | null>;
-  /** scripts/jsclasses/baseclasses.js；读不到为 null（有脚本时整套脚本不运行，日志记一次）。 */
-  baseclasses: string | null;
+  // 修改（2026-11-03 用户定）：bundle 不再带 jsmodules / baseclasses 源码——两者在 realm 里直接以 `file:` 加载（点 2），
+  // jsmodules 的说明符扫描结果由宿主内存缓存（点 2 `JsModuleIndex`）。
 }
 export interface SceneBundle {
   // …
   scripts: SceneScripts;   // 新增
 }
 ```
-- **新增** 收集遍历整份 scene.json（包括当前未启用的 effect 与不可见图层：WPE 解析期给全部对象建绑定），与属性值无关；只读脚本用到的模块，`wevector` → `WEMath` 这类模块间依赖按同样的说明符扫描递归读。
+- **新增** 收集遍历整份 scene.json（包括当前未启用的 effect 与不可见图层：WPE 解析期给全部对象建绑定），与属性值无关。
+- **新增** 说明符扫描用 es-module-lexer（Vite 自带依赖，约 14 KB、内嵌 wasm；Worker 与宿主各初始化一次）。本机语料 206 份源码 3.2 ms、0 失败；正则在语料里有 1 处误报（注释掉的 `// import * as WEVector …`），不用正则。
 - **修改** `bindings.ts` 加一类目标，供 `scriptproperties` 的用户绑定（I3 `scriptproperties` 364 处）：
 ```ts
   | { kind: "script-property"; script: string; key: string }   // 新增：属性名 → 某段脚本的 scriptProperties 键（可带 condition）
@@ -186,18 +188,50 @@ export interface ScriptRealm {
   /** baseclasses 取回的原型（B「注入」）。 */
   readonly prototypes: { Vec2: object; Vec3: object; Vec4: object; Mat3: object; Mat4: object };
   readonly internal: { updateScriptProperties: Function; convertUserProperties: Function };
-  /** 每次一个新的 blob URL → 新的模块实例；求值失败 reject（错误来自子 frame realm）。 */
+  /**
+   * 用户脚本：每次一个新的 blob URL → 新的模块实例（用户脚本只是 scene.json 里的字符串，不落文件，2026-11-03 用户定）；
+   * 求值失败 reject（错误来自子 frame realm）。语法错误时再补拿一次位置（见下）。
+   */
   importModule(source: string, label: string): Promise<Record<string, unknown>>;
   dispose(): void;
 }
 
-/** 建 about:blank 子 frame → 环境对齐（点 3）→ import map（探针 4a；不行则改写说明符）→ 经典脚本执行 baseclasses。 */
+/**
+ * 建 about:blank 子 frame → 环境对齐（点 3）→ 按场景生成的 import map（见下）→ `<script src="file:…/jsclasses/baseclasses.js">`
+ * 作经典脚本执行（等 onload；读不到则整套脚本不运行，日志记一次）。
+ */
 export async function createIframeRealm(input: {
   document: Document;
   scripts: SceneScripts;
+  /** wpe_scene_target 的 sceneAssets（WPE assets 目录）；jsmodules / baseclasses 从这里按 `file:` 加载。 */
+  sceneAssets: readonly string[];
+  modules: JsModuleIndex;
   console: { log(text: string): void; error(text: string): void };
 }): Promise<ScriptRealm>;
+
+/**
+ * 新增：jsmodules 的扫描缓存，宿主内存里一份（模块级单例，跟着宿主 iframe 走；同一宿主重编译、换属性都不再读不再扫）。
+ * 不放 localStorage：它与全部网页壁纸共用 `file://` 存储区，且 WPE 升级后模块内容会变、拿不到文件时间判断失效。
+ */
+export interface JsModuleIndex {
+  /**
+   * 小写模块名 → `{ url, imports }`：按 sceneAssets 顺序 `fetch(file:…/scripts/jsmodules/<小写名>.js)`，第一个读到的为准，
+   * 顺带用 es-module-lexer 扫它自己的说明符（如 wevector.js 的 `'WEMath'`）；都读不到为 null。结果（含 null）缓存。
+   */
+  lookup(name: string): Promise<{ url: string; imports: string[] } | null>;
+}
 ```
+- **import map 按场景动态生成**（2026-11-03 用户定）：从脚本表的 `imports` 出发，每个裸说明符原样作键、转小写后经 `JsModuleIndex.lookup` 找到文件，
+  写 `"WEColor": "file:///…/scripts/jsmodules/wecolor.js"`；再对找到的模块的 `imports` 递归补齐（缓存里有就不再扫）。
+  - 同一文件的不同写法映射到同一 URL，模块只求值一次（探针 4a 与主会话实测：同一 URL 单例）。
+  - 找不到的名字不写进 map：导入它的脚本解析失败、整段不用（同 WPE 模块求值失败）。非裸名同样不写。
+  - 在第一次 `import()` 之前插入一份 `<script type="importmap">`。realm 跨重编译保留，脚本表不变则 map 不变；
+    万一后来出现新说明符，追加一份新的 import map（探针 4a：首次 import 之后追加的映射也能解析）。
+  - 不改写源码：行列号与作者原文一致，报错信息保留原写法。
+  - 只认 WPE `assets` 里的 jsmodules。WPE 经资源系统读 `scripts/jsmodules/`，工程自带同名模块时可能优先用工程的；本机 36 张场景的 pkg 里都没有 `.js`，遇到再说（后续）。
+- **语法错误的位置**（2026-11-03 主会话实测）：`import()` 的 rejection 只有 `SyntaxError: Unexpected token ';'`、不带行列；
+  在子 frame 里用 `<script type="module" src=blob:>` 加载同一份源码，`error` 事件给 `lineno` / `colno`（实测 3 / 11，1 起）。
+  只在 `import()` 已因 `SyntaxError` 失败后补拿一次：这时源码必然仍解析 / 链接失败，不会被执行第二次。不引入 acorn / babel（解析器只为报错位置，体积 233 / 513 KB）。
 - 模块按脚本表顺序**逐个** `await importModule`：动态 `import()` 各自成图，并行时求值顺序不定；用一个入口模块静态导入全部又会因一段失败而整体失败。
 - 逻辑单测用 `FakeRealm`（同一接口，`importModule` 返回手写的导出对象，`prototypes` 用测试里的类），不在 Node 里模拟真正的 realm。
 
@@ -376,7 +410,7 @@ export interface SceneRendererOptions {
 ## 验收
 
 **单测**（`apps/wpe-scene`，`FakeRealm` 与注入时钟）
-1. 脚本收集：vortex 3 段，`owner` 为各自的 tint pass、目标是 `colormode` 常量、`initial` 0；bedroom 6 段，目标 `color` 常量（vec3）、`imports` 为 `["WEColor"]`、`modules` 里有 `wecolor`；shimmering 1 段，`owner` general、目标 `bloom.strength`；`wevector` 的依赖 `wemath` 被一起读入；非裸名说明符记错、这段不加载；未启用的 effect 里的脚本也在表里。
+1. 脚本收集：vortex 3 段，`owner` 为各自的 tint pass、目标是 `colormode` 常量、`initial` 0；bedroom 6 段，目标 `color` 常量（vec3）、`imports` 为 `["WEColor"]`（bundle 不带模块源码，模块由宿主的 `JsModuleIndex` 按 `file:` 找）；shimmering 1 段，`owner` general、目标 `bloom.strength`；`wevector` 的依赖 `wemath` 被一起读入；非裸名说明符记错、这段不加载；未启用的 effect 里的脚本也在表里。
 2. **加载顺序**：求值按脚本表顺序、一段求值失败后面照常；`scriptproperties` 在 `init` 之前；`init` 写回在首次 `applyUserProperties` 之前；首次 apply 是全集、颜色转成 `Vec3`；首帧里计时器先于 `update`。
 3. **增量顺序**：直接绑定 → `updateScriptProperties`（只对命中的段）→ `applyUserProperties`（只含增量、同一份 JSON 串）；`engine.userProperties` 在 apply 时已是新值、保留全部键；`init` 不重跑。
 4. **返回值转换**：数字；`{x,y,z}` 与单个数字展开；布尔要求真布尔；`angles` 度转弧度；类型不符与 `undefined` 不改；`applyUserProperties` 与 `destroy` 的返回值不写回。
@@ -398,7 +432,7 @@ export interface SceneRendererOptions {
 
 ## 风险
 
-1. **realm 探针不成立**：经典脚本的全局词法绑定、blob 模块、import map 任一不行就要换方案（停下汇报，已定 2）。备选只在点 0 内（说明符改写）；跨 realm 的其它做法（Worker、不透明源）都与已定 1 / 2 冲突。
+1. **realm 探针**：已成立（实施记录「步骤 0」）。经典脚本、blob 模块、`file:` 模块与 import map 都可用，不需要说明符改写。
 2. **跨 realm 的类型判断**：宿主侧不能用 `instanceof`；脚本侧的值必须用 realm 的构造器造，漏一处就会出现「脚本里 `instanceof Vec3` 为 false」这类与 WPE 不同的行为。
 3. **模块加载是异步的**：首次加载多了 N 次顺序 `import()`（步骤 0 量用时）；加载期间 Worker 编译与模块求值不能重叠（求值要在 bundle 到达之后）。工坊场景动辄几十到上百段。
 4. **同步脚本拖慢帧**：脚本每帧在渲染之前同步跑，写得重的脚本直接拉长帧时间、拖慢同一进程里的其它宿主（同窗口的宿主同进程，3-0c）；只能靠 15 s 规则兜住极端情况，平时没有预算控制（WPE 同样如此）。
@@ -419,6 +453,10 @@ export interface SceneRendererOptions {
 8. **默认照 WPE**（D / I 节）：加载顺序、增量顺序与转换、两帧之间处理下一帧生效、`init` 不重跑、返回值写回规则、`thisLayer` / `thisObject` 的全局 getter 与计时器归属、出错只禁用该回调、模块求值失败整段不用、暂停时脚本也停、计时器按帧 dt 推进、裸模块名转小写映射到 `assets/scripts/jsmodules/`、`baseclasses.js` 先作经典脚本执行；不照搬 `engine.userProperties` 改值后丢内置键、CLI 改颜色后成字符串两个缺陷。
 9. D10（脚本静态规则）于 2026-11-02 推翻，本阶段删除其实现；D1 细化为「同线程、独立 realm（同源子 frame）」。
 
+10. **模块加载**（步骤 0 之后定）：用户脚本不落文件，仍用 blob 模块；WPE 的 jsmodules 与 `baseclasses.js` 直接以 `file:` 加载。
+    import map 按场景动态生成：扫到的每个说明符原样作键，转小写找到 `jsmodules/<小写名>.js` 后映射过去；jsmodules 自己的说明符扫描结果由宿主内存缓存，不每次扫（点 2）。不改写源码。
+11. **按推荐**（用户 2026-11-03「其他问题按推荐」）：说明符扫描用 es-module-lexer；语法错误的位置用 `<script type="module" src=blob:>` 的 `error` 事件补拿（零依赖，不引入 acorn / babel）；参数是变量的动态 `import()`（理论上能加载远程模块，且 `import()` 是语法遮不掉）本阶段不处理，记入后续——与已定 4「环境对齐不是安全边界」一致。
+
 ## 待定（附推荐）
 
 1. **`init` 时 `scriptProperties` 里绑了用户属性的键取什么值**：报告没有直接证据（I10 的样本默认值与脚本默认值相同，分不出）。WPE 首次加载先把配置里的属性写进全集、再构造场景（I1），解析期读到的就是用户当前值。**推荐**：求值之后、`init` 之前，用「JSON 的 `scriptproperties`，`{user}` 取用户当前值」调一次 `updateScriptProperties`；首次全量 apply 时再写一遍同一值（幂等）。
@@ -434,6 +472,8 @@ export interface SceneRendererOptions {
 ## 后续
 
 - **3c**：effect 可见性单图层重算（脚本写 effect `visible` 不再重编译）及其余能就地改的类别。
+- **动态 `import()` 与远程模块**：脚本 realm 是 `file:` 来源、没有 CSP，参数为变量的 `import()` 能加载任意 URL。可选的收口是给子 frame 文档插一条只放行 `blob:` / `file:` 的 CSP（未测）。
+- **工程自带的 jsmodules**：若遇到工程目录或 pkg 里带 `scripts/jsmodules/*.js` 的场景，核对 WPE 的查找顺序；pkg 里的条目没法用 `file:` 地址，要退回 blob。
 - **后续 API 阶段（初排，步骤 6 的语料排行出来后修订，交用户定）**：
   - 音频：`engine.registerAudioBuffers` / `AUDIO_RESOLUTION_*`（F：10 张壁纸 125 段，模块顶层调用）→ 随 W2 / W3 的音频订阅；
   - 光标与命中：`input.*`、`cursor*` 回调 → W4；
@@ -445,4 +485,51 @@ export interface SceneRendererOptions {
 
 ## 实施记录
 
-（实施时填写：步骤 0 探针结果表、步骤 6 语料产出、真机实测数值。）
+### 步骤 0 探针结果（2026-11-03，Windows Kabegame dev / CEF 149）
+
+在图库 `/gallery` 打开图片 12889（razer_vortex）预览，确认 CDP 目标为 `file:///D:/Codes/kabegame/target/debug/resources/wpe-scene/index.html?kbScene=12889&…` 后，在该宿主求值。原始完整结果见 `ignore/p3b/result.json`，驱动与注入代码为 `ignore/p3b/probe.mjs`、`ignore/p3b/probe-host.js`。
+
+| 项 | 结论 | 证据摘要 |
+| --- | --- | --- |
+| 1. 建 realm | 成立 | `display:none` 与 `hidden` 两种子 frame 均 `sync:true`、`origin:"file://"`、`secure:true`、计算样式 `display:"none"`；`location.origin` 均为 `"null"`，不能把它当成同一个字符串判据。 |
+| 2. 经典脚本 | 成立 | `fetch(baseclasses.js)` 为 HTTP 状态 200、长度 38646；内联执行后 `_Vec3` / `_Internal` / `shared` / `createScriptProperties` 均为全局属性，`"Vec3" in child === false`，随后模块的 `typeof Vec3 === "function"`。对照 `child.eval(base)` 后 `eval('typeof Vec3') === "undefined"`。 |
+| 3. blob 模块 | 成立 | 子 frame 自造两个同源码 URL：模块内 `globalThis === child` 为 true；两份实例各自的模块级计数调用结果为 `[1,2,1]`，顶层全局计数依次为 1、2；宿主同步调用导出函数得到 3。 |
+| 4a. import map | 成立，大小写需逐种登记 | `wecolor` / `wemath` / `wevector` 原文均读到状态 200；预先映射 `WEColor` / `WEMath` / `WEVector` 后，`WEVector` 内部的 `import 'WEMath'` 成功，导出含 `angleVector2` / `vectorAngle2`。两个入口引用同一模块 URL 的求值计数为 1。小写 `wecolor` 未登记时报 `Failed to resolve module specifier "wecolor". Relative references must start with either "/", "./", or "../".`。首次 import 后新增映射 `P3BLate` 仍解析为 1，故“必须首次 import 之前登记”在本环境不成立。 |
+| 4b. 改写说明符 | 未测（按计划） | 4a 已成立，未走回退路径。 |
+| 5. 跨 realm | 部分 | 抛错在宿主 `instanceof Error === false`，运行时报错栈含 `blob:file:///…:1:31`；模块语法错误由 `import()` rejection 给出 `SyntaxError: Unexpected token ';'`，但其 `stack` 只有这一行，**不含行列**。子 frame `_Vec3.constructor` 构造的值在模块里 `instanceof Vec3 === true`，宿主普通对象为 false。 |
+| 6. 遮蔽 | 部分 | 表中每个名字分别在独立 frame 做 `delete`、`defineProperty(...undefined, configurable:false)` 和随后模块的 `typeof`。网络、全局计时器、Web Storage、`indexedDB`、`caches`、`Intl`、`WebAssembly` 均得到 `undefined`；`console` 可替换，模块调用 `console.warn` 报 `TypeError: console.warn is not a function`。`__TAURI_INTERNALS__`、`window`、`document`、`top`、`location` 的 `delete` 为 false，重定义报 `TypeError: Cannot redefine property: <name>`，模块仍见 `object`。与预期不同，`parent`、`self`、`frames` 的 `delete` 为 true，随后模块见 `undefined`。 |
+| 7. 帧与性能 | 部分 | 仅留一个隐藏子 frame 时，1.1 s 内宿主 rAF 160 次（约 145.5/s），临时包装的 `GPUQueue.submit` 67 次（约 60.9/s），包装已恢复。100 个小 blob 模块顺序导入全部成功，合计 **302.1 ms**、均值 **3.021 ms**。移除 frame 后持有的 window 引用 `closed === true`，但其旧函数仍可调用并返回 42；这不能证明 realm 已被回收。 |
+
+**对后续步骤的影响。** 采用 4a import map；构造映射时须扫描脚本与 jsmodules 的原样说明符，将不同大小写的写法都映射到小写文件对应的同一 blob URL。4b 不需要。错误格式不能假定模块语法错误的 `stack` 有行列，应把“行列未知”作为可记录结果，若后续要求精确位置需另找证据来源。环境对齐无法遮掉 `__TAURI_INTERNALS__`、`window`、`document`、`top`、`location`；`parent` / `self` / `frames` 与点 3 表的预期相反，但子 frame 同源同权限，遮蔽仍不是安全边界。顺序导入的最后一轮实测为 302.1 ms / 100 个模块，属此机器此轮测量，不作为固定性能预算。
+
+**临时改动与恢复。** 只打开了 12889 的图库预览并在其宿主新建子 frame、blob URL、一次临时 `GPUQueue.prototype.submit` 包装；探针撤销 URL、移除全部测试 frame，`remainingFrames:0`、`global:false`，并在 `finally` 里恢复原 `submit`。随后关闭预览，CDP 目标中只剩原有 12888 壁纸宿主；主窗口路由由 `/gallery` 回到 `/gallery`。未更改壁纸、图库数据、设置或产品代码。
+
+### 步骤 0 补充（2026-11-03，主会话）
+
+`file:` 模块（主窗口应用背景宿主 12888 里建隐藏子 frame 实测，脚本 `ignore/p3b/filetest.js`，结果 `ignore/p3b/filetest-result.json`；临时测试模块写在宿主目录、测完删除）：
+
+| 项 | 结果 |
+| --- | --- |
+| `<script src="file:…/jsclasses/baseclasses.js">` 作经典脚本 | 成立：随后模块里 `typeof Vec3 === "function"`、`"Vec3" in child === false`、`_Internal` 在 |
+| 直接 `import("file:…/jsmodules/wemath.js")` | 成立 |
+| import map 映射到 `file:`，`wevector.js` 内部的 `import 'WEMath'` | 成立；同一 URL 只求值一次 |
+| 宿主目录里的 `.js`（代表「脚本落成文件」） | 成立；运行时报错栈为真实路径 `kbtest-ok.js:9:8`。用户定：用户脚本不落文件 |
+| 同一文件不同 query | 两个独立实例 |
+| 语法错误的 `file:` 模块 | 同 blob，rejection 只有 `SyntaxError: Unexpected token ';'`，无行列 |
+| 范围外的 `file:` | 闸门拒绝（`deny file: … OutsideRoot`） |
+| blob 模块 import `file:` 模块 | 成立，可混用 |
+| 语法错误补位置：`<script type="module">` 的 `error` 事件 | 内联与 `src=blob:` 都给 `lineno: 3, colno: 11`（1 起）；blob 那种带 `filename` |
+
+说明符扫描（`ignore/p3b/specifiers.mjs`，本机默认工程 + 工坊抽取，206 份不同源码 = 203 段用户脚本（共出现 652 次）+ 3 个 jsmodules）：
+- 导入共 19 处，全部是静态 `import * as X from '…'`；没有动态 `import()`、`export … from`、副作用导入。写法只有 `WEColor` 9、`WEMath` 9、`WEVector` 1，都是标准大小写。
+- es-module-lexer 3.2 ms、0 失败；正则 0.95 ms、1 处误报（注释掉的导入）；acorn / @babel/parser 都能解析全部 206 份（约 36 ms），语法错误给 `(3:10)`（列 0 起）。
+- 等长改写成小写（对照）：0.06 ms，改写后长度不变、重新扫描结果正确。按用户方案不改写源码，只按场景生成 import map。
+
+### 步骤 1–2 实施记录（2026-11-03）
+
+- 新增 `compile/scripts.ts`：在编译早期遍历完整 `scene.json`，不受图层可见性、effect 开关与快速回退影响；用 es-module-lexer 扫原样说明符，非裸名记入脚本错误。稳定 id 使用 JSON 坐标。`scriptproperties` 的用户属性引用登记为 `script-property` 绑定。材质常量的 uniform 名和类型在对应 pass 成功编译后补齐；没有编译出的 pass 保留脚本与目标坐标，uniform 列表为空，待后续步骤的宿主写入接口判为不可写。bundle 不带 jsmodules / baseclasses 源码；`value:script` 与 `isStaticScript` 保持原状。
+- 新增 `script/runtime.ts`：`ScriptRealm` 只定义接口，真实 iframe realm 留待步骤 3；读写目标、日志、时钟、当前脚本上下文和用户属性全集均由宿主注入。模块按表顺序求值，随后按表顺序初始化；属性增量依次更新命中的 `scriptProperties`、调用 `applyUserProperties`；每帧计时器先于 `update`。回调出错只禁用该回调；计时器出错取消该计时器；超过 15 秒在回调返回后停止所有脚本，保留本次返回值写回。重编译接口重放最后脚本写入，用户直接绑定可按稳定目标键撤销覆盖。
+- 新增 FakeRealm 单测及本机语料测试。38 张场景中 23 张含 `scene.json` 脚本，共 638 段；说明符为 `WEColor` / `WEMath` / `WEVector`，扫描错误 0。报告 F 节的 639 段还包含 1 段材质 JSON 中的脚本，本步骤按指定范围仅收集 `scene.json`。根目录已有 es-module-lexer 1.7.0，仅登记应用依赖并手动同步 `deno.lock` workspace 条目，未安装依赖。
+- **主会话复核（2026-11-03）**：`git status` 无越界（只有 `apps/wpe-scene` 与 `deno.lock` 的 workspace 依赖登记）；宿主 tsc 0 error、vitest 12 文件 182 项全过（含本机语料）；临时编译 vortex / bedroom / shimmering 核对脚本写回目标：vortex 3 段 → `g_CMode`（float）、bedroom 6 段 → `g_TintColor`（vec3）、shimmering → 泛光 `strength`，pass 键与 3a 一致。
+  - **修正**：`setInterval` 的周期补偿原为 `ceil(超出 / 周期 + 1)` 个周期，只要触发时有超出就多加一个周期（60 fps 下 `setInterval(1000)` 跑 10 s 只触发 5 次）；改为 `floor(超出 / 周期) + 1`。补了两条断言：一帧跨多个周期后按次数核对，以及 60 fps 跑 10 s 触发 10 次。换回旧公式两条都失败。
+  - **遗留**：材质 json 里的 1 段脚本（报告 F 节）本次没收集，步骤 5 接入前确认它在哪张场景、是否要收。

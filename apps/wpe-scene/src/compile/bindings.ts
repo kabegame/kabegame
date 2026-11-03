@@ -27,6 +27,7 @@ export type RecompileReason =
   | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）
 
 export type BindingTarget =
+  | { kind: "script-property"; script: string; key: string }
   | { kind: "layer"; object: number; field: LayerField }
   | { kind: "constant"; pass: TargetKey; material: string; uniforms: string[]; type: ValueType }
   | { kind: "bloom"; field: keyof BloomParams }
@@ -171,7 +172,7 @@ export function planApply(bindings: readonly SceneBinding[], changes: ReadonlyMa
     for (const binding of byProperty.get(property) ?? []) {
       if (binding.target.kind === "recompile")
         recompile.push({ key: property, reason: binding.target.reason, path: binding.target.path });
-      else writes.push({ binding, value });
+      else if (binding.target.kind !== "script-property") writes.push({ binding, value });
     }
   }
   return { writes, recompile };

@@ -208,6 +208,7 @@ describe("渲染器自查：泛光 pass", () => {
     bloom,
     unsupported: [],
     bindings: [],
+    scripts: { list: [] },
   });
   it("链上每个 pass 都要有程序，缺了报 render:bloom:<名字>", () => {
     const all = Object.fromEntries(Object.keys(HDR_BLOOM_MATERIALS).map((name) => [name, pass(0)]));

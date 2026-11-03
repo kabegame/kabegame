@@ -413,6 +413,7 @@ describe("可渲染性自查", () => {
     bloom: null,
     unsupported: [],
     bindings: [],
+    scripts: { list: [] },
   };
   const pass = {
     key: "objects/0/passes/0",
