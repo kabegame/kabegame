@@ -474,6 +474,7 @@ export interface SceneRendererOptions {
 
 ## 后续
 
+- **材质 JSON 内的脚本**：本机工坊 3549863808 的 `materials/workshop/2778900105/bar.json` 有 1 段脚本；本步只收集 `scene.json`，该场景另有渲染阻塞，后续再定材质脚本的收集与 owner。
 - **3c**：effect 可见性单图层重算（脚本写 effect `visible` 不再重编译）及其余能就地改的类别。
 - **动态 `import()` 与远程模块**：脚本 realm 是 `file:` 来源、没有 CSP，参数为变量的 `import()` 能加载任意 URL。可选的收口是给子 frame 文档插一条只放行 `blob:` / `file:` 的 CSP（未测）。
 - **工程自带的 jsmodules**：若遇到工程目录或 pkg 里带 `scripts/jsmodules/*.js` 的场景，核对 WPE 的查找顺序；pkg 里的条目没法用 `file:` 地址，要退回 blob。
@@ -567,3 +568,18 @@ export interface SceneRendererOptions {
   - razer_bedroom（dev 强制渲染）：同上各项，层数 18、首层 `backgroundclear`；6 段求值成功。
   - 临时改动：强制渲染标志测完删除；预览按 Esc 关闭，主窗口回到 `/gallery`。
   - 复核时发现三处要在步骤 5 接入前定，见「待定」第 10–12 条。
+
+### 步骤 5 实施记录（2026-11-04）
+
+- 渲染器在实际渲染帧同步状态前调 `beforeFrame(dt)`，`load` 在首帧前交出新 `SceneState`；暂停或隐藏时不推进脚本。宿主仅在可渲染且有脚本时建 realm / API / runtime，依次求值、初始化、全量 apply、首帧 update、绘制、ready。realm 在属性重编译与设备重建时复用；直接写入与返回值都登记稳定目标键，重编译前重放，用户直接绑定覆盖时撤销该键。退回时保留 realm、停止帧，恢复时全量 apply，保留 3a 的加载期间增量补差。
+- 删除 `isStaticScript` / `scriptExports` 与 `value:script` 裁决。38 张本机语料的 `exhaustive` 测试通过；相对 3a，razer_bedroom 由仅 `value:script` 变空，dino_run、3146703458、3549863808、3637191856 各删去 `value:script`，仍有其它不支持项；其余 33 张的结论未变。有脚本时全部材质图层预建资源；材质 owner 暴露同 pass 全部 `meta.material` 常量；图层数字查询按 `objects` 下标。
+- 增加脚本诊断与 `scriptCorpus` dev 探针。后者顺序逐张强制、穷尽编译，独立 realm 运行 120 个固定 dt 帧，不建 GPU，逐张释放 realm、纹理 bitmap，并返回残留测试帧数。production 构建不含探针标识。`console.error` 每段每分钟最多上报 10 条，多余条数随下一条上报；`console.log` 仅写控制台。
+- 与计划的实现细化：脚本写需重编译的目标通过 Worker 的 `scriptOverrides` 按 scene.json 稳定坐标覆盖编译输入；脚本重编译同一时刻最多一项在途，期间的后续变化再发一次。脚本从 API 直接写的值同回调返回值一起进入重放表。`scriptCorpus` 的资源读取使用现有 `SceneFs` 与 Worker 通道。
+- Node 自检：TypeScript 0 error；Vitest 原三条宿主退回用例及新增生命周期 / 重编译用例均通过。development、production Vite build 成功；production JS 搜索不到 `__kabegameSceneProbe`、`scriptCorpus`、`realmCheck`。本次未做真机脚本渲染验收，留给步骤 6–7。
+- **主会话复核（2026-11-04，步骤 5）**：`git status` 无越界；宿主 tsc 0 error、vitest 15 文件 193 项全过、Prettier 通过。dev 宿主以 development 模式重建、重载后，应用日志 `main: 场景脚本加载完成：6 段，成功 6 段，失败 0 段，用时 22 ms` → `场景壁纸 12888 开始渲染：18 层、7 个程序…`（bedroom 不再退回预览图）。
+- **bedroom 与 WPE 抓帧对照（2026-11-04，代理，产物 `ignore/p3b/compare/`，汇总 `results.json`）**：
+  - 公式：`A:\bedroom\{disabled,enabled,highres}` 共 9 帧 54 个 `g_TintColor`，按 `hsv2rgb(Date.now()/2000*speed%1,1,1)` 在整数毫秒 T 上逐位相等（highres-1463 有 1 段比其余早 1 ms：每段各自调 `Date.now()`）。T 只能确定到模 200 s，取离抓帧文件修改时间最近的解（前 0.3–2.0 s）。
+  - 画面：把 WPE 每帧的 6 个 tint 与 `g_Time` 注入预览宿主后读回，与后备缓冲逐像素比较（HDR 档按 sRGB 编码成 8 位）：关闭 / 开启档通道平均差 0.038/255、p99 2、差值 > 4 的像素 0.24%；超高档 0.055/255、p99 2、0.24%。灯带区域平均色各通道差 ≤ 0.26/255；随 tint 变色的像素内平均差 0.35–0.62/255（tint 错开约 0.5 s 时为 13–29）。残差集中在细线与高对比边缘（最大 51；超高档桌垫细线 112），三档相同、与 tint 和泛光无关；±0.5 px 平移不能减小，推断是对象 FBO 合成进场景时的采样差，未查。
+  - 实时：update 约 60 次/秒、色相速度与 speed/2 相符、相位差不超过一帧；rAF 144 次/秒、submit 60 次/秒；探针 frameMs 均值 0.19 ms、p95 0.4 ms；6 段无报错。
+  - 测量方法上的缺口：dev 探针没有「写目标」入口，代理临时改写 `SceneState.constants` 并借原型包装让 `sync` 刷新、截取读回缓冲（测完全部还原）。后续给探针加 `host.write(path, value)` 更稳妥。
+  - 临时改动：「场景后处理」由 `disabled` 依次改为 `enabled` / `ultra` 再改回 `disabled`（连带应用背景与壁纸窗口宿主各重载 3 次，realm 未重建）；预览宿主暂停后已恢复。qrenderdoc 停在 `highres-frame1463.rdc`（桥接没有关闭抓帧的方法）。

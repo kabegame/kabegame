@@ -20,6 +20,8 @@ interface ScriptRecord {
   exports: Record<string, unknown> | null;
   state: "pending" | "loaded" | "inited" | "failed";
   disabled: Set<Callback>;
+  errors: string[];
+  calls: Record<string, { count: number; maxMs: number }>;
 }
 interface Timer {
   owner: ScriptRecord;
@@ -83,6 +85,19 @@ export class ScriptRuntime {
   get stopped(): boolean {
     return this.halted;
   }
+  get diagnostics(): unknown[] {
+    return this.records.map((record) => ({
+      id: record.script.id,
+      state: record.state,
+      exports: Object.keys(record.exports ?? {}),
+      disabled: [...record.disabled],
+      errors: [...record.errors],
+      calls: { ...record.calls },
+    }));
+  }
+  get timerCount(): number {
+    return this.timers.length;
+  }
 
   private invoke(record: ScriptRecord, callback: Callback | "timer", fn: () => unknown): unknown {
     if (this.halted) return undefined;
@@ -96,9 +111,13 @@ export class ScriptRuntime {
       result = fn();
     } catch (error) {
       if (callback !== "timer") record.disabled.add(callback);
+      record.errors.push(`${callback}: ${messageOf(error)}`);
       this.options.report.warn(`场景脚本 ${record.script.id} ${callback} 出错：${messageOf(error)}`);
     } finally {
       const elapsed = now() - start;
+      const stats = (record.calls[callback] ??= { count: 0, maxMs: 0 });
+      stats.count++;
+      stats.maxMs = Math.max(stats.maxMs, elapsed);
       this.active = previous;
       this.options.enterScript?.(previous?.script ?? null);
       if (elapsed > 15_000 && !this.halted) {
@@ -169,24 +188,37 @@ export class ScriptRuntime {
   }
 
   async load(scripts: SceneScripts): Promise<void> {
-    this.records = scripts.list.map((script) => ({ script, exports: null, state: "pending", disabled: new Set() }));
+    this.records = scripts.list.map((script) => ({
+      script,
+      exports: null,
+      state: "pending",
+      disabled: new Set(),
+      errors: [],
+      calls: {},
+    }));
     this.byId = new Map(this.records.map((record) => [record.script.id, record]));
     const start = (this.options.now ?? performance.now.bind(performance))();
     for (const record of this.records) {
       if (record.script.errors.length) {
         record.state = "failed";
+        record.errors.push(...record.script.errors);
         this.options.report.warn(`场景脚本 ${record.script.id} 导入说明符无效：${record.script.errors.join("；")}`);
         continue;
       }
       try {
+        this.active = record;
+        this.options.enterScript?.(record.script);
         this.options.setModuleEvaluating?.(true);
         record.exports = await this.realm.importModule(record.script.source, record.script.id);
         record.state = "loaded";
         this.options.report.debug(`场景脚本 ${record.script.id} 导出：${Object.keys(record.exports).join(",")}`);
       } catch (error) {
         record.state = "failed";
+        record.errors.push(messageOf(error));
         this.options.report.warn(`场景脚本 ${record.script.id} 求值失败：${messageOf(error)}`);
       } finally {
+        this.active = null;
+        this.options.enterScript?.(null);
         this.options.setModuleEvaluating?.(false);
       }
     }
@@ -293,6 +325,9 @@ export class ScriptRuntime {
 
   replayWrites(): void {
     for (const { target, value } of this.writes.values()) this.options.write(target, value, "script-replay");
+  }
+  rememberWrite(target: ScriptTarget, value: number[] | boolean): void {
+    this.writes.set(targetKey(target), { target, value });
   }
   forgetWrite(target: TargetKey): void {
     this.writes.delete(target);

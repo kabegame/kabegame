@@ -5,10 +5,16 @@ import type { SceneBundle } from "./compile/bundle";
 import { compileSceneInWorker } from "./compile/client";
 import { TextureDecodeCache } from "./compile/decode";
 import { FetchSceneReader } from "./compile/fs";
+import type { BindingTarget } from "./compile/bindings";
 import type { SceneScalar } from "./compile/model";
 import { SCENE_POSTPROCESS_SETTINGS, type ScenePostprocessSetting } from "./compile/postprocess";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
+import { SceneState } from "./render/state";
+import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
+import { ScriptApi } from "./script/api";
+import { createIframeRealm, getJsModuleIndex } from "./script/realm";
+import { ScriptRuntime, type ScriptTarget } from "./script/runtime";
 
 interface SceneTarget {
   path: string;
@@ -69,6 +75,17 @@ export class SceneHost {
   private compiledWith: Record<string, unknown> = {};
   /** 当前场景的 bundle（取绑定表）与渲染器（就地写）。 */
   private bundle: SceneBundle | null = null;
+  private scriptBundle: SceneBundle | null = null;
+  private scriptState: SceneState | null = null;
+  private runtime: ScriptRuntime | null = null;
+  private scriptApi: ScriptApi | null = null;
+  private readonly scriptOverrides = new Map<string, number[] | boolean>();
+  private scriptReloadPending = false;
+  private scriptReloadRunning = false;
+  private reloading = false;
+  private scriptUnavailable = false;
+  private scriptNeedsFullApply = true;
+  private readonly consoleErrors = new Map<string, { minute: number; count: number; skipped: number }>();
   /** dev 探针计数：就地应用次数与重编译记录。 */
   readonly stats: SceneHostStats = { applied: 0, recompiled: [] };
   private receivedProperties = false;
@@ -131,7 +148,23 @@ export class SceneHost {
     const bundle = this.bundle;
     if (!bundle) return;
     const plan = planApply(bundle.bindings, changes);
-    if (plan.recompile.length || !this.renderer?.applyBindings(plan.writes)) {
+    const applied = this.renderer?.applyBindings(plan.writes) ?? false;
+    if (applied) {
+      for (const { binding } of plan.writes) this.runtime?.forgetWrite(this.targetPath(binding.target));
+      this.stats.applied++;
+      this.options.report.debug(`场景壁纸 ${this.options.imageId} 就地更新：${[...changes.keys()].join(",")}`);
+    }
+    for (const { path } of plan.recompile) {
+      this.runtime?.forgetWrite(path);
+      this.scriptApi?.forgetRecompile(path);
+      this.scriptOverrides.delete(path);
+    }
+    this.runtime?.applyUserProperties(
+      Object.fromEntries([...changes].map(([key]) => [key, this.properties.get(key)!])),
+      this.properties,
+      bundle.bindings,
+    );
+    if (plan.recompile.length || !applied) {
       this.stats.recompiled.push({
         reason: plan.recompile.length ? describeApply(plan) : "就地写失败",
         keys: [...changes.keys()],
@@ -142,13 +175,191 @@ export class SceneHost {
       void this.reload();
       return;
     }
-    this.stats.applied++;
-    this.options.report.debug(`场景壁纸 ${this.options.imageId} 就地更新：${[...changes.keys()].join(",")}`);
+  }
+
+  private targetPath(target: BindingTarget): string {
+    if (target.kind === "layer") return `objects/${target.object}/${target.field}`;
+    if (target.kind === "constant") return `${target.pass}/constantshadervalues/${target.material}`;
+    if (target.kind === "bloom") return `general/bloom/${target.field}`;
+    if (target.kind === "recompile") return target.path;
+    return `${target.script}/scriptproperties/${target.key}`;
+  }
+
+  private readScript(target: ScriptTarget): number[] | boolean | null {
+    const state = this.scriptState;
+    if (!state) return null;
+    if (target.kind === "layer") {
+      const value = state.layers.get(target.object)?.[target.field];
+      return value === undefined ? null : typeof value === "number" ? [value] : value;
+    }
+    if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
+    if (target.kind === "bloom") {
+      const value = state.bloom[target.field];
+      return Array.isArray(value) ? value : [value];
+    }
+    return null;
+  }
+
+  private writeScript(target: ScriptTarget, value: number[] | boolean): boolean {
+    if (target.kind === "unsupported" || target.kind === "script-property") return false;
+    if (target.kind === "recompile") {
+      const old = this.scriptOverrides.get(target.path);
+      if (JSON.stringify(old) === JSON.stringify(value)) return true;
+      if (old === undefined && JSON.stringify(this.recompileValue(target.path)) === JSON.stringify(value)) return true;
+      this.scriptOverrides.set(target.path, value);
+      this.options.report.debug(`场景脚本重编译目标变化：${target.path}`);
+      this.requestScriptReload();
+      return true;
+    }
+    const state = this.scriptState;
+    if (!state) return false;
+    state.write({ property: "", target }, Array.isArray(value) ? value.join(" ") : value);
+    return true;
+  }
+
+  private recompileValue(path: string): number[] | boolean | undefined {
+    const bundle = this.scriptBundle;
+    if (!bundle) return undefined;
+    const effect = /^objects\/(\d+)\/effects\/(\d+)\/visible$/.exec(path);
+    if (effect)
+      return (
+        bundle.layers
+          .find((layer) => layer.object === Number(effect[1]))
+          ?.effects.some((item) => item.source === Number(effect[2])) ?? false
+      );
+    const general: Record<string, number[] | boolean> = {
+      "general/clearcolor": bundle.general.clearColor,
+      "general/clearenabled": bundle.general.clearEnabled,
+      "general/ambientcolor": bundle.general.ambient,
+      "general/skylightcolor": bundle.general.skylight,
+      "general/bloom": bundle.general.postprocess.bloom,
+      "general/hdr": bundle.general.postprocess.hdr,
+    };
+    return general[path];
+  }
+
+  private requestScriptReload(): void {
+    this.scriptReloadPending = true;
+    if (this.reloading || this.scriptReloadRunning || this.disposed) return;
+    this.scriptReloadRunning = true;
+    queueMicrotask(async () => {
+      try {
+        while (this.scriptReloadPending && !this.disposed && !this.reloading) {
+          this.scriptReloadPending = false;
+          await this.reload();
+        }
+      } finally {
+        this.scriptReloadRunning = false;
+        if (this.scriptReloadPending && !this.reloading) this.requestScriptReload();
+      }
+    });
+  }
+
+  private scriptConsoleError(text: string): void {
+    const id = this.runtime?.currentScript?.id ?? "<module>";
+    const minute = Math.floor(Date.now() / 60_000);
+    const item = this.consoleErrors.get(id) ?? { minute, count: 0, skipped: 0 };
+    if (item.minute !== minute) {
+      item.minute = minute;
+      item.count = 0;
+    }
+    if (item.count < 10) {
+      this.options.report.warn(
+        `场景脚本 ${id} console.error：${text}${item.skipped ? `（前面省略 ${item.skipped} 条）` : ""}`,
+      );
+      item.count++;
+      item.skipped = 0;
+    } else item.skipped++;
+    this.consoleErrors.set(id, item);
+  }
+
+  private async ensureRuntime(bundle: SceneBundle, sceneAssets: string[]): Promise<void> {
+    if (this.runtime || this.scriptUnavailable || !bundle.scripts.list.length) return;
+    try {
+      const realm = await createIframeRealm({
+        document,
+        scripts: bundle.scripts,
+        sceneAssets,
+        modules: getJsModuleIndex(sceneAssets),
+        console: { log: (message) => console.log(message), error: (message) => this.scriptConsoleError(message) },
+        debug: (message) => this.options.report.debug(message),
+      });
+      if (this.disposed) {
+        realm.dispose();
+        return;
+      }
+      const api = new ScriptApi(realm, {
+        bundle: () => this.scriptBundle!,
+        state: () => this.scriptState!,
+        screenResolution: () => [this.canvas.width, this.canvas.height],
+        frametime: () => this.renderer?.frameSeconds ?? 0,
+        runtime: () => this.renderer?.runtimeSeconds ?? 0,
+        timeOfDay: () => daytimeOf(new Date()),
+        write: (target, value) => {
+          const applied = this.writeScript(target, value);
+          if (applied) this.runtime?.rememberWrite(target, value);
+          return applied;
+        },
+        read: (target) => this.readScript(target),
+      });
+      const runtime = new ScriptRuntime(realm, {
+        report: this.options.report,
+        write: (target, value) => this.writeScript(target, value),
+        read: (target) => this.readScript(target),
+        enterScript: (script) => api.enterScript(script),
+        setProperties: (full) => api.setProperties(full),
+        setModuleEvaluating: (evaluating) => api.setModuleEvaluating(evaluating),
+      });
+      api.attachRuntime(runtime);
+      this.scriptApi = api;
+      this.runtime = runtime;
+      await runtime.load(bundle.scripts);
+    } catch (error) {
+      this.scriptUnavailable = true;
+      this.options.report.error(`场景脚本 baseclasses.js 或 realm 加载失败：${String(error)}`);
+    }
   }
 
   /** dev 探针：当前 bundle 与渲染器（生产构建不访问）。 */
   get devScene(): { bundle: SceneBundle | null; renderer: SceneRenderer | null } {
     return { bundle: this.bundle, renderer: this.renderer };
+  }
+
+  get scriptDiagnostics(): unknown[] {
+    return this.runtime?.diagnostics ?? [];
+  }
+
+  readTarget(path: string): unknown {
+    const state = this.renderer?.sceneState;
+    const bundle = this.bundle;
+    if (!state || !bundle) return null;
+    if (path.startsWith("general/bloom")) {
+      const field = path.slice("general/bloom".length);
+      const names: Record<string, keyof SceneState["bloom"]> = {
+        strength: "strength",
+        threshold: "threshold",
+        tint: "tint",
+        hdrstrength: "hdrStrength",
+        hdrthreshold: "hdrThreshold",
+        hdrfeather: "hdrFeather",
+        hdrscatter: "hdrScatter",
+        hdriterations: "hdrIterations",
+      };
+      return state.bloom[names[field] ?? "strength"];
+    }
+    const layer = /^objects\/(\d+)\/(origin|scale|angles|alpha|color|brightness|visible)$/.exec(path);
+    if (layer)
+      return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;
+    const constant = /^(objects\/\d+(?:\/effects\/\d+)?\/passes\/\d+)\/constantshadervalues\/(.+)$/.exec(path);
+    if (constant) {
+      const target = bundle.bindings.find(
+        (binding) => binding.target.kind === "constant" && this.targetPath(binding.target) === path,
+      )?.target;
+      if (target?.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
+      const script = bundle.scripts.list.find((item) => item.id === path);
+      if (script?.target.kind === "constant") return this.readScript(script.target);
+    }
+    return null;
   }
 
   setPaused(paused: boolean): void {
@@ -169,6 +380,9 @@ export class SceneHost {
   private ensureRenderer(): Promise<SceneRenderer> {
     if (this.rendererTask) return this.rendererTask;
     const task: Promise<SceneRenderer> = SceneRenderer.create(this.canvas, {
+      beforeFrame: (dt) => {
+        if (this.state !== "fallback" && this.scriptState) this.runtime?.frame(dt);
+      },
       onError: (reasons) => {
         if (this.rendererTask === task) this.fallback(reasons);
       },
@@ -210,6 +424,8 @@ export class SceneHost {
   private fallback(reasons: string[]): void {
     this.dropRenderer();
     this.bundle = null;
+    this.scriptState = null;
+    this.scriptNeedsFullApply = true;
     const key = reasons.join("\n");
     if (this.state === "fallback" && key === this.lastFallback) return;
     this.state = "fallback";
@@ -234,6 +450,7 @@ export class SceneHost {
       return;
     }
     const id = ++this.generation;
+    this.reloading = true;
     this.controller?.abort();
     const abort = (this.controller = new AbortController());
     if (this.state !== "ready") this.state = "loading";
@@ -260,6 +477,7 @@ export class SceneHost {
         projectDir: target.path,
         sceneAssets: target.sceneAssets,
         userProperties,
+        scriptOverrides: Object.fromEntries(this.scriptOverrides),
         postprocess: setting,
         force,
         textureCache: this.textureCache,
@@ -276,9 +494,28 @@ export class SceneHost {
         }
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
       }
+      const firstRuntime = !this.runtime;
+      if (firstRuntime && bundle.scripts.list.length && !this.scriptUnavailable) {
+        this.scriptBundle = bundle;
+        this.scriptState = SceneState.fromBundle(bundle);
+        await this.ensureRuntime(bundle, target.sceneAssets);
+        if (id !== this.generation) return;
+      }
       const current = await this.ensureRenderer();
       if (id !== this.generation) return;
-      await current.load(bundle, { ignoreUnsupported: force });
+      current.setPaused(this.paused);
+      await current.load(bundle, {
+        ignoreUnsupported: force,
+        beforeFirstFrame: (state) => {
+          this.scriptBundle = bundle;
+          this.scriptState = state;
+          this.runtime?.replayWrites();
+          if (this.scriptNeedsFullApply && this.runtime) {
+            this.runtime.applyUserProperties(Object.fromEntries(this.properties), this.properties, bundle.bindings);
+            this.scriptNeedsFullApply = false;
+          }
+        },
+      });
       if (id !== this.generation) return;
       this.bundle = bundle;
       this.compiledWith = compiledWith;
@@ -310,6 +547,11 @@ export class SceneHost {
     } catch (error) {
       if (id !== this.generation || isAbort(error)) return;
       this.fallbackAfterLoad(reasonsOf(error, "render"), compiledWith);
+    } finally {
+      if (id === this.generation) {
+        this.reloading = false;
+        if (this.scriptReloadPending && !this.scriptReloadRunning && this.state === "ready") this.requestScriptReload();
+      }
     }
   }
 
@@ -328,6 +570,9 @@ export class SceneHost {
     this.controller?.abort();
     this.unlisten?.();
     this.dropRenderer();
+    this.runtime?.destroy();
+    this.runtime = null;
+    this.scriptApi = null;
     this.textureCache.clear();
   }
 }

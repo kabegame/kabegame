@@ -184,6 +184,8 @@ export interface CompileSceneInput {
   projectDir: string;
   sceneAssets: string[];
   userProperties?: Record<string, unknown>;
+  /** 脚本写入的重编译目标，按 scene.json 坐标覆盖编译输入。 */
+  scriptOverrides?: Record<string, number[] | boolean>;
   reader: SceneReader;
   translator: Wpesl2wgsl | null;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
@@ -301,6 +303,17 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const sceneText = await fs.text(project.file);
   if (!sceneText) throw new Error(`缺少场景入口：${project.file}`);
   const scene = parseScene(sceneText);
+  for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) {
+    const parts = path.split("/");
+    let parent: unknown = scene;
+    for (const part of parts.slice(0, -1)) parent = (parent as Record<string, unknown> | undefined)?.[part];
+    if (!parent || typeof parent !== "object") continue;
+    const key = parts.at(-1)!;
+    const old = (parent as Record<string, unknown>)[key];
+    const next = Array.isArray(value) ? value.join(" ") : value;
+    (parent as Record<string, unknown>)[key] =
+      old && typeof old === "object" && "value" in old ? { ...old, value: next } : next;
+  }
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
   checkSceneFeatures(scene, unsupported);

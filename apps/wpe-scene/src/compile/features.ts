@@ -9,7 +9,6 @@
  * 这三类逐项核对（`checkProgramFeatures`，默认纹理在 `bundle.ts` 里随绑定一起核对）。
  */
 import {
-  isStaticScript,
   type EffectJson,
   type MaterialPass,
   type ModelJson,
@@ -199,8 +198,6 @@ export function scanValue(value: unknown, unsupported: Set<string>): void {
     return;
   }
   if (!value || typeof value !== "object") return;
-  // D10：只导出 applyUserProperties 的脚本按 value 静态处理，其余要脚本宿主（P3）
-  if ("script" in value && !isStaticScript((value as { script: unknown }).script)) unsupported.add("value:script");
   for (const v of Object.values(value)) scanValue(v, unsupported);
 }
 

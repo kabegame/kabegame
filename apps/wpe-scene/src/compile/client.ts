@@ -9,10 +9,12 @@ export interface WorkerCompileInput {
   projectDir: string;
   sceneAssets: string[];
   userProperties?: Record<string, unknown>;
+  scriptOverrides?: Record<string, number[] | boolean>;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
   /** dev 强制渲染（D4）：有不支持项也解码纹理。 */
   force?: boolean;
+  exhaustive?: boolean;
   /**
    * FreeImage 纹理的解码缓存（`decode.ts`）。给了就在主线程解码这些纹理：`unsupported` 为空或 `force` 时才解，
    * 否则渲染器不会用它们。
@@ -90,8 +92,10 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       projectDir: input.projectDir,
       sceneAssets: input.sceneAssets,
       userProperties: input.userProperties ?? {},
+      scriptOverrides: input.scriptOverrides ?? {},
       postprocess: input.postprocess ?? "follow",
       force: input.force === true,
+      exhaustive: input.exhaustive === true,
       module,
     };
     worker.postMessage(request);

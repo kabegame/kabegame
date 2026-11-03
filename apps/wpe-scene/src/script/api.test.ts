@@ -244,6 +244,38 @@ describe("SceneScript API（FakeRealm）", () => {
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(first)).toBe(true);
   });
 
+  it("图层数字下标保持 scene.json 坐标；材质对象暴露同 pass 的全部常量", () => {
+    const h = setup();
+    h.bundle.layers.splice(0, 1);
+    const getLayer = h.api.thisScene.getLayer as (index: number) => Record<string, unknown> | null;
+    expect(getLayer(0)).toBeNull();
+    expect(getLayer(1)?.name).toBe("Second");
+    expect((h.api.thisScene.getLayerIndex as (value: unknown) => number)(getLayer(1))).toBe(1);
+    h.bundle.layers[0].passes.push({
+      key: "objects/1/passes/0",
+      program: 0,
+      blending: "normal",
+      cullmode: "none",
+      depthtest: "disabled",
+      depthwrite: "disabled",
+      textures: {},
+      runtime: {},
+      uniforms: {},
+      framebuffer: false,
+    });
+    h.bundle.programs.push({
+      uniforms: [
+        { name: "g_Tint", type: "vec3<f32>", meta: { material: "tint" } },
+        { name: "g_Amount", type: "f32", meta: { material: "amount" } },
+      ],
+    } as unknown as SceneBundle["programs"][number]);
+    h.state.constants.set("objects/1/passes/0", { g_Tint: [1, 0, 0], g_Amount: [2] });
+    h.api.enterScript(script("tint", { kind: "material", pass: "objects/1/passes/0", layer: 1 }, 1));
+    const owner = h.realm.global.thisObject as Record<string, unknown>;
+    expect(owner.tint).toEqual(new Vec3(1, 0, 0));
+    expect(owner.amount).toBe(2);
+  });
+
   it("thisLayer / thisObject 随脚本及计时器归属切换", async () => {
     const h = setup();
     const report = { ready() {}, fallback() {}, debug() {}, info() {}, warn() {}, error() {} };

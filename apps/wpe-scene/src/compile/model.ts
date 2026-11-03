@@ -140,41 +140,6 @@ export function textureName(raw: unknown): string | null {
 }
 
 /**
- * SceneScript 源码导出的名字（`export function x`、`export const x`、`export { a, b as c }`）；
- * `export default` 记为 `default`。只做词法扫描，不执行脚本。
- */
-export function scriptExports(source: string): string[] {
-  const names = new Set<string>();
-  // 去掉注释与字符串字面量里的内容，避免把注释里的 `export function` 算进来
-  const code = source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/\/\/[^\n]*/g, " ")
-    .replace(/(["'`])(?:\\[\s\S]|(?!\1)[^\\])*\1/g, '""');
-  for (const m of code.matchAll(/\bexport\s+(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/g)) names.add(m[1]);
-  for (const m of code.matchAll(/\bexport\s+(?:const|let|var|class)\s+([A-Za-z_$][\w$]*)/g)) names.add(m[1]);
-  for (const m of code.matchAll(/\bexport\s*\{([^}]*)\}/g))
-    for (const part of m[1].split(",")) {
-      const name = part
-        .trim()
-        .split(/\s+as\s+/)
-        .at(-1)
-        ?.trim();
-      if (name) names.add(name);
-    }
-  if (/\bexport\s+default\b/.test(code)) names.add("default");
-  return [...names];
-}
-
-/**
- * D10 脚本静态规则：只导出 `applyUserProperties`（没有 `update` / `init` 等每帧或生命周期入口）的脚本，P3 之前按
- * 绑定的 `value` 静态处理；用户属性对这类脚本的影响要等 P3 的脚本宿主才生效。
- */
-export function isStaticScript(source: unknown): boolean {
-  if (typeof source !== "string") return false;
-  return scriptExports(source).every((name) => name === "applyUserProperties");
-}
-
-/**
  * 编译期属性表读取的观察者：单测（`p3a.test.ts` 的完整性检查）用它记下编译期读过的属性名，
  * 断言每个都登记进了绑定表；生产恒为 null。
  */
@@ -209,6 +174,7 @@ export function resolveValue(
   properties: Record<string, SceneScalar>,
 ): SceneScalar | undefined {
   if (value && typeof value === "object") {
+    // 脚本求值前的编译期初值；运行时写回会覆盖它。
     if ("script" in value) return value.value;
     if (!("user" in value) || !value.user) return undefined;
     const name = typeof value.user === "string" ? value.user : value.user.name;

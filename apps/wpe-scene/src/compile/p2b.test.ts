@@ -230,9 +230,9 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P2b 样本", () => {
       ]),
     );
 
-  it("razer_bedroom 开启档：LDR 四个 pass 全部翻译通过，只剩 value:script", async () => {
+  it("razer_bedroom 开启档：LDR 四个 pass 全部翻译通过", async () => {
     const bundle = await compile(sample("razer_bedroom"), { postprocess: "enabled", exhaustive: true });
-    expect(bundle.unsupported).toEqual(["value:script"]);
+    expect(bundle.unsupported).toEqual([]);
     expect(bundle.bloom?.hdr).toBe(false);
     expect(bundle.general.bloom).toMatchObject({ strength: 1, threshold: 1 });
     expect(materialOf(bundle, "quarter")).toMatchObject({
@@ -245,7 +245,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P2b 样本", () => {
   }, 60000);
   it("razer_bedroom 超高档：HDR 五个 pass，COMBO 与材质名对上", async () => {
     const bundle = await compile(sample("razer_bedroom"), { postprocess: "ultra", exhaustive: true });
-    expect(bundle.unsupported).toEqual(["value:script"]);
+    expect(bundle.unsupported).toEqual([]);
     expect(bundle.general.postprocess).toEqual({ level: "ultra", bloom: true, hdr: true });
     expect(bundle.bloom?.hdr).toBe(true);
     expect(combos(bundle, "downsampleBloom")).toMatchObject({ BLOOM: 1 });

@@ -41,6 +41,7 @@ function bundleFor(properties: Record<string, unknown>): SceneBundle {
     bindings: [
       { property: "fx", target: { kind: "recompile", reason: "effect-visible", path: "objects/0/effects/0/visible" } },
     ],
+    scripts: { list: [] },
     unsupported: properties.fx === true ? ["effect:unsupported"] : [],
   } as unknown as SceneBundle;
 }

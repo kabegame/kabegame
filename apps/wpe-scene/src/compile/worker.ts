@@ -45,8 +45,10 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       projectDir: message.projectDir,
       sceneAssets: message.sceneAssets,
       userProperties: message.userProperties,
+      scriptOverrides: message.scriptOverrides,
       postprocess: message.postprocess,
       force: message.force,
+      exhaustive: message.exhaustive,
       reader,
       translator,
     });

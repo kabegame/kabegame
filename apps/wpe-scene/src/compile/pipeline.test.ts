@@ -373,7 +373,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
   it("全部场景编译、P1 / P2a 解锁、读取及请求次数有界", async () => {
     const translator = await Wpesl2wgsl.fromBytes(readFileSync(wasm));
     const rows: { sample: string; unsupported: string; calls: number; misses: number; bytes: number }[] = [];
-    const unlocked = ["eagleflag", "deep_space", "beach", "razer_vortex"];
+    const unlocked = ["eagleflag", "deep_space", "beach", "razer_vortex", "razer_bedroom"];
     for (const name of [...unlocked, "razer_bedroom"])
       expect(
         projects.some((dir) => dir.split(/[\\/]/).at(-1) === name),
@@ -426,8 +426,6 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
             `${sample}: 纹理缺 mip`,
           );
         } else check(bundle.unsupported.length > 0, `${sample}: 意外解锁`);
-        if (sample === "razer_bedroom")
-          check(bundle.unsupported.join(",") === "value:script", `razer_bedroom: ${bundle.unsupported.join(", ")}`);
         const expected: Record<string, [string, number, number, number]> = {
           eagleflag: ["materials/eagle.tex", 2048, 1024, 10],
           deep_space: ["materials/galaxy_2_base.tex", 1920, 1080, 11],

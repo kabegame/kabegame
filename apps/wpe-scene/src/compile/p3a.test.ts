@@ -201,6 +201,12 @@ describe("取值换算与分类（无 GPU、无语料）", () => {
 });
 
 describe.skipIf(!corpus)("本机语料：绑定表", () => {
+  it("脚本重编译目标按 scene.json 路径覆盖编译输入", async () => {
+    const bundle = await compile(sample("eagleflag"), {
+      scriptOverrides: { "general/clearcolor": [1, 0, 0] },
+    });
+    expect(bundle.general.clearColor).toEqual([1, 0, 0]);
+  }, 120000);
   it("razer_vortex：brightness / length / speed 都是 tint pass 的材质常量", async () => {
     const bundle = await compile(sample("razer_vortex"));
     const of = (property: string) => bundle.bindings.filter((binding) => binding.property === property);
@@ -220,7 +226,7 @@ describe.skipIf(!corpus)("本机语料：绑定表", () => {
   }, 120000);
 
   it("razer_bedroom：light_speed 登记 17 条 scroll 常量（9 个 speedx + 8 个 speedy）", async () => {
-    // bedroom 另有 value:script（脚本绑定，3b 处理）：快速路径会在第一处退回，列全才看得到全部图层
+    // 列全所有绑定，避免快速路径在其它不支持项处提前结束。
     const bundle = await compile(sample("razer_bedroom"), { exhaustive: true });
     const bindings = bundle.bindings.filter((binding) => binding.property === "light_speed");
     expect(bindings).toHaveLength(17);

@@ -130,7 +130,7 @@ export function checkRenderable(
     }
   for (const layer of bundle.layers) {
     // `visibleBound` 的图层当前可能不可见，但随时可能显示：同样要能画（P3a）
-    if (!(layer.visible || layer.visibleBound) || !layer.passes.length) continue;
+    if (!(layer.visible || layer.visibleBound || bundle.scripts.list.length) || !layer.passes.length) continue;
     const plan = planLayer(layer, bundle.textures);
     for (const reason of plan.reasons) reasons.add(reason);
     for (const step of plan.steps) {
@@ -287,7 +287,9 @@ export class GpuScene {
     const samplerFor = (texture: SceneTexture) => sampler(samplerDescriptor(texture, texture.mips.length > 1));
     const dummies = this.createDummies();
 
-    const built = bundle.layers.filter((layer) => (layer.visible || layer.visibleBound) && layer.passes.length);
+    const built = bundle.layers.filter(
+      (layer) => (layer.visible || layer.visibleBound || bundle.scripts.list.length) && layer.passes.length,
+    );
     const plans = built.map((layer) => planLayer(layer, bundle.textures));
 
     // 程序：全部建完再汇总失败，Tint 报告一次列全

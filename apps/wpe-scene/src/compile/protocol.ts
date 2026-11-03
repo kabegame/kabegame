@@ -13,8 +13,10 @@ export type WorkerRequest =
       projectDir: string;
       sceneAssets: string[];
       userProperties: Record<string, unknown>;
+      scriptOverrides: Record<string, number[] | boolean>;
       postprocess: ScenePostprocessSetting;
       force: boolean;
+      exhaustive: boolean;
       module: WebAssembly.Module | null;
     }
   | { type: "file-result"; id: number; bytes?: Uint8Array; error?: FileError };

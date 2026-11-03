@@ -49,11 +49,15 @@ export interface SceneRendererOptions {
   onError?: (reasons: string[]) => void;
   /** 设备丢失（非 `destroy()` 引起），渲染已停止；调用方可以重建渲染器。 */
   onLost?: (reasons: string[]) => void;
+  /** 每个实际渲染帧在状态同步前执行；暂停时不执行。 */
+  beforeFrame?: (dt: number) => void;
 }
 
 export interface SceneLoadOptions {
   /** dev 强制渲染（D4）：不因 `bundle.unsupported` 拒绝，渲染器自查仍然生效。 */
   ignoreUnsupported?: boolean;
+  /** 新状态建好后、首帧绘制前同步执行。 */
+  beforeFirstFrame?: (state: SceneState) => void;
 }
 
 /** 一条就地写：绑定 + 新值（宿主按 `planApply` 挑出来）。 */
@@ -82,6 +86,7 @@ export class SceneRenderer {
   private pointerLast: [number, number] = [0.5, 0.5];
   /** 上一帧的时钟读数（秒），算 `g_Frametime`。 */
   private lastTime: number | null = null;
+  private currentFrametime = 0;
   private paused = false;
   private failed = false;
   private lost = false;
@@ -169,6 +174,14 @@ export class SceneRenderer {
     return this.state;
   }
 
+  get runtimeSeconds(): number {
+    return this.clock.seconds();
+  }
+
+  get frameSeconds(): number {
+    return this.currentFrametime;
+  }
+
   /** 当前 GPU 场景；dev 探针按固定 `g_Time` 读回时用。 */
   get currentScene(): GpuScene | null {
     return this.scene;
@@ -216,9 +229,10 @@ export class SceneRenderer {
       ],
     });
     this.coverKey = "";
+    options.beforeFirstFrame?.(state);
     old?.destroy();
     this.failed = false;
-    this.render();
+    this.render(true);
     await this.gpu.device.queue.onSubmittedWorkDone();
     if (this.failed) throw new SceneRenderError(["webgpu:first-frame"]);
     this.sync();
@@ -313,7 +327,7 @@ export class SceneRenderer {
     if (this.scene && !this.shouldRun) this.render();
   }
 
-  private render(): void {
+  private render(runScripts = false): void {
     const scene = this.scene;
     const state = this.state;
     if (!scene || !state || !this.blitBindGroup || this.destroyed || this.lost || this.failed) return;
@@ -328,6 +342,8 @@ export class SceneRenderer {
     const seconds = this.clock.seconds();
     const frametime = this.lastTime === null ? 0 : Math.max(0, seconds - this.lastTime);
     this.lastTime = seconds;
+    this.currentFrametime = frametime;
+    if (!this.paused && !document.hidden && (runScripts || this.shouldRun)) this.options.beforeFrame?.(frametime);
     // 就地改过的状态先刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a）
     scene.sync(state);
     scene.update({

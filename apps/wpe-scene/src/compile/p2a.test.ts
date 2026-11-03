@@ -5,7 +5,6 @@ import { compileScene, fboFormat, needsFramebuffer, passthroughMaterial, type Sc
 import { decodeEncodedTextures, TextureDecodeCache } from "./decode";
 import { checkEffectFeatures, checkProgramFeatures, checkSceneFeatures, ENGINE_UNIFORMS, scanValue } from "./features";
 import type { SceneReader } from "./fs";
-import { isStaticScript, scriptExports } from "./model";
 import {
   readWpePostprocessing,
   resolvePostprocessLevel,
@@ -104,33 +103,6 @@ describe("场景后处理档位", () => {
     const reader = memoryReader({ "B:\\wpe\\config.json": config("ultra") });
     expect(await readWpePostprocessing(reader, ["A:\\wpe\\assets", "B:\\wpe\\assets"])).toBe("ultra");
     expect(await readWpePostprocessing(reader, [])).toBeNull();
-  });
-});
-
-describe("脚本静态规则（D10）", () => {
-  const vortex =
-    "'use strict';\n\nexport function applyUserProperties(userProperties) {\n\tthisObject.colormode = 1;\n}\n";
-  it("导出名的词法扫描", () => {
-    expect(scriptExports(vortex)).toEqual(["applyUserProperties"]);
-    expect(scriptExports("export function update(value) { return value; }\nexport function init() {}")).toEqual([
-      "update",
-      "init",
-    ]);
-    expect(scriptExports("const a = 1; export { a as update, b };")).toEqual(["update", "b"]);
-    expect(scriptExports("// export function update() {}\nexport const applyUserProperties = () => {};")).toEqual([
-      "applyUserProperties",
-    ]);
-    expect(scriptExports("export default function () {}")).toContain("default");
-  });
-  it("只导出 applyUserProperties 的按 value 静态处理，其余报 value:script", () => {
-    expect(isStaticScript(vortex)).toBe(true);
-    expect(isStaticScript("export function update(v) { return v; }")).toBe(false);
-    expect(isStaticScript("export function applyUserProperties() {}\nexport function init() {}")).toBe(false);
-    const keys = new Set<string>();
-    scanValue({ colormode: { script: vortex, value: 0 } }, keys);
-    expect([...keys]).toEqual([]);
-    scanValue({ color: { script: "export function update() {}", value: "1 0 0" } }, keys);
-    expect([...keys]).toEqual(["value:script"]);
   });
 });
 
@@ -485,9 +457,9 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P2a 样本", () => {
     // vortex 本身 bloom: false：开启 / 超高都不报后处理
     expect((await compile("razer_vortex", { postprocess: "ultra" })).unsupported).toEqual([]);
   }, 60000);
-  it("razer_bedroom：三档都只剩 value:script（泛光 / HDR 是 P2b）；强制渲染时 passthrough 用 genericimage3", async () => {
+  it("razer_bedroom：三档均可渲染；强制渲染时 passthrough 用 genericimage3", async () => {
     for (const postprocess of ["disabled", "enabled", "ultra"] as const)
-      expect((await compile("razer_bedroom", { postprocess, exhaustive: true })).unsupported).toEqual(["value:script"]);
+      expect((await compile("razer_bedroom", { postprocess, exhaustive: true })).unsupported).toEqual([]);
     const forced = await compile("razer_bedroom", { postprocess: "disabled", force: true });
     const blended = forced.layers.filter((layer) => layer.colorBlendMode !== 0);
     expect(blended.map((layer) => layer.colorBlendMode).sort()).toEqual([11, 11, 11, 11, 11, 12]);

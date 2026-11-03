@@ -1,5 +1,18 @@
 # v4.7.0 regression
 
+## 场景壁纸 P3b：SceneScript 运行时（进行中）
+
+2026-11-04 Windows dev。脚本在宿主 iframe 里的同源 `about:blank` 子 frame（独立 realm）中同步运行：每帧计时器 → `update`（返回值当帧写回）→ 渲染。用户脚本以 blob 模块加载，WPE 自带的 `jsmodules` 经按场景生成的 import map 以 `file:` 加载，`baseclasses.js` 作经典脚本。`value:script` 静态规则已删除。语料解锁清单（步骤 6）与文档（步骤 8）待补。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 单测与检查 | Windows | 宿主 tsc；`apps/wpe-scene` vitest（设 `KABEGAME_WPE_ROOT`）；Prettier | 0 error；全过 | 2026-11-04 主会话：tsc 0 error，15 文件 193 passed，Prettier 通过 |
+| [x] | D1 realm 与环境 | Windows dev，主窗口预览 | dev 探针 `host.realmCheck()`（vortex / bedroom / shimmering） | 脚本求值成功；import map 只含用到的模块；WPE 没有的全局被遮掉；语法错误带行列 | 2026-11-04：三张全部求值成功；bedroom 的 import map 只有 `WEColor` → WPE `wecolor.js`；22 个全局为 `undefined`，`__TAURI_INTERNALS__` / `window` / `document` / `top` / `location` 删不掉（预期）；`console.warn` 抛 `TypeError`；语法错误 `(line 3, col 11)`；模块缓存第二次不再读文件；测后无残留 frame |
+| [x] | D2 razer_bedroom 实时渲染 | Windows dev，主窗口预览与应用背景 | 打开 bedroom 预览 | 不再退回预览图；灯带随时间变色 | 2026-11-04：日志 `场景脚本加载完成：6 段，成功 6 段` → `开始渲染：18 层、7 个程序`；update 约 60 次/秒、色相速度与脚本 speed 相符、无报错；rAF 144、submit 60 次/秒，frameMs 均值 0.19 ms、p95 0.4 ms |
+| [x] | D3 bedroom 与 WPE 抓帧对照 | Windows dev + RenderDoc | `A:\bedroom` 三档 9 帧：读 6 个 `g_TintColor` 与 `g_Time`，注入预览宿主读回，与后备缓冲逐像素比较 | 脚本公式与 WPE 一致；画面只差舍入 | 2026-11-04：54 个颜色与 `hsv2rgb(Date.now()/2000*speed%1,1,1)` 在整数毫秒上逐位相等。关闭 / 开启档通道平均差 0.038/255、p99 2、差值 > 4 的像素 0.24%；超高档 0.055/255、p99 2、0.24%；灯带区域平均色各通道差 ≤ 0.26/255。残差集中在细线与高对比边缘（最大 51；超高档桌垫细线 112），三档相同、与脚本和泛光无关，原因未查。产物 `ignore/p3b/compare/` |
+| [x] | D4 razer_vortex 切模式 | Windows dev，主窗口预览 | 属性面板切「模式」 | 三层颜色模式跟着变 | 2026-11-04 用户目视确认切换正常 |
+| [ ] | D5 语料解锁清单 | Windows dev | dev 探针 `scriptCorpus`（步骤 6） | 列出解锁场景与缺失 API 排行 | 待测 |
+
 ## 场景壁纸 P3a：属性绑定表与快速路径
 
 2026-11-03 Windows dev，主窗口图库预览（宿主 iframe 里的 dev 探针 `__kabegameSceneProbe`，裸 CDP 脚本在 `ignore/p3a/`）。改动前基线：`git archive HEAD`（44f2dd97）的 `apps/wpe-scene` 解到 `ignore/p3a/base/`，以 development 模式构建进 `target/debug/resources/wpe-scene`，用旧探针渲染后再换回工作区构建；基线存 `ignore/p3a/baseline.txt`。「场景后处理」设置为跟随 WPE（WPE `config.json` 为 `disabled`，解析为关闭档），`g_Time` 固定 3.25 s。属性写入走属性面板的同一命令 `set_wpe_web_user_properties`（或面板本身），测完全部改回原值。

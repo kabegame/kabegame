@@ -1,4 +1,4 @@
-import type { BindingTarget, UserProperty, ValueType } from "../compile/bindings";
+import { valueTypeOf, type BindingTarget, type UserProperty, type ValueType } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
@@ -305,7 +305,10 @@ export class ScriptApi {
       "getLayer",
       (name: unknown) => {
         const layers = this.access.bundle().layers;
-        const layer = typeof name === "number" ? layers[name] : layers.find((item) => item.name === name);
+        const layer =
+          typeof name === "number"
+            ? layers.find((item) => item.object === name)
+            : layers.find((item) => item.name === name);
         return layer ? this.layer(layer.object) : null;
       },
       true,
@@ -321,7 +324,8 @@ export class ScriptApi {
       this.thisScene,
       "getLayerIndex",
       (value: unknown) =>
-        this.access.bundle().layers.findIndex((layer) => this.layer(layer.object) === value || layer.name === value),
+        this.access.bundle().layers.find((layer) => this.layer(layer.object) === value || layer.name === value)
+          ?.object ?? -1,
       true,
     );
   }
@@ -331,9 +335,26 @@ export class ScriptApi {
     if (api) return api;
     api = this.object();
     const names = new Map<string, { uniforms: string[]; type: ValueType }>();
-    for (const script of this.access.bundle().scripts.list)
-      if (script.owner.kind === "material" && script.owner.pass === pass && script.target.kind === "constant")
-        names.set(script.target.material, { uniforms: script.target.uniforms, type: script.target.type });
+    const bundle = this.access.bundle();
+    const passes = bundle.layers.flatMap((layer) => [
+      ...layer.passes,
+      ...layer.effects.flatMap((effect) => effect.steps.flatMap((step) => (step.kind === "draw" ? [step.pass] : []))),
+    ]);
+    const current = passes.find((item) => item.key === pass);
+    const program =
+      current?.program === null || current?.program === undefined ? null : bundle.programs[current.program];
+    for (const uniform of program?.uniforms ?? []) {
+      const name = uniform.meta?.material;
+      if (typeof name !== "string" || !name) continue;
+      const shape = names.get(name) ?? { uniforms: [], type: valueTypeOf(uniform) };
+      shape.uniforms.push(uniform.name);
+      names.set(name, shape);
+    }
+    // FakeRealm 单测没有翻译器结果；真实 bundle 以 meta.material 为准。
+    if (!program)
+      for (const script of bundle.scripts.list)
+        if (script.owner.kind === "material" && script.owner.pass === pass && script.target.kind === "constant")
+          names.set(script.target.material, { uniforms: script.target.uniforms, type: script.target.type });
     for (const [name, shape] of names)
       this.define(
         api,
