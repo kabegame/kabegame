@@ -2,7 +2,7 @@
 
 ## 场景壁纸 P3b：SceneScript 运行时（进行中）
 
-2026-11-04 Windows dev。脚本在宿主 iframe 里的同源 `about:blank` 子 frame（独立 realm）中同步运行：每帧计时器 → `update`（返回值当帧写回）→ 渲染。用户脚本以 blob 模块加载，WPE 自带的 `jsmodules` 经按场景生成的 import map 以 `file:` 加载，`baseclasses.js` 作经典脚本。`value:script` 静态规则已删除。语料解锁清单（步骤 6）与文档（步骤 8）待补。
+2026-11-04 Windows dev。脚本在宿主 iframe 里的同源 `about:blank` 子 frame（独立 realm）中同步运行：每帧计时器 → `update`（返回值当帧写回）→ 渲染。用户脚本以 blob 模块加载，WPE 自带的 `jsmodules` 经按场景生成的 import map 以 `file:` 加载，`baseclasses.js` 作经典脚本。`value:script` 静态规则已删除。语料解锁清单见 D5；文档（步骤 8）待补。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -11,7 +11,7 @@
 | [x] | D2 razer_bedroom 实时渲染 | Windows dev，主窗口预览与应用背景 | 打开 bedroom 预览 | 不再退回预览图；灯带随时间变色 | 2026-11-04：日志 `场景脚本加载完成：6 段，成功 6 段` → `开始渲染：18 层、7 个程序`；update 约 60 次/秒、色相速度与脚本 speed 相符、无报错；rAF 144、submit 60 次/秒，frameMs 均值 0.19 ms、p95 0.4 ms |
 | [x] | D3 bedroom 与 WPE 抓帧对照 | Windows dev + RenderDoc | `A:\bedroom` 三档 9 帧：读 6 个 `g_TintColor` 与 `g_Time`，注入预览宿主读回，与后备缓冲逐像素比较 | 脚本公式与 WPE 一致；画面只差舍入 | 2026-11-04：54 个颜色与 `hsv2rgb(Date.now()/2000*speed%1,1,1)` 在整数毫秒上逐位相等。关闭 / 开启档通道平均差 0.038/255、p99 2、差值 > 4 的像素 0.24%；超高档 0.055/255、p99 2、0.24%；灯带区域平均色各通道差 ≤ 0.26/255。残差集中在细线与高对比边缘（最大 51；超高档桌垫细线 112），三档相同、与脚本和泛光无关，原因未查。产物 `ignore/p3b/compare/` |
 | [x] | D4 razer_vortex 切模式 | Windows dev，主窗口预览 | 属性面板切「模式」 | 三层颜色模式跟着变 | 2026-11-04 用户目视确认切换正常 |
-| [ ] | D5 语料解锁清单 | Windows dev | dev 探针 `scriptCorpus`（步骤 6） | 列出解锁场景与缺失 API 排行 | 待测 |
+| [x] | D5 语料解锁清单 | Windows dev | dev 探针 `scriptCorpus`（步骤 6） | 列出解锁场景与缺失 API 排行 | 2026-11-04：经应用页 PathQL 取到库里 38 张 `x-wpe/scene`，在应用背景宿主里逐张调 `scriptCorpus`。38 张约 42 s 跑完；单个回调最长 1.4 ms；没有卡住，也没有残留测试 frame。`unsupported` 与 Node 语料测试逐张相同。<br>**解锁**：`unsupported` 为空的有 5 张（beach / deep_space / eagleflag / razer_vortex / razer_bedroom），相对 3a 新解锁的只有 razer_bedroom；dino_run、3146703458、3549863808、3637191856 只少了 `value:script`，仍然退回。<br>**脚本运行**：23 张、638 段。其中 444 段无报错，127 段求值失败，67 段有回调报错（98 条，均禁用了该回调），123 段写回到不支持的目标（主要是 `text`）；另有 209 段导出 `cursor*` / `media*` 回调，本阶段不调用。<br>**缺失 API 排行**（壁纸 / 段）：`engine.registerAudioBuffers` 10 / 124（模块顶层，整段失败）、`localStorage` 5 / 10、`thisLayer.getParent` 3 / 29（另有 28 条连带）、`getTextureAnimation` 3 / 10、声音 `play` / `stop` / `isPlaying` 3 / 4、`thisObject.getAnimation` 2 / 4、`input` 2 / 2、`getVideoTexture` 2 / 2、`registerAsset` / `getMaterial` / `getChildren` 各 1。<br>**样本自身的错**：`scene.getLayer` 伪代码 2 段；拖拽脚本挂在 `visible` 上 2 段。<br>没有发现无法归因的报错，也没有发现实现偏差。有脚本但仍退回的 21 张都另有渲染阻塞（文本 19、着色器 18、声音 16、粒子 15 张），单做 API 一张也解锁不了。明细与后续阶段建议见 phase-3b 实施记录「步骤 6 语料」，数据在 `ignore/p3b/corpus/` |
 
 ## 场景壁纸 P3a：属性绑定表与快速路径
 

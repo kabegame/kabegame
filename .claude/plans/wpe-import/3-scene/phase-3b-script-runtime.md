@@ -583,3 +583,182 @@ export interface SceneRendererOptions {
   - 实时：update 约 60 次/秒、色相速度与 speed/2 相符、相位差不超过一帧；rAF 144 次/秒、submit 60 次/秒；探针 frameMs 均值 0.19 ms、p95 0.4 ms；6 段无报错。
   - 测量方法上的缺口：dev 探针没有「写目标」入口，代理临时改写 `SceneState.constants` 并借原型包装让 `sync` 刷新、截取读回缓冲（测完全部还原）。后续给探针加 `host.write(path, value)` 更稳妥。
   - 临时改动：「场景后处理」由 `disabled` 依次改为 `enabled` / `ultra` 再改回 `disabled`（连带应用背景与壁纸窗口宿主各重载 3 次，realm 未重建）；预览宿主暂停后已恢复。qrenderdoc 停在 `highres-frame1463.rdc`（桥接没有关闭抓帧的方法）。
+
+### 步骤 6 语料（2026-11-04）
+
+**做法。** 环境为 Windows dev（CEF 149），宿主产物是 2026-11-04 的 development 构建，已含 `scriptCorpus`，本步骤未重建。
+
+- **取 id**：在主窗口应用页经 `pathql_fetch("images://gallery/media-type/image/scene/_kb_x500x/1")` 只读取得 38 行，`type` 全为 `x-wpe/scene`。`pathql_all` 计数 38，与 `media-type/image` 格式列举里的 `scene` 38 一致。
+- **调用**：在主窗口应用背景的 bedroom 宿主（12888）里逐张调 `scriptCorpus([id])`。每张异步启动、1 s 轮询结果；宿主 90 s 无应答即停，没有触发。
+- **防卡住**：开跑前静态扫了 638 段源码里的循环，只有 3286859278 一处 `while`（随机换歌，`audioLayers.length > 1` 时按概率结束）。计时器回调里新登记的计时器不会在同一帧触发。据此判断不会卡住。
+- **数据**：驱动与数据在 `ignore/p3b/corpus/`，包括 `ids.json`、`raw/<id>.json`、`summary.json`、`table.json`、`errors.json`、`ranking.json`、`runtable.json`、`static-api.json`；归类脚本为 `analyze.mjs` / `rank.mjs` / `runtable.mjs` / `staticapi.mjs`。
+
+结果：
+- 38 张全部跑完，共约 42 s，单张编译加运行 37–1847 ms。单个回调最长 1.4 ms，没有触发 15 s 停止。`update` 每段 120 次（出错被禁用的除外），`init` 与首次 `applyUserProperties` 各 1 次；计时器 3 段共触发 5 次。
+- 宿主里 `iframe[data-kb-script-realm="1"]` 调用前为 1（宿主自己的 realm），每张跑完与全部结束后都是 1，没有残留测试 frame。临时全局 `window.__kbCorpus6` 已删除。
+- 交叉核对：宿主 Worker 编译（`postprocess: "follow"`，本机 WPE 为 `disabled`）的 `unsupported` 与 Node 语料测试（`pipeline.test.ts`，`postprocess: "disabled"`）逐张相同，38/38。
+
+**解锁清单。** `unsupported` 为空的有 5 张：beach、deep_space、eagleflag（这三张无脚本）、razer_vortex（3 段）、razer_bedroom（6 段）。相对 3a 结束时，新解锁的只有 **razer_bedroom**，与本步骤的预期一致。其余报过 `value:script` 的 4 张都只少了这一项，仍然退回。
+
+逐张对比如下。3a 列是本次结果加上步骤 5 记录里删去的 `value:script`，没有重新运行 3a 的代码。
+
+| 场景 | 脚本段 | 3a 结束 | 现在 | 变化 |
+| --- | --- | --- | --- | --- |
+| arsenal（12878） | — | 5 项 | 5 项 | 不变 |
+| audiophile（12879） | — | 5 项 | 5 项 | 不变 |
+| beach（12880） | — | 空 | **空** | 不变 |
+| deep_space（12881） | — | 空 | **空** | 不变 |
+| demon_core（12882） | — | 6 项 | 6 项 | 不变 |
+| dino_run（12883） | 3 | 22 项（含 `value:script`） | 21 项 | 删去 `value:script`，仍退回 |
+| dna_fragment（12884） | — | 3 项 | 3 项 | 不变 |
+| eagleflag（12885） | — | 空 | **空** | 不变 |
+| fantasticcar（12886） | — | 3 项 | 3 项 | 不变 |
+| neon_sunset（12887） | — | 6 项 | 6 项 | 不变 |
+| razer_bedroom（12888） | 6 | 1 项（含 `value:script`） | **空** | **新解锁** |
+| razer_vortex（12889） | 3 | 空 | **空** | 不变 |
+| retro（12890） | — | 1 项 | 1 项 | 不变 |
+| ricepod（12891） | — | 6 项 | 6 项 | 不变 |
+| shimmering_particles（12892） | 1 | 2 项 | 2 项 | 不变 |
+| techno（12893） | — | 2 项 | 2 项 | 不变 |
+| 2932157836（12894） | 44 | 31 项 | 31 项 | 不变 |
+| 3146703458（12895） | 37 | 25 项（含 `value:script`） | 24 项 | 删去 `value:script`，仍退回 |
+| 3219908811（12896） | 40 | 42 项 | 42 项 | 不变 |
+| 3351072238（12897） | 67 | 46 项 | 46 项 | 不变 |
+| 3351163962（12898） | 99 | 38 项 | 38 项 | 不变 |
+| 3409595232（12899） | 3 | 40 项 | 40 项 | 不变 |
+| 3429479356（12900） | 7 | 30 项 | 30 项 | 不变 |
+| 3470764447（12901） | 51 | 38 项 | 38 项 | 不变 |
+| 3524852519（12902） | 68 | 47 项 | 47 项 | 不变 |
+| 3554161528（12903） | 5 | 50 项 | 50 项 | 不变 |
+| 3600630828（12904） | 7 | 30 项 | 30 项 | 不变 |
+| 3611425904（12905） | 9 | 37 项 | 37 项 | 不变 |
+| 3656079027（12906） | — | 18 项 | 18 项 | 不变 |
+| 3062029089（13102） | — | 1 项 | 1 项 | 不变 |
+| 3326873240（13103） | 105 | 46 项 | 46 项 | 不变 |
+| 3336377291（13104） | 13 | 33 项 | 33 项 | 不变 |
+| 3445915391（13105） | — | 8 项 | 8 项 | 不变 |
+| 3460973721（13106） | 9 | 30 项 | 30 项 | 不变 |
+| 3637191856（13107） | 2 | 21 项（含 `value:script`） | 20 项 | 删去 `value:script`，仍退回 |
+| 3286859278（13108） | 51 | 48 项 | 48 项 | 不变 |
+| 3451555874（13109） | 7 | 29 项 | 29 项 | 不变 |
+| 3549863808（13110） | 1 | 10 项（含 `value:script`） | 9 项 | 删去 `value:script`，仍退回 |
+
+**脚本运行表。** 23 张有脚本，共 638 段（与步骤 1 的统计相同；材质 json 里的 1 段未收集）：
+- 444 段求值与回调都没有报错；
+- 127 段求值失败；
+- 67 段有回调报错，共 98 条，每条都禁用了对应回调；计时器回调没有报错；
+- 123 段把返回值写到不支持的目标：`text` 115、`maxwidth` 6、`instanceoverride/colorn` 2；
+- 另有 209 段导出了本阶段不会调用的 `cursor*` / `media*` 回调。这一项来自静态扫描，运行时不报错。
+
+| 场景 | 段 | 无报错 | 求值失败（构成） | 回调报错 = 被禁用的回调（根因） | 写回到不支持目标 | 导出未调用的 cursor* / media* | 渲染阻塞项 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| dino_run（12883） | 3 | 1 | 1（registerAsset 1） | applyUserProperties 1（thisObject.getMaterial 1） | 0 | 1 | 21 |
+| razer_bedroom（12888） | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
+| razer_vortex（12889） | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
+| shimmering_particles（12892） | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
+| 2932157836（12894） | 44 | 43 | 1（registerAudioBuffers 1） | 0 | 6 | 8 | 31 |
+| 3146703458（12895） | 37 | 37 | 0 | 0 | 0 | 37 | 24 |
+| 3219908811（12896） | 40 | 22 | 16（registerAudioBuffers 16） | update 1、init 1（value 是布尔 1、thisObject.getAnimation 1） | 4 | 15 | 42 |
+| 3351072238（12897） | 67 | 36 | 31（registerAudioBuffers 31） | 0 | 17 | 0 | 46 |
+| 3351163962（12898） | 99 | 90 | 6（registerAudioBuffers 6） | update 3（input 1、isPlaying 2） | 29 | 61 | 38 |
+| 3409595232（12899） | 3 | 3 | 0 | 0 | 2 | 0 | 40 |
+| 3429479356（12900） | 7 | 6 | 0 | init 1、update 1（声音 2） | 2 | 0 | 30 |
+| 3470764447（12901） | 51 | 32 | 18（scene 1、registerAudioBuffers 17） | update 1（getVideoTexture 1） | 14 | 2 | 38 |
+| 3524852519（12902） | 68 | 41 | 9（registerAudioBuffers 9） | init 17、update 13（localStorage 1、getParent 12、连带 13、getTextureAnimation 4） | 8 | 22 | 47 |
+| 3554161528（12903） | 5 | 4 | 0 | init 1（localStorage 1） | 2 | 4 | 50 |
+| 3600630828（12904） | 7 | 6 | 0 | init 1、applyUserProperties 1（声音 2） | 3 | 0 | 30 |
+| 3611425904（12905） | 9 | 9 | 0 | 0 | 3 | 6 | 37 |
+| 3326873240（13103） | 105 | 64 | 21（scene 1、registerAudioBuffers 20） | init 17、update 15（localStorage 1、getParent 12、连带 13、getTextureAnimation 4、input 1、getVideoTexture 1） | 19 | 22 | 46 |
+| 3336377291（13104） | 13 | 10 | 0 | init 3（thisObject.getAnimation 3） | 2 | 9 | 33 |
+| 3460973721（13106） | 9 | 4 | 0 | init 5（localStorage 5） | 3 | 5 | 30 |
+| 3637191856（13107） | 2 | 1 | 0 | update 1（value 是布尔 1） | 1 | 1 | 20 |
+| 3286859278（13108） | 51 | 21 | 20（registerAudioBuffers 20） | init 10、update 5（localStorage 2、getChildren 1、getParent 5、连带 4、getTextureAnimation 3） | 5 | 15 | 48 |
+| 3451555874（13109） | 7 | 4 | 3（registerAudioBuffers 3） | 0 | 3 | 1 | 29 |
+| 3549863808（13110） | 1 | 0 | 1（registerAudioBuffers 1） | 0 | 0 | 0 | 9 |
+
+表中「连带」指二次错误，有两种：同一段的 `init` 失败后，`update` 读到 `undefined`；或者读取另一段本该写进 `shared` 的值。归因见下表。
+
+**缺失 API 排行。** 运行时报错按根因归类，按壁纸数、再按段数排序。连带错误已归到根因，没有无法归因的报错。
+
+| # | 名字 | 归类 | 壁纸 | 段（报错条数） | 出错位置 | 涉及场景 / 说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `engine.registerAudioBuffers`（连同 `AUDIO_RESOLUTION_*`） | 未实现的 WPE API | 10 | 124 段求值失败 + 2 段连带 | 模块顶层 | 2932157836、3219908811、3351072238、3351163962、3470764447、3524852519、3326873240、3286859278、3451555874、3549863808。失败的段整段不用。连带的 2 段是 3524852519 / 3326873240 的 `objects/{14,15}/color`：它们读 `shared.miTextContainerScale`，而写它的两段因本项求值失败。报告 F 节的 125 段里另有 1 段在材质 json，未收集 |
+| 2 | `localStorage`（WPE 版，`get` / `set` / `delete` / `clear`） | 未实现（计划 P6） | 5 | 10 | `init` | 3524852519、3554161528、3326873240、3460973721、3286859278；都是拖拽脚本读 `localStorage.get("miDragable")` |
+| 3 | `thisLayer.getParent` | 未实现 | 3 | 29（29 + 28 条连带） | `init` | 3524852519、3326873240（同一作者的时钟 UI）、3286859278。`update` 里读 `parent.scale`、`parent.origin`、`initValue.x` 等的 28 条报错都由此而来 |
+| 4 | `thisLayer.getTextureAnimation` | 未实现 | 3 | 10（11） | `init` / `update` | 3524852519、3326873240、3286859278 |
+| 5 | 声音图层 `play` / `stop` / `isPlaying` | 未实现 | 3 | 4（6） | `init` / `update` / `applyUserProperties` | 3351163962（脚本挂在 sound 对象的 `volume` 上，调 `thisLayer.isPlaying`）、3429479356（`cachedSongs[i].play`）、3600630828（`audioLayer.stop` / `play`） |
+| 6 | `thisObject.getAnimation` | 未实现 | 2 | 4 | `init` | 3219908811、3336377291 |
+| 7 | `input`（`cursorWorldPosition`） | 未实现 | 2 | 2 | `update` | 3351163962、3326873240 |
+| 8 | `<图层>.getVideoTexture` | 未实现 | 2 | 2 | `update` | 3470764447、3326873240 |
+| 9 | `engine.registerAsset` | 未实现 | 1 | 1 | 模块顶层 | dino_run `objects/22/visible` |
+| 10 | `thisObject.getMaterial` | 未实现 | 1 | 1 | `applyUserProperties` | dino_run `objects/33/effects/0/visible` |
+| 11 | `thisLayer.getChildren` | 未实现 | 1 | 1 | `init` | 3286859278 `objects/31/angles`；前面提到的 `while` 也因此不会执行 |
+| 12 | `scene.getLayer` 伪代码 | 样本自身的错 | 2 | 2 | 模块顶层 | 3470764447、3326873240 的 `objects/0/visible`；WPE 也报 `ReferenceError: scene is not defined`（报告 F、H 节） |
+| 13 | 拖拽脚本挂在 `visible` 上 | 样本自身的错 | 2 | 2 | `update` | 3219908811 `objects/13/visible`、3637191856 `objects/5/visible`。脚本是给 `origin` 写的拖拽脚本（注释写着「附加到图像层的原点属性」），却挂在了 `visible` 上：`init` 收到布尔，`update` 里 `value.x = …` 在严格模式下抛 `TypeError`。WPE 的 `visible` 同样是布尔，推断也会报错 |
+
+**实现偏差。** 运行时报错里没有发现我们实现有偏差。另有两点行为与 WPE 不同，目前不影响画面：
+- API 对象是可扩展的 `Object.create(null)`。给没有存取器的名字赋值（如 `thisLayer.text = …`），会在对象上新建一个普通属性，之后读回的就是这个值，既不报错也不生效；WPE 会写到真实属性。补文本等 API 时一并收紧。
+- bundle 给 `scene.json` 的每个对象都建了图层项，包括 sound / text / particle。所以 `thisLayer` / `getLayer` 对这些对象返回的是带通用图层字段的对象，报的错是 `isPlaying is not a function`，而不是读 null。这与待定 12 写的「粒子、文本、声音对象进不了 bundle」不同。补声音、文本 API 时，要按对象类型给不同的图层对象。
+
+**静态补充。** 下列各项运行时不报错，或在这 120 帧里没有走到。数字为「壁纸 / 段」。
+- **不会被调用的回调**：`cursorDown` 13 / 71、`cursorUp` 12 / 69、`cursorMove` 11 / 61、`cursorClick` 10 / 86、`cursorEnter` / `cursorLeave` 8 / 45、`mediaThumbnailChanged` 7 / 32、`mediaPropertiesChanged` 6 / 12、`mediaPlaybackChanged` 4 / 19、`mediaTimelineChanged` 3 / 3。
+- **文本图层**：返回值写 `text` 的 115 段（17 张），写 `maxwidth` 的 6 段；`thisLayer.text` / `horizontalalign` / `verticalalign` 的读写见于 2–3 张。
+- **没走到的成员**：
+  - `getTransformMatrix` 2 / 4（所在段求值已失败）；
+  - `localStorage.set` 6 / 22；
+  - `thisScene.createLayer` / `sortLayer` 2 / 2，`destroyLayer` 1；
+  - `<图层>.setFrame` 3 / 10（纹理动画）；
+  - `getEffect` 1 / 2、`emitParticles` 1、`getAnimationLayer` 1、`input.cursorLeftDown` 1。
+- **样本自身的错（未触发）**：`localStorage.remove` 2 / 6（WPE 没有 `remove`）、`console.warn` 1 / 1、`thisLayer.originalOrigin` 2 / 6（报告 C 节：推断不是 API）。
+
+**渲染阻塞。** 有脚本却仍然退回的 21 张都另有渲染阻塞，单做 API 一张也解锁不了。按出现张数：
+- 文本 `object:text`：19 张（除 shimmering_particles、3549863808 外全部）；
+- 着色器失败 `shader:*`：18 张；
+- 声音 `object:sound`：16 张；
+- 粒子 `object:particle`：15 张；
+- 父子层级 `object:parent`：14 张；
+- 视频纹理 `tex:video`：10 张；
+- 音频频谱 uniform：6 张；
+- 纹理动画 `tex:animation`：4 张；
+- puppet：3 张。
+
+所以下面各项的收益是两类：一是这些阻塞逐步解除之后画面正确；二是减少日志里的报错。
+
+**后续 API 阶段建议**（修订「后续」的初排，交用户定）：
+1. **音频缓冲与 `localStorage`**：量小，可以单列一个阶段，或并入 3c。
+   - `engine.registerAudioBuffers` 先返回全零缓冲：`{left, right, average}` 各为 16 / 32 / 64 长的 realm 数组，只许在模块顶层调用，同时提供 `AUDIO_RESOLUTION_*`。只这一个函数，就能让 10 张里的 124 段恢复求值，连带的 2 段也随之消失。全零对应「没有声音」，不改变画面；接上 W2 / W3 的音频订阅后再换成真数据。
+   - WPE 版 `localStorage`：提供 `get` / `set` / `delete` / `clear` 与 `LOCATION_GLOBAL` / `LOCATION_SCREEN`，不提供 `remove`。可以先做内存版，消掉 5 张 10 段的 `init` 失败；按壁纸持久化留到 P6，或这次一并做。
+   - `registerAsset` 只有 1 段，维持报错，随 P6。
+2. **层级与变换**：随渲染侧的父子层级做（W1 / W5）。
+   - 内容：`getParent` / `getChildren` / `setParent` / `getTransformMatrix`。
+   - 涉及 3 张 30 段，另有 28 条连带。这 3 张与另外 11 张都报 `object:parent`。
+   - 要与渲染器的父子变换放在同一阶段，否则 `getParent().scale` 读到的值与画面不一致。
+3. **光标与输入**（W4）：`input.*` 与 `cursor*` 回调。
+   - 运行时只有 2 段报错，但 13 张壁纸有 209 段导出了 cursor / media 回调，主要是拖拽、双击切换这类交互。这是不报错的缺口里最大的一项。
+   - 需要宿主把指针事件与命中测试（`cursorHitTest`、按图层的 enter / leave）交给脚本。
+4. **纹理动画与视频**：随 `tex:animation` / `tex:video` 的渲染支持做（W5 / P6）。涉及 `getTextureAnimation` 3 / 10、`thisObject.getAnimation` 2 / 4、`getVideoTexture` 2 / 2、`setFrame`。
+5. **声音、文本、媒体、建层**（P6 / W5）：
+   - 声音 `play` / `stop` / `isPlaying`：3 张 4 段；
+   - 文本属性写回：17 张 121 段；
+   - `media*Changed`：7 张；
+   - `createLayer` / `sortLayer` / `destroyLayer` / `registerAsset`：2 张。
+   - 做声音、文本时，同时给非图片对象正确类型的图层对象（见「实现偏差」第二条）。
+6. **`thisObject.getMaterial`**：只有 dino_run 1 段，随 3c 或材质 API。
+
+**`scriptCorpus` 本身的问题。**
+- 返回的 `remainingTestFrames` 不是残留测试 frame 数，而是 120 帧循环的倒计数，`finally` 里总被置 0，所以恒为 0。残留要数 DOM 里的 `iframe[data-kb-script-realm="1"]`，本次由驱动自己数。
+- `missingApis` 只认 `engine|thisLayer|thisObject|thisScene|input` 前缀和 `X is not defined`，因此：
+  - 漏掉经变量调用的 6 条：`video.getVideoTexture`、`cachedSongs[i].play` / `isPlaying`、`audioLayer.stop` / `play`；
+  - 30 条连带的 `Cannot read properties of undefined` 与 2 条 `Cannot create property` 没有归因；
+  - 把样本伪代码里的 `scene` 也计成了缺失 API。
+
+  本记录的排行由 `rank.mjs` 另行计算。
+- 诊断里没有每段的写回目标类型，也不统计写到重编译目标（effect `visible`、general 的重编译项）的次数。正式宿主里这类写入会触发重编译（待定 6），而语料看不出哪些段每帧都在写。
+- 属性用的是 `project.json` 的作者默认值，不是图库里用户改过的值；按设计不调用 `cursor*` / `media*` 回调。这两点作语料用可以接受。
+
+**临时改动与恢复。**
+- 在 bedroom 宿主里加的 `window.__kbCorpus6` 用完已删。
+- 没有切换路由：主窗口自始至终为 `/gallery?pvwimgid=12892`，宿主仍是 12888 / 12892 两个。
+- Node 侧只读跑了一次 `pipeline.test.ts` 的语料用例。
+- 没有改动图库、属性、设置与代码。
+- 应用背景的 bedroom 宿主 `update` 计数在开跑前后都是 32119。说明它在本步骤开始前就已暂停，与本次测量无关。
