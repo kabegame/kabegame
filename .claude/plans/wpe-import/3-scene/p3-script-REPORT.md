@@ -253,3 +253,356 @@ DLL 地址以 `0x180000000` 为基址，exe 以 `0x140000000` 为基址。函数
 | 首次是否包含未改动的属性 | 推理 | shimmering 的 `glow` 处于默认值（用户没改），抓帧里 bloomstrength 却被脚本改成了 2 × 0.5 = 1.0。所以首次调用**包含用户没改过的属性**，即完整集合。vortex 的脚本有 `hasOwnProperty` 守卫，不能作证据 |
 | 应用 CSP | 读 `src-tauri/kabegame/tauri.conf.json` | `script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'`，确实没有 `blob:`；`frame-src` 有 `blob: data: about: file:` |
 | **更正** | 读 `scripts/build-chromium.ts` | 报告说 Kabegame 的 CEF 7827「推断为 Chromium 147」，**不对**：注释写明 CEF_BRANCH 7827 对应 **Chromium 149.0.7827.x**，即 V8 14.9。比 WPE 的 14.7 新两个小版本，语言特性是它的超集，对兼容没有影响 |
+
+---
+
+## I. 用户属性的运行时更新（2026-11-03）
+
+对象与上文相同（`wallpaper64.exe` SHA-256 前缀 `40e2ce02`，`scenescript64.dll` 前缀 `58039ef9`）。
+- 先做静态分析（I1–I9）；
+- 同日经用户同意，按 I8 的手册做了**动态实验**：在 `-playInWindow` 独立窗口里跑测试工程，用 `-control applyProperties` 改值。现象、日志原文与恢复记录见 **I10**；
+- 下文已按实验结果修改置信度，与静态推断不符的地方逐条注明。
+
+**工具标注**（每条证据后括注）：
+- **REA**：REA MCP（Ghidra 12.1.4 provider）分析副本 `wallpaper64.exe`，从上一轮快照接着做（反编译、交叉引用、字节检索）。主力。
+- **OBJ**：上一轮 llvm-objdump 全量反汇编的文本检索。用于小桩函数、被 Ghidra 截断的函数体、批量抽取反射描述符。
+- **GH**：上一轮 Ghidra headless 对 `scenescript64.dll` 的反编译文件（这一轮只读，没有重跑）。
+- **TXT**：只读文本扫描。WPE 自带的 `assets/scripts/jsclasses/baseclasses.js`、`bin/wallpaperui.exe` 的 UI 脚本 `ui/dist/scripts/scripts.js`、本机样本 JSON。
+- **DOC**：官方 CLI 文档 help.wallpaperengine.io/en/functionality/cli.html。
+
+**置信度**：
+- 静态确认：代码逻辑直接读出。
+- 推断：有静态依据，但缺一环。
+- 实测：I10 的动态实验直接观察到（日志或画面）。
+
+**一句话结论**：
+- **运行时与首次加载走同一个函数。** 改值经渲染线程的窗口消息 0x466 进入 `FUN_140115280`，再调 `FUN_140181f30`，即首次加载用的那个。
+- **改值就地生效，不会整场重载。** 绑定表按属性名找到「对象 + 反射描述符」，调 setter 写字段，再调该描述符的改值回调。会重建的只有：effect 可见性（重算合成、重建图层）、用户纹理（换纹理）、颜色校正后处理材质（运行中会编译新的着色器变体，实测）。
+- **`size` 运行中改了没有效果**（实测）。
+- **COMBO 不能绑用户属性**：写成 `{user, value}` 时 jsoncpp 断言，**整个 WPE 进程中止**（实测）。**`hdr` 改了不生效**，要重载。
+- **脚本的执行顺序**：直接绑定 → `updateScriptProperties` → `applyUserProperties(增量)`；init 不重跑（实测）。
+  - `applyUserProperties` **只收「同时带 `value` 与 `type`」的项**。CLI 改值不带 `type`，所以脚本收到空对象（实测，静态结论已更正）。
+- **`engine.userProperties` 是累计全集，但有缺陷**：每次运行时改值，都会把这次增量里没给的 WPE 内置伪属性（`alignment*` / `rate` / `schemecolor` / `wec_*` / `wcc_*`）写成 `null`，它们随即从全集里消失（实测 + 静态解释）。
+- **生效时机**：在两帧之间同步处理，下一帧就用上新值（实测：apply 在第 N 帧之后，第 N+1 帧的 update 读到新值）。
+- **更正**：上文 D 节说 `FUN_1401830a0` 处理排队的属性变化，**不对**。它是资源热重载队列，见 I6。
+
+### I1. 入口与时机（Q1）
+
+**三条入口，最后都调同一个实例虚函数 +0x80**（静态确认，REA）：
+
+| 来源 | 通道 | 窗口过程 `FUN_140021e50` 的分支 | 载荷 |
+|---|---|---|---|
+| UI 属性面板（`bin/wallpaperui.exe`，CEF） | 主窗口消息 0x401，载荷 `{命令号, 长度, JSON}`；UI 进程到 exe 之间的传输层未查 | 命令 0x6b | `{file, location, properties: {键: 属性对象}}` |
+| `-control applyProperties` | 第二个 `wallpaper64` 进程发 `WM_COPYDATA`（`FUN_140008270`，2000 ms 超时）：`dwData`=0x3f0，数据是 16 字节魔数 `0x27977599 c58b644e 3d427e3b 906b6102` 加 JSON；接收端由 `FUN_14001de80` 校验魔数。**没有主实例时，这个控制进程会自己成为新的 WPE 主实例**，并拉起浏览界面（实测，I10） | 命令 0x3f0 | `-properties` 解析后，每个键包成 `{键: {value: v}}`，**不带 `type`**（实测：脚本收到空对象，见 I4） |
+| 整份配置下发 | 0x401 | 命令 2：先存配置，再对每个实例调 `FUN_140042e10` 取配置里保存的整份属性，与实例当前全集（虚函数 +0x90）合并 | 全集 |
+
+- **UI 一次只发一项**（静态确认，TXT）：
+  - `callbackWallpaperPropertyChanged` 组成 `{file, location, properties: {[key]: 属性对象}}`，经 `callDeferred("browseWallpaperObject", "applySingleProperty", …)` 发出；
+  - 滑块只在值变了时才发。
+  - 命令 0x6b 的载荷形状与之完全对应；`applySingleProperty` 映射到 0x6b 是推断。
+- **CLI 写法**（DOC）：`-control applyProperties -properties RAW~({"rate":10})~END [-location <名字>] [-monitor <n>]`。`-location` 也可以是 `-playInWindow` 指定的窗口名。
+
+**场景实例 +0x80 = `FUN_14010fd60`**（静态确认，REA）。依次做：
+1. 加锁（实例 `+0x3d8`）。
+2. `FUN_14010c380`：把新值合并进实例配置的 `wproperties`，并通知插件（`FUN_14011cf10`）。合并函数 `FUN_140109f80` **只更新配置里已有键的 `value`**。
+3. 解锁。
+4. 对渲染窗口（实例 `+0x1c8`）调 `SendMessageTimeoutW(0x466, wParam=原始 JSON, SMTO_BLOCK, 超时 0)`。
+
+**渲染线程**（静态确认，REA + OBJ）：
+- 渲染循环 `FUN_140110630` 在新线程上运行：`0x14010eeb5` 处取入口，`0x14010eeeb` 处调用 `0x1402ca17c`。参数形状与 `_beginthreadex` 一致，入口经跳板 `0x140116d60`，函数身份是推断。
+- 它自己创建 `WPELiveWallpaper` 窗口，所以这个窗口属于渲染线程。
+- 循环里，每帧函数 `FUN_14017fa70` 前后各有一段 `PeekMessageW` / `DispatchMessageW` 泵。
+- 渲染窗口过程 `FUN_140115b90` 的分支：0x465 = 加载（`FUN_140113c80`），**0x466 = 应用属性**（`FUN_140115280`），0x40e = 设置插件列表。
+
+**`FUN_140115280` 依次**（静态确认，REA）：
+1. 宿主级键：`rate`（÷100，下限 0.1，写实例 `+0x190`）、`volume`（÷100 × 主音量，`FUN_1401816d0`）、`audioprocessing`（开关音频采集位 `+0x1b8` bit3，关闭时清零三块频谱缓冲）。
+2. `FUN_140181f30(渲染器, JSON)`，**首次加载在 `0x140114f10` 调的就是它**。
+3. `cameraparallax` → `FUN_140115a90` 置 / 清 0x200。
+
+**`FUN_140181f30` 的尾部**（静态确认，REA + OBJ `0x140182eef`–`0x140182f5e`）：
+- 渲染器 `+0x1750` ← 本次 JSON（下称**增量**）；
+- `+0x1728` ← 合并(`+0x1728`, 增量)（`FUN_140017fb0`；下称**累计全集**）。
+  - 合并是**浅合并**：先整份拷贝累计全集（`0x140017fe2` 处拷的是第二个参数），再用增量的每个键**整项覆盖**同名项（静态确认，REA 汇编）。
+  - 所以 CLI 改过的键会丢掉 `type`、`text` 等字段（实测：`p_color` 改后在全集里变成字符串）。
+  - **缺陷**：`FUN_140115280` / `FUN_140181f30` 用 jsoncpp 的**非 const `operator[]`**（`FUN_140086de0`）读 `rate` / `volume` / `audioprocessing` / `cameraparallax` / `alignment*` / `schemecolor` / `wec_*` / `wcc_*`。增量里没有这些键时会被插成 `null`，随后覆盖进累计全集（静态解释）。实测见 I4。
+- 尾调用 `FUN_1401731d0(+0x1718)`。
+- 偏移对照：`P = 渲染器+0x1718` 是绑定管理器，`P+0x10` = 累计全集，`P+0x38` = 增量，`P+0x128` = 脚本引擎；场景对象 `S = 渲染器+0x10`，所以累计全集也是 `S+0x1718`。
+
+**首次加载**（静态确认，REA）：
+- `FUN_140113c80` 先把配置里的 `wproperties` 写进累计全集，**然后**才构造场景，所以解析期读到的 `usertextures` / `usershadervalues` 初值就是用户当前值；
+- 场景构造完，再以全集为增量调一次 `FUN_140181f30`。
+
+**第几帧生效**：
+- 0x466 在渲染线程的帧间消息泵里同步处理。绑定写值、改值回调、`updateScriptProperties`、`applyUserProperties` 都在这次处理里完成（静态确认）。
+- 下一帧照常 Tick → update → 渲染，所以改动在**下一帧**画出来。
+  - **实测**：`p_slider=9` 时，`applyUserProperties` 在 frame=4549 执行，此时 `scriptProperties.speed` 已经是 9；下一次 update 是 frame=4550，读到 9。
+  - 首次加载同样如此：init（frame=0）→ apply（frame=0）→ 第一次 update（frame=1）。
+- 例外：泛光参数靠脏位，下一帧开头才重算，同样在下一帧可见（I3）。
+- `SendMessageTimeoutW` 超时为 0、带 SMTO_BLOCK。发送方随后立即释放 JSON，因此推断它在接收方处理完之前不会返回。实验中十余次改值都正确生效，没有出现内存错误的迹象，但这只是间接旁证。
+
+### I2. 会不会整场重载（Q2）
+
+- **不会。** 属性路径（`FUN_140115280` → `FUN_140181f30` → `FUN_1401731d0`）里没有调用壁纸加载 `FUN_14010df40` 或渲染器重建 `FUN_140113be0`（静态确认，REA）。
+- 整场重载只在打开壁纸或改画质设置时发生（`FUN_14010df40`）。HDR 相关位只在加载时重算（p2 G2）。
+- **局部重建只有下面几类**（静态确认，REA / OBJ）：
+  - effect `visible`：改值回调 `FUN_1401e6300` 重算合成次数与 pass 数。数值变了才调图层虚函数 +0x110（`FUN_1402065e0`），重算尺寸、几何、合成 RT 与 passthrough 材质。**这回答了 p2 B11 / I5 留下的「谁调 `FUN_1401e6300`」。**
+  - `usertextures`：纹理槽名字变了，把材质记入场景的待刷新集合（`S+0x1678`），之后换该槽纹理。「之后」在哪里消费，没追，推断。
+  - `wec_*` / `wcc_*`：每次应用都重新取后处理材质 `materials/util/ccsimple.json`（COMBO `COL` / `LUT`），见 I5。
+    - **实测**：`wec_e=true` 那次 apply（19:13:21Z）的同一秒，工程目录的着色器缓存 `shaders/blobsSM40/` 新增了一个变体（`8434196b….dxs`），即运行中编译了新着色器。
+  - 文本：`text` / `font` / `pointsize` 等触发重排（`LAB_140256ad0` → `FUN_140256f20`）。
+- **材质常量不重编着色器**，只标脏、重传常量缓冲（I3）。
+  - **实测**：改 tint 常量、切 effect 可见、改颜色 / 透明度 / 位置的几次 apply，都没有产生新的着色器缓存文件。
+- **实测没有出现整场重载**：每次改值后脚本的帧计数连续，没有新的 init 日志。
+
+### I3. 逐类绑定（Q3）
+
+**机制**（静态确认，REA；调用约定由 OBJ `0x14017337b`–`0x1401733fa` 确认）：
+- **反射描述符**：每个可绑定属性一个，注册在类表里。静态注册用 `FUN_14015a000`，运行时动态注册用 `FUN_14015ac40`。两者新建条目时 `+0x30..+0x58` 全部清零。
+  - 字段：`+0x30` 类型，`+0x34` 字段偏移，`+0x38` JSON setter，`+0x40..+0x50` 其它存取器，**`+0x58` 改值回调（没设就是空）**。
+- **加载期**：`FUN_1401730d0(P, 对象, JSON)` 逐键找描述符（跳过只读位 `+0x60 & 2`），调 setter，并开启「解析绑定」标志。
+  - setter 写字段后，属性值是对象时交给 `FUN_1401a4db0` 登记绑定。
+  - `user` 为字符串，或为 `{name, condition, type}` 时，建用户绑定（虚表 `0x14048b700`；`+8` 目标对象，`+0x10` 描述符，`+0x20` 名字，`+0x40` 条件）；
+  - `animation` 建动画绑定（`0x14048df78`）；`script` + `scriptproperties` 建脚本绑定（`0x14048edf8`）；
+  - 都经 `FUN_140175880` 挂到 P 的「属性名 → 绑定列表」哈希表（`P+0xa0` / `+0xb0` / `+0xc8`）。
+- **运行时**：`FUN_1401731d0` 按增量里的每个键查表，对每个绑定调 `描述符->setter(&{P, 目标, 不解析}, 描述符, 值)`。
+  - 有 `condition` 时，值换成「新值字符串 == condition」的布尔。
+  - setter 只写字段，再调 `+0x58` 回调。
+  - **加载与运行用同一个 setter。** 不比较新旧值，同值重发也会再执行一遍。
+
+| 绑定目标 | 描述符（类表 / 偏移 / setter） | 改值回调 | 运行时效果 | 置信度 |
+|---|---|---|---|---|
+| `origin` / `scale` | 基础对象 `0x1404e8250` / `0x128`、`0x134` / `FUN_1401a4230`（vec3，数字会铺满三个分量） | `LAB_1401e0520`：对象 `+0xd0` 清零（变换缓存作废） | 就地 | 静态确认；`origin` **实测**（A 立即下移）；数字铺满三个分量也实测到（首轮把滑块数字绑到 `size` 上，得到正方形） |
+| `angles` | 同上 / `0x140` / `FUN_1401df2f0` → `FUN_1401dd630`（描述符 `+0x60 \|= 4`，推断该位表示脚本侧的度↔弧度换算） | 无 | 就地；setter 自己写旋转 | setter 静态确认；矩阵更新与标志位含义为推断 |
+| `parallaxDepth`、`sortorder` | `0x170`、`0x124` | 无 | 只改字段 | 静态确认 |
+| 图像层 `color` / `alpha` / `brightness` | 图像层 `0x1404e8360` / `0x330`、`0x33c`、`0x340` | 无 | 绘制时读（p2 B10），下一帧可见 | 回调静态确认；`color` / `alpha` **实测**即时生效 |
+| 图像层 `size` | `0x2f0` / `FUN_1401a3fc0` | 无 | 只改字段，**不触发** `FUN_1402065e0`，几何不重建 | **实测：运行中改 `size` 画面无变化**（300×300 → 120×120 后仍是 300×300）；只有重载才生效 |
+| 图层 `visible`，含 `{user: {name, condition}}` | `+0x120` bit0 / `FUN_1401e1a90` | 0 | 渲染循环逐帧检查 | 静态确认；条件可见**实测**（`p_mode` 改成 `a` 图层消失，改回 `b` 复现） |
+| `perspective`、`castshadow`、`copybackground`、`nointerpolation`、`clampuvs`、`ledsource` | `+0x120` / `+0x304` 各位 | 0 | 只改位 | 静态确认 |
+| effect `visible` | effect `0x1404e83e0` / `+0x118` bit0 / `FUN_1401e1a90` | **`FUN_1401e6300`** | 立即重算；合成次数变了就重建图层（I2） | 静态确认；**实测**：关掉后图层立即变回白色底，打开立即恢复绿色 tint，画面无异常（没有用 RenderDoc 看 pass 数） |
+| `constantshadervalues` 的 `{user}` | 材质解析末尾按着色器常量表**动态建描述符**：名字 = 材质常量名，偏移 = `0x120 + 4×槽位`，类型 1–4 对应 float / vec2 / vec3 / vec4 setter（`FUN_1401a4b00` / `FUN_1401a3fc0` / `FUN_1401a4230` / `FUN_1401a4580`）；再 `FUN_1401730d0` 套用 `constantshadervalues` | `0x1401538c0`：材质 `+0x1f8 \|= 3` | 就地改值、标脏重传，不重编 | 静态确认（OBJ：`0x1401553cb`–`0x1401555d5`，Ghidra 的函数体在 `0x1401553a8` 被截断）；**实测**：tint `color` 改洋红后立即生效，没有新着色器变体 |
+| `usershadervalues` | 解析时改写成 `constantshadervalues[常量] = {value: 累计全集里的当前值, user: 属性名}`，之后同上 | 同上 | 同上 | 静态确认（`FUN_140154480`） |
+| **COMBO** | 材质 `combos` 逐键转大写后按**整数**读（`FUN_140085ee0`，即 jsoncpp `Value::asInt`），没有 `user` / `value` 分支；effect 实例的 `combos` 只在加载时用于 fbo / pass 的 `conditions` | — | **不能绑**。写成 `{user, value}` 时，**整个 WPE 进程中止**，不只是这张壁纸失败 | **实测**：窗口全黑；随后弹出 VC++ 运行库断言框「`File: D:\dev\we\windows\src\json\src\json_value.cpp Line: 719 Expression: false && oss.str().c_str()`」，点中止后进程退出。同一工程只把 COMBO 改回整数 30 就正常渲染。二进制里唯一以行号 719（0x2cf）调用断言的是 `FUN_140085ee0` 的 `0x140085f4d`（REA 字节检索）。本机 26 张样本 0 处这么写 |
+| 纹理 `usertextures` | 材质解析为每个纹理槽建描述符：类型 5，偏移 = 槽号，setter `FUN_1401538d0`。项为字符串时是用户属性名；为 `{name, type: "system"\|"usershortcut", keepaspect}` 时含系统伪属性 | setter：名字变了才写，并把材质加入 `S+0x1678` 待刷新集合 | 换该槽纹理，延后执行 | setter 静态确认；消费点推断 |
+| general `bloom` | 场景 `0x1404e81c0` / `+0xe0` bit1 / `FUN_14019b4e0` | 0 | **每帧读**（`FUN_14017fa70`：`R.flags&0x40` 且 bloom 位且有对象），下一帧开 / 关泛光 | 静态确认；本机 WPE 画质设置 `postprocessing="disabled"`（按约定不改），实验中看不到泛光，**未实测** |
+| general `hdr` | `+0xe0` bit10 / `FUN_14019b6f0` | 0 | **运行中改不生效**：HDR 渲染位 0x2000 与交换链格式只在加载时判定（p2 G2） | 静态确认 |
+| `bloomstrength`、`bloomthreshold`、`bloomhdr*`（含 iterations、tint） | `0x3bc`–`0x3d8` | `LAB_1401863e0`：`+0xe0 \|= 0x80000000` | 下一帧开头 `FUN_140184020` 重算泛光参数后清位 | 静态确认 |
+| `clearcolor`；`clearenabled`、`camerafade`、`transparentsorting`、`customsortorder`、`camerashake`、`cameraparallax` 等标志；相机 `fov`、`zoom`、`nearz` 等 | `0x35c`；`+0xe0` 各位；`0x140`… | 无或 0 | 只改字段；逐帧读（推断） | 回调静态确认 |
+| `ambientcolor`、`skylightcolor` | `0x368`、`0x374` | `LAB_1401863f0`：拷到渲染上下文（`+0x1298` 起） | 即时 | 静态确认 |
+| `fog*` | `0x380`–`0x3b4` 与 `+0xe0` 位 | `FUN_140186440` | 即时 | 静态确认 |
+| 粒子 `instanceoverride` 的 `alpha` / `size` / `count` / `speed` / `lifetime` / `brightness` / `colorn` / `controlpoint*` | `0x1404e8860` / `0xc8`… | `LAB_14022ab30`：`+0x1b0 = 1`（脏） | 下次更新时重算（推断）；`rate` 无回调 | 回调静态确认 |
+| 文本层 `text`、`font`、`pointsize`、`padding`、`maxwidth`、`anchor`、对齐、`outline` / `dropshadow` 开关等 | `0x1404e88e0` | `LAB_140256ad0` → `FUN_140256f20` | 重排文字 | 静态确认 |
+| 文本层描边 / 阴影的颜色与尺寸、`backgroundcolor` | 同上 | 无 | 只改字段 | 静态确认 |
+| 声音层 `volume` | `0x1404e8560` / `0x2f0` | `FUN_1401f4c20` | 即时设音量（推断） | 回调静态确认 |
+| 声音层 `mintime` / `maxtime` / `attenuation` | 同上 | 无 | 只改字段 | 静态确认 |
+| 灯光、模型、人偶动画层 | 见描述符清单 | 灯光 `light` / `castshadow` / `usecookie` 为 `FUN_14025c610`，其余多为无或 0 | — | 静态确认 |
+
+- **完整描述符清单**（类表、名字、偏移、setter、回调）：`notes\descriptors-decomp.txt`（REA 反编译抽取）与 `notes\descriptors.txt`（OBJ 抽取，寄存器跟踪有误差，以前者为准）。
+- **本机绑定分布**（TXT，26 张场景、887 个 JSON，`notes\binding-scan.txt`）：
+  - 最多的几类：`scriptproperties` 364、`constantshadervalues` 222、图层 `visible` 347（其中带 condition 163）、`color` 141、文本 `pointsize` 102、effect `visible` 107、`alpha` 88、`scale` 27、`text` 25、声音 `volume` 24、`instanceoverride` 34；
+  - `general` 只有 `bloom` / `bloomhdrstrength` / `cameraparallax*` 等十几处；
+  - **COMBO 写成对象：0 处**；`usertextures` 出现在 5 张工坊壁纸里，多为 `$mediaThumbnail` 一类的系统项。
+
+### I4. 脚本侧（Q4）
+
+**`FUN_1401731d0` 内的顺序**（静态确认，REA + OBJ）：
+1. 直接绑定：按增量的键依次写值。
+2. 有引擎时，调槽 10（`0x1401734a3`，`call [rax+0x50]`），作废缓存的 `userProperties`。
+3. 遍历脚本列表（`P+0xd8`），只处理状态 2（init 已跑）的脚本：
+   1. 用脚本自己的「属性名 → scriptProperties 键」表（`FUN_140174dc0` 解析时登记，支持 `condition`），组装 `{键: 值或布尔}`；
+   2. 有命中才 Enter（槽 4，只进一次），再调槽 23 `updateScriptProperties`；
+   3. 脚本导出了 `applyUserProperties`（回调掩码位 4 = 0x10）时，用增量组装 `{名: {value, type}}`。**只收同时带 `value` 和 `type` 的项**；`usershortcut` 额外带 `isbound` / `commandtype` / `file`。这个 JSON **只序列化一次**，供所有脚本共用。然后经槽 8 `CallCallback(回调 4)` 调用（`0x1401742e2`）。即使组装结果为空也照样调用。
+      > **更正**：上一版把条件写成「带 `value` 就放进去」。反编译里两个条件是并列的（`FUN_140087490(…,"value")` 与 `FUN_140087490(…,"type")` 都要非空），实测也证实：CLI 改值时脚本收到 `{}`。
+4. Leave（槽 5，`0x140174357`）。
+5. 调用挂在 `P+0x150` 的「属性已应用」监听器。目前只看到纹理侧 `FUN_1400ec220` 往里登记。
+
+**各项结论**：
+
+| 问题 | 结论 | 置信度 |
+|---|---|---|
+| 运行中的参数是否只含变化项 | **取决于来源**：UI 面板每次一项；整份配置下发（命令 2）为全集；首次加载为全集。**CLI 改值时参数是空对象 `{}`**，因为没有 `type`。exe 不做去重，同值重发也会再调一次 | 来源静态确认；UI 只发一项来自 TXT；首次全集与 CLI 为 `{}` **实测** |
+| 参数形状 | `_Internal.convertUserProperties` **按 `type` 转换**：`color` → `new Vec3(value)`，`usershortcut` → `{isbound, commandtype, file}`，其余取 `value` | 转换规则静态确认（TXT `baseclasses.js` 1401–1418 行）；首次 apply 里颜色为 `Vec3`、文本为字符串、滑块为数字、开关为布尔，**实测** |
+| 首次 apply 包含哪些键 | 工程声明的全部属性，**外加 WPE 注入的 14 个内置项**：`alignment`、`alignmentfliph`、`alignmentposition`、`alignmentx/y/z`、`rate`、`wcc_amt`、`wcc_v`、`wec_brs`、`wec_con`、`wec_e`、`wec_hue`、`wec_sa`。本例共 25 个：10 个 `p_*`、本工程声明的 `schemecolor`、14 个内置项，值都是默认（如 `rate=100`、`wec_*=50`）。工程不声明 `schemecolor` 时是否也会注入，本实验没有验证 | **实测** |
+| init 会不会重跑、脚本状态是否保留 | **不会重跑，状态保留**：属性路径只调 `updateScriptProperties` 与 `applyUserProperties`，不卸载、不重载脚本 | 静态确认；**实测**（十余次改值后 `init#` 与 `initOnly#` 计数仍为 1，帧计数连续） |
+| `engine.userProperties` 返回什么 | **累计全集**。DLL 取值器 `FUN_181657410`（GH）在缓存 `引擎+0x390` 为空时，调宿主接口 `+0x98`，即 exe 的 `FUN_14018dc70`（REA）。它遍历 `S+0x1718`，输出带 `value` 的项为 `{名: {value, type}}`，再经 `convertUserProperties` 转换后缓存。槽 10（`FUN_181650610`）只把缓存清空，下次访问时重建。合并发生在调用 `FUN_1401731d0` 之前，所以 `applyUserProperties` 里读到的已经是新值 | 静态确认；**实测**（apply 里读到 `p_alpha=0.3` 新值） |
+| **全集的缺陷** | 每次运行时改值，增量里没给的 WPE 内置伪属性会被插成 `null`（I1），整项覆盖进全集；`FUN_14018dc70` 跳过没有 `value` 的项，于是它们从 `engine.userProperties` 里消失。例如首次 25 个键，CLI 改一次 `p_alpha` 后只剩 10 个 `p_*`（`schemecolor` 也没了）。这次增量里带了的伪属性会保留，下一次没带又消失。CLI 改过的键整项被 `{value}` 覆盖、丢掉 `type`，所以颜色在全集里变成字符串 | **实测** + 静态解释 |
+| `scriptproperties` 的 user 绑定何时更新 | 同一次处理里、**在 `applyUserProperties` 之前**调 `updateScriptProperties`。JS 侧只改 `scriptProperties` 里已有的键，原值是 `Vec3` 时重建 `Vec3`。它不看 `type`，所以 CLI 改值也能更新 | 静态确认（TXT 1389–1400 行）；**实测**（apply 时 `speedNow=9`） |
+| 直接绑定与脚本的先后 | 直接绑定 → `updateScriptProperties` → `applyUserProperties` → 监听器；下一帧才 Tick / update | 静态确认；后两段与「下一帧」**实测** |
+| `{script}` 绑定的属性，依赖的属性被改后值从哪来 | 脚本的 `scriptProperties` 已就地更新，下一帧 `update` 的返回值写回该属性（D 节）。脚本**没有 update** 时不会重算，init 也不重跑。属性若同时带 `user` 与 `script`，本次先由直接绑定写值，下一帧被 `update` 覆盖 | 前半**实测**（C 的透明度由 0.5 变 0.9）；无 update 时为推断 |
+| 日志 | 壁纸模式下 `console.log` **不写** `log.txt`；`console.error` 写入，格式为 `Error: <文本>` | **实测** |
+| 系统伪属性 | 每帧脚本函数 `FUN_140171440` 在媒体缩略图变化时，把 `$mediaThumbnail` / `$mediaPreviousThumbnail` 作为单键增量走同一路径（OBJ `0x140171a8d`）。`usertextures` 的 `type:"system"` 绑在它们上面；推断也会出现在 `applyUserProperties` 的参数里 | 路径静态确认；进入 apply 参数为推断 |
+
+### I5. 伪属性（Q5）
+
+都在 `FUN_140181f30` 或 `FUN_140115280` 中处理，每次应用都执行（静态确认，REA；字段用途靠 OBJ 检索读取点）。
+
+| 键 | 写到哪里 | 作用 |
+|---|---|---|
+| `rate` | 实例 `+0x190`（÷100，下限 0.1） | 播放速率 |
+| `volume` | 实例 `+0x178`，`FUN_1401816d0` | 音量 |
+| `audioprocessing` | 实例 `+0x1b8` bit3 | 音频频谱开关 |
+| `cameraparallax` | `FUN_140115a90` | 视差开关 |
+| `alignment` | 渲染器 `+0x124`（整数） | 对齐模式 |
+| `alignmentposition` / `alignmentx` / `alignmenty` / `alignmentz` | 渲染器 `+0x31c8` / `+0x31bc` / `+0x31c0` / `+0x31c4`（×0.01） | 对齐位置；`FUN_140183xxx`（`0x140183ac8`）按屏幕尺寸逐帧计算布局，推断 |
+| `alignmentfliph` | 渲染标志 `+0x128` 的 0x800 | 翻转（p2 把该位记为投影翻转） |
+| `schemecolor` | 渲染器 `+0x31b0..+0x31b8`（`"r g b"`） | 对齐模式非默认（`+0x124 & ~2 ≠ 0`）时，代替 `general.clearcolor` 作清屏色（`0x14017fc4c`）。**实测**：`alignment=1` + `schemecolor="1 0 0"` 后背景整片变红，改回 `alignment=0` 恢复。也作为普通用户属性给脚本用 |
+| `wec_e` | `+0x3110` | WPE 颜色校正开关 |
+| `wec_con` | `+0x3114`（÷50） | 对比度 |
+| `wec_brs` | `+0x3118`（÷50） | 亮度 |
+| `wec_sa` | `+0x311c`（÷50） | 饱和度 |
+| `wec_hue` | `+0x3120`（÷100 − 0.5） | 色相 |
+| `wcc_v` | `+0x3128` | LUT 纹理路径 |
+| `wcc_amt` | `+0x3148`（÷100） | LUT 强度 |
+
+**颜色校正的实现**：
+- 开启且不是恒等变换时（或有 LUT 且强度 > 0 时），取材质 `materials/util/ccsimple.json`，COMBO `COL=1` / `LUT=0|1`；
+- 设 `params` = (f(brs, 2), f(con, 0.5), f(sa, 0.5), hue)，`FUN_14041e350` 推断为 pow；有 LUT 时换纹理、设 `lutparams`；
+- 存到 `+0x3188`，每帧在场景之后画一遍全屏（`0x140180bd2`）。
+- **实测**：CLI 发 `{"wec_e":true,"wec_brs":80,"wec_sa":0}` 后整画面变亮、去饱和；同一秒编译出一个新着色器变体；发 `{"wec_e":false}` 后恢复。
+
+这些都是 WPE 的壁纸级设置，不在 `scene.json` 里。
+- 用户在 WPE 里改过的值存在 `config.json` 的 `wproperties[文件][显示器]` 下，存的是裸值。例如本机工坊 3351163962 存了 `{"schemecolor": …, "volume": 24, "wcc_amt": 42, "wcc_v": "lutx32_bluenavy"}`（TXT，只读）。
+
+### I6. 其它相关行为（Q6）
+
+- **更正 D 节**：`FUN_1401830a0`（每帧 `0x140180d0c` 调用）处理的是 0x50 字节条目的**资源热重载队列**，条目里带外部进程句柄。
+  - 等进程退出，且退出码为 0 或大于 0x18 时：类型 0 按名字重载资源；类型 1 对 `image` / `model` 路径匹配的图层调虚函数 +0x40 重载，重算场景标志，再跑一次 `FUN_1401731d0`。
+  - 推断是编辑器或资源编译器联动，与属性面板无关（静态确认，REA）。
+- **更正 p2 B11**：`FUN_1401a38f0` 不是「通用属性系统」，是给对象分配 `id`。effect `visible` 的运行时重算由描述符回调 `FUN_1401e6300` 触发，已确认（I3）。
+- **实例配置只合并已有键**：`FUN_140109f80` 的规则会影响持久化。但渲染线程收到的是原始 JSON，所以 CLI 发工程没声明的键（如 `wec_e`）仍会生效（**实测**）。
+- **运行中的 WPE 进程管理**（实测）：
+  - WPE 没有退出类 `-control` 命令（二进制命令表与官方文档一致，共 14 个公开命令，另有未公开的 `revealWallpaper` / `aws`）；
+  - `getWallpaper` 的结果写到 `CONOUT$`，重定向抓不到；
+  - 主实例不在时，任何 `-control` 调用都会自己成为新的主实例；
+  - effect 的材质、着色器要放在工程目录里（编辑器会把依赖拷进工程），只放在 `assets/effects/<名>/` 下会报 `Failed opening: materials/effects/tint.json`。
+- **插件属性**：渲染窗口 0x40e（`FUN_14010b900`）把插件提供的属性存到 `initalwproperties`，补进 `wproperties` 缺失的键。属性变化时 `FUN_14011cf10` 通知插件。加载前 `FUN_14010df40` 也合并一次。
+- **应用顺序**：增量是 jsoncpp 的对象，推断按键名字典序遍历，所以同一批改动里绑定的执行顺序是键名序。
+- **场景未加载时**：`FUN_140115280` 仍会执行；`FUN_14010fd60` 只在渲染窗口存在时发 0x466，否则只改实例配置，下次加载时生效（静态确认）。
+
+### I7. 对 Kabegame P3 的影响（代理建议，待用户定）
+
+| # | WPE 行为 | 风险 | 建议 |
+|---|---|---|---|
+| 1 | 运行时与首次加载用同一个应用函数；先把增量合并进累计全集，再应用增量 | 高 | 宿主只保留一个 `applyUserProperties(delta)`：加载时传全集，运行时传增量；累计全集是唯一事实来源，供 `engine.userProperties` 与解析期初值使用 |
+| 2 | 绑定表 = 属性名 → [目标, 描述符, condition]；运行时只写字段再调回调；不比较新旧值 | 高 | bundle 绑定表照这个形状做。回调分几类：无（逐帧读）、变换脏、effect 重算渲染图、材质常量脏、泛光参数脏、文本重排、粒子脏、纹理替换 |
+| 3 | 会重建的只有 effect 可见性（重算合成）、纹理、颜色校正材质；常量不重编 | 高 | 只有 effect `visible` 需要重算渲染图（P2a 的合成 RT 数与最后启用 effect）；常量直接改 uniform；`usertextures` 换纹理 |
+| 4 | COMBO 不能绑用户属性（WPE 遇到会断言中止整个进程）；`hdr` 运行中改不生效；`size` 运行中改无效 | 中 | COMBO 写成对象时按「不支持」报 unsupported、退回预览图（WPE 自己也跑不了）；`hdr` 变化走现有的 setting-change 重载；`size` 绑定只在加载时取值即可，与 WPE 一致 |
+| 5 | `bloom` 每帧读，参数改了下一帧重算 | 中 | P2b 的泛光开关与参数改为运行时可变，不重建；只有 HDR 格式切换才重建 |
+| 6 | 脚本顺序：直接绑定 → `updateScriptProperties` → `applyUserProperties(增量)`，再下一帧 update；init 不重跑 | 高 | 宿主每次应用按这个顺序一次性发给脚本 realm，不重建脚本；同一批里 `scriptProperties` 先于 apply 更新 |
+| 7 | `engine.userProperties` 返回全集，每次应用后惰性重建；但 WPE 会把增量里没给的内置伪属性写成 `null`，使它们从全集里消失 | 中 | 宿主维护全集；每次 apply 后作废缓存，下次访问时重建。**不复刻**伪属性丢失的缺陷：样本脚本若依赖 `engine.userProperties.schemecolor` 之类，WPE 自己在改值后也会读到 `undefined`，建议我们保持完整。是否复刻待用户定 |
+| 8 | 参数转换依赖 `type`（颜色转 `Vec3`）；没有 `type` 的项不进 `applyUserProperties` | 中 | 宿主发给脚本的增量必须带 `type`。Phase 7 的属性拉取已有定义，转换照 `convertUserProperties` 实现；全集里的项也保留 `type`，不学 WPE 的整项覆盖 |
+| 9 | 改值在两帧之间同步处理，下一帧画出 | 低 | 属性消息在 rAF 之间处理完，再画下一帧 |
+| 10 | 一次只发一项；整份配置下发才是全集 | 低 | 属性面板逐项发；切预设或恢复默认时可以发全集 |
+| 11 | 伪属性（`rate` / `alignment*` / `schemecolor` / `wec_*` / `wcc_*`） | 低 | `schemecolor` 当普通属性给脚本；对齐与颜色校正属于 WPE 壁纸级功能，暂不实现，需要时另议 |
+| 12 | 媒体缩略图走用户属性通路（`$mediaThumbnail`） | 低 | W5 做媒体集成时沿用同一条通路，`usertextures` 的 system 项绑它 |
+
+### I8. 仍未解决与动态实验
+
+**未解决**（动态实验后更新）：
+- UI 进程（`wallpaperui.exe`）到 exe 的传输层，以及 `applySingleProperty` 是否就是命令 0x6b。
+  - UI 路径的行为已由第 6 步实测（见 I10 末「第 6 步结果」）；传输层本身仍未查。
+- `SendMessageTimeoutW(超时 0, SMTO_BLOCK)` 是否等到渲染线程处理完才返回。实验只有间接旁证（十余次改值都正确生效）。
+- `S+0x1678` 待刷新纹理集合的消费点；`usertextures` 没测。
+- `FUN_1401dd630`（angles）与 `FUN_1401f4c20`（音量）的内部细节；声音、文本、粒子绑定没测。
+- `bloom` / 泛光参数的运行时效果：本机 WPE 后处理设置是关闭档，没有测。
+- 伪属性 `$media*` 是否出现在 `applyUserProperties` 参数里。
+- 工程不声明 `schemecolor` 时，WPE 是否也会注入它。
+- **已解决**：
+  - 合并函数是**浅合并、整项覆盖**（REA 汇编 + 实测）；
+  - `size` 运行中改**无效**（实测）；
+  - COMBO 写成对象会**断言中止整个进程**（实测）。
+
+**实验**（已于 2026-11-03 执行，结果见 I10）：
+- 目录：`C:\Users\Lenovo\AppData\Local\Temp\claude\d--Codes-kabegame\96b81c04-c7d5-43ca-8339-57185be782bd\scratchpad\dyn-test\`。
+- 内容：
+  - 生成脚本 `gen_projects.py`；
+  - 常规工程 `kbprops-test`：四个纯色图层，覆盖颜色 / 透明度 / 条件可见 / 位置 / 尺寸绑定、tint effect 的可见性与常量、脚本属性、只有 init 的脚本、泛光；
+  - COMBO 风险工程 `kbprops-combo`；
+  - 执行手册 `RUNBOOK.txt`：全部用 `-playInWindow` 在独立窗口跑，不接管桌面；含命令、预期、判读与恢复步骤。
+- 脚本把帧号、apply 参数、全集与 `scriptProperties` 打到 `log.txt`。实测发现 `console.log` 不写文件，已改成 `console.error`。
+
+### I9. 产物
+
+全部在会话 scratchpad `C:\Users\Lenovo\AppData\Local\Temp\claude\d--Codes-kabegame\96b81c04-c7d5-43ca-8339-57185be782bd\scratchpad\`，不入库：
+- REA 快照 `db\wallpaper64-2.8.42-p3-userprops.rea-snapshot`：在上一轮快照基础上，含本轮 52 个工作流条目；
+- REA 证据包 `db\evidence-p3-userprops.json`：122 条记录；
+- 反编译 `decomp\`（REA 批量反编译拆分）；
+- 描述符清单与样本统计 `notes\`；
+- 脚本 `scripts\`；
+- UI 脚本片段 `untrusted\`（不可信数据）；
+- 动态实验 `dyn-test\`：
+  - 工程与生成脚本；
+  - 截图 `shots\`；
+  - 本次新增的 `log.txt` 全文 `log-run-full.txt`；
+  - 开工前备份 `backup\`（`config.json`、`log-before.txt`）；
+  - 控制脚本 `ctl.ps1` / `shot.ps1` / `wins.ps1`；
+- 动态实验后的 REA 快照 `db\wallpaper64-2.8.42-p3-userprops-dyn.rea-snapshot`：126 条证据，含合并函数汇编与断言点检索。
+
+### I10. 动态实验记录（2026-11-03，实测）
+
+**环境**：
+- WPE 2.8.42 正在运行，主进程 3:50 启动，Monitor0 壁纸为工坊 2932157836「星浴」；画质设置 `postprocessing="disabled"`，没有改动；
+- Kabegame dev 在运行，壁纸窗口挂在 WorkerW 上。
+- 测试全部在 `-playInWindow` 独立窗口里进行：窗口名 `KBTest` / `KBCombo` / `KBComboCtrl`。
+- 判读依据：
+  - 脚本用 `console.error` 写 `log.txt`；
+  - 用 `PrintWindow` 截取窗口（窗口在 150% 缩放下只显示渲染结果的左上 2/3，测试图层已按此摆放）；
+  - 工程目录里着色器缓存的写入时间。
+
+**现象与日志摘录**（时间为 UTC；`frame` 是脚本自己累加的 update 次数）：
+
+| 步骤 | 操作 | 日志 / 画面 | 判读 |
+|---|---|---|---|
+| 1 | 打开工程 | `init#1 frame=0 fullKeys=alignment,…,wec_sa`（25 个）；`initOnly#1`；`apply frame=0 n=25 {… p_color=Vec3(1,0,0) … p_mode=string:"b" … rate=number:100 … wec_e=boolean:false …}`；`speed=5 frame=1` | 首次 apply 是全集、在 init 之后、第一次 update 之前；按 `type` 转换；WPE 注入了 14 个内置项 |
+| 2 | `{"p_alpha":0.3}` | `apply frame=60 n=0 {}`；`apply full n=10 … p_alpha=number:0.3`；`fullKeys=p_alpha,p_bloom,…,p_tintcolor`；A 变暗 | 直接绑定生效；脚本收到空对象（CLI 没有 `type`）；内置伪属性从全集里消失 |
+| 3 | `{"p_color":"0 0 1"}` | `apply … n=0 {}`；`full … p_color=string:"0 0 1"`；A 变暗蓝 | 颜色绑定吃字符串；全集里整项被覆盖、丢了 `type` |
+| 4a | `p_mode` = `a`，再改回 `b` | A 消失，再复现 | 条件可见运行时生效 |
+| 4b | `{"p_effvis":false}` / `true` | B 由绿变白，再变回绿 | effect 可见性运行时切换正常 |
+| 4c | `{"p_tintcolor":"1 0 1"}` | B 立即变洋红；没有新着色器缓存 | 材质常量就地生效 |
+| 4d | `p_origin_x` = `"250 550 0"`；`p_size_w` = `"120 120"` | A 下移；**尺寸不变** | `origin` 就地生效；`size` 运行中无效 |
+| 4e | `{"p_slider":9}` | `apply frame=4549 n=0 {}`；`apply full … speedNow=9`；`speed=9 frame=4550 runtime=455.075`；C 变亮 | `updateScriptProperties` 先于 apply；新值在下一帧可见；脚本绑定值由 update 写回；init 没重跑 |
+| 4f | `{"p_bloom":true,"p_bloomstr":4}` | 只有 apply 日志，画面无变化 | 后处理关闭档下不会有泛光，未判读 |
+| 4g | `{"wec_e":true,"wec_brs":80,"wec_sa":0}` | 整画面变亮、去饱和；`fullKeys` 多了 `wec_brs,wec_e,wec_sa`；19:13:21 新增着色器缓存 `8434196b….dxs` | 颜色校正生效，运行中编译新变体；增量里带了的伪属性才保留 |
+| 4g | `{"wec_e":false}` | 画面恢复；`fullKeys` 只剩 `…,wec_e`（`wec_brs` / `wec_sa` 又消失） | 伪属性被写成 `null` 的缺陷再次出现 |
+| 4g | `{"alignment":1,"alignmentz":60,"schemecolor":"1 0 0"}`，再还原 | 背景整片变红；还原后恢复 | `schemecolor` 在对齐模式下作清屏色 |
+| 5 | 打开 `kbprops-combo`（`combos.BLENDMODE = {user, value}`） | 窗口全黑，`log.txt` 无记录；稍后用户看到断言框：「Microsoft Visual C++ Runtime Library — Assertion failed! Program: …\wallpaper64.exe File: D:\dev\we\windows\src\json\src\json_value.cpp Line: 719 Expression: false && oss.str().c_str()」，点中止后 WPE 主进程退出 | COMBO 按整数读，对象值触发 jsoncpp 断言，**整个进程中止**。对照工程 `kbprops-combo-ctrl`（只把它改回整数 30）正常显示绿块 |
+
+**附带发现**：
+- 主进程中止后，我接着发出的 `-control closeWallpaper` 找不到主实例，自己成了新的 WPE 主实例（带浏览界面），因此卡在等待。这个实例在本工具的作业对象里，结束后台任务时它随之退出。
+- 第 2–3 步之间（04:08:31 本地时间），Kabegame 日志记录了一次 `renderer unresponsive for webview 'wallpaper', terminating for reload`，随后 3 次 ping 未应答，04:09:04「无响应，重新加载」后恢复。
+  - 当时没有发 WPE 命令，但 `KBTest` 窗口开着（置顶、约 144 fps）；
+  - 开工前 03:48–03:49 已有成串的 ping 未应答；
+  - 04:01–04:02 用户也在主窗口预览 4K 场景。
+  - 原因无法认定，只记录相关性。
+
+**恢复清单**：
+
+| 项 | 开工前 | 结束时 | 说明 |
+|---|---|---|---|
+| WPE 进程 | 运行（PID 81344，3:50 启动，带浏览窗口） | 运行（PID 31272，4:19 经 WMI 启动，不在本工具的作业对象里） | 原进程被第 5 步的断言中止；新进程没有自动弹出浏览窗口 |
+| Monitor0 壁纸 | 工坊 2932157836「星浴」 | 同一张：`-control openWallpaper -file …\2932157836\project.json -monitor 0` 后出现 `WPEDesktopDX11Window 'WPELiveWallpaper'`（父窗口 WorkerW） | 新进程启动后没有自动加载壁纸，所以手动放回 |
+| `config.json` | 哈希 `DF9E3649…` | 与备份只差一处：`general.wallpaperconfig.layout: 0` 被去掉（`openWallpaper -monitor` 重写这项配置所致）。没有回写，因为 WPE 没有退出命令，运行中覆盖会被它再写回 | 推断缺省即 0。备份在 `dyn-test\backup\config.json`，如需严格还原，在 WPE 退出后覆盖 |
+| 测试窗口 | — | `KBTest` / `KBCombo` / `KBComboCtrl` 都已不存在 | — |
+| Kabegame 壁纸窗口 | 渲染中 | CDP 只读检查（`eval --url wallpaper`）：1 秒 145 帧，`visibilityState=visible`；04:09:18 之后日志没有新的 ping 未应答 | **桌面上 WPE 的「星浴」与 Kabegame 壁纸谁在上层、是否被盖住，我看不到，请用户目视确认** |
+| `myprojects\kbprops-test` | 不存在 | 第 6 步后由主会话删除（含 WPE 写入的 `shaders\blobsSM40\*.dxs`），`myprojects` 恢复为空 | — |
+| `log.txt` | 5 行 | 73 行；新增部分另存在 `dyn-test\log-run-full.txt` | 追加型日志，不回滚 |
+
+**第 6 步结果（2026-11-03，用户在 WPE 界面操作，主会话读 `log.txt` 判读；实测）**：
+- 用户在浏览器里选中 kbprops-test，拖 `p_alpha`（1 → 约 0.17 → 0.21）、在取色器里来回选 `p_color`、拖 `p_slider`（5 → 10 → 8），比约定多了几次操作，不影响判读。
+- **首次加载**与 CLI 路径相同：`init#1` → `initOnly#1` → `apply frame=0 n=25`（全集，颜色为 `Vec3(1,0,0)`）→ `speed=5 frame=1`。
+- **UI 每次改值都是 `n=1`，并带 `type`**：`apply frame=86 n=1 {p_alpha=number:0.34}`、`apply frame=244 n=1 {p_color=Vec3(0,1,0.9686…)}`、`apply frame=359 n=1 {p_slider=number:6}`。CLI 路径的 `n=0 {}` 只是因为它不带 `type`（I4 结论成立）。
+- **拖动中逐帧连发**：一次 `p_alpha` 拖动在 frame 86–93 每帧一条（0.34、0.31、0.29、0.25、0.22、0.21、0.2、0.17）；取色器同样逐帧发，且**同一个值会重复发**（`Vec3(0,0.2431…,1)` 在 frame 259、271、272 各一条），印证「不去重」。
+- **脚本属性**：`apply frame=359 … speedNow=6` → `speed=6 frame=360`，每次都是下一帧生效；init 全程只有 1 次。
+- **全集缺陷在 UI 路径同样出现**：第一次改值后 `engine.userProperties` 也从 25 个键掉到 10 个（只剩 `p_*`，`alignment*` / `rate` / `schemecolor` / `wec_*` / `wcc_*` 都没了）；但 `p_color` 在全集里保持 `Vec3`（UI 发的是带 `type` 的完整属性对象）。
+- 收尾：主会话用 `-control openWallpaper -file …\2932157836\project.json -monitor 0` 放回「星浴」（`config.json` 的 Monitor0 已指回 `2932157836\scene.pkg`），删除 `myprojects\kbprops-test`。`config.json` 里留下 WPE 自己写的两处痕迹：最近使用列表里一条 kbprops-test、`wproperties` 里一份它的属性值；WPE 运行中无法回写备份，未处理。
+
+**第 6 步（原操作说明，已执行）**：工程曾复制到 `D:\Applications\Steam\steamapps\common\wallpaper_engine\projects\myprojects\kbprops-test`。
+1. 双击任务栏通知区的 Wallpaper Engine 图标，打开壁纸浏览器。
+2. 在「已安装」列表里找到标题为 **kbprops-test** 的壁纸，单击选中。它会被设为 Monitor0 的桌面壁纸，桌面会被它盖住，可以接受。
+3. 在右侧属性面板：
+   1. 把 **p_alpha** 滑块从 1 拖到约 0.5，松手；再拖到约 0.2，松手。共 2 次拖动。
+   2. 点 **p_color** 的色块，选一个明显不同的颜色（如纯绿），确认。1 次。
+   3. 可选：把 **p_slider** 从 5 拖到 8，1 次。
+4. 告诉协调方做了哪几次操作。之后由协调方：
+   - 读 `log.txt` 判读。预期每次改值都有 `[kbt] apply … n=1 {p_alpha=number:…}` 或 `{p_color=Vec3(…)}`；拖动中可能连发多条；全集里 `p_color` 仍是 `Vec3`。
+   - 用 `wallpaper64.exe -control openWallpaper -file "D:\Applications\Steam\steamapps\workshop\content\431960\2932157836\project.json" -monitor 0` 放回「星浴」。也可以在浏览器里点回它。
+   - 删除 `myprojects\kbprops-test`。

@@ -11,7 +11,10 @@
  */
 import type { SceneLayer, SceneTexture } from "../compile/bundle";
 import type { UniformLayout } from "../wpesl2wgsl";
-import { invert, normalMatrix, type Mat4 } from "./math";
+import type { DrawStep } from "./graph";
+import { layerModelMatrix } from "./layout";
+import { identity, invert, multiply, normalMatrix, orthographic, scaling, type Mat4 } from "./math";
+import type { LayerState } from "./state";
 
 /** 翻译器结果里还带 `declared`（WPESL 声明类型），胶水的类型定义没有列出。 */
 export type UniformEntry = UniformLayout & { declared?: string };
@@ -228,6 +231,128 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
 
 /** `g_Time` 超过 5 天（432000 s）归零（p2-REPORT C「时间」）。 */
 export const TIME_WRAP_SECONDS = 432000;
+
+/**
+ * 由图层状态算出的内置 uniform：就地刷新时只重写这一组，`pass.uniforms` 里有的名字（材质值，例如 passthrough 的
+ * `g_Color4 = (1, 1, 1, 1)`、材质自带的 `g_UserAlpha`）一律不动。
+ */
+export const LAYER_UNIFORMS: ReadonlySet<string> = new Set([
+  "g_ModelViewProjectionMatrix",
+  "g_ModelViewProjectionMatrixInverse",
+  "g_ModelMatrix",
+  "g_ModelMatrixInverse",
+  "g_EffectModelMatrix",
+  "g_EffectModelMatrixInverse",
+  "g_NormalModelMatrix",
+  "g_ViewProjectionMatrix",
+  "g_EffectModelViewProjectionMatrix",
+  "g_EffectModelViewProjectionMatrixInverse",
+  "g_EffectTextureProjectionMatrix",
+  "g_EffectTextureProjectionMatrixInverse",
+  "g_UserAlpha",
+  "g_Alpha",
+  "g_Color",
+  "g_Color4",
+  "g_CompositeColor",
+]);
+
+/**
+ * 各角色的变换（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：作用于 P1 的 `direct` 与合成链的三种角色。
+ * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层模型矩阵；
+ * - `base`：正交投影把图层四边形画满合成 RT，单位模型矩阵（B7）；
+ * - `effect`：NDC 全屏四边形、MVP 为单位阵；`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)，
+ *   `g_EffectModelViewProjectionMatrix` = 图层 MVP × 同一缩放，纹理投影与后者相同；
+ * - `final` / `passthrough`：图层四边形用图层 MVP 上屏；效果矩阵不缩放，纹理投影 = MVP × scale(w/2, h/2)。
+ */
+export function drawMatrices(
+  step: Pick<DrawStep, "role">,
+  layer: Pick<SceneLayer, "origin" | "angles" | "scale" | "size">,
+  viewProjection: Mat4,
+) {
+  const model = layerModelMatrix(layer);
+  const layerMvp = multiply(viewProjection, model);
+  const hw = (layer.size[0] ?? 0) / 2,
+    hh = (layer.size[1] ?? 0) / 2;
+  const half = scaling(hw, hh, 1);
+  switch (step.role) {
+    case "base": {
+      const fill = orthographic(-(hw || 1), hw || 1, -(hh || 1), hh || 1, -FILL_DEPTH, FILL_DEPTH);
+      return { modelViewProjection: fill, model: identity(), viewProjection: fill };
+    }
+    case "effect": {
+      const effectMvp = multiply(layerMvp, half);
+      return {
+        modelViewProjection: identity(),
+        model: identity(),
+        viewProjection,
+        effectModel: multiply(model, half),
+        effectModelViewProjection: effectMvp,
+        effectTextureProjection: effectMvp,
+      };
+    }
+    case "final":
+    case "passthrough":
+      return {
+        modelViewProjection: layerMvp,
+        model,
+        viewProjection,
+        effectModel: model,
+        effectModelViewProjection: layerMvp,
+        effectTextureProjection: multiply(layerMvp, half),
+      };
+    default:
+      return { modelViewProjection: layerMvp, model, viewProjection };
+  }
+}
+
+/** 画进合成 RT 的基础 pass 用的正交深度范围（图层 z 为 0）。 */
+const FILL_DEPTH = 10000;
+
+export interface DrawUniformInput {
+  step: Pick<DrawStep, "role" | "inputs">;
+  /** 图层的当前状态与尺寸（`size` 只在重编译时变）。 */
+  layer: LayerState & { size: number[] };
+  /** 本 pass 的材质常量（`SceneState.constants.get(pass.key)`）。 */
+  constants: Record<string, number[]>;
+  viewProjection: Mat4;
+  /** 颜色系数：HDR 下是图层 `brightness`，否则 1（B10）。 */
+  colorScale: number;
+  screenSize: [number, number];
+  /** 按槽位：该 pass 绑定的纹理尺寸；未绑定为 undefined。 */
+  textures: readonly (TextureSize | undefined)[];
+  eye: readonly number[];
+  ambient?: readonly number[];
+  skylight?: readonly number[];
+}
+
+/**
+ * 图层就地刷新要重写的 uniform 名：由图层状态算出的那组；`pass.uniforms` 里有的一律不动
+ * （材质值优先：passthrough 的 `g_Color4`、材质自带的 `g_UserAlpha` 等）。
+ */
+export function layerRefreshNames(passUniforms: Record<string, number[]>): string[] {
+  return [...LAYER_UNIFORMS].filter((name) => !(name in passUniforms));
+}
+
+/**
+ * 一个绘制步骤的全部静态 uniform：内置值（变换、颜色、纹理尺寸…）打底，材质常量覆盖。
+ * `createDraw` 建 draw 与 `GpuScene.sync` 就地刷新共用同一个函数——两边逐字节一致由单测核对（P3a 验收 4）。
+ */
+export function drawUniformValues(input: DrawUniformInput): Record<string, number[]> {
+  const matrices = drawMatrices(input.step, input.layer, input.viewProjection);
+  const values = staticBuiltins({
+    ...matrices,
+    modelViewProjectionInverse: invert(matrices.modelViewProjection),
+    layer: input.layer,
+    colorScale: input.colorScale,
+    textures: input.textures,
+    screenSize: input.screenSize,
+    eye: input.eye,
+    ambient: input.ambient,
+    skylight: input.skylight,
+  });
+  for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
+  return values;
+}
 
 export interface FrameInput {
   /** 秒，已按 `TIME_WRAP_SECONDS` 回绕。 */

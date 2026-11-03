@@ -9,12 +9,15 @@
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
+import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
+import type { SceneScalar } from "../compile/model";
 import { FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, SceneRenderError } from "./errors";
 import { coverUv, type CoverUv } from "./layout";
 import { GpuScene } from "./scene";
+import { SceneState } from "./state";
 import { daytimeOf, TIME_WRAP_SECONDS } from "./uniforms";
 
 /** cover 铺放：全屏三角形，按 `offset + uv * scale` 采样离屏目标，输出不透明。 */
@@ -53,6 +56,12 @@ export interface SceneLoadOptions {
   ignoreUnsupported?: boolean;
 }
 
+/** 一条就地写：绑定 + 新值（宿主按 `planApply` 挑出来）。 */
+export interface BindingWrite {
+  binding: SceneBinding;
+  value: SceneScalar;
+}
+
 export class SceneRenderer {
   private readonly context: GPUCanvasContext;
   private readonly format: GPUTextureFormat;
@@ -63,6 +72,8 @@ export class SceneRenderer {
   private readonly coverBuffer: GPUBuffer;
   private readonly observer: ResizeObserver | null;
   private scene: GpuScene | null = null;
+  /** 当前场景的 CPU 侧状态（就地写的落点，`GpuScene.sync` 每帧取脏项）。 */
+  private state: SceneState | null = null;
   private blitBindGroup: GPUBindGroup | null = null;
   private cover: CoverUv = { offset: [0, 0], scale: [1, 1] };
   private coverKey = "";
@@ -81,6 +92,8 @@ export class SceneRenderer {
   private loadSerial = 0;
   /** Tint 的非错误消息（warning / info），调用方记日志用。 */
   readonly warnings: string[] = [];
+  /** 最近 600 帧 `render()` 的 CPU 用时（毫秒）；dev 探针统计均值 / p95。 */
+  readonly frameCosts: number[] = [];
 
   private constructor(
     private readonly gpu: Gpu,
@@ -151,6 +164,32 @@ export class SceneRenderer {
       : null;
   }
 
+  /** 当前场景的 CPU 侧状态；没有场景为 null。3b 的脚本写回与 dev 探针都用它。 */
+  get sceneState(): SceneState | null {
+    return this.state;
+  }
+
+  /** 当前 GPU 场景；dev 探针按固定 `g_Time` 读回时用。 */
+  get currentScene(): GpuScene | null {
+    return this.scene;
+  }
+
+  /**
+   * 就地应用一批绑定写入；需要重编译时返回 false（调用方整场重编译）。
+   * 写之前先问 GPU 场景能不能做（`canApply`：泛光的 `bloomhdriterations` 改变级数时不能），做不了就一条都不写。
+   * 暂停时补画一帧（同 resize），画面立即反映、`g_Time` 不动。
+   */
+  applyBindings(writes: readonly BindingWrite[]): boolean {
+    const state = this.state;
+    const scene = this.scene;
+    if (!state || !scene || this.destroyed || this.lost || this.failed) return false;
+    if (writes.some((write) => write.binding.target.kind === "recompile")) return false;
+    if (!scene.canApply(state.previewBloom(writes))) return false;
+    for (const write of writes) state.write(write.binding, write.value);
+    if (!this.shouldRun) this.render();
+    return true;
+  }
+
   /**
    * 建好新场景后替换当前场景，画出第一帧并等 GPU 完成后返回。失败抛 `SceneRenderError`，当前场景保持不变。
    * 并发调用时只有最后一次生效，被取代的调用抛 `AbortError`。
@@ -159,13 +198,15 @@ export class SceneRenderer {
     if (this.destroyed) throw new DOMException("渲染器已销毁", "AbortError");
     if (this.lost) throw new SceneRenderError(["webgpu:device-lost"]);
     const serial = ++this.loadSerial;
-    const scene = await GpuScene.build(this.gpu.device, bundle, this.gpu.features, this.warnings, options);
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, options);
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
       throw new DOMException("已被新的场景取代", "AbortError");
     }
     const old = this.scene;
     this.scene = scene;
+    this.state = state;
     this.blitBindGroup = this.gpu.device.createBindGroup({
       layout: this.blitPipeline.getBindGroupLayout(0),
       entries: [
@@ -202,6 +243,7 @@ export class SceneRenderer {
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.scene?.destroy();
     this.scene = null;
+    this.state = null;
     this.blitBindGroup = null;
     try {
       this.context.unconfigure();
@@ -273,7 +315,9 @@ export class SceneRenderer {
 
   private render(): void {
     const scene = this.scene;
-    if (!scene || !this.blitBindGroup || this.destroyed || this.lost || this.failed) return;
+    const state = this.state;
+    if (!scene || !state || !this.blitBindGroup || this.destroyed || this.lost || this.failed) return;
+    const started = performance.now();
     const device = this.gpu.device;
     const key = `${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}`;
     if (key !== this.coverKey) {
@@ -284,6 +328,8 @@ export class SceneRenderer {
     const seconds = this.clock.seconds();
     const frametime = this.lastTime === null ? 0 : Math.max(0, seconds - this.lastTime);
     this.lastTime = seconds;
+    // 就地改过的状态先刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a）
+    scene.sync(state);
     scene.update({
       time: seconds % TIME_WRAP_SECONDS,
       frametime,
@@ -293,7 +339,7 @@ export class SceneRenderer {
     });
     this.pointerLast = this.pointer;
     const encoder = device.createCommandEncoder({ label: "scene frame" });
-    scene.encode(encoder);
+    scene.encode(encoder, state);
     const pass = encoder.beginRenderPass({
       label: "scene cover",
       colorAttachments: [
@@ -310,5 +356,7 @@ export class SceneRenderer {
     pass.draw(3);
     pass.end();
     device.queue.submit([encoder.finish()]);
+    this.frameCosts.push(performance.now() - started);
+    if (this.frameCosts.length > 600) this.frameCosts.splice(0, this.frameCosts.length - 600);
   }
 }

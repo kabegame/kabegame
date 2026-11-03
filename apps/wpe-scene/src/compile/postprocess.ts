@@ -11,6 +11,7 @@
  *   取 JSON 的 `value` 还是属性当前值那张抓帧分不出（属性在默认值），按当前值。
  * - 泛光参数（`bloom*`）缺键取 WPE 场景构造函数的默认值（A2 / PLAN P2b），写成属性对象时取生效值。渲染见 `render/bloom.ts`。
  */
+import type { BindingCollector, BindingTarget, RecompileReason } from "./bindings";
 import type { SceneReader } from "./fs";
 import { numbers, resolveValue, type SceneScalar, type SceneValue } from "./model";
 
@@ -70,24 +71,41 @@ export function scenePostprocessState(
   level: PostprocessLevel,
   general: Record<string, unknown> | undefined,
   properties: Record<string, SceneScalar> = {},
+  bindings?: BindingCollector,
 ): ScenePostprocessState {
-  const bloomKey = flagValue(general?.bloom, properties);
+  const bloomKey = flagValue(general?.bloom, properties, bindings, "general.bloom");
+  // hdr 与档位无关地求值：写成 `{user}` 时也要登记，档位改到超高时才用得上（P3a）
+  const hdrKey = flagValue(general?.hdr, properties, bindings, "general.hdr");
   const bloom = level !== "disabled" && bloomKey !== false;
   // HDR 的判定读的是场景 JSON（G3），缺键不算；写成属性对象时取生效值（J5 更正）
-  const hdr = level === "ultra" && bloomKey === true && flagValue(general?.hdr, properties) === true;
+  const hdr = level === "ultra" && bloomKey === true && hdrKey === true;
   return { level, bloom, hdr };
 }
 
 /**
  * `general.bloom` / `general.hdr` 的生效值（setter `FUN_14019b4e0` / `FUN_14019b6f0`）：bool 原样；带 `user` 的对象取属性当前值，
  * 否则取对象的 `value`；结果不是 bool 时 WPE 不改位，返回 undefined（泛光保留默认开、HDR 保留默认关）。
+ * 带 `bindings` 时登记成重编译目标（泛光链有无、目标格式都只在编译期决定）。
  */
-function flagValue(value: unknown, properties: Record<string, SceneScalar>): boolean | undefined {
+function flagValue(
+  value: unknown,
+  properties: Record<string, SceneScalar>,
+  bindings: BindingCollector | undefined,
+  path: string,
+): boolean | undefined {
   if (typeof value === "boolean") return value;
   if (!value || typeof value !== "object") return undefined;
   const resolved =
-    "user" in value ? resolveValue(value as SceneValue, properties) : (value as { value?: unknown }).value;
+    "user" in value
+      ? bindings
+        ? bindings.bind(value as SceneValue, properties, recompile("postprocess", path))
+        : resolveValue(value as SceneValue, properties)
+      : (value as { value?: unknown }).value;
   return typeof resolved === "boolean" ? resolved : undefined;
+}
+
+function recompile(reason: RecompileReason, path: string): BindingTarget {
+  return { kind: "recompile", reason, path };
 }
 
 /** 场景 `general` 里的泛光参数（已取生效值、缺键补默认值），原值，不做 HDR 换算（换算在 `render/bloom.ts`）。 */
@@ -120,28 +138,39 @@ export const BLOOM_DEFAULTS: Readonly<BloomParams> = {
 /**
  * 读 `general` 的泛光参数：数字、`"r g b"` 字符串或属性对象（取生效值，同 `resolveValue`）都认；
  * 取不到合法数字的保留默认值。`bloomhdriterations` 是整数字段（场景 `+0x3d4`），截断小数。
+ * 带 `bindings` 时每个参数登记成就地目标（渲染器改泛光链的常量，不重编译）。
  */
 export function bloomParams(
   general: Record<string, unknown> | undefined,
   properties: Record<string, SceneScalar> = {},
+  bindings?: BindingCollector,
 ): BloomParams {
-  const read = (key: string, fallback: number): number => {
-    const value = numbers(resolveValue(general?.[key] as SceneValue | undefined, properties))[0];
+  const read = (key: string, field: keyof BloomParams, fallback: number): number => {
+    const source = general?.[key] as SceneValue | undefined;
+    const raw = bindings
+      ? bindings.bind(source, properties, { kind: "bloom", field })
+      : resolveValue(source, properties);
+    const value = numbers(raw)[0];
     return value !== undefined && Number.isFinite(value) ? value : fallback;
   };
-  const tint = numbers(resolveValue(general?.bloomtint as SceneValue | undefined, properties));
+  const tintSource = general?.bloomtint as SceneValue | undefined;
+  const tint = numbers(
+    bindings
+      ? bindings.bind(tintSource, properties, { kind: "bloom", field: "tint" })
+      : resolveValue(tintSource, properties),
+  );
   return {
-    strength: read("bloomstrength", BLOOM_DEFAULTS.strength),
-    threshold: read("bloomthreshold", BLOOM_DEFAULTS.threshold),
+    strength: read("bloomstrength", "strength", BLOOM_DEFAULTS.strength),
+    threshold: read("bloomthreshold", "threshold", BLOOM_DEFAULTS.threshold),
     tint:
       tint.length >= 3 && tint.slice(0, 3).every(Number.isFinite)
         ? [tint[0], tint[1], tint[2]]
         : [...BLOOM_DEFAULTS.tint],
-    hdrStrength: read("bloomhdrstrength", BLOOM_DEFAULTS.hdrStrength),
-    hdrThreshold: read("bloomhdrthreshold", BLOOM_DEFAULTS.hdrThreshold),
-    hdrFeather: read("bloomhdrfeather", BLOOM_DEFAULTS.hdrFeather),
-    hdrScatter: read("bloomhdrscatter", BLOOM_DEFAULTS.hdrScatter),
-    hdrIterations: Math.trunc(read("bloomhdriterations", BLOOM_DEFAULTS.hdrIterations)),
+    hdrStrength: read("bloomhdrstrength", "hdrStrength", BLOOM_DEFAULTS.hdrStrength),
+    hdrThreshold: read("bloomhdrthreshold", "hdrThreshold", BLOOM_DEFAULTS.hdrThreshold),
+    hdrFeather: read("bloomhdrfeather", "hdrFeather", BLOOM_DEFAULTS.hdrFeather),
+    hdrScatter: read("bloomhdrscatter", "hdrScatter", BLOOM_DEFAULTS.hdrScatter),
+    hdrIterations: Math.trunc(read("bloomhdriterations", "hdrIterations", BLOOM_DEFAULTS.hdrIterations)),
   };
 }
 

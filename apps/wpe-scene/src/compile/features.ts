@@ -201,7 +201,6 @@ export function scanValue(value: unknown, unsupported: Set<string>): void {
   if (!value || typeof value !== "object") return;
   // D10：只导出 applyUserProperties 的脚本按 value 静态处理，其余要脚本宿主（P3）
   if ("script" in value && !isStaticScript((value as { script: unknown }).script)) unsupported.add("value:script");
-  if ("user" in value && typeof (value as { user: unknown }).user === "object") unsupported.add("visible:condition");
   for (const v of Object.values(value)) scanValue(v, unsupported);
 }
 
@@ -243,13 +242,6 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       active(value)
     )
       unsupported.add(`object:${key}`);
-  if (
-    typeof object.visible === "object" &&
-    object.visible &&
-    "user" in object.visible &&
-    typeof (object.visible as { user: unknown }).user === "object"
-  )
-    unsupported.add("visible:condition");
 }
 
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
@@ -269,6 +261,9 @@ export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>):
   if (pass.cullmode && pass.cullmode !== "nocull") unsupported.add(`cull:${pass.cullmode}`);
   if (pass.depthtest && pass.depthtest !== "disabled") unsupported.add(`depthtest:${pass.depthtest}`);
   if (pass.depthwrite && pass.depthwrite !== "disabled") unsupported.add(`depthwrite:${pass.depthwrite}`);
+  // COMBO 只按整数读（I3）：写成 `{user, value}` 时 WPE 断言中止整个进程，这里按不支持退回预览图
+  for (const value of Object.values(pass.combos ?? {}))
+    if (value && typeof value === "object") unsupported.add("combo:user-binding");
   for (const key of ["alphawriting", "keepaspect", "usertextures", "usertexturereference"])
     if (active(pass[key])) unsupported.add(`material:${key}`);
   for (const [key, value] of Object.entries(pass))
@@ -310,9 +305,14 @@ export function checkEffectFeatures(
 ): void {
   for (const [key, value] of Object.entries(instance))
     if (!SUPPORTED_EFFECT_INSTANCE.has(key) && active(value)) unsupported.add(`effect:${label}:${key}`);
-  for (const pass of instance.passes ?? [])
+  for (const pass of instance.passes ?? []) {
     for (const [key, value] of Object.entries(pass))
       if (!SUPPORTED_INSTANCE_PASS.has(key) && active(value)) unsupported.add(`effect:${label}:pass:${key}`);
+    // 实例覆盖的 COMBO 同样不能绑用户属性（I3）
+    const combos = pass.combos as Record<string, unknown> | undefined;
+    for (const value of Object.values(combos ?? {}))
+      if (value && typeof value === "object") unsupported.add("combo:user-binding");
+  }
   for (const [key, value] of Object.entries(effect))
     if (!SUPPORTED_EFFECT.has(key) && active(value)) unsupported.add(`effect:${label}:${key}`);
   const fbos = new Set<string>();

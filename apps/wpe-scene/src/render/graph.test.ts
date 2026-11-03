@@ -8,6 +8,7 @@ vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
 function pass(partial: Partial<ScenePass> = {}): ScenePass {
   return {
+    key: "objects/0/passes/0",
     program: 0,
     blending: "normal",
     cullmode: "nocull",
@@ -27,11 +28,12 @@ function fbo(name: string, partial: Partial<SceneFbo> = {}): SceneFbo {
   return { name, format: "rgba8888", scale: 1, unique: false, repeat: false, ...partial };
 }
 function effect(steps: SceneEffectStep[], fbos: SceneFbo[] = []): SceneEffect {
-  return { id: 1, name: "", file: "effects/x/effect.json", fbos, steps };
+  return { source: 0, id: 1, name: "", file: "effects/x/effect.json", fbos, steps };
 }
 function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
   return {
     id: 7,
+    object: 0,
     name: "l",
     origin: [100, 50, 0],
     scale: [1, 1, 1],
@@ -41,6 +43,7 @@ function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
     color: [1, 1, 1],
     brightness: 1,
     visible: true,
+    visibleBound: false,
     passes: [pass({ blending: "translucent", textures: { 0: 0 } })],
     colorBlendMode: 0,
     effects: [],

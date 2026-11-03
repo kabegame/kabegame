@@ -14,17 +14,29 @@
  * - HDR：场景目标、快照、合成 RT 都是 `rgba16float`（`*_backbuffer` fbo 编译期已换算），图层颜色乘 `brightness`（B10）。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
+import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, SceneTexture } from "../compile/bundle";
+import type { BloomParams } from "../compile/postprocess";
 import { FBO_FORMATS } from "../compile/tex";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { oneLine, SceneRenderError } from "./errors";
 import { FboBindings, fboSize, planLayer, type DrawStep, type TargetRef, type TextureRef } from "./graph";
-import { layerModelMatrix, layerQuad, sceneTargetSize, sceneViewProjection } from "./layout";
-import { identity, invert, multiply, orthographic, scaling } from "./math";
+import { layerQuad, sceneTargetSize, sceneViewProjection } from "./layout";
 import { createPipeline, createProgram, type GpuProgram } from "./programs";
+import type { LayerState, SceneState } from "./state";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
-import { frameBuiltins, staticBuiltins, UniformBlock, type FrameInput, type UniformEntry } from "./uniforms";
+import {
+  drawUniformValues,
+  frameBuiltins,
+  layerRefreshNames,
+  UniformBlock,
+  type DrawUniformInput,
+  type FrameInput,
+  type UniformEntry,
+} from "./uniforms";
+
+export { drawMatrices } from "./uniforms";
 
 /** 离屏目标格式：WPE 在 gamma 空间混合，用非 sRGB 格式。合成 RT 在 LDR 下也是它（B5）。 */
 export const SCENE_TARGET_FORMAT: GPUTextureFormat = "rgba8unorm";
@@ -44,9 +56,6 @@ function texelBytes(format: GPUTextureFormat): number {
   return 4;
 }
 
-/** 画进合成 RT 的基础 pass 用的正交深度范围（图层 z 为 0）。 */
-const FILL_DEPTH = 10000;
-
 interface RenderTarget {
   texture: GPUTexture;
   view: GPUTextureView;
@@ -65,6 +74,11 @@ interface LayerResources {
 interface Draw {
   label: string;
   step: DrawStep;
+  /** 所属图层（`objects` 下标与 bundle 里的图层，就地刷新用）。 */
+  object: number;
+  layer: SceneLayer;
+  /** 本 pass 的稳定键（材质常量绑定按它找回 draw）。 */
+  passKey: TargetKey;
   resources: LayerResources;
   pipeline: GPURenderPipeline;
   vertexBuffer: GPUBuffer;
@@ -72,6 +86,10 @@ interface Draw {
   block: UniformBlock | null;
   /** 需要每帧刷新的内置 uniform 名（被材质值覆盖的不刷）。 */
   frameNames: string[];
+  /** 按槽位的纹理尺寸（就地刷新时复用，纹理不随属性变化）。 */
+  textureSizes: readonly (TextureSize | undefined)[];
+  /** 静态 uniform 被就地改过：下一次 `update` 要整块重写。 */
+  dirty: boolean;
   /** 不引用 fbo 时建一次；引用 fbo 时按当前 swap 状态取（`bindGroups` 缓存）。 */
   bindGroup: GPUBindGroup | null;
   bindGroups: Map<string, GPUBindGroup>;
@@ -79,12 +97,21 @@ interface Draw {
   layout: GPUBindGroupLayout;
 }
 
+/** 纹理尺寸（与 `render/uniforms.ts` 的 `TextureSize` 同形）。 */
+type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
+
+/** 一个图层的全部步骤与 draw：不可见时整段跳过（含它的快照），泛光的 op 单独放在最后（P3a）。 */
+interface LayerRuntime {
+  object: number;
+  ops: Op[];
+  draws: Draw[];
+}
+
 type Op =
   | { kind: "draw"; draw: Draw }
   | { kind: "snapshot" }
   | { kind: "copy"; resources: LayerResources; effect: number; source: TextureRef; target: TargetRef }
-  | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string }
-  | { kind: "bloom"; chain: BloomChain };
+  | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string };
 
 /** 渲染器能画的 bundle 结构；不能画的整理成原因键（编译期能力表之外的渲染器自查）。 */
 export function checkRenderable(
@@ -102,7 +129,8 @@ export function checkRenderable(
       if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
     }
   for (const layer of bundle.layers) {
-    if (!layer.visible || !layer.passes.length) continue;
+    // `visibleBound` 的图层当前可能不可见，但随时可能显示：同样要能画（P3a）
+    if (!(layer.visible || layer.visibleBound) || !layer.passes.length) continue;
     const plan = planLayer(layer, bundle.textures);
     for (const reason of plan.reasons) reasons.add(reason);
     for (const step of plan.steps) {
@@ -116,10 +144,21 @@ export function checkRenderable(
   return [...reasons];
 }
 
+/**
+ * 本帧要执行的图层（`objects` 下标）：不可见图层整段跳过（含它的快照、copy 与 swap）。
+ * 纯函数，单测核对可见性的跳过规则（P3a）。
+ */
+export function visibleObjects(layers: readonly { object: number }[], state: SceneState): number[] {
+  return layers.filter((layer) => state.layers.get(layer.object)?.visible ?? false).map((layer) => layer.object);
+}
+
 export class GpuScene {
   private readonly owned: { destroy(): void }[] = [];
-  private readonly ops: Op[] = [];
+  /** 按图层分组的步骤：不可见图层整段跳过（含它的快照），泛光的 op 单独放在最后（P3a）。 */
+  private readonly layers: LayerRuntime[] = [];
   private readonly draws: Draw[] = [];
+  private readonly drawsByLayer = new Map<number, Draw[]>();
+  private readonly drawsByPass = new Map<TargetKey, Draw[]>();
   /** fbo 实体（`FboBindings` 的下标指向这里）。 */
   private readonly targets: RenderTarget[] = [];
   private target: GPUTexture | null = null;
@@ -133,6 +172,13 @@ export class GpuScene {
   targetBytes = 0;
   private bloom: BloomChain | null = null;
   private clear: GPUColor = { r: 0, g: 0, b: 0, a: 1 };
+  /** 就地刷新 uniform 时复用的场景级常量（建场景时算一次）。 */
+  private viewProjection: Float32Array = new Float32Array(16);
+  /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
+  private hdr = false;
+  private eye: readonly number[] = [];
+  private ambient: readonly number[] | undefined;
+  private skylight: readonly number[] | undefined;
 
   private constructor(private readonly device: GPUDevice) {}
 
@@ -143,11 +189,13 @@ export class GpuScene {
 
   /**
    * 建全部资源。失败时已建的资源都会释放，抛 `SceneRenderError`；`warnings` 收集 Tint 的非错误消息。
+   * `state` 是本次场景的 CPU 侧状态（`render/state.ts`），建 draw 时按它的初始值写 uniform；
    * `ignoreUnsupported`：dev 强制渲染（D4），不因 `bundle.unsupported` 拒绝，渲染器自查仍然生效。
    */
   static async build(
     device: GPUDevice,
     bundle: SceneBundle,
+    state: SceneState,
     features: ReadonlySet<string>,
     warnings: string[],
     options: { ignoreUnsupported?: boolean } = {},
@@ -159,7 +207,7 @@ export class GpuScene {
     device.pushErrorScope("validation");
     let failure: unknown = null;
     try {
-      await scene.populate(bundle, warnings);
+      await scene.populate(bundle, state, warnings);
     } catch (error) {
       failure = error;
     }
@@ -204,14 +252,17 @@ export class GpuScene {
     return { texture, view: texture.createView(), width, height, format, sampler };
   }
 
-  private async populate(bundle: SceneBundle, warnings: string[]): Promise<void> {
+  private async populate(bundle: SceneBundle, state: SceneState, warnings: string[]): Promise<void> {
     const device = this.device;
     const { general } = bundle;
     const [width, height] = sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D);
-    const hdr = general.postprocess.hdr;
+    const hdr = (this.hdr = general.postprocess.hdr);
     const format = (this.format = sceneTargetFormat(hdr));
     this.width = width;
     this.height = height;
+    this.eye = general.camera.eye;
+    this.ambient = general.ambient;
+    this.skylight = general.skylight;
     this.target = this.own(
       device.createTexture({
         label: "scene target",
@@ -236,8 +287,8 @@ export class GpuScene {
     const samplerFor = (texture: SceneTexture) => sampler(samplerDescriptor(texture, texture.mips.length > 1));
     const dummies = this.createDummies();
 
-    const visible = bundle.layers.filter((layer) => layer.visible && layer.passes.length);
-    const plans = visible.map((layer) => planLayer(layer, bundle.textures));
+    const built = bundle.layers.filter((layer) => (layer.visible || layer.visibleBound) && layer.passes.length);
+    const plans = built.map((layer) => planLayer(layer, bundle.textures));
 
     // 程序：全部建完再汇总失败，Tint 报告一次列全
     const used = new Set<number>();
@@ -301,11 +352,13 @@ export class GpuScene {
     const compositePool = new Map<string, RenderTarget[]>();
     const fboPool = new Map<string, number>();
     const setup = device.createCommandEncoder({ label: "scene setup" });
-    const viewProjection = sceneViewProjection(general);
+    const viewProjection = (this.viewProjection = sceneViewProjection(general));
     const drawTasks: Promise<void>[] = [];
 
     plans.forEach((plan, index) => {
-      const layer = visible[index];
+      const layer = built[index];
+      const runtime: LayerRuntime = { object: layer.object, ops: [], draws: [] };
+      this.layers.push(runtime);
       const base = layer.passes[0].textures[0];
       const baseTexture = base === undefined ? undefined : bundle.textures[base];
       // 合成 RT 的采样跟随基础纹理（WPE 用图层的 nointerpolation / clampuvs，LWE 用基础纹理的 flags）
@@ -378,23 +431,23 @@ export class GpuScene {
       );
       const resources: LayerResources = { composites, fbos: new FboBindings(maps) };
       for (const step of plan.steps) {
-        if (step.kind === "snapshot") this.ops.push({ kind: "snapshot" });
+        if (step.kind === "snapshot") runtime.ops.push({ kind: "snapshot" });
         else if (step.kind === "swap") {
           const a = this.targets[resources.fbos.resolve(step.effect, step.source)];
           const b = this.targets[resources.fbos.resolve(step.effect, step.target)];
           if (a.format !== b.format || a.width !== b.width || a.height !== b.height)
             throw new SceneRenderError([`render:swap-mismatch:${step.source}:${step.target}`]);
-          this.ops.push({ kind: "swap", resources, effect: step.effect, source: step.source, target: step.target });
+          runtime.ops.push({ kind: "swap", resources, effect: step.effect, source: step.source, target: step.target });
         } else if (step.kind === "copy") {
           const source = this.resolveTexture(step.source, resources);
           const target = this.resolveTarget(step.target, resources);
           if (!source || !target || source.format !== target.format)
             throw new SceneRenderError([`render:copy-format:${layer.name}`]);
-          this.ops.push({ kind: "copy", resources, effect: step.effect, source: step.source, target: step.target });
+          runtime.ops.push({ kind: "copy", resources, effect: step.effect, source: step.source, target: step.target });
         } else {
           const program = programs.get(step.pass.program!)!;
           const op: Op = { kind: "draw", draw: null as unknown as Draw };
-          this.ops.push(op);
+          runtime.ops.push(op);
           drawTasks.push(
             this.createDraw(
               bundle,
@@ -407,9 +460,17 @@ export class GpuScene {
               dummies,
               samplerFor,
               pipelineFor,
+              state,
             ).then((draw) => {
               op.draw = draw;
+              runtime.draws.push(draw);
               this.draws.push(draw);
+              const byLayer = this.drawsByLayer.get(draw.object);
+              if (byLayer) byLayer.push(draw);
+              else this.drawsByLayer.set(draw.object, [draw]);
+              const byPass = this.drawsByPass.get(draw.passKey);
+              if (byPass) byPass.push(draw);
+              else this.drawsByPass.set(draw.passKey, [draw]);
             }),
           );
         }
@@ -431,7 +492,6 @@ export class GpuScene {
       });
       this.bloom = chain;
       this.targetBytes += chain.bytes;
-      this.ops.push({ kind: "bloom", chain });
     }
     await Promise.all(drawTasks);
     device.queue.submit([setup.finish()]);
@@ -499,6 +559,7 @@ export class GpuScene {
       format: GPUTextureFormat,
       alpha: boolean,
     ) => Promise<GPURenderPipeline>,
+    state: SceneState,
   ): Promise<Draw> {
     const device = this.device;
     const { pass } = step;
@@ -525,28 +586,20 @@ export class GpuScene {
         : undefined;
     };
 
-    // uniform：内置值打底，材质常量 / 用户属性覆盖
+    // uniform：内置值打底，材质常量 / 用户属性覆盖（与就地刷新共用 `drawUniformValues`）
     let block: UniformBlock | null = null;
     let uniformBuffer: GPUBuffer | null = null;
     let frameNames: string[] = [];
+    const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));
+    const textureSizes = Array.from({ length: slots }, (_, slot) => sizeOf(step.inputs[slot]));
     if (program.uniformSize) {
       block = new UniformBlock((program.result.uniforms ?? []) as UniformEntry[], program.uniformSize);
-      const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));
-      const matrices = drawMatrices(step, layer, viewProjection);
-      const builtins = staticBuiltins({
-        ...matrices,
-        modelViewProjectionInverse: invert(matrices.modelViewProjection),
-        layer,
-        // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
-        colorScale: bundle.general.postprocess.hdr ? layer.brightness : 1,
-        textures: Array.from({ length: slots }, (_, slot) => sizeOf(step.inputs[slot])),
-        screenSize: [this.width, this.height],
-        eye: bundle.general.camera.eye,
-        ambient: bundle.general.ambient,
-        skylight: bundle.general.skylight,
-      });
-      for (const [name, values] of Object.entries(builtins)) block.set(name, values);
-      for (const [name, values] of Object.entries(pass.uniforms)) block.set(name, values);
+      const layerState = state.layers.get(layer.object);
+      if (layerState)
+        for (const [name, values] of Object.entries(
+          drawUniformValues(this.uniformInput(step, layer, layerState, textureSizes, state)),
+        ))
+          block.set(name, values);
       frameNames = Object.keys(
         frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0] }),
       ).filter((name) => block!.has(name) && !(name in pass.uniforms));
@@ -599,12 +652,17 @@ export class GpuScene {
     return {
       label,
       step,
+      object: layer.object,
+      layer,
+      passKey: pass.key,
       resources,
       pipeline: await pipelineFor(program, step.blending, format, !toScene),
       vertexBuffer,
       uniformBuffer,
       block,
       frameNames,
+      textureSizes,
+      dirty: false,
       bindGroup,
       bindGroups: new Map(),
       entries,
@@ -631,20 +689,83 @@ export class GpuScene {
     return group;
   }
 
-  /** 写每帧变化的 uniform（`g_Time` 等）。 */
+  /** 就地刷新 uniform 的输入：图层状态 + 场景级常量（建场景时算一次）。 */
+  private uniformInput(
+    step: DrawStep,
+    layer: SceneLayer,
+    layerState: LayerState,
+    textures: readonly (TextureSize | undefined)[],
+    state: SceneState,
+  ): DrawUniformInput {
+    return {
+      step,
+      layer: { ...layerState, size: layer.size },
+      constants: state.constants.get(step.pass.key) ?? {},
+      viewProjection: this.viewProjection,
+      // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
+      colorScale: this.hdr ? layerState.brightness : 1,
+      screenSize: [this.width, this.height],
+      textures,
+      eye: this.eye,
+      ambient: this.ambient,
+      skylight: this.skylight,
+    };
+  }
+
+  /** 泛光参数能否就地改（HDR 级数不变）；其它目标都能。 */
+  canApply(params: BloomParams): boolean {
+    return !this.bloom || this.bloom.sameLevels(params);
+  }
+
+  /**
+   * 把 `SceneState` 的脏项刷进 uniform 块 / 泛光链（在 `update` 之前调用）。
+   * 能不能做已在调用方判过（`canApply`）；脏 draw 由 `update` 整块重写。
+   */
+  sync(state: SceneState): void {
+    const dirty = state.takeDirty();
+    for (const object of dirty.layers)
+      for (const draw of this.drawsByLayer.get(object) ?? []) this.refreshLayer(draw, state);
+    for (const key of dirty.passes) for (const draw of this.drawsByPass.get(key) ?? []) this.refreshPass(draw, state);
+    if (dirty.bloom) this.bloom?.setParams(state.bloom);
+  }
+
+  /** 图层状态变化：只重写由图层算出的那组内置 uniform（材质值优先，不覆盖）。 */
+  private refreshLayer(draw: Draw, state: SceneState): void {
+    const layerState = state.layers.get(draw.object);
+    if (!draw.block || !layerState) return;
+    const values = drawUniformValues(this.uniformInput(draw.step, draw.layer, layerState, draw.textureSizes, state));
+    for (const name of layerRefreshNames(draw.step.pass.uniforms)) {
+      const value = values[name];
+      if (value) draw.block.set(name, value);
+    }
+    draw.dirty = true;
+  }
+
+  /** 材质常量变化：重写本 pass 的全部材质常量（含用户属性写进 `constantshadervalues` 的那些）。 */
+  private refreshPass(draw: Draw, state: SceneState): void {
+    const constants = state.constants.get(draw.passKey);
+    if (!draw.block || !constants) return;
+    for (const [name, values] of Object.entries(constants)) draw.block.set(name, values);
+    draw.dirty = true;
+  }
+
+  /** 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。 */
   update(frame: FrameInput): void {
     const values = frameBuiltins(frame);
     for (const draw of this.draws) {
-      if (!draw.block || !draw.uniformBuffer || !draw.frameNames.length) continue;
+      if (!draw.block || !draw.uniformBuffer) continue;
+      if (!draw.frameNames.length && !draw.dirty) continue;
       for (const name of draw.frameNames) draw.block.set(name, values[name]);
       this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
+      draw.dirty = false;
     }
   }
 
   /**
-   * 按图层顺序执行全部步骤，结果在离屏场景目标里。`afterBloomStep`：泛光链每步之后调用（dev 探针读回中间结果用）。
+   * 按图层顺序执行全部步骤，结果在离屏场景目标里。不可见图层整段跳过（含它的快照）。
+   * `afterBloomStep`：泛光链每步之后调用（dev 探针读回中间结果用）。
    */
-  encode(encoder: GPUCommandEncoder, afterBloomStep?: Parameters<BloomChain["encode"]>[2]): void {
+  encode(encoder: GPUCommandEncoder, state: SceneState, afterBloomStep?: Parameters<BloomChain["encode"]>[2]): void {
     if (!this.targetView || !this.target) return;
     const sceneView = this.targetView;
     const sceneTexture = this.target;
@@ -680,44 +801,50 @@ export class GpuScene {
       pass.setVertexBuffer(0, item.vertexBuffer);
       pass.draw(4);
     };
-    for (const op of this.ops) {
-      if (op.kind === "draw") {
-        const { draw: item } = op;
-        if (item.step.target.kind === "scene") {
-          draw(begin(), item);
-          continue;
-        }
-        end();
-        const target = this.resolveTarget(item.step.target, item.resources);
-        if (!target) continue;
-        const pass = encoder.beginRenderPass({
-          label: item.label,
-          colorAttachments: [{ view: target.view, loadOp: "load", storeOp: "store" }],
-        });
-        draw(pass, item);
-        pass.end();
-      } else if (op.kind === "snapshot") {
-        // 快照要包含清屏色：本帧还没画过场景就先清一次
-        if (!cleared) begin();
-        end();
-        snapshot();
-      } else if (op.kind === "bloom") {
-        // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
-        if (!cleared) begin();
-        end();
-        snapshot();
-        op.chain.encode(encoder, sceneView, afterBloomStep);
-      } else if (op.kind === "copy") {
-        end();
-        const source = this.resolveTexture(op.source, op.resources);
-        const target = this.resolveTarget(op.target, op.resources);
-        if (source && target && source !== target)
-          encoder.copyTextureToTexture(
-            { texture: source.texture },
-            { texture: target.texture },
-            { width: Math.min(source.width, target.width), height: Math.min(source.height, target.height) },
-          );
-      } else op.resources.fbos.swap(op.effect, op.source, op.target);
+    const runOps = (ops: readonly Op[]) => {
+      for (const op of ops) {
+        if (op.kind === "draw") {
+          const { draw: item } = op;
+          if (item.step.target.kind === "scene") {
+            draw(begin(), item);
+            continue;
+          }
+          end();
+          const target = this.resolveTarget(item.step.target, item.resources);
+          if (!target) continue;
+          const pass = encoder.beginRenderPass({
+            label: item.label,
+            colorAttachments: [{ view: target.view, loadOp: "load", storeOp: "store" }],
+          });
+          draw(pass, item);
+          pass.end();
+        } else if (op.kind === "snapshot") {
+          // 快照要包含清屏色：本帧还没画过场景就先清一次
+          if (!cleared) begin();
+          end();
+          snapshot();
+        } else if (op.kind === "copy") {
+          end();
+          const source = this.resolveTexture(op.source, op.resources);
+          const target = this.resolveTarget(op.target, op.resources);
+          if (source && target && source !== target)
+            encoder.copyTextureToTexture(
+              { texture: source.texture },
+              { texture: target.texture },
+              { width: Math.min(source.width, target.width), height: Math.min(source.height, target.height) },
+            );
+        } else op.resources.fbos.swap(op.effect, op.source, op.target);
+      }
+    };
+    // 不可见图层整段跳过（含它的快照与 copy / swap）；运行时可见性由 `SceneState` 决定（P3a）
+    const visible = new Set(visibleObjects(this.layers, state));
+    for (const layer of this.layers) if (visible.has(layer.object)) runOps(layer.ops);
+    if (this.bloom) {
+      // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
+      if (!cleared) begin();
+      end();
+      snapshot();
+      this.bloom.encode(encoder, sceneView, afterBloomStep);
     }
     if (!cleared) begin();
     end();
@@ -726,60 +853,13 @@ export class GpuScene {
   destroy(): void {
     for (const resource of this.owned.splice(0)) resource.destroy();
     this.draws.length = 0;
-    this.ops.length = 0;
+    this.layers.length = 0;
+    this.drawsByLayer.clear();
+    this.drawsByPass.clear();
     this.targets.length = 0;
     this.target = null;
     this.targetView = null;
     this.snapshot = null;
     this.bloom = null;
-  }
-}
-
-/**
- * 各角色的变换（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：
- * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层模型矩阵；
- * - `base`：正交投影把图层四边形画满合成 RT，单位模型矩阵（B7）；
- * - `effect`：NDC 全屏四边形、MVP 为单位阵；`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)，
- *   `g_EffectModelViewProjectionMatrix` = 图层 MVP × 同一缩放，纹理投影与后者相同；
- * - `final` / `passthrough`：图层四边形用图层 MVP 上屏；效果矩阵不缩放，纹理投影 = MVP × scale(w/2, h/2)。
- */
-export function drawMatrices(
-  step: Pick<DrawStep, "role">,
-  layer: Pick<SceneLayer, "origin" | "angles" | "scale" | "size">,
-  viewProjection: Float32Array,
-) {
-  const model = layerModelMatrix(layer);
-  const layerMvp = multiply(viewProjection, model);
-  const hw = (layer.size[0] ?? 0) / 2,
-    hh = (layer.size[1] ?? 0) / 2;
-  const half = scaling(hw, hh, 1);
-  switch (step.role) {
-    case "base": {
-      const fill = orthographic(-(hw || 1), hw || 1, -(hh || 1), hh || 1, -FILL_DEPTH, FILL_DEPTH);
-      return { modelViewProjection: fill, model: identity(), viewProjection: fill };
-    }
-    case "effect": {
-      const effectMvp = multiply(layerMvp, half);
-      return {
-        modelViewProjection: identity(),
-        model: identity(),
-        viewProjection,
-        effectModel: multiply(model, half),
-        effectModelViewProjection: effectMvp,
-        effectTextureProjection: effectMvp,
-      };
-    }
-    case "final":
-    case "passthrough":
-      return {
-        modelViewProjection: layerMvp,
-        model,
-        viewProjection,
-        effectModel: model,
-        effectModelViewProjection: layerMvp,
-        effectTextureProjection: multiply(layerMvp, half),
-      };
-    default:
-      return { modelViewProjection: layerMvp, model, viewProjection };
   }
 }

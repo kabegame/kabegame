@@ -412,8 +412,10 @@ describe("可渲染性自查", () => {
     textures: [texture({ format: 4, mips: [{ width: 4, height: 4, bytes: new Uint8Array(16) }] })],
     bloom: null,
     unsupported: [],
+    bindings: [],
   };
   const pass = {
+    key: "objects/0/passes/0",
     program: 0,
     blending: "normal",
     cullmode: "nocull",
@@ -426,6 +428,7 @@ describe("可渲染性自查", () => {
   };
   const layer = {
     id: 1,
+    object: 0,
     name: "a",
     origin: [0, 0, 0],
     scale: [1, 1, 1],
@@ -435,6 +438,7 @@ describe("可渲染性自查", () => {
     color: [1, 1, 1],
     brightness: 1,
     visible: true,
+    visibleBound: false,
     passes: [pass],
     colorBlendMode: 0,
     effects: [],

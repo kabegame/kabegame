@@ -203,6 +203,21 @@ interface BloomDraw {
   pipeline: GPURenderPipeline;
   vertexBuffer: GPUBuffer;
   bindGroup: GPUBindGroup;
+  /** 保留 uniform 块与缓冲：泛光参数就地改时按新参数重写（P3a）。 */
+  block: UniformBlock | null;
+  uniformBuffer: GPUBuffer | null;
+  program: GpuProgram;
+  pass: ScenePass;
+  /** 各输入槽的尺寸（参数重算时复用）。 */
+  sizes: readonly BloomInputSize[];
+}
+
+/** 一个输入槽的尺寸（场景目标 / 泛光 RT 都是纹理 = 图像）。 */
+interface BloomInputSize {
+  width: number;
+  height: number;
+  textureWidth: number;
+  textureHeight: number;
 }
 
 export interface BloomChainInput {
@@ -232,21 +247,70 @@ function materialUniforms(program: GpuProgram, constants: Record<string, number[
   return values;
 }
 
+/** 一步泛光 pass 的全部 uniform：屏幕、纹理尺寸、材质注解默认值与按材质名的参数。 */
+function bloomValues(
+  program: GpuProgram,
+  pass: ScenePass,
+  step: BloomStep,
+  sizes: readonly BloomInputSize[],
+  width: number,
+  height: number,
+): Record<string, number[]> {
+  const values: Record<string, number[]> = {
+    ...screenBuiltins([width, height]),
+    ...textureBuiltins(sizes),
+    ...pass.uniforms,
+    ...materialUniforms(program, step.constants),
+  };
+  if (step.renderVar0) values.g_RenderVar0 = step.renderVar0;
+  return values;
+}
+
 export class BloomChain {
   readonly targets: BloomTarget[];
   private readonly draws: BloomDraw[] = [];
+  /** 当前的渲染图（就地改参数时按新参数重算，级数不变所以结构相同）。 */
+  private currentPlan: BloomPlan;
 
   private constructor(
-    readonly plan: BloomPlan,
+    private readonly device: GPUDevice,
+    plan: BloomPlan,
     targets: BloomTarget[],
+    private readonly width: number,
+    private readonly height: number,
   ) {
+    this.currentPlan = plan;
     this.targets = targets;
+  }
+
+  get plan(): BloomPlan {
+    return this.currentPlan;
   }
 
   /** 中间 RT 与快照之外这条链另外占的显存（字节）。 */
   get bytes(): number {
     const texel = this.plan.hdr ? 8 : 4;
     return this.targets.reduce((sum, target) => sum + target.width * target.height * texel, 0);
+  }
+
+  /** HDR 级数（`bloomhdriterations` 换算出的金字塔级数）是否不变；级数变了要重排金字塔，只能整场重编译。 */
+  sameLevels(params: BloomParams): boolean {
+    if (!this.currentPlan.hdr) return true;
+    const available = Math.max(1, bloomLevels(this.width, this.height));
+    return bloomIterations(params.hdrIterations, available) === this.currentPlan.levels;
+  }
+
+  /** 按新参数重算常量并重写各 pass 的 uniform（调用方已确认 `sameLevels`）。 */
+  setParams(params: BloomParams): void {
+    const plan = planBloom(this.currentPlan.hdr, params, this.width, this.height);
+    this.draws.forEach((draw, index) => {
+      const step = plan.steps[index];
+      if (!draw.block || !draw.uniformBuffer || !step) return;
+      const values = bloomValues(draw.program, draw.pass, step, draw.sizes, this.width, this.height);
+      for (const [name, value] of Object.entries(values)) draw.block.set(name, value);
+      this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
+    });
+    this.currentPlan = plan;
   }
 
   static async create(input: BloomChainInput): Promise<BloomChain> {
@@ -263,7 +327,7 @@ export class BloomChain {
       );
       return { name, texture, view: texture.createView(), width: w, height: h };
     });
-    const chain = new BloomChain(plan, targets);
+    const chain = new BloomChain(device, plan, targets, width, height);
     const sampler = device.createSampler({
       label: "bloom",
       magFilter: "linear",
@@ -272,7 +336,7 @@ export class BloomChain {
       addressModeV: "clamp-to-edge",
     });
     const quad = layerQuad([2, 2], [1, 1]);
-    const sizeOf = (source: BloomSource) =>
+    const sizeOf = (source: BloomSource): BloomInputSize =>
       source.kind === "framebuffer"
         ? { width, height, textureWidth: width, textureHeight: height }
         : {
@@ -297,18 +361,15 @@ export class BloomChain {
             }),
           );
           device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+          const sizes = step.inputs.map(sizeOf);
           const entries: GPUBindGroupEntry[] = [];
+          let block: UniformBlock | null = null;
+          let uniformBuffer: GPUBuffer | null = null;
           if (program.uniformSize) {
-            const block = new UniformBlock((program.result.uniforms ?? []) as UniformEntry[], program.uniformSize);
-            const values: Record<string, number[]> = {
-              ...screenBuiltins([width, height]),
-              ...textureBuiltins(step.inputs.map(sizeOf)),
-              ...pass.uniforms,
-              ...materialUniforms(program, step.constants),
-            };
-            if (step.renderVar0) values.g_RenderVar0 = step.renderVar0;
+            block = new UniformBlock((program.result.uniforms ?? []) as UniformEntry[], program.uniformSize);
+            const values = bloomValues(program, pass, step, sizes, width, height);
             for (const [name, value] of Object.entries(values)) block.set(name, value);
-            const uniformBuffer = input.own(
+            uniformBuffer = input.own(
               device.createBuffer({
                 label,
                 size: block.data.byteLength,
@@ -333,6 +394,11 @@ export class BloomChain {
             pipeline: await input.pipelineFor(program, step.additive ? "additive" : null, input.format),
             vertexBuffer,
             bindGroup: device.createBindGroup({ label, layout: program.bindGroupLayout, entries }),
+            block,
+            uniformBuffer,
+            program,
+            pass,
+            sizes,
           };
         }),
       )),

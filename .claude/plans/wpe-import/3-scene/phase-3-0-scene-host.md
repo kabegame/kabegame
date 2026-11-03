@@ -5,6 +5,7 @@
 > - [phase-3-0b-renderer-move.md](phase-3-0b-renderer-move.md)：渲染器迁进宿主、应用页改成 iframe 外壳；
 > - [phase-3-0c-frame-process.md](phase-3-0c-frame-process.md)：子 frame 不再跨窗口复用渲染进程（CEF 08，全局）、同进程 iframe 每帧只派发一次 rAF（CEF 09）。
 > 本文件是 P3-0 的总述、已定决策与阶段 0 / MVP 的实测记录。
+> 下一步（正式 P3，2026-11-03 定）：[phase-3a-bindings.md](phase-3a-bindings.md)（属性绑定与快速路径）→ [phase-3b-script-runtime.md](phase-3b-script-runtime.md)（脚本运行时）→ [phase-3c-runtime-graph.md](phase-3c-runtime-graph.md)（运行时渲染图）。
 
 > **形态更新（2026-11-02，用户定）**：宿主不再用 `index.html?window=…` 分支的不透明源 iframe——下面「阶段 0 实测」证明那条路
 > 读不了 `file:`、建不了 Worker、IPC 来源为 `null`。改成和网页壁纸一样的 **`file:` iframe**：

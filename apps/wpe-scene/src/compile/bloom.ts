@@ -67,7 +67,7 @@ export async function compileBloom(context: BloomCompileContext, hdr: boolean): 
   const format = FBO_FORMATS[hdr ? "rgb161616f" : "rgb888"].tex;
   const passes: Partial<Record<BloomPassName, ScenePass>> = {};
   for (const [name, { material, slots }] of Object.entries(table)) {
-    const pass = await compileBloomPass(context, material, slots, format);
+    const pass = await compileBloomPass(context, `bloom/${name}`, material, slots, format);
     if (pass) passes[name as BloomPassName] = pass;
   }
   return { hdr, passes };
@@ -75,6 +75,7 @@ export async function compileBloom(context: BloomCompileContext, hdr: boolean): 
 
 async function compileBloomPass(
   { fs, shader, unsupported, addProgram }: BloomCompileContext,
+  key: string,
   path: string,
   slots: number,
   format: number,
@@ -94,6 +95,7 @@ async function compileBloomPass(
     program = addProgram(result);
   }
   return {
+    key,
     program,
     blending: pass.blending ?? "normal",
     cullmode: pass.cullmode ?? "nocull",

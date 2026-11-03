@@ -1,4 +1,13 @@
 import { compileBloom, type SceneBloom } from "./bloom";
+import {
+  BindingCollector,
+  isUserBinding,
+  type BindingTarget,
+  type LayerField,
+  type RecompileReason,
+  type SceneBinding,
+  type TargetKey,
+} from "./bindings";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import {
   checkEffectFeatures,
@@ -15,7 +24,6 @@ import {
   parseModel,
   parseProject,
   parseScene,
-  resolveValue,
   textureName,
   type EffectFboJson,
   type MaterialPass,
@@ -78,6 +86,8 @@ export interface SceneTexture {
   videoRange?: { start: number; end: number };
 }
 export interface ScenePass {
+  /** 本 pass 的稳定键（基础材质 `objects/<i>/passes/<k>`、effect `objects/<i>/effects/<j>/passes/<k>`、`objects/<i>/passthrough`、`bloom/<pass>`）。 */
+  key: TargetKey;
   program: number | null;
   blending: string;
   cullmode: string;
@@ -120,6 +130,8 @@ export type SceneEffectStep =
   | { kind: "swap"; source: string; target: string };
 /** 一个启用的 effect（未启用的不进 bundle，B11）。 */
 export interface SceneEffect {
+  /** 图层 `effects[]` 里的下标（scene.json 的稳定坐标；bundle 下标会随未启用的 effect 移位）。 */
+  source: number;
   id: number;
   name: string;
   file: string;
@@ -128,6 +140,8 @@ export interface SceneEffect {
 }
 export interface SceneLayer {
   id: number;
+  /** scene.json 的 `objects` 下标（稳定键；`layers` 下标会随被跳过的对象移位）。 */
+  object: number;
   name: string;
   origin: number[];
   scale: number[];
@@ -138,6 +152,8 @@ export interface SceneLayer {
   /** 对象 `brightness`（默认 1）：只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效。 */
   brightness: number;
   visible: boolean;
+  /** `visible` 绑了用户属性（含 condition）：运行时可能变，当前不可见也要建 GPU 资源（P3a）。 */
+  visibleBound: boolean;
   /** 基础材质的 pass。 */
   passes: ScenePass[];
   /** 0 普通；31 上屏改 additive；其它值走 passthrough（B7 / B8）。 */
@@ -155,6 +171,11 @@ export interface SceneBundle {
   bloom: SceneBloom | null;
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
+  /**
+   * 属性绑定表（P3a）：编译期每处解析 `{user}` 的地方登记一条，宿主按它把属性增量分成就地写与重编译。
+   * 按登记顺序；同一属性可以有多条。
+   */
+  bindings: SceneBinding[];
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -251,8 +272,10 @@ function mergeTextures(base: unknown[] | undefined, override: unknown[] | undefi
 }
 export { shaderUniforms };
 
-/** 编译一个材质 pass 的上下文：effect 目录（资源查找）、本 effect 的 fbo，以及由渲染图填的槽位及其格式。 */
+/** 编译一个材质 pass 的上下文：稳定键、effect 目录（资源查找）、本 effect 的 fbo，以及由渲染图填的槽位及其格式。 */
 interface PassContext {
+  /** 本 pass 的稳定键（绑定表的目标键），见 `bindings.ts`。 */
+  key: TargetKey;
   scope?: ResourceScope | null;
   fbos?: ReadonlyMap<string, SceneFbo>;
   /** 渲染图运行时填的槽位（effect 无 bind 时的槽 0、bind 的各槽、passthrough 的槽 0）与其 `.tex` 格式枚举。 */
@@ -262,6 +285,13 @@ interface PassContext {
 export async function compileScene(input: CompileSceneInput): Promise<SceneBundle> {
   const fs = new SceneFs(input.projectDir, input.sceneAssets, input.reader);
   const unsupported = new Set<string>();
+  /** 属性绑定表：每处解析 `{user}` 的地方登记一次（P3a）。 */
+  const bindings = new BindingCollector();
+  const recompile = (reason: RecompileReason, path: string): BindingTarget => ({
+    kind: "recompile",
+    reason,
+    path,
+  });
   const projectText = await fs.text("project.json");
   if (!projectText) throw new Error("缺少 project.json");
   const project = parseProject(projectText);
@@ -275,7 +305,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   // 后处理档位：每次加载都解析（设置变了由调用方重新编译）
   const setting = input.postprocess ?? "follow";
   const wpeSetting = setting === "follow" ? await readWpePostprocessing(input.reader, input.sceneAssets) : null;
-  const postprocess = scenePostprocessState(resolvePostprocessLevel(setting, wpeSetting), general, properties);
+  const postprocess = scenePostprocessState(
+    resolvePostprocessLevel(setting, wpeSetting),
+    general,
+    properties,
+    bindings,
+  );
   const projection =
     general.orthogonalprojection && typeof general.orthogonalprojection === "object"
       ? (general.orthogonalprojection as { width?: number; height?: number })
@@ -284,23 +319,40 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     general: {
       width: projection.width ?? 1920,
       height: projection.height ?? 1080,
-      clearColor: numbers(resolveValue(general.clearcolor as SceneValue, properties), [0, 0, 0]),
+      clearColor: numbers(
+        bindings.bind(general.clearcolor as SceneValue, properties, recompile("general", "general.clearcolor")),
+        [0, 0, 0],
+      ),
       clearEnabled: general.clearenabled !== false,
       camera: {
-        eye: numbers(resolveValue(camera.eye as SceneValue, properties), [0, 0, 1]),
-        center: numbers(resolveValue(camera.center as SceneValue, properties), [0, 0, 0]),
-        up: numbers(resolveValue(camera.up as SceneValue, properties), [0, 1, 0]),
+        eye: numbers(
+          bindings.bind(camera.eye as SceneValue, properties, recompile("general", "camera.eye")),
+          [0, 0, 1],
+        ),
+        center: numbers(
+          bindings.bind(camera.center as SceneValue, properties, recompile("general", "camera.center")),
+          [0, 0, 0],
+        ),
+        up: numbers(bindings.bind(camera.up as SceneValue, properties, recompile("general", "camera.up")), [0, 1, 0]),
       },
-      ambient: numbers(resolveValue(general.ambientcolor as SceneValue, properties), [0, 0, 0]),
-      skylight: numbers(resolveValue(general.skylightcolor as SceneValue, properties), [0, 0, 0]),
+      ambient: numbers(
+        bindings.bind(general.ambientcolor as SceneValue, properties, recompile("general", "general.ambientcolor")),
+        [0, 0, 0],
+      ),
+      skylight: numbers(
+        bindings.bind(general.skylightcolor as SceneValue, properties, recompile("general", "general.skylightcolor")),
+        [0, 0, 0],
+      ),
       postprocess,
-      bloom: bloomParams(general, properties),
+      bloom: bloomParams(general, properties, bindings),
     },
     layers: [],
     programs: [],
     textures: [],
     bloom: null,
     unsupported: [],
+    // 同一个数组随编译继续填充，最后就是全部登记项
+    bindings: bindings.list,
   };
   const shader = new ShaderCompiler(fs, input.translator, unsupported);
   const textureIndex = new Map<string, number>();
@@ -366,7 +418,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
 
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
-  async function compilePass(pass: MaterialPass, context: PassContext = {}): Promise<ScenePass> {
+  async function compilePass(pass: MaterialPass, context: PassContext): Promise<ScenePass> {
     checkPassFeatures(pass, unsupported);
     const scope = context.scope ?? null;
     const names = (pass.textures ?? []).map(textureName);
@@ -414,6 +466,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       program = addProgram(result);
     }
     return {
+      key: context.key,
       program,
       blending: pass.blending ?? "normal",
       cullmode: pass.cullmode ?? "nocull",
@@ -421,26 +474,39 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       depthwrite: pass.depthwrite ?? "disabled",
       textures: slots,
       runtime,
-      uniforms: shaderUniforms(result, pass, properties),
+      uniforms: shaderUniforms(result, pass, properties, context.key, bindings),
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),
     };
   }
 
-  for (const object of scene.objects) {
+  for (const [index, object] of scene.objects.entries()) {
     if (settled()) break;
+    /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
+    const at = (field: LayerField): BindingTarget => ({ kind: "layer", object: index, field });
     const layer: SceneLayer = {
       id: object.id ?? bundle.layers.length,
+      object: index,
       name: object.name ?? "",
-      origin: numbers(resolveValue(object.origin, properties), [0, 0, 0]),
-      scale: numbers(resolveValue(object.scale, properties), [1, 1, 1]),
-      angles: numbers(resolveValue(object.angles, properties), [0, 0, 0]),
-      size: numbers(resolveValue(object.size, properties)),
-      alpha: asNumber(resolveValue(object.alpha, properties), 1),
-      color: numbers(resolveValue(object.color, properties), [1, 1, 1]),
-      brightness: asNumber(resolveValue(object.brightness as SceneValue, properties), 1),
-      visible: resolveValue(object.visible, properties) !== false,
+      origin: numbers(bindings.bind(object.origin, properties, at("origin")), [0, 0, 0]),
+      scale: numbers(bindings.bind(object.scale, properties, at("scale")), [1, 1, 1]),
+      angles: numbers(bindings.bind(object.angles, properties, at("angles")), [0, 0, 0]),
+      size: numbers(bindings.bind(object.size, properties, recompile("layer-structure", `objects/${index}/size`))),
+      alpha: asNumber(bindings.bind(object.alpha, properties, at("alpha")), 1),
+      color: numbers(bindings.bind(object.color, properties, at("color")), [1, 1, 1]),
+      brightness: asNumber(bindings.bind(object.brightness as SceneValue, properties, at("brightness")), 1),
+      visible: bindings.bind(object.visible, properties, at("visible")) !== false,
+      visibleBound: isUserBinding(object.visible),
       passes: [],
-      colorBlendMode: Math.trunc(asNumber(resolveValue(object.colorBlendMode as SceneValue, properties), 0)),
+      colorBlendMode: Math.trunc(
+        asNumber(
+          bindings.bind(
+            object.colorBlendMode as SceneValue,
+            properties,
+            recompile("layer-structure", `objects/${index}/colorBlendMode`),
+          ),
+          0,
+        ),
+      ),
       effects: [],
       passthrough: null,
     };
@@ -463,7 +529,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       continue;
     }
     const material = parseMaterial(materialText);
-    for (const pass of material.passes) layer.passes.push(await compilePass(pass));
+    for (const [k, pass] of material.passes.entries())
+      layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
     // 没写 size：先取模型的 width / height，没有再取基础纹理的图像尺寸（`autosize`）。不能反过来：deep_space 的
     // Background 模型写 1920×1080，槽 0 却是 480×270 的流向遮罩，按纹理取会缩成中间一小块（P1 一直按模型取）
     if (!layer.size.length) {
@@ -477,11 +544,18 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             : [model.width ?? 0, model.height ?? 0];
     }
 
-    for (const raw of Array.isArray(object.effects) ? object.effects : []) {
+    for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;
       const instance = (raw ?? {}) as SceneEffectInstance;
-      // 未启用的 effect 整步跳过（B11），也不检查它的能力
-      if (resolveValue(instance.visible, properties) === false) continue;
+      // 未启用的 effect 整步跳过（B11），也不检查它的能力；但可见性绑定登记成重编译目标（P3a，3c 改为单图层重算）
+      if (
+        bindings.bind(
+          instance.visible,
+          properties,
+          recompile("effect-visible", `objects/${index}/effects/${source}/visible`),
+        ) === false
+      )
+        continue;
       const file = typeof instance.file === "string" ? instance.file : "";
       const label = file.split("/").at(-2) ?? "unknown";
       const effectFile = file ? await fs.read(file) : null;
@@ -504,6 +578,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       );
       const steps: SceneEffectStep[] = [];
       let overrideIndex = 0;
+      /** 本 effect 里已编译的绘制 pass 序号（本 effect 的 pass 稳定键用，材质多 pass 也各占一个）。 */
+      let passIndex = 0;
       for (const pass of effect.passes ?? []) {
         if (pass.command === "copy" || pass.command === "swap") {
           if (typeof pass.source === "string" && typeof pass.target === "string")
@@ -538,7 +614,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             textures: mergeTextures(materialPass.textures, override?.textures),
           };
           // 有 bind 时材质槽 0 的 null 不再自动填（B6）：不在 planned 里的 null 槽位就保持空
-          const compiled = await compilePass(merged, { scope, fbos, planned });
+          const compiled = await compilePass(merged, {
+            key: `objects/${index}/effects/${source}/passes/${passIndex++}`,
+            scope,
+            fbos,
+            planned,
+          });
           steps.push({
             kind: "draw",
             pass: compiled,
@@ -549,6 +630,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         }
       }
       layer.effects.push({
+        source,
         id: instance.id ?? layer.effects.length,
         name: instance.name ?? "",
         file,
@@ -566,7 +648,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       else {
         layer.passthrough = await compilePass(
           { ...pass, combos: { ...pass.combos, ...passthroughCombos(cbm) } },
-          { planned: [{ slot: 0, format: FBO_FORMATS.rgba8888.tex }] },
+          { key: `objects/${index}/passthrough`, planned: [{ slot: 0, format: FBO_FORMATS.rgba8888.tex }] },
         );
         // passthrough 上屏颜色置 (1, 1, 1, 1)（B8 / B10）
         layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];

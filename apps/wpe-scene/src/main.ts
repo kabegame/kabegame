@@ -27,4 +27,4 @@ document.addEventListener("pointermove", (event) => {
 });
 window.addEventListener("pagehide", () => host.dispose(), { once: true });
 
-if (__SCENE_DEV__) installSceneDevProbe();
+if (__SCENE_DEV__) installSceneDevProbe(host);

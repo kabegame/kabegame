@@ -2,6 +2,7 @@
 
 > 状态（2026-11-01）：决策 D1–D7 全部按推荐确认。**P1-0（着色器翻译器 `wpesl2wgsl` + wasm 构建链）已完成**，结果见点 P1-0；
 > **`scene.pkg` 读取（`wpe-scene/compile/pkg.ts`）已完成**：本机创意工坊 scene 全是 pkg，原 P9 的 pkg 提前进 P1-3。**P1-1（scene 入库）已完成并真机验证**（29 张：默认 16 + 工坊 13）。**P1-2（WPE 安装目录交给前端）已完成**。**P1-3（前端编译管线）已完成**，本机 29 张语料与 CEF 里的 Worker 编译都验证过。**P1-4（WebGPU 渲染器 + `WpeSceneView.vue`）已完成**：P1 三张真机渲染，全语料 Tint 0 error；beach 与 WPE 桌面实拍一致（作者 `preview.jpg` 另有后期，不能当基准）。**P1-5（接入 `WallpaperStage`）已完成**：图库预览与桌面实时渲染，加载期间不闪预览图；场景 → 场景切换有 0.2–0.4 秒空档待定。
+> P2a / P2b、P3-0（场景宿主，3-0a–3-0c）已完成；**P3（SceneScript）**于 2026-11-03 定方案（D14），拆成 [3a](phase-3a-bindings.md) / [3b](phase-3b-script-runtime.md) / [3c](phase-3c-runtime-graph.md)，见「P3 — SceneScript」一节。
 > 上级：[../PLAN.md](../PLAN.md) 决策 9（Scene 走 WebGPU）。调研：[RESEARCH.md](RESEARCH.md)（格式、方言、WebGPU 可行性）。
 > 翻译器契约：[src-tauri/wpesl2wgsl/README.md](../../../../src-tauri/wpesl2wgsl/README.md)；场景文档：[cocs/wpe/WPE_SCENE.md](../../../../cocs/wpe/WPE_SCENE.md)。
 > 本文件取代调研 §5–§7 里与现架构不符的部分。调研写于网页壁纸改成 `file:` iframe 之前，其中的 `/wpe/<id>/` HTTP 路由、
@@ -42,6 +43,7 @@ Rust 侧只有两处小改动：导入接受 scene 行；把 WPE 安装目录随
 
 **信任边界不变。** 渲染器是我们自己的代码，跑在应用页主 frame。场景里唯一的第三方可执行代码是 SceneScript，放进不透明源的
 sandbox iframe（只给 `allow-scripts`），每帧经 `MessageChannel` 交换输入与绑定值：拿不到 IPC、读不到应用存储，也碰不到文件（D1）。
+（已更新：P3-0 起编译、渲染与脚本都在场景宿主 `file:` iframe 里，宿主与网页壁纸同信任级别；D14 起脚本在宿主内的同源子 frame 里同步执行，只是隔离、不是安全边界。）
 shader 是第三方源码，但要先经 naga 解析和校验、再经浏览器自己的 WGSL 校验，才进 GPU。
 
 **`scene.pkg` 是资源解析层的一个来源。** 创意工坊发布的 scene 把 `scene.json` 与全部项目资源打进 `scene.pkg`，目录里只剩
@@ -633,22 +635,16 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - 3-0a 宿主与应用的通路：[phase-3-0a-host-channel.md](phase-3-0a-host-channel.md)
 - 3-0b 渲染器迁进宿主：[phase-3-0b-renderer-move.md](phase-3-0b-renderer-move.md)
 - 3-0c 子 frame 不再跨窗口复用渲染进程（CEF 08，全局）、同进程 iframe 每帧只派发一次 rAF（CEF 09）：[phase-3-0c-frame-process.md](phase-3-0c-frame-process.md)
+- 下一步：正式 P3 拆成 [3a](phase-3a-bindings.md) / [3b](phase-3b-script-runtime.md) / [3c](phase-3c-runtime-graph.md)，见下一节。
 
-## P3 — SceneScript 基础（razer_vortex · razer_bedroom 完整）
+## P3 — SceneScript（razer_vortex · razer_bedroom 完整）
 
-> **2026-11-02**：WPE 的脚本运行时已查清（V8 14.7、每个场景一个 Isolate + Context、同步同帧、15 s 看门狗等），见 [p3-script-REPORT.md](p3-script-REPORT.md)。
-> 下面是查清之前的设计，按报告 G 节重定后再开工。
-
-- **新增** 脚本宿主：不透明源 sandbox iframe（`srcdoc`，只 `allow-scripts`）。
-  - 每段脚本经 Blob URL `import()` 加载，裸模块名 `WEColor / WEMath / WEVector` 用 import map 指向 WPE `assets/scripts/` 里的同名模块；
-    `Vec2 / Vec3 / Vec4 / Mat3 / Mat4` 基类来自 `jsclasses/baseclasses.js`。这些文件由渲染器 fetch 后以 Blob 交给宿主，不随应用分发。
-  - 生命周期：`init` → 每帧 `update(value)` → `applyUserProperties(changed)` → `destroy`。
-  - API 适配对象：`engine.frametime / runtime / userProperties`、`thisObject` / `thisLayer` 属性代理，`console` 进应用日志。
-- **新增** 每帧协议：渲染器发 `{ time, frametime, input, changedProps }`，宿主回 `{ bindingId → value, objectProps }`，
-  渲染器等到回包再画这一帧，取不到就沿用上一帧。脚本报错只禁用该段并记日志，不影响渲染。
-- **新增**（自 P2 挪来，D11）bundle 绑定表（属性名 / 脚本绑定 → 图层 / pass / uniform）：脚本每帧的值与用户改属性都直接改 uniform，
-  只有影响 COMBO 的属性才重新编译。
-- **验收**：vortex 切换 mode 后颜色模式跟着变；bedroom 的灯光按 `light_speed` 变色循环。
+依据 [p3-script-REPORT.md](p3-script-REPORT.md)（WPE 2.8.42 SceneScript 运行时逆向 A–H，用户属性运行时更新 I1–I10）。目标：脚本在场景宿主主线程上同步执行、照 WPE 的时序与写回规则；用户改属性就地生效、不整场重编译。
+2026-11-03 定的方案（见「关键决策」D14）拆成三步，旧草案（不透明源 iframe + 每帧消息往返）作废：
+- **3a 属性绑定表与快速路径（不含脚本）**：[phase-3a-bindings.md](phase-3a-bindings.md)。bundle 带绑定表（属性名 → 目标，可带 condition），宿主一个应用函数（加载传全集、运行时传增量），CPU 侧 `SceneState` + 每帧刷脏；材质常量、图层变换 / `alpha` / `color` / `visible`（含条件可见）、泛光参数就地，其余仍重编译；去掉 `visible:condition`。
+- **3b 脚本运行时**：[phase-3b-script-runtime.md](phase-3b-script-runtime.md)。可行性探针先行；同源 `about:blank` 子 frame 作独立 realm、`baseclasses.js` 经典脚本 + 每段一个 ES 模块；每帧计时器 → `update` 写回 → 渲染；最小 API + 骨架；出错禁用单个回调、15 s 停全部脚本；重编译保留 realm；删除 `value:script` 与 D10 静态规则；语料给出解锁清单与缺失 API 排行。
+- **3c 运行时渲染图**：[phase-3c-runtime-graph.md](phase-3c-runtime-graph.md)。effect 可见性单图层重算（`FUN_1401e6300`）、泛光开关与级数、清屏色 / 环境光 / 相机就地，做到 WPE 的程度。
+- **验收样本**：vortex 切「模式」颜色模式跟着变（3b）；bedroom 解锁，彩虹灯带按墙钟循环、与 WPE 同一时刻同色，`light_speed` 改滚动速度（3a）；shimmering_particles 的 `bloomstrength` 首次 apply 后为 1.0（3b，dev 强制渲染下经探针读）；eagleflag / vortex / bedroom 拖属性不重新编译（3a）。
 
 ## P4 — 粒子（shimmering_particles）
 
@@ -778,6 +774,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 
 - **D1 渲染器位置**：渲染器跑在应用页主 frame（`WallpaperStage` 的 scene 层）。SceneScript 放进不透明源 sandbox iframe，每帧经 `MessageChannel` 同步。
   代价：脚本与渲染器分处两个 realm，`createLayer` 这类调用只能返回代理，每帧多一次消息往返。
+  **2026-11-02 更新**（P3-0）：编译与渲染挪进场景宿主（`file:` iframe），脚本与渲染器同处宿主。**2026-11-03 细化**（D14）：同线程、独立 realm——脚本跑在宿主内的同源 `about:blank` 子 frame 里，宿主同步调用，见 [phase-3b-script-runtime.md](phase-3b-script-runtime.md)。
 - **D2 着色器翻译**：WPESL 原文直接交给 wasm 翻译器 `wpesl2wgsl`，预处理、改写、naga 翻译都在内部完成，前端不做方言处理。
   P1-0 的本机语料过了门槛。如果以后 naga 接不住，备选方案是 glslang 出 SPIR-V、再由 Tint 出 WGSL（Babylon.js 的路线）。
 - **D3 资源读取**：前端 `fetch(file:)`；pkg 是 `SceneFs` 的一个来源，条目带 `Range` 头按区间读（2026-11-01 已实现并提前到 P1）。
@@ -792,12 +789,22 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **D10 脚本静态规则（2026-11-01）**：P3 之前，带 `update` / `init` 的脚本绑定整张退回；只导出 `applyUserProperties` 的按 `value` 静态显示。
   **2026-11-02 推翻**（[p3-script-REPORT.md](p3-script-REPORT.md) D 节与 H 节）：WPE 加载时在 init 之后用完整属性集调一次 `applyUserProperties`，
   `value` 会被覆盖（shimmering 的 bloomstrength 实为 1.0，不是 1.12）。P3 起这类脚本必须实际运行；P3 之前的静态显示只在属性等于默认值、且脚本结果恰好等于 `value` 时才对。
+  实现（`isStaticScript` / `scriptExports`、`value:script`）在 3b 删除。
 - **D12 WPE 访问约定修订（2026-11-01）**：早先「只读、不运行、不附加 WPE」是代理自己加的，用户明确为了产品质量放开。
   现在可以运行 WPE、在其中切换壁纸与设置、用 RenderDoc 等工具附加进程抓帧，拿每个 pass、中间纹理与 uniform 的真值核对实现；
   不改动、不删除用户的壁纸、工程与创意工坊内容；为对照临时改的 WPE 设置用完恢复并记录。D8 的静态逆向结论可以用动态抓帧复核。
 - **D11 P2 拆分（2026-11-01）**：P2a 渲染图与 `disabled` 档，P2b 泛光与 HDR；属性绑定表挪到 P3，和脚本每帧改 uniform 共用一条通路。
 - **D13 P2b 验收与范围（2026-11-01）**：P2b 现在做（不等 P3）；用 RenderDoc 抓帧做链路隔离验证（WPE 的泛光链输入 → 我们的泛光 + combine → 对比 WPE 输出），
   需要一个只在 dev 构建里的测试入口；预览、应用背景与桌面同一档位。
+- **D14 P3 方案（2026-11-03 用户定）**：
+  - 脚本同步执行、不用 Worker，每帧 计时器 → `update`（返回值当帧写回）→ 渲染；脚本对象直接作用于渲染状态。
+  - 脚本 realm 是宿主内的同源 `about:blank` 子 frame（同进程同线程，对应 WPE 渲染线程上的独立 V8 Context），只是隔离、不是安全边界；先做可行性探针，不成立就停下汇报。
+  - 单个回调超过 15 s 就在它返回后停掉本场景全部脚本；死循环接受卡住；验收不含任何死循环 / 忙等测试，15 s 规则只用注入时钟单测。
+  - 环境对齐 WPE（遮掉 `fetch`、全局计时器等，`console` 只有 `log` / `error`）；未实现的 API 不做静态扫描，调用时报错只禁用那个回调；脚本相关不再进 `unsupported`。
+  - API 分阶段：3b 先做最小 + 骨架，做完用本机语料定后续 API 阶段。
+  - 属性快速路径分两步：3a 先做材质常量 / 变换 / `alpha` / `color` / `visible` / 泛光参数，3c 做到 WPE 的程度；重编译时保留脚本 realm 与状态，不重跑 `init`。
+  - 默认照 WPE（报告 D / I 节），不照搬 `engine.userProperties` 丢内置键、CLI 改颜色成字符串两个缺陷；COMBO 绑用户属性按不支持。
+  - 推翻 D10、细化 D1。细节与各自的「已定」「待定」见 [3a](phase-3a-bindings.md) / [3b](phase-3b-script-runtime.md) / [3c](phase-3c-runtime-graph.md)。
 
 ---
 
@@ -810,7 +817,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **浏览器 WGSL 校验**：naga 输出、naga 回读都通过，但 Tint 还没验证过（P1 真机首项）。
 - **合成语义**：效果链、混合模式、`copybackground`、fbo、泛光与 HDR 已由 WPE 逆向取得规格（P2，D8）；剩余未知见「P2 仍未知」。
   WPE 版本升级可能改变这些行为，逆向结论绑定 2.8.42。
-- **粒子与脚本语义**：算子公式、`update` 的调用时机都靠对照；脚本跨 realm 后，`createLayer` 返回的是下一帧才生效的代理，与 WPE 的同步语义可能有差别（P6 验证）。
+- **粒子与脚本语义**：算子公式靠对照；脚本的调用时机与写回规则已由逆向查清（p3-script-REPORT D / I），D14 起脚本与渲染同线程同步执行，`createLayer` 可以返回真对象（P6）；跨 realm 的类型判断与微任务时机的差异见 [3b](phase-3b-script-runtime.md) 风险。
 - **GPU 与主线程开销**：预览与桌面同时渲染 4K 场景；壁纸窗口在 WorkerW 下的 WebGPU 行为未验证。
   首次打开的大头是 GPU 进程编译 pipeline，靠 Chromium 的 GPU 着色器磁盘缓存与翻译结果缓存缓解。
 - **WPE 安装目录依赖**：只拷了壁纸目录、没装 WPE 的机器上 `sceneAssets` 为空，所有 scene 都会退回预览图；

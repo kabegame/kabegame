@@ -16,6 +16,8 @@ import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { acquireGpu } from "../render/device";
 import { GpuScene } from "../render/scene";
+import { SceneState } from "../render/state";
+import type { SceneHost } from "../host";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -178,7 +180,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const compileMs = performance.now() - started;
   const gpu = await acquireGpu();
   try {
-    const scene = await GpuScene.build(gpu.device, bundle, gpu.features, [], { ignoreUnsupported: force });
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], { ignoreUnsupported: force });
     try {
       const time = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
@@ -186,6 +189,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         const samples: number[] = [];
         for (let i = 0; i < options.profile; i++) {
           const t0 = performance.now();
+          scene.sync(state);
           scene.update({
             time: time + i / 60,
             frametime: 1 / 60,
@@ -194,7 +198,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
             pointerLast: [0.5, 0.5],
           });
           const encoder = gpu.device.createCommandEncoder({ label: "probe profile" });
-          scene.encode(encoder);
+          scene.encode(encoder, state);
           gpu.device.queue.submit([encoder.finish()]);
           await gpu.device.queue.onSubmittedWorkDone();
           samples.push(performance.now() - t0);
@@ -208,9 +212,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           max: round(samples.at(-1)!),
         };
       }
+      scene.sync(state);
       scene.update({ time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] });
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
-      scene.encode(encoder);
+      scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
       const read = scheduleReadback(gpu.device, encoder, scene.targetTexture!, scene.width, scene.height, format);
       gpu.device.queue.submit([encoder.finish()]);
@@ -252,4 +257,65 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
 
 export function probeKeys(): string[] {
   return [...stored.keys()];
+}
+
+/** 宿主帧计时的统计（均值 / p95，最近 600 帧）。 */
+function frameStats(costs: readonly number[]): { mean: number; p95: number } {
+  const round = (value: number) => Math.round(value * 100) / 100;
+  if (!costs.length) return { mean: 0, p95: 0 };
+  const sorted = [...costs].sort((a, b) => a - b);
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  return { mean: round(mean), p95: round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]) };
+}
+
+/** 当前 `SceneState` 的快照（图层、材质常量、泛光参数）与绑定表（P3a 点 8）。 */
+export function hostState(host: SceneHost): unknown {
+  const { bundle, renderer } = host.devScene;
+  const state = renderer?.sceneState ?? null;
+  return {
+    bindings: bundle?.bindings ?? [],
+    layers: state ? Object.fromEntries(state.layers) : {},
+    constants: state ? Object.fromEntries(state.constants) : {},
+    bloom: state?.bloom ?? null,
+  };
+}
+
+/** 计数：就地应用次数、重编译记录（含原因），以及 `render()` 的 CPU 用时统计。 */
+export function hostStats(host: SceneHost): {
+  applied: number;
+  recompiled: { reason: string; keys: string[] }[];
+  frameMs: { mean: number; p95: number };
+} {
+  return {
+    applied: host.stats.applied,
+    recompiled: host.stats.recompiled.map((item) => ({ ...item, keys: [...item.keys] })),
+    frameMs: frameStats(host.devScene.renderer?.frameCosts ?? []),
+  };
+}
+
+/**
+ * 按固定 `g_Time` 渲染**当前**场景（含就地改过的状态）并读回、给 SHA-256：与 `renderFrame` 的整场重编译结果逐字节比较，
+ * 是「就地 = 重编译」的真机判据（P3a 验收 4）。
+ */
+export async function hostRenderFrame(
+  host: SceneHost,
+  time: number,
+): Promise<{ sha256: string; width: number; height: number }> {
+  const renderer = host.devScene.renderer;
+  const scene = renderer?.currentScene;
+  const state = renderer?.sceneState;
+  const texture = scene?.targetTexture;
+  if (!renderer || !scene || !state || !texture) throw new Error("当前没有可渲染的场景");
+  const device = renderer.device;
+  const encoder = device.createCommandEncoder({ label: "probe host frame" });
+  scene.sync(state);
+  scene.update({ time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] });
+  scene.encode(encoder, state);
+  const format = texture.format as ReadbackFormat;
+  const read = scheduleReadback(device, encoder, texture, scene.width, scene.height, format);
+  device.queue.submit([encoder.finish()]);
+  const raw = await read();
+  const rgba = raw instanceof Uint8Array ? raw : quantize8(raw);
+  for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
+  return { sha256: await sha256(rgba), width: scene.width, height: scene.height };
 }

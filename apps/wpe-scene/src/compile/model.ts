@@ -174,6 +174,16 @@ export function isStaticScript(source: unknown): boolean {
   return scriptExports(source).every((name) => name === "applyUserProperties");
 }
 
+/**
+ * 编译期属性表读取的观察者：单测（`p3a.test.ts` 的完整性检查）用它记下编译期读过的属性名，
+ * 断言每个都登记进了绑定表；生产恒为 null。
+ */
+let propertyReadObserver: ((name: string) => void) | null = null;
+
+export function observePropertyReads(observer: ((name: string) => void) | null): void {
+  propertyReadObserver = observer;
+}
+
 export function currentProperties(
   project: ProjectJson,
   overrides: Record<string, unknown>,
@@ -184,7 +194,14 @@ export function currentProperties(
     result[name] = (
       value && typeof value === "object" && "value" in value ? (value as { value: SceneScalar }).value : value
     ) as SceneScalar;
-  return result;
+  // 每次返回一份可观察的视图：漏登记（读了属性却没进绑定表）的后果是「改了没反应」，
+  // 完整性单测靠这里发现（P3a 点 1 / 验收 2）
+  return new Proxy(result, {
+    get(target, key, receiver) {
+      if (typeof key === "string" && propertyReadObserver) propertyReadObserver(key);
+      return Reflect.get(target, key, receiver);
+    },
+  });
 }
 
 export function resolveValue(
@@ -196,11 +213,25 @@ export function resolveValue(
     if (!("user" in value) || !value.user) return undefined;
     const name = typeof value.user === "string" ? value.user : value.user.name;
     const current = properties[name] ?? value.value;
+    // condition 按字符串比（WPE 的值换字符串再与 condition 比；condition 写成数字时同样成立），见 `bindings.ts`
     if (typeof value.user === "object" && value.user.condition !== undefined)
-      return String(current) === value.user.condition;
+      return String(current) === String(value.user.condition);
     return current;
   }
   return value;
+}
+
+/**
+ * 只保留数值 / 布尔的 COMBO：WPE 的 COMBO 只按整数读，写成 `{user, value}` 会断言中止（I3）；
+ * 这类绑定由能力表报 `combo:user-binding`、整张退回，绝不把对象交给翻译器。
+ */
+export function staticCombos<T extends Record<string, number | boolean>>(
+  combos: T | undefined,
+): Record<string, number | boolean> {
+  const out: Record<string, number | boolean> = {};
+  for (const [name, value] of Object.entries(combos ?? {}))
+    if (typeof value === "number" || typeof value === "boolean") out[name] = value;
+  return out;
 }
 
 export function numbers(value: SceneScalar | undefined, fallback: number[] = []): number[] {
