@@ -4,6 +4,7 @@
 import type { SceneHost } from "../host";
 import { runBloomProbe } from "./bloomProbe";
 import { hostRenderFrame, hostState, hostStats, probeChunk, probeKeys, renderFrame } from "./probe";
+import { realmCheck } from "./realmProbe";
 
 export function installSceneDevProbe(host: SceneHost): void {
   (window as unknown as { __kabegameSceneProbe?: unknown }).__kabegameSceneProbe = {
@@ -16,6 +17,7 @@ export function installSceneDevProbe(host: SceneHost): void {
       state: () => hostState(host),
       stats: () => hostStats(host),
       renderFrame: (time: number) => hostRenderFrame(host, time),
+      realmCheck: (extraSources?: string[]) => realmCheck(host, extraSources),
     },
   };
 }

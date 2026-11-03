@@ -533,3 +533,21 @@ export interface SceneRendererOptions {
 - **主会话复核（2026-11-03）**：`git status` 无越界（只有 `apps/wpe-scene` 与 `deno.lock` 的 workspace 依赖登记）；宿主 tsc 0 error、vitest 12 文件 182 项全过（含本机语料）；临时编译 vortex / bedroom / shimmering 核对脚本写回目标：vortex 3 段 → `g_CMode`（float）、bedroom 6 段 → `g_TintColor`（vec3）、shimmering → 泛光 `strength`，pass 键与 3a 一致。
   - **修正**：`setInterval` 的周期补偿原为 `ceil(超出 / 周期 + 1)` 个周期，只要触发时有超出就多加一个周期（60 fps 下 `setInterval(1000)` 跑 10 s 只触发 5 次）；改为 `floor(超出 / 周期) + 1`。补了两条断言：一帧跨多个周期后按次数核对，以及 60 fps 跑 10 s 触发 10 次。换回旧公式两条都失败。
   - **遗留**：材质 json 里的 1 段脚本（报告 F 节）本次没收集，步骤 5 接入前确认它在哪张场景、是否要收。
+
+### 步骤 3 实施记录（2026-11-04）
+
+- 新增 `script/realm.ts`：宿主内存按 `sceneAssets` 缓存 `JsModuleIndex`（含缺失结果），以 `file:` 顺序读取并用 es-module-lexer 扫 jsmodules；按脚本原样说明符及模块递归依赖生成 import map。每个场景建隐藏 `about:blank` frame，先遮蔽环境并插 import map，再从 assets 加载 `baseclasses.js`，取回原型与 `_Internal`。用户源码在子 frame 的 blob 模块中求值，语法解析失败时以第二份 blob 的模块脚本 `error` 事件补行列，1 秒超时回退；释放时移除 frame 并主动断开宿主侧引用。
+- 新增 `script/environment.ts`：按点 3 遮蔽表处理网络、全局计时器、Web Storage、`Intl`、`WebAssembly`，并根据步骤 0 实测一并删除 `parent` / `self` / `frames`。不可配置的五项尝试后保留并记 debug；`console` 换为仅有 `log` / `error` 的普通对象，输出由调用方提供。
+- 新增 dev `host.realmCheck()`：从当前 bundle 与 `wpe_scene_target` 建独立 realm，逐段只求值不调用回调，返回 import map、每段状态与导出、环境实测、模块缓存两轮读取数、耗时和释放后剩余测试 frame 数。未接入正式宿主加载或渲染。
+- Node 逻辑单测覆盖映射大小写与递归、首个 assets 命中及成功/缺失缓存、遮蔽表。步骤 3 的真机 `realmCheck()` 由主会话后续执行；本次仅完成 TypeScript、Vitest、Prettier 与 development 构建检查。
+- 与点 2 的细化：`baseclasses.js` 按 `sceneAssets` 顺序尝试，全部失败才 reject 一次；`SyntaxError` 若已有 blob 行列栈，视为模块运行时抛错，不二次加载源码，避免副作用重复执行。
+- **主会话复核与真机验证（2026-11-04）**：`git status` 无越界、未写 `target/`；宿主 tsc 0 error、vitest 13 文件 185 项全过、Prettier 通过。主会话给 dev 探针加了可选参数 `realmCheck(extraSources?)`（额外求值几段测试源码，覆盖语法 / 链接错误的行列补拿），以 development 模式重建宿主后经 CDP 在主窗口预览宿主里跑（脚本与结果 `ignore/p3b/step3/`）：
+
+  | 场景 | 结果 |
+  | --- | --- |
+  | razer_vortex 12889 | 3 段求值成功（导出 `applyUserProperties`），import map 为空；额外源码：语法错误 → `Unexpected token ';' (line 3, col 11)`，顶层运行时错误 → `Cannot read properties of null (reading 'play') (line 2, col 6)`；遮蔽表 22 个名字为 `undefined`，`__TAURI_INTERNALS__` / `window` / `document` / `top` / `location` 仍为 `object`（预期）；`console.warn` 抛 `TypeError`；`Vec3` 在模块里为 `function`、不在全局对象上；用时 31 ms；释放后测试 frame 0 |
+  | razer_bedroom 12888（dev 强制渲染） | import map 只有 `"WEColor": "file:///…/assets/scripts/jsmodules/wecolor.js"`；6 段求值成功（导出 `update`）；额外源码：导入 `WEColor` 成功，导入不存在的导出名 → `The requested module 'WEColor' does not provide an export named 'nope' (line 1, col 10)`，导入不存在的模块 `WENope` → `Failed to resolve module specifier "WENope"…`；模块缓存首次读 1 个文件、再生成 map 读 0 个、命中 11 次；用时 46 ms；frame 0 |
+  | shimmering_particles 12892（dev 强制渲染） | `general/bloomstrength` 1 段求值成功（导出 `applyUserProperties`）；用时 13 ms；frame 0 |
+
+  - `WEVector` → `WEMath` 的递归补齐只有单测与步骤 0 探针覆盖：本机唯一用 `WEVector` 的是 1 段工坊脚本，其场景另有渲染阻塞，bundle 建不出来。
+  - 临时改动：强制渲染标志（测前为 null）测完删除；预览依次切过 12889、12888、12892 后按 Esc 关闭，主窗口回到 `/gallery`，只剩原有的应用背景宿主。

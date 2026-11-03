@@ -44,7 +44,7 @@ function targetKey(target: ScriptTarget): string {
   }
 }
 
-function messageOf(error: unknown): string {
+export function messageOf(error: unknown): string {
   const object = error as { message?: unknown; stack?: unknown } | null;
   const message = typeof object?.message === "string" ? object.message : String(error);
   const stack = typeof object?.stack === "string" ? object.stack : "";
