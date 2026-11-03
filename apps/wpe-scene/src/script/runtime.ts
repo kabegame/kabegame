@@ -72,6 +72,8 @@ export class ScriptRuntime {
       enterScript?(script: SceneScript | null): void;
       /** API 层让 engine.userProperties 读到新全集。 */
       setProperties?(full: ReadonlyMap<string, UserProperty>): void;
+      /** 模块求值期间的 API 访问限制。 */
+      setModuleEvaluating?(evaluating: boolean): void;
     },
   ) {}
 
@@ -177,12 +179,15 @@ export class ScriptRuntime {
         continue;
       }
       try {
+        this.options.setModuleEvaluating?.(true);
         record.exports = await this.realm.importModule(record.script.source, record.script.id);
         record.state = "loaded";
         this.options.report.debug(`场景脚本 ${record.script.id} 导出：${Object.keys(record.exports).join(",")}`);
       } catch (error) {
         record.state = "failed";
         this.options.report.warn(`场景脚本 ${record.script.id} 求值失败：${messageOf(error)}`);
+      } finally {
+        this.options.setModuleEvaluating?.(false);
       }
     }
     for (const record of this.records) {

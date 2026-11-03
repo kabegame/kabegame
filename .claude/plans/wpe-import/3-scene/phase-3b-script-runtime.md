@@ -468,6 +468,9 @@ export interface SceneRendererOptions {
 7. **general 上的脚本里 `thisLayer` 是什么**：报告没有证据。**推荐** `null`（推断），开工时若官方文档有说法以文档为准。
 8. **语料求值放在哪里跑**：**推荐** 在真机 dev 宿主里经探针跑（点 10 的 `scriptCorpus`，与运行时同一套 realm 实现）；Node 里只做逻辑单测（`FakeRealm`），不在 Node 里模拟 realm（`vm.SourceTextModule` 要实验开关，且与 Chromium 的模块加载不同）。
 9. **`setInterval` 的周期补偿**：**推荐** 触发后「剩余时间 += 周期」（长期平均频率不漂，同 `FrameThrottle` 的固定节拍）；若一帧 dt 跨过多个周期，只触发一次、剩余时间对齐到下一周期（避免卡顿后连发）。属推断，WPE 实际行为未查。
+10. **有脚本的场景里，初始隐藏的图层要不要预建 GPU 资源**（步骤 4 复核时发现，步骤 5 接入前定）：3a 只给 `{user}` 绑了 `visible` 的图层预建资源（`visibleBound`），其余 `visible: false` 的图层不建。脚本能经 `thisScene.getLayer(…).visible = true` 显示任意图层，也有脚本直接挂在 `visible` 上（F：19 段）；不预建的话写入落在 `SceneState` 上、画面不出现。本机 dino_run 36 个对象里 25 个初始隐藏、1 个 `visible` 挂脚本（P6 样本），P3 的三张样本没有这种情况。**推荐**：`bundle.scripts.list` 非空时，全部图层按 `visibleBound` 处理（预建、`encode` 时按状态跳过），WPE 本来就给全部对象建资源；代价是隐藏图层的合成 RT 与管线占显存。
+11. **材质常量 owner 的 `thisObject` 暴露哪些名字**：步骤 4 只暴露「同一 pass 上挂了脚本的常量」（vortex 的 `colormode` 够用）。计划点 4 写的是「该 pass 的材质常量名」。**推荐**：步骤 5 改为暴露该 pass 全部带 `meta.material` 的 uniform（与 3a 绑定表同一来源），脚本读其它常量不再是 `undefined`。
+12. **`thisScene.getLayer(下标)` / `getLayerIndex` 的下标**：步骤 4 用 `bundle.layers` 的顺序。本机能渲染的场景对象全是图片、bundle 层数等于 `objects` 数（bedroom 18 = 18），两者一致；粒子、文本、声音对象进不了 bundle（它们所在的场景现在都退回预览图）。**推荐**：步骤 5 改为按 `scene.json` 的 `objects` 下标（与 WPE 的图层顺序一致），bundle 里没有的对象返回 null，留到 P4 / P6 补全。
 
 ## 后续
 
@@ -551,3 +554,16 @@ export interface SceneRendererOptions {
 
   - `WEVector` → `WEMath` 的递归补齐只有单测与步骤 0 探针覆盖：本机唯一用 `WEVector` 的是 1 段工坊脚本，其场景另有渲染阻塞，bundle 建不出来。
   - 临时改动：强制渲染标志（测前为 null）测完删除；预览依次切过 12889、12888、12892 后按 Esc 关闭，主窗口回到 `/gallery`，只剩原有的应用背景宿主。
+
+### 步骤 4 实施记录（2026-11-04）
+
+- 新增 `script/api.ts`：在脚本 realm 内创建 `engine`、`thisScene`、图层、材质常量、effect 与 general 对象；`thisLayer` / `thisObject` 为全局 getter，随 runtime 当前脚本切换。向量与数组用 realm 构造器创建；图层对象按 `objects` 下标缓存，重编译后仍是同一对象。状态通过注入的 bundle / `SceneState` 访问层读写；重编译目标通过注入的 `write` 回调交宿主，API 只抑制重复值并提供 `forgetRecompile` 供用户绑定覆盖后失效。步骤 5 尚未把这些回调接进正式宿主。
+- runtime 增加模块求值阶段通知；原有 `enterScript`、`setProperties` 与按帧计时器接口连接 API。`engine.userProperties` 从累计全集经 realm 的 `convertUserProperties` 转换，下一次 `setProperties` 才重建缓存，颜色保留 `Vec3`，也不丢其它键。
+- `realmCheck` 新增 `api` 结果：`topLevelFrametimeThrows`、`frametime`、`count`、`enumerated`、`firstName`、`vec3Instance`、`alphaBefore`、`alphaAfter`。它在独立 realm 中求值，图层写入仅修改从当前 bundle 新建的 `SceneState`；本次未连 CDP，真机返回值仍待步骤 5 之前的独立验收。
+- FakeRealm 单测覆盖 API 作用域、属性、图层查找及跨重编译身份、向量复制、角度、只读 size、四类 owner、材质 uniform 形状、泛光参数及未提供 API 的调用错误。官方 `IScene.getLayerIndex` 签名为 `String|ILayer`，同时支持两者；`getLayer` 未命中时官方文档未注明返回值，按计划返回 `null`。`general` 中无法从当前 `SceneGeneral` 读出的相机参数暂返回 `undefined`，写入仍交重编译回调；`bloomhdr*` 按现有 `BloomParams` 的实际字段（feather、scatter、iterations）提供。
+- 自检：宿主 TypeScript 0 error；Vitest 14 文件 189 项全过；development Vite build 成功，输出在 `ignore/p3b/build-check`；修改过的 TS 文件 Prettier `--check` 通过。正式宿主加载、渲染及真机行为仍属步骤 5。
+- **主会话复核与真机验证（2026-11-04，步骤 4）**：`git status` 无越界；宿主 tsc 0 error、vitest 14 文件 189 项全过、Prettier 通过。以 development 模式重建宿主后经 CDP 跑 `realmCheck()`（结果 `ignore/p3b/step3/api-*.json`）：
+  - razer_vortex：`topLevelFrametimeThrows: true`（模块求值期间读 `engine.frametime` 抛错），调用时 `frametime` 0.016；`getLayerCount()` 3、`enumerateLayers()` 3、`getLayer(0).name` 为 `vortex`；`origin instanceof Vec3` 为 true；`alpha` 写 0.25 后读回 0.25（只写探针自己的状态副本）；3 段求值成功，测试 frame 0。
+  - razer_bedroom（dev 强制渲染）：同上各项，层数 18、首层 `backgroundclear`；6 段求值成功。
+  - 临时改动：强制渲染标志测完删除；预览按 Esc 关闭，主窗口回到 `/gallery`。
+  - 复核时发现三处要在步骤 5 接入前定，见「待定」第 10–12 条。
