@@ -379,5 +379,11 @@
   "wpeClearStorage": "清空脚本存储",
   "wpeClearStorageConfirm": "脚本保存的数据（如记住的位置、计数）会被删除，脚本随后重新启动。确定清空吗？",
   "wpeClearStorageDone": "已清空脚本存储",
-  "wpeClearStorageFailed": "清空脚本存储失败"
+  "wpeClearStorageFailed": "清空脚本存储失败",
+  "wpeSetCover": "设为封面",
+  "wpeSetCoverDone": "已设为封面",
+  "wpeSetCoverFailed": "设为封面失败",
+  "wpeRestoreCover": "恢复默认封面",
+  "wpeRestoreCoverDone": "已恢复默认封面",
+  "wpeRestoreCoverFailed": "恢复默认封面失败"
 }

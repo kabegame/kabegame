@@ -702,6 +702,7 @@ interface LayerRuntime {
 - **`g_AudioSpectrum*` uniform**：随 W2 做，数据直接用点 0 宿主收到的同一帧。本机报这项的场景都另有 25 项以上阻塞，现在做解锁不了什么。
 - **网页壁纸暂停的计时器**：垫片只冻结 rAF、CSS 动画与媒体元素，靠 `setTimeout` / `setInterval` 驱动的页面还会动。遇到实际样本再看要不要包装计时器。
 - **建好 realm 后才退回的场景**：渲染失败时 realm 与音频订阅都保留，frame 不销毁，Hub 会继续采集到 iframe 消失。没有退订命令，影响小，先不处理。
+- **`model:solidlayer`**：本机 41 个场景里 17 个报这项，影响图层几何与尺寸（`p2-REPORT`），测试工程 `kbprops-test` 也是靠本地覆盖 `models/util/solidlayer.json` 才绕开（见「步骤 0.6 真机」）。放在 3c 之后单独做。
 
 ## 实施记录
 

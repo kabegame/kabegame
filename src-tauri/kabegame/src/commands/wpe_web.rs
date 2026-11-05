@@ -13,10 +13,13 @@
 use crate::wallpaper::wpe_scene_host;
 use crate::wallpaper::wpe_web_dir_index::WpeWebDirIndex;
 use crate::wpe_media::{WpeMediaHub, WpeMediaKind, WpeMediaMessage};
+use kabegame_core::app_paths::AppPaths;
+use kabegame_core::crawler::downloader::compress::{generate_wallpaper_cover, CoverCrop};
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::media::image_type::wpe_kind;
 use kabegame_core::settings::Settings;
-use kabegame_core::storage::Storage;
+use kabegame_core::storage::{ImageInfo, Storage};
+use kabegame_core::wpe::project::read_project;
 use kabegame_core::wpe::properties::{resolve_web_user_props, wpe_language_code};
 use kabegame_core::wpe::user_props::{
     apply_changes, list_directory_files, localize, normalize_value, parse_defs, user_file_grants,
@@ -76,6 +79,8 @@ pub struct WpeWebPropertyItem {
 pub struct WpeWebPropertiesView {
     pub image_id: String,
     pub metadata_id: Option<i64>,
+    /// 封面已换成截取的画面，面板据此显示「恢复默认封面」。
+    pub custom_cover: bool,
     pub items: Vec<WpeWebPropertyItem>,
 }
 
@@ -149,6 +154,8 @@ fn properties_view_for_language(
     WpeWebPropertiesView {
         image_id,
         metadata_id,
+        // 只有面板用得上，由 `get_wpe_web_properties` 按图片行填
+        custom_cover: false,
         items,
     }
 }
@@ -185,11 +192,10 @@ pub async fn get_wpe_web_properties(
     let raw = tauri::async_runtime::spawn_blocking(move || Storage::global().get_metadata(&id))
         .await
         .map_err(|e| e.to_string())??;
-    Ok(Some(properties_view(
-        image_id,
-        info.metadata_id,
-        &raw.unwrap_or_default(),
-    )))
+    Ok(Some(WpeWebPropertiesView {
+        custom_cover: is_custom_cover(&info.thumbnail_path, &AppPaths::global().thumbnails_dir()),
+        ..properties_view(image_id, info.metadata_id, &raw.unwrap_or_default())
+    }))
 }
 
 /// 属性面板写入 `{ key: 新值 | null }`（`null` = 恢复默认），返回保存后的视图。改写 metadata 后发
@@ -225,6 +231,89 @@ pub async fn set_wpe_web_user_properties(
 /// 带作者用户属性的 WPE 类型：网页与场景。
 fn has_user_properties(media_type: Option<&str>) -> bool {
     matches!(wpe_kind(media_type).as_deref(), Some("web" | "scene"))
+}
+
+const MAIN_WEBVIEW_LABEL: &str = "main";
+
+/// 封面是不是应用自己生成的：在 `thumbnails_dir` 里。作者的 `preview.*` 在壁纸目录，没有预览图时是目录本身。
+fn is_custom_cover(thumbnail_path: &str, thumbnails_dir: &Path) -> bool {
+    let thumbnail_path = thumbnail_path.trim();
+    !thumbnail_path.is_empty() && Path::new(thumbnail_path).starts_with(thumbnails_dir)
+}
+
+/// 恢复默认封面时的 `thumbnail_path`，与导入一致：作者预览图去掉 `\\?\`，没有时用 `local_path`
+/// （同 `add_image` 的兜底）。
+fn default_cover_path(preview: Option<&Path>, local_path: &str) -> String {
+    preview
+        .map(|path| {
+            path.to_string_lossy()
+                .trim_start_matches("\\\\?\\")
+                .to_string()
+        })
+        .unwrap_or_else(|| local_path.to_string())
+}
+
+fn find_wallpaper_with_cover(image_id: &str) -> Result<ImageInfo, String> {
+    let info = Storage::find_image_by_id(image_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("image not found")?;
+    if !has_user_properties(info.media_type.as_deref()) {
+        return Err("not a web or scene wallpaper".into());
+    }
+    Ok(info)
+}
+
+/// 换 `thumbnail_path` 并发字段补丁，返回新路径。旧封面按归属清理：只删 `thumbnails_dir` 里的文件，
+/// 作者的 `preview.*` 不动。场景的退回画面取的也是它，下次取壁纸目标时跟着变。
+async fn replace_cover(image_id: String, path: String) -> Result<String, String> {
+    let (id, target) = (image_id.clone(), path.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        Storage::global().replace_image_thumbnail_path(&id, &target)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    GlobalEmitter::global().emit_image_fields(
+        std::slice::from_ref(&image_id),
+        serde_json::json!({ "thumbnailPath": path }),
+    );
+    Ok(path)
+}
+
+/// 把预览画布当前的画面设为封面，返回新封面路径。`region` 是画布占主窗口内容区的比例：截整窗再裁，为什么不用
+/// `clip` 见 [`tauri_runtime_kbcef::capture_screenshot`]。在浏览器层截图，网页和场景走同一条路：`file:` iframe 跨源，
+/// 应用页读不到它的像素。暂停时截到的就是停住的那一帧。按钮只在画面确定实时渲染时显示，这里不再校验。
+/// 只给应用页（不进 `wpe-web.toml`）。
+#[tauri::command]
+pub async fn capture_wallpaper_cover(
+    image_id: String,
+    region: CoverCrop,
+) -> Result<String, String> {
+    find_wallpaper_with_cover(&image_id)?;
+    let screenshot = tauri_runtime_kbcef::capture_screenshot(MAIN_WEBVIEW_LABEL).await?;
+    let cover = generate_wallpaper_cover(&screenshot, region).await?;
+    replace_cover(image_id, cover.to_string_lossy().into_owned())
+        .await
+        .inspect_err(|_| {
+            // 没换上的封面没有行引用它，留着就成了孤儿文件
+            let _ = std::fs::remove_file(&cover);
+        })
+}
+
+/// 恢复作者的预览图，返回恢复后的路径。`project.json` 读不了时（目录被移走）按没有预览图处理。
+/// 只给应用页（不进 `wpe-web.toml`）。
+#[tauri::command]
+pub async fn restore_wallpaper_cover(image_id: String) -> Result<String, String> {
+    let info = find_wallpaper_with_cover(&image_id)?;
+    let dir = info.local_path.clone();
+    let preview = tauri::async_runtime::spawn_blocking(move || {
+        read_project(Path::new(&dir))
+            .ok()
+            .and_then(|project| project.preview_path())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let path = default_cover_path(preview.as_deref(), &info.local_path);
+    replace_cover(image_id, path).await
 }
 
 fn path_for_page(path: &Path) -> String {
@@ -425,6 +514,53 @@ mod tests {
     use std::str::FromStr;
     use tauri::utils::acl::RemoteUrlPattern;
     use url::Url;
+
+    /// 自定义封面在 `thumbnails_dir` 里；作者预览图、目录兜底、前缀相同的别的目录都不算。
+    #[test]
+    fn custom_cover_means_inside_thumbnails_dir() {
+        use super::is_custom_cover;
+        use std::path::Path;
+        let dir = Path::new("/data/thumbnails");
+        assert!(is_custom_cover("/data/thumbnails/a.jpg", dir));
+        assert!(!is_custom_cover("/steam/431960/1/preview.jpg", dir));
+        assert!(!is_custom_cover("/steam/431960/1", dir));
+        assert!(!is_custom_cover("/data/thumbnails-old/a.jpg", dir));
+        assert!(!is_custom_cover("  ", dir));
+    }
+
+    /// 恢复默认封面：有预览图取预览图（去掉 `\\?\`），没有时取 `local_path`。
+    #[test]
+    fn default_cover_prefers_the_author_preview() {
+        use super::default_cover_path;
+        use std::path::Path;
+        assert_eq!(
+            default_cover_path(Some(Path::new(r"\\?\D:\wpe\1\preview.jpg")), r"D:\wpe\1"),
+            r"D:\wpe\1\preview.jpg"
+        );
+        assert_eq!(
+            default_cover_path(Some(Path::new(r"D:\wpe\1\preview.gif")), r"D:\wpe\1"),
+            r"D:\wpe\1\preview.gif"
+        );
+        assert_eq!(default_cover_path(None, r"D:\wpe\1"), r"D:\wpe\1");
+    }
+
+    /// 面板传来的形状：画布占窗口内容区的比例。
+    #[test]
+    fn cover_region_uses_the_panel_shape() {
+        use kabegame_core::crawler::downloader::compress::CoverCrop;
+        assert_eq!(
+            serde_json::from_value::<CoverCrop>(serde_json::json!({
+                "x": 0.25, "y": 0.5, "width": 0.5, "height": 0.25
+            }))
+            .unwrap(),
+            CoverCrop {
+                x: 0.25,
+                y: 0.5,
+                width: 0.5,
+                height: 0.25
+            }
+        );
+    }
 
     /// 音频订阅只认显式 `general.supportsaudioprocessing: true`。
     #[test]

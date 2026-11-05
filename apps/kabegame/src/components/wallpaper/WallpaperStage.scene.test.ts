@@ -156,6 +156,7 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     expect(sceneLayer(wrapper).classList.contains("visible")).toBe(true);
     expect(wrapper.find(".wallpaper-scene-live").classes()).toContain("live");
     expect(previewImg(wrapper).exists()).toBe(false);
+    expect(wrapper.emitted("sceneLive")).toEqual([[true]]);
   });
 
   it("不能渲染：这时才挂预览图，加载完才发 ready；fallback 不是错误，原因记进调试快照", async () => {
@@ -170,6 +171,7 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     loadPreview(wrapper);
     await settle();
     expect(wrapper.emitted("ready")).toHaveLength(1);
+    expect(wrapper.emitted("sceneLive")).toBeUndefined();
     expect(wrapper.emitted("error")).toBeUndefined();
     expect(debugOf(wrapper).media).toBe("scene");
     expect(debugOf(wrapper).sceneFallback).toBe("object:particle; effect:scroll");
@@ -184,6 +186,7 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     expect(wrapper.find(".wallpaper-scene-live").classes()).toContain("live");
     expect(debugOf(wrapper).sceneFallback).toBe("");
     expect(wrapper.emitted("ready")).toHaveLength(1);
+    expect(wrapper.emitted("sceneLive")).toEqual([[true]]);
   });
 
   it("迟迟没有结果：超时按退回显示预览图并发 ready，迟到的首帧照样切成实时画面", async () => {

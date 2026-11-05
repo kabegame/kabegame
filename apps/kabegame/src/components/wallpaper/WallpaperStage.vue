@@ -79,7 +79,7 @@ const props = withDefaults(defineProps<Props>(), {
   interactive: false,
 });
 
-const emit = defineEmits<{ error: [message: string]; ready: [] }>();
+const emit = defineEmits<{ error: [message: string]; ready: []; sceneLive: [live: boolean] }>();
 
 // 模板 ref：只在 onMounted 时读取一次
 const rootRef = ref<HTMLElement | null>(null);
@@ -191,6 +191,8 @@ const sceneMountKey = ref(0);
 const scenePreviewSrc = ref("");
 /** 首帧已出：画布可见（盖住可能已显示的预览图）；退回时置 false 露出预览图。 */
 const sceneLive = ref(false);
+// `ready` 在退回预览图时也发，分不清实时与退回；要确定画面是实时的看这个
+watch(sceneLive, (live) => emit("sceneLive", live));
 /** 垫片第一次请求音量后，场景宿主接管桌面 ping。 */
 let sceneAlive = false;
 let sceneToken = 0;

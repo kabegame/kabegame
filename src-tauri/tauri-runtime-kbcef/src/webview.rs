@@ -8,12 +8,14 @@ mod imp {
         path::PathBuf,
         rc::Rc,
         sync::{
+            atomic::{AtomicI32, Ordering},
             mpsc::{channel, RecvTimeoutError, Sender},
             Arc, Mutex,
         },
         time::Duration,
     };
 
+    use base64::Engine as _;
     use cef::{self, *};
     use tauri_runtime::{
         dpi::{PhysicalPosition, PhysicalSize, Rect as RuntimeRect, Size},
@@ -25,6 +27,7 @@ mod imp {
         Cookie, Error, Result, UserEvent, WebviewDispatch, WebviewEventId,
     };
     use tauri_utils::config::Color;
+    use tokio::sync::oneshot;
     use url::Url;
 
     use crate::{ipc, protocol, runtime, Cef};
@@ -105,6 +108,144 @@ mod imp {
         }
         rx.recv_timeout(Duration::from_secs(2))
             .map_err(|_| "CEF start_download timed out".to_string())?
+    }
+
+    /// 截图的超时：覆盖 UI 线程排队、合成一帧、编码与回传。
+    const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// 截图的 DevTools 消息 id。CEF 要求同一 browser 上递增，比上一个小的 id 会被它改写；这里是唯一用
+    /// `ExecuteDevToolsMethod` 的地方，在 UI 线程上取号、紧接着发出，进程级递增一定满足。不传 0 让 CEF 分配：
+    /// 参数校验失败的回包可能在调用返回之前就同步回调，observer 必须在调用之前就知道自己等哪个 id。
+    static NEXT_CAPTURE_MESSAGE_ID: AtomicI32 = AtomicI32::new(1);
+
+    /// CDP 回包（是否成功 + result / error 对象的 JSON），或没能发出调用的原因。
+    type CaptureBody = std::result::Result<(bool, Vec<u8>), String>;
+    type CaptureReply = Arc<Mutex<Option<oneshot::Sender<CaptureBody>>>>;
+
+    fn send_capture_reply(reply: &CaptureReply, body: CaptureBody) {
+        if let Some(sender) = reply.lock().ok().and_then(|mut slot| slot.take()) {
+            let _ = sender.send(body);
+        }
+    }
+
+    wrap_dev_tools_message_observer! {
+        struct CaptureObserver {
+            message_id: i32,
+            reply: CaptureReply,
+        }
+
+        impl DevToolsMessageObserver {
+            fn on_dev_tools_method_result(
+                &self,
+                _browser: Option<&mut Browser>,
+                message_id: ::std::os::raw::c_int,
+                success: ::std::os::raw::c_int,
+                result: Option<&[u8]>,
+            ) {
+                if message_id != self.message_id {
+                    return;
+                }
+                // 回包有几 MB：这里只拷贝，解析放到等待方，不占 UI 线程。
+                let body = result.unwrap_or_default().to_vec();
+                send_capture_reply(&self.reply, Ok((success != 0, body)));
+            }
+        }
+    }
+
+    /// `Page.captureScreenshot` 的参数。质量留足，封面还要再裁剪缩放、编码一次。
+    fn capture_params() -> Option<DictionaryValue> {
+        let params = dictionary_value_create()?;
+        params.set_string(
+            Some(&CefString::from("format")),
+            Some(&CefString::from("jpeg")),
+        );
+        params.set_int(Some(&CefString::from("quality")), 95);
+        params.set_bool(Some(&CefString::from("optimizeForSpeed")), 1);
+        Some(params)
+    }
+
+    /// 挂上 observer 并发出调用，必须在 CEF UI 线程上。返回的注册释放时 observer 摘除。
+    fn begin_capture(
+        label: &str,
+        reply: &CaptureReply,
+    ) -> std::result::Result<Registration, String> {
+        let browser_id = webview_browser_ids()
+            .lock()
+            .ok()
+            .and_then(|map| map.get(label).copied())
+            .ok_or_else(|| format!("CEF webview not found: {label}"))?;
+        let browser = browser_host_get_browser_by_identifier(browser_id)
+            .ok_or_else(|| format!("CEF browser not found: {label}"))?;
+        let host = browser
+            .host()
+            .ok_or_else(|| format!("CEF browser host not found: {label}"))?;
+        let mut params = capture_params().ok_or("CEF failed to create capture params")?;
+        let message_id = NEXT_CAPTURE_MESSAGE_ID.fetch_add(1, Ordering::Relaxed);
+        let mut observer = CaptureObserver::new(message_id, reply.clone());
+        let registration = host
+            .add_dev_tools_message_observer(Some(&mut observer))
+            .ok_or("CEF failed to add DevTools observer")?;
+        let method = CefString::from("Page.captureScreenshot");
+        if host.execute_dev_tools_method(message_id, Some(&method), Some(&mut params)) != message_id
+        {
+            return Err("CEF failed to execute Page.captureScreenshot".to_string());
+        }
+        Ok(registration)
+    }
+
+    /// 解析 `Page.captureScreenshot` 的回包：成功时是 `{ "data": "<base64>" }`，失败时是 CDP 错误对象。
+    pub(crate) fn decode_capture_result(
+        success: bool,
+        body: &[u8],
+    ) -> std::result::Result<Vec<u8>, String> {
+        let value: serde_json::Value = serde_json::from_slice(body)
+            .map_err(|error| format!("Invalid Page.captureScreenshot result: {error}"))?;
+        if !success {
+            let message = value.get("message").and_then(|message| message.as_str());
+            return Err(format!(
+                "Page.captureScreenshot failed: {}",
+                message.unwrap_or("unknown error")
+            ));
+        }
+        let data = value
+            .get("data")
+            .and_then(|data| data.as_str())
+            .ok_or("Page.captureScreenshot result has no data")?;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|error| format!("Invalid Page.captureScreenshot data: {error}"))
+    }
+
+    /// 经 CEF 的 `ExecuteDevToolsMethod` 截 webview 的内容，不需要 DevTools 前端或远程调试端口。
+    pub(crate) async fn capture_screenshot(
+        webview_label: &str,
+    ) -> std::result::Result<Vec<u8>, String> {
+        let label = webview_label.to_string();
+        let (tx, rx) = oneshot::channel();
+        let reply: CaptureReply = Arc::new(Mutex::new(Some(tx)));
+        // 注册由等待方持有到返回，超时也一样；最后一个引用释放时 observer 摘除。
+        // CEF 的注册对象是 DELETE_ON_UIT，在哪个线程释放都行。
+        let registration = Arc::new(Mutex::new(None::<Registration>));
+        let slot = registration.clone();
+        let begin: CefUiTaskCallback = Box::new(move || match begin_capture(&label, &reply) {
+            Ok(observing) => {
+                if let Ok(mut slot) = slot.lock() {
+                    *slot = Some(observing);
+                }
+            }
+            Err(error) => send_capture_reply(&reply, Err(error)),
+        });
+        let mut task = CefUiTask::new(Arc::new(Mutex::new(Some(begin))));
+        if cef::post_task(ThreadId::UI, Some(&mut task)) == 0 {
+            return Err("CEF failed to post capture_screenshot task".to_string());
+        }
+        drop(task);
+        let outcome = tokio::time::timeout(CAPTURE_TIMEOUT, rx).await;
+        drop(registration);
+        let (success, body) = outcome
+            .map_err(|_| "CEF capture_screenshot timed out".to_string())?
+            .map_err(|_| "CEF capture_screenshot reply dropped".to_string())??;
+        decode_capture_result(success, &body)
     }
 
     /// 经 `CefBrowserHost::SendMouse*Event` 向某个 webview 注入鼠标事件。
@@ -1749,3 +1890,36 @@ mod imp {
 }
 
 pub use imp::*;
+
+#[cfg(test)]
+mod tests {
+    use super::decode_capture_result;
+
+    #[test]
+    fn capture_result_decodes_base64_data() {
+        assert_eq!(
+            decode_capture_result(true, br#"{"data":"/9j/"}"#).unwrap(),
+            vec![0xff, 0xd8, 0xff]
+        );
+    }
+
+    #[test]
+    fn capture_failure_reports_the_cdp_message() {
+        let error = decode_capture_result(
+            false,
+            br#"{"code":-32000,"message":"Cannot take screenshot with 0 width."}"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot take screenshot with 0 width."),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn capture_result_without_usable_data_is_an_error() {
+        assert!(decode_capture_result(true, b"{}").is_err());
+        assert!(decode_capture_result(true, b"").is_err());
+        assert!(decode_capture_result(true, br#"{"data":"***"}"#).is_err());
+    }
+}

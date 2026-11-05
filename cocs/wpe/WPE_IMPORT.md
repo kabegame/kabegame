@@ -507,6 +507,15 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 `file` 与 `directory` 仅使用用户所选路径；无作者默认值时清空路径会删除该用户键，垫片向页面补发空路径以撤销旧值。core 生成文件 / 目录放行项（`user_file_grants`），网页壁纸目录索引按这张壁纸当前的 metadata **覆盖**它的放行（`metadataId` 补丁到达时、`wpe_web_pull_state` 返回前各写一次，见上「网页壁纸目录索引」）：改了目录属性，旧目录立即不可读；另一张网页壁纸读不到这张的用户选择。预览与桌面共用这套闸门。目录属性递归列举浏览器安全的媒体文件，最多 10000 个；垫片对 `fetchall` 发送文件增删回调，对 `ondemand` 随机返回一个文件。
 
+### 封面
+
+WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的退回画面（`previewPath`）也取它。预览详情栏的属性面板可以把当前画面设为封面：`capture_wallpaper_cover(imageId, region)` 截主窗口，按 `region`（画布占窗口内容区的比例）裁出画布，缩到最长边不超过 1920，写进 `thumbnails_dir`，再经 `replace_image_thumbnail_path` 换行并发 `thumbnailPath` 补丁。暂停时截到的就是停住的那一帧。设置页的属性弹窗没有封面按钮。
+
+- **截整窗再裁，不用 CDP 的 `clip`**：`clip` 靠临时改视口实现，这次改动画在屏幕正在显示的表面上，整个窗口跳变约 150 ms，`scale: 1` 也一样；宿主和页面收不到尺寸事件，只看 `stats()` 发现不了。代价是封面分辨率等于画布的屏幕像素（窗口 1200 CSS 宽、缩放 150% 时约 1071 宽）。对 iframe target 截图也不行，Chromium 只认顶层（`Command can only be executed on top-level targets`）。
+- **按钮只在画面确定实时渲染时显示**：场景看 `WallpaperStage` 的 `sceneLive`（出了首帧才为真，退回预览图时为假），网页壁纸看 `ready`，由 `ImagePreviewDialog` 经 `coverReady` 传给面板。`ready` 在退回时也发，不能用来判断。后端不记实时状态，也不校验。恢复不受影响：退回预览图的场景也能恢复。
+- **截图前的等待**（`WallpaperDesktopCanvas.withCaptureRegion`）：盖在画布上的 UI 会截进去，先在 `<html>` 加 `data-kb-cover-capture` 隐藏看板娘，`finally` 里恢复；壁纸层出画面后还要淡入，这时截到的是黑底，所以再等画布里的 `CSSTransition` 结束（只等过渡：页面里可能有循环动画）。窗口被完全遮挡时 `visibilityState` 不是 `visible`，矩形即使量得出来，截到的也是残缺的画面，所以报错不截。
+- **文件归属**：删除只碰 `thumbnails_dir` 里的文件，作者的 `preview.*` 不动。换封面、删图时旧封面随之清掉；「恢复默认封面」读 `project.json` 的预览图，没有时回到 `local_path`（同 `add_image` 的兜底）。`get_wpe_web_properties` 的 `customCover` 表示封面在 `thumbnails_dir` 里。重新导入跳过已有行，封面保留。
+
 ### 音频与媒体集成（第二阶段 Phase 8）
 
 WPE 的音频与媒体数据是「页面登记、宿主推送」：页面调 `wallpaperRegisterAudioListener` / `wallpaperRegisterMedia*Listener`

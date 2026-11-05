@@ -72,6 +72,7 @@
         :interactive="interactive"
         @ready="onWallpaperReady"
         @error="onWallpaperError"
+        @scene-live="emit('sceneLive', $event)"
       />
 
       <!-- 视频 -->
@@ -286,6 +287,7 @@ const emit = defineEmits<{
   ready: [];
   error: [];
   videoPlayFail: [];
+  sceneLive: [live: boolean];
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());

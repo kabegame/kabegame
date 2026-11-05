@@ -378,5 +378,11 @@
   "wpeClearStorage": "스크립트 저장소 비우기",
   "wpeClearStorageConfirm": "스크립트가 저장한 데이터(기억한 위치, 카운트 등)가 삭제되고 스크립트가 다시 시작됩니다. 계속할까요?",
   "wpeClearStorageDone": "스크립트 저장소를 비웠습니다",
-  "wpeClearStorageFailed": "스크립트 저장소를 비우지 못했습니다"
+  "wpeClearStorageFailed": "스크립트 저장소를 비우지 못했습니다",
+  "wpeSetCover": "표지로 설정",
+  "wpeSetCoverDone": "표지로 설정했습니다",
+  "wpeSetCoverFailed": "표지를 설정하지 못했습니다",
+  "wpeRestoreCover": "기본 표지로 복원",
+  "wpeRestoreCoverDone": "기본 표지로 복원했습니다",
+  "wpeRestoreCoverFailed": "기본 표지로 복원하지 못했습니다"
 }

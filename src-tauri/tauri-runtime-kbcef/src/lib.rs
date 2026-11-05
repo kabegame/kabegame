@@ -124,6 +124,18 @@ pub fn inject_mouse(webview_label: &str, input: MouseInjection) -> Result<(), St
     webview::inject_mouse(webview_label, input)
 }
 
+// ---- 截图 ----
+
+/// 截 `webview_label` 的整个内容区，返回 JPEG 字节。合成器的输出里 WebGPU 画布与跨源 iframe 都已画好。
+///
+/// 走 CEF 的 `ExecuteDevToolsMethod`，不依赖远程调试端口；在 tokio 运行时里调用，10 s 超时。
+///
+/// 故意不提供 CDP 的 `clip`：Chromium 靠临时改视口实现它，而这次改动就画在屏幕正在显示的表面上，整个窗口会跳变
+/// 约 150 ms，`scale: 1` 也一样。要局部就截整窗后自己裁。CDP 也不接受对 iframe target 截图（只认顶层）。
+pub async fn capture_screenshot(webview_label: &str) -> Result<Vec<u8>, String> {
+    webview::capture_screenshot(webview_label).await
+}
+
 /// CEF 驱动的 Tauri runtime。
 ///
 /// 桌面应用通过 `tauri::Builder::<Cef<EventLoopMessage>>::new()` 选择这个

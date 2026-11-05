@@ -378,5 +378,11 @@
   "wpeClearStorage": "スクリプトの保存データを消去",
   "wpeClearStorageConfirm": "スクリプトが保存したデータ（記憶した位置やカウントなど）を削除し、スクリプトを再起動します。よろしいですか？",
   "wpeClearStorageDone": "スクリプトの保存データを消去しました",
-  "wpeClearStorageFailed": "スクリプトの保存データを消去できませんでした"
+  "wpeClearStorageFailed": "スクリプトの保存データを消去できませんでした",
+  "wpeSetCover": "カバーに設定",
+  "wpeSetCoverDone": "カバーに設定しました",
+  "wpeSetCoverFailed": "カバーを設定できませんでした",
+  "wpeRestoreCover": "既定のカバーに戻す",
+  "wpeRestoreCoverDone": "既定のカバーに戻しました",
+  "wpeRestoreCoverFailed": "既定のカバーに戻せませんでした"
 }

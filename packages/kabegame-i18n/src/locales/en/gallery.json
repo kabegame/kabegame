@@ -376,5 +376,11 @@
   "wpeClearStorage": "Clear Script Storage",
   "wpeClearStorageConfirm": "Data saved by the wallpaper's scripts (such as remembered positions or counters) will be deleted, and the scripts will restart. Continue?",
   "wpeClearStorageDone": "Script storage cleared",
-  "wpeClearStorageFailed": "Failed to clear script storage"
+  "wpeClearStorageFailed": "Failed to clear script storage",
+  "wpeSetCover": "Set as Cover",
+  "wpeSetCoverDone": "Cover updated",
+  "wpeSetCoverFailed": "Failed to set cover",
+  "wpeRestoreCover": "Restore Default Cover",
+  "wpeRestoreCoverDone": "Default cover restored",
+  "wpeRestoreCoverFailed": "Failed to restore default cover"
 }

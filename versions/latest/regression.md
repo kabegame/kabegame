@@ -1,5 +1,29 @@
 # v4.7.0 regression
 
+## 壁纸封面截取
+
+2026-11-05 Windows dev。网页与场景壁纸可在预览的属性面板把当前画面设为封面，封面写进 `thumbnails_dir`，换掉 `thumbnail_path`，作者的 `preview.*` 不动，可恢复。截主窗口整窗再裁出画布。C7–C10、C14、C17 是去掉 `clip` 之前测的，写入路径没变，没有重测。脚本与截图在 `ignore/p3c/cover-test/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | C1 预览 · 场景 | Windows dev，Beach 12880 | 预览里点「设为封面」 | 网格缩略图立即换新图、不整页刷新；封面在 `thumbnails_dir`，等于画布的屏幕像素，没有看板娘和留白，与画面一致；看板娘恢复；`customCover` 为 true，出现「恢复默认封面」 | 2026-11-05：点击到行更新 243 ms，封面 1070×602（窗口 1200 CSS 宽、缩放 150%），约 145 KB，无看板娘和留白，看板娘属性已移除。上一轮在 clip 路径上确认过网格只打补丁、不整页刷新，写入路径没变 |
+| [x] | C2 预览 · 网页 | Windows dev，12100 | 同 C1 | 跨源 iframe 的内容截到 | 2026-11-05：159 ms，1070×602 |
+| [x] | C3 暂停取帧 | Windows dev，Deep Space 12881 预览 | 暂停 → 连设两次封面 → 恢复默认 → 取消暂停 | 封面就是停住的那一帧；恢复后接着动 | 2026-11-05：时钟停在 1.565，两张封面逐像素差 0.018；取消暂停后时钟走到 3.069 |
+| [x] | C5 退回场景 | Windows dev，13110 | 预览，连续采样按钮 | 没有「设为封面」，暂停开关还在 | 2026-11-05：12 s 采样 116 次，按钮一次都没出现，控制卡片在。后端不再校验实时状态，只靠按钮 |
+| [x] | C7 恢复默认封面 | Windows dev，12888 / 12889 / 12097 / 13114 | 点「恢复默认封面」 | 回到作者 `preview.*`，作者文件还在，自定义文件已删除，`customCover` false | 2026-11-05：四张都符合，`preview.*` 大小不变；13114 没有预览图，回到目录本身；退回目标跟着回到 `preview.gif` |
+| [x] | C8 重复与清理 | Windows dev，12888 | 连续设两次；再快速双击一次 | 旧文件被删除，只多一个 | 2026-11-05：两次后 `thumbnails_dir` 数量不变（一增一删）；双击只截一次 |
+| [x] | C9 删除记录 | Windows dev，副本 `cover-test/kbprops-del`，13116 | 设封面后 `batch_delete_images` | 封面文件被删除，副本目录里的 `preview.*` 还在 | 2026-11-05：行和封面文件都没了；`preview.jpg` md5 不变，目录内容不变。`kbprops-noaudio` 没有预览图，这里用它的副本加了 `preview.jpg` |
+| [x] | C10 重新导入 | Windows dev，13114 | 设封面后再导入一次 `ignore/p3c/kbprops-test` | 封面保留 | 2026-11-05：`thumbnail_path` 不变，文件还在，行数 49 → 49，其它行不变；测后恢复 |
+| [x] | C11 截取过程 · 宿主 | Windows dev，12880 | 截取前后比宿主状态 | `recompiled` 不变，`kbInstance` 不变，不重新加载 | 2026-11-05：`recompiled` 与 `kbInstance` 都不变 |
+| [x] | C12 截取过程 · 屏幕 | Windows dev，12880 / 12100，屏幕采帧约 32 fps | 真实鼠标事件点击，检测每帧与前后 12 帧中位图的差 | 屏幕上不跳变 | 2026-11-05：场景最高分 1.05，网页 2.53，都没有过阈值 6。对照：`clip` 跳变约 120，空闲最高 7.1。预览闪的是 `clip` 的视口模拟，`scale: 1` 也一样，所以截整窗后在 Rust 里裁，封面分辨率降到画布的屏幕像素 |
+| [~] | C13 DevTools 客户端常驻 | Windows dev | 首次截取前后比 rAF、宿主 `frameMs` | 没有变化 | 2026-11-05：主窗口缺截取前基线，之后 rAF 141.9 → 144.0，宿主 144 fps，`frameMs` 0.25 → 0.34；同一时刻壁纸窗口宿主 0.33，不像常驻客户端造成的；网格与预览行为没看到变化 |
+| [x] | C14 合并回归 | Windows dev | 预览暂停恢复一次；清空 13114 存储一次；看画廊角标 | 均正常 | 2026-11-05：暂停恢复见 C3；清空后键从 2 回到 1，脚本重启，`recompiled` 记 `clear-storage`；「WPE · 场景」角标 36 / 36 |
+| [x] | C15 窗口完全遮挡 | Windows dev，12100，主窗口被完全遮挡（`hidden`） | 打开过一次预览后再打开，点「设为封面」 | 报错，不截 | 2026-11-05：提示「wallpaper canvas is not visible」，封面不变，`thumbnails_dir` 无变化。修复前第二次打开能量到矩形，会存下一张残缺的封面 |
+| [x] | C16 预览刚打开就点 | Windows dev，12881 第二次预览 | 按钮一出现就点 | 封面是实时画面 | 2026-11-05：按钮 385 ms 出现，点击到行更新 1012 ms，封面是实时画面。按钮只在 `sceneLive` 为真时显示；图层还要淡入 800 ms，第一次复测在这段时间截到黑底，所以截图前等画布里的 CSS 过渡结束 |
+| [~] | C17 退回画面显示新封面 | Windows dev，12889 / 13114 | 设封面后取壁纸目标 | `previewPath` 跟着变 | 2026-11-05：字段跟随，恢复后也跟回来。没有实际触发能渲染的场景走退回 |
+| [ ] | C18 关闭调试端口 | 打包版 | 没有远程调试端口时设为封面 | 截取照常工作 | dev 下做不了，要在打包版上手动确认 |
+| [x] | C19 设置页 | Windows dev，桌面 12888（有自定义封面） | 设置 → 壁纸 → 打开壁纸属性 | 没有「设为封面」和「恢复默认封面」，暂停与清空脚本存储还在 | 2026-11-05：符合 |
+
 ## 场景壁纸 P3c：脚本环境、音频与运行时渲染图（进行中）
 
 2026-11-05 Windows dev。脚本环境不再遮蔽浏览器全局，只把 `console` 和 `localStorage` 改写成 WPE 的形状；WPE `localStorage` 存进浏览器存储，按图片 id 与位置加前缀隔离。`engine.registerAudioBuffers` 接上 Phase 8 的 `WpeMediaHub`。
@@ -649,11 +673,10 @@ CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁�
 | [x] | B3 畅游 https | Windows CEF dev | 打开 `https://example.com/`，调用注入命令、尝试 `read_plugin_file`，再插入 `no-referrer` meta | 主通道 200，受限命令被 ACL 拒绝，`no-referrer` 下正常 | 2026-10-30：刷新后 `surf_collect_attach`、`surf_report_url`、`get_webview_i18n` 都是 `POST ipc://localhost/…` 200；`read_plugin_file` 报 `not allowed by ACL`；插 `no-referrer` meta 后 invoke 仍正常 |
 | [x] | B4 严格 CSP 与 raw body | Windows CEF dev | 畅游 x.com 并下载视频 | 无 `connect-src` 违规和回落，`crawl_fs_fwrite` 是 raw body | 2026-10-30（`https://x.com/home`，已登录）：刷新后没有 `connect-src` 违规日志和「IPC custom protocol failed」回落警告，注入脚本三个命令都走 `ipc://localhost` 200；`read_plugin_file` 被 ACL 拒绝。未实际下载视频：改为以 `Uint8Array` 作 invoke 参数，请求为 `ipc://localhost/…`、`Content-Type: application/octet-stream`、200，即 raw body 走主通道（修复前 x.com 上主通道被 CSP 拦，只能回落 `cef-ipc` JSON） |
 | [x] | B5 frame 隔离 | Windows CEF dev | 检查导航栏、图库预览 iframe、插件详情 iframe | opaque iframe 无 invoke key，不能调用 IPC | 2026-10-30：主窗口临时插入 `sandbox="allow-scripts"`、内层 `connect-src 'none'` 的 srcdoc iframe（测完移除）：`__TAURI_INTERNALS__` 为 `undefined`；`fetch(ipc://localhost/get_plugins)` 绕过 CSP 到达 handler，返回 500 `missing Tauri-Invoke-Key header`；`cef-ipc://` 返回 400 `only accepted from the main frame`。导航栏随畅游会话正常工作 |
-| [ ] | C1 正式版应用页 | Windows CEF release | 打开主窗口并调用本地命令 | 地址 `tauri://localhost/`，页面、JS 模块和 IPC 正常 | 需用户在隔离环境执行：release 版使用真实数据目录与正式版 CEF profile，本分支带 v047 / v048 数据库迁移，在用户真实数据上运行会升级其数据库。C1–C5 同此 |
-| [ ] | C2 壁纸窗口导航 | Windows CEF release | 切到网页壁纸再切回 | 应用页 `tauri://localhost/index.html?window=wallpaper` 正常恢复 | |
-| [ ] | C3 本地文件 | Windows CEF release | 查看图库媒体、`fetch(file:)` 复制、WPE iframe、拖出 | 文件加载、复制和拖出正常 | |
-| [ ] | C4 远程图片 | Windows CEF release | 查看插件商店图标与详情模板的 `http://` 图片 | 记录与 macOS / Linux 相同的混合内容表现 | |
-| [ ] | C5 用户数据 | Windows CEF release | 升级后查看界面偏好与后端数据 | 界面偏好恢复默认，后端设置与图库保留 | |
+| [x] | C1 预览 · 场景 | Windows dev，Beach 12880 | 预览里点「设为封面」 | 网格缩略图立即换新图、不整页刷新；封面在 `thumbnails_dir`，等于画布的屏幕像素，没有看板娘和留白，与画面一致；看板娘恢复；`customCover` 为 true，出现「恢复默认封面」 | 2026-11-05：点击到行更新 243 ms，封面 1070×602（窗口 1200 CSS 宽、缩放 150%），约 145 KB，无看板娘和留白，看板娘属性已移除。上一轮在 clip 路径上确认过网格只打补丁、不整页刷新，写入路径没变 |
+| [x] | C2 预览 · 网页 | Windows dev，12100 | 同 C1 | 跨源 iframe 的内容截到 | 2026-11-05：159 ms，1070×602 |
+| [x] | C3 暂停取帧 | Windows dev，Deep Space 12881 预览 | 暂停 → 连设两次封面 → 恢复默认 → 取消暂停 | 封面就是停住的那一帧；恢复后接着动 | 2026-11-05：时钟停在 1.565，两张封面逐像素差 0.018；取消暂停后时钟走到 3.069 |
+| [x] | C5 退回场景 | Windows dev，13110 | 预览，连续采样按钮 | 没有「设为封面」，暂停开关还在 | 2026-11-05：12 s 采样 116 次，按钮一次都没出现，控制卡片在。后端不再校验实时状态，只靠按钮 |
 | [ ] | D1 桌面其它平台 | macOS / Linux CEF | 冒烟主窗口、畅游、壁纸 | 原有功能正常 | |
 | [ ] | D2 Android | Android 真机 | 主界面与畅游的 Channel 数据 | 正常 | |
 

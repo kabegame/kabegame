@@ -8923,6 +8923,7 @@ name = "tauri-runtime-kbcef"
 version = "0.1.0"
 dependencies = [
  "ash",
+ "base64 0.22.1",
  "cef",
  "cookie",
  "gtk",
@@ -8937,6 +8938,7 @@ dependencies = [
  "tao 0.35.3",
  "tauri-runtime",
  "tauri-utils",
+ "tokio",
  "tracing",
  "url",
  "windows 0.62.2",

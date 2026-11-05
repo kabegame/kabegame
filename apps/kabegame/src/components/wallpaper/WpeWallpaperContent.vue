@@ -7,6 +7,7 @@
  * - 样式 / 过渡 / 音量 / 倍速跟随壁纸设置（主窗口已加载 settings，这里不 loadAll）；样式对网页与场景都不生效。
  *   音量对网页壁纸同样生效（Stage 经 postMessage 交给页面里的垫片）；`muted`（应用背景）时为 0。
  * - `ready`：网页 iframe load；场景出首帧，或不能渲染（含超时）时预览图加载完。场景结果出来前不发，加载态一直保持。
+ * - `sceneLive`：场景是否在实时渲染，退回预览图时为假。
  * - `error` 第二个参数区分致命与否：目标取不到（行已删、IPC 失败）为致命，调用方显示丢失态；
  *   页面加载超时、场景既不能渲染又没有预览图等运行期错误不致命，只用来结束加载态。
  */
@@ -37,6 +38,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   ready: [];
   error: [message: string, fatal: boolean];
+  sceneLive: [live: boolean];
 }>();
 
 const settings = useSettingsStore();
@@ -89,5 +91,6 @@ function onStageError(message: string) {
     :interactive="props.interactive"
     @ready="emit('ready')"
     @error="onStageError"
+    @scene-live="emit('sceneLive', $event)"
   />
 </template>

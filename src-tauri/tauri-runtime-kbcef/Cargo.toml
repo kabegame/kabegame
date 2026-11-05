@@ -30,6 +30,9 @@ cookie = "0.18"
 cef = { version = "149", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# 截图：CDP 回包的 base64 解码，以及等待 CEF 回调的 oneshot 与超时。
+base64 = { workspace = true }
+tokio = { workspace = true }
 
 # Window + event-loop host (same lib tauri-runtime-wry uses). `rwh_06` exposes
 # raw-window-handle 0.6 so we can read the tao window's handle. Default features

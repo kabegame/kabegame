@@ -563,6 +563,10 @@ pub const IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES: u64 = 512 * 1024;
 pub const IMAGE_THUMBNAIL_MAX_DIM: u32 = 512;
 /// 预览缩略图固定 JPEG 质量（80~85 区间视觉接近无损，压缩与速度均衡）。
 const IMAGE_THUMBNAIL_JPEG_QUALITY: u8 = 82;
+/// 壁纸封面最长边：封面同时是场景的退回画面，会全屏显示，比普通缩略图大。
+pub const WALLPAPER_COVER_MAX_DIM: u32 = 1920;
+/// 壁纸封面固定 JPEG 质量。
+const WALLPAPER_COVER_JPEG_QUALITY: u8 = 85;
 pub fn image_needs_independent_thumbnail(source_size: u64) -> bool {
     source_size > IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES
 }
@@ -590,6 +594,15 @@ fn encode_jpeg_rgb(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String
 /// 生成预览缩略图字节：按最长边 ≤ `IMAGE_THUMBNAIL_MAX_DIM` 缩放一次，再以固定质量编码一次。
 /// 不再按字节大小做「缩放×质量」二分搜索——单次重采样 + 单次编码，避免在超大原图上反复重采样。
 fn build_compressed_thumbnail_bytes(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
+    build_scaled_jpeg_bytes(img, IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_JPEG_QUALITY)
+}
+
+/// 最长边超过 `max_dim` 时缩放一次（不放大），再以 `quality` 编码一次。
+fn build_scaled_jpeg_bytes(
+    img: &image::DynamicImage,
+    max_dim: u32,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
     use image::GenericImageView;
 
     let (width, height) = img.dimensions();
@@ -597,8 +610,8 @@ fn build_compressed_thumbnail_bytes(img: &image::DynamicImage) -> Result<Vec<u8>
         return Err("Image has invalid dimensions".to_string());
     }
 
-    let rgb = if width.max(height) > IMAGE_THUMBNAIL_MAX_DIM {
-        let scale = IMAGE_THUMBNAIL_MAX_DIM as f64 / width.max(height) as f64;
+    let rgb = if width.max(height) > max_dim {
+        let scale = max_dim as f64 / width.max(height) as f64;
         let target_w = ((width as f64) * scale).round().clamp(1.0, width as f64) as u32;
         let target_h = ((height as f64) * scale).round().clamp(1.0, height as f64) as u32;
         img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
@@ -607,7 +620,7 @@ fn build_compressed_thumbnail_bytes(img: &image::DynamicImage) -> Result<Vec<u8>
         img.to_rgb8()
     };
 
-    encode_jpeg_rgb(&rgb, IMAGE_THUMBNAIL_JPEG_QUALITY)
+    encode_jpeg_rgb(&rgb, quality)
 }
 
 async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
@@ -620,6 +633,51 @@ async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
         .await
         .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
     Ok(thumbnail_path)
+}
+
+/// 截图里要留下的区域：都是占整张截图宽高的比例。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+pub struct CoverCrop {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// 按比例裁剪。边界向内取整，不把区域外的像素带进封面。
+fn crop_cover(img: &image::DynamicImage, crop: CoverCrop) -> Result<image::DynamicImage, String> {
+    use image::GenericImageView;
+
+    let (width, height) = img.dimensions();
+    let (image_w, image_h) = (width as f64, height as f64);
+    let left = (crop.x * image_w).ceil().clamp(0.0, image_w) as u32;
+    let top = (crop.y * image_h).ceil().clamp(0.0, image_h) as u32;
+    let right = ((crop.x + crop.width) * image_w)
+        .floor()
+        .clamp(0.0, image_w) as u32;
+    let bottom = ((crop.y + crop.height) * image_h)
+        .floor()
+        .clamp(0.0, image_h) as u32;
+    if right <= left || bottom <= top {
+        return Err("Cover region is outside the screenshot".to_string());
+    }
+    Ok(img.crop_imm(left, top, right - left, bottom - top))
+}
+
+/// 按 `crop` 裁剪壁纸截图，缩到最长边不超过 [`WALLPAPER_COVER_MAX_DIM`]，写进 `thumbnails_dir`，返回路径。
+///
+/// 不走 [`generate_thumbnail_from_bytes`]：它最长边只有 512，小文件还直接返回 None。
+pub async fn generate_wallpaper_cover(bytes: &[u8], crop: CoverCrop) -> Result<PathBuf, String> {
+    let bytes = bytes.to_vec();
+    let cover = tokio::task::spawn_blocking(move || {
+        let img = image::load_from_memory(&bytes)
+            .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
+        let img = crop_cover(&img, crop)?;
+        build_scaled_jpeg_bytes(&img, WALLPAPER_COVER_MAX_DIM, WALLPAPER_COVER_JPEG_QUALITY)
+    })
+    .await
+    .map_err(|e| format!("Wallpaper cover task join error: {e}"))??;
+    write_thumbnail_bytes(cover).await
 }
 
 /// 从字节生成图片预览图；小于等于阈值时返回 None，让调用方使用原图路径。
@@ -1327,4 +1385,129 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     ofmt.write_trailer()
         .map_err(|e| format!("write_trailer: {e:?}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_paths::AppPaths;
+    use image::GenericImageView;
+
+    const WHOLE: CoverCrop = CoverCrop {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+
+    fn screenshot(width: u32, height: u32) -> Vec<u8> {
+        encode_jpeg_rgb(&image::RgbImage::new(width, height), 90).unwrap()
+    }
+
+    #[tokio::test]
+    async fn wallpaper_cover_shrinks_to_the_longest_edge_and_keeps_the_ratio() {
+        let paths = AppPaths::init_for_tests();
+        for ((width, height), expected) in
+            [((3840, 2160), (1920, 1080)), ((2160, 3840), (1080, 1920))]
+        {
+            let cover = generate_wallpaper_cover(&screenshot(width, height), WHOLE)
+                .await
+                .unwrap();
+            assert!(cover.starts_with(paths.thumbnails_dir()), "{cover:?}");
+            assert_eq!(image::open(&cover).unwrap().dimensions(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn wallpaper_cover_does_not_upscale_small_screenshots() {
+        AppPaths::init_for_tests();
+        let cover = generate_wallpaper_cover(&screenshot(800, 450), WHOLE)
+            .await
+            .unwrap();
+        assert_eq!(image::open(&cover).unwrap().dimensions(), (800, 450));
+    }
+
+    #[tokio::test]
+    async fn wallpaper_cover_rejects_bytes_that_are_not_an_image() {
+        AppPaths::init_for_tests();
+        assert!(generate_wallpaper_cover(b"not an image", WHOLE)
+            .await
+            .is_err());
+    }
+
+    /// 窗口截图比画布大：先裁再缩，比例按画布算。
+    #[tokio::test]
+    async fn wallpaper_cover_is_cropped_before_it_is_scaled() {
+        AppPaths::init_for_tests();
+        let crop = CoverCrop {
+            x: 0.0,
+            y: 0.0,
+            width: 0.5,
+            height: 0.5,
+        };
+        let cover = generate_wallpaper_cover(&screenshot(4000, 2000), crop)
+            .await
+            .unwrap();
+        assert_eq!(image::open(&cover).unwrap().dimensions(), (1920, 960));
+    }
+
+    /// 只留区域内的像素：区域外是黑，区域内是白，结果里不能有黑。
+    #[test]
+    fn crop_keeps_only_the_region() {
+        let mut source = image::RgbImage::new(200, 100);
+        for x in 50..150 {
+            for y in 25..75 {
+                source.put_pixel(x, y, image::Rgb([255, 255, 255]));
+            }
+        }
+        let crop = CoverCrop {
+            x: 0.25,
+            y: 0.25,
+            width: 0.5,
+            height: 0.5,
+        };
+        let cropped = crop_cover(&image::DynamicImage::ImageRgb8(source), crop).unwrap();
+        assert_eq!(cropped.dimensions(), (100, 50));
+        assert!(cropped.to_rgb8().pixels().all(|pixel| pixel.0 == [255; 3]));
+    }
+
+    /// 边界落在像素中间时向内取整：2.5..7.5 留下 3..7。
+    #[test]
+    fn crop_rounds_inwards() {
+        let crop = CoverCrop {
+            x: 0.25,
+            y: 0.25,
+            width: 0.5,
+            height: 0.5,
+        };
+        let cropped = crop_cover(&image::DynamicImage::new_rgb8(10, 10), crop).unwrap();
+        assert_eq!(cropped.dimensions(), (4, 4));
+    }
+
+    #[test]
+    fn crop_rejects_a_region_outside_the_screenshot() {
+        let source = image::DynamicImage::new_rgb8(10, 10);
+        for crop in [
+            CoverCrop {
+                x: 1.5,
+                y: 0.0,
+                width: 0.5,
+                height: 0.5,
+            },
+            CoverCrop {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.5,
+            },
+            CoverCrop {
+                x: f64::NAN,
+                y: 0.0,
+                width: 0.5,
+                height: 0.5,
+            },
+        ] {
+            assert!(crop_cover(&source, crop).is_err(), "{crop:?}");
+        }
+    }
 }

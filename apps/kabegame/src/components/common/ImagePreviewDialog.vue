@@ -273,7 +273,7 @@
           <!-- 非视频 WPE 壁纸（web / scene）：主屏比例的「桌面画布」，页面按桌面尺寸渲染且可交互；
                不走 Panzoom，也不挂 VideoControls -->
           <div v-if="previewImage && isPreviewWallpaper" class="preview-wallpaper-wrapper absolute inset-0">
-            <WallpaperDesktopCanvas>
+            <WallpaperDesktopCanvas ref="wallpaperCanvasRef">
               <ImageContent
                 ref="previewContentRef"
                 :image="previewImage"
@@ -281,6 +281,7 @@
                 :video-playing="!wallpaperPaused"
                 interactive
                 @ready="handlePreviewReady"
+                @scene-live="previewSceneLive = $event"
               />
             </WallpaperDesktopCanvas>
           </div>
@@ -397,6 +398,8 @@
               :image-type="previewImage.type"
               fill-when-expanded
               :paused="previewWallpaperLive ? wallpaperPaused : undefined"
+              :cover-source="previewWallpaperLive ? previewCoverSource : undefined"
+              :cover-ready="previewCoverReady"
               @update:paused="wallpaperPaused = $event"
             />
             <ImagePluginDescriptionPanel v-else :image="previewImage" fill-when-expanded />
@@ -430,7 +433,7 @@ import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
-import WallpaperDesktopCanvas from "../wallpaper/WallpaperDesktopCanvas.vue";
+import WallpaperDesktopCanvas, { type CoverRegionScope } from "../wallpaper/WallpaperDesktopCanvas.vue";
 import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageBasicInfoPanel, {
@@ -462,6 +465,7 @@ import {
   hasWpeUserProperties,
   isNativeMetadataEligible,
   isVideoPlaybackType,
+  isWpeSceneType,
   isWpeVideoType,
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
@@ -570,6 +574,19 @@ const isPreviewWallpaper = computed(() => isWpeWallpaperContentType(previewImage
 const previewWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && isPreviewWallpaper.value);
 /** 预览这一份的暂停状态，切图时复位；桌面的暂停是设置 `wallpaperPaused`，互不影响 */
 const wallpaperPaused = ref(false);
+/** 网页壁纸加载完；场景退回预览图时也会置位，所以场景看 `previewSceneLive` */
+const previewWallpaperReady = ref(false);
+const previewSceneLive = ref(false);
+/** 画面确定在实时渲染：场景出了首帧，网页 iframe 加载完。退回预览图时为假，不能设为封面 */
+const previewCoverReady = computed(() =>
+  isWpeSceneType(previewImage.value?.type) ? previewSceneLive.value : previewWallpaperReady.value,
+);
+const wallpaperCanvasRef = ref<InstanceType<typeof WallpaperDesktopCanvas> | null>(null);
+/** 预览的封面截取来源：主窗口里的画布，用户看到什么就截到什么。点击时才取画布，区域也是那时才量 */
+const previewCoverSource: CoverRegionScope = (run) => {
+  const canvas = wallpaperCanvasRef.value;
+  return canvas ? canvas.withCaptureRegion(run) : Promise.reject(new Error("wallpaper canvas is not mounted"));
+};
 /** Panzoom 图片分支的条件。 */
 const isPreviewStatic = computed(() => !isPreviewVideo.value && !isPreviewWallpaper.value);
 
@@ -1020,6 +1037,8 @@ const navPending = ref(false);
 watch(currentId, (id) => {
   navPending.value = false;
   wallpaperPaused.value = false;
+  previewWallpaperReady.value = false;
+  previewSceneLive.value = false;
   // 上层清空 image 即关闭：停播放
   if (!id) {
     stopSlideshow();
@@ -1205,6 +1224,7 @@ const handlePreviewWheel = (event: WheelEvent) => {
 // ImageContent 内部已处理缩略图→原图流式覆盖与丢失态显示；这里只在内容就绪后对齐 Panzoom（桌面图片）。
 const handlePreviewReady = () => {
   previewImageLoading.value = false;
+  previewWallpaperReady.value = true;
   if (USE_PSWP || isPreviewVideo.value || isPreviewWallpaper.value) return;
   void measureContainerAfterRender().then(() => {
     panzoomReset();

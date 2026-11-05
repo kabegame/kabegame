@@ -22,6 +22,8 @@ export interface WpeWebPropertyItem {
 export interface WpeWebPropertiesView {
   imageId: string;
   metadataId: number | null;
+  /** 封面已换成截取的画面，可以恢复默认封面 */
+  customCover: boolean;
   items: WpeWebPropertyItem[];
 }
 
