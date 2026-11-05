@@ -689,13 +689,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (settled()) break;
       const instance = (raw ?? {}) as SceneEffectInstance;
       const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);
-      // 可见性绑定仍登记成重编译目标（P3a，3c 步骤 2 改为单图层重算）
       const enabled =
-        bindings.bind(
-          instance.visible,
-          properties,
-          recompile("effect-visible", `objects/${index}/effects/${source}/visible`),
-        ) !== false;
+        bindings.bind(instance.visible, properties, { kind: "effect", object: index, effect: source }) !== false;
       // 写死关闭、没有绑定的整步跳过（B11），也不检查它的能力
       if (!enabled && !visibleBound) continue;
       const issues = new EffectIssues(enabled ? unsupported : null);

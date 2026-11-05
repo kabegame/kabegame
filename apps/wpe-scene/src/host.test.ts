@@ -48,7 +48,7 @@ vi.mock("./render", async (importOriginal) => {
 const { SceneHost } = await import("./host");
 const { Channel } = await import("@tauri-apps/api/core");
 
-/** 打开 fx（绑在一个不支持的 effect 的可见性上）时退回预览图，关掉就能渲染。 */
+/** 打开 fx（绑在一个不支持的 effect 的可见性上）时退回预览图，关掉就能渲染。退回状态下改属性一律走重新编译。 */
 function bundleFor(properties: Record<string, unknown>): SceneBundle {
   return {
     general: { postprocess: { level: "disabled" } },
@@ -56,9 +56,7 @@ function bundleFor(properties: Record<string, unknown>): SceneBundle {
     programs: [],
     textures: [],
     bloom: null,
-    bindings: [
-      { property: "fx", target: { kind: "recompile", reason: "effect-visible", path: "objects/0/effects/0/visible" } },
-    ],
+    bindings: [{ property: "fx", target: { kind: "effect", object: 0, effect: 0 } }],
     scripts: { list: [] },
     unsupported: properties.fx === true ? ["effect:unsupported"] : [],
   } as unknown as SceneBundle;
@@ -150,11 +148,17 @@ class FakeRealm implements ScriptRealm {
   dispose() {}
 }
 
-/** 带一段脚本的场景；`fx` 沿用上面的重编译绑定，用来触发重编译。 */
+/** 带一段脚本的场景；`fx` 绑在重编译目标上，用来触发重编译。 */
 function scriptedBundle(): SceneBundle {
   return {
     ...bundleFor({}),
     general: { postprocess: { level: "disabled" }, bloom: { tint: [1, 1, 1] } },
+    bindings: [
+      {
+        property: "fx",
+        target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" },
+      },
+    ],
     scripts: {
       list: [
         {

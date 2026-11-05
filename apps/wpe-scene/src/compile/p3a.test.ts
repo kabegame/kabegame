@@ -169,9 +169,9 @@ describe("取值换算与分类（无 GPU、无语料）", () => {
         (field): SceneBinding => ({ property: `layer-${field}`, target: at(0, field) }),
       ),
       { property: "bloom", target: { kind: "bloom", field: "hdrStrength" } },
+      { property: "effect-visible", target: { kind: "effect", object: 0, effect: 0 } },
     ];
     const recompiled: SceneBinding[] = [
-      { property: "effect-visible", target: recompile("effect-visible", "objects/0/effects/0/visible") },
       { property: "bloom-switch", target: recompile("postprocess", "general.bloom") },
       { property: "hdr", target: recompile("postprocess", "general.hdr") },
       { property: "cbm", target: recompile("layer-structure", "objects/0/colorBlendMode") },

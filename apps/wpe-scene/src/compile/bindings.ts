@@ -21,7 +21,6 @@ export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
 export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible";
 
 export type RecompileReason =
-  | "effect-visible" // effect 可见性：可变的已进 bundle，开关仍整场重编译（3c 步骤 2 改为单图层重算）
   | "postprocess" // general.bloom / general.hdr：泛光链有无、目标格式
   | "general" // clearcolor / ambientcolor / skylightcolor / camera.*
   | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）
@@ -29,6 +28,8 @@ export type RecompileReason =
 export type BindingTarget =
   | { kind: "script-property"; script: string; key: string }
   | { kind: "layer"; object: number; field: LayerField }
+  /** effect 可见性：`effect` 是 `effects[]` 的 JSON 下标（`SceneEffect.source`），开关后只重建该图层（3c）。 */
+  | { kind: "effect"; object: number; effect: number }
   | { kind: "constant"; pass: TargetKey; material: string; uniforms: string[]; type: ValueType }
   | { kind: "bloom"; field: keyof BloomParams }
   | { kind: "recompile"; reason: RecompileReason; path: string };

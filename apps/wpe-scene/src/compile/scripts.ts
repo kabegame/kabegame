@@ -59,7 +59,8 @@ function valueType(initial: SceneScalar): ValueType | "string" {
 function targetOf(path: string, owner: ScriptOwner, key: string, initial: SceneScalar): SceneScript["target"] {
   if (owner.kind === "layer" && key in layerTypes)
     return { kind: "layer", object: owner.object, field: key as Extract<BindingTarget, { kind: "layer" }>["field"] };
-  if (owner.kind === "effect" && key === "visible") return { kind: "recompile", reason: "effect-visible", path };
+  if (owner.kind === "effect" && key === "visible")
+    return { kind: "effect", object: owner.object, effect: owner.effect };
   if (owner.kind === "general" && key in bloomFields)
     return { kind: "bloom", field: bloomFields[key] as Extract<BindingTarget, { kind: "bloom" }>["field"] };
   if (owner.kind === "material")

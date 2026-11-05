@@ -112,6 +112,7 @@ export async function scriptCorpus(imageIds: string[]): Promise<unknown> {
             return true;
           },
           read(target) {
+            if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
             if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
             if (target.kind === "layer") {
               const value = state.layers.get(target.object)?.[target.field];
@@ -133,6 +134,7 @@ export async function scriptCorpus(imageIds: string[]): Promise<unknown> {
             return true;
           },
           read(target) {
+            if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
             if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
             if (target.kind === "layer") {
               const value = state.layers.get(target.object)?.[target.field];

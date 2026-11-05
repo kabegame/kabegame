@@ -152,6 +152,9 @@ function setup(audioRegistered?: () => void) {
       bundle = scene();
       state = SceneState.fromBundle(bundle);
     },
+    resetState() {
+      state = SceneState.fromBundle(bundle);
+    },
     setResolution(value: [number, number]) {
       resolution = value;
     },
@@ -312,7 +315,7 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(h.realm.global.thisObject).toBeNull();
   });
 
-  it("材质 uniform、effect 重编译、general 泛光与重编译目标", () => {
+  it("材质 uniform、general 泛光与重编译目标", () => {
     const h = setup();
     const material = script("mat", { kind: "material", pass: "objects/0/passes/0", layer: 0 }, 0);
     material.target = {
@@ -341,16 +344,6 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(owner.amount).toBe(1);
     owner.amount = 2;
     expect(h.state.constants.get("objects/0/passes/0")?.g_Amount).toEqual([2]);
-    h.api.enterScript(script("effect", { kind: "effect", object: 0, effect: 0 }, 0));
-    const effect = h.realm.global.thisObject as Record<string, unknown>;
-    effect.visible = false;
-    effect.visible = false;
-    expect(h.recompiles).toEqual([{ path: "objects/0/effects/0/visible", value: false }]);
-    h.api.forgetRecompile("objects/0/effects/0/visible");
-    effect.visible = false;
-    expect(h.recompiles).toHaveLength(2);
-    // 探针统计写到重编译目标的次数：每一次赋值都算，被去重的也算（哪段每帧都在写）
-    expect(h.api.recompileWrites.get("effect")).toBe(3);
     h.api.enterScript(script("general", { kind: "general" }, null));
     expect(h.realm.global.thisLayer).toBeNull();
     const general = h.realm.global.thisObject as Record<string, unknown>;
@@ -358,10 +351,20 @@ describe("SceneScript API（FakeRealm）", () => {
     general.bloomtint = new Vec3(0.2, 0.3, 0.4);
     expect(h.state.bloom.strength).toBe(1.5);
     expect(h.state.bloom.tint).toEqual([0.2, 0.3, 0.4]);
-    h.api.enterScript(script("closed", { kind: "effect", object: 1, effect: 0 }, 1));
-    const closed = h.realm.global.thisObject as Record<string, unknown>;
+    general.clearcolor = new Vec3(1, 0, 0);
+    general.clearcolor = new Vec3(1, 0, 0);
+    expect(h.recompiles).toEqual([{ path: "general/clearcolor", value: [1, 0, 0] }]);
+    h.api.forgetRecompile("general/clearcolor");
+    general.clearcolor = new Vec3(1, 0, 0);
+    expect(h.recompiles).toHaveLength(2);
+    // 探针统计写到重编译目标的次数：每一次赋值都算，被去重的也算（哪段每帧都在写）
+    expect(h.api.recompileWrites.get("general")).toBe(3);
+  });
+
+  it("effect 的 visible 读写走状态，不算重编译写入（3c）", () => {
+    const h = setup();
     const entry: SceneEffect = {
-      source: 0,
+      source: 2, // JSON 下标，bundle 下标是 0
       id: 1,
       name: "",
       file: "effects/x/effect.json",
@@ -372,15 +375,23 @@ describe("SceneScript API（FakeRealm）", () => {
       unsupported: [],
     };
     h.bundle.layers[1].effects.push(entry);
-    // 3c：关着的可变 effect 在 bundle 里，但 visible 读到 false；它的对象仍然有效
+    h.resetState();
+    h.api.enterScript(script("closed", { kind: "effect", object: 1, effect: 2 }, 1));
+    const closed = h.realm.global.thisObject as Record<string, unknown>;
+    // 关着的可变 effect 在 bundle 里，visible 读到 false；它的对象仍然有效
     expect(closed.visible).toBe(false);
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(closed)).toBe(true);
     closed.visible = true;
-    expect(h.recompiles.at(-1)).toEqual({ path: "objects/1/effects/0/visible", value: true });
-    entry.enabled = true;
+    expect(h.state.effectEnabled(1, 2)).toBe(true);
     expect(closed.visible).toBe(true);
-    general.clearcolor = new Vec3(1, 0, 0);
-    expect(h.recompiles.at(-1)).toEqual({ path: "general/clearcolor", value: [1, 0, 0] });
+    expect(h.state.takeDirty().structures).toEqual(new Set([1]));
+    closed.visible = false;
+    expect(closed.visible).toBe(false);
+    // 不是布尔值的写入忽略（同图层 visible）
+    closed.visible = 1;
+    expect(closed.visible).toBe(false);
+    expect(h.recompiles).toEqual([]);
+    expect(h.api.recompileWrites.size).toBe(0);
   });
 
   it("registerAudioBuffers 只在模块求值期间可调用，同一分辨率返回同一组全零 realm 缓冲", () => {

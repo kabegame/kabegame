@@ -37,6 +37,8 @@ function targetKey(target: ScriptTarget): string {
   switch (target.kind) {
     case "layer":
       return `objects/${target.object}/${target.field}`;
+    case "effect":
+      return `objects/${target.object}/effects/${target.effect}/visible`;
     case "constant":
       return `${target.pass}/constantshadervalues/${target.material}`;
     case "bloom":

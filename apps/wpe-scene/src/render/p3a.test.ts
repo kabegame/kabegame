@@ -10,7 +10,7 @@ import {
   type SceneBinding,
   type UserProperty,
 } from "../compile/bindings";
-import { compileScene, type SceneBundle, type SceneLayer, type ScenePass } from "../compile/bundle";
+import { compileScene, type SceneBundle, type SceneEffect, type SceneLayer, type ScenePass } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
 import type { SceneScalar } from "../compile/model";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
@@ -308,6 +308,124 @@ describe.skipIf(!corpus)("条件可见（本机语料）", () => {
   }, 120000);
 });
 
+describe("effect 开关（3c）", () => {
+  const closed: SceneEffect = {
+    source: 2, // JSON 下标，不是 layer.effects 下标
+    id: 1,
+    name: "",
+    file: "effects/x/effect.json",
+    fbos: [],
+    steps: [],
+    enabled: false,
+    visibleBound: true,
+    unsupported: [],
+  };
+  const stateOf = (effect: Partial<SceneEffect>) =>
+    SceneState.fromBundle(synthetic({}, undefined, { effects: [{ ...closed, ...effect }] }));
+  const binding = (condition?: string): SceneBinding => ({
+    property: "fx",
+    ...(condition === undefined ? {} : { condition }),
+    target: { kind: "effect", object: 0, effect: 2 },
+  });
+
+  it("按 scene.json 坐标取开关，不在 bundle 里的算关着", () => {
+    const state = stateOf({ enabled: true });
+    expect(state.effectEnabled(0, 2)).toBe(true);
+    expect(state.effectEnabled(0, 0)).toBe(false);
+    expect(state.effectEnabled(1, 2)).toBe(false);
+  });
+
+  it("写入记结构脏，值没变不记", () => {
+    const state = stateOf({});
+    expect(state.write(binding(), false)).toBe("applied");
+    expect(state.takeDirty().structures.size).toBe(0);
+    expect(state.write(binding(), true)).toBe("applied");
+    expect(state.effectEnabled(0, 2)).toBe(true);
+    expect(state.takeDirty().structures).toEqual(new Set([0]));
+    expect(state.takeDirty().structures.size).toBe(0);
+  });
+
+  it("目标不在 bundle 里：什么都不做", () => {
+    const state = stateOf({});
+    expect(state.write({ property: "x", target: { kind: "effect", object: 0, effect: 0 } }, true)).toBe("applied");
+    expect(state.takeDirty().structures.size).toBe(0);
+  });
+
+  it("值换算同编译期：有条件比字符串，没条件只有 false 算关", () => {
+    const state = stateOf({});
+    state.write(binding("1"), 1);
+    expect(state.effectEnabled(0, 2)).toBe(true);
+    state.write(binding("1"), 0);
+    expect(state.effectEnabled(0, 2)).toBe(false);
+    state.write(binding("1"), "1");
+    expect(state.effectEnabled(0, 2)).toBe(true);
+    state.write(binding(), false);
+    expect(state.effectEnabled(0, 2)).toBe(false);
+    state.write(binding(), 0);
+    expect(state.effectEnabled(0, 2)).toBe(true);
+  });
+
+  it("打开带不支持项的 effect 返回 recompile，状态不变、不记脏", () => {
+    const state = stateOf({ unsupported: ["effect:custom:custom"] });
+    expect(state.write(binding(), true)).toBe("recompile");
+    expect(state.effectEnabled(0, 2)).toBe(false);
+    expect(state.takeDirty().structures.size).toBe(0);
+  });
+
+  it("关掉带不支持项的 effect 可以就地（dev 强制渲染才会走到）", () => {
+    const state = stateOf({ enabled: true, unsupported: ["effect:custom:custom"] });
+    expect(state.needsRecompile(binding(), false)).toBe(false);
+    expect(state.write(binding(), false)).toBe("applied");
+    expect(state.effectEnabled(0, 2)).toBe(false);
+    expect(state.takeDirty().structures).toEqual(new Set([0]));
+    // 再打开就要重编译
+    expect(state.write(binding(), true)).toBe("recompile");
+  });
+
+  it("冻结的图层：开和关都要重编译，同值写不算，别的图层不受影响", () => {
+    const state = stateOf({});
+    state.freezeLayer(0);
+    expect(state.needsRecompile(binding(), true)).toBe(true);
+    expect(state.needsRecompile(binding(), false)).toBe(false);
+    expect(state.write(binding(), false)).toBe("applied");
+    expect(state.write(binding(), true)).toBe("recompile");
+    expect(state.effectEnabled(0, 2)).toBe(false);
+    expect(state.takeDirty().structures.size).toBe(0);
+
+    const opened = stateOf({ enabled: true });
+    opened.freezeLayer(0);
+    expect(opened.needsRecompile(binding(), false)).toBe(true);
+    expect(opened.needsRecompile(binding(), true)).toBe(false);
+    expect(opened.write(binding(), false)).toBe("recompile");
+    expect(opened.effectEnabled(0, 2)).toBe(true);
+
+    const other = stateOf({});
+    other.freezeLayer(1);
+    expect(other.needsRecompile(binding(), true)).toBe(false);
+    expect(other.write(binding(), true)).toBe("applied");
+    expect(other.takeDirty().structures).toEqual(new Set([0]));
+  });
+
+  it("needsRecompile 不改状态：重编译类目标为真，其余按开关判断", () => {
+    const state = stateOf({ unsupported: ["effect:custom:custom"] });
+    expect(state.needsRecompile(binding(), true)).toBe(true);
+    expect(state.needsRecompile(binding(), false)).toBe(false);
+    expect(state.needsRecompile(binding("1"), 0)).toBe(false);
+    expect(state.needsRecompile(binding("1"), 1)).toBe(true);
+    expect(state.effectEnabled(0, 2)).toBe(false);
+    expect(state.takeDirty().structures.size).toBe(0);
+    expect(
+      state.needsRecompile(
+        { property: "cbm", target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" } },
+        1,
+      ),
+    ).toBe(true);
+    expect(state.needsRecompile({ property: "a", target: { kind: "layer", object: 0, field: "alpha" } }, 1)).toBe(
+      false,
+    );
+  });
+});
+
 describe("可见性、泛光与加载期间增量", () => {
   it("visibleObjects：不可见图层整段跳过（含它的快照）", () => {
     const bundle = synthetic();
@@ -339,7 +457,7 @@ describe("可见性、泛光与加载期间增量", () => {
 
   it("SceneState：泛光写入标记脏项，级数取整与编译期一致", () => {
     const state = SceneState.fromBundle(synthetic());
-    expect(state.takeDirty()).toEqual({ layers: new Set(), passes: new Set(), bloom: false });
+    expect(state.takeDirty()).toEqual({ layers: new Set(), passes: new Set(), bloom: false, structures: new Set() });
     state.write({ property: "glow", target: { kind: "bloom", field: "hdrStrength" } }, 5);
     state.write({ property: "iters", target: { kind: "bloom", field: "hdrIterations" } }, 3.9);
     state.write({ property: "tint", target: { kind: "bloom", field: "tint" } }, "1 0 0");

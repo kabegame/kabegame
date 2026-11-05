@@ -19,6 +19,8 @@ let onError: ((reasons: string[]) => void) | undefined;
 let onUpdate: (() => void) | null = null;
 let onInit: (() => unknown) | null = null;
 let activeGlobal: Record<string, unknown>;
+/** 新场景里图层 0 的可变 effect 备不好（`GpuScene.prepareVariants` 冻结了它）。 */
+let frozen = false;
 /** 让 realm 创建 / 模块求值停在半路，用来测并发的重载。 */
 let realmGate: Promise<void> | null = null;
 let moduleGate: Promise<void> | null = null;
@@ -81,6 +83,7 @@ class FakeRenderer {
   constructor(private readonly beforeFrame?: (dt: number) => void) {}
   async load(bundle: SceneBundle, options: { beforeFirstFrame?: (state: SceneState) => void }) {
     this.sceneState = SceneState.fromBundle(bundle);
+    if (frozen) this.sceneState.freezeLayer(0);
     options.beforeFirstFrame?.(this.sceneState);
     this.tick();
     events.push("render");
@@ -92,6 +95,7 @@ class FakeRenderer {
     this.paused = value;
   }
   applyBindings(writes: { binding: SceneBundle["bindings"][number]; value: unknown }[]) {
+    if (writes.some((write) => this.sceneState?.needsRecompile(write.binding, write.value as number))) return false;
     for (const write of writes) {
       events.push("binding");
       this.sceneState?.write(write.binding, write.value as number);
@@ -129,7 +133,10 @@ vi.mock("./render", async (original) => ({
   SceneRenderer: {
     create: async (
       _canvas: unknown,
-      options: { beforeFrame?: (dt: number) => void; onError?: (reasons: string[]) => void },
+      options: {
+        beforeFrame?: (dt: number) => void;
+        onError?: (reasons: string[]) => void;
+      },
     ) => {
       onError = options.onError;
       renderer = new FakeRenderer(options.beforeFrame);
@@ -208,6 +215,32 @@ function bundle(): SceneBundle {
   } as SceneBundle;
 }
 
+const EFFECT_PATH = "objects/0/effects/0/visible";
+
+/** 图层 0 带一个可变 effect；脚本挂在它的 `visible` 上，`fx` 属性绑同一个开关，`q` 绑重编译目标。 */
+function effectBundle(enabled: boolean, unsupported: string[] = []): SceneBundle {
+  const result = bundle();
+  result.scripts.list[0].owner = { kind: "effect", object: 0, effect: 0 };
+  result.layers[0].effects = [
+    {
+      source: 0,
+      id: 1,
+      name: "",
+      file: "effects/x/effect.json",
+      fbos: [],
+      steps: [],
+      enabled,
+      visibleBound: true,
+      unsupported,
+    },
+  ];
+  result.bindings.push(
+    { property: "fx", target: { kind: "effect", object: 0, effect: 0 } },
+    { property: "q", target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" } },
+  );
+  return result;
+}
+
 function report() {
   return {
     ready: vi.fn(() => events.push("ready")),
@@ -228,6 +261,7 @@ describe("SceneHost 脚本接线", () => {
     destroyed = 0;
     onUpdate = null;
     onInit = null;
+    frozen = false;
     realmGate = null;
     moduleGate = null;
     realmsCreated = 0;
@@ -323,13 +357,15 @@ describe("SceneHost 脚本接线", () => {
         await new Promise<void>((resolve) => {
           finishSecond = resolve;
         });
+      // 上界：去重坏了时重载会一直链下去，这里卡住让断言干净地失败
+      if (calls > 3) await new Promise(() => {});
       const result = bundle();
-      result.scripts.list[0].owner = { kind: "effect", object: 0, effect: 0 };
+      result.scripts.list[0].owner = { kind: "general" };
       return result;
     });
-    let visible = true;
+    let red = 1;
     onUpdate = () => {
-      (activeGlobal.thisObject as { visible: boolean }).visible = visible;
+      (activeGlobal.thisObject as { clearcolor: Vec3 }).clearcolor = new Vec3(red, 0, 0);
     };
     const reporter = report();
     const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
@@ -338,35 +374,97 @@ describe("SceneHost 脚本接线", () => {
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
     renderer.tick();
     expect(compile).toHaveBeenCalledTimes(2);
-    visible = false;
+    red = 0.5;
     renderer.tick();
     expect(compile).toHaveBeenCalledTimes(2);
     finishSecond();
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(3));
-    expect(compile.mock.calls[2][0].scriptOverrides["objects/0/effects/0/visible"]).toBe(false);
+    expect(compile.mock.calls[2][0].scriptOverrides["general/clearcolor"]).toEqual([0.5, 0, 0]);
     expect(imports).toBe(1);
     host.dispose();
   });
 
-  it("关着的可变 effect：脚本读 visible 为 false，写 true 触发重编译，之后读到 true（3c）", async () => {
-    const path = "objects/0/effects/0/visible";
-    compile.mockImplementation(async (input: { scriptOverrides?: Record<string, unknown> }) => {
-      const result = bundle();
-      result.scripts.list[0].owner = { kind: "effect", object: 0, effect: 0 };
-      result.layers[0].effects = [
-        {
-          source: 0,
-          id: 1,
-          name: "",
-          file: "effects/x/effect.json",
-          fbos: [],
-          steps: [],
-          enabled: input.scriptOverrides?.[path] === true,
-          visibleBound: true,
-          unsupported: [],
-        },
-      ];
-      return result;
+  it("effect 开关：脚本读写走状态，不重编译（3c）", async () => {
+    compile.mockImplementation(async () => effectBundle(false));
+    const seen: boolean[] = [];
+    let value = true;
+    onUpdate = () => {
+      const object = activeGlobal.thisObject as { visible: boolean };
+      seen.push(object.visible);
+      object.visible = value;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(seen).toEqual([false]);
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(true);
+    renderer.tick();
+    expect(seen).toEqual([false, true]);
+    value = false;
+    renderer.tick();
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    host.dispose();
+  });
+
+  it("effect 开关：属性就地写，不重编译；用户值盖掉脚本写过的值（3c）", async () => {
+    compile.mockImplementation(async () => effectBundle(true));
+    onUpdate = () => {};
+    onInit = () => {
+      (activeGlobal.thisObject as { visible: boolean }).visible = false;
+      return undefined;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({
+      p: { type: "slider", value: 0.3 },
+      fx: { type: "bool", value: true },
+      q: { type: "bool", value: false },
+    });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(false);
+    const applied = host.stats.applied;
+    host.applyUserProperties({ fx: { type: "bool", value: false } });
+    host.applyUserProperties({ fx: { type: "bool", value: true } });
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(true);
+    expect(host.stats.applied).toBe(applied + 2);
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    // 脚本的写入已被用户值盖掉：重编译之后不再重放
+    host.applyUserProperties({ q: { type: "bool", value: true } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(true));
+    host.dispose();
+  });
+
+  it("重编译后 replayWrites 把脚本写过的开关放回新状态，覆盖表不记（3c）", async () => {
+    compile.mockImplementation(async () => effectBundle(true));
+    onUpdate = () => {};
+    onInit = () => {
+      (activeGlobal.thisObject as { visible: boolean }).visible = false;
+      return undefined;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 }, q: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    const first = renderer.sceneState;
+    expect(first?.effectEnabled(0, 0)).toBe(false);
+    host.applyUserProperties({ q: { type: "bool", value: true } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(false);
+    expect(compile.mock.calls[1][0].scriptOverrides).toEqual({});
+    host.dispose();
+  });
+
+  it("脚本打开带不支持项的 effect：重编译一次，scriptOverrides 带脚本的值（3c）", async () => {
+    compile.mockImplementation(async (input) => {
+      const opened = input.scriptOverrides?.[EFFECT_PATH] === true;
+      const result = effectBundle(opened, ["effect:custom:custom"]);
+      return { ...result, unsupported: opened ? ["effect:custom:custom"] : [] };
     });
     const seen: boolean[] = [];
     onUpdate = () => {
@@ -379,11 +477,149 @@ describe("SceneHost 脚本接线", () => {
     host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
     expect(seen[0]).toBe(false);
-    expect(compile.mock.calls[1][0].scriptOverrides[path]).toBe(true);
-    await vi.waitFor(() => expect(seen.at(-1)).toBe(true));
-    // 已经是 true：不再重编译
-    renderer.tick();
+    expect(compile.mock.calls[0][0].scriptOverrides).toEqual({});
+    expect(compile.mock.calls[1][0].scriptOverrides[EFFECT_PATH]).toBe(true);
+    await vi.waitFor(() => expect(reporter.fallback).toHaveBeenCalledWith(["effect:custom:custom"]));
     expect(compile).toHaveBeenCalledTimes(2);
+    host.dispose();
+  });
+
+  it("脚本每帧写带不支持项的 effect：编译还没回来时不重复请求（3c）", async () => {
+    let finishSecond!: () => void;
+    let calls = 0;
+    compile.mockImplementation(async () => {
+      calls++;
+      if (calls === 2)
+        await new Promise<void>((resolve) => {
+          finishSecond = resolve;
+        });
+      // 上界：去重坏了时重载会一直链下去，这里卡住让断言干净地失败
+      if (calls > 3) await new Promise(() => {});
+      return effectBundle(false, ["effect:custom:custom"]);
+    });
+    onUpdate = () => {
+      (activeGlobal.thisObject as { visible: boolean }).visible = true;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    renderer.tick();
+    renderer.tick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(2);
+    finishSecond();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(2);
+    host.dispose();
+  });
+
+  it("属性打开带不支持项的 effect：整场重编译，原因写明被挡下的路径与不支持项（3c）", async () => {
+    compile.mockImplementation(async (input) => {
+      const opened = input.userProperties.fx === true;
+      const result = effectBundle(opened, ["effect:custom:custom"]);
+      return { ...result, unsupported: opened ? ["effect:custom:custom"] : [] };
+    });
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 }, fx: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    host.applyUserProperties({ fx: { type: "bool", value: true } });
+    await vi.waitFor(() => expect(reporter.fallback).toHaveBeenCalledWith(["effect:custom:custom"]));
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(host.stats.applied).toBe(0);
+    expect(host.stats.recompiled).toEqual([{ reason: `effect-blocked（${EFFECT_PATH}）`, keys: ["fx"] }]);
+    expect(reporter.debug).toHaveBeenCalledWith(expect.stringContaining("不支持项：effect:custom:custom"));
+    host.dispose();
+  });
+
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it("冻结的图层：属性开关走整场重编译，新值由编译给出（3c）", async () => {
+    frozen = true;
+    compile.mockImplementation(async (input) => effectBundle(input.userProperties.fx === true));
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 }, fx: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    const first = renderer.sceneState;
+    host.applyUserProperties({ fx: { type: "bool", value: true } });
+    await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(true);
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(host.stats.applied).toBe(0);
+    expect(host.stats.recompiled).toEqual([{ reason: `effect-blocked（${EFFECT_PATH}）`, keys: ["fx"] }]);
+    // 关回去同样重编译：冻结的图层开和关都不走就地
+    const second = renderer.sceneState;
+    host.applyUserProperties({ fx: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(renderer.sceneState).not.toBe(second));
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(3);
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(3);
+    expect(reporter.fallback).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
+  it("冻结的图层：脚本逐帧写同一个值只重编译一次，值变了再来一次（3c）", async () => {
+    frozen = true;
+    let calls = 0;
+    compile.mockImplementation(async (input) => {
+      calls++;
+      // 上界：去重坏了时重载会一直链下去，这里卡住让断言干净地失败
+      if (calls > 4) await new Promise(() => {});
+      return effectBundle(input.scriptOverrides?.[EFFECT_PATH] === true);
+    });
+    let value = true;
+    onUpdate = () => {
+      (activeGlobal.thisObject as { visible: boolean }).visible = value;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(compile.mock.calls[0][0].scriptOverrides).toEqual({});
+    expect(compile.mock.calls[1][0].scriptOverrides[EFFECT_PATH]).toBe(true);
+    await vi.waitFor(() => expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(true));
+    renderer.tick();
+    renderer.tick();
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(2);
+    value = false;
+    renderer.tick();
+    renderer.tick();
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(3));
+    expect(compile.mock.calls[2][0].scriptOverrides[EFFECT_PATH]).toBe(false);
+    await vi.waitFor(() => expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(false));
+    renderer.tick();
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(3);
+    expect(reporter.fallback).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
+  it("冻结的图层：编译没采用脚本的值时（如开关绑了用户属性）也不循环（3c）", async () => {
+    frozen = true;
+    let calls = 0;
+    compile.mockImplementation(async () => {
+      calls++;
+      if (calls > 4) await new Promise(() => {});
+      return effectBundle(false);
+    });
+    onUpdate = () => {
+      (activeGlobal.thisObject as { visible: boolean }).visible = true;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await settled();
+    renderer.tick();
+    renderer.tick();
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(false);
+    expect(reporter.fallback).not.toHaveBeenCalled();
     host.dispose();
   });
 
@@ -398,7 +634,7 @@ describe("SceneHost 脚本接线", () => {
       result.layers[0].alpha = Number(input.userProperties.p);
       result.bindings.push({
         property: "q",
-        target: { kind: "recompile", reason: "effect-visible", path: "objects/0/effects/0/visible" },
+        target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" },
       });
       return result;
     });
@@ -424,7 +660,7 @@ describe("SceneHost 脚本接线", () => {
       const result = bundle();
       result.bindings.push({
         property: "q",
-        target: { kind: "recompile", reason: "effect-visible", path: "objects/0/effects/0/visible" },
+        target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" },
       });
       return result;
     });
@@ -538,17 +774,20 @@ describe("SceneHost 清空脚本存储", () => {
   });
 
   it("脚本写过的重编译目标一并放弃", async () => {
+    let calls = 0;
     compile.mockImplementation(async () => {
+      // 上界：去重坏了时重载会一直链下去，这里卡住让断言干净地失败
+      if (++calls > 3) await new Promise(() => {});
       const result = bundle();
-      result.scripts.list[0].owner = { kind: "effect", object: 0, effect: 0 };
+      result.scripts.list[0].owner = { kind: "general" };
       return result;
     });
     onUpdate = () => {
-      (activeGlobal.thisObject as { visible: boolean }).visible = true;
+      (activeGlobal.thisObject as { clearcolor: Vec3 }).clearcolor = new Vec3(1, 0, 0);
     };
     const { host } = await ready();
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(compile.mock.calls[1][0].scriptOverrides["objects/0/effects/0/visible"]).toBe(true);
+    expect(compile.mock.calls[1][0].scriptOverrides["general/clearcolor"]).toEqual([1, 0, 0]);
     await vi.waitFor(() => expect(events.filter((value) => value === "render")).toHaveLength(2));
     onUpdate = null;
     clear("1");

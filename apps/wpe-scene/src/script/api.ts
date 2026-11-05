@@ -478,17 +478,8 @@ export class ScriptApi {
     this.define(
       api,
       "visible",
-      () =>
-        this.access
-          .bundle()
-          .layers.find((layer) => layer.object === object)
-          ?.effects.some((item) => item.source === effect && item.enabled) ?? false,
-      (value) =>
-        this.write(
-          { kind: "recompile", reason: "effect-visible", path: `objects/${object}/effects/${effect}/visible` },
-          value,
-          "bool",
-        ),
+      () => this.access.state().effectEnabled(object, effect),
+      (value) => this.write({ kind: "effect", object, effect }, value, "bool"),
     );
     this.effects.set(key, api);
     return api;

@@ -7,7 +7,24 @@ import { hostRenderFrame, hostState, hostStats, probeChunk, probeKeys, renderFra
 import { realmCheck } from "./realmProbe";
 import { scriptCorpus } from "./scriptCorpus";
 
+/** 预览属性面板的 dev 按钮发来的消息（`WpeWebPropertiesPanel.vue`）。 */
+const DEV_SCENE_MESSAGE = "kabegame:dev-scene";
+
+/** 观察 3c 风险用：整场重新加载（对比就地切换）。 */
+function listenDevButtons(host: SceneHost): void {
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const { kind, action } = (event.data ?? {}) as { kind?: unknown; action?: unknown };
+    if (kind !== DEV_SCENE_MESSAGE) return;
+    if (action === "reload") {
+      host.stats.recompiled.push({ reason: "dev-reload", keys: [] });
+      void (host as unknown as { reload(): Promise<void> }).reload();
+    }
+  });
+}
+
 export function installSceneDevProbe(host: SceneHost): void {
+  listenDevButtons(host);
   (window as unknown as { __kabegameSceneProbe?: unknown }).__kabegameSceneProbe = {
     renderFrame,
     bloom: runBloomProbe,

@@ -273,6 +273,25 @@ export function planLayer(
   return { composite: { count: Math.min(2, writes), width, height }, steps, reasons };
 }
 
+/**
+ * 图层运行时可能用到的计划；没有可变 effect 时为空。管线键只取决于 pass 和角色，不用枚举全部组合（见函数内）。
+ * 带不支持项的 effect 打开时整场重编译，不算可变。
+ */
+export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]): LayerPlan[] {
+  // dev 强制渲染时开着的 effect 可以带不支持项，它能就地关掉（`SceneState.needsRecompile`），所以也算可变
+  const variable = layer.effects.flatMap((effect, e) =>
+    effect.visibleBound && (effect.enabled || !effect.unsupported.length) ? [e] : [],
+  );
+  if (!variable.length) return [];
+  const plan = (open: (e: number) => boolean) =>
+    planLayer(layer, textures, (e) => (variable.includes(e) ? open(e) : layer.effects[e].enabled));
+  return [
+    plan(() => true), // 每个 pass 的普通角色
+    plan(() => false), // 基础 pass 直接上屏
+    ...variable.map((v) => plan((e) => e <= v)), // v 的上屏角色
+  ];
+}
+
 /** 渲染图的签名：步骤序列、角色、目标、合成 RT。相同就不用重建（同 WPE「数值变了才重建」）。pass 只取稳定键。 */
 export function planSignature(plan: LayerPlan): string {
   const steps = plan.steps.map((step) => (step.kind === "draw" ? { ...step, pass: step.pass.key } : step));
@@ -285,13 +304,23 @@ export function planSignature(plan: LayerPlan): string {
  */
 export class FboBindings {
   private readonly maps: Map<string, number>[];
+  /** 创建时的对应，不随 `swap` 变。 */
+  private readonly initials: ReadonlyMap<string, number>[];
 
   constructor(maps: readonly ReadonlyMap<string, number>[]) {
     this.maps = maps.map((map) => new Map(map));
+    this.initials = maps.map((map) => new Map(map));
   }
 
   resolve(effect: number, name: string): number {
     const id = this.maps[effect]?.get(name);
+    if (id === undefined) throw new Error(`fbo ${name} 不在 effect ${effect} 里`);
+    return id;
+  }
+
+  /** 这个名字的 fbo 对象本身：WPE 的 swap 只改 pass 下标，清屏清的是对象（J6）。 */
+  initial(effect: number, name: string): number {
+    const id = this.initials[effect]?.get(name);
     if (id === undefined) throw new Error(`fbo ${name} 不在 effect ${effect} 里`);
     return id;
   }

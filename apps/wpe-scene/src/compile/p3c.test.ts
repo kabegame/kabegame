@@ -136,12 +136,13 @@ describe("可变 effect 进 bundle", () => {
       { source: 1, enabled: false, visibleBound: true },
     ]);
     expect(effectsOf(bundle)[0].steps).toHaveLength(1);
-    // 绑定目标这一步不改：仍是整场重编译
+    // 用户绑定与脚本都是单图层重建的目标，坐标是 scene.json 下标
     expect(bundle.bindings).toContainEqual({
       property: "p",
       condition: "1",
-      target: { kind: "recompile", reason: "effect-visible", path: "objects/0/effects/0/visible" },
+      target: { kind: "effect", object: 0, effect: 0 },
     });
+    expect(bundle.scripts.list[0].target).toEqual({ kind: "effect", object: 0, effect: 1 });
   });
 
   it("可变 effect 打开时 enabled 为 true，visibleBound 不变", async () => {

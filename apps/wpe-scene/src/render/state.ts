@@ -28,6 +28,19 @@ export interface DirtyState {
   layers: Set<number>;
   passes: Set<TargetKey>;
   bloom: boolean;
+  /** effect 开关变了的图层（`objects` 下标）：渲染图可能要重排（3c）。 */
+  structures: Set<number>;
+}
+
+/** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
+interface EffectState {
+  enabled: boolean;
+  unsupported: boolean;
+}
+
+/** effect 开关的键：scene.json 坐标（`effect` 是 `SceneEffect.source`，不是 `layer.effects` 下标）。 */
+function effectKey(object: number, effect: number): string {
+  return `${object}/${effect}`;
 }
 
 function layerStateOf(layer: SceneLayer): LayerState {
@@ -100,11 +113,15 @@ export class SceneState {
   private dirtyLayers = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
+  private dirtyStructures = new Set<number>();
+  /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
+  private readonly frozenLayers = new Set<number>();
 
   private constructor(
     layers: Map<number, LayerState>,
     constants: Map<TargetKey, Record<string, number[]>>,
     bloom: BloomParams,
+    private readonly effects: Map<string, EffectState>,
   ) {
     this.layers = layers;
     this.constants = constants;
@@ -114,26 +131,64 @@ export class SceneState {
   static fromBundle(bundle: SceneBundle): SceneState {
     const layers = new Map<number, LayerState>();
     const constants = new Map<TargetKey, Record<string, number[]>>();
+    const effects = new Map<string, EffectState>();
     for (const layer of bundle.layers) {
       layers.set(layer.object, layerStateOf(layer));
       for (const pass of layer.passes) constants.set(pass.key, { ...pass.uniforms });
-      for (const effect of layer.effects)
+      for (const effect of layer.effects) {
+        effects.set(effectKey(layer.object, effect.source), {
+          enabled: effect.enabled,
+          unsupported: effect.unsupported.length > 0,
+        });
         for (const step of effect.steps)
           if (step.kind === "draw") constants.set(step.pass.key, { ...step.pass.uniforms });
+      }
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
     }
     const { bloom } = bundle.general;
-    return new SceneState(layers, constants, { ...bloom, tint: [...bloom.tint] });
+    return new SceneState(layers, constants, { ...bloom, tint: [...bloom.tint] }, effects);
+  }
+
+  /** 按 scene.json 坐标取 effect 开关；不在 bundle 里的算关着。 */
+  effectEnabled(object: number, effect: number): boolean {
+    return this.effects.get(effectKey(object, effect))?.enabled ?? false;
+  }
+
+  /** `GpuScene.prepareVariants` 没能备好这一层：同一层的失败不细分到 effect，切这一层都走重编译。 */
+  freezeLayer(object: number): void {
+    this.frozenLayers.add(object);
+  }
+
+  /** 这次写入是否要整场重编译（不改状态）：打开带不支持项的 effect、切换冻结的图层，或已经是重编译类目标。 */
+  needsRecompile(binding: SceneBinding, raw: SceneScalar): boolean {
+    const { target } = binding;
+    if (target.kind === "recompile") return true;
+    if (target.kind !== "effect") return false;
+    const effect = this.effects.get(effectKey(target.object, target.effect));
+    const enabled = bindingValue(raw, binding.condition, "bool") !== false;
+    if (!effect || enabled === effect.enabled) return false;
+    return (effect.unsupported && enabled) || this.frozenLayers.has(target.object);
   }
 
   /**
    * 一条绑定的写入；目标不在当前 bundle 里（如被排除的 effect）返回 `"applied"` 且不做事，
-   * 重编译类目标返回 `"recompile"`（调用方整场重编译）。
+   * 重编译类目标与 `needsRecompile` 为真的 effect 开关返回 `"recompile"`（状态不变，调用方整场重编译）。
    */
   write(binding: SceneBinding, raw: SceneScalar): WriteResult {
     const { target } = binding;
     if (target.kind === "recompile") return "recompile";
     if (target.kind === "script-property") return "applied";
+    if (target.kind === "effect") {
+      const effect = this.effects.get(effectKey(target.object, target.effect));
+      if (!effect) return "applied";
+      // 值换算同编译期（`enabled = 解析值 !== false`）
+      const enabled = bindingValue(raw, binding.condition, "bool") !== false;
+      if (enabled === effect.enabled) return "applied";
+      if (this.needsRecompile(binding, raw)) return "recompile";
+      effect.enabled = enabled;
+      this.dirtyStructures.add(target.object);
+      return "applied";
+    }
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
       if (layer) {
@@ -167,10 +222,16 @@ export class SceneState {
 
   /** 渲染器每帧取走脏项（取走即清空）。 */
   takeDirty(): DirtyState {
-    const dirty = { layers: this.dirtyLayers, passes: this.dirtyPasses, bloom: this.bloomDirty };
+    const dirty = {
+      layers: this.dirtyLayers,
+      passes: this.dirtyPasses,
+      bloom: this.bloomDirty,
+      structures: this.dirtyStructures,
+    };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
     this.bloomDirty = false;
+    this.dirtyStructures = new Set();
     return dirty;
   }
 }

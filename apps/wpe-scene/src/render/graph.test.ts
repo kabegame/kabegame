@@ -7,11 +7,13 @@ import {
   needsComposite,
   planLayer,
   planSignature,
+  variantPlans,
   type DrawStep,
+  type LayerPlan,
   type LayerStep,
 } from "./graph";
 import { transformPoint } from "./math";
-import { drawMatrices, uploadableTextures } from "./scene";
+import { drawMatrices, pipelineKey, stepPipeline, uploadableTextures } from "./scene";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -389,6 +391,152 @@ describe("渲染图按开关重排（3c）", () => {
     expect(signature([off(a), off(b)])).not.toBe(signature([a, off(b)]));
     const empty = effect([]);
     expect(signature([a, off(empty)])).toBe(signature([a, empty]));
+  });
+});
+
+describe("可变 effect 的计划枚举（3c）", () => {
+  /** 每个 pass 一个程序，键才分得开；`source` 故意和 `layer.effects` 下标不同。 */
+  const step = (program: number, partial: Partial<Extract<SceneEffectStep, { kind: "draw" }>> = {}) =>
+    draw({ pass: pass({ key: `p${program}`, program, blending: program % 2 ? "additive" : "normal" }), ...partial });
+  const open = (steps: SceneEffectStep[], fbos: SceneFbo[] = []): SceneEffect => ({
+    ...effect(steps, fbos),
+    source: 7,
+    enabled: false,
+    visibleBound: true,
+  });
+  const fixed = (steps: SceneEffectStep[]): SceneEffect => effect(steps);
+  const blocked = (enabled: boolean, steps: SceneEffectStep[]): SceneEffect => ({
+    ...open(steps),
+    enabled,
+    unsupported: ["effect:custom:custom"],
+  });
+  const passthrough = pass({ key: "pt", program: 90, blending: "translucent" });
+
+  const keyOf = (item: DrawStep) =>
+    pipelineKey(stepPipeline(item, "rgba8unorm", (_e, name) => (name.endsWith("_float") ? "rgba16float" : "r8unorm")));
+  const keysOf = (plans: LayerPlan[]) => new Set(plans.flatMap((plan) => draws(plan.steps).map(keyOf)));
+  const isVariable = (item: SceneEffect) => item.visibleBound && (item.enabled || !item.unsupported.length);
+
+  /** 全部开关组合：可变的逐位枚举，其余取 bundle 里的 `enabled`。 */
+  function combos(target: SceneLayer): ((e: number) => boolean)[] {
+    const variable = target.effects.flatMap((item, e) => (isVariable(item) ? [e] : []));
+    return Array.from({ length: 1 << variable.length }, (_, bits) => (e: number) => {
+      const at = variable.indexOf(e);
+      return at < 0 ? target.effects[e].enabled : ((bits >> at) & 1) === 1;
+    });
+  }
+
+  const cases: [string, Partial<SceneLayer>, number][] = [
+    ["两个可变", { effects: [open([step(1)]), open([step(2)])] }, 2],
+    ["三个可变、多 pass", { effects: [open([step(1), step(2)]), open([step(3)]), open([step(4), step(5)])] }, 3],
+    ["固定开着的夹在中间", { effects: [open([step(1)]), fixed([step(2)]), open([step(3)])] }, 2],
+    ["固定开着的在最后：可变的都不上屏", { effects: [open([step(1)]), open([step(2)]), fixed([step(3)])] }, 2],
+    ["固定开着的在最前", { effects: [fixed([step(1)]), open([step(2)]), open([step(3)])] }, 2],
+    ["没有绘制 pass 的 effect", { effects: [open([step(1)]), open([]), open([step(2)])] }, 3],
+    [
+      "只有 copy / swap 的 effect",
+      {
+        effects: [
+          open([step(1)]),
+          open(
+            [
+              { kind: "copy", source: "previous", target: "x" },
+              { kind: "swap", source: "x", target: "y" },
+            ],
+            [fbo("x"), fbo("y")],
+          ),
+          open([step(2)]),
+        ],
+      },
+      3,
+    ],
+    [
+      "fbo 目标：格式不同，compose 不写 fbo",
+      {
+        effects: [
+          open([step(1, { target: "a_float" }), step(2, { binds: [{ name: "a_float", index: 0 }] })], [fbo("a_float")]),
+          open([step(3, { target: "b" }), step(4, { target: "b", compose: true })], [fbo("b")]),
+          open([step(5, { target: "c" })], [fbo("c")]),
+        ],
+      },
+      3,
+    ],
+    ["colorBlendMode 31", { colorBlendMode: 31, effects: [open([step(1)]), open([step(2)])] }, 2],
+    [
+      "passthrough",
+      { colorBlendMode: 11, passthrough, effects: [open([step(1)]), open([step(2)]), open([step(3)])] },
+      3,
+    ],
+    [
+      "带不支持项：关着的不算可变，开着的（dev 强制渲染）能就地关，算可变",
+      { effects: [open([step(1)]), blocked(false, [step(2)]), blocked(true, [step(3)]), open([step(4)])] },
+      3,
+    ],
+    [
+      "四个可变，混固定、fbo 与空 effect",
+      {
+        effects: [
+          open([step(1)]),
+          fixed([step(2)]),
+          open([step(3, { target: "a" }), step(4)], [fbo("a")]),
+          open([]),
+          open([step(5)]),
+        ],
+      },
+      4,
+    ],
+  ];
+
+  it.each(cases)("%s：全部组合的管线键都在并集里，共 n + 2 份计划", (_name, partial, variable) => {
+    const target = layer(partial);
+    const plans = variantPlans(target, textures);
+    expect(plans).toHaveLength(variable + 2);
+    const union = keysOf(plans);
+    let checked = 0;
+    for (const enabled of combos(target)) {
+      const plan = planLayer(target, textures, enabled);
+      // 全部开着的 effect 都没有绘制 pass：整场加载同样画不了
+      if (plan.reasons.includes("render:no-final-pass")) continue;
+      expect(plan.reasons).toEqual([]);
+      for (const key of keysOf([plan])) expect(union).toContain(key);
+      checked++;
+    }
+    expect(checked).toBeGreaterThanOrEqual(1 << (variable - 1));
+  });
+
+  it("全开加全关不够：缺「某个可变 effect 开、后面全关」就漏掉它的上屏角色", () => {
+    const target = layer({ effects: [open([step(1)]), open([step(2)])] });
+    const [allOn, allOff] = variantPlans(target, textures);
+    const middle = planLayer(target, textures, (e) => e === 0);
+    expect(draws(middle.steps).at(-1)).toMatchObject({ role: "final", effect: 0 });
+    const partial = keysOf([allOn, allOff]);
+    expect([...keysOf([middle])].some((key) => !partial.has(key))).toBe(true);
+  });
+
+  it("没有可变 effect 时为空", () => {
+    expect(variantPlans(layer(), textures)).toEqual([]);
+    expect(variantPlans(layer({ effects: [fixed([step(1)])] }), textures)).toEqual([]);
+    expect(variantPlans(layer({ effects: [blocked(false, [step(1)])] }), textures)).toEqual([]);
+  });
+
+  it("带不支持项且关着的 effect 不进任何一份计划", () => {
+    const target = layer({ effects: [open([step(1)]), blocked(false, [step(2)])] });
+    const plans = variantPlans(target, textures);
+    expect(plans.flatMap((plan) => draws(plan.steps).map((item) => item.pass.program))).not.toContain(2);
+  });
+
+  it("FboBindings.initial 不随 swap 变", () => {
+    const bindings = new FboBindings([
+      new Map([
+        ["a", 10],
+        ["b", 11],
+      ]),
+    ]);
+    bindings.swap(0, "a", "b");
+    expect(bindings.resolve(0, "a")).toBe(11);
+    expect(bindings.initial(0, "a")).toBe(10);
+    expect(bindings.initial(0, "b")).toBe(11);
+    expect(() => bindings.initial(0, "c")).toThrow();
   });
 });
 

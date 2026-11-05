@@ -7,14 +7,14 @@
  * - **帧循环**：`requestAnimationFrame`，默认上限 60 fps（`maxFps`）。`paused` 或 `document.hidden` 时停循环、冻结时钟，
  *   恢复后 `g_Time` 从冻结处继续（见 `clock.ts`）。暂停期间画布尺寸变了会补画一帧（同一时刻），避免空白。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
- * - **失败**：运行期出现未捕获的校验错误时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
+ * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
 import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
-import { oneLine, SceneRenderError } from "./errors";
+import { oneLine, reasonsOf, SceneRenderError } from "./errors";
 import { coverUv, type CoverUv } from "./layout";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
@@ -189,14 +189,15 @@ export class SceneRenderer {
 
   /**
    * 就地应用一批绑定写入；需要重编译时返回 false（调用方整场重编译）。
-   * 写之前先问 GPU 场景能不能做（`canApply`：泛光的 `bloomhdriterations` 改变级数时不能），做不了就一条都不写。
+   * 写之前先问状态与 GPU 场景能不能做：打开带不支持项的 effect、切换冻结的图层不能（`needsRecompile`），
+   * 泛光的 `bloomhdriterations` 改变级数时不能（`canApply`），做不了就一条都不写。
    * 这里不画：暂停时由宿主在脚本的属性回调之后调 `redraw`，回调的写入才能进同一帧。
    */
   applyBindings(writes: readonly BindingWrite[]): boolean {
     const state = this.state;
     const scene = this.scene;
     if (!state || !scene || this.destroyed || this.lost || this.failed) return false;
-    if (writes.some((write) => write.binding.target.kind === "recompile")) return false;
+    if (writes.some((write) => state.needsRecompile(write.binding, write.value))) return false;
     if (!scene.canApply(state.previewBloom(writes))) return false;
     for (const write of writes) state.write(write.binding, write.value);
     return true;
@@ -348,18 +349,24 @@ export class SceneRenderer {
     this.lastTime = seconds;
     this.currentFrametime = frametime;
     if (!this.paused && !document.hidden && (runScripts || this.shouldRun)) this.options.beforeFrame?.(frametime);
-    // 就地改过的状态先刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a）
-    scene.sync(state);
-    scene.update({
-      time: seconds % TIME_WRAP_SECONDS,
-      frametime,
-      daytime: daytimeOf(new Date()),
-      pointer: this.pointer,
-      pointerLast: this.pointerLast,
-    });
-    this.pointerLast = this.pointer;
     const encoder = device.createCommandEncoder({ label: "scene frame" });
-    scene.encode(encoder, state);
+    try {
+      // 就地改过的状态先刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a）
+      scene.sync(state);
+      scene.update({
+        time: seconds % TIME_WRAP_SECONDS,
+        frametime,
+        daytime: daytimeOf(new Date()),
+        pointer: this.pointer,
+        pointerLast: this.pointerLast,
+      });
+      scene.encode(encoder, state);
+    } catch (error) {
+      // 抛出去没人接：下一帧已排好，每帧再抛一次，画面停住也不退回
+      this.fail(reasonsOf(error, "render:frame"));
+      return;
+    }
+    this.pointerLast = this.pointer;
     const pass = encoder.beginRenderPass({
       label: "scene cover",
       colorAttachments: [

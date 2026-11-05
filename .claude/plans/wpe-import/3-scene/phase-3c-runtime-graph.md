@@ -9,6 +9,8 @@
 > - 探针修正。
 >
 > 现状锚点按 3b 结束时（`7bfb9d30`）的代码重核。
+>
+> 修订（2026-11-06）：用户一度决定允许卡帧，effect 开关的单图层重建做成了后台异步（第一版，未提交）。用户随后说明那只是猜测，目标是对齐 WPE；查清 WPE 的实际行为后（[p3-script-REPORT.md](p3-script-REPORT.md) J 节）改成加载时备好、切换同步（已定 11）。总体设计第三段、点 3 与风险已按此改写，经过见实施记录「步骤 2」。
 
 ## 总体设计思路
 
@@ -16,11 +18,19 @@
 
 主体是 **effect 可见性的单图层重算**。现在编译期直接丢掉未启用的 effect（它们不进 bundle、不检查能力、不翻译着色器），所以运行时没法打开。P3c 改成：凡是可见性可能在运行时变化的 effect（`visible` 绑了用户属性，或有脚本挂在它的 `visible` 上），不论当前开关都编进 bundle，带上初始开关与**它自己的**不支持项；场景级的 `unsupported` 只算当前启用的 effect。写死 `visible: false`、没有任何绑定的 effect 照旧丢掉。运行时开关一个 effect，只对它所在的图层重新 `planLayer`（纯函数，已有）、按新步骤重建该图层的 draw、bind group 与 op 序列，换进 `GpuScene` 的图层表；要打开的 effect 带有不支持项时，退回整场重编译，结果照常退回预览图（与现在一致）。
 
-为了让单图层重建能在两帧之间**同步**完成（WPE 也是同步的），可能用到的 GPU 对象在加载时一次建好：可变 effect 的程序与 fbo；每个可变图层两张合成 RT；以及「角色会变」的步骤的两种管线——effect 的最后一个绘制 pass 可能是普通 effect 步骤（合成 RT 格式、自己的混合）或上屏步骤（场景格式、借基础材质的混合），基础 pass 可能直接上屏或画进合成 RT。uniform 值按角色由 3a 的纯函数 `drawUniformValues` 重算，bind group 是同步创建的。这样重建只剩 CPU 计算、`createBindGroup` 与 `writeBuffer`，量级在亚毫秒。
+单图层重建**同步**完成（已定 11），分两段，和 WPE 一样：加载时把可变图层可能用到的程序和管线全部建好；切换时在 `sync()` 里当场换上，不等待任何东西。脚本在 `sync()` 之前运行，所以脚本写的开关同一帧就画，属性改值后第一帧生效，这两点不需要额外处理。
+
+WebGPU 的管线绑定了混合、目标格式与写掩码，而 WPE 的 D3D11 着色器不绑，这是我们要多做的部分。不需要枚举全部开关组合：管线键只取决于 pass 和角色，所以 n 个可变 effect 只要 n+2 份计划就覆盖全部键。全开覆盖每个 pass 的普通角色，全关覆盖基础 pass 直接上屏，「某个可变 effect 开、它后面的可变 effect 全关」覆盖它的上屏角色。枚举直接复用 `planLayer`，不写第二份规则。带 `unsupported` 的 effect 打开时整场重编译，不算可变。
+
+切换时能失败的检查尽量提前到加载时，n+2 份覆盖不到的组合（全部开着的 effect 都没有绘制 pass）在切换时当场查，抛错走 `fail`。预建失败不影响当前画面，只把图层标成「不能就地切换」，之后切这一层走现有的整场重编译。这样切换路径上没有失败分支，没有后台任务、签名循环和重建失败回调；万一还有校验错误，走已有的 `onuncapturederror`，退回预览图。
+
+`clear` 的触发看「开关真的变了」，不看计划签名：同一帧内关了又开，计划不变，但 WPE 仍然清。清的是 fbo 本身，不受 swap 影响，所以按初始对应取实体。
+
+可变 effect 的纹理和 fbo 在加载时就建好（点 1），第二张合成 RT 和快照在预建时补齐。加载与切换共用 `buildLayer`，所以没有两套建图层的逻辑，这也是「就地 = 重编译」字节相等的保证。旧 draw 的缓冲换下时销毁，开关多少次都不累积。没有可变 effect 的场景不进入任何新路径，资源数与画面不变。
 
 其余几类：**泛光开关**照 WPE 每帧读——`general.bloom` 可变时，只要档位不是关闭、场景有对象就把泛光链建好，开关只决定本帧跑不跑泛光那一步；HDR 仍只在加载时判定（P2b，WPE 的 HDR 渲染位与交换链格式只在加载时算），运行中打开泛光的 LDR 场景得到 LDR 泛光。**泛光级数**照 WPE 预建：`bloomhdriterations` 可变时按可用级数建满金字塔，每帧只用前 N 级。**清屏色、环境光 / 天光、相机 `eye`** 直接就地写（正交相机里 `eye` 只进 `g_EyePosition`）。`colorBlendMode`、`hdr`、`size` 的处理见待定。
 
-关键决策：可变性按「有没有绑定」判定，而不是一律预建——这样没有绑定的场景（目前本机能渲染的全部）在 P3c 前后 GPU 资源与画面逐字节相同，回归面最小；代价是绑定表成为预建范围的唯一依据，3a 的完整性单测因此更重要。
+关键决策：可变性按「有没有绑定」判定，而不是所有 effect 都编进 bundle——这样没有绑定的场景（目前本机能渲染的全部）在 P3c 前后 GPU 资源与画面逐字节相同，回归面最小；代价是绑定表成为可变范围的唯一依据，3a 的完整性单测因此更重要。
 
 另有一组与渲染图无关的脚本侧改动（点 0），先做。
 
@@ -477,45 +487,62 @@ export function planSignature(plan: LayerPlan): string;
 ```
 - 单测（`graph.test.ts`）：两个 effect 的图层，关掉后一个时前一个的最后一个绘制 pass 变成上屏、合成 RT 由 2 张变 1 张；全关时基础 pass 改成直接上屏；passthrough 图层开关 effect 时上屏仍是 passthrough；关掉的 effect 里的 fbo 引用不进步骤。
 
-## 点 3 — 单图层同步重建（`render/scene.ts`、`render/state.ts`、`compile/bindings.ts`、`compile/scripts.ts`、`script/api.ts`、`host.ts`）
+## 点 3 — 单图层同步切换（`render/graph.ts`、`render/scene.ts`、`render/state.ts`、`render/renderer.ts`、`compile/bindings.ts`、`compile/bundle.ts`、`compile/scripts.ts`、`script/api.ts`、`script/runtime.ts`、`host.ts`）
 
-- **修改** 绑定目标：effect `visible` 从 `recompile("effect-visible")` 改成就地类目标。放在这一步而不是点 1：`SceneState` 要到这里才会处理 effect 目标，提前改的话改属性没有反应，脚本也写不进去。
+- **修改** 绑定目标：effect `visible` 从 `recompile("effect-visible")` 改成就地类目标，`RecompileReason` 删掉 `effect-visible`。放在这一步而不是点 1：`SceneState` 要到这里才会处理 effect 目标，提前改的话改属性没有反应，脚本也写不进去。
 ```ts
   | { kind: "effect"; object: number; effect: number /* effects[] 下标（JSON 坐标）*/ }   // 新增
 ```
 - **修改** 脚本侧：
   - `scripts.ts` 的 `targetOf` 把 effect `visible` 改为同一个就地目标；
-  - `ScriptApi` 里 effect 对象的 `visible` 写入也走这个目标；
-  - `host.ts` 的 `writeScript` 不再为它写 `scriptOverrides`，也不再请求重编译。
+  - `ScriptApi` 里 effect 对象的 `visible` 写入走这个目标，读取改读 `state().effectEnabled(...)`；
+  - `targetPath` 与 `targetKey` 加 effect 分支，路径同旧的 `objects/<i>/effects/<j>/visible`，`forgetWrite` 与 `replayWrites` 不变；
+  - `host.ts` 的 `writeScript` 只在 `state.write` 返回 `"recompile"` 时写 `scriptOverrides`。
 
-  `scriptOverrides` 只剩 general 字段与图层结构类目标在用（见待定 1、2）。
-- **修改** 加载时为可变图层预建（「可变图层」= 有 `visibleBound` 的 effect 的图层）：
+  `scriptOverrides` 只剩 general 字段、图层结构类目标、「打开带不支持项的 effect」与「切换冻结的图层」在用（见待定 1、2）。
+- **修改** `SceneState`：effect 开关进状态。
 ```ts
-interface LayerRuntime {
-  object: number;
-  ops: Op[];
-  draws: Draw[];
-  /** 新增：可变图层的预建资源，重建时只从这里取，不再异步建任何东西。 */
-  variants: {
-    composites: RenderTarget[];                          // 按 2 张建（合成 RT 最多 2 张，B5）
-    fbos: FboBindings;                                   // 全部编进 bundle 的 effect 的 fbo
-    pipelines: Map<string, GPURenderPipeline>;           // 键：pass key | 角色（direct / base / effect / final）
-  } | null;
-  signature: string;                                     // 当前计划的签名
-}
+  effectEnabled(object: number, effect: number): boolean;            // 按 scene.json 坐标
+  needsRecompile(binding: SceneBinding, raw: SceneScalar): boolean;  // 不改状态：打开带不支持项的 effect、切换冻结的图层，或重编译类目标
+  // write 的 effect 分支：值没变 "applied"；needsRecompile 为真时 "recompile"；否则改开关，记进结构脏集合
+  // takeDirty 加 structures: Set<number>
 ```
-  - 需要两种管线的步骤：基础 pass（`direct` 与 `base`）、每个可变 effect 的最后一个绘制 pass 以及每个 effect 链末端可能成为上屏的绘制 pass（`effect` 与 `final`）；passthrough 图层的 effect 步骤只有 `effect` 一种。
-- **新增** 同步重建：
+- **修改** `populate` 里按图层的部分拆开，局部变量升到实例字段，加载与重建共用：
 ```ts
-  /** effect 开关后调用：重新计划；签名没变就只更新开关，变了就用预建资源重建本图层的 draw、bind group、op（同步）。 */
-  rebuildLayer(object: number, state: SceneState): void {
-    // planLayer(layer, textures, (e) => state.effectEnabled(object, e))
-    // 对每个绘制步骤：管线取 variants.pipelines，uniform 由 drawUniformValues 按新角色算，bind group 同步建
-    // 快照 op 按新计划的位置；旧 draw 的 uniform buffer 放回本图层的缓冲池复用（不 destroy 进行中的帧要用的资源）
-  }
+  private ensureProgram(index: number): Promise<GpuProgram>;     // 用到才建，失败抛错
+  private ensureSnapshot(): void;
+  private ensureComposites(runtime: LayerRuntime, plan: LayerPlan): void;   // 不够就从共享池补
+  /** 等齐程序与管线（异步）；之后 buildLayer 是同步的 */
+  private prepareLayer(plan: LayerPlan, resources: LayerResources): Promise<Map<DrawStep, PreparedDraw>>;
+  /** 照计划生成 op 与 draw（开头调 checkPlanOps） */
+  private buildLayer(runtime, plan, prepared, state): { ops: Op[]; draws: Draw[] };
 ```
-- **修改** `SceneState`：effect 开关进状态（`effectEnabled(object, effect)`），写入时把图层记进「结构脏」集合；`GpuScene.sync` 先处理结构脏（`rebuildLayer`），再处理 uniform 脏。
-- **修改** 打开一个 `unsupported` 非空的 effect：`SceneState.write` 返回 `"recompile"`，宿主整场重编译（结果是退回预览图，与现在一致），日志写明是哪个 effect、哪些不支持项。
+  fbo 尺寸一律取 `compositeSize(layer, baseTexture)`，修掉步骤 1 留下的 `[4, 4]`。
+- **新增** 加载时预建与同步切换：
+```ts
+  /** graph.ts：图层运行时可能用到的计划，n 个可变 effect 共 n + 2 份；没有可变 effect 时为空。带不支持项的不算可变 */
+  export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]): LayerPlan[];
+  /** 关着的 effect 也在加载时备好。逐图层进行，失败不影响当前画面，这一层之后走整场重编译 */
+  private async prepareVariants(state: SceneState): Promise<void>;
+  /** 从就绪表同步取，缺了抛 render:variant-missing */
+  private preparedOf(plan: LayerPlan, resources: LayerResources): Map<DrawStep, PreparedDraw>;
+  /** 切换当场做完：比较签名，变了就建 draw 并换上 */
+  private rebuildLayer(runtime: LayerRuntime, state: SceneState): void;
+  /** 清本图层全部 effect 带 clear 的 fbo，含没切的和关着的，实体按 FboBindings.initial 取 */
+  private clearLayerFbos(encoder: GPUCommandEncoder, runtime: LayerRuntime): boolean;
+```
+  - 计划按 `(e) => state.effectEnabled(object, layer.effects[e].source)` 排：绑定目标与状态用 JSON 坐标，`planLayer` 的回调给 `layer.effects` 下标；
+  - 换上时旧 draw 从索引摘掉，缓冲销毁并移出 `owned`（改成 `Set`）。已提交的帧不受影响；
+  - `ensureProgram` / `pipelineFor` 完成时写进 `readyPrograms` / `readyPipelines`，切换时同步取。管线键由 `stepPipeline` + `pipelineKey` 算，`prepareLayer`、`preparedOf` 与单测共用；
+  - `checkPlanOps`：`buildLayer` 里 swap、copy 的检查抽出来，`prepareVariants` 对每份计划先过一遍；
+  - `GpuScene.build` 在 `populate` 的错误作用域弹出之后调 `prepareVariants`；每个可变图层一个 validation 作用域，失败调 `state.freezeLayer(object)` 并记进 `warnings`；
+  - `SceneState` 新增 `frozenLayers` 与 `freezeLayer`；`needsRecompile` 对冻结图层的开关为真，开和关都算，同值写不算。
+- **修改** `sync`：结构先处理，新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上。结构脏的图层 rebuild 之后清 fbo，签名没变也清（同一帧内关了又开）。
+- **修改** `applyBindings`：写之前 `needsRecompile` 为真就一条都不写，返回 false。
+- **修改** 渲染器 `render`：`scene.sync` 外包 `try/catch`，抛错走 `fail`。否则脏项已取走、下一帧已排好，这次切换丢失且没有任何报告。暂停时的补画沿用宿主 `applyChanges` 末尾的 `redraw`。
+- **修改** 宿主：
+  - 打开一个 `unsupported` 非空的 effect，或切换冻结的图层：`applyChanges` 的重编译原因写 `effect-blocked（路径）`，debug 日志带上不支持项，结果由整场编译决定（带不支持项的照常退回预览图）；
+  - 脚本写同样的目标：`state.write` 返回 `"recompile"`，走 `overrideAndReload`，值没变不重复请求。
 
 ## 点 4 — 泛光开关就地（`compile/bundle.ts`、`compile/postprocess.ts`、`render/scene.ts`）
 
@@ -557,7 +584,7 @@ interface LayerRuntime {
     - 补 `registerAudioBuffers` 占位；
     - 「未提供」清单删掉这两项；
     - 探针一段同步点 0。
-  - 「图层渲染图」补运行时开关与单图层重建、可变 effect 的编译规则与不支持项归属、预建资源；「泛光与 HDR」补开关就地与级数预建、HDR 只在加载时判定；「场景宿主」的就地 / 重编译分类表改成最终形态（并附上本文件的对照表）；`cocs/README.md` 摘要同步。
+  - 「图层渲染图」补运行时开关与单图层同步切换、可变 effect 的编译规则与不支持项归属；「泛光与 HDR」补开关就地与级数预建、HDR 只在加载时判定；「场景宿主」的就地 / 重编译分类表改成最终形态（并附上本文件的对照表）；`cocs/README.md` 摘要同步。
 - `versions/latest/regression.md` 新增「场景壁纸 P3c：运行时渲染图」小节，用例见验收。
 - `versions/latest/changelog.md` 用户侧 Optimized 一行：「场景壁纸开关图层效果、泛光，以及改背景色等属性时也即时生效，不再重新加载」。
   另在 3b 那条 Added 后补半句：「场景脚本的存储（如记住的拖动位置）会保留到下次打开」。
@@ -585,7 +612,7 @@ interface LayerRuntime {
 - 运行时行为不变：改 effect 可见性仍走整场重编译，`scriptOverrides` 继续保证重编译时 `enabled` 正确。
 - 验收：单测（点 2 列出的几例，以及「不可变的关闭 effect 照旧不进 bundle」「可变 effect 的不支持项不进场景级」、缓存命中重新上报、关着的 effect 出错）；语料测试的 `unsupported` 与 3b 结束时逐张相同（本机没有不可变 → 可变的变化会让结论改变的场景；如有，逐张解释）。
 
-**步骤 2 — 单图层重建**（codex：点 3，含绑定目标与脚本侧改成就地）
+**步骤 2 — 单图层重建**（子代理：点 3，含绑定目标与脚本侧改成就地）
 - 验收：单测——对测试工程的 bundle，「关掉 effect → 重建」得到的步骤与 uniform 字节，和「用 effect 关着的属性值整场编译」逐字节相同；再打开回到原样。没有可变 effect 的场景，`GpuScene` 建出的资源数与 3b 相同、基线哈希不变。
 
 **步骤 3 — 泛光开关与级数**（codex：点 4、点 5）
@@ -654,18 +681,19 @@ interface LayerRuntime {
 - **泛光开关**（「场景后处理」= 开启）：切 `p_bloom`，泛光随之出现 / 消失、不重编译；`p_bloomstr` 改强度即时生效。测完设置改回「跟随 WPE」。
 - **清屏色 / 环境光**：测试工程补的 `clearcolor` 绑定改值后背景即时变色、不重编译。
 - **脚本写 effect visible**（如本机有可渲染的样本；没有就在测试工程里加一段 `update` 按时间切 effect 可见性的脚本）：切换按脚本节奏发生，无重编译。
-- 不回归：vortex、bedroom（三档）、P1 三张画面与 3b 相同；显存（日志的渲染目标估算）记进回归表，说明可变图层预建多出的部分。
+- 不回归：vortex、bedroom（三档）、P1 三张画面与 3b 相同；显存（日志的渲染目标估算）记进回归表，说明可变 effect 多出的部分。
 
 ## 风险
 
-1. **预建资源的显存**：可变图层多两张合成 RT、全部可变 effect 的 fbo，`bloomhdriterations` 可变时建满 8 级金字塔（4K HDR 约 21 MiB，P2b）。只有带绑定的场景才多，记进回归表。
-2. **重建与在途帧**：单图层重建发生在两帧之间（属性消息、脚本 `update` 都在帧前同步跑），旧 draw 的 GPU 对象可能仍被已提交未完成的帧引用；WebGPU 允许释放已提交的资源（会等用完），但为稳妥起见复用而不是立即 `destroy`。
-3. **管线变体遗漏**：重建要求所有可能用到的管线已经建好；遗漏任何一种就只能异步补建（画面晚一帧）或报错。单测按「每个可变图层的全部开关组合」枚举需要的变体（effect 数小，组合数可控；超过 8 个可变 effect 时只枚举到角色层面）。
+1. **可变 effect 的显存与加载时间**：可变 effect 的 fbo、合成 RT 与快照都在加载时建，之后不还；程序与管线也在加载时建，可变图层的加载因此变长（管线按键去重）。`bloomhdriterations` 可变时建满 8 级金字塔（4K HDR 约 21 MiB，P2b）。只有带绑定的场景才多，记进回归表。
+2. **重建与在途帧**：切换在 `render` 里、编码这一帧之前同步完成，旧 draw 的缓冲换下时销毁。WebGPU 允许销毁已提交的帧用过的缓冲，那一帧不受影响。
+3. **切换开销**：切换不编译，但要建 draw 的缓冲与 bind group，有 `clear` 时再提交一次清屏，都在帧内同步做。脚本逐帧切换时每帧都有这份开销。WPE 的同类开销是 0.7 ms（J1，纯色层）；我们的数字等验收。预建失败的图层切换走整场重编译，这时会有明显延迟。
 4. **WPE 语义的推断部分**：`FUN_1402065e0` 只在「数值变了」才重建；我们按计划签名判定，覆盖范围略大（结果相同）。`colorBlendMode` 的运行时行为 I3 没有列出（待定 1）。
 5. **样本不足**：本机能实时渲染的场景都没有这几类绑定，主要靠测试工程与单测；工坊里有 effect visible 绑定的场景（如 2932157836 的 `wink`）要等它们的其它阻塞解除后才能真机看到。
 6. **存储配额共用**：脚本存储与宿主、所有网页壁纸同在 `file:` 来源的一份 `localStorage` 里，Chromium 每来源约 5 MiB。写得多的脚本可能挤占网页壁纸的空间，超了 `set` 抛错，只禁用那个回调。本机样本存的都是几个小值。
 7. **不再遮蔽的代价**：在 WPE 里会报错的脚本在我们这里可能能跑。比如用了全局 `setTimeout` 的脚本，计时器按墙钟走、暂停时不停；用了 `fetch` 的可以读宿主 `file:` 范围内的文件。这类行为与 WPE 不同，只出现在 WPE 下本来就坏掉的脚本里。安全性不变：3b 已定 4 本来就写明不是安全边界。
 8. **音频数值只是近似**：频谱算法是 Phase 8 自定的（WPE 没有公开），64 段到 32 / 16 段的合并方式也是推断。脚本的阈值按 WPE 的数值调出来，观感可能和 WPE 有差别。本机能实时渲染的场景都不用音频，要到它们的渲染阻塞解除后才能和 WPE 对照。全零时某些脚本的除法可能写出 `NaN`，与 WPE 静音时的行为一致与否未核实。
+9. **反馈型 fbo 的旧内容**（已查清，J6）：effect 关掉再打开时，fbo 内容与 swap 状态保留，带 `clear` 的除外（每次重建都清，且是同图层全部 effect 的 fbo）。我们照此实现，与 WPE 一致。整场重编译是清空的，所以这一点上「就地 = 重编译」本来就不成立，单测只比步骤序列、uniform 字节与编码轨迹。
 
 ## 已定（2026-11-03 用户）
 
@@ -690,6 +718,7 @@ interface LayerRuntime {
    - 多显示器壁纸落地时再按显示器分。
 9. **重编译日志保持 `debug`**（2026-11-05 用户）：只进宿主 DevTools 控制台，不进应用日志。验收靠探针的 `stats().recompiled`；点 0 起它也计入设置引起的重载。
 10. **暂停与清空存储单独放进当前壁纸属性面板**（2026-11-05 用户）：设置页与预览详情共用；不和「全部重置」绑在一起。不做 100 KB 上限。
+11. **对齐 WPE 行为，加载时备好、切换同步**（2026-11-06 用户，撤销「允许卡帧」）：依据 [p3-script-REPORT.md](p3-script-REPORT.md) J 节。
 
 ## 待定（附推荐）
 
@@ -768,3 +797,91 @@ interface LayerRuntime {
 - 测试工程 13114：关掉 effect 走一次 `effect-visible` 重编译，固定时刻的 hash 变化，`state` 里仍有该 effect 的 pass；关着时改 `p_tintcolor` 就地写（applied +1，不重编译，hash 不变）；打开再走一次重编译，hash 回到开始的值。属性已恢复默认。
 - bedroom、vortex 预览 `recompiled` 为空，按钮正常。
 - 变异检查：着色器、纹理缓存改回只报一次，都有对应单测失败，已还原。
+
+### 步骤 2
+
+**第一版（异步重建，未提交，已被下面的修订取代）。** 当时按「允许卡帧」落地。加载与重建共用 `prepareLayer` + `buildLayer`，`rebuildLayer` 用 `runtime.rebuilding` 保证同一图层只跑一次。`createDraw` 改成同步，程序和管线由 `prepareLayer` 等齐后传进来。新增单测 `render/rebuild.test.ts`（假 `GPUDevice`），按「开着建 → 关 → `sync` → `rebuildsSettled` → `update`」与「关着直接建」比步骤序列、缓冲字节和一帧的编码轨迹。
+
+**与计划不一致的地方。**
+- `buildLayer` 拆成两段。原来写的是一个返回 Promise 的 `buildLayer`，那样错误作用域只能跨 `await`，新 draw 也拿不到等待期间的写入。现在 `prepareLayer` 异步等程序和管线，`buildLayer` 全程同步，`commitLayer` 把它和换上包在一起。
+- 宿主多了 `rebuildRetried`。原来只写「重建失败整场重新加载」，但脚本打开的开关不进编译输入：重新加载后 `replayWrites` 又打开它，再失败，无限循环。现在第二次失败直接退回预览图，退回时复位。用户属性打开的 effect 不走到第二次，重新加载时 `GpuScene.build` 就失败了。
+- 新增 `planProblems`（`checkRenderable` 与重建共用）：关着的 effect 加载时没过自查，重建前要补一次，否则 `program: null` 会在 `prepareLayer` 里出错。
+- `applyChanges` 把被挡下的路径和 `plan.recompile` 一样处理（`forgetWrite` 等），否则用户值之后重放脚本的旧写入。
+- `overrideAndReload` 从 `writeScript` 里抽出来，effect 与重编译目标共用去重。`ScriptApi` 的 `recompileValues` 只管 `recompile` 目标，effect 目标靠这里的去重，否则脚本每帧写就每帧重新加载。
+- 改了计划没列的两个 dev 文件：`hostRenderFrame` 先 `sync` 再等 `rebuildsSettled`，否则读回的是旧计划；`scriptCorpus` 的 `read` 加 effect 分支，和 `host.ts` 一致。
+
+**语料诊断会变。** 挂在 effect `visible` 上的脚本，`targetKind` 从 `recompile` 变成 `effect`，`recompileWrites` 归零。这是目标改造的直接结果，和步骤 1 的语料结果比较时要排除这两项。
+
+**留的疑点。**
+- 校验错误的结果在换上之后才回来：作用域只包同步段，要立刻换上才拿得到最新状态，等结果再换就要跨 `await`。校验失败时新 draw 已经在用，下一帧可能走 `onuncapturederror` 退回预览图，而不是重新加载。`GpuScene.build` 对同一份计划也会失败，最后都是退回预览图，只是原因键可能不同。
+- 假设备不验证 WebGPU 的实际规则（bind group 与管线布局的兼容性、缓冲销毁时机），这些要真机确认。
+
+**第一版的验收**（2026-11-06 Claude，脚本 `ignore/p3c/step2/`，基线 `ignore/p3c/step2/baseline-before.json`、`ignore/p3c/corpus-s1/`）。
+- tsc 0 error，vitest 20 个文件、330 个用例。变异检查：循环尾加 `break`（不再比较签名）、去掉旧 draw 缓冲销毁，都有用例失败，已还原。
+- 语料 41 张、695 段：`unsupported` 逐张相同，脚本状态与报错逐张相同；挂在 effect `visible` 上的 13 段 `targetKind` 变成 `effect`。
+- 基线：bedroom、vortex、beach、deep space、eagleflag、13114 的 `host.renderFrame(1.5)` 哈希与动手前相同。
+- 真机 13114：
+  - 切 `p_effvis`：`applied` +1，没有新增重编译，78–155 ms 读到新画面；
+  - 就地关的哈希 = 关着状态整场加载的哈希（`0bdbe4a69e95`），也等于步骤 1 整场重编译的值；打开回到开始的哈希；
+  - 关着时改 `p_tintcolor`，哈希不变，再打开是新颜色，改回后回到开始的哈希；
+  - 连切 21 次：没有重编译，最终状态正确；
+  - 暂停时切换：屏幕截图开 / 关差 3.648、开 / 再开差 0.043，补画生效；
+  - 控制台没有 WebGPU 错误或警告，6 条输出都是测试工程脚本自己的日志。
+- 没有测到：校验错误的实际时序（只有单测，真机上构造不出来）；脚本逐帧切换带可变 effect 的真实场景（语料里能渲染的场景没有这种绑定，只有单测）。
+- 坑：`kabegame-chromium` 驱动经 playwright 连接时，`document.visibilityState` 会读成 `visible`，判断窗口是否真的可见要用裸 CDP。
+
+**修订：对齐 WPE（2026-11-06）。** 用户说明「允许卡帧」只是猜测，目标是对齐 WPE。查清 J 节之后，在第一版上修改，不重做：`planOf`、`prepareLayer`、`buildLayer`、`install`、`planProblems`、`SceneState` 的开关状态、绑定目标、脚本侧、`overrideAndReload` 都保留。下面「新增」「删除」是相对第一版。
+- 新增：`variantPlans`、`FboBindings.initial`、`prepareVariants`、`preparedOf`、就绪表、`checkPlanOps`、`clearTarget`、`clearLayerFbos`、`SceneState.freezeLayer`，`render` 接住一帧 CPU 部分（`sync` / `update` / `encode`）的异常。
+- 删除：`startRebuild`、`commitLayer`、`rebuildsSettled`、`LayerRuntime.rebuilding`、`rebuildTasks`、`GpuScene.destroyed`、`onRebuilt`、`onRebuildFailed`、宿主的 `rebuildRetried` 与 `rebuildFailed`；dev 按钮「下次切换重建失败」（`failNextRebuild`、`fail-rebuild`）。「整场重新加载」保留。
+- 第一版留的「校验错误的结果在换上之后才回来」不再存在：切换路径上没有错误作用域，校验错误走 `onuncapturederror`。
+
+**修订与计划不一致的地方。**
+- `GpuSceneOptions` 删完两个回调只剩 `ignoreUnsupported`，接口和构造参数一起去掉，`build` 的参数回到内联类型，与第一版之前相同。
+- `checkPlanOps` 的第二个参数是 `runtime`，不是 `runtime.resources`：`render:copy-format` 的原因键要图层名。
+- 管线键拆成导出的 `stepPipeline` + `pipelineKey`：`graph.test.ts` 的覆盖单测要用真实的键，不能在测试里再写一遍。
+- `sync` 里结构那段抽成 `rebuildStructures`，没有结构脏时直接返回，否则每帧多建一个 encoder。
+- `dev/probe.ts` 回到第一版之前：原来就有一处 `scene.sync(state)`，只删掉第一版加的 `sync` + `rebuildsSettled`。
+- 一帧 CPU 部分抛的非 `SceneRenderError` 归到原因键 `render:frame:…`。单测放在 `render/rebuild.test.ts`，它已有假设备。
+
+**修订时查到的两点。**
+- 计划写 `prepareVariants` 留在 `populate` 的作用域里会让整场失败，**按这份代码不成立**：`prepareVariants` 自己压了 validation 作用域，错误落到最内层匹配的作用域，到不了 `populate`。调用顺序仍照计划放在外面，用例按校验错误报出时的作用域栈钉住。真正的差别在 out-of-memory：见下面疑点。
+- `plan(e <= 最后一个可变)` 与全开相同，不同的计划实际是 n+1 份。变异 `e < v` 的键集合也相同（等价变异）：管线按键去重，没有额外开销，代码照计划。
+
+**子代理留的疑点，验收时已修（Claude，2026-11-06）。**
+- `render:texture-kind` 在 `encode` 抛错（引用 fbo 的 draw 到 `encode` 才建 bind group）：`try` 只包 `sync` 时接不住，下一帧已排好，每帧抛一次，画面停住也不退回。`try` 扩到 `sync` / `update` / `encode`，走 `fail`。
+- `render:no-final-pass`：全部开着的 effect 都没有绘制 pass 的组合不在 n+2 份里，`rebuildLayer` 补 `planProblems`，抛错走 `fail`，结果和整场加载相同。
+- dev 强制渲染：开着且带不支持项的 effect 能就地关掉，`variantPlans` 把它算可变，否则关掉后抛 `render:variant-missing`。
+- `prepareVariants` 加 out-of-memory 作用域：预建时显存不足只冻结图层，不影响当前画面。
+
+**还留着的。**
+- `prepareLayer` 用 `Promise.all`：一个程序先失败时作用域就弹出了，别的程序之后的 `createBindGroupLayout` 落在作用域之外。要两处同时出错才碰得到，没有改。
+- 关着的 effect 的 FreeImage 解码失败、BC 纹理计入设备特性要求（步骤 1 留的两个小缺口）没有动。
+- 合成 RT 只增不减，WPE 每次释放再取。两边每帧都整张重画，只差显存，不改。
+- 最后一个启用 effect 的中间 pass 的矩阵（J7）和切换无关，单独查。
+
+**修订的验收**（2026-11-06 Claude，脚本 `ignore/p3c/step2/`，图片 13114，实验工程 `ignore/p3c/wpe-sync/`）。
+- 单测：宿主 tsc 0 error，vitest 20 个文件、367 项全过。变异七条全被抓到（不清 fbo、按 swap 后的实体清、去掉冻结判断、重建不查计划、`try` 只包 `sync`、签名没变就不清、去掉 OOM 作用域）。
+- 语料 41 张、695 段：`unsupported` 与脚本诊断逐张相同（基线 `ignore/p3c/corpus-s1/`）。
+- 没有可变 effect 的 5 张（12888、12889、12880、12881、12885）固定时刻哈希和动手前逐张相同。
+- 13114：
+  - 切换不重编译（applied 增加、`recompiled` 不变），连切 21 次最终状态正确，开回与开始的哈希相同；
+  - 关着时改 `p_tintcolor`，哈希不变，打开是新颜色，改回后回到开始的哈希；
+  - 就地关的哈希 = 关着状态整场加载的哈希（`1edc19038502`，比较时把持久计数钉回去，见下面的坑）；
+  - 暂停时切换：屏幕截图开 / 关差 5.557，开 / 再开差 0.161；
+  - 关着加载后第一次打开：帧间隔 p50 6.9 ms、最大 7.1 ms，与空闲相同，没有卡顿；打开预览到按钮出现 364 ms（含预建）。
+- **和 WPE 同一套实验对比**（同样的工程，判读方式对齐 J5 / J6）：
+
+| 实验 | WPE | Kabegame |
+|---|---|---|
+| 脚本写 effect `visible`，K0 与 B 同相 | 181 / 181 | 181 / 181 |
+| 晚一帧的对照 K1 | 102 / 181 | 88 / 181 |
+| L1 关自己，无 `clear` | 接着关之前的值走 | 接着走（如 101 → 109） |
+| L2 关自己，带 `clear` | 回到 8 或 16 | 8 次都回到 8 |
+| L3 切同层 tint，无 `clear` | 连续 | 连续，每步 +8 |
+| L4 切同层 tint，带 `clear` | 开关两个方向都清 | 两个方向都回到 8 |
+| swap 奇偶，开关 10 轮共停 20 帧 | 差值恒为 20 | 差值恒为 20（40 个样本，按 255 周期算） |
+
+  脚本同帧用 `script-long`（把切换窗口放长，判定逻辑不变，我们帧率高，原工程的窗口不够采样）。`clear` 用暂停后逐帧步进，比连续采样确定。
+- 没有测到：`script-api`（我们的脚本 API 没有 `getEffect`）；校验错误只有 `onuncapturederror` 这条既有路径；预建失败、冻结图层、`texture-kind` 只有单测，真机上构造不出来。
+- 测试行 13118–13121 与对应任务已删除。当前壁纸 12888、窗口模式、未暂停。用户在 13114 上设的 `p_alpha` / `p_mode` 测试时临时改回默认，测完已放回。
+- **坑**：13114 的哈希依赖窗口是否可见。隐藏时脚本不跑，`COUNT` 图层 alpha 停在初始值，所以之前几轮的 `a70e9f8a` 看起来跨加载稳定；窗口可见时它按持久计数每次加载都变，`AUDIO` 图层还跟着系统音频变。比较时要钉住计数并看状态差异，第一版验收里「就地关 = 整场加载」是在隐藏时测的。

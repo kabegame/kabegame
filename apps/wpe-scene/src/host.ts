@@ -165,13 +165,19 @@ export class SceneHost {
     const bundle = this.bundle;
     if (!bundle) return;
     const plan = planApply(bundle.bindings, changes);
+    // 写之前问：打开带不支持项的 effect、切换冻结的图层时 `applyBindings` 一条都不写，这几条按重编译目标处理
+    const state = this.renderer?.sceneState;
+    const blocked = (state ? plan.writes.filter((write) => state.needsRecompile(write.binding, write.value)) : []).map(
+      (write) => write.binding.target,
+    );
+    const blockedPaths = blocked.map((target) => this.targetPath(target));
     const applied = this.renderer?.applyBindings(plan.writes) ?? false;
     if (applied) {
       for (const { binding } of plan.writes) this.runtime?.forgetWrite(this.targetPath(binding.target));
       this.stats.applied++;
       this.options.report.debug(`场景壁纸 ${this.options.imageId} 就地更新：${[...changes.keys()].join(",")}`);
     }
-    for (const { path } of plan.recompile) {
+    for (const path of [...plan.recompile.map((item) => item.path), ...blockedPaths]) {
       this.runtime?.forgetWrite(path);
       this.scriptApi?.forgetRecompile(path);
       this.scriptOverrides.delete(path);
@@ -182,12 +188,16 @@ export class SceneHost {
       bundle.bindings,
     );
     if (plan.recompile.length || !applied) {
-      this.stats.recompiled.push({
-        reason: plan.recompile.length ? describeApply(plan) : "就地写失败",
-        keys: [...changes.keys()],
-      });
+      const reasons = [
+        ...(plan.recompile.length ? [describeApply(plan)] : []),
+        ...(blockedPaths.length ? [`effect-blocked（${blockedPaths.join("、")}）`] : []),
+      ];
+      const reason = reasons.join("；") || "就地写失败";
+      const unsupported = blocked.flatMap((target) => (target.kind === "effect" ? this.effectIssues(target) : []));
+      this.stats.recompiled.push({ reason, keys: [...changes.keys()] });
       this.options.report.debug(
-        `场景壁纸 ${this.options.imageId} 重新编译：${plan.recompile.length ? describeApply(plan) : "就地写失败"}（${[...changes.keys()].join(",")}）`,
+        `场景壁纸 ${this.options.imageId} 重新编译：${reason}（${[...changes.keys()].join(",")}）` +
+          (unsupported.length ? `，不支持项：${unsupported.join(",")}` : ""),
       );
       void this.reload();
       return;
@@ -218,8 +228,15 @@ export class SceneHost {
     void this.reload();
   }
 
+  /** 一个 effect 自己的不支持项（`effect` 是 JSON 下标）。 */
+  private effectIssues(target: { object: number; effect: number }): string[] {
+    const layer = this.bundle?.layers.find((item) => item.object === target.object);
+    return layer?.effects.find((item) => item.source === target.effect)?.unsupported ?? [];
+  }
+
   private targetPath(target: BindingTarget): string {
     if (target.kind === "layer") return `objects/${target.object}/${target.field}`;
+    if (target.kind === "effect") return `objects/${target.object}/effects/${target.effect}/visible`;
     if (target.kind === "constant") return `${target.pass}/constantshadervalues/${target.material}`;
     if (target.kind === "bloom") return `general/bloom/${target.field}`;
     if (target.kind === "recompile") return target.path;
@@ -233,6 +250,7 @@ export class SceneHost {
       const value = state.layers.get(target.object)?.[target.field];
       return value === undefined ? null : typeof value === "number" ? [value] : value;
     }
+    if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
     if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
     if (target.kind === "bloom") {
       const value = state.bloom[target.field];
@@ -243,31 +261,28 @@ export class SceneHost {
 
   private writeScript(target: ScriptTarget, value: number[] | boolean): boolean {
     if (target.kind === "unsupported" || target.kind === "script-property") return false;
-    if (target.kind === "recompile") {
-      const old = this.scriptOverrides.get(target.path);
-      if (JSON.stringify(old) === JSON.stringify(value)) return true;
-      if (old === undefined && JSON.stringify(this.recompileValue(target.path)) === JSON.stringify(value)) return true;
-      this.scriptOverrides.set(target.path, value);
-      this.options.report.debug(`场景脚本重编译目标变化：${target.path}`);
-      this.requestScriptReload();
-      return true;
-    }
+    if (target.kind === "recompile") return this.overrideAndReload(target.path, value);
     const state = this.scriptState;
     if (!state) return false;
-    state.write({ property: "", target }, Array.isArray(value) ? value.join(" ") : value);
+    const result = state.write({ property: "", target }, Array.isArray(value) ? value.join(" ") : value);
+    // 打开带不支持项的 effect、切换冻结的图层：状态没变，结果由整场编译决定，编译要拿到脚本的值
+    return result === "recompile" ? this.overrideAndReload(this.targetPath(target), value) : true;
+  }
+
+  /** 脚本写重编译类目标：值变了才记进覆盖表、请求重新编译（脚本可能每帧写同一个值）。 */
+  private overrideAndReload(path: string, value: number[] | boolean): boolean {
+    const old = this.scriptOverrides.get(path);
+    if (JSON.stringify(old) === JSON.stringify(value)) return true;
+    if (old === undefined && JSON.stringify(this.recompileValue(path)) === JSON.stringify(value)) return true;
+    this.scriptOverrides.set(path, value);
+    this.options.report.debug(`场景脚本重编译目标变化：${path}`);
+    this.requestScriptReload();
     return true;
   }
 
   private recompileValue(path: string): number[] | boolean | undefined {
     const bundle = this.scriptBundle;
     if (!bundle) return undefined;
-    const effect = /^objects\/(\d+)\/effects\/(\d+)\/visible$/.exec(path);
-    if (effect)
-      return (
-        bundle.layers
-          .find((layer) => layer.object === Number(effect[1]))
-          ?.effects.some((item) => item.source === Number(effect[2]) && item.enabled) ?? false
-      );
     const general: Record<string, number[] | boolean> = {
       "general/clearcolor": bundle.general.clearColor,
       "general/clearenabled": bundle.general.clearEnabled,

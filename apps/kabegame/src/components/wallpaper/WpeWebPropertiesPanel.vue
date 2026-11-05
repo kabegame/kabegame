@@ -55,6 +55,12 @@
               {{ t("gallery.wpeClearStorage") }}
             </el-button>
           </div>
+          <!-- 开发版：观察 3c 的风险，文案不进 i18n -->
+          <div v-if="DEV_SCENE_TOOLS && isScene && coverSource" class="flex flex-wrap gap-2 px-2.5 py-2">
+            <el-button size="small" class="!ml-0" data-testid="wpe-dev-reload" @click="devScene('reload')">
+              dev：整场重新加载
+            </el-button>
+          </div>
         </div>
       </section>
 
@@ -341,6 +347,14 @@ function restoreCover() {
     "gallery.wpeRestoreCoverDone",
     "gallery.wpeRestoreCoverFailed",
   );
+}
+
+const DEV_SCENE_TOOLS = import.meta.env.DEV;
+
+/** 发给预览里的场景宿主（宿主的 `dev/install.ts`）。只有预览有 `coverSource`，所以按预览的画布找 iframe。 */
+function devScene(action: "reload") {
+  const frame = document.querySelector<HTMLIFrameElement>(".preview-wallpaper-wrapper iframe");
+  frame?.contentWindow?.postMessage({ kind: "kabegame:dev-scene", action }, "*");
 }
 </script>
 
