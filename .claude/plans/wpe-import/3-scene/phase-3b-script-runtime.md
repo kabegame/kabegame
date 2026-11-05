@@ -762,3 +762,53 @@ export interface SceneRendererOptions {
 - Node 侧只读跑了一次 `pipeline.test.ts` 的语料用例。
 - 没有改动图库、属性、设置与代码。
 - 应用背景的 bedroom 宿主 `update` 计数在开跑前后都是 32119。说明它在本步骤开始前就已暂停，与本次测量无关。
+
+### 步骤 7 真机（2026-11-04）
+
+**做法。** 环境为 Windows dev（CEF 149），使用 2026-11-04 构建的 development 版宿主，没有重建。测试用裸 CDP 脚本，连 2331 端口，脚本与数据在 `ignore/p3b/step7/`。
+- **公共部分**：`lib.mjs`、`common2.mjs`、`applog.mjs`；`applog.mjs` 按 UTC 日期定位应用日志，并按偏移读取新增行。
+- **各项脚本**：`test1.mjs` / `test1b.mjs` 对应 D6，`test2.mjs` 对应 D7，`test3.mjs` 对应 D8，`test4.mjs` 对应 D9，`test5.mjs` 对应 D10，`wprate.mjs` 对应 D11，`final.mjs` 用于收尾核对。
+- **采样器**：宿主里的采样器（`sampler.js`、`pausesampler.js`）只读，每个 rAF 读一次 `__kabegameSceneProbe.host.read()` / `scripts()`，到时间自行停止，全局变量用完即删。
+- **runtime 的读法**：探针没有暴露 `runtimeSeconds`。改为从宿主读 realm 里的 `engine.runtime` getter：作用域检查只在模块求值期间生效，所以平时可以读，而且这个读取没有副作用。
+- **设置与属性**：设置经主窗口应用页 IPC `set_wpe_scene_postprocess` 修改；属性经属性面板的同一命令 `set_wpe_web_user_properties` 修改；预览经 ImageGrid 的 `openPreviewById` 打开，按 Esc 关闭。
+- **窗口状态**：开测时主窗口被 VSCode 完全遮挡，Chromium 原生遮挡检测把它判为 `visibilityState: hidden`，宿主 rAF 为 0。D6 因此先在壁纸窗口宿主上只读观测（当时为窗口模式，桌面是 bedroom）。主窗口恢复可见后，D6 在预览上补测了一遍，D7–D10 都在主窗口预览上完成。
+
+结果（明细见回归表 P3b D6–D11）：
+
+| 项 | 结论 | 关键数字 |
+| --- | --- | --- |
+| D6 bedroom 跨重编译 | 通过 | 「场景后处理」`disabled` → `enabled` → `disabled`，壁纸窗口与预览各测一轮。宿主控制台记录 `重新判定` → `重新加载`，用时 414–482 ms。realm 是同一个对象；update 计数不归零，每 10 s 增加 601 / 602，即 60.1 次/秒；`engine.runtime` 每 10 s 前进 10.0 s。6 个颜色按墙钟公式反推的滞后为 0–16 ms，没有倒退，也没有跳回初值。bedroom 不导出 `init`，`calls` 里没有 init 项 |
+| D7 shimmering 泛光强度 | 通过 | 首次 apply 后为 1.0；`glow` 改 3 后为 1.5（207 ms 内，就地更新）；恢复默认后为 1.0。recompiled 为空。metadata id 20067 → 20073 → 20074，属性与改动前逐项相同 |
+| D8 暂停 | 通过（入口为模拟） | 暂停 5000 ms 共 721 个 rAF 采样，update 恒为 216，`engine.runtime` 冻结在 3.5766 s；恢复后从 3.5766 接着走，update 60 次/秒；恢复后 1 s 内 dt 最大 0.0219 s |
+| D9 出错日志 | 部分通过 | 13110：1 条 `求值失败：engine.registerAudioBuffers is not a function (line 67, col 24)`，该段 `failed`。12903（补选）：1 条 `init 出错：localStorage is not defined (line 46, col 25)`，`disabled: ["init"]`。两张约 12 s 内都没有重复。13107 的 update 报错没有触发：强制渲染下 GPU 场景也建不出来，所以没有帧 |
+| D10 vortex 切模式 | 通过；与 WPE 对照未测 | `colormode` 依次为 0 → 1 → 2 → 0（3 层同步）；控制台只有 3 条 `就地更新`，recompiled 为空，应用日志没有新增行。metadata id 20064 → 20077，属性与改动前逐项相同 |
+| D11 壁纸窗口 | 通过（只读） | 窗口模式、bedroom。6 段 `inited`，update 60.1 次/秒，单次最长 0.1 ms；宿主 rAF 144.5 次/秒；frameMs 均值 0.22 ms、p95 0.4 ms；没有错误或重编译 |
+
+**发现的问题与疑点。**
+1. **重编译在应用日志里看不到。** `SceneHost.reload` 的「重新加载」与「后处理设置 … 重新判定」都走 `report.debug`，而 `report.debug` 只写宿主控制台、不上报。所以验收里「日志有重新编译 / 没有重新编译」只能看宿主控制台（CDP `Runtime.consoleAPICalled`）与 `stats().recompiled`；应用日志里只有重编译时按查找顺序试探资源产生的 `deny file:` INFO。此外，`stats().recompiled` 不记设置变化（以及退回状态下，见 P3a D9）引起的重载。
+   - **建议**：把 `report.debug` 也上报为应用日志的 `debug` 级（dev 默认就输出 debug），或者把「重新加载」升为 `info`。
+   - **复现**：预览任一能渲染的场景，切「场景后处理」，再看当天的应用日志：没有 `kabegame::wpe_scene_host` 的新行。
+2. **`init` 计数这条验收对 bedroom 不适用。** bedroom 的 6 段只导出 `update`；`runtime` 只在回调存在并被调用时才建 `calls[name]`，所以 `scripts()` 里没有 init 项。「不重新 init」改用三条判据：realm 是同一个对象、`calls.update` 不归零、`场景脚本加载完成` 不再出现。本机能渲染的 3 张都没有 `init`；有 `init` 的语料场景都建不出 GPU 场景，所以「重编译后 init 仍为 1」在真机上没有直接样本，只有单测 9 覆盖。
+3. **现有 UI 里没有能暂停场景宿主的路径。**
+   - 现状：预览固定传 `video-playing`；应用背景隐藏时整层卸载；`WallpaperWindow` 不传 `paused`。D8 是从父页面按 `WpeSceneView` 的消息协议投递 `paused`，这条链路（垫片 → `wallpaperPropertyListener.setPaused` → `SceneHost.setPaused`）本身成立。
+   - 实际会让宿主停下来的是 `document.hidden`。主窗口被其它窗口完全遮挡时，Chromium 原生遮挡检测把页面判为 hidden，渲染循环与脚本都停（本次开测时应用背景宿主的 update 停在 38187）。步骤 6 记录里「应用背景宿主开跑前就已暂停」的原因也是这个。
+   - **与 WPE 可能不同**：WPE 按「其它程序获得焦点 / 最大化 / 全屏」等设置决定暂停；我们只按遮挡与隐藏，触发条件不一样。暂停期间 `engine.runtime` 不前进（不含暂停时段），WPE 在暂停期间的 `engine.runtime` 语义未查。
+   - 相关细节：在被遮挡的窗口里加载场景时，首帧不调用 `update`（`beforeFrame` 要求 `!document.hidden`），`init` 与首次全量 apply 照常执行，要等窗口可见后才开始 update。
+4. **「update 报错 → 禁用」在真实宿主里没有样本。** 语料里有 update 报错的场景（如 13107），加上强制渲染也建不出 GPU 场景（`render:no-program` / `texture-missing`），退回后就没有帧。这一项目前只由单测 6 与步骤 6 的 `scriptCorpus` 覆盖。init 报错与求值失败已在真机确认，都只记一次、带行列。
+5. **退回之前，脚本已经求值并执行了 init。** 强制渲染下（以及 `unsupported` 为空、但建 GPU 场景失败的生产情形），脚本 realm 会先建好，求值与 `init` 都执行，之后才退回预览图；realm 保留到宿主销毁。这与步骤 5「退回时保留 realm、停止帧」的设计一致，记作已知行为：退回场景里 `init` 的副作用（日志、计时器登记）照样发生。
+6. **测量工具上的缺口。** 探针没有 `runtimeSeconds`、计时器列表和「写目标」入口（步骤 5 已提出）。本次用 realm 的 `engine.runtime` 代替前者。建议给 `host` 增加 `clock()`，返回 runtime、frametime、paused、hidden 和计时器数。
+7. **宿主实例被重建（与测试无关）。** 收尾核对（11-05）时，dev 进程仍是 11-03 22:39 启动的那个，但壁纸窗口在 11-04 23:50 和 11-05 09:33 两次重新就绪，主窗口页面在 23:51 和 09:34 重新初始化，宿主都换了新实例。这些都发生在本步骤最后一次操作（11-04 02:53）之后，原因未查。
+
+**临时改动与恢复**（收尾核对于 2026-11-05 实测，见 `final-check.json`）：
+- **「场景后处理」**：一共改了 6 次（3 个来回）。其中第一个来回是因为采样器注入写错（`return` 后面跟注释行，触发了 ASI），没有采到数据，重跑了一次。现为 `disabled`，与改动前相同，`get_wpe_scene_postprocess` 与 `get_settings` 都已复核。
+- **dev 强制渲染开关**：开关过 3 次，测前都是 null。现在两个宿主（壁纸窗口、应用背景）读到的都是 null。
+- **属性**：
+  - 12892：`glow` 3 → 恢复默认，metadata id 20067 → 20074；
+  - 12889：「模式」1 / 2 / 0，metadata id 20064 → 20077。
+  - 这两张的值与 `modified` 都与改动前逐项相同。
+  - 13107 / 13110 的 metadata id 与改动前相同（20018 / 20021），属性也相同。
+  - 12888（20057，与 P3a 结束时 `ignore/p3a/props-after.json` 的记录相同）与 12903（19670）这次没有写入。两者的 id 都小于本步骤第一次写入前的 20064，说明没有被改写，`modified` 为空。
+- **预览**：12892 → 12888 → 13107 → 13110 是在同一个预览里依次切换的，看完 13110 后按 Esc 关闭；12903、12889 各自打开、各自按 Esc 关闭。现在路由为 `/gallery`，与开始时相同；页面上没有预览容器；宿主只剩应用背景与壁纸窗口两个（都是 12888）。
+- **暂停**：已发 `paused: false`（音量按设置为 1）恢复。
+- **宿主里的临时全局**：`__kbStep7Sampler` / `__kbStep7Pause` 用完已删，收尾核对时没有残留。
+- **未改动的内容**：壁纸、壁纸模式、WPE 安装目录，以及代码、`cocs/`、changelog、`AGENTS.md`。

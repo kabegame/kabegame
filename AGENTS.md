@@ -19,7 +19,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 ### 单体仓库布局
 - `apps/kabegame/` — Vue 3 前端（Vite、Pinia、UnoCSS、自有组件库）
-- `apps/wpe-scene/` — 场景壁纸宿主（纯 TS + Vite，P3-0 进行中）：构建进应用 `resources/wpe-scene`，主窗口 / 壁纸窗口以 `file:` iframe 加载；见 [场景壁纸文档](cocs/wpe/WPE_SCENE.md)「场景宿主」
+- `apps/wpe-scene/` — 场景壁纸宿主（纯 TS + Vite，P3 进行中）：构建进应用 `resources/wpe-scene`，主窗口 / 壁纸窗口以 `file:` iframe 加载；见 [场景壁纸文档](cocs/wpe/WPE_SCENE.md)「场景宿主」
 - `packages/` — 共享前端包、自有组件库、插件开发子仓库与生成型包；详见 [packages/AGENTS.md](packages/AGENTS.md)
 - `src-tauri/kabegame-core/` — `kabegame-core`：共享 Rust 库（爬虫引擎、插件系统、存储）
 - `src-tauri/kabegame/` — Tauri GUI 应用（桌面端 + Android）
