@@ -482,7 +482,7 @@ export class ScriptApi {
         this.access
           .bundle()
           .layers.find((layer) => layer.object === object)
-          ?.effects.some((item) => item.source === effect) ?? false,
+          ?.effects.some((item) => item.source === effect && item.enabled) ?? false,
       (value) =>
         this.write(
           { kind: "recompile", reason: "effect-visible", path: `objects/${object}/effects/${effect}/visible` },

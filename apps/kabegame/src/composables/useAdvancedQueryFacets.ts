@@ -5,6 +5,7 @@ import {
   type GalleryFilter,
   type GalleryQuery,
   type GalleryFilterDimension,
+  type GalleryMediaKind,
   type NodePath,
   normalizeQuery,
   serializeQueryBody,
@@ -34,6 +35,15 @@ const SIZE_LABEL_KEYS: Record<string, string> = {
   "50MB-": "filterSize_gte50m",
 };
 
+/** 媒体格式行文案：WPE 子类用已有词条（视频 / 网页 / 场景），其余显示原始格式名。 */
+export function mediaFormatLabel(kind: GalleryMediaKind, format: string, t: (key: string) => string): string {
+  if (kind === "x-wpe") {
+    const key = { video: "gallery.wpeKindVideo", web: "gallery.wpeKindWeb", scene: "gallery.wpeKindScene" }[format];
+    if (key) return t(key);
+  }
+  return format;
+}
+
 /**
  * 维度选中值 → 本地化展示文案(chip 未打开下拉时也要有正确文案)。
  * plugin 由调用侧经 pluginLabel 解析(store 依赖不进本纯函数)。
@@ -42,6 +52,7 @@ export function facetValueLabel(dimension: FacetDimension, value: string, t: (ke
   if (dimension === "mediaType") {
     if (value === "image") return t("gallery.filterImageOnlyLabel");
     if (value === "video") return t("gallery.filterVideoOnlyLabel");
+    if (value === "x-wpe") return "Wallpaper Engine";
     return value;
   }
   if (dimension === "aspect") {

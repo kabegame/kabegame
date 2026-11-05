@@ -83,10 +83,11 @@
 
       <!-- 媒体属性芯片：每个可点的片段都是一个画廊筛选 -->
       <div class="flex flex-wrap items-center gap-1.5">
-        <!-- 目录型 WPE 壁纸：显示「Wallpaper Engine · 类型」，不提供媒体类型筛选 -->
-        <span v-if="isWpeImage" class="basic-info-chip">Wallpaper Engine · {{ wpeKindText }}</span>
-        <span v-else class="basic-info-chip">
-          <el-icon class="mr-0.5"><component :is="mediaTypeParts.kind === 'video' ? VideoCamera : Picture" /></el-icon>
+        <!-- 媒体类型：主类与格式各是一个筛选；目录型 WPE 壁纸显示「Wallpaper Engine · 类型」 -->
+        <span class="basic-info-chip">
+          <el-icon v-if="!isWpeImage" class="mr-0.5">
+            <component :is="mediaTypeParts.kind === 'video' ? VideoCamera : Picture" />
+          </el-icon>
           <button
             type="button"
             class="basic-info-link"
@@ -96,14 +97,15 @@
             {{ mediaKindLabel }}
           </button>
           <template v-if="mediaTypeParts.format">
-            <span class="mx-0.5 opacity-60">/</span>
+            <span class="mx-0.5 opacity-60">{{ isWpeImage ? "·" : "/" }}</span>
             <button
               type="button"
-              class="basic-info-link uppercase"
+              class="basic-info-link"
+              :class="{ uppercase: !isWpeImage }"
               :title="t('gallery.filterByMediaType')"
               @click="emitGalleryFilter(mediaFormatFilterTarget)"
             >
-              {{ mediaTypeParts.format }}
+              {{ mediaFormatText }}
             </button>
           </template>
         </span>
@@ -186,8 +188,9 @@ import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { usePluginStore, type Plugin } from "../../stores/plugins";
 import { useSurfStore } from "../../stores/surf";
-import { displayImageMimeType, isVideoMediaType, isWpeMediaType, wpeKind } from "../../utils/mediaMime";
-import { aspectBucketForDimensions } from "../../utils/galleryQuery";
+import { displayImageMimeType, isVideoMediaType, isWpeMediaType } from "../../utils/mediaMime";
+import { aspectBucketForDimensions, type GalleryMediaKind } from "../../utils/galleryQuery";
+import { facetValueLabel, mediaFormatLabel } from "../../composables/useAdvancedQueryFacets";
 import { openExternalLink } from "../../utils/openExternalLink";
 
 const { t, locale } = useI18n();
@@ -225,7 +228,7 @@ export type ImageDetailSurfRecordTarget = {
 
 export type ImageDetailGalleryFilterTarget =
   | { type: "plugin"; pluginId: string }
-  | { type: "media-type"; kind: "image" | "video"; format?: string }
+  | { type: "media-type"; kind: GalleryMediaKind; format?: string }
   | { type: "date"; segment: string }
   | { type: "size"; range: string }
   | { type: "aspect"; range: string };
@@ -310,30 +313,30 @@ function handleOpenSource() {
   if (id && host) emit("open-surf-record", { surfRecordId: id, host });
 }
 
-const mediaTypeParts = computed((): { kind: "image" | "video"; format: string } => {
+/** 目录型 WPE 壁纸：类型显示成「Wallpaper Engine · 视频」，两段都是媒体类型过滤链接。 */
+const isWpeImage = computed(() => isWpeMediaType(props.image?.type));
+
+const mediaTypeParts = computed((): { kind: GalleryMediaKind; format: string } => {
   const raw = displayImageMimeType(props.image?.type).trim().toLowerCase();
-  const kind: "image" | "video" = isVideoMediaType(raw) ? "video" : "image";
+  const kind: GalleryMediaKind = isWpeMediaType(raw) ? "x-wpe" : isVideoMediaType(raw) ? "video" : "image";
   const slash = raw.indexOf("/");
   const format = slash >= 0 ? raw.slice(slash + 1).trim() : raw.trim();
   return {
     kind,
-    format: !format || format === "image" || format === "video" ? "" : format,
+    // 历史裸值 image / video 没有格式；x-wpe 的子类恰好叫 video，不能清掉
+    format: !format || (kind !== "x-wpe" && (format === "image" || format === "video")) ? "" : format,
   };
 });
 
-const mediaKindLabel = computed(() =>
-  t(mediaTypeParts.value.kind === "video" ? "gallery.imageDetailKindVideo" : "gallery.imageDetailKindImage"),
-);
-/** 目录型 WPE 壁纸：类型显示成「Wallpaper Engine · 视频」，不提供媒体类型过滤链接。 */
-const isWpeImage = computed(() => isWpeMediaType(props.image?.type));
-const wpeKindText = computed(() => {
-  const kind = wpeKind(props.image?.type);
-  if (!kind) return "";
-  if (kind === "video") return t("gallery.wpeKindVideo");
-  if (kind === "web") return t("gallery.wpeKindWeb");
-  if (kind === "scene") return t("gallery.wpeKindScene");
-  return kind;
+const mediaKindLabel = computed(() => {
+  const { kind } = mediaTypeParts.value;
+  if (kind === "image") return t("gallery.imageDetailKindImage");
+  if (kind === "video") return t("gallery.imageDetailKindVideo");
+  return facetValueLabel("mediaType", kind, t);
 });
+
+/** WPE 子类显示「视频 / 网页 / 场景」，其余显示格式名。 */
+const mediaFormatText = computed(() => mediaFormatLabel(mediaTypeParts.value.kind, mediaTypeParts.value.format, t));
 
 const mediaKindFilterTarget = computed<ImageDetailGalleryFilterTarget>(() => ({
   type: "media-type",

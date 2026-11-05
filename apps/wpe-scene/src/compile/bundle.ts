@@ -1,6 +1,7 @@
 import { compileBloom, type SceneBloom } from "./bloom";
 import {
   BindingCollector,
+  isScriptValue,
   isUserBinding,
   type BindingTarget,
   type LayerField,
@@ -130,15 +131,21 @@ export type SceneEffectStep =
     }
   | { kind: "copy"; source: string; target: string }
   | { kind: "swap"; source: string; target: string };
-/** 一个启用的 effect（未启用的不进 bundle，B11）。 */
+/** 编进 bundle 的 effect：启用的，以及关着但可见性可能变的（`visibleBound`）。写死关闭、没有绑定的不进 bundle（B11）。 */
 export interface SceneEffect {
-  /** 图层 `effects[]` 里的下标（scene.json 的稳定坐标；bundle 下标会随未启用的 effect 移位）。 */
+  /** 图层 `effects[]` 里的下标（scene.json 的稳定坐标；bundle 下标会随不进 bundle 的 effect 移位）。 */
   source: number;
   id: number;
   name: string;
   file: string;
   fbos: SceneFbo[];
   steps: SceneEffectStep[];
+  /** 当前是否启用。渲染图只看启用的 */
+  enabled: boolean;
+  /** `visible` 绑了用户属性或脚本：运行时可能变 */
+  visibleBound: boolean;
+  /** 本 effect 自己的不支持项：启用的已并入场景级，关着的打开时才生效 */
+  unsupported: string[];
 }
 export interface SceneLayer {
   id: number;
@@ -285,6 +292,19 @@ interface PassContext {
   fbos?: ReadonlyMap<string, SceneFbo>;
   /** 渲染图运行时填的槽位（effect 无 bind 时的槽 0、bind 的各槽、passthrough 的槽 0）与其 `.tex` 格式枚举。 */
   planned?: ShaderTextureSlot[];
+  /** 本 pass 不支持项的上报目标；缺省为场景级。 */
+  unsupported?: Set<string>;
+}
+
+/** 一个 effect 的不支持项。启用的 effect 同步写给场景级：快速退回与解码判断仍能实时看到。 */
+class EffectIssues extends Set<string> {
+  constructor(private readonly scene: Set<string> | null) {
+    super();
+  }
+  override add(key: string): this {
+    this.scene?.add(key);
+    return super.add(key);
+  }
 }
 
 export async function compileScene(input: CompileSceneInput): Promise<SceneBundle> {
@@ -374,6 +394,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   };
   const shader = new ShaderCompiler(fs, input.translator, unsupported);
   const textureIndex = new Map<string, number>();
+  /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
+  const textureIssues = new Map<number, string[]>();
   const programIndex = new Map<TranslateResult, number>();
   /** 翻译结果 → `bundle.programs` 下标（同一份结果只放一次）。 */
   const addProgram = (result: TranslateResult): number => {
@@ -392,28 +414,33 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   async function getTexture(
     name: string,
     scope: ResourceScope | null,
+    issues: Set<string> = unsupported,
   ): Promise<{ index: number; format: number } | null> {
     const path = texturePath(name);
     const file = await fs.resolveScoped(path, scope);
     if (!file) {
-      unsupported.add(`texture:missing:${path}`);
+      issues.add(`texture:missing:${path}`);
       return null;
     }
     const existing = textureIndex.get(file.path);
-    if (existing !== undefined) return { index: existing, format: bundle.textures[existing].format };
+    if (existing !== undefined) {
+      for (const key of textureIssues.get(existing) ?? []) issues.add(key);
+      return { index: existing, format: bundle.textures[existing].format };
+    }
     let tex: TexResult;
     try {
       tex = await parseTex(file, shouldDecode());
     } catch (error) {
-      unsupported.add(`tex:parse:${path}:${String(error)}`);
+      issues.add(`tex:parse:${path}:${String(error)}`);
       return null;
     }
-    for (const key of tex.unsupported) unsupported.add(key);
+    for (const key of tex.unsupported) issues.add(key);
     const [textureWidth, textureHeight] = tex.encoded
       ? freeImageTextureSize(tex)
       : [tex.textureWidth, tex.textureHeight];
     const index = bundle.textures.length;
     textureIndex.set(file.path, index);
+    textureIssues.set(index, tex.unsupported);
     bundle.textures.push({
       path,
       source: file.source,
@@ -437,7 +464,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
 
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
   async function compilePass(pass: MaterialPass, context: PassContext): Promise<ScenePass> {
-    checkPassFeatures(pass, unsupported);
+    const issues = context.unsupported ?? unsupported;
+    checkPassFeatures(pass, issues);
     const scope = context.scope ?? null;
     const names = (pass.textures ?? []).map(textureName);
     const slots: Record<number, number> = {};
@@ -455,16 +483,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (name.startsWith("_rt_")) {
         if (bindRuntime(slot, name))
           formats.push({ slot, format: FBO_FORMATS[context.fbos?.get(name)?.format ?? "rgba8888"].tex });
-        else unsupported.add(`texture:rendertarget:${name}`);
+        else issues.add(`texture:rendertarget:${name}`);
         continue;
       }
-      const texture = await getTexture(name, scope);
+      const texture = await getTexture(name, scope, issues);
       if (texture) {
         slots[slot] = texture.index;
         formats.push({ slot, format: texture.format });
       }
     }
-    const result = pass.shader ? await shader.compile(pass.shader, pass.combos ?? {}, formats, scope) : null;
+    const result = pass.shader ? await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, issues) : null;
     if (result?.ok) {
       for (const script of scripts.list) {
         if (script.owner.kind !== "material" || script.owner.pass !== context.key || script.target.kind !== "constant")
@@ -476,20 +504,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         script.valueType = script.target.type;
       }
     }
-    if (!pass.shader) unsupported.add("shader:missing");
+    if (!pass.shader) issues.add("shader:missing");
     let program: number | null = null;
     if (result?.ok) {
-      checkProgramFeatures(result, unsupported);
+      checkProgramFeatures(result, issues);
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
       for (const binding of result.textures ?? []) {
         const fallback = binding.meta?.default;
         if (typeof fallback !== "string" || !fallback) continue;
         if (planned.has(binding.slot) || binding.slot in slots || binding.slot in runtime) continue;
         if (fallback.startsWith("_rt_")) {
-          if (!bindRuntime(binding.slot, fallback)) unsupported.add(`texture:rendertarget:${fallback}`);
+          if (!bindRuntime(binding.slot, fallback)) issues.add(`texture:rendertarget:${fallback}`);
           continue;
         }
-        const texture = await getTexture(fallback, scope);
+        const texture = await getTexture(fallback, scope, issues);
         if (texture) slots[binding.slot] = texture.index;
       }
       program = addProgram(result);
@@ -506,6 +534,90 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       uniforms: shaderUniforms(result, pass, properties, context.key, bindings),
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),
     };
+  }
+
+  /** 编译一个 effect 的 fbo 与步骤；effect.json 缺失时返回 null。不支持项写进 `issues`，抛错交给调用方按开关处理。 */
+  async function compileEffect(
+    index: number,
+    shell: SceneEffect,
+    instance: SceneEffectInstance,
+    issues: Set<string>,
+  ): Promise<SceneEffect | null> {
+    const { file } = shell;
+    const label = file.split("/").at(-2) ?? "unknown";
+    const effectFile = file ? await fs.read(file) : null;
+    const effectText = effectFile ? new TextDecoder().decode(effectFile.bytes).replace(/^﻿/, "") : null;
+    if (!effectFile || !effectText) {
+      issues.add(`effect:missing:${file}`);
+      return null;
+    }
+    const effect = parseEffect(effectText);
+    checkEffectFeatures(instance, effect, label, issues);
+    // effect 资源的查找范围：effect.json 所在目录；它来自 assets 时内置资源也在那里，先查它
+    const scope: ResourceScope | null = file.includes("/")
+      ? { dir: file.slice(0, file.lastIndexOf("/")), first: effectFile.source === "assets" }
+      : null;
+    const fbos = new Map(
+      (effect.fbos ?? [])
+        .map((item) => parseFbo(item, postprocess.hdr))
+        .filter((item) => item.name)
+        .map((item) => [item.name, item]),
+    );
+    const steps: SceneEffectStep[] = [];
+    let overrideIndex = 0;
+    /** 本 effect 里已编译的绘制 pass 序号（本 effect 的 pass 稳定键用，材质多 pass 也各占一个）。 */
+    let passIndex = 0;
+    for (const pass of effect.passes ?? []) {
+      if (pass.command === "copy" || pass.command === "swap") {
+        if (typeof pass.source === "string" && typeof pass.target === "string")
+          steps.push({ kind: pass.command, source: pass.source, target: pass.target });
+        continue;
+      }
+      if (typeof pass.material !== "string") continue;
+      // 实例的 passes 按顺序对应 effect.json 里的绘制 pass（命令 pass 不占位，同 LWE `CImage::setup`）
+      const override = instance.passes?.[overrideIndex++];
+      const passMaterialText = await fs.text(pass.material, scope);
+      if (!passMaterialText) {
+        issues.add(`material:missing:${pass.material}`);
+        continue;
+      }
+      const binds = Array.isArray(pass.bind)
+        ? pass.bind
+            .filter((bind) => typeof bind?.name === "string" && Number.isInteger(bind?.index))
+            .map((bind) => ({ name: String(bind.name), index: Number(bind.index) }))
+        : null;
+      // 渲染图填的槽位：有 bind 时只按 bind；没有 bind 时槽 0 = 上一步输出（合成 RT）
+      const planned: ShaderTextureSlot[] = binds
+        ? binds.map((bind) => ({
+            slot: bind.index,
+            format: FBO_FORMATS[fbos.get(bind.name)?.format ?? "rgba8888"].tex,
+          }))
+        : [{ slot: 0, format: FBO_FORMATS.rgba8888.tex }];
+      for (const materialPass of parseMaterial(passMaterialText).passes) {
+        const merged: MaterialPass = {
+          ...materialPass,
+          combos: { ...materialPass.combos, ...override?.combos },
+          constantshadervalues: { ...materialPass.constantshadervalues, ...override?.constantshadervalues },
+          textures: mergeTextures(materialPass.textures, override?.textures),
+        };
+        // 有 bind 时材质槽 0 的 null 不再自动填（B6）：不在 planned 里的 null 槽位就保持空
+        const compiled = await compilePass(merged, {
+          key: `objects/${index}/effects/${shell.source}/passes/${passIndex++}`,
+          scope,
+          fbos,
+          planned,
+          unsupported: issues,
+        });
+        steps.push({
+          kind: "draw",
+          pass: compiled,
+          target: typeof pass.target === "string" ? pass.target : null,
+          compose: pass.compose === true,
+          binds,
+        });
+      }
+    }
+    return { ...shell, fbos: [...fbos.values()], steps };
   }
 
   for (const [index, object] of scene.objects.entries()) {
@@ -576,96 +688,38 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;
       const instance = (raw ?? {}) as SceneEffectInstance;
-      // 未启用的 effect 整步跳过（B11），也不检查它的能力；但可见性绑定登记成重编译目标（P3a，3c 改为单图层重算）
-      if (
+      const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);
+      // 可见性绑定仍登记成重编译目标（P3a，3c 步骤 2 改为单图层重算）
+      const enabled =
         bindings.bind(
           instance.visible,
           properties,
           recompile("effect-visible", `objects/${index}/effects/${source}/visible`),
-        ) === false
-      )
-        continue;
-      const file = typeof instance.file === "string" ? instance.file : "";
-      const label = file.split("/").at(-2) ?? "unknown";
-      const effectFile = file ? await fs.read(file) : null;
-      const effectText = effectFile ? new TextDecoder().decode(effectFile.bytes).replace(/^﻿/, "") : null;
-      if (!effectFile || !effectText) {
-        unsupported.add(`effect:missing:${file}`);
-        continue;
-      }
-      const effect = parseEffect(effectText);
-      checkEffectFeatures(instance, effect, label, unsupported);
-      // effect 资源的查找范围：effect.json 所在目录；它来自 assets 时内置资源也在那里，先查它
-      const scope: ResourceScope | null = file.includes("/")
-        ? { dir: file.slice(0, file.lastIndexOf("/")), first: effectFile.source === "assets" }
-        : null;
-      const fbos = new Map(
-        (effect.fbos ?? [])
-          .map((item) => parseFbo(item, postprocess.hdr))
-          .filter((item) => item.name)
-          .map((item) => [item.name, item]),
-      );
-      const steps: SceneEffectStep[] = [];
-      let overrideIndex = 0;
-      /** 本 effect 里已编译的绘制 pass 序号（本 effect 的 pass 稳定键用，材质多 pass 也各占一个）。 */
-      let passIndex = 0;
-      for (const pass of effect.passes ?? []) {
-        if (pass.command === "copy" || pass.command === "swap") {
-          if (typeof pass.source === "string" && typeof pass.target === "string")
-            steps.push({ kind: pass.command, source: pass.source, target: pass.target });
-          continue;
-        }
-        if (typeof pass.material !== "string") continue;
-        // 实例的 passes 按顺序对应 effect.json 里的绘制 pass（命令 pass 不占位，同 LWE `CImage::setup`）
-        const override = instance.passes?.[overrideIndex++];
-        const passMaterialText = await fs.text(pass.material, scope);
-        if (!passMaterialText) {
-          unsupported.add(`material:missing:${pass.material}`);
-          continue;
-        }
-        const binds = Array.isArray(pass.bind)
-          ? pass.bind
-              .filter((bind) => typeof bind?.name === "string" && Number.isInteger(bind?.index))
-              .map((bind) => ({ name: String(bind.name), index: Number(bind.index) }))
-          : null;
-        // 渲染图填的槽位：有 bind 时只按 bind；没有 bind 时槽 0 = 上一步输出（合成 RT）
-        const planned: ShaderTextureSlot[] = binds
-          ? binds.map((bind) => ({
-              slot: bind.index,
-              format: FBO_FORMATS[fbos.get(bind.name)?.format ?? "rgba8888"].tex,
-            }))
-          : [{ slot: 0, format: FBO_FORMATS.rgba8888.tex }];
-        for (const materialPass of parseMaterial(passMaterialText).passes) {
-          const merged: MaterialPass = {
-            ...materialPass,
-            combos: { ...materialPass.combos, ...override?.combos },
-            constantshadervalues: { ...materialPass.constantshadervalues, ...override?.constantshadervalues },
-            textures: mergeTextures(materialPass.textures, override?.textures),
-          };
-          // 有 bind 时材质槽 0 的 null 不再自动填（B6）：不在 planned 里的 null 槽位就保持空
-          const compiled = await compilePass(merged, {
-            key: `objects/${index}/effects/${source}/passes/${passIndex++}`,
-            scope,
-            fbos,
-            planned,
-          });
-          steps.push({
-            kind: "draw",
-            pass: compiled,
-            target: typeof pass.target === "string" ? pass.target : null,
-            compose: pass.compose === true,
-            binds,
-          });
-        }
-      }
-      layer.effects.push({
+        ) !== false;
+      // 写死关闭、没有绑定的整步跳过（B11），也不检查它的能力
+      if (!enabled && !visibleBound) continue;
+      const issues = new EffectIssues(enabled ? unsupported : null);
+      const shell: SceneEffect = {
         source,
         id: instance.id ?? layer.effects.length,
         name: instance.name ?? "",
-        file,
-        fbos: [...fbos.values()],
-        steps,
-      });
+        file: typeof instance.file === "string" ? instance.file : "",
+        fbos: [],
+        steps: [],
+        enabled,
+        visibleBound,
+        unsupported: [],
+      };
+      let compiled: SceneEffect | null = null;
+      try {
+        compiled = await compileEffect(index, shell, instance, issues);
+      } catch (error) {
+        if (enabled) throw error;
+        // 关着的 effect 以前不解析，它坏了不能让整场编译失败
+        issues.add(`effect:error:${shell.file}`);
+      }
+      // 启用时缺文件维持现状（不进 layer.effects）；关着时进一个空 effect，打开时靠 `unsupported` 知道要整场重编译
+      if (compiled || !enabled) layer.effects.push({ ...(compiled ?? shell), unsupported: [...issues].sort() });
     }
 
     const cbm = layer.colorBlendMode;

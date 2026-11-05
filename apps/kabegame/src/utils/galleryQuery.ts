@@ -213,6 +213,13 @@ export function serializeSearchTerm(term: GallerySearchTerm): string {
 // 查询对象
 // ---------------------------------------------------------------------------
 
+/** 媒体分类，三类互补；新增时同步后端 gallery_media_type_router 的 list 与 resolve。 */
+export const GALLERY_MEDIA_KINDS = ["image", "video", "x-wpe"] as const;
+export type GalleryMediaKind = (typeof GALLERY_MEDIA_KINDS)[number];
+export function isGalleryMediaKind(value: string | undefined): value is GalleryMediaKind {
+  return GALLERY_MEDIA_KINDS.includes(value as GalleryMediaKind);
+}
+
 /**
  * 查询原子：各维度取值的 AND。搜索（`search`）与其它维度同级。
  * 单独一个 FilterSet 就是一条退化的 GalleryQuery（`[{ is: filters }]`）。
@@ -220,7 +227,7 @@ export function serializeSearchTerm(term: GallerySearchTerm): string {
  */
 export interface GalleryFilterSet {
   plugin?: { pluginId: string; extendPath?: string };
-  mediaType?: { kind: "image" | "video"; format?: string };
+  mediaType?: { kind: GalleryMediaKind; format?: string };
   date?: { segment: string };
   size?: { range: string };
   aspect?: { range: string };
@@ -256,7 +263,7 @@ export type GalleryFilter =
   | { type: "plugin"; pluginId: string; extendPath?: string }
   | { type: "date"; segment: string }
   | { type: "date-range"; start: string; end: string }
-  | { type: "media-type"; kind: "image" | "video"; format?: string }
+  | { type: "media-type"; kind: GalleryMediaKind; format?: string }
   | { type: "size"; range: string }
   | { type: "aspect"; range: string };
 
@@ -413,7 +420,7 @@ export function filterDateSegment(input: GalleryFilter | GalleryFilterSet): stri
   return fromFilterLike(input).date?.segment ?? null;
 }
 
-export function filterMediaKind(input: GalleryFilter | GalleryFilterSet): "image" | "video" | null {
+export function filterMediaKind(input: GalleryFilter | GalleryFilterSet): GalleryMediaKind | null {
   return fromFilterLike(input).mediaType?.kind ?? null;
 }
 
@@ -1197,7 +1204,7 @@ export function parseDimensionChunk(
 
   if (root === "media-type") {
     const kind = chunk[1]?.toLowerCase();
-    if (kind !== "image" && kind !== "video") return null;
+    if (!isGalleryMediaKind(kind)) return null;
     const format = decodeUserSegment(chunk[2] ?? "").trim();
     return {
       filter: format ? { type: "media-type", kind, format } : { type: "media-type", kind },

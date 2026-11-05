@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
 import type { SceneScript } from "../compile/scripts";
 import { SceneState } from "../render/state";
 import { ScriptApi } from "./api";
@@ -358,6 +358,27 @@ describe("SceneScript API（FakeRealm）", () => {
     general.bloomtint = new Vec3(0.2, 0.3, 0.4);
     expect(h.state.bloom.strength).toBe(1.5);
     expect(h.state.bloom.tint).toEqual([0.2, 0.3, 0.4]);
+    h.api.enterScript(script("closed", { kind: "effect", object: 1, effect: 0 }, 1));
+    const closed = h.realm.global.thisObject as Record<string, unknown>;
+    const entry: SceneEffect = {
+      source: 0,
+      id: 1,
+      name: "",
+      file: "effects/x/effect.json",
+      fbos: [],
+      steps: [],
+      enabled: false,
+      visibleBound: true,
+      unsupported: [],
+    };
+    h.bundle.layers[1].effects.push(entry);
+    // 3c：关着的可变 effect 在 bundle 里，但 visible 读到 false；它的对象仍然有效
+    expect(closed.visible).toBe(false);
+    expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(closed)).toBe(true);
+    closed.visible = true;
+    expect(h.recompiles.at(-1)).toEqual({ path: "objects/1/effects/0/visible", value: true });
+    entry.enabled = true;
+    expect(closed.visible).toBe(true);
     general.clearcolor = new Vec3(1, 0, 0);
     expect(h.recompiles.at(-1)).toEqual({ path: "general/clearcolor", value: [1, 0, 0] });
   });

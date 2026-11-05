@@ -348,6 +348,45 @@ describe("SceneHost 脚本接线", () => {
     host.dispose();
   });
 
+  it("关着的可变 effect：脚本读 visible 为 false，写 true 触发重编译，之后读到 true（3c）", async () => {
+    const path = "objects/0/effects/0/visible";
+    compile.mockImplementation(async (input: { scriptOverrides?: Record<string, unknown> }) => {
+      const result = bundle();
+      result.scripts.list[0].owner = { kind: "effect", object: 0, effect: 0 };
+      result.layers[0].effects = [
+        {
+          source: 0,
+          id: 1,
+          name: "",
+          file: "effects/x/effect.json",
+          fbos: [],
+          steps: [],
+          enabled: input.scriptOverrides?.[path] === true,
+          visibleBound: true,
+          unsupported: [],
+        },
+      ];
+      return result;
+    });
+    const seen: boolean[] = [];
+    onUpdate = () => {
+      const object = activeGlobal.thisObject as { visible: boolean };
+      seen.push(object.visible);
+      object.visible = true;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(seen[0]).toBe(false);
+    expect(compile.mock.calls[1][0].scriptOverrides[path]).toBe(true);
+    await vi.waitFor(() => expect(seen.at(-1)).toBe(true));
+    // 已经是 true：不再重编译
+    renderer.tick();
+    expect(compile).toHaveBeenCalledTimes(2);
+    host.dispose();
+  });
+
   it("重编译重放 API 直接写入，用户绑定覆盖后保留用户值", async () => {
     onUpdate = () => {};
     onInit = () => {

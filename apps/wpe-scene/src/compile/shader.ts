@@ -69,20 +69,31 @@ export function shaderUniforms(
   return values;
 }
 
+/** 一次翻译的结果与它的不支持项：两者一起缓存，命中时重新上报。 */
+interface TranslateOutcome {
+  result: TranslateResult | null;
+  issues: string[];
+}
+
 export class ShaderCompiler {
-  private readonly cache = new Map<string, Promise<TranslateResult | null>>();
+  private readonly cache = new Map<string, Promise<TranslateOutcome>>();
   constructor(
     private fs: SceneFs,
     private translator: Wpesl2wgsl | null,
     private unsupported: Set<string>,
   ) {}
 
-  /** `scope` 是 effect 的资源范围：effect 的着色器按 `SceneFs.readScoped` 的顺序查找；头文件都在 `shaders/` 根，不按 effect 查。 */
-  compile(
+  /**
+   * `scope` 是 effect 的资源范围：effect 的着色器按 `SceneFs.readScoped` 的顺序查找；头文件都在 `shaders/` 根，不按 effect 查。
+   * `unsupported` 是本次调用的上报目标，缺省为场景级。不支持项每次调用都写一遍：关着的 effect 先翻译、启用的 effect 再命中
+   * 缓存时，场景级才收得到（3c）。结果仍是同一个对象，`addProgram` 按它去重。
+   */
+  async compile(
     shader: string,
     combos: Record<string, number | boolean> = {},
     textures: ShaderTextureSlot[] = [],
     scope: ResourceScope | null = null,
+    unsupported: Set<string> = this.unsupported,
   ): Promise<TranslateResult | null> {
     // COMBO 只能是数值 / 布尔（WPE 按整数读，写成 `{user, value}` 会断言中止，I3）；对象由能力表报 `combo:user-binding`
     const usable = staticCombos(combos);
@@ -100,7 +111,9 @@ export class ShaderCompiler {
       task = this.translate(shader, usable, textures, scope);
       this.cache.set(key, task);
     }
-    return task;
+    const { result, issues } = await task;
+    for (const issue of issues) unsupported.add(issue);
+    return result;
   }
 
   private async translate(
@@ -108,19 +121,17 @@ export class ShaderCompiler {
     combos: Record<string, number | boolean>,
     textures: ShaderTextureSlot[],
     scope: ResourceScope | null,
-  ): Promise<TranslateResult | null> {
-    if (!this.translator) {
-      this.unsupported.add("shader:wasm-missing");
-      return null;
-    }
+  ): Promise<TranslateOutcome> {
+    if (!this.translator) return { result: null, issues: ["shader:wasm-missing"] };
+    const issues: string[] = [];
     const [vertex, fragment] = await Promise.all([
       this.fs.text(`shaders/${shader}.vert`, scope),
       this.fs.text(`shaders/${shader}.frag`, scope),
     ]);
     if (!vertex || !fragment) {
-      this.unsupported.add(`shader:${shader}:missing`);
-      if (!this.fs.sceneAssets.length) this.unsupported.add("assets:missing");
-      return null;
+      issues.push(`shader:${shader}:missing`);
+      if (!this.fs.sceneAssets.length) issues.push("assets:missing");
+      return { result: null, issues };
     }
     const result = await translateWithIncludes(this.translator, { vertex, fragment, combos, textures }, (name) =>
       this.fs.text(`shaders/${name}`),
@@ -128,9 +139,9 @@ export class ShaderCompiler {
     if (!result.ok) {
       const detail =
         result.requires?.[0] ?? result.missing?.[0] ?? result.errors?.[0]?.message?.replace(/\s+/g, " ").slice(0, 100);
-      this.unsupported.add(`shader:${shader}:${result.phase ?? "unknown"}${detail ? `:${detail}` : ""}`);
-      if (!this.fs.sceneAssets.length && result.phase === "include") this.unsupported.add("assets:missing");
+      issues.push(`shader:${shader}:${result.phase ?? "unknown"}${detail ? `:${detail}` : ""}`);
+      if (!this.fs.sceneAssets.length && result.phase === "include") issues.push("assets:missing");
     }
-    return result;
+    return { result, issues };
   }
 }

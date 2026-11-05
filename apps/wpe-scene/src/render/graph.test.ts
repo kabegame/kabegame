@@ -1,8 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SceneEffect, SceneEffectStep, SceneFbo, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
-import { compositeSize, FboBindings, fboSize, planLayer, type DrawStep, type LayerStep } from "./graph";
+import {
+  compositeSize,
+  FboBindings,
+  fboSize,
+  needsComposite,
+  planLayer,
+  planSignature,
+  type DrawStep,
+  type LayerStep,
+} from "./graph";
 import { transformPoint } from "./math";
-import { drawMatrices } from "./scene";
+import { drawMatrices, uploadableTextures } from "./scene";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -28,7 +37,17 @@ function fbo(name: string, partial: Partial<SceneFbo> = {}): SceneFbo {
   return { name, format: "rgba8888", scale: 1, unique: false, repeat: false, ...partial };
 }
 function effect(steps: SceneEffectStep[], fbos: SceneFbo[] = []): SceneEffect {
-  return { source: 0, id: 1, name: "", file: "effects/x/effect.json", fbos, steps };
+  return {
+    source: 0,
+    id: 1,
+    name: "",
+    file: "effects/x/effect.json",
+    fbos,
+    steps,
+    enabled: true,
+    visibleBound: false,
+    unsupported: [],
+  };
 }
 function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
   return {
@@ -280,6 +299,118 @@ describe("图层渲染图：_rt_FullFrameBuffer 快照时机（每图层至多�
     expect(planLayer(layer({ effects: [effect([draw()])] }), textures).steps.some((s) => s.kind === "snapshot")).toBe(
       false,
     );
+  });
+});
+
+describe("渲染图按开关重排（3c）", () => {
+  const off = (partial: SceneEffect): SceneEffect => ({ ...partial, enabled: false, visibleBound: true });
+  it("两个 effect 关掉后一个：前一个的最后绘制 pass 上屏，合成 RT 由 2 张变 1 张", () => {
+    const first = effect([draw({ pass: pass({ key: "e0" }) })]);
+    const second = effect([draw({ pass: pass({ key: "e1" }) })]);
+    const both = planLayer(layer({ effects: [first, second] }), textures);
+    expect(both.composite?.count).toBe(2);
+    expect(kinds(both.steps)).toEqual(["base→c0", "effect→c1", "final→scene"]);
+    const closed = planLayer(layer({ effects: [first, off(second)] }), textures);
+    expect(closed.composite?.count).toBe(1);
+    expect(kinds(closed.steps)).toEqual(["base→c0", "final→scene"]);
+    expect(draws(closed.steps)[1]).toMatchObject({
+      effect: 0,
+      geometry: "layer",
+      blending: "translucent",
+      pass: { key: "e0" },
+    });
+  });
+  it("全关时基础 pass 直接上屏，不分配合成 RT", () => {
+    const effects = [off(effect([draw()])), off(effect([draw()]))];
+    const plan = planLayer(layer({ effects }), textures);
+    expect(plan.composite).toBeNull();
+    expect(plan.reasons).toEqual([]);
+    expect(kinds(plan.steps)).toEqual(["direct→scene"]);
+    expect(draws(plan.steps)[0]).toMatchObject({ blending: "translucent", uv: [219 / 256, 216 / 256] });
+    expect(needsComposite({ effects, colorBlendMode: 0 })).toBe(false);
+    expect(needsComposite({ effects, colorBlendMode: 11 })).toBe(true);
+  });
+  it("passthrough 图层开关 effect 时上屏仍是 passthrough", () => {
+    const base = { colorBlendMode: 11, passthrough: pass({ key: "pt" }) };
+    const open = planLayer(layer({ ...base, effects: [effect([draw()])] }), textures);
+    const closed = planLayer(layer({ ...base, effects: [off(effect([draw()]))] }), textures);
+    expect(kinds(open.steps)).toEqual(["snapshot", "base→c0", "effect→c1", "passthrough→scene"]);
+    expect(kinds(closed.steps)).toEqual(["snapshot", "base→c0", "passthrough→scene"]);
+    expect(open.composite?.count).toBe(2);
+    expect(closed.composite?.count).toBe(1);
+    // 关掉之后 passthrough 读基础 pass 写的那张合成 RT
+    expect(draws(closed.steps).at(-1)?.inputs[0]).toEqual({ kind: "composite", index: 0 });
+  });
+  it("关掉的 effect 里的 fbo 引用不进步骤，后面 effect 的下标不移位", () => {
+    const first = off(effect([draw({ target: "_rt_A" })], [fbo("_rt_A")]));
+    const second = effect([draw({ target: "_rt_B" }), draw({ binds: [{ name: "_rt_B", index: 1 }] })], [fbo("_rt_B")]);
+    const plan = planLayer(layer({ effects: [first, second] }), textures);
+    expect(kinds(plan.steps)).toEqual(["base→c0", "effect→_rt_B", "final→scene"]);
+    const steps = draws(plan.steps);
+    expect(steps.slice(1).map((step) => step.effect)).toEqual([1, 1]);
+    expect(steps[1].target).toEqual({ kind: "fbo", effect: 1, name: "_rt_B" });
+    expect(steps[2].inputs[1]).toEqual({ kind: "fbo", effect: 1, name: "_rt_B" });
+    expect(JSON.stringify(plan.steps)).not.toContain("_rt_A");
+  });
+  it("关掉的 effect 的 copy / swap 与快照需求一起消失", () => {
+    const closed = off(
+      effect(
+        [
+          { kind: "copy", source: "previous", target: "_rt_A" },
+          { kind: "swap", source: "_rt_A", target: "_rt_B" },
+          draw({ pass: pass({ framebuffer: true }) }),
+        ],
+        [fbo("_rt_A"), fbo("_rt_B")],
+      ),
+    );
+    expect(kinds(planLayer(layer({ effects: [closed, effect([draw()])] }), textures).steps)).toEqual([
+      "base→c0",
+      "final→scene",
+    ]);
+  });
+  it("显式传 enabled 能覆盖 layer.effects[e].enabled", () => {
+    const effects = [off(effect([draw()])), effect([draw()])];
+    const opened = planLayer(layer({ effects }), textures, () => true);
+    expect(kinds(opened.steps)).toEqual(["base→c0", "effect→c1", "final→scene"]);
+    const closed = planLayer(layer({ effects }), textures, () => false);
+    expect(kinds(closed.steps)).toEqual(["direct→scene"]);
+    expect(needsComposite({ effects: [off(effect([]))], colorBlendMode: 0 }, () => true)).toBe(true);
+  });
+  it("planSignature：步骤或合成 RT 数变化时变，关掉一个没有步骤的 effect 时不变", () => {
+    const signature = (effects: SceneEffect[]) => planSignature(planLayer(layer({ effects }), textures));
+    const a = effect([draw({ pass: pass({ key: "e0" }) })]);
+    const b = effect([draw({ pass: pass({ key: "e1" }) })]);
+    expect(signature([a, b])).toBe(signature([a, b]));
+    // 合成 RT 2 → 1
+    expect(signature([a, off(b)])).not.toBe(signature([a, b]));
+    // 张数相同（都是 1）、上屏的 pass 不同
+    expect(signature([a, off(b)])).not.toBe(signature([off(a), b]));
+    // 全关 → 直接上屏
+    expect(signature([off(a), off(b)])).not.toBe(signature([a, off(b)]));
+    const empty = effect([]);
+    expect(signature([a, off(empty)])).toBe(signature([a, empty]));
+  });
+});
+
+describe("上传的纹理（3c）", () => {
+  const textured = (index: number) => draw({ pass: pass({ textures: { 1: index } }) });
+  const sorted = (values: Set<number>) => [...values].sort((a, b) => a - b);
+  it("只被关着且带不支持项的 effect 用到的不上传；关着但没有不支持项的上传（打开时要用）", () => {
+    const blocked = { ...effect([textured(2)]), enabled: false, unsupported: ["tex:video"] };
+    const closed = { ...effect([textured(3)]), enabled: false };
+    const open = effect([textured(4)]);
+    const passthrough = pass({ textures: { 0: 5 } });
+    const bundle = { layers: [layer({ effects: [blocked, closed, open], passthrough })] };
+    expect(sorted(uploadableTextures(bundle))).toEqual([0, 3, 4, 5]);
+  });
+  it("同时被启用的 effect 用到时照常上传", () => {
+    const blocked = { ...effect([textured(2)]), enabled: false, unsupported: ["tex:video"] };
+    expect(sorted(uploadableTextures({ layers: [layer({ effects: [blocked, effect([textured(2)])] })] }))).toEqual([
+      0, 2,
+    ]);
+  });
+  it("没有 effect 用到的（如关着的 effect 编译到一半出错留下的）不上传", () => {
+    expect(sorted(uploadableTextures({ layers: [layer()] }))).toEqual([0]);
   });
 });
 

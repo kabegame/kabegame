@@ -446,31 +446,22 @@ const emit = defineEmits<{ "update:paused": [value: boolean] }>();   // 新增
 ```
   > 说明：退回预览图的宿主没有 runtime，只删存储。没有任何宿主存活时事件没人收，这次清空不生效：面板只在有实时实例时显示按钮，预览与窗口模式下宿主都在，这种情况很少。
 
-## 点 1 — 编译可变 effect（`compile/bundle.ts`、`compile/features.ts`、`compile/bindings.ts`、`compile/scripts.ts`）
+## 点 1 — 编译可变 effect（`compile/bundle.ts`、`compile/shader.ts`、`compile/bindings.ts`、`host.ts`、`script/api.ts`）
 
-- **修改** effect 循环：
+- **修改** effect 循环。绑定目标这一步**不改**，仍是 `recompile("effect-visible")`，改造放在点 3：
 ```ts
-      const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);   // 新增：用户绑定或脚本挂在它的 visible 上（函数名以实际代码为准）
-      const enabled = bindings.bind(instance.visible, properties, { kind: "effect", object: index, effect: j }) !== false;
+      const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);   // 新增：用户绑定或脚本挂在它的 visible 上
+      const enabled = bindings.bind(instance.visible, properties, recompile("effect-visible", …)) !== false;   // 目标不变
       if (!enabled && !visibleBound) continue;            // 修改：只丢「写死关闭、没有绑定」的
-      const effectUnsupported = new Set<string>();         // 新增：本 effect 自己的不支持项
-      checkEffectFeatures(instance, effect, label, effectUnsupported);
-      // …材质、着色器、纹理的不支持项也记进 effectUnsupported（compilePass 接受一个目标集合）
-      if (enabled) for (const key of effectUnsupported) unsupported.add(key);   // 修改：只有启用的进场景级
-      layer.effects.push({ /* … */, source: j, enabled, visibleBound, unsupported: [...effectUnsupported].sort() });   // 新增三个字段
+      const issues = new EffectIssues(enabled ? unsupported : null);   // 新增：本 effect 自己的不支持项，启用时同步写给场景级
+      // …compileEffect：checkEffectFeatures 与材质、着色器、纹理的不支持项都记进 issues（compilePass 接受一个目标集合）
+      layer.effects.push({ /* … */, source, enabled, visibleBound, unsupported: [...issues].sort() });   // 新增三个字段
 ```
   - 快速退回（`settled()`）照旧：场景已确定退回时不再编译后面的任何 effect，包括可变的。
   - 未启用的可变 effect 的 mip 照样解码（它随时可能打开）。
-- **修改** 绑定目标：effect `visible` 从 `recompile("effect-visible")` 改成就地类目标：
-```ts
-  | { kind: "effect"; object: number; effect: number /* effects[] 下标（JSON 坐标）*/ }   // 新增
-```
-- **修改** 脚本侧：
-  - `scripts.ts` 的 `targetOf` 把 effect `visible` 改为同一个就地目标；
-  - `ScriptApi` 里 effect 对象的 `visible` 写入也走这个目标；
-  - `host.ts` 的 `writeScript` 不再为它写 `scriptOverrides`，也不再请求重编译。
-
-  `scriptOverrides` 只剩 general 字段与图层结构类目标在用（见待定 1、2）。
+- **修改** 不支持项跟着缓存走。`ShaderCompiler` 只在第一次翻译时上报，`getTexture` 只在第一次解析时上报。不支持项分到 effect 之后，一个关着的 effect 先编译某个坏着色器，启用的 effect 再用同一份就命中缓存，场景级收不到，本该退回的场景会去渲染。所以缓存带着不支持项，命中时重新上报。翻译结果仍是同一个对象，`addProgram` 的去重不受影响。
+- **修改** 区分「在 bundle 里」和「启用」。`host.ts` 的 `recompileValue` 与 `script/api.ts` 的 effect `visible` 读取都改看 `item.enabled`，否则脚本读到的 `visible` 永远是 true，写 `true` 也会被当成没变而不重编译。`isObjectValid` 不改：关着的可变 effect 算有效对象，更接近 WPE，它的对象本来就一直存在。
+- **修改** 关着的 effect 出错。以前根本不解析它，它的 `effect.json` 坏了也没事；现在抛错要收进它自己的 `unsupported`（`effect:error:<file>`），进一个空 effect，不影响场景。启用的照旧抛。`effect:missing` 同理：启用时维持现状（不进 `layer.effects`），关着时进一个空 effect，打开时靠 `unsupported` 知道要整场重编译。
 
 ## 点 2 — 渲染图按开关重排（`render/graph.ts`）
 
@@ -486,8 +477,18 @@ export function planSignature(plan: LayerPlan): string;
 ```
 - 单测（`graph.test.ts`）：两个 effect 的图层，关掉后一个时前一个的最后一个绘制 pass 变成上屏、合成 RT 由 2 张变 1 张；全关时基础 pass 改成直接上屏；passthrough 图层开关 effect 时上屏仍是 passthrough；关掉的 effect 里的 fbo 引用不进步骤。
 
-## 点 3 — 单图层同步重建（`render/scene.ts`、`render/state.ts`）
+## 点 3 — 单图层同步重建（`render/scene.ts`、`render/state.ts`、`compile/bindings.ts`、`compile/scripts.ts`、`script/api.ts`、`host.ts`）
 
+- **修改** 绑定目标：effect `visible` 从 `recompile("effect-visible")` 改成就地类目标。放在这一步而不是点 1：`SceneState` 要到这里才会处理 effect 目标，提前改的话改属性没有反应，脚本也写不进去。
+```ts
+  | { kind: "effect"; object: number; effect: number /* effects[] 下标（JSON 坐标）*/ }   // 新增
+```
+- **修改** 脚本侧：
+  - `scripts.ts` 的 `targetOf` 把 effect `visible` 改为同一个就地目标；
+  - `ScriptApi` 里 effect 对象的 `visible` 写入也走这个目标；
+  - `host.ts` 的 `writeScript` 不再为它写 `scriptOverrides`，也不再请求重编译。
+
+  `scriptOverrides` 只剩 general 字段与图层结构类目标在用（见待定 1、2）。
 - **修改** 加载时为可变图层预建（「可变图层」= 有 `visibleBound` 的 effect 的图层）：
 ```ts
 interface LayerRuntime {
@@ -580,10 +581,11 @@ interface LayerRuntime {
 **步骤 0.6 — 当前壁纸控制**（子代理：点 0b；在真实音频完成并通过审查之后做，两者都改 `host.ts`）
 - 验收：单测（验收「单测」第 8 条）；`check-kabegame` 与宿主 `typecheck` 0 error；`deno task test -c kabegame --skip cargo` 全过；真机见验收「真机」的「暂停」「清空存储」。
 
-**步骤 1 — 编译与渲染图**（codex：点 1、点 2）
-- 验收：单测（点 2 列出的几例，以及「不可变的关闭 effect 照旧不进 bundle」「可变 effect 的不支持项不进场景级」）；语料测试的 `unsupported` 与 3b 结束时逐张相同（本机没有不可变 → 可变的变化会让结论改变的场景；如有，逐张解释）。
+**步骤 1 — 编译与渲染图，不改绑定目标**（子代理：点 1、点 2）
+- 运行时行为不变：改 effect 可见性仍走整场重编译，`scriptOverrides` 继续保证重编译时 `enabled` 正确。
+- 验收：单测（点 2 列出的几例，以及「不可变的关闭 effect 照旧不进 bundle」「可变 effect 的不支持项不进场景级」、缓存命中重新上报、关着的 effect 出错）；语料测试的 `unsupported` 与 3b 结束时逐张相同（本机没有不可变 → 可变的变化会让结论改变的场景；如有，逐张解释）。
 
-**步骤 2 — 单图层重建**（codex：点 3）
+**步骤 2 — 单图层重建**（codex：点 3，含绑定目标与脚本侧改成就地）
 - 验收：单测——对测试工程的 bundle，「关掉 effect → 重建」得到的步骤与 uniform 字节，和「用 effect 关着的属性值整场编译」逐字节相同；再打开回到原样。没有可变 effect 的场景，`GpuScene` 建出的资源数与 3b 相同、基线哈希不变。
 
 **步骤 3 — 泛光开关与级数**（codex：点 4、点 5）
@@ -748,3 +750,21 @@ interface LayerRuntime {
 - 多宿主同时清空时，17 轮里有 1 轮存储值比宿主数少 1，没有看到晚到的一方删掉别人写的值。
 
 **恢复。** 当前壁纸 12888、模式 window、`wallpaperPaused` false，都已实测读回，`settings.json` 已落盘。「场景后处理」`disabled`、音量 1、dev 强制渲染开关 null、vortex 属性与测前相同（metadata id 20077 → 20081）。预览已关，路由 `/gallery`。副本 13115 的行与计数键已删，13114 的计数键已删。`settings.rs` 只改了 mtime，内容没动。
+
+### 步骤 1
+
+**实现。** 点 1、点 2 按上文落地，绑定目标没有改。effect 循环体抽成 `compileEffect`，它拿到一个预先填好 `source` / `id` / `enabled` 等字段的空 effect，出错或缺文件时关着的 effect 就用这个空壳进 bundle。
+
+**与计划不一致的地方。**
+- 计划写 `render/scene.ts` 不用改，**实际改了一处**。`populate` 把 `bundle.textures` 全部上传，`uploadTexture` 遇到没有 mip 或格式不认识的纹理会抛错。可变 effect 进 bundle 之后，关着的 effect 带的这种纹理（如 `tex:video`）会让本来能画的场景退回，和「运行时行为不变」冲突，编译单测看不出来。新增纯函数 `uploadableTextures`：只跳过仅被「关着且带不支持项」的 effect 用到的纹理。这种 effect 打开时走整场重编译，用不到这份纹理。没有可变 effect 的场景结果是全集。
+- `p2a.test.ts` 没有 `SceneEffect` 夹具，不用补字段；只改了 `graph.test.ts`。
+
+**留给步骤 2。**
+- `scene.ts` 建 fbo 时，直接上屏的图层用的合成尺寸是 `[4, 4]`：全部 effect 关着时，关着的 effect 的 fbo 按 4×4 建。打开时要按真实合成尺寸（`compositeSize`），点 3 预建时要改。
+- 关着且带不支持项的 effect，它的纹理与程序都没有 GPU 资源，打开时只能整场重编译，与点 3 的「`SceneState.write` 返回 `"recompile"`」一致。
+
+**语料与真机**（2026-11-05 Claude 验收，脚本 `ignore/p3c/step1/effect.mjs`，基线 `ignore/p3c/corpus-05/`）。
+- 语料 41 张、695 段：`unsupported` 逐张相同，脚本诊断逐段相同。这份语料不覆盖「关着的可变 effect 带不支持项」的样本，`uploadableTextures` 只有单测。
+- 测试工程 13114：关掉 effect 走一次 `effect-visible` 重编译，固定时刻的 hash 变化，`state` 里仍有该 effect 的 pass；关着时改 `p_tintcolor` 就地写（applied +1，不重编译，hash 不变）；打开再走一次重编译，hash 回到开始的值。属性已恢复默认。
+- bedroom、vortex 预览 `recompiled` 为空，按钮正常。
+- 变异检查：着色器、纹理缓存改回只报一次，都有对应单测失败，已还原。

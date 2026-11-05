@@ -4,6 +4,8 @@
     "properties": {
         "format": { "type": "string", "default": "", "optional": false }
     },
+    // 不改成 images.type IN ('image/…', 'video/…', 'x-wpe/…')：webp、png 这类占比不低的格式会走 idx_images_type 再整体排序，
+    // 第 1 页从 0.05ms 变成 6.6ms（6.5 万行、已 ANALYZE）；'image/' || ? 这种拼接 STAT4 也估不了，还会漏掉格式表外的主类。
     "query": {
         "where": "SUBSTR(images.type, INSTR(images.type, '/') + 1) = ${properties.format}"
     }

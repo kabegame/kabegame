@@ -15,7 +15,7 @@
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
-import type { SceneBundle, SceneLayer, SceneTexture } from "../compile/bundle";
+import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import type { BloomParams } from "../compile/postprocess";
 import { FBO_FORMATS } from "../compile/tex";
 import type { TextureBinding } from "../wpesl2wgsl";
@@ -142,6 +142,27 @@ export function checkRenderable(
     }
   }
   return [...reasons];
+}
+
+/**
+ * 要上传的纹理：除了只被「关着且带不支持项」的 effect 用到的，其余全部上传。这种 effect 打开时整场重编译，用不到这份
+ * GPU 纹理；它的纹理可能没有 mip 或格式不认识，上传会抛错，让本来能画的场景退回（3c）。关着的 effect 编译到一半出错时
+ * 步骤不留，已解析的纹理同样不被引用。没有可变 effect 的场景，bundle 里的纹理都有 pass 引用，结果是全集。
+ */
+export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<number> {
+  const used = new Set<number>();
+  const add = (pass: ScenePass) => {
+    for (const index of Object.values(pass.textures)) used.add(index);
+  };
+  for (const layer of bundle.layers) {
+    layer.passes.forEach(add);
+    if (layer.passthrough) add(layer.passthrough);
+    for (const effect of layer.effects) {
+      if (!effect.enabled && effect.unsupported.length) continue;
+      for (const step of effect.steps) if (step.kind === "draw") add(step.pass);
+    }
+  }
+  return used;
 }
 
 /**
@@ -276,7 +297,10 @@ export class GpuScene {
     const [r = 0, g = 0, b = 0] = general.clearEnabled ? general.clearColor : [];
     this.clear = { r, g, b, a: 1 };
 
-    const textures = bundle.textures.map((texture) => this.own(uploadTexture(device, texture)));
+    const uploadable = uploadableTextures(bundle);
+    const textures = bundle.textures.map((texture, index) =>
+      uploadable.has(index) ? this.own(uploadTexture(device, texture)) : null,
+    );
     const samplers = new Map<string, GPUSampler>();
     const sampler = (descriptor: GPUSamplerDescriptor): GPUSampler => {
       const key = JSON.stringify(descriptor);
@@ -552,7 +576,7 @@ export class GpuScene {
     resources: LayerResources,
     program: GpuProgram,
     viewProjection: Float32Array,
-    textures: GPUTexture[],
+    textures: (GPUTexture | null)[],
     dummies: ReturnType<GpuScene["createDummies"]>,
     samplerFor: (texture: SceneTexture) => GPUSampler,
     pipelineFor: (
@@ -629,7 +653,7 @@ export class GpuScene {
           if (binding.kind !== "2d")
             throw new SceneRenderError([`render:texture-kind:${binding.slot}:${binding.kind}`]);
           if (ref.kind === "texture") {
-            view = textures[ref.index].createView();
+            view = textures[ref.index]!.createView();
             sampler = samplerFor(bundle.textures[ref.index]);
           } else {
             const target = ref.kind === "fbo" ? resolveFbo(ref.effect, ref.name) : this.resolveTexture(ref, resources);

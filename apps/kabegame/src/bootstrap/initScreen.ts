@@ -16,6 +16,7 @@ export type StartupPhase =
   | { phase: "plugins" }
   | { phase: "schema"; version: number; name: string }
   | { phase: "backfill"; id: string; processed: number; total: number | null }
+  | { phase: "analyze" }
   | { phase: "services" }
   | { phase: "ready" }
   | { phase: "failed"; message: string };

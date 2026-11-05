@@ -54,7 +54,7 @@ pub fn init_fast_globals() -> Result<(), String> {
     Ok(())
 }
 
-/// 重型初始化：PluginManager、Storage（schema 迁移 + 被依赖的回填）、调度器与各 Service。
+/// 重型初始化：PluginManager、Storage（schema 迁移 + 被依赖的回填 + 统计刷新）、调度器与各 Service。
 /// 桌面端与 Android 在独立线程里调用（期间启动页经 `startup_state` 显示进度），web 顺序调用。
 /// 不得包含必须在主线程执行的调用（托盘、壁纸控制器等放在 app 层的 `init_post`）。
 pub fn init_heavy_globals() -> Result<(), String> {
@@ -63,8 +63,8 @@ pub fn init_heavy_globals() -> Result<(), String> {
         .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
     tracing::info!("Plugin manager initialized");
 
-    // 迁移与阻塞回填的进度由 Storage::new() 直接写进 startup_state。
-    Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
+    // 迁移、阻塞回填与统计刷新的进度由 Storage 直接写进 startup_state。
+    Storage::init_global_for_app().map_err(|e| format!("Failed to initialize storage: {}", e))?;
     // 网页壁纸目录索引（file: 闸门与网页壁纸拉取的数据源，也记着场景壁纸目录）：必须先于任何网页壁纸 /
     // 场景宿主 iframe 就绪。主窗口要等启动页 Ready 才会打开预览、壁纸窗口在 init_post 才建，所以放在这里而不是
     // init_post。场景宿主的范围（宿主目录、WPE 安装目录）先算好，索引注册的解析器里宿主目录优先。

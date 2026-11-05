@@ -150,7 +150,7 @@ export class SceneHost {
       return;
     }
     if (!changes.size) return;
-    // 退回预览图时没有 bundle 可就地写；改了属性可能就能渲染（例如关掉不支持的 effect，未启用的 effect 不查能力），重新编译
+    // 退回预览图时没有 bundle 可就地写；改了属性可能就能渲染（例如关掉不支持的 effect，关着的 effect 不计入场景级），重新编译
     if (this.state === "fallback") {
       void this.reload();
       return;
@@ -266,7 +266,7 @@ export class SceneHost {
       return (
         bundle.layers
           .find((layer) => layer.object === Number(effect[1]))
-          ?.effects.some((item) => item.source === Number(effect[2])) ?? false
+          ?.effects.some((item) => item.source === Number(effect[2]) && item.enabled) ?? false
       );
     const general: Record<string, number[] | boolean> = {
       "general/clearcolor": bundle.general.clearColor,

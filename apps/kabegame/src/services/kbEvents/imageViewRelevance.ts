@@ -70,9 +70,10 @@ export function imageMayMatchQuery(image: ImageInfo, query: GalleryQuery): boole
     const atom = node.is;
     if (atom.plugin && image.pluginId !== atom.plugin.pluginId) return false;
     if (atom.mediaType) {
-      // gallery_media_type_provider 还接受旧行里的裸 video，且忽略大小写。
+      // 与 gallery_media_type_provider 同口径：video/* 归视频，x-wpe/* 归 WPE，其余归图片；还接受旧行里的裸 video，且忽略大小写。
       const type = (image.type ?? "").toLowerCase();
-      const kind = type === "video" || type.startsWith("video/") ? "video" : "image";
+      const kind =
+        type === "video" || type.startsWith("video/") ? "video" : type.startsWith("x-wpe/") ? "x-wpe" : "image";
       if (kind !== atom.mediaType.kind) return false;
       const format = type.slice(type.indexOf("/") + 1);
       if (atom.mediaType.format && format !== atom.mediaType.format) return false;

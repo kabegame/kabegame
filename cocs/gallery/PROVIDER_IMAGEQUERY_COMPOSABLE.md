@@ -107,7 +107,7 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 `_kb_desc`。另支持 `image-only` / `video-only` 根段，在画册内叠加媒体类型过滤。语义与根级
 `all` / `wallpaper-order` 对齐。前端路径拼装见 [`apps/kabegame/src/utils/albumPath.ts`](/apps/kabegame/src/utils/albumPath.ts)。
 
-画廊根级由 `gallery_media_type_router` 列举 `media-type/image`、`media-type/video`，以 `CASE WHEN sub.type GLOB 'video/*'` 分组计数；虚拟盘复用媒体分类与格式 provider，中文根目录为「按媒体」→「图片」/「视频」。`x-wpe/video` 仍归图片。
+画廊根级由 `gallery_media_type_router` 列举 `media-type/image`、`media-type/video`、`media-type/x-wpe`，按 `video/*` / `x-wpe/*` / 其余分组计数，三类互补；只列出当前上下文里有数据的分类（不补 0，字母序），三个段名都可直接路由，所以选中后计数为 0 也不会 not found。前端枚举见 `GALLERY_MEDIA_KINDS`，WPE 显示为 Wallpaper Engine，其子类显示为视频 / 网页 / 场景；详情面板的类型芯片两段都是筛选。虚拟盘复用媒体分类与格式 provider，中文根目录为「按媒体」→「图片」/「视频」，不含 WPE（`vd_image_entry_from_row` 已隐藏 `x-wpe/*` 行）。
 
 `images.type` 由 Rust 写入口保证非空、小写且为「主类/子类」。格式列举直接按 `SUBSTR(sub.type, INSTR(sub.type, '/') + 1)` 分组计数，格式过滤同样直接取子类，不再做 LOWER / COALESCE 或过滤空格式。新入库使用规范后缀（如 `jpg` / `mov` / `mkv`）；v049 不归并已合规的历史别名（例如 `image/jpeg`）。执行计划约束见 `cocs/provider-dsl/RULES.md` §2.2。
 
@@ -193,9 +193,10 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
   整数交叉乘法 `w*min_h > h*min_w AND w*max_h <= h*max_w`，缺下界补 `0x1`、缺上界补 `1x0`（∞），不需特判；
   有效性由 `+images.aspect_ratio IS NOT NULL` 判定，无效时整条谓词为 FALSE 而非 NULL，`~not` 取非留得住这些图。
   `unknown` 走 [`aspect_unknown_provider`](/src-tauri/kabegame-core/src/providers/dsl/shared/aspect_unknown_provider.yaml)（`IS NULL`）。
-- **区间谓词禁止走索引**（`+` 一元加号）：没有 STAT4 统计时规划器把任何范围都估成高选择性，landscape 实占约 6 成，
-  100 万图组合筛选一页从约 0.2s 变成 14s。只有完整 `ANALYZE`（含 STAT4）能让它按桶选对；默认 `PRAGMA optimize`
-  与 `analysis_limit` 只写 stat1，效果等于没有统计，且近似重分析会清掉已有 STAT4，所以不依赖它。
+- **区间谓词禁止走索引**（`+` 一元加号）：五个桶占比都不低，走索引要回表再临时排序，100 万图组合筛选一页从约 0.2s 变成 14s。
+  主程序启动时跑的完整 `ANALYZE`（含 STAT4）也救不了：规划器知道占比，但沿排序索引取满即停的收益不进估算，6.5 万行实测 landscape（占 40%）
+  第 1 页仍选索引，0.13ms 变成 14ms，hide 组合 0.18ms 变成 20ms，COUNT 也不更快。所以不写真区间，这里的 `+` 保留。
+  `PRAGMA optimize` 与 `analysis_limit` 只写 stat1，近似重分析还会清掉已有 STAT4，主程序不用它们。
   `unknown` 允许走索引（正常库里极少，直接取 NULL 段）。100 万图实测：各桶组合筛选一页约 20ms、COUNT 0.3～0.8s。
 - **列举只列应用的桶**：原先按当前查询动态列举非空桶（100 万图 2～10s）已删除；现在列举固定列出应用的五个桶
   （顺序同 `GALLERY_ASPECT_BUCKETS`），并带分组计数，见下一节「维度列举带分组计数」。段名解析顺序是
@@ -236,7 +237,7 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 | --- | --- | --- |
 | 年 / 月 / 日 | `shared/dates_provider`、`year_provider`、`month_provider`（VD 共用） | `DISTINCT` 改 `GROUP BY` + `COUNT(*) AS count`；画廊三层 router 把 `${out.meta.count}` 透传进 meta |
 | 媒体格式 | `gallery_media_type_provider` | 原本就按格式分组计数，仅把计数放进 meta |
-| image / video | `gallery_media_type_router.yaml` | 按 kind 分组，与两类固定行 LEFT JOIN 补 0；新增 `image` / `video` resolve，路由不跑 SQL |
+| image / video / x-wpe | `gallery_media_type_router.yaml` | 按 kind 分组，与三类固定行 JOIN（无数据的分类不列出）；`image` / `video` / `x-wpe` 三条 resolve，路由不跑 SQL |
 | 大小 | `gallery_size_router.yaml` | 八个应用桶（`unknown` 在前、其余按大小升序）按 CASE 分组，与固定桶表 LEFT JOIN 补 0；字节值同 `size_bucket_router` |
 | 宽高比 | `gallery_aspect_router.yaml` | 四个区间桶一条分组 SQL（补 0），`unknown` 单独一条（动态列举项的 provider 名不能按行切换） |
 | 插件 | `gallery_plugins_router` | 按 `plugin_id` 分组，**只列当前上下文里有图的插件**；meta 只有 `count`，不再附插件清单 JSON；路由靠 resolve 正则，不依赖列举 |

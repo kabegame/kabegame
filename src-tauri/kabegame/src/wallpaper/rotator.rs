@@ -53,7 +53,7 @@ struct RotationSource {
     /// count / 取行出错后改用了默认随机路径
     fallback: bool,
     /// 目录型 WPE 壁纸能否参与：只有窗口模式能渲染，原生 / Plasma 插件逐张跳过。
-    /// 不放进有效路径：`media-type/image` 是「非视频」，WPE 行仍会被 count 进来。
+    /// 不放进有效路径：Plasma 能播视频、有效路径不带媒体过滤，WPE 行仍会被 count 进来。
     allow_wpe: bool,
 }
 

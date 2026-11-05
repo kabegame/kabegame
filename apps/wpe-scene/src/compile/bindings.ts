@@ -4,7 +4,7 @@
  * （`.claude/plans/wpe-import/3-scene/phase-3a-bindings.md` 点 1 / 点 5，依据 p3-script-REPORT I3）。
  *
  * 目标的键用 scene.json 的坐标（`objects/<i>`、`objects/<i>/effects/<j>/passes/<k>`、`general`），不用 bundle 下标：
- * 未启用的 effect 不进 bundle，下标会随属性值移位；3b 的脚本 realm 跨重编译保留，脚本手里的图层对象也要按这个键找回。
+ * 写死关闭的 effect 不进 bundle，下标与 JSON 坐标不一致；3b 的脚本 realm 跨重编译保留，脚本手里的图层对象也要按这个键找回。
  *
  * **漏登记的后果是「改了没反应」**：既不就地写、也不重编译。新增读取用户属性的编译点时必须同时登记
  * （单测用 `Proxy` 记录编译期读过的属性名，断言都在绑定表里）。
@@ -21,7 +21,7 @@ export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
 export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible";
 
 export type RecompileReason =
-  | "effect-visible" // effect 可见性：未启用的不进 bundle（3c 改为单图层重算）
+  | "effect-visible" // effect 可见性：可变的已进 bundle，开关仍整场重编译（3c 步骤 2 改为单图层重算）
   | "postprocess" // general.bloom / general.hdr：泛光链有无、目标格式
   | "general" // clearcolor / ambientcolor / skylightcolor / camera.*
   | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）
@@ -50,6 +50,16 @@ export interface UserProperty {
 /** `value` 是不是 `{user: …}` 绑定（含 `{user: {name, condition}}`）。 */
 export function isUserBinding(value: unknown): boolean {
   return userBindingOf(value as SceneValue | undefined) !== null;
+}
+
+/** `value` 是不是挂了脚本：判断与 `collectScripts` 相同（`script` 是字符串）。 */
+export function isScriptValue(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { script?: unknown }).script === "string"
+  );
 }
 
 /** `{user}` 里的属性名与条件；不是用户绑定返回 null。 */

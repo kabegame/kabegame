@@ -1,5 +1,7 @@
 /**
  * 图层渲染图（PLAN P2a）：把 bundle 里一个图层的基础材质、启用的 effect 与 passthrough 排成按序执行的步骤。
+ * 开关由调用方给（缺省取 bundle 里的 `enabled`，3c）：关着的 effect 不产生步骤、不计入合成次数，但下标仍是 `layer.effects`
+ * 里的位置，fbo 引用不移位。
  * 纯函数，不碰 GPU：`scene.ts` 照步骤建资源、逐帧编码，单测直接核对步骤。规则来自对 WPE 2.8.42 的只读逆向
  * （`.claude/plans/wpe-import/3-scene/p2-REPORT.md` B5–B8，`FUN_1401ea500` 分配、`FUN_1401e8aa0` 执行、`FUN_1401ebf60` effect pass）：
  *
@@ -102,14 +104,21 @@ export function fboSize(
 }
 
 /** 图层要不要走合成：有启用的 effect，或 colorBlendMode 混合（∉ {0, 31}）。 */
-export function needsComposite(layer: Pick<SceneLayer, "effects" | "colorBlendMode">): boolean {
-  return layer.effects.length > 0 || isPassthroughBlend(layer.colorBlendMode);
+export function needsComposite(
+  layer: Pick<SceneLayer, "effects" | "colorBlendMode">,
+  enabled: (effect: number) => boolean = (e) => layer.effects[e].enabled,
+): boolean {
+  return layer.effects.some((_, e) => enabled(e)) || isPassthroughBlend(layer.colorBlendMode);
 }
 export function isPassthroughBlend(colorBlendMode: number): boolean {
   return colorBlendMode !== 0 && colorBlendMode !== 31;
 }
 
-export function planLayer(layer: SceneLayer, textures: readonly TextureSize[]): LayerPlan {
+export function planLayer(
+  layer: SceneLayer,
+  textures: readonly TextureSize[],
+  enabled: (effect: number) => boolean = (e) => layer.effects[e].enabled, // 运行时的开关，3c 步骤 2 传入
+): LayerPlan {
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const base = layer.passes[0];
@@ -137,7 +146,7 @@ export function planLayer(layer: SceneLayer, textures: readonly TextureSize[]): 
     return inputs;
   };
 
-  if (!needsComposite(layer)) {
+  if (!needsComposite(layer, enabled)) {
     // 规则 1：基础材质需要帧缓冲
     if (base.framebuffer) snapshot();
     steps.push({
@@ -181,13 +190,15 @@ export function planLayer(layer: SceneLayer, textures: readonly TextureSize[]): 
   let finalEffect = -1,
     finalStep = -1;
   if (!passthrough)
-    for (let e = layer.effects.length - 1; e >= 0 && finalEffect < 0; e--)
+    for (let e = layer.effects.length - 1; e >= 0 && finalEffect < 0; e--) {
+      if (!enabled(e)) continue;
       for (let s = layer.effects[e].steps.length - 1; s >= 0; s--)
         if (layer.effects[e].steps[s].kind === "draw") {
           finalEffect = e;
           finalStep = s;
           break;
         }
+    }
   /** effect 里的名字：本 effect 的 fbo，否则（如 `previous`）是当前合成 RT（B6：找不到记为 −1）。读写两用。 */
   const resolveRef = (
     effect: number,
@@ -196,6 +207,7 @@ export function planLayer(layer: SceneLayer, textures: readonly TextureSize[]): 
     fboNames[effect].has(name) ? { kind: "fbo", effect, name } : { kind: "composite", index: current };
 
   layer.effects.forEach((effect, e) => {
+    if (!enabled(e)) return;
     // 规则 2：该 effect 任一 pass 的材质需要帧缓冲
     if (effect.steps.some((step) => step.kind === "draw" && step.pass.framebuffer)) snapshot();
     effect.steps.forEach((step, s) => {
@@ -259,6 +271,12 @@ export function planLayer(layer: SceneLayer, textures: readonly TextureSize[]): 
 
   const [width, height] = compositeSize(layer, baseTexture);
   return { composite: { count: Math.min(2, writes), width, height }, steps, reasons };
+}
+
+/** 渲染图的签名：步骤序列、角色、目标、合成 RT。相同就不用重建（同 WPE「数值变了才重建」）。pass 只取稳定键。 */
+export function planSignature(plan: LayerPlan): string {
+  const steps = plan.steps.map((step) => (step.kind === "draw" ? { ...step, pass: step.pass.key } : step));
+  return JSON.stringify({ composite: plan.composite, steps });
 }
 
 /**

@@ -61,6 +61,33 @@ describe("facetTreeSource 分组计数枚举", () => {
     ]);
   });
 
+  it("类型维度保留 x-wpe 并显示 Wallpaper Engine，枚举外的主类不显示，格式用词条", async () => {
+    pathqlList.mockResolvedValue([
+      { name: "image", meta: { count: 5 }, total: null },
+      { name: "text", meta: { count: 1 }, total: null },
+      { name: "video", meta: { count: 2 }, total: null },
+      { name: "x-wpe", meta: { count: 3 }, total: null },
+    ]);
+    const source = createSource();
+
+    const page = source.dataSource.page({ kind: "section", sectionId: "mediaType" }, 1)!;
+    const nodes = page.parse([await pathqlList(page.queries[0].path, false)]);
+    expect(pathqlList).toHaveBeenCalledWith("gallery/media-type/_kb_co", false);
+    expect(nodes).toEqual([
+      { kind: "media-kind", mediaKind: "image", count: 5 },
+      { kind: "media-kind", mediaKind: "video", count: 2 },
+      { kind: "media-kind", mediaKind: "x-wpe", count: 3 },
+    ]);
+    expect(source.descriptor(nodes[2]!).name).toBe("Wallpaper Engine");
+    expect(source.descriptor(nodes[2]!).filterOnSelect).toEqual({ type: "media-type", kind: "x-wpe" });
+
+    const formats = source.dataSource.page({ kind: "children", parent: nodes[2]! }, 1)!;
+    expect(formats.queries[0]!.path).toBe("gallery/media-type/x-wpe/_kb_co");
+    const children = formats.parse([[{ name: "web", meta: { count: 2 }, total: null }]]);
+    expect(children).toEqual([{ kind: "media-format", mediaKind: "x-wpe", format: "web", count: 2 }]);
+    expect(source.descriptor(children[0]!).name).toBe("gallery.wpeKindWeb");
+  });
+
   it("插件扩展只列举一次，计数读 meta.count / meta.image_count，缺失为 null", async () => {
     pathqlList.mockResolvedValue([
       { name: "rating", meta: { isLeaf: true, image_count: 9 }, total: 99 },

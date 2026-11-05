@@ -109,6 +109,7 @@
     "plugins": "正在載入插件…",
     "schema": "正在升級資料庫（v{version} {name}）…",
     "backfill": "正在更新資料：{name}",
+    "analyze": "正在最佳化資料庫…",
     "services": "正在啟動服務…",
     "failed": "啟動失敗"
   }

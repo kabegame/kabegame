@@ -108,6 +108,16 @@ describe("简单 chip + 追加高级条件", () => {
     expect(composeQueryFilters({}, [])).toEqual([]);
   });
 
+  it("media-type 接受 x-wpe 及其子类，未知分类不解析", () => {
+    expect(parseQueryBody("media-type/x-wpe/web".split("/"))).toEqual([
+      { is: { mediaType: { kind: "x-wpe", format: "web" } } },
+    ]);
+    expect(serializeQueryBody([{ is: { mediaType: { kind: "x-wpe", format: "web" } } }]).body).toBe(
+      "media-type/x-wpe/web",
+    );
+    expect(parseQueryBody("media-type/text".split("/"))).toBeNull();
+  });
+
   it("旧版单分支 ~any 边界包装仍能拆回高级条件", () => {
     const parsed = parseQueryBody("plugin/pixiv/_kb_fc/~any/media-type/image/~end".split("/"));
     expect(splitQueryFilters(parsed!)).toEqual({

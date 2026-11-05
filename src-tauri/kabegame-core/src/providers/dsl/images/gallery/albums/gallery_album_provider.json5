@@ -38,11 +38,11 @@
     "resolve": {
         "image-only": {
             "provider": "gallery_album_media_type_provider",
-            "properties": { "kind": "image" }
+            "properties": { "type_glob": "*", "type_not_glob": "video/*", "type_not_glob2": "x-wpe/*" }
         },
         "video-only": {
             "provider": "gallery_album_media_type_provider",
-            "properties": { "kind": "video" }
+            "properties": { "type_glob": "video/*", "type_not_glob": "", "type_not_glob2": "" }
         },
         "id_([^/]+)": {
             "provider": "gallery_by_id_provider",

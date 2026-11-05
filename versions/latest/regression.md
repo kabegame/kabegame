@@ -47,6 +47,40 @@
 | [x] | D14 暂停时改属性 | Windows dev，主窗口预览 vortex 12889 | 暂停后经属性面板的同一命令把 `ui_editor_properties_mode` 改成 `"1"`，再改回 `"0"`；前后截图 | 画面立即更新、时钟不动、不重编译 | 2026-11-05：`runtimeSeconds` 1.5716 全程不变；改值后 0.7 s 内画布 51.9% 像素变化，再过 1 s 0 像素差（只补画一帧）；`applied` 0 → 1 → 2，`recompiled` 为空。改回后与改动前最大差 1/255。5 个属性的值与 `modified` 与测前逐项相同，metadata id 20077 → 20081 |
 | [x] | D15 清空存储 · 单宿主 | Windows dev，主窗口预览 13114；网页壁纸面板对照 | 放一个别的图片 id 前缀的键、本图 `g` 位置的键、dev 开关；点「清空脚本存储」，先取消再确定 | 取消不清空；确定后计数回到 1、`init` 重跑一次；音频订阅保留；别的键不受影响；网页壁纸没有按钮 | 2026-11-05：<br>**取消**：计数 5、`g` 键都在，`init` 不变，`recompiled` 为空；主窗口可见时重测同样不变，确认框已关。<br>**确定**：计数 5 → 1，`g` 键删掉，`init` 各 1 次，日志 `[kbt] init#1`，`stats().recompiled` 有 `clear-storage`，toast「已清空脚本存储」。<br>**音频**：不重新订阅，帧数 3381 → 3441（2 s）。<br>**别的键**：`…:99999:s:probe`、dev 开关、其余 4 个键都在，测后已手动删除探测键。<br>**网页壁纸**：见 D9。<br>**测试注意**：主窗口被遮挡时 Vue 过渡不结束，关掉的确认框留在 DOM 里，脚本要点最后一个框；页面恢复可见后自动消失 |
 | [x] | D16 清空存储 · 多宿主 | Windows dev，13114 同时在应用背景、壁纸窗口、预览 | 点按钮 1 次，再用同一命令 `wpe_scene_clear_storage` 连续清 16 次（间隔约 1.7 s），读每个宿主的内存计数（由 `alpha` 反推）与存储值 | 全部宿主重启；观察事件晚到的一方是否删掉别人刚写的计数 | 2026-11-05：<br>**都重启**：每轮三个宿主的 `clear-storage` 各加 1、`init` 各 1 次、音频订阅都保留。<br>**最终值**：主窗口被遮挡时 8 轮存储值都是 3。主窗口可见时点按钮那一轮存储值 2、内存计数 1 / 2 / 1，之后 8 轮存储值都是 3、内存计数 1 / 2 / 3，壁纸窗口总是 1。<br>**竞态**：没有看到晚到的一方删掉别人写的值（那样存储值会回到 1）。存储值是 2 的那轮少一次加 1，更像跨进程读到了尚未同步的 `localStorage`；只看结果两种情况不能完全区分。<br>多实例时计数回不到 1：每个实例的 `init` 都会加一次，这是脚本自己的写入 |
+## 类型过滤新增 Wallpaper Engine 分类（`x-wpe`）
+
+2026-11-05 macOS。媒体分类从两类（`video/*` 视频、其余图片）改成三类互补：`video/*` 视频、`x-wpe/*` WPE、其余图片。`type_not_glob2` 模式串、列举不补 0 且按字母序；前端以 `GALLERY_MEDIA_KINDS` 枚举，图片详情的「Wallpaper Engine · 类型」两段可点击筛选。计划阶段另在内存库（6.5 万行）验证三类之和等于总数，图片沿 `idx_crawled_at`，视频与 WPE 走 `idx_images_type`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 core 测试 | macOS | `kabegame-core --test dsl_e2e`、`--lib storage` | 全过 | 2026-11-05：61 passed、127 passed。含三类互补对照 SQL、`x-wpe` 与 `video` 走 `idx_images_type`、图片沿 `idx_crawled_at`、WPE 子类列举、原生有效路径不含 WPE |
+| [x] | S2 前端测试与类型 | macOS | `apps/kabegame` Vitest；`check-kabegame` | 全过、0 error | 2026-11-05：590 passed；vue-tsc 无错误。新增 `x-wpe` 的相关性、路径往返、过滤树顶层与子层文案用例 |
+| [x] | D1 类型下拉 | macOS dev，库里 16 张场景、2 张网页 | 打开画廊「类型」下拉，与 `pathql_list` / `pathql_entry` 对照 | 有 Wallpaper Engine 一项，计数正确；图片计数不含 WPE | 2026-11-05 通过：hide 视图「仅图片 4082、仅视频 101、Wallpaper Engine 18」，合计等于页头 4201；全库 5182 + 120 + 18 = 5320 |
+| [x] | D2 子类与 chip | macOS dev | 展开 Wallpaper Engine，选「网页」 | 子类显示视频 / 网页 / 场景；chip 文案、结果数与网格一致 | 2026-11-05 通过：子类为场景 16、网页 2，chip「Wallpaper Engine / 网页」，网格 2 项，刷新后恢复。库里没有 `x-wpe/video` 行，临时改一行测得「视频 (1)」，测完还原 |
+| [x] | D3 高级查询 | macOS dev | 高级查询加一条「种类」选 Wallpaper Engine，应用后刷新页面 | 能选到；路径 `media-type/x-wpe/...` 刷新后恢复 | 2026-11-05 通过：候选差值为图片 −119、视频 −4100、WPE −4183，命中 18 张，路径 `~not/~not/media-type/x-wpe/~end/~end`，刷新后仍 18 项 |
+| [x] | D4 详情芯片 | macOS dev | 打开网页、场景壁纸与临时 `x-wpe/video` 行的详情，点「Wallpaper Engine」与子类 | 前者筛出全部 WPE 行，后者只筛该子类；普通图片 / 视频的芯片显示与点击不变 | 2026-11-05 通过：网页点主类得 18 项；场景点子类得 16 项；`x-wpe/video` 显示「Wallpaper Engine · 视频」且有两个按钮（子类没有被清掉）。普通图片「图片 / JPG」、视频「视频 / MP4」的图标与大写不变，点击分别筛 `仅图片 / jpg`、`仅图片`、`仅视频` |
+| [x] | D5 无数据分类 | macOS dev | 插件过滤选 konachan、PixAI，看类型下拉 | 范围里没有的分类不列出 | 2026-11-05 通过：konachan 只有「仅图片 529」，PixAI 只有图片与视频，清除后三项恢复。界面选不到「已选视频但范围里没有视频」，选视频后插件列表只剩有视频的插件；这一状态只能来自保存的路径，路由由 e2e 覆盖（计数 0、不报 not found），chip 显示未真机验证 |
+| [x] | D6 虚拟盘路径 | macOS dev | `pathql_list` 读 `vd/i18n-zh_CN/按媒体` 与其「图片」目录 | 根下只有所有格式、图片、视频；图片目录没有 WPE 子类 | 2026-11-05 通过：图片目录为 jpg、png、webp。只验证 PathQL，没有挂载虚拟盘看文件 |
+| [ ] | D7 轮播 | Windows / Linux 原生壁纸模式 | 用含 WPE 行的视图轮播 | WPE 行不被计入，也不被切到 | 未真切壁纸：只核对了有效路径，`gallery/hide/sort/by-time` 为 4201，拼 `_kb_fc/media-type/image` 后为 4082，e2e 断言 rank 查不到 WPE 行；rotator 的 `allow_wpe` 保留给 Plasma |
+
+## 启动时跑 `ANALYZE`，视频分类走索引
+
+2026-11-05 macOS dev。主程序每次启动在 schema 迁移之后跑完整 `ANALYZE`；媒体分类改成绑定模式串的 `images.type GLOB ? AND images.type NOT GLOB ?`。计划阶段的对比实验用生产库（6.5 万图、166 万 `album_images`）在内存里跑，数字见 `cocs/provider-dsl/RULES.md` §2.2。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 三种 feature 组合编译 | macOS | `check-kabegame`（standard、`-c kabegame-cli`、`--mode web --skip vue`） | 全部 0 error | 2026-11-05 通过 |
+| [x] | S2 core 测试 | macOS | `kabegame-core --lib storage`、`--test dsl_e2e` | 全过 | 2026-11-05：127 passed、61 passed。e2e 在 `ANALYZE` 之后检查实际 DSL 生成的计划，并断言 `x-wpe/video` 归图片、两类互补 |
+| [x] | S3 前端测试 | macOS | `apps/kabegame` Vitest | 全过 | 2026-11-05：582 passed |
+| [x] | D1 启动写入统计 | macOS dev | 启动后读日志与开发库 | 日志有 `ANALYZE finished`，`sqlite_stat1` / `sqlite_stat4` 有数据 | 2026-11-05 通过：38 行、679 行 |
+| [x] | D2 视频分类性能 | macOS dev | `KABEGAME_SQL_DEBUG=1` 读 `media-type/video` 第 1 页实际耗时 | 明显下降，image、webp、jpg、宽高比不变慢 | 2026-11-05 通过：video 58ms → 1ms，其余 1～2ms。开发库 5.3K 图，毫秒级取整 |
+| [x] | D3 分类结果 | macOS dev | 经 CDP 调 `pathql_fetch` / `pathql_list`，与 SQL 对照 | 列举计数、分页、画册 `image-only` / `video-only`、VD 正确 | 2026-11-05 通过：image 5200、video 120 与旧写法一致；video 页全是 `video/*`；示例画册 3 个视频与 SQL 一致；VD 列出图片、视频且能取页 |
+| [x] | D4 CLI 不跑 | macOS dev | `--via local plugin run wpe-import --dry-run` 开 SQL 调试 | 打开 Storage 但没有 `ANALYZE` | 2026-11-05 通过：58 行 SQL 日志，0 行 `ANALYZE` |
+| [x] | D5 启动耗时 | macOS dev | 读日志；另在生产库的磁盘副本上跑 | 记录实际开销 | 2026-11-05：开发库（150 MB）应用内 0.47～1.1s（都在重新编译之后），同连接第二次 96ms；`BEGIN IMMEDIATE` 0ms，不是等锁。生产库副本（870 MB）首次 4.4s、第二次 0.87s，首次多出来的是等待时间，CPU 约 1s。没有测过真正的冷开机，也没有测过不重新编译的连续重启 |
+| [ ] | A1 启动页文案 | macOS dev | 大库启动时看启动页 | 显示「正在优化数据库」 | 未目视确认：开发库上这一阶段一闪而过。五种语言的词条与 `analyze` 分支已加，序列化有单测 |
+| [ ] | A2 新库首次启动 | 全平台 | 空数据目录启动，下载一批图后重启 | 第一次没有统计也能正常用，重启后有统计 | 未测 |
+| [ ] | A3 大库启动 | Windows / Linux / Android | 看日志里的 `ANALYZE finished` | 启动时间可接受 | 未测：Android 的存储与 CPU 都更慢，耗时可能明显高于 macOS |
+| [ ] | A4 Web | Web 部署 | 启动服务 | 监听前跑完 `ANALYZE` | 未真跑，只有 `--mode web` 编译覆盖 |
 
 ## WPE 改用 `wpe` feature：三桌面开启，手选文件夹统一两层
 
