@@ -12,8 +12,9 @@
   var internals = window.__TAURI_INTERNALS__;
   if (!direct || !internals || window.__kbWpeShim) return;
   Object.defineProperty(window, "__kbWpeShim", { value: true });
-  // 宿主的暂停状态（音量消息里的 paused）：页面起来时默认在播，只在状态变化时调 setPaused
+  // 宿主的暂停状态（音量消息里的 paused）：页面起来时默认在播，只在状态变化时冻结 / 恢复并调 setPaused
   var hostPaused = false;
+  var freezer = null;
 
   // ---- 音量：宿主音量乘到页面的两条出声路径上（HTMLMediaElement、Web Audio）----
   // 要在页面脚本之前改好原型，所以放在最前面，出错也不影响后面的属性投递。消息类型的字面量与
@@ -23,6 +24,115 @@
     installVolume();
   } catch (error) {
     console.warn("[kb-wpe] volume", error);
+  }
+  // 暂停：rAF 同样要在页面脚本之前包装
+  try {
+    freezer = installFreeze();
+  } catch (error) {
+    console.warn("[kb-wpe] freeze", error);
+  }
+
+  // ---- 暂停：iframe 保持可见，冻结 requestAnimationFrame、CSS 动画与媒体元素 ----
+  // 管不到的：setTimeout / setInterval 不冻结，靠它们驱动的页面暂停时还会动；Web Audio 沿用音量置 0，不 suspend。
+  function installFreeze() {
+    // 场景宿主不冻结：它有自己的 setPaused，渲染循环也要留给 load 画首帧
+    if (new URLSearchParams(location.search).get("kbScene")) return null;
+    var nativeRequest = window.requestAnimationFrame;
+    var nativeCancel = window.cancelAnimationFrame;
+    if (typeof nativeRequest !== "function" || typeof nativeCancel !== "function") return null;
+    // 页面拿到的 id 都由这里发：暂停时把排着的原生回调全部退掉、恢复时重排，id 不变，页面随时能取消
+    var requests = new Map(); // id → { callback, native }；native 为 0 表示暂停中没有排
+    var nextId = 0;
+    var frozen = false;
+    var wanted = false; // 宿主要求暂停；load 之前只记下，见 set
+    var loaded = false;
+    var heldAnimations = [];
+    var heldMedia = [];
+
+    function schedule(id, request) {
+      request.native = nativeRequest.call(window, function (time) {
+        requests.delete(id);
+        var callback = request.callback; // 取出来再调，this 才和原生一样不是 request
+        callback(time);
+      });
+    }
+    window.requestAnimationFrame = function requestAnimationFrame(callback) {
+      // 不是函数：交给原生照原样报错
+      if (typeof callback !== "function") return nativeRequest.call(window, callback);
+      var id = ++nextId;
+      var request = { callback: callback, native: 0 };
+      requests.set(id, request);
+      if (!frozen) schedule(id, request);
+      return id;
+    };
+    window.cancelAnimationFrame = function cancelAnimationFrame(id) {
+      var request = requests.get(+id);
+      if (!request) return;
+      requests.delete(+id);
+      if (request.native) nativeCancel.call(window, request.native);
+    };
+
+    function tryEach(items, fn) {
+      items.forEach(function (item) {
+        try {
+          fn(item);
+        } catch (error) {
+          console.warn("[kb-wpe] freeze", error);
+        }
+      });
+    }
+    function freeze() {
+      if (frozen) return;
+      frozen = true;
+      requests.forEach(function (request) {
+        nativeCancel.call(window, request.native);
+        request.native = 0;
+      });
+      tryEach(document.getAnimations(), function (animation) {
+        if (animation.playState !== "running") return;
+        animation.pause();
+        heldAnimations.push(animation);
+      });
+      tryEach(document.querySelectorAll("video, audio"), function (el) {
+        if (el.paused) return;
+        el.pause();
+        heldMedia.push(el);
+      });
+    }
+    function thaw() {
+      if (!frozen) return;
+      frozen = false;
+      requests.forEach(function (request, id) {
+        schedule(id, request);
+      });
+      // 只恢复记下的；页面在暂停期间自己取消或播放了的不动
+      tryEach(heldAnimations.splice(0), function (animation) {
+        if (animation.playState === "paused") animation.play();
+      });
+      tryEach(heldMedia.splice(0), function (el) {
+        if (!el.paused) return;
+        var playing = el.play();
+        if (playing && playing.catch) playing.catch(function () {});
+      });
+    }
+    // load 之前不冻结：暂停中打开的壁纸也要先画出第一帧，否则靠 rAF 绘制的页面一直是空白。等 load 回调都跑完、
+    // 再过一帧（页面在 load 里排的第一帧画完）才冻结；这期间恢复了就不冻
+    window.addEventListener("load", function () {
+      loaded = true;
+      if (!wanted) return;
+      nativeRequest.call(window, function () {
+        nativeRequest.call(window, function () {
+          if (wanted) freeze();
+        });
+      });
+    });
+    return {
+      set: function (paused) {
+        wanted = paused;
+        if (!paused) thaw();
+        else if (loaded) freeze();
+      },
+    };
   }
 
   function installVolume() {
@@ -316,6 +426,7 @@
         var paused = data.paused === true;
         if (hostPaused !== paused) {
           hostPaused = paused;
+          if (freezer) freezer.set(paused);
           // 首次投递之前到达的留给 deliverFull 补
           if (delivered) call("setPaused", paused);
         }
@@ -520,8 +631,8 @@
   });
 
   // ---- 传输：iframe 自己直接 invoke / listen，事件只投递到本 frame ----
-  // 权限只来自 wpe-web-capability（listen 只放行 wallpaper-ping / setting-change / image-changed /
-  // images-change，新增监听要同步改 capability；另可订阅音频 / 媒体，数据经 Channel 只回本 frame，
+  // 权限只来自 wpe-web-capability（listen 只放行 wallpaper-ping / setting-change / image-changed / images-change，
+  // 以及场景宿主用的 wpe-scene-clear-storage，新增监听要同步改 capability；另可订阅音频 / 媒体，数据经 Channel 只回本 frame，
   // frame 销毁即由宿主释放）。来源由 CEF 补丁 07 在建工厂时确定，首批请求即可用，不做重试。
   var transport = {
     pull: function () {

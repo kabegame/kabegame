@@ -39,6 +39,27 @@ pub struct WpeSceneTarget {
     pub scene_assets: Vec<String>,
 }
 
+/// 「清空脚本存储」：存储在宿主的 `file:` 来源里，应用页碰不到，所以广播给宿主，同一张图的全部宿主收到后停脚本、
+/// 删本场景的前缀、重建脚本环境。只给应用页用（免 ACL），宿主与网页壁纸的权限里都没有这条；宿主能监听这个事件靠
+/// `wpe-web-capability` 的 `allow-listen`。没有宿主存活时事件没人收，这次清空不生效：面板只在有实时实例时显示按钮。
+#[tauri::command]
+pub fn wpe_scene_clear_storage<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    image_id: String,
+) -> Result<(), String> {
+    use crate::wallpaper::wpe_web_dir_index::WpeWebDirIndex;
+    use tauri::Emitter;
+
+    if !WpeWebDirIndex::global().is_scene(&image_id) {
+        return Err("not a scene wallpaper in the library".into());
+    }
+    app.emit(
+        "wpe-scene-clear-storage",
+        serde_json::json!({ "imageId": image_id }),
+    )
+    .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum WpeSceneReport {

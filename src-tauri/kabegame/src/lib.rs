@@ -779,6 +779,8 @@ pub(crate) fn configure_app(
             set_fast_folder_sync,
             get_surf_freeze_page,
             set_surf_freeze_page,
+            get_wallpaper_paused,
+            set_wallpaper_paused,
             get_wpe_media_integration,
             set_wpe_media_integration,
             get_wpe_scene_postprocess,
@@ -955,6 +957,8 @@ pub(crate) fn configure_app(
             wpe_scene_target,
             #[cfg(not(target_os = "android"))]
             wpe_scene_report,
+            #[cfg(not(target_os = "android"))]
+            wpe_scene_clear_storage,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

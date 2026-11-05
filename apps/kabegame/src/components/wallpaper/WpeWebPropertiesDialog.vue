@@ -8,6 +8,8 @@
       :image-type="imageType"
       :collapsible="false"
       :fill-when-expanded="false"
+      :paused="paused"
+      @update:paused="emit('update:paused', $event)"
     />
   </el-dialog>
 </template>
@@ -18,14 +20,22 @@ import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
 import WpeWebPropertiesPanel from "./WpeWebPropertiesPanel.vue";
 
-/** `title` 传壁纸显示名；缺省时用「壁纸属性」。`imageType` 传图片 `type`，场景壁纸据此隐藏用不到的属性 */
-const props = defineProps<{
-  modelValue: boolean;
-  imageId: string | null | undefined;
-  imageType?: string | null;
-  title?: string | null;
-}>();
-const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
+/**
+ * `title` 传壁纸显示名；缺省时用「壁纸属性」。`imageType` 传图片 `type`，场景壁纸据此隐藏用不到的属性。
+ * `paused` 见面板：undefined 表示没有实时实例。
+ */
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean;
+    imageId: string | null | undefined;
+    imageType?: string | null;
+    title?: string | null;
+    paused?: boolean;
+  }>(),
+  // 布尔 prop 缺省时 Vue 会转成 false，要写明 undefined 才能表示「没有实时实例」
+  { imageType: undefined, title: undefined, paused: undefined },
+);
+const emit = defineEmits<{ "update:modelValue": [value: boolean]; "update:paused": [value: boolean] }>();
 const { t } = useI18n();
 const visible = computed({ get: () => props.modelValue, set: (value) => emit("update:modelValue", value) });
 useModalBack(visible);

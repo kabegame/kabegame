@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { IS_DEV } from "@/env";
 import WallpaperStage from "@/components/wallpaper/WallpaperStage.vue";
+import { isWpeLiveTarget } from "@/components/wallpaper/targetKind";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
 import {
   FRAME_MONITOR_SAMPLE_MS,
@@ -28,6 +29,7 @@ const state = reactive<{
   transition: Transition;
   volume: number;
   playbackRate: number;
+  paused: boolean;
 }>({
   target: null,
   styleMode: "fill",
@@ -36,7 +38,12 @@ const state = reactive<{
   volume: 1,
   /** 视频播放速率 0.25～3 */
   playbackRate: 1,
+  /** 设置 `wallpaperPaused`；是否真的暂停看 `stagePaused` */
+  paused: false,
 });
+
+/** 只对网页与场景生效：切到普通图片、视频时它们照常播放（没有面板，用户无法恢复）。 */
+const stagePaused = computed(() => state.paused && state.target !== null && isWpeLiveTarget(state.target));
 
 // 调试状态（窗口侧）
 const windowLabel = ref("");
@@ -164,18 +171,22 @@ async function init() {
     if ("wallpaperVideoPlaybackRate" in changes && typeof changes.wallpaperVideoPlaybackRate === "number") {
       state.playbackRate = Math.min(3, Math.max(0.25, changes.wallpaperVideoPlaybackRate));
     }
+    if ("wallpaperPaused" in changes && typeof changes.wallpaperPaused === "boolean") {
+      state.paused = changes.wallpaperPaused;
+    }
   });
 
   // 初始化时从 settings 拉取当前状态
   try {
-    const [styleRes, transitionRes, volumeRes, playbackRateRes, targetRes] = await Promise.all([
+    const [styleRes, transitionRes, volumeRes, playbackRateRes, pausedRes, targetRes] = await Promise.all([
       invoke<string>("get_wallpaper_rotation_style"),
       invoke<string>("get_wallpaper_rotation_transition"),
       invoke<number>("get_wallpaper_volume"),
       invoke<number>("get_wallpaper_video_playback_rate"),
+      invoke<boolean>("get_wallpaper_paused"),
       invoke<WallpaperTarget | null>("get_current_wallpaper_target"),
     ]);
-    // 赋值顺序即 WallpaperStage 各 watch 的执行顺序：样式 → 过渡 → 音量 → 倍速 → 目标，
+    // 赋值顺序即 WallpaperStage 各 watch 的执行顺序：样式 → 过渡 → 音量 → 倍速 → 暂停 → 目标，
     // 与原实现「先应用样式 / 音量 / 循环，再 setTarget」一致。
     if (styleRes && typeof styleRes === "string") {
       state.styleMode = styleRes as Mode;
@@ -188,6 +199,9 @@ async function init() {
     }
     if (typeof playbackRateRes === "number" && Number.isFinite(playbackRateRes)) {
       state.playbackRate = Math.min(3, Math.max(0.25, playbackRateRes));
+    }
+    if (typeof pausedRes === "boolean") {
+      state.paused = pausedRes;
     }
     acceptTarget(targetRes);
   } catch (e) {
@@ -250,6 +264,7 @@ onBeforeUnmount(() => {
       :transition="state.transition"
       :volume="state.volume"
       :playback-rate="state.playbackRate"
+      :paused="stagePaused"
       interactive
     />
     <!-- 调试面板（开发模式），内容与原实现一致 -->

@@ -100,6 +100,11 @@ pub fn get_surf_freeze_page() -> bool {
 }
 
 #[tauri::command]
+pub fn get_wallpaper_paused() -> bool {
+    Settings::global().get_wallpaper_paused()
+}
+
+#[tauri::command]
 pub fn get_wpe_media_integration() -> bool {
     Settings::global().get_wpe_media_integration()
 }
@@ -470,6 +475,12 @@ pub fn set_surf_freeze_page(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn set_wpe_scene_postprocess(value: String) -> Result<(), String> {
     Settings::global().set_wpe_scene_postprocess(value)
+}
+
+/// 暂停桌面上的壁纸：壁纸窗口经 `setting-change` 收到，只对网页与场景生效。
+#[tauri::command]
+pub fn set_wallpaper_paused(paused: bool) -> Result<(), String> {
+    Settings::global().set_wallpaper_paused(paused)
 }
 
 /// 网页壁纸「媒体集成」：写设置后同步启停媒体会话监视，并向已订阅的页面推 `{ enabled }`。

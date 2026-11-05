@@ -71,7 +71,6 @@
   "wpeKindVideo": "動画",
   "wpeKindWeb": "ウェブ",
   "wpeKindScene": "シーン",
-  "wpeDesktopPreview": "デスクトッププレビュー · {w}×{h}",
   "wpeNoSourceFile": "Wallpaper Engine 壁紙にはコピーや共有できる単一ファイルがありません",
   "webpageUrlError": {
     "empty": "ページの URL を入力してください",
@@ -374,5 +373,10 @@
   "wpePropsModified": "このグループに変更あり",
   "wpePropsEmpty": "調整できるプロパティはありません",
   "wpePropsLoadFailed": "壁紙のプロパティを読み込めませんでした",
-  "wpePropsSaveFailed": "壁紙のプロパティを保存できませんでした"
+  "wpePropsSaveFailed": "壁紙のプロパティを保存できませんでした",
+  "wpePause": "一時停止",
+  "wpeClearStorage": "スクリプトの保存データを消去",
+  "wpeClearStorageConfirm": "スクリプトが保存したデータ（記憶した位置やカウントなど）を削除し、スクリプトを再起動します。よろしいですか？",
+  "wpeClearStorageDone": "スクリプトの保存データを消去しました",
+  "wpeClearStorageFailed": "スクリプトの保存データを消去できませんでした"
 }

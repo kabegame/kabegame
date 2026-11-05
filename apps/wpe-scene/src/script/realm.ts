@@ -130,7 +130,11 @@ export interface CreateIframeRealmInput {
   sceneAssets: readonly string[];
   modules: JsModuleIndex;
   console: { log(text: string): void; error(text: string): void };
-  debug?: (message: string) => void;
+  /**
+   * 环境改写：子 frame 建好后、执行 baseclasses 之前调用，用子 frame 的全局造 WPE `localStorage` 对象。
+   * 存储后端与作用域检查由调用方决定（见 `script/api.ts` 的 `createWpeLocalStorage`）。
+   */
+  localStorage: (global: Record<string, unknown>) => object;
 }
 
 export async function createIframeRealm(
@@ -143,7 +147,8 @@ export async function createIframeRealm(
   try {
     let child: ChildWindow | null = frame.contentWindow as ChildWindow | null;
     if (!child) throw new Error("无法创建场景脚本 frame");
-    alignScriptEnvironment(child, input.console, input.debug);
+    const scriptGlobal = child as unknown as Record<string, unknown>;
+    alignScriptEnvironment(child, input.console, input.localStorage(scriptGlobal));
     const importMap = await buildScriptImportMap(input.scripts, input.modules);
     const map = child.document.createElement("script");
     map.type = "importmap";

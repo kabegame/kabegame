@@ -355,10 +355,11 @@ pub async fn wpe_web_pull_state(
 /// 网页壁纸订阅音频（`audio`）或媒体会话（`media`）数据，经 `channel` 推回调用的 iframe。
 ///
 /// 预览（主窗口）与桌面（壁纸窗口）的网页壁纸 iframe 走同一条路：按调用方文档认出是哪张（同
-/// [`wpe_web_pull_state`]）；订阅归属调用方 frame，frame 销毁即释放（`lib.rs` 的 `on_webview_event`），
-/// 同一 frame 再订阅同一类替换旧条，所以没有退订命令。只接受子 frame：两个窗口的主 frame 是应用页。
-/// `audio` 只对 `general.supportsaudioprocessing: true` 的壁纸放行（照 WPE）。WPE 网页壁纸只支持 Windows，
-/// 其它平台返回错误。
+/// [`wpe_web_pull_state`]）；场景宿主也是子 frame，它的确切入口文档必须传库内场景壁纸的 `image_id`
+/// （SceneScript 的 `engine.registerAudioBuffers`），网页壁纸的垫片不传。订阅归属调用方 frame，frame 销毁
+/// 即释放（`lib.rs` 的 `on_webview_event`），同一 frame 再订阅同一类替换旧条，所以没有退订命令。只接受
+/// 子 frame：两个窗口的主 frame 是应用页。`audio` 只对 `general.supportsaudioprocessing: true` 的壁纸放行
+/// （照 WPE）。WPE 网页壁纸只支持 Windows，其它平台返回错误。
 #[tauri::command]
 pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
@@ -366,6 +367,7 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     frame: tauri::ipc::CallerFrame,
     kind: WpeMediaKind,
     channel: tauri::ipc::Channel<WpeMediaMessage>,
+    image_id: Option<String>,
 ) -> Result<(), String> {
     let tauri::ipc::CallerFrame::Sub(frame) = frame else {
         return Err("only web wallpaper frames can subscribe".to_string());
@@ -374,9 +376,18 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
         return Err("web wallpaper media is only available on Windows".to_string());
     }
     let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
-    let id = WpeWebDirIndex::global()
-        .image_id_of(&doc)
-        .ok_or("not inside a web wallpaper")?;
+    let index = WpeWebDirIndex::global();
+    let id = match index.image_id_of(&doc) {
+        Some(id) => id,
+        None if wpe_scene_host::is_host_document(&doc) => {
+            let id = image_id.ok_or("the scene host must pass imageId")?;
+            if !index.is_scene(&id) {
+                return Err("not a scene wallpaper in the library".into());
+            }
+            id
+        }
+        None => return Err("not inside a web wallpaper".into()),
+    };
     if kind == WpeMediaKind::Audio && !supports_audio_processing(&id).await? {
         return Err("this wallpaper does not process audio".to_string());
     }

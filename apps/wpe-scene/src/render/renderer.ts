@@ -190,7 +190,7 @@ export class SceneRenderer {
   /**
    * 就地应用一批绑定写入；需要重编译时返回 false（调用方整场重编译）。
    * 写之前先问 GPU 场景能不能做（`canApply`：泛光的 `bloomhdriterations` 改变级数时不能），做不了就一条都不写。
-   * 暂停时补画一帧（同 resize），画面立即反映、`g_Time` 不动。
+   * 这里不画：暂停时由宿主在脚本的属性回调之后调 `redraw`，回调的写入才能进同一帧。
    */
   applyBindings(writes: readonly BindingWrite[]): boolean {
     const state = this.state;
@@ -199,8 +199,12 @@ export class SceneRenderer {
     if (writes.some((write) => write.binding.target.kind === "recompile")) return false;
     if (!scene.canApply(state.previewBloom(writes))) return false;
     for (const write of writes) state.write(write.binding, write.value);
-    if (!this.shouldRun) this.render();
     return true;
+  }
+
+  /** 循环不跑时补画一帧（同 resize）：画面立即反映就地写，`g_Time` 不动、脚本不跑。循环在跑时什么都不做。 */
+  redraw(): void {
+    if (!this.shouldRun) this.render();
   }
 
   /**

@@ -21,6 +21,8 @@ export function installSceneDevProbe(host: SceneHost): void {
       renderFrame: (time: number) => hostRenderFrame(host, time),
       realmCheck: (extraSources?: string[]) => realmCheck(host, extraSources),
       scripts: () => host.scriptDiagnostics,
+      clock: () => host.clock(),
+      audio: () => host.audio(),
       read: (path: string) => host.readTarget(path),
     },
   };

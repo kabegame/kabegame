@@ -124,6 +124,8 @@ pub enum SettingKey {
     WallpaperVolume,
     /// 视频壁纸播放速率（0.25～3）
     WallpaperVideoPlaybackRate,
+    /// 暂停桌面上的壁纸：只对网页与场景壁纸生效（窗口模式，仅 Windows）
+    WallpaperPaused,
     /// 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（标题、封面、进度），仅 Windows 生效
     WpeMediaIntegration,
     /// 场景壁纸后处理档位：follow（跟随 WPE 的 postprocessing）/ disabled / enabled / ultra，仅 Windows 生效
@@ -355,6 +357,7 @@ impl Settings {
             SettingKey::WallpaperDisabled => SettingValue::Bool(false),
             SettingKey::WallpaperVolume => SettingValue::F64(1.0),
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
+            SettingKey::WallpaperPaused => SettingValue::Bool(false),
             SettingKey::WpeMediaIntegration => SettingValue::Bool(true),
             SettingKey::WpeScenePostprocess => {
                 SettingValue::String(DEFAULT_WPE_SCENE_POSTPROCESS.to_string())
@@ -456,6 +459,7 @@ impl Settings {
             SettingKey::WallpaperDisabled,
             SettingKey::WallpaperVolume,
             SettingKey::WallpaperVideoPlaybackRate,
+            SettingKey::WallpaperPaused,
             SettingKey::WpeMediaIntegration,
             SettingKey::WpeScenePostprocess,
             SettingKey::WindowState,
@@ -587,6 +591,7 @@ impl Settings {
             | SettingKey::DedupUpdateMetadata
             | SettingKey::WallpaperRotationEnabled
             | SettingKey::WallpaperDisabled
+            | SettingKey::WallpaperPaused
             | SettingKey::WebServerEnabled
             | SettingKey::WebServerLanAccess => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
@@ -801,6 +806,7 @@ impl Settings {
             SettingKey::WallpaperDisabled => "wallpaperDisabled".to_string(),
             SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
+            SettingKey::WallpaperPaused => "wallpaperPaused".to_string(),
             SettingKey::WpeMediaIntegration => "wpeMediaIntegration".to_string(),
             SettingKey::WpeScenePostprocess => "wpeScenePostprocess".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
@@ -1148,6 +1154,13 @@ impl Settings {
             .get(&SettingKey::WallpaperVideoPlaybackRate)
             .map(|c| c.load().as_f64().unwrap_or(1.0).clamp(0.25, 3.0))
             .unwrap_or(1.0)
+    }
+
+    pub fn get_wallpaper_paused(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::WallpaperPaused)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
     pub fn get_wpe_media_integration(&self) -> bool {
@@ -1650,6 +1663,16 @@ impl Settings {
         Ok(())
     }
 
+    pub fn set_wallpaper_paused(&self, paused: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(paused);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperPaused) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WallpaperPaused, &new_value);
+        Ok(())
+    }
+
     pub fn set_wpe_media_integration(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
@@ -1875,6 +1898,27 @@ fn is_wpe_scene_postprocess(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wallpaper_paused_defaults_to_false() {
+        assert_eq!(
+            Settings::default_value(SettingKey::WallpaperPaused).as_bool(),
+            Some(false)
+        );
+        for (json, expected) in [
+            (serde_json::json!(true), true),
+            (serde_json::json!(false), false),
+            (serde_json::json!("true"), false),
+        ] {
+            assert_eq!(
+                Settings::json_value_to_setting_value(SettingKey::WallpaperPaused, &json)
+                    .unwrap()
+                    .as_bool(),
+                Some(expected),
+                "{json}"
+            );
+        }
+    }
 
     #[test]
     fn wpe_scene_postprocess_rejects_unknown_values() {

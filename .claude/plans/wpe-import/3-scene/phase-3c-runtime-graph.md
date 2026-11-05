@@ -38,7 +38,23 @@
 
 脚本看不到宿主、网页壁纸和别的场景存的东西，宿主的 dev 开关也不会被脚本改写。
 
-**`engine.registerAudioBuffers` 先返回全零缓冲**，结构照 WPE：`{left, right, average}`，长度 16 / 32 / 64。缓冲对象由宿主持有，接上真实音频时原地填写即可，脚本不用改。这样 3b 语料里 124 段在模块顶层就失败的脚本能正常求值，同时把 dev 探针在步骤 6、7 里暴露的统计缺口补上。
+**`engine.registerAudioBuffers` 直接接真实音频**，结构照 WPE：`{left, right, average}`，长度 16 / 32 / 64。数据源复用 Phase 8 的 `WpeMediaHub`：
+- 场景宿主本身是子 frame，和网页壁纸的垫片走同一个命令 `wpe_web_media_subscribe`，只需让命令认识宿主（同 `wpe_web_pull_state` 的宿主分支）；
+- 脚本第一次注册时才订阅，Hub 有订阅才开回环采集；
+- Hub 每 33 ms 推一帧 64 段频谱，宿主按注册过的分辨率合并，原地写进脚本持有的缓冲；
+- 拿不到音频时（壁纸没声明 `supportsaudioprocessing`、非 Windows、订阅失败）缓冲保持全零，不报错，相当于没有声音在放。
+
+这样 3b 语料里 124 段在模块顶层就失败的脚本能正常求值。放行条件沿用 Phase 8：本机用脚本音频的 10 张场景全部声明了 `supportsaudioprocessing: true`。
+
+同时把 dev 探针在步骤 6、7 里暴露的统计缺口补上。
+
+**当前壁纸属性面板加「暂停」和「清空存储」**（点 0b）。面板 `WpeWebPropertiesPanel` 是预览详情与设置页共用的，所以面板只管显示，状态由父组件传入：预览控制预览这一份，设置页控制桌面。
+
+暂停沿用 `WallpaperStage` 现成的 `paused`。桌面这边是新设置 `wallpaperPaused`，走设置架构，壁纸窗口从 `setting-change` 收到后传给 Stage；它只对网页和场景生效，切到普通图片或视频时不起作用，否则那些类型没有面板，用户没法恢复。
+
+网页壁纸现在的暂停是隐藏 iframe、不冻结脚本，用户手动暂停时画面会消失。改成 iframe 保持可见，由垫片冻结 `requestAnimationFrame`、CSS 动画和媒体元素，并照旧调页面的 `setPaused`。靠计时器驱动的页面管不到。
+
+清空存储只对场景提供：网页壁纸的 `localStorage` 没有前缀，所有网页壁纸共用一份，没法只清一张。应用页和这份存储不同来源，所以由后端发事件，同一张图的全部宿主收到后停脚本、删本场景的前缀、重建脚本环境。不重启脚本的话，内存里的值很快又会被写回去。
 
 ## 现状锚点
 
@@ -188,6 +204,41 @@ export function alignScriptEnvironment(child: Window, consoleOutput: { … }, de
 - 宿主探针没有暴露 `runtimeSeconds` 与计时器列表。
 - 设置变化引起的重载不计入 `stats().recompiled`。
 
+**j. 音频订阅只认网页壁纸目录**（`src-tauri/kabegame/src/commands/wpe_web.rs:376`）
+```rust
+    let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
+    let id = WpeWebDirIndex::global()
+        .image_id_of(&doc)
+        .ok_or("not inside a web wallpaper")?;   // 现状：宿主文档在宿主目录里，这里被拒
+    if kind == WpeMediaKind::Audio && !supports_audio_processing(&id).await? {
+        return Err("this wallpaper does not process audio".to_string());
+    }
+```
+同文件 `wpe_web_pull_state`（`:330`）已有宿主分支：`wpe_scene_host::is_host_document(&doc)` 时要求传 `imageId`，并用 `index.is_scene(&id)` 校验。
+
+**k. 暂停的现有链路**
+```ts
+// components/wallpaper/WallpaperStage.vue:536 —— 网页层：现状只隐藏，不冻结脚本
+function applyWebPaused() {
+  if (webLayerEl) webLayerEl.style.visibility = props.paused ? "hidden" : "";
+}
+// views/WallpaperWindow.vue:246 —— 现状不传 paused，桌面恒在播放
+<WallpaperStage ref="stage" :target="state.target" … :volume="state.volume" :playback-rate="state.playbackRate" interactive />
+```
+```html
+<!-- components/common/ImagePreviewDialog.vue:277 —— 现状固定播放，预览没有暂停入口 -->
+<ImageContent ref="previewContentRef" :image="previewImage" prefer="original" video-playing interactive … />
+```
+```js
+// webview_js/wpe_shim.js:316 —— 现状只转告页面
+var paused = data.paused === true;
+if (hostPaused !== paused) { hostPaused = paused; if (delivered) call("setPaused", paused); }
+```
+```ts
+// apps/wpe-scene/src/render/renderer.ts:233 —— load 的首帧不受暂停影响（render(true)），暂停时加载新场景照常 ready；
+// 但就地写属性只在下一帧生效，暂停时画面不更新
+```
+
 ## WPE 的就地处理与我们的对应（I3 逐类）
 
 | 绑定目标 | WPE 运行时效果（I3） | 我们（3a / 3b 之后） | 本阶段 |
@@ -241,7 +292,7 @@ export class SceneScriptStorage {
   constructor(storage: Storage, sceneKey: string);
   get(key: string, location?: number): unknown;               // 没有的键返回 undefined；JSON.parse 失败返回 undefined、debug 日志
   set(key: string, value: unknown, location?: number): void;  // JSON.stringify；超配额抛错（同 Storage 的 QuotaExceededError）
-  delete(key: string, location?: number): void;
+  delete(key: string, location?: number): boolean;            // 官方文档返回 Boolean；取「键原本是否存在」，含义是推断
   clear(location?: number): void;                             // 只删本场景、本位置前缀下的键
 }
 ```
@@ -257,10 +308,55 @@ export class SceneScriptStorage {
     // 新增：只能在模块顶层调（报告 D），回调里调用抛错；只收 16 / 32 / 64，其它值抛 TypeError
     this.method(this.engine, "registerAudioBuffers", (resolution: number) => {
       this.requireEvaluating("registerAudioBuffers");
-      return this.audioBuffers(resolution);   // { left, right, average }：realm 的 Float32Array，全零；同一分辨率返回同一个对象
+      const buffers = this.audioBuffers(resolution);   // { left, right, average }：realm 的 Float32Array；同一分辨率返回同一个对象
+      this.access.audioRegistered?.();                 // 新增：通知宿主订阅音频；语料与 realmCheck 不传，保持全零
+      return buffers;
     });
 ```
-  > 说明：宿主持有缓冲对象，接上真实音频时原地填写即可（见「后续」）。现在全零，相当于 WPE 里没有声音在放。
+  > 说明：`ScriptApi` 持有缓冲对象，脚本拿到的就是这几个数组，新数据原地写入，脚本不用改。
+- **新增** `script/audio.ts`：把 Hub 的一帧合并进一组缓冲，纯函数。
+```ts
+/**
+ * `frame`：Hub 一帧 128 个值（左声道 0–63、右声道 64–127，各自低频在前）。
+ * 分辨率 n 的每一段取对应 64 / n 个原始段的最大值（`spectrum.rs` 的段内也取最大，含义是推断）；
+ * `average[i] = (left[i] + right[i]) / 2`。长度不是 128 的帧忽略。
+ */
+export function fillAudioBuffers(
+  frame: ArrayLike<number>,
+  buffers: { left: Float32Array; right: Float32Array; average: Float32Array },
+): void;
+```
+- **新增** `ScriptApi.applyAudioFrame(frame)`：把一帧写进全部已注册分辨率的缓冲。
+- **修改** `commands/wpe_web.rs` 的 `wpe_web_media_subscribe`：加可选参数 `image_id`，认识场景宿主（见锚点 j）。放行条件不变。
+```rust
+    let index = WpeWebDirIndex::global();
+    let id = match index.image_id_of(&doc) {
+        Some(id) => id,
+        None if wpe_scene_host::is_host_document(&doc) => {   // 新增：同 wpe_web_pull_state 的宿主分支
+            let id = image_id.ok_or("the scene host must pass imageId")?;
+            if !index.is_scene(&id) {
+                return Err("not a scene wallpaper in the library".into());
+            }
+            id
+        }
+        None => return Err("not inside a web wallpaper".into()),
+    };
+```
+- **修改** 宿主：`ScriptApi` 的 `audioRegistered` 触发订阅，只订一次；没有图片 id 时不订。
+```ts
+  private subscribeAudio(): void {
+    const imageId = this.options.imageId;
+    if (this.audioSubscribed || !imageId) return;
+    this.audioSubscribed = true;
+    const channel = new Channel<{ type: string; data?: number[] }>();
+    channel.onmessage = (message) => {
+      if (message.type === "audio" && message.data) this.scriptApi?.applyAudioFrame(message.data);
+    };
+    // 没声明 supportsaudioprocessing 或非 Windows 时被拒：缓冲保持全零，不报错（同 Phase 8 垫片），只记 debug
+    invoke("wpe_web_media_subscribe", { kind: "audio", channel, imageId }).catch(/* report.debug */);
+  }
+```
+  > 说明：订阅归属宿主 frame，frame 销毁时由 Phase 8 的 `SubframeDestroyed` 释放，没有退订命令；重编译保留 realm 与缓冲，也不用重订。退回预览图的场景不建 realm，不会开采集。
 - **修改** 宿主建 realm 时把 `window.localStorage` 与场景键交给 `ScriptApi`：
   - 场景键取宿主已有的 `imageId`（地址参数 `kbScene`），见已定 7；为 null 时用内存 `Storage`；
   - 不改 Rust。
@@ -271,6 +367,7 @@ export class SceneScriptStorage {
     - 每段多报写回目标的类型，以及写到重编译目标的次数；
     - 用临时的存储前缀，跑完清掉，不碰真实场景存过的东西。
   - `host.clock()`：返回 `runtimeSeconds`、`frameSeconds` 与计时器列表（所属段、剩余时间、周期）。
+  - `host.audio()`：返回是否已订阅、收到的帧数、已注册的分辨率，以及最近一帧的峰值。
   - `stats().recompiled` 计入设置变化引起的重载（原因记 `settings`）。
 - **修改** `dev/realmProbe.ts` 与 `script/realm.test.ts`：
   - 删掉遮蔽表相关的检查；
@@ -279,6 +376,75 @@ export class SceneScriptStorage {
     - `localStorage` 是 WPE 形状；
     - 浏览器全局（如 `fetch`）保留；
     - 宿主自己的 `localStorage` 键脚本读不到。
+
+## 点 0b — 当前壁纸控制：暂停与清空存储
+
+> 面板在 `components/wallpaper/`，设置走 `kabegame-core/src/settings`，宿主在 `apps/wpe-scene`，垫片在 `webview_js/wpe_shim.js`。
+
+**面板**
+- **修改** `WpeWebPropertiesPanel.vue`：内容区最上面加一张控制卡片，样式同现有分组卡片。作者属性为空时也显示。
+```ts
+const props = defineProps<{
+  imageId: string; imageType?: string | null; collapsible?: boolean; fillWhenExpanded?: boolean;
+  /** 新增：壁纸正在实时运行时由父组件传入；undefined 表示没有实时实例，不显示暂停与清空存储 */
+  paused?: boolean;
+}>();
+const emit = defineEmits<{ "update:paused": [value: boolean] }>();   // 新增
+```
+  - 「暂停」开关：`paused !== undefined` 时显示。
+  - 「清空脚本存储」按钮：`paused !== undefined` 且是场景时显示。点击先 `ElMessageBox.confirm`，再调 `wpe_scene_clear_storage`，成功 toast。
+  - i18n 加到 `packages/kabegame-i18n/src/locales/{zh,zhtw,en,ja,ko}/gallery.json`。
+- **修改** `WpeWebPropertiesDialog.vue`：透传 `paused` 与 `update:paused`。
+
+**预览**
+- **修改** `ImagePreviewDialog.vue`：新增 `wallpaperPaused = ref(false)`，切图时复位。
+```html
+<ImageContent … :video-playing="!wallpaperPaused" interactive />                 <!-- 修改：只改 isPreviewWallpaper 那一处 -->
+<WpeWebPropertiesPanel …
+  :paused="isPreviewWallpaper ? wallpaperPaused : undefined"
+  @update:paused="wallpaperPaused = $event" />                                    <!-- 新增 -->
+```
+
+**桌面**
+- **新增** 设置 `wallpaperPaused: bool`，默认 false，持久化。照 `wpeMediaIntegration` 的全套写法：core `SettingKey`、读写方法、命令与 `generate_handler!`、`stores/settings.ts`、`settingsDescriptors.ts`（Web 为 readonly）。
+- **修改** `Settings.vue`：用 `useSettingKeyState` 读写，传给对话框；不是窗口模式时传 undefined。
+- **修改** `WallpaperWindow.vue`：`state.paused` 启动时读取，随 `setting-change` 更新。
+```html
+<WallpaperStage … :paused="state.paused && state.target !== null && isWpeLiveTarget(state.target)" interactive />
+```
+  > 说明：`isWpeLiveTarget` = `isWebTarget || isSceneTarget`（`targetKind.ts`）。普通图片、视频不受影响：它们没有面板，用户无法恢复。
+
+**网页壁纸真暂停**
+- **删除** `WallpaperStage.vue` 的 `applyWebPaused`（iframe 保持可见）；更新相关注释与 `WpeWallpaperContent.vue` 里「web 层只隐藏，不冻结脚本」。
+- **修改** `wpe_shim.js`：`hostPaused` 变化时冻结 / 恢复。
+```js
+// 新增：在页面脚本之前包装。暂停期间 rAF 回调先存着（返回负数 id，cancelAnimationFrame 能取消），恢复时交还给原生 rAF
+// 暂停：document.getAnimations() 里在播的 pause()、在播的 video / audio pause()，都记下；恢复时只恢复记下的
+// 场景宿主不冻结（地址带 kbScene）：它有自己的 setPaused，渲染循环也要留给 load 用
+```
+  > 说明：`setTimeout` / `setInterval` 不冻结，靠它们驱动的页面暂停时还会动。Web Audio 沿用音量置 0，不 `suspend`（Phase 8）。
+
+**场景**
+- **新增** `SceneRenderer.redraw()`：暂停时补画一帧（`render(true)`）。
+- **修改** 宿主 `applyChanges`：就地写之后，若 `this.paused` 就调 `redraw()`，否则暂停时改属性画面没反应。脚本不跑。
+
+**清空存储**
+- **新增** Rust 命令 `wpe_scene_clear_storage(image_id)`：校验 `WpeWebDirIndex::is_scene`，发事件 `wpe-scene-clear-storage { imageId }`。只给应用页用，注册进 `generate_handler!` 即可。
+- **修改** `capabilities/wpe-web.json` 的 `allow-listen`：加这个事件。
+- **新增** `script/storage.ts` 的 `clearSceneStorage(storage, sceneKey)`：删 `kabegame:wpe-scene:ls:<图片 id>:` 前缀（`g` 与 `s` 都删）。
+- **修改** 宿主：`listen` 这个事件，`imageId` 相同时：
+```ts
+  private restartScriptsWithClearedStorage(): void {
+    // 先停脚本再删：destroy 回调可能还会写；删完重建 realm，init 重跑
+    this.runtime?.destroy();
+    this.runtime = null;
+    this.scriptApi = null;
+    this.scriptOverrides.clear();          // 字段名以实际代码为准：脚本写过的重编译目标一并放弃
+    clearSceneStorage(backend, imageId);
+    if (hadRuntime) void this.reload();    // ensureRuntime 重建；音频订阅保留，新 ScriptApi 的缓冲继续收到数据
+  }
+```
+  > 说明：退回预览图的宿主没有 runtime，只删存储。没有任何宿主存活时事件没人收，这次清空不生效：面板只在有实时实例时显示按钮，预览与窗口模式下宿主都在，这种情况很少。
 
 ## 点 1 — 编译可变 effect（`compile/bundle.ts`、`compile/features.ts`、`compile/bindings.ts`、`compile/scripts.ts`）
 
@@ -401,15 +567,18 @@ interface LayerRuntime {
 
 **步骤 0 — 测试工程**（Claude）：本机默认样本里能实时渲染的场景都没有 effect visible、`general.bloom` 的用户绑定。把 I10 的测试工程 `kbprops-test`（已存到 `ignore/p3-userprops/dyn-test/kbprops-test`：四个纯色图层、tint effect 的可见性与常量、条件可见、位置 / 尺寸、脚本属性、只有 init 的脚本、泛光）拷到 `ignore/p3c/kbprops-test/`（gitignore，不进仓库），必要时补一个 `clearcolor` / `ambientcolor` 绑定与第二个 effect；在 Kabegame 里「添加壁纸目录」导入。WPE 一侧对它的现象见报告 I10（4b：关掉 effect 后 B 由绿变白、打开恢复）。
 
-**步骤 0.5 — 脚本环境与 API**（codex：点 0；与后面各步无依赖，先做）
+**步骤 0.5 — 脚本环境与 API**（点 0；与后面各步无依赖，先做。环境、存储、探针已由 codex 完成，真实音频交子代理，codex 暂不可用）
 - 验收：
-  - 单测（验收「单测」第 5–7 条）；
+  - 单测（验收「单测」第 5–7 条）；`test-kabegame` 跑 `kabegame wpe_`，`check-kabegame` 0 error；
   - CDP 复跑 `realmCheck()`；
   - `scriptCorpus` 重跑全语料，与 3b 步骤 6 逐段对比：
-    - `registerAudioBuffers` 引起的 124 段求值失败应消失，2 段连带错误随之消失；
+    - `registerAudioBuffers` 引起的 124 段求值失败应消失；
     - `localStorage` 的 10 段 `init` 报错应消失。调 `remove` 的段改报 `remove` 不存在，这是样本自身的错，WPE 同样报。
     - 新出现的报错逐条解释。
   - `unsupported` 与 3b 逐张相同。
+
+**步骤 0.6 — 当前壁纸控制**（子代理：点 0b；在真实音频完成并通过审查之后做，两者都改 `host.ts`）
+- 验收：单测（验收「单测」第 8 条）；`check-kabegame` 与宿主 `typecheck` 0 error；`deno task test -c kabegame --skip cargo` 全过；真机见验收「真机」的「暂停」「清空存储」。
 
 **步骤 1 — 编译与渲染图**（codex：点 1、点 2）
 - 验收：单测（点 2 列出的几例，以及「不可变的关闭 effect 照旧不进 bundle」「可变 effect 的不支持项不进场景级」）；语料测试的 `unsupported` 与 3b 结束时逐张相同（本机没有不可变 → 可变的变化会让结论改变的场景；如有，逐张解释）。
@@ -442,14 +611,23 @@ interface LayerRuntime {
    - 模块求值期间调用抛错，`init` 里不抛；
    - 没有 `remove`。
 6. **音频缓冲**：
-   - 模块求值期间 `registerAudioBuffers(engine.AUDIO_RESOLUTION_32)` 返回 `left` / `right` / `average` 三个长度 32 的全零 realm `Float32Array`；
+   - 模块求值期间 `registerAudioBuffers(engine.AUDIO_RESOLUTION_32)` 返回 `left` / `right` / `average` 三个长度 32、初始全零的 realm `Float32Array`；
    - 同一分辨率两次调用返回同一个对象；
-   - 在 `init` 里调用、或参数不是 16 / 32 / 64 时抛错。
+   - 在 `init` 里调用、或参数不是 16 / 32 / 64 时抛错；
+   - `fillAudioBuffers`：64 / 32 / 16 三种分辨率的合并结果，左右声道不串，`average` 正确，长度不是 128 的帧不写入；
+   - `applyAudioFrame` 写进脚本持有的同一个数组，所有已注册分辨率都更新；
+   - 宿主（`host.test.ts`）：第一次注册才订阅，参数带 `kind` / `imageId`，再注册不重复订阅；Channel 的 `audio` 消息写进缓冲，其它类型的消息忽略；订阅被拒时不报错、缓冲保持全零；没有图片 id 时不订阅。
 7. **环境**：
    - realm 里 `console` 只有 `log` / `error`；
    - `localStorage` 是 WPE 对象；
    - `typeof fetch === "function"`（不再遮蔽）；
    - 不再有遮蔽表。
+8. **当前壁纸控制**：
+   - 面板：`paused` 为 undefined 时不显示控制项；网页壁纸不显示清空按钮；开关发 `update:paused`；取消确认时不调命令；
+   - `WallpaperWindow` 的判定：网页、场景受 `wallpaperPaused` 影响，普通图片与视频不受；
+   - `clearSceneStorage`：`g` 与 `s` 都删，别的场景与前缀外的键不动；
+   - 宿主：同 id 的事件才处理；顺序是先 `destroy` 再删存储；有 runtime 时重建并重跑 `init`，退回状态只删存储；暂停时就地写属性会补画一帧，不暂停时不补画；
+   - 垫片：暂停期间 rAF 不回调、恢复后回调；暂停时取消 rAF 有效；恢复只恢复暂停前在播的媒体与动画；带 `kbScene` 时不冻结。
 
 **真机**（Windows dev，主窗口预览；壁纸窗口为窗口模式时一并验，不是就记未测）
 - **`localStorage` 持久与隔离**（点 0）：在测试工程里加一段脚本，`init` 里读一个计数键、加 1 后写回，`update` 把计数写进某个图层的 `alpha` 或颜色，用来目视。
@@ -458,6 +636,17 @@ interface LayerRuntime {
   - 宿主 `localStorage` 里只多出带 `kabegame:wpe-scene:ls:` 前缀的键；
   - dev 强制渲染开关等其它键不受影响；
   - 测完清掉测试前缀下的键。
+- **真实音频**（点 0）：
+  - 本机用脚本音频的场景都还退回预览图，所以在测试工程里加一段脚本：模块顶层 `registerAudioBuffers(16)`，`update` 把 `average[0]` 写进某个图层的 `alpha`。工程声明 `supportsaudioprocessing: true`。
+  - 系统放音乐时图层随低频变化，探针 `host.audio()` 的帧数约 30 次/秒、峰值大于 0；停止后回落到 0。
+  - 预览、应用背景与壁纸窗口（窗口模式时）各订一份，互不影响；关预览后 Hub 的订阅数下降，没有订阅时采集停止（日志或 Phase 8 的既有手段确认）。
+  - 把声明改成 `false` 的副本：订阅被拒、缓冲保持全零、没有报错。
+- **暂停**（点 0b）：
+  - 预览：场景与网页壁纸各切一次，画面停在最后一帧、不消失，恢复后接着动；切到下一张时恢复播放；桌面不受影响。
+  - 桌面（窗口模式）：设置页切换，场景与网页壁纸同上；重启应用后仍是暂停；暂停时切到另一张场景能显示首帧、切到普通视频照常播放。
+  - 暂停时改颜色，场景画面立即更新、时钟不动。
+  - 暂停期间 ping 看门狗不误判。
+- **清空存储**（点 0b）：测试工程的计数脚本涨到几次后点清空，确认后计数回到 1，`init` 重跑一次；别的场景的键、dev 开关不受影响；预览与壁纸窗口同时开着同一张时都重启。
 - **测试工程 effect 开关**：属性面板切 `p_effvis`，B 层由绿变白、再变回绿（同 WPE I10 4b）；应用日志没有「重新编译」，探针 `stats()` 的单图层重建次数增加；关 / 开之后 `host.renderFrame(t)` 的哈希分别等于用同一属性值整场编译的 `renderFrame(t)` 哈希。
 - **逐帧开关**：CDP 在宿主 frame 里以 rAF 频率交替推 `p_effvis` 10 s，记录单图层重建的均值 / 最大用时、`stats().frameMs` 的均值与 p95、宿主 rAF 与 `GPUQueue.submit` 次数（预期与不切换时相同），无重编译、无 WebGPU 校验错误。测完推回原值。
 - **泛光开关**（「场景后处理」= 开启）：切 `p_bloom`，泛光随之出现 / 消失、不重编译；`p_bloomstr` 改强度即时生效。测完设置改回「跟随 WPE」。
@@ -474,6 +663,7 @@ interface LayerRuntime {
 5. **样本不足**：本机能实时渲染的场景都没有这几类绑定，主要靠测试工程与单测；工坊里有 effect visible 绑定的场景（如 2932157836 的 `wink`）要等它们的其它阻塞解除后才能真机看到。
 6. **存储配额共用**：脚本存储与宿主、所有网页壁纸同在 `file:` 来源的一份 `localStorage` 里，Chromium 每来源约 5 MiB。写得多的脚本可能挤占网页壁纸的空间，超了 `set` 抛错，只禁用那个回调。本机样本存的都是几个小值。
 7. **不再遮蔽的代价**：在 WPE 里会报错的脚本在我们这里可能能跑。比如用了全局 `setTimeout` 的脚本，计时器按墙钟走、暂停时不停；用了 `fetch` 的可以读宿主 `file:` 范围内的文件。这类行为与 WPE 不同，只出现在 WPE 下本来就坏掉的脚本里。安全性不变：3b 已定 4 本来就写明不是安全边界。
+8. **音频数值只是近似**：频谱算法是 Phase 8 自定的（WPE 没有公开），64 段到 32 / 16 段的合并方式也是推断。脚本的阈值按 WPE 的数值调出来，观感可能和 WPE 有差别。本机能实时渲染的场景都不用音频，要到它们的渲染阻塞解除后才能和 WPE 对照。全零时某些脚本的除法可能写出 `NaN`，与 WPE 静音时的行为一致与否未核实。
 
 ## 已定（2026-11-03 用户）
 
@@ -487,7 +677,7 @@ interface LayerRuntime {
    改掉 3b 已定 4 的「遮掉 WPE 没有的东西」。
 5. **WPE `localStorage` 直接做持久化**（2026-11-05 用户）：存进浏览器 `localStorage`，加前缀隔离。
 6. **API 阶段**（2026-11-05 用户同意 3b 步骤 6 的建议）：
-   - 3c 先补 `registerAudioBuffers`（全零）与 `localStorage`，并修探针；
+   - 3c 先补 `registerAudioBuffers` 与 `localStorage`，并修探针；`registerAudioBuffers` 直接接 Phase 8 的真实音频，不做全零占位（2026-11-05 用户）；
    - 层级、输入、纹理动画 / 视频、声音 / 文本随各自的渲染阶段做。
 7. **`localStorage` 的场景键用图片 id**（2026-11-05 用户），即宿主地址里的 `kbScene`。
    - 删掉再导入、图片 id 变了以后，存储不再对应。
@@ -497,6 +687,7 @@ interface LayerRuntime {
    - `LOCATION_GLOBAL` 用前缀 `g`，两者互不可见；
    - 多显示器壁纸落地时再按显示器分。
 9. **重编译日志保持 `debug`**（2026-11-05 用户）：只进宿主 DevTools 控制台，不进应用日志。验收靠探针的 `stats().recompiled`；点 0 起它也计入设置引起的重载。
+10. **暂停与清空存储单独放进当前壁纸属性面板**（2026-11-05 用户）：设置页与预览详情共用；不和「全部重置」绑在一起。不做 100 KB 上限。
 
 ## 待定（附推荐）
 
@@ -508,6 +699,51 @@ interface LayerRuntime {
 
 - 后续各 Phase 新增的可绑定属性按本文件对照表直接实现就地处理：粒子 `instanceoverride`（P4）、透视相机参数（P5）、文本重排与声音音量（P6）、用户纹理换槽（W5）、雾（P8）。
 - `thisLayer.getEffect(…)` 进入脚本 API 时（见 3b「后续」），effect 可变性的判定扩到「有脚本的场景全部 effect」（待定 3）。
-- **真实音频**：场景宿主本身是网页壁纸，可以像 Phase 8 的垫片一样经 `wpe_web_media_subscribe` 订阅音频，每帧原地填 `registerAudioBuffers` 返回的缓冲，脚本不用改。
-  - 要在 `supportsaudioprocessing` 与订阅生命周期上对齐 Phase 8；
-  - 随 W2 / W3 做。
+- **`g_AudioSpectrum*` uniform**：随 W2 做，数据直接用点 0 宿主收到的同一帧。本机报这项的场景都另有 25 项以上阻塞，现在做解锁不了什么。
+- **网页壁纸暂停的计时器**：垫片只冻结 rAF、CSS 动画与媒体元素，靠 `setTimeout` / `setInterval` 驱动的页面还会动。遇到实际样本再看要不要包装计时器。
+- **建好 realm 后才退回的场景**：渲染失败时 realm 与音频订阅都保留，frame 不销毁，Hub 会继续采集到 iframe 消失。没有退订命令，影响小，先不处理。
+
+## 实施记录
+
+### 步骤 0.5（2026-11-05）
+
+**实现。** 环境、`localStorage`、探针由 codex 完成，主会话审查后改了三处：`delete` 按文档返回 `Boolean`；`localStorage.remove` 与 `console.*` 归为样本自身的错；注释写明 `location` 的实际类型未核实。真实音频由子代理完成。
+
+**与计划不一致的地方。**
+- WPE `localStorage` 由 `createWpeLocalStorage` 造，不在 `ScriptApi` 里：它要早于 `baseclasses.js` 挂上，那时 `ScriptApi` 还不存在。
+- `remainingTestFrames` 改成 `{ before, after }`，`missingApis` 改成条目数组。
+- 连带错误按属性名列出（`consequential:scale` 等），没有归到根因，要归根因得分析源码。
+- 音频缓冲存 `{ api, arrays }` 两份：脚本能改写 `buffer.left`，写入只认 `arrays`。
+- `recompileWrites` 统计写入尝试次数，同值重复写也算，不等于实际重编译次数。
+
+**CDP（dev 宿主，端口 58100）。**
+- `realmCheck()`（bedroom）：`console` 只有 `error` / `log`；`localStorage` 成员只有 4 个方法加 2 个常量，没有 `remove`；`fetch` 是函数；宿主的键读不到；模块顶层调 `localStorage` 抛错；`console.warn` 抛 `TypeError`；语法错误 `(line 1, col 18)`；测后只剩宿主自己的 frame。
+- 全语料 41 张、695 段（比 3b 多 3 张 57 段，都是新订阅的工坊场景）。开跑前按上次的办法扫了全部循环，条件看不出有界的仍只有 13108 那处 `while`；它在 `getChildren` 缺失时走不到，走到时每轮重新取随机数。
+  - 求值失败 127 → 3：`registerAudioBuffers` 124 段、`localStorage` 10 段的报错全部消失。剩下 `engine.registerAsset` 1 段，以及样本伪代码 `scene` 2 段。
+  - 原有 38 张的 `unsupported` 逐张相同；能完整渲染的仍是 beach、deep_space、eagleflag、razer_vortex、razer_bedroom。
+  - 新出现 9 条报错，都在旧场景里：这些段以前卡在模块顶层，现在才往下走到。`getTransformMatrix` 4 段、`getEffect` 2 段、`input` 1 段、`createLayer` 1 段，其余 1 条是 `createLayer` 的连带错误（`alignment`）。
+  - 计划原先写「2 段连带错误随之消失」，**这是错的**：写这些 `shared` 值的段现在卡在 `getTransformMatrix`（`12902` 的 `shared.miTextContainerScale` 就在那一行之后），`multiply` 那两条要等这个 API。
+  - 13 段挂在重编译目标上，120 帧内写入次数都是 0：它们只导出 `mediaThumbnailChanged` 或 `applyUserProperties`，前者本阶段不调用。
+  - 每张 frame 前后都是 1，`kabegame:wpe-scene:ls:` 前缀下没有残留的键。
+- 音频冒烟（dev 强制渲染，预览 13110）：订阅成功，帧数 91 → 181（3 s 内 90 帧，30 帧/秒），已注册分辨率 `[64]`，峰值 0（当时机器没有声音）。对照 12889 不注册、不订阅。子 frame 的 `Channel` 与 Rust 宿主分支都实际走通。
+
+**测试工程注意。** `supportsaudioprocessing` 有两个来源，含义相反：Rust 放行读 `project.json` 的 `general`；`features.ts:211` 读 `scene.json` 的 `general`，写了 true 就报 `general:supportsaudioprocessing`、整张退回。测试工程只能写在 `project.json`。
+
+### 步骤 0.6 真机（2026-11-05）
+
+验收暂停、清空存储、音频与 `localStorage`，逐项数字见回归表 P3c 小节 D4、D5、D9–D16。脚本和截图在 `ignore/p3c/step05/`。用户在验收途中放开了「改壁纸」和「让 `tauri dev` 重启」，范围只限这次。
+
+**测试工程。** 图片 id 13114，目录 `ignore/p3c/kbprops-test/`，行保留。在原工程上加了 `COUNT`、`AUDIO` 两层，`project.json` 声明 `supportsaudioprocessing: true`。
+
+**与计划不一致的地方。**
+- 原工程不能实时渲染。四个纯色图层用的 `models/util/solidlayer.json` 带 `solidlayer: true`，`features.ts` 报 `model:solidlayer`，整张退回预览图。处理办法是在工程里放同路径的本地文件 `models/util/solidlayer.json`，只保留 `material`，`scene.json` 不动。这样 6 层都按图层 `size` 画对，`unsupported` 为空。计划后面用这个工程的验收（`p_effvis`、泛光、清屏色）都依赖这个覆盖。WPE 是否也读这份本地文件没有验证，和 I10 对照时要先确认。
+- 只选自定义目录导入会失败。`WallpaperImportDialog` 在没勾任何来源时 `canSubmit` 为真，提交的 `sources` 全是 `false`，`start_task` 返回 `sources: 至少选择一项`。这次带上待导入数为 0 的 `defaultprojects` 绕过。已由 `origin/main` 的 `40219e03` 修复：没勾来源时前端发 `sources: null`，本分支合并后生效。
+- `average[0]` 只覆盖约 30–44 Hz，`chimes.wav` 在这个频段没有能量，`alpha` 全程 0。计划写的「随低频变化」要用很低的信号验证，这次生成了 40 Hz、-18 dBFS 的 14 s 信号。
+
+**结论。** 测试项全部通过，下面几点没有覆盖或留有疑点：
+- 预览的 `alpha` 跟声音未量到：放低音时主窗口被遮挡，只量了预览宿主的峰值与帧数；`alpha` 是在壁纸窗口上量的，脚本与写入路径相同。
+- 真实在播的视频没有验证到时间冻结：这次用的三张样本都没有在放视频，12097 的两个媒体元素一直是暂停状态。往 12097 注入的 `<video>` 12 s 内 `readyState` 一直是 0，只确认了 `paused` 的切换，原因未查。
+- 峰值回落后停在 `3e-45`，不是严格的 0。
+- 多宿主同时清空时，17 轮里有 1 轮存储值比宿主数少 1，没有看到晚到的一方删掉别人写的值。
+
+**恢复。** 当前壁纸 12888、模式 window、`wallpaperPaused` false，都已实测读回，`settings.json` 已落盘。「场景后处理」`disabled`、音量 1、dev 强制渲染开关 null、vortex 属性与测前相同（metadata id 20077 → 20081）。预览已关，路由 `/gallery`。副本 13115 的行与计数键已删，13114 的计数键已删。`settings.rs` 只改了 mtime，内容没动。

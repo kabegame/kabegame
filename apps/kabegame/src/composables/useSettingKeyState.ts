@@ -42,6 +42,7 @@ const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
   currentWallpaperImageId: "wallpaper",
   wallpaperVolume: "wallpaperPlayback",
   wallpaperVideoPlaybackRate: "wallpaperPlayback",
+  wallpaperPaused: "wallpaperPlayback",
   wallpaperRotationEnabled: "wallpaperRotation",
   wallpaperRotationPath: "wallpaperRotation",
   wallpaperRotationIntervalMinutes: "wallpaperRotation",

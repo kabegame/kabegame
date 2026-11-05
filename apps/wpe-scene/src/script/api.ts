@@ -2,10 +2,53 @@ import { valueTypeOf, type BindingTarget, type UserProperty, type ValueType } fr
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
+import { fillAudioBuffers, type AudioBuffers } from "./audio";
 import type { ScriptRealm, ScriptRuntime } from "./runtime";
+import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
 
 type ApiObject = Record<string, unknown>;
 type ApiTarget = BindingTarget | { kind: "unsupported"; path: string };
+
+/** 模块求值期间调用 scoped 方法 / 访问 scoped 属性时抛错（`ScriptApi` 与 WPE `localStorage` 共用）。 */
+export function requireCallbackContext(name: string, evaluating: boolean): void {
+  if (evaluating) throw new Error(`${name} 不能在模块求值期间访问`);
+}
+
+/**
+ * 造挂在场景子 frame 全局上的 WPE `localStorage`：成员只有 `get` / `set` / `delete` / `clear` 与两个位置常量，
+ * 没有 `remove`（报告 A；样本调 `remove` 照样报 `TypeError`）。四个方法在模块求值期间调用抛错（报告 D）。
+ * `get` 用子 frame 的 `JSON.parse` 造值，脚本里 `instanceof Array` 才为真。
+ */
+export function createWpeLocalStorage(input: {
+  global: Record<string, unknown>;
+  /** 宿主的 `Storage`；null = 只存在内存里（宿主没有图片 id，或读不到浏览器存储）。 */
+  backend: Storage | null;
+  sceneKey: string;
+  isEvaluating: () => boolean;
+  debug?: (message: string) => void;
+}): object {
+  const object = input.global.Object as ObjectConstructor;
+  const storage = new SceneScriptStorage(input.backend ?? createMemoryStorage(), input.sceneKey, {
+    parse: (text) => (input.global.JSON as JSON).parse(text),
+    debug: input.debug,
+  });
+  const api = object.create(null) as Record<string, unknown>;
+  const define = (name: string, value: unknown) =>
+    object.defineProperty(api, name, { value, enumerable: true, writable: false, configurable: false });
+  const method = (name: string, run: (...args: unknown[]) => unknown) =>
+    define(name, (...args: unknown[]) => {
+      requireCallbackContext(`localStorage.${name}`, input.isEvaluating());
+      return run(...args);
+    });
+  const locationOf = (value: unknown) => (typeof value === "number" ? value : LOCATION_SCREEN);
+  method("get", (key, location) => storage.get(String(key), locationOf(location)));
+  method("set", (key, value, location) => storage.set(String(key), value, locationOf(location)));
+  method("delete", (key, location) => storage.delete(String(key), locationOf(location)));
+  method("clear", (location) => storage.clear(locationOf(location)));
+  define("LOCATION_GLOBAL", LOCATION_GLOBAL);
+  define("LOCATION_SCREEN", LOCATION_SCREEN);
+  return api;
+}
 
 export interface ScriptApiState {
   bundle(): SceneBundle;
@@ -17,6 +60,8 @@ export interface ScriptApiState {
   /** 普通目标由宿主写入 SceneState；重编译目标由宿主合并请求。 */
   write(target: ApiTarget, value: number[] | boolean): boolean;
   read?(target: ApiTarget): number[] | boolean | null;
+  /** 脚本注册了音频缓冲：宿主据此订阅音频。语料与 `realmCheck` 不传，缓冲保持全零。 */
+  audioRegistered?(): void;
 }
 
 const DEGREE = 0.017453292;
@@ -62,6 +107,14 @@ export class ScriptApi {
   private readonly materials = new Map<string, ApiObject>();
   private readonly effects = new Map<string, ApiObject>();
   private readonly recompileValues = new Map<string, string>();
+  /**
+   * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applyAudioFrame` 把宿主收到的
+   * 音频原地写进 `arrays`；没有音频时保持全零，相当于 WPE 里没有声音在放。`api` 是脚本拿到的对象，脚本可以改写
+   * 它的字段，所以写入只认 `arrays`。
+   */
+  private readonly audioBufferCache = new Map<number, { api: ApiObject; arrays: AudioBuffers }>();
+  /** 每段脚本写到重编译目标的次数（dev 探针诊断用）。 */
+  readonly recompileWrites = new Map<string, number>();
   readonly engine: ApiObject;
   readonly thisScene: ApiObject;
   readonly general: ApiObject;
@@ -93,6 +146,10 @@ export class ScriptApi {
   setModuleEvaluating(evaluating: boolean): void {
     this.evaluating = evaluating;
   }
+  /** 是否正在求值模块：realm 里挂的 WPE `localStorage` 用它做作用域检查。 */
+  get moduleEvaluating(): boolean {
+    return this.evaluating;
+  }
   setProperties(full: ReadonlyMap<string, UserProperty>): void {
     this.properties = full;
     this.convertedProperties = null;
@@ -100,6 +157,14 @@ export class ScriptApi {
   /** 用户绑定改变重编译目标后，下一次脚本写同一值仍需重新提交。 */
   forgetRecompile(path: string): void {
     this.recompileValues.delete(path);
+  }
+  /** 把 Hub 的一帧写进全部已注册分辨率的缓冲，脚本持有的数组不变。 */
+  applyAudioFrame(frame: ArrayLike<number>): void {
+    for (const { arrays } of this.audioBufferCache.values()) fillAudioBuffers(frame, arrays);
+  }
+  /** 已注册的音频分辨率，从小到大（dev 探针 `host.audio()` 用）。 */
+  get audioResolutions(): number[] {
+    return [...this.audioBufferCache.keys()].sort((a, b) => a - b);
   }
   /** 同一 objects 下标对应同一 API 对象，重编译只替换访问层里的 bundle 与 state。 */
   layer(object: number): ApiObject | null {
@@ -164,7 +229,11 @@ export class ScriptApi {
     });
   }
   private requireCallback(name: string): void {
-    if (this.evaluating) throw new Error(`${name} 不能在模块求值期间访问`);
+    requireCallbackContext(name, this.evaluating);
+  }
+  /** 与 `requireCallback` 相反：只能模块顶层调用的 API（报告 D）。 */
+  private requireEvaluating(name: string): void {
+    if (!this.evaluating) throw new Error(`${name} 只能在模块求值期间调用`);
   }
   private vector(values: readonly number[], size: 2 | 3 | 4): unknown {
     const prototype = this.realm.prototypes[`Vec${size}`];
@@ -174,6 +243,22 @@ export class ScriptApi {
   private array(values: unknown[]): unknown[] {
     const ctor = this.realm.global.Array as ArrayConstructor;
     return ctor.from(values);
+  }
+  /** 初始全零的 `{ left, right, average }`，元素是 realm 的 `Float32Array`；同一分辨率返回同一个对象。 */
+  private audioBuffer(resolution: unknown): ApiObject {
+    if (resolution !== 16 && resolution !== 32 && resolution !== 64)
+      throw new TypeError(`registerAudioBuffers 只接受 16、32、64，收到 ${String(resolution)}`);
+    const size = resolution as 16 | 32 | 64;
+    const cached = this.audioBufferCache.get(size);
+    if (cached) return cached.api;
+    const ctor = this.realm.global.Float32Array as Float32ArrayConstructor;
+    const arrays: AudioBuffers = { left: new ctor(size), right: new ctor(size), average: new ctor(size) };
+    const api = this.object();
+    api.left = arrays.left;
+    api.right = arrays.right;
+    api.average = arrays.average;
+    this.audioBufferCache.set(size, { api, arrays });
+    return api;
   }
   private findLayer(object: number): SceneLayer | undefined {
     return this.access.bundle().layers.find((layer) => layer.object === object);
@@ -194,6 +279,8 @@ export class ScriptApi {
       if (type === "angles") value = value.map((part) => part * DEGREE);
     }
     if (target.kind === "recompile") {
+      const id = this.current?.id ?? "<module>";
+      this.recompileWrites.set(id, (this.recompileWrites.get(id) ?? 0) + 1);
       const encoded = JSON.stringify(value);
       if (this.recompileValues.get(target.path) === encoded) return;
       if (this.access.write(target, value)) this.recompileValues.set(target.path, encoded);
@@ -268,6 +355,16 @@ export class ScriptApi {
           return this.findLayer(layer)?.effects.some((item) => item.source === effect) ?? false;
         }),
     );
+    this.engine.AUDIO_RESOLUTION_16 = 16;
+    this.engine.AUDIO_RESOLUTION_32 = 32;
+    this.engine.AUDIO_RESOLUTION_64 = 64;
+    // 只能在模块顶层调（报告 D），回调里调用抛错；只收 16 / 32 / 64，其它值抛 TypeError
+    this.method(this.engine, "registerAudioBuffers", (resolution: unknown) => {
+      this.requireEvaluating("registerAudioBuffers");
+      const buffers = this.audioBuffer(resolution);
+      this.access.audioRegistered?.();
+      return buffers;
+    });
     this.method(
       this.engine,
       "setTimeout",

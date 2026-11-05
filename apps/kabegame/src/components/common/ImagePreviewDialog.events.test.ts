@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImagePreviewDialog from "./ImagePreviewDialog.vue";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import ImageContent from "../image/ImageContent.vue";
+import WpeWebPropertiesPanel from "../wallpaper/WpeWebPropertiesPanel.vue";
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 const fetchImageById = vi.hoisted(() => vi.fn());
@@ -66,11 +67,11 @@ afterEach(async () => {
   await flushPromises();
   vi.useRealTimers();
 });
-async function fixture() {
+async function fixture(stubs: Record<string, unknown> = {}) {
   const wrapper = shallowMount(ImagePreviewDialog, {
     props: { image: "current" },
     global: {
-      stubs: { "el-dialog": { template: "<div><slot /></div>" }, "el-icon": true },
+      stubs: { "el-dialog": { template: "<div><slot /></div>" }, "el-icon": true, ...stubs },
     },
   });
   wrappers.push(wrapper);
@@ -160,5 +161,21 @@ describe("裸 id 预览的事件保鲜", () => {
     vi.advanceTimersByTime(300);
     await flushPromises();
     expect(fetchImageById).not.toHaveBeenCalled();
+  });
+});
+
+describe("WPE 壁纸预览的暂停", () => {
+  it("面板切换的是预览这一份，切图时复位", async () => {
+    fetchImageById.mockImplementation(async (id: string) => ({ id, localPath: `/${id}`, type: "x-wpe/scene" }));
+    const slot = { template: "<div><slot /></div>" };
+    const wrapper = await fixture({ KbResizable: slot, WallpaperDesktopCanvas: slot });
+    const playing = () => wrapper.findComponent(ImageContent).props("videoPlaying");
+    expect(playing()).toBe(true);
+    wrapper.findComponent(WpeWebPropertiesPanel).vm.$emit("update:paused", true);
+    await flushPromises();
+    expect(playing()).toBe(false);
+    await wrapper.setProps({ image: "next" });
+    await flushPromises();
+    expect(playing()).toBe(true);
   });
 });

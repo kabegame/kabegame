@@ -530,15 +530,9 @@ function applyWebInteractive() {
 }
 
 /**
- * paused 对 web 层做 visibility: hidden，并由垫片通知页面的 `setPaused`；页面音量随之按 0
- * （见 `postWebVolume`）。
- */
-function applyWebPaused() {
-  if (webLayerEl) webLayerEl.style.visibility = props.paused ? "hidden" : "";
-}
-
-/**
  * 把当前宿主音量发给 web iframe 里的垫片：回复它的请求，或 `volume` / `paused` 变化时主动推。
+ * `paused` 也经这条消息到垫片：iframe 保持可见，垫片冻结 rAF、CSS 动画与媒体元素并调页面的 `setPaused`，
+ * 页面音量随之按 0。
  * iframe 还停在初始 about:blank 时也照发（那份文档没有垫片、收下即丢），页面起来后垫片会自己再要一次。
  */
 function postWebVolume() {
@@ -707,7 +701,6 @@ async function enterWeb(next: WallpaperTarget, normalizedPath: string) {
   phase = "prep";
   if (webLayerEl) webLayerEl.style.display = "block";
   setWebLayerClasses(false);
-  applyWebPaused();
   updateDebugPanel();
 
   // 等页面 load（或超时）再淡入，避免先露出一块空白页；入口由后端随目标现算（webEntry）
@@ -1136,7 +1129,7 @@ async function playVideo(el: HTMLVideoElement | null, src: string) {
     el.src = src;
   }
   applyVideoLoopToElement(el);
-  // 新增能力 paused：只设源不播放；pause() 同时取消 autoplay（桌面窗口不传 paused，不走这里）
+  // 新增能力 paused：只设源不播放；pause() 同时取消 autoplay（桌面窗口只对网页与场景传 paused，不走这里）
   if (props.paused) {
     el.pause();
     return;
@@ -1264,7 +1257,7 @@ async function setTarget(target: WallpaperTarget) {
       applyStyles();
       if (topVideoEl) {
         if (props.paused) {
-          // 新增能力 paused：不播放，仅取消 autoplay（桌面窗口不走这里）
+          // 新增能力 paused：不播放，仅取消 autoplay（桌面窗口只对网页与场景传 paused，不走这里）
           topVideoEl.pause();
         } else {
           // 同 playVideo:先静音保证自动播放获准,成功后再按音量恢复
@@ -1492,11 +1485,11 @@ function applyStyleFromMode() {
 }
 
 /**
- * 新增能力 paused：暂停 / 恢复当前视频。桌面窗口不传 paused（恒为 false），只在其变化时触发。
- * scene 层不经这里：`paused` 直接绑到 WpeSceneView（停帧、冻结时钟，画面停在最后一帧）。
+ * 新增能力 paused：暂停 / 恢复当前视频。桌面窗口只对网页与场景传 paused，视频恒为 false。
+ * scene 层不经这里：`paused` 直接绑到 WpeSceneView（停帧、冻结时钟，画面停在最后一帧）；web 层经 `postWebVolume`
+ * 交给垫片。
  */
 function applyPaused() {
-  applyWebPaused();
   if (currentMediaType !== "video") return;
   if (props.paused) {
     baseVideoEl?.pause();

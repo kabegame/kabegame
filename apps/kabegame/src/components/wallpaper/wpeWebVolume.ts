@@ -37,7 +37,7 @@ export function clampWallpaperVolume(volume: number): number {
 }
 
 /**
- * 回给网页壁纸的宿主音量：`paused`（层被隐藏，页面脚本仍在跑）时为 0，其余就是 Stage 的 `volume` prop
+ * 回给网页壁纸的宿主音量：`paused`（页面已被垫片冻结）时为 0，其余就是 Stage 的 `volume` prop
  * ——桌面与预览传设置里的壁纸音量，应用背景传 0。
  */
 export function webHostVolume(volume: number, paused: boolean): number {

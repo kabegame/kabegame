@@ -432,13 +432,10 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 
-  /* 隐藏图片：盖在所有图层最上面的半透明遮罩。
-     `isolation: isolate` 让 image-wrapper 自成一层独立 stacking context，遮罩只在 wrapper 内部生效，
-     而 .image-item 上的角标（video-play-badge / missing-file-badge）作为 wrapper 的兄弟节点仍显示在遮罩之上。 */
+  /* 隐藏图片：盖在所有图层最上面的半透明遮罩。遮罩只在 image-wrapper 内部生效（见下方 isolation），
+     .image-item 上的角标仍显示在遮罩之上。 */
   &.image-item-hidden {
     .image-wrapper {
-      isolation: isolate;
-
       &::after {
         content: "";
         position: absolute;
@@ -495,6 +492,9 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   .image-wrapper {
     width: 100%;
     position: relative;
+    /* 自成 stacking context：ImageContent 内部的图层带 z-index，不隔离就会和兄弟节点上的角标比层级，
+       加载完把角标（wpe-video-badge 等）盖住。 */
+    isolation: isolate;
     cursor: pointer;
     overflow: hidden;
     -webkit-tap-highlight-color: transparent;
@@ -611,7 +611,8 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 }
 
 /* 可控视频的播放/暂停按钮：让 badge 接收点击 */
-.video-play-badge-interactive {  pointer-events: auto;
+.video-play-badge-interactive {
+  pointer-events: auto;
   cursor: pointer;
   transition:
     background 0.15s ease,

@@ -90,6 +90,15 @@ describe("WallpaperStage web 层的音量消息", () => {
     expect(posts.mock.calls.map(([message]) => (message as { paused: boolean }).paused)).toEqual([false, true, false]);
   });
 
+  it("paused 时 web 层保持可见：暂停由垫片冻结页面，不隐藏 iframe", async () => {
+    const wrapper = mountStage(web("a"));
+    await settle();
+    const layer = wrapper.element.querySelector(".wallpaper-web-layer") as HTMLElement;
+    await wrapper.setProps({ paused: true });
+    expect(layer.style.visibility).toBe("");
+    expect(layer.style.display).toBe("block");
+  });
+
   it("同一窗口里两个 Stage 各答各的 iframe", async () => {
     const background = mountStage(web("a"), 0);
     const preview = mountStage(web("b"), 0.8);

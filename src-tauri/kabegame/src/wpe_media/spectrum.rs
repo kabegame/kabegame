@@ -18,6 +18,9 @@ const HIGH_HZ: f32 = 16_000.0;
 const REFERENCE_HZ: f32 = 1_000.0;
 /// 输出上限：允许略超 1（WPE 的数据也会偶尔超过），但不让页面画出界太多。
 const MAX_VALUE: f32 = 1.2;
+/// 低于这个值按 0：`smoothed × release` 到 f32 次正规数后会舍入回原值，不截断就永远到不了 0，
+/// 靠 `=== 0` 判空闲的页面进不了空闲。
+const SILENCE_FLOOR: f32 = 1e-4;
 
 /// 频谱观感的可调常数。
 #[derive(Debug, Clone, Copy)]
@@ -150,7 +153,11 @@ impl Spectrum {
         for (i, level) in left.iter().chain(right.iter()).enumerate() {
             let held = self.smoothed[i] * release;
             let value = level.max(held);
-            self.smoothed[i] = if value.is_finite() { value } else { 0.0 };
+            self.smoothed[i] = if value.is_finite() && value >= SILENCE_FLOOR {
+                value
+            } else {
+                0.0
+            };
         }
         self.smoothed
     }
@@ -260,7 +267,7 @@ mod tests {
             last = spectrum.frame();
         }
         assert!(
-            last.iter().all(|v| *v < 1e-3),
+            last.iter().all(|v| *v == 0.0),
             "静音后没有衰减到 0: {last:?}"
         );
     }

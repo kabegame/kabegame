@@ -20,7 +20,7 @@ import type { Mode, Transition, WallpaperTarget } from "./types";
 const props = withDefaults(
   defineProps<{
     image: ImageInfo;
-    /** false 时暂停（web 层只隐藏，不冻结脚本） */
+    /** false 时暂停：网页由垫片冻结、场景停帧，画面都停在最后一帧 */
     playing?: boolean;
     /** true 时音量为 0（应用背景）：网页壁纸页面自己的声音也静音 */
     muted?: boolean;

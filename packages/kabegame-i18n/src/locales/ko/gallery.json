@@ -71,7 +71,6 @@
   "wpeKindVideo": "동영상",
   "wpeKindWeb": "웹",
   "wpeKindScene": "씬",
-  "wpeDesktopPreview": "바탕 화면 미리보기 · {w}×{h}",
   "wpeNoSourceFile": "Wallpaper Engine 월페이퍼에는 복사하거나 공유할 단일 파일이 없습니다",
   "webpageUrlError": {
     "empty": "페이지 URL을 입력하세요",
@@ -374,5 +373,10 @@
   "wpePropsModified": "이 그룹에 변경 사항 있음",
   "wpePropsEmpty": "조정할 수 있는 속성이 없습니다",
   "wpePropsLoadFailed": "배경화면 속성을 불러오지 못했습니다",
-  "wpePropsSaveFailed": "배경화면 속성을 저장하지 못했습니다"
+  "wpePropsSaveFailed": "배경화면 속성을 저장하지 못했습니다",
+  "wpePause": "일시 중지",
+  "wpeClearStorage": "스크립트 저장소 비우기",
+  "wpeClearStorageConfirm": "스크립트가 저장한 데이터(기억한 위치, 카운트 등)가 삭제되고 스크립트가 다시 시작됩니다. 계속할까요?",
+  "wpeClearStorageDone": "스크립트 저장소를 비웠습니다",
+  "wpeClearStorageFailed": "스크립트 저장소를 비우지 못했습니다"
 }

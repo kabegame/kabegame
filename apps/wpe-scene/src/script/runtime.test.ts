@@ -333,6 +333,25 @@ describe("脚本运行时（FakeRealm）", () => {
   });
 });
 
+describe("脚本运行时的销毁", () => {
+  it("加载途中销毁：还没跑的 init 不再跑", async () => {
+    const realm = new FakeRealm();
+    const { runtime } = harness(realm);
+    const init = vi.fn();
+    let finish!: (module: Record<string, unknown>) => void;
+    realm.importModule = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const loading = runtime.load({ list: [script("a")] });
+    runtime.destroy();
+    finish({ init });
+    await loading;
+    expect(init).not.toHaveBeenCalled();
+    expect(realm.disposed).toBe(true);
+  });
+});
+
 const root = process.env.KABEGAME_WPE_ROOT;
 const wasm = join(__dirname, "..", "wpesl2wgsl", "wpesl2wgsl.wasm");
 const corpus = !!root && existsSync(wasm);

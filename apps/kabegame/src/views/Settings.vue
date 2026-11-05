@@ -217,6 +217,8 @@
                   :image-id="currentWallpaperImageId"
                   :image-type="currentWallpaperType"
                   :title="currentWallpaperName"
+                  :paused="desktopWallpaperPaused"
+                  @update:paused="setWallpaperPaused"
                 />
 
                 <SettingRow
@@ -409,6 +411,7 @@ import SettingRow from "@/components/settings/SettingRow.vue";
 import WpeWebPropertiesDialog from "@/components/wallpaper/WpeWebPropertiesDialog.vue";
 import { fetchImageById } from "@/utils/imageRow";
 import { hasWpeUserProperties } from "@/utils/mediaMime";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
@@ -651,6 +654,11 @@ watch(
   },
 );
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
+const { settingValue: wallpaperPausedSetting, set: setWallpaperPaused } = useSettingKeyState("wallpaperPaused");
+/** 只有窗口模式桌面上才有实时实例（网页与场景只在 Windows 运行）；其它情况传 undefined，面板不显示暂停与清空 */
+const desktopWallpaperPaused = computed(() =>
+  IS_WINDOWS && wallpaperMode.value === "window" ? wallpaperPausedSetting.value === true : undefined,
+);
 // 关闭壁纸：禁用期间将其余壁纸控件置灰
 const wallpaperDisabled = computed(() => settingsStore.values.wallpaperDisabled === true);
 // native 模式下开启"关闭壁纸"时提示用户系统壁纸保持现状、无法自动还原

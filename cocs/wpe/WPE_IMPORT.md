@@ -458,7 +458,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 - 网格（`ImageItem`）对所有 WPE 行固定用缩略形态，不悬停加载原图形态；角标「WPE · 视频」/「WPE · 网页」。
 - 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperDesktopCanvas.vue`：按主显示器逻辑分辨率
   （`primaryMonitor()` 的 `size / scaleFactor`，失败回退 `window.screen`，模块级缓存）给一块固定尺寸画布，整体
-  `scale` 进可用区域并居中，页面按桌面尺寸排版且可交互；右下角角标「桌面预览 · W×H」。不走 Panzoom、不挂
+  `scale` 进可用区域并居中，页面按桌面尺寸排版且可交互。不走 Panzoom、不挂
   `VideoControls`，控制条只保留全屏。
 - 应用背景层不按类型分支：与预览同走 `ImageContent` 原图形态（`prefer="original"`），网页与场景壁纸都实时渲染、不交互。
   **背景静音**：`video-muted` 经 `WpeWallpaperContent` 的 `muted` 让 `WallpaperStage` 的 `volume` 为 0，网页壁纸页面的声音由垫片

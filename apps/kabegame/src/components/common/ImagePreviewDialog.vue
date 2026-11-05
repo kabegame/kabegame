@@ -278,7 +278,7 @@
                 ref="previewContentRef"
                 :image="previewImage"
                 prefer="original"
-                video-playing
+                :video-playing="!wallpaperPaused"
                 interactive
                 @ready="handlePreviewReady"
               />
@@ -341,10 +341,10 @@
                   <el-icon><component :is="action.icon" /></el-icon>
                 </button>
               </template>
-              <span class="control-bar-divider" />
             </template>
+            <!-- 控制条定宽左对齐：普通图片靠缩放滑块撑开，壁纸没有弹性项，靠 ml-auto 贴到最右 -->
             <button
-              class="control-btn"
+              class="control-btn ml-auto"
               type="button"
               :aria-label="isAppFullscreen ? t('gallery.exitFullscreen') : t('gallery.fullscreen')"
               @click="toggleAppFullscreen"
@@ -396,6 +396,8 @@
               :image-id="previewImage.id"
               :image-type="previewImage.type"
               fill-when-expanded
+              :paused="previewWallpaperLive ? wallpaperPaused : undefined"
+              @update:paused="wallpaperPaused = $event"
             />
             <ImagePluginDescriptionPanel v-else :image="previewImage" fill-when-expanded />
           </div>
@@ -464,7 +466,7 @@ import {
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";
-import { IS_ANDROID } from "@/env.ts";
+import { IS_ANDROID, IS_WINDOWS } from "@/env.ts";
 
 const { t } = useI18n();
 /** 与模板 v-if 一致：Android（含平板宽屏）一律用 PhotoSwipe，不能按 isCompact 宽度断点判断。 */
@@ -564,6 +566,10 @@ const previewResolving = computed(() => typeof props.image === "string" && !reso
 const isPreviewVideo = computed(() => isVideoPlaybackType(previewImage.value?.type));
 /** 非视频 WPE 壁纸（web / scene）：桌面画布内嵌壁纸组件，WPE 视频仍是视频预览。 */
 const isPreviewWallpaper = computed(() => isWpeWallpaperContentType(previewImage.value?.type));
+/** 网页与场景只在 Windows 实时运行，其它平台只显示预览图，没有可暂停的实例 */
+const previewWallpaperLive = computed(() => IS_WINDOWS && isPreviewWallpaper.value);
+/** 预览这一份的暂停状态，切图时复位；桌面的暂停是设置 `wallpaperPaused`，互不影响 */
+const wallpaperPaused = ref(false);
 /** Panzoom 图片分支的条件。 */
 const isPreviewStatic = computed(() => !isPreviewVideo.value && !isPreviewWallpaper.value);
 
@@ -1013,6 +1019,7 @@ watch(
 const navPending = ref(false);
 watch(currentId, (id) => {
   navPending.value = false;
+  wallpaperPaused.value = false;
   // 上层清空 image 即关闭：停播放
   if (!id) {
     stopSlideshow();

@@ -185,7 +185,32 @@ type Fakes = ReturnType<typeof createFakes>;
 /** 页面眼里的媒体元素：volume / muted 走垫片装的访问器（假类型上没有声明这两个属性）。 */
 type PageMedia = InstanceType<Fakes["FakeMediaElement"]> & { volume: number; muted: boolean };
 
-function createShimEnv(initialState: unknown = null) {
+/** 页面里的动画与媒体元素（垫片的冻结只用到这几个成员）。 */
+function fakeAnimation(playState: string) {
+  return {
+    playState,
+    pause() {
+      this.playState = "paused";
+    },
+    play() {
+      this.playState = "running";
+    },
+  };
+}
+function fakeMedia(paused: boolean) {
+  return {
+    paused,
+    pause() {
+      this.paused = true;
+    },
+    play() {
+      this.paused = false;
+      return Promise.resolve();
+    },
+  };
+}
+
+function createShimEnv(initialState: unknown = null, search = "") {
   const fakes = createFakes();
   const {
     FakeMediaElement,
@@ -202,10 +227,31 @@ function createShimEnv(initialState: unknown = null) {
   const hostPosts: { data: unknown; origin: string }[] = [];
   const host = { postMessage: (data: unknown, origin: string) => hostPosts.push({ data, origin }) };
   const consoleSpy = { warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+  // 原生 rAF：id 故意和垫片发的错开；取消同一帧里还没轮到的回调也生效（同规范）
+  const frames = new Map<number, (time: number) => void>();
+  let nativeFrame = 1000;
+  const nativeRequest = (callback: (time: number) => void) => {
+    frames.set(++nativeFrame, callback);
+    return nativeFrame;
+  };
+  const nativeCancel = (id: number) => void frames.delete(id);
+  function runFrame(time = 0) {
+    for (const id of [...frames.keys()]) {
+      const callback = frames.get(id);
+      if (!callback) continue;
+      frames.delete(id);
+      callback(time);
+    }
+  }
+  const animations: ReturnType<typeof fakeAnimation>[] = [];
+  const mediaElements: ReturnType<typeof fakeMedia>[] = [];
   const sandbox: Record<string, unknown> = {
     top: host,
     parent: host,
-    location: { protocol: "file:", search: "" },
+    location: { protocol: "file:", search },
+    requestAnimationFrame: nativeRequest,
+    cancelAnimationFrame: nativeCancel,
+    document: { getAnimations: () => animations, querySelectorAll: () => mediaElements },
     URLSearchParams,
     __TAURI_INTERNALS__: {
       invoke: vi.fn((command: string) => Promise.resolve(command === "wpe_web_pull_state" ? initialState : null)),
@@ -254,7 +300,26 @@ function createShimEnv(initialState: unknown = null) {
     dispatch("message", event);
     return event;
   }
-  return { ...fakes, sandbox, host, hostPosts, consoleSpy, pageMessages, dispatch, sendFromHost };
+  const page = sandbox as unknown as {
+    requestAnimationFrame(callback: (time: number) => void): number;
+    cancelAnimationFrame(id: number): void;
+  };
+  return {
+    ...fakes,
+    sandbox,
+    host,
+    hostPosts,
+    consoleSpy,
+    pageMessages,
+    dispatch,
+    sendFromHost,
+    frames,
+    runFrame,
+    nativeRequest,
+    animations,
+    mediaElements,
+    page,
+  };
 }
 
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
@@ -425,5 +490,191 @@ describe("wpe_shim 音量接管", () => {
 
     env.sendFromHost(wpeVolumeMessage(0, false));
     expect([viaFactory.nativeVolume, viaFactory.nativeMuted]).toEqual([0.6, false]);
+  });
+});
+
+describe("wpe_shim 暂停冻结", () => {
+  /** 页面已加载完：之后的暂停立即冻结。 */
+  function loaded(search = "") {
+    const env = createShimEnv(null, search);
+    env.dispatch("load", {});
+    return env;
+  }
+  const pause = (env: ReturnType<typeof createShimEnv>) => env.sendFromHost(wpeVolumeMessage(0, true));
+  const resume = (env: ReturnType<typeof createShimEnv>) => env.sendFromHost(wpeVolumeMessage(1, false));
+
+  it("暂停期间 rAF 不回调，恢复后回调；暂停之前排的也一样", () => {
+    const env = loaded();
+    const before = vi.fn();
+    const during = vi.fn();
+    env.page.requestAnimationFrame(before);
+    pause(env);
+    env.page.requestAnimationFrame(during);
+    expect(env.frames.size).toBe(0);
+    env.runFrame();
+    expect(before).not.toHaveBeenCalled();
+    expect(during).not.toHaveBeenCalled();
+
+    resume(env);
+    expect(before).not.toHaveBeenCalled();
+    env.runFrame(16);
+    expect(before).toHaveBeenCalledExactlyOnceWith(16);
+    expect(during).toHaveBeenCalledExactlyOnceWith(16);
+    env.runFrame(32);
+    expect(before).toHaveBeenCalledOnce();
+  });
+
+  it("页面的动画循环暂停时停住，恢复后接着转", () => {
+    const env = loaded();
+    let frames = 0;
+    const loop = () => {
+      frames++;
+      env.page.requestAnimationFrame(loop);
+    };
+    env.page.requestAnimationFrame(loop);
+    env.runFrame();
+    env.runFrame();
+    expect(frames).toBe(2);
+    pause(env);
+    env.runFrame();
+    env.runFrame();
+    expect(frames).toBe(2);
+    resume(env);
+    env.runFrame();
+    env.runFrame();
+    expect(frames).toBe(4);
+  });
+
+  it("暂停时取消 rAF 有效，不管是暂停之前还是暂停期间排的", () => {
+    const env = loaded();
+    const before = vi.fn();
+    const during = vi.fn();
+    const beforeId = env.page.requestAnimationFrame(before);
+    pause(env);
+    const duringId = env.page.requestAnimationFrame(during);
+    env.page.cancelAnimationFrame(beforeId);
+    env.page.cancelAnimationFrame(duringId);
+    resume(env);
+    env.runFrame();
+    expect(before).not.toHaveBeenCalled();
+    expect(during).not.toHaveBeenCalled();
+    expect(env.consoleSpy.warn).not.toHaveBeenCalled();
+  });
+
+  it("不暂停时取消照常生效；取消没排过的 id 什么都不做", () => {
+    const env = loaded();
+    const callback = vi.fn();
+    const other = vi.fn();
+    const id = env.page.requestAnimationFrame(callback);
+    env.page.requestAnimationFrame(other);
+    env.page.cancelAnimationFrame(id);
+    env.page.cancelAnimationFrame(999_999);
+    env.runFrame();
+    expect(callback).not.toHaveBeenCalled();
+    expect(other).toHaveBeenCalledOnce();
+  });
+
+  it("恢复只恢复暂停前在播的媒体与动画", () => {
+    const env = loaded();
+    const running = fakeAnimation("running");
+    const finished = fakeAnimation("finished");
+    const pausedByPage = fakeAnimation("paused");
+    const playing = fakeMedia(false);
+    const idle = fakeMedia(true);
+    env.animations.push(running, finished, pausedByPage);
+    env.mediaElements.push(playing, idle);
+    pause(env);
+    expect(running.playState).toBe("paused");
+    expect(playing.paused).toBe(true);
+    resume(env);
+    expect(running.playState).toBe("running");
+    expect(playing.paused).toBe(false);
+    expect(finished.playState).toBe("finished");
+    expect(pausedByPage.playState).toBe("paused");
+    expect(idle.paused).toBe(true);
+  });
+
+  it("暂停期间页面自己取消的动画、自己放起来的媒体，恢复时不动", () => {
+    const env = loaded();
+    const animation = fakeAnimation("running");
+    const media = fakeMedia(false);
+    const play = vi.spyOn(media, "play");
+    env.animations.push(animation);
+    env.mediaElements.push(media);
+    pause(env);
+    animation.playState = "idle";
+    media.paused = false;
+    resume(env);
+    expect(animation.playState).toBe("idle");
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("暂停与恢复时照旧调页面的 setPaused", async () => {
+    const env = createShimEnv({ imageId: "web", user: {}, general: {}, directories: {} });
+    const setPaused = vi.fn();
+    env.sandbox.wallpaperPropertyListener = { setPaused, applyUserProperties: vi.fn() };
+    env.dispatch("load", {});
+    await tick();
+    pause(env);
+    resume(env);
+    expect(setPaused.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("带 kbScene（场景宿主）时不冻结", () => {
+    const env = loaded("?kbScene=7&kbInstance=1");
+    expect(env.page.requestAnimationFrame).toBe(env.nativeRequest);
+    const callback = vi.fn();
+    const media = fakeMedia(false);
+    env.mediaElements.push(media);
+    pause(env);
+    env.page.requestAnimationFrame(callback);
+    env.runFrame();
+    expect(callback).toHaveBeenCalledOnce();
+    expect(media.paused).toBe(false);
+  });
+
+  it("load 之前收到暂停：页面先画出第一帧，load 后再过一帧才冻结", () => {
+    const env = createShimEnv();
+    const media = fakeMedia(false);
+    env.mediaElements.push(media);
+    pause(env);
+    const beforeLoad = vi.fn();
+    env.page.requestAnimationFrame(beforeLoad);
+    env.runFrame();
+    expect(beforeLoad).toHaveBeenCalledOnce();
+    expect(media.paused).toBe(false);
+
+    env.dispatch("load", {});
+    // 页面在 load 回调里排的第一帧照常画
+    let frames = 0;
+    const loop = () => {
+      frames++;
+      env.page.requestAnimationFrame(loop);
+    };
+    env.page.requestAnimationFrame(loop);
+    env.runFrame();
+    expect(frames).toBe(1);
+    env.runFrame();
+    expect(media.paused).toBe(true);
+    const frozenAt = frames;
+    env.runFrame();
+    expect(frames).toBe(frozenAt);
+
+    resume(env);
+    expect(media.paused).toBe(false);
+    env.runFrame();
+    expect(frames).toBe(frozenAt + 1);
+  });
+
+  it("load 之后等冻结的那一帧里已经恢复：不冻结", () => {
+    const env = createShimEnv();
+    const media = fakeMedia(false);
+    env.mediaElements.push(media);
+    pause(env);
+    env.dispatch("load", {});
+    resume(env);
+    env.runFrame();
+    env.runFrame();
+    expect(media.paused).toBe(false);
   });
 });

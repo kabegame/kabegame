@@ -22,6 +22,8 @@ interface ScriptRecord {
   disabled: Set<Callback>;
   errors: string[];
   calls: Record<string, { count: number; maxMs: number }>;
+  /** 回调返回值写到重编译目标的次数（API 直接写入由 `ScriptApi` 另计，探针合并）。 */
+  recompileWrites: number;
 }
 interface Timer {
   owner: ScriptRecord;
@@ -93,10 +95,22 @@ export class ScriptRuntime {
       disabled: [...record.disabled],
       errors: [...record.errors],
       calls: { ...record.calls },
+      targetKind: record.script.target.kind,
+      recompileWrites: record.recompileWrites,
     }));
   }
   get timerCount(): number {
-    return this.timers.length;
+    return this.timers.filter((timer) => !timer.cancelled).length;
+  }
+  /** 未取消的计时器：所属段 id、剩余秒数、周期（`null` 表示一次性）。dev 探针 `host.clock()` 用。 */
+  get timerInfo(): { script: string; remaining: number; period: number | null }[] {
+    return this.timers
+      .filter((timer) => !timer.cancelled)
+      .map((timer) => ({
+        script: timer.owner.script.id,
+        remaining: timer.remaining,
+        period: timer.period,
+      }));
   }
 
   private invoke(record: ScriptRecord, callback: Callback | "timer", fn: () => unknown): unknown {
@@ -179,6 +193,7 @@ export class ScriptRuntime {
       } else return;
       if (type === "angles") value = value.map((part) => part * 0.017453292);
     }
+    if (record.script.target.kind === "recompile") record.recompileWrites++;
     if (this.options.write(record.script.target, value, record.script.id))
       this.writes.set(targetKey(record.script.target), { target: record.script.target, value });
     else if (!this.unsupported.has(record.script.id)) {
@@ -195,6 +210,7 @@ export class ScriptRuntime {
       disabled: new Set(),
       errors: [],
       calls: {},
+      recompileWrites: 0,
     }));
     this.byId = new Map(this.records.map((record) => [record.script.id, record]));
     const start = (this.options.now ?? performance.now.bind(performance))();
@@ -335,6 +351,8 @@ export class ScriptRuntime {
   destroy(): void {
     for (const record of this.records) if (record.state === "inited" && !this.halted) this.call(record, "destroy");
     this.timers = [];
+    // 加载中被销毁时（清空存储重启），还没跑的 init 不再跑：它们会把值写回刚清空的存储
+    this.halted = true;
     this.realm.dispose();
   }
 }

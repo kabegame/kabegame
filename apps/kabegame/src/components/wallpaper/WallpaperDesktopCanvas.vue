@@ -8,13 +8,10 @@ let desktopSizePromise: Promise<{ width: number; height: number }> | null = null
 /**
  * 预览弹窗里的「桌面画布」（纯布局）：按主显示器逻辑分辨率给插槽一块固定尺寸的画布，再整体
  * `scale` 进可用区域并居中。用户看到的就是设到桌面上的样子，页面按桌面尺寸排版，并能交互。
- * 画布本身不拦指针事件；右下角角标显示分辨率。
+ * 画布本身不拦指针事件。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { primaryMonitor } from "@tauri-apps/api/window";
-import { useI18n } from "@kabegame/i18n";
-
-const { t } = useI18n();
 
 function fallbackDesktopSize(): { width: number; height: number } {
   return {
@@ -80,14 +77,6 @@ const canvasStyle = computed(() => {
   } as Record<string, string>;
 });
 
-/** 角标贴在画布（而非容器）右下角，不随画布缩放。 */
-const badgeStyle = computed(() => ({
-  right: `${offset.value.left + 8}px`,
-  bottom: `${offset.value.top + 8}px`,
-}));
-
-const badgeText = computed(() => t("gallery.wpeDesktopPreview", { w: desktop.value.width, h: desktop.value.height }));
-
 function measure() {
   const el = containerRef.value;
   if (!el) return;
@@ -113,12 +102,6 @@ onBeforeUnmount(() => {
   <div ref="containerRef" class="relative w-full h-full overflow-hidden">
     <div class="absolute origin-top-left overflow-hidden bg-black shadow-lg" :style="canvasStyle">
       <slot />
-    </div>
-    <div
-      class="absolute px-2 py-0.5 rounded text-xs text-white/80 bg-black/45 pointer-events-none select-none"
-      :style="badgeStyle"
-    >
-      {{ badgeText }}
     </div>
   </div>
 </template>

@@ -211,8 +211,9 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(tauri("fastFolderSync", "get_fast_folder_sync", "set_fast_folder_sync", "enabled"));
   }
 
-  // 网页壁纸媒体集成：WPE 网页壁纸只支持 Windows 桌面
+  // 网页壁纸媒体集成与当前壁纸暂停：WPE 网页、场景壁纸只支持 Windows 桌面
   if (IS_WINDOWS && !IS_WEB) {
+    entries.push(tauri("wallpaperPaused", "get_wallpaper_paused", "set_wallpaper_paused", "paused"));
     entries.push(tauri("wpeMediaIntegration", "get_wpe_media_integration", "set_wpe_media_integration", "enabled"));
     entries.push(tauri("wpeScenePostprocess", "get_wpe_scene_postprocess", "set_wpe_scene_postprocess", "value"));
   }
@@ -289,6 +290,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
       readonly("wallpaperRotationIntervalMinutes", 30),
       readonly("wallpaperVolume", 0.5),
       readonly("wallpaperVideoPlaybackRate", 1),
+      readonly("wallpaperPaused", false),
       readonly("wallpaperStyle", "fill"),
       readonly("wallpaperRotationTransition", "none"),
       readonly("wallpaperStyleByMode", {} as Record<string, string>),

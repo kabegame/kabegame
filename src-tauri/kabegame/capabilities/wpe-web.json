@@ -1,6 +1,6 @@
 {
   "identifier": "wpe-web-capability",
-  "description": "WPE web wallpaper pages: the file: iframe of WallpaperStage in the main window (gallery preview) and in the wallpaper window (desktop). Pull state, answer pings, listen to four events, subscribe to audio / media data over a channel. Only subframes match: both windows' main frames are app pages, covered by the ACL exemption",
+  "description": "WPE web wallpaper pages: the file: iframe of WallpaperStage in the main window (gallery preview) and in the wallpaper window (desktop). Pull state, answer pings, listen to five events, subscribe to audio / media data over a channel. Only subframes match: both windows' main frames are app pages, covered by the ACL exemption",
   "local": false,
   "windows": ["main", "wallpaper"],
   "frames": "sub",
@@ -14,7 +14,8 @@
         { "event": "wallpaper-ping" },
         { "event": "setting-change" },
         { "event": "image-changed" },
-        { "event": "images-change" }
+        { "event": "images-change" },
+        { "event": "wpe-scene-clear-storage" }
       ]
     },
     "core:event:allow-unlisten",

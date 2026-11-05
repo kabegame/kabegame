@@ -73,7 +73,6 @@
   "wpeKindVideo": "影片",
   "wpeKindWeb": "網頁",
   "wpeKindScene": "場景",
-  "wpeDesktopPreview": "桌面預覽 · {w}×{h}",
   "wpeNoSourceFile": "Wallpaper Engine 桌布沒有可複製或分享的單一檔案",
   "webpageUrlError": {
     "empty": "請輸入網頁位址",
@@ -376,5 +375,10 @@
   "wpePropsModified": "本組有變更",
   "wpePropsEmpty": "這張桌布沒有可調屬性",
   "wpePropsLoadFailed": "載入桌布屬性失敗",
-  "wpePropsSaveFailed": "儲存桌布屬性失敗"
+  "wpePropsSaveFailed": "儲存桌布屬性失敗",
+  "wpePause": "暫停",
+  "wpeClearStorage": "清空腳本儲存空間",
+  "wpeClearStorageConfirm": "腳本儲存的資料（如記住的位置、計數）會被刪除，腳本隨後重新啟動。確定要清空嗎？",
+  "wpeClearStorageDone": "已清空腳本儲存空間",
+  "wpeClearStorageFailed": "清空腳本儲存空間失敗"
 }

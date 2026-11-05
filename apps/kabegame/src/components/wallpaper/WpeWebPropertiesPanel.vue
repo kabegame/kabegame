@@ -16,6 +16,23 @@
 
     <!-- 外框 / 标题栏由 CollapsibleDrawerPanel 提供；视觉对齐 ImageNativeMetadataPanel：分组卡片 + 卡片内无边框条目 -->
     <div class="kb-selectable flex min-h-0 flex-auto flex-col gap-3 overflow-y-auto px-4 py-3.5 [scrollbar-width:none]">
+      <!-- 控制卡片：只在有实时实例时显示，作者属性为空时也在 -->
+      <section v-if="paused !== undefined" :class="CARD_CLASS" data-testid="wpe-controls">
+        <div class="flex flex-col p-1.5">
+          <div class="flex items-center gap-2 rounded-lg px-2.5 py-2">
+            <span class="min-w-0 flex-1 text-[13px] leading-[1.5] text-[var(--anime-text-primary)]">
+              {{ t("gallery.wpePause") }}
+            </span>
+            <el-switch :model-value="paused" @update:model-value="emit('update:paused', $event === true)" />
+          </div>
+          <div v-if="isScene" class="px-2.5 py-2">
+            <el-button size="small" data-testid="wpe-clear-storage" @click="clearStorage">
+              {{ t("gallery.wpeClearStorage") }}
+            </el-button>
+          </div>
+        </div>
+      </section>
+
       <div
         v-if="loading && !view"
         class="flex items-center gap-2.5 px-0.5 py-1 text-[13px] text-[var(--anime-text-secondary)]"
@@ -45,11 +62,7 @@
         {{ t("gallery.wpePropsEmpty") }}
       </div>
 
-      <section
-        v-for="section in sections"
-        :key="section.key"
-        class="flex-none overflow-hidden rounded-xl border border-solid border-[color-mix(in_srgb,var(--anime-primary)_28%,transparent)] bg-[color-mix(in_srgb,var(--anime-bg-card)_50%,transparent)]"
-      >
+      <section v-for="section in sections" :key="section.key" :class="CARD_CLASS">
         <button
           v-if="section.group"
           type="button"
@@ -126,7 +139,9 @@
 <script setup lang="ts">
 import { computed, reactive, toRef, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
+import { ElMessage, ElMessageBox } from "@kabegame/element-plus";
 import { ArrowRight, Loading, RefreshLeft } from "@kabegame/element-plus-icons";
+import { invoke } from "@/api";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { isWpeSceneType } from "@/utils/mediaMime";
@@ -137,15 +152,28 @@ import WpePropertyField from "./WpePropertyField.vue";
  * 网页与场景壁纸共用的属性面板。`imageType` 传图片的 `type`：场景壁纸（`x-wpe/scene`）不显示 `file` / `directory`
  * 属性——场景渲染器不读用户选的文件，这两类的放行也只对网页壁纸生效（网页壁纸目录索引只收 `x-wpe/web` 行）。
  * 本机语料里场景没有这两类；场景特有的 `scenetexture` / `replacetexture` 后端解析时已跳过，面板看不到。
+ *
+ * 面板是预览详情与设置页共用的，只管显示：`paused` 由父组件传入，预览控制预览这一份，设置页控制桌面。
+ * undefined 表示没有实时实例，不显示暂停与清空脚本存储；清空只对场景提供（网页壁纸的 `localStorage` 没有前缀，
+ * 所有网页壁纸共用一份，没法只清一张）。
  */
 const props = withDefaults(
-  defineProps<{ imageId: string; imageType?: string | null; collapsible?: boolean; fillWhenExpanded?: boolean }>(),
+  defineProps<{
+    imageId: string;
+    imageType?: string | null;
+    collapsible?: boolean;
+    fillWhenExpanded?: boolean;
+    paused?: boolean;
+  }>(),
   {
     imageType: null,
     collapsible: true,
     fillWhenExpanded: true,
+    // 布尔 prop 缺省时 Vue 会转成 false，要写明 undefined 才能表示「没有实时实例」
+    paused: undefined,
   },
 );
+const emit = defineEmits<{ "update:paused": [value: boolean] }>();
 const { t } = useI18n();
 const { view, loading, error, valueOf, isModified, set, reset, resetAll, reload } = useWpeWebProperties(
   toRef(props, "imageId"),
@@ -170,6 +198,10 @@ type Section = {
   /** 段内改过的字段数：组折叠时用小圆点提示 */
   modifiedCount: number;
 };
+
+/** 分组卡片与控制卡片共用的外框 */
+const CARD_CLASS =
+  "flex-none overflow-hidden rounded-xl border border-solid border-[color-mix(in_srgb,var(--anime-primary)_28%,transparent)] bg-[color-mix(in_srgb,var(--anime-bg-card)_50%,transparent)]";
 
 const isScene = computed(() => isWpeSceneType(props.imageType ?? undefined));
 
@@ -213,6 +245,21 @@ function isInline(item: WpeWebPropertyItem): boolean {
 
 function toggleGroup(key: string) {
   opened[key] = !opened[key];
+}
+
+/** 存储在宿主的 `file:` 来源里，应用页碰不到：由后端广播，同一张图的全部宿主收到后清空并重启脚本。 */
+async function clearStorage() {
+  try {
+    await ElMessageBox.confirm(t("gallery.wpeClearStorageConfirm"), t("gallery.wpeClearStorage"), { type: "warning" });
+  } catch {
+    return;
+  }
+  try {
+    await invoke("wpe_scene_clear_storage", { imageId: props.imageId });
+    ElMessage.success(t("gallery.wpeClearStorageDone"));
+  } catch (failure) {
+    ElMessage.error(`${t("gallery.wpeClearStorageFailed")}: ${String(failure)}`);
+  }
 }
 </script>
 

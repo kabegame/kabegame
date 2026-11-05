@@ -1,18 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SceneBundle } from "./compile/bundle";
+import type { ScriptRealm } from "./script/runtime";
 
-// 宿主依赖 IPC、Worker 编译与 WebGPU：都换成替身，只核对加载状态机（P3a 退回路径）
+const subscribeAudio = vi.fn<(args: Record<string, unknown>) => Promise<void>>();
+const listeners = new Map<string, (event: { payload: unknown }) => void>();
+
+// 宿主依赖 IPC、Worker 编译与 WebGPU：都换成替身，只核对加载状态机（P3a 退回路径）与音频订阅（3c 点 0）
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (command: string) => {
+  Channel: class {
+    onmessage: (message: unknown) => void = () => {};
+  },
+  invoke: vi.fn(async (command: string, args: Record<string, unknown>) => {
     if (command === "wpe_scene_target") return { path: "P:/p", sceneAssets: [] };
     if (command === "get_wpe_scene_postprocess") return "disabled";
+    if (command === "wpe_web_media_subscribe") return subscribeAudio(args);
     return undefined;
   }),
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return () => {};
+  }),
+}));
 
 const compile = vi.fn<(input: { userProperties: Record<string, unknown> }) => Promise<SceneBundle>>();
 vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => compile(input) }));
+
+const createRealm = vi.fn<() => Promise<ScriptRealm>>();
+vi.mock("./script/realm", () => ({ createIframeRealm: () => createRealm(), getJsModuleIndex: () => ({}) }));
 
 vi.mock("./render", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./render")>();
@@ -23,12 +39,14 @@ vi.mock("./render", async (importOriginal) => {
     load: async () => {},
     setPaused: () => {},
     applyBindings: () => true,
+    redraw: () => {},
     destroy: () => {},
   };
   return { ...actual, SceneRenderer: { create: async () => renderer } };
 });
 
 const { SceneHost } = await import("./host");
+const { Channel } = await import("@tauri-apps/api/core");
 
 /** 打开 fx（绑在一个不支持的 effect 的可见性上）时退回预览图，关掉就能渲染。 */
 function bundleFor(properties: Record<string, unknown>): SceneBundle {
@@ -113,5 +131,190 @@ describe("SceneHost：退回预览图后的属性变化", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
     host.dispose();
+  });
+});
+
+type AudioBuffers = Record<"left" | "right" | "average", Float32Array>;
+type Register = (resolution: number) => AudioBuffers;
+
+/** 替身 realm：求值模块时跑 `body`（相当于脚本的模块顶层），真实的 ScriptApi 与 ScriptRuntime 照常工作。 */
+class FakeRealm implements ScriptRealm {
+  global: Record<string, unknown> = { Object, Array, JSON, Float32Array };
+  prototypes = { Vec2: {}, Vec3: {}, Vec4: {}, Mat3: {}, Mat4: {} };
+  internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
+  constructor(private readonly body: (register: Register) => void) {}
+  async importModule(): Promise<Record<string, unknown>> {
+    this.body((this.global.engine as { registerAudioBuffers: Register }).registerAudioBuffers);
+    return {};
+  }
+  dispose() {}
+}
+
+/** 带一段脚本的场景；`fx` 沿用上面的重编译绑定，用来触发重编译。 */
+function scriptedBundle(): SceneBundle {
+  return {
+    ...bundleFor({}),
+    general: { postprocess: { level: "disabled" }, bloom: { tint: [1, 1, 1] } },
+    scripts: {
+      list: [
+        {
+          id: "audio",
+          source: "",
+          target: { kind: "layer", object: 0, field: "alpha" },
+          valueType: "float",
+          initial: 1,
+          owner: { kind: "general" },
+          layer: null,
+          scriptProperties: null,
+          imports: [],
+          errors: [],
+        },
+      ],
+    },
+  } as unknown as SceneBundle;
+}
+
+/** 加载一张带脚本的场景并等到 ready；`body` 是脚本的模块顶层。 */
+async function loadScene(body: (register: Register) => void) {
+  createRealm.mockImplementation(async () => new FakeRealm(body));
+  compile.mockImplementation(async () => scriptedBundle());
+  const report = reporter();
+  const host = new SceneHost({ width: 800, height: 600 } as HTMLCanvasElement, { imageId: "7", report });
+  host.applyUserProperties(fx(false));
+  await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+  return { host, report };
+}
+
+/** 宿主第一次订阅时交给后端的 Channel。 */
+function subscribedChannel(): { onmessage(message: unknown): void } {
+  return subscribeAudio.mock.calls[0][0].channel as { onmessage(message: unknown): void };
+}
+
+/** 左声道全 0.5、右声道全 0.25，任何分辨率合并出来都一样。 */
+const audioFrame = [...Array<number>(64).fill(0.5), ...Array<number>(64).fill(0.25)];
+const allZero = (buffers: AudioBuffers) =>
+  [buffers.left, buffers.right, buffers.average].every((array) => array.every((value) => value === 0));
+
+describe("SceneHost：脚本音频订阅", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    vi.stubGlobal("document", {});
+    compile.mockReset();
+    createRealm.mockReset();
+    subscribeAudio.mockReset();
+    subscribeAudio.mockResolvedValue(undefined);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("脚本不注册音频缓冲就不订阅", async () => {
+    const { host } = await loadScene(() => {});
+    expect(subscribeAudio).not.toHaveBeenCalled();
+    expect(host.audio()).toEqual({ subscribed: false, error: null, frames: 0, resolutions: [], peak: 0 });
+    host.dispose();
+  });
+
+  it("第一次注册才订阅，参数带 kind / imageId；再注册不重复订阅", async () => {
+    const calls: number[] = [];
+    const { host } = await loadScene((register) => {
+      calls.push(subscribeAudio.mock.calls.length);
+      register(16);
+      calls.push(subscribeAudio.mock.calls.length);
+      register(32);
+      register(16);
+    });
+    expect(calls).toEqual([0, 1]);
+    expect(subscribeAudio).toHaveBeenCalledTimes(1);
+    expect(subscribeAudio).toHaveBeenCalledWith({ kind: "audio", channel: expect.any(Channel), imageId: "7" });
+    expect(host.audio()).toMatchObject({ subscribed: true, resolutions: [16, 32] });
+    host.dispose();
+  });
+
+  it("Channel 的 audio 消息写进缓冲，其它类型的消息忽略", async () => {
+    const registered: AudioBuffers[] = [];
+    const { host } = await loadScene((register) => registered.push(register(16), register(64)));
+    const channel = subscribedChannel();
+
+    channel.onmessage({ type: "status", enabled: true });
+    channel.onmessage({ type: "timeline", position: 1, duration: 2, data: audioFrame });
+    channel.onmessage({ type: "audio" });
+    expect(registered.every(allZero)).toBe(true);
+    expect(host.audio()).toMatchObject({ frames: 0, peak: 0 });
+
+    channel.onmessage({ type: "audio", data: audioFrame });
+    for (const buffers of registered) {
+      expect(buffers.left.every((value) => value === 0.5)).toBe(true);
+      expect(buffers.right.every((value) => value === 0.25)).toBe(true);
+      expect(buffers.average.every((value) => value === 0.375)).toBe(true);
+    }
+    expect(host.audio()).toMatchObject({ frames: 1, peak: 0.5 });
+    host.dispose();
+  });
+
+  it("订阅被拒时不报错，缓冲保持全零", async () => {
+    subscribeAudio.mockRejectedValue("this wallpaper does not process audio");
+    const registered: AudioBuffers[] = [];
+    const { host, report } = await loadScene((register) => registered.push(register(32)));
+    await vi.waitFor(() => expect(report.debug).toHaveBeenCalledWith(expect.stringContaining("音频订阅被拒")));
+    expect(report.warn).not.toHaveBeenCalled();
+    expect(report.error).not.toHaveBeenCalled();
+    expect(report.fallback).not.toHaveBeenCalled();
+    expect(allZero(registered[0])).toBe(true);
+    expect(host.audio()).toMatchObject({
+      subscribed: false,
+      error: "this wallpaper does not process audio",
+      frames: 0,
+      resolutions: [32],
+    });
+    host.dispose();
+  });
+
+  it("没有图片 id 时不订阅", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: null, report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.fallback).toHaveBeenCalledWith(["host:missing-image-id"]));
+    expect(createRealm).not.toHaveBeenCalled();
+    // 加载路径走不到脚本；订阅函数自己的判断也要挡住
+    (host as unknown as { subscribeAudio(): void }).subscribeAudio();
+    expect(subscribeAudio).not.toHaveBeenCalled();
+    expect(host.audio().subscribed).toBe(false);
+    host.dispose();
+  });
+
+  it("重编译保留 realm 与缓冲，不重订，新帧写进原来的数组", async () => {
+    const registered: AudioBuffers[] = [];
+    const { host, report } = await loadScene((register) => registered.push(register(16)));
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(report.debug).toHaveBeenCalledWith(expect.stringContaining("重新加载")));
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(createRealm).toHaveBeenCalledTimes(1);
+    expect(subscribeAudio).toHaveBeenCalledTimes(1);
+    subscribedChannel().onmessage({ type: "audio", data: audioFrame });
+    expect(registered).toHaveLength(1);
+    expect(registered[0].left[0]).toBe(0.5);
+    host.dispose();
+  });
+
+  it("清空存储重启脚本：音频订阅保留，新脚本的缓冲继续收到数据", async () => {
+    const registered: AudioBuffers[] = [];
+    const { host } = await loadScene((register) => registered.push(register(16)));
+    const channel = subscribedChannel();
+    listeners.get("wpe-scene-clear-storage")!({ payload: { imageId: "7" } });
+    await vi.waitFor(() => expect(registered).toHaveLength(2));
+    expect(subscribeAudio).toHaveBeenCalledTimes(1);
+    expect(host.audio()).toMatchObject({ subscribed: true, resolutions: [16] });
+    channel.onmessage({ type: "audio", data: audioFrame });
+    expect(registered[1].left[0]).toBe(0.5);
+    // 旧脚本持有的缓冲不再更新
+    expect(allZero(registered[0])).toBe(true);
+    host.dispose();
+  });
+
+  it("宿主销毁后到达的帧不再写缓冲", async () => {
+    const registered: AudioBuffers[] = [];
+    const { host } = await loadScene((register) => registered.push(register(16)));
+    host.dispose();
+    subscribedChannel().onmessage({ type: "audio", data: audioFrame });
+    expect(allZero(registered[0])).toBe(true);
   });
 });

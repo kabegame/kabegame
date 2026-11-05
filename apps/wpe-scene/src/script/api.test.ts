@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import type { SceneScript } from "../compile/scripts";
 import { SceneState } from "../render/state";
@@ -28,7 +28,7 @@ class Vec4 {
 }
 
 class FakeRealm implements ScriptRealm {
-  global: Record<string, unknown> = { Object, Array };
+  global: Record<string, unknown> = { Object, Array, JSON, Float32Array };
   prototypes = { Vec2: Vec2.prototype, Vec3: Vec3.prototype, Vec4: Vec4.prototype, Mat3: {}, Mat4: {} };
   internal = {
     updateScriptProperties() {},
@@ -114,7 +114,7 @@ function script(id: string, owner: SceneScript["owner"], layer: number | null): 
   };
 }
 
-function setup() {
+function setup(audioRegistered?: () => void) {
   const realm = new FakeRealm();
   let bundle = scene();
   let state = SceneState.fromBundle(bundle);
@@ -136,6 +136,7 @@ function setup() {
       state.write({ property: "test", target }, Array.isArray(value) ? value.join(" ") : value);
       return true;
     },
+    audioRegistered,
   });
   return {
     realm,
@@ -200,11 +201,9 @@ describe("SceneScript API（FakeRealm）", () => {
     );
     expect(engine.userProperties).not.toBe(first);
     expect(engine.userProperties).toEqual({ tint: new Vec3(0, 1, 0), speed: 2 });
-    for (const name of ["registerAudioBuffers", "registerAsset", "openUserShortcut", "requestFeatures"])
+    for (const name of ["registerAsset", "openUserShortcut", "requestFeatures"])
       expect(() => (engine[name] as () => void)()).toThrow(TypeError);
-    expect(engine.AUDIO_RESOLUTION_16).toBeUndefined();
     expect(h.realm.global.input).toBeUndefined();
-    expect(h.realm.global.localStorage).toBeUndefined();
   });
 
   it("图层查询、对象身份、向量复制、角度和只读 size", () => {
@@ -350,6 +349,8 @@ describe("SceneScript API（FakeRealm）", () => {
     h.api.forgetRecompile("objects/0/effects/0/visible");
     effect.visible = false;
     expect(h.recompiles).toHaveLength(2);
+    // 探针统计写到重编译目标的次数：每一次赋值都算，被去重的也算（哪段每帧都在写）
+    expect(h.api.recompileWrites.get("effect")).toBe(3);
     h.api.enterScript(script("general", { kind: "general" }, null));
     expect(h.realm.global.thisLayer).toBeNull();
     const general = h.realm.global.thisObject as Record<string, unknown>;
@@ -359,5 +360,85 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(h.state.bloom.tint).toEqual([0.2, 0.3, 0.4]);
     general.clearcolor = new Vec3(1, 0, 0);
     expect(h.recompiles.at(-1)).toEqual({ path: "general/clearcolor", value: [1, 0, 0] });
+  });
+
+  it("registerAudioBuffers 只在模块求值期间可调用，同一分辨率返回同一组全零 realm 缓冲", () => {
+    const h = setup();
+    // 换成 realm 自己的构造器，验证缓冲是用 realm 的 Float32Array 造的
+    class RealmFloat32Array extends Float32Array {}
+    h.realm.global.Float32Array = RealmFloat32Array;
+    const engine = h.api.engine;
+    const register = engine.registerAudioBuffers as (resolution: unknown) => Record<string, Float32Array>;
+    expect(engine.AUDIO_RESOLUTION_16).toBe(16);
+    expect(engine.AUDIO_RESOLUTION_32).toBe(32);
+    expect(engine.AUDIO_RESOLUTION_64).toBe(64);
+    // init / update 等回调里调用抛错（报告 D：只能在模块顶层调）
+    expect(() => register(32)).toThrow("只能在模块求值期间调用");
+    h.api.setModuleEvaluating(true);
+    for (const size of [16, 32, 64]) {
+      const buffer = register(engine[`AUDIO_RESOLUTION_${size}`]);
+      for (const name of ["left", "right", "average"]) {
+        expect(buffer[name]).toBeInstanceOf(RealmFloat32Array);
+        expect(buffer[name].length).toBe(size);
+        expect([...buffer[name]].every((value) => value === 0)).toBe(true);
+      }
+      expect(register(size)).toBe(buffer);
+    }
+    expect(() => register(8)).toThrow(TypeError);
+    expect(() => register("32")).toThrow(TypeError);
+    expect(() => register(32.5)).toThrow(TypeError);
+    h.api.setModuleEvaluating(false);
+  });
+
+  /** 左声道全 0.5、右声道全 0.25，任何分辨率合并出来都一样。 */
+  const flatFrame = () => [...Array<number>(64).fill(0.5), ...Array<number>(64).fill(0.25)];
+
+  it("applyAudioFrame 写进脚本持有的同一组数组，全部已注册分辨率都更新", () => {
+    const h = setup();
+    const register = h.api.engine.registerAudioBuffers as (resolution: number) => Record<string, Float32Array>;
+    h.api.setModuleEvaluating(true);
+    const low = register(16);
+    const high = register(64);
+    h.api.setModuleEvaluating(false);
+    // 脚本持有的是数组本身：先取出来，写入之后看这些引用里的值
+    const held = [low, high].map(({ left, right, average }) => ({ left, right, average }));
+    h.api.applyAudioFrame(flatFrame());
+    for (const { left, right, average } of held) {
+      expect([...left].every((value) => value === 0.5)).toBe(true);
+      expect([...right].every((value) => value === 0.25)).toBe(true);
+      expect([...average].every((value) => value === 0.375)).toBe(true);
+    }
+    expect(h.api.audioResolutions).toEqual([16, 64]);
+    // 长度不对的帧不写入
+    h.api.applyAudioFrame([1, 2, 3]);
+    expect(held[0].left[0]).toBe(0.5);
+  });
+
+  it("还没注册就来帧什么都不做；脚本改写缓冲对象的字段不影响写入", () => {
+    const h = setup();
+    h.api.applyAudioFrame(flatFrame());
+    expect(h.api.audioResolutions).toEqual([]);
+    const register = h.api.engine.registerAudioBuffers as (resolution: number) => Record<string, unknown>;
+    h.api.setModuleEvaluating(true);
+    const buffer = register(16);
+    h.api.setModuleEvaluating(false);
+    const { left } = buffer;
+    buffer.left = "脚本写的";
+    h.api.applyAudioFrame(flatFrame());
+    expect(buffer.left).toBe("脚本写的");
+    expect((left as Float32Array)[0]).toBe(0.5);
+  });
+
+  it("registerAudioBuffers 成功才通知宿主，不成功的调用不通知", () => {
+    const registered = vi.fn();
+    const h = setup(registered);
+    const register = h.api.engine.registerAudioBuffers as (resolution: unknown) => unknown;
+    expect(() => register(16)).toThrow("只能在模块求值期间调用");
+    h.api.setModuleEvaluating(true);
+    expect(() => register(8)).toThrow(TypeError);
+    expect(registered).not.toHaveBeenCalled();
+    register(16);
+    expect(registered).toHaveBeenCalledTimes(1);
+    h.api.setModuleEvaluating(false);
   });
 });

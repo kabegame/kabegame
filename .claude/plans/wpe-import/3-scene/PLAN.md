@@ -691,8 +691,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **新增** 视频纹理：`.tex` 的 flags 含 Video（32）时，唯一 mip 是完整 MP4，起点按容器版本解析。
   - 读取：按区间读出 MP4，做成 Blob，交给静音循环的 `<video>`，每帧 `importExternalTexture`；解码交给浏览器。
   - 单段最大 707 MB：Blob 的内存占用与 4K60 解码开销要实测。不行再看 MSE 分段喂入，或由 Rust 把区间解到缓存文件。
-- **新增** 音频：`g_AudioSpectrum*` uniform 与脚本 `engine.registerAudioBuffers`，接 Phase 8 的 `WpeMediaHub`。
-  现在订阅方只有 iframe，要加一个按 label 的主 frame 订阅方（原 P7 的工作提前到这里）。这类 uniform 数组在翻译结果里是补齐过的 `vec4` 数组（见 P1-0）。
+- **新增** 音频：`g_AudioSpectrum*` uniform。脚本 `engine.registerAudioBuffers` 已在 P3c 点 0 接上 Phase 8 的 `WpeMediaHub`；场景宿主本身是子 frame，不需要主 frame 订阅方，uniform 直接用宿主收到的同一帧。这类 uniform 数组在翻译结果里是补齐过的 `vec4` 数组（见 P1-0）。
 - **新增** 脚本 `thisScene.enumerateLayers`、`thisLayer.text / alpha`；rope renderer（`genericropeparticle`）与跟随指针的控制点；
   `shine`（5 pass、2 fbo，同 P6 godrays 形态）、`blurprecise`、`opacity`；项目自带的工坊 effect（`effects/workshop/<id>/…`，资源层已覆盖）。
 - **验收**：两张画面与预览图一致；视频流畅循环；音频条随系统音频跳动；调位置的用户属性生效。

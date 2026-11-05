@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SceneScripts } from "../compile/scripts";
-import { SCRIPT_HIDDEN_GLOBALS } from "./environment";
+import { createWpeLocalStorage } from "./api";
+import { alignScriptEnvironment } from "./environment";
 import { buildScriptImportMap, JsModuleIndexImpl } from "./realm";
+import { createMemoryStorage, SCENE_STORAGE_PREFIX } from "./storage";
 
 function scripts(...imports: string[][]): SceneScripts {
   return { list: imports.map((names) => ({ imports: names })) } as SceneScripts;
@@ -49,36 +51,61 @@ describe("JsModuleIndex", () => {
   });
 });
 
-it("遮蔽表覆盖计划中的全局及实测可删除的 frame 引用", () => {
-  expect(SCRIPT_HIDDEN_GLOBALS).toEqual(
-    expect.arrayContaining([
-      "fetch",
-      "XMLHttpRequest",
-      "WebSocket",
-      "EventSource",
-      "setTimeout",
-      "setInterval",
-      "clearTimeout",
-      "clearInterval",
-      "requestAnimationFrame",
-      "cancelAnimationFrame",
-      "requestIdleCallback",
-      "Worker",
-      "SharedWorker",
-      "localStorage",
-      "sessionStorage",
-      "indexedDB",
-      "caches",
-      "Intl",
-      "WebAssembly",
-      "__TAURI_INTERNALS__",
-      "window",
-      "document",
-      "top",
-      "location",
-      "parent",
-      "self",
-      "frames",
-    ]),
-  );
+describe("脚本环境改写（3c 点 0：不再遮蔽）", () => {
+  function child(): Window {
+    return {
+      fetch: () => Promise.resolve(),
+      document: {},
+      setTimeout,
+      localStorage: "native",
+    } as unknown as Window;
+  }
+
+  it("console 只有 log / error，localStorage 换成 WPE 对象，其余浏览器全局保留", () => {
+    const frame = child();
+    const output = { log: vi.fn(), error: vi.fn() };
+    const wpe = { get() {}, set() {}, delete() {}, clear() {} };
+    alignScriptEnvironment(frame, output, wpe);
+    const global = frame as unknown as Record<string, unknown>;
+    expect(global.console).toEqual({ log: output.log, error: output.error });
+    expect(Object.keys(global.console as object).sort()).toEqual(["error", "log"]);
+    expect(global.localStorage).toBe(wpe);
+    // 浏览器全局不再遮蔽
+    expect(typeof global.fetch).toBe("function");
+    expect(typeof global.setTimeout).toBe("function");
+    expect(global.document).toEqual({});
+  });
+
+  it("WPE localStorage 的形状：四个方法与两个位置常量，没有 remove", () => {
+    const backend = createMemoryStorage();
+    const object = createWpeLocalStorage({
+      global: { Object, JSON } as unknown as Record<string, unknown>,
+      backend,
+      sceneKey: "7",
+      isEvaluating: () => false,
+    }) as Record<string, unknown>;
+    expect(Object.keys(object).sort()).toEqual(["LOCATION_GLOBAL", "LOCATION_SCREEN", "clear", "delete", "get", "set"]);
+    expect("remove" in object).toBe(false);
+    expect(object.LOCATION_GLOBAL).toBe(0);
+    expect(object.LOCATION_SCREEN).toBe(1);
+    (object.set as (key: string, value: unknown) => void)("k", [1, 2]);
+    expect((object.get as (key: string) => unknown)("k")).toEqual([1, 2]);
+  });
+
+  it("脚本读不到宿主自己的 localStorage 键", () => {
+    const backend = createMemoryStorage();
+    backend.setItem("kabegame-dev-scene-force-render", "1");
+    const object = createWpeLocalStorage({
+      global: { Object, JSON } as unknown as Record<string, unknown>,
+      backend,
+      sceneKey: "7",
+      isEvaluating: () => false,
+    }) as Record<string, unknown>;
+    expect((object.get as (key: string) => unknown)("kabegame-dev-scene-force-render")).toBeUndefined();
+    (object.clear as () => void)();
+    expect(backend.getItem("kabegame-dev-scene-force-render")).toBe("1");
+    expect(backend.length).toBe(1);
+    expect(backend.key(0)).toBe("kabegame-dev-scene-force-render");
+    expect(SCENE_STORAGE_PREFIX).toBe("kabegame:wpe-scene:ls:");
+  });
 });

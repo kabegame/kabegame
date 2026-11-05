@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { describeApply, mergeProperties, pendingChanges, planApply, type UserProperty } from "./compile/bindings";
 import type { SceneBundle } from "./compile/bundle";
@@ -12,9 +12,10 @@ import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import { SceneState } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
-import { ScriptApi } from "./script/api";
+import { ScriptApi, createWpeLocalStorage } from "./script/api";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, type ScriptTarget } from "./script/runtime";
+import { browserStorage, clearSceneStorage } from "./script/storage";
 
 interface SceneTarget {
   path: string;
@@ -85,34 +86,50 @@ export class SceneHost {
   private reloading = false;
   private scriptUnavailable = false;
   private scriptNeedsFullApply = true;
+  private runtimeTask: Promise<void> | null = null;
   private readonly consoleErrors = new Map<string, { minute: number; count: number; skipped: number }>();
+  /** 音频只订一次（被拒也不重试）；后面三项只给 dev 探针读。 */
+  private audioSubscribed = false;
+  private audioError: string | null = null;
+  private audioFrames = 0;
+  private lastAudioFrame: number[] | null = null;
   /** dev 探针计数：就地应用次数与重编译记录。 */
   readonly stats: SceneHostStats = { applied: 0, recompiled: [] };
   private receivedProperties = false;
   private readonly reader = new FetchSceneReader();
   private readonly textureCache = new TextureDecodeCache(this.reader);
   private targetTask: Promise<SceneTarget> | null = null;
-  private unlisten: UnlistenFn | null = null;
+  private readonly unlisteners: UnlistenFn[] = [];
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly options: { imageId: string | null; report: SceneReporter },
   ) {
-    void listen<Record<string, unknown>>("setting-change", (event) => {
+    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
-      const raw = event.payload;
       const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
       if (!delta || !("wpeScenePostprocess" in delta)) return;
       const next = asPostprocess(delta.wpeScenePostprocess);
       if (this.postprocess !== null && next === this.postprocess) return;
+      // 设置变化引起的重载也计入探针的 recompiled（原因记 settings）
+      this.stats.recompiled.push({ reason: "settings", keys: ["wpeScenePostprocess"] });
       options.report.debug(`场景壁纸 ${options.imageId} 后处理设置 ${this.postprocess} → ${next}，重新判定`);
       void this.reload();
-    })
+    });
+    // 应用页与这份存储不同来源，由后端广播：同一张图的全部宿主（预览、桌面）都停脚本、删前缀、重建
+    this.listenEvent<{ imageId?: string }>("wpe-scene-clear-storage", "清空脚本存储", (payload) => {
+      const imageId = options.imageId;
+      if (!this.disposed && imageId && payload?.imageId === imageId) this.restartScriptsWithClearedStorage(imageId);
+    });
+  }
+
+  private listenEvent<T>(name: string, label: string, handler: (payload: T) => void): void {
+    void listen<T>(name, (event) => handler(event.payload))
       .then((unlisten) => {
         if (this.disposed) unlisten();
-        else this.unlisten = unlisten;
+        else this.unlisteners.push(unlisten);
       })
-      .catch((error) => options.report.warn("监听场景后处理设置失败：", error));
+      .catch((error) => this.options.report.warn(`监听${label}失败：`, error));
   }
 
   /** 垫片的属性入口：运行时与首次加载走同一个应用函数（加载传全集、运行时传增量，I7 第 1 条）。 */
@@ -175,6 +192,30 @@ export class SceneHost {
       void this.reload();
       return;
     }
+    // 暂停时循环不跑，补画一帧。放在脚本的属性回调之后：回调的写入也要进这一帧
+    if (this.paused) this.renderer?.redraw();
+  }
+
+  /**
+   * 「清空脚本存储」：停脚本、删本场景的存储、重建脚本环境（`init` 重跑）。不重启的话，内存里的值很快又会被写回去。
+   * 音频订阅保留（`audioSubscribed` 不复位）：Channel 的消息总是写进当时的 `scriptApi`，新脚本注册的缓冲照样收到。
+   */
+  private restartScriptsWithClearedStorage(imageId: string): void {
+    const hadRuntime = this.runtime !== null;
+    // 先停脚本再删：destroy 回调可能还会写
+    this.runtime?.destroy();
+    this.runtime = null;
+    this.scriptApi = null;
+    // 脚本写过的重编译目标一并放弃；用户属性在重建后重新全量交给新脚本
+    this.scriptOverrides.clear();
+    this.scriptNeedsFullApply = true;
+    const backend = browserStorage();
+    if (backend) clearSceneStorage(backend, imageId);
+    // 退回预览图时脚本不跑，只删存储；下次能加载时自然重建
+    if (!hadRuntime || this.state === "fallback") return;
+    this.stats.recompiled.push({ reason: "clear-storage", keys: [] });
+    this.options.report.debug(`场景壁纸 ${imageId} 已清空脚本存储，重启脚本`);
+    void this.reload();
   }
 
   private targetPath(target: BindingTarget): string {
@@ -273,16 +314,60 @@ export class SceneHost {
     this.consoleErrors.set(id, item);
   }
 
+  /**
+   * 脚本第一次注册音频缓冲时向 `WpeMediaHub` 订阅，Hub 有订阅才开回环采集。订阅归属宿主 frame，frame 销毁时由
+   * Phase 8 的 `SubframeDestroyed` 释放，没有退订命令；重编译保留 realm 与缓冲，也不用重订。
+   */
+  private subscribeAudio(): void {
+    const imageId = this.options.imageId;
+    if (this.audioSubscribed || !imageId) return;
+    this.audioSubscribed = true;
+    const channel = new Channel<{ type: string; data?: number[] }>();
+    channel.onmessage = (message) => {
+      if (message.type !== "audio" || !message.data) return;
+      this.audioFrames++;
+      this.lastAudioFrame = message.data;
+      this.scriptApi?.applyAudioFrame(message.data);
+    };
+    // 没声明 supportsaudioprocessing 或非 Windows 时被拒：缓冲保持全零，不报错（同 Phase 8 垫片），只记 debug
+    invoke("wpe_web_media_subscribe", { kind: "audio", channel, imageId }).catch((error: unknown) => {
+      this.audioError = String(error);
+      this.options.report.debug(`场景壁纸 ${imageId} 音频订阅被拒：${this.audioError}`);
+    });
+  }
+
+  /**
+   * 建脚本环境。并发的重载要排队：不排队会建出第二个 realm、`init` 跑两次，`localStorage` 的写入也跟着多一次。
+   * 等完再判断：在途的那次可能已被「清空脚本存储」作废，这时要重建。
+   */
   private async ensureRuntime(bundle: SceneBundle, sceneAssets: string[]): Promise<void> {
+    while (this.runtimeTask) await this.runtimeTask;
     if (this.runtime || this.scriptUnavailable || !bundle.scripts.list.length) return;
+    this.runtimeTask = this.startRuntime(bundle, sceneAssets).finally(() => {
+      this.runtimeTask = null;
+    });
+    await this.runtimeTask;
+  }
+
+  private async startRuntime(bundle: SceneBundle, sceneAssets: string[]): Promise<void> {
     try {
+      // 场景键取地址参数 kbScene（3c 已定 7）：没有图片 id 时只存在内存里，不读写持久存储。
+      const imageId = this.options.imageId;
+      const backend = imageId ? browserStorage() : null;
       const realm = await createIframeRealm({
         document,
         scripts: bundle.scripts,
         sceneAssets,
         modules: getJsModuleIndex(sceneAssets),
         console: { log: (message) => console.log(message), error: (message) => this.scriptConsoleError(message) },
-        debug: (message) => this.options.report.debug(message),
+        localStorage: (global) =>
+          createWpeLocalStorage({
+            global,
+            backend,
+            sceneKey: imageId ?? "memory",
+            isEvaluating: () => this.scriptApi?.moduleEvaluating ?? false,
+            debug: (message) => this.options.report.debug(message),
+          }),
       });
       if (this.disposed) {
         realm.dispose();
@@ -301,6 +386,7 @@ export class SceneHost {
           return applied;
         },
         read: (target) => this.readScript(target),
+        audioRegistered: () => this.subscribeAudio(),
       });
       const runtime = new ScriptRuntime(realm, {
         report: this.options.report,
@@ -325,8 +411,37 @@ export class SceneHost {
     return { bundle: this.bundle, renderer: this.renderer };
   }
 
+  /** dev 探针：每段脚本的诊断；`recompileWrites` 合并回调返回值与 API 直接写入两路。 */
   get scriptDiagnostics(): unknown[] {
-    return this.runtime?.diagnostics ?? [];
+    const direct = this.scriptApi?.recompileWrites;
+    return (this.runtime?.diagnostics ?? []).map((item) => {
+      const record = item as { id: string; recompileWrites?: number };
+      return { ...record, recompileWrites: (record.recompileWrites ?? 0) + (direct?.get(record.id) ?? 0) };
+    });
+  }
+
+  /** dev 探针：运行秒数、本帧 dt 与脚本计时器（所属段、剩余秒数、周期）。 */
+  clock(): {
+    runtimeSeconds: number;
+    frameSeconds: number;
+    timers: { script: string; remaining: number; period: number | null }[];
+  } {
+    return {
+      runtimeSeconds: this.renderer?.runtimeSeconds ?? 0,
+      frameSeconds: this.renderer?.frameSeconds ?? 0,
+      timers: this.runtime?.timerInfo ?? [],
+    };
+  }
+
+  /** dev 探针：音频是否已订阅（`error` 是被拒的原因）、收到的帧数、已注册的分辨率与最近一帧的峰值。 */
+  audio(): { subscribed: boolean; error: string | null; frames: number; resolutions: number[]; peak: number } {
+    return {
+      subscribed: this.audioSubscribed && this.audioError === null,
+      error: this.audioError,
+      frames: this.audioFrames,
+      resolutions: this.scriptApi?.audioResolutions ?? [],
+      peak: this.lastAudioFrame ? Math.max(...this.lastAudioFrame) : 0,
+    };
   }
 
   readTarget(path: string): unknown {
@@ -494,8 +609,8 @@ export class SceneHost {
         }
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
       }
-      const firstRuntime = !this.runtime;
-      if (firstRuntime && bundle.scripts.list.length && !this.scriptUnavailable) {
+      // runtime 已赋值但脚本还在加载时也要等，否则会抢在 init 之前进入首帧
+      if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;
         this.scriptState = SceneState.fromBundle(bundle);
         await this.ensureRuntime(bundle, target.sceneAssets);
@@ -568,7 +683,7 @@ export class SceneHost {
     this.disposed = true;
     this.generation++;
     this.controller?.abort();
-    this.unlisten?.();
+    for (const unlisten of this.unlisteners.splice(0)) unlisten();
     this.dropRenderer();
     this.runtime?.destroy();
     this.runtime = null;
