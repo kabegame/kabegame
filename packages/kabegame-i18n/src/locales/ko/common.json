@@ -109,6 +109,7 @@
     "plugins": "플러그인을 불러오는 중…",
     "schema": "데이터베이스 업그레이드 중 (v{version} {name})…",
     "backfill": "데이터 업데이트 중: {name}",
+    "analyze": "데이터베이스 최적화 중…",
     "services": "서비스를 시작하는 중…",
     "failed": "시작하지 못했습니다"
   }

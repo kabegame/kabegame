@@ -26,6 +26,7 @@
 - Windows 桌面版从图库把图片或视频拖到资源管理器、Word、聊天软件等程序时，得到的是库内原文件（不再是缩略图或需要下载的地址）；三个桌面平台的拖出都只复制，不会把库内文件移走。
 - Windows 安装程序在最后阶段不再一个接一个地闪出大量黑色命令行窗口：搬运 CEF 运行时、DLL 与设置目录图标属性改用安装程序内置指令完成。
 - 桌面端界面卡死后的自动恢复更快：页面无响应约 6 秒（原约 16 秒）即自动重新加载。
+- 按视频筛选和视频计数在大图库下明显更快；应用启动时会刷新数据库的查询统计，启动页显示「正在优化数据库」，图库越大这一步越久。
 
 ### Fixed
 - 「壁纸」导入只添加文件夹、没有勾选自动来源时不再提示「壁纸导入任务创建失败」。
@@ -113,6 +114,7 @@
 - 新增 tauri 补丁 13：Windows 改用原生 `tauri://localhost` / `ipc://localhost`；CEF runtime 删除 `http://<scheme>.localhost` 映射并统一三平台 scheme。拉取后须重新应用 tauri 补丁序列。
 - CEF 补丁 06 改用每工厂私有 CORS 列表，运行时登记应用 origin 到 `file:` 的跨源白名单；删除桌面 `start_http_server` 并关闭 Tauri asset 协议。
 - Phase 6d：CEF 补丁 03 扩到 Windows（需重编 CEF）——Chromium 内层补丁的 aura `StartDragging` 钩子放宽到 `IS_LINUX || IS_WIN`，delegate 背书文件时另清 `html` / `download_metadata`，Windows 不打 `chromium/x-renderer-taint`；`tauri-runtime-kbcef` 的 `on_start_dragging` 去掉 Linux / macOS cfg，应用在三个桌面平台安装拖出 resolver，`authorize_drag_image` 收紧为 `is_file()`（`x-wpe/*` 目录行不得拖出）；前端桌面拖出只写 image id 并设 `effectAllowed = "copy"`，Web 版保留 `DownloadURL`。
+- 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，CLI 与测试不跑，失败只告警），启动页新增 `analyze` 阶段。媒体分类改成绑定模式串的 `images.type GLOB ? AND images.type NOT GLOB ?`，相关 provider 的属性 `kind` 换成 `type_glob` / `type_not_glob`，视频走 `idx_images_type`；格式过滤的 `SUBSTR` 与宽高比的 `+` 实测改写后更慢，保持原样。
 
 ### Fixed
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。

@@ -1,5 +1,24 @@
 # v4.7.0 regression
 
+## 启动时跑 `ANALYZE`，视频分类走索引
+
+2026-11-05 macOS dev。主程序每次启动在 schema 迁移之后跑完整 `ANALYZE`；媒体分类改成绑定模式串的 `images.type GLOB ? AND images.type NOT GLOB ?`。计划阶段的对比实验用生产库（6.5 万图、166 万 `album_images`）在内存里跑，数字见 `cocs/provider-dsl/RULES.md` §2.2。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 三种 feature 组合编译 | macOS | `check-kabegame`（standard、`-c kabegame-cli`、`--mode web --skip vue`） | 全部 0 error | 2026-11-05 通过 |
+| [x] | S2 core 测试 | macOS | `kabegame-core --lib storage`、`--test dsl_e2e` | 全过 | 2026-11-05：127 passed、61 passed。e2e 在 `ANALYZE` 之后检查实际 DSL 生成的计划，并断言 `x-wpe/video` 归图片、两类互补 |
+| [x] | S3 前端测试 | macOS | `apps/kabegame` Vitest | 全过 | 2026-11-05：582 passed |
+| [x] | D1 启动写入统计 | macOS dev | 启动后读日志与开发库 | 日志有 `ANALYZE finished`，`sqlite_stat1` / `sqlite_stat4` 有数据 | 2026-11-05 通过：38 行、679 行 |
+| [x] | D2 视频分类性能 | macOS dev | `KABEGAME_SQL_DEBUG=1` 读 `media-type/video` 第 1 页实际耗时 | 明显下降，image、webp、jpg、宽高比不变慢 | 2026-11-05 通过：video 58ms → 1ms，其余 1～2ms。开发库 5.3K 图，毫秒级取整 |
+| [x] | D3 分类结果 | macOS dev | 经 CDP 调 `pathql_fetch` / `pathql_list`，与 SQL 对照 | 列举计数、分页、画册 `image-only` / `video-only`、VD 正确 | 2026-11-05 通过：image 5200、video 120 与旧写法一致；video 页全是 `video/*`；示例画册 3 个视频与 SQL 一致；VD 列出图片、视频且能取页 |
+| [x] | D4 CLI 不跑 | macOS dev | `--via local plugin run wpe-import --dry-run` 开 SQL 调试 | 打开 Storage 但没有 `ANALYZE` | 2026-11-05 通过：58 行 SQL 日志，0 行 `ANALYZE` |
+| [x] | D5 启动耗时 | macOS dev | 读日志；另在生产库的磁盘副本上跑 | 记录实际开销 | 2026-11-05：开发库（150 MB）应用内 0.47～1.1s（都在重新编译之后），同连接第二次 96ms；`BEGIN IMMEDIATE` 0ms，不是等锁。生产库副本（870 MB）首次 4.4s、第二次 0.87s，首次多出来的是等待时间，CPU 约 1s。没有测过真正的冷开机，也没有测过不重新编译的连续重启 |
+| [ ] | A1 启动页文案 | macOS dev | 大库启动时看启动页 | 显示「正在优化数据库」 | 未目视确认：开发库上这一阶段一闪而过。五种语言的词条与 `analyze` 分支已加，序列化有单测 |
+| [ ] | A2 新库首次启动 | 全平台 | 空数据目录启动，下载一批图后重启 | 第一次没有统计也能正常用，重启后有统计 | 未测 |
+| [ ] | A3 大库启动 | Windows / Linux / Android | 看日志里的 `ANALYZE finished` | 启动时间可接受 | 未测：Android 的存储与 CPU 都更慢，耗时可能明显高于 macOS |
+| [ ] | A4 Web | Web 部署 | 启动服务 | 监听前跑完 `ANALYZE` | 未真跑，只有 `--mode web` 编译覆盖 |
+
 ## WPE 改用 `wpe` feature：三桌面开启，手选文件夹统一两层
 
 2026-11-05 macOS dev。cargo feature `wpe`（桌面主程序与 `kabegame-cli` 开启，Android / Web 不开）取代运行时的 `platform_supported()`；手选文件夹只看自身与向下两层。测试壁纸是自造的网页壁纸（含 `project.json`、读同目录 `data.json`、越界读 `/etc/hosts` 的探针），另有用户本机拷来的 `wallpaper_engine/projects/defaultprojects`。

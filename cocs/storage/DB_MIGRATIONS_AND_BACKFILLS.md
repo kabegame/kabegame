@@ -1,7 +1,7 @@
 # 数据库迁移与可恢复回填
 
 本文描述 Kabegame 数据库的两类迁移（同步 schema 迁移 / 可恢复的异步回填作业）、它们之间的依赖声明，
-以及配套的三段式启动与前端启动页（Init app）。
+以及配套的启动统计刷新、三段式启动与前端启动页（Init app）。
 
 ## 涉及文件
 
@@ -12,6 +12,7 @@
 | core | `src-tauri/kabegame-core/src/storage/migrations/backfills/` | 作业实现目录（发布态为空） |
 | core | `src-tauri/kabegame-core/src/storage/migrations/v048_backfill_jobs.rs` | 建 `backfill_jobs` 表（`init::create_all_tables` 共用同一 DDL） |
 | core | `src-tauri/kabegame-core/src/storage/backfill_service.rs` | `BackfillService`：后台按序跑剩余作业，忙碌快照 + `backfill-finished` |
+| core | `src-tauri/kabegame-core/src/storage/mod.rs` | `Storage::init_global_for_app`、`refresh_query_stats`（启动统计刷新） |
 | core | `src-tauri/kabegame-core/src/storage/startup_state.rs` | `StartupPhase` watch 单例（不依赖 Tauri / `GlobalEmitter` / `Storage::global()`） |
 | core | `src-tauri/kabegame-core/src/commands/busy_tasks.rs` | `BusyTasksSnapshot.backfills` |
 | app | `src-tauri/kabegame/src/core_init.rs` | `init_fast_globals` / `init_heavy_globals` |
@@ -130,6 +131,18 @@ v049 在同步迁移事务内创建 `idx_images_type`，并一次性修正 `imag
 副标题取 i18n `header.backfill.<id>`、缺省回落 id；排队中的作业显示「排队中」。`backfill-finished` 带 error 时 toast。
 IPC `status` 附带 `backfillPending`（只增字段，不升 `IPC_PROTOCOL_VERSION`）。
 
+## 启动统计刷新（`ANALYZE`）
+
+主程序每次启动都在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`，有迁移、没迁移、新库走同一处；启动页显示 `analyze` 阶段。
+
+- **只有主程序跑**：桌面、Android、Web 经 `Storage::init_global_for_app`。CLI 与测试用 `Storage::init_global`，不跑：CLI 每条命令是一个短进程，
+  循环调用时不该每次付一遍全库分析。`pathql query` 的只读 Storage 直接读主程序写好的统计。
+- **放在 Storage 打开流程里**：读连接在之后才打开，直接读到新统计，不用处理已打开连接的统计重载。
+- **失败不致命**：只 `warn!`，启动继续。没有统计时规划器照常工作。
+- **用完整 `ANALYZE`**：`PRAGMA optimize` 与 `analysis_limit` 只写 stat1，低选择性列估不准，还会清掉已有 STAT4。
+- **新库**：空表写不出统计，第一次运行没有统计，下次启动才有。过滤形态在两种情况下都要能接受，见 [`../provider-dsl/RULES.md`](../provider-dsl/RULES.md) §2.2。
+- **耗时**随库大小增长，每次启动都要付；日志有 `ANALYZE finished in N ms`。实测数字见 `versions/` 对应版本的回归文档。
+
 ## 三段式启动与启动页
 
 ```
@@ -137,7 +150,7 @@ setup (主线程)
  └─ init_pre：init_fast_globals（Settings / i18n / 事件广播）→ 事件循环与转发
               → startup-progress 转发 → 非 --minimized 时 create_main_window → CEF relaunch 处理器
  └─ spawn "kabegame-init" 线程，setup 立即返回
-      ├─ init_heavy_globals：PluginManager → Storage（迁移 + 阻塞回填）→ 调度器 → 各 Service
+      ├─ init_heavy_globals：PluginManager → Storage（迁移 + 阻塞回填 + ANALYZE）→ 调度器 → 各 Service
       ├─ run_on_main_thread_sync(init_post)：托盘、壁纸控制器、下载 worker、IPC / Web 服务、插件缓存 …
       ├─ BackfillService::start_pending
       └─ startup_state = Ready（任一步 Err → Failed{message}）

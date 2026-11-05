@@ -216,11 +216,28 @@ COUNT，把整个结构重跑 N 次。
 v049 一次性修正历史残留；所有生产写入必须经该函数，不依赖 schema 的遗留默认值 `image`，数据库不加触发器或 CHECK。
 查询直接读列，不再包 `LOWER` / `COALESCE`；分类用 `video/*` 判断（`x-wpe/video` 仍归图片），格式用 `SUBSTR` 取第一个斜杠后的子类。
 
-`idx_images_type` 供 `type = ?` 的高选择性读取使用，如网页壁纸 `x-wpe/web`。type 只有十几种值，本库不跑 `ANALYZE`；
-低选择性的 type 过滤若同时带 `ORDER BY … LIMIT`，不能写成可走此索引的形态：分类保持 `CASE` 包裹，格式保持 `SUBSTR` 表达式，
-必要时用 `+images.type` 禁用该列索引。计划阶段在本机 6.4 万行库的实测中，裸 `type = 'image/jpg' ORDER BY crawled_at DESC LIMIT 100`
-走 type 索引再整体排序约 15 ms；禁用 type 索引后沿 `idx_crawled_at` 取满即停，约 1 ms。
-迁移单测与实际 DSL 生成 SQL 的 e2e 回归都检查执行计划，后续改写过滤条件时必须保留这一约束。
+`idx_images_type` 供 `type = ?` 的高选择性读取使用，如网页壁纸 `x-wpe/web`。主程序每次启动都跑完整 `ANALYZE`（含 STAT4，见
+[`../storage/DB_MIGRATIONS_AND_BACKFILLS.md`](../storage/DB_MIGRATIONS_AND_BACKFILLS.md)），规划器知道各类型的真实占比，
+但 `LIMIT` 只用来压低排序代价（`whereSortingCost`），沿排序索引取满即停的收益不进估算，所以占比不算高的过滤也会选走索引再整体排序
+（实测 35%、40% 选索引，57% 才回到排序索引）。过滤形态按这一点选：
+
+- **媒体分类**写成 `images.type GLOB ?1 AND images.type NOT GLOB ?2`，由调用方绑定模式串：视频是 `'video/*'` 与 `''`，图片是 `'*'` 与 `'video/*'`。
+  模式串必须直接绑定、不能藏进 `CASE` 或拼接表达式，规划器才看得到前缀。视频走索引，视频占多数时规划器按统计回到排序索引；
+  图片的 `*` 没有前缀，沿排序索引取满即停。
+- **格式过滤**保持 `SUBSTR` 表达式，不走索引。写成 `IN ('image/x', 'video/x', 'x-wpe/x')` 时 webp、png 这类占比不低的格式变慢，
+  `'image/' || ?` 的拼接 STAT4 估不了，还会漏掉格式表外的主类。
+- 其它占比不低的 type 过滤若带 `ORDER BY … LIMIT`，不能写成可走此索引的形态，必要时用 `+images.type` 禁用该列索引。
+
+6.5 万行库、已 ANALYZE 的第 1 页实测：
+
+| 过滤 | 沿 `idx_crawled_at` | 走 `idx_images_type` |
+|---|---|---|
+| 视频（0.5%） | 9.6 ms | 0.13 ms |
+| avif（3 张） | 15 ms | 0.03 ms |
+| webp（35%） | 0.05 ms | 6.6 ms |
+| png（6.7%） | 0.28 ms | 1.9 ms |
+
+迁移单测与实际 DSL 生成 SQL 的 e2e 回归都在 `ANALYZE` 之后检查执行计划，后续改写过滤条件时必须保留这一约束。
 
 ---
 

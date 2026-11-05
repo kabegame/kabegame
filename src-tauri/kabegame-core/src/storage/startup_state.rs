@@ -1,4 +1,4 @@
-//! 启动进度：重型初始化（插件、Storage 迁移与阻塞回填、服务）期间供启动页读取的单值通道。
+//! 启动进度：重型初始化（插件、Storage 迁移与阻塞回填、统计刷新、服务）期间供启动页读取的单值通道。
 //!
 //! 刻意不依赖 Tauri、`GlobalEmitter` 与 `Storage::global()`：全局单例就绪之前就要能读写。
 //! app 层把它转成 `startup-progress` 事件与 `get_startup_state` 命令。
@@ -26,6 +26,8 @@ pub enum StartupPhase {
         processed: usize,
         total: Option<usize>,
     },
+    /// 迁移之后刷新规划器统计（`ANALYZE`）。
+    Analyze,
     Services,
     Ready,
     Failed {
@@ -108,6 +110,10 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({ "phase": "failed", "message": "boom" })
+        );
+        assert_eq!(
+            serde_json::to_value(StartupPhase::Analyze).unwrap(),
+            serde_json::json!({ "phase": "analyze" })
         );
         assert_eq!(
             serde_json::to_value(StartupPhase::Ready).unwrap(),

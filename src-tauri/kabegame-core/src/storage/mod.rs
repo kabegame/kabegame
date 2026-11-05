@@ -85,7 +85,14 @@ impl Storage {
     ///   随后 `mark_as_latest(7)`。
     /// - 已有数据库 → [`migrations::run_pending`]；仅支持从 v7（3.5.x）升级，
     ///   更旧版本返回错误，提示用户先升级或删除数据重新导入。
+    ///
+    /// 不刷新规划器统计：CLI 每条命令都是一个短进程，不该每次都付一遍全库分析。
+    /// 主程序走 [`Storage::init_global_for_app`]。
     pub fn new() -> Result<Self, String> {
+        Self::open(false)
+    }
+
+    fn open(refresh_stats: bool) -> Result<Self, String> {
         let db_path = Self::get_db_path();
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)
@@ -110,6 +117,12 @@ impl Storage {
             // 同步 schema 迁移 + 被依赖的回填（阻塞阶段）；进度经 startup_state 交给启动页。
             migrations::run_pending(&conn, &mut |progress| startup_state::set(progress.into()))
                 .map_err(|e| format!("Failed to run pending DB migrations: {e}"))?;
+        }
+
+        // 有无迁移、是否新库都走这里；读连接在之后才打开，直接读到新统计。
+        if refresh_stats {
+            startup_state::set(startup_state::StartupPhase::Analyze);
+            refresh_query_stats(&conn);
         }
 
         // 7a: schema 就绪后注册 DSL 主机 SQL 函数 (get_plugin 等)。
@@ -201,7 +214,15 @@ impl Storage {
 
     /// 初始化全局 Storage（必须在首次使用前调用）
     pub fn init_global() -> Result<(), String> {
-        let storage = Storage::new()?;
+        Self::install_global(Storage::new()?)
+    }
+
+    /// 主程序的初始化入口：比 [`Storage::init_global`] 多一步，在 schema 就绪后刷新规划器统计。
+    pub fn init_global_for_app() -> Result<(), String> {
+        Self::install_global(Self::open(true)?)
+    }
+
+    fn install_global(storage: Storage) -> Result<(), String> {
         storage.init()?;
         STORAGE
             .set(storage)
@@ -318,6 +339,18 @@ pub(crate) fn open_reader_pool(db_path: &Path) -> Result<ReaderPool, String> {
         .map_err(|e| format!("创建只读连接池失败：{e}"))
 }
 
+/// 重新采集规划器统计（`sqlite_stat1` / `sqlite_stat4`）。
+///
+/// 用完整 `ANALYZE`：`PRAGMA optimize` 与 `analysis_limit` 只写 stat1，低选择性列估不准，还会清掉已有 STAT4。
+/// 失败不致命：没有统计时规划器照常工作，只是估算差一些。
+fn refresh_query_stats(conn: &Connection) {
+    let started = std::time::Instant::now();
+    match conn.execute_batch("ANALYZE") {
+        Ok(()) => tracing::info!("ANALYZE finished in {} ms", started.elapsed().as_millis()),
+        Err(e) => tracing::warn!("ANALYZE failed, keep existing stats: {e}"),
+    }
+}
+
 pub(crate) fn default_true() -> bool {
     true
 }
@@ -325,6 +358,50 @@ pub(crate) fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn indexed_table() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, kind TEXT NOT NULL);
+             CREATE INDEX idx_items_kind ON items(kind);
+             INSERT INTO items (kind) VALUES ('a'), ('a'), ('b');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn refresh_query_stats_writes_stat_tables() {
+        let conn = indexed_table();
+        refresh_query_stats(&conn);
+        let stat: String = conn
+            .query_row(
+                "SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_items_kind'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stat.starts_with("3 "), "{stat}");
+        let samples: i64 = conn
+            .query_row("SELECT count(*) FROM sqlite_stat4", [], |row| row.get(0))
+            .unwrap();
+        assert!(samples > 0, "bundled SQLite 应该带 STAT4");
+    }
+
+    #[test]
+    fn refresh_query_stats_failure_is_not_fatal() {
+        let conn = indexed_table();
+        conn.execute_batch("PRAGMA query_only = ON;").unwrap();
+        refresh_query_stats(&conn);
+        let tables: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'sqlite_stat1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+    }
 
     #[test]
     fn reader_pool_reads_committed_data_rejects_writes_and_registers_dsl() {

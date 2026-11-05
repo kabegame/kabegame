@@ -193,9 +193,10 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
   整数交叉乘法 `w*min_h > h*min_w AND w*max_h <= h*max_w`，缺下界补 `0x1`、缺上界补 `1x0`（∞），不需特判；
   有效性由 `+images.aspect_ratio IS NOT NULL` 判定，无效时整条谓词为 FALSE 而非 NULL，`~not` 取非留得住这些图。
   `unknown` 走 [`aspect_unknown_provider`](/src-tauri/kabegame-core/src/providers/dsl/shared/aspect_unknown_provider.yaml)（`IS NULL`）。
-- **区间谓词禁止走索引**（`+` 一元加号）：没有 STAT4 统计时规划器把任何范围都估成高选择性，landscape 实占约 6 成，
-  100 万图组合筛选一页从约 0.2s 变成 14s。只有完整 `ANALYZE`（含 STAT4）能让它按桶选对；默认 `PRAGMA optimize`
-  与 `analysis_limit` 只写 stat1，效果等于没有统计，且近似重分析会清掉已有 STAT4，所以不依赖它。
+- **区间谓词禁止走索引**（`+` 一元加号）：五个桶占比都不低，走索引要回表再临时排序，100 万图组合筛选一页从约 0.2s 变成 14s。
+  主程序启动时跑的完整 `ANALYZE`（含 STAT4）也救不了：规划器知道占比，但沿排序索引取满即停的收益不进估算，6.5 万行实测 landscape（占 40%）
+  第 1 页仍选索引，0.13ms 变成 14ms，hide 组合 0.18ms 变成 20ms，COUNT 也不更快。所以不写真区间，这里的 `+` 保留。
+  `PRAGMA optimize` 与 `analysis_limit` 只写 stat1，近似重分析还会清掉已有 STAT4，主程序不用它们。
   `unknown` 允许走索引（正常库里极少，直接取 NULL 段）。100 万图实测：各桶组合筛选一页约 20ms、COUNT 0.3～0.8s。
 - **列举只列应用的桶**：原先按当前查询动态列举非空桶（100 万图 2～10s）已删除；现在列举固定列出应用的五个桶
   （顺序同 `GALLERY_ASPECT_BUCKETS`），并带分组计数，见下一节「维度列举带分组计数」。段名解析顺序是

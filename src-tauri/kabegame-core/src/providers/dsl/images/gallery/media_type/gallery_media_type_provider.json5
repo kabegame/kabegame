@@ -1,13 +1,15 @@
 {
     "namespace": "kabegame",
     "name": "gallery_media_type_provider",
+    // 图片：type_glob = '*'，type_not_glob = 'video/*'（默认值）。视频：type_glob = 'video/*'，type_not_glob = ''。
     "properties": {
-        "kind": { "type": "string", "default": "image", "optional": false }
+        "type_glob": { "type": "string", "default": "*", "optional": false },
+        "type_not_glob": { "type": "string", "default": "video/*", "optional": false }
     },
     // type 已规范化，video/* 归视频，x-wpe/video 仍归图片。
-    // 保持 CASE 包裹，避免分页走低选择性的 idx_images_type 再整体排序，见 RULES.md。
+    // 模式串直接绑定进 GLOB：视频的前缀能走 idx_images_type，图片的 `*` 不走索引、沿排序索引取满即停，见 RULES.md。
     "query": {
-        "where": "CASE ${properties.kind} WHEN 'video' THEN images.type GLOB 'video/*' ELSE NOT (images.type GLOB 'video/*') END"
+        "where": "images.type GLOB ${properties.type_glob} AND images.type NOT GLOB ${properties.type_not_glob}"
     },
     "list": {
         "${fmt.format}": {

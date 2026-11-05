@@ -6,13 +6,16 @@ note: >-
   such as webp or mp4. A broad type can also continue directly to filtering or pagination.
 # 列举：一条 SQL 在上游结果集上按 image / video 分组计数，再与两类固定行 LEFT JOIN 补 0，
 # 计数随列举放进 meta.count（画廊过滤树用 list(with_count=false) 直接读）。
-# 段名解析走下方 resolve，不跑这条 SQL。kind 判定与 gallery_media_type_provider 的 WHERE 同源，
-# 改一处同步另一处。
+# 段名解析走下方 resolve，不跑这条 SQL。kind 判定与下面两个模式串同源，
+# 也与 gallery_media_type_provider 的 WHERE 同源，改一处同步其它。
 list:
   "${out.kind}":
     sql: |-
-      SELECT k.kind AS kind, COALESCE(c.count, 0) AS count
-      FROM (SELECT 0 AS ord, 'image' AS kind UNION ALL SELECT 1, 'video') AS k
+      SELECT k.kind AS kind, k.type_glob AS type_glob, k.type_not_glob AS type_not_glob, COALESCE(c.count, 0) AS count
+      FROM (
+        SELECT 0 AS ord, 'image' AS kind, '*' AS type_glob, 'video/*' AS type_not_glob
+        UNION ALL SELECT 1, 'video', 'video/*', ''
+      ) AS k
       LEFT JOIN (
         SELECT
           CASE WHEN sub.type GLOB 'video/*' THEN 'video' ELSE 'image' END AS kind,
@@ -24,13 +27,14 @@ list:
     data_var: out
     provider: gallery_media_type_provider
     properties:
-      kind: "${out.kind}"
+      type_glob: "${out.type_glob}"
+      type_not_glob: "${out.type_not_glob}"
     meta:
       count: "${out.count}"
 resolve:
   image:
     provider: gallery_media_type_provider
-    properties: { kind: image }
+    properties: { type_glob: "*", type_not_glob: "video/*" }
   video:
     provider: gallery_media_type_provider
-    properties: { kind: video }
+    properties: { type_glob: "video/*", type_not_glob: "" }

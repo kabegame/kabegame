@@ -109,6 +109,7 @@
     "plugins": "Loading plugins…",
     "schema": "Upgrading database (v{version} {name})…",
     "backfill": "Updating data: {name}",
+    "analyze": "Optimizing database…",
     "services": "Starting services…",
     "failed": "Startup failed"
   }

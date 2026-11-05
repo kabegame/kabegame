@@ -65,6 +65,8 @@ const label = computed(() => {
       });
     case "backfill":
       return t("common.startup.backfill", { name: backfillName(phase.id) });
+    case "analyze":
+      return t("common.startup.analyze");
     case "services":
     case "ready":
       return t("common.startup.services");

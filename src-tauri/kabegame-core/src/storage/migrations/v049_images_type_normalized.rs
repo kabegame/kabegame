@@ -4,8 +4,8 @@
 //! 本迁移只修正历史残留（v023 之后预期 0 行）；之后由 Rust 写入口保证（`normalize_stored_media_type`），
 //! 数据库不放触发器或约束。规则自包含，不读运行时格式表（同 v023），所以不做别名归并（`image/jpeg` 本身合规，保持原样）。
 //!
-//! 索引注意：type 只有十几种取值，本库不跑 ANALYZE。按 type 过滤再 `ORDER BY … LIMIT` 的查询若写成可走索引的形态，
-//! 规划器会选本索引再整体排序（实测 6.4 万行 15 ms，对比沿排序索引 1 ms）。见 `cocs/provider-dsl/RULES.md`。
+//! 索引注意：type 只有十几种取值。占比不低的 type 过滤再 `ORDER BY … LIMIT` 时，走本索引要整体排序，
+//! 比沿排序索引取满即停慢得多，所以只让稀有分类走它。见 `cocs/provider-dsl/RULES.md` §2.2。
 
 use rusqlite::Connection;
 
@@ -102,42 +102,44 @@ mod tests {
     }
 
     #[test]
-    fn storage_v049_index_supports_equality_and_preserves_pagination_plan() {
+    fn storage_v049_index_supports_equality_and_rare_kind_pagination() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE images (id INTEGER PRIMARY KEY, type TEXT, crawled_at INTEGER);
             CREATE INDEX idx_crawled_at ON images(crawled_at DESC);
             WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1000)
-            INSERT INTO images SELECT n, CASE WHEN n = 1 THEN 'x-wpe/web' ELSE 'image/jpg' END, n FROM seq;").unwrap();
+            INSERT INTO images SELECT n, CASE WHEN n = 1 THEN 'x-wpe/web' WHEN n <= 5 THEN 'video/mp4' ELSE 'image/jpg' END, n FROM seq;").unwrap();
         up(&conn).unwrap();
-        let plan = |sql: &str, kind: &str| -> Vec<String> {
+        conn.execute_batch("ANALYZE").unwrap();
+        let plan = |sql: &str, params: &[&str]| -> Vec<String> {
             conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
                 .unwrap()
-                .query_map([kind], |row| row.get(3))
+                .query_map(rusqlite::params_from_iter(params), |row| row.get(3))
                 .unwrap()
                 .map(Result::unwrap)
                 .collect()
         };
-        let equality = plan("SELECT * FROM images WHERE type = ?1", "x-wpe/web");
+        let equality = plan("SELECT * FROM images WHERE type = ?1", &["x-wpe/web"]);
         assert!(
             equality.iter().any(|line| line.contains("idx_images_type")),
             "{equality:?}"
         );
-        for kind in ["image", "video"] {
-            let page = plan(
-                "SELECT * FROM images WHERE CASE ?1 WHEN 'video' THEN type GLOB 'video/*'
-                ELSE NOT (type GLOB 'video/*') END ORDER BY crawled_at DESC LIMIT 100",
-                kind,
-            );
-            assert!(
-                page.iter().any(|line| line.contains("idx_crawled_at")),
-                "{page:?}"
-            );
-            assert!(
-                !page
-                    .iter()
-                    .any(|line| line.contains("TEMP B-TREE") || line.contains("idx_images_type")),
-                "{page:?}"
-            );
-        }
+        const PAGE: &str = "SELECT * FROM images WHERE type GLOB ?1 AND type NOT GLOB ?2
+            ORDER BY crawled_at DESC LIMIT 100";
+        let video = plan(PAGE, &["video/*", ""]);
+        assert!(
+            video.iter().any(|line| line.contains("idx_images_type")),
+            "{video:?}"
+        );
+        let image = plan(PAGE, &["*", "video/*"]);
+        assert!(
+            image.iter().any(|line| line.contains("idx_crawled_at")),
+            "{image:?}"
+        );
+        assert!(
+            !image
+                .iter()
+                .any(|line| line.contains("TEMP B-TREE") || line.contains("idx_images_type")),
+            "{image:?}"
+        );
     }
 }

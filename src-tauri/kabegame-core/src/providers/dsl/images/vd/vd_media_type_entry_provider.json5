@@ -2,12 +2,16 @@
     "namespace": "kabegame",
     "name": "vd_media_type_entry_provider",
     "properties": {
-        "kind": { "type": "string", "default": "image", "optional": false }
+        "type_glob": { "type": "string", "default": "*", "optional": false },
+        "type_not_glob": { "type": "string", "default": "video/*", "optional": false }
     },
     "query": {
         "delegate": {
             "provider": "gallery_media_type_provider",
-            "properties": { "kind": "${properties.kind}" }
+            "properties": {
+                "type_glob": "${properties.type_glob}",
+                "type_not_glob": "${properties.type_not_glob}"
+            }
         }
     },
     "list": {
@@ -15,7 +19,10 @@
             "alias": "format",
             "delegate": {
                 "provider": "gallery_media_type_provider",
-                "properties": { "kind": "${properties.kind}" }
+                "properties": {
+                    "type_glob": "${properties.type_glob}",
+                    "type_not_glob": "${properties.type_not_glob}"
+                }
             },
             "child_var": "format",
             "provider": "vd_media_format_entry_provider",

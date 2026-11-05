@@ -3210,23 +3210,29 @@ fn wallpaper_rotation_image_only_tail_keeps_view_order() {
     assert_eq!(rank(&runtime, &album_eff, "118"), None);
 }
 
-/// 对实际 DSL 生成的 SQL 检查计划，防止后续改写过滤条件后绕过迁移里的 SQL 回归。
+/// 对实际 DSL 生成的 SQL 检查计划（已 ANALYZE，与主程序启动后一致），防止改写过滤条件后绕过迁移里的 SQL 回归：
+/// 稀有的视频走 idx_images_type，占比高的分类、格式与宽高比沿 idx_crawled_at 取满即停。
 #[test]
-fn media_type_pagination_preserves_crawled_at_index() {
+fn media_filters_plan_with_query_stats() {
     let conn = fixture_db();
     conn.lock()
         .unwrap()
         .execute_batch(
             "CREATE INDEX idx_images_type ON images(type);
-         CREATE INDEX idx_crawled_at ON images(crawled_at DESC);",
+         CREATE INDEX idx_crawled_at ON images(crawled_at DESC);
+         CREATE INDEX idx_images_aspect_ratio ON images(aspect_ratio);
+         WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 4000)
+         INSERT INTO images(id, local_path, plugin_id, crawled_at, type, width, height)
+         SELECT 100000 + n, '/plan/' || n, 'plan', 2000000000 + n,
+                CASE WHEN n % 200 = 0 THEN 'video/mp4' WHEN n % 4 = 0 THEN 'image/webp' ELSE 'image/jpg' END,
+                CASE WHEN n % 2 = 0 THEN 1600 ELSE 900 END,
+                CASE WHEN n % 2 = 0 THEN 1000 ELSE 1600 END
+         FROM seq;
+         ANALYZE;",
         )
         .unwrap();
     let runtime = build_runtime_with(conn.clone());
-    for path in [
-        "images://gallery/media-type/image/_kb_desc/_kb_x100x/1",
-        "images://gallery/media-type/video/_kb_desc/_kb_x100x/1",
-        "images://gallery/media-type/image/jpeg/_kb_desc/_kb_x100x/1",
-    ] {
+    let plan = |path: &str| -> Vec<String> {
         let resolved = runtime.resolve(path).unwrap();
         let mut ctx = TemplateContext::default();
         ctx.globals = runtime.globals().clone();
@@ -3236,7 +3242,7 @@ fn media_type_pagination_preserves_crawled_at_index() {
             .unwrap();
         let db = conn.lock().unwrap();
         let mut stmt = db.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-        let plan: Vec<String> = stmt
+        let plan = stmt
             .query_map(
                 rusqlite::params_from_iter(local_params_for(&params)),
                 |row| row.get(3),
@@ -3244,6 +3250,14 @@ fn media_type_pagination_preserves_crawled_at_index() {
             .unwrap()
             .map(Result::unwrap)
             .collect();
+        plan
+    };
+    for path in [
+        "images://gallery/media-type/image/_kb_desc/_kb_x100x/1",
+        "images://gallery/media-type/image/jpg/_kb_desc/_kb_x100x/1",
+        "images://gallery/aspect/4x3-16x9/_kb_desc/_kb_x100x/1",
+    ] {
+        let plan = plan(path);
         assert!(
             plan.iter().any(|line| line.contains("idx_crawled_at")),
             "{path}: {plan:?}"
@@ -3253,10 +3267,98 @@ fn media_type_pagination_preserves_crawled_at_index() {
             !plan
                 .iter()
                 .any(|line| line == "USE TEMP B-TREE FOR ORDER BY"
-                    || line.contains("idx_images_type")),
+                    || line.contains("idx_images_type")
+                    || line.contains("idx_images_aspect_ratio")),
             "{path}: {plan:?}"
         );
     }
+    let video = plan("images://gallery/media-type/video/_kb_desc/_kb_x100x/1");
+    assert!(
+        video.iter().any(|line| line.contains("idx_images_type")),
+        "{video:?}"
+    );
+}
+
+/// 分类只看 `video/*`：x-wpe/video 归图片，两类互补；画廊、画册、列举与 VD 入口是同一判定。
+#[test]
+fn media_kind_filters_partition_images() {
+    const ALBUM: &str = "33333333-3333-3333-3333-333333333333";
+    let _locale_guard = lock_locale_tests();
+    kabegame_i18n::set_locale("zh");
+    let conn = fixture_db();
+    conn.lock()
+        .unwrap()
+        .execute_batch(&format!(
+            "INSERT INTO images(id, local_path, plugin_id, crawled_at, type)
+             VALUES(9001, '/tmp/wpe-video', '', 1, 'x-wpe/video');
+             INSERT INTO album_images(album_id, image_id) VALUES('{ALBUM}', 9001), ('{ALBUM}', 118);"
+        ))
+        .unwrap();
+    let runtime = build_runtime_with(conn.clone());
+    let reference = |filter: &str| -> Vec<String> {
+        let db = conn.lock().unwrap();
+        let mut stmt = db
+            .prepare(&format!(
+                "SELECT CAST(images.id AS TEXT) FROM images WHERE {filter} ORDER BY 1"
+            ))
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
+    };
+    let fetched = |path: &str| -> Vec<String> {
+        let mut rows = ids(runtime.fetch(path).unwrap());
+        rows.sort();
+        rows
+    };
+
+    let videos = reference("images.type GLOB 'video/*'");
+    let others = reference("NOT (images.type GLOB 'video/*')");
+    assert!(videos.contains(&"118".to_string()), "{videos:?}");
+    assert!(others.contains(&"9001".to_string()), "{others:?}");
+    assert_eq!(
+        fetched("images://gallery/media-type/video/_kb_x500x/1"),
+        videos
+    );
+    assert_eq!(
+        fetched("images://gallery/media-type/image/_kb_x500x/1"),
+        others
+    );
+    assert_eq!(
+        listed_counts(&runtime, "images://gallery/media-type"),
+        [
+            ("image".to_string(), others.len()),
+            ("video".to_string(), videos.len())
+        ]
+    );
+
+    let album = format!("EXISTS (SELECT 1 FROM album_images ai WHERE ai.album_id = '{ALBUM}' AND ai.image_id = images.id)");
+    assert_eq!(
+        fetched(&format!(
+            "images://gallery/album/{ALBUM}/video-only/_kb_x500x/1"
+        )),
+        reference(&format!("{album} AND images.type GLOB 'video/*'"))
+    );
+    assert_eq!(
+        fetched(&format!(
+            "images://gallery/album/{ALBUM}/image-only/_kb_x500x/1"
+        )),
+        reference(&format!("{album} AND NOT (images.type GLOB 'video/*')"))
+    );
+
+    assert_eq!(fetched("images://vd/i18n-zh_CN/按媒体/视频/1"), videos);
+    let vd_children = runtime.list("images://vd/i18n-zh_CN/按媒体").unwrap();
+    assert!(
+        vd_children.iter().any(|child| child.name == "视频"),
+        "{:?}",
+        vd_children
+            .iter()
+            .map(|child| &child.name)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
