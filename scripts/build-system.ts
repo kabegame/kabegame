@@ -468,6 +468,8 @@ export class BuildSystem {
 
     if (!this.context.skip?.isVue) {
       for (const feTestDir of component.feTestDirs) {
+        // 场景宿主依赖的 wasm 只在 standard 模式同步
+        if (feTestDir === Component.WPE_SCENE_DIR && !this.context.mode?.isStandard) continue;
         run("test", [], { bin: "deno-task", cwd: feTestDir });
       }
     }

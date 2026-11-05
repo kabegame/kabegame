@@ -24,6 +24,34 @@
 | [x] | D15 清空存储 · 单宿主 | Windows dev，主窗口预览 13114；网页壁纸面板对照 | 放一个别的图片 id 前缀的键、本图 `g` 位置的键、dev 开关；点「清空脚本存储」，先取消再确定 | 取消不清空；确定后计数回到 1、`init` 重跑一次；音频订阅保留；别的键不受影响；网页壁纸没有按钮 | 2026-11-05：<br>**取消**：计数 5、`g` 键都在，`init` 不变，`recompiled` 为空；主窗口可见时重测同样不变，确认框已关。<br>**确定**：计数 5 → 1，`g` 键删掉，`init` 各 1 次，日志 `[kbt] init#1`，`stats().recompiled` 有 `clear-storage`，toast「已清空脚本存储」。<br>**音频**：不重新订阅，帧数 3381 → 3441（2 s）。<br>**别的键**：`…:99999:s:probe`、dev 开关、其余 4 个键都在，测后已手动删除探测键。<br>**网页壁纸**：见 D9。<br>**测试注意**：主窗口被遮挡时 Vue 过渡不结束，关掉的确认框留在 DOM 里，脚本要点最后一个框；页面恢复可见后自动消失 |
 | [x] | D16 清空存储 · 多宿主 | Windows dev，13114 同时在应用背景、壁纸窗口、预览 | 点按钮 1 次，再用同一命令 `wpe_scene_clear_storage` 连续清 16 次（间隔约 1.7 s），读每个宿主的内存计数（由 `alpha` 反推）与存储值 | 全部宿主重启；观察事件晚到的一方是否删掉别人刚写的计数 | 2026-11-05：<br>**都重启**：每轮三个宿主的 `clear-storage` 各加 1、`init` 各 1 次、音频订阅都保留。<br>**最终值**：主窗口被遮挡时 8 轮存储值都是 3。主窗口可见时点按钮那一轮存储值 2、内存计数 1 / 2 / 1，之后 8 轮存储值都是 3、内存计数 1 / 2 / 3，壁纸窗口总是 1。<br>**竞态**：没有看到晚到的一方删掉别人写的值（那样存储值会回到 1）。存储值是 2 的那轮少一次加 1，更像跨进程读到了尚未同步的 `localStorage`；只看结果两种情况不能完全区分。<br>多实例时计数回不到 1：每个实例的 `init` 都会加一次，这是脚本自己的写入 |
 
+## WPE 改用 `wpe` feature：三桌面开启，手选文件夹统一两层
+
+2026-11-05 macOS dev。cargo feature `wpe`（桌面主程序与 `kabegame-cli` 开启，Android / Web 不开）取代运行时的 `platform_supported()`；手选文件夹只看自身与向下两层。测试壁纸是自造的网页壁纸（含 `project.json`、读同目录 `data.json`、越界读 `/etc/hosts` 的探针），另有用户本机拷来的 `wallpaper_engine/projects/defaultprojects`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 三种 feature 组合编译 | macOS | `check-kabegame`（standard）、`-c kabegame-cli`、`--mode web --skip vue` | 全部 0 error；Web 模式即 `wpe` 关闭路径 | 2026-11-05 通过。`--mode web` 起初因 `lib.rs` Web 入口缺 `axum` 导入编译不过（HEAD 上已有），已补 |
+| [x] | S2 core 单测 | macOS | `kabegame-core --lib wpe`、`--lib plugin::builtin` | 全过 | 2026-11-05：39 passed、3 passed。这组用例以前只在 Windows 跑过，首次在 macOS 跑出 3 个失败：`is_safe_relative_path` 放行 `C:\\x`，`libraryfolders.vdf` 路径把 `\\\\` 转成 `//`，都已修 |
+| [x] | S3 应用单测 | macOS | `kabegame --lib wpe`、`--lib web_entry` | 全过 | 2026-11-05：25 passed、3 passed |
+| [x] | S4 前端单测 | macOS | `apps/kabegame` 与 `apps/wpe-scene` 的 Vitest | 全过 | 2026-11-05：582 passed；145 passed、26 skipped（需 `KABEGAME_WPE_ROOT`） |
+| [x] | S5 WPE 目录设置的编译与单测 | macOS | `check-kabegame`（standard、`--mode web`）；`kabegame-core --lib wpe`、`--lib settings`；`kabegame --lib wpe`；`apps/docs` 构建 | 全过 | 2026-11-05：0 error；43、15、25 passed；文档站 35 页构建成功。用的是 Homebrew 工具链 |
+| [x] | D1 手选文件夹两层规则 | macOS dev | 经 `wpe_recognize_dir` 探测：第一层、第二层、第三层、Steam 库结构的根、`431960` 根 | 一、二层与 `431960` 能识别；第三层与库根报「未识别」 | 2026-11-05 通过。返回值已无 `recognized` |
+| [x] | D2 只选手选文件夹导入 | macOS dev | 对话框不勾自动来源，只添加文件夹，点开始导入 | 任务创建成功，只导入该文件夹 | 2026-11-05 用户操作先复现「壁纸导入任务创建失败」（`sources: 至少选择一项`）；改传 `sources: null` 后用户重试成功：`defaultprojects` 19 个目录入库 18 张（场景 16、网页 2），任务配置 `sources: null` |
+| [x] | D3 CLI 经主程序 | macOS dev | `kabegame-cli --via app plugin run wpe-import --dry-run` 与真实运行 | 解析到内建插件；dry-run 不入库；真实运行入库 | 2026-11-05 通过。本地模式（`--via local`）报「只支持 v8 后端」，符合现状 |
+| [x] | D4 网页壁纸图库预览 | macOS dev | `pvwimgid` 打开网页壁纸预览，进 iframe 读探针 | `file:` iframe 加载；同目录 `fetch` 成功；越界被拒且有 `deny file:`；属性送达 | 2026-11-05 通过。`applyUserProperties` 收到 `schemecolor`，`wpe_web_pull_state` 返回正常。这是 `file:` 子 frame 闸门与 IPC 首次在 macOS 上验证 |
+| [x] | D5 越权与音频订阅 | macOS dev | iframe 内调 `get_images_count` 与 `wpe_web_media_subscribe` | 前者被 ACL 拒绝；后者报只有 Windows | 2026-11-05 通过 |
+| [x] | D6 窗口模式桌面壁纸 | macOS dev | 窗口模式设网页壁纸，读壁纸窗口 iframe，再恢复原壁纸 | iframe 在壁纸窗口加载；恢复后 iframe 销毁 | 2026-11-05 通过，已恢复原壁纸 8215。没有目视确认桌面画面 |
+| [x] | D7 设置页 | macOS dev | 打开壁纸分区 | 有「场景后处理」，没有「媒体集成」 | 2026-11-05 通过 |
+| [x] | D8 WPE 目录自动查找 | macOS dev | 设置为空时启动，读设置与日志 | 从库里的壁纸往上找到安装目录并写入设置 | 2026-11-05 通过：WPE 目录是 DepotDownloader 下载的，不在 Steam 库里，自动写入 `/Users/didi/wpe/wallpaper_engine`，壁纸设置显示该路径 |
+| [x] | D9 WPE 目录校验与覆盖 | macOS dev | 经 `set_wpe_engine_dir`：选无 `assets/shaders/common.h` 的目录、传空、传带尾斜杠的路径 | 无效目录被拒且保留原值；传空后立即重新查找；手动路径规范化 | 2026-11-05 通过。界面上的「选择」与错误提示没有点过，只测了命令与显示 |
+| [x] | D10 macOS 场景壁纸 | macOS dev，主窗口预览 | 预览 beach、eagleflag、razer_bedroom、razer_vortex | 按 WPE 渲染，不退回预览图 | 2026-11-05 通过：四张都进入渲染，razer_bedroom 18 层 7 个程序、6 段脚本全部成功，截图画面正确，帧率约 120。走 Metal（Apple M5），WebGPU 支持 BC。没有与 WPE 逐像素对比。dev 裸跑时 Chromium 在 exe 旁找 ANGLE 库，起初因缺 `target/debug/libGLESv2.dylib` 退回软件合成、报 `webgpu:no-adapter`。`OSPlugin` 现在在 dev / start 前把 `libEGL.dylib`、`libGLESv2.dylib` 软链到 exe 旁：直接调用该方法建链后，结束 GPU 进程让它重新拉起，Metal 与 WebGPU 正常，且只加载这两个库。尚未经 `deno task dev` 完整走一遍 |
+| [ ] | A1 macOS 打包版场景壁纸 | macOS release | 打包后预览场景 | GPU 可用，场景渲染 | 未测：打包版应走 framework 的 `Libraries/`，不需要符号链接 |
+| [ ] | A2 macOS 视频壁纸 | macOS dev | 导入并预览 `x-wpe/video` | 正常播放 | 未测：本机样本没有视频壁纸 |
+| [ ] | A3 Windows 编译与媒体回归 | Windows | `check-kabegame`；网页壁纸音频、媒体集成、鼠标转发 | `windows` feature 移到 `wpe` 后行为不变 | 未测：这部分代码在 macOS 上编译不到 |
+| [ ] | A4 Linux | Linux dev | 导入、预览网页壁纸；设为壁纸 | 导入与预览正常；设为壁纸报「Linux 暂不支持」 | 未测 |
+| [ ] | A5 Android | Android | `--mode android` 检查；打包后 APK 不含 `wpe-scene` | 编译通过；`x-wpe/*` 行只显示预览图 | 未测：本机缺 `bin/android/arm64/rusty_v8-build`，`scene_assets_of` 的关闭分支没有编译过 |
+| [ ] | A6 Web | Web 部署 | `start_task` 提交 `wpe-import` | 解析不到插件 | 未真跑，只有 `--mode web` 编译覆盖 |
+
 ## 场景壁纸 P3b：SceneScript 运行时（进行中）
 
 2026-11-04 Windows dev。脚本在宿主 iframe 里的同源 `about:blank` 子 frame（独立 realm）中同步运行：每帧计时器 → `update`（返回值当帧写回）→ 渲染。用户脚本以 blob 模块加载，WPE 自带的 `jsmodules` 经按场景生成的 import map 以 `file:` 加载，`baseclasses.js` 作经典脚本。`value:script` 静态规则已删除。语料解锁清单见 D5；文档（步骤 8）待补。

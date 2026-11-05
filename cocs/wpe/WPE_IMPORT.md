@@ -59,24 +59,43 @@ MediaFormat { key: "x-wpe/scene", .. } // 占位
 
 ## 三、发现与识别
 
-**WPE 壁纸目前只提供 Windows 桌面**（第二阶段已确认决策 11）：自动发现（`platform_supported()` 只对 Windows 为
-true）、网页壁纸入口（`web_entry`）与网页壁纸目录索引都按 `target_os = "windows"` 门控；macOS / Linux / Android / Web
-不自动发现、不渲染网页壁纸，`x-wpe/*` 行在网格与应用背景里只显示作者预览图。`kabegame-core::wpe` 的入库模型、
-`read_project`、属性解析保持跨平台编译（CLI / 测试用）。
+**WPE 由 cargo feature `wpe` 控制**：`kabegame-core` 的 `wpe`，`kabegame` 的 `wpe`（`standard` 依赖它，同时带上
+`realfft` 与 `windows` 的音频 / WinRT feature），`kabegame-cli` 的依赖声明。三个桌面平台开启，Android / Web 不开。
+
+| 随 `wpe` 编译 | 所有构建都编译 |
+| --- | --- |
+| core：`wpe::{discover, scan, recognize, locale}`、`commands::wpe`、`crawler::wpe_import`、内建插件 `wpe-import` | core：`wpe::{project, properties, user_props}`、`image_type` 的 `x-wpe/*` 判断（`Storage` 与 Android 的壁纸目标要用） |
+| app：`commands::{wpe, wpe_scene, wpe_web}`、`wpe_media`、`wallpaper::{wpe_web_dir_index, wpe_scene_host}` | app：`wallpaper::web_entry`（关闭时恒为 `None`）、`commands/wallpaper.rs` 的壁纸目标 |
+
+「壁纸」对话框没有勾选自动来源时传 `sources: null`：通用 checkbox 校验不接受全 false，缺失又会合并默认的全选，显式 `null` 才表示只导入手选文件夹（`parse_sources`）。
+
+CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只支持 V8 后端，这个内建任务要经运行中的主程序执行（`--via app`）。
+
+关闭时 `wpe-import` 不在内建表里，`start_task` 与定时运行配置都解析不到它，Web RPC 不需要另外拦截；`x-wpe/*` 行在网格与
+应用背景里只显示作者预览图。`apps/wpe-scene` 也只属于桌面 standard 模式，Android / Web 不构建、不同步 wasm、不跑它的 Vitest。
+
+三个桌面平台的能力不同：
+
+| | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| 导入、图库预览、应用背景 | 有 | 有 | 有 |
+| 桌面壁纸（窗口模式） | 有 | 有 | 没有窗口模式，设为壁纸直接报错 |
+| 桌面鼠标转发 | 有 | 无 | 无 |
+| 音频与媒体数据 | 有 | 无 | 无 |
 
 `kabegame_core::wpe`：
 
-- `discover.rs`：Windows 读 `HKCU\Software\Valve\Steam\SteamPath`，再解析
+- `discover.rs`：Windows 读 `HKCU\Software\Valve\Steam\SteamPath`，Linux 查 `~/.steam/steam`、`~/.steam/root`、
+  `~/.local/share/Steam`，macOS 查 `~/Library/Application Support/Steam`，再解析
   `<Steam>/steamapps/libraryfolders.vdf`。只在含 app `431960` 的库里产出三类根：
   - 创意工坊：`<库>/steamapps/workshop/content/431960`
   - 官方默认：`<库>/steamapps/common/wallpaper_engine/projects/defaultprojects`
   - 我的项目：`<库>/steamapps/common/wallpaper_engine/projects/myprojects`
-  Linux 的 Steam 路径探测（`~/.steam/steam`、`~/.steam/root`、`~/.local/share/Steam`）代码保留，但
-  `platform_supported()` 为 false，`discover_roots` 不再进入；Linux / macOS / Android / Web 返回空。
   VDF 用最小手写解析器（兼容新旧两种 `libraryfolders` 格式），不引新依赖。
-- `recognize.rs`：把用户随手选的文件夹展开成壁纸目录集合。支持单个壁纸目录、`431960`
-  创意工坊根、`projects/`、`defaultprojects` / `myprojects`、WPE 安装目录、Steam 库根与
-  `steamapps/`；其它目录向下最多两层找 `project.json`。
+- `recognize.rs`：把目录展开成壁纸目录集合。手选文件夹与自动发现的根走同一条规则：只看目录自身、`<dir>/*`、`<dir>/*/*`，
+  含 `project.json` 就收下且不再深入，到第二层仍没有就停。不按目录名或结构猜类型，所以手选 Steam 库根、WPE 安装根识别不到
+  （壁纸在第 3 层以下），这两类由自动发现覆盖；`431960`、`projects/`、`defaultprojects` / `myprojects` 都在两层内。
+- `is_safe_relative_path`（`wpe/mod.rs`）：`file` / `preview` 的第一道门，规则不随平台变：`\\` 一律按分隔符看，盘符单独拒绝。Unix 的 `Path` 把 `C:\\x` 和 `..\\x` 都当成一个普通文件名，只靠 `Path` 判断会放行。
 - `project.rs`：解析 `project.json`。`type` 归一为 `Video / Web / Scene / Application / Other`，
   `WpeKind::is_supported()`（video、web 与 scene）是「可导入」口径的唯一来源，已支持的类型都要求入口文件存在；
   场景例外：目录里有 `scene.pkg`（创意工坊发布形态）就算入口存在，Rust 不解析包。没有 `type` 但 `file` 是 `.json` 的
@@ -164,7 +183,7 @@ Web 发布版与 Android 硬门控为主窗口。
 | 速率 / 音量 | Kabegame 全局设置（覆盖作者值） |
 
 - `x-wpe/web`：`compatiblePath` 与 `wpeVideo` 为空，`webEntry` 是入口的 `file://`，由 `build_wallpaper_target` 用
-  `wallpaper::web_entry` 现算（`read_project` 校验入口在目录内且存在，放 blocking 线程；非 Windows、读不了 `project.json`
+  `wallpaper::web_entry` 现算（`read_project` 校验入口在目录内且存在，放 blocking 线程；Android、读不了 `project.json`
   时为 `null`）。图库预览与**桌面壁纸窗口**拿同一份目标，都由 `WallpaperStage` 的独立 **web 层**建一个 iframe、直接赋
   `src = webEntry`（见下「网页壁纸 iframe」）；`webEntry` 为空时报「无法加载网页壁纸」，预览退回作者预览图、桌面保持原画面。
 - `x-wpe/scene`：`sceneAssets` 是 WPE 安装目录的 `assets`，`previewPath` 是退回用的作者预览图（行的 `thumbnail_path`，缩略图为空或
@@ -182,12 +201,12 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
 
 - **加载**：`WallpaperStage` 建 iframe、插入 DOM 后直接 `frame.src = target.webEntry`，没有命令往返、没有要维护的状态
   （入口由 `build_wallpaper_target` 现算，见上）。壁纸窗口本身始终停在应用页，不再导航。
-- **能力登记**（Windows）：主窗口（`startup.rs`）与壁纸窗口（`wallpaper/manager/window.rs`）建窗前都
+- **能力登记**：主窗口（`startup.rs`）与壁纸窗口（`wallpaper/manager/window.rs`）建窗前都
   `tauri_runtime_kbcef::allow_file_documents(label)`（CEF 补丁 [`04`](../../third-patches/cef/README.md)：建窗 `extra_info` 带
   `kabegame.allow_file_access_from_file_urls`，只给这个 browser 的 `file:` 文档打开 `allow_file_access_from_file_urls`，页面
   才能 fetch 同目录文件；偏好对应用页的 http / tauri 源没有作用）与 `allow_app_local_resources(label)`（补丁 05，三个桌面平台
-  都登记：应用页能给 iframe 赋 `file:` 的 `src`；同时供图库媒体走 `file://`，见下「图库媒体」）。非 Windows 不登记 04，
-  `webEntry` 恒为空。`allow_universal_access_from_file_urls` 仍关闭，`file:` iframe 碰不到父页面 DOM。
+  都登记：应用页能给 iframe 赋 `file:` 的 `src`；同时供图库媒体走 `file://`，见下「图库媒体」）。
+  `allow_universal_access_from_file_urls` 仍关闭，`file:` iframe 碰不到父页面 DOM。
 - **应用页直接赋 `src`，靠 CEF 补丁 05**：应用页是 `http://localhost:1420` / `tauri` 源，Chromium 有两道互相独立的关
   拦住它嵌 `file:`——渲染进程 Blink 的 `SecurityOrigin::CanDisplay(file:)` 对非本地源返回 false（控制台
   `Not allowed to load local resource`，iframe 停在 `about:blank`）；浏览器进程 `RenderFrameHostImpl::BeginNavigation` 的
@@ -200,7 +219,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
   iframe 的 `file:` 导航与 `file:` 文档的请求由运行时闸门按网页壁纸目录索引裁决（见下）。
   > 历史：Phase 6a 曾由运行时从浏览器进程对命名子 frame 调 `CefFrame::LoadURL` 绕开 `CanDisplay`，真机上渲染进程被杀并被
   > `on_render_process_terminated` 的无条件 `reload()` 放大成整窗刷新循环。不要再从后端导航子 frame。
-- **前端时序**（`WallpaperStage`）：`createWebFrame(entry)`：没有入口直接抛「无法加载网页壁纸」（非 Windows、Web 版、Android
+- **前端时序**（`WallpaperStage`）：`createWebFrame(entry)`：没有入口直接抛「无法加载网页壁纸」（Web 版、Android
   都走这条，`ImageContent` 退回作者预览图）；否则建 iframe、插入 DOM、赋 `src`。`load` 时 `isInitialBlank`（仍可读且是
   `about:blank`）的初始空文档忽略；仍可读却不是初始文档（例如浏览器侧缺授权时改写出的 `about:blank#blocked`）记
   `wpe web entry blocked: <href>`；读 `location` 抛错（已是跨源 `file:` 页面）才算加载完成。8s 超时仍停在初始 `about:blank`
@@ -260,7 +279,7 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
   `kabegame.allow_local_resources` 给非弹窗 browser 的最外层主 frame 加 `content::CreateFileURLLoaderFactory`。工厂照常经
   `WillCreateURLLoaderFactory` 包成 CEF 的代理工厂，每个请求仍到 `OnBeforeResourceLoad`。Phase 6c 给每个工厂实例创建只允许该文档 origin 读 `file:` 的私有 CORS 列表；运行时还调用 `CefAddCrossOriginWhitelistEntry(origin, "file", "", true)` 通过 CEF proxy 的跨源闸门，profile 的共享列表不变。
 - **登记**：`allow_app_local_resources` 给主窗口（`startup.rs`，三个桌面平台）与壁纸窗口（`wallpaper/manager/window.rs`，
-  它的 Vue 页同样显示图片 / 视频；窗口壁纸模式只有 Windows / macOS）登记；`allow_file_documents`（04）仍只 Windows、只为 WPE。
+  它的 Vue 页同样显示图片 / 视频；窗口壁纸模式只有 Windows / macOS）登记；`allow_file_documents`（04）只为 WPE，同样两个窗口都登记。
 - **运行时按发起方分档**（`tauri-runtime-kbcef` 的 `resource_request_handler` + `file_access::classify_file_requester`；登记了任一
   能力的 label 的 `file:` 请求才进入分档）。不免检的请求在 `OnBeforeResourceLoad` 里向应用注册的解析器要访问范围
   （`set_file_scope_resolver`，即网页壁纸目录索引），再经 `check_file_request` 判定（百分号解码成路径，必须是普通文件，拒绝
@@ -293,7 +312,7 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
 - **键**：与闸门同一套规范化，`tauri_runtime_kbcef::file_path_key`（canonicalize、去 Windows `\\?\` 前缀、Windows 不分大小写、去尾
   分隔符），两边不各写一份。查找沿路径的祖先向上，第一个在表里的目录就是所属壁纸（文档在壁纸子目录里也能找到）。目录已不
   存在时不登记。
-- **建表时机**：桌面 Windows 在 `core_init::init_heavy_globals` 里 `Storage::init_global()` 之后、进入 `Services` 阶段之前调用
+- **建表时机**：三个桌面平台在 `core_init::init_heavy_globals` 里 `Storage::init_global()` 之后、进入 `Services` 阶段之前调用
   `init_wpe_web_dir_index()`。两个宿主都晚于它：主窗口虽在 `init_pre` 建好，但前端要等启动页 Ready 才会打开预览；壁纸窗口在
   `init_post` 才建。所以表一定先于任何网页壁纸 iframe 就绪，冷启动时桌面就是网页壁纸也能第一次就加载成功。
 - **先订阅再扫描**：先同步订阅 `images-added` / `images-deleted` / `image-changed` / `images-change` 四种广播，再全量扫描
@@ -306,8 +325,7 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
 - **放行的两条写入路**：事件跟随在收到 `metadataId` 补丁时按新 metadata 重算（改了目录属性，旧目录**立即**不可读，不必等
   页面重拉）；`wpe_web_pull_state` 在把状态交给页面之前用同一份 metadata 覆盖（页面拿到新路径时闸门一定已经认它）。两条路写的
   都是「这张壁纸当前 metadata 算出的放行」，先后到达结果相同；覆盖，不是追加。
-- **失败时全拒**：建表失败只记 error 并保持空表，闸门全拒、拉取报错，网页壁纸加载不出来，但不放宽。非 Windows 不建表
-  （`WpeWebDirIndex::global()` 是空表）。
+- **失败时全拒**：建表失败只记 error 并保持空表，闸门全拒、拉取报错，网页壁纸加载不出来，但不放宽。
 
 ### 运行时垫片与宿主协议
 
@@ -428,7 +446,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 
 - 对 `type === "x-wpe/web"` 的目标，在 base / top 双层之上命令式创建一个 **`file:` iframe**（插入后直接赋
   `src = webEntry`，见上「网页壁纸 iframe」），与应用前端不同源，拿不到父页面 DOM；IPC 来自 CEF 注入的子 frame 桥，权限只有
-  `wpe-web-capability`。`webEntry` 为空（非 Windows 等）时不建 iframe、报「无法加载网页壁纸」。
+  `wpe-web-capability`。`webEntry` 为空（Android 等）时不建 iframe、报「无法加载网页壁纸」。
   `sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-forms"`（不给 top-navigation / popups / modals /
   downloads）、`allow="autoplay; fullscreen"`、`referrerpolicy="no-referrer"`。
 - **不参与 base / top 双层过渡**：一次只存在一个 iframe。切入时等页面 `load`（8s 无 load 记 `wpe web entry load timeout`，
@@ -453,7 +471,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   样式 / 过渡 / 音量 / 倍速跟随壁纸设置，渲染 `WallpaperStage`），缩略形态仍是作者 `preview.*`；该形态不构建缩略 / 原图链，
   丢失态只看 `localExists === false` 或目标取不到（页面加载超时、场景退回都不算丢失）。场景在出结果（首帧，或退回后预览图加载完）前
   不发 `ready`，加载态一直保持。`x-wpe/video` 不走这里，仍是 `<video>` 链。
-  非 Windows 上目标的 `webEntry` 为空：`WallpaperStage` 报非致命错误，`ImageContent` 只结束加载态，原图形态的画布留空
+  Android 上目标的 `webEntry` 为空：`WallpaperStage` 报非致命错误，`ImageContent` 只结束加载态，原图形态的画布留空
   （网格本来就用作者预览图）。
 - 网格（`ImageItem`）对所有 WPE 行固定用缩略形态，不悬停加载原图形态；角标「WPE · 视频」/「WPE · 网页」。
 - 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperDesktopCanvas.vue`：按主显示器逻辑分辨率
@@ -532,12 +550,18 @@ Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSess
 当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，
 Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网页壁纸收到的是 Kabegame 自己的会话（图片名 + 应用图标）。
 
-只有 Windows 有数据源（`realfft` 与 `windows` 的音频 / WinRT feature 都只在 Windows 依赖段），其它平台命令直接返回错误。
+只有 Windows 有数据源（`realfft` 与 `windows` 的音频 / WinRT feature 只在 Windows 依赖段，并由 `wpe` feature 开启），macOS / Linux 的订阅命令直接返回错误，垫片忽略，页面收不到音频与媒体回调。
 
 ## 七、已知边界
 
-- **WPE 壁纸目前只提供 Windows 桌面**：macOS / Linux / Android / Web 不自动发现、不渲染网页壁纸（`web_entry` 与网页壁纸目录
-  索引都按 Windows 门控），`x-wpe/*` 行只显示作者预览图。
+- **Android / Web 没有 WPE**（`wpe` feature 不开）：不发现、不导入、不渲染，`x-wpe/*` 行只显示作者预览图。
+- **macOS / Linux 的限制**：Steam 上装不了 WPE，`libraryfolders.vdf` 通常不含 431960，自动发现大概率为空，主要靠手选文件夹。
+  场景壁纸依赖 WPE 安装目录的 `assets`，找不到时退回预览图（`assets:missing`）。Linux 的 CEF 未启用 WebGPU 时同样退回（`webgpu:unavailable`）。
+  macOS 窗口壁纸没有鼠标转发，网页壁纸在桌面上不可交互。Linux 没有窗口壁纸模式，设为壁纸直接报错。
+- **WPE 安装目录**：只有一个，存在设置 `wpeEngineDir`（`wpe::discover::engine_dir`），三个桌面平台通用，场景的 `assets`、`config.json` 与 `ui_` 词条都读它。
+  设置为空时先看 Steam 库，再把库里的场景 / 网页壁纸逐张从上一级往上找，判据是 `assets/shaders/common.h`（壁纸自身不算，作者的项目可以自带 `assets`；不能只看 `assets` 目录名，这个目录会放行给场景宿主），找到就写入设置。
+  设置里的目录失效时不另找，清空才重新查找；找不到时 `scene_assets_of` 打 warn，场景退回预览图。用户在壁纸设置里覆盖（`set_wpe_engine_dir` 校验同一判据、刷新宿主范围，传空时立即重新查找）。
+  用户怎么拿到这些资源见用户文档 `apps/docs/src/content/docs/guide/wallpaper-engine.md`。
 - 导入 `video`、`web` 与 `scene`；`application` 只占位并计入跳过。场景壁纸目前只有少数能实时渲染（P1：eagleflag、deep_space、beach），其余在预览、应用背景与桌面显示作者预览图。
 - 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言（`applyGeneralProperties({ language })`）；
   `fps`、`setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
@@ -563,7 +587,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 - `src-tauri/kabegame-core/src/crawler/wpe_import.rs`、`plugin/builtin.rs`、`task_scheduler/mod.rs`
 - `src-tauri/kabegame-core/src/media/image_type.rs`、`storage/images.rs`、`storage/organize.rs`
 - `src-tauri/kabegame/src/http_server.rs`（`/file` 对 WPE 行 404）、`commands/wallpaper.rs`（`WallpaperTarget.webEntry`）、
-  `wallpaper/mod.rs`（`web_entry`，Windows 门控）、`wallpaper/rotator.rs`、`capabilities/wpe-web.json`、
+  `wallpaper/mod.rs`（`web_entry`，`wpe` feature 门控）、`wallpaper/rotator.rs`、`capabilities/wpe-web.json`、
   `tauri.conf.json.handlebars`（CSP `frame-src … file:`）
 - 网页壁纸 iframe：`src-tauri/kabegame/src/startup.rs` 与 `wallpaper/manager/window.rs`（`allow_file_documents` +
   `allow_app_local_resources`）、`apps/kabegame/src/components/wallpaper/WallpaperStage.vue`（`createWebFrame` 赋 `src` /

@@ -466,7 +466,7 @@ import {
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";
-import { IS_ANDROID, IS_WINDOWS } from "@/env.ts";
+import { IS_ANDROID, IS_WEB } from "@/env.ts";
 
 const { t } = useI18n();
 /** 与模板 v-if 一致：Android（含平板宽屏）一律用 PhotoSwipe，不能按 isCompact 宽度断点判断。 */
@@ -566,8 +566,8 @@ const previewResolving = computed(() => typeof props.image === "string" && !reso
 const isPreviewVideo = computed(() => isVideoPlaybackType(previewImage.value?.type));
 /** 非视频 WPE 壁纸（web / scene）：桌面画布内嵌壁纸组件，WPE 视频仍是视频预览。 */
 const isPreviewWallpaper = computed(() => isWpeWallpaperContentType(previewImage.value?.type));
-/** 网页与场景只在 Windows 实时运行，其它平台只显示预览图，没有可暂停的实例 */
-const previewWallpaperLive = computed(() => IS_WINDOWS && isPreviewWallpaper.value);
+/** 网页与场景只在桌面实时运行（`wpe` feature），Android / Web 只显示预览图，没有可暂停的实例 */
+const previewWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && isPreviewWallpaper.value);
 /** 预览这一份的暂停状态，切图时复位；桌面的暂停是设置 `wallpaperPaused`，互不影响 */
 const wallpaperPaused = ref(false);
 /** Panzoom 图片分支的条件。 */

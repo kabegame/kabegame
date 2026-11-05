@@ -7,9 +7,9 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::discover::{discover_roots, platform_supported, WpeRootKind};
+use super::discover::{discover_roots, WpeRootKind};
 use super::project::{read_project, WpeKind};
-use super::recognize::{classify_dir, expand_dir, RecognizedKind};
+use super::recognize::expand_dir;
 use super::{normalize_local_dir, WPE_PROJECT_FILE};
 
 /// 一个来源（按类别合并多个 Steam 库）的扫描结果。
@@ -18,8 +18,6 @@ use super::{normalize_local_dir, WPE_PROJECT_FILE};
 pub struct WpeSourceInfo {
     /// `workshop` / `defaultprojects` / `myprojects` / `custom`。
     pub kind: String,
-    /// 自定义目录的识别结果（`wallpaper` / `workshop` / `install` / `steamLibrary` …）。
-    pub recognized: Option<String>,
     pub paths: Vec<String>,
     pub total: usize,
     /// 入口文件存在的 `video` 壁纸数量。
@@ -38,7 +36,6 @@ impl WpeSourceInfo {
     pub fn empty(kind: impl Into<String>) -> Self {
         Self {
             kind: kind.into(),
-            recognized: None,
             paths: Vec::new(),
             total: 0,
             video: 0,
@@ -53,7 +50,6 @@ impl WpeSourceInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WpeScanResult {
-    pub platform_supported: bool,
     pub sources: Vec<WpeSourceInfo>,
 }
 
@@ -136,30 +132,21 @@ pub fn scan_sources(imported: &HashSet<String>) -> WpeScanResult {
         }
     }
 
-    WpeScanResult {
-        platform_supported: platform_supported(),
-        sources,
-    }
+    WpeScanResult { sources }
 }
 
-/// 识别用户随手选的目录（单个壁纸 / 创意工坊根 / WPE 安装目录 / Steam 库根）。
+/// 识别用户手选的目录：自身或向下两层里的壁纸目录（规则见 [`expand_dir`]）。
 pub fn scan_extra_dir(path: &Path, imported: &HashSet<String>) -> Result<WpeSourceInfo, String> {
     let Some(dir) = normalize_local_dir(path) else {
         return Err("目录不存在或不可访问".to_string());
     };
     let dirs = expand_dir(&dir);
     if dirs.is_empty() {
-        let recognized = classify_dir(&dir);
-        if recognized == RecognizedKind::Unknown {
-            return Err("未识别到 Wallpaper Engine 壁纸目录（缺少 project.json）".to_string());
-        }
         return Err(format!(
-            "该目录（{}）里没有可识别的壁纸目录",
-            recognized.as_str()
+            "未识别到 Wallpaper Engine 壁纸目录（两层内没有 {WPE_PROJECT_FILE}）"
         ));
     }
     let mut info = WpeSourceInfo::empty("custom");
-    info.recognized = Some(classify_dir(&dir).as_str().to_string());
     info.paths.push(dir.to_string_lossy().into_owned());
     info.add_counts(count_dirs(&dirs, imported));
     Ok(info)
@@ -189,7 +176,7 @@ pub fn collect_selected_dirs(
                 if expanded.is_empty() {
                     errors.push((
                         trimmed.to_string(),
-                        format!("{}（{}）", WPE_PROJECT_FILE, classify_dir(&dir).as_str()),
+                        format!("两层内没有 {WPE_PROJECT_FILE}"),
                     ));
                 } else {
                     dirs.extend(expanded);

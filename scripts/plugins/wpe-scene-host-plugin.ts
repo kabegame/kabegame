@@ -32,18 +32,24 @@ export class WpeSceneHostPlugin extends BasePlugin {
     bs.hooks.prepareEnv.tap(this.name, () => {
       const { component, cmd, mode, skip } = bs.context;
       if (!component?.isMain || skip?.isVue) return;
+      // Android 打包会把 resources/ 整个注入 APK assets，先清掉桌面 release 留下的产物。
+      if (mode?.isAndroid) this.removeStaleResources();
       if (mode?.isAndroid || mode?.isWeb) return;
       if (cmd.isDev) this.buildForDev();
       else if (cmd.isBuild) this.buildInto(path.join(RESOURCES_DIR, SCENE_HOST_DIR_NAME));
     });
   }
 
-  private buildForDev(): void {
+  private removeStaleResources(): void {
     const stale = path.join(RESOURCES_DIR, SCENE_HOST_DIR_NAME);
     if (existsSync(stale)) {
       rmSync(stale, { recursive: true, force: true });
       this.log(`删除上次 prod 构建留下的 ${path.relative(ROOT, stale)}`);
     }
+  }
+
+  private buildForDev(): void {
+    this.removeStaleResources();
     this.buildInto(path.join(TARGET_DIR, "debug", "resources", SCENE_HOST_DIR_NAME), true);
   }
 

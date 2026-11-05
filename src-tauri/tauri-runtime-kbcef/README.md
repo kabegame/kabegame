@@ -65,6 +65,7 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
 - `Settings.browser_subprocess_path` 指向 exe 旁的扁平 `kabegame-cef-helper`（与 Linux/Windows 相同布局）；renderer/GPU/utility 全部由它承载，helper 与 browser 复用 runtime 内唯一的 `CefRuntimeApp` 和 renderer initialization-script handler。**release（bundled）依赖 `third-patches/cef/01-flat-subprocess-path.patch`**（见「CEF 依赖与 patch」），否则 Chromium 会把路径改写为 5 个 helper `.app` 变体；dev 裸跑时 `AmIBundled()==false`，stock CEF 本就不做变体改写。
 - runtime 使用 `external_message_pump=1`，每轮非阻塞排空 NSApplication event queue，再执行 `do_message_loop_work()`。
 - `framework_dir_path` 仍显式设为 canonicalize 后的真实路径（dev 的 `target/Frameworks` 是符号链接），与 dyld 实际加载路径一致；留空或不一致会导致 GPU 合成黑屏（JS/输入正常、画面全黑）。
+- 裸跑时 Chromium 到 exe 旁找 ANGLE，`chrome_debug.log` 里缺库表现为 `Failed to load .../libGLESv2.dylib` 与 `Exiting GPU process`，随后退回软件合成，`webgl`、`webgpu` 都是 `disabled_off`。`OSPlugin` 在 dev / start 前把 `libEGL.dylib`、`libGLESv2.dylib` 软链到 `target/<profile>`；GPU 进程只加载这两个，`libvk_swiftshader` 与 `libcef_sandbox` 不用链。打包版是 `.app`，走 framework 的 `Libraries`。
 
 ## Windows 注意事项
 

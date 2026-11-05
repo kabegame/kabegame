@@ -107,6 +107,11 @@ Kabegame 跟随操作系统的网络配置，**没有应用内的用户代理设
 - **原因**：轮播选中的画册是空的。
 - **操作**：先到画廊把图片加入该画册再开启轮播。
 
+### 现象：Wallpaper Engine 场景壁纸一直显示预览图
+
+- **原因**：这张壁纸用了尚未支持的特性，或者找不到 Wallpaper Engine 的内置资源。
+- **操作**：按 [Wallpaper Engine 壁纸](/guide/wallpaper-engine/#排障) 的步骤排查，缺资源时可以自己复制或下载。
+
 ## 插件相关
 
 ### 现象：爬虫运行报错 `Failed to eval crawler script: ...`

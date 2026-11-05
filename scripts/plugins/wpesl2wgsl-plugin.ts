@@ -6,8 +6,9 @@ import { BuildSystem } from "../build-system.ts";
 import { ROOT, WPESL2WGSL_FE_WASM, WPESL2WGSL_WASM } from "../paths.ts";
 
 /**
- * kabegame 的命令（dev / start / build / check / test）不带 `--skip vue` 时，先把
- * `deno task build:wpesl2wgsl` 的产物拷进前端；找不到产物只告警，前端照常构建，场景壁纸退回预览图。
+ * kabegame 桌面 standard 模式的命令（dev / start / build / check / test）不带 `--skip vue` 时，先把
+ * `deno task build:wpesl2wgsl` 的产物拷进场景宿主；找不到产物只告警，宿主照常构建，场景壁纸退回预览图。
+ * Android / Web 没有 WPE，不需要这份 wasm。
  */
 export class Wpesl2wgslPlugin extends BasePlugin {
   static readonly NAME = "Wpesl2wgslPlugin";
@@ -18,7 +19,8 @@ export class Wpesl2wgslPlugin extends BasePlugin {
 
   apply(bs: BuildSystem): void {
     bs.hooks.prepareEnv.tap(this.name, () => {
-      if (!bs.context.component?.isMain || bs.context.skip?.isVue) return;
+      const { component, mode, skip } = bs.context;
+      if (!component?.isMain || skip?.isVue || !mode?.isStandard) return;
       this.syncWasm();
     });
   }

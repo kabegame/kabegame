@@ -211,11 +211,18 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(tauri("fastFolderSync", "get_fast_folder_sync", "set_fast_folder_sync", "enabled"));
   }
 
-  // 网页壁纸媒体集成与当前壁纸暂停：WPE 网页、场景壁纸只支持 Windows 桌面
+  // 网页壁纸媒体集成：系统媒体会话与音频采集只有 Windows 有数据源
   if (IS_WINDOWS && !IS_WEB) {
-    entries.push(tauri("wallpaperPaused", "get_wallpaper_paused", "set_wallpaper_paused", "paused"));
     entries.push(tauri("wpeMediaIntegration", "get_wpe_media_integration", "set_wpe_media_integration", "enabled"));
-    entries.push(tauri("wpeScenePostprocess", "get_wpe_scene_postprocess", "set_wpe_scene_postprocess", "value"));
+  }
+
+  // 当前壁纸暂停、场景后处理与 WPE 目录：WPE 只在桌面提供
+  if (!IS_ANDROID && !IS_WEB) {
+    entries.push(
+      tauri("wallpaperPaused", "get_wallpaper_paused", "set_wallpaper_paused", "paused"),
+      tauri("wpeScenePostprocess", "get_wpe_scene_postprocess", "set_wpe_scene_postprocess", "value"),
+      tauri("wpeEngineDir", "get_wpe_engine_dir", "set_wpe_engine_dir", "dir"),
+    );
   }
 
   // 冻结网页：畅游一键下载（桌面）与网页收集（桌面 + Android 的 V8 后端）共用

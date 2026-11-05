@@ -104,7 +104,7 @@ pub async fn generate_wallpaper_cover(bytes: &[u8]) -> Result<PathBuf, String>;
 
 ## 点 3 — 命令（`kabegame/src/commands/wpe_web.rs`）
 
-- **新增** 两个命令，只给应用页用，注册进 `generate_handler!`，门控同 `start_download` 的调用方（桌面 CEF）。
+- **新增** 两个命令，只给应用页用，注册进 `generate_handler!`，门控 `#[cfg(feature = "wpe")]`（`40219e03` 起 WPE 在三个桌面平台都开启）。
 ```rust
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]

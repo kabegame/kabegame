@@ -124,12 +124,15 @@ pub enum SettingKey {
     WallpaperVolume,
     /// 视频壁纸播放速率（0.25～3）
     WallpaperVideoPlaybackRate,
-    /// 暂停桌面上的壁纸：只对网页与场景壁纸生效（窗口模式，仅 Windows）
+    /// 暂停桌面上的壁纸：只对网页与场景壁纸生效（窗口模式）
     WallpaperPaused,
     /// 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（标题、封面、进度），仅 Windows 生效
     WpeMediaIntegration,
-    /// 场景壁纸后处理档位：follow（跟随 WPE 的 postprocessing）/ disabled / enabled / ultra，仅 Windows 生效
+    /// 场景壁纸后处理档位：follow（跟随 WPE 的 postprocessing）/ disabled / enabled / ultra
     WpeScenePostprocess,
+    /// WPE 安装目录（场景的 `assets`、`config.json` 与 `ui_` 词条都从这里读）；None 时由
+    /// `wpe::discover::engine_dir` 自动查找并写入，用户可以在壁纸设置里覆盖
+    WpeEngineDir,
     /// 窗口状态（窗口位置、大小、是否最大化）
     WindowState,
     /// 当前壁纸图片ID
@@ -339,6 +342,7 @@ impl Settings {
             SettingKey::FastFolderSync => SettingValue::Bool(true),
             SettingKey::SurfFreezePage => SettingValue::Bool(true),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
+            SettingKey::WpeEngineDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
             SettingKey::WallpaperRotationPath => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationPosition => SettingValue::I64(0),
@@ -462,6 +466,7 @@ impl Settings {
             SettingKey::WallpaperPaused,
             SettingKey::WpeMediaIntegration,
             SettingKey::WpeScenePostprocess,
+            SettingKey::WpeEngineDir,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
             #[cfg(feature = "virtual-driver")]
@@ -650,6 +655,7 @@ impl Settings {
             )),
             SettingKey::GalleryImageAspectRatio
             | SettingKey::DefaultDownloadDir
+            | SettingKey::WpeEngineDir
             | SettingKey::CurrentWallpaperImageId
             | SettingKey::WallpaperRotationPath => match json {
                 serde_json::Value::String(s) if !s.trim().is_empty() => {
@@ -809,6 +815,7 @@ impl Settings {
             SettingKey::WallpaperPaused => "wallpaperPaused".to_string(),
             SettingKey::WpeMediaIntegration => "wpeMediaIntegration".to_string(),
             SettingKey::WpeScenePostprocess => "wpeScenePostprocess".to_string(),
+            SettingKey::WpeEngineDir => "wpeEngineDir".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
             #[cfg(feature = "virtual-driver")]
@@ -1052,6 +1059,13 @@ impl Settings {
     pub fn get_default_download_dir(&self) -> Option<String> {
         Self::cells()
             .get(&SettingKey::DefaultDownloadDir)
+            .and_then(|c| c.load().as_option_string())
+            .flatten()
+    }
+
+    pub fn get_wpe_engine_dir(&self) -> Option<String> {
+        Self::cells()
+            .get(&SettingKey::WpeEngineDir)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
@@ -1694,6 +1708,20 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WpeScenePostprocess, &new_value);
+        Ok(())
+    }
+
+    /// WPE 安装目录；空串按未设置处理。是不是安装目录由调用方判断（`wpe::discover`，它只随 `wpe` feature 编译）。
+    pub fn set_wpe_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
+        let dir = dir
+            .map(|dir| dir.trim().to_string())
+            .filter(|dir| !dir.is_empty());
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionString(dir);
+        if let Some(cell) = cells.get(&SettingKey::WpeEngineDir) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WpeEngineDir, &new_value);
         Ok(())
     }
 

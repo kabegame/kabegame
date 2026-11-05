@@ -48,6 +48,7 @@
     "npm:dexie@^4.2.0": "4.4.2",
     "npm:dompurify@^3.3.2": "3.3.2",
     "npm:ejs@^3.1.10": "3.1.10",
+    "npm:es-module-lexer@1.7.0": "1.7.0",
     "npm:eslint-config-airbnb-base@15": "15.0.0_eslint@8.57.1_eslint-plugin-import@2.32.0__eslint@8.57.1",
     "npm:eslint-plugin-import@^2.26.0": "2.32.0_eslint@8.57.1",
     "npm:eslint@^8.16.0": "8.57.1",

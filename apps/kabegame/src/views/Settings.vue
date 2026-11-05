@@ -280,11 +280,19 @@
                 </SettingRow>
 
                 <SettingRow
-                  v-if="IS_WINDOWS"
+                  v-if="!IS_ANDROID && !IS_WEB"
                   :label="$t('settings.wpeScenePostprocess')"
                   :description="$t('settings.wpeScenePostprocessDesc')"
                 >
                   <SettingRadioControl setting-key="wpeScenePostprocess" :options="wpeScenePostprocessOptions" />
+                </SettingRow>
+
+                <SettingRow
+                  v-if="!IS_ANDROID && !IS_WEB"
+                  :label="$t('settings.wpeEngineDir')"
+                  :description="$t('settings.wpeEngineDirDesc')"
+                >
+                  <WpeEngineDirSetting />
                 </SettingRow>
 
                 <SettingRow
@@ -417,6 +425,7 @@ import SettingNumberControl from "@/components/settings/controls/SettingNumberCo
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
 import SettingRadioControl from "@/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownloadDirSetting.vue";
+import WpeEngineDirSetting from "@/components/settings/items/WpeEngineDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
@@ -655,9 +664,9 @@ watch(
 );
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 const { settingValue: wallpaperPausedSetting, set: setWallpaperPaused } = useSettingKeyState("wallpaperPaused");
-/** 只有窗口模式桌面上才有实时实例（网页与场景只在 Windows 运行）；其它情况传 undefined，面板不显示暂停与清空 */
+/** 只有窗口模式桌面上才有实时实例（Android / Web 不运行网页与场景）；其它情况传 undefined，面板不显示暂停与清空 */
 const desktopWallpaperPaused = computed(() =>
-  IS_WINDOWS && wallpaperMode.value === "window" ? wallpaperPausedSetting.value === true : undefined,
+  !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window" ? wallpaperPausedSetting.value === true : undefined,
 );
 // 关闭壁纸：禁用期间将其余壁纸控件置灰
 const wallpaperDisabled = computed(() => settingsStore.values.wallpaperDisabled === true);

@@ -6,11 +6,16 @@
 //!
 //! 本模块只做只读解析与目录展开，不写库、不复制或转码用户目录里的任何文件。
 
+// 入库模型与属性解析在所有构建里都要（Storage、Android 的壁纸目标），发现与识别只随 wpe feature 编译。
+#[cfg(feature = "wpe")]
 pub mod discover;
+#[cfg(feature = "wpe")]
 pub mod locale;
 pub mod project;
 pub mod properties;
+#[cfg(feature = "wpe")]
 pub mod recognize;
+#[cfg(feature = "wpe")]
 pub mod scan;
 pub mod user_props;
 
@@ -40,12 +45,20 @@ pub fn normalize_local_dir(path: &Path) -> Option<PathBuf> {
 ///
 /// WPE 的 `file` / `preview` 必须是目录内相对路径；媒体服务按它拼目录并再次做
 /// canonicalize 边界校验，这里是第一道门。
+///
+/// 壁纸内容来自 Windows，规则不随平台变：`\` 一律按分隔符看（Unix 上它本是普通文件名字符），
+/// 盘符也单独拒绝（Unix 的 `Path` 不认识盘符）。
 pub fn is_safe_relative_path(rel: &str) -> bool {
     let rel = rel.trim();
     if rel.is_empty() {
         return false;
     }
-    let path = Path::new(rel);
+    let normalized = rel.replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return false;
+    }
+    let path = Path::new(&normalized);
     if path.is_absolute() {
         return false;
     }
@@ -66,7 +79,9 @@ mod tests {
         assert!(!is_safe_relative_path("video/../../outside.mp4"));
         assert!(!is_safe_relative_path(""));
         assert!(!is_safe_relative_path(r"C:\Windows\notepad.exe"));
+        assert!(!is_safe_relative_path("C:/Windows/notepad.exe"));
         assert!(!is_safe_relative_path("/etc/passwd"));
         assert!(!is_safe_relative_path(r"\\server\share\a.mp4"));
+        assert!(!is_safe_relative_path(r"video\..\..\outside.mp4"));
     }
 }
