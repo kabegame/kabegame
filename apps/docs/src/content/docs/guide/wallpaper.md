@@ -162,6 +162,7 @@ Android 没有壁纸模式选择，统一走系统 `WallpaperManager`：
 
 - [画廊](/guide/gallery/) — 右键菜单与导入流程。
 - [画册](/guide/albums/) — 「设为轮播壁纸」入口。
+- [Wallpaper Engine 壁纸](/guide/wallpaper-engine/) — 导入 Wallpaper Engine 壁纸，以及场景壁纸需要的资源（仅桌面）。
 - [虚拟磁盘](/guide/virtual-drive/) — 通过虚拟磁盘直接浏览本地壁纸目录（仅桌面）。
 - [安卓专版](/guide/android/) — Android 返回栈、图片选择器与限制。
 - [设置概览](/guide/settings/) — 壁纸轮播相关的完整设置项。

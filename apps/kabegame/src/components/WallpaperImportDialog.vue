@@ -174,7 +174,6 @@ import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 /** 与后端 `WpeSourceInfo` 对应。 */
 interface WpeSourceInfo {
   kind: string;
-  recognized?: string | null;
   paths: string[];
   total: number;
   /** 入口存在的视频壁纸数量。 */
@@ -189,7 +188,6 @@ interface WpeSourceInfo {
 }
 
 interface WpeScanResult {
-  platformSupported: boolean;
   sources: WpeSourceInfo[];
 }
 
@@ -361,7 +359,9 @@ async function handleSubmit() {
     myprojects: sources.value.some((s) => s.kind === "myprojects" && isSelected(s)),
   };
   const extraPaths = extraDirs.value.map((source) => source.paths[0]).filter(Boolean);
-  const userConfig: Record<string, unknown> = { sources: sourceFlags };
+  // checkbox 校验不接受全 false，缺失又会合并默认的全选：没勾自动来源时传 null，只导入手选文件夹。
+  const hasAutoSource = Object.values(sourceFlags).some(Boolean);
+  const userConfig: Record<string, unknown> = { sources: hasAutoSource ? sourceFlags : null };
   // `extraDirs` 是 list 变量：空数组会被校验拒绝，未选时省略（后端按缺失处理）。
   if (extraPaths.length > 0) userConfig.extraDirs = extraPaths;
 

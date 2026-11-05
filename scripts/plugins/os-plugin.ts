@@ -56,6 +56,11 @@ const WINDOWS_CEF_RUNTIME_FILES = [
   "dxcompiler.dll",
   "dxil.dll",
 ];
+// dev / start 裸跑 exe 时 Chromium 到 exe 旁找 ANGLE，找不到就退回软件合成，WebGL 与 WebGPU 都不可用；
+// 打包版是 .app，走 framework 的 Libraries，不需要这一步。GPU 进程实际只加载这两个：
+// libvk_swiftshader 是没有 Metal 时的软件回退，libcef_sandbox 与 ANGLE 无关。
+const MACOS_ANGLE_LIBS = ["libEGL.dylib", "libGLESv2.dylib"];
+
 // locales 白名单来自 scripts/cef-locales.ts(单一来源,与 build-chromium.ts 的
 // 导出期裁剪共用)。自编 cef-build 在导出期就已经只剩白名单,这里再挑一次是
 // 幂等的重复工作,留着给「CEF_PATH 指向未经裁剪的目录」兜底。
@@ -166,11 +171,21 @@ export class OSPlugin extends BasePlugin {
       this.bundleLibs(bs);
     });
 
+    bs.hooks.beforeBuild.tap(`${this.name}:macos-angle`, (comp?: string) => {
+      if (!bs.context.cmd?.isDev || !OSPlugin.isMacOS) return;
+      const component = comp ? new Component(comp) : bs.context.component!;
+      if (!component.isMain) return;
+      if (bs.context.mode?.isWeb || bs.context.mode?.isAndroid) return;
+      this.linkMacOSAngleLibs("debug");
+    });
+
     bs.hooks.beforeRun.tap(this.name, (comp?: string) => {
       const component = comp ? new Component(comp) : bs.context.component!;
       if (component.isMain && OSPlugin.isMacOS) {
         if (bs.context.mode?.isWeb || bs.context.mode?.isAndroid) return;
-        this.ensureMacOSCefHelper(bs.options.release ? "release" : "debug");
+        const profile = bs.options.release ? "release" : "debug";
+        this.ensureMacOSCefHelper(profile);
+        this.linkMacOSAngleLibs(profile);
         return;
       }
     });
@@ -472,6 +487,21 @@ export class OSPlugin extends BasePlugin {
       this.log(
         chalk.cyan(`已收集额外库 → ${path.basename(raw)}(来源: ${realpath})`),
       );
+    }
+  }
+
+  private linkMacOSAngleLibs(profile: "debug" | "release"): void {
+    const libraries = path.join(
+      this.cefDir(),
+      "Chromium Embedded Framework.framework",
+      "Libraries",
+    );
+    const dir = path.join(ARTIFACT_DIR, profile);
+    ensureDir(dir);
+    for (const name of MACOS_ANGLE_LIBS) {
+      const link = path.join(dir, name);
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(path.join(libraries, name), link);
     }
   }
 

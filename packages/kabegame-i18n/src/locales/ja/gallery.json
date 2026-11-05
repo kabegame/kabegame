@@ -60,7 +60,7 @@
   "wpeStatTotal": "{n} 件",
   "wpeSectionSources": "壁紙の場所",
   "wpeRescan": "再スキャン",
-  "wpeNoSources": "Wallpaper Engine 壁紙が見つかりません。「フォルダを追加」でワークショップのコンテンツフォルダか Wallpaper Engine のインストール先を選んでください。",
+  "wpeNoSources": "Wallpaper Engine 壁紙が見つかりません。「フォルダを追加」でワークショップのコンテンツフォルダか Wallpaper Engine の projects フォルダを選んでください。",
   "wpeScanHint": "この PC の Wallpaper Engine 壁紙を自動で探し、コピーせずにその場で参照します。現在は動画・ウェブ・シーンの壁紙に対応しています（シーン壁紙は当面ごく一部のみ描画でき、それ以外はプレビュー画像を表示します）。",
   "wpeUnsupported": "Wallpaper Engine の壁紙フォルダとして認識できません",
   "wpeNoSelection": "ソースを 1 つ以上選ぶか、フォルダを追加してください",

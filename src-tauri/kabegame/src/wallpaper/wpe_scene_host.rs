@@ -111,7 +111,7 @@ pub fn refresh_scene_host() {
     let next = file_path_key(&root).map(|root_key| HostScope {
         root,
         root_key,
-        engine_grants: engine_grants(&kabegame_core::wpe::discover::engine_dirs()),
+        engine_grants: engine_grants(kabegame_core::wpe::discover::engine_dir().as_slice()),
     });
     if let Ok(mut slot) = HOST_SCOPE.write() {
         *slot = next;

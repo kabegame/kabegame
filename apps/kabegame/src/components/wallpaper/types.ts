@@ -34,9 +34,9 @@ export interface WallpaperTarget {
   type?: string;
   compatiblePath?: string;
   wpeVideo?: WpeVideoProps | null;
-  /** 网页壁纸的入口 `file://`（后端 `wallpaper::web_entry` 现算）；其它类型、非 Windows 为空。 */
+  /** 网页壁纸的入口 `file://`（后端 `wallpaper::web_entry` 现算）；其它类型、Android 为空。 */
   webEntry?: string | null;
-  /** 场景壁纸（`x-wpe/scene`）解析内置资源的 `<WPE 安装目录>/assets` 绝对路径，按顺序查找；其它类型、非 Windows 为空。 */
+  /** 场景壁纸（`x-wpe/scene`）解析内置资源的 `<WPE 安装目录>/assets` 绝对路径，按顺序查找；其它类型、Android、没找到 WPE 安装目录为空。 */
   sceneAssets?: string[];
   /**
    * 场景壁纸退回用的预览图（行的缩略图，导入时就是作者的 `preview.*`）：不能渲染（含超时）时

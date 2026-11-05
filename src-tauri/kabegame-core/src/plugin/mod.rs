@@ -17,7 +17,7 @@ pub(crate) mod var_canonical;
 pub mod vfs;
 pub mod webpage;
 
-mod builtin;
+pub(crate) mod builtin;
 
 use arc_swap::ArcSwap;
 use futures_util::StreamExt;

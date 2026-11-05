@@ -10,4 +10,5 @@ pub mod settings;
 pub mod surf;
 pub mod task;
 pub mod view;
+#[cfg(feature = "wpe")]
 pub mod wpe;

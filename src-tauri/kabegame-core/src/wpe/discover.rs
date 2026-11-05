@@ -1,10 +1,14 @@
 //! Steam 库发现与 WPE 壁纸根展开。
 //!
-//! Windows 从注册表 `HKCU\Software\Valve\Steam\SteamPath` 起步，Linux 走 Steam 的常见
-//! 安装目录；两者都解析 `steamapps/libraryfolders.vdf`，只在包含 app `431960`
-//! （Wallpaper Engine）的库里产出三类根。WPE 壁纸暂只支持 Windows（[`platform_supported`]）：
-//! Linux 的路径探测保留但不再进入，Linux / macOS / Android / Web 返回空。
+//! Windows 从注册表 `HKCU\Software\Valve\Steam\SteamPath` 起步，Linux / macOS 走 Steam 的常见
+//! 安装目录；都解析 `steamapps/libraryfolders.vdf`，只在包含 app `431960`
+//! （Wallpaper Engine）的库里产出三类根。本模块只随 `wpe` feature 编译，Android / Web 没有。
+//!
+//! WPE 安装目录（[`engine_dir`]）以设置 `wpeEngineDir` 为准；设置为空时先看 Steam 库，再从库里的壁纸往上找，
+//! 找到就写进设置。场景的 `assets`、`config.json` 与 `ui_` 词条都从这一个目录读。
 
+use crate::settings::Settings;
+use crate::storage::Storage;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -43,19 +47,7 @@ pub struct WpeRoot {
 /// WPE 的 Steam app id。
 pub const WPE_STEAM_APP_ID: &str = "431960";
 
-/// 当前平台是否提供 WPE 发现：暂只支持 Windows。
-///
-/// Linux 的 Steam 路径探测（[`steam_install_roots`]）保留但不再进入；macOS / Android / Web 不适用。
-pub fn platform_supported() -> bool {
-    platform_supported_on(std::env::consts::OS)
-}
-
-/// 按目标系统名（`std::env::consts::OS` 的取值）判定，单测在任一平台都能覆盖各分支。
-fn platform_supported_on(os: &str) -> bool {
-    os == "windows"
-}
-
-/// Steam 安装根目录（Windows 注册表 / Linux 常见路径）。
+/// Steam 安装根目录（Windows 注册表 / Linux 与 macOS 常见路径）。
 pub fn steam_install_roots() -> Vec<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -78,7 +70,19 @@ pub fn steam_install_roots() -> Vec<PathBuf> {
         }
         out
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = dirs::home_dir() else {
+            return Vec::new();
+        };
+        let path = home.join("Library/Application Support/Steam");
+        if path.is_dir() {
+            vec![path]
+        } else {
+            Vec::new()
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -161,7 +165,7 @@ fn normalize_vdf_path(raw: &str) -> Option<PathBuf> {
     let path = PathBuf::from(if cfg!(target_os = "windows") {
         normalized
     } else {
-        trimmed.replace('\\', "/")
+        normalized.replace('\\', "/")
     });
     Some(path)
 }
@@ -300,9 +304,6 @@ pub fn roots_in_library(library: &Path) -> Vec<WpeRoot> {
 
 /// 发现全部 WPE 根：读 Steam 库列表 → 每个含 WPE 的库展开三类根。
 pub fn discover_roots() -> Vec<WpeRoot> {
-    if !platform_supported() {
-        return Vec::new();
-    }
     // 注册表里的 SteamPath 与 vdf 里的库路径大小写、分隔符常不一致（如
     // `d:/applications/steam` 对 `D:\Applications\Steam`），统一规范化后按 path_key 去重；
     // 先登记的胜出，所以 vdf 的 apps 判断优先于补登的安装根。
@@ -350,10 +351,67 @@ pub fn discover_roots() -> Vec<WpeRoot> {
     roots
 }
 
+/// 是不是 WPE 安装目录：看内置头文件，不能只看 `assets` 这个常见的目录名，它会放行给场景宿主读取。
+fn is_engine_dir(dir: &Path) -> bool {
+    dir.join("assets")
+        .join("shaders")
+        .join("common.h")
+        .is_file()
+}
+
+/// 从壁纸目录的上一级起逐级往上找安装目录。壁纸自身不算：作者的项目里可以带自己的 `assets`。
+fn engine_dir_above(wallpaper: &Path) -> Option<PathBuf> {
+    wallpaper
+        .ancestors()
+        .skip(1)
+        .find(|dir| is_engine_dir(dir))
+        .map(Path::to_path_buf)
+}
+
+/// 库里的场景 / 网页壁纸逐张往上找。手动拷来的 WPE 不在 Steam 库里，只能这样定位。
+fn engine_dir_from_library() -> Option<PathBuf> {
+    let storage = Storage::global();
+    [storage.list_wpe_scene_rows(), storage.list_wpe_web_rows()]
+        .into_iter()
+        .flat_map(Result::unwrap_or_default)
+        .find_map(|(_, path)| engine_dir_above(Path::new(&path)))
+}
+
+/// WPE 安装目录。设置优先；设置为空时先看 Steam 库、再从库里的壁纸往上找，找到就写进设置。
+/// 设置里的目录失效时返回 None、不另找：那是用户指定或已认定的值，清空设置才重新查找。
+pub fn engine_dir() -> Option<PathBuf> {
+    let settings = Settings::global();
+    if let Some(dir) = settings.get_wpe_engine_dir() {
+        return Some(PathBuf::from(dir)).filter(|dir| is_engine_dir(dir));
+    }
+    let dir = steam_engine_dirs()
+        .into_iter()
+        .find(|dir| is_engine_dir(dir))
+        .or_else(engine_dir_from_library)?;
+    tracing::info!("找到 WPE 安装目录，写入设置: {}", dir.display());
+    settings
+        .set_wpe_engine_dir(Some(dir.to_string_lossy().into_owned()))
+        .ok()?;
+    Some(dir)
+}
+
+/// 壁纸设置里改目录：空值清掉设置（之后重新自动查找），其它值必须是 WPE 安装目录。
+pub fn set_engine_dir(dir: Option<String>) -> Result<(), String> {
+    let Some(dir) = dir.filter(|dir| !dir.trim().is_empty()) else {
+        return Settings::global().set_wpe_engine_dir(None);
+    };
+    let engine = super::normalize_local_dir(Path::new(dir.trim()))
+        .filter(|engine| is_engine_dir(engine))
+        .ok_or_else(|| {
+            format!("不是 Wallpaper Engine 目录（缺 assets/shaders/common.h）: {dir}")
+        })?;
+    Settings::global().set_wpe_engine_dir(Some(engine.to_string_lossy().into_owned()))
+}
+
 /// 各 Steam 库里的 WPE 安装目录 `<库>/steamapps/common/wallpaper_engine`（去重、保持发现顺序）。
 /// 项目根（defaultprojects / myprojects）在安装目录之内；创意工坊根在
 /// `<库>/steamapps/workshop/content/431960`，往上三级是 `steamapps`。
-pub fn engine_dirs() -> Vec<PathBuf> {
+fn steam_engine_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     for root in discover_roots() {
         let engine = match root.kind {
@@ -381,28 +439,17 @@ pub fn engine_dirs() -> Vec<PathBuf> {
 }
 
 /// 场景壁纸解析内置资源（`shaders/common*.h`、内置着色器与 effect、工具材质……）的 `<WPE 安装目录>/assets`。
-/// 只列存在的目录，顺序同 [`engine_dirs`]；非 Windows 为空（[`discover_roots`] 已按平台门控）。
+/// 找不到安装目录时为空。
 pub fn scene_asset_dirs() -> Vec<PathBuf> {
-    engine_dirs()
-        .into_iter()
+    engine_dir()
         .map(|engine| engine.join("assets"))
-        .filter(|assets| assets.is_dir())
+        .into_iter()
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn platform_supported_is_windows_only() {
-        assert!(platform_supported_on("windows"));
-        // 非 Windows 分支：Linux 不再进入 Steam 探测，其余平台本来就不适用
-        for os in ["linux", "macos", "android", "ios", "freebsd"] {
-            assert!(!platform_supported_on(os), "{os}");
-        }
-        assert_eq!(platform_supported(), cfg!(target_os = "windows"));
-    }
 
     #[test]
     fn parses_new_library_folders_format() {
@@ -453,5 +500,61 @@ mod tests {
             libraries[0].0.to_string_lossy().replace('\\', "/"),
             "D:/SteamLibrary"
         );
+    }
+
+    /// `<tmp>/kabegame-engine-<name>-<pid>/wallpaper_engine`：含 `assets/shaders/common.h` 的安装目录。
+    fn engine_fixture(name: &str) -> PathBuf {
+        let base =
+            std::env::temp_dir().join(format!("kabegame-engine-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let engine = base.join("wallpaper_engine");
+        std::fs::create_dir_all(engine.join("assets/shaders")).unwrap();
+        std::fs::write(engine.join("assets/shaders/common.h"), "x").unwrap();
+        engine
+    }
+
+    #[test]
+    fn engine_dir_needs_the_builtin_header() {
+        let engine = engine_fixture("marker");
+        assert!(is_engine_dir(&engine));
+        // 只有同名目录不算
+        let plain = engine.parent().unwrap().join("plain");
+        std::fs::create_dir_all(plain.join("assets/shaders")).unwrap();
+        assert!(!is_engine_dir(&plain));
+        let _ = std::fs::remove_dir_all(engine.parent().unwrap());
+    }
+
+    #[test]
+    fn engine_dir_is_found_above_a_wallpaper_at_any_depth() {
+        let engine = engine_fixture("above");
+        for rel in ["projects/defaultprojects/beach", "workshop/copied/123", "a"] {
+            let wallpaper = engine.join(rel);
+            std::fs::create_dir_all(&wallpaper).unwrap();
+            assert_eq!(
+                engine_dir_above(&wallpaper).as_ref(),
+                Some(&engine),
+                "{rel}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(engine.parent().unwrap());
+    }
+
+    #[test]
+    fn a_wallpaper_is_not_its_own_engine_dir() {
+        // 作者的项目里带 `assets/shaders/common.h` 也不能把壁纸自身当安装目录
+        let engine = engine_fixture("self");
+        assert_eq!(engine_dir_above(&engine), None);
+        let _ = std::fs::remove_dir_all(engine.parent().unwrap());
+    }
+
+    #[test]
+    fn set_engine_dir_rejects_a_folder_without_the_header() {
+        let engine = engine_fixture("reject");
+        let plain = engine.parent().unwrap().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let error = set_engine_dir(Some(plain.to_string_lossy().into_owned())).unwrap_err();
+        assert!(error.contains("assets/shaders/common.h"), "{error}");
+        assert!(set_engine_dir(Some("/no/such/kabegame/dir".into())).is_err());
+        let _ = std::fs::remove_dir_all(engine.parent().unwrap());
     }
 }

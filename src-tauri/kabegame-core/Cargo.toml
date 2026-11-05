@@ -141,7 +141,10 @@ windows-sys = { version = "0.52", features = [
 ] }
 
 [features]
-default = ["ipc-client", "plugin-runtime"]
+default = ["ipc-client", "plugin-runtime", "wpe"]
+# Wallpaper Engine 壁纸的发现、导入与内建插件 wpe-import。桌面主程序与 CLI 开启，Android / Web 不开；
+# 依赖方都是 default-features = false，放进 default 只为让 core 单独测试时覆盖这部分。
+wpe = []
 ipc-client = []
 ipc-server = []
 virtual-driver = ["dep:fuser", "dep:dokan"]

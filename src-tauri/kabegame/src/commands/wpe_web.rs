@@ -357,8 +357,8 @@ pub async fn wpe_web_pull_state(
 /// 预览（主窗口）与桌面（壁纸窗口）的网页壁纸 iframe 走同一条路：按调用方文档认出是哪张（同
 /// [`wpe_web_pull_state`]）；订阅归属调用方 frame，frame 销毁即释放（`lib.rs` 的 `on_webview_event`），
 /// 同一 frame 再订阅同一类替换旧条，所以没有退订命令。只接受子 frame：两个窗口的主 frame 是应用页。
-/// `audio` 只对 `general.supportsaudioprocessing: true` 的壁纸放行（照 WPE）。WPE 网页壁纸只支持 Windows，
-/// 其它平台返回错误。
+/// `audio` 只对 `general.supportsaudioprocessing: true` 的壁纸放行（照 WPE）。只有 Windows 有数据源，
+/// 其它平台返回错误，垫片忽略。
 #[tauri::command]
 pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     webview: tauri::Webview<R>,

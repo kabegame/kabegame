@@ -5,6 +5,7 @@ use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use crate::plugin::webpage::WEBPAGE_PLUGIN_ID;
+#[cfg(feature = "wpe")]
 use crate::wpe::WPE_IMPORT_PLUGIN_ID;
 use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
 use crate::schedule_sync::on_crawl_task_reached_terminal;
@@ -816,6 +817,7 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
             WEBPAGE_PLUGIN_ID => {
                 crate::crawler::webpage::run_builtin_webpage(download_queue, Arc::clone(&run)).await
             }
+            #[cfg(feature = "wpe")]
             WPE_IMPORT_PLUGIN_ID => {
                 crate::crawler::wpe_import::run_builtin_wpe_import(Arc::clone(&run))
                     .await

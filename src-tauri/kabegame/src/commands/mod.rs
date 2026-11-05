@@ -28,10 +28,11 @@ pub mod wallpaper;
 #[cfg(not(target_os = "android"))]
 pub mod web_server;
 pub mod window;
+#[cfg(feature = "wpe")]
 pub mod wpe;
-#[cfg(not(target_os = "android"))]
+#[cfg(feature = "wpe")]
 pub mod wpe_scene;
-#[cfg(not(target_os = "android"))]
+#[cfg(feature = "wpe")]
 pub mod wpe_web;
 
 pub use album::*;
@@ -61,8 +62,9 @@ pub use wallpaper::*;
 #[cfg(not(target_os = "android"))]
 pub use web_server::*;
 pub use window::*;
+#[cfg(feature = "wpe")]
 pub use wpe::*;
-#[cfg(not(target_os = "android"))]
+#[cfg(feature = "wpe")]
 pub use wpe_scene::*;
-#[cfg(not(target_os = "android"))]
+#[cfg(feature = "wpe")]
 pub use wpe_web::*;

@@ -45,10 +45,10 @@ pub struct WallpaperTarget {
     /// 目录型 WPE 视频壁纸的作者默认播放属性；其它类型为 null。
     pub wpe_video: Option<WpeVideoProps>,
     /// 网页壁纸（`x-wpe/web`）的入口 `file://`，由 `wallpaper::web_entry` 现算：图库预览与桌面壁纸窗口的
-    /// `WallpaperStage` 直接把它赋给 web 层 iframe 的 `src`。其它类型、非 Windows、读 `project.json` 失败为 None。
+    /// `WallpaperStage` 直接把它赋给 web 层 iframe 的 `src`。其它类型、Android、读 `project.json` 失败为 None。
     pub web_entry: Option<String>,
     /// 场景壁纸（`x-wpe/scene`）解析内置资源的 `<WPE 安装目录>/assets` 绝对路径，按顺序查找
-    /// （`wpe::discover::scene_asset_dirs`）。其它类型、非 Windows、没找到 WPE 安装目录为空。
+    /// （`wpe::discover::scene_asset_dirs`，来自设置 `wpeEngineDir`）。其它类型、Android、没找到安装目录为空。
     pub scene_assets: Vec<String>,
     /// 场景壁纸（`x-wpe/scene`）退回用的预览图：行的 `thumbnail_path`（导入时就是作者的 `preview.*`）。
     /// 不能渲染（含超时）时 `WallpaperStage` 才显示它，编译期间保持加载态；其它类型、缩略图为空时为 None。
@@ -136,6 +136,7 @@ async fn web_entry_of(info: &ImageInfo) -> Option<String> {
 
 /// 场景壁纸的 `<WPE 安装目录>/assets`（发现 Steam 库要读注册表与 `libraryfolders.vdf`，放 blocking 线程）；
 /// 其它类型不读盘。
+#[cfg(feature = "wpe")]
 async fn scene_assets_of(info: &ImageInfo) -> Vec<String> {
     let kind = kabegame_core::media::image_type::wpe_kind(info.media_type.as_deref());
     if kind.as_deref() != Some("scene") {
@@ -144,13 +145,21 @@ async fn scene_assets_of(info: &ImageInfo) -> Vec<String> {
     let dirs = tokio::task::spawn_blocking(kabegame_core::wpe::discover::scene_asset_dirs)
         .await
         .unwrap_or_default();
-    // 非 Windows 本来就为空（发现按平台门控），不告警
-    if dirs.is_empty() && kabegame_core::wpe::discover::platform_supported() {
-        tracing::warn!("场景壁纸 {} 找不到 WPE 安装目录的 assets", info.id);
+    if dirs.is_empty() {
+        tracing::warn!(
+            "场景壁纸 {} 找不到 WPE 安装目录，可在壁纸设置里指定",
+            info.id
+        );
     }
     dirs.into_iter()
         .map(|dir| dir.to_string_lossy().into_owned())
         .collect()
+}
+
+/// 没有 `wpe` feature 就没有发现逻辑，场景行只显示预览图。
+#[cfg(not(feature = "wpe"))]
+async fn scene_assets_of(_info: &ImageInfo) -> Vec<String> {
+    Vec::new()
 }
 
 /// 图库预览 / 应用背景按 id 取壁纸目标，与当前壁纸共用 [`build_wallpaper_target`]，
@@ -183,10 +192,15 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     let local_path = info.local_path;
 
     // 目录型 WPE 壁纸第一阶段只支持窗口模式；用与视频相同的错误码让前端引导切换模式。
+    // Linux 没有窗口模式，引导过去也切不了，直接报错。
     if kabegame_core::media::image_type::is_wpe_type(media_type.as_deref())
         && settings.get_wallpaper_mode() != "window"
     {
-        return Err("REQUIRES_WINDOW_MODE".to_string());
+        return Err(if cfg!(target_os = "linux") {
+            "Linux 暂不支持把 Wallpaper Engine 壁纸设为桌面".to_string()
+        } else {
+            "REQUIRES_WINDOW_MODE".to_string()
+        });
     }
 
     let requires_window_mode =

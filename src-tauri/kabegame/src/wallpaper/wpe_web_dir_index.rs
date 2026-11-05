@@ -18,7 +18,7 @@
 //! `file:` 访问范围放行库里全部场景壁纸目录，要和网页壁纸目录一样随图片事件维护。场景目录**不**构成网页壁纸
 //! 范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
 //!
-//! 本体与单测跨平台编译；只有初始化的挂接点（`core_init` 里的调用）限 Windows，因为网页壁纸只在 Windows 提供。
+//! 只随 `wpe` feature 编译，三个桌面平台都有。
 
 use kabegame_core::ipc::events::{AppEvent, AppEventKind, ArcAppEvent, ImageFieldPatch};
 use kabegame_core::ipc::server::EventBroadcaster;
@@ -131,7 +131,7 @@ impl WpeWebDirIndex {
         }
     }
 
-    /// 全局实例。未初始化（非 Windows、或尚未 [`init_wpe_web_dir_index`]）时是空表：闸门全拒、拉取报错。
+    /// 全局实例。尚未 [`init_wpe_web_dir_index`] 时是空表：闸门全拒、拉取报错。
     pub fn global() -> &'static Self {
         static INDEX: OnceLock<WpeWebDirIndex> = OnceLock::new();
         INDEX.get_or_init(Self::new)
@@ -305,7 +305,6 @@ const FOLLOWED_KINDS: [AppEventKind; 4] = [
 
 /// 建表并接上闸门与事件。调用方需在 Storage 就绪之后、任何网页壁纸 iframe 加载之前调用（见模块注释）；
 /// 在普通线程上同步执行，不需要处在异步运行时里。
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn init_wpe_web_dir_index() {
     let index = WpeWebDirIndex::global();
     // 1. 先订阅再扫描：扫描期间新增 / 删除的行留在通道里，扫完再处理，不会漏。

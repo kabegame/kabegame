@@ -60,7 +60,7 @@
   "wpeStatTotal": "배경화면 {n}개",
   "wpeSectionSources": "배경화면 위치",
   "wpeRescan": "다시 검색",
-  "wpeNoSources": "Wallpaper Engine 월페이퍼를 찾지 못했습니다. \"폴더 추가\"로 창작마당 콘텐츠 폴더나 Wallpaper Engine 설치 폴더를 선택하세요.",
+  "wpeNoSources": "Wallpaper Engine 월페이퍼를 찾지 못했습니다. \"폴더 추가\"로 창작마당 콘텐츠 폴더나 Wallpaper Engine의 projects 폴더를 선택하세요.",
   "wpeScanHint": "이 PC의 Wallpaper Engine 배경화면을 자동으로 찾아 복사하지 않고 그 자리에서 참조합니다. 현재는 동영상, 웹, 장면 배경화면을 지원합니다(장면 배경화면은 당분간 일부만 렌더링되며 나머지는 미리보기 이미지를 표시합니다).",
   "wpeUnsupported": "Wallpaper Engine 월페이퍼 폴더가 아닙니다",
   "wpeNoSelection": "소스를 하나 이상 선택하거나 폴더를 추가하세요",

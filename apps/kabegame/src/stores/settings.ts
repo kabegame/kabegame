@@ -51,8 +51,10 @@ export interface AppSettings {
   wallpaperVideoPlaybackRate: number;
   /** 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（仅 Windows 桌面） */
   wpeMediaIntegration: boolean;
-  /** 场景壁纸后处理档位（泛光 / HDR）：跟随 WPE 的 postprocessing，或固定为关闭 / 开启 / 超高（仅 Windows 桌面） */
+  /** 场景壁纸后处理档位（泛光 / 超高）：跟随 WPE 的 postprocessing，或固定为关闭 / 开启 / 超高（桌面） */
   wpeScenePostprocess: "follow" | "disabled" | "enabled" | "ultra";
+  /** WPE 安装目录（桌面）：为空时后端自动查找并写入，用户可覆盖 */
+  wpeEngineDir: string | null;
   windowState: {
     x: number | null;
     y: number | null;

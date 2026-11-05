@@ -6,7 +6,7 @@
 //! - 视频行的 `compatible_path` 始终有值：浏览器能播时就是入口视频本身，不能播时才在
 //!   `compatibles_dir` 生成兼容副本；所有播放端（预览、应用背景、壁纸窗口）统一走 `/compatible`。
 //! - 网页行没有可播放媒体，`compatible_path` 留空、宽高留空；`hash` / `size` 取入口 html。
-//!   页面以入口的 `file://` 从原目录加载（桌面壁纸窗口与图库预览同一套运行时目录拦截，暂只支持 Windows）。
+//!   页面以入口的 `file://` 从原目录加载（桌面壁纸窗口与图库预览同一套运行时目录拦截）。
 //! - 场景行同样没有可播放媒体、宽高留空；`hash` / `size` 取入口 json，入口打包在 `scene.pkg` 里时取包。
 //!   渲染在前端（阶段 3），Rust 不解析场景与包。
 //!
@@ -40,9 +40,14 @@ fn emit_log(task_id: &str, level: &str, key: &str, params: serde_json::Value) {
 }
 
 /// 解析勾选的来源。缺省（未传 `sources`）时三类全选；`extraDirs` 单独走扩展键。
+/// 勾选的自动来源。缺失按全选；显式 `null` 表示不用自动来源（只导入手选文件夹）：checkbox 校验不接受全 false，
+/// 前端没有勾选时传 `null`。
 fn parse_sources(config: &HashMap<String, serde_json::Value>) -> Vec<WpeRootKind> {
-    let Some(sources) = config.get("sources").and_then(|value| value.as_object()) else {
+    let Some(value) = config.get("sources") else {
         return WpeRootKind::ALL.to_vec();
+    };
+    let Some(sources) = value.as_object() else {
+        return Vec::new();
     };
     WpeRootKind::ALL
         .into_iter()
@@ -163,7 +168,6 @@ async fn resolve_compatible_path(
     probe: Option<&crate::media::dimensions::MediaProbeResult>,
     dir_string: &str,
 ) -> String {
-    #[cfg(not(target_os = "android"))]
     if let Some(probe) = probe.filter(|probe| !probe.browser_safe) {
         match crate::crawler::downloader::generate_compatible_video(entry, probe).await {
             Ok(Some(path)) => return canonical_string(&path),
@@ -176,8 +180,6 @@ async fn resolve_compatible_path(
             ),
         }
     }
-    #[cfg(target_os = "android")]
-    let _ = (task_id, probe, dir_string);
     canonical_string(entry)
 }
 
@@ -543,4 +545,42 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
 
     run.set_progress(100.0);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crawler::task_scheduler::build_effective_user_config_from_var_defs;
+    use crate::plugin::builtin::builtin_plugins;
+
+    #[test]
+    fn missing_sources_means_all() {
+        assert_eq!(parse_sources(&HashMap::new()).len(), WpeRootKind::ALL.len());
+    }
+
+    #[test]
+    fn flags_select_only_checked_sources() {
+        let config = HashMap::from([(
+            "sources".to_string(),
+            json!({ "workshop": true, "defaultprojects": false, "myprojects": false }),
+        )]);
+        assert_eq!(parse_sources(&config), vec![WpeRootKind::Workshop]);
+    }
+
+    /// 对话框只选手选文件夹时的配置：要过校验，且不回落到默认的全选。
+    #[test]
+    fn folder_only_config_passes_validation_without_auto_sources() {
+        let plugin = builtin_plugins().get(WPE_IMPORT_PLUGIN_ID).unwrap();
+        let config = build_effective_user_config_from_var_defs(
+            &plugin.var_defs,
+            HashMap::from([
+                ("sources".to_string(), serde_json::Value::Null),
+                ("extraDirs".to_string(), json!(["/some/folder"])),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(parse_sources(&config).is_empty());
+        assert_eq!(parse_extra_dirs(&config), vec!["/some/folder".to_string()]);
+    }
 }

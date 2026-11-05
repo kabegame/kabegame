@@ -184,7 +184,7 @@ export function wpeConfigPath(assetsDir: string): string {
 
 /**
  * 读 WPE 用户设置里的 `postprocessing`：依次查各个 `sceneAssets` 所在安装目录的 `config.json`（与 `ui_` 词条、assets
- * 同一套安装目录定位，Rust `wpe::discover::engine_dirs`），第一个读到的为准；都读不到返回 null。只读。
+ * 同一套安装目录定位，Rust `wpe::discover::engine_dir`），第一个读到的为准；都读不到返回 null。只读。
  */
 export async function readWpePostprocessing(
   reader: SceneReader,

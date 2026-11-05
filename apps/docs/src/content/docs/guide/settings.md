@@ -146,6 +146,12 @@ description: 应用设置、壁纸、下载、插件默认与快捷设置的完�
 - 默认值：1。
 - 平台：Windows / macOS / Linux（仅 Plasma）。
 
+### Wallpaper Engine 目录（仅桌面）
+
+- UI 标签：「Wallpaper Engine 目录」
+- 作用：场景壁纸读取内置资源的目录。留空时自动查找，先看 Steam 库，再从已导入的壁纸往上找，找到后写入这里。用「选择」可以覆盖，用「恢复默认」清空并重新查找。
+- 说明：目录里必须有 `assets/shaders/common.h`。资源怎么获取见 [Wallpaper Engine 壁纸](/guide/wallpaper-engine/)。
+
 ### 壁纸模式
 
 - UI 标签：「壁纸模式」

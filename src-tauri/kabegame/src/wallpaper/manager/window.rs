@@ -62,8 +62,6 @@ impl<R: Runtime> WindowWallpaperManager<R> {
 
         // 网页壁纸是 web 层里的 file: iframe，页面要读同目录文件：建窗前登记 label，CEF 只给这个 browser
         // 打开文件访问偏好（补丁 04），file: 文档的请求由运行时按网页壁纸目录索引约束。
-        // WPE 网页壁纸暂只支持 Windows（`web_entry` 在其它平台恒为 None），其它平台不登记。
-        #[cfg(target_os = "windows")]
         tauri_runtime_kbcef::allow_file_documents(WALLPAPER_LABEL);
         // 壁纸窗口的 Vue 页用 <img> / <video> 显示图库媒体（file://），也要给 iframe 赋 file: src：登记
         // CEF 补丁 05 + 0006，应用页主 frame 的 file: 子资源免检，iframe 导航须落进库里某个网页壁纸目录。

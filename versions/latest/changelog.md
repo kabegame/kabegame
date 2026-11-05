@@ -11,7 +11,9 @@
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - Windows 上的 Wallpaper Engine 网页壁纸支持音频可视化与媒体集成：声明了音频处理的壁纸会随系统正在播放的声音跳动；壁纸可显示正在播放的歌曲名、歌手、封面、播放状态与进度（来自系统媒体控制，网易云、Spotify、浏览器等均可）。桌面与图库预览都生效。设置页壁纸分区新增「网页壁纸媒体集成」开关（默认开启），关闭后壁纸读不到歌曲信息。
 - 预览视频或网页壁纸时，系统媒体浮窗显示图片名称与 Kabegame 图标，不再显示「画廊」。
-- 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加任意壁纸目录或 Steam 库；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
+- 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加壁纸目录；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
+- 壁纸设置新增「Wallpaper Engine 目录」：留空时自动查找（Steam 库，或从已导入的壁纸往上找）并写入，也可以手动指定。没有 Steam 版 WPE 时，把 `assets` 等资源复制到本机就能让场景壁纸读到内置资源，做法见文档「Wallpaper Engine 壁纸」。
+- Wallpaper Engine 壁纸现在也支持 macOS 和 Linux：可以导入并在图库预览、应用背景里运行网页与场景壁纸，macOS 还可在窗口模式设为桌面壁纸；音频可视化、媒体集成和桌面鼠标转发仍只在 Windows，Linux 暂不能设为桌面壁纸。Android 与 Web 版不提供。
 - 「壁纸」导入支持 Wallpaper Engine 网页壁纸：原地引用壁纸目录；预览以主屏比例的「桌面画布」运行页面并可交互，也可在窗口模式设为桌面壁纸，应用背景同样实时显示（静音）。设置里的「壁纸音量」（原「视频壁纸音量」）对网页壁纸同样生效。
 - 桌面网页壁纸改为像 Wallpaper Engine 一样以 `file://` 直接加载壁纸目录：依赖读取同目录数据文件的壁纸（如歌单、字幕类）现在能完整运行；文件访问只对壁纸窗口开启，且只能读当前壁纸目录内的文件。Windows 上桌面的鼠标移动与左键点击会转发给网页壁纸（不拦截桌面本身的点击，桌面框选不受影响）。预览网页壁纸时，鼠标移到画布左右边缘中段即可唤出切换箭头。预览网页壁纸时右键菜单无法弹出（右键会被壁纸页面接收），菜单里的操作改为按原顺序排在底部工具条里。
 - 网页壁纸可读取作者默认属性与界面语言：桌面壁纸与图库预览里的 Wallpaper Engine 网页壁纸会在加载完成后收到 `project.json` 里作者设定的属性值，以及当前界面语言（切换语言后页面随之更新）；依赖这些属性才开始绘制的壁纸现在能正常显示。暂不支持帧率上限与暂停。
@@ -26,6 +28,7 @@
 - 桌面端界面卡死后的自动恢复更快：页面无响应约 6 秒（原约 16 秒）即自动重新加载。
 
 ### Fixed
+- 「壁纸」导入只添加文件夹、没有勾选自动来源时不再提示「壁纸导入任务创建失败」。
 - 预览视频后切到其它图片或关闭预览，立即释放视频播放器：系统媒体浮窗不再停在已经切走的视频，也不再盖住桌面壁纸正在放的歌。
 - 修复网页壁纸刚打开时偶尔要等几秒才应用属性、读不到为它选择的文件夹的问题。
 - Windows 桌面版畅游在 x.com 等限制严格的网站上，下载视频等大块数据不再降级到慢速通道。
@@ -88,6 +91,10 @@
 - 生产 web 构建（`isWeb && command === "build"`）的 Vite `base` 指向 `https://cdn.kabegame.com/web/`，`index.html` 仍由二进制内嵌返回。`scripts/deploy-web.sh` 新增第 0 步：先经服务器暂存目录把 `dist-kabegame-web/`（除 `index.html`）`cp` 进 OSS 挂载目录 `/mnt/oss/web/`，校验入口脚本 MIME 后才停服换二进制，OSS 上只增不删。详见 `cocs/web/CDN_MEDIA.md`。
 - `public/` 下的吉祥物、空状态、失物、冲浪插画移到 `apps/kabegame/src/assets/`，经 `src/assets/illustrations.ts` 按 `IS_WEB` 取 WebP 或原图；`vite.config.ts` 新增 `dropUnreferencedSrcAssets` 插件，删掉产物中未被引用的那一份。吉祥物启动时只预取挥手图。
 - 新增目录型媒体格式 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）与 `is_wpe_type` / `wpe_kind` / `is_video_like_type`；`images.local_path` 在目录型行上是 WPE 壁纸目录，所有把它当文件用的调用点按 type 分流：`/file` 返回 404、新增 `/wpe/<imageId>/<rel>` 目录服务（307 到 `project.json` 入口、越界拒绝，供网页壁纸的相对资源）、整理跳过缩略图 / 兼容副本 / 哈希去重 / 无法识别清理、虚拟盘隐藏、原生壁纸与 Plasma 拒绝、WPE 行删除不进源文件回收。
+- 新增 cargo feature `wpe`（桌面主程序与 `kabegame-cli` 开启，Android / Web 不开），取代运行时的 `platform_supported()` 和按 Windows 的门控；Android / Web 不再编译 WPE 的发现、导入与内建插件，也不再同步 `wpesl2wgsl` wasm、不跑场景宿主 Vitest。
+- 手选 WPE 文件夹改为统一的两层扫描：只看目录自身、`<folder>/*`、`<folder>/*/*`，去掉 Steam 库根、WPE 安装目录等分类（`RecognizedKind`、`classify_dir`、`recognized` 字段）；手选这两类目录不再识别，由自动发现覆盖。
+- 修复 `src-tauri/kabegame/src/lib.rs` 的 Web 入口缺少 `axum` 导入，`--mode web` 编译不过。
+- 修复 WPE 路径处理在非 Windows 上的两处问题：`is_safe_relative_path` 把 `C:\\x`、`..\\x` 当成合法相对路径（现在 `\\` 与盘符的规则不随平台变），`libraryfolders.vdf` 的路径把 `\\\\` 转成了 `//`。
 - 新增 `kabegame-core::wpe`（Steam 库发现、任意目录识别、`project.json` 解析、作者视频属性换算）与内建任务 `wpe-import`；缩略图删除改为只删 `thumbnails_dir` 内由 Kabegame 生成的文件，避免删掉 WPE 的 `preview.*`。
 - 修复 `libraryfolders.vdf` 解析：顶层键值序列没有花括号，原解析器直接返回空，其它盘的 Steam 库从未被发现；旧格式 `LibraryFolders` 键改为不区分大小写，并只把数字键当库条目。
 - 壁纸窗口改用 `get_current_wallpaper_target`（`{ id, path, type, compatiblePath, wpeVideo }`），`x-wpe/video` 只走 `compatible_path`（入口视频本身或兼容副本）播放，并在舞台层复现作者的对齐位置 / 翻转 / 背景色 / 颜色调整（Kabegame 样式、音量、倍速覆盖作者值）；轮播与可用性判定从路径扩展名改为按行 `type`。

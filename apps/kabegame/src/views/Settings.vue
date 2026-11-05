@@ -278,11 +278,19 @@
                 </SettingRow>
 
                 <SettingRow
-                  v-if="IS_WINDOWS"
+                  v-if="!IS_ANDROID && !IS_WEB"
                   :label="$t('settings.wpeScenePostprocess')"
                   :description="$t('settings.wpeScenePostprocessDesc')"
                 >
                   <SettingRadioControl setting-key="wpeScenePostprocess" :options="wpeScenePostprocessOptions" />
+                </SettingRow>
+
+                <SettingRow
+                  v-if="!IS_ANDROID && !IS_WEB"
+                  :label="$t('settings.wpeEngineDir')"
+                  :description="$t('settings.wpeEngineDirDesc')"
+                >
+                  <WpeEngineDirSetting />
                 </SettingRow>
 
                 <SettingRow
@@ -414,6 +422,7 @@ import SettingNumberControl from "@/components/settings/controls/SettingNumberCo
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
 import SettingRadioControl from "@/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownloadDirSetting.vue";
+import WpeEngineDirSetting from "@/components/settings/items/WpeEngineDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";

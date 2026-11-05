@@ -7,8 +7,8 @@
 //! 丢弃、发送照样成功，所以不能只靠它。
 //!
 //! 有 audio 订阅才开 WASAPI 回环采集（`audio.rs`），有 media 订阅且「媒体集成」打开才开系统媒体会话监视
-//! （`media.rs`）；最后一个订阅离开即停。系统接口只在 Windows（WPE 网页壁纸只支持 Windows），其它桌面平台订阅表
-//! 照常、永远没有数据。见 `cocs/wpe/WPE_IMPORT.md`「音频与媒体集成」。
+//! （`media.rs`）；最后一个订阅离开即停。系统接口只在 Windows，其它桌面平台的订阅命令直接报错。
+//! 见 `cocs/wpe/WPE_IMPORT.md`「音频与媒体集成」。
 
 #[cfg(target_os = "windows")]
 mod audio;

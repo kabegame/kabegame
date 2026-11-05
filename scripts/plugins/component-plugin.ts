@@ -91,6 +91,11 @@ export class Component {
     return Component.appFeDir(this.comp);
   }
 
+  /** 场景宿主:只属于桌面 standard 模式,Android / Web 不构建也不测。 */
+  static get WPE_SCENE_DIR(): string {
+    return path.join(SRC_FE_DIR, "wpe-scene");
+  }
+
   /**
    * 该组件的前端测试目录(vitest),按顺序依次跑。空列表表示这个组件没有前端测试。
    *
@@ -101,7 +106,7 @@ export class Component {
   static feTestDirs(comp: string): string[] {
     switch (comp) {
       case this.MAIN: {
-        return [this.appFeDir(comp), path.join(SRC_FE_DIR, "wpe-scene")];
+        return [this.appFeDir(comp), this.WPE_SCENE_DIR];
       }
       default: {
         return [];

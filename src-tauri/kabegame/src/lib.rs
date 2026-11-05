@@ -46,7 +46,7 @@ mod wallpaper;
 mod web_server_service;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 mod window_title;
-#[cfg(all(not(feature = "web"), not(target_os = "android")))]
+#[cfg(feature = "wpe")]
 mod wpe_media;
 
 // ---- local-only imports ----
@@ -215,8 +215,8 @@ fn init_pre(
     start_startup_progress_forwarder(app_handle.clone());
 
     // 场景宿主（apps/wpe-scene 的 file: iframe）的 capability：按宿主 index.html 的确切地址注册，
-    // 要先于任何宿主 iframe 调 IPC。场景壁纸只在 Windows 提供。
-    #[cfg(all(not(feature = "web"), target_os = "windows"))]
+    // 要先于任何宿主 iframe 调 IPC。
+    #[cfg(feature = "wpe")]
     if let Err(e) = crate::wallpaper::wpe_scene_host::register_capability(app_handle) {
         tracing::warn!("场景宿主 capability 注册失败: {e}");
     }
@@ -405,6 +405,8 @@ fn spawn_local_folder_sync() {}
 // ---- web entry point ----
 #[cfg(feature = "web")]
 pub fn run() {
+    use axum::{routing::get, Router};
+
     logging_setup::init();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -939,21 +941,27 @@ pub(crate) fn configure_app(
             get_webview_i18n,
             proxy_fetch,
             get_supported_image_types,
+            #[cfg(feature = "wpe")]
             wpe_scan,
+            #[cfg(feature = "wpe")]
             wpe_recognize_dir,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(feature = "wpe")]
+            get_wpe_engine_dir,
+            #[cfg(feature = "wpe")]
+            set_wpe_engine_dir,
+            #[cfg(feature = "wpe")]
             get_wpe_web_properties,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(feature = "wpe")]
             set_wpe_web_user_properties,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(feature = "wpe")]
             wpe_web_pull_state,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(feature = "wpe")]
             wpe_web_media_subscribe,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(feature = "wpe")]
             get_wpe_scene_host_url,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(feature = "wpe")]
             wpe_scene_target,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(feature = "wpe")]
             wpe_scene_report,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,

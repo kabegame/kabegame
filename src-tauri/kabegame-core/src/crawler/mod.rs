@@ -7,6 +7,7 @@ pub mod task_log_i18n;
 pub mod task_scheduler;
 pub mod webpage;
 pub mod webview;
+#[cfg(feature = "wpe")]
 pub mod wpe_import;
 
 pub use downloader::{create_client, ActiveDownloadInfo, DownloadQueue};
