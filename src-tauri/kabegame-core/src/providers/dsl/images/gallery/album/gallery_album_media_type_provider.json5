@@ -4,10 +4,11 @@
     // 模式串含义与 where 同 gallery_media_type_provider，改一处同步另一处。
     "properties": {
         "type_glob": { "type": "string", "default": "*", "optional": false },
-        "type_not_glob": { "type": "string", "default": "video/*", "optional": false }
+        "type_not_glob": { "type": "string", "default": "video/*", "optional": false },
+        "type_not_glob2": { "type": "string", "default": "x-wpe/*", "optional": false }
     },
     "query": {
-        "where": "images.type GLOB ${properties.type_glob} AND images.type NOT GLOB ${properties.type_not_glob}"
+        "where": "images.type GLOB ${properties.type_glob} AND images.type NOT GLOB ${properties.type_not_glob} AND images.type NOT GLOB ${properties.type_not_glob2}"
     },
     "resolve": {
         "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },

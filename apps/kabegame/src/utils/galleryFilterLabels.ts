@@ -21,7 +21,7 @@ import {
   type GallerySortField,
 } from "./galleryPath";
 import { formatTimeFilterDetail } from "./galleryTimeFilterMenu";
-import { facetValueLabel } from "@/composables/useAdvancedQueryFacets";
+import { facetValueLabel, mediaFormatLabel } from "@/composables/useAdvancedQueryFacets";
 
 type TFn = (key: string, named?: any) => string;
 
@@ -128,9 +128,9 @@ export function galleryLabelForFilter(filter: GalleryFilter | GalleryFilterSet, 
   }
   const mk = filterMediaKind(filter);
   const mf = filterMediaFormat(filter);
-  if (mk === "image" || mk === "video") {
-    const label = mk === "image" ? t("gallery.filterImageOnlyLabel") : t("gallery.filterVideoOnlyLabel");
-    return mf ? `${label} / ${mf}` : label;
+  if (mk) {
+    const label = facetValueLabel("mediaType", mk, t);
+    return mf ? `${label} / ${mediaFormatLabel(mk, mf, t)}` : label;
   }
   return t("gallery.filterAll");
 }
@@ -164,7 +164,7 @@ export function galleryDimensionChipValue(
     if (!kind) return undefined;
     const format = filterMediaFormat(filter);
     const label = facetValueLabel("mediaType", kind, t);
-    return format ? `${label} / ${format}` : label;
+    return format ? `${label} / ${mediaFormatLabel(kind, format, t)}` : label;
   }
   const value = dimension === "size" ? filterSizeRange(filter) : filterAspectRange(filter);
   if (value == null) return undefined;

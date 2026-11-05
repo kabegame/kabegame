@@ -3,14 +3,16 @@
     "name": "vd_media_type_entry_provider",
     "properties": {
         "type_glob": { "type": "string", "default": "*", "optional": false },
-        "type_not_glob": { "type": "string", "default": "video/*", "optional": false }
+        "type_not_glob": { "type": "string", "default": "video/*", "optional": false },
+        "type_not_glob2": { "type": "string", "default": "x-wpe/*", "optional": false }
     },
     "query": {
         "delegate": {
             "provider": "gallery_media_type_provider",
             "properties": {
                 "type_glob": "${properties.type_glob}",
-                "type_not_glob": "${properties.type_not_glob}"
+                "type_not_glob": "${properties.type_not_glob}",
+                "type_not_glob2": "${properties.type_not_glob2}"
             }
         }
     },
@@ -21,7 +23,8 @@
                 "provider": "gallery_media_type_provider",
                 "properties": {
                     "type_glob": "${properties.type_glob}",
-                    "type_not_glob": "${properties.type_not_glob}"
+                    "type_not_glob": "${properties.type_not_glob}",
+                    "type_not_glob2": "${properties.type_not_glob2}"
                 }
             },
             "child_var": "format",

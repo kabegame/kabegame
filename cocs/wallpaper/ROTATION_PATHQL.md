@@ -25,7 +25,7 @@
 
 ## 每次切换
 
-1. **有效路径**：壁纸模式为原生（非 `window` / `plasma-plugin`，含 Android）时，在设置路径尾部拼 `/_kb_fc/media-type/image`。全局 `_kb_fc` 在任何段都先于当前 provider 解析，条件 AND 进去，前面的排序保留。count 本身只数图片，每一页都是图片，不需要逐张跳过视频。
+1. **有效路径**：壁纸模式为原生（非 `window` / `plasma-plugin`，含 Android）时，在设置路径尾部拼 `/_kb_fc/media-type/image`。全局 `_kb_fc` 在任何段都先于当前 provider 解析，条件 AND 进去，前面的排序保留。count 本身只数图片（`media-type/image` 不含视频，也不含 WPE），每一页都是图片，不需要逐张跳过视频。Plasma 插件模式的有效路径不带媒体过滤，WPE 行仍靠 rotator 的 `allow_wpe` 逐张跳过。
 2. **count**：`count_at(有效路径)`。出错（路径坏了、画册已删……）就把设置路径换成新的默认随机路径（位置随之清零）再 count 一次。`count == 0` 本轮跳过，不关闭轮播。
 3. **定起点**：位置为 `-1` 时从 0 开始；否则取 `<有效路径>/~~/rank/~~/id_<currentWallpaperImageId>` 的 `row_index`（当前壁纸的 1 起序号 = 下一张的 0 起位置），找到就写回位置并以它为起点；当前 id 为空、或不在有效路径里（已被过滤掉、删掉、换了视图），才用持久化位置。
 4. **取行**：位置 ≥ count 时回到 0（走到末尾统一回到第 1 张，随机路径也不换种子），取 `rows_path(有效路径, 1, 位置 + 1)`。画廊路径转成 `images://filter/…/_kb_x1x/<页>/~~/rank/~~p/lookup/gallery`，与前端 `toLookupRowsPath` 同构，避免深页慢。取行出错与 count 出错同样处理。

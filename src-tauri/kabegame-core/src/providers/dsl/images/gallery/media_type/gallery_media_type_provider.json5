@@ -1,15 +1,16 @@
 {
     "namespace": "kabegame",
     "name": "gallery_media_type_provider",
-    // 图片：type_glob = '*'，type_not_glob = 'video/*'（默认值）。视频：type_glob = 'video/*'，type_not_glob = ''。
+    // 图片：'*' / 'video/*' / 'x-wpe/*'（默认值）。视频：'video/*' / '' / ''。WPE：'x-wpe/*' / '' / ''。
     "properties": {
         "type_glob": { "type": "string", "default": "*", "optional": false },
-        "type_not_glob": { "type": "string", "default": "video/*", "optional": false }
+        "type_not_glob": { "type": "string", "default": "video/*", "optional": false },
+        "type_not_glob2": { "type": "string", "default": "x-wpe/*", "optional": false }
     },
-    // type 已规范化，video/* 归视频，x-wpe/video 仍归图片。
-    // 模式串直接绑定进 GLOB：视频的前缀能走 idx_images_type，图片的 `*` 不走索引、沿排序索引取满即停，见 RULES.md。
+    // type 已规范化。三类互补：video/* 归视频，x-wpe/* 归 WPE，其余归图片。
+    // 模式串直接绑定进 GLOB：视频与 WPE 的前缀能走 idx_images_type，图片的 `*` 不走索引、沿排序索引取满即停，见 RULES.md。
     "query": {
-        "where": "images.type GLOB ${properties.type_glob} AND images.type NOT GLOB ${properties.type_not_glob}"
+        "where": "images.type GLOB ${properties.type_glob} AND images.type NOT GLOB ${properties.type_not_glob} AND images.type NOT GLOB ${properties.type_not_glob2}"
     },
     "list": {
         "${fmt.format}": {

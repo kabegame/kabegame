@@ -107,7 +107,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE images (id INTEGER PRIMARY KEY, type TEXT, crawled_at INTEGER);
             CREATE INDEX idx_crawled_at ON images(crawled_at DESC);
             WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1000)
-            INSERT INTO images SELECT n, CASE WHEN n = 1 THEN 'x-wpe/web' WHEN n <= 5 THEN 'video/mp4' ELSE 'image/jpg' END, n FROM seq;").unwrap();
+            INSERT INTO images SELECT n, CASE WHEN n <= 3 THEN 'x-wpe/web' WHEN n <= 8 THEN 'video/mp4' ELSE 'image/jpg' END, n FROM seq;").unwrap();
         up(&conn).unwrap();
         conn.execute_batch("ANALYZE").unwrap();
         let plan = |sql: &str, params: &[&str]| -> Vec<String> {
@@ -124,13 +124,15 @@ mod tests {
             "{equality:?}"
         );
         const PAGE: &str = "SELECT * FROM images WHERE type GLOB ?1 AND type NOT GLOB ?2
-            ORDER BY crawled_at DESC LIMIT 100";
-        let video = plan(PAGE, &["video/*", ""]);
-        assert!(
-            video.iter().any(|line| line.contains("idx_images_type")),
-            "{video:?}"
-        );
-        let image = plan(PAGE, &["*", "video/*"]);
+            AND type NOT GLOB ?3 ORDER BY crawled_at DESC LIMIT 100";
+        for rare in [["video/*", "", ""], ["x-wpe/*", "", ""]] {
+            let plan = plan(PAGE, &rare);
+            assert!(
+                plan.iter().any(|line| line.contains("idx_images_type")),
+                "{rare:?}: {plan:?}"
+            );
+        }
+        let image = plan(PAGE, &["*", "video/*", "x-wpe/*"]);
         assert!(
             image.iter().any(|line| line.contains("idx_crawled_at")),
             "{image:?}"

@@ -47,6 +47,7 @@
 - 安全加固：畅游导航栏、桌面网页壁纸等页面只能监听为它们开放的应用事件，发给某个窗口的事件不会再被其它窗口收到；页面里嵌入的子页面（iframe）不再沿用所在页面的应用权限。
 
 ### Changed
+- 图库「类型」过滤里，Wallpaper Engine 壁纸单独成一类（显示为 Wallpaper Engine，可再选视频 / 网页 / 场景），不再混在「图片」里；图片详情里的「Wallpaper Engine · 类型」也可点击筛选。没有视频或没有 Wallpaper Engine 壁纸的范围里，对应分类不再显示。
 - Windows 桌面版升级后，部分只存在本机界面里的偏好会恢复默认：画廊每页数量与布局、面板宽度、链接打开方式（会重新询问）、吉祥物开关与位置、上次浏览的画廊路径、视频音量等；应用设置与图库数据不受影响。
 - 壁纸轮播改为按一条视图路径依次切换：在画廊、画册、任务或畅游详情的过滤栏 ⋯ 菜单点「用当前视图轮播」，当前的过滤与排序就是轮播来源；设置页只显示当前轮播路径，原来的「选择画册 / 包含子画册 / 随机或顺序」三项去掉（随机即随机排序视图）。每次切换都从当前壁纸在视图里的下一张接着走，视图里的图片增删、排序变化不会让轮播跳张或重复；当前壁纸不在视图里时按保存的轮播位置继续，停止再开启、重启应用也接着上次；换视图会立刻切到新视图的第一张；原生壁纸模式只轮播图片，切换壁纸模式后从当前壁纸的下一张继续。旧设置升级时自动换算成对应路径。
 - 图片详情的「基本信息」改为卡片式排版：名称作标题，源与收藏时间并在一行，类型、大小、尺寸做成可点筛选的芯片，宽高比画成与图片同比例的矩形框；URL 与本地路径各占一行，省略显示并带复制按钮，整体高度明显降低。
@@ -80,6 +81,7 @@
 - WPE 网页壁纸用户属性：值存图片 metadata 的 `userProperties`，经新增的 `Storage::rewrite_image_metadata` 事务改写并发 `metadataId` 补丁驱动垫片与面板重拉；CEF 运行时文件策略新增 `grant_file_documents`，按窗口与当前根目录追加放行用户选的文件 / 目录（换根清空）；显示条件解释器 `utils/wpeProperties.ts`、WPE 内置词表只读读取安装目录。
 
 ### Changed
+- 媒体分类 provider 的属性新增 `type_not_glob2`（分三类互补：`video/*`、`x-wpe/*`、其余），`gallery_media_type_router` 新增 `x-wpe` resolve，列举不再补 0 且只按字母序；前端以 `GALLERY_MEDIA_KINDS` 枚举分类。
 - `third-patches/` 补丁序列统一改用两位编号；补丁管理器的读取校验与 `--gen --from` 编号解析、V8 构建脚本及文档示例同步更新。
 - 桌面 CEF runtime 的目录、Cargo crate 与代码引用统一更名为 `tauri-runtime-kbcef`（Rust 标识符 `tauri_runtime_kbcef`），同步更新文档与构建脚本。
 - debug ingest 改为 trace 日志：Rust 用 `kabegame_core::kb_debug!`（core 也能插桩），Tauri 前端 `sendDebugEvent` 经插件打 `kb-debug` trace 日志，由 debug 构建的 `DebugIngestLayer` 批量 NDJSON 转发；删除 `spawn_debug_event` / `send_debug_event`。Android 前端 debug 事件不再需要 query 参数绕过 WebView 拦截。

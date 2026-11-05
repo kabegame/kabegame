@@ -214,16 +214,17 @@ COUNT，把整个结构重跑 N 次。
 
 `images.type` 由 Rust 写入口 `normalize_stored_media_type` 保证非空、小写、去掉首尾空白，且形如「主类/子类」、两段非空。
 v049 一次性修正历史残留；所有生产写入必须经该函数，不依赖 schema 的遗留默认值 `image`，数据库不加触发器或 CHECK。
-查询直接读列，不再包 `LOWER` / `COALESCE`；分类用 `video/*` 判断（`x-wpe/video` 仍归图片），格式用 `SUBSTR` 取第一个斜杠后的子类。
+查询直接读列，不再包 `LOWER` / `COALESCE`；分类按主类分三类互补（`video/*` 视频、`x-wpe/*` WPE、其余图片），格式用 `SUBSTR` 取第一个斜杠后的子类。
 
 `idx_images_type` 供 `type = ?` 的高选择性读取使用，如网页壁纸 `x-wpe/web`。主程序每次启动都跑完整 `ANALYZE`（含 STAT4，见
 [`../storage/DB_MIGRATIONS_AND_BACKFILLS.md`](../storage/DB_MIGRATIONS_AND_BACKFILLS.md)），规划器知道各类型的真实占比，
 但 `LIMIT` 只用来压低排序代价（`whereSortingCost`），沿排序索引取满即停的收益不进估算，所以占比不算高的过滤也会选走索引再整体排序
 （实测 35%、40% 选索引，57% 才回到排序索引）。过滤形态按这一点选：
 
-- **媒体分类**写成 `images.type GLOB ?1 AND images.type NOT GLOB ?2`，由调用方绑定模式串：视频是 `'video/*'` 与 `''`，图片是 `'*'` 与 `'video/*'`。
-  模式串必须直接绑定、不能藏进 `CASE` 或拼接表达式，规划器才看得到前缀。视频走索引，视频占多数时规划器按统计回到排序索引；
-  图片的 `*` 没有前缀，沿排序索引取满即停。
+- **媒体分类**写成 `images.type GLOB ?1 AND images.type NOT GLOB ?2 AND images.type NOT GLOB ?3`，由调用方绑定模式串：视频是 `'video/*'`、`''`、`''`，
+  WPE 是 `'x-wpe/*'`、`''`、`''`，图片是 `'*'`、`'video/*'`、`'x-wpe/*'`（排除法，格式表外的主类也归图片，三类互补）。
+  模式串必须直接绑定、不能藏进 `CASE` 或拼接表达式，规划器才看得到前缀。视频与 WPE 走索引，占多数时规划器按统计回到排序索引；
+  图片的 `*` 没有前缀，沿排序索引取满即停。不要把图片写成 `image/*`：带前缀，占比不够高时会走索引再整体排序。
 - **格式过滤**保持 `SUBSTR` 表达式，不走索引。写成 `IN ('image/x', 'video/x', 'x-wpe/x')` 时 webp、png 这类占比不低的格式变慢，
   `'image/' || ?` 的拼接 STAT4 估不了，还会漏掉格式表外的主类。
 - 其它占比不低的 type 过滤若带 `ORDER BY … LIMIT`，不能写成可走此索引的形态，必要时用 `+images.type` 禁用该列索引。

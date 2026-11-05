@@ -12,6 +12,7 @@ import {
   filterForDimension,
   queryRuntimePath,
   removeFilterDimension,
+  isGalleryMediaKind,
   type GalleryFilter,
   type GalleryBrowseDimension,
   type GalleryFilterSet,
@@ -185,7 +186,7 @@ export function filterFromTreeSegment(segment: string): GalleryFilter {
     }
     case "media-type": {
       const kind = segs[1];
-      if (kind !== "image" && kind !== "video") return { type: "all" };
+      if (!isGalleryMediaKind(kind)) return { type: "all" };
       const format = segs[2] ? decodeURIComponent(segs[2]) : "";
       return format ? { type: "media-type", kind, format } : { type: "media-type", kind };
     }

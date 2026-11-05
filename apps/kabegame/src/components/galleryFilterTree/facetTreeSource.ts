@@ -1,5 +1,6 @@
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
-import { queryUsesSearchMode } from "@/utils/galleryQuery";
+import { queryUsesSearchMode, isGalleryMediaKind, type GalleryMediaKind } from "@/utils/galleryQuery";
+import { facetValueLabel, mediaFormatLabel } from "@/composables/useAdvancedQueryFacets";
 import { addedTrigger, patchTriggers, hiddenTrigger, type ImageViewState } from "@/services/kbEvents";
 import { computed, type ComputedRef, type Ref } from "vue";
 import type { useI18n } from "@kabegame/i18n";
@@ -35,8 +36,8 @@ import type { TreeQuerySource } from "@/components/tree/types";
  */
 export type FacetNode = (
   | { kind: "date"; segments: string[] }
-  | { kind: "media-kind"; mediaKind: "image" | "video" }
-  | { kind: "media-format"; mediaKind: "image" | "video"; format: string }
+  | { kind: "media-kind"; mediaKind: GalleryMediaKind }
+  | { kind: "media-format"; mediaKind: GalleryMediaKind; format: string }
   | { kind: "size"; range: string }
   | { kind: "aspect"; range: string }
   | { kind: "plugin"; pluginId: string; version: string }
@@ -241,9 +242,11 @@ export function createGalleryFacetSource(
       case "date":
         return dateLabel(node.segments);
       case "media-kind":
-        return node.mediaKind === "image" ? t("gallery.filterImageOnly") : t("gallery.filterVideoOnly");
+        if (node.mediaKind === "image") return t("gallery.filterImageOnly");
+        if (node.mediaKind === "video") return t("gallery.filterVideoOnly");
+        return facetValueLabel("mediaType", node.mediaKind, t);
       case "media-format":
-        return node.format;
+        return mediaFormatLabel(node.mediaKind, node.format, t);
       case "size":
         return t(`gallery.${SIZE_BUCKETS.find((b) => b.range === node.range)?.labelKey ?? ""}`);
       case "aspect":
@@ -289,10 +292,10 @@ export function createGalleryFacetSource(
       }
       case "mediaType": {
         return entries
-          .filter((entry) => entry.name === "image" || entry.name === "video")
+          .filter((entry) => isGalleryMediaKind(entry.name))
           .map((entry) => ({
             kind: "media-kind",
-            mediaKind: entry.name as "image" | "video",
+            mediaKind: entry.name as GalleryMediaKind,
             count: groupedCount(entry),
           }));
       }

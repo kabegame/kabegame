@@ -54,6 +54,12 @@ describe("imageMayMatchQuery 与 provider 口径", () => {
     ["video/mp4", "image", undefined, false],
     ["image/png", "image", "jpg", false],
     ["png", "image", "png", true],
+    ["x-wpe/web", "x-wpe", undefined, true],
+    ["x-wpe/web", "x-wpe", "web", true],
+    ["x-wpe/web", "x-wpe", "scene", false],
+    ["x-wpe/video", "video", undefined, false],
+    ["x-wpe/video", "image", undefined, false],
+    ["image/png", "x-wpe", undefined, false],
   ] as const)("媒体类型 %s / %s / %s → %s", (type, kind, format, expected) => {
     expect(imageMayMatchQuery(image({ type }), query({ mediaType: { kind, format } }))).toBe(expected);
   });

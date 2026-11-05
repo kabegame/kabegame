@@ -18,12 +18,13 @@
         },
         "${out.display}": {
             // 模式串含义见 gallery_media_type_provider，改一处同步另一处。
-            "sql": "SELECT 'image' AS canonical, vd_display_name('image') AS display, '*' AS type_glob, 'video/*' AS type_not_glob UNION ALL SELECT 'video', vd_display_name('video'), 'video/*', ''",
+            "sql": "SELECT 'image' AS canonical, vd_display_name('image') AS display, '*' AS type_glob, 'video/*' AS type_not_glob, 'x-wpe/*' AS type_not_glob2 UNION ALL SELECT 'video', vd_display_name('video'), 'video/*', '', ''",
             "data_var": "out",
             "provider": "vd_media_type_entry_provider",
             "properties": {
                 "type_glob": "${out.type_glob}",
-                "type_not_glob": "${out.type_not_glob}"
+                "type_not_glob": "${out.type_not_glob}",
+                "type_not_glob2": "${out.type_not_glob2}"
             }
         }
     }

@@ -1,40 +1,50 @@
 namespace: kabegame
 name: gallery_media_type_router
 note: >-
-  Filter by broad media type. Listing returns image and video with each one's image count in
-  meta.count. Choose image or video next, then list that node to discover concrete stored formats
-  such as webp or mp4. A broad type can also continue directly to filtering or pagination.
-# 列举：一条 SQL 在上游结果集上按 image / video 分组计数，再与两类固定行 LEFT JOIN 补 0，
-# 计数随列举放进 meta.count（画廊过滤树用 list(with_count=false) 直接读）。
-# 段名解析走下方 resolve，不跑这条 SQL。kind 判定与下面两个模式串同源，
-# 也与 gallery_media_type_provider 的 WHERE 同源，改一处同步其它。
+  Filter by broad media type: image, video, or x-wpe (Wallpaper Engine wallpapers). The three are
+  mutually exclusive and together cover every image. Listing returns only the types that have images
+  in the current context, in alphabetical order, with each one's image count in meta.count. Choose a
+  type next, then list that node to discover concrete stored formats such as webp, mp4 or web.
+  A broad type can also continue directly to filtering or pagination, even when it is not listed.
+# 列举：一条 SQL 在上游结果集上按 image / video / x-wpe 分组计数，计数随列举放进 meta.count
+# （画廊过滤树用 list(with_count=false) 直接读）。没有数据的分类不列出（不补 0），按字母序。
+# 段名解析走下方 resolve，不跑这条 SQL。kind 判定与下面三个模式串同源，
+# 也与 gallery_media_type_provider 的 WHERE 同源，改一处同步其它；前端枚举见 GALLERY_MEDIA_KINDS。
 list:
   "${out.kind}":
     sql: |-
-      SELECT k.kind AS kind, k.type_glob AS type_glob, k.type_not_glob AS type_not_glob, COALESCE(c.count, 0) AS count
+      SELECT k.kind AS kind, k.type_glob AS type_glob, k.type_not_glob AS type_not_glob,
+        k.type_not_glob2 AS type_not_glob2, c.count AS count
       FROM (
-        SELECT 0 AS ord, 'image' AS kind, '*' AS type_glob, 'video/*' AS type_not_glob
-        UNION ALL SELECT 1, 'video', 'video/*', ''
+        SELECT 'image' AS kind, '*' AS type_glob, 'video/*' AS type_not_glob, 'x-wpe/*' AS type_not_glob2
+        UNION ALL SELECT 'video', 'video/*', '', ''
+        UNION ALL SELECT 'x-wpe', 'x-wpe/*', '', ''
       ) AS k
-      LEFT JOIN (
+      JOIN (
         SELECT
-          CASE WHEN sub.type GLOB 'video/*' THEN 'video' ELSE 'image' END AS kind,
+          CASE WHEN sub.type GLOB 'video/*' THEN 'video'
+               WHEN sub.type GLOB 'x-wpe/*' THEN 'x-wpe'
+               ELSE 'image' END AS kind,
           COUNT(*) AS count
         FROM (${composed}) AS sub
         GROUP BY kind
       ) AS c ON c.kind = k.kind
-      ORDER BY k.ord
+      ORDER BY k.kind
     data_var: out
     provider: gallery_media_type_provider
     properties:
       type_glob: "${out.type_glob}"
       type_not_glob: "${out.type_not_glob}"
+      type_not_glob2: "${out.type_not_glob2}"
     meta:
       count: "${out.count}"
 resolve:
   image:
     provider: gallery_media_type_provider
-    properties: { type_glob: "*", type_not_glob: "video/*" }
+    properties: { type_glob: "*", type_not_glob: "video/*", type_not_glob2: "x-wpe/*" }
   video:
     provider: gallery_media_type_provider
-    properties: { type_glob: "video/*", type_not_glob: "" }
+    properties: { type_glob: "video/*", type_not_glob: "", type_not_glob2: "" }
+  x-wpe:
+    provider: gallery_media_type_provider
+    properties: { type_glob: "x-wpe/*", type_not_glob: "", type_not_glob2: "" }
