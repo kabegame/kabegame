@@ -2,6 +2,13 @@
 
 > 上级：[PLAN.md](PLAN.md)「P3 — SceneScript」。前置：[phase-3a-bindings.md](phase-3a-bindings.md)、[phase-3b-script-runtime.md](phase-3b-script-runtime.md) 已验收。
 > 依据：[p3-script-REPORT.md](p3-script-REPORT.md) I2（哪些会重建）、I3（逐类绑定与改值回调）、I7 第 3–5 条；[p2-REPORT.md](p2-REPORT.md) B5 / B11（合成次数、`FUN_1401e6300`）；PLAN P2a「effect」「合成 RT」、P2b「HDR 判定」。
+> 修订（2026-11-05）：按 3b 步骤 6 的语料排行与用户决定，加「点 0」：
+> - 脚本环境由遮蔽改为改写；
+> - 持久化的 WPE `localStorage`；
+> - `registerAudioBuffers` 占位；
+> - 探针修正。
+>
+> 现状锚点按 3b 结束时（`7bfb9d30`）的代码重核。
 
 ## 总体设计思路
 
@@ -15,19 +22,60 @@
 
 关键决策：可变性按「有没有绑定」判定，而不是一律预建——这样没有绑定的场景（目前本机能渲染的全部）在 P3c 前后 GPU 资源与画面逐字节相同，回归面最小；代价是绑定表成为预建范围的唯一依据，3a 的完整性单测因此更重要。
 
+另有一组与渲染图无关的脚本侧改动（点 0），先做。
+
+**环境对齐从「遮蔽」改成「改写」。** 3b 把 WPE 没有的 22 个浏览器全局逐个遮成 `undefined`。现在不再遮蔽，只把和 WPE 同名、但语义不同的两个全局改写成 WPE 的形状：`console`（只有 `log` / `error`，与 3b 相同）和 `localStorage`。其余浏览器全局照常留着。理由：
+- 正确的样本不会用这些名字：3b 语料里没有任何报错来自它们；
+- 环境对齐本来就不是安全边界（3b 已定 4）；
+- 遮蔽表要维护，也挡不全（5 个名字不可配置）。
+
+代价是，在 WPE 里会因为这些名字报错的脚本，在我们这里可能能跑。
+
+**WPE `localStorage` 直接做成持久的。** 底下存进宿主所在 `file:` 来源的浏览器 `localStorage`：
+- 键加前缀隔离：`kabegame:wpe-scene:ls:<图片 id>:<位置>:<键>`；
+- 值按 JSON 存取；
+- `clear` 只删本场景、本位置前缀下的键。
+
+脚本看不到宿主、网页壁纸和别的场景存的东西，宿主的 dev 开关也不会被脚本改写。
+
+**`engine.registerAudioBuffers` 先返回全零缓冲**，结构照 WPE：`{left, right, average}`，长度 16 / 32 / 64。缓冲对象由宿主持有，接上真实音频时原地填写即可，脚本不用改。这样 3b 语料里 124 段在模块顶层就失败的脚本能正常求值，同时把 dev 探针在步骤 6、7 里暴露的统计缺口补上。
+
 ## 现状锚点
 
-**a. 编译期丢掉未启用的 effect**（`apps/wpe-scene/src/compile/bundle.ts:480`）
+**a. 编译期丢掉未启用的 effect**（`apps/wpe-scene/src/compile/bundle.ts:575`）
 ```ts
-    for (const raw of Array.isArray(object.effects) ? object.effects : []) {
+    for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;
       const instance = (raw ?? {}) as SceneEffectInstance;
-      // 未启用的 effect 整步跳过（B11），也不检查它的能力
-      if (resolveValue(instance.visible, properties) === false) continue;   // 现状：不进 bundle；3a 起登记 recompile("effect-visible")
-      // …checkEffectFeatures(instance, effect, label, unsupported) —— 现状：不支持项直接进场景级 unsupported
+      // 未启用的 effect 整步跳过（B11），也不检查它的能力；但可见性绑定登记成重编译目标（P3a，3c 改为单图层重算）
+      if (
+        bindings.bind(
+          instance.visible,
+          properties,
+          recompile("effect-visible", `objects/${index}/effects/${source}/visible`),   // 现状：用户绑定登记成重编译
+        ) === false
+      )
+        continue;                                                                       // 现状：不进 bundle
+      // …checkEffectFeatures(…, unsupported) —— 现状：不支持项直接进场景级 unsupported
 ```
 
-**b. 渲染图只看 bundle 里的 effect**（`render/graph.ts:180`）
+**a2. 脚本挂在 effect `visible` 上也走重编译**（`compile/scripts.ts:62`、`host.ts:203`）
+```ts
+  if (owner.kind === "effect" && key === "visible") return { kind: "recompile", reason: "effect-visible", path };
+```
+```ts
+  private writeScript(target: ScriptTarget, value: number[] | boolean): boolean {
+    if (target.kind === "recompile") {
+      const old = this.scriptOverrides.get(target.path);
+      // …值没变就返回
+      this.scriptOverrides.set(target.path, value);   // 现状：写进覆盖表，交给 Worker 重新编译（3b 待定 6）
+      this.options.report.debug(`场景脚本重编译目标变化：${target.path}`);
+      this.requestScriptReload();                     // 现状：同一时刻最多一个在途，结束后若又变了再来一次
+      return true;
+    }
+```
+
+**b. 渲染图只看 bundle 里的 effect**（`render/graph.ts:180`、`:105`）
 ```ts
   // 上屏的那一步：最后一个启用 effect 的最后一个绘制 pass（passthrough 时没有）
   let finalEffect = -1,
@@ -44,7 +92,7 @@ export function needsComposite(layer: Pick<SceneLayer, "effects" | "colorBlendMo
 }
 ```
 
-**c. GPU 资源按加载时的计划一次建好，之后不再变**（`render/scene.ts:307`）
+**c. GPU 资源按加载时的计划一次建好，之后不再变**（`render/scene.ts:370`、`:661`）
 ```ts
     plans.forEach((plan, index) => {
       // …
@@ -66,7 +114,7 @@ export function needsComposite(layer: Pick<SceneLayer, "effects" | "colorBlendMo
       pipeline: await pipelineFor(program, step.blending, format, !toScene),   // 现状：只有当前角色的一种管线（异步建）
 ```
 
-**d. 泛光链只在 `general.bloom` 生效时编译与建立**（`compile/bundle.ts:577`、`render/bloom.ts:128`）
+**d. 泛光链只在 `general.bloom` 生效时编译与建立**（`compile/bundle.ts:688`、`render/bloom.ts:128`）
 ```ts
   // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光、场景 bloom 生效且对象列表非空（A1）
   if (postprocess.bloom && scene.objects.length > 0 && !settled())
@@ -76,7 +124,7 @@ export function needsComposite(layer: Pick<SceneLayer, "effects" | "colorBlendMo
   const levels = bloomIterations(params.hdrIterations, Math.max(1, bloomLevels(width, height)));   // 现状：只建 N 级
 ```
 
-**e. 清屏色、环境光、相机在建场景时定死**（`render/scene.ts:225`、`:536`）
+**e. 清屏色、环境光、相机在建场景时定死**（`render/scene.ts:276`；`createDraw` 里的 `eye` / `ambient` / `skylight`）
 ```ts
     const [r = 0, g = 0, b = 0] = general.clearEnabled ? general.clearColor : [];
     this.clear = { r, g, b, a: 1 };                    // 现状：之后不变
@@ -86,14 +134,59 @@ export function needsComposite(layer: Pick<SceneLayer, "effects" | "colorBlendMo
         skylight: bundle.general.skylight,
 ```
 
-**f. 3a 结束时仍重编译的类别**（3a 点 1 计划中的形状，实施后以实际代码为准）
+**f. 仍重编译的类别**（`compile/bindings.ts:23`，3b 结束时的实际代码）
 ```ts
 export type RecompileReason =
-  | "effect-visible"      // 本阶段改成单图层重算
-  | "postprocess"         // general.bloom（本阶段就地）/ general.hdr（待定 2）
-  | "general"             // clearcolor / ambientcolor / skylightcolor / camera.*（本阶段就地）
-  | "layer-structure";    // colorBlendMode（待定 1）、size（3a 已定 5）
+  | "effect-visible" // effect 可见性：未启用的不进 bundle（3c 改为单图层重算）     ← 本阶段改成单图层重算
+  | "postprocess" // general.bloom / general.hdr：泛光链有无、目标格式              ← bloom 本阶段就地；hdr 见待定 2
+  | "general" // clearcolor / ambientcolor / skylightcolor / camera.*              ← 本阶段就地
+  | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）   ← 待定 1 / 3a 已定 5
 ```
+
+**g. 脚本环境：遮蔽表**（`script/environment.ts:2`、`:34`）
+```ts
+/** WPE 脚本环境中没有的浏览器全局；仅在场景子 frame 上遮蔽。 */
+export const SCRIPT_HIDDEN_GLOBALS = [
+  "fetch", "XMLHttpRequest", "WebSocket", "EventSource",
+  "setTimeout", "setInterval", "clearTimeout", "clearInterval",
+  "requestAnimationFrame", "cancelAnimationFrame", "requestIdleCallback",
+  "Worker", "SharedWorker", "localStorage", "sessionStorage", "indexedDB", "caches",
+  "Intl", "WebAssembly", "parent", "self", "frames",
+  "__TAURI_INTERNALS__", "window", "document", "top", "location",   // 现状：这 5 个不可配置，遮不掉，只记 debug
+] as const;
+
+export function alignScriptEnvironment(child: Window, consoleOutput: { … }, debug = () => {}): void {
+  for (const name of SCRIPT_HIDDEN_GLOBALS) {
+    // 现状：deleteProperty，删不掉就 defineProperty(value: undefined)，再不行记 debug
+  }
+  global.console = { log: consoleOutput.log, error: consoleOutput.error };   // 现状：console 改写成 WPE 的两项
+}
+```
+  另有使用者：`dev/realmProbe.ts:66` 按遮蔽表逐个读 `typeof`；`script/realm.test.ts:53` 断言遮蔽表内容。
+
+**h. 脚本 API 的作用域检查**（`script/api.ts:160`、`:213`）
+```ts
+  private method(object: ApiObject, name: string, fn: (...args: never[]) => unknown, scoped = false): void {
+    this.define(object, name, () => (...args: never[]) => {
+      if (scoped) this.requireCallback(name);   // 现状：scoped 的方法在模块求值期间调用就抛错
+      return fn(...args);
+    });
+  }
+  private requireCallback(name: string): void {
+    if (this.evaluating) throw new Error(`${name} 不能在模块求值期间访问`);
+  }
+  // installEngine()：现状没有 registerAudioBuffers、AUDIO_RESOLUTION_*；也没有反向检查「只能在模块顶层调」
+```
+
+**i. dev 探针 `scriptCorpus` 的统计缺口**（`dev/scriptCorpus.ts`，3b 步骤 6 / 7 实施记录）
+- `remainingTestFrames` 是 120 帧循环的倒计数，`finally` 里总清零，恒为 0。
+- `missingApis` 只认有限的报错前缀：
+  - 漏了经变量调用的报错；
+  - 连带错误没有归到根因；
+  - 把样本伪代码里的 `scene` 算成缺失 API。
+- 没有每段的写回目标类型，也不统计写到重编译目标的次数。
+- 宿主探针没有暴露 `runtimeSeconds` 与计时器列表。
+- 设置变化引起的重载不计入 `stats().recompiled`。
 
 ## WPE 的就地处理与我们的对应（I3 逐类）
 
@@ -122,11 +215,76 @@ export type RecompileReason =
 | `parallaxDepth` / `cameraparallax` | 只改字段 / 置位 | 未实现 | 随 P5 / W6 |
 | 伪属性 `rate` / `alignment*` / `schemecolor` 清屏 / `wec_*` / `wcc_*` | 实例与渲染器字段；颜色校正编新变体 | 不实现（I7 第 11 条） | 不做 |
 
-## 点 1 — 编译可变 effect（`compile/bundle.ts`、`compile/features.ts`、`compile/bindings.ts`）
+## 点 0 — 脚本环境改写、持久 `localStorage`、音频缓冲占位、探针修正（`script/environment.ts`、`script/api.ts`、`script/realm.ts`、`dev/`）
+
+- **删除** `SCRIPT_HIDDEN_GLOBALS` 与遮蔽循环。
+- **修改** `alignScriptEnvironment` 只做改写：
+  > 说明：子 frame 自己的 `localStorage` 与宿主同一 `file:` 来源、同一份存储。存储一律经宿主传进来的 `Storage` 读写，子 frame 的全局名只用来挂 WPE 对象；`localStorage` 在 3b 步骤 0 已实测可删、可重定义。
+```ts
+/** 与 WPE 同名但语义不同的全局，改写成 WPE 的形状；其余浏览器全局照常保留（不是安全边界）。 */
+export function alignScriptEnvironment(
+  child: Window,
+  consoleOutput: { log(text: string): void; error(text: string): void },
+  localStorage: object,                      // 新增：ScriptApi 造好的 WPE localStorage 对象
+): void {
+  const global = child as unknown as Record<string, unknown>;
+  global.console = { log: consoleOutput.log, error: consoleOutput.error };   // 不变
+  Object.defineProperty(child, "localStorage", { value: localStorage, configurable: true, writable: false });   // 新增
+}
+```
+- **新增** `script/storage.ts`：WPE `localStorage` 的存取。纯逻辑，接受一个 `Storage`，单测用内存实现。
+```ts
+export const LOCATION_GLOBAL = 0;          // 取值照 WPE 名字表；数值开工时用 WPE 文档或 REA 核对
+export const LOCATION_SCREEN = 1;
+/** 前缀：kabegame:wpe-scene:ls:<图片 id>:<g|s>: 。场景键见已定 7，位置见已定 8。 */
+export class SceneScriptStorage {
+  constructor(storage: Storage, sceneKey: string);
+  get(key: string, location?: number): unknown;               // 没有的键返回 undefined；JSON.parse 失败返回 undefined、debug 日志
+  set(key: string, value: unknown, location?: number): void;  // JSON.stringify；超配额抛错（同 Storage 的 QuotaExceededError）
+  delete(key: string, location?: number): void;
+  clear(location?: number): void;                             // 只删本场景、本位置前缀下的键
+}
+```
+- **修改** `ScriptApi` 造 WPE `localStorage` 对象，挂到 realm：
+  - 成员只有 `get` / `set` / `delete` / `clear`，加上 `LOCATION_GLOBAL` / `LOCATION_SCREEN`。没有 `remove`：WPE 也没有（报告 A），样本调 `remove` 照样报 `TypeError`。
+  - 四个方法都是 `scoped`：模块求值期间调用抛错，同 WPE（报告 D「顶层调用会报错」）。
+  - `get` 返回的对象、数组用 realm 的 `JSON.parse` 造，这样脚本里的 `instanceof Array` 为真（3b 风险 2）。
+- **修改** `ScriptApi.installEngine` 新增：
+```ts
+    this.engine.AUDIO_RESOLUTION_16 = 16;    // 新增：常量照 WPE（报告 A）
+    this.engine.AUDIO_RESOLUTION_32 = 32;
+    this.engine.AUDIO_RESOLUTION_64 = 64;
+    // 新增：只能在模块顶层调（报告 D），回调里调用抛错；只收 16 / 32 / 64，其它值抛 TypeError
+    this.method(this.engine, "registerAudioBuffers", (resolution: number) => {
+      this.requireEvaluating("registerAudioBuffers");
+      return this.audioBuffers(resolution);   // { left, right, average }：realm 的 Float32Array，全零；同一分辨率返回同一个对象
+    });
+```
+  > 说明：宿主持有缓冲对象，接上真实音频时原地填写即可（见「后续」）。现在全零，相当于 WPE 里没有声音在放。
+- **修改** 宿主建 realm 时把 `window.localStorage` 与场景键交给 `ScriptApi`：
+  - 场景键取宿主已有的 `imageId`（地址参数 `kbScene`），见已定 7；为 null 时用内存 `Storage`；
+  - 不改 Rust。
+- **修改** dev 探针：
+  - `scriptCorpus`：
+    - `remainingTestFrames` 改成数 `iframe[data-kb-script-realm="1"]`（调用前后各一次）；
+    - `missingApis` 改为按根因归类：把经变量调用的、读到 `undefined` 后的连带错误归到根因，样本伪代码里的 `scene` 单列为 sample；
+    - 每段多报写回目标的类型，以及写到重编译目标的次数；
+    - 用临时的存储前缀，跑完清掉，不碰真实场景存过的东西。
+  - `host.clock()`：返回 `runtimeSeconds`、`frameSeconds` 与计时器列表（所属段、剩余时间、周期）。
+  - `stats().recompiled` 计入设置变化引起的重载（原因记 `settings`）。
+- **修改** `dev/realmProbe.ts` 与 `script/realm.test.ts`：
+  - 删掉遮蔽表相关的检查；
+  - 改成检查四项：
+    - `console` 只有 `log` / `error`；
+    - `localStorage` 是 WPE 形状；
+    - 浏览器全局（如 `fetch`）保留；
+    - 宿主自己的 `localStorage` 键脚本读不到。
+
+## 点 1 — 编译可变 effect（`compile/bundle.ts`、`compile/features.ts`、`compile/bindings.ts`、`compile/scripts.ts`）
 
 - **修改** effect 循环：
 ```ts
-      const visibleBound = isUserBinding(instance.visible) || scripts.ownsEffectVisible(index, j);   // 新增：用户绑定或脚本挂在它的 visible 上
+      const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);   // 新增：用户绑定或脚本挂在它的 visible 上（函数名以实际代码为准）
       const enabled = bindings.bind(instance.visible, properties, { kind: "effect", object: index, effect: j }) !== false;
       if (!enabled && !visibleBound) continue;            // 修改：只丢「写死关闭、没有绑定」的
       const effectUnsupported = new Set<string>();         // 新增：本 effect 自己的不支持项
@@ -141,7 +299,12 @@ export type RecompileReason =
 ```ts
   | { kind: "effect"; object: number; effect: number /* effects[] 下标（JSON 坐标）*/ }   // 新增
 ```
-- **修改** 3b 的 `thisObject`（effect 对象）的 `visible` 写入改走同一个目标，不再按 3b 待定 6 合并重编译。
+- **修改** 脚本侧：
+  - `scripts.ts` 的 `targetOf` 把 effect `visible` 改为同一个就地目标；
+  - `ScriptApi` 里 effect 对象的 `visible` 写入也走这个目标；
+  - `host.ts` 的 `writeScript` 不再为它写 `scriptOverrides`，也不再请求重编译。
+
+  `scriptOverrides` 只剩 general 字段与图层结构类目标在用（见待定 1、2）。
 
 ## 点 2 — 渲染图按开关重排（`render/graph.ts`）
 
@@ -213,20 +376,40 @@ interface LayerRuntime {
 ## 点 7 — 宿主收尾（`host.ts`、`compile/bindings.ts`）
 
 - **修改** `RecompileReason` 收窄为：`"layer-structure"`（`colorBlendMode`，待定 1；`size`，3a 已定 5）、`"postprocess-hdr"`（待定 2）、`"effect-unsupported"`（打开带不支持项的 effect）。
-- **修改** 宿主日志：单图层重建记 `debug`（图层、effect、签名是否变化、用时）；重编译仍记 `debug` 并带原因（3a 已定 8）。
+- **修改** 宿主日志：
+  - 单图层重建记 `debug`：图层、effect、签名是否变化、用时。
+  - 重编译仍记 `debug` 并带原因（3a 已定 8；已定 9）。
 - **修改** dev 探针 `stats()` 增加单图层重建次数与用时（均值 / 最大）。
 
 ## 点 8 — 文档、回归与 changelog
 
-- `cocs/wpe/WPE_SCENE.md`：「图层渲染图」补运行时开关与单图层重建、可变 effect 的编译规则与不支持项归属、预建资源；「泛光与 HDR」补开关就地与级数预建、HDR 只在加载时判定；「场景宿主」的就地 / 重编译分类表改成最终形态（并附上本文件的对照表）；`cocs/README.md` 摘要同步。
+- `cocs/wpe/WPE_SCENE.md`：
+  - 「场景脚本（P3b）」：
+    - 环境表改成「改写」形态（`console`、`localStorage`；其余浏览器全局保留）；
+    - 补持久 `localStorage`：前缀、位置、配额与网页壁纸共用；
+    - 补 `registerAudioBuffers` 占位；
+    - 「未提供」清单删掉这两项；
+    - 探针一段同步点 0。
+  - 「图层渲染图」补运行时开关与单图层重建、可变 effect 的编译规则与不支持项归属、预建资源；「泛光与 HDR」补开关就地与级数预建、HDR 只在加载时判定；「场景宿主」的就地 / 重编译分类表改成最终形态（并附上本文件的对照表）；`cocs/README.md` 摘要同步。
 - `versions/latest/regression.md` 新增「场景壁纸 P3c：运行时渲染图」小节，用例见验收。
 - `versions/latest/changelog.md` 用户侧 Optimized 一行：「场景壁纸开关图层效果、泛光，以及改背景色等属性时也即时生效，不再重新加载」。
+  另在 3b 那条 Added 后补半句：「场景脚本的存储（如记住的拖动位置）会保留到下次打开」。
 
 ## 实施步骤
 
 每步都能单独验收；codex 只改仓库内文件，独立验收时先 `git status` 查越界，不采信自报。
 
 **步骤 0 — 测试工程**（Claude）：本机默认样本里能实时渲染的场景都没有 effect visible、`general.bloom` 的用户绑定。把 I10 的测试工程 `kbprops-test`（已存到 `ignore/p3-userprops/dyn-test/kbprops-test`：四个纯色图层、tint effect 的可见性与常量、条件可见、位置 / 尺寸、脚本属性、只有 init 的脚本、泛光）拷到 `ignore/p3c/kbprops-test/`（gitignore，不进仓库），必要时补一个 `clearcolor` / `ambientcolor` 绑定与第二个 effect；在 Kabegame 里「添加壁纸目录」导入。WPE 一侧对它的现象见报告 I10（4b：关掉 effect 后 B 由绿变白、打开恢复）。
+
+**步骤 0.5 — 脚本环境与 API**（codex：点 0；与后面各步无依赖，先做）
+- 验收：
+  - 单测（验收「单测」第 5–7 条）；
+  - CDP 复跑 `realmCheck()`；
+  - `scriptCorpus` 重跑全语料，与 3b 步骤 6 逐段对比：
+    - `registerAudioBuffers` 引起的 124 段求值失败应消失，2 段连带错误随之消失；
+    - `localStorage` 的 10 段 `init` 报错应消失。调 `remove` 的段改报 `remove` 不存在，这是样本自身的错，WPE 同样报。
+    - 新出现的报错逐条解释。
+  - `unsupported` 与 3b 逐张相同。
 
 **步骤 1 — 编译与渲染图**（codex：点 1、点 2）
 - 验收：单测（点 2 列出的几例，以及「不可变的关闭 effect 照旧不进 bundle」「可变 effect 的不支持项不进场景级」）；语料测试的 `unsupported` 与 3b 结束时逐张相同（本机没有不可变 → 可变的变化会让结论改变的场景；如有，逐张解释）。
@@ -251,8 +434,30 @@ interface LayerRuntime {
 2. 编译：可变 effect 进 bundle 并带 `enabled`、自己的 `unsupported`；关着的可变 effect 的不支持项不让场景退回；打开它时 `SceneState.write` 返回 `"recompile"`。
 3. **就地 = 重编译（字节级）**：effect 开 / 关、泛光开 / 关（LDR）、`bloomhdriterations` 8 → 5 → 8（HDR）、`clearcolor`、`ambientcolor`、`eye`，就地结果与整场编译的 uniform 字节与步骤序列逐项相同。
 4. 不回归：没有可变项的场景（本机能渲染的全部默认样本）在 3c 前后资源数与哈希相同。
+5. **`localStorage` 存取**（`storage.test.ts`，内存 `Storage`）：
+   - `set` / `get` 往返数字、字符串、布尔、对象、数组；没有的键返回 `undefined`；
+   - 两个场景键、两个位置互不可见，`clear` 只删自己的前缀；
+   - 前缀外的键（模拟宿主的 dev 开关）读不到、删不掉；
+   - 坏 JSON 返回 `undefined`；
+   - 模块求值期间调用抛错，`init` 里不抛；
+   - 没有 `remove`。
+6. **音频缓冲**：
+   - 模块求值期间 `registerAudioBuffers(engine.AUDIO_RESOLUTION_32)` 返回 `left` / `right` / `average` 三个长度 32 的全零 realm `Float32Array`；
+   - 同一分辨率两次调用返回同一个对象；
+   - 在 `init` 里调用、或参数不是 16 / 32 / 64 时抛错。
+7. **环境**：
+   - realm 里 `console` 只有 `log` / `error`；
+   - `localStorage` 是 WPE 对象；
+   - `typeof fetch === "function"`（不再遮蔽）；
+   - 不再有遮蔽表。
 
 **真机**（Windows dev，主窗口预览；壁纸窗口为窗口模式时一并验，不是就记未测）
+- **`localStorage` 持久与隔离**（点 0）：在测试工程里加一段脚本，`init` 里读一个计数键、加 1 后写回，`update` 把计数写进某个图层的 `alpha` 或颜色，用来目视。
+  - 关预览再开：计数接着涨；
+  - 预览与壁纸窗口（窗口模式时）读到同一份；
+  - 宿主 `localStorage` 里只多出带 `kabegame:wpe-scene:ls:` 前缀的键；
+  - dev 强制渲染开关等其它键不受影响；
+  - 测完清掉测试前缀下的键。
 - **测试工程 effect 开关**：属性面板切 `p_effvis`，B 层由绿变白、再变回绿（同 WPE I10 4b）；应用日志没有「重新编译」，探针 `stats()` 的单图层重建次数增加；关 / 开之后 `host.renderFrame(t)` 的哈希分别等于用同一属性值整场编译的 `renderFrame(t)` 哈希。
 - **逐帧开关**：CDP 在宿主 frame 里以 rAF 频率交替推 `p_effvis` 10 s，记录单图层重建的均值 / 最大用时、`stats().frameMs` 的均值与 p95、宿主 rAF 与 `GPUQueue.submit` 次数（预期与不切换时相同），无重编译、无 WebGPU 校验错误。测完推回原值。
 - **泛光开关**（「场景后处理」= 开启）：切 `p_bloom`，泛光随之出现 / 消失、不重编译；`p_bloomstr` 改强度即时生效。测完设置改回「跟随 WPE」。
@@ -267,12 +472,31 @@ interface LayerRuntime {
 3. **管线变体遗漏**：重建要求所有可能用到的管线已经建好；遗漏任何一种就只能异步补建（画面晚一帧）或报错。单测按「每个可变图层的全部开关组合」枚举需要的变体（effect 数小，组合数可控；超过 8 个可变 effect 时只枚举到角色层面）。
 4. **WPE 语义的推断部分**：`FUN_1402065e0` 只在「数值变了」才重建；我们按计划签名判定，覆盖范围略大（结果相同）。`colorBlendMode` 的运行时行为 I3 没有列出（待定 1）。
 5. **样本不足**：本机能实时渲染的场景都没有这几类绑定，主要靠测试工程与单测；工坊里有 effect visible 绑定的场景（如 2932157836 的 `wink`）要等它们的其它阻塞解除后才能真机看到。
+6. **存储配额共用**：脚本存储与宿主、所有网页壁纸同在 `file:` 来源的一份 `localStorage` 里，Chromium 每来源约 5 MiB。写得多的脚本可能挤占网页壁纸的空间，超了 `set` 抛错，只禁用那个回调。本机样本存的都是几个小值。
+7. **不再遮蔽的代价**：在 WPE 里会报错的脚本在我们这里可能能跑。比如用了全局 `setTimeout` 的脚本，计时器按墙钟走、暂停时不停；用了 `fetch` 的可以读宿主 `file:` 范围内的文件。这类行为与 WPE 不同，只出现在 WPE 下本来就坏掉的脚本里。安全性不变：3b 已定 4 本来就写明不是安全边界。
 
 ## 已定（2026-11-03 用户）
 
 1. 属性快速路径的第二步：做到 WPE 的程度（报告 I3 / I7），effect 可见性只重算该图层渲染图（合成次数、合成 RT、passthrough，对应 `FUN_1401e6300`），其余能就地改的都不重编译。
 2. 重编译时保留脚本 realm 与脚本状态（3b 起），不重跑 `init`。
 3. 默认照 WPE（报告 D / I 节）；COMBO 绑用户属性按不支持；快速路径要扛得住逐帧调用。
+4. **脚本环境不再遮蔽，改写**（2026-11-05 用户）：
+   - 22 个全局的遮蔽表去掉，因为太多；
+   - 只把与 WPE 同名、语义不同的改写成 WPE 的形状（`console`、`localStorage`）。
+
+   改掉 3b 已定 4 的「遮掉 WPE 没有的东西」。
+5. **WPE `localStorage` 直接做持久化**（2026-11-05 用户）：存进浏览器 `localStorage`，加前缀隔离。
+6. **API 阶段**（2026-11-05 用户同意 3b 步骤 6 的建议）：
+   - 3c 先补 `registerAudioBuffers`（全零）与 `localStorage`，并修探针；
+   - 层级、输入、纹理动画 / 视频、声音 / 文本随各自的渲染阶段做。
+7. **`localStorage` 的场景键用图片 id**（2026-11-05 用户），即宿主地址里的 `kbScene`。
+   - 删掉再导入、图片 id 变了以后，存储不再对应。
+   - 没有图片 id 的宿主（`imageId` 为 null）不读写持久存储，改用只存在内存里的一份。
+8. **`LOCATION_SCREEN` 的「屏幕」**（按推荐，用户未提异议）：
+   - 先全部记作同一块屏（前缀 `s`），预览、应用背景与桌面共用；
+   - `LOCATION_GLOBAL` 用前缀 `g`，两者互不可见；
+   - 多显示器壁纸落地时再按显示器分。
+9. **重编译日志保持 `debug`**（2026-11-05 用户）：只进宿主 DevTools 控制台，不进应用日志。验收靠探针的 `stats().recompiled`；点 0 起它也计入设置引起的重载。
 
 ## 待定（附推荐）
 
@@ -284,3 +508,6 @@ interface LayerRuntime {
 
 - 后续各 Phase 新增的可绑定属性按本文件对照表直接实现就地处理：粒子 `instanceoverride`（P4）、透视相机参数（P5）、文本重排与声音音量（P6）、用户纹理换槽（W5）、雾（P8）。
 - `thisLayer.getEffect(…)` 进入脚本 API 时（见 3b「后续」），effect 可变性的判定扩到「有脚本的场景全部 effect」（待定 3）。
+- **真实音频**：场景宿主本身是网页壁纸，可以像 Phase 8 的垫片一样经 `wpe_web_media_subscribe` 订阅音频，每帧原地填 `registerAudioBuffers` 返回的缓冲，脚本不用改。
+  - 要在 `supportsaudioprocessing` 与订阅生命周期上对齐 Phase 8；
+  - 随 W2 / W3 做。
