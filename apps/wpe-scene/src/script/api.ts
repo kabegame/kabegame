@@ -194,8 +194,8 @@ export class ScriptApi {
   }
 
   private object(): ApiObject {
-    const object = this.realm.global.Object as typeof Object;
-    return object.create(null) as ApiObject;
+    // 普通对象，不是 `create(null)`：WPE 的 `String(thisObject)` 是 `[object Object]`，没有原型时会抛 TypeError
+    return new (this.realm.global.Object as ObjectConstructor)() as ApiObject;
   }
   private define(object: ApiObject, name: string, get: () => unknown, set?: (value: unknown) => void): void {
     (this.realm.global.Object as typeof Object).defineProperty(object, name, {

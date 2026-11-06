@@ -509,6 +509,12 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(scene.fov).toBe(50);
   });
 
+  it("API 对象是普通对象：能转成字符串（WPE 是 [object Object]）", () => {
+    const h = setup();
+    for (const object of [h.api.general, h.api.thisScene, h.api.layer(0)])
+      expect(String(object)).toBe("[object Object]");
+  });
+
   it("挂在 general 上的脚本：thisLayer === thisObject，经它写字段进场景（L14）", () => {
     const h = setup();
     h.api.enterScript(script("general", { kind: "general" }, null));

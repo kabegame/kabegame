@@ -1638,3 +1638,54 @@ HDR 也累加，但趋于收敛，`bg` 停在 2–3。没有逐帧帧号，成�
 **重复运行**：`python -X utf8 -I exp.py q2bloom`，`python -X utf8 -I ana_q2bloom.py q2-bloom-ctl q2-bloom-ldr q2-bloom-hdr`。HDR 的按时间判读没有存成脚本。
 
 测试窗口已关，主实例仍是 PID 36548。`config.json` 这一轮没有写过。
+
+### L21. HDR 不清屏：底图是线性值（2026-11-07，`ultra`）
+
+步骤 5 验收时发现 Kabegame 的 HDR 不清屏不收敛，补这一节。L20 的 HDR 判读是 960×540、按时间，这里对齐 1920×1080、按帧。L3、L11、L20 的旧文字未改。
+
+**条件**：PID 36548，`ultra`，`fps=10`，`msaa=none`，`-playInWindow`，客户区 1920×1080，`PrintWindow`，画面变了才留，10 fps 下每帧一张（`ignore/p3c/step4/accept/w1080.py`）。读数是 G 通道、5×5 平均。HDR 工程的 `FR` 块带辉光，帧号读不准，这里取 `TRAIL` 最新那一格。没有用 RenderDoc，后备缓冲里的值没有直接读过，下面的「存的是什么」来自着色器源码和读数吻合。
+
+**结论**：HDR 下半透明累加走 `x' = lin(0.9x + 0.1)`，`x` 是后备缓冲里存的线性值，显示的是 `encode(x')`。LDR 的 `x' = 0.9x + 0.1` 不适用。
+
+**依据**：
+- 有泛光：`assets/shaders/combine_hdr.frag`，非 `LINEAR` 分支写 `saturate(lin(albedo)) * g_RenderVar0.x`，`lin` 是 sRGB → 线性。
+- 没有泛光：`assets/shaders/passthroughsrgb.frag`，`albedo.rgb = lin(albedo.rgb)`，不 saturate。走这条路的静态依据在 `p2-REPORT.md` 第 141 行（`combine_srgb`）。
+- 两条都把 `lin` 之后的值写进 RGBA16F 后备缓冲。清屏时这个值下一帧就没了，所以单帧看不出来；`clearenabled: false` 时它是 N−2 的底图，图层在 gamma 空间混合到线性值上，再 `lin` 一次。
+
+**`ACC`（白，alpha 0.1）**，模型从 `x = 0` 起，每步是同一条链的一次：
+
+| 步 | 帧 | 模型 `encode(x')` | WPE `q2-bloom-hdr` |
+|---|---|---|---|
+| 1 | 1、2 | 25.5 | 25、25 |
+| 2 | 3、4 | 27.8 | 28、28 |
+| 3 | 5、6 | 28.1 | 28、28 |
+| 4 起 | 7… | 28.2 | 28，到第 139 帧不变 |
+
+没有泛光的 `q2-hdr-nobloom`（`hdr: true`、`bloom` 绑属性且属性 false）收敛到同一个 28，第 2 帧 25、第 3 帧起 28，88 帧（第 2–89 帧，第 1 帧没有样本）。所以这一条和泛光无关。
+
+**`q2-bloom-hdr` 的辉光**，按帧：
+
+| 帧 | `d10` | `d40` | `d80` | `d160` | `d320` | `d640` | `bg` |
+|---|---|---|---|---|---|---|---|
+| 1 | 182.6 | 95.6 | 52.4 | 23.0 | 7 | 1 | 0 |
+| 3 | 255 | 127.0 | 62.4 | 25.4 | 8 | 1 | 0 |
+| 5 | 255 | 152.4 | 66.0 | 26.0 | 8 | 1 | 0 |
+| 9 | 255 | 215.0 | 69.0 | 26.4 | 8 | 1 | 0 |
+| 19 | 255 | 255 | 70.4 | 26.5 | 8 | 1 | 0 |
+| 79 | 255 | 255 | 71.2 | 26.6 | 8 | 1 | 0 |
+| 139 | 255 | 255 | 71.4 | 26.6 | 8 | 1 | 0 |
+
+和 L20 的差别（`d40` 停在 109、`bg` 2–3）是窗口尺寸，形状相同：外圈收敛。靠近 GLOW 的一圈涨到 255，是 `x + bloom` 超过 1 之后被 `saturate` 留住。
+
+**运行中切换**（L11 只测了 LDR）：
+- `hdr-scr`：`clearenabled` 挂 `{script}`，第 40–79、120–159 帧不清屏。第 39 帧 `ACC` 25，第 40 帧 28，第 79 帧 28，第 80 帧 25。切到 false 当帧就过了一次 `lin`，切回 true 当帧干净。`hdr-scr-nb`（泛光位关）相同。
+- `hdr-user`：`p_clearen` 属性 6 轮 12 次，12 次切换全是：切到 false 块偏移 {0, 2}，`ACC` 25 → 28；切回 true 1 块，`ACC` 28 → 25，`bg` 全程 0。
+
+工程在 `ignore/p3c/step4/accept/proj/`（`q2-hdr-nobloom`、`hdr-scr`、`hdr-scr-nb`、`hdr-user`），帧在 `wpe/`。
+
+**没有查清**：
+- 后备缓冲的值没有直接读，存的是线性值是推断，依据是源码和 `ACC` 模型差 0.2 以内。
+- `msaa` 不是 none、`disabled` 档、桌面壁纸窗口下没有测。
+- `bloom` 绑属性且运行中打开时的 HDR 不清屏没有测。
+
+测试窗口已关，主实例仍是 PID 36548，`config.json` 哈希前后都是 `6263297c…`。

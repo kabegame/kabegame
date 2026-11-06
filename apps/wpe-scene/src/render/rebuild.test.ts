@@ -1291,6 +1291,65 @@ describe("泛光开关与级数", () => {
     expect(frame()).toEqual(expected("scene target"));
     expect(frame()).toEqual(expected("scene target 2"));
   });
+
+  describe("HDR 不清屏：开画之前把底图过一次 lin（L21）", () => {
+    const LINEAR = (target: string) => [`copy ${target} -> _rt_FullFrameBuffer`, `pass ${target} load`];
+    const frame = (live: Live) => capture(live).trace.filter((line) => line.includes("scene target"));
+    /** 同一份 HDR 图层，没有泛光链（场景位关着）：没有别的地方建快照。 */
+    const hdrNoChain = () => {
+      const bundle = bloomScene(true, false);
+      bundle.bloom = null;
+      bundle.general.fields.clearenabled = false;
+      bundle.general.clearVariable = true;
+      return bundle;
+    };
+
+    it("泛光开着：换底图、画图层、快照、combine，都在当前这张", async () => {
+      const bundle = bloomScene(true, true);
+      bundle.general.fields.clearenabled = false;
+      bundle.general.clearVariable = true;
+      const live = await open(bundle);
+      for (const target of ["scene target 2", "scene target", "scene target 2"])
+        expect(frame(live)).toEqual([
+          ...LINEAR(target),
+          `pass ${target} load`, // 图层
+          `copy ${target} -> _rt_FullFrameBuffer`,
+          `pass ${target} load`, // combine
+        ]);
+    });
+
+    it("没有泛光链：第一次用时建快照当中转，只建一次", async () => {
+      const live = await open(hdrNoChain());
+      const textures = live.gpu.counts.textures;
+      expect(frame(live)).toEqual([...LINEAR("scene target 2"), "pass scene target 2 load"]);
+      expect(live.gpu.counts.textures).toBe(textures + 1);
+      expect(frame(live)).toEqual([...LINEAR("scene target"), "pass scene target load"]);
+      expect(live.gpu.counts.textures).toBe(textures + 1);
+    });
+
+    it("运行中切换：关着才走，切回 true 不再走", async () => {
+      const bundle = bloomScene(true, false);
+      bundle.bloom = null;
+      bundle.general.clearVariable = true;
+      const live = await open(bundle);
+      const setClear = (value: boolean) =>
+        live.state.write({ property: "c", target: { kind: "general", key: "clearenabled" } }, value);
+      expect(frame(live).filter((line) => line.startsWith("copy"))).toEqual([]);
+      setClear(false);
+      expect(frame(live)).toEqual([...LINEAR("scene target"), "pass scene target load"]);
+      setClear(true);
+      expect(frame(live).filter((line) => line.startsWith("copy"))).toEqual([]);
+    });
+
+    it("LDR 不走这一步", async () => {
+      const bundle = bloomScene(false, false);
+      bundle.bloom = null;
+      bundle.general.fields.clearenabled = false;
+      bundle.general.clearVariable = true;
+      const live = await open(bundle);
+      expect(frame(live)).toEqual(["pass scene target 2 load"]);
+    });
+  });
 });
 
 /** 带环境光与 `g_EyePosition` 的程序：跟在 `program` 的成员后面。 */

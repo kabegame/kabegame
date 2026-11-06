@@ -20,6 +20,7 @@
  * - 清屏（L4、L11）：`clearcolor` 与 `clearenabled` 每帧读，脚本写入同帧生效。`clearenabled: false` 是不清屏，不是清成黑色：
  *   WPE 画进两张交替的后备缓冲，第 N 帧的底图是第 N−2 帧的成品，两条链互不相交，所以这里同样用两张场景目标逐帧交替。
  *   泛光的 combine 写当前这张，底图含泛光（L20）。第二张只在清屏可能关掉时建（`SceneGeneral.clearVariable`），别的场景资源不变。
+ *   HDR 下 WPE 的后备缓冲存 `lin(x)`，累加因此收敛（L21），我们的目标存 `x`，所以开画之前把底图过一次 `lin`（`linearizeBase`）。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -65,6 +66,21 @@ export const HDR_TARGET_FORMAT: GPUTextureFormat = "rgba16float";
 export function sceneTargetFormat(hdr: boolean): GPUTextureFormat {
   return hdr ? HDR_TARGET_FORMAT : SCENE_TARGET_FORMAT;
 }
+
+/** 底图逐像素过 `lin`（WPE `passthroughsrgb.frag`，公式不变）：见 `GpuScene.linearizeBase`。 */
+const LINEAR_BASE_WGSL = /* wgsl */ `
+@group(0) @binding(0) var base: texture_2d<f32>;
+@vertex fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+  let p = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
+  return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+}
+@fragment fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+  let value = textureLoad(base, vec2<i32>(position.xy), 0);
+  let c = step(vec3<f32>(0.04045), value.rgb);
+  let rgb = c * pow((value.rgb + 0.055) / 1.055, vec3<f32>(2.4)) + (1.0 - c) * (value.rgb / 12.92);
+  return vec4<f32>(rgb, value.a);
+}
+`;
 
 /** 每像素字节（显存估算用）。 */
 function texelBytes(format: GPUTextureFormat): number {
@@ -264,6 +280,8 @@ export class GpuScene {
   /** 场景目标：`current` 是这一帧画的那张，`alternate` 只在清屏可能关掉时有（L11）。 */
   private current: SceneTarget | null = null;
   private alternate: SceneTarget | null = null;
+  /** `linearizeBase` 的管线，第一次用时才建。 */
+  private linearBase: { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup } | null = null;
   private snapshot: RenderTarget | null = null;
   width = 0;
   height = 0;
@@ -988,6 +1006,45 @@ export class GpuScene {
     this.alternate = alternate;
   }
 
+  /**
+   * HDR 不清屏时把底图换回 WPE 的空间。WPE 收尾写 `lin(x)`（`combine_hdr`、`passthroughsrgb`），下一轮底图是线性值，累加因此收敛；
+   * 我们的目标存 `x`（画布是 8 位 sRGB 编码，单帧逐值相等，P2b），不补这一步就一直涨（L21）。
+   * 快照当中转：这一帧要读它之前总有 `snapshot` 操作重新拷。
+   */
+  private linearizeBase(encoder: GPUCommandEncoder, { texture, view }: SceneTarget): void {
+    this.ensureSnapshot();
+    const snapshot = this.snapshot!;
+    if (!this.linearBase) {
+      const module = this.device.createShaderModule({ label: "scene base linear", code: LINEAR_BASE_WGSL });
+      const pipeline = this.device.createRenderPipeline({
+        label: "scene base linear",
+        layout: "auto",
+        vertex: { module, entryPoint: "vs" },
+        fragment: { module, entryPoint: "fs", targets: [{ format: this.format }] },
+        primitive: { topology: "triangle-list" },
+      });
+      const bindGroup = this.device.createBindGroup({
+        label: "scene base linear",
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: snapshot.view }],
+      });
+      this.linearBase = { pipeline, bindGroup };
+    }
+    encoder.copyTextureToTexture(
+      { texture },
+      { texture: snapshot.texture },
+      { width: this.width, height: this.height },
+    );
+    const pass = encoder.beginRenderPass({
+      label: "scene base linear",
+      colorAttachments: [{ view, loadOp: "load", storeOp: "store" }],
+    });
+    pass.setPipeline(this.linearBase.pipeline);
+    pass.setBindGroup(0, this.linearBase.bindGroup);
+    pass.draw(3);
+    pass.end();
+  }
+
   /** effect 开关真的变了的图层：重排，再清 fbo。清屏提交在这一帧的绘制之前。 */
   private rebuildStructures(objects: ReadonlySet<number>, state: SceneState): void {
     if (!objects.size) return;
@@ -1100,6 +1157,7 @@ export class GpuScene {
     const { view: sceneView, texture: sceneTexture } = this.current;
     const { clearcolor, clearenabled } = state.general;
     const [r, g, b] = clearcolor;
+    if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
     const snapshot = () => {
       if (this.snapshot)
         encoder.copyTextureToTexture(
@@ -1197,6 +1255,7 @@ export class GpuScene {
     this.targets.length = 0;
     this.current = null;
     this.alternate = null;
+    this.linearBase = null;
     this.snapshot = null;
     this.bloom = null;
   }
