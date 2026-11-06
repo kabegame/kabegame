@@ -72,9 +72,13 @@ export interface LayerPlan {
 
 type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
 
-/** 合成 RT 尺寸（B5 `FUN_1402091e0`）：基础材质槽 0 纹理的图像尺寸，没有纹理取图层 size，再取 max(4, ·)。精灵表取单帧留到 P6。 */
-export function compositeSize(layer: Pick<SceneLayer, "size">, texture: TextureSize | undefined): [number, number] {
-  const [w, h] = texture ? [texture.width, texture.height] : [layer.size[0] ?? 0, layer.size[1] ?? 0];
+/** 合成 RT 尺寸（B5 `FUN_1402091e0`）：基础材质槽 0 纹理的图像尺寸，没有纹理或 `solidLayer` 取图层 size，再取 max(4, ·)。精灵表取单帧留到 P6。 */
+export function compositeSize(
+  layer: Pick<SceneLayer, "size" | "solidLayer">,
+  texture: TextureSize | undefined,
+): [number, number] {
+  const [w, h] =
+    texture && !layer.solidLayer ? [texture.width, texture.height] : [layer.size[0] ?? 0, layer.size[1] ?? 0];
   return [Math.max(4, Math.round(w)), Math.max(4, Math.round(h))];
 }
 

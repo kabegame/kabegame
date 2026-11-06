@@ -34,6 +34,8 @@ export interface ModelJson extends JsonObject {
   height?: number;
   autosize?: unknown;
   puppet?: unknown;
+  solidlayer?: unknown;
+  instanced?: unknown;
 }
 export interface MaterialPass extends JsonObject {
   shader?: string;

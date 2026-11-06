@@ -182,6 +182,7 @@ function bundle(): SceneBundle {
         brightness: 1,
         visible: true,
         visibleBound: false,
+        solidLayer: false,
         passes: [],
         effects: [],
         colorBlendMode: 0,

@@ -167,6 +167,8 @@ export interface SceneLayer {
   visible: boolean;
   /** `visible` 绑了用户属性（含 condition）：运行时可能变，当前不可见也要建 GPU 资源（P3a）。 */
   visibleBound: boolean;
+  /** 模型 `solidlayer` 且不是 `instanced`：合成 RT 按 `size`，不看纹理（B5）。 */
+  solidLayer: boolean;
   /** 基础材质的 pass。 */
   passes: ScenePass[];
   /** 0 普通；31 上屏改 additive；其它值走 passthrough（B7 / B8）。 */
@@ -647,6 +649,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       brightness: asNumber(bindings.bind(object.brightness as SceneValue, properties, at("brightness")), 1),
       visible: bindings.bind(object.visible, properties, at("visible")) !== false,
       visibleBound: isUserBinding(object.visible),
+      solidLayer: false,
       passes: [],
       colorBlendMode: Math.trunc(
         asNumber(
@@ -670,6 +673,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     const model = parseModel(modelText);
     checkModelFeatures(model, unsupported);
+    layer.solidLayer = !!model.solidlayer && !model.instanced;
     if (!model.material) {
       unsupported.add("material:missing");
       continue;

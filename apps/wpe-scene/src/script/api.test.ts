@@ -65,6 +65,7 @@ function scene(): SceneBundle {
     brightness: 1,
     visible: true,
     visibleBound: false,
+    solidLayer: false,
     passes: [],
     colorBlendMode: 0,
     effects: [],

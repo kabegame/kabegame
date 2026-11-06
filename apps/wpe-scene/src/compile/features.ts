@@ -160,8 +160,13 @@ const OBJECT_FLAGS = [
   "reflected",
   "skin",
 ];
-/** `autosize`：`size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸（`bundle.ts`），否则不起作用。 */
-const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize"]);
+/**
+ * 支持或中性的模型键。
+ * - `autosize`：`size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸（`bundle.ts`），否则不起作用。
+ * - `solidlayer`：合成 RT 按图层 `size`（`compositeSize`）；UV 不内缩（`FUN_1401ea310`），我们的图层都不内缩，不用另做。
+ *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
+ */
+const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "solidlayer"]);
 const SUPPORTED_PASS = new Set([
   "shader",
   "blending",
@@ -242,14 +247,9 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
 }
 
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
-  for (const key of ["puppet", "fullscreen", "passthrough", "solidlayer"])
-    if (active(model[key])) unsupported.add(`model:${key}`);
+  for (const key of ["puppet", "fullscreen", "passthrough"]) if (active(model[key])) unsupported.add(`model:${key}`);
   for (const [key, value] of Object.entries(model))
-    if (
-      !SUPPORTED_MODEL.has(key) &&
-      !["puppet", "fullscreen", "passthrough", "solidlayer"].includes(key) &&
-      active(value)
-    )
+    if (!SUPPORTED_MODEL.has(key) && !["puppet", "fullscreen", "passthrough"].includes(key) && active(value))
       unsupported.add(`model:${key}`);
 }
 

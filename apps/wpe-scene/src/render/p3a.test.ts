@@ -115,6 +115,7 @@ function synthetic(
     ...state,
     size: [64, 32],
     visibleBound: true,
+    solidLayer: false,
     passes: [scenePass({ uniforms })],
     colorBlendMode: 0,
     effects: [],

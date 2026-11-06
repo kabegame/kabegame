@@ -438,6 +438,7 @@ describe("可渲染性自查", () => {
     brightness: 1,
     visible: true,
     visibleBound: false,
+    solidLayer: false,
     passes: [pass],
     colorBlendMode: 0,
     effects: [],

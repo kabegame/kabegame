@@ -471,3 +471,22 @@ describe("重编译原因", () => {
     expect(of("h")).toEqual({ kind: "recompile", reason: "postprocess-hdr", path: "general.hdr" });
   });
 });
+
+describe("模型 solidlayer", () => {
+  const compileModel = (model: Record<string, unknown>) =>
+    compile([], 0, { "P:/p/models/a.json": JSON.stringify({ material: "materials/a.json", ...model }) });
+
+  it("放行，图层带上这一位", async () => {
+    const bundle = await compileModel({ solidlayer: true });
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0].solidLayer).toBe(true);
+  });
+  it("没写时不带", async () => {
+    expect((await compileModel({})).layers[0].solidLayer).toBe(false);
+  });
+  it("`instanced` 另报不支持，这一位不算", async () => {
+    const bundle = await compileModel({ solidlayer: true, instanced: true });
+    expect(bundle.unsupported).toEqual(["model:instanced"]);
+    expect(bundle.layers[0].solidLayer).toBe(false);
+  });
+});

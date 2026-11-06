@@ -42,7 +42,7 @@ HDR 仍只在加载时判定（P2b，WPE 的 HDR 渲染位与交换链格式只�
 
 **清屏色、环境光、天光**共用一张字段表 `GENERAL_FIELDS`，列出 WPE 里只改字段、不用重编译的 general 属性。编译、就地写和脚本读写都按这张表走，取值规则只有一份，所以就地结果和整场编译相同。WPE 在脚本之后每帧读 `clearcolor` 和 `clearenabled`，我们也在 `encode` 里每帧读，不走脏项，脚本写入同帧生效。`ambientcolor` / `skylightcolor` 在 WPE 里由改值回调拷进渲染上下文，脚本写入也走回调；我们记一个脏位，`sync` 把新值刷进声明了这两个 uniform 的 draw。
 
-`clearenabled: false` 是颜色和深度都不清，不是清成黑色，初始底色是黑，`clearcolor` 不出现（L11）。WPE 画进两张交替的后备缓冲，第 N 帧的底图是第 N−2 帧的成品，两条链互不相交；泛光写回当前缓冲，所以底图含泛光，LDR 每两帧累加一次，HDR 趋于收敛（L20）。我们照此用两张场景目标逐帧交替（已定 16），泛光的 combine 写当前这张，累加自然成立。
+`clearenabled: false` 是颜色和深度都不清，不是清成黑色，初始底色是黑，`clearcolor` 不出现（L11）。WPE 画进两张交替的后备缓冲，第 N 帧的底图是第 N−2 帧的成品，两条链互不相交；泛光写回当前缓冲，所以底图含泛光，LDR 每两帧累加一次，HDR 趋于收敛（L20）。我们照此用两张场景目标逐帧交替（已定 16），泛光的 combine 写当前这张，累加自然成立。HDR 下底图还差一步：WPE 的后备缓冲存 `lin(x)`，我们的目标存 `x`，所以 HDR 且不清屏时，每帧切完目标先把底图过一次 `lin`（`GpuScene.linearizeBase`，L21）。
 
 第二张目标只在需要时建。当前关着，或 `clearenabled` 绑了属性、挂了脚本时，加载就建，从第一帧开始交替，清屏开着也换，运行中关掉时手上正好是 N−2，和 WPE 相同。别的脚本写 `thisScene.clearenabled = false` 时才建，并把当前画面拷过去，这一帧的底图是 N−1，静止内容相同。本机 99 张都不走这条路，资源数和画面不变。
 
@@ -707,6 +707,7 @@ private alternate: SceneTarget | null = null;
   - `sync`：`clearenabled` 为 false 且没有第二张时当场建，把当前目标拷过去（没有声明的脚本写入才走到这里）。
   - `targetTexture`、`targetView` 返回 `current`，`targetBytes` 加上第二张。
   - `SceneRenderer` 的 `blitBindGroup` 改成按 `scene.targetView` 取，每张目标各一个，换场景时清空。
+- **新增** `GpuScene.linearizeBase`（2026-11-07，修 D37）：HDR 且不清屏时，切完目标先把当前目标拷到快照，再全屏画 `lin(快照)` 回目标，然后才开始这一帧的绘制（L21）。`lin` 用 `passthroughsrgb.frag` 的公式。快照当中转用，因为 `snapshot` 步骤读之前总会重新拷。
 - **新增** `render/uniforms.ts` 的 `LIGHT_UNIFORMS`（`g_LightAmbientColor`、`g_LightSkylightColor`），`GpuScene.sync` 在 `dirty.lights` 时遍历全部 draw 调 `refreshLights`：只写块里有、且 `pass.uniforms` 没覆盖的名字，都没有时不标 `dirty`，脚本逐帧写时不重传无关的缓冲。
 - **修改** `uniformInput`：`ambient` / `skylight` 读 `state.general`，单图层重建出来的新 draw 拿到的是当前值。**删除** `this.ambient`、`this.skylight`。
 - **新增** `render/layout.ts` 的 `eyePosition(general)`：`[width / 2, height / 2, 2000]`（L2），`populate` 算一次。文件头的相机注释改成 WPE 的实际做法：正交且没有 `paths` 时视图是单位阵，不是 `eye` 被抵消。
@@ -886,7 +887,7 @@ private alternate: SceneTarget | null = null;
 9. **反馈型 fbo 的旧内容**（已查清，J6）：effect 关掉再打开时，fbo 内容与 swap 状态保留，带 `clear` 的除外（每次重建都清，且是同图层全部 effect 的 fbo）。我们照此实现，与 WPE 一致。整场重编译是清空的，所以这一点上「就地 = 重编译」本来就不成立，单测只比步骤序列、uniform 字节与编码轨迹。
 10. **`thisScene.bloom = true` 打开没有链的场景**是整场重编译，不是就地。WPE 同帧、不编译（K7），这是有意的差异，换来写死 `bloom: false` 的场景不多占显存。重编译后 HDR 判定不变：`bloom` 读场景文件，脚本写入不算（K3）。本机没有脚本这样写。
 11. **`general.hdr` 与 WPE 不同**（已定 12）：WPE 运行中改不生效，连加载时都只读 JSON；我们读属性当前值与脚本覆盖，改值就整场重编译并生效。本机样本 3355291946（工坊，2026-11-06 新下载）绑了 `hdr`，是差异样本；它能不能实时渲染还没看。
-12. **第二张场景目标的显存与差一帧**（已定 16）：`clearenabled` 关着、绑了属性或挂了脚本的场景多一张全尺寸目标（4K LDR 约 32 MiB，HDR 约 63 MiB）。没有声明的脚本第一次关掉清屏时，那一帧的底图是 N−1，之后这条链里多带一帧的旧内容，切回 true 就清掉，静止内容不受影响。本机 99 张 0 个写 `false`，也没有绑定。
+12. **第二张场景目标的显存与差一帧**（已定 16）：`clearenabled` 关着、绑了属性或挂了脚本的场景多一张全尺寸目标（4K LDR 约 32 MiB，HDR 约 63 MiB）。没有声明的脚本第一次关掉清屏时，那一帧的底图是 N−1，之后这条链里多带一帧的旧内容，切回 true 就清掉，静止内容不受影响。本机 99 张 0 个写 `false`，也没有绑定。HDR 且不清屏的场景每帧多一次拷贝和一次全屏绘制，帧时间还没单独量。`linearizeBase` 用快照作中转，没有泛光链时要多建一张快照；现在 HDR 要求 `general.bloom` 文件值为 true，非空场景一定有链，这条分支真机走不到。
 13. **`g_EyePosition` 改值可能影响现有画面**：着色器里它给视线方向用（`genericimage*.vert`、粒子）。基线哈希有变化要确认是修正，不是回归。
 14. **脚本打开 `camerashake` / `cameraparallax` 的效果缺失**（已定 14）：从退回预览图变成继续渲染、没有效果，用户看不出这里缺了东西。本机 0 个样本。
 
@@ -932,7 +933,9 @@ private alternate: SceneTarget | null = null;
 - **`g_AudioSpectrum*` uniform**：随 W2 做，数据直接用点 0 宿主收到的同一帧。本机报这项的场景都另有 25 项以上阻塞，现在做解锁不了什么。
 - **网页壁纸暂停的计时器**：垫片只冻结 rAF、CSS 动画与媒体元素，靠 `setTimeout` / `setInterval` 驱动的页面还会动。遇到实际样本再看要不要包装计时器。
 - **建好 realm 后才退回的场景**：渲染失败时 realm 与音频订阅都保留，frame 不销毁，Hub 会继续采集到 iframe 消失。没有退订命令，影响小，先不处理。
-- **`model:solidlayer`**：本机 41 个场景里 17 个报这项，影响图层几何与尺寸（`p2-REPORT`），测试工程 `kbprops-test` 也是靠本地覆盖 `models/util/solidlayer.json` 才绕开（见「步骤 0.6 真机」）。放在 3c 之后单独做。
+- **普通图像图层的 UV 内缩**：WPE 把普通图层的 UV 两端各内缩 `0.15 / 纹理尺寸`（`FUN_1401ede30` 的位 2），`solidlayer`、passthrough、fullscreen 不内缩。我们的图层都不内缩。D54 在没有 effect 的层上量到：128 宽的纹理铺到 600 像素，棋盘竖边左端 −0.60、右端 +0.60 像素，拟合 0.001183，`0.15 / 128` = 0.001172，只量了 x 方向。改它会动所有普通图层的画面，要重新和 WPE 比。
+- **单层 mip 的纹理**：D54 里同一工程纹理只放 1 层 mip 时最大差 47，换完整 mip 链后是 0。`samplerDescriptor` 只有带 mip 才开各向异性，和现象对得上，但没有验证是不是这个原因，本机有多少这样的纹理也没统计。
+- **`model:instanced`**：本机 15 张报这项，模型都是工坊的 `solid_instance_model_*`（`solidlayer` + `instanced`，材质带 `util/white`，绝大多数是 `genericimage4`）。已知它让合成 RT 按纹理尺寸，其余语义没查，要解锁时再看。
 - **`thisScene.get/setCameraTransforms`**：WPE 在正交场景里也生效（L2）：改基准字段，下一帧 `lookAt` 进视图矩阵。我们的 `ScriptApi` 没有这两个方法，本机 99 张 0 处（L15）。要做的话 `sceneViewProjection` 不能再只看场景尺寸。
 - **`camera.paths`**：WPE 按路径每帧插值。本机正交场景 0 张，透视 6 张（都是默认工程），`features.ts` 现在不报不支持，随 P5 一起处理。
 - **相机图层**（对象带 `camera` 键）：本机 7 张正交工坊场景有，`origin {script}` 或关键帧动画，`zoom` 绑属性（L15）。这些场景现在报 `object:empty` 退回预览图，不会画错。WPE 里的实际效果没有实验，要解锁这些场景时先测。
@@ -1423,3 +1426,51 @@ WPE 收敛，我们不收敛，而且跟 LDR 一样一直涨。`d40` 在 WPE 里
 - 测试行 13238–13257 与两个任务已删，图片 9899、任务 639、画册 5660。`localStorage` 没有测试键。工程目录都在。
 - 设置文件与重跑前逐键相同，与这轮开始时只差用户改的两个过渡键。
 - WPE 主进程 36548 没有动，`KBG` 窗口 0 个，`config.json` 哈希 `6263297c…` 没变，WPE 写的 `shaders/blobsSM40` 已删。
+
+### `solidlayer` 收尾（2026-11-07）
+
+步骤 0.6 留下的后续项，不属于步骤 3。计划原来写「影响图层几何与尺寸」，复核后比这小得多。
+
+**WPE 的行为。** 用 REA 重看 p2 报告记录的两处读取（`wallpaper64.exe` 2.8.42）：
+- `FUN_1402091e0`（合成 RT 尺寸）：没有基础纹理时取图层 `size`。有纹理时取图像尺寸，只有 `solidlayer` 或 passthrough、非 fullscreen、非 `instanced` 才改回 `size`。
+- `FUN_1401ea310` → `FUN_1401ede30`（效果链四边形）：普通图层传位 2，UV 内缩 `0.15 / 纹理尺寸`；`solidlayer`、passthrough、fullscreen 传 0，不内缩。D54 在没有 effect 的层上也量到了内缩，不只效果链。
+
+`assets` 的 `solidlayer.json` 用 `flat` 着色器，不带纹理，走第一条分支，所以和普通图层只差 UV 内缩，而我们本来就不内缩。没有全部搜过 `0x200` 这一位的读取点，只复核了这两处。
+
+**本机情况。** 103 张里 40 张报这项，共 265 个对象：`assets` 的两个模型 179 个，工坊 `solid_instance_model_*` 86 个。没有一张只差这一项，现在能渲染的 6 张都不用它。带纹理、非 `instanced` 的 `solidlayer` 0 个。
+
+**实现。**
+- `features.ts`：`solidlayer` 进 `SUPPORTED_MODEL`，不再报不支持。
+- `SceneLayer` 新增 `solidLayer`（模型 `solidlayer` 且不是 `instanced`），`compositeSize` 按它取图层 `size`。
+- `solidlayer_depthtest` 仍报 `depthtest:enabled`，`instanced` 仍报 `model:instanced`，不在这次范围内。
+
+**验证。** 宿主 tsc 0 error，Prettier 通过，vitest 584 passed，唯一失败是与此无关的 2077888249「意外解锁」。4 个变异都被抓到：`compositeSize` 不看 `solidLayer`、`instanced` 也算、不记这一位、仍报不支持。
+
+**真机（2026-11-07）。** 回归表 D54，通过。宿主 `index-BPQzyznU.js`，预览，档位 `disabled`，工程都是 `bloom: false`。WPE 是 PID 36548、`ultra`、`fps=10`，`-playInWindow`，客户区 1920×1080。工程与脚本在 `ignore/p3c/step4/accept/`（`gensolid.py`、`t54.mjs`、`cmp_solid.py`、`uvshift.py`，工程 `solidp/`）。比的是 Kabegame 第 25 帧的离屏场景目标和 WPE 窗口帧，这批工程没有时间相关的内容。
+
+| 工程 | 内容 | `unsupported` | 整帧最大差 | 差异像素 |
+| --- | --- | --- | --- | --- |
+| `s-real` | `assets` 模型 12 层：`size` + `scale`、`color`、`alpha`、`angles`、组合、重叠、`tint`、`tint` + 组合、`blur`、2×2、301×3 | 空 | 0 | 0 |
+| `s-kb` | 13114 的工程去掉 `COUNT`、`AUDIO` 与本地模型，4 层 | 空 | 0 | 0 |
+| `t-solid` | 工程内模型 `{material, solidlayer: true}`，纹理 128×512、完整 mip，7 层 | 空 | 0 | 0 |
+| `t-plain` | 同上，去掉 `solidlayer` | 空 | 255 | 267693（见下） |
+
+合成 RT。`kbres` 后面挂直通 effect，`kbres` 才真正画进合成 RT，带 0 输出 `1 / |ddx(u)|`、`1 / |ddy(v)|`，不经过 uniform。带 1 输出 `g_Texture0Resolution`。两边读数逐项相同：
+
+| 图层 | `size` | `scale` | `t-solid` RT 读数 | `t-plain` RT 读数 | `t-solid` 条纹翻转数 | `t-plain` 条纹翻转数 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `res2` | 600×200 | 1 | 598.3×200.8 | 128.5×510.0 | 597 | 127 |
+| `res3` | 300×400 | 1 | 301.2×401.6 | 128.5×510.0 | 297 | 127 |
+| `res4` | 300×200 | 1.5 × 1 | 301.2×200.8 | 128.5×510.0 | 298 | 127 |
+
+读数是 8 位量化后换算的，精度约 ±2。Kabegame 这边另有建纹理记录，是精确的 `composite 600×200`、`300×400`、`300×200` 与 `128×512`。两边都按 `size`、不随 `scale`，对照工程都按纹理尺寸。
+
+灵敏度：同一引擎 `t-solid` 对 `t-plain`，`res2` 平均差 WPE 92.2、Kabegame 91.8，`res3` 53.9、53.1，`res4` 61.2、60.9，`blur` 2.12、2.10。第一版工程只挂 `kbres`，带 0 两个工程读数相同：它是最后一个 pass，直接画到图层四边形上，量到的是屏幕尺寸。所以换成后面挂直通。
+
+**和 WPE 的差异，都不是 solidlayer 引起的。**
+- **普通图层的 UV 内缩，这次量到了。** 没有 effect 的 `noeff` 层，WPE 里 `t-solid` 与 `t-plain` 不同，Kabegame 里相同，而且 WPE `t-solid` 与 Kabegame 逐像素相同，差异都在 WPE 普通图层这边。棋盘竖边的位移按 `u` 线性：左端 −0.60 像素，中间 0.00，右端 +0.60 像素。拟合 e = 0.001183，换算 0.151 texel，反编译记录是 `0.15 / 尺寸`，128 宽时 0.001172，残差 0.019 像素。这里的尺寸是纹理尺寸，不是图层 `size`（0.15 / 600 = 0.00025 对不上）；上文「效果链四边形」的说法要补一句：没有 effect 的普通图层也量到了。只量了 x 方向。Kabegame 不内缩，所以 `t-plain` 整帧差 0 做不到：最大差 255，差大于 2 的 156979 像素。`res2` 等其它层的差异没有逐层量位移，不能说全部来自内缩。
+- **单层 mip 的纹理。** 同一工程纹理只放 1 层 mip 时，`t-solid` 最大差 47，`noeff` 差大于 2 的 45651 像素；换成完整 mip 链后为 0。差异在纹理缩小方向的棋盘边缘。`samplerDescriptor` 只有带 mip 时才开各向异性，这和现象对得上，但没有验证是不是这个原因。本机多少纹理只有 1 层 mip 没有统计。
+
+**没有测到。** 真实工坊样本（本机没有只差这一项的场景）；带纹理 solidlayer 的真实样本（本机 0 个）；`colorBlendMode` 不为 0 的 solidlayer；开泛光、HDR；壁纸窗口（这轮只用预览，`wallpaperDisabled` 测前就是 true）；画布读回（比的是离屏目标）；UV 内缩的 y 方向；13114 本身（有 `COUNT` / `AUDIO`，按要求没有用，开预览也会改它的存储计数）。`solidlayer_depthtest`、`instanced` 不在这次范围内。
+
+**恢复。** 测试行 13262–13265 与任务 `635e6cd9…` 已删，删除前逐个核对过任务 id；用户行 13258–13261 与任务 `c7586edd…` 都在。图片 9903、任务 640、画册 5660，最大 id 13261，与测前相同。当前壁纸 13258，`window`，未暂停，「场景后处理」`disabled` 没有改过，过渡 `none`，设置文件与测前逐键相同。13114 没有开过，`metadataId` 20265，属性不变。预览已关，路由 `/gallery`，`localStorage` 没有测试键。WPE 主进程 36548 没有动，`KBG` 窗口 0 个，WPE 写进 `solidp/` 的 `shaders/blobsSM40` 已删。
