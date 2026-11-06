@@ -1,4 +1,11 @@
-import { valueTypeOf, type BindingTarget, type UserProperty, type ValueType } from "../compile/bindings";
+import {
+  GENERAL_FIELDS,
+  valueTypeOf,
+  type BindingTarget,
+  type GeneralKey,
+  type UserProperty,
+  type ValueType,
+} from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
@@ -67,25 +74,6 @@ export interface ScriptApiState {
 
 const DEGREE = 0.017453292;
 const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness"] as const;
-const GENERAL_RECOMPILE = new Set([
-  "hdr",
-  "clearenabled",
-  "clearcolor",
-  "ambientcolor",
-  "skylightcolor",
-  "fov",
-  "nearz",
-  "farz",
-  "camerafade",
-  "camerashake",
-  "camerashakespeed",
-  "camerashakeamplitude",
-  "camerashakeroughness",
-  "cameraparallax",
-  "cameraparallaxamount",
-  "cameraparallaxdelay",
-  "cameraparallaxmouseinfluence",
-]);
 
 export class ScriptApi {
   private current: SceneScript | null = null;
@@ -123,9 +111,11 @@ export class ScriptApi {
     this.installGeneral(this.thisScene);
     this.realm.global.engine = this.engine;
     this.realm.global.thisScene = this.thisScene;
-    this.define(this.realm.global, "thisLayer", () =>
-      this.current?.layer === null || !this.current ? null : this.layer(this.current.layer),
-    );
+    this.define(this.realm.global, "thisLayer", () => {
+      if (!this.current) return null;
+      // 挂在 general 上的脚本没有图层，`thisLayer` 就是 `thisObject`（L14）
+      return this.current.layer === null ? this.owner() : this.layer(this.current.layer);
+    });
     this.define(this.realm.global, "thisObject", () => this.owner());
   }
 
@@ -499,32 +489,23 @@ export class ScriptApi {
             name.endsWith("tint") ? "vec3" : "float",
           ),
       );
-    for (const name of GENERAL_RECOMPILE)
+    // WPE 里只改字段的属性（L1）：不走重编译。vec3 每次读都是新的 `Vec3`，改它不影响字段（L14）
+    for (const key of Object.keys(GENERAL_FIELDS) as GeneralKey[])
       this.define(
         object,
-        name,
+        key,
         () => {
-          const general = this.access.bundle().general;
-          const value =
-            name === "clearcolor"
-              ? general.clearColor
-              : name === "ambientcolor"
-                ? general.ambient
-                : name === "skylightcolor"
-                  ? general.skylight
-                  : name === "clearenabled"
-                    ? general.clearEnabled
-                    : name === "hdr"
-                      ? general.postprocess.hdrFlag
-                      : undefined;
+          const value = this.access.state().general[key];
           return Array.isArray(value) ? this.vector(value, 3) : value;
         },
-        (value) =>
-          this.write(
-            { kind: "recompile", reason: "general", path: `general/${name}` },
-            value,
-            name.endsWith("color") ? "vec3" : name === "hdr" || name === "clearenabled" ? "bool" : "float",
-          ),
+        (value) => this.write({ kind: "general", key }, value, GENERAL_FIELDS[key].type),
       );
+    // 只有 `hdr` 保留整场重编译（已定 12），读场景位
+    this.define(
+      object,
+      "hdr",
+      () => this.access.bundle().general.postprocess.hdrFlag,
+      (value) => this.write({ kind: "recompile", reason: "postprocess-hdr", path: "general/hdr" }, value, "bool"),
+    );
   }
 }

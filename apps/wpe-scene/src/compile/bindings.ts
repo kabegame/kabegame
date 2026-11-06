@@ -21,9 +21,72 @@ export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
 export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible";
 
 export type RecompileReason =
-  | "postprocess" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）
-  | "general" // clearcolor / ambientcolor / skylightcolor / camera.*
+  | "postprocess-hdr" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）
   | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）
+
+type GeneralField =
+  | { type: "vec3"; fallback: readonly [number, number, number] }
+  | { type: "float"; fallback: number }
+  | { type: "bool"; fallback: boolean };
+
+/**
+ * WPE 里只改字段的 general 属性（L1），不重编译。`fov` 起的项正交场景不读，只存值，脚本能读回（已定 13）。
+ * `fallback` 是缺键时的值（L1 的构造默认值、L14 的实测）。
+ */
+export const GENERAL_FIELDS = {
+  clearcolor: { type: "vec3", fallback: [0, 0, 0] },
+  clearenabled: { type: "bool", fallback: true },
+  ambientcolor: { type: "vec3", fallback: [0, 0, 0] },
+  skylightcolor: { type: "vec3", fallback: [0, 0, 0] },
+  fov: { type: "float", fallback: 50 },
+  nearz: { type: "float", fallback: 0.1 },
+  farz: { type: "float", fallback: 10000 },
+  camerafade: { type: "bool", fallback: true },
+  camerashake: { type: "bool", fallback: false },
+  camerashakespeed: { type: "float", fallback: 3 },
+  camerashakeamplitude: { type: "float", fallback: 0.5 },
+  camerashakeroughness: { type: "float", fallback: 1 },
+  cameraparallax: { type: "bool", fallback: false },
+  cameraparallaxamount: { type: "float", fallback: 0.5 },
+  cameraparallaxdelay: { type: "float", fallback: 0.1 },
+  cameraparallaxmouseinfluence: { type: "float", fallback: 0.5 },
+} as const satisfies Record<string, GeneralField>;
+
+export type GeneralKey = keyof typeof GENERAL_FIELDS;
+
+/** `GENERAL_FIELDS` 的一份取值：vec3 是三个分量。 */
+export type GeneralValues = {
+  [K in GeneralKey]: (typeof GENERAL_FIELDS)[K]["type"] extends "vec3"
+    ? number[]
+    : (typeof GENERAL_FIELDS)[K]["type"] extends "float"
+      ? number
+      : boolean;
+};
+
+/** 全部字段的缺省值：每次一份新的，vec3 不共用数组。 */
+export function generalDefaults(): GeneralValues {
+  const entries = Object.entries(GENERAL_FIELDS).map(([key, { fallback }]) => [
+    key,
+    typeof fallback === "object" ? [...fallback] : fallback,
+  ]);
+  return Object.fromEntries(entries) as GeneralValues;
+}
+
+/**
+ * 一个字段的取值规则，编译与就地写共用，这是「就地 = 重编译」的保证。
+ * 单个数字铺满三个分量（`FUN_1401a4230`）；bool setter 只认 bool（G4）。不合法时返回 undefined：WPE 不改字段。
+ */
+export function generalValue(key: GeneralKey, value: SceneScalar | undefined): number[] | number | boolean | undefined {
+  const { type } = GENERAL_FIELDS[key];
+  if (type === "bool") return typeof value === "boolean" ? value : undefined;
+  // `numbers` 把布尔换成 0 / 1，这里不算数字
+  if (typeof value === "boolean") return undefined;
+  const parts = numbers(value);
+  if (!parts.length || !parts.every(Number.isFinite)) return undefined;
+  if (type === "float") return parts.length === 1 ? parts[0] : undefined;
+  if (parts.length === 1) return [parts[0], parts[0], parts[0]];
+  return parts.length >= 3 ? parts.slice(0, 3) : undefined;
+}
 
 export type BindingTarget =
   | { kind: "script-property"; script: string; key: string }
@@ -34,6 +97,8 @@ export type BindingTarget =
   | { kind: "bloom"; field: keyof BloomParams }
   /** `general.bloom`：每帧读（A1），写的是场景位。 */
   | { kind: "bloom-enabled" }
+  /** `GENERAL_FIELDS` 的字段：只改 `SceneState.general`，不重编译。 */
+  | { kind: "general"; key: GeneralKey }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 export interface SceneBinding {

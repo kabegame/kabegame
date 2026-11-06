@@ -1088,3 +1088,553 @@ DLL 地址以 `0x180000000` 为基址，exe 以 `0x140000000` 为基址。函数
 - 之前 20 多次开窗后哈希都没有变（10:06 之后核对过一次仍是 `2cc84151…`）。
 
 这两个键我没有动，也没有恢复。全部实验数据都在这之前或不受影响：最后一轮 `q5-ldr` 的读数与第一轮相同。`postprocessing` 与 `fps` 没有变。
+
+## L. 清屏、环境光与相机（2026-11-06）
+
+对象不变（`wallpaper64.exe` SHA-256 前缀 `40e2ce02`，`scenescript64.dll` 前缀 `58039ef9`，`bin\` 与 `distribution\bin\` 两份相同）。目的：Phase 3c 步骤 4 要把这些属性改成就地生效，之前的 I3 只有「只改字段」的笼统结论，相机一条是推断。
+
+L1–L8 是静态分析（REA 快照 `wallpaper64-2.8.42-p3-userprops-dyn.rea-snapshot` 配合 `llvm-objdump`，并只读了 `assets/shaders`），没有运行 WPE。**置信度**沿用 I、J 节：静态确认 / 实测 / 推断 / 未查清。
+
+记号：`G` = `*R`（general 结构），`ctx` = `R+0x10` = `G+0xd8`。之前写的 `R+0x35c`、`R+0x368` 实际都在 `G` 上。
+
+**一句话结论**：
+- **`camera` 绑不了属性。** 加载时硬读字符串，写成对象就跳过。正交且没有 `paths` 时，加载末尾把三个值重置成默认值，JSON 的值被丢弃。
+- **`clearenabled: false` 是颜色和深度都不清**，没有别的地方清主目标。
+- **`clearcolor` 与 `clearenabled` 在脚本之后每帧读**，脚本写入同帧生效。
+- **`g_LightAmbientColor` / `g_LightSkylightColor` 就是原值**，没有转换，灯光图层不覆盖。脚本写入也走改值回调。
+- **`g_EyePosition` 不是 JSON 的 `eye`**，正交场景里是 `(W/2, H/2, 2000)`。
+
+### L1. general 属性全表
+
+**静态确认：47 项，没有 `eye` / `center` / `up`。** `FUN_14015a000` 调用 47 次，逐项列出。`+0x58` 未赋值的项由该函数清零，即无回调。
+
+| 属性 | 偏移 / 位 | 类型 | `+0x58` 回调 |
+|---|---|---|---|
+| `bloom` / `hdr` | `+0xe0` bit1 / bit10 | bool | 无 |
+| `bloomstrength` `bloomthreshold` `bloomhdrstrength` `bloomhdrthreshold` `bloomhdrfeather` `bloomhdrscatter` | `0x3bc`…`0x3d0`（步长 4） | float | `LAB_1401863e0` |
+| `bloomhdriterations` / `bloomtint` | `0x3d4` / `0x3d8` | int / vec3 | `LAB_1401863e0` |
+| `clearenabled` | `+0xe0` bit5 | bool | 无 |
+| `clearcolor` | `0x35c` | vec3 | 无 |
+| `ambientcolor` / `skylightcolor` | `0x368` / `0x374` | vec3 | `LAB_1401863f0` |
+| `fogdistance` / `fogheight` | `+0xe0` bit14 / bit15 | bool | `FUN_140186440` |
+| `fogdistancecolor` / `fogheightcolor` | `0x380` / `0x38c` | vec3 | `FUN_140186440` |
+| `fogdistancestart` `fogdistanceend` `fogdistancestartdensity` `fogdistanceenddensity` `fogheightstart` `fogheightend` `fogheightstartdensity` `fogheightenddensity` | `0x398`…`0x3b4` | float | `FUN_140186440` |
+| `fov` / `perspectiveoverridefov` | `0x140` / `0x144` | float | 无 |
+| `nearz` / `farz` / `zoom` | `0x14c` / `0x150` / `0x154` | float | 无 |
+| `camerafade` | `+0xe0` bit2 | bool | 无 |
+| `transparentsorting` / `customsortorder` | `+0xe0` bit12 / bit13 | bool | 无 |
+| `camerashake` | `+0xe0` bit7 | bool | 无 |
+| `camerashakespeed` / `amplitude` / `roughness` | `0x328` / `0x32c` / `0x330` | float | 无 |
+| `cameraparallax` | `+0xe0` bit8 | bool | 无 |
+| `cameraparallaxamount` / `delay` / `mouseinfluence` | `0x334` / `0x338` / `0x33c` | float | 无 |
+| `gravitydirection` / `gravitystrength` | `0x3e4` / `0x3f0` | vec3 / float | 无 |
+| `windenabled` | `+0xe0` bit16 | bool | 无 |
+| `winddirection` / `windstrength` | `0x3f4` / `0x400` | vec3 / float | 无 |
+
+- 不走描述符、由 `FUN_140186c90` 直接读的键：`orthogonalprojection`（`auto` / `width` / `height`）、`refreshdelay`、`norecompile`、`spritesheetrefreshsync`、`lightconfig`。
+- `+0xe0` bit3 = 正交，bit4 = 正交 `auto`。
+- 构造默认值：`fov` 50，`perspectiveoverridefov` 95，`nearz` 0.1，`farz` 10000，`zoom` 1。`clearcolor`、`ambientcolor`、`skylightcolor` 全 0。
+
+### L2. 相机
+
+**不能绑属性（静态确认）：**
+- 解析在 `FUN_140186c90`：取 `camera` 在 `0x140187426`，`eye` 在 `0x14018821c`，`center` 在 `0x140188323`。写进基准字段 `G+0x118` / `+0x124` / `+0x130`。
+- 类型不是字符串（tag 4）就跳过，保留默认值（`eye` 2,2,2；`center` 0,0,0；`up` 0,1,0）。不取 `value`，不建绑定，不断言。`camera` 本身不是对象时整段跳过。
+- `camera.paths` 是文件路径数组，交给 `FUN_140198e20`，每帧 Hermite 插值（`FUN_1401891a0`）。
+- 运行时只有两条路：脚本 `setCameraTransforms`；相机图层（对象带 `camera` 键，`FUN_14018ff60` 建，进 `G+0x1f8`）。优先级是相机图层 > 路径 > 基准字段。相机图层的 `origin` / `angles` 走基础对象描述符，理论上能间接绑定（推断，没做实验）。
+
+**`get/setCameraTransforms`（静态确认；同帧性未实测）：**
+- DLL 的回调在 `0x1816357df` 调 `vt+0x68`，在 `0x181635e9e` 调 `vt+0x70`。对象是 `G+0x48` 接口（虚表 `0x14048ea50`），exe 实现是 `0x14018da30` 和 `0x14018da90`。
+- 字段：`G+0x118`（eye）、`+0x124`（center）、`+0x130`（up）、`+0x13c`（第四个 float）。DLL 里 `eye` / `center` / `up` / `zoom` 字符串相邻（`0x1819a35b0`），所以第四个叫 `zoom` 是推断。
+- 各项可空。vec3 不是合法对象、zoom 不是数字时跳过该项。没有正交判断。从全局作用域调用报 `cannot be called from global scope`。
+- 读取返回基准值，不是当前值 `G+0xf0`，所以读不到路径、抖动、相机图层的结果。
+- `FUN_1401891a0` 每帧开头把基准拷到当前值（`0x14018942e`），再算 `lookAt`（`FUN_14019d920`）。只有在没有活动相机图层、也没有路径时才走这条。
+- 脚本在 `0x1401802e5`，晚于上面的拷贝，所以 `update` 里写入要到下一帧才进视图矩阵。
+
+**正交场景（静态确认）：**
+1. 视图：`V = lookAt(eye, center, up)`，右手系，写到 `*(ctx+0x38)`。
+2. 投影：`FUN_140183a70`（`0x140183e95`）调 `ortho(L, W−cropR, cropB, H−cropT, −2000, 2000)`。`W` / `H` 是 `G+0x354` / `+0x358`。`nearz` / `farz` 不参与。
+3. 缩放：`FUN_14017fa70`（`0x14017fd50`）在 `P` 上绕场景中心乘 `G.zoom × G+0x114`。`zoom` 只在正交分支有读取点。
+4. 合成：`FUN_1400d4200` 算 VP = P×V（`ctx+0x930`，uniform ID 0xb）和 MVP（`ctx+0x8f0`）。
+
+`LAB_140188648`（`0x14018866b`）在加载末尾判断，正交且路径为空时强制写 `eye` = (0,0,0)、`center` = (0,0,−1)、`up` = (0,1,0)，所以 `V` 是单位阵。eagleflag 的 `-378.29 -185.706 0` 被清掉，画面不平移，与计算相符（前提是它有 `orthogonalprojection` 且没有 `paths`，这轮没有重读样本 JSON）。
+
+**`g_EyePosition`（`ctx+0x68`）**：`lookAt` 之后才改写（`FUN_1401891a0` 末尾），值是 `(eye.x + W/2, eye.y + H/2, 2000)`，默认即 `(W/2, H/2, 2000)`，`eye.z` 被丢弃。
+
+**`center` / `up` 的消费者**：场景代码段 `0x140170000–0x1401a4000` 内只有 `lookAt`（`0x140189d04` / `0x140189cf6`），`center` 另被 `camerashake`（`FUN_140199580`）改写。范围外没有逐一排查。`eye.xy` 还是视差中心（`0x140189c18` / `0x140189c24`）。
+
+### L3. `clearenabled` 为 false
+
+**静态确认：**
+- `FUN_140183550` 在 `0x14018359d` 调 `clear(color=1, depth=1)`，实现是 `0x14009b160`。关掉时颜色和深度都不清，共用这一个开关。模板没有单独清除。
+- 全部 `ClearRenderTargetView` 只有三处：`0x14005a51e`、`0x14005e84a`（初始化 / 重建）和 `0x14009b191`（设备清屏实现）。每帧路径上其余清屏点都不碰主目标（反射 RT、阴影图集、效果 FBO）。
+- 绘制目标：开 MSAA 时画进 `_rt_FullFrameBufferMultiSampled`（`R[0x620]`），画完 resolve 到后备缓冲；无 MSAA 时直接画进后备缓冲。`_rt_FullFrameBuffer`（`R[0x613]`）始终是拷出来的快照。本机 `config.json` 的 `msaa` 是 `none`。
+- 交换链：`FUN_14012ac60` 的 `CreateSwapChainForHwnd`，`SwapEffect=3`（FLIP_SEQUENTIAL），`BufferCount=2`，`AlphaMode=3`（IGNORE），`Flags=0x800`。
+- 泛光开着时：画场景 → 快照到 `_rt_FullFrameBuffer` → `FUN_140183610` → combine 材质 `R[0x62a]` 写回当前默认目标（后备缓冲）。
+
+**推断（未实测）：**
+- 无 MSAA 时 flip 模型保留缓冲内容，但两张缓冲交替，手上这张多半是 N−2 帧的成品，不是严格的上一帧。开 MSAA 时是同一张纹理，上一帧的颜色和深度都留着。
+- 无 MSAA 时下一轮底图已含泛光；MSAA 时不含。
+- 设备清屏色是共享状态，效果 FBO 也会改（如 `0x1401ee49a`）。带反射的场景里，这个共享状态可能影响主 clear。
+
+**清屏色的来源（静态确认，模式含义为推断）**：`FUN_14017fa70` 在帧首判断 `(R+0x124 & ~2) == 0`。`alignment` 为 0 或 2 时用 `G.clearcolor`，否则用 `R+0x31b0`，即 `schemecolor.value`（`FUN_140181f30`，`0x140182311`，无转换，默认 0）。从 `FUN_140183a70` 看，1 / 3 / 4 是可能露底的对齐方式（推断）。alpha 恒为 1.0。
+
+### L4. `clearcolor` 的读取时机
+
+**静态确认（同帧未实测）：每帧读 `G+0x35c`，无缓存。** 一帧的顺序：
+
+| 顺序 | 动作 | 地址 |
+|---|---|---|
+| 1 | 选清屏色指针 | `0x14017fc4c` |
+| 2 | 相机更新 `FUN_1401891a0` | |
+| 3 | 投影 `FUN_140183a70` | |
+| 4 | 脚本 `FUN_140171440` | `0x1401802e5` |
+| 5 | 解引用颜色 | `0x14018033a–34d` |
+| 6 | `setClearColor` | `0x140180351` |
+| 7 | 反射 pass（有才走） | |
+| 8 | `FUN_140183550` 读 `clearenabled` 并清屏 | `0x1401835a7` |
+
+`clearcolor` 与 `clearenabled` 都在脚本之后读，所以同帧生效。相机、`fov`、`zoom` 都在脚本之前算，所以脚本写入晚一帧。
+
+### L5. `g_LightAmbientColor` / `g_LightSkylightColor`
+
+**静态确认：就是回调拷进去的那份，全程无转换，灯光图层不覆盖。**
+- ID `0x60` 和 `0x61`（注册在 `0x140003daf` / `0x140003dcf`）。`FUN_1400d8300` 读 `ctx+0x1298` / `ctx+0x12a4`，原样写 vec3。
+- 写入点只有三处：初始化清零 `0x14017ce44`、加载时内联拷贝 `0x140187e43`、回调 `LAB_1401863f0`。回调每次两个都拷。读取点只有 `FUN_1400d8300` 这一处（`0x1400d9b82` / `0x1400d9ba8`）。
+- `FUN_1401a4230` 只解析 `"r g b"`，单个数字铺满三分量。
+- 着色器里：`ambient * color` 在 `genericimage2/3/4.frag` 和两个粒子 frag 的 `#if LIGHTING` 里，`genericimage2` 另带 `max(0.001, …)` 下限；`mix(sky, ambient, n.y*0.5+0.5)` 在 `generic*.vert` 与 `model_vertex_v1.h`；skylight 只出现在这个顶点半球混合里。
+- 灯光图层：`FUN_140190c80` 单独打包灯光数组，不碰这两个值。两者在着色器里叠加：LDR 是 `ambient + light`，HDR 是 `saturate(ambient + light) + overbright`。没有 `LIGHTING` combo 的材质不受影响。
+
+### L6. 脚本写入与改值回调
+
+**静态确认（K5 只实测过 bloom，ambient 未实测）：脚本写 `ambientcolor` 会同步执行回调，同帧进渲染上下文。**
+1. DLL `FUN_181620e10` 的类型 2 分支（`0x181621046`）：对象要 `x` / `y` / `z` 全是数字，否则放弃写入；单个数字铺满三分量。
+2. 跳到 `0x18162144f`，`call [rsi+0x18]`，其中 `rsi = 描述符+0x30`，即调用 `+0x48`。
+3. exe 的 `0x1401a4530` 写完字段，执行 `mov rax,[rdx+0x28]`，非空就 `jmp rax`，即尾调用 `+0x58`，`rcx` 仍是 `G`。
+
+float 版 `0x1401a49f0`、bool 版如 `0x14019baf0` 结构相同。所以 `fog*`、`bloom*` 的脚本写入也走回调，`clearcolor` 没有回调但在渲染前读取。
+
+### L7. 更正与补充（旧文字未改）
+
+- **p2 A4**「编辑器状态下改用 `R+0x31b0`」不对：切换条件是 `alignment`，值是 `schemecolor`（L3）。
+- **I3**「相机 `fov`、`zoom`、`nearz` 等」成立，但 `eye` / `center` / `up` 不在其中：它们不是描述符，绑不了（L1、L2）。
+- **PLAN** 相机一条的「LWE 的 `ortho·translate(eye)` 与 `lookAt` 恰好抵消」是 LWE 的做法；WPE 是加载末尾把三个值重置，视图为单位阵（L2）。结果相同，原因不同。
+- **`g_EyePosition`**：p2 I4 只写了 `ctx+0x68`，取值见 L2。
+
+### L8. 未查清
+
+- 无 MSAA 且不清屏时的实际画面（N−2 帧的判断）没有运行验证。
+- 每帧 Present 路径上有没有 Discard 类调用，没有专门排查。
+- 相机图层属性绑定是否如推断一样可用，没做实验。
+- `perspectiveoverridefov` 在正交场景里的下游消费者（`R+0x120`）没有追完。
+
+### L9. 实验条件（2026-11-06，步骤 4.0）
+
+L9 起是运行 WPE 的实验，验证 L1–L8 的静态结论，只测 WPE，没有碰 Kabegame。工程和脚本在 `ignore/p3c/wpe-general/`，版面与判读点见 L17。
+
+**一句话结论**：
+- **`clearenabled: false` 残留的是 N−2，不是上一帧。** 两张后备缓冲各走各的链，第 N 帧只含 N、N−2、N−4……（L11）
+- **初始底色是黑**，不是 `clearcolor`，`clearcolor` 全程不出现。
+- **缺键时的调节项不是 0**：`camerashakespeed` 3、`camerashakeamplitude` 0.5、`camerashakeroughness` 1、`cameraparallaxamount` 0.5、`cameraparallaxdelay` 0.1、`cameraparallaxmouseinfluence` 0.5（L14）。
+- `clearcolor`、`clearenabled`、`ambientcolor`、`skylightcolor` 属性改值都是下一帧生效、不重载；脚本写入都是同帧生效；数字铺满三分量；读到的是原值。
+- `g_EyePosition` 是 `(W/2, H/2, 2000)`，`eye` 非零或写成 `{user}` 都不影响，图层不平移。
+- **样本里顶层 `camera.paths` 在正交场景 0 张，`[gs]etCameraTransforms` 0 处，但有 7 张正交场景用相机图层**（L15），这条路没有实验。
+- **开泛光时底图含不含泛光没有测到**：这轮档位是 `disabled`（见下）。
+
+**实验条件**（数字都在这个条件下得到）：
+- 窗口在用户的 WPE 主进程里（`-playInWindow`，960×540，名字前缀 `KBG`），PID 36548，2026/11/04 2:32:57 启动。对象版本不变。`fps=10`，帧间隔实测 100 ms（改值前后 12 帧的均值 99.6–100.9，最大 105）。`msaa=none`。
+- **`postprocessing` 是 `disabled`，不是 K 节的 `ultra`。** 开工前 `config.json` 就是这个值（K10 记着等用户改回），这轮不能改。实测确认运行中也是关闭档：字面量 `bloom: true` 的 `ctl-bloom` 里 `d10`…`d640` 全 0（K1 的 `ultra` 下 `d10` 是 54.2）。所以 HDR 和泛光相关的都没有测到，其余结论也都是 `disabled` 档下的。
+- 画面采样同 K 节：`PrintWindow(PW_RENDERFULLCONTENT)`，23–24 次 / 秒，存整帧，每帧约 2.4 个样本。遮挡不影响。
+- **窗口坐标**：窗口图 = 场景 × (960 / W) + (11, 45)，y 轴朝上。1920×1080 时与 K 节相同。
+- **帧号**：这轮比 K 节多一个判读量。`FR` 块的颜色由脚本写成帧号（R = 低 8 位，G = 高 8 位，B = 1），每个样本都能读出它是第几帧，不再靠时间对齐。`K0` / `K1` 对照仍然照做。不改值的工程帧号逐帧连续（`q2-false` 339 帧 0 缺失）。个别帧缺样本，集中在 `applyProperties` 那一刻，原因应是起进程占用（推断），不影响判读：改值类实验共缺 3–5 帧。
+- **读数取整**：`0.5` 读 127，`0.1` 读 25，`0.3` 读 76，`0.25` 读 64，`0.75` 读 191。`.5` 往下取，其余就近，所以与 Kabegame 比较时留 ±1。原因未查。
+- `MON` 脚本同 K 节：`applyUserProperties` 时记 `mark frame`，`init` 计数。**下文「mark+1」指在 `mark` 那一帧之后的第一帧看到新值。**
+- 改值是一条 `applyProperties` 同时改被测属性和 `p_alpha`。工程按「共同版面」给 `K` 垫了黑底，读数不受清屏色和残留影响。
+
+### L10. Q1：`clearcolor` 绑属性
+
+**实测：下一帧生效，不重载，读到原值，单个数字铺满三分量。**
+
+| 工程 | 绑定 | 发 / 测到 | 变化帧与 K 同帧 | 变化帧 − mark | `init` | `.dxs` | 帧间隔最大 |
+|---|---|---|---|---|---|---|---|
+| `q1-clear` | `{user: p_clear, value: "0 0 0"}`，`color` | 24 / 22 | **22 / 22** | **全是 1** | 1 次 | 5 → 5 | 105 ms |
+| `q1-clear-num` | `{user: p_clearn, value: 0.25}`，`slider` | 24 / 22 | **22 / 22** | **全是 1** | 1 次 | 5 → 5 | 103 ms |
+
+（「发 / 测到」差的 2 次发生在采样结束之后，不是没生效。）
+
+读数（`bg`）：
+
+| `p_clear` | 读数 | `p_clearn` | 读数 |
+|---|---|---|---|
+| `0.25 0.5 0.75` | 64, 127, 191 | 0.25（加载时） | 64, 64, 64 |
+| `1 0 0` | 255, 0, 0 | 0.75 | 191, 191, 191 |
+| `0 0.5 0` | 0, 127, 0 | 0.5 | 127, 127, 127 |
+| `0.1 0.2 0.3` | 25, 51, 76 | 0.1 | 25, 25, 25 |
+| `1 1 1` | 255, 255, 255 | 1 | 255, 255, 255 |
+| `0 0 0` | 0, 0, 0 | 0 | 0, 0, 0 |
+
+一个属性值只配一种 K 状态，全程 6 种组合，没有一新一旧。没有系数和颜色空间转换。
+
+`schemecolor`（`q1-scheme`）：属性 `schemecolor = 0.9 0.1 0.1`、`clearcolor = 0.1 0.1 0.9`，背景读 25, 25, 229，是 `clearcolor`。与 L3 一致（`-playInWindow` 下走 `G.clearcolor` 这一支）。`alignment` 不为 0 的情形没有测。
+
+### L11. Q2：`clearenabled: false` 的实际画面
+
+**实测：N−2。L3 的推断成立。**
+
+**写法**：`false`、`{value: false}`、`{user: p_clearen, value: true}` + 属性 false 三种，画面行为完全相同。
+
+**残留的是哪一帧**。`TRAIL` 每帧挪一格，所以第 f 帧的画面里，每一格都能看出第几帧的内容还在：
+
+| 工程 | 帧数 | 同奇偶的历史格 | 异奇偶的历史格 | 同奇偶缺失 | 颜色与奇偶不符 | `bg` |
+|---|---|---|---|---|---|---|
+| `q2-false` | 339 | 28561 | **0** | **0** | 0 | 0, 0, 0 |
+| `q2-value` | 119 | 3481 | **0** | **0** | 0 | 0, 0, 0 |
+| `q2-user-pfalse` | 119 | 3481 | **0** | **0** | 0 | 0, 0, 0 |
+
+（`bloom: true` 的 `q2-bloom-ldr`、`q2-bloom-hdr` 在 `disabled` 档下数字相同，这里不当泛光结论用。）
+
+第 170 帧近 16 帧的残留（左边是当前帧，`#` = 在）：`#.#.#.#.#.#.#.#.`。
+
+**第二个独立判据**：白 alpha 0.1 的 `ACC` 逐帧累加，读数成对上升：
+
+| 帧 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `acc` | 25 | 25 | 48 | 48 | 68 | 68 | 86 | 86 | 103 | 103 | 118 | 118 |
+
+第 3 帧压在第 1 帧上（25 → 48），第 4 帧压在第 2 帧上。两个判据都说明：**第 N 帧的底图是第 N−2 帧的成品，两条链不相交。** 这两张缓冲之间没有复制。屏幕上是两条链逐帧交替，半透明累加的速度是「保留上一帧」的一半。
+
+**加载后第一批帧**：
+- 从窗口出现就开始采样，头 2 个样本整窗纯黑（还没有帧），第 3 个样本起是第 1 帧，距开始 0.08–0.11 s。第 1 帧之前的帧不存在，没有漏。
+- **背景从第 1 帧起一直是 0, 0, 0。** `clearcolor` 是 `0.1 0.2 0.3`（清屏时读 25, 51, 76），全程 339 帧一次都没出现。两条链的初始内容都是黑（奇偶帧都读 0）。
+- `q2-user-pfalse` 的 JSON `value` 是 true、属性是 false：`init` 读到 `true`（K3 的顺序），第 5 帧读到 `false`，而第 1 帧的背景已经是黑、`ACC` 与其余工程相同。所以**第一帧渲染前属性就已生效**，不存在一帧清屏。
+
+**运行中切换**（`q2-user`，6 轮共 12 次，`init` 1 次，`.dxs` 5 → 5，采样覆盖第 9–521 帧）：
+
+| 项 | 结果 |
+|---|---|
+| K 翻转帧 − mark | **12 / 12 都是 1** |
+| true → false 的那一帧 | 6 / 6 带两块，偏移 {0, 2}：当帧就接上了 N−2 的底图 |
+| false → true 的那一帧 | 6 / 6 只剩 1 块，下一帧就干净 |
+| true 的帧 | 213 帧全是 1 块，没有一帧多于 1 块 |
+| `bg` | 全程 25, 51, 76，切换时没有闪黑，也不变化 |
+
+- 切到 false：不闪、不跳，已有内容保留。切换前两张缓冲都是干净的完整帧，所以静态内容不变，之后才开始两条链各自累加（`acc` 从 48 → 68 → 86…）。
+- 切回 true：`acc` 下一帧回到 48，累积内容一次清掉。
+
+**泛光**：**没有测到**，`disabled` 档下 `q2-bloom-ldr` / `q2-bloom-hdr` / `q2-bloom-ctl` 的 `d10`…`d640` 全 0。L3 的「无 MSAA 时下一轮底图已含泛光」仍是推断。工程和判读脚本都已备好，档位改成 `ultra` 后运行 `python -X utf8 -I exp.py q2bloom`、`python -X utf8 -I ana_q2bloom.py q2-bloom-ctl q2-bloom-ldr q2-bloom-hdr` 即可（版面与 K 节的 `GLOW`、`dN` 相同）。
+
+### L12. Q3：环境光
+
+**实测：读到原值，没有系数和颜色空间转换；运行中下一帧生效，不重载；单个数字铺满三分量。**
+
+自定义着色器 `AMB`、`SKY` 在顶点里读 uniform 经 varying 输出，`AMBF` 在片元里直接读，全程 `AMB` = `AMBF`。
+
+| 工程 | 发 / 测到 | 变化帧与 K 同帧 | 变化帧 − mark | `init` | `.dxs` | 帧间隔最大 |
+|---|---|---|---|---|---|---|
+| `q3-light`（`color`） | 24 / 22 | **22 / 22** | **全是 1** | 1 次 | 8 → 8 | 103 ms |
+| `q3-light-num`（`slider`） | 18 / 17 | **17 / 17** | **全是 1** | 1 次 | 8 → 8 | 105 ms |
+
+| `ambientcolor` | `AMB` / `AMBF` | `skylightcolor` | `SKY` |
+|---|---|---|---|
+| `0.2 0.4 0.6`（加载） | 51, 102, 153 | `0.6 0.4 0.2`（加载） | 153, 102, 51 |
+| `0.25 0.5 0.75` | 64, 127, 191 | `0.75 0.5 0.25` | 191, 127, 64 |
+| `1 0 0` | 255, 0, 0 | `0 1 0` | 0, 255, 0 |
+| `0.1 0.2 0.3` | 25, 51, 76 | `0.4 0.6 0.8` | 102, 153, 204 |
+| `0 0 0` | 0, 0, 0 | `1 1 1` | 255, 255, 255 |
+| 0.25（数字） | 64, 64, 64 | 0.75（数字） | 191, 191, 191 |
+| 0.5 | 127, 127, 127 | 0.1 | 25, 25, 25 |
+| 0.9 | 229, 229, 229 | 0.6 | 153, 153, 153 |
+
+`0.5` 不被 sRGB 换算（换算过会读 55 或 188）。`0 0 0` 就是 0，没有 `genericimage2` 的 `max(0.001, …)`，那个下限在该着色器里。灯光图层、`LIGHTING` combo 这轮没有测。
+
+### L13. Q4：`g_EyePosition`
+
+**实测：L2 成立。**探针 `EYE` 粗读（除以 `3840, 2160, 4000`），`EYELO` / `EYEHI` 拆成 8 + 8 位还原，精度约 ±1。都在顶点里读（WPE 自带着色器也在顶点读）。
+
+| 工程 | `camera.eye` / `center` | 投影 | `EYE` 读数 | 还原值 | 图层 |
+|---|---|---|---|---|---|
+| `q4-eye-zero` | `0 0 0` / `0 0 -1` | 1920×1080 | 64, 64, 127 | **960, 540, 2000** | 基准 |
+| `q4-eye-nz` | `-378.29 -185.706 0` / `… -1` | 1920×1080 | 64, 64, 127 | **960, 540, 2000** | 不平移 |
+| `q4-eye-user` | `{user: p_eye, value: "-378.29 -185.706 0"}` | 1920×1080 | 64, 64, 127 | **960, 540, 2000** | 不平移 |
+| `q4-eye-1280` | `0 0 0` / `0 0 -1` | 1280×720 | 42, 42, 127 | **640, 360, 2000** | 按比例 |
+
+（还原值的原始数字 959.7、540.1、1999.8、639.5、360.4，这里按精度取整。）
+
+- `q4-eye-nz` 与 `q4-eye-zero` 整帧比较，**客户区逐像素相同**，差异只有 183 像素，全在标题栏文字（窗口名不同）。
+- `q4-eye-user`：能加载，发 8 次 `p_eye`，`init` 1 次、`.dxs` 8 → 8；K 照常翻转（亮 65 帧、暗 56 帧）；`EYE`、`EYELO`、`EYEHI`、`MARK` 的读数全程只有一种。写成对象时 `value` 也被丢弃，符合 L2。
+- 另测了 `orthogonalprojection: {auto: true}`（`q4-eye-auto`，不在问题里）：整窗纯白，`FR` 被盖住，g_EyePosition 判读不出来，脚本正常运行。没有追原因，本机 91 张正交场景没有这种写法（L15）。
+
+### L14. Q5：脚本
+
+**成员**：`thisScene` 61 个，47 个字段 + 14 个方法：`getLayer`、`getLayerByID`、`getLayerCount`、`enumerateLayers`、`destroyLayer`、`createLayer`、`sortLayer`、`getLayerIndex`、`getInitialLayerConfig`、`getCameraTransforms`、`setCameraTransforms`、`getAnimation`、`createModelData`、`destroyModelData`。47 个字段就是 L1 的 47 项。
+
+**读**（实测）。`q5-nokeys` 的 `general` 只留 `orthogonalprojection`，读到的就是缺省值。`q5-keys` 写了全部键，`q5-keys-on` 另把三个 bool 打开。三个工程里 `init` 与第 5 帧读到的相同。
+
+| 字段 | 类型 | **缺键缺省值** | `q5-keys` 写 | 读到 |
+|---|---|---|---|---|
+| `clearcolor` | `Vec3` | **0, 0, 0** | `0.1 0.2 0.3` | 0.10000000149011612, 0.20000000298023224, 0.30000001192092896 |
+| `clearenabled` | boolean | **true** | true | true |
+| `ambientcolor` | `Vec3` | **0, 0, 0** | `0.2 0.3 0.4` | 0.2…、0.3…、0.4…（float32） |
+| `skylightcolor` | `Vec3` | **0, 0, 0** | `0.5 0.6 0.7` | 0.5、0.6000000238418579、0.699999988079071 |
+| `fov` | number | **50** | 33 | 33 |
+| `nearz` | number | **0.10000000149011612** | 0.5 | 0.5 |
+| `farz` | number | **10000** | 5000 | 5000 |
+| `camerafade` | boolean | **true** | false / true | false / true |
+| `camerashake` | boolean | **false** | false / true | false / true |
+| `camerashakespeed` | number | **3** | 1.5 | 1.5 |
+| `camerashakeamplitude` | number | **0.5** | 0.25 | 0.25 |
+| `camerashakeroughness` | number | **1** | 0.75 | 0.75 |
+| `cameraparallax` | boolean | **false** | false / true | false / true |
+| `cameraparallaxamount` | number | **0.5** | 0.4 | 0.4000000059604645 |
+| `cameraparallaxdelay` | number | **0.10000000149011612** | 0.2 | 0.20000000298023224 |
+| `cameraparallaxmouseinfluence` | number | **0.5** | 0.6 | 0.6000000238418579 |
+| `zoom`（顺带） | number | 1 | — | — |
+| `perspectiveoverridefov`（顺带） | number | 95 | — | — |
+| `bloom`（顺带） | boolean | true | — | — |
+| `hdr`（顺带） | boolean | false | — | — |
+
+**全部字段都是 float32**：写 0.4 读回 0.4000000059604645，缺省的 0.1 读回 0.10000000149011612。
+
+**写入**（`q5-write`，实测）：
+- 全部 16 个字段当场读回，下一帧再读相同，类型都不变。
+- `new Vec3(…)`、**单个数字**（`0.5` → 0.5, 0.5, 0.5）、**普通对象** `{x, y, z}` 都能写，读回都是 `Vec3`。
+- **读到的是拷贝**：`const c = thisScene.clearcolor; c.x = 0` 之后读回不变。
+- 没有写错类型的值（L6 / G4 有静态依据，这轮不做，避免风险）。
+- 画面：`clearcolor`、`ambientcolor`、`skylightcolor` 在写入那一帧（f = 30、40、50）就变，读数是原值（0.1 0.2 0.3 → 25, 51, 76；0.2 0.3 0.4 → 51, 76, 102；0.5 0.6 0.7 → 127, 153, 178）。
+
+**同帧**（照 K5：60–460 帧每 2 帧翻一次，`K0` 与写入同相，`K1` 晚一帧）：
+
+| 工程 | 写什么 | 判读点 | 翻转期样本 | 与 K0 同相 | 与 K1 同相 | 去重后序列 | 与 K0 不同 | 与 K1 不同 | 覆盖帧 | 与 `on(f)` 不符的帧 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `q5-sync-clear` | `thisScene.clearcolor` | `bg` | 957 | **957** | 475 | 400 | **0** | 200 | 400 / 400 | **0** |
+| `q5-sync-amb` | `thisScene.ambientcolor` | `amb`、`ambf` | 947 | **947** | 472 | 400 | **0** | 200 | 400 / 400 | **0** |
+| `q5-sync-amb` | `thisScene.skylightcolor` | `sky` | 947 | **947** | 472 | 400 | **0** | 200 | 400 / 400 | **0** |
+
+对照证明这个采样看得出一帧之差。`on(f)` 一列是直接按 `FR` 读出的帧号比，比 K 节的判定更强。`fps=10` 的局限在这里影响不大：判定按帧号，和时间无关；局限只在高帧率下的开销没有测到。
+
+`thisScene.clearenabled` 也是同帧（`q5-clearen`，帧号判定）：f = 40、120 写 false，**当帧**就带上 N−2 的块；f = 80、160 写 true，**当帧**只剩 1 块。4 / 4 次。
+
+**`{script}` 直接挂在 general 上**（实测，本机样本里没有这种写法，见 L15）：
+
+| 项 | 结果 |
+|---|---|
+| `update` 返回值 | **写回，同帧生效**。`clearcolor` 与 `ambientcolor` 都是 f = 30 起变成 255, 127, 0，f = 60 起变成 0, 127, 255 |
+| 改 `value` 后返回 / 返回新 `Vec3` | 两种都写回 |
+| 下一帧的 `value` | 上一次写回的值 |
+| `init` 的 `value` | JSON `value`（`Vec3`） |
+| 同时读 `thisScene.<键>` | 与写回值相同 |
+| `clearenabled` 上挂 `{script}` | 返回 bool，同帧生效（f = 40 不清屏、f = 80 恢复），`value` 是 bool |
+| `thisObject` | **object，`=== thisLayer`，`!== thisScene`**。`constructor.name` 为空，`String()` 是 `[object Object]`。48 个成员都能在 `thisScene` 上访问，没有 `name`，没有 `getLayerCount` 这类方法 |
+| 经 `thisObject` 写字段 | **能写进场景**：`thisObject.skylightcolor = …` 后 `thisScene` 读回相同，`SKY` 当帧变成 229, 25, 25 |
+
+**日志**：`console.log` 0 行，`console.error` 全部进 `log.txt`，与 K5 一致。
+
+### L15. Q6：扫样本（只读）
+
+范围：工坊 91 + 默认 19，共 110 个目录，场景 **99 张**，全部解析成功。其中正交 91、透视 8，`orthogonalprojection` 全是 `{width, height}`，没有 `auto`。扫描对全部字节流式进行：83 个 `scene.pkg`（6.04 GB，含 8 个 200 MB 以上的包，最大 712 MB）与 1911 个散文件。
+
+**`camera.paths`（顶层）**：
+- 正交场景：**0 张**。
+- 透视场景：6 张，全是默认工程，都是 `["scripts/camera_00.json"]`：arsenal、demon_core、dna_fragment、fantasticcar、neon_sunset、ricepod。另 2 张透视（audiophile、techno）没有这个键。
+
+**`getCameraTransforms` / `setCameraTransforms`**：**0 张、0 处**，assets 脚本里也没有。结果是 0，所以验证过扫描器：同一函数在 `scenescript64.dll` 上命中 2 处，人造文件 4 处全部找到，另用 `grep -a -i cameratransform` 独立复查全部 pkg 也是 0。字符串拼接拆开的写法扫不到。
+
+**相机图层**（这一节在问题之外，但它决定上面两个 0 能不能说明问题）：**7 张正交场景有相机图层**（对象带 `camera` 键，值都是 `"default"`），都是工坊场景，都是 3840×2160。
+
+| 工坊 ID | `origin` | `zoom` | `visible` | `path` 指向的文件 |
+|---|---|---|---|---|
+| 3326873240 | `{script}` | `{user}` | 缺 | `{"paths": []}` |
+| 3351072238 | `{script}` | `{user}` | 缺 | `{"paths": []}` |
+| 3354366708 | `{script}` | `{user}` | 缺 | `{"paths": []}` |
+| 3400241651 | `{script}` | `{user}` | 缺 | `{"paths": []}` |
+| 3470764447 | `{script}` | `{user}` | 缺 | `{"paths": []}` |
+| 3524852519 | `{script}` | `{user}` | 缺 | `{"paths": []}` |
+| 3554161528 | 关键帧动画 | 关键帧动画 | `{user}` | `{"paths": []}` |
+
+- 都带 `fov: 50`、`queuemode: "random"`、`path: "scripts/camera_paths_<id>.json"`。
+- 这些场景的顶层 `camera` 都是默认形态，所以按顶层键统计时看不出来。
+- 除 3400241651 外的 6 张都在 Kabegame 语料里，都有大量其它 `unsupported`，目前不会实时渲染。
+- **这些图层在 WPE 里实际怎么作用于正交视图、`g_EyePosition` 取什么值，没有实验**（L18）。
+
+**其它计数**：
+
+| 项 | 张数 |
+|---|---|
+| 正交场景 `eye` 或 `center` 不是默认值 | **30 / 91**，全是字符串，写成对象 0 |
+| 其中 `eye.z=0, center.z=-1` / `eye.z=1, center.z=0` | 15 / 15（`center` 都等于 `eye` 减 1，朝向 −z） |
+| 其中 xy 非零 | 22 |
+| `clearenabled` | true 87，缺键 11，`null` 1（neon_sunset，透视），**false 0**，对象 **0** |
+| `clearcolor` / `ambientcolor` / `skylightcolor` 写成对象 | **都是 0** |
+
+eagleflag：`eye` `-378.290 -185.706 0.000`，投影 **2200×1080**（不是 1920×1080），没有 `paths`。L2 的前提成立，对应结果见 L13。
+
+统计局限：只有本机这 99 张，不代表全部工坊。
+
+### L16. 与 L1–L8 和计划的差异（只列事实）
+
+**L8 里被实验解决的项**（旧文字未改）：
+- 「无 MSAA 且不清屏时的实际画面（N−2 帧的判断）没有运行验证」：已验证，是 N−2（L11）。
+- 「每帧 Present 路径上有没有 Discard 类调用」：静态上仍没有排查，行为上内容能跨 339 帧保留，至少在 `-playInWindow` 下不丢。
+
+**L1–L7 被实测确认的项**：L1 的构造默认值；L2 的 `g_EyePosition`、eagleflag 前提、`{user}` 跳过；L3 的 N−2 推断；L4 的同帧（当时未实测）；L5 的原值；L6 的 ambient 同帧（当时未实测）与数字铺满。
+
+**补充**：
+- L1 没有列的 6 个调节项缺省值，见 L14。
+- L2「运行时只有两条路」里的相机图层，样本里实际有 7 张（L15）。
+
+**与计划的差异**：
+
+| 项 | 计划 | WPE 实测 |
+|---|---|---|
+| 不清屏保留哪一帧 | 总体设计「保留场景目标的上一帧（`loadOp: "load"`）」；点 6 `encode` 注释「关着保留上一帧（L3），WebGPU 的 `"load"` 正好是这个语义」 | **N−2，两条不相交的链。** 单张目标 + `load` 是 N−1：移动物体的残留密度是 WPE 的 2 倍且连续，半透明累加速度是 WPE 的 2 倍，`TRAIL` 和 `ACC` 都能直接看出差别。静止不透明的画面两者没有差别 |
+| 不清屏的初始底色 | 没写 | 黑，`clearcolor` 不出现。`loadOp: "load"` 的新纹理全 0，RGB 相同，alpha 为 0（WPE 的交换链 `AlphaMode=3` 忽略 alpha，L3） |
+| 调节项缺省值 | 点 6 字段表写「同形」，没有给值 | 3 / 0.5 / 1 / 0.5 / 0.1 / 0.5，**都不是 0**（L14）。计划已写的 `fov`、`nearz`、`farz`、`camerafade`、`camerashake`、`clearenabled`、三个颜色都对 |
+| 读回精度 | 「只存值、脚本能读回」 | 读回是 float32（0.4 → 0.4000000059604645），`Vec3` 同样 |
+| 运行时改相机 | 总体设计「运行时能改相机的只有脚本的 `setCameraTransforms`」 | 样本里脚本调用 0 处；7 张正交场景用相机图层的 `origin {script}` / `zoom {user}` / 动画。这条路 WPE 的实际效果没有实验 |
+| `{script}` 挂 general 时的 `thisLayer` | `script/api.ts`：`current.layer === null` 时 `thisLayer` 为 `null` | object，`=== thisObject`。`thisObject` 的形状（只有字段、写入进场景）与 `general` 对象相同 |
+
+计划里其余假设都与实测相符：清屏色 / 环境光下一帧生效、不重载，脚本写入同帧；`{value: false}` 算 false；数字铺满三分量；`g_EyePosition` 公式；`eye` 绑不了；`{script}` 的目标可以是这些字段（WPE 返回值写回）；`thisScene` 上有这些字段。
+
+### L17. 工程（用于导入 Kabegame 对比）
+
+全部在 `ignore/p3c/wpe-general/`，`python -X utf8 -I gen.py` 重新生成（会删掉工程里的 `shaders/` 缓存）。全部从 `base-kbprops-test` 拷 `models/`，本地 `models/util/solidlayer.json` 绕开 Kabegame 不支持的 `model:solidlayer`，不能丢。每个工程都带全部探针着色器。
+
+**共同版面**（场景坐标 1920×1080，y 朝上，`camerafade: false`，缺省 `ambientcolor` / `skylightcolor` 0.3）：
+
+| 层 | 位置 / 尺寸 | 内容 |
+|---|---|---|
+| `TRAIL` | 第 f 帧在第 `(f−1) % 450` 格：`(80 + 40×(s%45), 60 + 40×⌊s/45⌋)`，40×40 | 奇数帧绿、偶数帧红 |
+| `ACC` | (1500, 640)，100×100 | 白，alpha 0.1 |
+| `GLOW` | (400, 720)，120×120 | 白，`brightness` 4（只有 `ctl-bloom`、`q2-bloom-*`） |
+| `FR` | (100, 1040)，80×60 | 帧号：R = 低 8 位，G = 高 8 位，B = 1 |
+| `KB` / `K` | (1100, 500)，100×100 / 80×80 | 黑底 + 红 0.5，alpha 绑 `p_alpha` 或脚本 |
+| `KB1` / `K1` | (1100, 640)，100×100 / 80×80 | 黑底 + 蓝 0.5，脚本（只有同帧工程有） |
+| `AMB` / `SKY` / `AMBF` | (600 / 760 / 920, 900)，120×120 | 探针，显示 `g_LightAmbientColor` / `g_LightSkylightColor` / 片元读 ambient（只有 `q3-*`、`q5-write`、`q5-sync-amb`、`q5-scr-vec`） |
+| `MARK` / `EYE` / `EYELO` / `EYEHI` | (300 / 600 / 760 / 920, 900)，120×120 | 白块 + 探针（只有 `q4-*`） |
+| `MON` | (1500, 900)，100×100 | 灰 0.2，记录脚本 |
+| `S` | (1500, 760)，100×100 | 灰 0.2，被测脚本（只有 `q5-keys*`、`q5-nokeys`、`q5-write`、`q5-sync-*`、`q5-clearen`） |
+
+**判读点**（`layout.py`）：`fr` (100, 1040)、`k` (1100, 500)、`k1` (1100, 640)、`bg` (1250, 1040)、`bg2` (1700, 500)、`acc` (1500, 640)、`amb` (600, 900)、`sky` (760, 900)、`ambf` (920, 900)、`mark` (300, 900)、`eye` (600, 900)、`eyelo` (760, 900)、`eyehi` (920, 900)，`dN` = (460 + N, 720)。
+
+| 目录 | 被测写法 | 属性（默认值） | 用途 |
+|---|---|---|---|
+| `ctl-bloom` | `bloom: true` | `p_alpha`（1） | 确认档位 |
+| `q1-clear` | `clearcolor: {user: p_clear, value: "0 0 0"}` | `p_clear`（`0 0 0`，`color`）、`p_alpha` | Q1 |
+| `q1-clear-num` | `clearcolor: {user: p_clearn, value: 0.25}` | `p_clearn`（0.25，滑块）、`p_alpha` | Q1 数字 |
+| `q1-scheme` | `clearcolor: "0.1 0.1 0.9"` | `schemecolor`（`0.9 0.1 0.1`） | 背景读哪个 |
+| `q2-false` | `clearenabled: false`，`clearcolor: "0.1 0.2 0.3"` | `p_alpha` | Q2 |
+| `q2-value` | `clearenabled: {value: false}`，同上 | `p_alpha` | Q2 |
+| `q2-user` | `clearenabled: {user: p_clearen, value: true}`，同上 | `p_clearen`（true）、`p_alpha` | Q2 运行中切换 |
+| `q2-user-pfalse` | 同上 | `p_clearen`（**false**）、`p_alpha` | Q2 加载 |
+| `q2-bloom-ctl` | `clearenabled: true`，`bloom: true` | `p_alpha` | 泛光对照（要 `ultra`） |
+| `q2-bloom-ldr` | `clearenabled: false`，`bloom: true` | `p_alpha` | 泛光累加（要 `ultra`） |
+| `q2-bloom-hdr` ★ | `clearenabled: false`，`bloom: true`，`hdr: true` | `p_alpha` | 同上 |
+| `q3-light` | `ambientcolor` / `skylightcolor`：`{user, value: 串}` | `p_amb`、`p_sky`（`color`）、`p_alpha` | Q3 |
+| `q3-light-num` | 同上，`value` 为数字 | `p_ambn`、`p_skyn`（滑块）、`p_alpha` | Q3 数字 |
+| `q4-eye-zero` | `eye: "0 0 0"` | `p_alpha` | Q4 基准 |
+| `q4-eye-nz` | `eye: "-378.29 -185.706 0"`，`center: "-378.29 -185.706 -1"` | `p_alpha` | Q4 |
+| `q4-eye-user` | `eye: {user: p_eye, value: "-378.29 -185.706 0"}` | `p_eye`（`color`）、`p_alpha` | Q4 |
+| `q4-eye-1280` | 投影 1280×720，版面 × 2/3 | `p_alpha` | Q4 |
+| `q4-eye-auto` | `orthogonalprojection: {auto: true}` | `p_alpha` | WPE 整窗白，**不用于比较** |
+| `q5-keys` | 16 个字段全写，`camerafade`、`camerashake`、`cameraparallax` 为 false | `p_alpha` | Q5 读 |
+| `q5-keys-on` ☆ | 同上，`camerashake`、`cameraparallax`、`camerafade` 为 true | `p_alpha` | Q5 读 |
+| `q5-nokeys` | `general` 只有投影 | `p_alpha` | Q5 缺省值 |
+| `q5-write` | 脚本在 30、40、50、60、70、80 帧写 | `p_alpha` | Q5 写入 |
+| `q5-sync-clear` | 脚本写 `clearcolor`，60–460 帧 | `p_noop`（0.5） | Q5 同帧 |
+| `q5-sync-amb` | 脚本写 `ambientcolor`、`skylightcolor`，60–460 帧 | `p_noop`（0.5） | Q5 同帧 |
+| `q5-clearen` | 脚本写 `clearenabled`，40、80、120、160 帧 | `p_alpha` | Q5 同帧 |
+| `q5-scr-vec` | `clearcolor`、`ambientcolor` 挂 `{script}` | `p_alpha` | Q5 `{script}` |
+| `q5-scr-bool` | `clearenabled` 挂 `{script}` | `p_alpha` | Q5 `{script}` |
+
+★ `bloomhdrstrength` 0.5。☆ Kabegame 会报 `general:camerashake` / `general:cameraparallax`，只用来读 WPE。
+
+**各状态的完整读数**在 `out/summary.json`（末帧全部判读点、Q2 残留统计、`q2-user` 的 12 次切换），末帧图是 `out/state-*.png`。
+
+**比较时注意**：
+- **Q2 按帧号比，不按时间比**：`FR`、`TRAIL` 都是脚本按帧计数，帧率不同不影响。判据：`TRAIL` 只有同奇偶的格子有块；`acc` 序列 25, 25, 48, 48, 68, 68…（底色黑）。Kabegame 没有两条链时序列会是 25, 48, 68, 86…
+- 判读点是场景坐标，按实际渲染尺寸换算。这些工程的读数不含泛光，与渲染尺寸无关（`ctl-bloom`、`q2-bloom-*` 除外）。
+- 读数比较留 ±1（L9）。
+- `q5-scr-*` 依赖步骤 4.1 的 `targetOf`，之前在 Kabegame 里是 `unsupported`。`q4-eye-user` 同理。
+- 兼容性：6 个探针着色器用仓库的 `wpesl2wgsl.wasm` 离线翻译全部通过（`check_wgsl.mjs`）；`features.ts` 只读核对过，除 ☆ 外没有会报的键。**没有实际导入 Kabegame**（这轮约束不连）。
+
+### L18. 未查清与局限
+
+- **开泛光时底图含不含泛光、泛光是否逐帧累加**：LDR、HDR 都没有测到，`postprocessing` 是 `disabled`。L3 的这条仍是推断。
+- **以上全部结论都在 `disabled` 档**。`ultra` 下、泛光关时是不是同一条路径，这轮分不出。
+- **相机图层**：7 张样本在用（L15），WPE 实际效果没有实验。L8 这一项仍未解决。没有做是因为不在这轮的问题里，且这条路只有静态推断，主进程上跑新路径有风险（I10 有断言中止的先例），判断留给用户。
+- **`msaa` 不是 `none` 的情形**没有测，不能改设置。L3 的「开 MSAA 时是上一帧」仍是推断。
+- **桌面壁纸窗口**没有测：只测了 `-playInWindow`，不能动用户的壁纸。交换链参数是否完全相同没有核对。
+- **深度不清**没有测：`clearenabled: false` 时颜色保留已证实，深度保留仍只有静态依据（L3），画面上没有判据。
+- **反射 pass** 对共享清屏色的影响（L3）、`alignment` 不为 0 的清屏色没有测。
+- **`q5-keys-on` 的画面**没有判读，只读了字段，抖动与视差的效果不在这轮。
+- **用户保存在 `config.json` 的属性值**没有测，同 K9。
+- **错类型写入**（给 bool 写数字、给 vec3 写字符串）没有测，避免主进程风险。
+- **`q4-eye-auto` 整窗白**没有追原因。
+- **`thisObject` 比 `thisScene` 字段多的第 48 个成员**：只确认它在 `thisScene` 上也能访问（`in` 为真），名字没有列出来，推断是原型上的成员。
+- **读数取整的原因**（L9）没有查。
+- **`fps=10`**：同帧和帧序按帧号判定不受影响；高帧率下的切换开销没有测。
+
+### L19. 产物与恢复
+
+实验目录 `ignore/p3c/wpe-general/`（`ignore/` 不入库）：
+- `gen.py` 生成全部工程；`base-kbprops-test/`、`wpe.py`、`sampler.py`、`sampler_pw.py` 拷自 `wpe-bloom/`，`wpe-bloom/` 与 `wpe-sync/` 没有改动。
+- `run.py`（开窗并保证关窗，改成轮询窗口出现，才抓得到第一帧）、`layout.py`（坐标、判读点、帧号）、`smoke.py`。
+- `exp.py`：`q1`、`q1num`、`q1scheme`、`q2`、`q2value`、`q2pfalse`、`q2user`、`q2bloom`、`q3`、`q3num`、`q4`、`q4user`、`q5read`、`q5write`、`q5sync`、`q5clearen`、`q5scrvec`、`q5scrbool`。
+- 判读：`ana_q2.py`、`ana_q2user.py`、`ana_step.py`、`ana_sync.py`、`ana_trailrun.py`、`ana_q4.py`、`ana_q2bloom.py`、`summary.py`。
+- Q6：`scan_q6.py`（`out/q6.json`）、`check_camlayer.py`（`out/q6-camlayer.json`）。
+- `check_wgsl.mjs`（探针翻译）、`final_check.py`（收尾核对）。
+- `out/`：采样数据（约 93 MB，可重新生成）、每轮日志、`summary.json`、`state-*.png`。
+- `backup/`：开工前的 `config.json`、哈希、`log.txt` 行数。
+
+重复运行：`python -X utf8 -I exp.py <实验名>`，需要主实例在跑，`wpe.py` 的 `MAIN_PID` 要与当前进程一致。
+
+恢复情况：
+
+| 项 | 开工前 | 结束时 |
+|---|---|---|
+| WPE 主进程 | PID 36548，2026/11/04 2:32:57 启动 | 同一进程，没有重启 |
+| WPE 档位 | **`disabled`（任务说明写的是 `ultra`）**，`fps` 10，`msaa` none | 没有改，相同 |
+| `config.json` | 哈希 `aea12dd3…` | **相同** |
+| `log.txt` | 752 行 | 1069 行，新增 317 行全是 `[kbg]` |
+| 测试窗口 | — | 全部已关，按标题前缀 `KBG` 枚举不存在 |
+| 工程缓存 | — | 最后重跑了 `gen.py`，WPE 写进工程的 `shaders/blobsSM40/` 已清除，工程是纯生成状态 |
+| Kabegame | — | 没有启动或连接。`check_wgsl.mjs` 只读取仓库的 wasm |
+| RenderDoc | — | 没有用 |
+| 用户壁纸、工程、工坊内容 | — | 只读，没有动 |
+
+实验中途有一次我的命令失误：多写了一个等 stdin 的 `cat`，挂住后已停掉，当时还没有发任何 WPE 命令，留下的空文件已删除。
+- `thisScene` 的读取走 `+0x50`，这条没读 DLL 代码。
+
+### L20. 补测：不清屏时的泛光（2026-11-06，`ultra`）
+
+用户把 `postprocessing` 改成 `ultra` 后（`config.json` 23:36:20，哈希 `8e6ad19f…`）补做 L11 没测到的一项。其余条件同 L9：PID 36548，`-playInWindow`，960×540，`fps=10`，`msaa=none`。L3 与 L11 的旧文字未改。
+
+**实测：底图含泛光，按 N−2 成对累加。** L3 的「无 MSAA 时下一轮底图已含泛光」成立。
+
+`q2-bloom-ldr`（`clearenabled: false`，`bloom: true`，LDR）按帧号：
+
+| 帧 | 1 | 2 | 3 | 4 | 5 | 6 | 9 | 10 | 19 | 39 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `d10` | 54 | 54 | 108 | 108 | 165 | 165 | 255 | 255 | 255 | 255 |
+| `d40` | 19 | 19 | 37 | 37 | 57 | 57 | 111 | 111 | 255 | 255 |
+| `d80` | 2 | 2 | 4 | 4 | 7 | 7 | 13 | 13 | 126 | 255 |
+| `d160` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 34 |
+
+- 对照 `q2-bloom-ctl`（`clearenabled: true`）281 个样本只有一种读数：`d10` 54、`d40` 19、`d80` 2。
+- 第一对与对照相同，之后每两帧涨一次：辉光写回后备缓冲，N+2 帧在它上面再画一层，快照再从这张底图算泛光。
+- LDR 不收敛：11.9 s 时 `d640` 已是 255，`bg` 涨到 149。
+
+`q2-bloom-hdr` 的帧号块被辉光盖住，读数不能用（读成 4114…），下面按采样时间：
+
+| 距开始 | 0.12 s | 0.25 s | 0.46 s | 0.67 s | 0.88 s | 2.09 s | 6.49 s | 11.88 s |
+|---|---|---|---|---|---|---|---|---|
+| `d10` | 116 | 163 | 215 | 249 | 255 | 255 | 255 | 255 |
+| `d40` | 65 | 79 | 87 | 92 | 95 | 103 | 107 | 109 |
+| `d80` | 38 | 44 | 46 | 47 | 47 | 48 | 48 | 48 |
+| `d160` | 19 | 21 | 21 | 22 | 22 | 22 | 22 | 22 |
+
+HDR 也累加，但趋于收敛，`bg` 停在 2–3。没有逐帧帧号，成对关系只从 LDR 看到，HDR 是同一路径（推断）。
+
+**重复运行**：`python -X utf8 -I exp.py q2bloom`，`python -X utf8 -I ana_q2bloom.py q2-bloom-ctl q2-bloom-ldr q2-bloom-hdr`。HDR 的按时间判读没有存成脚本。
+
+测试窗口已关，主实例仍是 PID 36548。`config.json` 这一轮没有写过。

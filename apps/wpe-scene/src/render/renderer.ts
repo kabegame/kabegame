@@ -78,7 +78,8 @@ export class SceneRenderer {
   private scene: GpuScene | null = null;
   /** 当前场景的 CPU 侧状态（就地写的落点，`GpuScene.sync` 每帧取脏项）。 */
   private state: SceneState | null = null;
-  private blitBindGroup: GPUBindGroup | null = null;
+  /** 上屏的 bind group，按场景目标的视图取：清屏可能关掉的场景有两张目标，每张一个（L11）。换场景时清空。 */
+  private readonly blitBindGroups = new Map<GPUTextureView, GPUBindGroup>();
   private cover: CoverUv = { offset: [0, 0], scale: [1, 1] };
   private coverKey = "";
   /** 光标在画布上的归一化坐标（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
@@ -223,14 +224,7 @@ export class SceneRenderer {
     const old = this.scene;
     this.scene = scene;
     this.state = state;
-    this.blitBindGroup = this.gpu.device.createBindGroup({
-      layout: this.blitPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.coverBuffer } },
-        { binding: 1, resource: scene.targetView! },
-        { binding: 2, resource: this.blitSampler },
-      ],
-    });
+    this.blitBindGroups.clear();
     this.coverKey = "";
     options.beforeFirstFrame?.(state);
     old?.destroy();
@@ -261,7 +255,7 @@ export class SceneRenderer {
     this.scene?.destroy();
     this.scene = null;
     this.state = null;
-    this.blitBindGroup = null;
+    this.blitBindGroups.clear();
     try {
       this.context.unconfigure();
     } catch {
@@ -330,10 +324,26 @@ export class SceneRenderer {
     if (this.scene && !this.shouldRun) this.render();
   }
 
+  private blitBindGroup(view: GPUTextureView): GPUBindGroup {
+    let group = this.blitBindGroups.get(view);
+    if (!group) {
+      group = this.gpu.device.createBindGroup({
+        layout: this.blitPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: this.coverBuffer } },
+          { binding: 1, resource: view },
+          { binding: 2, resource: this.blitSampler },
+        ],
+      });
+      this.blitBindGroups.set(view, group);
+    }
+    return group;
+  }
+
   private render(runScripts = false): void {
     const scene = this.scene;
     const state = this.state;
-    if (!scene || !state || !this.blitBindGroup || this.destroyed || this.lost || this.failed) return;
+    if (!scene || !state || this.destroyed || this.lost || this.failed) return;
     const started = performance.now();
     const device = this.gpu.device;
     const key = `${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}`;
@@ -377,7 +387,8 @@ export class SceneRenderer {
       ],
     });
     pass.setPipeline(this.blitPipeline);
-    pass.setBindGroup(0, this.blitBindGroup);
+    // `encode` 之后取：有两张目标时它开头才换，上屏的必须是这一帧画的那张
+    pass.setBindGroup(0, this.blitBindGroup(scene.targetView!));
     pass.draw(3);
     pass.end();
     device.queue.submit([encoder.finish()]);

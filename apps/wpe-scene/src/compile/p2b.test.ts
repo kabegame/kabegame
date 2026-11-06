@@ -239,7 +239,7 @@ describe("编译：泛光链与 brightness", () => {
       expect(off.bloom?.hdr).toBe(false);
       expect(off.bindings).toContainEqual({
         property: "h",
-        target: { kind: "recompile", reason: "postprocess", path: "general.hdr" },
+        target: { kind: "recompile", reason: "postprocess-hdr", path: "general.hdr" },
       });
     });
     it("scriptOverrides 写 general/hdr：影响判定与 hdrFlag", async () => {

@@ -45,6 +45,8 @@ function targetKey(target: ScriptTarget): string {
       return `general/bloom/${target.field}`;
     case "bloom-enabled":
       return "general/bloom";
+    case "general":
+      return `general/${target.key}`;
     case "script-property":
       return `${target.script}/scriptproperties/${target.key}`;
     default:

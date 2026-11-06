@@ -11,10 +11,12 @@
 > 现状锚点按 3b 结束时（`7bfb9d30`）的代码重核。
 >
 > 修订（2026-11-06）：用户一度决定允许卡帧，effect 开关的单图层重建做成了后台异步（第一版，未提交）。用户随后说明那只是猜测，目标是对齐 WPE；查清 WPE 的实际行为后（[p3-script-REPORT.md](p3-script-REPORT.md) J 节）改成加载时备好、切换同步（已定 11）。总体设计第三段、点 3 与风险已按此改写，经过见实施记录「步骤 2」。
+>
+> 修订（2026-11-06）：步骤 4 动手前用 REA 静态核对（[p3-script-REPORT.md](p3-script-REPORT.md) L 节），推翻了点 6 的相机部分：`camera.*` 在 WPE 里绑不了属性，`clearenabled: false` 是不清屏，`g_EyePosition` 不取 JSON。总体设计「其余几类」、对照表、点 6–8、步骤 4–6、验收与风险已按此改写，用户定了已定 13–15。
 
 ## 总体设计思路
 
-3a 把材质常量、图层变换 / 颜色 / 可见性、泛光参数改成了就地写，3b 让脚本也写同一份状态；剩下仍要整场重编译的，是 effect 可见性、泛光开关、泛光级数、清屏色 / 环境光 / 相机、`colorBlendMode`、`hdr`、`size`。WPE 里这些大多也是就地处理的（I3）：effect `visible` 的改值回调 `FUN_1401e6300` 重算该图层的合成次数与 pass 数，数值变了才调图层虚函数 +0x110（`FUN_1402065e0`）重算尺寸、几何、合成 RT 与 passthrough 材质，别的图层与整场都不动；`bloom` 位每帧读；清屏色、环境光逐帧读或拷进渲染上下文；只有 `hdr`（运行中改不生效）、用户纹理（换纹理）、颜色校正（编新变体）例外（I2）。P3c 的目标是：WPE 就地处理的，我们也就地处理；重编译只剩 WPE 自己也要重建或不生效的情形，以及我们自己的设置变化（「场景后处理」档位）。
+3a 把材质常量、图层变换 / 颜色 / 可见性、泛光参数改成了就地写，3b 让脚本也写同一份状态；剩下仍要整场重编译的，是 effect 可见性、泛光开关、泛光级数、清屏色 / 环境光、`colorBlendMode`、`hdr`、`size`。WPE 里这些大多也是就地处理的（I3）：effect `visible` 的改值回调 `FUN_1401e6300` 重算该图层的合成次数与 pass 数，数值变了才调图层虚函数 +0x110（`FUN_1402065e0`）重算尺寸、几何、合成 RT 与 passthrough 材质，别的图层与整场都不动；`bloom` 位每帧读；清屏色、环境光逐帧读或拷进渲染上下文；只有 `hdr`（运行中改不生效）、用户纹理（换纹理）、颜色校正（编新变体）例外（I2）。P3c 的目标是：WPE 就地处理的，我们也就地处理；重编译只剩 WPE 自己也要重建或不生效的情形，以及我们自己的设置变化（「场景后处理」档位）。
 
 主体是 **effect 可见性的单图层重算**。现在编译期直接丢掉未启用的 effect（它们不进 bundle、不检查能力、不翻译着色器），所以运行时没法打开。P3c 改成：凡是可见性可能在运行时变化的 effect（`visible` 绑了用户属性，或有脚本挂在它的 `visible` 上），不论当前开关都编进 bundle，带上初始开关与**它自己的**不支持项；场景级的 `unsupported` 只算当前启用的 effect。写死 `visible: false`、没有任何绑定的 effect 照旧丢掉。运行时开关一个 effect，只对它所在的图层重新 `planLayer`（纯函数，已有）、按新步骤重建该图层的 draw、bind group 与 op 序列，换进 `GpuScene` 的图层表；要打开的 effect 带有不支持项时，退回整场重编译，结果照常退回预览图（与现在一致）。
 
@@ -38,7 +40,17 @@ HDR 仍只在加载时判定（P2b，WPE 的 HDR 渲染位与交换链格式只�
 
 **泛光级数**照 WPE 预建：金字塔总是建满全部可用级，每帧只用前 N 级。不同级数之间，下采样的 pass、输入和目标完全相同，上采样只差「最粗两级用 bicubic」，所以绘制按步骤身份（pass + 输入 + 目标）去重，8 级共 21 个，比只建 8 级时多 5 个小缓冲。`setParams` 按新参数重排，级数永远能就地改。没有泛光时间状态：每帧下采样整张覆盖，改级数不残留。
 
-**清屏色、环境光 / 天光、相机 `eye`** 直接就地写（正交相机里 `eye` 只进 `g_EyePosition`）。`hdr` 保留整场重编译（已定 12）；`colorBlendMode` 见待定 1；`size` 见 3a 已定 5。
+**清屏色、环境光、天光**共用一张字段表 `GENERAL_FIELDS`，列出 WPE 里只改字段、不用重编译的 general 属性。编译、就地写和脚本读写都按这张表走，取值规则只有一份，所以就地结果和整场编译相同。WPE 在脚本之后每帧读 `clearcolor` 和 `clearenabled`，我们也在 `encode` 里每帧读，不走脏项，脚本写入同帧生效。`ambientcolor` / `skylightcolor` 在 WPE 里由改值回调拷进渲染上下文，脚本写入也走回调；我们记一个脏位，`sync` 把新值刷进声明了这两个 uniform 的 draw。
+
+`clearenabled: false` 是颜色和深度都不清，不是清成黑色，初始底色是黑，`clearcolor` 不出现（L11）。WPE 画进两张交替的后备缓冲，第 N 帧的底图是第 N−2 帧的成品，两条链互不相交；泛光写回当前缓冲，所以底图含泛光，LDR 每两帧累加一次，HDR 趋于收敛（L20）。我们照此用两张场景目标逐帧交替（已定 16），泛光的 combine 写当前这张，累加自然成立。
+
+第二张目标只在需要时建。当前关着，或 `clearenabled` 绑了属性、挂了脚本时，加载就建，从第一帧开始交替，清屏开着也换，运行中关掉时手上正好是 N−2，和 WPE 相同。别的脚本写 `thisScene.clearenabled = false` 时才建，并把当前画面拷过去，这一帧的底图是 N−1，静止内容相同。本机 99 张都不走这条路，资源数和画面不变。
+
+**相机不做就地。** WPE 加载时直接读 `camera` 的字符串，写成对象就跳过，绑不了属性；正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵，JSON 的值被丢弃。所以 `camera.*` 的绑定删掉，`SceneGeneral.camera` 也删掉，`g_EyePosition` 改成 WPE 的 `(W/2, H/2, 2000)`。运行时能改相机的是脚本的 `setCameraTransforms` 和相机图层，见「后续」。
+
+**其余 12 个字段**（`fov`、`nearz`、`farz`、`camerafade`、`camerashake*`、`cameraparallax*`）在正交场景里不影响我们的画面，WPE 同样只改字段。它们进同一张表，只存值、脚本能读回，不再重编译（已定 13）。脚本打开 `camerashake` / `cameraparallax` 时继续实时渲染，没有抖动与视差效果，等 P5 / W6（已定 14）。
+
+`hdr` 保留整场重编译（已定 12）；`colorBlendMode` 见待定 1；`size` 见 3a 已定 5。
 
 关键决策：可变性按「有没有绑定」判定，而不是所有 effect 都编进 bundle——这样没有绑定的场景（目前本机能渲染的全部）在 P3c 前后 GPU 资源与画面逐字节相同，回归面最小；代价是绑定表成为可变范围的唯一依据，3a 的完整性单测因此更重要。
 
@@ -274,10 +286,11 @@ if (hostPaused !== paused) { hostPaused = paused; if (delivered) call("setPaused
 | `general.bloom` | 每帧读，下一帧开 / 关 | 3a 重编译 | **点 4：就地**（没有链时打开走整场重编译） |
 | `general.hdr` | 运行中改不生效，加载时也只读 JSON（K3） | 3a 重编译 | 保留重编译，改值即生效，判定读属性，有意不跟（已定 12） |
 | `bloomstrength` 等调节项 | 脏位，下一帧开头重算 | 3a 就地（级数变化退回重编译） | **点 5：级数也就地** |
-| `clearcolor`；`clearenabled` 等标志 | 只改字段，逐帧读 | 3a 重编译（`clearenabled` 未登记） | **点 6：就地，`clearenabled` 一并登记** |
-| `ambientcolor` / `skylightcolor` | 拷进渲染上下文，即时 | 3a 重编译 | **点 6：就地** |
-| 相机 `fov` / `zoom` / `nearz`… | 只改字段，逐帧读 | 透视相机未实现（`camera:perspective`） | 随 P5 直接按就地实现 |
-| 相机 `eye` / `center` / `up`（正交） | 同上 | 3a 重编译 | **点 6：就地**（正交下只影响 `g_EyePosition`） |
+| `clearcolor`；`clearenabled` | 只改字段，脚本之后每帧读（L4） | 3a 重编译（`clearenabled` 未登记，`false` 时清成黑色） | **点 6：就地，`clearenabled` 一并登记，`false` 改成不清屏** |
+| `ambientcolor` / `skylightcolor` | 回调拷进渲染上下文，无转换，脚本写入也走回调（L5、L6） | 3a 重编译 | **点 6：就地** |
+| `fov` / `nearz` / `farz` / `camerafade` / `camerashake*` / `cameraparallax*` | 只改字段，没有回调（L1） | 脚本写入整场重编译，读回 `undefined` | **点 6：只存值**（已定 13、14）；效果随 P5 / W6 |
+| `zoom` | 只改字段，正交投影每帧读（L1、L2） | 不等于 1 时报 `general:zoom` | 不在本阶段，随 P5 |
+| 相机 `eye` / `center` / `up` | 不能绑：加载时硬读字符串，写成对象就跳过；正交且没有 `paths` 时重置成默认值（L2） | 3a 登记重编译 | **点 6：删绑定**；`g_EyePosition` 改成 `(W/2, H/2, 2000)` |
 | `colorBlendMode` | 未在 I3 列出（推断属图层结构，走 +0x110） | 3a 重编译 | 待定 1 |
 | `fog*` | 回调即时 | 未实现 | 随 P8 |
 | 粒子 `instanceoverride` | 脏标志，下次更新重算 | 未实现（`object:instanceoverride`） | 随 P4 直接按就地实现 |
@@ -628,19 +641,87 @@ setParams(params: BloomParams): void {
   > 说明：不分「可变时建满、不可变时只建 N 级」。WPE 本来就在 resize 时建满；41 张里写了 `bloomhdriterations` 的 26 张，25 张是 8，只有 1 张是 3 且 `bloom: false`（不跑泛光），分支换不来显存，还要多一个判定。
 - 单测（`bloom.test.ts`）：每个 N（1–8）的步骤序列、常量、编码轨迹，和 `planBloom` 按 N 规划的逐项相同；8 → 5 → 8 回到原字节；可用级数不足时不越界；绘制数 21、RT 数 8（含 `hdrIterations: 3`），LDR 4 个绘制不变。
 
-## 点 6 — 清屏色、环境光、相机就地（`compile/bindings.ts`、`render/state.ts`、`render/scene.ts`）
+## 点 6 — general 字段表：清屏色、环境光就地，相机不绑定（`compile/bindings.ts`、`compile/bundle.ts`、`compile/postprocess.ts`、`compile/scripts.ts`、`render/state.ts`、`render/scene.ts`、`render/uniforms.ts`、`render/layout.ts`、`script/api.ts`、`script/runtime.ts`、`host.ts`、`dev/`）
 
-- **修改** 目标：`clearcolor` → `{ kind: "general"; field: "clearColor" }`、`clearenabled` 新登记为 `{ kind: "general"; field: "clearEnabled" }`、`ambientcolor` / `skylightcolor` → `ambient` / `skylight`、`camera.eye` → `eye`；`camera.center` / `camera.up` 在正交相机里不影响任何 uniform（`layout.ts`：正交投影里 eye 被抵消，视图投影只看场景尺寸），登记为无操作。
-- **修改** `GpuScene.sync`：`clearColor` / `clearEnabled` 改 `this.clear`；`ambient` / `skylight` / `eye` 改所有含 `g_LightAmbientColor` / `g_LightSkylightColor` / `g_EyePosition` 且未被材质值覆盖的 draw。
-- 透视相机（P5）落地时，`fov` / `zoom` / `nearz` / `farz` 直接按这一类就地实现。
+依据见 [p3-script-REPORT.md](p3-script-REPORT.md) L 节，步骤 4.0 的实验已确认（L9–L20）。
 
-## 点 7 — 宿主收尾（`host.ts`、`compile/bindings.ts`）
+- **新增** 字段表、绑定目标与取值规则（`compile/bindings.ts`）。编译与就地写共用 `generalValue`。
+```ts
+/** WPE 里只改字段的 general 属性（L1），不重编译。`fov` 起的项正交场景不读，只存值，脚本能读回（已定 13）。 */
+export const GENERAL_FIELDS = {
+  clearcolor: { type: "vec3", fallback: [0, 0, 0] },
+  clearenabled: { type: "bool", fallback: true },
+  ambientcolor: { type: "vec3", fallback: [0, 0, 0] },
+  skylightcolor: { type: "vec3", fallback: [0, 0, 0] },
+  fov: { type: "float", fallback: 50 },
+  nearz: { type: "float", fallback: 0.1 },
+  farz: { type: "float", fallback: 10000 },
+  camerafade: { type: "bool", fallback: true },
+  camerashake: { type: "bool", fallback: false },
+  camerashakespeed: { type: "float", fallback: 3 },
+  camerashakeamplitude: { type: "float", fallback: 0.5 },
+  camerashakeroughness: { type: "float", fallback: 1 },
+  cameraparallax: { type: "bool", fallback: false },
+  cameraparallaxamount: { type: "float", fallback: 0.5 },
+  cameraparallaxdelay: { type: "float", fallback: 0.1 },
+  cameraparallaxmouseinfluence: { type: "float", fallback: 0.5 },
+} as const;
+export type GeneralKey = keyof typeof GENERAL_FIELDS;
 
-- **修改** `RecompileReason` 收窄为：`"layer-structure"`（`colorBlendMode`，待定 1；`size`，3a 已定 5）、`"postprocess-hdr"`（只有 `general.hdr`，保留整场重编译，已定 12；步骤 3 时名字仍是 `postprocess`）、`"effect-unsupported"`（打开带不支持项的 effect）。
-- **修改** 宿主日志：
-  - 单图层重建记 `debug`：图层、effect、签名是否变化、用时。
-  - 重编译仍记 `debug` 并带原因（3a 已定 8；已定 9）。
-- **修改** dev 探针 `stats()` 增加单图层重建次数与用时（均值 / 最大）。
+  | { kind: "general"; key: GeneralKey }   // BindingTarget 新增
+
+/** `FUN_1401a4230` 单个数字铺满三个分量；bool setter 只认 bool（G4）。不合法时返回 undefined：WPE 不改字段。 */
+export function generalValue(key: GeneralKey, value: SceneScalar | undefined): number[] | number | boolean | undefined;
+```
+- **修改** `SceneGeneral`：`clearColor`、`clearEnabled`、`ambient`、`skylight` 合成 `fields: GeneralValues`。`compileScene` 按表循环取值、登记绑定，bool 走 `flagValue`（从 `postprocess.ts` 导出，`{value: false}` 也算），其余走 `bindings.bind`；`generalValue` 不合法时用 `fallback`。
+- **删除** `SceneGeneral.camera`，`camera.eye` / `center` / `up` 的绑定与读取。透视相机（P5）落地时再按 L2 加回。
+- **修改** `scripts.ts` 的 `targetOf`：`owner.kind === "general" && key in GENERAL_FIELDS` → `{ kind: "general", key }`，`valueType` 取表里的 `type`。原来这些键上的 `{script}` 是 `unsupported`。
+- **修改** `SceneState`：
+```ts
+  /** 起始值 = `bundle.general.fields`。清屏两项不标脏，`encode` 每帧读（L4）。 */
+  general: GeneralValues;
+  private lightsDirty = false;   // DirtyState 加 `lights`
+```
+  `write` 加 `general` 分支：条件先换成布尔（同 `bloomFlagOf`），`generalValue` 不合法时不改字段，`ambientcolor` / `skylightcolor` 标 `lightsDirty`。
+- **修改** `GpuScene.encode`：
+```ts
+// 两张时每帧都换，清屏开着也换：运行中关掉时手上正好是 N−2（L11）
+if (this.alternate) [this.current, this.alternate] = [this.alternate, this.current];
+const { clearcolor, clearenabled } = state.general;
+const [r, g, b] = clearcolor;
+// 第一个 pass：开着清成 clearcolor，关着接着这张目标上次的成品画
+loadOp: started || !clearenabled ? "load" : "clear",
+clearValue: { r, g, b, a: 1 },
+```
+  `cleared` 改名 `started`，`snapshot` 与收尾的判断不变，泛光的 combine 写当前这张（L20）。**删除** `this.clear`。
+- **新增** 第二张场景目标（`render/scene.ts`、`render/renderer.ts`、`compile/bundle.ts`）：
+```ts
+/** `SceneGeneral`：当前关着，或绑了属性、挂了脚本：加载就建第二张目标。 */
+clearVariable: boolean;
+
+/** 场景目标：`current` 是这一帧画的那张，`alternate` 只在清屏可能关掉时有（L11）。 */
+private current: SceneTarget | null = null;
+private alternate: SceneTarget | null = null;
+```
+  - `populate`：`general.clearVariable` 时建第二张，两张都是空的，初始底色就是黑（L11）。
+  - `sync`：`clearenabled` 为 false 且没有第二张时当场建，把当前目标拷过去（没有声明的脚本写入才走到这里）。
+  - `targetTexture`、`targetView` 返回 `current`，`targetBytes` 加上第二张。
+  - `SceneRenderer` 的 `blitBindGroup` 改成按 `scene.targetView` 取，每张目标各一个，换场景时清空。
+- **新增** `render/uniforms.ts` 的 `LIGHT_UNIFORMS`（`g_LightAmbientColor`、`g_LightSkylightColor`），`GpuScene.sync` 在 `dirty.lights` 时遍历全部 draw 调 `refreshLights`：只写块里有、且 `pass.uniforms` 没覆盖的名字，都没有时不标 `dirty`，脚本逐帧写时不重传无关的缓冲。
+- **修改** `uniformInput`：`ambient` / `skylight` 读 `state.general`，单图层重建出来的新 draw 拿到的是当前值。**删除** `this.ambient`、`this.skylight`。
+- **新增** `render/layout.ts` 的 `eyePosition(general)`：`[width / 2, height / 2, 2000]`（L2），`populate` 算一次。文件头的相机注释改成 WPE 的实际做法：正交且没有 `paths` 时视图是单位阵，不是 `eye` 被抵消。
+- **修改** 脚本：`GENERAL_RECOMPILE` 删到只剩 `hdr`。`installGeneral` 按表循环定义成员，读 `state().general[key]`（vec3 转 `Vec3`），写 `{ kind: "general", key }`。字段同时装到 `general` 和 `thisScene`（K5）。
+- **修改** `script/api.ts`：挂在 general 上的脚本，`thisLayer` 现在是 `null`，改成 `=== thisObject`（L14）。
+- **修改** 目标路径：`runtime.ts` 的 `targetKey`、`host.ts` 的 `targetPath` 都是 `general/<key>`；`readScript`、`readTarget`、`scriptCorpus` 两处 `read`、`probe.ts` 的 `state` 加 `general`；`recompileValue` 只留 `general/hdr`。
+
+## 点 7 — 宿主收尾（`host.ts`、`compile/bindings.ts`、`render/scene.ts`、`dev/probe.ts`）
+
+- **修改** `RecompileReason` 收窄为 `"layer-structure"`（`colorBlendMode`，待定 1；`size`，3a 已定 5）和 `"postprocess-hdr"`（只有 `general.hdr`，已定 12；现在名字是 `postprocess`）。**删除** `"general"`。不加 `effect-unsupported`：它不是绑定目标的原因，打开带不支持项的 effect 由 `needsRecompile` 判定。
+- **修改** `applyChanges` 的标签：现在被挡下的写入都记成 `effect-blocked（路径）`，`bloom-enabled` 改记 `bloom-missing（路径）`。
+- **修改** 宿主的 `后处理 …（泛光）` 日志：现在看 `bundle.bloom`，有链但当前关着的场景也写「泛光」。改成区分「泛光」和「泛光（关）」。
+- **新增** `GpuScene.rebuildStats`（次数、总用时、最大用时），只记签名变了、真正重建的那几次。dev 探针 `stats()` 加 `rebuilds: { count, meanMs, maxMs }`。
+  > 说明：单图层重建不打 debug 日志。脚本逐帧切换时每帧一条，`GpuScene` 也没有日志通路，探针的数字已经够验收用。
+- 重编译仍记 `debug` 并带原因（3a 已定 8；已定 9）。
 
 ## 点 8 — 文档、回归与 changelog
 
@@ -651,10 +732,11 @@ setParams(params: BloomParams): void {
     - 补 `registerAudioBuffers` 占位；
     - 「未提供」清单删掉这两项；
     - 探针一段同步点 0。
-  - 「图层渲染图」补运行时开关与单图层同步切换、可变 effect 的编译规则与不支持项归属；「泛光与 HDR」补开关就地与级数预建、HDR 只在加载时判定；「场景宿主」的就地 / 重编译分类表改成最终形态（并附上本文件的对照表）；`cocs/README.md` 摘要同步。
-- `versions/latest/regression.md` 新增「场景壁纸 P3c：运行时渲染图」小节，用例见验收。
+  - 「图层渲染图」补运行时开关与单图层同步切换、可变 effect 的编译规则与不支持项归属；「泛光与 HDR」补开关就地与级数预建、HDR 只在加载时判定；「场景宿主」的就地 / 重编译分类表改成最终形态（并附上本文件的对照表）；补 general 字段表、`clearenabled: false` 不清屏、`g_EyePosition` 的取值与相机不能绑；`cocs/README.md` 摘要同步。
+- `.claude/plans/wpe-import/3-scene/p2-REPORT.md` 与 `PLAN.md`：A4 的「编辑器状态下改用 `R+0x31b0`」和 `PLAN.md` 相机一条按 L7 更正。
+- `versions/latest/regression.md` 的 P3c 小节接着 D31 往下加，用例见验收。
 - `versions/latest/changelog.md` 用户侧 Optimized 一行：「场景壁纸开关图层效果、泛光，以及改背景色等属性时也即时生效，不再重新加载」。
-  另在 3b 那条 Added 后补半句：「场景脚本的存储（如记住的拖动位置）会保留到下次打开」。
+  另在 3b 那条 Added 后补半句：「场景脚本的存储（如记住的拖动位置）会保留到下次打开」；含「暂不支持帧率上限与暂停」的那条按现状改。
 
 ## 实施步骤
 
@@ -695,19 +777,31 @@ setParams(params: BloomParams): void {
     - 逐帧切 10 s 帧时间不变、没有 WebGPU 错误；暂停时切换画面更新；
   - Q1–Q5 的工程和 WPE 同一套对比。
 
-**步骤 4 — 清屏色、环境光、相机与宿主收尾**（codex：点 6、点 7）
-- 验收：单测（就地 = 重编译的字节对比，覆盖 `clearcolor`、`ambientcolor`、`eye`）；`deno task test -c kabegame --skip cargo`、`check-kabegame`、宿主 `typecheck` 全过。
+**步骤 4.0 — WPE 实验**（已完成，见实施记录；子代理，结果写进 [p3-script-REPORT.md](p3-script-REPORT.md) L 节，工程在 `ignore/p3c/wpe-general/`）。REA 已给出静态结论（L1–L8），这一步只测静态查不清的和要确认的：
+- Q1：`clearcolor` 绑属性，运行中改值下一帧生效、不重载；绑数字时铺满三个分量。
+- Q2：`clearenabled: false` 的实际画面：残留上一帧还是隔一帧、开泛光时底图含不含泛光、运行中切换、加载时的初始画面。
+- Q3：`ambientcolor` / `skylightcolor` 绑属性，自定义着色器读到的是原值。
+- Q4：`g_EyePosition` 的实际值（含 `camera.eye` 非零、写成 `{user}`、场景尺寸不是 1920×1080）。
+- Q5：脚本读写 `thisScene` 的这些字段：类型、缺键时的缺省值、读回、`clearcolor` 与 `ambientcolor` 同帧。
+- Q6：扫样本：`camera.paths` 出现在正交场景里的张数，`[gs]etCameraTransforms` 的用法（含 200 MB 以上的包）。
+- 实验结果和 L 节不一致时，先改本文件再实施。
 
-**步骤 5 — 真机验收**（Claude 经 CDP；Kabegame「场景后处理」临时改成「开启」看泛光，测完改回「跟随 WPE」；不改用户的壁纸设置）：见验收「真机」。
+**步骤 4.1 — 字段表与宿主收尾**（子代理：点 6、点 7）
+- 验收：
+  - 单测（下面「单测」第 3、9、10 条）；宿主 `typecheck`、vitest、`deno task test -c kabegame --skip cargo`、`check-kabegame` 全过；
+  - 语料 41 张，跟随、开启、超高三档，`unsupported` 与脚本诊断与步骤 3 的基线逐张相同；
+  - 能渲染的 5 张固定时刻哈希与动手前相同。`g_EyePosition` 变了，哈希有变化要逐张解释。
 
-**步骤 6 — 文档**（codex：点 8；Claude 填实测数值并核对文档与代码一致）。
+**步骤 5 — 真机验收**（Claude 经 CDP；Kabegame「场景后处理」临时改档，测完恢复，不改用户的壁纸设置）。步骤 1–3 已各自真机验收，这里只测没覆盖的：验收「真机」的清屏色、环境光、`clearenabled`、`g_EyePosition`、脚本写 general 字段（和 WPE 同一套工程对比），加上 D30 壁纸窗口里切泛光、D31 `general.hdr` 绑属性、显存记录与整体不回归。
+
+**步骤 6 — 文档**（子代理：点 8；Claude 填实测数值并核对文档与代码一致）。
 
 ## 验收
 
 **单测**
 1. 渲染图：点 2 的四例；`planSignature` 在步骤或合成 RT 数变化时变化、只改开关但计划相同（例如关掉一个没有绘制 pass 的 effect）时不变。
 2. 编译：可变 effect 进 bundle 并带 `enabled`、自己的 `unsupported`；关着的可变 effect 的不支持项不让场景退回；打开它时 `SceneState.write` 返回 `"recompile"`。
-3. **就地 = 重编译（字节级）**：effect 开 / 关、泛光开 / 关（LDR）、`bloomhdriterations` 8 → 5 → 8（HDR）、`clearcolor`、`ambientcolor`、`eye`，就地结果与整场编译的 uniform 字节与步骤序列逐项相同。
+3. **就地 = 重编译（字节级）**：effect 开 / 关、泛光开 / 关（LDR）、`bloomhdriterations` 8 → 5 → 8（HDR）、`clearcolor`、`clearenabled`、`ambientcolor`、`skylightcolor`，就地结果与整场编译的 uniform 字节、步骤序列和编码轨迹（`loadOp`、`clearValue`）逐项相同。写过环境光之后切 effect，新 draw 拿到的是当前值。
 4. 不回归：没有可变项的场景（本机能渲染的全部默认样本）在 3c 前后资源数与哈希相同。
 5. **`localStorage` 存取**（`storage.test.ts`，内存 `Storage`）：
    - `set` / `get` 往返数字、字符串、布尔、对象、数组；没有的键返回 `undefined`；
@@ -734,6 +828,14 @@ setParams(params: BloomParams): void {
    - `clearSceneStorage`：`g` 与 `s` 都删，别的场景与前缀外的键不动；
    - 宿主：同 id 的事件才处理；顺序是先 `destroy` 再删存储；有 runtime 时重建并重跑 `init`，退回状态只删存储；暂停时就地写属性会补画一帧，不暂停时不补画；
    - 垫片：暂停期间 rAF 不回调、恢复后回调；暂停时取消 rAF 有效；恢复只恢复暂停前在播的媒体与动画；带 `kbScene` 时不冻结。
+9. **general 字段**：
+   - 取值：编译与就地写结果相同；数字铺满三个分量；`{value: false}` 算关；不合法的值不改字段；
+   - 绑定：表里每个字段都登记成 `{ kind: "general" }`，`camera.*` 写成 `{user}` 时不登记、不读属性；
+   - 编码：`clearenabled` 为 false 时第一个 pass 是 `load`，切回 true 是 `clear`；一帧没有绘制时也按这条走；只有环境光和天光标 `lights`，没有这两个 uniform 的 draw 不重传；
+   - 第二张目标：`clearVariable` 为 false 且 `clearenabled` 为 true 时只有一张，资源数与编码轨迹不变；为 true 时两张逐帧交替，清屏开着也换，上屏用当前这张的 bind group，快照和 combine 落在当前这张；没有声明时脚本关掉清屏，当场建第二张并拷一次，只拷这一次；
+   - `g_EyePosition` 不随 `camera.eye` 变，等于 `(W/2, H/2, 2000)`；
+   - 脚本：成员读到 `Vec3` / bool / number，写入不重编译、`recompileWrites` 不增加，重编译后 `replayWrites` 恢复；`{script}` 挂在这些键上能写回；`hdr` 仍走重编译。
+10. **宿主收尾**：`RecompileReason` 只剩两项；被挡下的写入按 effect / 泛光分标签；`stats().rebuilds` 只数真正重建的次数；有链但关着的场景日志写「泛光（关）」。
 
 **真机**（Windows dev，主窗口预览；壁纸窗口为窗口模式时一并验，不是就记未测）
 - **`localStorage` 持久与隔离**（点 0）：在测试工程里加一段脚本，`init` 里读一个计数键、加 1 后写回，`update` 把计数写进某个图层的 `alpha` 或颜色，用来目视。
@@ -756,7 +858,18 @@ setParams(params: BloomParams): void {
 - **测试工程 effect 开关**：属性面板切 `p_effvis`，B 层由绿变白、再变回绿（同 WPE I10 4b）；应用日志没有「重新编译」，探针 `stats()` 的单图层重建次数增加；关 / 开之后 `host.renderFrame(t)` 的哈希分别等于用同一属性值整场编译的 `renderFrame(t)` 哈希。
 - **逐帧开关**：CDP 在宿主 frame 里以 rAF 频率交替推 `p_effvis` 10 s，记录单图层重建的均值 / 最大用时、`stats().frameMs` 的均值与 p95、宿主 rAF 与 `GPUQueue.submit` 次数（预期与不切换时相同），无重编译、无 WebGPU 校验错误。测完推回原值。
 - **泛光开关**（「场景后处理」= 开启）：切 `p_bloom`，泛光随之出现 / 消失、不重编译；`p_bloomstr` 改强度即时生效。测完设置改回「跟随 WPE」。
-- **清屏色 / 环境光**：测试工程补的 `clearcolor` 绑定改值后背景即时变色、不重编译。
+- **清屏色 / 环境光**（`ignore/p3c/wpe-general/` 的工程，和 WPE 同一套对比）：
+  - 切 `clearcolor` 属性是 `applied` 增加、`recompiled` 不变，哈希等于同值整场加载；绑数字时读数与 WPE 相同；
+  - `ambientcolor` / `skylightcolor` 改值，着色器读到的数字与 WPE 相同；
+  - 暂停时改值，画面立即更新；
+  - 逐 rAF 写 10 s，没有重编译、没有 WebGPU 错误，帧时间不变。
+- **`clearenabled`**（工程 `q2-*`，按 `FR` 块的帧号比，判读同 L11、L20）：
+  - `q2-false`、`q2-value`、`q2-user-pfalse`：同奇偶的历史格都在，异奇偶 0 个，背景是黑，`clearcolor` 不出现；
+  - `ACC` 成对上升：25, 25, 48, 48, 68, 68…；
+  - `q2-user`：切到 false 当帧接上 N−2 的底图，切回 true 当帧干净；
+  - `q2-bloom-ldr`：辉光成对累加；`q2-bloom-hdr` 趋于收敛。窗口尺寸按 K8 对齐后再比绝对值。
+- **`g_EyePosition`**：读数与 Q4 相同。
+- **脚本写 general 字段**：`thisScene.clearcolor`、`ambientcolor` 同帧，判定方式同 K5；`fov` 等写入不重编译，读回写入值。
 - **脚本写 effect visible**（如本机有可渲染的样本；没有就在测试工程里加一段 `update` 按时间切 effect 可见性的脚本）：切换按脚本节奏发生，无重编译。
 - 不回归：vortex、bedroom（三档）、P1 三张画面与 3b 相同；显存（日志的渲染目标估算）记进回归表，说明可变 effect 多出的部分。
 
@@ -773,6 +886,9 @@ setParams(params: BloomParams): void {
 9. **反馈型 fbo 的旧内容**（已查清，J6）：effect 关掉再打开时，fbo 内容与 swap 状态保留，带 `clear` 的除外（每次重建都清，且是同图层全部 effect 的 fbo）。我们照此实现，与 WPE 一致。整场重编译是清空的，所以这一点上「就地 = 重编译」本来就不成立，单测只比步骤序列、uniform 字节与编码轨迹。
 10. **`thisScene.bloom = true` 打开没有链的场景**是整场重编译，不是就地。WPE 同帧、不编译（K7），这是有意的差异，换来写死 `bloom: false` 的场景不多占显存。重编译后 HDR 判定不变：`bloom` 读场景文件，脚本写入不算（K3）。本机没有脚本这样写。
 11. **`general.hdr` 与 WPE 不同**（已定 12）：WPE 运行中改不生效，连加载时都只读 JSON；我们读属性当前值与脚本覆盖，改值就整场重编译并生效。本机样本 3355291946（工坊，2026-11-06 新下载）绑了 `hdr`，是差异样本；它能不能实时渲染还没看。
+12. **第二张场景目标的显存与差一帧**（已定 16）：`clearenabled` 关着、绑了属性或挂了脚本的场景多一张全尺寸目标（4K LDR 约 32 MiB，HDR 约 63 MiB）。没有声明的脚本第一次关掉清屏时，那一帧的底图是 N−1，之后这条链里多带一帧的旧内容，切回 true 就清掉，静止内容不受影响。本机 99 张 0 个写 `false`，也没有绑定。
+13. **`g_EyePosition` 改值可能影响现有画面**：着色器里它给视线方向用（`genericimage*.vert`、粒子）。基线哈希有变化要确认是修正，不是回归。
+14. **脚本打开 `camerashake` / `cameraparallax` 的效果缺失**（已定 14）：从退回预览图变成继续渲染、没有效果，用户看不出这里缺了东西。本机 0 个样本。
 
 ## 已定（2026-11-03 用户）
 
@@ -799,6 +915,10 @@ setParams(params: BloomParams): void {
 10. **暂停与清空存储单独放进当前壁纸属性面板**（2026-11-05 用户）：设置页与预览详情共用；不和「全部重置」绑在一起。不做 100 KB 上限。
 11. **对齐 WPE 行为，加载时备好、切换同步**（2026-11-06 用户，撤销「允许卡帧」）：依据 [p3-script-REPORT.md](p3-script-REPORT.md) J 节。
 12. **`general.hdr` 保留整场重编译，改值即生效，判定读属性**（2026-11-06 用户，原待定 2 选 (b)）：属性绑定和脚本写入都一样。WPE 连加载时都只读 JSON 的 `value`，属性不起作用（K3 静态确认），运行中改也不生效（I3）。用户判定这是 WPE 的 bug，有意不跟，所以不加无操作目标。判定里的 `bloom` 照 WPE 读场景文件（K3）。P2b 时本机 `hdr` 写成属性对象的样本 0 个；2026-11-06 新下载的工坊 3355291946 有 1 个（`hdr: {user: "hdr", value: false}`）。
+13. **其余 12 个 general 字段这一轮一起进字段表**（2026-11-06 用户）：只存值、脚本能读回，不再重编译。`zoom`、`fog*`、`wind*`、`gravity*` 等现在没有的字段不新增。
+14. **脚本打开 `camerashake` / `cameraparallax` 不退回预览图**（2026-11-06 用户）：继续实时渲染，没有效果，等 P5 / W6 实现。JSON 里写 `true` 的场景加载时仍报不支持。
+15. **步骤 4 先做 WPE 实验**（2026-11-06 用户）：静态结论写进 L 节，实验结果和它不一致时先改计划再实施。
+16. **`clearenabled: false` 对齐 WPE 的 N−2，用两张场景目标逐帧交替**（2026-11-06 用户）：单张目标是 N−1，运动残留和半透明累加都是 WPE 的 2 倍。第二张只在需要时建，见总体设计。
 
 ## 待定（附推荐）
 
@@ -813,6 +933,10 @@ setParams(params: BloomParams): void {
 - **网页壁纸暂停的计时器**：垫片只冻结 rAF、CSS 动画与媒体元素，靠 `setTimeout` / `setInterval` 驱动的页面还会动。遇到实际样本再看要不要包装计时器。
 - **建好 realm 后才退回的场景**：渲染失败时 realm 与音频订阅都保留，frame 不销毁，Hub 会继续采集到 iframe 消失。没有退订命令，影响小，先不处理。
 - **`model:solidlayer`**：本机 41 个场景里 17 个报这项，影响图层几何与尺寸（`p2-REPORT`），测试工程 `kbprops-test` 也是靠本地覆盖 `models/util/solidlayer.json` 才绕开（见「步骤 0.6 真机」）。放在 3c 之后单独做。
+- **`thisScene.get/setCameraTransforms`**：WPE 在正交场景里也生效（L2）：改基准字段，下一帧 `lookAt` 进视图矩阵。我们的 `ScriptApi` 没有这两个方法，本机 99 张 0 处（L15）。要做的话 `sceneViewProjection` 不能再只看场景尺寸。
+- **`camera.paths`**：WPE 按路径每帧插值。本机正交场景 0 张，透视 6 张（都是默认工程），`features.ts` 现在不报不支持，随 P5 一起处理。
+- **相机图层**（对象带 `camera` 键）：本机 7 张正交工坊场景有，`origin {script}` 或关键帧动画，`zoom` 绑属性（L15）。这些场景现在报 `object:empty` 退回预览图，不会画错。WPE 里的实际效果没有实验，要解锁这些场景时先测。
+- **`thisScene` 的其余字段**：`zoom`、`fog*`、`wind*`、`gravity*`、`transparentsorting`、`customsortorder`、`perspectiveoverridefov` 还没有（L1），随各自的渲染阶段补。
 
 ## 实施记录
 
@@ -1039,3 +1163,77 @@ setParams(params: BloomParams): void {
 **没有测到。** 壁纸窗口里切泛光（不改壁纸设置）；`general.hdr` 绑属性；`q5-sync*` 原工程的 400 帧窗口（用放长的副本）；工坊 2582765611（`unsupported` 不为空，退回预览图）；displayhdr 档。
 
 **恢复。** 测试行 13122–13148 与两个任务已删，图片 9841 行、任务 638 行、画册 5657 个。工坊目录与工程目录都在。13114 的属性不变（`p_alpha` 0.53、`p_mode` c）。「场景后处理」恢复成 `disabled`，当前壁纸 12888、窗口模式、未暂停，预览已关，路由 `/gallery`，`localStorage` 没有残留测试键。WPE 主进程 36548 没有动，测试窗口都关了，`config.json` 哈希前后相同，仍是 `ultra`、`fps=10`。
+
+### 步骤 4.0（2026-11-06）
+
+子代理跑实验，结果写在 [p3-script-REPORT.md](p3-script-REPORT.md) L9–L19，工程与脚本在 `ignore/p3c/wpe-general/`（27 个工程，`gen.py` 一键生成，没有实际导入 Kabegame）。WPE 主进程 36548 没有动，`config.json` 哈希 `aea12dd3…` 前后相同，`KBG` 窗口都已关闭。
+
+**结论。** 属性改值都是下一帧生效、不重载；脚本写入同帧（400 / 400 帧与 `K0` 同相，与晚一帧的 `K1` 差 200）；读到原值，数字铺满三个分量；`g_EyePosition` 是 `(W/2, H/2, 2000)`，`eye` 非零或写成 `{user}` 都不影响；`{script}` 挂 general 时 `update` 的返回值写回。
+
+**和计划不一致的地方，已改本文件。**
+- `clearenabled: false` 残留的是 N−2，不是上一帧，用户定用两张目标交替（已定 16）。`q2-false` 339 帧：同奇偶的历史格 28561 个，异奇偶 0 个。主会话看过第 300、301 帧，红绿两条链的棋盘格互补。
+- 6 个调节项的缺省值不是 0，点 6 的表已填实测值。
+- 运行时改相机还有相机图层一条路，本机 7 张正交场景用（「后续」）。
+- 挂 general 的脚本 `thisLayer` 是对象，`=== thisObject`，点 6 已加。
+
+**有意不跟。** 全部字段读回是 float32（0.4 → 0.4000000059604645），我们保持 JS 数字，本机没有脚本依赖这一点。
+
+**泛光补测。** 第一轮时 WPE 档位是 `disabled`（`config.json` 21:25:58 改的，不是实验造成的），用户改成 `ultra` 后主会话补做（L20）：底图含泛光，LDR 成对累加（`d10` 54, 54, 108, 108, 165, 165…），HDR 趋于收敛（`d40` 停在 109 左右）。
+
+**没有测到。** 桌面壁纸窗口（只测了 `-playInWindow`）、`msaa` 非 none、相机图层。
+
+**样本。** 本机 99 张场景（正交 91、透视 8）：`clearenabled: false` 0 张，`clearcolor` / `ambientcolor` / `skylightcolor` 写成对象 0 张，`camera.paths` 正交 0 张，`[gs]etCameraTransforms` 0 处。比之前的 78 多，是工坊 2026-11-06 晚上又下载了一批。
+
+### 步骤 4.1（2026-11-07）
+
+**实现。** 点 6、点 7 按上文落地，代码都在 `apps/wpe-scene/src/`。没有改 `third/`、`cocs/`、`versions/latest/`。还没有真机验收，下面的结论都来自单测。
+- 取值只有 `generalValue` 一处，编译（`bundle.ts` 的 `generalFields`）与 `SceneState.write` 共用。
+- `SceneState.general` 是运行时的字段值；`uniformInput` 读它，单图层重建的新 draw 拿到当前值。
+- `general/<键>` 同时是 `targetKey` 与 `targetPath`：写过的字段在 `hdr` 重编译后重放，被用户属性改过的不再重放。
+- 两张目标：`clearVariable` 时 `populate` 建第二张，`encode` 开头交替，`SceneRenderer` 按 `targetView` 取 bind group。没有声明时 `sync` 当场建第二张并拷一次。
+- `RecompileReason` 只剩 `layer-structure`、`postprocess-hdr`。被挡下的写入分 `effect-blocked` / `bloom-missing`，日志分「泛光」「泛光（关）」，探针 `stats().rebuilds` 读 `GpuScene.rebuildStats`。
+
+**与计划不一致的地方。**
+- 新增 `generalDefaults()`：`generalFields` 从它起步，测试夹具也用它。
+- 计划只写了「数字铺满」和「bool 只认 bool」，其余取值规则是这轮定的，没有 WPE 依据，本机也没有样本（L15）：
+  - vec3：字符串三段以上取前三段，一段（如 `"0.5"`）按数字铺满，两段不合法；布尔不合法。
+  - float：字符串只认一段，多段不合法；布尔不合法。脚本写回走 `value.join(" ")`，所以字符串 `"0.5"` 必须算合法。
+  - `numbers` 把布尔换成 0 / 1，图层字段沿用，这张表不沿用。
+- 计划的 `LIGHT_UNIFORMS` 没写形状，实际是「uniform 名 → 字段键」。`refreshLights` 不走 `drawUniformValues`：它要算矩阵，脚本逐帧写时不划算。
+- `GENERAL_RECOMPILE` 整个删了，`hdr` 单独定义，一个元素的集合没有意义。
+- `targetView` 从字段改成 getter，`blitBindGroup` 从 `load` 里提前建改成 `render` 里按需建，都因为目标不再只有一张。
+- 第二张的 label 是 `scene target 2`，只有它带 `COPY_DST`，所以 `clearVariable` 为 false 的场景，第一张的描述符与改动前相同。
+- 探针 `hostRenderFrame` 原来在 `encode` 之前取 `targetTexture`，有两张目标时读回的是另一张，已改到 `encode` 之后。`renderFrame` 本来就在之后取。
+- 拿 `clearcolor` 当重编译例子的用例换成 `hdr`，意图不变。`hdr` 是 bool，「脚本写的值变了要再重编译一次」那条从 1 → 0.5 改成 true → false。
+- 假设备：`clear` 的 pass 在轨迹里带 `clearValue`；新增 `copied`（已提交的拷贝）与读回需要的方法。
+
+**5 张能渲染的场景**（超高档，只看编译结果，没有渲染）。
+- `clearVariable` 都是 false，`unsupported` 都是空，`clearenabled` 都是 true。
+- `g_LightAmbientColor` / `g_LightSkylightColor`：5 张都没有程序声明。
+- `g_EyePosition`：只有 razer_bedroom 的 2 个程序声明，下标 2、4。这两个程序不属于任何图层的基础 pass 或 effect pass，推断是 passthrough 的 `genericimage3`（未核实）。`genericimage3.vert:164` 用它算 `viewDir`，`v_ViewDir` 这个 varying 声明在 `#if LIGHTING || REFLECTION` 里。这两个程序开没开这两个 COMBO 没有核对，所以 bedroom 的哈希变不变还不知道；变了先查这两个程序（风险 13）。
+
+**留的疑点。**
+- **暂停时补画会推进交替**：`redraw()`、暂停时改画布尺寸都走 `encode`。不清屏的场景每补画一次换一张目标，再多画一层，半透明会多累加一次。WPE 暂停时不渲染。探针 `hostRenderFrame` 同样多推进一帧。
+- **初始 alpha 是 0**：不清屏时目标从空纹理 `load`，alpha 为 0，不是清屏的 1。场景 pass 不写 alpha，读 `_rt_FullFrameBuffer` alpha 的 effect 拿到 0；上屏固定输出 1，不受影响。WPE 交换链忽略 alpha（L3），但快照的 alpha 没有核对。
+- **重编译丢掉累积内容**：`hdr` 重编译之后两张目标都是新的，不清屏累积的内容清零。`clearVariable` 不知道脚本写过 `clearenabled`，这时走 `sync` 当场建第二张，拷的是空目标。WPE 没有对应路径。
+- **`camerashake` / `cameraparallax` 写成对象时仍然退回**：`features.ts` 的 `active(g[key])` 对 `{user, value: false}` 也为真，字段表里的绑定对这类场景用不上。这是原有行为，`unsupported` 要和基线逐张相同，所以没有改。已定 14 只说了 JSON 写 `true` 时仍报。
+- **`general.hdr` 的路径有两种写法**：绑定目标是 `general.hdr`，脚本是 `general/hdr`，`applyChanges` 的 `forgetWrite` / `scriptOverrides.delete` 对不上脚本那条。原有问题，这轮没有动。用户绑定的 `hdr` 编译时取属性值，脚本覆盖不起作用，所以目前没有可见后果。
+- **基线就失败的用例**：`pipeline.test.ts` 的语料用例报 `2077888249: 意外解锁`。动手前的代码上同样失败，和这一步无关，解锁清单没有改。
+
+**单测。**
+- 宿主 tsc 0 error。
+- vitest 20 个文件、576 项：575 过，1 败，败的就是上面的基线用例。动手前是 489 项、1 败，这轮新增 87 项。
+- prettier 改过的文件全过。
+- `check-kabegame --skip cargo` 退出码 0，vue-tsc 0 error，cargo 没有跑。
+- 没有跑 `deno task test -c kabegame --skip cargo`。
+- 变异检查 29 条。第一轮漏了 1 条（第二张的拷贝编码了但没提交），假设备加 `copied` 后抓到，其余 28 条第一轮就抓到。
+
+**只有单测、要真机确认的。**
+- 假设备不验证 WebGPU 的实际规则：第二张目标的 usage、从未写过的纹理 `load`、拷贝的格式约束，都要真机确认。
+- 验收里的这些都还没做：语料 41 张三档、5 张固定时刻哈希、`q1-*` 到 `q5-*` 工程和 WPE 的对比（含 `ACC` 成对上升、泛光累加、同帧判定、`q5-scr-*`）、显存记录、逐 rAF 写 10 s、探针 `rebuilds` 的真实用时。
+
+**主会话验收**（2026-11-07，结果在 `ignore/p3c/step4/`）。
+- 宿主 tsc 0 error；vitest 576 项，575 过，1 败。败的是 `pipeline.test.ts` 的「意外解锁」：工坊 2077888249 是 2026-11-06 23:38 新下载的，本来就没有不支持项，用例写死的解锁清单里没有它，和这一步无关。
+- 动手前取基线（`baseline-before.json`），6 张图 3 档共 18 个哈希，和步骤 3 结束时逐项相同。改完构建 dev 宿主重跑：18 个哈希、`targetBytes`、语料 41 张三档的 `unsupported`、warnings、脚本诊断都相同。razer_bedroom 的哈希没变，`g_EyePosition` 的修正不影响现有画面。
+- 变异抽查 5 条，都有用例失败，已还原：不交替（9）、环境光读编译值（1）、`targetKey` 对不上（1）、数字不铺满（5）、关清屏仍清（6）。
+- 读过全部 diff，没有改动。

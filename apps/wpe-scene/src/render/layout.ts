@@ -9,8 +9,8 @@
  *   所以这里直接用场景坐标，不做任何翻转。
  * - **模型空间**：顶点放在以图层中心为原点的模型空间（未缩放的 `size`），平移 / 旋转 / 缩放进 `g_ModelMatrix`，
  *   而不是像 LWE 那样把场景坐标烘进顶点；对 P1 着色器结果相同，`g_ModelMatrix` 也有了真实含义。
- * - **相机**：LWE 的正交投影是 `ortho(±w/2, ±h/2) * translate(eye)`，再乘 `lookAt(eye, center, up)` 后 eye 恰好抵消；
- *   这里直接用 `ortho(0…w, 0…h)`，与之等价（eagleflag 的 eye 是编辑器残留的偏移，WPE 预览图里画面并未平移）。
+ * - **相机**：WPE 在正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵，JSON 的值被丢弃
+ *   （L2）；投影是 `ortho(0…w, 0…h)`，这里就用它。eagleflag 的 eye 是编辑器残留的偏移，画面不平移。
  */
 import type { SceneGeneral, SceneLayer, SceneTexture } from "../compile/bundle";
 import { multiply, orthographic, rotationZ, scaling, translation, type Mat4 } from "./math";
@@ -61,6 +61,11 @@ export function layerModelMatrix(layer: Pick<SceneLayer, "origin" | "angles" | "
 /** 正交场景的视图投影：场景 `[0, w] × [0, h]`（y 向上）铺满整个渲染目标。 */
 export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">): Mat4 {
   return orthographic(0, general.width, 0, general.height, -ORTHO_DEPTH, ORTHO_DEPTH);
+}
+
+/** 正交场景的 `g_EyePosition`：`(W/2, H/2, 2000)`，不取 JSON 的 `eye`（L2、L13）。W、H 是投影尺寸，不随渲染目标缩小。 */
+export function eyePosition(general: Pick<SceneGeneral, "width" | "height">): number[] {
+  return [general.width / 2, general.height / 2, 2000];
 }
 
 export interface CoverUv {

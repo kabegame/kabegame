@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { generalDefaults } from "./compile/bindings";
 import type { SceneBundle } from "./compile/bundle";
 import { SceneState } from "./render/state";
 import { createMemoryStorage, SCENE_STORAGE_PREFIX } from "./script/storage";
@@ -153,11 +154,8 @@ function bundle(): SceneBundle {
     general: {
       width: 100,
       height: 100,
-      clearColor: [0, 0, 0],
-      clearEnabled: true,
-      ambient: [0, 0, 0],
-      skylight: [0, 0, 0],
-      camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
+      fields: generalDefaults(),
+      clearVariable: false,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: {
         strength: 1,
@@ -379,9 +377,9 @@ describe("SceneHost 脚本接线", () => {
       result.scripts.list[0].owner = { kind: "general" };
       return result;
     });
-    let red = 1;
+    let hdr = true;
     onUpdate = () => {
-      (activeGlobal.thisObject as { clearcolor: Vec3 }).clearcolor = new Vec3(red, 0, 0);
+      (activeGlobal.thisObject as { hdr: boolean }).hdr = hdr;
     };
     const reporter = report();
     const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
@@ -390,12 +388,12 @@ describe("SceneHost 脚本接线", () => {
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
     renderer.tick();
     expect(compile).toHaveBeenCalledTimes(2);
-    red = 0.5;
+    hdr = false;
     renderer.tick();
     expect(compile).toHaveBeenCalledTimes(2);
     finishSecond();
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(3));
-    expect(compile.mock.calls[2][0].scriptOverrides["general/clearcolor"]).toEqual([0.5, 0, 0]);
+    expect(compile.mock.calls[2][0].scriptOverrides["general/hdr"]).toBe(false);
     expect(imports).toBe(1);
     host.dispose();
   });
@@ -712,6 +710,179 @@ describe("SceneHost 脚本接线", () => {
     host.dispose();
   });
 
+  describe("general 字段", () => {
+    /** 脚本挂在 general 上；`c` 绑清屏色（就地），`h` 绑 hdr（保留重编译）。 */
+    function generalBundle(script: Partial<SceneBundle["scripts"]["list"][number]> = {}): SceneBundle {
+      const result = bundle();
+      Object.assign(result.scripts.list[0], { owner: { kind: "general" } }, script);
+      result.bindings.push(
+        { property: "c", target: { kind: "general", key: "clearcolor" } },
+        { property: "h", target: { kind: "recompile", reason: "postprocess-hdr", path: "general.hdr" } },
+      );
+      return result;
+    }
+    const scene = () => activeGlobal.thisScene as Record<string, unknown>;
+
+    async function start() {
+      const reporter = report();
+      const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+      host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+      await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+      return host;
+    }
+    /** 改 `h` 触发一次整场重编译，等新状态换上。 */
+    async function recompile(host: InstanceType<typeof SceneHost>) {
+      const compiles = compile.mock.calls.length;
+      const renders = events.filter((event) => event === "render").length;
+      host.applyUserProperties({ h: { type: "bool", value: true } });
+      await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(compiles + 1));
+      await vi.waitFor(() => expect(events.filter((event) => event === "render")).toHaveLength(renders + 1));
+    }
+
+    it("脚本写 thisScene：同一帧进状态，不重新加载，不算重编译写入；readTarget 读得到", async () => {
+      compile.mockImplementation(async () => generalBundle());
+      onUpdate = () => {
+        Object.assign(scene(), { clearcolor: new Vec3(1, 0, 0), clearenabled: false, fov: 33 });
+      };
+      const host = await start();
+      expect(renderer.sceneState?.general).toMatchObject({ clearcolor: [1, 0, 0], clearenabled: false, fov: 33 });
+      expect(host.readTarget("general/clearcolor")).toEqual([1, 0, 0]);
+      expect(host.readTarget("general/clearenabled")).toBe(false);
+      expect(host.readTarget("general/fov")).toBe(33);
+      expect(host.readTarget("general/nope")).toBeNull();
+      await settled();
+      expect(compile).toHaveBeenCalledTimes(1);
+      expect(host.stats.recompiled).toEqual([]);
+      expect((host.scriptDiagnostics as { recompileWrites: number }[])[0].recompileWrites).toBe(0);
+      host.dispose();
+    });
+
+    it("属性绑 general 字段：就地写，applied 增加，不重新加载", async () => {
+      compile.mockImplementation(async () => generalBundle());
+      onUpdate = () => undefined;
+      const host = await start();
+      const { applied } = host.stats;
+      host.applyUserProperties({ c: { type: "color", value: "0 1 0" } });
+      expect(renderer.sceneState?.general.clearcolor).toEqual([0, 1, 0]);
+      expect(host.stats.applied).toBe(applied + 1);
+      await settled();
+      expect(compile).toHaveBeenCalledTimes(1);
+      host.dispose();
+    });
+
+    it.each<[string, Partial<SceneBundle["scripts"]["list"][number]>, unknown, string, unknown]>([
+      ["vec3", { valueType: "vec3", initial: "0 0 0" }, new Vec3(1, 0.5, 0), "clearcolor", [1, 0.5, 0]],
+      ["bool", { valueType: "bool", initial: true }, false, "clearenabled", false],
+      ["float", { valueType: "float", initial: 50 }, 33, "fov", 33],
+    ])("{script} 挂在字段上（%s）：update 收到当前值，返回值写回", async (_name, shape, returned, key, stored) => {
+      compile.mockImplementation(async () =>
+        generalBundle({
+          ...shape,
+          id: `general/${key}`,
+          target: { kind: "general", key: key as "clearcolor" },
+        }),
+      );
+      onUpdate = () => returned;
+      const host = await start();
+      expect(renderer.sceneState?.general[key as "clearcolor"]).toEqual(stored);
+      updateArguments = [];
+      renderer.tick();
+      expect(updateArguments).toEqual([returned]);
+      await settled();
+      expect(compile).toHaveBeenCalledTimes(1);
+      host.dispose();
+    });
+
+    it("API 写过的字段在 hdr 重编译后重放", async () => {
+      compile.mockImplementation(async () => generalBundle());
+      onUpdate = () => {
+        Object.assign(scene(), { ambientcolor: new Vec3(0.2, 0.3, 0.4), clearenabled: false, fov: 33 });
+        onUpdate = () => undefined;
+      };
+      const host = await start();
+      const before = renderer.sceneState;
+      await recompile(host);
+      expect(renderer.sceneState).not.toBe(before);
+      expect(renderer.sceneState?.general).toMatchObject({
+        ambientcolor: [0.2, 0.3, 0.4],
+        clearenabled: false,
+        fov: 33,
+      });
+      expect(imports).toBe(1);
+      host.dispose();
+    });
+
+    it("{script} 的返回值在 hdr 重编译后重放", async () => {
+      compile.mockImplementation(async () =>
+        generalBundle({
+          id: "general/clearcolor",
+          target: { kind: "general", key: "clearcolor" },
+          valueType: "vec3",
+          initial: "0 0 0",
+        }),
+      );
+      onUpdate = () => {
+        onUpdate = () => undefined;
+        return new Vec3(1, 0, 0);
+      };
+      const host = await start();
+      await recompile(host);
+      expect(renderer.sceneState?.general.clearcolor).toEqual([1, 0, 0]);
+      host.dispose();
+    });
+
+    it("用户属性改过的字段：脚本的旧写入不再重放（`targetKey` 与 `targetPath` 一致）", async () => {
+      compile.mockImplementation(async () => generalBundle());
+      onUpdate = () => {
+        Object.assign(scene(), { clearcolor: new Vec3(1, 0, 0), fov: 33 });
+        onUpdate = () => undefined;
+      };
+      const host = await start();
+      host.applyUserProperties({ c: { type: "color", value: "0 1 0" } });
+      await recompile(host);
+      // 编译结果由替身给出（缺省值）：重放了脚本的写入就会是 1 0 0。没被用户改过的 fov 照常重放
+      expect(renderer.sceneState?.general.clearcolor).toEqual([0, 0, 0]);
+      expect(renderer.sceneState?.general.fov).toBe(33);
+      host.dispose();
+    });
+  });
+
+  it("被挡下的写入按 effect / 泛光分标签", async () => {
+    compile.mockImplementation(async () => {
+      const result = bloomBundle(false, false);
+      result.bindings.push({ property: "b", target: { kind: "bloom-enabled" } });
+      return result;
+    });
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 }, b: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    host.applyUserProperties({ b: { type: "bool", value: true } });
+    expect(host.stats.recompiled).toEqual([{ reason: "bloom-missing（general/bloom）", keys: ["b"] }]);
+    expect(reporter.debug).toHaveBeenCalledWith(expect.stringContaining("bloom-missing（general/bloom）"));
+    host.dispose();
+  });
+
+  it.each<[string, boolean, boolean, boolean, string]>([
+    ["有链开着", true, true, false, "（泛光）"],
+    ["有链关着", true, false, false, "（泛光（关））"],
+    ["HDR 开着", true, true, true, "（泛光 + HDR）"],
+    ["HDR 关着", true, false, true, "（泛光（关） + HDR）"],
+    ["没有链", false, false, false, "（无泛光）"],
+  ])("后处理日志：%s", async (_name, chain, flag, hdr, label) => {
+    compile.mockImplementation(async () => {
+      const result = bloomBundle(chain, flag);
+      if (result.bloom) result.bloom.hdr = hdr;
+      return result;
+    });
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(reporter.info).toHaveBeenCalledWith(expect.stringContaining(`后处理 enabled${label}`));
+    host.dispose();
+  });
+
   it("thisScene.bloom：档位允许但没有链时打开，只重新加载一次，新 bundle 有链且开着", async () => {
     let calls = 0;
     compile.mockImplementation(async (input) => {
@@ -856,7 +1027,7 @@ describe("SceneHost 脚本接线", () => {
       const result = bloomBundle(true, true);
       result.bindings.push({
         property: "h",
-        target: { kind: "recompile", reason: "postprocess", path: "general.hdr" },
+        target: { kind: "recompile", reason: "postprocess-hdr", path: "general.hdr" },
       });
       return result;
     });
@@ -875,7 +1046,7 @@ describe("SceneHost 脚本接线", () => {
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(3));
     expect(host.stats.recompiled).toEqual([
       { reason: "script（general/hdr）", keys: [] },
-      { reason: "postprocess（general.hdr）", keys: ["h"] },
+      { reason: "postprocess-hdr（general.hdr）", keys: ["h"] },
     ]);
     host.dispose();
   });
@@ -1040,11 +1211,11 @@ describe("SceneHost 清空脚本存储", () => {
       return result;
     });
     onUpdate = () => {
-      (activeGlobal.thisObject as { clearcolor: Vec3 }).clearcolor = new Vec3(1, 0, 0);
+      (activeGlobal.thisObject as { hdr: boolean }).hdr = true;
     };
     const { host } = await ready();
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(compile.mock.calls[1][0].scriptOverrides["general/clearcolor"]).toEqual([1, 0, 0]);
+    expect(compile.mock.calls[1][0].scriptOverrides["general/hdr"]).toBe(true);
     await vi.waitFor(() => expect(events.filter((value) => value === "render")).toHaveLength(2));
     onUpdate = null;
     clear("1");

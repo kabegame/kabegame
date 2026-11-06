@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HDR_BLOOM_MATERIALS, type BloomPassName, type SceneBloom } from "../compile/bloom";
+import { generalDefaults } from "../compile/bindings";
 import type { SceneBundle, ScenePass } from "../compile/bundle";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -455,11 +456,8 @@ describe("渲染器自查：泛光 pass", () => {
     general: {
       width: 4,
       height: 4,
-      clearColor: [0, 0, 0],
-      clearEnabled: true,
-      camera: { eye: [], center: [], up: [] },
-      ambient: [0, 0, 0],
-      skylight: [0, 0, 0],
+      fields: generalDefaults(),
+      clearVariable: false,
       postprocess: { level: "ultra", bloomFlag: true, hdrFlag: true, bloom: true, hdr: true },
       bloom: params(),
     },

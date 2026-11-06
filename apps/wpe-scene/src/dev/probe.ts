@@ -268,7 +268,14 @@ function frameStats(costs: readonly number[]): { mean: number; p95: number } {
   return { mean: round(mean), p95: round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]) };
 }
 
-/** 当前 `SceneState` 的快照（图层、材质常量、泛光参数与开关）与绑定表（P3a 点 8）。 */
+/** 单图层重建的次数与用时：当前场景的累计，整场重新加载后从 0 开始。 */
+function rebuildSummary(stats: GpuScene["rebuildStats"] | undefined): { count: number; meanMs: number; maxMs: number } {
+  const round = (value: number) => Math.round(value * 100) / 100;
+  if (!stats?.count) return { count: 0, meanMs: 0, maxMs: 0 };
+  return { count: stats.count, meanMs: round(stats.totalMs / stats.count), maxMs: round(stats.maxMs) };
+}
+
+/** 当前 `SceneState` 的快照（图层、材质常量、泛光参数与开关、general 字段）与绑定表（P3a 点 8）。 */
 export function hostState(host: SceneHost): unknown {
   const { bundle, renderer } = host.devScene;
   const state = renderer?.sceneState ?? null;
@@ -278,19 +285,23 @@ export function hostState(host: SceneHost): unknown {
     constants: state ? Object.fromEntries(state.constants) : {},
     bloom: state?.bloom ?? null,
     bloomEnabled: state?.bloomEnabled ?? null,
+    general: state?.general ?? null,
   };
 }
 
-/** 计数：就地应用次数、重编译记录（含原因），以及 `render()` 的 CPU 用时统计。 */
+/** 计数：就地应用次数、重编译记录（含原因）、单图层重建，以及 `render()` 的 CPU 用时统计。 */
 export function hostStats(host: SceneHost): {
   applied: number;
   recompiled: { reason: string; keys: string[] }[];
+  rebuilds: { count: number; meanMs: number; maxMs: number };
   frameMs: { mean: number; p95: number };
 } {
+  const renderer = host.devScene.renderer;
   return {
     applied: host.stats.applied,
     recompiled: host.stats.recompiled.map((item) => ({ ...item, keys: [...item.keys] })),
-    frameMs: frameStats(host.devScene.renderer?.frameCosts ?? []),
+    rebuilds: rebuildSummary(renderer?.currentScene?.rebuildStats),
+    frameMs: frameStats(renderer?.frameCosts ?? []),
   };
 }
 
@@ -305,13 +316,14 @@ export async function hostRenderFrame(
   const renderer = host.devScene.renderer;
   const scene = renderer?.currentScene;
   const state = renderer?.sceneState;
-  const texture = scene?.targetTexture;
-  if (!renderer || !scene || !state || !texture) throw new Error("当前没有可渲染的场景");
+  if (!renderer || !scene || !state) throw new Error("当前没有可渲染的场景");
   const device = renderer.device;
   const encoder = device.createCommandEncoder({ label: "probe host frame" });
   scene.sync(state);
   scene.update({ time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] });
   scene.encode(encoder, state);
+  // 有两张目标时 `encode` 开头才换，这一帧画的那张要在它之后取
+  const texture = scene.targetTexture!;
   const format = texture.format as ReadbackFormat;
   const read = scheduleReadback(device, encoder, texture, scene.width, scene.height, format);
   device.queue.submit([encoder.finish()]);

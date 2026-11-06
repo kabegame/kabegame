@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import { collectScripts, type SceneScript } from "../compile/scripts";
@@ -73,11 +74,8 @@ function scene(): SceneBundle {
     general: {
       width: 1920,
       height: 1080,
-      clearColor: [0, 0, 0],
-      clearEnabled: true,
-      camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
-      ambient: [0, 0, 0],
-      skylight: [0, 0, 0],
+      fields: generalDefaults(),
+      clearVariable: false,
       postprocess: { level: "enabled", bloomFlag: true, hdrFlag: false, bloom: true, hdr: false },
       bloom: {
         strength: 1,
@@ -311,7 +309,7 @@ describe("SceneScript API（FakeRealm）", () => {
     h.realm.modules.set("two", { init: () => seen.push(h.realm.global.thisLayer, h.realm.global.thisObject) });
     await runtime.load({ list: [one, two] });
     runtime.frame(0.1);
-    expect(seen).toEqual([h.api.layer(0), h.api.layer(0), null, h.api.general, h.api.layer(0)]);
+    expect(seen).toEqual([h.api.layer(0), h.api.layer(0), h.api.general, h.api.general, h.api.layer(0)]);
     expect(h.realm.global.thisLayer).toBeNull();
     expect(h.realm.global.thisObject).toBeNull();
   });
@@ -346,17 +344,16 @@ describe("SceneScript API（FakeRealm）", () => {
     owner.amount = 2;
     expect(h.state.constants.get("objects/0/passes/0")?.g_Amount).toEqual([2]);
     h.api.enterScript(script("general", { kind: "general" }, null));
-    expect(h.realm.global.thisLayer).toBeNull();
     const general = h.realm.global.thisObject as Record<string, unknown>;
     general.bloomstrength = 1.5;
     general.bloomtint = new Vec3(0.2, 0.3, 0.4);
     expect(h.state.bloom.strength).toBe(1.5);
     expect(h.state.bloom.tint).toEqual([0.2, 0.3, 0.4]);
-    general.clearcolor = new Vec3(1, 0, 0);
-    general.clearcolor = new Vec3(1, 0, 0);
-    expect(h.recompiles).toEqual([{ path: "general/clearcolor", value: [1, 0, 0] }]);
-    h.api.forgetRecompile("general/clearcolor");
-    general.clearcolor = new Vec3(1, 0, 0);
+    general.hdr = true;
+    general.hdr = true;
+    expect(h.recompiles).toEqual([{ path: "general/hdr", value: true }]);
+    h.api.forgetRecompile("general/hdr");
+    general.hdr = true;
     expect(h.recompiles).toHaveLength(2);
     // 探针统计写到重编译目标的次数：每一次赋值都算，被去重的也算（哪段每帧都在写）
     expect(h.api.recompileWrites.get("general")).toBe(3);
@@ -431,11 +428,111 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(general.bloomtint).toEqual(new Vec3(0.2, 0.3, 0.4));
     expect(h.recompiles).toEqual([]);
     // 重编译类字段写到 thisScene 上同样重编译，和写 general 共用去重
-    scene.clearcolor = new Vec3(1, 0, 0);
-    general.clearcolor = new Vec3(1, 0, 0);
-    expect(h.recompiles).toEqual([{ path: "general/clearcolor", value: [1, 0, 0] }]);
     scene.hdr = true;
-    expect(h.recompiles.at(-1)).toEqual({ path: "general/hdr", value: true });
+    general.hdr = true;
+    expect(h.recompiles).toEqual([{ path: "general/hdr", value: true }]);
+  });
+
+  it("general 字段：读到 Vec3 / bool / number，缺省值同 L14", () => {
+    const { thisScene: scene } = setup().api;
+    expect(scene.clearcolor).toEqual(new Vec3(0, 0, 0));
+    expect(scene.ambientcolor).toEqual(new Vec3(0, 0, 0));
+    expect(scene.skylightcolor).toEqual(new Vec3(0, 0, 0));
+    expect(scene.clearenabled).toBe(true);
+    expect(scene.camerafade).toBe(true);
+    expect(scene.camerashake).toBe(false);
+    expect(scene.fov).toBe(50);
+    expect(scene.nearz).toBe(0.1);
+    expect(scene.camerashakespeed).toBe(3);
+    expect(scene.cameraparallaxdelay).toBe(0.1);
+    expect(scene.cameraparallaxmouseinfluence).toBe(0.5);
+  });
+
+  it("general 字段：全部字段写入不重编译，当场读回，thisScene 与 general 同一份", () => {
+    const h = setup();
+    h.api.enterScript(script("s", { kind: "general" }, null));
+    const { thisScene: scene, general } = h.api;
+    const written: Record<GeneralKey, unknown> = {
+      clearcolor: new Vec3(0.1, 0.2, 0.3),
+      clearenabled: false,
+      ambientcolor: new Vec3(0.2, 0.3, 0.4),
+      skylightcolor: new Vec3(0.5, 0.6, 0.7),
+      fov: 33,
+      nearz: 0.5,
+      farz: 5000,
+      camerafade: false,
+      camerashake: true,
+      camerashakespeed: 1.5,
+      camerashakeamplitude: 0.25,
+      camerashakeroughness: 0.75,
+      cameraparallax: true,
+      cameraparallaxamount: 0.4,
+      cameraparallaxdelay: 0.2,
+      cameraparallaxmouseinfluence: 0.6,
+    };
+    expect(Object.keys(written).sort()).toEqual(Object.keys(GENERAL_FIELDS).sort());
+    for (const [key, value] of Object.entries(written)) {
+      scene[key] = value;
+      expect(scene[key]).toEqual(value);
+      expect(general[key]).toEqual(value);
+    }
+    expect(h.state.general.clearcolor).toEqual([0.1, 0.2, 0.3]);
+    expect(h.state.general.fov).toBe(33);
+    expect(h.state.general.camerashake).toBe(true);
+    expect(h.recompiles).toEqual([]);
+    expect(h.api.recompileWrites.size).toBe(0);
+  });
+
+  it("general 字段写入的形状：数字铺满、普通对象能写，读到的是拷贝，错类型不改（L14、G4）", () => {
+    const h = setup();
+    const scene = h.api.thisScene;
+    scene.clearcolor = 0.5;
+    expect(scene.clearcolor).toEqual(new Vec3(0.5, 0.5, 0.5));
+    scene.ambientcolor = { x: 0.1, y: 0.2, z: 0.3 };
+    expect(scene.ambientcolor).toEqual(new Vec3(0.1, 0.2, 0.3));
+    expect(scene.ambientcolor).toBeInstanceOf(Vec3);
+    (scene.clearcolor as Vec3).x = 0;
+    expect((scene.clearcolor as Vec3).x).toBe(0.5);
+    scene.clearcolor = "1 0 0";
+    scene.clearenabled = 0;
+    scene.fov = "x";
+    expect(scene.clearcolor).toEqual(new Vec3(0.5, 0.5, 0.5));
+    expect(scene.clearenabled).toBe(true);
+    expect(scene.fov).toBe(50);
+  });
+
+  it("重编译后 general 字段读新状态：写入由宿主重放，不留在 API 层", () => {
+    const h = setup();
+    const scene = h.api.thisScene;
+    scene.fov = 33;
+    h.recompile();
+    expect(scene.fov).toBe(50);
+  });
+
+  it("挂在 general 上的脚本：thisLayer === thisObject，经它写字段进场景（L14）", () => {
+    const h = setup();
+    h.api.enterScript(script("general", { kind: "general" }, null));
+    const { thisLayer, thisObject } = h.realm.global as Record<string, Record<string, unknown>>;
+    expect(thisLayer).toBe(thisObject);
+    expect(thisObject).toBe(h.api.general);
+    expect(thisObject).not.toBe(h.api.thisScene);
+    thisLayer.skylightcolor = new Vec3(0.9, 0.1, 0.1);
+    expect(h.api.thisScene.skylightcolor).toEqual(new Vec3(0.9, 0.1, 0.1));
+    h.api.enterScript(null);
+    expect(h.realm.global.thisLayer).toBeNull();
+  });
+
+  it("{script} 挂在 general 字段上：目标是字段本身，形状取字段表", async () => {
+    const source = "export function update(v) { return v; }";
+    const fields = Object.keys(GENERAL_FIELDS) as GeneralKey[];
+    const general = Object.fromEntries(fields.map((key) => [key, { script: source }]));
+    const { list } = await collectScripts({ general, objects: [] }, {}, []);
+    expect(list).toHaveLength(fields.length);
+    for (const item of list) {
+      const key = item.id.split("/").at(-1) as GeneralKey;
+      expect(item.target).toEqual({ kind: "general", key });
+      expect(item.valueType).toBe(GENERAL_FIELDS[key].type);
+    }
   });
 
   it("{script} 挂在 8 个泛光字段上是就地目标，挂在 bloom 上是场景位，hdr 暂不支持", async () => {

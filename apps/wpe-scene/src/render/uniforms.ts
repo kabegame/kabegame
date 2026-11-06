@@ -256,6 +256,12 @@ export const LAYER_UNIFORMS: ReadonlySet<string> = new Set([
   "g_CompositeColor",
 ]);
 
+/** 环境光 uniform → `GENERAL_FIELDS` 的键：就是字段的原值，没有转换，灯光图层也不改它（L5）。 */
+export const LIGHT_UNIFORMS = {
+  g_LightAmbientColor: "ambientcolor",
+  g_LightSkylightColor: "skylightcolor",
+} as const;
+
 /**
  * 各角色的变换（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：作用于 P1 的 `direct` 与合成链的三种角色。
  * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层模型矩阵；

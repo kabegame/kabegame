@@ -1,9 +1,14 @@
 import { compileBloom, type SceneBloom } from "./bloom";
 import {
   BindingCollector,
+  GENERAL_FIELDS,
+  generalDefaults,
+  generalValue,
   isScriptValue,
   isUserBinding,
   type BindingTarget,
+  type GeneralKey,
+  type GeneralValues,
   type LayerField,
   type RecompileReason,
   type SceneBinding,
@@ -35,6 +40,7 @@ import {
 } from "./model";
 import {
   bloomParams,
+  flagValue,
   readWpePostprocessing,
   resolvePostprocessLevel,
   scenePostprocessState,
@@ -50,12 +56,10 @@ import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 export interface SceneGeneral {
   width: number;
   height: number;
-  clearColor: number[];
-  clearEnabled: boolean;
-  camera: { eye: number[]; center: number[]; up: number[] };
-  /** `g_LightAmbientColor` / `g_LightSkylightColor`。 */
-  ambient: number[];
-  skylight: number[];
+  /** `GENERAL_FIELDS` 的生效值，`SceneState.general` 的起始值。 */
+  fields: GeneralValues;
+  /** 清屏当前关着，或绑了属性、挂了脚本：加载就建第二张场景目标（L11）。 */
+  clearVariable: boolean;
   /** 本次编译解析出的后处理档位与场景实际的泛光 / HDR 状态（`postprocess.ts`）。 */
   postprocess: ScenePostprocessState;
   /** 场景的泛光参数（缺键已补 WPE 默认值，原值未换算）；泛光关着时也给出，渲染器只在 `bundle.bloom` 存在时用。 */
@@ -299,6 +303,28 @@ interface PassContext {
   unsupported?: Set<string>;
 }
 
+/**
+ * `GENERAL_FIELDS` 的生效值，每个字段登记成就地目标。bool 走 `flagValue`（`{value: false}` 也算），其余走绑定解析；
+ * 不合法时取缺省值，同 WPE 不改字段。`camera` 不在表里：WPE 加载时硬读字符串，绑不了属性（L2）。
+ */
+function generalFields(
+  general: Record<string, unknown>,
+  properties: Record<string, SceneScalar>,
+  bindings: BindingCollector,
+): GeneralValues {
+  let fields = generalDefaults();
+  for (const key of Object.keys(GENERAL_FIELDS) as GeneralKey[]) {
+    const target: BindingTarget = { kind: "general", key };
+    const raw =
+      GENERAL_FIELDS[key].type === "bool"
+        ? flagValue(general[key], properties, bindings, target)
+        : bindings.bind(general[key] as SceneValue | undefined, properties, target);
+    const value = generalValue(key, raw);
+    if (value !== undefined) fields = { ...fields, [key]: value };
+  }
+  return fields;
+}
+
 /** 一个 effect 的不支持项。启用的 effect 同步写给场景级：快速退回与解码判断仍能实时看到。 */
 class EffectIssues extends Set<string> {
   constructor(private readonly scene: Set<string> | null) {
@@ -342,8 +368,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
   checkSceneFeatures(scene, unsupported);
-  const general = scene.general ?? {},
-    camera = scene.camera ?? {};
+  const general = scene.general ?? {};
   // 后处理档位：每次加载都解析（设置变了由调用方重新编译）
   const setting = input.postprocess ?? "follow";
   const wpeSetting = setting === "follow" ? await readWpePostprocessing(input.reader, input.sceneAssets) : null;
@@ -358,34 +383,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     general.orthogonalprojection && typeof general.orthogonalprojection === "object"
       ? (general.orthogonalprojection as { width?: number; height?: number })
       : {};
+  const fields = generalFields(general, properties, bindings);
   const bundle: SceneBundle = {
     general: {
       width: projection.width ?? 1920,
       height: projection.height ?? 1080,
-      clearColor: numbers(
-        bindings.bind(general.clearcolor as SceneValue, properties, recompile("general", "general.clearcolor")),
-        [0, 0, 0],
-      ),
-      clearEnabled: general.clearenabled !== false,
-      camera: {
-        eye: numbers(
-          bindings.bind(camera.eye as SceneValue, properties, recompile("general", "camera.eye")),
-          [0, 0, 1],
-        ),
-        center: numbers(
-          bindings.bind(camera.center as SceneValue, properties, recompile("general", "camera.center")),
-          [0, 0, 0],
-        ),
-        up: numbers(bindings.bind(camera.up as SceneValue, properties, recompile("general", "camera.up")), [0, 1, 0]),
-      },
-      ambient: numbers(
-        bindings.bind(general.ambientcolor as SceneValue, properties, recompile("general", "general.ambientcolor")),
-        [0, 0, 0],
-      ),
-      skylight: numbers(
-        bindings.bind(general.skylightcolor as SceneValue, properties, recompile("general", "general.skylightcolor")),
-        [0, 0, 0],
-      ),
+      fields,
+      clearVariable: !fields.clearenabled || isUserBinding(general.clearenabled) || isScriptValue(general.clearenabled),
       postprocess,
       bloom: bloomParams(general, properties, bindings),
     },

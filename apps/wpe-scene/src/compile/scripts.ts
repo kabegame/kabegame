@@ -1,5 +1,12 @@
 import { init, parse } from "es-module-lexer";
-import { type BindingTarget, type TargetKey, type ValueType, type SceneBinding } from "./bindings";
+import {
+  GENERAL_FIELDS,
+  type BindingTarget,
+  type GeneralKey,
+  type SceneBinding,
+  type TargetKey,
+  type ValueType,
+} from "./bindings";
 import { resolveValue, type SceneJson, type SceneScalar, type SceneValue } from "./model";
 import { BLOOM_FIELDS } from "./postprocess";
 
@@ -56,6 +63,7 @@ function targetOf(path: string, owner: ScriptOwner, key: string, initial: SceneS
   if (owner.kind === "general" && key === "bloom") return { kind: "bloom-enabled" };
   if (owner.kind === "general" && key in BLOOM_FIELDS)
     return { kind: "bloom", field: BLOOM_FIELDS[key as keyof typeof BLOOM_FIELDS] };
+  if (owner.kind === "general" && key in GENERAL_FIELDS) return { kind: "general", key: key as GeneralKey };
   if (owner.kind === "material")
     return {
       kind: "constant",
@@ -110,7 +118,12 @@ export async function collectScripts(
         id: path,
         source: raw.script,
         target: targetOf(path, owner, key, initial),
-        valueType: owner.kind === "layer" && key in layerTypes ? layerTypes[key] : valueType(initial),
+        valueType:
+          owner.kind === "layer" && key in layerTypes
+            ? layerTypes[key]
+            : owner.kind === "general" && key in GENERAL_FIELDS
+              ? GENERAL_FIELDS[key as GeneralKey].type
+              : valueType(initial),
         initial,
         owner,
         layer,

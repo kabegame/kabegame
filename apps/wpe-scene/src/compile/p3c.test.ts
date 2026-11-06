@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { SceneState } from "../render/state";
+import {
+  GENERAL_FIELDS,
+  generalDefaults,
+  generalValue,
+  type GeneralKey,
+  type RecompileReason,
+  type SceneBinding,
+} from "./bindings";
 import { compileScene, type SceneBundle } from "./bundle";
 import type { SceneReader } from "./fs";
+import { observePropertyReads, type SceneScalar } from "./model";
 import { TEX_FLAGS } from "./tex";
 import type { TranslateRequest, TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 
@@ -260,5 +270,204 @@ describe("没有绑定的场景", () => {
     const bundle = await compile([{ file: "effects/good/effect.json" }]);
     expect(effectsOf(bundle)).toHaveLength(1);
     expect(effectsOf(bundle)[0]).toMatchObject({ enabled: true, visibleBound: false, unsupported: [] });
+  });
+});
+
+/** 只有基础图层的场景，`general` 并进投影设置之后；`extra` 写 scene.json 顶层（如 `camera`）。 */
+async function compileGeneral(
+  general: Record<string, unknown>,
+  userProperties: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
+) {
+  return compileScene({
+    projectDir: "P:/p",
+    sceneAssets: ["A:/assets"],
+    userProperties,
+    reader: memoryReader({
+      ...FILES,
+      "P:/p/scene.json": JSON.stringify({
+        general: { orthogonalprojection: { width: 64, height: 32 }, ...general },
+        objects: [{ id: 1, name: "a", image: "models/a.json" }],
+        ...extra,
+      }),
+    }),
+    translator: translator(),
+    postprocess: "disabled",
+  });
+}
+
+describe("general 字段表", () => {
+  const keys = Object.keys(GENERAL_FIELDS) as GeneralKey[];
+  /** 全部字段都绑属性 `p_<键>`；`camerashake` 这类写成对象会被能力表报出来，这里只看绑定。 */
+  const allBound = () => Object.fromEntries(keys.map((key) => [key, { user: `p_${key}`, value: null }]));
+
+  it("缺键时取表里的缺省值（L1、L14）", async () => {
+    const { general } = await compileGeneral({});
+    expect(general.fields).toEqual(generalDefaults());
+    expect(general.fields).toMatchObject({
+      clearcolor: [0, 0, 0],
+      clearenabled: true,
+      fov: 50,
+      nearz: 0.1,
+      farz: 10000,
+      camerafade: true,
+      camerashake: false,
+      camerashakespeed: 3,
+      camerashakeamplitude: 0.5,
+      camerashakeroughness: 1,
+      cameraparallax: false,
+      cameraparallaxamount: 0.5,
+      cameraparallaxdelay: 0.1,
+      cameraparallaxmouseinfluence: 0.5,
+    });
+    expect(general.clearVariable).toBe(false);
+  });
+
+  it("generalDefaults 每次一份新的，vec3 不共用数组", () => {
+    generalDefaults().clearcolor[0] = 1;
+    expect(generalDefaults().clearcolor).toEqual([0, 0, 0]);
+    expect(GENERAL_FIELDS.clearcolor.fallback).toEqual([0, 0, 0]);
+  });
+
+  it("表里每个字段写成 {user} 都登记成 general 目标，写法含条件", async () => {
+    const { bindings } = await compileGeneral(allBound());
+    for (const key of keys) expect(bindings).toContainEqual({ property: `p_${key}`, target: { kind: "general", key } });
+    const conditional = await compileGeneral({ clearenabled: { user: { name: "m", condition: "a" }, value: true } });
+    expect(conditional.bindings).toContainEqual({
+      property: "m",
+      condition: "a",
+      target: { kind: "general", key: "clearenabled" },
+    });
+  });
+
+  it("编译期读过的属性都在绑定表里：完整性同 P3a", async () => {
+    const read = new Set<string>();
+    observePropertyReads((name) => read.add(name));
+    try {
+      const { bindings } = await compileGeneral(allBound());
+      const bound = new Set(bindings.map((binding) => binding.property));
+      expect([...read].filter((name) => !bound.has(name))).toEqual([]);
+      expect(read.size).toBe(keys.length);
+    } finally {
+      observePropertyReads(null);
+    }
+  });
+
+  it.each<[GeneralKey, SceneScalar, unknown]>([
+    ["clearcolor", "0.25 0.5 0.75", [0.25, 0.5, 0.75]],
+    ["clearcolor", 0.25, [0.25, 0.25, 0.25]],
+    ["ambientcolor", "0.2 0.4 0.6", [0.2, 0.4, 0.6]],
+    ["ambientcolor", 0.5, [0.5, 0.5, 0.5]],
+    ["skylightcolor", "0.6 0.4 0.2 1", [0.6, 0.4, 0.2]],
+    ["clearenabled", false, false],
+    ["camerafade", false, false],
+    ["camerashake", true, true],
+    ["fov", 33, 33],
+    ["nearz", 0.5, 0.5],
+    ["cameraparallaxamount", "0.4", 0.4],
+  ])("编译与就地写取值相同：%s = %j", async (key, value, expected) => {
+    const bound = { [key]: { user: "v", value: null } };
+    const compiled = await compileGeneral(bound, { v: value });
+    expect(compiled.general.fields[key]).toEqual(expected);
+    const before = await compileGeneral(bound);
+    const state = SceneState.fromBundle(before);
+    for (const binding of before.bindings.filter((item) => item.property === "v")) state.write(binding, value);
+    expect(state.general).toEqual(compiled.general.fields);
+  });
+
+  it("条件：值换成布尔，编译与就地写相同", async () => {
+    const bound = { clearenabled: { user: { name: "m", condition: "a" }, value: true } };
+    expect((await compileGeneral(bound, { m: "a" })).general.fields.clearenabled).toBe(true);
+    const off = await compileGeneral(bound, { m: "b" });
+    expect(off.general.fields.clearenabled).toBe(false);
+    const state = SceneState.fromBundle(off);
+    state.write(
+      off.bindings.find((item) => item.property === "m")!,
+      "a",
+    );
+    expect(state.general.clearenabled).toBe(true);
+  });
+
+  it("bool 字段：{value: false} 算关，null 取缺省（neon_sunset 写的就是 null）", async () => {
+    expect((await compileGeneral({ clearenabled: { value: false } })).general.fields.clearenabled).toBe(false);
+    expect((await compileGeneral({ clearenabled: null })).general.fields.clearenabled).toBe(true);
+    expect((await compileGeneral({ camerafade: { value: false } })).general.fields.camerafade).toBe(false);
+  });
+
+  it.each<[GeneralKey, SceneScalar | undefined]>([
+    ["clearcolor", "a b c"],
+    ["clearcolor", "1 2"],
+    ["clearcolor", true],
+    ["clearcolor", null],
+    ["clearcolor", undefined],
+    ["clearenabled", 0],
+    ["clearenabled", "false"],
+    ["camerashake", 1],
+    ["fov", "1 2"],
+    ["fov", true],
+    ["fov", Number.POSITIVE_INFINITY],
+    ["fov", Number.NaN],
+  ])("不合法的值不改字段：%s = %j", async (key, value) => {
+    expect(generalValue(key, value)).toBeUndefined();
+    const state = SceneState.fromBundle(await compileGeneral({}));
+    const before = state.general;
+    if (value !== undefined) state.write({ property: "v", target: { kind: "general", key } }, value);
+    expect(state.general).toBe(before);
+  });
+
+  it("不合法的值：编译取缺省值", async () => {
+    const { general } = await compileGeneral({ clearcolor: "a b c", fov: "x", clearenabled: 0 });
+    expect(general.fields).toEqual(generalDefaults());
+  });
+
+  it("camera.* 写成 {user} 时不登记、不读属性（L2）", async () => {
+    const read = new Set<string>();
+    observePropertyReads((name) => read.add(name));
+    try {
+      const { bindings, general, unsupported } = await compileGeneral(
+        {},
+        { e: "1 2 3", c: "4 5 6", u: "7 8 9" },
+        { camera: { eye: { user: "e", value: "0 0 1" }, center: { user: "c" }, up: { user: "u" } } },
+      );
+      expect(bindings).toEqual([]);
+      expect(read).toEqual(new Set());
+      expect("camera" in general).toBe(false);
+      expect(unsupported).toEqual([]);
+    } finally {
+      observePropertyReads(null);
+    }
+  });
+
+  it.each<[string, unknown, boolean]>([
+    ["缺键", undefined, false],
+    ["写死 true", true, false],
+    ["null", null, false],
+    ["写死 false", false, true],
+    ["{value: false}", { value: false }, true],
+    ["绑了属性", { user: "c", value: true }, true],
+    ["挂了脚本", { script: "export function update(v) { return v; }", value: true }, true],
+  ])("clearVariable：%s", async (_name, clearenabled, expected) => {
+    const bundle = await compileGeneral(clearenabled === undefined ? {} : { clearenabled });
+    expect(bundle.general.clearVariable).toBe(expected);
+    expect(bundle.unsupported).toEqual([]);
+  });
+});
+
+describe("重编译原因", () => {
+  it("只剩两项", () => {
+    // 类型层面的穷举：多一项或少一项 tsc 都不过
+    const reasons: Record<RecompileReason, true> = { "layer-structure": true, "postprocess-hdr": true };
+    expect(Object.keys(reasons)).toHaveLength(2);
+  });
+
+  it("general 里只有 hdr 还是重编译目标", async () => {
+    const { bindings } = await compileGeneral({
+      clearcolor: { user: "a", value: "0 0 0" },
+      hdr: { user: "h", value: false },
+    });
+    const of = (property: string): SceneBinding["target"] | undefined =>
+      bindings.find((binding) => binding.property === property)?.target;
+    expect(of("a")).toEqual({ kind: "general", key: "clearcolor" });
+    expect(of("h")).toEqual({ kind: "recompile", reason: "postprocess-hdr", path: "general.hdr" });
   });
 });

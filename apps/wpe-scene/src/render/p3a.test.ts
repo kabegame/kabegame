@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { SceneBloom } from "../compile/bloom";
 import {
+  generalDefaults,
   mergeProperties,
   pendingChanges,
   planApply,
@@ -18,7 +19,7 @@ import type { TranslateResult } from "../wpesl2wgsl";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { planLayer, type TextureRef } from "./graph";
-import { sceneTargetSize, sceneViewProjection } from "./layout";
+import { eyePosition, sceneTargetSize, sceneViewProjection } from "./layout";
 import type { GpuProgram } from "./programs";
 import { checkRenderable, visibleObjects } from "./scene";
 import { SceneState, type LayerState } from "./state";
@@ -124,11 +125,8 @@ function synthetic(
     general: {
       width: 64,
       height: 32,
-      clearColor: [0, 0, 0],
-      clearEnabled: true,
-      camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
-      ambient: [0.1, 0.1, 0.1],
-      skylight: [0.2, 0.2, 0.2],
+      fields: { ...generalDefaults(), ambientcolor: [0.1, 0.1, 0.1], skylightcolor: [0.2, 0.2, 0.2] },
+      clearVariable: false,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },
@@ -177,9 +175,9 @@ function uniformBytes(bundle: SceneBundle, state: SceneState): Map<string, Uint8
         colorScale: bundle.general.postprocess.hdr ? layerState.brightness : 1,
         screenSize: [width, height],
         textures: Array.from({ length: slots }, (_, slot) => sizeOf(step.inputs[slot])),
-        eye: bundle.general.camera.eye,
-        ambient: bundle.general.ambient,
-        skylight: bundle.general.skylight,
+        eye: eyePosition(bundle.general),
+        ambient: state.general.ambientcolor,
+        skylight: state.general.skylightcolor,
       });
       const block = new UniformBlock((program.uniforms ?? []) as UniformEntry[], program.uniformBlockSize ?? 0);
       for (const [name, value] of Object.entries(values)) block.set(name, value);
@@ -253,7 +251,7 @@ describe("就地 = 重编译（字节级，合成用例）", () => {
       colorScale: 1,
       screenSize: [64, 32],
       textures: [],
-      eye: bundle.general.camera.eye,
+      eye: eyePosition(bundle.general),
     });
     expect(values.g_Color4).toEqual([1, 1, 1, 1]);
     expect(values.g_UserAlpha).toEqual([0.5]);
@@ -457,7 +455,13 @@ describe("可见性、泛光与加载期间增量", () => {
 
   it("SceneState：泛光写入标记脏项，级数取整与编译期一致", () => {
     const state = SceneState.fromBundle(synthetic());
-    expect(state.takeDirty()).toEqual({ layers: new Set(), passes: new Set(), bloom: false, structures: new Set() });
+    expect(state.takeDirty()).toEqual({
+      layers: new Set(),
+      passes: new Set(),
+      bloom: false,
+      structures: new Set(),
+      lights: false,
+    });
     state.write({ property: "glow", target: { kind: "bloom", field: "hdrStrength" } }, 5);
     state.write({ property: "iters", target: { kind: "bloom", field: "hdrIterations" } }, 3.9);
     state.write({ property: "tint", target: { kind: "bloom", field: "tint" } }, "1 0 0");
@@ -495,7 +499,13 @@ describe("可见性、泛光与加载期间增量", () => {
       expect(state.bloomEnabled).toBe(false);
       expect(state.write(BLOOM_ENABLED, true)).toBe("applied");
       expect(state.bloomEnabled).toBe(true);
-      expect(state.takeDirty()).toEqual({ layers: new Set(), passes: new Set(), bloom: false, structures: new Set() });
+      expect(state.takeDirty()).toEqual({
+        layers: new Set(),
+        passes: new Set(),
+        bloom: false,
+        structures: new Set(),
+        lights: false,
+      });
     });
 
     it("condition：按字符串比出布尔", () => {

@@ -89,7 +89,7 @@ export function scenePostprocessState(
   // hdr 与档位无关地求值：写成 `{user}` 时也要登记，档位改到超高时才用得上（P3a）
   const hdrKey = flagValue(general?.hdr, properties, bindings, {
     kind: "recompile",
-    reason: "postprocess",
+    reason: "postprocess-hdr",
     path: "general.hdr",
   });
   const bloomFlag = bloomKey !== false;
@@ -110,8 +110,9 @@ function fileFlag(value: unknown): boolean | undefined {
  * `general.bloom` / `general.hdr` 的生效值（setter `FUN_14019b4e0` / `FUN_14019b6f0`）：bool 原样；带 `user` 的对象取属性当前值，
  * 否则取对象的 `value`；结果不是 bool 时 WPE 不改位，返回 undefined（泛光保留默认开、HDR 保留默认关）。
  * 带 `bindings` 时登记成 `target`：`bloom` 运行时就地改，`hdr` 决定目标格式，改值走整场重编译。
+ * `GENERAL_FIELDS` 里的 bool 字段同样走这里（`compileScene`）。
  */
-function flagValue(
+export function flagValue(
   value: unknown,
   properties: Record<string, SceneScalar>,
   bindings: BindingCollector | undefined,

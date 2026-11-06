@@ -1,12 +1,19 @@
 /**
  * CPU 侧的场景状态（P3a 点 2）：就地写落在它上面并标脏，`GpuScene.sync` 每帧把脏项刷进对应 draw 的 uniform 块、
- * 图层可见性或泛光链参数，一帧之内生效。`bloomEnabled` 不标脏，`GpuScene.encode` 每帧直接读（A1）。
+ * 图层可见性或泛光链参数，一帧之内生效。`bloomEnabled` 与清屏两项不标脏，`GpuScene.encode` 每帧直接读（A1、L4）。
  *
  * 它**独立于 GPU**：只是数据加脏集合。draw 的 uniform 组装是纯函数（`render/uniforms.ts` 的 `drawUniformValues`），
  * 单测在 Node 里就能核对「就地改值后的 uniform 字节 = 用新值整场重编译得到的字节」，这是本阶段最主要的正确性判据。
  * 3b 的脚本写的也是这个状态（`write` 的目标形状复用绑定表，值按 3b 的返回值规则换算）。
  */
-import { bindingValue, type SceneBinding, type TargetKey, type LayerField } from "../compile/bindings";
+import {
+  bindingValue,
+  generalValue,
+  type GeneralValues,
+  type LayerField,
+  type SceneBinding,
+  type TargetKey,
+} from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
@@ -30,6 +37,8 @@ export interface DirtyState {
   bloom: boolean;
   /** effect 开关变了的图层（`objects` 下标）：渲染图可能要重排（3c）。 */
   structures: Set<number>;
+  /** `ambientcolor` / `skylightcolor` 写过：刷进声明了这两个 uniform 的 draw（L5）。 */
+  lights: boolean;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -43,9 +52,14 @@ function effectKey(object: number, effect: number): string {
   return `${object}/${effect}`;
 }
 
+/** 有 `condition` 时值换成布尔，按字符串比（I3）。 */
+function conditioned({ condition }: SceneBinding, raw: SceneScalar): SceneScalar {
+  return condition === undefined ? raw : String(raw) === condition;
+}
+
 /** `general.bloom` 的写入值：WPE 的 setter 只认 bool，别的值不改位（G4），同 `flagValue`；不改位时返回 undefined。 */
 function bloomFlagOf(binding: SceneBinding, raw: SceneScalar): boolean | undefined {
-  const value = binding.condition === undefined ? raw : String(raw) === binding.condition;
+  const value = conditioned(binding, raw);
   return typeof value === "boolean" ? value : undefined;
 }
 
@@ -118,10 +132,13 @@ export class SceneState {
   bloom: BloomParams;
   /** 场景的 bloom 位，不含档位（WPE 的 `+0xe0` bit1）。档位关闭时没有泛光链，位怎么变都没有效果。 */
   bloomEnabled: boolean;
+  /** 起始值 = `bundle.general.fields`。清屏两项不标脏，`encode` 每帧读（L4）。 */
+  general: GeneralValues;
   private dirtyLayers = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
   private dirtyStructures = new Set<number>();
+  private lightsDirty = false;
   /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
   private readonly frozenLayers = new Set<number>();
 
@@ -133,11 +150,13 @@ export class SceneState {
     bloomEnabled: boolean,
     /** 档位允许但没有编泛光链：打开要整场重编译。 */
     private readonly bloomMissing: boolean,
+    general: GeneralValues,
   ) {
     this.layers = layers;
     this.constants = constants;
     this.bloom = bloom;
     this.bloomEnabled = bloomEnabled;
+    this.general = general;
   }
 
   static fromBundle(bundle: SceneBundle): SceneState {
@@ -157,7 +176,7 @@ export class SceneState {
       }
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
     }
-    const { bloom, postprocess } = bundle.general;
+    const { bloom, postprocess, fields } = bundle.general;
     return new SceneState(
       layers,
       constants,
@@ -165,6 +184,7 @@ export class SceneState {
       effects,
       postprocess.bloomFlag,
       !bundle.bloom && postprocess.level !== "disabled",
+      { ...fields },
     );
   }
 
@@ -218,6 +238,13 @@ export class SceneState {
       this.bloomEnabled = value;
       return recompile ? "recompile" : "applied";
     }
+    if (target.kind === "general") {
+      const value = generalValue(target.key, conditioned(binding, raw));
+      if (value === undefined) return "applied";
+      this.general = { ...this.general, [target.key]: value };
+      if (target.key === "ambientcolor" || target.key === "skylightcolor") this.lightsDirty = true;
+      return "applied";
+    }
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
       if (layer) {
@@ -247,11 +274,13 @@ export class SceneState {
       passes: this.dirtyPasses,
       bloom: this.bloomDirty,
       structures: this.dirtyStructures,
+      lights: this.lightsDirty,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
     this.bloomDirty = false;
     this.dirtyStructures = new Set();
+    this.lightsDirty = false;
     return dirty;
   }
 }

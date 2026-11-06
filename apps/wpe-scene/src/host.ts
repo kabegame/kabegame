@@ -1,6 +1,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { describeApply, mergeProperties, pendingChanges, planApply, type UserProperty } from "./compile/bindings";
+import {
+  describeApply,
+  mergeProperties,
+  pendingChanges,
+  planApply,
+  type GeneralKey,
+  type UserProperty,
+} from "./compile/bindings";
 import type { SceneBundle } from "./compile/bundle";
 import { compileSceneInWorker } from "./compile/client";
 import { TextureDecodeCache } from "./compile/decode";
@@ -53,6 +60,13 @@ function asPostprocess(value: unknown): ScenePostprocessSetting {
 
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** 日志里的泛光状态：有链不等于开着，当前开不开看场景位。 */
+function bloomLabel(bloom: SceneBundle["bloom"], enabled: boolean): string {
+  if (!bloom) return "无泛光";
+  const label = enabled ? "泛光" : "泛光（关）";
+  return bloom.hdr ? `${label} + HDR` : label;
 }
 
 /** 每个 iframe 只有一个 SceneHost；属性由垫片推送，实例随 iframe 一同销毁。 */
@@ -188,9 +202,14 @@ export class SceneHost {
       bundle.bindings,
     );
     if (plan.recompile.length || !applied) {
+      const blockedTag = (label: string, kind: BindingTarget["kind"]) => {
+        const paths = blocked.filter((target) => target.kind === kind).map((target) => this.targetPath(target));
+        return paths.length ? [`${label}（${paths.join("、")}）`] : [];
+      };
       const reasons = [
         ...(plan.recompile.length ? [describeApply(plan)] : []),
-        ...(blockedPaths.length ? [`effect-blocked（${blockedPaths.join("、")}）`] : []),
+        ...blockedTag("effect-blocked", "effect"),
+        ...blockedTag("bloom-missing", "bloom-enabled"),
       ];
       const reason = reasons.join("；") || "就地写失败";
       const unsupported = blocked.flatMap((target) => (target.kind === "effect" ? this.effectIssues(target) : []));
@@ -241,6 +260,7 @@ export class SceneHost {
     if (target.kind === "bloom") return `general/bloom/${target.field}`;
     // 与 `scriptOverrides` 的路径相同：兜底重编译时编译器读得到
     if (target.kind === "bloom-enabled") return "general/bloom";
+    if (target.kind === "general") return `general/${target.key}`;
     if (target.kind === "recompile") return target.path;
     return `${target.script}/scriptproperties/${target.key}`;
   }
@@ -259,6 +279,10 @@ export class SceneHost {
       return Array.isArray(value) ? value : [value];
     }
     if (target.kind === "bloom-enabled") return state.bloomEnabled;
+    if (target.kind === "general") {
+      const value = state.general[target.key];
+      return typeof value === "number" ? [value] : value;
+    }
     return null;
   }
 
@@ -285,16 +309,7 @@ export class SceneHost {
   }
 
   private recompileValue(path: string): number[] | boolean | undefined {
-    const bundle = this.scriptBundle;
-    if (!bundle) return undefined;
-    const general: Record<string, number[] | boolean> = {
-      "general/clearcolor": bundle.general.clearColor,
-      "general/clearenabled": bundle.general.clearEnabled,
-      "general/ambientcolor": bundle.general.ambient,
-      "general/skylightcolor": bundle.general.skylight,
-      "general/hdr": bundle.general.postprocess.hdrFlag,
-    };
-    return general[path];
+    return path === "general/hdr" ? this.scriptBundle?.general.postprocess.hdrFlag : undefined;
   }
 
   private requestScriptReload(): void {
@@ -469,6 +484,7 @@ export class SceneHost {
     if (path === "general/bloom") return state.bloomEnabled;
     if (path.startsWith("general/bloom/"))
       return state.bloom[path.slice("general/bloom/".length) as keyof SceneState["bloom"]] ?? null;
+    if (path.startsWith("general/")) return state.general[path.slice("general/".length) as GeneralKey] ?? null;
     const layer = /^objects\/(\d+)\/(origin|scale|angles|alpha|color|brightness|visible)$/.exec(path);
     if (layer)
       return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;
@@ -647,7 +663,7 @@ export class SceneHost {
       const stats = current.sceneStats;
       const post = bundle.general.postprocess;
       const detail =
-        `后处理 ${post.level}（${bundle.bloom ? (bundle.bloom.hdr ? "泛光 + HDR" : "泛光") : "无泛光"}）` +
+        `后处理 ${post.level}（${bloomLabel(bundle.bloom, current.sceneState?.bloomEnabled ?? false)}）` +
         (stats
           ? `，目标 ${stats.width}×${stats.height} ${stats.format}、渲染目标约 ${Math.round(stats.targetBytes / 2 ** 20)} MiB`
           : "");

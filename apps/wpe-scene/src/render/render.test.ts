@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, type SceneBundle, type SceneTexture } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
+import { generalDefaults } from "../compile/bindings";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { FrameThrottle, PausableClock } from "./clock";
@@ -399,11 +400,8 @@ describe("可渲染性自查", () => {
     general: {
       width: 1,
       height: 1,
-      clearColor: [0, 0, 0],
-      clearEnabled: true,
-      camera: { eye: [], center: [], up: [] },
-      ambient: [0, 0, 0],
-      skylight: [0, 0, 0],
+      fields: generalDefaults(),
+      clearVariable: false,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },

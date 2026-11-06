@@ -174,15 +174,16 @@ describe("取值换算与分类（无 GPU、无语料）", () => {
       { property: "bloom-iterations", target: { kind: "bloom", field: "hdrIterations" } },
       { property: "bloom-switch", target: { kind: "bloom-enabled" } },
       { property: "effect-visible", target: { kind: "effect", object: 0, effect: 0 } },
+      { property: "clear", target: { kind: "general", key: "clearcolor" } },
+      { property: "clear-enabled", target: { kind: "general", key: "clearenabled" } },
+      { property: "ambient", target: { kind: "general", key: "ambientcolor" } },
+      { property: "skylight", target: { kind: "general", key: "skylightcolor" } },
+      { property: "fov", target: { kind: "general", key: "fov" } },
     ];
     const recompiled: SceneBinding[] = [
-      { property: "hdr", target: recompile("postprocess", "general.hdr") },
+      { property: "hdr", target: recompile("postprocess-hdr", "general.hdr") },
       { property: "cbm", target: recompile("layer-structure", "objects/0/colorBlendMode") },
       { property: "size", target: recompile("layer-structure", "objects/0/size") },
-      { property: "clear", target: recompile("general", "general.clearcolor") },
-      { property: "ambient", target: recompile("general", "general.ambientcolor") },
-      { property: "skylight", target: recompile("general", "general.skylightcolor") },
-      { property: "eye", target: recompile("general", "camera.eye") },
     ];
     const bindings = [...inPlace, ...recompiled];
     const changes = new Map<string, string>([...bindings.map((b) => [b.property, "1"] as [string, string])]);
@@ -214,7 +215,7 @@ describe("general.bloom 与 general.hdr 的绑定目标", () => {
     );
     expect(bindings.list).toEqual([
       { property: "b", condition: "on", target: { kind: "bloom-enabled" } },
-      { property: "h", target: { kind: "recompile", reason: "postprocess", path: "general.hdr" } },
+      { property: "h", target: { kind: "recompile", reason: "postprocess-hdr", path: "general.hdr" } },
     ]);
   });
   it("没写成 {user} 的不登记", () => {
@@ -227,9 +228,9 @@ describe("general.bloom 与 general.hdr 的绑定目标", () => {
 describe.skipIf(!corpus)("本机语料：绑定表", () => {
   it("脚本重编译目标按 scene.json 路径覆盖编译输入", async () => {
     const bundle = await compile(sample("eagleflag"), {
-      scriptOverrides: { "general/clearcolor": [1, 0, 0] },
+      scriptOverrides: { "general/hdr": true },
     });
-    expect(bundle.general.clearColor).toEqual([1, 0, 0]);
+    expect(bundle.general.postprocess.hdrFlag).toBe(true);
   }, 120000);
   it("razer_vortex：brightness / length / speed 都是 tint pass 的材质常量", async () => {
     const bundle = await compile(sample("razer_vortex"));

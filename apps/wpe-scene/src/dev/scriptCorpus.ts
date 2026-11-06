@@ -118,6 +118,10 @@ export async function scriptCorpus(
           read(target) {
             if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
             if (target.kind === "bloom-enabled") return state.bloomEnabled;
+            if (target.kind === "general") {
+              const value = state.general[target.key];
+              return typeof value === "number" ? [value] : value;
+            }
             if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
             if (target.kind === "layer") {
               const value = state.layers.get(target.object)?.[target.field];
@@ -141,6 +145,10 @@ export async function scriptCorpus(
           read(target) {
             if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
             if (target.kind === "bloom-enabled") return state.bloomEnabled;
+            if (target.kind === "general") {
+              const value = state.general[target.key];
+              return typeof value === "number" ? [value] : value;
+            }
             if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
             if (target.kind === "layer") {
               const value = state.layers.get(target.object)?.[target.field];

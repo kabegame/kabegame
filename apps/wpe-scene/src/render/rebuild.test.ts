@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { generalDefaults, type GeneralKey, type GeneralValues } from "../compile/bindings";
 import {
   FRAMEBUFFER_RT,
   type SceneBundle,
@@ -9,12 +10,16 @@ import {
   type ScenePass,
   type SceneTexture,
 } from "../compile/bundle";
+import type { SceneScalar } from "../compile/model";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
+import { hostRenderFrame, hostStats } from "../dev/probe";
+import type { SceneHost } from "../host";
 import type { TranslateResult } from "../wpesl2wgsl";
 import type { BloomStep } from "./bloom";
 import { acquireGpu } from "./device";
 import { SceneRenderError } from "./errors";
 import type { FboBindings } from "./graph";
+import { eyePosition } from "./layout";
 import { SceneRenderer } from "./renderer";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
@@ -25,6 +30,7 @@ vi.mock("./device", () => ({ acquireGpu: vi.fn() }));
 type Size = { width: number; height: number };
 interface FakeTexture {
   label: string;
+  format: GPUTextureFormat;
   width: number;
   height: number;
   createView(): { label: string };
@@ -47,6 +53,8 @@ class FakeGpu {
   readonly trace: string[] = [];
   /** 已提交的清屏：`目标 清屏色`。 */
   readonly cleared: string[] = [];
+  /** 已提交的纹理拷贝：`源 -> 目标`。 */
+  readonly copied: string[] = [];
   readonly scopes: { filter: string; error: string | null }[] = [];
   /** 每条校验错误报出时的作用域栈（由外到内）。 */
   readonly errorStacks: string[][] = [];
@@ -83,6 +91,7 @@ class FakeGpu {
         const { width, height } = descriptor.size as Size;
         const texture: FakeTexture = {
           label: descriptor.label ?? "",
+          format: descriptor.format,
           width,
           height,
           createView: () => ({ label: descriptor.label ?? "" }),
@@ -100,7 +109,12 @@ class FakeGpu {
           destroy: () => this.live.delete(buffer),
         };
         this.live.add(buffer);
-        return buffer;
+        // 探针读回用的三个方法
+        return Object.assign(buffer, {
+          mapAsync: async () => {},
+          getMappedRange: () => buffer.bytes.buffer,
+          unmap() {},
+        });
       },
       createShaderModule: (descriptor: GPUShaderModuleDescriptor) => {
         this.counts.modules++;
@@ -136,17 +150,27 @@ class FakeGpu {
       createCommandEncoder: () => {
         this.encoders++;
         const clears: string[] = [];
+        const copies: string[] = [];
         return {
           beginRenderPass: (descriptor: GPURenderPassDescriptor) => {
             const attachment = [...descriptor.colorAttachments][0]!;
             const { label } = attachment.view as unknown as { label: string };
-            this.trace.push(`pass ${label} ${attachment.loadOp}`);
+            const clearValue = attachment.loadOp === "clear" ? ` ${JSON.stringify(attachment.clearValue)}` : "";
+            this.trace.push(`pass ${label} ${attachment.loadOp}${clearValue}`);
             if (attachment.loadOp === "clear") clears.push(`${label} ${JSON.stringify(attachment.clearValue)}`);
             return pass();
           },
-          copyTextureToTexture: (source: { texture: { label: string } }, destination: { texture: { label: string } }) =>
-            this.trace.push(`copy ${source.texture.label} -> ${destination.texture.label}`),
-          finish: () => ({ clears }),
+          copyTextureToTexture: (
+            source: { texture: { label: string } },
+            destination: { texture: { label: string } },
+          ) => {
+            const copy = `${source.texture.label} -> ${destination.texture.label}`;
+            this.trace.push(`copy ${copy}`);
+            copies.push(copy);
+          },
+          copyTextureToBuffer: (source: { texture: { label: string } }) =>
+            this.trace.push(`readback ${source.texture.label}`),
+          finish: () => ({ clears, copies }),
         };
       },
       queue: {
@@ -154,8 +178,11 @@ class FakeGpu {
           buffer.bytes = new Uint8Array(data.slice(0));
         },
         writeTexture() {},
-        submit: (commands: { clears: string[] }[]) => {
-          for (const { clears } of commands) this.cleared.push(...clears);
+        submit: (commands: { clears: string[]; copies: string[] }[]) => {
+          for (const { clears, copies } of commands) {
+            this.cleared.push(...clears);
+            this.copied.push(...copies);
+          }
         },
         onSubmittedWorkDone: async () => {},
       },
@@ -301,11 +328,8 @@ function bundleOf(layers: SceneLayer[], overrides: Partial<SceneBundle> = {}): S
     general: {
       width: 256,
       height: 128,
-      clearColor: [0, 0, 0],
-      clearEnabled: true,
-      camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
-      ambient: [0.1, 0.1, 0.1],
-      skylight: [0.2, 0.2, 0.2],
+      fields: { ...generalDefaults(), ambientcolor: [0.1, 0.1, 0.1], skylightcolor: [0.2, 0.2, 0.2] },
+      clearVariable: false,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },
@@ -445,7 +469,8 @@ function lazyEffect(enabled: boolean): SceneBundle {
 
 beforeEach(() => {
   vi.stubGlobal("GPUTextureUsage", { RENDER_ATTACHMENT: 1, TEXTURE_BINDING: 2, COPY_SRC: 4, COPY_DST: 8 });
-  vi.stubGlobal("GPUBufferUsage", { VERTEX: 1, UNIFORM: 2, COPY_DST: 4 });
+  vi.stubGlobal("GPUBufferUsage", { VERTEX: 1, UNIFORM: 2, COPY_DST: 4, MAP_READ: 8 });
+  vi.stubGlobal("GPUMapMode", { READ: 1 });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -947,7 +972,7 @@ describe("effect 切换", () => {
 
   describe("渲染循环", () => {
     /** 跑起来的渲染器；`frames` 是排队的 rAF 回调。 */
-    async function start(onError: (reasons: string[]) => void) {
+    async function start(onError: (reasons: string[]) => void, bundle = twoEffects([true, true])) {
       const frames: FrameRequestCallback[] = [];
       const gpu = new FakeGpu();
       vi.mocked(acquireGpu).mockResolvedValue({
@@ -972,8 +997,8 @@ describe("effect 切换", () => {
         getBoundingClientRect: () => ({ width: 100, height: 100 }),
       } as unknown as HTMLCanvasElement;
       const renderer = await SceneRenderer.create(canvas, { onError, maxFps: 0 });
-      await renderer.load(twoEffects([true, true]));
-      return { renderer, frames };
+      await renderer.load(bundle);
+      return { renderer, frames, gpu };
     }
 
     it("rAF 回调里 sync 抛错：走 onError，不抛出去、不再排下一帧", async () => {
@@ -1024,6 +1049,29 @@ describe("effect 切换", () => {
       frames.at(-1)!(1000);
       expect(internals(scene).layers[0].ops).not.toBe(before);
       expect(onError).not.toHaveBeenCalled();
+      renderer.destroy();
+    });
+
+    it("两张目标：上屏用这一帧画的那张，每张一个 bind group，换场景时清空", async () => {
+      const bundle = twoEffects([true, true]);
+      bundle.general.clearVariable = true;
+      const { renderer, frames, gpu } = await start(vi.fn(), bundle);
+      const groups = (renderer as unknown as { blitBindGroups: Map<unknown, unknown> }).blitBindGroups;
+      const shown = () =>
+        gpu.trace
+          .filter((line) => line.startsWith("bind 0:uniform,1:scene target"))
+          .at(-1)!
+          .split(",")[1];
+      // `load` 画了第一帧：`encode` 开头已经换到第二张
+      expect(shown()).toBe("1:scene target 2");
+      frames.at(-1)!(1000);
+      expect(shown()).toBe("1:scene target");
+      frames.at(-1)!(1016);
+      expect(shown()).toBe("1:scene target 2");
+      expect(groups.size).toBe(2);
+      await renderer.load(twoEffects([true, true]));
+      expect(groups.size).toBe(1);
+      expect(shown()).toBe("1:scene target");
       renderer.destroy();
     });
   });
@@ -1226,6 +1274,360 @@ describe("泛光开关与级数", () => {
     const hdr = (await open(bloomScene(true, true, { hdrIterations: 3 }))).gpu.counts;
     expect(hdr.buffers - without.buffers).toBe(42);
     expect(hdr.textures - without.textures).toBe(9);
+  });
+
+  it("两张目标：快照与 combine 落在当前这张，所以底图含泛光（L20）", async () => {
+    const bundle = bloomScene(false, true);
+    bundle.general.fields.clearenabled = false;
+    bundle.general.clearVariable = true;
+    const live = await open(bundle);
+    const frame = () => capture(live).trace.filter((line) => line.includes("scene target"));
+    const expected = (target: string) => [
+      `pass ${target} load`, // 图层
+      `copy ${target} -> _rt_FullFrameBuffer`,
+      `pass ${target} load`, // combine
+    ];
+    expect(frame()).toEqual(expected("scene target 2"));
+    expect(frame()).toEqual(expected("scene target"));
+    expect(frame()).toEqual(expected("scene target 2"));
+  });
+});
+
+/** 带环境光与 `g_EyePosition` 的程序：跟在 `program` 的成员后面。 */
+const LIGHT_OFFSET = { ambient: 128, skylight: 144, eye: 160 };
+function litProgram(name: string): TranslateResult {
+  const base = program(name) as unknown as { uniforms: object[] };
+  const vec3 = (uniform: string, offset: number) => ({
+    name: uniform,
+    type: "vec3<f32>",
+    declared: "vec3",
+    offset,
+    size: 12,
+  });
+  return {
+    ...base,
+    uniforms: [
+      ...base.uniforms,
+      vec3("g_LightAmbientColor", LIGHT_OFFSET.ambient),
+      vec3("g_LightSkylightColor", LIGHT_OFFSET.skylight),
+      vec3("g_EyePosition", LIGHT_OFFSET.eye),
+    ],
+    uniformBlockSize: 176,
+  } as unknown as TranslateResult;
+}
+
+describe("general 字段", () => {
+  const setGeneral = (state: SceneState, key: GeneralKey, value: SceneScalar) =>
+    state.write({ property: "g", target: { kind: "general", key } }, value);
+
+  /** 两个 effect 的图层，程序都声明环境光；`fields` 覆盖缺省值。 */
+  function lit(
+    fields: Partial<GeneralValues> = {},
+    clearVariable = false,
+    enabled: [boolean, boolean] = [true, true],
+  ): SceneBundle {
+    const bundle = twoEffects(enabled);
+    bundle.programs = bundle.programs.map((_, index) => litProgram(`lit ${index}`));
+    bundle.general.fields = { ...bundle.general.fields, ...fields };
+    bundle.general.clearVariable = clearVariable;
+    return bundle;
+  }
+
+  /** 一帧里画到场景目标的 pass。 */
+  const scenePasses = (live: Live) => capture(live).trace.filter((line) => line.startsWith("pass scene target"));
+  /** 一帧画在哪张目标上。 */
+  const targetOf = (live: Live) => /scene target( 2)?/.exec(scenePasses(live)[0])![0];
+  const sceneTextures = (gpu: FakeGpu) =>
+    gpu.textures.filter((item) => item.label.startsWith("scene target")).map((item) => item.label);
+  const vec3At = (draw: DrawView, offset: number) => [
+    ...new Float32Array(draw.uniformBuffer.bytes.slice().buffer, offset, 3),
+  ];
+  const fround3 = (values: number[]) => values.map(Math.fround);
+  const clearOf = (r: number, g: number, b: number) => JSON.stringify({ r, g, b, a: 1 });
+
+  describe("就地 = 重编译", () => {
+    it.each<[string, GeneralKey, SceneScalar, Partial<GeneralValues>]>([
+      ["clearcolor", "clearcolor", "0.25 0.5 0.75", { clearcolor: [0.25, 0.5, 0.75] }],
+      ["clearcolor 单个数字", "clearcolor", 0.5, { clearcolor: [0.5, 0.5, 0.5] }],
+      ["ambientcolor", "ambientcolor", "0.3 0.6 0.9", { ambientcolor: [0.3, 0.6, 0.9] }],
+      ["ambientcolor 单个数字", "ambientcolor", 0.25, { ambientcolor: [0.25, 0.25, 0.25] }],
+      ["skylightcolor", "skylightcolor", "0.9 0.6 0.3", { skylightcolor: [0.9, 0.6, 0.3] }],
+    ])("%s，再写回原值", async (_name, key, value, fields) => {
+      const live = await open(lit());
+      setGeneral(live.state, key, value);
+      advance(live);
+      expect(capture(live)).toEqual(capture(await fresh(lit(fields))));
+      const original = lit().general.fields[key] as number[];
+      setGeneral(live.state, key, original.join(" "));
+      advance(live);
+      expect(capture(live)).toEqual(capture(await fresh(lit())));
+    });
+
+    it("clearenabled 关再开（声明了可变）", async () => {
+      const live = await open(lit({ clearcolor: [0.1, 0.2, 0.3] }, true));
+      setGeneral(live.state, "clearenabled", false);
+      advance(live);
+      expect(capture(live)).toEqual(
+        capture(await fresh(lit({ clearcolor: [0.1, 0.2, 0.3], clearenabled: false }, true))),
+      );
+      // 比较的那边也先走一帧：两张目标的奇偶要对齐
+      const on = await fresh(lit({ clearcolor: [0.1, 0.2, 0.3] }, true));
+      capture(on);
+      setGeneral(live.state, "clearenabled", true);
+      advance(live);
+      expect(capture(live)).toEqual(capture(on));
+    });
+
+    it("写过环境光之后切 effect，新 draw 拿到的是当前值", async () => {
+      const live = await open(lit());
+      setGeneral(live.state, "ambientcolor", "0.3 0.6 0.9");
+      setGeneral(live.state, "skylightcolor", "0.9 0.6 0.3");
+      live.scene.sync(live.state);
+      toggle(live.state, 0, 2, false);
+      advance(live);
+      const fields = { ambientcolor: [0.3, 0.6, 0.9], skylightcolor: [0.9, 0.6, 0.3] };
+      expect(capture(live)).toEqual(capture(await fresh(lit(fields, false, [true, false]))));
+      for (const draw of internals(live.scene).layers[0].draws) {
+        expect(vec3At(draw, LIGHT_OFFSET.ambient)).toEqual(fround3([0.3, 0.6, 0.9]));
+        expect(vec3At(draw, LIGHT_OFFSET.skylight)).toEqual(fround3([0.9, 0.6, 0.3]));
+      }
+    });
+
+    it("同一次 sync 既切 effect 又写环境光", async () => {
+      const live = await open(lit());
+      toggle(live.state, 0, 2, false);
+      setGeneral(live.state, "ambientcolor", "0.3 0.6 0.9");
+      advance(live);
+      expect(capture(live)).toEqual(capture(await fresh(lit({ ambientcolor: [0.3, 0.6, 0.9] }, false, [true, false]))));
+    });
+  });
+
+  describe("编码", () => {
+    it("clearenabled 为 false 时第一个 pass 是 load，切回 true 是 clear；不经 sync 就进这一帧（L4）", async () => {
+      const live = await open(lit({ clearcolor: [0.1, 0.2, 0.3] }, true));
+      const clear = clearOf(0.1, 0.2, 0.3);
+      expect(scenePasses(live)).toEqual([`pass scene target 2 clear ${clear}`]);
+      setGeneral(live.state, "clearenabled", false);
+      expect(scenePasses(live)).toEqual(["pass scene target load"]);
+      setGeneral(live.state, "clearenabled", true);
+      expect(scenePasses(live)).toEqual([`pass scene target 2 clear ${clear}`]);
+    });
+
+    it("clearcolor 不经 sync 就进这一帧", async () => {
+      const live = await open(lit());
+      setGeneral(live.state, "clearcolor", "1 0 0");
+      expect(scenePasses(live)).toEqual([`pass scene target clear ${clearOf(1, 0, 0)}`]);
+    });
+
+    it("一帧没有绘制时也按这条走", async () => {
+      const bundle = bundleOf([]);
+      bundle.general.clearVariable = true;
+      const live = await open(bundle);
+      expect(scenePasses(live)).toEqual([`pass scene target 2 clear ${clearOf(0, 0, 0)}`]);
+      setGeneral(live.state, "clearenabled", false);
+      expect(scenePasses(live)).toEqual(["pass scene target load"]);
+    });
+
+    it("只有环境光和天光标 lights，不合法的值不标", async () => {
+      const { state } = await open(lit());
+      for (const [key, value] of [
+        ["clearcolor", "1 0 0"],
+        ["clearenabled", false],
+        ["fov", 33],
+        ["camerashake", true],
+        ["ambientcolor", "a b c"],
+      ] as [GeneralKey, SceneScalar][])
+        setGeneral(state, key, value);
+      expect(state.takeDirty().lights).toBe(false);
+      setGeneral(state, "ambientcolor", "1 0 0");
+      expect(state.takeDirty().lights).toBe(true);
+      expect(state.takeDirty().lights).toBe(false);
+      setGeneral(state, "skylightcolor", 0.5);
+      expect(state.takeDirty().lights).toBe(true);
+    });
+
+    it("没有这两个 uniform 或被材质覆盖的 draw 不写、不标脏", async () => {
+      const bundle = twoEffects([true, true]);
+      bundle.programs[P.base] = litProgram("base");
+      bundle.programs[P.a] = litProgram("a");
+      const step = bundle.layers[0].effects[0].steps[0];
+      if (step.kind === "draw")
+        Object.assign(step.pass.uniforms, {
+          g_LightAmbientColor: [0.9, 0.9, 0.9],
+          g_LightSkylightColor: [0.8, 0.8, 0.8],
+        });
+      const live = await open(bundle);
+      setGeneral(live.state, "ambientcolor", "0.3 0.6 0.9");
+      live.scene.sync(live.state);
+      const { draws } = internals(live.scene).layers[0];
+      expect(Object.fromEntries(draws.map((draw) => [draw.passKey, draw.dirty]))).toEqual({
+        "objects/0/passes/0": true,
+        "objects/0/effects/0/passes/0": false,
+        "objects/0/effects/2/passes/0": false,
+        "objects/0/effects/2/passes/1": false,
+      });
+      live.scene.update(FRAME);
+      const covered = draws.find((draw) => draw.passKey === "objects/0/effects/0/passes/0")!;
+      expect(vec3At(covered, LIGHT_OFFSET.ambient)).toEqual(fround3([0.9, 0.9, 0.9]));
+    });
+  });
+
+  describe("g_EyePosition", () => {
+    it("等于 (W/2, H/2, 2000)（L13）", async () => {
+      expect(eyePosition({ width: 1920, height: 1080 })).toEqual([960, 540, 2000]);
+      expect(eyePosition({ width: 1280, height: 720 })).toEqual([640, 360, 2000]);
+      const { scene } = await open(lit());
+      for (const draw of internals(scene).layers[0].draws)
+        expect(vec3At(draw, LIGHT_OFFSET.eye)).toEqual([128, 64, 2000]);
+    });
+
+    it("按投影尺寸算，不随渲染目标缩小", async () => {
+      const bundle = lit();
+      bundle.general.width = 16384;
+      bundle.general.height = 1024;
+      const { scene } = await open(bundle);
+      expect(scene.width).toBe(8192);
+      expect(vec3At(internals(scene).layers[0].draws[0], LIGHT_OFFSET.eye)).toEqual([8192, 512, 2000]);
+    });
+  });
+
+  describe("第二张目标", () => {
+    it("clearVariable 为 false 且 clearenabled 为 true：只有一张，每帧的编码轨迹相同", async () => {
+      const live = await open(lit());
+      expect(sceneTextures(live.gpu)).toEqual(["scene target"]);
+      const first = capture(live);
+      expect(capture(live)).toEqual(first);
+      expect(first.trace.join("\n")).not.toContain("scene target 2");
+      advance(live);
+      expect(sceneTextures(live.gpu)).toEqual(["scene target"]);
+    });
+
+    it("clearVariable 为 true：只多这一张，显存估算算上它", async () => {
+      const one = await open(lit());
+      const two = await open(lit({}, true));
+      expect(sceneTextures(two.gpu)).toEqual(["scene target", "scene target 2"]);
+      expect(two.gpu.counts).toEqual({ ...one.gpu.counts, textures: one.gpu.counts.textures + 1 });
+      expect(two.scene.targetBytes - one.scene.targetBytes).toBe(256 * 128 * 4);
+    });
+
+    it("逐帧交替，清屏开着也换；targetTexture 是这一帧画的那张", async () => {
+      const live = await open(lit({}, true));
+      const shown = () => (live.scene.targetTexture as unknown as FakeTexture).label;
+      expect(targetOf(live)).toBe("scene target 2");
+      expect(shown()).toBe("scene target 2");
+      expect(targetOf(live)).toBe("scene target");
+      expect(shown()).toBe("scene target");
+      expect(targetOf(live)).toBe("scene target 2");
+    });
+
+    it("运行中关掉：当帧画在 N−2 那张上；一直关着时两条链互不相交", async () => {
+      const live = await open(lit({}, true));
+      expect(targetOf(live)).toBe("scene target 2"); // N−1
+      expect(targetOf(live)).toBe("scene target"); // N
+      setGeneral(live.state, "clearenabled", false);
+      for (const target of ["scene target 2", "scene target", "scene target 2", "scene target"])
+        expect(scenePasses(live)).toEqual([`pass ${target} load`]);
+    });
+
+    it("没有声明时脚本关掉清屏：当场建第二张并拷一次，只拷这一次", async () => {
+      const live = await open(lit());
+      const { gpu, scene, state } = live;
+      capture(live);
+      const { targetBytes } = scene;
+      setGeneral(state, "clearenabled", false);
+      gpu.trace.length = 0;
+      scene.sync(state);
+      // 要真的提交：这一帧的编码器是另一个，只编码不提交时第二张是空的
+      expect(gpu.copied).toEqual(["scene target -> scene target 2"]);
+      expect(gpu.trace).toEqual(["copy scene target -> scene target 2"]);
+      expect(sceneTextures(gpu)).toEqual(["scene target", "scene target 2"]);
+      expect(scene.targetBytes).toBe(targetBytes + 256 * 128 * 4);
+      // 这一帧的底图是拷过去的 N−1，下一帧回到原来那张
+      expect(scenePasses(live)).toEqual(["pass scene target 2 load"]);
+      expect(scenePasses(live)).toEqual(["pass scene target load"]);
+      gpu.trace.length = 0;
+      scene.sync(state);
+      setGeneral(state, "clearenabled", true);
+      scene.sync(state);
+      setGeneral(state, "clearenabled", false);
+      scene.sync(state);
+      expect(gpu.trace).toEqual([]);
+      expect(sceneTextures(gpu)).toHaveLength(2);
+    });
+
+    it("重放的写入在第一帧之前：sync 建第二张，这一帧不清屏", async () => {
+      const live = await open(lit());
+      setGeneral(live.state, "clearenabled", false);
+      advance(live);
+      expect(scenePasses(live)).toEqual(["pass scene target 2 load"]);
+    });
+
+    it("探针 host.renderFrame 读回这一帧画的那张，两张目标时也是", async () => {
+      const { gpu, scene, state } = await open(lit({}, true));
+      const host = { devScene: { renderer: { currentScene: scene, sceneState: state, device: gpu.device } } };
+      const readback = async () => {
+        gpu.trace.length = 0;
+        await hostRenderFrame(host as unknown as SceneHost, 1);
+        return gpu.trace.filter((line) => line.startsWith("pass scene target ") || line.startsWith("readback"));
+      };
+      const clear = clearOf(0, 0, 0);
+      expect(await readback()).toEqual([`pass scene target 2 clear ${clear}`, "readback scene target 2"]);
+      expect(await readback()).toEqual([`pass scene target clear ${clear}`, "readback scene target"]);
+    });
+
+    it("销毁后目标都放掉", async () => {
+      const { scene } = await open(lit({}, true));
+      scene.destroy();
+      expect(scene.targetTexture).toBeNull();
+      expect(scene.targetView).toBeNull();
+    });
+  });
+});
+
+describe("重建统计", () => {
+  const bundle = () =>
+    bundleOf([
+      layer(0, [effect(0, true, [draw(pass("objects/0/effects/0/passes/0", P.a))]), effect(1, true, [])]),
+      layer(1, [
+        effect(0, true, [draw(pass("objects/1/effects/0/passes/0", P.a))]),
+        effect(1, true, [draw(pass("objects/1/effects/1/passes/0", P.b))]),
+      ]),
+    ]);
+
+  it("rebuildStats 只数真正重建的次数", async () => {
+    const live = await open(bundle());
+    const { scene, state } = live;
+    expect(scene.rebuildStats).toEqual({ count: 0, totalMs: 0, maxMs: 0 });
+    // 关掉没有步骤的 effect：计划没变
+    toggle(state, 0, 1, false);
+    advance(live);
+    expect(scene.rebuildStats.count).toBe(0);
+    // 同一帧关了又开：计划没变
+    toggle(state, 1, 1, false);
+    toggle(state, 1, 1, true);
+    advance(live);
+    expect(scene.rebuildStats.count).toBe(0);
+    toggle(state, 1, 1, false);
+    advance(live);
+    expect(scene.rebuildStats.count).toBe(1);
+    toggle(state, 1, 1, true);
+    advance(live);
+    expect(scene.rebuildStats.count).toBe(2);
+    expect(scene.rebuildStats.maxMs).toBeGreaterThanOrEqual(0);
+    expect(scene.rebuildStats.totalMs).toBeGreaterThanOrEqual(scene.rebuildStats.maxMs);
+  });
+
+  it("探针 stats() 的 rebuilds：次数、均值、最大值，没有场景时为 0", async () => {
+    const host = (renderer: unknown) =>
+      ({ stats: { applied: 0, recompiled: [] }, devScene: { renderer } }) as unknown as SceneHost;
+    expect(hostStats(host(null)).rebuilds).toEqual({ count: 0, meanMs: 0, maxMs: 0 });
+    const { scene } = await open(bundle());
+    Object.assign(scene.rebuildStats, { count: 4, totalMs: 10, maxMs: 4.126 });
+    expect(hostStats(host({ currentScene: scene, frameCosts: [] })).rebuilds).toEqual({
+      count: 4,
+      meanMs: 2.5,
+      maxMs: 4.13,
+    });
   });
 });
 

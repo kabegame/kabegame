@@ -17,6 +17,9 @@
  *   （关着的 effect 也一样）；切换时 `sync` 当场重排图层（`rebuildLayer`），不编译、不等待，返回时新结构已换上。脚本在 `sync` 之前运行，
  *   所以脚本写的开关同一帧就画。加载与切换共用 `buildLayer`，「就地 = 重编译」靠的就是这一点。
  *   每次切换清掉本图层全部带 `clear` 的 fbo，其余内容与 swap 状态保留（J6）。预建失败的图层切换时走整场重编译。
+ * - 清屏（L4、L11）：`clearcolor` 与 `clearenabled` 每帧读，脚本写入同帧生效。`clearenabled: false` 是不清屏，不是清成黑色：
+ *   WPE 画进两张交替的后备缓冲，第 N 帧的底图是第 N−2 帧的成品，两条链互不相交，所以这里同样用两张场景目标逐帧交替。
+ *   泛光的 combine 写当前这张，底图含泛光（L20）。第二张只在清屏可能关掉时建（`SceneGeneral.clearVariable`），别的场景资源不变。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -37,7 +40,7 @@ import {
   type TargetRef,
   type TextureRef,
 } from "./graph";
-import { layerQuad, sceneTargetSize, sceneViewProjection } from "./layout";
+import { eyePosition, layerQuad, sceneTargetSize, sceneViewProjection } from "./layout";
 import { createPipeline, createProgram, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
@@ -45,6 +48,7 @@ import {
   drawUniformValues,
   frameBuiltins,
   layerRefreshNames,
+  LIGHT_UNIFORMS,
   UniformBlock,
   type DrawUniformInput,
   type FrameInput,
@@ -69,6 +73,12 @@ function texelBytes(format: GPUTextureFormat): number {
   if (format === "r16float" || format === "rg8unorm") return 2;
   if (format === "r8unorm") return 1;
   return 4;
+}
+
+/** 一张场景目标。 */
+interface SceneTarget {
+  texture: GPUTexture;
+  view: GPUTextureView;
 }
 
 interface RenderTarget {
@@ -251,24 +261,24 @@ export class GpuScene {
   private readonly drawsByPass = new Map<TargetKey, Draw[]>();
   /** fbo 实体（`FboBindings` 的下标指向这里）。 */
   private readonly targets: RenderTarget[] = [];
-  private target: GPUTexture | null = null;
+  /** 场景目标：`current` 是这一帧画的那张，`alternate` 只在清屏可能关掉时有（L11）。 */
+  private current: SceneTarget | null = null;
+  private alternate: SceneTarget | null = null;
   private snapshot: RenderTarget | null = null;
-  targetView: GPUTextureView | null = null;
   width = 0;
   height = 0;
   /** 场景目标、快照与合成 RT 的格式（HDR 为 `rgba16float`）。 */
   format: GPUTextureFormat = SCENE_TARGET_FORMAT;
   /** 渲染目标类资源（场景目标、快照、合成 RT、fbo、泛光 RT）的显存估算，字节；不含场景纹理。 */
   targetBytes = 0;
+  /** 真正重建图层的次数与用时（毫秒）：计划签名没变的切换不算。dev 探针读。 */
+  readonly rebuildStats = { count: 0, totalMs: 0, maxMs: 0 };
   private bloom: BloomChain | null = null;
-  private clear: GPUColor = { r: 0, g: 0, b: 0, a: 1 };
   /** 就地刷新 uniform 时复用的场景级常量（建场景时算一次）。 */
   private viewProjection: Float32Array = new Float32Array(16);
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
   private hdr = false;
   private eye: readonly number[] = [];
-  private ambient: readonly number[] | undefined;
-  private skylight: readonly number[] | undefined;
   /** 上传后的场景纹理，下标同 `bundle.textures`；没上传的为 null（`uploadableTextures`）。 */
   private textures: (GPUTexture | null)[] = [];
   private dummies!: ReturnType<GpuScene["createDummies"]>;
@@ -287,9 +297,14 @@ export class GpuScene {
     private readonly warnings: string[],
   ) {}
 
-  /** 离屏场景目标（dev 探针同步读回用）。 */
+  /** 这一帧画的那张场景目标（dev 探针同步读回用）。有两张时 `encode` 开头才换，要在它之后取。 */
   get targetTexture(): GPUTexture | null {
-    return this.target;
+    return this.current?.texture ?? null;
+  }
+
+  /** 这一帧画的那张场景目标的视图，取用时机同 `targetTexture`。 */
+  get targetView(): GPUTextureView | null {
+    return this.current?.view ?? null;
   }
 
   /**
@@ -340,6 +355,21 @@ export class GpuScene {
   private release(resource: { destroy(): void }): void {
     this.owned.delete(resource);
     resource.destroy();
+  }
+
+  private createSceneTarget(label: string, extraUsage = 0): SceneTarget {
+    const { width, height, format } = this;
+    const texture = this.own(
+      this.device.createTexture({
+        label,
+        size: { width, height },
+        format,
+        usage:
+          GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | extraUsage,
+      }),
+    );
+    this.targetBytes += width * height * texelBytes(format);
+    return { texture, view: texture.createView() };
   }
 
   private createTarget(
@@ -598,21 +628,10 @@ export class GpuScene {
     const format = (this.format = sceneTargetFormat(hdr));
     this.width = width;
     this.height = height;
-    this.eye = general.camera.eye;
-    this.ambient = general.ambient;
-    this.skylight = general.skylight;
-    this.target = this.own(
-      device.createTexture({
-        label: "scene target",
-        size: { width, height },
-        format,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
-      }),
-    );
-    this.targetBytes += width * height * texelBytes(format);
-    this.targetView = this.target.createView();
-    const [r = 0, g = 0, b = 0] = general.clearEnabled ? general.clearColor : [];
-    this.clear = { r, g, b, a: 1 };
+    this.eye = eyePosition(general);
+    this.current = this.createSceneTarget("scene target");
+    // 两张都是空的：不清屏时初始底色就是黑，`clearcolor` 不出现（L11）
+    if (general.clearVariable) this.alternate = this.createAlternateTarget();
 
     const uploadable = uploadableTextures(bundle);
     this.textures = bundle.textures.map((texture, index) =>
@@ -929,8 +948,9 @@ export class GpuScene {
       screenSize: [this.width, this.height],
       textures,
       eye: this.eye,
-      ambient: this.ambient,
-      skylight: this.skylight,
+      // 读状态，不读编译结果：单图层重建新建的 draw 要拿到当前值
+      ambient: state.general.ambientcolor,
+      skylight: state.general.skylightcolor,
     };
   }
 
@@ -945,7 +965,27 @@ export class GpuScene {
     for (const object of dirty.layers)
       for (const draw of this.drawsByLayer.get(object) ?? []) this.refreshLayer(draw, state);
     for (const key of dirty.passes) for (const draw of this.drawsByPass.get(key) ?? []) this.refreshPass(draw, state);
+    if (dirty.lights) for (const draw of this.draws) this.refreshLights(draw, state);
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
+    if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
+  }
+
+  private createAlternateTarget(): SceneTarget {
+    return this.createSceneTarget("scene target 2", GPUTextureUsage.COPY_DST);
+  }
+
+  /** 没有声明的脚本第一次关掉清屏：当场建第二张，把当前画面拷过去。这一帧的底图是 N−1，静止内容相同。 */
+  private addAlternateTarget(): void {
+    if (!this.current) return;
+    const alternate = this.createAlternateTarget();
+    const encoder = this.device.createCommandEncoder({ label: "scene target copy" });
+    encoder.copyTextureToTexture(
+      { texture: this.current.texture },
+      { texture: alternate.texture },
+      { width: this.width, height: this.height },
+    );
+    this.device.queue.submit([encoder.finish()]);
+    this.alternate = alternate;
   }
 
   /** effect 开关真的变了的图层：重排，再清 fbo。清屏提交在这一帧的绘制之前。 */
@@ -971,6 +1011,7 @@ export class GpuScene {
     const plan = this.planOf(runtime.layer, state);
     const signature = planSignature(plan);
     if (signature === runtime.signature) return;
+    const started = performance.now();
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
     const problems = planProblems(plan, this.bundle);
     if (problems.length) throw new SceneRenderError(problems);
@@ -983,6 +1024,10 @@ export class GpuScene {
     }
     this.install(runtime, built);
     runtime.signature = signature;
+    const elapsed = performance.now() - started;
+    this.rebuildStats.count++;
+    this.rebuildStats.totalMs += elapsed;
+    this.rebuildStats.maxMs = Math.max(this.rebuildStats.maxMs, elapsed);
   }
 
   /**
@@ -1021,6 +1066,17 @@ export class GpuScene {
     draw.dirty = true;
   }
 
+  /** 环境光变化：只写块里有、材质没覆盖的名字；都没有时不标脏，脚本逐帧写时不重传无关的缓冲。 */
+  private refreshLights(draw: Draw, state: SceneState): void {
+    const { block, step } = draw;
+    if (!block) return;
+    for (const [name, key] of Object.entries(LIGHT_UNIFORMS)) {
+      if (!block.has(name) || name in step.pass.uniforms) continue;
+      block.set(name, state.general[key]);
+      draw.dirty = true;
+    }
+  }
+
   /** 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。 */
   update(frame: FrameInput): void {
     const values = frameBuiltins(frame);
@@ -1038,9 +1094,12 @@ export class GpuScene {
    * `afterBloomStep`：泛光链每步之后调用（dev 探针读回中间结果用）。
    */
   encode(encoder: GPUCommandEncoder, state: SceneState, afterBloomStep?: Parameters<BloomChain["encode"]>[2]): void {
-    if (!this.targetView || !this.target) return;
-    const sceneView = this.targetView;
-    const sceneTexture = this.target;
+    // 两张时每帧都换，清屏开着也换：运行中关掉时手上正好是 N−2（L11）
+    if (this.alternate) [this.current, this.alternate] = [this.alternate, this.current];
+    if (!this.current) return;
+    const { view: sceneView, texture: sceneTexture } = this.current;
+    const { clearcolor, clearenabled } = state.general;
+    const [r, g, b] = clearcolor;
     const snapshot = () => {
       if (this.snapshot)
         encoder.copyTextureToTexture(
@@ -1050,16 +1109,22 @@ export class GpuScene {
         );
     };
     let open: GPURenderPassEncoder | null = null;
-    let cleared = false;
+    let started = false;
     const begin = (): GPURenderPassEncoder => {
       if (!open) {
         open = encoder.beginRenderPass({
           label: "scene",
           colorAttachments: [
-            { view: sceneView, clearValue: this.clear, loadOp: cleared ? "load" : "clear", storeOp: "store" },
+            {
+              view: sceneView,
+              clearValue: { r, g, b, a: 1 },
+              // 第一个 pass：开着清成 clearcolor，关着接着这张目标上次的成品画
+              loadOp: started || !clearenabled ? "load" : "clear",
+              storeOp: "store",
+            },
           ],
         });
-        cleared = true;
+        started = true;
       }
       return open;
     };
@@ -1092,7 +1157,7 @@ export class GpuScene {
           pass.end();
         } else if (op.kind === "snapshot") {
           // 快照要包含清屏色：本帧还没画过场景就先清一次
-          if (!cleared) begin();
+          if (!started) begin();
           end();
           snapshot();
         } else if (op.kind === "copy") {
@@ -1113,12 +1178,12 @@ export class GpuScene {
     for (const layer of this.layers) if (visible.has(layer.object)) runOps(layer.ops);
     if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
-      if (!cleared) begin();
+      if (!started) begin();
       end();
       snapshot();
       this.bloom.encode(encoder, sceneView, afterBloomStep);
     }
-    if (!cleared) begin();
+    if (!started) begin();
     end();
   }
 
@@ -1130,8 +1195,8 @@ export class GpuScene {
     this.drawsByLayer.clear();
     this.drawsByPass.clear();
     this.targets.length = 0;
-    this.target = null;
-    this.targetView = null;
+    this.current = null;
+    this.alternate = null;
     this.snapshot = null;
     this.bloom = null;
   }
