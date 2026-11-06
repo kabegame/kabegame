@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { compileSceneInWorker } from "../compile/client";
 import type { SceneBundle } from "../compile/bundle";
+import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { FetchSceneReader, SceneFs } from "../compile/fs";
 import { SceneState } from "../render/state";
 import type { SceneReporter } from "../report";
@@ -37,7 +38,10 @@ function realmFrameCount(): number {
 }
 
 /** 逐张场景在独立 realm 中运行有限的 120 帧；没有 GPU 或 rAF。 */
-export async function scriptCorpus(imageIds: string[]): Promise<unknown> {
+export async function scriptCorpus(
+  imageIds: string[],
+  { postprocess = "follow" }: { postprocess?: ScenePostprocessSetting } = {},
+): Promise<unknown> {
   const rows: unknown[] = [];
   const groups = new Map<string, MissingApiGroup>();
   const framesBefore = realmFrameCount();
@@ -62,7 +66,7 @@ export async function scriptCorpus(imageIds: string[]): Promise<unknown> {
         bundle = await compileSceneInWorker({
           projectDir: target.path,
           sceneAssets: target.sceneAssets,
-          postprocess: "follow",
+          postprocess,
           userProperties: Object.fromEntries([...properties].map(([key, value]) => [key, value.value])),
           force: true,
           exhaustive: true,
@@ -113,6 +117,7 @@ export async function scriptCorpus(imageIds: string[]): Promise<unknown> {
           },
           read(target) {
             if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
+            if (target.kind === "bloom-enabled") return state.bloomEnabled;
             if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
             if (target.kind === "layer") {
               const value = state.layers.get(target.object)?.[target.field];
@@ -135,6 +140,7 @@ export async function scriptCorpus(imageIds: string[]): Promise<unknown> {
           },
           read(target) {
             if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
+            if (target.kind === "bloom-enabled") return state.bloomEnabled;
             if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
             if (target.kind === "layer") {
               const value = state.layers.get(target.object)?.[target.field];

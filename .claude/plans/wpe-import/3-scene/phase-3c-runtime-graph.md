@@ -28,7 +28,17 @@ WebGPU 的管线绑定了混合、目标格式与写掩码，而 WPE 的 D3D11 �
 
 可变 effect 的纹理和 fbo 在加载时就建好（点 1），第二张合成 RT 和快照在预建时补齐。加载与切换共用 `buildLayer`，所以没有两套建图层的逻辑，这也是「就地 = 重编译」字节相等的保证。旧 draw 的缓冲换下时销毁，开关多少次都不累积。没有可变 effect 的场景不进入任何新路径，资源数与画面不变。
 
-其余几类：**泛光开关**照 WPE 每帧读——`general.bloom` 可变时，只要档位不是关闭、场景有对象就把泛光链建好，开关只决定本帧跑不跑泛光那一步；HDR 仍只在加载时判定（P2b，WPE 的 HDR 渲染位与交换链格式只在加载时算），运行中打开泛光的 LDR 场景得到 LDR 泛光。**泛光级数**照 WPE 预建：`bloomhdriterations` 可变时按可用级数建满金字塔，每帧只用前 N 级。**清屏色、环境光 / 天光、相机 `eye`** 直接就地写（正交相机里 `eye` 只进 `g_EyePosition`）。`colorBlendMode`、`hdr`、`size` 的处理见待定。
+其余几类：
+
+**泛光开关**照 WPE 每帧读。`general.bloom` 是运行时状态 `SceneState.bloomEnabled`，它是场景位，不含档位（WPE 的 `+0xe0` bit1 同样不看 `R.flags & 0x40`，脚本读到的也是它）。`encode` 每帧看它，关着时不拷快照、不跑链，走的就是没有泛光链时的同一段代码，所以画面逐字节相同。档位关闭时根本不建链，位怎么变都没有效果，和 WPE 一致。
+
+泛光链只在档位不是关闭、场景有对象，且「当前开着，或 `general.bloom` 绑了属性或挂了脚本」时才建。不按「场景有脚本」判定：本机 41 张里 28 张 `bloom: false`，其中 21 张带脚本，判定成可变会平白多出全尺寸快照和泛光 RT。写死 `bloom: false` 的场景被 `thisScene.bloom = true` 打开时没有链可用，走整场重编译，和「打开带不支持项的 effect」同一条路。WPE 这里是同帧、不编译（K5），这是有意的差异。
+
+HDR 仍只在加载时判定（P2b，WPE 的 HDR 渲染位与交换链格式只在加载时算）。判定里的 `bloom` 读场景文件的 `value`，不读属性当前值，也不看脚本写入（K3），所以判定和开关可以不一致：JSON 为 true、属性为 false 的场景是关着泛光的 HDR 场景，运行中打开是 HDR 泛光；反过来是开着泛光的 LDR 场景。判定里的 `hdr` 读属性当前值与脚本覆盖（已定 12）。运行中打开泛光的 LDR 场景得到 LDR 泛光；运行中关掉 HDR 场景的泛光，目标格式和 `brightness` 都保持 HDR（WPE 走 `combine_srgb`，8 位画布上等价于什么都不画，P2b 已定）。
+
+**泛光级数**照 WPE 预建：金字塔总是建满全部可用级，每帧只用前 N 级。不同级数之间，下采样的 pass、输入和目标完全相同，上采样只差「最粗两级用 bicubic」，所以绘制按步骤身份（pass + 输入 + 目标）去重，8 级共 21 个，比只建 8 级时多 5 个小缓冲。`setParams` 按新参数重排，级数永远能就地改。没有泛光时间状态：每帧下采样整张覆盖，改级数不残留。
+
+**清屏色、环境光 / 天光、相机 `eye`** 直接就地写（正交相机里 `eye` 只进 `g_EyePosition`）。`hdr` 保留整场重编译（已定 12）；`colorBlendMode` 见待定 1；`size` 见 3a 已定 5。
 
 关键决策：可变性按「有没有绑定」判定，而不是所有 effect 都编进 bundle——这样没有绑定的场景（目前本机能渲染的全部）在 P3c 前后 GPU 资源与画面逐字节相同，回归面最小；代价是绑定表成为可变范围的唯一依据，3a 的完整性单测因此更重要。
 
@@ -164,7 +174,7 @@ export function needsComposite(layer: Pick<SceneLayer, "effects" | "colorBlendMo
 ```ts
 export type RecompileReason =
   | "effect-visible" // effect 可见性：未启用的不进 bundle（3c 改为单图层重算）     ← 本阶段改成单图层重算
-  | "postprocess" // general.bloom / general.hdr：泛光链有无、目标格式              ← bloom 本阶段就地；hdr 见待定 2
+  | "postprocess" // general.bloom / general.hdr：泛光链有无、目标格式              ← bloom 本阶段就地；hdr 保留（已定 12）
   | "general" // clearcolor / ambientcolor / skylightcolor / camera.*              ← 本阶段就地
   | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）   ← 待定 1 / 3a 已定 5
 ```
@@ -261,8 +271,8 @@ if (hostPaused !== paused) { hostPaused = paused; if (delivered) call("setPaused
 | **effect `visible`** | `FUN_1401e6300` 重算合成次数与 pass 数，变了才 `FUN_1402065e0` 重建该图层 | 3a 重编译 | **点 1–3：单图层重算** |
 | COMBO 绑用户属性 | 不能绑，写成对象时整个进程断言中止 | 3a 报 `combo:user-binding` | 不变 |
 | `usertextures` | 槽名变了就换该槽纹理（延后） | 报 `material:usertextures` | 不在本阶段（随用户纹理支持，W5） |
-| `general.bloom` | 每帧读，下一帧开 / 关 | 3a 重编译 | **点 4：就地** |
-| `general.hdr` | 运行中改不生效 | 3a 重编译 | 待定 2 |
+| `general.bloom` | 每帧读，下一帧开 / 关 | 3a 重编译 | **点 4：就地**（没有链时打开走整场重编译） |
+| `general.hdr` | 运行中改不生效，加载时也只读 JSON（K3） | 3a 重编译 | 保留重编译，改值即生效，判定读属性，有意不跟（已定 12） |
 | `bloomstrength` 等调节项 | 脏位，下一帧开头重算 | 3a 就地（级数变化退回重编译） | **点 5：级数也就地** |
 | `clearcolor`；`clearenabled` 等标志 | 只改字段，逐帧读 | 3a 重编译（`clearenabled` 未登记） | **点 6：就地，`clearenabled` 一并登记** |
 | `ambientcolor` / `skylightcolor` | 拷进渲染上下文，即时 | 3a 重编译 | **点 6：就地** |
@@ -499,7 +509,7 @@ export function planSignature(plan: LayerPlan): string;
   - `targetPath` 与 `targetKey` 加 effect 分支，路径同旧的 `objects/<i>/effects/<j>/visible`，`forgetWrite` 与 `replayWrites` 不变；
   - `host.ts` 的 `writeScript` 只在 `state.write` 返回 `"recompile"` 时写 `scriptOverrides`。
 
-  `scriptOverrides` 只剩 general 字段、图层结构类目标、「打开带不支持项的 effect」与「切换冻结的图层」在用（见待定 1、2）。
+  `scriptOverrides` 只剩 general 字段、图层结构类目标、「打开带不支持项的 effect」「切换冻结的图层」与「打开没有泛光链的场景」在用（见待定 1、已定 12）。
 - **修改** `SceneState`：effect 开关进状态。
 ```ts
   effectEnabled(object: number, effect: number): boolean;            // 按 scene.json 坐标
@@ -544,22 +554,79 @@ export function planSignature(plan: LayerPlan): string;
   - 打开一个 `unsupported` 非空的 effect，或切换冻结的图层：`applyChanges` 的重编译原因写 `effect-blocked（路径）`，debug 日志带上不支持项，结果由整场编译决定（带不支持项的照常退回预览图）；
   - 脚本写同样的目标：`state.write` 返回 `"recompile"`，走 `overrideAndReload`，值没变不重复请求。
 
-## 点 4 — 泛光开关就地（`compile/bundle.ts`、`compile/postprocess.ts`、`render/scene.ts`）
+## 点 4 — 泛光开关就地（`compile/bindings.ts`、`compile/postprocess.ts`、`compile/scripts.ts`、`compile/bundle.ts`、`render/state.ts`、`render/scene.ts`、`render/renderer.ts`、`script/api.ts`、`script/runtime.ts`、`host.ts`、`dev/`）
 
-- **修改** 编译：`general.bloom` 可变（有用户绑定或脚本）时，只要档位不是关闭、场景有对象，就编泛光链；`bundle.bloom` 多一个 `enabled`（当前生效值）。HDR 判定不变（加载时的生效值，P2b）。
+- **修改** 绑定目标：`general.bloom` 改成就地目标；`RecompileReason` 的 `postprocess` 收窄成只有 `general.hdr`（已定 12）。
 ```ts
-  const bloomVariable = isUserBinding(general.bloom) || scripts.ownsGeneral("bloom");     // 新增
-  if ((postprocess.bloom || (bloomVariable && postprocess.level !== "disabled")) && scene.objects.length > 0 && !settled())
-    bundle.bloom = { ...(await compileBloom(/* … */, postprocess.hdr)), enabled: postprocess.bloom };   // 修改
+  /** `general.bloom`：每帧读（A1），写的是场景位。 */
+  | { kind: "bloom-enabled" }
 ```
-- **修改** 渲染：快照纹理在有泛光链时就建；`encode` 里泛光那一步看 `state.bloomEnabled`，关着时整步跳过（不拷快照、不跑链），画面与没有泛光链时逐字节相同。
-- 绑定目标 `general.bloom` 改成 `{ kind: "bloom-enabled" }`；`general.hdr` 见待定 2。
+- **修改** `scenePostprocessState`：`flagValue` 改收目标。**新增** `bloomFlag`、`hdrFlag`。
+```ts
+export interface ScenePostprocessState {
+  level: PostprocessLevel;
+  /** 场景的 bloom 位：`general.bloom` 的生效值，缺键或不是 bool 时为 true，不看档位。 */
+  bloomFlag: boolean;
+  /** 场景的 hdr 位：`general.hdr` 的生效值，缺键或不是 bool 时为 false，不看档位。脚本读 `thisScene.hdr` 拿到的是它（K5）。 */
+  hdrFlag: boolean;
+  bloom: boolean;
+  hdr: boolean;
+}
+```
+- **修改** HDR 判定的 `bloom` 读场景文件（K3）：`compileScene` 在套用 `scriptOverrides` **之前**取出文件里的 `general.bloom`，传给 `scenePostprocessState`。`hdr` 仍读属性当前值与脚本覆盖（已定 12）。
+```ts
+const hdr = level === "ultra" && fileFlag(fileBloom) === true && hdrFlag;   // 修改：`bloom` 只看文件，`hdrFlag` 跟属性走
+```
+- **新增** `postprocess.ts` 导出 `BLOOM_FIELDS`（JSON 键 → `BloomParams` 字段，8 项），`scripts.ts` 与 `script/api.ts` 共用。`{script}` 挂在 feather / scatter / iterations 上原来是 `unsupported`，级数要能被脚本改，这里一起修。
+- **修改** `scripts.ts` 的 `targetOf`：`general.bloom` → `{ kind: "bloom-enabled" }`。
+- **修改** 编译：泛光链的判定。
+```ts
+// 泛光链：当前开着，或运行中可能打开（绑了属性或挂了脚本）。别的写入走整场重编译（`SceneState.needsRecompile`）
+const bloomVariable = isUserBinding(general.bloom) || isScriptValue(general.bloom);
+if ((postprocess.bloom || (bloomVariable && postprocess.level !== "disabled")) && scene.objects.length > 0 && !settled())
+  bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
+```
+- **新增** `SceneState`：
+```ts
+  /** 场景的 bloom 位，不含档位。不标脏，`encode` 每帧读（A1）。 */
+  bloomEnabled: boolean;
+  /** 档位允许但没有编泛光链：打开要整场重编译。 */
+  private readonly bloomMissing: boolean;   // !bundle.bloom && level !== "disabled"
+```
+- **修改** `needsRecompile`、`write` 加 `bloom-enabled` 分支。WPE 的 setter 只认 bool，别的值不改位（G4），同 `flagValue`。
+- **修改** `encode`：
+```ts
+if (this.bloom && state.bloomEnabled) {   // 修改：关着时不拷快照、不跑链，和没有链时走同一段
+```
+- **修改** 脚本：`GENERAL_RECOMPILE` 删掉 `bloom`，读 `state().bloomEnabled`，写 `{ kind: "bloom-enabled" }`。`hdr` 写入仍是重编译，读 `hdrFlag`。`installGeneral` 的全部字段同时装到 `general` 和 `thisScene`（K5），读写同一份。`runtime.ts` 的 `targetKey`、`host.ts` 的 `targetPath`：`bloom-enabled` → `general/bloom`（与 `scriptOverrides` 的路径相同，兜底重编译时编译器读得到）。
+- **修改** `host.ts`：`readScript` 加 `bloom-enabled`；`recompileValue` 删掉 `general/bloom`，`general/hdr` 改用 `hdrFlag`（脚本写的值等于场景位时不重新加载）；`readTarget` 按 `general/bloom/<字段>` 直接取，`general/bloom` 返回 `bloomEnabled`（原来查不到字段，永远返回 `strength`）。
+- **修改** dev：`scriptCorpus` 两处 `read` 加 `bloom-enabled`，**新增** `postprocess` 选项（语料要跑开启、超高档）；`probe.ts` 的 `state` 带上 `bloomEnabled`。
 
-## 点 5 — 泛光级数就地（`render/bloom.ts`）
+## 点 5 — 泛光级数就地（`render/bloom.ts`、`render/state.ts`、`render/renderer.ts`、`render/scene.ts`）
 
-- **修改** `bloomhdriterations` 可变时按可用级数（`bloomLevels(width, height)`，最多 8）建满金字塔与各级 draw，`encode` 只跑前 N 级的下采样与对应的上采样；这时 `sameLevels` 恒为 true（3a 的退回重编译不再发生），`setParams` 同时改「用几级」。
-  > 说明：WPE 在 resize 时预建全部可用级、每帧用 N 级（P2b「与规格的差异」第三条）。不可变时照旧只建 N 级，省显存。
-- 单测（`bloom.test.ts`）：预建 8 级、用 5 级时的步骤序列与常量，和直接按 5 级规划的逐项相同。
+- **新增**
+```ts
+/** 建链要覆盖的计划：HDR 是 1 到可用级数的每一级（WPE 在 resize 时预建全部可用级，每帧用前 N 级，A1），LDR 一份。 */
+function plansFor(hdr: boolean, params: BloomParams, width: number, height: number): BloomPlan[];
+/** 同一身份的步骤在各级数之间共用绘制：pass、输入、目标相同，常量与 RV0 由 `setParams` 写。 */
+function stepKey(step: BloomStep): string;
+```
+- **修改** `create`：RT 取最后一份计划的 `targets`，绘制按 `stepKey` 去重建好放进 `Map`，最后调一次 `setParams`。
+- **修改** `setParams` 选出当前级数的绘制并写常量，`encode` 只跑它们。`after` 的下标仍是计划内的步骤下标（`dev/bloomProbe.ts` 依赖）。`targets` 下标不变，`bytes` 算全部级。
+```ts
+setParams(params: BloomParams): void {
+  const plan = planBloom(this.currentPlan.hdr, params, this.width, this.height);
+  this.active = plan.steps.map((step) => {
+    const draw = this.draws.get(stepKey(step))!;   // 全部级数都建过
+    // 按 step 写常量
+    return { step, draw };
+  });
+  this.currentPlan = plan;
+}
+```
+- **删除** `sameLevels`、`BloomDraw.step`、`GpuScene.canApply`、`SceneState.previewBloom`、`applyBindings` 里的 `canApply` 判断。
+  > 说明：不分「可变时建满、不可变时只建 N 级」。WPE 本来就在 resize 时建满；41 张里写了 `bloomhdriterations` 的 26 张，25 张是 8，只有 1 张是 3 且 `bloom: false`（不跑泛光），分支换不来显存，还要多一个判定。
+- 单测（`bloom.test.ts`）：每个 N（1–8）的步骤序列、常量、编码轨迹，和 `planBloom` 按 N 规划的逐项相同；8 → 5 → 8 回到原字节；可用级数不足时不越界；绘制数 21、RT 数 8（含 `hdrIterations: 3`），LDR 4 个绘制不变。
 
 ## 点 6 — 清屏色、环境光、相机就地（`compile/bindings.ts`、`render/state.ts`、`render/scene.ts`）
 
@@ -569,7 +636,7 @@ export function planSignature(plan: LayerPlan): string;
 
 ## 点 7 — 宿主收尾（`host.ts`、`compile/bindings.ts`）
 
-- **修改** `RecompileReason` 收窄为：`"layer-structure"`（`colorBlendMode`，待定 1；`size`，3a 已定 5）、`"postprocess-hdr"`（待定 2）、`"effect-unsupported"`（打开带不支持项的 effect）。
+- **修改** `RecompileReason` 收窄为：`"layer-structure"`（`colorBlendMode`，待定 1；`size`，3a 已定 5）、`"postprocess-hdr"`（只有 `general.hdr`，保留整场重编译，已定 12；步骤 3 时名字仍是 `postprocess`）、`"effect-unsupported"`（打开带不支持项的 effect）。
 - **修改** 宿主日志：
   - 单图层重建记 `debug`：图层、effect、签名是否变化、用时。
   - 重编译仍记 `debug` 并带原因（3a 已定 8；已定 9）。
@@ -615,8 +682,18 @@ export function planSignature(plan: LayerPlan): string;
 **步骤 2 — 单图层重建**（子代理：点 3，含绑定目标与脚本侧改成就地）
 - 验收：单测——对测试工程的 bundle，「关掉 effect → 重建」得到的步骤与 uniform 字节，和「用 effect 关着的属性值整场编译」逐字节相同；再打开回到原样。没有可变 effect 的场景，`GpuScene` 建出的资源数与 3b 相同、基线哈希不变。
 
-**步骤 3 — 泛光开关与级数**（codex：点 4、点 5）
-- 验收：单测（点 5）；关着泛光时测试工程的哈希与没有泛光链时相同；bedroom（超高档）哈希与 P2b 基准相同（它的 `bloom` 不可变，走原路径）。
+**步骤 3 — 泛光开关与级数**（子代理：点 4、点 5）。`bloom` 的运行时效果在报告里当时未实测，先做 WPE 实验（Q1–Q5，结果写进 [p3-script-REPORT.md](p3-script-REPORT.md) K 节）。
+- 验收：
+  - 单测（点 5，以及验收「单测」第 3 条的泛光部分）；
+  - 语料 41 张，跟随、开启、超高三档，`unsupported` 与脚本诊断与 HEAD 基线逐张相同；
+  - bedroom 三档（HDR 走 N = 8，新增的绘制不参与）、没有绑定的场景，固定时刻哈希与基线逐张相同；
+  - 测试工程（不含 `COUNT` / `AUDIO` 的副本）在「开启」「超高」各测一轮：
+    - 切 `p_bloom` 是 `applied` 增加、`recompiled` 不变；
+    - 关的哈希 = 档位关闭整场加载，开的哈希 = 属性为 true 整场加载；
+    - 关着时改 `p_bloomstr`，打开是新强度；
+    - HDR 副本 8 → 5 → 8 与按 5 整场加载的哈希相同，回到开始的哈希；
+    - 逐帧切 10 s 帧时间不变、没有 WebGPU 错误；暂停时切换画面更新；
+  - Q1–Q5 的工程和 WPE 同一套对比。
 
 **步骤 4 — 清屏色、环境光、相机与宿主收尾**（codex：点 6、点 7）
 - 验收：单测（就地 = 重编译的字节对比，覆盖 `clearcolor`、`ambientcolor`、`eye`）；`deno task test -c kabegame --skip cargo`、`check-kabegame`、宿主 `typecheck` 全过。
@@ -685,7 +762,7 @@ export function planSignature(plan: LayerPlan): string;
 
 ## 风险
 
-1. **可变 effect 的显存与加载时间**：可变 effect 的 fbo、合成 RT 与快照都在加载时建，之后不还；程序与管线也在加载时建，可变图层的加载因此变长（管线按键去重）。`bloomhdriterations` 可变时建满 8 级金字塔（4K HDR 约 21 MiB，P2b）。只有带绑定的场景才多，记进回归表。
+1. **可变 effect 的显存与加载时间**：可变 effect 的 fbo、合成 RT 与快照都在加载时建，之后不还；程序与管线也在加载时建，可变图层的加载因此变长（管线按键去重）。只有带绑定的场景才多，记进回归表。金字塔不分可变与否，总是建满全部可用级：静态 N 小的场景多占显存（4K、N = 1 多约 5.5 MiB，全部 8 级约 21 MiB，P2b）；本机没有这样跑泛光的场景。`bloom` 绑了属性或挂了脚本且当前关着的场景，多出全尺寸快照和泛光 RT，打开时才用得上。
 2. **重建与在途帧**：切换在 `render` 里、编码这一帧之前同步完成，旧 draw 的缓冲换下时销毁。WebGPU 允许销毁已提交的帧用过的缓冲，那一帧不受影响。
 3. **切换开销**：切换不编译，但要建 draw 的缓冲与 bind group，有 `clear` 时再提交一次清屏，都在帧内同步做。脚本逐帧切换时每帧都有这份开销。WPE 的同类开销是 0.7 ms（J1，纯色层）；我们的数字等验收。预建失败的图层切换走整场重编译，这时会有明显延迟。
 4. **WPE 语义的推断部分**：`FUN_1402065e0` 只在「数值变了」才重建；我们按计划签名判定，覆盖范围略大（结果相同）。`colorBlendMode` 的运行时行为 I3 没有列出（待定 1）。
@@ -694,6 +771,8 @@ export function planSignature(plan: LayerPlan): string;
 7. **不再遮蔽的代价**：在 WPE 里会报错的脚本在我们这里可能能跑。比如用了全局 `setTimeout` 的脚本，计时器按墙钟走、暂停时不停；用了 `fetch` 的可以读宿主 `file:` 范围内的文件。这类行为与 WPE 不同，只出现在 WPE 下本来就坏掉的脚本里。安全性不变：3b 已定 4 本来就写明不是安全边界。
 8. **音频数值只是近似**：频谱算法是 Phase 8 自定的（WPE 没有公开），64 段到 32 / 16 段的合并方式也是推断。脚本的阈值按 WPE 的数值调出来，观感可能和 WPE 有差别。本机能实时渲染的场景都不用音频，要到它们的渲染阻塞解除后才能和 WPE 对照。全零时某些脚本的除法可能写出 `NaN`，与 WPE 静音时的行为一致与否未核实。
 9. **反馈型 fbo 的旧内容**（已查清，J6）：effect 关掉再打开时，fbo 内容与 swap 状态保留，带 `clear` 的除外（每次重建都清，且是同图层全部 effect 的 fbo）。我们照此实现，与 WPE 一致。整场重编译是清空的，所以这一点上「就地 = 重编译」本来就不成立，单测只比步骤序列、uniform 字节与编码轨迹。
+10. **`thisScene.bloom = true` 打开没有链的场景**是整场重编译，不是就地。WPE 同帧、不编译（K7），这是有意的差异，换来写死 `bloom: false` 的场景不多占显存。重编译后 HDR 判定不变：`bloom` 读场景文件，脚本写入不算（K3）。本机没有脚本这样写。
+11. **`general.hdr` 与 WPE 不同**（已定 12）：WPE 运行中改不生效，连加载时都只读 JSON；我们读属性当前值与脚本覆盖，改值就整场重编译并生效。本机样本 3355291946（工坊，2026-11-06 新下载）绑了 `hdr`，是差异样本；它能不能实时渲染还没看。
 
 ## 已定（2026-11-03 用户）
 
@@ -719,11 +798,11 @@ export function planSignature(plan: LayerPlan): string;
 9. **重编译日志保持 `debug`**（2026-11-05 用户）：只进宿主 DevTools 控制台，不进应用日志。验收靠探针的 `stats().recompiled`；点 0 起它也计入设置引起的重载。
 10. **暂停与清空存储单独放进当前壁纸属性面板**（2026-11-05 用户）：设置页与预览详情共用；不和「全部重置」绑在一起。不做 100 KB 上限。
 11. **对齐 WPE 行为，加载时备好、切换同步**（2026-11-06 用户，撤销「允许卡帧」）：依据 [p3-script-REPORT.md](p3-script-REPORT.md) J 节。
+12. **`general.hdr` 保留整场重编译，改值即生效，判定读属性**（2026-11-06 用户，原待定 2 选 (b)）：属性绑定和脚本写入都一样。WPE 连加载时都只读 JSON 的 `value`，属性不起作用（K3 静态确认），运行中改也不生效（I3）。用户判定这是 WPE 的 bug，有意不跟，所以不加无操作目标。判定里的 `bloom` 照 WPE 读场景文件（K3）。P2b 时本机 `hdr` 写成属性对象的样本 0 个；2026-11-06 新下载的工坊 3355291946 有 1 个（`hdr: {user: "hdr", value: false}`）。
 
 ## 待定（附推荐）
 
 1. **`colorBlendMode` 绑了用户属性**：I3 没有列出它的改值回调；值在 {0, 31} 与其它值之间切换会改变 passthrough 有无，passthrough 材质的 COMBO 又随值变（`BLENDMODE = cbm`），要按值翻译着色器。本机 binding-scan 0 处。**推荐保持重编译**，有样本再议。
-2. **`general.hdr` 绑了用户属性**：WPE 运行中改了不生效，要重载（I3，HDR 渲染位与交换链格式只在加载时判定）。选项：(a) 照 WPE，运行时忽略，下次加载（含任何一次重编译）才用新值；(b) 重编译。**推荐 (a)**，与已定「默认照 WPE」一致；代价是用户在面板里改了看不到变化，直到下一次加载。本机 `hdr` 写成属性对象的样本 0 个（P2b），`bloom` 写成属性对象的 3 个。
 3. **可变图层的判定范围**：只看绑定表与脚本表（本文件的做法），还是像 WPE 一样所有 effect 都编进 bundle。**推荐只看绑定**：没有绑定的场景零变化、零额外显存；脚本目前没有 `getEffect`（3b API 不含），不会在运行时打开未登记的 effect。等 `thisLayer.getEffect` 进入 API 阶段时，再把「有脚本的场景全部 effect 可变」加进判定。
 
 ## 后续
@@ -885,3 +964,78 @@ export function planSignature(plan: LayerPlan): string;
 - 没有测到：`script-api`（我们的脚本 API 没有 `getEffect`）；校验错误只有 `onuncapturederror` 这条既有路径；预建失败、冻结图层、`texture-kind` 只有单测，真机上构造不出来。
 - 测试行 13118–13121 与对应任务已删除。当前壁纸 12888、窗口模式、未暂停。用户在 13114 上设的 `p_alpha` / `p_mode` 测试时临时改回默认，测完已放回。
 - **坑**：13114 的哈希依赖窗口是否可见。隐藏时脚本不跑，`COUNT` 图层 alpha 停在初始值，所以之前几轮的 `a70e9f8a` 看起来跨加载稳定；窗口可见时它按持久计数每次加载都变，`AUDIO` 图层还跟着系统音频变。比较时要钉住计数并看状态差异，第一版验收里「就地关 = 整场加载」是在隐藏时测的。
+
+### 步骤 3（2026-11-06）
+
+**实现。** 点 4、点 5 按上文落地。第一版写完后 WPE 实验（[p3-script-REPORT.md](p3-script-REPORT.md) K 节）推翻了几个假设，又修了三处：
+- HDR 判定的 `bloom` 改读场景文件（K3）。`compileScene` 在套用 `scriptOverrides` 之前取值，缺键写成 null：`undefined` 会落到缺省参数，读到覆盖后的值。泛光位 `bloomFlag` 仍读属性当前值。
+- `installGeneral` 的全部字段同时装到 `general` 和 `thisScene`（K5）。
+- 新增 `hdrFlag`：`thisScene.hdr` 与 `recompileValue["general/hdr"]` 读它，脚本写的值等于场景位时不重新加载。`ctl-nobloom` 这样的场景读 true，而渲染是 LDR，同 WPE。
+
+判定里的 `hdr` 读属性当前值与脚本覆盖，见已定 12。中途曾按「`hdr` 也读场景文件」改过一版，用户随后撤销，已还原。
+
+**与计划不一致的地方。**
+- **`thisScene` 原来没有 general 字段。** 计划的 Q5、单测和总体设计都写 `thisScene.bloom`，但 `ScriptApi` 的 `thisScene` 只有 `getLayer` 等四个方法，general 字段全在 `this.general` 上，只有挂在 `general.*` 上的脚本能经 `thisObject` 碰到。K5 证实 WPE 的 API 存在，general 字段都在 `thisScene` 上（C 节当时只列了方法）。现在 `installGeneral` 跑两遍，`general` 和 `thisScene` 是同一组字段，读写同一份；`fog*`、`wind*`、`zoom` 这些现在没有的字段不新增。固定的 41 张语料脚本（含 `scene.pkg` 与散落的 `.js`）里，`thisScene` 只用到 `getLayer`、`createLayer`、`destroyLayer`、`sortLayer`、`getLayerIndex`、`enumerateLayers`，没有 general 字段、方括号、解构或别名，所以 `recompileWrites` 不变。
+- **`init` 里读到的值与 WPE 不同。** WPE 的 `init` 读到 JSON 的 `value`，第一次 `update` 起才是属性值（K3）；我们从一开始就是属性值。这是 3b 的整体语义，所有绑定都一样，这轮不改。
+- `create` 不再写 uniform，全部由末尾那次 `setParams` 写。没用到的绘制留空，用到时才写，所以「建链时的写入」和「就地 `setParams` 的写入」是同一批缓冲，`p3a.test` 的逐字节比较不用改。
+- `needsRecompile` 与 `write` 共用 `bloomFlagOf`：计划的 `write` 分支自己换算 condition，`needsRecompile` 没写。`write` 没有单独判「同值」，同值时 `needsRecompile` 本来就是假，赋值无害。
+- 计划写 `needsRecompile` 返回真的条件是「没有链」，实际还要 `!bloomEnabled`：场景没有对象时没有链但位是开的，这时写 `true` 是同值，不算打开。
+- `BLOOM_FIELDS` 比 `scripts.ts` 原来的表少了 `bloomhdrtint`（`hdrTint` 不是 `BloomParams` 字段，写进去也没有效果），`{script}` 挂在它上面现在是 `unsupported`。本机零样本。
+- `render/renderer.ts` 的 `applyBindings` 删 `canApply` 后局部变量 `scene` 也不用了，`scene.ts` 的 `BloomParams` import 同样删掉。
+
+**语料的预期。** 扫了本机 defaultprojects 与工坊目录的 `scene.json` / `scene.pkg`（3429479356 的包有 712 MB，用 `grep -a` 单独扫的）：
+- 动手时的 41 张语料：`general.bloom` 绑属性 3 张（3286859278、3409595232、3445915391），`{script}` 只挂在 shimmering_particles 的 `bloomstrength` 上，`bloom`、`bloomhdrfeather`、`bloomhdrscatter`、`bloomhdriterations`、`bloomhdrtint` 上都没有。所以这份语料的 `targetKind` 不应该变。这三张的属性当前为 false 时，开启档以上会多编泛光链。
+- 2026-11-06 10:08–10:11 工坊目录新下载了 14 项（45 → 59，都带 `scene.pkg`），不是这一步动的，基线不含它们。里面有这一步相关的样本：
+  - 2582765611：`bloom: {user: "highlight", value: false}`，默认关着、绑属性，正好走「有链但关着」；
+  - 2833017810：`bloom` 绑属性；
+  - 3355291946：`bloom` 和 `hdr` 都绑属性，推翻了计划写的「`hdr` 绑属性 0 个」，是和 WPE 的差异样本（已定 12）；
+  - 3487328036：`bloomstrength` 写成 `{animation: …}`，不是 `{user}` 也不是 `{script}`，这一步没有看它怎么解析。
+
+  全部语料里 `thisScene.bloom` / `thisScene.hdr` 仍然 0 处。
+- `pkg.test.ts` 按工坊目录每个 `scene.pkg` 生成一个用例，所以 vitest 总数随目录变化，比较时要扣掉。
+
+**留的疑点。**
+- `{script}` 挂在 `general.hdr` 上时，`targetOf` 给的是 `unsupported`：经 `thisObject.hdr = x` 或 `thisScene.hdr = x` 赋值走重编译，`update` 的返回值不写回，只警告一次。这是原有行为，「脚本写入保留重编译」这里按 API 赋值理解，没有改。本机零样本。
+- `applyChanges` 把被挡下的写入都记成 `effect-blocked（路径）`。`bloom-enabled` 也可能走到这里，但属性绑定必有链，只有场景没有对象或 dev 强制渲染时才碰得到，只影响 debug 日志，没有改名。
+- 宿主的 `后处理 …（泛光）` 日志看的是 `bundle.bloom`，有链但当前关着的场景也写「泛光」，没有改。
+- 假设备不验证 WebGPU 的实际规则，21 个绘制的 bind group 与管线布局兼容性要真机确认。
+
+**验收**（2026-11-06，脚本与结果 `ignore/p3c/step3/accept/`，回归表 D17–D31）。tsc、vitest 453 项、HEAD 基线 18 项、语料三档 41 张由主会话验过，这一轮没有重跑。变异检查不在这一轮范围。
+
+开测时主窗口被遮住，裸 CDP 读到 `hidden`，rAF 为 0。全程用 `Emulation.setFocusEmulationEnabled` 让页面按可见处理，rAF 145 Hz，所以没有在真实露出的窗口上测。宿主绘制是 60 Hz，低于 rAF，逐 rAF 写入时不是每次写入都画出来。
+
+- 判定（K3 四组，超高档）：HDR / LDR 与 WPE 四组全部一致，`q3a` 翻开是 HDR 泛光，`q3b` 翻关保持 LDR，`q3d` 翻开是 LDR 泛光，翻转后的哈希都等于对应工程的整场加载。
+- 就地开关：`q1-ldr`（开启、超高）、`q2-hdr`（超高）都是 `applied` +4、`recompiled` 0。关 = 没有泛光时整场加载，开 = 属性为 true 整场加载，`q2-hdr` 关 = `q3a-jT-pF`。关着时 `hdrp` 76，`brightness` 仍生效。关着改强度，打开是新强度。暂停时切换，250 ms 后的截图已更新。连切 21 次末态正确。
+- 级数：8 → 3 → 8、8 → 1 → 5 → 8 没有重编译，每个 N 等于同 N 整场加载，回到开始的哈希。
+- 脚本：`q5-hdr` 系就地，同帧判定 300 / 300 与 K0 同相（K1 对照 158 / 300、144 / 300）。`q5-ldr` 系第一次写 `true` 走一次整场重编译（72–83 ms），之后就地，HDR 判定不变；`s-nb`（`hdr: true`、`bloom: false`）打开后仍是 LDR。`ctl-nobloom` 读 `hdr=true`、实际 LDR。
+- 压力：逐 rAF 交替 10 s，每段约 1440 次写入、610 帧。`frameMs` 均值开 0.29、关 0.22、交替 0.24（`q2-hdr`）。切换期间没有管线、着色器、bind group、纹理、缓冲创建，`recompiled` 0，没有 WebGPU 错误。
+- 不回归：12888、12889 开启、超高档四次读回等于动手前基线，控制台没有错误，桌面宿主不受影响。
+
+**和 WPE 比绝对值。** WPE 窗口客户区 1920×1080，Kabegame 场景目标 1920×1080，判读点同 K8，5×5 平均，G 通道，`k` 取 R。窗口图 = 场景 + (11, 45)，与 960×540 时的偏移相同，整帧比较说明没有缩放。上行 WPE，下行 Kabegame：
+
+| 工程 | 来源 | `block` | `hdrp` | `k` | `bg` | `d10` | `d20` | `d40` | `d80` | `d160` | `d320` | `d640` | 整帧最大差 / 平均差 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ctl-ldr` | WPE | 255 | 153 | 127 | 0 | 52.0 | 25.4 | 3.0 | 0 | 0 | 0 | 0 | |
+| | KB | 255 | 153 | 127 | 0 | 52.0 | 25.4 | 3.0 | 0 | 0 | 0 | 0 | 0 / 0 |
+| `ctl-hdr` | WPE | 255 | 80 | 130 | 1 | 255 | 255 | 255 | 210.1 | 91.6 | 28.4 | 4.0 | |
+| | KB | 255 | 80 | 130 | 1 | 255 | 255 | 255 | 210.1 | 91.6 | 28.4 | 4.0 | 1 / 0.025 |
+| `q4-n8` | WPE | 255 | 77 | 128 | 0 | 182.6 | 142.2 | 95.6 | 52.4 | 23.0 | 7.0 | 1.0 | |
+| | KB | 255 | 77 | 128 | 0 | 182.7 | 142.2 | 95.6 | 52.6 | 23.0 | 7.0 | 1.0 | 1 / 0.028 |
+| `q4-n3` | WPE | 255 | 76 | 127 | 0 | 40.4 | 2.2 | 0 | 0 | 0 | 0 | 0 | |
+| | KB | 255 | 76 | 128 | 0 | 40.4 | 2.2 | 0 | 0 | 0 | 0 | 0 | 1 / 0.001 |
+
+`ctl-nobloom` 整帧逐像素相同。差值最大是判读点 0.2、`k` 1，都在 8 位取整的范围内。
+
+**和 WPE 的差异。**
+- 已定：
+  - 没有链的场景被脚本打开走整场重编译，WPE 同帧、不编译（实测 72–83 ms）；
+  - `init` 里读到属性值，WPE 是 JSON 的 `value`（`q3a` 日志 `init … bloom=false`）。
+- 这一轮新发现，验收后已修（Claude，2026-11-06）：
+  - `thisScene.bloom = true` 打开没有链的场景时，重编译完成前读回 `false`，WPE 当场读回 `true`（K5）。`SceneState.write` 现在先改位再返回 `recompile`，位开着但没有链时不画，整场编译后才打开。
+  - 脚本触发的重编译不进 `stats().recompiled`。`overrideAndReload` 现在记一条，原因写 `script（<路径>）`。
+
+  复测（`ignore/p3c/step3/accept/recheck.mjs`，超高档）：`q5-ldr` 的 4 次写入都当场读回写入值，`recompiled` 为 1 条 `script（general/bloom）`；`s-ldr-long` 只有一次重编译，计数与宿主日志一致，之后的开启哈希 `910b2f7a6678` 等于验收里的整场加载。第一次开的读回落在重编译完成之前，这时还是关着的画面，属于上面已定的差异。
+
+**没有测到。** 壁纸窗口里切泛光（不改壁纸设置）；`general.hdr` 绑属性；`q5-sync*` 原工程的 400 帧窗口（用放长的副本）；工坊 2582765611（`unsupported` 不为空，退回预览图）；displayhdr 档。
+
+**恢复。** 测试行 13122–13148 与两个任务已删，图片 9841 行、任务 638 行、画册 5657 个。工坊目录与工程目录都在。13114 的属性不变（`p_alpha` 0.53、`p_mode` c）。「场景后处理」恢复成 `disabled`，当前壁纸 12888、窗口模式、未暂停，预览已关，路由 `/gallery`，`localStorage` 没有残留测试键。WPE 主进程 36548 没有动，测试窗口都关了，`config.json` 哈希前后相同，仍是 `ultra`、`fps=10`。

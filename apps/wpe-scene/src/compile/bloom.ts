@@ -43,7 +43,7 @@ export const HDR_BLOOM_MATERIALS: Readonly<Record<HdrBloomPass, { material: stri
 /** 泛光链里由渲染器写、图层材质里没有意义的引擎 uniform（RV0：纹素偏移，A2 / I4）。 */
 export const POSTPROCESS_UNIFORMS: ReadonlySet<string> = new Set(["g_RenderVar0"]);
 
-/** 一份 bundle 的泛光：开着时才有（`general.postprocess.bloom` 且场景有对象，A1）。 */
+/** 一份 bundle 的泛光：当前开着或运行中可能打开时才有（判定见 `compileScene`），开不开看 `SceneState.bloomEnabled`。 */
 export interface SceneBloom {
   hdr: boolean;
   /** 各 pass 编好的材质；`uniforms` 只是着色器注解默认值，场景参数由渲染图按材质名写入。 */

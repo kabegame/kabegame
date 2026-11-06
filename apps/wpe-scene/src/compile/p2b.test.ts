@@ -78,15 +78,65 @@ describe("泛光参数", () => {
   });
   it("HDR 判定：工坊 3286859278 的 bloom 是属性对象、hdr 为 true，超高档走 HDR", () => {
     const general = { bloom: { user: "postprocessing", value: true }, hdr: true };
-    expect(scenePostprocessState("ultra", general)).toEqual({ level: "ultra", bloom: true, hdr: true });
-    expect(scenePostprocessState("enabled", general)).toEqual({ level: "enabled", bloom: true, hdr: false });
+    expect(scenePostprocessState("ultra", general)).toEqual({
+      level: "ultra",
+      bloomFlag: true,
+      hdrFlag: true,
+      bloom: true,
+      hdr: true,
+    });
+    expect(scenePostprocessState("enabled", general)).toEqual({
+      level: "enabled",
+      bloomFlag: true,
+      hdrFlag: true,
+      bloom: true,
+      hdr: false,
+    });
+    // 属性关掉泛光，HDR 判定不变：判定读 JSON 的 value（K3）
     expect(scenePostprocessState("ultra", general, { postprocessing: false })).toEqual({
       level: "ultra",
+      bloomFlag: false,
+      hdrFlag: true,
       bloom: false,
-      hdr: false,
+      hdr: true,
     });
     // bloom 缺键：泛光默认开，但 HDR 要求场景里写明（G3）
     expect(scenePostprocessState("ultra", { hdr: true })).toMatchObject({ bloom: true, hdr: false });
+  });
+  it("hdrFlag 是场景位：不看档位，也不看 HDR 判定；缺键或不是 bool 时为 false", () => {
+    for (const level of ["disabled", "enabled", "ultra"] as const) {
+      expect(scenePostprocessState(level, { hdr: true }).hdrFlag).toBe(true);
+      expect(scenePostprocessState(level, { hdr: false }).hdrFlag).toBe(false);
+      expect(scenePostprocessState(level, {}).hdrFlag).toBe(false);
+      expect(scenePostprocessState(level, undefined).hdrFlag).toBe(false);
+      expect(scenePostprocessState(level, { hdr: 1 }).hdrFlag).toBe(false);
+      expect(scenePostprocessState(level, { hdr: { user: "h", value: true } }, { h: "1" }).hdrFlag).toBe(false);
+      expect(scenePostprocessState(level, { hdr: { user: "h", value: false } }, { h: true }).hdrFlag).toBe(true);
+    }
+    // ctl-nobloom：场景位 true，实际渲染是 LDR（K5）
+    expect(scenePostprocessState("ultra", { bloom: false, hdr: true })).toMatchObject({ hdrFlag: true, hdr: false });
+  });
+  it("文件值只认 bool 或对象的 bool value，其余都不判 HDR", () => {
+    const state = (fileBloom: unknown) =>
+      scenePostprocessState("ultra", { bloom: true, hdr: true }, {}, undefined, fileBloom).hdr;
+    expect(state(true)).toBe(true);
+    expect(state({ user: "p", value: true })).toBe(true);
+    expect(state({ script: "x", value: true })).toBe(true);
+    expect(state(false)).toBe(false);
+    expect(state({ user: "p", value: false })).toBe(false);
+    expect(state({ user: "p" })).toBe(false);
+    expect(state({ user: "p", value: "true" })).toBe(false);
+    expect(state(1)).toBe(false);
+    expect(state(null)).toBe(false);
+  });
+  it("bloomFlag 是场景位：不看档位；缺键或不是 bool 时为 true", () => {
+    expect(scenePostprocessState("disabled", { bloom: true })).toMatchObject({ bloomFlag: true, bloom: false });
+    expect(scenePostprocessState("disabled", { bloom: false })).toMatchObject({ bloomFlag: false, bloom: false });
+    expect(scenePostprocessState("disabled", {})).toMatchObject({ bloomFlag: true, bloom: false });
+    expect(scenePostprocessState("enabled", { bloom: { user: "p", value: "1" } })).toMatchObject({ bloomFlag: true });
+    expect(scenePostprocessState("disabled", { bloom: { user: "p", value: true } }, { p: false })).toMatchObject({
+      bloomFlag: false,
+    });
   });
 });
 
@@ -118,21 +168,105 @@ describe("HDR 下的颜色系数", () => {
 });
 
 describe("编译：泛光链与 brightness", () => {
+  const SCRIPT = "export function update(value) { return value; }";
   const project = JSON.stringify({ file: "scene.json" });
   const scene = (general: Record<string, unknown>, objects: unknown[] = [{ id: 1, name: "a", brightness: 3 }]) =>
     JSON.stringify({ general: { orthogonalprojection: { width: 64, height: 32 }, ...general }, objects });
-  const compile = (general: Record<string, unknown>, postprocess: "disabled" | "enabled" | "ultra", files = {}) =>
+  const compile = (
+    general: Record<string, unknown>,
+    postprocess: "disabled" | "enabled" | "ultra",
+    files = {},
+    userProperties: Record<string, boolean> = {},
+    scriptOverrides: Record<string, boolean> = {},
+  ) =>
     compileScene({
       projectDir: "P:/p",
       sceneAssets: ["A:/assets"],
       reader: memoryReader({ "P:/p/project.json": project, "P:/p/scene.json": scene(general), ...files }),
       translator: null,
       postprocess,
+      userProperties,
+      scriptOverrides,
       exhaustive: true,
     });
-  it("关闭档或场景 bloom 为 false 时没有泛光链", async () => {
+  it("关闭档或场景 bloom 写死 false 时没有泛光链", async () => {
     expect((await compile({ bloom: true, hdr: true }, "disabled")).bloom).toBeNull();
     expect((await compile({ bloom: false }, "ultra")).bloom).toBeNull();
+  });
+  it("bloom 绑了属性且当前为 false：档位允许就有链，场景位是 false，绑定目标就地", async () => {
+    const general = { bloom: { user: "p", value: true } };
+    const off = await compile(general, "enabled", {}, { p: false });
+    expect(off.bloom).not.toBeNull();
+    expect(off.general.postprocess).toMatchObject({ bloomFlag: false, bloom: false });
+    expect(off.bindings).toContainEqual({ property: "p", target: { kind: "bloom-enabled" } });
+    // 属性打开时同样有链
+    expect((await compile(general, "enabled", {}, { p: true })).general.postprocess.bloom).toBe(true);
+  });
+  describe("HDR 判定读场景文件（K3）", () => {
+    it.each([
+      [true, false, true],
+      [false, true, false],
+      [true, true, true],
+      [false, false, false],
+    ])("JSON value %s、属性 %s：HDR %s，开关跟属性，链的形态跟判定", async (value, property, hdr) => {
+      const bundle = await compile({ bloom: { user: "p", value }, hdr: true }, "ultra", {}, { p: property });
+      expect(bundle.general.postprocess).toMatchObject({ bloomFlag: property, bloom: property, hdrFlag: true, hdr });
+      // 绑了属性：四组都建链。关着的两组运行中打开，泛光的形态就是这条链
+      expect(bundle.bloom?.hdr).toBe(hdr);
+    });
+    it("`bloom: false` 被脚本覆盖成 true：仍是 LDR，但开着、有链", async () => {
+      const opened = await compile({ bloom: false, hdr: true }, "ultra", {}, {}, { "general/bloom": true });
+      expect(opened.general.postprocess).toMatchObject({ bloomFlag: true, bloom: true, hdrFlag: true, hdr: false });
+      expect(opened.bloom?.hdr).toBe(false);
+    });
+    it("挂了脚本的 bloom 被覆盖：判定读文件里的 value，开关读覆盖后的值", async () => {
+      const general = { bloom: { script: SCRIPT, value: false }, hdr: true };
+      const opened = await compile(general, "ultra", {}, {}, { "general/bloom": true });
+      expect(opened.general.postprocess).toMatchObject({ bloomFlag: true, hdr: false });
+      const kept = await compile({ ...general, bloom: { script: SCRIPT, value: true } }, "ultra");
+      expect(kept.general.postprocess).toMatchObject({ bloomFlag: true, hdr: true });
+    });
+    it("文件缺 bloom 键：被覆盖成 true 也不算写明，不判 HDR", async () => {
+      const opened = await compile({ hdr: true }, "ultra", {}, {}, { "general/bloom": true });
+      expect(opened.general.postprocess).toMatchObject({ bloomFlag: true, bloom: true, hdr: false });
+    });
+    it("general.hdr 绑属性：改属性影响判定，目标格式跟判定（3c 已定 12，有意不跟 WPE）", async () => {
+      const on = await compile({ bloom: true, hdr: { user: "h", value: false } }, "ultra", {}, { h: true });
+      expect(on.general.postprocess).toMatchObject({ hdrFlag: true, hdr: true });
+      expect(on.bloom?.hdr).toBe(true);
+      const off = await compile({ bloom: true, hdr: { user: "h", value: true } }, "ultra", {}, { h: false });
+      expect(off.general.postprocess).toMatchObject({ hdrFlag: false, hdr: false });
+      expect(off.bloom?.hdr).toBe(false);
+      expect(off.bindings).toContainEqual({
+        property: "h",
+        target: { kind: "recompile", reason: "postprocess", path: "general.hdr" },
+      });
+    });
+    it("scriptOverrides 写 general/hdr：影响判定与 hdrFlag", async () => {
+      const raised = await compile({ bloom: true, hdr: false }, "ultra", {}, {}, { "general/hdr": true });
+      expect(raised.general.postprocess).toMatchObject({ hdrFlag: true, hdr: true });
+      expect(raised.bloom?.hdr).toBe(true);
+      const lowered = await compile({ bloom: true, hdr: true }, "ultra", {}, {}, { "general/hdr": false });
+      expect(lowered.general.postprocess).toMatchObject({ hdrFlag: false, hdr: false });
+      const hung = { bloom: true, hdr: { script: SCRIPT, value: false } };
+      const script = await compile(hung, "ultra", {}, {}, { "general/hdr": true });
+      expect(script.general.postprocess).toMatchObject({ hdrFlag: true, hdr: true });
+    });
+  });
+  it("档位关闭时不建链：绑了属性、挂了脚本都不算，位怎么变都没有效果", async () => {
+    const bound = await compile({ bloom: { user: "p", value: true } }, "disabled", {}, { p: true });
+    expect(bound.bloom).toBeNull();
+    expect(bound.general.postprocess).toMatchObject({ bloomFlag: true, bloom: false });
+    expect((await compile({ bloom: { script: SCRIPT, value: true } }, "disabled")).bloom).toBeNull();
+  });
+  it("bloom 挂了脚本且当前为 false：有链；写死 false 的场景带别的脚本不算", async () => {
+    const hung = await compile({ bloom: { script: SCRIPT, value: false } }, "enabled");
+    expect(hung.bloom).not.toBeNull();
+    expect(hung.general.postprocess).toMatchObject({ bloomFlag: false, bloom: false });
+    expect(hung.scripts.list[0]).toMatchObject({ target: { kind: "bloom-enabled" }, valueType: "bool" });
+    const other = await compile({ bloom: false, bloomstrength: { script: SCRIPT, value: 2 } }, "enabled");
+    expect(other.scripts.list).toHaveLength(1);
+    expect(other.bloom).toBeNull();
   });
   it("场景没有对象时不跑泛光（A1）", async () => {
     const bundle = await compileScene({
@@ -246,7 +380,13 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P2b 样本", () => {
   it("razer_bedroom 超高档：HDR 五个 pass，COMBO 与材质名对上", async () => {
     const bundle = await compile(sample("razer_bedroom"), { postprocess: "ultra", exhaustive: true });
     expect(bundle.unsupported).toEqual([]);
-    expect(bundle.general.postprocess).toEqual({ level: "ultra", bloom: true, hdr: true });
+    expect(bundle.general.postprocess).toEqual({
+      level: "ultra",
+      bloomFlag: true,
+      hdrFlag: true,
+      bloom: true,
+      hdr: true,
+    });
     expect(bundle.bloom?.hdr).toBe(true);
     expect(combos(bundle, "downsampleBloom")).toMatchObject({ BLOOM: 1 });
     expect(combos(bundle, "upsample")).toMatchObject({ UPSAMPLE: 1 });
@@ -274,7 +414,13 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P2b 样本", () => {
     async () => {
       // 快速路径（这张还有别的不支持项，确定退回后不再编译泛光链；列全时会撞上带尾逗号的 effect.json，见 PLAN P2b 遗留）
       const bundle = await compile(ghost, { postprocess: "ultra" });
-      expect(bundle.general.postprocess).toEqual({ level: "ultra", bloom: true, hdr: true });
+      expect(bundle.general.postprocess).toEqual({
+        level: "ultra",
+        bloomFlag: true,
+        hdrFlag: true,
+        bloom: true,
+        hdr: true,
+      });
       // 抓帧里的常量：scatter 1.6、hdrstrength 5（g_BloomStrength = 5 / (1 + 1.6^6) = 0.28126）
       expect(bundle.general.bloom).toMatchObject({ hdrStrength: 5, hdrThreshold: 1, hdrIterations: 8 });
       expect(bundle.general.bloom.hdrScatter).toBeCloseTo(1.6, 6);

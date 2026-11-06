@@ -11,6 +11,7 @@
  *   非 unique 的 fbo 按名字、尺寸、格式、寻址共享，unique 的每层独占（B6）。
  * - `swap` 只改 fbo 名 → 实体的对应（`FboBindings`），跨帧保留；引用 fbo 的 bind group 按当前对应取（缓存）。
  * - 泛光（`bundle.bloom`，P2b）：全部图层之后拷一次快照、跑 `BloomChain`，combine 写回场景目标；没有泛光时不多任何拷贝或 pass。
+ *   开关每帧读 `SceneState.bloomEnabled`（A1），关着时和没有链走同一段代码，画面逐字节相同。HDR 在加载时判定，读场景文件、和开关无关（K3），运行中关泛光，目标格式与 `brightness` 都保持 HDR。
  * - HDR：场景目标、快照、合成 RT 都是 `rgba16float`（`*_backbuffer` fbo 编译期已换算），图层颜色乘 `brightness`（B10）。
  * - effect 开关（3c，对齐 WPE，p3-script-REPORT J 节）：分两段。加载时 `prepareVariants` 把可变图层可能用到的程序与管线全部建好
  *   （关着的 effect 也一样）；切换时 `sync` 当场重排图层（`rebuildLayer`），不编译、不等待，返回时新结构已换上。脚本在 `sync` 之前运行，
@@ -20,7 +21,6 @@
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
-import type { BloomParams } from "../compile/postprocess";
 import { FBO_FORMATS } from "../compile/tex";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
@@ -934,14 +934,9 @@ export class GpuScene {
     };
   }
 
-  /** 泛光参数能否就地改（HDR 级数不变）；其它目标都能。 */
-  canApply(params: BloomParams): boolean {
-    return !this.bloom || this.bloom.sameLevels(params);
-  }
-
   /**
    * 把 `SceneState` 的脏项刷进 uniform 块 / 泛光链（在 `update` 之前调用）。
-   * 能不能做已在调用方判过（`canApply`）；脏 draw 由 `update` 整块重写。结构脏当场处理，返回时新结构已换上。
+   * 脏 draw 由 `update` 整块重写。结构脏当场处理，返回时新结构已换上。
    */
   sync(state: SceneState): void {
     const dirty = state.takeDirty();
@@ -1039,7 +1034,7 @@ export class GpuScene {
   }
 
   /**
-   * 按图层顺序执行全部步骤，结果在离屏场景目标里。不可见图层整段跳过（含它的快照）。
+   * 按图层顺序执行全部步骤，结果在离屏场景目标里。不可见图层整段跳过（含它的快照），泛光关着时不拷快照、不跑链。
    * `afterBloomStep`：泛光链每步之后调用（dev 探针读回中间结果用）。
    */
   encode(encoder: GPUCommandEncoder, state: SceneState, afterBloomStep?: Parameters<BloomChain["encode"]>[2]): void {
@@ -1116,7 +1111,7 @@ export class GpuScene {
     // 不可见图层整段跳过（含它的快照与 copy / swap）；运行时可见性由 `SceneState` 决定（P3a）
     const visible = new Set(visibleObjects(this.layers, state));
     for (const layer of this.layers) if (visible.has(layer.object)) runOps(layer.ops);
-    if (this.bloom) {
+    if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!cleared) begin();
       end();

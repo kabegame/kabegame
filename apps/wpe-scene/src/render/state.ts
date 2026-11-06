@@ -1,6 +1,6 @@
 /**
  * CPU 侧的场景状态（P3a 点 2）：就地写落在它上面并标脏，`GpuScene.sync` 每帧把脏项刷进对应 draw 的 uniform 块、
- * 图层可见性或泛光链参数，一帧之内生效。
+ * 图层可见性或泛光链参数，一帧之内生效。`bloomEnabled` 不标脏，`GpuScene.encode` 每帧直接读（A1）。
  *
  * 它**独立于 GPU**：只是数据加脏集合。draw 的 uniform 组装是纯函数（`render/uniforms.ts` 的 `drawUniformValues`），
  * 单测在 Node 里就能核对「就地改值后的 uniform 字节 = 用新值整场重编译得到的字节」，这是本阶段最主要的正确性判据。
@@ -41,6 +41,12 @@ interface EffectState {
 /** effect 开关的键：scene.json 坐标（`effect` 是 `SceneEffect.source`，不是 `layer.effects` 下标）。 */
 function effectKey(object: number, effect: number): string {
   return `${object}/${effect}`;
+}
+
+/** `general.bloom` 的写入值：WPE 的 setter 只认 bool，别的值不改位（G4），同 `flagValue`；不改位时返回 undefined。 */
+function bloomFlagOf(binding: SceneBinding, raw: SceneScalar): boolean | undefined {
+  const value = binding.condition === undefined ? raw : String(raw) === binding.condition;
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function layerStateOf(layer: SceneLayer): LayerState {
@@ -110,6 +116,8 @@ export class SceneState {
   /** pass 稳定键 → 材质常量覆盖（uniform 名 → 分量）；起始值 = 编译期的 `pass.uniforms`。 */
   readonly constants = new Map<TargetKey, Record<string, number[]>>();
   bloom: BloomParams;
+  /** 场景的 bloom 位，不含档位（WPE 的 `+0xe0` bit1）。档位关闭时没有泛光链，位怎么变都没有效果。 */
+  bloomEnabled: boolean;
   private dirtyLayers = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
@@ -122,10 +130,14 @@ export class SceneState {
     constants: Map<TargetKey, Record<string, number[]>>,
     bloom: BloomParams,
     private readonly effects: Map<string, EffectState>,
+    bloomEnabled: boolean,
+    /** 档位允许但没有编泛光链：打开要整场重编译。 */
+    private readonly bloomMissing: boolean,
   ) {
     this.layers = layers;
     this.constants = constants;
     this.bloom = bloom;
+    this.bloomEnabled = bloomEnabled;
   }
 
   static fromBundle(bundle: SceneBundle): SceneState {
@@ -145,8 +157,15 @@ export class SceneState {
       }
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
     }
-    const { bloom } = bundle.general;
-    return new SceneState(layers, constants, { ...bloom, tint: [...bloom.tint] }, effects);
+    const { bloom, postprocess } = bundle.general;
+    return new SceneState(
+      layers,
+      constants,
+      { ...bloom, tint: [...bloom.tint] },
+      effects,
+      postprocess.bloomFlag,
+      !bundle.bloom && postprocess.level !== "disabled",
+    );
   }
 
   /** 按 scene.json 坐标取 effect 开关；不在 bundle 里的算关着。 */
@@ -159,10 +178,12 @@ export class SceneState {
     this.frozenLayers.add(object);
   }
 
-  /** 这次写入是否要整场重编译（不改状态）：打开带不支持项的 effect、切换冻结的图层，或已经是重编译类目标。 */
+  /** 这次写入是否要整场重编译（不改状态）：打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景，或已经是重编译类目标。 */
   needsRecompile(binding: SceneBinding, raw: SceneScalar): boolean {
     const { target } = binding;
     if (target.kind === "recompile") return true;
+    if (target.kind === "bloom-enabled")
+      return this.bloomMissing && !this.bloomEnabled && bloomFlagOf(binding, raw) === true;
     if (target.kind !== "effect") return false;
     const effect = this.effects.get(effectKey(target.object, target.effect));
     const enabled = bindingValue(raw, binding.condition, "bool") !== false;
@@ -172,7 +193,8 @@ export class SceneState {
 
   /**
    * 一条绑定的写入；目标不在当前 bundle 里（如被排除的 effect）返回 `"applied"` 且不做事，
-   * 重编译类目标与 `needsRecompile` 为真的 effect 开关返回 `"recompile"`（状态不变，调用方整场重编译）。
+   * 重编译类目标与 `needsRecompile` 为真的开关返回 `"recompile"`（调用方整场重编译）。状态不变，只有 bloom 位例外：
+   * 脚本写完要能当场读回（K5），没有链时位开着也不画，整场编译后才打开。
    */
   write(binding: SceneBinding, raw: SceneScalar): WriteResult {
     const { target } = binding;
@@ -188,6 +210,13 @@ export class SceneState {
       effect.enabled = enabled;
       this.dirtyStructures.add(target.object);
       return "applied";
+    }
+    if (target.kind === "bloom-enabled") {
+      const value = bloomFlagOf(binding, raw);
+      if (value === undefined) return "applied";
+      const recompile = this.needsRecompile(binding, raw);
+      this.bloomEnabled = value;
+      return recompile ? "recompile" : "applied";
     }
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
@@ -209,15 +238,6 @@ export class SceneState {
     this.bloom = writeBloomParam(this.bloom, target.field, raw, binding.condition);
     this.bloomDirty = true;
     return "applied";
-  }
-
-  /** 估算一批写入之后的泛光参数（不改状态）：渲染器据此先问 GPU 场景能不能就地改（级数会不会变）。 */
-  previewBloom(writes: readonly { binding: SceneBinding; value: SceneScalar }[]): BloomParams {
-    let bloom = this.bloom;
-    for (const { binding, value } of writes)
-      if (binding.target.kind === "bloom")
-        bloom = writeBloomParam(bloom, binding.target.field, value, binding.condition);
-    return bloom;
   }
 
   /** 渲染器每帧取走脏项（取走即清空）。 */

@@ -189,16 +189,14 @@ export class SceneRenderer {
 
   /**
    * 就地应用一批绑定写入；需要重编译时返回 false（调用方整场重编译）。
-   * 写之前先问状态与 GPU 场景能不能做：打开带不支持项的 effect、切换冻结的图层不能（`needsRecompile`），
-   * 泛光的 `bloomhdriterations` 改变级数时不能（`canApply`），做不了就一条都不写。
+   * 写之前先问状态能不能做：打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景不能（`needsRecompile`），
+   * 做不了就一条都不写。
    * 这里不画：暂停时由宿主在脚本的属性回调之后调 `redraw`，回调的写入才能进同一帧。
    */
   applyBindings(writes: readonly BindingWrite[]): boolean {
     const state = this.state;
-    const scene = this.scene;
-    if (!state || !scene || this.destroyed || this.lost || this.failed) return false;
+    if (!state || !this.scene || this.destroyed || this.lost || this.failed) return false;
     if (writes.some((write) => state.needsRecompile(write.binding, write.value))) return false;
-    if (!scene.canApply(state.previewBloom(writes))) return false;
     for (const write of writes) state.write(write.binding, write.value);
     return true;
   }

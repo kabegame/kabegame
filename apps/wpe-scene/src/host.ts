@@ -160,12 +160,12 @@ export class SceneHost {
     this.applyChanges(changes);
   }
 
-  /** 按当前 bundle 的绑定表应用一批变化；有任何一条要重编译（或 GPU 侧做不了就地写）就整场重编译。 */
+  /** 按当前 bundle 的绑定表应用一批变化；有任何一条要重编译（或 `needsRecompile` 挡下了就地写）就整场重编译。 */
   private applyChanges(changes: ReadonlyMap<string, SceneScalar>): void {
     const bundle = this.bundle;
     if (!bundle) return;
     const plan = planApply(bundle.bindings, changes);
-    // 写之前问：打开带不支持项的 effect、切换冻结的图层时 `applyBindings` 一条都不写，这几条按重编译目标处理
+    // 写之前问：打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景时 `applyBindings` 一条都不写，这几条按重编译目标处理
     const state = this.renderer?.sceneState;
     const blocked = (state ? plan.writes.filter((write) => state.needsRecompile(write.binding, write.value)) : []).map(
       (write) => write.binding.target,
@@ -239,6 +239,8 @@ export class SceneHost {
     if (target.kind === "effect") return `objects/${target.object}/effects/${target.effect}/visible`;
     if (target.kind === "constant") return `${target.pass}/constantshadervalues/${target.material}`;
     if (target.kind === "bloom") return `general/bloom/${target.field}`;
+    // 与 `scriptOverrides` 的路径相同：兜底重编译时编译器读得到
+    if (target.kind === "bloom-enabled") return "general/bloom";
     if (target.kind === "recompile") return target.path;
     return `${target.script}/scriptproperties/${target.key}`;
   }
@@ -256,6 +258,7 @@ export class SceneHost {
       const value = state.bloom[target.field];
       return Array.isArray(value) ? value : [value];
     }
+    if (target.kind === "bloom-enabled") return state.bloomEnabled;
     return null;
   }
 
@@ -265,7 +268,7 @@ export class SceneHost {
     const state = this.scriptState;
     if (!state) return false;
     const result = state.write({ property: "", target }, Array.isArray(value) ? value.join(" ") : value);
-    // 打开带不支持项的 effect、切换冻结的图层：状态没变，结果由整场编译决定，编译要拿到脚本的值
+    // 打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景：状态没变，结果由整场编译决定，编译要拿到脚本的值
     return result === "recompile" ? this.overrideAndReload(this.targetPath(target), value) : true;
   }
 
@@ -275,6 +278,7 @@ export class SceneHost {
     if (JSON.stringify(old) === JSON.stringify(value)) return true;
     if (old === undefined && JSON.stringify(this.recompileValue(path)) === JSON.stringify(value)) return true;
     this.scriptOverrides.set(path, value);
+    this.stats.recompiled.push({ reason: `script（${path}）`, keys: [] });
     this.options.report.debug(`场景脚本重编译目标变化：${path}`);
     this.requestScriptReload();
     return true;
@@ -288,8 +292,7 @@ export class SceneHost {
       "general/clearenabled": bundle.general.clearEnabled,
       "general/ambientcolor": bundle.general.ambient,
       "general/skylightcolor": bundle.general.skylight,
-      "general/bloom": bundle.general.postprocess.bloom,
-      "general/hdr": bundle.general.postprocess.hdr,
+      "general/hdr": bundle.general.postprocess.hdrFlag,
     };
     return general[path];
   }
@@ -463,20 +466,9 @@ export class SceneHost {
     const state = this.renderer?.sceneState;
     const bundle = this.bundle;
     if (!state || !bundle) return null;
-    if (path.startsWith("general/bloom")) {
-      const field = path.slice("general/bloom".length);
-      const names: Record<string, keyof SceneState["bloom"]> = {
-        strength: "strength",
-        threshold: "threshold",
-        tint: "tint",
-        hdrstrength: "hdrStrength",
-        hdrthreshold: "hdrThreshold",
-        hdrfeather: "hdrFeather",
-        hdrscatter: "hdrScatter",
-        hdriterations: "hdrIterations",
-      };
-      return state.bloom[names[field] ?? "strength"];
-    }
+    if (path === "general/bloom") return state.bloomEnabled;
+    if (path.startsWith("general/bloom/"))
+      return state.bloom[path.slice("general/bloom/".length) as keyof SceneState["bloom"]] ?? null;
     const layer = /^objects\/(\d+)\/(origin|scale|angles|alpha|color|brightness|visible)$/.exec(path);
     if (layer)
       return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;

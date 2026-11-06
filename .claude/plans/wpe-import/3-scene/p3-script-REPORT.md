@@ -824,3 +824,267 @@ DLL 地址以 `0x180000000` 为基址，exe 以 `0x140000000` 为基址。函数
 | ffmpeg | — | 卡住的两个进程由我结束，没有残留 |
 
 另外，试验屏幕抓取时，`gdigrab` 抓到了测试窗口所在区域的桌面内容（用户的编辑器，因为测试窗口没有置顶）。这几个文件已删除，之后只用 `PrintWindow` 抓测试窗口自身。
+
+## K. 泛光开关与级数的运行中行为（2026-11-06）
+
+对象不变（`wallpaper64.exe` SHA-256 前缀 `40e2ce02`，`scenescript64.dll` 前缀 `58039ef9`）。目的：Phase 3c 步骤 3 要把 `general.bloom` 与 `bloomhdriterations` 改成就地生效，这两项之前只有静态结论（I3 标着「未实测」，当时 WPE 是关闭档）。本轮用户把后处理改成了 `ultra`，LDR 场景与 HDR 场景同时可测。
+
+**置信度**沿用 I、J 节：静态确认 / 实测 / 推断 / 未查清。
+
+**一句话结论**：
+- **运行中开关 `bloom`，下一帧生效，不重载**，LDR 与 HDR 都实测。
+- **HDR 位运行中不变。** 关掉 HDR 场景的泛光，`brightness` 继续生效，画面与「JSON `value` 为 true、属性为 false」直接加载逐像素相同。
+- **HDR 判定读 `scene.json` 里 `general.bloom` 的 `value`，不读属性当前值；泛光位读属性当前值。** 两者可以不一致，这一点与代码现状不同（K3）。
+- **级数运行中改值下一帧生效**，8 → 3 → 8 回到原样，每个状态都与同 N 整场加载逐像素相同。
+- **`thisScene.bloom`、`thisScene.bloomhdriterations` 存在且可读写，写入同帧生效**，能在 `bloom: false` 的场景里打开泛光，不编译着色器。读到的是场景位，不含档位（档位部分只有静态依据）。
+
+**实验条件**（数字都在这个条件下得到）：
+- 窗口在用户的 WPE 主进程里（`-playInWindow`，960×540），PID 36548。`postprocessing=ultra`，`fps=10`，帧间隔实测 100 ms。
+- **没有用 RenderDoc**：PID 36548 没有加载 `renderdoc.dll`，要抓帧得重启 WPE，约束不允许。走的是哪条 combine 没有直接观察，靠读数与静态分析。
+- 画面采样用 `PrintWindow(PW_RENDERFULLCONTENT)`，节流到约 23 次 / 秒，存整帧。这轮单次抓取约 9 ms（不节流时 112 次 / 秒），比 J 节记录的 250 ms 快得多，原因未查。所以这轮每帧能抓到约 2 次，比 J 节更接近逐帧。
+- **窗口坐标**：窗口图 = 场景 × 0.5 + (11, 45)，y 轴朝上。`wpe-sync/cap.py` 注释里的 0.75 是错的（`ana_q4.py` 用的坐标其实也是 0.5）。其中 x 比客户区多 9 px，原因未查，不影响判读。
+- **判读量**（场景坐标，版面见 K8）：
+  - `hdrp`：判读片，颜色 0.6、`brightness` 0.5。LDR 读 153（0.6），HDR 读 76（0.3）。0.6 低于 LDR 阈值，自己不发光。开泛光时 HDR 还要加上辉光，读 80–90。
+  - `dN`：白块右缘外 N 个场景单位的亮度，N = 10…640，无泛光时为 0（`clearcolor` 全黑）。
+  - `k`：对照层，红 0.5，alpha 绑 `p_alpha`，与被测属性放在同一条 `applyProperties` 里改。alpha 只改字段，I3 已知下一帧可见。
+  - PrintWindow 读 FP16 交换链是准的：HDR 无泛光时 0.3 读 76，亮度 4 的白块截到 255。
+- `MON` 脚本用 `Date.now()` 记帧，`applyUserProperties` 时记下墙钟与 `thisScene` 的读数，`init` 计数，用来查重载。
+
+### K1. Q1：LDR，`bloom` 绑属性，运行中关、开
+
+**实测：下一帧生效，没有重载。** 工程 `q1-ldr`，连切 24 次，877 个样本：
+
+| 项 | 结果 |
+|---|---|
+| 全部样本的读数组合 | **只有 2 种**，没有中间值、黑帧或第三种状态 |
+| 辉光与对照层 `k` | 496 个（有辉光 + 亮）、381 个（无辉光 + 暗），**从未一新一旧** |
+| 状态段 | 25 段，24 次切换全部看到 |
+| apply 之后第一个新状态样本 | 结束时刻在 apply 后 **4–27 ms**（24 / 24）；apply 之后**没有一个旧状态样本** |
+| 重载 | 全程 `init` 计数 1，帧号连续 |
+| 帧间隔 | 切换前后 12 帧均值 100 ms，最大 105 ms，看不出影响 |
+| 着色器 | `.dxs` 5 → 5，没有新文件（第一轮记录） |
+
+读数（G 通道）：
+
+| 状态 | `d10` | `d20` | `d40` | `d80` | `d160` 及更远 | `hdrp` |
+|---|---|---|---|---|---|---|
+| 开 | 54.2 | 40.2 | 18.6 | 2.2 | 0 | 153 |
+| 关 | 0 | 0 | 0 | 0 | 0 | 153 |
+
+运行中的「开」与字面量 `bloom: true` 整场加载（`ctl-ldr`）逐像素相同，「关」与字面量 `false`（`ctl-nobloom`）逐像素相同（比较时去掉标题栏与 `K` 层）。
+
+静态（p2 A1、I3 已有）：`bloom` 没有改值回调，`FUN_14017fa70` 每帧读 `+0xe0` bit1。
+
+### K2. Q2：HDR，`bloom` 绑属性，运行中关、开
+
+**实测：HDR 位保持，下一帧生效，没有重载。** 工程 `q2-hdr`，连切 24 次，847 个样本，统计与 K1 同样干净：2 种读数，508 / 339 个样本，25 段，第一个新状态样本 4–40 ms，apply 之后没有旧状态样本，`init` 1 次，帧间隔最大 103 ms，`.dxs` 7 → 7。
+
+| 状态 | `hdrp` | `k` | `bg` | `d80` | `d160` | `d320` | `d640` | 白块 |
+|---|---|---|---|---|---|---|---|---|
+| 开 | 90 | 138 | 9 | 153.2 | 75.9 | 33.6 | 12.2 | 255 |
+| 关 | **76** | 25 | 0 | 0 | 0 | 0 | 0 | 255 |
+
+- **关着时 `hdrp` 是 76，不是 153**：`brightness` 继续生效，HDR 位没动。24 次切换一次都没有回到 LDR。
+- **关着时的画面**：没有任何辉光，背景全黑，其余按 HDR 场景原值输出，超过 1 的部分截断（白块亮度 4 读 255）。**这和「`bloom: false` 整场加载」不是同一个画面**：后者判成 LDR，`hdrp` 读 153（`ctl-nobloom`）。
+- 运行中的「关」与 `q3a-jT-pF` 直接加载逐像素相同；「开」与 `ctl-hdr` 逐像素相同。
+- 走 `combine_srgb` 是推断：读数相符（A3：`rgb = lin(rgb)`、不 saturate），没有抓帧。
+
+### K3. Q3：HDR 判定读 JSON 的 `value` 还是属性当前值
+
+**实测 + 静态确认：读 `scene.json` 里 `general.bloom` 的 `value`。泛光位读属性当前值。这回答了 p2 J5 没分清的问题。**
+
+四个工程都是 `hdr: true`、`bloom: {user: p_bloom, value: j}`，属性值 `p` 写在 `project.json`，直接加载，读数不经任何运行中改值：
+
+| 工程 | JSON `value` | 属性当前值 | `hdrp` | 判定 | `d80` | 泛光 |
+|---|---|---|---|---|---|---|
+| `q3a-jT-pF` | true | false | **76** | **HDR** | 0 | **关** |
+| `q3b-jF-pT` | false | true | **153** | **LDR** | 2.2 | **开（LDR 链）** |
+| `q3c-jT-pT` | true | true | 90 | HDR | 153.2 | 开（HDR 链） |
+| `q3d-jF-pF` | false | false | 153 | LDR | 0 | 关 |
+
+- `q3a` 与 `q3b` 是决定性的两组：`hdrp` 跟着 JSON `value` 走，辉光跟着属性走。
+- 整帧比较：`q3b` 直接加载 = `ctl-ldr`，`q3c` = `ctl-hdr`，`q3d` = `ctl-nobloom`，都是逐像素相同。
+- **运行中再翻属性，判定不变**：
+  - `q3a` 翻成 true：`hdrp` 76 → 90，`d80` 153.2，就是 HDR 链的读数。说明这个窗口的 HDR 链已经就绪。
+  - `q3b` 翻成 false：`hdrp` 保持 153，`d80` 归零。
+  - `q3d` 翻成 true：出现 LDR 辉光（`d80` 2.2），`hdrp` 保持 153。
+- **`init` 里读到的是 JSON 的 `value`**，第一次 `update` 起才是属性值。`q3a`：`init` 时 `thisScene.bloom=true`，第 5 帧 `false`。`q3b`：`init` 时 `false`，第 5 帧 `true`。这与 I1 的顺序一致：解析期 setter 写 JSON 的 `value`，场景构造完才以全集为增量走一次绑定。
+
+静态（本轮 REA）：
+- `FUN_14010df40` 读 `.json` 文件（`FUN_1400d3f80`）、rapidjson 解析（`FUN_140117060`），用 `FUN_14010d850(general, "bloom")`、`FUN_14010d850(general, "hdr")` 取值。
+- `FUN_14010d850`：成员是对象时返回它的 `value` 成员（`FUN_140116800(…, "value")`），否则返回成员本身。**全程不碰属性**，所以 p2 G3 的「属性对象不算」确实是错的，J5 的更正是对的，只是取值来源现在分清了。
+- **`general.hdr` 走同一个函数，同样读 JSON 的 `value`**（静态确认，没有构造工程跑）。
+
+局限：这里的「属性当前值」是 `project.json` 的默认值。**用户在界面改过并存进 `config.json` 的值没有测**，因为不能动配置。静态上这条路只读场景文件，推断结论相同。
+
+### K4. Q4：HDR，`bloomhdriterations` 绑属性，8 → 3 → 8
+
+**实测：下一帧生效，回到 8 后与开始完全相同，没有残留。** 工程 `q4-iter`（`bloomhdrstrength` 压到 0.5，让两种级数都不饱和），基准是字面量工程 `q4-n8`、`q4-n3`。切 12 次，721 个样本：
+
+| 项 | 结果 |
+|---|---|
+| 与整场加载基准整帧比较 | **485 个样本与 N=8 逐像素相同，236 个与 N=3 逐像素相同，例外 0 个** |
+| 回到 8 | 与开始、与 `q4-n8` 都逐像素相同（6 次都是） |
+| 对照层 `k` | N=8 只配亮、N=3 只配暗，从未一新一旧 |
+| 状态段 | 13 段，12 次切换全部看到 |
+| apply 之后第一个新状态样本 | 6–30 ms（12 / 12），之后没有旧状态样本 |
+| `thisScene.bloomhdriterations` | 切换时读到 3、8 |
+| 重载与着色器 | `init` 1 次，帧间隔最大 102 ms，`.dxs` 7 → 7 |
+
+读数（G 通道，字面量工程与运行中相同）：
+
+| N | `d10` | `d20` | `d40` | `d80` | `d160` | `d320` | `d640` | `bg` | `hdrp` |
+|---|---|---|---|---|---|---|---|---|---|
+| 8 | 116.4 | 92.7 | 65.0 | 38.2 | 18.8 | 8.2 | 3.0 | 2.0 | 80 |
+| 3 | 110.4 | 39.8 | 2.6 | 0 | 0 | 0 | 0 | 0 | 76 |
+
+- N=3 辉光很集中，N=8 铺满全屏。两者在 `d10` 处接近，这是归一化压低 N=8 的结果：公式给出强度 0.5 / (1 + 1.619^6) = 0.0263 对 0.5 / (1 + 1.619) = 0.191，约 7.25 倍。
+- **公式本身没有单独做数值验证**（要模拟整条链）。这里实测到的是：运行中改 N 与整场加载 N 逐像素相同，所以归一化确实按当前 N 重算。公式来自 A2，N=8 有 p2 J5 的抓帧。
+- 这个窗口的可用级数够 8 级：按 A1 的规则，540 连减 7 次半仍不小于 1。
+- 安全性（静态）：int setter `FUN_1401a4930` 收 jsoncpp 的 int / uint / real 都直接转换，收 real 不断言，所以滑块绑 `bloomhdriterations` 不会走 I3 的 COMBO 断言。
+
+### K5. Q5：脚本读写 `thisScene`
+
+**实测：API 存在，读到 bool / number，写入当场读回，同帧生效。**
+
+- **成员**：`thisScene` 的自有成员里有 `bloom`、`hdr`、`bloomstrength`、`bloomthreshold`、`bloomtint`、`bloomhdrstrength`、`bloomhdrthreshold`、`bloomhdrfeather`、`bloomhdrscatter`、`bloomhdriterations`、`clearenabled`、`clearcolor`，以及 `fog*`、`camera*`、`wind*`、`fov`、`zoom` 等。这补全了 C 节，C 节只列了方法。
+- **读**（`q5-ldr`，`bloom: false`）：`bloom=boolean:false`、`bloomhdriterations=number:8`、`bloomtint=object:1 1 1`、`hdr=boolean:false`。
+- **打开泛光**：`thisScene.bloom = true` 在 `bloom: false` 的场景里**能打开**，读回 `true`，辉光读数与 `ctl-ldr` 逐像素相同；写 false 关掉。两轮共 8 次写入，写后第一段读数都在 9–44 ms 内出现。
+- **没有编译**：无缓存跑一次，`q5-ldr` 的 5 个 `.dxs` 最晚的比第一次写 `bloom` 早 4.98 s，之后没有新文件。
+- **HDR 下**（`q5-hdr`）：
+  - `thisScene.bloomhdriterations = 3` 读回 `number:3`，画面逐像素等于 `q4-n3`；写回 8 恢复。
+  - `thisScene.bloom = false` 后 `hdrp` 76，HDR 位保持，画面等于属性关掉时（`q2-off`）。
+- **同帧**：按 J5 的做法，每 2 帧翻一次共 400 帧，`K0` 与写入同相，`K1` 故意晚一帧当对照：
+
+| 工程 | 写什么 | 翻转期样本 | 与 K0 同相 | 与 K1 同相 | 去重后状态序列 | 与 K0 不同 | 与 K1 不同 |
+|---|---|---|---|---|---|---|---|
+| `q5-sync` | `thisScene.bloom` | 941 | **941** | 473 | 397 | **0** | 198 |
+| `q5-sync-iter` | `thisScene.bloomhdriterations`（3 / 8） | 932 | **932** | 467 | 397 | **0** | 198 |
+
+对照证明这个采样看得出一帧之差。397 接近 400，说明几乎每帧都抓到了。
+
+静态：
+- `bloom` 描述符（`FUN_140199780`）：偏移 `0xe0`，`+0x48` = `0x14019b6b0` 改 bit1，`+0x50` = `0x14019b6e0` 读 bit1。**getter 只读这个字段，不碰渲染标志 `R+0x128`。** `+0x38` = `FUN_14019b4e0` 与 `+0x40` = `FUN_14019b5b0` 是 JSON 读写。没有改值回调。
+- 脚本走 `+0x48` 是 J5 确认的；读取走 `+0x50` 没有读 DLL 代码，是推断。
+- **级数同帧的原因**：`FUN_14017fa70` 里顺序是 `FUN_140171440`（脚本）→ `FUN_14018b390` → 脏位检查 `FUN_140184020` → 渲染与泛光分支。所以脏位在脚本**之后**、渲染**之前**消费。
+
+**不含档位**：
+- ultra 下档位恒为允许，这个实验分不出，**只有静态依据**（上面的 getter）。
+- 旁证：`ctl-nobloom`（`bloom: false`、`hdr: true`）里 `thisScene.hdr` 读 `true`，而实际渲染是 LDR（`hdrp` 153）。说明 getter 读的是场景位，不是渲染状态。
+
+**日志**：`console.log` 没有进 `log.txt`（每个工程 `init` 里都写了一行，0 命中），`console.error` 进。与 I4 一致。
+
+### K6. 更正与补充（旧文字未改）
+
+- **p2 J5**「取 JSON 的 `value` 还是用户当前值分不出」：已查清，读 JSON 的 `value`（K3）。
+- **I3** `general bloom` 的「未实测」：LDR、HDR 都已实测，静态结论成立。
+- **I3 / I1** 泛光参数「下一帧开头才重算」不准确：`FUN_140184020` 在脚本之后、渲染之前调用（K5）。属性改值的效果仍是下一帧，脚本写入是同一帧。
+- **C 节** `thisScene` 的清单缺全部属性成员（K5）。
+- **`cap.py`** 注释的 0.75 比例不对（见实验条件），`ana_q4.py` 用的坐标本身没问题。
+
+### K7. 与计划和代码的差异（只列事实）
+
+下面的文件与行号是 2026-11-06 工作区读到的，另一个代理正在改这几个文件，以实际代码为准。
+
+| 项 | WPE | Kabegame 现状或计划 |
+|---|---|---|
+| HDR 判定的 `bloom` | JSON 的 `value` | `compile/postprocess.ts` 的 `flagValue` 取属性当前值（`q3a`、`q3b` 两种工程会判反） |
+| HDR 判定的 `hdr` | JSON 的 `value`（静态确认，没有跑） | 同上；待定 2 已定改值即重编译，这条与 WPE 的差异是已知的，但加载时的取值来源也不同 |
+| 计划风险 1 | 判定不看脚本写入 | 计划写「`thisScene.bloom = true` 重编译后会判成 HDR」；若判定只读 JSON，这条风险随之消失。计划点 5 让 `bloom-enabled` 走 `scriptOverrides` 的 `general/bloom`，要确认这条路不进 HDR 判定 |
+| 计划风险 2 | 判定不看属性 | 同上，「就地关泛光后再重编译会判成 LDR」随之消失 |
+| `thisScene.hdr` | 场景位，`ctl-nobloom` 读 true 而渲染是 LDR | `script/api.ts` 读 `general.postprocess.hdr`（生效值）。计划只改 `bloom`，`hdr` 写着「不动」 |
+| `init` 里的 `thisScene.bloom` | JSON 的 `value` | 待核对 |
+| 脚本写级数 | 同一帧画出来 | 计划点 4 的 `setParams` 要赶在这一帧 `encode` 之前 |
+| 运行中打开没有链的场景 | 同帧、不编译 | 计划走整场重编译，已知差异（`bloomMissing`） |
+
+计划里其余假设都与实测相符：`bloom` 下一帧生效不重载、HDR 位运行中不变、级数下一帧生效、改 N 无残留、`thisScene.bloom` 读场景位。
+
+### K8. 工程（用于导入 Kabegame 对比）
+
+全部在 `ignore/p3c/wpe-bloom/`，`python -X utf8 -I gen.py` 重新生成（会删掉工程里的 `shaders/` 缓存）。WPE 打开工程后会往工程目录写 `shaders/blobsSM40/`。
+
+**共同版面**（场景坐标 1920×1080，y 朝上，`clearcolor` 全黑、`camerafade: false`）：
+
+| 层 | 位置 / 尺寸 | 内容 |
+|---|---|---|
+| `GLOW` | (400, 720)，120×120 | 白，`brightness` 4 |
+| `HDRP` | (1100, 980)，80×80 | 颜色 0.6，`brightness` 0.5 |
+| `K` | (1100, 500)，80×80 | 红 0.5，alpha 绑 `p_alpha` 或脚本 |
+| `K1` | (1100, 640)，80×80 | 蓝 0.5，脚本（只有两个同步工程有） |
+| `MON` | (1500, 900)，100×100 | 灰 0.2，记录脚本 |
+| `S` | (1500, 760)，100×100 | 灰 0.2，被测脚本（只有 `q5-*` 有） |
+
+**判读点**（`layout.py`）：`block` (400, 720)、`hdrp` (1100, 980)、`k` (1100, 500)、`k1` (1100, 640)、`bg` (1250, 1040)，`dN` = (460 + N, 720)，N = 10、20、40、80、160、320、640。
+
+**泛光参数**：`bloomstrength` 2、`bloomthreshold` 0.65、`bloomhdrstrength` 2（标 ★ 的工程是 0.5）、`bloomhdrthreshold` 1、`bloomhdrfeather` 0.1、`bloomhdrscatter` 1.619、`bloomhdriterations` 8。
+
+| 目录 | `general.bloom` | `hdr` | 属性（默认值） | 用途 |
+|---|---|---|---|---|
+| `ctl-ldr` | `true` | false | `p_alpha`（1） | 字面量对照 |
+| `ctl-hdr` | `true` | true | `p_alpha`（1） | 字面量对照 |
+| `ctl-nobloom` | `false` | true | `p_alpha`（1） | 字面量对照 |
+| `q1-ldr` | `{user: p_bloom, value: true}` | false | `p_bloom`（true）、`p_alpha`（1） | Q1 |
+| `q2-hdr` | `{user: p_bloom, value: true}` | true | `p_bloom`（true）、`p_alpha`（1） | Q2 |
+| `q3a-jT-pF` | `{user: p_bloom, value: true}` | true | `p_bloom`（**false**）、`p_alpha`（1） | Q3 |
+| `q3b-jF-pT` | `{user: p_bloom, value: false}` | true | `p_bloom`（**true**）、`p_alpha`（1） | Q3 |
+| `q3c-jT-pT` | `{user: p_bloom, value: true}` | true | `p_bloom`（true）、`p_alpha`（1） | Q3 对照 |
+| `q3d-jF-pF` | `{user: p_bloom, value: false}` | true | `p_bloom`（false）、`p_alpha`（1） | Q3 对照 |
+| `q4-iter` ★ | `true`，`bloomhdriterations: {user: p_iter, value: 8}` | true | `p_iter`（8，滑块 1–8）、`p_alpha`（1） | Q4 |
+| `q4-n8` ★ | `true`，`bloomhdriterations: 8` | true | `p_alpha`（1） | Q4 基准 |
+| `q4-n3` ★ | `true`，`bloomhdriterations: 3` | true | `p_alpha`（1） | Q4 基准 |
+| `q5-ldr` | `false` | false | `p_alpha`（1） | Q5，脚本按帧写 `bloom`（50、100、150、200 帧） |
+| `q5-hdr` ★ | `true` | true | `p_alpha`（1） | Q5，50、100 帧写级数，150、200 帧写 `bloom` |
+| `q5-sync` | `false` | false | `p_noop`（0.5） | Q5 同帧，60–460 帧 |
+| `q5-sync-iter` ★ | `true` | true | `p_noop`（0.5） | Q5 同帧（级数），60–460 帧 |
+
+**各状态的完整读数**在 `out/summary.json`（RGB 三通道，每点 5×5 窗口像素平均），代表帧是 `out/state-*.png`。
+
+**比较时注意**：
+- 这些读数对应 960×540 的渲染尺寸（**推断**：LDR 辉光约 50 px 的范围是窗口像素，泛光 RT 按场景 RT 尺寸算，见 A1）。Kabegame 按其它尺寸渲染时，辉光距离与数值都不能直接比，要么渲染到同一尺寸，要么只比 `hdrp`、有无辉光和切换行为。
+- 同 N 相等、开关前后相等这类**自比较**不受尺寸影响，可以直接用。
+- 属性切换的工程：`q1-ldr`、`q2-hdr`、`q3*` 用 `p_bloom`，`q4-iter` 用 `p_iter`。
+
+### K9. 未查清与局限
+
+- **RenderDoc 没用上**（见实验条件）：运行中走的 combine、金字塔实际跑几级、`combine_srgb` 分支，都只有读数与静态依据。
+- **`thisScene.bloom` 不含档位**：ultra 下分不出，只有静态依据，要用 disabled 档跑才能实测，这轮不能改设置。
+- **用户保存在 `config.json` 里的属性值**没有测，见 K3。
+- **`general.hdr` 写成 `{user}`** 只有静态结论，这轮没有构造工程。
+- **HDR 归一化公式**没有独立的数值验证，见 K4。
+- **`fps=10` 下**只能看出超过 1 ms 量级的影响，高帧率下切换开销没有测。
+- **窗口 x 方向多出的 9 px** 和 PrintWindow 这轮变快的原因都没查，都不影响判读。
+- **displayhdr 档**没有测，真 HDR 显示器的情况也没有测。
+
+### K10. 产物与恢复
+
+实验目录 `ignore/p3c/wpe-bloom/`（`ignore/` 不入库）：
+- `gen.py` 生成全部工程；`base-kbprops-test/` 拷自 `ignore/p3c/wpe-sync/`；`wpe.py`、`sampler_pw.py` 同样拷来，`wpe-sync/` 没有改动。
+- `sampler.py`（存整帧）、`layout.py`（坐标与判读点）、`run.py`（开窗并保证关窗）、`smoke.py`（标定）。
+- `exp_toggle.py`（Q1、Q2）、`exp_q3.py`、`exp_q4.py`、`exp_q5.py`；`ana_toggle.py`、`ana_q4.py`、`ana_q5.py`、`summary.py` 判读。
+- `out/`：采样数据（共约 234 MB，可重新生成）、每轮日志、`summary.json`、`state-*.png`。
+- `backup/`：开工前的 `config.json` 与 `log.txt` 行数。
+
+重复运行：`python -X utf8 -I exp_toggle.py q1-ldr 24`，`exp_toggle.py q2-hdr 24`，`exp_q3.py`，`exp_q4.py 6`，`exp_q5.py q5-ldr 25`、`q5-hdr 24`、`q5-sync 50`、`q5-sync-iter 50`。`smoke.py ctl-ldr ctl-hdr ctl-nobloom` 产出 `summary.py` 用的对照帧。需要主实例在跑，`wpe.py` 的 `MAIN_PID` 要与当前进程一致。
+
+恢复情况：
+
+| 项 | 开工前 | 结束时 |
+|---|---|---|
+| WPE 主进程 | PID 36548，2026/11/04 2:32:57 启动 | 同一进程，没有重启 |
+| WPE 档位 | `ultra`（用户改的） | **仍是 `ultra`，等用户改回 `disabled`**；`fps` 仍是 10 |
+| 测试窗口 | — | 全部已关，按标题前缀 `KBB` 查询不存在 |
+| `log.txt` | 552 行 | 737 行，新增 185 行全是 `[kbb]` |
+| `config.json` | 哈希 `2cc84151…` | **我没有写过，但被界面操作改过两个键**，见下 |
+| REA | — | 只读分析副本，会话已关闭，没有新快照 |
+
+**`config.json` 在实验尾段被 WPE 界面操作改过，不是实验造成的**。与开工前的备份比，最终差两行：
+- `wallpaperconfig.selectedwallpapers.Monitor0.file`（第 327 行）：10:08:41 工坊 3451555874 → 2896608544，10:10:13 → 3643916956，10:11:20 → 3810092560；
+- 第 72 行浏览界面的排序：`name` → `subscriptiondate`。
+
+依据：
+- 10:10:13 与 10:11:20 两次发生时，我的窗口都已关闭，也没有发任何 WPE 命令；
+- 排序方式只能来自界面操作；
+- 我的命令从不涉及 `Monitor0` 或这几个工坊 ID。只有 10:08:41 那次与我最后一轮开窗在同一秒，来源没有直接证据，现象上与后两次相同；
+- 之前 20 多次开窗后哈希都没有变（10:06 之后核对过一次仍是 `2cc84151…`）。
+
+这两个键我没有动，也没有恢复。全部实验数据都在这之前或不受影响：最后一轮 `q5-ldr` 的读数与第一轮相同。`postprocessing` 与 `fps` 没有变。

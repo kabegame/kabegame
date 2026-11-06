@@ -268,7 +268,7 @@ function frameStats(costs: readonly number[]): { mean: number; p95: number } {
   return { mean: round(mean), p95: round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]) };
 }
 
-/** 当前 `SceneState` 的快照（图层、材质常量、泛光参数）与绑定表（P3a 点 8）。 */
+/** 当前 `SceneState` 的快照（图层、材质常量、泛光参数与开关）与绑定表（P3a 点 8）。 */
 export function hostState(host: SceneHost): unknown {
   const { bundle, renderer } = host.devScene;
   const state = renderer?.sceneState ?? null;
@@ -277,6 +277,7 @@ export function hostState(host: SceneHost): unknown {
     layers: state ? Object.fromEntries(state.layers) : {},
     constants: state ? Object.fromEntries(state.constants) : {},
     bloom: state?.bloom ?? null,
+    bloomEnabled: state?.bloomEnabled ?? null,
   };
 }
 

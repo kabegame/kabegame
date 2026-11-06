@@ -4,14 +4,18 @@
  * 规则来自对 WPE 2.8.42 的只读逆向（`.claude/plans/wpe-import/3-scene/p2-REPORT.md` G1–G4）：
  * - WPE 的用户设置 `config.json` → `<用户>.general.user.postprocessing` 只认 `disabled` / `ultra` / `displayhdr`，
  *   其它非空值当「开启」；缺键时配置加载先补成 `disabled`。`displayhdr` 按「超高」处理（我们输出到普通画布）；读不到也按 `disabled`。
- * - 泛光实际开启 = 档位不是关闭，且 `general.bloom` 的生效值不是 false（缺键即开：场景构造默认标志 0x26）。
- *   WPE 的 setter 对 bool 或带 bool `value` 的对象都改位；绑定用户属性时取属性当前值（运行时随属性变是推断）。
- * - HDR 实际开启 = 档位为超高，且 `general.bloom`、`general.hdr` 的生效值都是 true（生效值规则同泛光，缺键不算）。
- *   G3 曾推断写成属性对象不算，工坊 3286859278 的超高档抓帧（`bloom` 为 `{user, value: true}`）证伪了这一点（J5）；
- *   取 JSON 的 `value` 还是属性当前值那张抓帧分不出（属性在默认值），按当前值。
+ * - 场景的 bloom 位 = `general.bloom` 的生效值（缺键即开：场景构造默认标志 0x26），不看档位。这是运行时状态，渲染每帧读（A1，
+ *   `SceneState.bloomEnabled`），属性与脚本改的都是它。泛光实际开启 = 档位不是关闭且 bloom 位开着。
+ *   WPE 的 setter 对 bool 或带 bool `value` 的对象都改位，别的值不改位；绑定用户属性时取属性当前值。
+ * - HDR 实际开启 = 档位为超高，且 `general.bloom` 的文件值、`general.hdr` 的生效值都是 true（缺键不算）。
+ *   `bloom` 读场景文件（K3 实测，`FUN_14010d850`）：bool 原样，对象取 `value`，不读属性当前值，也不看脚本写入。所以判定和开关可以不一致：
+ *   JSON 为 true、属性为 false 是关着泛光的 HDR 场景，反过来是开着泛光的 LDR 场景。
+ *   `hdr` 有意不跟：WPE 连加载时都只读 JSON，属性不起作用（K3 静态确认），用户判定这是 WPE 的 bug。我们读属性当前值与脚本覆盖，改值重编译生效（3c 已定 12）。
+ *   只在加载时判定：运行中关掉 HDR 场景的泛光，目标格式保持 HDR；运行中打开泛光的 LDR 场景得到 LDR 泛光。
+ *   G3 曾推断写成属性对象不算，工坊 3286859278 的超高档抓帧（`bloom` 为 `{user, value: true}`）证伪了这一点（J5）。
  * - 泛光参数（`bloom*`）缺键取 WPE 场景构造函数的默认值（A2 / PLAN P2b），写成属性对象时取生效值。渲染见 `render/bloom.ts`。
  */
-import type { BindingCollector, BindingTarget, RecompileReason } from "./bindings";
+import type { BindingCollector, BindingTarget } from "./bindings";
 import type { SceneReader } from "./fs";
 import { numbers, resolveValue, type SceneScalar, type SceneValue } from "./model";
 
@@ -29,6 +33,10 @@ export const SCENE_POSTPROCESS_SETTINGS: readonly ScenePostprocessSetting[] = [
 
 export interface ScenePostprocessState {
   level: PostprocessLevel;
+  /** 场景的 bloom 位：`general.bloom` 的生效值，缺键或不是 bool 时为 true，不看档位。 */
+  bloomFlag: boolean;
+  /** 场景的 hdr 位：`general.hdr` 的生效值，缺键或不是 bool 时为 false，不看档位。脚本读 `thisScene.hdr` 拿到的是它（K5）。 */
+  hdrFlag: boolean;
   bloom: boolean;
   hdr: boolean;
 }
@@ -66,46 +74,58 @@ export function resolvePostprocessLevel(
   return wpeLevelOf(wpeValue);
 }
 
-/** 档位 + 场景 `general`（`properties` 为用户属性当前值）→ 场景实际的泛光 / HDR 状态。 */
+/**
+ * 档位 + 场景 `general`（`properties` 为用户属性当前值）→ 场景实际的泛光 / HDR 状态。
+ * `fileBloom` 是场景文件里的 `general.bloom`，HDR 判定读它；`general` 已套用脚本覆盖时调用方要另外传（`compileScene`）。
+ */
 export function scenePostprocessState(
   level: PostprocessLevel,
   general: Record<string, unknown> | undefined,
   properties: Record<string, SceneScalar> = {},
   bindings?: BindingCollector,
+  fileBloom: unknown = general?.bloom,
 ): ScenePostprocessState {
-  const bloomKey = flagValue(general?.bloom, properties, bindings, "general.bloom");
+  const bloomKey = flagValue(general?.bloom, properties, bindings, { kind: "bloom-enabled" });
   // hdr 与档位无关地求值：写成 `{user}` 时也要登记，档位改到超高时才用得上（P3a）
-  const hdrKey = flagValue(general?.hdr, properties, bindings, "general.hdr");
-  const bloom = level !== "disabled" && bloomKey !== false;
-  // HDR 的判定读的是场景 JSON（G3），缺键不算；写成属性对象时取生效值（J5 更正）
-  const hdr = level === "ultra" && bloomKey === true && hdrKey === true;
-  return { level, bloom, hdr };
+  const hdrKey = flagValue(general?.hdr, properties, bindings, {
+    kind: "recompile",
+    reason: "postprocess",
+    path: "general.hdr",
+  });
+  const bloomFlag = bloomKey !== false;
+  const hdrFlag = hdrKey === true;
+  const bloom = level !== "disabled" && bloomFlag;
+  // HDR 的判定缺键不算（G3）；`bloom` 只看场景文件（K3），`hdr` 读生效值（已定 12）
+  const hdr = level === "ultra" && fileFlag(fileBloom) === true && hdrFlag;
+  return { level, bloomFlag, hdrFlag, bloom, hdr };
+}
+
+/** 场景文件里一个开关的值（`FUN_14010d850`）：对象取 `value`，否则取本身，全程不碰属性；不是 bool 时返回 undefined。 */
+function fileFlag(value: unknown): boolean | undefined {
+  const raw = value && typeof value === "object" ? (value as { value?: unknown }).value : value;
+  return typeof raw === "boolean" ? raw : undefined;
 }
 
 /**
  * `general.bloom` / `general.hdr` 的生效值（setter `FUN_14019b4e0` / `FUN_14019b6f0`）：bool 原样；带 `user` 的对象取属性当前值，
  * 否则取对象的 `value`；结果不是 bool 时 WPE 不改位，返回 undefined（泛光保留默认开、HDR 保留默认关）。
- * 带 `bindings` 时登记成重编译目标（泛光链有无、目标格式都只在编译期决定）。
+ * 带 `bindings` 时登记成 `target`：`bloom` 运行时就地改，`hdr` 决定目标格式，改值走整场重编译。
  */
 function flagValue(
   value: unknown,
   properties: Record<string, SceneScalar>,
   bindings: BindingCollector | undefined,
-  path: string,
+  target: BindingTarget,
 ): boolean | undefined {
   if (typeof value === "boolean") return value;
   if (!value || typeof value !== "object") return undefined;
   const resolved =
     "user" in value
       ? bindings
-        ? bindings.bind(value as SceneValue, properties, recompile("postprocess", path))
+        ? bindings.bind(value as SceneValue, properties, target)
         : resolveValue(value as SceneValue, properties)
       : (value as { value?: unknown }).value;
   return typeof resolved === "boolean" ? resolved : undefined;
-}
-
-function recompile(reason: RecompileReason, path: string): BindingTarget {
-  return { kind: "recompile", reason, path };
 }
 
 /** 场景 `general` 里的泛光参数（已取生效值、缺键补默认值），原值，不做 HDR 换算（换算在 `render/bloom.ts`）。 */
@@ -134,6 +154,18 @@ export const BLOOM_DEFAULTS: Readonly<BloomParams> = {
   hdrScatter: 1.619,
   hdrIterations: 8,
 };
+
+/** `general` 的泛光键 → `BloomParams` 字段，`{script}` 的写回目标（`scripts.ts`）与脚本 API（`script/api.ts`）共用。 */
+export const BLOOM_FIELDS = {
+  bloomstrength: "strength",
+  bloomthreshold: "threshold",
+  bloomtint: "tint",
+  bloomhdrstrength: "hdrStrength",
+  bloomhdrthreshold: "hdrThreshold",
+  bloomhdrfeather: "hdrFeather",
+  bloomhdrscatter: "hdrScatter",
+  bloomhdriterations: "hdrIterations",
+} as const satisfies Record<string, keyof BloomParams>;
 
 /**
  * 读 `general` 的泛光参数：数字、`"r g b"` 字符串或属性对象（取生效值，同 `resolveValue`）都认；

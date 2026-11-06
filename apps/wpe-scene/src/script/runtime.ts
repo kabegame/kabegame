@@ -43,6 +43,8 @@ function targetKey(target: ScriptTarget): string {
       return `${target.pass}/constantshadervalues/${target.material}`;
     case "bloom":
       return `general/bloom/${target.field}`;
+    case "bloom-enabled":
+      return "general/bloom";
     case "script-property":
       return `${target.script}/scriptproperties/${target.key}`;
     default:

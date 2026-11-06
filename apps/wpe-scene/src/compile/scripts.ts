@@ -1,6 +1,7 @@
 import { init, parse } from "es-module-lexer";
 import { type BindingTarget, type TargetKey, type ValueType, type SceneBinding } from "./bindings";
 import { resolveValue, type SceneJson, type SceneScalar, type SceneValue } from "./model";
+import { BLOOM_FIELDS } from "./postprocess";
 
 export type ScriptOwner =
   | { kind: "layer"; object: number }
@@ -35,15 +36,6 @@ const layerTypes: Record<string, ValueType> = {
   visible: "bool",
 };
 
-const bloomFields: Record<string, string> = {
-  bloomstrength: "strength",
-  bloomthreshold: "threshold",
-  bloomtint: "tint",
-  bloomhdrstrength: "hdrStrength",
-  bloomhdrthreshold: "hdrThreshold",
-  bloomhdrtint: "hdrTint",
-};
-
 function valueType(initial: SceneScalar): ValueType | "string" {
   if (typeof initial === "boolean") return "bool";
   if (typeof initial === "number") return "float";
@@ -61,8 +53,9 @@ function targetOf(path: string, owner: ScriptOwner, key: string, initial: SceneS
     return { kind: "layer", object: owner.object, field: key as Extract<BindingTarget, { kind: "layer" }>["field"] };
   if (owner.kind === "effect" && key === "visible")
     return { kind: "effect", object: owner.object, effect: owner.effect };
-  if (owner.kind === "general" && key in bloomFields)
-    return { kind: "bloom", field: bloomFields[key] as Extract<BindingTarget, { kind: "bloom" }>["field"] };
+  if (owner.kind === "general" && key === "bloom") return { kind: "bloom-enabled" };
+  if (owner.kind === "general" && key in BLOOM_FIELDS)
+    return { kind: "bloom", field: BLOOM_FIELDS[key as keyof typeof BLOOM_FIELDS] };
   if (owner.kind === "material")
     return {
       kind: "constant",

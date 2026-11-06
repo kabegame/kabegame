@@ -557,8 +557,9 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   - LDR 泛光的第一步着色器（assets 原样翻译）是 `saturate(max(rgb) − threshold)·rgb` → `2·c − luma` → `× strength × tint`，常量是场景原值，不做换算。
 - **更正 HDR 判定**（`32868-ghost-rider` 超高档抓帧）：工坊 3286859278 的 `general.bloom` 写成属性对象 `{user: "postprocessing", value: true}`、`hdr: true`，
   WPE 照样走 HDR（后备缓冲 RGBA16F、1/2 金字塔与 `combine_hdr_upsample`）。G3「属性对象不算」的推断不成立：
-  **HDR = 档位为超高，且 `general.bloom` 与 `general.hdr` 的生效值都为 true**（生效值规则与泛光相同：bool 原样，属性对象取绑定属性的当前值或对象的 `value`）。
-  取 JSON 的 `value` 还是用户当前值没法从这张抓帧区分（属性在默认值），按当前值实现；`hdr` 写成属性对象的样本本机没有，按同一规则（推断）。
+  **HDR = 档位为超高，且 `general.bloom` 的文件值与 `general.hdr` 的生效值都为 true**。
+  `bloom` 读场景文件：bool 原样，属性对象取 `value`，不读属性当前值，也不看脚本写入（这张抓帧分不出，P3c 实测查清，见 `p3-script-REPORT.md` K3）。
+  `hdr` 读属性当前值与脚本覆盖：WPE 连加载时都只读 JSON，属性不起作用，用户判定是 WPE 的 bug，有意不跟（P3c 已定 12）。
 - **验收方法（D13）**：bedroom 的颜色要 P3 才对得上、LDR 泛光又全黑，所以 P2b 用**链路隔离验证**：
   从抓帧导出 WPE 泛光链的输入（整帧快照）与最终后备缓冲，喂给我们的泛光 + combine，逐像素比较；整张场景我们能不能渲染无关。
   要一个只在 dev 构建里存在的测试入口。
@@ -603,7 +604,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **与规格的差异 / 实现选择**：
   - **HDR 收尾**用 `combine_hdr_upsample_linear`（同一份 `combine_hdr` 的 `LINEAR=1`，也是 WPE assets 原件）输出 `saturate(scene + bloom)`，而不是 `combine_hdr_upsample` 再在 cover 时编码：sRGB 编码是 `lin()` 的精确反函数，两者单调、把 [0, 1] 映到 [0, 1]，encode(saturate(lin(x))) = saturate(x)，画布上逐值相等；少一次 pow 往返，cover 不用分 HDR / LDR 两种着色器。实测最终输出与 WPE 只差 FP16 舍入（上表）。
   - 快照与图层的 `_rt_FullFrameBuffer` 共用一张纹理，泛光在全部图层之后再拷一次（WPE 也是此处一次 `ResolveSubresource`）。
-  - 金字塔只建 N 级（WPE resize 时预建全部可用级）：画面无差别，`bloomhdriterations` 小时省显存。
+  - 金字塔照 WPE 建满全部可用级，每帧只用前 N 级（P3c 更正；P2b 原先只建 N 级，改级数只能重编译）：绘制按步骤身份去重，8 级共 21 个，`bloomhdriterations` 能就地改，代价是 N 小的场景多占显存（4K、N = 1 多约 5.5 MiB）。
   - 「屏幕尺寸」取场景目标尺寸（P2a 起的约定）：场景分辨率与窗口相同时与 WPE 等价；shimmering_particles 是 5760×1080，WPE 按窗口 3840×2160 画场景与泛光，我们按场景分辨率，泛光核的像素尺度不同（见遗留）。
   - 参数按 float32 逐步计算（`Math.fround`），与抓帧逐位一致；`g_RenderVar0` 也按 float32 写。
   - 翻译器的槽位格式（`TEX<n>FORMAT`）：泛光槽按 WPE 的 RT 枚举给 `rgb888` / `rgb161616f`；图层材质里合成 RT 槽在 HDR 下仍给 `rgba8888`（着色器不按它分支）。

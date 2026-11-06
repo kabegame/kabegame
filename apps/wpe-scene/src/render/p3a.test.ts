@@ -129,7 +129,7 @@ function synthetic(
       camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
       ambient: [0.1, 0.1, 0.1],
       skylight: [0.2, 0.2, 0.2],
-      postprocess: { level: "disabled", bloom: false, hdr: false },
+      postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },
     layers: [layer],
@@ -466,15 +466,98 @@ describe("可见性、泛光与加载期间增量", () => {
     expect(state.bloom.tint).toEqual([1, 0, 0]);
     expect(state.takeDirty().bloom).toBe(true);
     expect(state.takeDirty().bloom).toBe(false);
-    // 级数不变时 previewBloom 与写入结果一致（渲染器预检用）
-    expect(
-      state.previewBloom([{ binding: { property: "x", target: { kind: "bloom", field: "hdrStrength" } }, value: 7 }])
-        .hdrStrength,
-    ).toBe(7);
-    expect(state.bloom.hdrStrength).toBe(5);
   });
 
-  it("BloomChain：级数变了不能就地改；级数不变时 setParams 重写的常量与重新建链相同", async () => {
+  describe("SceneState：泛光开关（场景位）", () => {
+    const BLOOM_ENABLED: SceneBinding = { property: "b", target: { kind: "bloom-enabled" } };
+    /** `chain`：bundle 里有没有泛光链；`flag`：场景位。 */
+    function stateOf(level: "disabled" | "enabled" | "ultra", chain: boolean, flag: boolean): SceneState {
+      const bundle = synthetic();
+      bundle.general.postprocess = {
+        level,
+        bloomFlag: flag,
+        hdrFlag: false,
+        bloom: level !== "disabled" && flag,
+        hdr: false,
+      };
+      bundle.bloom = chain ? { hdr: false, passes: {} } : null;
+      return SceneState.fromBundle(bundle);
+    }
+
+    it("初始值取 bloomFlag，不含档位", () => {
+      expect(stateOf("disabled", false, true).bloomEnabled).toBe(true);
+      expect(stateOf("enabled", true, false).bloomEnabled).toBe(false);
+    });
+
+    it("写入改位、不标脏（encode 每帧读）", () => {
+      const state = stateOf("enabled", true, true);
+      expect(state.write(BLOOM_ENABLED, false)).toBe("applied");
+      expect(state.bloomEnabled).toBe(false);
+      expect(state.write(BLOOM_ENABLED, true)).toBe("applied");
+      expect(state.bloomEnabled).toBe(true);
+      expect(state.takeDirty()).toEqual({ layers: new Set(), passes: new Set(), bloom: false, structures: new Set() });
+    });
+
+    it("condition：按字符串比出布尔", () => {
+      const state = stateOf("enabled", true, false);
+      const binding: SceneBinding = { ...BLOOM_ENABLED, condition: "2" };
+      expect(state.write(binding, 2)).toBe("applied");
+      expect(state.bloomEnabled).toBe(true);
+      expect(state.write(binding, 1)).toBe("applied");
+      expect(state.bloomEnabled).toBe(false);
+    });
+
+    it("不是 bool 的值不改位（G4），两个方向都是，也不算要重编译", () => {
+      for (const flag of [true, false])
+        for (const chain of [true, false]) {
+          const state = stateOf("enabled", chain, flag);
+          for (const raw of [1, 0, "true", ""]) {
+            expect(state.needsRecompile(BLOOM_ENABLED, raw)).toBe(false);
+            expect(state.write(BLOOM_ENABLED, raw)).toBe("applied");
+            expect(state.bloomEnabled).toBe(flag);
+          }
+        }
+    });
+
+    it("同值不算：没有链时重复写 false、开着时写 true 都不要重编译", () => {
+      const off = stateOf("enabled", false, false);
+      expect(off.needsRecompile(BLOOM_ENABLED, false)).toBe(false);
+      expect(off.write(BLOOM_ENABLED, false)).toBe("applied");
+      const on = stateOf("enabled", false, true);
+      expect(on.needsRecompile(BLOOM_ENABLED, true)).toBe(false);
+      expect(on.write(BLOOM_ENABLED, true)).toBe("applied");
+    });
+
+    it("档位允许但没有链：打开要重编译，位当场改（脚本要能读回，K5）；关掉照常改位", () => {
+      const state = stateOf("enabled", false, false);
+      expect(state.needsRecompile(BLOOM_ENABLED, true)).toBe(true);
+      expect(state.write(BLOOM_ENABLED, true)).toBe("recompile");
+      expect(state.bloomEnabled).toBe(true);
+      // 已经请求过重编译：同值再写不算打开
+      expect(state.write(BLOOM_ENABLED, true)).toBe("applied");
+      // 场景没有对象时 bloomFlag 为 true 也没有链：关掉不用重编译，再打开要
+      const empty = stateOf("enabled", false, true);
+      expect(empty.write(BLOOM_ENABLED, false)).toBe("applied");
+      expect(empty.bloomEnabled).toBe(false);
+      expect(empty.write(BLOOM_ENABLED, true)).toBe("recompile");
+    });
+
+    it("档位关闭：没有链也直接改位", () => {
+      const state = stateOf("disabled", false, false);
+      expect(state.needsRecompile(BLOOM_ENABLED, true)).toBe(false);
+      expect(state.write(BLOOM_ENABLED, true)).toBe("applied");
+      expect(state.bloomEnabled).toBe(true);
+    });
+
+    it("有链：打开不要重编译", () => {
+      const state = stateOf("enabled", true, false);
+      expect(state.needsRecompile(BLOOM_ENABLED, true)).toBe(false);
+      expect(state.write(BLOOM_ENABLED, true)).toBe("applied");
+      expect(state.bloomEnabled).toBe(true);
+    });
+  });
+
+  it("BloomChain：setParams 重写的常量与重新建链相同，级数变了也一样", async () => {
     vi.stubGlobal("GPUTextureUsage", { RENDER_ATTACHMENT: 1, TEXTURE_BINDING: 2, COPY_SRC: 4, COPY_DST: 8 });
     vi.stubGlobal("GPUBufferUsage", { VERTEX: 1, UNIFORM: 2, COPY_DST: 4 });
     try {
@@ -594,11 +677,6 @@ describe("可见性、泛光与加载期间增量", () => {
       const uniformWrites = (writes: Map<string, Uint8Array>) =>
         [...writes.entries()].filter(([key]) => key.startsWith("uniform:")).sort(([a], [b]) => a.localeCompare(b));
 
-      const first = await create(fakeDevice().device, hdrBloom, defaults());
-      expect(first.plan.levels).toBe(8);
-      expect(first.sameLevels({ ...defaults(), hdrIterations: 3 })).toBe(false);
-      expect(first.sameLevels({ ...defaults(), hdrStrength: 5 })).toBe(true);
-
       const updated: BloomParams = {
         ...defaults(),
         hdrStrength: 5,
@@ -617,9 +695,21 @@ describe("可见性、泛光与加载期间增量", () => {
       expect(uniformWrites(before.writes)).toEqual(uniformWrites(other.writes));
       expect(applied.plan.steps.map((step) => step.constants)).toEqual(fresh.plan.steps.map((step) => step.constants));
 
-      // LDR 链没有级数概念，参数怎么改都能就地
+      // 级数变了：只重写这一级数用到的绘制，字节同样等于按这个级数建链
+      const fewer: BloomParams = { ...updated, hdrIterations: 3 };
+      const three = fakeDevice();
+      const freshThree = await create(three.device, hdrBloom, fewer);
+      before.writes.clear();
+      applied.setParams(fewer);
+      expect(applied.plan.levels).toBe(3);
+      expect(uniformWrites(before.writes)).toEqual(uniformWrites(three.writes));
+      expect(applied.plan).toEqual(freshThree.plan);
+
+      // LDR 链没有级数概念：改 HDR 的级数什么都不变
       const ldr = await create(fakeDevice().device, ldrBloom, defaults());
-      expect(ldr.sameLevels({ ...defaults(), hdrIterations: 2 })).toBe(true);
+      ldr.setParams({ ...defaults(), hdrIterations: 2 });
+      expect(ldr.plan.levels).toBe(0);
+      expect(ldr.plan.steps.map((step) => step.pass)).toEqual(["quarter", "eighth", "blur", "combine"]);
     } finally {
       vi.unstubAllGlobals();
     }

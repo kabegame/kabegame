@@ -1,5 +1,6 @@
 import { valueTypeOf, type BindingTarget, type UserProperty, type ValueType } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
 import { fillAudioBuffers, type AudioBuffers } from "./audio";
@@ -66,18 +67,7 @@ export interface ScriptApiState {
 
 const DEGREE = 0.017453292;
 const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness"] as const;
-const BLOOM_FIELDS = {
-  bloomstrength: "strength",
-  bloomthreshold: "threshold",
-  bloomtint: "tint",
-  bloomhdrstrength: "hdrStrength",
-  bloomhdrthreshold: "hdrThreshold",
-  bloomhdrfeather: "hdrFeather",
-  bloomhdrscatter: "hdrScatter",
-  bloomhdriterations: "hdrIterations",
-} as const;
 const GENERAL_RECOMPILE = new Set([
-  "bloom",
   "hdr",
   "clearenabled",
   "clearcolor",
@@ -128,7 +118,9 @@ export class ScriptApi {
     this.general = this.object();
     this.installEngine();
     this.installScene();
-    this.installGeneral();
+    // general 字段在 `thisScene` 上也有（K5），和挂在 general 上的脚本的 `thisObject` 读写同一份
+    this.installGeneral(this.general);
+    this.installGeneral(this.thisScene);
     this.realm.global.engine = this.engine;
     this.realm.global.thisScene = this.thisScene;
     this.define(this.realm.global, "thisLayer", () =>
@@ -484,10 +476,17 @@ export class ScriptApi {
     this.effects.set(key, api);
     return api;
   }
-  private installGeneral(): void {
+  private installGeneral(object: ApiObject): void {
+    // `bloom` 是运行时状态，不走重编译
+    this.define(
+      object,
+      "bloom",
+      () => this.access.state().bloomEnabled,
+      (value) => this.write({ kind: "bloom-enabled" }, value, "bool"),
+    );
     for (const [name, field] of Object.entries(BLOOM_FIELDS))
       this.define(
-        this.general,
+        object,
         name,
         () => {
           const value = this.access.state().bloom[field as keyof SceneState["bloom"]];
@@ -502,7 +501,7 @@ export class ScriptApi {
       );
     for (const name of GENERAL_RECOMPILE)
       this.define(
-        this.general,
+        object,
         name,
         () => {
           const general = this.access.bundle().general;
@@ -515,22 +514,16 @@ export class ScriptApi {
                   ? general.skylight
                   : name === "clearenabled"
                     ? general.clearEnabled
-                    : name === "bloom"
-                      ? general.postprocess.bloom
-                      : name === "hdr"
-                        ? general.postprocess.hdr
-                        : undefined;
+                    : name === "hdr"
+                      ? general.postprocess.hdrFlag
+                      : undefined;
           return Array.isArray(value) ? this.vector(value, 3) : value;
         },
         (value) =>
           this.write(
             { kind: "recompile", reason: "general", path: `general/${name}` },
             value,
-            name.endsWith("color")
-              ? "vec3"
-              : name === "bloom" || name === "hdr" || name === "clearenabled"
-                ? "bool"
-                : "float",
+            name.endsWith("color") ? "vec3" : name === "hdr" || name === "clearenabled" ? "bool" : "float",
           ),
       );
   }

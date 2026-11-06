@@ -16,7 +16,9 @@ let renderer: FakeRenderer;
 let imports = 0;
 let destroyed = 0;
 let onError: ((reasons: string[]) => void) | undefined;
-let onUpdate: (() => void) | null = null;
+let onUpdate: (() => unknown) | null = null;
+/** 脚本 `update` 每次收到的参数（写回目标的当前值）。 */
+let updateArguments: unknown[] = [];
 let onInit: (() => unknown) | null = null;
 let activeGlobal: Record<string, unknown>;
 /** 新场景里图层 0 的可变 effect 备不好（`GpuScene.prepareVariants` 冻结了它）。 */
@@ -58,10 +60,10 @@ function createRealm() {
         applyUserProperties() {
           events.push("apply");
         },
-        update() {
+        update(value: unknown) {
           events.push("update");
-          onUpdate?.();
-          return onUpdate ? undefined : 0.6;
+          updateArguments.push(value);
+          return onUpdate ? onUpdate() : 0.6;
         },
         destroy() {
           events.push("destroy");
@@ -156,7 +158,7 @@ function bundle(): SceneBundle {
       ambient: [0, 0, 0],
       skylight: [0, 0, 0],
       camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
-      postprocess: { level: "disabled", bloom: false, hdr: false },
+      postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: {
         strength: 1,
         threshold: 1,
@@ -217,6 +219,19 @@ function bundle(): SceneBundle {
 
 const EFFECT_PATH = "objects/0/effects/0/visible";
 
+/** 档位开启的场景：`chain` 是有没有编泛光链，`flag` 是场景位；脚本挂在 general 上，`q` 绑重编译目标。 */
+function bloomBundle(chain: boolean, flag: boolean): SceneBundle {
+  const result = bundle();
+  result.scripts.list[0].owner = { kind: "general" };
+  result.general.postprocess = { level: "enabled", bloomFlag: flag, hdrFlag: false, bloom: flag, hdr: false };
+  result.bloom = chain ? { hdr: false, passes: {} } : null;
+  result.bindings.push({
+    property: "q",
+    target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" },
+  });
+  return result;
+}
+
 /** 图层 0 带一个可变 effect；脚本挂在它的 `visible` 上，`fx` 属性绑同一个开关，`q` 绑重编译目标。 */
 function effectBundle(enabled: boolean, unsupported: string[] = []): SceneBundle {
   const result = bundle();
@@ -260,6 +275,7 @@ describe("SceneHost 脚本接线", () => {
     imports = 0;
     destroyed = 0;
     onUpdate = null;
+    updateArguments = [];
     onInit = null;
     frozen = false;
     realmGate = null;
@@ -620,6 +636,247 @@ describe("SceneHost 脚本接线", () => {
     expect(compile).toHaveBeenCalledTimes(2);
     expect(renderer.sceneState?.effectEnabled(0, 0)).toBe(false);
     expect(reporter.fallback).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
+  it("thisScene.bloom：有链时就地改位，不重新加载；readTarget 读到开关与各字段", async () => {
+    compile.mockImplementation(async () => bloomBundle(true, true));
+    const scene = () => activeGlobal.thisScene as { bloom: boolean };
+    const seen: boolean[] = [];
+    let value = false;
+    onUpdate = () => {
+      seen.push(scene().bloom);
+      scene().bloom = value;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(seen).toEqual([true]);
+    expect(renderer.sceneState?.bloomEnabled).toBe(false);
+    expect(host.readTarget("general/bloom")).toBe(false);
+    value = true;
+    renderer.tick();
+    expect(seen).toEqual([true, false]);
+    expect(renderer.sceneState?.bloomEnabled).toBe(true);
+    expect(host.readTarget("general/bloom")).toBe(true);
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    host.dispose();
+  });
+
+  it("{script} 挂在 general.bloom 上：update 收到当前的位，返回值写回", async () => {
+    compile.mockImplementation(async () => {
+      const result = bloomBundle(true, false);
+      result.bindings.push({ property: "b", target: { kind: "bloom-enabled" } });
+      Object.assign(result.scripts.list[0], {
+        id: "general/bloom",
+        target: { kind: "bloom-enabled" },
+        valueType: "bool",
+        initial: false,
+      });
+      return result;
+    });
+    let returned: boolean | undefined;
+    onUpdate = () => returned;
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 }, b: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    host.applyUserProperties({ b: { type: "bool", value: true } });
+    updateArguments = [];
+    renderer.tick();
+    // 读的是状态，不是 JSON 里的初始值
+    expect(updateArguments).toEqual([true]);
+    returned = false;
+    renderer.tick();
+    expect(renderer.sceneState?.bloomEnabled).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it("readTarget 按 general/bloom/<字段> 直接取值", async () => {
+    compile.mockImplementation(async () => bloomBundle(true, true));
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    const { bloom } = renderer.sceneState!;
+    Object.assign(bloom, { hdrStrength: 3, hdrIterations: 5, tint: [1, 0, 0] });
+    expect(host.readTarget("general/bloom/hdrStrength")).toBe(3);
+    expect(host.readTarget("general/bloom/hdrIterations")).toBe(5);
+    expect(host.readTarget("general/bloom/tint")).toEqual([1, 0, 0]);
+    expect(host.readTarget("general/bloom/strength")).toBe(bloom.strength);
+    expect(host.readTarget("general/bloom/nope")).toBeNull();
+    host.dispose();
+  });
+
+  it("thisScene.bloom：档位允许但没有链时打开，只重新加载一次，新 bundle 有链且开着", async () => {
+    let calls = 0;
+    compile.mockImplementation(async (input) => {
+      calls++;
+      // 上界：去重坏了时重载会一直链下去，这里卡住让断言干净地失败
+      if (calls > 3) await new Promise(() => {});
+      const opened = input.scriptOverrides?.["general/bloom"] === true;
+      return bloomBundle(opened, opened);
+    });
+    const readBack: boolean[] = [];
+    onUpdate = () => {
+      const scene = activeGlobal.thisScene as { bloom: boolean };
+      scene.bloom = true;
+      readBack.push(scene.bloom);
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(compile.mock.calls[0][0].scriptOverrides).toEqual({});
+    expect(compile.mock.calls[1][0].scriptOverrides).toEqual({ "general/bloom": true });
+    await vi.waitFor(() => expect(renderer.sceneState?.bloomEnabled).toBe(true));
+    renderer.tick();
+    renderer.tick();
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(host.stats.recompiled).toEqual([{ reason: "script（general/bloom）", keys: [] }]);
+    // 写完当场读回，重编译完成之前也是（K5）
+    expect(readBack.length).toBeGreaterThan(0);
+    expect(readBack.every(Boolean)).toBe(true);
+    expect(reporter.fallback).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
+  it("thisScene.bloom：没有链时写 false 是同值，不重新加载", async () => {
+    compile.mockImplementation(async () => bloomBundle(false, false));
+    onUpdate = () => {
+      (activeGlobal.thisScene as { bloom: boolean }).bloom = false;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    renderer.tick();
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it("重编译后 replayWrites 恢复脚本写的 bloom 位，覆盖表不记", async () => {
+    compile.mockImplementation(async () => bloomBundle(true, true));
+    onUpdate = () => {};
+    onInit = () => {
+      (activeGlobal.thisScene as { bloom: boolean }).bloom = false;
+      return undefined;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 }, q: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    const first = renderer.sceneState;
+    expect(first?.bloomEnabled).toBe(false);
+    host.applyUserProperties({ q: { type: "bool", value: true } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
+    expect(renderer.sceneState?.bloomEnabled).toBe(false);
+    expect(compile.mock.calls[1][0].scriptOverrides).toEqual({});
+    host.dispose();
+  });
+
+  it("属性改 bloom：就地写，用户值盖掉脚本写过的值，重编译后不再重放", async () => {
+    compile.mockImplementation(async () => {
+      const result = bloomBundle(true, true);
+      result.bindings.push({ property: "b", target: { kind: "bloom-enabled" } });
+      return result;
+    });
+    onUpdate = () => {};
+    onInit = () => {
+      (activeGlobal.thisScene as { bloom: boolean }).bloom = false;
+      return undefined;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({
+      p: { type: "slider", value: 0.3 },
+      b: { type: "bool", value: false },
+      q: { type: "bool", value: false },
+    });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(renderer.sceneState?.bloomEnabled).toBe(false);
+    const applied = host.stats.applied;
+    host.applyUserProperties({ b: { type: "bool", value: true } });
+    expect(renderer.sceneState?.bloomEnabled).toBe(true);
+    expect(host.stats.applied).toBe(applied + 1);
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    const first = renderer.sceneState;
+    host.applyUserProperties({ q: { type: "bool", value: true } });
+    await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
+    // bundle 的 bloomFlag 恒为 true：脚本的 false 不再重放
+    expect(renderer.sceneState?.bloomEnabled).toBe(true);
+    host.dispose();
+  });
+
+  it("thisScene.hdr：写的值等于场景位时不重新加载，不同才重新加载（渲染是 LDR 也一样）", async () => {
+    let calls = 0;
+    compile.mockImplementation(async (input) => {
+      // 上界：去重坏了时重载会一直链下去，这里卡住让断言干净地失败
+      if (++calls > 3) await new Promise(() => {});
+      const result = bloomBundle(false, false);
+      // ctl-nobloom：`bloom: false`、`hdr: true`，场景位 true，渲染是 LDR
+      const hdrFlag = input.scriptOverrides?.["general/hdr"] !== false;
+      result.general.postprocess = { level: "ultra", bloomFlag: false, hdrFlag, bloom: false, hdr: false };
+      return result;
+    });
+    let value = true;
+    onUpdate = () => {
+      (activeGlobal.thisScene as { hdr: boolean }).hdr = value;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    renderer.tick();
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(1);
+    value = false;
+    renderer.tick();
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(compile.mock.calls[1][0].scriptOverrides).toEqual({ "general/hdr": false });
+    await settled();
+    renderer.tick();
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(2);
+    host.dispose();
+  });
+
+  it("general/hdr 属性绑定与脚本写入都走整场重编译（已定，与 WPE 不同）", async () => {
+    let calls = 0;
+    compile.mockImplementation(async () => {
+      if (++calls > 3) await new Promise(() => {});
+      const result = bloomBundle(true, true);
+      result.bindings.push({
+        property: "h",
+        target: { kind: "recompile", reason: "postprocess", path: "general.hdr" },
+      });
+      return result;
+    });
+    onUpdate = () => {
+      (activeGlobal.thisObject as { hdr: boolean }).hdr = true;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 }, h: { type: "bool", value: false } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(compile.mock.calls[1][0].scriptOverrides).toEqual({ "general/hdr": true });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalled());
+    await settled();
+    expect(compile).toHaveBeenCalledTimes(2);
+    host.applyUserProperties({ h: { type: "bool", value: true } });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(3));
+    expect(host.stats.recompiled).toEqual([
+      { reason: "script（general/hdr）", keys: [] },
+      { reason: "postprocess（general.hdr）", keys: ["h"] },
+    ]);
     host.dispose();
   });
 

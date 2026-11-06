@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  BindingCollector,
   bindingValue,
   mergeProperties,
   planApply,
@@ -15,6 +16,7 @@ import { compileScene } from "./bundle";
 import { checkEffectFeatures, checkPassFeatures } from "./features";
 import type { SceneReader } from "./fs";
 import { numbers, observePropertyReads, resolveValue, type SceneValue } from "./model";
+import { scenePostprocessState } from "./postprocess";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -169,10 +171,11 @@ describe("取值换算与分类（无 GPU、无语料）", () => {
         (field): SceneBinding => ({ property: `layer-${field}`, target: at(0, field) }),
       ),
       { property: "bloom", target: { kind: "bloom", field: "hdrStrength" } },
+      { property: "bloom-iterations", target: { kind: "bloom", field: "hdrIterations" } },
+      { property: "bloom-switch", target: { kind: "bloom-enabled" } },
       { property: "effect-visible", target: { kind: "effect", object: 0, effect: 0 } },
     ];
     const recompiled: SceneBinding[] = [
-      { property: "bloom-switch", target: recompile("postprocess", "general.bloom") },
       { property: "hdr", target: recompile("postprocess", "general.hdr") },
       { property: "cbm", target: recompile("layer-structure", "objects/0/colorBlendMode") },
       { property: "size", target: recompile("layer-structure", "objects/0/size") },
@@ -197,6 +200,27 @@ describe("取值换算与分类（无 GPU、无语料）", () => {
     // 只给脚本用的属性：既不就地写、也不重编译
     expect(plan.writes.some((write) => write.binding.property === "script-only")).toBe(false);
     expect(plan.recompile.some((item) => item.key === "script-only")).toBe(false);
+  });
+});
+
+describe("general.bloom 与 general.hdr 的绑定目标", () => {
+  it("bloom 就地、hdr 重编译；条件照常带上", () => {
+    const bindings = new BindingCollector();
+    scenePostprocessState(
+      "ultra",
+      { bloom: { user: { name: "b", condition: "on" }, value: true }, hdr: { user: "h", value: true } },
+      { b: "on", h: true },
+      bindings,
+    );
+    expect(bindings.list).toEqual([
+      { property: "b", condition: "on", target: { kind: "bloom-enabled" } },
+      { property: "h", target: { kind: "recompile", reason: "postprocess", path: "general.hdr" } },
+    ]);
+  });
+  it("没写成 {user} 的不登记", () => {
+    const bindings = new BindingCollector();
+    scenePostprocessState("enabled", { bloom: { script: "x", value: true }, hdr: true }, {}, bindings);
+    expect(bindings.list).toEqual([]);
   });
 });
 

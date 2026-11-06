@@ -67,9 +67,11 @@ describe("场景后处理档位", () => {
     expect(resolvePostprocessLevel("follow", null)).toBe("disabled");
     expect(resolvePostprocessLevel(undefined, "high")).toBe("enabled");
   });
-  it("场景实际状态：泛光缺键即开；HDR 要超高且 bloom、hdr 的生效值都为 true", () => {
+  it("场景实际状态：泛光缺键即开；HDR 要超高，且 bloom 的文件值、hdr 的生效值都为 true", () => {
     expect(scenePostprocessState("disabled", { bloom: true, hdr: true })).toEqual({
       level: "disabled",
+      bloomFlag: true,
+      hdrFlag: true,
       bloom: false,
       hdr: false,
     });
@@ -78,17 +80,24 @@ describe("场景后处理档位", () => {
     expect(scenePostprocessState("enabled", { bloom: true, hdr: true })).toMatchObject({ bloom: true, hdr: false });
     expect(scenePostprocessState("ultra", { bloom: true, hdr: true })).toMatchObject({ bloom: true, hdr: true });
     expect(scenePostprocessState("ultra", { hdr: true })).toMatchObject({ bloom: true, hdr: false });
-    // 写成属性对象：泛光与 HDR 都取生效值（P2b 更正，工坊 3286859278 超高档抓帧）
+    // 写成属性对象也算（P2b 更正，工坊 3286859278 超高档抓帧）；泛光读属性当前值，HDR 判定读 JSON 的 value（K3）
     expect(scenePostprocessState("ultra", { bloom: { user: "x", value: true }, hdr: true })).toMatchObject({
       bloom: true,
       hdr: true,
     });
     expect(
       scenePostprocessState("ultra", { bloom: { user: "x", value: true }, hdr: true }, { x: false }),
-    ).toMatchObject({ bloom: false, hdr: false });
+    ).toMatchObject({ bloom: false, hdr: true });
+    expect(
+      scenePostprocessState("ultra", { bloom: { user: "x", value: false }, hdr: true }, { x: true }),
+    ).toMatchObject({ bloom: true, hdr: false });
+    // hdr 读属性当前值，这一点有意不跟 WPE（3c 已定 12）
     expect(
       scenePostprocessState("ultra", { bloom: true, hdr: { user: "h", value: false } }, { h: true }),
-    ).toMatchObject({ hdr: true });
+    ).toMatchObject({ hdrFlag: true, hdr: true });
+    expect(
+      scenePostprocessState("ultra", { bloom: true, hdr: { user: "h", value: true } }, { h: false }),
+    ).toMatchObject({ hdrFlag: false, hdr: false });
     expect(scenePostprocessState("enabled", { bloom: { user: "x", value: false } })).toMatchObject({ bloom: false });
     expect(scenePostprocessState("enabled", { bloom: { user: "x", value: false } }, { x: true })).toMatchObject({
       bloom: true,

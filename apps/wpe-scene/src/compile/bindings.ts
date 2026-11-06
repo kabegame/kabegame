@@ -21,7 +21,7 @@ export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
 export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible";
 
 export type RecompileReason =
-  | "postprocess" // general.bloom / general.hdr：泛光链有无、目标格式
+  | "postprocess" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）
   | "general" // clearcolor / ambientcolor / skylightcolor / camera.*
   | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）
 
@@ -32,6 +32,8 @@ export type BindingTarget =
   | { kind: "effect"; object: number; effect: number }
   | { kind: "constant"; pass: TargetKey; material: string; uniforms: string[]; type: ValueType }
   | { kind: "bloom"; field: keyof BloomParams }
+  /** `general.bloom`：每帧读（A1），写的是场景位。 */
+  | { kind: "bloom-enabled" }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 export interface SceneBinding {

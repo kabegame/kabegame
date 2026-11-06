@@ -9,8 +9,9 @@ import {
   type ScenePass,
   type SceneTexture,
 } from "../compile/bundle";
-import { BLOOM_DEFAULTS } from "../compile/postprocess";
+import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import type { TranslateResult } from "../wpesl2wgsl";
+import type { BloomStep } from "./bloom";
 import { acquireGpu } from "./device";
 import { SceneRenderError } from "./errors";
 import type { FboBindings } from "./graph";
@@ -305,7 +306,7 @@ function bundleOf(layers: SceneLayer[], overrides: Partial<SceneBundle> = {}): S
       camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
       ambient: [0.1, 0.1, 0.1],
       skylight: [0.2, 0.2, 0.2],
-      postprocess: { level: "disabled", bloom: false, hdr: false },
+      postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },
     layers,
@@ -1025,6 +1026,206 @@ describe("effect 切换", () => {
       expect(onError).not.toHaveBeenCalled();
       renderer.destroy();
     });
+  });
+});
+
+describe("泛光开关与级数", () => {
+  /** 泛光程序排在图层程序之后。 */
+  const BLOOM_PROGRAM = programs().length;
+  const bloomProgram = (name: string, slots: number[]): TranslateResult =>
+    ({
+      ...program(name, slots),
+      uniforms: [
+        { name: "g_RenderVar0", type: "vec4<f32>", declared: "vec4", offset: 0, size: 16 },
+        {
+          name: "g_Strength",
+          type: "vec2<f32>",
+          declared: "vec2",
+          offset: 16,
+          size: 8,
+          meta: { material: "bloomstrength" },
+        },
+        {
+          name: "g_Threshold",
+          type: "f32",
+          declared: "float",
+          offset: 24,
+          size: 4,
+          meta: { material: "bloomthreshold" },
+        },
+        { name: "g_Blend", type: "vec4<f32>", declared: "vec4", offset: 32, size: 16, meta: { material: "blend" } },
+        {
+          name: "g_BloomTint",
+          type: "vec3<f32>",
+          declared: "vec3",
+          offset: 48,
+          size: 12,
+          meta: { material: "bloomtint" },
+        },
+        { name: "g_Scatter", type: "f32", declared: "float", offset: 60, size: 4, meta: { material: "scatter" } },
+      ],
+      uniformBlockSize: 64,
+    }) as unknown as TranslateResult;
+
+  /** 512×256：可用级数 8。`hdr` 决定建哪条链，`flag` 是场景位。 */
+  function bloomScene(
+    hdr: boolean,
+    flag: boolean,
+    params: Partial<BloomParams> = {},
+    extra: Partial<SceneLayer> = {},
+  ): SceneBundle {
+    const names = hdr
+      ? ["downsampleBloom", "downsample", "upsample", "upsampleCubic", "combine"]
+      : ["quarter", "eighth", "blur", "combine"];
+    const bundle = bundleOf([layer(0, [], extra)]);
+    bundle.programs.push(...names.map((name) => bloomProgram(name, name === "combine" ? [0, 1] : [0])));
+    bundle.bloom = {
+      hdr,
+      passes: Object.fromEntries(
+        names.map((name, index) => [
+          name,
+          pass(`bloom/${name}`, BLOOM_PROGRAM + index, { blending: "normal", uniforms: {} }),
+        ]),
+      ),
+    };
+    bundle.general = {
+      ...bundle.general,
+      width: 512,
+      height: 256,
+      postprocess: { level: hdr ? "ultra" : "enabled", bloomFlag: flag, hdrFlag: hdr, bloom: flag, hdr },
+      bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1], ...params },
+    };
+    return bundle;
+  }
+
+  /** 同一份图层，没有泛光链（档位关闭）。 */
+  function noChain(): SceneBundle {
+    const bundle = bloomScene(false, false);
+    bundle.bloom = null;
+    bundle.general.postprocess = { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false };
+    return bundle;
+  }
+
+  const setBloom = (state: SceneState, value: boolean) =>
+    state.write({ property: "b", target: { kind: "bloom-enabled" } }, value);
+  const setParam = (state: SceneState, field: keyof BloomParams, value: number) =>
+    state.write({ property: "p", target: { kind: "bloom", field } }, value);
+
+  /** `capture` 加上泛光链当前要跑的步骤与 uniform 字节。 */
+  function withChain(live: Live) {
+    const chain = live.scene.bloomChain as unknown as {
+      active: {
+        step: BloomStep;
+        draw: { label: string; pipeline: { label: string }; uniformBuffer: FakeBuffer };
+      }[];
+    };
+    return {
+      ...capture(live),
+      chain: chain.active.map(({ step, draw }) => ({
+        step,
+        label: draw.label,
+        pipeline: draw.pipeline.label,
+        uniform: hex(draw.uniformBuffer.bytes),
+      })),
+    };
+  }
+
+  it("关着 = 没有链：编码轨迹逐项相同，不拷快照、不跑链", async () => {
+    const live = await fresh(bloomScene(false, false));
+    const result = capture(live);
+    expect(result).toEqual(capture(await fresh(noChain())));
+    expect(result.trace.some((line) => line.includes("FullFrameBuffer") || line.includes("_rt_"))).toBe(false);
+  });
+
+  it("就地开 / 关（LDR）= 整场编译的 uniform 字节与步骤序列", async () => {
+    const live = await open(bloomScene(false, false));
+    const { gpu, state } = live;
+    const counts = { ...gpu.counts };
+    expect(setBloom(state, true)).toBe("applied");
+    advance(live);
+    const opened = withChain(live);
+    expect(opened).toEqual(withChain(await fresh(bloomScene(false, true))));
+    expect(opened.trace).toContain("copy scene target -> _rt_FullFrameBuffer");
+    expect(opened.trace).toContain("pass _rt_Bloom load");
+
+    setBloom(state, false);
+    advance(live);
+    expect(withChain(live)).toEqual(withChain(await fresh(bloomScene(false, false))));
+    expect(gpu.counts).toEqual(counts);
+  });
+
+  it("bloomhdriterations 8 → 5 → 8（HDR）= 整场编译的 uniform 字节与步骤序列，不建新资源", async () => {
+    const live = await open(bloomScene(true, true));
+    const { gpu, state } = live;
+    const counts = { ...gpu.counts };
+    setParam(state, "hdrIterations", 5);
+    advance(live);
+    const five = withChain(live);
+    expect(five).toEqual(withChain(await fresh(bloomScene(true, true, { hdrIterations: 5 }))));
+    expect(five.trace).not.toContain("pass _rt_64FrameBuffer load");
+
+    setParam(state, "hdrIterations", 8);
+    advance(live);
+    expect(withChain(live)).toEqual(withChain(await fresh(bloomScene(true, true))));
+    expect(gpu.counts).toEqual(counts);
+  });
+
+  it.each<[string, boolean, Partial<BloomParams>]>([
+    ["LDR 强度", false, { strength: 0.5, threshold: 0.3 }],
+    ["HDR 强度", true, { hdrStrength: 4 }],
+    ["HDR 级数", true, { hdrIterations: 2 }],
+  ])("关着时改参数，打开是新值：%s", async (_name, hdr, params) => {
+    const live = await open(bloomScene(hdr, true));
+    const { scene, state } = live;
+    setBloom(state, false);
+    for (const [field, value] of Object.entries(params)) setParam(state, field as keyof BloomParams, value as number);
+    scene.sync(state);
+    expect(capture(live).trace.some((line) => line.includes("_rt_"))).toBe(false);
+    setBloom(state, true);
+    advance(live);
+    expect(withChain(live)).toEqual(withChain(await fresh(bloomScene(hdr, true, params))));
+  });
+
+  it("HDR 就地关泛光：目标格式保持 HDR，brightness 继续乘进颜色，combine 不跑", async () => {
+    const live = await open(bloomScene(true, true));
+    const { scene, state } = live;
+    setBloom(state, false);
+    state.write({ property: "l", target: { kind: "layer", object: 0, field: "brightness" } }, 2);
+    advance(live);
+    expect(scene.format).toBe("rgba16float");
+    const { draws } = internals(scene).layers[0];
+    const color = [...new Float32Array(draws[0].uniformBuffer.bytes.slice().buffer, 80, 4)];
+    expect(color).toEqual([Math.fround(0.2) * 2, Math.fround(0.4) * 2, Math.fround(0.6) * 2, 0.5]);
+    const { trace } = capture(live);
+    expect(trace.some((line) => line.includes("_rt_"))).toBe(false);
+    expect(trace.filter((line) => line.startsWith("pipeline"))).toEqual([expect.stringContaining("rgba16float")]);
+  });
+
+  it("HDR 场景加载时关着（JSON true、属性 false，K3）：运行中打开 = 开着整场加载", async () => {
+    const live = await open(bloomScene(true, false));
+    expect(capture(live).trace.some((line) => line.includes("_rt_"))).toBe(false);
+    expect(live.scene.format).toBe("rgba16float");
+    setBloom(live.state, true);
+    advance(live);
+    expect(withChain(live)).toEqual(withChain(await fresh(bloomScene(true, true))));
+  });
+
+  it("没有链的场景：位怎么变编码轨迹都不变", async () => {
+    const live = await fresh(noChain());
+    const before = capture(live);
+    expect(setBloom(live.state, true)).toBe("applied");
+    advance(live);
+    expect(capture(live)).toEqual(before);
+  });
+
+  it("链的资源数：LDR 4 个绘制、3 张 RT 加快照，HDR 21 个绘制、8 张 RT 加快照", async () => {
+    const without = (await open(noChain())).gpu.counts;
+    const ldr = (await open(bloomScene(false, false))).gpu.counts;
+    expect(ldr.buffers - without.buffers).toBe(8); // 每个绘制一个顶点缓冲、一个 uniform 缓冲
+    expect(ldr.textures - without.textures).toBe(4);
+    const hdr = (await open(bloomScene(true, true, { hdrIterations: 3 }))).gpu.counts;
+    expect(hdr.buffers - without.buffers).toBe(42);
+    expect(hdr.textures - without.textures).toBe(9);
   });
 });
 

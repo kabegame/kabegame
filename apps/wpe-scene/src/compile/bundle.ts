@@ -176,7 +176,10 @@ export interface SceneBundle {
   layers: SceneLayer[];
   programs: TranslateResult[];
   textures: SceneTexture[];
-  /** 泛光链（`bloom.ts`）；泛光实际关着（档位关闭、`general.bloom` 为 false 或场景没有对象）时为 null，渲染路径与 P2a 相同。 */
+  /**
+   * 泛光链（`bloom.ts`）；档位关闭、场景没有对象，或 `general.bloom` 写死 false（没绑属性、没挂脚本）时为 null，渲染路径与 P2a 相同。
+   * 有链不等于开着：当前开不开看 `SceneState.bloomEnabled`，关着时渲染路径同样与 P2a 相同。
+   */
   bloom: SceneBloom | null;
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
@@ -323,6 +326,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const sceneText = await fs.text(project.file);
   if (!sceneText) throw new Error(`缺少场景入口：${project.file}`);
   const scene = parseScene(sceneText);
+  // HDR 判定读文件里的 `general.bloom`（K3），脚本覆盖不算，要在套用之前取。缺键写成 null：undefined 会落到缺省参数，读到覆盖后的值
+  const fileBloom = scene.general?.bloom ?? null;
   for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) {
     const parts = path.split("/");
     let parent: unknown = scene;
@@ -347,6 +352,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     general,
     properties,
     bindings,
+    fileBloom,
   );
   const projection =
     general.orthogonalprojection && typeof general.orthogonalprojection === "object"
@@ -733,8 +739,15 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
     }
   }
-  // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光、场景 bloom 生效且对象列表非空（A1）
-  if (postprocess.bloom && scene.objects.length > 0 && !settled())
+  // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光且对象列表非空（A1）。当前开着，或运行中可能打开（绑了属性或挂了脚本）才建；
+  // 不按「场景有脚本」判定：`bloom: false` 的场景大多带脚本，会平白多占显存。别的写入打开时走整场重编译（`SceneState.needsRecompile`）。
+  // 链的形态跟 HDR 判定走，和当前开不开无关（K3）：JSON 为 true、属性为 false 时建 HDR 链，运行中打开是 HDR 泛光
+  const bloomVariable = isUserBinding(general.bloom) || isScriptValue(general.bloom);
+  if (
+    (postprocess.bloom || (bloomVariable && postprocess.level !== "disabled")) &&
+    scene.objects.length > 0 &&
+    !settled()
+  )
     bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
   bundle.unsupported = [...unsupported].sort();

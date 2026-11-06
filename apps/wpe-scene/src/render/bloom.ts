@@ -15,6 +15,9 @@
  *   - 参数（`FUN_140184020`）：`bloomstrength` = (hdrstrength / (1 + scatter^(max(N, 2) − 2)), scatter)，
  *     `blend` = (t, t − k, 2k, 0.25 / (k + 1e−5))（k = t · feather），`scatter` 写给两个上采样材质，`bloomtint` 原样。
  *     按 float32 逐步计算（`Math.fround`），与抓帧里的常量逐位一致。
+ *   - 建满：RT 与绘制照 WPE 建全部可用级（resize 时预建），每帧只跑前 N 级。不同级数之间下采样的 pass、输入与目标完全相同，
+ *     上采样只差「最粗两级用 bicubic」，所以绘制按步骤身份去重（8 级共 21 个），`setParams` 按新级数取出要跑的绘制并写常量，
+ *     级数总能就地改。泛光没有时间状态：每帧下采样整张覆盖，改级数不残留。
  */
 import type { BloomPassName, SceneBloom } from "../compile/bloom";
 import type { ScenePass } from "../compile/bundle";
@@ -184,6 +187,20 @@ export function planBloom(hdr: boolean, params: BloomParams, width: number, heig
   };
 }
 
+/** 建链要覆盖的计划：HDR 是 1 到可用级数的每一级（WPE 在 resize 时预建全部可用级，每帧用前 N 级，A1），LDR 一份。最后一份用到全部 RT。 */
+function plansFor(hdr: boolean, params: BloomParams, width: number, height: number): BloomPlan[] {
+  if (!hdr) return [planBloom(false, params, width, height)];
+  const available = Math.max(1, bloomLevels(width, height));
+  return Array.from({ length: available }, (_, index) =>
+    planBloom(true, { ...params, hdrIterations: index + 1 }, width, height),
+  );
+}
+
+/** 同一身份的步骤在各级数之间共用绘制：pass、输入、目标相同，常量与 RV0 由 `setParams` 写。 */
+function stepKey({ pass, inputs, target }: BloomStep): string {
+  return JSON.stringify([pass, inputs, target]);
+}
+
 /** 一份 bundle 的泛光链要用的 pass 名（`checkRenderable` 核对是否都编出来了）。 */
 export function bloomPassesOf(plan: Pick<BloomPlan, "steps">): BloomPassName[] {
   return [...new Set(plan.steps.map((step) => step.pass))];
@@ -198,7 +215,6 @@ interface BloomTarget {
 }
 
 interface BloomDraw {
-  step: BloomStep;
   label: string;
   pipeline: GPURenderPipeline;
   vertexBuffer: GPUBuffer;
@@ -268,8 +284,11 @@ function bloomValues(
 
 export class BloomChain {
   readonly targets: BloomTarget[];
-  private readonly draws: BloomDraw[] = [];
-  /** 当前的渲染图（就地改参数时按新参数重算，级数不变所以结构相同）。 */
+  /** 全部级数的绘制，按 `stepKey` 去重。 */
+  private readonly draws = new Map<string, BloomDraw>();
+  /** 当前级数要跑的步骤与绘制：`setParams` 重排，下标是计划内的步骤下标。 */
+  private active: { step: BloomStep; draw: BloomDraw }[] = [];
+  /** 当前的渲染图：`targets` 只列这一级数用到的 RT，`this.targets` 是全部。 */
   private currentPlan: BloomPlan;
 
   private constructor(
@@ -293,30 +312,26 @@ export class BloomChain {
     return this.targets.reduce((sum, target) => sum + target.width * target.height * texel, 0);
   }
 
-  /** HDR 级数（`bloomhdriterations` 换算出的金字塔级数）是否不变；级数变了要重排金字塔，只能整场重编译。 */
-  sameLevels(params: BloomParams): boolean {
-    if (!this.currentPlan.hdr) return true;
-    const available = Math.max(1, bloomLevels(this.width, this.height));
-    return bloomIterations(params.hdrIterations, available) === this.currentPlan.levels;
-  }
-
-  /** 按新参数重算常量并重写各 pass 的 uniform（调用方已确认 `sameLevels`）。 */
+  /** 按新参数重排：取出这一级数用到的绘制并重写 uniform。没用到的绘制留着旧字节，下次用到时重写。 */
   setParams(params: BloomParams): void {
     const plan = planBloom(this.currentPlan.hdr, params, this.width, this.height);
-    this.draws.forEach((draw, index) => {
-      const step = plan.steps[index];
-      if (!draw.block || !draw.uniformBuffer || !step) return;
-      const values = bloomValues(draw.program, draw.pass, step, draw.sizes, this.width, this.height);
-      for (const [name, value] of Object.entries(values)) draw.block.set(name, value);
-      this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
+    this.active = plan.steps.map((step) => {
+      const draw = this.draws.get(stepKey(step))!; // 全部级数都建过
+      if (draw.block && draw.uniformBuffer) {
+        const values = bloomValues(draw.program, draw.pass, step, draw.sizes, this.width, this.height);
+        for (const [name, value] of Object.entries(values)) draw.block.set(name, value);
+        this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
+      }
+      return { step, draw };
     });
     this.currentPlan = plan;
   }
 
   static async create(input: BloomChainInput): Promise<BloomChain> {
     const { device, bloom, width, height } = input;
-    const plan = planBloom(bloom.hdr, input.params, width, height);
-    const targets = plan.targets.map(({ name, width: w, height: h }) => {
+    const plans = plansFor(bloom.hdr, input.params, width, height);
+    const full = plans.at(-1)!;
+    const targets = full.targets.map(({ name, width: w, height: h }) => {
       const texture = input.own(
         device.createTexture({
           label: name,
@@ -327,7 +342,7 @@ export class BloomChain {
       );
       return { name, texture, view: texture.createView(), width: w, height: h };
     });
-    const chain = new BloomChain(device, plan, targets, width, height);
+    const chain = new BloomChain(device, full, targets, width, height);
     const sampler = device.createSampler({
       label: "bloom",
       magFilter: "linear",
@@ -345,69 +360,70 @@ export class BloomChain {
             textureWidth: targets[source.index].width,
             textureHeight: targets[source.index].height,
           };
-    chain.draws.push(
-      ...(await Promise.all(
-        plan.steps.map(async (step, index): Promise<BloomDraw> => {
-          const pass: ScenePass | undefined = bloom.passes[step.pass];
-          const program = pass?.program === null || pass === undefined ? undefined : input.programs.get(pass.program);
-          if (!pass || !program) throw new SceneRenderError([`render:bloom:${step.pass}`]);
-          const label = `bloom ${index} ${step.pass}`;
-          const vertexData = program.vertexPacking.pack(quad);
-          const vertexBuffer = input.own(
+    const steps = new Map<string, BloomStep>();
+    for (const step of plans.flatMap((plan) => plan.steps)) {
+      const key = stepKey(step);
+      if (!steps.has(key)) steps.set(key, step);
+    }
+    const draws = await Promise.all(
+      [...steps].map(async ([key, step], index): Promise<[string, BloomDraw]> => {
+        const pass: ScenePass | undefined = bloom.passes[step.pass];
+        const program = pass?.program === null || pass === undefined ? undefined : input.programs.get(pass.program);
+        if (!pass || !program) throw new SceneRenderError([`render:bloom:${step.pass}`]);
+        const label = `bloom ${index} ${step.pass}`;
+        const vertexData = program.vertexPacking.pack(quad);
+        const vertexBuffer = input.own(
+          device.createBuffer({
+            label,
+            size: vertexData.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          }),
+        );
+        device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+        const entries: GPUBindGroupEntry[] = [];
+        let block: UniformBlock | null = null;
+        let uniformBuffer: GPUBuffer | null = null;
+        if (program.uniformSize) {
+          block = new UniformBlock((program.result.uniforms ?? []) as UniformEntry[], program.uniformSize);
+          uniformBuffer = input.own(
             device.createBuffer({
               label,
-              size: vertexData.byteLength,
-              usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+              size: block.data.byteLength,
+              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
             }),
           );
-          device.queue.writeBuffer(vertexBuffer, 0, vertexData);
-          const sizes = step.inputs.map(sizeOf);
-          const entries: GPUBindGroupEntry[] = [];
-          let block: UniformBlock | null = null;
-          let uniformBuffer: GPUBuffer | null = null;
-          if (program.uniformSize) {
-            block = new UniformBlock((program.result.uniforms ?? []) as UniformEntry[], program.uniformSize);
-            const values = bloomValues(program, pass, step, sizes, width, height);
-            for (const [name, value] of Object.entries(values)) block.set(name, value);
-            uniformBuffer = input.own(
-              device.createBuffer({
-                label,
-                size: block.data.byteLength,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-              }),
-            );
-            device.queue.writeBuffer(uniformBuffer, 0, block.data);
-            entries.push({ binding: 0, resource: { buffer: uniformBuffer } });
-          }
-          for (const binding of program.textures) {
-            const source = step.inputs[binding.slot];
-            if (!source || binding.kind !== "2d")
-              throw new SceneRenderError([`render:bloom-slot:${step.pass}:${binding.slot}`]);
-            const view = source.kind === "framebuffer" ? input.source : targets[source.index].view;
-            entries.push({ binding: binding.binding, resource: view });
-            entries.push({ binding: binding.samplerBinding, resource: sampler });
-          }
-          return {
-            step,
-            label,
-            // 场景目标与中间 RT 同格式；全部只写 RGB（write mask 7，J5）；上采样 SrcAlpha / One，其余关闭混合
-            pipeline: await input.pipelineFor(program, step.additive ? "additive" : null, input.format),
-            vertexBuffer,
-            bindGroup: device.createBindGroup({ label, layout: program.bindGroupLayout, entries }),
-            block,
-            uniformBuffer,
-            program,
-            pass,
-            sizes,
-          };
-        }),
-      )),
+          entries.push({ binding: 0, resource: { buffer: uniformBuffer } });
+        }
+        for (const binding of program.textures) {
+          const source = step.inputs[binding.slot];
+          if (!source || binding.kind !== "2d")
+            throw new SceneRenderError([`render:bloom-slot:${step.pass}:${binding.slot}`]);
+          const view = source.kind === "framebuffer" ? input.source : targets[source.index].view;
+          entries.push({ binding: binding.binding, resource: view });
+          entries.push({ binding: binding.samplerBinding, resource: sampler });
+        }
+        const draw: BloomDraw = {
+          label,
+          // 场景目标与中间 RT 同格式；全部只写 RGB（write mask 7，J5）；上采样 SrcAlpha / One，其余关闭混合
+          pipeline: await input.pipelineFor(program, step.additive ? "additive" : null, input.format),
+          vertexBuffer,
+          bindGroup: device.createBindGroup({ label, layout: program.bindGroupLayout, entries }),
+          block,
+          uniformBuffer,
+          program,
+          pass,
+          sizes: step.inputs.map(sizeOf),
+        };
+        return [key, draw];
+      }),
     );
+    for (const [key, draw] of draws) chain.draws.set(key, draw);
+    chain.setParams(input.params);
     return chain;
   }
 
   /**
-   * 按步骤编码；`sceneView` 是场景目标（combine 写它）。`after` 在每步之后调用（dev 探针读回中间结果用）。
+   * 按当前级数的步骤编码；`sceneView` 是场景目标（combine 写它）。`after` 在每步之后调用（dev 探针读回中间结果用），下标是计划内的步骤下标。
    * 每步一个 render pass、`load`：下采样整张覆盖，上采样加在本帧的下采样结果上。
    */
   encode(
@@ -415,8 +431,8 @@ export class BloomChain {
     sceneView: GPUTextureView,
     after?: (index: number, step: BloomStep, encoder: GPUCommandEncoder) => void,
   ): void {
-    this.draws.forEach((draw, index) => {
-      const view = draw.step.target.kind === "scene" ? sceneView : this.targets[draw.step.target.index].view;
+    this.active.forEach(({ step, draw }, index) => {
+      const view = step.target.kind === "scene" ? sceneView : this.targets[step.target.index].view;
       const pass = encoder.beginRenderPass({
         label: draw.label,
         colorAttachments: [{ view, loadOp: "load", storeOp: "store" }],
@@ -426,7 +442,7 @@ export class BloomChain {
       pass.setVertexBuffer(0, draw.vertexBuffer);
       pass.draw(4);
       pass.end();
-      after?.(index, draw.step, encoder);
+      after?.(index, step, encoder);
     });
   }
 }

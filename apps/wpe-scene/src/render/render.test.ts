@@ -404,7 +404,7 @@ describe("可渲染性自查", () => {
       camera: { eye: [], center: [], up: [] },
       ambient: [0, 0, 0],
       skylight: [0, 0, 0],
-      postprocess: { level: "disabled", bloom: false, hdr: false },
+      postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },
     layers: [],

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
-import type { SceneScript } from "../compile/scripts";
+import { BLOOM_FIELDS } from "../compile/postprocess";
+import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState } from "../render/state";
 import { ScriptApi } from "./api";
 import { ScriptRuntime, type ScriptRealm } from "./runtime";
@@ -77,7 +78,7 @@ function scene(): SceneBundle {
       camera: { eye: [0, 0, 1], center: [0, 0, 0], up: [0, 1, 0] },
       ambient: [0, 0, 0],
       skylight: [0, 0, 0],
-      postprocess: { level: "enabled", bloom: true, hdr: false },
+      postprocess: { level: "enabled", bloomFlag: true, hdrFlag: false, bloom: true, hdr: false },
       bloom: {
         strength: 1,
         threshold: 0.5,
@@ -359,6 +360,104 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(h.recompiles).toHaveLength(2);
     // 探针统计写到重编译目标的次数：每一次赋值都算，被去重的也算（哪段每帧都在写）
     expect(h.api.recompileWrites.get("general")).toBe(3);
+  });
+
+  it("thisScene.bloom 读写 SceneState 的场景位，不算重编译写入；与 thisObject 是同一个位", () => {
+    const h = setup();
+    h.bundle.bloom = { hdr: false, passes: {} };
+    h.resetState();
+    const scene = h.api.thisScene;
+    expect(scene.bloom).toBe(true);
+    scene.bloom = false;
+    expect(h.state.bloomEnabled).toBe(false);
+    expect(scene.bloom).toBe(false);
+    h.api.enterScript(script("general", { kind: "general" }, null));
+    const general = h.realm.global.thisObject as Record<string, unknown>;
+    expect(general.bloom).toBe(false);
+    general.bloom = true;
+    expect(scene.bloom).toBe(true);
+    // 只认布尔，同图层 visible
+    scene.bloom = 0;
+    expect(h.state.bloomEnabled).toBe(true);
+    expect(h.recompiles).toEqual([]);
+    expect(h.api.recompileWrites.size).toBe(0);
+    // 读的是场景位，不含档位：档位关闭时也如实读到
+    h.bundle.general.postprocess = { level: "disabled", bloomFlag: true, hdrFlag: false, bloom: false, hdr: false };
+    h.resetState();
+    expect(scene.bloom).toBe(true);
+  });
+
+  it("hdr 写入仍是重编译目标，读场景位", () => {
+    const h = setup();
+    h.api.enterScript(script("general", { kind: "general" }, null));
+    const general = h.realm.global.thisObject as Record<string, unknown>;
+    expect(general.hdr).toBe(false);
+    general.hdr = true;
+    expect(h.recompiles).toEqual([{ path: "general/hdr", value: true }]);
+    expect(h.api.recompileWrites.get("general")).toBe(1);
+  });
+
+  it("thisScene.hdr 读场景位：`bloom: false`、`hdr: true` 读 true，而渲染是 LDR（K5）", () => {
+    const h = setup();
+    h.bundle.general.postprocess = { level: "ultra", bloomFlag: false, hdrFlag: true, bloom: false, hdr: false };
+    expect(h.api.thisScene.hdr).toBe(true);
+    h.bundle.general.postprocess = { level: "disabled", bloomFlag: true, hdrFlag: true, bloom: false, hdr: false };
+    expect(h.api.thisScene.hdr).toBe(true);
+    h.bundle.general.postprocess = { level: "ultra", bloomFlag: true, hdrFlag: false, bloom: true, hdr: false };
+    expect(h.api.thisScene.hdr).toBe(false);
+  });
+
+  it("thisScene 带全部 general 字段，和挂在 general 上的脚本读写同一份（K5）", () => {
+    const h = setup();
+    h.bundle.bloom = { hdr: false, passes: {} };
+    h.resetState();
+    const { thisScene: scene, general } = h.api;
+    // 成员就是 general 的全部字段加四个查询方法：fog*、wind*、zoom 这轮不加
+    const methods = ["enumerateLayers", "getLayer", "getLayerCount", "getLayerIndex"];
+    expect(Object.keys(scene).sort()).toEqual([...Object.keys(general), ...methods].sort());
+    expect(Object.keys(general)).toEqual(
+      expect.arrayContaining(["bloom", "hdr", "clearenabled", "clearcolor", ...Object.keys(BLOOM_FIELDS)]),
+    );
+    expect(scene.bloomhdriterations).toBe(4);
+    expect(scene.bloomtint).toEqual(new Vec3(1, 1, 1));
+    expect(scene.clearenabled).toBe(true);
+    expect(scene.clearcolor).toEqual(new Vec3(0, 0, 0));
+    scene.bloomhdriterations = 3;
+    expect(h.state.bloom.hdrIterations).toBe(3);
+    expect(general.bloomhdriterations).toBe(3);
+    general.bloomstrength = 1.5;
+    expect(scene.bloomstrength).toBe(1.5);
+    scene.bloomtint = new Vec3(0.2, 0.3, 0.4);
+    expect(general.bloomtint).toEqual(new Vec3(0.2, 0.3, 0.4));
+    expect(h.recompiles).toEqual([]);
+    // 重编译类字段写到 thisScene 上同样重编译，和写 general 共用去重
+    scene.clearcolor = new Vec3(1, 0, 0);
+    general.clearcolor = new Vec3(1, 0, 0);
+    expect(h.recompiles).toEqual([{ path: "general/clearcolor", value: [1, 0, 0] }]);
+    scene.hdr = true;
+    expect(h.recompiles.at(-1)).toEqual({ path: "general/hdr", value: true });
+  });
+
+  it("{script} 挂在 8 个泛光字段上是就地目标，挂在 bloom 上是场景位，hdr 暂不支持", async () => {
+    const keys = Object.keys(BLOOM_FIELDS);
+    expect(keys).toHaveLength(8);
+    const general = Object.fromEntries(
+      [...keys, "bloom", "hdr"].map((key) => [key, { script: "export function update(v) { return v; }", value: 1 }]),
+    );
+    const { list } = await collectScripts({ general, objects: [] }, {}, []);
+    const targets = Object.fromEntries(list.map((item) => [item.id.split("/").at(-1), item.target]));
+    expect(targets).toEqual({
+      bloomstrength: { kind: "bloom", field: "strength" },
+      bloomthreshold: { kind: "bloom", field: "threshold" },
+      bloomtint: { kind: "bloom", field: "tint" },
+      bloomhdrstrength: { kind: "bloom", field: "hdrStrength" },
+      bloomhdrthreshold: { kind: "bloom", field: "hdrThreshold" },
+      bloomhdrfeather: { kind: "bloom", field: "hdrFeather" },
+      bloomhdrscatter: { kind: "bloom", field: "hdrScatter" },
+      bloomhdriterations: { kind: "bloom", field: "hdrIterations" },
+      bloom: { kind: "bloom-enabled" },
+      hdr: { kind: "unsupported", path: "general/hdr" },
+    });
   });
 
   it("effect 的 visible 读写走状态，不算重编译写入（3c）", () => {
