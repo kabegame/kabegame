@@ -106,7 +106,10 @@ def system(rgb, origin, *, lifetime=8, size=40, velocity='100 0 0', rate=1, maxc
 |---|---|---|---|
 | `linear` | 红 | 默认 | T1、T2、T3；解析模型的对照 |
 | `birth` | 绿 | `lifetime 0.2`、`rate 20`、`maxcount 8`、尺寸 12、速度 `400 0 0` | O1：`fps=60` 的 10 帧只有 0.17 s，`rate` 要够高才抓得到出生帧 |
-| `gravity` | 蓝 | 初速 0，`gravity '100 0 0'`（沿 x，留在自己这一行），寿命 6 | T4：积分方式和子步 |
+| `gravity` | 蓝 | 初速 0，`gravity '100 0 0'`（沿 x，留在自己这一行），寿命 6 |
+| `gfirst` | 淡蓝 | 初速 0，重力 1000，寿命 0.3：新粒子第一步直接给出 c，不用解初速度 | T4 |
+| `o2-cap-ab` / `-ba` | 绿 / 粉 | `movement`、`capvelocity` 两种顺序，初速 300，上限 100 | O2 |
+| `o2-init-ab` / `-ba` | 紫 / 暗绿 | 两个 `lifetimerandom` 两种顺序 | O2 | T4：积分方式和子步 |
 | `order-fade-ab` / `-ba` | 黄 / 青 | `alphafade`、`oscillatealpha` 两种顺序 | O2 |
 | `order-move-ab` / `-ba` | 品红 / 橙 | `movement`、`oscillateposition` 两种顺序 | O2 |
 | `custom` | 白 | 同 `linear`，材质用项目着色器 | 顶点展开和几何着色器的几何是否一致 |
@@ -197,29 +200,27 @@ REA 从 `C:\Users\Lenovo\AppData\Local\Temp\claude\D--Codes-kabegame\c8271d84-73
 | `fps=60` | `A:\p4-0\fps60\`，帧 800–809 | 10 帧连续，10 个绘制，1920×1080 |
 | PrintWindow 序列 | `ignore/p4/out/fps10.bin`、`fps60.bin`，日志 `*-log.txt` | 和抓帧同一次运行，含一次 3 s 暂停（`pause-fps*.json`） |
 
-已读到的事实：
-- `g_Time`、`g_Frametime` 都是 `referenced: true`，帧 800 是 13.363488、0.0162204。
-- 风险 7 的无旋转情形：`linear` 和 `custom` 的 `POSITION` 完全相同，最终四角的 x 逐位相同，只有角点顺序不同。
-- `sizerandom 40` 进顶点时是 20，画出来 20×20。
-- `birth` 在 `fps=10` 下间距 40 像素：发射按帧成批，不做帧内插值。
-
-待查：两组 PrintWindow 序列的帧号有跳变（如 `fps=10` 的 `-103`、`72`），`pw_track.py` 要先弄清是读数问题还是采样问题，判读点避开 RenderDoc 叠加层（左上约 340×40 像素）。
+读数和结论见 [p4-particles-REPORT.md](p4-particles-REPORT.md)。
 
 ## 执行顺序
 
-1. 工程和抓帧已完成。
+全部完成（2026-11-07），结果在报告里。
+
+1. 工程和抓帧。
 2. 点 2、点 3 的提取器、解析模型和比较工具。
-3. 提取轨迹，跑模型对比和误差标定。
-4. REA 和实验判据合起来写结论。
+3. 扫 `fps` 5、15、20、21、30 定两遍模式的边界（T4）；加不可交换的组合测 O2。工程把 `FR`、`CLK` 挪到了右下角。
+4. REA 交子代理，常量和判断指令我从 exe 核对过。
+
+T3 的恢复行为没有实测成：桌面壁纸不呈现（当时显示器被拔掉了，很可能是这个原因），不影响底座，留在报告的未实测清单里。
 
 ## 验收
 
 1. `p4-0` 在 WPE 里全部系统都出现，`log.txt` 没有着色器错误。
-2. `linear` 的 RenderDoc 轨迹和解析模型逐帧比，位置差不超过 1e-3。超限就是 T1 的线索，要解释清楚才算过。
+2. `linear`、`gravity` 的 RenderDoc 轨迹和解析模型逐帧比，位置差不超过 1e-3。超限要解释清楚才算过。
 3. 变异自检：解析模型的速度改 1%、dt 序列错开一帧，比较工具都要报失败。
 4. 同一次运行的同一批帧，PrintWindow 轨迹和 RenderDoc 轨迹相比，目标是位置差不超过 0.5 场景像素、颜色差不超过 1/255。实测误差写进报告，作为 P4a 起长程对比的阈值。
 5. T1–T4、O1、O2、F1、F2 每条都有结论、证据来源和置信度，或明确写未知。
-6. 恢复：WPE 正常运行，壁纸是 `3462279189`。`config.json` 和测前只差 `openWallpaper` 去掉的一行 `"layout": null`，写进报告。
+6. 恢复：WPE 正常运行，壁纸和 `config.json` 回到会话开始时的状态。
 
 ## 不做
 

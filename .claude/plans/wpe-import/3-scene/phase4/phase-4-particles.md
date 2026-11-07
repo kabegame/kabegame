@@ -88,6 +88,8 @@ const OBJECT_FLAGS = [
 
 ## P4a — 层级、底座与档 1
 
+底座的要求已由 P4-0 查清，见[报告](p4-particles-REPORT.md)「对 P4a 底座的要求」：定长列加标志、`R` 共用一列、模块按 JSON 顺序、帧内顺序、`fps` 不超过 20 时 operator 跑两遍、帧时钟钳到 `[0.0001, 0.25]`。
+
 **步骤 0：**
 - 层级：父链的变换累乘，`alpha`、`visible` 是否继承，无内容分组节点、带 `effects` 的分组、`disablepropagation`、`clampuvs`，以及绘制顺序。
 - `starttime` 的语义和步长。
@@ -207,4 +209,4 @@ const OBJECT_FLAGS = [
 4. **P4b–P4f 解锁很少：** P4b、P4d 各解锁 1 张，P4c、P4e、P4f 不解锁新场景。主要靠确定性工程和 dev 强制渲染验证，大部分效果要等后续阶段才能在真实壁纸上看到。
 5. **风、重力和 `perspectiveoverridefov` 的语义未证实：** [lighting-REPORT.md](../lighting-REPORT.md) 把它们标为中性，但能力表仍在报，P4a 步骤 0 要用实验确认。`3811798465` 等 6 张的解锁取决于这一项。
 6. **层级动的是现有路径：** 它改所有图层的世界矩阵，现有能渲染的场景都要过基线。
-7. **内置粒子着色器的路径和 WPE 不同：** 抓帧已证实（2026-11-07）：`genericparticle` 在 WPE 里是 `PointList` 加几何着色器，项目自定义 `particle` 走顶点展开。我们两种都走顶点展开，几何是否一致要靠逐帧对比确认。
+7. **内置粒子着色器的路径和 WPE 不同：** `genericparticle` 在 WPE 里是 `PointList` 加几何着色器，项目自定义 `particle` 走顶点展开。无旋转时两条路径的最终几何相同（[报告](p4-particles-REPORT.md)）；旋转的情形要在 P4a 对比。
