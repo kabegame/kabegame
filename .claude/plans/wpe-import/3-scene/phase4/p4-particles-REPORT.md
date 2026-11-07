@@ -129,4 +129,8 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | `oscillateposition` 的 ω 就是 `frequency` | y 振荡按 ω = 1 残差 2.9e-4，按 2π 残差 5 |
 | 场景的风、重力键（`gravitydirection`、`gravitystrength`、`windenabled`、`winddirection`、`windstrength`）粒子路径不读 | 中性。`proj/p4a-wind` 是 `p4-0` 只改这 5 个键（重力 `0 1 0` × 50、风开、`-1 0 0` × 80），同一会话各抓 6 帧（`A:\p4a\wind\`）：两份对解析模型最大差 6.7e-5、1.9e-5（没有场景重力项）；16 个系统的 y 都不漂移，含 `drag`、预热、模块重力。场景重力若生效，每帧就会偏约 0.08 像素 |
 
-**没测：** `oscillateposition` 的 y 比 x、z 多 `2π·R` 的时间偏移。`R` 是随机的，要在 P4a 用幅度范围反推 `R` 再比。`sprite` 的 `upright`、`fixed` 朝向没读到，先报不支持。
+| `oscillateposition` 的 y 比 x、z 多 `2π·R` 的时间偏移 | 成立。`proj/p4a2` 的 `osc-r`（频率 1、相位 0、`scale` 0–100、mask `1 1 0`）4 个粒子，由 x 的幅度反推 `R`（0.386、0.357、0.598、0.125），y 按 `T = 2π·R` 预测残差 3.4e-4–1.8e-3；`T = 0` 是 5.6–92，`T = π·R` 是 1.6–35。抓帧 `A:\p4a\p4a2`，读数脚本 `ana_oscr.py`。残差略过 1e-3 是因为年龄由日志的 6 位小数 dt 累加了 800 多帧 |
+
+`sprite` 的 `upright`、`fixed` 朝向没读到，先报不支持。
+
+`proj/p4a2` 同时带日志重抓了 `burst`、`inst`、`inst0`、`osc-y`（`tracks/rd-p4a2.json`、`out/p4a2-log.txt`），给步骤 3 的模拟器从加载开始回放。

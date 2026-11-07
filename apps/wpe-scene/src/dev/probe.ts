@@ -5,7 +5,8 @@
  * - `renderFrame`：按指定 `g_Time` 渲染一帧场景、同步读回离屏场景目标，给出 SHA-256 与 PNG，用来做逐像素回归
  *   （例如关闭档前后两版渲染器的输出是否逐字节相同）；
  * - `bloom`：泛光链的链路隔离验证（`bloomProbe.ts`）；
- * - `chunk`：把存下的结果（PNG、原始数据）按 base64 分块交给 CDP 那一侧落盘。
+ * - `chunk`：把存下的结果（PNG、原始数据）按 base64 分块交给 CDP 那一侧落盘；
+ * - `particleTrack`：编译后按给定 dt 序列步进粒子模拟器，输出和 WPE RenderDoc 轨迹同格式的数据（P4a 步骤 3）。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -14,6 +15,7 @@ import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
+import { particleTrack, type ParticleTrack } from "../particles/track";
 import { acquireGpu } from "../render/device";
 import { GpuScene } from "../render/scene";
 import { SceneState } from "../render/state";
@@ -331,4 +333,43 @@ export async function hostRenderFrame(
   const rgba = raw instanceof Uint8Array ? raw : quantize8(raw);
   for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
   return { sha256: await sha256(rgba), width: scene.width, height: scene.height };
+}
+
+export interface ParticleTrackProbeOptions {
+  projectDir: string;
+  sceneAssets: string[];
+  /** 每帧的 `g_Frametime`，`dts[0]` 是第 1 帧（对齐 WPE 脚本帧号）。 */
+  dts: number[];
+  /** 要输出的帧号。 */
+  frames: number[];
+  /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。 */
+  passes: 1 | 2;
+  seed?: number;
+  tag?: string;
+}
+
+/**
+ * 粒子轨迹（P4a 步骤 3）：按 `projectDir` 编译（不解码纹理，只要粒子层），再交给 `particles/track.ts` 逐帧步进。
+ * 输出可直接存成 `ignore/p4/tracks/sim-<tag>.json` 给 `cmp_track.py` 比。
+ */
+export async function particleTrackProbe(options: ParticleTrackProbeOptions): Promise<ParticleTrack> {
+  const bundle = await compileSceneInWorker({
+    projectDir: options.projectDir,
+    sceneAssets: options.sceneAssets,
+    postprocess: "disabled",
+    force: true,
+  });
+  try {
+    return particleTrack({
+      layers: bundle.layers,
+      dts: options.dts,
+      frames: options.frames,
+      passes: options.passes,
+      seed: options.seed,
+      project: options.projectDir.split(/[\\/]/).filter(Boolean).at(-1) ?? "",
+      tag: options.tag,
+    });
+  } finally {
+    for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
+  }
 }

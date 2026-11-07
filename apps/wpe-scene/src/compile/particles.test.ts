@@ -32,7 +32,7 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 共 12 项，外加 renderer sprite；每项都有列，执行函数留给步骤 3", () => {
+  it("档 1 共 12 项，外加 renderer sprite；每项都有列，档 1 都有执行函数，sprite 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "initializer:lifetimerandom",
@@ -50,7 +50,8 @@ describe("模块表", () => {
     ]);
     for (const def of PARTICLE_MODULES) {
       expect(def.columns.length, def.name).toBeGreaterThan(0);
-      expect(def.run, def.name).toBeNull();
+      if (def.category === "renderer") expect(def.run, def.name).toBeNull();
+      else expect(def.run, def.name).toBeTypeOf("function");
     }
   });
 

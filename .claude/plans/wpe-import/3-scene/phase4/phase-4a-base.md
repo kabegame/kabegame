@@ -290,3 +290,39 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 挡住场景最多的粒子键：`controlpoint` 48、`turbulentvelocityrandom` 41、`animationmode` 38、`boxrandom` 37、`sizechange` 34、`sequencemultiplier` 34、`children` 31、`alpharandom` 31。完整清单在 `ignore/p4/step2/out/compare.txt`。
 
 工具在 `ignore/p4/step2/`。
+
+### 步骤 3 — 模拟器（2026-11-07）
+
+子代理实现，Claude 独立验收。
+
+- **新增** `particles/` 下的模拟器：
+  - `f32.ts`、`random.ts`（mulberry32，两个区间）；
+  - `columns.ts`（一块 `Float32Array`，基础 17 列加 5 组标志列，别名照 WPE）；
+  - `emitters.ts`、`initializers.ts`、`operators.ts`（档 1 全部 12 个模块）；
+  - `system.ts`（`ParticleSystem`）；
+  - `track.ts`（输出 RenderDoc 同格式的轨迹）。
+- **修改** `modules.ts`：执行函数挂在模块表的 `run` 上，分发只走这张表。新增 `resolveParticleFields`，按 `instanceoverride` 从基值乘。
+- **修改** dev 探针：加 `particleTrack`，只过了类型检查，在应用里没跑过。
+- **固定数据** `particles/fixtures/`：fps60、fps10、s15、s60、p4a2，共 64 KB，单测不依赖 `ignore/`。
+
+和计划不同、或读码没写由代理推断的：
+- `step(frameDt)` 只收帧时间，内部乘 `rate`。drag 的 `k0` 要用没乘 `rate` 的帧时间。
+- 判死是严格大于（`life < age`）。新粒子填编号最小的空槽，高水位只增不减。
+- `sphererandom` 距离为 0 时另抽的 3 个方向随机数按 x、y、z 顺序，是推断。`|p| = 0` 时按 0 处理，不复刻 WPE 乘出的 NaN。
+- blend 的「三个间距」取 `ie−is`、`os−ie`、`oe−os`，是推断，档 1 的数据里没有 blend。
+- `rcpps` 近似不复刻，alpha 因此差 2.4e-4。
+- `instanceoverride` 在构造时乘进字段，所以预热也用乘过的值；预热步长不乘 `rate`。这两点都没实测。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；27 个文件、801 个用例全过（新增 51 个）；格式通过 |
+| 回放 8 个 tag + p4a2（dt 用日志累计时间差分，抓帧用 float32 原值） | 档 1 的全部系统在限内：`linear`、`custom` ≤ 9.2e-5，`birth` ≤ 3.5e-4，`gravity` ≤ 4.9e-4，`order-*` ≤ 6.1e-4，`o2-init` ≤ 1.5e-4，`drag`、`rot` ≤ 1.2e-4，`inst` 9.2e-4，`burst` 1.1e-3（坐标过 1000，限 2e-3）。尺寸、颜色、旋转差 0，alpha ≤ 2.4e-4，粒子数和出现的系统逐帧一致 |
+| `pre-*`（s15、s60，坐标约 1.1e4） | 2e-3–9.8e-3，超限。判定为输入精度：float32 在这个坐标上一个 ulp 是 9.8e-4；dt 在日志精度内扰动后，两个 tag 都出现和 WPE 逐位相同的结果，基准残差在扰动分布中间（`ignore/p4/step3/out/jitter.txt`）。s60 的 `pre-small` 在 8 帧上恒差 7 个 ulp，不随帧增长 |
+| `o2-cap-*` | 2.1e-3–2.6e-3。`capvelocity` 属 P4b，是回放工具临时补的；WPE 截后的速度是 99.9927 的固定比例（近似倒数），乘上这个系数后 ≤ 2.1e-4，说明 operator 顺序和两遍模式是对的。**P4b 实现 `capvelocity` 时要处理这个近似** |
+| `osc-r`、`osc-y` | `R` 随机，不逐位比。产品模拟器注入反推的 `R` 后，`osc-r` 4 个粒子 x、y 残差 ≤ 6.1e-4，`osc-y` 6.1e-5 |
+| dt 两种取法 | 日志 dt 列逐帧累加时，`gravity`、`inst`、`pre-small` 都会超限；累计时间差分没有这个问题 |
+| 变异检查（代理 14 处、Claude 10 处） | 帧内顺序、`R` 共用、`Math.fround`、两遍判断、`|p|`、抽取顺序、预热步数、ω、y 偏移、实例 alpha、`rate`、空槽回收、判死边界、预热遍数、每遍重置、`size0` 初值、`R` 与发射器的先后、预热 `k0`、新粒子当帧走 operator，各有用例失败 |
+
+工具在 `ignore/p4/step3/`（`replay.test.ts`、`jitter.test.ts`、`rfit.test.ts`、`make_fixtures.py`）。
