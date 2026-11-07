@@ -75,6 +75,10 @@ export interface ScriptApiState {
 const DEGREE = 0.017453292;
 const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness"] as const;
 
+/**
+ * 脚本 realm 里的 WPE API。WPE 有、这里还没实现的成员登记在 `compile/scriptApi.ts` 的 `MISSING_SCRIPT_API`，
+ * 编译期据此报 `script:api:*`、整张退回预览图；实现一个就从表里删一个（`api.test.ts` 双向核对）。
+ */
 export class ScriptApi {
   private current: SceneScript | null = null;
   private evaluating = false;

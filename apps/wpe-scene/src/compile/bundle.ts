@@ -27,6 +27,7 @@ import {
   checkPassFeatures,
   checkProgramFeatures,
   checkSceneFeatures,
+  checkScriptFeatures,
   objectKind,
   PARTICLE_UNIFORMS,
   usesLighting,
@@ -404,6 +405,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
+  checkScriptFeatures(scripts.list, unsupported);
   checkSceneFeatures(scene, unsupported);
   const general = scene.general ?? {};
   // 后处理档位：每次加载都解析（设置变了由调用方重新编译）

@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
+import { MISSING_SCRIPT_API, type ScriptApiGroup } from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState } from "../render/state";
-import { ScriptApi } from "./api";
+import { createWpeLocalStorage, ScriptApi } from "./api";
+import { alignScriptEnvironment } from "./environment";
 import { ScriptRuntime, type ScriptRealm } from "./runtime";
+import { createMemoryStorage } from "./storage";
 
 class Vec2 {
   constructor(
@@ -678,5 +681,55 @@ describe("SceneScript API（FakeRealm）", () => {
     register(16);
     expect(registered).toHaveBeenCalledTimes(1);
     h.api.setModuleEvaluating(false);
+  });
+});
+
+describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () => {
+  /** 各分组在 realm 里对应的真实对象：表项必须不在上面，上面已有的成员必须不在表里。 */
+  function objects(): Record<ScriptApiGroup, Record<string, unknown>[]> {
+    const h = setup();
+    h.api.enterScript(script("e", { kind: "effect", object: 0, effect: 0 }, 0));
+    const effect = h.realm.global.thisObject as Record<string, unknown>;
+    h.api.enterScript(script("m", { kind: "material", pass: "objects/0/passes/0", layer: 0 }, 0));
+    const material = h.realm.global.thisObject as Record<string, unknown>;
+    h.api.enterScript(null);
+    const localStorage = createWpeLocalStorage({
+      global: { Object, JSON } as unknown as Record<string, unknown>,
+      backend: createMemoryStorage(),
+      sceneKey: "1",
+      isEvaluating: () => false,
+    }) as Record<string, unknown>;
+    const frame = {} as Window;
+    alignScriptEnvironment(frame, { log() {}, error() {} }, localStorage);
+    const layer = h.api.layer(0)!;
+    return {
+      thisScene: [h.api.thisScene, h.api.general],
+      engine: [h.api.engine],
+      // 整个 input 都没有；装上之后逐成员核对
+      input: [(h.realm.global.input as Record<string, unknown> | undefined) ?? {}],
+      localStorage: [localStorage],
+      console: [(frame as unknown as Record<string, Record<string, unknown>>).console],
+      layer: [layer],
+      effect: [effect],
+      object: [layer, effect, material, h.api.general, h.api.thisScene],
+    };
+  }
+
+  it("表里的成员都还没实现", () => {
+    const groups = objects();
+    const table = Object.entries(MISSING_SCRIPT_API) as [ScriptApiGroup, readonly { name: string }[]][];
+    for (const [group, entries] of table)
+      for (const { name } of entries)
+        for (const object of groups[group]) expect(name in object, `${group}.${name} 已经实现，从表里删掉`).toBe(false);
+  });
+
+  it("已实现的成员不在表里", () => {
+    const groups = objects();
+    for (const group of ["thisScene", "engine", "input", "localStorage", "console", "layer", "effect"] as const) {
+      const missing = new Set(MISSING_SCRIPT_API[group].map((entry) => entry.name));
+      for (const object of groups[group])
+        for (const name of Object.keys(object))
+          expect(missing.has(name), `${group}.${name} 已实现却在表里`).toBe(false);
+    }
   });
 });
