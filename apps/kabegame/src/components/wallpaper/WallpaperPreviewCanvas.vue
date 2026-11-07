@@ -32,12 +32,15 @@ function nextFrame(): Promise<void> {
 
 <script setup lang="ts">
 /**
- * 预览弹窗里的「桌面画布」（纯布局）：按主显示器逻辑分辨率给插槽一块固定尺寸的画布，再整体
- * `scale` 进可用区域并居中。用户看到的就是设到桌面上的样子，页面按桌面尺寸排版，并能交互。
- * 画布本身不拦指针事件。
+ * 预览弹窗里的壁纸画布（纯布局）：给插槽一块固定尺寸的画布，再整体 `scale` 进可用区域并居中，没有背景，
+ * 看起来和单独一张图一样。尺寸取 `contentSize`，也就是场景的分辨率或退回时预览图的尺寸；网页壁纸没有固有尺寸，
+ * 场景也要出首帧才知道，这时按主显示器逻辑分辨率，页面照这个尺寸排版。画布本身不拦指针事件。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { primaryMonitor } from "@tauri-apps/api/window";
+import type { WallpaperContentSize } from "./types";
+
+const props = defineProps<{ contentSize?: WallpaperContentSize | null }>();
 
 function fallbackDesktopSize(): { width: number; height: number } {
   return {
@@ -60,7 +63,7 @@ async function resolveDesktopSize(): Promise<{ width: number; height: number }> 
           };
         }
       } catch (error) {
-        console.warn("[WallpaperDesktopCanvas] primaryMonitor 失败，回退 window.screen:", error);
+        console.warn("[WallpaperPreviewCanvas] primaryMonitor 失败，回退 window.screen:", error);
       }
       return fallbackDesktopSize();
     })().then((size) => {
@@ -72,6 +75,7 @@ async function resolveDesktopSize(): Promise<{ width: number; height: number }> 
 }
 
 const desktop = ref(desktopSizeCache ?? fallbackDesktopSize());
+const size = computed(() => props.contentSize ?? desktop.value);
 const containerRef = ref<HTMLElement | null>(null);
 const canvasRef = ref<HTMLElement | null>(null);
 const available = ref({ width: 0, height: 0 });
@@ -80,23 +84,23 @@ let observer: ResizeObserver | null = null;
 const scale = computed(() => {
   const { width, height } = available.value;
   if (width <= 0 || height <= 0) return 0;
-  return Math.min(width / desktop.value.width, height / desktop.value.height);
+  return Math.min(width / size.value.width, height / size.value.height);
 });
 
 /** 画布缩放后在容器里的居中偏移。 */
 const offset = computed(() => {
   const k = scale.value;
   return {
-    left: (available.value.width - desktop.value.width * k) / 2,
-    top: (available.value.height - desktop.value.height * k) / 2,
+    left: (available.value.width - size.value.width * k) / 2,
+    top: (available.value.height - size.value.height * k) / 2,
   };
 });
 
 const canvasStyle = computed(() => {
   const k = scale.value;
   return {
-    width: `${desktop.value.width}px`,
-    height: `${desktop.value.height}px`,
+    width: `${size.value.width}px`,
+    height: `${size.value.height}px`,
     left: `${offset.value.left}px`,
     top: `${offset.value.top}px`,
     transform: `scale(${k})`,
@@ -159,7 +163,7 @@ defineExpose({ withCaptureRegion });
 
 <template>
   <div ref="containerRef" class="relative w-full h-full overflow-hidden">
-    <div ref="canvasRef" class="absolute origin-top-left overflow-hidden bg-black shadow-lg" :style="canvasStyle">
+    <div ref="canvasRef" class="absolute origin-top-left overflow-hidden" :style="canvasStyle">
       <slot />
     </div>
   </div>

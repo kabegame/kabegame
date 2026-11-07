@@ -3,6 +3,12 @@ export type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
 /** 壁纸切换过渡：与设置 `wallpaperRotationTransition`（窗口模式）一致。 */
 export type Transition = "none" | "fade" | "slide" | "zoom";
 
+/** 壁纸内容的固有尺寸：场景的分辨率，或退回时预览图的尺寸。网页壁纸没有。 */
+export interface WallpaperContentSize {
+  width: number;
+  height: number;
+}
+
 /** WPE 视频壁纸的作者默认播放属性（后端 `WpeVideoProps`）。 */
 export interface WpeVideoProps {
   alignment: "cover" | "fill" | "stretch" | "center" | "free";

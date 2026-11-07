@@ -75,6 +75,7 @@ class FakeGpu {
 
   constructor() {
     const pass = () => ({
+      setViewport: () => {},
       setPipeline: (pipeline: { label: string }) => this.trace.push(`pipeline ${pipeline.label}`),
       setBindGroup: (_index: number, group: { key: string }) => this.trace.push(`bind ${group.key}`),
       setVertexBuffer() {},

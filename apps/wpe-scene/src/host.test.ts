@@ -30,6 +30,8 @@ vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => com
 const createRealm = vi.fn<() => Promise<ScriptRealm>>();
 vi.mock("./script/realm", () => ({ createIframeRealm: () => createRealm(), getJsModuleIndex: () => ({}) }));
 
+const rendererStyle = vi.hoisted(() => ({ setStyle: vi.fn(), setBackground: vi.fn() }));
+
 vi.mock("./render", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./render")>();
   const renderer = {
@@ -38,6 +40,7 @@ vi.mock("./render", async (importOriginal) => {
     sceneStats: null,
     load: async () => {},
     setPaused: () => {},
+    ...rendererStyle,
     applyBindings: () => true,
     redraw: () => {},
     destroy: () => {},
@@ -198,6 +201,52 @@ function subscribedChannel(): { onmessage(message: unknown): void } {
 const audioFrame = [...Array<number>(64).fill(0.5), ...Array<number>(64).fill(0.25)];
 const allZero = (buffers: AudioBuffers) =>
   [buffers.left, buffers.right, buffers.average].every((array) => array.every((value) => value === 0));
+
+describe("SceneHost：壁纸样式与留白", () => {
+  const scheme = (value: string) => ({ schemecolor: { type: "color", value } });
+  const sized = (properties: Record<string, unknown>) => {
+    const bundle = bundleFor(properties);
+    bundle.general = { ...bundle.general, width: 2560, height: 1440 };
+    bundle.bindings = [];
+    return bundle;
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    rendererStyle.setStyle.mockReset();
+    rendererStyle.setBackground.mockReset();
+    compile.mockImplementation(async ({ userProperties }) => sized(userProperties));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("渲染器建好时带上已收到的样式与 schemecolor，出首帧时报场景分辨率", async () => {
+    const report = reporter();
+    const onSceneSize = vi.fn();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report, onSceneSize });
+    host.setStyle("center");
+    host.applyUserProperties(scheme("1 0.5 0"));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect(rendererStyle.setStyle).toHaveBeenLastCalledWith("center");
+    expect(rendererStyle.setBackground).toHaveBeenLastCalledWith([1, 0.5, 0]);
+    expect(onSceneSize).toHaveBeenCalledExactlyOnceWith(2560, 1440);
+    host.dispose();
+  });
+
+  it("运行时改样式与 schemecolor 就地生效，不重新编译", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(scheme("0 0 0"));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    host.setStyle("fit");
+    expect(rendererStyle.setStyle).toHaveBeenLastCalledWith("fit");
+    host.applyUserProperties(scheme("0 1 0"));
+    expect(rendererStyle.setBackground).toHaveBeenLastCalledWith([0, 1, 0]);
+    await Promise.resolve();
+    expect(compile).toHaveBeenCalledOnce();
+    host.dispose();
+  });
+});
 
 describe("SceneHost：脚本音频订阅", () => {
   beforeEach(() => {

@@ -19,9 +19,9 @@
  *   iframe 外壳，宿主负责读属性、编译与 GPU 设备；切走即卸载宿主。状态流转
  *   loading → live / fallback：结果出来前什么都不显示、不发 `ready`（图库保持加载态，桌面保留上一张壁纸）；首帧出来
  *   就淡入实时画面并发 `ready`；不能渲染（或 `SCENE_RESULT_TIMEOUT_MS` 内没有结果）才显示作者预览图（目标的
- *   `previewPath`），预览图加载完才发 `ready`。`fallback` 不是错误，原因只记进调试状态。场景固定 cover 铺满，
- *   壁纸样式对它不生效。scene 层在 web 层之上：网页 → 场景时场景盖上来再销毁 iframe，场景 → 网页时网页先在下面载好、
- *   场景再淡出。
+ *   `previewPath`），预览图加载完才发 `ready`。`fallback` 不是错误，原因只记进调试状态。壁纸样式交给宿主铺放，
+ *   留白是壁纸的 `schemecolor`；退回的预览图按同一样式显示。scene 层在 web 层之上：网页 → 场景时场景盖上来再销毁
+ *   iframe，场景 → 网页时网页先在下面载好、场景再淡出。
  * - 网页壁纸 iframe 直接赋入口 `file://` 的 `src`：应用页是 http / tauri 源，Chromium 默认会在渲染进程用
  *   `SecurityOrigin::CanDisplay` 拦下（`Not allowed to load local resource`，iframe 停在 about:blank），
  *   主窗口与壁纸窗口靠 CEF 补丁 05/0007（建窗前 `allow_app_local_resources`）放行；没有该补丁时 8s 超时报
@@ -32,12 +32,19 @@
  *   且清 src 必须用 `removeAttribute` 才不触发 error；若改成响应式 class / style / src 绑定，
  *   Vue 的 patch 会与这些命令式改动互相覆盖。这些元素在模板里只有静态属性，Vue 不会再 patch 它们。
  */
-import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl, thumbnailToUrl } from "@/utils/fileUrl";
 import { logger } from "@/utils/logger";
 import { resetVideoElement } from "@/utils/videoElement";
 import { isSceneTarget, isVideoTarget, isWebTarget, isWpeTarget } from "./targetKind";
-import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
+import type {
+  Mode,
+  Transition,
+  WallpaperContentSize,
+  WallpaperStageDebugState,
+  WallpaperTarget,
+  WpeVideoProps,
+} from "./types";
 import { clampWallpaperVolume, isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { WEB_SANDBOX } from "./webSandbox";
 import WpeSceneView from "./WpeSceneView.vue";
@@ -79,7 +86,12 @@ const props = withDefaults(defineProps<Props>(), {
   interactive: false,
 });
 
-const emit = defineEmits<{ error: [message: string]; ready: []; sceneLive: [live: boolean] }>();
+const emit = defineEmits<{
+  error: [message: string];
+  ready: [];
+  sceneLive: [live: boolean];
+  contentSize: [size: WallpaperContentSize];
+}>();
 
 // 模板 ref：只在 onMounted 时读取一次
 const rootRef = ref<HTMLElement | null>(null);
@@ -309,6 +321,11 @@ function getImgStyle(): Record<string, string> {
   return base;
 }
 
+/** 退回预览图的铺放：`tile` 没有 object-fit 对应项，等比放进，其余位置由底下重复的那层补上。 */
+const scenePreviewStyle = computed(() =>
+  props.styleMode === "tile" ? { objectFit: "contain", objectPosition: "center" } : getImgStyle(),
+);
+
 /** 正在渲染的目标：过渡期间 top 层是新目标。 */
 function renderingTarget(): WallpaperTarget | null {
   return pendingTarget ?? currentTarget;
@@ -425,22 +442,21 @@ function applyWpeStageStyles() {
   }
 }
 
-function getBaseTileStyle(): Record<string, string> {
+function tileStyle(src: string): Record<string, string> {
   return {
-    backgroundImage: baseSrc ? `url("${baseSrc}")` : "",
+    backgroundImage: src ? `url("${src}")` : "",
     backgroundRepeat: "repeat",
     backgroundPosition: "center",
     backgroundSize: "contain",
   };
 }
 
+function getBaseTileStyle(): Record<string, string> {
+  return tileStyle(baseSrc);
+}
+
 function getTopTileStyle(): Record<string, string> {
-  return {
-    backgroundImage: topSrc ? `url("${topSrc}")` : "",
-    backgroundRepeat: "repeat",
-    backgroundPosition: "center",
-    backgroundSize: "contain",
-  };
+  return tileStyle(topSrc);
 }
 
 function getTopClasses(): string[] {
@@ -815,7 +831,11 @@ function showScenePreview() {
 
 /** 预览图加载完：这时才算就绪（只在退回后才会加载它）。 */
 function onScenePreviewLoad(e: Event) {
-  if (!(e.target as Element | null)?.isConnected) return;
+  const img = e.target as HTMLImageElement | null;
+  if (!img?.isConnected) return;
+  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+    emit("contentSize", { width: img.naturalWidth, height: img.naturalHeight });
+  }
   scenePreviewState = "loaded";
   markReady();
   checkSceneShown();
@@ -1456,7 +1476,7 @@ function updateModeDisplay() {
 }
 
 function applyStyleFromMode() {
-  // 网页与场景不吃壁纸样式（场景固定 cover），这里只同步调试快照
+  // 网页不吃壁纸样式，场景的样式经 prop 交给 WpeSceneView，这里只同步调试快照
   if (currentMediaType === "video" || currentMediaType === "web" || currentMediaType === "scene") {
     applyStyles();
     updateDebugPanel();
@@ -1759,13 +1779,19 @@ defineExpose({ debugState, delegatesPing });
     <div ref="webLayerRef" class="wallpaper-web-layer" style="display: none"></div>
     <!-- Scene 层：独立于 base / top 双层，盖在 web 层之上；层本身（类名 / display）由 enterScene / teardownScene 命令式
          切换，里面的预览图与 WpeSceneView 按 sceneTarget 等 ref 响应式渲染，同一时间只有一个 WpeSceneView。
-         预览图只在退回后才挂上。场景固定 cover 铺满（渲染器自己按 cover 铺放，预览图同样 object-cover），壁纸样式对它不生效 -->
+         预览图只在退回后才挂上。实时画面由宿主按样式铺放，预览图用同样的样式；tile 时底下再垫一层重复的 -->
     <div ref="sceneLayerRef" class="wallpaper-scene-layer" style="display: none">
+      <div
+        v-if="scenePreviewSrc && styleMode === 'tile'"
+        class="absolute inset-0 pointer-events-none"
+        :style="tileStyle(scenePreviewSrc)"
+      />
       <img
         v-if="scenePreviewSrc"
         :key="scenePreviewSrc"
         :src="scenePreviewSrc"
-        class="absolute inset-0 block w-full h-full object-cover pointer-events-none select-none"
+        class="absolute inset-0 block w-full h-full pointer-events-none select-none"
+        :style="scenePreviewStyle"
         alt="wallpaper-scene-preview"
         draggable="false"
         @load="onScenePreviewLoad"
@@ -1780,12 +1806,14 @@ defineExpose({ debugState, delegatesPing });
       >
         <WpeSceneView
           :target="sceneTarget"
+          :style-mode="styleMode"
           :paused="paused"
           :volume="volume"
           :interactive="interactive"
           @alive="sceneAlive = true"
           @ready="onSceneReady"
           @fallback="onSceneFallback"
+          @size="emit('contentSize', $event)"
         />
       </div>
     </div>

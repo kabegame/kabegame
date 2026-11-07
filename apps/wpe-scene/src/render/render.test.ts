@@ -9,10 +9,10 @@ import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { FrameThrottle, PausableClock } from "./clock";
 import { reasonsOf, SceneRenderError } from "./errors";
 import {
-  canvasToScenePointer,
-  coverUv,
   layerModelMatrix,
   layerQuad,
+  scenePlacement,
+  scenePointer,
   sceneTargetSize,
   sceneViewProjection,
   textureUvExtent,
@@ -151,22 +151,74 @@ describe("场景几何", () => {
     const m = layerModelMatrix({ origin: [100, 50, 0], scale: [2, 2, 1], angles: [0, 0, Math.PI / 2] });
     close(transformPoint(m, 10, 0, 0), [100, 70, 0, 1]);
   });
-  it("cover：宽场景裁左右、高场景裁上下", () => {
-    const wide = coverUv(2200, 1080, 1920, 1080);
+  it("fill：宽场景裁左右、高场景裁上下，铺满画布", () => {
+    const wide = scenePlacement("fill", 2200, 1080, 1920, 1080);
+    expect(wide.rect).toEqual([0, 0, 1920, 1080]);
     close(wide.scale, [1920 / 2200, 1]);
     close(wide.offset, [(1 - 1920 / 2200) / 2, 0]);
-    const square = coverUv(1920, 1080, 1000, 1000);
-    close(square.scale, [1080 / 1920, 1]);
-    const tall = coverUv(1920, 1080, 1920, 1440);
-    close(tall.scale, [0.75, 1]);
-    close(coverUv(1920, 1080, 3840, 2160).scale, [1, 1]);
-    expect(coverUv(0, 0, 1, 1)).toEqual({ offset: [0, 0], scale: [1, 1] });
+    close(scenePlacement("fill", 1920, 1080, 1000, 1000).scale, [1080 / 1920, 1]);
+    close(scenePlacement("fill", 1920, 1080, 1920, 1440).scale, [0.75, 1]);
+    close(scenePlacement("fill", 1920, 1080, 3840, 2160).scale, [1, 1]);
   });
-  it("画布指针换算到场景（左下原点）", () => {
-    const cover = coverUv(2000, 1000, 1000, 1000);
-    close(canvasToScenePointer(cover, 0.5, 0.5), [0.5, 0.5]);
-    close(canvasToScenePointer(cover, 0, 0), [0.25, 1]);
-    close(canvasToScenePointer(cover, 1, 1), [0.75, 0]);
+  it("fit：放进画布居中，矩形外留白，不裁", () => {
+    const pillar = scenePlacement("fit", 1000, 1000, 1920, 1080);
+    expect(pillar.rect).toEqual([420, 0, 1080, 1080]);
+    close(pillar.scale, [1, 1]);
+    close(pillar.offset, [0, 0]);
+    expect(scenePlacement("fit", 1920, 800, 1920, 1080).rect).toEqual([0, 140, 1920, 800]);
+  });
+  it("stretch：拉满，不裁", () => {
+    expect(scenePlacement("stretch", 1000, 1000, 1920, 1080)).toEqual({
+      rect: [0, 0, 1920, 1080],
+      offset: [0, 0],
+      scale: [1, 1],
+    });
+  });
+  it("center：一个场景像素对一个 CSS 像素，小了留白、大了居中裁", () => {
+    expect(scenePlacement("center", 800, 600, 1920, 1080).rect).toEqual([560, 240, 800, 600]);
+    expect(scenePlacement("center", 800, 600, 3840, 2160, 2).rect).toEqual([1120, 480, 1600, 1200]);
+    const large = scenePlacement("center", 3840, 2160, 1920, 1080);
+    expect(large.rect).toEqual([0, 0, 1920, 1080]);
+    close(large.scale, [0.5, 0.5]);
+    close(large.offset, [0.25, 0.25]);
+  });
+  it("tile：等比放进后居中重复，铺满画布", () => {
+    const tile = scenePlacement("tile", 1000, 1000, 2000, 1000);
+    expect(tile.rect).toEqual([0, 0, 2000, 1000]);
+    close(tile.scale, [2, 1]);
+    close(tile.offset, [-0.5, 0]);
+  });
+  it("铺放矩形总在画布内：setViewport 超界是校验错误", () => {
+    for (const style of ["fill", "fit", "stretch", "center", "tile"] as const) {
+      for (const [w, h] of [
+        [1921, 1081],
+        [1071, 603],
+        [333, 777],
+      ]) {
+        const [left, top, width, height] = scenePlacement(style, 1920, 1080, w, h, 1.5).rect;
+        expect(left + width).toBeLessThanOrEqual(w);
+        expect(top + height).toBeLessThanOrEqual(h);
+        expect([left, top, width, height].every(Number.isInteger)).toBe(true);
+      }
+    }
+  });
+  it("尺寸无效时铺满，不产生 NaN", () => {
+    expect(scenePlacement("fit", 0, 0, 100, 100)).toEqual({ rect: [0, 0, 100, 100], offset: [0, 0], scale: [1, 1] });
+  });
+  it("指针：fill / stretch 取窗口坐标，其余换算到场景上", () => {
+    const pillar = scenePlacement("fit", 1000, 1000, 2000, 1000);
+    expect(scenePointer("fill", pillar, 2000, 1000, 0.25, 0.5)).toEqual([0.25, 0.5]);
+    expect(scenePointer("stretch", pillar, 2000, 1000, 0.25, 0.5)).toEqual([0.25, 0.5]);
+    close(scenePointer("fit", pillar, 2000, 1000, 0.5, 0.5), [0.5, 0.5]);
+    close(scenePointer("fit", pillar, 2000, 1000, 0.25, 0), [0, 0]);
+    close(scenePointer("fit", pillar, 2000, 1000, 0.75, 1), [1, 1]);
+    // 留白处在 0…1 之外
+    expect(scenePointer("fit", pillar, 2000, 1000, 0, 0.5)[0]).toBeLessThan(0);
+    const large = scenePlacement("center", 4000, 2000, 2000, 1000);
+    close(scenePointer("center", large, 2000, 1000, 0, 0), [0.25, 0.25]);
+    const tile = scenePlacement("tile", 1000, 1000, 2000, 1000);
+    close(scenePointer("tile", tile, 2000, 1000, 0, 0.5), [0.5, 0.5]);
+    close(scenePointer("tile", tile, 2000, 1000, 0.5, 0.5), [0.5, 0.5]);
   });
   it("离屏目标不超过设备上限", () => {
     expect(sceneTargetSize(1920, 1080, 8192)).toEqual([1920, 1080]);

@@ -9,26 +9,29 @@
  * - 暂停与音量：回应本 iframe 里垫片的音量请求（`wpeWebVolume.ts` 的协议，消息带 `paused`，垫片转成
  *   `setPaused`），`volume` / `paused` 变化时主动推。第一次收到请求说明垫片已在跑，emit `alive`：
  *   壁纸窗口从此把 ping 交给宿主里的垫片应答。
+ * - 样式与尺寸：`styleMode` 经 `wpeSceneStyle.ts` 的协议交给宿主，由它铺放；出首帧时宿主报场景分辨率，emit `size`。
  * - 指针：`interactive` 时 iframe 接收指针事件，宿主自己算 `g_PointerPosition`。
  */
 import { invoke } from "@/api";
 import { logger } from "@/utils/logger";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { WallpaperTarget } from "./types";
+import type { Mode, WallpaperContentSize, WallpaperTarget } from "./types";
 import { WEB_SANDBOX } from "./webSandbox";
+import { isWpeSceneStyleRequest, wpeSceneSizeOf, wpeSceneStyleMessage } from "./wpeSceneStyle";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 
 const props = withDefaults(
   defineProps<{
     target: WallpaperTarget;
+    styleMode: Mode;
     paused?: boolean;
     volume: number;
     interactive?: boolean;
   }>(),
   { paused: false, interactive: false },
 );
-const emit = defineEmits<{ ready: []; fallback: [reasons: string[]]; alive: [] }>();
+const emit = defineEmits<{ ready: []; fallback: [reasons: string[]]; alive: []; size: [size: WallpaperContentSize] }>();
 const frame = ref<HTMLIFrameElement | null>(null);
 const src = ref("");
 let instance = "";
@@ -47,9 +50,23 @@ function postVolume() {
   }
 }
 
+function postStyle() {
+  frame.value?.contentWindow?.postMessage(wpeSceneStyleMessage(props.styleMode), "*");
+}
+
 function onWindowMessage(event: MessageEvent) {
   const target = frame.value?.contentWindow;
-  if (!target || !event.isTrusted || event.source !== target || !isWpeVolumeRequest(event.data)) return;
+  if (!target || !event.isTrusted || event.source !== target) return;
+  if (isWpeSceneStyleRequest(event.data)) {
+    postStyle();
+    return;
+  }
+  const size = wpeSceneSizeOf(event.data);
+  if (size) {
+    emit("size", size);
+    return;
+  }
+  if (!isWpeVolumeRequest(event.data)) return;
   postVolume();
   if (!alive) {
     alive = true;
@@ -101,6 +118,7 @@ watch(
   },
 );
 watch(() => [props.volume, props.paused], postVolume);
+watch(() => props.styleMode, postStyle);
 
 onBeforeUnmount(() => {
   disposed = true;

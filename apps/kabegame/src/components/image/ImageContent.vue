@@ -63,16 +63,18 @@
         @dragstart="onDragStart(thumbSlot, $event)"
       />
 
-      <!-- 非视频 WPE 壁纸（web / scene）的原图形态：交给壁纸组件渲染（预览「桌面画布」内可交互） -->
+      <!-- 非视频 WPE 壁纸（web / scene）的原图形态：交给壁纸组件渲染（预览内可交互） -->
       <WpeWallpaperContent
         v-else-if="mode === 'wallpaper'"
         :image="image"
+        :fit="fit"
         :playing="videoPlaying"
         :muted="videoMuted"
         :interactive="interactive"
         @ready="onWallpaperReady"
         @error="onWallpaperError"
         @scene-live="emit('sceneLive', $event)"
+        @content-size="emit('contentSize', $event)"
       />
 
       <!-- 视频 -->
@@ -109,6 +111,7 @@ import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import WpeWallpaperContent from "../wallpaper/WpeWallpaperContent.vue";
+import type { WallpaperContentSize } from "../wallpaper/types";
 import {
   displayImageMimeType,
   isVideoMediaType,
@@ -199,7 +202,7 @@ interface Props {
    * 例如预览的 panzoom 在已缩放状态下要靠拖动平移画面（见 `usePanzoomPreview` 的 canPan）。
    */
   nativeDrag?: boolean;
-  /** 只对 `wallpaper` 形态生效：壁纸页面是否接收指针事件（预览「桌面画布」为 true）。 */
+  /** 只对 `wallpaper` 形态生效：壁纸页面是否接收指针事件（预览为 true）。 */
   interactive?: boolean;
 }
 
@@ -288,6 +291,7 @@ const emit = defineEmits<{
   error: [];
   videoPlayFail: [];
   sceneLive: [live: boolean];
+  contentSize: [size: WallpaperContentSize];
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());

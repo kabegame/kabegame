@@ -15,15 +15,15 @@ import type { SceneScalar } from "../compile/model";
 import { FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
-import { coverUv, type CoverUv } from "./layout";
+import { scenePlacement, scenePointer, type ScenePlacement, type SceneStyle } from "./layout";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import { daytimeOf, TIME_WRAP_SECONDS } from "./uniforms";
 
-/** cover 铺放：全屏三角形，按 `offset + uv * scale` 采样离屏目标，输出不透明。 */
+/** 上屏：在视口（铺放矩形）里画全屏三角形，按 `offset + uv * scale` 采样离屏目标，输出不透明。 */
 const BLIT_WGSL = /* wgsl */ `
-struct Cover { offset: vec2<f32>, scale: vec2<f32> }
-@group(0) @binding(0) var<uniform> cover: Cover;
+struct Placement { offset: vec2<f32>, scale: vec2<f32> }
+@group(0) @binding(0) var<uniform> placement: Placement;
 @group(0) @binding(1) var sceneTexture: texture_2d<f32>;
 @group(0) @binding(2) var sceneSampler: sampler;
 struct VsOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
@@ -31,7 +31,7 @@ struct VsOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32
   let p = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
   var out: VsOut;
   out.position = vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
-  out.uv = cover.offset + vec2<f32>(p.x, 1.0 - p.y) * cover.scale;
+  out.uv = placement.offset + vec2<f32>(p.x, 1.0 - p.y) * placement.scale;
   return out;
 }
 @fragment fn fs(in: VsOut) -> @location(0) vec4<f32> {
@@ -73,15 +73,20 @@ export class SceneRenderer {
   private readonly throttle: FrameThrottle;
   private readonly blitPipeline: GPURenderPipeline;
   private readonly blitSampler: GPUSampler;
-  private readonly coverBuffer: GPUBuffer;
+  /** `tile` 用：纹理坐标超出 0…1 的部分重复。 */
+  private readonly tileSampler: GPUSampler;
+  private readonly placementBuffer: GPUBuffer;
   private readonly observer: ResizeObserver | null;
   private scene: GpuScene | null = null;
   /** 当前场景的 CPU 侧状态（就地写的落点，`GpuScene.sync` 每帧取脏项）。 */
   private state: SceneState | null = null;
-  /** 上屏的 bind group，按场景目标的视图取：清屏可能关掉的场景有两张目标，每张一个（L11）。换场景时清空。 */
+  /** 上屏的 bind group，按场景目标的视图取：清屏可能关掉的场景有两张目标，每张一个（L11）。换场景或样式时清空。 */
   private readonly blitBindGroups = new Map<GPUTextureView, GPUBindGroup>();
-  private cover: CoverUv = { offset: [0, 0], scale: [1, 1] };
-  private coverKey = "";
+  private style: SceneStyle = "fill";
+  /** 留白的颜色（0…1 的 RGB）。 */
+  private background: [number, number, number] = [0, 0, 0];
+  private placement: ScenePlacement = { rect: [0, 0, 1, 1], offset: [0, 0], scale: [1, 1] };
+  private placementKey = "";
   /** 光标在画布上的归一化坐标（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
   private pointer: [number, number] = [0.5, 0.5];
   private pointerLast: [number, number] = [0.5, 0.5];
@@ -113,9 +118,9 @@ export class SceneRenderer {
     this.context = context;
     this.format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format: this.format, alphaMode: "opaque" });
-    const module = device.createShaderModule({ label: "scene cover blit", code: BLIT_WGSL });
+    const module = device.createShaderModule({ label: "scene blit", code: BLIT_WGSL });
     this.blitPipeline = device.createRenderPipeline({
-      label: "scene cover blit",
+      label: "scene blit",
       layout: "auto",
       vertex: { module, entryPoint: "vs" },
       fragment: { module, entryPoint: "fs", targets: [{ format: this.format }] },
@@ -127,7 +132,13 @@ export class SceneRenderer {
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
     });
-    this.coverBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.tileSampler = device.createSampler({
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "repeat",
+      addressModeV: "repeat",
+    });
+    this.placementBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.onuncapturederror = (event) => this.fail([`webgpu:validation:${oneLine(event.error.message)}`]);
     void device.lost.then((info) => {
       if (this.destroyed || info.reason === "destroyed") return;
@@ -225,7 +236,7 @@ export class SceneRenderer {
     this.scene = scene;
     this.state = state;
     this.blitBindGroups.clear();
-    this.coverKey = "";
+    this.placementKey = "";
     options.beforeFirstFrame?.(state);
     old?.destroy();
     this.failed = false;
@@ -240,10 +251,28 @@ export class SceneRenderer {
     this.sync();
   }
 
-  /** 画布上的指针位置（0…1，左上为原点、y 向下），原样作为 `g_PointerPosition`（WPE 取窗口归一化坐标）。 */
+  /** 画布上的指针位置（0…1，左上为原点、y 向下），按样式换算成 `g_PointerPosition`（见 `scenePointer`）。 */
   setPointer(x: number, y: number): void {
     this.pointerLast = this.pointer;
-    this.pointer = [x, y];
+    if (!this.scene) {
+      this.pointer = [x, y];
+      return;
+    }
+    this.syncPlacement(this.scene);
+    this.pointer = scenePointer(this.style, this.placement, this.canvas.width, this.canvas.height, x, y);
+  }
+
+  /** 壁纸样式：只影响上屏，场景本身不重画。 */
+  setStyle(style: SceneStyle): void {
+    if (style === this.style) return;
+    this.style = style;
+    this.blitBindGroups.clear();
+    this.redraw();
+  }
+
+  setBackground(color: [number, number, number]): void {
+    this.background = color;
+    this.redraw();
   }
 
   destroy(): void {
@@ -309,7 +338,7 @@ export class SceneRenderer {
 
   /**
    * 画布像素尺寸跟随**显示**尺寸 × DPR；暂停时补画一帧。用 `getBoundingClientRect`（含祖先 CSS transform），
-   * 而不是布局尺寸：预览「桌面画布」按桌面尺寸布局、再整体缩小显示，按布局尺寸会在 4K 上渲染只显示约 1/4 面积的画面。
+   * 而不是布局尺寸：预览画布按内容尺寸布局、再整体缩小显示，按布局尺寸会在 4K 上渲染只显示约 1/4 面积的画面。
    */
   private resize(): void {
     if (this.destroyed) return;
@@ -330,14 +359,28 @@ export class SceneRenderer {
       group = this.gpu.device.createBindGroup({
         layout: this.blitPipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: this.coverBuffer } },
+          { binding: 0, resource: { buffer: this.placementBuffer } },
           { binding: 1, resource: view },
-          { binding: 2, resource: this.blitSampler },
+          { binding: 2, resource: this.style === "tile" ? this.tileSampler : this.blitSampler },
         ],
       });
       this.blitBindGroups.set(view, group);
     }
     return group;
+  }
+
+  /** 场景、画布或样式变了才重算：中心样式按 DPR 换算，所以键里也有它。 */
+  private syncPlacement(scene: GpuScene): void {
+    const dpr = window.devicePixelRatio || 1;
+    const key = `${this.style}:${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}@${dpr}`;
+    if (key === this.placementKey) return;
+    this.placementKey = key;
+    this.placement = scenePlacement(this.style, scene.width, scene.height, this.canvas.width, this.canvas.height, dpr);
+    this.gpu.device.queue.writeBuffer(
+      this.placementBuffer,
+      0,
+      new Float32Array([...this.placement.offset, ...this.placement.scale]),
+    );
   }
 
   private render(runScripts = false): void {
@@ -346,12 +389,7 @@ export class SceneRenderer {
     if (!scene || !state || this.destroyed || this.lost || this.failed) return;
     const started = performance.now();
     const device = this.gpu.device;
-    const key = `${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}`;
-    if (key !== this.coverKey) {
-      this.coverKey = key;
-      this.cover = coverUv(scene.width, scene.height, this.canvas.width, this.canvas.height);
-      device.queue.writeBuffer(this.coverBuffer, 0, new Float32Array([...this.cover.offset, ...this.cover.scale]));
-    }
+    this.syncPlacement(scene);
     const seconds = this.clock.seconds();
     const frametime = this.lastTime === null ? 0 : Math.max(0, seconds - this.lastTime);
     this.lastTime = seconds;
@@ -376,16 +414,18 @@ export class SceneRenderer {
     }
     this.pointerLast = this.pointer;
     const pass = encoder.beginRenderPass({
-      label: "scene cover",
+      label: "scene blit",
       colorAttachments: [
         {
           view: this.context.getCurrentTexture().createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          // 留白：整屏清成这个颜色，再把场景画进铺放矩形
+          clearValue: { r: this.background[0], g: this.background[1], b: this.background[2], a: 1 },
           loadOp: "clear",
           storeOp: "store",
         },
       ],
     });
+    pass.setViewport(...this.placement.rect, 0, 1);
     pass.setPipeline(this.blitPipeline);
     // `encode` 之后取：有两张目标时它开头才换，上屏的必须是这一帧画的那张
     pass.setBindGroup(0, this.blitBindGroup(scene.targetView!));

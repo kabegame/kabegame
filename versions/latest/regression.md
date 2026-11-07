@@ -1,5 +1,23 @@
 # v4.7.0 regression
 
+## 场景壁纸样式与预览比例
+
+2026-11-07 Windows dev。场景跟随壁纸样式（fill / fit / stretch / center / tile），fit / center 的留白是 `schemecolor`；预览不看样式，按场景自身比例完整显示。脚本在 `ignore/p3c/style-test/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 预览比例 | Windows dev，Eagle Flag 12885（2200×1080）、竖向场景 13306（2893×4092） | 打开预览，量画布 | 画布比例等于场景比例，不裁，没有黑底和阴影 | 2026-11-07：2.037、0.707 |
+| [x] | S2 五种样式的几何 | Windows dev，12885，预览里把画布临时改成方形，向宿主发样式消息 | 逐个切换截图 | fill 等比盖满、fit 上下留白、stretch 拉满、center 1:1 裁宽、tile 居中重复；不重建宿主 | 2026-11-07：目视符合 |
+| [x] | S3 留白取用户值 | Windows dev，12885（用户改过 `schemecolor`） | fit 下读留白像素 | 是用户值，不是工程值 | 2026-11-07：`(61,87,191)` = `0.239 0.341 0.749`，工程值是绿色 |
+| [x] | S4 改色就地生效 | Windows dev，12885，fit | 经 `applyUserProperties` 改 `schemecolor` 为红色再还原 | 留白立即变，不重新编译 | 2026-11-07：`(61,87,191)` → `(255,0,0)`，`recompiled` 0 → 0。只进宿主内存 |
+| [x] | S5 暂停时切样式 | Windows dev，12885，预览暂停 | fit → tile | 画面更新，时钟不动 | 2026-11-07：时钟停在 4.998 |
+| [x] | S6 桌面五种样式 | Windows dev，桌面 13306（竖向），窗口模式 | `set_wallpaper_style` 逐个切换，截壁纸窗口，比较像素 | 五种画面不同，实例不变，fit 留白是 `schemecolor`，tile 按周期重复 | 2026-11-07：两两差异 43.8–74.5；fit 留白 `(248,153,112)` = `0.97255 0.6 0.43922`，右侧 100% 一致，左侧只有 dev 调试面板遮挡；tile 错开一个周期差 3.16、半周期差 68.24；已恢复 fill |
+| [x] | S7 退回场景的预览 | Windows dev，13302 | 打开预览 | 画布按预览图尺寸，按 contain 显示，没有「设为封面」 | 2026-11-07：1024×1024，`object-fit: contain`，按钮未出现 |
+| [x] | S8 网页壁纸预览 | Windows dev，12100 | 打开预览 | 仍按主屏尺寸排版，没有黑底和阴影 | 2026-11-07：2560×1440，背景透明、无阴影 |
+| [x] | S9 比例不是 16:9 的封面 | Windows dev，13306 | 设为封面，读文件尺寸，恢复默认 | 封面比例等于场景比例 | 2026-11-07：641×907，比例 0.707，已恢复默认。详情面板收起时按钮在窗口外，这次直接触发按钮；屏幕不跳变沿用 C12 的结论 |
+| [x] | S10 应用背景 | Windows dev，背景是场景 13306 | 读应用背景的 `styleMode` | 固定 fill，不跟壁纸样式 | 2026-11-07：`styleMode` 为 fill |
+| [ ] | S11 fit / center 下的光标效果 | 桌面，带光标效果的场景 | fit 下移动鼠标 | 效果落在鼠标所在位置 | 只有单元测试，真机未测 |
+
 ## 壁纸封面截取
 
 2026-11-05 Windows dev。网页与场景壁纸可在预览的属性面板把当前画面设为封面，封面写进 `thumbnails_dir`，换掉 `thumbnail_path`，作者的 `preview.*` 不动，可恢复。截主窗口整窗再裁出画布。C7–C10、C14、C17 是去掉 `clip` 之前测的，写入路径没变，没有重测。脚本与截图在 `ignore/p3c/cover-test/`。
@@ -86,6 +104,7 @@
 | [x] | D53 桌面改属性 | Windows dev，窗口模式，`q1-clear`、`q3-light` 设为桌面 | 经 `set_wpe_web_user_properties` 改 4 次、3 次 | 就地生效 | 2026-11-07：`applied` +4、+3，`recompiled` 0，K 翻转帧 − mark 全是 1。`bg` 64, 127, 191 / 255, 0, 0 / 25, 51, 76 / 0, 0, 0；`AMB` = `AMBF`，64, 127, 191 / 255, 0, 0 / 25, 51, 76，`SKY` 191, 127, 64 / 0, 255, 0 / 102, 153, 204，同 D32、D38。没有错误 |
 | [x] | D54 纯色图层 | Windows dev，宿主 `index-BPQzyznU.js`，预览（档位 `disabled`，都是 `bloom: false`）；WPE PID 36548，`-playInWindow`，客户区 1920×1080。工程 `ignore/p3c/step4/accept/solidp/`：`s-real`、`s-kb`（13114 的工程去掉 `COUNT`、`AUDIO`，4 层）不放本地模型，走 `assets`；`t-solid`、`t-plain` 带纹理，128×512、完整 mip，模型一个有 `solidlayer: true`，一个没有 | 看 `unsupported`，第 25 帧读场景目标，和 WPE 比整帧；`t-*` 用自写 effect `kbres` 把合成 RT 的分辨率画出来：后面挂直通 effect 时量光栅化尺寸，同时读 `g_Texture0Resolution` | `model:solidlayer` 不再报，画面与 WPE 一致；带纹理时合成 RT 按图层 `size`，对照工程按纹理尺寸 | 2026-11-07 通过。四个工程 `unsupported` 为空，没有 WebGPU 错误。**真实 solidlayer**：`s-real` 12 层（`size` + `scale`、`color`、`alpha`、`angles`、组合、重叠、`tint`、`blur`、2×2、301×3）与 `s-kb` 整帧最大差 0，差异像素 0。**带纹理**：`t-solid` 7 层整帧最大差 0。合成 RT 两边读数相同：`t-solid` 约 600×200、300×400、300×200（最后一个图层 `size` 300×200、`scale` 1.5，RT 不随 `scale`），`t-plain` 全部约 128×512；Kabegame 建纹理记录是精确的 600×200、300×400、300×200 与 128×512。读数量化约 ±2。**灵敏度**：同一引擎 `t-solid` 对 `t-plain`，`res2` 平均差 WPE 92.2、Kabegame 91.8，看得出。第一版只挂 `kbres` 时带 0 两个工程读数相同（它是最后一个 pass，量到的是屏幕四边形），换成后面挂直通才量到 RT。**对照工程整帧不一致**：`t-plain` 最大差 255，差大于 2 的 156979 像素，不是 solidlayer 的问题。其中 `noeff` 层（没有 effect）量到 WPE 普通图层 UV 内缩：棋盘竖边相对 `solidlayer` 线性位移，两端 ±0.60 像素、中间 0，拟合 e = 0.001183，0.15 / 128 = 0.001172，Kabegame 不内缩。其它层的差异没有单独量。**单层 mip 差异**：同一工程纹理只有 1 层 mip 时，`t-solid` 最大差 47，`noeff` 差大于 2 的 45651 像素；换完整 mip 后为 0。这条与 solidlayer 无关，原因没有验证 |
 | [x] | D55 图层 UV 内缩 | Windows dev，宿主 `index-CE8NVmzY.js`，预览；WPE PID 36548，`ultra`，`-playInWindow`。工程 `ignore/p3c/step4/accept/uvp/` 与 `solidp/` | 比离屏场景目标和 WPE 窗口帧：`t-plain` 等基准工程，x、y 两个方向，NPOT、FreeImage、无纹理普通模型，passthrough 与 `colorBlendMode` 31 各有无 effect；真实场景只比两边都静止的像素 | 上屏的四边形内缩 `0.15 / 纹理尺寸`，中间步骤不缩，`solidlayer` 不缩，和 WPE 一致 | 2026-11-07：`t-plain` 最大差 255 → 1（214 像素），`t-solid`、`s-real`、`s-kb` 仍是 0。各路径实测的 e 都和规则相符，明显区别于错分母。真实场景平均差 bedroom 0.048、vortex 0.055、beach 0.285、deep_space 0.282；eagleflag 整张在动，没有比成；内缩前没有同口径结果。非整数 `size` 的四边形另有差异，已记入 3c 后续。 |
+| [x] | D56 工坊 X-Ray 场景 | Windows dev；2077883354、2077888249、2418800402、2833452727、2961807954 | 逐张看实时渲染 | 正常渲染，不退回预览图 | 2026-11-07：用户确认 5 张都正常。已加进 `pipeline.test.ts` 的 `workshopUnlocked`。 |
 
 步骤 3 的真机验收，2026-11-06。脚本、读回与结果在 `ignore/p3c/step3/accept/`。开测时主窗口被别的窗口完全遮住，裸 CDP 读到 `hidden`，rAF 为 0，所以全程用 `Emulation.setFocusEmulationEnabled` 让页面按可见处理，rAF 145 Hz，没有抢前台。测试行 13122–13148 与两个任务已删，「场景后处理」恢复成 `disabled`。
 
@@ -325,7 +344,7 @@
 `WallpaperStage` 新增 scene 层，挂 `WpeSceneView`，行为照 web 层：独立一层、淡入淡出、切走即卸载、同一时间只有一个场景。`isWpeWallpaperContentType` 改为认网页与场景，图库预览与桌面壁纸窗口实时渲染场景。
 - **加载**：编译期间保持加载态，桌面上保留上一张壁纸。能渲染就直接淡入实时画面；不能渲染（或 10 秒内没有结果）才显示作者预览图（壁纸目标新增 `previewPath`）。
 - **重编译**：改属性触发的重编译期间画面保持旧场景。
-- **其它**：壁纸样式对场景不生效，固定 cover。属性面板对场景也显示，隐藏 `file` / `directory`。应用背景不再按类型分支，网页与场景壁纸都实时渲染。画布像素按显示尺寸（含 CSS transform）× DPR，预览「桌面画布」不再按 4K 渲染。
+- **其它**：当时壁纸样式对场景不生效，固定 cover（现已跟随样式，见「场景壁纸样式与预览比例」）。属性面板对场景也显示，隐藏 `file` / `directory`。应用背景不再按类型分支，网页与场景壁纸都实时渲染。画布像素按显示尺寸（含 CSS transform）× DPR，预览「桌面画布」不再按 4K 渲染。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -1256,3 +1275,31 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 14 IDataObject 格式 | Windows 重编 CEF 的 dev | 用最小 Win32 / .NET 接收器或 ClipSpy 类工具接收一次拖放，列出全部格式 | 有 `CF_HDROP`（路径为库内原文件）；无 `chromium/x-renderer-taint`、`CF_HTML`、`FileGroupDescriptorW`、`UniformResourceLocatorW` | 新增风险点 |
 | [ ] | 15 Linux / macOS 文件管理器复制 | Linux（Wayland / X11）与 macOS 重编 CEF 的 dev | 复跑 v4.5.0「Linux / macOS 拖出真实本地文件」矩阵的「文件管理器复制」 | 得到库内原文件；同文件系统也是复制、不是移动 | 本次对 Linux / macOS 只多 `effectAllowed=copy`、`download_metadata.reset()`（Linux 无消费者）与 resolver `is_file()` |
 | [ ] | 16 Linux / macOS 拖入回归 | Linux（Wayland / X11）与 macOS 重编 CEF 的 dev | 复跑 v4.5.0 同一矩阵的「拖入回归」 | Enter / Over / Drop / Leave 与导入照常 | |
+
+## 场景壁纸光照（`#require LightingV1`）
+
+`#require` 是预处理期现场生成源码：`LIGHTING=0` 时为空，开启时按 `LIGHTS_*` 生成库。灯数取 `general.lightconfig`。对比工程在 `ignore/lighting/`，调查见 `.claude/plans/wpe-import/3-scene/lighting-REPORT.md`。WPE 窗口 1920×1080，与离屏目标 1:1 比。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 翻译器单测 | Windows 本地 | `CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --lib` | 全部通过 | 33 通过 |
+| [x] | 翻译器语料 | Windows 本地 | `KABEGAME_WPE_ROOT=<WPE 安装目录> cargo test -p wpesl2wgsl --test corpus -- --nocapture` | 158/167；不再有 `requires`；7 个着色器开 `LIGHTING` 带四种灯，翻译并回读通过 | `fur4` 基线只绑槽 0，缺 `TEX8FORMAT`；绑上后在门槛里通过 |
+| [x] | 宿主单测 | Windows 本地 | 在 `apps/wpe-scene` 跑 vitest、tsc | 只有 `pipeline.test.ts` 的「意外解锁」失败 | 618 通过 1 失败；失败的 5 张不含 `#require`，HEAD 代码同样报 |
+| [x] | 语料 `require:LightingV1` | Windows 本地 | 重扫全部场景 | 0 处（基线 78） | 新暴露 `combo:SPRITESHEET` 8 张 |
+| [x] | 只有环境光 | 桌面 + WPE | `lt-amb`：有灯对象、没有 `lightconfig` | 灯对象不起作用，全图等于环境光 | 最大差 0 |
+| [x] | 点光、隐藏灯、遗留灯 | 桌面 + WPE | `lt-point` | 只有两盏 `lpoint` 生效 | 最大差 1 |
+| [x] | 聚光 | 桌面 + WPE | `lt-spot`：三个角非 0，配置 2 盏只有 1 盏 | 方向、锥角一致，空槽不发光 | 最大差 1 |
+| [x] | 管光 | 桌面 + WPE | `lt-tube`：控制点走世界矩阵 | 一致 | 最大差 1 |
+| [x] | 平行光 | 桌面 + WPE | `lt-dir`：三个角都非 0 | 一致 | 最大差 0 |
+| [x] | 图层变换与材质 | 桌面 + WPE | `lt-mat`：旋转缩放、半透明、金属 / 粗糙 / 高光色 | 一致 | 最大差 1 |
+| [x] | 灯数超配 | 桌面 + WPE | `lt-over`：2 盏配 1 盏 | 留文件靠前的那盏 | 最大差 1；WPE 实际按排序截断，只测了这一组 |
+| [x] | 法线图 | 桌面 + WPE | `lt-nrm`（`solidlayer`） | 一致 | 最大差 1；普通图层另有 UV 内缩，最大差 10 |
+| [x] | PBR 遮罩与自发光 | 桌面 + WPE | `lt-pbr`（`solidlayer`） | 一致 | 最大差 1 |
+| [x] | HDR overbright | 桌面 + WPE | `lt-hdr`：灯强 9，`bloomhdrstrength=0`，`ultra` | 一致 | 最大差 1 |
+| [x] | 旧着色器 | 桌面 + WPE | `lt-gi3`（`genericimage3`）、`lt-gi2`（`genericimage2`） | gi3 走 `>= 62` 的公式；gi2 报 `uniform:g_LightsPosition` | 最大差 1 / 0 |
+| [x] | passthrough 走 `genericimage4` | 桌面 + WPE | `lt-cbm9`、`lt-cbm21`（`version 3`） | 一致 | 最大差 1 |
+| [x] | 真实壁纸 | 桌面 + WPE | 3811798465 force 渲染（只差粒子） | 与 WPE 差异不超过 WPE 自身帧间差异 | 差大于 8 的像素 0.46%，自身 0.56%；只做数值比较 |
+| [x] | 现有基线 | 桌面 | `ignore/p3c/step3` 的 `baseline.mjs`、`corpus.mjs`、`compare.mjs --base ../step4/base` | 帧哈希不变 | 18 项 sha256 相同；脚本诊断相同；语料差异只有阻塞项减少与 `combo:SPRITESHEET` |
+| [ ] | 带 effect 的图层开光照 | 桌面 | 材质 `LIGHTING=1` 且图层有 effect | 报 `lighting:prelighting`，退回预览图 | 只有单测，没有和 WPE 比 |
+| [ ] | 灯 `scale` 不为 1 | 桌面 + WPE | | 聚光方向按列 0 含缩放 | 没有实测 |
+| [ ] | 属性绑灯字段 | 桌面 | 绑 `intensity` 后改属性 | 整场重编译，画面更新 | 只有单测 |

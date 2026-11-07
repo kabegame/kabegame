@@ -131,7 +131,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
     }
 
     async fn set_style(&self, _style: &str) -> Result<(), String> {
-        // 样式由壁纸页面监听 setting-change 自驱动；对网页壁纸不生效。
+        // 样式由壁纸页面监听 setting-change 自驱动；场景交给宿主铺放，对网页壁纸不生效。
         Ok(())
     }
 

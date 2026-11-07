@@ -270,10 +270,10 @@
               </button>
             </div>
           </div>
-          <!-- 非视频 WPE 壁纸（web / scene）：主屏比例的「桌面画布」，页面按桌面尺寸渲染且可交互；
+          <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示，可交互；页面接收指针事件，
                不走 Panzoom，也不挂 VideoControls -->
           <div v-if="previewImage && isPreviewWallpaper" class="preview-wallpaper-wrapper absolute inset-0">
-            <WallpaperDesktopCanvas ref="wallpaperCanvasRef">
+            <WallpaperPreviewCanvas ref="wallpaperCanvasRef" :content-size="previewWallpaperSize">
               <ImageContent
                 ref="previewContentRef"
                 :image="previewImage"
@@ -282,8 +282,9 @@
                 interactive
                 @ready="handlePreviewReady"
                 @scene-live="previewSceneLive = $event"
+                @content-size="previewWallpaperSize = $event"
               />
-            </WallpaperDesktopCanvas>
+            </WallpaperPreviewCanvas>
           </div>
           <div v-if="previewImage && isPreviewStatic" ref="panzoomWrapperRef" class="panzoom-wrapper">
             <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
@@ -301,7 +302,7 @@
             :is-fullscreen="isAppFullscreen"
             :keep-visible="zoomSliderDragging"
           >
-            <!-- 缩放只对 Panzoom 图片有意义；桌面画布只保留全屏 -->
+            <!-- 缩放只对 Panzoom 图片有意义；壁纸画布只保留全屏 -->
             <template v-if="isPreviewStatic">
               <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -433,7 +434,8 @@ import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
-import WallpaperDesktopCanvas, { type CoverRegionScope } from "../wallpaper/WallpaperDesktopCanvas.vue";
+import WallpaperPreviewCanvas, { type CoverRegionScope } from "../wallpaper/WallpaperPreviewCanvas.vue";
+import type { WallpaperContentSize } from "../wallpaper/types";
 import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageBasicInfoPanel, {
@@ -568,7 +570,7 @@ const previewImage = computed<ImageInfo | null>(() =>
 /** 只给了 id 且还没解析出来：画 loading，不是「不存在」。 */
 const previewResolving = computed(() => typeof props.image === "string" && !resolvedImage.value);
 const isPreviewVideo = computed(() => isVideoPlaybackType(previewImage.value?.type));
-/** 非视频 WPE 壁纸（web / scene）：桌面画布内嵌壁纸组件，WPE 视频仍是视频预览。 */
+/** 非视频 WPE 壁纸（web / scene）：壁纸画布内嵌壁纸组件，WPE 视频仍是视频预览。 */
 const isPreviewWallpaper = computed(() => isWpeWallpaperContentType(previewImage.value?.type));
 /** 网页与场景只在桌面实时运行（`wpe` feature），Android / Web 只显示预览图，没有可暂停的实例 */
 const previewWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && isPreviewWallpaper.value);
@@ -581,7 +583,9 @@ const previewSceneLive = ref(false);
 const previewCoverReady = computed(() =>
   isWpeSceneType(previewImage.value?.type) ? previewSceneLive.value : previewWallpaperReady.value,
 );
-const wallpaperCanvasRef = ref<InstanceType<typeof WallpaperDesktopCanvas> | null>(null);
+/** 预览这一份的固有尺寸，画布按它定比例；切图时复位 */
+const previewWallpaperSize = ref<WallpaperContentSize | null>(null);
+const wallpaperCanvasRef = ref<InstanceType<typeof WallpaperPreviewCanvas> | null>(null);
 /** 预览的封面截取来源：主窗口里的画布，用户看到什么就截到什么。点击时才取画布，区域也是那时才量 */
 const previewCoverSource: CoverRegionScope = (run) => {
   const canvas = wallpaperCanvasRef.value;
@@ -1039,6 +1043,7 @@ watch(currentId, (id) => {
   wallpaperPaused.value = false;
   previewWallpaperReady.value = false;
   previewSceneLive.value = false;
+  previewWallpaperSize.value = null;
   // 上层清空 image 即关闭：停播放
   if (!id) {
     stopSlideshow();

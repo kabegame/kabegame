@@ -4,7 +4,8 @@
  * `WallpaperStage`。只服务非视频的 WPE 类型（web 与 scene）；`x-wpe/video` 在图库里按普通视频处理。
  *
  * - 目标经 `get_wallpaper_target_for_image` 获取，与桌面壁纸窗口共用后端 `build_wallpaper_target`。
- * - 样式 / 过渡 / 音量 / 倍速跟随壁纸设置（主窗口已加载 settings，这里不 loadAll）；样式对网页与场景都不生效。
+ * - 过渡 / 音量 / 倍速跟随壁纸设置（主窗口已加载 settings，这里不 loadAll）。铺放不看壁纸样式：这里是图库内容，
+ *   和其它媒体一样由调用方给 `fit`（预览 contain、应用背景 cover）。
  *   音量对网页壁纸同样生效（Stage 经 postMessage 交给页面里的垫片）；`muted`（应用背景）时为 0。
  * - `ready`：网页 iframe load；场景出首帧，或不能渲染（含超时）时预览图加载完。场景结果出来前不发，加载态一直保持。
  * - `sceneLive`：场景是否在实时渲染，退回预览图时为假。
@@ -16,11 +17,12 @@ import { invoke } from "@/api/rpc";
 import { useSettingsStore } from "@/stores/settings";
 import type { ImageInfo } from "@/types/image";
 import WallpaperStage from "./WallpaperStage.vue";
-import type { Mode, Transition, WallpaperTarget } from "./types";
+import type { Mode, Transition, WallpaperContentSize, WallpaperTarget } from "./types";
 
 const props = withDefaults(
   defineProps<{
     image: ImageInfo;
+    fit?: "contain" | "cover";
     /** false 时暂停：网页由垫片冻结、场景停帧，画面都停在最后一帧 */
     playing?: boolean;
     /** true 时音量为 0（应用背景）：网页壁纸页面自己的声音也静音 */
@@ -29,6 +31,7 @@ const props = withDefaults(
     interactive?: boolean;
   }>(),
   {
+    fit: "contain",
     playing: true,
     muted: false,
     interactive: false,
@@ -39,11 +42,12 @@ const emit = defineEmits<{
   ready: [];
   error: [message: string, fatal: boolean];
   sceneLive: [live: boolean];
+  contentSize: [size: WallpaperContentSize];
 }>();
 
 const settings = useSettingsStore();
 
-const styleMode = computed(() => (settings.values.wallpaperStyle ?? "fill") as Mode);
+const styleMode = computed<Mode>(() => (props.fit === "cover" ? "fill" : "fit"));
 const transition = computed(() => (settings.values.wallpaperRotationTransition ?? "none") as Transition);
 const volume = computed(() => (props.muted ? 0 : (settings.values.wallpaperVolume ?? 1)));
 const playbackRate = computed(() => settings.values.wallpaperVideoPlaybackRate ?? 1);
@@ -92,5 +96,6 @@ function onStageError(message: string) {
     @ready="emit('ready')"
     @error="onStageError"
     @scene-live="emit('sceneLive', $event)"
+    @content-size="emit('contentSize', $event)"
   />
 </template>

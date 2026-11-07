@@ -462,7 +462,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 ### scene 层（`WallpaperStage`）
 
 `x-wpe/scene` 走 web 层之上的独立 scene 层（z-index 3），一次只挂一个 `WpeSceneView`，切走即卸载。结果出来前不显示、不发 `ready`
-（桌面保留上一张壁纸），能渲染就直接淡入实时画面，不能渲染或 10s 超时才显示 `previewPath` 预览图；壁纸样式对场景不生效（固定 cover），
+（桌面保留上一张壁纸），能渲染就直接淡入实时画面，不能渲染或 10s 超时才显示 `previewPath` 预览图；壁纸样式由宿主铺放（留白是 `schemecolor`，见 [WPE_SCENE.md](WPE_SCENE.md)「样式」「留白颜色」），
 `paused` / `interactive` 透传，ping 仍由应用页应答。细节见 [WPE_SCENE.md](WPE_SCENE.md)「接入 `WallpaperStage`」。
 
 ### 图库接入
@@ -475,10 +475,11 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   Android 上目标的 `webEntry` 为空：`WallpaperStage` 报非致命错误，`ImageContent` 只结束加载态，原图形态的画布留空
   （网格本来就用作者预览图）。
 - 网格（`ImageItem`）对所有 WPE 行固定用缩略形态，不悬停加载原图形态；角标「WPE · 视频」/「WPE · 网页」。
-- 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperDesktopCanvas.vue`：按主显示器逻辑分辨率
-  （`primaryMonitor()` 的 `size / scaleFactor`，失败回退 `window.screen`，模块级缓存）给一块固定尺寸画布，整体
-  `scale` 进可用区域并居中，页面按桌面尺寸排版且可交互。不走 Panzoom、不挂
-  `VideoControls`，控制条只保留全屏。
+- 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperPreviewCanvas.vue`：给一块固定尺寸的画布，整体
+  `scale` 进可用区域并居中，没有背景，和单独的图片一样显示。尺寸取内容的固有尺寸（场景的分辨率、退回时预览图的尺寸，
+  经 `contentSize` 传上来）；网页壁纸没有固有尺寸，场景出首帧前也不知道，这时按主显示器逻辑分辨率（`primaryMonitor()`
+  的 `size / scaleFactor`，失败回退 `window.screen`，模块级缓存），页面按这个尺寸排版。可交互，不走 Panzoom（页面要收指针）、
+  不挂 `VideoControls`，控制条只保留全屏。
 - 应用背景层不按类型分支：与预览同走 `ImageContent` 原图形态（`prefer="original"`），网页与场景壁纸都实时渲染、不交互。
   **背景静音**：`video-muted` 经 `WpeWallpaperContent` 的 `muted` 让 `WallpaperStage` 的 `volume` 为 0，网页壁纸页面的声音由垫片
   按 0 缩放（见上「音量」），开着应用背景时只有桌面出声。
@@ -514,7 +515,7 @@ WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的�
 
 - **截整窗再裁，不用 CDP 的 `clip`**：`clip` 靠临时改视口实现，这次改动画在屏幕正在显示的表面上，整个窗口跳变约 150 ms，`scale: 1` 也一样；宿主和页面收不到尺寸事件，只看 `stats()` 发现不了。代价是封面分辨率等于画布的屏幕像素（窗口 1200 CSS 宽、缩放 150% 时约 1071 宽）。对 iframe target 截图也不行，Chromium 只认顶层（`Command can only be executed on top-level targets`）。
 - **按钮只在画面确定实时渲染时显示**：场景看 `WallpaperStage` 的 `sceneLive`（出了首帧才为真，退回预览图时为假），网页壁纸看 `ready`，由 `ImagePreviewDialog` 经 `coverReady` 传给面板。`ready` 在退回时也发，不能用来判断。后端不记实时状态，也不校验。恢复不受影响：退回预览图的场景也能恢复。
-- **截图前的等待**（`WallpaperDesktopCanvas.withCaptureRegion`）：盖在画布上的 UI 会截进去，先在 `<html>` 加 `data-kb-cover-capture` 隐藏看板娘，`finally` 里恢复；壁纸层出画面后还要淡入，这时截到的是黑底，所以再等画布里的 `CSSTransition` 结束（只等过渡：页面里可能有循环动画）。窗口被完全遮挡时 `visibilityState` 不是 `visible`，矩形即使量得出来，截到的也是残缺的画面，所以报错不截。
+- **截图前的等待**（`WallpaperPreviewCanvas.withCaptureRegion`）：盖在画布上的 UI 会截进去，先在 `<html>` 加 `data-kb-cover-capture` 隐藏看板娘，`finally` 里恢复；壁纸层出画面后还要淡入，这时截到的是黑底，所以再等画布里的 `CSSTransition` 结束（只等过渡：页面里可能有循环动画）。窗口被完全遮挡时 `visibilityState` 不是 `visible`，矩形即使量得出来，截到的也是残缺的画面，所以报错不截。
 - **文件归属**：删除只碰 `thumbnails_dir` 里的文件，作者的 `preview.*` 不动。换封面、删图时旧封面随之清掉；「恢复默认封面」读 `project.json` 的预览图，没有时回到 `local_path`（同 `add_image` 的兜底）。`get_wpe_web_properties` 的 `customCover` 表示封面在 `thumbnails_dir` 里。重新导入跳过已有行，封面保留。
 
 ### 音频与媒体集成（第二阶段 Phase 8）
@@ -631,4 +632,4 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   `commands/window.rs`（`wallpaper_pong`）、`src-tauri/kabegame-core/src/{ipc/events.rs,emitter.rs}`（ping / pong 事件）
 - 壁纸窗口：`src-tauri/kabegame/src/wallpaper/manager/window.rs`、`apps/kabegame/src/main.ts`、`windowKind.ts`、
   `bootstrap/{app,wallpaper}.ts`、`views/WallpaperWindow.vue`、
-  `components/wallpaper/{WallpaperStage.vue,targetKind.ts,types.ts,WpeWallpaperContent.vue,WallpaperDesktopCanvas.vue,WpeSceneView.vue}`
+  `components/wallpaper/{WallpaperStage.vue,targetKind.ts,types.ts,WpeWallpaperContent.vue,WallpaperPreviewCanvas.vue,WpeSceneView.vue,wpeSceneStyle.ts}`

@@ -168,7 +168,7 @@ describe("WPE 壁纸预览的暂停", () => {
   it("面板切换的是预览这一份，切图时复位", async () => {
     fetchImageById.mockImplementation(async (id: string) => ({ id, localPath: `/${id}`, type: "x-wpe/scene" }));
     const slot = { template: "<div><slot /></div>" };
-    const wrapper = await fixture({ KbResizable: slot, WallpaperDesktopCanvas: slot });
+    const wrapper = await fixture({ KbResizable: slot, WallpaperPreviewCanvas: slot });
     const playing = () => wrapper.findComponent(ImageContent).props("videoPlaying");
     expect(playing()).toBe(true);
     wrapper.findComponent(WpeWebPropertiesPanel).vm.$emit("update:paused", true);

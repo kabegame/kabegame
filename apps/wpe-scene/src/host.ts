@@ -16,9 +16,11 @@ import type { BindingTarget } from "./compile/bindings";
 import type { SceneScalar } from "./compile/model";
 import { SCENE_POSTPROCESS_SETTINGS, type ScenePostprocessSetting } from "./compile/postprocess";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
+import type { SceneStyle } from "./render/layout";
 import { SceneState } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
+import { schemeColor } from "./sceneStyle";
 import { ScriptApi, createWpeLocalStorage } from "./script/api";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, type ScriptTarget } from "./script/runtime";
@@ -71,6 +73,7 @@ function bloomLabel(bloom: SceneBundle["bloom"], enabled: boolean): string {
 
 /** 每个 iframe 只有一个 SceneHost；属性由垫片推送，实例随 iframe 一同销毁。 */
 export class SceneHost {
+  private style: SceneStyle = "fill";
   private renderer: SceneRenderer | null = null;
   private rendererTask: Promise<SceneRenderer> | null = null;
   private controller: AbortController | null = null;
@@ -117,7 +120,12 @@ export class SceneHost {
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly options: { imageId: string | null; report: SceneReporter },
+    private readonly options: {
+      imageId: string | null;
+      report: SceneReporter;
+      /** 出首帧时告诉父页面场景分辨率（预览按它定比例）。 */
+      onSceneSize?: (width: number, height: number) => void;
+    },
   ) {
     this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
@@ -157,6 +165,7 @@ export class SceneHost {
    */
   private apply(delta: Record<string, SceneProperty>): void {
     const changes = mergeProperties(this.properties, delta);
+    if (changes.has("schemecolor")) this.renderer?.setBackground(schemeColor(this.properties));
     if (!this.receivedProperties) {
       // 首包 = 全集：整场编译（这时不会用增量路径）
       this.receivedProperties = true;
@@ -509,6 +518,11 @@ export class SceneHost {
     this.renderer?.setPointer(x, y);
   }
 
+  setStyle(style: SceneStyle): void {
+    this.style = style;
+    this.renderer?.setStyle(style);
+  }
+
   private dropRenderer(): void {
     this.rendererTask = null;
     this.renderer?.destroy();
@@ -543,6 +557,8 @@ export class SceneHost {
           throw new DOMException("渲染器已过期", "AbortError");
         }
         this.renderer = created;
+        created.setStyle(this.style);
+        created.setBackground(schemeColor(this.properties));
         const info = created.adapterInfo;
         this.options.report.debug(
           `场景渲染器：${info.vendor} ${info.architecture} ${info.description}`.trim(),
@@ -674,6 +690,7 @@ export class SceneHost {
           `场景壁纸 ${this.options.imageId} 开始渲染：${bundle.layers.length} 层、${bundle.programs.length} 个程序，` +
             `${detail}，用时 ${Math.round(performance.now() - started)} ms`,
         );
+        this.options.onSceneSize?.(bundle.general.width, bundle.general.height);
         this.options.report.ready();
       } else
         this.options.report.debug(

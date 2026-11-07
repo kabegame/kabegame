@@ -11,7 +11,8 @@ const stub = vi.hoisted(() => ({
     id: string;
     aliveAtMount: number;
     unmounted: boolean;
-    emit: (event: "ready" | "fallback" | "alive", ...args: unknown[]) => void;
+    props: { styleMode?: string };
+    emit: (event: "ready" | "fallback" | "alive" | "size", ...args: unknown[]) => void;
   }[],
 }));
 
@@ -19,14 +20,21 @@ vi.mock("./WpeSceneView.vue", async () => {
   const { defineComponent, h, onBeforeUnmount } = await import("vue");
   return {
     default: defineComponent({
-      props: { target: { type: Object, required: true }, paused: Boolean, volume: Number, interactive: Boolean },
-      emits: ["ready", "fallback", "alive"],
+      props: {
+        target: { type: Object, required: true },
+        styleMode: String,
+        paused: Boolean,
+        volume: Number,
+        interactive: Boolean,
+      },
+      emits: ["ready", "fallback", "alive", "size"],
       setup(props, { emit }) {
         const record = {
           id: (props.target as WallpaperTarget).id,
           aliveAtMount: stub.scenes.filter((scene) => !scene.unmounted).length,
           unmounted: false,
-          emit: emit as (event: "ready" | "fallback" | "alive", ...args: unknown[]) => void,
+          props,
+          emit: emit as (event: "ready" | "fallback" | "alive" | "size", ...args: unknown[]) => void,
         };
         stub.scenes.push(record);
         onBeforeUnmount(() => {
@@ -187,6 +195,46 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     expect(debugOf(wrapper).sceneFallback).toBe("");
     expect(wrapper.emitted("ready")).toHaveLength(1);
     expect(wrapper.emitted("sceneLive")).toEqual([[true]]);
+  });
+
+  it("壁纸样式交给 WpeSceneView，改样式不重建", async () => {
+    const wrapper = mountStage(scene("a"));
+    await settle();
+    expect(stub.scenes[0].props.styleMode).toBe("fill");
+    await wrapper.setProps({ styleMode: "center" });
+    await settle();
+    expect(stub.scenes).toHaveLength(1);
+    expect(stub.scenes[0].props.styleMode).toBe("center");
+  });
+
+  it("上传内容尺寸：实时是场景分辨率，退回是预览图尺寸", async () => {
+    const wrapper = mountStage(scene("a"));
+    await settle();
+    stub.scenes[0].emit("size", { width: 2560, height: 1440 });
+    expect(wrapper.emitted("contentSize")).toEqual([[{ width: 2560, height: 1440 }]]);
+    stub.scenes[0].emit("fallback", ["object:particle"]);
+    await settle();
+    const img = previewImg(wrapper).element as HTMLImageElement;
+    Object.defineProperty(img, "naturalWidth", { value: 800 });
+    Object.defineProperty(img, "naturalHeight", { value: 600 });
+    loadPreview(wrapper);
+    await settle();
+    expect(wrapper.emitted("contentSize")?.at(-1)).toEqual([{ width: 800, height: 600 }]);
+  });
+
+  it("退回的预览图按壁纸样式显示，tile 时重复", async () => {
+    const wrapper = mountStage(scene("a"));
+    await settle();
+    stub.scenes[0].emit("fallback", ["object:particle"]);
+    await settle();
+    const fit = () => (previewImg(wrapper).element as HTMLImageElement).style.objectFit;
+    expect(fit()).toBe("cover");
+    await wrapper.setProps({ styleMode: "center" });
+    expect(fit()).toBe("none");
+    await wrapper.setProps({ styleMode: "tile" });
+    expect(fit()).toBe("contain");
+    const backdrop = wrapper.find(".wallpaper-scene-layer > div").element as HTMLElement;
+    expect(backdrop.style.backgroundRepeat).toBe("repeat");
   });
 
   it("迟迟没有结果：超时按退回显示预览图并发 ready，迟到的首帧照样切成实时画面", async () => {

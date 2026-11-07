@@ -3,7 +3,7 @@
  * （`.claude/plans/wpe-import/3-scene/p2-REPORT.md` A1–A4、J5，PLAN P2b）。材质见 `compile/bloom.ts`。
  *
  * 每帧在全部图层画完之后：场景目标整张拷进 `_rt_FullFrameBuffer`（只拷这一次）→ 泛光链 → combine 读快照与泛光结果、
- * 写回场景目标（之后照常 cover 铺到画布）。所有 pass 画全屏四边形、只写 RGB（write mask 7），采样线性过滤 + clamp。
+ * 写回场景目标（之后照常按壁纸样式铺到画布）。所有 pass 画全屏四边形、只写 RGB（write mask 7），采样线性过滤 + clamp。
  *
  * - **LDR**（`rgba8unorm`）：快照 → `_rt_4FrameBuffer`（W/4）→ `_rt_8FrameBuffer`（W/8）→ `_rt_Bloom`（W/8）→ combine。
  *   `bloomstrength` / `bloomthreshold` / `bloomtint` 原值写进第一个下采样材质，不做换算。

@@ -19,6 +19,7 @@
           :key="`bg-${bgImageToken}`"
           :image="bgImage"
           prefer="original"
+          fit="cover"
           class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
           :style="bgImageStyle"
           :video-playing="bgVisible"

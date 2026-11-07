@@ -177,7 +177,7 @@ import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.v
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { hasWpeUserProperties, isWpeSceneType } from "@/utils/mediaMime";
 import { evaluateWpeCondition, sanitizeWpeLabel, wpeLabelText } from "@/utils/wpeProperties";
-import type { CoverRegionScope } from "./WallpaperDesktopCanvas.vue";
+import type { CoverRegionScope } from "./WallpaperPreviewCanvas.vue";
 import WpePropertyField from "./WpePropertyField.vue";
 
 /**

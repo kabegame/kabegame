@@ -552,7 +552,7 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-/* 截壁纸封面时隐藏：它盖在预览画布上，按区域截图会一起截进去（WallpaperDesktopCanvas 的 withCaptureRegion） */
+/* 截壁纸封面时隐藏：它盖在预览画布上，按区域截图会一起截进去（WallpaperPreviewCanvas 的 withCaptureRegion） */
 html[data-kb-cover-capture] .kamechan-host {
   visibility: hidden;
 }

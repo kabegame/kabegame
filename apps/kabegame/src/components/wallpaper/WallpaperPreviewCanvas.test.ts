@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WallpaperDesktopCanvas, { type CoverRegion } from "./WallpaperDesktopCanvas.vue";
+import WallpaperPreviewCanvas, { type CoverRegion } from "./WallpaperPreviewCanvas.vue";
 
 vi.mock("@tauri-apps/api/window", () => ({ primaryMonitor: async () => null }));
 
@@ -15,8 +15,11 @@ class CSSTransitionStub {
   constructor(readonly finished: Promise<unknown>) {}
 }
 
-function mountCanvas(rect: { x: number; y: number; width: number; height: number }) {
-  const wrapper = mount(WallpaperDesktopCanvas, { attachTo: document.body });
+function mountCanvas(
+  rect: { x: number; y: number; width: number; height: number },
+  props: { contentSize?: { width: number; height: number } | null } = {},
+) {
+  const wrapper = mount(WallpaperPreviewCanvas, { attachTo: document.body, props });
   wrappers.push(wrapper);
   const canvas = wrapper.element.firstElementChild as HTMLElement;
   canvas.getBoundingClientRect = () => rect as DOMRect;
@@ -42,7 +45,26 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("WallpaperDesktopCanvas.withCaptureRegion", () => {
+describe("WallpaperPreviewCanvas 尺寸", () => {
+  const canvasOf = (index = 0) => wrappers[index].element.firstElementChild as HTMLElement;
+
+  it("有内容尺寸时画布就是这个尺寸，没有时按桌面", async () => {
+    mountCanvas(VISIBLE, { contentSize: { width: 2560, height: 1600 } });
+    expect(canvasOf().style.width).toBe("2560px");
+    expect(canvasOf().style.height).toBe("1600px");
+    mountCanvas(VISIBLE, { contentSize: null });
+    expect(canvasOf(1).style.width).toBe(`${Math.round(window.screen.width || 1920)}px`);
+  });
+
+  it("内容尺寸到达后换成内容尺寸", async () => {
+    mountCanvas(VISIBLE);
+    await wrappers[0].setProps({ contentSize: { width: 800, height: 600 } });
+    expect(canvasOf().style.width).toBe("800px");
+    expect(canvasOf().style.height).toBe("600px");
+  });
+});
+
+describe("WallpaperPreviewCanvas.withCaptureRegion", () => {
   it("给出实际画布占窗口内容区的比例", async () => {
     const canvas = mountCanvas(VISIBLE);
     const region = await canvas.withCaptureRegion(async (value) => value);

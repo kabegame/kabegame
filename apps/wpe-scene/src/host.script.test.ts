@@ -94,6 +94,8 @@ class FakeRenderer {
   tick() {
     if (!this.paused) this.beforeFrame?.(1 / 60);
   }
+  setStyle() {}
+  setBackground() {}
   setPaused(value: boolean) {
     this.paused = value;
   }

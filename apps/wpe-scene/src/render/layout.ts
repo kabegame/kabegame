@@ -1,5 +1,5 @@
 /**
- * 场景几何：图层四边形、模型 / 视图投影矩阵、cover 铺放与指针换算。纯函数，不碰 GPU。
+ * 场景几何：图层四边形、模型 / 视图投影矩阵、壁纸样式铺放与指针换算。纯函数，不碰 GPU。
  *
  * 图层四边形与纹理坐标的换算移植自 linux-wallpaperengine（GPLv3，与本项目同许可）
  * `src/WallpaperEngine/Render/Objects/CImage.cpp`（`CImage::CImage` / `uploadGeometryBuffers`）、
@@ -91,27 +91,66 @@ export function eyePosition(general: Pick<SceneGeneral, "width" | "height">): nu
   return [general.width / 2, general.height / 2, 2000];
 }
 
-export interface CoverUv {
-  /** 画布左上角对应的场景纹理坐标。 */
+/** 壁纸样式：与设置 `wallpaperStyle` 同义，几何照 `WallpaperStage` 的图片层。 */
+export type SceneStyle = "fill" | "fit" | "stretch" | "center" | "tile";
+
+/** 场景目标铺到画布的方式。 */
+export interface ScenePlacement {
+  /** 画布上画场景的矩形（x、y、宽、高，整数像素，左上为原点），矩形外是留白。 */
+  rect: [number, number, number, number];
+  /** 矩形左上角对应的场景纹理坐标。 */
   offset: [number, number];
-  /** 画布从左上到右下跨过的场景纹理坐标长度（≤ 1）。 */
+  /** 矩形从左上到右下跨过的场景纹理坐标长度。`tile` 时大于 1，要重复采样。 */
   scale: [number, number];
 }
 
-/** cover：等比放大到盖满画布、居中裁掉溢出部分，返回画布 → 场景纹理的坐标变换。 */
-export function coverUv(sceneWidth: number, sceneHeight: number, canvasWidth: number, canvasHeight: number): CoverUv {
-  if (sceneWidth <= 0 || sceneHeight <= 0 || canvasWidth <= 0 || canvasHeight <= 0)
-    return { offset: [0, 0], scale: [1, 1] };
-  const zoom = Math.max(canvasWidth / sceneWidth, canvasHeight / sceneHeight);
-  const scale: [number, number] = [canvasWidth / (zoom * sceneWidth), canvasHeight / (zoom * sceneHeight)];
-  return { offset: [(1 - scale[0]) / 2, (1 - scale[1]) / 2], scale };
+/**
+ * 按壁纸样式算铺放：`fill` 等比盖满（裁溢出）、`fit` 等比放进（留白）、`stretch` 拉满、`center` 一个场景像素对一个
+ * CSS 像素（`pixelRatio` 换算成画布像素，放不下就裁），`tile` 等比放进后居中重复。显示不下的部分都居中裁。
+ * 矩形取整：`setViewport` 超出附件尺寸是校验错误，小数加回去可能多出一点。
+ */
+export function scenePlacement(
+  style: SceneStyle,
+  sceneWidth: number,
+  sceneHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  pixelRatio = 1,
+): ScenePlacement {
+  const whole: ScenePlacement = { rect: [0, 0, canvasWidth, canvasHeight], offset: [0, 0], scale: [1, 1] };
+  if (style === "stretch" || sceneWidth <= 0 || sceneHeight <= 0 || canvasWidth <= 0 || canvasHeight <= 0) return whole;
+  const contain = Math.min(canvasWidth / sceneWidth, canvasHeight / sceneHeight);
+  const cover = Math.max(canvasWidth / sceneWidth, canvasHeight / sceneHeight);
+  const zoom = style === "fill" ? cover : style === "center" ? pixelRatio : contain;
+  const shownWidth = sceneWidth * zoom;
+  const shownHeight = sceneHeight * zoom;
+  const width = style === "tile" ? canvasWidth : Math.min(canvasWidth, Math.max(1, Math.round(shownWidth)));
+  const height = style === "tile" ? canvasHeight : Math.min(canvasHeight, Math.max(1, Math.round(shownHeight)));
+  const scale: [number, number] = [width / shownWidth, height / shownHeight];
+  return {
+    rect: [Math.floor((canvasWidth - width) / 2), Math.floor((canvasHeight - height) / 2), width, height],
+    offset: [(1 - scale[0]) / 2, (1 - scale[1]) / 2],
+    scale,
+  };
 }
 
 /**
- * 画布上的指针（0…1，左上为原点）换算成场景上的归一化位置（0…1，左下为原点，与 LWE `g_PointerPosition` 相同）。
+ * 画布上的指针（0…1，左上为原点）换算成 `g_PointerPosition`。`fill` / `stretch` 铺满窗口，原样（WPE 取窗口归一化坐标）；
+ * 其余样式画面不跟窗口对齐，换算到场景上，光标效果才落在画面上，留白处的值在 0…1 之外，`tile` 按所在那一块算。
  */
-export function canvasToScenePointer(cover: CoverUv, x: number, y: number): [number, number] {
-  return [cover.offset[0] + x * cover.scale[0], 1 - (cover.offset[1] + y * cover.scale[1])];
+export function scenePointer(
+  style: SceneStyle,
+  placement: ScenePlacement,
+  canvasWidth: number,
+  canvasHeight: number,
+  x: number,
+  y: number,
+): [number, number] {
+  if (style === "fill" || style === "stretch") return [x, y];
+  const [left, top, width, height] = placement.rect;
+  const u = placement.offset[0] + ((x * canvasWidth - left) / width) * placement.scale[0];
+  const v = placement.offset[1] + ((y * canvasHeight - top) / height) * placement.scale[1];
+  return style === "tile" ? [u - Math.floor(u), v - Math.floor(v)] : [u, v];
 }
 
 /** 离屏目标尺寸：场景分辨率，超过设备上限时等比缩小。 */
