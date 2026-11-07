@@ -7,14 +7,17 @@
 //!   `WorkerW`，即桌面图标层或壁纸层本身）才注入 `LeftDown`；抬起沿只要按下被转发过就注入
 //!   `LeftUp`，保证按下 / 抬起成对。
 //! - 不拦截、不吞掉任何输入：Explorer 照常收到点击。
+//! - 设置「暂停壁纸」打开时不转发（每轮读设置）：进入暂停时补一次 `Leave` 与未配对的 `LeftUp`，页面不会停在
+//!   悬停 / 按住状态；恢复后按当前光标照常注入。
 //!
-//! 只在「窗口模式 + 当前是网页壁纸」时运行，由 `WallpaperWindow`（`wallpaper/window.rs`）启停。
+//! 只在「窗口模式 + 当前是网页 / 场景壁纸」时运行，由 `WallpaperWindow`（`wallpaper/window.rs`）启停。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use kabegame_core::settings::Settings;
 use tauri_runtime_kbcef::MouseInjection;
 use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
@@ -137,24 +140,71 @@ fn run(label: String, hwnd: HWND, stop: Arc<AtomicBool>) {
                 (client.y as f64 / scale).round() as i32,
             );
 
-            if inside {
-                if last_move != Some(view) {
-                    inject(&label, MouseInjection::Move { x: view.0, y: view.1 });
-                    last_move = Some(view);
+            if Settings::global().get_wallpaper_paused() {
+                // 暂停的壁纸不接收桌面事件。按键状态照常记（循环末尾），恢复时左键还按着不会被当成一次新的按下
+                if last_move.take().is_some() {
+                    inject(
+                        &label,
+                        MouseInjection::Leave {
+                            x: view.0,
+                            y: view.1,
+                        },
+                    );
                 }
-            } else if last_move.take().is_some() {
-                inject(&label, MouseInjection::Leave { x: view.0, y: view.1 });
-            }
+                if down_forwarded {
+                    inject(
+                        &label,
+                        MouseInjection::LeftUp {
+                            x: view.0,
+                            y: view.1,
+                        },
+                    );
+                    down_forwarded = false;
+                }
+            } else {
+                if inside {
+                    if last_move != Some(view) {
+                        inject(
+                            &label,
+                            MouseInjection::Move {
+                                x: view.0,
+                                y: view.1,
+                            },
+                        );
+                        last_move = Some(view);
+                    }
+                } else if last_move.take().is_some() {
+                    inject(
+                        &label,
+                        MouseInjection::Leave {
+                            x: view.0,
+                            y: view.1,
+                        },
+                    );
+                }
 
-            if left_down && !was_down {
-                // 按下沿：只转发落在本窗口范围内、且光标下是桌面（空白处或图标）的点击。
-                if inside && cursor_over_desktop(cursor) {
-                    inject(&label, MouseInjection::LeftDown { x: view.0, y: view.1 });
-                    down_forwarded = true;
+                if left_down && !was_down {
+                    // 按下沿：只转发落在本窗口范围内、且光标下是桌面（空白处或图标）的点击。
+                    if inside && cursor_over_desktop(cursor) {
+                        inject(
+                            &label,
+                            MouseInjection::LeftDown {
+                                x: view.0,
+                                y: view.1,
+                            },
+                        );
+                        down_forwarded = true;
+                    }
+                } else if !left_down && was_down && down_forwarded {
+                    inject(
+                        &label,
+                        MouseInjection::LeftUp {
+                            x: view.0,
+                            y: view.1,
+                        },
+                    );
+                    down_forwarded = false;
                 }
-            } else if !left_down && was_down && down_forwarded {
-                inject(&label, MouseInjection::LeftUp { x: view.0, y: view.1 });
-                down_forwarded = false;
             }
 
             was_down = left_down;
