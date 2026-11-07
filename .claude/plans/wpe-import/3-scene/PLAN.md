@@ -649,7 +649,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 
 ## P4 — 粒子系统（shimmering_particles · 3062029089 · 1838478131 · 2254685070）
 
-总计划见 [phase-4-particles.md](phase-4-particles.md)。2026-11-07 用户定范围为全部 70 张的粒子用法，目标从跑通一张样本改为建好粒子运行时；层级支持从 W1 提前到 P4a。
+总计划见 [phase-4-particles.md](phase4/phase-4-particles.md)。2026-11-07 用户定范围为全部 70 张的粒子用法，目标从跑通一张样本改为建好粒子运行时；层级支持从 W1 提前到 P4a。
 
 - **分节**（P4a–P4f 各有步骤 0，只查本节要用的内容）：P4-0 对比工具与框架问题；P4a 层级、底座与档 1；P4b 帧表、`rg88` / `r8` 与档 2；P4c `spritetrail` 与控制点；P4d 绳与映射；P4e 子系统与音频；P4f 脚本与深度。
 - **模块归属**：档 2–4 的模块从 W2、W5、W6、P8 提前到这里；层级从 W1 提前到 P4a；R8 / RG88 从 W5 提前到 P4b。

@@ -1,6 +1,6 @@
 # P4 — 粒子系统（总计划）
 
-> 上级：[PLAN.md](PLAN.md)「P4 — 粒子」。前置：P3a、P3b、P3c。
+> 上级：[PLAN.md](../PLAN.md)「P4 — 粒子」。前置：P3a、P3b、P3c。
 > 范围：覆盖全部 70 张的粒子用法，层级支持提前到 P4a（2026-11-07 用户）。本文件只定目标、分节和验收，各节动工前另写子计划。
 > 统计基于 2026-11-07 重扫的本机 117 张场景，已包含 solidlayer 和 LightingV1 的改动。
 
@@ -72,14 +72,14 @@ const OBJECT_FLAGS = [
 
 ## 前置 — 引擎宏修正（已完成）
 
-已按 [hdr-macro-REPORT.md](hdr-macro-REPORT.md) 第 6 节落地（2026-11-07），P4a 依赖它：
+已按 [hdr-macro-REPORT.md](../hdr-macro-REPORT.md) 第 6 节落地（2026-11-07），P4a 依赖它：
 - 删掉翻译器的 `HLSL_GS40_DISABLED`。WPE 不定义它；`shimmering_particles` 的 `particle.vert` 定义后走几何着色器分支，顶点不经过 MVP，翻译能过但画不对。
 - `TEX<n>FORMAT` 只按 `formatcombo` 定义。`eagleflag` 和 WPE 比，差值大于 8 的像素从 6.22% 降到 1.66%。
 - `HDR` 等引擎宏全局传。关闭时 `HDR` 必须不定义，不能传 0，`common_blending.h` 用的是 `#ifdef`。
 
 ## P4-0 — 对比工具与框架问题
 
-不改产品代码，只做各节共用的部分，具体语义留给各节的步骤 0。结论写进 `p4-particles-REPORT.md`，每条标证据来源和置信度，后续步骤 0 接着往里写。
+子计划：[phase-4-0-tools.md](phase-4-0-tools.md)。不改产品代码，只做各节共用的部分，具体语义留给各节的步骤 0。结论写进 `p4-particles-REPORT.md`，每条标证据来源和置信度，后续步骤 0 接着往里写。
 
 - 确定性工程的生成和逐帧对比工具，能和 WPE 比位置、尺寸、颜色、透明度。
 - 只查决定底座形状的问题：模块的执行顺序、每个粒子存哪些字段、时间步进（dt 的来源和上限，暂停、低帧率时的行为）。
@@ -205,6 +205,6 @@ const OBJECT_FLAGS = [
 2. **主线程预算：** 模拟和脚本共用一帧，大 `maxcount` 场景可能超预算。
 3. **加载开销：** `starttime` 若是快进模拟，200 秒的系统会拖慢加载。
 4. **P4b–P4f 解锁很少：** P4b、P4d 各解锁 1 张，P4c、P4e、P4f 不解锁新场景。主要靠确定性工程和 dev 强制渲染验证，大部分效果要等后续阶段才能在真实壁纸上看到。
-5. **风、重力和 `perspectiveoverridefov` 的语义未证实：** [lighting-REPORT.md](lighting-REPORT.md) 把它们标为中性，但能力表仍在报，P4a 步骤 0 要用实验确认。`3811798465` 等 6 张的解锁取决于这一项。
+5. **风、重力和 `perspectiveoverridefov` 的语义未证实：** [lighting-REPORT.md](../lighting-REPORT.md) 把它们标为中性，但能力表仍在报，P4a 步骤 0 要用实验确认。`3811798465` 等 6 张的解锁取决于这一项。
 6. **层级动的是现有路径：** 它改所有图层的世界矩阵，现有能渲染的场景都要过基线。
-7. **内置粒子着色器的路径和 WPE 不同：** WPE 壁纸进程定义 `GS_ENABLED`，`genericparticle` 走几何着色器；我们走顶点展开分支。两边的几何是否一致，要靠逐帧对比确认。
+7. **内置粒子着色器的路径和 WPE 不同：** 抓帧已证实（2026-11-07）：`genericparticle` 在 WPE 里是 `PointList` 加几何着色器，项目自定义 `particle` 走顶点展开。我们两种都走顶点展开，几何是否一致要靠逐帧对比确认。
