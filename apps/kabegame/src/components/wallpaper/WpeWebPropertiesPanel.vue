@@ -71,14 +71,6 @@
               <span>{{ t("gallery.wpeClearStorage") }}</span>
             </button>
           </div>
-
-          <!-- 开发版：观察 3c 的风险，文案不进 i18n -->
-          <div v-if="DEV_SCENE_TOOLS && isScene && coverSource" class="px-3 py-2.5">
-            <button type="button" data-testid="wpe-dev-reload" :class="[ACTION_BTN, ACTION_DEV, 'w-full']" @click="devScene('reload')">
-              <el-icon class="text-[14px]"><Refresh /></el-icon>
-              <span>dev：整场重新加载</span>
-            </button>
-          </div>
         </div>
       </section>
 
@@ -189,7 +181,7 @@
 import { computed, reactive, ref, toRef, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "@kabegame/element-plus";
-import { ArrowRight, Brush, Camera, Loading, Refresh, RefreshLeft, VideoPause } from "@kabegame/element-plus-icons";
+import { ArrowRight, Brush, Camera, Loading, RefreshLeft, VideoPause } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
@@ -273,9 +265,6 @@ const ACTION_PRIMARY =
 /** 次操作（恢复默认 / 清空存储）：紫色描边幽灵按钮 */
 const ACTION_GHOST =
   "border-solid border-[color-mix(in_srgb,var(--anime-secondary)_28%,transparent)] bg-transparent text-[var(--anime-secondary-dark)] hover:border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)] hover:bg-[color-mix(in_srgb,var(--anime-secondary)_12%,transparent)] active:bg-[color-mix(in_srgb,var(--anime-secondary)_18%,transparent)]";
-/** 开发版入口：虚线弱化 */
-const ACTION_DEV =
-  "border-dashed border-[color-mix(in_srgb,var(--anime-text-muted)_45%,transparent)] bg-transparent text-[var(--anime-text-muted)] hover:bg-[color-mix(in_srgb,var(--anime-text-muted)_12%,transparent)]";
 
 const isScene = computed(() => isWpeSceneType(props.imageType ?? undefined));
 
@@ -382,14 +371,6 @@ function restoreCover() {
     "gallery.wpeRestoreCoverDone",
     "gallery.wpeRestoreCoverFailed",
   );
-}
-
-const DEV_SCENE_TOOLS = import.meta.env.DEV;
-
-/** 发给预览里的场景宿主（宿主的 `dev/install.ts`）。只有预览有 `coverSource`，所以按预览的画布找 iframe。 */
-function devScene(action: "reload") {
-  const frame = document.querySelector<HTMLIFrameElement>(".preview-wallpaper-wrapper iframe");
-  frame?.contentWindow?.postMessage({ kind: "kabegame:dev-scene", action }, "*");
 }
 </script>
 
