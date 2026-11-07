@@ -65,7 +65,7 @@ wasm 也只在真要渲染时才加载。上级计划的阶段 3 / 4 合并为�
 | P4 | shimmering_particles | 4 个粒子系统：emitter `sphererandom`；initializer `lifetimerandom sizerandom velocityrandom colorrandom angularvelocityrandom rotationrandom`；operator `movement oscillateposition alphafade oscillatealpha angularmovement`；renderer `sprite`。另有 `instanceoverride` 绑用户属性、自定义 `particle` shader（`WORLDBLUR` `USERCOLORBLEND`）、5760×1080 三屏正交、脚本改 `bloomstrength`、9 处用户绑定 |
 | P5 | retro · neon_sunset | 静态 `.mdl` 网格（MDLV0014，无骨骼 / 动画段）作为 model 图层（retro 1 个、neon_sunset 2 个，`neongrid` 151 KB）。neon_sunset 另有：透视相机（`orthogonalprojection: null`）、`fullscreen` / `passthrough` 层、`filmgrain` effect、`BLENDMODE=12`、`parallaxDepth`、`assets` 里的 `materials/util/noise.tex`、11 个颜色 / 滑块属性 |
 | P6 | dino_run | 32 层；`scroll` ×21 + `godrays`（5 pass、2 fbo）；spritesheet（`TEXS` 帧表，COMBO `spritesheet=1`）；文本 ×2（项目 otf 字体）；声音 ×2；脚本 `createLayer / destroyLayer / sortLayer / getLayer / getLayerIndex / registerAsset / thisObject.getMaterial`、`localStorage.get/set`（`LOCATION_GLOBAL`）、`cursorDown`、`input.cursorWorldPosition`；`camerafade` |
-| W1 | 工坊 3656079027 超时空辉夜姬 | 工坊里最简单的一张：没有脚本、视频、文本。`genericimage4` 的 `#require LightingV1` 已实现（[lighting-REPORT](lighting-REPORT.md)）；`parent` 层级（5 处）与带 `effects` 的分组节点（`disablepropagation`、`castshadow`、`clampuvs`）；effect `shake` ×2、`iris`；sprite 粒子（复用 P4）；7 处用户绑定 |
+| W1 | 工坊 3656079027 超时空辉夜姬 | 工坊里最简单的一张：没有脚本、视频、文本。`genericimage4` 的 `#require LightingV1` 已实现（[lighting-REPORT](lighting-REPORT.md)）；`parent` 层级（5 处）与形状对象 `shape: "quad"` + `lightshafts`（原写作「带 `effects` 的分组节点」，2026-11-07 核对是形状对象，见 [sample-gaps](phase4/sample-gaps.md) §2.1）；effect `shake` ×2、`iris`；sprite 粒子（复用 P4）；7 处用户绑定 |
 | W2 | 工坊 3429479356 MGS4 · 3600630828 樱羽艾玛 | 视频纹理（`.tex` 内嵌 4K MP4：MGS4 一段 707 MB，樱羽两段 200 + 95 MB）；文本与声音；简单脚本（`thisScene.enumerateLayers`、`thisLayer.text / alpha`、`getLayer`、`applyUserProperties`）；`g_AudioSpectrum` 音频条（工坊 effect `Simple_Audio_Bars`）；rope 粒子 + 跟随指针的控制点；`shine`（5 pass、2 fbo）、`blurprecise`、`opacity`；3840×2650 非 16:9 正交 |
 | W3 | 工坊 3470764447 伊蕾娜·昼夜 | `parent` 层级 31 处；5 段视频按时段切换；脚本 `engine.canvasSize`、`engine.registerAudioBuffers`、`mediaThumbnailChanged`；`colorBlendMode` 21 / 31；带 `camera` 的对象；16 个文本 |
 | W4 | 工坊 3611425904 五河琴里 · 3146703458 P3R 音乐播放器 · 3351163962 椎名真白 | 交互：按图层命中的 `cursorClick / Down / Up / Move / Enter / Leave`；声音图层由脚本控制（`play / pause / stop / isPlaying`，P3R 8 个声音、琴里 4 段语音）；`systemfont_*`；`engine.setTimeout`、`WEMath / WEVector`；材质 `genericimage3`、`flat`；effect `sharpen_filter`、`transform`、`foliagesway`、`iris`、`blend`；粒子 `turbulence`、`sizechange`；真白 53 个文本、448 处用户绑定 |
@@ -653,6 +653,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 
 - **分节**（P4a–P4f 各有步骤 0，只查本节要用的内容）：P4-0 对比工具与框架问题；P4a 层级、底座与档 1；P4b 帧表、`rg88` / `r8` 与档 2；P4c `spritetrail` 与控制点；P4d 绳与映射；P4e 子系统与音频；P4f 脚本与深度。
 - **模块归属**：档 2–4 的模块从 W2、W5、W6、P8 提前到这里；层级从 W1 提前到 P4a；R8 / RG88 从 W5 提前到 P4b。
+- **kabegame-sample**（用户自建，2026-11-07）作为 P4 的整场验收样本；按它的调研（[sample-gaps](phase4/sample-gaps.md)）补入 `vortex_v2`、`maintaindistancetocontrolpoint`、世界空间、发射器 `flags`、`static` 子系统、控制点 `flags`、`NORMALMAP`，归属见粒子总计划。它还用到形状对象（W1）和属性关键帧动画（K），P4 做完后还差这两项。
 - **绘制方式**：翻译后的 `a_TexCoordVec4` 同时装角点 UV、旋转和尺寸，不用实例化四边形，改成每个粒子 4 个顶点加索引。
 - **验收**：粒子用法覆盖 70 张，解锁 `shimmering_particles`、`3062029089`、`1838478131`、`2254685070`；粒子带随机，不比预览图，改用确定性工程和 WPE 逐帧对比。
 
@@ -685,6 +686,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **前置·翻译器**：~~`#require LightingV1` 打桩~~ 已按 WPE 语义实现，不是打桩：`LIGHTING=0` 展开成空，开启时生成真实的库（[lighting-REPORT](lighting-REPORT.md)）。
   待做：把 pkg 里的工坊着色器加进翻译器的语料测试。
 - `parent` 层级与分组节点已提前到 P4a。
+- **新增** 形状对象 `shape: "quad"`（读码，[sample-gaps](phase4/sample-gaps.md) §2.1）：图像类的子类，边长等于正交高度的正方形；只画最后一个 effect 的 pass，强制 `DIRECTDRAW=1`、强制 additive。语料 16 张、17 个对象，`3821678218` 在 P4b 之后只差这一项，可以在 P4b 之后单列一步先做。
 - **新增** effect `shake`、`iris`。
 - **验收**：画面与预览图一致；7 处用户属性生效。
 
@@ -716,7 +718,8 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **新增** 媒体事件 `mediaPlaybackChanged / PropertiesChanged / ThumbnailChanged / TimelineChanged`（SMTC）；跨脚本的 `shared` 对象（含可拖动图层）；
   `engine.setInterval`；`thisObject.getAnimation`、`thisLayer.getParent`。
 - **新增** 内置 effect：`waterwaves`、`waterripple`、`shake`、`pulse`、`transform`、`chromaticaberration`、`spin`、`perspective`、`twirl`、
-  `blendgradient`、`motionblur`、`blurradial`；`composelayer`；AlphaChannelPriority。R8 / RG88 纹理已提前到 P4b。
+  `blendgradient`、`motionblur`、`blurradial`；`composelayer`。R8 / RG88 纹理与 AlphaChannelPriority 已提前到 P4b（读码看 AlphaChannelPriority 多半对运行时中性，P4b 步骤 0 确认）。
+- `thisObject.getAnimation` 依赖「K — 属性关键帧动画」。
 - **验收**：播放音乐时歌名 / 封面 / 播放状态卡片随之显示与隐藏；水波等效果与预览图一致；可拖动图层的位置能保存。
 
 ## W6 — puppet warp 骨骼动画（工坊 3351072238 妃咲 · 3409595232 长安雪 · 3554161528 空崎日奈）
@@ -743,6 +746,14 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   `camerashake`；无内容的变换节点；`selfillum`。
 - arsenal 扫描时有 1 处引用解析为空，开工时核实。
 - **验收**：四张与预览图一致；fantasticcar 的车身 / 条纹 / 轮毂颜色属性生效。
+
+## K — 属性关键帧动画（2026-11-07 由 kabegame-sample 发现）
+
+- **是什么**：属性值写成 `{animation: {c0, c1, …, options: {fps, length, mode, …}}, value}`，按时间轴插值。可以和 `user`、`script` 并存。语料 32 张、169 处（不含 puppet 的 `animationlayers`）：图层 `alpha` / `origin` / `angles` / `scale` / `color`、材质常量、`general.zoom` / `bloomstrength`、`instanceoverride` 等。
+- **现状**：能力表报 `value:animation`，整张退回（P4a 步骤 5 之前补上）。此前 `resolveValue` 把这种值解析成 `undefined`，属性静默退回缺省值，能力表不报。
+- **步骤 0**：求值函数（插值、`loop` / `mirror` / `single` 的时间处理、`startpaused` 时取哪个值）、三种绑定谁优先、`magic` 切线。已读到的部分和查法见 [sample-gaps](phase4/sample-gaps.md) §3.4、§3.5。
+- **实现**：编译期解析成曲线，运行时每帧求值写进 `SceneState`（复用 P3a 的就地路径）；W5 的 `thisObject.getAnimation` 建在它上面。
+- **验收**：确定性工程和 WPE 逐帧对比；`kabegame-sample` 的 `controlpointangle1`。
 
 ## P9 — 按需：本机样本没用到的能力
 

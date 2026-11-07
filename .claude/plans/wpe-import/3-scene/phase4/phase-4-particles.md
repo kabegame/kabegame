@@ -19,13 +19,13 @@ WPE 语义以 REA 和实验为准，LWE 只作线索：它解析了 `starttime` 
 | 节 | 新增能力 | 粒子用法被完全覆盖（共 70 张） |
 |---|---|---|
 | P4a | 层级；`sphererandom`；lifetime / size / velocity / color / rotation / angular velocity 随机；`movement`、`oscillateposition`、`alphafade`、`oscillatealpha`、`angularmovement`；`sprite`；透视粒子；`starttime`；`instanceoverride` | 4 |
-| P4b | 帧表、`rg88` / `r8`；`boxrandom` 与发射时序；`alpharandom`、`turbulentvelocityrandom`、`positionoffsetrandom`；`sizechange`、`alphachange`、`colorchange`、`oscillatesize`、`turbulence`、`vortex`、`capvelocity`；`REFRACT`、`CUTOUT` | 22 |
-| P4c | `spritetrail`；控制点；`controlpointattract`；`locktopointer` | 34 |
-| P4d | `rope`、`ropetrail`；`mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`；`remapinitialvalue`、`remapvalue`；`maintaindistancebetweencontrolpoints`、`reducemovementnearcontrolpoint` | 47 |
-| P4e | `children` 的 `eventfollow`、`eventspawn`、`eventdeath`；`audioprocessing*` | 60 |
+| P4b | 帧表、`rg88` / `r8`；`boxrandom` 与发射时序；`alpharandom`、`turbulentvelocityrandom`、`positionoffsetrandom`；`sizechange`、`alphachange`、`colorchange`、`oscillatesize`、`turbulence`、`vortex`、`capvelocity`；`REFRACT`（含它带出的 `NORMALMAP`）、`CUTOUT`；发射器 `flags` bit1 / bit2；`tex:alpha-priority` | 22 |
+| P4c | `spritetrail`；控制点（含控制点 `flags` 逐位）；`controlpointattract`；`locktopointer`；粒子世界空间（系统 `flags` bit0） | 34 |
+| P4d | `rope`、`ropetrail`；`mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`；`remapinitialvalue`、`remapvalue`；`maintaindistancebetweencontrolpoints`、`reducemovementnearcontrolpoint`；`vortex_v2`、`maintaindistancetocontrolpoint` | 47 |
+| P4e | `children` 的 `static`（缺省类型）、`eventfollow`、`eventspawn`、`eventdeath`；`audioprocessing*` | 60 |
 | P4f | `emitParticles`；脚本写 `instanceoverride`；粒子的深度与剔除 | 70 |
 
-覆盖数按特性名统计，COMBO 只算值非 0 的。帧表和纹理格式放进 P4：不做它们，P4c 的 34 张只剩 14 张，其中 18 张用帧表，再有 2 张用 `rg88` 或 `r8`。P4d 排在 P4e 之前，因为绳用得最多：先做 P4d 累计 47 张，先做 P4e 只有 38 张。
+覆盖数按特性名统计，COMBO 只算值非 0 的。2026-11-07 按 kabegame-sample 调研（[sample-gaps.md](sample-gaps.md)）补入的项还没计入覆盖数，各节步骤 0 用能力表重算：世界空间语料 25 张、发射器 `flags` bit1 20 张、`static` 子系统 21 张、`NORMALMAP` 15 张，`vortex_v2`、`maintaindistancetocontrolpoint` 0 张（只为 kabegame-sample）。帧表和纹理格式放进 P4：不做它们，P4c 的 34 张只剩 14 张，其中 18 张用帧表，再有 2 张用 `rg88` 或 `r8`。P4d 排在 P4e 之前，因为绳用得最多：先做 P4d 累计 47 张，先做 P4e 只有 38 张。
 
 **解锁数：** 确定解锁 4 张，能渲染的场景从 10 张到 14 张。如果 P4a 步骤 0 确认风、重力和 `perspectiveoverridefov` 这几个键中性，加上 P4a 的层级和 P4b 的纹理格式，还能多解锁 6 张：`3778549173`、`3811798465`、`3799426930`、`3812822229`、`3820104696`、`3832772446`。
 
@@ -128,14 +128,19 @@ const OBJECT_FLAGS = [
 - `rg88`、`r8` 的通道语义。
 - `instantaneous`、`delay`、`duration` 的发射时序。
 - 档 2 模块的公式和字段默认值，`REFRACT`、`CUTOUT`。
+- 发射器 `flags` bit1（每帧至多 1 个）、bit2（周期发射，`minperiodic*` / `maxperiodic*` / `maxtoemitperperiod`）。
+- 系统 `flags` bit1：`randomframe` 时也会置位，读取点没找到。
+- `REFRACT` 带出的 `NORMALMAP` 与 `_rt_FullFrameBuffer`。
+- `tex:alpha-priority`（从 W5 移入）：读码看运行时多半不读这个标志，着色器只按 `TEX<n>FORMAT` 换通道（sample-gaps §2.9），确认中性后放行。
 
 **实现：**
 - `TEXS` 帧表进粒子路径，`animationmode`、`sequencemultiplier`。图像层的帧动画仍属 P6。
 - `rg88`、`r8` 纹理，全局放开，图像层也能用。
 - `boxrandom`、发射时序和档 2 模块。
-- `REFRACT`、`CUTOUT`。
+- `REFRACT`（含 `NORMALMAP`）、`CUTOUT`。
+- 发射器 `flags` bit1、bit2。
 
-**验收：** `1838478131` 解锁；语料中粒子用法覆盖达到 22 张；每个模块都有确定性工程，和 WPE 逐帧一致；帧表各模式和 WPE 一致。
+**验收：** `1838478131` 解锁（它还带控制点 `flags 1`：步骤 0 证明这个控制点没被模块引用、算中性才在本节解锁，否则移到 P4c）；语料中粒子用法覆盖达到 22 张；每个模块都有确定性工程，和 WPE 逐帧一致；帧表各模式和 WPE 一致。
 
 ## P4c — 档 3
 
@@ -143,11 +148,14 @@ const OBJECT_FLAGS = [
 - `spritetrail` 的几何，`length`、`minlength`、`maxlength`。
 - 控制点各字段、坐标空间和父子关系，`locktopointer`。
 - `controlpointattract` 的公式。
+- 控制点 `flags` 1、2、4、8、16 逐位查清。
+- 粒子世界空间（系统 `flags` bit0）：控制点乘模型矩阵、绘制时不乘对象矩阵（rea-p4a C3），发射位置怎么进世界空间。
 
 **实现：**
 - `spritetrail`。
 - 控制点：`offset`、`flags`、`parentcontrolpoint`、`locktopointer`，以及 `instanceoverride` 的 `controlpoint*`。
 - `controlpointattract`。
+- 粒子世界空间。
 
 **验收：** 语料中粒子用法覆盖达到 34 张；拖尾和控制点的确定性工程和 WPE 一致；指针跟随在预览和桌面都正常。`1923929928` 还差 `object:perspective`，不算本节验收。
 
@@ -156,23 +164,26 @@ const OBJECT_FLAGS = [
 **步骤 0：**
 - 绳的几何：分段、细分、UV 和 `ropetrail` 的长度。
 - 映射类和控制点距离类模块的公式。
+- `vortex_v2`（`flags` bit1 开 `centerforce`、bit2 环形模式）与 `maintaindistancetocontrolpoint`（先跟随控制点位移，再拉回半径 `distance` 的球面）：sample-gaps §2.2、§2.3 已读到字段、缺省值和公式结构，补实测。
 
 **实现：**
 - `rope`、`ropetrail` 和 `genericropeparticle` 着色器。
 - `mapsequence*`、`remap*`。
 - `maintaindistancebetweencontrolpoints`、`reducemovementnearcontrolpoint`。
+- `vortex_v2`、`maintaindistancetocontrolpoint`（语料 0 张，为 kabegame-sample）。
 
-**验收：** `2254685070` 解锁；语料中粒子用法覆盖达到 47 张；绳和映射模块的确定性工程和 WPE 一致。
+**验收：** `2254685070` 解锁（它依赖 P4b 的发射器 `flags` bit1）；语料中粒子用法覆盖达到 47 张；绳和映射模块的确定性工程和 WPE 一致。
 
 ## P4e — 子系统与音频
 
 **步骤 0：**
 - `children` 的触发时机、`probability`、`maxcount`、`controlpointstartindex`，子系统和父系统的控制点、绘制顺序。
+- `static` 子系统（`children` 条目没写 `type` 时的缺省，语料最常见的用法），以及条目的 `origin`、`angles`、`scale`、`flags`。
 - `audioprocessing*` 的频段、模式和指数，以及没有音频数据时的行为。
 
 **实现：**
-- `children` 三种事件子系统。
-- `audioprocessing*` 接入宿主现有的音频数据，用在 emitter、`turbulentvelocityrandom`、`turbulence`、`vortex` 上。音频只有 Windows，其它平台和没声明 `supportsaudioprocessing` 时按步骤 0 查到的行为处理。
+- `children` 的 `static` 与三种事件子系统。
+- `audioprocessing*` 接入宿主现有的音频数据，用在 emitter、`turbulentvelocityrandom`、`turbulence`、`vortex`、`vortex_v2` 上。音频只有 Windows，其它平台和没声明 `supportsaudioprocessing` 时按步骤 0 查到的行为处理。
 
 **验收：** 语料中粒子用法覆盖达到 60 张；三种事件的确定性工程和 WPE 一致；固定音频输入下的响应和 WPE 一致。
 
@@ -199,6 +210,8 @@ const OBJECT_FLAGS = [
 5. 层级支持提前到 P4a（2026-11-07 用户）。
 6. P4-0 不把调研做完，各节用步骤 0 查自己要用的内容（2026-11-07 用户）。
 7. 重新编译时粒子状态重来，含预热；改 `instanceoverride` 就地更新，不清粒子（P4a 步骤 0）。
+8. kabegame-sample 作为 P4 的整场验收样本，`vortex_v2`、`maintaindistancetocontrolpoint` 进 P4d；按 [sample-gaps.md](sample-gaps.md) 补入的其余项归属见范围表（2026-11-07 用户）。它还要形状对象（PLAN W1）和属性关键帧动画（PLAN K），P4 做完后差这两项。
+9. 能力表先报 `value:animation`、放行 `alphawriting: "default"`，在 P4a 步骤 5 放开 `instanceoverride` 之前做（2026-11-07 用户）。
 
 **待定：**
 1. `maxcount` 的上限和超限处理：看 P4a 实测。最大的 2582765611 是 62.5 万，其次 12.8 万。

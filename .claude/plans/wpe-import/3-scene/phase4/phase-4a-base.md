@@ -194,6 +194,10 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 
 ## 步骤 5 — `instanceoverride`、生命周期与解锁
 
+**先做能力表的两处修正**（2026-11-07 用户，依据 [sample-gaps.md](sample-gaps.md) §2.10、§3.3），放开 `instanceoverride` 之前必须完成：
+- **修改** 关键帧值 `{animation: {…}, value}` 报 `value:animation`。现在 `resolveValue` 把它解析成 `undefined`，属性静默退回缺省值。`animation` 是对象才算，puppet 的整数 id 不算；同时挂了 `user` 或 `script` 也报。覆盖 scene（`general`、图层字段、effect 实例、`instanceoverride`）、材质常量、粒子 JSON（系统级键和模块字段）、模型 JSON 与 `effect.json`。
+- **修改** 材质 `alphawriting: "default"` 不再报 `material:alphawriting`：读码确认它不改任何状态。可能直接解锁 `3304642534`，真机要和 WPE 比。
+
 - **修改** `BindingTarget` 新增 `{ kind: "particle-instance"; object: number; field: InstanceField }`，就地写，下一帧重算。
   > 说明：从基值重新乘，不累乘。存活粒子保留已有的 life、颜色、尺寸；`rate` 每帧现算，立即生效。
 - **修改** `OBJECT_FLAGS` 去掉 `instanceoverride`。`color`、`colorn` 的 HSV 路径读得不完整，只有样本用到时才测，否则报 `particle:instance:colorn`。
