@@ -4,7 +4,16 @@
 import type { SceneHost } from "../host";
 import { runBloomProbe } from "./bloomProbe";
 import { particleCorners } from "./particleCorners";
-import { hostRenderFrame, hostState, hostStats, particleTrackProbe, probeChunk, probeKeys, renderFrame } from "./probe";
+import {
+  hostParticles,
+  hostRenderFrame,
+  hostState,
+  hostStats,
+  particleTrackProbe,
+  probeChunk,
+  probeKeys,
+  renderFrame,
+} from "./probe";
 import { realmCheck } from "./realmProbe";
 import { scriptCorpus } from "./scriptCorpus";
 
@@ -46,6 +55,8 @@ export function installSceneDevProbe(host: SceneHost): void {
       clock: () => host.clock(),
       audio: () => host.audio(),
       read: (path: string) => host.readTarget(path),
+      /** P4a 步骤 5：粒子数量与分布、开销记录（`{ profile: true }` 开始，`false` 停止）、当前 instanceoverride。 */
+      particles: (options?: { profile?: boolean }) => hostParticles(host, options),
     },
   };
 }

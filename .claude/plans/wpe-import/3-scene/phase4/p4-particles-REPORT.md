@@ -131,6 +131,9 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 
 | `oscillateposition` 的 y 比 x、z 多 `2π·R` 的时间偏移 | 成立。`proj/p4a2` 的 `osc-r`（频率 1、相位 0、`scale` 0–100、mask `1 1 0`）4 个粒子，由 x 的幅度反推 `R`（0.386、0.357、0.598、0.125），y 按 `T = 2π·R` 预测残差 3.4e-4–1.8e-3；`T = 0` 是 5.6–92，`T = π·R` 是 1.6–35。抓帧 `A:\p4a\p4a2`，读数脚本 `ana_oscr.py`。残差略过 1e-3 是因为年龄由日志的 6 位小数 dt 累加了 800 多帧 |
 
+| 粒子对象运行中被隐藏：清空存活粒子；重新显示后照常发射、不重新预热（C8） | 成立。`proj/p4a-life` 的 `vis`（`starttime 10`、rate 2、v 100）`visible` 绑属性，经 `-control applyProperties` 隐藏再显示：隐藏前 42 个，显示约 3 秒后只有 7 个新粒子，年龄 0.13–3.13、间隔 0.5；重新预热的话会立刻有 20 个排到 x≈1100 |
+| 运行中改 `instanceoverride`：存活粒子保留已有值，新粒子用新值，`rate` 每帧现算（C5） | 成立。`inst` 改 size ×2、alpha 0.5、rate 3、count 2、speed 2：已有 54 个仍是尺寸 10、alpha 1、出生时的速度；新的 10 个尺寸 20、alpha 0.5、速度 ×2；`rate` 立刻作用于全部粒子（旧 300、新 600 像素/秒，对照 100）；新粒子间距 50，对应发射率 rate×count。抓帧 `A:\p4a\life`，读数脚本 `ana_life.py` |
+
 `sprite` 的 `upright`、`fixed` 朝向没读到，先报不支持。
 
 `proj/p4a2` 同时带日志重抓了 `burst`、`inst`、`inst0`、`osc-y`（`tracks/rd-p4a2.json`、`out/p4a2-log.txt`），给步骤 3 的模拟器从加载开始回放。

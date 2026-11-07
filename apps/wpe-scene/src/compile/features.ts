@@ -20,9 +20,16 @@ import {
   type SceneObject,
   type SceneValue,
 } from "./model";
-import { isScriptValue, isUserBinding } from "./bindings";
+import { isKeyframedValue, isScriptValue, isUserBinding } from "./bindings";
 import { resolveParents } from "./hierarchy";
-import { PARTICLE_SYSTEM_KEYS, particleModuleEntries, readParticleSystem } from "./particles";
+import {
+  INSTANCE_FIELDS,
+  instanceVector,
+  PARTICLE_SYSTEM_KEYS,
+  particleModuleEntries,
+  readParticleSystem,
+  type ParticleInstance,
+} from "./particles";
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
 
@@ -177,12 +184,14 @@ const SUPPORTED_OBJECT = new Set([
   "ledsource",
   "parallaxDepth",
 ]);
-/** 打开时改变画面、还没实现的对象开关。 */
+/**
+ * 打开时改变画面、还没实现的对象开关。`instanceoverride` 不在这里（P4a 步骤 5）：粒子对象上按键检查
+ * （`checkParticleInstance`），其它对象上 WPE 不读，照未知键报 `object:instanceoverride`（语料 0 个）。
+ */
 const OBJECT_FLAGS = [
   "perspective",
   "fullscreen",
   "passthrough",
-  "instanceoverride",
   "attachment",
   "castshadow",
   "disablepropagation",
@@ -226,12 +235,20 @@ const SUPPORTED_FBO = new Set(["name", "format", "scale", "width", "height", "fi
 const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visible"]);
 const SUPPORTED_INSTANCE_PASS = new Set(["id", "combos", "constantshadervalues", "textures"]);
 
+/**
+ * 递归扫描一个 JSON 值：属性关键帧 `{animation: {…}, value}` 报 `value:animation`（`isKeyframedValue`，P4a 步骤 5，
+ * `sample-gaps.md` §3.3）。挂了 `user` / `script` 的同样报；puppet 的 `animationlayers[i].animation` 是整数 id，不报。
+ * 覆盖：`checkSceneFeatures` 扫整个 scene（`general`、图层字段、effect 实例常量、`instanceoverride`），`checkPassFeatures`
+ * 扫材质 pass（含常量），`checkModelFeatures` 扫模型 JSON，`checkEffectFeatures` 扫 effect.json；粒子 JSON 在
+ * `checkParticleFeatures` 里按键检查（模块字段由 `readParticleModule` 报 `animation`）。
+ */
 export function scanValue(value: unknown, unsupported: Set<string>): void {
   if (Array.isArray(value)) {
     for (const v of value) scanValue(v, unsupported);
     return;
   }
   if (!value || typeof value !== "object") return;
+  if (isKeyframedValue(value)) unsupported.add("value:animation");
   for (const v of Object.values(value)) scanValue(v, unsupported);
 }
 
@@ -318,14 +335,13 @@ export function objectKind(object: SceneObject): ObjectKind | undefined {
  * 没有内容的对象是分组节点：WPE 把它建成只有变换的基类对象（P4a 实测），不报；它的 `effects` 不读（`bundle.ts`
  * 在没有 image 时不编译图层内容），所以也不报。
  *
- * 粒子对象自己的键（`origin`、`angles`、`scale`、`visible`、`parent`、`instanceoverride` 等）照对象规则走；粒子 JSON 的
- * 用法由 `checkParticleFeatures` 在读到文件后检查。
+ * 粒子对象自己的键（`origin`、`angles`、`scale`、`visible`、`parent` 等）照对象规则走；`instanceoverride` 要看粒子 JSON 的
+ * `flags` 与场景 HDR，由 `checkParticleInstance` 在读到文件后检查；粒子 JSON 的用法由 `checkParticleFeatures` 检查。
+ * 粒子不再有总括键（步骤 5 删掉了 `particle:pending`）：不支持的用法都要由这些细分键挡住。
  */
 export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>, parent: number | null = null): void {
   const kind = objectKind(object);
   if (kind === "particle") {
-    // 临时键：粒子已经能画（P4a 步骤 4），生命周期与 `instanceoverride` 的就地更新在步骤 5，做完再删
-    unsupported.add("particle:pending");
     // 带 effects 的粒子对象本机 0 个，P4 不做
     const effects = object.effects as unknown;
     if (Array.isArray(effects) ? effects.length > 0 : active(effects)) unsupported.add("particle:effects");
@@ -343,9 +359,50 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !OBJECT_FLAGS.includes(key) &&
       !["alignment", "model", "particle", "sound", "text", "light"].includes(key) &&
       !lightKey(key) &&
+      !(kind === "particle" && key === "instanceoverride") &&
       active(value)
     )
       unsupported.add(`object:${key}`);
+}
+
+/**
+ * 粒子对象的 `instanceoverride`（P4a 步骤 5，`rea-p4a.md` C3 / C5，`FUN_14022bd40`）。`flags` 是粒子 JSON 的系统 `flags`，
+ * `hdr` 是场景实际的 HDR（`postprocess.hdr`），`resolved` 是编译期解析出的值（含用户属性）。
+ * - `alpha`、`size`、`count`、`speed`、`lifetime`、`rate`：已实现（静态值与 `{user}`，就地更新），不报；`id` 是编辑器键。
+ * - `brightness`：只在 HDR 且没有 bit3 时生效（乘实例颜色，没实现），这时取非默认值报 `particle:instance:brightness`；
+ *   LDR 或有 bit3 时中性。绑了用户属性时 `bundle.ts` 把它登记成重编译目标，改成非默认值后由这里报。
+ * - `color`、`colorn`：没有 bit3、且设了值（`r ≥ 0`，WPE 只看第一个分量，`0x14022bd9f`；或绑了用户属性）时报
+ *   `particle:instance:colorn`。生效还要与系统颜色差 0.0035 以上，系统颜色的来源没读到，HSV 路径也没读全，所以 `"1 1 1"`
+ *   也照报。
+ * - `controlpoint0..7`、`controlpointangle0..7`：`particle:instance:controlpoint`（P4c）。
+ * - 挂了 `{script}`：`particle:binding:instance:<键>`（脚本名 `instance`，P4f）。
+ * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `scanValue` 报。
+ */
+export function checkParticleInstance(
+  raw: unknown,
+  resolved: Pick<ParticleInstance, "brightness">,
+  context: { flags: number; hdr: boolean },
+  unsupported: Set<string>,
+): void {
+  if (raw === null || raw === undefined) return;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    if (active(raw)) unsupported.add("particle:instance");
+    return;
+  }
+  // bit3 禁用 colorn 与 brightness（C3）
+  const colorOverride = (context.flags & 8) === 0;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value === null || value === undefined || key === "id") continue;
+    if (isScriptValue(value)) unsupported.add(`particle:binding:instance:${key}`);
+    if ((INSTANCE_FIELDS as readonly string[]).includes(key)) continue;
+    if (key === "color" || key === "colorn") {
+      const color = instanceVector(value);
+      if (colorOverride && (isUserBinding(value) || (color !== null && color[0] >= 0)))
+        unsupported.add("particle:instance:colorn");
+    } else if (/^controlpoint(?:angle)?[0-7]$/.test(key)) unsupported.add("particle:instance:controlpoint");
+    else unsupported.add(`particle:instance:${key}`);
+  }
+  if (context.hdr && colorOverride && resolved.brightness !== 1) unsupported.add("particle:instance:brightness");
 }
 
 /** 程序最终是否开了光照（COMBO 可能来自材质，也可能是着色器注解的默认值）。 */
@@ -358,6 +415,17 @@ export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): 
   for (const [key, value] of Object.entries(model))
     if (!SUPPORTED_MODEL.has(key) && !["puppet", "fullscreen", "passthrough"].includes(key) && active(value))
       unsupported.add(`model:${key}`);
+  // 关键帧（语料 0 处，防御用）；puppet 的 `animationlayers` 是整数 id，不报
+  scanValue(model, unsupported);
+}
+
+/**
+ * 材质 pass 的 `alphawriting` 取值（`sample-gaps.md` §2.10，读码可定论）：映射 `"default"` 0、`"enabled"` 1、`"disabled"` 2
+ * （`0x140157eb0`–`0x140157f40`）；绘制时 0 什么都不做，1 / 2 才保存设备状态、开关 alpha 写入（`0x140157201`）。
+ * 所以 `"default"` 等于没写；其余取值照报。
+ */
+function alphaWritingUsed(value: unknown): boolean {
+  return active(value) && value !== "default";
 }
 
 export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>): void {
@@ -368,7 +436,8 @@ export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>):
   // COMBO 只按整数读（I3）：写成 `{user, value}` 时 WPE 断言中止整个进程，这里按不支持退回预览图
   for (const value of Object.values(pass.combos ?? {}))
     if (value && typeof value === "object") unsupported.add("combo:user-binding");
-  for (const key of ["alphawriting", "keepaspect", "usertextures", "usertexturereference"])
+  if (alphaWritingUsed(pass.alphawriting)) unsupported.add("material:alphawriting");
+  for (const key of ["keepaspect", "usertextures", "usertexturereference"])
     if (active(pass[key])) unsupported.add(`material:${key}`);
   for (const [key, value] of Object.entries(pass))
     if (
@@ -419,6 +488,8 @@ export function checkEffectFeatures(
   }
   for (const [key, value] of Object.entries(effect))
     if (!SUPPORTED_EFFECT.has(key) && active(value)) unsupported.add(`effect:${label}:${key}`);
+  // effect.json 里的关键帧（语料 0 处，防御用）；实例上的已由 `checkSceneFeatures` 扫过
+  scanValue(effect, unsupported);
   const fbos = new Set<string>();
   for (const fbo of effect.fbos ?? []) {
     if (typeof fbo.name !== "string" || !fbo.name) unsupported.add(`effect:${label}:fbo-name`);
@@ -530,14 +601,21 @@ function controlPointsUsed(raw: unknown): boolean {
  * - 其它顶层键：`particle:system:<键>`；顶层键写成绑定：`particle:binding:system:<键>`（WPE 按 `isNumeric` / `isString`
  *   读，对象当缺键，语义没核对）。`emitter` / `initializer` / `operator` 不是数组时同样报 `particle:system:<键>`。
  * - renderer 多于一个：`particle:renderers`（多个 renderer 的绘制没读）。
+ * - 属性关键帧（P4a 步骤 5）：系统级键、模块字段写成 `{animation: {…}, value}` 报 `value:animation`，与绑定分开报；
+ *   控制点与子系统条目整段 `scanValue`。
  * 值为 null 的键一律当缺键。
  */
 export function checkParticleFeatures(system: JsonObject, orthographic: boolean, unsupported: Set<string>): void {
   for (const [key, value] of Object.entries(system)) {
     if (value === null || value === undefined) continue;
     if (isUserBinding(value) || isScriptValue(value)) unsupported.add(`particle:binding:system:${key}`);
+    // 关键帧和绑定分开报（P4a 步骤 5）：同时挂了 `user` / `script` 两个键都报
+    if (isKeyframedValue(value)) unsupported.add("value:animation");
     if (!PARTICLE_SYSTEM_KEYS.has(key)) unsupported.add(`particle:system:${key}`);
   }
+  // 控制点与子系统条目不走模块表，整段扫一次关键帧
+  scanValue(system.controlpoint, unsupported);
+  scanValue(system.children, unsupported);
   const { flags, animationMode, sequenceMultiplier } = readParticleSystem(system);
   if (flags & 1) unsupported.add("particle:flags:world");
   if (flags & 2) unsupported.add("particle:flags:2");
@@ -562,7 +640,11 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
       }
       for (const issue of reading.issues)
         unsupported.add(
-          issue.kind === "binding" ? `particle:binding:${module}:${issue.field}` : `particle:${module}:${issue.field}`,
+          issue.kind === "animation"
+            ? "value:animation"
+            : issue.kind === "binding"
+              ? `particle:binding:${module}:${issue.field}`
+              : `particle:${module}:${issue.field}`,
         );
     }
   }

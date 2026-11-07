@@ -8,6 +8,9 @@
  *
  * 层级（P4a 步骤 1）：图层存的都是本地值，世界矩阵与继承后的可见性由渲染器按父链现算。所以写一个图层的
  * `origin`、`angles`、`scale`、`visible` 时，它和全部子孙一起标脏；`alpha`、`color`、`brightness` 不继承，只标自己。
+ *
+ * 粒子（P4a 步骤 5）：`instanceoverride` 的标量存在 `particleInstances`，写入用编译期同一条取值规则（`instanceScalar`）、
+ * 标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘。
  */
 import {
   bindingValue,
@@ -19,6 +22,7 @@ import {
 } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
+import { instanceScalar, instanceValues, type ParticleInstanceValues } from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 
 export interface LayerState {
@@ -48,6 +52,8 @@ export interface DirtyState {
   structures: Set<number>;
   /** `ambientcolor` / `skylightcolor` 写过：刷进声明了这两个 uniform 的 draw（L5）。 */
   lights: boolean;
+  /** `instanceoverride` 改过的粒子层（`objects` 下标）：交给模拟器从基值重新乘（P4a 步骤 5）。 */
+  particles: Set<number>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -144,11 +150,17 @@ export class SceneState {
   bloomEnabled: boolean;
   /** 起始值 = `bundle.general.fields`。清屏两项不标脏，`encode` 每帧读（L4）。 */
   general: GeneralValues;
+  /**
+   * 粒子层的 `instanceoverride` 标量（`objects` 下标 → 值），起始值 = 编译期的 `particle.instance`（P4a 步骤 5）。
+   * 只是数据：`GpuScene.sync` 把脏的交给模拟器（`ParticleSystem.setInstance`）。
+   */
+  readonly particleInstances = new Map<number, ParticleInstanceValues>();
   private dirtyLayers = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
   private dirtyStructures = new Set<number>();
   private lightsDirty = false;
+  private dirtyParticles = new Set<number>();
   /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
   private readonly frozenLayers = new Set<number>();
 
@@ -176,8 +188,10 @@ export class SceneState {
     const constants = new Map<TargetKey, Record<string, number[]>>();
     const effects = new Map<string, EffectState>();
     const children = new Map<number, number[]>();
+    const instances = new Map<number, ParticleInstanceValues>();
     for (const layer of bundle.layers) {
       layers.set(layer.object, layerStateOf(layer));
+      if (layer.particle) instances.set(layer.object, instanceValues(layer.particle.instance));
       if (layer.parent !== null) {
         const list = children.get(layer.parent);
         if (list) list.push(layer.object);
@@ -197,7 +211,7 @@ export class SceneState {
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
     }
     const { bloom, postprocess, fields } = bundle.general;
-    return new SceneState(
+    const state = new SceneState(
       layers,
       constants,
       { ...bloom, tint: [...bloom.tint] },
@@ -207,6 +221,8 @@ export class SceneState {
       { ...fields },
       children,
     );
+    for (const [object, values] of instances) state.particleInstances.set(object, values);
+    return state;
   }
 
   /** 自身与全部子孙（`objects` 下标，自身在前）。环在编译期已断开，这里按走过的节点兜底。 */
@@ -279,6 +295,14 @@ export class SceneState {
       if (target.key === "ambientcolor" || target.key === "skylightcolor") this.lightsDirty = true;
       return "applied";
     }
+    if (target.kind === "particle-instance") {
+      const values = this.particleInstances.get(target.object);
+      if (!values) return "applied";
+      // 取值规则与编译期相同（`instanceScalar`），条件先换成布尔
+      values[target.field] = instanceScalar(conditioned(binding, raw));
+      this.dirtyParticles.add(target.object);
+      return "applied";
+    }
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
       if (layer) {
@@ -312,12 +336,14 @@ export class SceneState {
       bloom: this.bloomDirty,
       structures: this.dirtyStructures,
       lights: this.lightsDirty,
+      particles: this.dirtyParticles,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
     this.bloomDirty = false;
     this.dirtyStructures = new Set();
     this.lightsDirty = false;
+    this.dirtyParticles = new Set();
     return dirty;
   }
 }

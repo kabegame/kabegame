@@ -25,8 +25,11 @@
  *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。
  * - 粒子（P4a 步骤 4）：粒子层是计划里的 `particles` 步骤，和图像步骤按 `objects` 顺序混排、画在同一个场景 pass 里。
  *   每个粒子层一个 `ParticleSystem`（种子默认随机，探针可固定；建场景时预热），顶点缓冲按 `maxcount` 分配，索引缓冲全场一份、
- *   只建一次。`update` 按帧时间步进（不可见的不步进），`encode` 把列写成顶点、`writeBuffer` 后 `drawIndexed`。
+ *   只建一次。`update` 按帧时间步进，`encode` 把列写成顶点、`writeBuffer` 后 `drawIndexed`。
  *   MVP = 视图投影 × 对象世界矩阵，`flags & 4` 换透视粒子的视图投影。混合、纹理、材质常量走和图像 pass 相同的路径。
+ * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
+ *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
+ *   释放，换场景或重编译时新场景重新预热。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -34,6 +37,7 @@ import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compil
 import { FBO_FORMATS } from "../compile/tex";
 import { SeededRandom } from "../particles/random";
 import { ParticleSystem } from "../particles/system";
+import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import { particleVertexLayout, quadIndices, writeVertices, type ParticleVertexLayout } from "../particles/vertices";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
@@ -154,6 +158,52 @@ interface ParticleDraw {
   count: number;
   /** 步进过、还没写成顶点：`encode` 里写 `vertices` 并 `writeBuffer`。 */
   stale: boolean;
+}
+
+/** 一个粒子层最近若干帧的开销样本（dev 探针，`GpuScene.profileParticles`）。 */
+interface ParticleTiming {
+  /** `ParticleSystem.step` 的用时（毫秒）。 */
+  simulate: number[];
+  /** `writeVertices` 的用时（毫秒）。 */
+  vertices: number[];
+  /** `queue.writeBuffer` 的用时（毫秒，只是排队，不含 GPU 拷贝）。 */
+  upload: number[];
+  /** 步进后的存活数。 */
+  alive: number[];
+}
+
+/** 粒子开销记录每层最多留的帧数。 */
+const PARTICLE_TIMING_FRAMES = 600;
+
+function recordSample(list: number[], value: number): void {
+  list.push(value);
+  if (list.length > PARTICLE_TIMING_FRAMES) list.splice(0, list.length - PARTICLE_TIMING_FRAMES);
+}
+
+/** 一组样本的均值、p95 与最大值（保留两位小数）；没有样本时都是 0。 */
+export function timingStats(samples: readonly number[]): { mean: number; p95: number; max: number } {
+  const round = (value: number) => Math.round(value * 100) / 100;
+  if (!samples.length) return { mean: 0, p95: 0, max: 0 };
+  const sorted = [...samples].sort((a, b) => a - b);
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  return {
+    mean: round(mean),
+    p95: round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]),
+    max: round(sorted[sorted.length - 1]),
+  };
+}
+
+/** 一个粒子层的开销统计（`GpuScene.particleProfile`）。 */
+export interface ParticleProfile {
+  object: number;
+  name: string;
+  capacity: number;
+  /** 记录到的模拟帧数（最多 600）。 */
+  frames: number;
+  alive: ReturnType<typeof timingStats>;
+  simulateMs: ReturnType<typeof timingStats>;
+  verticesMs: ReturnType<typeof timingStats>;
+  uploadMs: ReturnType<typeof timingStats>;
 }
 
 /** 粒子层的运行时选项（`GpuScene.build`）。 */
@@ -381,6 +431,8 @@ export class GpuScene {
   private readonly particleOrdinals = new Map<number, number>();
   private readonly particlePasses: 1 | 2;
   private readonly particleSeed: number;
+  /** 粒子开销记录（dev 探针，`profileParticles` 打开时才有）。 */
+  private particleTimings: Map<Draw, ParticleTiming> | null = null;
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
   private hdr = false;
   private eye: readonly number[] = [];
@@ -944,9 +996,11 @@ export class GpuScene {
   /**
    * 一个粒子层的模拟器：种子 = `particleSeed` + 第几个粒子层，建好就预热（C1）。顶点按 `maxcount` 分配，
    * 第一次 `encode` 时写（`stale`）。布局的问题 `checkRenderable` 已经查过。
+   * `instanceoverride` 取状态里的当前值（建场景时与编译期相同；万一单图层重建，用的也是就地写过的值）。
    */
-  private createParticles(layer: SceneLayer, program: GpuProgram): ParticleDraw {
-    const def = layer.particle!;
+  private createParticles(layer: SceneLayer, program: GpuProgram, state: SceneState): ParticleDraw {
+    const compiled = layer.particle!;
+    const def = { ...compiled, instance: { ...compiled.instance, ...state.particleInstances.get(layer.object) } };
     const ordinal = this.particleOrdinals.get(layer.object) ?? 0;
     const system = new ParticleSystem(def, new SeededRandom((this.particleSeed + ordinal) >>> 0), this.particlePasses);
     system.prewarm();
@@ -971,7 +1025,7 @@ export class GpuScene {
     let particles: ParticleDraw | null = null;
     if (step.kind === "particles") {
       // 粒子：每帧由 `encode` 写，按容量分配
-      particles = this.createParticles(layer, program);
+      particles = this.createParticles(layer, program, state);
       vertexBuffer = this.own(
         device.createBuffer({
           label,
@@ -1158,6 +1212,11 @@ export class GpuScene {
       for (const draw of this.drawsByLayer.get(object) ?? []) this.refreshLayer(draw, state, worlds);
     for (const key of dirty.passes) for (const draw of this.drawsByPass.get(key) ?? []) this.refreshPass(draw, state);
     if (dirty.lights) for (const draw of this.draws) this.refreshLights(draw, state);
+    // `instanceoverride` 改值：模拟器从基值重新乘，不重建缓冲、不清粒子（P4a 步骤 5，C5）
+    for (const object of dirty.particles) {
+      const values = state.particleInstances.get(object);
+      if (values) for (const draw of this.drawsByLayer.get(object) ?? []) draw.particles?.system.setInstance(values);
+    }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
   }
@@ -1310,7 +1369,8 @@ export class GpuScene {
 
   /**
    * 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。粒子按 `frame.frametime` 步进一帧
-   * （`stepParticles`）：`state` 给出时不可见的粒子层不步进，不给（只核对 uniform 的单测）时全部步进。
+   * （`stepParticles`）：`state` 给出时不可见的粒子层走 `suspend`（不发射、有存活粒子就清空），不给（只核对 uniform 的单测）
+   * 时全部步进。
    */
   update(frame: FrameInput, state?: SceneState): void {
     this.stepParticles(frame.frametime, state);
@@ -1325,16 +1385,27 @@ export class GpuScene {
   }
 
   /**
-   * 全部粒子层按帧时间步进一帧（`ParticleSystem.step` 乘 `instanceoverride.rate`）；帧时间不是正数（补画帧）时不动。
-   * `state` 给出时跳过不可见的粒子层：不可见时 WPE 不发射、清空存活粒子是读码结论（步骤 5 再做），这里先只是不步进。
+   * 全部粒子层按帧时间步进一帧（`ParticleSystem.step` 乘 `instanceoverride.rate`）；帧时间不是正数（补画帧、暂停）时不动。
+   * `state` 给出时，不可见（含祖先，`effectiveVisible`）的粒子层不发射、不步进，还有存活粒子就清空并复位 emitter 计时
+   * （`ParticleSystem.suspend`，C8 读码）；重新可见时照常步进，不重新预热。清空后标 `stale`：之后哪一帧再画，都先写成 0 个。
    * dev 探针按 dt 序列回放时直接调它。
    */
   stepParticles(frametime: number, state?: SceneState): void {
     if (!(frametime > 0)) return;
     for (const draw of this.draws) {
       const particles = draw.particles;
-      if (!particles || (state && !effectiveVisible(draw.object, state.layers))) continue;
+      if (!particles) continue;
+      if (state && !effectiveVisible(draw.object, state.layers)) {
+        if (particles.system.suspend()) particles.stale = true;
+        continue;
+      }
+      const timing = this.particleTimings?.get(draw);
+      const started = timing ? performance.now() : 0;
       particles.system.step(frametime);
+      if (timing) {
+        recordSample(timing.simulate, performance.now() - started);
+        recordSample(timing.alive, particles.system.alive);
+      }
       particles.stale = true;
     }
   }
@@ -1343,20 +1414,38 @@ export class GpuScene {
   private uploadParticles(draw: Draw, particles: ParticleDraw): void {
     if (!particles.stale) return;
     particles.stale = false;
+    const timing = this.particleTimings?.get(draw);
+    const started = timing ? performance.now() : 0;
     particles.count = writeVertices(particles.system, particles.layout, particles.vertices);
-    if (!particles.count) return;
-    const bytes = particles.count * 4 * particles.layout.stride * 4;
-    this.device.queue.writeBuffer(
-      draw.vertexBuffer,
-      0,
-      particles.vertices.buffer,
-      particles.vertices.byteOffset,
-      bytes,
-    );
+    const written = timing ? performance.now() : 0;
+    if (particles.count) {
+      const bytes = particles.count * 4 * particles.layout.stride * 4;
+      this.device.queue.writeBuffer(
+        draw.vertexBuffer,
+        0,
+        particles.vertices.buffer,
+        particles.vertices.byteOffset,
+        bytes,
+      );
+    }
+    if (timing) {
+      recordSample(timing.vertices, written - started);
+      recordSample(timing.upload, performance.now() - written);
+    }
   }
 
-  /** 各粒子层当前的数量（dev 探针用）：存活数、高水位与容量。 */
-  particleStats(): { object: number; name: string; alive: number; highWater: number; capacity: number }[] {
+  /**
+   * 各粒子层当前的数量（dev 探针用）：存活数、高水位与容量。`detail` 时加上存活粒子的分布（位置范围、尺寸、alpha），
+   * 供和 WPE 比统计量（`summarizeParticles`）。
+   */
+  particleStats(detail = false): {
+    object: number;
+    name: string;
+    alive: number;
+    highWater: number;
+    capacity: number;
+    summary?: ParticleSummary;
+  }[] {
     return [...this.draws].flatMap((draw) =>
       draw.particles
         ? [
@@ -1366,10 +1455,41 @@ export class GpuScene {
               alive: draw.particles.system.alive,
               highWater: draw.particles.system.highWater,
               capacity: draw.particles.system.columns.capacity,
+              ...(detail ? { summary: summarizeParticles(draw.particles.system) } : {}),
             },
           ]
         : [],
     );
+  }
+
+  /**
+   * dev 探针：开始（`true`）或停止（`false`，同时清空）记录粒子开销。打开后每个粒子层记最近 600 帧的模拟、写顶点与上传
+   * 用时（`stepParticles` / `uploadParticles`），由 `particleProfile` 汇总。关着时只多一次 null 判断。
+   */
+  profileParticles(enabled: boolean): void {
+    if (!enabled) {
+      this.particleTimings = null;
+      return;
+    }
+    this.particleTimings ??= new Map();
+    for (const draw of this.draws)
+      if (draw.particles && !this.particleTimings.has(draw))
+        this.particleTimings.set(draw, { simulate: [], vertices: [], upload: [], alive: [] });
+  }
+
+  /** dev 探针：各粒子层的开销统计（毫秒）；没打开记录时为空。 */
+  particleProfile(): ParticleProfile[] {
+    if (!this.particleTimings) return [];
+    return [...this.particleTimings].map(([draw, timing]) => ({
+      object: draw.object,
+      name: draw.layer.name,
+      capacity: draw.particles!.system.columns.capacity,
+      frames: timing.simulate.length,
+      alive: timingStats(timing.alive),
+      simulateMs: timingStats(timing.simulate),
+      verticesMs: timingStats(timing.vertices),
+      uploadMs: timingStats(timing.upload),
+    }));
   }
 
   /**
@@ -1526,5 +1646,6 @@ export class GpuScene {
     this.snapshot = null;
     this.bloom = null;
     this.particleIndices = null;
+    this.particleTimings = null;
   }
 }

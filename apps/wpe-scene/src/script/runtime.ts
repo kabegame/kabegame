@@ -49,6 +49,8 @@ function targetKey(target: ScriptTarget): string {
       return `general/${target.key}`;
     case "script-property":
       return `${target.script}/scriptproperties/${target.key}`;
+    case "particle-instance":
+      return `objects/${target.object}/instanceoverride/${target.field}`;
     default:
       return target.path;
   }

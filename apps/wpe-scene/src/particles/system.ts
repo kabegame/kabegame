@@ -11,12 +11,14 @@
  *    写缺省值 → 按 JSON 顺序跑 initializer；新粒子当帧 `age = 0`；
  * 3. operator 一遍或两遍：每遍开头重置当前值，再按 JSON 顺序执行。
  *
- * 序列帧（P4b）、控制点（P4c）、子系统、可见性与暂停（步骤 5）不在这里。表外模块（`skipped`）不执行：场景已因
- * `particle:<类别>:<名字>` 退回预览图。
+ * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
+ * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热）；暂停时渲染器不步进。
+ *
+ * 序列帧（P4b）、控制点（P4c）、子系统不在这里。表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
  */
-import type { ParticleInstance, SceneParticle } from "../compile/particles";
+import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
 import { ParticleColumns } from "./columns";
-import { emissionCount, emitterState, type EmitterState } from "./emitters";
+import { emissionCount, emitterState, resetEmitterTiming, type EmitterState } from "./emitters";
 import { f32 } from "./f32";
 import {
   INSTANCE_DISABLE_FLAGS,
@@ -27,6 +29,7 @@ import {
   type ParticleCategory,
   type ParticleFields,
   type ParticleModule,
+  type ParticleModuleDef,
   type ParticleModuleRun,
   type ParticleRunContext,
 } from "./modules";
@@ -73,13 +76,20 @@ export function operatorPass(dt: number, frameDt: number, passes: 1 | 2): { h: n
 }
 
 /** 各项 `instanceoverride` 的乘数；系统 `flags` 的对应位禁用时为 1（C3）。 */
-export function instanceMultipliers(instance: ParticleInstance, flags: number): InstanceMultipliers {
+export function instanceMultipliers(
+  instance: Pick<ParticleInstanceValues, InstanceScale>,
+  flags: number,
+): InstanceMultipliers {
   const pick = (key: InstanceScale) => (flags & INSTANCE_DISABLE_FLAGS[key] ? 1 : instance[key]);
   return { size: pick("size"), speed: pick("speed"), count: pick("count"), lifetime: pick("lifetime") };
 }
 
 interface ResolvedModule {
   name: string;
+  def: ParticleModuleDef;
+  /** 解析后的基值（没乘 `instanceoverride`）：改值时从这里重新乘。 */
+  base: ParticleFields;
+  /** 模拟用的字段（已乘、已舍入）。 */
   fields: ParticleFields;
   run: ParticleModuleRun;
 }
@@ -114,10 +124,12 @@ export class ParticleSystem {
   private readonly emitters: ResolvedEmitter[];
   private readonly initializers: ResolvedModule[];
   private readonly operators: ResolvedModule[];
+  /** 当前的 `instanceoverride` 标量（起始值 = `def.instance`，`setInstance` 改）。 */
+  private instance: ParticleInstanceValues;
   /** 新粒子的 `a0`（`instanceoverride.alpha`）。 */
-  private readonly alpha0: number;
+  private alpha0 = 1;
   /** `instanceoverride.rate`，下限 0.01。 */
-  private readonly rate: number;
+  private rate = 1;
   /** 下一次找空槽的起点：它之前没有空槽。 */
   private searchFrom = 0;
   private readonly context: ParticleRunContext;
@@ -127,8 +139,9 @@ export class ParticleSystem {
     this.random = random;
     this.passes = passes;
     this.columns = new ParticleColumns(def.maxcount, particleColumnFlags(def));
-    // 从基值乘，不累乘（C5）。`colorn` / `color` / `brightness` 的 HSV 路径不做（能力表报 `object:instanceoverride`）
-    const multipliers = instanceMultipliers(def.instance, def.flags);
+    this.instance = instanceValues(def.instance);
+    // 从基值乘，不累乘（C5）。`colorn` / `color` / `brightness` 不做（能力表按 `checkParticleInstance` 报）
+    const multipliers = instanceMultipliers(this.instance, def.flags);
     const resolve = (category: ParticleCategory, modules: readonly ParticleModule[]): ResolvedModule[] =>
       modules.flatMap((module) => {
         const known = particleModuleDef(category, module.name);
@@ -136,9 +149,8 @@ export class ParticleSystem {
           this.skipped.push(`${category}:${module.name}`);
           return [];
         }
-        return [
-          { name: module.name, fields: resolveParticleFields(known, module.fields, multipliers), run: known.run },
-        ];
+        const fields = resolveParticleFields(known, module.fields, multipliers);
+        return [{ name: module.name, def: known, base: module.fields, fields, run: known.run }];
       });
     this.emitters = resolve("emitter", def.emitters).map((emitter) => ({
       ...emitter,
@@ -146,9 +158,49 @@ export class ParticleSystem {
     }));
     this.initializers = resolve("initializer", def.initializers);
     this.operators = resolve("operator", def.operators);
-    this.alpha0 = f32(def.instance.alpha);
-    this.rate = f32(Math.max(0.01, def.instance.rate));
+    this.applyScalars();
     this.context = { columns: this.columns, random, slot: 0, count: 0, h: 0, k: 0 };
+  }
+
+  /** 当前的 `instanceoverride` 标量（一份拷贝）。 */
+  get instanceValues(): ParticleInstanceValues {
+    return { ...this.instance };
+  }
+
+  /**
+   * `instanceoverride` 运行时改值（C5「运行时改值」，`FUN_140230650` 脏时调 `FUN_14022bd40(sys, 1)`）：从基值重新乘、不累乘，
+   * 不清粒子、不改容量（`count` 只乘 emitter 的 `rate` 与 `maxtoemitperperiod`）。
+   * - 存活粒子保留出生时写进列的 life、颜色、尺寸、`a0`；`size`、`lifetime`、`alpha`、发射速度与 `velocityrandom` 等只影响之后出生的。
+   * - 每帧现算的参数下一帧就用新值：`rate`（dt' = dt·rate，下限 0.01）、`count`（发射数量）、`speed` 乘的 operator 字段
+   *   （重力、角力、振荡频率，存活粒子也用）。
+   * - 系统 `flags` bit4–7 禁用的项照旧不乘（C3）。`brightness` 不影响模拟。
+   * - 已结束、新 `rate > 0` 的 emitter 重新打开（`param_2 = 1` 的尾段，`0x14022c1f0` 起）；累积余数等计时保留。
+   */
+  setInstance(values: Partial<ParticleInstanceValues>): void {
+    this.instance = { ...this.instance, ...values };
+    const multipliers = instanceMultipliers(this.instance, this.def.flags);
+    for (const module of [...this.emitters, ...this.initializers, ...this.operators])
+      module.fields = resolveParticleFields(module.def, module.base, multipliers);
+    this.applyScalars();
+    for (const emitter of this.emitters)
+      if (emitter.state.ended && (emitter.fields.rate as number) > 0) emitter.state.ended = false;
+  }
+
+  /** 不乘字段、由模拟器自己用的两项：新粒子的 `a0` 与时间缩放 `rate`（下限 0.01）。 */
+  private applyScalars(): void {
+    this.alpha0 = f32(this.instance.alpha);
+    this.rate = f32(Math.max(0.01, this.instance.rate));
+  }
+
+  /**
+   * 不可见的一帧（C8，`FUN_140230650` 的不可见分支，读码、未实测）：不发射、不步进；还有存活粒子就清空全部粒子，并复位每个
+   * emitter 的计时（`resetEmitterTiming`，`FUN_14022f6c0`）。返回这次有没有清空。重新可见后照常 `step`，**不重新预热**。
+   */
+  suspend(): boolean {
+    if (this.alive === 0) return false;
+    for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
+    this.clear();
+    return true;
   }
 
   /** 一帧。`frameDt` 是当帧的 `g_Frametime`（渲染器已钳到 `[0.0001, 0.25]`），这里乘 `instanceoverride.rate` 得 `dt'`。 */

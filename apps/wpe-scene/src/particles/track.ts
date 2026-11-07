@@ -66,6 +66,58 @@ export function particleSnapshot(system: ParticleSystem): ParticleTrackParticle[
   return out;
 }
 
+/**
+ * 一个系统存活粒子的分布（P4a 步骤 5 的验收：和 WPE 比粒子数、位置范围、尺寸分布）。字段同 `particleSnapshot`：
+ * 位置、当前尺寸（`size`，已是写进顶点的值）、当前 alpha。没有存活粒子时三项为 null。
+ */
+export interface ParticleSummary {
+  alive: number;
+  position: { min: number[]; max: number[] } | null;
+  size: { min: number; max: number; mean: number; p05: number; p50: number; p95: number } | null;
+  alpha: { min: number; max: number; mean: number } | null;
+}
+
+export function summarizeParticles(system: ParticleSystem): ParticleSummary {
+  const c = system.columns;
+  const sizes: number[] = [];
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  // 粒子可达数十万个：逐个累加，不展开成函数参数
+  let alphaMin = Infinity;
+  let alphaMax = -Infinity;
+  let alphaSum = 0;
+  for (let i = 0; i < system.highWater; i++) {
+    if (c.life[i] === 0) continue;
+    for (let axis = 0; axis < 3; axis++) {
+      const value = c.position[axis][i];
+      if (value < min[axis]) min[axis] = value;
+      if (value > max[axis]) max[axis] = value;
+    }
+    sizes.push(c.size[i]);
+    const alpha = c.alpha[i];
+    if (alpha < alphaMin) alphaMin = alpha;
+    if (alpha > alphaMax) alphaMax = alpha;
+    alphaSum += alpha;
+  }
+  if (!sizes.length) return { alive: 0, position: null, size: null, alpha: null };
+  sizes.sort((a, b) => a - b);
+  const at = (q: number) => sizes[Math.min(sizes.length - 1, Math.floor(sizes.length * q))];
+  const sizeSum = sizes.reduce((sum, value) => sum + value, 0);
+  return {
+    alive: sizes.length,
+    position: { min, max },
+    size: {
+      min: sizes[0],
+      max: sizes[sizes.length - 1],
+      mean: sizeSum / sizes.length,
+      p05: at(0.05),
+      p50: at(0.5),
+      p95: at(0.95),
+    },
+    alpha: { min: alphaMin, max: alphaMax, mean: alphaSum / sizes.length },
+  };
+}
+
 export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   const seed = options.seed ?? 1;
   const names = new Set<string>();

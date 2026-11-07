@@ -10,6 +10,7 @@
  * （单测用 `Proxy` 记录编译期读过的属性名，断言都在绑定表里）。
  */
 import { numbers, resolveValue, type SceneScalar, type SceneValue } from "./model";
+import type { InstanceField } from "./particles";
 import type { BloomParams } from "./postprocess";
 
 /** 目标的稳定键：scene.json 里的坐标。 */
@@ -22,7 +23,9 @@ export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "br
 
 export type RecompileReason =
   | "postprocess-hdr" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）
-  | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）、灯对象字段（`lights.ts` 的编译期常量）
+  // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）、灯对象字段（`lights.ts` 的编译期常量）、
+  // HDR 下生效的粒子 `instanceoverride.brightness`（没实现，改成非默认值时重编译后由能力表报不支持）
+  | "layer-structure";
 
 type GeneralField =
   | { type: "vec3"; fallback: readonly [number, number, number] }
@@ -99,6 +102,11 @@ export type BindingTarget =
   | { kind: "bloom-enabled" }
   /** `GENERAL_FIELDS` 的字段：只改 `SceneState.general`，不重编译。 */
   | { kind: "general"; key: GeneralKey }
+  /**
+   * 粒子对象 `instanceoverride` 的标量键（P4a 步骤 5，`rea-p4a.md` C5）：就地写，`GpuScene.sync` 交给模拟器从基值重新乘，
+   * 存活粒子不动。`object` 是 `objects` 下标。
+   */
+  | { kind: "particle-instance"; object: number; field: InstanceField }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 export interface SceneBinding {
@@ -128,6 +136,18 @@ export function isScriptValue(value: unknown): boolean {
     !Array.isArray(value) &&
     typeof (value as { script?: unknown }).script === "string"
   );
+}
+
+/**
+ * `value` 是不是属性关键帧动画 `{animation: {c0…, options}, value}`（`sample-gaps.md` §3）：`animation` 必须是对象，
+ * puppet 的 `animationlayers[i].animation` 是整数 id，不算。同时挂了 `user` / `script` 也算：三种绑定在 WPE 里并存
+ * （§3.4，`FUN_1401a4db0`），每帧谁生效没查清。关键帧还没实现，`resolveValue` 把它解析成 `undefined`、属性静默退回缺省值，
+ * 所以能力表一律报 `value:animation`。
+ */
+export function isKeyframedValue(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const animation = (value as { animation?: unknown }).animation;
+  return !!animation && typeof animation === "object" && !Array.isArray(animation);
 }
 
 /** `{user}` 里的属性名与条件；不是用户绑定返回 null。 */

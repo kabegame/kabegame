@@ -349,21 +349,21 @@ describe("解析：instanceoverride 的静态值", () => {
 });
 
 describe("能力表：粒子", () => {
-  it("粒子对象报 particle:pending，不再报 object:particle", () => {
+  it("粒子对象不报 object:particle，也不再报临时键 particle:pending（P4a 步骤 5 删掉）", () => {
     const keys = new Set<string>();
     checkObjectFeatures({ id: 1, particle: "particles/p.json", origin: "1 2 3", visible: true }, keys);
-    expect([...keys]).toEqual(["particle:pending"]);
+    expect([...keys]).toEqual([]);
   });
 
   it("粒子对象带 effects 报 particle:effects；空数组不报", () => {
     const keys = new Set<string>();
     checkObjectFeatures({ id: 1, particle: "p.json", effects: [] }, keys);
-    expect([...keys]).toEqual(["particle:pending"]);
+    expect([...keys]).toEqual([]);
     checkObjectFeatures({ id: 1, particle: "p.json", effects: [{ file: "effects/tint/effect.json" }] }, keys);
-    expect([...keys].sort()).toEqual(["particle:effects", "particle:pending"]);
+    expect([...keys].sort()).toEqual(["particle:effects"]);
   });
 
-  it("粒子对象的 instanceoverride 照对象规则报，其它对象键不额外报", () => {
+  it("粒子对象的 instanceoverride 不按对象规则报（由 checkParticleInstance 按键检查）；其它对象上照未知键报", () => {
     const keys = new Set<string>();
     checkObjectFeatures(
       {
@@ -374,18 +374,22 @@ describe("能力表：粒子", () => {
         visible: { user: { name: "style", condition: "1" }, value: false },
         parallaxDepth: "1 1",
         locktransforms: false,
-        instanceoverride: { id: 12 },
+        instanceoverride: { id: 12, count: 2, colorn: "1 0 0" },
       },
       keys,
     );
-    expect([...keys].sort()).toEqual(["object:instanceoverride", "particle:pending"]);
+    expect([...keys]).toEqual([]);
+    // 图像对象上 WPE 不读 instanceoverride，照未知键报（语料 0 个）
+    const image = new Set<string>();
+    checkObjectFeatures({ id: 2, image: "models/a.json", instanceoverride: { count: 2 } }, image);
+    expect([...image]).toEqual(["object:instanceoverride"]);
   });
 
   it("粒子对象的 alpha、color、brightness 取非默认值或绑了属性 / 脚本时报 particle:object:<键>（P4a 步骤 4）", () => {
     const keysOf = (extra: Record<string, unknown>) => {
       const keys = new Set<string>();
       checkObjectFeatures({ id: 1, particle: "p.json", ...extra }, keys);
-      return [...keys].filter((key) => key !== "particle:pending").sort();
+      return [...keys].sort();
     };
     // 默认值（编辑器照写的那几种写法）与缺键都不报
     expect(keysOf({ alpha: 1, color: "1 1 1", brightness: 1 })).toEqual([]);
@@ -792,10 +796,12 @@ describe("compileScene：粒子对象", () => {
     expect(imageLayer.particle).toBeNull();
     // 粒子 pass 无条件写 TEX0FORMAT（槽 0 是 `_rt_FullFrameBuffer`，格式 0）；图层材质不写
     expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual(["0", undefined]);
-    // object:instanceoverride 仍由对象规则报（步骤 5 去掉）；g_OrientationUp 只在图层材质里报
-    expect(bundle.unsupported).toEqual(["object:instanceoverride", "particle:pending", "uniform:g_OrientationUp"]);
-    // instanceoverride 的绑定不读用户属性、不登记（步骤 5）
-    expect(bundle.bindings).toEqual([]);
+    // g_OrientationUp 只在图层材质里报；instanceoverride 的 count 已实现，不报（P4a 步骤 5）
+    expect(bundle.unsupported).toEqual(["uniform:g_OrientationUp"]);
+    // instanceoverride 的 {user} 登记成就地目标（步骤 5）
+    expect(bundle.bindings).toEqual([
+      { property: "count", target: { kind: "particle-instance", object: 0, field: "count" } },
+    ]);
     expect(bundle.general.perspectiveOverrideFov).toBeCloseTo((95 * Math.PI) / 180, 12);
   });
 
@@ -831,14 +837,14 @@ describe("compileScene：粒子对象", () => {
     const missing = await compile(
       memoryReader(files({ "P:/p/scene.json": scene([{ id: 1, particle: "particles/none.json" }]) })),
     );
-    expect(missing.unsupported).toEqual(["particle:missing:particles/none.json", "particle:pending"]);
+    expect(missing.unsupported).toEqual(["particle:missing:particles/none.json"]);
     expect(missing.layers[0].particle).toBeNull();
     const broken = await compile(
       memoryReader(
         files({ "P:/p/scene.json": scene([{ id: 1, particle: "particles/p.json" }]), "P:/p/particles/p.json": "{" }),
       ),
     );
-    expect(broken.unsupported).toEqual(["particle:parse:particles/p.json", "particle:pending"]);
+    expect(broken.unsupported).toEqual(["particle:parse:particles/p.json"]);
   });
 
   it("perspectiveoverridefov 解析进 SceneGeneral（弧度，钳制）；透视场景用透视缺省值", async () => {
@@ -880,7 +886,7 @@ const diskReader: SceneReader = {
 };
 
 describe.skipIf(!root || !existsSync(wasm))("本机样本：shimmering_particles", () => {
-  it("粒子层都有 particle、pass 编译成功；粒子相关的不支持项只剩 particle:pending 与 object:instanceoverride", async () => {
+  it("粒子层都有 particle、pass 编译成功；没有不支持项（P4a 步骤 5 解锁）", async () => {
     const bundle = await compileScene({
       projectDir: join(root!, "projects", "defaultprojects", "shimmering_particles"),
       sceneAssets: [join(root!, "assets")],
@@ -903,7 +909,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机样本：shimmering_particles
       expect(layer.particle!.passes[0].key).toBe(`objects/${layer.object}/particle/passes/0`);
       expect(layer.particle!.passes[0].program).not.toBeNull();
     }
-    expect(bundle.unsupported).toEqual(["object:instanceoverride", "particle:pending"]);
+    expect(bundle.unsupported).toEqual([]);
     const dust = particles[0].particle!;
     expect(dust).toMatchObject({ maxcount: 200, starttime: 50, flags: 0, orthographic: true });
     expect(dust.renderers.map((module) => module.name)).toEqual(["sprite"]);
@@ -917,5 +923,47 @@ describe.skipIf(!root || !existsSync(wasm))("本机样本：shimmering_particles
     expect(motes).toMatchObject({ maxcount: 400, starttime: 200, flags: 4, instance: { alpha: 10, count: 1 } });
     // 两种材质 COMBO 不同，各是一个程序；TEX0FORMAT 走了缓存键，不会和图层材质混用
     expect(new Set(particles.map((layer) => layer.particle!.passes[0].program)).size).toBe(2);
+  }, 60000);
+
+  it("instanceoverride 的 count 登记成就地目标；超高档（HDR 判定）下同样没有不支持项（P4a 步骤 5）", async () => {
+    const bundle = await compileScene({
+      projectDir: join(root!, "projects", "defaultprojects", "shimmering_particles"),
+      sceneAssets: [join(root!, "assets")],
+      reader: diskReader,
+      translator: await Wpesl2wgsl.fromBytes(readFileSync(wasm)),
+      postprocess: "ultra",
+      exhaustive: true,
+    });
+    expect(bundle.unsupported).toEqual([]);
+    expect(
+      bundle.bindings.filter((binding) => binding.target.kind === "particle-instance").map((binding) => binding.target),
+    ).toEqual([
+      { kind: "particle-instance", object: 2, field: "count" },
+      { kind: "particle-instance", object: 3, field: "count" },
+    ]);
+  }, 60000);
+});
+
+const workshopSample = root ? join(root, "..", "..", "workshop", "content", "431960", "3062029089") : "";
+
+describe.skipIf(!root || !existsSync(wasm) || !existsSync(workshopSample))("本机样本：3062029089", () => {
+  it("透视粒子（flags 4）的雪：编译后没有不支持项（P4a 步骤 5 解锁），关闭与超高两档相同", async () => {
+    for (const postprocess of ["disabled", "ultra"] as const) {
+      const bundle = await compileScene({
+        projectDir: workshopSample,
+        sceneAssets: [join(root!, "assets")],
+        reader: diskReader,
+        translator: await Wpesl2wgsl.fromBytes(readFileSync(wasm)),
+        postprocess,
+        exhaustive: true,
+      });
+      expect(bundle.unsupported, postprocess).toEqual([]);
+      const particles = bundle.layers.filter((layer) => layer.particle);
+      expect(particles.map((layer) => [layer.object, layer.particle!.file])).toEqual([
+        [1, "particles/presets/snowperspective.json"],
+      ]);
+      expect(particles[0].particle).toMatchObject({ maxcount: 360, starttime: 15, flags: 4 });
+      expect(particles[0].particle!.passes[0].program).not.toBeNull();
+    }
   }, 60000);
 });

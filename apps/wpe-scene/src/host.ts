@@ -265,6 +265,7 @@ export class SceneHost {
     // 与 `scriptOverrides` 的路径相同：兜底重编译时编译器读得到
     if (target.kind === "bloom-enabled") return "general/bloom";
     if (target.kind === "general") return `general/${target.key}`;
+    if (target.kind === "particle-instance") return `objects/${target.object}/instanceoverride/${target.field}`;
     if (target.kind === "recompile") return target.path;
     return `${target.script}/scriptproperties/${target.key}`;
   }
@@ -492,6 +493,14 @@ export class SceneHost {
     const layer = /^objects\/(\d+)\/(origin|scale|angles|alpha|color|brightness|visible)$/.exec(path);
     if (layer)
       return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;
+    // 粒子 `instanceoverride` 的就地值（P4a 步骤 5）：状态里的值，与模拟器正在用的相同
+    const instance = /^objects\/(\d+)\/instanceoverride\/(\w+)$/.exec(path);
+    if (instance)
+      return (
+        state.particleInstances.get(Number(instance[1]))?.[
+          instance[2] as keyof import("./compile/particles").ParticleInstanceValues
+        ] ?? null
+      );
     const constant = /^(objects\/\d+(?:\/effects\/\d+)?\/passes\/\d+)\/constantshadervalues\/(.+)$/.exec(path);
     if (constant) {
       const target = bundle.bindings.find(

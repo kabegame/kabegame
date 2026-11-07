@@ -34,6 +34,20 @@ export function emitterState(fields: ParticleFields): EmitterState {
 }
 
 /**
+ * 复位 emitter 计时（`FUN_14022f6c0`，`ignore/p4/rea/wp.asm` `0x14022f6c0` 起，每条 emitter 记录）：当前延迟、当前时长、
+ * 待发的 `instantaneous` 从各自的初值重抄（`+0x18 ← +0x20`、`+0x14 ← +0x1c`、`+0x44 ← +0x48`），累积余数（`+0x24`）、
+ * 连发计数与周期计时（`+0x3c`、`+0x40`）清零。`flags`（`+0x4c`，bit31 是已结束）不动，所以已结束的 emitter 仍是结束的。
+ * 不可见时清空系统前调用（`FUN_140230650`，C8）。
+ */
+export function resetEmitterTiming(state: EmitterState, fields: ParticleFields): void {
+  const initial = emitterState(fields);
+  state.acc = initial.acc;
+  state.pending = initial.pending;
+  state.delay = initial.delay;
+  state.duration = initial.duration;
+}
+
+/**
  * 本帧要发射的数量（`FUN_1402378a0`）。`dt` 是 `dt'`（已乘 `instanceoverride.rate`），发射不受两遍模式影响。
  *
  * ```

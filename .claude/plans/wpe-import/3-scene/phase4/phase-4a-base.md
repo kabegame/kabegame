@@ -215,7 +215,7 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 
 ## 待定
 
-1. `maxcount` 上限和超限处理：等步骤 5 的实测。
+1. ~~`maxcount` 上限和超限处理~~：步骤 5 实测后定为 P4a 不设上限，见实施记录。
 2. ~~`angles` x、y 非 0 的现有场景~~：步骤 1 列出 9 张（见实施记录），都还有别的不支持项，现在能渲染的场景不受影响。等它们解锁时再和 WPE 比画面。
 
 ## 风险
@@ -361,3 +361,41 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 测试行 13814–13817（`p4-0`、`p4a`、`p4a-fov60`、`p4a2`）导入后已用 `batch_remove_images` 移除，导入任务已删，图库行数复原。
 
 工具在 `ignore/p4/step4/`：`real.mjs`（真机回放、读图、四角）、`cmp_real.py`、`wpe_rt.py`（导出 WPE 参照图）、`import.mjs` / `cleanup.mjs`、`hash-after.json`。
+
+### 步骤 5 — `instanceoverride`、生命周期与解锁（2026-11-07）
+
+子代理实现，Claude 独立验收。
+
+- **能力表两处修正：**
+  - 新增 `isKeyframedValue`，关键帧值报 `value:animation`，覆盖 scene、材质常量、模型、`effect.json`、粒子系统级键、模块字段、控制点、子系统条目。
+  - `alphawriting: "default"` 不再报。
+- **`instanceoverride` 就地生效：**
+  - 新目标 `particle-instance`，`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`brightness` 的 `{user}` 绑定登记成就地写。
+  - `ParticleSystem.setInstance` 从基值重新乘，存活粒子不动，已结束且 `rate > 0` 的 emitter 重开。
+  - 能力表新键：`particle:instance:colorn`、`particle:instance:brightness`（HDR 且非默认）、`particle:instance:controlpoint`、`particle:binding:instance:*`。
+- **生命周期：**
+  - 不可见（含祖先）时不发射；有存活粒子就清空，并复位 emitter 计时；重新可见不预热。
+  - 暂停不步进；切换壁纸、重编译时粒子缓冲随场景释放。
+- **解锁：** 删掉 `particle:pending`。
+
+实测依据：报告「P4a 语义的实测核对」里的 `p4a-life` 两行（隐藏清空、不重新预热；改 `instanceoverride` 后旧粒子保留、`rate` 立即生效）。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；32 个文件、886 个用例全过（新增 44 个）；格式通过 |
+| 变异检查（代理 36 处、Claude 6 处） | 就地写累乘、隐藏不清空、关键帧不报、`default` 仍报、结束的 emitter 不重开、实例 alpha 不更新，各有用例失败 |
+| 语料 | 能渲染的场景 12 → 15：`shimmering_particles`、`3062029089`、`3304642534`（后者因 `alphawriting` 修正）；没有场景掉出。`value:animation` 挡住 32 张，都不是原来能渲染的 |
+| `shimmering_particles`（真机，屏外宿主，回放 20 s） | 没有不支持项；`dust motes` 200 个，尺寸 43–996（WPE 200 个、40–999），位置、alpha 范围相近；3 个 `small_motes` 被 `style` 隐藏，WPE 同样只画一个系统 |
+| `3062029089` | 没有不支持项；雪 355 个，600 帧均值 333（WPE 344，容量 360），尺寸 1.02–14.97（WPE 1.02–14.88） |
+| `3304642534` | 没有不支持项，静态画面和 WPE 并排看一致。**但不算解锁**：用户真机发现音频条不动。它的可视化脚本在 `init` 里调 `thisScene.createLayer` 造另外 63 根条（属 P6），`init` 报错被禁用，`update` 每帧抛错又被脚本自己吞掉；音频数据本身是通的（64 段、已收 5571 帧）。用户定：能力表静态扫描脚本，调用未实现的 API 就整张退回（2026-11-07），它会重新被挡住 |
+| 属性切换（`shimmering_particles`） | `count`、`glow`、`style` 各改一次，`applied` 0 → 3，`recompiled` 0；测后属性还原为未修改 |
+| 帧时间（真机，600 帧） | 三张都是均值 3.2–3.4 ms；每个粒子层模拟加写顶点约 0.1 ms |
+| 真机哈希 | 10 张干净场景 × 三档，30 组和步骤 1 之前全部相同 |
+
+**`maxcount` 的结论：** P4a 不设上限。按 Node 实测，每个存活粒子每帧约 1 µs 模拟、0.12 µs 写顶点，60 fps 的主线程预算约 1.5 万个存活粒子。语料最大的 10 万（`3173418061`、`3351163962`）、62.5 万（`2582765611`）都还有别的不支持项挡着，到它们快解锁时再定：设上限，或把模拟挪进 Worker / GPU。
+
+**预热的加载开销：** `shimmering_particles` 的 3 个 `small_motes` 预热 200 秒，加载时主线程约 1 秒，而它们在默认样式下不可见，第一帧就被清空。
+
+工具在 `ignore/p4/step5/`（`real.mjs`、`loadtime.mjs`、`wpe_stats.py`、`corpus.test.ts`、`hash-after.json`），WPE 参照在 `A:\p4a\unlock\`。

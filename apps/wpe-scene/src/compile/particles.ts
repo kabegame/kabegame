@@ -13,8 +13,32 @@ import type { JsonObject, SceneScalar } from "./model";
 import { readParticleModule, type ParticleCategory, type ParticleModule } from "../particles/modules";
 
 /**
- * `instanceoverride` 的静态值（`rea-p4a.md` C5，基址 `obj+0x778`）。`{user}` / `{script}` 只取 JSON 里的 `value`，
- * 不读用户属性、不登记绑定：绑定与就地更新是步骤 5 的事，现在由 `object:instanceoverride` 整张退回。
+ * `instanceoverride` 里就地更新的标量键（P4a 步骤 5，`rea-p4a.md` C5）：编译期每处 `{user}` 登记成 `particle-instance`
+ * 绑定，运行时改值由 `ParticleSystem.setInstance` 从基值重新乘。`brightness` 只在场景 HDR 且系统 `flags` 没有 bit3 时生效，
+ * 这时它改走重编译（`bundle.ts`），取非默认值由能力表报。
+ */
+export const INSTANCE_FIELDS = ["alpha", "size", "count", "speed", "lifetime", "rate", "brightness"] as const;
+export type InstanceField = (typeof INSTANCE_FIELDS)[number];
+/** `instanceoverride` 的标量部分（`SceneState` 存的就是这一份）。 */
+export type ParticleInstanceValues = Record<InstanceField, number>;
+
+/**
+ * 一个标量键的取值，编译与就地写共用（「就地 = 重编译」靠它）：数字原样；非空字符串整串解析成有限数；布尔按 1 / 0
+ * （条件绑定 `{user: {name, condition}}` 的值是布尔，同图层字段的 `asNumber`）；其余（含解析不出来）取缺省 1。
+ */
+export function instanceScalar(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 1;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 1;
+}
+
+/**
+ * `instanceoverride` 的值（`rea-p4a.md` C5，基址 `obj+0x778`）。标量键经 `InstanceResolver` 取值（编译期登记绑定、读用户属性，
+ * `bundle.ts`）；`colorn`、控制点只取静态值，用到时能力表报不支持（`checkParticleInstance`）。
  * `rate` 的下限 0.01 只在脏时钳（C5），这里存原值。
  */
 export interface ParticleInstance {
@@ -144,16 +168,8 @@ function staticValue(raw: unknown): unknown {
     ? (raw as { value: unknown }).value
     : raw;
 }
-function instanceNumber(raw: unknown, fallback: number): number {
-  const value = staticValue(raw);
-  if (isNumeric(value)) return value;
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-}
-function instanceVector(raw: unknown, scale = 1): number[] | null {
+/** `"r g b"` 的前三个分量（乘 `scale`）；不是字符串、不足三个或有不是数字的分量时为 null。 */
+export function instanceVector(raw: unknown, scale = 1): number[] | null {
   const value = staticValue(raw);
   if (typeof value !== "string") return null;
   const parts = value.trim().split(/\s+/).filter(Boolean).map(Number);
@@ -161,20 +177,29 @@ function instanceVector(raw: unknown, scale = 1): number[] | null {
   return parts.slice(0, 3).map((part) => part * scale);
 }
 
-export function parseParticleInstance(raw: unknown): ParticleInstance {
+/**
+ * 标量键的取值方式：参数是键名与 JSON 里的原值（可能是 `{user}` / `{script}`），返回解析后的值。缺省只取静态 `value`、
+ * 不读用户属性；`bundle.ts` 传 `BindingCollector.bind`，同时登记绑定。
+ */
+export type InstanceResolver = (field: InstanceField, raw: unknown) => SceneScalar | undefined;
+const staticResolver: InstanceResolver = (_, raw) => staticValue(raw) as SceneScalar | undefined;
+
+export function parseParticleInstance(raw: unknown, resolve: InstanceResolver = staticResolver): ParticleInstance {
   const source = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const scalars = Object.fromEntries(
+    INSTANCE_FIELDS.map((field) => [field, instanceScalar(resolve(field, source[field]))]),
+  ) as ParticleInstanceValues;
   return {
-    alpha: instanceNumber(source.alpha, 1),
-    size: instanceNumber(source.size, 1),
-    count: instanceNumber(source.count, 1),
-    speed: instanceNumber(source.speed, 1),
-    lifetime: instanceNumber(source.lifetime, 1),
-    rate: instanceNumber(source.rate, 1),
-    brightness: instanceNumber(source.brightness, 1),
+    ...scalars,
     colorn: instanceVector(source.color, 1 / 255) ?? instanceVector(source.colorn),
     controlpoints: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpoint${i}`])),
     controlpointAngles: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpointangle${i}`])),
   };
+}
+
+/** `ParticleInstance` 的标量部分（一份新对象）。 */
+export function instanceValues(instance: ParticleInstanceValues): ParticleInstanceValues {
+  return Object.fromEntries(INSTANCE_FIELDS.map((field) => [field, instance[field]])) as ParticleInstanceValues;
 }
 
 export interface ParseParticleOptions {
@@ -182,6 +207,8 @@ export interface ParseParticleOptions {
   orthographic: boolean;
   /** 对象上的 `instanceoverride`。 */
   instanceoverride?: unknown;
+  /** 标量键的取值方式；缺省只取静态值（见 `InstanceResolver`）。 */
+  resolveInstance?: InstanceResolver;
 }
 
 /** 解析一个粒子 JSON（能力检查另由 `checkParticleFeatures` 做）。`passes` 由 `compileScene` 编材质后填。 */
@@ -199,7 +226,7 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     operators: modules("operator"),
     renderers: modules("renderer"),
     orthographic: options.orthographic,
-    instance: parseParticleInstance(options.instanceoverride),
+    instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),
     passes: [],
   };
 }

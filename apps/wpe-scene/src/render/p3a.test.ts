@@ -470,6 +470,7 @@ describe("可见性、泛光与加载期间增量", () => {
       bloom: false,
       structures: new Set(),
       lights: false,
+      particles: new Set(),
     });
     state.write({ property: "glow", target: { kind: "bloom", field: "hdrStrength" } }, 5);
     state.write({ property: "iters", target: { kind: "bloom", field: "hdrIterations" } }, 3.9);
@@ -514,6 +515,7 @@ describe("可见性、泛光与加载期间增量", () => {
         bloom: false,
         structures: new Set(),
         lights: false,
+        particles: new Set(),
       });
     });
 

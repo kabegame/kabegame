@@ -25,7 +25,7 @@ import { planLayer, planParticleLayer, planSignature } from "./graph";
 import { particleViewProjection, sceneViewProjection } from "./layout";
 import { multiply, translation, type Mat4 } from "./math";
 import { SceneRenderer } from "./renderer";
-import { buildableLayers, checkRenderable, GpuScene, uploadableTextures } from "./scene";
+import { buildableLayers, checkRenderable, GpuScene, timingStats, uploadableTextures } from "./scene";
 import { SceneState } from "./state";
 import { particleBuiltins, particleUniformValues, type FrameInput } from "./uniforms";
 
@@ -561,10 +561,10 @@ describe("渲染图：粒子层", () => {
     };
     expect(checkRenderable(trail, new Set())).toEqual(["render:particle-attribute:a_TexCoordVec4C1"]);
 
-    // `particle:pending` 保留：只有强制渲染才建
-    const pending = bundleOf([particleLayer(1)], { unsupported: ["particle:pending"] });
-    expect(checkRenderable(pending, new Set())).toEqual(["particle:pending"]);
-    expect(checkRenderable(pending, new Set(), { ignoreUnsupported: true })).toEqual([]);
+    // 能力表报的粒子细分键照常挡住，只有强制渲染才建（P4a 步骤 5 删掉了总括键 particle:pending）
+    const blocked = bundleOf([particleLayer(1)], { unsupported: ["particle:operator:turbulence"] });
+    expect(checkRenderable(blocked, new Set())).toEqual(["particle:operator:turbulence"]);
+    expect(checkRenderable(blocked, new Set(), { ignoreUnsupported: true })).toEqual([]);
   });
 
   it("粒子材质的常量进 SceneState（就地写按 pass 键）", () => {
@@ -703,7 +703,7 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     expect(floats(uniforms(1), 276, 1)).toEqual([2.5]);
   });
 
-  it("不可见的粒子层不画、不步进；重新可见后接着步进", async () => {
+  it("不可见的粒子层不画、不发射，存活粒子清空；重新可见后照常发射（P4a 步骤 5，C8）", async () => {
     const { gpu, state, scene } = await open(bundleOf([imageLayer(0), particleLayer(1, {}, { visibleBound: true })]));
     scene.update(frame(0.5), state);
     gpu.encode(scene, state);
@@ -712,13 +712,17 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     state.write({ property: "p", target: { kind: "layer", object: 1, field: "visible" } }, false);
     scene.sync(state);
     scene.update(frame(0.5), state);
-    expect(system.alive).toBe(5);
+    expect(system.alive).toBe(0);
+    expect(system.highWater).toBe(0);
     expect(draws(gpu.encode(scene, state))).toEqual(["vertex layer 1 layer 0 direct", "draw 4"]);
+    // 不可见期间不发射
+    scene.update(frame(0.5), state);
+    expect(system.alive).toBe(0);
     state.write({ property: "p", target: { kind: "layer", object: 1, field: "visible" } }, true);
     scene.sync(state);
     scene.update(frame(0.5), state);
-    expect(system.alive).toBe(10);
-    expect(draws(gpu.encode(scene, state)).at(-1)).toBe("drawIndexed 60");
+    expect(system.alive).toBe(5);
+    expect(draws(gpu.encode(scene, state)).at(-1)).toBe("drawIndexed 30");
   });
 
   it("写死不可见的祖先下面的粒子层不建资源", async () => {
@@ -839,5 +843,192 @@ describe("渲染器：帧时钟与遍数", () => {
     expect(dts).toHaveLength(3);
     expect(system.alive).toBe(4);
     renderer.destroy();
+  });
+
+  it("暂停：没有实时帧，粒子不步进；隐藏页面同样不步进；恢复后照常（P4a 步骤 5）", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const { renderer, frames } = await start(0);
+    const system = particleDraw(renderer.currentScene!, 1).particles!.system;
+    // 帧时间上限 0.25 s：每次走 0.2 s
+    now += 200;
+    frames.at(-1)!(now);
+    const alive = system.alive;
+    expect(alive).toBe(2);
+    renderer.setPaused(true);
+    // 暂停后循环已停：残留的回调直接返回，补画帧时间为 0
+    now += 500;
+    frames.at(-1)!(now);
+    renderer.redraw();
+    expect(system.alive).toBe(alive);
+    renderer.setPaused(false);
+    now += 200;
+    frames.at(-1)!(now);
+    expect(system.alive).toBe(4);
+    const resumed = system.alive;
+    // 页面隐藏：shouldRun 为假，同样不步进
+    (document as unknown as { hidden: boolean }).hidden = true;
+    now += 500;
+    frames.at(-1)!(now);
+    expect(system.alive).toBe(resumed);
+    renderer.destroy();
+  });
+
+  it("切换壁纸 / 重编译：旧场景的粒子缓冲随场景释放，新场景重新建系统并预热；销毁渲染器全部释放", async () => {
+    const { renderer, gpu } = await start(0, bundleOf([particleLayer(1, { starttime: 1 })]));
+    const particleBuffers = () => [...gpu.live].filter((buffer) => /particle/.test(buffer.label));
+    const before = particleBuffers();
+    // 顶点与 uniform 缓冲同名，外加全场一份索引缓冲
+    expect(before.map((buffer) => buffer.label).sort()).toEqual([
+      "layer 2 particles 1 particles",
+      "layer 2 particles 1 particles",
+      "particle indices",
+    ]);
+    const oldSystem = particleDraw(renderer.currentScene!, 1).particles!.system;
+    expect(oldSystem.alive).toBe(10);
+    // 重编译（同一份 bundle 重新加载）：粒子重来，含预热（决定 7）
+    oldSystem.step(0.5);
+    expect(oldSystem.alive).toBe(15);
+    await renderer.load(bundleOf([particleLayer(1, { starttime: 1 })]));
+    const newSystem = particleDraw(renderer.currentScene!, 1).particles!.system;
+    expect(newSystem).not.toBe(oldSystem);
+    expect(newSystem.alive).toBe(10);
+    for (const buffer of before) expect(gpu.live.has(buffer), buffer.label).toBe(false);
+    // 切到没有粒子的场景：粒子缓冲全部释放
+    await renderer.load(bundleOf([imageLayer(0)]));
+    expect(particleBuffers()).toEqual([]);
+    await renderer.load(bundleOf([particleLayer(1)]));
+    expect(particleBuffers()).toHaveLength(3);
+    renderer.destroy();
+    expect(particleBuffers()).toEqual([]);
+  });
+});
+
+describe("GpuScene：粒子生命周期（P4a 步骤 5）", () => {
+  const COUNT = { kind: "particle-instance", object: 1, field: "count" } as const;
+  const VISIBLE = { kind: "layer", object: 1, field: "visible" } as const;
+
+  it("instanceoverride 就地写：sync 交给模拟器，不重建缓冲、不清粒子，下一帧按新值发射（2026-11-07 实测，p4a-life）", async () => {
+    const { gpu, state, scene } = await open(bundleOf([particleLayer(1)]));
+    scene.update(frame(0.5), state); // 10/s → 5
+    gpu.encode(scene, state);
+    const system = particleDraw(scene, 1).particles!.system;
+    const buffers = gpu.buffers.length;
+    const born = Array.from(system.columns.size0.subarray(0, 5));
+    expect(state.write({ property: "count", target: COUNT }, 2)).toBe("applied");
+    state.write({ property: "size", target: { ...COUNT, field: "size" } }, 2);
+    // 写进状态，sync 之前模拟器不变
+    expect(system.instanceValues.count).toBe(1);
+    scene.sync(state);
+    expect(system.instanceValues).toMatchObject({ count: 2, size: 2 });
+    expect(system.alive).toBe(5);
+    scene.update(frame(0.5), state); // 20/s → +10
+    expect(system.alive).toBe(15);
+    expect(Array.from(system.columns.size0.subarray(0, 5))).toEqual(born);
+    expect(system.columns.size0[5]).toBe(born[0] * 2);
+    expect(gpu.buffers.length).toBe(buffers);
+    expect(system.columns.capacity).toBe(16);
+  });
+
+  it("建模拟器时取状态里的当前值（单图层重建也用就地写过的值）", async () => {
+    const bundle = bundleOf([particleLayer(1)]);
+    const state = SceneState.fromBundle(bundle);
+    state.write({ property: "count", target: COUNT }, 3);
+    const scene = await GpuScene.build(new FakeGpu().device, bundle, state, new Set(), [], { particles: { seed: 1 } });
+    expect(particleDraw(scene, 1).particles!.system.instanceValues.count).toBe(3);
+    // 编译结果没被改
+    expect(bundle.layers[0].particle!.instance.count).toBe(1);
+  });
+
+  it("不可见的帧要实时：暂停 / 补画（帧时间 0）时变不可见不清空，下一个实时帧才清", async () => {
+    const { gpu, state, scene } = await open(bundleOf([particleLayer(1, {}, { visibleBound: true })]));
+    scene.update(frame(0.5), state);
+    gpu.encode(scene, state);
+    const system = particleDraw(scene, 1).particles!.system;
+    state.write({ property: "v", target: VISIBLE }, false);
+    scene.sync(state);
+    scene.update(frame(0), state);
+    expect(system.alive).toBe(5);
+    scene.update(frame(0.1), state);
+    expect(system.alive).toBe(0);
+  });
+
+  it("清空后标 stale：暂停中重新可见（没有实时帧），画出来的是 0 个，不是清空前的顶点", async () => {
+    const { gpu, state, scene } = await open(bundleOf([particleLayer(1, {}, { visibleBound: true })]));
+    scene.update(frame(0.5), state);
+    expect(draws(gpu.encode(scene, state)).at(-1)).toBe("drawIndexed 30");
+    state.write({ property: "v", target: VISIBLE }, false);
+    scene.sync(state);
+    scene.update(frame(0.1), state);
+    gpu.encode(scene, state);
+    state.write({ property: "v", target: VISIBLE }, true);
+    scene.sync(state);
+    scene.update(frame(0), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([]);
+  });
+
+  it("祖先不可见（visible 沿父链）同样清空", async () => {
+    const group = baseLayer(0, { name: "group", visibleBound: true });
+    const { state, scene } = await open(bundleOf([group, particleLayer(1, {}, { parent: 0 })]));
+    scene.update(frame(0.5), state);
+    const system = particleDraw(scene, 1).particles!.system;
+    expect(system.alive).toBe(5);
+    state.write({ property: "v", target: { kind: "layer", object: 0, field: "visible" } }, false);
+    scene.sync(state);
+    scene.update(frame(0.5), state);
+    expect(system.alive).toBe(0);
+    state.write({ property: "v", target: { kind: "layer", object: 0, field: "visible" } }, true);
+    scene.sync(state);
+    scene.update(frame(0.5), state);
+    expect(system.alive).toBe(5);
+  });
+
+  it("重新可见不重新预热（starttime 的系统，2026-11-07 实测，p4a-life）", async () => {
+    const { state, scene } = await open(bundleOf([particleLayer(1, { starttime: 1 }, { visibleBound: true })]));
+    const system = particleDraw(scene, 1).particles!.system;
+    expect(system.alive).toBe(10);
+    state.write({ property: "v", target: VISIBLE }, false);
+    scene.sync(state);
+    scene.update(frame(0.1), state);
+    expect(system.alive).toBe(0);
+    state.write({ property: "v", target: VISIBLE }, true);
+    scene.sync(state);
+    scene.update(frame(0.3), state);
+    expect(system.alive).toBe(3);
+  });
+
+  it("dev 探针：particleStats(true) 给分布，profileParticles 记录模拟 / 写顶点 / 上传，关掉即清空", async () => {
+    const { gpu, state, scene } = await open(bundleOf([particleLayer(1)]));
+    expect(scene.particleProfile()).toEqual([]);
+    scene.profileParticles(true);
+    for (let i = 0; i < 3; i++) {
+      scene.update(frame(0.2), state);
+      gpu.encode(scene, state);
+    }
+    const [profile] = scene.particleProfile();
+    expect(profile).toMatchObject({ object: 1, name: "particles 1", capacity: 16, frames: 3 });
+    expect(profile.alive).toEqual({ mean: 4, p95: 6, max: 6 });
+    for (const key of ["simulateMs", "verticesMs", "uploadMs"] as const) {
+      expect(profile[key].max).toBeGreaterThanOrEqual(0);
+      expect(profile[key].mean).toBeLessThanOrEqual(profile[key].max);
+    }
+    const [stats] = scene.particleStats(true);
+    expect(stats.summary).toMatchObject({
+      alive: 6,
+      position: { min: [100, 200, 0], max: [100, 200, 0] },
+      size: { min: 20, max: 20, mean: 20, p50: 20 },
+      alpha: { min: 1, max: 1, mean: 1 },
+    });
+    expect(scene.particleStats()[0].summary).toBeUndefined();
+    scene.profileParticles(false);
+    expect(scene.particleProfile()).toEqual([]);
+  });
+
+  it("timingStats：均值、p95、最大值保留两位小数；没有样本时为 0", () => {
+    expect(timingStats([])).toEqual({ mean: 0, p95: 0, max: 0 });
+    expect(timingStats([3, 1, 2])).toEqual({ mean: 2, p95: 3, max: 3 });
+    const many = Array.from({ length: 100 }, (_, i) => i + 1);
+    expect(timingStats(many)).toEqual({ mean: 50.5, p95: 96, max: 100 });
+    expect(timingStats([1 / 3])).toEqual({ mean: 0.33, p95: 0.33, max: 0.33 });
   });
 });

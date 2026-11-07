@@ -7,7 +7,9 @@
  * - `bloom`：泛光链的链路隔离验证（`bloomProbe.ts`）；
  * - `chunk`：把存下的结果（PNG、原始数据）按 base64 分块交给 CDP 那一侧落盘；
  * - `particleTrack`：编译后按给定 dt 序列步进粒子模拟器，输出和 WPE RenderDoc 轨迹同格式的数据（P4a 步骤 3）；
- * - `particleCorners`：把粒子顶点着色器改写成计算着色器，读回每个粒子四角的裁剪坐标（P4a 步骤 4，`particleCorners.ts`）。
+ * - `particleCorners`：把粒子顶点着色器改写成计算着色器，读回每个粒子四角的裁剪坐标（P4a 步骤 4，`particleCorners.ts`）；
+ * - `renderFrame` 带 `profile` 时给出每个粒子层的模拟 / 写顶点 / 上传开销（`particleMs`），`host.particles` 对当前场景做同样的
+ *   记录，并给出粒子数与分布（P4a 步骤 5）。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -18,7 +20,7 @@ import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { particleTrack, type ParticleTrack } from "../particles/track";
 import { acquireGpu } from "../render/device";
-import { GpuScene } from "../render/scene";
+import { GpuScene, type ParticleProfile } from "../render/scene";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
 import { replayParticles, type ParticleReplay } from "./particleCorners";
@@ -172,10 +174,15 @@ export interface RenderFrameResult {
   bloomLevels: number | null;
   /** `profile` 帧的耗时（编码 + 提交 + 等 GPU 完成），毫秒。 */
   frameMs?: { mean: number; p95: number; min: number; max: number };
+  /**
+   * `profile` 帧里每个粒子层的开销（P4a 步骤 5）：模拟（`ParticleSystem.step`）、写顶点（`writeVertices`）、排队上传
+   * （`writeBuffer`）各自的均值 / p95 / 最大值（毫秒），以及步进后的存活数。不传 `profile` 时没有。
+   */
+  particleMs?: ParticleProfile[];
   /** 读回那一帧的 `g_Time` 与 `g_Frametime`。 */
   time: number;
   frametime: number;
-  /** 各粒子层读回时的数量：存活数（即画了几个）、高水位、容量。 */
+  /** 各粒子层读回时的数量：存活数（即画了几个）、高水位、容量，以及分布（位置范围、尺寸、alpha，`summarizeParticles`）。 */
   particles: ReturnType<GpuScene["particleStats"]>;
   /** PNG 的存放键是 `<key>.png`，原始 RGBA 是 `<key>.rgba`，都用 `chunk` 取（base64 分块）。 */
   key: string;
@@ -207,7 +214,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     try {
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
+      let particleMs: RenderFrameResult["particleMs"];
       if (options.profile) {
+        // 只记 profile 帧：读回那一帧之前取走并关掉
+        scene.profileParticles(true);
         const samples: number[] = [];
         for (let i = 0; i < options.profile; i++) {
           const t0 = performance.now();
@@ -236,6 +246,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           min: round(samples[0]),
           max: round(samples.at(-1)!),
         };
+        particleMs = scene.particleProfile();
+        scene.profileParticles(false);
       }
       // 粒子回放：前 n−1 帧只步进，最后一帧随 update 步进
       const { time, frametime } = replayParticles(scene, state, options.particles, startTime);
@@ -271,9 +283,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         targetBytes: scene.targetBytes,
         bloomLevels: scene.bloomChain ? scene.bloomChain.plan.levels : null,
         frameMs,
+        particleMs,
         time,
         frametime,
-        particles: scene.particleStats(),
+        particles: scene.particleStats(true),
         key,
       };
     } finally {
@@ -363,6 +376,30 @@ export async function hostRenderFrame(
   const rgba = raw instanceof Uint8Array ? raw : quantize8(raw);
   for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
   return { sha256: await sha256(rgba), width: scene.width, height: scene.height };
+}
+
+/**
+ * 当前场景的粒子（P4a 步骤 5，真机量帧时间与统计量用）：`profile: true` 开始记录、`false` 停止并清空，不传时不改；
+ * 返回各粒子层的数量与分布（`particleStats(true)`）、开销统计（`particleProfile`，打开记录之后的实时帧），以及当前的
+ * `instanceoverride` 值。整场重新加载后记录随旧场景一起丢掉，要重新打开。
+ */
+export function hostParticles(
+  host: SceneHost,
+  options: { profile?: boolean } = {},
+): {
+  stats: ReturnType<GpuScene["particleStats"]>;
+  profile: ParticleProfile[];
+  instances: Record<number, unknown>;
+} {
+  const renderer = host.devScene.renderer;
+  const scene = renderer?.currentScene;
+  if (!scene) return { stats: [], profile: [], instances: {} };
+  if (options.profile !== undefined) scene.profileParticles(options.profile);
+  return {
+    stats: scene.particleStats(true),
+    profile: scene.particleProfile(),
+    instances: Object.fromEntries(renderer?.sceneState?.particleInstances ?? []),
+  };
 }
 
 export interface ParticleTrackProbeOptions {

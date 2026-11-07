@@ -22,6 +22,7 @@ import {
   checkEffectFeatures,
   checkModelFeatures,
   checkParticleFeatures,
+  checkParticleInstance,
   checkParticleProgram,
   checkPassFeatures,
   checkProgramFeatures,
@@ -48,7 +49,14 @@ import {
   type SceneScalar,
   type SceneValue,
 } from "./model";
-import { isOrthographic, parseParticle, particleFov, type SceneParticle } from "./particles";
+import {
+  isOrthographic,
+  parseParticle,
+  particleFov,
+  readParticleSystem,
+  type InstanceField,
+  type SceneParticle,
+} from "./particles";
 import {
   bloomParams,
   flagValue,
@@ -575,11 +583,21 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     const system = json as JsonObject;
     checkParticleFeatures(system, orthographic, unsupported);
+    // `instanceoverride` 的标量键登记成就地目标（P4a 步骤 5）。`brightness` 只在 HDR 且系统 flags 没有 bit3 时生效（C5），
+    // 这时没实现：绑了属性就登记成重编译，改成非默认值后由能力表报，否则（LDR 或 bit3）是中性的就地目标
+    const { flags } = readParticleSystem(system);
+    const brightnessActive = postprocess.hdr && (flags & 8) === 0;
+    const instanceTarget = (field: InstanceField): BindingTarget =>
+      field === "brightness" && brightnessActive
+        ? recompile("layer-structure", `objects/${index}/instanceoverride/brightness`)
+        : { kind: "particle-instance", object: index, field };
     const particle = parseParticle(system, {
       file: file as string,
       orthographic,
       instanceoverride: object.instanceoverride,
+      resolveInstance: (field, raw) => bindings.bind(raw as SceneValue | undefined, properties, instanceTarget(field)),
     });
+    checkParticleInstance(object.instanceoverride, particle.instance, { flags, hdr: postprocess.hdr }, unsupported);
     layer.particle = particle;
     const materialPath = system.material;
     if (typeof materialPath !== "string" || !materialPath) {

@@ -12,7 +12,7 @@
  *
  * 不在表里的字段一律按未知报：包括 `audioprocessing*`（属 P4e，缺省值没读）。
  */
-import { isScriptValue, isUserBinding } from "../compile/bindings";
+import { isKeyframedValue, isScriptValue, isUserBinding } from "../compile/bindings";
 import type { ParticleColumns } from "./columns";
 import { sphereRandom } from "./emitters";
 import { f32 } from "./f32";
@@ -394,8 +394,11 @@ export interface ParticleModule {
 
 export interface ParticleModuleIssue {
   field: string;
-  /** `unknown` 表外字段；`value` 形状不对或本节不支持的取值；`binding` 写成 `{user}` / `{script}`。 */
-  kind: "unknown" | "value" | "binding";
+  /**
+   * `unknown` 表外字段；`value` 形状不对或本节不支持的取值；`binding` 写成 `{user}` / `{script}`；`animation` 写成属性
+   * 关键帧 `{animation: {…}, value}`（能力表报 `value:animation`，和绑定分开报，P4a 步骤 5）。
+   */
+  kind: "unknown" | "value" | "binding" | "animation";
 }
 
 export interface ParticleModuleReading extends ParticleModule {
@@ -458,7 +461,10 @@ function parseField(def: ParticleFieldDef, raw: unknown, previous: ParticleField
   }
 }
 
-/** 绑定的静态值（`{user, value}` / `{script, value}` 的 `value`），不读用户属性：模块字段的绑定整张退回，不登记。 */
+/**
+ * 绑定与关键帧的静态值（`{user, value}` / `{script, value}` / `{animation, value}` 的 `value`），不读用户属性：
+ * 模块字段的绑定、关键帧整张退回，不登记。
+ */
 function staticValue(raw: unknown): unknown {
   return raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
 }
@@ -466,6 +472,8 @@ function staticValue(raw: unknown): unknown {
 /**
  * 按模块表读一个模块项：解析与能力表共用这一个函数。表外模块 `known: false`、字段为空；表内模块的每个字段都有值。
  * `null` 当作缺键（WPE 的 `isNumeric` / `isString` 对 null 为假，取缺省）。
+ * 关键帧和绑定分开报：字段写成关键帧报 `animation`，同时挂了 `user` / `script` 再报 `binding`；两者都按 `value` 解析，
+ * 解析不出来时不另报形状问题（已经整张退回）。
  */
 export function readParticleModule(
   category: ParticleCategory,
@@ -483,8 +491,10 @@ export function readParticleModule(
   const present: string[] = [];
   for (const [field, value] of Object.entries(entry)) {
     if (field === "name" || field === "id" || value === null || value === undefined) continue;
-    const bound = isUserBinding(value) || isScriptValue(value);
-    if (bound) issues.push({ field, kind: "binding" });
+    const keyframed = isKeyframedValue(value);
+    if (keyframed) issues.push({ field, kind: "animation" });
+    if (isUserBinding(value) || isScriptValue(value)) issues.push({ field, kind: "binding" });
+    const bound = keyframed || isUserBinding(value) || isScriptValue(value);
     const spec = def.fields[field];
     if (!spec) {
       issues.push({ field, kind: "unknown" });

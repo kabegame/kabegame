@@ -31,6 +31,8 @@ const createRealm = vi.fn<() => Promise<ScriptRealm>>();
 vi.mock("./script/realm", () => ({ createIframeRealm: () => createRealm(), getJsModuleIndex: () => ({}) }));
 
 const rendererStyle = vi.hoisted(() => ({ setStyle: vi.fn(), setBackground: vi.fn() }));
+/** 就地写的落点（P4a 步骤 5 核对 instanceoverride 走就地一侧）。 */
+const rendererWrites = vi.hoisted(() => ({ applyBindings: vi.fn((_writes: unknown) => true) }));
 
 vi.mock("./render", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./render")>();
@@ -41,7 +43,7 @@ vi.mock("./render", async (importOriginal) => {
     load: async () => {},
     setPaused: () => {},
     ...rendererStyle,
-    applyBindings: () => true,
+    applyBindings: (writes: unknown) => rendererWrites.applyBindings(writes),
     redraw: () => {},
     destroy: () => {},
   };
@@ -362,5 +364,29 @@ describe("SceneHost：脚本音频订阅", () => {
     host.dispose();
     subscribedChannel().onmessage({ type: "audio", data: audioFrame });
     expect(allZero(registered[0])).toBe(true);
+  });
+});
+
+describe("SceneHost：粒子 instanceoverride（P4a 步骤 5）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    rendererWrites.applyBindings.mockClear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("instanceoverride 绑定的属性增量走就地写，不重新编译", async () => {
+    const binding = { property: "count", target: { kind: "particle-instance", object: 2, field: "count" } };
+    compile.mockImplementation(async () => ({ ...bundleFor({}), bindings: [binding] }) as unknown as SceneBundle);
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties({ count: { type: "slider", value: 1 } });
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    host.applyUserProperties({ count: { type: "slider", value: 2 } });
+    expect(rendererWrites.applyBindings).toHaveBeenCalledWith([{ binding, value: 2 }]);
+    expect(host.stats).toEqual({ applied: 1, recompiled: [] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
   });
 });
