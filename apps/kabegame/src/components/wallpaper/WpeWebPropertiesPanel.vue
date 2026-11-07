@@ -22,44 +22,62 @@
         :class="CARD_CLASS"
         data-testid="wpe-controls"
       >
-        <div class="flex flex-col p-1.5">
-          <div v-if="paused !== undefined" class="flex items-center gap-2 rounded-lg px-2.5 py-2">
-            <span class="min-w-0 flex-1 text-[13px] leading-[1.5] text-[var(--anime-text-primary)]">
+        <div :class="CONTROL_LIST">
+          <!-- 暂停：带图标徽标的开关行 -->
+          <div v-if="paused !== undefined" class="flex items-center gap-3 px-3 py-2.5">
+            <span
+              class="grid h-8 w-8 flex-none place-items-center rounded-lg bg-[color-mix(in_srgb,var(--anime-secondary)_14%,transparent)] text-[15px] text-[var(--anime-secondary-dark)]"
+            >
+              <el-icon><VideoPause /></el-icon>
+            </span>
+            <span class="min-w-0 flex-1 text-[13px] font-medium leading-tight text-[var(--anime-text-primary)]">
               {{ t("gallery.wpePause") }}
             </span>
             <el-switch :model-value="paused" @update:model-value="emit('update:paused', $event === true)" />
           </div>
-          <div v-if="canCaptureCover || canRestoreCover" class="flex flex-wrap gap-2 px-2.5 py-2">
-            <el-button
+
+          <!-- 封面：主操作（设为封面）+ 次操作（恢复默认封面） -->
+          <div v-if="canCaptureCover || canRestoreCover" class="flex flex-wrap gap-2 px-3 py-2.5">
+            <button
               v-if="canCaptureCover"
-              size="small"
+              type="button"
               data-testid="wpe-set-cover"
-              :loading="coverBusy"
+              :class="[ACTION_BTN, ACTION_PRIMARY, coverBusy && 'pointer-events-none opacity-80']"
+              :aria-busy="coverBusy"
               @click="setCover"
             >
-              {{ t("gallery.wpeSetCover") }}
-            </el-button>
-            <el-button
+              <el-icon class="text-[14px]">
+                <Loading v-if="coverBusy" class="is-loading" />
+                <Camera v-else />
+              </el-icon>
+              <span>{{ t("gallery.wpeSetCover") }}</span>
+            </button>
+            <button
               v-if="canRestoreCover"
-              size="small"
-              class="!ml-0"
+              type="button"
               data-testid="wpe-restore-cover"
-              :disabled="coverBusy"
+              :class="[ACTION_BTN, ACTION_GHOST, coverBusy && 'pointer-events-none opacity-50']"
               @click="restoreCover"
             >
-              {{ t("gallery.wpeRestoreCover") }}
-            </el-button>
+              <el-icon class="text-[14px]"><RefreshLeft /></el-icon>
+              <span>{{ t("gallery.wpeRestoreCover") }}</span>
+            </button>
           </div>
-          <div v-if="isScene && paused !== undefined" class="px-2.5 py-2">
-            <el-button size="small" data-testid="wpe-clear-storage" @click="clearStorage">
-              {{ t("gallery.wpeClearStorage") }}
-            </el-button>
+
+          <!-- 场景：清空脚本存储 -->
+          <div v-if="isScene && paused !== undefined" class="px-3 py-2.5">
+            <button type="button" data-testid="wpe-clear-storage" :class="[ACTION_BTN, ACTION_GHOST, 'w-full']" @click="clearStorage">
+              <el-icon class="text-[14px]"><Brush /></el-icon>
+              <span>{{ t("gallery.wpeClearStorage") }}</span>
+            </button>
           </div>
+
           <!-- 开发版：观察 3c 的风险，文案不进 i18n -->
-          <div v-if="DEV_SCENE_TOOLS && isScene && coverSource" class="flex flex-wrap gap-2 px-2.5 py-2">
-            <el-button size="small" class="!ml-0" data-testid="wpe-dev-reload" @click="devScene('reload')">
-              dev：整场重新加载
-            </el-button>
+          <div v-if="DEV_SCENE_TOOLS && isScene && coverSource" class="px-3 py-2.5">
+            <button type="button" data-testid="wpe-dev-reload" :class="[ACTION_BTN, ACTION_DEV, 'w-full']" @click="devScene('reload')">
+              <el-icon class="text-[14px]"><Refresh /></el-icon>
+              <span>dev：整场重新加载</span>
+            </button>
           </div>
         </div>
       </section>
@@ -171,7 +189,7 @@
 import { computed, reactive, ref, toRef, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "@kabegame/element-plus";
-import { ArrowRight, Loading, RefreshLeft } from "@kabegame/element-plus-icons";
+import { ArrowRight, Brush, Camera, Loading, Refresh, RefreshLeft, VideoPause } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
@@ -241,6 +259,23 @@ type Section = {
 /** 分组卡片与控制卡片共用的外框 */
 const CARD_CLASS =
   "flex-none overflow-hidden rounded-xl border border-solid border-[color-mix(in_srgb,var(--anime-primary)_28%,transparent)] bg-[color-mix(in_srgb,var(--anime-bg-card)_50%,transparent)]";
+
+/** 控制卡片内各行竖向排布，相邻行之间自动描一条浅分隔线（v-if 隐藏的行不留痕） */
+const CONTROL_LIST =
+  "flex flex-col [&>:not(:first-child)]:border-t [&>:not(:first-child)]:border-solid [&>:not(:first-child)]:border-[color-mix(in_srgb,var(--anime-primary)_12%,transparent)]";
+
+/** 控制卡片内的操作按钮：图标 + 文案，等宽可换行；视觉与卡片同一套粉紫 token */
+const ACTION_BTN =
+  "inline-flex min-w-0 grow basis-28 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-[12.5px] font-medium leading-none outline-none cursor-pointer select-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)]";
+/** 主操作（设为封面）：粉色实底调 */
+const ACTION_PRIMARY =
+  "border-solid border-[color-mix(in_srgb,var(--anime-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_15%,transparent)] text-[var(--anime-primary-dark)] hover:border-[color-mix(in_srgb,var(--anime-primary)_58%,transparent)] hover:bg-[color-mix(in_srgb,var(--anime-primary)_24%,transparent)] active:bg-[color-mix(in_srgb,var(--anime-primary)_32%,transparent)]";
+/** 次操作（恢复默认 / 清空存储）：紫色描边幽灵按钮 */
+const ACTION_GHOST =
+  "border-solid border-[color-mix(in_srgb,var(--anime-secondary)_28%,transparent)] bg-transparent text-[var(--anime-secondary-dark)] hover:border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)] hover:bg-[color-mix(in_srgb,var(--anime-secondary)_12%,transparent)] active:bg-[color-mix(in_srgb,var(--anime-secondary)_18%,transparent)]";
+/** 开发版入口：虚线弱化 */
+const ACTION_DEV =
+  "border-dashed border-[color-mix(in_srgb,var(--anime-text-muted)_45%,transparent)] bg-transparent text-[var(--anime-text-muted)] hover:bg-[color-mix(in_srgb,var(--anime-text-muted)_12%,transparent)]";
 
 const isScene = computed(() => isWpeSceneType(props.imageType ?? undefined));
 
