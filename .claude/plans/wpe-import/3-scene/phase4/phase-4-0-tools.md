@@ -211,7 +211,7 @@ REA 从 `C:\Users\Lenovo\AppData\Local\Temp\claude\D--Codes-kabegame\c8271d84-73
 3. 扫 `fps` 5、15、20、21、30 定两遍模式的边界（T4）；加不可交换的组合测 O2。工程把 `FR`、`CLK` 挪到了右下角。
 4. REA 交子代理，常量和判断指令我从 exe 核对过。
 
-T3 的恢复行为没有实测成：桌面壁纸不呈现（当时显示器被拔掉了，很可能是这个原因），不影响底座，留在报告的未实测清单里。
+5. 读码结论逐项实测核对：drag、`oscillateposition`、`starttime`、暂停，结果在报告「读码结论的实测核对」，其中预热的遍数被实测推翻。
 
 ## 验收
 

@@ -1,6 +1,6 @@
 # P4 粒子报告
 
-WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `ignore/p4/`（不入库），抓帧在 `A:\p4-0\`。计划见 [phase-4-0-tools.md](phase-4-0-tools.md)。逆向的完整记录和地址在 `ignore/p4/rea/findings.md`，快照 `ignore/p4/rea/wallpaper64-2.8.42-p4.rea-snapshot`。
+WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `ignore/p4/`（不入库），抓帧在 `A:\p4-0\`。计划见 [phase-4-0-tools.md](phase-4-0-tools.md)。逆向的完整记录和地址在 [rea-framework.md](rea-framework.md)（框架）和 [rea-p4a.md](rea-p4a.md)（层级和档 1 模块），快照在 `ignore/p4/rea/`。
 
 证据等级：**实测**是抓帧读到的值；**读码**是 REA 读到代码，代理做的，其中 5 个常量和两遍判断的指令我直接从 exe 核对过。LWE 不算证据。
 
@@ -8,18 +8,16 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 
 | # | 问题 | 结论 | 证据 |
 |---|---|---|---|
-| T1 | dt 的来源 | 粒子用当帧的 `g_Frametime` 乘粒子 `speed`：`pos[f] = pos[f-1] + v·dt[f]`，不错帧 | 实测：差不超过 3e-7；读码 |
+| T1 | dt 的来源 | 粒子用当帧的 `g_Frametime` 乘 `instanceoverride.rate`：`pos[f] = pos[f-1] + v·dt[f]`，不错帧 | 实测：差不超过 3e-7；读码 |
 | T2 | dt 上限 | 帧时钟钳到 `[0.0001, 0.25]`，`g_Time`、`g_Frametime` 都是钳后的值。粒子路径不再钳。**LWE 的 `min(dt, 0.1)` 不存在** | 实测：dt 到 0.2084 都走满；`fps=5` 启动时连续三帧恰好 0.250000，`runtime` 严格加 0.25；读码 |
-| T3 | 暂停 | `-control pause` 全局，只遍历普通壁纸表，`-playInWindow` 不受影响，`-location` 无效。暂停时 `pauseRate` 指数淡出（时间常数约 1/6 s），之后不再走帧。恢复时重置计时器，不补暂停时长，第一帧 dt = 0.0001，约 0.77 s 爬回全速 | 窗口不受影响是实测；其余只有读码，**恢复行为没有实测成**，见下 |
+| T3 | 暂停 | `-control pause` 全局，只遍历普通壁纸表，`-playInWindow` 不受影响，`-location` 无效。暂停时 `pauseRate` 指数淡出，之后不再走帧。恢复时重置计时器，不补暂停时长，第一帧 dt 很小，然后爬回全速 | 实测：`g_Time` 在 9 s 以上的暂停里没有前进，恢复后第一帧 dt 0.000175，粒子每步仍等于 dt。爬升过程被抓帧的长帧打断，没有测到；其余读码 |
 | T4 | 积分与步进 | `movement` 是半隐式欧拉：`v += g·h`、`x += v·h`、再按 drag 衰减。**设置 `fps` 在 1–20 时，整段 operator 每帧跑两遍，`h = dt/2`；否则一遍**。由设置决定，和当帧 dt 无关 | 实测：c = 0.75（fps 5、10、15、20）、1.0（21、30、60）；读码 |
 | O1 | 帧内顺序 | 年龄增长与判死 → 序列帧 → 死亡处理 → 控制点 → 发射与 initializer → operator（一或两遍）→ 写顶点 → 子系统。新粒子出生当帧 `age = 0`，走完整个 dt | 新粒子首帧是实测；全序是读码 |
 | O2 | 模块顺序 | operator、initializer 都保持 JSON 数组顺序，解析成字节流后原样执行 | 实测：`movement` + `capvelocity` 两种顺序第一步 300·dt 和 100·dt；两遍时 200·dt 和 100·dt，正好是预测值；两个 `lifetimerandom` 后写的生效；读码 |
 | F1 | 每粒子字段 | 没有结构体，是 SoA：每列连续 float32，基础 17 列加 5 组按标志开关的列。没有加速度列 | 读码；顶点布局实测 |
 | F2 | 模块私有状态 | 没有逐粒子的模块状态。`oscillate*` 的频率、相位、幅度都由**同一列每粒子随机数 `R`** 现算。模块级状态（发射累积余数等）在流记录里，每实例一份 | 读码 |
 
-**T3 为什么没测成：** 桌面壁纸抓不到帧。窗口在，但 `presenting` 是 false，只在加载时画一帧。`playbackmaximized=run`、`playbackfullscreen=run` 都没用。用户说当时把显示器拔了，这很可能是原因，没有验证。这不影响底座，所以没有继续反复重启 WPE。
-
-**风险 7（无旋转情形）：** 几何着色器和顶点展开的最终几何相同。`POSITION` 完全相同，四角 x 差严格为 0，只有角点顺序不同。旋转的情形没有测。
+**风险 7：** 无旋转时，`genericparticle` 的几何着色器和项目 `particle` 的顶点展开，最终几何相同：`POSITION` 完全相同，四角 x 差严格为 0，只有角点顺序不同。旋转时两者本来就不同：`shimmering_particles` 的 `particle.vert` 把旋转乘了 `1 − smoothstep(−1, 1, z)`，z = 0 时是一半，屏幕角 -23.23° 对 -52.37°。这是着色器自己的算法，不是路径差异。P4a 要比的是我们翻译出的 `genericparticle` 顶点路径和 WPE 的 `gs_out`。
 
 ## 对 P4a 底座的要求
 
@@ -97,12 +95,37 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | `cmp_track.py a b` | 按帧比较，超限退出码非 0。图像轨迹加 `--sort-x --alpha-gain 0.976471` |
 | `ana_time.py`、`ana_order.py`、`ana_sweep.py`、`ana_o2.py` | 各框架问题的读数 |
 
-## 只读到代码、没有实测
+## 读码结论的实测核对（2026-11-07）
 
-P4a 用到时再测：
+代理读码的结论，我逐项做了实验。**有一条被推翻：** 预热不受 `fps` 分支影响。
 
-- `movement` 的 drag：`k0 = pow(min(1, 0.025 / dt), 0.7) · dt'`，上限 0.99999988。现有测量 drag 都是 0。
-- 两遍模式下 `oscillateposition` 的幅度：它用 `sin(ω·t) − sin(ω·(t−h))`，两遍时 `t` 不变、`h` 减半，和一遍结果不同。
-- `starttime` 预热：固定步长，`maxcount < 500` 时 0.05，否则 0.2，也走两遍分支。
-- T3 的恢复行为。
-- 旋转时两条路径的几何。
+| 项 | 读码 | 实测 | 结果 |
+|---|---|---|---|
+| `movement` 的 drag | `k0 = pow(min(1, 0.025 / dt), 0.7) · dt`，每遍 `v *= 1 - min(drag · k, 0.99999988)` | `fps=15`、`fps=60` 残差 2.5e-4、1.7e-4。遍数写错 0.049、0.018；普通写法 `1 - drag·dt` 差 15、2.9 | 成立 |
+| `oscillateposition` 两遍 | `sin(ω·t) − sin(ω·(t−h))`，两遍时 `t` 不变、`h` 减半 | `fps=10` 按两遍残差 1.5e-4，按一遍 2.5e-3 | 成立 |
+| `oscillateposition` 的 ω | 没有明说 | **ω 就是 `frequency`，没有乘 2π**：按 2π·f 算残差 5–13 | 新事实 |
+| `starttime` 步长 | `maxcount < 500` 时 0.05，否则 0.2 | 两档都对上 | 成立 |
+| `starttime` 遍数 | 同样受 `fps` 分支影响 | **预热固定一遍**：按一遍差 0.001–0.009，按两遍差 2、9。推断是加载时 `fps` 还没抄过来，值为 0 | **读码错了** |
+| 暂停 | 见 T3 | 见 T3 | 成立 |
+
+**`starttime` 的步数要按 float32 算：** `starttime 2.5`、`rate 1` 时，粒子比 `g_Time` 多走 1.6（`maxcount 1`）和 1.8（`maxcount 500`）。按 float32 模拟 `while t < starttime` 正好得到这两个数：`0.05` 累加 50 次还小于 2.5，所以走 51 步，出生在第 20 步，受力 32 步；`0.2` 走 13 步，出生在第 5 步，受力 9 步。出生那一步也受力。模拟器的累加要用 `Math.fround`，否则差一步。
+
+**还没测：** 旋转时我们翻译的顶点路径和 WPE 几何着色器的一致性，要等 P4a 有模拟器。`rot-gs` 的 `gs_out` 就是真值。
+
+## P4a 语义的实测核对（2026-11-07）
+
+工程 `ignore/p4/proj/p4a`、`p4a-fov60`，抓帧 `A:\p4a\`，读数脚本 `ana_a.py`。
+
+| 读码结论 | 实测 |
+|---|---|
+| 世界矩阵 `W = W_parent · T · Rz·Ry·Rx · S`，弧度 | 5 个图层四角最大差 0.0001 像素，含三轴旋转、非均匀缩放、三层父链 |
+| `alpha`、`color` 不继承，`visible` 继承 | 子层 alpha 1（父 0.25）；不可见分组的子层没有绘制 |
+| 绘制按 `objects` 数组顺序，无内容分组不绘制 | 顺序一致，子在父前没有影响 |
+| `parent` 指向不存在的 id 时当根节点 | 正常绘制 |
+| 透视粒子 `d = (H/2) / tan(fov/2)`，`fov` 取 `perspectiveoverridefov`，默认 95 | `w` = 494.819、935.307，逐位相符 |
+| 透视时 z = 0 平面和正交画面重合，相机在场景中心 | z = 0 位置和尺寸都不变；z = 300 放大 `d / (d − z)` = 2.5399，屏幕位置吻合。+z 朝向相机 |
+| `instanceoverride`：`size`、`alpha`、`count`、`lifetime`、`speed`、`rate` | 尺寸 ×2、alpha 0.5、粒子数 48、跑到 x = 1900，全部吻合。`rate` 确实是整个模拟的时间缩放 |
+| `instantaneous` 从累积余数里扣，之后要还债 | 突发 3 个后停 2.0 s，等于 `(1 + 3) / rate`，之后每 0.5 s 一个 |
+| `oscillateposition` 的 ω 就是 `frequency` | y 振荡按 ω = 1 残差 2.9e-4，按 2π 残差 5 |
+
+**没测：** `oscillateposition` 的 y 比 x、z 多 `2π·R` 的时间偏移。`R` 是随机的，要在 P4a 用幅度范围反推 `R` 再比。`sprite` 的 `upright`、`fixed` 朝向没读到，先报不支持。

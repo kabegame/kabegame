@@ -85,7 +85,8 @@ rd stop --relaunch
 - **被抓的帧本身是长帧，** 序列化要时间，这几帧的 dt 不代表正常帧率。
 - **帧号在换壁纸后重新计数，** 不同壁纸的 `frame<N>` 不能比较。
 - **`pause` 只管桌面壁纸。** `-playInWindow` 窗口不受影响。`open` 会清掉暂停，所以先 `open` 再 `pause`。
-- **桌面壁纸可能不呈现。** 窗口存在、`windows` 是 1，但 `rd status` 的 `presenting` 是 `False`：只在加载时画一帧（帧号 0），之后停住，`capture` 超时。2026-11-07 下午遇到过，`playbackmaximized=run`、`playbackfullscreen=run` 都没用；当时显示器被拔掉了，这很可能是原因，没有验证。`--window` 不受影响，能用窗口就用窗口；抓到帧号 0 也要怀疑是这种情况。
+- **桌面壁纸可能不呈现。** 窗口存在、`windows` 是 1，但 `rd status` 的 `presenting` 是 `False`：只在加载时画一帧（帧号 0），之后停住，`capture` 超时。2026-11-07 下午遇到过，`playbackmaximized=run`、`playbackfullscreen=run` 都没用；当时显示器被拔掉了，后来同一条路径恢复正常，很可能就是这个原因。`--window` 不受影响；抓到帧号 0 也要怀疑是这种情况。
+- **想抓暂停恢复后的头几帧：** 暂停时触发 `capture`，它等到下一次呈现才开始。抓帧本身造成长帧，爬升过程看不到。
 - **RenderDoc 打开着的 `.rdc` 删不掉**（`Device or resource busy`），先让它打开别的文件。
 
 ## 排障
