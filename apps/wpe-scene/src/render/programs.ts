@@ -66,6 +66,18 @@ interface PackedAttribute {
   column: number;
 }
 
+/** 交错顶点里的一个输入（矩阵 / 数组按列展开成多项）：粒子顶点（`particles/vertices.ts`）按它写，不写死偏移。 */
+export interface PackedVertexAttribute {
+  name: string;
+  location: number;
+  /** 字节偏移。 */
+  offset: number;
+  components: number;
+  kind: "f32" | "i32" | "u32";
+  /** 矩阵的第几列（非矩阵为 0）。 */
+  column: number;
+}
+
 /** 图层四边形能提供的顶点属性；着色器声明了其它属性时补默认值（多数是 0）。 */
 function attributeValue(name: string, vertex: QuadVertex, column: number): number[] {
   if (column > 0) return [];
@@ -88,6 +100,8 @@ function attributeValue(name: string, vertex: QuadVertex, column: number): numbe
 
 export interface VertexPacking {
   layout: GPUVertexBufferLayout;
+  /** 各输入的位置，按 `attributes` 的顺序（即在顶点里的先后）。 */
+  attributes: readonly PackedVertexAttribute[];
   /** 按布局把四边形的顶点写成一块交错缓冲。 */
   pack(vertices: readonly QuadVertex[]): ArrayBuffer;
 }
@@ -113,6 +127,14 @@ export function vertexPacking(attributes: readonly InterfaceVariable[]): VertexP
       stepMode: "vertex",
       attributes: packed.map((a) => ({ shaderLocation: a.location, offset: a.offset, format: a.info.format })),
     },
+    attributes: packed.map((a) => ({
+      name: a.name,
+      location: a.location,
+      offset: a.offset,
+      components: a.info.components,
+      kind: a.info.kind,
+      column: a.column,
+    })),
     pack(vertices) {
       const buffer = new ArrayBuffer(stride * vertices.length);
       const view = new DataView(buffer);
@@ -133,9 +155,11 @@ export function vertexPacking(attributes: readonly InterfaceVariable[]): VertexP
   };
 }
 
-/** bind group layout 的条目（纯数据，便于测试）。 */
-export function bindGroupLayoutEntries(program: TranslateResult): GPUBindGroupLayoutEntry[] {
-  const visibility = 0x1 | 0x2; // GPUShaderStage.VERTEX | FRAGMENT（Node 测试里没有这个全局）
+/**
+ * bind group layout 的条目（纯数据，便于测试）。`visibility` 缺省是 VERTEX | FRAGMENT（`GPUShaderStage` 的位，Node 测试里
+ * 没有这个全局）；dev 探针把顶点着色器改写成计算着色器时传 COMPUTE（4）。
+ */
+export function bindGroupLayoutEntries(program: TranslateResult, visibility = 0x1 | 0x2): GPUBindGroupLayoutEntry[] {
   const entries: GPUBindGroupLayoutEntry[] = [];
   if (program.uniforms?.length) entries.push({ binding: 0, visibility, buffer: { type: "uniform" } });
   for (const texture of program.textures ?? []) {
@@ -226,7 +250,8 @@ export async function createProgram(
 
 /**
  * `blending` 为 null 时关闭混合（基础 pass 画进合成 RT，B7）。`writeAlpha`：画到场景目标时为 false（见文件头），
- * 画进合成 RT / fbo 时为 true（合成链要带着 alpha 走到上屏那一步）。
+ * 画进合成 RT / fbo 时为 true（合成链要带着 alpha 走到上屏那一步）。`topology`：图层四边形是三角形带，
+ * 粒子是带索引的三角形列表（每粒子 `0 1 2 0 2 3`，P4a 步骤 4）。
  */
 export async function createPipeline(
   device: GPUDevice,
@@ -234,10 +259,11 @@ export async function createPipeline(
   blending: string | null,
   format: GPUTextureFormat,
   writeAlpha = false,
+  topology: "triangle-strip" | "triangle-list" = "triangle-strip",
 ): Promise<GPURenderPipeline> {
   try {
     return await device.createRenderPipelineAsync({
-      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}`,
+      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}`,
       layout: program.pipelineLayout,
       vertex: {
         module: program.vertex,
@@ -250,7 +276,7 @@ export async function createPipeline(
         // 0x7 = RED | GREEN | BLUE，0xf 再加 ALPHA
         targets: [{ format, blend: blending ? blendState(blending) : undefined, writeMask: writeAlpha ? 0xf : 0x7 }],
       },
-      primitive: { topology: "triangle-strip", cullMode: "none" },
+      primitive: { topology, cullMode: "none" },
     });
   } catch (error) {
     throw new SceneRenderError([

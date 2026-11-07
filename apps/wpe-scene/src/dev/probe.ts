@@ -6,7 +6,8 @@
  *   （例如关闭档前后两版渲染器的输出是否逐字节相同）；
  * - `bloom`：泛光链的链路隔离验证（`bloomProbe.ts`）；
  * - `chunk`：把存下的结果（PNG、原始数据）按 base64 分块交给 CDP 那一侧落盘；
- * - `particleTrack`：编译后按给定 dt 序列步进粒子模拟器，输出和 WPE RenderDoc 轨迹同格式的数据（P4a 步骤 3）。
+ * - `particleTrack`：编译后按给定 dt 序列步进粒子模拟器，输出和 WPE RenderDoc 轨迹同格式的数据（P4a 步骤 3）；
+ * - `particleCorners`：把粒子顶点着色器改写成计算着色器，读回每个粒子四角的裁剪坐标（P4a 步骤 4，`particleCorners.ts`）。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -20,6 +21,7 @@ import { acquireGpu } from "../render/device";
 import { GpuScene } from "../render/scene";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
+import { replayParticles, type ParticleReplay } from "./particleCorners";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -134,14 +136,23 @@ export interface RenderFrameOptions {
   sceneAssets: string[];
   postprocess?: ScenePostprocessSetting;
   userProperties?: Record<string, unknown>;
-  /** `g_Time`（秒）；`g_Daytime` 固定 0.5、指针在中心，保证可复现。 */
+  /** `g_Time`（秒）；`g_Daytime` 固定 0.5、指针在中心，保证可复现。传了 `particles` 时改用 dt 的累计值。 */
   time?: number;
-  /** 结果的存放键；PNG 存 `<key>.png`。 */
+  /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（场景目标尺寸，alpha 置 255）存 `<key>.rgba`。 */
   key?: string;
   /** 有不支持项也渲染（同 dev 强制渲染）。默认 true。 */
   force?: boolean;
-  /** 先连续渲染这么多帧计时（每帧提交后等 GPU 完成，串行、不流水），再渲染读回的那一帧。 */
+  /**
+   * 先连续渲染这么多帧计时（每帧提交后等 GPU 完成，串行、不流水），再渲染读回的那一帧。这些帧同样按 1/60 步进粒子，
+   * 要确定性回放粒子时不要同时传。
+   */
   profile?: number;
+  /**
+   * 确定性粒子回放（P4a 步骤 4）：种子固定（缺省 1，第 i 个粒子层用 `seed + i`，同 `particleTrack`）、遍数固定（缺省 1）；
+   * 建场景（含预热）后按 `dts` 步进，`dts[0]` 是第 1 帧，最后一帧就是读回的那一帧，`g_Time` 用 dt 的累计值。
+   * 不传时种子同样固定为 1、不步进，画的是预热后的状态。
+   */
+  particles?: ParticleReplay;
 }
 
 export interface RenderFrameResult {
@@ -161,6 +172,12 @@ export interface RenderFrameResult {
   bloomLevels: number | null;
   /** `profile` 帧的耗时（编码 + 提交 + 等 GPU 完成），毫秒。 */
   frameMs?: { mean: number; p95: number; min: number; max: number };
+  /** 读回那一帧的 `g_Time` 与 `g_Frametime`。 */
+  time: number;
+  frametime: number;
+  /** 各粒子层读回时的数量：存活数（即画了几个）、高水位、容量。 */
+  particles: ReturnType<GpuScene["particleStats"]>;
+  /** PNG 的存放键是 `<key>.png`，原始 RGBA 是 `<key>.rgba`，都用 `chunk` 取（base64 分块）。 */
   key: string;
 }
 
@@ -183,22 +200,28 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const gpu = await acquireGpu();
   try {
     const state = SceneState.fromBundle(bundle);
-    const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], { ignoreUnsupported: force });
+    const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], {
+      ignoreUnsupported: force,
+      particles: { seed: options.particles?.seed ?? 1, passes: options.particles?.passes ?? 1 },
+    });
     try {
-      const time = options.time ?? 0;
+      const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
       if (options.profile) {
         const samples: number[] = [];
         for (let i = 0; i < options.profile; i++) {
           const t0 = performance.now();
           scene.sync(state);
-          scene.update({
-            time: time + i / 60,
-            frametime: 1 / 60,
-            daytime: 0.5,
-            pointer: [0.5, 0.5],
-            pointerLast: [0.5, 0.5],
-          });
+          scene.update(
+            {
+              time: startTime + i / 60,
+              frametime: 1 / 60,
+              daytime: 0.5,
+              pointer: [0.5, 0.5],
+              pointerLast: [0.5, 0.5],
+            },
+            state,
+          );
           const encoder = gpu.device.createCommandEncoder({ label: "probe profile" });
           scene.encode(encoder, state);
           gpu.device.queue.submit([encoder.finish()]);
@@ -214,8 +237,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           max: round(samples.at(-1)!),
         };
       }
+      // 粒子回放：前 n−1 帧只步进，最后一帧随 update 步进
+      const { time, frametime } = replayParticles(scene, state, options.particles, startTime);
       scene.sync(state);
-      scene.update({ time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] });
+      scene.update({ time, frametime, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] }, state);
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
@@ -226,6 +251,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
       const key = options.key ?? `frame-${Date.now()}`;
       storeProbeBytes(`${key}.png`, await encodePng(rgba, scene.width, scene.height));
+      storeProbeBytes(`${key}.rgba`, rgba);
       const sums = [0, 0, 0];
       for (let i = 0; i < rgba.length; i += 4) {
         sums[0] += rgba[i];
@@ -245,6 +271,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         targetBytes: scene.targetBytes,
         bloomLevels: scene.bloomChain ? scene.bloomChain.plan.levels : null,
         frameMs,
+        time,
+        frametime,
+        particles: scene.particleStats(),
         key,
       };
     } finally {
@@ -322,7 +351,8 @@ export async function hostRenderFrame(
   const device = renderer.device;
   const encoder = device.createCommandEncoder({ label: "probe host frame" });
   scene.sync(state);
-  scene.update({ time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] });
+  // 帧时间 0：粒子不步进，读回的是当前状态
+  scene.update({ time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] }, state);
   scene.encode(encoder, state);
   // 有两张目标时 `encode` 开头才换，这一帧画的那张要在它之后取
   const texture = scene.targetTexture!;

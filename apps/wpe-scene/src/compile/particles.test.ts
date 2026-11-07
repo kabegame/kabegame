@@ -381,6 +381,31 @@ describe("能力表：粒子", () => {
     expect([...keys].sort()).toEqual(["object:instanceoverride", "particle:pending"]);
   });
 
+  it("粒子对象的 alpha、color、brightness 取非默认值或绑了属性 / 脚本时报 particle:object:<键>（P4a 步骤 4）", () => {
+    const keysOf = (extra: Record<string, unknown>) => {
+      const keys = new Set<string>();
+      checkObjectFeatures({ id: 1, particle: "p.json", ...extra }, keys);
+      return [...keys].filter((key) => key !== "particle:pending").sort();
+    };
+    // 默认值（编辑器照写的那几种写法）与缺键都不报
+    expect(keysOf({ alpha: 1, color: "1 1 1", brightness: 1 })).toEqual([]);
+    expect(keysOf({ alpha: "1", color: "1.0 1 1", brightness: null })).toEqual([]);
+    expect(keysOf({})).toEqual([]);
+    // 解析不出数字时编译按默认值处理，也不报
+    expect(keysOf({ color: "abc" })).toEqual([]);
+    expect(keysOf({ alpha: 0.5 })).toEqual(["particle:object:alpha"]);
+    expect(keysOf({ color: "1 0.5 1" })).toEqual(["particle:object:color"]);
+    expect(keysOf({ brightness: 2 })).toEqual(["particle:object:brightness"]);
+    expect(keysOf({ alpha: { user: "a", value: 1 } })).toEqual(["particle:object:alpha"]);
+    expect(keysOf({ color: { script: "export function update(v) { return v; }", value: "1 1 1" } })).toEqual([
+      "particle:object:color",
+    ]);
+    // 图像对象不受影响
+    const image = new Set<string>();
+    checkObjectFeatures({ id: 2, image: "models/a.json", alpha: 0.5, color: "1 0 0", brightness: 2 }, image);
+    expect([...image]).toEqual([]);
+  });
+
   it("表外模块：particle:<类别>:<名字>", () => {
     expect(
       particleKeys({

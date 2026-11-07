@@ -184,6 +184,8 @@ export class SceneState {
         else children.set(layer.parent, [layer.object]);
       }
       for (const pass of layer.passes) constants.set(pass.key, { ...pass.uniforms });
+      // 粒子材质的常量（P4a 步骤 4）：粒子 draw 的 uniform 同样从这里取，绑定也按 pass 键就地写
+      for (const pass of layer.particle?.passes ?? []) constants.set(pass.key, { ...pass.uniforms });
       for (const effect of layer.effects) {
         effects.set(effectKey(layer.object, effect.source), {
           enabled: effect.enabled,

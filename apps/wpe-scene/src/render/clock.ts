@@ -32,6 +32,41 @@ export class PausableClock {
   }
 }
 
+/** WPE 的帧时间上下限（`p4-particles-REPORT.md` T2，实测）：`g_Frametime` 钳到这个区间，粒子路径不再钳。 */
+export const FRAMETIME_MIN = 0.0001;
+export const FRAMETIME_MAX = 0.25;
+
+export function clampFrametime(seconds: number): number {
+  return Math.min(FRAMETIME_MAX, Math.max(FRAMETIME_MIN, Number.isFinite(seconds) ? seconds : 0));
+}
+
+/**
+ * 帧时钟（T2）：实时帧按 `PausableClock` 读数的差推进，差钳到 `[0.0001, 0.25]`，`time`（`g_Time`）累加钳后的值，
+ * 所以一帧卡了 1 秒时 `g_Time` 只走 0.25（WPE 同样，实测 `fps=5` 启动时连续三帧恰好 0.25、`runtime` 严格加 0.25）。
+ * 第一个实时帧没有上一帧，差按 0，钳成 0.0001。
+ * 补画帧（暂停、页面隐藏时的 redraw、resize）画的是同一时刻：`time` 不动、`frametime` 为 0，粒子不步进。
+ */
+export class FrameClock {
+  /** 累加的秒数（未回绕）。 */
+  time = 0;
+  /** 这一帧的帧时间（秒）。 */
+  frametime = 0;
+  private last: number | null = null;
+
+  /** 一个实时帧：`seconds` 是 `PausableClock.seconds()`。 */
+  advance(seconds: number): void {
+    const raw = this.last === null ? 0 : seconds - this.last;
+    this.last = seconds;
+    this.frametime = clampFrametime(raw);
+    this.time += this.frametime;
+  }
+
+  /** 补画帧：同一时刻再画一次。补画只发生在时钟冻结时，不记读数。 */
+  hold(): void {
+    this.frametime = 0;
+  }
+}
+
 /**
  * 帧节流：rAF 的回调频率等于显示器刷新率（本机 144 Hz），壁纸没必要跟满。没到下一拍的回调直接跳过；
  * 节拍固定前进，长期平均频率贴近上限而不是被量化到刷新率的约数。`maxFps <= 0` 不节流。

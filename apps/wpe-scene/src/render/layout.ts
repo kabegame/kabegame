@@ -12,6 +12,7 @@
  *   P4a 起 `g_ModelMatrix` 是沿父链累乘的世界矩阵（`worldMatrixOf`），本地矩阵带完整的三轴旋转（`layerLocalMatrix`）。
  * - **相机**：WPE 在正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵，JSON 的值被丢弃
  *   （L2）；投影是 `ortho(0…w, 0…h)`，这里就用它。eagleflag 的 eye 是编辑器残留的偏移，画面不平移。
+ *   透视粒子（P4a 步骤 4）另用一套透视相机（`particleViewProjection`），z = 0 平面和正交画面重合。
  */
 import type { SceneGeneral, SceneTexture } from "../compile/bundle";
 import {
@@ -26,8 +27,15 @@ import {
   type Mat4,
 } from "./math";
 
-/** 正交场景的深度范围：图层 z 一般为 0，映射到深度 0.5。 */
-const ORTHO_DEPTH = 10000;
+/**
+ * 正交场景的深度范围 ±2000，照 WPE（2026-11-07 RenderDoc 读到的 MVP，图像层与正交粒子相同）：深度 = 0.00025·z + 0.5，
+ * 反向 Z（+z 朝相机、深度大），和透视粒子一致。图层 z 一般为 0，深度仍是 0.5；|z| > 2000 的被裁掉，WPE 同样如此。
+ */
+export const ORTHO_DEPTH = 2000;
+
+/** 透视粒子的近平面与远平面下限（`particleViewProjection`，实测）。 */
+const PARTICLE_NEAR = 5;
+const PARTICLE_FAR_MIN = 15000;
 
 /** 不内缩。 */
 export const NO_INSET: readonly [number, number] = [0, 0];
@@ -176,9 +184,36 @@ export function worldMatrixOf(
   return base!;
 }
 
-/** 正交场景的视图投影：场景 `[0, w] × [0, h]`（y 向上）铺满整个渲染目标。 */
+/**
+ * 正交场景的视图投影：场景 `[0, w] × [0, h]`（y 向上）铺满整个渲染目标，z ∈ [−2000, 2000] → 深度 [0, 1]（反向 Z，
+ * 见 `ORTHO_DEPTH`）。1920×1080 时是 WPE 的 `[1/960, 0, 0, 0, 0, 1/540, 0, 0, 0, 0, 0.00025, 0, −1, −1, 0.5, 1]`。
+ * `orthographic` 按 glm 的「视空间 z ∈ [−far, −near] → [0, 1]」，所以 near、far 反着传。
+ */
 export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">): Mat4 {
-  return orthographic(0, general.width, 0, general.height, -ORTHO_DEPTH, ORTHO_DEPTH);
+  return orthographic(0, general.width, 0, general.height, ORTHO_DEPTH, -ORTHO_DEPTH);
+}
+
+/**
+ * 透视粒子（系统 `flags & 4`，P4a 步骤 4）的视图投影，2026-11-07 对 WPE 实测（fov 95、60 两档，MVP 逐项对上）：
+ * - 相机在 `(w/2, h/2, d)` 看向 −z、上方 +y，`d = (h/2) / tan(fov/2)`，所以 z = 0 平面和正交画面重合；
+ * - 投影的纵向视角是 `fov`（`SceneGeneral.perspectiveOverrideFov`，弧度），宽高比 w/h；
+ * - 反向 Z：near 5 → 深度 1，far `max(15000, d + 1000)` → 深度 0，z 系数 `n / (f − n)`。
+ */
+export function particleViewProjection(
+  general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">,
+): Mat4 {
+  const { width, height } = general;
+  const focal = 1 / Math.tan(general.perspectiveOverrideFov / 2);
+  const d = (height / 2) * focal;
+  const near = PARTICLE_NEAR;
+  const far = Math.max(PARTICLE_FAR_MIN, d + 1000);
+  const projection = new Float32Array(16);
+  projection[0] = (focal * height) / width;
+  projection[5] = focal;
+  projection[10] = near / (far - near);
+  projection[11] = -1;
+  projection[14] = (far * near) / (far - near);
+  return multiply(projection, translation(-width / 2, -height / 2, -d));
 }
 
 /** 正交场景的 `g_EyePosition`：`(W/2, H/2, 2000)`，不取 JSON 的 `eye`（L2、L13）。W、H 是投影尺寸，不随渲染目标缩小。 */

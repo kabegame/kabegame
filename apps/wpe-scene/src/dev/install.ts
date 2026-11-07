@@ -3,6 +3,7 @@
  */
 import type { SceneHost } from "../host";
 import { runBloomProbe } from "./bloomProbe";
+import { particleCorners } from "./particleCorners";
 import { hostRenderFrame, hostState, hostStats, particleTrackProbe, probeChunk, probeKeys, renderFrame } from "./probe";
 import { realmCheck } from "./realmProbe";
 import { scriptCorpus } from "./scriptCorpus";
@@ -33,6 +34,8 @@ export function installSceneDevProbe(host: SceneHost): void {
     scriptCorpus,
     /** P4a 步骤 3：按 dt 序列步进粒子模拟器，输出 RenderDoc 轨迹同格式的数据。 */
     particleTrack: particleTrackProbe,
+    /** P4a 步骤 4（风险 7）：翻译出的粒子顶点着色器对当前粒子算出的四角裁剪坐标。 */
+    particleCorners,
     /** P3a：当前场景的状态、宿主计数与「按当前状态渲染一帧」的哈希。 */
     host: {
       state: () => hostState(host),

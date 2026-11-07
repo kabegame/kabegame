@@ -23,11 +23,18 @@
  *   HDR 下 WPE 的后备缓冲存 `lin(x)`，累加因此收敛（L21），我们的目标存 `x`，所以开画之前把底图过一次 `lin`（`linearizeBase`）。
  * - 层级（P4a 步骤 1）：模型矩阵是沿父链累乘的世界矩阵（`worldMatrixOf`），`visible` 沿父链继承（`visibleObjects`），
  *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。
+ * - 粒子（P4a 步骤 4）：粒子层是计划里的 `particles` 步骤，和图像步骤按 `objects` 顺序混排、画在同一个场景 pass 里。
+ *   每个粒子层一个 `ParticleSystem`（种子默认随机，探针可固定；建场景时预热），顶点缓冲按 `maxcount` 分配，索引缓冲全场一份、
+ *   只建一次。`update` 按帧时间步进（不可见的不步进），`encode` 把列写成顶点、`writeBuffer` 后 `drawIndexed`。
+ *   MVP = 视图投影 × 对象世界矩阵，`flags & 4` 换透视粒子的视图投影。混合、纹理、材质常量走和图像 pass 相同的路径。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import { FBO_FORMATS } from "../compile/tex";
+import { SeededRandom } from "../particles/random";
+import { ParticleSystem } from "../particles/system";
+import { particleVertexLayout, quadIndices, writeVertices, type ParticleVertexLayout } from "../particles/vertices";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { oneLine, SceneRenderError } from "./errors";
@@ -40,6 +47,7 @@ import {
   variantPlans,
   type DrawStep,
   type LayerPlan,
+  type ParticleStep,
   type TargetRef,
   type TextureRef,
 } from "./graph";
@@ -48,12 +56,13 @@ import {
   everyAncestor,
   eyePosition,
   layerQuad,
+  particleViewProjection,
   sceneTargetSize,
   sceneViewProjection,
   worldMatrixOf,
 } from "./layout";
 import type { Mat4 } from "./math";
-import { createPipeline, createProgram, type GpuProgram } from "./programs";
+import { createPipeline, createProgram, vertexPacking, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
 import {
@@ -61,8 +70,8 @@ import {
   frameBuiltins,
   layerRefreshNames,
   LIGHT_UNIFORMS,
+  particleUniformValues,
   UniformBlock,
-  type DrawUniformInput,
   type FrameInput,
   type UniformEntry,
 } from "./uniforms";
@@ -132,9 +141,36 @@ interface PreparedDraw {
   pipeline: GPURenderPipeline;
 }
 
+/** 图层的绘制步骤，或粒子层的绘制（`graph.ts`）：都画一次，共用 draw 的 uniform / bind group / 管线路径。 */
+type DrawLike = DrawStep | ParticleStep;
+
+/** 一个粒子层的模拟器与 CPU 侧顶点（P4a 步骤 4）。 */
+interface ParticleDraw {
+  system: ParticleSystem;
+  layout: ParticleVertexLayout;
+  /** CPU 侧交错顶点，按 `maxcount` 个粒子（每个 4 个顶点）分配。 */
+  vertices: Float32Array;
+  /** 上次写进缓冲的粒子数，`drawIndexed` 画 6 倍的索引。 */
+  count: number;
+  /** 步进过、还没写成顶点：`encode` 里写 `vertices` 并 `writeBuffer`。 */
+  stale: boolean;
+}
+
+/** 粒子层的运行时选项（`GpuScene.build`）。 */
+export interface ParticleOptions {
+  /** operator 遍数（`particlePasses(maxFps)`）；缺省 1。 */
+  passes?: 1 | 2;
+  /** 随机种子：第 i 个粒子层（`bundle.layers` 里带 `particle` 的，按顺序）用 `seed + i`，同 `particles/track.ts`。缺省随机。 */
+  seed?: number;
+}
+
 interface Draw {
   label: string;
-  step: DrawStep;
+  step: DrawLike;
+  /** 粒子层的模拟器与顶点；图像层为 null。 */
+  particles: ParticleDraw | null;
+  /** 本 draw 的程序（dev 探针改写顶点着色器用）。 */
+  program: GpuProgram;
   /** 所属图层（`objects` 下标与 bundle 里的图层，就地刷新用）。 */
   object: number;
   layer: SceneLayer;
@@ -178,21 +214,25 @@ type Op =
   | { kind: "copy"; resources: LayerResources; effect: number; source: TextureRef; target: TargetRef }
   | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string };
 
-/** 决定一条管线的四项：WebGPU 的管线绑定了混合、目标格式与写掩码（WPE 的 D3D11 着色器不绑），同一个程序要按它们各建一份。 */
+/**
+ * 决定一条管线的五项：WebGPU 的管线绑定了混合、目标格式、写掩码与图元拓扑（WPE 的 D3D11 着色器不绑），同一个程序要按它们
+ * 各建一份。`list`：粒子的带索引三角形列表；图层四边形是三角形带。
+ */
 export interface PipelineSpec {
   program: number;
   blending: string | null;
   format: GPUTextureFormat;
   alpha: boolean;
+  list: boolean;
 }
 
-export function pipelineKey({ program, blending, format, alpha }: PipelineSpec): string {
-  return `${program}|${blending}|${format}|${alpha}`;
+export function pipelineKey({ program, blending, format, alpha, list }: PipelineSpec): string {
+  return `${program}|${blending}|${format}|${alpha}${list ? "|list" : ""}`;
 }
 
-/** 绘制步骤的管线：合成 RT 与场景目标同格式，只有 fbo 有自己的格式；画到场景目标时不写 alpha。 */
+/** 绘制步骤的管线：合成 RT 与场景目标同格式，只有 fbo 有自己的格式；画到场景目标时不写 alpha。粒子只画到场景目标。 */
 export function stepPipeline(
-  step: DrawStep,
+  step: DrawLike,
   format: GPUTextureFormat,
   fboFormat: (effect: number, name: string) => GPUTextureFormat,
 ): PipelineSpec {
@@ -202,15 +242,27 @@ export function stepPipeline(
     blending,
     format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
     alpha: target.kind !== "scene",
+    list: step.kind === "particles",
   };
+}
+
+/** 粒子程序的顶点输入能不能由 `writeVertices` 写（`particles/vertices.ts`）。 */
+function particleAttributeProblems(program: SceneBundle["programs"][number]): string[] {
+  try {
+    return particleVertexLayout(vertexPacking(program.attributes ?? [])).problems;
+  } catch (error) {
+    return error instanceof SceneRenderError ? error.reasons : [`render:particle-attribute:${String(error)}`];
+  }
 }
 
 /** 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。 */
 function planProblems(plan: LayerPlan, bundle: SceneBundle): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
-    if (step.kind !== "draw") continue;
-    if (step.pass.program === null || !bundle.programs[step.pass.program]) problems.push("render:no-program");
+    if (step.kind !== "draw" && step.kind !== "particles") continue;
+    const program = step.pass.program === null ? undefined : bundle.programs[step.pass.program];
+    if (!program) problems.push("render:no-program");
+    else if (step.kind === "particles") problems.push(...particleAttributeProblems(program));
     for (const ref of Object.values(step.inputs))
       if (ref.kind === "texture" && !bundle.textures[ref.index]?.mips.length)
         problems.push(`render:texture-missing:${ref.index}`);
@@ -223,7 +275,8 @@ function wantsSnapshot(plan: LayerPlan): boolean {
   return plan.steps.some(
     (step) =>
       step.kind === "snapshot" ||
-      (step.kind === "draw" && Object.values(step.inputs).some((ref) => ref.kind === "framebuffer")),
+      ((step.kind === "draw" || step.kind === "particles") &&
+        Object.values(step.inputs).some((ref) => ref.kind === "framebuffer")),
   );
 }
 
@@ -248,16 +301,16 @@ export function checkRenderable(
 }
 
 /**
- * 要建 GPU 资源的图层（有 pass 的）：自身和每个祖先都可能可见，即当前可见、`visible` 绑了用户属性，或场景带脚本。
- * `visibleBound` 的图层当前可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组下面的子孙永远画不出来
- * （`visible` 沿父链继承，P4a 步骤 1）：不建资源，它们的问题也不让整场退回。
+ * 要建 GPU 资源的图层（有 pass 的，含粒子材质的 pass，P4a 步骤 4）：自身和每个祖先都可能可见，即当前可见、`visible`
+ * 绑了用户属性，或场景带脚本。`visibleBound` 的图层当前可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组
+ * 下面的子孙永远画不出来（`visible` 沿父链继承，P4a 步骤 1）：不建资源，它们的问题也不让整场退回。
  */
 export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">): SceneLayer[] {
   const scripted = bundle.scripts.list.length > 0;
   const byObject = new Map(bundle.layers.map((layer) => [layer.object, layer]));
   return bundle.layers.filter(
     (layer) =>
-      layer.passes.length > 0 &&
+      (layer.passes.length > 0 || (layer.particle?.passes.length ?? 0) > 0) &&
       everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted),
   );
 }
@@ -266,6 +319,7 @@ export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">)
  * 要上传的纹理：除了只被「关着且带不支持项」的 effect 用到的，其余全部上传。这种 effect 打开时整场重编译，用不到这份
  * GPU 纹理；它的纹理可能没有 mip 或格式不认识，上传会抛错，让本来能画的场景退回（3c）。关着的 effect 编译到一半出错时
  * 步骤不留，已解析的纹理同样不被引用。没有可变 effect 的场景，bundle 里的纹理都有 pass 引用，结果是全集。
+ * 粒子材质的纹理同样上传（P4a 步骤 4）。
  */
 export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<number> {
   const used = new Set<number>();
@@ -274,6 +328,7 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
   };
   for (const layer of bundle.layers) {
     layer.passes.forEach(add);
+    layer.particle?.passes.forEach(add);
     if (layer.passthrough) add(layer.passthrough);
     for (const effect of layer.effects) {
       if (!effect.enabled && effect.unsupported.length) continue;
@@ -318,6 +373,14 @@ export class GpuScene {
   private bloom: BloomChain | null = null;
   /** 就地刷新 uniform 时复用的场景级常量（建场景时算一次）。 */
   private viewProjection: Float32Array = new Float32Array(16);
+  /** 透视粒子（`flags & 4`）的视图投影（`particleViewProjection`）。 */
+  private perspectiveViewProjection: Float32Array = new Float32Array(16);
+  /** 粒子层全场共用的索引缓冲（`quadIndices`），按最大的 `maxcount` 建一次；没有粒子层时为 null。 */
+  private particleIndices: { buffer: GPUBuffer; format: GPUIndexFormat; particles: number } | null = null;
+  /** 粒子层（`objects` 下标）→ 第几个粒子层（`bundle.layers` 里带 `particle` 的顺序），定种子用。 */
+  private readonly particleOrdinals = new Map<number, number>();
+  private readonly particlePasses: 1 | 2;
+  private readonly particleSeed: number;
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
   private hdr = false;
   private eye: readonly number[] = [];
@@ -337,7 +400,13 @@ export class GpuScene {
     private readonly device: GPUDevice,
     private readonly bundle: SceneBundle,
     private readonly warnings: string[],
-  ) {}
+    particles: ParticleOptions,
+  ) {
+    this.particlePasses = particles.passes ?? 1;
+    this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
+    let ordinal = 0;
+    for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
+  }
 
   /** 这一帧画的那张场景目标（dev 探针同步读回用）。有两张时 `encode` 开头才换，要在它之后取。 */
   get targetTexture(): GPUTexture | null {
@@ -353,6 +422,7 @@ export class GpuScene {
    * 建全部资源。失败时已建的资源都会释放，抛 `SceneRenderError`；`warnings` 收集 Tint 的非错误消息。
    * `state` 是本次场景的 CPU 侧状态（`render/state.ts`），建 draw 时按它的初始值写 uniform；
    * `ignoreUnsupported`：dev 强制渲染（D4），不因 `bundle.unsupported` 拒绝，渲染器自查仍然生效。
+   * `particles`：粒子的遍数与种子（`ParticleOptions`）；粒子系统建好就预热。
    */
   static async build(
     device: GPUDevice,
@@ -360,11 +430,11 @@ export class GpuScene {
     state: SceneState,
     features: ReadonlySet<string>,
     warnings: string[],
-    options: { ignoreUnsupported?: boolean } = {},
+    options: { ignoreUnsupported?: boolean; particles?: ParticleOptions } = {},
   ): Promise<GpuScene> {
     const reasons = checkRenderable(bundle, features, options);
     if (reasons.length) throw new SceneRenderError(reasons);
-    const scene = new GpuScene(device, bundle, warnings);
+    const scene = new GpuScene(device, bundle, warnings, options.particles ?? {});
     device.pushErrorScope("out-of-memory");
     device.pushErrorScope("validation");
     let failure: unknown = null;
@@ -453,11 +523,13 @@ export class GpuScene {
     blending: string | null,
     format: GPUTextureFormat,
     alpha: boolean,
+    list = false,
   ): Promise<GPURenderPipeline> {
-    const key = pipelineKey({ program: program.index, blending, format, alpha });
+    const key = pipelineKey({ program: program.index, blending, format, alpha, list });
     let pipeline = this.pipelines.get(key);
     if (!pipeline) {
-      pipeline = createPipeline(this.device, program, blending, format, alpha).then((ready) => {
+      const topology = list ? "triangle-list" : "triangle-strip";
+      pipeline = createPipeline(this.device, program, blending, format, alpha, topology).then((ready) => {
         this.readyPipelines.set(key, ready);
         return ready;
       });
@@ -502,9 +574,9 @@ export class GpuScene {
     };
   }
 
-  /** 基础材质槽 0 的纹理：合成 RT 的尺寸与采样都跟随它。 */
+  /** 基础材质槽 0 的纹理：合成 RT 的尺寸与采样都跟随它。粒子层没有基础材质，为 undefined。 */
   private baseTexture(layer: SceneLayer): SceneTexture | undefined {
-    const base = layer.passes[0].textures[0];
+    const base = layer.passes[0]?.textures[0];
     return base === undefined ? undefined : this.bundle.textures[base];
   }
 
@@ -540,29 +612,29 @@ export class GpuScene {
     return planLayer(layer, this.bundle.textures, (e) => state.effectEnabled(layer.object, layer.effects[e].source));
   }
 
-  private pipelineOf(step: DrawStep, resources: LayerResources): PipelineSpec {
+  private pipelineOf(step: DrawLike, resources: LayerResources): PipelineSpec {
     return stepPipeline(step, this.format, (effect, name) => this.targets[resources.fbos.resolve(effect, name)].format);
   }
 
   /** 等齐一份计划要用的程序与管线，之后 `buildLayer` 就是同步的。 */
-  private async prepareLayer(plan: LayerPlan, resources: LayerResources): Promise<Map<DrawStep, PreparedDraw>> {
-    const prepared = new Map<DrawStep, PreparedDraw>();
+  private async prepareLayer(plan: LayerPlan, resources: LayerResources): Promise<Map<DrawLike, PreparedDraw>> {
+    const prepared = new Map<DrawLike, PreparedDraw>();
     await Promise.all(
       plan.steps.map(async (step) => {
-        if (step.kind !== "draw") return;
+        if (step.kind !== "draw" && step.kind !== "particles") return;
         const program = await this.ensureProgram(step.pass.program!);
-        const { blending, format, alpha } = this.pipelineOf(step, resources);
-        prepared.set(step, { program, pipeline: await this.pipelineFor(program, blending, format, alpha) });
+        const { blending, format, alpha, list } = this.pipelineOf(step, resources);
+        prepared.set(step, { program, pipeline: await this.pipelineFor(program, blending, format, alpha, list) });
       }),
     );
     return prepared;
   }
 
   /** 从就绪表同步取一份计划的程序与管线。`prepareVariants` 都备好了，缺了说明枚举漏了。 */
-  private preparedOf(plan: LayerPlan, resources: LayerResources): Map<DrawStep, PreparedDraw> {
-    const prepared = new Map<DrawStep, PreparedDraw>();
+  private preparedOf(plan: LayerPlan, resources: LayerResources): Map<DrawLike, PreparedDraw> {
+    const prepared = new Map<DrawLike, PreparedDraw>();
     for (const step of plan.steps) {
-      if (step.kind !== "draw") continue;
+      if (step.kind !== "draw" && step.kind !== "particles") continue;
       const spec = this.pipelineOf(step, resources);
       const program = this.readyPrograms.get(spec.program);
       const pipeline = this.readyPipelines.get(pipelineKey(spec));
@@ -628,7 +700,7 @@ export class GpuScene {
   private buildLayer(
     runtime: LayerRuntime,
     plan: LayerPlan,
-    prepared: ReadonlyMap<DrawStep, PreparedDraw>,
+    prepared: ReadonlyMap<DrawLike, PreparedDraw>,
     state: SceneState,
     worlds: Map<number, Mat4>,
   ): { ops: Op[]; draws: Draw[] } {
@@ -692,7 +764,8 @@ export class GpuScene {
     const used = new Set<number>();
     for (const plan of plans)
       for (const step of plan.steps)
-        if (step.kind === "draw" && step.pass.program !== null) used.add(step.pass.program);
+        if ((step.kind === "draw" || step.kind === "particles") && step.pass.program !== null)
+          used.add(step.pass.program);
     for (const pass of Object.values(bundle.bloom?.passes ?? {}))
       if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
     const settled = await Promise.allSettled([...used].map((index) => this.ensureProgram(index)));
@@ -710,6 +783,16 @@ export class GpuScene {
     const fboPool = new Map<string, number>();
     const setup = device.createCommandEncoder({ label: "scene setup" });
     this.viewProjection = sceneViewProjection(general);
+    this.perspectiveViewProjection = particleViewProjection(general);
+    // 粒子的索引缓冲：全场一份，按最大的 maxcount 建
+    const particleCapacity = plans.reduce(
+      (max, plan, index) =>
+        plan.steps.some((step) => step.kind === "particles")
+          ? Math.max(max, built[index].particle?.maxcount ?? 0)
+          : max,
+      -1,
+    );
+    if (particleCapacity >= 0) this.createParticleIndices(particleCapacity);
 
     const runtimes = plans.map((plan, index) => {
       const layer = built[index];
@@ -843,9 +926,38 @@ export class GpuScene {
     return this.resolveTexture(ref, resources);
   }
 
+  /** 全场一份的粒子索引缓冲（`quadIndices`）：每粒子 `0 1 2 0 2 3`，建场景时写一次。 */
+  private createParticleIndices(capacity: number): void {
+    const particles = Math.max(1, capacity);
+    const indices = quadIndices(particles);
+    const buffer = this.own(
+      this.device.createBuffer({
+        label: "particle indices",
+        size: indices.byteLength,
+        usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+      }),
+    );
+    this.device.queue.writeBuffer(buffer, 0, indices.buffer, indices.byteOffset, indices.byteLength);
+    this.particleIndices = { buffer, format: indices instanceof Uint32Array ? "uint32" : "uint16", particles };
+  }
+
+  /**
+   * 一个粒子层的模拟器：种子 = `particleSeed` + 第几个粒子层，建好就预热（C1）。顶点按 `maxcount` 分配，
+   * 第一次 `encode` 时写（`stale`）。布局的问题 `checkRenderable` 已经查过。
+   */
+  private createParticles(layer: SceneLayer, program: GpuProgram): ParticleDraw {
+    const def = layer.particle!;
+    const ordinal = this.particleOrdinals.get(layer.object) ?? 0;
+    const system = new ParticleSystem(def, new SeededRandom((this.particleSeed + ordinal) >>> 0), this.particlePasses);
+    system.prewarm();
+    const { layout } = particleVertexLayout(program.vertexPacking);
+    const vertices = new Float32Array(Math.max(1, system.columns.capacity) * 4 * Math.max(1, layout.stride));
+    return { system, layout, vertices, count: 0, stale: true };
+  }
+
   private createDraw(
     layer: SceneLayer,
-    step: DrawStep,
+    step: DrawLike,
     resources: LayerResources,
     { program, pipeline }: PreparedDraw,
     state: SceneState,
@@ -853,20 +965,34 @@ export class GpuScene {
   ): Draw {
     const { device, bundle } = this;
     const { pass } = step;
-    const label = `layer ${layer.id} ${layer.name} ${step.role}`;
+    const label = `layer ${layer.id} ${layer.name} ${step.kind === "particles" ? "particles" : step.role}`;
 
-    // 几何：图层四边形（模型空间、未缩放的 size），或 NDC 全屏四边形
-    const vertices =
-      step.geometry === "fullscreen" ? layerQuad([2, 2], [1, 1]) : layerQuad(layer.size, step.uv, step.inset);
-    const vertexData = program.vertexPacking.pack(vertices);
-    const vertexBuffer = this.own(
-      device.createBuffer({
-        label,
-        size: vertexData.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      }),
-    );
-    device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+    let vertexBuffer: GPUBuffer;
+    let particles: ParticleDraw | null = null;
+    if (step.kind === "particles") {
+      // 粒子：每帧由 `encode` 写，按容量分配
+      particles = this.createParticles(layer, program);
+      vertexBuffer = this.own(
+        device.createBuffer({
+          label,
+          size: particles.vertices.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        }),
+      );
+    } else {
+      // 几何：图层四边形（模型空间、未缩放的 size），或 NDC 全屏四边形
+      const vertices =
+        step.geometry === "fullscreen" ? layerQuad([2, 2], [1, 1]) : layerQuad(layer.size, step.uv, step.inset);
+      const vertexData = program.vertexPacking.pack(vertices);
+      vertexBuffer = this.own(
+        device.createBuffer({
+          label,
+          size: vertexData.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        }),
+      );
+      device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+    }
 
     const sizeOf = (ref: TextureRef | undefined) => {
       if (!ref) return undefined;
@@ -888,7 +1014,7 @@ export class GpuScene {
       const layerState = state.layers.get(layer.object);
       if (layerState)
         for (const [name, values] of Object.entries(
-          drawUniformValues(this.uniformInput(step, layer, layerState, textureSizes, state, worlds)),
+          this.uniformValues(step, layer, layerState, textureSizes, state, worlds),
         ))
           block.set(name, values);
       frameNames = Object.keys(
@@ -941,6 +1067,8 @@ export class GpuScene {
     return {
       label,
       step,
+      particles,
+      program,
       object: layer.object,
       layer,
       passKey: pass.key,
@@ -978,30 +1106,42 @@ export class GpuScene {
     return group;
   }
 
-  /** 就地刷新 uniform 的输入：图层状态、按父链算的世界矩阵 + 场景级常量（建场景时算一次）。 */
-  private uniformInput(
-    step: DrawStep,
+  /**
+   * 一个 draw 的全部静态 uniform（建 draw 与就地刷新共用）：图层状态、按父链算的世界矩阵 + 场景级常量（建场景时算一次）。
+   * 图层走 `drawUniformValues`，粒子走 `particleUniformValues`（透视粒子换视图投影）。
+   */
+  private uniformValues(
+    step: DrawLike,
     layer: SceneLayer,
     layerState: LayerState,
     textures: readonly (TextureSize | undefined)[],
     state: SceneState,
     worlds: Map<number, Mat4>,
-  ): DrawUniformInput {
-    return {
-      step,
-      layer: { ...layerState, size: layer.size },
+  ): Record<string, number[]> {
+    const common = {
       world: worldMatrixOf(layer.object, state.layers, worlds),
       constants: state.constants.get(step.pass.key) ?? {},
-      viewProjection: this.viewProjection,
       // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
       colorScale: this.hdr ? layerState.brightness : 1,
-      screenSize: [this.width, this.height],
+      screenSize: [this.width, this.height] as [number, number],
       textures,
       eye: this.eye,
       // 读状态，不读编译结果：单图层重建新建的 draw 要拿到当前值
       ambient: state.general.ambientcolor,
       skylight: state.general.skylightcolor,
     };
+    if (step.kind === "particles")
+      return particleUniformValues({
+        ...common,
+        layer: layerState,
+        viewProjection: step.perspective ? this.perspectiveViewProjection : this.viewProjection,
+      });
+    return drawUniformValues({
+      ...common,
+      step,
+      layer: { ...layerState, size: layer.size },
+      viewProjection: this.viewProjection,
+    });
   }
 
   /**
@@ -1141,9 +1281,7 @@ export class GpuScene {
   private refreshLayer(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
     const layerState = state.layers.get(draw.object);
     if (!draw.block || !layerState) return;
-    const values = drawUniformValues(
-      this.uniformInput(draw.step, draw.layer, layerState, draw.textureSizes, state, worlds),
-    );
+    const values = this.uniformValues(draw.step, draw.layer, layerState, draw.textureSizes, state, worlds);
     for (const name of layerRefreshNames(draw.step.pass.uniforms)) {
       const value = values[name];
       if (value) draw.block.set(name, value);
@@ -1170,8 +1308,12 @@ export class GpuScene {
     }
   }
 
-  /** 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。 */
-  update(frame: FrameInput): void {
+  /**
+   * 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。粒子按 `frame.frametime` 步进一帧
+   * （`stepParticles`）：`state` 给出时不可见的粒子层不步进，不给（只核对 uniform 的单测）时全部步进。
+   */
+  update(frame: FrameInput, state?: SceneState): void {
+    this.stepParticles(frame.frametime, state);
     const values = frameBuiltins(frame);
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
@@ -1180,6 +1322,86 @@ export class GpuScene {
       this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
       draw.dirty = false;
     }
+  }
+
+  /**
+   * 全部粒子层按帧时间步进一帧（`ParticleSystem.step` 乘 `instanceoverride.rate`）；帧时间不是正数（补画帧）时不动。
+   * `state` 给出时跳过不可见的粒子层：不可见时 WPE 不发射、清空存活粒子是读码结论（步骤 5 再做），这里先只是不步进。
+   * dev 探针按 dt 序列回放时直接调它。
+   */
+  stepParticles(frametime: number, state?: SceneState): void {
+    if (!(frametime > 0)) return;
+    for (const draw of this.draws) {
+      const particles = draw.particles;
+      if (!particles || (state && !effectiveVisible(draw.object, state.layers))) continue;
+      particles.system.step(frametime);
+      particles.stale = true;
+    }
+  }
+
+  /** 步进过的粒子层：把列写成顶点，再整段传上去（只传存活的那部分）。 */
+  private uploadParticles(draw: Draw, particles: ParticleDraw): void {
+    if (!particles.stale) return;
+    particles.stale = false;
+    particles.count = writeVertices(particles.system, particles.layout, particles.vertices);
+    if (!particles.count) return;
+    const bytes = particles.count * 4 * particles.layout.stride * 4;
+    this.device.queue.writeBuffer(
+      draw.vertexBuffer,
+      0,
+      particles.vertices.buffer,
+      particles.vertices.byteOffset,
+      bytes,
+    );
+  }
+
+  /** 各粒子层当前的数量（dev 探针用）：存活数、高水位与容量。 */
+  particleStats(): { object: number; name: string; alive: number; highWater: number; capacity: number }[] {
+    return [...this.draws].flatMap((draw) =>
+      draw.particles
+        ? [
+            {
+              object: draw.object,
+              name: draw.layer.name,
+              alive: draw.particles.system.alive,
+              highWater: draw.particles.system.highWater,
+              capacity: draw.particles.system.columns.capacity,
+            },
+          ]
+        : [],
+    );
+  }
+
+  /**
+   * dev 探针（`particleCorners`）：一个粒子层的程序、uniform 缓冲、bind group 条目，以及按当前状态写好的顶点
+   * （存活粒子按槽序，`count` 个，每个 4 个顶点）。不是粒子层时为 null。
+   */
+  particleProbe(object: number): {
+    program: GpuProgram;
+    uniformBuffer: GPUBuffer | null;
+    entries: GPUBindGroupEntry[];
+    vertices: Float32Array;
+    count: number;
+    layout: ParticleVertexLayout;
+    perspective: boolean;
+    system: ParticleSystem;
+  } | null {
+    const draw = [...this.draws].find((item) => item.object === object && item.particles);
+    if (!draw?.particles || draw.step.kind !== "particles") return null;
+    const { system, layout } = draw.particles;
+    const vertices = new Float32Array(draw.particles.vertices.length);
+    const count = writeVertices(system, layout, vertices);
+    const resources = draw.resources;
+    return {
+      program: draw.program,
+      uniformBuffer: draw.uniformBuffer,
+      entries: draw.entries((effect, name) => this.targets[resources.fbos.resolve(effect, name)]),
+      vertices: vertices.subarray(0, count * 4 * layout.stride),
+      count,
+      layout,
+      perspective: draw.step.perspective,
+      system,
+    };
   }
 
   /**
@@ -1227,10 +1449,19 @@ export class GpuScene {
       open = null;
     };
     const draw = (pass: GPURenderPassEncoder, item: Draw) => {
+      const particles = item.particles;
+      if (particles) {
+        // 粒子：先把这一帧的顶点传上去（队列写入排在本帧提交之前），没有存活粒子就不画
+        this.uploadParticles(item, particles);
+        if (!particles.count || !this.particleIndices) return;
+      }
       pass.setPipeline(item.pipeline);
       pass.setBindGroup(0, this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
-      pass.draw(4);
+      if (particles) {
+        pass.setIndexBuffer(this.particleIndices!.buffer, this.particleIndices!.format);
+        pass.drawIndexed(particles.count * 6);
+      } else pass.draw(4);
     };
     const runOps = (ops: readonly Op[]) => {
       for (const op of ops) {
@@ -1294,5 +1525,6 @@ export class GpuScene {
     this.linearBase = null;
     this.snapshot = null;
     this.bloom = null;
+    this.particleIndices = null;
   }
 }

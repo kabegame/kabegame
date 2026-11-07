@@ -17,6 +17,7 @@
  *   图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前。
  *   合成链不画进场景，所以三处拷到的都是画到本图层之前的场景。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」
  *   的条件；`fullscreen` 与 `passthrough` 对象另报 unsupported（P4a 起有父子层，但父层不会是 passthrough），条件恒成立。
+ * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：一个 `particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";
@@ -58,8 +59,23 @@ export interface DrawStep {
   /** 混合模式（`programs.ts` 的 `blendState`）；null = 关闭混合、四通道直写。 */
   blending: string | null;
 }
+/**
+ * 粒子层的绘制（P4a 步骤 4）：粒子材质的 pass 直接画到场景目标，和图像步骤一样按 `objects` 顺序执行。几何不是图层四边形，
+ * 是模拟器每帧写的顶点（每粒子 4 个顶点、6 个索引，`particles/vertices.ts`），MVP = 视图投影 × 对象世界矩阵。
+ */
+export interface ParticleStep {
+  kind: "particles";
+  pass: ScenePass;
+  target: { kind: "scene" };
+  /** 每个槽位的纹理来源（材质静态纹理，或 `_rt_FullFrameBuffer`）。 */
+  inputs: Record<number, TextureRef>;
+  blending: string;
+  /** 系统 `flags & 4`：换透视粒子的视图投影（`layout.ts` 的 `particleViewProjection`）。 */
+  perspective: boolean;
+}
 export type LayerStep =
   | DrawStep
+  | ParticleStep
   | { kind: "snapshot" }
   | { kind: "copy"; effect: number; source: TextureRef; target: TargetRef }
   | { kind: "swap"; effect: number; source: string; target: string };
@@ -120,11 +136,45 @@ export function isPassthroughBlend(colorBlendMode: number): boolean {
   return colorBlendMode !== 0 && colorBlendMode !== 31;
 }
 
+/**
+ * 粒子层的计划（P4a 步骤 4）：一个 `particles` 步骤，直接画到场景目标。
+ * 材质需要 `_rt_FullFrameBuffer` 时照图像层直接上屏的规则 1，在本层开始前拷一次快照。档 1 的材质都用不到（`REFRACT` 等
+ * 读帧缓冲的 COMBO 由 `particle:combo:*` 挡住），这条没有和 WPE 比过。其余运行时纹理（fbo 名）粒子没有，报不支持。
+ * 没有 pass（粒子 JSON 读不到、材质缺失）时为空计划。
+ */
+export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPlan {
+  const reasons: string[] = [];
+  const steps: LayerStep[] = [];
+  const particle = layer.particle;
+  const pass = particle?.passes[0];
+  if (!particle || !pass) return { composite: null, steps, reasons };
+  // 编译期已报 `particle:material:passes`；渲染器只画第一个
+  if (particle.passes.length > 1) reasons.push("render:multi-pass");
+  const inputs: Record<number, TextureRef> = {};
+  for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+  for (const [slot, name] of Object.entries(pass.runtime)) {
+    if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+    else reasons.push(`render:texture-rt:${name}`);
+  }
+  if (pass.framebuffer) steps.push({ kind: "snapshot" });
+  steps.push({
+    kind: "particles",
+    pass,
+    target: { kind: "scene" },
+    inputs,
+    blending: pass.blending,
+    perspective: (particle.flags & 4) !== 0,
+  });
+  return { composite: null, steps, reasons };
+}
+
 export function planLayer(
   layer: SceneLayer,
   textures: readonly TextureSize[],
   enabled: (effect: number) => boolean = (e) => layer.effects[e].enabled, // 运行时的开关，3c 步骤 2 传入
 ): LayerPlan {
+  // 粒子对象没有图像 pass，也不编 effect（`compileScene`）
+  if (layer.particle) return planParticleLayer(layer);
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const base = layer.passes[0];
@@ -306,7 +356,9 @@ export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]
 
 /** 渲染图的签名：步骤序列、角色、目标、合成 RT。相同就不用重建（同 WPE「数值变了才重建」）。pass 只取稳定键。 */
 export function planSignature(plan: LayerPlan): string {
-  const steps = plan.steps.map((step) => (step.kind === "draw" ? { ...step, pass: step.pass.key } : step));
+  const steps = plan.steps.map((step) =>
+    step.kind === "draw" || step.kind === "particles" ? { ...step, pass: step.pass.key } : step,
+  );
   return JSON.stringify({ composite: plan.composite, steps });
 }
 

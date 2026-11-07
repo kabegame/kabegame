@@ -9,6 +9,7 @@
  * 这三类逐项核对（`checkProgramFeatures`，默认纹理在 `bundle.ts` 里随绑定一起核对）。
  */
 import {
+  numbers,
   staticCombos,
   type EffectJson,
   type JsonObject,
@@ -286,6 +287,27 @@ const LIGHT_KEYS = new Set([
 const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as const;
 export type ObjectKind = (typeof OBJECT_KINDS)[number];
 
+/**
+ * 粒子对象上的 `alpha`、`color`、`brightness`（P4a 步骤 4）：图像层按 `g_Color4` 等用，粒子上 WPE 怎么用没测过
+ * （档 1 的两个粒子着色器都不读 `g_Color4`，WPE 可能乘进实例颜色）。取默认值时没有分别，取非默认值、或绑了用户属性 /
+ * 脚本（运行时可能变）时报 `particle:object:<键>`。
+ */
+const PARTICLE_OBJECT_DEFAULTS: Readonly<Record<string, readonly number[]>> = {
+  alpha: [1],
+  color: [1, 1, 1],
+  brightness: [1],
+};
+
+/** 值与默认值不同：解析成数字后逐分量比；解析不出来时编译按默认值处理，不算。 */
+function particleObjectValueUsed(value: unknown, defaults: readonly number[]): boolean {
+  if (value === null || value === undefined) return false;
+  if (isUserBinding(value) || isScriptValue(value)) return true;
+  if (typeof value !== "number" && typeof value !== "string" && typeof value !== "boolean") return true;
+  const parsed = numbers(value, []);
+  if (!parsed.length) return false;
+  return defaults.some((expected, i) => (parsed[i] ?? expected) !== expected);
+}
+
 /** 对象的内容类别；都没有时是分组节点（undefined）。`compileScene` 按同一规则分派。 */
 export function objectKind(object: SceneObject): ObjectKind | undefined {
   return OBJECT_KINDS.find((key) => active(object[key]));
@@ -302,11 +324,13 @@ export function objectKind(object: SceneObject): ObjectKind | undefined {
 export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>, parent: number | null = null): void {
   const kind = objectKind(object);
   if (kind === "particle") {
-    // 临时键：粒子还不会画（P4a 步骤 4 接上绘制后删掉），否则只差粒子的场景会被当成能渲染、静默少画粒子
+    // 临时键：粒子已经能画（P4a 步骤 4），生命周期与 `instanceoverride` 的就地更新在步骤 5，做完再删
     unsupported.add("particle:pending");
     // 带 effects 的粒子对象本机 0 个，P4 不做
     const effects = object.effects as unknown;
     if (Array.isArray(effects) ? effects.length > 0 : active(effects)) unsupported.add("particle:effects");
+    for (const [key, defaults] of Object.entries(PARTICLE_OBJECT_DEFAULTS))
+      if (particleObjectValueUsed(object[key], defaults)) unsupported.add(`particle:object:${key}`);
   } else if (kind && kind !== "image" && kind !== "light") unsupported.add(`object:${kind}`);
   // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
   if (kind === "light" && parent !== null) unsupported.add("object:parent");
@@ -421,8 +445,8 @@ export function checkEffectFeatures(
 }
 
 /**
- * 粒子着色器（`common_particles.h`）要、只有粒子路径才写的引擎 uniform：朝向、视图轴与 `g_RenderVar0/1`。步骤 4 的渲染器
- * 写它们（`phase-4a-base.md` 步骤 4「修改 uniform」）；在那之前粒子整张由 `particle:pending` 退回，所以粒子 pass 的程序检查
+ * 粒子着色器（`common_particles.h`）要、只有粒子路径才写的引擎 uniform：朝向、视图轴与 `g_RenderVar0/1`。渲染器在粒子
+ * draw 里写它们（`render/uniforms.ts` 的 `particleBuiltins`，P4a 步骤 4，单测核对两边一致），所以粒子 pass 的程序检查
  * 把它们当引擎 uniform，图层材质里照报。`g_EyePosition`、`g_Texture0Resolution` 已在 `ENGINE_UNIFORMS` / 通配里。
  */
 export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([

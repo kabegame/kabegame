@@ -326,3 +326,34 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 | 变异检查（代理 14 处、Claude 10 处） | 帧内顺序、`R` 共用、`Math.fround`、两遍判断、`|p|`、抽取顺序、预热步数、ω、y 偏移、实例 alpha、`rate`、空槽回收、判死边界、预热遍数、每遍重置、`size0` 初值、`R` 与发射器的先后、预热 `k0`、新粒子当帧走 operator，各有用例失败 |
 
 工具在 `ignore/p4/step3/`（`replay.test.ts`、`jitter.test.ts`、`rfit.test.ts`、`make_fixtures.py`）。
+
+### 步骤 4 — 绘制（2026-11-07）
+
+子代理实现，Claude 独立验收。`particle:pending` 保留，解锁在步骤 5。
+
+- **新增** `render/graph.ts` 的 `ParticleStep`：粒子层按 `objects` 顺序和图像层混排，同一个场景 render pass。
+- **新增** `particles/vertices.ts`：顶点偏移按翻译器反射出的 `attributes` 排；UV 依次 (0,0)(0,1)(1,1)(1,0)，索引 `0 1 2 0 2 3`，步长 52。
+- **修改** `GpuScene`：每个粒子层一个模拟器，建场景时预热；顶点缓冲按容量建，索引缓冲全场一份；每帧步进、写存活部分、`drawIndexed`。粒子纹理上传，粒子程序进 `checkRenderable`。
+- **新增** `particleViewProjection`：透视粒子相机，反向 Z，near 5、far `max(15000, d + 1000)`。
+- **修改** `ORTHO_DEPTH` 10000 → 2000，和 WPE 一致（图像层与粒子都是 `0.00025·z + 0.5`）。
+- **新增** `FrameClock`：帧时间钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值；补画帧时间为 0。脚本的 `engine.runtime` / `engine.frametime` 也随之改用钳过的时钟。
+- **修改** 能力表：粒子对象的 `alpha`、`color`、`brightness` 取非默认值时报 `particle:object:<键>`（语料 0 张）。
+- **新增** dev 探针：`renderFrame` 的确定性粒子回放（`particles: { dts, seed, passes }`）；`particleCorners` 把翻译后的顶点 WGSL 改写成计算着色器，取我们实际算出的四角。
+
+未定、留给步骤 5：不可见时现在是不步进也不画（WPE 是停发射、清空）。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；30 个文件、842 个用例全过（新增 41 个）；格式通过 |
+| 变异检查（代理 14 处、Claude 6 处） | 透视位、透视 `d`、跳过空槽、帧时间上限、正交深度、近平面等，各有用例失败 |
+| 风险 7：我们翻译的顶点路径对 WPE（真机 Tint，s60 第 725、718 帧） | `linear`（内置 `genericparticle`，WPE 走几何着色器）、`rot-gs`（同上，三轴旋转）、`custom`、`rot-vs`（项目 `particle`）：第 725 帧四角逐位相同，第 718 帧最大差 5.7e-5 像素 |
+| 透视粒子四角（真机） | fov 95、fov 60，z = 0 和 z = 300：最大差 1.7e-4 像素，`w` 一致 |
+| 整帧像素（s60 两帧，回放 WPE 日志的 dt） | WPE 有内容的 6382 个像素里 6214 个逐字节相同，`util/white` 自然得到 249。其余 168–186 个全在 `o2-cap-ab`、`o2-cap-ba` 两行，它们的 `capvelocity` 属 P4b、没实现；除这两个系统外整帧逐像素相同 |
+| 真机哈希 | 10 张干净场景 × 三档，30 组和步骤 1 之前全部相同（含 `ORTHO_DEPTH`、帧时钟的改动） |
+| 语料 | 和步骤 2 共有的 149 张没有变化 |
+
+测试行 13814–13817（`p4-0`、`p4a`、`p4a-fov60`、`p4a2`）导入后已用 `batch_remove_images` 移除，导入任务已删，图库行数复原。
+
+工具在 `ignore/p4/step4/`：`real.mjs`（真机回放、读图、四角）、`cmp_real.py`、`wpe_rt.py`（导出 WPE 参照图）、`import.mjs` / `cleanup.mjs`、`hash-after.json`。

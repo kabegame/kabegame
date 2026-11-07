@@ -358,10 +358,72 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
   return values;
 }
 
+/**
+ * 粒子路径才写的引擎 uniform（`common_particles.h`，P4a 步骤 4），2026-11-07 RenderDoc 实测，正交与透视场景相同：
+ * - 朝向是单位基：`g_OrientationUp (0,1,0)`、`g_OrientationRight (1,0,0)`、`g_OrientationForward (0,0,1)`；
+ * - `g_ViewUp`、`g_ViewRight`、`g_RenderVar0/1` 在档 1 的两个着色器（内置 `genericparticle`、`shimmering_particles` 的
+ *   项目 `particle`）里都没被读取（`referenced: false`，抓帧里是垃圾值），照语义给。`g_RenderVar0/1` 是帧表、拖尾用的，
+ *   属 P4b / P4c，先写 0。
+ * `g_EyePosition`、`g_Texture0Resolution`（纹理尺寸，32×32 的 `util/white` 为 `(32, 32, 32, 32)`）走通用的 `staticBuiltins`。
+ * 名字与 `compile/features.ts` 的 `PARTICLE_UNIFORMS` 一一对应，单测核对。
+ */
+export function particleBuiltins(): Record<string, number[]> {
+  return {
+    g_OrientationUp: [0, 1, 0],
+    g_OrientationRight: [1, 0, 0],
+    g_OrientationForward: [0, 0, 1],
+    g_ViewUp: [0, 1, 0],
+    g_ViewRight: [1, 0, 0],
+    g_RenderVar0: [0, 0, 0, 0],
+    g_RenderVar1: [0, 0, 0, 0],
+  };
+}
+
+export interface ParticleUniformInput {
+  /** 粒子对象的当前状态（颜色组取自身的值，不继承）。 */
+  layer: LayerState;
+  /** 对象的世界矩阵（`layout.ts` 的 `worldMatrixOf`，沿父链累乘）。 */
+  world: Mat4;
+  /** 粒子材质 pass 的材质常量（`SceneState.constants.get(pass.key)`）。 */
+  constants: Record<string, number[]>;
+  /** 正交场景的视图投影，或透视粒子（`flags & 4`）的 `particleViewProjection`。 */
+  viewProjection: Mat4;
+  colorScale: number;
+  screenSize: [number, number];
+  textures: readonly (TextureSize | undefined)[];
+  eye: readonly number[];
+  ambient?: readonly number[];
+  skylight?: readonly number[];
+}
+
+/**
+ * 粒子绘制的全部静态 uniform：`g_ModelViewProjectionMatrix` = 视图投影 × 对象世界矩阵，`g_ModelMatrix` 是世界矩阵
+ * （粒子位置在对象空间里）；粒子专用的见 `particleBuiltins`；材质常量覆盖。建 draw 与就地刷新共用，同 `drawUniformValues`。
+ */
+export function particleUniformValues(input: ParticleUniformInput): Record<string, number[]> {
+  const modelViewProjection = multiply(input.viewProjection, input.world);
+  const values = staticBuiltins({
+    modelViewProjection,
+    modelViewProjectionInverse: invert(modelViewProjection),
+    model: input.world,
+    viewProjection: input.viewProjection,
+    layer: input.layer,
+    colorScale: input.colorScale,
+    textures: input.textures,
+    screenSize: input.screenSize,
+    eye: input.eye,
+    ambient: input.ambient,
+    skylight: input.skylight,
+  });
+  Object.assign(values, particleBuiltins());
+  for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
+  return values;
+}
+
 export interface FrameInput {
-  /** 秒，已按 `TIME_WRAP_SECONDS` 回绕。 */
+  /** 秒：累加钳过的帧时间（T2，`clock.ts` 的 `FrameClock`），已按 `TIME_WRAP_SECONDS` 回绕。 */
   time: number;
-  /** 与上一帧的间隔（秒）。 */
+  /** 与上一帧的间隔（秒）：实时帧钳到 `[0.0001, 0.25]`（T2），补画帧为 0。粒子按它步进（P4a 步骤 4）。 */
   frametime: number;
   /** 本地时间在一天中的占比 [0, 1)（`daytimeOf`）。 */
   daytime: number;

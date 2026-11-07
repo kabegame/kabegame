@@ -6,13 +6,16 @@
  *   画布（8 位）上直接按编码值输出（见 `compile/bloom.ts`）。
  * - **帧循环**：`requestAnimationFrame`，默认上限 60 fps（`maxFps`）。`paused` 或 `document.hidden` 时停循环、冻结时钟，
  *   恢复后 `g_Time` 从冻结处继续（见 `clock.ts`）。暂停期间画布尺寸变了会补画一帧（同一时刻），避免空白。
+ *   帧时间照 WPE 钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（T2，`FrameClock`）。粒子每个实时帧按帧时间步进一次，
+ *   operator 的遍数由 `maxFps` 定（`particlePasses`：1–20 两遍，否则一遍，对应 WPE 的 `fps` 设置，P4a 步骤 4）。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
 import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
-import { FrameThrottle, PausableClock } from "./clock";
+import { particlePasses } from "../particles/system";
+import { FrameClock, FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
 import { scenePlacement, scenePointer, type ScenePlacement, type SceneStyle } from "./layout";
@@ -90,9 +93,8 @@ export class SceneRenderer {
   /** 光标在画布上的归一化坐标（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
   private pointer: [number, number] = [0.5, 0.5];
   private pointerLast: [number, number] = [0.5, 0.5];
-  /** 上一帧的时钟读数（秒），算 `g_Frametime`。 */
-  private lastTime: number | null = null;
-  private currentFrametime = 0;
+  /** `g_Time` / `g_Frametime`：钳过的帧时间与它的累加（T2）。换场景不重置。 */
+  private readonly frameClock = new FrameClock();
   private paused = false;
   private failed = false;
   private lost = false;
@@ -186,12 +188,14 @@ export class SceneRenderer {
     return this.state;
   }
 
+  /** 最近一帧的 `g_Time`（未回绕）：脚本的 `engine.runtime`。 */
   get runtimeSeconds(): number {
-    return this.clock.seconds();
+    return this.frameClock.time;
   }
 
+  /** 最近一帧的 `g_Frametime`：脚本的 `engine.frametime`。 */
   get frameSeconds(): number {
-    return this.currentFrametime;
+    return this.frameClock.frametime;
   }
 
   /** 当前 GPU 场景；dev 探针按固定 `g_Time` 读回时用。 */
@@ -227,7 +231,10 @@ export class SceneRenderer {
     if (this.lost) throw new SceneRenderError(["webgpu:device-lost"]);
     const serial = ++this.loadSerial;
     const state = SceneState.fromBundle(bundle);
-    const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, options);
+    const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, {
+      ignoreUnsupported: options.ignoreUnsupported,
+      particles: { passes: particlePasses(this.options.maxFps ?? 60) },
+    });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
       throw new DOMException("已被新的场景取代", "AbortError");
@@ -390,22 +397,26 @@ export class SceneRenderer {
     const started = performance.now();
     const device = this.gpu.device;
     this.syncPlacement(scene);
-    const seconds = this.clock.seconds();
-    const frametime = this.lastTime === null ? 0 : Math.max(0, seconds - this.lastTime);
-    this.lastTime = seconds;
-    this.currentFrametime = frametime;
-    if (!this.paused && !document.hidden && (runScripts || this.shouldRun)) this.options.beforeFrame?.(frametime);
+    // 实时帧：时间前进、脚本与粒子走一帧；其余是补画（同一时刻），帧时间为 0
+    const live = !this.paused && !document.hidden && (runScripts || this.shouldRun);
+    if (live) this.frameClock.advance(this.clock.seconds());
+    else this.frameClock.hold();
+    const { time, frametime } = this.frameClock;
+    if (live) this.options.beforeFrame?.(frametime);
     const encoder = device.createCommandEncoder({ label: "scene frame" });
     try {
-      // 就地改过的状态先刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a）
+      // 就地改过的状态先刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量与粒子（P3a、P4a）
       scene.sync(state);
-      scene.update({
-        time: seconds % TIME_WRAP_SECONDS,
-        frametime,
-        daytime: daytimeOf(new Date()),
-        pointer: this.pointer,
-        pointerLast: this.pointerLast,
-      });
+      scene.update(
+        {
+          time: time % TIME_WRAP_SECONDS,
+          frametime,
+          daytime: daytimeOf(new Date()),
+          pointer: this.pointer,
+          pointerLast: this.pointerLast,
+        },
+        state,
+      );
       scene.encode(encoder, state);
     } catch (error) {
       // 抛出去没人接：下一帧已排好，每帧再抛一次，画面停住也不退回
