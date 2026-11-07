@@ -223,19 +223,19 @@ impl WallpaperController {
 
     /// 拉起**当前应该活跃**的后端。
     ///
-    /// 不变量：**壁纸窗口存在 ⟺ `wallpaperMode == "window"` ∧ `!wallpaperDisabled`**。
+    /// 不变量：**壁纸窗口存在 ⟺ `wallpaperMode == "window"` ∧ `wallpaperEnabled`**。
     /// 本函数是该不变量的唯一实现处，两个条件缺一不可：
     /// - 不看 mode：`WindowWallpaperManager::init()` 会建窗并挂到桌面层，native 模式下
     ///   调用它等于凭空在桌面上盖一层窗口。
-    /// - 不看 disabled：用户关掉壁纸后重启，窗口会照样挂出来——他关的东西又回来了。
+    /// - 不看 enabled：用户关掉壁纸后重启，窗口会照样挂出来——他关的东西又回来了。
     ///
     /// 切换由 `commands/wallpaper.rs` 负责：模式切换走 `apply_backend_lifecycle`
     /// （它 init 的是**目标**模式，此时 mode 尚未落盘，故不能复用本函数；其入口有
-    /// `reject_if_wallpaper_disabled` 守卫）；开关走 `set_wallpaper_disabled`
+    /// `reject_if_wallpaper_disabled` 守卫）；开关走 `set_wallpaper_enabled`
     /// （关 → `cleanup()`，开 → 本函数）。
     pub fn init(&self) -> Result<(), String> {
         let settings = Settings::global();
-        if settings.get_wallpaper_disabled() {
+        if !settings.get_wallpaper_enabled() {
             return Ok(());
         }
         self.manager_for_mode(&settings.get_wallpaper_mode()).init()

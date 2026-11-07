@@ -43,13 +43,13 @@ export interface AppSettings {
   wallpaperStyleByMode: Record<string, string>;
   wallpaperTransitionByMode: Record<string, string>;
   wallpaperMode: "native" | "window" | string;
-  /** 关闭壁纸：整体禁用壁纸功能（后端拒绝壁纸操作、隐藏壁纸窗口、启动不恢复） */
-  wallpaperDisabled: boolean;
+  /** 打开壁纸（默认开）：关掉时整体禁用壁纸功能（后端拒绝壁纸操作、隐藏壁纸窗口、启动不恢复） */
+  wallpaperEnabled: boolean;
   /** 视频壁纸音量 0~1 */
   wallpaperVolume: number;
   /** 视频壁纸播放速率 0.25～3 */
   wallpaperVideoPlaybackRate: number;
-  /** 暂停桌面上的壁纸：只对网页与场景生效（窗口模式） */
+  /** 暂停桌面上的壁纸：视频、网页与场景共用，换壁纸后仍保持（窗口模式） */
   wallpaperPaused: boolean;
   /** 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（仅 Windows 桌面） */
   wpeMediaIntegration: boolean;

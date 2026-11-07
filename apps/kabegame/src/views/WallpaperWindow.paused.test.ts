@@ -65,18 +65,21 @@ afterEach(() => {
 });
 
 describe("WallpaperWindow 的 wallpaperPaused 判定", () => {
-  it.each(["x-wpe/web", "x-wpe/scene"])("%s 受设置影响：启动时读取，随 setting-change 更新", async (type) => {
-    const wrapper = await mountWindow(type, true);
-    expect(stagePaused(wrapper)).toBe(true);
-    settingChange({ wallpaperPaused: false });
-    await flushPromises();
-    expect(stagePaused(wrapper)).toBe(false);
-    settingChange({ wallpaperPaused: true });
-    await flushPromises();
-    expect(stagePaused(wrapper)).toBe(true);
-  });
+  it.each(["x-wpe/web", "x-wpe/scene", "video/mp4", "x-wpe/video"])(
+    "%s 受设置影响：启动时读取，随 setting-change 更新",
+    async (type) => {
+      const wrapper = await mountWindow(type, true);
+      expect(stagePaused(wrapper)).toBe(true);
+      settingChange({ wallpaperPaused: false });
+      await flushPromises();
+      expect(stagePaused(wrapper)).toBe(false);
+      settingChange({ wallpaperPaused: true });
+      await flushPromises();
+      expect(stagePaused(wrapper)).toBe(true);
+    },
+  );
 
-  it.each(["image/png", "video/mp4", "x-wpe/video"])("%s 不受影响：它们没有面板，用户无法恢复", async (type) => {
+  it.each(["image/png", "image/jpg"])("%s 不受影响：图片是静态的", async (type) => {
     const wrapper = await mountWindow(type, true);
     expect(stagePaused(wrapper)).toBe(false);
     settingChange({ wallpaperPaused: true });

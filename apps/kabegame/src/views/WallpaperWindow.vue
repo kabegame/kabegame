@@ -9,7 +9,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { IS_DEV } from "@/env";
 import WallpaperStage from "@/components/wallpaper/WallpaperStage.vue";
-import { isWpeLiveTarget } from "@/components/wallpaper/targetKind";
+import { isPausableTarget } from "@/components/wallpaper/targetKind";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
 import {
   FRAME_MONITOR_SAMPLE_MS,
@@ -42,8 +42,8 @@ const state = reactive<{
   paused: false,
 });
 
-/** 只对网页与场景生效：切到普通图片、视频时它们照常播放（没有面板，用户无法恢复）。 */
-const stagePaused = computed(() => state.paused && state.target !== null && isWpeLiveTarget(state.target));
+/** 视频、网页、场景共用设置页的「暂停壁纸」，换壁纸后仍保持；图片不受影响。 */
+const stagePaused = computed(() => state.paused && state.target !== null && isPausableTarget(state.target));
 
 // 调试状态（窗口侧）
 const windowLabel = ref("");

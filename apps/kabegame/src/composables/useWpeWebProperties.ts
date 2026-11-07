@@ -162,22 +162,18 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
     },
     { immediate: true },
   );
-  const changed = kbEvent$<{ patch?: { id: string; metadataId?: number } }>("image-changed").subscribe((event) => {
-    const patch = event.payload.patch;
-    if (patch && patch.id === activeId && patch.metadataId !== undefined && patch.metadataId !== view.value?.metadataId)
-      reload();
+  type Patch = { id: string; metadataId?: number; thumbnailPath?: string };
+  /** 属性跟 `metadataId`；`customCover` 由 `thumbnail_path` 算出，封面在别处设或恢复时也要重读 */
+  const affects = (patch: Patch | null | undefined) =>
+    !!patch &&
+    patch.id === activeId &&
+    ((patch.metadataId !== undefined && patch.metadataId !== view.value?.metadataId) ||
+      patch.thumbnailPath !== undefined);
+  const changed = kbEvent$<{ patch?: Patch }>("image-changed").subscribe((event) => {
+    if (affects(event.payload.patch)) reload();
   });
-  const changes = kbEvent$<{ patches?: { id: string; metadataId?: number }[] }>("images-change").subscribe((event) => {
-    if (
-      event.payload.patches?.some(
-        (patch) =>
-          patch &&
-          patch.id === activeId &&
-          patch.metadataId !== undefined &&
-          patch.metadataId !== view.value?.metadataId,
-      )
-    )
-      reload();
+  const changes = kbEvent$<{ patches?: Patch[] }>("images-change").subscribe((event) => {
+    if (event.payload.patches?.some(affects)) reload();
   });
   const language = kbEvent$<{ changes?: Record<string, unknown>; language?: unknown }>("setting-change").subscribe(
     (event) => {

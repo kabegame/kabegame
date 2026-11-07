@@ -507,7 +507,7 @@ impl WallpaperRotator {
     /// （或用户手动触发 rotate）；位置沿用设置里保存的值，路径不变就接着上次的下一张。
     pub async fn ensure_running(&self) -> Result<(), String> {
         // 壁纸功能已关闭：静默跳过，不启动轮播线程。
-        if Settings::global().get_wallpaper_disabled() {
+        if !Settings::global().get_wallpaper_enabled() {
             return Ok(());
         }
         // 已在运行：设置变化后 reset 让任务按新设置继续运行即可。
@@ -588,7 +588,7 @@ impl WallpaperRotator {
     /// - 否则在当前任务里切换一次；轮播已启用则随后启动轮播线程
     pub async fn rotate(&self) -> Result<(), String> {
         // 壁纸功能已关闭：静默跳过，不切换壁纸。
-        if Settings::global().get_wallpaper_disabled() {
+        if !Settings::global().get_wallpaper_enabled() {
             return Ok(());
         }
         // 桌面端运行中：轮播线程可能正在 await tick，交给它处理

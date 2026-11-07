@@ -34,17 +34,17 @@ export function isSceneTarget(target: WallpaperTarget): boolean {
   return normalizedType(target) === "x-wpe/scene";
 }
 
-/** WPE 实时壁纸（网页、场景）：只有这两类受 `wallpaperPaused` 影响，普通图片与视频没有面板，用户无法恢复。 */
-export function isWpeLiveTarget(target: WallpaperTarget): boolean {
-  return isWebTarget(target) || isSceneTarget(target);
-}
-
 /** 是否按视频播放：优先看行类型，缺失时回退旧扩展名逻辑。 */
 export function isVideoTarget(target: WallpaperTarget): boolean {
   const type = normalizedType(target);
   if (type === "x-wpe/video" || type === "video" || type.startsWith("video/")) return true;
   if (type) return false;
   return isVideoPath(target.path);
+}
+
+/** 受 `wallpaperPaused` 影响的壁纸：视频（含 WPE 视频）、网页、场景。图片是静态的，没什么可暂停。 */
+export function isPausableTarget(target: WallpaperTarget): boolean {
+  return isWebTarget(target) || isSceneTarget(target) || isVideoTarget(target);
 }
 
 /** 目标落在哪一层（与 `WallpaperStage` 的 `currentMediaType` / 调试快照 `media` 同一套取值）。 */

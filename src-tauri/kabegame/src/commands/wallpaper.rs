@@ -10,13 +10,13 @@ use kabegame_core::wpe::properties::WpeVideoProps;
 use std::path::Path;
 use tauri::AppHandle;
 
-/// 当"关闭壁纸"开关开启时，对用户主动发起的壁纸操作返回的提示文案。
+/// 「打开壁纸」关掉时，对用户主动发起的壁纸操作返回的提示文案。
 /// 直接作为错误信息透传给前端展示（不使用专用错误码）。
 const WALLPAPER_DISABLED_MSG: &str = "壁纸功能已关闭，请先在设置中重新开启";
 
 /// 若已关闭壁纸功能，则返回错误以拒绝该操作。
 fn reject_if_wallpaper_disabled() -> Result<(), String> {
-    if Settings::global().get_wallpaper_disabled() {
+    if !Settings::global().get_wallpaper_enabled() {
         return Err(WALLPAPER_DISABLED_MSG.to_string());
     }
     Ok(())
@@ -611,27 +611,27 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub fn get_wallpaper_disabled() -> bool {
-    Settings::global().get_wallpaper_disabled()
+pub fn get_wallpaper_enabled() -> bool {
+    Settings::global().get_wallpaper_enabled()
 }
 
-/// 切换"关闭壁纸"开关，并执行副作用：
-/// - 开启时：停止轮播，隐藏壁纸窗口（window 模式）/ 切回 org.kde.image（plasma-plugin 模式）；
+/// 切换「打开壁纸」开关，并执行副作用：
+/// - 关掉时：停止轮播，隐藏壁纸窗口（window 模式）/ 切回 org.kde.image（plasma-plugin 模式）；
 ///   native 模式保持系统壁纸现状不动（无法自动还原）。保留 currentWallpaperImageId。
-/// - 关闭时：复用启动逻辑恢复上次壁纸，并在轮播启用时恢复轮播。
+/// - 打开时：复用启动逻辑恢复上次壁纸，并在轮播启用时恢复轮播。
 #[tauri::command]
-pub async fn set_wallpaper_disabled<R: tauri::Runtime>(
-    disabled: bool,
+pub async fn set_wallpaper_enabled<R: tauri::Runtime>(
+    enabled: bool,
     _app: AppHandle<R>,
 ) -> Result<(), String> {
     let settings = Settings::global();
     settings
-        .set_wallpaper_disabled(disabled)
+        .set_wallpaper_enabled(enabled)
         .map_err(|e| format!("Settings error: {}", e))?;
 
     let rotator = WallpaperRotator::global();
 
-    if disabled {
+    if !enabled {
         // 停止轮播
         rotator.stop();
         // 隐藏/还原各模式（保留 currentWallpaperImageId）
@@ -654,23 +654,23 @@ pub async fn set_wallpaper_disabled<R: tauri::Runtime>(
     } else {
         // 重新启用：先把当前模式的后端拉起来，再恢复壁纸内容。
         //
-        // 顺序不可颠倒，且这一步不可省：上面 `disabled` 分支的 `cleanup()` 已经把
+        // 顺序不可颠倒，且这一步不可省：上面关掉分支的 `cleanup()` 已经把
         // 壁纸窗口**销毁**了（不是隐藏），而 `init_wallpaper_on_startup()` 终点是
         // `set_wallpaper_path()` —— 它在 window 模式下不会兜底建窗。
         // 少了这行，关掉再打开壁纸就永远显示不出来。
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if let Err(e) = WallpaperController::global().init() {
-            tracing::warn!("set_wallpaper_disabled: 初始化壁纸后端失败: {}", e);
+            tracing::warn!("set_wallpaper_enabled: 初始化壁纸后端失败: {}", e);
         }
 
         // 恢复上次壁纸（复用启动恢复逻辑）
         if let Err(e) = crate::startup::init_wallpaper_on_startup().await {
-            tracing::warn!("set_wallpaper_disabled: 恢复壁纸失败: {}", e);
+            tracing::warn!("set_wallpaper_enabled: 恢复壁纸失败: {}", e);
         }
         // 之前开启过轮播则恢复轮播
         if settings.get_wallpaper_rotation_enabled() {
             if let Err(e) = rotator.ensure_running().await {
-                tracing::warn!("set_wallpaper_disabled: 恢复轮播失败: {}", e);
+                tracing::warn!("set_wallpaper_enabled: 恢复轮播失败: {}", e);
             }
         }
     }

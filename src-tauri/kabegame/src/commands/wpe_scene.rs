@@ -38,7 +38,7 @@ pub struct WpeSceneTarget {
 
 /// 「清空脚本存储」：存储在宿主的 `file:` 来源里，应用页碰不到，所以广播给宿主，同一张图的全部宿主收到后停脚本、
 /// 删本场景的前缀、重建脚本环境。只给应用页用（免 ACL），宿主与网页壁纸的权限里都没有这条；宿主能监听这个事件靠
-/// `wpe-web-capability` 的 `allow-listen`。没有宿主存活时事件没人收，这次清空不生效：面板只在有实时实例时显示按钮。
+/// `wpe-web-capability` 的 `allow-listen`。没有宿主存活时事件没人收，这次清空不生效：入口只在预览的右键菜单与工具条里（预览有实时实例）。
 #[tauri::command]
 pub fn wpe_scene_clear_storage<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,

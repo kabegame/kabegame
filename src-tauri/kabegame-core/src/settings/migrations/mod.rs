@@ -31,6 +31,7 @@ use serde_json::Value;
 mod v001_wallpaper_drop_system;
 mod v002_mcp_settings;
 mod v003_wallpaper_rotation_path;
+mod v004_wallpaper_enabled;
 
 type MigrationFn = fn(&mut Value) -> Result<(), String>;
 
@@ -57,9 +58,14 @@ const MIGRATIONS: &[Migration] = &[
         name: "wallpaper_rotation_path",
         up: v003_wallpaper_rotation_path::up,
     },
+    Migration {
+        version: 4,
+        name: "wallpaper_enabled",
+        up: v004_wallpaper_enabled::up,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 3;
+pub const LATEST_VERSION: u32 = 4;
 pub const VERSION_KEY: &str = "schemaVersion";
 
 pub fn current_version(json: &Value) -> u32 {
@@ -132,11 +138,13 @@ mod tests {
 
     #[test]
     fn runs_from_v0_to_latest() {
-        let mut v = json!({ "wallpaperStyle": "system" });
+        let mut v = json!({ "wallpaperStyle": "system", "wallpaperDisabled": true });
         assert!(run_pending(&mut v).unwrap());
         assert_eq!(current_version(&v), LATEST_VERSION);
         assert_eq!(v["wallpaperStyle"], "fill");
         assert!(v.get("wallpaperRotationPath").is_some());
+        assert_eq!(v["wallpaperEnabled"], false);
+        assert!(v.get("wallpaperDisabled").is_none());
     }
 
     #[test]

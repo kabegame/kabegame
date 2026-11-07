@@ -555,11 +555,12 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 ### 封面
 
-WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的退回画面（`previewPath`）也取它。预览详情栏的属性面板可以把当前画面设为封面：`capture_wallpaper_cover(imageId, region)` 截主窗口，按 `region`（画布占窗口内容区的比例）裁出画布，缩到最长边不超过 1920，写进 `thumbnails_dir`，再经 `replace_image_thumbnail_path` 换行并发 `thumbnailPath` 补丁。暂停时截到的就是停住的那一帧。设置页的属性弹窗没有封面按钮。
+WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的退回画面（`previewPath`）也取它。预览的右键菜单与底部工具条有「设为壁纸封面」：`capture_wallpaper_cover(imageId, region)` 截主窗口，按 `region`（画布占窗口内容区的比例）裁出画布，缩到最长边不超过 1920，写进 `thumbnails_dir`，再经 `replace_image_thumbnail_path` 换行并发 `thumbnailPath` 补丁。暂停时截到的就是停住的那一帧。「恢复默认封面」在预览详情栏的属性面板里（`restorableCover`）；设置页的属性弹窗没有封面按钮。
 
+- **预览专属的菜单项**（`actions/imageActions.ts`）：「暂停」（排第一）、「设为壁纸封面」「清空脚本存储」（只场景）只在 `ImageActionContext.wallpaperPreview` 存在时显示，它由 `ImagePreviewDialog` 在桌面预览网页与场景壁纸时给出（`live` / `paused` / `coverBusy`）；画廊的右键菜单不带它，所以没有这几项。工具条照常平铺菜单的可见项。这几条命令由弹窗的 `handleWallpaperCommand` 处理，不发 `contextCommand`，网格不需要知道画面出没出来。
 - **截整窗再裁，不用 CDP 的 `clip`**：`clip` 靠临时改视口实现，这次改动画在屏幕正在显示的表面上，整个窗口跳变约 150 ms，`scale: 1` 也一样；宿主和页面收不到尺寸事件，只看 `stats()` 发现不了。代价是封面分辨率等于画布的屏幕像素（窗口 1200 CSS 宽、缩放 150% 时约 1071 宽）。对 iframe target 截图也不行，Chromium 只认顶层（`Command can only be executed on top-level targets`）。
-- **按钮只在画面确定实时渲染时显示**：场景看 `WallpaperStage` 的 `sceneLive`（出了首帧才为真，退回预览图时为假），网页壁纸看 `ready`，由 `ImagePreviewDialog` 经 `coverReady` 传给面板。`ready` 在退回时也发，不能用来判断。后端不记实时状态，也不校验。恢复不受影响：退回预览图的场景也能恢复。
-- **截图前的等待**（`WallpaperPreviewCanvas.withCaptureRegion`）：盖在画布上的 UI 会截进去，先在 `<html>` 加 `data-kb-cover-capture` 隐藏看板娘，`finally` 里恢复；壁纸层出画面后还要淡入，这时截到的是黑底，所以再等画布里的 `CSSTransition` 结束（只等过渡：页面里可能有循环动画）。窗口被完全遮挡时 `visibilityState` 不是 `visible`，矩形即使量得出来，截到的也是残缺的画面，所以报错不截。
+- **画面确定实时渲染之前，暂停与设为壁纸封面置灰**：场景看 `WallpaperStage` 的 `sceneLive`（出了首帧才为真，退回预览图时为假），网页壁纸看 `ready`，即弹窗的 `previewRendering`，经 `wallpaperPreview.live` 交给菜单项。`ready` 在退回时也发，不能用来判断。后端不记实时状态，也不校验。恢复不受影响：退回预览图的场景也能恢复；属性面板的 `customCover` 跟着 `thumbnailPath` 补丁重读，从菜单设的封面也会让恢复按钮出现。`ImageContent` 的壁纸形态只按图片 id 重置加载态：换封面改的 `thumbnailPath` 不能让它重新等 ready（壁纸组件同一目标只发一次，骨架会一直盖在网页层上）。
+- **截图前的等待**（`WallpaperPreviewCanvas.withCaptureRegion`）：盖在画布上的 UI 会截进去，先在 `<html>` 加 `data-kb-cover-capture` 隐藏看板娘与预览容器里除壁纸画布外的全部元素（工具条、箭头、抽屉开关：从工具条或右键菜单点时它们正显示着；右键菜单是 `v-if`，命令发出时已经移除），`finally` 里恢复；壁纸层出画面后还要淡入，这时截到的是黑底，所以再等画布里的 `CSSTransition` 结束（只等过渡：页面里可能有循环动画）。窗口被完全遮挡时 `visibilityState` 不是 `visible`，矩形即使量得出来，截到的也是残缺的画面，所以报错不截。
 - **文件归属**：删除只碰 `thumbnails_dir` 里的文件，作者的 `preview.*` 不动。换封面、删图时旧封面随之清掉；「恢复默认封面」读 `project.json` 的预览图，没有时回到 `local_path`（同 `add_image` 的兜底）。`get_wpe_web_properties` 的 `customCover` 表示封面在 `thumbnails_dir` 里。重新导入跳过已有行，封面保留。
 
 ### 音频与媒体集成（第二阶段 Phase 8）

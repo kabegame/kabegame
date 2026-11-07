@@ -1135,7 +1135,7 @@ async function playVideo(el: HTMLVideoElement | null, src: string) {
     el.src = src;
   }
   applyVideoLoopToElement(el);
-  // 新增能力 paused：只设源不播放；pause() 同时取消 autoplay（桌面窗口只对网页与场景传 paused，不走这里）
+  // 新增能力 paused：只设源不播放；pause() 同时取消 autoplay（桌面「暂停壁纸」对视频同样生效，换视频时停在首帧）
   if (props.paused) {
     el.pause();
     return;
@@ -1263,7 +1263,7 @@ async function setTarget(target: WallpaperTarget) {
       applyStyles();
       if (topVideoEl) {
         if (props.paused) {
-          // 新增能力 paused：不播放，仅取消 autoplay（桌面窗口只对网页与场景传 paused，不走这里）
+          // 新增能力 paused：不播放，仅取消 autoplay（过渡照常由 1400 ms 守卫提交）
           topVideoEl.pause();
         } else {
           // 同 playVideo:先静音保证自动播放获准,成功后再按音量恢复
@@ -1491,7 +1491,7 @@ function applyStyleFromMode() {
 }
 
 /**
- * 新增能力 paused：暂停 / 恢复当前视频。桌面窗口只对网页与场景传 paused，视频恒为 false。
+ * 新增能力 paused：暂停 / 恢复当前视频（桌面窗口按设置「暂停壁纸」传，视频、网页、场景共用）。
  * scene 层不经这里：`paused` 直接绑到 WpeSceneView（停帧、冻结时钟，画面停在最后一帧）；web 层经 `postWebVolume`
  * 交给垫片。
  */

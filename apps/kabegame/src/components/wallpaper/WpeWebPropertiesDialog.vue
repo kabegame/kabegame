@@ -8,8 +8,6 @@
       :image-type="imageType"
       :collapsible="false"
       :fill-when-expanded="false"
-      :paused="paused"
-      @update:paused="emit('update:paused', $event)"
     />
   </el-dialog>
 </template>
@@ -21,8 +19,8 @@ import { useModalBack } from "@/composables/useModalBack";
 import WpeWebPropertiesPanel from "./WpeWebPropertiesPanel.vue";
 
 /**
- * `title` 传壁纸显示名；缺省时用「壁纸属性」。`imageType` 传图片 `type`，场景壁纸据此隐藏用不到的属性。
- * `paused` 见面板：undefined 表示没有实时实例。
+ * 设置页「当前壁纸」的属性弹窗，只有作者属性。`title` 传壁纸显示名；缺省时用「壁纸属性」。`imageType` 传图片 `type`，
+ * 场景壁纸据此隐藏用不到的属性。桌面的暂停是设置页里单独的一项（视频、网页、场景共用）。
  */
 const props = withDefaults(
   defineProps<{
@@ -30,12 +28,10 @@ const props = withDefaults(
     imageId: string | null | undefined;
     imageType?: string | null;
     title?: string | null;
-    paused?: boolean;
   }>(),
-  // 布尔 prop 缺省时 Vue 会转成 false，要写明 undefined 才能表示「没有实时实例」
-  { imageType: undefined, title: undefined, paused: undefined },
+  { imageType: undefined, title: undefined },
 );
-const emit = defineEmits<{ "update:modelValue": [value: boolean]; "update:paused": [value: boolean] }>();
+const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
 const { t } = useI18n();
 const visible = computed({ get: () => props.modelValue, set: (value) => emit("update:modelValue", value) });
 useModalBack(visible);

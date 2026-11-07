@@ -118,13 +118,13 @@ pub enum SettingKey {
     WallpaperTransitionByMode,
     /// 壁纸模式（原生等）
     WallpaperMode,
-    /// 关闭壁纸（整体禁用壁纸功能：拒绝壁纸相关操作、隐藏壁纸窗口、启动不恢复）
-    WallpaperDisabled,
+    /// 打开壁纸，默认开（关掉时整体禁用壁纸功能：拒绝壁纸相关操作、隐藏壁纸窗口、启动不恢复）；v004 由 `wallpaperDisabled` 取反迁来
+    WallpaperEnabled,
     /// 视频壁纸音量（0~1）
     WallpaperVolume,
     /// 视频壁纸播放速率（0.25～3）
     WallpaperVideoPlaybackRate,
-    /// 暂停桌面上的壁纸：只对网页与场景壁纸生效（窗口模式）
+    /// 暂停桌面上的壁纸：视频、网页与场景共用，换壁纸后仍保持（窗口模式）
     WallpaperPaused,
     /// 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（标题、封面、进度），仅 Windows 生效
     WpeMediaIntegration,
@@ -358,7 +358,7 @@ impl Settings {
                 SettingValue::HashMapStringString(HashMap::new())
             }
             SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
-            SettingKey::WallpaperDisabled => SettingValue::Bool(false),
+            SettingKey::WallpaperEnabled => SettingValue::Bool(true),
             SettingKey::WallpaperVolume => SettingValue::F64(1.0),
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WallpaperPaused => SettingValue::Bool(false),
@@ -460,7 +460,7 @@ impl Settings {
             SettingKey::WallpaperStyleByMode,
             SettingKey::WallpaperTransitionByMode,
             SettingKey::WallpaperMode,
-            SettingKey::WallpaperDisabled,
+            SettingKey::WallpaperEnabled,
             SettingKey::WallpaperVolume,
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WallpaperPaused,
@@ -595,13 +595,12 @@ impl Settings {
             | SettingKey::AutoDeduplicate
             | SettingKey::DedupUpdateMetadata
             | SettingKey::WallpaperRotationEnabled
-            | SettingKey::WallpaperDisabled
             | SettingKey::WallpaperPaused
             | SettingKey::WebServerEnabled
             | SettingKey::WebServerLanAccess => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
-            SettingKey::ImportRecommendedScheduleEnabled => {
+            SettingKey::ImportRecommendedScheduleEnabled | SettingKey::WallpaperEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
             SettingKey::FastFolderSync => Ok(SettingValue::Bool(json.as_bool().unwrap_or(true))),
@@ -809,7 +808,7 @@ impl Settings {
             SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
             SettingKey::WallpaperTransitionByMode => "wallpaperTransitionByMode".to_string(),
             SettingKey::WallpaperMode => "wallpaperMode".to_string(),
-            SettingKey::WallpaperDisabled => "wallpaperDisabled".to_string(),
+            SettingKey::WallpaperEnabled => "wallpaperEnabled".to_string(),
             SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WallpaperPaused => "wallpaperPaused".to_string(),
@@ -1094,11 +1093,12 @@ impl Settings {
             .unwrap_or(0)
     }
 
-    pub fn get_wallpaper_disabled(&self) -> bool {
+    /// 「打开壁纸」：关掉时拒绝壁纸相关操作、隐藏壁纸窗口、启动不恢复。默认开。
+    pub fn get_wallpaper_enabled(&self) -> bool {
         Self::cells()
-            .get(&SettingKey::WallpaperDisabled)
-            .map(|c| c.load().as_bool().unwrap_or(false))
-            .unwrap_or(false)
+            .get(&SettingKey::WallpaperEnabled)
+            .map(|c| c.load().as_bool().unwrap_or(true))
+            .unwrap_or(true)
     }
 
     pub fn get_wallpaper_rotation_interval_minutes(&self) -> u32 {
@@ -1555,13 +1555,13 @@ impl Settings {
         Ok(())
     }
 
-    pub fn set_wallpaper_disabled(&self, disabled: bool) -> Result<(), String> {
+    pub fn set_wallpaper_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
-        let new_value = SettingValue::Bool(disabled);
-        if let Some(cell) = cells.get(&SettingKey::WallpaperDisabled) {
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperEnabled) {
             cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperDisabled, &new_value);
+        Self::emit_setting_change(SettingKey::WallpaperEnabled, &new_value);
         Ok(())
     }
 

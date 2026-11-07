@@ -445,8 +445,16 @@ const isLost = computed(() => {
 // ---- Reset on image identity or resource path change (NOT on prefer — preserves hover no-flash) ----
 // When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
 // watch doesn't fire, showLoading stays false, and the already-cached thumbnail layer is instant.
+// wallpaper 形态的内容只跟图片 id 走：`WpeWallpaperContent` 按 id 取目标，同一目标只发一次 ready。换封面会改
+// `thumbnailPath`，这里若跟着重置，加载态就再也等不到 ready，骨架一直盖在网页层上（场景层画在骨架之上，看不出来）。
+// 网格里 WPE 固定用缩略形态，prefer 不会在两种形态间切换。
+const resetKey = computed(() =>
+  mode.value === "wallpaper"
+    ? `wallpaper|${props.image.id}`
+    : [props.image.id, localPath.value, compPath.value, thumbPath.value].join("|"),
+);
 watch(
-  () => [props.image.id, localPath.value, compPath.value, thumbPath.value].join("|"),
+  resetKey,
   () => {
     thumbSlot.reset();
     origSlot.reset();

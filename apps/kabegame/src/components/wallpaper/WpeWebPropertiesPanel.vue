@@ -16,61 +16,22 @@
 
     <!-- 外框 / 标题栏由 CollapsibleDrawerPanel 提供；视觉对齐 ImageNativeMetadataPanel：分组卡片 + 卡片内无边框条目 -->
     <div class="kb-selectable flex min-h-0 flex-auto flex-col gap-3 overflow-y-auto px-4 py-3.5 [scrollbar-width:none]">
-      <!-- 控制卡片：只在有实时实例时显示，作者属性为空时也在 -->
-      <section
-        v-if="paused !== undefined || canCaptureCover || canRestoreCover"
-        :class="CARD_CLASS"
-        data-testid="wpe-controls"
-      >
-        <div :class="CONTROL_LIST">
-          <!-- 暂停：带图标徽标的开关行 -->
-          <div v-if="paused !== undefined" class="flex items-center gap-3 px-3 py-2.5">
-            <span
-              class="grid h-8 w-8 flex-none place-items-center rounded-lg bg-[color-mix(in_srgb,var(--anime-secondary)_14%,transparent)] text-[15px] text-[var(--anime-secondary-dark)]"
-            >
-              <el-icon><VideoPause /></el-icon>
-            </span>
-            <span class="min-w-0 flex-1 text-[13px] font-medium leading-tight text-[var(--anime-text-primary)]">
-              {{ t("gallery.wpePause") }}
-            </span>
-            <el-switch :model-value="paused" @update:model-value="emit('update:paused', $event === true)" />
-          </div>
-
-          <!-- 封面：主操作（设为封面）+ 次操作（恢复默认封面） -->
-          <div v-if="canCaptureCover || canRestoreCover" class="flex flex-wrap gap-2 px-3 py-2.5">
-            <button
-              v-if="canCaptureCover"
-              type="button"
-              data-testid="wpe-set-cover"
-              :class="[ACTION_BTN, ACTION_PRIMARY, coverBusy && 'pointer-events-none opacity-80']"
-              :aria-busy="coverBusy"
-              @click="setCover"
-            >
-              <el-icon class="text-[14px]">
-                <Loading v-if="coverBusy" class="is-loading" />
-                <Camera v-else />
-              </el-icon>
-              <span>{{ t("gallery.wpeSetCover") }}</span>
-            </button>
-            <button
-              v-if="canRestoreCover"
-              type="button"
-              data-testid="wpe-restore-cover"
-              :class="[ACTION_BTN, ACTION_GHOST, coverBusy && 'pointer-events-none opacity-50']"
-              @click="restoreCover"
-            >
-              <el-icon class="text-[14px]"><RefreshLeft /></el-icon>
-              <span>{{ t("gallery.wpeRestoreCover") }}</span>
-            </button>
-          </div>
-
-          <!-- 场景：清空脚本存储 -->
-          <div v-if="isScene && paused !== undefined" class="px-3 py-2.5">
-            <button type="button" data-testid="wpe-clear-storage" :class="[ACTION_BTN, ACTION_GHOST, 'w-full']" @click="clearStorage">
-              <el-icon class="text-[14px]"><Brush /></el-icon>
-              <span>{{ t("gallery.wpeClearStorage") }}</span>
-            </button>
-          </div>
+      <!-- 恢复默认封面：设过封面才出现，作者属性为空时也在（暂停、设为壁纸封面、清空脚本存储在预览的右键菜单与工具条里） -->
+      <section v-if="canRestoreCover" :class="CARD_CLASS" data-testid="wpe-controls">
+        <div class="px-3 py-2.5">
+          <button
+            type="button"
+            data-testid="wpe-restore-cover"
+            :class="[ACTION_BTN, ACTION_GHOST, 'w-full', coverBusy && 'pointer-events-none opacity-50']"
+            :aria-busy="coverBusy"
+            @click="restoreCover"
+          >
+            <el-icon class="text-[14px]">
+              <Loading v-if="coverBusy" class="is-loading" />
+              <RefreshLeft v-else />
+            </el-icon>
+            <span>{{ t("gallery.wpeRestoreCover") }}</span>
+          </button>
         </div>
       </section>
 
@@ -180,28 +141,23 @@
 <script setup lang="ts">
 import { computed, reactive, ref, toRef, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage, ElMessageBox } from "@kabegame/element-plus";
-import { ArrowRight, Brush, Camera, Loading, RefreshLeft, VideoPause } from "@kabegame/element-plus-icons";
+import { ElMessage } from "@kabegame/element-plus";
+import { ArrowRight, Loading, RefreshLeft } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { hasWpeUserProperties, isWpeSceneType } from "@/utils/mediaMime";
 import { evaluateWpeCondition, sanitizeWpeLabel, wpeLabelText } from "@/utils/wpeProperties";
-import type { CoverRegionScope } from "./WallpaperPreviewCanvas.vue";
 import WpePropertyField from "./WpePropertyField.vue";
 
 /**
- * 网页与场景壁纸共用的属性面板。`imageType` 传图片的 `type`：场景壁纸（`x-wpe/scene`）不显示 `file` / `directory`
- * 属性——场景渲染器不读用户选的文件，这两类的放行也只对网页壁纸生效（网页壁纸目录索引只收 `x-wpe/web` 行）。
- * 本机语料里场景没有这两类；场景特有的 `scenetexture` / `replacetexture` 后端解析时已跳过，面板看不到。
+ * 网页与场景壁纸共用的属性面板（预览详情与设置页）。`imageType` 传图片的 `type`：场景壁纸（`x-wpe/scene`）不显示
+ * `file` / `directory` 属性——场景渲染器不读用户选的文件，这两类的放行也只对网页壁纸生效（网页壁纸目录索引只收
+ * `x-wpe/web` 行）。本机语料里场景没有这两类；场景特有的 `scenetexture` / `replacetexture` 后端解析时已跳过，面板看不到。
  *
- * 面板是预览详情与设置页共用的，只管显示：`paused` 由父组件传入，预览控制预览这一份，设置页控制桌面。
- * undefined 表示没有实时实例，不显示暂停与清空脚本存储；清空只对场景提供（网页壁纸的 `localStorage` 没有前缀，
- * 所有网页壁纸共用一份，没法只清一张）。
- *
- * 封面只在预览里设，设置页不传这两个 prop。`coverSource` 包住一次截取：点击时才量区域，命令在它的回调里发出，隐藏与
- * 恢复都在函数内；undefined 时不显示封面按钮。`coverReady` 表示画面确定在实时渲染，为假时只能恢复、不能设为封面：
- * 场景退回预览图时截到的只是作者预览图放大。
+ * 面板只管作者属性，外加「恢复默认封面」：`restorableCover` 由预览传，设过封面时显示，恢复不需要实时画面，退回预览图的
+ * 场景也能恢复；设置页不传。预览的暂停、设为壁纸封面、清空脚本存储在右键菜单与工具条里（由预览弹窗处理）；
+ * 桌面的暂停是设置页里单独的一项。
  */
 const props = withDefaults(
   defineProps<{
@@ -209,20 +165,14 @@ const props = withDefaults(
     imageType?: string | null;
     collapsible?: boolean;
     fillWhenExpanded?: boolean;
-    paused?: boolean;
-    coverSource?: CoverRegionScope;
-    coverReady?: boolean;
+    restorableCover?: boolean;
   }>(),
   {
     imageType: null,
     collapsible: true,
     fillWhenExpanded: true,
-    // 布尔 prop 缺省时 Vue 会转成 false，要写明 undefined 才能表示「没有实时实例」
-    paused: undefined,
-    coverSource: undefined,
   },
 );
-const emit = defineEmits<{ "update:paused": [value: boolean] }>();
 const { t } = useI18n();
 const { view, loading, error, valueOf, isModified, set, reset, resetAll, reload } = useWpeWebProperties(
   toRef(props, "imageId"),
@@ -252,33 +202,20 @@ type Section = {
 const CARD_CLASS =
   "flex-none overflow-hidden rounded-xl border border-solid border-[color-mix(in_srgb,var(--anime-primary)_28%,transparent)] bg-[color-mix(in_srgb,var(--anime-bg-card)_50%,transparent)]";
 
-/** 控制卡片内各行竖向排布，相邻行之间自动描一条浅分隔线（v-if 隐藏的行不留痕） */
-const CONTROL_LIST =
-  "flex flex-col [&>:not(:first-child)]:border-t [&>:not(:first-child)]:border-solid [&>:not(:first-child)]:border-[color-mix(in_srgb,var(--anime-primary)_12%,transparent)]";
-
-/** 控制卡片内的操作按钮：图标 + 文案，等宽可换行；视觉与卡片同一套粉紫 token */
+/** 控制卡片内的操作按钮：图标 + 文案，整行宽；视觉与卡片同一套粉紫 token */
 const ACTION_BTN =
-  "inline-flex min-w-0 grow basis-28 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-[12.5px] font-medium leading-none outline-none cursor-pointer select-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)]";
-/** 主操作（设为封面）：粉色实底调 */
-const ACTION_PRIMARY =
-  "border-solid border-[color-mix(in_srgb,var(--anime-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_15%,transparent)] text-[var(--anime-primary-dark)] hover:border-[color-mix(in_srgb,var(--anime-primary)_58%,transparent)] hover:bg-[color-mix(in_srgb,var(--anime-primary)_24%,transparent)] active:bg-[color-mix(in_srgb,var(--anime-primary)_32%,transparent)]";
-/** 次操作（恢复默认 / 清空存储）：紫色描边幽灵按钮 */
+  "inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-[12.5px] font-medium leading-none outline-none cursor-pointer select-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)]";
+/** 恢复默认封面：紫色描边幽灵按钮 */
 const ACTION_GHOST =
   "border-solid border-[color-mix(in_srgb,var(--anime-secondary)_28%,transparent)] bg-transparent text-[var(--anime-secondary-dark)] hover:border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)] hover:bg-[color-mix(in_srgb,var(--anime-secondary)_12%,transparent)] active:bg-[color-mix(in_srgb,var(--anime-secondary)_18%,transparent)]";
 
 const isScene = computed(() => isWpeSceneType(props.imageType ?? undefined));
 
-const canCaptureCover = computed(
-  () => props.coverSource !== undefined && props.coverReady && hasWpeUserProperties(props.imageType ?? undefined),
-);
-/** 恢复不需要实时画面：设过封面后退回预览图的场景也要能恢复 */
+/** `customCover` 跟着封面变化重读（`useWpeWebProperties` 听 `thumbnailPath` 补丁），右键菜单设的封面也会让它出现 */
 const canRestoreCover = computed(
-  () =>
-    props.coverSource !== undefined &&
-    hasWpeUserProperties(props.imageType ?? undefined) &&
-    view.value?.customCover === true,
+  () => props.restorableCover && hasWpeUserProperties(props.imageType ?? undefined) && view.value?.customCover === true,
 );
-/** 封面命令进行中：按钮转圈，也挡住重复触发 */
+/** 恢复进行中：按钮转圈，也挡住重复触发 */
 const coverBusy = ref(false);
 
 /** 这张壁纸用得上的条目：场景去掉 `file` / `directory`（见 props 注释） */
@@ -323,54 +260,19 @@ function toggleGroup(key: string) {
   opened[key] = !opened[key];
 }
 
-/** 存储在宿主的 `file:` 来源里，应用页碰不到：由后端广播，同一张图的全部宿主收到后清空并重启脚本。 */
-async function clearStorage() {
-  try {
-    await ElMessageBox.confirm(t("gallery.wpeClearStorageConfirm"), t("gallery.wpeClearStorage"), { type: "warning" });
-  } catch {
-    return;
-  }
-  try {
-    await invoke("wpe_scene_clear_storage", { imageId: props.imageId });
-    ElMessage.success(t("gallery.wpeClearStorageDone"));
-  } catch (failure) {
-    ElMessage.error(`${t("gallery.wpeClearStorageFailed")}: ${String(failure)}`);
-  }
-}
-
 /** 成功后重读视图：`customCover` 以后端为准，这次读取排在命令之后，不会被更早的在途读取盖掉 */
-async function runCoverCommand(command: () => Promise<unknown>, doneKey: string, failedKey: string) {
+async function restoreCover() {
   if (coverBusy.value) return;
   coverBusy.value = true;
   try {
-    await command();
-    ElMessage.success(t(doneKey));
+    await invoke<string>("restore_wallpaper_cover", { imageId: props.imageId });
+    ElMessage.success(t("gallery.wpeRestoreCoverDone"));
     reload();
   } catch (failure) {
-    ElMessage.error(`${t(failedKey)}: ${String(failure)}`);
+    ElMessage.error(`${t("gallery.wpeRestoreCoverFailed")}: ${String(failure)}`);
   } finally {
     coverBusy.value = false;
   }
-}
-
-function setCover() {
-  const source = props.coverSource;
-  if (!source) return;
-  const imageId = props.imageId;
-  void runCoverCommand(
-    () => source((region) => invoke<string>("capture_wallpaper_cover", { imageId, region })),
-    "gallery.wpeSetCoverDone",
-    "gallery.wpeSetCoverFailed",
-  );
-}
-
-function restoreCover() {
-  const imageId = props.imageId;
-  void runCoverCommand(
-    () => invoke<string>("restore_wallpaper_cover", { imageId }),
-    "gallery.wpeRestoreCoverDone",
-    "gallery.wpeRestoreCoverFailed",
-  );
 }
 </script>
 

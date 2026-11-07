@@ -839,8 +839,8 @@ pub(crate) fn configure_app(
             set_wallpaper_volume,
             get_wallpaper_video_playback_rate,
             set_wallpaper_video_playback_rate,
-            get_wallpaper_disabled,
-            set_wallpaper_disabled,
+            get_wallpaper_enabled,
+            set_wallpaper_enabled,
             #[cfg(target_os = "macos")]
             fix_wallpaper_zorder,
             // --- Virtual Drive ---

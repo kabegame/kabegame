@@ -947,7 +947,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     use std::path::Path;
 
     // 壁纸功能已关闭：启动时不恢复壁纸。
-    if Settings::global().get_wallpaper_disabled() {
+    if !Settings::global().get_wallpaper_enabled() {
         return Ok(());
     }
 

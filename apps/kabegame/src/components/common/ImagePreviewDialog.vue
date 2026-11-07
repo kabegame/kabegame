@@ -391,16 +391,14 @@
           @wheel.stop
         >
           <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
-            <!-- 网页与场景壁纸：作者属性面板（改动经 metadataId 补丁让页面 / 场景重读） -->
+            <!-- 网页与场景壁纸：作者属性面板（改动经 metadataId 补丁让页面 / 场景重读）。暂停、设为封面、
+                 清空脚本存储在右键菜单与工具条里，面板只留恢复默认封面 -->
             <WpeWebPropertiesPanel
               v-if="previewImage && hasWpeUserProperties(previewImage.type)"
               :image-id="previewImage.id"
               :image-type="previewImage.type"
               fill-when-expanded
-              :paused="previewWallpaperLive ? wallpaperPaused : undefined"
-              :cover-source="previewWallpaperLive ? previewCoverSource : undefined"
-              :cover-ready="previewCoverReady"
-              @update:paused="wallpaperPaused = $event"
+              :restorable-cover="previewWallpaperLive"
             />
             <ImagePluginDescriptionPanel v-else :image="previewImage" fill-when-expanded />
           </div>
@@ -451,6 +449,8 @@ import { useSettingsStore } from "../../stores/settings";
 import { useKameMessageStore } from "../../stores/kameMessage";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
+import type { ImageActionContext } from "../../actions/imageActions";
+import { captureWpeCover, clearWpeSceneStorage } from "../../utils/wpeWallpaperCommands";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
@@ -577,8 +577,8 @@ const wallpaperPaused = ref(false);
 /** 网页壁纸加载完；场景退回预览图时也会置位，所以场景看 `previewSceneLive` */
 const previewWallpaperReady = ref(false);
 const previewSceneLive = ref(false);
-/** 画面确定在实时渲染：场景出了首帧，网页 iframe 加载完。退回预览图时为假，不能设为封面 */
-const previewCoverReady = computed(() =>
+/** 画面确定在实时渲染：场景出了首帧，网页 iframe 加载完。之前与退回预览图时为假，暂停与设为封面置灰 */
+const previewRendering = computed(() =>
   isWpeSceneType(previewImage.value?.type) ? previewSceneLive.value : previewWallpaperReady.value,
 );
 /** 场景的分辨率，画布按它定比例；网页壁纸没有宽高，透视场景读不到 */
@@ -1138,11 +1138,49 @@ const closePreviewContextMenu = () => {
   previewContextMenu.close();
 };
 
-const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
+/** 设为封面进行中：菜单项与工具条按钮置灰，也挡住重复触发 */
+const coverBusy = ref(false);
+
+const previewActionContext = computed<ImageActionContext>(() => ({
   target: previewImage.value,
   selectedIds: previewImage.value ? new Set([previewImage.value.id]) : new Set<string>(),
   selectedCount: previewImage.value ? 1 : 0,
+  // 实例状态只在弹窗里：画廊的菜单不带它，依赖实例的项不显示
+  wallpaperPreview: previewWallpaperLive.value
+    ? { live: previewRendering.value, paused: wallpaperPaused.value, coverBusy: coverBusy.value }
+    : undefined,
 }));
+
+/**
+ * 设为封面：截的是这一份预览的画面。截取期间盖在画布上的工具条、箭头等按 `data-kb-cover-capture` 隐藏（见样式），
+ * 从工具条或右键菜单点的时候它们正显示着。
+ */
+async function setPreviewCover(imageId: string) {
+  if (coverBusy.value || !previewRendering.value) return;
+  coverBusy.value = true;
+  try {
+    await captureWpeCover(imageId, previewCoverSource, t);
+  } finally {
+    coverBusy.value = false;
+  }
+}
+
+/** 只对这一份实例有意义的命令由弹窗自己处理，不交给上层（上层不知道画面出没出来）。处理了返回 true */
+function handleWallpaperCommand(command: string, image: ImageInfo): boolean {
+  if (command === "pauseWallpaper") {
+    if (previewRendering.value) wallpaperPaused.value = !wallpaperPaused.value;
+    return true;
+  }
+  if (command === "setCover") {
+    void setPreviewCover(image.id);
+    return true;
+  }
+  if (command === "clearStorage") {
+    void clearWpeSceneStorage(image.id, t);
+    return true;
+  }
+  return false;
+}
 
 // 网页壁纸预览的工具条按钮：右键菜单的可见项按原顺序平铺（桌面菜单没有子菜单）
 const wallpaperBarActions = computed(() => {
@@ -1190,6 +1228,7 @@ const handlePreviewActionCommand = (command: string) => {
   } else {
     closePreviewContextMenu();
   }
+  if (handleWallpaperCommand(command, payload.image)) return;
   emit("contextCommand", payload);
 };
 
@@ -1685,6 +1724,12 @@ defineExpose({
     overflow: hidden;
     box-sizing: border-box;
     position: relative;
+
+    /* 截壁纸封面时只留壁纸画布：工具条、箭头、抽屉开关都盖在画布上，从工具条或右键菜单点「设为封面」时它们正显示着
+       （WallpaperPreviewCanvas 的 withCaptureRegion 设这个属性并等两帧） */
+    html[data-kb-cover-capture] & > :not(.preview-wallpaper-wrapper) {
+      visibility: hidden;
+    }
 
     /* z-index 由模板内联绑定给出（见模板处注释），这里不写 v-bind */
     &.is-app-fullscreen {

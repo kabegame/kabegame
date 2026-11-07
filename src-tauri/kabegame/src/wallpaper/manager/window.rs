@@ -40,7 +40,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
     ///
     /// 窗口只由 `init()` 创建，而 `init()` 只在两个地方被调用：启动
     /// （`startup.rs` → `WallpaperController::init()`）和模式/开关切换
-    /// （`commands/wallpaper.rs` 的 `apply_backend_lifecycle` / `set_wallpaper_disabled`）。
+    /// （`commands/wallpaper.rs` 的 `apply_backend_lifecycle` / `set_wallpaper_enabled`）。
     /// 任何新增的"让壁纸生效"路径若漏调 `init()`，症状是**静默无窗口**——
     /// 类型系统抓不到（去掉兜底建窗后已连续踩到三次：模式切换的无壁纸早返回、
     /// 切换中止路径、关闭壁纸后重新开启）。这行日志把它变成可见的。

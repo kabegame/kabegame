@@ -187,7 +187,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     tauri("wallpaperStyleByMode", "get_wallpaper_style_by_mode", "set_wallpaper_style_by_mode"),
     tauri("wallpaperTransitionByMode", "get_wallpaper_transition_by_mode", "set_wallpaper_transition_by_mode"),
     tauri("wallpaperMode", "get_wallpaper_mode", "set_wallpaper_mode", "mode"),
-    tauri("wallpaperDisabled", "get_wallpaper_disabled", "set_wallpaper_disabled", "disabled"),
+    tauri("wallpaperEnabled", "get_wallpaper_enabled", "set_wallpaper_enabled", "enabled"),
     tauri("wallpaperVolume", "get_wallpaper_volume", "set_wallpaper_volume", "volume"),
     tauri(
       "wallpaperVideoPlaybackRate",

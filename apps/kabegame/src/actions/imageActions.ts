@@ -1,11 +1,16 @@
 import {
+  Brush,
+  Camera,
   InfoFilled,
   DocumentCopy,
   FolderOpened,
   Folder,
+  Monitor,
   Picture,
   Star,
   StarFilled,
+  VideoPause,
+  VideoPlay,
   FolderAdd,
   Download,
   Delete,
@@ -19,8 +24,27 @@ import type { ActionItem, ActionContext } from "@/actions/types";
 import type { ImageInfo } from "@/types/image";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { i18n } from "@kabegame/i18n";
-import { isWpeMediaType } from "@/utils/mediaMime";
+import { hasWpeUserProperties, isWpeMediaType, isWpeSceneType } from "@/utils/mediaMime";
 import { useUiStore } from "@/stores/ui";
+
+/**
+ * 预览弹窗给菜单的上下文：多出当前这张壁纸的实时实例状态。画廊的右键菜单没有当前画面，不带它，
+ * 依赖实例的项（暂停、设为封面、清空脚本存储）就不显示；这几条命令也由预览弹窗自己处理，不交给网格。
+ */
+export interface ImageActionContext extends ActionContext<ImageInfo> {
+  /** 只在桌面预览网页与场景壁纸时有（Android / Web 只显示预览图，没有实例） */
+  wallpaperPreview?: {
+    /** 画面确定在实时渲染：场景出了首帧，网页 iframe 加载完。之前与退回预览图时为假，暂停与设为封面置灰 */
+    live: boolean;
+    /** 预览这一份的暂停状态（桌面的暂停是设置 `wallpaperPaused`，互不影响） */
+    paused: boolean;
+    /** 设为封面进行中 */
+    coverBusy: boolean;
+  };
+}
+
+/** 设为壁纸：桌面与 Android 设的是系统壁纸，Web 版设的是应用背景 */
+const WALLPAPER_ICON = IS_WEB ? Picture : Monitor;
 
 export interface CreateImageActionsOptions {
   /** Custom text for remove action (e.g., "删除" | "从画册移除") */
@@ -59,15 +83,25 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
   const multiHideSet = new Set(multiHide);
   const isSingle = (ctx: ActionContext<ImageInfo>) => !ctx.selectedCount || ctx.selectedCount === 1;
   /** 目录型 WPE 壁纸没有单个源文件：复制 / 分享 / 删源文件都不适用；「打开」即打开目录，「欣赏更多」也不再需要。 */
-  const isWpeTarget = (ctx: ActionContext<ImageInfo>) =>
-    isWpeMediaType(ctx.target?.type);
+  const isWpeTarget = (ctx: ActionContext<ImageInfo>) => isWpeMediaType(ctx.target?.type);
   // 详情弹窗与系统分享只有 Android 有（桌面在预览抽屉里看详情，share_file 仅 Android 编译）；
   // 放在顶层还是「更多」子菜单由 isCompact 决定，平板宽屏走顶层。
   const canDetail = () => IS_ANDROID && !hideSet.has("detail");
   const canShare = () => IS_ANDROID && !hideSet.has("share");
+  const wallpaperPreviewOf = (ctx: ActionContext<ImageInfo>) => (ctx as ImageActionContext).wallpaperPreview;
 
   // Single-select actions
   const singleActions: ActionItem<ImageInfo>[] = [
+    {
+      // 排第一：预览壁纸时最常用
+      key: "pauseWallpaper",
+      label: (ctx) => (wallpaperPreviewOf(ctx)?.paused ? t("gallery.wpeResume") : t("gallery.wpePause")),
+      icon: (ctx: ActionContext<ImageInfo>) => (wallpaperPreviewOf(ctx)?.paused ? VideoPlay : VideoPause),
+      command: "pauseWallpaper",
+      // 暂停的是预览里这一份实例，画廊里没有
+      visible: (ctx) => !hideSet.has("pauseWallpaper") && isSingle(ctx) && !!wallpaperPreviewOf(ctx),
+      disabled: (ctx) => !wallpaperPreviewOf(ctx)?.live,
+    },
     {
       key: "favorite",
       label: (ctx: ActionContext<ImageInfo>) =>
@@ -139,9 +173,34 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "wallpaper",
       label: IS_WEB ? t("contextMenu.background") : t("contextMenu.wallpaper"),
-      icon: Picture,
+      icon: WALLPAPER_ICON,
       command: "wallpaper",
       visible: () => !hideSet.has("wallpaper"),
+    },
+    {
+      key: "setCover",
+      label: t("gallery.wpeSetCover"),
+      icon: Camera,
+      command: "setCover",
+      // 截的是预览里正在渲染的画面，画廊里没有当前画面
+      visible: (ctx) =>
+        !hideSet.has("setCover") &&
+        isSingle(ctx) &&
+        !!wallpaperPreviewOf(ctx) &&
+        hasWpeUserProperties(ctx.target?.type),
+      disabled: (ctx) => {
+        const preview = wallpaperPreviewOf(ctx);
+        return !preview?.live || preview.coverBusy;
+      },
+    },
+    {
+      key: "clearStorage",
+      label: t("gallery.wpeClearStorage"),
+      icon: Brush,
+      command: "clearStorage",
+      // 清空由后端广播给正在运行的场景宿主，没有实例时没人收、不生效
+      visible: (ctx) =>
+        !hideSet.has("clearStorage") && isSingle(ctx) && !!wallpaperPreviewOf(ctx) && isWpeSceneType(ctx.target?.type),
     },
     {
       key: "addToAlbum",
@@ -325,7 +384,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "wallpaper",
       label: IS_WEB ? t("contextMenu.background") : t("contextMenu.wallpaper"),
-      icon: Picture,
+      icon: WALLPAPER_ICON,
       command: "wallpaper",
       visible: (ctx) => {
         if (hideSet.has("wallpaper")) return false;

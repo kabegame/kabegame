@@ -183,8 +183,8 @@
               :title="$t('settings.categoryWallpaper')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
-              <SettingRow :label="$t('settings.wallpaperDisabled')" :description="$t('settings.wallpaperDisabledDesc')">
-                <SettingSwitchControl setting-key="wallpaperDisabled" />
+              <SettingRow :label="$t('settings.wallpaperEnabled')" :description="$t('settings.wallpaperEnabledDesc')">
+                <SettingSwitchControl setting-key="wallpaperEnabled" />
               </SettingRow>
 
               <div :class="{ 'pointer-events-none opacity-50': wallpaperDisabled }">
@@ -217,9 +217,16 @@
                   :image-id="currentWallpaperImageId"
                   :image-type="currentWallpaperType"
                   :title="currentWallpaperName"
-                  :paused="desktopWallpaperPaused"
-                  @update:paused="setWallpaperPaused"
                 />
+
+                <!-- 视频、网页、场景共用：只有窗口模式的桌面上有在播放的实例 -->
+                <SettingRow
+                  v-if="desktopWallpaperLive"
+                  :label="$t('settings.wallpaperPaused')"
+                  :description="$t('settings.wallpaperPausedDesc')"
+                >
+                  <SettingSwitchControl setting-key="wallpaperPaused" />
+                </SettingRow>
 
                 <SettingRow
                   :label="$t('settings.wallpaperRotationInterval')"
@@ -419,7 +426,6 @@ import SettingRow from "@/components/settings/SettingRow.vue";
 import WpeWebPropertiesDialog from "@/components/wallpaper/WpeWebPropertiesDialog.vue";
 import { fetchImageById } from "@/utils/imageRow";
 import { hasWpeUserProperties } from "@/utils/mediaMime";
-import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
@@ -663,14 +669,11 @@ watch(
   },
 );
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
-const { settingValue: wallpaperPausedSetting, set: setWallpaperPaused } = useSettingKeyState("wallpaperPaused");
-/** 只有窗口模式桌面上才有实时实例（Android / Web 不运行网页与场景）；其它情况传 undefined，面板不显示暂停与清空 */
-const desktopWallpaperPaused = computed(() =>
-  !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window" ? wallpaperPausedSetting.value === true : undefined,
-);
-// 关闭壁纸：禁用期间将其余壁纸控件置灰
-const wallpaperDisabled = computed(() => settingsStore.values.wallpaperDisabled === true);
-// native 模式下开启"关闭壁纸"时提示用户系统壁纸保持现状、无法自动还原
+/** 只有窗口模式的桌面上有在播放的视频、网页与场景（原生模式交给系统，Android / Web 没有窗口壁纸），暂停只在这时显示 */
+const desktopWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window");
+// 「打开壁纸」关掉期间将其余壁纸控件置灰（还没读到值时按开启处理）
+const wallpaperDisabled = computed(() => settingsStore.values.wallpaperEnabled === false);
+// native 模式下关掉「打开壁纸」时提示用户系统壁纸保持现状、无法自动还原
 watch(wallpaperDisabled, (disabled, prev) => {
   if (disabled && !prev && wallpaperMode.value === "native") {
     ElMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
