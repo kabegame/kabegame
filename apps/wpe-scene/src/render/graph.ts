@@ -16,7 +16,7 @@
  * - **`_rt_FullFrameBuffer`**（B8）：场景目标的整帧快照，每图层至多拷一次，时机是三处里最早满足的一处：
  *   图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前。
  *   合成链不画进场景，所以三处拷到的都是画到本图层之前的场景。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」
- *   的条件，P2a 的场景没有 fullscreen / 父子层（另报 unsupported），条件恒成立。
+ *   的条件；`fullscreen` 与 `passthrough` 对象另报 unsupported（P4a 起有父子层，但父层不会是 passthrough），条件恒成立。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";

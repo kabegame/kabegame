@@ -42,7 +42,31 @@ export function scaling(x: number, y: number, z: number): Mat4 {
   return m;
 }
 
-/** 绕 z 轴逆时针旋转（弧度，y 向上的右手系）。 */
+/** 绕 x 轴旋转（弧度，右手系）：数学矩阵 `[[1, 0, 0], [0, c, −s], [0, s, c]]`。 */
+export function rotationX(radians: number): Mat4 {
+  const m = identity();
+  const c = Math.cos(radians),
+    s = Math.sin(radians);
+  m[5] = c;
+  m[6] = s;
+  m[9] = -s;
+  m[10] = c;
+  return m;
+}
+
+/** 绕 y 轴旋转（弧度，右手系）：数学矩阵 `[[c, 0, s], [0, 1, 0], [−s, 0, c]]`。 */
+export function rotationY(radians: number): Mat4 {
+  const m = identity();
+  const c = Math.cos(radians),
+    s = Math.sin(radians);
+  m[0] = c;
+  m[2] = -s;
+  m[8] = s;
+  m[10] = c;
+  return m;
+}
+
+/** 绕 z 轴逆时针旋转（弧度，y 向上的右手系）：数学矩阵 `[[c, −s, 0], [s, c, 0], [0, 0, 1]]`。 */
 export function rotationZ(radians: number): Mat4 {
   const m = identity();
   const c = Math.cos(radians),

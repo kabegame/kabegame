@@ -19,7 +19,8 @@ import type { TranslateResult } from "../wpesl2wgsl";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { planLayer, type TextureRef } from "./graph";
-import { eyePosition, sceneTargetSize, sceneViewProjection } from "./layout";
+import { eyePosition, layerLocalMatrix, sceneTargetSize, sceneViewProjection, worldMatrixOf } from "./layout";
+import type { Mat4 } from "./math";
 import type { GpuProgram } from "./programs";
 import { checkRenderable, visibleObjects } from "./scene";
 import { SceneState, type LayerState } from "./state";
@@ -84,6 +85,7 @@ const BASE_LAYER: LayerState = {
   color: [0.2, 0.4, 0.6],
   brightness: 1,
   visible: true,
+  parent: null,
 };
 
 function scenePass(partial: Partial<ScenePass> = {}): ScenePass {
@@ -149,6 +151,8 @@ function uniformBytes(bundle: SceneBundle, state: SceneState): Map<string, Uint8
   const out = new Map<string, Uint8Array>();
   const viewProjection = sceneViewProjection(bundle.general);
   const [width, height] = sceneTargetSize(bundle.general.width, bundle.general.height, 8192);
+  // 世界矩阵按这份状态沿父链算（同 `GpuScene` 一次快照一份缓存）
+  const worlds = new Map<number, Mat4>();
   for (const layer of bundle.layers) {
     if (!(layer.visible || layer.visibleBound) || !layer.passes.length) continue;
     const plan = planLayer(layer, bundle.textures);
@@ -171,6 +175,7 @@ function uniformBytes(bundle: SceneBundle, state: SceneState): Map<string, Uint8
       const values = drawUniformValues({
         step,
         layer: { ...layerState, size: layer.size },
+        world: worldMatrixOf(layer.object, state.layers, worlds),
         constants: state.constants.get(step.pass.key) ?? {},
         viewProjection,
         colorScale: bundle.general.postprocess.hdr ? layerState.brightness : 1,
@@ -247,6 +252,7 @@ describe("就地 = 重编译（字节级，合成用例）", () => {
     const values = drawUniformValues({
       step: { role: "passthrough", inputs: {} },
       layer: { ...state.layers.get(0)!, size: [64, 32] },
+      world: layerLocalMatrix(state.layers.get(0)!),
       constants: state.constants.get("objects/0/passthrough") ?? {},
       viewProjection: sceneViewProjection(bundle.general),
       colorScale: 1,

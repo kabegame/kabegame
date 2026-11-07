@@ -12,7 +12,7 @@ import {
   type LayerPlan,
   type LayerStep,
 } from "./graph";
-import { uvInset } from "./layout";
+import { layerLocalMatrix, uvInset } from "./layout";
 import { transformPoint } from "./math";
 import { drawMatrices, pipelineKey, stepPipeline, uploadableTextures } from "./scene";
 
@@ -56,6 +56,7 @@ function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
   return {
     id: 7,
     object: 0,
+    parent: null,
     name: "l",
     origin: [100, 50, 0],
     scale: [1, 1, 1],
@@ -603,8 +604,10 @@ describe("上传的纹理（3c）", () => {
 
 describe("效果矩阵", () => {
   const vp = new Float32Array([2 / 400, 0, 0, 0, 0, 2 / 200, 0, 0, 0, 0, -1, 0, -1, -1, 0, 1]);
+  /** 根图层：世界矩阵就是本地矩阵。 */
+  const matrices = (role: DrawStep["role"]) => drawMatrices({ role }, layerLocalMatrix(layer()), layer().size, vp);
   it("effect pass：MVP 单位阵，效果 MVP 把 NDC 四边形摆回图层在场景里的位置", () => {
-    const m = drawMatrices({ role: "effect" }, layer(), vp);
+    const m = matrices("effect");
     expect(Array.from(m.modelViewProjection)).toEqual(
       Array.from(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])),
     );
@@ -615,14 +618,14 @@ describe("效果矩阵", () => {
     expect(m.effectTextureProjection).toEqual(m.effectModelViewProjection);
   });
   it("上屏 pass：效果矩阵不缩放，纹理投影 = MVP × scale(w/2, h/2)", () => {
-    const m = drawMatrices({ role: "final" }, layer(), vp);
+    const m = matrices("final");
     expect(m.effectModelViewProjection).toEqual(m.modelViewProjection);
     const [x, y] = transformPoint(m.effectTextureProjection!, 1, 1, 0);
     expect(x).toBeCloseTo(0);
     expect(y).toBeCloseTo(0);
   });
   it("基础 pass：正交投影把图层四边形画满目标", () => {
-    const m = drawMatrices({ role: "base" }, layer(), vp);
+    const m = matrices("base");
     const [x, y] = transformPoint(m.modelViewProjection, 100, -50, 0);
     expect(x).toBeCloseTo(1, 6);
     expect(y).toBeCloseTo(-1, 6);

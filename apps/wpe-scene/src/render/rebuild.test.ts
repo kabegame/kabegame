@@ -21,7 +21,7 @@ import { SceneRenderError } from "./errors";
 import type { FboBindings } from "./graph";
 import { eyePosition } from "./layout";
 import { SceneRenderer } from "./renderer";
-import { GpuScene } from "./scene";
+import { GpuScene, visibleObjects } from "./scene";
 import { SceneState } from "./state";
 import type { FrameInput } from "./uniforms";
 
@@ -306,6 +306,7 @@ function layer(object: number, effects: SceneEffect[], extra: Partial<SceneLayer
   return {
     id: object + 1,
     object,
+    parent: null,
     name: `layer ${object}`,
     origin: [10, 20, 0],
     scale: [1, 1, 1],
@@ -1719,5 +1720,65 @@ describe("没有可变 effect 的场景：资源数与改动前相同", () => {
     const { encoders } = gpu;
     scene.sync(state);
     expect(gpu.encoders).toBe(encoders);
+  });
+});
+
+describe("层级（P4a 步骤 1）", () => {
+  /**
+   * 0 图层 a（父 2，排在父前面）；1 分组 g（没有 pass）；2 图层 c（父 g，带一个 effect，走合成链）；3 图层 d（父 c）；4 根图层 e。
+   * `group` 改分组的字段。
+   */
+  function tree(group: Partial<SceneLayer> = {}): SceneBundle {
+    return bundleOf([
+      layer(0, [], { parent: 2, origin: [-15, 5, 0] }),
+      layer(1, [], { passes: [], origin: [100, 50, 0], angles: [0, 0, 0.5], scale: [2, 1, 1], ...group }),
+      layer(2, [effect(0, true, [draw(pass("objects/2/effects/0/passes/0", P.a))])], {
+        parent: 1,
+        angles: [0, 0, 0.3],
+      }),
+      layer(3, [], { parent: 2, origin: [30, 0, 0], angles: [0.2, 0.3, 0.4] }),
+      layer(4, []),
+    ]);
+  }
+  const writeGroup = (state: SceneState, field: "origin" | "angles" | "scale" | "visible", value: SceneScalar) =>
+    state.write({ property: "p", target: { kind: "layer", object: 1, field } }, value);
+  const layerOf = (captured: ReturnType<typeof capture>, object: number) =>
+    captured.layers.find((item) => item.object === object);
+
+  it("就地改分组的 origin / angles / scale：子孙的字节等于用新值整场编译，无关图层不变", async () => {
+    const live = await open(tree());
+    // 先走一帧：对照的字节都写过每帧内置量
+    advance(live);
+    const before = capture(live);
+    writeGroup(live.state, "origin", "220 -40 5");
+    writeGroup(live.state, "angles", "0.1 0.2 1.1");
+    writeGroup(live.state, "scale", "0.5 3 1");
+    advance(live);
+    const after = capture(live);
+    expect(after).toEqual(
+      capture(await fresh(tree({ origin: [220, -40, 5], angles: [0.1, 0.2, 1.1], scale: [0.5, 3, 1] }))),
+    );
+    for (const object of [0, 2, 3]) expect(layerOf(after, object)).not.toEqual(layerOf(before, object));
+    expect(layerOf(after, 4)).toEqual(layerOf(before, 4));
+  });
+
+  it("分组写死不可见：子孙不建资源、不画", async () => {
+    const live = await open(tree({ visible: false }));
+    expect(internals(live.scene).layers.map((item) => item.object)).toEqual([4]);
+    expect(visibleObjects(internals(live.scene).layers, live.state)).toEqual([4]);
+  });
+
+  it("分组的 visible 绑了属性：子孙建资源，可见性跟着分组变", async () => {
+    const live = await open(tree({ visible: false, visibleBound: true }));
+    const runtimes = internals(live.scene).layers;
+    expect(runtimes.map((item) => item.object)).toEqual([0, 2, 3, 4]);
+    expect(visibleObjects(runtimes, live.state)).toEqual([4]);
+    writeGroup(live.state, "visible", true);
+    advance(live);
+    expect(visibleObjects(runtimes, live.state)).toEqual([0, 2, 3, 4]);
+    // 子自己关掉：它的子孙一起不画
+    live.state.write({ property: "p", target: { kind: "layer", object: 2, field: "visible" } }, false);
+    advance(live);
+    expect(visibleObjects(runtimes, live.state)).toEqual([4]);
   });
 });

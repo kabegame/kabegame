@@ -55,6 +55,7 @@ function scene(): SceneBundle {
   const layer = (object: number, name: string): SceneLayer => ({
     id: object + 10,
     object,
+    parent: null,
     name,
     origin: [1, 2, 3],
     scale: [1, 1, 1],

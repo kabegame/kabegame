@@ -16,6 +16,7 @@ import {
   valueTypeOf,
 } from "./bindings";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
+import { resolveParents } from "./hierarchy";
 import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import {
   checkEffectFeatures,
@@ -157,6 +158,11 @@ export interface SceneLayer {
   id: number;
   /** scene.json 的 `objects` 下标（稳定键；`layers` 下标会随被跳过的对象移位）。 */
   object: number;
+  /**
+   * 父对象的 `objects` 下标（`hierarchy.ts` 的 `resolveParents`）；根节点为 null。世界矩阵沿父链累乘、`visible` 沿父链继承
+   * （`render/layout.ts`），`alpha`、`color`、`brightness` 不继承。父可能排在子后面。
+   */
+  parent: number | null;
   name: string;
   origin: number[];
   scale: number[];
@@ -422,6 +428,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       counts,
       bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
     ));
+  // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
+  const { parents } = resolveParents(scene.objects);
   const textureIndex = new Map<string, number>();
   /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
   const textureIssues = new Map<number, string[]>();
@@ -656,6 +664,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const layer: SceneLayer = {
       id: object.id ?? bundle.layers.length,
       object: index,
+      parent: parents[index],
       name: object.name ?? "",
       origin: numbers(bindings.bind(object.origin, properties, at("origin")), [0, 0, 0]),
       scale: numbers(bindings.bind(object.scale, properties, at("scale")), [1, 1, 1]),
@@ -681,7 +690,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       effects: [],
       passthrough: null,
     };
+    // 每个对象都进 `layers`（分组节点、灯、粒子是没有 pass 的图层），子孙算世界矩阵与可见性时父的状态都在
     bundle.layers.push(layer);
+    // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
     if (!object.image) continue;
     const modelText = await fs.text(object.image);
     if (!modelText) {

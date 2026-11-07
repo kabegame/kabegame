@@ -21,6 +21,8 @@
  *   WPE 画进两张交替的后备缓冲，第 N 帧的底图是第 N−2 帧的成品，两条链互不相交，所以这里同样用两张场景目标逐帧交替。
  *   泛光的 combine 写当前这张，底图含泛光（L20）。第二张只在清屏可能关掉时建（`SceneGeneral.clearVariable`），别的场景资源不变。
  *   HDR 下 WPE 的后备缓冲存 `lin(x)`，累加因此收敛（L21），我们的目标存 `x`，所以开画之前把底图过一次 `lin`（`linearizeBase`）。
+ * - 层级（P4a 步骤 1）：模型矩阵是沿父链累乘的世界矩阵（`worldMatrixOf`），`visible` 沿父链继承（`visibleObjects`），
+ *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -41,7 +43,16 @@ import {
   type TargetRef,
   type TextureRef,
 } from "./graph";
-import { eyePosition, layerQuad, sceneTargetSize, sceneViewProjection } from "./layout";
+import {
+  effectiveVisible,
+  everyAncestor,
+  eyePosition,
+  layerQuad,
+  sceneTargetSize,
+  sceneViewProjection,
+  worldMatrixOf,
+} from "./layout";
+import type { Mat4 } from "./math";
 import { createPipeline, createProgram, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
@@ -231,12 +242,24 @@ export function checkRenderable(
       const pass = bundle.bloom.passes[name as keyof typeof bundle.bloom.passes];
       if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
     }
-  for (const layer of bundle.layers) {
-    // `visibleBound` 的图层当前可能不可见，但随时可能显示：同样要能画（P3a）
-    if (!(layer.visible || layer.visibleBound || bundle.scripts.list.length) || !layer.passes.length) continue;
+  for (const layer of buildableLayers(bundle))
     for (const reason of planProblems(planLayer(layer, bundle.textures), bundle)) reasons.add(reason);
-  }
   return [...reasons];
+}
+
+/**
+ * 要建 GPU 资源的图层（有 pass 的）：自身和每个祖先都可能可见，即当前可见、`visible` 绑了用户属性，或场景带脚本。
+ * `visibleBound` 的图层当前可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组下面的子孙永远画不出来
+ * （`visible` 沿父链继承，P4a 步骤 1）：不建资源，它们的问题也不让整场退回。
+ */
+export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">): SceneLayer[] {
+  const scripted = bundle.scripts.list.length > 0;
+  const byObject = new Map(bundle.layers.map((layer) => [layer.object, layer]));
+  return bundle.layers.filter(
+    (layer) =>
+      layer.passes.length > 0 &&
+      everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted),
+  );
 }
 
 /**
@@ -261,11 +284,12 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
 }
 
 /**
- * 本帧要执行的图层（`objects` 下标）：不可见图层整段跳过（含它的快照、copy 与 swap）。
+ * 本帧要执行的图层（`objects` 下标）：不可见图层整段跳过（含它的快照、copy 与 swap）。可见性沿父链继承：
+ * 自身和所有祖先都可见才画（P4a 步骤 1），祖先按 `state.layers` 查，不要求祖先有 GPU 资源。
  * 纯函数，单测核对可见性的跳过规则（P3a）。
  */
 export function visibleObjects(layers: readonly { object: number }[], state: SceneState): number[] {
-  return layers.filter((layer) => state.layers.get(layer.object)?.visible ?? false).map((layer) => layer.object);
+  return layers.filter((layer) => effectiveVisible(layer.object, state.layers)).map((layer) => layer.object);
 }
 
 export class GpuScene {
@@ -597,12 +621,16 @@ export class GpuScene {
     }
   }
 
-  /** 照计划生成 op 与 draw。全程同步：新 draw 的 uniform 按这一刻的状态写。 */
+  /**
+   * 照计划生成 op 与 draw。全程同步：新 draw 的 uniform 按这一刻的状态写。`worlds` 是这一刻状态下的世界矩阵缓存
+   * （`worldMatrixOf`），由调用方按一次状态快照建一份。
+   */
   private buildLayer(
     runtime: LayerRuntime,
     plan: LayerPlan,
     prepared: ReadonlyMap<DrawStep, PreparedDraw>,
     state: SceneState,
+    worlds: Map<number, Mat4>,
   ): { ops: Op[]; draws: Draw[] } {
     const { layer, resources } = runtime;
     this.ensureComposites(runtime, plan);
@@ -617,7 +645,7 @@ export class GpuScene {
       else if (step.kind === "copy")
         ops.push({ kind: "copy", resources, effect: step.effect, source: step.source, target: step.target });
       else {
-        const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state);
+        const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds);
         ops.push({ kind: "draw", draw });
         draws.push(draw);
       }
@@ -657,9 +685,7 @@ export class GpuScene {
     );
     this.dummies = this.createDummies();
 
-    const built = bundle.layers.filter(
-      (layer) => (layer.visible || layer.visibleBound || bundle.scripts.list.length) && layer.passes.length,
-    );
+    const built = buildableLayers(bundle);
     const plans = built.map((layer) => this.planOf(layer, state));
 
     // 程序：全部建完再汇总失败，Tint 报告一次列全
@@ -753,8 +779,10 @@ export class GpuScene {
       this.bloom = chain;
       this.targetBytes += chain.bytes;
     }
+    // 世界矩阵按这一刻的状态算，全部图层共用一份缓存
+    const worlds = new Map<number, Mat4>();
     runtimes.forEach((runtime, index) =>
-      this.install(runtime, this.buildLayer(runtime, plans[index], prepared[index], state)),
+      this.install(runtime, this.buildLayer(runtime, plans[index], prepared[index], state, worlds)),
     );
     device.queue.submit([setup.finish()]);
   }
@@ -821,6 +849,7 @@ export class GpuScene {
     resources: LayerResources,
     { program, pipeline }: PreparedDraw,
     state: SceneState,
+    worlds: Map<number, Mat4>,
   ): Draw {
     const { device, bundle } = this;
     const { pass } = step;
@@ -859,7 +888,7 @@ export class GpuScene {
       const layerState = state.layers.get(layer.object);
       if (layerState)
         for (const [name, values] of Object.entries(
-          drawUniformValues(this.uniformInput(step, layer, layerState, textureSizes, state)),
+          drawUniformValues(this.uniformInput(step, layer, layerState, textureSizes, state, worlds)),
         ))
           block.set(name, values);
       frameNames = Object.keys(
@@ -949,17 +978,19 @@ export class GpuScene {
     return group;
   }
 
-  /** 就地刷新 uniform 的输入：图层状态 + 场景级常量（建场景时算一次）。 */
+  /** 就地刷新 uniform 的输入：图层状态、按父链算的世界矩阵 + 场景级常量（建场景时算一次）。 */
   private uniformInput(
     step: DrawStep,
     layer: SceneLayer,
     layerState: LayerState,
     textures: readonly (TextureSize | undefined)[],
     state: SceneState,
+    worlds: Map<number, Mat4>,
   ): DrawUniformInput {
     return {
       step,
       layer: { ...layerState, size: layer.size },
+      world: worldMatrixOf(layer.object, state.layers, worlds),
       constants: state.constants.get(step.pass.key) ?? {},
       viewProjection: this.viewProjection,
       // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
@@ -979,10 +1010,12 @@ export class GpuScene {
    */
   sync(state: SceneState): void {
     const dirty = state.takeDirty();
+    // 本次的状态快照下的世界矩阵：重建与刷新共用，一条父链只算一次。父的变换写过时子孙已在 `dirty.layers` 里（`SceneState.write`）
+    const worlds = new Map<number, Mat4>();
     // 结构先处理：新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上
-    this.rebuildStructures(dirty.structures, state);
+    this.rebuildStructures(dirty.structures, state, worlds);
     for (const object of dirty.layers)
-      for (const draw of this.drawsByLayer.get(object) ?? []) this.refreshLayer(draw, state);
+      for (const draw of this.drawsByLayer.get(object) ?? []) this.refreshLayer(draw, state, worlds);
     for (const key of dirty.passes) for (const draw of this.drawsByPass.get(key) ?? []) this.refreshPass(draw, state);
     if (dirty.lights) for (const draw of this.draws) this.refreshLights(draw, state);
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
@@ -1047,14 +1080,14 @@ export class GpuScene {
   }
 
   /** effect 开关真的变了的图层：重排，再清 fbo。清屏提交在这一帧的绘制之前。 */
-  private rebuildStructures(objects: ReadonlySet<number>, state: SceneState): void {
+  private rebuildStructures(objects: ReadonlySet<number>, state: SceneState, worlds: Map<number, Mat4>): void {
     if (!objects.size) return;
     const encoder = this.device.createCommandEncoder({ label: "effect clear" });
     let cleared = false;
     for (const object of objects) {
       const runtime = this.layers.find((layer) => layer.object === object);
       if (!runtime) continue;
-      this.rebuildLayer(runtime, state);
+      this.rebuildLayer(runtime, state, worlds);
       // 签名没变也要清：同一帧内关了又开，WPE 仍然重建
       cleared = this.clearLayerFbos(encoder, runtime) || cleared;
     }
@@ -1065,7 +1098,7 @@ export class GpuScene {
    * 切换当场做完：程序与管线都是加载时备好的，这里不编译、不等待。copy / swap 与程序的检查已提前到 `prepareVariants`，n + 2 份之外的组合由 `planProblems` 当场查，
    * 万一还有校验错误，走 `onuncapturederror`。旧 draw 的缓冲换下时销毁：已提交的帧不受影响，之后的帧只用新 draw。
    */
-  private rebuildLayer(runtime: LayerRuntime, state: SceneState): void {
+  private rebuildLayer(runtime: LayerRuntime, state: SceneState, worlds: Map<number, Mat4>): void {
     const plan = this.planOf(runtime.layer, state);
     const signature = planSignature(plan);
     if (signature === runtime.signature) return;
@@ -1073,7 +1106,7 @@ export class GpuScene {
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
     const problems = planProblems(plan, this.bundle);
     if (problems.length) throw new SceneRenderError(problems);
-    const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime.resources), state);
+    const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime.resources), state, worlds);
     for (const draw of runtime.draws) {
       this.draws.delete(draw);
       this.drawsByPass.delete(draw.passKey);
@@ -1104,11 +1137,13 @@ export class GpuScene {
     return cleared;
   }
 
-  /** 图层状态变化：只重写由图层算出的那组内置 uniform（材质值优先，不覆盖）。 */
-  private refreshLayer(draw: Draw, state: SceneState): void {
+  /** 图层（或它某个祖先）状态变化：只重写由图层算出的那组内置 uniform（材质值优先，不覆盖）。 */
+  private refreshLayer(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
     const layerState = state.layers.get(draw.object);
     if (!draw.block || !layerState) return;
-    const values = drawUniformValues(this.uniformInput(draw.step, draw.layer, layerState, draw.textureSizes, state));
+    const values = drawUniformValues(
+      this.uniformInput(draw.step, draw.layer, layerState, draw.textureSizes, state, worlds),
+    );
     for (const name of layerRefreshNames(draw.step.pass.uniforms)) {
       const value = values[name];
       if (value) draw.block.set(name, value);

@@ -5,6 +5,9 @@
  * 它**独立于 GPU**：只是数据加脏集合。draw 的 uniform 组装是纯函数（`render/uniforms.ts` 的 `drawUniformValues`），
  * 单测在 Node 里就能核对「就地改值后的 uniform 字节 = 用新值整场重编译得到的字节」，这是本阶段最主要的正确性判据。
  * 3b 的脚本写的也是这个状态（`write` 的目标形状复用绑定表，值按 3b 的返回值规则换算）。
+ *
+ * 层级（P4a 步骤 1）：图层存的都是本地值，世界矩阵与继承后的可见性由渲染器按父链现算。所以写一个图层的
+ * `origin`、`angles`、`scale`、`visible` 时，它和全部子孙一起标脏；`alpha`、`color`、`brightness` 不继承，只标自己。
  */
 import {
   bindingValue,
@@ -19,15 +22,21 @@ import type { SceneScalar } from "../compile/model";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 
 export interface LayerState {
-  /** angles 为弧度（同 scene.json）。 */
+  /** angles 为弧度（同 scene.json）。都是本地值：世界矩阵与继承后的可见性按父链现算（`render/layout.ts`）。 */
   origin: number[];
   scale: number[];
   angles: number[];
   alpha: number;
   color: number[];
   brightness: number;
+  /** 自身的值；画不画还要看祖先（`effectiveVisible`）。 */
   visible: boolean;
+  /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中不变。 */
+  readonly parent: number | null;
 }
+
+/** 会传给子孙的字段：世界矩阵用到的三项，加沿父链继承的 `visible`。`alpha`、`color`、`brightness` 不继承。 */
+const INHERITED_FIELDS: ReadonlySet<LayerField> = new Set(["origin", "angles", "scale", "visible"]);
 
 export type WriteResult = "applied" | "recompile";
 
@@ -72,6 +81,7 @@ function layerStateOf(layer: SceneLayer): LayerState {
     color: [...layer.color],
     brightness: layer.brightness,
     visible: layer.visible,
+    parent: layer.parent,
   };
 }
 
@@ -151,6 +161,8 @@ export class SceneState {
     /** 档位允许但没有编泛光链：打开要整场重编译。 */
     private readonly bloomMissing: boolean,
     general: GeneralValues,
+    /** 父 → 直接子（都是 `objects` 下标，只含进了 bundle 的图层）：写父的变换或可见性时子孙一起标脏。 */
+    private readonly children: Map<number, number[]>,
   ) {
     this.layers = layers;
     this.constants = constants;
@@ -163,8 +175,14 @@ export class SceneState {
     const layers = new Map<number, LayerState>();
     const constants = new Map<TargetKey, Record<string, number[]>>();
     const effects = new Map<string, EffectState>();
+    const children = new Map<number, number[]>();
     for (const layer of bundle.layers) {
       layers.set(layer.object, layerStateOf(layer));
+      if (layer.parent !== null) {
+        const list = children.get(layer.parent);
+        if (list) list.push(layer.object);
+        else children.set(layer.parent, [layer.object]);
+      }
       for (const pass of layer.passes) constants.set(pass.key, { ...pass.uniforms });
       for (const effect of layer.effects) {
         effects.set(effectKey(layer.object, effect.source), {
@@ -185,7 +203,21 @@ export class SceneState {
       postprocess.bloomFlag,
       !bundle.bloom && postprocess.level !== "disabled",
       { ...fields },
+      children,
     );
+  }
+
+  /** 自身与全部子孙（`objects` 下标，自身在前）。环在编译期已断开，这里按走过的节点兜底。 */
+  subtree(object: number): number[] {
+    const out = [object];
+    const seen = new Set(out);
+    for (let i = 0; i < out.length; i++)
+      for (const child of this.children.get(out[i]) ?? [])
+        if (!seen.has(child)) {
+          seen.add(child);
+          out.push(child);
+        }
+    return out;
   }
 
   /** 按 scene.json 坐标取 effect 开关；不在 bundle 里的算关着。 */
@@ -249,7 +281,10 @@ export class SceneState {
       const layer = this.layers.get(target.object);
       if (layer) {
         writeLayer(layer, target.field, bindingValue(raw, binding.condition, target.field));
-        this.dirtyLayers.add(target.object);
+        // 变换与可见性传给子孙：子孙的世界矩阵跟着变；alpha、color、brightness 只是自己的
+        if (INHERITED_FIELDS.has(target.field))
+          for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
+        else this.dirtyLayers.add(target.object);
       }
       return "applied";
     }

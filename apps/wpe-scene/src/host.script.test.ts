@@ -174,6 +174,7 @@ function bundle(): SceneBundle {
       {
         id: 1,
         object: 0,
+        parent: null,
         name: "one",
         origin: [0, 0, 0],
         scale: [1, 1, 1],

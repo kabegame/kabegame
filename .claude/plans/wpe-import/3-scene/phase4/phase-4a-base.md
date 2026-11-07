@@ -212,7 +212,7 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 ## 待定
 
 1. `maxcount` 上限和超限处理：等步骤 5 的实测。
-2. `angles` x、y 非 0 的现有场景：步骤 1 列出后看要不要单独验证。
+2. ~~`angles` x、y 非 0 的现有场景~~：步骤 1 列出 9 张（见实施记录），都还有别的不支持项，现在能渲染的场景不受影响。等它们解锁时再和 WPE 比画面。
 
 ## 风险
 
@@ -221,3 +221,34 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 3. **透视场景的默认值另一套：** `camera:perspective` 仍报不支持，这套默认值这节用不到，但解析要留开关，避免以后错用正交值。
 4. **`rcpps` 近似：** `alphafade`、发射方向用近似倒数，相对误差约 3.7e-4。透明度验收的 0.004 够宽，位置比较要留余量。
 5. **读码结论出过错：** 预热的遍数就是读码错了。没有实测的项不要当成已确认，步骤 3 的测试要覆盖到。
+
+## 实施记录
+
+### 步骤 1 — 层级（2026-11-07）
+
+子代理实现，Claude 独立验收。
+
+- **新增** `compile/hierarchy.ts` 的 `resolveParents`：按 id 解析成 `objects` 下标。
+  - 不是有限数字、找不到、指向自己时当根节点；id 重复取第一个（没有实测）。
+  - 成环从下标小的对象开始走，断掉指回本轮走过节点的边，报 `object:parent-cycle`。
+- **修改** `render/layout.ts`：`layerLocalMatrix` 带完整三轴旋转；新增 `worldMatrixOf`、`effectiveVisible`、`everyAncestor`。
+  世界矩阵缓存不放进 `SceneState`，每次建场景、每次 `sync` 各建一份，状态变了不会读到旧值。
+- **修改** `render/scene.ts`：新增 `buildableLayers`，自身和每个祖先都可能可见才建资源，`checkRenderable` 同一口径。`visibleObjects` 用继承后的可见性。
+- **修改** `render/state.ts`：写 `origin`、`angles`、`scale`、`visible` 时自身和子孙一起标脏。
+- **修改** 能力表：去掉 `parent`、`object:empty`。灯带有效父对象时仍报 `object:parent`：`lights.ts` 用的是本地 `origin`，灯在父链下的位置没和 WPE 比过。分组节点上的其它键照报。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；24 个文件、690 个用例全过（原 666 个）；格式通过 |
+| 真值：`proj/p4a` 从磁盘编译，按渲染器的路径算四角，对 RenderDoc | 5 个图层最大差 6.1e-5 像素；可见顺序 h3、h4、h1、h2、h7，h6 不画；alpha 不继承 |
+| 变异检查 | 旋转顺序、世界矩阵不走父链、可见性不继承、建资源不看祖先、子孙不标脏、成环不报、灯带父不报、父不存在误处理，各有用例失败 |
+| 语料 149 个工程（Node 侧编译） | 66 张变化：只去掉 `object:parent` 27 张、只去掉 `object:empty` 10 张、两者都去掉 29 张，没有新增项和其它差异。仍报 `object:parent` 的是灯带父对象的 `3453730450`、`3706286085`。干净的仍是 11 张，没有新解锁 |
+| 真机哈希（dev 库重新导入过，按目录对应新 id） | 10 张干净场景 × 三档，30 组画面哈希、显存统计、格式改动前后全部相同 |
+
+`angles` x、y 非 0 的图像层所在场景有 9 张：1923929928、3219908811、3308867900、3453730450、3462279189、3516174947、3600630828、3823859141、3823864170。
+
+工具在 `ignore/p4/step1/`：`corpus.test.ts`（语料）、`truth.test.ts`（真值）、`compare.py`、`hash-before.json`、`hash-after.json`。
+
+`cocs/`、changelog、回归文档放到 P4a 收尾时一起写。

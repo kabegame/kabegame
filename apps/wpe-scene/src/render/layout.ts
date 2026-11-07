@@ -9,11 +9,22 @@
  *   所以这里直接用场景坐标，不做任何翻转。
  * - **模型空间**：顶点放在以图层中心为原点的模型空间（未缩放的 `size`），平移 / 旋转 / 缩放进 `g_ModelMatrix`，
  *   而不是像 LWE 那样把场景坐标烘进顶点；对 P1 着色器结果相同，`g_ModelMatrix` 也有了真实含义。
+ *   P4a 起 `g_ModelMatrix` 是沿父链累乘的世界矩阵（`worldMatrixOf`），本地矩阵带完整的三轴旋转（`layerLocalMatrix`）。
  * - **相机**：WPE 在正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵，JSON 的值被丢弃
  *   （L2）；投影是 `ortho(0…w, 0…h)`，这里就用它。eagleflag 的 eye 是编辑器残留的偏移，画面不平移。
  */
-import type { SceneGeneral, SceneLayer, SceneTexture } from "../compile/bundle";
-import { multiply, orthographic, rotationZ, scaling, translation, type Mat4 } from "./math";
+import type { SceneGeneral, SceneTexture } from "../compile/bundle";
+import {
+  identity,
+  multiply,
+  orthographic,
+  rotationX,
+  rotationY,
+  rotationZ,
+  scaling,
+  translation,
+  type Mat4,
+} from "./math";
 
 /** 正交场景的深度范围：图层 z 一般为 0，映射到深度 0.5。 */
 const ORTHO_DEPTH = 10000;
@@ -74,11 +85,95 @@ export function layerQuad(
   ];
 }
 
-/** 图层模型矩阵：`T(origin) · Rz(angles.z) · S(scale)`。P1 只处理 z 轴旋转（2D 图层）。 */
-export function layerModelMatrix(layer: Pick<SceneLayer, "origin" | "angles" | "scale">): Mat4 {
+/**
+ * 图层在父对象空间里的本地矩阵：`T(origin) · Rz(az) · Ry(ay) · Rx(ax) · S(scale)`，角度是弧度（2026-11-07 对 WPE 实测，
+ * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。`angles` 的 x、y 为 0 时 Ry、Rx 是单位阵，结果与只转 z 轴的旧矩阵逐位相同。
+ * `scale.z` 为 0 时按 1：WPE 在这种输入下的行为没有测过，保留 P1 的兜底。
+ */
+export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale">): Mat4 {
   const [x = 0, y = 0, z = 0] = layer.origin;
   const [sx = 1, sy = 1, sz = 1] = layer.scale;
-  return multiply(multiply(translation(x, y, z), rotationZ(layer.angles[2] ?? 0)), scaling(sx, sy, sz === 0 ? 1 : sz));
+  const [ax = 0, ay = 0, az = 0] = layer.angles;
+  const rotation = multiply(multiply(multiply(translation(x, y, z), rotationZ(az)), rotationY(ay)), rotationX(ax));
+  return multiply(rotation, scaling(sx, sy, sz === 0 ? 1 : sz));
+}
+
+/** 层级里一个对象的变换与可见性：`SceneLayer` 与 `LayerState` 都满足。 */
+export interface LayerTransform {
+  origin: readonly number[];
+  angles: readonly number[];
+  scale: readonly number[];
+  visible: boolean;
+  /** 父对象的 `objects` 下标；根节点为 null。 */
+  parent: number | null;
+}
+
+/**
+ * 自身和父链上每个对象都满足 `test`。父对象不在表里时当根节点（编译中途停下时 `layers` 只是 `objects` 的前缀）；
+ * 环在编译期已断开，这里再按走过的节点兜底，不会死循环。对象自己不在表里时为 false。
+ */
+export function everyAncestor<T extends Pick<LayerTransform, "parent">>(
+  object: number,
+  layers: ReadonlyMap<number, T>,
+  test: (layer: T) => boolean,
+): boolean {
+  if (!layers.has(object)) return false;
+  const seen = new Set<number>();
+  let current: number | null = object;
+  while (current !== null && !seen.has(current)) {
+    const layer = layers.get(current);
+    if (!layer) break;
+    if (!test(layer)) return false;
+    seen.add(current);
+    current = layer.parent;
+  }
+  return true;
+}
+
+/** `visible` 沿父链：自身和所有祖先都可见才可见。`alpha`、`color`、`brightness` 不继承（P4a 实测）。 */
+export function effectiveVisible(
+  object: number,
+  layers: ReadonlyMap<number, Pick<LayerTransform, "parent" | "visible">>,
+): boolean {
+  return everyAncestor(object, layers, (layer) => layer.visible);
+}
+
+/**
+ * 世界矩阵 `W = W_parent · L`（L 见 {@link layerLocalMatrix}），惰性按父链算，结果记进 `cache`：子在父前也成立，
+ * 一条链上的祖先只算一次。`cache` 跟随调用方的一次状态快照（一次建场景、一次 `sync`），状态变了要换新的。
+ * 根节点直接是本地矩阵，不乘单位阵；父对象不在表里时当根节点；对象自己不在表里时为单位阵。
+ */
+export function worldMatrixOf(
+  object: number,
+  layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "parent">>,
+  cache: Map<number, Mat4>,
+): Mat4 {
+  const cached = cache.get(object);
+  if (cached) return cached;
+  if (!layers.has(object)) return identity();
+  // 往上收集还没算过的对象，直到根、已缓存的祖先或已走过的节点（环的兜底）
+  const chain: number[] = [];
+  const seen = new Set<number>();
+  let base: Mat4 | null = null;
+  let current: number | null = object;
+  while (current !== null && !seen.has(current)) {
+    const hit = cache.get(current);
+    if (hit) {
+      base = hit;
+      break;
+    }
+    const layer = layers.get(current);
+    if (!layer) break;
+    seen.add(current);
+    chain.push(current);
+    current = layer.parent;
+  }
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const local = layerLocalMatrix(layers.get(chain[i])!);
+    base = base ? multiply(base, local) : local;
+    cache.set(chain[i], base);
+  }
+  return base!;
 }
 
 /** 正交场景的视图投影：场景 `[0, w] × [0, h]`（y 向上）铺满整个渲染目标。 */

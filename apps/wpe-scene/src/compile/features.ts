@@ -17,6 +17,7 @@ import {
   type SceneObject,
   type SceneValue,
 } from "./model";
+import { resolveParents } from "./hierarchy";
 import type { TranslateResult } from "../wpesl2wgsl";
 
 export const SUPPORTED = {
@@ -135,11 +136,13 @@ const NEUTRAL_GENERAL = new Set([
  * - `brightness`：只在 HDR 下乘进颜色（B10，`render/uniforms.ts` 的 `colorScale`），LDR 下不生效。
  * - `locktransforms`：编辑器锁定。
  * - `parallaxDepth`：只在 `general.cameraparallax` 打开时起作用，那时已报 `general:cameraparallax`。
+ * - `parent`：层级已实现（P4a 步骤 1，`hierarchy.ts` 与 `render/layout.ts`）；灯对象例外，见 `checkObjectFeatures`。
  * `alignment` 为 `center`、`perspective` 为 false 时中性，其余取值另报。
  */
 const SUPPORTED_OBJECT = new Set([
   "id",
   "name",
+  "parent",
   "image",
   "origin",
   "scale",
@@ -159,7 +162,6 @@ const SUPPORTED_OBJECT = new Set([
 ]);
 /** 打开时改变画面、还没实现的对象开关。 */
 const OBJECT_FLAGS = [
-  "parent",
   "perspective",
   "fullscreen",
   "passthrough",
@@ -236,7 +238,9 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
       active(value)
     )
       unsupported.add(`general:${key}`);
-  for (const object of scene.objects) checkObjectFeatures(object, unsupported);
+  const { parents, cycle } = resolveParents(scene.objects);
+  if (cycle) unsupported.add("object:parent-cycle");
+  scene.objects.forEach((object, index) => checkObjectFeatures(object, unsupported, parents[index]));
   scanValue(scene, unsupported);
 }
 
@@ -262,10 +266,16 @@ const LIGHT_KEYS = new Set([
   "usecookie",
 ]);
 
-export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>): void {
+/**
+ * 一个对象的能力检查。`parent` 是解析后的父对象下标（`hierarchy.ts` 的 `resolveParents`），根节点为 null。
+ * 没有内容的对象是分组节点：WPE 把它建成只有变换的基类对象（P4a 实测），不报；它的 `effects` 不读（`bundle.ts`
+ * 在没有 image 时不编译图层内容），所以也不报。
+ */
+export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>, parent: number | null = null): void {
   const kind = ["image", "model", "particle", "sound", "text", "light"].find((key) => active(object[key]));
-  if (!kind) unsupported.add("object:empty");
-  else if (kind !== "image" && kind !== "light") unsupported.add(`object:${kind}`);
+  if (kind && kind !== "image" && kind !== "light") unsupported.add(`object:${kind}`);
+  // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
+  if (kind === "light" && parent !== null) unsupported.add("object:parent");
   const lightKey = (key: string) => kind === "light" && LIGHT_KEYS.has(key);
   for (const key of OBJECT_FLAGS) if (active(object[key]) && !lightKey(key)) unsupported.add(`object:${key}`);
   if (object.alignment !== undefined && object.alignment !== "center") unsupported.add("object:alignment");

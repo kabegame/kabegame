@@ -9,7 +9,7 @@ import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { FrameThrottle, PausableClock } from "./clock";
 import { reasonsOf, SceneRenderError } from "./errors";
 import {
-  layerModelMatrix,
+  layerLocalMatrix,
   layerQuad,
   scenePlacement,
   scenePointer,
@@ -130,7 +130,7 @@ describe("场景几何", () => {
   it("eagleflag 的旗帜盖满 2200×1080 场景（相机 eye 不平移画面）", () => {
     const general = { width: 2200, height: 1080 };
     const layer = { origin: [1082, 550.906, 0], scale: [1.1, 1.1, 1], angles: [0, 0, 0] };
-    const mvp = multiply(sceneViewProjection(general), layerModelMatrix(layer));
+    const mvp = multiply(sceneViewProjection(general), layerLocalMatrix(layer));
     const e = Math.fround(0.15) / 128;
     const inset = layerQuad([200, 100], [0.75, 0.5], [e, e]).map((vertex) => vertex.texCoord);
     expect(inset).toEqual([
@@ -148,7 +148,7 @@ describe("场景几何", () => {
     close(ndc(mvp, 0, 0).slice(0, 2), [1082 / 1100 - 1, 550.906 / 540 - 1]);
   });
   it("旋转图层：角点绕图层中心转", () => {
-    const m = layerModelMatrix({ origin: [100, 50, 0], scale: [2, 2, 1], angles: [0, 0, Math.PI / 2] });
+    const m = layerLocalMatrix({ origin: [100, 50, 0], scale: [2, 2, 1], angles: [0, 0, Math.PI / 2] });
     close(transformPoint(m, 10, 0, 0), [100, 70, 0, 1]);
   });
   it("fill：宽场景裁左右、高场景裁上下，铺满画布", () => {
@@ -488,6 +488,7 @@ describe("可渲染性自查", () => {
   const layer = {
     id: 1,
     object: 0,
+    parent: null,
     name: "a",
     origin: [0, 0, 0],
     scale: [1, 1, 1],
@@ -575,7 +576,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机 P1 样本的渲染准备", (
         for (const slot of Object.keys(pass.textures).map(Number))
           expect(program.textures?.some((t) => t.slot === slot && t.kind === "2d")).toBe(true);
         // 图层中心落在场景里
-        const center = ndc(multiply(vp, layerModelMatrix(layer)), 0, 0);
+        const center = ndc(multiply(vp, layerLocalMatrix(layer)), 0, 0);
         expect(Math.abs(center[0])).toBeLessThan(1);
         expect(Math.abs(center[1])).toBeLessThan(1);
       }

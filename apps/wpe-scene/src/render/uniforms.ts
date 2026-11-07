@@ -12,7 +12,6 @@
 import type { SceneLayer, SceneTexture } from "../compile/bundle";
 import type { UniformLayout } from "../wpesl2wgsl";
 import type { DrawStep } from "./graph";
-import { layerModelMatrix } from "./layout";
 import { identity, invert, multiply, normalMatrix, orthographic, scaling, type Mat4 } from "./math";
 import type { LayerState } from "./state";
 
@@ -264,21 +263,18 @@ export const LIGHT_UNIFORMS = {
 
 /**
  * 各角色的变换（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：作用于 P1 的 `direct` 与合成链的三种角色。
- * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层模型矩阵；
+ * `world` 是图层的世界矩阵（`layout.ts` 的 `worldMatrixOf`，沿父链累乘，P4a 步骤 1），下文的「模型矩阵」都是它。
+ * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层世界矩阵；
  * - `base`：正交投影把图层四边形画满合成 RT，单位模型矩阵（B7）；
  * - `effect`：NDC 全屏四边形、MVP 为单位阵；`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)，
  *   `g_EffectModelViewProjectionMatrix` = 图层 MVP × 同一缩放，纹理投影与后者相同；
  * - `final` / `passthrough`：图层四边形用图层 MVP 上屏；效果矩阵不缩放，纹理投影 = MVP × scale(w/2, h/2)。
  */
-export function drawMatrices(
-  step: Pick<DrawStep, "role">,
-  layer: Pick<SceneLayer, "origin" | "angles" | "scale" | "size">,
-  viewProjection: Mat4,
-) {
-  const model = layerModelMatrix(layer);
+export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: readonly number[], viewProjection: Mat4) {
+  const model = world;
   const layerMvp = multiply(viewProjection, model);
-  const hw = (layer.size[0] ?? 0) / 2,
-    hh = (layer.size[1] ?? 0) / 2;
+  const hw = (size[0] ?? 0) / 2,
+    hh = (size[1] ?? 0) / 2;
   const half = scaling(hw, hh, 1);
   switch (step.role) {
     case "base": {
@@ -316,8 +312,10 @@ const FILL_DEPTH = 10000;
 
 export interface DrawUniformInput {
   step: Pick<DrawStep, "role" | "inputs">;
-  /** 图层的当前状态与尺寸（`size` 只在重编译时变）。 */
+  /** 图层的当前状态与尺寸（`size` 只在重编译时变）；颜色组取自身的值，不继承。 */
   layer: LayerState & { size: number[] };
+  /** 图层的世界矩阵：按同一份状态沿父链算（`layout.ts` 的 `worldMatrixOf`）。 */
+  world: Mat4;
   /** 本 pass 的材质常量（`SceneState.constants.get(pass.key)`）。 */
   constants: Record<string, number[]>;
   viewProjection: Mat4;
@@ -344,7 +342,7 @@ export function layerRefreshNames(passUniforms: Record<string, number[]>): strin
  * `createDraw` 建 draw 与 `GpuScene.sync` 就地刷新共用同一个函数——两边逐字节一致由单测核对（P3a 验收 4）。
  */
 export function drawUniformValues(input: DrawUniformInput): Record<string, number[]> {
-  const matrices = drawMatrices(input.step, input.layer, input.viewProjection);
+  const matrices = drawMatrices(input.step, input.world, input.layer.size, input.viewProjection);
   const values = staticBuiltins({
     ...matrices,
     modelViewProjectionInverse: invert(matrices.modelViewProjection),
