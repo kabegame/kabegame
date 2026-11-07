@@ -137,3 +137,29 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 `sprite` 的 `upright`、`fixed` 朝向没读到，先报不支持。
 
 `proj/p4a2` 同时带日志重抓了 `burst`、`inst`、`inst0`、`osc-y`（`tracks/rd-p4a2.json`、`out/p4a2-log.txt`），给步骤 3 的模拟器从加载开始回放。
+
+## P4b 语义的实测核对（2026-11-08）
+
+读码在 [rea-p4b-modules.md](rea-p4b-modules.md)、[rea-p4b-render.md](rea-p4b-render.md)。工程由 `ignore/p4/gen_b.py` 生成：`proj/p4b`（模块）、`p4b-emit`（发射）、`p4b-tex`（纹理与帧表）、`p4b-refract`（折射）、`p4b-color`（`colorn`）、`p4b-cp`（控制点）。抓帧在 `A:\p4b\`，`sweep_b.py` 一次会话抓完。fps 60 每个工程都抓，`p4b` 另抓 fps 10。轨迹在 `tracks/rd-p4b*.json`，由 `rdc_track_b.py` 提取：它按 `kbp-meta.json` 认系统，颜色会变的系统按绘制顺序认，并保存厚格式的 `TEXCOORD1`。帧时间日志在 `out/p4b*-log.txt`。
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| alpha-priority（头标志 0x80000）运行时不读 | 同一张 RG88 纹理，复制一份去掉标志位，粒子和图像层各放一对：3 帧都是 0 个像素不同（`cmp_ap.py`） | 成立 |
+| R8、RG88 按原格式上传，通道换算靠着色器的 `TEX0FORMAT` | 图像层没有换算：R8 显示 `(r, 0, 0, 1)` 的红色，RG88 显示 `(r, g, 0, 1)`；粒子换算后 R8 白、RG88 灰 | 成立（逐像素比较在步骤 1） |
+| NPOT 纹理的粒子 UV 不缩放 | 图像 598×720、纹理 1024² 的 x 光片，只画在四边形左上部分 | 成立 |
+| 帧表顶点 `TEXCOORD1 = (速度, frame 原值)`，引擎不取 frac | xyz 是 `130 0 0`；`sequencemultiplier` 为 1、2、3 时同一年龄的 frame 是 0.4692、0.9384、1.4077，大于 1 不回绕；`randomframe` 是 0.897 | 成立 |
+| 折射快照在每个折射对象画之前拷一次，存活数为 0 不拷 | 每个 `REFRACT` 对象前面都有一次 `ResolveSubresource`，`CUTOUT` 对象前面没有；第 906 帧 `P0` 没有存活粒子，既没有绘制也没有拷贝（`rdc_events.py`） | 成立。拷贝是 Resolve，说明 WPE 场景目标开了 MSAA，步骤 5 比较边缘时要注意 |
+| `colorn`（`ana_color.py`） | 7 组逐位吻合：没有颜色模块时直接作颜色；单色按 HSV 平移；`color` 的 0–255 写法；和系统色差 < 0.0035 不生效；系统 `flags` bit3 不生效；两个 `colorrandom` 取后一个作系统色；区间两端各自平移后再插值（拟合残差 0） | 成立 |
+| `colorchange` 加 `colorn`：两端各自平移 | 起始色平移后 `(0, 1, 0)`，和预测一致；终止色实测 `(0, 0, 0)`，预测 `(1, 0, 0)`（`ana_cchange.py`，9 个粒子按年龄拟合） | **推翻**。`0xc` 记录的字段偏移读码没逐项核对，步骤 6 先补读 |
+| `sizechange` 的两个值乘 `instanceoverride.size` | `size 2` 时，只有 `sizerandom` 尺寸 20；加上 `startvalue = endvalue = 1` 的 `sizechange` 后是 40 | 成立：两者叠用时按 `size²` 放大 |
+| `turbulence` 不读 `phasemin` | 同一出生点，`phasemin` 0 和 5 的两个系统 6 帧位置逐位相同 | 成立 |
+| `capvelocity` 的比例来自 `rsqrtps` | 截后速度 99.993 | 成立 |
+| `vortex` 的 `flags` bit0 按到轴的距离 | 出生点 z 偏 100：柱形的轨迹和不偏移时相同，球形明显变小 | 成立 |
+| `turbulentvelocityrandom` 用场景时间的一维噪声 | 整秒出生的粒子方向都接近 90°，和噪声在整数处为 0 一致 | 方向一致，定量在步骤 4 回放 |
+| `delay`、`duration` | `delay 0.5`、`duration 1`、`rate 10`：10 个粒子，最早 0.6076、最晚 1.5057 出生 | 成立 |
+| emitter `flags` bit1 | `rate 200` 时每帧正好 1 个，间隔就是帧时间 | 成立 |
+| 周期发射 | 每周期 3 个突发加 4 个连续（`maxtoemitperperiod`），周期间隔 0.80–0.82 s（0.5 + 0.3，按帧量化）；突发后约 0.2 s 才开始连续发射（`instantaneous` 欠账）；`count 2` 时每周期 11 个，即 `instantaneous` 不乘 `count`，`maxtoemitperperiod` 乘 | 成立。满容量时计时冻结、逐帧量化留给步骤 3 回放 |
+| `boxrandom` 逐轴独立，角块分布，速度沿出生方向 | `distancemin 50`、`distancemax 100`：100 个粒子全在角块里，横向距离 50.1–99.25；出生距离为 0 时走回退分支，速度沿 x、正负随机 | 成立 |
+| 控制点 0 的 `flags 1` 跟随指针 | 跟随组的粒子出生在 (3195, 1174)、(3170, 1805) 等随时间变化的位置（光标在窗口坐标里的位置），参照组都在原点；`offset "100 50 0"` 整体平移 (100, 50) | 成立。`1838478131` 归 P4c |
+
+留给各步回放核对、步骤 0 没有直接判断的：`turbulence`、`vortex` 乘的是 `k` 不是 `dt`（fps 10 的数据已抓）；三个噪声函数；`oscillatesize`；三个 `*change` 的曲线；`positionoffsetrandom`；`vortex` 的定量；周期发射的逐帧量化与满容量冻结；帧表和折射的像素。

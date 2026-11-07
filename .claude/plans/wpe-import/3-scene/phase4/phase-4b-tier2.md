@@ -328,3 +328,41 @@ export function emitterTail(state: EmitterState, fields: ParticleFields, dt: num
 3. **解锁的场景少。** 步骤 2、4、5 都不解锁新场景，主要靠确定性工程验收。
 4. **R8 纹理用得广（81 张）。** 放开后，部分场景会第一次走到后面的编译阶段，可能暴露新的不支持项。语料比较要逐条解释，不能只看干净数。
 5. **`rcpps` 不复刻。** 位置比较要留余量。如果某个模块的近似误差会累积（例如每帧都乘一次近似倒数），限值要按帧数放宽，并在实施记录里写明。
+
+## 实施记录
+
+### 步骤 0 — 调研（2026-11-08）
+
+两个子代理读码，Claude 设计并抓取确定性工程、独立核对。没有改产品代码。
+
+- **读码：** [rea-p4b-modules.md](rea-p4b-modules.md)（发射、档 2 模块、三个噪声函数，常量表在 `ignore/p4/rea/p4b-mod/noise-tables.json`）、[rea-p4b-render.md](rea-p4b-render.md)（纹理格式、帧表、折射、`colorn`）。Claude 抽查了两条最反直觉的：`turbulence` 用的是解释器第三个参数 `k`（`0x14023fbfa` 广播、`0x140240290` 每条重装），`snoise2` 的梯度判断是 `test al, 0x3c`。两条都对。
+- **实测：** 结论写在 [报告](p4-particles-REPORT.md)「P4b 语义的实测核对」。17 条里 16 条成立，**推翻 1 条**：`colorchange` 加 `colorn` 时，终止色平移后是 `(0, 0, 0)`，不是读码预测的 `(1, 0, 0)`。
+- **四个要直接回答的问题：**
+  - **alpha-priority：** 中性，步骤 1 删掉 `tex:alpha-priority`。
+  - **系统 `flags` bit1：** 读取点找到了，作用只是关掉 `SPRITESHEETBLEND`（`randomframe` 也会置它），步骤 2 实现。
+  - **`1838478131`：** 控制点 0 的 `flags 1` 跟随指针，归 P4c。
+  - **周期发射：** 时序和读码一致，满容量冻结留给步骤 3 回放。
+- **数据：** 6 个工程、7 组抓帧，见报告开头一段。后续各步按 `out/p4b*-log.txt` 的 dt 回放。
+
+对后续各步的影响：
+
+- **步骤 1：** DXGI 格式和计划里的表一致。`TEX0FORMAT` WPE 只对格式 8–11（或非 `screen` 朝向）写；P4a 对粒子无条件写，格式 0、4 时着色器分支相同，画面不受影响，但缓存键可以按 WPE 收窄。
+- **步骤 2：**
+  - 宏的条件：`SPRITESHEET` 一定伴随 `THICKFORMAT`；`SPRITESHEETBLEND` = 系统 `flags` 没有 bit1 且不是 `randomframe`；`SPRITESHEETBLENDNPOT` 只比宽度（图像宽 < 纹理宽）。
+  - `g_RenderVar1` 只用第 0 帧：`(帧宽 / 纹理宽, 帧高 / 纹理高, 帧数, (纹理高 / 纹理宽) · (帧高 / 帧宽))`，坐标按第 0 级 mip 归一化。
+  - `0x1000000` 的置位条件是材质槽 0 纹理的头标志 bit2。
+  - 多图像帧表继续报不支持。
+- **步骤 3：**
+  - `boxrandom` 的 `distancemin` / `distancemax` 是向量、只接受字符串。
+  - `instantaneous` 不乘 `count`，`maxtoemitperperiod` 乘。
+  - `sizechange` 的两个值乘 `instanceoverride.size`。
+  - `vortex` 乘 `k`；中心是控制点平移加 `offset`，`offset` 不旋转。
+- **步骤 4：**
+  - 三个噪声函数照 WPE 移植，不能用开源原版：二维噪声的梯度条件不同，三维噪声第 4 个角的哈希不同。
+  - 场景时间 `T` 要进模拟器。
+  - `turbulence` 乘 `k`，不读 `phasemin`。
+  - `turbulentvelocityrandom` 用 CRT 的 `sinf` / `cosf`，和 `Math.sin` 可能差 1 ulp。
+- **步骤 5：** WPE 的场景目标开了 MSAA（快照是 Resolve），边缘像素可能对不上，比较时要单独统计边缘。
+- **步骤 6：** 先补读 `colorchange` 的 `0xc` 记录，解释终止色为什么是 0。系统色取自颜色模块，不是粒子 JSON 的 `colorn` 键（改 rea-p4a C5）。
+
+工具在 `ignore/p4/`：`gen_b.py`、`sweep_b.py`、`rdc_track_b.py`、`rdc_cols.py`、`rdc_events.py`、`check_b.py`、`ana_b.py`、`ana_emit.py`、`ana_color.py`、`ana_cchange.py`、`cmp_ap.py`；DXT1 / DXT3 纹理从语料导出在 `texsrc/`。
