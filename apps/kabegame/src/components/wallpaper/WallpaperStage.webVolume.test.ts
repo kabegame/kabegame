@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import WallpaperStage from "./WallpaperStage.vue";
 import type { WallpaperTarget } from "./types";
 import { WPE_VOLUME_MESSAGE, WPE_VOLUME_REQUEST } from "./wpeWebVolume";
+import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 
 vi.mock("./WpeSceneView.vue", async () => {
   const { defineComponent, h } = await import("vue");
@@ -114,5 +115,32 @@ describe("WallpaperStage web 层的音量消息", () => {
     expect(previewPosts.mock.calls.map(([message]) => message)).toEqual([
       { type: WPE_VOLUME_MESSAGE, volume: 0.8, paused: false },
     ]);
+  });
+});
+
+describe("WallpaperStage web 层的右键", () => {
+  function contextMenuFrom(source: unknown, trusted = true) {
+    const event = new MessageEvent("message", {
+      source: source as Window,
+      data: { type: WPE_CONTEXT_MENU, x: 40, y: 30 },
+    });
+    // 合成事件的 isTrusted 为 false，这里模拟真实消息
+    if (trusted) Object.defineProperty(event, "isTrusted", { value: true });
+    window.dispatchEvent(event);
+  }
+
+  it("自己 iframe 转发的右键换算到本页面视口后往上抛；别的来源、不可信的不理", async () => {
+    const wrapper = mountStage(web("a"));
+    await settle();
+    const frame = frameOf(wrapper);
+    Object.defineProperty(frame, "offsetWidth", { configurable: true, value: 800 });
+    Object.defineProperty(frame, "offsetHeight", { configurable: true, value: 600 });
+    frame.getBoundingClientRect = () => ({ left: 10, top: 20, width: 400, height: 300 }) as DOMRect;
+
+    contextMenuFrom(window);
+    contextMenuFrom(frame.contentWindow, false);
+    expect(wrapper.emitted("contextmenu")).toBeUndefined();
+    contextMenuFrom(frame.contentWindow);
+    expect(wrapper.emitted("contextmenu")).toEqual([[{ x: 30, y: 35 }]]);
   });
 });

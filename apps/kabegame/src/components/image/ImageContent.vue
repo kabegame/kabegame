@@ -74,6 +74,7 @@
         @ready="onWallpaperReady"
         @error="onWallpaperError"
         @scene-live="emit('sceneLive', $event)"
+        @contextmenu="emit('wallpaperContextmenu', $event)"
       />
 
       <!-- 视频 -->
@@ -110,6 +111,7 @@ import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import WpeWallpaperContent from "../wallpaper/WpeWallpaperContent.vue";
+import type { ViewportPoint } from "../wallpaper/wpeContextMenu";
 import {
   displayImageMimeType,
   isVideoMediaType,
@@ -289,6 +291,8 @@ const emit = defineEmits<{
   error: [];
   videoPlayFail: [];
   sceneLive: [live: boolean];
+  /** wallpaper 形态：网页 / 场景壁纸里点了右键，坐标是本页面视口（见 `wpeContextMenu.ts`） */
+  wallpaperContextmenu: [point: ViewportPoint];
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());

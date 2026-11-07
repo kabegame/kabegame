@@ -256,4 +256,16 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(button(wrapper, "gallery.wpeSetCover").attributes("disabled")).toBeUndefined();
   });
+
+  it("壁纸里转发的右键在那个位置弹出同一份菜单", async () => {
+    const wrapper = await sceneFixture();
+    const menu = () =>
+      wrapper.findAllComponents({ name: "ActionRenderer" }).find((item) => item.props("mode") === "contextmenu")!;
+    expect(menu().props("visible")).toBe(false);
+    wrapper.findComponent(ImageContent).vm.$emit("wallpaperContextmenu", { x: 320, y: 180 });
+    await flushPromises();
+    expect(menu().props("visible")).toBe(true);
+    expect(menu().props("position")).toEqual({ x: 320, y: 180 });
+    expect(menu().props("actions")).toBe(wrapper.props("actions"));
+  });
 });

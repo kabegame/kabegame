@@ -126,7 +126,7 @@ if (pass.framebuffer) steps.push({ kind: "snapshot" });
 
 ### 0a — REA 读码（子代理）
 
-结果写成 `phase4/rea-p4b.md`，格式同 `rea-p4a.md`：每条标地址和证据等级【确】【推】【未知】。
+两个代理并行，结果分别写成 `phase4/rea-p4b-modules.md`（第 3、4、5、8 项）和 `phase4/rea-p4b-render.md`（第 1、2、6、7 项），格式同 `rea-p4a.md`：每条标地址和证据等级【确】【推】【未知】。
 
 1. **纹理：**
    - `rg88`、`r8` 建成什么 DXGI 格式。

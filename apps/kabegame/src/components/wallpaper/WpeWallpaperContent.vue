@@ -18,6 +18,7 @@ import { useSettingsStore } from "@/stores/settings";
 import type { ImageInfo } from "@/types/image";
 import WallpaperStage from "./WallpaperStage.vue";
 import type { Mode, Transition, WallpaperTarget } from "./types";
+import type { ViewportPoint } from "./wpeContextMenu";
 
 const props = withDefaults(
   defineProps<{
@@ -42,6 +43,8 @@ const emit = defineEmits<{
   ready: [];
   error: [message: string, fatal: boolean];
   sceneLive: [live: boolean];
+  /** 壁纸里点了右键，坐标是本页面视口（见 `wpeContextMenu.ts`） */
+  contextmenu: [point: ViewportPoint];
 }>();
 
 const settings = useSettingsStore();
@@ -95,5 +98,6 @@ function onStageError(message: string) {
     @ready="emit('ready')"
     @error="onStageError"
     @scene-live="emit('sceneLive', $event)"
+    @contextmenu="emit('contextmenu', $event)"
   />
 </template>

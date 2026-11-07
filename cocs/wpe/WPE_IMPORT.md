@@ -380,7 +380,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 宿主把作者默认值推给它之后，多数壁纸才开始画。Kabegame 用一份 JS 垫片 `webview_js/wpe_shim.js` 定义这组接口并投递属性，
 **不照搬 WPE 的「宿主拼 JS、加载完成前排队」**（`API.md` §4.8），改成垫片驱动：垫片向宿主**拉取**完整状态、**订阅**
 应用事件后重拉；宿主只回答「当前完整状态」和「转发事件」，不推状态、不排队、不记页面收到过什么。例外是音频 / 媒体数据
-（Channel 推，见「音频与媒体集成」）与宿主音量（父页面经 `postMessage` 回复与推送，见下「音量」）。
+（Channel 推，见「音频与媒体集成」）与宿主音量（父页面经 `postMessage` 回复与推送，见下「音量」）；右键也经 `postMessage` 交给父页面（见下「右键」）。
 
 - **注入与启用**：同一份垫片以 `initialization_script_for_all_frames` 挂在壁纸窗口（`wallpaper/manager/window.rs`）与
   主窗口（`startup.rs`）上，按地址自判：只在「父窗口就是 top 的 `file:` 子 frame」（网页壁纸 iframe，预览与桌面同一份）且
@@ -470,6 +470,21 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   - 在 shadow DOM 里、或不在 DOM 里又没调 `play()`、只靠 `autoplay` 出声的元素，在页面碰到它之前不受控（媒体事件不冒泡出
     shadow root，DOM 外的元素收不到捕获事件）；
   - 场景壁纸目前没有声音，不涉及。
+
+#### 右键
+
+iframe 里的右键到不了父页面（DOM 事件不跨 frame），预览的上下文菜单靠垫片转发。工具条是父页面里一条常驻热区唤出的，右键菜单
+不能照做：热区要盖住整块页面，页面就收不到指针了。场景宿主也加载这份垫片，网页与场景同一条路。
+
+- **消息**：`{ type: "kabegame:wpe-contextmenu", x, y }`，垫片 → 父页面，`x` / `y` 是 iframe 视口里的 CSS 像素。字面量集中在
+  `components/wallpaper/wpeContextMenu.ts`，`wpeWebVolume.test.ts` 读垫片原文核对。
+- **垫片**：在 `window` 捕获阶段、页面脚本之前登记 `contextmenu` 监听，只转发 `isTrusted` 的事件；页面取消右键或停止冒泡也照发
+  （菜单是应用的功能，和工具条一样总能用）。原生菜单 CEF 已全局关掉（`DisabledContextMenuHandler`），不必 `preventDefault`。
+- **父页面**：网页层由 `WallpaperStage`、场景层由 `WpeSceneView` 收，只认 `isTrusted` 且 `source` 是自己当前 iframe 的消息，
+  按 iframe 的显示矩形换算到本页面视口（预览画布带 CSS `scale`：坐标 × 显示矩形 ÷ 布局尺寸 + 左上角），经
+  `WpeWallpaperContent` → `ImageContent` 的 `wallpaperContextmenu` 交给预览弹窗，在那个位置弹出与右键容器同一份菜单。应用背景
+  不接收指针、桌面窗口不转发右键，都不会触发。
+- **覆盖不到**：页面里再嵌的 iframe 没有垫片；页面脚本自己也能发这条消息，最多就是弹出菜单，不能代用户点菜单项。
 
 ### 桌面鼠标转发（Windows）
 

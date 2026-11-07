@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WpeSceneView from "./WpeSceneView.vue";
 import { WPE_SCENE_DISPLAY, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
+import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 
 vi.mock("@/api", () => ({ invoke: async () => "file:///D:/host/index.html" }));
 vi.mock("@/utils/logger", () => ({ logger: { warn: vi.fn() } }));
@@ -157,5 +158,18 @@ describe("WpeSceneView 显示缩放", () => {
     wrapper.unmount();
     expect(clear).toHaveBeenCalledWith(intervals.findIndex((item) => item.delay === 250) + 1);
     expect(observers.every((item) => !item.targets.has(frame))).toBe(true);
+  });
+});
+
+describe("WpeSceneView 右键", () => {
+  it("宿主转发的右键换算到父页面视口后往上抛；别的窗口发的不理", async () => {
+    const { wrapper, fromHost, frame } = await mountView();
+    Object.defineProperty(frame, "offsetWidth", { configurable: true, value: 1920 });
+    Object.defineProperty(frame, "offsetHeight", { configurable: true, value: 1080 });
+    frame.getBoundingClientRect = () => ({ left: 100, top: 50, width: 960, height: 540 }) as DOMRect;
+    fromHost({ type: WPE_CONTEXT_MENU, x: 400, y: 200 });
+    expect(wrapper.emitted("contextmenu")).toEqual([[{ x: 300, y: 150 }]]);
+    fromHost({ type: WPE_CONTEXT_MENU, x: 1, y: 1 }, window);
+    expect(wrapper.emitted("contextmenu")).toHaveLength(1);
   });
 });

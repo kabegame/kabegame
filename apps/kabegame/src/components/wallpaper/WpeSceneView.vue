@@ -24,6 +24,7 @@ import type { Mode, WallpaperTarget } from "./types";
 import { WEB_SANDBOX } from "./webSandbox";
 import { displayScaleOf, isWpeSceneStyleRequest, wpeSceneDisplayMessage, wpeSceneStyleMessage } from "./wpeSceneStyle";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
+import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 
 /**
  * 祖先 transform 变化不触发任何 observer，按这个间隔核对显示缩放。不用 rAF：桌面壁纸窗口里场景一直在，
@@ -43,7 +44,13 @@ const props = withDefaults(
   }>(),
   { paused: false, interactive: false },
 );
-const emit = defineEmits<{ ready: []; fallback: [reasons: string[]]; alive: [] }>();
+const emit = defineEmits<{
+  ready: [];
+  fallback: [reasons: string[]];
+  alive: [];
+  /** 宿主里点了右键（垫片转发，`wpeContextMenu.ts`），坐标已换算到本页面视口 */
+  contextmenu: [point: ViewportPoint];
+}>();
 const frame = ref<HTMLIFrameElement | null>(null);
 const src = ref("");
 let instance = "";
@@ -96,6 +103,11 @@ function onWindowMessage(event: MessageEvent) {
   if (isWpeSceneStyleRequest(event.data)) {
     postStyle();
     postDisplay(true);
+    return;
+  }
+  const point = frame.value ? wpeContextMenuPoint(event.data, frame.value) : null;
+  if (point) {
+    emit("contextmenu", point);
     return;
   }
   if (!isWpeVolumeRequest(event.data)) return;

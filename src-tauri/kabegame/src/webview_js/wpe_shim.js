@@ -31,6 +31,28 @@
   } catch (error) {
     console.warn("[kb-wpe] freeze", error);
   }
+  // 右键：转给父页面弹预览的上下文菜单。要在页面脚本之前登记，捕获阶段先于页面的监听
+  try {
+    installContextMenu();
+  } catch (error) {
+    console.warn("[kb-wpe] contextmenu", error);
+  }
+
+  // ---- 右键：iframe 里的事件到不了父页面，发消息给它（WallpaperStage / WpeSceneView）弹菜单 ----
+  // 字面量与 apps/kabegame/src/components/wallpaper/wpeContextMenu.ts 一致（单测核对）。坐标是本视口的 CSS 像素，
+  // 父页面按 iframe 的显示矩形换算。页面取消右键或停止冒泡也照发：菜单和工具条一样总能用。原生菜单 CEF 已全局关掉。
+  function installContextMenu() {
+    var CONTEXT_MENU = "kabegame:wpe-contextmenu";
+    var host = window.parent;
+    window.addEventListener(
+      "contextmenu",
+      function (event) {
+        if (!event.isTrusted) return;
+        host.postMessage({ type: CONTEXT_MENU, x: event.clientX, y: event.clientY }, "*");
+      },
+      true,
+    );
+  }
 
   // ---- 暂停：iframe 保持可见，冻结 requestAnimationFrame、CSS 动画与媒体元素 ----
   // 管不到的：setTimeout / setInterval 不冻结，靠它们驱动的页面暂停时还会动；Web Audio 沿用音量置 0，不 suspend。

@@ -282,6 +282,7 @@
                 interactive
                 @ready="handlePreviewReady"
                 @scene-live="previewSceneLive = $event"
+                @wallpaper-contextmenu="openPreviewContextMenuAt"
               />
             </WallpaperPreviewCanvas>
           </div>
@@ -327,7 +328,7 @@
                 <span class="zoom-progress-text">{{ zoomPercentText }}</span>
               </div>
             </template>
-            <!-- 网页壁纸的右键落在跨源 iframe 里、到不了预览容器，菜单项按原顺序平铺成图标按钮 -->
+            <!-- 壁纸的右键菜单项按原顺序平铺成图标按钮（壁纸里的右键由垫片转发，见 wpeContextMenu.ts） -->
             <template v-if="isPreviewWallpaper && wallpaperBarActions.length > 0">
               <template v-for="action in wallpaperBarActions" :key="action.key">
                 <span v-if="action.divider" class="control-bar-divider" />
@@ -1127,11 +1128,16 @@ watch(previewVisible, (visible) => {
   if (!visible) stopSlideshow();
 });
 
-const handlePreviewDialogContextMenu = (event: MouseEvent) => {
+/** 在视口坐标处弹出上下文菜单；已经开着时挪到新位置 */
+const openPreviewContextMenuAt = (point: { x: number; y: number }) => {
   if (!previewImage.value) return;
   if (!props.actions?.length) return;
-  previewContextMenuPosition.value = { x: event.clientX, y: event.clientY };
+  previewContextMenuPosition.value = { x: point.x, y: point.y };
   previewContextMenu.open();
+};
+
+const handlePreviewDialogContextMenu = (event: MouseEvent) => {
+  openPreviewContextMenuAt({ x: event.clientX, y: event.clientY });
 };
 
 const closePreviewContextMenu = () => {
@@ -1182,7 +1188,7 @@ function handleWallpaperCommand(command: string, image: ImageInfo): boolean {
   return false;
 }
 
-// 网页壁纸预览的工具条按钮：右键菜单的可见项按原顺序平铺（桌面菜单没有子菜单）
+// 壁纸预览的工具条按钮：右键菜单的可见项按原顺序平铺（桌面菜单没有子菜单）
 const wallpaperBarActions = computed(() => {
   const ctx = previewActionContext.value;
   return props.actions

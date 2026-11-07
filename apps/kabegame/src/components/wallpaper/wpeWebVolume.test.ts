@@ -14,6 +14,7 @@ import {
   webHostVolume,
   wpeVolumeMessage,
 } from "./wpeWebVolume";
+import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 
 const SHIM_SOURCE = readFileSync(
   fileURLToPath(new URL("../../../../../src-tauri/kabegame/src/webview_js/wpe_shim.js", import.meta.url)),
@@ -676,5 +677,27 @@ describe("wpe_shim 暂停冻结", () => {
     env.runFrame();
     env.runFrame();
     expect(media.paused).toBe(false);
+  });
+});
+
+describe("wpe_shim 右键转发", () => {
+  it("垫片的字面量与 wpeContextMenu.ts 一致", () => {
+    expect(SHIM_SOURCE).toContain(`CONTEXT_MENU = "${WPE_CONTEXT_MENU}"`);
+  });
+
+  it("可信的右键发给父页面（坐标是本视口），页面停止冒泡也照发；合成事件不发", () => {
+    const env = createShimEnv(null);
+    // 页面自己的监听：冒泡阶段取消并停止传播（垫片在捕获阶段，先于它）
+    (env.sandbox.addEventListener as (type: string, fn: (event: { stopped?: boolean }) => void) => void)(
+      "contextmenu",
+      (event) => {
+        event.stopped = true;
+      },
+    );
+    const posts = () => env.hostPosts.filter((post) => (post.data as { type?: unknown }).type === WPE_CONTEXT_MENU);
+    env.dispatch("contextmenu", { isTrusted: true, clientX: 120, clientY: 45 } as never);
+    expect(plain(posts())).toEqual([{ data: { type: WPE_CONTEXT_MENU, x: 120, y: 45 }, origin: "*" }]);
+    env.dispatch("contextmenu", { isTrusted: false, clientX: 1, clientY: 1 } as never);
+    expect(posts()).toHaveLength(1);
   });
 });

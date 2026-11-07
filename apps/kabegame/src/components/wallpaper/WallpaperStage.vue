@@ -39,6 +39,7 @@ import { resetVideoElement } from "@/utils/videoElement";
 import { isSceneTarget, isVideoTarget, isWebTarget, isWpeTarget } from "./targetKind";
 import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
 import { clampWallpaperVolume, isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
+import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { WEB_SANDBOX } from "./webSandbox";
 import WpeSceneView from "./WpeSceneView.vue";
 
@@ -79,7 +80,13 @@ const props = withDefaults(defineProps<Props>(), {
   interactive: false,
 });
 
-const emit = defineEmits<{ error: [message: string]; ready: []; sceneLive: [live: boolean] }>();
+const emit = defineEmits<{
+  error: [message: string];
+  ready: [];
+  sceneLive: [live: boolean];
+  /** 网页 / 场景壁纸里点了右键（`wpeContextMenu.ts` 的协议），坐标已换算到本页面视口 */
+  contextmenu: [point: ViewportPoint];
+}>();
 
 // 模板 ref：只在 onMounted 时读取一次
 const rootRef = ref<HTMLElement | null>(null);
@@ -553,13 +560,22 @@ function postWebVolume() {
 }
 
 /**
- * 垫片的音量请求：只认来自本组件当前 iframe 的（主窗口里应用背景与预览各有一个 Stage，各答各的 iframe；
+ * 垫片的消息：只认来自本组件当前 iframe 的（主窗口里应用背景与预览各有一个 Stage，各答各的 iframe；
  * 换壁纸重建 iframe 后，新页面的请求照常回复，旧 iframe 已不是 `webFrameEl`）。
+ * - 音量请求：回复当前宿主音量；
+ * - 右键：换算到本页面视口后往上抛（场景壁纸的由 `WpeSceneView` 收）。
  */
 function onWindowMessage(event: MessageEvent) {
-  const target = webFrameEl?.contentWindow;
-  if (!target || event.source !== target || !isWpeVolumeRequest(event.data)) return;
-  postWebVolume();
+  const frame = webFrameEl;
+  const target = frame?.contentWindow;
+  if (!frame || !target || event.source !== target) return;
+  if (isWpeVolumeRequest(event.data)) {
+    postWebVolume();
+    return;
+  }
+  if (!event.isTrusted) return;
+  const point = wpeContextMenuPoint(event.data, frame);
+  if (point) emit("contextmenu", point);
 }
 
 /**
@@ -1797,6 +1813,7 @@ defineExpose({ debugState, delegatesPing });
           @alive="sceneAlive = true"
           @ready="onSceneReady"
           @fallback="onSceneFallback"
+          @contextmenu="emit('contextmenu', $event)"
         />
       </div>
     </div>
