@@ -7,6 +7,7 @@
 - 场景壁纸支持图层效果链与颜色混合模式，自带的 Razer Vortex 现在可实时渲染；设置页壁纸分区新增「场景后处理」（跟随 WPE / 关闭 / 开启 / 超高，默认跟随 Wallpaper Engine 自己的后处理设置）。
 - 场景壁纸支持泛光与 HDR：「场景后处理」为开启或超高时，开着泛光的场景按 Wallpaper Engine 的算法画出光晕（超高档另有 HDR 高光与更柔和的多级光晕），光晕本身与 Wallpaper Engine 的输出逐像素一致（相差不超过 1/255）；图库预览、应用背景与桌面同一档位，超高档 4K 场景多占约 90 MB 显存。Razer Bedroom 在「场景后处理」为开启或超高时可见光晕。
 - 场景壁纸支持 Wallpaper Engine 场景脚本（SceneScript）的基础部分：Razer Bedroom 现在可实时渲染彩虹灯带，Razer Vortex 的「模式」属性生效；一段脚本的某个回调出错只停用该回调，其余照常运行；场景脚本的存储（如记住的拖动位置）会保留到下次打开。
+- 场景壁纸支持图层层级与第一批粒子效果：子图层跟随父图层移动、旋转与显隐；粒子的发射、运动、淡出、振荡与透视粒子按 Wallpaper Engine 的方式模拟，并逐帧对照过 Wallpaper Engine 的输出。自带的 Shimmering Particles 与创意工坊 3062029089 现在可实时渲染；改粒子数量、发光、风格等属性即时生效，不重新加载。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - 场景壁纸现在跟随壁纸样式（填充、适应、拉伸、居中、平铺），适应和居中时空白处用壁纸的主题色填充，和 Wallpaper Engine 一样；图库预览里场景壁纸按自身比例完整显示，和单独的图片一样；详情面板显示场景分辨率，宽高比筛选与排序也包含场景壁纸。
@@ -35,6 +36,7 @@
 - 按视频筛选和视频计数在大图库下明显更快；应用启动时会刷新数据库的查询统计，启动页显示「正在优化数据库」，图库越大这一步越久。
 
 ### Fixed
+- 图库预览场景壁纸时，画面不再多出主题色留边、整体缩小，也不再按远大于显示的尺寸渲染。
 - 「壁纸」导入只添加文件夹、没有勾选自动来源时不再提示「壁纸导入任务创建失败」。
 - 预览视频后切到其它图片或关闭预览，立即释放视频播放器：系统媒体浮窗不再停在已经切走的视频，也不再盖住桌面壁纸正在放的歌。
 - 修复网页壁纸刚打开时偶尔要等几秒才应用属性、读不到为它选择的文件夹的问题。
@@ -53,6 +55,7 @@
 - 安全加固：畅游导航栏、桌面网页壁纸等页面只能监听为它们开放的应用事件，发给某个窗口的事件不会再被其它窗口收到；页面里嵌入的子页面（iframe）不再沿用所在页面的应用权限。
 
 ### Changed
+- 场景壁纸的脚本用到 Kabegame 还不支持的脚本功能（如运行中新建图层）时，整张改为显示作者预览图，不再实时渲染出缺了内容的画面（例如创意工坊 3304642534 的音频条）。
 - 图库「类型」过滤里，Wallpaper Engine 壁纸单独成一类（显示为 Wallpaper Engine，可再选视频 / 网页 / 场景），不再混在「图片」里；图片详情里的「Wallpaper Engine · 类型」也可点击筛选。没有视频或没有 Wallpaper Engine 壁纸的范围里，对应分类不再显示。
 - Windows 桌面版升级后，部分只存在本机界面里的偏好会恢复默认：画廊每页数量与布局、面板宽度、链接打开方式（会重新询问）、吉祥物开关与位置、上次浏览的画廊路径、视频音量等；应用设置与图库数据不受影响。
 - 壁纸轮播改为按一条视图路径依次切换：在画廊、画册、任务或畅游详情的过滤栏 ⋯ 菜单点「用当前视图轮播」，当前的过滤与排序就是轮播来源；设置页只显示当前轮播路径，原来的「选择画册 / 包含子画册 / 随机或顺序」三项去掉（随机即随机排序视图）。每次切换都从当前壁纸在视图里的下一张接着走，视图里的图片增删、排序变化不会让轮播跳张或重复；当前壁纸不在视图里时按保存的轮播位置继续，停止再开启、重启应用也接着上次；换视图会立刻切到新视图的第一张；原生壁纸模式只轮播图片，切换壁纸模式后从当前壁纸的下一张继续。旧设置升级时自动换算成对应路径。
@@ -72,6 +75,7 @@
 ## 开发侧
 
 ### Added
+- 场景壁纸 P4a：图层层级（`compile/hierarchy.ts`、`render/layout.ts` 的 `worldMatrixOf`，`visible` 沿父链继承）；粒子运行时（`apps/wpe-scene/src/particles/`：模块表 `PARTICLE_MODULES` 是唯一事实来源，float32 定长列模拟器，顶点按翻译器反射布局写入，与图像层按 `objects` 顺序混排）、透视粒子相机、正交深度改 ±2000、帧时间钳到 `[0.0001, 0.25]`；`instanceoverride` 进绑定表就地生效；能力表新增 `particle:*`、`value:animation`、`object:parent-cycle` 与 `script:api:*`（`compile/scriptApi.ts`）；预览画布按父页面量的显示缩放渲染（`kabegame:wpe-scene-display`）。dev 探针新增 `particleTrack`、`particleCorners`、`host.particles` 与 `renderFrame` 的粒子回放。详见 `cocs/wpe/WPE_SCENE.md`「层级（P4a）」「粒子（P4a）」。
 - 场景壁纸的着色器宏按 Wallpaper Engine 修正：Eagle Flag 的旗面法线更接近原版，HDR 场景里过亮颜色的色相类混合模式不再偏色。
 - 翻译器按 Wallpaper Engine 语义实现 `#require LightingV1`：`LIGHTING=0` 时为空，开启时生成灯光 uniform 与 `PerformLighting_V1`；宿主支持 `general.lightconfig` 与 `lpoint` / `lspot` / `ltube` / `ldirectional` 灯对象，无 effect 图层的光照与 Wallpaper Engine 对比最大差 1（`cocs/wpe/WPE_SCENE.md`「光照」）。
 - 场景宿主 P3-0c：CEF 补丁 08 让 `ChromeContentBrowserClientCef::ShouldEmbeddedFramesTryToReuseExistingProcess` 无条件返回 false，子 frame 不再跨 browser 复用同站点渲染进程（两个窗口的 `file:` 宿主 / 网页壁纸各自一个进程，畅游 / 爬虫的第三方 iframe 同样生效，主 frame 复用不变）；CEF 补丁 09（Chromium 内层 `kabegame_raf_local_root_only`）让每个 frame widget 只服务自己 local root 的文档，同一页面里多个同进程 iframe 的 rAF 不再每帧重复派发。

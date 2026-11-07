@@ -16,7 +16,7 @@ WPE 给每个场景一个 V8 Isolate 加一个 Context，场景里所有脚本�
 
 **跨重编译保留脚本（已定 7 末句）。** 重编译（3a 里仍有几类）只换 bundle、`SceneState` 与 GPU 场景，realm、模块实例、`shared`、计时器、`init` 状态都不动。脚本写过的值记在一张「目标稳定键 → 最后一次写入」的覆盖表里，新 `SceneState` 建好、首帧之前重放一遍；用户绑定之后又写了同一目标的，以用户绑定为准（谁最后写谁赢，同 WPE 一个字段只有一份值）。
 
-**出错与卡住（已定 3、5）。** 回调抛错只禁用这段脚本的这个回调（D「异常」）；模块求值失败这段整段不用；不做静态扫描，未实现的 API 就让它在调用时报错，可能画出半成品。错误按 `"<message> (line L, col C)"` 写应用日志。每个回调都计时，单次超过 15 s 就在它返回后停掉本场景全部脚本、画面按最后的值继续、写应用日志；真正的死循环接受卡住，由现有 ping / 看门狗 / CEF 处理。脚本相关不再进 `unsupported`：`value:script` 与 D10 的 `isStaticScript` 在本阶段删除，渲染能力的 `unsupported` 与 D4 照旧。
+**出错与卡住（已定 3、5）。** 回调抛错只禁用这段脚本的这个回调（D「异常」）；模块求值失败这段整段不用；不做静态扫描，未实现的 API 就让它在调用时报错，可能画出半成品（2026-11-07 改为静态扫描未实现 API、报 `script:api:*` 整张退回，见「已定」5 的注记）。错误按 `"<message> (line L, col C)"` 写应用日志。每个回调都计时，单次超过 15 s 就在它返回后停掉本场景全部脚本、画面按最后的值继续、写应用日志；真正的死循环接受卡住，由现有 ping / 看门狗 / CEF 处理。脚本相关不再进 `unsupported`：`value:script` 与 D10 的 `isStaticScript` 在本阶段删除，渲染能力的 `unsupported` 与 D4 照旧。
 
 **环境对齐（已定 4）。** realm 里遮掉 WPE 没有的东西（`fetch`、`XMLHttpRequest`、`WebSocket`、全局计时器等，E），`console` 只有 `log` / `error`。另有一项是我们特有的：realm 与网页壁纸同为 `file://` 来源，`localStorage` 会落到与全部网页壁纸共用的 Web Storage 上，而 WPE 的 `localStorage` 是另一套 API（`set` / `get` / `delete` / `clear`，P6），所以本阶段一并遮掉 Web Storage。这些只为画面一致，不是安全边界（`parent` / `top` / `document` 删不掉）。
 
@@ -447,7 +447,7 @@ export interface SceneRendererOptions {
 2. **脚本 realm**：宿主内建一个同源 `about:blank` 子 frame 作独立 realm（同进程同线程，宿主同步调用其中函数），对应 WPE「渲染线程上一个独立 V8 Context」；只是隔离不是安全边界。可行性先做探针（步骤 0），不成立就停下汇报，不自行改方案。
 3. **卡住**：记录每个回调的耗时；单次超过 15 s 就在它返回后停掉本场景全部脚本，画面按最后的值继续，写应用日志；真正的死循环接受卡住（靠现有 ping / CEF 机制）。验收不包含让宿主或脚本死循环 / 忙等 / 卡住的测试，15 s 规则只用注入时钟的单测验证。
 4. **环境对齐 WPE**：遮掉 WPE 没有的东西，`console` 只有 `log` / `error`（`console.warn` 照 WPE 抛错）；只为画面一致，不是安全边界。（2026-11-05 用户改为「不遮蔽、只改写同名全局」，由 3c 点 0 实施，见 3c 已定 4。）
-5. **未实现的 API 不做静态扫描**：照常运行，调用时报错只禁用那个回调，可能画出半成品；脚本相关不再进 `unsupported`（`value:script` 随本阶段删除；渲染能力的 `unsupported` 与 D4 照旧）；报错写应用日志。
+5. **未实现的 API 不做静态扫描**：照常运行，调用时报错只禁用那个回调，可能画出半成品；脚本相关不再进 `unsupported`（`value:script` 随本阶段删除；渲染能力的 `unsupported` 与 D4 照旧）；报错写应用日志。（2026-11-07 用户改定：能力表静态扫描会执行的脚本，用到 WPE 有、我们没实现的 API 就报 `script:api:<分组>.<成员>`、整张退回预览图；表来自 WPE 自带的 `lib.sceneScript.d.ts` 减去已实现部分，见 `compile/scriptApi.ts`，提交 `c8ebf098`。起因是工坊 3304642534 的 `init` 调 `thisScene.createLayer` 失败后音频条静默缺失。运行期的普通脚本错误仍只禁用回调、写日志，不进 `unsupported`。）
 6. **API 分阶段**：本阶段先做「最小 + 骨架」（见总体设计思路末段）；做完用本机语料验证能解锁哪些新壁纸、脚本运行有无报错，据此再排后续 API 阶段。
 7. **重编译时保留脚本 realm 与脚本状态**，不重跑 `init`。
 8. **默认照 WPE**（D / I 节）：加载顺序、增量顺序与转换、两帧之间处理下一帧生效、`init` 不重跑、返回值写回规则、`thisLayer` / `thisObject` 的全局 getter 与计时器归属、出错只禁用该回调、模块求值失败整段不用、暂停时脚本也停、计时器按帧 dt 推进、裸模块名转小写映射到 `assets/scripts/jsmodules/`、`baseclasses.js` 先作经典脚本执行；不照搬 `engine.userProperties` 改值后丢内置键、CLI 改颜色后成字符串两个缺陷。

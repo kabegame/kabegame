@@ -1,5 +1,29 @@
 # v4.7.0 regression
 
+## 场景壁纸 P4a：层级、粒子、预览画布尺寸与脚本 API 检查
+
+2026-11-07 Windows dev。P4a 落地图层层级、粒子底座与档 1（12 个模块加 `sprite`）、`instanceoverride` 就地生效与粒子生命周期；同批还有预览画布按显示尺寸渲染（`7c77e48a`）和脚本 API 检查（`c8ebf098`，用到未实现的脚本 API 时整张退回）。说明见 `cocs/wpe/WPE_SCENE.md`「层级（P4a）」「粒子（P4a）」。验收工具在 `ignore/p4/step1/`–`step5/`，WPE 参照在 `A:\p4a\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | P0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；应用的 vue-tsc 与 `components/wallpaper` 测试 | 0 error；全过 | 2026-11-07（`c8ebf098` 之后）：宿主 tsc 0 error，33 个文件 912 个用例全过；应用 vue-tsc 0 error，场景视图相关 87 个用例全过；格式通过 |
+| [x] | P1 层级 · 确定性工程 | Node，`ignore/p4/step1/truth.test.ts` | `proj/p4a` 从磁盘编译，按渲染器的路径算 5 个图层的四角，对 RenderDoc 抓帧 | 四角差不超过 0.01 像素；可见顺序与 `visible` 遮蔽一致；alpha 不继承 | 2026-11-07：最大差 6.1e-5 像素（含三轴旋转、非均匀缩放、三层父链）；可见顺序 h3、h4、h1、h2、h7，h6 不画 |
+| [ ] | P2 层级 · 应用里的画面 | Windows dev | 导入 `ignore/p4/proj/p4a`，预览，与 WPE 的同一工程对照；测后删行 | 子层随父层移动、旋转，不可见分组下的子层不画，画面与 WPE 一致 | 语料里还没有能渲染、又带父子层的真实场景；真机只做了粒子回放 |
+| [x] | P3 语料变化 | Node，本机 149 个工程 | 每一步前后重扫 `unsupported` | 只在对应键上变化，原来能渲染的场景不掉出 | 2026-11-07：层级让 66 张只少了 `object:parent` / `object:empty`；粒子编译去掉 `object:particle`、风与重力键、`perspectiveoverridefov`；步骤 5 能渲染的 12 → 15，没有掉出；之后脚本 API 检查让 3304642534 重新退回，15 → 14，除 `script:api:*` 外没有别的变化 |
+| [x] | P4 粒子 · 确定性工程 | Windows dev 真机 + Node 回放 | 按 WPE 日志的 dt 回放档 1 全部系统；读我们翻译的顶点着色器四角；整帧读回 | 位置差不超过 1e-3（坐标过 1000 时 2e-3）；四角差不超过 0.01 像素；整帧逐像素一致 | 2026-11-07：位置 ≤ 9.2e-4（`burst` 1.1e-3），尺寸、颜色、旋转差 0；四角一帧逐位相同、另一帧最大差 5.7e-5 像素，透视粒子 1.7e-4；整帧 6382 个有内容像素 6214 个逐字节相同，其余全在 P4b 的 `capvelocity` 两行。测试行已删 |
+| [x] | P5 shimmering_particles 应用内渲染 | Windows dev，场景宿主（屏外），回放 20 s | `host.particles()` 读粒子数与分布，和 WPE 抓帧的统计比 | 没有不支持项；粒子数、位置、尺寸、alpha 范围与 WPE 相近 | 2026-11-07：`dust motes` 200 个，尺寸 43–996（WPE 200 个、40–999）；3 个 `small_motes` 被 `style` 隐藏，WPE 同样只画一个系统 |
+| [x] | P6 3062029089 应用内渲染 | 同 P5 | 同 P5 | 同 P5 | 2026-11-07：雪 600 帧均值 333 个（WPE 344，容量 360），尺寸 1.02–14.97（WPE 1.02–14.88） |
+| [ ] | P7 两张粒子场景 · 桌面 | Windows，窗口模式 | 分别设为桌面壁纸，看一会儿，与 WPE 对照 | 粒子正常飘动，观感与 WPE 一致，没有闪烁或方块 | 待用户确认 |
+| [x] | P8 改粒子属性不重新加载 | Windows dev，shimmering_particles | 依次改「计数」`count`、「发光」`glow`、「风格」`style`，看探针 `stats()` | 就地生效，不整场重编译 | 2026-11-07：`applied` 0 → 3，`recompiled` 0；测后属性还原为未修改 |
+| [ ] | P9 隐藏 / 显示粒子图层 | Windows dev，shimmering_particles 预览 | 用「风格」切到显示 `small_motes` 的选项再切回；或用绑了 `visible` 的粒子层 | 隐藏时粒子立刻消失；重新显示后从头慢慢发射，不会一下子涌出一整屏 | WPE 行为已实测（`p4a-life`），模拟器有单测；应用里没有目视 |
+| [ ] | P10 暂停 | Windows，预览与桌面 | 预览属性面板点「暂停」；桌面在壁纸设置里暂停；各停几秒再恢复 | 暂停时粒子定住；恢复后接着动，不跳、不清空 | 待用户确认 |
+| [ ] | P11 切换壁纸与关闭预览 | Windows，预览与桌面 | 粒子场景与图片 / 视频 / 其它场景来回切；反复开关预览 | 没有残留粒子或画布；GPU 进程内存不持续上涨 | 待用户确认 |
+| [x] | P12 预览无留边 | Windows dev，shimmering_particles 预览，壁纸样式「适应」 | 打开预览，量画布像素与显示尺寸，看边缘 | 画布像素等于显示尺寸 × DPR；没有 `schemecolor` 留边，画面不缩小 | 2026-11-07 主会话真机核对通过。修正前画布按布局尺寸 × DPR 渲染、超 8192 时宽高各自钳制，宽高比被破坏 |
+| [ ] | P13 预览缩放与属性面板 | Windows dev，预览场景 | 改主窗口大小；展开、收起右侧属性面板；切 `center` 样式对照桌面 | 每次变化 250 ms 内画布跟上显示尺寸，始终没有留边；`center` 的构图与桌面相同 | 属性面板展开时真机核对过：显示 675×126.6 CSS 像素，画布 1013×190，等于显示尺寸 × 1.5。改窗口大小、`center` 对照桌面没测 |
+| [x] | P14 3304642534 显示预览图 | Windows dev | 打开它的预览 | 退回作者预览图，原因是 `script:api:*` | 2026-11-07：`script:api:thisScene.createLayer`、`script:api:thisScene.sortLayer`，整场只剩这两项 |
+| [x] | P15 原有场景画面不变 | Windows dev | 10 张原本能渲染的场景 × 三档后处理，`renderFrame` 读回哈希，与 P4a 之前比 | 逐张相同 | 2026-11-07：每一步 30 组都相同，含正交深度改成 ±2000、帧时钟钳制 |
+| [x] | P16 帧时间 | Windows dev，600 帧 | 探针记录帧时间与每个粒子层的开销 | 不明显变慢 | 2026-11-07：shimmering_particles、3062029089、3304642534 均值都是 3.2–3.4 ms，每个粒子层模拟加写顶点约 0.1 ms。P4a 不设 `maxcount` 上限 |
+
 ## WPE 导入标签：工具标签、年龄分级与子目录
 
 2026-11-07 Windows dev，界面语言中文。导入时除作者的 `tags` 外，再挂 WPE 显示的其它标签：已订阅工坊壁纸取 `bin/workshopcache.json` 的 Steam 标签，其余从 `project.json` 推导；分类、类型、来源与分辨率不挂。标签照 WPE 筛选面板分到 `WPE/genre`、`WPE/rating`、`WPE/feature`。key 是 Steam 原文，名称按语言翻译。脚本 `ignore/wpe-tags-test/run.mjs`：用临时目录走真实导入任务，结束时删掉本次的行、任务和新建的标签与目录（标签加目录总数前后都是 5668）。
