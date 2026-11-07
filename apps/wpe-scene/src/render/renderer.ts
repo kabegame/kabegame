@@ -18,7 +18,7 @@ import { particlePasses } from "../particles/system";
 import { FrameClock, FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
-import { scenePlacement, scenePointer, type ScenePlacement, type SceneStyle } from "./layout";
+import { canvasSize, scenePlacement, scenePointer, type ScenePlacement, type SceneStyle } from "./layout";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import { daytimeOf, TIME_WRAP_SECONDS } from "./uniforms";
@@ -42,12 +42,21 @@ struct VsOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32
 }
 `;
 
-/** 帧循环里按显示尺寸核对画布的间隔：transform 变化不触发 ResizeObserver，这样最多晚这么久跟上。 */
+/**
+ * 帧循环里核对画布尺寸的间隔：DPR 变化（换显示器、改系统缩放）不触发 ResizeObserver，这样最多晚这么久跟上。
+ * 父页面的 CSS transform 跨不进 iframe，这里量不到，由父页面量好经 `setDisplayScale` 交来。
+ */
 const SIZE_CHECK_INTERVAL_MS = 250;
+
+function validDisplayScale(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
 
 export interface SceneRendererOptions {
   /** 帧率上限；≤ 0 不限（跟随 rAF）。默认 60。 */
   maxFps?: number;
+  /** 初始显示缩放（见 `setDisplayScale`），默认 1。建渲染器时就带上，免得先按原尺寸建一张大画布再缩。 */
+  displayScale?: number;
   /** 运行期失败（未捕获的校验错误等），渲染已停止。 */
   onError?: (reasons: string[]) => void;
   /** 设备丢失（非 `destroy()` 引起），渲染已停止；调用方可以重建渲染器。 */
@@ -90,6 +99,12 @@ export class SceneRenderer {
   private background: [number, number, number] = [0, 0, 0];
   private placement: ScenePlacement = { rect: [0, 0, 1, 1], offset: [0, 0], scale: [1, 1] };
   private placementKey = "";
+  /** 父页面把 iframe 缩小显示的比例（iframe 里量不到 transform），画布按它缩到实际显示大小。 */
+  private displayScale = 1;
+  /** 一个布局 CSS 像素对多少画布像素（`canvasSize`），随画布尺寸一起更新；`center` 样式用。 */
+  private pixelRatio = 1;
+  /** 显示缩放为 1 时的画布尺寸：脚本的 `engine.screenResolution`，预览缩小显示时也和桌面一致。 */
+  private fullResolution: [number, number] = [1, 1];
   /** 光标在画布上的归一化坐标（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
   private pointer: [number, number] = [0.5, 0.5];
   private pointerLast: [number, number] = [0.5, 0.5];
@@ -115,6 +130,7 @@ export class SceneRenderer {
   ) {
     const device = gpu.device;
     this.throttle = new FrameThrottle(options.maxFps ?? 60);
+    if (validDisplayScale(options.displayScale)) this.displayScale = options.displayScale;
     const context = canvas.getContext("webgpu");
     if (!context) throw new SceneRenderError(["webgpu:canvas-context"]);
     this.context = context;
@@ -186,6 +202,14 @@ export class SceneRenderer {
   /** 当前场景的 CPU 侧状态；没有场景为 null。3b 的脚本写回与 dev 探针都用它。 */
   get sceneState(): SceneState | null {
     return this.state;
+  }
+
+  /**
+   * 脚本的 `engine.screenResolution`：按显示缩放为 1 算的画布尺寸（布局 × DPR，超上限等比缩）。预览缩小显示时画布变小，
+   * 脚本看到的分辨率仍与桌面一致；桌面上就是画布尺寸。
+   */
+  get screenResolution(): [number, number] {
+    return this.fullResolution;
   }
 
   /** 最近一帧的 `g_Time`（未回绕）：脚本的 `engine.runtime`。 */
@@ -282,6 +306,16 @@ export class SceneRenderer {
     this.redraw();
   }
 
+  /**
+   * 父页面把 iframe 缩小显示的比例（`getBoundingClientRect` ÷ 布局尺寸，父页面量）。画布按「布局 × DPR × 它」定尺寸，
+   * 不再按布局尺寸渲染只显示一小块的大画面。非正数、非有限值不理。
+   */
+  setDisplayScale(scale: number): void {
+    if (!validDisplayScale(scale) || scale === this.displayScale) return;
+    this.displayScale = scale;
+    this.resize();
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -328,7 +362,7 @@ export class SceneRenderer {
     if (!this.shouldRun) return;
     this.raf = requestAnimationFrame(this.frame);
     if (!this.throttle.ready(now)) return;
-    // 祖先的 CSS transform 变化（如预览「桌面画布」随弹窗缩放）不触发 ResizeObserver，帧循环里定期按显示尺寸核对
+    // DPR 变化不触发 ResizeObserver，帧循环里定期核对；父页面的缩放由它量好经 setDisplayScale 交来
     if (now - this.sizeCheckedAt >= SIZE_CHECK_INTERVAL_MS) {
       this.sizeCheckedAt = now;
       this.resize();
@@ -344,19 +378,27 @@ export class SceneRenderer {
   }
 
   /**
-   * 画布像素尺寸跟随**显示**尺寸 × DPR；暂停时补画一帧。用 `getBoundingClientRect`（含祖先 CSS transform），
-   * 而不是布局尺寸：预览画布按内容尺寸布局、再整体缩小显示，按布局尺寸会在 4K 上渲染只显示约 1/4 面积的画面。
+   * 画布像素尺寸 = 布局尺寸 × DPR × 显示缩放，超上限时保持宽高比地缩（`canvasSize`）；变了就在暂停时补画一帧。
+   * `getBoundingClientRect` 在 iframe 里量到的就是布局尺寸：预览画布的 `scale` 加在父页面的 iframe 元素上，
+   * 跨不进来，所以显示缩放只能由父页面交来（`setDisplayScale`）。
    */
   private resize(): void {
     if (this.destroyed) return;
     const dpr = window.devicePixelRatio || 1;
     const max = this.gpu.device.limits.maxTextureDimension2D;
     const rect = this.canvas.getBoundingClientRect();
-    const width = Math.min(max, Math.max(1, Math.round(rect.width * dpr)));
-    const height = Math.min(max, Math.max(1, Math.round(rect.height * dpr)));
-    if (this.canvas.width === width && this.canvas.height === height) return;
-    this.canvas.width = width;
-    this.canvas.height = height;
+    const full = canvasSize(rect.width, rect.height, dpr, 1, max);
+    this.fullResolution = [full.width, full.height];
+    const { width, height, pixelRatio } =
+      this.displayScale === 1 ? full : canvasSize(rect.width, rect.height, dpr, this.displayScale, max);
+    const sized = this.canvas.width === width && this.canvas.height === height;
+    if (sized && this.pixelRatio === pixelRatio) return;
+    this.pixelRatio = pixelRatio;
+    // 同值赋给 width / height 也会重置画布，只在真变了时赋
+    if (!sized) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
     if (this.scene && !this.shouldRun) this.render();
   }
 
@@ -376,13 +418,23 @@ export class SceneRenderer {
     return group;
   }
 
-  /** 场景、画布或样式变了才重算：中心样式按 DPR 换算，所以键里也有它。 */
+  /**
+   * 场景、画布或样式变了才重算。中心样式按「画布像素 / 布局 CSS 像素」换算（DPR × 显示缩放，超上限再乘缩小比例），
+   * 所以键里也有它：一个场景像素对一个布局 CSS 像素，预览缩小显示时构图与桌面相同。
+   */
   private syncPlacement(scene: GpuScene): void {
-    const dpr = window.devicePixelRatio || 1;
-    const key = `${this.style}:${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}@${dpr}`;
+    const ratio = this.pixelRatio;
+    const key = `${this.style}:${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}@${ratio}`;
     if (key === this.placementKey) return;
     this.placementKey = key;
-    this.placement = scenePlacement(this.style, scene.width, scene.height, this.canvas.width, this.canvas.height, dpr);
+    this.placement = scenePlacement(
+      this.style,
+      scene.width,
+      scene.height,
+      this.canvas.width,
+      this.canvas.height,
+      ratio,
+    );
     this.gpu.device.queue.writeBuffer(
       this.placementBuffer,
       0,

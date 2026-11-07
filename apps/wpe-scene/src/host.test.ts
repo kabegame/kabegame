@@ -30,7 +30,9 @@ vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => com
 const createRealm = vi.fn<() => Promise<ScriptRealm>>();
 vi.mock("./script/realm", () => ({ createIframeRealm: () => createRealm(), getJsModuleIndex: () => ({}) }));
 
-const rendererStyle = vi.hoisted(() => ({ setStyle: vi.fn(), setBackground: vi.fn() }));
+const rendererStyle = vi.hoisted(() => ({ setStyle: vi.fn(), setBackground: vi.fn(), setDisplayScale: vi.fn() }));
+/** `SceneRenderer.create` 收到的选项（核对建渲染器时带上显示缩放）。 */
+const rendererCreate = vi.hoisted(() => vi.fn((_options: unknown) => {}));
 /** 就地写的落点（P4a 步骤 5 核对 instanceoverride 走就地一侧）。 */
 const rendererWrites = vi.hoisted(() => ({ applyBindings: vi.fn((_writes: unknown) => true) }));
 
@@ -47,7 +49,15 @@ vi.mock("./render", async (importOriginal) => {
     redraw: () => {},
     destroy: () => {},
   };
-  return { ...actual, SceneRenderer: { create: async () => renderer } };
+  return {
+    ...actual,
+    SceneRenderer: {
+      create: async (_canvas: unknown, options: unknown) => {
+        rendererCreate(options);
+        return renderer;
+      },
+    },
+  };
 });
 
 const { SceneHost } = await import("./host");
@@ -213,6 +223,8 @@ describe("SceneHost：壁纸样式与留白", () => {
     compile.mockReset();
     rendererStyle.setStyle.mockReset();
     rendererStyle.setBackground.mockReset();
+    rendererStyle.setDisplayScale.mockReset();
+    rendererCreate.mockReset();
     compile.mockImplementation(async ({ userProperties }) => unbound(userProperties));
   });
   afterEach(() => vi.unstubAllGlobals());
@@ -237,6 +249,22 @@ describe("SceneHost：壁纸样式与留白", () => {
     expect(rendererStyle.setStyle).toHaveBeenLastCalledWith("fit");
     host.applyUserProperties(scheme("0 1 0"));
     expect(rendererStyle.setBackground).toHaveBeenLastCalledWith([0, 1, 0]);
+    await Promise.resolve();
+    expect(compile).toHaveBeenCalledOnce();
+    host.dispose();
+  });
+
+  it("显示缩放：建渲染器时带上已收到的值，之后就地交给渲染器、不重新编译", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.setDisplayScale(0.25);
+    host.applyUserProperties(scheme("0 0 0"));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect(rendererCreate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ displayScale: 0.25 }));
+    // 取设备期间没变：不用再设一次
+    expect(rendererStyle.setDisplayScale).not.toHaveBeenCalled();
+    host.setDisplayScale(0.5);
+    expect(rendererStyle.setDisplayScale).toHaveBeenLastCalledWith(0.5);
     await Promise.resolve();
     expect(compile).toHaveBeenCalledOnce();
     host.dispose();

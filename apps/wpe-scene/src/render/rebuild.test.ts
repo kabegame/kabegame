@@ -19,7 +19,7 @@ import type { BloomStep } from "./bloom";
 import { acquireGpu } from "./device";
 import { SceneRenderError } from "./errors";
 import type { FboBindings } from "./graph";
-import { eyePosition } from "./layout";
+import { eyePosition, type ScenePlacement } from "./layout";
 import { SceneRenderer } from "./renderer";
 import { GpuScene, visibleObjects } from "./scene";
 import { SceneState } from "./state";
@@ -977,7 +977,11 @@ describe("effect 切换", () => {
 
   describe("渲染循环", () => {
     /** 跑起来的渲染器；`frames` 是排队的 rAF 回调。 */
-    async function start(onError: (reasons: string[]) => void, bundle = twoEffects([true, true])) {
+    async function start(
+      onError: (reasons: string[]) => void,
+      bundle = twoEffects([true, true]),
+      options: { displayScale?: number } = {},
+    ) {
       const frames: FrameRequestCallback[] = [];
       const gpu = new FakeGpu();
       vi.mocked(acquireGpu).mockResolvedValue({
@@ -1001,9 +1005,9 @@ describe("effect 切换", () => {
         getContext: () => context,
         getBoundingClientRect: () => ({ width: 100, height: 100 }),
       } as unknown as HTMLCanvasElement;
-      const renderer = await SceneRenderer.create(canvas, { onError, maxFps: 0 });
+      const renderer = await SceneRenderer.create(canvas, { onError, maxFps: 0, ...options });
       await renderer.load(bundle);
-      return { renderer, frames, gpu };
+      return { renderer, frames, gpu, canvas };
     }
 
     it("rAF 回调里 sync 抛错：走 onError，不抛出去、不再排下一帧", async () => {
@@ -1077,6 +1081,42 @@ describe("effect 切换", () => {
       await renderer.load(twoEffects([true, true]));
       expect(groups.size).toBe(1);
       expect(shown()).toBe("1:scene target");
+      renderer.destroy();
+    });
+
+    it("显示缩放：画布按显示大小定尺寸、暂停时补画；脚本分辨率不变；center 构图不变", async () => {
+      // 画布布局 100×100、DPR 1；场景 256×128
+      const { renderer, frames, gpu, canvas } = await start(vi.fn());
+      const placement = () => (renderer as unknown as { placement: ScenePlacement }).placement;
+      expect([canvas.width, canvas.height]).toEqual([100, 100]);
+      renderer.setStyle("center");
+      frames.at(-1)!(1000);
+      const before = placement();
+      renderer.setPaused(true);
+      const encoders = gpu.encoders;
+      renderer.setDisplayScale(0.5);
+      expect([canvas.width, canvas.height]).toEqual([50, 50]);
+      expect(renderer.screenResolution).toEqual([100, 100]);
+      expect(gpu.encoders).toBeGreaterThan(encoders);
+      const drawn = gpu.encoders;
+      // 一个场景像素对一个布局 CSS 像素：画布缩一半，场景占画布的比例不变（只按 DPR 算会变成两倍大）
+      const after = placement();
+      expect(after.rect).toEqual([0, 0, 50, 50]);
+      expect(after.scale[0]).toBeCloseTo(before.scale[0], 6);
+      expect(after.scale[1]).toBeCloseTo(before.scale[1], 6);
+      // 同值与无效值不理
+      for (const value of [0.5, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) renderer.setDisplayScale(value);
+      expect([canvas.width, canvas.height]).toEqual([50, 50]);
+      expect(gpu.encoders).toBe(drawn);
+      renderer.setDisplayScale(1);
+      expect([canvas.width, canvas.height]).toEqual([100, 100]);
+      renderer.destroy();
+    });
+
+    it("建渲染器时带上显示缩放：直接按缩小后的尺寸建画布", async () => {
+      const { renderer, canvas } = await start(vi.fn(), twoEffects([true, true]), { displayScale: 0.25 });
+      expect([canvas.width, canvas.height]).toEqual([25, 25]);
+      expect(renderer.screenResolution).toEqual([100, 100]);
       renderer.destroy();
     });
   });

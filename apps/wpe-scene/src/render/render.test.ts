@@ -9,6 +9,7 @@ import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { FrameThrottle, PausableClock } from "./clock";
 import { reasonsOf, SceneRenderError } from "./errors";
 import {
+  canvasSize,
   layerLocalMatrix,
   layerQuad,
   scenePlacement,
@@ -223,6 +224,85 @@ describe("场景几何", () => {
   it("离屏目标不超过设备上限", () => {
     expect(sceneTargetSize(1920, 1080, 8192)).toEqual([1920, 1080]);
     expect(sceneTargetSize(16384, 4096, 8192)).toEqual([8192, 2048]);
+  });
+});
+
+describe("画布尺寸（canvasSize）", () => {
+  it("显示缩放为 1、没超上限：与只按 DPR 取整逐位相同", () => {
+    for (const [w, h, dpr] of [
+      [1920, 1080, 1],
+      [1920, 1080, 1.5],
+      [2560, 1440, 1.25],
+      [1366.4, 767.6, 1.75],
+      [5461.33, 1024, 1.5],
+    ]) {
+      const size = canvasSize(w, h, dpr, 1, 8192);
+      expect([size.width, size.height]).toEqual([Math.round(w * dpr), Math.round(h * dpr)]);
+      expect(size.pixelRatio).toBe(dpr);
+    }
+  });
+
+  it("超上限时宽高按同一比例缩，宽高比不变", () => {
+    // shimmering_particles：5760×1080、DPR 1.5 → 8640×1620；旧算法只钳宽得 8192×1620（宽高比 5.06）
+    const wide = canvasSize(5760, 1080, 1.5, 1, 8192);
+    expect([wide.width, wide.height]).toEqual([8192, 1536]);
+    expect(wide.width / wide.height).toBeCloseTo(5760 / 1080, 3);
+    close([wide.pixelRatio], [1.5 * (8192 / 8640)]);
+    // 7860×4404、DPR 1.5：旧算法得 8192×6606（1.24），应保持 1.78
+    const big = canvasSize(7860, 4404, 1.5, 1, 8192);
+    expect(big.width).toBe(8192);
+    expect(big.width / big.height).toBeCloseTo(7860 / 4404, 3);
+    // 竖向超限：按高缩
+    const tall = canvasSize(4000, 5700, 1.5, 1, 8192);
+    expect(tall.height).toBe(8192);
+    expect(tall.width).toBe(Math.round(4000 * 1.5 * (8192 / 8550)));
+    for (const size of [wide, big, tall]) {
+      expect(Math.max(size.width, size.height)).toBeLessThanOrEqual(8192);
+      expect([size.width, size.height].every(Number.isInteger)).toBe(true);
+    }
+  });
+
+  it("取整后正好等于上限的不缩；四舍五入超过上限的才缩", () => {
+    expect(canvasSize(8192.3, 100, 1, 1, 8192)).toEqual({ width: 8192, height: 100, pixelRatio: 1 });
+    const over = canvasSize(8192.6, 100, 1, 1, 8192);
+    expect(over.width).toBe(8192);
+    expect(over.pixelRatio).toBeLessThan(1);
+  });
+
+  it("显示缩放：按实际显示大小 × DPR 渲染", () => {
+    // 预览把 5760×1080 的画布缩到约 1034 CSS 像素宽，DPR 1.5 下约 1551×291 个设备像素
+    const scale = 1034 / 5760;
+    const preview = canvasSize(5760, 1080, 1.5, scale, 8192);
+    expect([preview.width, preview.height]).toEqual([1551, 291]);
+    close([preview.pixelRatio], [1.5 * scale]);
+    // 放大显示时画布也跟着大，但仍不超上限、宽高比不变
+    const zoomed = canvasSize(1920, 1080, 2, 3, 8192);
+    expect(zoomed.width).toBe(8192);
+    expect(zoomed.width / zoomed.height).toBeCloseTo(1920 / 1080, 3);
+  });
+
+  it("每边至少 1 像素", () => {
+    expect(canvasSize(0, 0, 1, 1, 8192)).toMatchObject({ width: 1, height: 1 });
+    expect(canvasSize(1920, 1080, 1, 0.0001, 8192)).toMatchObject({ width: 1, height: 1 });
+    expect(canvasSize(100000, 1, 1, 1, 8192)).toMatchObject({ width: 8192, height: 1 });
+  });
+
+  it("center：一个场景像素对一个布局 CSS 像素，缩小显示时构图与不缩放时相同", () => {
+    // 1920×1080 的桌面画布、800×600 的场景、DPR 1.5
+    const full = canvasSize(1920, 1080, 1.5, 1, 8192);
+    const shown = scenePlacement("center", 800, 600, full.width, full.height, full.pixelRatio);
+    expect(shown.rect).toEqual([840, 360, 1200, 900]);
+    // 预览缩到 1/4 显示：画布 720×405，场景占画布的比例不变
+    const small = canvasSize(1920, 1080, 1.5, 0.25, 8192);
+    const preview = scenePlacement("center", 800, 600, small.width, small.height, small.pixelRatio);
+    expect(preview.rect).toEqual([210, 90, 300, 225]);
+    expect(preview.rect[2] / small.width).toBeCloseTo(shown.rect[2] / full.width, 6);
+    expect(preview.rect[3] / small.height).toBeCloseTo(shown.rect[3] / full.height, 6);
+    // 超上限缩小后同样：5760×1080 的画布、DPR 1.5 被缩到 8192 宽，场景仍占 1/3 宽
+    const wide = canvasSize(5760, 1080, 1.5, 1, 8192);
+    const third = scenePlacement("center", 1920, 1080, wide.width, wide.height, wide.pixelRatio);
+    expect(third.rect[2] / wide.width).toBeCloseTo(1 / 3, 3);
+    expect(third.rect[3]).toBe(wide.height);
   });
 });
 

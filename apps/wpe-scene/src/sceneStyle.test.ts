@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listenSceneStyle, schemeColor, SCENE_STYLE_MESSAGE, SCENE_STYLE_REQUEST } from "./sceneStyle";
+import {
+  listenSceneParent,
+  schemeColor,
+  SCENE_DISPLAY_MESSAGE,
+  SCENE_STYLE_MESSAGE,
+  SCENE_STYLE_REQUEST,
+} from "./sceneStyle";
 
 const color = (value: unknown) => schemeColor(new Map([["schemecolor", { type: "color", value }]]));
 
@@ -25,16 +31,16 @@ describe("父页面通路", () => {
     parent.postMessage.mockReset();
   });
 
-  function install(apply: (style: string) => void) {
+  function install(style: (style: string) => void = () => {}, displayScale: (scale: number) => void = () => {}) {
     vi.stubGlobal("window", {
       parent,
       addEventListener: (_: string, handler: (event: unknown) => void) => (listener = handler),
     });
-    listenSceneStyle(apply);
+    listenSceneParent({ style, displayScale });
   }
 
-  it("启动时请求一次样式", () => {
-    install(() => {});
+  it("启动时请求一次（样式与显示缩放共用这一条请求）", () => {
+    install();
     expect(parent.postMessage).toHaveBeenCalledExactlyOnceWith({ type: SCENE_STYLE_REQUEST }, "*");
   });
 
@@ -50,5 +56,22 @@ describe("父页面通路", () => {
     listener({ isTrusted: true, source: parent, data: { type: "other", style: "center" } });
     listener({ isTrusted: true, source: parent, data: null });
     expect(apply).toHaveBeenCalledOnce();
+  });
+
+  it("显示缩放：只认父窗口发来的可信消息，只收有限正数", () => {
+    const style = vi.fn();
+    const displayScale = vi.fn();
+    install(style, displayScale);
+    const message = (scale: unknown) => ({ type: SCENE_DISPLAY_MESSAGE, scale });
+    listener({ isTrusted: true, source: parent, data: message(0.18) });
+    expect(displayScale).toHaveBeenCalledExactlyOnceWith(0.18);
+    listener({ isTrusted: false, source: parent, data: message(0.5) });
+    listener({ isTrusted: true, source: {}, data: message(0.5) });
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "0.5", null, undefined])
+      listener({ isTrusted: true, source: parent, data: message(bad) });
+    // 样式消息里带 scale 不算显示缩放
+    listener({ isTrusted: true, source: parent, data: { type: SCENE_STYLE_MESSAGE, style: "fit", scale: 0.5 } });
+    expect(displayScale).toHaveBeenCalledOnce();
+    expect(style).toHaveBeenCalledExactlyOnceWith("fit");
   });
 });

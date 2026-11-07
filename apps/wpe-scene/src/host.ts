@@ -74,6 +74,8 @@ function bloomLabel(bloom: SceneBundle["bloom"], enabled: boolean): string {
 /** 每个 iframe 只有一个 SceneHost；属性由垫片推送，实例随 iframe 一同销毁。 */
 export class SceneHost {
   private style: SceneStyle = "fill";
+  /** 父页面量的显示缩放（`sceneStyle.ts` 的协议），渲染器建好前先存着。 */
+  private displayScale = 1;
   private renderer: SceneRenderer | null = null;
   private rendererTask: Promise<SceneRenderer> | null = null;
   private controller: AbortController | null = null;
@@ -414,7 +416,8 @@ export class SceneHost {
       const api = new ScriptApi(realm, {
         bundle: () => this.scriptBundle!,
         state: () => this.scriptState!,
-        screenResolution: () => [this.canvas.width, this.canvas.height],
+        // 按显示缩放为 1 算：预览缩小显示时画布变小，脚本看到的分辨率仍与桌面一致
+        screenResolution: () => this.renderer?.screenResolution ?? [this.canvas.width, this.canvas.height],
         frametime: () => this.renderer?.frameSeconds ?? 0,
         runtime: () => this.renderer?.runtimeSeconds ?? 0,
         timeOfDay: () => daytimeOf(new Date()),
@@ -527,6 +530,11 @@ export class SceneHost {
     this.renderer?.setStyle(style);
   }
 
+  setDisplayScale(scale: number): void {
+    this.displayScale = scale;
+    this.renderer?.setDisplayScale(scale);
+  }
+
   private dropRenderer(): void {
     this.rendererTask = null;
     this.renderer?.destroy();
@@ -535,7 +543,9 @@ export class SceneHost {
 
   private ensureRenderer(): Promise<SceneRenderer> {
     if (this.rendererTask) return this.rendererTask;
+    const displayScale = this.displayScale;
     const task: Promise<SceneRenderer> = SceneRenderer.create(this.canvas, {
+      displayScale,
       beforeFrame: (dt) => {
         if (this.state !== "fallback" && this.scriptState) this.runtime?.frame(dt);
       },
@@ -561,6 +571,8 @@ export class SceneHost {
           throw new DOMException("渲染器已过期", "AbortError");
         }
         this.renderer = created;
+        // 取设备期间父页面可能又推了新的显示缩放
+        if (this.displayScale !== displayScale) created.setDisplayScale(this.displayScale);
         created.setStyle(this.style);
         created.setBackground(schemeColor(this.properties));
         const info = created.adapterInfo;

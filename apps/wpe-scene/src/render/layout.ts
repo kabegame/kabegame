@@ -236,7 +236,8 @@ export interface ScenePlacement {
 
 /**
  * 按壁纸样式算铺放：`fill` 等比盖满（裁溢出）、`fit` 等比放进（留白）、`stretch` 拉满、`center` 一个场景像素对一个
- * CSS 像素（`pixelRatio` 换算成画布像素，放不下就裁），`tile` 等比放进后居中重复。显示不下的部分都居中裁。
+ * 布局 CSS 像素（`pixelRatio` 换算成画布像素，见 {@link CanvasSize}；放不下就裁），`tile` 等比放进后居中重复。
+ * 显示不下的部分都居中裁。
  * 矩形取整：`setViewport` 超出附件尺寸是校验错误，小数加回去可能多出一点。
  */
 export function scenePlacement(
@@ -289,4 +290,42 @@ export function sceneTargetSize(width: number, height: number, maxDimension: num
     h = Math.max(1, Math.round(height));
   const k = Math.min(1, maxDimension / Math.max(w, h));
   return [Math.max(1, Math.floor(w * k)), Math.max(1, Math.floor(h * k))];
+}
+
+/** 画布（上屏目标）的像素尺寸。 */
+export interface CanvasSize {
+  width: number;
+  height: number;
+  /**
+   * 一个布局 CSS 像素（iframe 里的 CSS 像素，桌面上就是桌面的 CSS 像素）对多少画布像素：DPR × 显示缩放，超上限时
+   * 再乘等比缩小的比例。`center` 样式按它铺放（`scenePlacement` 的 `pixelRatio`），预览里的构图才和桌面相同。
+   */
+  pixelRatio: number;
+}
+
+/**
+ * 画布像素尺寸 = 布局尺寸 × DPR × 显示缩放，各边取整、至少 1。显示缩放是父页面把 iframe 缩小显示的比例（预览画布
+ * 按内容尺寸布局、再整体 `scale`），iframe 里量不到，由父页面量好交来，缺省 1。超过设备上限时宽高按同一比例缩
+ * （同 {@link sceneTargetSize}），宽高比不变，不会因为只钳了一边而在「适应」下多出留白。
+ * 没超上限时就是 `round(布局 × DPR × 显示缩放)`；显示缩放为 1 时与只按 DPR 算的结果逐位相同。
+ */
+export function canvasSize(
+  layoutWidth: number,
+  layoutHeight: number,
+  devicePixelRatio: number,
+  displayScale: number,
+  maxDimension: number,
+): CanvasSize {
+  const ratio = devicePixelRatio * displayScale;
+  const w = layoutWidth * ratio,
+    h = layoutHeight * ratio;
+  const width = Math.max(1, Math.round(w)),
+    height = Math.max(1, Math.round(h));
+  if (width <= maxDimension && height <= maxDimension) return { width, height, pixelRatio: ratio };
+  const k = maxDimension / Math.max(w, h);
+  return {
+    width: Math.min(maxDimension, Math.max(1, Math.round(w * k))),
+    height: Math.min(maxDimension, Math.max(1, Math.round(h * k))),
+    pixelRatio: ratio * k,
+  };
 }

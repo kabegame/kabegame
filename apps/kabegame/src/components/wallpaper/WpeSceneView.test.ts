@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { flushPromises, mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WpeSceneView from "./WpeSceneView.vue";
-import { WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
+import { WPE_SCENE_DISPLAY, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
 
 vi.mock("@/api", () => ({ invoke: async () => "file:///D:/host/index.html" }));
 vi.mock("@/utils/logger", () => ({ logger: { warn: vi.fn() } }));
@@ -25,8 +25,19 @@ async function mountView(styleMode = "fit") {
     Object.defineProperty(event, "isTrusted", { value: true });
     window.dispatchEvent(event);
   };
-  return { wrapper, post, fromHost };
+  return { wrapper, post, fromHost, frame };
 }
+
+/** happy-dom 不排版：直接给 iframe 布局尺寸与显示矩形（布局 × 显示缩放）。 */
+function layout(frame: HTMLIFrameElement, width: number, height: number, shown: number) {
+  Object.defineProperty(frame, "offsetWidth", { configurable: true, value: width });
+  Object.defineProperty(frame, "offsetHeight", { configurable: true, value: height });
+  frame.getBoundingClientRect = () => ({ width: width * shown, height: height * shown }) as DOMRect;
+}
+
+const displayMessage = (scale: number) => ({ type: WPE_SCENE_DISPLAY, scale: expect.closeTo(scale, 9) });
+const displayPosts = (post: { mock: { calls: unknown[][] } }) =>
+  post.mock.calls.filter(([data]) => (data as { type?: unknown }).type === WPE_SCENE_DISPLAY);
 
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
@@ -45,5 +56,106 @@ describe("WpeSceneView 样式", () => {
     const { post, fromHost } = await mountView();
     fromHost({ type: WPE_SCENE_STYLE_REQUEST }, window);
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("WpeSceneView 显示缩放", () => {
+  /** 假 ResizeObserver：记录观察的元素，测试里手动回调。 */
+  const observers: { callback: ResizeObserverCallback; targets: Set<Element> }[] = [];
+  /** `window.setInterval` 排的回调（轮询）。 */
+  let intervals: { callback: () => void; delay: number }[] = [];
+
+  beforeEach(() => {
+    observers.splice(0);
+    intervals = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly record: (typeof observers)[number];
+        constructor(callback: ResizeObserverCallback) {
+          this.record = { callback, targets: new Set() };
+          observers.push(this.record);
+        }
+        observe(target: Element) {
+          this.record.targets.add(target);
+        }
+        unobserve(target: Element) {
+          this.record.targets.delete(target);
+        }
+        disconnect() {
+          this.record.targets.clear();
+        }
+      },
+    );
+    vi.spyOn(window, "setInterval").mockImplementation(((callback: () => void, delay: number) => {
+      intervals.push({ callback, delay });
+      return intervals.length;
+    }) as typeof window.setInterval);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const resized = (frame: Element) =>
+    observers.forEach((item) => item.targets.has(frame) && item.callback([], {} as ResizeObserver));
+  const poll = () => intervals.filter((item) => item.delay === 250).forEach((item) => item.callback());
+
+  it("挂载：宿主启动时请求，回样式的同时回显示缩放；量不出来时不推", async () => {
+    const { post, fromHost, frame } = await mountView("fit");
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    // happy-dom 没有布局：量不出来，只回样式
+    expect(post).toHaveBeenCalledExactlyOnceWith({ type: WPE_SCENE_STYLE, style: "fit" }, "*");
+    layout(frame, 5760, 1080, 0.18);
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    expect(post).toHaveBeenLastCalledWith(displayMessage(0.18), "*");
+    // 宿主再请求（例如重载）时即使没变也照回
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    expect(displayPosts(post)).toHaveLength(2);
+  });
+
+  it("iframe 尺寸变化（ResizeObserver）时推新的缩放，没变不推", async () => {
+    const { post, fromHost, frame } = await mountView();
+    // 宿主 iframe 挂上后就在观察它
+    expect(observers.some((item) => item.targets.has(frame))).toBe(true);
+    layout(frame, 5760, 1080, 0.18);
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    layout(frame, 3840, 2160, 0.25);
+    resized(frame);
+    expect(post).toHaveBeenLastCalledWith(displayMessage(0.25), "*");
+    resized(frame);
+    expect(displayPosts(post)).toHaveLength(2);
+  });
+
+  it("只有父级缩放变了（布局不变）：轮询比较，只在值变时推；窗口尺寸变化时也量", async () => {
+    const { post, fromHost, frame } = await mountView();
+    layout(frame, 5760, 1080, 0.18);
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    poll();
+    expect(displayPosts(post)).toHaveLength(1);
+    // 预览弹窗被拉大：transform 变了，布局尺寸不变，ResizeObserver 不触发
+    layout(frame, 5760, 1080, 0.3);
+    poll();
+    expect(post).toHaveBeenLastCalledWith(displayMessage(0.3), "*");
+    // 亚像素抖动不推
+    layout(frame, 5760, 1080, 0.3 * (1 + 1e-6));
+    poll();
+    expect(displayPosts(post)).toHaveLength(2);
+    // 窗口尺寸变化：等这一轮渲染更新（祖先重算 scale）之后再量
+    layout(frame, 5760, 1080, 0.4);
+    window.dispatchEvent(new Event("resize"));
+    expect(displayPosts(post)).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(post).toHaveBeenLastCalledWith(displayMessage(0.4), "*");
+  });
+
+  it("卸载时停掉轮询与观察", async () => {
+    const clear = vi.spyOn(window, "clearInterval");
+    const { wrapper, frame } = await mountView();
+    wrappers.splice(wrappers.indexOf(wrapper), 1);
+    wrapper.unmount();
+    expect(clear).toHaveBeenCalledWith(intervals.findIndex((item) => item.delay === 250) + 1);
+    expect(observers.every((item) => !item.targets.has(frame))).toBe(true);
   });
 });
