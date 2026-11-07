@@ -66,6 +66,8 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         // 壁纸窗口的 Vue 页用 <img> / <video> 显示图库媒体（file://），也要给 iframe 赋 file: src：登记
         // CEF 补丁 05 + 0006，应用页主 frame 的 file: 子资源免检，iframe 导航须落进库里某个网页壁纸目录。
         tauri_runtime_kbcef::allow_app_local_resources(WALLPAPER_LABEL);
+        // 补丁 10：壁纸 iframe 上的 Ctrl+滚轮不缩放；缩放按 host 存，这里和主窗口是同一个 host
+        tauri_runtime_kbcef::disable_wheel_zoom(WALLPAPER_LABEL);
 
         // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
         let builder = WebviewWindowBuilder::new(

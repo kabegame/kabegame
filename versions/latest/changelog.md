@@ -37,6 +37,7 @@
 - 按视频筛选和视频计数在大图库下明显更快；应用启动时会刷新数据库的查询统计，启动页显示「正在优化数据库」，图库越大这一步越久。
 
 ### Fixed
+- 在图库预览的网页或场景壁纸上按住 Ctrl 滚动滚轮，不再把整个应用一起放大缩小；以前这样缩放过的，下次打开时自动恢复原大小。
 - 图库预览场景壁纸时，画面不再多出主题色留边、整体缩小，也不再按远大于显示的尺寸渲染。
 - 「壁纸」导入只添加文件夹、没有勾选自动来源时不再提示「壁纸导入任务创建失败」。
 - 预览视频后切到其它图片或关闭预览，立即释放视频播放器：系统媒体浮窗不再停在已经切走的视频，也不再盖住桌面壁纸正在放的歌。
@@ -133,6 +134,7 @@
 - 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，CLI 与测试不跑，失败只告警），启动页新增 `analyze` 阶段。媒体分类改成绑定模式串的 `images.type GLOB ? AND images.type NOT GLOB ?`，相关 provider 的属性 `kind` 换成 `type_glob` / `type_not_glob`，视频走 `idx_images_type`；格式过滤的 `SUBSTR` 与宽高比的 `+` 实测改写后更慢，保持原样。
 
 ### Fixed
+- 新增 CEF 补丁 10：建窗 `extra_info` 带 `kabegame.disable_wheel_zoom` 的 browser 忽略 Ctrl+滚轮缩放（`AlloyBrowserHostImpl::ContentsZoomChange` 提前返回），主窗口与壁纸窗口登记（`tauri_runtime_kbcef::disable_wheel_zoom`）。子 frame 里没被页面取消的 Ctrl+滚轮会缩放整个 WebContents，主文档的 `wheel` 监听收不到子 frame 的事件；这两个窗口的主 frame 加载完时，缩放不是默认值就复位，清掉以前按 host 存进 profile 的缩放。需要重新构建 CEF（`deno task build:chromium`）。
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 12：`ipc-protocol.js` 的自定义协议 IPC fetch 固定 `referrerPolicy: 'origin'`（Windows 上 https 页面请求 `http://ipc.localhost` 时 CEF 把 `Origin` 发成 `null`，Tauri 回 500 且不回退 postMessage）；`tauri-runtime-kbcef` 的 `cef-ipc` 回退 shim 同样设置。
 - CEF 运行时 IPC 链路拉直：`ipc` / `cef-ipc` 由 `IpcResourceRequestHandler::GetResourceHandler` 直接交出 Tauri 协议 handler；`ipc_origin` 按 initiator 与 CEF 07 的完整文档 URL 算一次 `Origin`，认不出写 `null`。删除 `IpcInitiatorHandler`、`Sec-Kabegame-Initiator-Origin` 与 `pin_file_frame_origin`；回退通道不合法来源统一用占位来源交给 ACL 拒绝。`IpcResourceRequestHandler` 显式让 `on_before_resource_load` 返回 `CONTINUE`：cef-rs 的默认实现是 `RV_CANCEL`，不实现会取消全部 IPC 请求。

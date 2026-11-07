@@ -777,15 +777,35 @@ mod imp {
     wrap_load_handler! {
         pub(crate) struct InitializationLoadHandler {
             on_page_load: Option<PageLoadHandler>,
+            // 登记了不随 Ctrl+滚轮缩放（`page_zoom`，CEF 补丁 10）：主 frame 加载完时把缩放复位
+            reset_zoom: bool,
         }
         impl LoadHandler {
             fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition: TransitionType) {
                 let Some(frame) = frame else { return };
                 emit_page_load(frame, &self.on_page_load, PageLoadEvent::Started);
             }
-            fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _status: ::std::os::raw::c_int) {
-                if let Some(frame) = frame { emit_page_load(frame, &self.on_page_load, PageLoadEvent::Finished); }
+            fn on_load_end(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, _status: ::std::os::raw::c_int) {
+                let Some(frame) = frame else { return };
+                if self.reset_zoom && frame.is_main() == 1 {
+                    reset_stale_zoom(browser);
+                }
+                emit_page_load(frame, &self.on_page_load, PageLoadEvent::Finished);
             }
+        }
+    }
+
+    /// 补丁 10 之前 Ctrl+滚轮在 iframe 上缩放过的，级别按主 frame 的 host 存在 profile 里、重启后仍在：
+    /// 主 frame 加载完（此时 host 已是应用页的）不是默认值就复位，复位会删掉这个 host 的记录。
+    /// 弹窗与 DevTools 沿用本 client，不碰它们。
+    fn reset_stale_zoom(browser: Option<&mut Browser>) {
+        let Some(browser) = browser else { return };
+        if browser.is_popup() != 0 {
+            return;
+        }
+        let Some(host) = browser.host() else { return };
+        if host.zoom_level() != host.default_zoom_level() {
+            host.set_zoom_level(0.0);
         }
     }
 
@@ -1772,7 +1792,13 @@ mod imp {
         // 0005 / 0006 都不授弹窗。弹窗的初始 `about:blank` 空文档会按 Blink 自身规则从 opener 继承
         // `CanDisplay(file:)`，它沿用本窗口的 client，`file:` 子 frame 照样过下面的闸门（弹窗没有
         // 0006 的子资源工厂，自身的 `file:` 子资源加载不了）。
-        for key in crate::file_access::extra_info_keys(&webview_label) {
+        // 不随 Ctrl+滚轮缩放（`kabegame.disable_wheel_zoom`，CEF 补丁 10）同样只进本字典，弹窗不带。
+        let zoom_key = crate::page_zoom::wheel_zoom_disabled(&webview_label)
+            .then_some(crate::page_zoom::DISABLE_WHEEL_ZOOM_EXTRA_INFO_KEY);
+        for key in crate::file_access::extra_info_keys(&webview_label)
+            .into_iter()
+            .chain(zoom_key)
+        {
             if initialization_scripts_extra_info.set_bool(Some(&CefString::from(key)), 1) == 0 {
                 return Err(Error::CreateWebview(Box::new(io::Error::other(format!(
                     "CEF failed to write extra_info key '{key}'"
@@ -1831,7 +1857,10 @@ mod imp {
                 )
             });
         let mut client = ViewsClient::new(
-            InitializationLoadHandler::new(on_page_load),
+            InitializationLoadHandler::new(
+                on_page_load,
+                crate::page_zoom::wheel_zoom_disabled(&webview_label),
+            ),
             display_handler,
             DevToolsKeyboardHandler::new(),
             DisabledContextMenuHandler::new(),

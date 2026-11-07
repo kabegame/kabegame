@@ -505,6 +505,8 @@ let unlistenSettingChange: UnlistenFn | null = null;
 let removeF11Listener: (() => void) | null = null;
 
 // CEF/Chromium 默认会把 Ctrl/Cmd+滚轮解释为页面缩放；仅取消默认行为，不阻止业务侧继续处理事件。
+// 只管得到本文档：落在壁纸 iframe 上的滚轮只派发给子文档，那一路由 CEF 补丁 10 在浏览器侧忽略
+// （`tauri_runtime_kbcef::disable_wheel_zoom`）。
 let removeBrowserZoomWheelListener: (() => void) | null = null;
 const browserZoomWheelOptions: AddEventListenerOptions = { capture: true, passive: false };
 const preventBrowserZoomWheel = (event: WheelEvent) => {

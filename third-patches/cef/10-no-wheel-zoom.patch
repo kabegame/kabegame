@@ -1,0 +1,23 @@
+diff --git a/libcef/browser/alloy/alloy_browser_host_impl.cc b/libcef/browser/alloy/alloy_browser_host_impl.cc
+index fc2ee7ac5b63dab7f5379e7bc0d47f07ed70a37f..e1044e97db252d2ba90df7dcaa0e7429b52b3959 100644
+--- a/libcef/browser/alloy/alloy_browser_host_impl.cc
++++ b/libcef/browser/alloy/alloy_browser_host_impl.cc
+@@ -946,6 +946,18 @@ bool AlloyBrowserHostImpl::DidAddMessageToConsole(
+ }
+ 
+ void AlloyBrowserHostImpl::ContentsZoomChange(bool zoom_in) {
++  // kabegame: an unconsumed Ctrl+wheel in any frame of this WebContents lands
++  // here, including frames whose documents the embedder cannot script (a
++  // page's own preventDefault() never sees events dispatched to a child
++  // frame). Browsers created with the bool extra_info key below ignore it;
++  // CefBrowserHost::SetZoomLevel() and Zoom() are unaffected.
++  if (auto extra_info = browser_info()->extra_info()) {
++    const CefString key("kabegame.disable_wheel_zoom");
++    if (extra_info->HasKey(key) && extra_info->GetType(key) == VTYPE_BOOL &&
++        extra_info->GetBool(key)) {
++      return;
++    }
++  }
+   zoom::PageZoom::Zoom(
+       web_contents(), zoom_in ? content::PAGE_ZOOM_IN : content::PAGE_ZOOM_OUT);
+ }

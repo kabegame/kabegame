@@ -29,6 +29,19 @@
 | [ ] | E5 打开壁纸 · 开关 | Windows，窗口模式 | 关掉「打开壁纸」，再打开 | 关掉时壁纸窗口消失、其余壁纸设置置灰、壁纸操作被拒绝；打开后壁纸恢复，轮播开着的话继续轮播 | 待用户确认 |
 | [ ] | E6 全新安装 | 新数据目录 | 首次启动看设置页 | 「打开壁纸」默认开 | 待用户确认 |
 
+## Ctrl+滚轮缩放（CEF 补丁 10）
+
+2026-11-08 Windows dev。主文档的 Ctrl+滚轮由 `App.vue` 取消，落在壁纸 iframe 上的事件只派发给子文档，没被取消就缩放整个应用，缩放按 host 存进 profile（dev 的 `Default/Preferences` 里 `per_host_zoom_levels.localhost` 为 125%，2026-11-07 23:51 写入）。补丁 10 让主窗口与壁纸窗口忽略这一路，主 frame 加载完时把存下的缩放复位。需要重新构建 CEF。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Z0 检查 | Windows | `deno task patch cef --check`；`check-kabegame --skip vue`；rustfmt / Prettier | 系列能应用；0 error | 2026-11-08：`OK dry-run`；cargo 0 error；改动的文件格式通过 |
+| [ ] | Z1 网页与场景壁纸 iframe | 新 CEF，Windows dev | 预览网页壁纸、场景壁纸，指针放在画面上 Ctrl+滚轮上下各滚几格 | 应用不缩放，画面不滚动 | 待用户确认 |
+| [ ] | Z2 主文档 | 新 CEF | 画廊、设置页上 Ctrl+滚轮 | 不缩放；画廊的 Ctrl+滚轮调列数照常 | 待用户确认 |
+| [x] | Z3 复位存下的缩放 | 新 CEF，dev profile 里 `localhost` 为 125% | 重启 dev | 主窗口回到 100%，`per_host_zoom_levels` 里没有 `localhost` | 2026-11-08：新 CEF（00:26）跑过 dev 后，`Default/Preferences`（00:38）里 `localhost` 的记录已删，畅游的 `x.com` 还在；运行时复位与手动缩回 100% 都会删掉这条，从文件上分不出是哪一种 |
+| [ ] | Z4 畅游窗口 | 新 CEF | 畅游打开外部网站，Ctrl+滚轮 | 照常缩放（没有登记） | 待用户确认 |
+| [ ] | Z5 壁纸窗口 | 新 CEF，窗口模式，桌面是网页壁纸 | 桌面壁纸接收不到滚轮，只看重启后缩放是否 100% | 100% | 待用户确认 |
+
 ## 场景壁纸 P4a：层级、粒子、预览画布尺寸与脚本 API 检查
 
 2026-11-07 Windows dev。P4a 落地图层层级、粒子底座与档 1（12 个模块加 `sprite`）、`instanceoverride` 就地生效与粒子生命周期；同批还有预览画布按显示尺寸渲染（`7c77e48a`）和脚本 API 检查（`c8ebf098`，用到未实现的脚本 API 时整张退回）。说明见 `cocs/wpe/WPE_SCENE.md`「层级（P4a）」「粒子（P4a）」。验收工具在 `ignore/p4/step1/`–`step5/`，WPE 参照在 `A:\p4a\`。

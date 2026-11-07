@@ -169,6 +169,9 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
     tauri_runtime_kbcef::allow_app_local_resources("main"); // 0005：应用页加载 file:（0006 补子资源工厂）
     tauri_runtime_kbcef::allow_file_documents("main"); // 0004：iframe 里的 file 文档 fetch 同目录
 
+    // 补丁 10：iframe 上的 Ctrl+滚轮不缩放整个应用（主文档的由 App.vue 拦，子 frame 的它收不到）
+    tauri_runtime_kbcef::disable_wheel_zoom("main");
+
     let builder =
         WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))
             .title(t!("common.appName"))

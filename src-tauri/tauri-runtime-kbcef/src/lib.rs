@@ -45,6 +45,7 @@ use tauri_runtime::UserEvent;
 #[cfg(target_os = "macos")]
 mod app_mac;
 mod file_access;
+mod page_zoom;
 mod runtime;
 mod subprocess;
 mod webview;
@@ -100,6 +101,14 @@ pub fn allow_app_local_resources(webview_label: &str) {
 pub use file_access::{
     file_path_key, set_file_scope_resolver, FileAccessScope, FileGrant, FileScopeResolver,
 };
+
+/// 建窗前给 `webview_label` 登记「不随 Ctrl+滚轮缩放」：该 label 的 browser 在 `extra_info` 里带
+/// `kabegame.disable_wheel_zoom = true`，CEF 补丁 10 据此忽略任一 frame 里没被页面取消的 Ctrl+滚轮
+/// （主文档的监听收不到子 frame 的滚轮事件，壁纸 iframe 上滚动会缩放整个应用）。主 frame 每次加载完时，
+/// 缩放不是默认值就复位，清掉以前按 host 存进 profile 的缩放。弹窗不带这个键。
+pub fn disable_wheel_zoom(webview_label: &str) {
+    page_zoom::disable_wheel_zoom(webview_label)
+}
 
 // ---- 鼠标注入 ----
 
