@@ -18,6 +18,7 @@ description: 命令行自动抓 Wallpaper Engine 的 RenderDoc 帧：注入启�
 | `rd open <工程> [--wait 秒]` | 切换桌面壁纸。工程可以是目录、`project.json`、工坊 ID 或默认工程名 |
 | `rd open <工程> --window 名字 [--size 1920x1080] [--close-desktop]` | 放进独立窗口 |
 | `rd close [--window 名字]` | 关窗口；不给名字就关桌面壁纸 |
+| `rd control pause\|play\|mute\|unmute` | 发 WPE 的全局控制命令 |
 | `rd capture --out A:\<项目>\<用途> [--frames 10] [--tag 前缀]` | 连续抓帧，文件名 `<前缀>-frame<N>.rdc` |
 | `rd stop [--relaunch]` | 结束自己启动的 WPE，按字节还原 `config.json`。`--relaunch` 再按普通方式启动，并确认桌面壁纸回来 |
 
@@ -83,6 +84,8 @@ rd stop --relaunch
 - **实时画面左上角有 RenderDoc 的叠加文字，** 约 340×40 像素。它不进 `.rdc`，但 PrintWindow 采样能看到，判读点要避开。
 - **被抓的帧本身是长帧，** 序列化要时间，这几帧的 dt 不代表正常帧率。
 - **帧号在换壁纸后重新计数，** 不同壁纸的 `frame<N>` 不能比较。
+- **`pause` 只管桌面壁纸。** `-playInWindow` 窗口不受影响。`open` 会清掉暂停，所以先 `open` 再 `pause`。
+- **桌面壁纸可能不呈现。** 窗口存在、`windows` 是 1，但 `rd status` 的 `presenting` 是 `False`：只在加载时画一帧（帧号 0），之后停住，`capture` 超时。2026-11-07 下午遇到过，`playbackmaximized=run`、`playbackfullscreen=run` 都没用；当时显示器被拔掉了，这很可能是原因，没有验证。`--window` 不受影响，能用窗口就用窗口；抓到帧号 0 也要怀疑是这种情况。
 - **RenderDoc 打开着的 `.rdc` 删不掉**（`Device or resource busy`），先让它打开别的文件。
 
 ## 排障
@@ -92,6 +95,6 @@ rd stop --relaunch
 | `WPE 正在运行` | 请用户从托盘退出，不要自己结束 |
 | `上一次会话没有结束` | 跑 `rd stop` |
 | `会话的 WPE 进程已经不在了` | 跑 `rd stop` 还原配置，再 `rd start` |
-| `只抓到 n / m 帧` | `windows` 为 `null` 表示没有在呈现的窗口，先 `rd open` |
+| `只抓到 n / m 帧` | `windows` 为 `null` 表示没有窗口，先 `rd open`；`presenting` 为 false 见上面的「桌面壁纸可能不呈现」 |
 | `有 N 个可抓窗口` | 见上面的多交换链 |
 | `config.json 里 X 出现 n 次` | `--set` 只支持文件里恰好出现一次的标量键 |

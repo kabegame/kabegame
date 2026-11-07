@@ -191,6 +191,12 @@ def cmd_close(args):
     print('已关闭')
 
 
+def cmd_control(args):
+    session()
+    control(args.action)
+    print('已发送', args.action)
+
+
 def cmd_capture(args):
     state = session()
     out = os.path.abspath(args.out)
@@ -207,10 +213,12 @@ def cmd_capture(args):
     gaps = [b - a for a, b in zip(frames, frames[1:]) if b - a != 1]
     # 文件名和大小看不出抓错了窗口，回放第一张，报绘制数和后备缓冲尺寸
     check = in_renderdoc('inspect', 120, path=saved[0]['path']) if saved else None
-    print(json.dumps({'api': result.get('api'), 'windows': result.get('windows'), 'saved': saved, 'gaps': gaps,
-                      'first_frame': check}, ensure_ascii=False, indent=1))
+    presenting = any(item.get('presenting') == 'True' for item in result.get('apis', []))
+    print(json.dumps({'api': result.get('api'), 'windows': result.get('windows'), 'presenting': presenting, 'saved': saved,
+                      'gaps': gaps, 'first_frame': check}, ensure_ascii=False, indent=1))
     if len(saved) < args.frames:
-        die(f'只抓到 {len(saved)} / {args.frames} 帧。windows 为 0 说明这个进程还没有在呈现的窗口')
+        hint = '目标在呈现，再加大 --timeout' if presenting else 'presenting 为 false：窗口在，但 WPE 没有在画'
+        die(f'只抓到 {len(saved)} / {args.frames} 帧。{hint}')
 
 
 def ui_processes():
@@ -344,6 +352,9 @@ def main():
     close.add_argument('--window')
     close.add_argument('--monitor', type=int, default=0)
     close.set_defaults(run=cmd_close)
+    send = sub.add_parser('control')
+    send.add_argument('action', choices=['pause', 'play', 'mute', 'unmute'])
+    send.set_defaults(run=cmd_control)
     capture = sub.add_parser('capture')
     capture.add_argument('--out', required=True, help=r'目录，约定 A:\<项目>\<用途>')
     capture.add_argument('--frames', type=int, default=10, help='连续抓几帧')
