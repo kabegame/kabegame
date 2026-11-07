@@ -191,6 +191,54 @@ webview:
 
 wpe:
   schemeColor: 主題配色
+  # 键与标签目录的 key 相同，不能翻译或改写
+  tagDirs:
+    genre: 題材
+    rating: 年齡分級
+    feature: 特性
+  # 键是 Steam 标签原文，与图片标签的 key 相同，不能翻译或改写
+  tags:
+    3D: 3D
+    Abstract: 抽象
+    Animal: 動物
+    Anime: 動漫
+    Approved: 已核准
+    Audio responsive: 音訊回應
+    CGI: CGI
+    Cartoon: 卡通
+    Customizable: 可自訂
+    Cyberpunk: 賽博龐克
+    Everyone: 普遍級
+    Fantasy: 奇幻
+    Game: 遊戲
+    Girls: 女生
+    Guys: 男生
+    HDR: HDR
+    Interactive: 互動
+    Landscape: 風景
+    MMD: MMD
+    Mature: 成人級
+    Media Integration: 媒體整合
+    Medieval: 中世紀
+    Memes: 迷因
+    Multi-monitor optimized: 多螢幕最佳化
+    Music: 音樂
+    Nature: 自然
+    No Animation: 無動畫
+    Oversized: 超大體積
+    Pixel art: 像素藝術
+    Puppet Warp: 操控變形
+    Questionable: 家長指導級
+    Relaxing: 放鬆
+    Retro: 復古
+    Sci-Fi: 科幻
+    Sports: 運動
+    Technology: 科技
+    Television: 電視節目
+    Unspecified: 未分類
+    User Shortcut: 使用者捷徑
+    Vehicle: 載具
+    Video Texture: 視訊紋理
 
 crawler:
   toolbar:

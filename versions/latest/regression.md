@@ -1,17 +1,17 @@
 # v4.7.0 regression
 
-## WPE 导入标签：工具标签与年龄分级
+## WPE 导入标签：工具标签、年龄分级与子目录
 
-2026-11-07 Windows dev，界面语言中文。导入时除作者的 `tags` 外，再挂 WPE 显示的其它标签：已订阅工坊壁纸取 `bin/workshopcache.json` 的 Steam 标签，其余从 `project.json` 推导；分类、类型、来源与分辨率不挂。key 是 Steam 原文，名称按语言翻译。脚本 `ignore/wpe-tags-test/run.mjs`：用临时目录走真实导入任务，结束时删掉本次的行、任务和新建标签（标签总数前后都是 5633）。
+2026-11-07 Windows dev，界面语言中文。导入时除作者的 `tags` 外，再挂 WPE 显示的其它标签：已订阅工坊壁纸取 `bin/workshopcache.json` 的 Steam 标签，其余从 `project.json` 推导；分类、类型、来源与分辨率不挂。标签照 WPE 筛选面板分到 `WPE/genre`、`WPE/rating`、`WPE/feature`。key 是 Steam 原文，名称按语言翻译。脚本 `ignore/wpe-tags-test/run.mjs`：用临时目录走真实导入任务，结束时删掉本次的行、任务和新建的标签与目录（标签加目录总数前后都是 5668）。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [x] | T1 工坊壁纸取 Steam 标签 | Windows dev，缓存里有 Mature / Puppet Warp 的壁纸 | 用它的 `project.json` 与工坊 id 导入 | 挂 `Anime`、`Audio responsive`、`Mature`、`Customizable`、`Puppet Warp`、`Video Texture`；没有 `3840 x 2160`、`Wallpaper`、`Scene`、`Workshop` | 2026-11-07：符合，`Puppet Warp` 等 `project.json` 没有的标签也在 |
-| [x] | T2 分级以 Steam 为准 | Windows dev，全库唯一 `Questionable` 那张 | 同 T1 | 挂 `WPE/Questionable`，名称「家长指导级」 | 2026-11-07：符合，这张的 `contentrating` 是 `Everyone`，只读 `project.json` 会标错 |
-| [x] | T3 不在缓存的壁纸走推导 | Windows dev，无工坊 id 的目录 | 导入带音频、`supportsvideoflags: 3`、作者属性、`contentrating: Mature` 的项目 | 挂 `Retro`、`Audio responsive`、`Video Texture`、`Customizable`、`Mature` | 2026-11-07：符合 |
-| [x] | T4 key 稳定、名称翻译 | Windows dev，中文 | 看新建标签的路径与名称 | 路径是英文原文（`WPE/Audio responsive`），名称是中文（音频响应 / 可自定义的 / 视频纹理 / 成人级） | 2026-11-07：符合。五种语言的译名、同语言不重名、不含 `/` 由单测覆盖 |
-| [x] | T5 已有标签不改名 | Windows dev，库里已有 `WPE/Anime` | 同 T1 | 名称保持「Anime」，挂到同一个标签，不新建 | 2026-11-07：符合。要让它们也显示译名，得先删 `WPE` 标签目录再导入 |
-| [ ] | T6 全量重新导入 | Windows，删除全部壁纸与 `WPE` 标签目录 | 重新导入全部壁纸，抽几张与 WPE 界面对照 | 标签与 WPE 一致（不含分辨率），默认壁纸有推导出的标签，声明的类型也显示译名 | 待你重新导入时确认 |
+| [x] | T1 工坊壁纸取 Steam 标签 | Windows dev，缓存里有 Mature / Puppet Warp 的壁纸 | 用它的 `project.json` 与工坊 id 导入 | 挂 `genre/Anime`、`rating/Mature`，`feature/` 下有 `Audio responsive`、`Customizable`、`Puppet Warp`、`Video Texture`；没有 `3840 x 2160`、`Wallpaper`、`Scene`、`Workshop` | 2026-11-07：符合，`Puppet Warp` 等 `project.json` 没有的标签也在 |
+| [x] | T2 分级以 Steam 为准 | Windows dev，全库唯一 `Questionable` 那张 | 同 T1 | 挂 `WPE/rating/Questionable`，名称「家长指导级」 | 2026-11-07：符合，这张的 `contentrating` 是 `Everyone`，只读 `project.json` 会标错 |
+| [x] | T3 不在缓存的壁纸走推导 | Windows dev，无工坊 id 的目录 | 导入带音频、`supportsvideoflags: 3`、作者属性、`contentrating: Mature` 的项目 | 挂 `genre/Retro`、`rating/Mature`，`feature/` 下有 `Audio responsive`、`Video Texture`、`Customizable` | 2026-11-07：符合 |
+| [x] | T4 key 稳定、名称翻译 | Windows dev，中文 | 看新建标签与目录的路径和名称 | 路径是英文原文（`WPE/feature/Audio responsive`），名称是中文；目录显示题材、年龄分级、特性 | 2026-11-07：符合。五种语言的译名、同语言不重名、不含 `/` 由单测覆盖 |
+| [x] | T5 目录名称只在新建时使用 | 单测 | 目录已存在时再传别的名称 | 已有目录不改名，只有最后一段用这个名称 | 2026-11-07：`dir_name_names_only_the_last_new_directory` 通过；插件 JSON 传不进 `dir_name`，失败重试表的旧 JSON 照常读取，也有单测 |
+| [ ] | T6 全量重新导入 | Windows，删除全部壁纸 | 重新导入全部壁纸，在标签树看三个子目录，抽几张与 WPE 界面对照 | 标签与 WPE 一致（不含分辨率），默认壁纸有推导出的标签 | 待你重新导入时确认。旧的平铺标签（如 `WPE/Anime`）不会自动清理，会留成空标签 |
 | [ ] | T7 没有工坊缓存 | 没装 WPE 或缓存读不到 | 手选文件夹导入 | 导入照常，走推导 | 解析失败与空表由单测覆盖，真机没测 |
 
 ## 场景壁纸样式与预览比例

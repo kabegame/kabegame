@@ -7,8 +7,8 @@
 //!   `compatibles_dir` 生成兼容副本；所有播放端（预览、应用背景、壁纸窗口）统一走 `/compatible`。
 //! - 网页行没有可播放媒体，`compatible_path` 留空、宽高留空；`hash` / `size` 取入口 html。
 //!   页面以入口的 `file://` 从原目录加载（桌面壁纸窗口与图库预览同一套运行时目录拦截）。
-//! - 场景行同样没有可播放媒体、宽高留空；`hash` / `size` 取入口 json，入口打包在 `scene.pkg` 里时取包。
-//!   渲染在前端（阶段 3），Rust 不解析场景与包。
+//! - 场景行同样没有可播放媒体；宽高是场景分辨率，透视场景留空；`hash` / `size` 取入口 json，入口打包在
+//!   `scene.pkg` 里时取包。渲染在前端（阶段 3），Rust 只从入口读分辨率。
 //!
 //! 不复制、不转码、不改写用户目录里的任何文件。
 
@@ -28,11 +28,14 @@ use crate::wpe::discover::WpeRootKind;
 use crate::wpe::normalize_local_dir;
 use crate::wpe::project::{read_project, WpeKind, WpeProject, WpeSkip};
 use crate::wpe::scan::collect_selected_dirs;
+use crate::wpe::tags::{
+    read_workshop_tags, tag_dir, tag_dir_name, tag_name, wallpaper_tags, WorkshopTags,
+};
 
 /// 内建任务 / 插件 id。
 pub use crate::wpe::WPE_IMPORT_PLUGIN_ID;
 
-/// 壁纸标签画册的分类段：`WPE/<tag>`。
+/// 壁纸标签画册的根目录：`WPE/<子目录>/<tag>`，子目录见 [`tag_dir`]。
 pub const WPE_LABEL_CATEGORY: &str = "WPE";
 
 fn emit_log(task_id: &str, level: &str, key: &str, params: serde_json::Value) {
@@ -76,23 +79,32 @@ fn parse_extra_dirs(config: &HashMap<String, serde_json::Value>) -> Vec<String> 
         .unwrap_or_default()
 }
 
-/// 把 `project.json` 的 `tags` 转成 `WPE/<tag>` 标签并挂到图片上。
-fn apply_wpe_tags(task_id: &str, project: &WpeProject, image_id: &str) {
-    if project.tags.is_empty() {
+/// 把壁纸的标签（见 [`wallpaper_tags`]）转成 `WPE/<子目录>/<tag>` 标签并挂到图片上。
+fn apply_wpe_tags(
+    task_id: &str,
+    project: &WpeProject,
+    workshop_tags: &WorkshopTags,
+    image_id: &str,
+) {
+    let tags = wallpaper_tags(project, workshop_tags);
+    if tags.is_empty() {
         return;
     }
-    let inputs: Vec<LabelInput> = project
-        .tags
+    let inputs: Vec<LabelInput> = tags
         .iter()
-        .map(|tag| LabelInput {
-            key: Some(tag.clone()),
-            category: Some(WPE_LABEL_CATEGORY.to_string()),
-            name: None,
+        .map(|tag| {
+            let dir = tag_dir(tag);
+            LabelInput {
+                key: Some(tag.clone()),
+                category: Some(format!("{WPE_LABEL_CATEGORY}/{dir}")),
+                name: tag_name(tag),
+                dir_name: tag_dir_name(dir),
+            }
         })
         .collect();
     let (specs, rejected) = validate_labels(&inputs, WPE_IMPORT_PLUGIN_ID);
     for (index, reason) in rejected {
-        let tag = project.tags.get(index).cloned().unwrap_or_default();
+        let tag = tags.get(index).cloned().unwrap_or_default();
         emit_log(
             task_id,
             "warn",
@@ -266,6 +278,7 @@ fn base_image_info(
 fn finish_insert(
     task_id: &str,
     project: &WpeProject,
+    workshop_tags: &WorkshopTags,
     album_id: Option<&str>,
     image: ImageInfo,
 ) -> Result<ImportOutcome, String> {
@@ -274,7 +287,7 @@ fn finish_insert(
     GlobalEmitter::global().emit_images_added(std::slice::from_ref(&inserted));
 
     join_album(task_id, album_id, &image_id)?;
-    apply_wpe_tags(task_id, project, &image_id);
+    apply_wpe_tags(task_id, project, workshop_tags, &image_id);
 
     emit_log(
         task_id,
@@ -296,6 +309,7 @@ fn insert_project_metadata(project: &WpeProject) -> Result<i64, String> {
 async fn import_wpe_video(
     task_id: &str,
     project: &WpeProject,
+    workshop_tags: &WorkshopTags,
     album_id: Option<&str>,
 ) -> Result<ImportOutcome, String> {
     let dir_string = project.dir_string();
@@ -329,7 +343,7 @@ async fn import_wpe_video(
         compatible_path,
         ..base_image_info(project, task_id, metadata_id, hash, size)
     };
-    finish_insert(task_id, project, album_id, image)
+    finish_insert(task_id, project, workshop_tags, album_id, image)
 }
 
 /// 导入一个网页壁纸目录（幂等：已入库只补画册成员）。页面没有可播放媒体，
@@ -337,6 +351,7 @@ async fn import_wpe_video(
 async fn import_wpe_web(
     task_id: &str,
     project: &WpeProject,
+    workshop_tags: &WorkshopTags,
     album_id: Option<&str>,
 ) -> Result<ImportOutcome, String> {
     let dir_string = project.dir_string();
@@ -358,14 +373,15 @@ async fn import_wpe_web(
         media_type: Some("x-wpe/web".to_string()),
         ..base_image_info(project, task_id, metadata_id, hash, size)
     };
-    finish_insert(task_id, project, album_id, image)
+    finish_insert(task_id, project, workshop_tags, album_id, image)
 }
 
-/// 导入一个场景壁纸目录（幂等：已入库只补画册成员）。与网页行一样没有可播放媒体与固有尺寸；
+/// 导入一个场景壁纸目录（幂等：已入库只补画册成员）。与网页行一样没有可播放媒体，宽高是场景分辨率；
 /// `hash` / `size` 取入口 json，创意工坊发布的场景入口打包在 `scene.pkg` 里时取包。
 async fn import_wpe_scene(
     task_id: &str,
     project: &WpeProject,
+    workshop_tags: &WorkshopTags,
     album_id: Option<&str>,
 ) -> Result<ImportOutcome, String> {
     let dir_string = project.dir_string();
@@ -382,23 +398,27 @@ async fn import_wpe_scene(
     let size = std::fs::metadata(&content).ok().map(|meta| meta.len());
     let metadata_id = insert_project_metadata(project)?;
 
+    let (width, height) = project.scene_resolution().unzip();
     let image = ImageInfo {
         media_type: Some("x-wpe/scene".to_string()),
+        width,
+        height,
         ..base_image_info(project, task_id, metadata_id, hash, size)
     };
-    finish_insert(task_id, project, album_id, image)
+    finish_insert(task_id, project, workshop_tags, album_id, image)
 }
 
 /// 按类型分派到对应的导入函数；调用方保证 `project.kind.is_supported()`。
 async fn import_wpe_project(
     task_id: &str,
     project: &WpeProject,
+    workshop_tags: &WorkshopTags,
     album_id: Option<&str>,
 ) -> Result<ImportOutcome, String> {
     match project.kind {
-        WpeKind::Video => import_wpe_video(task_id, project, album_id).await,
-        WpeKind::Web => import_wpe_web(task_id, project, album_id).await,
-        WpeKind::Scene => import_wpe_scene(task_id, project, album_id).await,
+        WpeKind::Video => import_wpe_video(task_id, project, workshop_tags, album_id).await,
+        WpeKind::Web => import_wpe_web(task_id, project, workshop_tags, album_id).await,
+        WpeKind::Scene => import_wpe_scene(task_id, project, workshop_tags, album_id).await,
         kind => Err(format!("暂不支持的壁纸类型：{}", kind.as_str())),
     }
 }
@@ -431,6 +451,7 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
         return Err("没有找到任何 Wallpaper Engine 壁纸目录".to_string());
     }
 
+    let workshop_tags = read_workshop_tags();
     let total = dirs.len();
     run.set_progress(0.0);
     emit_log(
@@ -468,6 +489,7 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
                     match import_wpe_project(
                         &task_id,
                         project,
+                        &workshop_tags,
                         run.params.output_album_id.as_deref(),
                     )
                     .await

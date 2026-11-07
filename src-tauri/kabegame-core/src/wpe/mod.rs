@@ -17,6 +17,8 @@ pub mod properties;
 pub mod recognize;
 #[cfg(feature = "wpe")]
 pub mod scan;
+#[cfg(feature = "wpe")]
+pub mod tags;
 pub mod user_props;
 
 pub use project::{read_project, WpeKind, WpeProject, WpeSkip, WPE_PROJECT_FILE};

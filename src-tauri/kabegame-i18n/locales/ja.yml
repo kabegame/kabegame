@@ -191,6 +191,54 @@ webview:
 
 wpe:
   schemeColor: テーマカラー
+  # 键与标签目录的 key 相同，不能翻译或改写
+  tagDirs:
+    genre: ジャンル
+    rating: 年齢区分
+    feature: 機能
+  # 键是 Steam 标签原文，与图片标签的 key 相同，不能翻译或改写
+  tags:
+    3D: 3D
+    Abstract: 抽象画
+    Animal: 動物
+    Anime: アニメ
+    Approved: 承認済み
+    Audio responsive: オーディオレスポンス
+    CGI: CGI
+    Cartoon: カートゥーン
+    Customizable: カスタマイズ可能
+    Cyberpunk: サイバーパンク
+    Everyone: 全年齢
+    Fantasy: ファンタジー
+    Game: ゲーム
+    Girls: 女の子
+    Guys: 男の子
+    HDR: HDR
+    Interactive: インタラクティブ
+    Landscape: 風景
+    MMD: MMD
+    Mature: 成人向け
+    Media Integration: メディア統合
+    Medieval: 中世
+    Memes: ミーム
+    Multi-monitor optimized: マルチモニタ最適化
+    Music: 音楽
+    Nature: 自然
+    No Animation: アニメーションなし
+    Oversized: 大容量
+    Pixel art: ドット絵
+    Puppet Warp: パペットワープ
+    Questionable: 保護者同伴
+    Relaxing: リラックス
+    Retro: レトロ
+    Sci-Fi: SF
+    Sports: スポーツ
+    Technology: テクノロジー
+    Television: テレビ
+    Unspecified: ジャンル未指定
+    User Shortcut: ユーザーショートカット
+    Vehicle: 乗り物
+    Video Texture: ビデオテクスチャ
 
 crawler:
   toolbar:

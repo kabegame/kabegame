@@ -20,7 +20,7 @@ Kabegame 把整个目录作为一行 `images`：
 | `type` | `x-wpe/video` / `x-wpe/web` / `x-wpe/scene` 都已入库；场景壁纸由 `WallpaperStage` 的 scene 层实时渲染，渲染器还不支持的场景显示作者预览图（见 [WPE_SCENE.md](WPE_SCENE.md)） |
 | `thumbnail_path` | `<目录>/<preview>`，直接引用 WPE 自带预览图，不生成缩略图 |
 | `compatible_path` | 视频行**始终有值**：浏览器能播时就是入口视频本身（`<目录>/<file>` 绝对路径）；解不了的编码在 `compatibles_dir` 生成 H.264 MP4，生成失败也回落到入口视频。**网页行为空**（没有可播放媒体，页面以入口的 `file://` 加载，见第六节） |
-| `hash` / `size` / `width` / `height` | 入口文件的哈希、大小（创意工坊场景的入口打包在 `scene.pkg` 里，取包本身，`WpeProject::content_path`）；视频行带探测尺寸，网页与场景行宽高为空 |
+| `hash` / `size` / `width` / `height` | 入口文件的哈希、大小（创意工坊场景的入口打包在 `scene.pkg` 里，取包本身，`WpeProject::content_path`）；视频行带探测尺寸，场景行是场景分辨率（`WpeProject::scene_resolution`，透视场景为空），网页行为空 |
 | `post_url` | 有 workshop id 时是创意工坊页面地址 |
 | `metadata` | `project.json` 原文（`plugin_id = wpe-import`），供详情展示 |
 
@@ -99,7 +99,7 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 - `is_safe_relative_path`（`wpe/mod.rs`）：`file` / `preview` 的第一道门，规则不随平台变：`\\` 一律按分隔符看，盘符单独拒绝。Unix 的 `Path` 把 `C:\\x` 和 `..\\x` 都当成一个普通文件名，只靠 `Path` 判断会放行。
 - `project.rs`：解析 `project.json`。`type` 归一为 `Video / Web / Scene / Application / Other`，
   `WpeKind::is_supported()`（video、web 与 scene）是「可导入」口径的唯一来源，已支持的类型都要求入口文件存在；
-  场景例外：目录里有 `scene.pkg`（创意工坊发布形态）就算入口存在，Rust 不解析包。没有 `type` 但 `file` 是 `.json` 的
+  场景例外：目录里有 `scene.pkg`（创意工坊发布形态）就算入口存在，这一步不读包。没有 `type` 但 `file` 是 `.json` 的
   （默认项目 audiophile、techno）按场景处理；
   `file` / `preview` 必须是目录内相对路径（拒绝绝对路径与 `..`）；`preview` 缺失或越界归为
   `None`；`workshopid` 缺失时用 `431960/<纯数字目录名>` 回退，便于拼创意工坊链接。
@@ -125,7 +125,51 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 （`import_wpe_project` 按类型分派，dry-run 与结果计数共用一处），其它类型计入「跳过」并写日志。两类共用
 `base_image_info`（来源、预览图、创意工坊链接、metadata）与 `finish_insert`（写库、`images-added`、画册、标签、日志），
 各自只覆盖 `type` / 宽高 / `compatible_path`。`local_path` 已存在时幂等，只补目标画册成员（视频另补缺失的
-`compatible_path`）；`tags` 挂到 `WPE/<tag>` 标签画册（`validate_labels` 校验，非法 tag 逐条写警告）。
+`compatible_path`），不补标签。
+
+### 标签
+
+新增行挂 `WPE/<子目录>/<tag>` 标签（`wpe/tags.rs`，`validate_labels` 校验，非法 tag 逐条写警告）。作者声明的 `tags` 只是一部分：
+「音频响应」「可自定义的」、年龄分级这些是 WPE 发布时打到 Steam 上的，`project.json` 里没有。
+
+| 壁纸 | 标签来源 |
+| --- | --- |
+| 在 `<WPE 安装目录>/bin/workshopcache.json` 里（已订阅的工坊壁纸） | 作者的 `tags` + 缓存里的 Steam 标签，与 WPE 界面一致 |
+| 其余（默认壁纸、我的项目、已退订的工坊目录） | 作者的 `tags` + 从 `project.json` 推导 |
+
+有缓存就不推导：Steam 上的分级可以和本地 `contentrating` 不同（全库唯一的 `Questionable` 那张，`project.json` 写的是
+`Everyone`），发布后才加的属性也不会让 `Customizable` 出现。缓存是 WPE 的内部文件，读不到或格式变了都走推导。
+
+推导规则，已对照本机 141 张工坊壁纸的 Steam 标签：
+
+| 标签 | 条件 | 对照 |
+| --- | --- | --- |
+| `Audio responsive` | `general.supportsaudioprocessing` 为 `true` | 65 / 65，无误判 |
+| `Video Texture` | `general.supportsvideoflags & 1`；`supportsvideo` 不够，有 15 张为真但没有这个标签 | 35 / 35，无误判 |
+| `Customizable` | `general.properties` 里有 `schemecolor` 以外的键 | 103 / 103，误判 1 张（发布后才加属性） |
+| `User Shortcut` | 有 `type` 为 `usershortcut` 的属性 | 1 / 1 |
+| `Everyone` / `Questionable` / `Mature` | `contentrating` | 与 Steam 不同 4 张 |
+
+`Approved`（审核给的，`project.json` 的 `approved` 对不上）与 `HDR`、`3D`、`Puppet Warp`、`Media Integration`（要看场景内容，
+Rust 不解析场景）推导不出来，只有缓存里才有。
+
+分类（`Wallpaper`、`Preset`、`Asset`）、类型（`Scene`、`Video`、`Web`、`Application`）、来源（`Official`、`Workshop`、`Local`）
+与分辨率标签不挂：前三种已由图片类型与导入来源表达，分辨率按需求不要。分辨率的判定照 WPE 自己的写法：含 ` x `，或以
+` resolution`、`Standard Definition` 结尾。
+
+子目录照 WPE 筛选面板的分组：
+
+| 子目录 | 显示名（中文） | 标签 |
+| --- | --- | --- |
+| `genre` | 题材 | 作者声明的 `Anime`、`Game` 等；不认识的标签也归这里，作者只能从题材里选 |
+| `rating` | 年龄分级 | `Everyone`、`Questionable`、`Mature` |
+| `feature` | 特性 | `FEATURE_TAGS`：WPE 的工具标签，如 `Audio responsive`、`Customizable`、`Video Texture`、`Approved` |
+
+**key 与名称**：标签 key 是 Steam 标签原文（`Audio responsive`），子目录 key 是上表的英文，都不随语言变，缓存与推导落到同一个标签，
+写进库后不能再改写：归到另一个子目录就是另一个标签，旧标签留在原处。名称在建标签时取当前语言的 `wpe.tags.<key>` 与 `wpe.tagDirs.<目录>`
+（`kabegame-i18n/locales/*.yml`，键同样是原文，不收录的标签名称用 key）；目录名经 `LabelSpec.dir_name` 传给 `ensure_label_path`。
+不读 WPE 的 `ui_workshop_tags_*`：`Video Texture` 等标签 WPE 没有译文，没装 WPE 时也读不到，「限制级/成人级」带 `/` 不能作画册名。
+名称遵循标签的通用规则「只在创建时使用」：切换语言或重新导入都不改已有标签的名称，要换语言的名称得删掉 `WPE` 标签目录后重新导入。
 
 ## 五、媒体与页面的访问路径（无 HTTP 目录服务）
 
@@ -476,8 +520,8 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   （网格本来就用作者预览图）。
 - 网格（`ImageItem`）对所有 WPE 行固定用缩略形态，不悬停加载原图形态；角标「WPE · 视频」/「WPE · 网页」。
 - 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperPreviewCanvas.vue`：给一块固定尺寸的画布，整体
-  `scale` 进可用区域并居中，没有背景，和单独的图片一样显示。尺寸取内容的固有尺寸（场景的分辨率、退回时预览图的尺寸，
-  经 `contentSize` 传上来）；网页壁纸没有固有尺寸，场景出首帧前也不知道，这时按主显示器逻辑分辨率（`primaryMonitor()`
+  `scale` 进可用区域并居中，没有背景，和单独的图片一样显示。尺寸取图片行的 `width` / `height`（场景入库时写的分辨率）；
+  网页壁纸没有固有尺寸，透视场景读不到，这时按主显示器逻辑分辨率（`primaryMonitor()`
   的 `size / scaleFactor`，失败回退 `window.screen`，模块级缓存），页面按这个尺寸排版。可交互，不走 Panzoom（页面要收指针）、
   不挂 `VideoControls`，控制条只保留全屏。
 - 应用背景层不按类型分支：与预览同走 `ImageContent` 原图形态（`prefer="original"`），网页与场景壁纸都实时渲染、不交互。

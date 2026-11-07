@@ -34,6 +34,9 @@ pub struct LabelInput {
     pub key: Option<String>,
     pub category: Option<String>,
     pub name: Option<String>,
+    /// `category` 最后一段目录的名称，见 [`LabelSpec::dir_name`]。只给内建任务用，插件传不进来。
+    #[serde(skip)]
+    pub dir_name: Option<String>,
 }
 
 /// 校验后的标签。`segments` 是目录各段，`name` 为 `None` 表示未提供。
@@ -42,6 +45,9 @@ pub struct LabelSpec {
     pub segments: Vec<String>,
     pub key: String,
     pub name: Option<String>,
+    /// 最后一段目录的名称，语义同 `name`：只在新建时使用，缺省用段本身。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir_name: Option<String>,
 }
 
 /// 校验单个标签。除了将纯空白名称视为未提供，不会修正输入。
@@ -79,16 +85,17 @@ pub fn validate_label(input: &LabelInput, plugin_id: &str) -> Result<LabelSpec, 
         }
     };
 
-    let name = input
-        .name
-        .as_ref()
-        .filter(|name| !name.trim().is_empty())
-        .cloned();
+    let provided = |name: &Option<String>| {
+        name.as_ref()
+            .filter(|name| !name.trim().is_empty())
+            .cloned()
+    };
 
     Ok(LabelSpec {
         segments,
         key: key.to_string(),
-        name,
+        name: provided(&input.name),
+        dir_name: provided(&input.dir_name),
     })
 }
 
@@ -166,7 +173,24 @@ mod tests {
             key: key.map(str::to_string),
             category: category.map(str::to_string),
             name: name.map(str::to_string),
+            dir_name: None,
         }
+    }
+
+    #[test]
+    fn dir_name_is_not_part_of_the_plugin_input() {
+        let input: LabelInput =
+            serde_json::from_value(serde_json::json!({ "key": "a", "dir_name": "x" })).unwrap();
+        assert_eq!(input.dir_name, None);
+    }
+
+    /// 失败重试表里存的是序列化的 `LabelSpec`：没有目录名的旧行要读得回来，新行不多写字段。
+    #[test]
+    fn label_spec_json_stays_compatible() {
+        let spec: LabelSpec =
+            serde_json::from_str(r#"{"segments":["a"],"key":"b","name":null}"#).unwrap();
+        assert_eq!(spec.dir_name, None);
+        assert!(!serde_json::to_string(&spec).unwrap().contains("dir_name"));
     }
 
     #[test]

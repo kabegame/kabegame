@@ -65,7 +65,8 @@ v031 迁移（`storage/migrations/v031_label_albums.rs`，`init.rs` 同步）：
 | `apply_label_assignments([(spec, image_ids)])` | 批量版（上一行即它的薄包装），整体一个事务：按小写完整路径合并同一叶子；一条 SQL 按 `LOWER(label_path)` 解析全部叶子（必须原样写出部分索引的 `type IN ('label', 'label_dir')` 条件，并用 `CROSS JOIN` 固定先遍历 `json_each`，否则退化成全表扫）；缺失叶子才逐段寻址 / 新建，各占一个 savepoint；最后一条 `INSERT OR IGNORE … SELECT` 把「叶子 × 图片」一次插入，`order` 取当前 `MAX("order")` + 分区内序号（依赖 v040 的 `album_images(album_id, "order")` 索引），`RETURNING` 带回实际新增成员 |
 | `get_image_album_ids(image_id)` | 预览面板用：图片直接所属的全部画册 id，前端按类型过滤 |
 
-插件给的名称**只在创建时使用**，已存在节点永远不改名（用户可能改过）。新建时名称撞同级已有画册，
+插件给的名称**只在创建时使用**，已存在节点永远不改名（用户可能改过）。`LabelSpec.dir_name` 是最后一段目录的名称，语义相同，
+只有内建任务能传（`LabelInput` 上是 `serde(skip)`，插件 JSON 传不进来），缺省时目录名称等于段本身。新建时名称撞同级已有画册，
 依次退化为 `name (key)`、`key`、`key (2)`、`key (3)`…，插件创建永不因撞名失败。
 
 命令接线与 `rename_album` 同一组位置：`kabegame-core/src/commands/album.rs`、
@@ -80,6 +81,8 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
 3. **历史图片**：迁移脚本导出 `provideLabels(input)`，`migrate` 成功后以其输出调用，标签挂到引用该
    metadata 行的所有图片，详见 [../crawler/METADATA_MIGRATION.md](../crawler/METADATA_MIGRATION.md)。
 4. **用户手动**：画册页新建标签/标签目录、拖入文件到标签叶子、预览面板添加 / 新建标签。
+5. **WPE 导入**：内建 `wpe-import` 给新增行挂 `WPE/<子目录>/<tag>`，key 是 Steam 标签原文，名称按当前语言翻译，
+   详见 [../wpe/WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「标签」。
 
 样例：`src-crawler-plugins/plugins/kabegame-plugin-anime-pictures` 把作品 / 角色 / 画师 / 参考 / 物体 tag 映射为
 `anime-pictures/{copyright,character,artist,reference,object}` 下的标签（下载与 `provideLabels` 各一份同规则实现）。

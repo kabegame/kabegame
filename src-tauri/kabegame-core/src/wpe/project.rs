@@ -4,6 +4,8 @@
 
 use serde::Serialize;
 use serde_json::Value;
+use std::fs::File;
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::is_safe_relative_path;
@@ -11,8 +13,13 @@ use super::is_safe_relative_path;
 pub const WPE_PROJECT_FILE: &str = "project.json";
 
 /// 创意工坊发布的场景壁纸把 `scene.json` 与项目资源打进这个包，目录里只剩 `project.json` 与预览图。
-/// Rust 不解析它，包内读取在前端（`apps/kabegame/src/wpe-scene/compile/pkg.ts`）。
+/// 渲染资源由前端读（`apps/wpe-scene/src/compile/pkg.ts`），Rust 只从里面取入口 json，见 [`WpeProject::scene_resolution`]。
 pub const WPE_SCENE_PKG: &str = "scene.pkg";
+
+/// 包里单个 `sizedString`（头部与条目名）的上限，同前端。
+const PKG_MAX_STRING_BYTES: u32 = 64 * 1024;
+/// 入口 json 的上限：防止损坏的包把读取放大到整包。
+const PKG_MAX_ENTRY_BYTES: u32 = 64 * 1024 * 1024;
 
 /// `project.json` 的 `type`：WPE 壁纸类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -102,6 +109,29 @@ impl WpeProject {
         (self.kind == WpeKind::Scene && pkg.is_file()).then_some(pkg)
     }
 
+    /// 场景分辨率：入口 json 的 `general.orthogonalprojection`，入口不是散文件就到 `scene.pkg` 里读。
+    /// 透视场景没有这个字段，读不到时都是 `None`，宽高留空。
+    pub fn scene_resolution(&self) -> Option<(u32, u32)> {
+        if self.kind != WpeKind::Scene {
+            return None;
+        }
+        let file = self.file.as_deref()?;
+        let entry = self.dir.join(file);
+        let bytes = if entry.is_file() {
+            std::fs::read(entry).ok()?
+        } else {
+            read_pkg_entry(&self.dir.join(WPE_SCENE_PKG), file).ok()??
+        };
+        let scene: Value =
+            serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)).ok()?;
+        let projection = scene.get("general")?.get("orthogonalprojection")?;
+        let side = |key: &str| {
+            let value = projection.get(key)?.as_f64()?;
+            (value >= 1.0).then(|| value.round() as u32)
+        };
+        Some((side("width")?, side("height")?))
+    }
+
     /// 预览图的绝对路径。
     pub fn preview_path(&self) -> Option<PathBuf> {
         self.preview.as_ref().map(|preview| self.dir.join(preview))
@@ -113,6 +143,50 @@ impl WpeProject {
             .as_deref()
             .map(|id| format!("https://steamcommunity.com/sharedfiles/filedetails/?id={id}"))
     }
+}
+
+fn read_pkg_u32(reader: &mut impl Read) -> io::Result<u32> {
+    let mut bytes = [0; 4];
+    reader.read_exact(&mut bytes)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_pkg_string(reader: &mut impl Read) -> io::Result<Vec<u8>> {
+    let length = read_pkg_u32(reader)?;
+    if length > PKG_MAX_STRING_BYTES {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let mut bytes = vec![0; length as usize];
+    reader.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// 读 `scene.pkg` 里的一个条目，没有这个条目时是 `None`。格式见 `apps/wpe-scene/src/compile/pkg.ts`：
+/// `sizedString` 头、u32 条目数、条目表（`sizedString` 名、u32 偏移、u32 长度），数据区紧跟在条目表之后，全部小端。
+fn read_pkg_entry(path: &Path, name: &str) -> io::Result<Option<Vec<u8>>> {
+    let mut reader = BufReader::new(File::open(path)?);
+    read_pkg_string(&mut reader)?;
+    let count = read_pkg_u32(&mut reader)?;
+    let mut found = None;
+    for _ in 0..count {
+        let entry = read_pkg_string(&mut reader)?;
+        let offset = read_pkg_u32(&mut reader)?;
+        let length = read_pkg_u32(&mut reader)?;
+        if found.is_none() && entry == name.as_bytes() {
+            found = Some((offset, length));
+        }
+    }
+    let Some((offset, length)) = found else {
+        return Ok(None);
+    };
+    if length > PKG_MAX_ENTRY_BYTES {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let data_start = reader.stream_position()?;
+    reader.seek(SeekFrom::Start(data_start + u64::from(offset)))?;
+    let mut bytes = vec![0; length as usize];
+    reader.read_exact(&mut bytes)?;
+    Ok(Some(bytes))
 }
 
 /// 跳过某个壁纸目录的原因。
@@ -377,6 +451,127 @@ mod tests {
             other => panic!("expected MissingEntry, got {other:?}"),
         }
         fs::remove_dir_all(dir).ok();
+    }
+
+    /// 按 `scene.pkg` 的布局打一个包；第一个条目放在数据区开头以外，确认偏移是相对数据区的。
+    fn pkg(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let sized = |bytes: &[u8]| [&(bytes.len() as u32).to_le_bytes(), bytes].concat();
+        let mut table = sized(b"PKGV0022");
+        table.extend((entries.len() as u32).to_le_bytes());
+        let mut data = Vec::new();
+        for (name, bytes) in entries {
+            table.extend(sized(name.as_bytes()));
+            table.extend((data.len() as u32).to_le_bytes());
+            table.extend((bytes.len() as u32).to_le_bytes());
+            data.extend_from_slice(bytes);
+        }
+        [table, data].concat()
+    }
+
+    fn scene_project(dir: &Path) -> WpeProject {
+        fs::write(
+            dir.join(WPE_PROJECT_FILE),
+            r#"{"file":"scene.json","type":"scene"}"#,
+        )
+        .unwrap();
+        read_project(dir).expect("scene project should parse")
+    }
+
+    const SCENE_JSON: &str = r#"{"general":{"orthogonalprojection":{"width":2200,"height":1080}}}"#;
+
+    #[test]
+    fn scene_resolution_reads_the_loose_entry() {
+        let dir = temp_dir("resolution-loose");
+        fs::write(dir.join("scene.json"), SCENE_JSON).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), Some((2200, 1080)));
+    }
+
+    #[test]
+    fn scene_resolution_tolerates_a_bom() {
+        let dir = temp_dir("resolution-bom");
+        fs::write(dir.join("scene.json"), format!("\u{feff}{SCENE_JSON}")).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), Some((2200, 1080)));
+    }
+
+    #[test]
+    fn scene_resolution_reads_the_packed_entry() {
+        let dir = temp_dir("resolution-pkg");
+        let bytes = pkg(&[
+            ("materials/a.tex", b"binary"),
+            ("scene.json", SCENE_JSON.as_bytes()),
+        ]);
+        fs::write(dir.join(WPE_SCENE_PKG), bytes).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), Some((2200, 1080)));
+    }
+
+    #[test]
+    fn scene_resolution_is_none_when_it_cannot_be_read() {
+        // 透视场景没有 orthogonalprojection
+        let dir = temp_dir("resolution-perspective");
+        fs::write(dir.join("scene.json"), r#"{"general":{"zoom":1}}"#).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), None);
+        // 包里没有入口
+        let dir = temp_dir("resolution-missing");
+        fs::write(dir.join(WPE_SCENE_PKG), pkg(&[("other.json", b"{}")])).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), None);
+        // 包被截断、头部长度离谱
+        let dir = temp_dir("resolution-truncated");
+        let bytes = pkg(&[("scene.json", SCENE_JSON.as_bytes())]);
+        fs::write(dir.join(WPE_SCENE_PKG), &bytes[..bytes.len() - 8]).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), None);
+        let dir = temp_dir("resolution-corrupt");
+        fs::write(dir.join(WPE_SCENE_PKG), u32::MAX.to_le_bytes()).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), None);
+        // 尺寸无效
+        let dir = temp_dir("resolution-zero");
+        fs::write(
+            dir.join("scene.json"),
+            r#"{"general":{"orthogonalprojection":{"width":0,"height":1080}}}"#,
+        )
+        .unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), None);
+    }
+
+    #[test]
+    fn scene_resolution_is_only_for_scenes() {
+        let dir = temp_dir("resolution-web");
+        fs::write(
+            dir.join(WPE_PROJECT_FILE),
+            r#"{"file":"index.html","type":"web"}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("index.html"), "<html>").unwrap();
+        let project = read_project(&dir).expect("web project should parse");
+        assert_eq!(project.scene_resolution(), None);
+    }
+
+    /// 本机语料：`KABEGAME_WPE_ROOT` 指向 WPE 安装目录时才跑，创意工坊的真实 `scene.pkg` 要能读出分辨率。
+    #[test]
+    fn scene_resolution_reads_the_local_corpus() {
+        let Ok(root) = std::env::var("KABEGAME_WPE_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let workshop = root.join("../../workshop/content/431960");
+        let (mut loose, mut packed, mut unread) = (0, 0, 0);
+        for base in [root.join("projects/defaultprojects"), workshop] {
+            for item in fs::read_dir(base).unwrap().flatten() {
+                let Ok(project) = read_project(&item.path()) else {
+                    continue;
+                };
+                if project.kind != WpeKind::Scene {
+                    continue;
+                }
+                let is_packed = project.entry_path().is_some_and(|entry| !entry.is_file());
+                match (project.scene_resolution(), is_packed) {
+                    (Some(_), true) => packed += 1,
+                    (Some(_), false) => loose += 1,
+                    (None, _) => unread += 1,
+                }
+            }
+        }
+        println!("散文件 {loose}，scene.pkg {packed}，读不到 {unread}");
+        assert!(loose > 0 && packed > 0, "{loose} {packed}");
     }
 
     #[test]

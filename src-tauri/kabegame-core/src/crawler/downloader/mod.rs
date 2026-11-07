@@ -1689,6 +1689,7 @@ mod spill_writer_tests {
             segments: vec!["pixiv".to_string()],
             key: "hatsune".to_string(),
             name: None,
+            dir_name: None,
         }];
         assert!(!should_apply_download_labels(&labels, true, false));
         assert!(should_apply_download_labels(&labels, true, true));

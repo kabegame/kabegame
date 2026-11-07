@@ -74,6 +74,12 @@ pub fn translate(key: &str) -> String {
     rust_i18n::t!(key).to_string()
 }
 
+/// 同 [`translate`]，但 key 不存在时返回 `None`（`translate` 回显 `<locale>.<key>`，调用方分不清）。
+#[inline]
+pub fn try_translate(key: &str) -> Option<String> {
+    _rust_i18n_try_translate(&rust_i18n::locale(), key).map(|text| text.into_owned())
+}
+
 #[inline]
 pub fn translate_for_locale(key: &str, locale: &str) -> String {
     let lang = resolve_supported_language(locale).unwrap_or(DEFAULT_LANGUAGE);

@@ -621,7 +621,7 @@ impl Storage {
         let mut parent_id: Option<String> = None;
         let mut created = Vec::new();
 
-        for segment in &spec.segments {
+        for (index, segment) in spec.segments.iter().enumerate() {
             if let Some(existing) =
                 Self::find_label_child_by_key_ci(conn, parent_id.as_deref(), segment)?
             {
@@ -631,8 +631,17 @@ impl Storage {
                 parent_id = Some(existing.id);
                 continue;
             }
-            let name =
-                Self::resolve_new_label_name_ci(conn, parent_id.as_deref(), segment, segment)?;
+            let requested_name = spec
+                .dir_name
+                .as_deref()
+                .filter(|_| index + 1 == spec.segments.len())
+                .unwrap_or(segment);
+            let name = Self::resolve_new_label_name_ci(
+                conn,
+                parent_id.as_deref(),
+                requested_name,
+                segment,
+            )?;
             let album =
                 Self::insert_label_album(conn, segment, &name, parent_id.as_deref(), "label_dir")?;
             parent_id = Some(album.id.clone());
@@ -2352,7 +2361,34 @@ VALUES
             segments: segments.iter().map(|segment| segment.to_string()).collect(),
             key: key.to_string(),
             name: name.map(str::to_string),
+            dir_name: None,
         }
+    }
+
+    #[test]
+    fn dir_name_names_only_the_last_new_directory() {
+        let storage = test_storage();
+        let named = |key: &str, dir_name: &str| LabelSpec {
+            dir_name: Some(dir_name.to_string()),
+            ..label_spec(&["root", "dir"], key, None)
+        };
+        let first = storage.ensure_label_path(&named("a", "目录")).unwrap();
+        let names: Vec<_> = first
+            .created
+            .iter()
+            .map(|album| album.name.as_str())
+            .collect();
+        assert_eq!(names, ["root", "目录", "a"]);
+        assert_eq!(first.created[1].label_path.as_deref(), Some("root/dir"));
+
+        // 已有目录不改名
+        let second = storage.ensure_label_path(&named("b", "别的名字")).unwrap();
+        assert_eq!(second.created.len(), 1);
+        let dir = storage
+            .get_album_by_id(&first.created[1].id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(dir.name, "目录");
     }
 
     #[test]

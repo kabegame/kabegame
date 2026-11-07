@@ -191,6 +191,54 @@ webview:
 
 wpe:
   schemeColor: Scheme Color
+  # 键与标签目录的 key 相同，不能翻译或改写
+  tagDirs:
+    genre: Genre
+    rating: Age rating
+    feature: Features
+  # 键是 Steam 标签原文，与图片标签的 key 相同，不能翻译或改写
+  tags:
+    3D: 3D
+    Abstract: Abstract
+    Animal: Animal
+    Anime: Anime
+    Approved: Approved
+    Audio responsive: Audio responsive
+    CGI: CGI
+    Cartoon: Cartoon
+    Customizable: Customizable
+    Cyberpunk: Cyberpunk
+    Everyone: All ages
+    Fantasy: Fantasy
+    Game: Game
+    Girls: Girls
+    Guys: Guys
+    HDR: HDR
+    Interactive: Interactive
+    Landscape: Landscape
+    MMD: MMD
+    Mature: Mature
+    Media Integration: Media integration
+    Medieval: Medieval
+    Memes: Memes
+    Multi-monitor optimized: Multi-monitor optimized
+    Music: Music
+    Nature: Nature
+    No Animation: No animation
+    Oversized: Oversized
+    Pixel art: Pixel art
+    Puppet Warp: Puppet warp
+    Questionable: Parental guidance
+    Relaxing: Relaxing
+    Retro: Retro
+    Sci-Fi: Sci-Fi
+    Sports: Sports
+    Technology: Technology
+    Television: Television
+    Unspecified: Unspecified genre
+    User Shortcut: User shortcut
+    Vehicle: Vehicle
+    Video Texture: Video texture
 
 crawler:
   toolbar:

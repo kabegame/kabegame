@@ -528,11 +528,13 @@ mod tests {
                 segments: vec!["phase-e-labels".into()],
                 key: "one".into(),
                 name: None,
+                dir_name: None,
             },
             crate::storage::labels::LabelSpec {
                 segments: vec!["phase-e-labels".into()],
                 key: "two".into(),
                 name: None,
+                dir_name: None,
             },
         ];
         storage
