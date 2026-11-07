@@ -131,6 +131,14 @@ describe("场景几何", () => {
     const general = { width: 2200, height: 1080 };
     const layer = { origin: [1082, 550.906, 0], scale: [1.1, 1.1, 1], angles: [0, 0, 0] };
     const mvp = multiply(sceneViewProjection(general), layerModelMatrix(layer));
+    const e = Math.fround(0.15) / 128;
+    const inset = layerQuad([200, 100], [0.75, 0.5], [e, e]).map((vertex) => vertex.texCoord);
+    expect(inset).toEqual([
+      [e, Math.fround(0.5 - e)],
+      [Math.fround(0.75 - e), Math.fround(0.5 - e)],
+      [e, e],
+      [Math.fround(0.75 - e), e],
+    ]);
     const [bl, , , tr] = layerQuad([2048, 1024], [1, 1]).map((v) => ndc(mvp, ...v.position));
     expect(bl[0]).toBeLessThan(-1);
     expect(bl[1]).toBeLessThan(-1);

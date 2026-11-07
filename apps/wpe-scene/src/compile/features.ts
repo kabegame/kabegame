@@ -163,7 +163,7 @@ const OBJECT_FLAGS = [
 /**
  * 支持或中性的模型键。
  * - `autosize`：`size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸（`bundle.ts`），否则不起作用。
- * - `solidlayer`：合成 RT 按图层 `size`（`compositeSize`）；UV 不内缩（`FUN_1401ea310`），我们的图层都不内缩，不用另做。
+ * - `solidlayer`：合成 RT 按图层 `size`（`compositeSize`）；UV 不内缩（`uvInset`）。
  *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
  */
 const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "solidlayer"]);

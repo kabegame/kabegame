@@ -12,6 +12,7 @@ import {
   type LayerPlan,
   type LayerStep,
 } from "./graph";
+import { uvInset } from "./layout";
 import { transformPoint } from "./math";
 import { drawMatrices, pipelineKey, stepPipeline, uploadableTextures } from "./scene";
 
@@ -170,6 +171,38 @@ describe("图层渲染图：合成 RT 计数与上屏 pass", () => {
   it("没有纹理时合成 RT 取图层 size，至少 4", () => {
     expect(compositeSize({ size: [2, 300], solidLayer: false }, undefined)).toEqual([4, 300]);
     expect(compositeSize({ size: [2, 300], solidLayer: false }, textures[0])).toEqual([219, 216]);
+  });
+  it("UV 内缩：上屏的四边形才有，分母是基础纹理的纹理尺寸", () => {
+    const e = [Math.fround(0.15) / 256, Math.fround(0.15) / 256].map(Math.fround);
+    const insets = (plan: ReturnType<typeof planLayer>) =>
+      Object.fromEntries(draws(plan.steps).map((step) => [step.role, [...step.inset]]));
+    expect(insets(planLayer(layer(), textures))).toEqual({ direct: e });
+    expect(insets(planLayer(layer({ effects: [effect([draw(), draw()])] }), textures))).toEqual({
+      base: [0, 0],
+      effect: [0, 0],
+      final: e,
+    });
+    const passthrough = pass({ key: "pt" });
+    expect(insets(planLayer(layer({ colorBlendMode: 12, passthrough }), textures))).toEqual({
+      base: [0, 0],
+      passthrough: e,
+    });
+  });
+  it("UV 内缩：分母按轴取纹理尺寸，不是图像尺寸", () => {
+    const texture = { width: 100, height: 50, textureWidth: 128, textureHeight: 64 };
+    expect(uvInset([600, 200], texture)).toEqual([
+      Math.fround(Math.fround(0.15) / 128),
+      Math.fround(Math.fround(0.15) / 64),
+    ]);
+  });
+  it("UV 内缩：solidlayer 没有，没有纹理时分母是图层 size 的整数部分", () => {
+    const solid = planLayer(layer({ solidLayer: true, effects: [effect([draw()])] }), textures);
+    for (const step of draws(solid.steps)) expect(step.inset).toEqual([0, 0]);
+    expect(uvInset([300.9, 2.5], undefined)).toEqual([
+      Math.fround(Math.fround(0.15) / 300),
+      Math.fround(Math.fround(0.15) / 2),
+    ]);
+    expect(uvInset([0, 0], undefined)).toEqual([0, 0]);
   });
   it("solidlayer 带纹理时合成 RT 也取图层 size", () => {
     expect(compositeSize({ size: [2, 300], solidLayer: true }, textures[0])).toEqual([4, 300]);

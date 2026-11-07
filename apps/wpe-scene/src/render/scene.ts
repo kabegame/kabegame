@@ -827,7 +827,8 @@ export class GpuScene {
     const label = `layer ${layer.id} ${layer.name} ${step.role}`;
 
     // 几何：图层四边形（模型空间、未缩放的 size），或 NDC 全屏四边形
-    const vertices = step.geometry === "fullscreen" ? layerQuad([2, 2], [1, 1]) : layerQuad(layer.size, step.uv);
+    const vertices =
+      step.geometry === "fullscreen" ? layerQuad([2, 2], [1, 1]) : layerQuad(layer.size, step.uv, step.inset);
     const vertexData = program.vertexPacking.pack(vertices);
     const vertexBuffer = this.own(
       device.createBuffer({

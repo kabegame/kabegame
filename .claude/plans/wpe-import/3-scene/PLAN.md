@@ -336,7 +336,7 @@ export interface SceneBundle {
   `programs`（Tint 检查、绑定布局、混合）、`scene`（`GpuScene`）、`renderer`（设备、cover、帧循环、无缝换场景、设备丢失）、`clock`、`errors`（退回原因键）；`WpeSceneView.vue` emit `ready` / `fallback(reasons)`。
   `get_wpe_web_properties` / `set_wpe_web_user_properties` 放宽到 `x-wpe/scene`。开发依赖 `@webgpu/types`（TS 5.9 的 lib.dom 没有 WebGPU 类型）。
 - 与原方案的差异 / 实现选择：
-  - **相机**：正交场景直接用 `ortho(0…w, 0…h)`，不用 `eye`。LWE 的 `ortho·translate(eye)` 与 `lookAt` 恰好抵消；eagleflag 的 eye 是编辑器残留偏移，预览图里画面没有平移。
+  - **相机**：正交场景直接用 `ortho(0…w, 0…h)`，不用 `eye`。LWE 的 `ortho·translate(eye)` 与 `lookAt` 恰好抵消；WPE 是加载末尾把三个值重置，视图为单位阵（L2），结果相同；eagleflag 的 eye 是编辑器残留偏移，预览图里画面没有平移。
   - **Tint 前言**：每个模块开头加 `diagnostic(off, derivative_uniformity);`。HLSL 允许分支里隐式求导，WGSL 不允许；不加时语料里 `effects/depthparallax` 被拒。
   - **`g_Time`**：暂停 / 页面隐藏时冻结，恢复后接着走，换属性重编译不重置；默认上限 60 fps。
   - **多 pass 材质**以 `render:multi-pass` 退回（ping-pong 留到 P2）；只处理 z 轴旋转。

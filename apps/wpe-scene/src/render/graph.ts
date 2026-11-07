@@ -19,7 +19,7 @@
  *   的条件，P2a 的场景没有 fullscreen / 父子层（另报 unsupported），条件恒成立。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
-import { textureUvExtent } from "./layout";
+import { NO_INSET, textureUvExtent, uvInset } from "./layout";
 
 export type TextureRef =
   | { kind: "texture"; index: number }
@@ -53,6 +53,8 @@ export interface DrawStep {
   geometry: Geometry;
   /** 纹理坐标上界：基础 pass 是图像 / 纹理，其余采样合成 RT 或 fbo 全图为 (1, 1)。 */
   uv: [number, number];
+  /** UV 内缩：上屏的四边形才有，见 `uvInset`。 */
+  inset: readonly [number, number];
   /** 混合模式（`programs.ts` 的 `blendState`）；null = 关闭混合、四通道直写。 */
   blending: string | null;
 }
@@ -130,6 +132,8 @@ export function planLayer(
   if (layer.passes.length > 1) reasons.push("render:multi-pass");
   const baseTexture = base.textures[0] === undefined ? undefined : textures[base.textures[0]];
   const uv = textureUvExtent(baseTexture);
+  // WPE 的 `nopadding` 只关直接上屏这一块，`fullscreen`、`passthrough` 模型两块都关；这三个现在都报不支持
+  const screenInset = layer.solidLayer ? NO_INSET : uvInset(layer.size, baseTexture);
   const additive = layer.colorBlendMode === 31;
   const passthrough = isPassthroughBlend(layer.colorBlendMode);
   let snapped = false;
@@ -162,6 +166,7 @@ export function planLayer(
       inputs: staticInputs(base, null),
       geometry: "layer",
       uv,
+      inset: screenInset,
       blending: additive ? "additive" : base.blending,
     });
     return { composite: null, steps, reasons };
@@ -187,6 +192,7 @@ export function planLayer(
     inputs: staticInputs(base, null),
     geometry: "fill",
     uv,
+    inset: NO_INSET,
     blending: null,
   });
 
@@ -246,6 +252,7 @@ export function planLayer(
         inputs,
         geometry: final ? "layer" : "fullscreen",
         uv: [1, 1],
+        inset: final ? screenInset : NO_INSET,
         // 上屏借用基础材质的 blend（B7 `FUN_140209160`），colorBlendMode 31 强制 additive
         blending: final ? (additive ? "additive" : base.blending) : step.pass.blending,
       });
@@ -268,6 +275,7 @@ export function planLayer(
         inputs,
         geometry: "layer",
         uv: [1, 1],
+        inset: screenInset,
         blending: base.blending,
       });
     }

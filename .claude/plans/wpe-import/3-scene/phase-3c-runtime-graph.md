@@ -933,9 +933,9 @@ private alternate: SceneTarget | null = null;
 - **`g_AudioSpectrum*` uniform**：随 W2 做，数据直接用点 0 宿主收到的同一帧。本机报这项的场景都另有 25 项以上阻塞，现在做解锁不了什么。
 - **网页壁纸暂停的计时器**：垫片只冻结 rAF、CSS 动画与媒体元素，靠 `setTimeout` / `setInterval` 驱动的页面还会动。遇到实际样本再看要不要包装计时器。
 - **建好 realm 后才退回的场景**：渲染失败时 realm 与音频订阅都保留，frame 不销毁，Hub 会继续采集到 iframe 消失。没有退订命令，影响小，先不处理。
-- **普通图像图层的 UV 内缩**：WPE 把普通图层的 UV 两端各内缩 `0.15 / 纹理尺寸`（`FUN_1401ede30` 的位 2），`solidlayer`、passthrough、fullscreen 不内缩。我们的图层都不内缩。D54 在没有 effect 的层上量到：128 宽的纹理铺到 600 像素，棋盘竖边左端 −0.60、右端 +0.60 像素，拟合 0.001183，`0.15 / 128` = 0.001172，只量了 x 方向。改它会动所有普通图层的画面，要重新和 WPE 比。
-- **单层 mip 的纹理**：D54 里同一工程纹理只放 1 层 mip 时最大差 47，换完整 mip 链后是 0。`samplerDescriptor` 只有带 mip 才开各向异性，和现象对得上，但没有验证是不是这个原因，本机有多少这样的纹理也没统计。
-- **`model:instanced`**：本机 15 张报这项，模型都是工坊的 `solid_instance_model_*`（`solidlayer` + `instanced`，材质带 `util/white`，绝大多数是 `genericimage4`）。已知它让合成 RT 按纹理尺寸，其余语义没查，要解锁时再看。
+- **单层 mip 的纹理**：D54 里同一工程纹理只放 1 层 mip 时最大差 47，换完整 mip 链后是 0；内缩之后 `t-solid-1m` 没有变化，`t-plain-1m` 只剩 `noeff` 层最大差 55。`samplerDescriptor` 只有带 mip 才开各向异性，和现象对得上，但没有验证是不是这个原因，本机有多少这样的纹理也没统计。
+- **非整数 `size` 的四边形**：WPE 的四边形按截断后的 `size` 建，100.9×60.9 画成 100×60，合成 RT 是 101×61；我们的四边形用原值。本机 92 张有 `size` 的场景里只有 3351163962 有，30 个对象里占 4 个，屏幕偏差最多 0.25 像素，这张现在也不渲染。
+- **`model:instanced`**：本机 15 张报这项，模型都是工坊的 `solid_instance_model_*`（`solidlayer` + `instanced`，材质带 `util/white`，绝大多数是 `genericimage4`）。已知它让合成 RT 按纹理尺寸，其余语义没查，要解锁时再看。`solidlayer` 不内缩不看 `instanced`，而 `SceneLayer.solidLayer` 把它排除了，解锁时要分开。
 - **`thisScene.get/setCameraTransforms`**：WPE 在正交场景里也生效（L2）：改基准字段，下一帧 `lookAt` 进视图矩阵。我们的 `ScriptApi` 没有这两个方法，本机 99 张 0 处（L15）。要做的话 `sceneViewProjection` 不能再只看场景尺寸。
 - **`camera.paths`**：WPE 按路径每帧插值。本机正交场景 0 张，透视 6 张（都是默认工程），`features.ts` 现在不报不支持，随 P5 一起处理。
 - **相机图层**（对象带 `camera` 键）：本机 7 张正交工坊场景有，`origin {script}` 或关键帧动画，`zoom` 绑属性（L15）。这些场景现在报 `object:empty` 退回预览图，不会画错。WPE 里的实际效果没有实验，要解锁这些场景时先测。
@@ -1433,7 +1433,7 @@ WPE 收敛，我们不收敛，而且跟 LDR 一样一直涨。`d40` 在 WPE 里
 
 **WPE 的行为。** 用 REA 重看 p2 报告记录的两处读取（`wallpaper64.exe` 2.8.42）：
 - `FUN_1402091e0`（合成 RT 尺寸）：没有基础纹理时取图层 `size`。有纹理时取图像尺寸，只有 `solidlayer` 或 passthrough、非 fullscreen、非 `instanced` 才改回 `size`。
-- `FUN_1401ea310` → `FUN_1401ede30`（效果链四边形）：普通图层传位 2，UV 内缩 `0.15 / 纹理尺寸`；`solidlayer`、passthrough、fullscreen 传 0，不内缩。D54 在没有 effect 的层上也量到了内缩，不只效果链。
+- `FUN_1401ede30` 的 UV 内缩：`solidlayer`、passthrough、fullscreen 不内缩。图像层实际走的是 `FUN_1402066a0`，不是这里原来写的 `FUN_1401ea310`，规则见 L22。
 
 `assets` 的 `solidlayer.json` 用 `flat` 着色器，不带纹理，走第一条分支，所以和普通图层只差 UV 内缩，而我们本来就不内缩。没有全部搜过 `0x200` 这一位的读取点，只复核了这两处。
 
@@ -1474,3 +1474,54 @@ WPE 收敛，我们不收敛，而且跟 LDR 一样一直涨。`d40` 在 WPE 里
 **没有测到。** 真实工坊样本（本机没有只差这一项的场景）；带纹理 solidlayer 的真实样本（本机 0 个）；`colorBlendMode` 不为 0 的 solidlayer；开泛光、HDR；壁纸窗口（这轮只用预览，`wallpaperDisabled` 测前就是 true）；画布读回（比的是离屏目标）；UV 内缩的 y 方向；13114 本身（有 `COUNT` / `AUDIO`，按要求没有用，开预览也会改它的存储计数）。`solidlayer_depthtest`、`instanced` 不在这次范围内。
 
 **恢复。** 测试行 13262–13265 与任务 `635e6cd9…` 已删，删除前逐个核对过任务 id；用户行 13258–13261 与任务 `c7586edd…` 都在。图片 9903、任务 640、画册 5660，最大 id 13261，与测前相同。当前壁纸 13258，`window`，未暂停，「场景后处理」`disabled` 没有改过，过渡 `none`，设置文件与测前逐键相同。13114 没有开过，`metadataId` 20265，属性不变。预览已关，路由 `/gallery`，`localStorage` 没有测试键。WPE 主进程 36548 没有动，`KBG` 窗口 0 个，WPE 写进 `solidp/` 的 `shaders/blobsSM40` 已删。
+
+### 步骤 6（2026-11-07）
+
+文档由主会话直接写，内容以 `bcb90b90` 的代码为准。
+
+- `cocs/wpe/WPE_SCENE.md`：
+  - 能力表加模型 `solidlayer`。
+  - 「图层渲染图」补 effect 开关运行时可变。
+  - 新增「general 字段、清屏与相机」。
+  - 「泛光与 HDR」补开关与级数就地、HDR 只在加载时判定。
+  - 「属性与快速路径」的重编译原因改成最终形态，并加和 WPE 的对照表。
+  - 「场景脚本」改环境表，补持久存储、音频缓冲、API 与探针，已知差异加上 D37、D46 等。
+- `cocs/README.md` 摘要同步，新增 general 字段一条。
+- `p2-REPORT.md` A4、`PLAN.md` 相机一条按 L7 更正。
+- `changelog.md`：Optimized 加一行，3b 那条补存储半句，含「暂不支持帧率上限与暂停」的那条改成只说帧率上限。计划外补了一条 Added：点 0b 的暂停与清空脚本存储原来没有记录。
+
+**与计划不一致的地方。** 点 8 写的 `registerAudioBuffers`「占位」已经过时，真实音频在步骤 0.5 就接上了，文档按真实行为写。
+
+### UV 内缩（2026-11-07）
+
+用户决定补上。规则见 [p3-script-REPORT.md](p3-script-REPORT.md) L22。
+
+**实现。**
+- `render/layout.ts` 新增 `uvInset`，`layerQuad` 接受内缩量，float32 逐步算。
+- `render/graph.ts` 的绘制步骤新增 `inset`：直接上屏、最后一个 effect 上屏、passthrough 上屏有，基础 pass 和 effect 中间 pass 没有。`solidLayer` 没有。
+- `nopadding`、`fullscreen`、`passthrough` 模型现在都报不支持，没有做判断，解锁时按 L22 补。
+
+**验证。** 宿主 tsc 0 error，Prettier 通过，vitest 只有 `pipeline.test` 的「意外解锁」失败，5 条都是工作区里尚未提交的光照改动带来的。6 个变异都被抓到；第一轮漏了宽高互换，补了非正方形纹理的用例。
+
+18 个哈希里 15 个变了，只有纯色层的 13114 三档不变，和预期一致。
+
+**真机。** 回归表 D55，通过。宿主 `index-CE8NVmzY.js`，WPE PID 36548、`ultra`，工程在 `ignore/p3c/step4/accept/uvp/`，比的是离屏场景目标。
+
+| 工程 | 内缩前最大差 | 内缩后最大差 | 差异像素 |
+|---|---|---|---|
+| `t-plain` | 255 | 1 | 214（主会话用存下的帧重算过） |
+| `t-solid`、`s-real`、`s-kb` | 0 | 0 | 0 |
+
+- x、y 两个方向，NPOT、FreeImage、无纹理普通模型，passthrough 与 `colorBlendMode` 31 各有无 effect，读数都和规则相符，且明显区别于错分母。y 方向 `ylow` 的 `e_v` 实测 0.00948 / 0.00953，规则 0.009375，错分母 0.000586，两边读数相同。
+- 真实场景只比两边都静止的像素：
+
+  | 场景 | 比较区占比 | 平均差 | 最大差 | 差 > 2 |
+  |---|---|---|---|---|
+  | bedroom 12888（超高档） | 71.2% | 0.048 | 1.06 | 0 |
+  | vortex 12889 | 54.1% | 0.055 | 1.39 | 0 |
+  | beach 12880 | 45.3% | 0.285 | 3.36 | 24 |
+  | deep_space 12881 | 21.4% | 0.282 | 8.43 | 13 |
+
+  eagleflag 整张都在动，没有比成。内缩前没有同口径结果，这组数字不能说明改善了多少。
+
+**没有测到。** eagleflag 和所有动画区域；内缩前后的真实场景对比；`nopadding`；桌面与画布读回。±1 级的残余差异（`t-plain` 214 像素、`plain2` 6 像素、`u-blend` 582 像素）原因没查。

@@ -157,7 +157,7 @@ t=[rax+0x3c8]; k=t*[rax+0x3cc]; (t, t-k, k+k, 0.25/(k+1e-5)) → "blend", 4 分�
 - `_rt_FullFrameBuffer`（`R[0x613]`，场景尺寸，scale 1）：HDR → `R16G16B16A16_FLOAT`，否则 `R8G8B8A8_UNORM`（**非 sRGB 格式**）；深度 `D16_UNORM`（`R.flags&1` 时无深度）。
 - 同一套规则用于 `_rt_FullFrameBufferMultiSampled`（开 MSAA 时场景实际画进它，深度 D32F，再 Resolve）、`_rt_MipMappedFrameBuffer`（general bit11 时，带 mip，每帧拷贝后生成 mip）、`_rt_Reflection`（反射，RGBA8）。
 - 场景对象实际画进"当前目标"（无 MSAA 时为后备缓冲），之后才 `CopyResource` 到 `_rt_FullFrameBuffer`。`CopyResource` 要求格式一致 ⇒ HDR 模式下后备缓冲/交换链也必须是 RGBA16F（推断）。
-- clear：每帧 `setClearColor(clearcolor.r, .g, .b, 1.0)`（`*R+0x35c..0x364`，编辑器状态下改用 `R+0x31b0..`），`general.clearenabled`（bit5，默认开）为真时在渲染场景前清屏（颜色+深度）。clearcolor 与图层颜色同处 sRGB 编码空间，HDR 下不做转换。
+- clear：每帧 `setClearColor(clearcolor.r, .g, .b, 1.0)`（`*R+0x35c..0x364`；原写「编辑器状态下改用 `R+0x31b0..`」不对，切换条件是 `alignment`，值是 `schemecolor`，见 p3-script-REPORT L3），`general.clearenabled`（bit5，默认开）为真时在渲染场景前清屏（颜色+深度）。clearcolor 与图层颜色同处 sRGB 编码空间，HDR 下不做转换。
 - 渲染标志 `0x2000` 与 general `hdr`（bit10）的对应关系：未找到设置代码（推断：`hdr` 为真且设备/设置允许时置位）。另：general 标志字的构造默认值为 `0x26`（bloom 位与 clearenabled 位默认置 1），即 **JSON 缺 `bloom` 键时推断为开**。
 
 **证据**：`FUN_14017f1b0`（`_rt_FullFrameBuffer` 创建：`colorFmt = HDR?0xf:1`，`depth = 0x16 + 4*(flags&1)`）；`FUN_140181af0`（场景加载：MSAA/Mip/Reflection RT，ev_75384…）；`FUN_14017fa70` 帧首 clear 色；`FUN_140183550`（`clearenabled` → device clear）；默认标志 `0x140186d20: mov dword [..+0xe0], 0x26`。
@@ -254,7 +254,7 @@ mov [rdx+0x1f2], base[0x1f2] ; mov [rdx+0x1f3], base[0x1f3]
   - `true`：基础 pass 用图层世界四边形（`layer[0x5d]`）+ 世界变换画基础材质进合成 RT ⇒ 合成 RT 的初始内容是**图层背后的场景快照**，效果链作用于背景；
   - `false`：先把合成 RT 清成 (0,0,0,0)，然后（基础 pass 之后）把**子图层**画进合成 RT（期间切换一个设备状态 `vfunc_0xe8(1)`），即"只合成子层"的组；无效果直接上屏时 blend 被强制为 translucent；加载时标记为透明排序对象。
   - 普通图像模型（如 razer_vortex 的 `models/vortex.json`，只有 `autosize`）上 `copybackground:true` **没有渲染效果**。
-- `solid`：在图层渲染路径中未发现任何读取（字节级搜索 `test/bt [reg+0x120], bit13` 无结果）。推断与鼠标拾取/交互（光标命中）有关，不影响画面。模型级 `solidlayer`（不同于 `solid`）影响几何与尺寸（`FUN_1401ea310`、`FUN_1402091e0`）。（2026-11-07 复核：实际只影响带纹理时的合成 RT 尺寸和效果链四边形的 UV 内缩，见 phase-3c「`solidlayer` 收尾」。）
+- `solid`：在图层渲染路径中未发现任何读取（字节级搜索 `test/bt [reg+0x120], bit13` 无结果）。推断与鼠标拾取/交互（光标命中）有关，不影响画面。模型级 `solidlayer`（不同于 `solid`）影响几何与尺寸（`FUN_1401ea310`、`FUN_1402091e0`）。（2026-11-07 复核：实际只影响带纹理时的合成 RT 尺寸和上屏四边形的 UV 内缩，见 p3-script-REPORT L22。）
 
 **证据**：属性表 `FUN_1401ee520`（ev_03697e84…）+ 位访问器 `FUN_1401ef350`（0x40）、`FUN_14019bb40`（0x4000）、`FUN_14019bd70`（0x8000）（ev_726f7f52…）；`solid` 注册于 `0x1401e1286`，访问器 `FUN_14019c3f0`（`btr/bts edx,13`）；模型解析 `FUN_1401fac50`（ev_3c681665…）；`FUN_140207b50` 第 277–300 与 432–460 行；`FUN_140208670` 第 55–60 行。
 

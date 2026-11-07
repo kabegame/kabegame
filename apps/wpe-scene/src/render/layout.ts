@@ -18,6 +18,9 @@ import { multiply, orthographic, rotationZ, scaling, translation, type Mat4 } fr
 /** 正交场景的深度范围：图层 z 一般为 0，映射到深度 0.5。 */
 const ORTHO_DEPTH = 10000;
 
+/** 不内缩。 */
+export const NO_INSET: readonly [number, number] = [0, 0];
+
 export interface QuadVertex {
   position: [number, number, number];
   texCoord: [number, number];
@@ -36,18 +39,38 @@ export function textureUvExtent(
 }
 
 /**
- * 图层四边形，三角形带顺序：左下、右下、左上、右上。顶点在模型空间（中心为原点，未缩放的 `size`），
- * 图像顶边对应 v = 0（纹理第 0 行），与 LWE 的 `texcoordCopy` 相同。
+ * 上屏四边形的 UV 内缩（WPE `FUN_1401ede30` 的位 2）：两端各缩 `0.15 / 尺寸`，float32 逐步算。分母是基础纹理的纹理尺寸，
+ * 走合成路径时也是，不是合成 RT；没有纹理时是图层 size 的整数部分。
  */
-export function layerQuad(size: readonly number[], uv: [number, number]): QuadVertex[] {
+export function uvInset(
+  size: readonly number[],
+  texture: Pick<SceneTexture, "textureWidth" | "textureHeight"> | undefined,
+): [number, number] {
+  const denominators = texture
+    ? [texture.textureWidth, texture.textureHeight]
+    : [Math.trunc(size[0] ?? 0), Math.trunc(size[1] ?? 0)];
+  const [u, v] = denominators.map((value) => (value > 0 ? Math.fround(Math.fround(0.15) / value) : 0));
+  return [u, v];
+}
+
+/**
+ * 图层四边形，三角形带顺序：左下、右下、左上、右上。顶点在模型空间（中心为原点，未缩放的 `size`），
+ * 图像顶边对应 v = 0（纹理第 0 行），与 LWE 的 `texcoordCopy` 相同。`inset` 见 {@link uvInset}。
+ */
+export function layerQuad(
+  size: readonly number[],
+  uv: [number, number],
+  [left, top]: readonly [number, number] = NO_INSET,
+): QuadVertex[] {
   const hw = (size[0] ?? 0) / 2,
     hh = (size[1] ?? 0) / 2;
-  const [u, v] = uv;
+  const right = Math.fround(Math.fround(uv[0]) - left);
+  const bottom = Math.fround(Math.fround(uv[1]) - top);
   return [
-    { position: [-hw, -hh, 0], texCoord: [0, v] },
-    { position: [hw, -hh, 0], texCoord: [u, v] },
-    { position: [-hw, hh, 0], texCoord: [0, 0] },
-    { position: [hw, hh, 0], texCoord: [u, 0] },
+    { position: [-hw, -hh, 0], texCoord: [left, bottom] },
+    { position: [hw, -hh, 0], texCoord: [right, bottom] },
+    { position: [-hw, hh, 0], texCoord: [left, top] },
+    { position: [hw, hh, 0], texCoord: [right, top] },
   ];
 }
 
