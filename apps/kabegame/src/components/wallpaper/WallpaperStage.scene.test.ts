@@ -12,7 +12,7 @@ const stub = vi.hoisted(() => ({
     aliveAtMount: number;
     unmounted: boolean;
     props: { styleMode?: string };
-    emit: (event: "ready" | "fallback" | "alive" | "size", ...args: unknown[]) => void;
+    emit: (event: "ready" | "fallback" | "alive", ...args: unknown[]) => void;
   }[],
 }));
 
@@ -27,14 +27,14 @@ vi.mock("./WpeSceneView.vue", async () => {
         volume: Number,
         interactive: Boolean,
       },
-      emits: ["ready", "fallback", "alive", "size"],
+      emits: ["ready", "fallback", "alive"],
       setup(props, { emit }) {
         const record = {
           id: (props.target as WallpaperTarget).id,
           aliveAtMount: stub.scenes.filter((scene) => !scene.unmounted).length,
           unmounted: false,
           props,
-          emit: emit as (event: "ready" | "fallback" | "alive" | "size", ...args: unknown[]) => void,
+          emit: emit as (event: "ready" | "fallback" | "alive", ...args: unknown[]) => void,
         };
         stub.scenes.push(record);
         onBeforeUnmount(() => {
@@ -205,21 +205,6 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     await settle();
     expect(stub.scenes).toHaveLength(1);
     expect(stub.scenes[0].props.styleMode).toBe("center");
-  });
-
-  it("上传内容尺寸：实时是场景分辨率，退回是预览图尺寸", async () => {
-    const wrapper = mountStage(scene("a"));
-    await settle();
-    stub.scenes[0].emit("size", { width: 2560, height: 1440 });
-    expect(wrapper.emitted("contentSize")).toEqual([[{ width: 2560, height: 1440 }]]);
-    stub.scenes[0].emit("fallback", ["object:particle"]);
-    await settle();
-    const img = previewImg(wrapper).element as HTMLImageElement;
-    Object.defineProperty(img, "naturalWidth", { value: 800 });
-    Object.defineProperty(img, "naturalHeight", { value: 600 });
-    loadPreview(wrapper);
-    await settle();
-    expect(wrapper.emitted("contentSize")?.at(-1)).toEqual([{ width: 800, height: 600 }]);
   });
 
   it("退回的预览图按壁纸样式显示，tile 时重复", async () => {

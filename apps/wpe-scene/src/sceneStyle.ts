@@ -2,15 +2,13 @@ import type { UserProperty } from "./compile/bindings";
 import type { SceneStyle } from "./render/layout";
 
 /**
- * 场景宿主与父页面（`WpeSceneView`）的 postMessage 协议：
- * - 宿主启动时发 `{ type: SCENE_STYLE_REQUEST }`，父页面回 `{ type: SCENE_STYLE_MESSAGE, style }`，样式变化时再主动推；
- * - 出首帧时宿主发 `{ type: SCENE_SIZE_MESSAGE, width, height }`（场景分辨率），预览按它定比例。
+ * 场景宿主与父页面（`WpeSceneView`）的 postMessage 协议：宿主启动时发 `{ type: SCENE_STYLE_REQUEST }`，
+ * 父页面回 `{ type: SCENE_STYLE_MESSAGE, style }`，样式变化时再主动推。
  *
  * 宿主不能 import 应用的代码，字面量另写一份在 `apps/kabegame/.../wpeSceneStyle.ts`，那边的测试读这个文件比对。
  */
 export const SCENE_STYLE_REQUEST = "kabegame:wpe-scene-style-request";
 export const SCENE_STYLE_MESSAGE = "kabegame:wpe-scene-style";
-export const SCENE_SIZE_MESSAGE = "kabegame:wpe-scene-size";
 
 const SCENE_STYLES: readonly string[] = ["fill", "fit", "stretch", "center", "tile"] satisfies SceneStyle[];
 
@@ -36,8 +34,4 @@ export function listenSceneStyle(apply: (style: SceneStyle) => void): void {
     if (SCENE_STYLES.includes(data.style)) apply(data.style as SceneStyle);
   });
   window.parent.postMessage({ type: SCENE_STYLE_REQUEST }, "*");
-}
-
-export function postSceneSize(width: number, height: number): void {
-  window.parent.postMessage({ type: SCENE_SIZE_MESSAGE, width, height }, "*");
 }

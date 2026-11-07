@@ -2,7 +2,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WpeSceneView from "./WpeSceneView.vue";
-import { WPE_SCENE_SIZE, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
+import { WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
 
 vi.mock("@/api", () => ({ invoke: async () => "file:///D:/host/index.html" }));
 vi.mock("@/utils/logger", () => ({ logger: { warn: vi.fn() } }));
@@ -32,7 +32,7 @@ afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
 });
 
-describe("WpeSceneView 样式与尺寸", () => {
+describe("WpeSceneView 样式", () => {
   it("宿主请求时回当前样式，样式变化时主动推", async () => {
     const { wrapper, post, fromHost } = await mountView("fit");
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
@@ -41,17 +41,9 @@ describe("WpeSceneView 样式与尺寸", () => {
     expect(post).toHaveBeenLastCalledWith({ type: WPE_SCENE_STYLE, style: "center" }, "*");
   });
 
-  it("把宿主报的场景分辨率发出去", async () => {
-    const { wrapper, fromHost } = await mountView();
-    fromHost({ type: WPE_SCENE_SIZE, width: 2560, height: 1440 });
-    expect(wrapper.emitted("size")).toEqual([[{ width: 2560, height: 1440 }]]);
-  });
-
   it("别的窗口发来的消息不理", async () => {
-    const { wrapper, post, fromHost } = await mountView();
+    const { post, fromHost } = await mountView();
     fromHost({ type: WPE_SCENE_STYLE_REQUEST }, window);
-    fromHost({ type: WPE_SCENE_SIZE, width: 2560, height: 1440 }, window);
     expect(post).not.toHaveBeenCalled();
-    expect(wrapper.emitted("size")).toBeUndefined();
   });
 });

@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  listenSceneStyle,
-  postSceneSize,
-  schemeColor,
-  SCENE_SIZE_MESSAGE,
-  SCENE_STYLE_MESSAGE,
-  SCENE_STYLE_REQUEST,
-} from "./sceneStyle";
+import { listenSceneStyle, schemeColor, SCENE_STYLE_MESSAGE, SCENE_STYLE_REQUEST } from "./sceneStyle";
 
 const color = (value: unknown) => schemeColor(new Map([["schemecolor", { type: "color", value }]]));
 
@@ -57,11 +50,5 @@ describe("父页面通路", () => {
     listener({ isTrusted: true, source: parent, data: { type: "other", style: "center" } });
     listener({ isTrusted: true, source: parent, data: null });
     expect(apply).toHaveBeenCalledOnce();
-  });
-
-  it("把场景分辨率发给父窗口", () => {
-    install(() => {});
-    postSceneSize(1920, 1080);
-    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: SCENE_SIZE_MESSAGE, width: 1920, height: 1080 }, "*");
   });
 });

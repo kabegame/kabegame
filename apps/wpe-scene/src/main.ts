@@ -1,6 +1,6 @@
 import { SceneHost, type SceneProperty } from "./host";
 import { createReporter } from "./report";
-import { listenSceneStyle, postSceneSize } from "./sceneStyle";
+import { listenSceneStyle } from "./sceneStyle";
 import { installSceneDevProbe } from "./dev/install";
 
 declare global {
@@ -16,11 +16,7 @@ const params = new URLSearchParams(location.search);
 const instance = params.get("kbInstance") ?? "";
 const canvas = document.querySelector<HTMLCanvasElement>("#scene-canvas");
 if (!canvas) throw new Error("场景画布不存在");
-const host = new SceneHost(canvas, {
-  imageId: params.get("kbScene"),
-  report: createReporter(instance),
-  onSceneSize: postSceneSize,
-});
+const host = new SceneHost(canvas, { imageId: params.get("kbScene"), report: createReporter(instance) });
 listenSceneStyle((style) => host.setStyle(style));
 
 window.wallpaperPropertyListener = {

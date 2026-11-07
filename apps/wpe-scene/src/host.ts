@@ -120,12 +120,7 @@ export class SceneHost {
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly options: {
-      imageId: string | null;
-      report: SceneReporter;
-      /** 出首帧时告诉父页面场景分辨率（预览按它定比例）。 */
-      onSceneSize?: (width: number, height: number) => void;
-    },
+    private readonly options: { imageId: string | null; report: SceneReporter },
   ) {
     this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
@@ -690,7 +685,6 @@ export class SceneHost {
           `场景壁纸 ${this.options.imageId} 开始渲染：${bundle.layers.length} 层、${bundle.programs.length} 个程序，` +
             `${detail}，用时 ${Math.round(performance.now() - started)} ms`,
         );
-        this.options.onSceneSize?.(bundle.general.width, bundle.general.height);
         this.options.report.ready();
       } else
         this.options.report.debug(

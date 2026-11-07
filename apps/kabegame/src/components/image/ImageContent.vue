@@ -74,7 +74,6 @@
         @ready="onWallpaperReady"
         @error="onWallpaperError"
         @scene-live="emit('sceneLive', $event)"
-        @content-size="emit('contentSize', $event)"
       />
 
       <!-- 视频 -->
@@ -111,7 +110,6 @@ import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import WpeWallpaperContent from "../wallpaper/WpeWallpaperContent.vue";
-import type { WallpaperContentSize } from "../wallpaper/types";
 import {
   displayImageMimeType,
   isVideoMediaType,
@@ -291,7 +289,6 @@ const emit = defineEmits<{
   error: [];
   videoPlayFail: [];
   sceneLive: [live: boolean];
-  contentSize: [size: WallpaperContentSize];
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());

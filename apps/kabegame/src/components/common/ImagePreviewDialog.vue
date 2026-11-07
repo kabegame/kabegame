@@ -282,7 +282,6 @@
                 interactive
                 @ready="handlePreviewReady"
                 @scene-live="previewSceneLive = $event"
-                @content-size="previewWallpaperSize = $event"
               />
             </WallpaperPreviewCanvas>
           </div>
@@ -435,7 +434,6 @@ import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
 import WallpaperPreviewCanvas, { type CoverRegionScope } from "../wallpaper/WallpaperPreviewCanvas.vue";
-import type { WallpaperContentSize } from "../wallpaper/types";
 import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageBasicInfoPanel, {
@@ -583,8 +581,11 @@ const previewSceneLive = ref(false);
 const previewCoverReady = computed(() =>
   isWpeSceneType(previewImage.value?.type) ? previewSceneLive.value : previewWallpaperReady.value,
 );
-/** 预览这一份的固有尺寸，画布按它定比例；切图时复位 */
-const previewWallpaperSize = ref<WallpaperContentSize | null>(null);
+/** 场景的分辨率，画布按它定比例；网页壁纸没有宽高，透视场景读不到 */
+const previewWallpaperSize = computed(() => {
+  const image = previewImage.value;
+  return image?.width && image?.height ? { width: image.width, height: image.height } : null;
+});
 const wallpaperCanvasRef = ref<InstanceType<typeof WallpaperPreviewCanvas> | null>(null);
 /** 预览的封面截取来源：主窗口里的画布，用户看到什么就截到什么。点击时才取画布，区域也是那时才量 */
 const previewCoverSource: CoverRegionScope = (run) => {
@@ -1043,7 +1044,6 @@ watch(currentId, (id) => {
   wallpaperPaused.value = false;
   previewWallpaperReady.value = false;
   previewSceneLive.value = false;
-  previewWallpaperSize.value = null;
   // 上层清空 image 即关闭：停播放
   if (!id) {
     stopSlideshow();

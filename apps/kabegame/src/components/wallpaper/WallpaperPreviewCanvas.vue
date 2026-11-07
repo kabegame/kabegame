@@ -33,14 +33,13 @@ function nextFrame(): Promise<void> {
 <script setup lang="ts">
 /**
  * 预览弹窗里的壁纸画布（纯布局）：给插槽一块固定尺寸的画布，再整体 `scale` 进可用区域并居中，没有背景，
- * 看起来和单独一张图一样。尺寸取 `contentSize`，也就是场景的分辨率或退回时预览图的尺寸；网页壁纸没有固有尺寸，
- * 场景也要出首帧才知道，这时按主显示器逻辑分辨率，页面照这个尺寸排版。画布本身不拦指针事件。
+ * 看起来和单独一张图一样。尺寸取 `contentSize`，也就是图片行的宽高；网页壁纸没有固有尺寸，透视场景读不到分辨率，
+ * 这时按主显示器逻辑分辨率，页面照这个尺寸排版。画布本身不拦指针事件。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { primaryMonitor } from "@tauri-apps/api/window";
-import type { WallpaperContentSize } from "./types";
 
-const props = defineProps<{ contentSize?: WallpaperContentSize | null }>();
+const props = defineProps<{ contentSize?: { width: number; height: number } | null }>();
 
 function fallbackDesktopSize(): { width: number; height: number } {
   return {

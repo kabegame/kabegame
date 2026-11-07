@@ -9,16 +9,16 @@
  * - 暂停与音量：回应本 iframe 里垫片的音量请求（`wpeWebVolume.ts` 的协议，消息带 `paused`，垫片转成
  *   `setPaused`），`volume` / `paused` 变化时主动推。第一次收到请求说明垫片已在跑，emit `alive`：
  *   壁纸窗口从此把 ping 交给宿主里的垫片应答。
- * - 样式与尺寸：`styleMode` 经 `wpeSceneStyle.ts` 的协议交给宿主，由它铺放；出首帧时宿主报场景分辨率，emit `size`。
+ * - 样式：`styleMode` 经 `wpeSceneStyle.ts` 的协议交给宿主，由它铺放。
  * - 指针：`interactive` 时 iframe 接收指针事件，宿主自己算 `g_PointerPosition`。
  */
 import { invoke } from "@/api";
 import { logger } from "@/utils/logger";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { Mode, WallpaperContentSize, WallpaperTarget } from "./types";
+import type { Mode, WallpaperTarget } from "./types";
 import { WEB_SANDBOX } from "./webSandbox";
-import { isWpeSceneStyleRequest, wpeSceneSizeOf, wpeSceneStyleMessage } from "./wpeSceneStyle";
+import { isWpeSceneStyleRequest, wpeSceneStyleMessage } from "./wpeSceneStyle";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 
 const props = withDefaults(
@@ -31,7 +31,7 @@ const props = withDefaults(
   }>(),
   { paused: false, interactive: false },
 );
-const emit = defineEmits<{ ready: []; fallback: [reasons: string[]]; alive: []; size: [size: WallpaperContentSize] }>();
+const emit = defineEmits<{ ready: []; fallback: [reasons: string[]]; alive: [] }>();
 const frame = ref<HTMLIFrameElement | null>(null);
 const src = ref("");
 let instance = "";
@@ -59,11 +59,6 @@ function onWindowMessage(event: MessageEvent) {
   if (!target || !event.isTrusted || event.source !== target) return;
   if (isWpeSceneStyleRequest(event.data)) {
     postStyle();
-    return;
-  }
-  const size = wpeSceneSizeOf(event.data);
-  if (size) {
-    emit("size", size);
     return;
   }
   if (!isWpeVolumeRequest(event.data)) return;

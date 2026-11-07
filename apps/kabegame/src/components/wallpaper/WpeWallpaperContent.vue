@@ -17,7 +17,7 @@ import { invoke } from "@/api/rpc";
 import { useSettingsStore } from "@/stores/settings";
 import type { ImageInfo } from "@/types/image";
 import WallpaperStage from "./WallpaperStage.vue";
-import type { Mode, Transition, WallpaperContentSize, WallpaperTarget } from "./types";
+import type { Mode, Transition, WallpaperTarget } from "./types";
 
 const props = withDefaults(
   defineProps<{
@@ -42,7 +42,6 @@ const emit = defineEmits<{
   ready: [];
   error: [message: string, fatal: boolean];
   sceneLive: [live: boolean];
-  contentSize: [size: WallpaperContentSize];
 }>();
 
 const settings = useSettingsStore();
@@ -96,6 +95,5 @@ function onStageError(message: string) {
     @ready="emit('ready')"
     @error="onStageError"
     @scene-live="emit('sceneLive', $event)"
-    @content-size="emit('contentSize', $event)"
   />
 </template>

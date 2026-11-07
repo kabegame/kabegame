@@ -37,14 +37,7 @@ import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl, thumbnailToUrl } fro
 import { logger } from "@/utils/logger";
 import { resetVideoElement } from "@/utils/videoElement";
 import { isSceneTarget, isVideoTarget, isWebTarget, isWpeTarget } from "./targetKind";
-import type {
-  Mode,
-  Transition,
-  WallpaperContentSize,
-  WallpaperStageDebugState,
-  WallpaperTarget,
-  WpeVideoProps,
-} from "./types";
+import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
 import { clampWallpaperVolume, isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { WEB_SANDBOX } from "./webSandbox";
 import WpeSceneView from "./WpeSceneView.vue";
@@ -86,12 +79,7 @@ const props = withDefaults(defineProps<Props>(), {
   interactive: false,
 });
 
-const emit = defineEmits<{
-  error: [message: string];
-  ready: [];
-  sceneLive: [live: boolean];
-  contentSize: [size: WallpaperContentSize];
-}>();
+const emit = defineEmits<{ error: [message: string]; ready: []; sceneLive: [live: boolean] }>();
 
 // 模板 ref：只在 onMounted 时读取一次
 const rootRef = ref<HTMLElement | null>(null);
@@ -831,11 +819,7 @@ function showScenePreview() {
 
 /** 预览图加载完：这时才算就绪（只在退回后才会加载它）。 */
 function onScenePreviewLoad(e: Event) {
-  const img = e.target as HTMLImageElement | null;
-  if (!img?.isConnected) return;
-  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-    emit("contentSize", { width: img.naturalWidth, height: img.naturalHeight });
-  }
+  if (!(e.target as Element | null)?.isConnected) return;
   scenePreviewState = "loaded";
   markReady();
   checkSceneShown();
@@ -1813,7 +1797,6 @@ defineExpose({ debugState, delegatesPing });
           @alive="sceneAlive = true"
           @ready="onSceneReady"
           @fallback="onSceneFallback"
-          @size="emit('contentSize', $event)"
         />
       </div>
     </div>

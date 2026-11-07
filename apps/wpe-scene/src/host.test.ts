@@ -204,32 +204,25 @@ const allZero = (buffers: AudioBuffers) =>
 
 describe("SceneHost：壁纸样式与留白", () => {
   const scheme = (value: string) => ({ schemecolor: { type: "color", value } });
-  const sized = (properties: Record<string, unknown>) => {
-    const bundle = bundleFor(properties);
-    bundle.general = { ...bundle.general, width: 2560, height: 1440 };
-    bundle.bindings = [];
-    return bundle;
-  };
+  const unbound = (properties: Record<string, unknown>) => ({ ...bundleFor(properties), bindings: [] });
 
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);
     compile.mockReset();
     rendererStyle.setStyle.mockReset();
     rendererStyle.setBackground.mockReset();
-    compile.mockImplementation(async ({ userProperties }) => sized(userProperties));
+    compile.mockImplementation(async ({ userProperties }) => unbound(userProperties));
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("渲染器建好时带上已收到的样式与 schemecolor，出首帧时报场景分辨率", async () => {
+  it("渲染器建好时带上已收到的样式与 schemecolor", async () => {
     const report = reporter();
-    const onSceneSize = vi.fn();
-    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report, onSceneSize });
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
     host.setStyle("center");
     host.applyUserProperties(scheme("1 0.5 0"));
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
     expect(rendererStyle.setStyle).toHaveBeenLastCalledWith("center");
     expect(rendererStyle.setBackground).toHaveBeenLastCalledWith([1, 0.5, 0]);
-    expect(onSceneSize).toHaveBeenCalledExactlyOnceWith(2560, 1440);
     host.dispose();
   });
 
