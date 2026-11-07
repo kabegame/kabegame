@@ -141,4 +141,4 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 `40e2ce02…93b0`（与 p2-REPORT 同一�
 
 ## 顺带发现
 
-**宿主从未传 `HDR` 宏**，这和光照无关但影响画面：`common_blending.h` 的 `RGBToHSL` 在 HDR 下要先 `saturate`，`ccsimple` 的 LUT、`generic*` 也按它分支。HDR 场景里用这些路径的画面可能和 WPE 不同。这次只在光照路径传了，没有扩大范围，要全局传时要重跑基线。
+**宿主从未传 `HDR` 宏**（已修，见 [hdr-macro-REPORT](hdr-macro-REPORT.md)），这和光照无关但影响画面：`common_blending.h` 的 `RGBToHSL` 在 HDR 下要先 `saturate`，`ccsimple` 的 LUT、`generic*` 也按它分支。HDR 场景里用这些路径的画面可能和 WPE 不同。这次只在光照路径传了，没有扩大范围，要全局传时要重跑基线。

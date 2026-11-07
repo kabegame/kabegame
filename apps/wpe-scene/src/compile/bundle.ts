@@ -16,7 +16,7 @@ import {
   valueTypeOf,
 } from "./bindings";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
-import { bindingReader, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
+import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import {
   checkEffectFeatures,
   checkModelFeatures,
@@ -300,7 +300,7 @@ interface PassContext {
   key: TargetKey;
   scope?: ResourceScope | null;
   fbos?: ReadonlyMap<string, SceneFbo>;
-  /** 渲染图运行时填的槽位（effect 无 bind 时的槽 0、bind 的各槽、passthrough 的槽 0）与其 `.tex` 格式枚举。 */
+  /** 渲染图运行时填的槽位（effect 无 bind 时的槽 0、bind 的各槽、passthrough 的槽 0）：不带格式，WPE 不给 `previous` 与 `bind` 定义 `TEX<n>FORMAT`。 */
   planned?: ShaderTextureSlot[];
   /** 本 pass 不支持项的上报目标；缺省为场景级。 */
   unsupported?: Set<string>;
@@ -411,7 +411,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     fs,
     input.translator,
     unsupported,
-    litDefines(counts, postprocess.hdr, !!general.orthogonalprojection),
+    litDefines(counts),
+    engineDefines(postprocess.hdr, !!general.orthogonalprojection),
   );
   /** 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定。 */
   let lights: Record<string, number[]> | null = null;
@@ -618,12 +619,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             .map((bind) => ({ name: String(bind.name), index: Number(bind.index) }))
         : null;
       // 渲染图填的槽位：有 bind 时只按 bind；没有 bind 时槽 0 = 上一步输出（合成 RT）
-      const planned: ShaderTextureSlot[] = binds
-        ? binds.map((bind) => ({
-            slot: bind.index,
-            format: FBO_FORMATS[fbos.get(bind.name)?.format ?? "rgba8888"].tex,
-          }))
-        : [{ slot: 0, format: FBO_FORMATS.rgba8888.tex }];
+      const planned: ShaderTextureSlot[] = binds ? binds.map((bind) => ({ slot: bind.index })) : [{ slot: 0 }];
       for (const materialPass of parseMaterial(passMaterialText).passes) {
         const merged: MaterialPass = {
           ...materialPass,
@@ -764,7 +760,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       else {
         layer.passthrough = await compilePass(
           { ...pass, combos: { ...pass.combos, ...passthroughCombos(cbm) } },
-          { key: `objects/${index}/passthrough`, planned: [{ slot: 0, format: FBO_FORMATS.rgba8888.tex }] },
+          { key: `objects/${index}/passthrough`, planned: [{ slot: 0 }] },
         );
         // passthrough 上屏颜色置 (1, 1, 1, 1)（B8 / B10）
         layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];

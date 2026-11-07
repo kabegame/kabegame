@@ -70,11 +70,11 @@ const OBJECT_FLAGS = [
 4. **验收：** PLAN 写「画面与预览图一致」，粒子随机，做不到。改成确定性工程逐帧对比。
 5. **模块归属：** 档 2–4 的模块原本排在 W2、W5、W6、P8，提前到 P4；层级从 W1 提前到 P4a；R8 / RG88 从 W5 提前到 P4b。
 
-## 前置 — 引擎宏修正
+## 前置 — 引擎宏修正（已完成）
 
-按 [hdr-macro-REPORT.md](hdr-macro-REPORT.md) 第 6 节落地，P4a 依赖它：
+已按 [hdr-macro-REPORT.md](hdr-macro-REPORT.md) 第 6 节落地（2026-11-07），P4a 依赖它：
 - 删掉翻译器的 `HLSL_GS40_DISABLED`。WPE 不定义它；`shimmering_particles` 的 `particle.vert` 定义后走几何着色器分支，顶点不经过 MVP，翻译能过但画不对。
-- `TEX<n>FORMAT` 只按 `formatcombo` 定义。修完 `eagleflag` 的基线会变，要和 WPE 重新对比。
+- `TEX<n>FORMAT` 只按 `formatcombo` 定义。`eagleflag` 和 WPE 比，差值大于 8 的像素从 6.22% 降到 1.66%。
 - `HDR` 等引擎宏全局传。关闭时 `HDR` 必须不定义，不能传 0，`common_blending.h` 用的是 `#ifdef`。
 
 ## P4-0 — 对比工具与框架问题

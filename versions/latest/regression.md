@@ -1,22 +1,39 @@
 # v4.7.0 regression
 
-## 场景壁纸样式与预览比例
+## WPE 导入标签：工具标签与年龄分级
 
-2026-11-07 Windows dev。场景跟随壁纸样式（fill / fit / stretch / center / tile），fit / center 的留白是 `schemecolor`；预览不看样式，按场景自身比例完整显示。脚本在 `ignore/p3c/style-test/`。
+2026-11-07 Windows dev，界面语言中文。导入时除作者的 `tags` 外，再挂 WPE 显示的其它标签：已订阅工坊壁纸取 `bin/workshopcache.json` 的 Steam 标签，其余从 `project.json` 推导；分类、类型、来源与分辨率不挂。key 是 Steam 原文，名称按语言翻译。脚本 `ignore/wpe-tags-test/run.mjs`：用临时目录走真实导入任务，结束时删掉本次的行、任务和新建标签（标签总数前后都是 5633）。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [x] | S1 预览比例 | Windows dev，Eagle Flag 12885（2200×1080）、竖向场景 13306（2893×4092） | 打开预览，量画布 | 画布比例等于场景比例，不裁，没有黑底和阴影 | 2026-11-07：2.037、0.707 |
+| [x] | T1 工坊壁纸取 Steam 标签 | Windows dev，缓存里有 Mature / Puppet Warp 的壁纸 | 用它的 `project.json` 与工坊 id 导入 | 挂 `Anime`、`Audio responsive`、`Mature`、`Customizable`、`Puppet Warp`、`Video Texture`；没有 `3840 x 2160`、`Wallpaper`、`Scene`、`Workshop` | 2026-11-07：符合，`Puppet Warp` 等 `project.json` 没有的标签也在 |
+| [x] | T2 分级以 Steam 为准 | Windows dev，全库唯一 `Questionable` 那张 | 同 T1 | 挂 `WPE/Questionable`，名称「家长指导级」 | 2026-11-07：符合，这张的 `contentrating` 是 `Everyone`，只读 `project.json` 会标错 |
+| [x] | T3 不在缓存的壁纸走推导 | Windows dev，无工坊 id 的目录 | 导入带音频、`supportsvideoflags: 3`、作者属性、`contentrating: Mature` 的项目 | 挂 `Retro`、`Audio responsive`、`Video Texture`、`Customizable`、`Mature` | 2026-11-07：符合 |
+| [x] | T4 key 稳定、名称翻译 | Windows dev，中文 | 看新建标签的路径与名称 | 路径是英文原文（`WPE/Audio responsive`），名称是中文（音频响应 / 可自定义的 / 视频纹理 / 成人级） | 2026-11-07：符合。五种语言的译名、同语言不重名、不含 `/` 由单测覆盖 |
+| [x] | T5 已有标签不改名 | Windows dev，库里已有 `WPE/Anime` | 同 T1 | 名称保持「Anime」，挂到同一个标签，不新建 | 2026-11-07：符合。要让它们也显示译名，得先删 `WPE` 标签目录再导入 |
+| [ ] | T6 全量重新导入 | Windows，删除全部壁纸与 `WPE` 标签目录 | 重新导入全部壁纸，抽几张与 WPE 界面对照 | 标签与 WPE 一致（不含分辨率），默认壁纸有推导出的标签，声明的类型也显示译名 | 待你重新导入时确认 |
+| [ ] | T7 没有工坊缓存 | 没装 WPE 或缓存读不到 | 手选文件夹导入 | 导入照常，走推导 | 解析失败与空表由单测覆盖，真机没测 |
+
+## 场景壁纸样式与预览比例
+
+2026-11-07 Windows dev。场景跟随壁纸样式（fill / fit / stretch / center / tile），fit / center 的留白是 `schemecolor`；预览不看样式，按场景自身比例完整显示。场景分辨率导入时写进 `images.width/height`；场景导入还没发版，不做迁移，开发库的存量行用 `ignore/p3c/style-test/fill-dims.mjs` 补过一次（152 行写入 142 行，其余是透视场景或读不到）。脚本在 `ignore/p3c/style-test/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 预览比例 | Windows dev，Eagle Flag 12885（2200×1080）、竖向场景 13306（2893×4092） | 打开预览，从第一时间起连续量画布 | 一打开就是场景比例，中途不变，不裁，没有黑底和阴影 | 2026-11-07：2.037、0.707，画布尺寸全程只有一个值 |
 | [x] | S2 五种样式的几何 | Windows dev，12885，预览里把画布临时改成方形，向宿主发样式消息 | 逐个切换截图 | fill 等比盖满、fit 上下留白、stretch 拉满、center 1:1 裁宽、tile 居中重复；不重建宿主 | 2026-11-07：目视符合 |
 | [x] | S3 留白取用户值 | Windows dev，12885（用户改过 `schemecolor`） | fit 下读留白像素 | 是用户值，不是工程值 | 2026-11-07：`(61,87,191)` = `0.239 0.341 0.749`，工程值是绿色 |
 | [x] | S4 改色就地生效 | Windows dev，12885，fit | 经 `applyUserProperties` 改 `schemecolor` 为红色再还原 | 留白立即变，不重新编译 | 2026-11-07：`(61,87,191)` → `(255,0,0)`，`recompiled` 0 → 0。只进宿主内存 |
 | [x] | S5 暂停时切样式 | Windows dev，12885，预览暂停 | fit → tile | 画面更新，时钟不动 | 2026-11-07：时钟停在 4.998 |
 | [x] | S6 桌面五种样式 | Windows dev，桌面 13306（竖向），窗口模式 | `set_wallpaper_style` 逐个切换，截壁纸窗口，比较像素 | 五种画面不同，实例不变，fit 留白是 `schemecolor`，tile 按周期重复 | 2026-11-07：两两差异 43.8–74.5；fit 留白 `(248,153,112)` = `0.97255 0.6 0.43922`，右侧 100% 一致，左侧只有 dev 调试面板遮挡；tile 错开一个周期差 3.16、半周期差 68.24；已恢复 fill |
-| [x] | S7 退回场景的预览 | Windows dev，13302 | 打开预览 | 画布按预览图尺寸，按 contain 显示，没有「设为封面」 | 2026-11-07：1024×1024，`object-fit: contain`，按钮未出现 |
+| [x] | S7 退回场景的预览 | Windows dev，13302 | 打开预览 | 画布按场景比例，预览图按 contain 显示，没有「设为封面」 | 2026-11-07：1359×1920（比例 0.708），`object-fit: contain`，按钮未出现 |
 | [x] | S8 网页壁纸预览 | Windows dev，12100 | 打开预览 | 仍按主屏尺寸排版，没有黑底和阴影 | 2026-11-07：2560×1440，背景透明、无阴影 |
-| [x] | S9 比例不是 16:9 的封面 | Windows dev，13306 | 设为封面，读文件尺寸，恢复默认 | 封面比例等于场景比例 | 2026-11-07：641×907，比例 0.707，已恢复默认。详情面板收起时按钮在窗口外，这次直接触发按钮；屏幕不跳变沿用 C12 的结论 |
+| [x] | S9 比例不是 16:9 的封面 | Windows dev，13306 | 设为封面，读文件尺寸，恢复默认 | 封面比例等于场景比例 | 2026-11-07：499×706，比例 0.707，已恢复默认。详情面板收起时按钮在窗口外，这次直接触发按钮；屏幕不跳变沿用 C12 的结论 |
 | [x] | S10 应用背景 | Windows dev，背景是场景 13306 | 读应用背景的 `styleMode` | 固定 fill，不跟壁纸样式 | 2026-11-07：`styleMode` 为 fill |
 | [ ] | S11 fit / center 下的光标效果 | 桌面，带光标效果的场景 | fit 下移动鼠标 | 效果落在鼠标所在位置 | 只有单元测试，真机未测 |
+| [x] | S12 新导入写宽高 | Windows dev，测试工程 `kbprops-del` | 「添加壁纸目录」导入，读行 | 宽高是场景分辨率 | 2026-11-07：1920×1080，测完已删行与任务 |
+| [x] | S13 从 `scene.pkg` 读分辨率 | Windows dev，本机语料 | `KABEGAME_WPE_ROOT` 指向 WPE 安装目录，跑 `scene_resolution` 测试 | 散文件与真实的包都能读到 | 2026-11-07：通过；开发库 152 行场景读到 142 行 |
+| [ ] | S14 宽高带来的列表变化 | 桌面 | gallery 布局看场景格子，详情面板看尺寸，按宽高比筛选 | 格子是场景比例、1:1 预览图不变形；详情显示分辨率；场景进真实分桶，不再是未知 | 只读过代码，真机未测 |
 
 ## 壁纸封面截取
 
@@ -1303,3 +1320,19 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 带 effect 的图层开光照 | 桌面 | 材质 `LIGHTING=1` 且图层有 effect | 报 `lighting:prelighting`，退回预览图 | 只有单测，没有和 WPE 比 |
 | [ ] | 灯 `scale` 不为 1 | 桌面 + WPE | | 聚光方向按列 0 含缩放 | 没有实测 |
 | [ ] | 属性绑灯字段 | 桌面 | 绑 `intensity` 后改属性 | 整场重编译，画面更新 | 只有单测 |
+
+## 场景壁纸引擎宏
+
+2026-11-07 Windows dev，宿主 `index-BGGGLREP.js`；WPE PID 36548，`ultra`。调查与改法见 `.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md`，脚本在 `ignore/hdr-macro/fix/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 翻译器单测与语料 | Windows 本地 | `KABEGAME_WPE_ROOT=<WPE 安装目录> cargo test -p wpesl2wgsl` | 全部通过，语料不下降 | 单测 35 通过，语料 158/167 |
+| [x] | 宿主单测 | Windows 本地 | 在 `apps/wpe-scene` 跑 vitest、tsc、Prettier | 全部通过 | 668 通过 |
+| [x] | 语料不支持项 | Windows 本地 | 重扫 `disabled`、`ultra` 两档 | 没有新的翻译失败 | 原有 117 张的键没有增减，`ultra` 没有多出失败 |
+| [x] | 现有基线 | Windows dev，6 张 × 3 档 | 改前改后各录一次 | 只有 `eagleflag` 变 | 18 项里 15 项逐字节相同，12885 三档变 |
+| [x] | `eagleflag` 法线 | 桌面 + WPE | 相位对齐后比画面 | 更接近 WPE | 均差 0.481、差 > 8 的像素 1.655%；改前 1.83、6.22%。最大差 88，来源没查 |
+| [x] | HDR 过亮输入 | 桌面 + WPE | `hsl-hdr`：`brightness` 2，色相类混合模式 | 和 WPE 一致 | 最大差 1；改前 255 |
+| [x] | LDR 不受 `HDR` 影响 | 桌面 + WPE | `hsl-ldr` | 和 WPE 一致 | 最大差 0 |
+| [ ] | 未声明 `formatcombo` 的法线工程 | 桌面 + WPE | `nrm` | 和 WPE 一致 | 工程含 RG88 单元格，`tex:format:8` 渲染不了，等 P4b |
+| [ ] | 其它档位的 `HDR` | 桌面 + WPE | `disabled`、开启档、`displayhdr` | `HDR` 只在 `ultra` / `displayhdr` 且 JSON 都为 true 时定义 | 只有静态结论 |

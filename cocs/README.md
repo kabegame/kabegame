@@ -108,7 +108,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 - [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
   - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
-    **`wpe` feature 门控**（桌面主程序与 CLI 开启，Android / Web 不开；三个桌面平台都能导入与预览，Linux 没有桌面壁纸）、Steam 库发现与手选文件夹的两层扫描、WPE 安装目录设置 `wpeEngineDir`（为空时查 Steam 库或从库内壁纸往上找并写入，壁纸设置可覆盖）、`wpe-import` 内建任务与「壁纸」收集入口、
+    **`wpe` feature 门控**（桌面主程序与 CLI 开启，Android / Web 不开；三个桌面平台都能导入与预览，Linux 没有桌面壁纸）、Steam 库发现与手选文件夹的两层扫描、导入时的 `WPE/<tag>` 标签（作者 `tags` + WPE 工坊缓存的 Steam 标签，缓存没有时从 `project.json` 推导；key 是 Steam 原文，名称按语言翻译）、WPE 安装目录设置 `wpeEngineDir`（为空时查 Steam 库或从库内壁纸往上找并写入，壁纸设置可覆盖）、`wpe-import` 内建任务与「壁纸」收集入口、
     删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WallpaperStage` 独立 web 层（sandbox `file:` iframe，`src` 直接取壁纸目标的 `webEntry`，由补丁 05 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览画布 `WallpaperPreviewCanvas`（按内容固有尺寸，和单独的图片一样显示；网页壁纸按主屏尺寸排版）、`get_wallpaper_target_for_image`、应用背景与预览同走原图形态实时渲染（不交互、静音），以及子 frame 也有 IPC 桥之后由 ACL 兜底的纵深防御；
@@ -129,7 +129,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     排查属性改了页面不变 / 预览与桌面不同步 / 草稿串到下一张、属性标签显示 `ui_` 键名、显示条件显隐与 WPE 不一致、`file` / `directory` 属性选的文件被 `deny file:` 或目录回调不触发；
     排查网页壁纸频谱不动 / 一直满格 / 静音后不回落、没有歌名封面或进度、切走壁纸后仍在采集或订阅数不降、音频订阅被拒；
     排查网页壁纸音量不跟壁纸音量设置、开着应用背景时背景也出声、页面一打开先响一下或一直没声、页面读到的 `volume` 被改；
-    排查「设为封面」按钮不出现或出现过早、封面截到残缺画面或带上看板娘、截取时窗口跳变、恢复后封面不对。
+    排查「设为封面」按钮不出现或出现过早、封面截到残缺画面或带上看板娘、截取时窗口跳变、恢复后封面不对；
+    排查导入后缺标签或标签与 WPE 显示不一致、标签名称没翻译或语言不对。
 
 - [wpe/WPE_SCENE.md](wpe/WPE_SCENE.md)
   - 主题：场景壁纸（`x-wpe/scene`）的前端渲染路线：WebGPU 在 `WallpaperStage` 的 scene 层、前端 `fetch(file:)` 读资源、前端编译，Rust 只做导入；以及着色器翻译器 `wpesl2wgsl` 的摘要。翻译器的完整契约见 [../src-tauri/wpesl2wgsl/README.md](../src-tauri/wpesl2wgsl/README.md)：
@@ -142,13 +143,13 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     - **能力表**（`features.ts`，P2a）：只报真正改变画面的特性，中性字段逐项写明依据；着色器不按名字白名单，改核内置 uniform（`ENGINE_UNIFORMS`）、引擎 COMBO 与 `_rt_*` 默认纹理；effect 逐项检查；场景脚本由 P3b 运行，脚本错误不进 `unsupported`。
     - **场景后处理档位**（`postprocess.ts`、设置 `wpeScenePostprocess`）：跟随 WPE 时只读 `<WPE 安装目录>/config.json` 的 `postprocessing`，按 WPE 规则判定场景实际的泛光 / HDR（HDR 也认属性对象的生效值）与泛光参数缺键默认值；`WpeSceneView` 随 `setting-change` 重新加载，HDR 切换重建场景目标格式。
     - **泛光与 HDR**（P2b，`compile/bloom.ts` + `render/bloom.ts`）：全部图层之后拷一次快照跑泛光链，着色器全用 WPE `materials/util/` 原件翻译；LDR 1/4 → 1/8 → `_rt_Bloom` → `combine_ldr`；HDR 场景目标 / 快照 / 合成 RT 为 `rgba16float`、颜色乘 `brightness`，最多 8 级金字塔（名义纹素 `g_RenderVar0`、SrcAlpha/One 上采样、最粗两级 bicubic、float32 参数换算），收尾用 `combine_hdr` 的 `LINEAR` 变体（8 位画布上与 WPE 的 `saturate(lin())` 逐值等价）；关闭档与 P2a 逐字节相同。P3c 起 `general.bloom` 每帧读，开关与级数就地（金字塔建满全部可用级），HDR 只在加载时判定。dev 探针 `window.__kabegameSceneProbe`（`wpe-scene/dev/`，生产构建摇掉）做链路隔离验证（RenderDoc 快照 → 我们的泛光链 → 与 WPE 逐像素比）与固定时刻渲染读回。
-    - **壁纸样式与留白**（`render/layout.ts`、`sceneStyle.ts`、`wpeSceneStyle.ts`）：上屏时按 Kabegame 样式铺放，几何同图片层，宿主启动时经 postMessage 取样式、变化时父页面推，改样式不重编译；`fit` / `center` 的留白是 `schemecolor`（WPE 的规则，用户值已并入属性全集，改色就地生效），非铺满样式下指针换算到场景上；宿主出首帧时报场景分辨率，预览据此按场景比例显示。
+    - **壁纸样式与留白**（`render/layout.ts`、`sceneStyle.ts`、`wpeSceneStyle.ts`）：上屏时按 Kabegame 样式铺放，几何同图片层，宿主启动时经 postMessage 取样式、变化时父页面推，改样式不重编译；`fit` / `center` 的留白是 `schemecolor`（WPE 的规则，用户值已并入属性全集，改色就地生效），非铺满样式下指针换算到场景上；场景分辨率在导入时写进 `images.width/height`（Rust 只从入口 json 或 `scene.pkg` 里取这一项），预览据此按场景比例显示。
     - **FreeImage `.tex`**：PNG / JPG mip 由主线程 `createImageBitmap` 解码并跨重新编译缓存（`decode.ts`），纹理尺寸取头里的图像尺寸（UV 为 1）。
     - **渲染器**（`wpe-scene/render/` + `components/wallpaper/WpeSceneView.vue`）：WebGPU，RGBA8 / BC3 / 位图纹理、std140 uniform 打包与内置 uniform（P2a 起按 WPE 校正：空槽分辨率、`Texel`、`g_Screen`、`g_Time` 回绕、窗口坐标的指针、效果矩阵）、混合照 LWE，场景分辨率离屏目标再 cover 到画布；Tint 前言 `diagnostic(off, derivative_uniformity)`；`WpeSceneView` 自读用户属性与后处理设置、按 `metadataId` 补丁重编译，不能渲染时 emit `fallback(reasons)`；dev 下 `localStorage["kabegame-dev-scene-force-render"]` 强制渲染半成品。
     - **图层渲染图**（`render/graph.ts`，P2a）：直接上屏（P1 路径）或「基础 pass 关混合画满合成 RT → effect ping-pong（fbos / bind / target / compose / copy / swap）→ 最后一个启用 effect 的最后一个绘制 pass 借基础材质 blend 上屏」；合成 RT 数 min(2, 写进合成链的次数)；colorBlendMode 31 → additive，其它非 0 → passthrough（`scene.json` `version` > 2 用 genericimage4）；`_rt_FullFrameBuffer` 是 `copyTextureToTexture` 快照，每图层至多一次。P3c 起 effect `visible` 绑属性或挂脚本时进 bundle，`variantPlans` 加载时预建管线，运行时单图层同步切换。
     - **general 字段**（P3c，`GENERAL_FIELDS`）：清屏色、环境光就地，`clearenabled: false` 用两张场景目标交替对齐 WPE 的 N−2 累加，HDR 下底图过一次 `lin`；相机不能绑，`g_EyePosition` 是 `(W/2, H/2, 2000)`。
     - **属性快速路径**（P3a）：编译期每处 `{user}` 登记成绑定表（属性名 + condition → 图层字段 / 材质常量 / 泛光参数 / 重编译原因，目标用 scene.json 坐标做稳定键）；宿主一个应用函数（加载传全集、运行时传增量）把增量分成就地写与重编译，就地写落在不依赖 GPU 的 `SceneState` 上、`GpuScene.sync` 下一帧刷 uniform / 图层可见性 / 泛光链；只有 `general.hdr`、`colorBlendMode`、`size` 仍重编译，文档有和 WPE 的对照表；`visibleBound` 的图层不可见也建资源、`encode` 整段跳过；COMBO 绑用户属性报 `combo:user-binding`，条件可见不再退回；面板写库尾随 300 ms 去抖，拖动中场景不跟手。
-    - **光照**（`#require LightingV1`）：`#require` 是预处理期现场生成源码，`LIGHTING=0` 时为空；灯数取 `general.lightconfig` 不数灯对象，`point` 是遗留灯；宿主 `compile/lights.ts` 算 uniform，经 `litDefines` 传宏；边界是无 effect 图层，其余报 `lighting:*` / `lightconfig:*`。
+    - **光照**（`#require LightingV1`）：`#require` 是预处理期现场生成源码，`LIGHTING=0` 时为空；灯数取 `general.lightconfig` 不数灯对象，`point` 是遗留灯；宿主 `compile/lights.ts` 算 uniform，经 `litDefines` 传 `LIGHTS_*`，`HDR`、`SCENE_ORTHO` 经 `engineDefines` 全局传（`#ifdef HDR`，关闭时不写键），`TEX<n>FORMAT` 只给声明 `formatcombo` 的槽位；边界是无 effect 图层，其余报 `lighting:*` / `lightconfig:*`。
     - **场景脚本**（P3b）：宿主内同源 `about:blank` realm 以 `file:` 经典脚本加载 `baseclasses.js`，用户源码各自作 blob 模块；按场景生成 import map 查 WPE `jsmodules`；`init` / 属性回调 / 帧计时器 / `update` 的写回进入 `SceneState`，重编译保留 realm 并重放写入；回调出错只禁用该回调。含环境改写、持久 `localStorage`、音频缓冲、API 清单、缺口、语料结论与 dev 探针。
     - **scene 层**（`WallpaperStage`，P1-5）：web 层之上独立一层、同一时间一个 `WpeSceneView`；loading → live / fallback（结果出来前不显示、不发 `ready`，桌面保留上一张；能渲染直接淡入，退回或 10s 超时才显示壁纸目标的 `previewPath`）；场景 → 场景有短暂空档；壁纸样式由宿主铺放；属性面板对场景隐藏 `file` / `directory`；应用背景与预览同走原图形态、实时渲染且不交互；壁纸窗口实测不被判为隐藏（rAF 144 Hz）。
     - **场景宿主**（P3-0，进行中）：场景宿主是一种特殊的网页壁纸。独立的纯 TS + Vite 项目 `apps/wpe-scene` 构建进 `resource_dir/wpe-scene`（dev 直接写 `target/debug/resources`、不经 tauri-build，prod 进 `src-tauri/kabegame/resources` 打包）；`get_wpe_scene_host_url` 给应用页 `file:` 地址，应用页附 `kbScene` / `kbInstance`；解析器给宿主目录专门范围（宿主目录 + WPE `assets` / `config.json` + 库内全部场景目录，场景目录随图片事件维护）；网页壁纸的命令与事件经 `wpe-web-capability` 照常可用，场景专用命令由按确切地址运行时注册的 `wpe-scene-host-capability` 放行。P3-0a 已接通属性拉取、`wpe_scene_target`、暂停与音量、`wpe_scene_report` 状态和日志；P3-0b 已把编译、渲染与探针迁进宿主；CEF 08 使子 frame 不跨窗口复用渲染进程，CEF 09 使同进程 iframe 每帧只派发一次 rAF。实测表含 Worker 不能 `fetch(file:)`、`localStorage` 与网页壁纸共用（允许）、同窗口 `file:` frame 互相可达（接受）。

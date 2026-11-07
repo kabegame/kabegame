@@ -28,10 +28,13 @@ pub mod rewrite;
 
 use preprocess::{scan_annotations, Annotations, Preprocessor};
 
-/// 平台宏：照 WPE 在 Windows 上的 HLSL 路径。
+/// 平台宏：照 WPE 的源码前缀与预处理器种子（2.8.42 `FUN_1400d5070`、`FUN_14016b0e0`）。
 /// - `HLSL`：`#ifdef HLSL` 块里是 D3D 坐标约定下的 Y 翻转，WebGPU 的纹理 / 帧缓冲坐标与 D3D 相同；
-/// - `HLSL_GS40_DISABLED`：WebGPU 没有几何着色器（`GS_ENABLED` 保持未定义，粒子走顶点着色器展开四角）。
-const PLATFORM_DEFINES: &[(&str, &str)] = &[("HLSL", "1"), ("HLSL_GS40_DISABLED", "1")];
+/// - `HLSL_SM40`、`SHADERVERSION`：WPE 恒定义。
+///
+/// `GS_ENABLED`、`REVERSEDEPTH` WPE 也恒定义，这里有意不定义：WebGPU 没有几何着色器，粒子走顶点着色器展开四角；深度也不是反向的。
+/// `HLSL_GS40_DISABLED` 不能定义：WPE 没有这个宏，`shimmering_particles` 的 `particle.vert` 定义后走给几何着色器准备输入的分支，顶点不经过 MVP。
+const PLATFORM_DEFINES: &[(&str, &str)] = &[("HLSL", "1"), ("HLSL_SM40", "1"), ("SHADERVERSION", "69")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -254,6 +257,13 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         defines.insert(combo.name.clone(), combo.value.to_string());
     }
     for texture in &request.textures {
+        // WPE 只给声明了 `formatcombo` 的槽位定义，没声明的在 `#if` 里按 0（法线图走 `normal.wy`，不走 DXT 分支）
+        let declared = annotations.samplers.iter().any(|(slot, meta)| {
+            *slot == texture.slot && meta.get("formatcombo").and_then(Value::as_bool) == Some(true)
+        });
+        if !declared {
+            continue;
+        }
         if let Some(format) = texture.format {
             defines.insert(format!("TEX{}FORMAT", texture.slot), format.to_string());
         }
@@ -533,7 +543,7 @@ void main() {
 #include "common_fragment.h"
 // [COMBO] {"material":"Tint","combo":"TINT","default":0}
 uniform sampler2D g_Texture0; // {"material":"albedo","default":"util/white"}
-uniform sampler2D g_Texture1; // {"combo":"NORMALMAP"}
+uniform sampler2D g_Texture1; // {"combo":"NORMALMAP","formatcombo":true}
 #if TINT
 uniform vec3 g_Color1; // {"material":"color1","default":"0 0 0"}
 #endif
@@ -651,6 +661,38 @@ void main() {
         assert_eq!(combo("TINT"), Some((1, "request")));
         assert_eq!(combo("NORMALMAP"), Some((1, "texture")));
         assert!(result.uniforms.iter().any(|u| u.name == "g_Color1"));
+    }
+
+    /// 翻译后有没有 `g_Mark`：判断 `#if condition` 走了哪一支。
+    fn reaches_mark(condition: &str, annotation: &str, format: Option<u32>) -> bool {
+        let mut req = request();
+        req.fragment = format!(
+            "uniform sampler2D g_Texture1; // {annotation}\n#if {condition}\nuniform float g_Mark;\n#endif\nvoid main() {{\n\tgl_FragColor = texSample2D(g_Texture1, vec2(0, 0));\n#if {condition}\n\tgl_FragColor.r = g_Mark;\n#endif\n}}\n"
+        );
+        req.textures = vec![BoundTexture { slot: 1, format }];
+        let result = translate(&req);
+        assert!(result.ok, "{result:#?}");
+        result.uniforms.iter().any(|u| u.name == "g_Mark")
+    }
+
+    #[test]
+    fn format_macro_requires_formatcombo() {
+        assert!(reaches_mark(
+            "TEX1FORMAT == 8",
+            r#"{"formatcombo":true}"#,
+            Some(8)
+        ));
+        // eagleflag：`g_Texture1` 没有注释，DXT5 也不定义 TEX1FORMAT
+        assert!(!reaches_mark("TEX1FORMAT == 4", r#"{"label":"x"}"#, Some(4)));
+    }
+
+    #[test]
+    fn platform_macros_follow_wpe() {
+        let plain = r#"{"label":"x"}"#;
+        assert!(reaches_mark("HLSL_SM40", plain, None));
+        assert!(reaches_mark("SHADERVERSION == 69", plain, None));
+        assert!(!reaches_mark("HLSL_GS40_DISABLED", plain, None));
+        assert!(!reaches_mark("GS_ENABLED", plain, None));
     }
 
     /// 输出的 WGSL 必须能被 naga 自己的 WGSL 前端重新接受。

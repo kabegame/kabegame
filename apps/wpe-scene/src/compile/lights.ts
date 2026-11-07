@@ -46,21 +46,24 @@ export function lightConfigIssues(general: Record<string, unknown>): string[] {
 }
 
 /**
- * 只在最终 `LIGHTING` 非 0 时生效的宏（翻译器的 `litDefines`）。
- * `HDR`、`SCENE_ORTHO` 在 WPE 里是全局宏，这里只给光照路径：别的着色器不传 `HDR` 是现状，见 lighting-REPORT「顺带发现」。
+ * 整场全局的引擎宏（hdr-macro-REPORT）：基础材质、effect、passthrough 都定义，运行中改属性不变。
+ * 关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。
  */
-export function litDefines(counts: LightCounts, hdr: boolean, ortho: boolean): Record<string, string> {
-  const defines: Record<string, string> = {
+export function engineDefines(hdr: boolean, ortho: boolean): Record<string, string> {
+  const defines: Record<string, string> = {};
+  if (hdr) defines.HDR = "1";
+  if (ortho) defines.SCENE_ORTHO = "1";
+  return defines;
+}
+
+/** 只在最终 `LIGHTING` 非 0 时生效的宏（翻译器的 `litDefines`）。 */
+export function litDefines(counts: LightCounts): Record<string, string> {
+  return {
     LIGHTS_POINT: String(counts.point),
     LIGHTS_SPOT: String(counts.spot),
     LIGHTS_TUBE: String(counts.tube),
     LIGHTS_DIRECTIONAL: String(counts.directional),
   };
-  // `genericimage3` / `generic3` 按它选 PerformLighting_Deprecated 的公式；具体值没逆向到，实测 WPE 走 >= 62 的分支
-  defines.SHADERVERSION = "62";
-  if (hdr) defines.HDR = "1";
-  if (ortho) defines.SCENE_ORTHO = "1";
-  return defines;
 }
 
 /** 灯对象缺键时的值（`FUN_14018ff60` 的构造函数）。 */

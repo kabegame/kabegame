@@ -57,7 +57,7 @@ interface TranslateRequest {
 - **头文件按需提供**：结果为 `phase: "include"` 时，读出 `missing` 里的文件、放进 `includes` 后再调一次。只有处于有效分支的 `#include` 才要求提供。
   头文件的查找顺序（项目 `shaders/` → WPE `assets/shaders/`，effect 自己的 `shaders/` 优先）由调用方决定。
 - **`litDefines`**：WPE 只在最终 `LIGHTING` 非 0 时写 `LIGHTS_*`，而 COMBO 的最终值（可能来自着色器注解的默认值）要到这里才算得出，所以由翻译器裁决。
-- **`textures` 有两个作用**：一是采样器注释里写了 `"combo": "NORMALMAP"` 的槽位绑定了纹理时，该 COMBO 置 1；二是定义 `TEX<slot>FORMAT = format`。
+- **`textures` 有两个作用**：一是采样器注释里写了 `"combo": "NORMALMAP"` 的槽位绑定了纹理时，该 COMBO 置 1；二是给声明了 `formatcombo` 的槽位定义 `TEX<slot>FORMAT = format`，和 WPE 一样；没声明的不定义，在 `#if` 里按 0。
   格式枚举与 WPE 一致：0 RGBA8888、1 RGB888、2 RGB565、4 DXT5、6 DXT3、7 DXT1、8 RG88、9 R8、10 RG1616F、11 R16F、12 BC7。
 
 ### 结果
@@ -115,8 +115,10 @@ interface TranslateRequest {
 
    平台宏照 WPE 在 Windows 上的 HLSL 路径：
    - `HLSL=1`：`#ifdef HLSL` 块是 D3D 坐标约定下的 Y 翻转，WebGPU 的纹理 / 帧缓冲坐标与 D3D 相同；
-   - `HLSL_GS40_DISABLED=1`，`GS_ENABLED` 保持未定义：WebGPU 没有几何着色器，粒子走「顶点着色器自己展开四角」的分支；
-   - `HLSL_SM30`、`GLSL`、`PLATFORM_ANDROID`、`SHADERVERSION` 不定义，需要时由调用方通过 `defines` 传。
+   - `HLSL_SM40=1`、`SHADERVERSION=69`：WPE 恒定义；
+   - `GS_ENABLED`、`REVERSEDEPTH` WPE 恒定义，这里有意不定义：WebGPU 没有几何着色器，粒子走「顶点着色器自己展开四角」的分支，深度也不是反向的；
+   - `HLSL_GS40_DISABLED` 不能定义：WPE 没有这个宏，`particle.vert` 定义后走给几何着色器准备输入的分支；
+   - `HLSL_SM30`、`GLSL`、`PLATFORM_ANDROID` 不定义。`HDR`、`SCENE_ORTHO` 由宿主按场景经 `defines` 传，关闭时不写键。
 
    COMBO 名按大写处理：材质里写 `version: 2`，源码里是 `VERSION`。
 3. **预处理**（`preprocess.rs`）：

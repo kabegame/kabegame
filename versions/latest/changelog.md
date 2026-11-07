@@ -9,7 +9,7 @@
 - 场景壁纸支持 Wallpaper Engine 场景脚本（SceneScript）的基础部分：Razer Bedroom 现在可实时渲染彩虹灯带，Razer Vortex 的「模式」属性生效；一段脚本的某个回调出错只停用该回调，其余照常运行；场景脚本的存储（如记住的拖动位置）会保留到下次打开。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
-- 场景壁纸现在跟随壁纸样式（填充、适应、拉伸、居中、平铺），适应和居中时空白处用壁纸的主题色填充，和 Wallpaper Engine 一样；图库预览里场景壁纸按自身比例完整显示，和单独的图片一样。
+- 场景壁纸现在跟随壁纸样式（填充、适应、拉伸、居中、平铺），适应和居中时空白处用壁纸的主题色填充，和 Wallpaper Engine 一样；图库预览里场景壁纸按自身比例完整显示，和单独的图片一样；详情面板显示场景分辨率，宽高比筛选与排序也包含场景壁纸。
 - 网页与场景壁纸可在预览详情栏把当前画面设为封面，替换作者的低清预览图，也可恢复默认封面。
 - 网页与场景壁纸可在预览详情栏暂停，窗口模式下在壁纸设置里也可以暂停桌面壁纸；场景壁纸还可清空脚本存储。
 - Windows 上的 Wallpaper Engine 网页壁纸支持音频可视化与媒体集成：声明了音频处理的壁纸会随系统正在播放的声音跳动；壁纸可显示正在播放的歌曲名、歌手、封面、播放状态与进度（来自系统媒体控制，网易云、Spotify、浏览器等均可）。桌面与图库预览都生效。设置页壁纸分区新增「网页壁纸媒体集成」开关（默认开启），关闭后壁纸读不到歌曲信息。
@@ -17,6 +17,7 @@
 - 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加壁纸目录；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
 - 壁纸设置新增「Wallpaper Engine 目录」：留空时自动查找（Steam 库，或从已导入的壁纸往上找）并写入，也可以手动指定。没有 Steam 版 WPE 时，把 `assets` 等资源复制到本机就能让场景壁纸读到内置资源，做法见文档「Wallpaper Engine 壁纸」。
 - Wallpaper Engine 壁纸现在也支持 macOS 和 Linux：可以导入并在图库预览、应用背景里运行网页与场景壁纸，macOS 还可在窗口模式设为桌面壁纸；音频可视化、媒体集成和桌面鼠标转发仍只在 Windows，Linux 暂不能设为桌面壁纸。Android 与 Web 版不提供。
+- 「壁纸」导入现在会带上 Wallpaper Engine 里显示的全部标签：除作者声明的类型外，还有音频响应、可自定义的、视频纹理、年龄分级等（不含分辨率），标签名称跟随导入时的界面语言。
 - 「壁纸」导入支持 Wallpaper Engine 网页壁纸：原地引用壁纸目录；预览以主屏比例的画布运行页面并可交互，也可在窗口模式设为桌面壁纸，应用背景同样实时显示（静音）。设置里的「壁纸音量」（原「视频壁纸音量」）对网页壁纸同样生效。
 - 桌面网页壁纸改为像 Wallpaper Engine 一样以 `file://` 直接加载壁纸目录：依赖读取同目录数据文件的壁纸（如歌单、字幕类）现在能完整运行；文件访问只对壁纸窗口开启，且只能读当前壁纸目录内的文件。Windows 上桌面的鼠标移动与左键点击会转发给网页壁纸（不拦截桌面本身的点击，桌面框选不受影响）。预览网页壁纸时，鼠标移到画布左右边缘中段即可唤出切换箭头。预览网页壁纸时右键菜单无法弹出（右键会被壁纸页面接收），菜单里的操作改为按原顺序排在底部工具条里。
 - 网页壁纸可读取作者默认属性与界面语言：桌面壁纸与图库预览里的 Wallpaper Engine 网页壁纸会在加载完成后收到 `project.json` 里作者设定的属性值，以及当前界面语言（切换语言后页面随之更新）；依赖这些属性才开始绘制的壁纸现在能正常显示。暂不支持帧率上限。
@@ -71,6 +72,7 @@
 ## 开发侧
 
 ### Added
+- 场景壁纸的着色器宏按 Wallpaper Engine 修正：Eagle Flag 的旗面法线更接近原版，HDR 场景里过亮颜色的色相类混合模式不再偏色。
 - 翻译器按 Wallpaper Engine 语义实现 `#require LightingV1`：`LIGHTING=0` 时为空，开启时生成灯光 uniform 与 `PerformLighting_V1`；宿主支持 `general.lightconfig` 与 `lpoint` / `lspot` / `ltube` / `ldirectional` 灯对象，无 effect 图层的光照与 Wallpaper Engine 对比最大差 1（`cocs/wpe/WPE_SCENE.md`「光照」）。
 - 场景宿主 P3-0c：CEF 补丁 08 让 `ChromeContentBrowserClientCef::ShouldEmbeddedFramesTryToReuseExistingProcess` 无条件返回 false，子 frame 不再跨 browser 复用同站点渲染进程（两个窗口的 `file:` 宿主 / 网页壁纸各自一个进程，畅游 / 爬虫的第三方 iframe 同样生效，主 frame 复用不变）；CEF 补丁 09（Chromium 内层 `kabegame_raf_local_root_only`）让每个 frame widget 只服务自己 local root 的文档，同一页面里多个同进程 iframe 的 rAF 不再每帧重复派发。
 - 场景宿主 P3-0b：编译、WebGPU 渲染与 dev 探针迁入 `apps/wpe-scene` 的 `SceneHost`，应用页 `WpeSceneView` 改为 iframe 外壳；宿主垫片接管 ping，独立 Vitest 纳入 `deno task test -c kabegame`。

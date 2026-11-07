@@ -358,3 +358,24 @@ const planned: ShaderTextureSlot[] = binds ? binds.map((bind) => ({ slot: bind.i
 | `ccsimple` 的 `LUT=1` | 我们翻译失败：`The type of [15] doesn't match the type stored in [16]`，推断是 `texSample3D` 的 vec4 赋给 vec3 |
 | `particle/swirl_0` | 我们报 `render:texture-missing:2`，所以 RG88 的 `nrm` 对比没有做成。WPE 侧读数已有，原因没查 |
 | 修改后的实际验证 | 本次不改产品代码，「修正后」都是用测试工程模拟的 |
+
+## 落地记录（2026-11-07）
+
+第 6 节的三点已落地，宿主入口 `index-BGGGLREP.js`，脚本和结果在 `ignore/hdr-macro/fix/`。这一节的读数都来自真实改动，不是模拟。
+
+| 验证 | 结果 |
+|---|---|
+| 翻译器 | 单测 35 通过，语料 158/167，带灯门槛通过 |
+| 宿主 | vitest 668 通过，tsc、Prettier 通过 |
+| 语料不支持项 | 原有 117 张没有新增或减少的键；`ultra` 比 `disabled` 没有多出翻译失败 |
+| 基线 6 张 × 3 档 | 18 项里 15 项逐字节相同，变的只有 `eagleflag`（12885）三档，和第 6 节预测一致 |
+| `eagleflag` 和 WPE 比（相位对齐到 t = 4.9） | 均差 0.481、差 > 8 的像素 1.655%、最大差 88。改前是 1.83、6.22% |
+| `hsl-hdr` 和 WPE 比 | 最大差 1、均差 0.0667、差 > 8 的像素 0。改前是 255、31.47、40% |
+| `hsl-ldr` 和 WPE 比 | 最大差 0，LDR 场景没有被 `HDR` 影响 |
+
+**没验证：**
+- `nrm` 工程渲染不了：它的 `rg-*` 单元格用 `particle/swirl_0`（RG88），`tex:format:8` 没有 mip，报 `render:texture-missing:2`。这是已知限制，归 P4b，和宏无关。法线修复由 `eagleflag` 的真实对比验证。
+- `eagleflag` 剩余最大差 88 的来源没查。
+- `disabled`、开启档、`displayhdr` 下的 `HDR` 仍是静态结论。
+
+第 344 行的「约 4%」和结论表的 6.22% 对不上，这里以结论表为准。

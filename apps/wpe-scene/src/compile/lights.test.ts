@@ -3,7 +3,7 @@ import type { TranslateRequest, TranslateResult, Wpesl2wgsl } from "../wpesl2wgs
 import { compileScene } from "./bundle";
 import { checkObjectFeatures, isEngineUniform } from "./features";
 import type { SceneReader } from "./fs";
-import { lightAxes, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
+import { engineDefines, lightAxes, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import type { SceneObject, SceneValue } from "./model";
 
 const plain = (value: SceneValue | undefined) => value as string | number | boolean | null | undefined;
@@ -31,16 +31,15 @@ describe("general.lightconfig", () => {
     ]);
   });
 
-  it("宏：LIGHTS_* 恒给，HDR / SCENE_ORTHO 按场景，SHADERVERSION 选 >= 62 的分支", () => {
-    const counts = { point: 2, spot: 0, tube: 1, directional: 0 };
-    expect(litDefines(counts, false, false)).toEqual({
+  it("宏：litDefines 只有 LIGHTS_*，HDR / SCENE_ORTHO 全局给，关闭时不写键", () => {
+    expect(litDefines({ point: 2, spot: 0, tube: 1, directional: 0 })).toEqual({
       LIGHTS_POINT: "2",
       LIGHTS_SPOT: "0",
       LIGHTS_TUBE: "1",
       LIGHTS_DIRECTIONAL: "0",
-      SHADERVERSION: "62",
     });
-    expect(litDefines(counts, true, true)).toMatchObject({ HDR: "1", SCENE_ORTHO: "1" });
+    expect(engineDefines(false, false)).toEqual({});
+    expect(engineDefines(true, true)).toEqual({ HDR: "1", SCENE_ORTHO: "1" });
   });
 });
 
@@ -229,7 +228,8 @@ describe("编译", () => {
   it("无 effect 的图层：灯数宏随请求给翻译器，灯光 uniform 进 pass", async () => {
     const { bundle, calls } = await compile({ image: "models/lit.json" }, { lightconfig: { point: 1 } }, [lamp]);
     expect(bundle.unsupported).toEqual([]);
-    expect(calls[0].litDefines).toMatchObject({ LIGHTS_POINT: "1", SCENE_ORTHO: "1" });
+    expect(calls[0].litDefines).toMatchObject({ LIGHTS_POINT: "1" });
+    expect(calls[0].defines).toMatchObject({ SCENE_ORTHO: "1" });
     expect(bundle.layers[0].passes[0].uniforms.g_LPoint_Color).toEqual([2, 2, 2, 3]);
   });
 

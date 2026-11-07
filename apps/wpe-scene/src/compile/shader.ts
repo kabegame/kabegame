@@ -83,6 +83,8 @@ export class ShaderCompiler {
     private unsupported: Set<string>,
     /** 只在最终 `LIGHTING` 非 0 时生效的宏（`lights.ts`）。整场一份，不进缓存键。 */
     private litDefines: Record<string, string> = {},
+    /** 整场全局的引擎宏（`lights.ts` 的 `engineDefines`）。`ShaderCompiler` 每次编译新建，不进缓存键。 */
+    private defines: Record<string, string> = {},
   ) {}
 
   /**
@@ -137,7 +139,7 @@ export class ShaderCompiler {
     }
     const result = await translateWithIncludes(
       this.translator,
-      { vertex, fragment, combos, textures, litDefines: this.litDefines },
+      { vertex, fragment, combos, textures, defines: this.defines, litDefines: this.litDefines },
       (name) => this.fs.text(`shaders/${name}`),
     );
     if (!result.ok) {
