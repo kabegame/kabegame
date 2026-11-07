@@ -66,21 +66,29 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_PointerPositionLast",
   "g_PointerState",
 ]);
+/** 光照路径声明了、只有 PRELIGHTING 才读的 uniform（`genericimage4.vert`）：渲染器不写，PRELIGHTING 另报。 */
+const UNREAD_UNIFORMS = new Set(["g_AltModelMatrix", "g_AltNormalModelMatrix", "g_AltViewProjectionMatrix"]);
 export function isEngineUniform(name: string): boolean {
-  return ENGINE_UNIFORMS.has(name) || /^g_Texture\d+(?:Resolution|Texel)$/.test(name);
+  // 灯光数组由 `lights.ts` 随材质常量写入
+  return (
+    ENGINE_UNIFORMS.has(name) ||
+    UNREAD_UNIFORMS.has(name) ||
+    /^g_Texture\d+(?:Resolution|Texel)$/.test(name) ||
+    /^g_L(?:Point|Spot|Tube|Directional)_/.test(name)
+  );
 }
 
 /**
- * 值非 0 时需要引擎提供数据、渲染器还没有的 COMBO。其余 COMBO（材质 / effect 自己的选项，如 `VERSION`、`BLENDMODE`、
+ * 值非 0 时需要引擎提供数据、渲染器还没有的 COMBO。`LIGHTING` 不在这里：无 effect 的图层已实现（`lights.ts`），
+ * 其余路径由 `compileScene` 报 `lighting:*`。其余 COMBO（材质 / effect 自己的选项，如 `VERSION`、`BLENDMODE`、
  * rz 的 `HUEMODE`）只是着色器内部分支，交给翻译器即可。
  * - `SPRITESHEET`：要逐帧的 `g_Texture0Rotation` / `Translation`（P6），现在只给恒等帧；
  * - `ALPHATOCOVERAGE`：混合模式 3（B7），没有 MSAA 时结果不同；
- * - 光照、反射、蒙皮、变形、预光照：对应的 uniform 也会被 `uniform:*` 报出，这里一并列上，防止只改 COMBO 漏报。
+ * - 反射、蒙皮、变形、预光照：对应的 uniform 也会被 `uniform:*` 报出，这里一并列上，防止只改 COMBO 漏报。
  */
 const ENGINE_COMBOS = new Set([
   "SPRITESHEET",
   "ALPHATOCOVERAGE",
-  "LIGHTING",
   "REFLECTION",
   "SKINNING",
   "SKINNING_ALPHA",
@@ -92,6 +100,7 @@ const ENGINE_COMBOS = new Set([
  * 不影响画面、或由别处裁决的 general 键。
  * - `orthogonalprojection` / `clearcolor` / `clearenabled`：已实现。
  * - `ambientcolor` / `skylightcolor`：只进 `g_LightAmbientColor` / `g_LightSkylightColor`，渲染器照写。
+ * - `lightconfig`：灯数进 `LIGHTS_*`（`lights.ts`），要阴影 / cookie 的项由 `lightConfigIssues` 另报。
  * - `norecompile`、`camerapreview`：编辑器选项。
  * - `camerafade`：加载时的淡入，不改变稳定画面。
  * - `bloom`、`hdr` 与全部 `bloom*` 调节项：由后处理档位裁决（`postprocess.ts`），泛光 / HDR 由 `bloom.ts` 与 `render/bloom.ts` 实现。
@@ -105,6 +114,7 @@ const NEUTRAL_GENERAL = new Set([
   "clearenabled",
   "ambientcolor",
   "skylightcolor",
+  "lightconfig",
   "norecompile",
   "camerapreview",
   "camerafade",
@@ -230,20 +240,49 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   scanValue(scene, unsupported);
 }
 
+/**
+ * 灯对象自己的键（`FUN_14025da80`）。灯不画东西，这些键只影响 `lights.ts` 算出的 uniform，`density` 之后的项只给体积光与阴影用。
+ * `castshadow` / `usecookie` 单独不起作用：要 `lightconfig` 里的阴影灯数才生效，那时报 `lightconfig:*`。
+ */
+const LIGHT_KEYS = new Set([
+  "light",
+  "intensity",
+  "radius",
+  "exponent",
+  "innercone",
+  "outercone",
+  "controlpoint",
+  "density",
+  "volumetricsexponent",
+  "cascadedistance0",
+  "cascadedistance1",
+  "cascadedistance2",
+  "lightsourcesize",
+  "castshadow",
+  "usecookie",
+]);
+
 export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>): void {
   const kind = ["image", "model", "particle", "sound", "text", "light"].find((key) => active(object[key]));
   if (!kind) unsupported.add("object:empty");
-  else if (kind !== "image") unsupported.add(`object:${kind}`);
-  for (const key of OBJECT_FLAGS) if (active(object[key])) unsupported.add(`object:${key}`);
+  else if (kind !== "image" && kind !== "light") unsupported.add(`object:${kind}`);
+  const lightKey = (key: string) => kind === "light" && LIGHT_KEYS.has(key);
+  for (const key of OBJECT_FLAGS) if (active(object[key]) && !lightKey(key)) unsupported.add(`object:${key}`);
   if (object.alignment !== undefined && object.alignment !== "center") unsupported.add("object:alignment");
   for (const [key, value] of Object.entries(object))
     if (
       !SUPPORTED_OBJECT.has(key) &&
       !OBJECT_FLAGS.includes(key) &&
       !["alignment", "model", "particle", "sound", "text", "light"].includes(key) &&
+      !lightKey(key) &&
       active(value)
     )
       unsupported.add(`object:${key}`);
+}
+
+/** 程序最终是否开了光照（COMBO 可能来自材质，也可能是着色器注解的默认值）。 */
+export function usesLighting(result: TranslateResult): boolean {
+  return (result.combos ?? []).some((combo) => combo.name.toUpperCase() === "LIGHTING" && combo.value !== 0);
 }
 
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {

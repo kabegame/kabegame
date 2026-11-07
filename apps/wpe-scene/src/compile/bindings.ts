@@ -22,7 +22,7 @@ export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "br
 
 export type RecompileReason =
   | "postprocess-hdr" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）
-  | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）
+  | "layer-structure"; // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）、灯对象字段（`lights.ts` 的编译期常量）
 
 type GeneralField =
   | { type: "vec3"; fallback: readonly [number, number, number] }

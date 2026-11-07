@@ -65,14 +65,14 @@ wasm 也只在真要渲染时才加载。上级计划的阶段 3 / 4 合并为�
 | P4 | shimmering_particles | 4 个粒子系统：emitter `sphererandom`；initializer `lifetimerandom sizerandom velocityrandom colorrandom angularvelocityrandom rotationrandom`；operator `movement oscillateposition alphafade oscillatealpha angularmovement`；renderer `sprite`。另有 `instanceoverride` 绑用户属性、自定义 `particle` shader（`WORLDBLUR` `USERCOLORBLEND`）、5760×1080 三屏正交、脚本改 `bloomstrength`、9 处用户绑定 |
 | P5 | retro · neon_sunset | 静态 `.mdl` 网格（MDLV0014，无骨骼 / 动画段）作为 model 图层（retro 1 个、neon_sunset 2 个，`neongrid` 151 KB）。neon_sunset 另有：透视相机（`orthogonalprojection: null`）、`fullscreen` / `passthrough` 层、`filmgrain` effect、`BLENDMODE=12`、`parallaxDepth`、`assets` 里的 `materials/util/noise.tex`、11 个颜色 / 滑块属性 |
 | P6 | dino_run | 32 层；`scroll` ×21 + `godrays`（5 pass、2 fbo）；spritesheet（`TEXS` 帧表，COMBO `spritesheet=1`）；文本 ×2（项目 otf 字体）；声音 ×2；脚本 `createLayer / destroyLayer / sortLayer / getLayer / getLayerIndex / registerAsset / thisObject.getMaterial`、`localStorage.get/set`（`LOCATION_GLOBAL`）、`cursorDown`、`input.cursorWorldPosition`；`camerafade` |
-| W1 | 工坊 3656079027 超时空辉夜姬 | 工坊里最简单的一张：没有脚本、视频、文本。新增 `genericimage4` 的 `#require LightingV1` 打桩；`parent` 层级（5 处）与带 `effects` 的分组节点（`disablepropagation`、`castshadow`、`clampuvs`）；effect `shake` ×2、`iris`；sprite 粒子（复用 P4）；7 处用户绑定 |
+| W1 | 工坊 3656079027 超时空辉夜姬 | 工坊里最简单的一张：没有脚本、视频、文本。`genericimage4` 的 `#require LightingV1` 已实现（[lighting-REPORT](lighting-REPORT.md)）；`parent` 层级（5 处）与带 `effects` 的分组节点（`disablepropagation`、`castshadow`、`clampuvs`）；effect `shake` ×2、`iris`；sprite 粒子（复用 P4）；7 处用户绑定 |
 | W2 | 工坊 3429479356 MGS4 · 3600630828 樱羽艾玛 | 视频纹理（`.tex` 内嵌 4K MP4：MGS4 一段 707 MB，樱羽两段 200 + 95 MB）；文本与声音；简单脚本（`thisScene.enumerateLayers`、`thisLayer.text / alpha`、`getLayer`、`applyUserProperties`）；`g_AudioSpectrum` 音频条（工坊 effect `Simple_Audio_Bars`）；rope 粒子 + 跟随指针的控制点；`shine`（5 pass、2 fbo）、`blurprecise`、`opacity`；3840×2650 非 16:9 正交 |
 | W3 | 工坊 3470764447 伊蕾娜·昼夜 | `parent` 层级 31 处；5 段视频按时段切换；脚本 `engine.canvasSize`、`engine.registerAudioBuffers`、`mediaThumbnailChanged`；`colorBlendMode` 21 / 31；带 `camera` 的对象；16 个文本 |
 | W4 | 工坊 3611425904 五河琴里 · 3146703458 P3R 音乐播放器 · 3351163962 椎名真白 | 交互：按图层命中的 `cursorClick / Down / Up / Move / Enter / Leave`；声音图层由脚本控制（`play / pause / stop / isPlaying`，P3R 8 个声音、琴里 4 段语音）；`systemfont_*`；`engine.setTimeout`、`WEMath / WEVector`；材质 `genericimage3`、`flat`；effect `sharpen_filter`、`transform`、`foliagesway`、`iris`、`blend`；粒子 `turbulence`、`sizechange`；真白 53 个文本、448 处用户绑定 |
 | W5 | 工坊 2932157836 星浴 · 3524852519 伊蕾娜·初晨偎风 · 3219908811 初音·胧月 | 媒体集成（`mediaPlaybackChanged / PropertiesChanged / ThumbnailChanged / TimelineChanged`）；跨脚本 `shared`（含可拖动图层）、`engine.setInterval`、`getAnimation`、`thisLayer.getParent`；粒子 `vortex`、`controlpointattract`、`children: eventfollow`；大量内置 effect（`waterwaves` `waterripple` `shake` `pulse` `transform` `chromaticaberration` `spin` `perspective` `twirl` `blendgradient` `motionblur` `blurradial`）、`composelayer`；R8 / RG88（AlphaChannelPriority） |
 | W6 | 工坊 3351072238 妃咲 · 3409595232 长安雪 · 3554161528 空崎日奈 | puppet warp：MDLV0021 / MDLV0023 带骨骼（MDLS）与动画（MDLA），skinning 经 `defines` 传 `BONECOUNT`；DXT3（格式 6）；`REFRACT` / `PARALLAX`、`depthparallax`、`g_PointerPosition` / `g_ParallaxPosition`；粒子 `ropetrail` `spritetrail` `mapsequencearoundcontrolpoint` `oscillatesize`；effect `waterflow` `bloom` `color_grading` `rounded_mask` `hue_shift` `clipping_mask`；脚本 `localStorage` |
 | P7 | dna_fragment · techno · audiophile | 纯 3D 模型场景（全部是 `.mdl`、透视），各自用项目 shader。mdl 新旧格式都有：MDLV0004（dna_fragment、audiophile）、MDLV0023 混 MDLV0014（techno）。audiophile 要音频（`supportsaudioprocessing`），接 Phase 8 的音频源；dna_fragment 带一个简单粒子（复用 P4） |
-| P8 | demon_core · arsenal · fantasticcar · ricepod | 光照（light 图层、ambient / skylight）；内置 `generic` 的 `lightmap` / `normalmap` / `reflection` / `detailinalpha`（arsenal）；车漆 shader 的 `normalmap` / `metal` / `paintwork` / `specularalpha`（fantasticcar）；`spritetrail` renderer、`camerashake`、无内容的变换节点、`selfillum`（ricepod）。WPE 私有光照库 `#require LightingV1` 在这里实现（翻译器目前报 `phase: "require"`） |
+| P8 | demon_core · arsenal · fantasticcar · ricepod | 光照（light 图层、ambient / skylight）；内置 `generic` 的 `lightmap` / `normalmap` / `reflection` / `detailinalpha`（arsenal）；车漆 shader 的 `normalmap` / `metal` / `paintwork` / `specularalpha`（fantasticcar）；`spritetrail` renderer、`camerashake`、无内容的变换节点、`selfillum`（ricepod）。`#require LightingV1` 与图层光照已提前实现（lighting-REPORT），这里剩阴影、PRELIGHTING 与遗留灯 |
 | P9 | 按需 | 本机样本都没用到的能力（如 `attachment`、`cursorripple` / `depthparallax` 等内置 effect、`fluidsimulation`），拿到新样本再排 |
 
 补充事实：
@@ -89,8 +89,8 @@ wasm 也只在真要渲染时才加载。上级计划的阶段 3 / 4 合并为�
 - **全是 `scene.pkg`**：版本 `PKGV0018`–`0024` 布局相同，最大 712 MB；条目首尾相接，最后一条结束在文件末尾；
   条目名是 UTF-8 正斜杠路径，有中文、有末尾带空格的。项目自带的工坊依赖放在 `effects|materials|shaders|fonts/workshop/<工坊 id>/` 下。
 - **图层材质换成了 `genericimage4`**（22 个材质，`genericimage2` 只剩 10 个）与 `genericparticle`（13 个）。`genericimage4.frag` 在顶层
-  **无条件** `#require LightingV1`，翻译器现在会整对报 `phase: "require"`，所以工坊样本要先让翻译器给光照库打桩（W1）；
-  `genericparticle.frag` 的 require 在条件编译里。主体只在 `LIGHTING || REFLECTION` 下用光照，不开光照的 2D 图层给空库就够。
+  **无条件** `#require LightingV1`：`LIGHTING=0` 时它什么都不插，翻译器已按此实现（lighting-REPORT）；
+  `genericparticle.frag` 的 require 在条件编译里。主体只在 `LIGHTING || REFLECTION` 下用光照。本机语料没有一张真的开 `LIGHTING`。
 - **视频纹理**：`.tex` 的 flags 含 Video（32）。容器多为 `TEXB0004`，FreeImage 字段为 −1、`isVideoMp4` 字段为 **0**，
   按 linux-wallpaperengine 的规则退回 TEXB0003 的 mip 布局；也有直接是 `TEXB0003` 的（P3R）。唯一一个 mip 不压缩，数据就是完整 MP4
   （`ftypmp42` / `ftypisom`），从 mip 数据起点（`TEXB0004` 为第 91 字节、`TEXB0003` 为第 87 字节）到条目末尾。
@@ -647,13 +647,14 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **3c 运行时渲染图**：[phase-3c-runtime-graph.md](phase-3c-runtime-graph.md)。effect 可见性单图层重算（`FUN_1401e6300`）、泛光开关与级数、清屏色 / 环境光 / 相机就地，做到 WPE 的程度。
 - **验收样本**：vortex 切「模式」颜色模式跟着变（3b）；bedroom 解锁，彩虹灯带按墙钟循环、与 WPE 同一时刻同色，`light_speed` 改滚动速度（3a）；shimmering_particles 的 `bloomstrength` 首次 apply 后为 1.0（3b，dev 强制渲染下经探针读）；eagleflag / vortex / bedroom 拖属性不重新编译（3a）。
 
-## P4 — 粒子（shimmering_particles）
+## P4 — 粒子系统（shimmering_particles · 3062029089 · 1838478131 · 2254685070）
 
-- **新增** CPU 粒子模拟（TypedArray）：P4 样本用到的 1 种 emitter、6 种 initializer、5 种 operator，以及 `sprite` renderer。
-  用实例化四边形代替几何着色器（翻译器已定义 `HLSL_GS40_DISABLED`、不定义 `GS_ENABLED`，着色器走顶点展开分支）；
-  `instanceoverride` 的数量 / 尺寸 / 透明度 / 颜色接用户属性。
-- **新增** 粒子 shader 的 `WORLDBLUR` / `USERCOLORBLEND`，以及脚本写场景级 `bloomstrength`（`thisObject` 指向 general）。
-- **验收**：画面与预览图一致；`count / glow / style` 等属性实时生效。
+总计划见 [phase-4-particles.md](phase-4-particles.md)。2026-11-07 用户定范围为全部 70 张的粒子用法，目标从跑通一张样本改为建好粒子运行时；层级支持从 W1 提前到 P4a。
+
+- **分节**（P4a–P4f 各有步骤 0，只查本节要用的内容）：P4-0 对比工具与框架问题；P4a 层级、底座与档 1；P4b 帧表、`rg88` / `r8` 与档 2；P4c `spritetrail` 与控制点；P4d 绳与映射；P4e 子系统与音频；P4f 脚本与深度。
+- **模块归属**：档 2–4 的模块从 W2、W5、W6、P8 提前到这里；层级从 W1 提前到 P4a；R8 / RG88 从 W5 提前到 P4b。
+- **绘制方式**：翻译后的 `a_TexCoordVec4` 同时装角点 UV、旋转和尺寸，不用实例化四边形，改成每个粒子 4 个顶点加索引。
+- **验收**：粒子用法覆盖 70 张，解锁 `shimmering_particles`、`3062029089`、`1838478131`、`2254685070`；粒子带随机，不比预览图，改用确定性工程和 WPE 逐帧对比。
 
 ## P5 — 透视相机与静态网格（retro · neon_sunset）
 
@@ -679,21 +680,21 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **新增** spritesheet（`TEXS` 帧表、COMBO `spritesheet`）、`godrays`（多 pass、多 fbo）、`camerafade`。
 - **验收**：dino_run 可玩，计分显示正确，切换 `dino / level / show_score / god_rays / follow_cursor` 生效，重启后最高分仍在。
 
-## W1 — 光照库打桩、层级与分组节点（工坊 3656079027 超时空辉夜姬）
+## W1 — effect `shake`、`iris`（工坊 3656079027 超时空辉夜姬）
 
-- **前置·翻译器**：`#require LightingV1` 改为打桩。预处理后若没有引用光照库，就当空库处理；真引用了，才报 `phase: "require"`。
-  没有这条，所有 `genericimage4` 材质都翻译失败（见「样本复杂度分级」的工坊补充事实）。同时把 pkg 里的工坊着色器加进翻译器的语料测试。
-- **新增** `parent` 层级：变换按父链累乘；无内容的分组节点，以及带 `effects` 的分组（`disablepropagation`、`castshadow`、`clampuvs`，开工时核实语义）。
+- **前置·翻译器**：~~`#require LightingV1` 打桩~~ 已按 WPE 语义实现，不是打桩：`LIGHTING=0` 展开成空，开启时生成真实的库（[lighting-REPORT](lighting-REPORT.md)）。
+  待做：把 pkg 里的工坊着色器加进翻译器的语料测试。
+- `parent` 层级与分组节点已提前到 P4a。
 - **新增** effect `shake`、`iris`。
 - **验收**：画面与预览图一致；7 处用户属性生效。
 
-## W2 — 视频纹理、音频频谱、绳状粒子（工坊 3429479356 MGS4 · 3600630828 樱羽艾玛）
+## W2 — 视频纹理、音频频谱（工坊 3429479356 MGS4 · 3600630828 樱羽艾玛）
 
 - **新增** 视频纹理：`.tex` 的 flags 含 Video（32）时，唯一 mip 是完整 MP4，起点按容器版本解析。
   - 读取：按区间读出 MP4，做成 Blob，交给静音循环的 `<video>`，每帧 `importExternalTexture`；解码交给浏览器。
   - 单段最大 707 MB：Blob 的内存占用与 4K60 解码开销要实测。不行再看 MSE 分段喂入，或由 Rust 把区间解到缓存文件。
 - **新增** 音频：`g_AudioSpectrum*` uniform。脚本 `engine.registerAudioBuffers` 已在 P3c 点 0 接上 Phase 8 的 `WpeMediaHub`；场景宿主本身是子 frame，不需要主 frame 订阅方，uniform 直接用宿主收到的同一帧。这类 uniform 数组在翻译结果里是补齐过的 `vec4` 数组（见 P1-0）。
-- **新增** 脚本 `thisScene.enumerateLayers`、`thisLayer.text / alpha`；rope renderer（`genericropeparticle`）与跟随指针的控制点；
+- **新增** 脚本 `thisScene.enumerateLayers`、`thisLayer.text / alpha`；
   `shine`（5 pass、2 fbo，同 P6 godrays 形态）、`blurprecise`、`opacity`；项目自带的工坊 effect（`effects/workshop/<id>/…`，资源层已覆盖）。
 - **验收**：两张画面与预览图一致；视频流畅循环；音频条随系统音频跳动；调位置的用户属性生效。
 
@@ -707,16 +708,15 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 
 - **新增** 按图层命中的 `cursorClick / Down / Up / Move / Enter / Leave`：要算图层的命中区域。
 - **新增** 声音图层由脚本控制 `play / pause / stop / isPlaying`；`systemfont_*` 系统字体映射；`engine.setTimeout`、`WEMath`、`WEVector`。
-- **新增** 材质 `genericimage3`、`flat`；effect `sharpen_filter`、`transform`、`foliagesway`、`iris`、`blend`；粒子 `turbulence`、`sizechange`。
+- **新增** 材质 `genericimage3`、`flat`；effect `sharpen_filter`、`transform`、`foliagesway`、`iris`、`blend`。
 - **验收**：点击语音 / 播放器 / 各按钮触发对应变化与声音；真白 53 个文本显示正确、448 处用户属性生效。
 
 ## W5 — 媒体集成、跨脚本共享与大量内置 effect（工坊 2932157836 星浴 · 3524852519 伊蕾娜·初晨偎风 · 3219908811 初音·胧月）
 
 - **新增** 媒体事件 `mediaPlaybackChanged / PropertiesChanged / ThumbnailChanged / TimelineChanged`（SMTC）；跨脚本的 `shared` 对象（含可拖动图层）；
   `engine.setInterval`；`thisObject.getAnimation`、`thisLayer.getParent`。
-- **新增** 粒子 `vortex`、`controlpointattract`、`children: eventfollow`。
 - **新增** 内置 effect：`waterwaves`、`waterripple`、`shake`、`pulse`、`transform`、`chromaticaberration`、`spin`、`perspective`、`twirl`、
-  `blendgradient`、`motionblur`、`blurradial`；`composelayer`；R8 / RG88 纹理与 AlphaChannelPriority。
+  `blendgradient`、`motionblur`、`blurradial`；`composelayer`；AlphaChannelPriority。R8 / RG88 纹理已提前到 P4b。
 - **验收**：播放音乐时歌名 / 封面 / 播放状态卡片随之显示与隐藏；水波等效果与预览图一致；可拖动图层的位置能保存。
 
 ## W6 — puppet warp 骨骼动画（工坊 3351072238 妃咲 · 3409595232 长安雪 · 3554161528 空崎日奈）
@@ -724,7 +724,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **新增** MDLV0021 / MDLV0023 的骨骼（MDLS）与动画（MDLA），skinning（翻译器经 `defines` 传 `BONECOUNT`）。
 - **新增** DXT3（格式 6）；`REFRACT` / `PARALLAX`、`depthparallax` 与 `g_PointerPosition` / `g_ParallaxPosition`；
   `blurprecise`、`hue_shift`、`clipping_mask`、`waterflow`、`bloom`、`color_grading`、`rounded_mask`；
-  粒子 `boxrandom`、`ropetrail`、`spritetrail`、`mapsequencearoundcontrolpoint`、`oscillatesize`；脚本 `localStorage`。
+  脚本 `localStorage`。
 - **验收**：人物骨骼动画与预览一致；鼠标视差与折射生效。
 
 ## P7 — 3D 模型场景（dna_fragment · techno · audiophile）
@@ -736,10 +736,11 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 
 ## P8 — 光照与材质（demon_core · arsenal · fantasticcar · ricepod）
 
-- **新增** light 图层、ambient / skylight 与 `LIGHTING` 相关 COMBO（`g_Lights*` uniform）。
-- **新增** 翻译器支持 `#require LightingV1`（WPE 私有光照库，目前报 `phase: "require"`）与阴影投射路径。
+- **已完成**（lighting-REPORT）：`#require LightingV1`、`general.lightconfig`、四种 V1 灯对象、无 effect 图层的 `LIGHTING`。
+- **新增** 遗留灯（`"light": "point"`，`g_LightsPosition` / `g_LightsColorPremultiplied`，`generic*` 与 `genericimage2` 读）。
+- **新增** `PRELIGHTING`（带 effect 或 passthrough 的图层开光照，`g_Alt*`）、effect 自己开光照、阴影投射与 cookie、体积光。
 - **新增** 内置 `generic` 的 lightmap / normalmap / reflection；车漆 shader 的 metal / paintwork；
-  `spritetrail` renderer；`camerashake`；无内容的变换节点；`selfillum`。
+  `camerashake`；无内容的变换节点；`selfillum`。
 - arsenal 扫描时有 1 处引用解析为空，开工时核实。
 - **验收**：四张与预览图一致；fantasticcar 的车身 / 条纹 / 轮毂颜色属性生效。
 
@@ -811,8 +812,8 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 ## 风险
 
 - **视频纹理**：工坊样本的主画面多是 `.tex` 内嵌的 4K MP4（单段最大 707 MB），Blob 的内存与解码开销、预览与桌面同时播放时的表现都要在 W2 实测。
-- **翻译覆盖面**：P1–P6 的着色器都已通过；工坊样本先卡在 `genericimage4` 无条件 `#require LightingV1`（W1 前置打桩），
-  真正的光照留给 P8，另有阴影与工坊着色器里 HLSL 的隐式截断。翻译器的语料测试还没覆盖 pkg 里的工坊着色器，W1 补上。
+- **翻译覆盖面**：P1–P6 的着色器都已通过；`#require LightingV1` 已实现，
+  剩阴影与工坊着色器里 HLSL 的隐式截断。翻译器的语料测试还没覆盖 pkg 里的工坊着色器，W1 补上。
   后者需要类型信息，规则改写做不到，遇到时再评估：要么扩展翻译器，要么在 naga 的 IR 上处理。
 - **浏览器 WGSL 校验**：naga 输出、naga 回读都通过，但 Tint 还没验证过（P1 真机首项）。
 - **合成语义**：效果链、混合模式、`copybackground`、fbo、泛光与 HDR 已由 WPE 逆向取得规格（P2，D8）；剩余未知见「P2 仍未知」。

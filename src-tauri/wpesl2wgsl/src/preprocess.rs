@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde_json::Value;
 
+use crate::library::{self, Expansion};
+
 /// include 嵌套上限，防止自包含或深链。
 const MAX_INCLUDE_DEPTH: usize = 32;
 /// `#if` 里宏展开的递归上限。
@@ -45,7 +47,7 @@ pub struct Preprocessor<'a> {
     pub lines: Vec<Line>,
     /// 处于有效分支、但调用方没提供的头文件。
     pub missing: BTreeSet<String>,
-    /// 处于有效分支的 `#require`（WPE 私有指令，如 `LightingV1`）。
+    /// 处于有效分支、`library` 展开不了的 `#require`。`LIGHTING` 关闭时的 `LightingV1` 不算，它展开成空。
     pub requires: BTreeSet<String>,
 }
 
@@ -168,7 +170,15 @@ impl<'a> Preprocessor<'a> {
                         self.push(code, None, file, line_no);
                     }
                     "require" => {
-                        self.requires.insert(rest.to_string());
+                        match library::expand(rest, |name| self.eval(name)).map_err(fail)? {
+                            Expansion::Nothing => {}
+                            Expansion::Source(source) => {
+                                self.process(&format!("<{rest}>"), &source, depth + 1)?;
+                            }
+                            Expansion::Unsupported(what) => {
+                                self.requires.insert(what);
+                            }
+                        }
                     }
                     // 版本 / 扩展由翻译器统一给出（GLSL 450），源码里的去掉
                     "version" | "extension" | "pragma" | "line" | "" => {}
@@ -690,7 +700,7 @@ mod tests {
 
     #[test]
     fn comments_metadata_and_array_sizes() {
-        let source = "/* block\n#if 1 */\nuniform float g_X; // {\"material\":\"x\"}\nuniform mat4x3 g_Bones[BONECOUNT];\n#require LightingV1\n";
+        let source = "/* block\n#if 1 */\nuniform float g_X; // {\"material\":\"x\"}\nuniform mat4x3 g_Bones[BONECOUNT];\n#require LightingV2\n";
         let pp = run(source, &[("BONECOUNT", "4 * 2")], &[]);
         assert_eq!(
             code(&pp),
@@ -704,7 +714,7 @@ mod tests {
             .unwrap();
         assert_eq!(uniform.line, 3);
         assert!(uniform.comment.as_deref().unwrap().contains("material"));
-        assert_eq!(pp.requires.iter().collect::<Vec<_>>(), ["LightingV1"]);
+        assert_eq!(pp.requires.iter().collect::<Vec<_>>(), ["LightingV2"]);
     }
 
     #[test]

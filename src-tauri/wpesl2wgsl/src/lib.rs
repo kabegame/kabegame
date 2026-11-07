@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod library;
 mod naga_stage;
 pub mod preprocess;
 pub mod rewrite;
@@ -57,6 +58,10 @@ pub struct TranslateRequest {
     /// 额外的宏（最后应用，可覆盖平台宏与 COMBO）。
     #[serde(default)]
     pub defines: BTreeMap<String, String>,
+    /// 只在最终 `LIGHTING` 非 0 时生效的宏：`LIGHTS_*`（WPE 只在这时写它们，`FUN_1401a5c40`）与光照路径要的 `HDR`。
+    /// 材质默认开光照的情况调用方翻译前不知道，所以由这里按最终取值裁决。
+    #[serde(default, rename = "litDefines")]
+    pub lit_defines: BTreeMap<String, String>,
     /// 成功时也带上生成的 GLSL 450，便于排查。
     #[serde(default)]
     pub debug: bool,
@@ -103,7 +108,7 @@ pub struct TranslateResult {
     /// `phase: "include"` 时缺少的头文件。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
-    /// `phase: "require"` 时用到的 WPE 私有库（如 `LightingV1`），暂不支持。
+    /// `phase: "require"` 时展开不了的库：未知的名字，或要阴影 / cookie 的 `LightingV1/shadow`。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
 }
@@ -254,6 +259,9 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         }
     }
     defines.extend(request.defines.clone());
+    if defines.get("LIGHTING").is_some_and(|value| value != "0") {
+        defines.extend(request.lit_defines.clone());
+    }
 
     // 3. 预处理两段
     let mut stages = Vec::with_capacity(2);
@@ -689,12 +697,81 @@ void main() {
     }
 
     #[test]
-    fn require_directive_is_reported() {
+    fn unknown_require_is_reported() {
+        let mut req = request();
+        req.fragment = format!("#require LightingV2\n{FRAG}");
+        let result = translate(&req);
+        assert_eq!(result.phase, Some("require"));
+        assert_eq!(result.requires, ["LightingV2"]);
+    }
+
+    #[test]
+    fn lighting_require_is_empty_when_lighting_is_off() {
         let mut req = request();
         req.fragment = format!("#require LightingV1\n{FRAG}");
         let result = translate(&req);
+        assert!(result.ok, "{:?}", result.errors);
+    }
+
+    /// `common_pbr_2.h` 的最小替身：只保留库要调用的签名，验证生成的代码能一路翻到 WGSL。
+    const PBR_STUB: &str = "\
+vec3 ComputePBRLightShadow(vec3 N, vec3 L, vec3 V, vec3 albedo, vec3 lightColor, float radius, float exponent, vec3 tint, vec3 f0, float roughness, float metallic, float shadow) { return L * radius * exponent; }
+vec3 ComputePBRLightShadowInfinite(vec3 N, vec3 L, vec3 V, vec3 albedo, vec3 lightColor, vec3 tint, vec3 f0, float roughness, float metallic, float shadow) { return L; }
+vec3 PointSegmentDelta(vec3 p, vec3 a, vec3 b) { return a - p; }
+";
+
+    fn lit_request() -> TranslateRequest {
+        let mut req = request();
+        req.fragment = format!(
+            "{PBR_STUB}#require LightingV1\nvoid main() {{ vec3 c = PerformLighting_V1(vec3(0, 0, 0), vec3(1, 1, 1), vec3(0, 0, 1), vec3(0, 0, 1), vec3(1, 1, 1), vec3(0.04, 0.04, 0.04), 0.5, 0.0); gl_FragColor = vec4(c, 1.0); }}\n"
+        );
+        req.combos.insert("LIGHTING".into(), serde_json::json!(1));
+        req
+    }
+
+    #[test]
+    fn lighting_library_translates_every_light_type() {
+        let mut req = lit_request();
+        for name in [
+            "LIGHTS_POINT",
+            "LIGHTS_SPOT",
+            "LIGHTS_TUBE",
+            "LIGHTS_DIRECTIONAL",
+        ] {
+            req.lit_defines.insert(name.into(), "2".into());
+        }
+        let result = translate(&req);
+        assert!(result.ok, "{:?}", result.errors);
+        let names: Vec<_> = result.uniforms.iter().map(|u| u.name.as_str()).collect();
+        for name in [
+            "g_LPoint_Color",
+            "g_LSpot_Exponent",
+            "g_LTube_OriginB",
+            "g_LDirectional_Direction",
+        ] {
+            assert!(names.contains(&name), "缺 {name}: {names:?}");
+        }
+    }
+
+    /// WPE 只在最终 `LIGHTING` 非 0 时写 `LIGHTS_*`（`FUN_1401a5c40`）：LIGHTING=0 的材质拿到它们也不生效。
+    #[test]
+    fn lit_defines_apply_only_when_lighting_is_on() {
+        let mut req = request();
+        req.fragment = format!("#if LIGHTS_POINT\nuniform vec4 g_Marker;\n#endif\n{FRAG}");
+        req.lit_defines.insert("LIGHTS_POINT".into(), "1".into());
+        let result = translate(&req);
+        assert!(result.ok, "{:?}", result.errors);
+        assert!(!result.uniforms.iter().any(|u| u.name == "g_Marker"));
+    }
+
+    #[test]
+    fn lighting_shadows_stay_reported() {
+        let mut req = lit_request();
+        req.lit_defines
+            .insert("LIGHTS_SPOT_COOKIE".into(), "1".into());
+        let result = translate(&req);
         assert_eq!(result.phase, Some("require"));
-        assert_eq!(result.requires, ["LightingV1"]);
+        assert_eq!(result.requires, ["LightingV1/shadow"]);
     }
 
     /// 按 JS 胶水的方式走一遍 C ABI：写请求、调用、读长度头、解析、释放。

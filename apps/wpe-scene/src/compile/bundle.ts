@@ -16,12 +16,14 @@ import {
   valueTypeOf,
 } from "./bindings";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
+import { bindingReader, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import {
   checkEffectFeatures,
   checkModelFeatures,
   checkPassFeatures,
   checkProgramFeatures,
   checkSceneFeatures,
+  usesLighting,
 } from "./features";
 import {
   currentProperties,
@@ -221,8 +223,7 @@ export const FRAMEBUFFER_RT = "_rt_FullFrameBuffer";
 /**
  * colorBlendMode ∉ {0, 31} 时的 passthrough 上屏材质（B8，`FUN_1401ecae0` → 0x1401853b0）：看场景 `scene.json` 顶层的
  * `version`（缺键按 0），与显卡、画质设置无关。`version > 2` 用 `effectpassthrough_4.json`（`genericimage4`），否则用
- * `effectpassthrough.json`（`genericimage3`）。本机默认样本都 ≤ 1；工坊样本多数 ≥ 3，而 `genericimage4.frag` 顶层无条件
- * `#require LightingV1`，翻译失败照常记 `shader:genericimage4:require:LightingV1`，等 W1 给光照库打桩。
+ * `effectpassthrough.json`（`genericimage3`）。本机默认样本都 ≤ 1；工坊样本多数 ≥ 3。
  */
 export function passthroughMaterial(sceneVersion: unknown): string {
   const version = typeof sceneVersion === "number" && Number.isFinite(sceneVersion) ? sceneVersion : 0;
@@ -404,7 +405,22 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     bindings: bindings.list,
     scripts,
   };
-  const shader = new ShaderCompiler(fs, input.translator, unsupported);
+  const counts = lightCounts(general);
+  for (const issue of lightConfigIssues(general)) unsupported.add(issue);
+  const shader = new ShaderCompiler(
+    fs,
+    input.translator,
+    unsupported,
+    litDefines(counts, postprocess.hdr, !!general.orthogonalprojection),
+  );
+  /** 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定。 */
+  let lights: Record<string, number[]> | null = null;
+  const sceneLights = () =>
+    (lights ??= lightUniforms(
+      scene.objects,
+      counts,
+      bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
+    ));
   const textureIndex = new Map<string, number>();
   /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
   const textureIssues = new Map<number, string[]>();
@@ -543,7 +559,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       depthwrite: pass.depthwrite ?? "disabled",
       textures: slots,
       runtime,
-      uniforms: shaderUniforms(result, pass, properties, context.key, bindings),
+      uniforms: {
+        ...shaderUniforms(result, pass, properties, context.key, bindings),
+        ...(result?.ok && usesLighting(result) ? sceneLights() : {}),
+      },
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),
     };
   }
@@ -620,6 +639,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           planned,
           unsupported: issues,
         });
+        // effect 自己开光照：WPE 里能跑，但世界坐标的取法没有和 WPE 对比过，不猜
+        if (compiled.program !== null && usesLighting(bundle.programs[compiled.program])) issues.add("lighting:effect");
         steps.push({
           kind: "draw",
           pass: compiled,
@@ -732,6 +753,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
 
     const cbm = layer.colorBlendMode;
+    // 带 effect 或走 passthrough 时，WPE 把光照挪到基础 pass（PRELIGHTING=1，世界坐标改用 g_Alt*），上屏 pass 关光照（FUN_140209540）
+    const lit = layer.passes.some((pass) => pass.program !== null && usesLighting(bundle.programs[pass.program]));
+    if (lit && (layer.effects.length > 0 || (cbm !== 0 && cbm !== 31))) unsupported.add("lighting:prelighting");
     if (cbm !== 0 && cbm !== 31) {
       const path = passthroughMaterial(scene.version);
       const text = await fs.text(path);

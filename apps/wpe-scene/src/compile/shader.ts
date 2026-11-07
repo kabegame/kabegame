@@ -81,6 +81,8 @@ export class ShaderCompiler {
     private fs: SceneFs,
     private translator: Wpesl2wgsl | null,
     private unsupported: Set<string>,
+    /** 只在最终 `LIGHTING` 非 0 时生效的宏（`lights.ts`）。整场一份，不进缓存键。 */
+    private litDefines: Record<string, string> = {},
   ) {}
 
   /**
@@ -133,8 +135,10 @@ export class ShaderCompiler {
       if (!this.fs.sceneAssets.length) issues.push("assets:missing");
       return { result: null, issues };
     }
-    const result = await translateWithIncludes(this.translator, { vertex, fragment, combos, textures }, (name) =>
-      this.fs.text(`shaders/${name}`),
+    const result = await translateWithIncludes(
+      this.translator,
+      { vertex, fragment, combos, textures, litDefines: this.litDefines },
+      (name) => this.fs.text(`shaders/${name}`),
     );
     if (!result.ok) {
       const detail =

@@ -374,6 +374,8 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
     const translator = await Wpesl2wgsl.fromBytes(readFileSync(wasm));
     const rows: { sample: string; unsupported: string; calls: number; misses: number; bytes: number }[] = [];
     const unlocked = ["eagleflag", "deep_space", "beach", "razer_vortex", "razer_bedroom"];
+    // 工坊样本：用户真机确认过（2026-11-07）。不是每台机器都订阅，所以不要求存在
+    const workshopUnlocked = ["2077883354", "2077888249", "2418800402", "2833452727", "2961807954"];
     for (const name of [...unlocked, "razer_bedroom"])
       expect(
         projects.some((dir) => dir.split(/[\\/]/).at(-1) === name),
@@ -415,7 +417,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
           misses: tally.misses,
           bytes: tally.bytes,
         });
-        if (unlocked.includes(sample)) {
+        if (unlocked.includes(sample) || workshopUnlocked.includes(sample)) {
           check(bundle.unsupported.length === 0, `${sample}: ${bundle.unsupported.join(", ")}`);
           check(bundle.programs.length > 0, `${sample}: 没有程序`);
           // FreeImage 形态的 mip 由主线程解码，这里只有区间
@@ -425,7 +427,8 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
             ),
             `${sample}: 纹理缺 mip`,
           );
-        } else check(bundle.unsupported.length > 0, `${sample}: 意外解锁`);
+          // 工坊内容因机器而异，新下载的场景本来就可能直接能渲染，只约束默认工程
+        } else if (!dir.startsWith(workshop)) check(bundle.unsupported.length > 0, `${sample}: 意外解锁`);
         const expected: Record<string, [string, number, number, number]> = {
           eagleflag: ["materials/eagle.tex", 2048, 1024, 10],
           deep_space: ["materials/galaxy_2_base.tex", 1920, 1080, 11],

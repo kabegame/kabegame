@@ -36,6 +36,16 @@ fn read(path: &Path) -> String {
 
 /// 模拟前端的协议：先不带头文件请求，按 `missing` 补齐后重试。
 fn run(program: &Program, combos: &[(&str, i64)], textures: &[(u32, u32)]) -> TranslateResult {
+    run_lit(program, combos, textures, &[])
+}
+
+/// `lit` 是 `lit_defines`：只在 `LIGHTING` 非 0 时生效的宏。
+fn run_lit(
+    program: &Program,
+    combos: &[(&str, i64)],
+    textures: &[(u32, u32)],
+    lit: &[(&str, &str)],
+) -> TranslateResult {
     let mut request = TranslateRequest {
         vertex: read(&program.vertex),
         fragment: read(&program.fragment),
@@ -49,6 +59,10 @@ fn run(program: &Program, combos: &[(&str, i64)], textures: &[(u32, u32)]) -> Tr
                 slot: *slot,
                 format: Some(*format),
             })
+            .collect(),
+        lit_defines: lit
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
         ..TranslateRequest::default()
     };
@@ -238,6 +252,45 @@ fn corpus() {
             gate_failures.push(format!("{name}: {}\n{glsl}", summary(&result)));
         }
     }
+
+    // 1b. 门槛：`#require LightingV1` 带四种灯，走真实的 common_pbr_2.h（默认 COMBO 下灯数为 0，覆盖不到循环）
+    let lit: &[(&str, &str)] = &[
+        ("LIGHTS_POINT", "2"),
+        ("LIGHTS_SPOT", "2"),
+        ("LIGHTS_TUBE", "1"),
+        ("LIGHTS_DIRECTIONAL", "2"),
+    ];
+    let mut lit_failures = Vec::new();
+    for name in [
+        "assets/shaders/genericimage4",
+        "assets/shaders/genericparticle",
+        "assets/shaders/genericropeparticle",
+        "assets/shaders/generic4",
+        "assets/shaders/foliage4",
+        "assets/shaders/chroma4",
+        "assets/shaders/fur4",
+    ] {
+        let hdr: &[(&str, &str)] = &[("HDR", "1")];
+        for extra in [&[][..], hdr] {
+            let defines: Vec<_> = lit.iter().chain(extra).copied().collect();
+            let result = run_lit(
+                program(&programs, name),
+                &[("LIGHTING", 1)],
+                // fur4 的毛发图在槽 8，头文件里按 TEX8FORMAT 分支
+                &[(0, 0), (8, 0)],
+                &defines,
+            );
+            let wgsl = result
+                .fragment
+                .as_ref()
+                .and_then(|o| o.wgsl.as_deref())
+                .unwrap_or_default();
+            if !result.ok || reparse_wgsl(wgsl).is_err() || !wgsl.contains("g_LSpot_Direction") {
+                lit_failures.push(format!("{name}: {}", summary(&result)));
+            }
+        }
+    }
+    assert!(lit_failures.is_empty(), "{lit_failures:#?}");
 
     // 2. 基线：全部着色器对、默认 COMBO
     let mut ok = 0;

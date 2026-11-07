@@ -25,6 +25,8 @@ export interface TranslateRequest {
   textures?: { slot: number; format?: number }[];
   /** 额外的宏，最后应用。 */
   defines?: Record<string, string>;
+  /** 只在最终 `LIGHTING` 非 0 时生效的宏：`LIGHTS_*` 与光照路径的 `HDR` / `SCENE_ORTHO`。 */
+  litDefines?: Record<string, string>;
   /** 成功时也带上生成的 GLSL 450。 */
   debug?: boolean;
 }

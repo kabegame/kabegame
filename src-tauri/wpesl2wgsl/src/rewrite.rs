@@ -335,6 +335,10 @@ fn split_stage(stage: Stage, lines: &[Line]) -> Result<StageParts, RewriteError>
     for line in lines {
         let trimmed = line.code.trim();
         let keyword = split_ident(trimmed).0;
+        // `in uint gl_InstanceID;`：fur4 在 HLSL 分支里声明的内建，GLSL 450 本来就有
+        if keyword == "in" && trimmed.contains(" gl_") {
+            continue;
+        }
         let storage = match keyword {
             "uniform" => Storage::Uniform,
             "attribute" => Storage::Attribute,

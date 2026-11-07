@@ -49,12 +49,14 @@ interface TranslateRequest {
   combos?: Record<string, number | boolean>;       // 材质 pass 与 effect pass 的 combos，名字不分大小写
   textures?: { slot: number; format?: number }[];  // 已绑定的 g_Texture<slot> 及其 .tex 格式枚举
   defines?: Record<string, string>;                // 额外的宏，最后应用（可覆盖平台宏与 COMBO）
+  litDefines?: Record<string, string>;             // 只在最终 LIGHTING 非 0 时生效的宏（LIGHTS_* 等，见下）
   debug?: boolean;                                 // 成功时也带上生成的 GLSL 450
 }
 ```
 
 - **头文件按需提供**：结果为 `phase: "include"` 时，读出 `missing` 里的文件、放进 `includes` 后再调一次。只有处于有效分支的 `#include` 才要求提供。
   头文件的查找顺序（项目 `shaders/` → WPE `assets/shaders/`，effect 自己的 `shaders/` 优先）由调用方决定。
+- **`litDefines`**：WPE 只在最终 `LIGHTING` 非 0 时写 `LIGHTS_*`，而 COMBO 的最终值（可能来自着色器注解的默认值）要到这里才算得出，所以由翻译器裁决。
 - **`textures` 有两个作用**：一是采样器注释里写了 `"combo": "NORMALMAP"` 的槽位绑定了纹理时，该 COMBO 置 1；二是定义 `TEX<slot>FORMAT = format`。
   格式枚举与 WPE 一致：0 RGBA8888、1 RGB888、2 RGB565、4 DXT5、6 DXT3、7 DXT1、8 RG88、9 R8、10 RG1616F、11 R16F、12 BC7。
 
@@ -77,7 +79,7 @@ interface TranslateRequest {
 |---|---|
 | `request` | 请求 JSON 无法解析，或 COMBO 值不是整数 / 布尔 |
 | `include` | 缺头文件，见 `missing` |
-| `require` | 用到 WPE 私有库指令 `#require`（如 `LightingV1`），见 `requires`；暂不支持 |
+| `require` | `#require` 展开不了，见 `requires`：未知的库名，或要阴影 / cookie 的 `LightingV1/shadow` |
 | `preprocess` | 条件编译不配对、`#if` 表达式错误、未知预处理指令（`file` / `line` 指向原文） |
 | `rewrite` | 不支持的全局声明、两阶段类型冲突、纹理函数参数不是已声明的纹理 |
 | `parse` / `validate` / `write` | naga 阶段的错误（行号指向生成的 GLSL） |
@@ -102,7 +104,7 @@ interface TranslateRequest {
 
 ## 内部流程
 
-源码在 `src/`：`lib.rs`（请求 / 结果、编排、C ABI）、`preprocess.rs`、`rewrite.rs`、`naga_stage.rs`。
+源码在 `src/`：`lib.rs`（请求 / 结果、编排、C ABI）、`preprocess.rs`、`library.rs`（`#require`）、`rewrite.rs`、`naga_stage.rs`。
 
 1. **注释元数据**：不看条件分支，扫描两段源码与可达的头文件，收集 `// [COMBO] {"combo","default",…}` 声明和带注释的 `uniform sampler* g_Texture<n>; // {…}`。
 2. **宏表**，后者覆盖前者：
@@ -122,13 +124,15 @@ interface TranslateRequest {
    - `#if / #ifdef / #ifndef / #elif / #else / #endif` 按 C 优先级求整数表达式，支持 `defined`。未定义的标识符按 0 处理：大量 COMBO 不写声明，直接 `#if MULTI`。
    - `#define` / `#undef` 行保留，交给 naga 自带的预处理器展开正文；函数宏不参与 `#if`。
    - 全局声明的数组长度如果写成宏（`g_Bones[BONECOUNT]`），按当前宏表算成数字。
-   - `#require` 收集后整体报错；`#version` / `#extension` / `#pragma` 去掉。
+   - `#require` 按 WPE 语义现场展开（`library.rs`）：`LightingV1` 在 `LIGHTING` 非 0 时按 `LIGHTS_*` 生成灯光 uniform 与 `PerformLighting_V1`，
+     否则什么都不插；逐灯计算在公开头文件 `common_pbr_2.h`，这里只负责遍历。未知的库、阴影与 cookie 报 `phase: "require"`。
+   - `#version` / `#extension` / `#pragma` 去掉。
 4. **改写成 Vulkan GLSL 450**（`rewrite.rs`）：
    - **声明**：
      - 普通 uniform 并入 uniform 块，标量 / 二三分量向量的数组补成 `kb_u_<名字>`，再由 `kb_load_<名字>()` 还原、宏指回原名。这样下标访问和整个数组传参都照常可用。
      - 采样器拆成纹理 + `kb_sampler_<名字>`；`attribute` / `varying` 加 `layout(location)`。
      - 只在片元阶段声明的 varying，也给顶点阶段补一个输出。顶点阶段不写入时值为零，对应 D3D 下的未定义值；不补的话，WebGPU 建管线会失败。
-     - `gl_*` 名的全局声明（几何着色器遗留的 `varying uint gl_ViewportIndex`）忽略。
+     - `gl_*` 名的全局声明（几何着色器遗留的 `varying uint gl_ViewportIndex`、fur4 的 `in uint gl_InstanceID`）忽略。
    - **纹理函数**：
      - `texSample2D(t, uv)` 改成 `texture(sampler2D(t, kb_sampler_t), uv)`；
      - `texSample2DLod` 改成 `textureLod`；
@@ -152,7 +156,7 @@ interface TranslateRequest {
 
 | 现象 | 原因 |
 |---|---|
-| `phase: "require"`，`LightingV1` | WPE 私有光照库指令，3D 光照阶段再做 |
+| `phase: "require"`，`LightingV1/shadow` | 阴影与 cookie 要 `_rt_shadowAtlas` / `_alias_lightCookie`，渲染器没有 |
 | `Unknown variable: gl_ViewportIndex` | 阴影投射走的几何着色器路径 |
 | `Unknown function 'rotateVec2'` 这类 | HLSL 允许 vec4 → vec2 隐式截断，GLSL 不允许；没有类型信息无法改写 |
 | `varying … 在两个阶段的类型不同` | 同上（片元阶段读更少分量） |
@@ -181,6 +185,8 @@ deno task test -c kabegame --skip cargo
 - **基线**：`assets/shaders`、`assets/effects`、`projects/defaultprojects` 下全部着色器对，在默认 COMBO（只绑定 g_Texture0）下的通过率；并把每份输出 WGSL 交给 naga `wgsl-in` 重新解析、校验。
   完整报告写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-corpus.txt`。
 
-2026-11-01 结果：167 对通过 153 对（91.6%），WGSL 回读失败 0。失败的 14 对见「已知不支持」。
+另有一道门槛：`genericimage4` / `genericparticle` / `genericropeparticle` / `generic4` / `foliage4` / `chroma4` / `fur4` 开 `LIGHTING`、带四种灯（LDR 与 HDR 各一遍），走真实的 `common_pbr_2.h`，翻译并回读。
+
+2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
 
 浏览器自己的 WGSL 编译器（Tint）是否接受这些输出，要在 dev app 里实测：用 `createShaderModule` + `getCompilationInfo` 跑一遍语料。见 `versions/latest/regression.md` 的场景壁纸 P1-0 节。
