@@ -122,6 +122,7 @@ function synthetic(
     colorBlendMode: 0,
     effects: [],
     passthrough: null,
+    particle: null,
     ...extra,
   };
   return {
@@ -130,6 +131,7 @@ function synthetic(
       height: 32,
       fields: { ...generalDefaults(), ambientcolor: [0.1, 0.1, 0.1], skylightcolor: [0.2, 0.2, 0.2] },
       clearVariable: false,
+      perspectiveOverrideFov: (95 * Math.PI) / 180,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },

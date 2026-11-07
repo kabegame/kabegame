@@ -322,6 +322,7 @@ function layer(object: number, effects: SceneEffect[], extra: Partial<SceneLayer
     colorBlendMode: 0,
     effects,
     passthrough: null,
+    particle: null,
     ...extra,
   };
 }
@@ -333,6 +334,7 @@ function bundleOf(layers: SceneLayer[], overrides: Partial<SceneBundle> = {}): S
       height: 128,
       fields: { ...generalDefaults(), ambientcolor: [0.1, 0.1, 0.1], skylightcolor: [0.2, 0.2, 0.2] },
       clearVariable: false,
+      perspectiveOverrideFov: (95 * Math.PI) / 180,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },

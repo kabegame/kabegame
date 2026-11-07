@@ -69,6 +69,31 @@ export function shaderUniforms(
   return values;
 }
 
+/**
+ * `ShaderCompiler` 的缓存键。`defines` 是调用方按 pass 给的宏（粒子路径的 `TEX0FORMAT`）：同一着色器、同样 COMBO，
+ * 宏不同就不能命中同一条；没有时键与加宏之前逐字相同（图层材质的缓存行为不变）。
+ */
+export function shaderCacheKey(
+  shader: string,
+  combos: Record<string, number | boolean>,
+  textures: ShaderTextureSlot[],
+  scope: ResourceScope | null,
+  defines: Record<string, string> = {},
+): string {
+  const parts: unknown[] = [
+    shader,
+    scope?.dir ?? null,
+    scope?.first ?? null,
+    Object.entries(combos)
+      .map(([name, value]) => [name.toUpperCase(), Number(value)])
+      .sort(),
+    textures.map((t) => [t.slot, t.format]).sort((a, b) => Number(a[0]) - Number(b[0])),
+  ];
+  const extra = Object.entries(defines).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (extra.length) parts.push(extra);
+  return JSON.stringify(parts);
+}
+
 /** 一次翻译的结果与它的不支持项：两者一起缓存，命中时重新上报。 */
 interface TranslateOutcome {
   result: TranslateResult | null;
@@ -91,6 +116,7 @@ export class ShaderCompiler {
    * `scope` 是 effect 的资源范围：effect 的着色器按 `SceneFs.readScoped` 的顺序查找；头文件都在 `shaders/` 根，不按 effect 查。
    * `unsupported` 是本次调用的上报目标，缺省为场景级。不支持项每次调用都写一遍：关着的 effect 先翻译、启用的 effect 再命中
    * 缓存时，场景级才收得到（3c）。结果仍是同一个对象，`addProgram` 按它去重。
+   * `defines` 是本 pass 的宏（粒子材质的 `TEX0FORMAT`），在整场的 `defines` 之后应用，进缓存键。
    */
   async compile(
     shader: string,
@@ -98,21 +124,14 @@ export class ShaderCompiler {
     textures: ShaderTextureSlot[] = [],
     scope: ResourceScope | null = null,
     unsupported: Set<string> = this.unsupported,
+    defines: Record<string, string> = {},
   ): Promise<TranslateResult | null> {
     // COMBO 只能是数值 / 布尔（WPE 按整数读，写成 `{user, value}` 会断言中止，I3）；对象由能力表报 `combo:user-binding`
     const usable = staticCombos(combos);
-    const key = JSON.stringify([
-      shader,
-      scope?.dir ?? null,
-      scope?.first ?? null,
-      Object.entries(usable)
-        .map(([name, value]) => [name.toUpperCase(), Number(value)])
-        .sort(),
-      textures.map((t) => [t.slot, t.format]).sort((a, b) => Number(a[0]) - Number(b[0])),
-    ]);
+    const key = shaderCacheKey(shader, usable, textures, scope, defines);
     let task = this.cache.get(key);
     if (!task) {
-      task = this.translate(shader, usable, textures, scope);
+      task = this.translate(shader, usable, textures, scope, defines);
       this.cache.set(key, task);
     }
     const { result, issues } = await task;
@@ -125,6 +144,7 @@ export class ShaderCompiler {
     combos: Record<string, number | boolean>,
     textures: ShaderTextureSlot[],
     scope: ResourceScope | null,
+    defines: Record<string, string>,
   ): Promise<TranslateOutcome> {
     if (!this.translator) return { result: null, issues: ["shader:wasm-missing"] };
     const issues: string[] = [];
@@ -139,7 +159,7 @@ export class ShaderCompiler {
     }
     const result = await translateWithIncludes(
       this.translator,
-      { vertex, fragment, combos, textures, defines: this.defines, litDefines: this.litDefines },
+      { vertex, fragment, combos, textures, defines: { ...this.defines, ...defines }, litDefines: this.litDefines },
       (name) => this.fs.text(`shaders/${name}`),
     );
     if (!result.ok) {

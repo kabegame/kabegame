@@ -252,3 +252,41 @@ const d = (height / 2) / Math.tan(fov / 2);     // fov = radians(perspectiveover
 工具在 `ignore/p4/step1/`：`corpus.test.ts`（语料）、`truth.test.ts`（真值）、`compare.py`、`hash-before.json`、`hash-after.json`。
 
 `cocs/`、changelog、回归文档放到 P4a 收尾时一起写。
+
+### 步骤 2 — 编译与能力表（2026-11-07）
+
+子代理实现，Claude 独立验收。
+
+- **新增** `particles/modules.ts`：模块表 13 项（档 1 的 12 个加 `sprite`）。每项有字段表（形状、正交 / 透视缺省值、本节支持的取值）、列、列标志和 `run` 槽位（步骤 3 填）。解析和能力表共用 `readParticleModule`。
+- **新增** `compile/particles.ts`：`SceneParticle`、正交判定、`particleFov`、系统级键、`instanceoverride` 的静态值。
+- **修改** `compile/bundle.ts`：粒子对象读 JSON、检查、解析、编材质，pass 放在 `layer.particle.passes`，不进 `layer.passes`。
+- **修改** `compile/features.ts`：
+  - 不再报 `object:particle`，每个粒子对象报临时键 `particle:pending`，**步骤 4 接上绘制后删掉**。
+  - 能力表按模块表生成。
+  - 风、重力 5 个键进中性表（实测见报告）；`perspectiveoverridefov` 解析进 `SceneGeneral.perspectiveOverrideFov`。
+- **修改** `compile/shader.ts`：`compile` 多一个 `defines` 参数，进缓存键；粒子材质经它无条件写 `TEX0FORMAT`。图层材质的缓存键逐字不变。
+
+和委托字面要求不同的三处，按证据定：
+1. **`renderer: []` 不补 `sprite`。** WPE 只在缺键或不是数组时补（`0x1401c58af` 前的 `isArray`）。语料里写成 `[]` 的 5 个都是带 `children` 的发射器，本来就被挡住。
+2. **COMBO 检查不算着色器注解的缺省值。** `genericparticle` 的 `FOG` 缺省 1，只在引擎宏 `FOG_DIST` / `FOG_HEIGHT` 下起作用。纹理槽带出的 COMBO 照算，所以 `2903412088` 多报一个 `NORMALMAP`，那张本来就被别的键挡住。
+3. **`PARTICLE_UNIFORMS` 在粒子 pass 里暂按引擎 uniform 放行：** `g_OrientationUp/Right/Forward`、`g_ViewUp/Right`、`g_RenderVar0/1`。**步骤 4 必须真的写这 7 个。**
+
+步骤 4 要注意：
+- 粒子纹理现在进了 `bundle.textures`，但 `uploadableTextures` 只看图层 pass，不上传；`requiredFeatures` 已经算上它们。
+- `particle:pending` 删掉时，粒子纹理的上传、`checkRenderable` 的粒子程序检查要一起接上。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；25 个文件、750 个用例全过（新增 60 个）；格式通过 |
+| 变异检查（代理 5 处、Claude 12 处） | 不报 `pending`、周期字段不看 bit2、正交缺省值、世界空间、控制点 `offset`、风键、fov 钳制、COMBO 放行、发射器控制点、朝向、`TEX0FORMAT`、粒子 pass 混进图层 pass，各有用例失败 |
+| `shimmering_particles` | 4 个粒子层都编出程序，不支持项只剩 `particle:pending`、`object:instanceoverride` |
+| 语料 149 个工程（和步骤 1 比） | 去掉的只有 `object:particle`、风和重力键、`perspectiveoverridefov`。新增的非粒子键全在带粒子的场景上，是粒子材质和纹理第一次进编译带出的：`tex:animation` 49 张、`tex:alpha-priority` 20、`tex:format` 15、`material:alphawriting` 14、`depthwrite:enabled` 4、`cull:normal` 3、`material:usertextures` 2、`depthtest:enabled` 1。干净场景仍是那 11 张 |
+| 档 1 覆盖 | 旧统计的 117 张里正好是 `demon_core`、`dna_fragment`、`shimmering_particles`、`3062029089`。全语料 7 张，多出的 `2854083091`、`3173418061`、`3453730450` 是之后下载的 |
+| 全部不支持项都是粒子类 | 只差 `pending` 和 `instanceoverride` 的：`shimmering_particles`、`3062029089`；再加 `1838478131`（还差控制点、`sizechange`）、`2254685070`（还差控制点、发射器 `flags`、`rope`） |
+| 真机哈希 | 10 张干净场景 × 三档，30 组和改动前全部相同 |
+
+挡住场景最多的粒子键：`controlpoint` 48、`turbulentvelocityrandom` 41、`animationmode` 38、`boxrandom` 37、`sizechange` 34、`sequencemultiplier` 34、`children` 31、`alpharandom` 31。完整清单在 `ignore/p4/step2/out/compare.txt`。
+
+工具在 `ignore/p4/step2/`。

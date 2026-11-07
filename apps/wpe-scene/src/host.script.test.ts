@@ -158,6 +158,7 @@ function bundle(): SceneBundle {
       height: 100,
       fields: generalDefaults(),
       clearVariable: false,
+      perspectiveOverrideFov: (95 * Math.PI) / 180,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: {
         strength: 1,
@@ -190,6 +191,7 @@ function bundle(): SceneBundle {
         effects: [],
         colorBlendMode: 0,
         passthrough: null,
+        particle: null,
       },
     ],
     programs: [],

@@ -21,9 +21,13 @@ import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUnif
 import {
   checkEffectFeatures,
   checkModelFeatures,
+  checkParticleFeatures,
+  checkParticleProgram,
   checkPassFeatures,
   checkProgramFeatures,
   checkSceneFeatures,
+  objectKind,
+  PARTICLE_UNIFORMS,
   usesLighting,
 } from "./features";
 import {
@@ -34,13 +38,17 @@ import {
   parseModel,
   parseProject,
   parseScene,
+  parseWpeJson,
   textureName,
   type EffectFboJson,
+  type JsonObject,
   type MaterialPass,
   type SceneEffectInstance,
+  type SceneObject,
   type SceneScalar,
   type SceneValue,
 } from "./model";
+import { isOrthographic, parseParticle, particleFov, type SceneParticle } from "./particles";
 import {
   bloomParams,
   flagValue,
@@ -67,6 +75,11 @@ export interface SceneGeneral {
   postprocess: ScenePostprocessState;
   /** 场景的泛光参数（缺键已补 WPE 默认值，原值未换算）；泛光关着时也给出，渲染器只在 `bundle.bloom` 存在时用。 */
   bloom: BloomParams;
+  /**
+   * 透视粒子（系统 `flags & 4`）的 fov，弧度：`general.perspectiveoverridefov` 缺省 95 度、钳到 [0.1, 179.9] 度
+   * （`rea-p4a.md` C4，实测核对过）。P4a 步骤 4 用。
+   */
+  perspectiveOverrideFov: number;
 }
 export interface SceneMip {
   width: number;
@@ -184,6 +197,11 @@ export interface SceneLayer {
   effects: SceneEffect[];
   /** colorBlendMode ∉ {0, 31} 时的上屏 pass（`PASSTHROUGH_MATERIAL`）。 */
   passthrough: ScenePass | null;
+  /**
+   * 粒子对象解析出的粒子系统（`particles.ts`）；其它对象、或粒子 JSON 读不到时为 null。粒子材质的 pass 在
+   * `particle.passes` 里，不在上面的 `passes`（步骤 4 才接绘制）。
+   */
+  particle: SceneParticle | null;
 }
 export interface SceneBundle {
   general: SceneGeneral;
@@ -310,6 +328,8 @@ interface PassContext {
   planned?: ShaderTextureSlot[];
   /** 本 pass 不支持项的上报目标；缺省为场景级。 */
   unsupported?: Set<string>;
+  /** 粒子材质：无条件写 `TEX0FORMAT`，程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。 */
+  particle?: boolean;
 }
 
 /**
@@ -401,6 +421,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       clearVariable: !fields.clearenabled || isUserBinding(general.clearenabled) || isScriptValue(general.clearenabled),
       postprocess,
       bloom: bloomParams(general, properties, bindings),
+      // 绑了属性时重编译：步骤 4 只在编译期读它（语料里没有绑定）
+      perspectiveOverrideFov: particleFov(
+        bindings.bind(
+          general.perspectiveoverridefov as SceneValue | undefined,
+          properties,
+          recompile("layer-structure", "general/perspectiveoverridefov"),
+        ),
+      ),
     },
     layers: [],
     programs: [],
@@ -430,6 +458,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     ));
   // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
   const { parents } = resolveParents(scene.objects);
+  /** 粒子字段的缺省值按正交 / 透视选两套（`rea-p4a.md`「基础」）；透视场景另报 `camera:perspective`。 */
+  const orthographic = isOrthographic(general);
   const textureIndex = new Map<string, number>();
   /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
   const textureIssues = new Map<number, string[]>();
@@ -499,6 +529,75 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     return { index, format: tex.format };
   }
 
+  /**
+   * 粒子路径无条件写的宏（`hdr-macro-REPORT.md`「TEX0FORMAT（粒子）」，`FUN_1401d2340`）：`TEX0FORMAT` = 槽 0 纹理的格式，
+   * 取值规则同 `TEX<n>FORMAT`（`.tex` 格式枚举；`_rt_*` 按 RT 格式，`_rt_FullFrameBuffer` 为 0）。经 `defines` 传，进缓存键。
+   * 图层材质不走这里，`TEX<n>FORMAT` 仍只按 `formatcombo` 由翻译器定。
+   * 槽 0 没按名字写时取着色器注解的 `default`：先不带这个宏翻译一次读注解（结果进缓存，不上报，正式翻译会再报一遍），
+   * 仍取不到时不写（语料里粒子材质的槽 0 都按名字写了）。
+   */
+  async function particleDefines(
+    pass: MaterialPass,
+    formats: ShaderTextureSlot[],
+    scope: ResourceScope | null,
+  ): Promise<Record<string, string>> {
+    let format = formats.find((item) => item.slot === 0)?.format;
+    if (format === undefined && pass.shader) {
+      const probe = await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, new Set());
+      const fallback = probe?.textures?.find((texture) => texture.slot === 0)?.meta?.default;
+      if (fallback === FRAMEBUFFER_RT) format = FBO_FORMATS.rgba8888.tex;
+      else if (typeof fallback === "string" && fallback && !fallback.startsWith("_rt_"))
+        format = (await getTexture(fallback, scope, new Set()))?.format;
+    }
+    return format === undefined ? {} : { TEX0FORMAT: String(format) };
+  }
+
+  /**
+   * 粒子对象（P4a 步骤 2）：读粒子 JSON（按现有查找顺序：项目 → `scene.pkg` → assets），解析成 `layer.particle`，
+   * 逐模块检查能力，再编粒子材质。材质的 pass 放进 `layer.particle.passes`，稳定键 `objects/<i>/particle/passes/<n>`。
+   */
+  async function compileParticle(index: number, object: SceneObject, layer: SceneLayer): Promise<void> {
+    const file = object.particle;
+    const text = typeof file === "string" && file ? await fs.text(file) : null;
+    if (!text) {
+      unsupported.add(`particle:missing:${String(file)}`);
+      return;
+    }
+    let json: unknown;
+    try {
+      json = parseWpeJson(text);
+    } catch {
+      json = null;
+    }
+    if (!json || typeof json !== "object" || Array.isArray(json)) {
+      unsupported.add(`particle:parse:${file}`);
+      return;
+    }
+    const system = json as JsonObject;
+    checkParticleFeatures(system, orthographic, unsupported);
+    const particle = parseParticle(system, {
+      file: file as string,
+      orthographic,
+      instanceoverride: object.instanceoverride,
+    });
+    layer.particle = particle;
+    const materialPath = system.material;
+    if (typeof materialPath !== "string" || !materialPath) {
+      unsupported.add("material:missing");
+      return;
+    }
+    const materialText = await fs.text(materialPath);
+    if (!materialText) {
+      unsupported.add(`material:missing:${materialPath}`);
+      return;
+    }
+    const material = parseMaterial(materialText);
+    // 语料里粒子材质都是 1 个 pass；多 pass 怎么画没读，保守报
+    if (material.passes.length !== 1) unsupported.add("particle:material:passes");
+    for (const [k, pass] of material.passes.entries())
+      particle.passes.push(await compilePass(pass, { key: `objects/${index}/particle/passes/${k}`, particle: true }));
+  }
+
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
   async function compilePass(pass: MaterialPass, context: PassContext): Promise<ScenePass> {
     const issues = context.unsupported ?? unsupported;
@@ -529,7 +628,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         formats.push({ slot, format: texture.format });
       }
     }
-    const result = pass.shader ? await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, issues) : null;
+    const defines = context.particle && pass.shader ? await particleDefines(pass, formats, scope) : {};
+    const result = pass.shader
+      ? await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, issues, defines)
+      : null;
     if (result?.ok) {
       for (const script of scripts.list) {
         if (script.owner.kind !== "material" || script.owner.pass !== context.key || script.target.kind !== "constant")
@@ -542,9 +644,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
     }
     if (!pass.shader) issues.add("shader:missing");
+    if (context.particle) checkParticleProgram(pass, result?.ok ? result : null, issues);
     let program: number | null = null;
     if (result?.ok) {
-      checkProgramFeatures(result, issues);
+      checkProgramFeatures(result, issues, context.particle ? PARTICLE_UNIFORMS : undefined);
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
       for (const binding of result.textures ?? []) {
         const fallback = binding.meta?.default;
@@ -689,9 +792,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ),
       effects: [],
       passthrough: null,
+      particle: null,
     };
     // 每个对象都进 `layers`（分组节点、灯、粒子是没有 pass 的图层），子孙算世界矩阵与可见性时父的状态都在
     bundle.layers.push(layer);
+    if (objectKind(object) === "particle") {
+      await compileParticle(index, object, layer);
+      continue;
+    }
     // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
     if (!object.image) continue;
     const modelText = await fs.text(object.image);

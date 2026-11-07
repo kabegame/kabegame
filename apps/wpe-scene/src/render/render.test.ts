@@ -462,6 +462,7 @@ describe("可渲染性自查", () => {
       height: 1,
       fields: generalDefaults(),
       clearVariable: false,
+      perspectiveOverrideFov: (95 * Math.PI) / 180,
       postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
       bloom: { ...BLOOM_DEFAULTS, tint: [1, 1, 1] },
     },
@@ -504,6 +505,7 @@ describe("可渲染性自查", () => {
     colorBlendMode: 0,
     effects: [],
     passthrough: null,
+    particle: null,
   };
   it("缺 BC、多 pass、缺程序、unsupported 原样带上", () => {
     const bc = new Set(["texture-compression-bc"]);

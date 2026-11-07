@@ -127,5 +127,6 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | `instanceoverride`：`size`、`alpha`、`count`、`lifetime`、`speed`、`rate` | 尺寸 ×2、alpha 0.5、粒子数 48、跑到 x = 1900，全部吻合。`rate` 确实是整个模拟的时间缩放 |
 | `instantaneous` 从累积余数里扣，之后要还债 | 突发 3 个后停 2.0 s，等于 `(1 + 3) / rate`，之后每 0.5 s 一个 |
 | `oscillateposition` 的 ω 就是 `frequency` | y 振荡按 ω = 1 残差 2.9e-4，按 2π 残差 5 |
+| 场景的风、重力键（`gravitydirection`、`gravitystrength`、`windenabled`、`winddirection`、`windstrength`）粒子路径不读 | 中性。`proj/p4a-wind` 是 `p4-0` 只改这 5 个键（重力 `0 1 0` × 50、风开、`-1 0 0` × 80），同一会话各抓 6 帧（`A:\p4a\wind\`）：两份对解析模型最大差 6.7e-5、1.9e-5（没有场景重力项）；16 个系统的 y 都不漂移，含 `drag`、预热、模块重力。场景重力若生效，每帧就会偏约 0.08 像素 |
 
 **没测：** `oscillateposition` 的 y 比 x、z 多 `2π·R` 的时间偏移。`R` 是随机的，要在 P4a 用幅度范围反推 `R` 再比。`sprite` 的 `upright`、`fixed` 朝向没读到，先报不支持。

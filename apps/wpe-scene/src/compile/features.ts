@@ -9,7 +9,9 @@
  * 这三类逐项核对（`checkProgramFeatures`，默认纹理在 `bundle.ts` 里随绑定一起核对）。
  */
 import {
+  staticCombos,
   type EffectJson,
+  type JsonObject,
   type MaterialPass,
   type ModelJson,
   type SceneEffectInstance,
@@ -17,7 +19,10 @@ import {
   type SceneObject,
   type SceneValue,
 } from "./model";
+import { isScriptValue, isUserBinding } from "./bindings";
 import { resolveParents } from "./hierarchy";
+import { PARTICLE_SYSTEM_KEYS, particleModuleEntries, readParticleSystem } from "./particles";
+import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
 
 export const SUPPORTED = {
@@ -107,7 +112,11 @@ const ENGINE_COMBOS = new Set([
  * - `bloom`、`hdr` 与全部 `bloom*` 调节项：由后处理档位裁决（`postprocess.ts`），泛光 / HDR 由 `bloom.ts` 与 `render/bloom.ts` 实现。
  * - `farz` / `fov` / `nearz`：正交投影不用；透视另报 `camera:perspective`。
  * - `supportsvideo`：只决定 D3D 设备的视频支持标志（G2 0x8000）；视频纹理另报 `tex:video`。
+ * - `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength`：REA 没找到引擎读取点，
+ *   实测见 P4a 实施记录（`rea-p4a.md` C7：只在场景属性表里，粒子路径不碰，`movement` 的重力只来自模块自己的 `gravity`）。
  * `cameraparallax*` / `camerashake*` 的调节项只在主开关打开时起作用，主开关打开时另报；`zoom` 为 1 时是恒等。
+ * `perspectiveoverridefov` 不是中性：它是透视粒子的 fov（C4，实测核对过），解析进 `SceneGeneral.perspectiveOverrideFov`，
+ * 见 `PARSED_GENERAL`。
  */
 const NEUTRAL_GENERAL = new Set([
   "orthogonalprojection",
@@ -125,7 +134,14 @@ const NEUTRAL_GENERAL = new Set([
   "fov",
   "nearz",
   "supportsvideo",
+  "gravitydirection",
+  "gravitystrength",
+  "windenabled",
+  "winddirection",
+  "windstrength",
 ]);
+/** 编译期解析、由渲染器使用的 general 键（不进中性表）：`perspectiveoverridefov` → `SceneGeneral.perspectiveOverrideFov`（步骤 4 用）。 */
+const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
 
 /**
  * 支持或中性的对象键。
@@ -231,6 +247,7 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   for (const [key, value] of Object.entries(g))
     if (
       !NEUTRAL_GENERAL.has(key) &&
+      !PARSED_GENERAL.has(key) &&
       !key.startsWith("bloom") &&
       !key.startsWith("cameraparallax") &&
       !key.startsWith("camerashake") &&
@@ -266,14 +283,31 @@ const LIGHT_KEYS = new Set([
   "usecookie",
 ]);
 
+const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as const;
+export type ObjectKind = (typeof OBJECT_KINDS)[number];
+
+/** 对象的内容类别；都没有时是分组节点（undefined）。`compileScene` 按同一规则分派。 */
+export function objectKind(object: SceneObject): ObjectKind | undefined {
+  return OBJECT_KINDS.find((key) => active(object[key]));
+}
+
 /**
  * 一个对象的能力检查。`parent` 是解析后的父对象下标（`hierarchy.ts` 的 `resolveParents`），根节点为 null。
  * 没有内容的对象是分组节点：WPE 把它建成只有变换的基类对象（P4a 实测），不报；它的 `effects` 不读（`bundle.ts`
  * 在没有 image 时不编译图层内容），所以也不报。
+ *
+ * 粒子对象自己的键（`origin`、`angles`、`scale`、`visible`、`parent`、`instanceoverride` 等）照对象规则走；粒子 JSON 的
+ * 用法由 `checkParticleFeatures` 在读到文件后检查。
  */
 export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>, parent: number | null = null): void {
-  const kind = ["image", "model", "particle", "sound", "text", "light"].find((key) => active(object[key]));
-  if (kind && kind !== "image" && kind !== "light") unsupported.add(`object:${kind}`);
+  const kind = objectKind(object);
+  if (kind === "particle") {
+    // 临时键：粒子还不会画（P4a 步骤 4 接上绘制后删掉），否则只差粒子的场景会被当成能渲染、静默少画粒子
+    unsupported.add("particle:pending");
+    // 带 effects 的粒子对象本机 0 个，P4 不做
+    const effects = object.effects as unknown;
+    if (Array.isArray(effects) ? effects.length > 0 : active(effects)) unsupported.add("particle:effects");
+  } else if (kind && kind !== "image" && kind !== "light") unsupported.add(`object:${kind}`);
   // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
   if (kind === "light" && parent !== null) unsupported.add("object:parent");
   const lightKey = (key: string) => kind === "light" && LIGHT_KEYS.has(key);
@@ -383,5 +417,129 @@ export function checkEffectFeatures(
     // 绘制目标只认本 effect 的 fbo；缺省为合成链
     if (pass.command === undefined && pass.target !== undefined && !fbos.has(String(pass.target)))
       unsupported.add(`effect:${label}:target:${pass.target}`);
+  }
+}
+
+/**
+ * 粒子着色器（`common_particles.h`）要、只有粒子路径才写的引擎 uniform：朝向、视图轴与 `g_RenderVar0/1`。步骤 4 的渲染器
+ * 写它们（`phase-4a-base.md` 步骤 4「修改 uniform」）；在那之前粒子整张由 `particle:pending` 退回，所以粒子 pass 的程序检查
+ * 把它们当引擎 uniform，图层材质里照报。`g_EyePosition`、`g_Texture0Resolution` 已在 `ENGINE_UNIFORMS` / 通配里。
+ */
+export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
+  "g_OrientationUp",
+  "g_OrientationRight",
+  "g_OrientationForward",
+  "g_ViewUp",
+  "g_ViewRight",
+  "g_RenderVar0",
+  "g_RenderVar1",
+]);
+
+/** 粒子材质允许非 0 的 COMBO：`shimmering_particles` 自带 `particle` 着色器的分支，本节实现（总计划「P4a 实现」）。 */
+const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND"]);
+
+/**
+ * 粒子材质 pass 的 COMBO 与光照（混合、剔除、深度由 `checkPassFeatures` 照常检查，引擎 uniform / COMBO 由
+ * `checkProgramFeatures` 带 `PARTICLE_UNIFORMS` 检查）。
+ * - 材质写的、以及纹理槽注解带出的 COMBO（翻译结果 `source` 为 `request` / `texture`），值非 0 的只允许 `WORLDBLUR`、
+ *   `USERCOLORBLEND`，其余报 `particle:combo:<名字>`（`REFRACT`、`CUTOUT` 属 P4b）。
+ * - 着色器注解的缺省值（`source: "default"`）不算：WPE 同样按缺省值编，翻译器照办。`genericparticle` 的 `FOG` 缺省为 1，
+ *   但它只在引擎的 `FOG_DIST` / `FOG_HEIGHT` 下起作用，渲染器不定义这两个宏。
+ * - 最终开了 `LIGHTING`（含着色器缺省值）报 `particle:lighting`：粒子的光照路径没有和 WPE 比过，本机 0 张。
+ */
+export function checkParticleProgram(
+  pass: MaterialPass,
+  result: TranslateResult | null,
+  unsupported: Set<string>,
+): void {
+  const combos = new Map<string, number>();
+  for (const [name, value] of Object.entries(staticCombos(pass.combos))) combos.set(name.toUpperCase(), Number(value));
+  for (const combo of result?.combos ?? [])
+    if (combo.source !== "default") combos.set(combo.name.toUpperCase(), combo.value);
+  for (const [name, value] of combos) {
+    if (value === 0 || PARTICLE_COMBOS.has(name)) continue;
+    unsupported.add(name === "LIGHTING" ? "particle:lighting" : `particle:combo:${name}`);
+  }
+  if (result && usesLighting(result)) unsupported.add("particle:lighting");
+}
+
+/** `"x y z"` 有没有非 0 分量；不是字符串（null 除外）时保守算有。 */
+function nonZeroVector(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value !== "string") return true;
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .some((part) => Number(part) !== 0);
+}
+
+/**
+ * 控制点数组有没有实际内容（P4c 的范围）。依据 `ignore/p4/rea/parser.asm` 的 `0x1401d04d8`–`0x1401d080e`：先把 8 个槽清零，
+ * 只在 `controlpoint` 是数组时读（`0x1401d051b`），按**数组下标**读前 8 项（`0x1401d080a`）、只读对象项（`0x1401d053e`）；
+ * 每项读 `offset`（缺省 `"0 0 0"`）、`flags`（0）、`parentcontrolpoint`（0）、`angles`（只在是字符串时解析，缺省 0），`id` 不读。
+ * 所以这几个键取缺省值时等于没写。`locktopointer` 不在这段里，读取点没找到，真值保守算内容；其余键同样保守算内容。
+ */
+function controlPointsUsed(raw: unknown): boolean {
+  if (!Array.isArray(raw)) return false;
+  return raw.slice(0, 8).some((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    return Object.entries(entry as Record<string, unknown>).some(([key, value]) => {
+      if (value === null || value === undefined || key === "id") return false;
+      if (key === "offset" || key === "angles") return nonZeroVector(value);
+      if (key === "flags" || key === "parentcontrolpoint") return value !== 0 && value !== false;
+      if (key === "locktopointer") return value !== false;
+      return true;
+    });
+  });
+}
+
+/**
+ * 粒子 JSON 的能力检查，规则从模块表（`particles/modules.ts`）生成。依据见各条注释，系统级键见 `particles.ts`。
+ * - 表外模块：`particle:<类别>:<名字>`；表内模块的未知字段、形状不对或本节不支持的取值：`particle:<类别>:<名字>:<字段>`；
+ *   写成 `{user}` / `{script}`：`particle:binding:<类别>:<名字>:<字段>`。
+ * - 系统 `flags`（C3）：bit2–7 支持；bit0 世界空间没实测，报 `particle:flags:world`；bit1 读取点没找到，报 `particle:flags:2`；
+ *   更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，`0x1401c56e9`，高位其实被丢掉；没有样本，保守报）。
+ * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。
+ * - `controlpoint` 有实际内容：`particle:controlpoint`（P4c，判定见 `controlPointsUsed`）。
+ * - `animationmode` 是 `"randomframe"`、`sequencemultiplier` 是数字且不为 1：`particle:<键>`（帧表属 P4b）。
+ * - 其它顶层键：`particle:system:<键>`；顶层键写成绑定：`particle:binding:system:<键>`（WPE 按 `isNumeric` / `isString`
+ *   读，对象当缺键，语义没核对）。`emitter` / `initializer` / `operator` 不是数组时同样报 `particle:system:<键>`。
+ * - renderer 多于一个：`particle:renderers`（多个 renderer 的绘制没读）。
+ * 值为 null 的键一律当缺键。
+ */
+export function checkParticleFeatures(system: JsonObject, orthographic: boolean, unsupported: Set<string>): void {
+  for (const [key, value] of Object.entries(system)) {
+    if (value === null || value === undefined) continue;
+    if (isUserBinding(value) || isScriptValue(value)) unsupported.add(`particle:binding:system:${key}`);
+    if (!PARTICLE_SYSTEM_KEYS.has(key)) unsupported.add(`particle:system:${key}`);
+  }
+  const { flags, animationMode, sequenceMultiplier } = readParticleSystem(system);
+  if (flags & 1) unsupported.add("particle:flags:world");
+  if (flags & 2) unsupported.add("particle:flags:2");
+  for (let bit = 8; bit < 32; bit++) if (flags & (1 << bit)) unsupported.add(`particle:flags:${(1 << bit) >>> 0}`);
+  if (animationMode !== "sequence") unsupported.add("particle:animationmode");
+  if (sequenceMultiplier !== 1) unsupported.add("particle:sequencemultiplier");
+  if (Array.isArray(system.children) && system.children.length > 0) unsupported.add("particle:children");
+  if (controlPointsUsed(system.controlpoint)) unsupported.add("particle:controlpoint");
+  for (const category of PARTICLE_CATEGORIES) {
+    const entries = particleModuleEntries(system, category);
+    if (!entries) {
+      unsupported.add(`particle:system:${category}`);
+      continue;
+    }
+    if (category === "renderer" && entries.length > 1) unsupported.add("particle:renderers");
+    for (const entry of entries) {
+      const reading = readParticleModule(category, entry, orthographic);
+      const module = `${category}:${reading.name || "unnamed"}`;
+      if (!reading.known) {
+        unsupported.add(`particle:${module}`);
+        continue;
+      }
+      for (const issue of reading.issues)
+        unsupported.add(
+          issue.kind === "binding" ? `particle:binding:${module}:${issue.field}` : `particle:${module}:${issue.field}`,
+        );
+    }
   }
 }

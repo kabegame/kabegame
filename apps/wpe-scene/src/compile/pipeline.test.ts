@@ -146,8 +146,9 @@ describe("场景编译基础", () => {
       { general: { bloom: true }, objects: [{ id: 2, particle: "particles/a.json", parent: 1 }] },
       keys,
     );
-    // general.bloom 交给后处理档位裁决（postprocess:*），不再按键报；层级已实现，parent 指向不存在的 id 时当根节点（P4a）
-    expect(keys).toEqual(new Set(["camera:perspective", "object:particle"]));
+    // general.bloom 交给后处理档位裁决（postprocess:*），不再按键报；层级已实现，parent 指向不存在的 id 时当根节点（P4a）。
+    // 粒子不再整条报 object:particle，用法在读到粒子 JSON 后逐模块检查；还不会画，先报 particle:pending（P4a 步骤 2）
+    expect(keys).toEqual(new Set(["camera:perspective", "particle:pending"]));
   });
   it("LZ4 已知向量及损坏输入", () => {
     expect(decodeLz4Block(new Uint8Array([0x40, 65, 66, 67, 68]), 4)).toEqual(new Uint8Array([65, 66, 67, 68]));

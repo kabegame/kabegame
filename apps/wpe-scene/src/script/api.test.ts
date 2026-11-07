@@ -71,6 +71,7 @@ function scene(): SceneBundle {
     colorBlendMode: 0,
     effects: [],
     passthrough: null,
+    particle: null,
   });
   return {
     general: {
@@ -78,6 +79,7 @@ function scene(): SceneBundle {
       height: 1080,
       fields: generalDefaults(),
       clearVariable: false,
+      perspectiveOverrideFov: (95 * Math.PI) / 180,
       postprocess: { level: "enabled", bloomFlag: true, hdrFlag: false, bloom: true, hdr: false },
       bloom: {
         strength: 1,

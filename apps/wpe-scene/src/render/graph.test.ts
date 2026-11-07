@@ -72,6 +72,7 @@ function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
     colorBlendMode: 0,
     effects: [],
     passthrough: null,
+    particle: null,
     ...partial,
   };
 }

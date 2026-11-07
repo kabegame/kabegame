@@ -458,6 +458,7 @@ describe("渲染器自查：泛光 pass", () => {
       height: 4,
       fields: generalDefaults(),
       clearVariable: false,
+      perspectiveOverrideFov: (95 * Math.PI) / 180,
       postprocess: { level: "ultra", bloomFlag: true, hdrFlag: true, bloom: true, hdr: true },
       bloom: params(),
     },
