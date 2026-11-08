@@ -498,6 +498,8 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），预览的上
 - 左键按下沿：光标在客户区内，且 `WindowFromPoint` 命中窗口的根窗口（`GetAncestor(GA_ROOT)`）类名是 `Progman` /
   `WorkerW`（桌面图标层或壁纸层本身，即点在桌面空白处或图标上）才注入 `LeftDown`；抬起沿只要按下被转发过就注入
   `LeftUp`，停止转发时也会补发，保证成对。点在别的应用窗口上不转发。
+- 设置「暂停壁纸」（`wallpaperPaused`）打开时不转发：线程照跑，每轮读设置，暂停期间什么都不注入；进入暂停时补一次
+  `Leave` 与未配对的 `LeftUp`，页面不会停在悬停 / 按住状态。按键状态照常跟踪，恢复时左键还按着不会被当成新的按下。
 - 不拦截、不吞掉任何输入：Explorer 照常收到点击（桌面图标选中状态会变，与 WPE 一致）。
 - 注入走 `CefBrowserHost::SendMouse*Event`，直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序；只投递不等回执。
 - 不做：键盘、滚轮、右键、设置开关；macOS / Linux 不转发。

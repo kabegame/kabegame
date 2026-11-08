@@ -477,7 +477,8 @@ pub fn set_wpe_scene_postprocess(value: String) -> Result<(), String> {
     Settings::global().set_wpe_scene_postprocess(value)
 }
 
-/// 暂停桌面上的壁纸：壁纸窗口经 `setting-change` 收到，只对网页与场景生效。
+/// 暂停桌面上的壁纸：壁纸窗口经 `setting-change` 收到，只对网页与场景生效；暂停期间桌面鼠标也不再转发给壁纸
+/// （`wallpaper/input_forward.rs` 每轮读这项）。
 #[tauri::command]
 pub fn set_wallpaper_paused(paused: bool) -> Result<(), String> {
     Settings::global().set_wallpaper_paused(paused)

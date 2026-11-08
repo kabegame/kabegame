@@ -142,8 +142,9 @@ impl<R: Runtime> WallpaperWindow<R> {
         Ok(())
     }
 
-    /// 开关 Windows 的桌面鼠标转发：显示网页壁纸时开（桌面上的移动与左键点击注入到窗口，落到 web 层的
-    /// iframe），否则关。重复调用幂等；其它平台什么都不做。
+    /// 开关 Windows 的桌面鼠标转发：显示网页 / 场景壁纸时开（桌面上的移动与左键点击注入到窗口，落到 web 层的
+    /// iframe 或场景宿主），否则关。「暂停壁纸」不经这里：转发线程每轮自己读设置，暂停期间不注入。
+    /// 重复调用幂等；其它平台什么都不做。
     ///
     /// 不调会同步等主线程的 getter：调用方持着 manager 锁。
     pub fn set_mouse_forwarding(&mut self, enabled: bool) {

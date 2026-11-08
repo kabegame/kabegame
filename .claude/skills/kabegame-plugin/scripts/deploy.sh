@@ -21,6 +21,9 @@ PLUGIN_DIR="$ROOT/src-crawler-plugins/plugins/kabegame-plugin-$ID"
 [ -d "$PLUGIN_DIR" ] || PLUGIN_DIR="$ROOT/src-crawler-plugins/plugins/$ID"
 [ -d "$PLUGIN_DIR" ] || { echo "✗ 插件目录不存在: src-crawler-plugins/plugins/kabegame-plugin-$ID" >&2; exit 1; }
 export KABEGAME_CLI="$ROOT/target/$PROFILE/kabegame-cli"
+# Windows（Git Bash）下可执行文件带 .exe；package-plugin.ts 按字面路径检查存在性，
+# 而 Git Bash 的 -x 对不带 .exe 的路径也返回真，所以存在 .exe 时一律用 .exe
+[ ! -e "$KABEGAME_CLI.exe" ] || KABEGAME_CLI="$KABEGAME_CLI.exe"
 if [ ! -x "$KABEGAME_CLI" ]; then
   [ "$PROFILE" = release ] && hint="deno task b -c kabegame-cli --release" || hint="deno task b -c kabegame-cli"
   echo "✗ 缺少 $PROFILE CLI —— 请用户在仓库根执行 $hint" >&2; exit 1

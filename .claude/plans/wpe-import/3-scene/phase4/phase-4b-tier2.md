@@ -1130,6 +1130,18 @@ if (target.kind === "particle-instance") {
 
 和 P4a 一样，步骤 6 之后统一写 `cocs/wpe/WPE_SCENE.md`、changelog 和回归文档，并更新总计划的覆盖数。
 
+**已做（2026-11-08）：**
+- `cocs/wpe/WPE_SCENE.md`：
+  - 新增「粒子（P4b）」一节：纹理格式、帧表、发射时序与档 2 模块、折射与裁切、`colorn`、语料与解锁、探针增补；
+  - 改正 P4a 节里被 P4b 改掉的说法：`TEX0FORMAT`、COMBO 放行范围、能力键表、粒子 uniform、`colorn`；
+  - 能力表放行项加上 alpha-priority 与 `colorn`；渲染器的 `textures.ts` 一行改成格式表。
+- `cocs/README.md`：场景文档条目加「粒子与纹理（P4b）」，并补充适用场景。
+- changelog：用户侧一行、开发侧一行。
+- 回归文档：新增「场景壁纸 P4b」一节（B0–B13，B12、B13 待用户目视）；把引擎宏一节里「等 P4b」的 `nrm` 用例改成待重测。
+- 总计划：P4b 节补上完成情况。覆盖数实测 22 张（`ignore/p4/b6/coverage6.py`）。
+
+`versions/latest/` 的两个文件里还有另一处会话没提交的改动，提交时只放本节的改动（index 写入「HEAD + 本节插入」，工具在 scratchpad 的 `p4b_wrapup_versions.py`）。
+
 ## 决定
 
 1. `colorn` 纳入 P4b，作为步骤 6（2026-11-08 用户）。它是粒子里挡场景最多的一项，和 P4a 步骤 5 是同一条绑定路径。

@@ -1,5 +1,27 @@
 # v4.7.0 regression
 
+## 场景壁纸 P4b：纹理格式、粒子帧表、档 2 模块、折射与 colorn
+
+2026-11-08 Windows dev。P4b 分 7 步：步骤 0 调研；1 纹理格式（另有两次补充：翻译器按材质键拆分两阶段同名 uniform、材质常量取值对齐 WPE，后者见下一节）；2 粒子帧表；3 发射时序、`boxrandom` 与确定性档 2 模块；4 噪声类模块；5 `REFRACT` / `CUTOUT`；6 `instanceoverride.colorn`。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「粒子（P4b）」，每步的验收数据见 `.claude/plans/wpe-import/3-scene/phase4/phase-4b-tier2.md`「实施记录」。验收工具在 `ignore/p4/b1/`–`b6/`、`b2v/`–`b5v/`，WPE 参照在 `A:\p4b\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | B0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error；全过 | 2026-11-08（步骤 6 之后）：tsc 0 error，44 个文件 1154 个用例全过，格式通过 |
+| [x] | B1 纹理格式 · 确定性工程 | Windows dev，屏外宿主 | `p4b-tex1` 按 WPE 日志 dt 回放，静态格式区域与 WPE 抓帧逐像素比 | R8、RG88、DXT1、DXT3、alpha-priority 有无、NPOT 粒子与 WPE 一致 | 2026-11-08：R8、RG88、DXT3、alpha-priority、NPOT 粒子 0 个像素不同；DXT1 粒子 15 个、R8 图像层 45 个、RG88 图像层 2 个像素，都只差 1 个色阶 |
+| [x] | B2 `foliagesway` 场景 | Windows dev | `3799426930`、`3812822229`、`3829603837`、`2418800402` 按场景分辨率和 WPE 逐像素比 | 植物摇摆速度与相位和 WPE 一致 | 2026-11-08：前三张 0.03%–0.07% 像素不同，几乎都只差 1（翻译器修正前 1.3%–35%）；`2418800402` 是全图 4×4 方块状的解码舍入，画面一致 |
+| [x] | B3 粒子帧表 | Node 回放 + Windows dev 屏外宿主 | `p4b-tex` 的 15 个帧表系统按 WPE 日志 dt 回放：比 frame 列，再比整帧 | frame 与 WPE 只差 `rcpps` 的固定偏差；画面一致 | 2026-11-08：frame 相对差 2.44e-4–2.48e-4；`randomframe` 注入 WPE 的 `R` 后逐位相同；整帧最大差 2 个色阶，混帧关与随机帧 0 个像素不同 |
+| [x] | B4 发射时序与档 2 模块 | Node 回放 | `p4b`（fps 60 / fps 10）、`p4b-emit` 按 WPE 日志 dt 回放 | 每帧粒子数一致；位置、尺寸、颜色、alpha 在近似倒数包络内 | 2026-11-08：全部系统在限内；`capvelocity` 截后速度 WPE 99.993、我们 100.000；`vortex` 位置差 / 限 ≤ 0.46；P4a 的 9 个 tag 也全部在限内 |
+| [x] | B5 噪声类模块 | Node | 噪声对拍、短程强制回放、整段回放 | 噪声逐位相同；轨迹在限内 | 2026-11-08：Claude 独立参考实现 13033 组逐位相同；`turbulence` 4 帧强制回放 ≤ 3.1e-4；`turbulentvelocityrandom`、`positionoffsetrandom` 在包络内 |
+| [x] | B6 折射与裁切 | Windows dev，屏外宿主 | `p4b-refract`、`p4b-refract2` 各 4 帧对 WPE 逐像素比；数快照次数 | 差异不超过 1 个色阶；每个折射对象前一次快照 | 2026-11-08：最大差 1；`CUTOUT`、法线图对照组 0 个像素不同。存活数为 0 时 WPE 不拷快照、我们照拷，画面不受影响 |
+| [x] | B7 `colorn` · 确定性工程 | Node 回放 + Windows dev 屏外宿主 | `p4b-color`（`version 3`）、`p4b-color5`（`version 5`）、`p4b-color3b`、`p4b-color0`（不写 `version`）逐粒子比颜色；前两个再比整帧 | 逐粒子差不超过 2e-6；`version` < 5 时平移后再乘 `colorn` | 2026-11-08：最大差 3e-8；`c-change` 在 `version 5` 下为 (t, 1 − t, 0)，`version 3` 与缺键为 (0, 1 − t, 0)；整帧只有 `colorchange` 个别粒子差 1 个色阶 |
+| [x] | B8 `colorn` · 运行中改颜色属性 | WPE 抓帧 + Windows dev | `p4b-colorp2`（寿命 16 s）经 `-control applyProperties` 改三次颜色，按改值帧回放比；屏外宿主改 `p_c` 看探针 `stats()` | 新粒子用新值；`colorrandom` 与没有颜色模块的存活粒子不变，`colorchange` 的存活粒子立即变；不重编译 | 2026-11-08：3 个系统各 120 个粒子逐槽一致，最大差 3e-8；真机 `applied` 1 → 2 → 3，`recompiled` 0。测试行已删 |
+| [x] | B9 语料变化 | Node，152 个工程 | 每一步前后重扫 `unsupported` | 只在对应键上变化，原来能渲染的场景不掉出 | 2026-11-08：能渲染 14 → 20；带粒子的 95 张里粒子用法全覆盖 5 → 22；除各步的模块 `audioprocessing*` 字段外没有新增键 |
+| [x] | B10 原有场景画面不变 | Windows dev，屏外宿主 | 10 张原本能渲染的场景 × 三档后处理，`renderFrame` 读回哈希 | 每一步都与前一步相同 | 2026-11-08：步骤 2–6 每步 30 组都相同；翻译器修正只改了 `2418800402`，见 B2 |
+| [x] | B11 新解锁场景 · 屏外渲染 | Windows dev，屏外宿主 | 6 张新解锁的场景强制渲染、回放，与 WPE 抓帧比统计量 | 没有不支持项；粒子数、尺寸、位置、alpha 范围与 WPE 相近 | 2026-11-08：`1504316159`、`3820104696` 的雾与雨线和 WPE 一致，帧时间均值 3.74 / 4.01 ms；`2854083091` 构图一致；三张 `foliagesway` 见 B2 |
+| [ ] | B12 新解锁场景 · 预览与桌面 | Windows，窗口模式 | 6 张新解锁的场景分别在图库预览里打开、设为桌面壁纸，与 WPE 对照看一会儿 | 实时渲染；植物摇摆、雾、雨、粒子帧动画与 WPE 观感一致，没有闪烁或方块 | 待用户确认 |
+| [ ] | B13 改粒子颜色属性 · 预览 | Windows dev | 语料里带 `colorn` 绑定的场景都还有别的不支持项；可导入 `ignore/p4/proj/p4b-colorp2`，在预览属性面板改 `p_c`，测后删行 | 改色即时生效：之后出生的粒子换色，`p-change` 一行的存活粒子立即换色；不重新加载 | 待用户确认 |
 ## 场景壁纸材质常量取值对齐 WPE
 
 2026-11-08。材质常量（`constantshadervalues`、注解缺省、`usershadervalues` 与 `{user}` 绑定、就地写、脚本写回）改成照 WPE 的 setter 取值（`apps/wpe-scene/src/compile/materialValues.ts`，依据 `.claude/plans/wpe-import/3-scene/vector-constant-REPORT.md` 第 2 节，第 6 节 `p4b-vec` 36 格实测与读码吻合）。翻译器只在材质键不同时拆开两阶段同名 uniform，同键合并、注解取片元的。按用户决定不复刻同阶段同键只上传后声明的、按声明行子串定类型两条。测试工程 `ignore/p4/proj/p4b-vec`（`ignore/p4/vec/gen_vec.py` 生成，读像素点与 WPE 值在 `kbv-meta.json`）。
@@ -43,6 +65,7 @@
 | [ ] | E4 打开壁纸 · 升级 | Windows，旧设置 `wallpaperDisabled: true` | 关掉应用，把 `settings.json` 改成旧键后启动 | 「打开壁纸」是关着的，桌面没有壁纸窗口；`settings.json` 里变成 `wallpaperEnabled: false`、旧键消失、`schemaVersion` 4，旁边有 `settings.json.bak-v3` | 待用户确认 |
 | [ ] | E5 打开壁纸 · 开关 | Windows，窗口模式 | 关掉「打开壁纸」，再打开 | 关掉时壁纸窗口消失、其余壁纸设置置灰、壁纸操作被拒绝；打开后壁纸恢复，轮播开着的话继续轮播 | 待用户确认 |
 | [ ] | E6 全新安装 | 新数据目录 | 首次启动看设置页 | 「打开壁纸」默认开 | 待用户确认 |
+| [ ] | E7 暂停时不转发桌面鼠标 | Windows，窗口模式，桌面是网页或场景壁纸 | 先在桌面上移动、点击，确认壁纸有反应；打开「暂停壁纸」后再移动、点击；在桌面上按住左键时关掉「暂停壁纸」再松开；最后关掉暂停再试 | 暂停期间壁纸收不到移动与点击，打开暂停那一刻页面收到一次离开（悬停效果消失）；暂停中按住、恢复后松开不会被当成一次点击；关掉暂停后照常响应 | 2026-11-08 只改了 `input_forward.rs`（每轮读 `wallpaperPaused`），待重编后用户在桌面上实测 |
 
 ## Ctrl+滚轮缩放（CEF 补丁 10）
 
@@ -1415,7 +1438,7 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | `eagleflag` 法线 | 桌面 + WPE | 相位对齐后比画面 | 更接近 WPE | 均差 0.481、差 > 8 的像素 1.655%；改前 1.83、6.22%。最大差 88，来源没查 |
 | [x] | HDR 过亮输入 | 桌面 + WPE | `hsl-hdr`：`brightness` 2，色相类混合模式 | 和 WPE 一致 | 最大差 1；改前 255 |
 | [x] | LDR 不受 `HDR` 影响 | 桌面 + WPE | `hsl-ldr` | 和 WPE 一致 | 最大差 0 |
-| [ ] | 未声明 `formatcombo` 的法线工程 | 桌面 + WPE | `nrm` | 和 WPE 一致 | 工程含 RG88 单元格，`tex:format:8` 渲染不了，等 P4b |
+| [ ] | 未声明 `formatcombo` 的法线工程 | 桌面 + WPE | `nrm` | 和 WPE 一致 | 工程含 RG88 单元格，当时 `tex:format:8` 渲染不了；P4b 步骤 1 起 RG88 可渲染，待重测 |
 | [ ] | 其它档位的 `HDR` | 桌面 + WPE | `disabled`、开启档、`displayhdr` | `HDR` 只在 `ultra` / `displayhdr` 且 JSON 都为 true 时定义 | 只有静态结论 |
 
 ## 壁纸属性面板控制区排版
@@ -1429,3 +1452,12 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | 场景壁纸预览 | Windows dev，场景 13662 | 打开预览（场景退回预览图） | 暂停徽标行 + 紫色幽灵「清空脚本存储」+ 虚线 dev 按钮，三段用分隔线分开 | 2026-11-07：符合；该场景在本机不实时渲染，封面按钮按 `coverReady` 未出现 |
 | [ ] | 封面按钮并排 | 桌面 | 已设过自定义封面的网页 / 场景壁纸预览 | 设为封面（粉）与恢复默认封面（紫幽灵）等宽并排、窄栏时换行 | 未真机覆盖：手上没有带 `customCover` 的壁纸，避免改数据未触发 |
 | [ ] | 设置页弹窗 | 桌面，窗口模式 | 壁纸设置「当前壁纸」打开属性弹窗 | 暂停行 + 清空脚本存储（场景），无封面按钮 | 未真机覆盖 |
+
+## CLI 插件模板 Windows 输出路径
+
+2026-11-08 Windows。`kabegame-cli plugin new` 内嵌模板的 `rspack.config.mjs` 输出路径从 `new URL("./dist", import.meta.url).pathname`（Windows 上为 `/D:/...`，rspack 编译"成功"但 `dist/` 不产出）改为 `fileURLToPath(...)`，与 `plugins/kabegame-plugin-wallspic` 等现有插件一致。模板经 `include_dir!` 编译期内嵌，重建 CLI 后生效。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 修正后的配置可产出 | Windows | theanimegallery 插件（同一配置写法）`deno task build` | `dist/main.js` 产出，打包成功 | 2026-11-08：打包 128.49 KB，CLI 真跑 80 张全部下载 |
+| [ ] | plugin new 全链路 | Windows | 重建 CLI 后 `plugin new` 新插件并构建 | `dist/main.js` 直接产出 | 需重建 CLI 后验证 |

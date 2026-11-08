@@ -8,12 +8,13 @@
 - 场景壁纸支持泛光与 HDR：「场景后处理」为开启或超高时，开着泛光的场景按 Wallpaper Engine 的算法画出光晕（超高档另有 HDR 高光与更柔和的多级光晕），光晕本身与 Wallpaper Engine 的输出逐像素一致（相差不超过 1/255）；图库预览、应用背景与桌面同一档位，超高档 4K 场景多占约 90 MB 显存。Razer Bedroom 在「场景后处理」为开启或超高时可见光晕。
 - 场景壁纸支持 Wallpaper Engine 场景脚本（SceneScript）的基础部分：Razer Bedroom 现在可实时渲染彩虹灯带，Razer Vortex 的「模式」属性生效；一段脚本的某个回调出错只停用该回调，其余照常运行；场景脚本的存储（如记住的拖动位置）会保留到下次打开。
 - 场景壁纸支持图层层级与第一批粒子效果：子图层跟随父图层移动、旋转与显隐；粒子的发射、运动、淡出、振荡与透视粒子按 Wallpaper Engine 的方式模拟，并逐帧对照过 Wallpaper Engine 的输出。自带的 Shimmering Particles 与创意工坊 3062029089 现在可实时渲染；改粒子数量、发光、风格等属性即时生效，不重新加载。
+- 场景壁纸支持更多粒子效果与纹理格式：R8 / RG88 / DXT1 / DXT3 纹理；粒子序列帧动画（含随机帧与混帧）；按时长、延迟或周期发射，盒形发射区；粒子的尺寸、透明度、颜色随寿命变化，尺寸振荡、旋涡、限速、湍流与随机偏移；折射与裁切粒子；粒子的颜色覆盖（改颜色属性即时生效，不重新加载）。这些都逐帧或逐像素对照过 Wallpaper Engine 的输出。创意工坊 2854083091、3799426930、3812822229、3829603837、1504316159、3820104696 现在可实时渲染；用植物摇摆效果的场景（如创意工坊 2418800402）摇摆速度和 Wallpaper Engine 一致。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - 场景壁纸现在跟随壁纸样式（填充、适应、拉伸、居中、平铺），适应和居中时空白处用壁纸的主题色填充，和 Wallpaper Engine 一样；图库预览里场景壁纸按自身比例完整显示，和单独的图片一样；详情面板显示场景分辨率，宽高比筛选与排序也包含场景壁纸。
 - 网页与场景壁纸可在预览的右键菜单或底部工具条把当前画面设为壁纸封面，替换作者的低清预览图，也可在预览详情栏恢复默认封面。
 - 网页与场景壁纸可在预览的右键菜单或底部工具条暂停（排在第一个，画面出来后可用）；场景壁纸还可清空脚本存储。「设为壁纸」的图标换成了显示器。预览网页与场景壁纸时，直接在壁纸画面上右键也能弹出菜单。
-- 壁纸设置新增「暂停壁纸」：窗口模式下暂停桌面上的视频、网页与场景壁纸，换壁纸后仍保持暂停；原来在「壁纸属性」弹窗里的暂停开关与清空脚本存储移除。
+- 壁纸设置新增「暂停壁纸」：窗口模式下暂停桌面上的视频、网页与场景壁纸，换壁纸后仍保持暂停；暂停期间桌面上的鼠标移动与点击不再转发给网页和场景壁纸。原来在「壁纸属性」弹窗里的暂停开关与清空脚本存储移除。
 - Windows 上的 Wallpaper Engine 网页壁纸支持音频可视化与媒体集成：声明了音频处理的壁纸会随系统正在播放的声音跳动；壁纸可显示正在播放的歌曲名、歌手、封面、播放状态与进度（来自系统媒体控制，网易云、Spotify、浏览器等均可）。桌面与图库预览都生效。设置页壁纸分区新增「网页壁纸媒体集成」开关（默认开启），关闭后壁纸读不到歌曲信息。
 - 预览视频或网页壁纸时，系统媒体浮窗显示图片名称与 Kabegame 图标，不再显示「画廊」。
 - 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加壁纸目录；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
@@ -76,10 +77,14 @@
 ### Added
 - `kabegame-cli plugin run` 新增 `--freeze-template`：把本次运行插件的 `description.ejs` 冻结进每行 metadata（新列 `metadata.template`），详情面板优先用它渲染。`--id` 测试 id 没有安装，过去它下载的图片只能看原始键值，现在也能直接在应用里调试模板。插件模板与冻结模板并行获取，冻结模板非空时覆盖插件模板。
 
+### Fixed
+- `kabegame-cli plugin new` 模板的 rspack 输出路径改用 `fileURLToPath`：原来的 `URL.pathname` 在 Windows 上是 `/D:/...` 形式，rspack 产物落不到插件的 `dist/`，打包时报 `main 脚本不存在`（模板编译期内嵌，重新构建 CLI 后生效）。
+
 ## 开发侧
 
 ### Added
 - 场景壁纸 P4a：图层层级（`compile/hierarchy.ts`、`render/layout.ts` 的 `worldMatrixOf`，`visible` 沿父链继承）；粒子运行时（`apps/wpe-scene/src/particles/`：模块表 `PARTICLE_MODULES` 是唯一事实来源，float32 定长列模拟器，顶点按翻译器反射布局写入，与图像层按 `objects` 顺序混排）、透视粒子相机、正交深度改 ±2000、帧时间钳到 `[0.0001, 0.25]`；`instanceoverride` 进绑定表就地生效；能力表新增 `particle:*`、`value:animation`、`object:parent-cycle` 与 `script:api:*`（`compile/scriptApi.ts`）；预览画布按父页面量的显示缩放渲染（`kabegame:wpe-scene-display`）。dev 探针新增 `particleTrack`、`particleCorners`、`host.particles` 与 `renderFrame` 的粒子回放。详见 `cocs/wpe/WPE_SCENE.md`「层级（P4a）」「粒子（P4a）」。
+- 场景壁纸 P4b：纹理格式表 `TEXTURE_FORMATS`（`compile/tex.ts`，编译期与渲染器共用，新增 DXT3 / DXT1 / RG88 / R8，删 `tex:alpha-priority`）；粒子帧表（TEXS 解析进 bundle，`particleSheetDefines`、`g_RenderVar1`、`a_TexCoordVec4C1`，新增 `tex:animation:multi-image` / `tex:animation:empty`）；发射时序与 `boxrandom`（`particles/emitters.ts`）、8 个确定性档 2 模块、3 个噪声模块（`particles/noise.ts` 逐位移植 WPE，`ParticleSystem.step` 收场景时间）；粒子 COMBO 放行 `REFRACT` / `CUTOUT` / `NORMALMAP`；`instanceoverride.colorn`（`particles/colorn.ts`，绑定目标 `particle-instance` 收 `colorn`，`sceneVersionOf` 与 passthrough 材质共用）；翻译器按材质键拆分两阶段同名 uniform。dev 探针 `renderFrame` 加 `pointer` 与 `particles.random`，`particleTrack` 加 `times`。详见 `cocs/wpe/WPE_SCENE.md`「粒子（P4b）」。
 - 场景壁纸的着色器宏按 Wallpaper Engine 修正：Eagle Flag 的旗面法线更接近原版，HDR 场景里过亮颜色的色相类混合模式不再偏色。
 - 翻译器按 Wallpaper Engine 语义实现 `#require LightingV1`：`LIGHTING=0` 时为空，开启时生成灯光 uniform 与 `PerformLighting_V1`；宿主支持 `general.lightconfig` 与 `lpoint` / `lspot` / `ltube` / `ldirectional` 灯对象，无 effect 图层的光照与 Wallpaper Engine 对比最大差 1（`cocs/wpe/WPE_SCENE.md`「光照」）。
 - 场景宿主 P3-0c：CEF 补丁 08 让 `ChromeContentBrowserClientCef::ShouldEmbeddedFramesTryToReuseExistingProcess` 无条件返回 false，子 frame 不再跨 browser 复用同站点渲染进程（两个窗口的 `file:` 宿主 / 网页壁纸各自一个进程，畅游 / 爬虫的第三方 iframe 同样生效，主 frame 复用不变）；CEF 补丁 09（Chromium 内层 `kabegame_raf_local_root_only`）让每个 frame widget 只服务自己 local root 的文档，同一页面里多个同进程 iframe 的 rAF 不再每帧重复派发。

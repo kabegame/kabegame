@@ -33,7 +33,8 @@ const has = (flag: string) => {
 const root = new TextDecoder().decode(
   (await new Deno.Command("git", { args: ["rev-parse", "--show-toplevel"], stdout: "piped" }).output()).stdout,
 ).trim();
-const out = take("-o") ?? `${Deno.env.get("TMPDIR") ?? "/tmp"}/kb-desc.png`.replace(/\/+/g, "/");
+const tmpDir = Deno.env.get("TMPDIR") ?? Deno.env.get("TEMP") ?? Deno.env.get("TMP") ?? "/tmp";
+const out = take("-o") ?? `${tmpDir}/kb-desc.png`.replaceAll("\\", "/").replace(/\/+/g, "/");
 const width = Number(take("--width") ?? 600);
 const taskPlugin = take("--task-plugin");
 const where = take("--where");
@@ -82,7 +83,9 @@ await Deno.writeTextFile(htmlPath, html);
 
 const chrome = Deno.build.os === "darwin"
   ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-  : "google-chrome";
+  : Deno.build.os === "windows"
+    ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    : "google-chrome";
 await new Deno.Command(chrome, {
   args: ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--window-size=${width},1600`,
     "--virtual-time-budget=4000", `--screenshot=${out}`, `file://${htmlPath}`],

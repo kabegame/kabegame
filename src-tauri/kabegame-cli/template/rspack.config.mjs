@@ -1,4 +1,5 @@
 import { defineConfig } from "@rspack/cli";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   entry: { main: "./src/index.ts" },
@@ -8,7 +9,8 @@ export default defineConfig({
   optimization: { minimize: false },
   output: {
     filename: "[name].js",
-    path: new URL("./dist", import.meta.url).pathname,
+    // Windows 下 URL.pathname 形如 /D:/... 不是合法路径，必须经 fileURLToPath
+    path: fileURLToPath(new URL("./dist", import.meta.url)),
     library: { type: "module" },
   },
   experiments: { outputModule: true },
