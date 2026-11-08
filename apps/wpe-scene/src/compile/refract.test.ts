@@ -551,6 +551,7 @@ describe.skipIf(!root || !existsSync(wasm))("真翻译器：折射、裁切工�
       daytime: 0.5,
       pointer: [0.5, 0.5] as [number, number],
       pointerLast: [0.5, 0.5] as [number, number],
+      cursor: [0.5, 0.5] as [number, number],
     });
     /** 编码一帧（存活数在编码时随顶点上传更新），返回快照次数与各折射层的存活数。 */
     const encode = () => {

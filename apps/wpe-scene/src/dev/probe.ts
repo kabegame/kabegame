@@ -142,7 +142,8 @@ export interface RenderFrameOptions {
   time?: number;
   /**
    * `g_PointerPosition` 与 `g_PointerPositionLast`（窗口归一化坐标，原样进 uniform），缺省在中心 `[0.5, 0.5]`。
-   * 和 WPE 抓帧比时填抓帧里读到的值（P4b 步骤 1：`2854083091` 的 x 光随指针）。
+   * 和 WPE 抓帧比时填抓帧里读到的值（P4b 步骤 1：`2854083091` 的 x 光随指针）。同一个值也作控制点跟随指针的 `cursor`
+   * （光标下的场景纹理坐标，P4c 步骤 2），加载时的预热、回放的每一帧和读回那一帧都用它：抓帧窗口和场景同尺寸时两者相同。
    */
   pointer?: [number, number];
   /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（场景目标尺寸，alpha 置 255）存 `<key>.rgba`。 */
@@ -215,13 +216,13 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const gpu = await acquireGpu();
   try {
     const state = SceneState.fromBundle(bundle);
+    const pointer = options.pointer ?? [0.5, 0.5];
     const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], {
       ignoreUnsupported: force,
-      particles: replayParticleOptions(options.particles),
+      particles: { ...replayParticleOptions(options.particles), cursor: pointer },
     });
     try {
       const startTime = options.time ?? 0;
-      const pointer = options.pointer ?? [0.5, 0.5];
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
       if (options.profile) {
@@ -238,6 +239,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
               daytime: 0.5,
               pointer,
               pointerLast: pointer,
+              cursor: pointer,
             },
             state,
           );
@@ -259,9 +261,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         scene.profileParticles(false);
       }
       // 粒子回放：前 n−1 帧只步进，最后一帧随 update 步进
-      const { time, frametime } = replayParticles(scene, state, options.particles, startTime);
+      const { time, frametime } = replayParticles(scene, state, options.particles, startTime, pointer);
       scene.sync(state);
-      scene.update({ time, frametime, daytime: 0.5, pointer, pointerLast: pointer }, state);
+      scene.update({ time, frametime, daytime: 0.5, pointer, pointerLast: pointer, cursor: pointer }, state);
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
@@ -374,7 +376,10 @@ export async function hostRenderFrame(
   const encoder = device.createCommandEncoder({ label: "probe host frame" });
   scene.sync(state);
   // 帧时间 0：粒子不步进，读回的是当前状态
-  scene.update({ time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] }, state);
+  scene.update(
+    { time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5], cursor: [0.5, 0.5] },
+    state,
+  );
   scene.encode(encoder, state);
   // 有两张目标时 `encode` 开头才换，这一帧画的那张要在它之后取
   const texture = scene.targetTexture!;
@@ -425,6 +430,11 @@ export interface ParticleTrackProbeOptions {
   seed?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`，同 `renderFrame` 的 `particles.random`。 */
   random?: Record<number, number[]>;
+  /**
+   * 每帧光标下的场景纹理坐标（P4c 步骤 2），和 `dts` 等长，同 `particleTrack` 的 `cursors`；回放 WPE 时填轨迹里每帧的
+   * `g_PointerPosition`（抓帧窗口和场景同尺寸时两者相同）。不给时是场景中心。
+   */
+  cursors?: [number, number][];
   tag?: string;
 }
 
@@ -448,6 +458,8 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       passes: options.passes,
       seed: options.seed,
       random: options.random,
+      cursors: options.cursors,
+      size: [bundle.general.width, bundle.general.height],
       project: options.projectDir.split(/[\\/]/).filter(Boolean).at(-1) ?? "",
       tag: options.tag,
     });

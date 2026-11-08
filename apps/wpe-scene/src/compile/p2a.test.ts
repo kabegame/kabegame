@@ -215,7 +215,9 @@ describe("能力表裁决", () => {
           skylight: [0, 0, 0],
         }),
       ),
-      ...Object.keys(frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0] })),
+      ...Object.keys(
+        frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0], cursor: [0, 0] }),
+      ),
     ]);
     expect([...written].sort()).toEqual([...ENGINE_UNIFORMS].sort());
   });

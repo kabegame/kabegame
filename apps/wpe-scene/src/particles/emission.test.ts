@@ -482,7 +482,7 @@ describe("控制点（P4c 步骤 1，rea-p4c-sim.md 第 3 节）", () => {
     it("|q|² 判的是旋转后的 q（汇编 0x140237f76 起对旋转结果求平方和）：3×3 把 q 缩小到 1e-2 以下就回退", () => {
       // 控制点 1 带 flags 2：本地系统 current = inverse(W)·base，W 放大 1000 倍时 3×3 是 0.001
       const cp = points({}, { controlpoint: [{}, { flags: 2 }] });
-      cp.update({ world: scaling(1000, 1000, 1) });
+      cp.update({ world: scaling(1000, 1000, 1), pointer: [0, 0] });
       const small = spawn(
         { controlpoint: 1, distancemin: 0.5, distancemax: 0.5 },
         cp,

@@ -36,6 +36,7 @@ import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import { FBO_FORMATS } from "../compile/tex";
+import { pointerScenePoint } from "../particles/controlpoints";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ParticleSystem } from "../particles/system";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
@@ -223,6 +224,11 @@ export interface ParticleOptions {
    * `particles.random`，替换的实现在探针侧），产品路径不传。
    */
   rOverride?: (object: number) => ParticleROverride | undefined;
+  /**
+   * 加载时刻光标下的场景纹理坐标（`render/layout.ts` 的 `sceneCursor`，P4c 步骤 2），加载时的控制点更新和预热按它算指针的
+   * 跟随点（WPE 加载时也读当时的指针，rea-p4c-sim.md 1.3、1.7）。缺省场景中心 `(0.5, 0.5)`。
+   */
+  cursor?: readonly [number, number];
 }
 
 interface Draw {
@@ -443,6 +449,12 @@ export class GpuScene {
   private readonly particlePasses: 1 | 2;
   private readonly particleSeed: number;
   private readonly particleROverride: ParticleOptions["rOverride"];
+  /**
+   * 最近的光标下场景纹理坐标（P4c 步骤 2）：建场景时取 `ParticleOptions.cursor`，之后每次 `stepParticles` 更新。新建粒子系统
+   * 预热时用它。现在只有加载时会新建：粒子层编译期没有 effect、`planParticleLayer` 也不看 effect，计划签名不变，不会单独重建；
+   * 以后能单独重建时，新系统按最近的指针预热（`render/particles.test.ts` 用内部字段强制重建守着这一点）。
+   */
+  private particleCursor: readonly [number, number];
   /** 粒子开销记录（dev 探针，`profileParticles` 打开时才有）。 */
   private particleTimings: Map<Draw, ParticleTiming> | null = null;
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
@@ -469,6 +481,7 @@ export class GpuScene {
     this.particlePasses = particles.passes ?? 1;
     this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
     this.particleROverride = particles.rOverride;
+    this.particleCursor = particles.cursor ?? [0.5, 0.5];
     let ordinal = 0;
     for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
   }
@@ -1010,7 +1023,8 @@ export class GpuScene {
    * 一个粒子层的模拟器：种子 = `particleSeed` + 第几个粒子层，建好就预热（C1）。顶点按 `maxcount` 分配，
    * 第一次 `encode` 时写（`stale`）。布局的问题 `checkRenderable` 已经查过。
    * `instanceoverride` 取状态里的当前值（建场景时与编译期相同；万一单图层重建，用的也是就地写过的值）。
-   * 预热按状态里对象当前的世界矩阵更新控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）。
+   * 预热按状态里对象当前的世界矩阵更新控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）；指针点的跟随点按最近的 cursor
+   * （`particleCursor`，加载时是 `ParticleOptions.cursor`）反投影（P4c 步骤 2）。
    */
   private createParticles(layer: SceneLayer, program: GpuProgram, state: SceneState): ParticleDraw {
     const compiled = layer.particle!;
@@ -1023,7 +1037,7 @@ export class GpuScene {
       this.particleROverride?.(layer.object),
     );
     const world = worldMatrixOf(layer.object, state.layers, new Map());
-    system.prewarm({ world });
+    system.prewarm({ world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) });
     const { layout } = particleVertexLayout(program.vertexPacking);
     const vertices = new Float32Array(Math.max(1, system.columns.capacity) * 4 * Math.max(1, layout.stride));
     return { system, layout, vertices, count: 0, stale: true, world };
@@ -1092,7 +1106,7 @@ export class GpuScene {
         ))
           block.set(name, values);
       frameNames = Object.keys(
-        frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0] }),
+        frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0], cursor: [0, 0] }),
       ).filter((name) => block!.has(name) && !(name in pass.uniforms));
       uniformBuffer = this.own(
         device.createBuffer({
@@ -1397,7 +1411,7 @@ export class GpuScene {
    * 时全部步进。
    */
   update(frame: FrameInput, state?: SceneState): void {
-    this.stepParticles(frame.frametime, frame.time, state);
+    this.stepParticles(frame.frametime, frame.time, state, frame.cursor);
     const values = frameBuiltins(frame);
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
@@ -1415,11 +1429,21 @@ export class GpuScene {
    * `time` 是这一帧的 `g_Time`（和 uniform 同一个值，已回绕），作噪声类模块的场景时间 `T`（P4b 步骤 4）。
    * 控制点的输入是对象的世界矩阵（P4c 步骤 1）：给了 `state` 时每帧按它沿父链算（脚本改变换、父链变化下一帧就跟上，一次调用
    * 共用一份缓存），没给时用加载时的（`ParticleDraw.world`）。
+   * 指针点的跟随点（P4c 步骤 2）：`cursor` 是这一帧光标下的场景纹理坐标（`FrameInput.cursor`，缺省场景中心），按场景的正交
+   * `P·V` 反投影到 z = 0（`pointerScenePoint`），每次调用只算一次、交给每个系统（没有粒子层时不算）；透视粒子不另算（WPE 模拟时
+   * 栈上是正交投影，透视投影只在绘制时压栈，rea-p4c-sim.md 1.6）。
    * dev 探针按 dt 序列回放时直接调它。
    */
-  stepParticles(frametime: number, time: number, state?: SceneState): void {
+  stepParticles(
+    frametime: number,
+    time: number,
+    state?: SceneState,
+    cursor: readonly [number, number] = [0.5, 0.5],
+  ): void {
+    this.particleCursor = cursor;
     if (!(frametime > 0)) return;
     const worlds = new Map<number, Mat4>();
+    let pointer: [number, number] | null = null;
     for (const draw of this.draws) {
       const particles = draw.particles;
       if (!particles) continue;
@@ -1430,7 +1454,8 @@ export class GpuScene {
       const timing = this.particleTimings?.get(draw);
       const started = timing ? performance.now() : 0;
       const world = state ? worldMatrixOf(draw.object, state.layers, worlds) : particles.world;
-      particles.system.step(frametime, time, { world });
+      pointer ??= pointerScenePoint(this.viewProjection, cursor);
+      particles.system.step(frametime, time, { world, pointer });
       if (timing) {
         recordSample(timing.simulate, performance.now() - started);
         recordSample(timing.alive, particles.system.alive);

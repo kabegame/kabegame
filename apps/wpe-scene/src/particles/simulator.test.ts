@@ -751,12 +751,12 @@ describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.m
 
   it("更新在发射之前：本帧 W 变了，本帧出生的粒子已经用本帧的 inverse(W)", () => {
     const system = new ParticleSystem(particle(json()), new SeededRandom(1), 1);
-    system.prewarm({ world: identity() });
-    system.step(0.25, undefined, { world: at(1000) });
+    system.prewarm({ world: identity(), pointer: [0, 0] });
+    system.step(0.25, undefined, { world: at(1000), pointer: [0, 0] });
     expect(system.alive).toBe(2);
     expect(born(system, 0)).toEqual([-900, 100, 0]);
     expect(born(system, 1)).toEqual([-900, 100, 0]);
-    system.step(0.25, undefined, { world: at(2000) });
+    system.step(0.25, undefined, { world: at(2000), pointer: [0, 0] });
     expect(born(system, 2)).toEqual([-1900, 100, 0]);
     // 已出生的不动（速度 0）
     expect(born(system, 0)).toEqual([-900, 100, 0]);
@@ -764,11 +764,11 @@ describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.m
 
   it("预热前按加载时的 W 更新一次、previous ← current；预热的每一步照常更新；starttime 0 也做", () => {
     const zero = new ParticleSystem(particle(json()), new SeededRandom(1), 1);
-    zero.prewarm({ world: at(500) });
+    zero.prewarm({ world: at(500), pointer: [0, 0] });
     expect(Array.from(zero.controlPoints.current(1).translation)).toEqual([-400, 100, 0]);
     expect(Array.from(zero.controlPoints.previous(1).translation)).toEqual([-400, 100, 0]);
     const warm = new ParticleSystem(particle(json({ starttime: 0.5 })), new SeededRandom(1), 1);
-    warm.prewarm({ world: at(500) });
+    warm.prewarm({ world: at(500), pointer: [0, 0] });
     expect(warm.alive).toBeGreaterThan(0);
     for (let slot = 0; slot < warm.highWater; slot++) expect(born(warm, slot)).toEqual([-400, 100, 0]);
     // 不传 W（单测）时按单位阵
@@ -789,10 +789,10 @@ describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.m
         seen.push([context.controlPoints.previous(1).translation[0], context.controlPoints.current(1).translation[0]]),
     };
     (system as unknown as { operators: (typeof spy)[] }).operators.push(spy);
-    system.prewarm({ world: identity() });
-    system.step(0.1, undefined, { world: at(1000) });
-    system.step(0.1, undefined, { world: at(2000) });
-    system.step(0.1, undefined, { world: at(3000) });
+    system.prewarm({ world: identity(), pointer: [0, 0] });
+    system.step(0.1, undefined, { world: at(1000), pointer: [0, 0] });
+    system.step(0.1, undefined, { world: at(2000), pointer: [0, 0] });
+    system.step(0.1, undefined, { world: at(3000), pointer: [0, 0] });
     // 两遍模式：每帧 operator 跑两遍，控制点只更新一次
     expect(seen).toEqual([
       [100, -900],
@@ -847,5 +847,48 @@ describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.m
       passes: 1,
     });
     expect(bare.frames[0].systems.p[0].pos).toEqual([100, 100, 0]);
+  });
+
+  it("particleTrack（P4c 步骤 2）：cursors 每帧反投影成跟随点，第 1 项也给预热；不给时是场景中心；给 cursors 要给 size、等长", () => {
+    const def = particle({
+      maxcount: 32,
+      starttime: 0.3,
+      emitter: [{ name: "sphererandom", distancemax: 0, rate: 4 }],
+      initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+      controlpoint: [{ flags: 1, offset: "100 100 0" }],
+    });
+    const layers = [
+      { object: 1, name: "p", particle: def, origin: [960, 540, 0], angles: [0, 0, 0], scale: [1, 1, 1] },
+    ];
+    const options = { layers, dts: [0.25, 0.25, 0.25], frames: [3], passes: 1 as const, size: [1920, 1080] as const };
+    const track = particleTrack({
+      ...options,
+      cursors: [
+        [0.25, 0.75],
+        [0.5, 0.25],
+        [1.25, 0],
+      ],
+    });
+    const positions = track.frames[0].systems.p.map((particle) => particle.pos.slice(0, 2));
+    // 预热与第 1 帧：(480, 270)；第 2 帧 (960, 810)；第 3 帧（窗口外）(2400, 1080)；本地再减对象原点
+    const expected = new Set(["-480,-270", "0,270", "1440,540"]);
+    expect(new Set(positions.map((pos) => pos.map((v) => Math.round(v * 1000) / 1000).join(",")))).toEqual(expected);
+    expect(positions.length).toBeGreaterThanOrEqual(4);
+    const center = particleTrack(options);
+    // 场景中心 (960, 540) 正好是对象原点（反投影的逆矩阵差 1 ulp，按 1e-3 比）
+    for (const pos of center.frames[0].systems.p.map((particle) => particle.pos))
+      pos.forEach((value) => expect(Math.abs(value)).toBeLessThan(1e-3));
+    expect(() =>
+      particleTrack({
+        ...options,
+        size: undefined,
+        cursors: [
+          [0, 0],
+          [0, 0],
+          [0, 0],
+        ],
+      }),
+    ).toThrow();
+    expect(() => particleTrack({ ...options, cursors: [[0, 0]] })).toThrow();
   });
 });

@@ -19,7 +19,15 @@ import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { FrameClock, FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
-import { canvasSize, scenePlacement, scenePointer, type ScenePlacement, type SceneStyle } from "./layout";
+import {
+  canvasSize,
+  sceneCursor,
+  scenePlacement,
+  scenePointer,
+  sceneTargetSize,
+  type ScenePlacement,
+  type SceneStyle,
+} from "./layout";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
@@ -106,9 +114,16 @@ export class SceneRenderer {
   private pixelRatio = 1;
   /** 显示缩放为 1 时的画布尺寸：脚本的 `engine.screenResolution`，预览缩小显示时也和桌面一致。 */
   private fullResolution: [number, number] = [1, 1];
-  /** 光标在画布上的归一化坐标（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
+  /** `g_PointerPosition`：光标在画布上的归一化坐标按样式换算后的值（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
   private pointer: [number, number] = [0.5, 0.5];
   private pointerLast: [number, number] = [0.5, 0.5];
+  /**
+   * 最近一次 `setPointer` 收到的画布原始坐标（0…1，左上原点），没收到过时为 null。控制点跟随指针用的 `cursor`
+   * （`sceneCursor`）每帧按当前样式与铺放从它现算（P4c 步骤 2），改样式、改尺寸后下一帧就对，不用等下一次 `pointermove`。
+   * 只在宿主收到事件时更新（预览是光标在 iframe 上时，桌面是鼠标转发时），之外保持最后的值；WPE 用全局光标、窗口外也跟踪，
+   * 这点差别不处理。
+   */
+  private canvasPointer: [number, number] | null = null;
   /** `g_Time` / `g_Frametime`：钳过的帧时间与它的累加（T2）。换场景不重置。 */
   private readonly frameClock = new FrameClock();
   private paused = false;
@@ -256,9 +271,24 @@ export class SceneRenderer {
     if (this.lost) throw new SceneRenderError(["webgpu:device-lost"]);
     const serial = ++this.loadSerial;
     const state = SceneState.fromBundle(bundle);
+    // 加载时的控制点更新和预热用加载时刻的 cursor（WPE 加载时也读当时的指针，rea-p4c-sim.md 1.3、1.7）：按新场景的尺寸现算
+    // 一次铺放，尺寸取法同 `GpuScene.width/height`，和之后 `syncPlacement` 算的一致
+    const [sceneWidth, sceneHeight] = sceneTargetSize(
+      bundle.general.width,
+      bundle.general.height,
+      this.gpu.device.limits.maxTextureDimension2D,
+    );
+    const placement = scenePlacement(
+      this.style,
+      sceneWidth,
+      sceneHeight,
+      this.canvas.width,
+      this.canvas.height,
+      this.pixelRatio,
+    );
     const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, {
       ignoreUnsupported: options.ignoreUnsupported,
-      particles: { passes: particlePasses(this.options.maxFps ?? 60) },
+      particles: { passes: particlePasses(this.options.maxFps ?? 60), cursor: this.cursorOf(placement) },
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
@@ -283,8 +313,13 @@ export class SceneRenderer {
     this.sync();
   }
 
-  /** 画布上的指针位置（0…1，左上为原点、y 向下），按样式换算成 `g_PointerPosition`（见 `scenePointer`）。 */
+  /**
+   * 画布上的指针位置（0…1，左上为原点、y 向下），按样式换算成 `g_PointerPosition`（见 `scenePointer`）；原始坐标另记下，
+   * 控制点的 `cursor` 每帧从它现算（`canvasPointer`）。暂停时照常记，不画；恢复后的第一帧用最新值（WPE 暂停时指针冻结、
+   * 恢复后读当时的光标，效果相同）。
+   */
   setPointer(x: number, y: number): void {
+    this.canvasPointer = [x, y];
     this.pointerLast = this.pointer;
     if (!this.scene) {
       this.pointer = [x, y];
@@ -443,6 +478,13 @@ export class SceneRenderer {
     );
   }
 
+  /** 光标下的场景纹理坐标（`sceneCursor`，P4c 步骤 2）：按当前样式与给定铺放从 `canvasPointer` 现算；没收到过指针时取场景中心。 */
+  private cursorOf(placement: ScenePlacement): [number, number] {
+    const pointer = this.canvasPointer;
+    if (!pointer) return [0.5, 0.5];
+    return sceneCursor(this.style, placement, this.canvas.width, this.canvas.height, pointer[0], pointer[1]);
+  }
+
   private render(runScripts = false): void {
     const scene = this.scene;
     const state = this.state;
@@ -467,6 +509,8 @@ export class SceneRenderer {
           daytime: daytimeOf(new Date()),
           pointer: this.pointer,
           pointerLast: this.pointerLast,
+          // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上
+          cursor: this.cursorOf(this.placement),
         },
         state,
       );

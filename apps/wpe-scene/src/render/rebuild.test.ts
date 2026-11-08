@@ -350,7 +350,14 @@ function bundleOf(layers: SceneLayer[], overrides: Partial<SceneBundle> = {}): S
 }
 
 const FEATURES = new Set<string>();
-const FRAME: FrameInput = { time: 1.5, frametime: 1 / 60, daytime: 0.5, pointer: [0.25, 0.75], pointerLast: [0, 0] };
+const FRAME: FrameInput = {
+  time: 1.5,
+  frametime: 1 / 60,
+  daytime: 0.5,
+  pointer: [0.25, 0.75],
+  pointerLast: [0, 0],
+  cursor: [0.25, 0.75],
+};
 
 /** 一个跑起来的场景与它的假设备、状态、警告。`setup` 在建场景之前改假设备。 */
 async function open(bundle: SceneBundle, setup?: (gpu: FakeGpu) => void) {

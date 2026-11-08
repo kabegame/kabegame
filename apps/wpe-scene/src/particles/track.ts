@@ -8,11 +8,13 @@
  *
  * 帧号与 WPE 脚本帧号对齐：`dts[0]` 是第 1 帧。每个系统加载时先预热（场景时间 0），再从第 1 帧步进；第 n 帧的场景时间是
  * `times[n − 1]`，没给时是 `dts` 前 n 项之和（P4b 步骤 4）。可见性（步骤 5）不处理。
- * 控制点的输入（P4c 步骤 1）是对象的世界矩阵：按全部图层的编译期变换沿父链算（`worldMatrixOf`），静态、不跑脚本。
+ * 控制点的输入（P4c 步骤 1）是对象的世界矩阵：按全部图层的编译期变换沿父链算（`worldMatrixOf`），静态、不跑脚本；指针的跟随点
+ * （P4c 步骤 2）按每帧的 `cursors` 与场景的正交投影反投影（`pointerScenePoint`），预热用第 1 项。
  */
 import type { SceneLayer } from "../compile/bundle";
-import { worldMatrixOf } from "../render/layout";
+import { sceneViewProjection, worldMatrixOf } from "../render/layout";
 import type { Mat4 } from "../render/math";
+import { pointerScenePoint } from "./controlpoints";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { injectedR, SeededRandom } from "./random";
 import { ParticleSystem } from "./system";
@@ -63,6 +65,17 @@ export interface ParticleTrackOptions {
   frames: readonly number[];
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。 */
   passes: 1 | 2;
+  /**
+   * 每帧光标下的场景纹理坐标（`render/layout.ts` 的 `sceneCursor`，P4c 步骤 2），和 `dts` 等长、一一对应；第 1 项也用于加载时的
+   * 控制点更新与预热。回放 WPE 时填轨迹里的 `g_PointerPosition`（抓帧窗口和场景同尺寸时两者相同；比例不同时按 `fill` 的铺放
+   * 换算，见 `sceneCursor`）。不给时是场景中心 `(0.5, 0.5)`。
+   */
+  cursors?: readonly (readonly [number, number])[];
+  /**
+   * 场景的投影尺寸（`general.width/height`），算 `sceneViewProjection` 给跟随点反投影用。给了 `cursors` 时必填；都不给时跟随点
+   * 按 (0, 0)（同 `ParticleSystem` 的缺省输入，只给单测）。
+   */
+  size?: readonly [number, number];
   /** 随机种子；第 i 个粒子层用 `seed + i`。缺省 1。 */
   seed?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`（`injectedR`，用完退回种子随机数），同 dev 探针 `renderFrame` 的 `particles.random`。 */
@@ -144,6 +157,15 @@ export function summarizeParticles(system: ParticleSystem): ParticleSummary {
 
 export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   const seed = options.seed ?? 1;
+  const { cursors, size } = options;
+  if (cursors && !size) throw new Error("给了 cursors 时要给 size（场景的投影尺寸）");
+  if (cursors && cursors.length !== options.dts.length)
+    throw new Error(`cursors 有 ${cursors.length} 项，dts 有 ${options.dts.length} 项，应等长`);
+  const viewProjection = size ? sceneViewProjection({ width: size[0], height: size[1] }) : null;
+  /** 第 i 帧（从 0 起）的跟随点：每帧反投影一次，全部系统共用。 */
+  const pointerAt = (i: number): readonly [number, number] =>
+    viewProjection ? pointerScenePoint(viewProjection, cursors?.[i] ?? [0.5, 0.5]) : [0, 0];
+  const loadPointer = pointerAt(0);
   const names = new Set<string>();
   const systems: { name: string; system: ParticleSystem; world: Mat4 }[] = [];
   const skipped: Record<string, string[]> = {};
@@ -172,7 +194,7 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
       injected ? injectedR(injected) : undefined,
     );
     const world = worldMatrixOf(layer.object, transforms, worlds);
-    system.prewarm({ world });
+    system.prewarm({ world, pointer: loadPointer });
     if (system.skipped.length) skipped[name] = system.skipped;
     systems.push({ name, system, world });
   }
@@ -187,7 +209,8 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     const dt = options.dts[frame - 1];
     elapsed = (elapsed + dt) % TIME_WRAP_SECONDS;
     const time = options.times ? options.times[frame - 1] : elapsed;
-    for (const { system, world } of systems) system.step(dt, time, { world });
+    const pointer = pointerAt(frame - 1);
+    for (const { system, world } of systems) system.step(dt, time, { world, pointer });
     if (!wanted.has(frame)) continue;
     const out: Record<string, ParticleTrackParticle[]> = {};
     for (const { name, system } of systems) {

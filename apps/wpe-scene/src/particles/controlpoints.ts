@@ -11,11 +11,12 @@
  *   - 每帧 `update`（`FUN_14022e3e0`，1.5）在序列帧之后、发射之前，两遍模式也只一次；全部 operator 之后 `endFrame`
  *     （`previous ← current`，`0x140237798`）。
  * - 读控制点的模块经执行上下文的 `controlPoints` 读 `current`（第 3 节）。
+ * - 指针点（`flags` bit0，P4c 步骤 2，1.6）：每帧的平移是「光标下的场景点」`F`（渲染器按壁纸样式把画布指针换成场景纹理坐标，
+ *   再由 `pointerScenePoint` 照 WPE 反投影到 z = 0），`offset` 被丢弃、3×3 是单位阵；本地系统再乘 `inverse(W)`，世界系统直接用。
  *
- * 本步不做：指针（`flags` bit0，步骤 2，能力表报 `particle:controlpoint:pointer`，这里先 `current = base`）；父控制点
- * （bit2、bit3，只对子系统有意义，P4e；顶层系统的 bit2 走缺省更新，只让实例覆盖不生效）；remap 写控制点（`0x10000`，P4d）；
- * `instanceoverride` 控制点的运行时改值（语料全是静态值，能力表报 `{user}`）。世界空间分支照 WPE 同一个函数写上，但世界空间
- * 整体在步骤 4，能力表照报 `particle:flags:world`。
+ * 不做：父控制点（bit2、bit3，只对子系统有意义，P4e；顶层系统的 bit2 走缺省更新，只让实例覆盖不生效）；remap 写控制点
+ * （`0x10000`，P4d）；`instanceoverride` 控制点的运行时改值（语料全是静态值，能力表报 `{user}`）。世界空间分支照 WPE 同一个
+ * 函数写上，但世界空间整体在步骤 4，能力表照报 `particle:flags:world`。
  */
 import type { ParticleInstance, SceneControlPoint, SceneParticle } from "../compile/particles";
 import { invert, multiply, type Mat4 } from "../render/math";
@@ -32,11 +33,16 @@ export interface ControlPoint {
 export interface ControlPointInputs {
   /** 对象世界矩阵 `W`（`render/layout.ts` 的 `worldMatrixOf`，含父链）。顶层系统模拟时的模型矩阵 `M` 就是它（1.4）。 */
   world: Mat4;
+  /**
+   * 指针的跟随点 `F`（场景坐标，z = 0，`pointerScenePoint` 算），每帧由渲染器给（P4c 步骤 2）。全场一个值，和对象无关；
+   * 只有指针点读它。
+   */
+  pointer: readonly [number, number];
 }
 
 /** 控制点 `flags` 的位（rea-p4c-sim.md 1.9）。bit3（父分支不换算）、bit4（没有读者）这里用不到。 */
 export const CONTROL_POINT_FLAGS = {
-  /** 跟随指针（1.6，步骤 2）。 */
+  /** 跟随指针（1.6，P4c 步骤 2）：平移是光标下的场景点，丢弃 `offset`，不吃实例覆盖。 */
   pointer: 1,
   /** `base` 是场景坐标：本地系统乘 `inverse(W)`；世界系统的控制点 0 忽略它（1.5）。 */
   scene: 2,
@@ -51,6 +57,55 @@ const NO_INSTANCE_OVERRIDE = CONTROL_POINT_FLAGS.pointer | CONTROL_POINT_FLAGS.p
 
 /** 单位 3×3（列主序）。只读：执行上下文的缺省 `basis`，不要改写。 */
 export const IDENTITY_BASIS: Float32Array = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+/**
+ * 光标下的场景纹理坐标（0…1，左上原点、y 向下，`render/layout.ts` 的 `sceneCursor`）→ 跟随点的场景坐标（P4c 步骤 2，
+ * rea-p4c-sim.md 1.6，`0x14022e47b`–`0x14022e669`）。`viewProjection` 是场景的正交 `P·V`（`sceneViewProjection`），函数内求逆。
+ *
+ * WPE 的 `ctx+0x8c/0x90` 是窗口归一化坐标（1.7），`P·V` 里已带着把场景居中盖满到窗口的裁切（报告「步骤 2 补测」）；Kabegame 的
+ * 场景渲染在场景分辨率的目标里、`P·V` 不裁，裁切与留白在上屏时按样式做，所以先由 `sceneCursor` 把画布指针换成光标下的场景
+ * 纹理坐标，再照 WPE 同一串运算反投影。`fill` 的铺放就是 WPE 的居中盖满，两边结果一致。逐步 float32（照 1.6 的伪代码）：
+ * ```
+ * x = ((px − 0) + (px − 0)) − 1                          // subss 0、addss 自身、subss 1
+ * y = (((1 − py) − 0) + ((1 − py) − 0)) − 1
+ * A = inverse(P·V)                                      // FUN_14005ecb0 再 FUN_14005f730
+ * w = (A03·x + A13·y) + (A23·0 + A33)
+ * X = ((A00·x + A10·y) + (A20·0 + A30)) / w             // divss
+ * Y = ((A01·x + A11·y) + (A21·0 + A31)) / w
+ * ```
+ * `Aij` 是第 i 列第 j 个分量。反投影的 z 丢掉（落在 z = 0 平面）；不钳制，窗口外线性外推。求逆用 `render/math.ts` 的 `invert`
+ * （double 余子式、末尾舍入），WPE 是 float32 伴随矩阵乘 `1/det`，正交矩阵的逆可能差 1 ulp。`invert` 失败（正交投影可逆，
+ * 不会发生）时返回 NaN。
+ */
+export function pointerScenePoint(viewProjection: Mat4, cursor: readonly [number, number]): [number, number] {
+  const a = invert(viewProjection);
+  if (!a) return [Number.NaN, Number.NaN];
+  const px = f32(cursor[0]);
+  const py = f32(cursor[1]);
+  const sx = f32(px - 0);
+  const x = f32(f32(sx + sx) - 1);
+  const sy = f32(f32(1 - py) - 0);
+  const y = f32(f32(sy + sy) - 1);
+  const w = f32(f32(f32(a[3] * x) + f32(a[7] * y)) + f32(f32(a[11] * 0) + a[15]));
+  const X = f32(f32(f32(f32(a[0] * x) + f32(a[4] * y)) + f32(f32(a[8] * 0) + a[12])) / w);
+  const Y = f32(f32(f32(f32(a[1] * x) + f32(a[5] * y)) + f32(f32(a[9] * 0) + a[13])) / w);
+  return [X, Y];
+}
+
+/**
+ * 指针点本地系统的平移：`B·(X, Y, 0, 1)`（`B = inverse(W)`，1.6），逐步 float32、加法顺序照伪代码：
+ * `((B0j·X + B1j·Y) + (B2j·0 + B3j))`。`B` 为 null（`W` 奇异）时写 NaN：WPE 的 `FUN_14005f730` 乘 `1/det = inf`，同样画不出来。
+ */
+function pointerLocal(target: Float32Array, inverse: Mat4 | null, x: number, y: number): void {
+  if (!inverse) {
+    target.fill(Number.NaN);
+    return;
+  }
+  for (let j = 0; j < 3; j++)
+    target[j] = f32(
+      f32(f32(inverse[j] * x) + f32(inverse[4 + j] * y)) + f32(f32(inverse[8 + j] * 0) + inverse[12 + j]),
+    );
+}
 
 /**
  * `n = max(controlpoint + 1)`：遍历三类模块里模块表有 `controlpoint` 字段的项，取解析后的值（0–7，`clampControlPoint`）。
@@ -195,20 +250,30 @@ export class ControlPointSet {
    * 每帧一次（`FUN_14022e3e0`，1.5），在发射之前。位的优先级 `0x10000` > bit0 > bit2 > 缺省：
    * ```
    * f & 0x10000：跳过（remap 输出的点，P4d；JSON 写这一位时 current 一直是 base）
-   * f & 1：      current = base（指针分支，步骤 2；能力表报 particle:controlpoint:pointer）
+   * f & 1：      指针分支（1.6，0x14022e47b）：current = base（3×3 是单位阵：指针点不吃实例覆盖），平移整体覆盖（丢弃 offset）：
+   *   世界：current.t = (X, Y, 0)，不乘 W
+   *   本地：current.t = inverse(W)·(X, Y, 0, 1)（和 flags 2 共用一次求逆；W 奇异时平移写 NaN）
    * 其余（含 f & 4：顶层系统没有父，走缺省更新 FUN_14022a070，1.8）：
    *   世界：!(f & 2) 或 i == 0 → current = W·base；否则不动
    *   本地：f & 2 → current = inverse(W)·base；否则不动
    * ```
-   * 「不动」的点 `current` 一直是建系统时的 `base`（本步没有运行时改值）。
+   * `(X, Y)` 是 `inputs.pointer`（本帧的跟随点）。「不动」的点 `current` 一直是建系统时的 `base`（没有运行时改值）。
    */
-  update({ world: matrix }: ControlPointInputs): void {
+  update({ world: matrix, pointer }: ControlPointInputs): void {
     let inverse: Mat4 | null | undefined;
     this.points.forEach((point, i) => {
       const f = point.flags;
       if (f & CONTROL_POINT_FLAGS.remap) return;
       if (f & CONTROL_POINT_FLAGS.pointer) {
         copyPoint(point.current, point.base);
+        // 跟随点是 float（`pointerScenePoint` 的结果已舍入；单测直接给的值这里再舍一次）
+        const x = f32(pointer[0]);
+        const y = f32(pointer[1]);
+        if (this.world) point.current.translation.set([x, y, 0]);
+        else {
+          if (inverse === undefined) inverse = invert(matrix);
+          pointerLocal(point.current.translation, inverse, x, y);
+        }
         return;
       }
       const scene = (f & CONTROL_POINT_FLAGS.scene) !== 0;

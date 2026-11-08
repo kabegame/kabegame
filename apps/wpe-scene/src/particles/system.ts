@@ -20,8 +20,9 @@
  * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
  * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热）；暂停时渲染器不步进。
  *
- * 控制点（P4c 步骤 1）是系统的一份状态（`controlpoints.ts`）：建系统时按 JSON 的 `offset` 与静态 `instanceoverride` 定基准，
- * 每帧按对象世界矩阵 `W`（`step` / `prewarm` 的 `inputs`，渲染器按父链算）更新，模块经执行上下文读。子系统不在这里。
+ * 控制点（P4c 步骤 1、2）是系统的一份状态（`controlpoints.ts`）：建系统时按 JSON 的 `offset` 与静态 `instanceoverride` 定基准，
+ * 每帧按对象世界矩阵 `W` 与指针的跟随点（`step` / `prewarm` 的 `inputs`，渲染器按父链与壁纸样式算）更新，模块经执行上下文读。
+ * 子系统不在这里。
  * 表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
@@ -47,8 +48,8 @@ import {
 } from "./modules";
 import type { ParticleRandom, ParticleROverride } from "./random";
 
-/** 没给控制点输入时用：对象世界矩阵按单位阵（单测；渲染器与 `particleTrack` 都显式传）。 */
-const IDENTITY_INPUTS: ControlPointInputs = { world: identity() };
+/** 没给控制点输入时用：对象世界矩阵按单位阵、指针的跟随点按 (0, 0)（单测；渲染器与 `particleTrack` 都显式传）。 */
+const IDENTITY_INPUTS: ControlPointInputs = { world: identity(), pointer: [0, 0] };
 
 /** 预热步长：`maxcount < 500` 时 0.05，否则 0.2（C1，实测两档都对上）。 */
 export function prewarmStep(maxcount: number): number {
@@ -290,8 +291,8 @@ export class ParticleSystem {
    * `time` 是本帧的 `g_Time`（已加上本帧钳过的帧时间、已按 432000 回绕，P4b 步骤 4 的场景时间 `T`），舍入成 float32 给噪声类
    * 模块（WPE 的 `ctx+0x130` 是场景时间的 float 副本）；`T` **不乘** `rate`（`rate` 只缩放 `dt'` 与 `timescale`）。
    * 不给时用本系统收到的帧时间之和（double 累加、同样回绕），即从 0 起步的 `FrameClock`：渲染器、`particleTrack` 都显式传，
-   * 缺省只给单测用。`inputs` 是本帧控制点更新的输入（对象世界矩阵 `W`，P4c 步骤 1）：渲染器每帧按 `SceneState` 沿父链算，
-   * 缺省单位阵只给单测用。
+   * 缺省只给单测用。`inputs` 是本帧控制点更新的输入：对象世界矩阵 `W`（P4c 步骤 1，渲染器每帧按 `SceneState` 沿父链算）和
+   * 指针的跟随点（P4c 步骤 2，场景坐标，渲染器每帧按本帧的光标反投影，用的是本帧的指针）；缺省（单位阵、(0, 0)）只给单测用。
    */
   step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
@@ -308,7 +309,7 @@ export class ParticleSystem {
    *
    * 控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）：加载时 `FUN_14022feb0` 先写好 `W`，压模型矩阵，`FUN_14022e3e0` 更新一次、全部
    * 控制点 `previous ← current`，再预热，预热的每一步照常更新、照常拷 `previous`。`starttime` 为 0 时也做前两步。
-   * `inputs` 是加载时的 `W`。
+   * `inputs` 是加载时的 `W` 与加载时刻光标的跟随点（P4c 步骤 2；预热不走帧函数，指针不变）。
    */
   prewarm(inputs: ControlPointInputs = IDENTITY_INPUTS): void {
     this.controlPoints.update(inputs);

@@ -266,8 +266,33 @@ export function scenePlacement(
 }
 
 /**
- * 画布上的指针（0…1，左上为原点）换算成 `g_PointerPosition`。`fill` / `stretch` 铺满窗口，原样（WPE 取窗口归一化坐标）；
- * 其余样式画面不跟窗口对齐，换算到场景上，光标效果才落在画面上，留白处的值在 0…1 之外，`tile` 按所在那一块算。
+ * 画布上的指针（0…1，左上为原点）→ 光标下的场景纹理坐标（0…1，左上原点、y 向下；P4c 步骤 2，控制点跟随指针用，见
+ * `particles/controlpoints.ts` 的 `pointerScenePoint`）。所有样式都按铺放反算，即「光标下的那个场景点」：
+ * - `fill`：等于 WPE 把居中盖满裁切做进投影 `P·V` 的结果（报告「步骤 2 补测」：1920×800、1440×1080 窗口下跟随点都是
+ *   `inverse(P·V)` 作用在窗口指针上，即光标下的场景点）；
+ * - `fit` / `center`：Kabegame 自己的样式，按同一原则，留白处线性外推（0…1 之外，不钳制，同 WPE 窗口外的外推）；
+ * - `stretch`：铺放是恒等，原样返回；
+ * - `tile`：取所在那一块（取小数部分）。
+ */
+export function sceneCursor(
+  style: SceneStyle,
+  placement: ScenePlacement,
+  canvasWidth: number,
+  canvasHeight: number,
+  x: number,
+  y: number,
+): [number, number] {
+  if (style === "stretch") return [x, y];
+  const [left, top, width, height] = placement.rect;
+  const u = placement.offset[0] + ((x * canvasWidth - left) / width) * placement.scale[0];
+  const v = placement.offset[1] + ((y * canvasHeight - top) / height) * placement.scale[1];
+  return style === "tile" ? [u - Math.floor(u), v - Math.floor(v)] : [u, v];
+}
+
+/**
+ * 画布上的指针（0…1，左上为原点）换算成 `g_PointerPosition`。`fill` / `stretch` 铺满窗口，原样（WPE 取窗口归一化坐标，
+ * P2a；步骤 2 补测确认裁切时 WPE 的 `g_PointerPosition` 仍是窗口坐标）；其余样式画面不跟窗口对齐，换算到场景上（`sceneCursor`），
+ * 光标效果才落在画面上，留白处的值在 0…1 之外，`tile` 按所在那一块算。和控制点的跟随点（`sceneCursor`）只在 `fill` 下不同。
  */
 export function scenePointer(
   style: SceneStyle,
@@ -278,10 +303,7 @@ export function scenePointer(
   y: number,
 ): [number, number] {
   if (style === "fill" || style === "stretch") return [x, y];
-  const [left, top, width, height] = placement.rect;
-  const u = placement.offset[0] + ((x * canvasWidth - left) / width) * placement.scale[0];
-  const v = placement.offset[1] + ((y * canvasHeight - top) / height) * placement.scale[1];
-  return style === "tile" ? [u - Math.floor(u), v - Math.floor(v)] : [u, v];
+  return sceneCursor(style, placement, canvasWidth, canvasHeight, x, y);
 }
 
 /** 离屏目标尺寸：场景分辨率，超过设备上限时等比缩小。 */

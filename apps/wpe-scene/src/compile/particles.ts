@@ -86,8 +86,8 @@ export interface ParticleInstance {
 export interface SceneControlPoint {
   /**
    * `flags`：按 jsoncpp 取无符号整数（`FUN_140085f70`，`0x1401d05a2`）：数字取整后取低 32 位（负数当很大的无符号数），布尔为
-   * 1 / 0，其余 0（WPE 对字符串、对象会抛异常，语料没有）。bit0 指针、bit1 base 是场景坐标、bit2 父控制点（顶层只让实例覆盖
-   * 不生效），其余位没有读者（`particles/controlpoints.ts`）。
+   * 1 / 0，其余 0（WPE 对字符串、对象会抛异常，语料没有）。bit0 跟随指针（P4c 步骤 2 已实现）、bit1 base 是场景坐标、bit2 父
+   * 控制点（顶层只让实例覆盖不生效），其余位没有读者（`particles/controlpoints.ts`）。
    */
   flags: number;
   /**

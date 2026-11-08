@@ -817,7 +817,7 @@ describe("能力表：粒子", () => {
     ]);
   });
 
-  it("控制点（P4c 步骤 1）：只看被模块引用的点（n = max(controlpoint + 1)）；flags bit0 报 particle:controlpoint:pointer，其余中性", () => {
+  it("控制点（P4c 步骤 1、2）：全部支持或中性；flags bit0（指针）不再报，n 之内之外都一样", () => {
     const emitter = (controlpoint?: number) => ({
       name: "sphererandom",
       ...(controlpoint === undefined ? {} : { controlpoint }),
@@ -828,28 +828,22 @@ describe("能力表：粒子", () => {
       { id: 2, flags: 8 + 16, offset: "1 2 3" },
       { id: 3, angles: "1 2 3", flags: 0x10001 },
     ];
-    // 中性：offset、angles、flags 2 / 4 / 8 / 16、parentcontrolpoint、locktopointer、别的键；0x10000 优先于指针
+    // 中性：offset、angles、flags 2 / 4 / 8 / 16、parentcontrolpoint、locktopointer、别的键
     expect(particleKeys({ emitter: [emitter(3)], controlpoint: neutral })).toEqual([]);
-    // 指针：被引用的点报新键
-    expect(particleKeys({ emitter: [emitter()], controlpoint: [{ id: 0, flags: 1 }] })).toEqual([
-      "particle:controlpoint:pointer",
-    ]);
-    expect(particleKeys({ emitter: [emitter(2)], controlpoint: [{}, {}, { flags: 3 }] })).toEqual([
-      "particle:controlpoint:pointer",
-    ]);
-    // n 之外的指针点不报（emitter 缺省读控制点 0，n = 1）
+    // 指针（步骤 2 已实现）：被引用的点（缺省读控制点 0、读控制点 2、vortex 读控制点 1、钳成 7）和 n 之外的点都不报
+    expect(particleKeys({ emitter: [emitter()], controlpoint: [{ id: 0, flags: 1 }] })).toEqual([]);
+    expect(particleKeys({ emitter: [emitter(2)], controlpoint: [{}, {}, { flags: 3 }] })).toEqual([]);
     expect(particleKeys({ emitter: [emitter()], controlpoint: [{}, { flags: 1 }] })).toEqual([]);
-    // n 按全部表内模块取最大：vortex 读控制点 1
     expect(
       particleKeys({
         emitter: [emitter()],
         operator: [{ name: "vortex", controlpoint: 1 }],
-        controlpoint: [{}, { flags: 1 }],
+        controlpoint: [{}, { flags: 5 }],
       }),
-    ).toEqual(["particle:controlpoint:pointer"]);
-    // 没有读控制点的模块：一个控制点都没有
-    expect(particleKeys({ controlpoint: [{ flags: 1 }] })).toEqual([]);
-    // 表外模块不算（它自己报）
+    ).toEqual([]);
+    const pointerAt7 = [...Array.from({ length: 7 }, (_, id) => ({ id })), { id: 7, flags: 1 }];
+    expect(particleKeys({ emitter: [emitter(-1)], controlpoint: pointerAt7 })).toEqual([]);
+    // 表外模块照旧自己报
     expect(
       particleKeys({
         emitter: [emitter()],
@@ -857,12 +851,59 @@ describe("能力表：粒子", () => {
         controlpoint: [{}, { flags: 1 }],
       }),
     ).toEqual(["particle:operator:controlpointattract"]);
-    // 只按数组下标读前 8 项；-1 钳成 7
-    const pointerAt7 = [...Array.from({ length: 7 }, (_, id) => ({ id })), { id: 7, flags: 1 }];
-    expect(particleKeys({ emitter: [emitter(-1)], controlpoint: pointerAt7 })).toEqual([
-      "particle:controlpoint:pointer",
-    ]);
-    expect(particleKeys({ emitter: [emitter(6)], controlpoint: pointerAt7 })).toEqual([]);
+    // 关键帧照报（整段 scanValue）
+    expect(
+      particleKeys({
+        emitter: [emitter()],
+        controlpoint: [{ flags: 1, offset: { animation: { c0: [] }, value: "0 0 0" } }],
+      }),
+    ).toEqual(["value:animation"]);
+  });
+
+  it("1838478131（步骤 2 解锁）：唯一的粒子系统控制点 0 跟随指针，没有不支持项", () => {
+    // 照抄 scene.pkg 里的 particles/new_particle_system.json（键序、取值原样；null 当缺键）
+    const system: JsonObject = {
+      children: null,
+      controlpoint: [
+        { flags: 1, id: 0, offset: "0 0 0" },
+        { flags: 0, id: 1, offset: "0 0 0" },
+        { flags: 0, id: 2, offset: "0 0 0" },
+        { flags: 0, id: 3, offset: "0 0 0" },
+        { flags: 0, id: 4, offset: "0 0 0" },
+        { flags: 0, id: 5, offset: "0 0 0" },
+        { flags: 0, id: 6, offset: "0 0 0" },
+        { flags: 0, id: 7, offset: "0 0 0" },
+      ],
+      emitter: [
+        {
+          directions: "1 1 0",
+          distancemax: 32,
+          distancemin: 0,
+          id: 6,
+          name: "sphererandom",
+          origin: "0 0 0",
+          rate: 150,
+        },
+      ],
+      flags: null,
+      initializer: [
+        { exponent: 2, id: 2, max: 4, min: 2, name: "lifetimerandom" },
+        { id: 3, max: 200, min: 50, name: "sizerandom" },
+        { id: 4, max: "50 50 0", min: "-50 -50 0", name: "velocityrandom" },
+        { id: 5, max: "134 132 255", min: "255 130 130", name: "colorrandom" },
+      ],
+      material: "materials/particle/halo_1.json",
+      maxcount: 500,
+      operator: [
+        { drag: 0.4, gravity: "0 0 0", id: 7, name: "movement" },
+        { fadeintime: 0.1, fadeouttime: 0.1, id: 8, name: "alphafade" },
+        { id: 9, name: "sizechange" },
+      ],
+      renderer: [{ id: 1, name: "sprite" }],
+      starttime: 0,
+    };
+    expect(particleKeys(system)).toEqual([]);
+    expect(readControlPoints(system)[0]).toEqual({ flags: 1, offset: [0, 0, 0] });
   });
 
   it("animationmode、sequencemultiplier 任意取值都不报（P4b 步骤 2）；写成绑定或关键帧照报", () => {

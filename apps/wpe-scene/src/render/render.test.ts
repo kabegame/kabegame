@@ -544,7 +544,14 @@ describe("uniform 打包", () => {
     expect(values.g_Color4).toEqual([1, 0.5, 0.25, 0.5]);
     expect(values.g_TexelSize).toEqual([1 / 1920, 1 / 1080]);
     expect(values.g_Screen).toEqual([1920, 1080, 1920 / 1080]);
-    const frame = frameBuiltins({ time: 3, frametime: 0.016, daytime: 0.5, pointer: [0.1, 0.2], pointerLast: [0, 0] });
+    const frame = frameBuiltins({
+      time: 3,
+      frametime: 0.016,
+      daytime: 0.5,
+      pointer: [0.1, 0.2],
+      pointerLast: [0, 0],
+      cursor: [0.7, 0.8],
+    });
     expect(frame.g_Time).toEqual([3]);
     expect(frame.g_Frametime).toEqual([0.016]);
     expect(frame.g_PointerState).toEqual([0, 0, 0, 0]);

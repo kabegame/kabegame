@@ -26,12 +26,10 @@ import {
   INSTANCE_FIELDS,
   PARTICLE_SYSTEM_KEYS,
   particleModuleEntries,
-  readControlPoints,
   readParticleSystem,
   type ParticleInstance,
 } from "./particles";
-import { CONTROL_POINT_FLAGS, controlPointCount } from "../particles/controlpoints";
-import { PARTICLE_CATEGORIES, readParticleModule, type ParticleModule } from "../particles/modules";
+import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
 import type { SceneScript } from "./scripts";
 import { scanScriptApi } from "./scriptApi";
@@ -596,27 +594,6 @@ export function checkParticleProgram(
 }
 
 /**
- * 控制点（P4c 步骤 1，rea-p4c-sim.md 第 1 节，实测见报告「P4c 语义的实测核对」）：只看下标 < n 的项（n 见 `controlPointCount`，
- * 模块按模块表读；没被模块引用的控制点 WPE 不建，写什么都不起作用）。`flags` bit0（指针）报 `particle:controlpoint:pointer`
- * （步骤 2；`0x10000` 优先于 bit0，同 `ControlPointSet.update`）；其余位、`offset`、`angles`、`parentcontrolpoint`、
- * `locktopointer` 和别的键都不报（理由同 `SceneControlPoint`：bit1 已实现，bit2 在顶层系统上只让实例覆盖不生效，bit3、bit4
- * 没有读者）。关键帧照旧由 `scanValue` 报。
- */
-function checkControlPoints(system: JsonObject, orthographic: boolean, unsupported: Set<string>): void {
-  const modules = (category: "emitter" | "initializer" | "operator"): ParticleModule[] =>
-    (particleModuleEntries(system, category) ?? []).map((entry) => readParticleModule(category, entry, orthographic));
-  const count = controlPointCount({
-    emitters: modules("emitter"),
-    initializers: modules("initializer"),
-    operators: modules("operator"),
-  });
-  const points = readControlPoints(system);
-  for (let i = 0; i < count; i++)
-    if ((points[i].flags & (CONTROL_POINT_FLAGS.remap | CONTROL_POINT_FLAGS.pointer)) === CONTROL_POINT_FLAGS.pointer)
-      unsupported.add("particle:controlpoint:pointer");
-}
-
-/**
  * 粒子 JSON 的能力检查，规则从模块表（`particles/modules.ts`）生成。依据见各条注释，系统级键见 `particles.ts`。
  * - 表外模块：`particle:<类别>:<名字>`；表内模块的未知字段、形状不对或本节不支持的取值：`particle:<类别>:<名字>:<字段>`；
  *   写成 `{user}` / `{script}`：`particle:binding:<类别>:<名字>:<字段>`。
@@ -624,7 +601,9 @@ function checkControlPoints(system: JsonObject, orthographic: boolean, unsupport
  *   没实测，报 `particle:flags:world`；更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，`0x1401c56e9`，
  *   高位其实被丢掉；没有样本，保守报）。
  * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。
- * - 控制点：被模块引用的点跟随指针时报 `particle:controlpoint:pointer`（P4c 步骤 2），其余中性（`checkControlPoints`）。
+ * - 控制点：全部支持或中性（P4c 步骤 1、2，`particles/controlpoints.ts`：`offset`、`flags` bit0 指针、bit1 已实现，bit2 在顶层
+ *   系统上只让实例覆盖不生效；`angles`、`locktopointer`、bit3、bit4 没有读者，理由见 `SceneControlPoint`），父控制点归 P4e
+ *   （只对子系统有意义，随 `particle:children` 报）。关键帧照下面整段 `scanValue`。
  * - `animationmode`、`sequencemultiplier` 任意取值都支持（P4b 步骤 2）：只在材质槽 0 是帧表纹理时起作用（frame 列、混帧宏），
  *   否则是中性的。写成绑定或关键帧照下面两条报。帧表纹理用在粒子其它槽位是普通纹理（P4b 步骤 5），用在图像层、effect 由纹理
  *   报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
@@ -650,7 +629,6 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
   if (flags & 1) unsupported.add("particle:flags:world");
   for (let bit = 8; bit < 32; bit++) if (flags & (1 << bit)) unsupported.add(`particle:flags:${(1 << bit) >>> 0}`);
   if (Array.isArray(system.children) && system.children.length > 0) unsupported.add("particle:children");
-  checkControlPoints(system, orthographic, unsupported);
   for (const category of PARTICLE_CATEGORIES) {
     const entries = particleModuleEntries(system, category);
     if (!entries) {

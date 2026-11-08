@@ -197,13 +197,14 @@ export function replayParticleOptions(replay: ParticleReplay | undefined): Parti
 /**
  * 按 dt 序列回放粒子：前 n−1 帧只步进粒子，返回最后一帧的 `g_Time` 与 `g_Frametime`，由调用方 `update`（它会步进最后一帧）。
  * 每帧的 `g_Time` 取 `times`，没给时是 dt 的累计值（double）；同一个值也作粒子的场景时间 `T`。没有回放时时间取 `time`、
- * 帧时间 0（不步进，就是预热后的状态）。
+ * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是每帧光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心。
  */
 export function replayParticles(
   scene: Pick<GpuScene, "stepParticles">,
   state: SceneState,
   replay: ParticleReplay | undefined,
   time = 0,
+  cursor: readonly [number, number] = [0.5, 0.5],
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
@@ -211,7 +212,7 @@ export function replayParticles(
     throw new Error(`times 有 ${times.length} 项，dts 有 ${dts.length} 项，应等长`);
   let elapsed = 0;
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
-  for (let i = 0; i < dts.length - 1; i++) scene.stepParticles(dts[i], timeAt(i), state);
+  for (let i = 0; i < dts.length - 1; i++) scene.stepParticles(dts[i], timeAt(i), state, cursor);
   return { time: timeAt(dts.length - 1), frametime: dts[dts.length - 1] };
 }
 
@@ -273,7 +274,10 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
     try {
       const { time, frametime } = replayParticles(scene, state, options.particles);
       scene.sync(state);
-      scene.update({ time, frametime, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] }, state);
+      scene.update(
+        { time, frametime, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5], cursor: [0.5, 0.5] },
+        state,
+      );
       const wanted = scene
         .particleStats()
         .filter(

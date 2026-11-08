@@ -410,14 +410,176 @@ function checkControlPoints(system: JsonObject, orthographic: boolean, unsupport
 
 ## 步骤 2 — 指针
 
-- **修改** 控制点 `flags` bit0：本帧平移取指针的场景坐标，公式按步骤 0（`locktopointer` WPE 不读，步骤 1 已按中性处理）。
-- **修改** `render/renderer.ts`：`setPointer` 之外再算一份场景坐标（含壁纸样式、透视粒子的深度），每帧交给各粒子系统。暂停时不转发输入，指针保持最后的值。
-- **修改** 能力表：放开 `flags` bit0。
+> 2026-11-08 按 rea-p4c-sim 1.6、1.7、步骤 0 的实测和步骤 2 补测（报告「P4c 语义的实测核对」末尾，`proj/p4c-ptr` 三种窗口）写成可以直接派发的版本。P4b 已收尾（`58b4e8c6`），本步直接在 `apps/wpe-scene` 里做，不用快照。
 
-**验收：**
-- `proj/p4c-cp` 的指针系统按记录的指针回放，和 WPE 逐帧比。
-- `1838478131` 没有不支持项。用户在真机上看预览和桌面：粒子跟着鼠标，`fit` / `center` 样式下位置也对。
-- 现有画面哈希不变。
+### 思路
+
+指针点每帧的平移是「光标下的场景点」：
+- **WPE 的做法**（1.6）：`current = base`，再用 `inverse(P·V)` 把窗口归一化指针 `(px, py)` 反投影到 z = 0，丢掉 `offset`（3×3 是单位阵，实例覆盖不作用在指针点上）。世界系统直接用 `(X, Y, 0)`，本地系统再乘 `inverse(W)`。用的是本帧指针（补测：指针每帧在动，跟随点和当帧值吻合）。
+- **窗口和场景比例不同时**：WPE 把居中盖满的裁切做进投影 `P·V`（补测：1920×800、1440×1080 两种窗口），所以跟随点是光标下的场景点，不是 `px·W`。
+- **Kabegame 的对应**：场景渲染在场景分辨率的目标里，`P·V` 是不裁的正交投影，裁切和留白在上屏时按样式做（`scenePlacement`）。所以先按铺放把画布指针反算成光标下的场景纹理坐标 `cursor`（0…1，左上原点、y 向下），再用不裁的 `P·V` 照 WPE 的同一串运算反投影。`fill` 的铺放就是 WPE 的居中盖满，结果和 WPE 一致；`fit`、`center` 是 Kabegame 自己的样式，按同一个原则（光标下的点），留白处线性外推；`stretch` 是恒等；`tile` 取所在那一块（取小数部分）。
+
+这和 `g_PointerPosition` 不是一个量。`g_PointerPosition` 照 P2a 不变：`fill` / `stretch` 是画布归一化坐标（WPE 就是窗口归一化坐标），其余样式换算到场景上。本步不改它。
+
+数据流：宿主 `pointermove` → `SceneRenderer.setPointer` 只记画布上的原始坐标 → 每帧按当前样式和铺放算 `cursor`，放进 `FrameInput` → `GpuScene` 每帧用 `sceneViewProjection` 反投影一次，得到跟随点 `F = (X, Y)`（场景坐标）→ 每个系统的 `ControlPointInputs.pointer`。模拟器只收场景坐标，不知道样式。加载时的那次更新和预热用加载时刻的 `cursor`（WPE 加载时也读当时的指针）。
+
+透视粒子（系统 `flags & 4`）不用另算：WPE 模拟时栈上是场景的正交投影，透视投影只在绘制时压栈（1.6），透视粒子的 z = 0 平面和正交画面重合（rea-p4a C4）。透视场景（`camera:perspective`）、相机视差（`general:cameraparallax`）、`zoom ≠ 1` 都照报，所以 `P·V` 只有正交一种。
+
+**已知差别，不处理：** WPE 用全局光标（`GetCursorPos`），光标在窗口外也跟踪；Kabegame 只在宿主收到 `pointermove` 时更新（预览里是光标在 iframe 上时，桌面是鼠标转发时），之外保持最后的值。没收到过事件时 `cursor` 取场景中心 `(0.5, 0.5)`。
+
+**本步不做：** 世界空间（`particle:flags:world`，步骤 4）。`ControlPointSet` 的世界分支照 1.6 写上（`(X, Y, 0)`，不乘 `W`），能力表照报。
+
+### 现状锚点
+
+见上文「现状锚点」h。另有：
+
+**m. 指针点先按 `base` 处理**（`particles/controlpoints.ts`，`update`）
+```ts
+if (f & CONTROL_POINT_FLAGS.pointer) {
+  copyPoint(point.current, point.base); // 现状：步骤 1 的占位，能力表报 particle:controlpoint:pointer
+  return;
+}
+```
+
+**n. 控制点的输入只有世界矩阵**（`particles/controlpoints.ts`、`particles/system.ts`）
+```ts
+export interface ControlPointInputs {
+  world: Mat4; // 现状：没有指针
+}
+const IDENTITY_INPUTS: ControlPointInputs = { world: identity() };
+```
+
+**o. 指针换算成 `g_PointerPosition` 发生在事件里**（`render/renderer.ts`，`setPointer`；`render/layout.ts`，`scenePointer`）
+```ts
+setPointer(x: number, y: number): void {
+  this.pointerLast = this.pointer;
+  // …
+  this.pointer = scenePointer(this.style, this.placement, this.canvas.width, this.canvas.height, x, y);
+}
+// scenePointer：fill / stretch 原样返回（g_PointerPosition 的取法），其余按铺放反算，tile 取小数
+if (style === "fill" || style === "stretch") return [x, y];
+```
+
+**p. 能力表报指针点**（`compile/features.ts`，`checkControlPoints`）
+```ts
+for (let i = 0; i < count; i++)
+  if ((points[i].flags & (CONTROL_POINT_FLAGS.remap | CONTROL_POINT_FLAGS.pointer)) === CONTROL_POINT_FLAGS.pointer)
+    unsupported.add("particle:controlpoint:pointer");
+```
+
+### 点 1 — 反投影与指针分支（`particles/controlpoints.ts`）
+
+- **修改**
+```ts
+export interface ControlPointInputs {
+  world: Mat4;
+  /** 新增：指针的跟随点（场景坐标，z = 0，`pointerScenePoint` 算），每帧由渲染器给。 */
+  pointer: readonly [number, number];
+}
+```
+- **新增**
+```ts
+/**
+ * 光标下的场景纹理坐标（0…1，左上原点、y 向下）→ 跟随点的场景坐标（rea-p4c-sim.md 1.6，`0x14022e47b` 起）。
+ * `viewProjection` 是场景的正交 `P·V`（`render/layout.ts` 的 `sceneViewProjection`），函数内求逆。
+ */
+export function pointerScenePoint(viewProjection: Mat4, cursor: readonly [number, number]): [number, number];
+```
+  照 1.6 逐步 float32：`px`、`py` 先舍入；`x = ((px − 0) + (px − 0)) − 1`，`y = (((1 − py) − 0) + ((1 − py) − 0)) − 1`；`w = (A03·x + A13·y) + (A23·0 + A33)`；`X = ((A00·x + A10·y) + (A20·0 + A30)) / w`，`Y` 同理（`Aij` 是第 i 列第 j 个分量）。`invert` 失败（不会发生，正交投影可逆）时返回 NaN。
+- **修改** `update` 的指针分支（位的优先级不变：`0x10000` > bit0 > bit2 > 缺省）：
+```
+f & 1：current = base（3×3 是单位阵：指针点不吃实例覆盖），平移整体覆盖：
+  世界：current.t = (X, Y, 0)
+  本地：B = inverse(W)；current.t = ((B00·X + B10·Y) + (B20·0 + B30), (B01·X + B11·Y) + (B21·0 + B31), (B02·X + B12·Y) + (B22·0 + B32))
+        B 和 flags 2 共用一次求逆；W 奇异时写 NaN（同 flags 2）
+```
+  逐步 float32，`offset` 被丢弃。文件头和 `update` 注释去掉「步骤 2」的占位说明。
+
+### 点 2 — 光标下的场景点（`render/layout.ts`）
+
+- **新增**
+```ts
+/**
+ * 画布上的指针（0…1，左上原点）→ 光标下的场景纹理坐标（P4c 步骤 2，控制点跟随指针用）。所有样式都按铺放反算：
+ * `fill` 等于 WPE 投影里的居中盖满裁切（步骤 2 补测），`fit` / `center` 留白处线性外推，`stretch` 恒等，`tile` 取所在那一块。
+ */
+export function sceneCursor(
+  style: SceneStyle,
+  placement: ScenePlacement,
+  canvasWidth: number,
+  canvasHeight: number,
+  x: number,
+  y: number,
+): [number, number];
+```
+- **修改** `scenePointer`：非 `fill` / `stretch` 时调 `sceneCursor`（两者在这些样式下相同），`fill` / `stretch` 仍原样返回。结果逐位不变。
+
+### 点 3 — 渲染器（`render/renderer.ts`、`render/uniforms.ts`）
+
+- **修改** `FrameInput` 加一项：
+```ts
+  /** 新增：光标下的场景纹理坐标（`sceneCursor`），控制点跟随指针用（P4c 步骤 2）。和 `pointer`（`g_PointerPosition`）不是一个量。 */
+  cursor: [number, number];
+```
+  `frameBuiltins` 不读它。
+- **修改** `SceneRenderer`：
+  - 新增 `canvasPointer: [number, number] | null`，`setPointer` 记下原始坐标（`g_PointerPosition` 的算法不变）。
+  - `render` 里 `syncPlacement` 之后算 `cursor`：有 `canvasPointer` 时 `sceneCursor(this.style, this.placement, canvas.width, canvas.height, …canvasPointer)`，否则 `(0.5, 0.5)`。每帧现算，所以改样式、改尺寸之后下一帧就对，不用等下一次 `pointermove`。
+  - `load`：按新场景的尺寸（`bundle` 的场景分辨率，宽高比和 `GpuScene.width/height` 相同）现算一次铺放和 `cursor`，经 `GpuScene.build` 的 `particles` 选项传给加载时的更新和预热。
+- 暂停：`setPointer` 照常记坐标，不画；恢复后的第一帧用最新值。WPE 暂停时指针冻结、恢复后读当时的光标，效果相同。
+
+### 点 4 — `GpuScene`（`render/scene.ts`）
+
+- **修改** `build` 的 `particles` 选项加 `cursor?: [number, number]`（缺省 `(0.5, 0.5)`）；`createParticles` 用 `pointerScenePoint(this.viewProjection, cursor)` 和加载时的 `W` 调 `prewarm`。
+- **修改** `update` 把 `frame.cursor` 交给 `stepParticles`；`stepParticles(frametime, time, state?, cursor = [0.5, 0.5])` 每次调用只反投影一次，`{ world, pointer }` 传给每个系统。没有粒子层时不算。
+- `stepParticles` 的注释写清指针输入。
+
+### 点 5 — 模拟器、轨迹工具与 dev 探针
+
+- **修改** `particles/system.ts`：`IDENTITY_INPUTS` 加 `pointer: [0, 0]`（只给单测）；`step`、`prewarm` 注释里的输入说明加上指针。
+- **修改** `particles/track.ts`：`ParticleTrackOptions` 加
+```ts
+  /** 新增：每帧光标下的场景纹理坐标，和 `dts` 等长；回放 WPE 时填轨迹里的 `g_PointerPosition`（抓帧窗口和场景同尺寸时两者相同）。缺省场景中心。第 1 项也用于预热。 */
+  cursors?: readonly (readonly [number, number])[];
+  /** 新增：场景的投影尺寸（`general.width/height`），算 `sceneViewProjection`。给了 `cursors` 时必填。 */
+  size?: readonly [number, number];
+```
+  预热和每帧都按它算跟随点。
+- **修改** `dev/probe.ts`：`renderFrame` 的 `pointer` 同时作 `cursor`（`FrameInput` 两项都填，加载时也用它），注释写明「抓帧窗口和场景同尺寸时两者相同」；调 `particleTrack` 的地方传 `size`。`dev/particleCorners.ts` 的 `FrameInput` 补 `cursor: [0.5, 0.5]`。
+
+### 点 6 — 能力表与解析注释（`compile/features.ts`、`compile/particles.ts`）
+
+- **删除** `checkControlPoints` 和键 `particle:controlpoint:pointer`；不再用到的 import（`readControlPoints`、`controlPointCount`、`CONTROL_POINT_FLAGS` 等）一并删掉。`checkParticleFeatures` 注释的控制点一条改成「控制点全部支持或中性（P4c 步骤 1、2），父控制点归 P4e」。
+- **修改** `SceneControlPoint.flags` 的注释：bit0 已实现（步骤 2）。
+
+### 验收
+
+**单测**（改 `particles/controlpoints.test.ts`、`render/layout.test.ts`（没有就新增）、`compile/particles.test.ts` 或能力表的测试、`render` / `dev` 里手写 `FrameInput` 的测试）：
+- `pointerScenePoint`：1920×1080 时等于 `(px·1920, (1 − py)·1080)`；`py` 不翻转的写法会失败；窗口外（`px > 1`、负数）线性外推；非方形场景（3441×2465）。
+- 指针分支：`offset` 被丢弃；实例覆盖（`controlpointN`、`controlpointangleN`）不作用；本地系统是 `inverse(W)·F`（带旋转、缩放的 `W`）；世界系统是 `(X, Y, 0)`、不乘 `W`；`flags 1|2`、`1|4` 走指针分支；`0x10000|1` 跳过；`W` 奇异写 NaN；更新在发射之前（本帧发射读到本帧的跟随点）。
+- `sceneCursor`：`fill` 在 1920×800、1440×1080 画布上和补测的 `P·V` 裁切一致（用 `out/ana_ptr2.txt` 里几组指针和跟随点当用例）；`fit` 留白外推；`center`；`stretch` 恒等；`tile` 取小数。`scenePointer` 的结果逐位不变。
+- 渲染器：`cursor` 每帧现算（改样式后不经 `setPointer` 也变）；没事件时是中心。能做成纯函数测试就不起 GPU。
+- 能力表：`flags 1` 的点不再报；1838478131 的粒子 JSON（照抄进测试）没有不支持项。
+
+**回放**（新增 `ignore/p4/c2/`，骨架照 `c1/replay.test.ts`，dt 同样取日志累计时间差分，抓到的帧用轨迹的 float32 dt）：
+- `p4c-ptr-fps60`（FR 919–928 的 10 帧）：`p-loc`、`p-xform`、`p-off`、`p-io`、`p-cp1`、`p-persp`、`p-ref` 逐粒子比，跟随点用轨迹里每帧的 `pointer`，窗口之前的帧用第一帧的值。**只比窗口内出生的粒子**（按年龄判断；窗口之前出生的粒子用的指针没有记录）。`p-world` 不比（步骤 4）。限值同步骤 1（含 `rcpps` 包络）。
+- `p4c-ptr-fps60-1920x800`、`-1440x1080`：同样的系统，跟随点按 Kabegame 的 `fill` 算：`sceneCursor("fill", scenePlacement("fill", 1920, 1080, 窗口宽, 窗口高), …, 轨迹指针)` 再 `pointerScenePoint`。这一组验证 `fill` 等于 WPE 的裁切。
+- 编译 `p4c-ptr` 的不支持项应正好是 `particle:flags:world`。
+- 以前的回放在改动前后各跑一遍（改动前用 HEAD 导出的源码），输出逐字相同：`b3`、`b4` 的拷贝（`c1/replay-b3.test.ts`、`replay-b4.test.ts`）、`c1/replay-b6.test.ts`、`c1/replay.test.ts`（`p4c-cp` 的 11 个系统；它断言不支持项是 `particle:controlpoint:pointer`，在 `c2` 里拷一份把断言改成空集再跑，`c1` 原文件不动）。这些系统没有指针点，结果不该变。
+
+**变异检查**（每处都要有用例或回放失败）：
+- `y` 用 `py` 不翻转；跟随点取上一帧的指针；
+- `offset` 不丢（加到跟随点上）；指针点吃实例覆盖；
+- 本地系统不乘 `inverse(W)`；乘 `W`；世界系统乘 `W`；
+- 指针优先于 `0x10000`；
+- `fill` 用原始画布坐标（`scenePointer` 的取法）；`tile` 不取小数；`cursor` 只在 `setPointer` 里算（改样式后不变）；
+- 加载时的更新 / 预热不用指针。
+
+**语料**（`c1/corpus.test.ts` 的做法，HEAD 导出对工作区）：去掉的键应只有 `particle:controlpoint:pointer`（32 张）；`1838478131` 变干净，干净场景 20 → 21，其余变干净的逐张解释。
+
+**画面哈希**（Claude 做，需要 dev 在跑，没在跑就记下没做）：10 张干净场景三档和步骤 1 的 `c1/out/hash-after.json` 相同（这些场景没有指针点；注意宿主要重建）。
+
+**真机**（用户）：`1838478131` 在预览和桌面上粒子跟着鼠标；桌面若不是 3441∶2465 的比例，`fill` 下粒子仍在光标下；切到 `fit` / `center` 再看一次。
 
 ## 步骤 3 — `controlpointattract`
 
@@ -556,3 +718,57 @@ Claude 独立验收：
 | 画面哈希（dev 应用，宿主按 `--mode development` 重建，入口 `index-COPBXizU.js`） | 10 张干净场景 × 三档，30 组和 P4b 步骤 6 的记录（`b6/out/hash-after.json`，入口 `index-CY0tK-L-.js`）全部相同 |
 
 工具在 `ignore/p4/c1/`：`scan_cp.py`、`replay.test.ts`、`replay-b3.test.ts`、`replay-b4.test.ts`、`replay-b6.test.ts`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`mutate_claude.py`、`run_merge.sh`、`cmp_merge.py`、`vitest.config.ts`；快照 `ov/`、基线源码 `base/`、HEAD 源码 `head/`，结果在 `out/`（画面哈希 `out/hash-after.json`）。
+
+### 步骤 2 — 指针（2026-11-08）
+
+P4b 已收尾，本步直接在 `apps/wpe-scene` 里做。Claude 先补测、写计划，子代理实现，Claude 独立验收。
+
+**补测**：步骤 0 的指针系统要么在抓帧前就生满了（`p4c-cp`），要么抓帧期间只出生一个（`p4c-world`），逐帧回放不了。新工程 `proj/p4c-ptr`（`gen_c.py`），8 个系统 rate 60、寿命 0.05 s。窗口 1920×1080、1920×800、1440×1080 各抓 10 帧，抓帧时用户在窗口里移动鼠标，指针每帧都变。结论写进报告「步骤 2 补测」：
+- 跟随点用本帧指针。
+- 窗口和场景比例不同时，WPE 把居中盖满裁切做进 `P·V`，跟随点是光标下的场景点；`g_PointerPosition` 仍是窗口坐标。
+- 这一点决定了 Kabegame 的 `fill` 要按铺放反算（`sceneCursor`），而不是沿用 `g_PointerPosition`。1838478131 是 3441×2465，桌面 16:9 下正好裁切。
+
+**改动**（`apps/wpe-scene/src`，20 个文件，新增 `render/layout.test.ts`）：
+- **新增** `particles/controlpoints.ts`：`pointerScenePoint`（照 1.6 逐步 float32 反投影）；指针分支 `current = base` 后覆盖平移，本地系统乘 `inverse(W)`（和 `flags 2` 共用一次求逆），世界系统 `(X, Y, 0)`。
+- **新增** `render/layout.ts`：`sceneCursor`（所有样式按铺放反算，`stretch` 原样，`tile` 取小数）；`scenePointer` 逐位不变。
+- **修改** `render/uniforms.ts`：`FrameInput.cursor`。
+- **修改** `render/renderer.ts`：`setPointer` 记下画布原始坐标，每帧按当前样式现算 `cursor`；`load` 按新场景尺寸算加载时的 `cursor`。
+- **修改** `render/scene.ts`：`ParticleOptions.cursor`；`stepParticles` 每次调用反投影一次，交给每个系统。
+- **修改** `particles/system.ts`、`particles/track.ts`（`cursors`、`size`）、`dev/probe.ts`、`dev/particleCorners.ts`。
+- **删除** `compile/features.ts` 的 `checkControlPoints` 和键 `particle:controlpoint:pointer`。
+
+和计划不同、或计划没写、由代理按证据定的：
+- **`W` 奇异时只把平移写 NaN，3×3 保持单位阵。** 1.6 的指针分支只覆盖平移，3×3 来自 `base`。计划写「同 flags 2」不准确。
+- **求逆没按 float32 复刻**（用现有 `invert`），回放里 y 轴最大差 6.9e-5。
+- **`load` 的铺放尺寸用 `sceneTargetSize`**，和 `GpuScene.width/height`、`syncPlacement` 一致，加载时的 `cursor` 等于首帧的。
+- **`GpuScene` 记下最近的 `cursor`，新建粒子系统预热时用它。** 代理原说「单图层重建时生效」，Claude 让它补用例时它自己查明粒子层现在不会单独重建（编译期没有 effect，`planParticleLayer` 不看 effect，签名不变）。这行留作防御，有用例用内部字段强制重建守着；Claude 把字段注释改准确了。
+- **`particleTrack` 只给 `size` 没给 `cursors` 时是场景中心；两者都不给时是 (0, 0)**，同 `ParticleSystem` 单测的缺省。
+- **`c2/replay-cp.test.ts`**（c1 p4c-cp 回放的拷贝）的不支持项断言改成按环境变量，写进 `-meta.txt`，主输出才能在 HEAD 与工作区之间逐字比较。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；46 个文件、1211 个用例全过（改动前 45 个、1188 个）；改过和新增的文件格式通过 |
+| `p4c-ptr` 回放（三组窗口，跟随的 6 个系统只比窗口内出生的粒子，`p-ref` 比全部） | 全部在限内。1920×1080 每系统 49 个，两种非等比窗口按 Kabegame 的 `fill` 反算，各 41、38 个；差 / 限 0.43–0.72，x 向的差是 `sphererandom` 归一化的 `rcpps` 抖动，y 向 ≤ 6.9e-5；size、color、alpha、rot 差 0。WPE 跟随点和我们的逐帧对上（差 ≤ 0.02）。编译 `p4c-ptr` 只报 `particle:flags:world` |
+| 旧回放（HEAD 导出对工作区） | b3、b4、b6 的拷贝和 c1 的 `p4c-cp` 11 个系统，输出逐字节相同 |
+| 变异检查（代理，17 处） | 计划列的 15 处和另加的 2 处全部检出，`out/mutate.txt` |
+| 语料 | 只去掉 `particle:controlpoint:pointer`（32 张，和按 JSON 推算的一致），没有新增；干净场景 20 → 21，新解锁的只有 `1838478131`，`out/corpus-diff.txt` |
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 只有 `apps/wpe-scene/src` 和 `ignore/p4/c2/`；没有 git 写操作。工作区里 `.claude/plans/tools/` 是别的会话的 |
+| 读码对照 | `pointerScenePoint` 的运算顺序、指针分支（丢 `offset`、不吃实例覆盖、本地乘 `inverse(W)`、世界不乘 `W`、位的优先级）和 rea-p4c-sim 1.6 一致；`viewProjection` 在建粒子之前赋值 |
+| 「改动前」源码 | `head/src` 和 `git archive HEAD` 逐文件相同（只多一个本就不在 git 里的翻译器 wasm） |
+| tsc、vitest、Prettier（自跑） | 0 error；46 个文件、1210 个用例全过，补用例、改注释后再跑 1211 个全过；格式通过 |
+| `p4c-ptr` 回放（自跑） | 输出和代理的逐字相同 |
+| 变异检查（Claude 8 处，和代理不重复，`mutate_claude.py`） | 7 处检出：反投影 Y 取错列、本地 `inverse(W)·F` 的 X、Y 对调、渲染器把 `g_PointerPosition` 当 `cursor`、`update` 传 `pointer` 而不是 `cursor`、加载时用旧场景的铺放、`sceneCursor` 的 v 用画布宽、重建不用最近的 `cursor`（补用例后检出，`out/mutate-claude-partial.txt`）。未检出 1 处：dev 探针回放帧的 `cursor` 固定在中心，探针没有单测，和以前一样靠用的时候核对。源码树哈希前后相同，`out/mutate-claude.txt` |
+| 旧回放（自跑改后一侧，对代理的改动前输出） | 10 份逐字节相同 |
+| 语料（自跑工作区，对代理的 HEAD） | 只去掉 `particle:controlpoint:pointer` 32 张，干净场景 20 → 21，新解锁 `1838478131` |
+| 画面哈希（dev 应用，屏外宿主，宿主按 `--mode development` 重建，入口 `index-DzNQaqDP.js`） | 10 张干净场景 × 三档，30 组和步骤 1 的记录（`c1/out/hash-after.json`）全部相同。主窗口开着预览，没有接管，前后路由不变 |
+
+真机（用户，2026-11-08）：`1838478131` 在预览和桌面上看过，没有问题。
+
+工具在 `ignore/p4/c2/`：`replay.test.ts`、`replay-cp.test.ts`、`replay-b3.test.ts`、`replay-b4.test.ts`、`replay-b6.test.ts`、`corpus.test.ts`、`corpus_diff.py`、`run_old.sh`、`cmp_old.py`、`mutate.py`、`mutate_claude_gen.py`（生成 `mutate_claude.py`）、`cmp_hash.py`、`cmp_corpus_claude.py`、`pkg_extract.py`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`。补测工具在 `ignore/p4/`：`gen_c.py` 的 `p4c_ptr`、`ana_ptr2.py`，抓帧 `A:\p4b\p4c-ptr-fps60[-<尺寸>]`。

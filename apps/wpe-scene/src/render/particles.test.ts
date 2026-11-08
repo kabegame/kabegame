@@ -16,13 +16,14 @@ import type { JsonObject } from "../compile/model";
 import { parseParticle, particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { replayParticleOptions, replayParticles } from "../dev/particleCorners";
+import { pointerScenePoint } from "../particles/controlpoints";
 import { particleSnapshot, particleTrack } from "../particles/track";
 import type { ParticleSystem } from "../particles/system";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { clampFrametime, FrameClock, FRAMETIME_MAX, FRAMETIME_MIN } from "./clock";
 import { acquireGpu } from "./device";
 import { planLayer, planParticleLayer, planSignature } from "./graph";
-import { particleViewProjection, sceneViewProjection } from "./layout";
+import { particleViewProjection, sceneCursor, scenePlacement, sceneViewProjection } from "./layout";
 import { multiply, translation, type Mat4 } from "./math";
 import { SceneRenderer } from "./renderer";
 import {
@@ -499,6 +500,7 @@ const frame = (frametime: number, time = 1): FrameInput => ({
   daytime: 0.5,
   pointer: [0.5, 0.5],
   pointerLast: [0.5, 0.5],
+  cursor: [0.5, 0.5],
 });
 
 async function open(bundle: SceneBundle, particles: ParticleOptions = { seed: 1 }) {
@@ -913,8 +915,102 @@ describe("GpuScene：粒子绘制（假设备）", () => {
   });
 });
 
+describe("GpuScene：指针的跟随点（P4c 步骤 2）", () => {
+  const pointerLayer = (extra: JsonObject = {}) =>
+    particleLayer(
+      1,
+      {
+        emitter: [{ name: "sphererandom", origin: "0 0 0", distancemax: 0, rate: 10 }],
+        controlpoint: [{ flags: 1, offset: "100 50 0" }],
+        ...extra,
+      },
+      { origin: [960, 540, 0] },
+    );
+  const positions = (system: ParticleSystem, from: number) =>
+    Array.from({ length: system.highWater - from }, (_, i) =>
+      [0, 1].map((axis) => system.columns.position[axis][from + i]),
+    );
+
+  it("update 每帧按本帧的 cursor 反投影（不是上一帧的），本帧出生的粒子在本帧光标下的场景点；已出生的不动", async () => {
+    const { state, scene } = await open(bundleOf([pointerLayer()]));
+    const system = particleDraw(scene, 1).particles!.system;
+    const born = (cursor: [number, number]) => {
+      const from = system.highWater;
+      scene.update({ ...frame(0.1), cursor }, state);
+      expect(system.highWater).toBeGreaterThan(from);
+      return positions(system, from);
+    };
+    // (0.25, 0.75) → 场景 (480, 270)；本地再减对象原点 (960, 540)
+    for (const [x, y] of born([0.25, 0.75])) {
+      expect(x).toBeCloseTo(480 - 960, 3);
+      expect(y).toBeCloseTo(270 - 540, 3);
+    }
+    for (const [x, y] of born([0.75, 0.25])) {
+      expect(x).toBeCloseTo(1440 - 960, 3);
+      expect(y).toBeCloseTo(810 - 540, 3);
+    }
+    expect(system.columns.position[0][0]).toBeCloseTo(480 - 960, 3);
+    // dev 回放（不给 state 时也一样）：replayParticles 的 cursor 交给每一帧
+    const from = system.highWater;
+    replayParticles(scene, state, { dts: [0.1, 0.1, 0.1] }, 0, [0.5, 0]);
+    for (const [x, y] of positions(system, from)) {
+      expect(x).toBeCloseTo(0, 3);
+      expect(y).toBeCloseTo(1080 - 540, 3);
+    }
+    scene.destroy();
+  });
+
+  it("build 的 particles.cursor 给加载时的预热；缺省是场景中心", async () => {
+    const warm = pointerLayer({ starttime: 0.5 });
+    const { scene } = await open(bundleOf([warm]), { seed: 1, cursor: [0.1, 0.9] });
+    const system = particleDraw(scene, 1).particles!.system;
+    expect(system.highWater).toBeGreaterThan(0);
+    for (const [x, y] of positions(system, 0)) {
+      expect(x).toBeCloseTo(192 - 960, 3);
+      expect(y).toBeCloseTo(108 - 540, 3);
+    }
+    scene.destroy();
+    const center = await open(bundleOf([warm]));
+    for (const [x, y] of positions(particleDraw(center.scene, 1).particles!.system, 0)) {
+      expect(x).toBeCloseTo(0, 3);
+      expect(y).toBeCloseTo(0, 3);
+    }
+    center.scene.destroy();
+  });
+
+  it("单图层重建（effect 切换走的 sync → rebuildLayer）新建的粒子系统，预热用最近一次 stepParticles 的 cursor，不是加载时的", async () => {
+    // 粒子层编译期没有 effect、`planParticleLayer` 也不看 effect，计划签名不变，现在的产品路径里粒子层不会单独重建；这里把签名
+    // 置旧、把图层标成结构脏，强制走 sync → rebuildStructures → rebuildLayer → createParticles，守住 `particleCursor` 的取值
+    const warm = pointerLayer({ starttime: 0.5 });
+    const { state, scene } = await open(bundleOf([warm]), { seed: 1, cursor: [0.1, 0.9] });
+    const loaded = particleDraw(scene, 1).particles!.system;
+    // 加载时的预热在 (192, 108)
+    expect(positions(loaded, 0)[0][0]).toBeCloseTo(192 - 960, 3);
+    // 之后一帧的光标在 (0.75, 0.25)，场景 (1440, 810)
+    scene.update({ ...frame(0.1), cursor: [0.75, 0.25] }, state);
+    const runtime = (scene as unknown as { layers: { object: number; signature: string }[] }).layers.find(
+      (layer) => layer.object === 1,
+    )!;
+    runtime.signature = "stale";
+    (state as unknown as { dirtyStructures: Set<number> }).dirtyStructures.add(1);
+    scene.sync(state);
+    const rebuilt = particleDraw(scene, 1).particles!.system;
+    expect(rebuilt).not.toBe(loaded);
+    expect(rebuilt.highWater).toBeGreaterThan(0);
+    for (const [x, y] of positions(rebuilt, 0)) {
+      expect(x).toBeCloseTo(1440 - 960, 3);
+      expect(y).toBeCloseTo(810 - 540, 3);
+    }
+    scene.destroy();
+  });
+});
+
 describe("渲染器：帧时钟与遍数", () => {
-  async function start(maxFps: number | undefined, bundle = bundleOf([imageLayer(0), particleLayer(1)])) {
+  async function start(
+    maxFps: number | undefined,
+    bundle = bundleOf([imageLayer(0), particleLayer(1)]),
+    beforeLoad?: (renderer: SceneRenderer) => void,
+  ) {
     const frames: FrameRequestCallback[] = [];
     const gpu = new FakeGpu();
     vi.mocked(acquireGpu).mockResolvedValue({
@@ -940,6 +1036,7 @@ describe("渲染器：帧时钟与遍数", () => {
     } as unknown as HTMLCanvasElement;
     const dts: number[] = [];
     const renderer = await SceneRenderer.create(canvas, { maxFps, beforeFrame: (dt) => dts.push(dt) });
+    beforeLoad?.(renderer);
     await renderer.load(bundle);
     return { renderer, frames, gpu, dts };
   }
@@ -956,6 +1053,58 @@ describe("渲染器：帧时钟与遍数", () => {
     expect(await passes(21)).toBe(1);
     expect(await passes(undefined)).toBe(1);
     expect(await passes(0)).toBe(1);
+  });
+
+  it("cursor（P4c 步骤 2）：没收到指针时是场景中心；setPointer 只记原始坐标，每帧按当前样式现算，改样式不经 setPointer 也变", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const { renderer, frames } = await start(0);
+    const update = vi.spyOn(renderer.currentScene!, "update");
+    const next = () => {
+      now += 20;
+      frames.at(-1)!(now);
+      return update.mock.lastCall![0];
+    };
+    expect(next().cursor).toEqual([0.5, 0.5]);
+    // 画布 100×100、场景 1920×1080：fill 裁左右，画布最左边对着场景 u = (1 − 0.5625) / 2
+    const expected = (style: "fill" | "fit" | "stretch" | "center" | "tile", x: number, y: number) =>
+      sceneCursor(style, scenePlacement(style, 1920, 1080, 100, 100), 100, 100, x, y);
+    renderer.setPointer(0, 0.1);
+    const fill = next();
+    expect(fill.pointer).toEqual([0, 0.1]);
+    expect(fill.cursor).toEqual(expected("fill", 0, 0.1));
+    expect(fill.cursor[0]).toBeCloseTo(0.21875, 12);
+    // 改样式：不再收到指针，下一帧的 cursor 照新样式算
+    renderer.setStyle("stretch");
+    expect(next().cursor).toEqual([0, 0.1]);
+    renderer.setStyle("fit");
+    const fit = next().cursor;
+    expect(fit).toEqual(expected("fit", 0, 0.1));
+    expect(fit[1]).toBeLessThan(0);
+    renderer.setStyle("tile");
+    expect(next().cursor).toEqual(expected("tile", 0, 0.1));
+    renderer.destroy();
+  });
+
+  it("加载时的控制点更新与预热用加载时刻的 cursor（P4c 步骤 2）：预热里出生的粒子在光标下的场景点", async () => {
+    const build = vi.spyOn(GpuScene, "build");
+    const json = {
+      starttime: 0.5,
+      controlpoint: [{ flags: 1, offset: "9 9 0" }],
+    };
+    const bundle = bundleOf([particleLayer(1, json, { origin: [960, 540, 0] })]);
+    const { renderer } = await start(0, bundle, (r) => r.setPointer(0.25, 0.25));
+    const cursor = sceneCursor("fill", scenePlacement("fill", 1920, 1080, 100, 100), 100, 100, 0.25, 0.25);
+    expect(build.mock.lastCall![5]!.particles!.cursor).toEqual(cursor);
+    const follow = pointerScenePoint(sceneViewProjection(GENERAL_1080), cursor);
+    const system = particleDraw(renderer.currentScene!, 1).particles!.system;
+    expect(system.alive).toBeGreaterThan(0);
+    // 本地系统：inverse(W)·F + 发射器 origin (100, 200)
+    for (let slot = 0; slot < system.highWater; slot++) {
+      expect(system.columns.position[0][slot]).toBeCloseTo(follow[0] - 960 + 100, 3);
+      expect(system.columns.position[1][slot]).toBeCloseTo(follow[1] - 540 + 200, 3);
+    }
+    renderer.destroy();
   });
 
   it("g_Time 累加钳后的帧时间；脚本与粒子拿同一个值；暂停补画时间不动、粒子不步进", async () => {

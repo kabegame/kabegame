@@ -433,9 +433,14 @@ export interface FrameInput {
   frametime: number;
   /** 本地时间在一天中的占比 [0, 1)（`daytimeOf`）。 */
   daytime: number;
-  /** 光标在画布上的归一化坐标：原点左上、y 向下。 */
+  /** `g_PointerPosition`：光标在画布上的归一化坐标（原点左上、y 向下），按样式换算过（`render/layout.ts` 的 `scenePointer`）。 */
   pointer: [number, number];
   pointerLast: [number, number];
+  /**
+   * 光标下的场景纹理坐标（`render/layout.ts` 的 `sceneCursor`），控制点跟随指针用（P4c 步骤 2）。和 `pointer`
+   * （`g_PointerPosition`）不是一个量：`fill` 下前者是光标下的场景点，后者是画布坐标。`frameBuiltins` 不读它。
+   */
+  cursor: [number, number];
 }
 
 /**
