@@ -72,6 +72,8 @@ export const TOOLS = [
   "projects_remove",
   "job",
   "render_scene",
+  "particle_track",
+  "particle_corners",
   "hash_baseline",
   "projects_import",
   "hash_compare",

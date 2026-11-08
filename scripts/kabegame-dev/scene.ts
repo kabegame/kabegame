@@ -1,9 +1,10 @@
 /**
- * 场景宿主（只在桌面）：列出、开屏外宿主、在宿主里跑探针任务、渲染一帧取 PNG。
+ * 场景宿主（只在桌面）：列出、开屏外宿主、在宿主里跑探针任务、渲染一帧取 PNG、粒子轨迹与四角。
  *
  * 只信任「文档入口脚本 = 磁盘上 `SCENE_DIST/index.html` 的入口脚本」的新 frame（P3c 的教训：旧 frame 跑旧代码，
  * 档位选项会被悄悄忽略）。探针（`window.__kabegameSceneProbe`）只在 `--mode development` 构建的宿主里有，
- * 接口在 `apps/wpe-scene/src/dev/`，改探针时同步这里。
+ * 接口在 `apps/wpe-scene/src/dev/`（`renderFrame` 的 `particles`、`particleTrack`、`particleCorners`、`chunk`），
+ * 改探针时同步这里与 `replay.ts` 的校验。
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -12,16 +13,26 @@ import { CdpError, hostParams, isMain, isSceneHost, isWallpaper, wrapExpression 
 import { DevError, badRequest } from "./errors.ts";
 import { invoke, mainState, openPreview, closePreview, sleep } from "./app.ts";
 import { evalValue, pageError } from "./page.ts";
+import { checkCornersRequest, checkPostprocess, checkRenderReplay, checkTrackRequest } from "./replay.ts";
 import type { DevSession, HostHandle } from "./session.ts";
 import type {
   HostCloseResult,
   HostSummary,
   HostTaskResult,
   OpenedHost,
+  ParticleCornersLayer,
+  ParticleCornersRequest,
+  ParticleTrackRequest,
+  ParticleTrackResult,
   RenderMeta,
   RenderRequest,
   RenderResponse,
 } from "./types.ts";
+
+/** 轨迹、四角这类 JSON 结果的上限（UTF-8 字节）：超过回 413，建议减少 `frames` / `limit`。 */
+export const MAX_RESULT_BYTES = 32 * 1024 * 1024;
+/** JSON 结果按这么多字符一块经 `Runtime.evaluate` 取回（单次 CDP 消息不宜过大，同探针 `chunk` 的 4 MB）。 */
+const RESULT_CHUNK_CHARS = 4 * 1024 * 1024;
 
 const SANDBOX = "allow-scripts allow-same-origin allow-pointer-lock allow-forms";
 
@@ -241,8 +252,108 @@ export async function hostTask(
   s: DevSession,
   handle: string,
   expression: string,
-  options: { limitMs?: number; pollMs?: number; signal?: AbortSignal } = {},
+  options: HostTaskOptions = {},
 ): Promise<HostTaskResult> {
+  const host = s.host(handle);
+  const slot = await runHostTask(s, handle, expression, options);
+  return evalValue<HostTaskResult>(
+    s,
+    host.targetId,
+    `(() => { const v = window.__kbTask[${slot}]; delete window.__kbTask[${slot}]; return v; })()`,
+    60_000,
+  );
+}
+
+export interface HostTaskOptions {
+  limitMs?: number;
+  pollMs?: number;
+  signal?: AbortSignal;
+}
+
+/** 宿主任务的 JSON 结果：`done` 时 `value` 是解析后的结果，`bytes` 是它的 UTF-8 字节数。 */
+export interface HostTaskJson<T> {
+  status: "done" | "rejected";
+  ms: number;
+  value?: T;
+  bytes?: number;
+  error?: string;
+}
+
+/**
+ * 同 `hostTask`，但结果在宿主里先 `JSON.stringify`、量大小，再按 4 M 字符一块取回、在 vite 里解析：单次 CDP 消息不会过大，
+ * 超过 `maxBytes`（缺省 32 MB）时不取、回 413。注意 JSON 的取值规则：`NaN` / `Infinity` 变成 null，`-0` 变成 0。
+ */
+export async function hostTaskJson<T>(
+  s: DevSession,
+  handle: string,
+  expression: string,
+  options: HostTaskOptions & { maxBytes?: number; what?: string; chunkChars?: number } = {},
+): Promise<HostTaskJson<T>> {
+  const host = s.host(handle);
+  const maxBytes = options.maxBytes ?? MAX_RESULT_BYTES;
+  const chunk = options.chunkChars ?? RESULT_CHUNK_CHARS;
+  const slot = await runHostTask(s, handle, expression, options);
+  const head = await evalValue<{
+    status: "done" | "rejected";
+    ms: number;
+    error?: string;
+    bytes?: number;
+    chars?: number;
+    tooLarge?: boolean;
+  }>(
+    s,
+    host.targetId,
+    `(() => {
+      const box = window.__kbTask, v = box[${slot}];
+      if (v.status !== "done") { delete box[${slot}]; return { status: v.status, ms: v.ms, error: v.error }; }
+      let text;
+      try { text = JSON.stringify(v.result) ?? "null"; }
+      catch (e) { delete box[${slot}]; return { status: "rejected", ms: v.ms, error: "结果转不成 JSON：" + String(e) }; }
+      const bytes = new Blob([text]).size;
+      if (bytes > ${maxBytes}) { delete box[${slot}]; return { status: "done", ms: v.ms, bytes, tooLarge: true }; }
+      box[${slot}] = { status: "fetching", text };
+      return { status: "done", ms: v.ms, bytes, chars: text.length };
+    })()`,
+    60_000,
+  );
+  if (head.status !== "done") return { status: head.status, ms: head.ms, error: head.error };
+  if (head.tooLarge) {
+    throw new DevError(
+      413,
+      "host",
+      `${options.what ?? "结果"}有 ${head.bytes} 字节，超过上限 ${maxBytes}：减少 frames / limit 再试`,
+      { bytes: head.bytes, maxBytes },
+    );
+  }
+  const parts: string[] = [];
+  try {
+    for (let start = 0; start < head.chars!; start += chunk) {
+      parts.push(
+        await evalValue<string>(
+          s,
+          host.targetId,
+          `window.__kbTask[${slot}].text.slice(${start}, ${start + chunk})`,
+          60_000,
+        ),
+      );
+    }
+  } finally {
+    await evalValue(s, host.targetId, `(delete window.__kbTask[${slot}], true)`).catch(() => {});
+  }
+  const text = parts.join("");
+  if (text.length !== head.chars) {
+    throw new DevError(422, "host", `取回的结果不完整（${text.length} / ${head.chars} 字符）`);
+  }
+  return { status: "done", ms: head.ms, value: JSON.parse(text) as T, bytes: head.bytes };
+}
+
+/** 在宿主里起任务、轮询到结束（`done` / `rejected`），返回结果槽位（JSON 字面量），结果还在宿主里。 */
+async function runHostTask(
+  s: DevSession,
+  handle: string,
+  expression: string,
+  options: HostTaskOptions,
+): Promise<string> {
   const host = s.host(handle);
   if (typeof expression !== "string" || !expression.trim()) throw badRequest("缺 expression");
   const limitMs = options.limitMs ?? 300_000;
@@ -289,12 +400,7 @@ export async function hostTask(
       throw new DevError(504, "host", `宿主任务 ${limitMs} ms 未完成（仍在宿主里跑）：${expression.slice(0, 120)}`);
     }
   }
-  return evalValue<HostTaskResult>(
-    s,
-    host.targetId,
-    `(() => { const v = window.__kbTask[${slot}]; delete window.__kbTask[${slot}]; return v; })()`,
-    60_000,
-  );
+  return slot;
 }
 
 /** 取探针存下的字节（`chunk` 按 base64 分块）。 */
@@ -342,7 +448,10 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
   return invoke<SceneTarget>(s, "wpe_scene_target", { imageId });
 }
 
-/** 在宿主里渲染一帧（`__kabegameSceneProbe.renderFrame`），再按 chunk 取回 PNG。场景目录由 `wpe_scene_target` 按图片 id 取。 */
+/**
+ * 在宿主里渲染一帧（`__kabegameSceneProbe.renderFrame`），再按 chunk 取回 PNG。场景目录由 `wpe_scene_target` 按图片 id 取。
+ * 给了 `particles` 时原样交给探针做确定性回放（不收 `time`：读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计值）。
+ */
 export async function renderFrame(
   s: DevSession,
   handle: string,
@@ -354,10 +463,8 @@ export async function renderFrame(
   if (request.time !== undefined && (typeof request.time !== "number" || !Number.isFinite(request.time))) {
     throw badRequest("time 要是数字（秒）");
   }
-  const levels = ["disabled", "enabled", "ultra", "follow"];
-  if (request.postprocess !== undefined && !levels.includes(request.postprocess)) {
-    throw badRequest(`postprocess 只能是 ${levels.join(" / ")}`);
-  }
+  if (request.postprocess !== undefined) checkPostprocess(request.postprocess);
+  const particles = checkRenderReplay(request);
   const target = await sceneTarget(s, request.imageId);
   const userProperties = request.userProperties ?? (await currentUserProperties(s, request.imageId)).userProperties;
   // 固定键：探针把每帧 PNG 存在内存里，同键覆盖才不会越跑越大
@@ -367,7 +474,7 @@ export async function renderFrame(
     sceneAssets: target.sceneAssets,
     postprocess: request.postprocess ?? "disabled",
     userProperties,
-    time: request.time ?? 1.5,
+    ...(particles ? { particles } : { time: request.time ?? 1.5 }),
     key,
     ...(request.pointer ? { pointer: request.pointer } : {}),
   };
@@ -383,4 +490,67 @@ export async function renderFrame(
     pngSha256: createHash("sha256").update(png).digest("hex"),
     pngBytes: png.length,
   };
+}
+
+/**
+ * 粒子轨迹（`__kabegameSceneProbe.particleTrack`）：探针按场景目录编译（不解码纹理），按 `dts` 逐帧步进模拟器，在 `frames`
+ * 输出和 RenderDoc 轨迹同格式的 JSON。结果超过 32 MB 回 413。
+ */
+export async function particleTrack(
+  s: DevSession,
+  handle: string,
+  request: ParticleTrackRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<ParticleTrackResult> {
+  s.host(handle);
+  const checked = checkTrackRequest(request);
+  const target = await sceneTarget(s, checked.imageId);
+  const { imageId, ...rest } = checked;
+  const args = { projectDir: target.path, sceneAssets: target.sceneAssets, ...rest };
+  const task = await hostTaskJson<ParticleTrackResult>(
+    s,
+    handle,
+    `__kabegameSceneProbe.particleTrack(${JSON.stringify(args)})`,
+    { signal: options.signal, what: "粒子轨迹" },
+  );
+  if (task.status !== "done") {
+    throw new DevError(422, "host", `粒子轨迹失败：${task.error}`, { imageId });
+  }
+  return task.value!;
+}
+
+/**
+ * 粒子四角（`__kabegameSceneProbe.particleCorners`）：探针编译、建场景、按 `particles` 回放，把每个粒子层的顶点着色器改成计算
+ * 着色器跑一遍，读回每个粒子四角的裁剪坐标与像素坐标。`userProperties` 缺省取库里这张图当前的值。结果超过 32 MB 回 413。
+ */
+export async function particleCorners(
+  s: DevSession,
+  handle: string,
+  request: ParticleCornersRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<ParticleCornersLayer[]> {
+  s.host(handle);
+  const checked = checkCornersRequest(request);
+  const target = await sceneTarget(s, checked.imageId);
+  const userProperties = checked.userProperties ?? (await currentUserProperties(s, checked.imageId)).userProperties;
+  const args = {
+    projectDir: target.path,
+    sceneAssets: target.sceneAssets,
+    postprocess: checked.postprocess ?? "disabled",
+    userProperties,
+    ...(checked.particles ? { particles: checked.particles } : {}),
+    ...(checked.layer !== undefined ? { layer: checked.layer } : {}),
+    ...(checked.limit !== undefined ? { limit: checked.limit } : {}),
+    ...(checked.wgsl ? { wgsl: true } : {}),
+  };
+  const task = await hostTaskJson<ParticleCornersLayer[]>(
+    s,
+    handle,
+    `__kabegameSceneProbe.particleCorners(${JSON.stringify(args)})`,
+    { signal: options.signal, what: "粒子四角" },
+  );
+  if (task.status !== "done") {
+    throw new DevError(422, "host", `粒子四角失败：${task.error}`, { imageId: checked.imageId });
+  }
+  return task.value!;
 }

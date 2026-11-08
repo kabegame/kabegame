@@ -1,6 +1,6 @@
 ---
 name: kabegame-chromium
-description: 连上跑起来的 kabegame dev app（桌面 CEF，或经 adb 连 Android dev 包的系统 WebView）做截图与 UI 自动化（CDP），以及调应用命令、把主窗口带到前台、打开某张图的预览、操作场景宿主、渲染场景帧、画面哈希、导入 / 移除测试工程、读应用日志。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态 / 调 Tauri 命令 / 让用户看到正在调试的那张图 / 渲染某张场景壁纸或比画面哈希时使用；安卓同一套工具，dev 用 --mode android 跑即可。工具经 kabegame-dev MCP（mcp__kabegame-dev__*）或 vite 上的 REST（/__kabegame_dev/*）调用。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
+description: 连上跑起来的 kabegame dev app（桌面 CEF，或经 adb 连 Android dev 包的系统 WebView）做截图与 UI 自动化（CDP），以及调应用命令、把主窗口带到前台、打开某张图的预览、操作场景宿主、渲染场景帧、按 WPE 抓帧回放粒子（渲染一帧、轨迹、四角）、画面哈希、导入 / 移除测试工程、读应用日志。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态 / 调 Tauri 命令 / 让用户看到正在调试的那张图 / 渲染某张场景壁纸或比画面哈希时使用；安卓同一套工具，dev 用 --mode android 跑即可。工具经 kabegame-dev MCP（mcp__kabegame-dev__*）或 vite 上的 REST（/__kabegame_dev/*）调用。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
 ---
 
 # kabegame-chromium
@@ -47,7 +47,8 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 
 失败时结果是 `isError`，文本第一行 `[层] 说明`：`[vite]` 第 1 层 vite 不在；`[cdp]` 第 2 层 CDP 不在；`[handle]` 句柄 / 任务 /
 控制台流不存在（vite 重启过）；`[target]` 找不到目标；`[page]` 页面里出错；`[app]` 应用命令拒绝；`[host]` 场景宿主；`[guard]`
-测试工程护栏；`[platform]` 平台不支持；`[job]` 任务没成功；`[local]` MCP 本地（参数 / 文件）。
+测试工程护栏；`[platform]` 平台不支持；`[job]` 任务没成功；`[timeline]` 粒子回放的时间线组不出来（WPE 日志 / 轨迹缺帧、读不了）；
+`[local]` MCP 本地（参数 / 文件）。
 
 目标写法：`main`（主窗口，缺省）/ `wallpaper`（壁纸窗口）/ `url:<URL 子串>`（page 优先，其次 iframe）/
 `host:<宿主句柄或 kbInstance>`。参数里的相对路径一律按仓库根解析。
@@ -65,10 +66,12 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `show_window` | 把主窗口带到前台：最小化时 unminimize、不可见时 show，再 set_focus；没到前台（Windows 前台限制）时临时置顶再取消。回走了哪条路径、前后的 `visibilityState` / `hasFocus` | 要 | 桌面 |
 | `open_image_preview` | 主窗口打开某张图的预览，再 `show_window`。导航到 `/gallery`（保留 query，加 `pvwimgid`）并整页重载；图在当前视图里就跳到它所在的页，不在就降级成单图预览，不改筛选条件。回最终路由、预览开没开、是哪张、在不在视图里 | 要 | 桌面（安卓未验，不显示窗口） |
 | `android_screen` | adb 整屏截图（含系统栏、原生对话框）；`save` / `size` 同 `screenshot` | 要 | 安卓 |
-| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`） | 要 | 桌面 |
+| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay` 同 `render_scene`） | 要 | 桌面 |
 | `projects_remove` | 按清单移除测试工程（只 `batch_remove_images`） | 要 | 桌面 |
 | `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
-| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。固定时刻的一帧，粒子是预热后的状态，见下方「屏外宿主」 | 要 | 桌面 |
+| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」） | 要 | 桌面 |
+| `particle_track` | 按 WPE 的一次抓帧回放粒子模拟器，在 `frames`（缺省为抓到的帧）输出和 `rd-*.json` 同格式的轨迹，写 `out`；回摘要（每帧每系统的粒子数、位置范围、时间线信息） | 要 | 桌面 |
+| `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene` | 要 | 桌面 |
 | `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
 | `projects_import` | 导入 `ignore/` 下的测试工程并等完成，清单写 `out` | 要 | 桌面 |
 | `hash_compare` | 只读两份基线，按 `input.path` 对应，比哈希与 unsupported | 不要 | — |
@@ -103,17 +106,65 @@ iframe 停了渲染；`document.visibilityState` 仍是 `visible`）。2026-11-0
   `profile`、`scriptCorpus`、`particleTrack` / `particleCorners`。
 - **看实时行为用可见宿主**：`open_image_preview` 打开那张的预览，再 `screenshot`，或在那个宿主里求值（`hosts` 里 `where: "main"`、
   没有句柄的那个，`eval target=host:<kbInstance>`）。
-- **`render_scene` 画粒子场景时是预热后的状态**：不步进，`starttime` 为 0 的系统是空的。探针本身的 `particles` 回放参数还没开放给工具，
-  要用就 `host_open` 后 `job start kind=host-task` 自己调 `__kabegameSceneProbe.renderFrame`。
+- **不给 `replay` 时 `render_scene` 画粒子场景是预热后的状态**：不步进，`starttime` 为 0 的系统是空的。要看某一帧的粒子，给
+  `replay`（见下一节）。
+
+### 粒子回放（`render_scene` / `host_render` 的 `replay`、`particle_track`、`particle_corners`）
+
+P4 和 WPE 真机核对的三种用法，都是屏外宿主里一次跑完、结果确定的计算（种子固定，不依赖帧循环）：按 WPE 的 dt 序列回放后渲染一帧
+（和抓帧逐像素比）、只步进模拟器出轨迹（和 RenderDoc 轨迹比）、读四角（和 `gs_out` 比）。**工具只出结果、不做比较**：比较自己跑
+`ignore/p4` 下的脚本（例如 `cmp_track.py`、各步的 `real.mjs` / `replay.test.ts`）。
+
+`replay` 两种写法，给了就不收 `time`（读回那一帧的 `g_Time` 取时间线或 `times` 的末项）：
+
+```text
+replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor? }, seed?, passes?, random? }   常用：从 WPE 的一次抓帧组时间线
+replay: { particles: { dts, times?, seed?, passes?, random? } }                                  直接给探针（缺省 seed 1、passes 1）
+```
+
+**时间线**（`apps/kabegame-dev-mcp/src/timeline.ts`，脚本也能 import `buildTimeline`）：`log` 是 WPE 日志
+`ignore/p4/out/<标签>-log.txt`（只读 `[kbp] 帧号,帧时间,累计时间`），`track` 是 RenderDoc 轨迹 `ignore/p4/tracks/rd-<标签>.json`，
+`frame` 是回放到的帧（WPE 脚本帧号，即读回的那一帧，缺省为轨迹最后一帧）。规则照 P4 各步的回放脚本：
+
+- 第 f 帧 dt = 日志累计时间第 f 项减第 f − 1 项（第 1 帧就是它自己），四舍五入到 6 位小数；不用 frametime 列（差分不累积舍入）。
+  `g_Time` 取日志的累计时间。抓到的帧（轨迹里有的）dt 与 `g_Time` 换成轨迹的 float32 原值。
+- **缺帧**：fps 低时日志每 50 帧才刷一次，尾巴会缺。日志和轨迹都没有的帧缺省报 `[timeline]` 并列出；`gap: "split"` 把缺的那一段按
+  「后一个已知帧的 g_Time − 它的 dt」与前一帧 `g_Time` 之差平分（dt 同样 6 位小数，`g_Time` 累加），结果里写明平分了哪几帧。平分有误差：
+  `p4b-fps10` 的第 151、152 帧平分是各 0.099432，按粒子反推的真实拆分是 0.099343 / 0.099521（`phase-4b-tier2.md` 步骤 3），
+  出生在这两帧、对拆分敏感的粒子会偏。缺的那段后面没有已知帧时没法平分，照样报错。
+- **`passes`**（operator 遍数）缺省按标签里的 `fps<N>` 推：N 在 1–20 两遍，否则一遍（同 `particlePasses`）；标签先看轨迹的 `tag`，推不出
+  再看日志文件名。推不出就 1，结果里会写明——P4a 的 `s15` 这类标签不带 `fps`，要两遍得自己传 `passes: 2`。
+- **光标**：`cursors: "track"` 时抓到的帧取轨迹的 `pointer`、其余帧取 `cursor`（缺省场景中心 `[0.5, 0.5]`）；也可以直接给整串（长度 =
+  `frame`）；只给 `cursor` 时每帧都是它。光标是「光标下的场景纹理坐标」，抓帧窗口和场景同尺寸时等于 `g_PointerPosition`，不同尺寸时由
+  调用方换算（P4c 步骤 2）。WPE 只在抓到的帧记了 `pointer`，别的帧的光标是猜的。**只有 `particle_track` 收逐帧光标**：探针
+  `renderFrame` 只有一个固定的 `pointer`（`render_scene` 的 `pointer` 参数，预热、每一帧和读回那一帧都用它），`particleCorners`
+  固定在场景中心；时间线里给了光标会报 `[local]`。
+
+**结果**：`particle_track` 写 `out`（`{ source: "sim", project, tag, frames: [{ frame, dt, systems: { <系统名>: [粒子] } }], skipped }`，
+和 `rd-*.json` 同格式、可直接交给比较脚本）；`particle_corners` 写 `out`（每层 `{ object, name, perspective, count, uv, corners, pixels,
+particles }`，`corners` 是每粒子四角的裁剪坐标 `[x, y, z, w]`，`pixels` 是场景像素坐标、原点左上）。`particle_track` 的场景用户属性取工程
+缺省值（探针不收 `userProperties`）。结果超过 32 MB 报 `[host]` 413，减少 `frames` / 用 `limit` 收小。
+
+```text
+particle_track   { imageId: 14182, timeline: { log: "ignore/p4/out/p4c-cp-fps60-log.txt", track: "ignore/p4/tracks/rd-p4c-cp-fps60.json", frame: 927 },
+                   out: "ignore/p4/xx/sim-p4c-cp.json" }
+render_scene     { imageId: 14181, replay: { timeline: { log: "ignore/p4/out/p4b-refract-fps60-log.txt", track: "ignore/p4/tracks/rd-p4b-refract-fps60.json", frame: 907 } } }
+particle_track   { imageId: 14180, timeline: { log: "ignore/p4/out/p4b-fps10-log.txt", track: "ignore/p4/tracks/rd-p4b-fps10.json", gap: "split" }, out: … }  → passes 2，平分 151–152
+particle_corners { imageId: 14179, replay: { particles: { dts: [720 个 1/60], seed: 1, passes: 1 } }, limit: 64, out: … }
+```
+
+2026-11-09 核对：`particle_track` 对 `p4c-cp`（927 帧）和 node 里同一时间线直调 `particles/track.ts` 逐字相同，和 WPE 轨迹的差与
+`ignore/p4/c1/out/replay-cp.txt` 逐系统相同；`render_scene` 回放 `p4b-refract` 到 907 帧，RGBA 摘要等于 `b5v/out/real-summary.json`；
+`particle_corners` 对 `p4a` 和 `step4/out/ours-p4a-corners.json` 逐位相同（记录见 `.claude/plans/tools/kabegame-chromium-lib.md` 第 4 批）。
 
 ## REST（`/__kabegame_dev/*`，vite 上）
 
 请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`，以及原图的 `X-Png-Original-Width` / `-Height`）。
 截图、渲染、安卓整屏可选带 **`resize: { scale?, maxWidth?, maxHeight? }`**（GET 用同名 query），规则同 MCP 的 `size`，在 vite 里缩小后再回；
 **不带时回原图**。渲染带 `resize` 时 `png` 是缩小后的，`pngSha256` / `pngBytes` 仍说的是原图，`size` 报两者尺寸。
-出错回 `{ error, layer, … }`：参数错 400；来源不对、测试工程护栏 403；句柄或任务不存在 404（提示 vite 可能重启过）；页面抛错、找不到
+出错回 `{ error, layer, … }`：参数错 400（粒子相关的参数带 `field`，指到错的那一项，例如 `particles.dts[3]`）；来源不对、测试工程护栏 403；句柄或任务不存在 404（提示 vite 可能重启过）；页面抛错、找不到
 目标或元素、应用命令被拒、PNG 格式不支持缩小（`png`）422；宿主产物问题、主窗口里有宿主时打开预览 409；CDP 不可用 503（带 `endpoint`
-结论）；超时 504；插件内部错误 500。
+结论）；超时 504；轨迹 / 四角结果超过 32 MB 413；插件内部错误 500。
 
 | 方法 与 路径 | 做什么 | 平台 |
 |---|---|---|
@@ -130,7 +181,9 @@ iframe 停了渲染；`document.visibilityState` 仍是 `visible`）。2026-11-0
 | `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time?, postprocess?, userProperties?, pointer?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }` | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥 | 桌面 |
+| `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`） | 桌面 |
+| `POST /hosts/:h/particle-corners` | `{ imageId, particles?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果 | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |
 | `POST /jobs` | `{ kind: "host-task" \| "hash-baseline" \| "projects-import", params }` → 任务记录 | 桌面 |
 | `GET /jobs`、`GET /jobs/:id`、`DELETE /jobs/:id` | 列出 / 查（状态、进度、结果）/ 取消 | 都有 |
@@ -149,6 +202,16 @@ const small = await dev.screenshot("main", { resize: { maxWidth: 800 } }); // �
 const opened = await dev.openImagePreview("13515"); // 重载主窗口打开预览，再带到前台；opened.preview.mode 是 in-view / single
 const job = await dev.jobStart("hash-baseline", { from: "ignore/p4/c1/out/hash-after.json" });
 const done = await dev.waitJob(job.id, { onProgress: (p) => console.error(p) });
+
+// 粒子回放：时间线在脚本里组（同 MCP），再交给宿主
+import { buildTimeline } from "../../apps/kabegame-dev-mcp/src/timeline.ts";
+const tl = buildTimeline({ log: "ignore/p4/out/p4c-cp-fps60-log.txt", track: "ignore/p4/tracks/rd-p4c-cp-fps60.json" }, { root: "D:/Codes/kabegame" });
+const host = await dev.hostOpen({ scene: "14182" }); // 屏外宿主
+const track = await dev.hostParticleTrack(host.handle, {
+  imageId: "14182", dts: tl.dts, times: tl.times, frames: tl.captured, passes: tl.passes?.passes ?? 1,
+});
+const frame = await dev.hostRender(host.handle, { imageId: "14182", particles: { dts: tl.dts, times: tl.times, passes: 1 } });
+await dev.hostClose(host.handle);
 ```
 
 出错统一抛 `KabegameDevError`，`layer` 同上。也可以直接 curl（本机设了 `HTTP_PROXY` 时要加 `--noproxy '*'`，否则请求会交给代理）：
@@ -229,11 +292,15 @@ adb shell pidof app.kabegame.dev → <pid>        （KABEGAME_ANDROID_PACKAGE �
 - **vite 重启会丢句柄、任务和控制台流**（改 `vite.config.*` 或它 import 的本地文件，包括 `scripts/kabegame-dev/` 与
   `scripts/vite-debug-server.ts`，vite 都会自己重启一次，app 页面随之整页刷新）。旧 id 回 404 `[handle]`，重开即可；
   vite 关闭时会移除它开的屏外 iframe、取消任务。`uno.config.ts` 不在 vite 的 config 依赖里，不触发重启。
+- **一次改几个插件文件时，vite 可能拷到一半就重启、读到新旧混合的文件**（2026-11-09 实测：一条 `cp` 拷 8 个文件，新 `rest.ts` 生效、
+  最后拷的 `backend.ts` 还是旧的，接口回 500 `backend.hostParticleTrack is not a function`；重启进行中的后续改动被合并掉，不会再重启）。
+  拷完要打一下新接口核对；不一致就 `touch` 一个插件文件再触发一次重启。
 - **登记没有撤销机制**：app 退出后 vite 与磁盘上都仍留着旧端口，所以每次用之前都验 `/json/version`；不应答就报第 2 层 `cdp`。
 - **验活必须看 `webSocketDebuggerUrl`，不能只看 HTTP 状态码**：vite 的 SPA 兜底对任意路径都回 200 text/html。
 - **随机端口有极小的 TOCTOU 窗口**：探号的 socket 释放后、CEF 真正 bind 前，别的进程可能抢先占上。表现为 CDP 起不来，重启 dev 换个号即可。
 - **场景宿主要用 `--mode development` 构建**：dev 探针（`window.__kabegameSceneProbe`，在 `apps/wpe-scene/src/dev/`）只在 development
-  构建里有；没有探针时 `host_open` 报 `[host]`。探针接口（`renderFrame`、`chunk`）改了要同步 `scripts/kabegame-dev/scene.ts`。
+  构建里有；没有探针时 `host_open` 报 `[host]`。探针接口（`renderFrame` 与它的 `particles`、`particleTrack`、`particleCorners`、
+  `chunk`）改了要同步 `scripts/kabegame-dev/scene.ts` 与参数校验 `replay.ts`（不认识的字段一律 400，探针新增参数要在这里放行）。
 - **只信任新加载的宿主**：只认「文档入口脚本 = 磁盘上 `<target>/debug/resources/wpe-scene/index.html` 的入口脚本」的新 frame
   （P3c 的教训：旧 frame 跑旧代码，档位选项会被悄悄忽略）。宿主产物重新构建后，旧宿主不会被复用。
 - **屏外宿主截不到图，也不跑帧循环**：`screenshot` 报 `[host]`，取画面用 `render_scene` / `host_render`；看动起来的样子用

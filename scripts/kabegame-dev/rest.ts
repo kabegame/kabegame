@@ -5,6 +5,8 @@
  * 截图、渲染、安卓整屏可选带 `resize`（`{ scale?, maxWidth?, maxHeight? }`，GET 用同名 query）：等比、不放大，
  * 在 vite 里用 `png.ts` 缩小后再回；不带时回原图。
  *
+ * 粒子回放（渲染的 `particles`）、轨迹、四角的参数在交给后端之前用 `replay.ts` 校验，错在哪一项 400 的 `field` 就是哪一项。
+ *
  * 只接受本机访问：来源地址必须是回环（同 debug server 的判断）；带 `Origin` 时只认 localhost / 127.0.0.1 / [::1]，
  * `Host` 也只认这几个（防 DNS 重绑定：同源 GET 不带 Origin）。
  */
@@ -12,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Buffer } from "node:buffer";
 import { DevError, badRequest } from "./errors.ts";
 import { PngError, parseResizeSpec, pngSize, resizePng } from "./png.ts";
+import { checkCornersRequest, checkRenderReplay, checkTrackRequest } from "./replay.ts";
 import type { ResizeSpec } from "./png.ts";
 import type {
   AppState,
@@ -30,6 +33,10 @@ import type {
   OpenImagePreviewRequest,
   OpenImagePreviewResult,
   OpenedHost,
+  ParticleCornersLayer,
+  ParticleCornersRequest,
+  ParticleTrackRequest,
+  ParticleTrackResult,
   ProjectsRemoveResult,
   RenderRequest,
   RenderResponse,
@@ -65,6 +72,8 @@ export interface DevBackend {
   hostClose(handle: string): Promise<HostCloseResult>;
   hostEval(handle: string, expression: string, timeoutMs?: number): Promise<EvalResponse>;
   hostRender(handle: string, request: RenderRequest): Promise<RenderResponse>;
+  hostParticleTrack(handle: string, request: ParticleTrackRequest): Promise<ParticleTrackResult>;
+  hostParticleCorners(handle: string, request: ParticleCornersRequest): Promise<ParticleCornersLayer[]>;
   projectsRemove(manifest: unknown, allowPrefix?: string): Promise<ProjectsRemoveResult>;
   jobStart(kind: JobKind, params: unknown): Promise<JobRecord>;
   jobList(): Promise<JobRecord[]>;
@@ -379,11 +388,29 @@ export function createRestHandler(backend: DevBackend) {
         const imageId = rest.imageId;
         if (typeof imageId !== "string" && typeof imageId !== "number") throw badRequest("缺 imageId");
         const resize = resizeSpec(rawResize);
+        const particles = checkRenderReplay(rest);
         const response = await backend.hostRender(m[1], {
           ...(rest as Partial<RenderRequest>),
+          ...(particles ? { particles } : {}),
           imageId: String(imageId),
         });
         json(res, shapeRender(response, resize));
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/hosts\/([\w-]+)\/particle-track$/,
+      handle: async (m, req, res) => {
+        const body = await readJson(req);
+        json(res, await backend.hostParticleTrack(m[1], checkTrackRequest(body)));
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/hosts\/([\w-]+)\/particle-corners$/,
+      handle: async (m, req, res) => {
+        const body = await readJson(req);
+        json(res, await backend.hostParticleCorners(m[1], checkCornersRequest(body)));
       },
     },
     {

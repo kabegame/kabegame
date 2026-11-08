@@ -37,6 +37,10 @@ import type {
   JobRecord,
   OpenImagePreviewResult,
   OpenedHost,
+  ParticleCornersLayer,
+  ParticleCornersRequest,
+  ParticleTrackRequest,
+  ParticleTrackResult,
   ProjectManifest,
   ProjectsImportParams,
   ProjectsRemoveResult,
@@ -219,9 +223,18 @@ export function createClient(options: ClientOptions = {}) {
     hostClose: (handle: string) => del<HostCloseResult>(`/hosts/${seg(handle)}`),
     hostEval: (handle: string, expression: string, timeoutMs?: number) =>
       post<EvalResponse>(`/hosts/${seg(handle)}/eval`, { expression, timeoutMs }),
-    /** 宿主里渲染一帧；`resize` 时 `png` 是缩小后的，`pngSha256` / `pngBytes` 仍是原图的，`size` 报两者尺寸。 */
+    /**
+     * 宿主里渲染一帧；`resize` 时 `png` 是缩小后的，`pngSha256` / `pngBytes` 仍是原图的，`size` 报两者尺寸。
+     * 带 `particles`（`{ dts, times?, seed?, passes?, random? }`）时做确定性粒子回放，此时不收 `time`。
+     */
     hostRender: (handle: string, render: RenderBody) =>
       post<RenderResponse>(`/hosts/${seg(handle)}/render`, render, { timeoutMs: 10 * 60_000 }),
+    /** 宿主里跑粒子轨迹（探针 `particleTrack`），回和 RenderDoc 轨迹同格式的 JSON；超过 32 MB 回 413。 */
+    hostParticleTrack: (handle: string, request: ParticleTrackRequest) =>
+      post<ParticleTrackResult>(`/hosts/${seg(handle)}/particle-track`, request, { timeoutMs: 10 * 60_000 }),
+    /** 宿主里读粒子四角（探针 `particleCorners`）：每层每粒子四角的裁剪坐标与像素坐标；超过 32 MB 回 413。 */
+    hostParticleCorners: (handle: string, request: ParticleCornersRequest) =>
+      post<ParticleCornersLayer[]>(`/hosts/${seg(handle)}/particle-corners`, request, { timeoutMs: 10 * 60_000 }),
     projectsRemove: (manifest: ProjectManifest, allowPrefix?: string) =>
       post<ProjectsRemoveResult>("/projects/remove", { manifest, allowPrefix }),
     jobStart: (kind: JobKind, params: HostTaskParams | HashBaselineParams | ProjectsImportParams) =>

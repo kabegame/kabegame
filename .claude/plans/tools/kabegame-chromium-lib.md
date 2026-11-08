@@ -518,3 +518,253 @@ Claude 独立验收（不采信自报，另写脚本、照 `.mcp.json` 起 stdio
 | REST `/android/screen` 在桌面 | 400 `platform` |
 | **`open_image_preview 13523`（图在当前视图里，子代理只测到 `single`）** | 2.1 s；`mode: "in-view"`、第 1 页、`resolved`；窗口本来就在前台，走 focus 路径、两步跳过；1.2 s 后截图是 13523（Razer Bedroom）的场景预览、弹窗不透明 |
 | 恢复 | 关预览后路由回 `/gallery`、网格同开始；`app_state` 与开始时逐字相同；只剩应用背景的宿主 13531 |
+
+## 第 4 批 — 粒子回放、轨迹与四角（2026-11-09 用户）
+
+**来源：** 2026-11-09 对照 `ignore/tools-inventory.md` 查缺口，用户定先补这一块。`wpe-renderdoc` 扩展、粒子对比 skill、产品 fixture 生成脚本入库仍不在本计划。
+
+### 总体设计思路
+
+P4 的真机核对有三种用法，都靠 dev 探针现成的接口，工具里一个都没开放：
+- **按 WPE 的 dt 序列回放后渲染一帧**：`renderFrame` 的 `particles: { dts, times, seed, passes, random }`。和 WPE 抓帧逐像素比（`ignore/p4/b1/real.mjs --cases`、`b5v/real.mjs`）。
+- **只步进模拟器、出轨迹**：`particleTrack`，输出和 RenderDoc 轨迹（`ignore/p4/tracks/rd-*.json`）同格式。
+- **读四角**：`particleCorners`，把粒子顶点着色器改成计算着色器，读回每个粒子四角的裁剪坐标和像素坐标，和 WPE 的 `gs_out` 比（P4a 风险 7；P4c 步骤 5 的拖尾和 `sprite` 朝向要用）。
+
+这三种都是一次跑完、结果确定的计算，屏外宿主就能做（第 3 批已核实屏外宿主不跑帧循环，但这几个接口不依赖帧循环）。
+
+**分工照旧：vite 透传，MCP 组装。**
+- **vite（REST）** 只做「按图片 id 取场景目录、在宿主里跑探针、取回结果」：渲染接口多收一个 `particles`，原样交给 `renderFrame`；新增两个宿主接口分别跑 `particleTrack`、`particleCorners`，结果是 JSON。参数在 vite 里校验，错在哪一项就报哪一项。
+- **MCP** 负责把「WPE 的这次抓帧」变成探针要的参数。一次回放要传几百上千帧的 dt，不可能写在工具调用里。所以 MCP 新增时间线模块，从 WPE 日志（`ignore/p4/out/<标签>-log.txt` 的 `[kbp] 帧,frametime,runtime`）和 RenderDoc 轨迹（`rd-<标签>.json`）组出 `dts`、`times`、逐帧光标，规则和 P4 各步的回放脚本一致。工具只收文件路径和要回放到的帧号。
+- 轨迹和四角的结果可能很大（全部帧 × 全部粒子），**落盘为主**：写到 `out`，回到会话里的只有摘要（每帧每系统的粒子数、坐标范围、前几个粒子）。
+
+**时间线的规则**（照 `b5v/real.mjs` 的 `logDts`、`b3/replay.test.ts` 的 `dtsWithGap`、`b4` 的场景时间）：
+- 第 f 帧的 dt = 日志里第 f 帧的累计时间减第 f − 1 帧的（第 1 帧就是它自己的累计时间）。用差分、不用 frametime 列，因为日志只有 6 位小数，差分不累积舍入。
+- 抓到的帧（轨迹里有的）dt 换成轨迹的 float32 原值，`g_Time` 也取轨迹的值；其余帧的 `g_Time` 取日志的累计时间。
+- 日志和轨迹都没有的帧（fps 低时日志每 50 帧才刷一次，尾巴会缺）缺省报错并列出缺哪些帧。可选 `gap: "split"`：把缺的那一段按轨迹里下一帧的 `g_Time` 平分，结果里写明哪些帧是平分出来的（b3 的做法，`phase-4b-tier2.md` 步骤 3 实施记录说明了它的误差）。
+- 逐帧光标（`cursors`）：WPE 只在抓到的帧记录了 `g_PointerPosition`（轨迹的 `pointer`）。`cursors: "track"` 时抓到的帧用轨迹值，其余帧用 `cursor`（缺省场景中心 `[0.5, 0.5]`）；也可以直接给整串。光标是「光标下的场景纹理坐标」，抓帧窗口和场景同尺寸时等于 `g_PointerPosition`，不同尺寸时由调用方换算（P4c 步骤 2 的结论），工具描述里写明。
+
+### 现状锚点
+
+**a. 渲染只给固定时刻**（`scripts/kabegame-dev/scene.ts`，`renderFrame`）
+```ts
+const args = {
+  projectDir: target.path,
+  sceneAssets: target.sceneAssets,
+  postprocess: request.postprocess ?? "disabled",
+  userProperties,
+  time: request.time ?? 1.5,
+  key,
+  ...(request.pointer ? { pointer: request.pointer } : {}),
+  // 现状：没有 particles，探针的 dt 回放用不了
+};
+```
+
+**b. MCP 的渲染参数**（`apps/kabegame-dev-mcp/src/tools.ts`）
+```ts
+const RENDER_FIELDS = {
+  time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）"),
+  postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
+  userProperties: z.record(z.unknown()).optional().describe("用户属性；缺省取库里这张图当前的用户属性"),
+  pointer: z.tuple([z.number(), z.number()]).optional().describe("指针位置（场景坐标）"),
+  // 现状：没有回放参数；工具描述写着「粒子是预热后的状态、不步进」
+};
+```
+
+**c. 探针接口已经有**（`apps/wpe-scene/src/dev/install.ts`）
+```ts
+particleTrack: particleTrackProbe, // { projectDir, sceneAssets, dts, times?, frames, passes, seed?, random?, cursors?, tag? }
+particleCorners,                   // { projectDir, sceneAssets, postprocess?, userProperties?, layer?, particles?, limit?, wgsl? }
+// renderFrame 的 particles: { dts, times?, seed?, passes?, random? }
+```
+
+### 点 1 — vite：渲染透传回放参数（`scripts/kabegame-dev/scene.ts`、`types.ts`、`rest.ts`）
+- **修改** `RenderRequest` 加 `particles?: ParticleReplay`（`{ dts: number[]; times?: number[]; seed?: number; passes?: 1 | 2; random?: Record<string, number[]> }`），`renderFrame` 原样放进探针参数。
+- **新增** 校验函数 `checkReplay`（点 2 共用）：`dts` 非空、都是有限正数；`times` 与 `dts` 等长、都是有限数；`passes` 只能 1 / 2；`seed` 是整数；`random` 的键是 `objects` 下标、值是 [0, 1) 内的数。不合法回 400，说明是哪一项。
+- 给了 `particles` 时探针忽略 `time`（读回那一帧的 `g_Time` 取 `times` 的最后一项或 dt 累计值），结果的 `meta.time` / `meta.frametime` 照常回。
+
+### 点 2 — vite：轨迹与四角（`scene.ts`、`rest.ts`、`backend.ts`、`types.ts`）
+- **新增** REST：
+  - `POST /hosts/:handle/particle-track`：`{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, tag? }` → 探针 `particleTrack` 的结果（`ParticleTrack` JSON）。
+  - `POST /hosts/:handle/particle-corners`：`{ imageId, particles?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → `ParticleCornersLayer[]`。
+- 场景目录同渲染，按 `wpe_scene_target` 取；`userProperties` 缺省取库里这张图当前的值。
+- `frames` 都在 `[1, dts.length]` 内；`cursors` 与 `dts` 等长、每项两个有限数。
+- 走 `hostTask`（宿主里起 Promise 再轮询），超时同渲染。结果直接经 `Runtime.evaluate` 取回；单次结果超过约 32 MB 时回 413 并建议减少 `frames` / `limit`。
+
+### 点 3 — MCP：时间线（新增 `apps/kabegame-dev-mcp/src/timeline.ts`）
+```ts
+/** 按 WPE 日志与 RenderDoc 轨迹组出探针要的时间线（规则见第 4 批「总体设计思路」）。脚本也能 import。 */
+export interface TimelineSource {
+  /** WPE 日志里截出的 `[kbp]` 行（`ignore/p4/out/<标签>-log.txt`）。 */
+  log: string;
+  /** RenderDoc 轨迹（`ignore/p4/tracks/rd-<标签>.json`），可选：给了时抓到的帧用它的 dt、g_Time、pointer。 */
+  track?: string;
+  /** 回放到这一帧（WPE 脚本帧号，从 1 起），即读回的那一帧；缺省为轨迹里最后一帧。 */
+  frame?: number;
+  /** 日志与轨迹都缺的帧：缺省报错；"split" 按下一个已知 g_Time 平分。 */
+  gap?: "error" | "split";
+  /** 逐帧光标："track" 抓到的帧取轨迹 pointer、其余取 cursor；或直接给整串（长度 = frame）。 */
+  cursors?: "track" | [number, number][];
+  cursor?: [number, number];
+}
+export interface Timeline {
+  dts: number[];
+  times: number[];
+  cursors?: [number, number][];
+  /** 轨迹里抓到的帧号（不超过 frame）。 */
+  captured: number[];
+  /** 平分出来的帧号。 */
+  split: number[];
+}
+export function buildTimeline(source: TimelineSource): Timeline;
+```
+
+### 点 4 — MCP 工具（`tools.ts`、`client.ts`）
+- **修改** `render_scene`、`host_render` 加 `replay`：
+  - `{ timeline: TimelineSource, seed?, passes?, random? }`（常用），或 `{ particles: { dts, times?, seed?, passes?, random? } }`（直接给）；
+  - 给了 `replay` 时不收 `time`；工具描述里「粒子是预热后的状态、不步进」改成「不给 replay 时……」。
+  - `passes` 缺省按标签里的 `-fps<N>` 推（1–20 两遍，同 `particlePasses`），推不出就 1。
+- **新增** `particle_track`：`{ imageId, timeline, frames?, passes?, seed?, random?, out, overwrite? }`。
+  - `frames` 缺省为轨迹里抓到的帧；
+  - 自己开屏外宿主、跑、关掉（同 `render_scene`）；
+  - 结果写 `out`（`ParticleTrack` JSON，和 `rd-*.json` 同格式，可直接交给 `ignore/p4` 的比较脚本）；
+  - 回到会话的是摘要：每帧每系统的粒子数、位置范围，以及时间线信息（回放了多少帧、抓到的帧、平分的帧）。
+- **新增** `particle_corners`：`{ imageId, replay?, layer?, limit?, postprocess?, userProperties?, out, overwrite? }`，同样开关屏外宿主、写 `out`、回摘要（每层粒子数、前 3 个粒子的四个像素角）。
+- **修改** `client.ts`：`hostParticleTrack`、`hostParticleCorners`，`hostRender` 带 `particles`。
+- 相对路径照旧按仓库根解析；`out` 已存在时缺省拒绝。
+
+### 点 5 — 文档（`.claude/skills/kabegame-chromium/SKILL.md`）
+- 工具表、REST 表加上新工具和接口；
+- 「粒子回放」一节：时间线规则、`gap`、`cursors` 与 `g_PointerPosition` 的区别、`passes` 怎么定、结果格式、和 WPE 比较要自己跑 `ignore/p4` 的脚本（工具不做比较）；
+- 第 3 批写的「探针本身的 `particles` 回放参数还没开放给工具」删掉。
+
+### 验收
+- **单测：**
+  - `timeline.ts`：差分、轨迹覆盖 dt 与 `g_Time`、缺帧报错、`split`、`cursors` 两种写法、`frame` 超出日志与轨迹；
+  - vite：`checkReplay` 与两个新接口的参数校验（400 的形状）；
+  - MCP：`replay` 与 `time` 互斥，`passes` 从标签推。
+- **端到端（dev 在跑；先用 `projects_import` 导入要用的测试工程，验完 `projects_remove`）：**
+  - `particle_track`：`ignore/p4/proj/p4c-cp`，时间线取 `out/p4c-cp-fps60-log.txt` + `tracks/rd-p4c-cp-fps60.json`，回放到 927 帧。输出和在 node 里用同一时间线直接调 `particles/track.ts` 的 `particleTrack` 逐位相同（同一份 TS，浏览器与 node 的 float32 运算应一致）；再和 WPE 轨迹比，差和 `ignore/p4/c1/out/replay-cp.txt` 同一量级。
+  - `render_scene` 带 `replay`：`p4b-refract` 回放到 907 帧，PNG 的 RGBA 摘要和 `ignore/p4/b5v/out/real-summary.json` 的 `p4b-refract-f907` 相同；不同时查是 P4b 步骤 5 之后的哪次提交改了画面，写明原因。
+  - `particle_corners`：P4a 步骤 4 的一组（`ignore/p4/step4/out/ours-*-corners.json` 里挑一组，用同样的回放参数），四角和记录逐位相同；不同时说明原因。
+  - `gap: "split"`：一组 fps10 抓帧，平分的帧和 `b3/out/replay.txt` 记录的拆分一致。
+  - 不留痕迹：`app_state` 前后一致，没有残留宿主，测试工程已移除。
+- **其余照前几批：** `deno check`、Prettier、两个包的单测；vite 侧改动先在临时副本里写好再一次拷回，vite 只重启一次；改动范围只有本批文件。
+
+### 实施记录 / 第 4 批（2026-11-09，子代理实现）
+
+- **新增：**
+  - `scripts/kabegame-dev/replay.ts`：回放、轨迹、四角的参数校验（`checkReplay`、`checkTrackRequest`、`checkCornersRequest`、
+    `checkRenderReplay`），400 带 `field`。单测 `replay.test.ts`。
+  - `scripts/kabegame-dev/scene.test.ts`：用 `node:vm` 造一个真执行表达式的假 CDP（主窗口、宿主各一个上下文），测分块取回、413、
+    宿主里抛错，以及三个探针调用的参数透传。
+  - `apps/kabegame-dev-mcp/src/timeline.ts`：`parseKbpLog`、`parseTrackJson`、`passesFromTag`、纯函数 `timelineFrom`、读文件的
+    `buildTimeline`、`describeTimeline`。单测 `timeline.test.ts`。
+  - MCP `particle_track`、`particle_corners`；单测 `particles.test.ts`。
+  - REST `POST /hosts/:h/particle-track`、`POST /hosts/:h/particle-corners`。
+- **修改：**
+  - `scene.ts`：`renderFrame` 透传 `particles`（给了就不传 `time`）；`hostTask` 拆成起任务 + 轮询的 `runHostTask`，新增
+    `hostTaskJson`；新增 `particleTrack`、`particleCorners`。
+  - `rest.ts`：两条新路由；渲染路由校验 `particles`。`backend.ts`、`types.ts`（`ParticleReplay`、`ParticleTrackRequest`、
+    `ParticleTrackResult`、`ParticleCornersRequest`、`ParticleCornersLayer`，`RenderRequest.particles`）、`rest.test.ts`。
+  - `client.ts`：`hostParticleTrack`、`hostParticleCorners`；`hostRender` 的 `particles` 经类型带上。
+  - `tools.ts`：`render_scene`、`host_render` 加 `replay`；开关屏外宿主抽成 `withSceneHost`，三个封装工具共用，`render_scene` 的行为不变；
+    渲染结果多两行：读回那一帧的 `g_Time` / `g_Frametime`，以及各粒子层的存活数。新增错误层 `[timeline]`。`testdata/fakeRest.ts` 的工具表。
+  - `SKILL.md`：`description`、工具表、REST 表、错误层，新增「粒子回放」一节、脚本例子与两条 Gotchas；第 3 批写的「`particles` 回放参数
+    还没开放给工具」删掉。
+
+和计划不同、或计划没写、由代理按证据定的：
+
+- **校验放在新文件 `replay.ts`，计划写的是 `scene.ts`。** REST 路由在交给后端之前调它，单测能直接测 400 的形状；`scene.ts` 被直接调用
+  时再校验一次。
+  - 不认识的字段一律 400。探针会静默忽略它们，例如给 `renderFrame` 传逐帧光标。
+  - REST 渲染同时给 `particles` 与 `time` 回 400。计划只写了「探针忽略 `time`」。
+- **结果按 JSON 文本分块取回。** 计划写的是「结果直接经 `Runtime.evaluate` 取回」。`hostTaskJson` 先在宿主里 `JSON.stringify`、量
+  UTF-8 字节数：超过 32 MB 回 413，不取；不超过就按 4 M 字符一块取回，在 vite 里解析。原因是单次 CDP 消息不宜过大，同探针的
+  `chunk`。按 JSON 的取值规则，`NaN` 变成 null，`-0` 变成 0。
+- **时间线：**
+  - **dt 舍入到 6 位小数。** 同 b3 / b4 / c1；b5v、step4 的 `logDts` 没舍入。在 p4b-refract f907 / f910、s60 f718 / f725、
+    p4c-cp f927 上逐帧核对，进模拟器的 `f32(dt)` 与 drag 系数 `f32(0.025 / dt)` 两种写法全部相同（`ignore/p4/dev4/check-timeline.ts`）。
+  - **非抓帧的 `g_Time` 取日志的累计时间，照计划。** b5v、step4 当时没传 `times`，探针按 dt 累加。两者的 float32：p4b-refract f907
+    逐帧相同，s60 f725 有 2 帧不同，但四角结果仍逐字相同（见下表）。
+  - **平分：**
+    - 一段缺帧的结束时刻 = 后一个已知帧的 `g_Time` 减它的 dt（b3 用的是首个抓帧）；
+    - dt 舍入到 6 位小数（同 b3），`g_Time` 按 dt 累加（同 b4）；
+    - 中间缺的一段也能平分；尾巴缺的一段后面没有已知帧，照样报错；平分出来的时长不是正数时也报错。
+  - **日志与轨迹的解析：**
+    - 日志只认两列都是 6 位小数的 `[kbp]` 条目（现有 40 份日志全是），用来查出被截断的行；帧号重复或倒退报错（文件里有两次运行）。
+    - 轨迹容忍 Python 写出的 `NaN` / `Infinity`：`rd-p4c-sprite-fps60.json` 的 `corners` 里有 `NaN`，直接 `JSON.parse` 会失败。
+  - **`passes` 推断：** 先看轨迹的 `tag`，推不出再看日志文件名（`rd-p4b-colorp-fps60.json` 的 `tag` 是 `p4b-colorp-a-base`）。P4a 的
+    `s15` 这类标签不带 `fps`，推不出就按 1，结果里写明。
+  - **光标：** 只给 `cursor` 时每帧都用它；`cursors` 给了整串时不收 `cursor`。
+  - **`Timeline` 多了几个字段：** `frame`、`gaps`、`cursorsFromTrack`、`tag`、`passes`、`log`、`track`。
+- **只有 `particle_track` 收逐帧光标。** 计划的 `TimelineSource` 带 `cursors`，但探针 `renderFrame` 只有一个固定的 `pointer`，
+  `particleCorners` 固定在场景中心。`render_scene`、`host_render`、`particle_corners` 的时间线里给了 `cursors` / `cursor` 就报 `[local]`，
+  不静默丢掉。
+- **其余 MCP 细节：**
+  - `particle_track` 不收 `userProperties`：探针 `particleTrack` 没有这个参数，用的是工程缺省值。
+  - `particle_track` 没有轨迹时，`frames` 缺省为最后一帧；`frames` 超过时间线回放到的帧时报错。
+  - `particle_corners` 多一个 `wgsl` 选项（REST 本来就有）。三个封装工具都能用 `host` 指定已开的宿主。
+  - `out` 的写法：轨迹是紧凑 JSON，同 `sim-*.json`；四角是 `JSON.stringify(…, null, 1)`，同 step4。
+- **暂存副本放在 `ignore/p4/dev4/stage/`，不在 scratchpad。**
+  - MCP 包的 npm 依赖，以及 `sdk.ts` 里 `@ts-types` 的相对路径，要能解析到仓库的 `node_modules`。暂存根下临时建了一个指向它的
+    junction，用完删了。
+  - vite 的根是 `apps/kabegame`，监听不到 `ignore/`。
+  - 拷回之前，用暂存代码在独立进程里预跑了全部端到端：`createDevRuntime` 起在 127.0.0.1:14200（另开一条 CDP 连接），MCP 也在进程内，
+    不经 vite。
+- **vite 重启了 2 次，计划要求 1 次。**
+  - 一条 `cp` 拷 8 个文件，vite 在拷到一半时就开始重启：新 `rest.ts` 生效了，最后拷的 `backend.ts` 还是旧的，新接口回 500
+    `backend.hostParticleTrack is not a function`。重启进行中的后续改动被合并掉，没有再重启。
+  - `touch backend.ts` 再触发一次，之后一致。这一条写进了 SKILL.md 的 Gotchas。
+- **宿主产物中途换了：**
+  - **开始时是 `index--c4joQgu.js`。** 这是 P4c 步骤 4 验收用的那份：worker 里已经没有步骤 4 删掉的 `particle:flags:world`。
+  - **拷回期间（01:19:38）被另一会话重建为 `index-zvkIAUZN.js`。** 它带着那个会话工作区里没提交的 P4c 步骤 5 改动，四角结果多了一个
+    `drawn` 字段。
+  - **两份产物的结果：** 暂存预跑用旧产物，MCP 端到端用新产物。轨迹在两份产物下逐字节相同；四角的数值全部相同，只多了 `drawn`；
+    渲染摘要相同。
+  - 我没有重建宿主。
+- **node 直调用的源码：** 用 `git archive` 取 HEAD 的快照（`ignore/p4/dev4/head/`），因为工作区里另一会话正改着 `particles/track.ts`
+  等文件。工作区源码也跑了一遍，结果相同。
+
+验收结果（子代理自测）：
+
+| 项 | 结果 |
+|---|---|
+| 单测（带代理环境，不设 `NO_PROXY`） | `scripts/kabegame-dev/` 26 组 105 步、`apps/kabegame-dev-mcp/` 17 组 54 步全过（原来 20 组 83 步、13 组 39 步） |
+| 检查 | `deno check` 通过；Prettier 通过；根 tsc 错误数 867 → 867，本包 0 个；`deno.lock` 没变 |
+| 端到端方式 | 拷回前：暂存代码的 REST（本进程，14200）+ 进程内 MCP。拷回后：SDK `StdioClientTransport` 照 `.mcp.json` 拉起 `main.ts`，带 `HTTP_PROXY`、不设 `NO_PROXY`，共 26 个工具 |
+| `particle_track` p4c-cp（回放 927 帧，输出 924–927） | 21005 字符，和 node 里用同一时间线直调 `particleTrack` 逐字相同：HEAD 快照与工作区源码各跑一遍。927 帧全输出（4.06 MB，43512 个粒子）也逐字相同 |
+| 和 WPE 轨迹比（`ignore/p4/dev4/cmp-wpe.ts`） | 11 个不跟随指针的系统，pos 最大差与 `c1/out/replay-cp.txt` 逐系统相同：7.93e-3 到 1.83e-2，vortex-cp 3.88e-1；其余字段为 0。`ptr-offset` / `ptr-io` / `ptr-xform` 不比，同 c1 |
+| 逐帧光标 | `cursors: "track"`，`cursor` 取抓帧时的 pointer：和 node 逐字相同；ptr-* 与 WPE 的差从 2.12e3 降到 80（光标语义不在本批核对范围） |
+| `render_scene` + `replay`：p4b-refract 回放到 907 帧 | 时间线版、b5v 原参数直给版两种写法：RGBA 摘要都是 `8f144c2f…`，等于 `real-summary.json`；PNG 文件的 sha256 也等于 `b5v/out/ours-p4b-refract-f907.png`；粒子存活数同 `real-summary.json`。新旧两份宿主产物结果相同 |
+| `particle_corners` p4a（参数同 `step4/real.mjs`：720 × 1/60，seed 1，passes 1，limit 64） | 和 `step4/out/ours-p4a-corners.json` 逐位相同，2965 个数值。新产物多一个 `drawn` 字段，数值不变 |
+| `particle_corners` s60 f725（额外一组） | 时间线版与 step4 原参数直给版逐字相同。和 11-07 的记录只差在 `o2-cap-ab` / `o2-cap-ba` 两层：那时 `capvelocity` 是不支持项、模拟器跳过，到 8910c9d1（P4b 步骤 2、3）才实现 |
+| `gap: "split"`：p4b fps10 | 不给 `gap` 时报 `[timeline]`，列出 151–152。给了之后平分 151–152：合计 0.198864 s，每帧 0.099432，和 `b3/out/replay.txt` 一致。passes 从标签推出 2；和 node 逐字相同（124595 字符） |
+| 报错路径（经真 MCP） | `replay` 与 `time` 同时给、渲染 / 四角给了光标 → `[local]`；缺帧 → `[timeline]`；dts 有负数、passes 为 3 → SDK 参数校验拒绝；REST 的 400 带 `field`（curl） |
+| 测试工程 | 导入 p4c-cp、p4b-refract、p4a、p4b、p4-0（14178–14182，导入前库里没有这些行）。移除后行与任务都没了，场景行数 154 → 154，库里没有 `ignore/` 下的行；165 个工程文件的大小与 mtime 摘要前后相同 |
+| 不留痕迹 | `app_state` 前后逐字段相同；最后只剩应用背景的宿主 13531：开始就在，页面重载后 `kbInstance` 变了。拷回后第一次关宿主报「残留宿主 1」，是 vite 重启后主窗口重载、应用背景宿主在那次调用中途重建，被算进去了 |
+
+**没在真环境验的：**
+- 超过 32 MB 回 413、多块取回：只有单测。真环境最大的结果 4.06 MB，不到一块 4 M 字符。
+- `host_render` 带 `replay`：只有单测（`render_scene` 走同一条路径）。
+- `particle_corners` 的 `layer`、`wgsl`：只有单测。
+
+**其它：**
+- vite 任务表里另有 2 个别的会话的任务（c4 的画面哈希，导入 p4c-trail / p4c-sprite），不是本批的。
+- `versions/latest` 的 changelog / regression 没加：本批只改上面列出的文件，dev 工具也不进发布包。
+- 一次性脚本与输出在 `ignore/p4/dev4/`：
+  - `check-timeline.ts`、`cmp-wpe.ts`、`cmp-corners.ts`；
+  - node 直调的 `track-node.test.ts` 与 `vitest.config.ts`；
+  - 端到端的 `e2e.ts`（暂存副本删了以后，只有 `mcp` 模式能跑）；
+  - 结果在 `out/`。
+
+Claude 独立验收（不采信自报；照 `.mcp.json` 另起 stdio MCP，带 `HTTP_PROXY`、不设 `NO_PROXY`；脚本在 `ignore/p4/dev4/claude/`）：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 本批只有 `scripts/kabegame-dev/`、`apps/kabegame-dev-mcp/`、`SKILL.md` 与本计划；`apps/wpe-scene/` 与 `phase-4c-controlpoints.md` 的改动是另一会话的 P4c 步骤 5 |
+| 单测、检查 | 两个包自跑全过（26 组 105 步、17 组 54 步）；`deno check`（含 `main.ts` 与 `scripts/kabegame-dev/*.ts`）、Prettier 通过 |
+| 时间线（Python 另写一遍规则，`check_timeline.py`，和 `timeline.ts` 的输出比） | `p4c-cp` 927 帧、`p4b-refract` 907 帧、`p4b-fps10`（`gap: "split"`）158 帧：dt 与 `g_Time` 按 float32 逐帧相同；平分的帧都是 151、152；`cursors: "track"` 相同；`passes` 推出 1、1、2 |
+| `render_scene` + `replay`（`p4b-refract` 到 907 帧） | RGBA 摘要 `8f144c2f…` 等于 `b5v/out/real-summary.json`；宿主产物 `index-zvkIAUZN.js`（含另一会话未提交的步骤 5 改动） |
+| `particle_track`（`p4c-cp` 到 927 帧） | 4 帧 × 14 个系统写进 `out`；11 个不跟随指针的系统和 WPE 轨迹的最大差与 `c1/out/replay-cp.txt` 逐系统相同（`cp-io-pos` 8.06e-3，`vortex-cp` 0.388） |
+| 参数护栏 | `inline: false` 不给 `save` 时报 `[local]`，没开宿主 |
+| 不留痕迹 | 导入的 2 个工程（两轮各一次）都已 `projects_remove`，`verified.imagesGone` / `tasksGone` 为真；`app_state` 前后逐字相同，只剩应用背景宿主 13531 |

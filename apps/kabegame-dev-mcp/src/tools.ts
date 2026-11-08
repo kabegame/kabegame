@@ -2,8 +2,10 @@
  * kabegame-dev MCP 的工具，分三类：
  * - 探活 `status`：两层，vite 在不在；经 vite 问 CDP 在不在；
  * - vite 能力的一对一工具：`targets`、`eval`、`screenshot`……（只经 `client.ts` 调 REST，不另发请求）；
- * - 封装好的工具：`render_scene`、`hash_baseline`、`projects_import`（几次 REST 拼成一步，长任务等完成并报 MCP 进度），
- *   以及不需要 vite 的 `hash_compare`、`app_log`。
+ * - 封装好的工具：`render_scene`、`particle_track`、`particle_corners`、`hash_baseline`、`projects_import`（几次 REST 拼成
+ *   一步，长任务等完成并报 MCP 进度），以及不需要 vite 的 `hash_compare`、`app_log`。
+ * - 粒子回放（第 4 批）：WPE 的一次抓帧（日志 + RenderDoc 轨迹）在 MCP 里经 `timeline.ts` 组成探针要的 `dts` / `times` /
+ *   逐帧光标，工具只收文件路径与回放到的帧号。
  *
  * 工具表是静态的：vite 不在时照常列出，调用时回 `isError` 并写明是哪一层不在（文本以 `[层]` 开头）。
  * 参数里的相对路径一律按仓库根解析。图片类工具的落盘与缩小见 `imageOutput.ts`。
@@ -28,8 +30,13 @@ import type {
   JobRecord,
   KabegameDevClient,
   OpenImagePreviewResult,
+  ParticleCornersLayer,
+  ParticleReplay,
+  ParticleTrackRequest,
+  ParticleTrackResult,
   PreviewInfo,
   ProjectManifest,
+  RenderMeta,
   RenderResponse,
   ShowWindowResult,
   WindowFrontState,
@@ -39,6 +46,8 @@ import type { ImageOutputOptions } from "./imageOutput.ts";
 import { LEVELS, formatMark, markNow, parseMark, readSince, readTail } from "./appLog.ts";
 import { compareBaselines, formatCompare, loadBaseline } from "./hashCompare.ts";
 import { formatStatus, probeStatus } from "./status.ts";
+import { TimelineError, buildTimeline, describeTimeline, frameRanges } from "./timeline.ts";
+import type { Timeline, TimelineSource } from "./timeline.ts";
 
 export type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
@@ -78,6 +87,7 @@ const LAYER_TITLES: Record<string, string> = {
   platform: "当前平台不支持",
   png: "PNG 格式不支持缩小",
   job: "任务没有成功结束",
+  timeline: "时间线（WPE 日志 / RenderDoc 轨迹）",
   local: "MCP 本地（参数 / 文件）",
 };
 
@@ -260,16 +270,242 @@ const IMAGE_ID = z
   .union([z.string().regex(/^\d+$/), z.number().int().nonnegative()])
   .transform(String)
   .describe("图片 id");
+const POINT = z.tuple([z.number(), z.number()]);
+const PASSES = z.union([z.literal(1), z.literal(2)]);
+const SEED = z.number().int().describe("随机种子，第 i 个粒子层用 seed + i；缺省 1");
+const RANDOM = z
+  .record(z.string().regex(/^\d+$/), z.array(z.number().min(0).lt(1)))
+  .describe(
+    "{ <objects 下标>: [R, …] }：按出生顺序顶替这个系统抽到的 R（[0, 1)），用完退回种子随机数。randomframe 系统和 WPE 比像素时填轨迹里的 frame",
+  );
+const TIMELINE = z
+  .object({
+    log: z
+      .string()
+      .min(1)
+      .describe("WPE 日志（ignore/p4/out/<标签>-log.txt，相对路径按仓库根），只读「[kbp] 帧号,帧时间,累计时间」条目"),
+    track: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "RenderDoc 轨迹（ignore/p4/tracks/rd-<标签>.json）：抓到的帧的 dt、g_Time、pointer 取它的 float32 原值",
+      ),
+    frame: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("回放到这一帧（WPE 脚本帧号，从 1 起），即读回的那一帧；缺省为轨迹里最后一帧"),
+    gap: z
+      .enum(["error", "split"])
+      .optional()
+      .describe(
+        '日志与轨迹都没有的帧（fps 低时日志每 50 帧才刷一次，尾巴会缺）：缺省报错并列出；"split" 按后一个已知帧的 g_Time 平分，结果里写明哪些帧是平分的',
+      ),
+    cursors: z
+      .union([z.literal("track"), z.array(POINT)])
+      .optional()
+      .describe(
+        '逐帧光标（只有 particle_track 收）："track" 抓到的帧取轨迹的 pointer、其余取 cursor；或直接给整串（长度 = frame）。' +
+          "光标是「光标下的场景纹理坐标」：抓帧窗口和场景同尺寸时等于 g_PointerPosition，不同尺寸时自己换算",
+      ),
+    cursor: POINT.optional().describe(
+      "cursors 为 track 时其余帧的光标，缺省场景中心 [0.5, 0.5]；不给 cursors 时每帧都用它",
+    ),
+  })
+  .strict()
+  .describe(
+    "按 WPE 日志与 RenderDoc 轨迹组时间线：第 f 帧 dt = 日志累计时间第 f 项减第 f − 1 项（6 位小数），g_Time 取日志累计时间；抓到的帧换成轨迹的 dt 与 g_Time",
+  );
+const REPLAY = z
+  .union([
+    z
+      .object({
+        timeline: TIMELINE,
+        seed: SEED.optional(),
+        passes: PASSES.optional().describe(
+          "operator 遍数；缺省按标签里的 fps<N> 推（1–20 两遍，否则一遍），推不出就 1",
+        ),
+        random: RANDOM.optional(),
+      })
+      .strict(),
+    z
+      .object({
+        particles: z
+          .object({
+            dts: z
+              .array(z.number().positive())
+              .min(1)
+              .describe("每帧 g_Frametime，dts[0] 是第 1 帧，最后一帧是读回的那一帧"),
+            times: z.array(z.number()).optional().describe("每帧 g_Time，和 dts 等长；不给时按 dts 累加"),
+            seed: SEED.optional(),
+            passes: PASSES.optional().describe("缺省 1"),
+            random: RANDOM.optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+  ])
+  .describe(
+    "确定性粒子回放：{ timeline, seed?, passes?, random? }（按 WPE 的一次抓帧组时间线，常用），或 { particles: { dts, times?, seed?, passes?, random? } }（直接给探针）。" +
+      "给了就不收 time：读回那一帧的 g_Time 取时间线（或 times）的末项",
+  );
 const RENDER_FIELDS = {
-  time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）"),
+  time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）；给了 replay 时不收"),
   postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
   userProperties: z.record(z.unknown()).optional().describe("用户属性；缺省取库里这张图当前的用户属性"),
-  pointer: z.tuple([z.number(), z.number()]).optional().describe("指针位置（场景坐标）"),
+  pointer: POINT.optional().describe(
+    "g_PointerPosition（窗口归一化坐标），也作控制点跟随指针的光标，预热、回放的每一帧和读回那一帧都用它；缺省 [0.5, 0.5]",
+  ),
+  replay: REPLAY.optional(),
 };
 const OUT = z.string().describe("结果写到这个文件（相对路径按仓库根）");
 const OVERWRITE = z.boolean().default(false).describe("out 已存在时是否覆盖，缺省拒绝");
 
 const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
+
+// ---------------------------------------------------------------- 粒子回放（第 4 批）
+
+type ReplayArg = z.infer<typeof REPLAY>;
+type TimelineArg = z.infer<typeof TIMELINE>;
+
+/** 时间线：读文件、组 dts / times / 光标；出错报 `[timeline]`。 */
+export function timelineFor(root: string, source: TimelineArg): Timeline {
+  try {
+    return buildTimeline(source as TimelineSource, { root });
+  } catch (error) {
+    if (error instanceof TimelineError) throw new ToolError("timeline", error.message);
+    throw error;
+  }
+}
+
+/** operator 遍数：参数给的优先，其次标签里的 fps<N>，都没有就 1。回遍数与说明。 */
+export function passesFor(given: 1 | 2 | undefined, timeline: Timeline | null): { passes: 1 | 2; line: string } {
+  if (given !== undefined) return { passes: given, line: `passes ${given}（参数给的）` };
+  if (timeline?.passes) {
+    const { passes, tag, fps } = timeline.passes;
+    return { passes, line: `passes ${passes}（标签 ${tag} 的 fps${fps}：1–20 两遍，否则一遍）` };
+  }
+  return {
+    passes: 1,
+    line: `passes 1（标签 ${timeline?.tag ?? "无"} 里推不出 fps，按 1 遍；fps 1–20 的抓帧要传 passes: 2）`,
+  };
+}
+
+/**
+ * 渲染与四角的回放参数 → 探针的 `particles`。这两个探针接口只有一个固定的光标（渲染是 `pointer`，四角固定在场景中心），
+ * 时间线里给了逐帧光标就报错，不静默丢掉。
+ */
+export function resolveReplay(
+  root: string,
+  replay: ReplayArg,
+  tool: string,
+): { particles: ParticleReplay; timeline: Timeline | null; lines: string[] } {
+  if ("particles" in replay) {
+    const p = replay.particles;
+    return {
+      particles: p,
+      timeline: null,
+      lines: [
+        `回放：直接给的 ${p.dts.length} 帧 dt${p.times ? "（带 times）" : "（g_Time 按 dt 累加）"}；seed ${p.seed ?? 1}；passes ${p.passes ?? 1}` +
+          (p.random ? `；random 顶替 ${Object.keys(p.random).join("、")} 号对象的 R` : ""),
+      ],
+    };
+  }
+  const source = replay.timeline;
+  if (source.cursors !== undefined || source.cursor !== undefined) {
+    throw new ToolError(
+      "local",
+      `${tool} 不收逐帧光标：探针${tool === "particle_corners" ? " particleCorners 的光标固定在场景中心" : " renderFrame 只有一个固定的 pointer（预热、回放的每一帧和读回那一帧都用它），要固定光标用 pointer"}；逐帧光标只有 particle_track 收`,
+    );
+  }
+  const timeline = timelineFor(root, source);
+  const passes = passesFor(replay.passes, timeline);
+  const particles: ParticleReplay = {
+    dts: timeline.dts,
+    times: timeline.times,
+    passes: passes.passes,
+    ...(replay.seed !== undefined ? { seed: replay.seed } : {}),
+    ...(replay.random ? { random: replay.random } : {}),
+  };
+  return {
+    particles,
+    timeline,
+    lines: [
+      describeTimeline(timeline),
+      `${passes.line}；seed ${replay.seed ?? 1}${replay.random ? `；random 顶替 ${Object.keys(replay.random).join("、")} 号对象的 R` : ""}`,
+    ],
+  };
+}
+
+const num = (value: number) => String(Number(value.toFixed(3)));
+
+/** 一帧里每个系统的粒子数与位置范围。 */
+function systemLines(systems: ParticleTrackResult["frames"][number]["systems"]): string[] {
+  return Object.entries(systems).map(([name, particles]) => {
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (const p of particles) {
+      for (let axis = 0; axis < 3; axis++) {
+        const v = p.pos?.[axis];
+        if (typeof v !== "number") continue;
+        if (v < min[axis]) min[axis] = v;
+        if (v > max[axis]) max[axis] = v;
+      }
+    }
+    const range = ["x", "y", "z"]
+      .map((axis, i) => (min[i] === max[i] ? `${axis} ${num(min[i])}` : `${axis} [${num(min[i])}, ${num(max[i])}]`))
+      .join(" ");
+    return `  ${name}：${particles.length} 个，${particles.length ? range : "（空）"}`;
+  });
+}
+
+/** 轨迹摘要：每帧每系统的粒子数与位置范围；帧多时只列头尾各 4 帧。 */
+export function summarizeTrack(result: ParticleTrackResult, maxFrames = 8): string[] {
+  const frames = result.frames;
+  const shown =
+    frames.length <= maxFrames ? frames : [...frames.slice(0, maxFrames / 2), ...frames.slice(-maxFrames / 2)];
+  const lines: string[] = [];
+  shown.forEach((frame, i) => {
+    if (frames.length > maxFrames && i === maxFrames / 2) lines.push(`…（省略 ${frames.length - maxFrames} 帧）`);
+    const names = Object.keys(frame.systems);
+    const total = names.reduce((n, name) => n + frame.systems[name].length, 0);
+    lines.push(`第 ${frame.frame} 帧（dt ${frame.dt}）：${names.length} 个系统有粒子，共 ${total} 个`);
+    lines.push(...systemLines(frame.systems));
+  });
+  const skipped = Object.entries(result.skipped ?? {});
+  lines.push(
+    skipped.length
+      ? `模拟器跳过的模块（表外）：${skipped.map(([name, modules]) => `${name}: ${modules.join(", ")}`).join("；")}`
+      : "模拟器没有跳过的模块",
+  );
+  return lines;
+}
+
+/** 四角摘要：每层粒子数，前 3 个粒子的四个像素角。 */
+export function summarizeCorners(layers: ParticleCornersLayer[]): string[] {
+  const lines: string[] = [];
+  for (const layer of layers) {
+    lines.push(
+      `层 ${layer.object} ${layer.name}（${layer.perspective ? "透视" : "正交"}）：存活 ${layer.count} 个，取了 ${layer.corners.length} 个`,
+    );
+    layer.pixels.slice(0, 3).forEach((quad, i) => {
+      lines.push(`  #${i} 像素角 ${quad.map(([x, y]) => `(${num(x)}, ${num(y)})`).join(" ")}`);
+    });
+  }
+  if (!layers.length) lines.push("没有粒子层（或 layer 没匹配上）");
+  if (layers[0])
+    lines.push(`角的顺序（uv）：${layers[0].uv.map(([u, v]) => `(${u},${v})`).join(" ")}；像素坐标原点左上、y 向下`);
+  return lines;
+}
+
+/** 渲染元数据里的粒子数（探针 `particleStats`）。 */
+function particleStatsLine(meta: RenderMeta): string | null {
+  const stats = meta.particles as Array<{ name?: string; alive?: number }> | undefined;
+  if (!Array.isArray(stats) || !stats.length) return null;
+  return `粒子层存活数：${stats.map((s) => `${s.name ?? "?"} ${s.alive ?? "?"}`).join("，")}`;
+}
 
 type Shape = z.ZodRawShape;
 type Args<S extends Shape> = z.infer<z.ZodObject<S>>;
@@ -591,16 +827,65 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       save: options.save,
       size: options.size,
       inline: options.inline,
-      lead: [...lead, `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`],
+      lead: [
+        ...lead,
+        `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
+        `读回那一帧 g_Time ${response.meta.time}，g_Frametime ${response.meta.frametime}`,
+        particleStatsLine(response.meta) ?? "",
+      ].filter(Boolean),
       tail: [JSON.stringify(response.meta, null, 2)],
     });
+
+  /** 渲染参数：`replay` 与 `time` 互斥；`replay` 换成探针的 `particles`，并回时间线说明。 */
+  const renderBody = (tool: string, imageId: string, render: Args<typeof RENDER_FIELDS>) => {
+    const { replay, ...rest } = render;
+    if (!replay) return { body: { imageId, ...rest }, lines: [] as string[] };
+    if (rest.time !== undefined) {
+      throw new ToolError(
+        "local",
+        "replay 与 time 不能同时给：回放时读回那一帧的 g_Time 取时间线（或 particles.times）的末项，没给 times 时是 dt 累计值",
+      );
+    }
+    const resolved = resolveReplay(root, replay, tool);
+    return { body: { imageId, ...rest, particles: resolved.particles }, lines: resolved.lines };
+  };
+
+  /** 给图片 id 开一个屏外宿主（kbScene 为这张图）跑 `run`、关掉；给了 `host` 时用已开的、不开也不关。 */
+  async function withSceneHost<T>(
+    imageId: string,
+    host: string | undefined,
+    run: (handle: string) => Promise<T>,
+  ): Promise<{ value: T; hostLine: string }> {
+    const started = Date.now();
+    const opened = host ? null : await client.hostOpen({ hidden: true, scene: imageId });
+    const handle = host ?? opened!.handle;
+    let value: T;
+    let closed: string;
+    try {
+      value = await run(handle);
+    } finally {
+      if (opened) {
+        closed = await client.hostClose(handle).then(
+          (r) => `已关宿主 ${handle}，残留宿主 ${r.previewHostsLeft}`,
+          (error) => `关宿主 ${handle} 失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      } else {
+        closed = `用的是已开的宿主 ${handle}，没有关`;
+      }
+    }
+    return {
+      value: value!,
+      hostLine: `宿主产物 ${opened?.entry ?? "（已开的宿主）"}；${closed!}；用时 ${seconds(started)}`,
+    };
+  }
 
   tool(
     "host_render",
     {
       title: "宿主里渲染一帧",
       description:
-        "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。",
+        "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
+        "replay 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回。",
       inputSchema: {
         handle: z.string().min(1),
         imageId: IMAGE_ID,
@@ -612,8 +897,9 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ handle, imageId, save, size, inline, ...render }) => {
-      const response = await client.hostRender(handle, { imageId, ...render });
-      return renderResult(response, { tool: "host_render", imageId, save, size, inline });
+      const { body, lines } = renderBody("host_render", imageId, render);
+      const response = await client.hostRender(handle, body);
+      return renderResult(response, { tool: "host_render", imageId, save, size, inline }, lines);
     },
   );
 
@@ -695,7 +981,9 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：给图片 id，自己开一个屏外宿主（kbScene 为这张图）、渲染一帧、关掉宿主，回图片与元数据。不碰用户的预览。" +
         "给 host 时改用已开的宿主、不开也不关。宿主产物要用 --mode development 构建（要有 dev 探针）。" +
-        "屏外宿主不跑帧循环：画的是固定时刻的一帧，粒子是预热后的状态、不步进（starttime 为 0 的系统是空的）；看实时行为用 open_image_preview。",
+        "屏外宿主不跑帧循环：不给 replay 时画的是固定时刻的一帧，粒子是预热后的状态、不步进（starttime 为 0 的系统是空的）；看实时行为用 open_image_preview。" +
+        "给 replay 时按 WPE 的 dt 序列确定性回放粒子（种子固定），再读回最后一帧，用来和 WPE 抓帧逐像素比；时间线用 { timeline: { log, track, frame } } 从 WPE 日志与 RenderDoc 轨迹组，" +
+        "passes 缺省按标签里的 fps<N> 推。回放不收逐帧光标（探针只有一个固定的 pointer）。工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,
         ...RENDER_FIELDS,
@@ -707,26 +995,134 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ imageId, host, save, size, inline, ...render }) => {
-      const started = Date.now();
-      const opened = host ? null : await client.hostOpen({ hidden: true, scene: imageId });
-      const handle = host ?? opened!.handle;
-      let response: RenderResponse;
-      let closed: string;
-      try {
-        response = await client.hostRender(handle, { imageId, ...render });
-      } finally {
-        if (opened) {
-          closed = await client.hostClose(handle).then(
-            (r) => `已关宿主 ${handle}，残留宿主 ${r.previewHostsLeft}`,
-            (error) => `关宿主 ${handle} 失败：${error instanceof Error ? error.message : String(error)}`,
-          );
-        } else {
-          closed = `用的是已开的宿主 ${handle}，没有关`;
-        }
+      const { body, lines } = renderBody("render_scene", imageId, render);
+      const { value: response, hostLine } = await withSceneHost(imageId, host, (handle) =>
+        client.hostRender(handle, body),
+      );
+      return renderResult(response, { tool: "render_scene", imageId, save, size, inline }, [hostLine, ...lines]);
+    },
+  );
+
+  tool(
+    "particle_track",
+    {
+      title: "粒子轨迹",
+      description:
+        "桌面：按 WPE 的一次抓帧回放粒子模拟器（dev 探针 particleTrack：编译场景、不碰 GPU，种子固定），在 frames 输出和 RenderDoc 轨迹" +
+        "（ignore/p4/tracks/rd-*.json）同格式的轨迹，写到 out（可直接交给 ignore/p4 的比较脚本，例如 cmp_track.py；工具不做比较）。" +
+        "时间线从 WPE 日志与轨迹组（timeline: { log, track, frame?, gap?, cursors?, cursor? }）；frames 缺省为轨迹里抓到的帧；passes 缺省按标签里的 fps<N> 推。" +
+        "自己开屏外宿主、跑、关掉（同 render_scene），给 host 时用已开的。回到会话的只有摘要：每帧每系统的粒子数、位置范围，以及时间线信息。" +
+        "场景的用户属性取工程缺省值（探针不收 userProperties）。结果超过 32 MB 报 413，减少 frames。",
+      inputSchema: {
+        imageId: IMAGE_ID,
+        timeline: TIMELINE,
+        frames: z
+          .array(z.number().int().positive())
+          .min(1)
+          .optional()
+          .describe("要输出的帧号（不超过 timeline 回放到的帧）；缺省为轨迹里抓到的帧，没有轨迹时是最后一帧"),
+        passes: PASSES.optional().describe(
+          "operator 遍数；缺省按标签里的 fps<N> 推（1–20 两遍，否则一遍），推不出就 1",
+        ),
+        seed: SEED.optional(),
+        random: RANDOM.optional(),
+        host: z.string().optional().describe("用已开的宿主句柄"),
+        out: OUT,
+        overwrite: OVERWRITE,
+      },
+    },
+    async ({ imageId, timeline: source, frames, passes, seed, random, host, out, overwrite }) => {
+      const abs = resolvePath(root, out);
+      if (!overwrite && existsSync(abs)) throw new ToolError("local", `${abs} 已存在：换个路径，或传 overwrite: true`);
+      const timeline = timelineFor(root, source);
+      const wanted = frames ?? (timeline.captured.length ? timeline.captured : [timeline.frame]);
+      const beyond = wanted.filter((f) => f > timeline.frame);
+      if (beyond.length) {
+        throw new ToolError(
+          "local",
+          `frames 里的第 ${frameRanges([...new Set(beyond)].sort((a, b) => a - b))} 帧超过时间线回放到的第 ${timeline.frame} 帧：把 timeline.frame 调大`,
+        );
       }
-      return renderResult(response, { tool: "render_scene", imageId, save, size, inline }, [
-        `宿主产物 ${opened?.entry ?? "（已开的宿主）"}；${closed!}；用时 ${seconds(started)}`,
-      ]);
+      const resolvedPasses = passesFor(passes, timeline);
+      const request: ParticleTrackRequest = {
+        imageId,
+        dts: timeline.dts,
+        times: timeline.times,
+        frames: wanted,
+        passes: resolvedPasses.passes,
+        ...(seed !== undefined ? { seed } : {}),
+        ...(random ? { random } : {}),
+        ...(timeline.cursors ? { cursors: timeline.cursors } : {}),
+        ...(timeline.tag ? { tag: timeline.tag } : {}),
+      };
+      const { value: result, hostLine } = await withSceneHost(imageId, host, (handle) =>
+        client.hostParticleTrack(handle, request),
+      );
+      const text = `${JSON.stringify(result)}\n`;
+      const file = writeOut(root, out, text, overwrite);
+      const systems = new Set(result.frames.flatMap((f) => Object.keys(f.systems)));
+      return textResult(
+        `轨迹：${result.project}（图片 ${imageId}，标签 ${result.tag || "无"}），${result.frames.length} 帧（${frameRanges(result.frames.map((f) => f.frame))}）× ${systems.size} 个系统`,
+        `已写入：${file}（${Buffer.byteLength(text)} 字节）`,
+        describeTimeline(timeline),
+        `${resolvedPasses.line}；seed ${seed ?? 1}${random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""}`,
+        hostLine,
+        "",
+        ...summarizeTrack(result),
+      );
+    },
+  );
+
+  tool(
+    "particle_corners",
+    {
+      title: "粒子四角",
+      description:
+        "桌面：读每个粒子四角的裁剪坐标与场景像素坐标（dev 探针 particleCorners：把粒子顶点着色器改成计算着色器、用这一帧的 uniform 跑一遍），" +
+        "和 WPE 几何着色器的 gs_out 比。replay 同 render_scene（不给时是预热后的状态）；光标固定在场景中心。结果（每层每粒子的 corners、pixels、particles）写到 out，" +
+        "回到会话的是摘要：每层粒子数、前 3 个粒子的四个像素角。自己开屏外宿主、跑、关掉，给 host 时用已开的。结果超过 32 MB 报 413，用 limit 收小。",
+      inputSchema: {
+        imageId: IMAGE_ID,
+        replay: REPLAY.optional(),
+        layer: z
+          .union([z.number().int().nonnegative(), z.string().min(1)])
+          .optional()
+          .describe("粒子层：objects 下标或对象名；缺省全部粒子层"),
+        limit: z.number().int().nonnegative().optional().describe("每层只取前这么多个粒子（按槽序）；缺省全部"),
+        postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
+        userProperties: z.record(z.unknown()).optional().describe("用户属性；缺省取库里这张图当前的用户属性"),
+        wgsl: z.boolean().optional().describe("结果里带上改写后的计算着色器 WGSL（排查用）"),
+        host: z.string().optional().describe("用已开的宿主句柄"),
+        out: OUT,
+        overwrite: OVERWRITE,
+      },
+    },
+    async ({ imageId, replay, layer, limit, postprocess, userProperties, wgsl, host, out, overwrite }) => {
+      const abs = resolvePath(root, out);
+      if (!overwrite && existsSync(abs)) throw new ToolError("local", `${abs} 已存在：换个路径，或传 overwrite: true`);
+      const resolved = replay ? resolveReplay(root, replay, "particle_corners") : null;
+      const request = {
+        imageId,
+        ...(resolved ? { particles: resolved.particles } : {}),
+        ...(layer !== undefined ? { layer } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+        ...(postprocess ? { postprocess } : {}),
+        ...(userProperties ? { userProperties } : {}),
+        ...(wgsl ? { wgsl } : {}),
+      };
+      const { value: layers, hostLine } = await withSceneHost(imageId, host, (handle) =>
+        client.hostParticleCorners(handle, request),
+      );
+      const text = `${JSON.stringify(layers, null, 1)}\n`;
+      const file = writeOut(root, out, text, overwrite);
+      return textResult(
+        `四角：图片 ${imageId}，${layers.length} 个粒子层`,
+        `已写入：${file}（${Buffer.byteLength(text)} 字节）`,
+        ...(resolved ? resolved.lines : ["没有回放：预热后的状态（不步进）"]),
+        hostLine,
+        "",
+        ...summarizeCorners(layers),
+      );
     },
   );
 

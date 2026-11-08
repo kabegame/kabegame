@@ -13,7 +13,17 @@ import { click, evaluate, listTargets, readConsole, screenshot, startConsole, st
 import type { DevPaths } from "./paths.ts";
 import { createRestHandler } from "./rest.ts";
 import type { DevBackend } from "./rest.ts";
-import { closeAllHosts, closeHost, hostEval, hostTask, openHost, renderFrame, sceneHosts } from "./scene.ts";
+import {
+  closeAllHosts,
+  closeHost,
+  hostEval,
+  hostTask,
+  openHost,
+  particleCorners,
+  particleTrack,
+  renderFrame,
+  sceneHosts,
+} from "./scene.ts";
 import { DevSession } from "./session.ts";
 import type { EndpointResult, HashBaselineParams, HostTaskParams, ProjectsImportParams } from "./types.ts";
 
@@ -75,6 +85,14 @@ export function createBackend({ session: s, jobs, probe, exec }: BackendOptions)
     async hostRender(handle, request) {
       desktopOnly("场景宿主");
       return renderFrame(s, handle, request);
+    },
+    async hostParticleTrack(handle, request) {
+      desktopOnly("场景宿主");
+      return particleTrack(s, handle, request);
+    },
+    async hostParticleCorners(handle, request) {
+      desktopOnly("场景宿主");
+      return particleCorners(s, handle, request);
     },
     async projectsRemove(manifest, allowPrefix) {
       desktopOnly("测试工程");

@@ -62,6 +62,8 @@ function fakeBackend(overrides: Partial<DevBackend> = {}): { backend: DevBackend
     hostClose: record("hostClose", {} as never),
     hostEval: record("hostEval", { value: 1, type: "number" }),
     hostRender: record("hostRender", {} as never),
+    hostParticleTrack: record("hostParticleTrack", { source: "sim", project: "p", tag: "", frames: [], skipped: {} }),
+    hostParticleCorners: record("hostParticleCorners", []),
     projectsRemove: record("projectsRemove", {} as never),
     jobStart: record("jobStart", {} as never),
     jobList: record("jobList", []),
@@ -414,6 +416,98 @@ describe("resize", () => {
         ["hostRender", "h-1", { imageId: "9" }],
         ["hostRender", "h-1", { imageId: "9" }],
       ]);
+    });
+  });
+});
+
+describe("粒子回放、轨迹与四角", () => {
+  test("render 带 particles 原样转给后端；particles 不合法或同时给 time 回 400，field 指到那一项", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const particles = { dts: [0.1, 0.2], times: [0.1, 0.3], seed: 1, passes: 2, random: { "3": [0.5] } };
+      const ok = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: "14108", particles });
+      assert.equal(ok.status, 200);
+      await ok.body?.cancel();
+      assert.deepEqual(calls, [["hostRender", "h-1", { imageId: "14108", particles }]]);
+      for (const [body, field] of [
+        [{ imageId: "1", particles: { dts: [0.1, 0] } }, "particles.dts[1]"],
+        [{ imageId: "1", particles: { dts: [0.1], passes: 3 } }, "particles.passes"],
+        [{ imageId: "1", particles: { dts: [0.1], cursors: [[0.5, 0.5]] } }, "particles.cursors"],
+        [{ imageId: "1", particles: { dts: [0.1] }, time: 1.5 }, "time"],
+      ] as const) {
+        const res = await post(`${base}/__kabegame_dev/hosts/h-1/render`, body);
+        assert.equal(res.status, 400, JSON.stringify(body));
+        const error = await res.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field);
+        assert.ok(error.error.startsWith(`${field} `), error.error);
+      }
+      assert.equal(calls.length, 1, "参数错时不调后端");
+    });
+  });
+
+  test("particle-track：校验后转给后端（imageId 转字符串），400 的形状", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const body = {
+        imageId: 14176,
+        dts: [0.1, 0.1],
+        frames: [2],
+        passes: 1,
+        cursors: [
+          [0.5, 0.5],
+          [1, 1],
+        ],
+      };
+      const res = await post(`${base}/__kabegame_dev/hosts/h-1/particle-track`, body);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { source: "sim", project: "p", tag: "", frames: [], skipped: {} });
+      assert.deepEqual(calls, [["hostParticleTrack", "h-1", { ...body, imageId: "14176" }]]);
+      for (const [bad, field] of [
+        [{ ...body, frames: [3] }, "frames[0]"],
+        [{ ...body, passes: undefined }, "passes"],
+        [{ ...body, cursors: [[0.5, 0.5]] }, "cursors"],
+        [{ ...body, imageId: "x" }, "imageId"],
+        [{ ...body, extra: 1 }, "extra"],
+      ] as const) {
+        const r = await post(`${base}/__kabegame_dev/hosts/h-1/particle-track`, bad);
+        assert.equal(r.status, 400, JSON.stringify(bad));
+        const error = await r.json();
+        assert.deepEqual(Object.keys(error).sort(), ["error", "field", "layer"]);
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field);
+      }
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  test("particle-corners：校验后转给后端；413、404 原样带出", async () => {
+    const { backend, calls } = fakeBackend({
+      hostParticleCorners: async (handle, request) => {
+        calls.push(["hostParticleCorners", handle, request]);
+        if (handle === "h-big") throw new DevError(413, "host", "粒子四角有 40000000 字节，超过上限", { bytes: 4e7 });
+        if (handle === "h-gone") throw staleHandle("宿主句柄", handle);
+        return [];
+      },
+    });
+    await withServer(backend, async (base) => {
+      const body = { imageId: "13815", particles: { dts: [1 / 60] }, layer: "persp", limit: 64 };
+      const res = await post(`${base}/__kabegame_dev/hosts/h-1/particle-corners`, body);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), []);
+      assert.deepEqual(calls, [["hostParticleCorners", "h-1", body]]);
+      const bad = await post(`${base}/__kabegame_dev/hosts/h-1/particle-corners`, { ...body, limit: -1 });
+      assert.equal(bad.status, 400);
+      assert.equal((await bad.json()).field, "limit");
+      const big = await post(`${base}/__kabegame_dev/hosts/h-big/particle-corners`, body);
+      assert.equal(big.status, 413);
+      assert.deepEqual(await big.json(), { error: "粒子四角有 40000000 字节，超过上限", layer: "host", bytes: 4e7 });
+      const gone = await post(`${base}/__kabegame_dev/hosts/h-gone/particle-corners`, body);
+      assert.equal(gone.status, 404);
+      assert.equal((await gone.json()).layer, "handle");
+      const method = await localFetch(`${base}/__kabegame_dev/hosts/h-1/particle-corners`);
+      assert.equal(method.status, 405);
+      await method.body?.cancel();
     });
   });
 });

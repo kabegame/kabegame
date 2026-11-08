@@ -44,7 +44,7 @@ export interface ErrorBody {
    * 出错的层：`rest`（路由 / 参数）、`access`（来源校验）、`cdp`（连不上 CDP，带 `endpoint`）、`target`（找不到目标）、
    * `page`（页面里抛错 / 找不到元素）、`app`（应用命令拒绝）、`host`（场景宿主）、`guard`（测试工程护栏）、
    * `platform`（平台不支持）、`handle`（句柄 / 任务 / 控制台流不存在，多半是 vite 重启过）、`png`（要 `resize` 但 PNG 格式
-   * 不支持缩小）、`vite`（插件内部错误）。
+   * 不支持缩小）、`vite`（插件内部错误）。参数错的 400 带 `field`（哪一项，例如 `particles.dts[3]`）。
    */
   layer: string;
   [key: string]: unknown;
@@ -339,15 +339,114 @@ export interface HostEvalRequest {
 
 export type ScenePostprocess = "disabled" | "enabled" | "ultra" | "follow";
 
+/**
+ * dev 探针的确定性粒子回放（`apps/wpe-scene/src/dev/particleCorners.ts` 的 `ParticleReplay`，`renderFrame` /
+ * `particleCorners` 的 `particles`）：建场景（含预热）后按 `dts` 步进，最后一帧就是读回的那一帧。
+ */
+export interface ParticleReplay {
+  /** 每帧的 `g_Frametime`（秒，有限正数），`dts[0]` 是第 1 帧（对齐 WPE 脚本帧号）。 */
+  dts: number[];
+  /** 每帧的 `g_Time`，和 `dts` 等长；不给时按 `dts` 累加。 */
+  times?: number[];
+  /** 随机种子（整数），第 i 个粒子层用 `seed + i`；缺省 1。 */
+  seed?: number;
+  /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍；缺省 1。 */
+  passes?: 1 | 2;
+  /** `{ <objects 下标>: [R, …] }`，按出生顺序顶替该系统抽到的 `R`（[0, 1)），用完退回种子随机数。 */
+  random?: Record<string, number[]>;
+}
+
 export interface RenderRequest {
   imageId: string;
-  /** `g_Time`（秒），缺省 1.5（同画面哈希基线）。 */
+  /** `g_Time`（秒），缺省 1.5（同画面哈希基线）。给了 `particles` 时不收（读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计）。 */
   time?: number;
   /** 场景后处理档位，缺省 `disabled`（同探针）。 */
   postprocess?: ScenePostprocess;
   /** 缺省取库里这张图当前的用户属性（同画面哈希基线的取法）。 */
   userProperties?: Record<string, unknown>;
+  /** `g_PointerPosition`，也作控制点跟随指针的光标（预热、回放的每一帧和读回那一帧都用它）；缺省 `[0.5, 0.5]`。 */
   pointer?: [number, number];
+  /** 确定性粒子回放，原样交给探针 `renderFrame`；不给时画的是预热后的状态（不步进）。 */
+  particles?: ParticleReplay;
+}
+
+/** REST `POST /hosts/:h/particle-track` 的请求体：交给探针 `particleTrack`（场景目录按图片 id 取）。 */
+export interface ParticleTrackRequest {
+  imageId: string;
+  /** 每帧的 `g_Frametime`，`dts[0]` 是第 1 帧。 */
+  dts: number[];
+  /** 每帧的 `g_Time`，和 `dts` 等长；不给时按 `dts` 累加。 */
+  times?: number[];
+  /** 要输出的帧号（从 1 起，不超过 `dts.length`）。 */
+  frames: number[];
+  passes: 1 | 2;
+  seed?: number;
+  random?: Record<string, number[]>;
+  /** 每帧光标下的场景纹理坐标，和 `dts` 等长；不给时是场景中心。 */
+  cursors?: [number, number][];
+  /** 写进结果的 `tag`。 */
+  tag?: string;
+}
+
+/** 轨迹里的一个粒子（写进顶点的值，同 RenderDoc 轨迹）。 */
+export interface ParticleTrackParticle {
+  pos: number[];
+  size: number;
+  color: number[];
+  alpha: number;
+  rot: number[];
+  /** 帧表系统才有：`[vx, vy, vz, frame 原值]`。 */
+  thick?: number[];
+}
+
+export interface ParticleTrackFrame {
+  frame: number;
+  dt: number;
+  /** 系统名 → 存活粒子（按槽序）；没有存活粒子的系统不出现。 */
+  systems: Record<string, ParticleTrackParticle[]>;
+}
+
+/** 探针 `particleTrack` 的结果，格式同 `ignore/p4/tracks/rd-*.json`（`source: "sim"`）。 */
+export interface ParticleTrackResult {
+  source: "sim";
+  project: string;
+  tag: string;
+  frames: ParticleTrackFrame[];
+  /** 每个系统里模拟器跳过的模块（表外模块）。 */
+  skipped: Record<string, string[]>;
+}
+
+/** REST `POST /hosts/:h/particle-corners` 的请求体：交给探针 `particleCorners`。 */
+export interface ParticleCornersRequest {
+  imageId: string;
+  particles?: ParticleReplay;
+  /** 粒子层：`objects` 下标或对象名；缺省全部粒子层。 */
+  layer?: number | string;
+  /** 每层只取前这么多个粒子（按槽序）；缺省全部。 */
+  limit?: number;
+  /** 缺省 `disabled`。 */
+  postprocess?: ScenePostprocess;
+  /** 缺省取库里这张图当前的用户属性。 */
+  userProperties?: Record<string, unknown>;
+  /** 结果里带上改写后的 WGSL（排查用）。 */
+  wgsl?: boolean;
+}
+
+/** 探针 `particleCorners` 的一层结果。 */
+export interface ParticleCornersLayer {
+  object: number;
+  name: string;
+  perspective: boolean;
+  /** 存活粒子数（不受 `limit` 影响）。 */
+  count: number;
+  /** 每个角的 UV：`(0,0)`、`(0,1)`、`(1,1)`、`(1,0)`。 */
+  uv: [number, number][];
+  /** 每粒子 4 个角的裁剪坐标 `[x, y, z, w]`。 */
+  corners: number[][][];
+  /** 同一角的场景像素坐标 `[x, y]`（原点左上、y 向下）。 */
+  pixels: number[][][];
+  particles: ParticleTrackParticle[];
+  wgsl?: string;
 }
 
 /** 探针 `renderFrame` 的结果（`sha256` 是 8 位 RGBA 的摘要，不是 PNG 文件的）。 */
