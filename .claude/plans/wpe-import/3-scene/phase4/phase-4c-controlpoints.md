@@ -1,6 +1,6 @@
 # P4c — 控制点、世界空间与拖尾（子计划）
 
-> 上级：[phase-4-particles.md](phase-4-particles.md)「P4c」。底座沿用 P4a、P4b（[phase-4a-base.md](phase-4a-base.md)、[phase-4b-tier2.md](phase-4b-tier2.md)），已有语义见 [p4-particles-REPORT.md](p4-particles-REPORT.md) 与 `rea-*.md`，本节新增的语义由步骤 0 写进 `rea-p4c.md` 和报告。
+> 上级：[phase-4-particles.md](phase-4-particles.md)「P4c」。底座沿用 P4a、P4b（[phase-4a-base.md](phase-4a-base.md)、[phase-4b-tier2.md](phase-4b-tier2.md)），已有语义见 [p4-particles-REPORT.md](p4-particles-REPORT.md) 与 `rea-*.md`，本节新增的语义由步骤 0 写进 `rea-p4c-sim.md`、`rea-p4c-render.md` 和报告。
 > 语料是 P4b 步骤 3 之后的重扫（152 个工程，`ignore/p4/b3/out/after.json`），能渲染 20 张。P4b 步骤 4–6 还在进行，下文的现状锚点取自已提交的代码（`36e6f29a`）。
 > 分六步：步骤 0 只调研，步骤 1–5 每步能单独验收、单独提交。
 
@@ -24,7 +24,7 @@ P4a、P4b 的粒子系统是封闭的：控制点 0 当单位阵、平移 0，�
 
 几个关键决定：
 
-- **步骤 0 一次做完。** 和 P4b 一样：一个 REA 代理读完全部条目，写进 `rea-p4c.md`；一次 WPE 会话抓完确定性工程，后面各步只回放。
+- **步骤 0 一次做完。** 和 P4b 一样：两个 REA 代理并行读完全部条目，写进 `rea-p4c-sim.md`、`rea-p4c-render.md`；一次 WPE 会话抓完确定性工程，后面各步只回放。
 - **指针用记录的值回放，不动用户的鼠标。** 测试工程里加一个图层，把 WPE 每帧的 `g_PointerPosition` 写进颜色，和帧号、时钟图层同一种做法。回放时喂同一串指针，不需要把光标移到固定位置。
 - **父控制点只做顶层能做的部分。** `flags` bit2、`parentcontrolpoint` 如果只在子系统里才有意义，就留给 P4e（子系统），本节继续报不支持。步骤 0 判定。
 - **验收照旧靠回放。** 控制点、吸引、世界空间比轨迹；拖尾和朝向比整帧像素和四角。
@@ -129,7 +129,7 @@ setPointer(x: number, y: number): void {
 
 ### 0a — REA 读码（子代理）
 
-结果写成 `phase4/rea-p4c.md`，格式同 `rea-p4a.md`，每条标地址和证据等级。已知线索：控制点更新在 `FUN_14022e3e0`，bit0 读 `ctx+0x8c` 和 `1 − ctx+0x90`，bit2 取 `[cp+0xc4]`，bit3 在 `0x14022e6b3`，bit1、bit4 在这个函数里没读到（sample-gaps §2.8）；世界空间见 rea-p4a C3。
+两个代理并行，结果分别写成 `phase4/rea-p4c-sim.md`（第 1–5 项）和 `phase4/rea-p4c-render.md`（第 6、7 项），格式同 `rea-p4a.md`，每条标地址和证据等级。已知线索：控制点更新在 `FUN_14022e3e0`，bit0 读 `ctx+0x8c` 和 `1 − ctx+0x90`，bit2 取 `[cp+0xc4]`，bit3 在 `0x14022e6b3`，bit1、bit4 在这个函数里没读到（sample-gaps §2.8）；世界空间见 rea-p4a C3。
 
 1. **控制点：**
    - 存储布局：本帧和上一帧各存什么（平移、3×3、角度），初值是不是单位阵加 `offset`（rea-p4a 未查完一项）。
@@ -163,7 +163,7 @@ setPointer(x: number, y: number): void {
 - 结论写进报告新节「P4c 语义的实测核对」。
 
 **验收：**
-- `rea-p4c.md` 覆盖上面各项，模块都有字段表、缺省值、公式和证据等级。
+- 两份逆向文档覆盖上面各项，模块都有字段表、缺省值、公式和证据等级。
 - 父控制点归 P4c 还是 P4e 有结论。
 - 指针换算有实测：记录的 `g_PointerPosition` 换算后和跟随指针的粒子出生位置吻合。
 - 步骤 1–5 要回放的数据都已抓到。
@@ -202,9 +202,9 @@ export class ControlPoints {
 
 ## 步骤 2 — 指针
 
-- **修改** 控制点 `flags` bit0 与 `locktopointer`：本帧平移取指针的场景坐标，公式按步骤 0。
+- **修改** 控制点 `flags` bit0：本帧平移取指针的场景坐标，公式按步骤 0（`locktopointer` WPE 不读，步骤 1 已按中性处理）。
 - **修改** `render/renderer.ts`：`setPointer` 之外再算一份场景坐标（含壁纸样式、透视粒子的深度），每帧交给各粒子系统。暂停时不转发输入，指针保持最后的值。
-- **修改** 能力表：放开 `flags` bit0、`locktopointer`。
+- **修改** 能力表：放开 `flags` bit0。
 
 **验收：**
 - `proj/p4c-cp` 的指针系统按记录的指针回放，和 WPE 逐帧比。
@@ -256,6 +256,37 @@ export class ControlPoints {
 ## 风险
 
 1. **指针换算牵涉宿主。** 预览（iframe 事件）和桌面（Windows 鼠标转发）两条来源、壁纸样式和透视粒子的深度都要对，真机验收离不开用户。
-2. **父控制点可能拖进子系统。** 如果 `flags` bit2 只对子系统有意义，`parentcontrolpoint` 的 2 张要等 P4e。
+2. ~~**父控制点可能拖进子系统。**~~ 步骤 0 确认：控制点 `flags` 4、8 和 `parentcontrolpoint` 只对子系统有意义，归 P4e；顶层系统上只复刻「`flags 4` 时忽略 `instanceoverride` 的控制点」。
 3. **世界空间改的是坐标系。** 所有模块在世界空间下都要对，尤其是读控制点和读模型矩阵的（`movement` 的重力、`vortex` 的轴）。只靠几组确定性工程覆盖不全，要靠语料场景的统计量补。
 4. **和 P4b 步骤 4–6 并行。** P4b 还在改模拟器和模块表，P4c 的步骤 1 要等 P4b 收尾后再动手，避免同一批文件两头改。
+
+## 实施记录
+
+### 步骤 0 — 调研（2026-11-08）
+
+两个子代理读码，Claude 设计并抓取确定性工程、独立核对。没有改产品代码。
+
+- **读码：** [rea-p4c-sim.md](rea-p4c-sim.md)（控制点、指针、`controlpointattract`、世界空间）、[rea-p4c-render.md](rea-p4c-render.md)（`spritetrail`、`sprite` 朝向）。控制点代理中途被 API 用量上限打断一次，续跑后写完。Claude 抽查：`g_Orientation*` 的唯一写入者 `FUN_1402298b0` 开头读朝向与 `flags`（`not` 再 `and 1`），调用点正是 4 个 renderer 分支；`locktopointer` 在二进制里一次都没出现；`deletethreshold` 存在。
+- **实测：** 结论写在[报告](p4-particles-REPORT.md)「P4c 语义的实测核对」，22 条全部成立，没有推翻。5 个工程、6 组抓帧，时钟图层同时记录 WPE 当帧的指针。
+- **生成工程时的一处失误：** 世界空间工程用脚本旋转对象时，我按弧度写了 `angles`，WPE 脚本里图层 `angles` 是度（P3b 已记录）。核对时按度换算后全部吻合，结论不受影响；以后写脚本驱动的工程要按度。
+
+对后续各步的影响：
+
+- **步骤 1（控制点底座）：**
+  - 控制点只有被模块引用到的才存在（`max(·, controlpoint + 1)`）；没被引用的控制点上的设置不起作用，能力表也不该报。
+  - 初值是「单位阵 + `offset`」。JSON 的 `angles` 不读，`locktopointer` 不存在，`flags 16` 没有读者：这三项改成中性。
+  - `instanceoverride.controlpointN` 替换平移、`controlpointangleN` 替换 3×3（Z·Y·X，弧度，CRT `cosf` / `sinf`）；指针点、`flags 4` 的点上不生效。运行时改值从基值重算，不动上一帧。
+  - `flags 2`：基准点是场景坐标，本地系统乘 `inverse(W)`；世界系统里控制点 0 忽略这一位。
+  - 发射器的 3×3 只在「世界空间或 `controlpoint ≠ 0`」时作用到出生点；传给 `velocityrandom`、`turbulentvelocityrandom` 的 `M` 总是控制点的 3×3。
+  - 控制点 `flags 4`、`8` 和 `parentcontrolpoint` 归 P4e，顶层系统上照报，或按「忽略实例覆盖」实现。
+- **步骤 2（指针）：**
+  - `g_PointerPosition` 就是 WPE 的客户区归一化坐标，y 向下、不钳制，跟随点是 `inverse(P·V)` 反投影到 z = 0。铺满时 X = px·W、Y = (1 − py)·H。Kabegame 要按壁纸样式把画布指针换成场景坐标，留白和窗口外都线性外推。
+  - 指针点丢弃 `offset`，3×3 是单位阵；本地系统再乘 `inverse(W)`，世界系统不乘 `W`。
+- **步骤 3（`controlpointattract`）：**
+  - 字段是 `scale`、`threshold`、`deletethreshold`、`flags`、`controlpoint`，加 `offset`（解析但不读）。没有 `origin`，语料里写的 `origin` 是中性的。
+  - 缺省：`flags 2`（钳制开），`scale` 512 / 20，`threshold` 512 / 5，`deletethreshold` 15 / 0.5（存平方）。`scale` 乘 `instanceoverride.speed`。
+  - 公式：只改速度，乘 `k`，有 blend 变体；`flags` bit0 用「上一步位置」那段线段做删除判定。
+- **步骤 4（世界空间）：** 控制点是 `W·base`，粒子存世界坐标；发射器 `origin` 不经 `W`；绘制时模型矩阵是单位阵；`movement` `flags 1` 只在本地系统变换重力；`vortex` 的轴固定在世界。
+- **步骤 5（拖尾与朝向）：** 公式和四角全部实测吻合。实现要显式处理 NaN（速度为 0、轴平行视线）为不画；同系统两个 renderer 画两次；朝向的三个 uniform 每个 renderer 每帧在 CPU 上算。
+
+工具在 `ignore/p4/`：`gen_c.py`、`ana_c.py`、`ana_c2.py`、`ana_ptr.py`、`ana_c_render.py`；`rdc_track_b.py` 加了指针记录、四角读取和同系统多次绘制，对 P4b 的工程兼容。

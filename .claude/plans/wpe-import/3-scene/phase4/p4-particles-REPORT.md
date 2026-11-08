@@ -163,3 +163,34 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | 控制点 0 的 `flags 1` 跟随指针 | 跟随组的粒子出生在 (3195, 1174)、(3170, 1805) 等随时间变化的位置（光标在窗口坐标里的位置），参照组都在原点；`offset "100 50 0"` 整体平移 (100, 50) | 成立。`1838478131` 归 P4c |
 
 留给各步回放核对、步骤 0 没有直接判断的：`turbulence`、`vortex` 乘的是 `k` 不是 `dt`（fps 10 的数据已抓）；三个噪声函数；`oscillatesize`；三个 `*change` 的曲线；`positionoffsetrandom`；`vortex` 的定量；周期发射的逐帧量化与满容量冻结；帧表和折射的像素。
+
+## P4c 语义的实测核对（2026-11-08）
+
+读码在 [rea-p4c-sim.md](rea-p4c-sim.md)（控制点、指针、`controlpointattract`、世界空间）和 [rea-p4c-render.md](rea-p4c-render.md)（`spritetrail`、`sprite` 朝向）。工程由 `ignore/p4/gen_c.py` 生成：`proj/p4c-cp`、`p4c-attract`、`p4c-world`、`p4c-trail`、`p4c-sprite`。时钟图层的着色器同时读 `g_PointerPosition`，`rdc_track_b.py` 把 WPE 当帧用的指针记进轨迹；标了 `corners` 的工程另读 `gs_out` 的四角。抓帧在 `A:\p4b\p4c-*`，fps 60 全抓，`p4c-attract` 另抓 fps 10。读数脚本：`ana_c.py`、`ana_c2.py`、`ana_ptr.py`、`ana_c_render.py`。
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| JSON 控制点的 `angles` 运行时不读 | 控制点 1 写 `angles "0 0 1.5708"`，出生点 (1060, 540)，即没有旋转 | 成立 |
+| `locktopointer` 不存在 | `flags 0` 加 `locktopointer true`，出生点 (1060, 540)，不跟随 | 成立 |
+| `instanceoverride.controlpointangleN` 旋转出生点（控制点 ≠ 0） | (960, 640) | 成立 |
+| `instanceoverride.controlpointN` 替换 `offset`，不叠加 | `offset "100 0 0"`、覆盖 `"0 200 0"`：出生点 (1060, 740) | 成立 |
+| 顶层系统上控制点 `flags 4` 走缺省更新，但忽略 `instanceoverride` 的控制点 | (1160, 540)：用 `offset`，覆盖没生效 | 成立 |
+| 控制点 `flags 16` 没有读者 | 和 `flags 0` 的对照组出生点相同（差在发射方向的近似倒数抖动内） | 成立 |
+| 本地系统里控制点 0 的角度不转出生点，但转 `velocityrandom` | 出生点本地 x 保持 100，速度变成 (0, 50) | 成立 |
+| 控制点 `flags 2`：基准点是场景坐标 | 对象 `scale 2`、`angles 0.5`：出生点在场景 (200, 100)；对照组跟着对象落在 (1215.1, 907.3)，和公式一致 | 成立 |
+| 指针：`g_PointerPosition` 就是客户区归一化坐标（y 向下、不钳制），跟随点 X = px·W、Y = (1 − py)·H | 指针 (1.4115, 0.7398) 那一帧，世界空间跟随粒子正好出生在 (2810, 281) = (1.4115·1920 + 100, (1 − 0.7398)·1080)；y 翻转的式子差 518 | 成立。光标在窗口外照样外推 |
+| 指针点的 `offset` 被丢弃；本地系统乘 `inverse(W)`，世界系统不乘 `W` | 对象 `scale 2` 时，世界组和本地组的出生点正好差 100（本地组的 (100, 0) 经对象放大成 200）；`angles 0.7`、`scale 2` 的本地组偏移 (152.97, 128.84)，和预测一致 | 成立 |
+| 世界空间：粒子存世界坐标，已发出的留在原地 | 对象由脚本平移、旋转，5 个世界空间粒子都落在出生时刻的 `W(t)·(100, 0)` 上（t ≈ 10、11、12、13、15 s，残差 ≤ 0.05）；本地对照组的顶点一直是 (100, 0) | 成立。注意脚本里图层 `angles` 是度 |
+| 世界空间：发射器 `origin` 不经 `W` | 对象转 90°、`origin "100 0 0"`：世界组出生在 (1060, 540) | 成立 |
+| 世界空间：速度、重力 | 世界组 `velocityrandom (50, 0)` 沿世界 +y 走；`movement` `flags 0` 时本地组的重力随对象转，`flags 1` 和世界组沿世界 −y | 成立 |
+| `vortex` 读控制点的平移，不读它的 3×3 | 控制点 1 带 `controlpointangle1 "1.5708 0 0"`，粒子 z 一直为 0 | 成立。中心的定量留给回放 |
+| `controlpointattract` 的 `flags` 缺省是 2（钳制开） | 不写 `flags` 和写 `flags 0`（`scale 1e6`）完全不同：前者在控制点附近往返，后者一帧冲到 3.6 万以外 | 成立 |
+| `controlpointattract` 没有 `origin`，`offset` 不读 | 加了 `origin`、`offset "200 0 0"` 的组和基本组只差出生时的随机抖动（0.02） | 成立 |
+| `controlpointattract` 的 `threshold` 严格小于；`scale` 为负排斥；`scale` 乘 `instanceoverride.speed` | 阈值外不动；排斥组越推越远；`speed 2` 组吸得更快 | 成立。`k`、删除判定、blend 的定量留给回放 |
+| `spritetrail`：`L = max(minlength, min(|v|·length, maxlength))`，以粒子为中心沿速度拉长；缺省 `length 0.05`、`maxlength 10`、`minlength 0` | 12 组的长度都吻合（含 `maxlength` 截顶、`minlength` 托底、两者冲突时 `minlength` 胜）；`v = (60, 80)` 那组四角逐位吻合 | 成立 |
+| 拖尾宽向依赖 `g_EyePosition`，离开视轴变窄 | 宽度 9.842、9.945 等，正好是 `10·2000/√(2000² + dy²)` | 成立 |
+| 速度为 0 的拖尾、轴平行视线的 `upright` 算出 NaN，不画 | `gs_out` 四角是 NaN | 成立 |
+| 一个系统同时有 `sprite` 和 `spritetrail` 时画两次，按数组顺序 | 两种顺序都是两次绘制，几何分别是 sprite 和拖尾 | 成立 |
+| `sprite` 的朝向（`g_Orientation*`）：`screen`、`upright`、`fixed` 和 `flags` bit0 | 24 组四角全部吻合：`flags` 0、1、2、255 在对象不旋转时相同；`upright` 各轴、`fixed` 各轴（含缺省轴躺平、只认精确零）；对象转 0.5 弧度时 `flags 0` 随对象转、`flags 1` 保持直立 | 成立 |
+
+留给各步回放核对的：`controlpointattract` 乘 `k`（fps 10 已抓）、删除判定、blend；`vortex` 读控制点的定量；透视粒子加拖尾（四角不对称，和「仍用场景眼位」一致）。
