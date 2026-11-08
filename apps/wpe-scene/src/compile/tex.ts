@@ -102,6 +102,22 @@ export interface TexMip {
 export interface TexImage {
   mips: TexMip[];
 }
+/**
+ * TEXS 帧表的一帧（`FUN_14015e1d0`，rea-p4b-render.md 2.1）。文件里每帧 32 字节：`imageId`（i32）、`frametime`（f32）、
+ * 6 个坐标（TEXS0001 是 i32，0002 / 0003 是 f32）。坐标已按该帧所在图像的第 0 级 mip 尺寸 `(W, H)` 归一化：
+ * `x / W, y / H, width / W, widthY / H, heightX / W, height / H`，float32 精确除法（`divss`）。`imageId` 越界或该图像
+ * 没有 mip 时 6 个坐标为 0。粒子路径只读第 0 帧的 `width`、`height`（见 `bundle.ts` 的 `spriteSheet`）。
+ */
+export interface TexFrame {
+  image: number;
+  frametime: number;
+  x: number;
+  y: number;
+  width: number;
+  widthY: number;
+  heightX: number;
+  height: number;
+}
 export interface TexResult {
   format: number;
   flags: number;
@@ -116,6 +132,8 @@ export interface TexResult {
   frameCount?: number;
   gifWidth?: number;
   gifHeight?: number;
+  /** 头标志 bit2（`animated`）置位时的帧表，按文件顺序（`TexFrame`）。 */
+  frames?: TexFrame[];
   videoRange?: { start: number; end: number };
   /**
    * FreeImage 形态（`freeImageFormat` 为 2 JPEG / 13 PNG）：每个 mip 的数据是一整份图片文件。Worker 不读这些字节，
@@ -225,6 +243,30 @@ export function decodeLz4Block(input: Uint8Array, outputSize: number): Uint8Arra
   return output;
 }
 
+/** 帧表纹理的不支持项：用在粒子材质槽 0 以外的地方时报（`bundle.ts` 的 `getTexture` 按用途过滤）。 */
+export const ANIMATION_ISSUE = "tex:animation";
+
+/**
+ * TEXS 的帧（`FUN_14015e1d0`，rea-p4b-render.md 2.1）：每帧 32 字节，`imageId` 按有符号读（`movsxd`），TEXS0001 的 6 个坐标
+ * 是 i32（`cvtdq2ps` 转 float），0002 / 0003 是 f32。归一化的分母是 `imageId` 号图像第 0 级 mip 的宽高（`cvtsi2ss`），
+ * float32 精确除法；越界或该图像没有 mip 时 6 个坐标写 0。
+ */
+function readFrames(bytes: Uint8Array, version: number, images: readonly TexImage[]): TexFrame[] {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const frames: TexFrame[] = [];
+  for (let at = 0; at + 32 <= bytes.length; at += 32) {
+    const image = view.getInt32(at, true);
+    const coord = (k: number) =>
+      version === 1 ? Math.fround(view.getInt32(at + 8 + 4 * k, true)) : view.getFloat32(at + 8 + 4 * k, true);
+    const mip = image >= 0 && image < images.length ? images[image].mips[0] : undefined;
+    const [x, y, width, widthY, heightX, height] = [0, 1, 2, 3, 4, 5].map((k) =>
+      mip ? Math.fround(coord(k) / Math.fround(k % 2 === 0 ? mip.width : mip.height)) : 0,
+    );
+    frames.push({ image, frametime: view.getFloat32(at + 4, true), x, y, width, widthY, heightX, height });
+  }
+  return frames;
+}
+
 export async function parseTex(file: SceneFile, decode = true): Promise<TexResult> {
   const c = new Cursor(file);
   if ((await c.magic()) !== "TEXV0005" || (await c.magic()) !== "TEXI0001") throw new Error("不支持的 TEX 头");
@@ -247,14 +289,18 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   const mipLayoutVersion = containerVersion === 4 && videoMp4 === 1 ? 4 : Math.min(containerVersion, 3);
   const unsupported: string[] = [];
   if (flags & TEX_FLAGS.video) unsupported.push("tex:video");
-  if (flags & TEX_FLAGS.animated) unsupported.push("tex:animation");
+  // 帧表纹理：粒子材质的槽 0 是合法用法（P4b 步骤 2），`bundle.ts` 的 `getTexture` 按用途去掉这个键；图像层的帧动画属 P6，照报
+  if (flags & TEX_FLAGS.animated) unsupported.push(ANIMATION_ISSUE);
+  // 粒子路径只采第 0 张图像（rea-p4b-render.md 2.7【推】），帧落在别的图像上会采错
+  if (flags & TEX_FLAGS.animated && imageCount > 1) unsupported.push("tex:animation:multi-image");
   const freeImageMime = FREE_IMAGE_MIME[freeImageFormat];
   // 原格式上传查格式表；FreeImage 形态由主线程解成 RGBA 位图（`planBitmapUpload` 只收格式 0，本机语料也都是 0）
   if (freeImageMime ? format !== 0 : !textureFormat(format)) unsupported.push(`tex:format:${format}`);
   if (freeImageFormat !== -1 && !freeImageMime) unsupported.push(`tex:freeimage:${freeImageFormat}`);
   if (flags & TEX_FLAGS.clampBorder) unsupported.push("tex:clamp-border");
-  // FreeImage 的 mip 交给主线程解码，这里永远不读字节
-  const shouldDecode = decode && unsupported.length === 0 && !freeImageMime;
+  // FreeImage 的 mip 交给主线程解码，这里永远不读字节。`tex:animation` 不挡解码：帧表纹理在粒子槽 0 要上传；用在图像层时
+  // 场景反正退回，多解一张纹理只在 `exhaustive` / `force` 下发生。`tex:animation:empty` 在 mip 之后才读到，同样不挡
+  const shouldDecode = decode && unsupported.every((key) => key === ANIMATION_ISSUE) && !freeImageMime;
   const images: TexImage[] = [];
   for (let image = 0; image < imageCount; image++) {
     const mipCount = await c.u32();
@@ -297,6 +343,7 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   let frameCount: number | undefined;
   let gifWidth: number | undefined;
   let gifHeight: number | undefined;
+  let frames: TexFrame[] | undefined;
   if (flags & TEX_FLAGS.animated) {
     const magic = await c.magic();
     if (!/^TEXS000[1-3]$/.test(magic)) throw new Error(`不支持的 TEXS 帧表：${magic}`);
@@ -307,7 +354,9 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
       gifWidth = await c.u32();
       gifHeight = await c.u32();
     }
-    c.skip(frameCount * 32);
+    frames = readFrames(await c.bytes(frameCount * 32), animatedVersion, images);
+    // 帧向量为空时 WPE 不写 `g_RenderVar1`、保留上一次绘制的值（rea-p4b-render.md 2.2），不复刻
+    if (frameCount === 0) unsupported.push("tex:animation:empty");
   }
   const first = images[0]?.mips[0];
   const videoRange =
@@ -337,6 +386,7 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
     frameCount,
     gifWidth,
     gifHeight,
+    frames,
     videoRange,
     encoded,
     unsupported,

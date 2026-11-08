@@ -15,12 +15,13 @@ import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
+import { injectedR } from "../particles/random";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
 import { CORNER_UVS } from "../particles/vertices";
 import { acquireGpu } from "../render/device";
 import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
-import { GpuScene } from "../render/scene";
+import { GpuScene, type ParticleOptions } from "../render/scene";
 import { SceneState } from "../render/state";
 
 /** 计算入口从顶点缓冲读一个输入：location、在顶点里的 float 偏移、分量数与标量类型。 */
@@ -172,6 +173,21 @@ export interface ParticleReplay {
   seed?: number;
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。缺省 1。 */
   passes?: 1 | 2;
+  /**
+   * 按 `objects` 下标、按出生顺序顶替这个系统抽到的 `R`，用完退回种子随机数（P4b 步骤 2）。`randomframe` 的 frame 就是 `R`，
+   * 和 WPE 抓帧逐像素比时填从 WPE 轨迹读出的 frame（`rd-*.json` 的 `TEXCOORD1.w`）。只改 `R`，别的抽取照旧。
+   */
+  random?: Record<number, number[]>;
+}
+
+/** 建场景用的粒子选项：种子缺省 1、遍数缺省 1，`random` 换成每个粒子层一个 `injectedR`。 */
+export function replayParticleOptions(replay: ParticleReplay | undefined): ParticleOptions {
+  const random = replay?.random;
+  return {
+    seed: replay?.seed ?? 1,
+    passes: replay?.passes ?? 1,
+    rOverride: random ? (object) => (random[object] ? injectedR(random[object]) : undefined) : undefined,
+  };
 }
 
 /**
@@ -243,7 +259,7 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
     const state = SceneState.fromBundle(bundle);
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
       ignoreUnsupported: true,
-      particles: { seed: options.particles?.seed ?? 1, passes: options.particles?.passes ?? 1 },
+      particles: replayParticleOptions(options.particles),
     });
     try {
       const { time, frametime } = replayParticles(scene, state, options.particles);

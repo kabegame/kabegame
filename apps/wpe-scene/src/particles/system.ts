@@ -7,14 +7,15 @@
  *
  * 一帧（`step`）：
  * 1. 全部槽 `age += dt'`；`life ≠ 0 且 life < age`（严格大于）判死：`life = 0`，存活数减一；
- * 2. 按 JSON 顺序遍历 emitter：算本帧数量，逐个新粒子线性扫描第一个 `life == 0` 的槽 → emitter 写位置速度 → 抽 `R` →
- *    写缺省值 → 按 JSON 顺序跑 initializer；新粒子当帧 `age = 0`；
- * 3. operator 一遍或两遍：每遍开头重置当前值，再按 JSON 顺序执行。
+ * 2. 序列帧（P4b 步骤 2，`sequenceFrames`）：帧表系统且不是 `randomframe` 时，全部槽 `frame = (1 / life)·age·sequencemultiplier`；
+ * 3. 按 JSON 顺序遍历 emitter：算本帧数量（周期发射的时长在这里从流 A 抽，`rea-p4b-modules.md` A3），逐个新粒子线性扫描
+ *    第一个 `life == 0` 的槽 → emitter 写位置速度 → 抽 `R` → 写缺省值 → 按 JSON 顺序跑 initializer；新粒子当帧 `age = 0`；
+ * 4. operator 一遍或两遍：每遍开头重置当前值，再按 JSON 顺序执行。
  *
  * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
  * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热）；暂停时渲染器不步进。
  *
- * 序列帧（P4b）、控制点（P4c）、子系统不在这里。表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
+ * 控制点（P4c）、子系统不在这里。表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
 import { ParticleColumns } from "./columns";
@@ -33,7 +34,7 @@ import {
   type ParticleModuleRun,
   type ParticleRunContext,
 } from "./modules";
-import type { ParticleRandom } from "./random";
+import type { ParticleRandom, ParticleROverride } from "./random";
 
 /** 预热步长：`maxcount < 500` 时 0.05，否则 0.2（C1，实测两档都对上）。 */
 export function prewarmStep(maxcount: number): number {
@@ -133,11 +134,14 @@ export class ParticleSystem {
   /** 下一次找空槽的起点：它之前没有空槽。 */
   private searchFrom = 0;
   private readonly context: ParticleRunContext;
+  /** 出生时 `R` 的替换（dev 探针按出生顺序注入 WPE 的值，`random.ts` 的 `injectedR`）；缺省照常用抽到的值。 */
+  private readonly rOverride: ParticleROverride | undefined;
 
-  constructor(def: SceneParticle, random: ParticleRandom, passes: 1 | 2) {
+  constructor(def: SceneParticle, random: ParticleRandom, passes: 1 | 2, rOverride?: ParticleROverride) {
     this.def = def;
     this.random = random;
     this.passes = passes;
+    this.rOverride = rOverride;
     this.columns = new ParticleColumns(def.maxcount, particleColumnFlags(def));
     this.instance = instanceValues(def.instance);
     // 从基值乘，不累乘（C5）。`colorn` / `color` / `brightness` 不做（能力表按 `checkParticleInstance` 报）
@@ -230,6 +234,7 @@ export class ParticleSystem {
   private advance(dt: number, frameDt: number, passes: 1 | 2): void {
     if (!(dt > 0)) return;
     this.ageAndKill(dt);
+    this.sequenceFrames();
     this.emit(dt);
     const { h, k } = operatorPass(dt, frameDt, passes);
     const context = this.context;
@@ -254,10 +259,27 @@ export class ParticleSystem {
     }
   }
 
+  /**
+   * 序列帧（模拟第 3 步，`0x140237022`，rea-p4b-render.md 2.5）：系统有 `0x1000000`（`def.spriteSheet`）且不是 `randomframe`
+   * 时，对 `[0, highWater)` 全部槽 `frame = (1 / life)·age·sequencemultiplier`，先乘 age 再乘倍数，float32。引擎不取小数，
+   * frame 可以大于 1（倍数 2 时一生循环两遍），小数由着色器取。
+   * - 在判死之后、发射之前：出生当帧 `frame = 0`（序列）或 `R`（`randomframe`，之后不更新），下一帧才按年龄更新。
+   * - WPE 用 `rcpps(life)`（相对误差约 3.7e-4），不复刻（总体设计「近似倒数不复刻」）：混帧开着时只让混帧系数差约 1%，
+   *   关着时帧号正好落在帧边界附近的粒子可能差一帧。
+   * - 死槽（`life = 0`）得 inf / NaN：写顶点时跳过、出生时覆盖，和 WPE 一样不影响结果。
+   */
+  private sequenceFrames(): void {
+    if (!this.def.spriteSheet || this.def.animationMode !== "sequence") return;
+    const { frame, age, life } = this.columns;
+    const multiplier = f32(this.def.sequenceMultiplier);
+    for (let i = 0; i < this.highWater; i++) frame[i] = f32(f32(f32(1 / life[i]) * age[i]) * multiplier);
+  }
+
+  /** 按 JSON 顺序逐个 emitter：先算数量（周期发射在这里抽时长，早于本 emitter 的新粒子，A3），再逐个出生。 */
   private emit(dt: number): void {
     const capacity = this.columns.capacity;
     for (const emitter of this.emitters) {
-      const count = emissionCount(emitter.state, emitter.fields, dt, this.alive, capacity);
+      const count = emissionCount(emitter.state, emitter.fields, dt, this.alive, capacity, this.random);
       for (let n = 0; n < count; n++) this.spawn(emitter);
     }
   }
@@ -272,10 +294,13 @@ export class ParticleSystem {
     const context = this.context;
     context.slot = slot;
     emitter.run(emitter.fields, context);
-    const r = this.random.a();
+    // 照常抽一次再替换：注入只改 `R` 本身，后面各模块抽到的随机数和不注入时相同
+    const drawn = this.random.a();
+    const r = this.rOverride ? this.rOverride(drawn) : drawn;
     c.random[slot] = r;
     c.age[slot] = 0;
     c.life[slot] = 1;
+    // 出生时 frame（`0x14023b4e9`）：`randomframe` 写 `R`，否则 0（rea-p4b-render.md 2.5）
     c.frame[slot] = this.def.animationMode === "randomframe" ? r : 0;
     c.size0[slot] = 0.5;
     for (let i = 0; i < 3; i++) {

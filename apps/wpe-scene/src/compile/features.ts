@@ -612,11 +612,13 @@ function controlPointsUsed(raw: unknown): boolean {
  * 粒子 JSON 的能力检查，规则从模块表（`particles/modules.ts`）生成。依据见各条注释，系统级键见 `particles.ts`。
  * - 表外模块：`particle:<类别>:<名字>`；表内模块的未知字段、形状不对或本节不支持的取值：`particle:<类别>:<名字>:<字段>`；
  *   写成 `{user}` / `{script}`：`particle:binding:<类别>:<名字>:<字段>`。
- * - 系统 `flags`（C3）：bit2–7 支持；bit0 世界空间没实测，报 `particle:flags:world`；bit1 读取点没找到，报 `particle:flags:2`；
- *   更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，`0x1401c56e9`，高位其实被丢掉；没有样本，保守报）。
+ * - 系统 `flags`（C3）：bit1–7 支持（bit1 唯一的读取点是关混帧，rea-p4b-render.md 2.3【确，有界】，P4b 步骤 2）；bit0 世界空间
+ *   没实测，报 `particle:flags:world`；更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，`0x1401c56e9`，
+ *   高位其实被丢掉；没有样本，保守报）。
  * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。
  * - `controlpoint` 有实际内容：`particle:controlpoint`（P4c，判定见 `controlPointsUsed`）。
- * - `animationmode` 是 `"randomframe"`、`sequencemultiplier` 是数字且不为 1：`particle:<键>`（帧表属 P4b）。
+ * - `animationmode`、`sequencemultiplier` 任意取值都支持（P4b 步骤 2）：只在材质槽 0 是帧表纹理时起作用（frame 列、混帧宏），
+ *   否则是中性的。写成绑定或关键帧照下面两条报。帧表纹理用在槽 0 以外由纹理报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
  * - 其它顶层键：`particle:system:<键>`；顶层键写成绑定：`particle:binding:system:<键>`（WPE 按 `isNumeric` / `isString`
  *   读，对象当缺键，语义没核对）。`emitter` / `initializer` / `operator` 不是数组时同样报 `particle:system:<键>`。
  * - renderer 多于一个：`particle:renderers`（多个 renderer 的绘制没读）。
@@ -635,12 +637,9 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
   // 控制点与子系统条目不走模块表，整段扫一次关键帧
   scanValue(system.controlpoint, unsupported);
   scanValue(system.children, unsupported);
-  const { flags, animationMode, sequenceMultiplier } = readParticleSystem(system);
+  const { flags } = readParticleSystem(system);
   if (flags & 1) unsupported.add("particle:flags:world");
-  if (flags & 2) unsupported.add("particle:flags:2");
   for (let bit = 8; bit < 32; bit++) if (flags & (1 << bit)) unsupported.add(`particle:flags:${(1 << bit) >>> 0}`);
-  if (animationMode !== "sequence") unsupported.add("particle:animationmode");
-  if (sequenceMultiplier !== 1) unsupported.add("particle:sequencemultiplier");
   if (Array.isArray(system.children) && system.children.length > 0) unsupported.add("particle:children");
   if (controlPointsUsed(system.controlpoint)) unsupported.add("particle:controlpoint");
   for (const category of PARTICLE_CATEGORIES) {

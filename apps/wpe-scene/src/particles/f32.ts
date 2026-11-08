@@ -2,7 +2,8 @@
  * 粒子模拟的 float32 算术（P4a 步骤 3）。WPE 的粒子列、模块记录都是 float32，SIMD 逐步舍入；模拟器每一步运算后都
  * `Math.fround`，否则 `starttime` 的步数、长程累加会和 WPE 差一步（`p4-particles-REPORT.md`「`starttime` 的步数要按 float32 算」）。
  *
- * 近似倒数 `rcpps`（相对误差约 3.7e-4，`rea-p4a.md`「基础」）不复刻，按精确除法算：确定性工程的验收限留了余量。
+ * 近似倒数 `rcpps`、近似平方根倒数 `rsqrtps`（相对误差约 3.7e-4，`rea-p4a.md`「基础」）不复刻，按精确值算：确定性工程的
+ * 验收限留了余量。两者各有一个函数（`rcp`、`rsqrt`），只在 WPE 用近似指令的位置调用。
  */
 export const f32 = Math.fround;
 
@@ -15,9 +16,17 @@ export function lerp(min: number, range: number, t: number): number {
   return f32(min + f32(t * range));
 }
 
-/** 倒数。 */
+/** 倒数。只用在 WPE 用 `rcpps` 的位置（按精确倒数算，见文件头）。 */
 export function rcp(value: number): number {
   return f32(1 / value);
+}
+
+/**
+ * 平方根倒数。只用在 WPE 用 `rsqrtps` 的位置（`vortex` 的径向单位向量、`capvelocity` 的截速比例，`rea-p4b-modules.md` B7、
+ * B8）：近似值随 CPU 厂商不同，不复刻，按精确值算（P4b 总体设计「近似倒数不复刻」，验收按相对 3.7e-4 放宽）。
+ */
+export function rsqrt(value: number): number {
+  return f32(1 / Math.sqrt(value));
 }
 
 export function clamp01(value: number): number {

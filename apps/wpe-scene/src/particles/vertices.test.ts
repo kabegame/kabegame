@@ -49,7 +49,7 @@ describe("粒子顶点布局", () => {
   it("偏移按翻译器反射的 attributes 排：位置 0、a_TexCoordVec4 3、颜色 7、a_TexCoordC2 11，步长 13 个 float（52 字节）", () => {
     const { layout, problems } = particleVertexLayout(vertexPacking(TRANSLATED));
     expect(problems).toEqual([]);
-    expect(layout).toEqual({ stride: 13, position: 0, texCoord: 3, color: 7, rotation: 11 });
+    expect(layout).toEqual({ stride: 13, position: 0, texCoord: 3, color: 7, rotation: 11, thick: -1 });
   });
 
   it("换成 WPE 的输入顺序，字节偏移就是实测的 0、12、28、36，步长 52", () => {
@@ -61,10 +61,15 @@ describe("粒子顶点布局", () => {
   });
 
   it("认不得的输入、分量数不对、整数类型都报 render:particle-attribute", () => {
+    // 绳索的第三组属性（P4c）照报；厚格式的 a_TexCoordVec4C1 在 P4b 步骤 2 起认得
     expect(
-      particleVertexLayout(vertexPacking([...TRANSLATED, { name: "a_TexCoordVec4C1", location: 4, type: "vec4" }]))
+      particleVertexLayout(vertexPacking([...TRANSLATED, { name: "a_TexCoordVec4C2", location: 4, type: "vec4" }]))
         .problems,
-    ).toEqual(["render:particle-attribute:a_TexCoordVec4C1"]);
+    ).toEqual(["render:particle-attribute:a_TexCoordVec4C2"]);
+    expect(
+      particleVertexLayout(vertexPacking([...TRANSLATED, { name: "a_TexCoordVec4C1", location: 4, type: "vec3" }]))
+        .problems,
+    ).toEqual(["render:particle-attribute:a_TexCoordVec4C1:3f32"]);
     expect(
       particleVertexLayout(
         vertexPacking([
@@ -77,7 +82,7 @@ describe("粒子顶点布局", () => {
 
   it("着色器没声明的输入为 −1，不写", () => {
     const { layout } = particleVertexLayout(vertexPacking([{ name: "a_Position", location: 0, type: "vec3" }]));
-    expect(layout).toEqual({ stride: 3, position: 0, texCoord: -1, rotation: -1, color: -1 });
+    expect(layout).toEqual({ stride: 3, position: 0, texCoord: -1, rotation: -1, color: -1, thick: -1 });
   });
 });
 
@@ -127,6 +132,44 @@ describe("writeVertices", () => {
     writeVertices({ columns, highWater: 1 }, layout, data);
     expect(read(data, layout, 0).rotation).toEqual([0.25, 0.25]);
     expect(read(data, layout, 0).texCoord[2]).toBe(0.25);
+  });
+
+  it("厚格式（P4b 步骤 2）：a_TexCoordVec4C1 = (速度 xyz, frame 原值)，4 个角相同、frame 不取小数，偏移按反射排", () => {
+    // 带 THICKFORMAT 的翻译结果多一组输入；位置放在中间，偏移照样按反射算
+    const thick = [
+      { name: "a_Position", location: 0, type: "vec3" },
+      { name: "a_TexCoordVec4", location: 1, type: "vec4" },
+      { name: "a_TexCoordVec4C1", location: 2, type: "vec4" },
+      { name: "a_Color", location: 3, type: "vec4" },
+      { name: "a_TexCoordC2", location: 4, type: "vec2" },
+    ];
+    const { layout, problems } = particleVertexLayout(vertexPacking(thick));
+    expect(problems).toEqual([]);
+    // WPE 非 GS 厚格式是 68 字节（17 个 float），我们同样 17 个
+    expect(layout).toEqual({ stride: 17, position: 0, texCoord: 3, thick: 7, color: 11, rotation: 15 });
+    const system = threeSlots();
+    const c = system.columns;
+    for (const [slot, frame] of [
+      [0, 1.75],
+      [2, 0.25],
+    ]) {
+      c.velocity[0][slot] = 130 + slot;
+      c.velocity[1][slot] = -5;
+      c.velocity[2][slot] = 0.5;
+      c.frame[slot] = frame;
+    }
+    const data = new Float32Array(3 * 4 * layout.stride);
+    expect(writeVertices(system, layout, data)).toBe(2);
+    for (const [particle, slot, frame] of [
+      [0, 0, 1.75],
+      [1, 2, 0.25],
+    ])
+      for (let corner = 0; corner < 4; corner++) {
+        const o = (particle * 4 + corner) * layout.stride + layout.thick;
+        expect(Array.from(data.subarray(o, o + 4))).toEqual([130 + slot, -5, 0.5, frame]);
+      }
+    // 没有帧表的着色器不声明这组输入：布局里为 −1，不写
+    expect(particleVertexLayout(vertexPacking(TRANSLATED)).layout.thick).toBe(-1);
   });
 
   it("放不下的粒子不写，返回写了的个数；高水位之外的槽不看", () => {

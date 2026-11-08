@@ -252,28 +252,33 @@ describe("sphererandom", () => {
 
 describe("发射数量", () => {
   const fields = (module: JsonObject) => fieldsOf("emitter", { name: "sphererandom", ...module });
+  // 非周期发射不抽随机数（周期发射的用例在 emission.test.ts）
+  const none = new ScriptedRandom();
 
   it("累积余数：rate·dt + acc 满 1 才发，余数留到下一帧", () => {
     const f = fields({ rate: 3 });
     const state = emitterState(f);
-    expect([0.25, 0.25, 0.25, 0.25, 0.25].map(() => emissionCount(state, f, 0.25, 0, 10))).toEqual([0, 1, 1, 1, 0]);
+    expect([0.25, 0.25, 0.25, 0.25, 0.25].map(() => emissionCount(state, f, 0.25, 0, 10, none))).toEqual([
+      0, 1, 1, 1, 0,
+    ]);
+    expect(none.calls).toEqual([]);
   });
 
   it("instantaneous 从累积余数里扣，之后要等欠账还完：突发 3 个后停 (1 + 3) / rate 秒", () => {
     const f = fields({ rate: 2, instantaneous: 3 });
     const state = emitterState(f);
-    const counts = Array.from({ length: 12 }, () => emissionCount(state, f, 0.25, 0, 64));
+    const counts = Array.from({ length: 12 }, () => emissionCount(state, f, 0.25, 0, 64, none));
     expect(counts).toEqual([3, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1]);
   });
 
   it("满容量时不累积；rate ≤ 0 时第一帧后结束", () => {
     const f = fields({ rate: 4 });
     const state = emitterState(f);
-    expect(emissionCount(state, f, 0.25, 1, 1)).toBe(0);
+    expect(emissionCount(state, f, 0.25, 1, 1, none)).toBe(0);
     expect(state.acc).toBe(0);
     const burst = fields({ rate: 0, instantaneous: 2 });
     const once = emitterState(burst);
-    expect([1, 2, 3].map(() => emissionCount(once, burst, 0.1, 0, 10))).toEqual([2, 0, 0]);
+    expect([1, 2, 3].map(() => emissionCount(once, burst, 0.1, 0, 10, none))).toEqual([2, 0, 0]);
     expect(once.ended).toBe(true);
   });
 
@@ -702,13 +707,13 @@ describe("轨迹", () => {
   });
 
   it("表外模块不执行，记在 skipped", () => {
-    const def = particle(systemJson({ operators: [{ name: "movement" }, { name: "capvelocity", maxspeed: 10 }] }));
+    const def = particle(systemJson({ operators: [{ name: "movement" }, { name: "turbulence", scale: 0.01 }] }));
     const track = particleTrack({
       layers: [{ object: 0, name: "p", particle: def }],
       dts: [0.1],
       frames: [1],
       passes: 1,
     });
-    expect(track.skipped).toEqual({ p: ["operator:capvelocity"] });
+    expect(track.skipped).toEqual({ p: ["operator:turbulence"] });
   });
 });

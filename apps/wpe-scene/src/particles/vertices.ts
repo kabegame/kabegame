@@ -11,6 +11,10 @@
  * | `a_TexCoordVec4` | 4 | 角点 u、v，旋转 z，尺寸 |
  * | `a_TexCoordC2` | 2 | 旋转 x、y |
  * | `a_Color` | 4 | 颜色 rgb（当前值）、alpha（当前值） |
+ * | `a_TexCoordVec4C1` | 4 | 速度 xyz、frame 原值（只在 `THICKFORMAT`，即帧表系统，P4b 步骤 2） |
+ *
+ * `a_TexCoordVec4C1` 照 WPE 非 GS 厚格式的写入（`0x140235ea9`，rea-p4b-render.md 2.6）：系统本地空间的列值，4 个角相同，
+ * frame 不取小数（着色器在 `ComputeSpriteFrame(frac(...))` 里取）。帧表的网格换算全在翻译后的着色器里，这里不重写。
  *
  * WPE 项目自定义 `particle` 的布局实测是步长 52：`POSITION` 0、`TEXCOORD0` 12、`TEXCOORD2` 28、`COLOR` 36
  * （`p4-particles-REPORT.md`「顶点布局」）。我们的偏移按翻译器反射的 `attributes` 经 `vertexPacking` 排，不写死：
@@ -33,6 +37,8 @@ export interface ParticleVertexLayout {
   rotation: number;
   /** `a_Color`：rgba。 */
   color: number;
+  /** `a_TexCoordVec4C1`：速度 xyz、frame 原值（厚格式）。 */
+  thick: number;
 }
 
 type LayoutField = Exclude<keyof ParticleVertexLayout, "stride">;
@@ -43,6 +49,7 @@ export const PARTICLE_ATTRIBUTES: Readonly<Record<string, readonly [LayoutField,
   a_TexCoordVec4: ["texCoord", 4],
   a_TexCoordC2: ["rotation", 2],
   a_Color: ["color", 4],
+  a_TexCoordVec4C1: ["thick", 4],
 };
 
 /** 每粒子 4 个顶点的角点 UV：`(0,0)`、`(0,1)`、`(1,1)`、`(1,0)`（实测）。 */
@@ -57,9 +64,9 @@ export const CORNER_UVS: readonly (readonly [number, number])[] = [
 export const QUAD_INDICES: readonly number[] = [0, 1, 2, 0, 2, 3];
 
 /**
- * 由顶点打包结果（`vertexPacking(result.attributes)`）定布局。认不得的输入、分量数或类型不对的报
- * `render:particle-attribute:<名字>[:<分量数><类型>]`：渲染器写不了，缺了会读到 0（例如拖尾的 `a_TexCoordVec4C1`，
- * 它所在的 renderer 已被能力表挡住）。
+ * 由顶点打包结果（`vertexPacking(result.attributes)`）定布局，偏移按反射排、不写死（WPE 非 GS 厚格式是 68 字节，我们按翻译器的
+ * 顺序排，每粒子内容相同）。认不得的输入、分量数或类型不对的报 `render:particle-attribute:<名字>[:<分量数><类型>]`：渲染器写不了，
+ * 缺了会读到 0。
  */
 export function particleVertexLayout(packing: {
   layout: Pick<GPUVertexBufferLayout, "arrayStride">;
@@ -71,6 +78,7 @@ export function particleVertexLayout(packing: {
     texCoord: -1,
     rotation: -1,
     color: -1,
+    thick: -1,
   };
   const problems: string[] = [];
   for (const attribute of packing.attributes) {
@@ -104,11 +112,12 @@ export function writeVertices(
   into: Float32Array,
 ): number {
   const c = system.columns;
-  const { stride, position: p, texCoord: t, rotation: r, color: k } = layout;
+  const { stride, position: p, texCoord: t, rotation: r, color: k, thick: h } = layout;
   const [px, py, pz] = c.position;
   const [rx, ry, rz] = c.rotation;
   const [cr, cg, cb] = c.color;
-  const { life, size, alpha } = c;
+  const [vx, vy, vz] = c.velocity;
+  const { life, size, alpha, frame } = c;
   const capacity = vertexCapacity(layout, into);
   let count = 0;
   for (let i = 0; i < system.highWater && count < capacity; i++) {
@@ -135,6 +144,12 @@ export function writeVertices(
         into[o + k + 1] = cg[i];
         into[o + k + 2] = cb[i];
         into[o + k + 3] = alpha[i];
+      }
+      if (h >= 0) {
+        into[o + h] = vx[i];
+        into[o + h + 1] = vy[i];
+        into[o + h + 2] = vz[i];
+        into[o + h + 3] = frame[i];
       }
     }
     count++;

@@ -1,5 +1,5 @@
 /**
- * initializer（P4a 步骤 3）。依据 `rea-p4a.md` B「initializer」（读码【确】）。
+ * initializer（P4a 步骤 3、P4b 步骤 3）。依据 `rea-p4a.md` B「initializer」、`rea-p4b-modules.md` B1（读码【确】）。
  *
  * 模拟器给新粒子先抽 `R = uA`、写缺省值，再按 JSON 顺序调这里的函数。每个函数的 `t` 都是 `uA`，`exponent ≠ 1` 时
  * `t = pow(t, exponent)`（`powf` 是推断）。min / max 已乘 `instanceoverride`（`resolveParticleFields`）。
@@ -37,6 +37,17 @@ export function colorRandom(fields: ParticleFields, { columns, random, slot }: P
   const t = drawT(random, fields.exponent as number);
   for (let i = 0; i < 3; i++)
     columns.color0[i][slot] = f32(columns.color0[i][slot] * lerp(min[i], f32(max[i] - min[i]), t));
+}
+
+/**
+ * `alpharandom`（initializer 6，`0x14023ba6f`，`rea-p4b-modules.md` B1【确】）：`a0 *= min + t·(max − min)`，`t = uA`
+ * （`exponent ≠ 1` 时取幂），和 `sizerandom` 共用乘法尾巴（`0x14023b684`）。写的是 alpha **初值**列，不碰当前值列、不置
+ * 列标志：当前值在出生时和每遍 operator 开头从初值复制，所以结果一样。用新抽的 `uA`，不用 `R`。
+ */
+export function alphaRandom(fields: ParticleFields, { columns, random, slot }: ParticleRunContext): void {
+  const min = fields.min as number;
+  const t = drawT(random, fields.exponent as number);
+  columns.alpha0[slot] = f32(columns.alpha0[slot] * lerp(min, f32((fields.max as number) - min), t));
 }
 
 /** 三轴独立，**抽取顺序 z、y、x**，经控制点矩阵（P4a 为单位阵）后加到速度。 */

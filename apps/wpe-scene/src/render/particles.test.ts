@@ -15,7 +15,7 @@ import { isEngineUniform, PARTICLE_UNIFORMS } from "../compile/features";
 import type { JsonObject } from "../compile/model";
 import { parseParticle, particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
-import { replayParticles } from "../dev/particleCorners";
+import { replayParticleOptions, replayParticles } from "../dev/particleCorners";
 import { particleSnapshot, particleTrack } from "../particles/track";
 import type { ParticleSystem } from "../particles/system";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -25,7 +25,14 @@ import { planLayer, planParticleLayer, planSignature } from "./graph";
 import { particleViewProjection, sceneViewProjection } from "./layout";
 import { multiply, translation, type Mat4 } from "./math";
 import { SceneRenderer } from "./renderer";
-import { buildableLayers, checkRenderable, GpuScene, timingStats, uploadableTextures } from "./scene";
+import {
+  buildableLayers,
+  checkRenderable,
+  GpuScene,
+  timingStats,
+  uploadableTextures,
+  type ParticleOptions,
+} from "./scene";
 import { SceneState } from "./state";
 import { particleBuiltins, particleUniformValues, type FrameInput } from "./uniforms";
 
@@ -135,6 +142,28 @@ describe("粒子 uniform", () => {
       g_Texture0Resolution: [32, 32, 32, 32],
     });
     closeRelative(values.g_ModelViewProjectionMatrix, WPE_ORTHO);
+  });
+
+  it("g_RenderVar1：槽 0 帧表的 renderVar1 原样写（拷贝，不共享数组）；没有帧表为 0（P4b 步骤 2）", () => {
+    const sheet = { renderVar1: [0.25, 0.125, 32, 0.25] as [number, number, number, number], npot: true };
+    const input = {
+      layer: layerState,
+      world: translation(0, 0, 0),
+      constants: {},
+      viewProjection: sceneViewProjection(GENERAL_1080),
+      colorScale: 1,
+      screenSize: [1920, 1080] as [number, number],
+      textures: [{ width: 896, height: 1024, textureWidth: 1024, textureHeight: 1024 }],
+      eye: [960, 540, 2000],
+    };
+    const values = particleUniformValues({ ...input, sheet });
+    expect(values.g_RenderVar1).toEqual([0.25, 0.125, 32, 0.25]);
+    expect(values.g_RenderVar1).not.toBe(sheet.renderVar1);
+    // NPOT 的 `z / x` 来自 g_Texture0Resolution（纹理宽、纹理高、图像宽、图像高），不改
+    expect(values.g_Texture0Resolution).toEqual([1024, 1024, 896, 1024]);
+    expect(values.g_RenderVar0).toEqual([0, 0, 0, 0]);
+    expect(particleUniformValues({ ...input, sheet: null }).g_RenderVar1).toEqual([0, 0, 0, 0]);
+    expect(particleBuiltins(sheet).g_RenderVar1).toEqual([0.25, 0.125, 32, 0.25]);
   });
 
   it("PARTICLE_UNIFORMS（能力表放行的粒子 uniform）每一个都真的写", () => {
@@ -472,7 +501,7 @@ const frame = (frametime: number, time = 1): FrameInput => ({
   pointerLast: [0.5, 0.5],
 });
 
-async function open(bundle: SceneBundle, particles = { seed: 1 }) {
+async function open(bundle: SceneBundle, particles: ParticleOptions = { seed: 1 }) {
   const gpu = new FakeGpu();
   const state = SceneState.fromBundle(bundle);
   const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], { particles });
@@ -554,12 +583,19 @@ describe("渲染图：粒子层", () => {
     noProgram.layers[0].particle!.passes[0].program = null;
     expect(checkRenderable(noProgram, new Set())).toEqual(["render:no-program"]);
 
-    const trail = bundleOf([particleLayer(1)]);
-    trail.programs[P.particle] = {
+    // 厚格式的 a_TexCoordVec4C1（帧表，P4b 步骤 2）写得了；绳索的 a_TexCoordVec4C2（P4c）照报
+    const thick = bundleOf([particleLayer(1)]);
+    thick.programs[P.particle] = {
       ...PARTICLE_PROGRAM,
       attributes: [...PARTICLE_PROGRAM.attributes!, { name: "a_TexCoordVec4C1", location: 4, type: "vec4" }],
     };
-    expect(checkRenderable(trail, new Set())).toEqual(["render:particle-attribute:a_TexCoordVec4C1"]);
+    expect(checkRenderable(thick, new Set())).toEqual([]);
+    const rope = bundleOf([particleLayer(1)]);
+    rope.programs[P.particle] = {
+      ...PARTICLE_PROGRAM,
+      attributes: [...PARTICLE_PROGRAM.attributes!, { name: "a_TexCoordVec4C2", location: 4, type: "vec4" }],
+    };
+    expect(checkRenderable(rope, new Set())).toEqual(["render:particle-attribute:a_TexCoordVec4C2"]);
 
     // 能力表报的粒子细分键照常挡住，只有强制渲染才建（P4a 步骤 5 删掉了总括键 particle:pending）
     const blocked = bundleOf([particleLayer(1)], { unsupported: ["particle:operator:turbulence"] });
@@ -701,6 +737,65 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     expect(floats(uniforms(1), 0, 16)).toEqual(Array.from(multiply(ortho, translation(210, 50, 0))));
     // 每帧内置量照常写
     expect(floats(uniforms(1), 276, 1)).toEqual([2.5]);
+  });
+
+  it("帧表（P4b 步骤 2）：槽 0 纹理带 sheet 的粒子层写 g_RenderVar1，其余仍是 0；就地刷新后保持；顶点写 a_TexCoordVec4C1", async () => {
+    const sheet = { renderVar1: [0.125, 0.125, 64, 1] as [number, number, number, number], npot: false };
+    const bundle = bundleOf([particleLayer(1), particleLayer(2), particleLayer(3)]);
+    bundle.textures.push({ ...texture("materials/particle/fog/fog1.tex", 64, 64), sheet });
+    // 槽 0 是帧表纹理；槽 1 的帧表不算（WPE 只看基础材质槽 0）
+    bundle.layers[0].particle!.passes[0].textures = { 0: 2 };
+    bundle.layers[1].particle!.passes[0].textures = { 0: 1, 1: 2 };
+    bundle.layers[0].particle!.spriteSheet = true;
+    bundle.programs.push({
+      ...PARTICLE_PROGRAM,
+      attributes: [...PARTICLE_PROGRAM.attributes!, { name: "a_TexCoordVec4C1", location: 4, type: "vec4" }],
+    } as TranslateResult);
+    bundle.layers[0].particle!.passes[0].program = 2;
+    const { gpu, state, scene } = await open(bundle);
+    const uniforms = (object: number) => particleDraw(scene, object).uniformBuffer;
+    expect(floats(uniforms(1), 240, 4)).toEqual([0.125, 0.125, 64, 1]);
+    expect(floats(uniforms(2), 240, 4)).toEqual([0, 0, 0, 0]);
+    expect(floats(uniforms(3), 240, 4)).toEqual([0, 0, 0, 0]);
+    // 就地刷新（改图层变换）走同一个 uniformValues，帧表照写
+    state.write({ property: "p", target: { kind: "layer", object: 1, field: "origin" } }, "5 0 0");
+    scene.sync(state);
+    scene.update(frame(0.25), state);
+    expect(floats(uniforms(1), 240, 4)).toEqual([0.125, 0.125, 64, 1]);
+    // 出生当帧 frame 是 0，下一帧才按年龄更新
+    scene.update(frame(0.25), state);
+    gpu.encode(scene, state);
+    // 顶点：步长 17 个 float，C1 在偏移 13（反射顺序的最后一组）：速度列、frame = age / life（寿命 100）
+    const draw = particleDraw(scene, 1);
+    const system = draw.particles!.system;
+    expect(system.alive).toBe(5);
+    const { velocity, frame: frames } = system.columns;
+    const vertices = floats(draw.vertexBuffer, 0, 17 * 4);
+    for (let corner = 0; corner < 4; corner++)
+      expect(vertices.slice(corner * 17 + 13, corner * 17 + 17)).toEqual([
+        velocity[0][0],
+        velocity[1][0],
+        velocity[2][0],
+        frames[0],
+      ]);
+    expect(system.columns.frame[0]).toBe(Math.fround(Math.fround(Math.fround(1 / 100) * system.columns.age[0]) * 1));
+    expect(system.columns.frame[0]).toBeGreaterThan(0);
+  });
+
+  it("dev 探针的 R 注入（replayParticleOptions）：按出生顺序顶替 R，用完退回种子随机数，只改注入的那个粒子层", async () => {
+    const json = { animationmode: "randomframe" };
+    const bundle = bundleOf([particleLayer(1, json), particleLayer(2, json)]);
+    const plain = await open(bundle, { seed: 3 });
+    const injected = await open(bundle, replayParticleOptions({ dts: [], seed: 3, random: { 1: [0.25, 0.5] } }));
+    for (const { scene, state } of [plain, injected]) scene.update(frame(0.35), state);
+    const columns = (scene: GpuScene, object: number) => particleDraw(scene, object).particles!.system.columns;
+    // 0.35 s、每秒 10 个：3 个粒子
+    const r = (scene: GpuScene, object: number) => Array.from(columns(scene, object).random.subarray(0, 3));
+    const seeded = r(plain.scene, 1);
+    expect(r(injected.scene, 1)).toEqual([0.25, 0.5, seeded[2]]);
+    // randomframe 的 frame 就是 R
+    expect(Array.from(columns(injected.scene, 1).frame.subarray(0, 3))).toEqual([0.25, 0.5, seeded[2]]);
+    expect(r(injected.scene, 2)).toEqual(r(plain.scene, 2));
   });
 
   it("不可见的粒子层不画、不发射，存活粒子清空；重新可见后照常发射（P4a 步骤 5，C8）", async () => {

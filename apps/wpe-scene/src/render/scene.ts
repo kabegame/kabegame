@@ -27,6 +27,7 @@
  *   每个粒子层一个 `ParticleSystem`（种子默认随机，探针可固定；建场景时预热），顶点缓冲按 `maxcount` 分配，索引缓冲全场一份、
  *   只建一次。`update` 按帧时间步进，`encode` 把列写成顶点、`writeBuffer` 后 `drawIndexed`。
  *   MVP = 视图投影 × 对象世界矩阵，`flags & 4` 换透视粒子的视图投影。混合、纹理、材质常量走和图像 pass 相同的路径。
+ *   帧表（P4b 步骤 2）：槽 0 的纹理带帧表时 `g_RenderVar1` 取它的 `sheet`，顶点多写 `a_TexCoordVec4C1`，帧数学在着色器里。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -35,7 +36,7 @@ import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import { FBO_FORMATS } from "../compile/tex";
-import { SeededRandom } from "../particles/random";
+import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ParticleSystem } from "../particles/system";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import { particleVertexLayout, quadIndices, writeVertices, type ParticleVertexLayout } from "../particles/vertices";
@@ -212,6 +213,11 @@ export interface ParticleOptions {
   passes?: 1 | 2;
   /** 随机种子：第 i 个粒子层（`bundle.layers` 里带 `particle` 的，按顺序）用 `seed + i`，同 `particles/track.ts`。缺省随机。 */
   seed?: number;
+  /**
+   * 按粒子层（`objects` 下标）给出生时 `R` 的替换（`ParticleROverride`），每建一个模拟器调一次。只给 dev 探针用（`renderFrame` 的
+   * `particles.random`，替换的实现在探针侧），产品路径不传。
+   */
+  rOverride?: (object: number) => ParticleROverride | undefined;
 }
 
 interface Draw {
@@ -431,6 +437,7 @@ export class GpuScene {
   private readonly particleOrdinals = new Map<number, number>();
   private readonly particlePasses: 1 | 2;
   private readonly particleSeed: number;
+  private readonly particleROverride: ParticleOptions["rOverride"];
   /** 粒子开销记录（dev 探针，`profileParticles` 打开时才有）。 */
   private particleTimings: Map<Draw, ParticleTiming> | null = null;
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
@@ -456,6 +463,7 @@ export class GpuScene {
   ) {
     this.particlePasses = particles.passes ?? 1;
     this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
+    this.particleROverride = particles.rOverride;
     let ordinal = 0;
     for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
   }
@@ -1002,7 +1010,12 @@ export class GpuScene {
     const compiled = layer.particle!;
     const def = { ...compiled, instance: { ...compiled.instance, ...state.particleInstances.get(layer.object) } };
     const ordinal = this.particleOrdinals.get(layer.object) ?? 0;
-    const system = new ParticleSystem(def, new SeededRandom((this.particleSeed + ordinal) >>> 0), this.particlePasses);
+    const system = new ParticleSystem(
+      def,
+      new SeededRandom((this.particleSeed + ordinal) >>> 0),
+      this.particlePasses,
+      this.particleROverride?.(layer.object),
+    );
     system.prewarm();
     const { layout } = particleVertexLayout(program.vertexPacking);
     const vertices = new Float32Array(Math.max(1, system.columns.capacity) * 4 * Math.max(1, layout.stride));
@@ -1184,12 +1197,16 @@ export class GpuScene {
       ambient: state.general.ambientcolor,
       skylight: state.general.skylightcolor,
     };
-    if (step.kind === "particles")
+    if (step.kind === "particles") {
+      // 帧表（P4b 步骤 2）：槽 0 的纹理带帧表时写 `g_RenderVar1`
+      const base = step.inputs[0];
       return particleUniformValues({
         ...common,
         layer: layerState,
         viewProjection: step.perspective ? this.perspectiveViewProjection : this.viewProjection,
+        sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
       });
+    }
     return drawUniformValues({
       ...common,
       step,

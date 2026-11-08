@@ -9,7 +9,7 @@
  * 的 `setupUniforms` / `setupTextureUniforms`；材质常量与用户属性（`pass.uniforms`，编译期已解析）优先于内置值，
  * 与 WPE 着色器的写法一致（例如 `genericimage2` 同时用材质的 `g_UserAlpha` 和对象的 `g_Color4`）。
  */
-import type { SceneLayer, SceneTexture } from "../compile/bundle";
+import type { SceneLayer, SceneSpriteSheet, SceneTexture } from "../compile/bundle";
 import type { UniformLayout } from "../wpesl2wgsl";
 import type { DrawStep } from "./graph";
 import { identity, invert, multiply, normalMatrix, orthographic, scaling, type Mat4 } from "./math";
@@ -362,12 +362,15 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
  * 粒子路径才写的引擎 uniform（`common_particles.h`，P4a 步骤 4），2026-11-07 RenderDoc 实测，正交与透视场景相同：
  * - 朝向是单位基：`g_OrientationUp (0,1,0)`、`g_OrientationRight (1,0,0)`、`g_OrientationForward (0,0,1)`；
  * - `g_ViewUp`、`g_ViewRight`、`g_RenderVar0/1` 在档 1 的两个着色器（内置 `genericparticle`、`shimmering_particles` 的
- *   项目 `particle`）里都没被读取（`referenced: false`，抓帧里是垃圾值），照语义给。`g_RenderVar0/1` 是帧表、拖尾用的，
- *   属 P4b / P4c，先写 0。
- * `g_EyePosition`、`g_Texture0Resolution`（纹理尺寸，32×32 的 `util/white` 为 `(32, 32, 32, 32)`）走通用的 `staticBuiltins`。
+ *   项目 `particle`）里都没被读取（`referenced: false`，抓帧里是垃圾值），照语义给。`g_RenderVar0` 是拖尾用的，属 P4c，先写 0。
+ * - `g_RenderVar1`（P4b 步骤 2）：粒子 pass 槽 0 的纹理带帧表时是 `sheet.renderVar1`（帧宽、帧高、帧数、帧宽高比，
+ *   `FUN_1402366f0` 每次绘制写一次，rea-p4b-render.md 2.2），否则 0。WPE 在帧向量为空时不写、保留上一次绘制的值，
+ *   空帧表已由 `parseTex` 报 `tex:animation:empty`，碰不到。
+ * `g_EyePosition`、`g_Texture0Resolution`（纹理尺寸，32×32 的 `util/white` 为 `(32, 32, 32, 32)`；NPOT 时是
+ * `(纹理宽, 纹理高, 图像宽, 图像高)`，`SPRITESHEETBLENDNPOT` 用它的 `z / x`）走通用的 `staticBuiltins`。
  * 名字与 `compile/features.ts` 的 `PARTICLE_UNIFORMS` 一一对应，单测核对。
  */
-export function particleBuiltins(): Record<string, number[]> {
+export function particleBuiltins(sheet?: SceneSpriteSheet | null): Record<string, number[]> {
   return {
     g_OrientationUp: [0, 1, 0],
     g_OrientationRight: [1, 0, 0],
@@ -375,7 +378,7 @@ export function particleBuiltins(): Record<string, number[]> {
     g_ViewUp: [0, 1, 0],
     g_ViewRight: [1, 0, 0],
     g_RenderVar0: [0, 0, 0, 0],
-    g_RenderVar1: [0, 0, 0, 0],
+    g_RenderVar1: sheet ? [...sheet.renderVar1] : [0, 0, 0, 0],
   };
 }
 
@@ -394,11 +397,14 @@ export interface ParticleUniformInput {
   eye: readonly number[];
   ambient?: readonly number[];
   skylight?: readonly number[];
+  /** 粒子 pass 槽 0 纹理的帧表（`SceneTexture.sheet`）；没有时 `g_RenderVar1` 为 0。 */
+  sheet?: SceneSpriteSheet | null;
 }
 
 /**
  * 粒子绘制的全部静态 uniform：`g_ModelViewProjectionMatrix` = 视图投影 × 对象世界矩阵，`g_ModelMatrix` 是世界矩阵
- * （粒子位置在对象空间里）；粒子专用的见 `particleBuiltins`；材质常量覆盖。建 draw 与就地刷新共用，同 `drawUniformValues`。
+ * （粒子位置在对象空间里）；粒子专用的见 `particleBuiltins`（帧表的 `g_RenderVar1` 取 `sheet`）；材质常量覆盖。
+ * 建 draw 与就地刷新共用，同 `drawUniformValues`。
  */
 export function particleUniformValues(input: ParticleUniformInput): Record<string, number[]> {
   const modelViewProjection = multiply(input.viewProjection, input.world);
@@ -415,7 +421,7 @@ export function particleUniformValues(input: ParticleUniformInput): Record<strin
     ambient: input.ambient,
     skylight: input.skylight,
   });
-  Object.assign(values, particleBuiltins());
+  Object.assign(values, particleBuiltins(input.sheet));
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
   return values;
 }

@@ -71,12 +71,23 @@ export interface SceneParticle {
   maxcount: number;
   /** 预热时长（秒）：加载时一次跑完，步长按 `maxcount` 取 0.05 或 0.2（C1，实测核对过）。 */
   starttime: number;
-  /** 系统 `flags`（整数）：bit2 透视覆盖、bit3–7 禁用对应的 `instanceoverride`（C3）；bit0、bit1 与更高位由能力表报。 */
+  /**
+   * 系统 `flags`（整数）：bit1 关混帧（`SPRITESHEETBLEND = 0`，唯一的读取点，rea-p4b-render.md 2.3），bit2 透视覆盖、
+   * bit3–7 禁用对应的 `instanceoverride`（C3）；bit0 与更高位由能力表报。
+   */
   flags: number;
-  /** `animationmode`：只有 `"randomframe"` 是 1，其余（含缺键、null、`"sequence"`）都是 0。帧表属 P4b。 */
+  /**
+   * `animationmode`：只有 `"randomframe"` 是 1，其余（含缺键、null、`"sequence"`）都是 0。`randomframe` 时出生写 `R`、
+   * 之后不更新，混帧关（rea-p4b-render.md 2.5）；只在帧表系统（`spriteSheet`）里有作用。
+   */
   animationMode: "sequence" | "randomframe";
-  /** 缺省 1。帧表属 P4b。 */
+  /** 缺省 1。帧表系统的 `sequence` 模式下 frame = age / life · 它（可以大于 1，着色器取小数）。 */
   sequenceMultiplier: number;
+  /**
+   * 粒子材质槽 0 的纹理带帧表（WPE 的系统标志 `0x1000000`，rea-p4b-render.md 2.3）：编完材质后由 `compileScene` 填，
+   * `parseParticle` 给 false。模拟器据此每帧算 frame（`ParticleSystem.sequenceFrames`），顶点写 `a_TexCoordVec4C1`。
+   */
+  spriteSheet: boolean;
   /** JSON 顺序，不排序（O2，实测）。 */
   emitters: ParticleModule[];
   initializers: ParticleModule[];
@@ -221,6 +232,7 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
   return {
     file: options.file,
     ...readParticleSystem(json),
+    spriteSheet: false,
     emitters: modules("emitter"),
     initializers: modules("initializer"),
     operators: modules("operator"),

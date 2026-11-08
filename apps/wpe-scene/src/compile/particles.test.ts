@@ -32,20 +32,28 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 共 12 项，外加 renderer sprite；每项都有列，档 1 都有执行函数，sprite 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项，外加 renderer sprite；每项都有列和执行函数，sprite 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
+      "emitter:boxrandom",
       "initializer:lifetimerandom",
       "initializer:sizerandom",
       "initializer:colorrandom",
       "initializer:velocityrandom",
       "initializer:rotationrandom",
       "initializer:angularvelocityrandom",
+      "initializer:alpharandom",
       "operator:movement",
       "operator:angularmovement",
       "operator:alphafade",
       "operator:oscillateposition",
       "operator:oscillatealpha",
+      "operator:sizechange",
+      "operator:alphachange",
+      "operator:colorchange",
+      "operator:oscillatesize",
+      "operator:vortex",
+      "operator:capvelocity",
       "renderer:sprite",
     ]);
     for (const def of PARTICLE_MODULES) {
@@ -65,6 +73,15 @@ describe("模块表", () => {
       oscillatealpha: 16,
       movement: 0,
       sphererandom: 0,
+      // P4b 步骤 3（rea-p4b-modules.md B9、rea-framework「标志位来源」）：只有 alphachange bit4、colorchange bit3
+      boxrandom: 0,
+      alpharandom: 0,
+      sizechange: 0,
+      alphachange: 16,
+      colorchange: 8,
+      oscillatesize: 0,
+      vortex: 0,
+      capvelocity: 0,
     });
   });
 });
@@ -126,13 +143,61 @@ describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
       { frequencymin: 1, frequencymax: 10, scalemin: 0, scalemax: 1, phasemin: 0, phasemax: TWO_PI, ...BLEND },
     ],
     ["renderer", "sprite", { orientation: "screen", axis: [0, 0, 0], flags: 0 }],
+    // P4b 步骤 3（rea-p4b-modules.md A0、A4、B1、B4、B5、B7、B8）
+    [
+      "emitter",
+      "boxrandom",
+      {
+        origin: [0, 0, 0],
+        directions: [1, 1, 0],
+        distancemin: [0, 0, 0],
+        distancemax: [256, 256, 0],
+        speedmin: 0,
+        speedmax: 0,
+        controlpoint: 0,
+        rate: 10,
+        duration: 0,
+        delay: 0,
+        instantaneous: 0,
+        flags: 0,
+        minperiodicduration: 2,
+        maxperiodicduration: 3,
+        minperiodicdelay: 1,
+        maxperiodicdelay: 2,
+        maxtoemitperperiod: 0,
+      },
+    ],
+    ["initializer", "alpharandom", { min: 0.05, max: 1, exponent: 1 }],
+    ["operator", "sizechange", { startvalue: 1, endvalue: 0, starttime: 0, endtime: 1 }],
+    ["operator", "alphachange", { startvalue: 1, endvalue: 0, starttime: 0, endtime: 1 }],
+    ["operator", "colorchange", { startvalue: [1, 1, 1], endvalue: [0, 0, 0], starttime: 0, endtime: 1 }],
+    [
+      "operator",
+      "oscillatesize",
+      { frequencymin: 1, frequencymax: 10, phasemin: 0, phasemax: TWO_PI, scalemin: 0.8, scalemax: 1.2, ...BLEND },
+    ],
+    [
+      "operator",
+      "vortex",
+      {
+        offset: [0, 0, 0],
+        axis: [0, 0, 1],
+        distanceinner: 500,
+        distanceouter: 650,
+        speedinner: 2500,
+        speedouter: 0,
+        flags: 0,
+        controlpoint: 0,
+      },
+    ],
+    ["operator", "capvelocity", { maxspeed: 100, ...BLEND }],
   ];
 
   it.each(ortho)("正交：%s %s", (category, name, expected) => {
     expect(defaults(category, name, true)).toEqual(expected);
   });
 
-  it("透视那一套只在 distancemax、sizerandom、velocityrandom、oscillateposition.scalemax 上不同", () => {
+  it("透视那一套只在 distancemax、sizerandom、velocityrandom、oscillateposition.scalemax 与步骤 3 的几项上不同", () => {
     for (const [category, name, expected] of ortho) {
       const perspective = defaults(category, name, false);
       const changed = Object.keys(expected).filter(
@@ -143,6 +208,9 @@ describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
         sizerandom: ["min", "max"],
         velocityrandom: ["min", "max"],
         oscillateposition: ["scalemax"],
+        boxrandom: ["directions", "distancemax"],
+        vortex: ["distanceinner", "distanceouter", "speedinner"],
+        capvelocity: ["maxspeed"],
       };
       expect(changed, name).toEqual(differs[name] ?? []);
     }
@@ -150,6 +218,34 @@ describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
     expect(defaults("initializer", "sizerandom", false)).toMatchObject({ min: 0.001, max: 1 });
     expect(defaults("initializer", "velocityrandom", false)).toMatchObject({ min: [-1, -1, -1], max: [1, 1, 1] });
     expect(defaults("operator", "oscillateposition", false).scalemax).toBe(0.5);
+    expect(defaults("emitter", "boxrandom", false)).toMatchObject({ directions: [1, 1, 1], distancemax: [1, 1, 1] });
+    expect(defaults("operator", "vortex", false)).toMatchObject({ distanceinner: 1, distanceouter: 2, speedinner: 1 });
+    expect(defaults("operator", "capvelocity", false).maxspeed).toBe(1);
+  });
+
+  it("alpharandom 的缺省 min 是 float 0x3d4ccccd；oscillatesize 的 phasemax 是 float 0x40c90fdb", () => {
+    const bits = (value: number) => new Uint32Array(new Float32Array([value]).buffer)[0];
+    expect(bits(defaults("initializer", "alpharandom", true).min as number)).toBe(0x3d4ccccd);
+    expect(bits(defaults("operator", "oscillatesize", true).phasemax as number)).toBe(0x40c90fdb);
+  });
+
+  it("周期字段解析期 min = min(min, max)（A0）：只写 max 且小于缺省 min 时 min 跟着变小", () => {
+    for (const name of ["sphererandom", "boxrandom"]) {
+      const fields = readParticleModule(
+        "emitter",
+        { name, maxperiodicduration: 1, maxperiodicdelay: 0.5 },
+        true,
+      ).fields;
+      expect(fields, name).toMatchObject({
+        minperiodicduration: 1,
+        maxperiodicduration: 1,
+        minperiodicdelay: 0.5,
+        maxperiodicdelay: 0.5,
+      });
+      expect(
+        readParticleModule("emitter", { name, minperiodicduration: 0.2, maxperiodicduration: 4 }, true).fields,
+      ).toMatchObject({ minperiodicduration: 0.2, maxperiodicduration: 4 });
+    }
   });
 
   it("缺省值每次是新数组，改一份不影响下一次", () => {
@@ -413,17 +509,27 @@ describe("能力表：粒子", () => {
   it("表外模块：particle:<类别>:<名字>", () => {
     expect(
       particleKeys({
-        emitter: [{ name: "boxrandom" }],
-        initializer: [{ name: "alpharandom" }],
+        emitter: [{ name: "layerimage" }],
+        initializer: [{ name: "turbulentvelocityrandom" }],
         operator: [{ name: "turbulence" }],
         renderer: [{ name: "spritetrail" }],
       }),
     ).toEqual([
-      "particle:emitter:boxrandom",
-      "particle:initializer:alpharandom",
+      "particle:emitter:layerimage",
+      "particle:initializer:turbulentvelocityrandom",
       "particle:operator:turbulence",
       "particle:renderer:spritetrail",
     ]);
+    // 步骤 3 的 8 个模块进了表
+    expect(
+      particleKeys({
+        emitter: [{ name: "boxrandom" }],
+        initializer: [{ name: "alpharandom" }],
+        operator: ["sizechange", "alphachange", "colorchange", "oscillatesize", "vortex", "capvelocity"].map(
+          (name) => ({ name }),
+        ),
+      }),
+    ).toEqual([]);
     expect(particleKeys({ operator: [{ id: 3 }] })).toEqual(["particle:operator:unnamed"]);
   });
 
@@ -486,28 +592,82 @@ describe("能力表：粒子", () => {
     ]);
   });
 
-  it("本节不支持的取值：controlpoint、delay、duration 非 0，emitter flags 带 bit1 / bit2，movement flags 非 0", () => {
-    const emitter = (fields: JsonObject) => particleKeys(withModule("emitter", { name: "sphererandom", ...fields }));
-    expect(emitter({ controlpoint: 0, delay: 0, duration: 0, flags: 0 })).toEqual([]);
-    expect(emitter({ controlpoint: 1 })).toEqual(["particle:emitter:sphererandom:controlpoint"]);
-    expect(emitter({ delay: 0.5 })).toEqual(["particle:emitter:sphererandom:delay"]);
-    expect(emitter({ duration: 2 })).toEqual(["particle:emitter:sphererandom:duration"]);
-    expect(emitter({ flags: 1 })).toEqual([]);
-    expect(emitter({ flags: 2 })).toEqual(["particle:emitter:sphererandom:flags"]);
-    expect(emitter({ flags: 8 })).toEqual(["particle:emitter:sphererandom:flags"]);
+  it("本节不支持的取值：controlpoint 非 0，emitter flags 带 bit3 以上，movement flags 非 0；delay、duration 任意值都支持", () => {
+    for (const name of ["sphererandom", "boxrandom"]) {
+      const emitter = (fields: JsonObject) => particleKeys(withModule("emitter", { name, ...fields }));
+      expect(emitter({ controlpoint: 0, delay: 0.5, duration: 2, flags: 7 }), name).toEqual([]);
+      expect(emitter({ duration: -1, delay: -2 }), name).toEqual([]);
+      expect(emitter({ controlpoint: 1 })).toEqual([`particle:emitter:${name}:controlpoint`]);
+      expect(emitter({ flags: 8 })).toEqual([`particle:emitter:${name}:flags`]);
+      expect(emitter({ flags: 0x80000000 })).toEqual([`particle:emitter:${name}:flags`]);
+    }
     expect(particleKeys(withModule("operator", { name: "movement", flags: 1 }))).toEqual([
       "particle:operator:movement:flags",
     ]);
   });
 
-  it("周期发射的字段：没有 bit2 时中性，有 bit2 时连同 flags 一起报", () => {
-    const periodic = { minperiodicdelay: 0.5, maxperiodicdelay: 1, maxtoemitperperiod: 3 };
-    expect(particleKeys(withModule("emitter", { name: "sphererandom", ...periodic }))).toEqual([]);
-    expect(particleKeys(withModule("emitter", { name: "sphererandom", flags: 4, ...periodic }))).toEqual([
-      "particle:emitter:sphererandom:flags",
-      "particle:emitter:sphererandom:maxperiodicdelay",
-      "particle:emitter:sphererandom:maxtoemitperperiod",
-      "particle:emitter:sphererandom:minperiodicdelay",
+  it("周期发射的字段有没有 bit2 都支持（P4b 步骤 3）", () => {
+    const periodic = {
+      minperiodicduration: 0.5,
+      maxperiodicduration: 0.5,
+      minperiodicdelay: 0.5,
+      maxperiodicdelay: 1,
+      maxtoemitperperiod: 3,
+      instantaneous: 3,
+    };
+    for (const name of ["sphererandom", "boxrandom"]) {
+      expect(particleKeys(withModule("emitter", { name, ...periodic }))).toEqual([]);
+      expect(particleKeys(withModule("emitter", { name, flags: 4, ...periodic }))).toEqual([]);
+      expect(particleKeys(withModule("emitter", { name, flags: 6, ...periodic }))).toEqual([]);
+    }
+  });
+
+  it("boxrandom：距离是向量、只接受字符串，写成数字报；没有 sign、cone；audioprocessing* 照报（P4e）", () => {
+    const box = (fields: JsonObject) => particleKeys(withModule("emitter", { name: "boxrandom", ...fields }));
+    expect(box({ distancemin: "50 50 0", distancemax: "100 100 0", directions: "1 1 0", speedmax: 5 })).toEqual([]);
+    expect(box({ distancemin: 0, distancemax: 100 })).toEqual([
+      "particle:emitter:boxrandom:distancemax",
+      "particle:emitter:boxrandom:distancemin",
+    ]);
+    expect(box({ sign: "0 1 0", cone: 0.5 })).toEqual([
+      "particle:emitter:boxrandom:cone",
+      "particle:emitter:boxrandom:sign",
+    ]);
+    expect(box({ audioprocessingmode: 1 })).toEqual(["particle:emitter:boxrandom:audioprocessingmode"]);
+    expect(readParticleModule("emitter", { name: "boxrandom", distancemax: "7 8" }, true).fields.distancemax).toEqual([
+      7, 8, 0,
+    ]);
+  });
+
+  it("vortex：flags 只认 bit0，controlpoint 非 0 报（P4c），audioprocessing* 照报（P4e）", () => {
+    const vortex = (fields: JsonObject) => particleKeys(withModule("operator", { name: "vortex", ...fields }));
+    expect(vortex({ flags: 1, offset: "100 0 0", axis: "0 1 0", controlpoint: 0 })).toEqual([]);
+    expect(vortex({ flags: 2 })).toEqual(["particle:operator:vortex:flags"]);
+    expect(vortex({ controlpoint: 2 })).toEqual(["particle:operator:vortex:controlpoint"]);
+    expect(vortex({ audioprocessingmode: 1, audioprocessingbounds: "0 1" })).toEqual([
+      "particle:operator:vortex:audioprocessingbounds",
+      "particle:operator:vortex:audioprocessingmode",
+    ]);
+  });
+
+  it("步骤 3 的其余模块：blend 只在 oscillatesize、capvelocity 上有；colorchange 的颜色只接受字符串", () => {
+    expect(
+      particleKeys({
+        initializer: [{ name: "alpharandom", min: 0.2, max: 0.8, exponent: 2 }],
+        operator: [
+          { name: "sizechange", startvalue: 1, endvalue: 3, starttime: 0.2, endtime: 0.8 },
+          { name: "alphachange", startvalue: 1, endvalue: 0, starttime: 0.5 },
+          { name: "colorchange", startvalue: "1 0.5 0", endvalue: "0 1 1" },
+          { name: "oscillatesize", frequencymax: 4, blendinstart: 0, blendinend: 0.5 },
+          { name: "capvelocity", maxspeed: 50, blendoutstart: 0.5 },
+        ],
+      }),
+    ).toEqual([]);
+    expect(particleKeys(withModule("operator", { name: "sizechange", blendinend: 0.5 }))).toEqual([
+      "particle:operator:sizechange:blendinend",
+    ]);
+    expect(particleKeys(withModule("operator", { name: "colorchange", startvalue: 1 }))).toEqual([
+      "particle:operator:colorchange:startvalue",
     ]);
   });
 
@@ -534,11 +694,11 @@ describe("能力表：粒子", () => {
     ).toBe(7);
   });
 
-  it("系统 flags：bit2–7 支持；bit0 报 world，bit1 报 2，更高位逐位报十进制位值", () => {
-    for (const flags of [0, 4, 8, 16, 32, 64, 128, 252]) expect(particleKeys({ flags }), String(flags)).toEqual([]);
+  it("系统 flags：bit1–7 支持（bit1 只关混帧，P4b 步骤 2）；bit0 报 world，更高位逐位报十进制位值", () => {
+    for (const flags of [0, 2, 4, 6, 8, 16, 32, 64, 128, 252, 254])
+      expect(particleKeys({ flags }), String(flags)).toEqual([]);
     expect(particleKeys({ flags: 1 })).toEqual(["particle:flags:world"]);
-    expect(particleKeys({ flags: 2 })).toEqual(["particle:flags:2"]);
-    expect(particleKeys({ flags: 7 })).toEqual(["particle:flags:2", "particle:flags:world"]);
+    expect(particleKeys({ flags: 7 })).toEqual(["particle:flags:world"]);
     expect(particleKeys({ flags: 256 + 1024 + 4 })).toEqual(["particle:flags:1024", "particle:flags:256"]);
   });
 
@@ -574,11 +734,21 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ controlpoint: late })).toEqual([]);
   });
 
-  it("animationmode 为 randomframe、sequencemultiplier 不为 1 时报", () => {
+  it("animationmode、sequencemultiplier 任意取值都不报（P4b 步骤 2）；写成绑定或关键帧照报", () => {
     expect(particleKeys({ animationmode: "sequence", sequencemultiplier: 1 })).toEqual([]);
     expect(particleKeys({ animationmode: null, sequencemultiplier: null })).toEqual([]);
-    expect(particleKeys({ animationmode: "randomframe" })).toEqual(["particle:animationmode"]);
-    expect(particleKeys({ sequencemultiplier: 3 })).toEqual(["particle:sequencemultiplier"]);
+    expect(particleKeys({ animationmode: "randomframe" })).toEqual([]);
+    expect(particleKeys({ sequencemultiplier: 3 })).toEqual([]);
+    expect(particleKeys({ animationmode: "randomframe", sequencemultiplier: 0.5, flags: 2 })).toEqual([]);
+    expect(particleKeys({ sequencemultiplier: { user: "m", value: 2 } })).toEqual([
+      "particle:binding:system:sequencemultiplier",
+    ]);
+    expect(particleKeys({ animationmode: { script: "export function update(v) { return v; }", value: "x" } })).toEqual([
+      "particle:binding:system:animationmode",
+    ]);
+    expect(
+      particleKeys({ sequencemultiplier: { animation: { c0: [], options: { fps: 30, length: 30 } }, value: 2 } }),
+    ).toEqual(["value:animation"]);
   });
 
   it("其它顶层键报 particle:system:<键>；顶层键绑定报 particle:binding:system:<键>；模块数组不是数组也报", () => {

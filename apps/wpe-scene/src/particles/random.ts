@@ -44,6 +44,21 @@ export function mulberry32(seed: number): Uint32Source {
   };
 }
 
+/**
+ * 出生时 `R` 的替换（`ParticleSystem` 的可选参数）：参数是这次照常抽到的值，返回写进 `R` 列的值。只给 dev 探针与回放工具用，
+ * 产品路径不传。
+ */
+export type ParticleROverride = (drawn: number) => number;
+
+/**
+ * 按出生顺序顶替 `R`：第 k 个出生的粒子取 `values[k]`（按 float32），用完退回照常抽到的值（P4b 步骤 2 的探针：`randomframe`
+ * 的 frame 就是 `R`，从 WPE 轨迹读出来注入后和 WPE 逐像素比）。每次调用得到一个从头计数的新替换。
+ */
+export function injectedR(values: readonly number[]): ParticleROverride {
+  let next = 0;
+  return (drawn) => (next < values.length ? f32(values[next++]) : drawn);
+}
+
 export class SeededRandom implements ParticleRandom {
   private readonly next: Uint32Source;
 

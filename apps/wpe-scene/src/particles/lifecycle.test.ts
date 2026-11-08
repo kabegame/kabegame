@@ -200,7 +200,7 @@ describe("suspend：不可见的一帧（C8）", () => {
     expect(live.alive).toBe(0);
     expect(live.highWater).toBe(0);
     expect(live.columns.life.every((value) => value === 0)).toBe(true);
-    expect(state).toEqual({ acc: 0, pending: 2, delay: 0, duration: 0, ended: false });
+    expect(state).toEqual({ acc: 0, pending: 2, delay: 0, duration: 0, ended: false, burst: 0, period: 0 });
     // 重新可见：照常发射（瞬发又来一次），不重新预热
     live.step(0.1);
     expect(live.alive).toBe(2);

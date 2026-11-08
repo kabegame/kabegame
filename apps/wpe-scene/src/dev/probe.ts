@@ -23,7 +23,7 @@ import { acquireGpu } from "../render/device";
 import { GpuScene, type ParticleProfile } from "../render/scene";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
-import { replayParticles, type ParticleReplay } from "./particleCorners";
+import { replayParticleOptions, replayParticles, type ParticleReplay } from "./particleCorners";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -158,6 +158,8 @@ export interface RenderFrameOptions {
    * 确定性粒子回放（P4a 步骤 4）：种子固定（缺省 1，第 i 个粒子层用 `seed + i`，同 `particleTrack`）、遍数固定（缺省 1）；
    * 建场景（含预热）后按 `dts` 步进，`dts[0]` 是第 1 帧，最后一帧就是读回的那一帧，`g_Time` 用 dt 的累计值。
    * 不传时种子同样固定为 1、不步进，画的是预热后的状态。
+   * `random`（P4b 步骤 2）：`{ <objects 下标>: [R, …] }`，按出生顺序顶替该系统的 `R`，用完退回种子随机数；`randomframe`
+   * 系统和 WPE 比像素时填 WPE 轨迹里的 frame。
    */
   particles?: ParticleReplay;
 }
@@ -214,7 +216,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const state = SceneState.fromBundle(bundle);
     const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], {
       ignoreUnsupported: force,
-      particles: { seed: options.particles?.seed ?? 1, passes: options.particles?.passes ?? 1 },
+      particles: replayParticleOptions(options.particles),
     });
     try {
       const startTime = options.time ?? 0;
@@ -418,6 +420,8 @@ export interface ParticleTrackProbeOptions {
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。 */
   passes: 1 | 2;
   seed?: number;
+  /** 按 `objects` 下标、按出生顺序顶替 `R`，同 `renderFrame` 的 `particles.random`。 */
+  random?: Record<number, number[]>;
   tag?: string;
 }
 
@@ -439,6 +443,7 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       frames: options.frames,
       passes: options.passes,
       seed: options.seed,
+      random: options.random,
       project: options.projectDir.split(/[\\/]/).filter(Boolean).at(-1) ?? "",
       tag: options.tag,
     });

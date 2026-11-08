@@ -70,7 +70,7 @@ import {
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
 import { collectScripts, type SceneScripts } from "./scripts";
-import { FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
+import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 
 export interface SceneGeneral {
@@ -116,6 +116,67 @@ export interface SceneTexture {
   /** FreeImage 形态的 mip 位置（PNG / JPG 原文件），见 `TexResult.encoded`。 */
   encoded?: TexResult["encoded"];
   videoRange?: { start: number; end: number };
+  /** 头标志 bit2（帧表）置位、帧表非空时有（`spriteSheet`）。只有粒子材质的槽 0 用它（P4b 步骤 2）。 */
+  sheet?: SceneSpriteSheet;
+}
+/**
+ * 粒子帧表（rea-p4b-render.md 2.2，`FUN_1402366f0`）：粒子路径只用第 0 帧的宽、高和帧数，`x`、`y`、`frametime`、`imageId`
+ * 都不读；帧号的网格换算在着色器里（`ComputeSpriteFrame`）。渲染器原样写进 `g_RenderVar1`。
+ */
+export interface SceneSpriteSheet {
+  /**
+   * `(帧宽 / W, 帧高 / H, 帧数, (纹理高 / 纹理宽) · ((帧高 / H) / (帧宽 / W)))`，W、H 是第 0 帧所在图像的第 0 级 mip，
+   * 纹理宽高是 `SceneTexture.textureWidth / textureHeight`。float32。
+   */
+  renderVar1: [number, number, number, number];
+  /** 图像宽 < 纹理宽（只比宽度，WPE 同）→ `SPRITESHEETBLENDNPOT`。 */
+  npot: boolean;
+}
+
+/**
+ * 帧表纹理的 `SceneSpriteSheet`；不是帧表或帧表为空时为 undefined（空帧表由 `parseTex` 报 `tex:animation:empty`）。
+ * `textureWidth` / `textureHeight` 是 bundle 里的纹理尺寸（FreeImage 形态已按 `freeImageTextureSize` 改成图像尺寸，
+ * 同 WPE 在解码前改头字段）。
+ */
+export function spriteSheet(
+  tex: Pick<TexResult, "frames" | "width">,
+  textureWidth: number,
+  textureHeight: number,
+): SceneSpriteSheet | undefined {
+  const first = tex.frames?.[0];
+  if (!first) return undefined;
+  const f32 = Math.fround;
+  const ratio = f32(f32(textureHeight) / f32(textureWidth));
+  return {
+    renderVar1: [first.width, first.height, f32(tex.frames!.length), f32(ratio * f32(first.height / first.width))],
+    npot: tex.width < textureWidth,
+  };
+}
+
+/** 帧表宏要的系统描述（`readParticleSystem` 的两项）。 */
+export interface ParticleSheetSystem {
+  flags: number;
+  animationMode: "sequence" | "randomframe";
+}
+
+/**
+ * 粒子材质槽 0 是帧表纹理时的宏（`FUN_1401d2340`，rea-p4b-render.md 2.4）：`SPRITESHEET` 只在厚格式分支写，一定伴随
+ * `THICKFORMAT`；混帧在系统 `flags` 有 bit1 或 `randomframe`（WPE 解析时顺带置 bit1）时关；`SPRITESHEETBLENDNPOT` 只比宽度。
+ * 值为 0 的宏也写键：`genericparticle` 全用 `#if`，结果相同；项目自定义着色器若用 `#ifdef`，照写才和 WPE 一致。
+ * 没有帧表时返回空对象，粒子材质的宏与缓存键和步骤 1 逐字相同。
+ */
+export function particleSheetDefines(
+  sheet: SceneSpriteSheet | undefined,
+  system: ParticleSheetSystem,
+): Record<string, string> {
+  if (!sheet) return {};
+  const blend = (system.flags & 2) === 0 && system.animationMode !== "randomframe";
+  return {
+    THICKFORMAT: "1",
+    SPRITESHEET: "1",
+    SPRITESHEETBLEND: blend ? "1" : "0",
+    SPRITESHEETBLENDNPOT: sheet.npot ? "1" : "0",
+  };
 }
 export interface ScenePass {
   /** 本 pass 的稳定键（基础材质 `objects/<i>/passes/<k>`、effect `objects/<i>/effects/<j>/passes/<k>`、`objects/<i>/passthrough`、`bloom/<pass>`）。 */
@@ -337,8 +398,11 @@ interface PassContext {
   planned?: ShaderTextureSlot[];
   /** 本 pass 不支持项的上报目标；缺省为场景级。 */
   unsupported?: Set<string>;
-  /** 粒子材质：槽 0 格式是 8–11 时写 `TEX0FORMAT`（`particleWritesTex0Format`），程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。 */
-  particle?: boolean;
+  /**
+   * 粒子材质（P4b 步骤 2 起带系统描述）：槽 0 格式是 8–11 时写 `TEX0FORMAT`（`particleWritesTex0Format`），槽 0 是帧表纹理时
+   * 写帧表宏（`particleSheetDefines`），槽 0 的帧表纹理不报 `tex:animation`；程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。
+   */
+  particle?: ParticleSheetSystem;
 }
 
 /**
@@ -496,10 +560,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   /** 已确定退回且不需要列全时，停止编译后面的图层 / effect。 */
   const settled = () => unsupported.size > 0 && !input.force && !input.exhaustive;
 
+  /**
+   * 一张纹理（按解析后的路径缓存）。`sheetSlot`：本次是粒子材质的槽 0，帧表是合法用法，这次上报的问题里去掉 `tex:animation`
+   * （帧表纹理用在图像层、effect、粒子其它槽时照报，图像层的帧动画属 P6）。缓存的 `textureIssues` 仍是纹理自己的全部问题，
+   * 只在上报时按用途过滤。
+   */
   async function getTexture(
     name: string,
     scope: ResourceScope | null,
     issues: Set<string> = unsupported,
+    sheetSlot = false,
   ): Promise<{ index: number; format: number } | null> {
     const path = texturePath(name);
     const file = await fs.resolveScoped(path, scope);
@@ -507,9 +577,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       issues.add(`texture:missing:${path}`);
       return null;
     }
+    const report = (keys: readonly string[]) => {
+      for (const key of keys) if (!(sheetSlot && key === ANIMATION_ISSUE)) issues.add(key);
+    };
     const existing = textureIndex.get(file.path);
     if (existing !== undefined) {
-      for (const key of textureIssues.get(existing) ?? []) issues.add(key);
+      report(textureIssues.get(existing) ?? []);
       return { index: existing, format: bundle.textures[existing].format };
     }
     let tex: TexResult;
@@ -519,7 +592,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       issues.add(`tex:parse:${path}:${String(error)}`);
       return null;
     }
-    for (const key of tex.unsupported) issues.add(key);
+    report(tex.unsupported);
     const [textureWidth, textureHeight] = tex.encoded
       ? freeImageTextureSize(tex)
       : [tex.textureWidth, tex.textureHeight];
@@ -544,6 +617,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       encoded: tex.encoded,
       videoRange: tex.videoRange,
     });
+    const sheet = spriteSheet(tex, textureWidth, textureHeight);
+    if (sheet) bundle.textures[index].sheet = sheet;
     return { index, format: tex.format };
   }
 
@@ -556,21 +631,32 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    * 图层材质不走这里，`TEX<n>FORMAT` 仍只按 `formatcombo` 由翻译器定。
    * 槽 0 没按名字写时取着色器注解的 `default`：先不带这个宏翻译一次读注解（结果进缓存，不上报，正式翻译会再报一遍），
    * 仍取不到时不写（语料里粒子材质的槽 0 都按名字写了）。
+   * 槽 0 的纹理带帧表（`SceneTexture.sheet`，WPE 据此置系统的 `0x1000000`）时另写帧表宏（`particleSheetDefines`，P4b 步骤 2）。
+   * 槽 0 的纹理按同一规则取：按名字写的（`slots[0]`），否则是注解的 `default`。
    */
   async function particleDefines(
     pass: MaterialPass,
     formats: ShaderTextureSlot[],
+    slots: Record<number, number>,
     scope: ResourceScope | null,
+    system: ParticleSheetSystem,
   ): Promise<Record<string, string>> {
     let format = formats.find((item) => item.slot === 0)?.format;
+    let texture: SceneTexture | undefined = slots[0] === undefined ? undefined : bundle.textures[slots[0]];
     if (format === undefined && pass.shader) {
       const probe = await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, new Set());
       const fallback = probe?.textures?.find((texture) => texture.slot === 0)?.meta?.default;
       if (fallback === FRAMEBUFFER_RT) format = FBO_FORMATS.rgba8888.tex;
-      else if (typeof fallback === "string" && fallback && !fallback.startsWith("_rt_"))
-        format = (await getTexture(fallback, scope, new Set()))?.format;
+      else if (typeof fallback === "string" && fallback && !fallback.startsWith("_rt_")) {
+        const found = await getTexture(fallback, scope, new Set());
+        format = found?.format;
+        texture = found ? bundle.textures[found.index] : undefined;
+      }
     }
-    return format !== undefined && particleWritesTex0Format(format) ? { TEX0FORMAT: String(format) } : {};
+    return {
+      ...particleSheetDefines(texture?.sheet, system),
+      ...(format !== undefined && particleWritesTex0Format(format) ? { TEX0FORMAT: String(format) } : {}),
+    };
   }
 
   /**
@@ -625,8 +711,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const material = parseMaterial(materialText);
     // 语料里粒子材质都是 1 个 pass；多 pass 怎么画没读，保守报
     if (material.passes.length !== 1) unsupported.add("particle:material:passes");
+    const sheetSystem: ParticleSheetSystem = { flags, animationMode: particle.animationMode };
     for (const [k, pass] of material.passes.entries())
-      particle.passes.push(await compilePass(pass, { key: `objects/${index}/particle/passes/${k}`, particle: true }));
+      particle.passes.push(
+        await compilePass(pass, { key: `objects/${index}/particle/passes/${k}`, particle: sheetSystem }),
+      );
+    // 基础材质槽 0 的纹理带帧表：WPE 置系统的 `0x1000000`，模拟器据此每帧算 frame（rea-p4b-render.md 2.3、2.5）
+    const slot0 = particle.passes[0]?.textures[0];
+    particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet;
   }
 
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
@@ -653,13 +745,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         else issues.add(`texture:rendertarget:${name}`);
         continue;
       }
-      const texture = await getTexture(name, scope, issues);
+      const texture = await getTexture(name, scope, issues, !!context.particle && slot === 0);
       if (texture) {
         slots[slot] = texture.index;
         formats.push({ slot, format: texture.format });
       }
     }
-    const defines = context.particle && pass.shader ? await particleDefines(pass, formats, scope) : {};
+    const defines =
+      context.particle && pass.shader ? await particleDefines(pass, formats, slots, scope, context.particle) : {};
     const result = pass.shader
       ? await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, issues, defines)
       : null;
@@ -689,7 +782,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           if (!bindRuntime(binding.slot, fallback)) issues.add(`texture:rendertarget:${fallback}`);
           continue;
         }
-        const texture = await getTexture(fallback, scope, issues);
+        const texture = await getTexture(fallback, scope, issues, !!context.particle && binding.slot === 0);
         if (texture) slots[binding.slot] = texture.index;
       }
       program = addProgram(result);

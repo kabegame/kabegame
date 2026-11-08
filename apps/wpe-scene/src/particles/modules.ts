@@ -7,16 +7,17 @@
  * - 模拟器（`system.ts`，步骤 3）按 `columnFlags` 开列，按 `run` 执行（emitter 写新粒子的位置速度、initializer 写初值、
  *   operator 跑一遍），按字段的 `instance` 乘 `instanceoverride`。没有 `run` 的模块（表外模块、renderer）模拟器跳过。
  *
- * 依据：`.claude/plans/wpe-import/3-scene/phase4/rea-p4a.md` B 节（WPE 2.8.42 读码【确】），列与标志见
- * `p4-particles-REPORT.md`「对 P4a 底座的要求」。公式不在这里重抄，见各执行函数。
+ * 依据：`.claude/plans/wpe-import/3-scene/phase4/rea-p4a.md` B 节、`rea-p4b-modules.md` A、B 节（WPE 2.8.42 读码【确】），
+ * 列与标志见 `p4-particles-REPORT.md`「对 P4a 底座的要求」。公式不在这里重抄，见各执行函数。
  *
- * 不在表里的字段一律按未知报：包括 `audioprocessing*`（属 P4e，缺省值没读）。
+ * 不在表里的字段一律按未知报：包括 `audioprocessing*`（属 P4e；`boxrandom`、`vortex` 等模块带这组键，`rea-p4b-modules.md` D）。
  */
 import { isKeyframedValue, isScriptValue, isUserBinding } from "../compile/bindings";
 import type { ParticleColumns } from "./columns";
-import { sphereRandom } from "./emitters";
+import { boxRandom, sphereRandom } from "./emitters";
 import { f32 } from "./f32";
 import {
+  alphaRandom,
   angularVelocityRandom,
   colorRandom,
   lifetimeRandom,
@@ -24,7 +25,19 @@ import {
   sizeRandom,
   velocityRandom,
 } from "./initializers";
-import { alphaFade, angularMovement, movement, oscillateAlpha, oscillatePosition } from "./operators";
+import {
+  alphaChange,
+  alphaFade,
+  angularMovement,
+  capVelocity,
+  colorChange,
+  movement,
+  oscillateAlpha,
+  oscillatePosition,
+  oscillateSize,
+  sizeChange,
+  vortex,
+} from "./operators";
 import type { ParticleRandom } from "./random";
 
 export type ParticleCategory = "emitter" | "initializer" | "operator" | "renderer";
@@ -61,6 +74,11 @@ export interface ParticleFieldDef {
   supported?: (value: ParticleFieldValue, fields: Readonly<Record<string, ParticleFieldValue>>) => boolean;
   /** 乘哪一项 `instanceoverride`（`rea-p4a.md` C5）；系统 `flags` 的对应位禁用时不乘（C3）。 */
   instance?: InstanceScale;
+  /**
+   * 乘完 `instanceoverride` 再截断成整数（条目类型 1：`int(f32(value)·o)`，`rea-p4b-modules.md`「`instanceoverride` 写回的
+   * 条目类型」）。只有 `maxtoemitperperiod`。
+   */
+  truncate?: boolean;
 }
 
 /** 乘到模块字段上的 `instanceoverride` 项（C5）。`rate`、`alpha` 不乘字段，由模拟器自己用。 */
@@ -165,10 +183,39 @@ const vec3 = (value: ParticleFieldDefault, type: "vec3" | "vec3z" | "vec3str" = 
 /** 字段乘 `instanceoverride` 的哪一项（C5）。 */
 const by = (instance: InstanceScale, def: ParticleFieldDef): ParticleFieldDef => ({ ...def, instance });
 const zeroOnly = (value: ParticleFieldValue) => value === 0;
-/** 周期发射的字段只在 emitter `flags` bit2 时有意义：没有 bit2 时出现算中性，有 bit2 时报（周期发射本节不做）。 */
-const periodic = (_: ParticleFieldValue, fields: Readonly<Record<string, ParticleFieldValue>>) =>
-  (Number(fields.flags) & 4) === 0;
 const TWO_PI = 2 * Math.PI;
+
+/**
+ * emitter 共有的发射字段（`FUN_1401c1c70` 解析、`FUN_1401b8df0` 缺省，`rea-p4b-modules.md` A0【确】），`sphererandom` 与
+ * `boxrandom` 共用；数量逻辑见 `emitters.ts` 的 `emissionCount`（A1–A3，实测核对过）。
+ */
+const EMITTER_FIELDS: Record<string, ParticleFieldDef> = {
+  // 乘 `count`（条目类型 2，不截断）
+  rate: by("count", num(10)),
+  // 帧尾倒数（A2）；JSON 写负值时只发 `instantaneous`（A1 的 `duration < 0` 分支）
+  duration: num(0),
+  delay: num(0),
+  // 从累积余数里扣，之后要还债；不乘 `count`（两条都实测核对过）
+  instantaneous: num(0),
+  // bit0 用 `sign`（只有 `sphererandom` 读，`sign` 非零时自动置位），bit1 每帧至多 1 个，bit2 周期发射；其余位
+  // （bit31 是内部的「已结束」）没读到含义
+  flags: int(0, (value) => (Number(value) & ~7) === 0),
+  minperiodicduration: num(2),
+  maxperiodicduration: num(3),
+  minperiodicdelay: num(1),
+  maxperiodicdelay: num(2),
+  // 乘 `count` 后截断成整数（条目类型 1；实测 `count 2`、`instantaneous 3`、本值 4 时每周期 3 + 8 = 11 个）
+  maxtoemitperperiod: { ...by("count", num(0)), truncate: true },
+};
+
+/** 解析期的周期字段修正（A0）：`min = min(min, max)`，时长、间歇各一对。 */
+function normalizeEmitter(fields: Record<string, ParticleFieldValue>): void {
+  for (const kind of ["duration", "delay"]) {
+    const min = fields[`minperiodic${kind}`] as number;
+    const max = fields[`maxperiodic${kind}`] as number;
+    fields[`minperiodic${kind}`] = Math.min(min, max);
+  }
+}
 
 /**
  * 共用 blend 的四个键（B「operator」【确】）。解析期的修正（`is ≤ ie−0.0001`、`oe ≥ os+0.0001`）与「参数实质非默认才切到带
@@ -181,7 +228,10 @@ const BLEND: Record<string, ParticleFieldDef> = {
   blendoutend: num(1),
 };
 
-/** 档 1 的 12 个模块加 renderer `sprite`。 */
+/**
+ * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
+ * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`），加 renderer `sprite`。
+ */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
     // `FUN_1401b9100` 缺省值；发射数量 `FUN_1402378a0`
@@ -198,26 +248,37 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       // 控制点（上限 7）属 P4c：非 0 时发射位置过控制点矩阵
       controlpoint: int(0, zeroOnly),
       cone: num(0),
-      rate: by("count", num(10)),
-      // 发射时序属 P4b（`delay` 倒数、`duration` 结束）
-      duration: num(0, zeroOnly),
-      delay: num(0, zeroOnly),
-      // 从累积余数里扣，之后要还债（实测核对过）
-      instantaneous: num(0),
-      // bit0 用 `sign`（支持，`sign` 非零时自动置位）；bit1 每帧至多 1 个、bit2 周期发射没实现；其余位（bit31 是内部的「已结束」）没读到含义
-      flags: int(0, (value) => (Number(value) & ~1) === 0),
-      minperiodicduration: num(2, periodic),
-      maxperiodicduration: num(3, periodic),
-      minperiodicdelay: num(1, periodic),
-      maxperiodicdelay: num(2, periodic),
-      maxtoemitperperiod: by("count", num(0, periodic)),
+      ...EMITTER_FIELDS,
     },
     columns: ["position", "velocity"],
     columnFlags: 0,
     normalize(fields) {
       if ((fields.sign as number[]).some((value) => value !== 0)) fields.flags = Number(fields.flags) | 1;
+      normalizeEmitter(fields);
     },
     run: sphereRandom,
+  },
+  {
+    // `FUN_1401b9520` 缺省值（含公共 `FUN_1401b8df0`），解析 `0x1401c6390`，`rea-p4b-modules.md` A4。没有 `sign`、`cone`
+    category: "emitter",
+    name: "boxrandom",
+    fields: {
+      origin: vec3("0 0 0"),
+      directions: vec3({ orthographic: "1 1 0", perspective: "1 1 1" }),
+      // 两个距离是**向量**（每轴独立），只接受字符串
+      distancemin: vec3("0 0 0"),
+      distancemax: vec3({ orthographic: "256 256 0", perspective: "1 1 1" }),
+      // 乘 `speed`（条目类型 6）
+      speedmin: by("speed", num(0)),
+      speedmax: by("speed", num(0)),
+      // 控制点（上限 7）属 P4c：非 0 时出生位置和速度方向过控制点矩阵
+      controlpoint: int(0, zeroOnly),
+      ...EMITTER_FIELDS,
+    },
+    columns: ["position", "velocity"],
+    columnFlags: 0,
+    normalize: normalizeEmitter,
+    run: boxRandom,
   },
   {
     // 绝对写入 `life = max(0.001, …)`
@@ -293,6 +354,15 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     run: angularVelocityRandom,
   },
   {
+    // 乘到 alpha 初值（`rea-p4b-modules.md` B1）；缺省 `min` 是 float `0x3d4ccccd`，两套相同，没有覆盖项
+    category: "initializer",
+    name: "alpharandom",
+    fields: { min: num(0.05), max: num(1), exponent: num(1) },
+    columns: ["alpha0"],
+    columnFlags: 0,
+    run: alphaRandom,
+  },
+  {
     // 半隐式欧拉，drag 按 k0 衰减（实测核对过）。`previousPosition` 只在列标志 bit2 时开头拷一次
     category: "operator",
     name: "movement",
@@ -356,6 +426,84 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columns: ["age", "life", "random", "alpha"],
     columnFlags: COLUMN_FLAGS.alpha,
     run: oscillateAlpha,
+  },
+  {
+    // `rea-p4b-modules.md` B4：两个值都乘 `size`（条目类型 7，实测）；`t` 是生命比例
+    category: "operator",
+    name: "sizechange",
+    fields: {
+      startvalue: by("size", num(1)),
+      endvalue: by("size", num(0)),
+      starttime: num(0),
+      endtime: num(1),
+    },
+    columns: ["age", "life", "size"],
+    columnFlags: 0,
+    run: sizeChange,
+  },
+  {
+    category: "operator",
+    name: "alphachange",
+    fields: { startvalue: num(1), endvalue: num(0), starttime: num(0), endtime: num(1) },
+    columns: ["age", "life", "alpha"],
+    columnFlags: COLUMN_FLAGS.alpha,
+    run: alphaChange,
+  },
+  {
+    // 两个颜色是 0–1 的倍数（不 ÷255），只接受字符串
+    category: "operator",
+    name: "colorchange",
+    fields: { startvalue: vec3("1 1 1"), endvalue: vec3("0 0 0"), starttime: num(0), endtime: num(1) },
+    columns: ["age", "life", "color"],
+    columnFlags: COLUMN_FLAGS.color,
+    run: colorChange,
+  },
+  {
+    // `rea-p4b-modules.md` B5：R 进 ω、相位、幅度三处；频率不乘 `speed`
+    category: "operator",
+    name: "oscillatesize",
+    fields: {
+      frequencymin: num(1),
+      frequencymax: num(10),
+      phasemin: num(0),
+      phasemax: num(TWO_PI),
+      scalemin: num(0.8),
+      scalemax: num(1.2),
+      ...BLEND,
+    },
+    columns: ["age", "life", "random", "size"],
+    columnFlags: 0,
+    run: oscillateSize,
+  },
+  {
+    // `rea-p4b-modules.md` B7：乘 `k`；中心 = 控制点平移 + `offset`
+    category: "operator",
+    name: "vortex",
+    fields: {
+      offset: vec3("0 0 0"),
+      axis: vec3("0 0 1"),
+      distanceinner: num({ orthographic: 500, perspective: 1 }),
+      distanceouter: num({ orthographic: 650, perspective: 2 }),
+      // 乘 `speed`（条目类型 7）
+      speedinner: by("speed", num({ orthographic: 2500, perspective: 1 })),
+      speedouter: by("speed", num(0)),
+      // bit0：柱形（按到轴线的距离）；其余位没读到含义
+      flags: int(0, (value) => (Number(value) & ~1) === 0),
+      // 控制点（上限 7）属 P4c：非 0 时中心取那个控制点的平移
+      controlpoint: int(0, zeroOnly),
+    },
+    columns: ["position", "velocity"],
+    columnFlags: 0,
+    run: vortex,
+  },
+  {
+    // `rea-p4b-modules.md` B8：`maxspeed` 没有覆盖项
+    category: "operator",
+    name: "capvelocity",
+    fields: { maxspeed: num({ orthographic: 100, perspective: 1 }), ...BLEND },
+    columns: ["age", "life", "velocity"],
+    columnFlags: 0,
+    run: capVelocity,
   },
   {
     // `FUN_1401c22e0`（trail、rope 共用）：缺省 `orientation "screen"`、`axis "0 0 0"`、`flags 0`。
@@ -520,8 +668,8 @@ export function readParticleModule(
 export type InstanceMultipliers = Readonly<Record<InstanceScale, number>>;
 
 /**
- * 模拟用的字段：数值舍入成 float32（WPE 的模块记录是 float），带 `instance` 的字段乘对应的 `instanceoverride`。
- * 每次都从解析值（基值）乘，不累乘（C5「运行时改值」）。字符串原样。
+ * 模拟用的字段：数值舍入成 float32（WPE 的模块记录是 float），带 `instance` 的字段乘对应的 `instanceoverride`，带 `truncate`
+ * 的乘完截断成整数（条目类型 1）。每次都从解析值（基值）乘，不累乘（C5「运行时改值」）。字符串原样。
  */
 export function resolveParticleFields(
   def: ParticleModuleDef,
@@ -530,14 +678,13 @@ export function resolveParticleFields(
 ): ParticleFields {
   const out: Record<string, ParticleFieldValue> = {};
   for (const [field, value] of Object.entries(fields)) {
-    const instance = def.fields[field]?.instance;
-    const scale = instance ? f32(multipliers[instance]) : 1;
-    out[field] =
-      typeof value === "number"
-        ? f32(f32(value) * scale)
-        : Array.isArray(value)
-          ? value.map((part) => f32(f32(part) * scale))
-          : value;
+    const spec = def.fields[field];
+    const scale = spec?.instance ? f32(multipliers[spec.instance]) : 1;
+    const resolve = (part: number) => {
+      const scaled = f32(f32(part) * scale);
+      return spec?.truncate ? Math.trunc(scaled) : scaled;
+    };
+    out[field] = typeof value === "number" ? resolve(value) : Array.isArray(value) ? value.map(resolve) : value;
   }
   return out;
 }
