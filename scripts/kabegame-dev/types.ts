@@ -43,7 +43,8 @@ export interface ErrorBody {
   /**
    * 出错的层：`rest`（路由 / 参数）、`access`（来源校验）、`cdp`（连不上 CDP，带 `endpoint`）、`target`（找不到目标）、
    * `page`（页面里抛错 / 找不到元素）、`app`（应用命令拒绝）、`host`（场景宿主）、`guard`（测试工程护栏）、
-   * `platform`（平台不支持）、`handle`（句柄 / 任务 / 控制台流不存在，多半是 vite 重启过）、`vite`（插件内部错误）。
+   * `platform`（平台不支持）、`handle`（句柄 / 任务 / 控制台流不存在，多半是 vite 重启过）、`png`（要 `resize` 但 PNG 格式
+   * 不支持缩小）、`vite`（插件内部错误）。
    */
   layer: string;
   [key: string]: unknown;
@@ -110,6 +111,34 @@ export interface ScreenshotRequest {
   fullPage?: boolean;
 }
 
+/**
+ * 回到调用方的图片尺寸约束：等比、不放大，几项同时给时取最严的；一项都没给时按长边 1568。
+ * REST 的截图、渲染、安卓整屏可选带它；不带时回原图。实现在 `png.ts`（只支持 8 位、不隔行的 RGB / RGBA）。
+ */
+export interface ResizeRequest {
+  /** 相对原尺寸的倍数（大于 1 按 1 算）。 */
+  scale?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+}
+
+export interface ImageDims {
+  width: number;
+  height: number;
+}
+
+/** 原图与回传图的尺寸。 */
+export interface ImageSizeInfo {
+  original: ImageDims;
+  returned: ImageDims;
+  resized: boolean;
+}
+
+/** REST `POST /screenshot` 的请求体：截图参数加可选的 `resize`。 */
+export interface ScreenshotBody extends ScreenshotRequest {
+  resize?: ResizeRequest;
+}
+
 export interface SelectorRequest {
   target: TargetSpec;
   selector: string;
@@ -174,8 +203,75 @@ export interface ConsoleStopResponse {
 export interface MainState {
   vis: string;
   route: string;
+  /** 有图片预览弹窗开着（按弹窗本身的可见状态判断，图片、视频、网页、场景都算）。 */
   preview: boolean;
+  /** 开着的预览弹窗是哪张图；没开为 null。 */
+  previewImageId: string | null;
   grid: string;
+}
+
+/** 主窗口里的图片预览弹窗（依赖 Vue 内部：`ImagePreviewDialog` 的 `previewVisible` 与 `image` prop）。 */
+export interface PreviewInfo {
+  open: boolean;
+  /** 弹窗的目标图片 id（没开为 null）。 */
+  imageId: string | null;
+  /** 弹窗画的确实是这张（单图路线要等按 id 取回）。 */
+  resolved: boolean;
+  /**
+   * `in-view`：图在当前视图里，网格已跳到它所在的页；`single`：不在视图里（或关了「预览自动跟随视图翻页」），
+   * 降级成单图预览；`locating`：还拿着旧对象、网格在跳页。
+   */
+  mode: "in-view" | "single" | "locating" | null;
+  /** 网格当前持有的行里有没有这张。 */
+  inView: boolean;
+  /** 网格当前页码（1 起）与每页条数。 */
+  page: number | null;
+  pageSize: number | null;
+}
+
+/** 主窗口在不在前台。 */
+export interface WindowFrontState {
+  /** 主窗口页面的 `document.visibilityState`（被别的窗口完全挡住、最小化时是 hidden）。 */
+  visibilityState: string;
+  /** 主窗口页面的 `document.hasFocus()`。 */
+  hasFocus: boolean;
+  /** `plugin:window|is_minimized` / `is_visible`，读不到为 null。 */
+  minimized: boolean | null;
+  visible: boolean | null;
+}
+
+export interface ShowWindowResult {
+  /** 到前台了：页面可见且有焦点。 */
+  front: boolean;
+  /**
+   * `focus`：unminimize（最小化时）→ show（不可见时）→ set_focus 就到了前台；
+   * `always-on-top`：没到前台（Windows 前台限制），又临时置顶、set_focus、取消置顶一次。
+   */
+  path: "focus" | "always-on-top";
+  before: WindowFrontState;
+  after: WindowFrontState;
+  /** 每一步调的应用命令与结果。 */
+  steps: string[];
+}
+
+export interface OpenImagePreviewRequest {
+  imageId: string;
+  /** 等预览打开的上限（毫秒），缺省 45 s。 */
+  timeoutMs?: number;
+  /** 打开后把主窗口带到前台，缺省 true。 */
+  show?: boolean;
+}
+
+export interface OpenImagePreviewResult {
+  imageId: string;
+  /** 重载前的主窗口：路由（pathname + search）与预览。 */
+  before: { route: string; preview: PreviewInfo };
+  /** 重载后、预览打开时的路由。 */
+  route: string;
+  preview: PreviewInfo;
+  /** `show: false` 时为 null。 */
+  window: ShowWindowResult | null;
+  ms: number;
 }
 
 export interface AppState {
@@ -274,11 +370,19 @@ export interface RenderMeta {
 
 export interface RenderResponse {
   meta: RenderMeta;
-  /** PNG 的 base64。 */
+  /** PNG 的 base64。请求带 `resize` 时是缩小后的那份。 */
   png: string;
-  /** PNG 文件本身的 sha256。 */
+  /** 原图 PNG 文件本身的 sha256（不随 `resize` 变）。 */
   pngSha256: string;
+  /** 原图 PNG 的字节数（不随 `resize` 变）。 */
   pngBytes: number;
+  /** 原图与 `png` 的尺寸（REST 填）。 */
+  size?: ImageSizeInfo;
+}
+
+/** REST `POST /hosts/:h/render` 的请求体：渲染参数加可选的 `resize`。 */
+export interface RenderBody extends RenderRequest {
+  resize?: ResizeRequest;
 }
 
 /** 测试工程清单：目录 → 库里的行与导入任务。 */

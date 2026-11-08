@@ -1,6 +1,6 @@
 ---
 name: kabegame-chromium
-description: 连上跑起来的 kabegame dev app（桌面 CEF，或经 adb 连 Android dev 包的系统 WebView）做截图与 UI 自动化（CDP），以及调应用命令、操作场景宿主、渲染场景帧、画面哈希、导入 / 移除测试工程、读应用日志。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态 / 调 Tauri 命令 / 渲染某张场景壁纸或比画面哈希时使用；安卓同一套工具，dev 用 --mode android 跑即可。工具经 kabegame-dev MCP（mcp__kabegame-dev__*）或 vite 上的 REST（/__kabegame_dev/*）调用。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
+description: 连上跑起来的 kabegame dev app（桌面 CEF，或经 adb 连 Android dev 包的系统 WebView）做截图与 UI 自动化（CDP），以及调应用命令、把主窗口带到前台、打开某张图的预览、操作场景宿主、渲染场景帧、画面哈希、导入 / 移除测试工程、读应用日志。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态 / 调 Tauri 命令 / 让用户看到正在调试的那张图 / 渲染某张场景壁纸或比画面哈希时使用；安卓同一套工具，dev 用 --mode android 跑即可。工具经 kabegame-dev MCP（mcp__kabegame-dev__*）或 vite 上的 REST（/__kabegame_dev/*）调用。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
 ---
 
 # kabegame-chromium
@@ -57,16 +57,18 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `status` | 两层探活：vite 在不在；经 vite 问 CDP 在不在。不在时报可能原因和下一步 | 不要（探的就是它） | 都有 |
 | `targets` | page 与 iframe 目标（URL、类型、父目标、角色 main / wallpaper / scene-host） | 要 | 都有 |
 | `eval` | 目标页面里求值（表达式或语句块，Promise 会等） | 要 | 都有 |
-| `screenshot` | 截图，`selector` / `clip`（CSS 像素矩形 `{x,y,width,height,scale?}`）/ `fullPage` 三选一；回 image，可 `save` 落盘 | 要 | 都有 |
+| `screenshot` | 截图，`selector` / `clip`（CSS 像素矩形 `{x,y,width,height,scale?}`）/ `fullPage` 三选一；回 image（缺省长边缩到 1568，见下方「图片输出」），可 `save` 落盘原图 | 要 | 都有 |
 | `click`、`text` | 取元素中心派发鼠标事件（强制，不等可操作性）；取 innerText | 要 | 都有 |
 | `invoke` | 调 Tauri 命令（主窗口里的 `__TAURI_INTERNALS__.invoke`） | 要 | 都有 |
 | `console` | `start` / `read`（`since`）/ `stop`：按目标收集控制台消息与未捕获异常 | 要 | 都有 |
 | `app_state` | 当前壁纸、模式、暂停、启用、后处理、过渡、样式、轮播、路由、现有宿主 | 要 | 都有 |
-| `android_screen` | adb 整屏截图（含系统栏、原生对话框） | 要 | 安卓 |
-| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧 | 要 | 桌面 |
+| `show_window` | 把主窗口带到前台：最小化时 unminimize、不可见时 show，再 set_focus；没到前台（Windows 前台限制）时临时置顶再取消。回走了哪条路径、前后的 `visibilityState` / `hasFocus` | 要 | 桌面 |
+| `open_image_preview` | 主窗口打开某张图的预览，再 `show_window`。导航到 `/gallery`（保留 query，加 `pvwimgid`）并整页重载；图在当前视图里就跳到它所在的页，不在就降级成单图预览，不改筛选条件。回最终路由、预览开没开、是哪张、在不在视图里 | 要 | 桌面（安卓未验，不显示窗口） |
+| `android_screen` | adb 整屏截图（含系统栏、原生对话框）；`save` / `size` 同 `screenshot` | 要 | 安卓 |
+| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`） | 要 | 桌面 |
 | `projects_remove` | 按清单移除测试工程（只 `batch_remove_images`） | 要 | 桌面 |
 | `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
-| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据 | 要 | 桌面 |
+| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。固定时刻的一帧，粒子是预热后的状态，见下方「屏外宿主」 | 要 | 桌面 |
 | `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
 | `projects_import` | 导入 `ignore/` 下的测试工程并等完成，清单写 `out` | 要 | 桌面 |
 | `hash_compare` | 只读两份基线，按 `input.path` 对应，比哈希与 unsupported | 不要 | — |
@@ -75,26 +77,60 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 资源：`kabegame-dev://health`（同 `status`）、`kabegame-dev://targets`、`kabegame-dev://jobs`、`kabegame-dev://jobs/{id}`、
 `kabegame-dev://app-log/{date}`（某天最后 2000 行，不需要 vite）。
 
+### 图片输出（`screenshot`、`render_scene`、`host_render`、`android_screen`）
+
+- **`size: { scale?, maxWidth?, maxHeight? }`** 只管回到会话里的那份：等比、不放大，几项同时给时取最严。**不给时长边缩到 1568**，
+  原图不超过就原样回；要原图传 `{ scale: 1 }`（原图可能有十几 MB，例如 4K 渲染）。
+- **`save`** 落盘的**总是原尺寸**：给路径（相对路径按仓库根），或 `"temp"`——落到系统临时目录下的 `kabegame-dev/`，自动命名
+  `<工具名>[-<图片 id>]-<本地时间>.png`，结果里给完整路径。`inline: false` 只落盘不回图。
+- 结果第一段写「原尺寸 W×H」「回传 w×h（已缩小）/ 原尺寸」「原图已保存：路径」。
+- 缩小在 MCP 进程里做（`scripts/kabegame-dev/png.ts`：`node:zlib` 解码、按面积平均缩小、再编码），只支持 8 位、不隔行的 RGB / RGBA
+  （CEF 截图是 RGB，探针输出是 RGBA）。别的格式要缩小时报 `[local]` 并给出已保存的原图路径，不会回一张错图。
+
+```text
+screenshot {}                                  → 回 1568 宽的图
+screenshot { size: { maxWidth: 400 } }          → 只看个大概
+render_scene { imageId: 13515, save: "temp" }   → 回缩小的图，原图 1920×1080 落到 %TEMP%\kabegame-dev\render_scene-13515-….png
+```
+
+### 屏外宿主是计算沙箱，不跑帧循环
+
+`host_open`（缺省 hidden）、`render_scene`、`hash_baseline` 开的宿主摆在视口外，**rAF 不触发**（推测 Chromium 对完全不可见的跨进程
+iframe 停了渲染；`document.visibilityState` 仍是 `visible`）。2026-11-09 实测 600 ms：屏外宿主 0 帧，同时主窗口预览里的宿主与应用背景
+的宿主各 87 帧。所以在屏外宿主里：场景时间停在第一帧，脚本 `update` 只跑一次，粒子不步进。
+
+- 屏外宿主只用来调探针里**一次跑完、结果确定**的接口：`renderFrame` 给固定时刻、`renderFrame` 的 `particles: { dts, … }` 回放、
+  `profile`、`scriptCorpus`、`particleTrack` / `particleCorners`。
+- **看实时行为用可见宿主**：`open_image_preview` 打开那张的预览，再 `screenshot`，或在那个宿主里求值（`hosts` 里 `where: "main"`、
+  没有句柄的那个，`eval target=host:<kbInstance>`）。
+- **`render_scene` 画粒子场景时是预热后的状态**：不步进，`starttime` 为 0 的系统是空的。探针本身的 `particles` 回放参数还没开放给工具，
+  要用就 `host_open` 后 `job start kind=host-task` 自己调 `__kabegameSceneProbe.renderFrame`。
+
 ## REST（`/__kabegame_dev/*`，vite 上）
 
-请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`）。出错回 `{ error, layer, … }`：参数错 400；来源不对、
-测试工程护栏 403；句柄或任务不存在 404（提示 vite 可能重启过）；页面抛错、找不到目标或元素、应用命令被拒 422；宿主产物问题 409；
-CDP 不可用 503（带 `endpoint` 结论）；超时 504；插件内部错误 500。
+请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`，以及原图的 `X-Png-Original-Width` / `-Height`）。
+截图、渲染、安卓整屏可选带 **`resize: { scale?, maxWidth?, maxHeight? }`**（GET 用同名 query），规则同 MCP 的 `size`，在 vite 里缩小后再回；
+**不带时回原图**。渲染带 `resize` 时 `png` 是缩小后的，`pngSha256` / `pngBytes` 仍说的是原图，`size` 报两者尺寸。
+出错回 `{ error, layer, … }`：参数错 400；来源不对、测试工程护栏 403；句柄或任务不存在 404（提示 vite 可能重启过）；页面抛错、找不到
+目标或元素、应用命令被拒、PNG 格式不支持缩小（`png`）422；宿主产物问题、主窗口里有宿主时打开预览 409；CDP 不可用 503（带 `endpoint`
+结论）；超时 504；插件内部错误 500。
 
 | 方法 与 路径 | 做什么 | 平台 |
 |---|---|---|
 | `GET /health` | `{ vite: true, android, cdp: 端点或端点错误, session }`，每次现探 CDP | 都有 |
 | `GET /targets` | page 与 iframe 目标 | 都有 |
 | `POST /eval` | `{ target, expression, timeoutMs? }` → `{ value, type }` | 都有 |
-| `POST /screenshot` | `{ target, selector? \| clip? \| fullPage? }` → PNG | 都有 |
+| `POST /screenshot` | `{ target, selector? \| clip? \| fullPage?, resize? }` → PNG | 都有 |
 | `POST /click`、`POST /text` | `{ target, selector }` | 都有 |
 | `POST /invoke` | `{ command, args? }` → `{ value }` | 都有 |
 | `POST /console`、`GET /console/:id?since=`、`DELETE /console/:id` | 开始收集 / 取新增 / 停 | 都有 |
 | `GET /app/state` | 应用状态快照 | 都有 |
-| `GET /android/screen` | `adb exec-out screencap` → PNG | 安卓 |
+| `POST /app/show-window` | 把主窗口带到前台 → `{ front, path, before, after, steps }` | 桌面 |
+| `POST /app/open-preview` | `{ imageId, timeoutMs?, show? }` → `{ imageId, before, route, preview, window, ms }`（`preview.mode`：`in-view` / `single`） | 桌面 |
+| `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time?, postprocess?, userProperties?, pointer? }` → `{ meta, png(base64), pngSha256 }` | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time?, postprocess?, userProperties?, pointer?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }` | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |
 | `POST /jobs` | `{ kind: "host-task" \| "hash-baseline" \| "projects-import", params }` → 任务记录 | 桌面 |
 | `GET /jobs`、`GET /jobs/:id`、`DELETE /jobs/:id` | 列出 / 查（状态、进度、结果）/ 取消 | 都有 |
@@ -109,6 +145,8 @@ const dev = createClient(); // 端口取 KABEGAME_DEV_SERVER_PORT，缺省 1420
 console.log(await dev.health());
 const mode = await dev.invoke("get_wallpaper_mode");
 const png = await dev.screenshot("main", { clip: { x: 0, y: 0, width: 200, height: 100 } });
+const small = await dev.screenshot("main", { resize: { maxWidth: 800 } }); // 不带 resize 回原图
+const opened = await dev.openImagePreview("13515"); // 重载主窗口打开预览，再带到前台；opened.preview.mode 是 in-view / single
 const job = await dev.jobStart("hash-baseline", { from: "ignore/p4/c1/out/hash-after.json" });
 const done = await dev.waitJob(job.id, { onProgress: (p) => console.error(p) });
 ```
@@ -132,6 +170,10 @@ MCP 请求被取消时会顺手取消 vite 里的任务（协作式）。
 - `hash_baseline`：每张场景按档位（缺省 disabled / enabled / ultra）、固定时刻（缺省 1.5 s）各渲染两次，两次不同就停；格式同旧
   `hash-*.json`。`from` 给旧基线时按 `input.path` 找库里现在的图片 id（测试工程重新导入后 id 会变）。`out` 已存在时拒绝，除非
   `overwrite: true`。10 张 × 3 档约 90 s。
+- **直接走 REST 的画面哈希任务**（`POST /jobs { kind: "hash-baseline", params: { ids? | from?, time?, levels?, host? } }`）：结束后
+  `GET /jobs/:id` 的 `result` 是 `{ ok, unstable, baseline }`——`baseline` 才是 `hash-*.json` 的内容，`unstable` 是停下的那组
+  `{ id, postprocess }`（`ok: true` 时为 null）。**REST 没有 `out` 参数**，不落盘；落盘只在 MCP 的 `hash_baseline` 里做，脚本要自己写
+  `JSON.stringify(result.baseline)`。
 - `hash_compare`：A、B 按 `input.path` 对应；sha256、stable、postprocess、bloomLevels、尺寸、格式、unsupported（按集合）、输入算差异；
   targetBytes、metadataId 单独列。两边是同一份宿主产物时会提醒「相同只说明可复现」。
 - `projects_import` → `projects_remove`：清单 `{ <目录>: { image, task, preexisting } }`，移除时 `manifestFile` 传同一个文件。
@@ -194,8 +236,19 @@ adb shell pidof app.kabegame.dev → <pid>        （KABEGAME_ANDROID_PACKAGE �
   构建里有；没有探针时 `host_open` 报 `[host]`。探针接口（`renderFrame`、`chunk`）改了要同步 `scripts/kabegame-dev/scene.ts`。
 - **只信任新加载的宿主**：只认「文档入口脚本 = 磁盘上 `<target>/debug/resources/wpe-scene/index.html` 的入口脚本」的新 frame
   （P3c 的教训：旧 frame 跑旧代码，档位选项会被悄悄忽略）。宿主产物重新构建后，旧宿主不会被复用。
-- **屏外宿主截不到图**：`screenshot` 报 `[host]`，取画面用 `render_scene` / `host_render`。非屏外宿主（主窗口预览）按 iframe 位置从主窗口截。
-- **`host_open hidden:false` 与关预览依赖 Vue 内部**（`openPreviewById` / `closePreview`），前端改了可能失效，失败时报原因；缺省的屏外宿主不碰用户的预览。
+- **屏外宿主截不到图，也不跑帧循环**：`screenshot` 报 `[host]`，取画面用 `render_scene` / `host_render`；看动起来的样子用
+  `open_image_preview`（见上方「屏外宿主是计算沙箱」）。非屏外宿主（主窗口预览）按 iframe 位置从主窗口截。
+- **预览相关依赖 Vue 内部**（dev 构建才有 `__vueParentComponent`）：判断预览开没开、是哪张，看 `ImagePreviewDialog` 的
+  `exposed.previewVisible` 与 `props.image`（`host_close` 的 `before` / `after`、`open_image_preview` 都用它，图片、视频、网页、场景都认）；
+  页码看外层 `ImageGrid` 的 `exposed`；`host_open hidden:false` 与关预览用 `openPreviewById` / `closePreview`。前端改了可能失效，失败时报原因；
+  缺省的屏外宿主不碰用户的预览。
+- **`open_image_preview` 会整页重载主窗口**（网格只在挂载时读一次 `pvwimgid`），用户正在看的界面会变：原来的预览被换掉、页码回到
+  目标页。主窗口里有 vite 开的宿主时拒绝（`[host]`，重载会把它们一起销毁），先 `host_close`。用完要恢复就关掉预览（`pvwimgid` 随之从 URL
+  去掉），路由与 query 就回到原样；页码是网格自己的状态，不在 URL 里，跳过页就要重新导航回原地址。
+- **`open_image_preview` 一返回就截图，会截到弹窗淡入的半透明画面**，场景 / 网页壁纸也还没出首帧：等 1 s 左右再截，或先在宿主里求值确认
+  在出帧。
+- **`show_window` 会抢走用户当前窗口的焦点**，只在要让用户看到某个画面时用。到没到前台看结果里的 `visibilityState`（被别的窗口完全挡住、
+  最小化时是 `hidden`）与 `hasFocus`。不会无条件 unminimize / show：CEF 的 restore 会把最大化的窗口还原。
 - **测试工程只移除、不删除**：`projects_remove` 只调 `batch_remove_images`，不删磁盘文件；只动目录在仓库 `ignore/` 之下（且在
   `allowPrefix` 之下）的行，任务也必须是只导入这些目录、已结束的 `wpe-import`，有一行不符就整批拒绝、库不变。**绝不调
   `batch_delete_images`**（会连源文件一起删），`invoke` 里也不要调。验收后核对没有残留行与任务。

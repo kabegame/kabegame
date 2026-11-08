@@ -35,11 +35,14 @@ import type {
   HostTaskParams,
   JobKind,
   JobRecord,
+  OpenImagePreviewResult,
   OpenedHost,
   ProjectManifest,
   ProjectsImportParams,
   ProjectsRemoveResult,
-  RenderRequest,
+  RenderBody,
+  ResizeRequest,
+  ShowWindowResult,
   RenderResponse,
   TargetSpec,
   TargetSummary,
@@ -174,9 +177,14 @@ export function createClient(options: ClientOptions = {}) {
     targets: () => get<TargetSummary[]>("/targets"),
     evaluate: (target: TargetSpec, expression: string, timeoutMs?: number) =>
       post<EvalResponse>("/eval", { target, expression, timeoutMs }),
-    /** 截图（PNG 字节）。`selector` / `clip` / `fullPage` 三选一。 */
-    screenshot: (target: TargetSpec, shot: { selector?: string; clip?: ClipRect; fullPage?: boolean } = {}) =>
-      post<Uint8Array>("/screenshot", { target, ...shot }, { binary: true }),
+    /**
+     * 截图（PNG 字节）。`selector` / `clip` / `fullPage` 三选一；`resize` 在 vite 里等比缩小后再回（不给回原图，
+     * 原尺寸也在响应头 `X-Png-Original-Width` / `-Height`）。
+     */
+    screenshot: (
+      target: TargetSpec,
+      shot: { selector?: string; clip?: ClipRect; fullPage?: boolean; resize?: ResizeRequest } = {},
+    ) => post<Uint8Array>("/screenshot", { target, ...shot }, { binary: true }),
     click: (target: TargetSpec, selector: string) => post<ClickResponse>("/click", { target, selector }),
     text: async (target: TargetSpec, selector: string) =>
       (await post<{ text: string }>("/text", { target, selector })).text,
@@ -187,14 +195,32 @@ export function createClient(options: ClientOptions = {}) {
     consoleRead: (id: string, since = 0) => get<ConsoleBatch>(`/console/${seg(id)}?since=${since}`),
     consoleStop: (id: string) => del<ConsoleStopResponse>(`/console/${seg(id)}`),
     appState: () => get<AppState>("/app/state"),
+    /** 桌面：把主窗口带到前台（unminimize / show / set_focus，不行再临时置顶），回前后的可见性与焦点。 */
+    showWindow: () => post<ShowWindowResult>("/app/show-window", {}, { timeoutMs: 60_000 }),
+    /**
+     * 主窗口导航到 `/gallery?…&pvwimgid=<id>` 并重载，等预览弹窗打开到这张图，再显示主窗口（`show: false` 不显示）。
+     * 会改变用户正在看的界面。
+     */
+    openImagePreview: (imageId: string | number, options: { timeoutMs?: number; show?: boolean } = {}) =>
+      post<OpenImagePreviewResult>(
+        "/app/open-preview",
+        { imageId: String(imageId), ...options },
+        { timeoutMs: (options.timeoutMs ?? 45_000) + 60_000 },
+      ),
     /** 安卓：adb 整屏截图（PNG 字节）。 */
-    androidScreen: () => get<Uint8Array>("/android/screen", { binary: true }),
+    androidScreen: (resize?: ResizeRequest) => {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(resize ?? {})) if (value !== undefined) query.set(key, String(value));
+      const qs = query.toString();
+      return get<Uint8Array>(`/android/screen${qs ? `?${qs}` : ""}`, { binary: true });
+    },
     hosts: () => get<HostSummary[]>("/hosts"),
     hostOpen: (open: HostOpenRequest = {}) => post<OpenedHost>("/hosts", open, { timeoutMs: 60_000 }),
     hostClose: (handle: string) => del<HostCloseResult>(`/hosts/${seg(handle)}`),
     hostEval: (handle: string, expression: string, timeoutMs?: number) =>
       post<EvalResponse>(`/hosts/${seg(handle)}/eval`, { expression, timeoutMs }),
-    hostRender: (handle: string, render: RenderRequest) =>
+    /** 宿主里渲染一帧；`resize` 时 `png` 是缩小后的，`pngSha256` / `pngBytes` 仍是原图的，`size` 报两者尺寸。 */
+    hostRender: (handle: string, render: RenderBody) =>
       post<RenderResponse>(`/hosts/${seg(handle)}/render`, render, { timeoutMs: 10 * 60_000 }),
     projectsRemove: (manifest: ProjectManifest, allowPrefix?: string) =>
       post<ProjectsRemoveResult>("/projects/remove", { manifest, allowPrefix }),

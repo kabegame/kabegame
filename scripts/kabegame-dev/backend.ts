@@ -2,7 +2,7 @@
  * 把会话、任务表和各模块组装成 REST 背后的实现。`plugin.ts` 只负责把它挂到 vite 上；不经 vite 的脚本
  * （例如调试本模块）也能直接用 `createDevRuntime`。
  */
-import { appState, invoke } from "./app.ts";
+import { appState, invoke, openImagePreview, showWindow } from "./app.ts";
 import { androidScreencap, resolveEndpoint } from "./endpoint.ts";
 import type { CdpRegistrationLike, Exec } from "./endpoint.ts";
 import { DevError, badRequest, wrongPlatform } from "./errors.ts";
@@ -44,6 +44,12 @@ export function createBackend({ session: s, jobs, probe, exec }: BackendOptions)
     consoleRead: async (id, since) => readConsole(s, id, since),
     consoleStop: (id) => stopConsole(s, id),
     appState: () => appState(s),
+    async showWindow() {
+      desktopOnly("显示主窗口");
+      return showWindow(s);
+    },
+    // 安卓也能用（重载主 WebView、按弹窗判断），只是不显示窗口；没在真机上验过
+    openImagePreview: (request) => openImagePreview(s, s.android ? { ...request, show: false } : request),
     async androidScreen() {
       if (!s.android) throw wrongPlatform("adb 整屏截图", false);
       const result = await androidScreencap(exec);

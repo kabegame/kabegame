@@ -13,6 +13,8 @@ import { Client, InMemoryTransport } from "./testdata/sdkClient.ts";
 import { PNG, SESSION, TOOLS, fakeRest, sendJson } from "./testdata/fakeRest.ts";
 import type { Handler } from "./testdata/fakeRest.ts";
 import { deadPort } from "../../../scripts/kabegame-dev/testdata/fakes.ts";
+import { encodePng, pngSize } from "../../../scripts/kabegame-dev/png.ts";
+import { Buffer } from "node:buffer";
 
 type ToolResult = {
   isError?: boolean;
@@ -52,6 +54,18 @@ const textOf = (result: ToolResult) =>
     .filter((c) => c.type === "text")
     .map((c) => c.text)
     .join("\n");
+
+const imageOf = (result: ToolResult) => {
+  const image = result.content.find((c) => c.type === "image");
+  return image?.data ? new Uint8Array(Buffer.from(image.data, "base64")) : null;
+};
+
+/** 不透明 RGBA 渐变。 */
+function bigPng(width: number, height: number): Uint8Array {
+  const data = new Uint8Array(width * height * 4);
+  for (let i = 0; i < width * height; i++) data.set([i & 255, (i >> 8) & 255, (i * 7) & 255, 255], i * 4);
+  return encodePng({ width, height, channels: 4, data });
+}
 
 async function withRest(handler: Handler, run: (mcp: Awaited<ReturnType<typeof connect>>) => Promise<void>) {
   const rest = await fakeRest(handler);
@@ -210,7 +224,8 @@ describe("一对一工具", () => {
         const clip = { x: 1, y: 2, width: 30, height: 40, scale: 2 };
         const result = await mcp.call("screenshot", { clip, save: "out/shot.png" });
         assert.notEqual(result.isError, true, textOf(result));
-        assert.match(textOf(result), /PNG 1×1/);
+        assert.match(textOf(result), /原尺寸 1×1/);
+        assert.match(textOf(result), /回传：原尺寸/);
         const image = result.content.find((c) => c.type === "image");
         assert.equal(image?.mimeType, "image/png");
         assert.deepEqual(
@@ -222,6 +237,132 @@ describe("一对一工具", () => {
         assert.match(textOf(both), /^\[local\]/);
       },
     );
+  });
+
+  test("截图缩小与落盘：缺省长边 1568、size 取最严、save temp 落原图；REST 收到的不带 size", async () => {
+    const big = bigPng(2400, 300);
+    const rest = await fakeRest((req, _body, res) => {
+      if (req.url?.endsWith("/screenshot")) {
+        res.writeHead(200, { "Content-Type": "image/png" });
+        return res.end(big);
+      }
+      sendJson(res, 404, { error: "x", layer: "rest" });
+    });
+    const mcp = await connect(rest.port);
+    const saved: string[] = [];
+    try {
+      const plain = await mcp.call("screenshot", {});
+      assert.match(textOf(plain), /原尺寸 2400×300/);
+      assert.match(textOf(plain), /回传：1568×196（已缩小/);
+      assert.deepEqual(pngSize(imageOf(plain)!), { width: 1568, height: 196 });
+
+      const small = await mcp.call("screenshot", { size: { maxWidth: 400 }, save: "temp" });
+      assert.notEqual(small.isError, true, textOf(small));
+      assert.deepEqual(pngSize(imageOf(small)!), { width: 400, height: 50 });
+      const file = /原图已保存：(.+)$/m.exec(textOf(small))![1];
+      saved.push(file);
+      assert.match(path.basename(file), /^screenshot-\d{8}-\d{6}-\d{3}\.png$/);
+      assert.deepEqual(new Uint8Array(readFileSync(file)), big, "落盘的是原图");
+
+      const bad = await mcp.call("screenshot", { size: { maxWidth: 0 } });
+      assert.equal(bad.isError, true);
+      assert.deepEqual(
+        rest.seen.map((r) => r.body),
+        [{ target: "main" }, { target: "main" }],
+        "size / save 不发给 REST（缩小在 MCP 里做）",
+      );
+    } finally {
+      for (const file of saved) rmSync(file, { force: true });
+      await mcp.close();
+      await rest.close();
+    }
+  });
+
+  test("show_window 与 open_image_preview：参数原样转给 REST，结果有路径、前后状态与预览", async () => {
+    const front = { visibilityState: "visible", hasFocus: true, minimized: false, visible: true };
+    const shown = {
+      front: true,
+      path: "always-on-top",
+      before: { ...front, visibilityState: "hidden", hasFocus: false },
+      after: front,
+      steps: ["plugin:window|set_focus：ok"],
+    };
+    const preview = {
+      open: true,
+      imageId: "13515",
+      resolved: true,
+      mode: "single",
+      inView: false,
+      page: 1,
+      pageSize: 1000,
+    };
+    await withRest(
+      (req, _body, res) => {
+        if (req.url?.endsWith("/app/show-window")) return sendJson(res, 200, shown);
+        if (req.url?.endsWith("/app/open-preview")) {
+          return sendJson(res, 200, {
+            imageId: "13515",
+            before: { route: "/gallery", preview: { ...preview, open: false, imageId: null, mode: null } },
+            route: "/gallery?pvwimgid=13515",
+            preview,
+            window: shown,
+            ms: 4200,
+          });
+        }
+        sendJson(res, 404, { error: "x", layer: "rest" });
+      },
+      async (mcp) => {
+        const show = await mcp.call("show_window");
+        assert.notEqual(show.isError, true, textOf(show));
+        assert.match(textOf(show), /^主窗口已到前台（路径 always-on-top/);
+        assert.match(textOf(show), /之前：visibilityState hidden，hasFocus false/);
+        assert.match(textOf(show), /之后：visibilityState visible，hasFocus true/);
+
+        const open = await mcp.call("open_image_preview", { imageId: 13515, timeoutMs: 9000 });
+        assert.notEqual(open.isError, true, textOf(open));
+        assert.match(
+          textOf(open),
+          /^预览：开着 13515（不在当前视图里，降级成单图预览）；路由 \/gallery\?pvwimgid=13515；用时 4\.2 s/,
+        );
+        assert.match(textOf(open), /之前：路由 \/gallery，预览没开/);
+        assert.match(textOf(open), /主窗口已到前台/);
+        const bad = await mcp.call("open_image_preview", { imageId: "abc" });
+        assert.equal(bad.isError, true);
+      },
+    );
+  });
+
+  test("host_render：缺省缩小回传，save 落原图（自动命名带图片 id），元数据在文本里", async () => {
+    const big = bigPng(1800, 900);
+    const meta = { width: 1800, height: 900, sha256: "pix", format: "rgba8unorm" };
+    const saved: string[] = [];
+    await withRest(
+      (_req, body, res) =>
+        sendJson(res, 200, {
+          meta: { ...meta, echo: body },
+          png: Buffer.from(big).toString("base64"),
+          pngSha256: "file",
+          pngBytes: big.length,
+        }),
+      async (mcp) => {
+        const result = await mcp.call("host_render", {
+          handle: "h-1",
+          imageId: "42",
+          save: "temp",
+          size: { scale: 0.1 },
+        });
+        assert.notEqual(result.isError, true, textOf(result));
+        assert.deepEqual(pngSize(imageOf(result)!), { width: 180, height: 90 });
+        const file = /原图已保存：(.+)$/m.exec(textOf(result))![1];
+        saved.push(file);
+        assert.match(path.basename(file), /^host_render-42-/);
+        assert.deepEqual(new Uint8Array(readFileSync(file)), big);
+        assert.match(textOf(result), /像素摘要（RGBA）pix，原图 PNG 文件 sha256 file/);
+        assert.match(textOf(result), /"format": "rgba8unorm"/);
+        assert.match(textOf(result), /原尺寸 1800×900/);
+      },
+    );
+    for (const file of saved) rmSync(file, { force: true });
   });
 
   test("REST 回的层原样带出（句柄 404）", async () => {

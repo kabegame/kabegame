@@ -6,7 +6,7 @@
  *   以及不需要 vite 的 `hash_compare`、`app_log`。
  *
  * 工具表是静态的：vite 不在时照常列出，调用时回 `isError` 并写明是哪一层不在（文本以 `[层]` 开头）。
- * 参数里的相对路径一律按仓库根解析。
+ * 参数里的相对路径一律按仓库根解析。图片类工具的落盘与缩小见 `imageOutput.ts`。
  */
 import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -27,9 +27,15 @@ import type {
   JobKind,
   JobRecord,
   KabegameDevClient,
+  OpenImagePreviewResult,
+  PreviewInfo,
   ProjectManifest,
   RenderResponse,
+  ShowWindowResult,
+  WindowFrontState,
 } from "./client.ts";
+import { DEFAULT_MAX_EDGE, TEMP_SAVE, imageOutput } from "./imageOutput.ts";
+import type { ImageOutputOptions } from "./imageOutput.ts";
 import { LEVELS, formatMark, markNow, parseMark, readSince, readTail } from "./appLog.ts";
 import { compareBaselines, formatCompare, loadBaseline } from "./hashCompare.ts";
 import { formatStatus, probeStatus } from "./status.ts";
@@ -70,6 +76,7 @@ const LAYER_TITLES: Record<string, string> = {
   host: "场景宿主出错",
   guard: "测试工程护栏拒绝，库没有改动",
   platform: "当前平台不支持",
+  png: "PNG 格式不支持缩小",
   job: "任务没有成功结束",
   local: "MCP 本地（参数 / 文件）",
 };
@@ -105,13 +112,6 @@ const pretty = (value: unknown): string => {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
 };
 
-/** PNG 头里的宽高（IHDR）。 */
-export function pngSize(png: Uint8Array): { width: number; height: number } | null {
-  if (png.length < 24 || png[0] !== 0x89 || png[1] !== 0x50 || png[2] !== 0x4e || png[3] !== 0x47) return null;
-  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
-  return { width: view.getUint32(16), height: view.getUint32(20) };
-}
-
 const resolvePath = (root: string, file: string) => path.resolve(root, file);
 
 function writeOut(root: string, file: string, data: string | Uint8Array, overwrite = true): string {
@@ -124,23 +124,42 @@ function writeOut(root: string, file: string, data: string | Uint8Array, overwri
   return abs;
 }
 
-function imageContent(
-  root: string,
-  png: Uint8Array,
-  options: { label: string; save?: string; inline?: boolean; lead?: string[] },
-): CallToolResult {
-  const size = pngSize(png);
-  const lines = [...(options.lead ?? [])];
-  lines.push(
-    `${options.label}：PNG ${size ? `${size.width}×${size.height}` : "尺寸未知"}，${(png.length / 1024).toFixed(1)} KB`,
-  );
-  if (options.save) lines.push(`已保存：${writeOut(root, options.save, png)}`);
-  const content: CallToolResult["content"] = [{ type: "text", text: lines.join("\n") }];
-  if (options.inline !== false) {
-    content.push({ type: "image", data: Buffer.from(png).toString("base64"), mimeType: "image/png" });
+/** 图片结果：落盘原图、缩小回传的那份（见 `imageOutput.ts`）。缩小失败时报 `[local]`，带已保存的路径。 */
+function imageContent(png: Uint8Array, options: ImageOutputOptions): CallToolResult {
+  try {
+    return { content: imageOutput(png, options).content };
+  } catch (error) {
+    throw new ToolError("local", error instanceof Error ? error.message : String(error));
   }
-  return { content };
 }
+
+const frontText = (state: WindowFrontState) =>
+  `visibilityState ${state.visibilityState}，hasFocus ${state.hasFocus}` +
+  (state.minimized ? "，最小化" : "") +
+  (state.visible === false ? "，不可见" : "");
+
+function showWindowLines(result: ShowWindowResult): string[] {
+  return [
+    `主窗口${result.front ? "已到前台" : "没到前台"}（路径 ${result.path === "focus" ? "focus：unminimize / show / set_focus" : "always-on-top：又临时置顶、set_focus、取消置顶"}）`,
+    `之前：${frontText(result.before)}`,
+    `之后：${frontText(result.after)}`,
+    ...(result.front
+      ? []
+      : ["没到前台：Windows 前台限制（后台进程拿不到前台），或窗口在别的虚拟桌面；请用户自己切过去"]),
+    `步骤：${result.steps.join("；")}`,
+  ];
+}
+
+const previewText = (preview: PreviewInfo) =>
+  !preview.open
+    ? "没开"
+    : `开着 ${preview.imageId}（${
+        preview.mode === "in-view"
+          ? `在当前视图里，第 ${preview.page ?? "?"} 页`
+          : preview.mode === "single"
+            ? "不在当前视图里，降级成单图预览"
+            : "网格还在跳页"
+      }${preview.resolved ? "" : "，还没取到图"}）`;
 
 /** MCP 进度通知：值必须单调增，同一个值不重复发。 */
 function progressReporter(extra: Extra) {
@@ -208,8 +227,25 @@ const TARGET = z
   .string()
   .default("main")
   .describe("目标：main（主窗口）/ wallpaper（壁纸窗口）/ url:<URL 子串> / host:<宿主句柄或 kbInstance>，缺省 main");
-const SAVE = z.string().optional().describe("PNG 落盘路径（相对路径按仓库根）；不给就只回图");
+const SAVE = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(
+    `PNG 落盘路径（相对路径按仓库根），或 "${TEMP_SAVE}"：系统临时目录下的 kabegame-dev/，自动命名（工具名 + 时间），结果里给完整路径。落盘的总是原尺寸；不给就只回图`,
+  );
 const INLINE = z.boolean().default(true).describe("是否把图片放进结果；只想落盘时传 false（要同时给 save）");
+const SIZE = z
+  .object({
+    scale: z.number().positive().optional().describe("相对原尺寸的倍数（大于 1 按 1 算）"),
+    maxWidth: z.number().int().positive().optional(),
+    maxHeight: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional()
+  .describe(
+    `回到会话里的图片尺寸：等比、不放大，几项同时给时取最严。不给时长边缩到 ${DEFAULT_MAX_EDGE}（原图不超过就原样回）；要原图传 { scale: 1 }。只影响回传，不影响落盘`,
+  );
 const CLIP = z
   .object({
     x: z.number(),
@@ -316,18 +352,19 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "截目标页面（只有 CEF / WebView 内容，不含系统层；安卓整屏用 android_screen）。selector / clip / fullPage 三选一，都不给就截视口。" +
         "目标是场景宿主时按 iframe 在主窗口里的位置换算后从主窗口截；屏外宿主截不到（改用 render_scene / host_render）。" +
-        "Windows 上壁纸窗口挂到 WorkerW 后截不到图，用 eval 读 DOM。回 PNG 图片，可用 save 落盘。",
+        'Windows 上壁纸窗口挂到 WorkerW 后截不到图，用 eval 读 DOM。回 PNG 图片（缺省长边缩到 1568，size 调），save 落盘原图（路径或 "temp"）。',
       inputSchema: {
         target: TARGET,
         selector: z.string().optional().describe("只截这个元素"),
         clip: CLIP.optional(),
         fullPage: z.boolean().optional().describe("整页"),
         save: SAVE,
+        size: SIZE,
         inline: INLINE,
       },
       annotations: READ_ONLY,
     },
-    async ({ target, selector, clip, fullPage, save, inline }) => {
+    async ({ target, selector, clip, fullPage, save, size, inline }) => {
       if ([selector, clip, fullPage || undefined].filter((v) => v !== undefined).length > 1) {
         throw new ToolError("local", "selector / clip / fullPage 只能给一个");
       }
@@ -337,7 +374,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       if (clip !== undefined) shot.clip = clip;
       if (fullPage) shot.fullPage = true;
       const png = await client.screenshot(target, shot);
-      return imageContent(root, png, { label: `截图 ${target}`, save, inline });
+      return imageContent(png, { root, tool: "screenshot", label: `截图 ${target}`, save, size, inline });
     },
   );
 
@@ -426,16 +463,65 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
   );
 
   tool(
+    "show_window",
+    {
+      title: "显示主窗口",
+      description:
+        "桌面：把主窗口带到前台，让用户看得到在调试什么：最小化时 unminimize、不可见时 show，再 set_focus；没到前台（Windows 前台限制）时退一步临时置顶再取消。" +
+        "回走了哪条路径，以及前后的 document.visibilityState / hasFocus（被别的窗口完全挡住时 visibilityState 是 hidden）。会抢走用户当前窗口的焦点。",
+      inputSchema: {},
+    },
+    async () => {
+      const result = await client.showWindow();
+      return textResult(...showWindowLines(result), "", pretty(result));
+    },
+  );
+
+  tool(
+    "open_image_preview",
+    {
+      title: "打开图片预览",
+      description:
+        "在主窗口打开某张图的预览，并把主窗口带到前台（同 show_window）。做法：主窗口导航到 /gallery，保留当前 query，加 pvwimgid=<id>，重载；" +
+        "等预览弹窗打开、确认是这张图。图在当前视图里时网格跳到它所在的页，不在时降级成单图预览；不改用户的筛选条件。" +
+        "会改变用户正在看的界面（整页重载、关掉原来的预览）；主窗口里有 vite 开的场景宿主时拒绝（重载会销毁它们）。" +
+        "场景 / 网页壁纸的预览是可见的实时宿主（跑帧循环，屏外宿主不跑）：之后可以截图，或用 eval target=host:<kbInstance> 在里面求值（kbInstance 见 hosts）。" +
+        "一返回就截图会截到弹窗淡入的半透明画面、场景还没出首帧，等 1 s 左右再截。",
+      inputSchema: {
+        imageId: IMAGE_ID,
+        timeoutMs: z.number().int().positive().optional().describe("等预览打开的上限（毫秒），缺省 45000"),
+      },
+    },
+    async ({ imageId, timeoutMs }) => {
+      const result: OpenImagePreviewResult = await client.openImagePreview(imageId, { timeoutMs });
+      return textResult(
+        `预览：${previewText(result.preview)}；路由 ${result.route}；用时 ${(result.ms / 1000).toFixed(1)} s`,
+        `之前：路由 ${result.before.route}，预览${previewText(result.before.preview)}`,
+        ...(result.window ? showWindowLines(result.window) : ["没有显示窗口"]),
+        "",
+        pretty(result),
+      );
+    },
+  );
+
+  tool(
     "android_screen",
     {
       title: "安卓整屏截图",
       description: "安卓：adb exec-out screencap 整屏（含系统栏、原生对话框）。桌面调用报 [platform]。",
-      inputSchema: { save: SAVE, inline: INLINE },
+      inputSchema: { save: SAVE, size: SIZE, inline: INLINE },
       annotations: READ_ONLY,
     },
-    async ({ save, inline }) => {
+    async ({ save, size, inline }) => {
       if (inline === false && !save) throw new ToolError("local", "inline 为 false 时要给 save");
-      return imageContent(root, await client.androidScreen(), { label: "安卓整屏", save, inline });
+      return imageContent(await client.androidScreen(), {
+        root,
+        tool: "android_screen",
+        label: "安卓整屏",
+        save,
+        size,
+        inline,
+      });
     },
   );
 
@@ -494,20 +580,19 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
 
   const renderResult = (
     response: RenderResponse,
-    label: string,
-    save?: string,
-    inline?: boolean,
+    options: { tool: string; imageId: string; save?: string; size?: z.infer<typeof SIZE>; inline?: boolean },
     lead: string[] = [],
   ) =>
-    imageContent(root, Buffer.from(response.png, "base64"), {
-      label,
-      save,
-      inline,
-      lead: [
-        ...lead,
-        `像素摘要（RGBA）${response.meta.sha256}，PNG 文件 sha256 ${response.pngSha256}`,
-        JSON.stringify(response.meta, null, 2),
-      ],
+    imageContent(Buffer.from(response.png, "base64"), {
+      root,
+      tool: options.tool,
+      extra: options.imageId,
+      label: `渲染 ${options.imageId}`,
+      save: options.save,
+      size: options.size,
+      inline: options.inline,
+      lead: [...lead, `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`],
+      tail: [JSON.stringify(response.meta, null, 2)],
     });
 
   tool(
@@ -516,12 +601,19 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       title: "宿主里渲染一帧",
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。",
-      inputSchema: { handle: z.string().min(1), imageId: IMAGE_ID, ...RENDER_FIELDS, save: SAVE, inline: INLINE },
+      inputSchema: {
+        handle: z.string().min(1),
+        imageId: IMAGE_ID,
+        ...RENDER_FIELDS,
+        save: SAVE,
+        size: SIZE,
+        inline: INLINE,
+      },
       annotations: READ_ONLY,
     },
-    async ({ handle, imageId, save, inline, ...render }) => {
+    async ({ handle, imageId, save, size, inline, ...render }) => {
       const response = await client.hostRender(handle, { imageId, ...render });
-      return renderResult(response, `渲染 ${imageId}`, save, inline);
+      return renderResult(response, { tool: "host_render", imageId, save, size, inline });
     },
   );
 
@@ -602,17 +694,19 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       title: "渲染场景一帧",
       description:
         "桌面：给图片 id，自己开一个屏外宿主（kbScene 为这张图）、渲染一帧、关掉宿主，回图片与元数据。不碰用户的预览。" +
-        "给 host 时改用已开的宿主、不开也不关。宿主产物要用 --mode development 构建（要有 dev 探针）。",
+        "给 host 时改用已开的宿主、不开也不关。宿主产物要用 --mode development 构建（要有 dev 探针）。" +
+        "屏外宿主不跑帧循环：画的是固定时刻的一帧，粒子是预热后的状态、不步进（starttime 为 0 的系统是空的）；看实时行为用 open_image_preview。",
       inputSchema: {
         imageId: IMAGE_ID,
         ...RENDER_FIELDS,
         host: z.string().optional().describe("用已开的宿主句柄"),
         save: SAVE,
+        size: SIZE,
         inline: INLINE,
       },
       annotations: READ_ONLY,
     },
-    async ({ imageId, host, save, inline, ...render }) => {
+    async ({ imageId, host, save, size, inline, ...render }) => {
       const started = Date.now();
       const opened = host ? null : await client.hostOpen({ hidden: true, scene: imageId });
       const handle = host ?? opened!.handle;
@@ -630,7 +724,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
           closed = `用的是已开的宿主 ${handle}，没有关`;
         }
       }
-      return renderResult(response, `渲染 ${imageId}`, save, inline, [
+      return renderResult(response, { tool: "render_scene", imageId, save, size, inline }, [
         `宿主产物 ${opened?.entry ?? "（已开的宿主）"}；${closed!}；用时 ${seconds(started)}`,
       ]);
     },

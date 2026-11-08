@@ -411,3 +411,110 @@ deno run --allow-net=127.0.0.1,localhost --allow-read --allow-write --allow-env 
 - 去掉 playwright 后桌面 CEF 是否还劫持页面下载（文档写「预期不再劫持，未实测」）；
 - 安卓真机；
 - `versions/latest/regression.md` 没加条目：dev 工具不进发布包。
+
+## 第 3 批 — 显示窗口、打开预览、截图落盘与缩放（2026-11-08 用户）
+
+**背景：** 第 2 批提交后，用户和另一个会话用了一轮，反馈如下：
+- 屏外宿主不跑帧循环；
+- `render_scene` 画出 0 个粒子；
+- 内联图片是原尺寸（3441×2465，12 MB）；
+- `host_close` 的 `before.preview` 不准；
+- REST 的哈希任务结果格式没写进文档。
+
+用户定这一批做下面四点，其余反馈（`host_open` 在主窗口不可见时提醒、`app_state` 带主窗口可见性与宿主入口）以后再说。
+
+### 点 1 — 显示窗口
+- **新增：**
+  - REST `POST /app/show-window`；
+  - MCP `show_window`。
+- **做法：** 在主窗口里依次 `invoke("plugin:window|unminimize" / "show" / "set_focus", { label: "main" })`。主窗口免 ACL，`capabilities/main.json` 也有 `allow-show`、`allow-set-focus`；不改 Rust。
+- **Windows 的前台限制：** 后台进程调 `SetForegroundWindow` 可能只让任务栏闪烁。实测不到前台时，退一步用 `set_always_on_top` 开再关（`main.json` 有 `allow-set-always-on-top`）。结果里报 `document.visibilityState` 与 `document.hasFocus()`。
+
+### 点 2 — 打开图片预览
+- **新增：**
+  - REST `POST /app/open-preview { imageId }`；
+  - MCP `open_image_preview`。
+- **做法：** 主窗口导航到 `/gallery`，保留当前 query，加 `pvwimgid=<id>`，再重载页面。图片网格只在挂载时读一次 URL，只 push 参数不会打开预览。
+  - 图片在当前视图里就跳到它所在的页；不在就降级成单图预览。不改用户的筛选条件。
+  - 等重载完成、预览弹窗打开（确认是这张图），再调点 1 显示窗口、放到前台，让用户看得到在调试哪一张。
+- **顺带修 `mainState` 的预览判断：** 现在的选择器是 `.preview-wallpaper-wrapper`，对场景预览不灵（`host_close` 报 `preview: false`）。改成按预览弹窗本身判断，并给出当前预览的图片 id。
+
+### 点 3 — 截图与渲染的输出
+`screenshot`、`render_scene`、`host_render`、`android_screen` 统一两件事：
+- **落盘：** `save` 可以给路径，也可以给 `"temp"`。`"temp"` 时落到系统临时目录下的 `kabegame-dev/`，自动命名（工具名 + 时间），结果里给出完整路径。**落盘的总是原尺寸。**
+- **缩放：** `size: { scale?, maxWidth?, maxHeight? }` 决定回到会话里的图片尺寸，等比、不放大。不给时按长边 1568 等比缩小；原图不超过这个尺寸就原样回。结果里同时报原尺寸和回传尺寸。
+- **缩放的实现：** 不依赖页面。新增 `scripts/kabegame-dev/png.ts`：用 `node:zlib` 解码 PNG（只需支持 CEF 截图与探针输出的 8 位 RGB / RGBA），按面积平均缩小，再编码 PNG。MCP 和 REST 共用。
+  - REST 的截图与渲染接口加可选的 `resize`，直接调用的脚本也能用；
+  - MCP 从 REST 拿原图，落盘原图，再在本地缩小内联的那一份。
+
+### 点 4 — 文档（`.claude/skills/kabegame-chromium/SKILL.md`）
+- **屏外宿主是计算沙箱，不跑帧循环。** 它摆在视口外，rAF 不触发（推测 Chromium 对完全不可见的跨进程 iframe 停了渲染）：场景时间停在第一帧，脚本 `update` 只跑一次，粒子不步进。
+  - 以前的用法：只调探针里一次跑完、结果确定的接口，即 `renderFrame` 给固定时刻、`renderFrame` 的 `particles: { dts, … }` 回放、`profile`、`scriptCorpus`、`particleTrack` / `particleCorners`；
+  - 看实时行为用可见宿主：`open_image_preview` 打开预览，再截图、在那个宿主里求值。
+- **`render_scene` 画粒子场景时是预热后的状态。** 不步进，`starttime` 为 0 的系统是空的。探针本身的 `particles` 回放参数还没开放给工具。
+- **REST 的哈希任务：** 结果是 `{ ok, unstable, baseline }`，REST 没有 `out` 参数，落盘只在 MCP 版有。
+- 新工具 `show_window`、`open_image_preview`，以及 `save: "temp"`、`size` 的用法，写进工具表。
+
+### 实施记录 / 第 3 批（2026-11-09，子代理实现，Claude 已验收）
+
+- **新增：**
+  - `scripts/kabegame-dev/png.ts`：`node:zlib` 解码 / 编码 PNG、按面积平均缩小（RGBA 先乘 alpha 再平均）、尺寸约束 `fitSize` / `resizePng`；只认 8 位、不隔行的 RGB / RGBA，调色板、灰度、16 位、隔行、CRC 不对、截断都抛 `PngError`。单测 `png.test.ts`。
+  - `apps/kabegame-dev-mcp/src/imageOutput.ts`：图片类工具的落盘（路径或 `"temp"`）、缩小回传、尺寸文本。单测 `imageOutput.test.ts`。
+  - REST `POST /app/show-window`、`POST /app/open-preview`；MCP `show_window`、`open_image_preview`。
+- **修改：**
+  - `app.ts`：`showWindow`、`openImagePreview`、`PREVIEW_PROBE`（按 `ImagePreviewDialog` 的 `exposed.previewVisible` 与 `props.image` 判断，页码取外层 `ImageGrid` 的 `exposed`）；`mainState` 改用它，多了 `previewImageId`。
+  - `rest.ts`：截图、渲染、安卓整屏可选 `resize`（GET 用 query）；PNG 响应加 `X-Png-Original-Width` / `-Height`；渲染响应加 `size`。`pngSize` 移到 `png.ts`、`rest.ts` 转出。
+  - `types.ts`、`backend.ts`；`client.ts`（`showWindow`、`openImagePreview`、`screenshot` / `androidScreen` / `hostRender` 带 `resize`）；`tools.ts`（四个图片工具加 `size`、`save` 认 `"temp"`）。
+  - `SKILL.md`：图片输出、屏外宿主不跑帧循环、`render_scene` 的粒子状态、REST 哈希任务结果、新工具与 REST 路由、Gotchas。
+
+和计划不同、或计划没写、由代理按证据定的：
+
+- **`show_window` 不无条件 unminimize / show**：最小化时才 unminimize、不可见时才 show（同 `startup.rs` 的 `ensure_main_window`）。kbcef 的 `Unminimize` 是 `CefWindow::Restore()`，会把最大化的窗口还原。退一步的置顶：原本就置顶的不取消。
+- **「到前台」的判断是 `visibilityState === "visible" && hasFocus()`**，2 s 内没到才走置顶。
+- **`open_image_preview`：**
+  - 先用 `images://gallery/by_id/<id>` 查图片在不在，不在回 422，不白重载一次；
+  - 主窗口里有 vite 开的宿主时回 409：重载会把它们一起销毁；
+  - 「确认是这张图」= 弹窗开着、目标 id 相同、弹窗实际在画的 `previewImage` 也是这张、网格不在跳页（`mode` 不是 `locating`）；
+  - 安卓：后端照样能调（不显示窗口），没验。`show_window` 只桌面。
+- **REST 的 `resize` 不给时回原图**（兼容已有脚本）；MCP 不经 REST 缩小，拿原图、落盘原图、本地缩小。渲染带 `resize` 时 `png` 换成缩小的，`pngSha256` / `pngBytes` 仍是原图的。
+- **MCP 缩小失败**（格式不支持）报 `[local]`，原图照样落盘，错误里带路径；`size: { scale: 1 }` 不缩小、不解码。
+- **没改**：`open_image_preview` 一返回就截图会截到弹窗淡入（约 0.3 s）、场景还没出首帧。只写进文档与工具描述；要在工具里等淡入结束 / 首帧，要再改 vite 侧、再开一次预览验证，这次没做。
+
+验收结果（子代理自测）：
+
+| 项 | 结果 |
+|---|---|
+| 单测（带代理环境，不设 `NO_PROXY`） | `scripts/kabegame-dev/` 20 组 83 步、`apps/kabegame-dev-mcp/` 13 组 39 步全过；`deno check` 通过；Prettier 通过；根 tsc 867 → 867，新文件 0 个 |
+| 端到端方式 | SDK `StdioClientTransport` 照 `.mcp.json` 拉起 `main.ts`（带当前环境，含 `HTTP_PROXY`） |
+| `screenshot` 缺省 | 原图 1779×1145（754 KB），回传 1568×1009（603 KB）；CEF 截图是 8 位 RGB |
+| `screenshot size.maxWidth 400` | 回传 400×257（71 KB） |
+| `screenshot save "temp"` | 回传 1568×1009；落盘 `%TEMP%\kabegame-dev\screenshot-20261109-000217-540.png` 是 1779×1145 |
+| `render_scene 13515 save "temp"` | 原图 1920×1080（3.4 MB，RGBA），回传 1568×882（1.9 MB）；落盘文件 sha256 = REST 的 `pngSha256`，解码后 RGBA 摘要 `3e7c0b7a…` = 探针 `meta.sha256`（和第 1、2 批的参照相同）；残留宿主 0 |
+| `show_window`（窗口可见、没焦点） | 路径 focus：`set_focus` 后 `hasFocus` false → true |
+| `show_window`（窗口被挡住：`visibilityState` hidden） | `set_focus` 2 s 内仍 hidden，退到置顶：之后 `visible`、`hasFocus` true，1.5 s 后仍 visible；`is_always_on_top` 恢复 false。用时 3.1 s。场景是自然出现的，没去遮挡窗口 |
+| `open_image_preview 13515` | 2.8 s；路由 `/gallery` → `/gallery?pvwimgid=13515`；弹窗开着、`props.image` 为裸 id `13515`、标题 Beach（13515 的显示名）；当前视图是「bedroom + 场景」搜索、只有 13523 一张，所以 `mode: "single"`（降级成单图），页码 1 |
+| `mainState` 新判断 | 预览开着时 `host_open` / `host_close` 的 `before` / `after` 都是 `preview: true`、`previewImageId: "13515"`（场景预览，旧选择器报 false） |
+| 屏外宿主不跑帧循环 | 600 ms 内 rAF：屏外宿主 0 帧（`visibilityState` 仍 visible），预览里的 13515 宿主与应用背景的 13531 宿主各 87 帧 |
+| 恢复与不留痕迹 | 关掉自己开的预览后路由回到 `/gallery`、网格同开始（第 1 页、13523），`app_state` 与开始时逐字段相同，没有残留宿主 |
+
+**没在真环境验的：** 安卓（`open_image_preview` 安卓路径、`android_screen` 的 query 缩小只有单测）；`host_render` 带 `size` 只有单测（`render_scene` 走同一条路径）；最小化窗口的 unminimize 路径（不去最小化用户的窗口）。
+
+**vite 重启 1 次**（vite 侧改动先在 scratchpad 的暂存副本里写好、单测、`deno check`、Prettier，再用一条 `cp` 一次性拷回 6 个文件；
+vite 控制台在用户终端里看不到，按 `/health` 的会话代数与任务表归零确认重启过，是否被拆成两次无法确认）。`deno.lock` 没变。开屏外宿主时应用日志多一条「场景壁纸 13513 退回预览图」，是缺省场景 13513 本来就退回，和以前各批一样。
+
+Claude 独立验收（不采信自报，另写脚本、照 `.mcp.json` 起 stdio MCP，带 `HTTP_PROXY`、不设 `NO_PROXY`）：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | `git status` 只有本批文件；`phase-4c-controlpoints.md` 是另一会话的，`third/` 与子仓库的 `m` 是原有状态 |
+| 单测、检查 | 两个包自跑全过（20 组 83 步、13 组 39 步）；`deno check`（含 `main.ts`、`plugin.ts`）、Prettier 通过；新文件 LF |
+| 工具表 | 24 个，含 `show_window`、`open_image_preview` |
+| `open_image_preview` 不存在的 id | `[app]` 报「图片 999999999 不存在」，主窗口 `performance.timeOrigin` 不变（没重载） |
+| `screenshot size.maxWidth 0` | SDK 参数校验拒绝 |
+| `screenshot size.maxHeight 300` + `save "temp"` | 回传 466×300；落盘原图 1779×1145 |
+| `screenshot inline false` + `save "temp"` | 不回图，只落盘 |
+| `render_scene 13515 size.scale 0.25` + `save "temp"` | 回传 480×270；落盘 1920×1080，文件 sha256 = `pngSha256`，解码 RGBA 摘要 = `meta.sha256`（`3e7c0b7a…`） |
+| REST `/screenshot` 带 `resize.maxWidth 300` | 回 300×193，`X-Png-Original-*` 为 1779×1145；不带 `resize` 回原图 |
+| REST `/android/screen` 在桌面 | 400 `platform` |
+| **`open_image_preview 13523`（图在当前视图里，子代理只测到 `single`）** | 2.1 s；`mode: "in-view"`、第 1 页、`resolved`；窗口本来就在前台，走 focus 路径、两步跳过；1.2 s 后截图是 13523（Razer Bedroom）的场景预览、弹窗不透明 |
+| 恢复 | 关预览后路由回 `/gallery`、网格同开始；`app_state` 与开始时逐字相同；只剩应用背景的宿主 13531 |

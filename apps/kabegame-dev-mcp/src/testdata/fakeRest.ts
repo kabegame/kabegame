@@ -61,6 +61,8 @@ export const TOOLS = [
   "invoke",
   "console",
   "app_state",
+  "show_window",
+  "open_image_preview",
   "android_screen",
   "hosts",
   "host_open",

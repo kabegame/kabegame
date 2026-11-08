@@ -158,7 +158,7 @@ describe("连接", () => {
       entry: "index-a.js",
       build: { entry: "index-a.js", frameVisibility: "visible", corpusHead: "" },
       known: new Set(),
-      before: { vis: "", route: "", preview: false, grid: "" },
+      before: { vis: "", route: "", preview: false, previewImageId: null, grid: "" },
       generation: s.generation,
     });
     assert.equal(s.host("h-12345678").instance, "inst-1");

@@ -2,12 +2,17 @@
  * `/__kabegame_dev/*` 的 REST 路由。JSON 进出，截图回 `image/png`；出错回 `{ error, layer, ...}`：
  * CDP 不可用 503（带端点结论）、参数错 400、句柄或任务不存在 404（提示 vite 可能重启过）。
  *
+ * 截图、渲染、安卓整屏可选带 `resize`（`{ scale?, maxWidth?, maxHeight? }`，GET 用同名 query）：等比、不放大，
+ * 在 vite 里用 `png.ts` 缩小后再回；不带时回原图。
+ *
  * 只接受本机访问：来源地址必须是回环（同 debug server 的判断）；带 `Origin` 时只认 localhost / 127.0.0.1 / [::1]，
  * `Host` 也只认这几个（防 DNS 重绑定：同源 GET 不带 Origin）。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Buffer } from "node:buffer";
 import { DevError, badRequest } from "./errors.ts";
+import { PngError, parseResizeSpec, pngSize, resizePng } from "./png.ts";
+import type { ResizeSpec } from "./png.ts";
 import type {
   AppState,
   ClickResponse,
@@ -21,13 +26,19 @@ import type {
   HostSummary,
   JobKind,
   JobRecord,
+  ImageSizeInfo,
+  OpenImagePreviewRequest,
+  OpenImagePreviewResult,
   OpenedHost,
   ProjectsRemoveResult,
   RenderRequest,
   RenderResponse,
   ScreenshotRequest,
+  ShowWindowResult,
   TargetSummary,
 } from "./types.ts";
+
+export { pngSize } from "./png.ts";
 
 export const PREFIX = "/__kabegame_dev";
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -46,6 +57,8 @@ export interface DevBackend {
   consoleRead(id: string, since: number): Promise<ConsoleBatch>;
   consoleStop(id: string): Promise<ConsoleStopResponse>;
   appState(): Promise<AppState>;
+  showWindow(): Promise<ShowWindowResult>;
+  openImagePreview(request: OpenImagePreviewRequest): Promise<OpenImagePreviewResult>;
   androidScreen(): Promise<Uint8Array>;
   hosts(): Promise<HostSummary[]>;
   hostOpen(request: HostOpenRequest): Promise<OpenedHost>;
@@ -108,24 +121,60 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
-function sendPng(res: ServerResponse, png: Uint8Array): void {
+/**
+ * 回 PNG。`X-Png-Width` / `X-Png-Height` 是回的这张，`X-Png-Original-Width` / `X-Png-Original-Height` 是原图
+ * （没缩小时两组相同）。
+ */
+function sendPng(res: ServerResponse, png: Uint8Array, resize?: ResizeSpec): void {
+  const shaped = shapePng(png, resize);
   res.statusCode = 200;
   res.setHeader("Content-Type", "image/png");
-  res.setHeader("Content-Length", String(png.length));
+  res.setHeader("Content-Length", String(shaped.png.length));
   res.setHeader("Cache-Control", "no-store");
-  const size = pngSize(png);
-  if (size) {
-    res.setHeader("X-Png-Width", String(size.width));
-    res.setHeader("X-Png-Height", String(size.height));
+  if (shaped.size) {
+    res.setHeader("X-Png-Width", String(shaped.size.returned.width));
+    res.setHeader("X-Png-Height", String(shaped.size.returned.height));
+    res.setHeader("X-Png-Original-Width", String(shaped.size.original.width));
+    res.setHeader("X-Png-Original-Height", String(shaped.size.original.height));
   }
-  res.end(Buffer.from(png));
+  res.end(Buffer.from(shaped.png));
 }
 
-/** PNG 头里的宽高（IHDR）。 */
-export function pngSize(png: Uint8Array): { width: number; height: number } | null {
-  if (png.length < 24 || png[0] !== 0x89 || png[1] !== 0x50 || png[2] !== 0x4e || png[3] !== 0x47) return null;
-  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
-  return { width: view.getUint32(16), height: view.getUint32(20) };
+/** 按 `resize` 缩小（没给就原样）；格式不支持缩小时 422（layer `png`）。 */
+function shapePng(png: Uint8Array, resize?: ResizeSpec): { png: Uint8Array; size: ImageSizeInfo | null } {
+  if (!resize) {
+    const dims = pngSize(png);
+    return { png, size: dims ? { original: dims, returned: dims, resized: false } : null };
+  }
+  try {
+    const out = resizePng(png, resize);
+    return { png: out.png, size: { original: out.original, returned: out.returned, resized: out.resized } };
+  } catch (error) {
+    if (error instanceof PngError) throw new DevError(422, "png", `缩小失败：${error.message}`);
+    throw error;
+  }
+}
+
+/** 解析尺寸约束；不合法 400。 */
+function resizeSpec(value: unknown): ResizeSpec | undefined {
+  try {
+    return parseResizeSpec(value);
+  } catch (error) {
+    throw badRequest(`resize 不合法：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** GET 的尺寸约束从 query 取：`scale`、`maxWidth`、`maxHeight`。 */
+function resizeFromQuery(url: URL): ResizeSpec | undefined {
+  const spec: Record<string, number> = {};
+  for (const key of ["scale", "maxWidth", "maxHeight"]) {
+    const raw = url.searchParams.get(key);
+    if (raw === null) continue;
+    const value = Number(raw);
+    if (!raw.trim() || !Number.isFinite(value)) throw badRequest(`${key} 要是数字`);
+    spec[key] = value;
+  }
+  return Object.keys(spec).length ? resizeSpec(spec) : undefined;
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -163,6 +212,20 @@ const optNumber = (body: Record<string, unknown>, key: string): number | undefin
   return value;
 };
 
+/**
+ * 渲染结果按 `resize` 换掉 `png`，并补上 `size`。`pngSha256`、`pngBytes` 始终说的是原图。
+ * 没给 `resize` 时不解 base64 全文，只读开头的 IHDR 取尺寸。
+ */
+function shapeRender(response: RenderResponse, resize?: ResizeSpec): RenderResponse {
+  if (typeof response?.png !== "string") return response;
+  if (!resize) {
+    const dims = pngSize(new Uint8Array(Buffer.from(response.png.slice(0, 44), "base64")));
+    return dims ? { ...response, size: { original: dims, returned: dims, resized: false } } : response;
+  }
+  const shaped = shapePng(new Uint8Array(Buffer.from(response.png, "base64")), resize);
+  return { ...response, png: Buffer.from(shaped.png).toString("base64"), size: shaped.size ?? undefined };
+}
+
 type Route = {
   method: string;
   pattern: RegExp;
@@ -194,7 +257,8 @@ export function createRestHandler(backend: DevBackend) {
           if (typeof body.fullPage !== "boolean") throw badRequest("fullPage 要是布尔值");
           request.fullPage = body.fullPage;
         }
-        sendPng(res, await backend.screenshot(request));
+        const resize = resizeSpec(body.resize);
+        sendPng(res, await backend.screenshot(request), resize);
       },
     },
     {
@@ -247,9 +311,40 @@ export function createRestHandler(backend: DevBackend) {
     },
     { method: "GET", pattern: /^\/app\/state$/, handle: async (_m, _q, res) => json(res, await backend.appState()) },
     {
+      method: "POST",
+      pattern: /^\/app\/show-window$/,
+      handle: async (_m, req, res) => {
+        await readJson(req);
+        json(res, await backend.showWindow());
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/app\/open-preview$/,
+      handle: async (_m, req, res) => {
+        const body = await readJson(req);
+        const imageId = body.imageId;
+        if ((typeof imageId !== "string" && typeof imageId !== "number") || !/^\d+$/.test(String(imageId))) {
+          throw badRequest("缺 imageId（图片 id）");
+        }
+        if (body.show !== undefined && typeof body.show !== "boolean") throw badRequest("show 要是布尔值");
+        json(
+          res,
+          await backend.openImagePreview({
+            imageId: String(imageId),
+            timeoutMs: optNumber(body, "timeoutMs"),
+            show: body.show as boolean | undefined,
+          }),
+        );
+      },
+    },
+    {
       method: "GET",
       pattern: /^\/android\/screen$/,
-      handle: async (_m, _q, res) => sendPng(res, await backend.androidScreen()),
+      handle: async (_m, _q, res, url) => {
+        const resize = resizeFromQuery(url);
+        sendPng(res, await backend.androidScreen(), resize);
+      },
     },
     { method: "GET", pattern: /^\/hosts$/, handle: async (_m, _q, res) => json(res, await backend.hosts()) },
     {
@@ -280,9 +375,15 @@ export function createRestHandler(backend: DevBackend) {
       pattern: /^\/hosts\/([\w-]+)\/render$/,
       handle: async (m, req, res) => {
         const body = await readJson(req);
-        const imageId = body.imageId;
+        const { resize: rawResize, ...rest } = body;
+        const imageId = rest.imageId;
         if (typeof imageId !== "string" && typeof imageId !== "number") throw badRequest("缺 imageId");
-        json(res, await backend.hostRender(m[1], { ...(body as Partial<RenderRequest>), imageId: String(imageId) }));
+        const resize = resizeSpec(rawResize);
+        const response = await backend.hostRender(m[1], {
+          ...(rest as Partial<RenderRequest>),
+          imageId: String(imageId),
+        });
+        json(res, shapeRender(response, resize));
       },
     },
     {

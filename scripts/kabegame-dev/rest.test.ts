@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 import { DevError, staleHandle } from "./errors.ts";
 import { checkAccess, createRestHandler, pngSize } from "./rest.ts";
 import { localFetch } from "./localHttp.ts";
+import { decodePng, encodePng } from "./png.ts";
+import { Buffer } from "node:buffer";
 import type { DevBackend } from "./rest.ts";
 
 // 1×1 的 PNG
@@ -46,6 +48,14 @@ function fakeBackend(overrides: Partial<DevBackend> = {}): { backend: DevBackend
     consoleRead: record("consoleRead", { id: "c-1", entries: [], next: 0, ended: null, dropped: 0 }),
     consoleStop: record("consoleStop", { id: "c-1", stopped: true as const, total: 0 }),
     appState: record("appState", {} as never),
+    showWindow: record("showWindow", {
+      front: true,
+      path: "focus" as const,
+      before: { visibilityState: "hidden", hasFocus: false, minimized: false, visible: true },
+      after: { visibilityState: "visible", hasFocus: true, minimized: false, visible: true },
+      steps: ["plugin:window|set_focus：ok"],
+    }),
+    openImagePreview: record("openImagePreview", { imageId: "7" } as never),
     androidScreen: record("androidScreen", PNG),
     hosts: record("hosts", []),
     hostOpen: record("hostOpen", {} as never),
@@ -265,5 +275,145 @@ describe("REST 路由", () => {
   test("pngSize 读 IHDR", () => {
     assert.deepEqual(pngSize(PNG), { width: 1, height: 1 });
     assert.equal(pngSize(new Uint8Array([1, 2, 3])), null);
+  });
+});
+
+/** 40×20 的不透明 RGBA，像素按坐标算。 */
+function bigPng(width = 40, height = 20): Uint8Array {
+  const data = new Uint8Array(width * height * 4);
+  for (let i = 0; i < width * height; i++) data.set([(i * 7) & 255, (i * 3) & 255, i & 255, 255], i * 4);
+  return encodePng({ width, height, channels: 4, data });
+}
+
+describe("显示窗口与打开预览", () => {
+  test("show-window 回后端结果；open-preview 校验 imageId、转数字、带 timeoutMs 与 show", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const shown = await (await post(`${base}/__kabegame_dev/app/show-window`, {})).json();
+      assert.equal(shown.front, true);
+      assert.equal(shown.path, "focus");
+      assert.equal(shown.after.visibilityState, "visible");
+
+      const opened = await post(`${base}/__kabegame_dev/app/open-preview`, {
+        imageId: 13515,
+        timeoutMs: 5000,
+        show: false,
+      });
+      assert.equal(opened.status, 200);
+      assert.deepEqual(await opened.json(), { imageId: "7" });
+      for (const body of [{}, { imageId: "abc" }, { imageId: "1", show: "yes" }, { imageId: "1", timeoutMs: -1 }]) {
+        const bad = await post(`${base}/__kabegame_dev/app/open-preview`, body);
+        assert.equal(bad.status, 400, JSON.stringify(body));
+        assert.equal((await bad.json()).layer, "rest");
+      }
+      const get = await localFetch(`${base}/__kabegame_dev/app/open-preview`);
+      assert.equal(get.status, 405);
+      await get.body?.cancel();
+      assert.deepEqual(calls, [
+        ["showWindow"],
+        ["openImagePreview", { imageId: "13515", timeoutMs: 5000, show: false }],
+      ]);
+    });
+  });
+});
+
+describe("resize", () => {
+  test("截图：不带时回原图（两组尺寸头相同）；带时缩小，头里有原尺寸", async () => {
+    const png = bigPng();
+    const { backend, calls } = fakeBackend({ screenshot: async () => png });
+    await withServer(backend, async (base) => {
+      let res = await post(`${base}/__kabegame_dev/screenshot`, { target: "main" });
+      assert.deepEqual(new Uint8Array(await res.arrayBuffer()), png);
+      assert.equal(res.headers.get("x-png-width"), "40");
+      assert.equal(res.headers.get("x-png-original-width"), "40");
+
+      res = await post(`${base}/__kabegame_dev/screenshot`, { target: "main", resize: { maxWidth: 10 } });
+      assert.equal(res.status, 200);
+      const small = new Uint8Array(await res.arrayBuffer());
+      assert.deepEqual(pngSize(small), { width: 10, height: 5 });
+      assert.equal(res.headers.get("x-png-width"), "10");
+      assert.equal(res.headers.get("x-png-height"), "5");
+      assert.equal(res.headers.get("x-png-original-width"), "40");
+      assert.equal(res.headers.get("x-png-original-height"), "20");
+      assert.equal(decodePng(small).channels, 4);
+      // resize 不传给后端
+      assert.deepEqual(calls, []);
+    });
+  });
+
+  test("resize 不合法回 400；格式不支持缩小回 422（png 层）", async () => {
+    const palette = Uint8Array.from(PNG);
+    palette[25] = 3; // 颜色类型改成调色板（CRC 随之不对，也会报错，同样不回错图）
+    const { backend } = fakeBackend({ screenshot: async () => palette });
+    await withServer(backend, async (base) => {
+      let res = await post(`${base}/__kabegame_dev/screenshot`, { target: "main", resize: { scale: 0 } });
+      assert.equal(res.status, 400);
+      assert.match((await res.json()).error, /resize 不合法/);
+      res = await post(`${base}/__kabegame_dev/screenshot`, { target: "main", resize: { width: 3 } });
+      assert.equal(res.status, 400);
+      await res.body?.cancel();
+      // 1×1 不用缩小：原样回，不解码
+      res = await post(`${base}/__kabegame_dev/screenshot`, { target: "main", resize: { maxWidth: 10 } });
+      assert.equal(res.status, 200);
+      await res.body?.cancel();
+    });
+    const big = bigPng();
+    const broken = Uint8Array.from(big);
+    broken[25] = 3;
+    const { backend: backend2 } = fakeBackend({ screenshot: async () => broken });
+    await withServer(backend2, async (base) => {
+      const res = await post(`${base}/__kabegame_dev/screenshot`, { target: "main", resize: { maxWidth: 10 } });
+      assert.equal(res.status, 422);
+      const body = await res.json();
+      assert.equal(body.layer, "png");
+      assert.match(body.error, /缩小失败/);
+    });
+  });
+
+  test("安卓整屏：GET 的 query 带尺寸约束", async () => {
+    const png = bigPng();
+    const { backend } = fakeBackend({ androidScreen: async () => png });
+    await withServer(backend, async (base) => {
+      let res = await localFetch(`${base}/__kabegame_dev/android/screen?maxHeight=4`);
+      assert.deepEqual(pngSize(new Uint8Array(await res.arrayBuffer())), { width: 8, height: 4 });
+      assert.equal(res.headers.get("x-png-original-height"), "20");
+      res = await localFetch(`${base}/__kabegame_dev/android/screen?scale=abc`);
+      assert.equal(res.status, 400);
+      await res.body?.cancel();
+    });
+  });
+
+  test("渲染：不带 resize 时补 size、png 不变；带时换掉 png，pngSha256 仍是原图的", async () => {
+    const png = bigPng();
+    const base64 = Buffer.from(png).toString("base64");
+    const response = { meta: { width: 40, height: 20 }, png: base64, pngSha256: "orig", pngBytes: png.length };
+    const { backend, calls } = fakeBackend({
+      hostRender: async (...args) => (calls.push(["hostRender", ...args]), response as never),
+    });
+    await withServer(backend, async (base) => {
+      let body = await (await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: "9" })).json();
+      assert.equal(body.png, base64);
+      assert.deepEqual(body.size, {
+        original: { width: 40, height: 20 },
+        returned: { width: 40, height: 20 },
+        resized: false,
+      });
+      body = await (
+        await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: "9", resize: { scale: 0.25 } })
+      ).json();
+      assert.deepEqual(body.size, {
+        original: { width: 40, height: 20 },
+        returned: { width: 10, height: 5 },
+        resized: true,
+      });
+      assert.deepEqual(pngSize(new Uint8Array(Buffer.from(body.png, "base64"))), { width: 10, height: 5 });
+      assert.equal(body.pngSha256, "orig");
+      assert.equal(body.pngBytes, png.length);
+      // resize 不传给后端
+      assert.deepEqual(calls, [
+        ["hostRender", "h-1", { imageId: "9" }],
+        ["hostRender", "h-1", { imageId: "9" }],
+      ]);
+    });
   });
 });

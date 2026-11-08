@@ -43,7 +43,7 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
 describe("客户端：每个接口一个函数", () => {
   test("路径、方法、请求体与 REST 表一致", async () => {
     const rest = await fakeRest((req, _body, res) => {
-      if (req.url?.endsWith("/screenshot") || req.url?.endsWith("/android/screen")) {
+      if (req.url?.endsWith("/screenshot") || req.url?.includes("/android/screen")) {
         res.writeHead(200, { "Content-Type": "image/png" });
         res.end(PNG);
         return;
@@ -66,11 +66,16 @@ describe("客户端：每个接口一个函数", () => {
       await dev.consoleRead("c-1", 3);
       await dev.consoleStop("c-1");
       await dev.appState();
+      await dev.showWindow();
+      await dev.openImagePreview(13515, { timeoutMs: 5000 });
       assert.deepEqual(await dev.androidScreen(), PNG);
+      await dev.androidScreen({ maxWidth: 400, scale: 0.5 });
+      await dev.screenshot("main", { resize: { maxHeight: 300 } });
       await dev.hosts();
       await dev.hostOpen({ hidden: true });
       await dev.hostEval("h-1", "1");
       await dev.hostRender("h-1", { imageId: "13515", time: 1.5, postprocess: "ultra" });
+      await dev.hostRender("h-1", { imageId: "13515", resize: { scale: 0.5 } });
       await dev.hostClose("h-1");
       await dev.projectsRemove({ "D:\\x": { image: "1", task: "t" } });
       await dev.jobStart("hash-baseline", { ids: ["1"] });
@@ -92,11 +97,16 @@ describe("客户端：每个接口一个函数", () => {
           ["GET", `${p}/console/c-1?since=3`, undefined],
           ["DELETE", `${p}/console/c-1`, undefined],
           ["GET", `${p}/app/state`, undefined],
+          ["POST", `${p}/app/show-window`, {}],
+          ["POST", `${p}/app/open-preview`, { imageId: "13515", timeoutMs: 5000 }],
           ["GET", `${p}/android/screen`, undefined],
+          ["GET", `${p}/android/screen?maxWidth=400&scale=0.5`, undefined],
+          ["POST", `${p}/screenshot`, { target: "main", resize: { maxHeight: 300 } }],
           ["GET", `${p}/hosts`, undefined],
           ["POST", `${p}/hosts`, { hidden: true }],
           ["POST", `${p}/hosts/h-1/eval`, { expression: "1" }],
           ["POST", `${p}/hosts/h-1/render`, { imageId: "13515", time: 1.5, postprocess: "ultra" }],
+          ["POST", `${p}/hosts/h-1/render`, { imageId: "13515", resize: { scale: 0.5 } }],
           ["DELETE", `${p}/hosts/h-1`, undefined],
           ["POST", `${p}/projects/remove`, { manifest: { "D:\\x": { image: "1", task: "t" } } }],
           ["POST", `${p}/jobs`, { kind: "hash-baseline", params: { ids: ["1"] } }],
