@@ -19,7 +19,7 @@ import { SeededRandom, type ParticleRandom } from "./random";
 import { particleColumnFlags, ParticleSystem } from "./system";
 
 const f32 = Math.fround;
-const ONE: InstanceMultipliers = { size: 1, speed: 1, count: 1, lifetime: 1 };
+const ONE: InstanceMultipliers = { size: 1, speed: 1, count: 1, lifetime: 1, rate: 1 };
 
 class ScriptedRandom implements ParticleRandom {
   readonly calls: ("a" | "b")[] = [];
@@ -43,7 +43,7 @@ const op = (name: string, module: JsonObject = {}, multipliers = ONE) =>
   fieldsOf("operator", { name, ...module }, multipliers);
 
 function context(columns: ParticleColumns, extra: Partial<ParticleRunContext> = {}): ParticleRunContext {
-  return { columns, random: new ScriptedRandom(), slot: 0, count: 1, h: 0, k: 0, ...extra };
+  return { columns, random: new ScriptedRandom(), slot: 0, count: 1, h: 0, k: 0, time: 0, ...extra };
 }
 
 /** 一个粒子的列：age / life 给定，size、颜色、alpha 的当前值与初值都是 1（size 是 `size`）。 */

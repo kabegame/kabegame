@@ -32,7 +32,7 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项，外加 renderer sprite；每项都有列和执行函数，sprite 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项，外加 renderer sprite；每项都有列和执行函数，sprite 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
@@ -43,6 +43,8 @@ describe("模块表", () => {
       "initializer:rotationrandom",
       "initializer:angularvelocityrandom",
       "initializer:alpharandom",
+      "initializer:turbulentvelocityrandom",
+      "initializer:positionoffsetrandom",
       "operator:movement",
       "operator:angularmovement",
       "operator:alphafade",
@@ -53,6 +55,7 @@ describe("模块表", () => {
       "operator:colorchange",
       "operator:oscillatesize",
       "operator:vortex",
+      "operator:turbulence",
       "operator:capvelocity",
       "renderer:sprite",
     ]);
@@ -510,14 +513,14 @@ describe("能力表：粒子", () => {
     expect(
       particleKeys({
         emitter: [{ name: "layerimage" }],
-        initializer: [{ name: "turbulentvelocityrandom" }],
-        operator: [{ name: "turbulence" }],
+        initializer: [{ name: "remapinitialvalue" }],
+        operator: [{ name: "controlpointattract" }],
         renderer: [{ name: "spritetrail" }],
       }),
     ).toEqual([
       "particle:emitter:layerimage",
-      "particle:initializer:turbulentvelocityrandom",
-      "particle:operator:turbulence",
+      "particle:initializer:remapinitialvalue",
+      "particle:operator:controlpointattract",
       "particle:renderer:spritetrail",
     ]);
     // 步骤 3 的 8 个模块进了表
@@ -528,6 +531,13 @@ describe("能力表：粒子", () => {
         operator: ["sizechange", "alphachange", "colorchange", "oscillatesize", "vortex", "capvelocity"].map(
           (name) => ({ name }),
         ),
+      }),
+    ).toEqual([]);
+    // 步骤 4 的 3 个噪声类模块进了表
+    expect(
+      particleKeys({
+        initializer: [{ name: "turbulentvelocityrandom" }, { name: "positionoffsetrandom" }],
+        operator: [{ name: "turbulence" }],
       }),
     ).toEqual([]);
     expect(particleKeys({ operator: [{ id: 3 }] })).toEqual(["particle:operator:unnamed"]);

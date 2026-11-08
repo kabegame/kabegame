@@ -1,5 +1,5 @@
 /**
- * operator（P4a 步骤 3、P4b 步骤 3）。依据 `rea-p4a.md` B「operator」、`rea-p4b-modules.md` B4、B5、B7、B8（读码【确】）与
+ * operator（P4a 步骤 3、P4b 步骤 3–4）。依据 `rea-p4a.md` B「operator」、`rea-p4b-modules.md` B4–B8（读码【确】）与
  * `p4-particles-REPORT.md` 的实测核对：drag 的 `k0`、`oscillateposition` 的 ω 不乘 2π、两遍模式、y 偏移 `2π·R`、
  * `sizechange` 乘 `instanceoverride.size`、`vortex` 的柱形 / 球形、`capvelocity` 的截速都实测过。
  *
@@ -8,6 +8,7 @@
  */
 import { clamp01, f32, lerp, orBits, rcp, rsqrt, TWO_PI } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
+import { snoise3 } from "./noise";
 
 /** drag 衰减的上限（`0x140492700`，`feff7f3f`）：drag 再大也保留约 1.19e-7 的速度。 */
 export const MAX_DAMPING = f32(0.99999988);
@@ -324,6 +325,58 @@ export function vortex(fields: ParticleFields, { columns, count, k }: ParticleRu
     velocity[0][i] = f32(velocity[0][i] + f32(f32(f32(uy * a[2]) - f32(uz * a[1])) * speed));
     velocity[1][i] = f32(velocity[1][i] + f32(f32(f32(uz * a[0]) - f32(ux * a[2])) * speed));
     velocity[2][i] = f32(velocity[2][i] + f32(f32(f32(ux * a[1]) - f32(uy * a[0])) * speed));
+  }
+}
+
+/**
+ * `turbulence`（operator 14，`0x14024295a`，blend `0x140242d6e`，`rea-p4b-modules.md` B6【确】）：三维噪声场加到速度上。
+ * ```
+ * Ts   = T·timescale                                  （timescale 已乘 instanceoverride.rate）
+ * mk_i = k·mask_i                                     （乘 drag 系数 k，不是步长 h）
+ * 每粒子：
+ *   φ   = R·(phasemax − phasemin) + Ts                （phasemin 本身不参与，实测）
+ *   spd = R·(speedmax − speedmin) + speedmin          （有 blend 时再乘 b；speedmin / max 已乘 instanceoverride.speed）
+ *   X = (x + φ)·scale;  Y = (y + φ)·scale;  Z = (z + φ)·scale
+ *   Nx = snoise3(X, Y, Z);  Ny = snoise3(Z, X, Y);  Nz = snoise3(Y, Z, X)     （只算掩码里的轴，其余为 0）
+ *   v_i = (N_i·mk_i)·spd + v_i
+ * ```
+ * - **乘的是 `k`**：`xmm8` 每条 operator 开头装成 `k`（`0x140240290`）。fps ≥ 40（`dt ≤ 0.025`）时 `k = dt'`，看不出差别；
+ *   两遍模式时每遍是 `k/2`，两遍之间位置被 `movement` 改过，噪声输入不同，照常处理。
+ * - `mask` 每轴非 0 才算这一轴（解析期置 p+0xc4 的位），三轴全 0 时整条跳过。三个轴照汇编都做加法（没算的轴 `N = 0`）。
+ * - 用 `R` 两处（相位、速度）；不置列标志，不用控制点。`audioprocessing*`（乘速度）属 P4e，能力表照报。
+ */
+export function turbulence(fields: ParticleFields, { columns, count, k, time }: ParticleRunContext): void {
+  const mask = fields.mask as number[];
+  const useX = mask[0] !== 0;
+  const useY = mask[1] !== 0;
+  const useZ = mask[2] !== 0;
+  if (!useX && !useY && !useZ) return;
+  const phaseTime = f32(time * (fields.timescale as number));
+  const speedMin = fields.speedmin as number;
+  const speedRange = f32((fields.speedmax as number) - speedMin);
+  const phaseRange = f32((fields.phasemax as number) - (fields.phasemin as number));
+  const mkx = f32(k * mask[0]);
+  const mky = f32(k * mask[1]);
+  const mkz = f32(k * mask[2]);
+  const scale = fields.scale as number;
+  const blend = readBlend(fields);
+  const { age, life, random, position, velocity } = columns;
+  const [px, py, pz] = position;
+  const [vx, vy, vz] = velocity;
+  for (let i = 0; i < count; i++) {
+    const r = random[i];
+    const phase = f32(f32(r * phaseRange) + phaseTime);
+    let speed = f32(f32(r * speedRange) + speedMin);
+    if (blend.active) speed = f32(speed * blendFactor(blend, f32(age[i] * rcp(life[i]))));
+    const x = f32(f32(px[i] + phase) * scale);
+    const y = f32(f32(py[i] + phase) * scale);
+    const z = f32(f32(pz[i] + phase) * scale);
+    const nx = useX ? snoise3(x, y, z) : 0;
+    const ny = useY ? snoise3(z, x, y) : 0;
+    const nz = useZ ? snoise3(y, z, x) : 0;
+    vx[i] = f32(f32(f32(nx * mkx) * speed) + vx[i]);
+    vy[i] = f32(f32(f32(ny * mky) * speed) + vy[i]);
+    vz[i] = f32(f32(f32(nz * mkz) * speed) + vz[i]);
   }
 }
 

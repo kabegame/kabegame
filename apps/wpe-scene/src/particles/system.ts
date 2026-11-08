@@ -11,6 +11,7 @@
  * 3. 按 JSON 顺序遍历 emitter：算本帧数量（周期发射的时长在这里从流 A 抽，`rea-p4b-modules.md` A3），逐个新粒子线性扫描
  *    第一个 `life == 0` 的槽 → emitter 写位置速度 → 抽 `R` → 写缺省值 → 按 JSON 顺序跑 initializer；新粒子当帧 `age = 0`；
  * 4. operator 一遍或两遍：每遍开头重置当前值，再按 JSON 顺序执行。
+ * 噪声类模块（P4b 步骤 4）另读场景时间 `T`（`step` 的 `time`，一帧内不变，预热时为 0）。
  *
  * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
  * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热）；暂停时渲染器不步进。
@@ -18,6 +19,7 @@
  * 控制点（P4c）、子系统不在这里。表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
+import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { ParticleColumns } from "./columns";
 import { emissionCount, emitterState, resetEmitterTiming, type EmitterState } from "./emitters";
 import { f32 } from "./f32";
@@ -76,13 +78,26 @@ export function operatorPass(dt: number, frameDt: number, passes: 1 | 2): { h: n
   return passes === 2 ? { h: f32(dt * 0.5), k: f32(k0 * 0.5) } : { h: dt, k: k0 };
 }
 
-/** 各项 `instanceoverride` 的乘数；系统 `flags` 的对应位禁用时为 1（C3）。 */
+/** `instanceoverride.rate` 的下限（`rea-framework.md` Q2 第 7 步）。 */
+const MIN_RATE = 0.01;
+
+/**
+ * 各项 `instanceoverride` 的乘数；系统 `flags` 的对应位禁用时为 1（C3）。`rate` 没有禁用位，取模拟用的同一个值（下限 0.01，
+ * 见 `applyScalars`）：WPE 的钳制写回 `instanceoverride.rate` 本身（`obj+0x854` 即 `+0xdc`），和 `timescale` 的条目重写在
+ * 同一次重算里，先后没读；`rate < 0.01` 没有实测【推】。
+ */
 export function instanceMultipliers(
   instance: Pick<ParticleInstanceValues, InstanceScale>,
   flags: number,
 ): InstanceMultipliers {
   const pick = (key: InstanceScale) => (flags & INSTANCE_DISABLE_FLAGS[key] ? 1 : instance[key]);
-  return { size: pick("size"), speed: pick("speed"), count: pick("count"), lifetime: pick("lifetime") };
+  return {
+    size: pick("size"),
+    speed: pick("speed"),
+    count: pick("count"),
+    lifetime: pick("lifetime"),
+    rate: Math.max(MIN_RATE, instance.rate),
+  };
 }
 
 interface ResolvedModule {
@@ -133,6 +148,8 @@ export class ParticleSystem {
   private rate = 1;
   /** 下一次找空槽的起点：它之前没有空槽。 */
   private searchFrom = 0;
+  /** `step` 没给场景时间时用的时钟：收到的帧时间之和（秒，double，按 432000 回绕）。 */
+  private elapsed = 0;
   private readonly context: ParticleRunContext;
   /** 出生时 `R` 的替换（dev 探针按出生顺序注入 WPE 的值，`random.ts` 的 `injectedR`）；缺省照常用抽到的值。 */
   private readonly rOverride: ParticleROverride | undefined;
@@ -163,7 +180,7 @@ export class ParticleSystem {
     this.initializers = resolve("initializer", def.initializers);
     this.operators = resolve("operator", def.operators);
     this.applyScalars();
-    this.context = { columns: this.columns, random, slot: 0, count: 0, h: 0, k: 0 };
+    this.context = { columns: this.columns, random, slot: 0, count: 0, h: 0, k: 0, time: 0 };
   }
 
   /** 当前的 `instanceoverride` 标量（一份拷贝）。 */
@@ -193,7 +210,7 @@ export class ParticleSystem {
   /** 不乘字段、由模拟器自己用的两项：新粒子的 `a0` 与时间缩放 `rate`（下限 0.01）。 */
   private applyScalars(): void {
     this.alpha0 = f32(this.instance.alpha);
-    this.rate = f32(Math.max(0.01, this.instance.rate));
+    this.rate = f32(Math.max(MIN_RATE, this.instance.rate));
   }
 
   /**
@@ -207,19 +224,30 @@ export class ParticleSystem {
     return true;
   }
 
-  /** 一帧。`frameDt` 是当帧的 `g_Frametime`（渲染器已钳到 `[0.0001, 0.25]`），这里乘 `instanceoverride.rate` 得 `dt'`。 */
-  step(frameDt: number): void {
+  /**
+   * 一帧。`frameDt` 是当帧的 `g_Frametime`（渲染器已钳到 `[0.0001, 0.25]`），这里乘 `instanceoverride.rate` 得 `dt'`。
+   * `time` 是本帧的 `g_Time`（已加上本帧钳过的帧时间、已按 432000 回绕，P4b 步骤 4 的场景时间 `T`），舍入成 float32 给噪声类
+   * 模块（WPE 的 `ctx+0x130` 是场景时间的 float 副本）；`T` **不乘** `rate`（`rate` 只缩放 `dt'` 与 `timescale`）。
+   * 不给时用本系统收到的帧时间之和（double 累加、同样回绕），即从 0 起步的 `FrameClock`：渲染器、`particleTrack` 都显式传，
+   * 缺省只给单测用。
+   */
+  step(frameDt: number, time?: number): void {
+    this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
+    this.context.time = f32(time ?? this.elapsed);
     this.advance(f32(f32(frameDt) * this.rate), frameDt, this.passes);
   }
 
   /**
    * 预热（C1）：加载时一次跑完 `while (t < starttime)`，步长按 `maxcount` 取 0.05 或 0.2，float32 累加，**固定一遍**
    * （加载时 `fps` 还是 0，实测推翻了读码的「受 fps 分支影响」），发射开启，`k0 = 步长`。步长不乘 `rate`（按读码直接传步长，
-   * `rate ≠ 1` 的预热没有实测）。
+   * `rate ≠ 1` 的预热没有实测）。预热不走帧函数，场景时间 `T` 保持加载期的初值 0（`rea-p4b-modules.md` B2 末条；实测
+   * `ignore/p4/tracks/rd-p4b-pre-fps60.json`：预热里出生的 `turbulentvelocityrandom` 粒子方向全是 90°，`positionoffsetrandom`
+   * 粒子偏移完全相同）。
    */
   prewarm(): void {
     const step = prewarmStep(this.def.maxcount);
     const end = f32(this.def.starttime);
+    this.context.time = 0;
     for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1);
   }
 

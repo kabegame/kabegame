@@ -15,7 +15,7 @@ import { SeededRandom, type ParticleRandom } from "./random";
 import { ParticleSystem } from "./system";
 
 const f32 = Math.fround;
-const ONE = { size: 1, speed: 1, count: 1, lifetime: 1 };
+const ONE = { size: 1, speed: 1, count: 1, lifetime: 1, rate: 1 };
 
 /** 按给定序列返回随机数，记录每次用的是哪个区间；序列用完后返回 `fallback`。 */
 class ScriptedRandom implements ParticleRandom {
@@ -240,7 +240,7 @@ describe("发射数量：周期发射（flags bit2，A3）", () => {
 describe("boxrandom（A4）", () => {
   const box = (module: JsonObject) => emitter(module, "boxrandom");
   const run = (fields: ParticleFields, random: ParticleRandom, columns = new ParticleColumns(4, 0)) => {
-    const context: ParticleRunContext = { columns, random, slot: 0, count: 1, h: 0, k: 0 };
+    const context: ParticleRunContext = { columns, random, slot: 0, count: 1, h: 0, k: 0, time: 0 };
     boxRandom(fields, context);
     return {
       pos: [0, 1, 2].map((i) => columns.position[i][0]),

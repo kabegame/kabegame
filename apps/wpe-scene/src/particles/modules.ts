@@ -21,8 +21,10 @@ import {
   angularVelocityRandom,
   colorRandom,
   lifetimeRandom,
+  positionOffsetRandom,
   rotationRandom,
   sizeRandom,
+  turbulentVelocityRandom,
   velocityRandom,
 } from "./initializers";
 import {
@@ -36,6 +38,7 @@ import {
   oscillatePosition,
   oscillateSize,
   sizeChange,
+  turbulence,
   vortex,
 } from "./operators";
 import type { ParticleRandom } from "./random";
@@ -72,7 +75,7 @@ export interface ParticleFieldDef {
    * 全部字段的解析值（周期发射的字段要看 `flags`）。返回 false 时报 `particle:<类别>:<名字>:<字段>`。
    */
   supported?: (value: ParticleFieldValue, fields: Readonly<Record<string, ParticleFieldValue>>) => boolean;
-  /** 乘哪一项 `instanceoverride`（`rea-p4a.md` C5）；系统 `flags` 的对应位禁用时不乘（C3）。 */
+  /** 乘哪一项 `instanceoverride`（`rea-p4a.md` C5）；系统 `flags` 的对应位禁用时不乘（C3，`rate` 没有禁用位）。 */
   instance?: InstanceScale;
   /**
    * 乘完 `instanceoverride` 再截断成整数（条目类型 1：`int(f32(value)·o)`，`rea-p4b-modules.md`「`instanceoverride` 写回的
@@ -81,14 +84,21 @@ export interface ParticleFieldDef {
   truncate?: boolean;
 }
 
-/** 乘到模块字段上的 `instanceoverride` 项（C5）。`rate`、`alpha` 不乘字段，由模拟器自己用。 */
-export type InstanceScale = "size" | "speed" | "count" | "lifetime";
-/** 系统 `flags` 里禁用对应 `instanceoverride` 的位（C3【确】）：bit4 speed、bit5 count、bit6 lifetime、bit7 size。 */
+/**
+ * 乘到模块字段上的 `instanceoverride` 项（C5）。`alpha` 不乘字段，由模拟器自己用；`rate` 除了作模拟的时间缩放（模拟器自己用），
+ * 还乘 `turbulence`、`turbulentvelocityrandom` 的 `timescale`（条目类型 2，`rea-p4b-modules.md`「`instanceoverride` 写回的条目类型」）。
+ */
+export type InstanceScale = "size" | "speed" | "count" | "lifetime" | "rate";
+/**
+ * 系统 `flags` 里禁用对应 `instanceoverride` 的位（C3【确】）：bit4 speed、bit5 count、bit6 lifetime、bit7 size。`rate` 的条目
+ * 无条件登记（同上节），没有禁用位。
+ */
 export const INSTANCE_DISABLE_FLAGS: Readonly<Record<InstanceScale, number>> = {
   speed: 0x10,
   count: 0x20,
   lifetime: 0x40,
   size: 0x80,
+  rate: 0,
 };
 
 /**
@@ -142,6 +152,11 @@ export interface ParticleRunContext {
   h: number;
   /** operator 这一遍的 drag 系数 k（两遍模式时是 k0/2）。 */
   k: number;
+  /**
+   * 场景时间 `T`（float32，P4b 步骤 4）：`ctx+0x130`，和着色器的 `g_Time` 同源（`rea-p4b-modules.md`「命名」【推】）——钳过的
+   * 帧时间累加、超过 432000 回绕。一帧内各模块读同一个值（本帧的 `g_Time`）；预热时为 0（B2 末条，实测确认）。噪声类模块用。
+   */
+  time: number;
 }
 
 /**
@@ -229,8 +244,18 @@ const BLEND: Record<string, ParticleFieldDef> = {
 };
 
 /**
+ * `positionoffsetrandom` 的 `octaves` 解析期钳制（`0x1401c9387`，`rea-p4b-modules.md` B3【确】）：按**无符号**比较，`≥ 8` 得 8
+ * （负数当很大的无符号数，也是 8），`0` 得 1。
+ */
+export function clampOctaves(value: number): number {
+  const octaves = value >>> 0;
+  return octaves >= 8 ? 8 : octaves < 1 ? 1 : octaves;
+}
+
+/**
  * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
- * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`），加 renderer `sprite`。
+ * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`）、步骤 4 的 3 个噪声类模块（initializer `turbulentvelocityrandom`、
+ * `positionoffsetrandom`，operator `turbulence`），加 renderer `sprite`。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -361,6 +386,56 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columns: ["alpha0"],
     columnFlags: 0,
     run: alphaRandom,
+  },
+  {
+    // `rea-p4b-modules.md` B2（initializer 9，缺省值 `FUN_1401bb030`，执行 `0x14023bdbc`）：方向由出生时刻的一维噪声决定，
+    // 速度**加**上去。`audioprocessing*`（乘相位范围，D）属 P4e，表外照报
+    category: "initializer",
+    name: "turbulentvelocityrandom",
+    fields: {
+      // 乘 `speed`（条目类型 6）
+      speedmin: by("speed", num({ orthographic: 100, perspective: 0.5 })),
+      speedmax: by("speed", num({ orthographic: 250, perspective: 1 })),
+      phasemin: num(0),
+      phasemax: num(0.1),
+      // 乘 `rate`（条目类型 2，无条件登记，不受系统 `flags` 禁用位影响）
+      timescale: by("rate", num(1)),
+      scale: num(1),
+      // 弧度，加在角度上
+      offset: num(0),
+      // 两个向量只接受字符串（写成数字 WPE 会把它当指针用，B「向量字段」，报不支持）；`forward` 不归一化，`right` 执行时归一化
+      forward: vec3("0 1 0"),
+      right: vec3("0 0 1"),
+      // WPE 不读 `up`（解析段 `0x1401c8748` 起只读 scale、timescale、offset、phasemin/max、speedmin/max、forward、right），
+      // 中性：登记成不参与计算的字段，免得按表外字段报（语料 2 张写了 "0.2 0.2 0"）
+      up: vec3("0 0 0", "vec3str"),
+    },
+    columns: ["velocity"],
+    columnFlags: 0,
+    run: turbulentVelocityRandom,
+  },
+  {
+    // `rea-p4b-modules.md` B3（initializer 11，缺省值 `FUN_1401bb660`，解析 `0x1401c903a`，执行 `0x14023c09a`）：完全确定，
+    // 不抽随机数。没有覆盖项、没有音频
+    category: "initializer",
+    name: "positionoffsetrandom",
+    fields: {
+      directions: vec3({ orthographic: "1 1 0", perspective: "1 1 1" }),
+      // `|sign|² > 1.19e-7` 时才做符号处理（解析期置 p+0x28 bit0，执行函数现算）
+      sign: vec3("0 0 0"),
+      scale: num({ orthographic: 0.001, perspective: 1 }),
+      distance: num({ orthographic: 100, perspective: 0.1 }),
+      // **不乘** `instanceoverride.rate`
+      timescale: num(1),
+      // 解析期钳到 [1, 8]（`normalize`）
+      octaves: int(6),
+    },
+    columns: ["position"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.octaves = clampOctaves(fields.octaves as number);
+    },
+    run: positionOffsetRandom,
   },
   {
     // 半隐式欧拉，drag 按 k0 衰减（实测核对过）。`previousPosition` 只在列标志 bit2 时开头拷一次
@@ -495,6 +570,29 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columns: ["position", "velocity"],
     columnFlags: 0,
     run: vortex,
+  },
+  {
+    // `rea-p4b-modules.md` B6（operator 14，blend 0x24，缺省值 `FUN_1401beb80`，执行 `0x14024295a` / `0x140242d6e`）：乘 `k`；
+    // 三维噪声场。`audioprocessing*`（乘速度，D）属 P4e，表外照报
+    category: "operator",
+    name: "turbulence",
+    fields: {
+      // 每轴非 0 才算这一轴，三轴全 0 时整个模块跳过；只接受字符串
+      mask: vec3({ orthographic: "1 1 0", perspective: "1 1 1" }),
+      scale: num({ orthographic: 0.01, perspective: 0.5 }),
+      // 乘 `speed`（条目类型 7）
+      speedmin: by("speed", num({ orthographic: 500, perspective: 1 })),
+      speedmax: by("speed", num({ orthographic: 1000, perspective: 5 })),
+      // 解析但执行时不读（只用 `phasemax − phasemin`，实测：`phasemin` 0 与 5 逐位相同）
+      phasemin: num(0),
+      phasemax: num(0),
+      // 乘 `rate`（条目类型 2，无条件登记）
+      timescale: by("rate", num({ orthographic: 20, perspective: 1 })),
+      ...BLEND,
+    },
+    columns: ["age", "life", "random", "position", "velocity"],
+    columnFlags: 0,
+    run: turbulence,
   },
   {
     // `rea-p4b-modules.md` B8：`maxspeed` 没有覆盖项

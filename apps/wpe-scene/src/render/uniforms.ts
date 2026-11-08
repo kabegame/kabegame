@@ -228,9 +228,6 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
   return values;
 }
 
-/** `g_Time` 超过 5 天（432000 s）归零（p2-REPORT C「时间」）。 */
-export const TIME_WRAP_SECONDS = 432000;
-
 /**
  * 由图层状态算出的内置 uniform：就地刷新时只重写这一组，`pass.uniforms` 里有的名字（材质值，例如 passthrough 的
  * `g_Color4 = (1, 1, 1, 1)`、材质自带的 `g_UserAlpha`）一律不动。
@@ -427,7 +424,7 @@ export function particleUniformValues(input: ParticleUniformInput): Record<strin
 }
 
 export interface FrameInput {
-  /** 秒：累加钳过的帧时间（T2，`clock.ts` 的 `FrameClock`），已按 `TIME_WRAP_SECONDS` 回绕。 */
+  /** 秒：累加钳过的帧时间（T2，`clock.ts` 的 `FrameClock`），已按 `TIME_WRAP_SECONDS`（`sceneTime.ts`）回绕。 */
   time: number;
   /** 与上一帧的间隔（秒）：实时帧钳到 `[0.0001, 0.25]`（T2），补画帧为 0。粒子按它步进（P4a 步骤 4）。 */
   frametime: number;

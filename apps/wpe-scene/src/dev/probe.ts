@@ -156,7 +156,8 @@ export interface RenderFrameOptions {
   profile?: number;
   /**
    * 确定性粒子回放（P4a 步骤 4）：种子固定（缺省 1，第 i 个粒子层用 `seed + i`，同 `particleTrack`）、遍数固定（缺省 1）；
-   * 建场景（含预热）后按 `dts` 步进，`dts[0]` 是第 1 帧，最后一帧就是读回的那一帧，`g_Time` 用 dt 的累计值。
+   * 建场景（含预热）后按 `dts` 步进，`dts[0]` 是第 1 帧，最后一帧就是读回的那一帧，`g_Time` 取 `times`（P4b 步骤 4，和 WPE
+   * 比时填日志的 `runtime` 列），没给时用 dt 的累计值；粒子的场景时间 `T` 与它同一个值。
    * 不传时种子同样固定为 1、不步进，画的是预热后的状态。
    * `random`（P4b 步骤 2）：`{ <objects 下标>: [R, …] }`，按出生顺序顶替该系统的 `R`，用完退回种子随机数；`randomframe`
    * 系统和 WPE 比像素时填 WPE 轨迹里的 frame。
@@ -415,6 +416,8 @@ export interface ParticleTrackProbeOptions {
   sceneAssets: string[];
   /** 每帧的 `g_Frametime`，`dts[0]` 是第 1 帧（对齐 WPE 脚本帧号）。 */
   dts: number[];
+  /** 每帧的 `g_Time`（噪声类模块的场景时间 `T`，P4b 步骤 4），和 `dts` 等长；不给时按 `dts` 累加。 */
+  times?: number[];
   /** 要输出的帧号。 */
   frames: number[];
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。 */
@@ -440,6 +443,7 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
     return particleTrack({
       layers: bundle.layers,
       dts: options.dts,
+      times: options.times,
       frames: options.frames,
       passes: options.passes,
       seed: options.seed,

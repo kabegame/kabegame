@@ -1,6 +1,8 @@
 /**
  * 固定数据回放（P4a 步骤 3）：从 WPE 的 RenderDoc 轨迹截出的短片段（`fixtures/`，来源写在每个文件的 `source`，由
  * `ignore/p4/step3/make_fixtures.py` 生成），按同一 dt 序列步进模拟器、逐帧比。不依赖 `ignore/`。
+ * P4b 步骤 4 加了 `positionoffsetrandom` 的两段（`p4b-posoffset60` / `10`，`ignore/p4/b4/make_fixtures.py` 生成），带每帧的
+ * 场景时间 `times`（日志 runtime 列）。
  *
  * 配对同 `ignore/p4/cmp_track.py`：按帧号、同一系统内按数组（槽）顺序；另要求每帧粒子数、系统出现与否都相同。
  * 限：位置 1e-3（坐标大于 1000 的系统 2e-3，float32 精度），尺寸 1e-3，颜色、alpha 2e-3，旋转 1e-3。
@@ -12,6 +14,8 @@ import { particleTrack, type ParticleTrackParticle } from "./track";
 import fps10 from "./fixtures/fps10.json";
 import fps60 from "./fixtures/fps60.json";
 import p4a2 from "./fixtures/p4a2.json";
+import posoffset10 from "./fixtures/p4b-posoffset10.json";
+import posoffset60 from "./fixtures/p4b-posoffset60.json";
 import s15 from "./fixtures/s15.json";
 import s60 from "./fixtures/s60.json";
 
@@ -21,10 +25,12 @@ interface Fixture {
   passes: 1 | 2;
   systems: Record<string, { particle: JsonObject; instanceoverride?: unknown }>;
   dts: number[];
+  /** 每帧的场景时间（`g_Time`），和 `dts` 等长；没有时按 `dts` 累加。 */
+  times?: number[];
   frames: { frame: number; systems: Record<string, ParticleTrackParticle[]> }[];
 }
 
-const FIXTURES = [fps60, fps10, s15, s60, p4a2] as unknown as Fixture[];
+const FIXTURES = [fps60, fps10, s15, s60, p4a2, posoffset60, posoffset10] as unknown as Fixture[];
 const LIMITS = { size: 1e-3, color: 2e-3, alpha: 2e-3, rot: 1e-3 };
 
 function maxDiff(a: number | number[], b: number | number[]): number {
@@ -48,6 +54,7 @@ describe("固定数据回放：和 WPE 逐帧比", () => {
       const track = particleTrack({
         layers,
         dts: fixture.dts,
+        times: fixture.times,
         frames: fixture.frames.map((frame) => frame.frame),
         passes: fixture.passes,
       });

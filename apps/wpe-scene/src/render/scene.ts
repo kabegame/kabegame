@@ -1390,7 +1390,7 @@ export class GpuScene {
    * 时全部步进。
    */
   update(frame: FrameInput, state?: SceneState): void {
-    this.stepParticles(frame.frametime, state);
+    this.stepParticles(frame.frametime, frame.time, state);
     const values = frameBuiltins(frame);
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
@@ -1405,9 +1405,10 @@ export class GpuScene {
    * 全部粒子层按帧时间步进一帧（`ParticleSystem.step` 乘 `instanceoverride.rate`）；帧时间不是正数（补画帧、暂停）时不动。
    * `state` 给出时，不可见（含祖先，`effectiveVisible`）的粒子层不发射、不步进，还有存活粒子就清空并复位 emitter 计时
    * （`ParticleSystem.suspend`，C8 读码）；重新可见时照常步进，不重新预热。清空后标 `stale`：之后哪一帧再画，都先写成 0 个。
+   * `time` 是这一帧的 `g_Time`（和 uniform 同一个值，已回绕），作噪声类模块的场景时间 `T`（P4b 步骤 4）。
    * dev 探针按 dt 序列回放时直接调它。
    */
-  stepParticles(frametime: number, state?: SceneState): void {
+  stepParticles(frametime: number, time: number, state?: SceneState): void {
     if (!(frametime > 0)) return;
     for (const draw of this.draws) {
       const particles = draw.particles;
@@ -1418,7 +1419,7 @@ export class GpuScene {
       }
       const timing = this.particleTimings?.get(draw);
       const started = timing ? performance.now() : 0;
-      particles.system.step(frametime);
+      particles.system.step(frametime, time);
       if (timing) {
         recordSample(timing.simulate, performance.now() - started);
         recordSample(timing.alive, particles.system.alive);

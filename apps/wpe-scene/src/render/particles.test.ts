@@ -859,6 +859,29 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     }
     expect(time).toBeCloseTo(0.35 + 1 / 60, 12);
   });
+
+  it("场景时间（P4b 步骤 4）：update 把这一帧的 g_Time 交给粒子当 T，回放按 times 逐帧传", async () => {
+    const bundle = bundleOf([particleLayer(1)]);
+    const { state, scene } = await open(bundle);
+    const step = vi.spyOn(particleDraw(scene, 1).particles!.system, "step");
+    scene.update(frame(0.02, 123.25), state);
+    expect(step).toHaveBeenLastCalledWith(0.02, 123.25);
+    expect(replayParticles(scene, state, { dts: [0.1, 0.2, 0.3], times: [5, 5.2, 5.5] })).toEqual({
+      time: 5.5,
+      frametime: 0.3,
+    });
+    expect(step.mock.calls.slice(1)).toEqual([
+      [0.1, 5],
+      [0.2, 5.2],
+    ]);
+    // 没给 times 时是 dt 的累计值
+    replayParticles(scene, state, { dts: [0.1, 0.2, 0.3] });
+    expect(step.mock.calls.slice(3)).toEqual([
+      [0.1, 0.1],
+      [0.2, 0.1 + 0.2],
+    ]);
+    scene.destroy();
+  });
 });
 
 describe("渲染器：帧时钟与遍数", () => {

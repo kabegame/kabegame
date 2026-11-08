@@ -6,9 +6,11 @@
  * `alpha` 当前 alpha，`rot` 旋转 xyz；帧表系统另有 `thick`（`a_TexCoordVec4C1`，同 `rdc_track_b.py` 读出的 `TEXCOORD1`）。
  * 粒子按槽序、跳过空槽；没有存活粒子的系统不出现（RenderDoc 那边没有这次绘制）。
  *
- * 帧号与 WPE 脚本帧号对齐：`dts[0]` 是第 1 帧。每个系统加载时先预热，再从第 1 帧步进。可见性（步骤 5）不处理。
+ * 帧号与 WPE 脚本帧号对齐：`dts[0]` 是第 1 帧。每个系统加载时先预热（场景时间 0），再从第 1 帧步进；第 n 帧的场景时间是
+ * `times[n − 1]`，没给时是 `dts` 前 n 项之和（P4b 步骤 4）。可见性（步骤 5）不处理。
  */
 import type { SceneLayer } from "../compile/bundle";
+import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { injectedR, SeededRandom } from "./random";
 import { ParticleSystem } from "./system";
 
@@ -42,6 +44,11 @@ export interface ParticleTrackOptions {
   layers: readonly Pick<SceneLayer, "object" | "name" | "particle">[];
   /** 每帧的 `g_Frametime`，`dts[0]` 是第 1 帧。 */
   dts: readonly number[];
+  /**
+   * 每帧的 `g_Time`（场景时间 `T`，已加上本帧的帧时间，P4b 步骤 4），和 `dts` 等长、一一对应；回放 WPE 时填日志的
+   * `runtime` 列。不给时按 `dts` 累加（double，按 432000 回绕），和渲染器的 `FrameClock` 一致。
+   */
+  times?: readonly number[];
   /** 要输出的帧号（从 1 起），不超过 `dts.length`。 */
   frames: readonly number[];
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。 */
@@ -149,10 +156,15 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   const wanted = new Set(options.frames);
   const last = Math.max(0, ...options.frames);
   if (last > options.dts.length) throw new Error(`dt 序列只有 ${options.dts.length} 帧，要输出第 ${last} 帧`);
+  if (options.times && options.times.length !== options.dts.length)
+    throw new Error(`times 有 ${options.times.length} 项，dts 有 ${options.dts.length} 项，应等长`);
   const frames: ParticleTrackFrame[] = [];
+  let elapsed = 0;
   for (let frame = 1; frame <= last; frame++) {
     const dt = options.dts[frame - 1];
-    for (const { system } of systems) system.step(dt);
+    elapsed = (elapsed + dt) % TIME_WRAP_SECONDS;
+    const time = options.times ? options.times[frame - 1] : elapsed;
+    for (const { system } of systems) system.step(dt, time);
     if (!wanted.has(frame)) continue;
     const out: Record<string, ParticleTrackParticle[]> = {};
     for (const { name, system } of systems) {

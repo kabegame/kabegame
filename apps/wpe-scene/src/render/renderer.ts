@@ -15,13 +15,14 @@ import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
+import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { FrameClock, FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
 import { canvasSize, scenePlacement, scenePointer, type ScenePlacement, type SceneStyle } from "./layout";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
-import { daytimeOf, TIME_WRAP_SECONDS } from "./uniforms";
+import { daytimeOf } from "./uniforms";
 
 /** 上屏：在视口（铺放矩形）里画全屏三角形，按 `offset + uv * scale` 采样离屏目标，输出不透明。 */
 const BLIT_WGSL = /* wgsl */ `

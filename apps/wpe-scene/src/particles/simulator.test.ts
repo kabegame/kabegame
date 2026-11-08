@@ -36,7 +36,7 @@ import {
 import { particleTrack } from "./track";
 
 const f32 = Math.fround;
-const ONE = { size: 1, speed: 1, count: 1, lifetime: 1 };
+const ONE = { size: 1, speed: 1, count: 1, lifetime: 1, rate: 1 };
 
 /** 按给定序列返回随机数，记录每次用的是哪个区间；序列用完后返回 `fallback`。 */
 class ScriptedRandom implements ParticleRandom {
@@ -62,7 +62,7 @@ function fieldsOf(category: ParticleCategory, module: JsonObject): ParticleField
 }
 
 function contextOf(columns: ParticleColumns, random: ParticleRandom, extra: Partial<ParticleRunContext> = {}) {
-  return { columns, random, slot: 0, count: 1, h: 0, k: 0, ...extra } satisfies ParticleRunContext;
+  return { columns, random, slot: 0, count: 1, h: 0, k: 0, time: 0, ...extra } satisfies ParticleRunContext;
 }
 
 /** 和 `ignore/p4/gen.py` 的 `system()` 同形：随机范围收成 min = max。 */
@@ -608,11 +608,11 @@ describe("预热", () => {
 describe("instanceoverride", () => {
   it("乘数：系统 flags bit4–7 分别禁用 speed、count、lifetime、size", () => {
     const instance = particle(systemJson({}), { size: 2, speed: 3, count: 4, lifetime: 5 }).instance;
-    expect(instanceMultipliers(instance, 0)).toEqual({ size: 2, speed: 3, count: 4, lifetime: 5 });
-    expect(instanceMultipliers(instance, 0x10)).toEqual({ size: 2, speed: 1, count: 4, lifetime: 5 });
-    expect(instanceMultipliers(instance, 0x20)).toEqual({ size: 2, speed: 3, count: 1, lifetime: 5 });
-    expect(instanceMultipliers(instance, 0x40)).toEqual({ size: 2, speed: 3, count: 4, lifetime: 1 });
-    expect(instanceMultipliers(instance, 0x80)).toEqual({ size: 1, speed: 3, count: 4, lifetime: 5 });
+    expect(instanceMultipliers(instance, 0)).toEqual({ size: 2, speed: 3, count: 4, lifetime: 5, rate: 1 });
+    expect(instanceMultipliers(instance, 0x10)).toEqual({ size: 2, speed: 1, count: 4, lifetime: 5, rate: 1 });
+    expect(instanceMultipliers(instance, 0x20)).toEqual({ size: 2, speed: 3, count: 1, lifetime: 5, rate: 1 });
+    expect(instanceMultipliers(instance, 0x40)).toEqual({ size: 2, speed: 3, count: 4, lifetime: 1, rate: 1 });
+    expect(instanceMultipliers(instance, 0x80)).toEqual({ size: 1, speed: 3, count: 4, lifetime: 5, rate: 1 });
   });
 
   it("size、alpha、lifetime、speed、count、rate 乘到对应位置，从基值乘", () => {
@@ -707,13 +707,15 @@ describe("轨迹", () => {
   });
 
   it("表外模块不执行，记在 skipped", () => {
-    const def = particle(systemJson({ operators: [{ name: "movement" }, { name: "turbulence", scale: 0.01 }] }));
+    const def = particle(
+      systemJson({ operators: [{ name: "movement" }, { name: "controlpointattract", scale: 0.01 }] }),
+    );
     const track = particleTrack({
       layers: [{ object: 0, name: "p", particle: def }],
       dts: [0.1],
       frames: [1],
       passes: 1,
     });
-    expect(track.skipped).toEqual({ p: ["operator:turbulence"] });
+    expect(track.skipped).toEqual({ p: ["operator:controlpointattract"] });
   });
 });

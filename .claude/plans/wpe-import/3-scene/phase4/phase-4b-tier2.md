@@ -1143,3 +1143,35 @@ Claude 独立验收：
   - `p_slider` 0.3 → (0.3, 0.3, 0.3)；`p_bool` false → 保持 0.3；都是就地写、0 次重编译。
   - `p_color3` 的 `"0.2"` 被应用的属性校验拒绝，改用 `"0.2 0.3 0.4"` → (0.2, 0.3, 0.4)。
   - 属性已还原，预览已关。
+
+### 步骤 4 — 噪声类模块（2026-11-08）
+
+子代理实现，Claude 独立验收。代理开工时步骤 1–3 还没提交，中途被提交了；同期另一个会话在同一工作区做步骤 5（`compile/bundle.ts`、`features.ts`、`sheet.test.ts`、`refract.test.ts`、`render/graph.ts`，以及 `render/uniforms.ts`、`compile/particles.test.ts` 里的几块）。步骤 4 的改动按块分出来单独提交（`ignore/p4/b4v/make_step4_patch.py`），验收也在「HEAD + 步骤 4 补丁」拼出的树上做（`ignore/p4/b4h/`），不含步骤 5。
+
+- **新增** `particles/noise.ts`：照 rea C1–C3 逐位移植 `snoise1` / `snoise2` / `snoise3`，float32 每步舍入；常量表 `noiseTables.ts` 由 `ignore/p4/b4/gen_tables.py` 从 `noise-tables.json` 生成，标量按位模式写。
+- **新增** 模块表记录：initializer `turbulentvelocityrandom`、`positionoffsetrandom`，operator `turbulence`。`InstanceScale` 加 `rate`（`timescale` 乘钳过的 `rate`，没有禁用位）；`positionoffsetrandom` 的 `octaves` 解析期按无符号比较钳到 [1, 8]；`turbulentvelocityrandom` 的 `up` 不在解析段里，登记成中性字段。
+- **新增** 场景时间 `T`：`ParticleRunContext.time`，`ParticleSystem.step(frameDt, time?)`（不给时按收到的帧时间 double 累加），渲染器传本帧 `g_Time`，`particleTrack` / 回放探针收 `times`；预热时 `T = 0`。
+- **新增** `src/sceneTime.ts` 放 432000 回绕常量，`particles/` 不再从 `render/uniforms` 引它（Claude 验收时提出）。
+
+和计划不同、或计划没写、由代理按证据定的：
+- **`turb*` 从加载起整段回放达不到 1e-3：** 湍流场对输入敏感，给日志里 6 位小数的 dt、`T` 加 ±5e-7 的扰动，我们自己的模拟就发散到 186 px（`turb`）/ 710 px（`turb-xyz`），和 WPE 残差（15 / 699 px）同量级。改用短程强制回放：从 WPE 抓帧的 float32 原值（精确）出发反解速度，再走 4 帧逐粒子比，钉进产品测试，全部 ≤ 3.1e-4。
+- **`turbulentvelocityrandom` 整段回放超基础限值（4.6×），在日志 `T` 的舍入包络内：** 每个出生帧在日志 `T` 的 ±1e-6 里联合拟合后，残差落到反推精度量级。没有看出 CRT `sinf` / `cosf` 的 1 ulp 影响。
+- **`T` 取本帧的 `g_Time`：** 取上一帧时 `snoise1` 残差 5e-2、`posoffset` 差 13–56 px、`turbvel` 差 164 / 589 px。
+- **预热期 `T = 0`：** Claude 另抓 `proj/p4b-pre`（`A:\p4b\p4b-pre-fps60`，`ana_pre_t.py`）证实：预热里出生的 `turbulentvelocityrandom` 粒子方向全是 90°，`positionoffsetrandom` 粒子偏移完全相同。同一工程里参照组 `ref-turb`（出生点 300, 700）不动，是三维噪声在 `(300, 700, 0) + T·(1, 1, 1)` 这条线上约为 1e-7，参考实现算出的方向与 WPE 一致。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier（HEAD + 步骤 4 补丁的树） | 0 error；41 个文件、1100 个用例全过（新增 26 个）；改过的文件格式通过 |
+| 噪声单测（真值从 WPE 轨迹反推，`fixtures/noise.json`） | `snoise1` 40 点最大 3.0e-6，`snoise2` 58 点 2.3e-6，方向角 40 点 5.2e-6 rad（限 1e-5）；`snoise3` 由相邻三帧反推 156 点 7.5e-4（限 1e-3，反推精度约 1e-4） |
+| 噪声移植对拍（Claude 独立写的 `ignore/p4/noise_ref.py`，照 rea 伪代码） | 13033 组输入（随机、整数点、负数、大坐标、坐标相等）逐位相同；代理另对拍 60 万组 |
+| 回放（fps 60 / fps 10） | `posoffset-*` 不加包络 ≤ 2.4e-4；`turbvel*` 在包络内；`turb*` 短程强制回放 ≤ 3.1e-4；`turb` 与 `turb-ph5` 逐位相同；fps 10 把 `k` 换成 `h` 超限（1.9–3.6 px）；`turb-ovr` 的三项覆盖各拿掉一项都超限 |
+| 变异检查（代理 24 处 + blend 1 处、Claude 8 处） | 全部有用例失败。Claude 第一轮发现「`turbulence` 丢掉 blend 系数」存活，代理补了读码单测后被抓到；源码逐字节还原 |
+| 语料 | 步骤 4 前与步骤 3 逐张相同；去掉的只有三个模块键（`turbulentvelocityrandom` 42 张、`turbulence` 30、`positionoffsetrandom` 1），新增的只有它们的 `audioprocessing*` 字段；干净场景 20 → 20 |
+| 真机哈希（屏外宿主，宿主由「HEAD + 步骤 4 补丁」构建，入口 `index-CmRLVj2T.js`） | 10 张干净场景 × 三档，30 组和步骤 3（`b3/hash-after.json`）全部相同 |
+| 真实场景（屏外宿主强制渲染，`b4v/real.mjs`；WPE 抓帧 `A:\p4b\<id>-fps60`，`b3/wpe_stats_b.py`；`b4v/cmp_stats.py`） | `3778549173`（`turbulence`）：回放到 WPE 抓帧的时刻（945 帧），`Ash` 2335 个（WPE 2335–2341）、积雪 283（WPE 280–281），尺寸、位置、alpha 范围一致；`Ash` 的数量由 `count 1.3`、`rate 0.05` 和预热 26 步（float32 累加）算得出 2028 + 19.5/s，两边都吻合。心形层跟随指针，属 P4c，不比位置。`3819646765`（`turbulentvelocityrandom`）：叶子 16 s 时我们 8 个、WPE 6–7（理论平均 7.7），尺寸 49–52 一致，位置范围同量级；WPE 多一层子系统（P4e）。画面正常（`b4v/out/ours-*.png`）|
+
+真实场景按 WPE 时刻重跑的那两次，用的是另一会话 14:32 从整个工作区重建的宿主（含步骤 5 半成品）；比的是粒子数和范围，属模拟层，不受步骤 5 影响。宿主备份因此没有还原。
+
+工具：代理的在 `ignore/p4/b4/`（`replay.test.ts`、`xcheck.*`、`mutate.py`、`mutate_blend.py`、`corpus.test.ts`、`explain.py`，结果在 `out/`）；Claude 的在 `ignore/p4/b4v/`（`make_step4_patch.py`、`make_xcheck.py`、`mutate_claude.py`、`mutate_b4h.py`，结果在 `out/`）与 `ignore/p4/`（`noise_ref.py`、`ana_pre_t.py`、`gen_b.py` 的 `p4b-pre`）。

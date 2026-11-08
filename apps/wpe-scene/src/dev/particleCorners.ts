@@ -169,6 +169,10 @@ fn ${PREFIX}main(@builtin(global_invocation_id) ${PREFIX}id: vec3<u32>) {
 export interface ParticleReplay {
   /** 每帧的 `g_Frametime`，`dts[0]` 是第 1 帧（对齐 WPE 脚本帧号）；最后一帧是读回的那一帧。 */
   dts: number[];
+  /**
+   * 每帧的 `g_Time`（场景时间 `T`，P4b 步骤 4），和 `dts` 等长；和 WPE 比时填日志的 `runtime` 列。不给时按 `dts` 累加（double）。
+   */
+  times?: number[];
   /** 随机种子：第 i 个粒子层用 `seed + i`（同 `particleTrack`）。缺省 1。 */
   seed?: number;
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。缺省 1。 */
@@ -191,8 +195,9 @@ export function replayParticleOptions(replay: ParticleReplay | undefined): Parti
 }
 
 /**
- * 按 dt 序列回放粒子：前 n−1 帧只步进粒子，返回最后一帧的 `g_Time`（累计值）与 `g_Frametime`，由调用方 `update`
- * （它会步进最后一帧）。没有回放时时间取 `time`、帧时间 0（不步进，就是预热后的状态）。
+ * 按 dt 序列回放粒子：前 n−1 帧只步进粒子，返回最后一帧的 `g_Time` 与 `g_Frametime`，由调用方 `update`（它会步进最后一帧）。
+ * 每帧的 `g_Time` 取 `times`，没给时是 dt 的累计值（double）；同一个值也作粒子的场景时间 `T`。没有回放时时间取 `time`、
+ * 帧时间 0（不步进，就是预热后的状态）。
  */
 export function replayParticles(
   scene: Pick<GpuScene, "stepParticles">,
@@ -201,9 +206,13 @@ export function replayParticles(
   time = 0,
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
-  const { dts } = replay;
-  for (let i = 0; i < dts.length - 1; i++) scene.stepParticles(dts[i], state);
-  return { time: dts.reduce((sum, dt) => sum + dt, 0), frametime: dts[dts.length - 1] };
+  const { dts, times } = replay;
+  if (times && times.length !== dts.length)
+    throw new Error(`times 有 ${times.length} 项，dts 有 ${dts.length} 项，应等长`);
+  let elapsed = 0;
+  const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
+  for (let i = 0; i < dts.length - 1; i++) scene.stepParticles(dts[i], timeAt(i), state);
+  return { time: timeAt(dts.length - 1), frametime: dts[dts.length - 1] };
 }
 
 export interface ParticleCornersOptions {
