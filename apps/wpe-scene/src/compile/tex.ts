@@ -1,6 +1,9 @@
 /**
  * .tex 容器布局移植自 linux-wallpaperengine（GPLv3，与本项目同许可）
  * `src/WallpaperEngine/Data/Parsers/TextureParser.cpp`。只按区间读头部与需要的 mip。
+ *
+ * 能按原格式上传的格式见 `TEXTURE_FORMATS`（编译期与渲染器共用），其余报 `tex:format:<n>`；FreeImage 形态（PNG / JPG）
+ * 由主线程解码，只收格式 0。
  */
 import type { SceneFile } from "./fs";
 
@@ -10,6 +13,11 @@ export const TEX_FLAGS = {
   animated: 4,
   clampBorder: 8,
   video: 32,
+  /**
+   * alpha-priority（0x80000）：中性，不报。WPE 运行时没有任何分支读这一位，整个标志字只进采样器缓存的哈希键
+   * （rea-p4b-render.md 1.3）；实测同一张 RG88 纹理去掉这一位，粒子和图像层 3 帧都是 0 个像素不同
+   * （p4-particles-REPORT.md「P4b 语义的实测核对」）。只留作文档。
+   */
   alphaPriority: 524288,
 } as const;
 export const TEX_FORMATS: Record<number, string> = {
@@ -28,6 +36,46 @@ export const TEX_FORMATS: Record<number, string> = {
   14: "rgba16f",
   15: "rgb16f",
 };
+
+/** 一种按原格式上传的 `.tex` 格式：WebGPU 格式与 mip 的块布局。 */
+export interface TextureFormatInfo {
+  gpu: GPUTextureFormat;
+  /** 压缩块边长（非压缩为 1）。 */
+  block: number;
+  /** 每块（非压缩为每像素）字节数。 */
+  bytesPerBlock: number;
+  /** 需要的设备特性。 */
+  feature?: GPUFeatureName;
+}
+
+/**
+ * 按原格式整块上传的 `.tex` 格式（非 FreeImage 形态），是格式支持范围的唯一来源：编译期（Worker）据此判 `tex:format:<n>`，
+ * 渲染器（`render/textures.ts`）据此建纹理、算 mip 的上传布局、要设备特性。这里只放格式名和数字，不依赖 GPU 运行时对象。
+ *
+ * DXGI 格式照 WPE 的映射函数 `FUN_1400d2a20`（rea-p4b-render.md 1.2）：都不是 sRGB，上传前不改通道。单、双通道纹理采样时
+ * 缺的通道补 0、alpha 补 1，D3D 与 WebGPU 相同，所以图像层直接拿原始采样值（实测 R8 显示成 `(r, 0, 0, 1)` 的红色）；
+ * 通道换算只在定义了 `TEX<n>FORMAT` 时由着色器的 `ConvertTexture<n>Format` 做。mip 数据紧排、没有行填充（本机语料逐 mip 核对过）。
+ */
+export const TEXTURE_FORMATS: Readonly<Record<number, TextureFormatInfo>> = {
+  /** RGBA8888 → `R8G8B8A8_UNORM`。 */
+  0: { gpu: "rgba8unorm", block: 1, bytesPerBlock: 4 },
+  /** DXT5 → `BC3_UNORM`。 */
+  4: { gpu: "bc3-rgba-unorm", block: 4, bytesPerBlock: 16, feature: "texture-compression-bc" },
+  /** DXT3 → `BC2_UNORM`。 */
+  6: { gpu: "bc2-rgba-unorm", block: 4, bytesPerBlock: 16, feature: "texture-compression-bc" },
+  /** DXT1 → `BC1_UNORM`。 */
+  7: { gpu: "bc1-rgba-unorm", block: 4, bytesPerBlock: 8, feature: "texture-compression-bc" },
+  /** RG88 → `R8G8_UNORM`，采样得 `(r, g, 0, 1)`。 */
+  8: { gpu: "rg8unorm", block: 1, bytesPerBlock: 2 },
+  /** R8 → `R8_UNORM`，采样得 `(r, 0, 0, 1)`。 */
+  9: { gpu: "r8unorm", block: 1, bytesPerBlock: 1 },
+};
+
+/** 格式表里的一项；不在表里返回 undefined（不走原型链）。 */
+export function textureFormat(format: number): TextureFormatInfo | undefined {
+  return Object.hasOwn(TEXTURE_FORMATS, format) ? TEXTURE_FORMATS[format] : undefined;
+}
+
 /**
  * effect fbo 的格式名（effect.json `fbos[].format`，B6）→ `.tex` 格式枚举（翻译器的 `TEX<n>FORMAT`）与 WebGPU 格式。
  * `rgb888` / `rgb161616f` 在 DXGI 里也是四通道。
@@ -200,11 +248,11 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   const unsupported: string[] = [];
   if (flags & TEX_FLAGS.video) unsupported.push("tex:video");
   if (flags & TEX_FLAGS.animated) unsupported.push("tex:animation");
-  if (format !== 0 && format !== 4) unsupported.push(`tex:format:${format}`);
   const freeImageMime = FREE_IMAGE_MIME[freeImageFormat];
+  // 原格式上传查格式表；FreeImage 形态由主线程解成 RGBA 位图（`planBitmapUpload` 只收格式 0，本机语料也都是 0）
+  if (freeImageMime ? format !== 0 : !textureFormat(format)) unsupported.push(`tex:format:${format}`);
   if (freeImageFormat !== -1 && !freeImageMime) unsupported.push(`tex:freeimage:${freeImageFormat}`);
   if (flags & TEX_FLAGS.clampBorder) unsupported.push("tex:clamp-border");
-  if (flags & TEX_FLAGS.alphaPriority) unsupported.push("tex:alpha-priority");
   // FreeImage 的 mip 交给主线程解码，这里永远不读字节
   const shouldDecode = decode && unsupported.length === 0 && !freeImageMime;
   const images: TexImage[] = [];

@@ -138,8 +138,13 @@ export interface RenderFrameOptions {
   sceneAssets: string[];
   postprocess?: ScenePostprocessSetting;
   userProperties?: Record<string, unknown>;
-  /** `g_Time`（秒）；`g_Daytime` 固定 0.5、指针在中心，保证可复现。传了 `particles` 时改用 dt 的累计值。 */
+  /** `g_Time`（秒）；`g_Daytime` 固定 0.5，保证可复现。传了 `particles` 时改用 dt 的累计值。 */
   time?: number;
+  /**
+   * `g_PointerPosition` 与 `g_PointerPositionLast`（窗口归一化坐标，原样进 uniform），缺省在中心 `[0.5, 0.5]`。
+   * 和 WPE 抓帧比时填抓帧里读到的值（P4b 步骤 1：`2854083091` 的 x 光随指针）。
+   */
+  pointer?: [number, number];
   /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（场景目标尺寸，alpha 置 255）存 `<key>.rgba`。 */
   key?: string;
   /** 有不支持项也渲染（同 dev 强制渲染）。默认 true。 */
@@ -213,6 +218,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     });
     try {
       const startTime = options.time ?? 0;
+      const pointer = options.pointer ?? [0.5, 0.5];
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
       if (options.profile) {
@@ -227,8 +233,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
               time: startTime + i / 60,
               frametime: 1 / 60,
               daytime: 0.5,
-              pointer: [0.5, 0.5],
-              pointerLast: [0.5, 0.5],
+              pointer,
+              pointerLast: pointer,
             },
             state,
           );
@@ -252,7 +258,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       // 粒子回放：前 n−1 帧只步进，最后一帧随 update 步进
       const { time, frametime } = replayParticles(scene, state, options.particles, startTime);
       scene.sync(state);
-      scene.update({ time, frametime, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5] }, state);
+      scene.update({ time, frametime, daytime: 0.5, pointer, pointerLast: pointer }, state);
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;

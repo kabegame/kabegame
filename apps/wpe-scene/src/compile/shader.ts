@@ -70,8 +70,8 @@ export function shaderUniforms(
 }
 
 /**
- * `ShaderCompiler` 的缓存键。`defines` 是调用方按 pass 给的宏（粒子路径的 `TEX0FORMAT`）：同一着色器、同样 COMBO，
- * 宏不同就不能命中同一条；没有时键与加宏之前逐字相同（图层材质的缓存行为不变）。
+ * `ShaderCompiler` 的缓存键。`defines` 是调用方按 pass 给的宏（粒子材质槽 0 格式为 8–11 时的 `TEX0FORMAT`）：同一着色器、
+ * 同样 COMBO，宏不同就不能命中同一条；没有时键与加宏之前逐字相同（图层材质、以及不写宏的粒子材质同一条规则）。
  */
 export function shaderCacheKey(
   shader: string,
@@ -116,7 +116,7 @@ export class ShaderCompiler {
    * `scope` 是 effect 的资源范围：effect 的着色器按 `SceneFs.readScoped` 的顺序查找；头文件都在 `shaders/` 根，不按 effect 查。
    * `unsupported` 是本次调用的上报目标，缺省为场景级。不支持项每次调用都写一遍：关着的 effect 先翻译、启用的 effect 再命中
    * 缓存时，场景级才收得到（3c）。结果仍是同一个对象，`addProgram` 按它去重。
-   * `defines` 是本 pass 的宏（粒子材质的 `TEX0FORMAT`），在整场的 `defines` 之后应用，进缓存键。
+   * `defines` 是本 pass 的宏（粒子材质槽 0 格式为 8–11 时的 `TEX0FORMAT`），在整场的 `defines` 之后应用，进缓存键。
    */
   async compile(
     shader: string,

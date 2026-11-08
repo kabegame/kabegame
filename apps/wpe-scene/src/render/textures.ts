@@ -1,5 +1,6 @@
 /**
- * 纹理上传：RGBA8888（格式 0）与 DXT5（格式 4 → `bc3-rgba-unorm`）连同全部 mip 直接交给 GPU，不做 CPU 解码；
+ * 纹理上传：`compile/tex.ts` 的 `TEXTURE_FORMATS` 里的格式（RGBA8888、DXT5 / DXT3 / DXT1 → BC3 / BC2 / BC1、RG88、R8）
+ * 连同全部 mip 按原格式直接交给 GPU，不做 CPU 解码、不改通道；格式表是编译期与渲染器共用的唯一来源。
  * FreeImage 形态（PNG / JPG）由主线程解成 `ImageBitmap`（`compile/decode.ts`），这里 `copyExternalImageToTexture`。
  * 采样方式照 linux-wallpaperengine（GPLv3）`src/WallpaperEngine/Render/CTexture.cpp` 的 `setupOpenGLParameters`：
  * ClampUVs → clamp，否则 repeat；NoInterpolation → nearest，否则线性 + 三线性 mip + 8 倍各向异性。
@@ -7,22 +8,8 @@
  * 颜色空间：WPE 在 gamma 空间里混合，纹理、离屏目标与画布都用非 sRGB 格式，全程不做转换。
  */
 import type { SceneTexture } from "../compile/bundle";
+import { textureFormat } from "../compile/tex";
 import { SceneRenderError } from "./errors";
-
-interface FormatInfo {
-  gpu: GPUTextureFormat;
-  /** 压缩块边长（非压缩为 1）。 */
-  block: number;
-  /** 每块（非压缩为每像素）字节数。 */
-  bytesPerBlock: number;
-  /** 需要的设备特性。 */
-  feature?: GPUFeatureName;
-}
-
-export const TEXTURE_FORMATS: Readonly<Record<number, FormatInfo>> = {
-  0: { gpu: "rgba8unorm", block: 1, bytesPerBlock: 4 },
-  4: { gpu: "bc3-rgba-unorm", block: 4, bytesPerBlock: 16, feature: "texture-compression-bc" },
-};
 
 export interface MipCopyLayout {
   bytesPerRow: number;
@@ -33,9 +20,12 @@ export interface MipCopyLayout {
   byteLength: number;
 }
 
-/** 一个 mip 的上传布局：BC 的行跨度按 4×4 块计，物理尺寸按块取整。 */
+/**
+ * 一个 mip 的上传布局：BC 的行跨度按 4×4 块计，物理尺寸按块取整；非压缩格式按像素计（R8 每像素 1 字节、RG88 2 字节）。
+ * 只用 `writeTexture`，行跨度不需要 256 对齐，按紧排给。
+ */
 export function mipCopyLayout(format: number, width: number, height: number): MipCopyLayout {
-  const info = TEXTURE_FORMATS[format];
+  const info = textureFormat(format);
   if (!info) throw new SceneRenderError([`webgpu:texture-format:${format}`]);
   const blocksX = Math.ceil(width / info.block),
     blocksY = Math.ceil(height / info.block);
@@ -57,7 +47,7 @@ export function mipSize(base: number, level: number): number {
 export function requiredFeatures(textures: readonly Pick<SceneTexture, "format">[]): GPUFeatureName[] {
   const features = new Set<GPUFeatureName>();
   for (const texture of textures) {
-    const feature = TEXTURE_FORMATS[texture.format]?.feature;
+    const feature = textureFormat(texture.format)?.feature;
     if (feature) features.add(feature);
   }
   return [...features];
@@ -65,7 +55,7 @@ export function requiredFeatures(textures: readonly Pick<SceneTexture, "format">
 
 /** 校验 mip 链并返回每级的上传布局；任何不一致都按退回处理，而不是让 WebGPU 报校验错误。 */
 export function planTextureUpload(texture: SceneTexture): MipCopyLayout[] {
-  const info = TEXTURE_FORMATS[texture.format];
+  const info = textureFormat(texture.format);
   if (!info) throw new SceneRenderError([`webgpu:texture-format:${texture.format}:${texture.path}`]);
   const base = texture.mips[0];
   if (!base) throw new SceneRenderError([`webgpu:texture-empty:${texture.path}`]);
@@ -145,7 +135,8 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
   const gpu = device.createTexture({
     label: texture.path,
     size: { width: base.width, height: base.height },
-    format: TEXTURE_FORMATS[texture.format].gpu,
+    // planTextureUpload 已确认格式在表里
+    format: textureFormat(texture.format)!.gpu,
     mipLevelCount: plan.length,
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
   });

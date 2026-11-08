@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { compileScene } from "./bundle";
+import { compileScene, particleWritesTex0Format } from "./bundle";
 import { checkObjectFeatures, checkParticleFeatures, checkParticleProgram, checkSceneFeatures } from "./features";
 import { SceneFs, type SceneReader } from "./fs";
 import type { JsonObject, MaterialPass } from "./model";
@@ -662,6 +662,7 @@ function memoryReader(files: Record<string, unknown>): SceneReader {
     async readWhole(path) {
       const value = files[path.replace(/\\/g, "/")];
       if (value === undefined) throw new TypeError("Failed to fetch");
+      if (value instanceof Uint8Array) return value;
       return new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value));
     },
     async readRange(path, start, end) {
@@ -669,6 +670,21 @@ function memoryReader(files: Record<string, unknown>): SceneReader {
     },
   };
   return reader;
+}
+
+/** 一级 mip、4×4 的原始 `.tex`（TEXB0002，不压缩）；解析不核对数据长度，只关心格式号。 */
+function rawTex(format: number): Uint8Array {
+  const magic = (text: string) => [...new TextEncoder().encode(text), 0];
+  const word = (value: number) => [value & 255, (value >> 8) & 255, (value >> 16) & 255, (value >>> 24) & 255];
+  return new Uint8Array([
+    ...magic("TEXV0005"),
+    ...magic("TEXI0001"),
+    ...[format, 2, 4, 4, 4, 4, 0].flatMap(word),
+    ...magic("TEXB0002"),
+    // 图像数、mip 数；mip：宽、高、压缩、原始长度、存储长度
+    ...[1, 1, 4, 4, 0, 64, 64].flatMap(word),
+    ...new Array(64).fill(7),
+  ]);
 }
 
 /** 记下每次翻译请求的假翻译器。 */
@@ -697,15 +713,15 @@ describe("ShaderCompiler：粒子的 TEX0FORMAT", () => {
   it("经 defines 传、进缓存键：两个格式各翻译一次，同一格式命中缓存", async () => {
     const { translator, requests } = fakeTranslator();
     const compiler = new ShaderCompiler(fs(), translator, new Set(), {}, { HDR: "1" });
-    const textures: ShaderTextureSlot[] = [{ slot: 0, format: 4 }];
-    await compiler.compile("genericparticle", {}, textures, null, undefined, { TEX0FORMAT: "0" });
-    await compiler.compile("genericparticle", {}, textures, null, undefined, { TEX0FORMAT: "4" });
-    await compiler.compile("genericparticle", {}, textures, null, undefined, { TEX0FORMAT: "4" });
+    const textures: ShaderTextureSlot[] = [{ slot: 0, format: 9 }];
+    await compiler.compile("genericparticle", {}, textures, null, undefined, { TEX0FORMAT: "8" });
+    await compiler.compile("genericparticle", {}, textures, null, undefined, { TEX0FORMAT: "9" });
+    await compiler.compile("genericparticle", {}, textures, null, undefined, { TEX0FORMAT: "9" });
     expect(requests.map((request) => request.defines)).toEqual([
-      { HDR: "1", TEX0FORMAT: "0" },
-      { HDR: "1", TEX0FORMAT: "4" },
+      { HDR: "1", TEX0FORMAT: "8" },
+      { HDR: "1", TEX0FORMAT: "9" },
     ]);
-    // 不带宏（图层材质）是另一条
+    // 不带宏（图层材质、槽 0 不是 8–11 的粒子材质）是另一条
     await compiler.compile("genericparticle", {}, textures, null);
     expect(requests.at(-1)!.defines).toEqual({ HDR: "1" });
     expect(requests).toHaveLength(3);
@@ -726,7 +742,11 @@ describe("ShaderCompiler：粒子的 TEX0FORMAT", () => {
     ]);
     expect(shaderCacheKey("genericimage2", combos, textures, scope)).toBe(legacy);
     expect(shaderCacheKey("genericimage2", combos, textures, scope, {})).toBe(legacy);
-    expect(shaderCacheKey("genericimage2", combos, textures, scope, { TEX0FORMAT: "0" })).not.toBe(legacy);
+    expect(shaderCacheKey("genericimage2", combos, textures, scope, { TEX0FORMAT: "9" })).not.toBe(legacy);
+  });
+
+  it("WPE 的条件是槽 0 格式 ∈ 8–11（`(fmt - 8) <= 3` 无符号比较）", () => {
+    expect([0, 4, 6, 7, 8, 9, 10, 11, 12, 13].filter(particleWritesTex0Format)).toEqual([8, 9, 10, 11]);
   });
 });
 
@@ -794,8 +814,8 @@ describe("compileScene：粒子对象", () => {
       ["objects/0/particle/passes/0", 0, "additive"],
     ]);
     expect(imageLayer.particle).toBeNull();
-    // 粒子 pass 无条件写 TEX0FORMAT（槽 0 是 `_rt_FullFrameBuffer`，格式 0）；图层材质不写
-    expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual(["0", undefined]);
+    // 粒子 pass 的槽 0 是 `_rt_FullFrameBuffer`（格式 0），不在 8–11，不写 TEX0FORMAT；图层材质也不写
+    expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([undefined, undefined]);
     // g_OrientationUp 只在图层材质里报；instanceoverride 的 count 已实现，不报（P4a 步骤 5）
     expect(bundle.unsupported).toEqual(["uniform:g_OrientationUp"]);
     // instanceoverride 的 {user} 登记成就地目标（步骤 5）
@@ -805,31 +825,58 @@ describe("compileScene：粒子对象", () => {
     expect(bundle.general.perspectiveOverrideFov).toBeCloseTo((95 * Math.PI) / 180, 12);
   });
 
-  it("槽 0 没按名字写时取着色器注解的 default 定 TEX0FORMAT", async () => {
-    const { translator, requests } = fakeTranslator(() => ({
-      ok: true,
-      textures: [
-        {
-          slot: 0,
-          name: "g_Texture0",
-          kind: "2d",
-          binding: 1,
-          samplerBinding: 2,
-          meta: { default: "_rt_FullFrameBuffer" },
-        },
-      ],
-    }));
+  it.each([
+    [0, undefined],
+    [4, undefined],
+    [6, undefined],
+    [7, undefined],
+    [8, "8"],
+    [9, "9"],
+    [10, "10"],
+    [11, "11"],
+    [12, undefined],
+  ])("槽 0 是格式 %i 的纹理：TEX0FORMAT = %s（WPE 只对 8–11 写）", async (format, expected) => {
+    const { translator, requests } = fakeTranslator();
     const bundle = await compile(
       memoryReader(
         files({
           "P:/p/scene.json": scene([{ id: 1, particle: "particles/p.json" }]),
-          "P:/p/materials/pm.json": { passes: [{ shader: "genericparticle" }] },
+          "P:/p/materials/pm.json": { passes: [{ shader: "genericparticle", textures: ["kbt/t"] }] },
+          "P:/p/materials/kbt/t.tex": rawTex(format),
         }),
       ),
       translator,
     );
-    // 先不带宏读注解，再带宏正式翻译
-    expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([undefined, "0"]);
+    expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([expected]);
+    expect(bundle.textures.map((texture) => texture.format)).toEqual([format]);
+    // 格式 10 起不在格式表里，纹理照报；宏照 WPE 的条件写
+    expect(bundle.unsupported).toEqual(format >= 10 ? [`tex:format:${format}`] : []);
+  });
+
+  it("槽 0 没按名字写时取着色器注解的 default 定 TEX0FORMAT", async () => {
+    const annotated = (fallback: string) =>
+      fakeTranslator(() => ({
+        ok: true,
+        textures: [
+          { slot: 0, name: "g_Texture0", kind: "2d", binding: 1, samplerBinding: 2, meta: { default: fallback } },
+        ],
+      }));
+    const reader = memoryReader(
+      files({
+        "P:/p/scene.json": scene([{ id: 1, particle: "particles/p.json" }]),
+        "P:/p/materials/pm.json": { passes: [{ shader: "genericparticle" }] },
+        "P:/p/materials/kbt/r8.tex": rawTex(9),
+      }),
+    );
+    // 注解指向 R8 纹理：先不带宏读注解，再带宏正式翻译
+    const r8 = annotated("kbt/r8");
+    const r8Bundle = await compile(reader, r8.translator);
+    expect(r8.requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([undefined, "9"]);
+    expect(r8Bundle.layers[0].particle!.passes[0].textures).toEqual({ 0: 0 });
+    // 注解是 `_rt_FullFrameBuffer`（格式 0）：不写宏，正式翻译与读注解同一条缓存键，只翻译一次
+    const framebuffer = annotated("_rt_FullFrameBuffer");
+    const bundle = await compile(reader, framebuffer.translator);
+    expect(framebuffer.requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([undefined]);
     expect(bundle.layers[0].particle!.passes[0].runtime).toEqual({ 0: "_rt_FullFrameBuffer" });
   });
 
@@ -921,7 +968,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机样本：shimmering_particles
     ]);
     const motes = particles[1].particle!;
     expect(motes).toMatchObject({ maxcount: 400, starttime: 200, flags: 4, instance: { alpha: 10, count: 1 } });
-    // 两种材质 COMBO 不同，各是一个程序；TEX0FORMAT 走了缓存键，不会和图层材质混用
+    // 两种材质 COMBO 不同，各是一个程序
     expect(new Set(particles.map((layer) => layer.particle!.passes[0].program)).size).toBe(2);
   }, 60000);
 

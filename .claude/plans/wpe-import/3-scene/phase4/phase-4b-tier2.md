@@ -366,3 +366,28 @@ export function emitterTail(state: EmitterState, fields: ParticleFields, dt: num
 - **步骤 6：** 先补读 `colorchange` 的 `0xc` 记录，解释终止色为什么是 0。系统色取自颜色模块，不是粒子 JSON 的 `colorn` 键（改 rea-p4a C5）。
 
 工具在 `ignore/p4/`：`gen_b.py`、`sweep_b.py`、`rdc_track_b.py`、`rdc_cols.py`、`rdc_events.py`、`check_b.py`、`ana_b.py`、`ana_emit.py`、`ana_color.py`、`ana_cchange.py`、`cmp_ap.py`；DXT1 / DXT3 纹理从语料导出在 `texsrc/`。
+
+### 步骤 1 — 纹理格式（2026-11-08）
+
+子代理实现，Claude 独立验收。
+
+- **修改** `compile/tex.ts`：新增 `TEXTURE_FORMATS`（0、4、6、7、8、9），是格式支持范围的唯一来源；编译期、渲染器（`render/textures.ts` 改为导入）、能力表的 `SUPPORTED.textureFormats` 都读它。格式检查改成「表里没有才报」；FreeImage 形态仍只收格式 0（`planBitmapUpload` 只认 0）。
+- **删除** `tex:alpha-priority`，`TEX_FLAGS.alphaPriority` 留作文档。
+- **修改** `compile/bundle.ts`：粒子 `TEX0FORMAT` 只在槽 0 格式是 8–11 时写（`particleWritesTex0Format`），照 WPE。
+- **修改** `compile/pipeline.test.ts`：语料快速路径的请求上限 150 → 200。R8 放开后 `3820104696` 要编完 7 个 effect、15 张纹理才遇到第一个不支持项，169 次请求，每个资源各查一次，没有重复。
+- Claude 验收时另改：`compile/tex.test.ts` 的 1 MB mip 比较从 `toEqual` 改成逐字节比较（原写法单独跑 5.6 秒，会超时）；dev 探针 `renderFrame` 加可选的 `pointer`（`g_PointerPosition`，和 WPE 抓帧比时填抓帧里的值）。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；34 个文件、950 个用例全过（新增 38 个）；格式通过 |
+| 变异检查（代理 10 处、Claude 8 处） | BC1 / BC2 / R8 / RG88 字节数、DXT1 映射、格式 9 删掉、`TEX0FORMAT` 边界、FreeImage 守卫、BC 行跨度，各有用例失败。Claude 的一处（`textureFormat` 走原型链）和原代码等价，不算 |
+| 语料（和步骤 1 前比） | 干净场景 14 → 18，新增正好是 `2854083091`、`3799426930`、`3812822229`、`3829603837`；去掉的只有 `tex:format:6/7/8/9` 与 `tex:alpha-priority`，没有新增键 |
+| 纹理和 WPE 逐像素比（`p4b-tex` 的静态格式区域，子集工程 `p4b-tex1` 回放 WPE 日志 dt） | R8、RG88、DXT3、alpha-priority 有无、NPOT 粒子 0 个像素不同；DXT1 粒子 15 个像素、R8 图像层 45 个、RG88 图像层 2 个，都只差 1 个色阶 |
+| 四张场景和 WPE 比（按场景分辨率开窗口重抓，WPE 窗口高度被屏幕压到 2130，cover 比例 1、上下各裁 15 行，逐像素） | `3799426930` 1.3% 像素不同；`3812822229` 3.7%；`3829603837` 35%；`2854083091`（4000×2667，有缩放，按抓帧里的指针渲染）构图和画面一致 |
+| 真机哈希 | 10 张干净场景 × 三档，30 组和 P4a 步骤 5 全部相同 |
+
+**发现的翻译器问题：** 三张差异都落在 `foliagesway` 的遮罩区域，其余部分逐像素一致。原因是翻译器把两个阶段的同名 uniform 合成一个、只留第一次声明的注解：`foliagesway` 的顶点 `g_Speed` 绑 `speed`（缺省 1），片元绑 `speeduv`（5），我们的片元拿到 1，摇摆慢 5 倍。WPE 两个阶段的常量缓冲分开（RenderDoc：片元 `g_Speed = 5`）。时间扫描 ±0.3 s 误差不变，排除了相位；按场景分辨率重抓排除了 mip 选择。assets 里还有 `perspective`（4 个 uniform 缺省值不同）和 `clouds`（同键不同类型）。用户定先修翻译器再提交（2026-11-08），见下一节。
+
+测试行 13818（`p4b-tex`）、13819（`p4b-tex1`）已用 `batch_remove_images` 移除，导入任务已删。工具在 `ignore/p4/b1/`：`mutate.py`、`diff_corpus.py`、`real.mjs`（`--cases`）、`cmp.py`、`cmp_n.py`、`heat.py`、`tsweep.mjs`、`stage_uniforms.py`、`import.mjs`、`cleanup.mjs`、`hash-after.json`；抓帧在 `A:\p4b\<id>-fps60[-<宽x高>]`。

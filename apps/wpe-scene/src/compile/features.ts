@@ -34,11 +34,13 @@ import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
 import type { SceneScript } from "./scripts";
 import { scanScriptApi } from "./scriptApi";
+import { TEXTURE_FORMATS } from "./tex";
 
 export const SUPPORTED = {
   objects: ["image"],
   blending: ["normal", "translucent", "additive"],
-  textureFormats: [0, 4],
+  /** 按原格式上传的 `.tex` 格式（0、4、6–9），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
+  textureFormats: Object.keys(TEXTURE_FORMATS).map(Number),
   /** FreeImage 形态 `.tex`（mip 是整份图片文件）：2 JPEG、13 PNG，主线程 `createImageBitmap` 解码。 */
   freeImageFormats: [2, 13],
 } as const;

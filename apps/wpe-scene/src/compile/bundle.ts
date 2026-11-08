@@ -337,8 +337,16 @@ interface PassContext {
   planned?: ShaderTextureSlot[];
   /** 本 pass 不支持项的上报目标；缺省为场景级。 */
   unsupported?: Set<string>;
-  /** 粒子材质：无条件写 `TEX0FORMAT`，程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。 */
+  /** 粒子材质：槽 0 格式是 8–11 时写 `TEX0FORMAT`（`particleWritesTex0Format`），程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。 */
   particle?: boolean;
+}
+
+/**
+ * 粒子材质的槽 0 格式要不要写 `TEX0FORMAT`：WPE 的条件是 `(fmt - 8) <= 3`（无符号比较），即 8–11
+ * （RG88、R8、RG1616F、R16F；rea-p4b-render.md 2.4）。非 `screen` 朝向那一支由能力表报不支持，不在这里。
+ */
+export function particleWritesTex0Format(format: number): boolean {
+  return format >= 8 && format <= 11;
 }
 
 /**
@@ -540,8 +548,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
 
   /**
-   * 粒子路径无条件写的宏（`hdr-macro-REPORT.md`「TEX0FORMAT（粒子）」，`FUN_1401d2340`）：`TEX0FORMAT` = 槽 0 纹理的格式，
-   * 取值规则同 `TEX<n>FORMAT`（`.tex` 格式枚举；`_rt_*` 按 RT 格式，`_rt_FullFrameBuffer` 为 0）。经 `defines` 传，进缓存键。
+   * 粒子路径的宏 `TEX0FORMAT`（`FUN_1401d2340`，rea-p4b-render.md 2.4）：WPE 只在槽 0 纹理的格式是 8–11（RG88、R8、
+   * RG1616F、R16F）时写，值是格式本身，着色器据此做通道换算（`ConvertTexture0Format`）。另有一支在非 `screen` 朝向时对
+   * 任何格式都写，那一支能力表已报不支持，这里不管。`hdr-macro-REPORT.md` 原说「无条件写」，按 rea-p4b-render 修正；
+   * 格式 0、4 时着色器分支本来相同，收窄只让缓存键和 WPE 一致（不写时与图层材质同一条键规则）。
+   * 格式取值规则同 `TEX<n>FORMAT`（`.tex` 格式枚举；`_rt_*` 按 RT 格式，`_rt_FullFrameBuffer` 为 0）。经 `defines` 传，进缓存键。
    * 图层材质不走这里，`TEX<n>FORMAT` 仍只按 `formatcombo` 由翻译器定。
    * 槽 0 没按名字写时取着色器注解的 `default`：先不带这个宏翻译一次读注解（结果进缓存，不上报，正式翻译会再报一遍），
    * 仍取不到时不写（语料里粒子材质的槽 0 都按名字写了）。
@@ -559,7 +570,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       else if (typeof fallback === "string" && fallback && !fallback.startsWith("_rt_"))
         format = (await getTexture(fallback, scope, new Set()))?.format;
     }
-    return format === undefined ? {} : { TEX0FORMAT: String(format) };
+    return format !== undefined && particleWritesTex0Format(format) ? { TEX0FORMAT: String(format) } : {};
   }
 
   /**

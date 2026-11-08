@@ -444,7 +444,9 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
         }
         check(tally.bytes < 64 * 1024 * 1024, `${sample}: 读取 ${tally.bytes} 字节`);
         check(tally.singleByteRanges === 0, `${sample}: 单字节探测`);
-        check(tally.calls <= 150, `${sample}: ${tally.calls} 次请求`);
+        // P4b 步骤 1 放开 R8 / RG88 后，快速路径要编到更后面才遇到第一个不支持项：3820104696 先编完 7 个 effect 和
+        // 15 张纹理（每级 mip 一次区间读）才到粒子，169 次，每个资源只按「散文件 → pkg → assets」各查一次，没有重复
+        check(tally.calls <= 200, `${sample}: ${tally.calls} 次请求`);
       }
     } finally {
       vi.unstubAllGlobals();

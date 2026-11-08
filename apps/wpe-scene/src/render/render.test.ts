@@ -319,7 +319,90 @@ describe("纹理上传布局", () => {
     expect(mipCopyLayout(4, 2, 2).byteLength).toBe(16);
     expect(mipCopyLayout(4, 1, 1).width).toBe(4);
     expect(mipCopyLayout(0, 3, 2)).toEqual({ bytesPerRow: 12, rowsPerImage: 2, width: 3, height: 2, byteLength: 24 });
-    expect(() => mipCopyLayout(9, 1, 1)).toThrow(SceneRenderError);
+    // 格式表外的照抛（1/2/3/5 是 WPE 加载时转 RGBA 的旧格式，10 起是半精度与 BC7）
+    for (const format of [1, 2, 3, 5, 10, 11, 12]) expect(() => mipCopyLayout(format, 1, 1)).toThrow(SceneRenderError);
+  });
+  it("R8 每像素 1 字节、RG88 每像素 2 字节，紧排、不按 4 或 256 对齐", () => {
+    expect(mipCopyLayout(9, 1, 1)).toEqual({ bytesPerRow: 1, rowsPerImage: 1, width: 1, height: 1, byteLength: 1 });
+    expect(mipCopyLayout(9, 2, 2)).toEqual({ bytesPerRow: 2, rowsPerImage: 2, width: 2, height: 2, byteLength: 4 });
+    // 语料里的奇数尺寸：strings.tex 第 2 级 125×125
+    expect(mipCopyLayout(9, 125, 125)).toEqual({
+      bytesPerRow: 125,
+      rowsPerImage: 125,
+      width: 125,
+      height: 125,
+      byteLength: 15625,
+    });
+    expect(mipCopyLayout(8, 1, 1)).toEqual({ bytesPerRow: 2, rowsPerImage: 1, width: 1, height: 1, byteLength: 2 });
+    expect(mipCopyLayout(8, 2, 2)).toEqual({ bytesPerRow: 4, rowsPerImage: 2, width: 2, height: 2, byteLength: 8 });
+    // 语料里的奇数尺寸：ripple_single.tex 第 4 级 14×4、waterflow_mask 1901×846
+    expect(mipCopyLayout(8, 14, 4)).toEqual({
+      bytesPerRow: 28,
+      rowsPerImage: 4,
+      width: 14,
+      height: 4,
+      byteLength: 112,
+    });
+    expect(mipCopyLayout(8, 1901, 846).byteLength).toBe(3216492);
+  });
+  it("BC1 每 4×4 块 8 字节、BC2 16 字节，小于 4 的 mip 也写满一块", () => {
+    expect(mipCopyLayout(7, 1, 1)).toEqual({ bytesPerRow: 8, rowsPerImage: 1, width: 4, height: 4, byteLength: 8 });
+    expect(mipCopyLayout(7, 2, 2)).toEqual({ bytesPerRow: 8, rowsPerImage: 1, width: 4, height: 4, byteLength: 8 });
+    expect(mipCopyLayout(7, 6, 10)).toEqual({ bytesPerRow: 16, rowsPerImage: 3, width: 8, height: 12, byteLength: 48 });
+    // dxt1.tex 的 620×220，以及它下一级的 310×110（不是 4 的倍数）
+    expect(mipCopyLayout(7, 620, 220)).toEqual({
+      bytesPerRow: 1240,
+      rowsPerImage: 55,
+      width: 620,
+      height: 220,
+      byteLength: 68200,
+    });
+    expect(mipCopyLayout(7, 310, 110)).toEqual({
+      bytesPerRow: 624,
+      rowsPerImage: 28,
+      width: 312,
+      height: 112,
+      byteLength: 17472,
+    });
+    expect(mipCopyLayout(6, 1, 1)).toEqual({ bytesPerRow: 16, rowsPerImage: 1, width: 4, height: 4, byteLength: 16 });
+    expect(mipCopyLayout(6, 2, 2)).toEqual({ bytesPerRow: 16, rowsPerImage: 1, width: 4, height: 4, byteLength: 16 });
+    expect(mipCopyLayout(6, 6, 10)).toEqual({ bytesPerRow: 32, rowsPerImage: 3, width: 8, height: 12, byteLength: 96 });
+    expect(mipCopyLayout(6, 1024, 1024).byteLength).toBe(1048576);
+  });
+  it("R8 / RG88 / BC1 / BC2 的 mip 链校验", () => {
+    const r8 = [
+      { width: 5, height: 3, bytes: new Uint8Array(15) },
+      { width: 2, height: 1, bytes: new Uint8Array(2) },
+      { width: 1, height: 1, bytes: new Uint8Array(1) },
+    ];
+    expect(planTextureUpload(texture({ format: 9, mips: r8 })).map((l) => l.bytesPerRow)).toEqual([5, 2, 1]);
+    expect(() => planTextureUpload(texture({ format: 9, mips: [{ ...r8[0], bytes: new Uint8Array(14) }] }))).toThrow(
+      "texture-data",
+    );
+    const rg88 = [
+      { width: 3, height: 2, bytes: new Uint8Array(12) },
+      { width: 1, height: 1, bytes: new Uint8Array(2) },
+    ];
+    expect(planTextureUpload(texture({ format: 8, mips: rg88 })).map((l) => l.byteLength)).toEqual([12, 2]);
+    expect(() => planTextureUpload(texture({ format: 8, mips: [{ ...rg88[0], bytes: new Uint8Array(6) }] }))).toThrow(
+      "texture-data",
+    );
+    const block = (bytes: number) => [
+      { width: 8, height: 4, bytes: new Uint8Array(2 * bytes) },
+      { width: 4, height: 2, bytes: new Uint8Array(bytes) },
+      { width: 2, height: 1, bytes: new Uint8Array(bytes) },
+      { width: 1, height: 1, bytes: new Uint8Array(bytes) },
+    ];
+    expect(planTextureUpload(texture({ format: 7, mips: block(8) })).map((l) => l.byteLength)).toEqual([16, 8, 8, 8]);
+    expect(planTextureUpload(texture({ format: 6, mips: block(16) })).map((l) => l.byteLength)).toEqual([
+      32, 16, 16, 16,
+    ]);
+    // BC1 的数据按 BC2 的块长算会不够
+    expect(() => planTextureUpload(texture({ format: 6, mips: block(8) }))).toThrow("texture-data");
+    // BC 的第 0 级必须是 4 的倍数（WebGPU 建压缩纹理的要求）
+    expect(() =>
+      planTextureUpload(texture({ format: 7, mips: [{ width: 6, height: 4, bytes: new Uint8Array(16) }] })),
+    ).toThrow("texture-size");
   });
   it("mip 链校验", () => {
     expect(mipSize(2048, 11)).toBe(1);
@@ -353,6 +436,26 @@ describe("纹理上传布局", () => {
     });
     expect(samplerDescriptor({ clampUVs: false, noInterpolation: false }, false).maxAnisotropy).toBe(1);
     expect(requiredFeatures([{ format: 0 }, { format: 4 }, { format: 4 }])).toEqual(["texture-compression-bc"]);
+    expect(requiredFeatures([{ format: 7 }])).toEqual(["texture-compression-bc"]);
+    expect(requiredFeatures([{ format: 6 }])).toEqual(["texture-compression-bc"]);
+    expect(requiredFeatures([{ format: 9 }, { format: 6 }, { format: 7 }, { format: 8 }])).toEqual([
+      "texture-compression-bc",
+    ]);
+    expect(requiredFeatures([{ format: 0 }, { format: 8 }, { format: 9 }])).toEqual([]);
+  });
+  it("缺 BC 特性时 BC1 / BC2 场景退回 webgpu:no-bc，R8 / RG88 不受影响", () => {
+    const bundle = (format: number) =>
+      ({
+        unsupported: [],
+        textures: [texture({ format })],
+        layers: [],
+        scripts: { list: [] },
+      }) as unknown as SceneBundle;
+    expect(checkRenderable(bundle(7), new Set())).toEqual(["webgpu:no-bc"]);
+    expect(checkRenderable(bundle(6), new Set())).toEqual(["webgpu:no-bc"]);
+    expect(checkRenderable(bundle(7), new Set(["texture-compression-bc"]))).toEqual([]);
+    expect(checkRenderable(bundle(8), new Set())).toEqual([]);
+    expect(checkRenderable(bundle(9), new Set())).toEqual([]);
   });
 });
 
