@@ -9,6 +9,7 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { createClient } from "./client.ts";
 import { createDevMcpServer } from "./main.ts";
+import { summarizeCorners } from "./tools.ts";
 import type { DevMcpDeps } from "./tools.ts";
 import { Client, InMemoryTransport } from "./testdata/sdkClient.ts";
 import { PNG, fakeRest, sendJson } from "./testdata/fakeRest.ts";
@@ -76,6 +77,7 @@ const handler: Handler = (req, body, res) => {
         object: 10,
         name: "persp",
         perspective: true,
+        drawn: true,
         count: 5,
         uv: [
           [0, 0],
@@ -343,7 +345,7 @@ describe("轨迹与四角", () => {
       ]);
       const text = textOf(result);
       assert.match(text, /^四角：图片 13815，1 个粒子层/);
-      assert.match(text, /层 10 persp（透视）：存活 5 个，取了 1 个/);
+      assert.match(text, /层 10 persp（透视）：写进顶点 5 个，取了 1 个$/m);
       assert.match(text, /#0 像素角 \(950, 530\) \(950, 550\) \(970, 550\) \(970, 530\)/);
       assert.match(text, /#2 像素角 \(952, 530\)/);
       assert.doesNotMatch(text, /#3 像素角/);
@@ -352,5 +354,24 @@ describe("轨迹与四角", () => {
       assert.match(textOf(plain), /没有回放：预热后的状态/);
       assert.deepEqual(bodiesOf(rest, "/particle-corners").at(-1), { imageId: "13815" });
     });
+  });
+
+  test("四角摘要：drawn 为 false 的层标明渲染时不画（P4c 步骤 5，朝向是 NaN）", () => {
+    const layer = {
+      object: 3,
+      name: "upright",
+      perspective: false,
+      drawn: false,
+      count: 2,
+      uv: [[0, 0]] as [number, number][],
+      // 朝向是 NaN 时四角也是 NaN，经 JSON 传回成了 null
+      corners: [[[null, null, null, null]]] as unknown as number[][][],
+      pixels: [Array.from({ length: 4 }, () => [null, null])] as unknown as number[][][],
+      particles: [],
+    };
+    const lines = summarizeCorners([layer, { ...layer, object: 4, name: "screen", drawn: true }]);
+    assert.equal(lines[0], "层 3 upright（正交）：写进顶点 2 个，取了 1 个；这一层渲染时不画（朝向是 NaN），四角照算");
+    assert.equal(lines[1], "  #0 像素角 (NaN, NaN) (NaN, NaN) (NaN, NaN) (NaN, NaN)");
+    assert.equal(lines[2], "层 4 screen（正交）：写进顶点 2 个，取了 1 个");
   });
 });

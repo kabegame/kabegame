@@ -71,7 +71,7 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
 | `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」） | 要 | 桌面 |
 | `particle_track` | 按 WPE 的一次抓帧回放粒子模拟器，在 `frames`（缺省为抓到的帧）输出和 `rd-*.json` 同格式的轨迹，写 `out`；回摘要（每帧每系统的粒子数、位置范围、时间线信息） | 要 | 桌面 |
-| `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene` | 要 | 桌面 |
+| `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层画不画、写进顶点的粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene` | 要 | 桌面 |
 | `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
 | `projects_import` | 导入 `ignore/` 下的测试工程并等完成，清单写 `out` | 要 | 桌面 |
 | `hash_compare` | 只读两份基线，按 `input.path` 对应，比哈希与 unsupported | 不要 | — |
@@ -141,8 +141,11 @@ replay: { particles: { dts, times?, seed?, passes?, random? } }                 
   固定在场景中心；时间线里给了光标会报 `[local]`。
 
 **结果**：`particle_track` 写 `out`（`{ source: "sim", project, tag, frames: [{ frame, dt, systems: { <系统名>: [粒子] } }], skipped }`，
-和 `rd-*.json` 同格式、可直接交给比较脚本）；`particle_corners` 写 `out`（每层 `{ object, name, perspective, count, uv, corners, pixels,
-particles }`，`corners` 是每粒子四角的裁剪坐标 `[x, y, z, w]`，`pixels` 是场景像素坐标、原点左上）。`particle_track` 的场景用户属性取工程
+和 `rd-*.json` 同格式、可直接交给比较脚本；帧表系统与拖尾的粒子另带 `thick` = `[vx, vy, vz, frame]`）；`particle_corners` 写 `out`（每层
+`{ object, name, perspective, drawn, count, uv, corners, pixels, particles }`，`corners` 是每粒子四角的裁剪坐标 `[x, y, z, w]`，`pixels` 是
+场景像素坐标、原点左上）。四角的两点（P4c 步骤 5）：`drawn` 为 false 表示这一层渲染时整次不画（`upright` 的轴平行于视线、朝向是 NaN），
+四角照算，和 WPE 的 `gs_out` 一样是 NaN（结果经 JSON 传回、落盘，NaN / ±Infinity 在文件里是 `null`，摘要里显示 NaN）；`count`、`particles` 是**写进顶点的**粒子，拖尾系统去掉了退化的（速度为 0 或平行于视线），
+所以拖尾层的 `count` 可以小于存活数（存活数看 `particle_track` 或渲染元数据）。`particle_track` 的场景用户属性取工程
 缺省值（探针不收 `userProperties`）。结果超过 32 MB 报 `[host]` 413，减少 `frames` / 用 `limit` 收小。
 
 ```text

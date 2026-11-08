@@ -439,7 +439,12 @@ export function resolveReplay(
   };
 }
 
-const num = (value: number) => String(Number(value.toFixed(3)));
+/**
+ * 摘要里的数字（保留 3 位小数）。探针结果经 JSON 传回，NaN / ±Infinity 在 JSON 里成了 null（四角：朝向是 NaN、拖尾退化时，
+ * P4c 步骤 5），这里按 NaN 显示，不能当数字格式化。
+ */
+const num = (value: number | null) =>
+  typeof value !== "number" ? "NaN" : Number.isFinite(value) ? String(Number(value.toFixed(3))) : String(value);
 
 /** 一帧里每个系统的粒子数与位置范围。 */
 function systemLines(systems: ParticleTrackResult["frames"][number]["systems"]): string[] {
@@ -483,12 +488,14 @@ export function summarizeTrack(result: ParticleTrackResult, maxFrames = 8): stri
   return lines;
 }
 
-/** 四角摘要：每层粒子数，前 3 个粒子的四个像素角。 */
+/** 四角摘要：每层画不画、写进顶点的粒子数，前 3 个粒子的四个像素角。 */
 export function summarizeCorners(layers: ParticleCornersLayer[]): string[] {
   const lines: string[] = [];
   for (const layer of layers) {
+    // drawn 为 false：朝向是 NaN，渲染时整次绘制跳过，四角照算（同 WPE 的 gs_out），P4c 步骤 5
+    const hidden = layer.drawn === false ? "；这一层渲染时不画（朝向是 NaN），四角照算" : "";
     lines.push(
-      `层 ${layer.object} ${layer.name}（${layer.perspective ? "透视" : "正交"}）：存活 ${layer.count} 个，取了 ${layer.corners.length} 个`,
+      `层 ${layer.object} ${layer.name}（${layer.perspective ? "透视" : "正交"}）：写进顶点 ${layer.count} 个，取了 ${layer.corners.length} 个${hidden}`,
     );
     layer.pixels.slice(0, 3).forEach((quad, i) => {
       lines.push(`  #${i} 像素角 ${quad.map(([x, y]) => `(${num(x)}, ${num(y)})`).join(" ")}`);
@@ -1080,7 +1087,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：读每个粒子四角的裁剪坐标与场景像素坐标（dev 探针 particleCorners：把粒子顶点着色器改成计算着色器、用这一帧的 uniform 跑一遍），" +
         "和 WPE 几何着色器的 gs_out 比。replay 同 render_scene（不给时是预热后的状态）；光标固定在场景中心。结果（每层每粒子的 corners、pixels、particles）写到 out，" +
-        "回到会话的是摘要：每层粒子数、前 3 个粒子的四个像素角。自己开屏外宿主、跑、关掉，给 host 时用已开的。结果超过 32 MB 报 413，用 limit 收小。",
+        "回到会话的是摘要：每层画不画（drawn 为 false：朝向是 NaN、渲染时不画，四角照算）、写进顶点的粒子数（拖尾去掉退化的）、前 3 个粒子的四个像素角。自己开屏外宿主、跑、关掉，给 host 时用已开的。结果超过 32 MB 报 413，用 limit 收小。",
       inputSchema: {
         imageId: IMAGE_ID,
         replay: REPLAY.optional(),

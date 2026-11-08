@@ -395,7 +395,7 @@ export interface ParticleTrackParticle {
   color: number[];
   alpha: number;
   rot: number[];
-  /** 帧表系统才有：`[vx, vy, vz, frame 原值]`。 */
+  /** 帧表系统与拖尾（renderer 是 `spritetrail`，P4c 步骤 5）才有：`[vx, vy, vz, frame 原值]`。 */
   thick?: number[];
 }
 
@@ -437,7 +437,12 @@ export interface ParticleCornersLayer {
   object: number;
   name: string;
   perspective: boolean;
-  /** 存活粒子数（不受 `limit` 影响）。 */
+  /**
+   * 渲染时画不画这一层（P4c 步骤 5）：朝向是 NaN（`upright` 的轴平行于视线）时整次绘制跳过，为 false；四角照算（uniform 里是 NaN，
+   * 同 WPE 的 `gs_out`）。
+   */
+  drawn: boolean;
+  /** 写进顶点的粒子数（不受 `limit` 影响）：存活粒子，拖尾系统去掉退化的（速度为 0 或平行于视线，P4c 步骤 5）。 */
   count: number;
   /** 每个角的 UV：`(0,0)`、`(0,1)`、`(1,1)`、`(1,0)`。 */
   uv: [number, number][];
@@ -445,6 +450,7 @@ export interface ParticleCornersLayer {
   corners: number[][][];
   /** 同一角的场景像素坐标 `[x, y]`（原点左上、y 向下）。 */
   pixels: number[][][];
+  /** 写进顶点的粒子输入，按槽序，与 `corners` 一一对应（拖尾系统同样去掉退化的）。 */
   particles: ParticleTrackParticle[];
   wgsl?: string;
 }

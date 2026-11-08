@@ -1360,7 +1360,7 @@ Claude 独立验收：
 | 旧回放（自跑改后一侧，对代理的改动前输出） | 14 对逐字节相同，`out/run-old-claude.log` |
 | 语料（自跑工作区，对代理的 HEAD） | 和代理的工作区结果逐字节相同 |
 | 画面哈希（kabegame-dev 任务表，屏外宿主，宿主按 `--mode development` 重建，入口 `index--c4joQgu.js`） | 10 张干净场景 × 三档，30 组和步骤 3（`c3/out/hash-after.json`）全部相同；没碰主窗口，前后路由不变 |
-| 应用里的帧循环 | **没确认成**：屏外宿主里 `requestAnimationFrame` 不发（1 秒 0 次，Chromium 停发视口外 iframe 的 rAF），时钟停在第一帧，解除暂停也一样，和改动无关。帧顺序由驱动真实 `SceneRenderer.render`（假 GPU）的单测钉住。要在应用里看，得开主窗口预览 |
+| 应用里的帧循环 | 当时没确认成：屏外宿主里 `requestAnimationFrame` 不发（1 秒 0 次，Chromium 停发视口外 iframe 的 rAF），时钟停在第一帧，解除暂停也一样，和改动无关。帧顺序由驱动真实 `SceneRenderer.render`（假 GPU）的单测钉住。**2026-11-09 补做**（宿主是步骤 5 的构建 `index-zvkIAUZN.js`，用户把主窗口切到前台；`show_window` 自己没能抢到前台）：主窗口预览 `3832772446` 1.5 秒 rAF 216 次、场景时间前进 1.5 秒、粒子位置在变；应用背景 `1838478131` 同样 216 次、存活粒子 396 → 408；`open_image_preview` 打开 `razer_bedroom`，6 个脚本 1.5 秒内 `update` 增加 540 次（6 × 90 帧，宿主上限 60 fps），没有报错、没有禁用的回调。测完用 `open_image_preview` 把用户原来的 `3832772446` 预览开回 |
 
 工具在 `ignore/p4/c4/`：`prestudy.test.ts`、`world_unlock.py`、`replay.test.ts`、`replay-b3/b4/b6/cp/ptr/attract.test.ts`、`run_old.sh`、`cmp_old.py`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`movement_parse.py`、`mutate_claude.py`、`run_old_claude.sh`、`cmp_corpus_claude.py`、`scripted_clean.py`、`hash_run.ts`、`cmp_hash.py`、`live_check.ts`、`live_gate.ts`、`live_unpause.ts`、`live_raf.ts`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`（画面哈希 `out/hash-after.json`）。
 

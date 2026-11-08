@@ -768,3 +768,13 @@ Claude 独立验收（不采信自报；照 `.mcp.json` 另起 stdio MCP，带 `
 | `particle_track`（`p4c-cp` 到 927 帧） | 4 帧 × 14 个系统写进 `out`；11 个不跟随指针的系统和 WPE 轨迹的最大差与 `c1/out/replay-cp.txt` 逐系统相同（`cp-io-pos` 8.06e-3，`vortex-cp` 0.388） |
 | 参数护栏 | `inline: false` 不给 `save` 时报 `[local]`，没开宿主 |
 | 不留痕迹 | 导入的 2 个工程（两轮各一次）都已 `projects_remove`，`verified.imagesGone` / `tasksGone` 为真；`app_state` 前后逐字相同，只剩应用背景宿主 13531 |
+
+### 补充 — 跟上 P4c 步骤 5 的四角输出（2026-11-09，Claude）
+
+P4c 步骤 5（`a0a84322`）改了探针 `particleCorners` 的结果：新增 `drawn`（朝向是 NaN、渲染时整次不画为 false，四角照算），`count` / `particles` 改成写进顶点的粒子（拖尾去掉退化的）；轨迹里拖尾系统也带 `thick`。
+
+- **修改** `scripts/kabegame-dev/types.ts`：`ParticleCornersLayer` 加 `drawn`，`count`、`particles`、`thick` 的注释按新含义改。vite 原样透传，不用改逻辑。
+- **修改** `apps/kabegame-dev-mcp/src/tools.ts`：四角摘要标出不画的层，「存活」改成「写进顶点」；摘要的数字格式化认 `null`。实测发现：NaN 的四角经 JSON 传回成了 `null`，原来的格式化在 `null.toFixed` 上抛错，`particle_corners` 对 `p4c-sprite` 直接报 `[local]`。
+- **修改** `particles.test.ts`（加 `drawn` 与 NaN 四角的摘要用例）、`SKILL.md`（结果字段、NaN 在文件里是 `null`）。
+
+验收：两个包单测全过（MCP 17 组 55 步、vite 26 组 105 步），`deno check`、Prettier 通过；另起 stdio MCP 导入 `p4c-sprite`、按 WPE 抓帧回放后读四角：24 层都带 `drawn`，只有 S7（`upright` 轴平行于视线，步骤 0 预测不画）为 false，摘要正常；测试工程已移除，`app_state` 前后相同。脚本 `ignore/p4/dev4/claude/e2e-drawn.mjs`。
