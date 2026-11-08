@@ -40,7 +40,7 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项，外加 renderer sprite；每项都有列和执行函数，sprite 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项，外加 renderer sprite；每项都有列和执行函数，sprite 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
@@ -63,6 +63,7 @@ describe("模块表", () => {
       "operator:colorchange",
       "operator:oscillatesize",
       "operator:vortex",
+      "operator:controlpointattract",
       "operator:turbulence",
       "operator:capvelocity",
       "renderer:sprite",
@@ -93,7 +94,11 @@ describe("模块表", () => {
       oscillatesize: 0,
       vortex: 0,
       capvelocity: 0,
+      // P4c 步骤 3：静态部分为 0，上一步位置列按 flags 算（columnFlagsOf，见 particles/attract.test.ts）
+      controlpointattract: 0,
     });
+    // 只有 controlpointattract 有按字段算的列标志
+    expect(PARTICLE_MODULES.filter((def) => def.columnFlagsOf).map((def) => def.name)).toEqual(["controlpointattract"]);
   });
 });
 
@@ -608,13 +613,13 @@ describe("能力表：粒子", () => {
       particleKeys({
         emitter: [{ name: "layerimage" }],
         initializer: [{ name: "remapinitialvalue" }],
-        operator: [{ name: "controlpointattract" }],
+        operator: [{ name: "reducemovementnearcontrolpoint" }],
         renderer: [{ name: "spritetrail" }],
       }),
     ).toEqual([
       "particle:emitter:layerimage",
       "particle:initializer:remapinitialvalue",
-      "particle:operator:controlpointattract",
+      "particle:operator:reducemovementnearcontrolpoint",
       "particle:renderer:spritetrail",
     ]);
     // 步骤 3 的 8 个模块进了表
@@ -843,14 +848,22 @@ describe("能力表：粒子", () => {
     ).toEqual([]);
     const pointerAt7 = [...Array.from({ length: 7 }, (_, id) => ({ id })), { id: 7, flags: 1 }];
     expect(particleKeys({ emitter: [emitter(-1)], controlpoint: pointerAt7 })).toEqual([]);
-    // 表外模块照旧自己报
+    // 表外模块照旧自己报（P4d）
+    expect(
+      particleKeys({
+        emitter: [emitter()],
+        operator: [{ name: "reducemovementnearcontrolpoint", controlpoint: 1 }],
+        controlpoint: [{}, { flags: 1 }],
+      }),
+    ).toEqual(["particle:operator:reducemovementnearcontrolpoint"]);
+    // controlpointattract（P4c 步骤 3）在表里：它引用的指针点不报
     expect(
       particleKeys({
         emitter: [emitter()],
         operator: [{ name: "controlpointattract", controlpoint: 1 }],
         controlpoint: [{}, { flags: 1 }],
       }),
-    ).toEqual(["particle:operator:controlpointattract"]);
+    ).toEqual([]);
     // 关键帧照报（整段 scanValue）
     expect(
       particleKeys({

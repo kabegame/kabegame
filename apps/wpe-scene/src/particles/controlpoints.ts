@@ -110,7 +110,9 @@ function pointerLocal(target: Float32Array, inverse: Mat4 | null, x: number, y: 
 /**
  * `n = max(controlpoint + 1)`：遍历三类模块里模块表有 `controlpoint` 字段的项，取解析后的值（0–7，`clampControlPoint`）。
  * 没有这样的模块时为 0。WPE 在解析期对每个读控制点的模块做 `max(已有, controlpoint + 1)`（`0x1401c6ab8` 等，无符号比较）；
- * 表外模块（`controlpointattract` 等）不计：场景已因 `particle:<类别>:<名字>` 退回，它们也不执行。
+ * `controlpointattract` 从 P4c 步骤 3 起在表里，计入（`0x1401ccd88`–`0x1401ccd99`），只被它引用的控制点从此存在，指针与实例覆盖
+ * 在这些点上生效。表外模块（P4d 的 `reducemovementnearcontrolpoint` 等）不计：场景已因 `particle:<类别>:<名字>` 退回，它们也
+ * 不执行。
  */
 export function controlPointCount(def: Pick<SceneParticle, "emitters" | "initializers" | "operators">): number {
   let count = 0;

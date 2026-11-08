@@ -42,7 +42,7 @@ function reference(matrix: Mat4, basis: number[], t: number[]) {
 }
 
 describe("个数 n = max(controlpoint + 1)（rea-p4c-sim.md 1.1）", () => {
-  it("遍历三类模块里模块表有 controlpoint 字段的项；没有时为 0；表外模块不计", () => {
+  it("遍历三类模块里模块表有 controlpoint 字段的项；没有时为 0；controlpointattract 计入（P4c 步骤 3）；表外模块不计", () => {
     expect(controlPointCount(def({}))).toBe(0);
     expect(controlPointCount(def({ initializer: [{ name: "lifetimerandom" }] }))).toBe(0);
     // emitter 缺省读控制点 0
@@ -57,8 +57,17 @@ describe("个数 n = max(controlpoint + 1)（rea-p4c-sim.md 1.1）", () => {
     ).toBe(6);
     // -1 钳成 7
     expect(controlPointCount(def({ emitter: [sphere(-1)] }))).toBe(8);
+    // controlpointattract（P4c 步骤 3，0x1401ccd88）的下标计入；缺省读控制点 0；-1 同样钳成 7
     expect(
       controlPointCount(def({ emitter: [sphere()], operator: [{ name: "controlpointattract", controlpoint: 3 }] })),
+    ).toBe(4);
+    expect(controlPointCount(def({ operator: [{ name: "controlpointattract" }] }))).toBe(1);
+    expect(controlPointCount(def({ operator: [{ name: "controlpointattract", controlpoint: -1 }] }))).toBe(8);
+    // 表外模块（P4d）不计
+    expect(
+      controlPointCount(
+        def({ emitter: [sphere()], operator: [{ name: "reducemovementnearcontrolpoint", controlpoint: 3 }] }),
+      ),
     ).toBe(1);
   });
 

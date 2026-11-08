@@ -583,13 +583,187 @@ export function sceneCursor(
 
 ## 步骤 3 — `controlpointattract`
 
-- **新增** 模块表记录 `controlpointattract`，字段、缺省值、列标志（含「上一步位置」列的条件）按步骤 0。
-- 用到的控制点经步骤 1 的接口取。
+> 2026-11-08 按 rea-p4c-sim 第 4 节、步骤 0 的实测和语料扫描（`ignore/p4/c3/scan_attract.py`，结果 `scan_attract.txt`；挡住的场景 `attract_unlock.py`）写成可以直接派发的版本。直接在 `apps/wpe-scene` 里做。Claude 对过 `ignore/p4/rea/p4c-sim/cpa.asm`、`cpa_blend.asm` 和解析段里 `deletethreshold` 的平方（`0x1401ccbef` `mulss xmm6, xmm6`，float 平方）。
 
-**验收：**
-- `proj/p4c-attract` 回放（fps 60 和 fps 10），和 WPE 逐帧比。
-- 变异检查：`threshold`、负 `scale`、`h` / `k`、`origin` 各有测试失败。
-- `3832772446` 只剩 `sprite` 的 `flags`（步骤 5 解锁）。
+### 思路
+
+`controlpointattract` 是一个普通 operator：每遍对 `[0, count)` 的槽，按粒子到控制点的距离改速度，不改位置。它加进模块表之后，解析、能力表和控制点个数 `n` 都按表自动跟上。只被它引用的控制点从此存在，指针和实例覆盖在这些点上生效。语料里它引用的大多是跟随指针的控制点 1，效果是粒子躲开光标。
+
+公式照 4.2 的汇编逐条写。普通版（`0x140241554`）和 blend 版（`0x14024172d`）的运算顺序相同，blend 版只在钳制之后多乘 `b`：
+```
+C  = cp[controlpoint].current.t
+ks = k·scale                    （scale 已乘 instanceoverride.speed）
+rT = rcp(threshold)
+每槽：dx = x − Cx，dy、dz 同；L2 = (dz² + dy²) + dx²；L = sqrt(L2)；inv = rcp(L)
+      active = (L < threshold) 且 (FLT_MIN < L)
+      f = (1 − L·rT)·ks；flags & 2 且 L < f 时 f = L；[blend 版：f = f·b]
+      active 时 vy −= (inv·dy)·f，vz −= (inv·dz)·f，vx −= (inv·dx)·f
+flags & 1：删除判定（4.3）
+```
+乘的是 drag 系数 `k`，不是步长 `h`。两遍模式下每遍用 `k/2`，删除判定每遍都做。
+
+删除判定（`flags` bit0）读「上一步位置」列。`movement` 每遍开头把位置抄进这一列，所以 `[上一步位置, 位置]` 是这一遍的位移线段。线段上离 `C` 最近的点到 `C` 的距离平方不大于 `deletethreshold²` 时，令 `age = life`：本帧照常画，下一帧判死。这一列只在 bit0 时分配（WPE 解析期 `def+0xc |= 4`），所以模块的列标志要按字段算。
+
+几个关键决定：
+- **`origin`、`offset` 登记成不参与计算的字段。** WPE 不读 `origin`（解析段里没有这个键）；`offset` 解析了，但两个执行段和删除判定都不读。语料里 50 处 `origin` 都是 `"0 0 0"` 一类的静态串，登记成 `vec3` 就不会按表外字段报。做法同 `turbulentvelocityrandom` 的 `up`。
+- **列标志按字段算。** 模块表加可选的 `columnFlagsOf(fields)`，和静态的 `columnFlags` 按位或。只有本模块用。
+- **近似倒数照旧不复刻**（`rcp`），回放用包络放宽。
+- **不解锁新场景。** 报 `controlpointattract` 的 28 张场景都还有别的不支持项；`3832772446` 做完只剩 `particle:renderer:sprite:flags`（步骤 5）。语料里 62 处全用缺省 `flags`（钳制开），没有 blend 和 `deletethreshold`；43 处 `scale < 0`（排斥）；`controlpoint` 写了 1、2、3、6、7；4 处在世界空间系统里（步骤 4）。上文「范围与解锁」里的字段计数含 kabegame-sample，和这里的数不同。
+- **删除判定和 blend 没有补抓。** 语料里没人用，读码已经确定。`p4c-attract` 的两轮抓帧里有 `a-blend`；`a-delete` 只能核对粒子数：窗口之前出生的那个粒子已经被删掉，窗口里新出生一个。删除发生在哪一帧没有抓到，由单测按读码钉住。
+
+### 现状锚点
+
+**q. 表外模块整张退回**（`compile/features.ts:640`）
+```ts
+const reading = readParticleModule(category, entry, orthographic);
+if (!reading.known) {
+  unsupported.add(`particle:${module}`); // 现状：controlpointattract 报 particle:operator:controlpointattract
+```
+
+**r. 列标志是模块的静态值**（`particles/system.ts:130`）
+```ts
+export function particleColumnFlags(def: Pick<SceneParticle, "emitters" | "initializers" | "operators">): number {
+  // …
+  for (const module of modules) flags |= particleModuleDef(category, module.name)?.columnFlags ?? 0; // 现状：不看字段
+}
+```
+
+**s. `n` 只数表内模块**（`particles/controlpoints.ts:113`）
+```ts
+ * 表外模块（`controlpointattract` 等）不计：场景已因 `particle:<类别>:<名字>` 退回，它们也不执行。
+```
+
+**t. `movement` 已经会刷新上一步位置**（`particles/operators.ts:58`）
+```ts
+if (columns.previousPosition)
+  for (let i = 0; i < 3; i++) columns.previousPosition[i].set(columns.position[i].subarray(0, count));
+```
+出生时 `spawn` 也把上一步位置写成出生位置（`particles/system.ts:420`）。
+
+**u. 单测拿它当表外模块的例子**（`compile/particles.test.ts:611`、`:850`，`particles/simulator.test.ts:725`，`particles/controlpoints.test.ts:61`）。
+
+### 点 1 — 模块表（`particles/modules.ts`）
+
+- **新增** `ParticleModuleDef` 一项：
+```ts
+  /**
+   * 按字段追加的列标志（和 `columnFlags` 按位或）。只有 `controlpointattract`：`flags` bit0 时置 bit2（上一步位置），
+   * rea-p4c-sim.md 4.1「`flags & 1` 时 `def+0xc |= 4`」。
+   */
+  columnFlagsOf?: (fields: Readonly<Record<string, ParticleFieldValue>>) => number;
+```
+- **新增** 模块记录（放在 `vortex` 之前或之后均可，注释写依据）：
+```ts
+  {
+    // rea-p4c-sim.md 4.1（operator 10，blend 0x20，解析 `0x1401cc9c8`–`0x1401ccdb5`，缺省 `FUN_1401bdee0`）
+    category: "operator",
+    name: "controlpointattract",
+    fields: {
+      // 乘 `speed`（条目类型 5，只登记这一项；系统 flags bit4 时不登记）
+      scale: by("speed", num({ orthographic: 512, perspective: 20 })),
+      threshold: num({ orthographic: 512, perspective: 5 }),
+      // 解析期按 float 平方存（`mulss`），执行函数里平方
+      deletethreshold: num({ orthographic: 15, perspective: 0.5 }),
+      // 缺省 2（钳制开，`0x1401be245`）；bit0 删除，bit1 钳制，其余位没有读者
+      flags: int(2),
+      // 读这个控制点 current 的平移；解析期钳到 0–7
+      controlpoint: CONTROL_POINT_FIELD,
+      // 解析了，执行不读
+      offset: vec3("0 0 0"),
+      // WPE 不读这个键（解析段没有它），中性：登记成不参与计算的字段，免得按表外字段报（语料 50 处）
+      origin: vec3("0 0 0"),
+      ...BLEND,
+    },
+    columns: ["age", "life", "position", "velocity", "previousPosition"],
+    columnFlags: 0,
+    columnFlagsOf: (fields) => ((fields.flags as number) & 1 ? COLUMN_FLAGS.previousPosition : 0),
+    normalize(fields) {
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
+    run: controlPointAttract,
+  },
+```
+- **修改** `PARTICLE_MODULES` 上面的清单注释加上 P4c 步骤 3。`clampControlPoint` 注释里引用 `controlpointattract` 的那句保留。
+- 派发后先核对：`flags`、`controlpoint` 的解析段（`cpa_parse.asm` 第 129–200 行附近，几处 `FUN_140085f70`）是不是只在键存在时读；`scale`、`threshold`、`deletethreshold` 是 `FUN_140086220`（float）读。和计划不符时按汇编改，并记下来。
+
+### 点 2 — 执行函数（`particles/operators.ts`）
+
+- **新增**
+```ts
+/** `FLT_MIN`（`0x00800000`，`0x1404e9960` / `0x1404e9980`）：`L` 不大于它时这个粒子不受影响，避免 `rcp(0)`。 */
+const FLT_MIN = 2 ** -126;
+
+/**
+ * `controlpointattract`（operator 10，`0x140241554`；blend 版 0x20，`0x14024172d`，rea-p4c-sim.md 4.2【确】）。公式见上面
+ * 「思路」；写法要点：
+ * - `L2 = (dz² + dy²) + dx²`，`L = sqrtps`（精确）；`rcp(threshold)`、`rcp(L)` 是 `rcpps`，按精确值算；
+ * - `active = L < threshold && FLT_MIN < L`，两个都是严格小于；`L` 为 NaN 时不生效；
+ * - `f = (1 − L·rT)·ks`；`flags & 2` 且 `L < f` 时 `f = L`（`scale < 0` 时 `f < 0`，永远不钳）；blend 版钳制之后 `f *= b`；
+ * - 速度按 y、z、x 的顺序减 `(inv·d)·f`，逐步 float32；
+ * - 死槽照常处理；`flags & 1` 时接着做删除判定（`attractDelete`）。
+ */
+export function controlPointAttract(fields: ParticleFields, context: ParticleRunContext): void;
+
+/**
+ * 删除判定（`FUN_14022a150`，rea-p4c-sim.md 4.3）：线段 `[上一步位置, 位置]` 上离 `C` 最近的点到 `C` 的距离平方不大于
+ * `deletethreshold²` 时 `age = life`（比较是 `dt² < |e|²` 保留年龄，所以 NaN 也删）。
+ */
+function attractDelete(/* … */): void;
+```
+- 删除判定逐步 float32：
+```
+d = P1 − P0；L = sqrt((dz² + dy²) + dx²)；r = L > 0 ? rcp(L) : 1
+s = C 在线段方向上的投影；s = s ≥ 0 ? s : 0（NaN 得 0）；s = s ≤ L ? s : L
+e = C − (s·r·d + P0)；!(deletethreshold² < |e|²) 时 age = life
+```
+  加法结合顺序 rea-p4c-sim 4.3 是按 Ghidra 写的【推】。实现前到 `ignore/p4/rea/wp.asm` 里找 `0x14022a150` 起的汇编，逐条核对 `s`、`e`、`|e|²` 的运算顺序，注释写地址。
+- 上一步位置列一定存在（`flags & 1` 时 `columnFlagsOf` 已经开列）。防御性地写成「列为 null 时跳过删除判定」，注释写明正常路径不会发生。
+- 文件头的依据加上 P4c 步骤 3。
+
+### 点 3 — 列标志（`particles/system.ts`）
+
+- **修改** `particleColumnFlags`：
+```ts
+for (const module of modules) {
+  const def = particleModuleDef(category, module.name);
+  if (def) flags |= def.columnFlags | (def.columnFlagsOf?.(module.fields) ?? 0); // 修改：加上按字段算的部分
+}
+```
+  `module.fields` 是解析值（没乘 `instanceoverride`），`flags` 不受覆盖影响，可以直接用。注释同步。
+
+### 点 4 — 注释与旧单测
+
+- **修改** `particles/controlpoints.ts` `controlPointCount` 的注释：表外模块的例子换成 P4d 的 `reducemovementnearcontrolpoint`，写明 `controlpointattract` 从步骤 3 起计入。
+- **修改** 把 `controlpointattract` 当表外模块的单测（锚点 u）换成仍在表外的模块（`reducemovementnearcontrolpoint` 或 `maintaindistancetocontrolpoint`），用意不变；`controlpoints.test.ts:61` 那条改成断言 `controlpointattract` 的下标计入 `n`。
+- `compile/features.ts` 不用改代码。`checkParticleFeatures` 的注释里如果有「控制点读者」或表外模块的举例，同步一下。
+
+### 验收
+
+**单测**（`particles/operators` 相关的测试文件，没有合适的就新增 `particles/attract.test.ts`；`compile/particles.test.ts`、`simulator.test.ts`、`controlpoints.test.ts` 按需补）：
+- 模块表：正交、透视两套缺省；`flags` 缺省 2；写了 `origin`、`offset` 不报；`scale` 乘 `instanceoverride.speed`，系统 `flags` bit4 时不乘，`threshold`、`deletethreshold` 不乘；`controlpoint` 钳制（−1 得 7，9 得 7）；列标志只在 `flags` bit0 时含上一步位置（`flags 1`、`3` 有，`0`、`2` 没有）；`controlPointCount` 计入本模块的下标。
+- 公式（单粒子单步，和手算比）：吸引、排斥、阈值外不动；恰在阈值上不动：挑一个 `T` 使 `f32(T·f32(1/T)) < 1`，配很大的 `scale`，写成 `<=` 时会动；`L = 0` 不产生 NaN；钳制开时 `f = L`；`scale < 0` 时不钳；blend 乘在钳制之后（钳制开、`b < 1` 时结果是 `L·b`）；用 `k` 不用 `h`（两者不同的帧）；读控制点的 current 不读 previous（控制点 1 带 `offset`、跟随指针各一组）。
+- 删除：线段扫过 `C` 时删（两端离 `C` 都比阈值远）；端点在阈值内删；偏离大于阈值不删；按平方比较（偏离 10、阈值 20 删）；`|e|²` 为 NaN 时删；删的那一帧粒子仍存活（`alive` 不变、`age = life`、当帧顶点照写），下一帧判死；两遍模式每遍都判（第一遍的半段就扫过 `C` 时删）；没有 `movement` 时线段起点是出生位置。
+
+**回放**（新增 `ignore/p4/c3/replay.test.ts`，骨架照 `c2/replay.test.ts`）：
+- `p4c-attract-fps60`（帧 955–960，1 遍；956 起抓帧拖慢了帧时间，dt ≈ 0.074，所以 `k ≠ h`）和 `p4c-attract-fps10`（帧 156–161，2 遍）：10 个系统全部粒子逐个比，每帧粒子数相同。限值同步骤 1、2（含 `rcp` / `rsqrt` 的包络）。`a-flags0`、`a-default` 对出生点的抖动很敏感，靠包络覆盖；如果包络盖不住，先查是不是公式问题，再把实际情况写进结果，不要私自放宽限值。
+- 编译 `p4c-attract` 的不支持项应为空。
+- 另用产品代码的 `particleTrack` 跑同一组输入，输出和手写循环逐位相同。
+- 旧回放在改动前后各跑一遍（改动前用 HEAD 导出的源码），输出逐字相同：`b3`、`b4`、`b6` 的拷贝，`c1` 的 `p4c-cp`，`c2` 的 `p4c-ptr`。这些系统都没有本模块，结果不该变。
+
+**变异检查**（每处都要有用例或回放失败）：
+- 不判 `threshold`；`L < threshold` 写成 `<=`；去掉 `FLT_MIN < L`；
+- 用 `h` 代替 `k`；`scale` 不乘 `instanceoverride.speed`；`scale` 取绝对值；
+- `flags` 缺省 0；钳制条件写成 `f < L`，或对 `f < 0` 也钳；
+- blend 乘在钳制之前；blend 不乘；
+- 中心加上 `offset` 或 `origin`；读控制点 previous；
+- 不做删除判定；`deletethreshold` 不平方；只看端点不看线段；删除时直接 `life = 0`；
+- 列标志总是带上一步位置（`particleColumnFlags` 的单测要能发现）；`controlPointCount` 不计本模块。
+
+**语料**（`c2/corpus.test.ts` 的做法，HEAD 导出对工作区）：去掉的键应只有 `particle:operator:controlpointattract`（28 张），不新增键。干净场景 21 → 21，`3832772446` 只剩 `particle:renderer:sprite:flags`。`n` 变大以后，只被本模块引用的控制点上的指针、实例覆盖开始生效，逐个系统列出来（`c1/scan_cp.py` 的 `cp-flags-used`、`io` 两类）。
+
+**画面哈希**（Claude 做，需要 dev 在跑，没在跑就记下没做）：10 张干净场景三档和步骤 2 的 `c2/out/hash-after.json` 相同（这些场景没有本模块）。
+
+**真机**：不解锁场景，不需要。dev 下可以用 `kabegame-dev-scene-force-render` 强制渲染 `3812887609`（只差 `object:shape`、`particle:children`）看萤火虫躲光标，可选。
 
 ## 步骤 4 — 世界空间
 
@@ -683,7 +857,7 @@ export function sceneCursor(
 - **`basis·q` 的加法顺序**：`boxrandom`、`FUN_140184440`、`sphererandom` 的 SIMD 写法都是 `(x·M0j + y·M1j) + z·M2j` 的交换形式，逐位等价，共用 `mulBasis`。
 - **`controlpoint` 取值**：三个模块都是 `FUN_140085f70` 后 `cmp eax, 7; cmovb`（无符号，负数得 7），Claude 核对过 `sphererandom` 那处（`0x1401c5ff7`–`0x1401c600d`）。
 - **能力表报指针点时排除 `0x10000`**，和 `update` 的位优先级一致。
-- **`n` 只算模块表里的模块**（照计划）：只被 `controlpointattract` 引用的点（如 thunderbolt 的 `flags 2`）现在算在 `n` 之外，步骤 3 加进模块表后自动计入。
+- **`n` 只算模块表里的模块**（照计划）：只被表外模块引用的点现在算在 `n` 之外，加进模块表后自动计入。（步骤 3 更正：原先这里举的 thunderbolt `flags 2` 点不是被 `controlpointattract` 引用，而是被 P4d 的 `reducemovementnearcontrolpoint` 引用，步骤 3 之后 `n` 仍是 1。）
 
 验收结果：
 
@@ -772,3 +946,50 @@ Claude 独立验收：
 真机（用户，2026-11-08）：`1838478131` 在预览和桌面上看过，没有问题。
 
 工具在 `ignore/p4/c2/`：`replay.test.ts`、`replay-cp.test.ts`、`replay-b3.test.ts`、`replay-b4.test.ts`、`replay-b6.test.ts`、`corpus.test.ts`、`corpus_diff.py`、`run_old.sh`、`cmp_old.py`、`mutate.py`、`mutate_claude_gen.py`（生成 `mutate_claude.py`）、`cmp_hash.py`、`cmp_corpus_claude.py`、`pkg_extract.py`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`。补测工具在 `ignore/p4/`：`gen_c.py` 的 `p4c_ptr`、`ana_ptr2.py`，抓帧 `A:\p4b\p4c-ptr-fps60[-<尺寸>]`。
+
+### 步骤 3 — `controlpointattract`（2026-11-08）
+
+Claude 扫语料、写计划，子代理实现，Claude 独立验收。没有补抓：语料里没人用删除判定和 blend，现有两组抓帧够回放。
+
+**改动**（`apps/wpe-scene/src`，7 个文件，新增 `particles/attract.test.ts`）：
+- **新增** `particles/modules.ts`：模块记录 `controlpointattract`（字段、两套缺省、`flags` 缺省 2、`scale` 乘 `speed`、`controlpoint` 钳制）；`ParticleModuleDef.columnFlagsOf`。
+- **新增** `particles/operators.ts`：`controlPointAttract`（普通版与 blend 版共用）、`attractDelete`、`FLT_MIN`。
+- **修改** `particles/system.ts`：`particleColumnFlags` 按位或上 `columnFlagsOf(module.fields)`。
+- **修改** `particles/controlpoints.ts` 注释；三处把本模块当表外例子的单测换成 `reducemovementnearcontrolpoint`。
+
+和计划不同、或计划没写、由代理按证据定的：
+- **删除判定的乘法结合**（`0x14022a150`–`0x14022a2fb`，Claude 逐条核对过）：先算 `u = r·d`，`s = ((Cz − P0z)·uz + (Cy − P0y)·uy) + (Cx − P0x)·ux`，`e = C − (s·u + P0)`。rea 4.3 按 Ghidra 写的 `((C − P0)·r)·d`、`(s·r)·d` 不对，有 1 ulp 的边界用例钉住。
+- **`origin` 登记成 `vec3str`**（写成数字也不报），不是计划写的 `vec3`：WPE 根本不读这个键。
+- **缺省值和 `FLT_MIN` 从 exe 读过**（`ignore/p4/c3/consts.py`）：两处比较用的常量是函数内静态，运行时从 `0x140492cd0` 拷入，四个分量都是 `0x00800000`。
+- **键在而值为 null 时 WPE 读成 0**（jsoncpp `find` 认它存在）。这里照模块表的统一规则当缺键处理，语料 0 处，注释写明。
+- **fps10 的日志只记到第 150 帧**（每 50 帧写一批，抓帧结束时下一批没写出），151–155 帧的 dt 按总时长平均分。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；47 个文件、1239 个用例全过（改动前 46 个、1211 个）；改过和新增的文件格式通过 |
+| `p4c-attract` 回放（fps60 帧 955–960 一遍，956 起抓帧拖慢、dt ≈ 0.074 所以 `k ≠ h`；fps10 帧 156–161 两遍） | 编译不支持项为空；两组逐帧粒子数全部相同（`a-delete` 窗口前出生的粒子已被删、窗口里新出生一个）。10 个系统里 9 个在限内，差 / 限 0.12–0.97；size、color、alpha、rot 差 0。`particleTrack` 与手写循环逐位相同。**`a-default` 两组都超出包络**：fps60 差 / 限 1.15，fps10 28.7，原因见下 |
+| `a-default` 超限的排查 | 单步核对（只用 WPE 自己相邻帧的位置预测下一帧，不依赖长历史）残差 4.6e-3 / 3.8e-3，在 rcpps 量级内；不钳制的假设残差 1.7e3、1.4e3，所以公式成立。这个系统钳制后每帧速度减掉整个 `L`，近似倒数的逐值误差一路累积：fps60 那组把出生和 attract 两处 rcpps 分开取符号，四种组合包得住 WPE，现有包络让所有 rcpps 同号，漏了异号的情形；fps10 那组还叠上 151–155 帧 dt 没有记录，只改这 5 帧的分法 `a-default` 就差 ±0.06 到 ±10，定不了 |
+| 旧回放（HEAD 导出对工作区） | b3、b4、b6 的拷贝，c1 的 `p4c-cp`，c2 的 `p4c-ptr`，13 对输出逐字节相同，各自全部通过 |
+| 变异检查（代理，24 处） | 计划列的 20 处和另加的 4 处全部检出，`out/mutate.txt` |
+| 语料 | 只去掉 `particle:operator:controlpointattract`（28 张），没有新增；干净场景 21 → 21，`3832772446` 只剩 `particle:renderer:sprite:flags`。`n` 变大后开始生效的控制点 42 处（指针 30 处、实例覆盖 12 处），所在场景都还因别的键退回，`out/corpus-diff.txt` |
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 只有 `apps/wpe-scene/src` 和 `ignore/p4/c3/`；没有 git 写操作。工作区里 `.claude/plans/tools/`、`scripts/kabegame-dev/` 是别的会话的 |
+| 读码对照 | 执行函数和 `cpa.asm`、`cpa_blend.asm` 逐条一致；删除判定对 `wp.asm` 的 `0x14022a1c0`–`0x14022a2fb` 逐条核对，`u = r·d` 先算、`s` 两次钳制、`!(dt² < |e|²)` 时删，和实现一致 |
+| 「改动前」源码 | `head/src` 和 `git archive HEAD` 逐文件相同（只多翻译器 wasm） |
+| tsc、vitest、Prettier（自跑） | 0 error；47 个文件、1239 个用例全过；格式通过 |
+| `p4c-attract` 回放（自跑） | 输出和代理的逐字节相同 |
+| 单步核对（Claude 自写，不用代理的代码，`claude_onestep.py`，`out/claude-onestep.txt`） | 两组抓帧 10 个系统残差都在 rcpps 量级内（`a-default` 4.6e-3、`a-flags0` 0.17（坐标 4 万以上，相对 2.3e-4），其余 ≤ 1e-4）；用 `h` 代替 `k` 的对照在 `a-basic`、`a-repel`、`a-speed`、`a-blend` 上残差 1.5e-2–0.56，不钳制的对照在 `a-default` 上 1.7e3。结论和代理的诊断一致 |
+| 变异检查（Claude 5 处，和代理不重复，`mutate_claude.py`） | 全部检出：删除判定去掉 `s ≥ 0` 钳制、去掉 `s ≤ L` 钳制、比较写成 `≤`、`origin` 登记成 `vec3`、中心固定读控制点 0。源码树哈希前后相同，`out/mutate-claude.txt` |
+| 旧回放（自跑改后一侧，对代理的改动前输出） | 13 对逐字节相同，`out/run-old-claude.log` |
+| 语料（自跑工作区，对代理的 HEAD） | 输出和代理的工作区结果逐字节相同；只去掉 `particle:operator:controlpointattract` 28 张，干净场景 21 → 21 |
+| 画面哈希（dev 应用，屏外宿主，宿主按 `--mode development` 重建，入口 `index-Dv_24C0e.js`） | 10 张干净场景 × 三档，30 组和步骤 2 的记录（`c2/out/hash-after.json`）全部相同。主窗口开着预览，没有接管，前后路由不变 |
+
+`a-default` 的长程超限用户接受（2026-11-08）：单步核对已经确定公式，不改包络、不重抓。
+
+工具在 `ignore/p4/c3/`：`scan_attract.py`、`attract_unlock.py`、`replay.test.ts`、`diag.test.ts`、`replay-b3/b4/b6/cp/ptr.test.ts`、`run_old.sh`、`cmp_old.py`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`mutate_default.py`、`consts.py`、`final.sh`、`claude_onestep.py`、`mutate_claude.py`、`run_old_claude.sh`、`cmp_corpus_claude.py`、`cmp_hash.py`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`（画面哈希 `out/hash-after.json`）。

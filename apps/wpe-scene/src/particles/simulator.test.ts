@@ -722,7 +722,7 @@ describe("轨迹", () => {
 
   it("表外模块不执行，记在 skipped", () => {
     const def = particle(
-      systemJson({ operators: [{ name: "movement" }, { name: "controlpointattract", scale: 0.01 }] }),
+      systemJson({ operators: [{ name: "movement" }, { name: "reducemovementnearcontrolpoint", controlpoint: 0 }] }),
     );
     const track = particleTrack({
       layers: [{ object: 0, name: "p", particle: def }],
@@ -730,7 +730,7 @@ describe("轨迹", () => {
       frames: [1],
       passes: 1,
     });
-    expect(track.skipped).toEqual({ p: ["operator:controlpointattract"] });
+    expect(track.skipped).toEqual({ p: ["operator:reducemovementnearcontrolpoint"] });
   });
 });
 

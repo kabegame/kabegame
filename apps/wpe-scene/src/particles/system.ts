@@ -126,11 +126,17 @@ interface ResolvedEmitter extends ResolvedModule {
   state: EmitterState;
 }
 
-/** 列标志：系统里全部表内模块的 `columnFlags` 按位或。 */
+/**
+ * 列标志：系统里全部表内模块的 `columnFlags`，加上按字段算的 `columnFlagsOf`（P4c 步骤 3，`controlpointattract` 的 `flags` bit0
+ * 开上一步位置列），按位或。`module.fields` 是解析值（没乘 `instanceoverride`）；按字段算的只看 `flags`，不受覆盖影响。
+ */
 export function particleColumnFlags(def: Pick<SceneParticle, "emitters" | "initializers" | "operators">): number {
   let flags = 0;
   const add = (category: ParticleCategory, modules: readonly ParticleModule[]) => {
-    for (const module of modules) flags |= particleModuleDef(category, module.name)?.columnFlags ?? 0;
+    for (const module of modules) {
+      const known = particleModuleDef(category, module.name);
+      if (known) flags |= known.columnFlags | (known.columnFlagsOf?.(module.fields) ?? 0);
+    }
   };
   add("emitter", def.emitters);
   add("initializer", def.initializers);

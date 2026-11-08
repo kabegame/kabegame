@@ -34,6 +34,7 @@ import {
   angularMovement,
   capVelocity,
   colorChange,
+  controlPointAttract,
   movement,
   oscillateAlpha,
   oscillatePosition,
@@ -190,6 +191,12 @@ export interface ParticleModuleDef {
   columns: readonly ParticleColumn[];
   /** 置的列标志（`COLUMN_FLAGS` 按位或）。 */
   columnFlags: number;
+  /**
+   * 按字段追加的列标志（和 `columnFlags` 按位或，`particleColumnFlags` 用；参数是解析值，没乘 `instanceoverride`）。只有
+   * `controlpointattract`：`flags` bit0 时置 bit2（上一步位置），rea-p4c-sim.md 4.1「`flags & 1` 时 `def+0xc |= 4`」
+   * （`0x1401ccd9d`–`0x1401ccda6`）。
+   */
+  columnFlagsOf?: (fields: Readonly<Record<string, ParticleFieldValue>>) => number;
   /** 字段全部读完后的修正（WPE 解析期的副作用，如 `sign` 非零时置 `flags` bit0）。 */
   normalize?: (fields: Record<string, ParticleFieldValue>) => void;
   run: ParticleModuleRun | null;
@@ -231,7 +238,10 @@ export function asUInt32(value: number): number {
 export function clampControlPoint(value: number): number {
   return Math.min(asUInt32(value), 7);
 }
-/** 三个读控制点的模块共用：取整，钳制在 `normalize` 里做（`clampControlPoint`）。 */
+/**
+ * 读控制点的模块共用（`sphererandom`、`boxrandom`、`vortex`，P4c 步骤 3 起加上 `controlpointattract`）：取整，钳制在
+ * `normalize` 里做（`clampControlPoint`）。
+ */
 const CONTROL_POINT_FIELD = int(0);
 
 /**
@@ -289,7 +299,7 @@ export function clampOctaves(value: number): number {
 /**
  * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
  * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`）、步骤 4 的 3 个噪声类模块（initializer `turbulentvelocityrandom`、
- * `positionoffsetrandom`，operator `turbulence`），加 renderer `sprite`。
+ * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -611,6 +621,38 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: vortex,
+  },
+  {
+    // rea-p4c-sim.md 4.1（operator 10，blend 0x20）：解析 `0x1401cc9c8`–`0x1401ccdb5`，缺省 `FUN_1401bdee0`（只在键不存在时往
+    // JSON 里写缺省值，`FUN_140087490` 是 jsoncpp 的 `find`；解析段之后无条件读全部键）。缺省值按二进制核对过
+    // （`ignore/p4/c3/consts.py`）。键在而值为 null 时 WPE 读成 0（`find` 认它存在，null 取数是 0），这里照模块表的统一规则当缺键
+    // （`readParticleModule`），语料 0 处。执行函数见 `operators.ts` 的 `controlPointAttract`
+    category: "operator",
+    name: "controlpointattract",
+    fields: {
+      // 乘 `speed`（覆盖条目只登记这一项，系统 flags bit4 时不登记，`0x1401ccd0c`）；`FUN_140086220` 取 float
+      scale: by("speed", num({ orthographic: 512, perspective: 20 })),
+      threshold: num({ orthographic: 512, perspective: 5 }),
+      // 解析期按 float 平方存（`0x1401ccbef` `mulss xmm6, xmm6`），执行函数里现算平方，结果相同
+      deletethreshold: num({ orthographic: 15, perspective: 0.5 }),
+      // 缺省 2（钳制开，jsoncpp 整数，`0x1401be245`）；`FUN_140085f70` 取无符号整数。bit0 删除，bit1 钳制，其余位没有读者
+      flags: int(2),
+      // 读这个控制点 current 的平移；解析期钳到 0–7（`0x1401ccc65`–`0x1401ccd06`，无符号比较）
+      controlpoint: CONTROL_POINT_FIELD,
+      // 解析了（`0x1401cca18` 起，存 p+0x00..0x20），两个执行段和删除判定都不读
+      offset: vec3("0 0 0"),
+      // WPE 不读这个键（解析段与缺省函数都没有它），中性：登记成不参与计算的字段，免得按表外字段报（语料 50 处）；写成数字也
+      // 不报（同 `turbulentvelocityrandom` 的 `up`）
+      origin: vec3("0 0 0", "vec3str"),
+      ...BLEND,
+    },
+    columns: ["age", "life", "position", "velocity", "previousPosition"],
+    columnFlags: 0,
+    columnFlagsOf: (fields) => ((fields.flags as number) & 1 ? COLUMN_FLAGS.previousPosition : 0),
+    normalize(fields) {
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
+    run: controlPointAttract,
   },
   {
     // `rea-p4b-modules.md` B6（operator 14，blend 0x24，缺省值 `FUN_1401beb80`，执行 `0x14024295a` / `0x140242d6e`）：乘 `k`；

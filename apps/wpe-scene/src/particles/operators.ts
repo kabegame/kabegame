@@ -1,7 +1,9 @@
 /**
- * operator（P4a 步骤 3、P4b 步骤 3–4）。依据 `rea-p4a.md` B「operator」、`rea-p4b-modules.md` B4–B8（读码【确】）与
- * `p4-particles-REPORT.md` 的实测核对：drag 的 `k0`、`oscillateposition` 的 ω 不乘 2π、两遍模式、y 偏移 `2π·R`、
- * `sizechange` 乘 `instanceoverride.size`、`vortex` 的柱形 / 球形、`capvelocity` 的截速都实测过。
+ * operator（P4a 步骤 3、P4b 步骤 3–4、P4c 步骤 3）。依据 `rea-p4a.md` B「operator」、`rea-p4b-modules.md` B4–B8、
+ * `rea-p4c-sim.md` 第 4 节（读码【确】）与 `p4-particles-REPORT.md` 的实测核对：drag 的 `k0`、`oscillateposition` 的 ω 不乘 2π、
+ * 两遍模式、y 偏移 `2π·R`、`sizechange` 乘 `instanceoverride.size`、`vortex` 的柱形 / 球形、`capvelocity` 的截速、
+ * `controlpointattract` 的缺省钳制与 `threshold` 严格小于都实测过（乘 `k`、钳制、`speed` 的定量由 `ignore/p4/c3` 的回放与单步
+ * 核对确认）。
  *
  * 每个函数对 `[0, count)` 的全部槽跑一遍（死槽照常处理，写顶点时跳过，同 WPE）。这一遍的步长 `h`、drag 系数 `k`
  * 由模拟器给（两遍模式时是 `dt/2`、`k0/2`）。每遍开头 `size`、`rgb`、`a` 已重置为初始值，所以乘性模块跑两遍结果不变。
@@ -330,6 +332,121 @@ export function vortex(fields: ParticleFields, { columns, count, k, controlPoint
     velocity[0][i] = f32(velocity[0][i] + f32(f32(f32(uy * a[2]) - f32(uz * a[1])) * speed));
     velocity[1][i] = f32(velocity[1][i] + f32(f32(f32(uz * a[0]) - f32(ux * a[2])) * speed));
     velocity[2][i] = f32(velocity[2][i] + f32(f32(f32(ux * a[1]) - f32(uy * a[0])) * speed));
+  }
+}
+
+/**
+ * `FLT_MIN`（`0x00800000`）：`controlpointattract` 的 `L` 不大于它时这个粒子不受影响，避免 `rcp(0)`。两个执行段比较的是函数内
+ * 静态 `0x1404e9960` / `0x1404e9980`，运行时由 `0x14024bafc` / `0x14024bb35` 从 `0x140492cd0` 拷入（四个分量都是 `0x00800000`，
+ * `ignore/p4/c3/consts.py` 读过）。
+ */
+const FLT_MIN = 2 ** -126;
+
+/**
+ * `controlpointattract`（operator 10，`0x140241554`；blend 版 0x20，`0x14024172d`，rea-p4c-sim.md 4.2【确】，两段汇编逐条核对过）：
+ * 按粒子到控制点的距离改速度，不改位置。
+ * ```
+ * C  = cp[controlpoint].current.t          （FUN_14024f2d0 拷出 current，FUN_14022a120 广播平移；offset 不读）
+ * ks = k·scale                             （mulps xmm10 = k·[p+0x30]；scale 已乘 instanceoverride.speed）
+ * rT = rcpps(threshold)
+ * 每槽（[0, count)，死槽也算）：
+ *   dx = x − Cx;  dy = y − Cy;  dz = z − Cz
+ *   L  = sqrtps((dz² + dy²) + dx²);  inv = rcpps(L)
+ *   active = (L < threshold) 且 (FLT_MIN < L)          （两个 cmpltps，都是严格小于）
+ *   f  = (1 − L·rT)·ks
+ *   flags & 2 且 L < f 时 f = L                         （cmpltps L, f；andps 钳制掩码；blendvps）
+ *   [blend 版：f = f·b]                                 （钳制之后 mulps，b 由 FUN_14022a530 算，同其它模块的 blend）
+ *   active 时 vy −= (inv·dy)·f，vz −= (inv·dz)·f，vx −= (inv·dx)·f
+ * flags & 1：删除判定（attractDelete）
+ * ```
+ * - **乘的是 drag 系数 `k`，不是步长 `h`**（`xmm8` 每条 operator 开头装成 `k`，同 `vortex`）；两遍模式每遍 `k/2`，删除判定每遍都做。
+ * - `scale < 0` 时 `f < 0`，`L < f` 永不成立，不钳（排斥）。`L` 为 NaN 时 `active` 为假，不受影响。
+ * - `rcpps` 按精确值算（文件头「近似倒数不复刻」），回放按包络放宽。不用 `R`、不读控制点的 3×3 与 `previous`。
+ */
+export function controlPointAttract(fields: ParticleFields, context: ParticleRunContext): void {
+  const { columns, count, k, controlPoints } = context;
+  const center = controlPoints.current(fields.controlpoint as number).translation;
+  const cx = center[0];
+  const cy = center[1];
+  const cz = center[2];
+  const threshold = fields.threshold as number;
+  const ks = f32(k * (fields.scale as number));
+  const rT = rcp(threshold);
+  const flags = fields.flags as number;
+  const clamp = (flags & 2) !== 0;
+  const blend = readBlend(fields);
+  const { age, life } = columns;
+  const [px, py, pz] = columns.position;
+  const [vx, vy, vz] = columns.velocity;
+  for (let i = 0; i < count; i++) {
+    const dx = f32(px[i] - cx);
+    const dy = f32(py[i] - cy);
+    const dz = f32(pz[i] - cz);
+    const length = f32(Math.sqrt(f32(f32(f32(dz * dz) + f32(dy * dy)) + f32(dx * dx))));
+    // 不生效的槽 WPE 减的是 +0（andps 掩掉），和不动相同
+    if (!(length < threshold && FLT_MIN < length)) continue;
+    const inv = rcp(length);
+    let f = f32(f32(1 - f32(length * rT)) * ks);
+    if (clamp && length < f) f = length;
+    if (blend.active) f = f32(f * blendFactor(blend, f32(age[i] * rcp(life[i]))));
+    vy[i] = f32(vy[i] - f32(f32(inv * dy) * f));
+    vz[i] = f32(vz[i] - f32(f32(inv * dz) * f));
+    vx[i] = f32(vx[i] - f32(f32(inv * dx) * f));
+  }
+  if (flags & 1) attractDelete(fields, context, cx, cy, cz);
+}
+
+/**
+ * `controlpointattract` 的删除判定（`flags` bit0，`FUN_14022a150`，rea-p4c-sim.md 4.3【确】）：线段 `[上一步位置, 位置]`（这一遍
+ * `movement` 的位移；没有 `movement` 时起点是出生位置）上离 `C` 最近的点到 `C` 的距离平方不大于 `deletethreshold²` 时
+ * `age = life`：本帧照常画，下一帧 `age += dt'` 严格大于 `life` 才判死。运算顺序按汇编（`0x14022a1c0`–`0x14022a2fb`）逐条核对，
+ * 和 rea 4.3 取自 Ghidra 的写法有两处不同（乘法结合）：
+ * ```
+ * d  = P1 − P0;  L = sqrtps((dz² + dy²) + dx²)
+ * r  = (0 < L) ? rcpps(L) : 1                                    （cmpltps 0, L；andps / andnps 1.0 / orps）
+ * u  = r·d                                                       （先算 r·dx、r·dy、r·dz，0x14022a264–0x14022a277）
+ * s  = ((Cz − P0z)·uz + (Cy − P0y)·uy) + (Cx − P0x)·ux           （0x14022a27a–0x14022a287）
+ * s  = (0 ≤ s) ? s : 0;  s = (s ≤ L) ? s : L                     （cmpleps；NaN 得 0；L 为 NaN 时得 L）
+ * e  = C − (s·u + P0)                                            （s·ux 再加 P0x，0x14022a2aa–0x14022a2d3）
+ * !(deletethreshold² < (ez² + ey²) + ex²) 时 age = life          （cmpltps；比较为假（含 NaN）就删）
+ * ```
+ * `deletethreshold²` 是 float 平方（解析期 `mulss`）。死槽也处理（命中时死槽的 `age` 被写成 0，出生时会重写，不影响结果）。
+ * 上一步位置列在 `flags & 1` 时一定存在（`columnFlagsOf` 开列）；列为 null 时跳过只是防御，正常路径不会发生。
+ */
+function attractDelete(
+  fields: ParticleFields,
+  { columns, count }: ParticleRunContext,
+  cx: number,
+  cy: number,
+  cz: number,
+): void {
+  const previous = columns.previousPosition;
+  if (!previous) return;
+  const threshold = fields.deletethreshold as number;
+  const thresholdSquared = f32(threshold * threshold);
+  const { age, life } = columns;
+  const [px, py, pz] = columns.position;
+  const [qx, qy, qz] = previous;
+  for (let i = 0; i < count; i++) {
+    const x0 = qx[i];
+    const y0 = qy[i];
+    const z0 = qz[i];
+    const dx = f32(px[i] - x0);
+    const dy = f32(py[i] - y0);
+    const dz = f32(pz[i] - z0);
+    const length = f32(Math.sqrt(f32(f32(f32(dz * dz) + f32(dy * dy)) + f32(dx * dx))));
+    const r = 0 < length ? rcp(length) : 1;
+    const ux = f32(r * dx);
+    const uy = f32(r * dy);
+    const uz = f32(r * dz);
+    let s = f32(f32(f32(f32(cz - z0) * uz) + f32(f32(cy - y0) * uy)) + f32(f32(cx - x0) * ux));
+    s = 0 <= s ? s : 0;
+    s = s <= length ? s : length;
+    const ex = f32(cx - f32(f32(s * ux) + x0));
+    const ey = f32(cy - f32(f32(s * uy) + y0));
+    const ez = f32(cz - f32(f32(s * uz) + z0));
+    const distanceSquared = f32(f32(f32(ez * ez) + f32(ey * ey)) + f32(ex * ex));
+    if (!(thresholdSquared < distanceSquared)) age[i] = life[i];
   }
 }
 
