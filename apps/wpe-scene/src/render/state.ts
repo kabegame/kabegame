@@ -9,8 +9,8 @@
  * 层级（P4a 步骤 1）：图层存的都是本地值，世界矩阵与继承后的可见性由渲染器按父链现算。所以写一个图层的
  * `origin`、`angles`、`scale`、`visible` 时，它和全部子孙一起标脏；`alpha`、`color`、`brightness` 不继承，只标自己。
  *
- * 粒子（P4a 步骤 5）：`instanceoverride` 的标量存在 `particleInstances`，写入用编译期同一条取值规则（`instanceScalar`）、
- * 标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘。
+ * 粒子（P4a 步骤 5）：`instanceoverride` 的标量与 `colorn`（P4b 步骤 6）存在 `particleInstances`，写入用编译期同一条取值规则
+ * （`instanceScalar` / `instanceColorn`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、重算颜色平移。
  */
 import {
   bindingValue,
@@ -24,7 +24,7 @@ import {
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
-import { instanceScalar, instanceValues, type ParticleInstanceValues } from "../compile/particles";
+import { instanceColorn, instanceScalar, instanceValues, type ParticleInstanceValues } from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 
 export interface LayerState {
@@ -316,8 +316,9 @@ export class SceneState {
     if (target.kind === "particle-instance") {
       const values = this.particleInstances.get(target.object);
       if (!values) return "applied";
-      // 取值规则与编译期相同（`instanceScalar`），条件先换成布尔
-      values[target.field] = instanceScalar(conditioned(binding, raw));
+      // 取值规则与编译期相同（`instanceColorn` / `instanceScalar`），条件先换成布尔
+      if (target.field === "colorn") values.colorn = instanceColorn(conditioned(binding, raw));
+      else values[target.field] = instanceScalar(conditioned(binding, raw));
       this.dirtyParticles.add(target.object);
       return "applied";
     }

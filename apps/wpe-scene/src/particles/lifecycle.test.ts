@@ -59,7 +59,16 @@ const fieldsOf = (value: ParticleSystem) => {
   };
 };
 
-const ALL: ParticleInstanceValues = { alpha: 0.5, size: 2, count: 3, speed: 4, lifetime: 5, rate: 0.25, brightness: 7 };
+const ALL: ParticleInstanceValues = {
+  alpha: 0.5,
+  size: 2,
+  count: 3,
+  speed: 4,
+  lifetime: 5,
+  rate: 0.25,
+  brightness: 7,
+  colorn: null,
+};
 
 describe("setInstance：从基值重新乘", () => {
   it("就地写 = 用新值新建系统：全部模块字段、a0、rate 逐项相同（resolveParticleFields 同一结果）", () => {

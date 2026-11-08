@@ -10,6 +10,8 @@
  */
 import type { ScenePass } from "./bundle";
 import type { JsonObject, SceneScalar } from "./model";
+import { roundTrip5 } from "../particles/colorn";
+import { f32 } from "../particles/f32";
 import { readParticleModule, type ParticleCategory, type ParticleModule } from "../particles/modules";
 
 /**
@@ -19,8 +21,13 @@ import { readParticleModule, type ParticleCategory, type ParticleModule } from "
  */
 export const INSTANCE_FIELDS = ["alpha", "size", "count", "speed", "lifetime", "rate", "brightness"] as const;
 export type InstanceField = (typeof INSTANCE_FIELDS)[number];
-/** `instanceoverride` 的标量部分（`SceneState` 存的就是这一份）。 */
-export type ParticleInstanceValues = Record<InstanceField, number>;
+/**
+ * 就地更新的全部键：标量键加 `colorn`（P4b 步骤 6）。`colorn` 也登记成 `particle-instance` 绑定，改值时模拟器从基值重算平移
+ * 与实例颜色（`ParticleSystem.setInstance` → `colornState`）。
+ */
+export type InstanceKey = InstanceField | "colorn";
+/** `instanceoverride` 就地更新的部分（`SceneState` 存的就是这一份）：标量键加 `colorn`（未设为 null）。 */
+export type ParticleInstanceValues = Record<InstanceField, number> & { colorn: readonly number[] | null };
 
 /**
  * 一个标量键的取值，编译与就地写共用（「就地 = 重编译」靠它）：数字原样；非空字符串整串解析成有限数；布尔按 1 / 0
@@ -37,8 +44,8 @@ export function instanceScalar(value: unknown): number {
 }
 
 /**
- * `instanceoverride` 的值（`rea-p4a.md` C5，基址 `obj+0x778`）。标量键经 `InstanceResolver` 取值（编译期登记绑定、读用户属性，
- * `bundle.ts`）；`colorn`、控制点只取静态值，用到时能力表报不支持（`checkParticleInstance`）。
+ * `instanceoverride` 的值（`rea-p4a.md` C5，基址 `obj+0x778`）。标量键与 `colorn` 经 `InstanceResolver` 取值（编译期登记绑定、
+ * 读用户属性，`bundle.ts`）；`color` 与控制点只取静态值（`color` 绑了属性、控制点由能力表报不支持，`checkParticleInstance`）。
  * `rate` 的下限 0.01 只在脏时钳（C5），这里存原值。
  */
 export interface ParticleInstance {
@@ -56,8 +63,11 @@ export interface ParticleInstance {
   rate: number;
   /** 仅 HDR 且系统 `flags` 没有 bit3 时乘实例颜色。 */
   brightness: number;
-  /** 未设为 null（WPE 的 −1 −1 −1）。`color`（0–255）加载时 ÷255 转成它（C5；两者都写时取 `color` 是推断）。 */
-  colorn: number[] | null;
+  /**
+   * 未设为 null（WPE 的 −1 −1 −1）；分量 r < 0 也算未设（`colornState` 判断，这里存原值）。`color`（0–255）加载时按
+   * `f32(f32(v) / 255)` 再 `%.5f` 往返转成它，两个键都写时取 `color`（rea-p4b-render.md 7.1，`instanceColorn`）。
+   */
+  colorn: readonly number[] | null;
   /** `controlpoint0..7`；未设为 null（WPE 的 FLT_MAX）。属 P4c。 */
   controlpoints: (number[] | null)[];
   /** `controlpointangle0..7`；未设为 null。属 P4c。 */
@@ -100,6 +110,8 @@ export interface SceneParticle {
   /** 缺省值按正交还是透视那一套选（`isOrthographic`）。 */
   orthographic: boolean;
   instance: ParticleInstance;
+  /** 系统色与 `0x200000`（`instanceoverride.colorn` 用，P4b 步骤 6，`particleColorSystem`）。 */
+  colorSystem: ParticleColorSystem;
   /**
    * 粒子材质的 pass（稳定键 `objects/<i>/particle/passes/<n>`）。步骤 4 才画：不放进 `layer.passes`，图像层的渲染图、
    * `buildableLayers`、`checkRenderable` 都按 `passes` 判断。
@@ -189,28 +201,127 @@ export function instanceVector(raw: unknown, scale = 1): number[] | null {
 }
 
 /**
- * 标量键的取值方式：参数是键名与 JSON 里的原值（可能是 `{user}` / `{script}`），返回解析后的值。缺省只取静态 `value`、
- * 不读用户属性；`bundle.ts` 传 `BindingCollector.bind`，同时登记绑定。
+ * `colorn` 的取值（编译期与就地写共用，「就地 = 重编译」靠它）：同 `instanceVector`，`"r g b"` 的前三个分量，不是字符串或解析
+ * 不出来时为 null（未设）。条件绑定的值是布尔，也是 null（WPE 怎么处理没读到，能力表报 `particle:instance:colorn:condition`）。
+ * 存 double 原值，float32 舍入在 `colornState` 里做。
  */
-export type InstanceResolver = (field: InstanceField, raw: unknown) => SceneScalar | undefined;
+export function instanceColorn(value: unknown): number[] | null {
+  return instanceVector(value);
+}
+
+/**
+ * `color`（0–255）→ `colorn`（rea-p4b-render.md 7.1，`0x14022b581`–`0x14022b592`）：每个分量 `strtod` 后 `divss 255`，
+ * 按 `"%.5f"` 格式化写回 `colorn`。只取静态值：绑了用户属性时 WPE 怎么转换没读到，能力表报 `particle:instance:color:user`。
+ * 解析不出来时为 null（WPE 的 `strtod` 会得 0，语料没有这种写法，不复刻）。
+ */
+export function colornFromColor(raw: unknown): number[] | null {
+  const color = instanceVector(raw);
+  return color && color.map((value) => roundTrip5(f32(f32(value) / 255)));
+}
+
+/**
+ * 标量键与 `colorn` 的取值方式：参数是键名与 JSON 里的原值（可能是 `{user}` / `{script}`），返回解析后的值。缺省只取静态
+ * `value`、不读用户属性；`bundle.ts` 传 `BindingCollector.bind`，同时登记绑定。
+ */
+export type InstanceResolver = (field: InstanceKey, raw: unknown) => SceneScalar | undefined;
 const staticResolver: InstanceResolver = (_, raw) => staticValue(raw) as SceneScalar | undefined;
 
 export function parseParticleInstance(raw: unknown, resolve: InstanceResolver = staticResolver): ParticleInstance {
   const source = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const scalars = Object.fromEntries(
     INSTANCE_FIELDS.map((field) => [field, instanceScalar(resolve(field, source[field]))]),
-  ) as ParticleInstanceValues;
+  ) as Record<InstanceField, number>;
+  // 有 `color` 键就无条件用它（7.1：即使已有 `colorn` 也覆盖，`colorn` 上的绑定随之丢掉，所以不登记）
+  const hasColor = source.color !== undefined && source.color !== null;
   return {
     ...scalars,
-    colorn: instanceVector(source.color, 1 / 255) ?? instanceVector(source.colorn),
+    colorn: hasColor ? colornFromColor(source.color) : instanceColorn(resolve("colorn", source.colorn)),
     controlpoints: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpoint${i}`])),
     controlpointAngles: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpointangle${i}`])),
   };
 }
 
-/** `ParticleInstance` 的标量部分（一份新对象）。 */
+/** `ParticleInstance` 就地更新的部分（一份新对象，`colorn` 也拷一份）。 */
 export function instanceValues(instance: ParticleInstanceValues): ParticleInstanceValues {
-  return Object.fromEntries(INSTANCE_FIELDS.map((field) => [field, instance[field]])) as ParticleInstanceValues;
+  const scalars = Object.fromEntries(INSTANCE_FIELDS.map((field) => [field, instance[field]])) as Record<
+    InstanceField,
+    number
+  >;
+  return { ...scalars, colorn: instance.colorn ? [...instance.colorn] : null };
+}
+
+/**
+ * 场景 `version`（scene.json 根的 `"version"`，缺键为 0，`0x140187401`）：数字且有限时取它，否则按 0。passthrough 材质
+ * （`passthroughMaterial`）与粒子的 `0x200000`（`particleColorSystem`）共用这一个取值函数。
+ */
+export function sceneVersionOf(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+}
+
+/** `colorn` 的系统色与 `0x200000`（rea-p4b-render.md 7.1、7.4）。 */
+export interface ParticleColorSystem {
+  /** 系统色：从颜色模块推出、已 `%.5f` 往返（float32）。`colorn` 与它比较、平移的 HSV 差也以它为原点。 */
+  rgb: [number, number, number];
+  /**
+   * WPE 的系统标志 `0x200000`：场景 `version` < 5（缺键为 0，`0x1401c57b6`），或没有颜色模块（`0x1401c5af9`）。置位且
+   * `colorn` 生效时，新粒子的颜色初值是 `colorn`（`colornState` 的 `instanceColor`）。
+   */
+  instanceColor: boolean;
+}
+
+/** 1/255 的乘法常量（`0x140492618`，float32 0.0039215689），系统色用乘法，不是除法。 */
+const INV_255 = f32(0.003921569);
+
+/** 颜色模块原文里的一个 vec3：同模块表的 vec3 规则（`"x y z"`，少写的为 0、多写的忽略），绑定取静态 `value`；读不出时取缺省。 */
+function rawVec3(raw: unknown, fallback: readonly number[]): number[] {
+  const value = staticValue(raw);
+  if (typeof value !== "string") return [...fallback];
+  const parts = value.trim().split(/\s+/).filter(Boolean).map(Number);
+  if (!parts.length || !parts.every(Number.isFinite)) return [...fallback];
+  return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+}
+
+const moduleName = (entry: unknown): unknown =>
+  entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as { name?: unknown }).name : undefined;
+
+/**
+ * 系统色（`FUN_1401c45f0`，粒子解析 `FUN_1401c5490` 在 `0x1401c5963` 调用，rea-p4b-render.md 7.1）。从粒子 JSON **原文**算，
+ * 不从模块字段反推（`colorrandom` 的字段已经乘过 1/255，乘回去会多一层舍入）：
+ * ```
+ * color = (1, 1, 1); hascolor = false
+ * for init in initializers（按顺序，不提前退出，后者覆盖前者）:
+ *     colorrandom: color = ((max − min)·0.5 + min) · 0.003921569   // min / max 是 0–255，缺省 "0 0 0" / "255 255 255"
+ *     （命中 hascolor = true）
+ * if 一个都没命中: 找第一个 operator colorchange: color = startvalue（缺省 "1 1 1"，不 ÷255），hascolor = true
+ * 系统色 = sprintf("%.5f %.5f %.5f", color) 读回
+ * ```
+ * `hsvcolorrandom`、`colorlist` 也算颜色模块（置 `hascolor`），但这两个模块本身报不支持，系统色不跟着它们算。
+ * `0x200000 = sceneVersion < 5 || !hascolor`（7.4）。
+ */
+export function particleColorSystem(json: JsonObject, sceneVersion: number): ParticleColorSystem {
+  let color = [1, 1, 1];
+  let hasColor = false;
+  for (const entry of particleModuleEntries(json, "initializer") ?? []) {
+    const name = moduleName(entry);
+    if (name === "colorrandom") {
+      const source = entry as Record<string, unknown>;
+      const min = rawVec3(source.min, [0, 0, 0]).map(f32);
+      const max = rawVec3(source.max, [255, 255, 255]).map(f32);
+      color = min.map((low, i) => f32(f32(f32(f32(max[i] - low) * 0.5) + low) * INV_255));
+      hasColor = true;
+    } else if (name === "hsvcolorrandom" || name === "colorlist") hasColor = true;
+  }
+  if (!hasColor) {
+    const change = (particleModuleEntries(json, "operator") ?? []).find((entry) => moduleName(entry) === "colorchange");
+    if (change) {
+      color = rawVec3((change as Record<string, unknown>).startvalue, [1, 1, 1]).map(f32);
+      hasColor = true;
+    }
+  }
+  return {
+    rgb: [roundTrip5(color[0]), roundTrip5(color[1]), roundTrip5(color[2])],
+    instanceColor: sceneVersion < 5 || !hasColor,
+  };
 }
 
 export interface ParseParticleOptions {
@@ -218,8 +329,10 @@ export interface ParseParticleOptions {
   orthographic: boolean;
   /** 对象上的 `instanceoverride`。 */
   instanceoverride?: unknown;
-  /** 标量键的取值方式；缺省只取静态值（见 `InstanceResolver`）。 */
+  /** 标量键与 `colorn` 的取值方式；缺省只取静态值（见 `InstanceResolver`）。 */
   resolveInstance?: InstanceResolver;
+  /** 场景 `version`（`sceneVersionOf` 取过的值）；缺省 0，同 WPE 缺键。决定 `0x200000`（`particleColorSystem`）。 */
+  sceneVersion?: number;
 }
 
 /** 解析一个粒子 JSON（能力检查另由 `checkParticleFeatures` 做）。`passes` 由 `compileScene` 编材质后填。 */
@@ -239,6 +352,7 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     renderers: modules("renderer"),
     orthographic: options.orthographic,
     instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),
+    colorSystem: particleColorSystem(json, options.sceneVersion ?? 0),
     passes: [],
   };
 }

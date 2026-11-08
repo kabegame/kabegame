@@ -55,7 +55,8 @@ import {
   parseParticle,
   particleFov,
   readParticleSystem,
-  type InstanceField,
+  sceneVersionOf,
+  type InstanceKey,
   type SceneParticle,
 } from "./particles";
 import {
@@ -317,10 +318,11 @@ export const FRAMEBUFFER_RT = "_rt_FullFrameBuffer";
 /**
  * colorBlendMode ∉ {0, 31} 时的 passthrough 上屏材质（B8，`FUN_1401ecae0` → 0x1401853b0）：看场景 `scene.json` 顶层的
  * `version`（缺键按 0），与显卡、画质设置无关。`version > 2` 用 `effectpassthrough_4.json`（`genericimage4`），否则用
- * `effectpassthrough.json`（`genericimage3`）。本机默认样本都 ≤ 1；工坊样本多数 ≥ 3。
+ * `effectpassthrough.json`（`genericimage3`）。本机默认样本都 ≤ 1；工坊样本多数 ≥ 3。`version` 的取值与粒子的 `0x200000`
+ * 共用 `sceneVersionOf`。
  */
 export function passthroughMaterial(sceneVersion: unknown): string {
-  const version = typeof sceneVersion === "number" && Number.isFinite(sceneVersion) ? sceneVersion : 0;
+  const version = sceneVersionOf(sceneVersion);
   return version > 2 ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json";
 }
 /** passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED = 1`。 */
@@ -687,11 +689,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     const system = json as JsonObject;
     checkParticleFeatures(system, orthographic, unsupported);
-    // `instanceoverride` 的标量键登记成就地目标（P4a 步骤 5）。`brightness` 只在 HDR 且系统 flags 没有 bit3 时生效（C5），
-    // 这时没实现：绑了属性就登记成重编译，改成非默认值后由能力表报，否则（LDR 或 bit3）是中性的就地目标
+    // `instanceoverride` 的标量键与 `colorn` 登记成就地目标（P4a 步骤 5、P4b 步骤 6）。`brightness` 只在 HDR 且系统 flags 没有
+    // bit3 时生效（C5），这时没实现：绑了属性就登记成重编译，改成非默认值后由能力表报，否则（LDR 或 bit3）是中性的就地目标
     const { flags } = readParticleSystem(system);
     const brightnessActive = postprocess.hdr && (flags & 8) === 0;
-    const instanceTarget = (field: InstanceField): BindingTarget =>
+    const instanceTarget = (field: InstanceKey): BindingTarget =>
       field === "brightness" && brightnessActive
         ? recompile("layer-structure", `objects/${index}/instanceoverride/brightness`)
         : { kind: "particle-instance", object: index, field };
@@ -700,6 +702,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       orthographic,
       instanceoverride: object.instanceoverride,
       resolveInstance: (field, raw) => bindings.bind(raw as SceneValue | undefined, properties, instanceTarget(field)),
+      // `0x200000` 看场景 `version`（rea-p4b-render.md 7.4），和 passthrough 材质同一个取值函数
+      sceneVersion: sceneVersionOf(scene.version),
     });
     checkParticleInstance(object.instanceoverride, particle.instance, { flags, hdr: postprocess.hdr }, unsupported);
     layer.particle = particle;

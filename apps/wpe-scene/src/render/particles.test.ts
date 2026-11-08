@@ -1048,6 +1048,31 @@ describe("GpuScene：粒子生命周期（P4a 步骤 5）", () => {
     expect(system.columns.capacity).toBe(16);
   });
 
+  it("colorn 就地写（P4b 步骤 6）：sync 交给模拟器，存活粒子保留出生时的颜色，之后出生的按新值（没有颜色模块，0x200000）", async () => {
+    const { gpu, state, scene } = await open(bundleOf([particleLayer(1)]));
+    scene.update(frame(0.5), state); // 5 个白色
+    gpu.encode(scene, state);
+    const system = particleDraw(scene, 1).particles!.system;
+    const buffers = gpu.buffers.length;
+    const colorOf = (slot: number) => [0, 1, 2].map((i) => system.columns.color[i][slot]);
+    expect(colorOf(0)).toEqual([1, 1, 1]);
+    const COLORN = { ...COUNT, field: "colorn" } as const;
+    expect(state.write({ property: "c", target: COLORN }, "0 1 0")).toBe("applied");
+    expect(system.instanceValues.colorn).toBeNull();
+    scene.sync(state);
+    expect(system.instanceValues.colorn).toEqual([0, 1, 0]);
+    scene.update(frame(0.5), state);
+    expect(system.alive).toBe(10);
+    expect(colorOf(4)).toEqual([1, 1, 1]);
+    expect(colorOf(5)).toEqual([0, 1, 0]);
+    // 改回未设：之后出生的又是白色
+    state.write({ property: "c", target: COLORN }, "-1 -1 -1");
+    scene.sync(state);
+    scene.update(frame(0.1), state);
+    expect(colorOf(10)).toEqual([1, 1, 1]);
+    expect(gpu.buffers.length).toBe(buffers);
+  });
+
   it("建模拟器时取状态里的当前值（单图层重建也用就地写过的值）", async () => {
     const bundle = bundleOf([particleLayer(1)]);
     const state = SceneState.fromBundle(bundle);

@@ -225,7 +225,8 @@ export function alphaChange(fields: ParticleFields, { columns, count }: Particle
 
 /**
  * `colorchange`（operator 5，`0x1402403a2`，B4【确】，置列标志 bit3）：三通道各自 `rgb *= start + t·(end − start)`，共用一个 `t`。
- * 两个颜色是 0–1 的倍数，不除以 255。`colorn` 的 HSV 路径（条目类型 0xc）属 P4b 步骤 6，能力表按 `particle:instance:colorn` 拦住。
+ * 两个颜色是 0–1 的倍数，不除以 255。`colorn` 生效时两端已由模拟器平移过（条目类型 0xc，`ParticleSystem.applyColorn`，
+ * rea-p4b-render.md 7.4）：WPE 写回 start = `A'`、Δ = `B' − A'`，这里按 `f32(end − start)` 现算 Δ，结果相同。
  */
 export function colorChange(fields: ParticleFields, { columns, count }: ParticleRunContext): void {
   const start = fields.startvalue as number[];

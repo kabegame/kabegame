@@ -881,16 +881,250 @@ const texture = await getTexture(name, scope, issues, !!context.particle); // �
 
 ## 步骤 6 — `instanceoverride.colorn`
 
-`colorn` 挡住 60 张，是粒子里最多的一项，其中 27 张绑了用户属性（颜色选择器）。它是 P4a 步骤 5 留下的：HSV 路径没读全，只要写了就报 `particle:instance:colorn`。
+> 2026-11-08 按步骤 0 的读码（[rea-p4b-render.md](rea-p4b-render.md) 第 7 节）、实测（报告「P4b 语义的实测核对」的两行 `colorn`）和 `0xc` 记录补读（7.4）重写，写成可以直接派发的版本。
 
-- **修改** `ParticleInstance.colorn` 走 HSV 路径；系统 `0x200000` 时直接作实例颜色。公式按步骤 0 的第 7 项。
-- **修改** `BindingTarget` 的 `particle-instance` 支持向量字段 `colorn`，用户改色就地生效，不重编译。
-- **删除** 能力表的 `particle:instance:colorn`；`brightness`（HDR）照旧。
+### 思路
 
-**验收：**
-- `proj/p4b-color`：几种 `colorn` 配不同的 `colorrandom`，和 WPE 比新粒子颜色。
-- 改颜色属性不重编译，已有粒子保留原颜色（同 P4a 的 `instanceoverride` 实测）。
-- 语料里不再被 `colorn` 挡住的场景逐条列出，30 组画面哈希不变。
+`colorn` 有两种作用方式，可以同时生效：
+- **平移：** WPE 加载时先从颜色模块推出一个「系统色」，再把每个颜色模块的颜色按「`colorn` 与系统色的 HSV 差」平移。
+- **实例颜色：** 系统标志 `0x200000` 置位时，新粒子的颜色初值是 `colorn`，颜色模块再乘到它上面。`0x200000` 在没有颜色模块时置，**在场景 `version` < 5 时也置**（7.4，原以为是设备档位）。
+
+运行中改值时从基值重算。
+
+**加载期（7.1）：**
+- `color`（0–255）在加载时 ÷255，按 `%.5f` 格式化成 `colorn`，再删掉 `color`。两个键都写时取 `color`。
+- `colorn` 缺省是 `−1 −1 −1`，判断「未设」只看 r < 0。
+- **系统色**按 initializer 顺序找颜色模块，后面的覆盖前面的：
+  - `colorrandom` 取 `((max − min)·0.5 + min)·0.003921569`，min、max 是 0–255 原值；
+  - 一个 initializer 都没命中时，取第一个 operator `colorchange` 的 `startvalue`（不 ÷255）；
+  - 都没有时系统色是 (1, 1, 1)，`hascolor` 为假。
+  - 结果同样经 `%.5f` 往返一次。
+
+**是否生效（7.3）：** 下面三条都满足才生效。
+- `colorn` 已设；
+- 不是三个分量都和系统色差 < 0.0035294117（0.9/255）；
+- 系统 `flags` 没有 bit3。
+
+**`0x200000`：** scene.json 根的 `version` < 5（缺键为 0，`0x1401c57b6`，Claude 抽查过：读的键名就是 `version`），或 `hascolor` 为假。
+
+**生效后**，三件事按下面的顺序叠在一起：
+```
+I     = (0x200000 && active) ? colorn : (1, 1, 1)                 // 新粒子 rgb 初值（k = 1，brightness 本步不做）
+rgb0  = I ⊙ [各颜色 initializer 的乘积]                           // colorrandom 用平移后的 min、max
+rgb   = rgb0 ⊙ (A' + t·(B' − A'))                                  // colorchange 用平移后的两端，每遍从初值复制再乘
+```
+- **实例颜色：** 见上面的 `I`。不生效时（或没有 `0x200000`）是 (1, 1, 1)。
+- **`colorrandom`（0xb 记录）：** `min' = shift(min)`、`max' = shift(max)`，两端各自平移后再插值。
+  - `shift(c)` 把 c 的 HSV 加上 `colorn` 与系统色的 HSV 差：色相取模到 [0, 1)，饱和度、明度钳到 [0, 1]。
+  - `rgb2hsv` 全用 float32 除法，`hsv2rgb` 里两次 `fmod` 是双精度。
+- **`colorchange`（0xc 记录，7.4【确】）：** A = `startvalue`、B = `endvalue`（解析出的原值），`A' = shift(A)`、`B' = shift(B)`，写回 start = `A'`、Δ = `B' − A'`。不生效时写回 A 与 `B − A`。
+  - 我们的 `colorChange` 每帧按 `f32(end − start)` 算 Δ，所以把 `startvalue`、`endvalue` 两个字段换成 `A'`、`B'` 即可，Δ 和 WPE 的 `subss` 结果相同。
+- **步骤 0 实测的「终止色变黑」：** 测试工程是 `version 3`，`I = colorn = (0, 1, 0)`，乘上 `lerp(A', B', t) = (t, 1 − t, 0)` 得 (0, 1 − t, 0)，和读码一致，不是 0xc 的问题。步骤 0 的其余 7 组也都是 `version 3`，乘不乘 `colorn` 在那几组里看不出差别，所以补抓 `version 5` 的副本。
+- `hsvcolorrandom`、`colorlist` 也有自己的记录，但这两个模块本身报不支持（语料 0 张），本步不做。
+
+**运行中改值：** 记录保留基色和系统色的 HSV，每次从基值重算，不累加。
+- `colorrandom` 是出生时的 initializer，所以只影响之后出生的粒子。
+- `colorchange` 是每帧跑的 operator，改了它的字段，存活粒子下一帧就跟着变。补抓的 `p4b-colorp2` 实测确认（见实施记录）。
+
+**本步不动的：**
+- `brightness`：只在 HDR 时乘实例颜色，HDR 下取非默认值照报 `particle:instance:brightness`（语料 2 张，都还差几十项）。
+- 子系统：父系统不生效时子系统一律不生效。子系统属 P4e，这条留给 P4e。语料里 41 处 `colorn` 所在的系统带子系统。
+
+**语料**（152 个工程，`ignore/p4/b6/scan_colorn.py`，结果在 `scan_colorn.txt`）：
+- 60 张、174 处，全是 `colorn` 键，没有 `color` 键。
+  - 118 处是静态值；
+  - 51 处绑了颜色属性，都不带 `condition`；
+  - 5 处挂了脚本（P4f），照报 `particle:binding:instance:colorn`。
+- 所在系统的颜色模块：163 处只有 `colorrandom`，4 处只有 `colorchange`，7 处一个都没有。没有两种并用的，也没有 `hsvcolorrandom` / `colorlist`。
+- 没有系统写 `flags` bit3。
+- 场景 `version`（`ignore/p4/b6/ver_colorn.py`）：60 张里 29 张 < 5（`version` 1 有 8 张、3 有 16 张、4 有 4 张、0 有 1 张），31 张是 5。这 29 张里有颜色模块的系统，平移之后还要再乘 `colorn`。
+- 预计不解锁新场景：去掉 `colorn` 后离得最近的是 `3778549173`，还差 `depthwrite:enabled`、`particle:controlpoint`。
+
+### 现状锚点
+
+**a. 写了就报**（`compile/features.ts`，`checkParticleInstance`）
+```ts
+if (key === "color" || key === "colorn") {
+  const color = instanceVector(value);
+  // 现状：没有 bit3、设了值或绑了属性就报，"1 1 1" 也报
+  if (colorOverride && (isUserBinding(value) || (color !== null && color[0] >= 0)))
+    unsupported.add("particle:instance:colorn");
+}
+```
+
+**b. `colorn` 只取静态值**（`compile/particles.ts`，`parseParticleInstance`）
+```ts
+return {
+  ...scalars,
+  // 现状：不经 resolve、不登记绑定；color ÷255 没有 %.5f 舍入
+  colorn: instanceVector(source.color, 1 / 255) ?? instanceVector(source.colorn),
+  // …
+};
+```
+
+**c. 就地写只有标量**（`compile/particles.ts`、`compile/bindings.ts`、`render/state.ts`）
+```ts
+export const INSTANCE_FIELDS = ["alpha", "size", "count", "speed", "lifetime", "rate", "brightness"] as const;
+export type ParticleInstanceValues = Record<InstanceField, number>; // 现状：SceneState 只存这一份标量
+// bindings.ts
+| { kind: "particle-instance"; object: number; field: InstanceField } // 现状：没有 colorn
+// state.ts write()
+values[target.field] = instanceScalar(conditioned(binding, raw)); // 现状：只按标量取值
+```
+
+**d. 新粒子颜色写死 1**（`particles/system.ts`，`emit`）
+```ts
+// 实例颜色：`colorn` 只在材质没有 `hascolor` 时直接用（`0x200000`），其余走 HSV 路径，都没做
+c.color0[i][slot] = 1;
+```
+
+**e. 改值只重乘标量**（`particles/system.ts`，`setInstance`）
+```ts
+const multipliers = instanceMultipliers(this.instance, this.def.flags);
+for (const module of [...this.emitters, ...this.initializers, ...this.operators])
+  module.fields = resolveParticleFields(module.def, module.base, multipliers); // 现状：颜色字段不平移
+```
+
+### 点 1 — HSV 与平移（新增 `particles/colorn.ts`）
+
+- **新增** `rgb2hsv`、`hsv2rgb`、`shiftColor`，照 7.3 的伪代码逐步 float32 舍入（`f32`），`fmod` 用 JS 的 `%`（双精度，和 WPE 的 `fmod` 相同）。
+- **新增** `colornState(def, colorn)`：返回 `{ active, instanceColor, shift }`，系统色与 `0x200000` 从 `def.colorSystem` 取（点 2）。
+```ts
+/**
+ * `instanceoverride.colorn` 的生效判断与平移（rea-p4b-render.md 7.3、7.4，`FUN_14022bd40` → `FUN_1401d15a0`）。
+ */
+export interface ColornState {
+  /** 三条都满足：已设（r ≥ 0）、不是三个分量都和系统色差 < 0.9/255、系统 flags 没有 bit3。 */
+  active: boolean;
+  /** 新粒子 rgb 初值：`0x200000`（`version` < 5 或没有颜色模块）且生效时是 colorn，否则 (1, 1, 1)。颜色模块乘在它上面。 */
+  instanceColor: readonly [number, number, number];
+  /** 生效时平移一个颜色，不生效时原样返回（WPE 把基值写回）。 */
+  shift(color: readonly number[]): number[];
+}
+```
+
+### 点 2 — 系统色（`compile/particles.ts`）
+
+- **新增** `SceneParticle.colorSystem: { rgb: [number, number, number]; instanceColor: boolean }`，由 `parseParticle` 算：
+  - `rgb` 是系统色，从粒子 JSON 原文算（7.1 的循环），不从模块字段反推：`colorrandom` 的字段已经乘过 1/255，乘回去会多一层舍入。
+  - `instanceColor` 是 `0x200000`：`sceneVersion < 5 || !hascolor`。
+- **修改** `ParseParticleOptions` 加 `sceneVersion`。`bundle.ts` 传 `scene.version`，和 `passthroughMaterial` 共用一个取值函数（缺键或不是有限数按 0）。
+  - `colorrandom` 的 min、max 用同一个 vec3 解析规则读原文，缺省 `"0 0 0"` / `"255 255 255"`；按 float32 算 `((max − min)·0.5 + min)·0.003921569`。
+  - `%.5f` 往返：`f32(Number(f32值.toFixed(5)))`。`toFixed` 遇到恰好的 .5 和 C 的舍入方向可能不同，只在二进制正好落在中点时出现，不处理，写进注释。
+- **修改** `parseParticleInstance`：`colorn` 改经 `resolve` 取值（登记绑定）；`color` 静态值按 `f32(f32(v) / 255)` 再 `%.5f` 往返。
+- **修改** `InstanceResolver` 的键类型放宽到 `InstanceField | "colorn"`。
+- `color` 绑了用户属性时 WPE 怎么转换没读到（语料 0 处），报 `particle:instance:color:user`。
+
+### 点 3 — 模拟器（`particles/system.ts`、`particles/operators.ts`）
+
+- **修改** `ParticleInstanceValues` 加 `colorn: readonly number[] | null`，`instanceValues` 一起拷。
+- **修改** 构造函数与 `setInstance`：重乘字段之后调一次 `applyColorn()`：
+```ts
+/** 从基值重算颜色模块的字段和新粒子颜色（rea-p4b-render.md 7.3、7.4）。重乘字段之后调，所以不会在上一次的结果上累加。 */
+private applyColorn(): void {
+  const state = colornState(this.def, this.instance.colorn);
+  this.instanceColor = state.instanceColor;
+  for (const module of this.initializers)
+    if (module.name === "colorrandom")
+      module.fields = { ...module.fields, min: state.shift(module.base.min), max: state.shift(module.base.max) };
+  for (const module of this.operators)
+    if (module.name === "colorchange")
+      // 0xc：写回 start = A'、Δ = B' − A'；`colorChange` 每帧按 f32(end − start) 算 Δ，所以换两端即可（7.4）
+      module.fields = {
+        ...module.fields,
+        startvalue: state.shift(module.base.startvalue),
+        endvalue: state.shift(module.base.endvalue),
+      };
+}
+```
+- **修改** `emit`：`c.color0[i][slot] = this.instanceColor[i]`。颜色 initializer 本来就乘在 `color0` 上，出生时当前列从 `color0` 复制，`colorchange` 每遍乘到当前列，这条链不用改（7.4 第 4 小节）。
+- **修改** `colorChange` 的注释，去掉「能力表拦住」。
+
+### 点 4 — 绑定（`compile/bundle.ts`、`compile/bindings.ts`、`render/state.ts`、`host.ts`）
+
+- **修改** `BindingTarget` 的 `particle-instance`：`field: InstanceField | "colorn"`。
+- **修改** `bundle.ts` 的 `instanceTarget`：`colorn` 登记成就地目标 `{ kind: "particle-instance", object, field: "colorn" }`。
+- **修改** `SceneState.write`：
+```ts
+if (target.kind === "particle-instance") {
+  const values = this.particleInstances.get(target.object);
+  if (!values) return "applied";
+  if (target.field === "colorn") values.colorn = instanceVector(raw); // 新增：同编译期的取值规则
+  else values[target.field] = instanceScalar(conditioned(binding, raw));
+  this.dirtyParticles.add(target.object);
+  return "applied";
+}
+```
+- 带 `condition` 的 `colorn` 绑定：WPE 对布尔值的处理没读到（语料 0 处），报 `particle:instance:colorn:condition`。
+- `host.ts` 的 `readTarget` 已按路径通用读，确认 `colorn` 返回数组即可；`GpuScene.sync` 的 `setInstance` 路径不用改。
+
+### 点 5 — 能力表（`compile/features.ts`）
+
+- **删除** `particle:instance:colorn`。
+- **新增** 上面两个只在语料 0 处出现的键：`particle:instance:color:user`、`particle:instance:colorn:condition`。
+- `particle:binding:instance:colorn`（脚本）、`particle:instance:brightness` 照旧。
+- 注释改写成 7.1、7.3、7.4 的结论。
+
+### 验收
+
+**真值数据：**
+- **已有的：** 步骤 0 的 `p4b-color`。抓帧 `A:\p4b\p4b-color-fps60`，轨迹 `ignore/p4/tracks/rd-p4b-color-fps60.json`，日志 `ignore/p4/out/p4b-color-fps60-log.txt`。10 个系统：
+  - `c-none`：没有颜色模块；
+  - `c-red-green`、`c-255`：单色红平移成绿，后者用 `color` 写法；
+  - `c-near`：和系统色差 < 0.0035；
+  - `c-flag8`：系统 `flags` 8；
+  - `c-range`：区间红 → 黄；
+  - `c-two`：两个 `colorrandom`；
+  - `c-change`：`colorchange` 红 → 蓝；
+  - `c-none-ref`、`c-range-ref`：对照组。
+- **要补抓的：** `gen_b.py` 加 4 个工程，一次 WPE 会话抓完。
+  - **`p4b-color5`**：`p4b-color` 的 10 个系统原样照搬，只把 `version` 改成 5，另加系统 `c-b`。这是 7.4 的最小区分实验：
+    - `c-change` 预期从 (0, 1 − t, 0) 变成 (t, 1 − t, 0)；
+    - `c-range` 的 g 能超过 0.5；
+    - `c-none` 不变。
+  - **`p4b-color3b`**（`version 3`）：只有 `c-b`。
+    - `c-b` 是 7.4 的实验 (b)：`colorchange` 的 `startvalue "1 0 0"`、`endvalue "0 0.5 1"`，`colorn "0 0.5 0"`。
+    - t = 0 时，`version 3` 的 g 应为 0.25，`version 5` 为 0.5。
+  - **`p4b-color0`**（不写 `version`）：`c-red-green`、`c-range`、`c-change` 三个系统，应和 `version 3` 一样置 `0x200000`。
+  - **`p4b-colorp`**（`version 5`）：运行中改属性。
+    - `colorn` 绑颜色属性 `p_c`，一个 `colorrandom` 系统、一个 `colorchange` 系统共用它。
+    - 照 `ignore/p4/sweep_life.py` 开窗口，用 `-control applyProperties`：基值 → 绿 → 蓝 → 改回基值，每步后抓 2 帧，并记下改值的时刻。
+    - 核对：新粒子按新值平移；`colorrandom` 的存活粒子不变，`colorchange` 的存活粒子跟着变。
+    - `write_project` 要加写 `project.json` 用户属性的参数。
+- **真实样本：** 抓 3 张语料场景，WPE 缺省属性：
+  - `3799462430`（`version 5`）：`colorrandom` 加颜色属性；
+  - `3308867900`（`version 3`）：`colorrandom` 加颜色属性，平移后再乘 `colorn`；
+  - `2582765611`（`version 1`）：`colorchange`，另有一处没有颜色模块。
+  - 挑颜色系统本身没有其它不支持模块的对象来比；三张不合适时从 `ignore/p4/b6/scan_colorn.txt` 换。
+
+**比较：**
+- **顶点颜色回放：** 照步骤 3 的 `ignore/p4/b3/replay.test.ts`，按 WPE 日志 dt 走 `particleTrack`，逐粒子比 rgb。
+  - 平移全是 float32 的同一串运算，限值 2e-6；超了先查 `fmod`、`%.5f` 的舍入。
+  - `p4b-color`、`p4b-color5`、`p4b-color3b`、`p4b-color0`、`p4b-colorp` 的全部系统都要比。
+  - 运行中改值的那组，在回放里按抓帧日志的时刻调 `setInstance`。
+- **整帧像素：** 照步骤 5 的 `ignore/p4/b5v/` 做法，`p4b-color`、`p4b-color5` 各 4 帧逐像素，除帧号与时钟图层外应相同；有差时列出。
+- **真实样本：** 三张场景强制渲染（`kabegame-dev-scene-force-render`），回放到 WPE 抓帧时刻，比粒子颜色的集合（不比位置），应和 WPE 顶点颜色在限值内一致。
+- **就地改值（真机）：** 在屏外宿主里改 `p4b-colorp` 的 `p_c`：`applied` 增加、`recompiled` 不变；改两次再改回，新粒子颜色和直接按该值加载的相同。
+- **语料：**
+  - 去掉的只有 `particle:instance:colorn`（60 张）；
+  - 挂脚本的 5 处照报 `particle:binding:instance:colorn`；
+  - 新增的两个键都应为 0 张；
+  - 干净场景 20 → 20。
+- **变异检查：** 以下各改坏一处，都要有测试失败：
+  - 色相不取模；
+  - s、v 不钳；
+  - `hsv2rgb` 的 `fmod` 改成 float32；
+  - 差值阈值写成 `≤`，或只比 r；
+  - 不看 bit3；
+  - 系统色取第一个 `colorrandom`；
+  - 有 `colorrandom` 时仍取 `colorchange` 的 `startvalue`；
+  - 漏掉 `%.5f` 往返；
+  - 没有颜色模块时不写实例颜色；
+  - `0x200000` 不看 `version`，或写成 `version ≤ 5`；
+  - `version` 缺键不按 0；
+  - `setInstance` 在上一次结果上累加；
+  - `colorchange` 只平移一端，或不生效时不还原基值。
+- **哈希：** 30 组画面哈希和 `ignore/p4/b5v/out/hash-after.json` 全部相同（10 张干净场景都没有 `colorn`）。
 
 ## P4b 收尾
 
@@ -916,7 +1150,7 @@ const texture = await getTexture(name, scope, issues, !!context.particle); // �
 两个子代理读码，Claude 设计并抓取确定性工程、独立核对。没有改产品代码。
 
 - **读码：** [rea-p4b-modules.md](rea-p4b-modules.md)（发射、档 2 模块、三个噪声函数，常量表在 `ignore/p4/rea/p4b-mod/noise-tables.json`）、[rea-p4b-render.md](rea-p4b-render.md)（纹理格式、帧表、折射、`colorn`）。Claude 抽查了两条最反直觉的：`turbulence` 用的是解释器第三个参数 `k`（`0x14023fbfa` 广播、`0x140240290` 每条重装），`snoise2` 的梯度判断是 `test al, 0x3c`。两条都对。
-- **实测：** 结论写在 [报告](p4-particles-REPORT.md)「P4b 语义的实测核对」。17 条里 16 条成立，**推翻 1 条**：`colorchange` 加 `colorn` 时，终止色平移后是 `(0, 0, 0)`，不是读码预测的 `(1, 0, 0)`。
+- **实测：** 结论写在 [报告](p4-particles-REPORT.md)「P4b 语义的实测核对」。17 条里 16 条成立，**推翻 1 条**：`colorchange` 加 `colorn` 时，终止色平移后是 `(0, 0, 0)`，不是读码预测的 `(1, 0, 0)`。（步骤 6 补读后更正：读码没错，工程是 `version 3`，平移之后又乘了一次 `colorn`，见 rea-p4b-render.md 7.4。）
 - **四个要直接回答的问题：**
   - **alpha-priority：** 中性，步骤 1 删掉 `tex:alpha-priority`。
   - **系统 `flags` bit1：** 读取点找到了，作用只是关掉 `SPRITESHEETBLEND`（`randomframe` 也会置它），步骤 2 实现。
@@ -1206,3 +1440,81 @@ Claude 独立验收：
 测试行 14108、14109 已用 `batch_remove_images` 移除，导入任务已删。
 
 工具：代理的在 `ignore/p4/b5/`（`diff_corpus.py`、`mutate.py`、`sheets.test.ts`、两个 patch）；Claude 的在 `ignore/p4/b5v/`（`real.mjs`、`cmp.py`、`ratio.py`）和 `ignore/p4/cmp_n01.py`。
+
+### 步骤 6 — `instanceoverride.colorn`（2026-11-08）
+
+一个代理补读 `0xc` 记录，另一个代理实现，Claude 独立验收。
+
+**补读：** 结论写在 [rea-p4b-render.md](rea-p4b-render.md) 7.4。
+- `0xc` 记录照 7.3 的读码平移两端，没有问题。步骤 0 测到的「终止色变黑」另有原因：
+  - `0x200000` 的「档位」来源是 scene.json 根的 `version`（< 5 时置位，缺键为 0），不是设备；
+  - 测试工程是 `version 3`，平移之后又乘了一次 `colorn`。
+- Claude 抽查 `0x1401c57b3`–`0x1401c57bb` 与 `0x1401873fa`–`0x140187401`：
+  - 读的键名常量（`0x140476ce8`）就是 `version`；
+  - `cmp eax, 5; jae` 跳过置位。
+- 同步更正了 rea 7.3、rea-p4a 的「设备档位」，以及报告里判「推翻」的那一行。
+
+**实现：**
+- **新增** `particles/colorn.ts`：`rgb2hsv`、`hsv2rgb`、`shiftColor`、`roundTrip5`、`colornState`，照 7.3 逐步 float32 舍入，`fmod` 用双精度。
+- **修改** `compile/particles.ts`：
+  - 新增 `particleColorSystem`：从粒子 JSON 原文算系统色与 `0x200000`；
+  - 新增 `sceneVersionOf`：`bundle.ts` 的 passthrough 材质也改用它；
+  - `colorn` 经 `resolve` 登记绑定，`color` 按 `f32(f32(v)/255)` 后做 `%.5f` 往返；
+  - `ParticleInstanceValues` 加 `colorn`，键类型 `InstanceKey = InstanceField | "colorn"`。
+- **修改** `particles/system.ts`：构造函数与 `setInstance` 重乘字段之后调 `applyColorn()`，从 `base` 平移 `colorrandom` 的 min / max、`colorchange` 的两端；出生时 `color0 = instanceColor`。
+- **修改** `render/state.ts`：`colorn` 就地写，取值函数和编译期共用。
+- **修改** `compile/features.ts`：
+  - 删掉 `particle:instance:colorn`；
+  - 新增 `particle:instance:color:user`、`particle:instance:colorn:condition`（语料都是 0 处）；
+  - 脚本照报 `particle:binding:instance:colorn`。
+- **修改** `compile/bindings.ts`、`particles/operators.ts`：只改类型和注释。
+- **测试：**
+  - 新增 `particles/colorn.test.ts`（30 个）、`compile/colorn.test.ts`（9 个）；
+  - `fixtures/colorn.json` 的 230 条逐位真值由独立的 numpy 参考实现 `ignore/p4/b6/colorn_ref.py` 生成；
+  - 更新 `p4a5.test.ts`、`particles.test.ts`、`lifecycle.test.ts`、`render/particles.test.ts`。
+
+和计划不同、或计划没写、由代理按证据定的：
+- 有 `color` 键就只用它，解析不出来也不回退到 `colorn`，`colorn` 上的绑定也不登记（7.1：WPE 覆盖整个 `colorn`）。WPE 对无效值 `strtod` 得 0，不复刻，语料里没有 `color` 键。
+- `hsvcolorrandom` / `colorlist` 会置 `hascolor`，但系统色不跟着它们算。这两个模块本身报不支持。
+- 系统色读原文 vec3，`compile/particles.ts` 里另写了一个 `rawVec3`，规则和模块表相同（模块表的解析函数没有导出）。
+- 计划里「`setInstance` 累加」「不生效时不还原基值」两条单改一处是等价变异：每次 `setInstance` 都先从基值重乘全部字段。所以改成和「颜色模块不重乘」一起改，才是真的累加 / 不还原。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 只有上面列的 `apps/wpe-scene/src` 文件和 `ignore/p4/b6/`；工作区里 `src-tauri/`、`versions/latest/` 等是会话开始前别处的改动 |
+| tsc、vitest、Prettier（Claude 自跑） | 0 error；44 个文件、1154 个用例全过（新增 40 个）；改过的文件格式通过 |
+| 变异检查（代理 32 条、Claude 8 条） | 全部有用例失败，源码逐字节还原。Claude 的 8 条：`rgb2hsv` 两个分支对调、色相差取反、`hsv2rgb` 第 1 扇区写错、r = 0 当未设、系统色取最后一个 `colorchange`、就地写不标脏、实例颜色只写 r、`colorchange` 不平移 |
+| 回放 `p4b-color`（`version 3`，第 898–900 帧，限值 2e-6；Claude 重跑结果相同） | 10 个系统最大差都是 0。<br>- 7 个直接比逐粒子相同；<br>- `c-range`、`c-range-ref`、`c-change` 用我们平移后的两端做线段拟合，残差 0；<br>- `c-change` 为 (0, 1 − t, 0)。它的 t 和我们按年龄算的差 3.8e-4，来自 WPE 的 `rcpps`，换成 `rcpps(1)` 后是 2.4e-7 |
+| 语料（`ignore/p4/b6/out/diff-after.txt`） | 只去掉 `particle:instance:colorn`（60 张），没有新增键，干净场景 20 → 20；挂脚本的 5 张照报 `particle:binding:instance:colorn`；登记了 51 处 `colorn` 用户绑定 |
+| 真机哈希（屏外宿主，宿主重建为 `index-CY0tK-L-.js`） | 30 组和 `ignore/p4/b5v/out/hash-after.json` 全部相同 |
+| 真机就地改值（`p4b-colorp`，测试行 14110，屏外宿主 `live_colorp.mjs`） | `p_c` 改成绿、蓝，再改回红：`applied` 1 → 2 → 3，`recompiled` 0；三个系统状态里的 `colorn` 都跟着变。屏外宿主不出帧，存活粒子的颜色由 `render/particles.test.ts` 覆盖 |
+
+测试行 14110 已用 `batch_remove_images` 移除，导入任务已删。
+
+**WPE 补抓：** 两次 WPE 会话，都是 fps 60，结束时 `stop --relaunch` 还原了 `config.json`，桌面壁纸放回原样。
+- 第一次：用户退出 WPE 后，`ignore/p4/b6/sweep_color.py` 抓了 `p4b-color5`、`p4b-color3b`、`p4b-color0` 各 4 帧，3 张语料场景各 3 帧，以及 `p4b-colorp` 的 4 个改属性阶段。
+- `p4b-colorp` 抓到的全是改值之后出生的粒子：RenderDoc 触发约要 3 s，改值到抓帧约 5 s，超过 4 s 寿命。所以加了寿命 16 s 的 `p4b-colorp2`，结束上一次 relaunch 拉起的 WPE（核对过进程号、启动时间）后，用 `--prop-only p4b-colorp2` 再抓一次。
+- 轨迹：`rdc_track_b.py`；改属性那组每个阶段单独提，再由 `b6/merge_colorp.py` 合成一段。
+- 改值帧：日志的秒级时间戳只能定到 ±1 s，再用新旧颜色粒子的出生帧夹定（`b6/ana_colorp_time.py`、`b6/ana_colorp.py`）。
+- RenderDoc 里原本开着另一个会话的 `p4c-sprite-fps60-frame921.rdc`，每次提取完都重新打开了它。
+
+| 项 | 结果 |
+|---|---|
+| `p4b-color5`（`version 5`，11 个系统，4 帧） | 全部通过，最大差 3e-8。<br>- `c-change` 为 (t, 1 − t, 0)，不再乘 `colorn`；<br>- `c-range` 的 g 到 0.89；<br>- `c-b` 为 (0.5t, 0.5(1 − t), 0.25t)，直接确认 `0xc` 两端都平移 |
+| `p4b-color3b`（`version 3`，`c-b`） | 最大差 0，(0, 0.25(1 − t), 0)，平移后再乘 `colorn` |
+| `p4b-color0`（不写 `version`） | 最大差 0，`c-change` 为 (0, 1 − t, 0)，和 `version 3` 相同，缺键按 0 |
+| `p4b-colorp`（4 s 寿命，改值 3 次） | 8 帧、每个系统 56 个粒子，最大差 3e-8：改值后出生的粒子用新值，改回系统色后恢复原样 |
+| `p4b-colorp2`（16 s 寿命，改值 3 次，改值帧 1025、1420、1830） | 8 帧、每个系统 120 个粒子，最大差 3e-8，按槽位逐个比，粒子数逐帧一致。<br>- `p-rand`（`colorrandom`）、`p-none`（没有颜色模块）：改值前出生的存活粒子保持旧色，之后出生的用新色；<br>- `p-change`（`colorchange`）：全部存活粒子立即换成新渐变，计划里的【推】成立 |
+| 整帧像素（屏外宿主按 WPE 日志 dt 回放，`b6/px/`，测试行 14127、14128） | `p4b-color` 3 帧、`p4b-color5` 4 帧，除帧号与时钟图层、颜色取决于 R 的 `c-range` / `c-range-ref` 外：<br>- `c-change` 在 3 帧里各有一个粒子差 1 个色阶，来自 WPE 的 `rcpps`，同步骤 1–5；<br>- 其余 0 个像素不同 |
+| 真实样本（屏外宿主 `particleTrack`，按工坊目录编译；WPE 统计 `b3/wpe_stats_b.py`；`b6/cmp_real_colors.py`） | 颜色范围和 WPE 对应的绘制相同：<br>- `3799462430`（`version 5`）：`轨迹 2`、`樱花`；<br>- `3308867900`（`version 3`）：`new_particle_system`、`Stars`、`萤火虫`、`雾 1`，`Trails 2` 是随机色，范围同量级；<br>- `2582765611`（`version 1`）：`Particles`、`Dust motes`。`Beat Ring` 只有一个粒子，WPE 和我们的颜色都落在 `I ⊙ lerp(A', B', t)` 上（残差 ≤ 4e-4），只是 t 不同：它的 `rate` 绑了音频响应属性，我们按固定 1/60 s 回放。<br>WPE 多出的 10 个一组的绘制是子系统（P4e） |
+
+测试行 14127、14128 已用 `batch_remove_images` 移除，导入任务已删。WPE 留在第二次 relaunch 拉起的实例（PID 302520）。
+
+工具：
+- 代理的：`ignore/p4/b6/` 下的 `replay.test.ts`、`corpus.test.ts`、`mutate.py`、`colorn_ref.py`、`base/`，结果在 `out/`；
+- Claude 的：
+  - `ignore/p4/b6/` 下的 `scan_colorn.py`、`ver_colorn.py`、`ver_of.py`、`cond_check.py`、`corpus_colorn.py`、`sweep_color.py`、`live_colorp.mjs`、`peek_tracks.py`、`ana_colorp.py`、`ana_colorp_time.py`、`merge_colorp.py`、`changes/`、`real_colors.mjs`、`cmp_real_colors.py`、`peek_obj.py`、`beat_ring.py`，以及 `px/`（`real.mjs`、`cmp.py`）；
+  - `gen_b.py` 的五个新工程。
+- 抓帧在 `A:\p4b\` 下：`<工程>-fps60`、`colorp\<阶段>`、`p4b-colorp2\<阶段>`。

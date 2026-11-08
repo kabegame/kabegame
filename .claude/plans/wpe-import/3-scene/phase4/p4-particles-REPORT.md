@@ -149,8 +149,8 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | NPOT 纹理的粒子 UV 不缩放 | 图像 598×720、纹理 1024² 的 x 光片，只画在四边形左上部分 | 成立 |
 | 帧表顶点 `TEXCOORD1 = (速度, frame 原值)`，引擎不取 frac | xyz 是 `130 0 0`；`sequencemultiplier` 为 1、2、3 时同一年龄的 frame 是 0.4692、0.9384、1.4077，大于 1 不回绕；`randomframe` 是 0.897 | 成立 |
 | 折射快照在每个折射对象画之前拷一次，存活数为 0 不拷 | 每个 `REFRACT` 对象前面都有一次 `ResolveSubresource`，`CUTOUT` 对象前面没有；第 906 帧 `P0` 没有存活粒子，既没有绘制也没有拷贝（`rdc_events.py`） | 成立。拷贝是 Resolve，说明 WPE 场景目标开了 MSAA，步骤 5 比较边缘时要注意 |
-| `colorn`（`ana_color.py`） | 7 组逐位吻合：没有颜色模块时直接作颜色；单色按 HSV 平移；`color` 的 0–255 写法；和系统色差 < 0.0035 不生效；系统 `flags` bit3 不生效；两个 `colorrandom` 取后一个作系统色；区间两端各自平移后再插值（拟合残差 0） | 成立 |
-| `colorchange` 加 `colorn`：两端各自平移 | 起始色平移后 `(0, 1, 0)`，和预测一致；终止色实测 `(0, 0, 0)`，预测 `(1, 0, 0)`（`ana_cchange.py`，9 个粒子按年龄拟合） | **推翻**。`0xc` 记录的字段偏移读码没逐项核对，步骤 6 先补读 |
+| `colorn`（`ana_color.py`） | 7 组逐位吻合：没有颜色模块时直接作颜色；单色按 HSV 平移；`color` 的 0–255 写法；和系统色差 < 0.0035 不生效；系统 `flags` bit3 不生效；两个 `colorrandom` 取后一个作系统色；区间两端各自平移后再插值（拟合残差 0）。工程是 `version 3`，这 7 组走的都是「平移后再乘 `colorn`」那条路径，乘不乘在这几组里看不出差别（rea-p4b-render.md 7.4 第 4 小节） | 成立 |
+| `colorchange` 加 `colorn`：两端各自平移 | 起始色平移后 `(0, 1, 0)`，和预测一致；终止色实测 `(0, 0, 0)`，预测 `(1, 0, 0)`（`ana_cchange.py`，9 个粒子按年龄拟合） | 当时判「推翻」，补读后更正（2026-11-08，rea-p4b-render.md 7.4）：0xc 记录照读码平移，终止色确为 `(1, 0, 0)`；工程是 `version 3`，`version` < 5 时置 `0x200000`，实例颜色 `colorn` = (0, 1, 0) 再乘上去，红通道成 0。步骤 6 补抓 `version 5` 的副本 `p4b-color5` 确认：`c-change` 为 (t, 1 − t, 0)，逐粒子差 ≤ 3e-8（phase-4b-tier2.md 步骤 6 实施记录） |
 | `sizechange` 的两个值乘 `instanceoverride.size` | `size 2` 时，只有 `sizerandom` 尺寸 20；加上 `startvalue = endvalue = 1` 的 `sizechange` 后是 40 | 成立：两者叠用时按 `size²` 放大 |
 | `turbulence` 不读 `phasemin` | 同一出生点，`phasemin` 0 和 5 的两个系统 6 帧位置逐位相同 | 成立 |
 | `capvelocity` 的比例来自 `rsqrtps` | 截后速度 99.993 | 成立 |

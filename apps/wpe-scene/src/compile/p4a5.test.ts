@@ -15,7 +15,7 @@ import {
 } from "./features";
 import type { SceneReader } from "./fs";
 import { observePropertyReads, type JsonObject, type SceneJson, type SceneValue } from "./model";
-import { INSTANCE_FIELDS, instanceScalar, parseParticleInstance, type InstanceField } from "./particles";
+import { INSTANCE_FIELDS, instanceScalar, parseParticleInstance, type InstanceKey } from "./particles";
 import { readParticleModule } from "../particles/modules";
 import { SceneState } from "../render/state";
 import type { Wpesl2wgsl } from "../wpesl2wgsl";
@@ -179,7 +179,7 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
 
   it("BindingCollector 解析：读用户属性、带 condition；静态值与 {script} 只取 value、不登记", () => {
     const bindings = new BindingCollector();
-    const target = (field: InstanceField): SceneBinding["target"] => ({ kind: "particle-instance", object: 3, field });
+    const target = (field: InstanceKey): SceneBinding["target"] => ({ kind: "particle-instance", object: 3, field });
     const instance = parseParticleInstance(
       {
         alpha: 10,
@@ -236,15 +236,36 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
       expect(check({ id: null })).toEqual([]);
     });
 
-    it("colorn / color 设了值（r ≥ 0）或绑了属性时报；-1 未设、系统 flags bit3 时不报", () => {
-      expect(check({ colorn: "1.00000 1.00000 1.00000" })).toEqual(["particle:instance:colorn"]);
-      expect(check({ colorn: "0 0 0" })).toEqual(["particle:instance:colorn"]);
-      expect(check({ color: "255 128 0" })).toEqual(["particle:instance:colorn"]);
-      expect(check({ colorn: { user: "c", value: "1 0 0" } })).toEqual(["particle:instance:colorn"]);
-      expect(check({ colorn: "-1 -1 -1" })).toEqual([]);
-      expect(check({ colorn: "abc" })).toEqual([]);
+    it("colorn / color（P4b 步骤 6 已实现）：静态值与 colorn 的 {user} 不再报 particle:instance:colorn", () => {
+      for (const raw of [
+        { colorn: "1.00000 1.00000 1.00000" },
+        { colorn: "0 0 0" },
+        { color: "255 128 0" },
+        { colorn: { user: "c", value: "1 0 0" } },
+        { colorn: "-1 -1 -1" },
+        { colorn: "abc" },
+      ])
+        expect(check(raw), JSON.stringify(raw)).toEqual([]);
       expect(check({ colorn: "1 0 0" }, { flags: 8, hdr: false })).toEqual([]);
-      expect(check({ colorn: { user: "c", value: "1 0 0" } }, { flags: 8 | 4, hdr: true })).toEqual([]);
+    });
+
+    it("WPE 没读到的两种写法照报：color 绑了属性报 color:user，colorn 带 condition 报 colorn:condition；bit3 时都不报", () => {
+      expect(check({ color: { user: "c", value: "255 0 0" } })).toEqual(["particle:instance:color:user"]);
+      expect(check({ color: { user: { name: "c", condition: "1" }, value: "255 0 0" } })).toEqual([
+        "particle:instance:color:user",
+      ]);
+      expect(check({ colorn: { user: { name: "c", condition: "1" }, value: "1 0 0" } })).toEqual([
+        "particle:instance:colorn:condition",
+      ]);
+      // 条件写数字也算（WPE 按字符串比）
+      expect(check({ colorn: { user: { name: "c", condition: 2 }, value: "1 0 0" } })).toEqual([
+        "particle:instance:colorn:condition",
+      ]);
+      expect(check({ colorn: { user: { name: "c" }, value: "1 0 0" } })).toEqual([]);
+      expect(check({ color: { user: "c", value: "255 0 0" } }, { flags: 8, hdr: false })).toEqual([]);
+      expect(
+        check({ colorn: { user: { name: "c", condition: "1" }, value: "1 0 0" } }, { flags: 8 | 4, hdr: true }),
+      ).toEqual([]);
     });
 
     it("brightness：HDR 且没有 bit3 时取非默认值报；LDR、bit3、默认值不报", () => {
@@ -262,10 +283,8 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
       expect(check({ controlpoint1: "10 20 0" })).toEqual(["particle:instance:controlpoint"]);
       expect(check({ controlpointangle3: "0 0 0" })).toEqual(["particle:instance:controlpoint"]);
       expect(check({ count: { script: SCRIPT, value: 1 } })).toEqual(["particle:binding:instance:count"]);
-      expect(check({ colorn: { script: SCRIPT, value: "1 1 1" } })).toEqual([
-        "particle:binding:instance:colorn",
-        "particle:instance:colorn",
-      ]);
+      // 挂了脚本的 colorn 照报（P4f），不再另报 particle:instance:colorn
+      expect(check({ colorn: { script: SCRIPT, value: "1 1 1" } })).toEqual(["particle:binding:instance:colorn"]);
       expect(check({ foo: 1 })).toEqual(["particle:instance:foo"]);
       expect(check({ controlpoint8: "1 0 0" })).toEqual(["particle:instance:controlpoint8"]);
       expect(check("1 2 3")).toEqual(["particle:instance"]);
@@ -303,6 +322,7 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
     l: { type: "slider", value: 4 },
     r: { type: "slider", value: 0.25 },
     b: { type: "slider", value: 1 },
+    c: { type: "color", value: "0 1 0" },
   };
   const OVERRIDE = {
     id: 7,
@@ -313,6 +333,7 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
     lifetime: { user: "l", value: 1 },
     rate: { user: "r", value: 1 },
     brightness: { user: "b", value: 1 },
+    colorn: { user: "c", value: "1 0 0" },
   };
   const files = (general: JsonObject, flags = 0) => ({
     "P:/p/project.json": { file: "scene.json", general: { properties: PROPERTIES } },
@@ -345,7 +366,7 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
   const instanceBindings = (bindings: readonly SceneBinding[]) =>
     bindings.filter((binding) => binding.target.kind === "particle-instance" || binding.target.kind === "recompile");
 
-  it("七个标量键都登记成就地目标（objects 下标），值取用户属性", async () => {
+  it("七个标量键与 colorn 都登记成就地目标（objects 下标），值取用户属性", async () => {
     const bundle = await compile(ORTHO);
     expect(instanceBindings(bundle.bindings)).toEqual(
       [
@@ -356,6 +377,7 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
         ["l", "lifetime"],
         ["r", "rate"],
         ["b", "brightness"],
+        ["c", "colorn"],
       ].map(([property, field]) => ({ property, target: { kind: "particle-instance", object: 1, field } })),
     );
     expect(bundle.layers[1].particle!.instance).toMatchObject({
@@ -366,7 +388,9 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
       lifetime: 4,
       rate: 0.25,
       brightness: 1,
+      colorn: [0, 1, 0],
     });
+    expect(bundle.unsupported.filter((key) => key.startsWith("particle:instance"))).toEqual([]);
     expect(bundle.unsupported).not.toContain("particle:instance:brightness");
     // SceneState 的起始值就是编译期的值
     expect(SceneState.fromBundle(bundle).particleInstances.get(1)).toEqual({
@@ -377,6 +401,7 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
       lifetime: 4,
       rate: 0.25,
       brightness: 1,
+      colorn: [0, 1, 0],
     });
   });
 
@@ -407,7 +432,7 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
       observePropertyReads(null);
     }
     const bound = new Set(bundle.bindings.map((binding) => binding.property));
-    for (const name of ["a", "s", "n", "v", "l", "r", "b"]) expect(read.has(name), name).toBe(true);
+    for (const name of ["a", "s", "n", "v", "l", "r", "b", "c"]) expect(read.has(name), name).toBe(true);
     expect([...read].filter((name) => !bound.has(name))).toEqual([]);
   });
 
@@ -444,5 +469,40 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
       "applied",
     );
     expect(state.takeDirty().particles.size).toBe(0);
+  });
+
+  it("colorn 就地写 = 用新值重编译（P4b 步骤 6）：字符串、少于三个分量、数字、布尔、condition 与编译期解析相同，只标脏粒子", async () => {
+    const bundle = await compile(ORTHO);
+    for (const raw of ["0 0 1", "0.25 0.5 0.75 1", "1 0", "abc", 0.5, true, "-1 -1 -1"]) {
+      for (const condition of [undefined, "0 0 1"]) {
+        const state = SceneState.fromBundle(bundle);
+        const user = condition === undefined ? "c" : { name: "c", condition };
+        const compiled = parseParticleInstance({ colorn: { user, value: "1 0 0" } }, (field, value) =>
+          new BindingCollector().bind(value as SceneValue, { c: raw }, { kind: "particle-instance", object: 1, field }),
+        ).colorn;
+        expect(
+          state.write(
+            {
+              property: "c",
+              ...(condition === undefined ? {} : { condition }),
+              target: { kind: "particle-instance", object: 1, field: "colorn" },
+            },
+            raw,
+          ),
+        ).toBe("applied");
+        expect(state.particleInstances.get(1)!.colorn, `${String(raw)} / ${condition}`).toEqual(compiled);
+        // 标量不受影响
+        expect(state.particleInstances.get(1)!.count).toBe(1.5);
+        const dirty = state.takeDirty();
+        expect(dirty.particles).toEqual(new Set([1]));
+        expect([dirty.layers.size, dirty.passes.size]).toEqual([0, 0]);
+      }
+    }
+    // 编译期绑定的属性改成新值：用 planApply 分到就地一侧
+    const plan = planApply(bundle.bindings, new Map([["c", "0 0 1"]]));
+    expect(plan.recompile).toEqual([]);
+    expect(plan.writes.map((write) => write.binding.target)).toEqual([
+      { kind: "particle-instance", object: 1, field: "colorn" },
+    ]);
   });
 });

@@ -13,6 +13,8 @@
  * 4. operator 一遍或两遍：每遍开头重置当前值，再按 JSON 顺序执行。
  * 噪声类模块（P4b 步骤 4）另读场景时间 `T`（`step` 的 `time`，一帧内不变，预热时为 0）。
  *
+ * `instanceoverride.colorn`（P4b 步骤 6，`colorn.ts`）：重乘字段之后从基值重算颜色模块的平移与新粒子的颜色初值（`applyColorn`）。
+ *
  * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
  * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热）；暂停时渲染器不步进。
  *
@@ -20,6 +22,7 @@
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
+import { colornState, type Rgb } from "./colorn";
 import { ParticleColumns } from "./columns";
 import { emissionCount, emitterState, resetEmitterTiming, type EmitterState } from "./emitters";
 import { f32 } from "./f32";
@@ -140,10 +143,12 @@ export class ParticleSystem {
   private readonly emitters: ResolvedEmitter[];
   private readonly initializers: ResolvedModule[];
   private readonly operators: ResolvedModule[];
-  /** 当前的 `instanceoverride` 标量（起始值 = `def.instance`，`setInstance` 改）。 */
+  /** 当前的 `instanceoverride` 标量与 `colorn`（起始值 = `def.instance`，`setInstance` 改）。 */
   private instance: ParticleInstanceValues;
   /** 新粒子的 `a0`（`instanceoverride.alpha`）。 */
   private alpha0 = 1;
+  /** 新粒子的 rgb 初值（WPE 的 `sys+0x3e0..0x3e8`，`colornState` 的 `instanceColor`），颜色 initializer 乘在它上面。 */
+  private instanceColor: Rgb = [1, 1, 1];
   /** `instanceoverride.rate`，下限 0.01。 */
   private rate = 1;
   /** 下一次找空槽的起点：它之前没有空槽。 */
@@ -161,7 +166,8 @@ export class ParticleSystem {
     this.rOverride = rOverride;
     this.columns = new ParticleColumns(def.maxcount, particleColumnFlags(def));
     this.instance = instanceValues(def.instance);
-    // 从基值乘，不累乘（C5）。`colorn` / `color` / `brightness` 不做（能力表按 `checkParticleInstance` 报）
+    // 从基值乘，不累乘（C5）；颜色模块的字段乘完再按 `colorn` 平移（`applyColorn`）。`brightness` 不做（能力表按
+    // `checkParticleInstance` 报）
     const multipliers = instanceMultipliers(this.instance, def.flags);
     const resolve = (category: ParticleCategory, modules: readonly ParticleModule[]): ResolvedModule[] =>
       modules.flatMap((module) => {
@@ -180,12 +186,13 @@ export class ParticleSystem {
     this.initializers = resolve("initializer", def.initializers);
     this.operators = resolve("operator", def.operators);
     this.applyScalars();
+    this.applyColorn();
     this.context = { columns: this.columns, random, slot: 0, count: 0, h: 0, k: 0, time: 0 };
   }
 
-  /** 当前的 `instanceoverride` 标量（一份拷贝）。 */
+  /** 当前的 `instanceoverride` 标量与 `colorn`（一份拷贝）。 */
   get instanceValues(): ParticleInstanceValues {
-    return { ...this.instance };
+    return instanceValues(this.instance);
   }
 
   /**
@@ -195,6 +202,8 @@ export class ParticleSystem {
    * - 每帧现算的参数下一帧就用新值：`rate`（dt' = dt·rate，下限 0.01）、`count`（发射数量）、`speed` 乘的 operator 字段
    *   （重力、角力、振荡频率，存活粒子也用）。
    * - 系统 `flags` bit4–7 禁用的项照旧不乘（C3）。`brightness` 不影响模拟。
+   * - `colorn`（P4b 步骤 6）：颜色模块的平移与新粒子的颜色初值从基值重算（`applyColorn`）。`colorrandom` 是出生时的
+   *   initializer，只影响之后出生的粒子；`colorchange` 每帧读字段，存活粒子下一帧就跟着变（rea-p4b-render.md 7.3【推】）。
    * - 已结束、新 `rate > 0` 的 emitter 重新打开（`param_2 = 1` 的尾段，`0x14022c1f0` 起）；累积余数等计时保留。
    */
   setInstance(values: Partial<ParticleInstanceValues>): void {
@@ -203,8 +212,35 @@ export class ParticleSystem {
     for (const module of [...this.emitters, ...this.initializers, ...this.operators])
       module.fields = resolveParticleFields(module.def, module.base, multipliers);
     this.applyScalars();
+    this.applyColorn();
     for (const emitter of this.emitters)
       if (emitter.state.ended && (emitter.fields.rate as number) > 0) emitter.state.ended = false;
+  }
+
+  /**
+   * 从基值重算颜色模块的字段和新粒子颜色（rea-p4b-render.md 7.3、7.4）。重乘字段之后调，平移的输入是 `module.base`，
+   * 所以不会在上一次的结果上累加；不生效时写回基值（float32）。
+   * - 0xb `colorrandom`：`min' = shift(min)`、`max' = shift(max)`，两端各自平移后再插值（`colorRandom` 每次按 `max − min` 算区间）。
+   * - 0xc `colorchange`：写回 start = `A'`、Δ = `B' − A'`；`colorChange` 每帧按 `f32(end − start)` 算 Δ，和 WPE 的 `subss`
+   *   相同，所以换两端即可（7.4）。
+   */
+  private applyColorn(): void {
+    const state = colornState(this.def, this.instance.colorn);
+    this.instanceColor = state.instanceColor;
+    for (const module of this.initializers)
+      if (module.name === "colorrandom")
+        module.fields = {
+          ...module.fields,
+          min: state.shift(module.base.min as number[]),
+          max: state.shift(module.base.max as number[]),
+        };
+    for (const module of this.operators)
+      if (module.name === "colorchange")
+        module.fields = {
+          ...module.fields,
+          startvalue: state.shift(module.base.startvalue as number[]),
+          endvalue: state.shift(module.base.endvalue as number[]),
+        };
   }
 
   /** 不乘字段、由模拟器自己用的两项：新粒子的 `a0` 与时间缩放 `rate`（下限 0.01）。 */
@@ -334,8 +370,9 @@ export class ParticleSystem {
     for (let i = 0; i < 3; i++) {
       c.rotation[i][slot] = 0;
       if (c.angularVelocity) c.angularVelocity[i][slot] = 0;
-      // 实例颜色：`colorn` 只在材质没有 `hascolor` 时直接用（`0x200000`），其余走 HSV 路径，都没做
-      c.color0[i][slot] = 1;
+      // 实例颜色（`FUN_14023b340` 在 initializer 之前拷 `sys+0x3e0..0x3e8`，rea-p4b-render.md 7.4 第 4 小节）：`0x200000`
+      // 且 `colorn` 生效时是 `colorn`，否则 1；颜色 initializer 乘在它上面，`colorchange` 每遍从这里复制后再乘
+      c.color0[i][slot] = this.instanceColor[i];
     }
     c.alpha0[slot] = this.alpha0;
     for (const initializer of this.initializers) initializer.run(initializer.fields, context);

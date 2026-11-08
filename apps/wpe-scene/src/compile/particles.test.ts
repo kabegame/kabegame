@@ -437,9 +437,9 @@ describe("解析：instanceoverride 的静态值", () => {
     expect(instance).toMatchObject({ alpha: 10, count: 2, rate: 0.5, size: 1.5 });
   });
 
-  it("colorn 直接用；color（0–255）÷255 转成 colorn；控制点按下标", () => {
+  it("colorn 直接用；color（0–255）÷255 后 %.5f 往返转成 colorn（float32）；控制点按下标", () => {
     expect(parseParticleInstance({ colorn: "1.00000 0.50000 0.00000" }).colorn).toEqual([1, 0.5, 0]);
-    expect(parseParticleInstance({ color: "255 0 51" }).colorn).toEqual([1, 0, 0.2]);
+    expect(parseParticleInstance({ color: "255 0 51" }).colorn).toEqual([1, 0, Math.fround(0.2)]);
     const instance = parseParticleInstance({ controlpoint1: "10 20 0", controlpointangle3: "0 0 1" });
     expect(instance.controlpoints[1]).toEqual([10, 20, 0]);
     expect(instance.controlpointAngles[3]).toEqual([0, 0, 1]);

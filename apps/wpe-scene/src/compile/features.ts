@@ -20,11 +20,10 @@ import {
   type SceneObject,
   type SceneValue,
 } from "./model";
-import { isKeyframedValue, isScriptValue, isUserBinding } from "./bindings";
+import { isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
 import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
-  instanceVector,
   PARTICLE_SYSTEM_KEYS,
   particleModuleEntries,
   readParticleSystem,
@@ -387,9 +386,13 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
  * - `alpha`、`size`、`count`、`speed`、`lifetime`、`rate`：已实现（静态值与 `{user}`，就地更新），不报；`id` 是编辑器键。
  * - `brightness`：只在 HDR 且没有 bit3 时生效（乘实例颜色，没实现），这时取非默认值报 `particle:instance:brightness`；
  *   LDR 或有 bit3 时中性。绑了用户属性时 `bundle.ts` 把它登记成重编译目标，改成非默认值后由这里报。
- * - `color`、`colorn`：没有 bit3、且设了值（`r ≥ 0`，WPE 只看第一个分量，`0x14022bd9f`；或绑了用户属性）时报
- *   `particle:instance:colorn`。生效还要与系统颜色差 0.0035 以上，系统颜色的来源没读到，HSV 路径也没读全，所以 `"1 1 1"`
- *   也照报。
+ * - `color`、`colorn`（P4b 步骤 6，rea-p4b-render.md 7.1、7.3、7.4）：已实现（`particles/colorn.ts`）。`color`（0–255）加载时
+ *   ÷255 后 `%.5f` 转成 `colorn`；生效要已设（r ≥ 0）、不是三个分量都和系统色（从颜色模块推出）差 < 0.9/255、系统 flags
+ *   没有 bit3；生效后颜色模块按 HSV 差平移，场景 `version` < 5 或没有颜色模块（`0x200000`）时新粒子再乘 `colorn`。静态值与
+ *   `colorn` 的 `{user}` 都不报（就地更新）。没有 bit3 时下面两种 WPE 的处理没读到（语料 0 处），照报：
+ *   - `color` 绑了用户属性：`particle:instance:color:user`（属性值怎么 ÷255 没读到）；
+ *   - `colorn` 的 `{user: {name, condition}}`：`particle:instance:colorn:condition`（布尔值怎么转颜色没读到）。
+ *   `brightness`（HDR 时乘实例颜色）见上条；子系统不生效的传递属 P4e（`particle:children` 照报）。
  * - `controlpoint0..7`、`controlpointangle0..7`：`particle:instance:controlpoint`（P4c）。
  * - 挂了 `{script}`：`particle:binding:instance:<键>`（脚本名 `instance`，P4f）。
  * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `scanValue` 报。
@@ -411,10 +414,11 @@ export function checkParticleInstance(
     if (value === null || value === undefined || key === "id") continue;
     if (isScriptValue(value)) unsupported.add(`particle:binding:instance:${key}`);
     if ((INSTANCE_FIELDS as readonly string[]).includes(key)) continue;
-    if (key === "color" || key === "colorn") {
-      const color = instanceVector(value);
-      if (colorOverride && (isUserBinding(value) || (color !== null && color[0] >= 0)))
-        unsupported.add("particle:instance:colorn");
+    if (key === "color") {
+      if (colorOverride && isUserBinding(value)) unsupported.add("particle:instance:color:user");
+    } else if (key === "colorn") {
+      if (colorOverride && userBindingOf(value as SceneValue)?.condition !== undefined)
+        unsupported.add("particle:instance:colorn:condition");
     } else if (/^controlpoint(?:angle)?[0-7]$/.test(key)) unsupported.add("particle:instance:controlpoint");
     else unsupported.add(`particle:instance:${key}`);
   }
