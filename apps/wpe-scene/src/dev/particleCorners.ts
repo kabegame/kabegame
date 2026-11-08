@@ -195,7 +195,8 @@ export function replayParticleOptions(replay: ParticleReplay | undefined): Parti
 }
 
 /**
- * 按 dt 序列回放粒子：前 n−1 帧只步进粒子，返回最后一帧的 `g_Time` 与 `g_Frametime`，由调用方 `update`（它会步进最后一帧）。
+ * 按 dt 序列回放粒子：前 n−1 帧只步进粒子，返回最后一帧的 `g_Time` 与 `g_Frametime`，由调用方先 `stepParticles` 步进最后一帧、
+ * 再 `update`（P4c 步骤 4 起 `update` 不步进粒子）。
  * 每帧的 `g_Time` 取 `times`，没给时是 dt 的累计值（double）；同一个值也作粒子的场景时间 `T`。没有回放时时间取 `time`、
  * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是每帧光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心。
  */
@@ -273,7 +274,10 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
     });
     try {
       const { time, frametime } = replayParticles(scene, state, options.particles);
+      // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
+      // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算
       scene.sync(state);
+      scene.stepParticles(frametime, time, state, [0.5, 0.5]);
       scene.update(
         { time, frametime, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5], cursor: [0.5, 0.5] },
         state,

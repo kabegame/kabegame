@@ -8,6 +8,7 @@
  *   恢复后 `g_Time` 从冻结处继续（见 `clock.ts`）。暂停期间画布尺寸变了会补画一帧（同一时刻），避免空白。
  *   帧时间照 WPE 钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（T2，`FrameClock`）。粒子每个实时帧按帧时间步进一次，
  *   operator 的遍数由 `maxFps` 定（`particlePasses`：1–20 两遍，否则一遍，对应 WPE 的 `fps` 设置，P4a 步骤 4）。
+ *   一帧的顺序（P4c 步骤 4）：`sync` → 步进粒子 → 脚本（`beforeFrame`）→ `sync` → 写每帧 uniform → 编码，粒子先于脚本，同 WPE。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
@@ -70,7 +71,7 @@ export interface SceneRendererOptions {
   onError?: (reasons: string[]) => void;
   /** 设备丢失（非 `destroy()` 引起），渲染已停止；调用方可以重建渲染器。 */
   onLost?: (reasons: string[]) => void;
-  /** 每个实际渲染帧在状态同步前执行；暂停时不执行。 */
+  /** 每个实际渲染帧在粒子步进之后、第二次状态同步之前执行（P4c 步骤 4，见 `render`）；暂停时不执行。 */
   beforeFrame?: (dt: number) => void;
 }
 
@@ -497,20 +498,33 @@ export class SceneRenderer {
     if (live) this.frameClock.advance(this.clock.seconds());
     else this.frameClock.hold();
     const { time, frametime } = this.frameClock;
+    const wrapped = time % TIME_WRAP_SECONDS;
+    // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上
+    const cursor = this.cursorOf(this.placement);
+    // 粒子先于脚本（P4c 步骤 4）：WPE 一帧里先模拟粒子、后跑脚本，模拟用的对象变换是本帧脚本运行之前的（依据见
+    // `GpuScene.stepParticles`）。步进之前先 `sync`：两帧之间写进状态的属性改值（`instanceoverride` 等）这一帧就进模拟器。
+    // 补画帧帧时间为 0，`stepParticles` 只记 cursor 就返回
+    try {
+      scene.sync(state);
+      scene.stepParticles(frametime, wrapped, state, cursor);
+    } catch (error) {
+      this.fail(reasonsOf(error, "render:frame"));
+      return;
+    }
+    // 脚本在 try 外（同以前）：脚本自己的错误不走 `render:frame` 退回
     if (live) this.options.beforeFrame?.(frametime);
     const encoder = device.createCommandEncoder({ label: "scene frame" });
     try {
-      // 就地改过的状态先刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量与粒子（P3a、P4a）
+      // 脚本写回的状态再刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a、P4a）
       scene.sync(state);
       scene.update(
         {
-          time: time % TIME_WRAP_SECONDS,
+          time: wrapped,
           frametime,
           daytime: daytimeOf(new Date()),
           pointer: this.pointer,
           pointerLast: this.pointerLast,
-          // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上
-          cursor: this.cursorOf(this.placement),
+          cursor,
         },
         state,
       );

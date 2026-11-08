@@ -14,9 +14,11 @@
  * - 指针点（`flags` bit0，P4c 步骤 2，1.6）：每帧的平移是「光标下的场景点」`F`（渲染器按壁纸样式把画布指针换成场景纹理坐标，
  *   再由 `pointerScenePoint` 照 WPE 反投影到 z = 0），`offset` 被丢弃、3×3 是单位阵；本地系统再乘 `inverse(W)`，世界系统直接用。
  *
+ * - 世界空间系统（系统 `flags` bit0，P4c 步骤 4，rea-p4c-sim.md 5.2）：缺省更新是 `current = W·base`（控制点 0 忽略 bit1），
+ *   指针点是 `(X, Y, 0)`、不乘 `W`，和本地分支在同一个函数里（`FUN_14022a070`、1.6）。
+ *
  * 不做：父控制点（bit2、bit3，只对子系统有意义，P4e；顶层系统的 bit2 走缺省更新，只让实例覆盖不生效）；remap 写控制点
- * （`0x10000`，P4d）；`instanceoverride` 控制点的运行时改值（语料全是静态值，能力表报 `{user}`）。世界空间分支照 WPE 同一个
- * 函数写上，但世界空间整体在步骤 4，能力表照报 `particle:flags:world`。
+ * （`0x10000`，P4d）；`instanceoverride` 控制点的运行时改值（语料全是静态值，能力表报 `{user}`）。
  */
 import type { ParticleInstance, SceneControlPoint, SceneParticle } from "../compile/particles";
 import { invert, multiply, type Mat4 } from "../render/math";

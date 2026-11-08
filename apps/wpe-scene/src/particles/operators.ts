@@ -1,6 +1,6 @@
 /**
- * operator（P4a 步骤 3、P4b 步骤 3–4、P4c 步骤 3）。依据 `rea-p4a.md` B「operator」、`rea-p4b-modules.md` B4–B8、
- * `rea-p4c-sim.md` 第 4 节（读码【确】）与 `p4-particles-REPORT.md` 的实测核对：drag 的 `k0`、`oscillateposition` 的 ω 不乘 2π、
+ * operator（P4a 步骤 3、P4b 步骤 3–4、P4c 步骤 3–4）。依据 `rea-p4a.md` B「operator」、`rea-p4b-modules.md` B4–B8、
+ * `rea-p4c-sim.md` 第 4、5 节（读码【确】）与 `p4-particles-REPORT.md` 的实测核对：drag 的 `k0`、`oscillateposition` 的 ω 不乘 2π、
  * 两遍模式、y 偏移 `2π·R`、`sizechange` 乘 `instanceoverride.size`、`vortex` 的柱形 / 球形、`capvelocity` 的截速、
  * `controlpointattract` 的缺省钳制与 `threshold` 严格小于都实测过（乘 `k`、钳制、`speed` 的定量由 `ignore/p4/c3` 的回放与单步
  * 核对确认）。
@@ -55,10 +55,25 @@ export function blendFactor(blend: Blend, t: number): number {
 
 /**
  * `movement`：半隐式欧拉。`v' = v + g·h`，`x' = x + v'·h`，`v'' = v'·(1 − min(drag·k, 0.99999988))`。
- * 有上一步位置列（bit2）时开头把位置拷过去。`flags` bit0（重力按模型矩阵变换）能力表拦住。
+ * 有上一步位置列（bit2）时开头把位置拷过去。
+ *
+ * `flags` bit0 且系统不是世界空间时，重力先变换成 `g = Mᵀ·g`（P4c 步骤 4，rea-p4c-sim.md 5.4，汇编核对过
+ * `0x14023fde2`–`0x14023fe31`）：`M` 是模拟时的模型矩阵栈顶 `*(ctx+0x30)`，顶层系统就是 `W`（`context.model`，含缩放、不归一化），
+ * `FUN_1400dd7d0` 取它前三列的 xyz，`FUN_1401f87e0` 逐步 float32 算
+ * `x' = (g.y·m1 + g.x·m0) + g.z·m2`、`y' = (g.x·m3 + g.y·m4) + g.z·m5`、`z' = (g.x·m6 + g.y·m7) + g.z·m8`（列主序，即每列点乘
+ * `g`），在乘 `h` 之前。变换在 operator 解释器 `FUN_14023fbc0` 里，两遍模式每遍都做。效果：本地系统把世界方向转进对象本地；
+ * 世界系统不变换，`g` 直接是世界方向；`flags` 0 时两种系统都不变换（本地系统的重力随对象转）。
  */
-export function movement(fields: ParticleFields, { columns, count, h, k }: ParticleRunContext): void {
-  const gravity = fields.gravity as number[];
+export function movement(fields: ParticleFields, { columns, count, h, k, world, model }: ParticleRunContext): void {
+  let gravity = fields.gravity as number[];
+  if ((fields.flags as number) & 1 && !world) {
+    const [gx, gy, gz] = gravity;
+    gravity = [
+      f32(f32(f32(gy * model[1]) + f32(gx * model[0])) + f32(gz * model[2])),
+      f32(f32(f32(gx * model[3]) + f32(gy * model[4])) + f32(gz * model[5])),
+      f32(f32(f32(gx * model[6]) + f32(gy * model[7])) + f32(gz * model[8])),
+    ];
+  }
   const damping = f32(1 - Math.min(f32((fields.drag as number) * k), MAX_DAMPING));
   if (columns.previousPosition)
     for (let i = 0; i < 3; i++) columns.previousPosition[i].set(columns.position[i].subarray(0, count));
@@ -299,6 +314,8 @@ const AXIS_EPSILON = f32(0.001);
  * - 中心（P4c 步骤 1，`0x1402431be`–`0x14024322c`）：`FUN_14024f2d0` 拷出 `cp[controlpoint]` 的 current，`FUN_14022a120` 把
  *   平移的三个分量广播成三个寄存器，再 `addps` 上 `offset`。实测控制点带 `controlpointangle1 "1.5708 0 0"` 时粒子 z 一直为 0
  *   （3×3 不用）。
+ * - 世界空间系统（P4c 步骤 4，rea-p4c-sim.md 5.5）：中心是世界坐标的 `cp.t`（`W·base`），轴不变换，所以轴固定在世界；本地系统里
+ *   轴随对象转（绘制时乘 `W`）。
  * - `rsqrtps` 按精确值算。`L2 = 0`（粒子正好在中心或轴上）时 WPE 得 NaN，这里跳过这个粒子。不用 `R`。
  */
 export function vortex(fields: ParticleFields, { columns, count, k, controlPoints }: ParticleRunContext): void {

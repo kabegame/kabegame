@@ -231,7 +231,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         const samples: number[] = [];
         for (let i = 0; i < options.profile; i++) {
           const t0 = performance.now();
+          // 顺序同渲染器（P4c 步骤 4）：先步进粒子再写 uniform；探针没有脚本，两次 sync 之间没有改动，省掉第二次
           scene.sync(state);
+          scene.stepParticles(1 / 60, startTime + i / 60, state, pointer);
           scene.update(
             {
               time: startTime + i / 60,
@@ -260,9 +262,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         particleMs = scene.particleProfile();
         scene.profileParticles(false);
       }
-      // 粒子回放：前 n−1 帧只步进，最后一帧随 update 步进
+      // 粒子回放：前 n−1 帧在 replayParticles 里步进，最后一帧在这里先步进再写 uniform（顺序同渲染器，P4c 步骤 4）
       const { time, frametime } = replayParticles(scene, state, options.particles, startTime, pointer);
       scene.sync(state);
+      scene.stepParticles(frametime, time, state, pointer);
       scene.update({ time, frametime, daytime: 0.5, pointer, pointerLast: pointer, cursor: pointer }, state);
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
@@ -375,7 +378,8 @@ export async function hostRenderFrame(
   const device = renderer.device;
   const encoder = device.createCommandEncoder({ label: "probe host frame" });
   scene.sync(state);
-  // 帧时间 0：粒子不步进，读回的是当前状态
+  // 帧时间 0：粒子不步进，读回的是当前状态（`stepParticles` 只记下 cursor，同以前 `update` 里的那一步）
+  scene.stepParticles(0, time, state, [0.5, 0.5]);
   scene.update(
     { time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5], cursor: [0.5, 0.5] },
     state,

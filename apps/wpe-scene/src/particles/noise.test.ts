@@ -77,6 +77,7 @@ function context(columns: ParticleColumns, random: ParticleRandom, time: number)
     controlPoints: identityControlPoints(),
     world: false,
     basis: IDENTITY_BASIS,
+    model: IDENTITY_BASIS,
   };
 }
 

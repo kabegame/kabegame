@@ -55,6 +55,7 @@ function context(columns: ParticleColumns, extra: Partial<ParticleRunContext> = 
     controlPoints: identityControlPoints(),
     world: false,
     basis: IDENTITY_BASIS,
+    model: IDENTITY_BASIS,
     ...extra,
   };
 }

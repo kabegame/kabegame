@@ -22,6 +22,9 @@
  *
  * 控制点（P4c 步骤 1、2）是系统的一份状态（`controlpoints.ts`）：建系统时按 JSON 的 `offset` 与静态 `instanceoverride` 定基准，
  * 每帧按对象世界矩阵 `W` 与指针的跟随点（`step` / `prewarm` 的 `inputs`，渲染器按父链与壁纸样式算）更新，模块经执行上下文读。
+ * 同一个 `W` 也是模拟时的模型矩阵 `M`（执行上下文的 `model`，`movement` 的 `flags` bit0 用）。
+ * 世界空间（系统 `flags` bit0，P4c 步骤 4，rea-p4c-sim.md 第 5 节）只是坐标系的切换：控制点是 `W·base`，出生点经控制点的 3×3
+ * 进世界坐标（`origin` 不经 `W`），之后对象移动、旋转，已发出的粒子留在原地；绘制时模型矩阵是单位阵（渲染器负责）。
  * 子系统不在这里。
  * 表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
  */
@@ -217,6 +220,8 @@ export class ParticleSystem {
       controlPoints: this.controlPoints,
       world: (def.flags & 1) !== 0,
       basis: IDENTITY_BASIS,
+      // 每帧由 `advance` 按 `inputs.world` 写（本系统独占一份，不和别的系统共用）
+      model: new Float32Array(IDENTITY_BASIS),
     };
   }
 
@@ -297,8 +302,9 @@ export class ParticleSystem {
    * `time` 是本帧的 `g_Time`（已加上本帧钳过的帧时间、已按 432000 回绕，P4b 步骤 4 的场景时间 `T`），舍入成 float32 给噪声类
    * 模块（WPE 的 `ctx+0x130` 是场景时间的 float 副本）；`T` **不乘** `rate`（`rate` 只缩放 `dt'` 与 `timescale`）。
    * 不给时用本系统收到的帧时间之和（double 累加、同样回绕），即从 0 起步的 `FrameClock`：渲染器、`particleTrack` 都显式传，
-   * 缺省只给单测用。`inputs` 是本帧控制点更新的输入：对象世界矩阵 `W`（P4c 步骤 1，渲染器每帧按 `SceneState` 沿父链算）和
-   * 指针的跟随点（P4c 步骤 2，场景坐标，渲染器每帧按本帧的光标反投影，用的是本帧的指针）；缺省（单位阵、(0, 0)）只给单测用。
+   * 缺省只给单测用。`inputs` 是本帧控制点更新的输入：对象世界矩阵 `W`（P4c 步骤 1，渲染器每帧按 `SceneState` 沿父链算，
+   * 取的是本帧脚本运行之前的状态，P4c 步骤 4；同时是模拟用的模型矩阵，`movement` 的 `flags` bit0 用）和指针的跟随点
+   * （P4c 步骤 2，场景坐标，渲染器每帧按本帧的光标反投影，用的是本帧的指针）；缺省（单位阵、(0, 0)）只给单测用。
    */
   step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
@@ -340,9 +346,12 @@ export class ParticleSystem {
     this.sequenceFrames();
     // O1 第 5 步（`0x1402376fe`）：序列帧（`0x140237022`）之后、发射之前，两遍模式也只一次
     this.controlPoints.update(inputs);
+    const context = this.context;
+    // 模拟时的模型矩阵 `M`（rea-p4c-sim.md 1.4，顶层系统就是 `W`）：取前三列的 xyz，同 `FUN_1400dd7d0`（P4c 步骤 4）
+    const w = inputs.world;
+    context.model.set([w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]]);
     this.emit(dt);
     const { h, k } = operatorPass(dt, frameDt, passes);
-    const context = this.context;
     context.count = this.highWater;
     context.h = h;
     context.k = k;

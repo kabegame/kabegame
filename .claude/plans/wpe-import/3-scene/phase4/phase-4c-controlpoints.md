@@ -767,15 +767,149 @@ for (const module of modules) {
 
 ## 步骤 4 — 世界空间
 
-- **修改** 模拟器：系统 `flags` bit0 时，出生位置、速度、控制点按步骤 0 读到的方式进世界空间；`movement` 的 `flags` bit0 一并放开。
-- **修改** `render/scene.ts`：世界空间系统绘制时不乘对象世界矩阵，只乘视图投影。
-- **修改** `GpuScene`：每帧把粒子层的世界矩阵交给模拟器（父链变化、脚本改对象变换都要跟上）。
-- **修改** 能力表：去掉 `particle:flags:world`。
+> 2026-11-08 按 rea-p4c-sim 第 5 节、步骤 0 的实测和预研回放（`ignore/p4/c4/prestudy.test.ts`，结果 `out/prestudy.txt`；挡住的场景 `world_unlock.py`）写成可以直接派发的版本。直接在 `apps/wpe-scene` 里做。
 
-**验收：**
-- `proj/p4c-world` 回放：对象移动、旋转时，世界空间系统已发出的粒子留在原地，本地空间对照组跟着走，两组都和 WPE 逐帧比。
-- 变异检查：出生时不乘世界矩阵、绘制时多乘一次、速度不变换，各有测试失败。
-- 语料变化逐条解释，现有画面哈希不变。
+### 思路
+
+世界空间是坐标系的切换。步骤 1、2 已经把模拟侧写好了大半：
+- 控制点的世界分支 `current = W·base`（控制点 0 忽略 `flags 2`）；
+- 指针点的世界分支 `(X, Y, 0)`，不乘 `W`；
+- 发射器在世界系统里用控制点的 3×3 旋转出生点，`origin` 不经 `W`；
+- initializer 的 `M` 是控制点的 3×3。
+
+预研把这些直接放进模拟器回放，静态对象上的世界空间系统都和 WPE 对上（差 ≤ 0.02，`vortex` 0.11）。`p4c-ptr` 里的 `p-world`（世界空间 + 跟随指针，窗口内出生的 49 个粒子）差 ≤ 0.025。本步补上剩下的四件事。
+
+**一、WPE 先模拟粒子、后跑脚本。** 预研里 `w-stay-*` 的对象由脚本每帧平移、旋转。按「第 N 帧用第 N 帧的对象变换」回放，世界空间粒子差 2.54 像素，正好是对象一帧的位移。按「用第 N − 1 帧的」回放，差 0.016。同时两件事已经确认：
+- 日志里脚本读到的 `engine.runtime` 和同一帧着色器的 `g_Time` 完全相等（929 帧都是 15.488633）；
+- P3b 测过，脚本写的变换当帧就作用到图层上。
+
+所以不是脚本时钟慢一帧，而是 WPE 在一帧里先模拟粒子，再跑脚本。粒子拿到的是本帧脚本运行之前的对象变换。我们现在的顺序相反（`beforeFrame` 跑脚本，`GpuScene.update` 里步进粒子）。本步把粒子步进挪到脚本之前。
+
+这个顺序对本地系统同样成立：模拟用的 `W` 只在 `flags 2` 和指针点上起作用；绘制照旧用当帧（脚本之后）的对象矩阵。可见性判断也跟着用脚本之前的状态，和「先模拟」一致（没有实测）。属性改值的延迟不变：步进之前先 `sync` 一次，把两帧之间写进 `SceneState` 的属性改值推给模拟器，脚本跑完再 `sync` 一次。
+
+**二、绘制时模型矩阵是单位阵。** WPE 绘制世界空间系统时，把模型矩阵栈顶整个换成 `ctx+0xaf0`（5.3），平时是单位阵，所以只乘 `V`、`P`。`particleUniformValues` 里和模型有关的量（`g_ModelMatrix`、`g_ModelViewProjectionMatrix` 及其逆）都从传入的 `world` 派生，世界空间系统传单位阵即可。对象之后移动、旋转，已经发出的粒子留在原地。
+
+**三、`movement` 的 `flags` bit0。** 本地系统里，重力在用之前先变换成 `g = Mᵀ·g`（5.4），`M` 是模拟用的 `W`，含缩放、不归一化。世界系统不变换。预研里 `w-grav1-l` 差 1.7e3，就是因为这一项没做。语料里没人写这个字段，按读码实现，靠 `w-grav1-l` 回放核对。
+
+**四、能力表放开** `particle:flags:world` 和 `movement` 的 `flags` bit0。
+
+几个关键决定：
+- **改顺序，不锁存矩阵。** 另一种做法是脚本之前把每个粒子层的 `W` 存一份，模拟时用存下的。改顺序更贴近实测到的机制，可见性也自然一致，也不用多存状态。代价是 `GpuScene.update` 不再步进粒子，调用方要显式先调 `stepParticles`：渲染器一处，dev 探针两处。
+- **组合层里的世界空间系统不处理。** WPE 在组合层离屏渲染时把 `ctx+0xaf0` 临时设成当时的模型矩阵（5.3）。我们没有这条路径（`model:passthrough` 等照报）。
+- **加载时的预热照旧用建场景时的 `W`。** 加载期脚本 `init` 和预热谁先谁后没有实测。
+- **不解锁新场景。** 报 `particle:flags:world` 的 21 张场景各自还有 18 项以上别的不支持项。`movement` 的 `flags` 语料里 0 处。
+
+### 现状锚点
+
+**v. 粒子在脚本之后步进**（`render/renderer.ts`，`render`）
+```ts
+if (live) this.options.beforeFrame?.(frametime); // 现状：脚本先跑，写回 SceneState
+// …
+scene.sync(state);
+scene.update({ time, frametime, /* … */ cursor: this.cursorOf(this.placement) }, state); // 现状：update 里步进粒子，读的是脚本之后的 W
+scene.encode(encoder, state);
+```
+```ts
+// render/scene.ts
+update(frame: FrameInput, state?: SceneState): void {
+  this.stepParticles(frame.frametime, frame.time, state, frame.cursor); // 现状：步进在 update 里
+  // … 写每帧 uniform
+}
+```
+
+**w. 绘制总乘对象世界矩阵**（`render/scene.ts`，`uniformValues`）
+```ts
+const common = {
+  world: worldMatrixOf(layer.object, state.layers, worlds), // 现状：世界空间系统也乘
+```
+
+**x. `movement` 的 `flags` 只认 0**（`particles/modules.ts`）
+```ts
+// bit0：系统非世界空间时重力按模型矩阵转置变换，没实测
+flags: int(0, zeroOnly),
+```
+执行上下文里也没有模拟用的 `W`（`ParticleRunContext` 只有控制点、`world` 标志和发射器的 `basis`）。
+
+**y. 能力表报世界空间**（`compile/features.ts`）
+```ts
+if (flags & 1) unsupported.add("particle:flags:world");
+```
+
+### 点 1 — 帧顺序（`render/renderer.ts`、`render/scene.ts`、`dev/`）
+
+- **修改** `GpuScene.update`：去掉开头的 `stepParticles` 调用，只写每帧 uniform。注释写明「粒子由调用方在脚本之前先 `stepParticles`」。
+- **修改** `SceneRenderer.render`（都在原 `try` 里）：
+```ts
+const cursor = this.cursorOf(this.placement);
+scene.sync(state);                                                       // 新增：两帧之间的属性改值先推给模拟器
+scene.stepParticles(frametime, time % TIME_WRAP_SECONDS, state, cursor); // 新增：粒子先于脚本（P4c 步骤 4 预研）
+if (live) this.options.beforeFrame?.(frametime);                         // 修改：挪到步进之后
+scene.sync(state);                                                       // 不变：脚本写回
+scene.update({ /* … */ cursor }, state);                                 // 修改：不再步进
+```
+  补画帧 `frametime` 为 0，`stepParticles` 照旧只记 `cursor` 就返回。`beforeFrame` 抛错的处理和现在一样（它原本在 `try` 外，挪进来后不能让脚本错误走 `render:frame` 退回；保持在 `try` 外也可以，前提是顺序对）。
+- **修改** `dev/probe.ts`（三处 `scene.update`）、`dev/particleCorners.ts`（`scene.update` 那一处）：先 `stepParticles` 再 `update`，顺序同渲染器。探针没有脚本，结果不变。
+- **修改** `stepParticles` 的注释：写明调用时机（脚本之前）和依据（预研：`w-stay-w` 本帧 2.54、上一帧 0.016，`engine.runtime` 等于 `g_Time`）。
+
+### 点 2 — 绘制矩阵（`render/scene.ts`）
+
+- **修改** `uniformValues`：粒子 draw 且系统 `flags & 1` 时 `world` 传单位阵，注释引 5.3（`ctx+0xaf0`）。本地系统不变。
+- 对象变换改了会标脏、重写 uniform。世界空间系统重写后仍是单位阵，不用特判。
+- `dev/particleCorners.ts` 如果自己用对象矩阵算四角，世界空间系统同样换成单位阵。
+
+### 点 3 — `movement` 的 `flags` bit0（`particles/modules.ts`、`particles/operators.ts`、`particles/system.ts`）
+
+- **修改** `ParticleRunContext` 加一项：
+```ts
+  /**
+   * 模拟用的模型矩阵 `M` 的 3×3（列主序，同 `ControlPoint.basis`），即本帧控制点输入的 `W`（rea-p4c-sim.md 1.4：顶层系统模拟时
+   * 模型矩阵栈顶就是 `W`）。`movement` 的 `flags` bit0 用（P4c 步骤 4）。
+   */
+  model: Float32Array;
+```
+  `ParticleSystem.advance` 每次从 `inputs.world` 取前三列的 xyz 写进去（预热每步同样）。
+- **修改** `movement`：
+```
+g = gravity（已乘 instanceoverride.speed）
+flags & 1 且 !world：g = Mᵀ·g   （FUN_1401f87e0：x' = (g.y·m1 + g.x·m0) + g.z·m2，y' = (g.x·m3 + g.y·m4) + g.z·m5，z' = (g.x·m6 + g.y·m7) + g.z·m8）
+之后照旧 gh = g·h …
+```
+  派发后先到 `ignore/p4/rea/wp.asm` 核对 `0x14023fde2`–`0x14023fe31`、`FUN_1400dd7d0`（取 3×3【推】）、`FUN_1401f87e0`：矩阵确实是模型栈顶、取的是哪 9 个分量、加法顺序；变换在乘 `h` 之前；两遍模式每遍都变换。和计划不符时按汇编改，并记下来。
+- **修改** 模块表 `movement.flags`：去掉 `zeroOnly`，改成 `(value & ~1) === 0`（其余位没有读者）。注释去掉「没实测」，写依据。
+
+### 点 4 — 能力表与注释（`compile/features.ts`、`particles/`）
+
+- **删除** `particle:flags:world` 那一行。系统 `flags` 的其它位按现状处理。
+- **修改** 注释里说「世界空间属步骤 4、能力表拦住」的地方（`ParticleRunContext.world`、`emitters.ts`、`controlpoints.ts` 的世界分支、`system.ts` 文件头、`checkParticleFeatures`），改成已实现。
+
+### 验收
+
+**单测：**
+- 帧顺序：渲染器在一帧里先步进粒子、再调 `beforeFrame`。在 `beforeFrame` 里改对象变换，这一帧模拟用的是改之前的 `W`，下一帧才用新的。能做成不起 GPU 的测试最好（假的 `GpuScene` 记录调用顺序，或者直接测 `GpuScene` 加脚本写回的组合）。属性改值（两帧之间写进 `SceneState` 的 `instanceoverride`）这一帧就进模拟器。
+- 绘制：世界空间系统的 `g_ModelMatrix` 是单位阵、`g_ModelViewProjectionMatrix` 等于视图投影；本地系统不变；对象变换改了以后世界空间系统的矩阵仍是单位阵。
+- `movement`：本地系统 `flags 1` 时重力是 `Mᵀ·g`（带旋转和缩放的 `W`，钉住每个分量和加法顺序）；世界系统 `flags 1` 不变换；`flags 0` 不变换；两遍模式每遍都变换。
+- 模拟（补现有用例里没覆盖的）：世界系统出生点 `= mat3(W·base)·q + (W·base.t + origin)`，`origin` 不经 `W`；`velocityrandom` 乘 `mat3(W·base)`（含缩放）；已发出的粒子在 `W` 变化后不动；`vortex` 的轴在世界系统里不随对象转。
+- 能力表：世界空间系统不再报；`movement` 的 `flags 1` 不报、`flags 2` 报。
+
+**回放**（新增 `ignore/p4/c4/replay.test.ts`，骨架照 `c3/replay.test.ts`，预研的 `prestudy.test.ts` 可以参考）：
+- `p4c-world-fps60`（帧 929–934，1 遍）：除 `w-ptr-w`、`w-ptr-l`（窗口之前的指针没有记录）外 13 个系统全部粒子逐个比，粒子数逐帧相同，限值和包络同前几步。`w-stay-*` 的对象变换按脚本公式逐帧算：`origin = (960 + 300·sin(0.5t), 540 + 150·sin(0.3t))`，`angles.z = 0.3t` 度；`t` 取日志的 `engine.runtime`，窗口内取轨迹的 `time`。第 N 帧给模拟器第 N − 1 帧的变换（第 1 帧给加载时的），就是渲染器新顺序下的输入。另跑一遍「第 N 帧用第 N 帧」的变体，确认它在 `w-stay-w` 上超限（钉住顺序）。
+- `p4c-ptr` 三组抓帧：把 `p-world` 加进比较（只比窗口内出生的），编译不支持项应为空。
+- 编译 `p4c-world` 的不支持项应为空。
+- 另用产品代码的 `particleTrack` 跑静态对象的系统，输出和手写循环逐位相同。
+- 旧回放在改动前后各跑一遍（改动前用 HEAD 导出的源码），输出逐字相同：`b3`、`b4`、`b6` 的拷贝，`c1` 的 `p4c-cp`，`c2` 的 `p4c-ptr`，`c3` 的 `p4c-attract`。这些系统都是本地空间、对象静态，结果不该变。
+
+**变异检查**（每处都要有用例或回放失败）：
+- 渲染器先跑脚本再步进；步进之前不 `sync`（属性改值晚一帧）；
+- 世界空间系统绘制时仍乘对象矩阵；
+- 发射器的 `origin` 经 `W`；旋转条件不看世界空间（只看 `controlpoint ≠ 0`）；`velocityrandom` 在世界系统里不乘 `M`；
+- `movement` 的 `flags 1` 对世界系统也变换；不变换；用 `M` 而不是 `Mᵀ`；`model` 不随帧更新（只用加载时的）；
+- 能力表仍报世界空间。
+
+**语料**（`c3/corpus.test.ts` 的做法，HEAD 导出对工作区）：去掉的键应只有 `particle:flags:world`（21 张），不新增键；干净场景 21 → 21。
+
+**画面哈希**（Claude 做，需要 dev 在跑）：10 张干净场景三档和步骤 3 的 `c3/out/hash-after.json` 相同。哈希走 dev 探针的固定时刻渲染，不经渲染器的帧循环，所以另外要在 dev 应用里确认带脚本的场景照常播放（Claude 用屏外宿主或预览看一张有脚本的干净场景，确认没有报错、画面在动）。
+
+**真机**：不解锁场景，不需要。dev 下可以用 `kabegame-dev-scene-force-render` 强制渲染一张世界空间场景看拖尾和跟随，可选。
 
 ## 步骤 5 — 拖尾与 `sprite` 几何
 
@@ -993,3 +1127,63 @@ Claude 独立验收：
 `a-default` 的长程超限用户接受（2026-11-08）：单步核对已经确定公式，不改包络、不重抓。
 
 工具在 `ignore/p4/c3/`：`scan_attract.py`、`attract_unlock.py`、`replay.test.ts`、`diag.test.ts`、`replay-b3/b4/b6/cp/ptr.test.ts`、`run_old.sh`、`cmp_old.py`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`mutate_default.py`、`consts.py`、`final.sh`、`claude_onestep.py`、`mutate_claude.py`、`run_old_claude.sh`、`cmp_corpus_claude.py`、`cmp_hash.py`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`（画面哈希 `out/hash-after.json`）。
+
+### 步骤 4 — 世界空间（2026-11-08）
+
+Claude 先用现有抓帧做预研回放，定下「粒子先于脚本」，再写计划；子代理实现，Claude 独立验收。没有补抓。
+
+**预研**（`ignore/p4/c4/prestudy.test.ts`，`out/prestudy.txt`）：`p4c-world` 的 `w-stay-*` 由脚本每帧平移、旋转对象。按「第 N 帧用第 N 帧的变换」回放，世界空间粒子差 2.54 像素，正好是对象一帧的位移；按「用第 N − 1 帧的」回放，差 0.016。日志里脚本读到的 `engine.runtime` 和同帧 `g_Time` 完全相等，P3b 测过脚本写的变换当帧作用到图层。所以 WPE 一帧里先模拟粒子、后跑脚本。静态对象上的世界空间系统，现有模拟侧已经对上。
+
+**改动**（`apps/wpe-scene/src`，20 个文件）：
+- **修改** `render/renderer.ts`：一帧的顺序改成 `sync` → `stepParticles` → 脚本（`beforeFrame`）→ `sync` → `update` → `encode`。前两步在一个 `try` 里，脚本仍在 `try` 外。
+- **修改** `render/scene.ts`：
+  - `update` 不再步进粒子；
+  - `uniformValues` 对世界空间系统用单位阵作模型矩阵；
+  - `stepParticles` 注释写明调用时机和预研依据。
+- **修改** `dev/probe.ts` 三处、`dev/particleCorners.ts` 一处：先 `stepParticles` 再 `update`。
+- **修改** `particles/`：
+  - 执行上下文加 `model`（模拟用 `W` 的 3×3），`advance` 每次（含预热每步）从控制点输入的 `W` 取前三列；
+  - `movement` 的 `flags` bit0：本地系统 `g = Mᵀ·g`；
+  - 模块表 `movement.flags` 放开 bit0。
+- **删除** `compile/features.ts` 报 `particle:flags:world` 那一行；各处「世界空间属步骤 4」的注释改成已实现。
+- **测试**：`render/particles.test.ts` 加 4 条（帧顺序、`beforeFrame` 里改变换这一帧用旧 `W`、帧间属性改值当帧生效、世界空间绘制矩阵），旧的步进写法换成 `stepFrame`；`simulator.test.ts` 加 6 条（`movement` 3 条、世界空间模拟 3 条）；其余手写执行上下文补 `model`。
+
+和计划不同、或计划没写、由代理按证据定的：
+- **重力变换核对过汇编**：
+  - `0x14023fde2` 测 `movement` 的 bit0，`0x14023fde9` 测系统 bit0；
+  - `0x14023fdef`–`0x14023fdf9` 取模型栈顶 `*(ctx+0x30)`；
+  - `FUN_1400dd7d0` 取 4×4 的 `[0..2]`、`[4..6]`、`[8..10]`（前三列 xyz，原先的【推】改为【确】）；
+  - `FUN_1401f87e0` 的加法顺序和计划一致，变换在乘 `h`（`[rbp+0x2008]`）之前，在 operator 解释器里，两遍模式每遍都做。
+
+  Claude 对过这几段。
+- **`movement.flags` 的解析**是 jsoncpp 无符号整数（`0x1401cb3ce`），执行段只测 bit0，其余位没找到读者，保守报。
+- **`GpuScene.update(frame, _state?)` 留了不再使用的参数**，`FrameInput.cursor` 也留着（`update` 不读），所有调用处不用改；以后可以删。
+- **`hostRenderFrame` 多调一次 `stepParticles(0, …)`**，保住以前 `update` 顺带记下 cursor 的副作用。
+- **c4 的 `replay-ptr.test.ts` 拷贝**把不支持项断言改成按环境变量，主输出才能在改动前后逐字节比较（同 c2 的 `replay-cp`）。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；47 个文件、1249 个用例全过（改动前 1239 个）；格式通过 |
+| `p4c-world` 回放（帧 929–934，第 N 帧用第 N − 1 帧的变换） | 编译不支持项为空；13 个系统（`w-ptr-*` 窗口前的指针没有记录，不比）各 30 个粒子，粒子数逐帧相同，差 / 限 0–0.587；`w-grav1-l` 从预研时的 1.73e3 降到 2.29e-2。「本帧变换」变体在 `w-stay-w` 上差 2.54、差 / 限 236，顺序被钉住。`particleTrack` 对照 390 个粒子逐位相同 |
+| `p4c-ptr` 回放（三组窗口，加上 `p-world`） | 编译不支持项为空；`p-world` 49 / 41 / 38 个粒子，差 / 限 0.62–0.67；其余系统和步骤 2 相同 |
+| 旧回放（HEAD 导出对工作区） | b3、b4、b6、c1 的 `p4c-cp`、c2 的 `p4c-ptr`、c3 的 `p4c-attract`，15 对输出逐字节相同（`p4c-attract` 两侧都有已接受的 `a-default` 超限） |
+| 变异检查（代理，15 + 4 处） | 全部检出，`out/mutate.txt` |
+| 语料 | 只去掉 `particle:flags:world`（21 张，34 个世界空间系统），没有新增；`movement` 的 `flags` 两侧 0 张；干净场景 21 → 21 |
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | `apps/wpe-scene/src` 20 个文件和 `ignore/p4/c4/`；没有 git 写操作。工作区里 skills、`apps/kabegame-dev-mcp`、`scripts/`、`cocs/`、`AGENTS.md`、`deno.lock` 等的改动是别的会话的 |
+| 读码对照 | 渲染器顺序、绘制矩阵、`model` 取列、`movement` 的条件与运算顺序和计划、rea 5.3 / 5.4 及汇编一致 |
+| tsc、vitest、Prettier（自跑） | 0 error；47 个文件、1249 个用例全过；格式通过 |
+| `p4c-world` / `p4c-ptr` 回放（自跑） | 输出和代理的逐字节相同 |
+| 变异检查（Claude 4 处，和代理不重复，`mutate_claude.py`） | 绘制判断写成 `flags & 4`、`movement` 判断写成 `flags & 2`、渲染器步进时光标固定在中心，3 处检出；「预热时不更新 `model`」起初没检出（那条单测名为「预热按加载时的」，实际没钉住），Claude 在 `simulator.test.ts` 那条用例里补了预热断言（`starttime 0.1` 两步，第一个粒子速度 `Mᵀ·g·0.1`，用例数不变）后检出。源码树哈希前后相同，`out/mutate-claude.txt` |
+| 旧回放（自跑改后一侧，对代理的改动前输出） | 14 对逐字节相同，`out/run-old-claude.log` |
+| 语料（自跑工作区，对代理的 HEAD） | 和代理的工作区结果逐字节相同 |
+| 画面哈希（kabegame-dev 任务表，屏外宿主，宿主按 `--mode development` 重建，入口 `index--c4joQgu.js`） | 10 张干净场景 × 三档，30 组和步骤 3（`c3/out/hash-after.json`）全部相同；没碰主窗口，前后路由不变 |
+| 应用里的帧循环 | **没确认成**：屏外宿主里 `requestAnimationFrame` 不发（1 秒 0 次，Chromium 停发视口外 iframe 的 rAF），时钟停在第一帧，解除暂停也一样，和改动无关。帧顺序由驱动真实 `SceneRenderer.render`（假 GPU）的单测钉住。要在应用里看，得开主窗口预览 |
+
+工具在 `ignore/p4/c4/`：`prestudy.test.ts`、`world_unlock.py`、`replay.test.ts`、`replay-b3/b4/b6/cp/ptr/attract.test.ts`、`run_old.sh`、`cmp_old.py`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`movement_parse.py`、`mutate_claude.py`、`run_old_claude.sh`、`cmp_corpus_claude.py`、`scripted_clean.py`、`hash_run.ts`、`cmp_hash.py`、`live_check.ts`、`live_gate.ts`、`live_unpause.ts`、`live_raf.ts`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`（画面哈希 `out/hash-after.json`）。

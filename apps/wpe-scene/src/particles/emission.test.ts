@@ -256,6 +256,7 @@ describe("boxrandom（A4）", () => {
       controlPoints: identityControlPoints(),
       world: false,
       basis: IDENTITY_BASIS,
+      model: IDENTITY_BASIS,
     };
     boxRandom(fields, context);
     return {
@@ -409,6 +410,7 @@ describe("控制点（P4c 步骤 1，rea-p4c-sim.md 第 3 节）", () => {
     controlPoints,
     world,
     basis: IDENTITY_BASIS,
+    model: IDENTITY_BASIS,
   });
   const read = (columns: ParticleColumns) => ({
     pos: [0, 1, 2].map((i) => columns.position[i][0]),

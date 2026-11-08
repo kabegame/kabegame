@@ -385,7 +385,10 @@ export function particleBuiltins(sheet?: SceneSpriteSheet | null): Record<string
 export interface ParticleUniformInput {
   /** 粒子对象的当前状态（颜色组取自身的值，不继承）。 */
   layer: LayerState;
-  /** 对象的世界矩阵（`layout.ts` 的 `worldMatrixOf`，沿父链累乘）。 */
+  /**
+   * 模型矩阵：本地系统是对象的世界矩阵（`layout.ts` 的 `worldMatrixOf`，沿父链累乘）；世界空间系统（系统 `flags` bit0，
+   * P4c 步骤 4）是单位阵，由调用方（`GpuScene.uniformValues`）选。
+   */
   world: Mat4;
   /** 粒子材质 pass 的材质常量（`SceneState.constants.get(pass.key)`）。 */
   constants: Record<string, number[]>;
@@ -402,8 +405,9 @@ export interface ParticleUniformInput {
 }
 
 /**
- * 粒子绘制的全部静态 uniform：`g_ModelViewProjectionMatrix` = 视图投影 × 对象世界矩阵，`g_ModelMatrix` 是世界矩阵
- * （粒子位置在对象空间里）；粒子专用的见 `particleBuiltins`（帧表的 `g_RenderVar1` 取 `sheet`）；材质常量覆盖。
+ * 粒子绘制的全部静态 uniform：`g_ModelViewProjectionMatrix` = 视图投影 × `world`，`g_ModelMatrix` 及各逆矩阵都从 `world` 派生
+ * （本地系统的粒子位置在对象空间里，`world` 是对象世界矩阵；世界空间系统的位置已是世界坐标，`world` 是单位阵）；粒子专用的见
+ * `particleBuiltins`（帧表的 `g_RenderVar1` 取 `sheet`）；材质常量覆盖。
  * 建 draw 与就地刷新共用，同 `drawUniformValues`。
  */
 export function particleUniformValues(input: ParticleUniformInput): Record<string, number[]> {
@@ -438,7 +442,8 @@ export interface FrameInput {
   pointerLast: [number, number];
   /**
    * 光标下的场景纹理坐标（`render/layout.ts` 的 `sceneCursor`），控制点跟随指针用（P4c 步骤 2）。和 `pointer`
-   * （`g_PointerPosition`）不是一个量：`fill` 下前者是光标下的场景点，后者是画布坐标。`frameBuiltins` 不读它。
+   * （`g_PointerPosition`）不是一个量：`fill` 下前者是光标下的场景点，后者是画布坐标。`frameBuiltins` 与 `GpuScene.update` 都不读
+   * 它：P4c 步骤 4 起粒子在脚本之前由 `GpuScene.stepParticles` 步进，渲染器把同一个值交给那里，这一项只是记下这一帧的值。
    */
   cursor: [number, number];
 }

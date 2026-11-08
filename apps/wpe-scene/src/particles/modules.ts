@@ -164,8 +164,17 @@ export interface ParticleRunContext {
    * `previous`。
    */
   controlPoints: ControlPointSet;
-  /** 系统 `flags` bit0（世界空间）：发射器据此决定出生点旋不旋。步骤 4 之前能力表拦住，恒为 false。 */
+  /**
+   * 系统 `flags` bit0（世界空间，P4c 步骤 4，rea-p4c-sim.md 第 5 节）：粒子存世界坐标。发射器据此决定出生点旋不旋，
+   * `movement` 的 `flags` bit0 据此决定重力变不变换。
+   */
   world: boolean;
+  /**
+   * 模拟用的模型矩阵 `M` 的 3×3（列主序，同 `ControlPoint.basis`），即本帧控制点输入的 `W`（rea-p4c-sim.md 1.4：顶层系统模拟时
+   * 模型矩阵栈顶就是 `W`）。模拟器每帧（预热每步同样）从 `inputs.world` 的前三列取 xyz 写进来；`movement` 的 `flags` bit0
+   * 用（P4c 步骤 4，`FUN_1400dd7d0` 取的就是这 9 个分量）。
+   */
+  model: Float32Array;
   /**
    * 发射这个粒子的 emitter 的控制点 3×3（`mat3(current)`，无条件，rea-p4c-sim.md 第 3 节）：emitter 写，initializer 当 `M`
    * 用（`velocityrandom`、`turbulentvelocityrandom`）。WPE 是 `FUN_14023b340` 的第三个参数，`sphererandom`、`boxrandom` 在进循环前
@@ -492,8 +501,10 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     fields: {
       gravity: by("speed", vec3("0 0 0")),
       drag: num(0),
-      // bit0：系统非世界空间时重力按模型矩阵转置变换，没实测
-      flags: int(0, zeroOnly),
+      // bit0（P4c 步骤 4）：系统非世界空间时重力按模型矩阵转置变换（`movement`）。解析是 jsoncpp 无符号整数
+      // （`FUN_140085f70`，`0x1401cb3ce`，存记录 `+0x1c`），执行段只 `test byte ptr [r14 + 0x1c], 0x1`（`0x14023fde2`），
+      // 其余位没找到读者，保守报
+      flags: int(0, (value) => (Number(value) & ~1) === 0),
     },
     columns: ["position", "velocity", "previousPosition"],
     columnFlags: 0,

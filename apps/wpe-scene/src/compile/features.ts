@@ -597,9 +597,11 @@ export function checkParticleProgram(
  * 粒子 JSON 的能力检查，规则从模块表（`particles/modules.ts`）生成。依据见各条注释，系统级键见 `particles.ts`。
  * - 表外模块：`particle:<类别>:<名字>`；表内模块的未知字段、形状不对或本节不支持的取值：`particle:<类别>:<名字>:<字段>`；
  *   写成 `{user}` / `{script}`：`particle:binding:<类别>:<名字>:<字段>`。
- * - 系统 `flags`（C3）：bit1–7 支持（bit1 唯一的读取点是关混帧，rea-p4b-render.md 2.3【确，有界】，P4b 步骤 2）；bit0 世界空间
- *   没实测，报 `particle:flags:world`；更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，`0x1401c56e9`，
- *   高位其实被丢掉；没有样本，保守报）。
+ * - 系统 `flags`（C3）：bit0–7 支持。bit0 世界空间（P4c 步骤 4，rea-p4c-sim.md 第 5 节，实测见报告「P4c 语义的实测核对」与
+ *   `ignore/p4/c4` 的回放）：模拟侧见 `particles/system.ts`，绘制时模型矩阵是单位阵（`render/scene.ts`）；组合层里的世界空间系统
+ *   WPE 另有一条路径（`ctx+0xaf0` 临时设成模型矩阵），我们没有组合层（`model:passthrough` 等照报）。bit1 唯一的读取点是关混帧
+ *   （rea-p4b-render.md 2.3【确，有界】，P4b 步骤 2）。更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，
+ *   `0x1401c56e9`，高位其实被丢掉；没有样本，保守报）。
  * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。
  * - 控制点：全部支持或中性（P4c 步骤 1、2，`particles/controlpoints.ts`：`offset`、`flags` bit0 指针、bit1 已实现，bit2 在顶层
  *   系统上只让实例覆盖不生效；`angles`、`locktopointer`、bit3、bit4 没有读者，理由见 `SceneControlPoint`），父控制点归 P4e
@@ -626,7 +628,6 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
   scanValue(system.controlpoint, unsupported);
   scanValue(system.children, unsupported);
   const { flags } = readParticleSystem(system);
-  if (flags & 1) unsupported.add("particle:flags:world");
   for (let bit = 8; bit < 32; bit++) if (flags & (1 << bit)) unsupported.add(`particle:flags:${(1 << bit) >>> 0}`);
   if (Array.isArray(system.children) && system.children.length > 0) unsupported.add("particle:children");
   for (const category of PARTICLE_CATEGORIES) {

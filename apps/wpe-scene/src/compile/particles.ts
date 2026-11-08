@@ -146,8 +146,9 @@ export interface SceneParticle {
   /** 预热时长（秒）：加载时一次跑完，步长按 `maxcount` 取 0.05 或 0.2（C1，实测核对过）。 */
   starttime: number;
   /**
-   * 系统 `flags`（整数）：bit1 关混帧（`SPRITESHEETBLEND = 0`，唯一的读取点，rea-p4b-render.md 2.3），bit2 透视覆盖、
-   * bit3–7 禁用对应的 `instanceoverride`（C3）；bit0 与更高位由能力表报。
+   * 系统 `flags`（整数）：bit0 世界空间（P4c 步骤 4：粒子存世界坐标，绘制时模型矩阵是单位阵），bit1 关混帧
+   * （`SPRITESHEETBLEND = 0`，唯一的读取点，rea-p4b-render.md 2.3），bit2 透视覆盖、bit3–7 禁用对应的 `instanceoverride`（C3）；
+   * 更高位由能力表报。
    */
   flags: number;
   /**

@@ -11,6 +11,8 @@
  * - 3×3 只在「世界空间或 `controlpoint ≠ 0`」时旋转出生点与回退方向（`emit` 第 496、825 行，`setne` 于 `0x140237ce3`、
  *   `0x14023852d`），所以本地系统的控制点 0 带角度时出生点不旋（实测 `cp0-angle`）；
  * - 但 3×3 总是交给 initializer 当 `M`（`context.basis`，`velocityrandom`、`turbulentvelocityrandom` 乘它）。
+ * 世界空间系统（P4c 步骤 4，rea-p4c-sim.md 5.2）里控制点是 `W·base`，所以出生点是 `mat3(W·base)·q + (W·base.t + origin)`：
+ * `origin` 是世界坐标里的直接偏移、不经 `W`（实测 `w-origin`），3×3 含 `W` 的旋转与缩放。
  */
 import { f32, lerp, mulBasis, PI, rcp, TWO_PI } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";

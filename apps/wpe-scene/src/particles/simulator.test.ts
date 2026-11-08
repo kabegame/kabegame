@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "../compile/model";
 import { parseParticle, type SceneParticle } from "../compile/particles";
-import { identity, translation } from "../render/math";
+import { identity, multiply, rotationX, rotationZ, scaling, translation } from "../render/math";
 import { allocatedCount, BASE_COLUMNS, columnCount, ParticleColumns } from "./columns";
 import { IDENTITY_BASIS, identityControlPoints } from "./controlpoints";
 import { emissionCount, emitterState, sphereRandom } from "./emitters";
@@ -75,6 +75,7 @@ function contextOf(columns: ParticleColumns, random: ParticleRandom, extra: Part
     controlPoints: identityControlPoints(),
     world: false,
     basis: IDENTITY_BASIS,
+    model: IDENTITY_BASIS,
     ...extra,
   } satisfies ParticleRunContext;
 }
@@ -393,6 +394,110 @@ describe("operator", () => {
     movement(op("movement", { drag: 1e6 }), contextOf(columns, new SeededRandom(), { h: 0.5, k: 0.5 }));
     expect(columns.velocity[0][0]).toBe(f32(10 * f32(1 - MAX_DAMPING)));
     expect(columns.velocity[0][0]).toBeGreaterThan(0);
+  });
+
+  describe("movement 的 flags bit0（P4c 步骤 4，rea-p4c-sim.md 5.4，汇编 0x14023fde2–0x14023fe31）", () => {
+    /** 跑一次 movement（h = 1、drag 0、速度从 0 起）：速度就是这一遍用的重力。 */
+    const gravityUsed = (module: JsonObject, world: boolean, model: Float32Array) => {
+      const columns = new ParticleColumns(4, 0);
+      movement(op("movement", module), contextOf(columns, new SeededRandom(), { h: 1, k: 0, world, model }));
+      return [0, 1, 2].map((i) => columns.velocity[i][0]);
+    };
+    /** W = T(960, 540)·Rz(0.7)·S(2, 3, 1) 的 3×3（列主序，同 `ParticleRunContext.model`）。 */
+    const W = multiply(translation(960, 540, 0), multiply(rotationZ(0.7), scaling(2, 3, 1)));
+    const MODEL = new Float32Array([W[0], W[1], W[2], W[4], W[5], W[6], W[8], W[9], W[10]]);
+    const close = (actual: number[], expected: number[]) =>
+      actual.forEach((value, i) => expect(value, `第 ${i} 项`).toBeCloseTo(expected[i], 3));
+
+    it("本地系统 flags 1：g = Mᵀ·g（每列点乘 g，含缩放、不归一化）；世界系统、flags 0 都不变换", () => {
+      const gravity = "10 -100 5";
+      const [c, s] = [Math.cos(0.7), Math.sin(0.7)];
+      // 第 0 列 (2c, 2s, 0)、第 1 列 (−3s, 3c, 0)、第 2 列 (0, 0, 1)
+      const transposed = [2 * c * 10 + 2 * s * -100, -3 * s * 10 + 3 * c * -100, 5];
+      close(gravityUsed({ gravity, flags: 1 }, false, MODEL), transposed);
+      // 对照：M·g（不转置）是另一个值
+      const straight = [2 * c * 10 - 3 * s * -100, 2 * s * 10 + 3 * c * -100, 5];
+      expect(Math.abs(straight[0] - transposed[0])).toBeGreaterThan(100);
+      // 世界系统：g 直接是世界方向；flags 0：两种系统都不变换
+      expect(gravityUsed({ gravity, flags: 1 }, true, MODEL)).toEqual([10, -100, 5]);
+      expect(gravityUsed({ gravity, flags: 0 }, false, MODEL)).toEqual([10, -100, 5]);
+      expect(gravityUsed({ gravity }, true, MODEL)).toEqual([10, -100, 5]);
+    });
+
+    it("加法顺序照 FUN_1401f87e0：x' = (g.y·m1 + g.x·m0) + g.z·m2，y'、z' 同理（逐步 float32，z 项最后加）", () => {
+      // 1e8 与 −1e8 先相消再加 1 得 1；z 项先和其中一个相加会被 1e8 吞掉（float32 在 1e8 附近的间距是 8），得 0
+      const model = new Float32Array([-1e8, 1e8, 1, 1e8, -1e8, 1, -1e8, 1e8, 1]);
+      expect(gravityUsed({ gravity: "1 1 1", flags: 1 }, false, model)).toEqual([1, 1, 1]);
+      // 同一个矩阵不转置（M·g）是 (−1e8, 1e8, 3)
+      expect([0, 1, 2].map((r) => f32(f32(f32(model[r]) + f32(model[3 + r])) + f32(model[6 + r])))).toEqual([
+        -1e8, 1e8, 3,
+      ]);
+    });
+
+    it("模拟器：两遍模式每遍都变换；model 每帧按本帧的 W 更新（预热按加载时的）", () => {
+      const json = (passes: 1 | 2) => ({
+        system: new ParticleSystem(
+          particle({
+            maxcount: 8,
+            emitter: [{ name: "sphererandom", distancemax: 0, rate: 20 }],
+            initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+            operator: [{ name: "movement", gravity: "10 -100 5", flags: 1 }],
+          }),
+          new SeededRandom(1),
+          passes,
+        ),
+      });
+      const velocity = (system: ParticleSystem, slot: number) => [0, 1, 2].map((i) => system.columns.velocity[i][slot]);
+      const [c, s] = [Math.cos(0.7), Math.sin(0.7)];
+      const transposed = [2 * c * 10 + 2 * s * -100, -3 * s * 10 + 3 * c * -100, 5];
+      for (const passes of [1, 2] as const) {
+        const { system } = json(passes);
+        system.prewarm({ world: identity(), pointer: [0, 0] });
+        system.step(0.1, undefined, { world: W, pointer: [0, 0] });
+        expect(system.highWater, `${passes} 遍`).toBe(2);
+        // 两遍各走 h = 0.05：每遍都是 Mᵀ·g，合起来 Mᵀ·g·0.1（只变换第一遍时是 (Mᵀ·g + g)·0.05）
+        close(
+          velocity(system, 0),
+          transposed.map((v) => v * 0.1),
+        );
+      }
+      // 下一帧换一个 W：新出生的按新的 W，已出生的这一帧也按新的 W 加速
+      const { system } = json(1);
+      system.prewarm({ world: identity(), pointer: [0, 0] });
+      system.step(0.1, undefined, { world: W, pointer: [0, 0] });
+      const W2 = multiply(rotationZ(-1.2), scaling(0.5, 4, 1));
+      system.step(0.1, undefined, { world: W2, pointer: [0, 0] });
+      const [c2, s2] = [Math.cos(-1.2), Math.sin(-1.2)];
+      const transposed2 = [0.5 * c2 * 10 + 0.5 * s2 * -100, -4 * s2 * 10 + 4 * c2 * -100, 5];
+      expect(system.highWater).toBe(4);
+      close(
+        velocity(system, 2),
+        transposed2.map((v) => v * 0.1),
+      );
+      close(
+        velocity(system, 0),
+        transposed.map((v, i) => (v + transposed2[i]) * 0.1),
+      );
+      // 预热也按加载时的 W 变换：starttime 0.1、步长 0.05 共两步，第一个粒子出生在第一步、两步各加 Mᵀ·g·0.05
+      // （预热时 model 还是单位阵的话是 g·0.1）
+      const warm = new ParticleSystem(
+        particle({
+          maxcount: 8,
+          starttime: 0.1,
+          emitter: [{ name: "sphererandom", distancemax: 0, rate: 20 }],
+          initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+          operator: [{ name: "movement", gravity: "10 -100 5", flags: 1 }],
+        }),
+        new SeededRandom(1),
+        1,
+      );
+      warm.prewarm({ world: W, pointer: [0, 0] });
+      expect(warm.highWater).toBe(2);
+      close(
+        velocity(warm, 0),
+        transposed.map((v) => v * 0.1),
+      );
+    });
   });
 
   it("angularmovement：无 blend 时 w' = w + f·h、rot += w'·h", () => {
@@ -890,5 +995,95 @@ describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.m
       }),
     ).toThrow();
     expect(() => particleTrack({ ...options, cursors: [[0, 0]] })).toThrow();
+  });
+});
+
+describe("世界空间（P4c 步骤 4，rea-p4c-sim.md 5.2、5.5）", () => {
+  /** W = T(960, 540)·Rz(π/2)·S(2, 2, 1)：第 0 列 (0, 2, 0)，第 1 列 (−2, 0, 0)。 */
+  const W = multiply(translation(960, 540, 0), multiply(rotationZ(Math.PI / 2), scaling(2, 2, 1)));
+  const pos = (system: ParticleSystem, slot: number) => [0, 1, 2].map((i) => system.columns.position[i][slot]);
+  const vel = (system: ParticleSystem, slot: number) => [0, 1, 2].map((i) => system.columns.velocity[i][slot]);
+  const close = (actual: number[], expected: number[]) =>
+    actual.forEach((value, i) => expect(value, `第 ${i} 项`).toBeCloseTo(expected[i], 2));
+  /**
+   * 控制点 0 的 offset (10, 20, 0)；发射器 origin (100, 0, 0)、方向 +x、距离 100（q = (100, 0, 0)）、速度 0；velocityrandom (50, 0, 0)。
+   * 没有 operator：位置只由出生决定。
+   */
+  const system = (flags: number, extra: JsonObject = {}) =>
+    new ParticleSystem(
+      particle({
+        flags,
+        maxcount: 8,
+        controlpoint: [{ offset: "10 20 0" }],
+        emitter: [
+          {
+            name: "sphererandom",
+            origin: "100 0 0",
+            directions: "1 0 0",
+            sign: "1 0 0",
+            distancemin: 100,
+            distancemax: 100,
+            rate: 20,
+          },
+        ],
+        initializer: [
+          { name: "lifetimerandom", min: 100, max: 100 },
+          { name: "velocityrandom", min: "50 0 0", max: "50 0 0" },
+        ],
+        operator: [],
+        ...extra,
+      }),
+      new SeededRandom(1),
+      1,
+    );
+
+  it("出生点 = mat3(W·base)·q + (W·base.t + origin)，origin 不经 W；velocityrandom 乘 mat3(W·base)（含缩放）", () => {
+    const world = system(1);
+    world.prewarm({ world: W, pointer: [0, 0] });
+    world.step(0.1, undefined, { world: W, pointer: [0, 0] });
+    expect(world.highWater).toBe(2);
+    // mat3(W)·(100, 0, 0) = (0, 200, 0)；W·(10, 20, 0) = (960 − 40, 540 + 20)；origin 直接加 (100, 0, 0)
+    close(pos(world, 0), [920 + 100, 560 + 200, 0]);
+    close(vel(world, 0), [0, 100, 0]);
+    // 本地系统同样的设置：控制点 0 不旋出生点，位置在对象空间（绘制时再乘 W）；速度仍乘控制点的 3×3（单位阵）
+    const local = system(0);
+    local.prewarm({ world: W, pointer: [0, 0] });
+    local.step(0.1, undefined, { world: W, pointer: [0, 0] });
+    close(pos(local, 0), [100 + 10 + 100, 20, 0]);
+    close(vel(local, 0), [50, 0, 0]);
+  });
+
+  it("已发出的粒子存世界坐标：W 变了不动，之后出生的按新的 W", () => {
+    const world = system(1);
+    world.prewarm({ world: W, pointer: [0, 0] });
+    world.step(0.1, undefined, { world: W, pointer: [0, 0] });
+    const before = pos(world, 0);
+    world.step(0.1, undefined, { world: translation(-500, 300, 0), pointer: [0, 0] });
+    expect(pos(world, 0)).toEqual(before);
+    expect(world.highWater).toBe(4);
+    close(pos(world, 2), [-500 + 10 + 100 + 100, 300 + 20, 0]);
+  });
+
+  it("vortex：世界系统里中心是 W·base.t、轴不变换（固定在世界）", () => {
+    // 对象绕 x 转 0.5：轴若随对象转，切向速度会带 z 分量
+    const tilted = multiply(translation(960, 540, 0), rotationX(0.5));
+    const world = system(1, {
+      controlpoint: [],
+      emitter: [
+        { name: "sphererandom", directions: "1 0 0", sign: "1 0 0", distancemin: 100, distancemax: 100, rate: 20 },
+      ],
+      initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+      operator: [
+        { name: "vortex", axis: "0 0 1", distanceinner: 50, distanceouter: 300, speedinner: 200, speedouter: 50 },
+      ],
+    });
+    world.prewarm({ world: tilted, pointer: [0, 0] });
+    world.step(0.1, undefined, { world: tilted, pointer: [0, 0] });
+    // Rx 不动 x 轴：出生在 (1060, 540, 0)，离中心 (960, 540, 0) 100，切向是 r̂ × z = −y
+    close(pos(world, 0), [1060, 540, 0]);
+    const [vx, vy, vz] = vel(world, 0);
+    expect(vz).toBe(0);
+    expect(Math.abs(vx)).toBeLessThan(1e-3);
+    expect(vy).toBeLessThan(-1);
   });
 });

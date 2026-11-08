@@ -701,7 +701,7 @@ describe("能力表：粒子", () => {
     ]);
   });
 
-  it("本节不支持的取值：emitter flags 带 bit3 以上，movement flags 非 0；delay、duration、controlpoint 任意值都支持", () => {
+  it("本节不支持的取值：emitter flags 带 bit3 以上，movement flags 带 bit0 以外的位；delay、duration、controlpoint 任意值都支持", () => {
     for (const name of ["sphererandom", "boxrandom"]) {
       const emitter = (fields: JsonObject) => particleKeys(withModule("emitter", { name, ...fields }));
       expect(emitter({ controlpoint: 0, delay: 0.5, duration: 2, flags: 7 }), name).toEqual([]);
@@ -713,9 +713,14 @@ describe("能力表：粒子", () => {
       expect(emitter({ flags: 8 })).toEqual([`particle:emitter:${name}:flags`]);
       expect(emitter({ flags: 0x80000000 })).toEqual([`particle:emitter:${name}:flags`]);
     }
-    expect(particleKeys(withModule("operator", { name: "movement", flags: 1 }))).toEqual([
-      "particle:operator:movement:flags",
-    ]);
+    // movement 的 flags（P4c 步骤 4）：bit0（本地系统重力按 Mᵀ 变换）支持，其余位没找到读者，保守报
+    const movement = (flags: unknown) => particleKeys(withModule("operator", { name: "movement", flags }));
+    expect(movement(0)).toEqual([]);
+    expect(movement(1)).toEqual([]);
+    for (const flags of [2, 3, 4, -1])
+      expect(movement(flags), String(flags)).toEqual(["particle:operator:movement:flags"]);
+    // 世界空间系统里写 flags 1 同样不报（WPE 照常解析，执行时不变换）
+    expect(particleKeys({ flags: 1, operator: [{ name: "movement", flags: 1 }] })).toEqual([]);
   });
 
   it("周期发射的字段有没有 bit2 都支持（P4b 步骤 3）", () => {
@@ -806,12 +811,10 @@ describe("能力表：粒子", () => {
     ).toBe(7);
   });
 
-  it("系统 flags：bit1–7 支持（bit1 只关混帧，P4b 步骤 2）；bit0 报 world，更高位逐位报十进制位值", () => {
-    for (const flags of [0, 2, 4, 6, 8, 16, 32, 64, 128, 252, 254])
+  it("系统 flags：bit0–7 支持（bit0 世界空间 P4c 步骤 4，bit1 只关混帧 P4b 步骤 2）；更高位逐位报十进制位值", () => {
+    for (const flags of [0, 1, 2, 4, 5, 6, 7, 8, 16, 32, 64, 128, 252, 254, 255])
       expect(particleKeys({ flags }), String(flags)).toEqual([]);
-    expect(particleKeys({ flags: 1 })).toEqual(["particle:flags:world"]);
-    expect(particleKeys({ flags: 7 })).toEqual(["particle:flags:world"]);
-    expect(particleKeys({ flags: 256 + 1024 + 4 })).toEqual(["particle:flags:1024", "particle:flags:256"]);
+    expect(particleKeys({ flags: 256 + 1024 + 5 })).toEqual(["particle:flags:1024", "particle:flags:256"]);
   });
 
   it("children 非空报 particle:children；null、[] 不报", () => {

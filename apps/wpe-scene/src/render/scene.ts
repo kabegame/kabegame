@@ -25,8 +25,9 @@
  *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。
  * - 粒子（P4a 步骤 4）：粒子层是计划里的 `particles` 步骤，和图像步骤按 `objects` 顺序混排、画在同一个场景 pass 里。
  *   每个粒子层一个 `ParticleSystem`（种子默认随机，探针可固定；建场景时预热），顶点缓冲按 `maxcount` 分配，索引缓冲全场一份、
- *   只建一次。`update` 按帧时间步进，`encode` 把列写成顶点、`writeBuffer` 后 `drawIndexed`。
- *   MVP = 视图投影 × 对象世界矩阵，`flags & 4` 换透视粒子的视图投影。混合、纹理、材质常量走和图像 pass 相同的路径。
+ *   只建一次。调用方每帧先 `stepParticles`（脚本之前，P4c 步骤 4）再 `update`，`encode` 把列写成顶点、`writeBuffer` 后
+ *   `drawIndexed`。MVP = 视图投影 × 模型矩阵：本地系统是对象世界矩阵，世界空间系统（`flags & 1`）是单位阵；`flags & 4` 换透视
+ *   粒子的视图投影。混合、纹理、材质常量走和图像 pass 相同的路径。
  *   帧表（P4b 步骤 2）：槽 0 的纹理带帧表时 `g_RenderVar1` 取它的 `sheet`，顶点多写 `a_TexCoordVec4C1`，帧数学在着色器里。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
@@ -67,7 +68,7 @@ import {
   sceneViewProjection,
   worldMatrixOf,
 } from "./layout";
-import type { Mat4 } from "./math";
+import { identity, type Mat4 } from "./math";
 import { createPipeline, createProgram, vertexPacking, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
@@ -1223,6 +1224,10 @@ export class GpuScene {
       const base = step.inputs[0];
       return particleUniformValues({
         ...common,
+        // 世界空间系统（系统 flags bit0，P4c 步骤 4）：粒子存世界坐标，WPE 绘制时把模型矩阵栈顶整个换成 `ctx+0xaf0`
+        // （`FUN_1402366f0`，`0x14023670c`–`0x140236748`，rea-p4c-sim.md 5.3），普通场景里是单位阵，所以只乘视图投影。
+        // 对象变换改了照样走这里重写，仍是单位阵
+        world: (layer.particle?.flags ?? 0) & 1 ? identity() : common.world,
         layer: layerState,
         viewProjection: step.perspective ? this.perspectiveViewProjection : this.viewProjection,
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
@@ -1406,12 +1411,10 @@ export class GpuScene {
   }
 
   /**
-   * 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。粒子按 `frame.frametime` 步进一帧
-   * （`stepParticles`）：`state` 给出时不可见的粒子层走 `suspend`（不发射、有存活粒子就清空），不给（只核对 uniform 的单测）
-   * 时全部步进。
+   * 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。不步进粒子：粒子由调用方在脚本之前先
+   * `stepParticles`（P4c 步骤 4，见那里），这里只写 uniform。`state` 不读，留着和调用方的写法对称。
    */
-  update(frame: FrameInput, state?: SceneState): void {
-    this.stepParticles(frame.frametime, frame.time, state, frame.cursor);
+  update(frame: FrameInput, _state?: SceneState): void {
     const values = frameBuiltins(frame);
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
@@ -1432,7 +1435,13 @@ export class GpuScene {
    * 指针点的跟随点（P4c 步骤 2）：`cursor` 是这一帧光标下的场景纹理坐标（`FrameInput.cursor`，缺省场景中心），按场景的正交
    * `P·V` 反投影到 z = 0（`pointerScenePoint`），每次调用只算一次、交给每个系统（没有粒子层时不算）；透视粒子不另算（WPE 模拟时
    * 栈上是正交投影，透视投影只在绘制时压栈，rea-p4c-sim.md 1.6）。
-   * dev 探针按 dt 序列回放时直接调它。
+   *
+   * 调用时机（P4c 步骤 4）：每帧在脚本之前，`update` 之前。WPE 一帧里先模拟粒子、后跑脚本，粒子拿到的是本帧脚本运行之前的对象
+   * 变换（即上一帧脚本写完的）：预研回放 `ignore/p4/c4/prestudy.test.ts` 里脚本每帧移动、旋转的世界空间系统 `w-stay-w`，按「本帧
+   * 变换」回放差 2.54 像素（正好是对象一帧的位移），按「上一帧变换」差 0.016；同时日志里脚本读到的 `engine.runtime` 与同帧
+   * `g_Time` 完全相等，P3b 也测过脚本写的变换当帧作用到图层，所以不是脚本时钟慢一帧。可见性同样按脚本之前的状态判断（没有实测）。
+   * 渲染器在步进之前先 `sync` 一次，两帧之间写进 `SceneState` 的属性改值（`instanceoverride` 等）这一帧就进模拟器。
+   * dev 探针按 dt 序列回放时直接调它（探针没有脚本，顺序同渲染器）。
    */
   stepParticles(
     frametime: number,

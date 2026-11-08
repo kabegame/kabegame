@@ -67,6 +67,7 @@ function run(fields: ParticleFields, columns: ParticleColumns, extra: Partial<Pa
     controlPoints: identityControlPoints(),
     world: false,
     basis: IDENTITY_BASIS,
+    model: IDENTITY_BASIS,
     ...extra,
   });
 }

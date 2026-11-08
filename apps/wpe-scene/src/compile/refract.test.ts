@@ -564,7 +564,12 @@ describe.skipIf(!root || !existsSync(wasm))("真翻译器：折射、裁切工�
     expect(first.copies).toBe(REFRACTING.length);
     // 走 0.5 s：P0 每秒 1 个、寿命 0.3 s，已经死掉，其余各有存活
     let time = 0;
-    for (let i = 0; i < 5; i++) scene.update(frame(0.1, (time += 0.1)), state);
+    // 顺序同渲染器（P4c 步骤 4）：先步进粒子，再写每帧 uniform
+    for (let i = 0; i < 5; i++) {
+      const input = frame(0.1, (time += 0.1));
+      scene.stepParticles(input.frametime, input.time, state, input.cursor);
+      scene.update(input, state);
+    }
     const later = encode();
     expect(later.alive[REFRACTING.indexOf("P0")]).toBe(0);
     expect(later.alive.filter((count) => count > 0)).toHaveLength(REFRACTING.length - 1);
