@@ -10,6 +10,7 @@
  * （单测用 `Proxy` 记录编译期读过的属性名，断言都在绑定表里）。
  */
 import { numbers, resolveValue, type SceneScalar, type SceneValue } from "./model";
+import type { MaterialMember } from "./materialValues";
 import type { InstanceField } from "./particles";
 import type { BloomParams } from "./postprocess";
 
@@ -96,7 +97,18 @@ export type BindingTarget =
   | { kind: "layer"; object: number; field: LayerField }
   /** effect 可见性：`effect` 是 `effects[]` 的 JSON 下标（`SceneEffect.source`），开关后只重建该图层（3c）。 */
   | { kind: "effect"; object: number; effect: number }
-  | { kind: "constant"; pass: TargetKey; material: string; uniforms: string[]; type: ValueType }
+  /**
+   * 材质常量：`uniforms` 是同一个键的整组名字，`members` 是各格的取值方式（`materialValues.ts`），就地写按它整体重写；
+   * 手写的目标没有 `members` 时每格按 `type` 取满。
+   */
+  | {
+      kind: "constant";
+      pass: TargetKey;
+      material: string;
+      uniforms: string[];
+      type: ValueType;
+      members?: MaterialMember[];
+    }
   | { kind: "bloom"; field: keyof BloomParams }
   /** `general.bloom`：每帧读（A1），写的是场景位。 */
   | { kind: "bloom-enabled" }
@@ -151,7 +163,7 @@ export function isKeyframedValue(value: unknown): boolean {
 }
 
 /** `{user}` 里的属性名与条件；不是用户绑定返回 null。 */
-function userBindingOf(value: SceneValue | undefined): { property: string; condition?: string } | null {
+export function userBindingOf(value: SceneValue | undefined): { property: string; condition?: string } | null {
   if (!value || typeof value !== "object" || !("user" in value) || !value.user) return null;
   const user = value.user;
   if (typeof user === "string") return { property: user };

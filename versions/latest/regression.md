@@ -1,5 +1,17 @@
 # v4.7.0 regression
 
+## 场景壁纸材质常量取值对齐 WPE
+
+2026-11-08。材质常量（`constantshadervalues`、注解缺省、`usershadervalues` 与 `{user}` 绑定、就地写、脚本写回）改成照 WPE 的 setter 取值（`apps/wpe-scene/src/compile/materialValues.ts`，依据 `.claude/plans/wpe-import/3-scene/vector-constant-REPORT.md` 第 2 节，第 6 节 `p4b-vec` 36 格实测与读码吻合）。翻译器只在材质键不同时拆开两阶段同名 uniform，同键合并、注解取片元的。按用户决定不复刻同阶段同键只上传后声明的、按声明行子串定类型两条。测试工程 `ignore/p4/proj/p4b-vec`（`ignore/p4/vec/gen_vec.py` 生成，读像素点与 WPE 值在 `kbv-meta.json`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | V1 编译管线逐格对 WPE | vitest（`ignore/p4/vec/vec.test.ts` + `checkproj.py`） | 用产品编译管线编 `p4b-vec`，逐格和 `kbv-meta.json` 的 `wpe` 列比 | 除 `dup-*` / `sub-*`（不复刻）与两个脚本格外全部相等；没有不支持项 | 2026-11-08 32 格相等；`dup-val` 碰巧相等，`dup-def` / `sub-*` 的差别见报告第 6 节 |
+| [x] | V2 脚本写回 | vitest（`materialValues.test.ts`） | 脚本给 float 常量返回数字、给 vec3 返回向量 | 经同一个 setter 写进去：float 0.6、向量逐分量 | 对应 `scr-num-*`。2026-11-08 Claude 在图库预览里实跑 `p4b-vec`（`update` 各 184 次）：`scr-num-v3` (0.6, 0.6, 0.6)、`scr-num-v4` (0.6 ×4)、`scr-vec2-v3` 保持初值 (0.1, 0.2, 0.3)，都与 WPE 一致 |
+| [x] | V3 语料不掉 | vitest（`ignore/p4/step5/corpus.test.ts`，基准 `p4b1b-mine.json`） | 全语料重扫 | 没有新的 `constant:*` 不支持项；干净场景不减少 | 18 → 20（新增两张来自粒子步骤）；能渲染的场景里只有 foliagesway `g_Phase` 两格并成一格，值不变或改的是没被引用的顶点半边 |
+| [x] | V4 实机逐像素 | Windows dev，场景渲染 | 预览 `p4b-vec`（导入 `ignore/p4/proj/p4b-vec`），按 `kbv-meta.json` 的读像素点取色，和 WPE 抓帧比 | 除 `dup-def`、`sub-val`、`sub-def` 外与 WPE 相差不超过 1.5/255 | 2026-11-08 Claude：屏外宿主 `renderFrame` 对 WPE 抓帧（`A:\p4b\p4b-vec-fps60`）31 / 36 格一致；不一致的是不复刻的 3 格和两个脚本格（`renderFrame` 不跑场景脚本，画的是初值，写回由 V2 单测核对） |
+| [x] | V5 运行中改属性 | Windows dev，`p4b-vec` | 依次把 `p_slider` 改成 0.3、`p_color3` 改成 `"0.2"`、`p_bool` 改成 false | `u-slider-v3` 变 (0.3, 0.3, 0.3)；`u-color-v3` 变 (0.2, 0, 0)，不留旧分量；`u-bool-f` 保持 0.3 | 2026-11-08 Claude 图库预览实测：`p_slider` → (0.3, 0.3, 0.3)；`p_bool` → 保持 0.3；都是就地写、0 次重编译。`p_color3` 的 `"0.2"` 被应用的属性校验拒绝（颜色要三个分量），改用 `"0.2 0.3 0.4"` → (0.2, 0.3, 0.4)；短颜色串不残留旧分量只由单测核对。属性已还原 |
+
 ## 预览壁纸的右键菜单与工具条
 
 2026-11-07 Windows dev。预览网页与场景壁纸时，「暂停」（排第一）、「设为壁纸封面」「清空脚本存储」（只场景）挪进右键菜单，工具条照常平铺菜单项；暂停与设为壁纸封面在画面出来之前置灰。这几条命令由预览弹窗自己处理，不交给网格，画廊的右键菜单里没有它们。预览的属性面板只留「恢复默认封面」（`customCover` 跟着 `thumbnailPath` 补丁重读）；设置页的属性弹窗只剩作者属性（见下一节）。「设为壁纸」的图标换成显示器（Web 版仍是图片）。截封面时预览容器里除壁纸画布外全部隐藏。

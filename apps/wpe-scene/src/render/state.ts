@@ -15,12 +15,14 @@
 import {
   bindingValue,
   generalValue,
+  type BindingTarget,
   type GeneralValues,
   type LayerField,
   type SceneBinding,
   type TargetKey,
 } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
 import { instanceScalar, instanceValues, type ParticleInstanceValues } from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
@@ -68,6 +70,22 @@ function effectKey(object: number, effect: number): string {
 }
 
 /** 有 `condition` 时值换成布尔，按字符串比（I3）。 */
+/**
+ * 脚本写回的值（运行时已按目标类型铺满、`[x, y, z]` 或布尔）→ `SceneState.write` 收的值。WPE 的脚本写回走类型化 setter，
+ * 直接写 float（vector-constant-REPORT.md 2.6）：单分量传数字（材质的 float setter 不收字符串），多分量拼成空格分隔的字符串，
+ * 向量 setter 再按空格切回同样的分量。
+ */
+export function scriptWriteValue(value: number[] | boolean): SceneScalar {
+  return Array.isArray(value) ? (value.length === 1 ? value[0] : value.join(" ")) : value;
+}
+
+/** `constant` 目标的各格取值方式；手写的目标没有 `members` 时每格按 `type` 取满。 */
+function constantMembers(target: Extract<BindingTarget, { kind: "constant" }>): MaterialMember[] {
+  if (target.members) return target.members;
+  const n = target.type === "vec2" ? 2 : target.type === "vec3" ? 3 : target.type === "vec4" ? 4 : 1;
+  return target.uniforms.map((name) => ({ name, size: n, components: n, count: n, default: undefined }));
+}
+
 function conditioned({ condition }: SceneBinding, raw: SceneScalar): SceneScalar {
   return condition === undefined ? raw : String(raw) === condition;
 }
@@ -317,10 +335,17 @@ export class SceneState {
     if (target.kind === "constant") {
       const constants = this.constants.get(target.pass);
       if (!constants) return "applied";
-      const value = bindingValue(raw, binding.condition, target.type);
-      const values = Array.isArray(value) ? value : [value ? 1 : 0];
-      for (const name of target.uniforms) constants[name] = [...values];
-      this.dirtyPasses.add(target.pass);
+      // WPE 运行时把属性值交给编译期同一个 setter（vector-constant-REPORT.md 2.5）：带 condition 的换成布尔，材质 setter 不收
+      // （第 6 节 `u-cond-f`）；不收的类型整格不动，收了就整体重写，不留旧分量（`materialValues.ts`）
+      if (binding.condition !== undefined) return "applied";
+      let changed = false;
+      for (const member of constantMembers(target)) {
+        const written = materialSetter(member.components, raw);
+        if (!written) continue;
+        constants[member.name] = memberValue(member, written);
+        changed = true;
+      }
+      if (changed) this.dirtyPasses.add(target.pass);
       return "applied";
     }
     this.bloom = writeBloomParam(this.bloom, target.field, raw, binding.condition);

@@ -1,27 +1,31 @@
-import { translateWithIncludes, type TranslateResult, type Wpesl2wgsl } from "../wpesl2wgsl";
-import { valueTypeOf, type BindingCollector, type TargetKey, type ValueType } from "./bindings";
+import { translateWithIncludes, type TranslateResult, type UniformLayout, type Wpesl2wgsl } from "../wpesl2wgsl";
+import { userBindingOf, type BindingCollector, type BindingTarget, type TargetKey } from "./bindings";
 import type { ResourceScope, SceneFs } from "./fs";
-import { numbers, resolveValue, staticCombos, type MaterialPass, type SceneScalar } from "./model";
+import {
+  constantTargetFields,
+  MATERIAL_SLOT_FLOATS,
+  materialDefault,
+  materialSetter,
+  materialSlots,
+  memberValue,
+  unwrapValue,
+  type MaterialMember,
+} from "./materialValues";
+import { staticCombos, type MaterialPass, type SceneScalar, type SceneValue } from "./model";
 
 export interface ShaderTextureSlot {
   slot: number;
   format?: number;
 }
 
-/** 一个材质常量名对应的全部 uniform（标量 / 向量可能分别声明成多个成员）。 */
-interface ConstantGroup {
-  uniforms: string[];
-  /** 成员名 → 着色器注解 `default`。 */
-  defaults: Map<string, SceneScalar | undefined>;
-  type: ValueType;
-}
-
 /**
- * 一个材质 pass 的材质常量（带 `meta.material` 的 uniform）：用户属性（`usershadervalues`）→ 材质
- * `constantshadervalues` → 着色器注解 `default`，按 uniform 名给出。
+ * 一个材质 pass 的材质常量（带 `meta.material` 的 uniform），按 uniform 名给出。取值照 WPE（`materialValues.ts`，
+ * vector-constant-REPORT.md 2.3–2.5）：加载时写 `constantshadervalues` 的值（缺键插注解缺省，`usershadervalues` 改写成
+ * `{value, user}`），再以属性当前值走一次运行时路径；setter 只收 WPE 收的类型，数字进向量铺满，字符串进向量先清零再按空格切。
  *
- * `key` / `bindings` 给出时把每处 `{user}` 登记成 `constant` 目标（P3a，就地刷新 uniform 块）；
- * 编译期与运行时共用 `bindingValue` / `numbers` 的换算规则，单测核对两边一致。
+ * `key` / `bindings` 给出时把每处用户绑定登记成 `constant` 目标（P3a，就地刷新 uniform 块）：目标带整组名字与各格的取值方式
+ * （`members`），就地写用同一个 setter 整体重写（`render/state.ts`），单测核对与整场重编译一致。
+ * 复刻不了的情况写进 `issues`（`constant:mixed-type:<键>`、单个 pass 超过 48 个 float 的 `constant:slots`）。
  */
 export function shaderUniforms(
   result: TranslateResult | null,
@@ -29,44 +33,64 @@ export function shaderUniforms(
   properties: Record<string, SceneScalar>,
   key?: TargetKey,
   bindings?: BindingCollector,
+  issues?: Set<string>,
 ): Record<string, number[]> {
   const values: Record<string, number[]> = {};
   if (!result?.ok) return values;
-  // 同一个材质常量名可能对应多个 uniform：先按 meta.material 分组，一条绑定登记整组名字
-  const groups = new Map<string, ConstantGroup>();
-  for (const uniform of result.uniforms ?? []) {
-    const material = uniform.meta?.material;
-    if (typeof material !== "string") continue;
-    let group = groups.get(material);
-    if (!group) groups.set(material, (group = { uniforms: [], defaults: new Map(), type: valueTypeOf(uniform) }));
-    group.uniforms.push(uniform.name);
-    group.defaults.set(uniform.name, uniform.meta?.default as SceneScalar | undefined);
-  }
   const users = Object.entries(pass.usershadervalues ?? {});
-  for (const [material, group] of groups) {
-    const constant = {
+  let floats = 0;
+  for (const slot of materialSlots(result.uniforms ?? [])) {
+    for (const issue of slot.issues) issues?.add(issue);
+    const target: BindingTarget = {
       kind: "constant",
       pass: key ?? "",
-      material,
-      uniforms: group.uniforms,
-      type: group.type,
-    } as const;
-    const property = users.find(([, target]) => target === material)?.[0];
-    let raw: SceneScalar | undefined;
-    if (property !== undefined && properties[property] !== undefined) {
-      // `usershadervalues` 优先于 `constantshadervalues`：两者都在时只登记前者
-      raw = properties[property];
-      if (key && bindings) bindings.list.push({ property, target: constant });
-    } else {
-      const source = pass.constantshadervalues?.[material];
-      raw = bindings && key ? bindings.bind(source, properties, constant) : resolveValue(source, properties);
+      material: slot.material,
+      ...constantTargetFields(slot),
+    };
+    const property = users.find(([, material]) => material === slot.material)?.[0];
+    const source = pass.constantshadervalues?.[slot.material];
+    // `usershadervalues` 把整项改写成 `{value, user: 属性}`，原来的 `{user}` 绑定随之没了（报告 2.3 第 3 步）
+    const user = property === undefined ? userBindingOf(source) : null;
+    if (key && bindings) {
+      if (property !== undefined && properties[property] !== undefined) bindings.list.push({ property, target });
+      else if (user) bindings.list.push({ ...user, target });
     }
-    for (const [name, fallback] of group.defaults) {
-      const value = raw ?? fallback;
-      if (value !== undefined) values[name] = numbers(value);
-    }
+    for (const member of slot.members)
+      values[member.name] = memberValue(member, materialStorage(member, source, property, user, properties));
+    // WPE 每个键一份存储；拆开的两半共用片元那一半的
+    floats += slot.members[0]?.components ?? 0;
   }
+  if (floats > MATERIAL_SLOT_FLOATS) issues?.add("constant:slots");
   return values;
+}
+
+/**
+ * 一格的存储：加载时用 setter 写 JSON 值（缺键插注解缺省；`usershadervalues` 写原值或缺省），再把属性当前值交给同一个 setter
+ * （报告 2.3 / 2.5）。带 condition 的属性值在 WPE 里换成布尔，材质 setter 不收（第 6 节 `u-cond-f`），所以不再写。
+ */
+function materialStorage(
+  member: MaterialMember,
+  source: SceneValue | undefined,
+  property: string | undefined,
+  user: { property: string; condition?: string } | null,
+  properties: Record<string, SceneScalar>,
+): number[] {
+  const n = member.components;
+  let storage = new Array<number>(n).fill(0);
+  const write = (value: unknown) => {
+    const written = materialSetter(n, value);
+    if (written) storage = written;
+  };
+  const fallback = materialDefault(n, member.default);
+  if (property !== undefined) {
+    write(source !== undefined ? unwrapValue(source) : fallback);
+    if (properties[property] !== undefined) write(properties[property]);
+  } else if (source !== undefined) {
+    write(source);
+    if (user && user.condition === undefined && properties[user.property] !== undefined)
+      write(properties[user.property]);
+  } else write(fallback);
+  return storage;
 }
 
 /**

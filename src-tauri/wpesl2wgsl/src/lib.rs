@@ -34,7 +34,8 @@ use preprocess::{scan_annotations, Annotations, Preprocessor};
 ///
 /// `GS_ENABLED`、`REVERSEDEPTH` WPE 也恒定义，这里有意不定义：WebGPU 没有几何着色器，粒子走顶点着色器展开四角；深度也不是反向的。
 /// `HLSL_GS40_DISABLED` 不能定义：WPE 没有这个宏，`shimmering_particles` 的 `particle.vert` 定义后走给几何着色器准备输入的分支，顶点不经过 MVP。
-const PLATFORM_DEFINES: &[(&str, &str)] = &[("HLSL", "1"), ("HLSL_SM40", "1"), ("SHADERVERSION", "69")];
+const PLATFORM_DEFINES: &[(&str, &str)] =
+    &[("HLSL", "1"), ("HLSL_SM40", "1"), ("SHADERVERSION", "69")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -87,7 +88,8 @@ pub struct TranslateResult {
     pub vertex: Option<StageOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fragment: Option<StageOutput>,
-    /// uniform 块（group 0 / binding 0，两阶段共用一块缓冲）的成员布局。
+    /// uniform 块（group 0 / binding 0，两阶段共用一块缓冲）的成员布局。两阶段同名、取值来源不同的 uniform
+    /// 各占一格（见 `rewrite::merge_uniforms`）。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub uniforms: Vec<Uniform>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,6 +148,12 @@ pub struct Uniform {
     /// 声明行尾的 JSON（`material` 名、`default`、`range` 等）；引擎内建的 `g_*` 没有。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<Value>,
+    /// 两阶段同名、取值来源不同而拆成两格时，这一格只给哪个阶段用；两半各标自己的阶段，合并的没有。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<Stage>,
+    /// 拆分后改了名的那一格（`kb_vs_<名字>` / `kb_fs_<名字>`）：着色器里写的原名。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -377,6 +385,8 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
                 array: uniform.array,
                 stride: layout.stride,
                 meta: uniform.meta.clone(),
+                stage: uniform.stage,
+                original: uniform.original.clone(),
             })
         })
         .collect();
@@ -683,7 +693,11 @@ void main() {
             Some(8)
         ));
         // eagleflag：`g_Texture1` 没有注释，DXT5 也不定义 TEX1FORMAT
-        assert!(!reaches_mark("TEX1FORMAT == 4", r#"{"label":"x"}"#, Some(4)));
+        assert!(!reaches_mark(
+            "TEX1FORMAT == 4",
+            r#"{"label":"x"}"#,
+            Some(4)
+        ));
     }
 
     #[test]
@@ -727,6 +741,62 @@ void main() {
         assert_eq!(spectrum.declared, "float");
         assert_eq!(spectrum.ty, "array<vec4<f32>, 4>");
         assert_eq!((spectrum.stride, spectrum.size), (Some(16), 64));
+    }
+
+    /// 两阶段同名、材质键不同的 uniform 拆成两格：各自的偏移、注解，改名的一格带 `stage` / `original`，WGSL 合法，
+    /// 每个阶段只读自己那一格。补齐过的数组（`kb_u_`）同样能拆。
+    #[test]
+    fn split_stage_uniforms_end_to_end() {
+        let req = TranslateRequest {
+            vertex: "uniform float g_Time;\nuniform float g_Speed; // {\"material\":\"speed\",\"default\":1}\nuniform float g_Bars[4]; // {\"material\":\"bars\"}\nattribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position * (g_Speed * g_Time + g_Bars[1]), 1.0); }".into(),
+            fragment: "uniform float g_Speed; // {\"material\":\"speeduv\",\"default\":5}\nuniform float g_Bars[4]; // {\"material\":\"bars2\",\"default\":\"1 2 3 4\"}\nuniform float g_Time;\nvoid main() { gl_FragColor = vec4(g_Speed * g_Time + g_Bars[2]); }".into(),
+            ..TranslateRequest::default()
+        };
+        let result = translate(&req);
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        let layout: Vec<_> = result
+            .uniforms
+            .iter()
+            .map(|u| (u.name.as_str(), u.ty.as_str(), u.offset))
+            .collect();
+        assert_eq!(
+            layout,
+            [
+                ("g_Time", "f32", 0),
+                ("g_Speed", "f32", 4),
+                ("g_Bars", "array<vec4<f32>, 4>", 16),
+                ("kb_fs_g_Speed", "f32", 80),
+                ("kb_fs_g_Bars", "array<vec4<f32>, 4>", 96),
+            ]
+        );
+        let json = serde_json::to_value(&result.uniforms).unwrap();
+        assert!(json[0].get("stage").is_none() && json[0].get("original").is_none());
+        assert_eq!(json[1]["stage"], "vertex");
+        assert!(json[1].get("original").is_none());
+        assert_eq!(json[3]["stage"], "fragment");
+        assert_eq!(json[3]["original"], "g_Speed");
+        assert_eq!(json[3]["meta"]["material"], "speeduv");
+        assert_eq!(json[4]["original"], "g_Bars");
+        assert_eq!(json[4]["meta"]["default"], "1 2 3 4");
+        // 只看入口函数体：补齐数组的还原函数两阶段都会生成（块是同一份），不算引用
+        let main_body = |output: &Option<StageOutput>| {
+            let wgsl = output.as_ref().unwrap().wgsl.clone().unwrap();
+            let start = wgsl.find("fn main_1()").unwrap();
+            let end = start + wgsl[start..].find("\n}\n").unwrap();
+            wgsl[start..end].to_string()
+        };
+        let (vs, fs) = (main_body(&result.vertex), main_body(&result.fragment));
+        assert!(vs.contains(".g_Speed") && !vs.contains("kb_fs_"), "{vs}");
+        assert!(vs.contains("kb_load_g_Bars()"), "{vs}");
+        assert!(
+            fs.contains(".kb_fs_g_Speed") && !fs.contains(".g_Speed"),
+            "{fs}"
+        );
+        assert!(
+            fs.contains("kb_load_kb_fs_g_Bars()") && !fs.contains("kb_load_g_Bars()"),
+            "{fs}"
+        );
     }
 
     #[test]

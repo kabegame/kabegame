@@ -468,6 +468,9 @@ export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>):
 /**
  * 翻译结果里依赖引擎、渲染器还不提供的部分：内置 uniform 与 COMBO。`extra` 是这类 pass 另外由渲染器写的引擎 uniform
  * （泛光链的 `g_RenderVar0`，见 `bloom.ts` 的 `POSTPROCESS_UNIFORMS`；图层材质里它没有意义，照报）。
+ *
+ * 两阶段同名、取值来源不同而被翻译器拆开的 uniform（`kb_vs_<名字>` / `kb_fs_<名字>`，带 `original`）总带 `meta.material`：
+ * 翻译器让引擎值那一侧保留原名，改名的一侧一定是材质常量，所以这里按 `meta.material` 放行，不会被当成未知的引擎 uniform。
  */
 export function checkProgramFeatures(
   result: TranslateResult,

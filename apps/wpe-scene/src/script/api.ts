@@ -1,12 +1,12 @@
 import {
   GENERAL_FIELDS,
-  valueTypeOf,
   type BindingTarget,
   type GeneralKey,
   type UserProperty,
   type ValueType,
 } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import { constantTargetFields, materialSlots, type MaterialMember } from "../compile/materialValues";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
@@ -417,7 +417,7 @@ export class ScriptApi {
     let api = this.materials.get(pass);
     if (api) return api;
     api = this.object();
-    const names = new Map<string, { uniforms: string[]; type: ValueType }>();
+    const names = new Map<string, { uniforms: string[]; type: ValueType; members?: MaterialMember[] }>();
     const bundle = this.access.bundle();
     const passes = bundle.layers.flatMap((layer) => [
       ...layer.passes,
@@ -426,18 +426,18 @@ export class ScriptApi {
     const current = passes.find((item) => item.key === pass);
     const program =
       current?.program === null || current?.program === undefined ? null : bundle.programs[current.program];
-    for (const uniform of program?.uniforms ?? []) {
-      const name = uniform.meta?.material;
-      if (typeof name !== "string" || !name) continue;
-      const shape = names.get(name) ?? { uniforms: [], type: valueTypeOf(uniform) };
-      shape.uniforms.push(uniform.name);
-      names.set(name, shape);
-    }
+    // 每个材质键一个字段：形状取这个键 setter 的类型，写回按各格的取值方式（`materialValues.ts`）
+    for (const slot of materialSlots(program?.uniforms ?? []))
+      if (slot.material) names.set(slot.material, constantTargetFields(slot));
     // FakeRealm 单测没有翻译器结果；真实 bundle 以 meta.material 为准。
     if (!program)
       for (const script of bundle.scripts.list)
         if (script.owner.kind === "material" && script.owner.pass === pass && script.target.kind === "constant")
-          names.set(script.target.material, { uniforms: script.target.uniforms, type: script.target.type });
+          names.set(script.target.material, {
+            uniforms: script.target.uniforms,
+            type: script.target.type,
+            members: script.target.members,
+          });
     for (const [name, shape] of names)
       this.define(
         api,

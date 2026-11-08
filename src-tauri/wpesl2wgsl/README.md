@@ -67,7 +67,7 @@ interface TranslateRequest {
 | 字段 | 内容 |
 |---|---|
 | `vertex` / `fragment` | `{ wgsl, entryPoint, glsl? }` |
-| `uniforms` | uniform 块成员：`{ name, type, declared, offset, size, array?, stride?, meta? }` |
+| `uniforms` | uniform 块成员：`{ name, type, declared, offset, size, array?, stride?, meta?, stage?, original? }`（`stage` / `original` 见「两阶段同名 uniform」） |
 | `uniformBlockSize` | uniform 块总字节数（没有普通 uniform 时缺省） |
 | `textures` | `{ slot, name, kind: "2d" \| "2d-comparison" \| "3d" \| "cube", binding, samplerBinding, meta? }` |
 | `attributes` / `varyings` | `{ name, location, type, array? }` |
@@ -81,14 +81,15 @@ interface TranslateRequest {
 | `include` | 缺头文件，见 `missing` |
 | `require` | `#require` 展开不了，见 `requires`：未知的库名，或要阴影 / cookie 的 `LightingV1/shadow` |
 | `preprocess` | 条件编译不配对、`#if` 表达式错误、未知预处理指令（`file` / `line` 指向原文） |
-| `rewrite` | 不支持的全局声明、两阶段类型冲突、纹理函数参数不是已声明的纹理 |
+| `rewrite` | 不支持的全局声明、两阶段同名的引擎 uniform（都没有 `material`）类型不同、纹理函数参数不是已声明的纹理 |
 | `parse` / `validate` / `write` | naga 阶段的错误（行号指向生成的 GLSL） |
 | `trap` | wasm 实例 trap（仅前端胶水产生） |
 
 ### 绑定布局（渲染器据此建 bind group layout）
 
 - 全部资源在 group 0；两阶段声明同一份。
-- binding 0：uniform 块 `KbUniforms`（std140），**顶点与片元共用一块缓冲**。成员是两阶段普通 uniform 的并集，按首次出现的顺序排列。
+- binding 0：uniform 块 `KbUniforms`（std140），**顶点与片元共用一块缓冲**。成员是两阶段普通 uniform 的并集，按首次出现的顺序排列；
+  两阶段同名而材质键（或类型）不同的 uniform 各占一格，见「两阶段同名 uniform」。
 - 纹理 `g_Texture<n>`：纹理在 binding `1 + 2n`，采样器在 binding `2 + 2n`。`2d-comparison` 的采样器是比较采样器。
 - 顶点属性按声明顺序分配 location：矩阵占列数个，数组再乘长度。渲染器按 `attributes` 的 name → location 建顶点缓冲布局。
 - varying 的 location 在两阶段间统一分配。整数类型的 varying 带 `flat`。
@@ -101,6 +102,37 @@ interface TranslateRequest {
   原因是 WGSL `array<f32, N>` 的步长固定为 4，而 uniform 地址空间要求步长是 16 的倍数，原样写出的 WGSL 不合法。
 - `meta` 是声明行尾的 JSON（`material` 名、`default`、`range`、`type: "color"` 等），渲染器据此把材质常量、用户属性映射到 uniform。引擎内建的 `g_*` 没有 `meta`。
 - 只在某些 COMBO 下声明的 uniform 不会出现在结果里；不同 COMBO 组合要分别翻译。
+
+### 两阶段同名 uniform
+
+WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材质键只有一份存储**（`.claude/plans/wpe-import/3-scene/vector-constant-REPORT.md` 2.1，实测见第 6 节）：
+- 键不同，是两份存储。`3829603837` 的 `foliagesway`：RenderDoc 里顶点 `g_Speed` 是材质键 `speed` 的值，片元 `g_Speed` 是 `speeduv` 的缺省值 5。
+- 键相同、缺省不同，也只有一份。合并表里片元覆盖顶点，缺省只插一份，两个阶段都读片元的缺省（`p4b-vec` 的 `stage-def`：顶点 0.2、片元 0.8，两阶段都读到 0.8）。
+
+我们两阶段共用一块缓冲，所以按**取值来源**决定合并还是拆分（`rewrite::merge_uniforms`）：
+
+- **取值来源**：注解里有字符串 `material` 是材质常量，来源就是这个键（缺省值、`label`、`range` 等都不比）；
+  没有注解，或注解里没有字符串 `material`，是引擎按名字写入的值。宿主同样只认字符串 `material`。
+- **合并**：类型相同、来源相同，合成一格。材质常量的注解取片元的（与 WPE 合并表一致），片元没有时取顶点的；引擎值的注解取顶点的，宿主不读。
+- **拆分**：来源不同，或同一个键而类型不同，拆成两格，各带自己的 `declared` / `type` / `meta`，各占块里的一格。其中一侧在**自己的源码里**整体改名为
+  `kb_vs_<名字>` / `kb_fs_<名字>`，撞上已有标识符时加 `_2`、`_3`……，与保留字改 `kb_<名字>` 同一惯例。改名覆盖本阶段正文的每一处，包括 `#define` 行和同名局部变量 / 参数。
+  - 一侧是引擎值、另一侧是材质常量：**材质常量那一侧改名**。引擎值保留原名，渲染器照旧按名字写入，宿主也照旧按名字把它认成引擎 uniform。
+    所以改了名的一格总带 `meta.material`。
+  - 两侧都是材质常量：先声明的顶点阶段保留原名，片元阶段改名。
+  - 两侧都是引擎值而类型不同：报 `phase: "rewrite"`。引擎值按名字写入，拆开后改了名的那一格没人写。
+- **同键不同类型**（工坊 `frame_builder` 的 `u_refResolution`：顶点 vec2、片元 float）：WGSL 里一格只能有一种类型，只能拆。
+  WPE 只有一份按片元类型（float）写的存储，各阶段按自己的类型从同一个槽拷分量，顶点多拷的那个分量是下一个材质常量的存储（报告 2.2）。
+  宿主按两半的 `stage` 复刻：setter 的类型与缺省值取片元那一半；顶点那一半分量数不超过片元的照常取前几个，超过的报 `constant:mixed-type:<材质键>`。
+- **反射**：拆开的两格都带 `stage`（`"vertex"` / `"fragment"`，这一格只给哪个阶段用），改名的一格另带 `original`（着色器里写的原名）。合并的没有这两个字段。
+- **按用户决定不复刻的两条**（2026-11-08，报告第 5 / 6 节）：同一阶段两个 uniform 用同一个键时 WPE 只上传后声明的那个，我们两个都照常填；
+  WPE 按声明行（含注释）的子串定类型（注释里写了 `vec3` 就按 vec3 写、溢到后面的变量），我们按真实的声明类型。
+
+本机语料（2026-11-08，WPE assets、defaultprojects 与 144 个工坊项目自带的着色器，扫描脚本 `ignore/p4/b1/workshop_stage_uniforms.py`）：
+- 同时可达的冲突：`effects/foliagesway`，`g_Speed` 键不同（拆）、`g_Phase` 同键不同缺省（合并，取片元的 0.5），assets 与 33 个工坊项目各带一份；
+  `effects/perspective` effect 预览项目自带的旧版，`g_Top/Bottom/Left/Right` 同键缺省 0 / 1（合并，取片元的 1）；
+  工坊 `frame_builder_by_gariam` 的 `u_refResolution`，同键不同类型，它另有 naga 校验错误、到不了宿主。
+- 被条件编译分开、不会同时出现的：assets 的 `effects/clouds` 的 `g_CloudSpeeds`（`PERSPECTIVE` 两支）；工坊 `auto_sway` 的 `g_Inertia` / `g_SigmentCount`（`AA_VERSION` 两支）。
+- 「一侧有注解、一侧没有」的 0 处。
 
 ## 内部流程
 
@@ -132,6 +164,7 @@ interface TranslateRequest {
 4. **改写成 Vulkan GLSL 450**（`rewrite.rs`）：
    - **声明**：
      - 普通 uniform 并入 uniform 块，标量 / 二三分量向量的数组补成 `kb_u_<名字>`，再由 `kb_load_<名字>()` 还原、宏指回原名。这样下标访问和整个数组传参都照常可用。
+       两阶段同名、取值来源不同的拆成两格，一侧改名为 `kb_vs_` / `kb_fs_<名字>`，见「两阶段同名 uniform」。
      - 采样器拆成纹理 + `kb_sampler_<名字>`；`attribute` / `varying` 加 `layout(location)`。
      - 只在片元阶段声明的 varying，也给顶点阶段补一个输出。顶点阶段不写入时值为零，对应 D3D 下的未定义值；不补的话，WebGPU 建管线会失败。
      - `gl_*` 名的全局声明（几何着色器遗留的 `varying uint gl_ViewportIndex`、fur4 的 `in uint gl_InstanceID`）忽略。

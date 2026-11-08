@@ -42,12 +42,21 @@ export interface UniformLayout {
   name: string;
   /** WGSL 写法，如 `vec4<f32>`、`mat4x4<f32>`、`array<f32, 4>`。 */
   type: string;
+  /** WPESL 里声明的类型（`float`、`vec3`、`mat4`……）；翻译器总会给，手写的测试数据可能没有。 */
+  declared?: string;
   offset: number;
   size: number;
   array?: number;
   stride?: number;
   /** 声明行尾的 JSON（`material`、`default`、`range`……）；引擎内建的 `g_*` 没有。 */
   meta?: Record<string, unknown>;
+  /**
+   * 两阶段同名、材质键或类型不同的 uniform 被拆成两格（同一个材质键在 WPE 里只有一份存储，同键同类型的合成一格）：
+   * 这一格只给哪个阶段用，两半各标自己的阶段。合并的没有。
+   */
+  stage?: ShaderStage;
+  /** 拆分后改了名的那一格（`kb_vs_<名字>` / `kb_fs_<名字>`，总带 `meta.material`）：着色器里写的原名。 */
+  original?: string;
 }
 
 export interface TextureBinding {

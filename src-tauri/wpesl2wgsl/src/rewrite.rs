@@ -1,12 +1,13 @@
 //! 把预处理后的 WPESL 改写成 naga 能接的 Vulkan GLSL 450：
 //! - 全局声明：普通 uniform 并成一个 std140 uniform 块（顶点 / 片元两阶段同一份、同一顺序，共用一块缓冲）；
+//!   两阶段同名、取值来源不同的 uniform 拆成两格，一侧改名（[`merge_uniforms`]）；
 //!   `sampler*` 拆成纹理 + 采样器，按 `g_Texture<n>` 的 n 固定绑定号；`attribute` / `varying` 加 `layout(location)`，
 //!   varying 的 location 在两阶段之间统一分配。
 //! - 正文：`texSample2D` 系列改成 `texture(sampler2D(t, s), …)`；`gl_FragColor` 等内建换成 Vulkan GLSL 写法；
 //!   与 GLSL 450 保留字冲突的标识符改名；精度限定符去掉；其余 HLSL 风格内建由 [`MACRO_HEADER`] 的宏补上
 //!   （照 WPE 自己翻 HLSL 时的宏头一一对应）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::preprocess::{parse_json_object, split_ident, Line};
 use crate::Stage;
@@ -136,10 +137,15 @@ impl TextureKind {
 
 #[derive(Debug, Clone)]
 pub struct UniformDecl {
+    /// 块里的成员名；拆分后改了名的一侧是新名字（原名见 `original`）。
     pub name: String,
     pub ty: String,
     pub array: Option<u32>,
     pub meta: Option<serde_json::Value>,
+    /// 两阶段同名、取值来源不同而拆开时，这一格只属于哪个阶段（两半各标自己的阶段）；合并的或只在一个阶段声明的为 None。
+    pub stage: Option<Stage>,
+    /// 拆分后改了名的一侧：着色器里写的原名。
+    pub original: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,7 +200,8 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
     let vs = split_stage(Stage::Vertex, vertex)?;
     let fs = split_stage(Stage::Fragment, fragment)?;
 
-    let mut uniforms: Vec<UniformDecl> = Vec::new();
+    // 普通 uniform 先按阶段各自收集（同阶段的重复声明合并），再跨阶段合并或拆分
+    let mut stage_uniforms: [Vec<UniformDecl>; 2] = [Vec::new(), Vec::new()];
     let mut textures: BTreeMap<u32, TextureDecl> = BTreeMap::new();
     let mut attributes: Vec<InterfaceDecl> = Vec::new();
     let mut varyings: Vec<InterfaceDecl> = Vec::new();
@@ -245,25 +252,29 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
                                 decl.name, decl.ty
                             )));
                         }
-                        match uniforms.iter_mut().find(|u| u.name == decl.name) {
+                        let list = &mut stage_uniforms[stage_index(stage)];
+                        match list.iter_mut().find(|u| u.name == decl.name) {
                             Some(existing)
                                 if existing.ty != decl.ty || existing.array != decl.array =>
                             {
                                 return Err(fail(format!(
-                                    "uniform {} 在两个阶段的类型不同",
+                                    "uniform {} 在同一阶段重复声明且类型不同",
                                     decl.name
                                 )));
                             }
+                            // 同一阶段重复声明（头文件与正文各写一次）：照旧合并，注解取第一个非空的
                             Some(existing) => {
                                 if existing.meta.is_none() {
                                     existing.meta = meta.clone();
                                 }
                             }
-                            None => uniforms.push(UniformDecl {
+                            None => list.push(UniformDecl {
                                 name: decl.name.clone(),
                                 ty: decl.ty.clone(),
                                 array: decl.array,
                                 meta: meta.clone(),
+                                stage: None,
+                                original: None,
                             }),
                         }
                     }
@@ -303,10 +314,24 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
     }
 
     let textures: Vec<TextureDecl> = textures.into_values().collect();
+    // 改名不能撞上两阶段里已有的任何标识符（声明名、正文里的局部变量 / 函数 / 宏）
+    let mut taken: BTreeSet<String> = [&vs, &fs]
+        .iter()
+        .flat_map(|parts| {
+            parts
+                .decls
+                .iter()
+                .map(|(decl, _)| decl.name.clone())
+                .chain(identifiers(&parts.body.join("\n")))
+        })
+        .collect();
+    let [vertex_uniforms, fragment_uniforms] = stage_uniforms;
+    let (uniforms, renames) = merge_uniforms(vertex_uniforms, fragment_uniforms, &mut taken)?;
     let vertex_glsl = render(
         Stage::Vertex,
         &vs,
         &uniforms,
+        &renames[stage_index(Stage::Vertex)],
         &textures,
         &attributes,
         &varyings,
@@ -315,6 +340,7 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
         Stage::Fragment,
         &fs,
         &uniforms,
+        &renames[stage_index(Stage::Fragment)],
         &textures,
         &attributes,
         &varyings,
@@ -327,6 +353,151 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
         vertex_glsl,
         fragment_glsl,
     })
+}
+
+fn stage_index(stage: Stage) -> usize {
+    match stage {
+        Stage::Vertex => 0,
+        Stage::Fragment => 1,
+    }
+}
+
+/// uniform 的取值来源，决定两阶段的同名 uniform 能不能共用一格。
+///
+/// WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量按**材质键**只有一份存储（vector-constant-REPORT.md 2.1）：
+/// - 键不同（`3829603837` 的 foliagesway：顶点 `g_Speed` 是 `speed`，片元 `g_Speed` 是 `speeduv`，缺省 5）是两份存储，
+///   两阶段读到的值不同，要拆成两格；
+/// - 键相同、缺省不同（foliagesway 的 `g_Phase`）也只有一份：合并表里片元覆盖顶点，缺省只插一份，
+///   两阶段都读片元的缺省（报告第 6 节 `stage-def` 实测 0.8 / 0.8）。所以来源只比材质键。
+///
+/// 没有注解，或注解里没有字符串 `material`（只有 `label` / `hidden` 等）：引擎按名字写入的值，来源相同。
+/// 宿主同样只认字符串 `material`（`shader.ts` 按它分组，能力表把没有的当引擎 uniform），这里与之一致。
+#[derive(Debug, Clone, PartialEq)]
+enum ValueSource {
+    Engine,
+    Material(String),
+}
+
+fn material_key(meta: &Option<serde_json::Value>) -> Option<&str> {
+    meta.as_ref()?
+        .get("material")
+        .and_then(serde_json::Value::as_str)
+}
+
+fn value_source(meta: &Option<serde_json::Value>) -> ValueSource {
+    material_key(meta).map_or(ValueSource::Engine, |key| {
+        ValueSource::Material(key.to_string())
+    })
+}
+
+/// 每个阶段的改名表（拆分后改名的 uniform，原名 → 新名），按 [`stage_index`] 取。
+type StageRenames = [BTreeMap<String, String>; 2];
+
+/// 两阶段各自的 uniform 合成一个块，返回块成员与每个阶段的改名表。
+///
+/// 两阶段同名的非采样器 uniform：
+/// - 类型相同、取值来源（[`ValueSource`]）相同：合并成一格。材质常量的注解取片元的（WPE 合并表里片元覆盖顶点，
+///   缺省值取片元的，报告 2.1 / 第 6 节）；引擎值的注解照旧取顶点的（顶点没有时取片元的），宿主不读。
+/// - 同一个材质键而类型不同：WGSL 里一格只能有一种类型，照旧拆成两格。WPE 只有一份按片元类型写的存储、
+///   各阶段按自己的类型从同一个槽拷分量（报告 2.2）；宿主按两半的 `stage` 复刻：setter 的类型与缺省值取片元那一半，
+///   顶点那一半比片元多出的分量会读到下一个常量的存储，宿主报不支持。
+/// - 类型或取值来源不同：拆成两格，各带自己的类型与注解；其中一侧在自己的源码里改名为 `kb_vs_<名字>` / `kb_fs_<名字>`
+///   （与保留字改 `kb_` 前缀同一惯例，撞名时再加 `_2`、`_3`……）。哪一侧改名：
+///   - 一侧是引擎值（没有 `material`）、另一侧是材质常量：材质常量那一侧改名。引擎值保留原名，渲染器照旧按名字写入，
+///     宿主也照旧按名字把它认成引擎 uniform；改了名的一侧总带 `material`，宿主按材质常量处理。
+///   - 两侧都是材质常量：先声明的顶点阶段保留原名，片元阶段改名。
+/// - 两侧都是引擎值而类型不同：报错（引擎值按名字写入，拆开后改了名的那一格没人写）。
+///
+/// 两半都标上各自的 `stage`，改名的一半另带 `original`。
+fn merge_uniforms(
+    vertex: Vec<UniformDecl>,
+    fragment: Vec<UniformDecl>,
+    taken: &mut BTreeSet<String>,
+) -> Result<(Vec<UniformDecl>, StageRenames), RewriteError> {
+    let mut renames: StageRenames = [BTreeMap::new(), BTreeMap::new()];
+    let mut uniforms = vertex;
+    for mut decl in fragment {
+        let Some(existing) = uniforms.iter_mut().find(|u| u.name == decl.name) else {
+            uniforms.push(decl);
+            continue;
+        };
+        let same_type = existing.ty == decl.ty && existing.array == decl.array;
+        let (vertex_source, fragment_source) =
+            (value_source(&existing.meta), value_source(&decl.meta));
+        if same_type && vertex_source == fragment_source {
+            if matches!(fragment_source, ValueSource::Material(_)) || existing.meta.is_none() {
+                existing.meta = decl.meta;
+            }
+            continue;
+        }
+        let name = decl.name.clone();
+        match (vertex_source, fragment_source) {
+            (ValueSource::Engine, ValueSource::Engine) => {
+                return Err(RewriteError {
+                    stage: Stage::Fragment,
+                    message: format!("uniform {name} 在两个阶段的类型不同"),
+                    file: None,
+                    line: None,
+                });
+            }
+            // 顶点是材质常量、片元是引擎值：顶点那一格改名，片元保留原名
+            (ValueSource::Material(_), ValueSource::Engine) => {
+                let renamed = fresh_name("kb_vs", &name, taken);
+                renames[stage_index(Stage::Vertex)].insert(name.clone(), renamed.clone());
+                existing.name = renamed;
+                existing.original = Some(name);
+                existing.stage = Some(Stage::Vertex);
+                decl.stage = Some(Stage::Fragment);
+            }
+            _ => {
+                let renamed = fresh_name("kb_fs", &name, taken);
+                renames[stage_index(Stage::Fragment)].insert(name.clone(), renamed.clone());
+                existing.stage = Some(Stage::Vertex);
+                decl.name = renamed;
+                decl.original = Some(name);
+                decl.stage = Some(Stage::Fragment);
+            }
+        }
+        uniforms.push(decl);
+    }
+    Ok((uniforms, renames))
+}
+
+/// `<prefix>_<名字>`，被占用时依次加 `_2`、`_3`……；选中的名字记进 `taken`。
+fn fresh_name(prefix: &str, name: &str, taken: &mut BTreeSet<String>) -> String {
+    let base = format!("{prefix}_{name}");
+    let mut candidate = base.clone();
+    let mut n = 2;
+    while taken.contains(&candidate) {
+        candidate = format!("{base}_{n}");
+        n += 1;
+    }
+    taken.insert(candidate.clone());
+    candidate
+}
+
+/// 正文里出现的全部标识符（按 [`rewrite_identifiers`] 同样的切分，已套用保留字改名）。
+fn identifiers(body: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut rest = body;
+    while !rest.is_empty() {
+        let c = rest.chars().next().expect("non-empty");
+        if c.is_ascii_alphabetic() || c == '_' {
+            let (ident, after) = split_ident(rest);
+            out.insert(rename(ident));
+            rest = after;
+        } else if c.is_ascii_digit() {
+            let end = rest
+                .char_indices()
+                .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '.'))
+                .map(|(at, _)| at)
+                .unwrap_or(rest.len());
+            rest = &rest[end..];
+        } else {
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
 }
 
 fn split_stage(stage: Stage, lines: &[Line]) -> Result<StageParts, RewriteError> {
@@ -507,10 +678,12 @@ fn array_suffix(array: Option<u32>) -> String {
     array.map(|n| format!("[{n}]")).unwrap_or_default()
 }
 
+/// `renames` 是本阶段的改名表（拆分后改名的 uniform，原名 → 新名），正文里的引用随之改写。
 fn render(
     stage: Stage,
     parts: &StageParts,
     uniforms: &[UniformDecl],
+    renames: &BTreeMap<String, String>,
     textures: &[TextureDecl],
     attributes: &[InterfaceDecl],
     varyings: &[InterfaceDecl],
@@ -591,7 +764,7 @@ fn render(
         ));
     }
 
-    let body = rewrite_identifiers(stage, &parts.body.join("\n"));
+    let body = rewrite_identifiers(stage, &parts.body.join("\n"), renames);
     let body = rewrite_texture_calls(&body, textures).map_err(|message| RewriteError {
         stage,
         message,
@@ -683,8 +856,11 @@ fn rename(name: &str) -> String {
     }
 }
 
-/// 按标识符逐个替换：保留字改名、内建换名、去掉精度限定符。
-fn rewrite_identifiers(stage: Stage, body: &str) -> String {
+/// 按标识符逐个替换：保留字改名、内建换名、去掉精度限定符，以及拆分后改名的 uniform（`renames`，键是保留字改名之后的名字）。
+///
+/// 改名对本阶段正文里的每个同名标识符一视同仁（包括 `#define` 行、同名的局部变量与参数）：新名字不与任何已有标识符重名，
+/// 整体替换等于换一个变量名，语义不变。
+fn rewrite_identifiers(stage: Stage, body: &str, renames: &BTreeMap<String, String>) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
     while !rest.is_empty() {
@@ -696,7 +872,10 @@ fn rewrite_identifiers(stage: Stage, body: &str) -> String {
                 "gl_VertexID" => "gl_VertexIndex".to_string(),
                 "gl_InstanceID" => "gl_InstanceIndex".to_string(),
                 "lowp" | "mediump" | "highp" => String::new(),
-                other => rename(other),
+                other => {
+                    let renamed = rename(other);
+                    renames.get(&renamed).cloned().unwrap_or(renamed)
+                }
             };
             out.push_str(&replaced);
             rest = after;
@@ -854,11 +1033,9 @@ mod tests {
             .contains("layout(location = 0) in vec2 v_TexCoord;"));
         // 片元阶段没声明 v_Extra，不出现
         assert!(!program.fragment_glsl.contains("v_Extra"));
-        // 两阶段同一份 uniform 块
-        let block = |glsl: &str| {
-            glsl[glsl.find("uniform KbUniforms").unwrap()..glsl.find("};").unwrap()].to_string()
-        };
+        // 两阶段同一份 uniform 块；g_Time 两阶段都没有注解，合并成一格
         assert_eq!(block(&program.vertex_glsl), block(&program.fragment_glsl));
+        assert!(program.uniforms.iter().all(|u| u.stage.is_none()));
     }
 
     #[test]
@@ -919,6 +1096,196 @@ mod tests {
         assert!(helpers.contains("vec3 kb_pow(vec3 a, float b)"));
         assert!(helpers.ends_with("#define pow kb_pow\n"));
         assert!(!helpers.contains("kb_min"));
+    }
+
+    fn uniform<'a>(program: &'a Program, name: &str) -> &'a UniformDecl {
+        program
+            .uniforms
+            .iter()
+            .find(|u| u.name == name)
+            .unwrap_or_else(|| panic!("没有 {name}: {:?}", program.uniforms))
+    }
+
+    fn uniform_names(program: &Program) -> Vec<&str> {
+        program.uniforms.iter().map(|u| u.name.as_str()).collect()
+    }
+
+    fn block(glsl: &str) -> String {
+        glsl[glsl.find("uniform KbUniforms").unwrap()..glsl.find("};").unwrap()].to_string()
+    }
+
+    /// foliagesway：`g_Speed` 两阶段材质键不同（speed / speeduv），`g_Phase` 同键不同缺省（0 / 0.5）。
+    const SWAY_VS: &str = "uniform float g_Time;\nuniform float g_Speed; // {\"material\":\"speed\",\"label\":\"ui_editor_properties_speed\",\"default\":1,\"range\":[0.01, 10]}\nuniform float g_Phase; // {\"material\":\"phase\",\"default\":0}\nattribute vec3 a_Position;\nvoid main() { float s = g_Phase + g_Speed * g_Time; gl_Position = vec4(a_Position * s, 1.0); }";
+    const SWAY_FS: &str = "uniform float g_Speed; // {\"material\":\"speeduv\",\"label\":\"ui_editor_properties_speed\",\"default\":5,\"range\":[0.01, 20]}\nuniform float g_Phase; // {\"material\":\"phase\",\"default\":0.5}\nuniform float g_Time;\nvoid main() { float s = g_Phase + g_Speed * g_Time; gl_FragColor = vec4(s); }";
+
+    #[test]
+    fn stage_uniforms_with_different_keys_are_split() {
+        let program = build(&lines(SWAY_VS), &lines(SWAY_FS)).unwrap();
+        // g_Speed 键不同：片元那一半改名后排在块末尾；g_Phase 同键：合成一格；g_Time 是引擎值照旧合并
+        assert_eq!(
+            uniform_names(&program),
+            ["g_Time", "g_Speed", "g_Phase", "kb_fs_g_Speed"]
+        );
+        let speed = uniform(&program, "g_Speed");
+        assert_eq!(speed.meta.as_ref().unwrap()["material"], "speed");
+        assert_eq!(
+            (speed.stage, speed.original.as_deref()),
+            (Some(Stage::Vertex), None)
+        );
+        let speed_uv = uniform(&program, "kb_fs_g_Speed");
+        assert_eq!(speed_uv.meta.as_ref().unwrap()["material"], "speeduv");
+        assert_eq!(speed_uv.meta.as_ref().unwrap()["default"], 5);
+        assert_eq!(
+            (speed_uv.stage, speed_uv.original.as_deref()),
+            (Some(Stage::Fragment), Some("g_Speed"))
+        );
+        assert_eq!(uniform(&program, "g_Time").stage, None);
+        // 每个阶段只引用自己的那一格
+        assert!(program
+            .vertex_glsl
+            .contains("float s = g_Phase + g_Speed * g_Time;"));
+        assert!(
+            program
+                .fragment_glsl
+                .contains("float s = g_Phase + kb_fs_g_Speed * g_Time;"),
+            "{}",
+            program.fragment_glsl
+        );
+        // 两阶段仍是同一份块
+        assert_eq!(block(&program.vertex_glsl), block(&program.fragment_glsl));
+        assert!(block(&program.vertex_glsl).contains("float kb_fs_g_Speed;"));
+    }
+
+    /// 报告第 6 节 `stage-def`：同一个材质键、缺省不同（顶点 0、片元 0.5），WPE 只有一份存储、两阶段都读片元的缺省。
+    #[test]
+    fn same_key_with_different_defaults_merges_with_fragment_annotation() {
+        let program = build(&lines(SWAY_VS), &lines(SWAY_FS)).unwrap();
+        let phase = uniform(&program, "g_Phase");
+        assert_eq!((phase.stage, phase.original.as_deref()), (None, None));
+        assert_eq!(phase.meta.as_ref().unwrap()["material"], "phase");
+        assert_eq!(phase.meta.as_ref().unwrap()["default"], 0.5);
+    }
+
+    #[test]
+    fn same_key_with_different_types_is_split() {
+        let vs = "uniform vec2 g_CloudSpeeds; // {\"material\":\"speed\",\"default\":\"0.01 -0.02\"}\nvoid main() { gl_Position = vec4(g_CloudSpeeds, 0.0, 1.0); }";
+        let fs = "uniform vec4 g_CloudSpeeds; // {\"material\":\"speed\",\"default\":\"0.01 0.01 -0.02 -0.02\"}\nvoid main() { gl_FragColor = g_CloudSpeeds; }";
+        let program = build(&lines(vs), &lines(fs)).unwrap();
+        assert_eq!(
+            uniform_names(&program),
+            ["g_CloudSpeeds", "kb_fs_g_CloudSpeeds"]
+        );
+        assert_eq!(uniform(&program, "g_CloudSpeeds").ty, "vec2");
+        let fragment = uniform(&program, "kb_fs_g_CloudSpeeds");
+        assert_eq!(fragment.ty, "vec4");
+        assert_eq!(fragment.original.as_deref(), Some("g_CloudSpeeds"));
+        assert!(program
+            .fragment_glsl
+            .contains("kb_FragColor = kb_fs_g_CloudSpeeds;"));
+    }
+
+    #[test]
+    fn matching_value_sources_still_merge() {
+        // label / range 不同、缺省值写法不同（1 与 "1.0"）：同一个材质键，合并，注解取片元的
+        let vs = "uniform float g_A; // {\"material\":\"a\",\"default\":1,\"label\":\"x\",\"range\":[0,1]}\nvoid main() { gl_Position = vec4(g_A); }";
+        let fs = "uniform float g_A; // {\"material\":\"a\",\"default\":\"1.0\",\"label\":\"y\"}\nvoid main() { gl_FragColor = vec4(g_A); }";
+        let program = build(&lines(vs), &lines(fs)).unwrap();
+        assert_eq!(uniform_names(&program), ["g_A"]);
+        let a = uniform(&program, "g_A");
+        assert_eq!((a.stage, a.original.as_deref()), (None, None));
+        assert_eq!(a.meta.as_ref().unwrap()["label"], "y");
+        assert!(program.fragment_glsl.contains("kb_FragColor = vec4(g_A);"));
+    }
+
+    #[test]
+    fn engine_uniforms_are_never_split() {
+        // 都没有 material（一侧只有 label）：引擎按名字写的值，合并
+        let vs = "uniform float g_Time;\nuniform vec4 g_Texture0Resolution; // {\"label\":\"x\"}\nvoid main() { gl_Position = g_Texture0Resolution * g_Time; }";
+        let fs = "uniform float g_Time;\nuniform vec4 g_Texture0Resolution;\nvoid main() { gl_FragColor = g_Texture0Resolution * g_Time; }";
+        let program = build(&lines(vs), &lines(fs)).unwrap();
+        assert_eq!(uniform_names(&program), ["g_Time", "g_Texture0Resolution"]);
+        assert!(program.uniforms.iter().all(|u| u.stage.is_none()));
+        // 引擎值类型不同：拆开后改名的一格没人写，照旧报错
+        let error = build(
+            &lines("uniform vec2 g_Point;\nvoid main() {}"),
+            &lines("uniform vec4 g_Point;\nvoid main() {}"),
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "uniform g_Point 在两个阶段的类型不同");
+    }
+
+    /// 改名覆盖本阶段正文里的每一处：多次引用、`#define` 行、同名参数（一起换名，语义不变）；另一阶段一处不动。
+    #[test]
+    fn rename_reaches_every_reference_in_its_stage() {
+        let fs = "uniform float g_Speed; // {\"material\":\"speeduv\",\"default\":5}\n#define SPEED2 (g_Speed * 2.0)\nfloat twice(float g_Speed) { return g_Speed * 2.0; }\nvoid main() { float a = g_Speed; gl_FragColor = vec4(a + g_Speed + SPEED2 + twice(g_Speed)); }";
+        let program = build(&lines(SWAY_VS), &lines(fs)).unwrap();
+        let body = |glsl: &str, marker: &str| glsl[glsl.find(marker).unwrap()..].to_string();
+        let fragment = body(&program.fragment_glsl, "#define SPEED2");
+        assert!(!identifiers(&fragment).contains("g_Speed"), "{fragment}");
+        assert_eq!(fragment.matches("kb_fs_g_Speed").count(), 6, "{fragment}");
+        let vertex = body(&program.vertex_glsl, "void main()");
+        assert!(vertex.contains("g_Speed") && !vertex.contains("kb_fs_"));
+    }
+
+    #[test]
+    fn engine_side_keeps_its_name() {
+        // 顶点是材质常量、片元是引擎值：顶点那一格改名
+        let vs = "uniform float g_Brightness; // {\"material\":\"brightness\",\"default\":2}\nvoid main() { gl_Position = vec4(g_Brightness); }";
+        let fs = "uniform float g_Brightness;\nvoid main() { gl_FragColor = vec4(g_Brightness); }";
+        let program = build(&lines(vs), &lines(fs)).unwrap();
+        assert_eq!(
+            uniform_names(&program),
+            ["kb_vs_g_Brightness", "g_Brightness"]
+        );
+        let material = uniform(&program, "kb_vs_g_Brightness");
+        assert_eq!(material.meta.as_ref().unwrap()["material"], "brightness");
+        assert_eq!(
+            (material.stage, material.original.as_deref()),
+            (Some(Stage::Vertex), Some("g_Brightness"))
+        );
+        let engine = uniform(&program, "g_Brightness");
+        assert!(engine.meta.is_none());
+        assert_eq!(
+            (engine.stage, engine.original.as_deref()),
+            (Some(Stage::Fragment), None)
+        );
+        assert!(program
+            .vertex_glsl
+            .contains("gl_Position = vec4(kb_vs_g_Brightness);"));
+        assert!(program
+            .fragment_glsl
+            .contains("kb_FragColor = vec4(g_Brightness);"));
+
+        // 反过来：顶点是引擎值、片元是材质常量，片元那一格改名
+        let program = build(&lines(fs), &lines(vs)).unwrap();
+        assert_eq!(
+            uniform_names(&program),
+            ["g_Brightness", "kb_fs_g_Brightness"]
+        );
+        assert!(uniform(&program, "g_Brightness").meta.is_none());
+        assert_eq!(
+            uniform(&program, "kb_fs_g_Brightness")
+                .meta
+                .as_ref()
+                .unwrap()["material"],
+            "brightness"
+        );
+    }
+
+    #[test]
+    fn renamed_uniform_avoids_existing_identifiers() {
+        let vs =
+            "uniform float g_A; // {\"material\":\"a\"}\nvoid main() { gl_Position = vec4(g_A); }";
+        let fs = "uniform float g_A; // {\"material\":\"b\"}\nvoid main() { float kb_fs_g_A = 1.0; gl_FragColor = vec4(g_A + kb_fs_g_A); }";
+        let program = build(&lines(vs), &lines(fs)).unwrap();
+        assert_eq!(uniform_names(&program), ["g_A", "kb_fs_g_A_2"]);
+        assert!(
+            program
+                .fragment_glsl
+                .contains("float kb_fs_g_A = 1.0; kb_FragColor = vec4(kb_fs_g_A_2 + kb_fs_g_A);"),
+            "{}",
+            program.fragment_glsl
+        );
     }
 
     #[test]

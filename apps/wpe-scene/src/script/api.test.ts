@@ -4,7 +4,7 @@ import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import { MISSING_SCRIPT_API, type ScriptApiGroup } from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
-import { SceneState } from "../render/state";
+import { SceneState, scriptWriteValue } from "../render/state";
 import { createWpeLocalStorage, ScriptApi } from "./api";
 import { alignScriptEnvironment } from "./environment";
 import { ScriptRuntime, type ScriptRealm } from "./runtime";
@@ -139,7 +139,7 @@ function setup(audioRegistered?: () => void) {
         return true;
       }
       if (target.kind === "unsupported" || target.kind === "script-property") return false;
-      state.write({ property: "test", target }, Array.isArray(value) ? value.join(" ") : value);
+      state.write({ property: "test", target }, scriptWriteValue(value));
       return true;
     },
     audioRegistered,

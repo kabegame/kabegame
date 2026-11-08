@@ -13,10 +13,10 @@ import {
   type RecompileReason,
   type SceneBinding,
   type TargetKey,
-  valueTypeOf,
 } from "./bindings";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
+import { constantTargetFields, materialSlots } from "./materialValues";
 import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import {
   checkEffectFeatures,
@@ -667,10 +667,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       for (const script of scripts.list) {
         if (script.owner.kind !== "material" || script.owner.pass !== context.key || script.target.kind !== "constant")
           continue;
+        // 脚本写回走 WPE 的类型化 setter，类型是这个键 setter 的类型（主格的，vector-constant-REPORT.md 2.6）
         const material = script.target.material;
-        const uniforms = (result.uniforms ?? []).filter((uniform) => uniform.meta?.material === material);
-        script.target.uniforms = uniforms.map((uniform) => uniform.name);
-        if (uniforms[0]) script.target.type = valueTypeOf(uniforms[0]);
+        const slot = materialSlots(result.uniforms ?? []).find((item) => item.material === material);
+        if (slot) Object.assign(script.target, constantTargetFields(slot));
+        else script.target.uniforms = [];
         script.valueType = script.target.type;
       }
     }
@@ -703,7 +704,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       textures: slots,
       runtime,
       uniforms: {
-        ...shaderUniforms(result, pass, properties, context.key, bindings),
+        ...shaderUniforms(result, pass, properties, context.key, bindings, issues),
         ...(result?.ok && usesLighting(result) ? sceneLights() : {}),
       },
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),

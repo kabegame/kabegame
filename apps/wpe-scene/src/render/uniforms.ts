@@ -15,8 +15,8 @@ import type { DrawStep } from "./graph";
 import { identity, invert, multiply, normalMatrix, orthographic, scaling, type Mat4 } from "./math";
 import type { LayerState } from "./state";
 
-/** 翻译器结果里还带 `declared`（WPESL 声明类型），胶水的类型定义没有列出。 */
-export type UniformEntry = UniformLayout & { declared?: string };
+/** 翻译器反射的一格 uniform（`declared` 已并入胶水的 `UniformLayout`，这个名字留作别名）。 */
+export type UniformEntry = UniformLayout;
 
 type Scalar = "f32" | "i32" | "u32";
 interface Shape {

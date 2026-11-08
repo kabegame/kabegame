@@ -17,7 +17,7 @@ import type { SceneScalar } from "./compile/model";
 import { SCENE_POSTPROCESS_SETTINGS, type ScenePostprocessSetting } from "./compile/postprocess";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import type { SceneStyle } from "./render/layout";
-import { SceneState } from "./render/state";
+import { SceneState, scriptWriteValue } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
 import { schemeColor } from "./sceneStyle";
@@ -298,7 +298,7 @@ export class SceneHost {
     if (target.kind === "recompile") return this.overrideAndReload(target.path, value);
     const state = this.scriptState;
     if (!state) return false;
-    const result = state.write({ property: "", target }, Array.isArray(value) ? value.join(" ") : value);
+    const result = state.write({ property: "", target }, scriptWriteValue(value));
     // 打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景：状态没变，结果由整场编译决定，编译要拿到脚本的值
     return result === "recompile" ? this.overrideAndReload(this.targetPath(target), value) : true;
   }
