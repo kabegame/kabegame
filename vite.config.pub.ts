@@ -7,6 +7,7 @@ import path from "path";
 import UnoCSS from "unocss/vite";
 import { getDevServerHost } from "./scripts/utils";
 import { kabegameDebugServer } from "./scripts/vite-debug-server";
+import { kabegameDev } from "./scripts/kabegame-dev/plugin";
 
 export const root = __dirname;
 
@@ -33,6 +34,8 @@ export default {
       enabled: isDebugIngestEnabled,
       allowRemote: isAndroid || isWeb,
     }),
+    // dev 工具：持有 CDP 连接，对外 /__kabegame_dev/* REST（scripts/kabegame-dev/）
+    kabegameDev({ workspaceRoot: root, android: isAndroid }),
   ],
 
   define: {

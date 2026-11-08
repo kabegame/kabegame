@@ -23,13 +23,32 @@ const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
  * 文件可能是陈旧的（app 退出不会撤销登记），所以读回来的号照旧要探活——skill 与
  * 本文件的 GET 分支都不假设它一定还活着。
  */
-interface CdpRegistration {
+export interface CdpRegistration {
   port: number;
   pid: number | null;
   registeredAt: string;
 }
 
 const CDP_PORT_FILE = "cdp-port.json";
+
+/**
+ * 内存中的登记，按落盘目录区分。放在模块级而不是插件闭包里，`scripts/kabegame-dev/` 插件经
+ * `currentCdpRegistration` 读的是同一份。
+ */
+const registrations = new Map<string, CdpRegistration>();
+
+/**
+ * 当前的 CDP 登记：内存优先，没有再读落盘（vite 重启会清空内存）。不探活：登记可能陈旧，调用方要自己验
+ * `/json/version`。
+ */
+export async function currentCdpRegistration(debugDir: string): Promise<CdpRegistration | null> {
+  const key = path.resolve(debugDir);
+  const memory = registrations.get(key);
+  if (memory) return memory;
+  const file = await readCdpFile(key);
+  if (file) registrations.set(key, file);
+  return file;
+}
 
 async function readCdpFile(debugDir: string): Promise<CdpRegistration | null> {
   try {
@@ -76,7 +95,6 @@ export function kabegameDebugServer(options: KabegameDebugServerOptions): Plugin
   const logToConsole = options.logToConsole ?? process.env.KABEGAME_DEBUG_TEE_CONSOLE === "true";
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const debugDir = path.resolve(options.workspaceRoot, ".kabegame", "debug");
-  let cdp: CdpRegistration | null = null;
 
   return {
     name: "kabegame-debug-server",
@@ -111,21 +129,22 @@ export function kabegameDebugServer(options: KabegameDebugServerOptions): Plugin
                 return;
               }
               const pid = Number.isInteger(Number(parsed.pid)) ? Number(parsed.pid) : null;
-              cdp = { port, pid, registeredAt: new Date().toISOString() };
-              await writeCdpFile(debugDir, cdp);
+              const registration: CdpRegistration = { port, pid, registeredAt: new Date().toISOString() };
+              registrations.set(path.resolve(debugDir), registration);
+              await writeCdpFile(debugDir, registration);
               console.log(`[kabegame-cdp] registered CDP port ${port}${pid ? ` (pid ${pid})` : ""}`);
-              sendJson(res, 200, { ok: true, ...cdp });
+              sendJson(res, 200, { ok: true, ...registration });
               return;
             }
 
             if (req.method === "GET" && (url.pathname === CDP_PREFIX || url.pathname === `${CDP_PREFIX}/`)) {
               // vite restart 会清空内存态，落盘的登记是唯一能跨重启活下来的副本
-              cdp ??= await readCdpFile(debugDir);
-              if (!cdp) {
+              const registration = await currentCdpRegistration(debugDir);
+              if (!registration) {
                 sendJson(res, 404, { ok: false, error: "no CDP port registered" });
                 return;
               }
-              sendJson(res, 200, { ok: true, ...cdp });
+              sendJson(res, 200, { ok: true, ...registration });
               return;
             }
 
