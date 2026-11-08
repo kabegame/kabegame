@@ -6,7 +6,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { compileScene, particleSheetDefines, spriteSheet, type ParticleSheetSystem } from "./bundle";
+import {
+  compileScene,
+  particleRendererDefines,
+  particleSheetDefines,
+  particleTex0Format,
+  spriteSheet,
+  type ParticleSheetSystem,
+} from "./bundle";
 import { checkParticleProgram, checkProgramFeatures, PARTICLE_UNIFORMS } from "./features";
 import { SceneFs, type SceneFile, type SceneReader } from "./fs";
 import type { JsonObject } from "./model";
@@ -432,6 +439,38 @@ function fakeTranslator(reply: (request: TranslateRequest) => TranslateResult = 
   return { translator, requests };
 }
 
+describe("renderer 的宏（P4c 步骤 5，FUN_1401d2340，rea-p4c-render.md 6.2、rea-p4b-render.md 2.4）", () => {
+  const system = (kind: "sprite" | "spritetrail", mode: 0 | 1 | 2 = 0): ParticleSheetSystem => ({
+    flags: 0,
+    animationMode: "sequence",
+    renderer: { kind, orientation: { mode } },
+  });
+
+  it("particleRendererDefines：拖尾写 THICKFORMAT、TRAILRENDERER；sprite（任何朝向）与缺省不写", () => {
+    expect(particleRendererDefines(system("spritetrail"))).toEqual({ THICKFORMAT: "1", TRAILRENDERER: "1" });
+    expect(particleRendererDefines(system("spritetrail", 2))).toEqual({ THICKFORMAT: "1", TRAILRENDERER: "1" });
+    for (const mode of [0, 1, 2] as const) expect(particleRendererDefines(system("sprite", mode))).toEqual({});
+    expect(particleRendererDefines({ flags: 0, animationMode: "sequence" })).toEqual({});
+  });
+
+  it("particleTex0Format：厚格式只看 8–11；非厚格式 sprite 的非 screen 朝向对任何格式都写；格式未知不写", () => {
+    for (const format of [0, 4, 6, 7, 12]) {
+      expect(particleTex0Format(format, false, system("sprite", 0)), `${format}`).toBeUndefined();
+      expect(particleTex0Format(format, false, system("sprite", 1)), `${format}`).toBe(format);
+      expect(particleTex0Format(format, false, system("sprite", 2)), `${format}`).toBe(format);
+      // 厚格式（帧表的 sprite、拖尾）：朝向不起作用
+      expect(particleTex0Format(format, true, system("sprite", 2)), `${format}`).toBeUndefined();
+      expect(particleTex0Format(format, true, system("spritetrail", 1)), `${format}`).toBeUndefined();
+    }
+    for (const format of [8, 9, 10, 11])
+      for (const thick of [false, true])
+        for (const mode of [0, 1, 2] as const)
+          expect(particleTex0Format(format, thick, system("sprite", mode))).toBe(format);
+    expect(particleTex0Format(undefined, false, system("sprite", 2))).toBeUndefined();
+    expect(particleTex0Format(0, false, { flags: 0, animationMode: "sequence" })).toBeUndefined();
+  });
+});
+
 describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
   const ORTHO = { orthogonalprojection: { width: 1920, height: 1080 } };
   const system = (extra: JsonObject = {}) => ({
@@ -556,6 +595,28 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     );
     expect(image.unsupported).toEqual(["tex:animation"]);
     expect(image.textures).toHaveLength(1);
+  });
+
+  it("拖尾 + 帧表（P4c 步骤 5）：THICKFORMAT、TRAILRENDERER 之外照写 SPRITESHEET*；混帧规则不变", async () => {
+    const { translator, requests } = fakeTranslator();
+    const bundle = await compile(
+      memoryReader(files({ "P:/p/particles/p.json": system({ renderer: [{ name: "spritetrail", minlength: 3 }] }) })),
+      translator,
+    );
+    expect(bundle.unsupported).toEqual([]);
+    expect(requests.map((request) => request.defines)).toEqual([
+      {
+        SCENE_ORTHO: "1",
+        THICKFORMAT: "1",
+        TRAILRENDERER: "1",
+        SPRITESHEET: "1",
+        SPRITESHEETBLEND: "1",
+        SPRITESHEETBLENDNPOT: "0",
+        TEX0FORMAT: "9",
+      },
+    ]);
+    expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
+    expect(bundle.layers[0].particle!.renderer.trail).toEqual([Math.fround(0.05), 10, 3]);
   });
 
   it("没有帧表的粒子材质：宏逐字和步骤 1 相同（只有 TEX0FORMAT），spriteSheet 为 false", async () => {

@@ -3,7 +3,7 @@
  * 同格式的数据，交给 `cmp_track.py` 逐帧比。纯函数，不碰 GPU。
  *
  * 字段语义与 RenderDoc 轨迹一致（写进顶点的值）：`pos` 位置，`size` 当前尺寸（`sizerandom 40` → 20），`color` 当前颜色 rgb，
- * `alpha` 当前 alpha，`rot` 旋转 xyz；帧表系统另有 `thick`（`a_TexCoordVec4C1`，同 `rdc_track_b.py` 读出的 `TEXCOORD1`）。
+ * `alpha` 当前 alpha，`rot` 旋转 xyz；帧表系统与拖尾另有 `thick`（`a_TexCoordVec4C1`，同 `rdc_track_b.py` 读出的 `TEXCOORD1`）。
  * 粒子按槽序、跳过空槽；没有存活粒子的系统不出现（RenderDoc 那边没有这次绘制）。
  *
  * 帧号与 WPE 脚本帧号对齐：`dts[0]` 是第 1 帧。每个系统加载时先预热（场景时间 0），再从第 1 帧步进；第 n 帧的场景时间是
@@ -25,7 +25,10 @@ export interface ParticleTrackParticle {
   color: number[];
   alpha: number;
   rot: number[];
-  /** 帧表系统（`spriteSheet`）才有：`[vx, vy, vz, frame 原值]`，写进顶点的第二组属性，frame 不取小数（P4b 步骤 2）。 */
+  /**
+   * 帧表系统（`spriteSheet`）与拖尾（renderer 是 `spritetrail`，P4c 步骤 5）才有：`[vx, vy, vz, frame 原值]`，写进顶点的第二组属性，
+   * frame 不取小数（P4b 步骤 2）。
+   */
   thick?: number[];
 }
 
@@ -84,12 +87,17 @@ export interface ParticleTrackOptions {
   tag?: string;
 }
 
-/** 一个系统当前的存活粒子，按槽序。 */
-export function particleSnapshot(system: ParticleSystem): ParticleTrackParticle[] {
+/**
+ * 一个系统当前的存活粒子，按槽序。`keep` 再按槽挑一遍（dev 四角探针只要写了顶点的粒子：拖尾跳过退化的，P4c 步骤 5）。
+ * 厚格式的列（速度、frame）在帧表系统与拖尾里有。
+ */
+export function particleSnapshot(system: ParticleSystem, keep?: (slot: number) => boolean): ParticleTrackParticle[] {
   const c = system.columns;
   const out: ParticleTrackParticle[] = [];
+  const thick = system.def.spriteSheet || system.def.renderer?.kind === "spritetrail";
   for (let i = 0; i < system.highWater; i++) {
     if (c.life[i] === 0) continue;
+    if (keep && !keep(i)) continue;
     const particle: ParticleTrackParticle = {
       pos: [c.position[0][i], c.position[1][i], c.position[2][i]],
       size: c.size[i],
@@ -97,7 +105,7 @@ export function particleSnapshot(system: ParticleSystem): ParticleTrackParticle[
       alpha: c.alpha[i],
       rot: [c.rotation[0][i], c.rotation[1][i], c.rotation[2][i]],
     };
-    if (system.def.spriteSheet) particle.thick = [c.velocity[0][i], c.velocity[1][i], c.velocity[2][i], c.frame[i]];
+    if (thick) particle.thick = [c.velocity[0][i], c.velocity[1][i], c.velocity[2][i], c.frame[i]];
     out.push(particle);
   }
   return out;

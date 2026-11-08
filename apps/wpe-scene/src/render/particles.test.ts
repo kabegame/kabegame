@@ -981,6 +981,184 @@ describe("GpuScene：粒子绘制（假设备）", () => {
   });
 });
 
+describe("GpuScene：拖尾与 sprite 朝向（P4c 步骤 5）", () => {
+  // uniform 偏移见 PARTICLE_PROGRAM：Up 128、Right 144、Forward 160、g_RenderVar0 224
+  const orientation = (draw: DrawView) => ({
+    up: floats(draw.uniformBuffer, 128, 3).map((v) => v + 0),
+    right: floats(draw.uniformBuffer, 144, 3).map((v) => v + 0),
+    forward: floats(draw.uniformBuffer, 160, 3).map((v) => v + 0),
+  });
+  const near = (actual: number[], expected: number[]) =>
+    expected.forEach((value, i) => expect(actual[i], `${actual} vs ${expected}`).toBeCloseTo(value, 6));
+  const ANGLES = (object: number) => ({ kind: "layer", object, field: "angles" }) as const;
+  const ORIGIN = (object: number) => ({ kind: "layer", object, field: "origin" }) as const;
+  /** 速度定值的粒子层（velocityrandom 的 min = max）。 */
+  const moving = (velocity: string, renderer: JsonObject[], json: JsonObject = {}) => ({
+    initializer: [
+      { name: "lifetimerandom", min: 100, max: 100 },
+      { name: "sizerandom", min: 40, max: 40 },
+      { name: "velocityrandom", min: velocity, max: velocity },
+    ],
+    renderer,
+    ...json,
+  });
+
+  it("朝向按 renderer 与绘制的模型矩阵写（rea-p4c-render.md 7.2）；改对象变换就地重写；世界空间系统用单位阵；材质值优先", async () => {
+    const [c, s] = [Math.cos(0.5), Math.sin(0.5)];
+    const upright = [{ name: "sprite", flags: 1 }];
+    const bundle = bundleOf([
+      particleLayer(1, { renderer: upright }, { angles: [0, 0, 0.5] }),
+      particleLayer(2, { flags: 1, renderer: upright }, { angles: [0, 0, 0.5] }),
+      particleLayer(3, { renderer: [{ name: "sprite", orientation: "upright", axis: "1 0 0" }] }),
+      particleLayer(4, { renderer: upright }, { angles: [0, 0, 0.5] }),
+    ]);
+    bundle.layers[3].particle!.passes[0].uniforms = { g_Overbright: [2], g_OrientationUp: [0, 0, 1] };
+    const { state, scene } = await open(bundle);
+    // 本地系统、flags 1：本地基反向转（世界里保持直立，S13）
+    let local = orientation(particleDraw(scene, 1));
+    near(local.right, [c, -s, 0]);
+    near(local.up, [s, c, 0]);
+    near(local.forward, [0, 0, 1]);
+    // 世界空间系统：模型矩阵是单位阵，朝向不看对象的旋转
+    expect(orientation(particleDraw(scene, 2))).toEqual({ up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1] });
+    // upright 轴 (1,0,0)：纹理转 90°（7.4）
+    const turned = orientation(particleDraw(scene, 3));
+    near(turned.right, [0, -1, 0]);
+    near(turned.up, [1, 0, 0]);
+    // 改对象变换：脏图层就地重写朝向；世界空间系统仍是单位基
+    state.write({ property: "a", target: ANGLES(1) }, "0 0 0");
+    state.write({ property: "b", target: ANGLES(2) }, "0 0 1");
+    state.write({ property: "c", target: ANGLES(4) }, "0 0 0");
+    scene.sync(state);
+    stepFrame(scene, frame(1 / 60), state);
+    local = orientation(particleDraw(scene, 1));
+    near(local.right, [1, 0, 0]);
+    near(local.up, [0, 1, 0]);
+    expect(orientation(particleDraw(scene, 2))).toEqual({ up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1] });
+    // 材质值优先：就地刷新不覆盖 pass.uniforms 里的名字，其余两个照常重写
+    const material = orientation(particleDraw(scene, 4));
+    expect(material.up).toEqual([0, 0, 1]);
+    near(material.right, [1, 0, 0]);
+  });
+
+  it("upright 的轴平行于视线：朝向是 NaN，这次绘制跳过（不 drawIndexed、不传顶点），uniform 照写；对象转开后照常画", async () => {
+    const bundle = bundleOf([
+      particleLayer(1, { renderer: [{ name: "sprite", orientation: "upright", axis: "0 0 1" }] }),
+      particleLayer(2),
+    ]);
+    const { gpu, state, scene } = await open(bundle);
+    stepFrame(scene, frame(0.5), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 3 particles 2 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+    ]);
+    expect(gpu.buffer("layer 2 particles 1 particles").writes).toEqual([]);
+    const hidden = orientation(particleDraw(scene, 1));
+    expect(hidden.up).toEqual([0, 0, 1]);
+    expect(hidden.right.every(Number.isNaN)).toBe(true);
+    // 模拟照常（隐藏的是绘制，不是对象）
+    expect(particleDraw(scene, 1).particles!.system.alive).toBe(5);
+    // 对象绕 x 转：轴离开视线，下一帧照画（不用等步进，顶点已标 stale）
+    state.write({ property: "a", target: ANGLES(1) }, "0.5 0 0");
+    scene.sync(state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 2 particles 1 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+      "vertex layer 3 particles 2 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+    ]);
+    // uniform 块在 update 时整块重写
+    scene.update(frame(0), state);
+    expect(orientation(particleDraw(scene, 1)).right.some(Number.isNaN)).toBe(false);
+  });
+
+  it("拖尾：g_RenderVar0 = (length, maxlength, minlength, 0)，sprite 为 0；速度为 0 的粒子不写顶点、不画；sprite 系统速度为 0 照画", async () => {
+    const trail = [{ name: "spritetrail", length: 0.08, maxlength: 7, minlength: 12 }];
+    const bundle = bundleOf([
+      particleLayer(1, { renderer: trail }),
+      particleLayer(2),
+      particleLayer(3, moving("100 0 0", [{ name: "spritetrail" }])),
+    ]);
+    const { gpu, state, scene } = await open(bundle);
+    expect(floats(particleDraw(scene, 1).uniformBuffer, 224, 4)).toEqual([Math.fround(0.08), 7, 12, 0]);
+    expect(floats(particleDraw(scene, 2).uniformBuffer, 224, 4)).toEqual([0, 0, 0, 0]);
+    expect(floats(particleDraw(scene, 3).uniformBuffer, 224, 4)).toEqual([Math.fround(0.05), 10, 0, 0]);
+    stepFrame(scene, frame(0.5), state);
+    // 层 1：5 个粒子都静止，一个都不写；层 2（sprite）照画；层 3 有速度，全写
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 3 particles 2 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+      "vertex layer 4 particles 3 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+    ]);
+    expect(particleDraw(scene, 1).particles!.count).toBe(0);
+    expect(particleDraw(scene, 1).particles!.system.alive).toBe(5);
+    // 层 3：把两个粒子的速度清零，重写顶点后只画 3 个，写的是余下的（按槽序）
+    const draw = particleDraw(scene, 3);
+    const system = draw.particles!.system;
+    for (const slot of [1, 3]) for (let i = 0; i < 3; i++) system.columns.velocity[i][slot] = 0;
+    (draw.particles as unknown as { stale: boolean }).stale = true;
+    expect(draws(gpu.encode(scene, state)).at(-1)).toBe("drawIndexed 18");
+    expect(draw.particles!.count).toBe(3);
+  });
+
+  it("拖尾：速度平行于视线的不写；眼位按绘制模型矩阵换到本地，对象移动后不步进也重写顶点", async () => {
+    // 粒子在本地 (100, 200, 0)，对象在原点时 eyeLocal = (960, 540, 2000)：速度 (−43, −17, −100) 正好指向眼位（−0.05 倍）
+    const bundle = bundleOf([
+      particleLayer(1, moving("-43 -17 -100", [{ name: "spritetrail" }])),
+      particleLayer(2, moving("0 0 100", [{ name: "spritetrail" }])),
+    ]);
+    const { gpu, state, scene } = await open(bundle);
+    stepFrame(scene, frame(0.5), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 3 particles 2 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+    ]);
+    // 层 2 的对象移到 (860, 340)：本地眼位 (100, 200, 2000) 正在粒子正上方，沿 z 的速度退化
+    state.write({ property: "o", target: ORIGIN(2) }, "860 340 0");
+    scene.sync(state);
+    expect(draws(gpu.encode(scene, state))).toEqual([]);
+    // 移回原点：眼位换回，顶点重写，照画
+    state.write({ property: "o", target: ORIGIN(2) }, "0 0 0");
+    scene.sync(state);
+    expect(draws(gpu.encode(scene, state)).at(-1)).toBe("drawIndexed 30");
+  });
+
+  it("世界空间的拖尾：眼位就是场景的 g_EyePosition（模型矩阵是单位阵），不随对象移动", async () => {
+    const bundle = bundleOf([
+      particleLayer(1, moving("0 0 100", [{ name: "spritetrail" }], { flags: 1 }), { origin: [860, 340, 0] }),
+    ]);
+    const { gpu, state, scene } = await open(bundle);
+    // 粒子出生在世界 (960, 540, 0)（对象原点 + 发射器 origin），正好在场景眼位正下方：退化
+    stepFrame(scene, frame(0.5), state);
+    expect(particleDraw(scene, 1).particles!.system.columns.position[0][0]).toBe(960);
+    expect(draws(gpu.encode(scene, state))).toEqual([]);
+    state.write({ property: "o", target: ORIGIN(1) }, "0 0 0");
+    scene.sync(state);
+    // 已发出的粒子留在原地，眼位不变，仍不画
+    expect(draws(gpu.encode(scene, state))).toEqual([]);
+  });
+
+  it("dev 探针 particleProbe：拖尾跳过退化的粒子，hidden 标出朝向是 NaN 的层", async () => {
+    const bundle = bundleOf([
+      particleLayer(1, { renderer: [{ name: "spritetrail" }] }),
+      particleLayer(2, { renderer: [{ name: "sprite", orientation: "upright", axis: "0 0 1" }] }),
+    ]);
+    const { state, scene } = await open(bundle);
+    stepFrame(scene, frame(0.5), state);
+    const trail = scene.particleProbe(1)!;
+    expect([trail.count, trail.hidden, trail.trailEye]).toEqual([0, false, [960, 540, 2000]]);
+    const upright = scene.particleProbe(2)!;
+    expect([upright.count, upright.hidden, upright.trailEye]).toEqual([5, true, null]);
+  });
+});
+
 describe("GpuScene：指针的跟随点（P4c 步骤 2）", () => {
   const pointerLayer = (extra: JsonObject = {}) =>
     particleLayer(

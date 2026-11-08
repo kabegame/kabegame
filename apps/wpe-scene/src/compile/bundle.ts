@@ -57,6 +57,7 @@ import {
   readParticleSystem,
   sceneVersionOf,
   type InstanceKey,
+  type ParticleRenderer,
   type SceneParticle,
 } from "./particles";
 import {
@@ -154,10 +155,42 @@ export function spriteSheet(
   };
 }
 
-/** 帧表宏要的系统描述（`readParticleSystem` 的两项）。 */
+/** 粒子材质宏要的系统描述（`readParticleSystem` 的两项，加上绘制用的 renderer）。 */
 export interface ParticleSheetSystem {
   flags: number;
   animationMode: "sequence" | "randomframe";
+  /**
+   * 系统的 renderer（`SceneParticle.renderer` 的种类与朝向模式，P4c 步骤 5）：拖尾写 `THICKFORMAT`、`TRAILRENDERER`
+   * （`particleRendererDefines`），非厚格式 sprite 的非 screen 朝向决定 `TEX0FORMAT`（`particleTex0Format`）。缺省是 screen 朝向的 sprite。
+   */
+  renderer?: { kind: ParticleRenderer["kind"]; orientation: Pick<ParticleRenderer["orientation"], "mode"> };
+}
+
+/**
+ * renderer 的宏（`FUN_1401d2340` 的 renderer 分发，`0x1401d2590`，rea-p4c-render.md 6.2）：`spritetrail` 分支
+ * （`0x1401d2c02`–`0x1401d2f78`）写 `THICKFORMAT = 1`（`0x1401d2c6d`）、`TRAILRENDERER = 1`（`0x1401d2cf6`），有帧表时再照
+ * sprite 厚格式的写法加 `SPRITESHEET*`（`particleSheetDefines`）。sprite 不写 renderer 宏（朝向不进宏，7.8）。只支持系统里一个
+ * renderer（多个报 `particle:renderers`）。
+ */
+export function particleRendererDefines(system: ParticleSheetSystem): Record<string, string> {
+  return system.renderer?.kind === "spritetrail" ? { THICKFORMAT: "1", TRAILRENDERER: "1" } : {};
+}
+
+/**
+ * 粒子路径要写的 `TEX0FORMAT` 值（rea-p4b-render.md 2.4，`FUN_1401d2340`）；不写时为 undefined。
+ * - 厚格式（拖尾，或槽 0 是帧表）：只在格式 8–11 时写（`particleWritesTex0Format`，拖尾分支 `0x1401d2ed1`）；
+ * - 非厚格式的 sprite：格式 8–11，**或者朝向不是 screen**（`movzx eax, r8b; or eax, [rdi + 0xc]`，`0x1401d3189`）时写，值是格式本身
+ *   （不在 8–11 的格式不影响画面：`ConvertTexture0Format` 只认 RG88、RG1616F、R8、R16F），否则直接用基础材质。
+ * WPE 在槽 0 没有纹理时格式取 0（`0x1401d2513`），我们取不到格式（槽 0 是 `_rt_*`、注解也没有缺省）时不写，语料里没有这种写法。
+ */
+export function particleTex0Format(
+  format: number | undefined,
+  thick: boolean,
+  system: ParticleSheetSystem,
+): number | undefined {
+  if (format === undefined) return undefined;
+  const oriented = !thick && (system.renderer?.orientation.mode ?? 0) !== 0;
+  return oriented || particleWritesTex0Format(format) ? format : undefined;
 }
 
 /**
@@ -401,16 +434,16 @@ interface PassContext {
   /** 本 pass 不支持项的上报目标；缺省为场景级。 */
   unsupported?: Set<string>;
   /**
-   * 粒子材质（P4b 步骤 2 起带系统描述）：槽 0 格式是 8–11 时写 `TEX0FORMAT`（`particleWritesTex0Format`），槽 0 是帧表纹理时
-   * 写帧表宏（`particleSheetDefines`）；任何槽位的帧表纹理都不报 `tex:animation`（步骤 5，帧表语义只按槽 0）；程序检查带
-   * `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。
+   * 粒子材质（P4b 步骤 2 起带系统描述）：按 renderer 与槽 0 格式写 `TEX0FORMAT`（`particleTex0Format`），槽 0 是帧表纹理时
+   * 写帧表宏（`particleSheetDefines`），拖尾写 `THICKFORMAT`、`TRAILRENDERER`（`particleRendererDefines`，P4c 步骤 5）；
+   * 任何槽位的帧表纹理都不报 `tex:animation`（步骤 5，帧表语义只按槽 0）；程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。
    */
   particle?: ParticleSheetSystem;
 }
 
 /**
- * 粒子材质的槽 0 格式要不要写 `TEX0FORMAT`：WPE 的条件是 `(fmt - 8) <= 3`（无符号比较），即 8–11
- * （RG88、R8、RG1616F、R16F；rea-p4b-render.md 2.4）。非 `screen` 朝向那一支由能力表报不支持，不在这里。
+ * 粒子材质的槽 0 格式在 8–11 吗：WPE 的条件是 `(fmt - 8) <= 3`（无符号比较），即 8–11（RG88、R8、RG1616F、R16F；
+ * rea-p4b-render.md 2.4）。非厚格式 sprite 的非 `screen` 朝向那一支在 `particleTex0Format`。
  */
 export function particleWritesTex0Format(format: number): boolean {
   return format >= 8 && format <= 11;
@@ -630,15 +663,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
 
   /**
-   * 粒子路径的宏 `TEX0FORMAT`（`FUN_1401d2340`，rea-p4b-render.md 2.4）：WPE 只在槽 0 纹理的格式是 8–11（RG88、R8、
-   * RG1616F、R16F）时写，值是格式本身，着色器据此做通道换算（`ConvertTexture0Format`）。另有一支在非 `screen` 朝向时对
-   * 任何格式都写，那一支能力表已报不支持，这里不管。`hdr-macro-REPORT.md` 原说「无条件写」，按 rea-p4b-render 修正；
+   * 粒子路径的宏 `TEX0FORMAT`（`FUN_1401d2340`，rea-p4b-render.md 2.4）：WPE 在槽 0 纹理的格式是 8–11（RG88、R8、
+   * RG1616F、R16F）时写，值是格式本身，着色器据此做通道换算（`ConvertTexture0Format`）。另有一支在非厚格式 sprite 的非 `screen`
+   * 朝向时对任何格式都写（P4c 步骤 5 起支持，`particleTex0Format`）。`hdr-macro-REPORT.md` 原说「无条件写」，按 rea-p4b-render 修正；
    * 格式 0、4 时着色器分支本来相同，收窄只让缓存键和 WPE 一致（不写时与图层材质同一条键规则）。
    * 格式取值规则同 `TEX<n>FORMAT`（`.tex` 格式枚举；`_rt_*` 按 RT 格式，`_rt_FullFrameBuffer` 为 0）。经 `defines` 传，进缓存键。
    * 图层材质不走这里，`TEX<n>FORMAT` 仍只按 `formatcombo` 由翻译器定。
    * 槽 0 没按名字写时取着色器注解的 `default`：先不带这个宏翻译一次读注解（结果进缓存，不上报，正式翻译会再报一遍），
    * 仍取不到时不写（语料里粒子材质的槽 0 都按名字写了）。
-   * 槽 0 的纹理带帧表（`SceneTexture.sheet`，WPE 据此置系统的 `0x1000000`）时另写帧表宏（`particleSheetDefines`，P4b 步骤 2）。
+   * 槽 0 的纹理带帧表（`SceneTexture.sheet`，WPE 据此置系统的 `0x1000000`）时另写帧表宏（`particleSheetDefines`，P4b 步骤 2）；
+   * 拖尾另写 `THICKFORMAT`、`TRAILRENDERER`（`particleRendererDefines`，P4c 步骤 5）。
    * 槽 0 的纹理按同一规则取：按名字写的（`slots[0]`），否则是注解的 `default`。
    */
   async function particleDefines(
@@ -660,9 +694,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         texture = found ? bundle.textures[found.index] : undefined;
       }
     }
+    // 拖尾一定走厚格式（`need |= 2`），帧表的 sprite 也是（rea-p4b-render.md 2.4）
+    const thick = system.renderer?.kind === "spritetrail" || !!texture?.sheet;
+    const tex0 = particleTex0Format(format, thick, system);
     return {
+      ...particleRendererDefines(system),
       ...particleSheetDefines(texture?.sheet, system),
-      ...(format !== undefined && particleWritesTex0Format(format) ? { TEX0FORMAT: String(format) } : {}),
+      ...(tex0 !== undefined ? { TEX0FORMAT: String(tex0) } : {}),
     };
   }
 
@@ -720,7 +758,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const material = parseMaterial(materialText);
     // 语料里粒子材质都是 1 个 pass；多 pass 怎么画没读，保守报
     if (material.passes.length !== 1) unsupported.add("particle:material:passes");
-    const sheetSystem: ParticleSheetSystem = { flags, animationMode: particle.animationMode };
+    const sheetSystem: ParticleSheetSystem = {
+      flags,
+      animationMode: particle.animationMode,
+      renderer: particle.renderer,
+    };
     for (const [k, pass] of material.passes.entries())
       particle.passes.push(
         await compilePass(pass, { key: `objects/${index}/particle/passes/${k}`, particle: sheetSystem }),

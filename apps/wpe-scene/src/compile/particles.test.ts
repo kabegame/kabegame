@@ -40,7 +40,7 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项，外加 renderer sprite；每项都有列和执行函数，sprite 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项，外加 renderer sprite、spritetrail（P4c 步骤 5）；每项都有列和执行函数，renderer 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
@@ -67,6 +67,7 @@ describe("模块表", () => {
       "operator:turbulence",
       "operator:capvelocity",
       "renderer:sprite",
+      "renderer:spritetrail",
     ]);
     for (const def of PARTICLE_MODULES) {
       expect(def.columns.length, def.name).toBeGreaterThan(0);
@@ -207,6 +208,12 @@ describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
       },
     ],
     ["operator", "capvelocity", { maxspeed: 100, ...BLEND }],
+    // P4c 步骤 5（rea-p4c-render.md 6.1）：`FUN_1401c0af0` 只补 length、maxlength，正交透视一套；minlength 不补，读成 0
+    [
+      "renderer",
+      "spritetrail",
+      { length: 0.05, maxlength: 10, minlength: 0, orientation: "screen", axis: [0, 0, 0], flags: 0 },
+    ],
   ];
 
   it.each(ortho)("正交：%s %s", (category, name, expected) => {
@@ -389,6 +396,60 @@ describe("解析：系统", () => {
     expect(
       parseParticle({ renderer: [{ id: 1, name: "sprite" }] }, { file: "p.json", orthographic: true }).renderers[0].id,
     ).toBe(1);
+  });
+
+  it("spritetrail（P4c 步骤 5，rea-p4c-render.md 6.1）：三个缺省值，minlength 不写为 0；负值与 minlength > maxlength 原样存", () => {
+    const fields = (json: JsonObject) => readParticleModule("renderer", { name: "spritetrail", ...json }, true).fields;
+    for (const orthographic of [true, false])
+      expect(readParticleModule("renderer", { name: "spritetrail" }, orthographic).fields).toMatchObject({
+        length: 0.05,
+        maxlength: 10,
+        minlength: 0,
+      });
+    expect(fields({ minlength: 12, maxlength: 10 })).toMatchObject({ length: 0.05, maxlength: 10, minlength: 12 });
+    expect(fields({ length: -0.5, maxlength: -3, minlength: -1 })).toMatchObject({
+      length: -0.5,
+      maxlength: -3,
+      minlength: -1,
+    });
+    // null 当缺键
+    expect(fields({ minlength: null, length: null })).toMatchObject({ length: 0.05, minlength: 0 });
+  });
+
+  it("renderer 的 flags 只留低 8 位（FUN_140085f70 取无符号整数后存一个字节，0x1401c29b2）", () => {
+    const flags = (value: unknown) =>
+      readParticleModule("renderer", { name: "sprite", flags: value }, true).fields.flags;
+    expect(flags(1)).toBe(1);
+    expect(flags(255)).toBe(255);
+    expect(flags(256)).toBe(0);
+    expect(flags(257)).toBe(1);
+    expect(flags(-1)).toBe(255);
+    expect(flags(1.9)).toBe(1);
+    expect(flags(2 ** 32 + 3)).toBe(3);
+    expect(readParticleModule("renderer", { name: "spritetrail", flags: 0x1ff }, true).fields.flags).toBe(0xff);
+  });
+
+  it("particleRenderer：第一个表内的 renderer；拖尾的 g_RenderVar0 按 float32 原样存，sprite 为 null；没有 renderer 时是缺省的 sprite", () => {
+    const parse = (renderer: unknown) => parseParticle({ renderer }, { file: "p.json", orthographic: true }).renderer;
+    const trail = parse([{ name: "spritetrail", length: 0.08, maxlength: 7.3, minlength: 12, orientation: "fixed" }]);
+    expect(trail.kind).toBe("spritetrail");
+    expect(trail.trail).toEqual([Math.fround(0.08), Math.fround(7.3), 12]);
+    expect(trail.orientation.mode).toBe(2);
+    expect(parse([{ name: "spritetrail" }]).trail).toEqual([Math.fround(0.05), 10, 0]);
+    const sprite = parse(undefined);
+    expect(sprite).toEqual({
+      kind: "sprite",
+      trail: null,
+      orientation: { mode: 0, axis: [0, 1, 0], t: [0, 0, -1], flags: 0 },
+    });
+    expect(parse([])).toEqual(sprite);
+    expect(parse([{ name: "sprite", orientation: "upright", flags: 3 }]).orientation).toMatchObject({
+      mode: 1,
+      flags: 3,
+    });
+    // 表外 renderer 不算（能力表报），多个时取第一个表内的（只在强制渲染时用）
+    expect(parse([{ name: "rope" }, { name: "spritetrail" }]).kind).toBe("spritetrail");
+    expect(parse([{ name: "sprite" }, { name: "spritetrail" }]).kind).toBe("sprite");
   });
 
   it("maxcount、starttime、flags、animationmode、sequencemultiplier：缺键与 null 取缺省", () => {
@@ -614,13 +675,13 @@ describe("能力表：粒子", () => {
         emitter: [{ name: "layerimage" }],
         initializer: [{ name: "remapinitialvalue" }],
         operator: [{ name: "reducemovementnearcontrolpoint" }],
-        renderer: [{ name: "spritetrail" }],
+        renderer: [{ name: "rope" }],
       }),
     ).toEqual([
       "particle:emitter:layerimage",
       "particle:initializer:remapinitialvalue",
       "particle:operator:reducemovementnearcontrolpoint",
-      "particle:renderer:spritetrail",
+      "particle:renderer:rope",
     ]);
     // 步骤 3 的 8 个模块进了表
     expect(
@@ -945,14 +1006,32 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ operator: { name: "movement" } })).toEqual(["particle:system:operator"]);
   });
 
-  it("sprite：orientation 不是 screen、axis 非零、flags 非 0 报；多个 renderer 报", () => {
-    const sprite = (fields: JsonObject) => particleKeys({ renderer: [{ name: "sprite", ...fields }] });
-    expect(sprite({ orientation: "screen", axis: "0 0 0", flags: 0 })).toEqual([]);
-    expect(sprite({ orientation: "upright" })).toEqual(["particle:renderer:sprite:orientation"]);
-    expect(sprite({ orientation: "fixed" })).toEqual(["particle:renderer:sprite:orientation"]);
-    expect(sprite({ axis: "0 1 0" })).toEqual(["particle:renderer:sprite:axis"]);
-    expect(sprite({ flags: 1 })).toEqual(["particle:renderer:sprite:flags"]);
+  it("renderer（P4c 步骤 5）：sprite 的 orientation、axis、flags 各种取值不报；spritetrail 不报；两个 renderer 仍报 particle:renderers；rope 两类照报", () => {
+    for (const name of ["sprite", "spritetrail"]) {
+      const renderer = (fields: JsonObject) => particleKeys({ renderer: [{ name, ...fields }] });
+      expect(renderer({}), name).toEqual([]);
+      for (const orientation of ["screen", "upright", "fixed", "Upright", "foo", ""])
+        expect(renderer({ orientation }), `${name} ${orientation}`).toEqual([]);
+      for (const axis of ["0 0 0", "0 1 0", "1 0 0", "0 0 1", "1 1 0", "0 0 0.000001", "0 -1 0", "-0 0 0"])
+        expect(renderer({ axis }), `${name} ${axis}`).toEqual([]);
+      for (const flags of [0, 1, 2, 3, 255, 256, -1, 1.5]) expect(renderer({ flags }), `${name} ${flags}`).toEqual([]);
+      expect(renderer({ orientation: "fixed", axis: "1 0 1", flags: 1 }), name).toEqual([]);
+    }
+    expect(particleKeys({ renderer: [{ name: "spritetrail", length: 0.08, maxlength: 10, minlength: 12 }] })).toEqual(
+      [],
+    );
+    // 形状不对照报（模块表的统一规则，比 WPE 严：WPE 的 axis 写成数字会把数字当指针读）
+    expect(particleKeys({ renderer: [{ name: "sprite", axis: 1 }] })).toEqual(["particle:renderer:sprite:axis"]);
+    expect(particleKeys({ renderer: [{ name: "spritetrail", length: "x" }] })).toEqual([
+      "particle:renderer:spritetrail:length",
+    ]);
+    // 一个系统多个 renderer（WPE 各画一次、共用顶点缓冲，rea-p4c-render.md 6.3）：没做，照报
     expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "sprite" }] })).toEqual(["particle:renderers"]);
+    expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "spritetrail" }] })).toEqual(["particle:renderers"]);
+    expect(particleKeys({ renderer: [{ name: "spritetrail" }, { name: "sprite" }] })).toEqual(["particle:renderers"]);
+    // rope 两类属 P4d
+    expect(particleKeys({ renderer: [{ name: "rope" }] })).toEqual(["particle:renderer:rope"]);
+    expect(particleKeys({ renderer: [{ name: "ropetrail" }] })).toEqual(["particle:renderer:ropetrail"]);
   });
 
   it("风、重力键不报；perspectiveoverridefov 不报", () => {
@@ -1212,6 +1291,68 @@ describe("compileScene：粒子对象", () => {
     // 格式 10 起不在格式表里，纹理照报；宏照 WPE 的条件写
     expect(bundle.unsupported).toEqual(format >= 10 ? [`tex:format:${format}`] : []);
   });
+
+  it("拖尾的宏（P4c 步骤 5，rea-p4c-render.md 6.2）：THICKFORMAT、TRAILRENDERER；TEX0FORMAT 只在 8–11 写；sprite 不变", async () => {
+    const defines = async (renderer: JsonObject[], format = 0) => {
+      const { translator, requests } = fakeTranslator();
+      const bundle = await compile(
+        memoryReader(
+          files({
+            "P:/p/scene.json": scene([{ id: 1, particle: "particles/p.json" }]),
+            "P:/p/particles/p.json": { material: "materials/pm.json", maxcount: 2, renderer },
+            "P:/p/materials/pm.json": { passes: [{ shader: "genericparticle", textures: ["kbt/t"] }] },
+            "P:/p/materials/kbt/t.tex": rawTex(format),
+          }),
+        ),
+        translator,
+      );
+      expect(bundle.unsupported).toEqual([]);
+      return requests.map((request) => request.defines);
+    };
+    expect(await defines([{ name: "spritetrail" }])).toEqual([
+      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" },
+    ]);
+    // 拖尾走厚格式：朝向不进宏，TEX0FORMAT 仍只看 8–11
+    expect(await defines([{ name: "spritetrail", orientation: "fixed", axis: "1 0 0", flags: 1 }])).toEqual([
+      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" },
+    ]);
+    expect(await defines([{ name: "spritetrail" }], 9)).toEqual([
+      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1", TEX0FORMAT: "9" },
+    ]);
+    expect(await defines([{ name: "sprite" }])).toEqual([{ SCENE_ORTHO: "1" }]);
+    expect(await defines([{ name: "sprite", flags: 1 }])).toEqual([{ SCENE_ORTHO: "1" }]);
+  });
+
+  it.each([
+    ["screen", 0, undefined],
+    ["upright", 0, "0"],
+    ["fixed", 4, "4"],
+    ["fixed", 7, "7"],
+    ["upright", 9, "9"],
+    ["screen", 9, "9"],
+  ] as const)(
+    "非厚格式 sprite 朝向 %s、槽 0 格式 %i：TEX0FORMAT = %s（非 screen 朝向对任何格式都写，0x1401d3189）",
+    async (orientation, format, expected) => {
+      const { translator, requests } = fakeTranslator();
+      await compile(
+        memoryReader(
+          files({
+            "P:/p/scene.json": scene([{ id: 1, particle: "particles/p.json" }]),
+            "P:/p/particles/p.json": {
+              material: "materials/pm.json",
+              maxcount: 2,
+              renderer: [{ name: "sprite", orientation }],
+            },
+            "P:/p/materials/pm.json": { passes: [{ shader: "genericparticle", textures: ["kbt/t"] }] },
+            "P:/p/materials/kbt/t.tex": rawTex(format),
+          }),
+        ),
+        translator,
+      );
+      expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([expected]);
+      expect(requests.map((request) => request.defines?.TRAILRENDERER)).toEqual([undefined]);
+    },
+  );
 
   it("槽 0 没按名字写时取着色器注解的 default 定 TEX0FORMAT", async () => {
     const annotated = (fallback: string) =>

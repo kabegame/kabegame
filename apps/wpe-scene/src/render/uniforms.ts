@@ -10,6 +10,8 @@
  * 与 WPE 着色器的写法一致（例如 `genericimage2` 同时用材质的 `g_UserAlpha` 和对象的 `g_Color4`）。
  */
 import type { SceneLayer, SceneSpriteSheet, SceneTexture } from "../compile/bundle";
+import { particleRenderer, type ParticleRenderer } from "../compile/particles";
+import { orientationVectors, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import type { UniformLayout } from "../wpesl2wgsl";
 import type { DrawStep } from "./graph";
 import { identity, invert, multiply, normalMatrix, orthographic, scaling, type Mat4 } from "./math";
@@ -356,13 +358,33 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
 }
 
 /**
+ * 粒子层就地刷新时另外重写的 uniform（P4c 步骤 5）：朝向由绘制的模型矩阵算，对象（或祖先）变换变了要跟着变。和
+ * `LAYER_UNIFORMS` 一样，`pass.uniforms` 里有的名字不动。
+ */
+export const PARTICLE_REFRESH_UNIFORMS: readonly string[] = [
+  "g_OrientationForward",
+  "g_OrientationRight",
+  "g_OrientationUp",
+];
+
+/** 缺省的 renderer：screen 朝向的 sprite（`particleRenderer([])` 同值），单测与没给 renderer 的调用用。 */
+const DEFAULT_RENDERER: ParticleRenderer = particleRenderer([]);
+
+/**
  * 粒子路径才写的引擎 uniform（`common_particles.h`，P4a 步骤 4），2026-11-07 RenderDoc 实测，正交与透视场景相同：
- * - 朝向是单位基：`g_OrientationUp (0,1,0)`、`g_OrientationRight (1,0,0)`、`g_OrientationForward (0,0,1)`；
+ * - 朝向（P4c 步骤 5）：`g_OrientationForward / Right / Up` 按 renderer 的朝向、这次绘制的模型矩阵 `model`（本地系统是对象世界矩阵，
+ *   世界空间系统是单位阵）和相机的视线、上方向算（`particles/orientation.ts` 的 `orientationVectors`，rea-p4c-render.md 7.2，
+ *   `FUN_1402298b0` 是唯一的写入者，每个 renderer 每次绘制前算一次）。视线、上方向是正交场景的常量 `VIEW_FORWARD (0,0,−1)`、
+ *   `VIEW_UP (0,1,0)`：透视场景照报，透视粒子的覆盖只改视图平移和投影。缺省的 screen 朝向、对象没有 x / y 旋转时就是单位基
+ *   `Up (0,1,0)`、`Right (1,0,0)`、`Forward (0,0,1)`（P4a 实测）。算出 NaN（`upright` 的轴平行于视线）时照写 NaN，这次绘制由
+ *   `GpuScene` 跳过（`orientationBasis` 为 null）。`M` 只在对象变换变化时变，变化会标脏、重写 uniform，所以算在静态 uniform 里；
  * - `g_ViewUp`、`g_ViewRight`：档 1 的两个着色器没读，`REFRACT`（`ComputeScreenRefractionTangents`，P4b 步骤 5）才读。
  *   步骤 0 抓帧里折射着色器真的读到了，正交与透视粒子都是 `g_ViewUp (0,1,0)`、`g_ViewRight (1,0,0)`，和这里写的相同
  *   （`p4b-refract` 第 907 帧，p4-particles-REPORT.md「P4b 语义的实测核对」）。WPE 每帧从视图矩阵抽一次，透视覆盖不重算
  *   （rea-p4b-render.md 6.3）。
- * - `g_RenderVar0` 是拖尾用的，属 P4c，先写 0；档 1 的着色器没读（`referenced: false`，抓帧里是垃圾值）。
+ * - `g_RenderVar0`（P4c 步骤 5）：拖尾绘制前写 `(length, maxlength, minlength)`（`FUN_1402366f0` `0x140236a3b`，`ctx+0xa8`…`0xb0`，
+ *   rea-p4c-render.md 6.3），`w` WPE 不写、保留上一次绘制的值，`genericparticle` 不读，我们写 0。sprite 不写，我们写 0（档 1 的
+ *   着色器没读，`referenced: false`，抓帧里是垃圾值）。
  * - `g_RenderVar1`（P4b 步骤 2）：粒子 pass 槽 0 的纹理带帧表时是 `sheet.renderVar1`（帧宽、帧高、帧数、帧宽高比，
  *   `FUN_1402366f0` 每次绘制写一次，rea-p4b-render.md 2.2），否则 0。WPE 在帧向量为空时不写、保留上一次绘制的值，
  *   空帧表已由 `parseTex` 报 `tex:animation:empty`，碰不到。
@@ -370,14 +392,19 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
  * `(纹理宽, 纹理高, 图像宽, 图像高)`，`SPRITESHEETBLENDNPOT` 用它的 `z / x`）走通用的 `staticBuiltins`。
  * 名字与 `compile/features.ts` 的 `PARTICLE_UNIFORMS` 一一对应，单测核对。
  */
-export function particleBuiltins(sheet?: SceneSpriteSheet | null): Record<string, number[]> {
+export function particleBuiltins(
+  sheet?: SceneSpriteSheet | null,
+  renderer: ParticleRenderer = DEFAULT_RENDERER,
+  model: Mat4 = identity(),
+): Record<string, number[]> {
+  const { forward, right, up } = orientationVectors(renderer.orientation, model, VIEW_FORWARD, VIEW_UP);
   return {
-    g_OrientationUp: [0, 1, 0],
-    g_OrientationRight: [1, 0, 0],
-    g_OrientationForward: [0, 0, 1],
+    g_OrientationUp: up,
+    g_OrientationRight: right,
+    g_OrientationForward: forward,
     g_ViewUp: [0, 1, 0],
     g_ViewRight: [1, 0, 0],
-    g_RenderVar0: [0, 0, 0, 0],
+    g_RenderVar0: renderer.trail ? [...renderer.trail, 0] : [0, 0, 0, 0],
     g_RenderVar1: sheet ? [...sheet.renderVar1] : [0, 0, 0, 0],
   };
 }
@@ -402,6 +429,8 @@ export interface ParticleUniformInput {
   skylight?: readonly number[];
   /** 粒子 pass 槽 0 纹理的帧表（`SceneTexture.sheet`）；没有时 `g_RenderVar1` 为 0。 */
   sheet?: SceneSpriteSheet | null;
+  /** 系统的 renderer（`SceneParticle.renderer`，P4c 步骤 5）：朝向与拖尾的 `g_RenderVar0`。缺省是 screen 朝向的 sprite。 */
+  renderer?: ParticleRenderer;
 }
 
 /**
@@ -425,7 +454,8 @@ export function particleUniformValues(input: ParticleUniformInput): Record<strin
     ambient: input.ambient,
     skylight: input.skylight,
   });
-  Object.assign(values, particleBuiltins(input.sheet));
+  // 朝向用这次绘制的模型矩阵（同 `g_ModelMatrix`，rea-p4c-render.md 7.2：两者都取 `*(ctx+0x30)`）
+  Object.assign(values, particleBuiltins(input.sheet, input.renderer, input.world));
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
   return values;
 }

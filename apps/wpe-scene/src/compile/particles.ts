@@ -13,6 +13,7 @@ import type { JsonObject, SceneScalar } from "./model";
 import { roundTrip5 } from "../particles/colorn";
 import { f32 } from "../particles/f32";
 import { asUInt32, readParticleModule, type ParticleCategory, type ParticleModule } from "../particles/modules";
+import { readOrientation, type ParticleOrientation } from "../particles/orientation";
 
 /**
  * `instanceoverride` 里就地更新的标量键（P4a 步骤 5，`rea-p4a.md` C5）：编译期每处 `{user}` 登记成 `particle-instance`
@@ -172,6 +173,8 @@ export interface SceneParticle {
    * 写成 `[]` 时 WPE 不补，系统不画（语料里都是只靠子系统出图的发射器）。
    */
   renderers: ParticleModule[];
+  /** 绘制用的 renderer（P4c 步骤 5，`particleRenderer`）：种类、拖尾的 `g_RenderVar0`、朝向。 */
+  renderer: ParticleRenderer;
   /** 缺省值按正交还是透视那一套选（`isOrthographic`）。 */
   orthographic: boolean;
   /** 控制点数组（总是 8 项，`readControlPoints`）。 */
@@ -184,6 +187,39 @@ export interface SceneParticle {
    * `buildableLayers`、`checkRenderable` 都按 `passes` 判断。
    */
   passes: ScenePass[];
+}
+
+/**
+ * 绘制用的 renderer（P4c 步骤 5）。一个系统只画一次：多个 renderer 时 WPE 各画一次、共用同一个顶点缓冲（rea-p4c-render.md 6.3），
+ * 这里没做，能力表报 `particle:renderers`（`checkParticleFeatures`），强制渲染时取第一个。
+ */
+export interface ParticleRenderer {
+  kind: "sprite" | "spritetrail";
+  /**
+   * 拖尾的 `g_RenderVar0.xyz`：`(length, maxlength, minlength)`，float32，原样（不钳制、不排序，6.1）；`w` WPE 不写、
+   * `genericparticle` 不读，我们写 0。sprite 为 null（`g_RenderVar0` 全 0）。
+   */
+  trail: [number, number, number] | null;
+  /** 朝向（`readOrientation`）：每次绘制按它和绘制的模型矩阵算 `g_Orientation*`；拖尾的几何不读，值照算（7.7）。 */
+  orientation: ParticleOrientation;
+}
+
+/**
+ * 系统的 renderer：第一个表内的 renderer（`sprite` / `spritetrail`）；一个都没有时按缺省的 `sprite` 画。表外 renderer
+ * （rope 两类，P4d）已由能力表报；`renderer: []` 时 WPE 不画，现在仍按缺省的 sprite 画（只靠子系统出图的发射器，随
+ * `particle:children` 退回）。
+ */
+export function particleRenderer(renderers: readonly ParticleModule[]): ParticleRenderer {
+  const module = renderers.find((item) => item.name === "sprite" || item.name === "spritetrail");
+  const fields = module?.fields ?? readParticleModule("renderer", { name: "sprite" }, true).fields;
+  const trail = module?.name === "spritetrail";
+  return {
+    kind: trail ? "spritetrail" : "sprite",
+    trail: trail
+      ? [f32(fields.length as number), f32(fields.maxlength as number), f32(fields.minlength as number)]
+      : null,
+    orientation: readOrientation(fields),
+  };
 }
 
 /** 粒子 JSON 的顶层键（`FUN_1401c5490` 读的全部键）；其余报 `particle:system:<键>`。 */
@@ -409,6 +445,7 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
       const { name, id, fields } = readParticleModule(category, entry, options.orthographic);
       return { name, id, fields };
     });
+  const renderers = modules("renderer");
   return {
     file: options.file,
     ...readParticleSystem(json),
@@ -416,7 +453,8 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     emitters: modules("emitter"),
     initializers: modules("initializer"),
     operators: modules("operator"),
-    renderers: modules("renderer"),
+    renderers,
+    renderer: particleRenderer(renderers),
     orthographic: options.orthographic,
     controlpoints: readControlPoints(json),
     instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),

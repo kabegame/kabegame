@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { identity, invert, multiply, rotationZ, scaling, translation } from "../render/math";
 import { vertexPacking } from "../render/programs";
 import { ParticleColumns } from "./columns";
 import { COLUMN_FLAGS } from "./modules";
@@ -7,6 +8,8 @@ import {
   particleVertexLayout,
   QUAD_INDICES,
   quadIndices,
+  trailDrawable,
+  trailEye,
   writeVertices,
   type ParticleVertexLayout,
 } from "./vertices";
@@ -177,6 +180,81 @@ describe("writeVertices", () => {
     const system = threeSlots();
     expect(writeVertices(system, layout, new Float32Array(4 * layout.stride))).toBe(1);
     expect(writeVertices({ ...system, highWater: 1 }, layout, new Float32Array(12 * layout.stride))).toBe(1);
+  });
+});
+
+describe("拖尾的退化粒子（P4c 步骤 5，rea-p4c-render.md 6.4）", () => {
+  const THICK = [...TRANSLATED, { name: "a_TexCoordVec4C1", location: 4, type: "vec4" }];
+  /** 一个系统：每个粒子给位置与速度。 */
+  function trailSystem(particles: { p: number[]; v: number[] }[]) {
+    const columns = new ParticleColumns(particles.length, 0);
+    particles.forEach(({ p, v }, slot) => {
+      columns.life[slot] = 1;
+      columns.size[slot] = 20;
+      for (let i = 0; i < 3; i++) {
+        columns.position[i][slot] = p[i];
+        columns.velocity[i][slot] = v[i];
+      }
+    });
+    return { columns, highWater: particles.length };
+  }
+
+  it("trailEye：(g_EyePosition, 1) 乘绘制模型矩阵的逆（列主序 ((m0·x + m4·y) + m8·z) + m12，float32）；奇异时按单位阵", () => {
+    const eye = [960, 540, 2000];
+    expect(trailEye(eye, identity())).toEqual([960, 540, 2000]);
+    // T7：对象在 (1760, 540)，eyeLocal = (−800, 0, 2000)
+    expect(trailEye(eye, translation(1760, 540, 0))).toEqual([-800, 0, 2000]);
+    // 旋转加缩放：等于逆矩阵乘 (eye, 1)
+    const model = multiply(translation(300, 200, 0), multiply(rotationZ(0.5), scaling(2, 3, 1)));
+    const inverse = invert(model)!;
+    const expected = [0, 1, 2].map((r) =>
+      Math.fround(
+        Math.fround(
+          Math.fround(Math.fround(inverse[r] * 960) + Math.fround(inverse[4 + r] * 540)) +
+            Math.fround(inverse[8 + r] * 2000),
+        ) + inverse[12 + r],
+      ),
+    );
+    expect(trailEye(eye, model)).toEqual(expected);
+    expect(trailEye(eye, scaling(0, 1, 1))).toEqual([960, 540, 2000]);
+  });
+
+  it("速度为 0 的粒子不写顶点；速度平行于视线（cross(p − eyeLocal, v) = 0）的不写；其余照写，返回实际写的个数", () => {
+    const { layout } = particleVertexLayout(vertexPacking(THICK));
+    const eye = [0, 0, 2000];
+    const system = trailSystem([
+      { p: [88, 0, 0], v: [100, 0, 0] }, // 写
+      { p: [0, 0, 0], v: [0, 0, 0] }, // 速度 0（T6）
+      { p: [0, 0, 0], v: [0, 0, 100] }, // 沿视线
+      { p: [50, 25, 0], v: [-50, -25, 2000] }, // 指向眼位：p − eye 与 v 平行
+      { p: [53, 70.6, 0], v: [60, 80, 0] }, // 写
+      { p: [0, 0, 0], v: [0, 0, -1e-30] }, // 平方和下溢成 0：同样不写
+    ]);
+    const into = new Float32Array(6 * 4 * layout.stride);
+    expect(writeVertices(system, layout, into, eye)).toBe(2);
+    // 写出去的依次是槽 0、槽 4（按槽序，跳过的不留空位）
+    expect(Array.from(into.subarray(0, 3))).toEqual([88, 0, 0]);
+    expect(Array.from(into.subarray(4 * layout.stride + layout.thick, 4 * layout.stride + layout.thick + 3))).toEqual([
+      60, 80, 0,
+    ]);
+    expect([0, 1, 2, 3, 4, 5].map((slot) => trailDrawable(system.columns, slot, eye))).toEqual([
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+    ]);
+    // 非拖尾（不给眼位）：速度为 0、沿视线的照写
+    expect(writeVertices(system, layout, new Float32Array(6 * 4 * layout.stride))).toBe(6);
+    expect(writeVertices(system, layout, new Float32Array(6 * 4 * layout.stride), null)).toBe(6);
+  });
+
+  it("视线方向看眼位：离轴的粒子沿 z 走不退化，眼位换成本地坐标后才退化", () => {
+    const system = trailSystem([{ p: [0, 0, 0], v: [0, 0, 100] }]);
+    // 对象在 (1760, 540)：本地 eyeLocal = (−800, 0, 2000)，p − eye 与 z 不平行
+    expect(trailDrawable(system.columns, 0, trailEye([960, 540, 2000], translation(1760, 540, 0)))).toBe(true);
+    expect(trailDrawable(system.columns, 0, trailEye([960, 540, 2000], translation(960, 540, 0)))).toBe(false);
   });
 });
 

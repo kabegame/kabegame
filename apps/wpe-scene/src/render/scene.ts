@@ -38,10 +38,17 @@ import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import { FBO_FORMATS } from "../compile/tex";
 import { pointerScenePoint } from "../particles/controlpoints";
+import { orientationBasis, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ParticleSystem } from "../particles/system";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
-import { particleVertexLayout, quadIndices, writeVertices, type ParticleVertexLayout } from "../particles/vertices";
+import {
+  particleVertexLayout,
+  quadIndices,
+  trailEye,
+  writeVertices,
+  type ParticleVertexLayout,
+} from "../particles/vertices";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { oneLine, SceneRenderError } from "./errors";
@@ -77,6 +84,7 @@ import {
   frameBuiltins,
   layerRefreshNames,
   LIGHT_UNIFORMS,
+  PARTICLE_REFRESH_UNIFORMS,
   particleUniformValues,
   UniformBlock,
   type FrameInput,
@@ -166,6 +174,16 @@ interface ParticleDraw {
    * 每帧用它。
    */
   world: Mat4;
+  /**
+   * 拖尾系统（renderer 是 `spritetrail`，P4c 步骤 5）写顶点时判断退化粒子用的眼位（`particles/vertices.ts` 的 `trailEye`）：
+   * `(g_EyePosition, 1)` 乘这次绘制模型矩阵的逆，和 uniform 同时算（`refreshParticleGeometry`）。非拖尾系统为 null。
+   */
+  trailEye: [number, number, number] | null;
+  /**
+   * 朝向算出 NaN（`orientationBasis` 为 null，`upright` 的轴平行于视线，P4c 步骤 5）：这次绘制跳过，uniform 照常写。
+   * 同样随模型矩阵更新（`refreshParticleGeometry`）。
+   */
+  hidden: boolean;
 }
 
 /** 一个粒子层最近若干帧的开销样本（dev 探针，`GpuScene.profileParticles`）。 */
@@ -1041,7 +1059,37 @@ export class GpuScene {
     system.prewarm({ world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) });
     const { layout } = particleVertexLayout(program.vertexPacking);
     const vertices = new Float32Array(Math.max(1, system.columns.capacity) * 4 * Math.max(1, layout.stride));
-    return { system, layout, vertices, count: 0, stale: true, world };
+    return { system, layout, vertices, count: 0, stale: true, world, trailEye: null, hidden: false };
+  }
+
+  /**
+   * 粒子绘制的模型矩阵（`g_ModelMatrix`）：本地系统是对象的世界矩阵（父链），世界空间系统（系统 flags bit0，P4c 步骤 4）是单位阵。
+   * WPE 绘制时把模型矩阵栈顶整个换成 `ctx+0xaf0`（`FUN_1402366f0`，`0x14023670c`–`0x140236748`，rea-p4c-sim.md 5.3），普通场景里
+   * 是单位阵，所以只乘视图投影。uniform、朝向与拖尾的眼位都用它（rea-p4c-render.md 7.2：`g_Orientation*` 和 `g_ModelMatrix` 都取
+   * `*(ctx+0x30)`）。
+   */
+  private particleModel(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>): Mat4 {
+    return (layer.particle?.flags ?? 0) & 1 ? identity() : worldMatrixOf(layer.object, state.layers, worlds);
+  }
+
+  /**
+   * 按当前状态重算粒子层的绘制几何（P4c 步骤 5）：朝向是不是 NaN（`hidden`）、拖尾的眼位（`trailEye`）。建 draw 与就地刷新时调，
+   * 和 uniform 同一个模型矩阵。拖尾的眼位变了，下一次画之前重写顶点（退化粒子的判断跟着变）。
+   */
+  private refreshParticleGeometry(
+    particles: ParticleDraw,
+    layer: SceneLayer,
+    state: SceneState,
+    worlds: Map<number, Mat4>,
+  ): void {
+    const renderer = layer.particle?.renderer;
+    if (!renderer) return;
+    const model = this.particleModel(layer, state, worlds);
+    particles.hidden = orientationBasis(renderer.orientation, model, VIEW_FORWARD, VIEW_UP) === null;
+    const eye = renderer.kind === "spritetrail" ? trailEye(this.eye, model) : null;
+    const previous = particles.trailEye;
+    if (eye && (!previous || eye.some((value, i) => !Object.is(value, previous[i])))) particles.stale = true;
+    particles.trailEye = eye;
   }
 
   private createDraw(
@@ -1061,6 +1109,7 @@ export class GpuScene {
     if (step.kind === "particles") {
       // 粒子：每帧由 `encode` 写，按容量分配
       particles = this.createParticles(layer, program, state);
+      this.refreshParticleGeometry(particles, layer, state, worlds);
       vertexBuffer = this.own(
         device.createBuffer({
           label,
@@ -1224,13 +1273,13 @@ export class GpuScene {
       const base = step.inputs[0];
       return particleUniformValues({
         ...common,
-        // 世界空间系统（系统 flags bit0，P4c 步骤 4）：粒子存世界坐标，WPE 绘制时把模型矩阵栈顶整个换成 `ctx+0xaf0`
-        // （`FUN_1402366f0`，`0x14023670c`–`0x140236748`，rea-p4c-sim.md 5.3），普通场景里是单位阵，所以只乘视图投影。
-        // 对象变换改了照样走这里重写，仍是单位阵
-        world: (layer.particle?.flags ?? 0) & 1 ? identity() : common.world,
+        // 世界空间系统（P4c 步骤 4）是单位阵，对象变换改了照样走这里重写，仍是单位阵（`particleModel`）
+        world: this.particleModel(layer, state, worlds),
         layer: layerState,
         viewProjection: step.perspective ? this.perspectiveViewProjection : this.viewProjection,
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
+        // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）
+        renderer: layer.particle?.renderer,
       });
     }
     return drawUniformValues({
@@ -1381,10 +1430,15 @@ export class GpuScene {
 
   /** 图层（或它某个祖先）状态变化：只重写由图层算出的那组内置 uniform（材质值优先，不覆盖）。 */
   private refreshLayer(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
+    // 粒子层的朝向是否 NaN、拖尾的眼位随模型矩阵变（P4c 步骤 5），没有 uniform 块也要跟上
+    if (draw.particles) this.refreshParticleGeometry(draw.particles, draw.layer, state, worlds);
     const layerState = state.layers.get(draw.object);
     if (!draw.block || !layerState) return;
     const values = this.uniformValues(draw.step, draw.layer, layerState, draw.textureSizes, state, worlds);
-    for (const name of layerRefreshNames(draw.step.pass.uniforms)) {
+    const names = layerRefreshNames(draw.step.pass.uniforms);
+    // 朝向由模型矩阵算（P4c 步骤 5），对象变换变了一起重写；材质值同样优先
+    if (draw.particles) names.push(...PARTICLE_REFRESH_UNIFORMS.filter((name) => !(name in draw.step.pass.uniforms)));
+    for (const name of names) {
       const value = values[name];
       if (value) draw.block.set(name, value);
     }
@@ -1479,7 +1533,7 @@ export class GpuScene {
     particles.stale = false;
     const timing = this.particleTimings?.get(draw);
     const started = timing ? performance.now() : 0;
-    particles.count = writeVertices(particles.system, particles.layout, particles.vertices);
+    particles.count = writeVertices(particles.system, particles.layout, particles.vertices, particles.trailEye);
     const written = timing ? performance.now() : 0;
     if (particles.count) {
       const bytes = particles.count * 4 * particles.layout.stride * 4;
@@ -1557,7 +1611,8 @@ export class GpuScene {
 
   /**
    * dev 探针（`particleCorners`）：一个粒子层的程序、uniform 缓冲、bind group 条目，以及按当前状态写好的顶点
-   * （存活粒子按槽序，`count` 个，每个 4 个顶点）。不是粒子层时为 null。
+   * （存活粒子按槽序，`count` 个，每个 4 个顶点；拖尾系统跳过退化的粒子，同 `encode`）。`hidden`：朝向是 NaN，`encode` 不画这一层
+   * （P4c 步骤 5）；`trailEye`：拖尾系统写顶点用的眼位（`trailDrawable` 按它挑出写了的粒子）。不是粒子层时为 null。
    */
   particleProbe(object: number): {
     program: GpuProgram;
@@ -1568,12 +1623,14 @@ export class GpuScene {
     layout: ParticleVertexLayout;
     perspective: boolean;
     system: ParticleSystem;
+    hidden: boolean;
+    trailEye: [number, number, number] | null;
   } | null {
     const draw = [...this.draws].find((item) => item.object === object && item.particles);
     if (!draw?.particles || draw.step.kind !== "particles") return null;
-    const { system, layout } = draw.particles;
+    const { system, layout, trailEye: eye, hidden } = draw.particles;
     const vertices = new Float32Array(draw.particles.vertices.length);
-    const count = writeVertices(system, layout, vertices);
+    const count = writeVertices(system, layout, vertices, eye);
     const resources = draw.resources;
     return {
       program: draw.program,
@@ -1584,6 +1641,8 @@ export class GpuScene {
       layout,
       perspective: draw.step.perspective,
       system,
+      hidden,
+      trailEye: eye,
     };
   }
 
@@ -1634,6 +1693,8 @@ export class GpuScene {
     const draw = (pass: GPURenderPassEncoder, item: Draw) => {
       const particles = item.particles;
       if (particles) {
+        // 朝向是 NaN（P4c 步骤 5）：WPE 的四角全是 NaN、图元被丢弃，这里整次绘制跳过（WGSL 判不了 NaN）
+        if (particles.hidden) return;
         // 粒子：先把这一帧的顶点传上去（队列写入排在本帧提交之前），没有存活粒子就不画
         this.uploadParticles(item, particles);
         if (!particles.count || !this.particleIndices) return;

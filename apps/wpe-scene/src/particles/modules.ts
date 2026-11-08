@@ -227,7 +227,6 @@ const vec3 = (value: ParticleFieldDefault, type: "vec3" | "vec3z" | "vec3str" = 
 });
 /** 字段乘 `instanceoverride` 的哪一项（C5）。 */
 const by = (instance: InstanceScale, def: ParticleFieldDef): ParticleFieldDef => ({ ...def, instance });
-const zeroOnly = (value: ParticleFieldValue) => value === 0;
 const TWO_PI = 2 * Math.PI;
 
 /**
@@ -297,6 +296,25 @@ const BLEND: Record<string, ParticleFieldDef> = {
 };
 
 /**
+ * renderer 共用的朝向字段（`FUN_1401c22e0`，rea-p4c-render.md 7.1，`sprite`、`spritetrail`、rope 两类都调它）：缺键时往 JSON 里补
+ * `orientation "screen"`、`axis "0 0 0"`、`flags 0`。取值全部支持（P4c 步骤 5，`orientation.ts` 的 `readOrientation`）：
+ * - `orientation`：只认精确的 `"upright"`、`"fixed"`，其它字符串都是 screen；
+ * - `axis`：WPE 按空格切三段、各自 `atof`。这里沿用模块表的 vec3 解析，对非数字分量报字段问题，比 WPE 严（语料里没有这种写法）；
+ * - `flags`：`FUN_140085f70` 取无符号整数后只存低 8 位（`mov byte ptr [rdi + 0x30], al`，`0x1401c29b2`），只有 bit0 有读者（7.6，
+ *   `FUN_1402298b0` 的 `0x1402298c2`），其余 7 位中性。
+ */
+const RENDERER_FIELDS: Record<string, ParticleFieldDef> = {
+  orientation: { type: "string", default: "screen" },
+  axis: vec3("0 0 0"),
+  flags: int(0),
+};
+
+/** renderer 的 `flags` 取无符号整数的低 8 位（见 `RENDERER_FIELDS`）。 */
+function normalizeRenderer(fields: Record<string, ParticleFieldValue>): void {
+  fields.flags = asUInt32(fields.flags as number) & 0xff;
+}
+
+/**
  * `positionoffsetrandom` 的 `octaves` 解析期钳制（`0x1401c9387`，`rea-p4b-modules.md` B3【确】）：按**无符号**比较，`≥ 8` 得 8
  * （负数当很大的无符号数，也是 8），`0` 得 1。
  */
@@ -308,7 +326,8 @@ export function clampOctaves(value: number): number {
 /**
  * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
  * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`）、步骤 4 的 3 个噪声类模块（initializer `turbulentvelocityrandom`、
- * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`。
+ * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`、`spritetrail`
+ * （P4c 步骤 5）。rope 两类属 P4d，表外照报。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -698,18 +717,37 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     run: capVelocity,
   },
   {
-    // `FUN_1401c22e0`（trail、rope 共用）：缺省 `orientation "screen"`、`axis "0 0 0"`、`flags 0`。
-    // 非 `screen` 朝向（upright = 1、fixed = 2）的几何没读；`axis`、`flags` 的作用没读
+    // rea-p4c-render.md 7.1（renderer 类型 1，分支 `0x1401cc5b5`）：只调 `FUN_1401c22e0`，没有别的键。朝向的解析与几何见
+    // `orientation.ts`（P4c 步骤 5）
     category: "renderer",
     name: "sprite",
-    fields: {
-      orientation: { type: "string", default: "screen", supported: (value) => value === "screen" },
-      axis: { type: "vec3", default: "0 0 0", supported: (value) => (value as number[]).every((v) => v === 0) },
-      flags: int(0, zeroOnly),
-    },
+    fields: RENDERER_FIELDS,
     // 写顶点：按槽序、跳过 `life == 0`
     columns: ["life", "position", "size", "rotation", "color", "alpha"],
     columnFlags: 0,
+    normalize: normalizeRenderer,
+    run: null,
+  },
+  {
+    // rea-p4c-render.md 6.1（renderer 类型 2，分支 `0x1401cfe16`）：缺省 `FUN_1401c0af0`，正交透视一套（第二个参数没用到），
+    // 三个值原样存，不钳制、不排序（`minlength > maxlength` 时着色器的 `max` 在外层，`minlength` 胜；负值也原样传）。绘制前写
+    // `g_RenderVar0 = (length, maxlength, minlength)`，宏 `THICKFORMAT`、`TRAILRENDERER`（6.2、6.3，`compile/bundle.ts`、
+    // `render/uniforms.ts`）。模拟侧不为拖尾多做任何事（6.4）：速度列照常写进厚格式顶点
+    category: "renderer",
+    name: "spritetrail",
+    fields: {
+      // `asFloat`（`FUN_140086220`）取 float：写回 JSON 的缺省是 float 0.05 提升成的 double
+      length: num(0.05),
+      maxlength: num(10),
+      // 缺省函数不补这个键，`asFloat(null)` 得 0
+      minlength: num(0),
+      // 和 sprite 共用的解析（`FUN_1401c22e0`）；拖尾的几何不读朝向（`TRAILRENDERER` 分支不调 `ComputeParticleTangents`，6.4、7.7）
+      ...RENDERER_FIELDS,
+    },
+    // 写顶点同 sprite，另有速度（厚格式的 `a_TexCoordVec4C1.xyz`）
+    columns: ["life", "position", "size", "rotation", "color", "alpha", "velocity"],
+    columnFlags: 0,
+    normalize: normalizeRenderer,
     run: null,
   },
 ];

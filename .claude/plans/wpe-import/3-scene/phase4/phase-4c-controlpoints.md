@@ -913,15 +913,189 @@ flags & 1 且 !world：g = Mᵀ·g   （FUN_1401f87e0：x' = (g.y·m1 + g.x·m0)
 
 ## 步骤 5 — 拖尾与 `sprite` 几何
 
-- **新增** 模块表记录 `spritetrail`（renderer），字段和缺省值按步骤 0。
-- **修改** 粒子材质的宏：拖尾写 `THICKFORMAT`、`TRAILRENDERER`，条件照 rea-p4b-render 2.4（任一 renderer 要厚格式，所有 sprite 一起走厚格式）。
-- **修改** `render/uniforms.ts`：拖尾系统写 `g_RenderVar0 = (length, maxlength, minlength, ·)`。
-- **修改** `sprite` 的 `orientation`、`axis`、`flags`：几何按步骤 0，能力表放开对应取值。
+> 2026-11-08 按 rea-p4c-render 第 6、7 节、步骤 0 的实测（报告「P4c 语义的实测核对」）和语料扫描（`ignore/p4/c5/step5_unlock.py`）写成可以直接派发的版本。范围：一个系统多个 renderer 继续报不支持（2026-11-08 用户定，见「关键决定」第一条）。
 
-**验收：**
-- 我们翻译的顶点路径和 WPE 的 `gs_out` 四角比（同 P4a 风险 7 的做法），拖尾的几种长度组合和 `sprite` 的三种朝向都比，差不超过 0.01 像素。
-- `proj/p4c-trail`、`proj/p4c-sprite` 整帧逐像素比。
-- `3832772446` 没有不支持项，真机和 WPE 比统计量。
+### 思路
+
+拖尾和朝向都是几何，不碰模拟。模拟器已经把速度写进厚格式顶点（P4b 步骤 2），着色器也是 WPE 原件翻译的。所以本步只在三处补输入：材质宏、两组 uniform、一处「不画」的处理。
+
+**拖尾。** `spritetrail` 进模块表（renderer 类别），字段 `length` 0.05、`maxlength` 10、`minlength` 0。它和 `sprite` 共用 `orientation`、`axis`、`flags` 三个字段的解析，但拖尾的几何不读朝向。材质变体写 `THICKFORMAT = 1`、`TRAILRENDERER = 1`，带帧表时照旧再写 `SPRITESHEET*`。绘制前写 `g_RenderVar0 = (length, maxlength, minlength, 0)`。之后着色器按 `L = max(minlength, min(|v|·length, maxlength))` 把四边形以粒子为中心、沿速度拉长，宽向是 `normalize(cross(p − eyeLocal, v))`。这些都在翻译后的着色器里，步骤 0 已经逐角核对过公式。
+
+**朝向。** `g_OrientationForward / Right / Up` 现在写死单位基。改成每个粒子层按 7.2 在 CPU 上算：
+- 输入是 `orientation`、`axis`（解析期归一化，精确零换成 `(0,1,0)`）、派生的 `t`、`flags` bit0 和绘制用的模型矩阵 `M`；
+- 本地系统的 `M` 是对象世界矩阵，世界空间系统是单位阵；
+- 相机的 `vf`、`vup` 在正交场景里恒为 `(0,0,−1)`、`(0,1,0)`。透视粒子的覆盖只改视图平移和投影，透视场景照报。
+
+`M` 只在对象变换变化时变，变化会标脏、重写 uniform，所以朝向放进静态 uniform（`particleUniformValues`）就够，不用每帧算。
+
+**NaN 不画。** WPE 里有两种情形算出 NaN、不画：
+- 拖尾速度为 0，或者速度恰好平行于视线；
+- `upright` 的轴平行于视线（三个朝向向量都是 NaN）。
+
+WGSL 没有可靠的 NaN 判断（`isNan` 已从规范里删掉），`normalize(0)` 的结果各后端不同，所以都在 CPU 上处理：
+- 拖尾系统写顶点时，跳过退化的粒子。判断照着色器的式子在 float32 里算，`|v|² == 0`，或 `|cross(p − eyeLocal, v)|² == 0`；`eyeLocal` 由 `g_EyePosition` 和 `M` 的逆矩阵算。
+- 朝向算出 NaN 时，整个绘制跳过。
+
+几个关键决定：
+- **一个系统多个 renderer 继续报 `particle:renderers`（用户定）。** WPE 对多个 renderer 是各画一次、共用一份顶点（6.3）。语料里这样的系统一个都没有（`particle:renderers` 0 张），而支持它要把「一个粒子层一次绘制」拆成「一个系统多次绘制」：要考虑顶点布局能不能共用、每次绘制各自的 uniform、快照「每对象至多一次」的规则、四角探针按绘制输出。所以本步只支持单个 `sprite` 或单个 `spritetrail`。步骤 0 抓到的 `T8`、`T8r` 数据留着，以后做多 renderer 时用。
+- **退化粒子在写顶点时跳过，不靠 GPU 丢 NaN 图元。** 单个 renderer 时顶点只给这一次绘制用，跳过最简单。以后支持多 renderer 时，拖尾那次绘制要改用自己的索引。
+- **朝向算在静态 uniform 里。** 依据同上：`M` 变化时 uniform 本来就会重写。
+- **`flags` 只有 bit0 有读者**，其余 7 位中性，全部放开；`orientation` 只认精确的 `"upright"`、`"fixed"`，其它字符串都是 `screen`。
+- **解锁 1 张**：`3832772446`，干净场景 21 → 22。语料里 `spritetrail` 29 张、`sprite:flags` 6 张、`sprite:orientation` 2 张；`1923929928` 做完只差 `object:perspective`。
+
+### 现状锚点
+
+**z. renderer 只认缺省朝向，`spritetrail` 是表外模块**（`particles/modules.ts`）
+```ts
+// 非 `screen` 朝向（upright = 1、fixed = 2）的几何没读；`axis`、`flags` 的作用没读
+orientation: { type: "string", default: "screen", supported: (value) => value === "screen" },
+axis: { type: "vec3", default: "0 0 0", supported: (value) => (value as number[]).every((v) => v === 0) },
+flags: int(0, zeroOnly),
+```
+
+**aa. 朝向与 `g_RenderVar0` 写死**（`render/uniforms.ts`，`particleBuiltins`）
+```ts
+g_OrientationUp: [0, 1, 0],
+g_OrientationRight: [1, 0, 0],
+g_OrientationForward: [0, 0, 1],
+// …
+g_RenderVar0: [0, 0, 0, 0], // 现状：拖尾的 length、maxlength、minlength 没写
+```
+
+**ab. 粒子材质的宏只看帧表**（`compile/bundle.ts`，`particleSheetDefines`）
+```ts
+if (!sheet) return {};
+return { THICKFORMAT: "1", SPRITESHEET: "1", SPRITESHEETBLEND: …, SPRITESHEETBLENDNPOT: … };
+```
+
+**ac. 多个 renderer 报不支持**（`compile/features.ts`）
+```ts
+if (category === "renderer" && entries.length > 1) unsupported.add("particle:renderers");
+```
+
+**ad. 写顶点只跳过空槽**（`particles/vertices.ts`，`writeVertices`）：按槽序写存活粒子，厚格式时写速度与 frame。
+
+### 点 1 — 模块表与解析（`particles/modules.ts`、`compile/particles.ts`）
+
+- **新增** `particles/orientation.ts`（或并进现有文件，代理定）：
+```ts
+/** renderer 的朝向（`FUN_1401c22e0`，rea-p4c-render.md 7.1）：解析期一次算好。 */
+export interface ParticleOrientation {
+  /** 0 screen、1 upright、2 fixed：只认精确的 "upright" / "fixed"，其它都是 0。 */
+  mode: 0 | 1 | 2;
+  /** 归一化后的 axis；精确的 (0,0,0) 换成 (0,1,0)。 */
+  axis: [number, number, number];
+  /** 派生的 t（`fixed` 用）。 */
+  t: [number, number, number];
+  /** flags 低 8 位；只有 bit0 有读者。 */
+  flags: number;
+}
+export function readOrientation(fields: ParticleFields): ParticleOrientation;
+/**
+ * `g_OrientationForward / Right / Up`（`FUN_1402298b0`，7.2）：M 是绘制用的模型矩阵（列主序 Mat4，取 3×3），vf / vup 是相机
+ * 的视线与上方向。逐步 float32，运算顺序照 7.2；任一结果是 NaN 时返回 null（这次绘制不画）。
+ */
+export function orientationBasis(o: ParticleOrientation, model: Mat4, vf: Vec3, vup: Vec3):
+  { forward: Vec3; right: Vec3; up: Vec3 } | null;
+```
+  - 注意记号：7.2 里 `M` 是行主序、「第 i 行 = 本地第 i 轴在世界里的向量」，等于我们列主序 `Mat4` 的第 i 列。`(0,1,0)·M` 就是我们的第 1 列。实现前对着 `ignore/p4/rea/p4c-render/orient_298b0.asm`、`orient_tail.asm` 逐条核对 `v·M`、`M·v` 的分量和加法顺序。
+  - `axis` 的解析：WPE 按空格切三段、各自 `atof`。模块表现有的 `vec3` 解析对非数字分量报字段问题，比 WPE 严，保留（语料里没有这种写法）。
+- **修改** 模块表 `sprite`：`orientation`、`axis`、`flags` 去掉 `supported` 限制（`flags` 取低 8 位）。注释改成依据 7.1、7.4、7.6。
+- **新增** 模块表 `spritetrail`（renderer）：
+```ts
+{
+  // rea-p4c-render.md 6.1（renderer 类型 2，分支 0x1401cfe16）：缺省 FUN_1401c0af0，正交透视一套，不钳制、不排序
+  category: "renderer",
+  name: "spritetrail",
+  fields: {
+    length: num(0.05),
+    maxlength: num(10),
+    // 缺省函数不补这个键，asFloat(null) 得 0
+    minlength: num(0),
+    // 和 sprite 共用的解析（FUN_1401c22e0），拖尾的几何不读朝向（6.4、7.7）
+    orientation: …, axis: …, flags: …,
+  },
+  columns: [/* 同 sprite，另有速度 */],
+  columnFlags: 0,
+  run: null,
+},
+```
+
+### 点 2 — 材质宏（`compile/bundle.ts`）
+
+- **修改** `particleSheetDefines`，或在它旁边加一个按 renderer 的宏函数：系统唯一的 renderer 是 `spritetrail` 时写 `THICKFORMAT = 1`、`TRAILRENDERER = 1`；有帧表时照旧加 `SPRITESHEET*`。值为 0 的宏也写键，规则同现状。`sprite` 的宏不变（7.8：朝向不进宏）。
+- `SceneParticle` 记下渲染用的东西：renderer 种类、`g_RenderVar0` 三个值、`ParticleOrientation`。字段名代理定。
+
+### 点 3 — uniform（`render/uniforms.ts`、`render/scene.ts`）
+
+- **修改** `particleBuiltins` / `particleUniformValues`：
+  - 朝向按 `orientationBasis(o, world, [0,0,−1], [0,1,0])` 算，`world` 就是这次绘制的模型矩阵（世界空间系统是单位阵，步骤 4）。
+  - 拖尾写 `g_RenderVar0 = (length, maxlength, minlength, 0)`，`sprite` 照旧 0。
+  - 朝向是 null 时这次绘制跳过：在 `encode` 里不发 `drawIndexed`，uniform 照常写。
+- 依据与记号写进注释。`vf`、`vup` 写成常量并注明「正交场景，透视场景照报」。
+
+### 点 4 — 拖尾的退化粒子（`particles/vertices.ts`、`render/scene.ts`）
+
+- **修改** `writeVertices`：拖尾系统跳过退化粒子，返回实际写的粒子数。参数加上判断要用的 `eyeLocal`（`(g_EyePosition, 1)` 乘绘制模型矩阵的逆，按着色器的写法），由 `GpuScene` 每次上传前给。判断照着色器的式子在 float32 里算：
+```
+v = 速度列；s2 = (vx² + vy²) + vz²（顺序照着色器翻译后的写法，代理核对）
+d = p − eyeLocal；c = cross(d, v)
+跳过：s2 == 0 或 (cx² + cy²) + cz² == 0
+```
+- 非拖尾系统不变。注释写明为什么不靠 GPU：NaN 判断在 WGSL 里不可靠。
+
+### 点 5 — 能力表（`compile/features.ts`）
+
+- `spritetrail` 进表后，`particle:renderer:spritetrail` 自然消失；`sprite` 三个字段不再报。
+- `particle:renderers` 保留（用户定），注释写明 WPE 的行为（6.3）和保留的理由。
+- `rope`、`ropetrail` 照报（P4d）。
+
+### 点 6 — 四角探针（`dev/particleCorners.ts`）
+
+- 拖尾系统退化粒子不写顶点后，探针的 `count` 和 `particles` 跟着变；朝向是 null 的层标出「不画」。确认改写成计算着色器的那段对 `TRAILRENDERER` 变体照样能跑。
+
+### 验收
+
+**单测：**
+- 解析：
+  - `spritetrail` 三个缺省值，`minlength` 不写时为 0、负值和 `minlength > maxlength` 原样存；
+  - `orientation` 只认精确的 `"upright"` / `"fixed"`（`"Upright"`、`"foo"` 都是 0）；
+  - `axis` 精确零换成 `(0,1,0)`、`"0 0 0.000001"` 归一化成 `(0,0,1)`；
+  - `t` 的两条分支（`axis.x == axis.z == 0` 与一般情形）；
+  - `flags` 只留低 8 位。
+- 朝向：
+  - 7.4 的表逐行算（正交、对象无旋转）；
+  - 对象转 0.5 弧度时三种朝向各配 `flags` 0、1（S13 的六组）；
+  - `upright` 轴 `"0 0 1"` 返回 null；`fixed` 缺省轴躺平（`Up = (0,0,−1)`）；
+  - 世界空间系统用单位阵；
+  - 运算顺序钉一组三个分量都非零的输入。
+- 拖尾：
+  - 宏（`THICKFORMAT`、`TRAILRENDERER`，带帧表时再加 `SPRITESHEET*`）；
+  - `g_RenderVar0` 的值；
+  - 速度为 0 的粒子不写顶点；速度平行于视线的不写；其余照写，计数对；`sprite` 系统速度为 0 也照写。
+- 能力表：三个 `sprite` 字段的各种取值不报；`spritetrail` 不报；两个 renderer 仍报 `particle:renderers`。
+
+**四角**（新增 `ignore/p4/c5/`，照 `ignore/p4/step4/corners-offline.test.ts` + `corners-offline.ts` 的离线做法：vitest 用产品代码编译工程、按日志 dt 回放到抓帧的帧、备好改写的计算着色器与 uniform / 顶点缓冲，Deno 的 WebGPU 跑出裁剪坐标，和轨迹里 WPE 的 `gs_out` 四角比）：
+- `p4c-trail`（帧 921–923）：`T1`–`T5`、`T7`、`T7r`、`T9`、`T10` 逐角比，差不超过 0.01 像素。`T6`（速度 0）我们不写顶点，WPE 四角是 NaN。`T8`、`T8r`（两个 renderer）不比，编译时应只报 `particle:renderers`。
+- `p4c-sprite`（帧 920–922）：24 组全部逐角比，差不超过 0.01 像素。`S7`（`upright` 轴平行视线）我们整次绘制跳过，WPE 四角是 NaN。`S8`（`fixed` 缺省轴，高度为 0）照常比四角。
+- 透视粒子加拖尾（`T10`）：步骤 0 留的项，看我们用场景眼位算出的四角是否和 WPE 一致。
+
+**回放与语料**（照 c4）：
+- 旧回放（b3、b4、b6、c1 `p4c-cp`、c2 `p4c-ptr`、c3 `p4c-attract`、c4 `p4c-world`）在改动前后逐字节相同。本步不改模拟器。
+- 语料：去掉的键只有 `particle:renderer:spritetrail`、`particle:renderer:sprite:flags`、`particle:renderer:sprite:orientation`（以及 `axis` 若有），不新增键；干净场景 21 → 22，新解锁 `3832772446`。
+
+**变异检查**（每处都要有用例或四角对比失败）：
+- 宏漏 `TRAILRENDERER`；`g_RenderVar0` 分量顺序错（`maxlength`、`minlength` 对调）；
+- 朝向用行而不是列（`M` 转置）；`flags` bit0 的两个分支对调；`fixed` 的 bit0 分支不拷原值；`upright` 的 bit0 仍读 `axis`；
+- `axis` 零向量不换成 `(0,1,0)`，或按「长度 < 0.001」换；
+- `t` 的特例分支条件写错；
+- 退化粒子不跳过；`sprite` 系统也跳过速度为 0 的粒子；
+- 世界空间系统的朝向用对象矩阵。
+
+**Claude 做（kabegame-dev）：**
+- 真机四角：用 `projects_import` 把 `proj/p4c-trail`、`proj/p4c-sprite` 导入 dev 库，在屏外宿主里跑 `particleCorners`，和离线结果、WPE 四角比；验收后 `projects_remove` 移除。
+- 画面哈希：10 张干净场景三档和步骤 4 的 `c4/out/hash-after.json` 相同；`3832772446` 另记一份基线，用 `render_scene` 看一眼画面。
+- `3832772446` 和 WPE 比画面：要抓 WPE，留到收尾时一起做，或由用户在真机上看。
 
 ## P4c 收尾
 
@@ -930,6 +1104,8 @@ flags & 1 且 !world：g = Mᵀ·g   （FUN_1401f87e0：x' = (g.y·m1 + g.x·m0)
 ## 决定
 
 1. `sprite` 的 `orientation`、`axis`、`flags` 纳入 P4c 步骤 5（2026-11-08 用户）。它们和 `spritetrail` 是同一个解析函数、同一段几何；语料里 `flags` 7 张、`orientation` 5 张，原先不归任何一节；纳入后 `3832772446` 能在本节解锁。
+2. `controlpointattract` 的 `a-default` 长程回放超限接受（2026-11-08 用户）：单步核对已经确定公式，不改包络、不重抓。
+3. 一个系统多个 renderer（如 `sprite` + `spritetrail`）在步骤 5 继续报 `particle:renderers`（2026-11-09 用户）。语料 0 张，支持它要把一个粒子层拆成多次绘制；步骤 0 的 `T8`、`T8r` 数据留给以后。
 
 ## 风险
 
@@ -1187,3 +1363,68 @@ Claude 独立验收：
 | 应用里的帧循环 | **没确认成**：屏外宿主里 `requestAnimationFrame` 不发（1 秒 0 次，Chromium 停发视口外 iframe 的 rAF），时钟停在第一帧，解除暂停也一样，和改动无关。帧顺序由驱动真实 `SceneRenderer.render`（假 GPU）的单测钉住。要在应用里看，得开主窗口预览 |
 
 工具在 `ignore/p4/c4/`：`prestudy.test.ts`、`world_unlock.py`、`replay.test.ts`、`replay-b3/b4/b6/cp/ptr/attract.test.ts`、`run_old.sh`、`cmp_old.py`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`movement_parse.py`、`mutate_claude.py`、`run_old_claude.sh`、`cmp_corpus_claude.py`、`scripted_clean.py`、`hash_run.ts`、`cmp_hash.py`、`live_check.ts`、`live_gate.ts`、`live_unpause.ts`、`live_raf.ts`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`（画面哈希 `out/hash-after.json`）。
+
+### 步骤 5 — 拖尾与 `sprite` 几何（2026-11-09）
+
+子代理实现，Claude 独立验收。范围按用户定：一个系统多个 renderer 继续报 `particle:renderers`。
+
+**改动**（`apps/wpe-scene/src`，15 个文件，其中新增 `particles/orientation.ts`、`particles/orientation.test.ts`）：
+- **新增** `particles/orientation.ts`：`readOrientation`（`FUN_1401c22e0`）、`orientationVectors` / `orientationBasis`（`FUN_1402298b0`，NaN 时为 null）、正交场景的 `VIEW_FORWARD`、`VIEW_UP`。
+- **修改** `particles/modules.ts`：`sprite` 三个字段放开，`flags` 取低 8 位；新增 `spritetrail`（`length` 0.05、`maxlength` 10、`minlength` 0，加共用的朝向字段）。
+- **修改** `compile/particles.ts`：`SceneParticle.renderer`（种类、拖尾的 `g_RenderVar0` 三个值、朝向），取第一个表内的 renderer。
+- **修改** `compile/bundle.ts`：`particleRendererDefines`（拖尾 `THICKFORMAT`、`TRAILRENDERER`，带帧表另加 `SPRITESHEET*`）、`particleTex0Format`。
+- **修改** `render/uniforms.ts`：朝向按 renderer 与这次绘制的模型矩阵算；拖尾写 `g_RenderVar0 = (length, maxlength, minlength, 0)`；`PARTICLE_REFRESH_UNIFORMS`（对象变换就地刷新时重写朝向）。
+- **修改** `render/scene.ts`：`particleModel`（世界空间系统单位阵）；`refreshParticleGeometry` 算 `hidden`（朝向 NaN）与拖尾眼位，建 draw 与就地刷新时都调；`hidden` 的层整次绘制跳过；拖尾眼位变了标 `stale`。
+- **修改** `particles/vertices.ts`：`trailEye`、`trailDrawable`，拖尾写顶点时跳过退化粒子（速度为 0、速度平行于视线）。
+- **修改** `particles/track.ts`、`dev/particleCorners.ts`：拖尾输出速度与 frame；探针多给 `drawn`。
+- **修改** `compile/features.ts`：只改注释（`particle:renderers` 的 WPE 行为与保留理由）。
+
+和计划不同、或计划没写、由代理按证据定的：
+- **`TEX0FORMAT`**：计划写「`sprite` 的宏不变」。汇编里非厚格式的 `sprite` 只要朝向不是 screen，就对任何格式都写 `TEX0FORMAT`（`0x1401d3189`），照汇编做了；厚格式仍只在格式 8–11 时写。对 `genericparticle` 不影响画面。
+- **朝向的就地刷新**：`refreshLayer` 原本只重写 `LAYER_UNIFORMS`，所以另加 `PARTICLE_REFRESH_UNIFORMS`，材质值照样优先。
+- **汇编核对**：`v·M`、`M·v` 的分量与加法顺序（`0x14022997d`、`0x140229ac1`、`0x140229d55`）、`R' = U' × F'`（`0x140229eb1`）、归一化先 `sqrtss` 再除；screen 分支乘数向量 `0x140492e30` 是 (1,1,1,1)；解析的精确零判断（`0x1401c2759`，−0 也算零）、特例 `t = (0,0,−1)`（`0x1401c27aa`）、`flags` 只存一个字节（`0x1401c29b2`）。和 rea 7.1、7.2 一致，常量见 `ignore/p4/c5/out/consts.txt`。
+- **NaN 时的 uniform** 照写原值，只跳过绘制和顶点上传。
+- **没改的边界**：`renderer: []` 仍按缺省 sprite 画（WPE 不画）；`orientation` 写成非字符串照报（比 WPE 严）；`g_RenderVar0.w` 写 0（WPE 保留上一次绘制的值，`genericparticle` 不读）。
+
+**行为变化**：朝向改成现算以后，挂在带 x / y 旋转对象上的 screen sprite 不再是写死的单位基。干净场景里只有 `shimmering_particles` 的 3 个 `small_motes_copy1` 层受影响（透视粒子，和单位基最大差 0.391，`ignore/p4/c5/out/orient-scan.txt`），它们在默认样式下不可见，画面哈希不变；`style` 改成 1 时这几层会朝向相机。步骤 0 的 S13 只有 z 旋转，这条路径（screen 朝向的 Gram-Schmidt 真正起作用）当时没对过，同日补测（见下「旋转补测」）：WPE 里 x 旋转对象上的 screen sprite 确实朝向相机，和现算一致，写死单位基是错的。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；48 个文件、1284 个用例全过（改动前 47 个、1249 个）；格式通过 |
+| 离线四角（输入取 WPE 的顶点列，Deno WebGPU 跑我们翻译的顶点着色器） | 32 个系统 × 3 帧全部吻合，最大差 1.14e-4 像素（限 0.01）；`T6` 不写顶点、`S7` 整次跳过，WPE 四角都是 NaN；`p4c-trail` 只报 `particle:renderers`（`T8`、`T8r`），`p4c-sprite` 为空 |
+| 旧回放（HEAD 导出对工作区） | b3、b4、b6、c1 `p4c-cp`、c2 `p4c-ptr`、c3 `p4c-attract`、c4 `p4c-world`，18 对输出逐字节相同 |
+| 语料 | 去掉 `particle:renderer:spritetrail` 29 张、`sprite:flags` 6 张、`sprite:orientation` 2 张，没有新增；干净场景 21 → 22，新解锁 `3832772446`；`1923929928` 只剩 `object:perspective` |
+| 变异检查（代理，23 处） | 全部检出，`out/mutate.txt` |
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | `apps/wpe-scene/src` 15 个文件和 `ignore/p4/c5/`；没有 git 写操作。工作区里 `.claude/plans/tools/kabegame-chromium-lib.md` 是别的会话的 |
+| 读码对照 | `orientationVectors` 的三个分支、bit0 的取向、公共尾和 rea 7.2 逐行一致 |
+| tsc、vitest、Prettier（自跑） | 0 error；48 个文件、1284 个用例全过；格式通过 |
+| 离线四角（自跑） | 输出和代理的逐字节相同 |
+| 变异检查（Claude 4 处，和代理不重复，`mutate_claude.py`） | 全部检出：`length` 缺省写成 0.5、`upright` 的叉乘次序反了、就地刷新不重算 `hidden` / 拖尾眼位、退化判断只看速度。源码树哈希前后相同 |
+| 旧回放（自跑改后一侧） | 18 对和代理的改动前输出逐字节相同 |
+| 语料（自跑工作区） | 和代理的工作区结果逐字节相同 |
+| 画面哈希（kabegame-dev `hash_baseline`，宿主按 `--mode development` 重建，入口 `index-zvkIAUZN.js`） | 10 张干净场景 × 三档，30 组和步骤 4（`c4/out/hash-after.json`）全部相同 |
+| 真机四角（kabegame-dev：`projects_import` 导入两个工程，屏外宿主里按 WPE 日志帧时间回放，dev 探针 `particleCorners` 读回真实 GPU 的四角，`live_corners.ts`） | 32 个系统 × 3 帧和 WPE 最大差 1.14e-4 像素；`T6`、`S7` 不画；之后 `projects_remove` 移除，核对没有残留行与任务 |
+| `3832772446`（`render_scene`） | 能渲染，没有不支持项；画面见 `out/render-3832772446-t3.png`（`render_scene` 不步进粒子，图里没有粒子）。和 WPE 比画面留到收尾 |
+
+**旋转补测（2026-11-09，用户要求当场做）**：新工程 `proj/p4c-rot`（`gen_c.py` 的 `p4c_rot`，17 个系统，λ 纹理，每系统一个粒子）：
+- 对象绕 x、y、三轴旋转上的 `screen` sprite（`flags` 0、1），粒子自身带 x 旋转（Forward 进几何），旋转对象上的 `upright`、`fixed`（含 `flags` 1），非均匀缩放，旋转对象上的拖尾；
+- 照抄 `shimmering_particles` 三个 `small_motes_copy1` 的角度、z 偏移与缩放（透视粒子）。
+
+WPE 在用户退出后由 `wpe-renderdoc` 注入启动，工程开在 1920×1080 窗口，fps 60 抓 3 帧（`A:\p4b\p4c-rot-fps60`，19 次绘制 = 2 个图层 + 17 个系统），日志 `out/p4c-rot-fps60-log.txt`（`c5/grab_log.py` 取）；`stop --relaunch` 按字节还原 `config.json`（临时改了 `fps=60`），桌面壁纸经 `openWallpaper` 放回。
+
+| 项 | 结果 |
+|---|---|
+| WPE 的四边形（`c5/rot_shape.py`） | x 旋转 0.6 的 `screen` sprite（R1、R2）是 40×40 的正方形，朝向相机；跟随对象的 `fixed`（R10）躺在旋转平面里，高宽比 0.825 = cos 0.6；P1–P3 也是朝相机的正方形。写死单位基时 R1 会像 R10 一样被压扁 |
+| 离线四角（输入取 WPE 的顶点列，`corners-offline.*` 加 `KB_CORNERS_PROJECTS`，结果 `out/rot/corners.txt`） | 17 个系统 × 3 帧全部吻合，最大差 1.90e-4 像素 |
+| 真机四角（kabegame-dev 导入 → 屏外宿主回放 → `particleCorners`，`live_corners.ts` 加 `KB_LIVE_PROJECTS`，结果 `out/live-corners-p4c-rot.txt`） | 17 个系统 × 3 帧全部吻合，最大差 6.87e-4 像素（含我们自己模拟的累积）；之后 `projects_remove` 移除，核对没有残留 |
+
+所以 `shimmering_particles` 在 `style = 1` 时三层朝向相机是对的。
+
+工具在 `ignore/p4/c5/`：`step5_unlock.py`、`consts.py`、`corners-offline.test.ts`、`corners-offline.ts`、`orient-scan.test.ts`、`replay-b3/b4/b6/cp/ptr/attract.test.ts`、`replay.test.ts`、`run_old.sh`、`cmp_old.py`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`mutate_claude.py`、`run_old_claude.sh`、`cmp_corpus_claude.py`、`live_corners.ts`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`（画面哈希 `out/hash-after.json`，导入清单 `out/import-manifest.json`）。

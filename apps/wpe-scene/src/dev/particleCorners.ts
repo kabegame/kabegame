@@ -17,7 +17,7 @@ import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { injectedR } from "../particles/random";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
-import { CORNER_UVS } from "../particles/vertices";
+import { CORNER_UVS, trailDrawable } from "../particles/vertices";
 import { acquireGpu } from "../render/device";
 import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
@@ -235,7 +235,12 @@ export interface ParticleCornersLayer {
   object: number;
   name: string;
   perspective: boolean;
-  /** 存活粒子数（顶点里的粒子数，不受 `limit` 影响）。 */
+  /**
+   * 渲染时画不画这一层（P4c 步骤 5）：朝向是 NaN（`upright` 的轴平行于视线）时 `encode` 整次绘制跳过，这里为 false；四角照算
+   * （uniform 里写的是 NaN，结果同 WPE 的 `gs_out`）。
+   */
+  drawn: boolean;
+  /** 写进顶点的粒子数（不受 `limit` 影响）：存活粒子，拖尾系统去掉退化的（速度为 0 或平行于视线，P4c 步骤 5）。 */
   count: number;
   /** 每个角点的 UV，顺序同 `corners` 里每个粒子的 4 个角：`(0,0)`、`(0,1)`、`(1,1)`、`(1,0)`。 */
   uv: [number, number][];
@@ -243,7 +248,7 @@ export interface ParticleCornersLayer {
   corners: number[][][];
   /** 同一角的场景像素坐标 `[x, y]`：透视除法后按场景目标尺寸换算，原点左上、y 向下。 */
   pixels: number[][][];
-  /** 写进顶点的粒子输入，按槽序，与 `corners` 一一对应。 */
+  /** 写进顶点的粒子输入，按槽序，与 `corners` 一一对应（拖尾系统同样去掉退化的）。 */
   particles: ParticleTrackParticle[];
   wgsl?: string;
 }
@@ -319,11 +324,15 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
           object,
           name,
           perspective: probe.perspective,
+          drawn: !probe.hidden,
           count: probe.count,
           uv: CORNER_UVS.map(([u, v]) => [u, v]),
           corners,
           pixels,
-          particles: particleSnapshot(probe.system).slice(0, limit),
+          particles: particleSnapshot(
+            probe.system,
+            probe.trailEye ? (slot) => trailDrawable(probe.system.columns, slot, probe.trailEye!) : undefined,
+          ).slice(0, limit),
           wgsl: options.wgsl ? code : undefined,
         });
       }

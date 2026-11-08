@@ -611,7 +611,11 @@ export function checkParticleProgram(
  *   报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
  * - 其它顶层键：`particle:system:<键>`；顶层键写成绑定：`particle:binding:system:<键>`（WPE 按 `isNumeric` / `isString`
  *   读，对象当缺键，语义没核对）。`emitter` / `initializer` / `operator` 不是数组时同样报 `particle:system:<键>`。
- * - renderer 多于一个：`particle:renderers`（多个 renderer 的绘制没读）。
+ * - renderer：`sprite`、`spritetrail` 在表里，`orientation`、`axis`、`flags` 的取值全部支持（P4c 步骤 5，`particles/orientation.ts`）；
+ *   rope 两类（P4d）表外照报。多于一个报 `particle:renderers`：WPE 按数组顺序各画一次、共用同一个顶点缓冲、各绑自己的变体材质
+ *   （rea-p4c-render.md 6.3，实测两种顺序都是两次绘制），我们一个粒子层只有一次绘制，支持它要拆成一个系统多次绘制（顶点布局
+ *   能不能共用、每次绘制各自的 uniform、快照「每对象至多一次」、四角探针按绘制输出）。语料里这样的系统 0 张，留着不做
+ *   （2026-11-09 用户定）。
  * - 属性关键帧（P4a 步骤 5）：系统级键、模块字段写成 `{animation: {…}, value}` 报 `value:animation`，与绑定分开报；
  *   控制点与子系统条目整段 `scanValue`。
  * 值为 null 的键一律当缺键。
@@ -636,6 +640,7 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
       unsupported.add(`particle:system:${category}`);
       continue;
     }
+    // 一个系统多个 renderer 的绘制没做（见上）
     if (category === "renderer" && entries.length > 1) unsupported.add("particle:renderers");
     for (const entry of entries) {
       const reading = readParticleModule(category, entry, orthographic);
