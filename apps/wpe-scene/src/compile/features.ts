@@ -26,10 +26,12 @@ import {
   INSTANCE_FIELDS,
   PARTICLE_SYSTEM_KEYS,
   particleModuleEntries,
+  readControlPoints,
   readParticleSystem,
   type ParticleInstance,
 } from "./particles";
-import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
+import { CONTROL_POINT_FLAGS, controlPointCount } from "../particles/controlpoints";
+import { PARTICLE_CATEGORIES, readParticleModule, type ParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
 import type { SceneScript } from "./scripts";
 import { scanScriptApi } from "./scriptApi";
@@ -393,7 +395,9 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
  *   - `color` 绑了用户属性：`particle:instance:color:user`（属性值怎么 ÷255 没读到）；
  *   - `colorn` 的 `{user: {name, condition}}`：`particle:instance:colorn:condition`（布尔值怎么转颜色没读到）。
  *   `brightness`（HDR 时乘实例颜色）见上条；子系统不生效的传递属 P4e（`particle:children` 照报）。
- * - `controlpoint0..7`、`controlpointangle0..7`：`particle:instance:controlpoint`（P4c）。
+ * - `controlpoint0..7`、`controlpointangle0..7`（P4c 步骤 1，`particles/controlpoints.ts`）：静态值已实现，不报（下标 ≥ 控制点
+ *   个数、或点上带 `flags` 1 / 4 时 WPE 不用它，同样中性）；绑了用户属性报 `particle:instance:controlpoint:user`（运行时改值
+ *   没做，语料 0 处）。
  * - 挂了 `{script}`：`particle:binding:instance:<键>`（脚本名 `instance`，P4f）。
  * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `scanValue` 报。
  */
@@ -419,8 +423,9 @@ export function checkParticleInstance(
     } else if (key === "colorn") {
       if (colorOverride && userBindingOf(value as SceneValue)?.condition !== undefined)
         unsupported.add("particle:instance:colorn:condition");
-    } else if (/^controlpoint(?:angle)?[0-7]$/.test(key)) unsupported.add("particle:instance:controlpoint");
-    else unsupported.add(`particle:instance:${key}`);
+    } else if (/^controlpoint(?:angle)?[0-7]$/.test(key)) {
+      if (isUserBinding(value)) unsupported.add("particle:instance:controlpoint:user");
+    } else unsupported.add(`particle:instance:${key}`);
   }
   if (context.hdr && colorOverride && resolved.brightness !== 1) unsupported.add("particle:instance:brightness");
 }
@@ -590,35 +595,25 @@ export function checkParticleProgram(
   if (result && usesLighting(result)) unsupported.add("particle:lighting");
 }
 
-/** `"x y z"` 有没有非 0 分量；不是字符串（null 除外）时保守算有。 */
-function nonZeroVector(value: unknown): boolean {
-  if (value === null || value === undefined) return false;
-  if (typeof value !== "string") return true;
-  return value
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .some((part) => Number(part) !== 0);
-}
-
 /**
- * 控制点数组有没有实际内容（P4c 的范围）。依据 `ignore/p4/rea/parser.asm` 的 `0x1401d04d8`–`0x1401d080e`：先把 8 个槽清零，
- * 只在 `controlpoint` 是数组时读（`0x1401d051b`），按**数组下标**读前 8 项（`0x1401d080a`）、只读对象项（`0x1401d053e`）；
- * 每项读 `offset`（缺省 `"0 0 0"`）、`flags`（0）、`parentcontrolpoint`（0）、`angles`（只在是字符串时解析，缺省 0），`id` 不读。
- * 所以这几个键取缺省值时等于没写。`locktopointer` 不在这段里，读取点没找到，真值保守算内容；其余键同样保守算内容。
+ * 控制点（P4c 步骤 1，rea-p4c-sim.md 第 1 节，实测见报告「P4c 语义的实测核对」）：只看下标 < n 的项（n 见 `controlPointCount`，
+ * 模块按模块表读；没被模块引用的控制点 WPE 不建，写什么都不起作用）。`flags` bit0（指针）报 `particle:controlpoint:pointer`
+ * （步骤 2；`0x10000` 优先于 bit0，同 `ControlPointSet.update`）；其余位、`offset`、`angles`、`parentcontrolpoint`、
+ * `locktopointer` 和别的键都不报（理由同 `SceneControlPoint`：bit1 已实现，bit2 在顶层系统上只让实例覆盖不生效，bit3、bit4
+ * 没有读者）。关键帧照旧由 `scanValue` 报。
  */
-function controlPointsUsed(raw: unknown): boolean {
-  if (!Array.isArray(raw)) return false;
-  return raw.slice(0, 8).some((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    return Object.entries(entry as Record<string, unknown>).some(([key, value]) => {
-      if (value === null || value === undefined || key === "id") return false;
-      if (key === "offset" || key === "angles") return nonZeroVector(value);
-      if (key === "flags" || key === "parentcontrolpoint") return value !== 0 && value !== false;
-      if (key === "locktopointer") return value !== false;
-      return true;
-    });
+function checkControlPoints(system: JsonObject, orthographic: boolean, unsupported: Set<string>): void {
+  const modules = (category: "emitter" | "initializer" | "operator"): ParticleModule[] =>
+    (particleModuleEntries(system, category) ?? []).map((entry) => readParticleModule(category, entry, orthographic));
+  const count = controlPointCount({
+    emitters: modules("emitter"),
+    initializers: modules("initializer"),
+    operators: modules("operator"),
   });
+  const points = readControlPoints(system);
+  for (let i = 0; i < count; i++)
+    if ((points[i].flags & (CONTROL_POINT_FLAGS.remap | CONTROL_POINT_FLAGS.pointer)) === CONTROL_POINT_FLAGS.pointer)
+      unsupported.add("particle:controlpoint:pointer");
 }
 
 /**
@@ -629,7 +624,7 @@ function controlPointsUsed(raw: unknown): boolean {
  *   没实测，报 `particle:flags:world`；更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，`0x1401c56e9`，
  *   高位其实被丢掉；没有样本，保守报）。
  * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。
- * - `controlpoint` 有实际内容：`particle:controlpoint`（P4c，判定见 `controlPointsUsed`）。
+ * - 控制点：被模块引用的点跟随指针时报 `particle:controlpoint:pointer`（P4c 步骤 2），其余中性（`checkControlPoints`）。
  * - `animationmode`、`sequencemultiplier` 任意取值都支持（P4b 步骤 2）：只在材质槽 0 是帧表纹理时起作用（frame 列、混帧宏），
  *   否则是中性的。写成绑定或关键帧照下面两条报。帧表纹理用在粒子其它槽位是普通纹理（P4b 步骤 5），用在图像层、effect 由纹理
  *   报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
@@ -655,7 +650,7 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
   if (flags & 1) unsupported.add("particle:flags:world");
   for (let bit = 8; bit < 32; bit++) if (flags & (1 << bit)) unsupported.add(`particle:flags:${(1 << bit) >>> 0}`);
   if (Array.isArray(system.children) && system.children.length > 0) unsupported.add("particle:children");
-  if (controlPointsUsed(system.controlpoint)) unsupported.add("particle:controlpoint");
+  checkControlPoints(system, orthographic, unsupported);
   for (const category of PARTICLE_CATEGORIES) {
     const entries = particleModuleEntries(system, category);
     if (!entries) {

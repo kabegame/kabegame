@@ -12,7 +12,7 @@ import type { ScenePass } from "./bundle";
 import type { JsonObject, SceneScalar } from "./model";
 import { roundTrip5 } from "../particles/colorn";
 import { f32 } from "../particles/f32";
-import { readParticleModule, type ParticleCategory, type ParticleModule } from "../particles/modules";
+import { asUInt32, readParticleModule, type ParticleCategory, type ParticleModule } from "../particles/modules";
 
 /**
  * `instanceoverride` 里就地更新的标量键（P4a 步骤 5，`rea-p4a.md` C5）：编译期每处 `{user}` 登记成 `particle-instance`
@@ -45,7 +45,8 @@ export function instanceScalar(value: unknown): number {
 
 /**
  * `instanceoverride` 的值（`rea-p4a.md` C5，基址 `obj+0x778`）。标量键与 `colorn` 经 `InstanceResolver` 取值（编译期登记绑定、
- * 读用户属性，`bundle.ts`）；`color` 与控制点只取静态值（`color` 绑了属性、控制点由能力表报不支持，`checkParticleInstance`）。
+ * 读用户属性，`bundle.ts`）；`color` 与控制点只取静态值（`color` 绑了属性报不支持；控制点的 `{user}` 报
+ * `particle:instance:controlpoint:user`，`checkParticleInstance`）。
  * `rate` 的下限 0.01 只在脏时钳（C5），这里存原值。
  */
 export interface ParticleInstance {
@@ -68,10 +69,73 @@ export interface ParticleInstance {
    * `f32(f32(v) / 255)` 再 `%.5f` 往返转成它，两个键都写时取 `color`（rea-p4b-render.md 7.1，`instanceColorn`）。
    */
   colorn: readonly number[] | null;
-  /** `controlpoint0..7`；未设为 null（WPE 的 FLT_MAX）。属 P4c。 */
+  /**
+   * `controlpoint0..7`；未设为 null（WPE 的 FLT_MAX）。替换控制点 `base` 的平移（`particles/controlpoints.ts`，P4c 步骤 1）。
+   * 静态值（`{user}` 只取 JSON 里的 `value`，由能力表报）。
+   */
   controlpoints: (number[] | null)[];
-  /** `controlpointangle0..7`；未设为 null。属 P4c。 */
+  /** `controlpointangle0..7`（弧度，`Rz·Ry·Rx`）；未设为 null。替换控制点 `base` 的 3×3。静态值，同上。 */
   controlpointAngles: (number[] | null)[];
+}
+
+/**
+ * 控制点数组的一项（rea-p4c-sim.md 1.2，`FUN_1401c5490` 段 `0x1401d04d8`–`0x1401d080e`）。`angles`、`parentcontrolpoint`、
+ * `locktopointer`、`id` 不读：`angles` 解析了但运行时没有读者（实测不起作用），`parentcontrolpoint` 只对子系统有意义（P4e），
+ * `locktopointer` 这个键 WPE 不认（二进制里没有这个字符串，实测不跟随），`id` 是编辑器键。
+ */
+export interface SceneControlPoint {
+  /**
+   * `flags`：按 jsoncpp 取无符号整数（`FUN_140085f70`，`0x1401d05a2`）：数字取整后取低 32 位（负数当很大的无符号数），布尔为
+   * 1 / 0，其余 0（WPE 对字符串、对象会抛异常，语料没有）。bit0 指针、bit1 base 是场景坐标、bit2 父控制点（顶层只让实例覆盖
+   * 不生效），其余位没有读者（`particles/controlpoints.ts`）。
+   */
+  flags: number;
+  /**
+   * `offset`：只在是字符串时解析（`0x1401d05c5`，其余保持 `0 0 0`），空串保持 `0 0 0`。三个分量各 `atof` 一次：第一个从串首，
+   * 之后先跳过非空格字符、再跳过空格（只认 0x20），从那里再 `atof`（`0x1401d061c`–`0x1401d0680`）；`atof` 按 `parseFloat`，
+   * 读不出数取 0。
+   */
+  offset: [number, number, number];
+}
+
+/** 控制点 `flags` 的取值（见 `SceneControlPoint.flags`）。 */
+function controlPointFlags(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return asUInt32(Math.trunc(value));
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return 0;
+}
+
+/** 控制点 `offset` 字符串的三个分量（见 `SceneControlPoint.offset`）。 */
+export function controlPointOffset(text: string): [number, number, number] {
+  const out: [number, number, number] = [0, 0, 0];
+  if (!text) return out;
+  let at = 0;
+  for (let i = 0; i < 3; i++) {
+    if (i > 0) {
+      while (at < text.length && text[at] !== " ") at++;
+      while (at < text.length && text[at] === " ") at++;
+    }
+    const value = parseFloat(text.slice(at));
+    out[i] = Number.isNaN(value) ? 0 : value;
+  }
+  return out;
+}
+
+/**
+ * 控制点数组（rea-p4c-sim.md 1.2）：只在 `controlpoint` 是数组时读；按数组下标取前 8 项，不是对象的项（含数组）取缺省。
+ * 总是 8 项。控制点有没有用由模块的 `controlpoint` 决定（`particles/controlpoints.ts` 的 `controlPointCount`）。
+ */
+export function readControlPoints(json: JsonObject): SceneControlPoint[] {
+  const raw = json.controlpoint;
+  return Array.from({ length: 8 }, (_, i) => {
+    const entry: unknown = Array.isArray(raw) ? raw[i] : undefined;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return { flags: 0, offset: [0, 0, 0] };
+    const { flags, offset } = entry as Record<string, unknown>;
+    return {
+      flags: controlPointFlags(flags),
+      offset: typeof offset === "string" ? controlPointOffset(offset) : [0, 0, 0],
+    };
+  });
 }
 
 export interface SceneParticle {
@@ -109,6 +173,8 @@ export interface SceneParticle {
   renderers: ParticleModule[];
   /** 缺省值按正交还是透视那一套选（`isOrthographic`）。 */
   orthographic: boolean;
+  /** 控制点数组（总是 8 项，`readControlPoints`）。 */
+  controlpoints: SceneControlPoint[];
   instance: ParticleInstance;
   /** 系统色与 `0x200000`（`instanceoverride.colorn` 用，P4b 步骤 6，`particleColorSystem`）。 */
   colorSystem: ParticleColorSystem;
@@ -351,6 +417,7 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     operators: modules("operator"),
     renderers: modules("renderer"),
     orthographic: options.orthographic,
+    controlpoints: readControlPoints(json),
     instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),
     colorSystem: particleColorSystem(json, options.sceneVersion ?? 0),
     passes: [],

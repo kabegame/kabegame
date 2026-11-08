@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonObject } from "../compile/model";
 import { parseParticle } from "../compile/particles";
 import { ParticleColumns } from "./columns";
+import { IDENTITY_BASIS, identityControlPoints } from "./controlpoints";
 import p4bTurb from "./fixtures/p4b-turb.json";
 import noiseFixture from "./fixtures/noise.json";
 import { positionOffsetRandom, turbulentVelocityRandom } from "./initializers";
@@ -65,7 +66,18 @@ class ScriptedRandom implements ParticleRandom {
 }
 
 function context(columns: ParticleColumns, random: ParticleRandom, time: number): ParticleRunContext {
-  return { columns, random, slot: 0, count: 1, h: 0, k: 0, time };
+  return {
+    columns,
+    random,
+    slot: 0,
+    count: 1,
+    h: 0,
+    k: 0,
+    time,
+    controlPoints: identityControlPoints(),
+    world: false,
+    basis: IDENTITY_BASIS,
+  };
 }
 
 describe("常量表（noiseTables.ts，由 noise-tables.json 生成）", () => {

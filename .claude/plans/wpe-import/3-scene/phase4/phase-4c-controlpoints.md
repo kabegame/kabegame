@@ -170,35 +170,243 @@ setPointer(x: number, y: number): void {
 
 ## 步骤 1 — 控制点底座
 
-- **新增** `particles/controlpoints.ts`：每个系统 8 个控制点，本帧和上一帧各一份。
+> 2026-11-08 按步骤 0 的读码（[rea-p4c-sim.md](rea-p4c-sim.md) 第 1–3 节）、实测（报告「P4c 语义的实测核对」）和语料扫描（`ignore/p4/c1/scan_cp.py`，结果 `scan_cp.txt`）重写，写成可以直接派发的版本。
+
+### 思路
+
+控制点成为粒子系统的一份状态。每个系统有 `n` 个控制点，`n` 是模块 `controlpoint` 字段的最大值加 1（1.1）；没被模块引用的控制点不存在，JSON 里给它写什么都不起作用。每个控制点存 `base`、`current`、`previous` 三份仿射变换（3×3 加平移）：
+- **建系统时**：`base` 是单位阵加 `offset`，再按静态的 `instanceoverride` 覆盖（`controlpointN` 替换平移，`controlpointangleN` 替换 3×3），`current = previous = base`（1.3、第 2 节）。
+- **每帧**：在序列帧之后、发射之前更新一次 `current`（两遍模式也只一次），全部 operator 之后 `previous ← current`（1.5）。
+- **预热前**：按加载时的对象世界矩阵 `W` 先更新一次，`previous ← current`；预热的每一步照常更新（1.3）。
+
+模块经执行上下文读控制点。发射器读自己那个控制点的 `current`：出生点加上平移；3×3 只在「世界空间或 `controlpoint ≠ 0`」时旋转出生点，但总是交给 initializer 当 `M`，`velocityrandom`、`turbulentvelocityrandom` 乘它。`vortex` 的中心加控制点平移。
+
+`flags 2` 要用 `W`：本地系统里 `current = inverse(W)·base`。渲染器每帧按 `SceneState` 算 `W`（父链、脚本改变换都跟上），预热和轨迹工具用编译期的变换。`ControlPointSet` 照 WPE 同一个函数把世界空间分支也写上（`current = W·base`），但世界空间整体在步骤 4，能力表照报。
+
+按步骤 0 的结论，这些是中性的，不进数据、不报：JSON 控制点的 `angles`、`locktopointer`、`parentcontrolpoint`；顶层系统上 `flags` 的 4（只让实例覆盖不生效）、8、16；下标 ≥ `n` 的控制点。
+
+**本步不做：**
+- **指针（`flags` bit0）**：键改名为 `particle:controlpoint:pointer`，步骤 2 放开。`ControlPointSet` 里指针分支先写成 `current = base`，能力表在前面拦住。
+- **世界空间**：照报 `particle:flags:world`（步骤 4）。
+- **`instanceoverride` 控制点的运行时绑定**：语料 17 处全是静态值（`controlpoint` 15、`controlpointangle` 2），绑属性和挂脚本都是 0 处。只做静态值，`{user}` 报 `particle:instance:controlpoint:user`。这样本步不碰 `ParticleInstanceValues`、`BindingTarget`、`SceneState.write`，和 P4b 步骤 6（`colorn`）改的绑定代码不重叠。
+
+**和 P4b 步骤 6 并行的做法**（风险 4）：另一个会话正在做 P4b 步骤 6，会改 `particles/system.ts`、`compile/particles.ts`、`compile/features.ts` 的其它段落。步骤 1 在快照 `ignore/p4/c1/ov`（`d938e75f` 的 `apps/wpe-scene/src`，加上未入库的翻译器 wasm）里开发和验收，不碰 `apps/wpe-scene`；验收后由 Claude 生成补丁移进工作区，再在工作区重跑一遍。快照的基线：tsc 0 error，vitest 42 个文件、1114 个用例全过。
+
+**语料**（`scan_cp.txt`，按 `n` 区分有没有被引用）：
+- 被引用的控制点：`flags` 1 有 67 处、2 有 3 处（都在 `3832133196` 的 `thunderbolt.json`，本地系统），其余 331 处是 0；`offset` 非零 15 处，`angles` 非零 24 处，`locktopointer` 3 处，`parentcontrolpoint` 6 处。
+- 没被引用的控制点：`angles` 非零 203 处、`offset` 非零 25 处、`flags 1` 2 处，现在都在报，本步起中性。
+- 模块的 `controlpoint`：`controlpointattract` 写了 1、2、3、6、7（步骤 3），`reducemovementnearcontrolpoint` 写了 1（P4d），`sphererandom` 写 0 的 3 处，其余用缺省 0。
+
+### 现状锚点
+
+见上文「现状锚点」的 a–d。另有：
+
+**i. 帧内顺序没有控制点**（`particles/system.ts`，`advance`）
 ```ts
+private advance(dt: number, frameDt: number, passes: 1 | 2): void {
+  if (!(dt > 0)) return;
+  this.ageAndKill(dt);
+  this.sequenceFrames();
+  this.emit(dt); // 现状：发射前没有控制点更新，帧尾没有 previous ← current
+  // … operator 一遍或两遍
+}
+```
+
+**j. initializer 的 `M` 按单位阵省掉**（`particles/initializers.ts`）
+```ts
+/** 三轴独立，**抽取顺序 z、y、x**，经控制点矩阵（P4a 为单位阵）后加到速度。 */
+export function velocityRandom(fields: ParticleFields, { columns, random, slot }: ParticleRunContext): void {
+  // …
+  for (let i = 0; i < 3; i++)
+    columns.velocity[i][slot] = f32(columns.velocity[i][slot] + lerp(min[i], f32(max[i] - min[i]), t[i])); // 现状：不乘 M
+}
+// turbulentVelocityRandom：「`M` 是发射器的控制点 3×3：控制点 0 无旋转时是单位阵，乘上是精确的，省掉」
+```
+
+**k. 模拟器拿不到对象的世界矩阵**（`render/scene.ts`，`createParticles` / `stepParticles`；`particles/track.ts`）
+```ts
+system.prewarm();                      // 现状：没有 W
+particles.system.step(frametime, time); // 现状：没有 W
+// particleTrack 的 layers 只取 "object" | "name" | "particle"
+```
+
+**l. 实例覆盖的控制点只取静态值、整个报掉**（`compile/particles.ts` `parseParticleInstance`、`compile/features.ts` `checkParticleInstance`）
+```ts
+controlpoints: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpoint${i}`])),
+controlpointAngles: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpointangle${i}`])),
+// features.ts：
+} else if (/^controlpoint(?:angle)?[0-7]$/.test(key)) unsupported.add("particle:instance:controlpoint");
+```
+
+### 点 1 — 控制点状态（新增 `particles/controlpoints.ts`）
+
+- **新增**
+```ts
+/** 一个控制点的仿射变换（WPE 每份存 4×4，第 4 行恒为 0 0 0 1，这里只存前三行）。 */
 export interface ControlPoint {
-  translation: Float32Array; // 3
-  basis: Float32Array; // 3×3，列主序，同 rea-p4b-modules 的 Mij 约定
+  /** 3×3，列主序：`basis[c * 3 + r]` 是第 c 列第 r 个分量（同 rea-p4b-modules 的 Mij）。 */
+  readonly basis: Float32Array;
+  readonly translation: Float32Array;
 }
 export interface ControlPointInputs {
-  /** 指针的场景坐标（步骤 2）；没有指针时为 null。 */
-  pointer: [number, number, number] | null;
-  /** 对象的世界矩阵（步骤 4 用）。 */
-  world: Float32Array;
+  /** 对象世界矩阵 `W`（`render/layout.ts` 的 `worldMatrixOf`，含父链）。顶层系统模拟时的模型矩阵 `M` 就是它（1.4）。 */
+  world: Mat4;
 }
-export class ControlPoints {
-  constructor(def: SceneControlPoint[], instance: ParticleInstance);
-  /** O1 的「控制点」一步：上一帧 ← 本帧，再按输入算本帧。 */
+/** `n = max(controlpoint + 1)`：遍历三类模块里模块表有 `controlpoint` 字段的项，取解析后的值（0–7）。没有这样的模块时为 0。 */
+export function controlPointCount(def: Pick<SceneParticle, "emitters" | "initializers" | "operators">): number;
+/** `controlpointangleN` 的 3×3（第 2 节，`R = Rz·Ry·Rx`，弧度；三列照伪代码逐项、逐步 f32）。 */
+export function eulerBasis(angles: readonly number[]): Float32Array;
+export class ControlPointSet {
+  readonly count: number;
+  /** base = I + offset，再按静态实例覆盖（`flags & 0x10005` 的点跳过）；current = previous = base。 */
+  constructor(def: SceneParticle);
+  /** `FUN_14022e3e0`（1.5），每帧一次，在发射之前。 */
   update(inputs: ControlPointInputs): void;
+  /** 帧尾 `previous ← current`（`0x140237798`），全部 operator 之后。 */
+  endFrame(): void;
   current(index: number): ControlPoint;
   previous(index: number): ControlPoint;
 }
 ```
-- **修改** `compile/particles.ts`：解析控制点数组（`offset`、`angles`、`flags`、`parentcontrolpoint`、`locktopointer`），按数组下标前 8 项，照 `controlPointsUsed` 注释里读到的规则。
-- **修改** 模拟器：在 O1 的位置调 `update`；`sphererandom`、`boxrandom`、`vortex`、`turbulentvelocityrandom` 改用 `current(controlpoint)`，去掉「按单位阵」。
-- **修改** `instanceoverride` 的 `controlpoint*`、`controlpointangle*` 走 P4a 的 `particle-instance` 绑定，就地生效，语义按步骤 0。
-- **修改** 能力表：去掉 `offset`、`angles` 的内容判定和模块 `controlpoint` 的 `zeroOnly`；`particle:instance:controlpoint` 只在步骤 0 没读清的写法上报。指针相关的位留到步骤 2 才放行。
+- `update` 照 1.5 的分支写，位的优先级 `0x10000` > bit0 > bit2 > 缺省：
+```
+for i < count:
+  f = flags[i]
+  f & 0x10000：跳过（remap 输出的点，P4d；JSON 写这一位时 current 一直是 base）
+  f & 1：current = base（步骤 2 换成指针分支；能力表报 particle:controlpoint:pointer）
+  其余（含 f & 4：顶层系统没有父，走缺省，1.8）：
+    世界：!(f & 2) 或 i == 0 → current = W·base；否则不动
+    本地：f & 2 → current = inverse(W)·base；否则不动
+```
+- 矩阵用 `render/math.ts`（列主序 `Mat4`、`multiply`、`invert`）。`W` 奇异时 `invert` 返回 null，WPE 是除以 0 得 inf / NaN，这里写 NaN（粒子不画），注释写明。
+- 实例覆盖（第 2 节）：`angle` 已设（`instanceVector` 非 null）时 `base.basis = eulerBasis(angle)`；`pos` 已设时 `base.translation = pos`（替换，不加 `offset`）。只在建系统时做一次，之后不变（本步没有运行时绑定）。加载时的 `FUN_14022bd40` 还会按当时的 `W`（单位阵）写一次 `current`，紧接着加载时的那次 `update` 会按真实 `W` 重算，结果相同，所以构造里直接 `current = base`。
 
-**验收：**
-- `proj/p4c-cp` 里不含指针的系统回放，和 WPE 逐帧比，限值同 P4b（1e-3，坐标过 1000 时 2e-3）。
-- 变异检查：控制点更新时机、角度顺序、`offset` 叠加方式、本帧 / 上一帧取错，各有测试失败。
-- 语料变化逐条解释，现有画面哈希不变。
+### 点 2 — 解析（`compile/particles.ts`）
+
+- **新增**
+```ts
+/** 控制点数组的一项（1.2）。`angles`、`parentcontrolpoint`、`locktopointer`、`id` 不读：运行时没有读者或 WPE 不认这个键。 */
+export interface SceneControlPoint {
+  /** `flags`：数字取整，其余 0。bit0 指针、bit1 base 是场景坐标、bit2 父控制点（顶层只让实例覆盖不生效），其余位没有读者。 */
+  flags: number;
+  /** `offset`：只在是字符串时解析，按空白切、前三段各自 `atof`（`parseFloat`，NaN 取 0），缺的分量 0；否则 `0 0 0`。 */
+  offset: [number, number, number];
+}
+/** 只在 `controlpoint` 是数组时读；按数组下标取前 8 项，不是对象的项取缺省。总是 8 项。 */
+export function readControlPoints(json: JsonObject): SceneControlPoint[];
+```
+- **修改** `SceneParticle` 加 `controlpoints: SceneControlPoint[]`，`parseParticle` 填。
+- **修改** `ParticleInstance.controlpoints`、`controlpointAngles` 的注释去掉「属 P4c」，写清「静态值，`{user}` 由能力表报」。
+
+### 点 3 — 模块表与执行上下文（`particles/modules.ts`）
+
+- **修改** `sphererandom`、`boxrandom`、`vortex` 的 `controlpoint` 去掉 `zeroOnly`，取值改成「取整后按无符号与 7 取小」（负数变 7；`controlpointattract` 的「上限 7、无符号比较」读到了，这三个按同一写法【推】，派发后先在 `ignore/p4/rea/wp.asm` 里核对各自的解析段）。
+- **修改** `ParticleRunContext` 加三项：
+```ts
+  /** 本系统的控制点（P4c）。模块读 `current`；P4d 的模块还读 `previous`。 */
+  controlPoints: ControlPointSet;
+  /** 系统 `flags` bit0（世界空间）：发射器据此决定出生点旋不旋。步骤 4 之前能力表拦住，恒为 false。 */
+  world: boolean;
+  /** 发射这个粒子的 emitter 的控制点 3×3（`mat3(current)`，无条件，rea-p4c-sim 第 3 节）：emitter 写，initializer 当 `M` 用。 */
+  basis: Float32Array;
+```
+
+### 点 4 — 读控制点的模块（`particles/emitters.ts`、`particles/initializers.ts`、`particles/operators.ts`）
+
+- **修改** `sphereRandom`、`boxRandom`：
+```
+cp     = controlPoints.current(controlpoint);  context.basis = cp.basis
+base   = cp.t + origin                          （逐分量一次加法）
+rotate = world || controlpoint ≠ 0
+q 照现状算；rotate 时 q = basis·q
+pos    = q + base
+回退方向（sphererandom 的 |q|² < 1e-4、boxrandom 的 fastInvSqrt 判定）另抽的 3 个分量，rotate 时同样乘 basis
+boxrandom：d = pos − base（写进列的 float 重新减）
+```
+  - `basis·q` 的加法结合顺序、`|q|²` 判的是旋转前还是旋转后的 `q`，照反编译逐条核对：`sphererandom` 看 `ignore/p4/rea/p4b-mod/emit_1402378a0.c` 第 465–676 行，`boxrandom` 看第 802–826 行与 rea-p4b-modules A4 的伪代码（`X = (qx·M00 + qy·M10) + qz·M20`、`Y = (qy·M11 + qx·M01) + qz·M21`、`Z = (qx·M02 + qy·M12) + qz·M22`）。
+  - 文件头和两个函数的注释去掉「按单位阵、平移按 0」。
+- **修改** `velocityRandom`：加到速度之前乘 `M`（`context.basis`），加法顺序照 `0x14023bbce` 起的汇编（`ignore/p4/rea/wp.asm`）。
+- **修改** `turbulentVelocityRandom`：`v += M·(…)`，`M·v` 照现有注释里的 `FUN_140184440` 顺序，去掉「省掉」那条。
+- **修改** `vortex`：`C = cp[controlpoint].t + offset`，轴、`offset` 不旋转（B7）。注释去掉「控制点 0 平移按 0」。
+
+### 点 5 — 模拟器（`particles/system.ts`）
+
+- **修改**
+```ts
+const IDENTITY_INPUTS: ControlPointInputs = { world: identity() };
+
+constructor(/* 不变 */) {
+  // …
+  this.controlPoints = new ControlPointSet(def); // 新增
+  this.context = { /* 现有各项 */, controlPoints: this.controlPoints, world: (def.flags & 1) !== 0, basis: IDENTITY_BASIS };
+}
+
+/** 加载（1.3）：控制点按加载时的 W 更新一次、previous ← current，再预热；预热每步照常更新控制点。starttime 为 0 时也做前两步。 */
+prewarm(inputs: ControlPointInputs = IDENTITY_INPUTS): void;
+step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void;
+
+private advance(dt: number, frameDt: number, passes: 1 | 2, inputs: ControlPointInputs): void {
+  if (!(dt > 0)) return;
+  this.ageAndKill(dt);
+  this.sequenceFrames();
+  this.controlPoints.update(inputs); // 新增：O1 第 5 步（0x1402376fe），序列帧（0x140237022）之后、发射之前
+  this.emit(dt);
+  // … operator 一遍或两遍，不变
+  this.controlPoints.endFrame(); // 新增：全部 operator 之后
+}
+```
+- `setInstance` 不变（只有标量）。`suspend` 不变：WPE 不可见时控制点照常更新（5.6），但可见后的第一帧发射前会重算 `current`，本步没有读 `previous` 的模块，注释写明这点差异只影响 P4d。
+- 文件头的「控制点（P4c）、子系统不在这里」改成控制点的一句话说明。
+
+### 点 6 — 世界矩阵输入（`render/scene.ts`、`particles/track.ts`）
+
+- **修改** `createParticles`：`W = worldMatrixOf(layer.object, state.layers, new Map())`，`system.prewarm({ world: W })`，`ParticleDraw` 加 `world`（加载时的 `W`）。
+- **修改** `stepParticles`：有 `state` 时每帧 `worldMatrixOf(draw.object, state.layers, cache)`（一次调用共用一个 `cache`），没有 `state`（dev 探针回放）时用 `particles.world`。
+- **修改** `particleTrack`：`layers` 的 Pick 加 `origin`、`angles`、`scale`、`parent`，用全部图层建变换表、按 `worldMatrixOf` 算每个粒子层的 `W`（静态，不跑脚本），传给 `prewarm` 和 `step`。`dev/probe.ts` 传进来的就是编译后的全部图层，确认类型对上即可。
+
+### 点 7 — 能力表（`compile/features.ts`）
+
+- **删除** `controlPointsUsed`、`nonZeroVector`（没有别的调用时），键 `particle:controlpoint`、`particle:instance:controlpoint`。
+- **新增**
+```ts
+/**
+ * 控制点（P4c 步骤 1，rea-p4c-sim.md 第 1 节，实测见报告「P4c 语义的实测核对」）：只看下标 < n 的项（n 见 `controlPointCount`，
+ * 模块按模块表读）。`flags` bit0（指针）报 `particle:controlpoint:pointer`（步骤 2）；其余位、`offset`、`angles`、
+ * `parentcontrolpoint`、`locktopointer` 和别的键都不报（理由同 `SceneControlPoint`）。关键帧照旧由 `scanValue` 报。
+ */
+function checkControlPoints(system: JsonObject, orthographic: boolean, unsupported: Set<string>): void;
+```
+- **修改** `checkParticleInstance`：`controlpointN`、`controlpointangleN` 静态值不报，`{user}` 报 `particle:instance:controlpoint:user`，`{script}` 照旧 `particle:binding:instance:<键>`。注释同步。
+
+### 验收
+
+**单测**（新增 `particles/controlpoints.test.ts`，改 `emission.test.ts`、`simulator.test.ts`、`compile/particles.test.ts`）：
+- 初值：`offset` 平移；JSON `angles` 不起作用；`offset` 不是字符串、分量不足、有非数字时的取值。
+- 实例覆盖：平移替换不叠加；`eulerBasis` 按 `Rz·Ry·Rx`（`(0, 0, π/2)` 把 x 轴转到 y 轴，再用一组三轴都非零的角度钉住每个分量）；`flags` 1、4、`0x10000` 的点不覆盖；`n` 之外的点不建。
+- `update`：本地 `flags 2` 是 `inverse(W)·base`，`flags 0` 不动；世界分支 `W·base`、控制点 0 忽略 bit1；`0x10000` 跳过；`endFrame` 之后 `previous` 是这一帧的 `current`；更新在序列帧之后、发射之前（发射读到的是本帧值）。
+- 发射：`controlpoint ≠ 0` 旋转出生点和回退方向；控制点 0 带角度时出生点不旋，`velocityrandom` 的速度旋了；`turbulentvelocityrandom` 乘 `M`；`vortex` 中心加控制点平移、轴不旋。
+- 能力表：上面列的中性项不报，指针点报新键，`n` 之外的指针点不报，实例覆盖三种写法。
+
+**回放**（新增 `ignore/p4/c1/replay.test.ts`，照 `b3/replay.test.ts` 的骨架，`KB_SRC` 指向快照）：
+- `p4c-cp` 抓帧（`tracks/rd-p4c-cp-fps60.json`，4 帧，dt 用 `out/p4c-cp-fps60-log.txt`）里不含指针的 11 个系统逐粒子比：`cp-angles`、`cp-io-angle`、`cp-io-pos`、`cp0-angle`、`cp-flag2`、`cp-flag2-ref`、`cp-flag4`、`cp-flag16`、`cp-flag16-ref`、`ptr-lock`、`vortex-cp`。限值同 P4b（1e-3，坐标过 1000 时 2e-3；`vortex-cp` 加 `rsqrt` 包络）。`ptr-*` 三个不比。
+- P4a、P4b 的回放在快照上改动前后各跑一遍，结果逐字相同：`b3/replay.test.ts`（P4a 的 9 个 tag、`p4b`、`p4b-emit`）、`b4/replay.test.ts`（噪声）。这些系统都只用控制点 0、没有实例覆盖，`basis` 是单位阵，结果不该变。
+
+**变异检查**（每处都要有用例或回放失败）：
+- 控制点更新挪到发射之后；`endFrame` 挪到 operator 之前，或不做；
+- 欧拉角按 `Rx·Ry·Rz`；
+- 实例平移加到 `offset` 上；实例覆盖不跳过 `flags 4` 的点；
+- 读 JSON 的 `angles`；
+- `flags 2` 用 `W` 而不是 `inverse(W)`；世界分支不对控制点 0 例外；
+- 旋转条件写成「总是旋」或「只看 `controlpoint ≠ 0`、不看世界」；回退方向不旋；
+- `basis` 不交给 initializer（`velocityrandom` 不乘 `M`）；
+- `vortex` 中心不加控制点平移；
+- `n` 按 8 算（能力表把 `n` 之外的指针点也报了）。
+
+**语料**（`b4/corpus.test.ts` 的做法，快照改动前后各跑一遍，逐条解释）：
+- 去掉的键应只有 `particle:controlpoint`、`particle:instance:controlpoint` 和模块的 `…:controlpoint` 字段问题；新增的键只有 `particle:controlpoint:pointer`（应正好是被引用的 `flags 1` 点所在的场景）。`particle:instance:controlpoint:user` 应为 0 张。
+- 干净场景数和新解锁的场景逐张列出，各自说明为什么解锁。
+
+**移进工作区之后**（Claude 做）：补丁用 `git apply --3way` 打进工作区；tsc、vitest、Prettier 在工作区重跑；10 张干净场景三档的画面哈希和 P4b 最近一轮（`b5v/out/hash-after.json`）相同，需要 dev 在跑，没在跑就记下没做。
 
 ## 步骤 2 — 指针
 
@@ -258,7 +466,7 @@ export class ControlPoints {
 1. **指针换算牵涉宿主。** 预览（iframe 事件）和桌面（Windows 鼠标转发）两条来源、壁纸样式和透视粒子的深度都要对，真机验收离不开用户。
 2. ~~**父控制点可能拖进子系统。**~~ 步骤 0 确认：控制点 `flags` 4、8 和 `parentcontrolpoint` 只对子系统有意义，归 P4e；顶层系统上只复刻「`flags 4` 时忽略 `instanceoverride` 的控制点」。
 3. **世界空间改的是坐标系。** 所有模块在世界空间下都要对，尤其是读控制点和读模型矩阵的（`movement` 的重力、`vortex` 的轴）。只靠几组确定性工程覆盖不全，要靠语料场景的统计量补。
-4. **和 P4b 步骤 4–6 并行。** P4b 还在改模拟器和模块表，P4c 的步骤 1 要等 P4b 收尾后再动手，避免同一批文件两头改。
+4. **和 P4b 步骤 4–6 并行。** P4b 还在改模拟器和模块表。P4b 步骤 4、5 已提交；步骤 6（`colorn`）和步骤 1 同时进行（2026-11-08 用户），步骤 1 在快照里开发、验收后以补丁移进工作区，并避开步骤 6 要改的绑定代码（见步骤 1「本步不做」）。
 
 ## 实施记录
 
@@ -290,3 +498,61 @@ export class ControlPoints {
 - **步骤 5（拖尾与朝向）：** 公式和四角全部实测吻合。实现要显式处理 NaN（速度为 0、轴平行视线）为不画；同系统两个 renderer 画两次；朝向的三个 uniform 每个 renderer 每帧在 CPU 上算。
 
 工具在 `ignore/p4/`：`gen_c.py`、`ana_c.py`、`ana_c2.py`、`ana_ptr.py`、`ana_c_render.py`；`rdc_track_b.py` 加了指针记录、四角读取和同系统多次绘制，对 P4b 的工程兼容。
+
+### 步骤 1 — 控制点底座（2026-11-08）
+
+子代理在快照 `ignore/p4/c1/ov`（`d938e75f` 的 `apps/wpe-scene/src`）里实现，Claude 独立验收。当时工作区里 P4b 步骤 6 正在进行；步骤 6 提交（`a7d12df9`）后，Claude 用补丁 `ignore/p4/c1/out/step1.patch`（19 个文件）三方合并进 `apps/wpe-scene`，见本节末「移进工作区」。
+
+- **新增** `particles/controlpoints.ts`：`ControlPointSet`（`base` / `current` / `previous`，`update` 照 1.5 的分支，世界分支也写了，`W` 奇异写 NaN）、`controlPointCount`、`eulerBasis`、`CONTROL_POINT_FLAGS`、`IDENTITY_BASIS`、`identityControlPoints`（单测用）。
+- **修改** `particles/f32.ts`：`mulBasis`（3×3 乘向量）。放这里而不放 `controlpoints.ts`，是为了避开 controlpoints → modules → emitters → controlpoints 的循环导入。
+- **修改** `particles/modules.ts`：执行上下文加 `controlPoints`、`world`、`basis`；`asUInt32`、`clampControlPoint`；三个模块的 `controlpoint` 去掉 `zeroOnly`，在 `normalize` 里钳制。
+- **修改** `particles/emitters.ts`、`initializers.ts`、`operators.ts`：两个发射器读控制点、按条件旋转出生点和回退方向、无条件交出 `basis`；`velocityrandom`、`turbulentvelocityrandom` 乘 `M`；`vortex` 中心加控制点平移。
+- **修改** `particles/system.ts`：更新在序列帧之后、发射之前，`endFrame` 在全部 operator 之后；`prewarm(inputs)` 先更新一次再拷 `previous`；`step(dt, time, inputs)`。
+- **修改** `particles/track.ts`、`render/scene.ts`：按编译期变换 / `SceneState` 沿父链算 `W` 传给模拟器，dev 探针回放用加载时的 `W`。
+- **修改** `compile/particles.ts`：`SceneControlPoint`、`readControlPoints`、`controlPointOffset`，`SceneParticle.controlpoints`。
+- **修改** `compile/features.ts`：删 `controlPointsUsed`、`nonZeroVector`；新增 `checkControlPoints`，键 `particle:controlpoint:pointer`；实例控制点静态值不报，`{user}` 报 `particle:instance:controlpoint:user`。
+- **测试**：新增 `particles/controlpoints.test.ts`；`emission`、`simulator`、`render/particles`、`compile/particles`、`p4a5` 补用例，手写执行上下文的测试补三项新字段。
+
+和计划不同、或计划没写、由代理按证据定的：
+
+- **控制点 `flags`** 按 jsoncpp 取无符号整数（`FUN_140085f70`）：布尔取 1 / 0，数字取整后取低 32 位，所以 −1 是 `0xFFFFFFFF`；字符串在 WPE 里抛异常，这里取 0。
+- **`offset` 的切分**照 `0x1401d061c`–`0x1401d0680` 逐字复刻：第一个分量从串首 `atof`，之后先跳过非空格、再跳过空格（只认 0x20）再 `atof`。所以 `" 5 6 7"` 是 (5, 5, 6)，`"1,2,3"` 是 (1, 0, 0)。Claude 核对过这段汇编。
+- **`sphererandom` 的 `|q|²`** 判的是旋转后的 `q`，求和顺序改成汇编的 `(y² + w²) + (x² + z²)`（`0x140237f76` 起）。速度的 `|dir|²` 只进 `rsqrtps`，保留旧顺序，P4a / P4b 回放才能逐字不变。
+- **`basis·q` 的加法顺序**：`boxrandom`、`FUN_140184440`、`sphererandom` 的 SIMD 写法都是 `(x·M0j + y·M1j) + z·M2j` 的交换形式，逐位等价，共用 `mulBasis`。
+- **`controlpoint` 取值**：三个模块都是 `FUN_140085f70` 后 `cmp eax, 7; cmovb`（无符号，负数得 7），Claude 核对过 `sphererandom` 那处（`0x1401c5ff7`–`0x1401c600d`）。
+- **能力表报指针点时排除 `0x10000`**，和 `update` 的位优先级一致。
+- **`n` 只算模块表里的模块**（照计划）：只被 `controlpointattract` 引用的点（如 thunderbolt 的 `flags 2`）现在算在 `n` 之外，步骤 3 加进模块表后自动计入。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier（快照） | tsc 0 error；43 个文件、1148 个用例全过（基线 42 个、1114 个）；改过和新增的 ts 文件格式通过 |
+| `p4c-cp` 回放（fps 60，帧 924–927，11 个系统各 16 个粒子） | 全部在限内。位置差 7.9e-3–1.8e-2，`vortex-cp`（坐标到 4747）0.39；差 / 限 0.21–0.48。size、color、alpha、rot 差 0。限值主要由 `sphererandom` 归一化的 `rcpps` 包络（100 × 3.7e-4）决定，WPE 第一个粒子是 99.990、我们 100.000 |
+| P4a、P4b 回放 | b3（P4a 9 个 tag、`p4b`、`p4b-emit`）和 b4（噪声）的拷贝在改动前、改动前（基线源码）、改动后三份输出逐字节相同 |
+| 语料（152 个场景，改动前后都没有出错） | 去掉 `particle:controlpoint` 48 张、`particle:instance:controlpoint` 7 张；新增只有 `particle:controlpoint:pointer` 32 张，和按 JSON 推算的「被引用的点带 bit0」完全一致；`particle:instance:controlpoint:user` 0 张。干净场景 20 → 20，不解锁新场景（`1838478131` 改报 pointer，等步骤 2）。逐张解释在 `ignore/p4/c1/out/corpus-diff.txt` |
+| 变异检查（代理，17 + 3 处） | 计划列的 17 处和另加的 3 处（`|q|²` 用旋转前、`turbulentvelocityrandom` 不乘 `M`、`n` 恒为 8）全部检出，结果在 `out/mutate.txt` |
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 快照对 `d938e75f` 只改了上面 19 个文件；`apps/wpe-scene` 没动，没有 git 写操作 |
+| 读码对照 | `ControlPointSet` 的初值、实例覆盖（跳过 `0x10005`）、`update` 分支、`eulerBasis` 三列逐项，发射器的 `base`、旋转条件、回退方向、`basis` 交接，`vortex` 中心，都和 rea-p4c-sim 1.3、1.5、第 2、3 节一致 |
+| tsc、vitest（快照，自跑） | 0 error；43 个文件、1148 个用例全过 |
+| 变异检查（Claude 13 处，和代理的不重复，`mutate_claude.py`） | 12 处检出：欧拉角第二列 x 分量符号、`offset` 不跳过当前段、本地系统所有点都乘 `inverse(W)`、`stepParticles` 不按状态算 `W`、预热不传 `W`、钳制按有符号、能力表指针点不排除 `0x10000`、预热前不更新、`boxrandom` 的 `d` 减 `origin`、轨迹工具不算 `W`、实例角度被忽略、`{user}` 不报。`flags` 布尔取 0 那处原文出现两次（另一处是 `instanceScalar`），没跑。源码整树哈希前后一致，结果在 `out/mutate-claude.txt` |
+| 三方合并预演（临时目录，对工作区当前文件） | 19 个文件里 16 个自动合入；`compile/features.ts`、`compile/particles.ts`、`particles/system.ts` 有冲突，都是和步骤 6 相邻的注释与构造函数行，手工合并 |
+
+**移进工作区**（P4b 步骤 6 提交后，HEAD `a7d12df9`）：
+
+`git apply --3way` 打进 `apps/wpe-scene`。16 个文件自动合入；`compile/features.ts`、`compile/particles.ts`、`particles/system.ts` 有冲突，都是和步骤 6 相邻的注释、import 与构造函数行，两边内容都保留。合并后撤下暂存区，改动只留在工作区。对照组是 `a7d12df9` 的源码导出（`ignore/p4/c1/head/src`），结果在 `out/run-merge.log`，比较脚本 `cmp_merge.py`。
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier（工作区） | 0 error；45 个文件、1188 个用例全过；19 个文件格式通过 |
+| `p4c-cp` 回放 | 输出和快照上的逐字相同，全部通过 |
+| P4a、P4b 回放（HEAD 对工作区） | b3、b4 的拷贝和 P4b 步骤 6 的 `p4b-color`、`p4b-colorp`、`p4b-colorp2` 三组 `colorn` 回放（`replay-b6.test.ts`），12 份输出逐字节相同，`colorn` 三组仍全部通过 |
+| 语料（HEAD 对工作区） | 增减和快照上逐条相同：去掉 `particle:controlpoint` 48 张、`particle:instance:controlpoint` 7 张，新增 `particle:controlpoint:pointer` 32 张；干净场景 20 → 20 |
+| 画面哈希（dev 应用，宿主按 `--mode development` 重建，入口 `index-COPBXizU.js`） | 10 张干净场景 × 三档，30 组和 P4b 步骤 6 的记录（`b6/out/hash-after.json`，入口 `index-CY0tK-L-.js`）全部相同 |
+
+工具在 `ignore/p4/c1/`：`scan_cp.py`、`replay.test.ts`、`replay-b3.test.ts`、`replay-b4.test.ts`、`replay-b6.test.ts`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`mutate_claude.py`、`run_merge.sh`、`cmp_merge.py`、`vitest.config.ts`；快照 `ov/`、基线源码 `base/`、HEAD 源码 `head/`，结果在 `out/`（画面哈希 `out/hash-after.json`）。

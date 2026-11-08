@@ -1,9 +1,13 @@
 // P4b 步骤 3：发射时序（周期、bit1、delay / duration、duration < 0）与 boxrandom。依据 rea-p4b-modules.md A0–A4。
+// P4c 步骤 1：读控制点的模块（两个发射器、velocityrandom、turbulentvelocityrandom、vortex），rea-p4c-sim.md 第 3 节。
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "../compile/model";
 import { parseParticle } from "../compile/particles";
 import { ParticleColumns } from "./columns";
-import { boxRandom, emissionCount, emitterState, fastInvSqrt, resetEmitterTiming } from "./emitters";
+import { scaling } from "../render/math";
+import { ControlPointSet, eulerBasis, IDENTITY_BASIS, identityControlPoints } from "./controlpoints";
+import { boxRandom, emissionCount, emitterState, fastInvSqrt, resetEmitterTiming, sphereRandom } from "./emitters";
+import { turbulentVelocityRandom, velocityRandom } from "./initializers";
 import {
   particleModuleDef,
   readParticleModule,
@@ -11,6 +15,7 @@ import {
   type ParticleFields,
   type ParticleRunContext,
 } from "./modules";
+import { vortex } from "./operators";
 import { SeededRandom, type ParticleRandom } from "./random";
 import { ParticleSystem } from "./system";
 
@@ -240,7 +245,18 @@ describe("发射数量：周期发射（flags bit2，A3）", () => {
 describe("boxrandom（A4）", () => {
   const box = (module: JsonObject) => emitter(module, "boxrandom");
   const run = (fields: ParticleFields, random: ParticleRandom, columns = new ParticleColumns(4, 0)) => {
-    const context: ParticleRunContext = { columns, random, slot: 0, count: 1, h: 0, k: 0, time: 0 };
+    const context: ParticleRunContext = {
+      columns,
+      random,
+      slot: 0,
+      count: 1,
+      h: 0,
+      k: 0,
+      time: 0,
+      controlPoints: identityControlPoints(),
+      world: false,
+      basis: IDENTITY_BASIS,
+    };
     boxRandom(fields, context);
     return {
       pos: [0, 1, 2].map((i) => columns.position[i][0]),
@@ -357,5 +373,200 @@ describe("boxrandom（A4）", () => {
     });
     // 每帧 x 增 2.5：第一帧 3 + 1（acc = 2.5 − 5），第二帧 x = 0 还欠账，之后每帧 1 个
     expect(alive).toEqual([4, 4, 5, 6]);
+  });
+});
+
+describe("控制点（P4c 步骤 1，rea-p4c-sim.md 第 3 节）", () => {
+  const moduleOf = (category: "initializer" | "operator", module: JsonObject) => {
+    const reading = readParticleModule(category, module, true);
+    expect(reading.issues).toEqual([]);
+    return resolveParticleFields(particleModuleDef(category, reading.name)!, reading.fields, ONE);
+  };
+  const initializer = (module: JsonObject) => moduleOf("initializer", module);
+  const operator = (module: JsonObject) => moduleOf("operator", module);
+  const HALF_PI = "0 0 1.5707964";
+  /** 8 个控制点（emitter 写 controlpoint 7 撑满 n）；控制点 1 的 offset 是 (10, 20, 0)。 */
+  const points = (instanceoverride: Record<string, string> = {}, extra: JsonObject = {}) =>
+    new ControlPointSet(
+      parseParticle(
+        { emitter: [{ name: "sphererandom", controlpoint: 7 }], controlpoint: [{}, { offset: "10 20 0" }], ...extra },
+        { file: "p.json", orthographic: true, instanceoverride },
+      ),
+    );
+  const cpContext = (
+    columns: ParticleColumns,
+    random: ParticleRandom,
+    controlPoints: ControlPointSet,
+    world = false,
+  ): ParticleRunContext => ({
+    columns,
+    random,
+    slot: 0,
+    count: 1,
+    h: 0.1,
+    k: 0.1,
+    time: 0.3,
+    controlPoints,
+    world,
+    basis: IDENTITY_BASIS,
+  });
+  const read = (columns: ParticleColumns) => ({
+    pos: [0, 1, 2].map((i) => columns.position[i][0]),
+    vel: [0, 1, 2].map((i) => columns.velocity[i][0]),
+  });
+  const close = (actual: number[], expected: number[]) =>
+    actual.forEach((value, i) => expect(value, `第 ${i} 项`).toBeCloseTo(expected[i], 3));
+
+  describe("sphererandom", () => {
+    const fields = (module: JsonObject) =>
+      emitter({
+        origin: "1 2 3",
+        directions: "1 0 0",
+        sign: "1 0 0",
+        distancemin: 100,
+        distancemax: 100,
+        speedmin: 50,
+        speedmax: 50,
+        ...module,
+      });
+    /** φ、cosθ（uA = 1 → cosθ = 1）、r，之后的都是 0.5。 */
+    const draws = (more: number[] = []) => new ScriptedRandom([0.5, 1, 0.5, ...more]);
+    const spawn = (module: JsonObject, controlPoints: ControlPointSet, world = false, random = draws()) => {
+      const columns = new ParticleColumns(4, 0);
+      const context = cpContext(columns, random, controlPoints, world);
+      sphereRandom(fields(module), context);
+      return { ...read(columns), context, random };
+    };
+
+    it("controlpoint ≠ 0：出生点与速度方向过 3×3；中心 = cp.t + origin，origin 不旋转；basis 交给 initializer", () => {
+      const cp = points({ controlpointangle1: HALF_PI });
+      const { pos, vel, context } = spawn({ controlpoint: 1 }, cp);
+      close(pos, [0 + 10 + 1, 100 + 20 + 2, 3]);
+      close(vel, [0, 50, 0]);
+      expect(context.basis).toBe(cp.current(1).basis);
+      // 没有角度：只平移
+      const plain = spawn({ controlpoint: 1 }, points());
+      close(plain.pos, [100 + 11, 22, 3]);
+      close(plain.vel, [50, 0, 0]);
+    });
+
+    it("本地系统的控制点 0 带角度：出生点不旋，velocityrandom 的速度旋了（M 无条件）；世界空间时出生点也旋", () => {
+      const cp = points({ controlpointangle0: HALF_PI });
+      const local = spawn({}, cp);
+      close(local.pos, [101, 2, 3]);
+      close(local.vel, [50, 0, 0]);
+      expect(local.context.basis).toBe(cp.current(0).basis);
+      velocityRandom(initializer({ name: "velocityrandom", min: "50 0 0", max: "50 0 0" }), local.context);
+      close(read(local.context.columns).vel, [50, 50, 0]);
+      const world = spawn({}, cp, true);
+      close(world.pos, [1, 102, 3]);
+      close(world.vel, [0, 50, 0]);
+    });
+
+    it("回退方向（|q|² < 1e-4，另抽 3 个 uB）同样过 3×3", () => {
+      const cp = points({ controlpointangle1: HALF_PI });
+      // x 抽 1（方向 +x），y、z 抽 0.5（乘 directions 的 0）
+      const rotated = spawn({ controlpoint: 1, distancemin: 0, distancemax: 0 }, cp, false, draws([1, 0.5, 0.5, 0.5]));
+      expect(rotated.random.calls).toHaveLength(7);
+      close(rotated.pos, [11, 22, 3]);
+      close(rotated.vel, [0, 50, 0]);
+      const plain = spawn(
+        { controlpoint: 1, distancemin: 0, distancemax: 0 },
+        points(),
+        false,
+        draws([1, 0.5, 0.5, 0.5]),
+      );
+      close(plain.vel, [50, 0, 0]);
+    });
+
+    it("|q|² 判的是旋转后的 q（汇编 0x140237f76 起对旋转结果求平方和）：3×3 把 q 缩小到 1e-2 以下就回退", () => {
+      // 控制点 1 带 flags 2：本地系统 current = inverse(W)·base，W 放大 1000 倍时 3×3 是 0.001
+      const cp = points({}, { controlpoint: [{}, { flags: 2 }] });
+      cp.update({ world: scaling(1000, 1000, 1) });
+      const small = spawn(
+        { controlpoint: 1, distancemin: 0.5, distancemax: 0.5 },
+        cp,
+        false,
+        draws([1, 0.5, 0.5, 0.5]),
+      );
+      expect(small.random.calls).toHaveLength(7);
+      // 同样的 q 不缩小：|q|² = 0.25，不回退
+      const plain = spawn({ controlpoint: 1, distancemin: 0.5, distancemax: 0.5 }, points(), false, draws());
+      expect(plain.random.calls).toHaveLength(4);
+    });
+  });
+
+  describe("boxrandom", () => {
+    const fields = (module: JsonObject) =>
+      emitter(
+        { origin: "1 2 3", directions: "1 1 1", distancemax: "10 20 30", speedmin: 5, speedmax: 5, ...module },
+        "boxrandom",
+      );
+    const spawn = (module: JsonObject, controlPoints: ControlPointSet, values: number[], world = false) => {
+      const columns = new ParticleColumns(4, 0);
+      const random = new ScriptedRandom([...values]);
+      const context = cpContext(columns, random, controlPoints, world);
+      boxRandom(fields(module), context);
+      return { ...read(columns), context, random };
+    };
+
+    it("controlpoint ≠ 0：q 过 3×3 后加 origin + cp.t；方向用写进列的 float 减中心", () => {
+      const cp = points({ controlpointangle1: HALF_PI });
+      // z、y 抽 0.5（r = 0），x 抽 1（q = 10）
+      const { pos, vel, context } = spawn({ controlpoint: 1 }, cp, [0.5, 0.5, 1, 0.5]);
+      close(pos, [11, 10 + 22, 3]);
+      close(vel, [0, 5, 0]);
+      expect(context.basis).toBe(cp.current(1).basis);
+      const plain = spawn({ controlpoint: 1 }, points(), [0.5, 0.5, 1, 0.5]);
+      close(plain.pos, [21, 22, 3]);
+    });
+
+    it("回退方向同样过 3×3；控制点 0 本地不旋（basis 照样交出去），世界空间时旋", () => {
+      const zero = { distancemax: "0 0 0" };
+      const fallback = [0.5, 0.5, 0.5, 0.5, 0.5, 1, 0.5];
+      const rotated = spawn({ controlpoint: 1, ...zero }, points({ controlpointangle1: HALF_PI }), fallback);
+      expect(rotated.random.calls).toHaveLength(7);
+      close(rotated.vel, [0, 5, 0]);
+      const cp0 = points({ controlpointangle0: HALF_PI });
+      const local = spawn(zero, cp0, fallback);
+      close(local.vel, [5, 0, 0]);
+      expect(local.context.basis).toBe(cp0.current(0).basis);
+      close(spawn(zero, cp0, fallback, true).vel, [0, 5, 0]);
+      close(spawn({}, cp0, [0.5, 0.5, 1, 0.5]).pos, [11, 2, 3]);
+      close(spawn({}, cp0, [0.5, 0.5, 1, 0.5], true).pos, [1, 12, 3]);
+    });
+  });
+
+  it("turbulentvelocityrandom：v += M·(dir·speed)，M 是发射器交来的 3×3", () => {
+    const fields = initializer({ name: "turbulentvelocityrandom", speedmin: 100, speedmax: 100 });
+    const run = (basis: Float32Array) => {
+      const columns = new ParticleColumns(4, 0);
+      columns.velocity[0][0] = 1;
+      const context = { ...cpContext(columns, new ScriptedRandom([0.5, 0.5]), identityControlPoints()), basis };
+      turbulentVelocityRandom(fields, context);
+      return read(columns).vel;
+    };
+    const plain = run(IDENTITY_BASIS);
+    const rotated = run(eulerBasis([0, 0, Math.PI / 2]));
+    // 加上去的部分转了 90°，原有的速度 (1, 0, 0) 不转
+    close(rotated, [-(plain[1] - 0) + 1, plain[0] - 1, plain[2]]);
+    expect(Math.hypot(plain[0] - 1, plain[1])).toBeGreaterThan(50);
+  });
+
+  it("vortex：中心 = cp[controlpoint].t + offset，轴和 offset 不经 3×3", () => {
+    const module = { name: "vortex", distanceinner: 50, distanceouter: 300, speedinner: 200, speedouter: 50 };
+    const kick = (extra: JsonObject, position: number[], controlPoints: ControlPointSet) => {
+      const columns = new ParticleColumns(4, 0);
+      for (let i = 0; i < 3; i++) columns.position[i][0] = position[i];
+      vortex(operator({ ...module, ...extra }), cpContext(columns, new ScriptedRandom(), controlPoints));
+      return read(columns).vel;
+    };
+    // 距中心 100：t = 0.2，速度 (0.2·(50 − 200) + 200)·k = 17，方向 r̂ × z = −y
+    close(kick({}, [100, 0, 0], identityControlPoints()), [0, -17, 0]);
+    const cp = points({ controlpointangle1: "1.5707964 0 0", controlpoint1: "200 0 0" });
+    close(kick({ controlpoint: 1 }, [300, 0, 0], cp), [0, -17, 0]);
+    close(kick({ controlpoint: 1, offset: "5 0 0" }, [305, 0, 0], cp), [0, -17, 0]);
+    // 不读控制点 0 以外的平移时（controlpoint 0），同一位置离中心 300：t = 1，速度 50·0.1
+    close(kick({}, [300, 0, 0], cp), [0, -5, 0]);
   });
 });

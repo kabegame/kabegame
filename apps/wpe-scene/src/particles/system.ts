@@ -8,9 +8,11 @@
  * 一帧（`step`）：
  * 1. 全部槽 `age += dt'`；`life ≠ 0 且 life < age`（严格大于）判死：`life = 0`，存活数减一；
  * 2. 序列帧（P4b 步骤 2，`sequenceFrames`）：帧表系统且不是 `randomframe` 时，全部槽 `frame = (1 / life)·age·sequencemultiplier`；
- * 3. 按 JSON 顺序遍历 emitter：算本帧数量（周期发射的时长在这里从流 A 抽，`rea-p4b-modules.md` A3），逐个新粒子线性扫描
+ * 3. 控制点更新一次（P4c 步骤 1，`ControlPointSet.update`，O1 第 5 步 `0x1402376fe`）：两遍模式也只一次；
+ * 4. 按 JSON 顺序遍历 emitter：算本帧数量（周期发射的时长在这里从流 A 抽，`rea-p4b-modules.md` A3），逐个新粒子线性扫描
  *    第一个 `life == 0` 的槽 → emitter 写位置速度 → 抽 `R` → 写缺省值 → 按 JSON 顺序跑 initializer；新粒子当帧 `age = 0`；
- * 4. operator 一遍或两遍：每遍开头重置当前值，再按 JSON 顺序执行。
+ * 5. operator 一遍或两遍：每遍开头重置当前值，再按 JSON 顺序执行；
+ * 6. 控制点 `previous ← current`（`0x140237798`）。
  * 噪声类模块（P4b 步骤 4）另读场景时间 `T`（`step` 的 `time`，一帧内不变，预热时为 0）。
  *
  * `instanceoverride.colorn`（P4b 步骤 6，`colorn.ts`）：重乘字段之后从基值重算颜色模块的平移与新粒子的颜色初值（`applyColorn`）。
@@ -18,12 +20,16 @@
  * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
  * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热）；暂停时渲染器不步进。
  *
- * 控制点（P4c）、子系统不在这里。表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
+ * 控制点（P4c 步骤 1）是系统的一份状态（`controlpoints.ts`）：建系统时按 JSON 的 `offset` 与静态 `instanceoverride` 定基准，
+ * 每帧按对象世界矩阵 `W`（`step` / `prewarm` 的 `inputs`，渲染器按父链算）更新，模块经执行上下文读。子系统不在这里。
+ * 表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
+import { identity } from "../render/math";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { colornState, type Rgb } from "./colorn";
 import { ParticleColumns } from "./columns";
+import { ControlPointSet, IDENTITY_BASIS, type ControlPointInputs } from "./controlpoints";
 import { emissionCount, emitterState, resetEmitterTiming, type EmitterState } from "./emitters";
 import { f32 } from "./f32";
 import {
@@ -40,6 +46,9 @@ import {
   type ParticleRunContext,
 } from "./modules";
 import type { ParticleRandom, ParticleROverride } from "./random";
+
+/** 没给控制点输入时用：对象世界矩阵按单位阵（单测；渲染器与 `particleTrack` 都显式传）。 */
+const IDENTITY_INPUTS: ControlPointInputs = { world: identity() };
 
 /** 预热步长：`maxcount < 500` 时 0.05，否则 0.2（C1，实测两档都对上）。 */
 export function prewarmStep(maxcount: number): number {
@@ -138,6 +147,8 @@ export class ParticleSystem {
   alive = 0;
   /** 没有执行函数、模拟器跳过的模块（`<类别>:<名字>`）。 */
   readonly skipped: string[] = [];
+  /** 控制点（P4c 步骤 1）。 */
+  readonly controlPoints: ControlPointSet;
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -187,7 +198,19 @@ export class ParticleSystem {
     this.operators = resolve("operator", def.operators);
     this.applyScalars();
     this.applyColorn();
-    this.context = { columns: this.columns, random, slot: 0, count: 0, h: 0, k: 0, time: 0 };
+    this.controlPoints = new ControlPointSet(def);
+    this.context = {
+      columns: this.columns,
+      random,
+      slot: 0,
+      count: 0,
+      h: 0,
+      k: 0,
+      time: 0,
+      controlPoints: this.controlPoints,
+      world: (def.flags & 1) !== 0,
+      basis: IDENTITY_BASIS,
+    };
   }
 
   /** 当前的 `instanceoverride` 标量与 `colorn`（一份拷贝）。 */
@@ -252,6 +275,8 @@ export class ParticleSystem {
   /**
    * 不可见的一帧（C8，`FUN_140230650` 的不可见分支，读码、未实测）：不发射、不步进；还有存活粒子就清空全部粒子，并复位每个
    * emitter 的计时（`resetEmitterTiming`，`FUN_14022f6c0`）。返回这次有没有清空。重新可见后照常 `step`，**不重新预热**。
+   * WPE 不可见时控制点照常更新（rea-p4c-sim.md 5.6），这里不更新：可见后第一帧发射前会按当帧的 `W` 重算 `current`，差别只在
+   * `previous`（那一帧的 `previous` 是不可见之前最后一帧的值），本步没有读 `previous` 的模块，只影响 P4d。
    */
   suspend(): boolean {
     if (this.alive === 0) return false;
@@ -265,12 +290,13 @@ export class ParticleSystem {
    * `time` 是本帧的 `g_Time`（已加上本帧钳过的帧时间、已按 432000 回绕，P4b 步骤 4 的场景时间 `T`），舍入成 float32 给噪声类
    * 模块（WPE 的 `ctx+0x130` 是场景时间的 float 副本）；`T` **不乘** `rate`（`rate` 只缩放 `dt'` 与 `timescale`）。
    * 不给时用本系统收到的帧时间之和（double 累加、同样回绕），即从 0 起步的 `FrameClock`：渲染器、`particleTrack` 都显式传，
-   * 缺省只给单测用。
+   * 缺省只给单测用。`inputs` 是本帧控制点更新的输入（对象世界矩阵 `W`，P4c 步骤 1）：渲染器每帧按 `SceneState` 沿父链算，
+   * 缺省单位阵只给单测用。
    */
-  step(frameDt: number, time?: number): void {
+  step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
     this.context.time = f32(time ?? this.elapsed);
-    this.advance(f32(f32(frameDt) * this.rate), frameDt, this.passes);
+    this.advance(f32(f32(frameDt) * this.rate), frameDt, this.passes, inputs);
   }
 
   /**
@@ -279,12 +305,18 @@ export class ParticleSystem {
    * `rate ≠ 1` 的预热没有实测）。预热不走帧函数，场景时间 `T` 保持加载期的初值 0（`rea-p4b-modules.md` B2 末条；实测
    * `ignore/p4/tracks/rd-p4b-pre-fps60.json`：预热里出生的 `turbulentvelocityrandom` 粒子方向全是 90°，`positionoffsetrandom`
    * 粒子偏移完全相同）。
+   *
+   * 控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）：加载时 `FUN_14022feb0` 先写好 `W`，压模型矩阵，`FUN_14022e3e0` 更新一次、全部
+   * 控制点 `previous ← current`，再预热，预热的每一步照常更新、照常拷 `previous`。`starttime` 为 0 时也做前两步。
+   * `inputs` 是加载时的 `W`。
    */
-  prewarm(): void {
+  prewarm(inputs: ControlPointInputs = IDENTITY_INPUTS): void {
+    this.controlPoints.update(inputs);
+    this.controlPoints.endFrame();
     const step = prewarmStep(this.def.maxcount);
     const end = f32(this.def.starttime);
     this.context.time = 0;
-    for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1);
+    for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs);
   }
 
   /** 清空全部粒子（不重置发射状态）。 */
@@ -295,10 +327,12 @@ export class ParticleSystem {
     this.searchFrom = 0;
   }
 
-  private advance(dt: number, frameDt: number, passes: 1 | 2): void {
+  private advance(dt: number, frameDt: number, passes: 1 | 2, inputs: ControlPointInputs): void {
     if (!(dt > 0)) return;
     this.ageAndKill(dt);
     this.sequenceFrames();
+    // O1 第 5 步（`0x1402376fe`）：序列帧（`0x140237022`）之后、发射之前，两遍模式也只一次
+    this.controlPoints.update(inputs);
     this.emit(dt);
     const { h, k } = operatorPass(dt, frameDt, passes);
     const context = this.context;
@@ -309,6 +343,8 @@ export class ParticleSystem {
       this.columns.resetCurrent(this.highWater);
       for (const operator of this.operators) operator.run(operator.fields, context);
     }
+    // 帧尾，全部 operator 之后（`0x140237798`）
+    this.controlPoints.endFrame();
   }
 
   private ageAndKill(dt: number): void {

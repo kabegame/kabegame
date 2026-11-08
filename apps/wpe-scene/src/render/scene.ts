@@ -159,6 +159,11 @@ interface ParticleDraw {
   count: number;
   /** 步进过、还没写成顶点：`encode` 里写 `vertices` 并 `writeBuffer`。 */
   stale: boolean;
+  /**
+   * 加载时对象的世界矩阵（`worldMatrixOf`，控制点的输入，P4c 步骤 1）：`stepParticles` 没给 `state`（dev 探针按 dt 回放）时
+   * 每帧用它。
+   */
+  world: Mat4;
 }
 
 /** 一个粒子层最近若干帧的开销样本（dev 探针，`GpuScene.profileParticles`）。 */
@@ -1005,6 +1010,7 @@ export class GpuScene {
    * 一个粒子层的模拟器：种子 = `particleSeed` + 第几个粒子层，建好就预热（C1）。顶点按 `maxcount` 分配，
    * 第一次 `encode` 时写（`stale`）。布局的问题 `checkRenderable` 已经查过。
    * `instanceoverride` 取状态里的当前值（建场景时与编译期相同；万一单图层重建，用的也是就地写过的值）。
+   * 预热按状态里对象当前的世界矩阵更新控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）。
    */
   private createParticles(layer: SceneLayer, program: GpuProgram, state: SceneState): ParticleDraw {
     const compiled = layer.particle!;
@@ -1016,10 +1022,11 @@ export class GpuScene {
       this.particlePasses,
       this.particleROverride?.(layer.object),
     );
-    system.prewarm();
+    const world = worldMatrixOf(layer.object, state.layers, new Map());
+    system.prewarm({ world });
     const { layout } = particleVertexLayout(program.vertexPacking);
     const vertices = new Float32Array(Math.max(1, system.columns.capacity) * 4 * Math.max(1, layout.stride));
-    return { system, layout, vertices, count: 0, stale: true };
+    return { system, layout, vertices, count: 0, stale: true, world };
   }
 
   private createDraw(
@@ -1406,10 +1413,13 @@ export class GpuScene {
    * `state` 给出时，不可见（含祖先，`effectiveVisible`）的粒子层不发射、不步进，还有存活粒子就清空并复位 emitter 计时
    * （`ParticleSystem.suspend`，C8 读码）；重新可见时照常步进，不重新预热。清空后标 `stale`：之后哪一帧再画，都先写成 0 个。
    * `time` 是这一帧的 `g_Time`（和 uniform 同一个值，已回绕），作噪声类模块的场景时间 `T`（P4b 步骤 4）。
+   * 控制点的输入是对象的世界矩阵（P4c 步骤 1）：给了 `state` 时每帧按它沿父链算（脚本改变换、父链变化下一帧就跟上，一次调用
+   * 共用一份缓存），没给时用加载时的（`ParticleDraw.world`）。
    * dev 探针按 dt 序列回放时直接调它。
    */
   stepParticles(frametime: number, time: number, state?: SceneState): void {
     if (!(frametime > 0)) return;
+    const worlds = new Map<number, Mat4>();
     for (const draw of this.draws) {
       const particles = draw.particles;
       if (!particles) continue;
@@ -1419,7 +1429,8 @@ export class GpuScene {
       }
       const timing = this.particleTimings?.get(draw);
       const started = timing ? performance.now() : 0;
-      particles.system.step(frametime, time);
+      const world = state ? worldMatrixOf(draw.object, state.layers, worlds) : particles.world;
+      particles.system.step(frametime, time, { world });
       if (timing) {
         recordSample(timing.simulate, performance.now() - started);
         recordSample(timing.alive, particles.system.alive);

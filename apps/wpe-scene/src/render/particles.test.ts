@@ -739,6 +739,33 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     expect(floats(uniforms(1), 276, 1)).toEqual([2.5]);
   });
 
+  it("控制点的输入（P4c 步骤 1）：建场景按状态里的世界矩阵（父链）预热；每帧按状态重算；不给状态时用加载时的", async () => {
+    const group = baseLayer(0, { name: "group", origin: [1000, 0, 0] });
+    // 控制点 1 带 flags 2：本地系统里 current = inverse(W)·(100, 100, 0)；发射距离 0，出生点就是它
+    const layer = particleLayer(
+      1,
+      {
+        emitter: [{ name: "sphererandom", controlpoint: 1, distancemax: 0, rate: 10 }],
+        controlpoint: [{}, { offset: "100 100 0", flags: 2 }],
+      },
+      { parent: 0 },
+    );
+    const { state, scene } = await open(bundleOf([group, layer]));
+    const system = particleDraw(scene, 1).particles!.system;
+    const current = () => Array.from(system.controlPoints.current(1).translation);
+    expect(current()).toEqual([-900, 100, 0]);
+    state.write({ property: "p", target: { kind: "layer", object: 0, field: "origin" } }, "2000 0 0");
+    scene.sync(state);
+    scene.update(frame(0.25), state);
+    expect(current()).toEqual([-1900, 100, 0]);
+    // 本帧出生的粒子用本帧的值
+    expect(system.alive).toBe(2);
+    expect(system.columns.position[0][0]).toBe(-1900);
+    // 不给 state（dev 探针按 dt 回放）：用加载时的世界矩阵
+    scene.stepParticles(0.25, 1);
+    expect(current()).toEqual([-900, 100, 0]);
+  });
+
   it("帧表（P4b 步骤 2）：槽 0 纹理带 sheet 的粒子层写 g_RenderVar1，其余仍是 0；就地刷新后保持；顶点写 a_TexCoordVec4C1", async () => {
     const sheet = { renderVar1: [0.125, 0.125, 64, 1] as [number, number, number, number], npot: false };
     const bundle = bundleOf([particleLayer(1), particleLayer(2), particleLayer(3)]);
@@ -865,18 +892,20 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     const { state, scene } = await open(bundle);
     const step = vi.spyOn(particleDraw(scene, 1).particles!.system, "step");
     scene.update(frame(0.02, 123.25), state);
-    expect(step).toHaveBeenLastCalledWith(0.02, 123.25);
+    // 第三个参数是控制点的输入（对象世界矩阵，P4c 步骤 1），这里只看前两个
+    const timing = (calls: unknown[][]) => calls.map((call) => call.slice(0, 2));
+    expect(timing([step.mock.lastCall!])).toEqual([[0.02, 123.25]]);
     expect(replayParticles(scene, state, { dts: [0.1, 0.2, 0.3], times: [5, 5.2, 5.5] })).toEqual({
       time: 5.5,
       frametime: 0.3,
     });
-    expect(step.mock.calls.slice(1)).toEqual([
+    expect(timing(step.mock.calls.slice(1))).toEqual([
       [0.1, 5],
       [0.2, 5.2],
     ]);
     // 没给 times 时是 dt 的累计值
     replayParticles(scene, state, { dts: [0.1, 0.2, 0.3] });
-    expect(step.mock.calls.slice(3)).toEqual([
+    expect(timing(step.mock.calls.slice(3))).toEqual([
       [0.1, 0.1],
       [0.2, 0.1 + 0.2],
     ]);

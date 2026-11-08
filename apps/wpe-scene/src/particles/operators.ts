@@ -281,7 +281,7 @@ const AXIS_EPSILON = f32(0.001);
 /**
  * `vortex`（operator 15，`0x1402431be`，B7【确】，没有 blend）：
  * ```
- * C    = cp.t + offset                         （控制点 0 平移按 0；offset、axis 不经控制点旋转）
+ * C    = cp[controlpoint].t + offset           （控制点的 current；offset、axis 不经控制点旋转，3×3 不用）
  * d    = pos − C
  * proj = (d.y·a.y + d.x·a.x) + d.z·a.z        （flags bit0 置位时；否则 0）
  * r    = d − proj·a;  L2 = (r.y² + r.x²) + r.z²
@@ -294,14 +294,18 @@ const AXIS_EPSILON = f32(0.001);
  * - 解析期：`axis` 精确归一化，`|axis|² < 0.001` 时取 `0 0 1`；`rcpRange = rcpps(outer − inner)`，两者相等时 1.0
  *   （两个常量是按寄存器赋值推的【推】）。`speedinner`、`speedouter` 已乘 `instanceoverride.speed`（条目类型 7）。
  *   这里每遍从模拟字段现算，和存在记录里的值相同。
+ * - 中心（P4c 步骤 1，`0x1402431be`–`0x14024322c`）：`FUN_14024f2d0` 拷出 `cp[controlpoint]` 的 current，`FUN_14022a120` 把
+ *   平移的三个分量广播成三个寄存器，再 `addps` 上 `offset`。实测控制点带 `controlpointangle1 "1.5708 0 0"` 时粒子 z 一直为 0
+ *   （3×3 不用）。
  * - `rsqrtps` 按精确值算。`L2 = 0`（粒子正好在中心或轴上）时 WPE 得 NaN，这里跳过这个粒子。不用 `R`。
  */
-export function vortex(fields: ParticleFields, { columns, count, k }: ParticleRunContext): void {
+export function vortex(fields: ParticleFields, { columns, count, k, controlPoints }: ParticleRunContext): void {
   const raw = fields.axis as number[];
   const axisSquared = f32(f32(f32(raw[1] * raw[1]) + f32(raw[0] * raw[0])) + f32(raw[2] * raw[2]));
   const axisLength = f32(Math.sqrt(axisSquared));
   const a = axisSquared < AXIS_EPSILON ? [0, 0, 1] : raw.map((value) => f32(value / axisLength));
-  const center = fields.offset as number[];
+  const translation = controlPoints.current(fields.controlpoint as number).translation;
+  const center = (fields.offset as number[]).map((offset, i) => f32(translation[i] + offset));
   const inner = fields.distanceinner as number;
   const outer = fields.distanceouter as number;
   const rcpRange = outer === inner ? 1 : rcp(f32(outer - inner));

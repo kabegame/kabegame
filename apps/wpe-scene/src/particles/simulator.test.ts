@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "../compile/model";
 import { parseParticle, type SceneParticle } from "../compile/particles";
+import { identity, translation } from "../render/math";
 import { allocatedCount, BASE_COLUMNS, columnCount, ParticleColumns } from "./columns";
+import { IDENTITY_BASIS, identityControlPoints } from "./controlpoints";
 import { emissionCount, emitterState, sphereRandom } from "./emitters";
 import { orBits } from "./f32";
 import {
@@ -62,7 +64,19 @@ function fieldsOf(category: ParticleCategory, module: JsonObject): ParticleField
 }
 
 function contextOf(columns: ParticleColumns, random: ParticleRandom, extra: Partial<ParticleRunContext> = {}) {
-  return { columns, random, slot: 0, count: 1, h: 0, k: 0, time: 0, ...extra } satisfies ParticleRunContext;
+  return {
+    columns,
+    random,
+    slot: 0,
+    count: 1,
+    h: 0,
+    k: 0,
+    time: 0,
+    controlPoints: identityControlPoints(),
+    world: false,
+    basis: IDENTITY_BASIS,
+    ...extra,
+  } satisfies ParticleRunContext;
 }
 
 /** 和 `ignore/p4/gen.py` 的 `system()` 同形：随机范围收成 min = max。 */
@@ -717,5 +731,121 @@ describe("轨迹", () => {
       passes: 1,
     });
     expect(track.skipped).toEqual({ p: ["operator:controlpointattract"] });
+  });
+});
+
+describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.md 1.3、1.5）", () => {
+  /**
+   * 控制点 1 带 flags 2、offset (100, 100, 0)：本地系统里 current = inverse(W)·base。发射器读控制点 1、距离 0、速度 0，出生点就是
+   * 控制点的平移。
+   */
+  const json = (extra: JsonObject = {}): JsonObject => ({
+    maxcount: 32,
+    emitter: [{ name: "sphererandom", controlpoint: 1, distancemax: 0, rate: 10 }],
+    initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+    controlpoint: [{}, { offset: "100 100 0", flags: 2 }],
+    ...extra,
+  });
+  const born = (system: ParticleSystem, slot: number) => [0, 1, 2].map((i) => system.columns.position[i][slot]);
+  const at = (x: number) => translation(x, 0, 0);
+
+  it("更新在发射之前：本帧 W 变了，本帧出生的粒子已经用本帧的 inverse(W)", () => {
+    const system = new ParticleSystem(particle(json()), new SeededRandom(1), 1);
+    system.prewarm({ world: identity() });
+    system.step(0.25, undefined, { world: at(1000) });
+    expect(system.alive).toBe(2);
+    expect(born(system, 0)).toEqual([-900, 100, 0]);
+    expect(born(system, 1)).toEqual([-900, 100, 0]);
+    system.step(0.25, undefined, { world: at(2000) });
+    expect(born(system, 2)).toEqual([-1900, 100, 0]);
+    // 已出生的不动（速度 0）
+    expect(born(system, 0)).toEqual([-900, 100, 0]);
+  });
+
+  it("预热前按加载时的 W 更新一次、previous ← current；预热的每一步照常更新；starttime 0 也做", () => {
+    const zero = new ParticleSystem(particle(json()), new SeededRandom(1), 1);
+    zero.prewarm({ world: at(500) });
+    expect(Array.from(zero.controlPoints.current(1).translation)).toEqual([-400, 100, 0]);
+    expect(Array.from(zero.controlPoints.previous(1).translation)).toEqual([-400, 100, 0]);
+    const warm = new ParticleSystem(particle(json({ starttime: 0.5 })), new SeededRandom(1), 1);
+    warm.prewarm({ world: at(500) });
+    expect(warm.alive).toBeGreaterThan(0);
+    for (let slot = 0; slot < warm.highWater; slot++) expect(born(warm, slot)).toEqual([-400, 100, 0]);
+    // 不传 W（单测）时按单位阵
+    const plain = new ParticleSystem(particle(json({ starttime: 0.5 })), new SeededRandom(1), 1);
+    plain.prewarm();
+    expect(born(plain, 0)).toEqual([100, 100, 0]);
+  });
+
+  it("endFrame 在全部 operator 之后：operator 里读到的 previous 是上一帧的 current，帧尾才拷", () => {
+    const system = new ParticleSystem(particle(json({ operator: [{ name: "movement" }] })), new SeededRandom(1), 2);
+    const seen: number[][] = [];
+    const spy = {
+      name: "spy",
+      def: particleModuleDef("operator", "movement")!,
+      base: {},
+      fields: {},
+      run: (_: ParticleFields, context: ParticleRunContext) =>
+        seen.push([context.controlPoints.previous(1).translation[0], context.controlPoints.current(1).translation[0]]),
+    };
+    (system as unknown as { operators: (typeof spy)[] }).operators.push(spy);
+    system.prewarm({ world: identity() });
+    system.step(0.1, undefined, { world: at(1000) });
+    system.step(0.1, undefined, { world: at(2000) });
+    system.step(0.1, undefined, { world: at(3000) });
+    // 两遍模式：每帧 operator 跑两遍，控制点只更新一次
+    expect(seen).toEqual([
+      [100, -900],
+      [100, -900],
+      [-900, -1900],
+      [-900, -1900],
+      [-1900, -2900],
+      [-1900, -2900],
+    ]);
+    expect(Array.from(system.controlPoints.previous(1).translation)).toEqual([-2900, 100, 0]);
+  });
+
+  it("两遍模式也只更新一次；不步进的帧（dt 不是正数）不更新", () => {
+    const system = new ParticleSystem(particle(json()), new SeededRandom(1), 2);
+    let updates = 0;
+    const update = system.controlPoints.update.bind(system.controlPoints);
+    system.controlPoints.update = (inputs) => {
+      updates++;
+      update(inputs);
+    };
+    system.prewarm();
+    expect(updates).toBe(1);
+    system.step(0.1);
+    system.step(0.1);
+    expect(updates).toBe(3);
+    system.step(0);
+    expect(updates).toBe(3);
+  });
+
+  it("particleTrack：W 按全部图层的编译期变换沿父链算（静态），预热与每帧都传", () => {
+    const def = particle(json());
+    const layers = [
+      {
+        object: 0,
+        name: "group",
+        particle: null,
+        origin: [1000, 0, 0],
+        angles: [0, 0, 0],
+        scale: [1, 1, 1],
+        parent: null,
+      },
+      { object: 1, name: "p", particle: def, origin: [0, 50, 0], angles: [0, 0, 0], scale: [2, 2, 1], parent: 0 },
+    ];
+    const track = particleTrack({ layers, dts: [0.25], frames: [1], passes: 1 });
+    // inverse(T(1000, 50)·S(2))·(100, 100) = ((100 − 1000)/2, (100 − 50)/2)
+    expect(track.frames[0].systems.p[0].pos).toEqual([-450, 25, 0]);
+    // 没给变换（手写的图层）按单位变换
+    const bare = particleTrack({
+      layers: [{ object: 1, name: "p", particle: def }],
+      dts: [0.25],
+      frames: [1],
+      passes: 1,
+    });
+    expect(bare.frames[0].systems.p[0].pos).toEqual([100, 100, 0]);
   });
 });

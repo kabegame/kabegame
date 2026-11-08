@@ -8,8 +8,11 @@
  *
  * 帧号与 WPE 脚本帧号对齐：`dts[0]` 是第 1 帧。每个系统加载时先预热（场景时间 0），再从第 1 帧步进；第 n 帧的场景时间是
  * `times[n − 1]`，没给时是 `dts` 前 n 项之和（P4b 步骤 4）。可见性（步骤 5）不处理。
+ * 控制点的输入（P4c 步骤 1）是对象的世界矩阵：按全部图层的编译期变换沿父链算（`worldMatrixOf`），静态、不跑脚本。
  */
 import type { SceneLayer } from "../compile/bundle";
+import { worldMatrixOf } from "../render/layout";
+import type { Mat4 } from "../render/math";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { injectedR, SeededRandom } from "./random";
 import { ParticleSystem } from "./system";
@@ -39,9 +42,16 @@ export interface ParticleTrack {
   skipped: Record<string, string[]>;
 }
 
+/**
+ * 轨迹用的图层：粒子层要 `particle`；变换（`origin`、`angles`、`scale`、`parent`）给控制点算世界矩阵，缺的按单位变换、根节点
+ * （单测手写的图层只有前三项）。
+ */
+export type ParticleTrackLayer = Pick<SceneLayer, "object" | "name" | "particle"> &
+  Partial<Pick<SceneLayer, "origin" | "angles" | "scale" | "parent">>;
+
 export interface ParticleTrackOptions {
-  /** 已编译的场景（只用粒子层）。 */
-  layers: readonly Pick<SceneLayer, "object" | "name" | "particle">[];
+  /** 已编译的场景：全部图层（建变换表），只步进粒子层。 */
+  layers: readonly ParticleTrackLayer[];
   /** 每帧的 `g_Frametime`，`dts[0]` 是第 1 帧。 */
   dts: readonly number[];
   /**
@@ -135,8 +145,20 @@ export function summarizeParticles(system: ParticleSystem): ParticleSummary {
 export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   const seed = options.seed ?? 1;
   const names = new Set<string>();
-  const systems: { name: string; system: ParticleSystem }[] = [];
+  const systems: { name: string; system: ParticleSystem; world: Mat4 }[] = [];
   const skipped: Record<string, string[]> = {};
+  const transforms = new Map(
+    options.layers.map((layer) => [
+      layer.object,
+      {
+        origin: layer.origin ?? [0, 0, 0],
+        angles: layer.angles ?? [0, 0, 0],
+        scale: layer.scale ?? [1, 1, 1],
+        parent: layer.parent ?? null,
+      },
+    ]),
+  );
+  const worlds = new Map<number, Mat4>();
   for (const layer of options.layers) {
     if (!layer.particle) continue;
     // 同名对象加下标区分
@@ -149,9 +171,10 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
       options.passes,
       injected ? injectedR(injected) : undefined,
     );
-    system.prewarm();
+    const world = worldMatrixOf(layer.object, transforms, worlds);
+    system.prewarm({ world });
     if (system.skipped.length) skipped[name] = system.skipped;
-    systems.push({ name, system });
+    systems.push({ name, system, world });
   }
   const wanted = new Set(options.frames);
   const last = Math.max(0, ...options.frames);
@@ -164,7 +187,7 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     const dt = options.dts[frame - 1];
     elapsed = (elapsed + dt) % TIME_WRAP_SECONDS;
     const time = options.times ? options.times[frame - 1] : elapsed;
-    for (const { system } of systems) system.step(dt, time);
+    for (const { system, world } of systems) system.step(dt, time, { world });
     if (!wanted.has(frame)) continue;
     const out: Record<string, ParticleTrackParticle[]> = {};
     for (const { name, system } of systems) {

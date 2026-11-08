@@ -14,6 +14,7 @@
  */
 import { isKeyframedValue, isScriptValue, isUserBinding } from "../compile/bindings";
 import type { ParticleColumns } from "./columns";
+import type { ControlPointSet } from "./controlpoints";
 import { boxRandom, sphereRandom } from "./emitters";
 import { f32 } from "./f32";
 import {
@@ -157,6 +158,19 @@ export interface ParticleRunContext {
    * 帧时间累加、超过 432000 回绕。一帧内各模块读同一个值（本帧的 `g_Time`）；预热时为 0（B2 末条，实测确认）。噪声类模块用。
    */
   time: number;
+  /**
+   * 本系统的控制点（P4c 步骤 1，`particles/controlpoints.ts`）。模块读 `current`（本帧发射之前已更新）；P4d 的模块还读
+   * `previous`。
+   */
+  controlPoints: ControlPointSet;
+  /** 系统 `flags` bit0（世界空间）：发射器据此决定出生点旋不旋。步骤 4 之前能力表拦住，恒为 false。 */
+  world: boolean;
+  /**
+   * 发射这个粒子的 emitter 的控制点 3×3（`mat3(current)`，无条件，rea-p4c-sim.md 第 3 节）：emitter 写，initializer 当 `M`
+   * 用（`velocityrandom`、`turbulentvelocityrandom`）。WPE 是 `FUN_14023b340` 的第三个参数，`sphererandom`、`boxrandom` 在进循环前
+   * 从控制点抄出 9 个分量（`0x140237c42`、`0x1402384c8` 起），不看旋转条件。
+   */
+  basis: Float32Array;
 }
 
 /**
@@ -199,6 +213,26 @@ const vec3 = (value: ParticleFieldDefault, type: "vec3" | "vec3z" | "vec3str" = 
 const by = (instance: InstanceScale, def: ParticleFieldDef): ParticleFieldDef => ({ ...def, instance });
 const zeroOnly = (value: ParticleFieldValue) => value === 0;
 const TWO_PI = 2 * Math.PI;
+
+/**
+ * jsoncpp 取无符号整数（`FUN_140085f70`，`0x140085f70`–`0x140085fc2`）对数字的结果：整数取低 32 位，实数 `cvttsd2si` 截断成
+ * 64 位再取低 32 位（超出 64 位范围得 `0x8000000000000000`，低 32 位是 0）。JS 的 `>>> 0` 就是按 2³² 取模。
+ */
+export function asUInt32(value: number): number {
+  return Math.abs(value) >= 2 ** 63 ? 0 : value >>> 0;
+}
+
+/**
+ * 模块的 `controlpoint` 下标（P4c 步骤 1）：解析期按 `FUN_140085f70` 取整，再和 7 **按无符号**取小（`cmp eax, 7; cmovb`），
+ * 负数当很大的无符号数，得 7。汇编核对过三处：`sphererandom` `0x1401c5ff7`–`0x1401c600d`（存 `p+0xe0`，执行读记录 `+0xf0`）、
+ * `boxrandom` `0x1401c6903`–`0x1401c6915`（`p+0x98`，执行读 `+0xa8`）、`vortex` `0x1401cdc0c`–`0x1401cdc1c`（同
+ * `controlpointattract` 的写法，rea-p4c-sim.md 4.1）。执行时不再钳制（`imul …, 0xd0` 直接取址）。
+ */
+export function clampControlPoint(value: number): number {
+  return Math.min(asUInt32(value), 7);
+}
+/** 三个读控制点的模块共用：取整，钳制在 `normalize` 里做（`clampControlPoint`）。 */
+const CONTROL_POINT_FIELD = int(0);
 
 /**
  * emitter 共有的发射字段（`FUN_1401c1c70` 解析、`FUN_1401b8df0` 缺省，`rea-p4b-modules.md` A0【确】），`sphererandom` 与
@@ -270,8 +304,8 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       distancemax: num({ orthographic: 256, perspective: 1 }),
       speedmin: by("speed", num(0)),
       speedmax: by("speed", num(0)),
-      // 控制点（上限 7）属 P4c：非 0 时发射位置过控制点矩阵
-      controlpoint: int(0, zeroOnly),
+      // 读这个控制点的平移与 3×3（P4c 步骤 1，`emitters.ts`）；解析期钳到 0–7
+      controlpoint: CONTROL_POINT_FIELD,
       cone: num(0),
       ...EMITTER_FIELDS,
     },
@@ -280,6 +314,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     normalize(fields) {
       if ((fields.sign as number[]).some((value) => value !== 0)) fields.flags = Number(fields.flags) | 1;
       normalizeEmitter(fields);
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: sphereRandom,
   },
@@ -296,13 +331,16 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       // 乘 `speed`（条目类型 6）
       speedmin: by("speed", num(0)),
       speedmax: by("speed", num(0)),
-      // 控制点（上限 7）属 P4c：非 0 时出生位置和速度方向过控制点矩阵
-      controlpoint: int(0, zeroOnly),
+      // 读这个控制点的平移与 3×3（P4c 步骤 1，`emitters.ts`）；解析期钳到 0–7
+      controlpoint: CONTROL_POINT_FIELD,
       ...EMITTER_FIELDS,
     },
     columns: ["position", "velocity"],
     columnFlags: 0,
-    normalize: normalizeEmitter,
+    normalize(fields) {
+      normalizeEmitter(fields);
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
     run: boxRandom,
   },
   {
@@ -551,7 +589,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     run: oscillateSize,
   },
   {
-    // `rea-p4b-modules.md` B7：乘 `k`；中心 = 控制点平移 + `offset`
+    // `rea-p4b-modules.md` B7：乘 `k`；中心 = 控制点平移 + `offset`（控制点的 3×3 不用）
     category: "operator",
     name: "vortex",
     fields: {
@@ -564,11 +602,14 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       speedouter: by("speed", num(0)),
       // bit0：柱形（按到轴线的距离）；其余位没读到含义
       flags: int(0, (value) => (Number(value) & ~1) === 0),
-      // 控制点（上限 7）属 P4c：非 0 时中心取那个控制点的平移
-      controlpoint: int(0, zeroOnly),
+      // 中心取这个控制点的平移（P4c 步骤 1，不用 3×3）；解析期钳到 0–7
+      controlpoint: CONTROL_POINT_FIELD,
     },
     columns: ["position", "velocity"],
     columnFlags: 0,
+    normalize(fields) {
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
     run: vortex,
   },
   {

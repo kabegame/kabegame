@@ -5,7 +5,15 @@ import { compileScene, particleWritesTex0Format } from "./bundle";
 import { checkObjectFeatures, checkParticleFeatures, checkParticleProgram, checkSceneFeatures } from "./features";
 import { SceneFs, type SceneReader } from "./fs";
 import type { JsonObject, MaterialPass } from "./model";
-import { isOrthographic, parseParticle, parseParticleInstance, particleFov, readParticleSystem } from "./particles";
+import {
+  controlPointOffset,
+  isOrthographic,
+  parseParticle,
+  parseParticleInstance,
+  particleFov,
+  readControlPoints,
+  readParticleSystem,
+} from "./particles";
 import { ShaderCompiler, shaderCacheKey, type ShaderTextureSlot } from "./shader";
 import { PARTICLE_MODULES, readParticleModule, type ParticleCategory } from "../particles/modules";
 import { Wpesl2wgsl, type TranslateRequest, type TranslateResult } from "../wpesl2wgsl";
@@ -296,6 +304,26 @@ describe("解析：字段形状", () => {
     expect(reading.issues).toEqual([]);
   });
 
+  it("controlpoint 下标（sphererandom、boxrandom、vortex）：取整后和 7 按无符号取小，负数得 7（P4c 步骤 1）", () => {
+    for (const [category, name] of [
+      ["emitter", "sphererandom"],
+      ["emitter", "boxrandom"],
+      ["operator", "vortex"],
+    ] as const) {
+      const index = (controlpoint: unknown) =>
+        readParticleModule(category, { name, controlpoint }, true).fields.controlpoint;
+      expect(index(undefined), name).toBe(0);
+      expect(index(3), name).toBe(3);
+      expect(index(2.9), name).toBe(2);
+      expect(index(7), name).toBe(7);
+      expect(index(8), name).toBe(7);
+      expect(index(-1), name).toBe(7);
+      expect(index(-0.5), name).toBe(0);
+      expect(index(2 ** 32 + 1), name).toBe(1);
+      expect(index(1e30), name).toBe(0);
+    }
+  });
+
   it("null 当缺键；id 记下来，name / id 不算字段", () => {
     const reading = readParticleModule("operator", { name: "movement", id: 7, drag: null }, true);
     expect(reading).toMatchObject({ name: "movement", id: 7, known: true, issues: [] });
@@ -404,6 +432,72 @@ describe("解析：系统", () => {
     expect(isOrthographic({ orthogonalprojection: null })).toBe(false);
     expect(isOrthographic({})).toBe(false);
     expect(isOrthographic(undefined)).toBe(false);
+  });
+});
+
+describe("解析：控制点数组（P4c 步骤 1，rea-p4c-sim.md 1.2）", () => {
+  it("只在是数组时读，按下标取前 8 项，不是对象的项取缺省；总是 8 项", () => {
+    const empty = { flags: 0, offset: [0, 0, 0] };
+    for (const raw of [undefined, null, {}, "0 0 0", 3])
+      expect(readControlPoints({ controlpoint: raw as never })).toEqual(Array(8).fill(empty));
+    const points = readControlPoints({
+      controlpoint: [{ id: 0, flags: 2 }, null, [1, 2], "x", { offset: "1 2 3" }, {}, {}, {}, { offset: "9 9 9" }],
+    });
+    expect(points).toHaveLength(8);
+    expect(points[0]).toEqual({ flags: 2, offset: [0, 0, 0] });
+    expect(points[1]).toEqual(empty);
+    expect(points[2]).toEqual(empty);
+    expect(points[3]).toEqual(empty);
+    expect(points[4]).toEqual({ flags: 0, offset: [1, 2, 3] });
+  });
+
+  it("offset：只在是字符串时解析，三段各自 atof（只认空格分隔），缺的分量 0，读不出数的分量 0", () => {
+    const offset = (value: unknown) => readControlPoints({ controlpoint: [{ offset: value as never }] })[0].offset;
+    expect(offset("100 50 0")).toEqual([100, 50, 0]);
+    expect(offset("100.00000 -9999.5 3")).toEqual([100, -9999.5, 3]);
+    // 不是字符串：保持 0 0 0（关键帧另由能力表报）
+    expect(offset(5)).toEqual([0, 0, 0]);
+    expect(offset({ value: "1 2 3" })).toEqual([0, 0, 0]);
+    expect(offset(null)).toEqual([0, 0, 0]);
+    // 分量不足、空串
+    expect(offset("7")).toEqual([7, 0, 0]);
+    expect(offset("7 8")).toEqual([7, 8, 0]);
+    expect(offset("")).toEqual([0, 0, 0]);
+    // 有非数字：atof 从能读的前缀取值，读不出取 0；多余的分量忽略
+    expect(offset("abc 2 3")).toEqual([0, 2, 3]);
+    expect(offset("1x 2y z")).toEqual([1, 2, 0]);
+    expect(offset("1 2 3 4")).toEqual([1, 2, 3]);
+    // 分隔只认空格：逗号分隔时第一段 atof 读到 1，后面找不到空格
+    expect(controlPointOffset("1,2,3")).toEqual([1, 0, 0]);
+    // 串首的空格：第一段 atof 自己跳过，第二段先跳过「非空格」（一个也没有）再跳空格，又落在第一个数上
+    expect(controlPointOffset(" 5 6 7")).toEqual([5, 5, 6]);
+    // 连续空格当一个
+    expect(controlPointOffset("1   2  3")).toEqual([1, 2, 3]);
+  });
+
+  it("flags：数字取整后按无符号 32 位，布尔 1 / 0，其余 0；angles、parentcontrolpoint、locktopointer、id 不读", () => {
+    const flags = (value: unknown) => readControlPoints({ controlpoint: [{ flags: value as never }] })[0].flags;
+    expect(flags(2)).toBe(2);
+    expect(flags(1.9)).toBe(1);
+    expect(flags(-1)).toBe(0xffffffff);
+    expect(flags(true)).toBe(1);
+    expect(flags(false)).toBe(0);
+    expect(flags("1")).toBe(0);
+    expect(flags(null)).toBe(0);
+    expect(
+      readControlPoints({
+        controlpoint: [{ id: 3, angles: "0 0 1.5708", parentcontrolpoint: 2, locktopointer: true, foo: 1 }],
+      })[0],
+    ).toEqual({ flags: 0, offset: [0, 0, 0] });
+  });
+
+  it("parseParticle 填 controlpoints", () => {
+    const particle = parseParticle(
+      { controlpoint: [{ id: 0 }, { id: 1, offset: "100 0 0", flags: 4 }] },
+      { file: "p.json", orthographic: true },
+    );
+    expect(particle.controlpoints[1]).toEqual({ flags: 4, offset: [100, 0, 0] });
+    expect(particle.controlpoints).toHaveLength(8);
   });
 });
 
@@ -602,12 +696,15 @@ describe("能力表：粒子", () => {
     ]);
   });
 
-  it("本节不支持的取值：controlpoint 非 0，emitter flags 带 bit3 以上，movement flags 非 0；delay、duration 任意值都支持", () => {
+  it("本节不支持的取值：emitter flags 带 bit3 以上，movement flags 非 0；delay、duration、controlpoint 任意值都支持", () => {
     for (const name of ["sphererandom", "boxrandom"]) {
       const emitter = (fields: JsonObject) => particleKeys(withModule("emitter", { name, ...fields }));
       expect(emitter({ controlpoint: 0, delay: 0.5, duration: 2, flags: 7 }), name).toEqual([]);
       expect(emitter({ duration: -1, delay: -2 }), name).toEqual([]);
-      expect(emitter({ controlpoint: 1 })).toEqual([`particle:emitter:${name}:controlpoint`]);
+      // 控制点下标（P4c 步骤 1）：任意数字都支持，写成字符串照报形状问题
+      for (const controlpoint of [1, 7, 9, -1])
+        expect(emitter({ controlpoint }), `${name} ${controlpoint}`).toEqual([]);
+      expect(emitter({ controlpoint: "1" })).toEqual([`particle:emitter:${name}:controlpoint`]);
       expect(emitter({ flags: 8 })).toEqual([`particle:emitter:${name}:flags`]);
       expect(emitter({ flags: 0x80000000 })).toEqual([`particle:emitter:${name}:flags`]);
     }
@@ -649,11 +746,11 @@ describe("能力表：粒子", () => {
     ]);
   });
 
-  it("vortex：flags 只认 bit0，controlpoint 非 0 报（P4c），audioprocessing* 照报（P4e）", () => {
+  it("vortex：flags 只认 bit0，controlpoint 任意值都支持（P4c 步骤 1），audioprocessing* 照报（P4e）", () => {
     const vortex = (fields: JsonObject) => particleKeys(withModule("operator", { name: "vortex", ...fields }));
     expect(vortex({ flags: 1, offset: "100 0 0", axis: "0 1 0", controlpoint: 0 })).toEqual([]);
     expect(vortex({ flags: 2 })).toEqual(["particle:operator:vortex:flags"]);
-    expect(vortex({ controlpoint: 2 })).toEqual(["particle:operator:vortex:controlpoint"]);
+    expect(vortex({ controlpoint: 2 })).toEqual([]);
     expect(vortex({ audioprocessingmode: 1, audioprocessingbounds: "0 1" })).toEqual([
       "particle:operator:vortex:audioprocessingbounds",
       "particle:operator:vortex:audioprocessingmode",
@@ -720,28 +817,52 @@ describe("能力表：粒子", () => {
     ]);
   });
 
-  it("controlpoint 有实际内容才报：offset / angles 非零、flags / parentcontrolpoint 非 0、locktopointer、其它键", () => {
-    const defaultsOnly = [
-      { id: 0 },
-      { id: 1, flags: 0, offset: "0 0 0" },
-      { id: 2, offset: "0.00000 0.00000 0.00000", angles: "0 0 0", parentcontrolpoint: 0, locktopointer: false },
-      { id: 3, offset: null },
+  it("控制点（P4c 步骤 1）：只看被模块引用的点（n = max(controlpoint + 1)）；flags bit0 报 particle:controlpoint:pointer，其余中性", () => {
+    const emitter = (controlpoint?: number) => ({
+      name: "sphererandom",
+      ...(controlpoint === undefined ? {} : { controlpoint }),
+    });
+    const neutral = [
+      { id: 0, offset: "0 -9999 0", angles: "0 0 1", flags: 2 },
+      { id: 1, flags: 4, parentcontrolpoint: 1, locktopointer: true, worldspace: true },
+      { id: 2, flags: 8 + 16, offset: "1 2 3" },
+      { id: 3, angles: "1 2 3", flags: 0x10001 },
     ];
-    expect(particleKeys({ controlpoint: defaultsOnly })).toEqual([]);
-    for (const extra of [
-      { offset: "0 -9999 0" },
-      { angles: "0 0 1" },
-      { flags: 1 },
-      { parentcontrolpoint: 1 },
-      { locktopointer: true },
-      { worldspace: true },
-    ])
-      expect(particleKeys({ controlpoint: [...defaultsOnly, { id: 4, ...extra }] }), JSON.stringify(extra)).toEqual([
-        "particle:controlpoint",
-      ]);
-    // 只按数组下标读前 8 项
-    const late = [...Array.from({ length: 8 }, (_, id) => ({ id })), { id: 8, offset: "1 0 0" }];
-    expect(particleKeys({ controlpoint: late })).toEqual([]);
+    // 中性：offset、angles、flags 2 / 4 / 8 / 16、parentcontrolpoint、locktopointer、别的键；0x10000 优先于指针
+    expect(particleKeys({ emitter: [emitter(3)], controlpoint: neutral })).toEqual([]);
+    // 指针：被引用的点报新键
+    expect(particleKeys({ emitter: [emitter()], controlpoint: [{ id: 0, flags: 1 }] })).toEqual([
+      "particle:controlpoint:pointer",
+    ]);
+    expect(particleKeys({ emitter: [emitter(2)], controlpoint: [{}, {}, { flags: 3 }] })).toEqual([
+      "particle:controlpoint:pointer",
+    ]);
+    // n 之外的指针点不报（emitter 缺省读控制点 0，n = 1）
+    expect(particleKeys({ emitter: [emitter()], controlpoint: [{}, { flags: 1 }] })).toEqual([]);
+    // n 按全部表内模块取最大：vortex 读控制点 1
+    expect(
+      particleKeys({
+        emitter: [emitter()],
+        operator: [{ name: "vortex", controlpoint: 1 }],
+        controlpoint: [{}, { flags: 1 }],
+      }),
+    ).toEqual(["particle:controlpoint:pointer"]);
+    // 没有读控制点的模块：一个控制点都没有
+    expect(particleKeys({ controlpoint: [{ flags: 1 }] })).toEqual([]);
+    // 表外模块不算（它自己报）
+    expect(
+      particleKeys({
+        emitter: [emitter()],
+        operator: [{ name: "controlpointattract", controlpoint: 1 }],
+        controlpoint: [{}, { flags: 1 }],
+      }),
+    ).toEqual(["particle:operator:controlpointattract"]);
+    // 只按数组下标读前 8 项；-1 钳成 7
+    const pointerAt7 = [...Array.from({ length: 7 }, (_, id) => ({ id })), { id: 7, flags: 1 }];
+    expect(particleKeys({ emitter: [emitter(-1)], controlpoint: pointerAt7 })).toEqual([
+      "particle:controlpoint:pointer",
+    ]);
+    expect(particleKeys({ emitter: [emitter(6)], controlpoint: pointerAt7 })).toEqual([]);
   });
 
   it("animationmode、sequencemultiplier 任意取值都不报（P4b 步骤 2）；写成绑定或关键帧照报", () => {

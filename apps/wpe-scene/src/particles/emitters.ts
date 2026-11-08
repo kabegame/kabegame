@@ -6,9 +6,13 @@
  * - `emissionCount`：每个 emitter、每帧算本帧要发几个（`FUN_1402378a0`），emitter 类型共有；
  * - `sphereRandom`、`boxRandom`：模块表 `sphererandom`、`boxrandom` 的执行函数，给一个新粒子写位置、速度。
  *
- * 控制点（`controlpoint ≠ 0`、世界空间）属 P4c，能力表已拦住，这里控制点矩阵按单位阵、平移按 0。
+ * 控制点（P4c 步骤 1，rea-p4c-sim.md 第 3 节、`controlpoints.ts`）：两个发射器读自己那个控制点的 `current`。
+ * - 出生中心 `base = cp.t + origin`（一次加法，`origin` 不经 3×3）；
+ * - 3×3 只在「世界空间或 `controlpoint ≠ 0`」时旋转出生点与回退方向（`emit` 第 496、825 行，`setne` 于 `0x140237ce3`、
+ *   `0x14023852d`），所以本地系统的控制点 0 带角度时出生点不旋（实测 `cp0-angle`）；
+ * - 但 3×3 总是交给 initializer 当 `M`（`context.basis`，`velocityrandom`、`turbulentvelocityrandom` 乘它）。
  */
-import { f32, lerp, PI, rcp, TWO_PI } from "./f32";
+import { f32, lerp, mulBasis, PI, rcp, TWO_PI } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
 import type { ParticleRandom } from "./random";
 
@@ -150,15 +154,27 @@ export function emissionCount(
  * 1. `φ = 2π·uB`；2. `cosθ = uA·(1−c)+c`，`c = −cos(π·cone)`；3. `r = cbrt(uB)`；
  * 4. `p = (r·cosθ, sinφ·r·sinθ, cosφ·r·sinθ)·directions`，`û = p / |p|`；5. `sign` 非零的分量强制同号；
  * 6. `q = (distancemin + (distancemax − distancemin)·|p|)·û`——**用 `|p|` 不是 `r`**；
- * 8. 位置 `q + origin`；9. 方向：`|q|² < 1e-4` 时另抽 3 个 uB 取 `(2u−1)·directions`，否则就是 `q`；
+ * 7. 世界空间或 `controlpoint ≠ 0` 时 `q = M_cp·q`（只有 3×3，`mulBasis`）；
+ * 8. 位置 `q + (cp.t + origin)`；9. 方向：`|q|² < 1e-4` 时另抽 3 个 uB 取 `(2u−1)·directions`（同样按第 7 步旋转），否则
+ *    就是 `q`；
  * 10. 速度 `(speedmin + (speedmax − speedmin)·uB)·dir / |dir|`，三轴共用一个随机。
  *
- * 第 9 步另抽的 3 个按 x、y、z 顺序（读码没写，推断）。`|p| = 0`、`|dir| = 0` 时 WPE 的 `rcpps` / `rsqrtps` 得到无穷、
- * 乘出 NaN；这里按 0 处理（只在随机数恰好落在 0.5 之类的点上才会遇到）。
+ * 汇编核对（P4c 步骤 1，`0x140237f1d`–`0x1402380d2`）：
+ * - 第 9 步的 `|q|²` 是**旋转后**的 `q`（`0x140237f76` 起对 `xmm4` 求平方和，`xmm4` 是旋转结果），求和顺序是
+ *   `(y² + w²) + (x² + z²)`（`movhlps` / `movlhps` 后 `addps`、再 `shufps 0xb1` 后 `addps`；`w² = 0`）。
+ * - 回退另抽的 3 个按 x、y、z 顺序进 0–2 道（`unpcklps` / `movlhps`，`0x140238069`–`0x140238082`），旋转写法同出生点。
+ * - 速度的 `|dir|²` 同样是 `(y² + w²) + (x² + z²)`，但它只进 `rsqrtps`（近似，不复刻），这里仍按 `(x² + y²) + z²` 算，免得改动
+ *   已验收的回放。
+ * `|p| = 0`、`|dir| = 0` 时 WPE 的 `rcpps` / `rsqrtps` 得到无穷、乘出 NaN；这里按 0 处理（只在随机数恰好落在 0.5 之类的点上
+ * 才会遇到）。
  */
 export function sphereRandom(fields: ParticleFields, context: ParticleRunContext): void {
   const { columns, random, slot } = context;
+  const cp = context.controlPoints.current(fields.controlpoint as number);
+  context.basis = cp.basis;
+  const rotate = context.world || fields.controlpoint !== 0;
   const origin = fields.origin as number[];
+  const base = [0, 1, 2].map((i) => f32(cp.translation[i] + origin[i]));
   const directions = fields.directions as number[];
   const sign = fields.sign as number[];
   const useSign = ((fields.flags as number) & 1) !== 0;
@@ -184,12 +200,16 @@ export function sphereRandom(fields: ParticleFields, context: ParticleRunContext
   if (useSign)
     for (let i = 0; i < 3; i++) if (sign[i] !== 0) unit[i] = sign[i] > 0 ? Math.abs(unit[i]) : -Math.abs(unit[i]);
   const distance = lerp(distanceMin, distanceRange, length);
-  const q = unit.map((value) => f32(distance * value));
-  for (let i = 0; i < 3; i++) columns.position[i][slot] = f32(q[i] + origin[i]);
+  const scaled = unit.map((value) => f32(distance * value));
+  const q = rotate ? mulBasis(cp.basis, scaled) : scaled;
+  for (let i = 0; i < 3; i++) columns.position[i][slot] = f32(q[i] + base[i]);
 
-  const q2 = f32(f32(f32(q[0] * q[0]) + f32(q[1] * q[1])) + f32(q[2] * q[2]));
+  const q2 = f32(f32(q[1] * q[1]) + f32(f32(q[0] * q[0]) + f32(q[2] * q[2])));
   let direction = q;
-  if (q2 < 1e-4) direction = directions.map((axis) => f32(f32(f32(2 * random.b()) - 1) * axis));
+  if (q2 < 1e-4) {
+    const fallback = directions.map((axis) => f32(f32(f32(2 * random.b()) - 1) * axis));
+    direction = rotate ? mulBasis(cp.basis, fallback) : fallback;
+  }
   const speed = lerp(speedMin, speedRange, random.b());
   const d2 = f32(
     f32(f32(direction[0] * direction[0]) + f32(direction[1] * direction[1])) + f32(direction[2] * direction[2]),
@@ -231,16 +251,23 @@ function lengthSquared(d: readonly number[]): number {
  * 1. 三轴按 z、y、x 各抽一个 uB：`r_i = (2u − 1)·directions_i`，`s_i` 是 `r_i` 的符号（0 时为 0）；
  * 2. `q_i = s_i·((s_i·r_i)·(max_i − min_i) + min_i)`：`|q_i| ∈ [min_i, min_i + |directions_i|·(max_i − min_i)]`，
  *    `distancemin` 三轴都大于 0 时落在 8 个角块里，不是盒壳（实测核对过）；
- * 3. 位置 `q + origin`；方向 `d` 用写进列的 float 重新减 `origin`，不是 `q` 本身；
- * 4. `1 / fastInvSqrt(|d|²) < 1e-4` 时回退：再按 z、y、x 抽 3 个 uB，`d = (2u − 1)·directions`；
- * 5. 速度 `(speedmin + (speedmax − speedmin)·uB)·(d / |d|)`，精确 `sqrt`、精确除法。
+ * 3. 世界空间或 `controlpoint ≠ 0` 时 `q = M_cp·q`（`mulBasis`，`0x14023890d`–`0x140238963` 核对过求和顺序）；
+ * 4. 位置 `q + base`，`base = origin + cp.t`（进循环前一次加法，`0x1402384c2` 起）；方向 `d` 用写进列的 float 重新减 `base`，
+ *    不是 `q` 本身；
+ * 5. `1 / fastInvSqrt(|d|²) < 1e-4` 时回退：再按 z、y、x 抽 3 个 uB，`d = (2u − 1)·directions`，旋转条件同第 3 步
+ *    （`0x140238a9c`–`0x140238af0`）；
+ * 6. 速度 `(speedmin + (speedmax − speedmin)·uB)·(d / |d|)`，精确 `sqrt`、精确除法。
  *
- * 没有 `sign`、`cone`；`flags` 只有 bit1、bit2 有用（发射数量），bit0 不读。控制点 0 按单位阵、平移 0（`origin + cp.t` 就是
- * `origin`，不旋转）。`|d| = 0`（`directions "0 0 0"`）时 WPE 乘出 NaN，这里按速度 0 处理，同 `sphererandom`。
+ * 没有 `sign`、`cone`；`flags` 只有 bit1、bit2 有用（发射数量），bit0 不读。`|d| = 0`（`directions "0 0 0"`）时 WPE 乘出 NaN，
+ * 这里按速度 0 处理，同 `sphererandom`。
  */
 export function boxRandom(fields: ParticleFields, context: ParticleRunContext): void {
   const { columns, random, slot } = context;
+  const cp = context.controlPoints.current(fields.controlpoint as number);
+  context.basis = cp.basis;
+  const rotate = context.world || fields.controlpoint !== 0;
   const origin = fields.origin as number[];
+  const base = [0, 1, 2].map((i) => f32(origin[i] + cp.translation[i]));
   const directions = fields.directions as number[];
   const min = fields.distancemin as number[];
   const max = fields.distancemax as number[];
@@ -248,13 +275,17 @@ export function boxRandom(fields: ParticleFields, context: ParticleRunContext): 
   const speedRange = f32((fields.speedmax as number) - speedMin);
 
   const r = boxDirections(random, directions);
-  for (let i = 0; i < 3; i++) {
+  const scaled = [0, 1, 2].map((i) => {
     const s = r[i] > 0 ? 1 : r[i] < 0 ? -1 : 0;
-    const q = f32(s * f32(f32(f32(s * r[i]) * f32(max[i] - min[i])) + min[i]));
-    columns.position[i][slot] = f32(q + origin[i]);
+    return f32(s * f32(f32(f32(s * r[i]) * f32(max[i] - min[i])) + min[i]));
+  });
+  const q = rotate ? mulBasis(cp.basis, scaled) : scaled;
+  for (let i = 0; i < 3; i++) columns.position[i][slot] = f32(q[i] + base[i]);
+  let d = [0, 1, 2].map((i) => f32(columns.position[i][slot] - base[i]));
+  if (f32(1 / fastInvSqrt(lengthSquared(d))) < BOX_FALLBACK) {
+    const fallback = boxDirections(random, directions);
+    d = rotate ? mulBasis(cp.basis, fallback) : fallback;
   }
-  let d = [0, 1, 2].map((i) => f32(columns.position[i][slot] - origin[i]));
-  if (f32(1 / fastInvSqrt(lengthSquared(d))) < BOX_FALLBACK) d = boxDirections(random, directions);
   const length = f32(Math.sqrt(lengthSquared(d)));
   const inverse = length > 0 ? f32(1 / length) : 0;
   const speed = lerp(speedMin, speedRange, random.b());

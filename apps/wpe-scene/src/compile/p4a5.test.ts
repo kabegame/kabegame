@@ -279,9 +279,17 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
       ]);
     });
 
-    it("控制点报 particle:instance:controlpoint；{script} 报 particle:binding:instance:<键>；其它键报 particle:instance:<键>", () => {
-      expect(check({ controlpoint1: "10 20 0" })).toEqual(["particle:instance:controlpoint"]);
-      expect(check({ controlpointangle3: "0 0 0" })).toEqual(["particle:instance:controlpoint"]);
+    it("控制点静态值不报、{user} 报 particle:instance:controlpoint:user（P4c 步骤 1）；{script} 报 particle:binding:instance:<键>；其它键报 particle:instance:<键>", () => {
+      expect(check({ controlpoint1: "10 20 0" })).toEqual([]);
+      expect(check({ controlpointangle3: "0 0 0" })).toEqual([]);
+      expect(check({ controlpoint7: "abc", controlpointangle0: "1 2 3" })).toEqual([]);
+      expect(check({ controlpoint2: { user: "p", value: "1 2 0" } })).toEqual(["particle:instance:controlpoint:user"]);
+      expect(check({ controlpointangle5: { user: { name: "a", condition: "1" }, value: "0 0 1" } })).toEqual([
+        "particle:instance:controlpoint:user",
+      ]);
+      expect(check({ controlpoint1: { script: SCRIPT, value: "1 2 0" } })).toEqual([
+        "particle:binding:instance:controlpoint1",
+      ]);
       expect(check({ count: { script: SCRIPT, value: 1 } })).toEqual(["particle:binding:instance:count"]);
       // 挂了脚本的 colorn 照报（P4f），不再另报 particle:instance:colorn
       expect(check({ colorn: { script: SCRIPT, value: "1 1 1" } })).toEqual(["particle:binding:instance:colorn"]);

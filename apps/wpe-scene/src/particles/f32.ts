@@ -29,6 +29,25 @@ export function rsqrt(value: number): number {
   return f32(1 / Math.sqrt(value));
 }
 
+/**
+ * `M·v`（3×3 乘向量，P4c 步骤 1），`basis[c * 3 + r]` 是第 c 列第 r 个分量（`particles/controlpoints.ts` 的 `ControlPoint`）。
+ * 三个分量都是 `(v.x·M0j + v.y·M1j) + v.z·M2j`，逐步 float32。WPE 里有三处，按汇编核对过（float 加法可交换，三种写法逐位相同）：
+ * - `FUN_140184440`（`velocityrandom`、`turbulentvelocityrandom` 乘发射器的 `M`）：`x = (v.y·m10 + v.x·m00) + v.z·m20`，
+ *   `y`、`z` 是 `(v.x·m0j + v.y·m1j) + v.z·m2j`（`0x140184440`–`0x1401844b6`）；
+ * - `boxrandom` 旋转出生点与回退方向：`X = (qx·M00 + qy·M10) + qz·M20`、`Y = (qy·M11 + qx·M01) + qz·M21`、
+ *   `Z = (qx·M02 + qy·M12) + qz·M22`（`0x14023890d`–`0x140238963`、回退 `0x140238a9c`–`0x140238af0`）；
+ * - `sphererandom` 用 4 宽 SIMD：`(t·q.w + M2·q.z) + (q.y·M1 + M0·q.x)`（`0x140237f29`–`0x140237f60`、回退
+ *   `0x14023809b`–`0x1402380d2`），`q.w` 是 ±0，`t` 有限时 `t·q.w` 是 ±0、不改变结果（`t` 为 inf 时 WPE 得 NaN，这里不复刻）。
+ */
+export function mulBasis(basis: ArrayLike<number>, v: readonly number[]): [number, number, number] {
+  const [x, y, z] = v;
+  return [
+    f32(f32(f32(x * basis[0]) + f32(y * basis[3])) + f32(z * basis[6])),
+    f32(f32(f32(x * basis[1]) + f32(y * basis[4])) + f32(z * basis[7])),
+    f32(f32(f32(x * basis[2]) + f32(y * basis[5])) + f32(z * basis[8])),
+  ];
+}
+
 export function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value;
 }

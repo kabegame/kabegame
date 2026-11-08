@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonObject } from "../compile/model";
 import { parseParticle } from "../compile/particles";
 import { ParticleColumns } from "./columns";
+import { IDENTITY_BASIS, identityControlPoints } from "./controlpoints";
 import { alphaRandom } from "./initializers";
 import {
   COLUMN_FLAGS,
@@ -43,7 +44,19 @@ const op = (name: string, module: JsonObject = {}, multipliers = ONE) =>
   fieldsOf("operator", { name, ...module }, multipliers);
 
 function context(columns: ParticleColumns, extra: Partial<ParticleRunContext> = {}): ParticleRunContext {
-  return { columns, random: new ScriptedRandom(), slot: 0, count: 1, h: 0, k: 0, time: 0, ...extra };
+  return {
+    columns,
+    random: new ScriptedRandom(),
+    slot: 0,
+    count: 1,
+    h: 0,
+    k: 0,
+    time: 0,
+    controlPoints: identityControlPoints(),
+    world: false,
+    basis: IDENTITY_BASIS,
+    ...extra,
+  };
 }
 
 /** 一个粒子的列：age / life 给定，size、颜色、alpha 的当前值与初值都是 1（size 是 `size`）。 */

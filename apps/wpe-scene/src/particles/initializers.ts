@@ -5,7 +5,7 @@
  * `t = pow(t, exponent)`（`powf` 是推断）。min / max 已乘 `instanceoverride`（`resolveParticleFields`）。
  * 噪声类（`turbulentvelocityrandom`、`positionoffsetrandom`）另读场景时间 `T`（`context.time`）。
  */
-import { f32, lerp } from "./f32";
+import { f32, lerp, mulBasis } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
 import { snoise1, snoise2 } from "./noise";
 import { PI } from "./noiseTables";
@@ -53,15 +53,22 @@ export function alphaRandom(fields: ParticleFields, { columns, random, slot }: P
   columns.alpha0[slot] = f32(columns.alpha0[slot] * lerp(min, f32((fields.max as number) - min), t));
 }
 
-/** 三轴独立，**抽取顺序 z、y、x**，经控制点矩阵（P4a 为单位阵）后加到速度。 */
-export function velocityRandom(fields: ParticleFields, { columns, random, slot }: ParticleRunContext): void {
+/**
+ * 三轴独立，**抽取顺序 z、y、x**，`v += M·add`（`0x14023bac6`–`0x14023bc27`）：三个分量 `min + t·range` 写进栈上向量，
+ * `FUN_140184440(out, M, add)`（`0x14023bbce`，`M` 是发射器传来的控制点 3×3，无条件，`mulBasis`）再逐分量加到速度上。
+ * 控制点 0 无旋转时 `M` 是单位阵，乘上是精确的。
+ */
+export function velocityRandom(fields: ParticleFields, { columns, random, slot, basis }: ParticleRunContext): void {
   const min = fields.min as number[];
   const max = fields.max as number[];
   const exponent = fields.exponent as number;
   const t = [0, 0, 0];
   for (const axis of [2, 1, 0]) t[axis] = drawT(random, exponent);
-  for (let i = 0; i < 3; i++)
-    columns.velocity[i][slot] = f32(columns.velocity[i][slot] + lerp(min[i], f32(max[i] - min[i]), t[i]));
+  const add = mulBasis(
+    basis,
+    t.map((value, i) => lerp(min[i], f32(max[i] - min[i]), value)),
+  );
+  for (let i = 0; i < 3; i++) columns.velocity[i][slot] = f32(add[i] + columns.velocity[i][slot]);
 }
 
 /** 三轴独立，顺序 x、y、z，加到每个轴（`rotationrandom` 置列标志 bit0，三个轴是三列）。 */
@@ -84,14 +91,15 @@ function addPerAxis(target: readonly Float32Array[], fields: ParticleFields, ran
  * ang = ((snoise1(t)·π)·scale) + offset               （π = 0x40490fdb）
  * dir = mat3(glm::rotate(I, ang, normalize(right)))·forward      （forward 不归一化）
  * u2  = uA                                            （速度，后抽）
- * v  += M·(dir·(u2·(speedmax − speedmin) + speedmin))  （speedmin / max 已乘 instanceoverride.speed）
+ * v  += M·(dir·(u2·(speedmax − speedmin) + speedmin))  （speedmin / max 已乘 instanceoverride.speed；M 见下）
  * ```
  * - `glm::rotate`（`FUN_1401e2500`，`ignore/p4/rea/p4b-mod/rotate.asm`）：`a = right·(1/sqrtss((x² + y²) + z²))`，
  *   `temp = (1 − c)·a`，`R[i][i] = a_i·temp_i + c`，`R[0][1] = a1·temp0 + a2·s` 等（下面逐项照抄）；单位阵左乘是精确的，省掉。
  *   `cosf` / `sinf` 是 CRT 实现（`FUN_14041a2e0` / `FUN_14041a9c0`，没读），这里 `Math.cos` / `Math.sin` 再舍入，可能差 1 ulp。
  * - `mat3·v`（`FUN_140184440`）：`x = (v.y·m10 + v.x·m00) + v.z·m20`、`y = (v.x·m01 + v.y·m11) + v.z·m21`、
  *   `z = (v.x·m02 + v.y·m12) + v.z·m22`，`mij` 是第 i 列第 j 个分量。
- * - `M` 是发射器的控制点 3×3：控制点 0 无旋转时是单位阵，乘上是精确的，省掉（有内容的控制点由 `particle:controlpoint` 挡住）。
+ * - `M` 是发射器的控制点 3×3（`context.basis`，无条件，`0x14023bec7` 起第二次 `FUN_140184440` 的 `rdx = r15`），乘法同上
+ *   （`mulBasis`）；控制点 0 无旋转时是单位阵，乘上是精确的。
  * - 不用 `R`，不置列标志，没有 blend。`audioprocessing*`（乘相位范围）属 P4e，能力表照报。
  */
 export function turbulentVelocityRandom(fields: ParticleFields, context: ParticleRunContext): void {
@@ -128,10 +136,11 @@ export function turbulentVelocityRandom(fields: ParticleFields, context: Particl
   const dz = f32(f32(f32(fx * r02) + f32(fy * r12)) + f32(fz * r22));
   const speedMin = fields.speedmin as number;
   const speed = lerp(speedMin, f32((fields.speedmax as number) - speedMin), random.a());
+  const add = mulBasis(context.basis, [f32(dx * speed), f32(dy * speed), f32(dz * speed)]);
   const { velocity } = columns;
-  velocity[0][slot] = f32(f32(dx * speed) + velocity[0][slot]);
-  velocity[1][slot] = f32(f32(dy * speed) + velocity[1][slot]);
-  velocity[2][slot] = f32(f32(dz * speed) + velocity[2][slot]);
+  velocity[0][slot] = f32(add[0] + velocity[0][slot]);
+  velocity[1][slot] = f32(add[1] + velocity[1][slot]);
+  velocity[2][slot] = f32(add[2] + velocity[2][slot]);
 }
 
 /** `positionoffsetrandom` 启用 `sign` 的门限：`|sign|² > 1.19e-7`（FLT_EPSILON，`0x1401c93ac`，B3）。 */
