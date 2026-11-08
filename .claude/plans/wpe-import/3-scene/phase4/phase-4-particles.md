@@ -148,6 +148,8 @@ const OBJECT_FLAGS = [
 
 ## P4c — 档 3
 
+子计划：[phase-4c-controlpoints.md](phase-4c-controlpoints.md)。`sprite` 的 `orientation`、`axis`、`flags`（语料 7 张，目前不归任何一节）纳入本节步骤 5（2026-11-08 用户）。
+
 **步骤 0：**
 - `spritetrail` 的几何，`length`、`minlength`、`maxlength`。
 - 控制点各字段、坐标空间和父子关系，`locktopointer`。
