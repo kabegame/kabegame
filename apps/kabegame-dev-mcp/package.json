@@ -1,5 +1,9 @@
 {
   "name": "@kabegame/dev-mcp",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^3.25.76"
+  }
 }

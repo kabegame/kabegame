@@ -357,3 +357,57 @@ deno run --allow-net=127.0.0.1,localhost --allow-read --allow-write --allow-env 
 **vite 重启了 3 次：** 接入 1 次、测会话内保持 1 次、修代理 1 次。每次 app 主窗口都会整页刷新。`deno.lock` 没变。
 
 **测试行：** 开发期间导入、移除过两次 `p4c-cp`（14175、14176），都只用 `batch_remove_images` 移除，任务已删。
+
+### 第 2 批 — stdio MCP、迁移与文档（2026-11-08）
+
+依赖由 Claude 在用户停掉 dev 后装：`apps/kabegame-dev-mcp/package.json` 加 `@modelcontextprotocol/sdk` ^1.32.2、`zod` ^3.25.76（对齐 `node_modules` 里已有的 zod，避免装两份），在根 `deno install`。`deno.lock` 里已有包的版本都没变，删掉的行是新 Deno 把 peer 依赖后缀写得更短。代码由子代理实现，Claude 独立验收。
+
+- **新增** `apps/kabegame-dev-mcp/src/`：
+  - `main.ts`：stdio，日志全走 stderr，stdin 结束就退出；
+  - `tools.ts`：22 个工具；
+  - `resources.ts`：5 类资源；
+  - 纯逻辑模块：`status.ts`（两层探活结论）、`appLog.ts`、`hashCompare.ts`；
+  - `sdk.ts`：SDK 门面，见下；
+  - 单测与 `testdata/`。
+- **新增** `.claude/skills/kabegame-plugin/scripts/app-run.ts`，**删除** `app-run.sh`、`.claude/skills/kabegame-chromium/driver.sh`、`cdp.mjs`。
+- **修改**：
+  - `.mcp.json`：加 `kabegame-dev`；
+  - `kabegame-chromium/SKILL.md`：重写；
+  - `kabegame-plugin` 的 `SKILL.md`、`references/webview.md`、`deploy.sh` 注释；
+  - `cocs/debug/DEBUG_INGEST.md`、`cocs/README.md`、`cocs/surf/ANDROID_SURF.md`；
+  - `AGENTS.md`：单体仓库布局加 `apps/kabegame-dev-mcp/`；
+  - `versions/latest/changelog.md`：开发侧一行；
+  - 两处注释：`scripts/vite-debug-server.ts`、`component-plugin.ts`；
+  - `client.ts`：一处 `declare`，见下。
+
+和计划不同、或计划没写、由代理按证据定的：
+
+- **SDK 门面 `sdk.ts`：** Deno 2.9 只认 `exports` 的 `types` 条件，直接 import `@modelcontextprotocol/sdk/server/mcp.js` 时 `deno check` 报 TS2307。运行时不受影响。门面用 `@ts-types` 指向根 `node_modules` 里的声明。
+- **`client.ts` 的 `cause` 改成 `declare readonly`：** `app-run.ts` 不在根 tsconfig 范围里，用 Deno 缺省选项检查时会对 `client.ts` 报 TS4114。
+- **不覆盖已有文件：** `hash_baseline`、`projects_import` 的 `out` 已存在时拒绝，要传 `overwrite: true`。
+- **`app-run.ts`：** `userConfig` 按严格 JSON 解析（原脚本是嵌进 JS 求值），省略配置时缺省 `{}`，用法错误退出码 2；正常输出不变。
+- **curl 示例都带 `--noproxy '*'`：** 本机 curl 访问 127.0.0.1 也走 `HTTP_PROXY`。
+- **工具表是静态的：** vite 不在时 22 个工具照常列出，调用报 `[vite]`。会话里不需要 `tools/list_changed`。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| 单测（Claude 自跑，带代理环境） | `apps/kabegame-dev-mcp/` 12 组 31 步、`scripts/kabegame-dev/` 15 组 65 步全过 |
+| 子进程冒烟（代理） | stdio 拉起 `main.ts`（参数取自 `.mcp.json`）：initialize、tools/list、resources/list、调 `status` |
+| 残留引用 | 全仓库（除 `ignore/`）只剩本计划和 `versions/v4.5.1/regression.md` 提到 `driver.sh` / `cdp.mjs` / `app-run.sh` |
+| dev 晚于会话、会话内可用 | 用户 dev 起来后、MCP 重连，同一会话里工具直接可用 |
+| `status`（Claude 经 MCP） | 两层「就绪」：vite 在，CDP 桌面端口 28159 |
+| `screenshot`（Claude 经 MCP） | `clip` 400×240 在 DPR 1.5 下回 600×360 的 PNG，图片直接回到会话 |
+| `eval` / `invoke` | 主窗口 `/gallery`、1186×763、DPR 1.5；`get_wallpaper_mode` → `window` |
+| `render_scene`（Claude 经 MCP） | 13515 超高档的像素摘要 `3e7c0b7a…` 和画面哈希参照相同；宿主产物已被另一会话重建为 `index--c4joQgu.js`，画面不变；渲染后没有残留宿主 |
+| `hash_compare` | 第 1 批的参照与新跑：30 组全同，并提醒两边是同一份宿主产物 |
+| `projects_import` / `projects_remove`（Claude 经 MCP） | 导入 `p4c-cp` 得到 14177，能渲染；指向官方默认壁纸 13515 的清单被护栏整批拒绝、库不变；按清单移除后行和任务都没了，目录 30 个文件的大小与 mtime 摘要和导入前相同 |
+| `app_log` / `app_state` | 验收期间日志没有 warn 及以上；`app_state` 前后一致 |
+| `app-run.ts`（代理） | 参数解析各错误分支；dev 不在时报错退出 1；对着假 REST 跑「自行结束」「限时取消」两条路径，输出格式和调用顺序同原脚本 |
+
+**没做的：**
+- `app-run.ts` 在真 app 里跑小任务；
+- 去掉 playwright 后桌面 CEF 是否还劫持页面下载（文档写「预期不再劫持，未实测」）；
+- 安卓真机；
+- `versions/latest/regression.md` 没加条目：dev 工具不进发布包。

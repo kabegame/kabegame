@@ -56,8 +56,12 @@ export class KabegameDevError extends Error {
   readonly body: ErrorBody | null;
   /** CDP 不在时的端点结论。 */
   readonly endpoint: EndpointError | null;
-  /** 底层错误（连不上 vite 时的连接异常等）。 */
-  readonly cause: unknown;
+  /**
+   * 底层错误（连不上 vite 时的连接异常等）。用 `declare`：根 tsconfig 的 lib 是 ES2020，`Error` 上没有 `cause`；
+   * 根 tsconfig 之外（如 `.claude/skills/` 下 import 本文件的脚本）按 Deno 缺省选项检查，`Error` 上有 `cause`，
+   * 普通字段会触发 `noImplicitOverride`。`declare` 两边都过。
+   */
+  declare readonly cause: unknown;
 
   constructor(
     layer: string,

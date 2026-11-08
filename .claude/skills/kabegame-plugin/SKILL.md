@@ -24,7 +24,7 @@ K=.claude/skills/kabegame-plugin/scripts
 | `$K/probe.ts media <url> [--referer R]` | Range 拉前 64 字节，按魔数判定是不是真媒体 |
 | `$K/deploy.sh <id> [--release]` | 构建 + 打包到 `.kabegame/debug/data/plugins-directory/<id>.kgpg` |
 | `$K/run-cli.sh <id> [--release] [--id T] [--secs N] [--no-freeze-template] [--var k=v]…` | deploy → CLI（默认 dev）`plugin run <kgpg> --id <id>-test --freeze-template`，限时取消并摘要 |
-| `$K/app-run.sh <id> '<userConfig JSON>' [--secs N]` | 在 dev app 里跑任务（WebView 插件唯一验证途径） |
+| `deno run -A $K/app-run.ts <id> '<userConfig JSON>' [--secs N] [--out DIR]` | 在 dev app 里跑任务（WebView 插件唯一验证途径） |
 | `$K/render-desc.ts <id> --db [--release] [--where <sql>]` | 从库里取真实 metadata 渲染 `description.ejs` 并截图 |
 
 `probe.ts` 用 `deno run -A $K/probe.ts …` 调。所有 probe 都带 Chrome UA；需要时加
@@ -35,7 +35,7 @@ K=.claude/skills/kabegame-plugin/scripts
 先确认：目标站点和入口（排行/搜索/作者/标签/单个作品…）、要哪些配置项、是新插件还是改旧插件。
 
 **改已有插件**：先读 `plugins/kabegame-plugin-<id>/package.json`（`kbBackend`、`main`、`kbConfig`）和源码入口，
-然后**先跑一次复现**（V8 用 `run-cli.sh`，WebView 用 `app-run.sh`），拿到失败的那一环再动手。
+然后**先跑一次复现**（V8 用 `run-cli.sh`，WebView 用 `app-run.ts`），拿到失败的那一环再动手。
 别凭报错描述猜——站点改版、配置写错、登录失效、去重跳过，日志长得完全不一样。
 
 **选后端**——默认 V8，只在必要时 WebView：
@@ -77,15 +77,20 @@ HTML 文字或 `内嵌state` 里——用 `grep -c` 或下一步的 `sel` 确认
    探针阶段用 `--cookie` 手动带上同样的 Cookie 复现。
 3. **Cloudflare/JS 质询、签名参数**：curl 走不通，转 WebView。这时用 `kabegame-chromium`
    skill 连上正在跑的 dev app（`deno task dev -c kabegame` 由用户自己启动），在 app 自己的
-   Chromium 里访问页面：
-   ```bash
-   C=.claude/skills/kabegame-chromium/driver.sh
-   $C targets                                   # 找畅游(surf)或 crawler-<taskId> 窗口
-   $C eval 'location.href' --url surf
-   $C eval 'document.documentElement.outerHTML.length' --url surf
-   $C eval 'Object.keys(window.__INITIAL_STATE__||{})' --url surf
+   Chromium 里访问页面。用 kabegame-dev MCP 工具（先 `status` 确认两层都在）：
+   ```text
+   targets                                                      # 找畅游(surf)或 crawler-<taskId> 窗口
+   eval  target=url:surf  expression=location.href
+   eval  target=url:surf  expression=document.documentElement.outerHTML.length
+   eval  target=url:surf  expression=Object.keys(window.__INITIAL_STATE__||{})
    ```
-   拿到的 `outerHTML` 可存成文件，后面照样用 `probe.ts sel/json` 分析。
+   不经 MCP 时直接打 vite 上的 REST（本机设了 `HTTP_PROXY` 就要 `--noproxy '*'`），或在脚本里用
+   `apps/kabegame-dev-mcp/src/client.ts` 的 `createClient().evaluate(target, expression)`：
+   ```bash
+   curl -s --noproxy '*' localhost:1420/__kabegame_dev/eval \
+     -d '{"target":"url:surf","expression":"document.documentElement.outerHTML"}' > $SP/page.json
+   ```
+   拿到的 `outerHTML`（REST 回 `{ value }`）可存成文件，后面照样用 `probe.ts sel/json` 分析。
    **验证门槛**同上：真实渲染后的 DOM/state 里有目标数据。
 
 ## 第 2 步：提取结构 —— 找到通向图片的字段
@@ -244,13 +249,12 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
 - 模板：`$K/render-desc.ts <id> --db --where "<挑一条信息最全的，比如有评论的>"`，用 Read 看截图，
   和第 2 步的源站截图逐块对照（卡片、标签配色、信息表、评论）。要看到 app 里的真实效果：
   `run-cli.sh` 默认冻结了模板，dev app 运行时直接打开测试 id 那张图的预览即可（模板改了要重跑，
-  旧图仍是旧的冻结模板）；WebView 插件在 dev app 里跑一次（`app-run.sh`）再打开预览：
-  ```bash
-  C=.claude/skills/kabegame-chromium/driver.sh
+  旧图仍是旧的冻结模板）；WebView 插件在 dev app 里跑一次（`app-run.ts`）再打开预览。用 kabegame-dev MCP 工具：
+  ```text
   # 图片网格只在挂载时读一次 URL，只 push pvwimgid 不会打开预览：加完参数再重载页面
-  $C eval "(async()=>{const r=document.querySelector('#app').__vue_app__.config.globalProperties.\$router;await r.push({query:{...r.currentRoute.value.query,pvwimgid:'<图片id>'}});location.reload()})()"
-  sleep 3   # 等重载完成；截图全白就 eval 'document.readyState' 确认后重截
-  $C shot $SP/preview.png
+  eval  target=main  expression=(async()=>{const r=document.querySelector('#app').__vue_app__.config.globalProperties.$router;await r.push({query:{...r.currentRoute.value.query,pvwimgid:'<图片id>'}});location.reload()})()
+  # 等几秒重载完成；截图全白就 eval document.readyState 确认后重截
+  screenshot  target=main  save=<scratchpad>/preview.png
   ```
   看完再把 `pvwimgid` 从 query 里删掉，把用户的界面还原。
 
@@ -262,23 +266,24 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
 
 CLI 本地模式起不了浏览器窗口；dev app 运行时 CLI 会经 IPC 交给主程序，`plugin run` 也能跑 WebView 插件
 （任务在 app 里执行）。下面是在 app 里直接验证的流程，需要用户先启动 `deno task dev -c kabegame`。
-注意 WebView 任务运行期间不要用 kabegame-chromium（playwright）连 CDP：它会劫持页面原生下载，导致
-「Native download failed」。
+原来的 kabegame-chromium 经 playwright 连 CDP，会劫持页面原生下载、导致「Native download failed」。现在的
+kabegame-dev 插件不发 `Browser.setDownloadBehavior`，去掉 playwright 后预期不再劫持，但**未实测**：测
+`onNativeDownload` / 页面原生下载时先确认一次（连着 CDP 跑一次、不连再跑一次，比结果），确认前仍尽量别在任务运行期间连 CDP。
 
 ```bash
 $K/deploy.sh <id>
-$K/app-run.sh <id> '{"mode":"search","search_keyword":"壁纸","max_items":3}' --secs 90
+deno run -A $K/app-run.ts <id> '{"mode":"search","search_keyword":"壁纸","max_items":3}' --secs 90
 ```
 
-`app-run.sh` 依次调用 `refresh_plugins`（让 app 读到刚打包的版本）→ `start_task`（带
-`outputDir`）→ 轮询 `get_task`，超时就 `cancel_task`，最后输出状态、计数、warn/error 分类
-和最后几条日志。任务跑的时候，可以另开终端看爬虫窗口里的真实页面：
+`app-run.ts` 经 kabegame-dev 的 REST（`apps/kabegame-dev-mcp/src/client.ts` 的 `invoke`）依次调用
+`refresh_plugins`（让 app 读到刚打包的版本）→ `start_task`（带 `outputDir`）→ 轮询 `get_task`，超时就
+`cancel_task`，最后输出状态、计数、warn/error 分类和最后几条日志。dev 没跑时直接报「没连上 dev app」。
+任务跑的时候（把 app-run.ts 放后台跑），可以用 kabegame-dev MCP 工具看爬虫窗口里的真实页面：
 
-```bash
-C=.claude/skills/kabegame-chromium/driver.sh
-$C targets                                         # crawler-<taskId> 窗口
-$C eval 'location.href' --url crawler
-$C shot $SP/crawler.png --url crawler              # 截图后用 Read 看一眼
+```text
+targets                                             # crawler-<taskId> 窗口
+eval        target=url:crawler  expression=location.href
+screenshot  target=url:crawler  save=<scratchpad>/crawler.png      # 回图，也可落盘后用 Read 看
 ```
 
 **验证门槛**同 V8；另外要确认每次导航后 `pageLabel` 的阶段日志都按预期出现
@@ -291,7 +296,7 @@ $C shot $SP/crawler.png --url crawler              # 截图后用 Read 看一眼
 - **V8 的 `fetch` 不会按当前页解析相对 URL**：用 `new URL(href, base)`，或者 SDK 的 `resolveUrl`。
 - **`Kabegame.to(url)` + `currentHtml()` 和 `fetch` 不一样**：`to` 会把页面压入 page stack，
   并带上任务请求头和重试；只取 JSON 用 `fetch`。两者都会合并 `setHeader` 设置的请求头。
-- **app 内存里的插件不会自动更新**：打包后必须 `refresh_plugins`（`app-run.sh` 已经做了），
+- **app 内存里的插件不会自动更新**：打包后必须 `refresh_plugins`（`app-run.ts` 已经做了），
   否则 app 跑的还是旧版本。
 - **i18n 占位日志**：下载器的 warn 是 `{"_i18n":{"k":"taskLogDedupByUrl",…}}` 这种原始 JSON，
   摘要按 key 聚合。`taskLogDedupByUrl` 是去重，不是错误。

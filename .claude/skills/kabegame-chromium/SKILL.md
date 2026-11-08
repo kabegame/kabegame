@@ -1,247 +1,233 @@
 ---
 name: kabegame-chromium
-description: 连上跑起来的 kabegame app（桌面 CEF，或经 adb 连 Android dev 包的系统 WebView）做截图与 UI 自动化(CDP)。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态时使用，安卓上看界面 / 跑 JS 加 --android。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
+description: 连上跑起来的 kabegame dev app（桌面 CEF，或经 adb 连 Android dev 包的系统 WebView）做截图与 UI 自动化（CDP），以及调应用命令、操作场景宿主、渲染场景帧、画面哈希、导入 / 移除测试工程、读应用日志。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态 / 调 Tauri 命令 / 渲染某张场景壁纸或比画面哈希时使用；安卓同一套工具，dev 用 --mode android 跑即可。工具经 kabegame-dev MCP（mcp__kabegame-dev__*）或 vite 上的 REST（/__kabegame_dev/*）调用。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
 ---
 
 # kabegame-chromium
 
-让 agent 真正"看到"并操作跑起来的 kabegame app——桌面端（CEF）与 Android dev 包
-（系统 WebView，见下文「Android」）共用同一套 `cdp.mjs`。
+让 agent 真正「看到」并操作跑起来的 kabegame dev app。桌面端跑在自建 CEF runtime（`src-tauri/tauri-runtime-kbcef/`）上，
+Android dev 包跑在系统 WebView 上，两者都是 Chromium，都支持 **CDP（Chrome DevTools Protocol）**。
 
-kabegame 桌面端跑在自建 CEF runtime（`src-tauri/tauri-runtime-kbcef/`）上，本质是
-Chromium，所以支持 **CDP（Chrome DevTools Protocol）**。dev 下调试端口默认开启且
-**端口随机**，app 起来后把实际端口 POST 给 vite dev server，本 skill 只认死端口
-**1420** 去要号，再用 `playwright-core` 的 `connectOverCDP` 连上去截图 / 执行 JS /
-点击。
+**先调 `status`**（MCP 工具，或 `GET /__kabegame_dev/health`）。截图完记得真看一眼——空白帧等于没起来。
+
+## 架构
 
 ```
-deno task dev -c kabegame          用户自己跑（能看到编译进度）
+deno task dev -c kabegame [--mode android]      用户自己跑（能看到编译进度），本 skill 不代起
         │
-        ├── vite            :1420           ← skill 只认这个死端口
-        └── app (CEF)       :<random>       ← 起来后 POST /__kabegame_cdp/register
-                                              把号寄存到 vite（内存 + 落盘）
-skill ── GET :1420/__kabegame_cdp → 拿到 <random> → connectOverCDP
-     └── 要不到 / 号不应答 → lsof 扫 kabegame 进程的监听端口 → 探 /json/version
+        ├── app（CEF，CDP 端口随机）── 起来后 POST /__kabegame_cdp/register ──┐
+        │   安卓：WebView 的 @webview_devtools_remote_<pid> ── adb forward ──┤
+        │                                                                    ▼
+        └── vite :1420 ── kabegame-dev 插件（scripts/kabegame-dev/）
+                          · 找端点（桌面读登记，安卓走 adb），持有唯一一条 CDP 连接
+                          · 状态：宿主句柄、控制台流、长任务
+                          · 对外 REST：/__kabegame_dev/*（JSON 进出，截图回 image/png）
+                                 ▲                         ▲
+            脚本：apps/kabegame-dev-mcp/src/client.ts    stdio MCP「kabegame-dev」（apps/kabegame-dev-mcp/，
+                  或直接 fetch / curl                    Claude Code 按 .mcp.json 拉起）：探活、一对一工具、封装工具
 ```
 
-**发现有两条独立的路**，因为 vite 中转会断：登记原本只是 vite 进程内的内存态，
-而改 `vite.config.ts`（或它 import 的任何本地文件，比如 `scripts/vite-debug-server.ts`）
-都会让 vite restart 并清空它——app 还活着却永远查不到号。现在内存态**同时落盘**到
-`.kabegame/debug/cdp-port.json`，vite 重启后读回；再加一条完全不依赖 vite 的
-`lsof` 扫描兜底。三条路任意一条通就能用。
+- **vite 持有连接和状态**：它本来就是 dev 的集合点，和 app 同生共死。连接是浏览器级 WebSocket + flatten session，
+  只 attach 用到的目标——进得去跨进程的场景宿主 iframe，也不会被别的窗口忙拖住握手。
+- **MCP 只做组合**：不依赖 vite 活着，工具表是静态的。vite 不在时照常列出，调用回 `[vite]`；vite 重启后 REST 没有会话要恢复，
+  下一次调用自然就通，同一个 Claude 会话里一直可用。`.mcp.json` 新加或改了这一项后，用户要在 Claude Code 里 `/mcp` 重连或重开会话。
+- **MCP 工具只经 `client.ts` 调 vite**：`client.ts` 是 REST 唯一的 typed 入口，接口改了要同时改它和工具描述。
 
-**本 skill 不管 dev 的生命周期**。以前它代跑 `deno task dev` 并等就绪，实测很糟：
-Rust 冷编译好几分钟、agent 侧看不到任何进度、还会跟用户已有的实例抢 1420 端口。
-现在检测不到 dev 就直接让用户自己起——在他自己的终端里编译进度是可见的。
-
-**为什么不用 `deno task dev:frontend` + 无头浏览器**：那条路只有 Vite，没有 Tauri
-后端，所有 `invoke`/`listen` 都是 `undefined`，看到的是空数据的空壳；而且
-`__ANDROID__`/`__WEB__` 是编译期 define，浏览器里再怎么缩窗也切不出安卓布局——要看安卓
-布局就用 `--android` 连真机。
-
-下面路径都相对仓库根（脚本自行 cd，任意子目录可调）。
+**为什么不用 `deno task dev:frontend` + 无头浏览器**：那条路只有 Vite，没有 Tauri 后端，所有 `invoke` / `listen` 都是
+`undefined`，看到的是空数据的空壳；而且 `__ANDROID__` / `__WEB__` 是编译期 define，浏览器里切不出安卓布局——要看安卓布局就用
+`--mode android` 连真机。
 
 ## 前置
 
-- 用户自己跑着 `deno task dev -c kabegame`（本 skill 不代跑）。
-  Android 则是 `deno task dev -c kabegame --mode android`，另需 `adb` 与已授权的设备。
-- `node`（≥18，要 `fetch`/`AbortSignal.timeout`）。
-- `playwright-core` 已在仓库根 `node_modules`（随 `bun install` 装好）。
-  **不需要** `npx playwright install` —— `connectOverCDP` 连的是已有 browser，
-  不下载任何浏览器二进制。
+- 用户自己跑着 `deno task dev -c kabegame`（安卓是 `deno task dev -c kabegame --mode android`，另需 `adb` 与已授权的设备）。
+- 场景宿主相关（`host_*`、`render_scene`、`hash_baseline`）：宿主产物要用 `--mode development` 构建（要有 dev 探针）。
+- 不需要 playwright，也不用装浏览器。
 
-## 用法
+## MCP 工具（`mcp__kabegame-dev__*`）
 
-```bash
-S=.claude/skills/kabegame-chromium/driver.sh
+失败时结果是 `isError`，文本第一行 `[层] 说明`：`[vite]` 第 1 层 vite 不在；`[cdp]` 第 2 层 CDP 不在；`[handle]` 句柄 / 任务 /
+控制台流不存在（vite 重启过）；`[target]` 找不到目标；`[page]` 页面里出错；`[app]` 应用命令拒绝；`[host]` 场景宿主；`[guard]`
+测试工程护栏；`[platform]` 平台不支持；`[job]` 任务没成功；`[local]` MCP 本地（参数 / 文件）。
 
-$S status                     # dev server / CDP 端口 状态
-$S port                       # 打印发现到的 CDP 端口
-$S targets                    # 列出所有 page（主窗口/壁纸/crawler/surf）
-$S shot /tmp/a.png            # 截图（视口）
-$S shot /tmp/a.png --full     # 整页截图
-$S eval 'document.title'      # 页面内求值，打印 JSON
-$S click '.sidebar-menu-item' # 点击
-$S text '.page-header .title' # 取元素文本
-```
+目标写法：`main`（主窗口，缺省）/ `wallpaper`（壁纸窗口）/ `url:<URL 子串>`（page 优先，其次 iframe）/
+`host:<宿主句柄或 kbInstance>`。参数里的相对路径一律按仓库根解析。
 
-截图完记得用 Read 真看一眼——空白帧等于没起来。
+| 工具 | 做什么 | 要 vite | 平台 |
+|---|---|---|---|
+| `status` | 两层探活：vite 在不在；经 vite 问 CDP 在不在。不在时报可能原因和下一步 | 不要（探的就是它） | 都有 |
+| `targets` | page 与 iframe 目标（URL、类型、父目标、角色 main / wallpaper / scene-host） | 要 | 都有 |
+| `eval` | 目标页面里求值（表达式或语句块，Promise 会等） | 要 | 都有 |
+| `screenshot` | 截图，`selector` / `clip`（CSS 像素矩形 `{x,y,width,height,scale?}`）/ `fullPage` 三选一；回 image，可 `save` 落盘 | 要 | 都有 |
+| `click`、`text` | 取元素中心派发鼠标事件（强制，不等可操作性）；取 innerText | 要 | 都有 |
+| `invoke` | 调 Tauri 命令（主窗口里的 `__TAURI_INTERNALS__.invoke`） | 要 | 都有 |
+| `console` | `start` / `read`（`since`）/ `stop`：按目标收集控制台消息与未捕获异常 | 要 | 都有 |
+| `app_state` | 当前壁纸、模式、暂停、启用、后处理、过渡、样式、轮播、路由、现有宿主 | 要 | 都有 |
+| `android_screen` | adb 整屏截图（含系统栏、原生对话框） | 要 | 安卓 |
+| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧 | 要 | 桌面 |
+| `projects_remove` | 按清单移除测试工程（只 `batch_remove_images`） | 要 | 桌面 |
+| `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
+| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据 | 要 | 桌面 |
+| `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
+| `projects_import` | 导入 `ignore/` 下的测试工程并等完成，清单写 `out` | 要 | 桌面 |
+| `hash_compare` | 只读两份基线，按 `input.path` 对应，比哈希与 unsupported | 不要 | — |
+| `app_log` | `mark` / `since`（跨日期）/ `tail`，直接读 `.kabegame/debug/data/logs/kabegame.<UTC 日期>.log` | 不要 | — |
 
-`status` 的三种结局，对应三种下一步：
+资源：`kabegame-dev://health`（同 `status`）、`kabegame-dev://targets`、`kabegame-dev://jobs`、`kabegame-dev://jobs/{id}`、
+`kabegame-dev://app-log/{date}`（某天最后 2000 行，不需要 vite）。
 
-| status 输出 | 含义 | 下一步 |
+## REST（`/__kabegame_dev/*`，vite 上）
+
+请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`）。出错回 `{ error, layer, … }`：参数错 400；来源不对、
+测试工程护栏 403；句柄或任务不存在 404（提示 vite 可能重启过）；页面抛错、找不到目标或元素、应用命令被拒 422；宿主产物问题 409；
+CDP 不可用 503（带 `endpoint` 结论）；超时 504；插件内部错误 500。
+
+| 方法 与 路径 | 做什么 | 平台 |
 |---|---|---|
-| vite `无应答 ❌` + `CDP: 未发现 ❌` | dev 没跑 | 请用户跑 `deno task dev -c kabegame` |
-| vite 活着 + `CDP: 未发现 ❌` | app 还没起/还在编译 | 等编译完；或该实例早于本功能，需重启 dev |
-| `就绪 ✅` | 可用 | 直接 shot/eval/click |
+| `GET /health` | `{ vite: true, android, cdp: 端点或端点错误, session }`，每次现探 CDP | 都有 |
+| `GET /targets` | page 与 iframe 目标 | 都有 |
+| `POST /eval` | `{ target, expression, timeoutMs? }` → `{ value, type }` | 都有 |
+| `POST /screenshot` | `{ target, selector? \| clip? \| fullPage? }` → PNG | 都有 |
+| `POST /click`、`POST /text` | `{ target, selector }` | 都有 |
+| `POST /invoke` | `{ command, args? }` → `{ value }` | 都有 |
+| `POST /console`、`GET /console/:id?since=`、`DELETE /console/:id` | 开始收集 / 取新增 / 停 | 都有 |
+| `GET /app/state` | 应用状态快照 | 都有 |
+| `GET /android/screen` | `adb exec-out screencap` → PNG | 安卓 |
+| `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
+| `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time?, postprocess?, userProperties?, pointer? }` → `{ meta, png(base64), pngSha256 }` | 桌面 |
+| `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |
+| `POST /jobs` | `{ kind: "host-task" \| "hash-baseline" \| "projects-import", params }` → 任务记录 | 桌面 |
+| `GET /jobs`、`GET /jobs/:id`、`DELETE /jobs/:id` | 列出 / 查（状态、进度、结果）/ 取消 | 都有 |
 
-vite 无应答但 CDP `就绪 ✅` 是**正常且可用**的：只重启了 vite、或直接跑了编好的
-dev 二进制时，扫描兜底照样能找到 app。`CDP 登记 : <旧号>（已陈旧…）` 这行也不是
-错误，只是说明 vite 上那条记录过期了，已自动回落到扫描。
+## 脚本写法
 
-### 选窗口
+验收脚本不必经 MCP，直接用 typed 客户端（Deno 跑；Node 能直接跑 TS 时也行）：
 
-kabegame 同时开着多个 CEF 窗口，实测 `targets` 输出：
-
+```ts
+import { createClient } from "../../apps/kabegame-dev-mcp/src/client.ts"; // 按脚本位置写相对路径
+const dev = createClient(); // 端口取 KABEGAME_DEV_SERVER_PORT，缺省 1420
+console.log(await dev.health());
+const mode = await dev.invoke("get_wallpaper_mode");
+const png = await dev.screenshot("main", { clip: { x: 0, y: 0, width: 200, height: 100 } });
+const job = await dev.jobStart("hash-baseline", { from: "ignore/p4/c1/out/hash-after.json" });
+const done = await dev.waitJob(job.id, { onProgress: (p) => console.error(p) });
 ```
-http://localhost:1420/index.html?window=wallpaper    ← 壁纸窗口（排在前面！与主窗口同一个 index.html）
-http://localhost:1420/gallery           ← 主窗口（SPA，路径随路由变）
-```
 
-不传 `--url` 时走 `isMainWindow()` 启发式：**应用自身页面（:1420、`tauri:` 或 Android 的 `tauri.localhost`）且
-路径不以 `.html` 结尾**。别退回成子串匹配——`localhost:1420` 会同时命中壁纸窗口，
-而壁纸排在前面，结果就是截到一张全屏壁纸而不是 UI。
-
-要操作别的窗口先 `targets` 看 URL，再用 `--url` 显式指定：
+出错统一抛 `KabegameDevError`，`layer` 同上。也可以直接 curl（本机设了 `HTTP_PROXY` 时要加 `--noproxy '*'`，否则请求会交给代理）：
 
 ```bash
-$S targets
-$S shot /tmp/wp.png --url wallpaper
-$S shot /tmp/surf.png --url surf
+curl -s --noproxy '*' localhost:1420/__kabegame_dev/health
+curl -s --noproxy '*' localhost:1420/__kabegame_dev/eval -d '{"target":"url:surf","expression":"location.href"}'
+curl -s --noproxy '*' localhost:1420/__kabegame_dev/screenshot -d '{"target":"main"}' -o shot.png
 ```
 
-`isMainWindow()` 的「路径不以 `.html` 结尾」对壁纸窗口仍成立（路径是 `/index.html`，主窗口是 `/` 或路由路径），
-`--url wallpaper` 子串仍能选中它。
+`client.ts` 内部用 `node:http` 直连（`localHttp.ts`），不读代理环境变量，不需要 `NO_PROXY`。
 
-**Windows 上壁纸窗口挂到 `WorkerW` 后 CDP 截不到图**：`shot --url wallpaper` 与裸 `Page.captureScreenshot` 都会等帧
-超时。这**不是**页面降频——2026-10-26 在页面内直接计时：rAF 稳定 ~144Hz（dev 调试面板 `.debug-panel` 第一行有
-MIN / AVG 帧率），fade 过渡 prep → enter 相隔 10ms、提交由 800ms `transitionend` 触发；之前「rAF 约 1s、靠 1400ms
-兜底」的记录是用 CDP 轮询类名造成的测量假象。要测壁纸窗口的时序，在页面里装 `MutationObserver` / `performance.now()`
-记时间线，再一次性读出，不要靠多次 eval 推算。验证壁纸窗口改用 `eval --url wallpaper`
-读 DOM（`img.base` 的 `naturalWidth`、`<video>` 的 `paused` / `volume` / `playbackRate`、dev 调试面板 `.debug-panel`
-的文字）。另外 playwright 的 `connectOverCDP` 会 attach 全部 page，任一窗口忙（如本机在跑 cargo）都会让
-所有命令握手超时；此时可直连单个 page 的 `webSocketDebuggerUrl`（`/json/list`）发 `Runtime.evaluate`。
+## 长任务
 
-## Android（`--android`）
+画面哈希要渲染几十次、导入要等后台任务完成，都是几分钟的事，由 vite 的任务表跑：`POST /jobs` 立刻回任务 id，再查进度和结果；
+结束的任务只留最近 20 个。MCP 的 `hash_baseline`、`projects_import` 自己起任务并等完成，期间发 MCP 进度通知；`job wait` 等任意任务。
+MCP 请求被取消时会顺手取消 vite 里的任务（协作式）。
 
-Android 不用 CEF，但系统 WebView 本身就是 Chromium：Tauri 在 `devtools: true`
-（`tauri.conf.json.handlebars` 里是 `{{isDev}}`）时由 wry 调
-`WebView.setWebContentsDebuggingEnabled(true)`，WebView 便在设备上监听 abstract unix
-socket `@webview_devtools_remote_<pid>`（`chrome://inspect` 走的也是它）。
-`adb forward` 到本机端口后就是**真正的 CDP 端点**，不是模拟——`cdp.mjs` 原样可用。
+- `hash_baseline`：每张场景按档位（缺省 disabled / enabled / ultra）、固定时刻（缺省 1.5 s）各渲染两次，两次不同就停；格式同旧
+  `hash-*.json`。`from` 给旧基线时按 `input.path` 找库里现在的图片 id（测试工程重新导入后 id 会变）。`out` 已存在时拒绝，除非
+  `overwrite: true`。10 张 × 3 档约 90 s。
+- `hash_compare`：A、B 按 `input.path` 对应；sha256、stable、postprocess、bloomLevels、尺寸、格式、unsupported（按集合）、输入算差异；
+  targetBytes、metadataId 单独列。两边是同一份宿主产物时会提醒「相同只说明可复现」。
+- `projects_import` → `projects_remove`：清单 `{ <目录>: { image, task, preexisting } }`，移除时 `manifestFile` 传同一个文件。
+
+## Android
+
+dev 用 `--mode android` 跑时 vite 就知道是安卓（`vite.config.pub.ts` 的 `isAndroid`），端点改由 vite 经 adb 现找：
 
 ```
-deno task dev -c kabegame --mode android     用户自己跑（或手机上直接打开已装的 dev 包）
-skill ── adb shell pidof app.kabegame.dev → <pid>
-     ├── /proc/net/unix 里确认 @webview_devtools_remote_<pid> 存在
-     ├── adb forward --list 有同 socket 的转发且应答 → 复用；否则 adb forward tcp:0 → <port>
-     └── connectOverCDP 127.0.0.1:<port>
+adb shell pidof app.kabegame.dev → <pid>        （KABEGAME_ANDROID_PACKAGE 可覆盖包名，ANDROID_SERIAL 选设备；都是 vite 进程的环境变量）
+├── /proc/net/unix 里确认 @webview_devtools_remote_<pid> 存在
+├── adb forward --list 有指向这个 socket 且应答的转发 → 复用；否则 adb forward tcp:0 新建
+└── 移除指向别的 webview_devtools_remote_* 的旧转发
 ```
 
-```bash
-$S status --android                 # 设备 / pid / socket / 转发端口
-$S port --android                   # 打印转发后的本机 CDP 端口
-$S shot /tmp/a.png --android        # WebView 截图（物理像素，如 1080x2400）
-$S eval 'innerWidth' --android      # 360（CSS 像素，DPR 3）
-$S click '.foo' --android
-$S screen /tmp/full.png --android   # adb screencap 整屏（含系统栏 / 原生对话框）
-```
+- **只对 dev 包有效**：prod 包 `app.kabegame` 的 devtools 为 false，没有调试 socket。
+- **pid 每次启动都会变**，所以每次连接前都重新 `pidof`；转发端口不缓存。
+- **主窗口 URL 是 `http://tauri.localhost/...`**（dev 也一样，不是 `:1420`），`main` 已认这个 host。
+- **CDP 截图只有 WebView 内容**：系统状态栏、原生权限弹窗、通知、Kotlin 侧 UI（如 picker）都截不到，要看就用 `android_screen`。
+- 场景宿主、渲染、测试工程、起任务只在桌面，安卓上报 `[platform]`。
 
-`--android` 可放在任意位置，也可设 `KABEGAME_ANDROID=1`。
-
-要点：
-
-- **只对 dev 包有效**：默认包名 `app.kabegame.dev`；prod 包 `app.kabegame` 的
-  devtools 为 false，没有调试 socket。`KABEGAME_ANDROID_PACKAGE` 可覆盖包名。
-- **pid 每次启动都会变**，所以端口不能缓存——驱动每次调用都重新 `pidof` 并核对转发，
-  顺手 `adb forward --remove` 指向其它 `webview_devtools_remote_*` 的陈旧条目。
-- **主窗口 URL 是 `http://tauri.localhost/...`**（dev 也一样，不是 `:1420`），
-  `isMainWindow()` 已认这个 host，不必传 `--url`。
-- **CDP 截图只有 WebView 内容**：系统状态栏、原生权限弹窗、通知、Kotlin 侧 UI
-  （如 picker）都截不到，要看就用 `screen`。
-- **多台设备**时设 `ANDROID_SERIAL`（adb 原生识别）。
-- 没有 vite 端口登记这条链路：Android app 不向 vite 上报，一切以 adb 为准。
-
-| 报错 | 处理 |
+| `status` 第 2 层的端点层 | 处理 |
 |---|---|
-| `adb 没有可用设备` | `adb devices` 看是否未授权 / 多台设备未设 `ANDROID_SERIAL` |
-| `设备上没有在跑的 app.kabegame.dev` | 请用户跑 `deno task dev -c kabegame --mode android` 或手机上打开 dev 包 |
-| `没有 WebView 调试 socket` | 装的是 prod 包，或 WebView 还没创建完 |
+| `adb` | 找不到 adb：platform-tools 没装或不在 vite 进程的 PATH 里 |
+| `device` | `adb devices` 看是否未授权 / 多台设备未设 `ANDROID_SERIAL` |
+| `app` | 请用户跑 `deno task dev -c kabegame --mode android` 或手机上打开 dev 包 |
+| `socket` | 装的是 prod 包，或 WebView 还没创建完 |
+| `forward` | 转发建不起来或不应答，`adb forward --list` 看看 |
 
-## 端口是怎么串起来的
+## 端点链路
 
-改动点分布在四处，排查时按这条链走：
+排查「找不到 CDP」时按这条链走：
 
-1. `scripts/plugins/component-plugin.ts` — dev（且非 CLI）注入
-   `KABEGAME_CEF_DEBUG_PORT=random`。**只在 dev 注入**，build/打包路径不经过这里。
-   显式设了这个 env（含 `=0` 关闭）时尊重用户的值。
-2. `src-tauri/tauri-runtime-kbcef/src/runtime.rs` — `remote_debugging_port()` 解析
-   `random` → 内核分配空闲回环端口，结果 memoize 在 `OnceLock`（每次重算会让
-   `CefSettings` 里 bind 的端口和事后上报的对不上）。command-line hook 用的是
-   `remote_debugging_requested()`（纯 env 判断，不分配端口）——它在每个子进程都跑，
-   去分配端口有概率抢掉 browser 进程要用的号。
-3. `src-tauri/kabegame/src/debug_ingest.rs` — `spawn_cdp_register()` 轮询
-   `/json/version` 直到真的应答，**然后**才 POST 给 vite。所以"vite 上有端口"
-   等价于"CDP 已就绪"。
-4. `scripts/vite-debug-server.ts` — `/__kabegame_cdp/register`（POST 登记）与
-   `/__kabegame_cdp`（GET 查询）。登记是进程内内存态**并落盘**到
-   `.kabegame/debug/cdp-port.json`（gitignored），GET 时内存为空就读回文件——vite
-   restart 会重建 plugin 实例、清空闭包变量，落盘是这条链路唯一跨得过重启的环节。
-5. `driver.sh` 的 `discover_port()` — 上面整条链都失灵时的兜底：
-   `lsof -a -c kabegame` 列出 app 自己的监听端口，逐个探 `/json/version`。
+1. `scripts/plugins/component-plugin.ts` — dev（且非 CLI）注入 `KABEGAME_CEF_DEBUG_PORT=random`。**只在 dev 注入**，build / 打包
+   路径不经过这里。显式设了这个 env（含 `=0` 关闭）时尊重用户的值。
+2. `src-tauri/tauri-runtime-kbcef/src/runtime.rs` — `remote_debugging_port()` 解析 `random` → 内核分配空闲回环端口，结果 memoize 在
+   `OnceLock`（每次重算会让 `CefSettings` 里 bind 的端口和事后上报的对不上）。command-line hook 用的是 `remote_debugging_requested()`
+   （纯 env 判断，不分配端口）——它在每个子进程都跑，去分配端口有概率抢掉 browser 进程要用的号。
+3. `src-tauri/kabegame/src/debug_ingest.rs` — `spawn_cdp_register()` 轮询 `/json/version` 直到真的应答，**然后**才 POST 给 vite。
+   所以「vite 上有登记」等价于「CDP 曾经就绪」。
+4. `scripts/vite-debug-server.ts` — `/__kabegame_cdp/register`（POST 登记）与 `/__kabegame_cdp`（GET 查询）。登记在模块级内存里，
+   **并落盘**到 `.kabegame/debug/cdp-port.json`（gitignored）；`currentCdpRegistration` 内存优先、没有再读落盘。vite 重启会清空内存，
+   落盘是这条链路唯一跨得过重启的环节。
+5. `scripts/kabegame-dev/endpoint.ts` — `resolveEndpoint`：桌面读登记，再用 `/json/version` 的 `webSocketDebuggerUrl` 验活；安卓走上面的
+   adb 流程。没有别的发现途径（不再扫端口）。
+6. `scripts/kabegame-dev/session.ts` — 懒建立唯一一条浏览器级 WebSocket，断开后下一次请求经 `resolveEndpoint` 重连；连接换过，
+   旧句柄失效（报 `[handle]`）。
+7. `scripts/kabegame-dev/rest.ts` → `apps/kabegame-dev-mcp/src/client.ts` → MCP 工具。
 
 ## Gotchas
 
-- **登记没有撤销机制**。app 退出后 vite 与磁盘上都仍留着旧端口，所以驱动在用之前
-  会再探一次 `/json/version`；探不通就回落到扫描，扫不到才报"app 已退出或正在重启"。
-- **vite 重启曾经会丢号**（改 `vite.config.ts` 或它 import 的本地文件都会触发
-  restart）。落盘 + 扫描兜底之后不再需要重启 app —— 但如果你在排查历史现象，这就是
-  "app 明明开着却查不到端口"的根因。注意 `uno.config.ts` **不**触发 restart，它不在
-  vite 的 config 依赖里。
-- **`cdp_up` 必须校验 `webSocketDebuggerUrl`，不能只看 HTTP 状态码**：vite 的 SPA
-  fallback 对任意路径都回 200 text/html，扫到 1420 会被它骗过去。
-- **`lsof` 的 `-a` 不能省**：多个选择项默认取**并集**，漏了 `-a` 的
-  `lsof -iTCP -sTCP:LISTEN -c kabegame` 会列出本机所有监听端口。
-- **随机端口有极小的 TOCTOU 窗口**：探号的 socket 释放后、CEF 真正 bind 前，别的进程
-  可能抢先占上。表现为 CDP 起不来，重启 dev 换个号即可。
-- **别靠包装 `window.__TAURI_INTERNALS__.invoke` 统计 IPC 调用**：它是不可写、不可配置的属性，
-  `eval` 里赋值静默失败，计数恒为空，会被误读成「没有调用」；CEF 下普通 invoke 走
-  `fetch(ipc://)` 主通道，回退时走 `cef-ipc://` postMessage 桥，抓网络请求看不全。要观测调用次数 / 顺序，用
-  `cocs/debug/DEBUG_INGEST.md` 的 debug ingest 插桩（前端 `sendDebugEvent`），本 skill 只负责驱动 UI。
-- **`click` 默认带 `force: true`**。页面上的亀ちゃん吉祥物（`.kamechan-mascot`）
-  是常驻浮层，经常盖住侧栏底部，普通 click 会一直等 actionability 直到超时。
-- **不要把 `http://host:port` 直接喂给 `connectOverCDP`**：playwright 会拼成
-  `/json/version/`（尾斜杠），Chromium 对此返回 400 并报 "This does not look like
-  a DevTools server"。`cdp.mjs` 已改为先 fetch `/json/version` 取
-  `webSocketDebuggerUrl` 再连——这是实测踩出来的，别改回去。
-- **安全**：调试端口一开，本机任意进程都能完全控制该 browser（读 cookie、执行
-  任意 JS）。所以：只在 **dev** 注入、端口**随机**、**发布包默认不监听**。要在 dev
-  下关掉就 `KABEGAME_CEF_DEBUG_PORT=0`。别把这个 env 写进 shell profile。
-- app 侧还有 `--remote-allow-origins=*`（Chromium 111+ 要求 CDP WebSocket 握手带
-  白名单 origin，否则 403），仅在端口确实开启时追加。
-- **`cef-example` 不走这条路径**。它在 `examples/cef-example.rs` 里有自己独立的
-  `Settings`，改 `runtime.rs` 不影响它，也没法拿它验证 CDP。
-- **playwright 连接会劫持页面触发的下载**。`connectOverCDP` 附着时对 browser/context
-  下发 `Browser.setDownloadBehavior allowAndName`，导航/链接触发的下载被 CDP 层截走存进
-  `playwright-artifacts-*`，**CEF 的 `CefDownloadHandler`（`on_before_download` 等）完全
-  收不到**，且断开连接后该行为仍残留在 browser 上——之后不经 CDP 的手动下载也被吞。
-  `host.start_download()` 显式触发的下载不受影响。要测试真实下载链路：保持单条连接，
-  连接后先对 browser 级 + `Target.getBrowserContexts` 的每个 context 发
-  `Browser.setDownloadBehavior {behavior:"default"}` 再触发（参考实测：驱动每次调用都是
-  新 playwright 连接，会重新注入劫持，所以"改回 default"和"触发下载"必须在同一连接内完成）。
-  **Android WebView 同样会被劫持，且改回 `default` 也无效**：连过 CDP 之后，页面附件下载
-  （含 http 的 `Content-Disposition: attachment`）都不再触发 `setDownloadListener` 的
-  `onDownloadStart`，WebView 照样发了请求，服务端看得到 GET。测页面自发下载必须先强制停止应用、
-  全程不连 CDP，由人在手机上点，靠 logcat / debug ingest 被动观察。
-
-## Troubleshooting
-
-| 症状 | 处理 |
-|---|---|
-| `没检测到 dev server` | 让用户跑 `deno task dev -c kabegame`，别代跑 |
-| `查不到 CDP 端口（vite 上没登记，本机也没扫到）` | app 还在编译；或 dev 实例早于本功能（重启）；或 `=0` 关掉了 |
-| `登记的端口不应答，本机也没扫到别的` | app 已退出/热重启中，等它起来 |
-| 扫描兜底不生效（Windows） | git bash 里通常没有 `lsof`，此时只剩 vite 中转（内存 + 落盘）这一条路 |
-| `没有 URL 含 ...` 的 page | 窗口还没渲染完，或主窗口关了。`targets` 看实际 URL |
-| 截图全白 | 页面还在加载；`eval 'document.readyState'` 确认，或 sleep 后重截 |
-| `无法加载 playwright-core` | 仓库根跑 `bun install` 恢复依赖 |
-| 点击超时 | 目标被浮层遮住；`cdp.mjs` 已 force，若仍失败检查选择器是否命中隐藏元素 |
-| `eval` 查 DOM 少了某些条目 | 工具箱里 `整理`/`检查更新` 是自定义 `comp`，渲染在 `.tool-row-comp` 而非 `.tool-row`，选择器要带上 |
-| 截到的是全屏壁纸 | 选中了壁纸窗口（`index.html?window=wallpaper`）。别用 `--url localhost:1420`，用默认启发式 |
+- **不经 vite 跑 dev 二进制时没有这组工具**：端点只从 vite 的登记里来。只重启 vite 时登记有落盘，起来就恢复。
+- **vite 重启会丢句柄、任务和控制台流**（改 `vite.config.*` 或它 import 的本地文件，包括 `scripts/kabegame-dev/` 与
+  `scripts/vite-debug-server.ts`，vite 都会自己重启一次，app 页面随之整页刷新）。旧 id 回 404 `[handle]`，重开即可；
+  vite 关闭时会移除它开的屏外 iframe、取消任务。`uno.config.ts` 不在 vite 的 config 依赖里，不触发重启。
+- **登记没有撤销机制**：app 退出后 vite 与磁盘上都仍留着旧端口，所以每次用之前都验 `/json/version`；不应答就报第 2 层 `cdp`。
+- **验活必须看 `webSocketDebuggerUrl`，不能只看 HTTP 状态码**：vite 的 SPA 兜底对任意路径都回 200 text/html。
+- **随机端口有极小的 TOCTOU 窗口**：探号的 socket 释放后、CEF 真正 bind 前，别的进程可能抢先占上。表现为 CDP 起不来，重启 dev 换个号即可。
+- **场景宿主要用 `--mode development` 构建**：dev 探针（`window.__kabegameSceneProbe`，在 `apps/wpe-scene/src/dev/`）只在 development
+  构建里有；没有探针时 `host_open` 报 `[host]`。探针接口（`renderFrame`、`chunk`）改了要同步 `scripts/kabegame-dev/scene.ts`。
+- **只信任新加载的宿主**：只认「文档入口脚本 = 磁盘上 `<target>/debug/resources/wpe-scene/index.html` 的入口脚本」的新 frame
+  （P3c 的教训：旧 frame 跑旧代码，档位选项会被悄悄忽略）。宿主产物重新构建后，旧宿主不会被复用。
+- **屏外宿主截不到图**：`screenshot` 报 `[host]`，取画面用 `render_scene` / `host_render`。非屏外宿主（主窗口预览）按 iframe 位置从主窗口截。
+- **`host_open hidden:false` 与关预览依赖 Vue 内部**（`openPreviewById` / `closePreview`），前端改了可能失效，失败时报原因；缺省的屏外宿主不碰用户的预览。
+- **测试工程只移除、不删除**：`projects_remove` 只调 `batch_remove_images`，不删磁盘文件；只动目录在仓库 `ignore/` 之下（且在
+  `allowPrefix` 之下）的行，任务也必须是只导入这些目录、已结束的 `wpe-import`，有一行不符就整批拒绝、库不变。**绝不调
+  `batch_delete_images`**（会连源文件一起删），`invoke` 里也不要调。验收后核对没有残留行与任务。
+- **Windows 上壁纸窗口挂到 `WorkerW` 后 CDP 截不到图**：`screenshot target=wallpaper` 等帧超时（`[page]`）。这**不是**页面降频——
+  2026-10-26 在页面内直接计时：rAF 稳定约 144Hz（dev 调试面板 `.debug-panel` 第一行有 MIN / AVG 帧率），fade 过渡 prep → enter 相隔
+  10ms、提交由 800ms `transitionend` 触发。要测壁纸窗口的时序，在页面里装 `MutationObserver` / `performance.now()` 记时间线，再一次性
+  读出，不要靠多次 eval 推算。验证壁纸窗口改用 `eval target=wallpaper` 读 DOM（`img.base` 的 `naturalWidth`、`<video>` 的 `paused` /
+  `volume` / `playbackRate`、`.debug-panel` 的文字）。
+- **截到全屏壁纸**：选中了壁纸窗口（`index.html?window=wallpaper`）。`main` 的规则是「应用自身页面（:1420、`tauri:` 或
+  `tauri.localhost`）且路径不以 `.html` 结尾」；别用 `url:localhost:1420`，它会同时命中壁纸窗口。
+- **`click` 是强制点击**：页面上的亀ちゃん吉祥物（`.kamechan-mascot`）是常驻浮层，经常盖住侧栏底部；点不到时检查选择器是否命中隐藏元素。
+- **`eval` 查 DOM 少了某些条目**：工具箱里 `整理` / `检查更新` 是自定义 `comp`，渲染在 `.tool-row-comp` 而非 `.tool-row`。
+- **截图全白**：页面还在加载；`eval document.readyState` 确认，或稍等后重截。
+- **别靠包装 `window.__TAURI_INTERNALS__.invoke` 统计 IPC 调用**：它是不可写、不可配置的属性，赋值静默失败，计数恒为空，会被误读成
+  「没有调用」；CEF 下普通 invoke 走 `fetch(ipc://)` 主通道，回退时走 `cef-ipc://` postMessage 桥，抓网络请求看不全。要观测调用次数 /
+  顺序，用 `cocs/debug/DEBUG_INGEST.md` 的 debug ingest 插桩（前端 `sendDebugEvent`），本 skill 只负责驱动 UI。
+- **下载行为**：原来的 playwright 连接会下发 `Browser.setDownloadBehavior`，把页面触发的下载截走、且断开后仍残留，CEF 的
+  `CefDownloadHandler` 收不到。kabegame-dev 插件不发 `Browser.setDownloadBehavior`、不开全局 auto-attach，**预期不再劫持桌面 CEF 的
+  下载，但未实测**；测 WebView 插件的页面自发下载前先实测一次，再改这条。
+- **Android WebView 连过 CDP 之后，页面附件下载（含 http 的 `Content-Disposition: attachment`）都不再触发 `setDownloadListener` 的
+  `onDownloadStart`**，WebView 照样发了请求、服务端看得到 GET，且改回 `default` 也无效（和 playwright 无关）。测页面自发下载必须先
+  强制停止应用、全程不连 CDP，由人在手机上点，靠 logcat / debug ingest 被动观察。
+- **安全**：调试端口一开，本机任意进程都能完全控制该 browser（读 cookie、执行任意 JS）。所以只在 **dev** 注入、端口**随机**、
+  **发布包默认不监听**；要在 dev 下关掉就 `KABEGAME_CEF_DEBUG_PORT=0`，别把这个 env 写进 shell profile。app 侧还有
+  `--remote-allow-origins=*`（Chromium 111+ 要求 CDP WebSocket 握手带白名单 origin，否则 403），仅在端口确实开启时追加。
+  REST 只接受回环地址的请求，带 `Origin` 时只认 localhost / 127.0.0.1 / [::1]，`Host` 也只认这几个（防 DNS 重绑定）。
+- **`cef-example` 不走这条路径**：它在 `examples/cef-example.rs` 里有自己独立的 `Settings`，改 `runtime.rs` 不影响它，也没法拿它验证 CDP。
 
 ## 相关
 
 - `.cursor/rules/debug-empirically.mdc` —— 调试要跑真东西，lint 证明不了运行时行为。
-- `cocs/debug/DEBUG_INGEST.md` —— 另一条调试路子：前端/Rust 插桩事件汇总到 NDJSON，
-  与本 skill 共用 `scripts/vite-debug-server.ts` 这个 vite 侧通道。
+- `cocs/debug/DEBUG_INGEST.md` —— 另一条调试路子：前端 / Rust 插桩事件汇总到 NDJSON，与本 skill 共用 `scripts/vite-debug-server.ts`
+  这个 vite 侧通道（CDP 端口寄存）。
+- `.claude/plans/tools/kabegame-chromium-lib.md` —— 本套工具的设计与实施记录。
 - `src-tauri/tauri-runtime-kbcef/README.md` —— CEF backend 架构。

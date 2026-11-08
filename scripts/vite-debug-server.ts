@@ -12,16 +12,17 @@ const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
  * app 上报的 CEF CDP 端口。
  *
  * dev 下 CDP 端口是随机的（`KABEGAME_CEF_DEBUG_PORT=random`），而 vite 的 1420 是
- * 死端口，所以让 app 把号寄存在这里当集合点：`.claude/skills/kabegame-chromium/`
- * 只探 1420 就能拿到端口。
+ * 死端口，所以让 app 把号寄存在这里当集合点：同一个 vite 里的 `kabegame-dev` 插件
+ * （`scripts/kabegame-dev/`）经 `currentCdpRegistration` 读它、持有 CDP 连接，对外提供
+ * `/__kabegame_dev/*` 的 REST（kabegame-chromium skill 与 kabegame-dev MCP 都经它）。
  *
  * 登记**同时写盘**（`.kabegame/debug/cdp-port.json`），vite 启动时读回：
  * 改 `vite.config.ts` 会让 vite restart，而 restart 重建 plugin 实例、清空闭包里的
  * 内存态；app 侧只在启动时上报一次且失败即放弃，于是 app 还活着却永远查不到端口。
  * 实测：POST 登记 → touch vite.config.ts → GET 变 404。落盘是这条链路唯一的持久环节。
  *
- * 文件可能是陈旧的（app 退出不会撤销登记），所以读回来的号照旧要探活——skill 与
- * 本文件的 GET 分支都不假设它一定还活着。
+ * 文件可能是陈旧的（app 退出不会撤销登记），所以读回来的号照旧要探活——kabegame-dev
+ * 插件与本文件的 GET 分支都不假设它一定还活着。
  */
 export interface CdpRegistration {
   port: number;

@@ -104,7 +104,10 @@ await main();
 
 ## 调试真实页面
 
-任务运行中可以用 `kabegame-chromium` 连到 `crawler-<taskId>` 窗口：`targets` 列出窗口，
-`eval '<js>' --url crawler` 执行脚本，`shot <png> --url crawler` 截图。选择器先在这里对真实 DOM
-验证，再写进 `crawl.js`。注意：playwright 连接会劫持页面触发的下载，测试 `onNativeDownload`
-时参考 kabegame-chromium SKILL.md 的 Gotchas。
+任务运行中可以用 `kabegame-chromium`（kabegame-dev MCP 工具）连到 `crawler-<taskId>` 窗口：`targets` 列出窗口，
+`eval`（`target=url:crawler`）执行脚本，`screenshot`（`target=url:crawler`）截图；脚本里用
+`apps/kabegame-dev-mcp/src/client.ts` 的 `evaluate` / `screenshot`，或直接打 vite 上的 REST
+（`curl -s --noproxy '*' localhost:1420/__kabegame_dev/eval -d '{"target":"url:crawler","expression":"location.href"}'`）。
+选择器先在这里对真实 DOM 验证，再写进 `crawl.js`。注意：原来的 playwright 连接会劫持页面触发的下载；现在的连接不发
+`Browser.setDownloadBehavior`，去掉 playwright 后预期不再劫持，但未实测，测试 `onNativeDownload` 时先确认一次，
+参考 kabegame-chromium SKILL.md 的 Gotchas。

@@ -329,9 +329,10 @@ WebView。
   `tauri.conf.json.handlebars` 的 `isAndroid` 分支）。漏掉时爬虫页的 `crawl_*` 全被 ACL 拒绝（`Command
   crawl_heartbeat not allowed by ACL`），插件一行日志都发不出，120 秒后任务以「WebView 窗口无响应」失败。
 - 页面自发的 `blob:` / `data:` 下载（`<a download href="blob:…">`）是否触发 `onDownloadStart`
-  尚未在干净进程验证。用 CDP（`kabegame-chromium`）连着测下载时，playwright 下发的
-  `Browser.setDownloadBehavior` 会吞掉 WebView 的下载回调，连 http 附件都不触发，
-  且断开后仍残留；测页面下载必须先强制停止应用、全程不连 CDP。
+  尚未在干净进程验证。WebView 连过 CDP（`kabegame-chromium`）之后，页面下载都不再触发
+  `onDownloadStart`，连 http 附件都不触发，改回 `default` 下载行为也无效，且断开后仍残留（当初是在
+  playwright 下发 `Browser.setDownloadBehavior` 时观察到的；现在的 `kabegame-dev` 插件不发这条命令，
+  但安卓上这一现象没有重测过，按仍然存在处理）。测页面下载必须先强制停止应用、全程不连 CDP。
 - `reqwest` 与浏览器指纹不同，个别 CDN 在 Cookie / UA / Referer 都正确时仍可能拒绝。
 - 长按菜单依赖页面的 `contextmenu` 事件；已在 YouTube Shorts 真机确认长按会派发。命中判断先在整个
   元素栈里找自身带媒体的元素，祖先的背景图只作兜底（Shorts 的轮播项带首帧占位背景图，曾盖过下层

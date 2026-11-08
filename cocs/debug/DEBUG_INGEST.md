@@ -194,8 +194,10 @@ KABEGAME_DEBUG_TEE_CONSOLE=true
 
 ## CDP 端口寄存
 
-同一个 Vite middleware 还兼职一个与 debug ingest 无关的用途：给 `kabegame-chromium`
-skill 寄存 CEF 的 CDP（Chrome DevTools Protocol）端口。
+同一个 Vite middleware 还兼职一个与 debug ingest 无关的用途：寄存 CEF 的 CDP（Chrome DevTools Protocol）端口，
+消费方是同一个 vite 里的 `kabegame-dev` 插件（`scripts/kabegame-dev/`）。插件读登记、持有到 app 的唯一一条 CDP 连接，
+对外提供 `/__kabegame_dev/*` 的 REST（截图、求值、调应用命令、场景宿主、长任务等），`kabegame-chromium` skill 与
+stdio MCP `kabegame-dev`（`apps/kabegame-dev-mcp/`）都经这组 REST 驱动 app。
 
 dev 下 `scripts/plugins/component-plugin.ts` 注入 `KABEGAME_CEF_DEBUG_PORT=random`，
 `src-tauri/tauri-runtime-kbcef/src/runtime.rs` 的 `remote_debugging_port()` 让内核分配一个
@@ -209,8 +211,10 @@ GET  http://127.0.0.1:1420/__kabegame_cdp            → {"ok":true,"port":51234
 
 要点：
 
-- 登记是 **Vite 进程内内存态**，没有撤销接口：app 退出后端口仍留在上面，vite 重启则清空。
-  消费方（`.claude/skills/kabegame-chromium/driver.sh`）在用之前会再探一次 `/json/version`。
+- 登记在 Vite 进程的模块级内存里，**并落盘**到 `.kabegame/debug/cdp-port.json`，没有撤销接口：app 退出后端口仍留在上面；
+  vite 重启清空内存，`currentCdpRegistration` 再从落盘读回。消费方（`scripts/kabegame-dev/endpoint.ts`）每次用之前都用
+  `/json/version` 的 `webSocketDebuggerUrl` 验活（vite 的 SPA 兜底对任意路径回 200，不能只看状态码）。
+- 安卓 dev 不走登记：app 不向 vite 上报，`kabegame-dev` 插件按 vite 的 `isAndroid` 经 adb 找 WebView 调试 socket。
 - 「vite 上有端口」等价于「CDP 已就绪」——因为后端是探通之后才上报的。
 - 只在 dev 注入；build/打包路径不经过 `component-plugin.ts`。显式设 `KABEGAME_CEF_DEBUG_PORT`
   （含 `=0` 关闭）时尊重用户的值。

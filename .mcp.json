@@ -11,6 +11,17 @@
     "renderdoc": {
       "command": "uv",
       "args": ["--directory", "ignore/RenderDocMCP", "run", "renderdoc-mcp"]
+    },
+    "kabegame-dev": {
+      "command": "deno",
+      "args": [
+        "run",
+        "--allow-net=127.0.0.1,localhost",
+        "--allow-read",
+        "--allow-write",
+        "--allow-env",
+        "apps/kabegame-dev-mcp/src/main.ts"
+      ]
     }
   }
 }

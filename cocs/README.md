@@ -284,8 +284,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：新增或修改日志输出、排查「查看日志」看不到 / 刷屏 / 自激放大、日志文件位置与切分、`KABEGAME_LOG` 调级、CLI `log tail`、Web 端日志暴露范围、前端日志进不了后端。
 
 - [debug/DEBUG_INGEST.md](debug/DEBUG_INGEST.md)
-  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。插桩只是 trace 日志（Rust `kabegame_core::kb_debug!`、Tauri 前端经 `tauri-plugin-tracing` 打 `kb-debug {json}`），由主程序 debug 构建的 `DebugIngestLayer` 订阅并批量 NDJSON 转发；Web dev 前端仍直接 POST。同一 middleware 还兼职 **CDP 端口寄存**（`/__kabegame_cdp/register` 登记 + `/__kabegame_cdp` 查询），把 CEF 随机分配的调试端口交给 `kabegame-chromium` skill。
-  - 适用场景：仿 Cursor Debug Mode 的插桩式排查；需要把前端和 Rust 后端运行时状态汇总到同一个 NDJSON 会话文件；用 curl 验证 debug endpoint 或读取 session 日志；排查 CDP 端口发现（skill 连不上跑起来的 app）。
+  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。插桩只是 trace 日志（Rust `kabegame_core::kb_debug!`、Tauri 前端经 `tauri-plugin-tracing` 打 `kb-debug {json}`），由主程序 debug 构建的 `DebugIngestLayer` 订阅并批量 NDJSON 转发；Web dev 前端仍直接 POST。同一 middleware 还兼职 **CDP 端口寄存**（`/__kabegame_cdp/register` 登记 + `/__kabegame_cdp` 查询，登记落盘跨得过 vite 重启），把 CEF 随机分配的调试端口交给同一 vite 里的 `kabegame-dev` 插件；插件持有 CDP 连接，对外提供 `/__kabegame_dev/*` 的 REST，`kabegame-chromium` skill 与 stdio MCP `kabegame-dev`（`apps/kabegame-dev-mcp/`）经它驱动 app。
+  - 适用场景：仿 Cursor Debug Mode 的插桩式排查；需要把前端和 Rust 后端运行时状态汇总到同一个 NDJSON 会话文件；用 curl 验证 debug endpoint 或读取 session 日志；排查 CDP 端口发现（`status` 报第 2 层 CDP 不在、skill 连不上跑起来的 app）。
 
 ## 组件库（`ui/`）
 

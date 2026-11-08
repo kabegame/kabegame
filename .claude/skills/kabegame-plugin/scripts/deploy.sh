@@ -3,7 +3,7 @@
 #   deploy.sh <plugin-id> [--release]
 #   CLI 默认 dev 版 target/debug/kabegame-cli；--release 或 KB_CLI_PROFILE=release 切到 target/release。
 # 产物：.kabegame/debug/data/plugins-directory/<id>.kgpg
-#   - dev app 直接读这个目录（app-run.sh 会 refresh_plugins）
+#   - dev app 直接读这个目录（app-run.ts 会 refresh_plugins）
 #   - run-cli.sh 从这里取 .kgpg，import 到生产目录后再 plugin run
 #
 # 走 src-crawler-plugins/package-plugin.ts：它先构建 plugin-sdk（dist 过期时）与插件的
