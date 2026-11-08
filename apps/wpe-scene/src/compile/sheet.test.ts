@@ -522,7 +522,8 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
   });
 
-  it("帧表纹理用在粒子槽 1、图像层：照报 tex:animation；同一张纹理在槽 0 用过、缓存命中也照报", async () => {
+  it("帧表纹理用在粒子槽 1：普通纹理，不报 tex:animation、不算帧表（P4b 步骤 5）；用在图像层照报，缓存命中也照报", async () => {
+    const { translator, requests } = fakeTranslator();
     const slot1 = await compile(
       memoryReader(
         files({
@@ -531,10 +532,13 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
           },
         }),
       ),
-      fakeTranslator().translator,
+      translator,
     );
-    expect(slot1.unsupported).toEqual(["tex:animation"]);
+    expect(slot1.unsupported).toEqual([]);
+    expect(slot1.layers[0].particle!.passes[0].textures).toEqual({ 0: 0, 1: 1 });
+    // 帧表语义只按槽 0：spriteSheet 为 false，宏只有槽 0 的 TEX0FORMAT
     expect(slot1.layers[0].particle!.spriteSheet).toBe(false);
+    expect(requests.map((request) => request.defines)).toEqual([{ SCENE_ORTHO: "1", TEX0FORMAT: "8" }]);
     const image = await compile(
       memoryReader(
         files({

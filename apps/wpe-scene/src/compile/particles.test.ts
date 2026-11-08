@@ -806,10 +806,10 @@ describe("能力表：粒子材质的 COMBO 与光照", () => {
     return [...keys].sort();
   };
 
-  it("非 0 的 COMBO 只允许 WORLDBLUR、USERCOLORBLEND", () => {
-    expect(check({ combos: { USERCOLORBLEND: 1, WORLDBLUR: 1, REFRACT: 0, CUTOUT: 0 } })).toEqual([]);
-    expect(check({ combos: { REFRACT: 1 } })).toEqual(["particle:combo:REFRACT"]);
-    expect(check({ combos: { cutout: true } })).toEqual(["particle:combo:CUTOUT"]);
+  it("非 0 的 COMBO 只允许 WORLDBLUR、USERCOLORBLEND、REFRACT、CUTOUT、NORMALMAP（后三个是 P4b 步骤 5）", () => {
+    expect(check({ combos: { USERCOLORBLEND: 1, WORLDBLUR: 1, REFRACT: 1, CUTOUT: 1, NORMALMAP: 1 } })).toEqual([]);
+    expect(check({ combos: { refract: true, cutout: true } })).toEqual([]);
+    expect(check({ combos: { DOUBLESIDEDLIGHTING: 1 } })).toEqual(["particle:combo:DOUBLESIDEDLIGHTING"]);
   });
 
   it("LIGHTING 非 0 报 particle:lighting（材质写的或着色器缺省值）", () => {
@@ -819,8 +819,10 @@ describe("能力表：粒子材质的 COMBO 与光照", () => {
 
   it("着色器注解缺省值不算（genericparticle 的 FOG 缺省为 1）；纹理槽带出的算", () => {
     expect(check({}, result([{ name: "FOG", value: 1, source: "default" }]))).toEqual([]);
-    expect(check({}, result([{ name: "NORMALMAP", value: 1, source: "texture" }]))).toEqual([
-      "particle:combo:NORMALMAP",
+    // NORMALMAP 是槽 1 绑了纹理带出的（步骤 5 放行）；别的纹理槽 COMBO 照报
+    expect(check({}, result([{ name: "NORMALMAP", value: 1, source: "texture" }]))).toEqual([]);
+    expect(check({}, result([{ name: "SPECULARMAP", value: 1, source: "texture" }]))).toEqual([
+      "particle:combo:SPECULARMAP",
     ]);
   });
 });

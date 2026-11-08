@@ -358,8 +358,11 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
 /**
  * 粒子路径才写的引擎 uniform（`common_particles.h`，P4a 步骤 4），2026-11-07 RenderDoc 实测，正交与透视场景相同：
  * - 朝向是单位基：`g_OrientationUp (0,1,0)`、`g_OrientationRight (1,0,0)`、`g_OrientationForward (0,0,1)`；
- * - `g_ViewUp`、`g_ViewRight`、`g_RenderVar0/1` 在档 1 的两个着色器（内置 `genericparticle`、`shimmering_particles` 的
- *   项目 `particle`）里都没被读取（`referenced: false`，抓帧里是垃圾值），照语义给。`g_RenderVar0` 是拖尾用的，属 P4c，先写 0。
+ * - `g_ViewUp`、`g_ViewRight`：档 1 的两个着色器没读，`REFRACT`（`ComputeScreenRefractionTangents`，P4b 步骤 5）才读。
+ *   步骤 0 抓帧里折射着色器真的读到了，正交与透视粒子都是 `g_ViewUp (0,1,0)`、`g_ViewRight (1,0,0)`，和这里写的相同
+ *   （`p4b-refract` 第 907 帧，p4-particles-REPORT.md「P4b 语义的实测核对」）。WPE 每帧从视图矩阵抽一次，透视覆盖不重算
+ *   （rea-p4b-render.md 6.3）。
+ * - `g_RenderVar0` 是拖尾用的，属 P4c，先写 0；档 1 的着色器没读（`referenced: false`，抓帧里是垃圾值）。
  * - `g_RenderVar1`（P4b 步骤 2）：粒子 pass 槽 0 的纹理带帧表时是 `sheet.renderVar1`（帧宽、帧高、帧数、帧宽高比，
  *   `FUN_1402366f0` 每次绘制写一次，rea-p4b-render.md 2.2），否则 0。WPE 在帧向量为空时不写、保留上一次绘制的值，
  *   空帧表已由 `parseTex` 报 `tex:animation:empty`，碰不到。

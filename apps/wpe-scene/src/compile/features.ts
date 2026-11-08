@@ -549,14 +549,23 @@ export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_RenderVar1",
 ]);
 
-/** 粒子材质允许非 0 的 COMBO：`shimmering_particles` 自带 `particle` 着色器的分支，本节实现（总计划「P4a 实现」）。 */
-const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND"]);
+/**
+ * 粒子材质允许非 0 的 COMBO（都是着色器自带的分支，数学全在着色器里）：
+ * - `WORLDBLUR`、`USERCOLORBLEND`：P4a（`shimmering_particles` 的项目 `particle` 着色器，总计划「P4a 实现」）；
+ * - `REFRACT`、`CUTOUT`：P4b 步骤 5（`genericparticle`）。引擎只负责在本对象画之前拷一次帧缓冲绑到 `g_Texture3`
+ *   （`render/graph.ts` 的 `planParticleLayer`，时机同 rea-p4b-render.md 6.1），以及写 `g_ViewRight` / `g_ViewUp`；
+ *   步骤 0 抓帧实测这两个视图轴与 `g_RefractAmount`、`g_Cutout*`、`g_Overbright` 都和我们写的相同（后几个是普通材质常量）；
+ * - `NORMALMAP`：采样器 COMBO，槽 1 按名字绑了纹理就定义，WPE 运行时不读注解里的 `require` / `requireany`
+ *   （rea-p4b-render.md 6.2）。`g_Texture1` 的声明在 `#if REFRACT || LIGHTING` 里，没开折射时定义了也不起作用
+ *   （语料 `2903412088`）；法线按 `TEX1FORMAT` 解码，翻译器按 `formatcombo` 写这个宏。
+ */
+const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND", "REFRACT", "CUTOUT", "NORMALMAP"]);
 
 /**
  * 粒子材质 pass 的 COMBO 与光照（混合、剔除、深度由 `checkPassFeatures` 照常检查，引擎 uniform / COMBO 由
  * `checkProgramFeatures` 带 `PARTICLE_UNIFORMS` 检查）。
- * - 材质写的、以及纹理槽注解带出的 COMBO（翻译结果 `source` 为 `request` / `texture`），值非 0 的只允许 `WORLDBLUR`、
- *   `USERCOLORBLEND`，其余报 `particle:combo:<名字>`（`REFRACT`、`CUTOUT` 属 P4b）。
+ * - 材质写的、以及纹理槽注解带出的 COMBO（翻译结果 `source` 为 `request` / `texture`），值非 0 的只允许
+ *   `PARTICLE_COMBOS` 里的，其余报 `particle:combo:<名字>`。
  * - 着色器注解的缺省值（`source: "default"`）不算：WPE 同样按缺省值编，翻译器照办。`genericparticle` 的 `FOG` 缺省为 1，
  *   但它只在引擎的 `FOG_DIST` / `FOG_HEIGHT` 下起作用，渲染器不定义这两个宏。
  * - 最终开了 `LIGHTING`（含着色器缺省值）报 `particle:lighting`：粒子的光照路径没有和 WPE 比过，本机 0 张。
@@ -618,7 +627,8 @@ function controlPointsUsed(raw: unknown): boolean {
  * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。
  * - `controlpoint` 有实际内容：`particle:controlpoint`（P4c，判定见 `controlPointsUsed`）。
  * - `animationmode`、`sequencemultiplier` 任意取值都支持（P4b 步骤 2）：只在材质槽 0 是帧表纹理时起作用（frame 列、混帧宏），
- *   否则是中性的。写成绑定或关键帧照下面两条报。帧表纹理用在槽 0 以外由纹理报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
+ *   否则是中性的。写成绑定或关键帧照下面两条报。帧表纹理用在粒子其它槽位是普通纹理（P4b 步骤 5），用在图像层、effect 由纹理
+ *   报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
  * - 其它顶层键：`particle:system:<键>`；顶层键写成绑定：`particle:binding:system:<键>`（WPE 按 `isNumeric` / `isString`
  *   读，对象当缺键，语义没核对）。`emitter` / `initializer` / `operator` 不是数组时同样报 `particle:system:<键>`。
  * - renderer 多于一个：`particle:renderers`（多个 renderer 的绘制没读）。

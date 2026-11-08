@@ -1175,3 +1175,34 @@ Claude 独立验收：
 真实场景按 WPE 时刻重跑的那两次，用的是另一会话 14:32 从整个工作区重建的宿主（含步骤 5 半成品）；比的是粒子数和范围，属模拟层，不受步骤 5 影响。宿主备份因此没有还原。
 
 工具：代理的在 `ignore/p4/b4/`（`replay.test.ts`、`xcheck.*`、`mutate.py`、`mutate_blend.py`、`corpus.test.ts`、`explain.py`，结果在 `out/`）；Claude 的在 `ignore/p4/b4v/`（`make_step4_patch.py`、`make_xcheck.py`、`mutate_claude.py`、`mutate_b4h.py`，结果在 `out/`）与 `ignore/p4/`（`noise_ref.py`、`ana_pre_t.py`、`gen_b.py` 的 `p4b-pre`）。
+
+### 步骤 5 — `REFRACT` 与 `CUTOUT`（2026-11-08）
+
+子代理实现，Claude 补抓 WPE 真值并独立验收。和步骤 4 同时在同一工作区进行，代理只改了下面这些文件。
+
+- **修改** `compile/features.ts`：`PARTICLE_COMBOS` 加 `REFRACT`、`CUTOUT`、`NORMALMAP`，注释写明依据；`LIGHTING` 照报。
+- **修改** `compile/bundle.ts`：`getTexture` 的 `sheetSlot` 改名 `particleSlot`，粒子材质任何槽位的帧表纹理都不报 `tex:animation`（两处调用）。帧表语义仍只按槽 0；`multi-image`、`empty` 照报；图像层、effect 照报。
+- **修改** `render/graph.ts`、`render/uniforms.ts`：只改注释，写明快照时机的核对结论、存活数为 0 时照拷不影响画面的理由，以及视图轴的实测值。
+- **新增** `compile/refract.test.ts`：14 个用例。用真翻译器编仿 `p4b-refract` / `p4b-refract2` 的内存工程，钉住常量、快照计划与次数、`NORMALMAP` 的来源。`N0`、`N1` 翻译出的 WGSL 逐字相同。
+- **修改** 测试：`compile/particles.test.ts` 的 COMBO 用例（第 809–825 行，步骤 5 的部分另存为 `ignore/p4/b5/particles-test-combo.patch`）、`compile/sheet.test.ts` 的槽 1 用例。
+
+补抓：`p4b-refract2`（`gen_b.py`），抓帧 `A:\p4b\p4b-refract2-fps60`。
+- `S` 是帧表折射：槽 0 `rain_drops_sheet`，槽 1 `rain_drops_sheet_normal`。
+- `N0` 槽 1 绑法线、不开 `REFRACT`；`N1` 不绑槽 1。
+- WPE 实测：`N0`、`N1` 4 帧都是 0 个像素不同；只有 `S` 前面有一次 Resolve。
+
+验收结果：
+
+| 项 | 结果 |
+|---|---|
+| tsc、vitest、Prettier | 0 error；42 个文件、1114 个用例全过（新增 15 个）；格式通过 |
+| 变异检查（代理 14 处、Claude 3 处） | 全部有用例失败。Claude 的三处：视图轴对调、放行表多一个 `SPECULARMAP`、粒子槽判断取反 |
+| 整帧像素（屏外宿主按 WPE 日志 dt 回放，`ignore/p4/b5v/`） | `p4b-refract` 4 帧、`p4b-refract2` 4 帧，差异最大 1 个色阶。<br>- 折射区域占有内容像素的 0.07%–0.10%，帧表折射 `S` 占 0.46%；<br>- 纯图像层也有 2–10 个像素差 1，和步骤 1 的「只差 1 个色阶」同类；<br>- `CUT`、`N0`、`N1` 是 0 个像素不同；<br>- 没有大于 1 的差，MSAA 没有造成边缘问题 |
+| 快照 | WPE 每个折射对象前一次 Resolve，`CUTOUT`、不折射的对象前没有。我们按计划每帧拷 6 次（单测钉住）。`P0` 没有存活粒子时 WPE 不拷、我们照拷，画面不受影响 |
+| 常量 | `g_RefractAmount` 0.2 / 0.05 / 0.1，`g_Cutout*` 0.3 / 0.5 / 0.8，`g_Overbright` 1，视图轴 `(1, 0, 0)` / `(0, 1, 0)`，正交、透视粒子相同，和 WPE 实测一致（单测钉住） |
+| 语料（152 个工程） | 干净场景 20 → 20，没有新增键。<br>- 去掉 `particle:combo:REFRACT` 15 张、`particle:combo:NORMALMAP` 15 张（合计 16 张），`tex:animation` 5 张；<br>- 计划写的「7 处」是 7 张场景、14 处粒子槽 1 的帧表法线图，另外 2 张（`3560756264`、`3818053626`）仍报 `tex:animation`，因为图像层也用了帧表纹理（P6）；<br>- `1333579536` 之后还差 `model:passthrough`、`object:config`、`particle:children` |
+| 真机哈希 | 30 组和 `ignore/p4/b4v/out/hash-after.json`（13:26）全部相同。这次重建的宿主同时含步骤 4、5 的代码 |
+
+测试行 14108、14109 已用 `batch_remove_images` 移除，导入任务已删。
+
+工具：代理的在 `ignore/p4/b5/`（`diff_corpus.py`、`mutate.py`、`sheets.test.ts`、两个 patch）；Claude 的在 `ignore/p4/b5v/`（`real.mjs`、`cmp.py`、`ratio.py`）和 `ignore/p4/cmp_n01.py`。

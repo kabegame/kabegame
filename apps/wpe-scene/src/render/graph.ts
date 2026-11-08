@@ -137,10 +137,19 @@ export function isPassthroughBlend(colorBlendMode: number): boolean {
 }
 
 /**
- * 粒子层的计划（P4a 步骤 4）：一个 `particles` 步骤，直接画到场景目标。
- * 材质需要 `_rt_FullFrameBuffer` 时照图像层直接上屏的规则 1，在本层开始前拷一次快照。档 1 的材质都用不到（`REFRACT` 等
- * 读帧缓冲的 COMBO 由 `particle:combo:*` 挡住），这条没有和 WPE 比过。其余运行时纹理（fbo 名）粒子没有，报不支持。
+ * 粒子层的计划（P4a 步骤 4）：一个 `particles` 步骤，直接画到场景目标。其余运行时纹理（fbo 名）粒子没有，报不支持。
  * 没有 pass（粒子 JSON 读不到、材质缺失）时为空计划。
+ *
+ * 快照（P4b 步骤 5，`genericparticle` 的 `REFRACT` 从 `g_Texture3` 读 `_rt_FullFrameBuffer`）：材质需要帧缓冲
+ * （`pass.framebuffer`，判定同 WPE 基础材质 `+0x1fc` bit1）时，照图像层直接上屏的规则 1 在本层开始前拷一次。
+ * - 时机和 WPE 相同：`FUN_1402366f0` 在本系统任何 renderer 画之前拷当前场景目标整张，每对象每帧至多一次（rea-p4b-render.md
+ *   6.1）；所以快照含按 `objects` 顺序画在它前面的全部内容，不含自己。步骤 0 抓帧（`p4b-refract`）里每个 `REFRACT` 对象前
+ *   各有一次拷贝，`CUTOUT` 对象前没有（它不读帧缓冲，`pass.framebuffer` 为假），和这里一致。
+ * - WPE 在存活数为 0 时不拷也不画，我们照拷。画面不受影响：本层自己没有粒子可画，而之后读快照的每一层（图像层规则 1–3、
+ *   passthrough、其它粒子层）都在本层内自己重拷，泛光也在全部图层之后再拷一次，没有哪一步读到的是这次多拷的内容。
+ * - WPE 的场景目标开了 MSAA，快照是 `ResolveSubresource`，我们是 `copyTextureToTexture`；轴对齐、落在整像素上的四边形
+ *   两者相同，差异只可能在边缘。逐像素比较见 P4b 计划步骤 5 的验收。
+ * 父子系统共用「本对象已拷」位的规则不用管：子系统由能力表报 `particle:children`。
  */
 export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPlan {
   const reasons: string[] = [];

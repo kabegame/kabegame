@@ -400,7 +400,8 @@ interface PassContext {
   unsupported?: Set<string>;
   /**
    * 粒子材质（P4b 步骤 2 起带系统描述）：槽 0 格式是 8–11 时写 `TEX0FORMAT`（`particleWritesTex0Format`），槽 0 是帧表纹理时
-   * 写帧表宏（`particleSheetDefines`），槽 0 的帧表纹理不报 `tex:animation`；程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。
+   * 写帧表宏（`particleSheetDefines`）；任何槽位的帧表纹理都不报 `tex:animation`（步骤 5，帧表语义只按槽 0）；程序检查带
+   * `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。
    */
   particle?: ParticleSheetSystem;
 }
@@ -561,15 +562,19 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const settled = () => unsupported.size > 0 && !input.force && !input.exhaustive;
 
   /**
-   * 一张纹理（按解析后的路径缓存）。`sheetSlot`：本次是粒子材质的槽 0，帧表是合法用法，这次上报的问题里去掉 `tex:animation`
-   * （帧表纹理用在图像层、effect、粒子其它槽时照报，图像层的帧动画属 P6）。缓存的 `textureIssues` 仍是纹理自己的全部问题，
-   * 只在上报时按用途过滤。
+   * 一张纹理（按解析后的路径缓存）。`particleSlot`：本次是粒子材质的某个槽位，帧表是合法用法，这次上报的问题里去掉
+   * `tex:animation`；`tex:animation:multi-image`、`tex:animation:empty` 照报。帧表纹理用在图像层、effect 时照报（图像层的
+   * 帧动画属 P6）。缓存的 `textureIssues` 仍是纹理自己的全部问题，只在上报时按用途过滤。
+   * 只有槽 0 带帧表语义：WPE 只看槽 0 纹理的头标志置系统的 `0x1000000`（rea-p4b-render.md 2.3），帧表宏与
+   * `SceneParticle.spriteSheet` 也只按槽 0 定，和这个参数无关。其它槽（`REFRACT` 的槽 1 帧表法线图，P4b 步骤 5）
+   * 只是一张普通纹理：绑定取第 0 张图像（2.7），片元用和槽 0 相同的 `v_TexCoord.xy` 采它，槽 0 是帧表时那已是帧内 UV，
+   * 法线图和颜色图同样排帧就对得上（语料里的配对都是这样）。
    */
   async function getTexture(
     name: string,
     scope: ResourceScope | null,
     issues: Set<string> = unsupported,
-    sheetSlot = false,
+    particleSlot = false,
   ): Promise<{ index: number; format: number } | null> {
     const path = texturePath(name);
     const file = await fs.resolveScoped(path, scope);
@@ -578,7 +583,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       return null;
     }
     const report = (keys: readonly string[]) => {
-      for (const key of keys) if (!(sheetSlot && key === ANIMATION_ISSUE)) issues.add(key);
+      for (const key of keys) if (!(particleSlot && key === ANIMATION_ISSUE)) issues.add(key);
     };
     const existing = textureIndex.get(file.path);
     if (existing !== undefined) {
@@ -745,7 +750,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         else issues.add(`texture:rendertarget:${name}`);
         continue;
       }
-      const texture = await getTexture(name, scope, issues, !!context.particle && slot === 0);
+      // 粒子材质的任何槽位都不报 `tex:animation`（帧表语义只按槽 0，见 `getTexture`）
+      const texture = await getTexture(name, scope, issues, !!context.particle);
       if (texture) {
         slots[slot] = texture.index;
         formats.push({ slot, format: texture.format });
@@ -782,7 +788,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           if (!bindRuntime(binding.slot, fallback)) issues.add(`texture:rendertarget:${fallback}`);
           continue;
         }
-        const texture = await getTexture(fallback, scope, issues, !!context.particle && binding.slot === 0);
+        const texture = await getTexture(fallback, scope, issues, !!context.particle);
         if (texture) slots[binding.slot] = texture.index;
       }
       program = addProgram(result);
