@@ -209,3 +209,99 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | 跟随点用本帧还是上一帧的指针 | 1920×1080：10 帧里每帧新出生粒子的跟随点和**当帧** `g_PointerPosition` 换算的 (px·1920, (1 − py)·1080) 差 ≤ 0.02，和上一帧的差几十像素 | 本帧 |
 | 窗口和场景比例不同时，WPE 怎么铺 | 1920×800 的 `P·V` 纵向是 `1/400`、平移 −1.35，只显示场景 y ∈ [140, 940]；1440×1080 横向是 `1/720`、平移 −4/3，只显示 x ∈ [240, 1680] | 投影里居中盖满裁切（和 Kabegame 的 `fill` 相同），渲染目标就是窗口 |
 | 裁切时跟随点 | 两种窗口下跟随点都等于 `inverse(P·V)` 作用在窗口 NDC 上（差 ≤ 0.02），即光标下的场景点；朴素的 px·1920 / (1 − py)·1080 差 12–45 像素 | 跟随点是光标下的场景点。`g_PointerPosition` 仍是窗口归一化坐标，和 P2a 对 `fill` 的取法一致 |
+
+## P4d 语义的实测核对（2026-11-09）
+
+读码在 [rea-p4d-rope.md](rea-p4d-rope.md)（`rope`、`ropetrail`）和 [rea-p4d-modules.md](rea-p4d-modules.md)（`mapsequence*`、`remap*`、距离类、`vortex_v2`）。
+- **工程：** 由 `ignore/p4/gen_d.py` 生成，共 6 个：`proj/p4d-rope`、`p4d-ropetrail`、`p4d-map`、`p4d-remap`、`p4d-remap2`、`p4d-dist`。
+- **抓帧：** fps 60 全抓，`p4d-map` 以外另抓 fps 10，在 `A:\p4b\p4d-*`。
+- **读取：** `rdc_rope.py` 原样保存每次粒子绘制的 `vs_in`、`gs_out`、几何着色器的 `dcl_maxout` 和各阶段常量。
+- **读数脚本**在 `ignore/p4/d0/`：
+  - `ana_rope.py`：`rope_gs.py` 按 WPE 原件 `genericropeparticle.vert` / `.geom` 把 `vs_in` 展开，再和 `gs_out` 逐顶点比；
+  - `ana_mod.py`：模块各项，噪声用 `fastnoise2.py`；
+  - `rdc_cull.py`：光栅化状态；
+  - `v2_variants.py`：`centerforce` 的几种写法。
+- **RenderDoc 的格式：** `gs_out` 把三角形带展开成三角形列表，奇数号三角形写成 `(v1, v3, v2)`；颜色在 `TEXCOORD1`。
+
+**rope**
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| WPE 画绳是 `POINTLIST` 加几何着色器，每段输出 `4 + 2·subdivision` 个顶点 | 所有绳的绘制都是 `PointList`，`dcl_maxout` 随 `subdivision` 0 / 3 / 4 / 16 / 40 是 4 / 10 / 12 / 36 / 68 | 成立，决定 1 的前提成立 |
+| 每段 96 字节，内容按 1.3：<br>起点 + 尺寸、终点 + `TL`、`CP0` + `TP`、`CP1` + 终点尺寸、终点颜色、起点颜色；<br>首段 `CP0` 取起点自身，末段 `CP1` 取终点自身 | 16 个系统、两种 fps、各 6 帧，没有一处不符（`POSITION`、`TEXCOORD0`–`3`、`COLOR`） | 成立 |
+| GS 展开按 1.5：<br>右向量；系数 0.15 的贝塞尔；`smoothstep` 之后的 `s`，计数器逐次累加；宽度、颜色、`v` 都按 `s` 插值 | 照 WPE 原件由 `vs_in` 算 `gs_out`：位置最大差 2.3e-4 场景像素，uv 差 1e-6，颜色逐位相同；R9 同帧出生的零长段，NaN 顶点数逐帧相同 | 成立 |
+| 表序就是出生序，判死后保序删除 | 稳态下槽位已复用，绳上位置仍严格单调；R8 两个发射器，B 的粒子到 x ≈ 180 被删后，A(247) 直接接到 A(145)；同帧出生的按 emitter 顺序排 | 成立 |
+| 缺省 `subdivision 4`、`uvsmoothing true`；平滑时 `TL = (N − 1)·K`，`TP0 ∈ [−1, 0]` | R2（只写名字）`maxout 12`、`TL 5.4`；`TP0` 每帧随最老粒子的年龄以 −4/s 变化，即 `Rf = 4` | 成立 |
+| `uvscrolling`：`TL = N − 1`，`TP0` = 累计死亡数 | R3 `TL 5.4`，`TP0` 在有粒子死去的那帧从 54 变成 55；R12 带预热，是 62 → 63 | 成立 |
+| `uvscale` 存倒数 | R4 `TL = 2·存活数` | 成立 |
+| 存活数 2 的特例；存活数 ≤ 1 不画 | R5b `TL 2`、`TP 0`，`uvscale 0.5` 和平滑都不起作用；R5a（`maxcount 1`）没有绘制，R5b 存活数掉到 1 的帧也没有 | 成立 |
+| `upright` / `fixed` 用 `g_OrientationForward`，u 左右对调 | R6u 的 Forward 是 (0, 0, 1)，u = 0 的顶点从下方换到上方，宽度正好 40；三种朝向的光栅化都是 `NoCull`，都画 | 成立，绳不剔除 |
+| 离开视轴带宽变窄；世界空间时 `g_ModelMatrix` 是单位阵 | R10、R11 的 `gs_out` 和展开逐顶点吻合 | 成立 |
+| 读 `fps`：绳没满时 `Rf = min(fps, R)` | 两种 fps 下抓帧时绳都已满（R9 存活 50–59，不小于 `R·L = 50`），走不到这一支 | 没测到 |
+
+**ropetrail**
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| 每个粒子恒写 `segments` 段，76 字节；段 0 是「当前位置 → h[0]」；`CP` 取法按 5.3 | 12 个系统、两种 fps，没有一处不符 | 成立 |
+| 计时器每系统一个，`≤ 0` 时重置为间隔，余量丢掉；每帧最多采一次 | `RV0.z` 每帧涨 `dt/间隔`。<br>T1 前一帧还剩 0.0127 s，采样后 `z = 0` 而不是 0.133。<br>fps 10 下 3 帧一采；`length 0` 每帧都采；两遍模式不影响 | 成立 |
+| 采样时 `h[0]` = 本帧位置，段 0 零长；已存段数 +1，封顶 `segments` | 采样帧的段 0 零长，`gs_out` 里是 NaN；`C·K` 从出生时的 2 涨到 `segments`；未填满的段零长，也是 NaN | 成立 |
+| 钳制：`segments` 到 `[2, 32]`，`subdivision` 到 `[0, 32]`，`length` 至少 0.001 | `segments` 0 / 40 → 2 / 32 段；`subdivision 40` → `maxout 68` | 成立 |
+| `RV0.w = n − 0.5`；`uvscrolling` 时 `RV0.w = (n − 1)·K`、`RV0.x = n − 1` | T1 3.5，T4seg0 1.5，T4seg40 31.5；T2 `w 6`、`x 3`；`U` 每次采样 +1 | 成立 |
+| `fadealpha` / `fadesize` 只在 `uvscrolling` 时起作用 | T3（开渐隐、不滚动）的 `gs_out` 和不渐隐的展开逐位相同；T2 的渐隐和展开吻合 | 成立 |
+| 预热后历史塌缩到当前位置（T7） | T7 只比 T1 多一个 `starttime 1`；T1 正常，T7 在两种 fps 下的 20 帧里都没有存活粒子 | 没测到，原因待查 |
+
+**mapsequence**
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| `around`：`θ = 2π(b0 + seq·Δb)`，`θ = 0` 在 +y、往 +x 转；保留出生点到轴的距离 | ma-basic / r40 / r160 的半径是 100 / 40 / 160，圈数正好是 {0, 0.2, …, 0.8}；例如 (0, 100)、(95.1, 30.9) | 成立 |
+| 序号先用后加，1.0 不大于 1 所以留着；repeat 用 `fmodf`，mirror 反射；float32 推演见 1.1 | ma-22r、ma-22m 的全部圈数都落在推演序列上（差 ≤ 2e-4） | 成立 |
+| 基向量：`axis "0 1 0"` 时 `B1 = (1, 0, 0)`、`B2 = (0, 0, −1)`；基向量乘 `mat3(cp)` | ma-axis 的 `\|y\| = 0`，(x, z) 的圈数吻合；ma-cp 圆心在 (300, 0)，圈数整体减 1/12（30°） | 成立 |
+| `speed` 的 x 是切向、y 径向、z 轴向，加到速度上 | ma-speed 残差 0.023 | 成立 |
+| `bounds` | ma-bounds 的圈数在 0.3–0.5 | 成立 |
+| `between`：`step = 1/(count − 1)`，repeat 超过 1 归零 | mb-basic 正好 5 个 x 值（−300 … 300） | 成立 |
+| 本地系统按系统原点量垂直分量，世界系统按起点量 | 本地组 y = −100，世界组 y = +100 | 成立 |
+| `flags` 1 / 2 / 4 / 8 与 `w = 1 − (2seq − 1)²` | f1、f8 与公式差 0，f4 的尺寸差 1.9e-7；f2 两端的 y 正好是 100 | 成立 |
+| mirror | mb-mirror 的 x ∈ {±100, ±300} | 成立 |
+| `flags & 0x20`：周期发射的新周期清零序号 | period32 的 x 到不了 300，对照组 period0 能到 | 成立 |
+| 对象不可见时复位、清零序号 | ma-hide 只看到粒子被清空（15 个对 20 个）；`count 5` 的序号是周期的，清零看不出来 | 没测到 |
+
+**距离类与 `vortex_v2`**
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| `maintaindistancetocontrolpoint`：硬约束；`T = inverse(mat3(cp))` | md-hard 半径 200 ± 0.05；对象 `scale "2 1 1"` 时落在 400 × 200 的椭圆上（±3e-4） | 成立 |
+| `Δcp = current − previous`，每遍都平移完整的 `Δcp` | md-move（世界系统，`variablestrength 0.001`，几乎只剩平移）跟着对象走：fps 60 每帧一倍，晚一帧；fps 10 约两倍（40/s），粒子越跑越靠前；对照组不动 | 成立 |
+| `between` 两个控制点重合时整条跳过 | mb2-same 的轨迹是直线（残差 0.015） | 成立 |
+| `reducemovementnearcontrolpoint` 的公式 | rm-basic 停在 L ≈ 48.2，正是 `h = 1/60` 时 `r·h ≥ 1` 的边界 | 成立 |
+| `reductionouter == reductioninner` 时差存成 1.0 | rm-eq 按 0 实现也是 `100·h > 1`，照样一出生就停 | 分辨不了 |
+| `vortex_v2` 切向是 `(r̂ × a)·spd·k` | sphere、cyl 每个粒子的 Δv 和公式差 ≤ 1.4e-3；换成 `h` 差 2.1–2.7 | 成立，sample-gaps 写的方向要更正 |
+| 柱形掩码 | v2-cyl 出生点 z = 50，`spd` 按到轴的距离算 | 成立 |
+| `centerforce`：`P′` 用 `h`，系数 `cf/h`；环形拉力 | 残差 0.4–1.8，在 `rsqrtps` 的误差包络里（`\|P′\|·3.7e-4/h`，约 1.3–2.2）；换成 `k` 的写法更差 | 成立（在包络内） |
+| 轴乘控制点的 3×3 | v2-axis 的 `\|y\| ≤ 0.004` | 成立 |
+| WPE 不可见时照常更新控制点 | dist-hide 重新可见后 1 s 才发出第一个粒子，第一帧没有粒子可拽 | 没测到 |
+
+**remap**
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| `remapvalue` 的 `particlesystemtime` 就是场景时间 `T`，和 `runtime` 相同 | rv-time（对象 `instanceoverride.rate 2`）和用 `runtime` 的对照组，alpha 逐帧相同，都按 `T` 的 10 s 周期变 | 成立，语料 3 个系统用它 |
+| `remapinitialvalue` 的 `particlesystemtime` 是系统时间 `sys+0x3f0`（乘 `rate`） | ri-time 的出生尺寸按 `T` 预测差 35；按系统时间拟合差 0.02，拟合出的系统时间每帧涨 `2·dt` | 成立 |
+| `remapvalue` 的噪声是 FastNoise2 二维 Simplex：输入 `(v·s, 0)`，种子取每粒子 `R` 的位，y、z 分量的种子再异或两个常量 | rv-noise 输出速度三分量，每个粒子只有年龄一个未知数，用 frame 列读出的 `R` 算：两种 fps 下三分量的残差都 ≤ 4e-4（量程 ±100，年龄按 1 µs 细化搜索） | 成立 |
+| FBm 的倍频（种子 +1、坐标 ×2、振幅 ×0.5、归一） | rv-fbm1 / rv-fbm3 输出的是标量 `speed`，年龄又未知，各种写法都拟合到 3e-4，没有区分力 | 没测到，留给步骤 4 的回放 |
+| `remapinitialvalue` 的噪声是 `snoise1`，和 `R` 无关 | ri-noise / ri-fbm 同一时刻出生的粒子尺寸相同；`flags` 缺省夹到 1 后输入是整数 10，`snoise1(10) = 0`，尺寸正好 22.5 | 成立 |
+| op 的 `square`、`saw` 用 `trunc`，init 用 `floorf`；init 的 `lifetimefraction` 读 frame 列（出生时为 0） | rv-square / rv-saw 的年轻粒子归一化后是负数，实测尺寸 40 / 29.5，用 `floor` 会是 75 / 64.5；ri-square / saw / triangle 恒为 40 / 40 / 5 | 成立 |
+| `positionbetweentwocontrolpoints` 读的是 `outputcontrolpoint0` / `1` | 按 ocp 预测差 0.013，按 icp 差 10 | 成立 |
+| 输出 `controlpoint`：该点不再按 `offset` 更新，只被 remap 改写 | rv-cpout 新粒子的出生点跟着 remap 的值走（残差 0.125），和 1 号点的 `offset (300, 0)` 无关 | 成立 |
+| `remapinitialvalue` 输入 `controlpoint` 会把控制点写成 0（WPE 的 bug） | ri-cpbug 用 1 号点（`offset (300, 0)`）发射，出生点 x ∈ [40, 290]，即从 0 出发 | 成立，照做 |
+| `distancetocontrolpoint` 输入、`multiply` | ri-dist 发射半径 25、`inputrangemax 50`，尺寸正好减半（4） | 成立 |
+| 两遍模式下持久输出列的 `add`、`subtract` 一帧叠两次 | fps 60 每帧 Δrot 是 ±0.0308，正好是一遍的预测；fps 10 是 ±0.0632，是一遍预测 0.0316 的两倍；`remap` 只等于一遍的值 | 成立 |
+| blend：`old + (op − old)·b` | rv-blend 寿命比例 0.5 以前 alpha 是 1，0.6 以后等于 rv-time 的值 | 成立 |
+| op 的标量输入只用 x 分量归一化再铺满，init 按分量各自归一化 | rv-vec / ri-vec 设计时漏写了 `flags 0`，归一化被夹到 1，两种算法都得 50 | 没测到，留给步骤 4 |
+| `remap2` 的全取值扫描（20 个输入、13 个输出，op 和 init 各一套） | 66 个系统每帧都画，没有加载报错 | 数据已抓，步骤 4 回放 |
+
+**留给各步回放核对的：**
+- `mb2-move` 的定量（fps 10 已抓）、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式；
+- FBm 的倍频细节、op 标量输入的归一化、`remap2` 的全部取值；
+- R9 的读 `fps` 分支、T7 的预热（WPE 里一直没有存活粒子，原因待查）。
