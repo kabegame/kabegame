@@ -1428,3 +1428,25 @@ WPE 在用户退出后由 `wpe-renderdoc` 注入启动，工程开在 1920×1080
 所以 `shimmering_particles` 在 `style = 1` 时三层朝向相机是对的。
 
 工具在 `ignore/p4/c5/`：`step5_unlock.py`、`consts.py`、`corners-offline.test.ts`、`corners-offline.ts`、`orient-scan.test.ts`、`replay-b3/b4/b6/cp/ptr/attract.test.ts`、`replay.test.ts`、`run_old.sh`、`cmp_old.py`、`corpus.test.ts`、`corpus_diff.py`、`mutate.py`、`mutate_claude.py`、`run_old_claude.sh`、`cmp_corpus_claude.py`、`live_corners.ts`、`vitest.config.ts`；HEAD 源码 `head/src`，结果在 `out/`（画面哈希 `out/hash-after.json`，导入清单 `out/import-manifest.json`）。
+
+### P4c 收尾（2026-11-09）
+
+**`3832772446` 和 WPE 比画面**（P4c 唯一新解锁的场景）。WPE 由 `wpe-renderdoc` 注入启动（此前用户已退出 WPE），临时改 `fps=60`，场景开在 3840×2160 窗口（WPE 窗口高度被屏幕压到 2130），抓 3 帧（`A:\p4b\3832772446-fps60`，`g_Time` 34.449 / 34.699 / 34.949，抓帧拖慢、帧时间钳到 0.25）；`stop --relaunch` 按字节还原 `config.json`，桌面壁纸经 `openWallpaper` 放回。场景没有着色器读 `g_PointerPosition`。
+
+| 项 | 结果 |
+|---|---|
+| 静态部分（我们按抓帧的 `g_Time` 渲染、不步进粒子，后处理 `follow` 解析为 `disabled`；cover 比例 1、上下各裁 15 行逐像素，`c5/cmp_scene.py`） | 差值 > 32 的像素只占 0.15%，全部落在 WPE 的 20 个粒子上（差异热图与拼图 `out/side-3832772446-f2062.png`）；粒子以外逐像素一致 |
+| 粒子（20 个透视粒子，`sphererandom` + `alphafade` + 排斥的 `controlpointattract`，`sprite` `flags 1`）：WPE 从抓帧读 vs_in 与 `gs_out`（`c5/wpe_particles.py`），我们按「前 2061 帧均匀走到 34.199 s、抓到的三帧各 0.25 s」回放（kabegame-dev `hostParticleCorners` / `hostRender`，`c5/ours_particles.ts`），比统计量（`c5/cmp_particles.py`） | 粒子数 20 / 19 / 20 对 20 / 19–20；位置 x、y、z 范围、尺寸（WPE 53–284，我们 54–292）、屏幕上的四边形边长（104–551 对 106–567）与中心分布一致。alpha 均值 WPE 0.43，我们前三个种子 0.56；再跑 24 个种子（`c5/alpha_seeds.ts`）均值 0.504、标准差 0.072，WPE 在一个标准差以内，是随机波动 |
+| 带粒子的整帧（`hostRender` 回放，`out/side-particles-3832772446-f2062.png`） | 粒子外观（一簇闪光的贴图）、大小、数量和分布和 WPE 一致，位置随机 |
+
+**文档**（子代理写）：
+- `cocs/wpe/WPE_SCENE.md`：
+  - 新增「粒子（P4c）」一节：控制点、指针、`controlpointattract`、世界空间与帧顺序、拖尾与 `sprite` 朝向、语料与解锁、探针增补；
+  - 顶部阶段摘要加 P4c 一条，计划链接加本文件；
+  - 改正被 P4c 改掉的旧说法：能力表放行项（`instanceoverride` 控制点静态值）、P4a 节的档 1 `sprite`、`TEX0FORMAT`、能力键表（`particle:flags:world`、`particle:controlpoint`、`particle:instance:controlpoint`、`particle:renderers`、表外模块的举例）、帧内顺序、绘制矩阵、写顶点、步进位置、粒子 uniform、`instanceoverride` 的控制点，P4b 节的 `vortex` 控制点与「语料与解锁」两条历史条目；`g_PointerPosition` 与场景样式里的指针各加一句和跟随点的区别。
+- `cocs/README.md`：场景文档条目加「控制点、世界空间与拖尾（P4c）」，并补充适用场景。
+- changelog：用户侧一行、开发侧一行。
+- 回归文档：新增「场景壁纸 P4c」一节（C0–C15）。C10、C12、C14 待用户目视，C15 可选；C11 按用户 2026-11-08 的真机记录勾上。
+- 总计划：P4c 节补上完成情况，「范围与覆盖」加口径说明。
+
+覆盖数按 P4b 的口径重算（`ignore/p4/c5/coverage_p4c.py`，结果 `out/coverage-p4c.txt`）：152 个工程，能渲染 20 → 22（`1838478131`、`3832772446`）；带粒子 95 张，粒子用法完全覆盖 22 → 44，步骤 1–5 之后依次 22、26、31、32、44。P4b 收尾的输入取 `c1/out/corpus-head.json`（`a7d12df9`），算出的 20 / 95 / 22 和 P4b 收尾记录相同。
