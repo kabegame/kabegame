@@ -657,12 +657,13 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **绘制方式**：翻译后的 `a_TexCoordVec4` 同时装角点 UV、旋转和尺寸，不用实例化四边形，改成每个粒子 4 个顶点加索引。
 - **验收**：粒子用法覆盖 70 张，解锁 `shimmering_particles`、`3062029089`、`1838478131`、`2254685070`；粒子带随机，不比预览图，改用确定性工程和 WPE 逐帧对比。
 
-## P5 — 透视相机与静态网格（retro · neon_sunset）
+## P5 — 相机、网格与图像模型标志（retro · neon_sunset · dna_fragment · techno 等 18 张）
 
-- **新增** `.mdl` 静态网格解析（MDLV0014：顶点、UV、索引、材质引用），model 图层用项目材质绘制；
-  透视相机（`fov / nearz / farz / eye / center / up`）、深度测试与写入。
-- **新增** `fullscreen` / `passthrough` 层、`filmgrain` effect、`parallaxDepth`（`cameraparallax` 关闭时不位移，开启时接指针，指针在 P6 才接）。
-- **验收**：retro、neon_sunset 与预览图一致；neon_sunset 的颜色属性生效。
+总计划见 [phase-5-camera-mesh.md](phase5/phase-5-camera-mesh.md)。2026-11-10 用户定范围为语料里相机、网格与图像模型标志的全部用法，目标从两张样本改为解锁 18 张（能渲染 22 → 40）。
+
+- **分节**：前置（能力表修正）；P5a 视差、抖动与缩放（[子计划](phase5/phase-5a-parallax.md)）；P5b 图像模型标志（组合层、`fullscreen`、`projectlayer`、`nopadding`、`instanced`、图像层 `perspective`）；P5c 静态网格（全部 mdl 版本，不含骨骼与变形）；P5d 透视相机、相机路径、相机对象与深度。
+- **从别处移来**：dna_fragment、techno 从 P7 提前到 P5d；相机对象从 W3 提前到 P5d；视差不再等 P6，P4c 已接好指针。深度附件由 P5d 建、P4f 复用。
+- **验收**：和 WPE 抓帧比，不比作者的预览图；每节有确定性工程。
 
 ## P6 — 复杂脚本、文本、声音（dino_run）
 
@@ -703,7 +704,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 ## W3 — 多段视频与音频脚本（工坊 3470764447 伊蕾娜·昼夜）
 
 - **新增** 5 段视频纹理按时段切换（脚本经 `getLayer` 改 `visible`）：不可见的视频要暂停解码。
-- **新增** 脚本 `engine.canvasSize`、`mediaThumbnailChanged`（接 `WpeMediaHub` 的 SMTC 封面）；`colorBlendMode` 21 / 31；带 `camera` 的对象（开工时核实语义）。
+- **新增** 脚本 `engine.canvasSize`、`mediaThumbnailChanged`（接 `WpeMediaHub` 的 SMTC 封面）；`colorBlendMode` 21 / 31。带 `camera` 的对象已移到 P5d（2026-11-10）。
 - **验收**：不同时段显示对应视频；层级动画与预览图一致。
 
 ## W4 — 交互与声音控制（工坊 3611425904 五河琴里 · 3146703458 P3R 音乐播放器 · 3351163962 椎名真白）
@@ -730,12 +731,13 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   脚本 `localStorage`。
 - **验收**：人物骨骼动画与预览一致；鼠标视差与折射生效。
 
-## P7 — 3D 模型场景（dna_fragment · techno · audiophile）
+## P7 — 3D 模型场景（audiophile）
 
-- **新增** mdl 的 MDLV0004 / MDLV0023 变体，多材质网格，项目 shader 的透视渲染。
+- dna_fragment、techno 与 mdl 的全部静态版本已提前到 P5（2026-11-10）：网格探针显示它们只差透视和网格。
+- **新增** 对象 `reflected`、`skin` 与反射 RT（audiophile 的 grid 还缺 `materials/grid/grid.tex`，开工时核实）。
 - **新增** 音频：audiophile 的 `g_AudioSpectrum*`，复用 W2 接好的主 frame 音频订阅。
-- 开工前先核实这 3 张的 shader 是否用到光照；用到的话，把该样本挪到 P8。
-- **验收**：三张与预览图一致；audiophile 随系统音频跳动，静音后回落。
+- 开工前先核实 audiophile 的 shader 是否用到光照；用到的话挪到 P8。
+- **验收**：和 WPE 画面一致；audiophile 随系统音频跳动，静音后回落。
 
 ## P8 — 光照与材质（demon_core · arsenal · fantasticcar · ricepod）
 
