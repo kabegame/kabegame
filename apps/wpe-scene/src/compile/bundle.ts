@@ -58,6 +58,7 @@ import {
   sceneVersionOf,
   type InstanceKey,
   type ParticleRenderer,
+  type RopeRenderer,
   type SceneParticle,
 } from "./particles";
 import {
@@ -162,18 +163,41 @@ export interface ParticleSheetSystem {
   /**
    * 系统的 renderer（`SceneParticle.renderer` 的种类与朝向模式，P4c 步骤 5）：拖尾写 `THICKFORMAT`、`TRAILRENDERER`
    * （`particleRendererDefines`），非厚格式 sprite 的非 screen 朝向决定 `TEX0FORMAT`（`particleTex0Format`）。缺省是 screen 朝向的 sprite。
+   * rope（P4d 步骤 1）另带 `subdivision`（`TRAILSUBDIVISION`），着色器换成 `ROPE_SHADER`。
    */
-  renderer?: { kind: ParticleRenderer["kind"]; orientation: Pick<ParticleRenderer["orientation"], "mode"> };
+  renderer?: {
+    kind: ParticleRenderer["kind"];
+    orientation: Pick<ParticleRenderer["orientation"], "mode">;
+    rope?: Pick<RopeRenderer, "subdivision"> | null;
+  };
 }
+
+/**
+ * rope 两类的着色器（rea-p4d-rope.md 第 6 节）：`FUN_140150110` 把 `{"shader": "genericropeparticle"}` 递归覆盖进材质 pass
+ * （`0x1401505f4`–`0x14015068f`），所以材质写了别的着色器也换掉；blending、深度、纹理、常量照旧取材质，`combos` 合并、变体宏优先。
+ * WPE 恒定义 `GS_ENABLED`，`.geom` 按同名另读（`0x140162cb7`）：翻译时带 `geometry`。
+ */
+export const ROPE_SHADER = "genericropeparticle";
 
 /**
  * renderer 的宏（`FUN_1401d2340` 的 renderer 分发，`0x1401d2590`，rea-p4c-render.md 6.2）：`spritetrail` 分支
  * （`0x1401d2c02`–`0x1401d2f78`）写 `THICKFORMAT = 1`（`0x1401d2c6d`）、`TRAILRENDERER = 1`（`0x1401d2cf6`），有帧表时再照
  * sprite 厚格式的写法加 `SPRITESHEET*`（`particleSheetDefines`）。sprite 不写 renderer 宏（朝向不进宏，7.8）。只支持系统里一个
  * renderer（多个报 `particle:renderers`）。
+ * rope 分支（`0x1401d29e1`–`0x1401d2bfd`，rea-p4d-rope.md 3.4）：无条件 `THICKFORMAT = 1`，`TRAILSUBDIVISION = subdivision`，
+ * `ORIENTATION = 朝向模式`（`0x1401d2b3e`，值为 0 也写）；`TEX0FORMAT` 只在格式 8–11 时写（`particleTex0Format` 的厚格式一支），
+ * 不写 `SPRITESHEET*`（`particleDefines` 跳过帧表宏）。
  */
 export function particleRendererDefines(system: ParticleSheetSystem): Record<string, string> {
-  return system.renderer?.kind === "spritetrail" ? { THICKFORMAT: "1", TRAILRENDERER: "1" } : {};
+  const renderer = system.renderer;
+  if (renderer?.kind === "spritetrail") return { THICKFORMAT: "1", TRAILRENDERER: "1" };
+  if (renderer?.kind === "rope")
+    return {
+      THICKFORMAT: "1",
+      TRAILSUBDIVISION: String(renderer.rope?.subdivision ?? 0),
+      ORIENTATION: String(renderer.orientation.mode),
+    };
+  return {};
 }
 
 /**
@@ -436,6 +460,7 @@ interface PassContext {
   /**
    * 粒子材质（P4b 步骤 2 起带系统描述）：按 renderer 与槽 0 格式写 `TEX0FORMAT`（`particleTex0Format`），槽 0 是帧表纹理时
    * 写帧表宏（`particleSheetDefines`），拖尾写 `THICKFORMAT`、`TRAILRENDERER`（`particleRendererDefines`，P4c 步骤 5）；
+   * rope 换着色器（`ROPE_SHADER`，带 `.geom`）、写 rope 的宏、不写帧表宏（P4d 步骤 1）；
    * 任何槽位的帧表纹理都不报 `tex:animation`（步骤 5，帧表语义只按槽 0）；程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。
    */
   particle?: ParticleSheetSystem;
@@ -674,18 +699,22 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    * 槽 0 的纹理带帧表（`SceneTexture.sheet`，WPE 据此置系统的 `0x1000000`）时另写帧表宏（`particleSheetDefines`，P4b 步骤 2）；
    * 拖尾另写 `THICKFORMAT`、`TRAILRENDERER`（`particleRendererDefines`，P4c 步骤 5）。
    * 槽 0 的纹理按同一规则取：按名字写的（`slots[0]`），否则是注解的 `default`。
+   * rope（P4d 步骤 1）：`shaderName` 是换过的 `ROPE_SHADER`，读注解的那次同样带 `.geom`；只写 rope 的宏与 8–11 的 `TEX0FORMAT`，
+   * 不写帧表宏（rea-p4d-rope.md 3.4）。
    */
   async function particleDefines(
     pass: MaterialPass,
+    shaderName: string,
     formats: ShaderTextureSlot[],
     slots: Record<number, number>,
     scope: ResourceScope | null,
     system: ParticleSheetSystem,
   ): Promise<Record<string, string>> {
+    const rope = system.renderer?.kind === "rope";
     let format = formats.find((item) => item.slot === 0)?.format;
     let texture: SceneTexture | undefined = slots[0] === undefined ? undefined : bundle.textures[slots[0]];
-    if (format === undefined && pass.shader) {
-      const probe = await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, new Set());
+    if (format === undefined) {
+      const probe = await shader.compile(shaderName, pass.combos ?? {}, formats, scope, new Set(), {}, rope);
       const fallback = probe?.textures?.find((texture) => texture.slot === 0)?.meta?.default;
       if (fallback === FRAMEBUFFER_RT) format = FBO_FORMATS.rgba8888.tex;
       else if (typeof fallback === "string" && fallback && !fallback.startsWith("_rt_")) {
@@ -694,12 +723,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         texture = found ? bundle.textures[found.index] : undefined;
       }
     }
-    // 拖尾一定走厚格式（`need |= 2`），帧表的 sprite 也是（rea-p4b-render.md 2.4）
-    const thick = system.renderer?.kind === "spritetrail" || !!texture?.sheet;
+    // 拖尾一定走厚格式（`need |= 2`），帧表的 sprite 也是（rea-p4b-render.md 2.4）；rope 的 `TEX0FORMAT` 同样只看 8–11
+    // （rea-p4d-rope.md 3.4：不像非厚格式 sprite 那样也看朝向）
+    const thick = rope || system.renderer?.kind === "spritetrail" || !!texture?.sheet;
     const tex0 = particleTex0Format(format, thick, system);
     return {
       ...particleRendererDefines(system),
-      ...particleSheetDefines(texture?.sheet, system),
+      ...(rope ? {} : particleSheetDefines(texture?.sheet, system)),
       ...(tex0 !== undefined ? { TEX0FORMAT: String(tex0) } : {}),
     };
   }
@@ -803,10 +833,15 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         formats.push({ slot, format: texture.format });
       }
     }
+    // rope 系统的 pass 无条件换成 `genericropeparticle`、带 `.geom` 翻译（P4d 步骤 1，rea-p4d-rope.md 第 6 节，见 `ROPE_SHADER`）
+    const rope = context.particle?.renderer?.kind === "rope";
+    const shaderName = rope ? ROPE_SHADER : pass.shader;
     const defines =
-      context.particle && pass.shader ? await particleDefines(pass, formats, slots, scope, context.particle) : {};
-    const result = pass.shader
-      ? await shader.compile(pass.shader, pass.combos ?? {}, formats, scope, issues, defines)
+      context.particle && shaderName
+        ? await particleDefines(pass, shaderName, formats, slots, scope, context.particle)
+        : {};
+    const result = shaderName
+      ? await shader.compile(shaderName, pass.combos ?? {}, formats, scope, issues, defines, rope)
       : null;
     if (result?.ok) {
       for (const script of scripts.list) {
@@ -820,7 +855,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         script.valueType = script.target.type;
       }
     }
-    if (!pass.shader) issues.add("shader:missing");
+    if (!shaderName) issues.add("shader:missing");
     if (context.particle) checkParticleProgram(pass, result?.ok ? result : null, issues);
     let program: number | null = null;
     if (result?.ok) {

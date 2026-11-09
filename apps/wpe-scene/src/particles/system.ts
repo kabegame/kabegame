@@ -27,6 +27,10 @@
  * 进世界坐标（`origin` 不经 `W`），之后对象移动、旋转，已发出的粒子留在原地；绘制时模型矩阵是单位阵（渲染器负责）。
  * 子系统不在这里。
  * 表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
+ *
+ * `rope`（P4d 步骤 1，rea-p4d-rope.md 第 2 节）：renderer 是 rope 的系统另维护 rope 表（`ropeOrder`，存槽号、表序就是出生序）
+ * 和累计死亡数（`deaths`，`sys+0x350`，只给 `uvscrolling` 用）：出生时追加，每帧判死后保序删除当帧的死亡槽、死亡数累加（删除在
+ * 发射之前），`clear` 时一起清零。两遍模式只影响 operator，预热照常维护（2.4）。段顶点见 `rope.ts`。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
 import { identity } from "../render/math";
@@ -50,6 +54,7 @@ import {
   type ParticleRunContext,
 } from "./modules";
 import type { ParticleRandom, ParticleROverride } from "./random";
+import { RopeOrder } from "./rope";
 
 /** 没给控制点输入时用：对象世界矩阵按单位阵、指针的跟随点按 (0, 0)（单测；渲染器与 `particleTrack` 都显式传）。 */
 const IDENTITY_INPUTS: ControlPointInputs = { world: identity(), pointer: [0, 0] };
@@ -159,6 +164,12 @@ export class ParticleSystem {
   readonly skipped: string[] = [];
   /** 控制点（P4c 步骤 1）。 */
   readonly controlPoints: ControlPointSet;
+  /** rope 表（P4d 步骤 1，`sys+0x218`）：renderer 是 rope 的系统才有，其余为 null。 */
+  readonly ropeOrder: RopeOrder | null;
+  /** 累计死亡数（`sys+0x350`，rope `uvscrolling` 的 `TP0`）：rope 系统才累加，`clear` 时清零。 */
+  deaths = 0;
+  /** 当帧判死的槽号（升序，`ageAndKill` 收集，rope 系统才用），复用同一个数组。 */
+  private readonly dead: number[] = [];
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -186,6 +197,8 @@ export class ParticleSystem {
     this.passes = passes;
     this.rOverride = rOverride;
     this.columns = new ParticleColumns(def.maxcount, particleColumnFlags(def));
+    // WPE 在 rope 的段缓冲（`sys+0x208`）存在时才维护表（2.2、2.3），即 renderer 是 rope
+    this.ropeOrder = def.renderer?.kind === "rope" ? new RopeOrder(this.columns.capacity) : null;
     this.instance = instanceValues(def.instance);
     // 从基值乘，不累乘（C5）；颜色模块的字段乘完再按 `colorn` 平移（`applyColorn`）。`brightness` 不做（能力表按
     // `checkParticleInstance` 报）
@@ -228,6 +241,14 @@ export class ParticleSystem {
   /** 当前的 `instanceoverride` 标量与 `colorn`（一份拷贝）。 */
   get instanceValues(): ParticleInstanceValues {
     return instanceValues(this.instance);
+  }
+
+  /**
+   * 当前的一项 `instanceoverride` 标量原值（不看系统 flags 的禁用位、不钳制）：rope 的 `R`、`L` 乘 `count`、`lifetime`
+   * （rea-p4d-rope.md 1.2，`io+0xd0`、`io+0xd8`），每帧写段顶点时读，不拷贝。
+   */
+  instanceScalar(field: "count" | "lifetime"): number {
+    return this.instance[field];
   }
 
   /**
@@ -332,12 +353,17 @@ export class ParticleSystem {
     for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs);
   }
 
-  /** 清空全部粒子（不重置发射状态）。 */
+  /**
+   * 清空全部粒子（不重置发射状态）。rope 表与累计死亡数一起清零（`FUN_14022fd90` / `FUN_14022f990` 在高水位 > 0 时同时清零
+   * 高水位、存活数、`sys+0x350` 并清空表，rea-p4d-rope.md 2.4；累计死亡数非零时高水位一定非零，所以无条件清零结果相同）。
+   */
   clear(): void {
     this.columns.clear();
     this.highWater = 0;
     this.alive = 0;
     this.searchFrom = 0;
+    this.ropeOrder?.clear();
+    this.deaths = 0;
   }
 
   private advance(dt: number, frameDt: number, passes: 1 | 2, inputs: ControlPointInputs): void {
@@ -363,15 +389,27 @@ export class ParticleSystem {
     this.controlPoints.endFrame();
   }
 
+  /**
+   * 判死（O1 第 1 步）。rope 系统另收集当帧的死亡槽号（槽号升序，`FUN_140236cd0` 的死亡列表 `sys+0x420`），循环后从 rope 表里
+   * 保序删除（`0x140237082`），死亡数累加进 `deaths`（`0x140237146`，rea-p4d-rope.md 2.3）。都在发射之前：同一帧先删死的、再追加新的。
+   */
   private ageAndKill(dt: number): void {
     const { age, life } = this.columns;
+    const order = this.ropeOrder;
+    const dead = this.dead;
+    dead.length = 0;
     for (let i = 0; i < this.highWater; i++) {
       age[i] = f32(age[i] + dt);
       if (life[i] !== 0 && life[i] < age[i]) {
         life[i] = 0;
         this.alive--;
         if (i < this.searchFrom) this.searchFrom = i;
+        if (order) dead.push(i);
       }
+    }
+    if (order && dead.length) {
+      order.removeDead(dead);
+      this.deaths += dead.length;
     }
   }
 
@@ -437,5 +475,7 @@ export class ParticleSystem {
     c.alpha[slot] = c.alpha0[slot];
     this.alive++;
     if (slot >= this.highWater) this.highWater = slot + 1;
+    // 「存活数 + 1、高水位更新」之后追加到 rope 表尾（rea-p4d-rope.md 2.2）：同一帧按 emitter 顺序、逐个出生的顺序
+    this.ropeOrder?.push(slot);
   }
 }

@@ -612,7 +612,8 @@ export function checkParticleProgram(
  * - 其它顶层键：`particle:system:<键>`；顶层键写成绑定：`particle:binding:system:<键>`（WPE 按 `isNumeric` / `isString`
  *   读，对象当缺键，语义没核对）。`emitter` / `initializer` / `operator` 不是数组时同样报 `particle:system:<键>`。
  * - renderer：`sprite`、`spritetrail` 在表里，`orientation`、`axis`、`flags` 的取值全部支持（P4c 步骤 5，`particles/orientation.ts`）；
- *   rope 两类（P4d）表外照报。多于一个报 `particle:renderers`：WPE 按数组顺序各画一次、共用同一个顶点缓冲、各绑自己的变体材质
+ *   `rope`（P4d 步骤 1）在表里，`subdivision`、`uvscale`、`uvscrolling`、`uvsmoothing` 的取值全部支持（`particles/rope.ts`）；
+ *   `ropetrail`（P4d 步骤 2）表外照报。多于一个报 `particle:renderers`：WPE 按数组顺序各画一次、共用同一个顶点缓冲、各绑自己的变体材质
  *   （rea-p4c-render.md 6.3，实测两种顺序都是两次绘制），我们一个粒子层只有一次绘制，支持它要拆成一个系统多次绘制（顶点布局
  *   能不能共用、每次绘制各自的 uniform、快照「每对象至多一次」、四角探针按绘制输出）。语料里这样的系统 0 张，留着不做
  *   （2026-11-09 用户定）。

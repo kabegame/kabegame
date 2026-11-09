@@ -106,8 +106,14 @@ export interface VertexPacking {
   pack(vertices: readonly QuadVertex[]): ArrayBuffer;
 }
 
-/** 按 `attributes` 的 name → location 建交错顶点布局；矩阵 / 数组属性按列（元素）展开成连续 location。 */
-export function vertexPacking(attributes: readonly InterfaceVariable[]): VertexPacking {
+/**
+ * 按 `attributes` 的 name → location 建交错顶点布局；矩阵 / 数组属性按列（元素）展开成连续 location。`stepMode`：翻译结果带
+ * `geometry`（几何着色器展开，P4d 步骤 1）时按实例步进（每次几何着色器调用一个实例），其余按顶点。
+ */
+export function vertexPacking(
+  attributes: readonly InterfaceVariable[],
+  stepMode: GPUVertexStepMode = "vertex",
+): VertexPacking {
   const packed: PackedAttribute[] = [];
   let offset = 0;
   for (const attribute of attributes) {
@@ -124,7 +130,7 @@ export function vertexPacking(attributes: readonly InterfaceVariable[]): VertexP
   return {
     layout: {
       arrayStride: stride,
-      stepMode: "vertex",
+      stepMode,
       attributes: packed.map((a) => ({ shaderLocation: a.location, offset: a.offset, format: a.info.format })),
     },
     attributes: packed.map((a) => ({
@@ -153,6 +159,11 @@ export function vertexPacking(attributes: readonly InterfaceVariable[]): VertexP
       return buffer;
     },
   };
+}
+
+/** 一个翻译结果的顶点布局：带 `geometry` 的按实例步进（`vertexPacking`），渲染器、自查与四角探针共用。 */
+export function programVertexPacking(result: Pick<TranslateResult, "attributes" | "geometry">): VertexPacking {
+  return vertexPacking(result.attributes ?? [], result.geometry ? "instance" : "vertex");
 }
 
 /**
@@ -242,7 +253,7 @@ export async function createProgram(
     fragment,
     bindGroupLayout,
     pipelineLayout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
-    vertexPacking: vertexPacking(result.attributes ?? []),
+    vertexPacking: programVertexPacking(result),
     textures: result.textures ?? [],
     uniformSize: result.uniforms?.length ? Math.max(16, Math.ceil((result.uniformBlockSize ?? 0) / 16) * 16) : 0,
   };
@@ -251,7 +262,8 @@ export async function createProgram(
 /**
  * `blending` 为 null 时关闭混合（基础 pass 画进合成 RT，B7）。`writeAlpha`：画到场景目标时为 false（见文件头），
  * 画进合成 RT / fbo 时为 true（合成链要带着 alpha 走到上屏那一步）。`topology`：图层四边形是三角形带，
- * 粒子是带索引的三角形列表（每粒子 `0 1 2 0 2 3`，P4a 步骤 4）。
+ * 粒子是带索引的三角形列表（每粒子 `0 1 2 0 2 3`，P4a 步骤 4）；rope（几何着色器展开，P4d 步骤 1）是三角形带，每段一个实例，
+ * 实例之间本来就断开，和 WPE 每次几何着色器调用输出一条带等价。
  */
 export async function createPipeline(
   device: GPUDevice,

@@ -173,7 +173,7 @@ export interface SceneParticle {
    * 写成 `[]` 时 WPE 不补，系统不画（语料里都是只靠子系统出图的发射器）。
    */
   renderers: ParticleModule[];
-  /** 绘制用的 renderer（P4c 步骤 5，`particleRenderer`）：种类、拖尾的 `g_RenderVar0`、朝向。 */
+  /** 绘制用的 renderer（P4c 步骤 5，`particleRenderer`）：种类、拖尾的 `g_RenderVar0`、朝向、rope 的绘制参数（P4d 步骤 1）。 */
   renderer: ParticleRenderer;
   /** 缺省值按正交还是透视那一套选（`isOrthographic`）。 */
   orthographic: boolean;
@@ -190,35 +190,109 @@ export interface SceneParticle {
 }
 
 /**
+ * `rope` 的绘制参数（P4d 步骤 1，rea-p4d-rope.md 1.2、3.1、3.2）：解析期定下，段顶点（`particles/rope.ts` 的 `writeRopeSegments`）
+ * 与宏（`compile/bundle.ts`）用。
+ */
+export interface RopeRenderer {
+  /** `subdivision`，已钳到 `[0, 32]`：宏 `TRAILSUBDIVISION`，每段输出 `4 + 2·subdivision` 个顶点。 */
+  subdivision: number;
+  /** `K = 1/uvscale`（`sys+0x30`，float32）；`uvscale` 为 0 时不改，保持 1（3.1，`0x1401d0026`）。 */
+  inverseScale: number;
+  /** `uvscrolling`，系统 flags `0x20000`（`0x1401d0060`）：为真时不看 `uvsmoothing`。 */
+  scrolling: boolean;
+  /** `uvsmoothing` 且没开 `uvscrolling`，系统 flags `0x40000`（`0x1401d00a4`，`else if`）。 */
+  smoothing: boolean;
+  /**
+   * `L`（`def+0x1a4` → `sys+0x1bc`）：按 JSON 顺序第一个中点非零的 `lifetimerandom` 的 `min + (max − min)·0.5`（float32，`exponent`
+   * 不参与，3.2 `0x1401c72d0`–`0x1401c72f5`），没有则 0。没乘 `instanceoverride.lifetime`（写段顶点时乘，1.2）。
+   */
+  lifetime: number;
+  /**
+   * `R`（`def+0x1a8` → `sys+0x1c0`）：按 JSON 顺序第一个 `rate` 非零的 `sphererandom` / `boxrandom` 的 `rate`（float32，3.2
+   * `0x1401c6ab4`），没有则 0。没乘 `instanceoverride.count`（写段顶点时乘，1.2）。
+   */
+  rate: number;
+}
+
+/**
  * 绘制用的 renderer（P4c 步骤 5）。一个系统只画一次：多个 renderer 时 WPE 各画一次、共用同一个顶点缓冲（rea-p4c-render.md 6.3），
  * 这里没做，能力表报 `particle:renderers`（`checkParticleFeatures`），强制渲染时取第一个。
  */
 export interface ParticleRenderer {
-  kind: "sprite" | "spritetrail";
+  kind: "sprite" | "spritetrail" | "rope";
   /**
    * 拖尾的 `g_RenderVar0.xyz`：`(length, maxlength, minlength)`，float32，原样（不钳制、不排序，6.1）；`w` WPE 不写、
-   * `genericparticle` 不读，我们写 0。sprite 为 null（`g_RenderVar0` 全 0）。
+   * `genericparticle` 不读，我们写 0。sprite、rope 为 null（`g_RenderVar0` 全 0：rope 分支不读它，WPE 写的 `z = 0`、
+   * `w = 存活数` 不复刻，rea-p4d-rope.md 第 4 节）。
    */
   trail: [number, number, number] | null;
-  /** 朝向（`readOrientation`）：每次绘制按它和绘制的模型矩阵算 `g_Orientation*`；拖尾的几何不读，值照算（7.7）。 */
+  /**
+   * 朝向（`readOrientation`）：每次绘制按它和绘制的模型矩阵算 `g_Orientation*`；拖尾的几何不读，值照算（7.7）。rope 的几何
+   * 只在 `ORIENTATION ≠ 0` 时读 `g_OrientationForward`（rea-p4d-rope.md 1.5），模式进宏 `ORIENTATION`。
+   */
   orientation: ParticleOrientation;
+  /** `rope` 的绘制参数；其余 renderer 为 null。 */
+  rope: RopeRenderer | null;
+}
+
+/** 表内的 renderer（`ropetrail` 属 P4d 步骤 2，表外照报）。 */
+const DRAWN_RENDERERS: ReadonlySet<string> = new Set(["sprite", "spritetrail", "rope"]);
+
+/**
+ * `rope` 的 `L`、`R`（rea-p4d-rope.md 3.2）：WPE 在解析 emitter / initializer 时顺带记下，`L`、`R` 初值 0、只在当前为 0 时写，
+ * 等价于各取第一个非零值。字段是模块表的解析值（double，缺省已补，绑定取静态值），这里舍入成 float32 再算。
+ */
+function ropeRateAndLifetime(
+  emitters: readonly ParticleModule[],
+  initializers: readonly ParticleModule[],
+): { rate: number; lifetime: number } {
+  let lifetime = 0;
+  for (const module of initializers) {
+    if (module.name !== "lifetimerandom" || lifetime !== 0) continue;
+    const min = f32(module.fields.min as number);
+    const max = f32(module.fields.max as number);
+    lifetime = f32(f32(f32(max - min) * 0.5) + min);
+  }
+  let rate = 0;
+  for (const module of emitters)
+    if ((module.name === "sphererandom" || module.name === "boxrandom") && rate === 0)
+      rate = f32(module.fields.rate as number);
+  return { rate, lifetime };
 }
 
 /**
- * 系统的 renderer：第一个表内的 renderer（`sprite` / `spritetrail`）；一个都没有时按缺省的 `sprite` 画。表外 renderer
- * （rope 两类，P4d）已由能力表报；`renderer: []` 时 WPE 不画，现在仍按缺省的 sprite 画（只靠子系统出图的发射器，随
- * `particle:children` 退回）。
+ * 系统的 renderer：第一个表内的 renderer（`sprite` / `spritetrail` / `rope`）；一个都没有时按缺省的 `sprite` 画。表外 renderer
+ * （`ropetrail`，P4d 步骤 2）已由能力表报；`renderer: []` 时 WPE 不画，现在仍按缺省的 sprite 画（只靠子系统出图的发射器，随
+ * `particle:children` 退回）。`emitters`、`initializers` 给 rope 的 `R`、`L`（`ropeRateAndLifetime`），缺省为空（`R = L = 0`）。
  */
-export function particleRenderer(renderers: readonly ParticleModule[]): ParticleRenderer {
-  const module = renderers.find((item) => item.name === "sprite" || item.name === "spritetrail");
+export function particleRenderer(
+  renderers: readonly ParticleModule[],
+  emitters: readonly ParticleModule[] = [],
+  initializers: readonly ParticleModule[] = [],
+): ParticleRenderer {
+  const module = renderers.find((item) => DRAWN_RENDERERS.has(item.name));
   const fields = module?.fields ?? readParticleModule("renderer", { name: "sprite" }, true).fields;
   const trail = module?.name === "spritetrail";
+  let rope: RopeRenderer | null = null;
+  if (module?.name === "rope") {
+    const scale = f32(fields.uvscale as number);
+    const scrolling = fields.uvscrolling === 1;
+    rope = {
+      subdivision: fields.subdivision as number,
+      // `divss`：`1.0f / uvscale`，0 时不写（def 构造值 1.0，`0x1401c17c6`）
+      inverseScale: scale !== 0 ? f32(1 / scale) : 1,
+      scrolling,
+      smoothing: !scrolling && fields.uvsmoothing === 1,
+      ...ropeRateAndLifetime(emitters, initializers),
+    };
+  }
   return {
-    kind: trail ? "spritetrail" : "sprite",
+    kind: trail ? "spritetrail" : rope ? "rope" : "sprite",
     trail: trail
       ? [f32(fields.length as number), f32(fields.maxlength as number), f32(fields.minlength as number)]
       : null,
     orientation: readOrientation(fields),
+    rope,
   };
 }
 
@@ -446,15 +520,17 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
       return { name, id, fields };
     });
   const renderers = modules("renderer");
+  const emitters = modules("emitter");
+  const initializers = modules("initializer");
   return {
     file: options.file,
     ...readParticleSystem(json),
     spriteSheet: false,
-    emitters: modules("emitter"),
-    initializers: modules("initializer"),
+    emitters,
+    initializers,
     operators: modules("operator"),
     renderers,
-    renderer: particleRenderer(renderers),
+    renderer: particleRenderer(renderers, emitters, initializers),
     orthographic: options.orthographic,
     controlpoints: readControlPoints(json),
     instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),

@@ -96,6 +96,7 @@ function materialStorage(
 /**
  * `ShaderCompiler` 的缓存键。`defines` 是调用方按 pass 给的宏（粒子材质槽 0 格式为 8–11 时的 `TEX0FORMAT`）：同一着色器、
  * 同样 COMBO，宏不同就不能命中同一条；没有时键与加宏之前逐字相同（图层材质、以及不写宏的粒子材质同一条规则）。
+ * `geometry`（P4d 步骤 1，rope 带 `.geom` 的翻译）另进键；为假时键与加这一项之前逐字相同。
  */
 export function shaderCacheKey(
   shader: string,
@@ -103,6 +104,7 @@ export function shaderCacheKey(
   textures: ShaderTextureSlot[],
   scope: ResourceScope | null,
   defines: Record<string, string> = {},
+  geometry = false,
 ): string {
   const parts: unknown[] = [
     shader,
@@ -115,6 +117,7 @@ export function shaderCacheKey(
   ];
   const extra = Object.entries(defines).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   if (extra.length) parts.push(extra);
+  if (geometry) parts.push("geometry");
   return JSON.stringify(parts);
 }
 
@@ -141,6 +144,8 @@ export class ShaderCompiler {
    * `unsupported` 是本次调用的上报目标，缺省为场景级。不支持项每次调用都写一遍：关着的 effect 先翻译、启用的 effect 再命中
    * 缓存时，场景级才收得到（3c）。结果仍是同一个对象，`addProgram` 按它去重。
    * `defines` 是本 pass 的宏（粒子材质槽 0 格式为 8–11 时的 `TEX0FORMAT`），在整场的 `defines` 之后应用，进缓存键。
+   * `geometry`（P4d 步骤 1）：为真时另读 `shaders/<名>.geom`（WPE 按同名另行加载，rea-p4d-rope.md 第 6 节，`0x140162cb7`），放进请求的
+   * `geometry`，翻译器把几何着色器展开进顶点着色器（`src-tauri/wpesl2wgsl/README.md`「几何着色器展开」）；进缓存键。
    */
   async compile(
     shader: string,
@@ -149,13 +154,14 @@ export class ShaderCompiler {
     scope: ResourceScope | null = null,
     unsupported: Set<string> = this.unsupported,
     defines: Record<string, string> = {},
+    geometry = false,
   ): Promise<TranslateResult | null> {
     // COMBO 只能是数值 / 布尔（WPE 按整数读，写成 `{user, value}` 会断言中止，I3）；对象由能力表报 `combo:user-binding`
     const usable = staticCombos(combos);
-    const key = shaderCacheKey(shader, usable, textures, scope, defines);
+    const key = shaderCacheKey(shader, usable, textures, scope, defines, geometry);
     let task = this.cache.get(key);
     if (!task) {
-      task = this.translate(shader, usable, textures, scope, defines);
+      task = this.translate(shader, usable, textures, scope, defines, geometry);
       this.cache.set(key, task);
     }
     const { result, issues } = await task;
@@ -169,21 +175,31 @@ export class ShaderCompiler {
     textures: ShaderTextureSlot[],
     scope: ResourceScope | null,
     defines: Record<string, string>,
+    geometry: boolean,
   ): Promise<TranslateOutcome> {
     if (!this.translator) return { result: null, issues: ["shader:wasm-missing"] };
     const issues: string[] = [];
-    const [vertex, fragment] = await Promise.all([
+    const [vertex, fragment, geom] = await Promise.all([
       this.fs.text(`shaders/${shader}.vert`, scope),
       this.fs.text(`shaders/${shader}.frag`, scope),
+      geometry ? this.fs.text(`shaders/${shader}.geom`, scope) : null,
     ]);
-    if (!vertex || !fragment) {
+    if (!vertex || !fragment || (geometry && !geom)) {
       issues.push(`shader:${shader}:missing`);
       if (!this.fs.sceneAssets.length) issues.push("assets:missing");
       return { result: null, issues };
     }
     const result = await translateWithIncludes(
       this.translator,
-      { vertex, fragment, combos, textures, defines: { ...this.defines, ...defines }, litDefines: this.litDefines },
+      {
+        vertex,
+        fragment,
+        ...(geom ? { geometry: geom } : {}),
+        combos,
+        textures,
+        defines: { ...this.defines, ...defines },
+        litDefines: this.litDefines,
+      },
       (name) => this.fs.text(`shaders/${name}`),
     );
     if (!result.ok) {

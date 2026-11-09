@@ -453,6 +453,17 @@ describe("renderer 的宏（P4c 步骤 5，FUN_1401d2340，rea-p4c-render.md 6.2
     expect(particleRendererDefines({ flags: 0, animationMode: "sequence" })).toEqual({});
   });
 
+  it("particleRendererDefines：rope 写 THICKFORMAT、TRAILSUBDIVISION、ORIENTATION（P4d 步骤 1，rea-p4d-rope.md 3.4）", () => {
+    for (const mode of [0, 1, 2] as const)
+      expect(
+        particleRendererDefines({
+          flags: 0,
+          animationMode: "sequence",
+          renderer: { kind: "rope", orientation: { mode }, rope: { subdivision: 16 } },
+        }),
+      ).toEqual({ THICKFORMAT: "1", TRAILSUBDIVISION: "16", ORIENTATION: String(mode) });
+  });
+
   it("particleTex0Format：厚格式只看 8–11；非厚格式 sprite 的非 screen 朝向对任何格式都写；格式未知不写", () => {
     for (const format of [0, 4, 6, 7, 12]) {
       expect(particleTex0Format(format, false, system("sprite", 0)), `${format}`).toBeUndefined();
@@ -617,6 +628,27 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     ]);
     expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
     expect(bundle.layers[0].particle!.renderer.trail).toEqual([Math.fround(0.05), 10, 3]);
+  });
+
+  it("rope + 帧表（P4d 步骤 1，rea-p4d-rope.md 3.4）：不写 SPRITESHEET*，只有 rope 的宏与 8–11 的 TEX0FORMAT；纹理不报 tex:animation", async () => {
+    const { translator, requests } = fakeTranslator();
+    const bundle = await compile(
+      memoryReader(
+        files({
+          "P:/p/particles/p.json": system({ renderer: [{ name: "rope", subdivision: 3 }] }),
+          "P:/p/shaders/genericropeparticle.vert": "void main(){}",
+          "P:/p/shaders/genericropeparticle.frag": "void main(){}",
+          "P:/p/shaders/genericropeparticle.geom": "void main(){}",
+        }),
+      ),
+      translator,
+    );
+    expect(bundle.unsupported).toEqual([]);
+    expect(requests.map((request) => request.defines)).toEqual([
+      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILSUBDIVISION: "3", ORIENTATION: "0", TEX0FORMAT: "9" },
+    ]);
+    // WPE 照样因槽 0 的帧表置 0x1000000（rope 着色器不读帧号），模拟器照算 frame
+    expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
   });
 
   it("没有帧表的粒子材质：宏逐字和步骤 1 相同（只有 TEX0FORMAT），spriteSheet 为 false", async () => {

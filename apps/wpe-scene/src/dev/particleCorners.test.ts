@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
-import { vertexPacking } from "../render/programs";
-import { Wpesl2wgsl } from "../wpesl2wgsl";
+import { ropeVertexLayout } from "../particles/rope";
+import { programVertexPacking, vertexPacking } from "../render/programs";
+import { translateWithIncludes, Wpesl2wgsl } from "../wpesl2wgsl";
 import { cornerInputs, replayParticles, rewriteVertexAsCompute } from "./particleCorners";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -139,6 +140,87 @@ fn vs(@builtin(vertex_index) index: u32, @location(1) size: f32, @location(0) id
     );
   });
 
+  describe("几何着色器展开（rope，P4d 步骤 1）", () => {
+    /** 翻译器展开 `.geom` 后的形状（摘自 `genericropeparticle` 的顶点 WGSL，主体只留一行）。 */
+    const ROPE_VERTEX = `struct VertexOutput {
+    @location(0) v_TexCoord: vec2<f32>,
+    @location(1) v_Color: vec4<f32>,
+    @builtin(position) gl_Position: vec4<f32>,
+}
+
+var<private> a_PositionVec4_1: vec4<f32>;
+var<private> v_TexCoord: vec2<f32>;
+var<private> v_Color: vec4<f32>;
+var<private> gl_Position: vec4<f32>;
+var<private> gl_VertexIndex_1: u32;
+
+fn main_1() {
+    gl_Position = a_PositionVec4_1;
+    return;
+}
+
+@vertex
+fn main(@location(0) a_PositionVec4_: vec4<f32>, @location(1) a_TexCoordVec4_: vec4<f32>, @builtin(vertex_index) gl_VertexIndex: u32, @builtin(instance_index) gl_InstanceIndex: u32) -> VertexOutput {
+    a_PositionVec4_1 = a_PositionVec4_;
+    gl_VertexIndex_1 = gl_VertexIndex;
+    main_1();
+    let _e1 = v_TexCoord;
+    let _e2 = v_Color;
+    let _e3 = gl_Position;
+    return VertexOutput(_e1, _e2, _e3);
+}
+`;
+    const ropeInputs = cornerInputs(
+      vertexPacking(
+        [
+          { name: "a_PositionVec4", location: 0, type: "vec4" },
+          { name: "a_TexCoordVec4", location: 1, type: "vec4" },
+        ],
+        "instance",
+      ).attributes,
+    );
+    const rewrite = () =>
+      rewriteVertexAsCompute(ROPE_VERTEX, "main", ropeInputs, 8, {
+        maxVertices: 10,
+        outputs: ["v_TexCoord", "v_Color"],
+      });
+
+    it("第 id 个调用是第 id / maxVertices 段的第 id % maxVertices 个顶点；按段读输入", () => {
+      const out = rewrite();
+      expect(out).toContain("let kb_corner_base = (kb_corner_index / 10u) * 8u;");
+      const r = (k: number) => `kb_corner_in[kb_corner_base + ${k}u]`;
+      expect(out).toContain(
+        `let kb_corner_result = kb_corner_vertex(vec4<f32>(${r(0)}, ${r(1)}, ${r(2)}, ${r(3)}), vec4<f32>(${r(4)}, ${r(5)}, ${r(6)}, ${r(7)}), (kb_corner_index % 10u), (kb_corner_index / 10u));`,
+      );
+    });
+
+    it("每个顶点写 3 项：位置、uv（补成 vec4）、颜色；上界按项数除", () => {
+      const out = rewrite();
+      expect(out).toContain("if (kb_corner_index >= arrayLength(&kb_corner_out) / 3u) {");
+      expect(out).toContain("kb_corner_out[kb_corner_index * 3u + 0u] = kb_corner_result.gl_Position;");
+      expect(out).toContain(
+        "kb_corner_out[kb_corner_index * 3u + 1u] = vec4<f32>(kb_corner_result.v_TexCoord, 0f, 0f);",
+      );
+      expect(out).toContain("kb_corner_out[kb_corner_index * 3u + 2u] = kb_corner_result.v_Color;");
+      expect(out).not.toContain("kb_corner_out[kb_corner_index] =");
+    });
+
+    it("要的成员不存在、入口只返回位置时抛错", () => {
+      expect(() =>
+        rewriteVertexAsCompute(ROPE_VERTEX, "main", ropeInputs, 8, { maxVertices: 10, outputs: ["v_Missing"] }),
+      ).toThrow("v_Missing");
+      expect(() =>
+        rewriteVertexAsCompute(
+          "@vertex\nfn vs(@location(0) p: vec4<f32>) -> @builtin(position) vec4<f32> {\n    return p;\n}\n",
+          "vs",
+          [{ location: 0, offset: 0, components: 4, kind: "f32" }],
+          4,
+          { outputs: ["v_Color"] },
+        ),
+      ).toThrow("v_Color");
+    });
+  });
+
   it("回放：前 n−1 帧只步进，最后一帧的时间是累计值、帧时间是最后一个 dt", () => {
     const steps: number[] = [];
     const scene = { stepParticles: (dt: number) => void steps.push(dt) };
@@ -194,5 +276,37 @@ describe.skipIf(!root || !existsSync(wasm))("本机样本：翻译出的粒子�
       expect(out).toContain("kb_corner_out[kb_corner_index] = kb_corner_result.gl_Position;");
       expect(out).not.toContain("@vertex");
     }
+  }, 60000);
+
+  it("WPE 的 genericropeparticle 带 .geom 翻译（P4d 步骤 1）：6 个 vec4 输入、maxVertices = 4 + 2·3，按段改写并写出 uv、颜色", async () => {
+    const shaders = join(root!, "assets", "shaders");
+    const read = (name: string) => readFileSync(join(shaders, name), "utf8");
+    const result = await translateWithIncludes(
+      await Wpesl2wgsl.fromBytes(readFileSync(wasm)),
+      {
+        vertex: read("genericropeparticle.vert"),
+        fragment: read("genericropeparticle.frag"),
+        geometry: read("genericropeparticle.geom"),
+        defines: { THICKFORMAT: "1", TRAILSUBDIVISION: "3", ORIENTATION: "0", SCENE_ORTHO: "1" },
+      },
+      async (name) => (existsSync(join(shaders, name)) ? read(name) : null),
+    );
+    expect(result.ok, JSON.stringify(result.errors)).toBe(true);
+    expect(result.geometry).toEqual({ maxVertices: 10 });
+    const packing = programVertexPacking(result);
+    expect(packing.layout.stepMode).toBe("instance");
+    const { layout, problems } = ropeVertexLayout(packing);
+    expect(problems).toEqual([]);
+    expect(layout.stride).toBe(24);
+    const out = rewriteVertexAsCompute(
+      result.vertex!.wgsl!,
+      result.vertex!.entryPoint!,
+      cornerInputs(packing.attributes),
+      layout.stride,
+      { maxVertices: 10, outputs: ["v_TexCoord", "v_Color"] },
+    );
+    expect(out).toContain("kb_corner_out[kb_corner_index * 3u + 2u] = kb_corner_result.v_Color;");
+    expect(out).toContain("(kb_corner_index % 10u)");
+    expect(out).not.toContain("@vertex");
   }, 60000);
 });

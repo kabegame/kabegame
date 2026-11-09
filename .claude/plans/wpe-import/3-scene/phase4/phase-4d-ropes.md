@@ -272,49 +272,243 @@ suspend(): boolean {
 
 ## 步骤 1 — `rope`
 
-- **新增** 翻译器的几何着色器展开（`src-tauri/wpesl2wgsl`），按决定 1。
-```ts
-interface TranslateRequest {
-  vertex: string;
-  fragment: string;
-  geometry?: string; // 新增：.geom 原文。给了就定义 GS_ENABLED，把顶点着色器的 GS 分支和几何着色器拼成一个顶点着色器
-  // …其余不变
-}
-interface TranslateResult {
-  // …其余不变
-  geometry?: {
-    // 新增：顶点输入全部按实例步进（每段一个实例），vertex_index 是输出顶点下标，拓扑三角形带
-    maxVertices: number; // [maxvertexcount(...)] 展开后的常量，如 4 + TRAILSUBDIVISION * 2
-  };
+分两半，各由一个子代理做、各自验收：1a 翻译器的几何着色器展开（Rust，能单独测），1b 宿主接入（TS，要 1a 的 wasm）。
+
+### 1a — 翻译器的几何着色器展开（`src-tauri/wpesl2wgsl`）
+
+**现状：** 编排在 `lib.rs::translate`，顺序是：
+1. 扫注释元数据；
+2. 建宏表（平台宏 < COMBO < `TEX<n>FORMAT` < `defines`）；
+3. 顶点、片元各自 `Preprocessor::run`；
+4. `rewrite::build(vs_lines, fs_lines)`；
+5. naga。
+
+改写层按行切：单行的 `uniform` / `attribute` / `varying` 进声明表，其余都是正文；`in … gl_*` 的行跳过；同一阶段重复的 uniform 合并。`GS_ENABLED` 有意不定义（`lib.rs:35`、README「内部流程」2）。
+
+**做法：** 在预处理和改写之间，把预处理后的几何段合进顶点段，得到一段「顶点着色器」交给现有的 `rewrite::build`。改写层、naga 阶段基本不动。
+
+- **新增** 请求字段 `geometry?: string`（`.geom` 原文）。有它时：
+  - 宏表加 `GS_ENABLED=1`，三段都定义，WPE 恒定义；
+  - 几何段用同一张宏表预处理，**跳过顶点段已经展开过的头文件**。`common_particles.h` 没有头文件保护，两段都 include 它，不跳过会重复定义函数；
+  - 几何段缺头文件时同样报 `phase: "include"`，阶段记作新增的 `Stage::Geometry`。
+- **新增** `src/geometry.rs`：`merge(vertex: &[Line], geometry: &[Line], pp: &Preprocessor) -> Result<(Vec<Line>, u32), RewriteError>`，规则如下。
+  1. **输出顶点数：** `[maxvertexcount(<表达式>)]` 用 `Preprocessor::eval` 按最终宏表求值，作为 `maxVertices`。缺这一行或有多行时报错。
+  2. **顶点段：**
+     - `varying T x;` 改成私有全局 `T kb_gsin_x;`，正文里的 `x` 都改成 `kb_gsin_x`；
+     - `gl_Position` 改成 `kb_gsin_gl_Position`（`vec4`）；
+     - `main` 改成 `kb_vs_main`。
+  3. **几何段：**
+     - `in T x;` 删掉，但要核对顶点段有同名、同类型的 varying；`gl_Position` 除外；
+     - `out T x;` 改成 `varying T x;`，这就是真正的顶点输出，和片元按名字配对；`out vec4 gl_Position;` 删掉；
+     - `IN[0].x` 改成 `kb_gsin_x`。下标不是 0 就报错，只支持点输入；
+     - `PS_INPUT` 改成生成的 `struct PS_INPUT { <每个 out 字段>; vec4 kb_Position; }`，`.gl_Position` 字段访问改成 `.kb_Position`（结构体字段不能以 `gl_` 开头）；
+     - `OUT.Append(e);` 改成 `kb_gs_append(e);`；`OUT.RestartStrip()` 报错，只支持单条带；
+     - `main` 改成 `kb_gs_main`；
+     - `normalize(` 改成 `kb_gs_normalize(`，见第 6 条。
+  4. **for 循环变量：** for 头里声明的变量，如果循环体顶层又声明了同名变量（`.geom` 里的 `for (int s…) { float s = smoothstep(…) …}`），把 for 头里的那个改名为 `kb_<名>`。GLSL 的循环体不开新作用域，会报重复声明；HLSL 允许遮蔽。
+  5. **拼接顺序：**
+     1. 私有全局：`kb_gsin_*`，以及状态 `kb_gs_target`、`kb_gs_count`、`kb_gs_hit`、`kb_gs_degenerate`、`kb_gs_selected`；
+     2. `struct PS_INPUT`；
+     3. `kb_gs_append`、`kb_gs_normalize`；
+     4. 顶点段正文；
+     5. 几何段正文；
+     6. 新的 `main`：
+```glsl
+void main() {
+  kb_vs_main();
+  kb_gs_target = gl_VertexIndex; kb_gs_count = 0; kb_gs_hit = false; kb_gs_degenerate = false;
+  kb_gs_main();   // 每次 kb_gs_append：kb_gs_count == kb_gs_target 时记下，kb_gs_count++
+  if (kb_gs_hit && !kb_gs_degenerate) {
+    gl_Position = kb_gs_selected.kb_Position;
+    // 每个 out 字段原样赋给同名 varying
+  } else {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // 整个图元落在裁剪体外，见第 6 条
+  }
 }
 ```
-  README 写明展开规则（每次 `Append` 计数，第 `vertex_index` 次的值是输出）和限制（只支持点输入、单个输出流）。
+  6. **零向量 `normalize` 时整个图元不画：**
+     - `kb_gs_normalize` 有 `float` / `vec2` / `vec3` / `vec4` 四个重载。`dot(v, v) == 0.0` 时置 `kb_gs_degenerate`、原样返回，否则返回 `v * inversesqrt(dot(v, v))`。
+     - 依据：WPE 下 `normalize(0)` 得 NaN，D3D 丢弃含 NaN 顶点的三角形。绳的两种 GS 里，右向量一旦是 NaN，带上每个三角形都含 NaN 顶点（rea-p4d-rope 1.5），所以等价于整个图元不画；步骤 0 实测的 NaN 顶点数和这个预测逐帧相同。
+     - 不靠检测 NaN：WGSL 允许实现假定没有 NaN，`x != x` 可能被优化掉。
+- **新增** 结果字段 `geometry: { maxVertices }`，只在有几何段时给。`attributes` 照旧；有几何段时，渲染器把全部属性按实例步进。
+- **修改** 前端胶水的 `TranslateRequest` / `TranslateResult` 类型加这两个字段；README 新增「几何着色器展开」一节，写规则和限制（点输入、单条带、`normalize` 退化整个图元不画及其依据）。
+
+**测试：**
+- **单测，每条规则一个：** `IN[0]` 改写、`Append` 计数选中第 N 个、结构体字段与 `kb_Position`、`normalize` 退化、for 变量改名、`maxvertexcount` 求值、跨段 include 只展开一次、`IN[1]` 和 `RestartStrip` 报错。
+- **语料门槛：** `genericropeparticle` 加 `.geom`，翻译通过、WGSL 回读通过，`maxVertices = 4 + 2·TRAILSUBDIVISION`。组合有：
+  - rope：`THICKFORMAT 1`；`TRAILSUBDIVISION` 0 / 4 / 16 / 32；`ORIENTATION` 0 / 1 / 2；
+  - ropetrail：`TRAILRENDERER 1`；`TRAILSCROLLALPHA`、`TRAILFADEALPHA`、`TRAILFADESIZE` 全开；
+  - 再各加一组 `REFRACT`、`FOG_DIST`、`LIGHTING`（带一盏点光）。
+- **不变的：** 不带 `geometry` 的请求，原有语料结果和输出 WGSL 逐字节不变（取一批对，翻译前后比较）。
+
+**验收（Claude）：**
+- `git status` 查越界；`cargo test -p wpesl2wgsl --lib` 和语料测试自跑；`deno task build:wpesl2wgsl` 能出 wasm。
+- 读生成的 GLSL，核对 rope `SUB 3` 的拼接结果。
+- 变异检查：`Append` 计数从 1 起、退化时照常输出、跳过 include-once，各有测试失败。
+
+### 1b — 宿主接入（TS）
+
+路径相对 `apps/wpe-scene/src/`。
+
+**现状锚点**（调研摘录，2026-11-10）：
+- **编译：** `compileParticle`（`compile/bundle.ts:738`）对材质的每个 pass 调 `compilePass(pass, { particle: sheetSystem })`。
+  - 着色器名直接取 `pass.shader`，不替换；
+  - `defines` 来自闭包 `particleDefines`（`bundle.ts:678`），见下面的代码；
+  - `ShaderCompiler.translate`（`compile/shader.ts:166`）只读 `.vert`、`.frag`；
+  - 缓存键是 `shaderCacheKey`（`shader.ts:100`）。
+```ts
+const thick = system.renderer?.kind === "spritetrail" || !!texture?.sheet;
+const tex0 = particleTex0Format(format, thick, system);
+return { ...particleRendererDefines(system), ...particleSheetDefines(texture?.sheet, system), ...(tex0 !== undefined ? { TEX0FORMAT: String(tex0) } : {}) };
+// particleRendererDefines：spritetrail → { THICKFORMAT: "1", TRAILRENDERER: "1" }，其它 {}
+```
+- **renderer：** `particleRenderer()`（`compile/particles.ts:204`）只找 `sprite` / `spritetrail`，找不到按缺省 sprite。模拟器不读 renderer（`particles/system.ts:193` 只解析 emitter / initializer / operator）。
+- **管线：** 顶点布局 `vertexPacking`（`render/programs.ts:110`）的 `stepMode` 写死 `"vertex"`。`PipelineSpec.list`（`render/scene.ts:307`）对粒子取 `triangle-list`，图层取 `triangle-strip`。
+- **顶点：** 每粒子 4 个顶点，全场共用 `quadIndices`。
+  - `createParticles`（`scene.ts:1060`）按 `capacity × 4 × stride` 建缓冲；
+  - `uploadParticles`（`scene.ts:1531`）在数据过期时调 `writeVertices`；
+  - `draw`（`scene.ts:1693`）调 `drawIndexed(count * 6)`；
+  - `particleAttributeProblems`（`scene.ts:336`）只认 sprite 的 5 个属性，其余报 `render:particle-attribute:*`。
+- **uniform：** `particleBuiltins`（`render/uniforms.ts:395`）写 `g_Orientation*` 和 `g_RenderVar0 = trail ? [...trail, 0] : 0`。建 draw 时写一次；对象变换变脏时，`refreshLayer` 重写 `g_Orientation*`。
+- **模拟：** `spawn`（`system.ts:404`）取第一个空槽；`ageAndKill`（`system.ts:366`）按槽号升序判死；`advance` 的顺序是：判死 → 帧 → 控制点 → 发射 → operator → 控制点帧尾。
+- **能力表：** `checkParticleFeatures`（`compile/features.ts:637`）对表外模块报 `particle:<类别>:<名字>`。现在的 rope 报 `particle:renderer:rope`（`compile/particles.test.ts:1033`）。
+- **四角探针：** `dev/particleCorners.ts:137` 把顶点 WGSL 改成计算着色器。
+  - `instance_index` 恒传 `0u`；
+  - 按 `index * stride` 读输入；
+  - dispatch `particles × 4` 个。
+- **回放：** 产品仓的 `particles/replay.test.ts` 读 `particles/fixtures/*.json`。P4c 拿抓帧比对的回放在 `ignore/p4/c5/`（独立的 vitest 配置）：`replay.test.ts` 用 `out/<tag>-log.txt` 差分出每帧 dt，`corners-offline.test.ts` 和 `gs_out` 比。
+
+**做法：**
+- **新增** 模块表的 `rope` 条目（`particles/modules.ts`）：
+  - 字段：`subdivision` int，缺省 4，钳到 `[0, 32]`；`uvscale` num，缺省 1；`uvscrolling` bool，缺省 false；`uvsmoothing` bool，缺省 true；另加共用的 `RENDERER_FIELDS`。
+  - `run: null`。`ropetrail` 仍在表外，留给步骤 2。
+- **修改** `ParticleRenderer`（`compile/particles.ts`），`kind` 加 `"rope"`，并新增：
+```ts
+rope: {
+  subdivision: number;   // TRAILSUBDIVISION
+  inverseScale: number;  // K = 1/uvscale；uvscale 为 0 时不改，保持 1（rea-p4d-rope 3.1）
+  scrolling: boolean;    // 0x20000，为真时不看 uvsmoothing
+  smoothing: boolean;    // 0x40000
+  lifetime: number;      // L：第一个中点非零的 lifetimerandom 的 min + (max − min)·0.5，没有则 0（3.2）
+  rate: number;          // R：第一个 rate 非零的 sphererandom / boxrandom 的 rate，没有则 0
+} | null;
+```
+  `g_RenderVar0` 对 rope 写 0：rope 分支不读它。WPE 写的 `z = 0`、`w = 存活数` 不复刻，步骤 2 的 ropetrail 才每帧写。
+- **修改** 编译（`compile/bundle.ts`、`compile/shader.ts`）：
+  - rope 系统的 pass，着色器一律换成 `genericropeparticle`，不论材质写的是什么（rea-p4d-rope 第 6 节）；blending、深度、纹理、常量照旧取材质；
+  - `ShaderCompiler.compile` 加 `geometry` 选项，为真时读 `shaders/<名>.geom`，放进请求的 `geometry` 字段，缓存键加这一项；
+  - rope 的宏：`THICKFORMAT=1`、`TRAILSUBDIVISION`、`ORIENTATION`；格式在 8–11 时写 `TEX0FORMAT`；不写 `SPRITESHEET*`（3.4）。
 - **新增** `particles/rope.ts`：
 ```ts
-/** rope 索引表（新增）：出生时追加、判死时移除，顺序就是绳上的先后（步骤 0 核实）。 */
+/** rope 表（sys+0x218）：存槽号，出生时追加，判死后保序删除（同一槽出现多次也删光），表序就是出生序。 */
 export class RopeOrder {
   constructor(capacity: number);
-  push(slot: number): void; // spawn 时调
-  remove(slot: number): void; // ageAndKill 判死时调
+  push(slot: number): void;
+  removeDead(slots: readonly number[]): void; // 一帧的死亡槽号，升序
+  clear(): void;
   readonly slots: Uint32Array;
-  readonly length: number;
+  length: number;
 }
-/** 按索引把存活粒子写成每段一个实例的顶点，返回段数；每段的内容照步骤 0（新增）。 */
-export function writeRopeSegments(system: ParticleSystem, layout: RopeVertexLayout, out: Float32Array): number;
+/** 每段一个实例，写进 out（按翻译结果的属性偏移），返回段数（存活数 ≤ 1 时为 0）。TL / TP0 照 1.2，每步 float32。 */
+export function writeRopeSegments(system: ParticleSystem, layout: RopeVertexLayout, out: Float32Array, fps: number): number;
 ```
-- **修改** `particles/system.ts`：`spawn`、`ageAndKill` 维护 `RopeOrder`（只有 rope 系统建）。
-- **修改** `compile/bundle.ts`、`compile/particles.ts`：
-  - `rope` 系统的 pass 换成 `genericropeparticle` 的三个文件，写步骤 0 读到的宏；
-  - `ParticleRenderer.kind` 加 `rope`，`trail` 换成按种类给出的 `g_RenderVar0`。
-- **修改** `render/scene.ts`：绳的管线用三角形带、实例步进，存活数 ≤ 1 不画；`g_RenderVar0.zw` 每帧写。
-- **修改** 模块表与能力表：`rope` 进表，字段取值按步骤 0。
-- **修改** `dev/particleCorners.ts`：改写入口时支持实例输入，读回整条带子。
+  - 段 k 写的内容照 1.3–1.4：起点 `idx[k]`、终点 `idx[k+1]`；CP0 取 `idx[k−1]`，首段取起点自身；CP1 取 `idx[k+2]`，末段取终点自身；w 分量依次是 `size[a]`、`TL`、`k + TP0`、`size[b]`；最后是终点颜色、起点颜色。
+  - `R`、`L` 乘 `instanceoverride` 的 `count`、`lifetime`，不看系统 flags 的禁用位。
+  - `fps` 取宿主的帧上限，和 `particlePasses` 用的是同一个值。
+- **修改** `particles/system.ts`：
+  - rope 系统建 `RopeOrder` 和死亡计数 `deaths`（`sys+0x350`）；
+  - `spawn` 末尾 `push`；
+  - `ageAndKill` 收集当帧死亡的槽号，循环后 `removeDead`，`deaths` 加上死亡数；
+  - `clear` 清空两者。预热、`suspend` 都经过 `clear`。
+- **修改** 绘制（`render/programs.ts`、`render/scene.ts`）：
+  - 翻译结果带 `geometry` 时，`vertexPacking` 的 `stepMode` 用 `"instance"`，管线拓扑用 `"triangle-strip"`（`PipelineSpec` 的 `list` 换成 `topology`，进管线键）；
+  - 顶点缓冲按 `capacity × stride` 建；
+  - `uploadParticles` 走 `writeRopeSegments`，`count` 是段数；
+  - 绘制用 `pass.draw(maxVertices, count)`，`count` 为 0 时不画；
+  - `particleAttributeProblems` 对 rope 程序检查 6 个 rope 属性。
+- **修改** 能力表：rope 进表后不再报 `particle:renderer:rope`。`particle:renderers`（多个 renderer）照旧报。
+- **修改** `dev/particleCorners.ts`：程序带 `geometry` 时：
+  - `vertex_index` 取 `id % maxVertices`，`instance_index` 取 `id / maxVertices`；
+  - 按 `instance × stride` 读输入；
+  - dispatch `段数 × maxVertices` 个；
+  - 结果按段给出整条带子：位置、uv、颜色。
 
-**验收：**
-- `proj/p4d-rope` 的 `gs_out` 逐顶点和我们读回的比，差不超过 0.01 像素；整帧逐像素比。
-- 变异检查：索引表顺序、样条控制点、细分的 `smoothstep`、UV，各有测试失败。
-- `2254685070` 没有不支持项，和 WPE 比画面（做法同 P4c 收尾的 `3832772446`）。
-- 语料变化逐条解释，现有画面哈希不变。
+**测试（子代理）：**
+- **单测：**
+  - `RopeOrder`：追加；中间删除保序；重复项删光；`clear`。
+  - `writeRopeSegments`：首段、中段、末段的 CP 和 w 分量；存活数 2 的特例、≤ 1 返回 0；平滑分支（含 `存活数 = N − 1` 的边界、`L = 0`）；滚动分支；`K`；读 `fps` 的分支。
+  - 模块表：rope 的缺省值与钳制。
+  - 编译：着色器替换、宏、缓存键带 `geometry`、`TEX0FORMAT` 只在格式 8–11 时写。
+  - 假设备：rope 绘制调 `draw(maxVertices, 段数)`、实例步进、三角形带；sprite 的调用不变。
+- **回放（`ignore/p4/d1/`，做法同 `ignore/p4/c5/replay.test.ts`）：**
+  - 用 `out/p4d-rope-fps60-log.txt` / `fps10` 的帧时间回放 `proj/p4d-rope`，16 个系统；
+  - 每个抓到的帧，用 `writeRopeSegments` 的输出和 `tracks/rd-p4d-rope-fps*.json` 的 `vs_in` 逐段比：位置、尺寸、颜色的限值同 P4c 回放，`TL`、`TP` 差 ≤ 1e-4。
+- **离线展开：** 用 1a 的 wasm 翻译出的 WGSL 跑 `particleCorners` 的计算着色器改写，输入 WPE 的 `vs_in`，输出和 WPE 的 `gs_out` 逐顶点比，差 ≤ 0.01 像素。做法同 `ignore/p4/c5/corners-offline.test.ts`；`gs_out` 是三角形列表，奇数号三角形写成 `(v1, v3, v2)`，比之前先还原成带。
+
+**验收（Claude）：**
+- `git status` 查越界；tsc、vitest、Prettier 自跑；回放与离线展开自跑。
+- 变异检查：保序删除改成交换删除、首段 CP0 改取下一段、`TL` 不乘 `K`、平滑分支的比较改成严格小于，各有测试失败。
+- **真机：**
+  - dev app 渲染 `proj/p4d-rope`，用四角探针读回的带子和 WPE `gs_out` 比，差 ≤ 0.01 像素；
+  - `2254685070` 不再有不支持项，和 WPE 比画面，做法同 P4c 收尾的 `3832772446`。
+- 语料重扫（`ignore/p4/d0/corpus.test.ts`）：变化逐条解释；现有画面哈希不变。
+
+### 步骤 1 实施记录（2026-11-10）
+
+**1a（子代理实现，Claude 验收）。**
+- **新增 `src/geometry.rs`：** 规格 1–7 条照做。
+- **规格外加了一条，必需：** 几何段里局部变量的初始值、`PS_INPUT` 字段的整体赋值，右边包一层 `kb_gs_as_<T>(…)`。
+  - 原因：HLSL 允许 `vec4` 隐式截断成 `vec3`，比如 `vec3 eyeModel = mul(vec4, mat4)`；GLSL 不允许，naga 会报错。
+  - 包装按实参类型重载：同类型原样返回，更宽的取前几个分量，标量铺满。
+- **另外几处细节：**
+  - `kb_gs_target = int(gl_VertexIndex)`；
+  - `kb_gs_selected` 声明在结构体之后；
+  - 跳过的头文件仍处理宏、只是不出行，这样头文件里的 `#define` 照样驱动几何段的 `#if`；
+  - `GS_ENABLED` 排在 COMBO 之前，请求里的 `defines` 能覆盖它。
+- **测试：**
+  - 单测 55 个，其中新增 11 个；
+  - 几何门槛 27 组；
+  - 语料 158/167，和改动前相同；
+  - 不带 `geometry` 的 177 次翻译、708 个输出文件，和改动前逐字节相同（`ignore/p4/d1/baseline/`）。
+- **Claude 验收：** 自跑上面的测试；读 rope `SUB 3` 拼出的 GLSL（`ignore/p4/d1/rope-thick-sub3-ori0.vert.glsl`），结构正确。变异检查：子代理做了 4 处，Claude 另做 1 处（去掉 for 变量改名），各有测试失败。
+
+**1b（子代理实现，Claude 验收）。** 规格「做法」都照做了，另外自定了几处：
+- `bool` 字段类型照 jsoncpp `asBool`；
+- `smoothing = !scrolling && uvsmoothing`；
+- `ORIENTATION 0` 的绳不因 `g_Orientation*` 是 NaN 而跳过；
+- `ParticleOptions.fps` 缺省 60，渲染器传 `maxFps`。
+
+改的文件：
+- 新增 `particles/rope.ts`；
+- 修改 `particles/modules.ts`、`particles/system.ts`、`compile/particles.ts`、`compile/bundle.ts`、`compile/shader.ts`、`render/programs.ts`、`render/scene.ts`、`render/renderer.ts`、`dev/particleCorners.ts`。
+
+**验收结果：**
+
+| 项目 | 结果 |
+|---|---|
+| tsc、vitest（49 个文件、1331 个测试）、Prettier | Claude 自跑，通过 |
+| 回放（`ignore/p4/d1/replay.test.ts`）：WPE 帧时间回放 `p4d-rope`，`writeRopeSegments` 的输出和 `vs_in` 逐段比 | 两种 fps、16 个系统，段数逐帧相同。位置 ≤ 4.3e-4（R11 坐标超过 1000，7.3e-4）；`TL` 差 0，`TP` 差 ≤ 5.7e-5。R7 的尺寸差 4.8e-3，在 `sizechange` 的近似倒数包络内 |
+| 离线展开（`corners-offline.ts`，Deno WebGPU）：我们翻译出的着色器吃 WPE 的 `vs_in`，输出和 `gs_out` 比 | 34 组、201 帧，位置差 ≤ 2.3e-4 像素，uv 差 ≤ 9.5e-7，颜色 0；WPE 里含 NaN 的段，我们这边全部整段落在裁剪体外 |
+| 真机，dev app 四角探针（`ignore/p4/d1/cmp_live.py`），fps 60 第 918 帧 | 17 个系统 ≤ 0.004 像素；R9 的 19 个 NaN 段一一对应 |
+| 真机，fps 60 的 R11 | 差 494 像素。探针回放只步进粒子、不跑场景脚本，R11 的对象由脚本移动、旋转，复现不了；上面两项已经覆盖了 R11 |
+| 真机，fps 10 第 161 帧 | R9 差 6e-5，其它约 0.16 像素。WPE 日志缺第 151–155 帧，工具按平均值平分；1b 从 R9 位置反推出的真实帧时间最多偏 0.0007 s，按 200 px/s 正好是这个量级 |
+| 变异检查 | 子代理做了 4 条（保序删除改交换、首段 CP0 改取下一个、`TL` 不乘 `K`、平滑相等时不进），Claude 另做 1 条（滚动分支不用死亡计数），各有测试失败；最后一条回放里 R3、R12 的 `TP` 差 55–65 |
+| 画面哈希（`ignore/p4/d1/out/hash-after.json` 对 `c5/out/hash-after.json`） | 10 张干净场景、三档，全部相同 |
+| 语料重扫（`ignore/p4/d0/diff_corpus.py`） | 只去掉 `particle:renderer:rope`（22 张工坊场景加 kabegame-sample），不新增键；能渲染 22 → 23（`2254685070`），粒子用法完全覆盖 44 → 53 |
+
+**`2254685070`：**
+- 不再报不支持项；
+- 绳系统 "Trails 1" 的控制点 0 是 `flags 1`（跟随指针），这是一个鼠标拖尾。`render_scene` 的光标固定，粒子都在一点上，段全是零长、不画，WPE 在鼠标不动时也是这样；
+- 和 WPE 比画面要在抓帧时移动鼠标，照 P4c 的做法留到 P4d 收尾。
+
+**遗留：**
+- **死亡计数的清零：**
+  - WPE 在高水位 > 0 时就清零死亡计数和 rope 表（rea-p4d-rope 2.4）；我们的 `suspend` 只在有存活粒子时清空。
+  - 差别在「全部粒子已死后再隐藏」时，`uvscrolling` 的 `TP0` 起点不同。
+  - 步骤 2 要改同一段清空逻辑（ropetrail 的历史），一起处理。
+- **探针不传 `fps`：** kabegame-dev MCP 的 `particle_corners` / `render_scene` 回放只传 `passes`，低 fps 下 rope 的 `Rf` 仍按 60 算。只影响绳没满的填充期。
+- `dev` 的 `particleTrack` 对 rope 系统仍按槽序输出粒子，不是表序。
+- 暂停时改 `instanceoverride` 的 `count` / `lifetime`，`TL` 要到下一次步进才更新。
 
 ## 步骤 2 — `ropetrail`
 

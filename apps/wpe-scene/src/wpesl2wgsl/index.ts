@@ -17,6 +17,11 @@ export type ShaderStage = "vertex" | "fragment";
 export interface TranslateRequest {
   vertex: string;
   fragment: string;
+  /**
+   * 几何着色器（`.geom`）原文。给了就定义 `GS_ENABLED`，把顶点着色器的 GS 分支和几何着色器拼成一个顶点着色器：
+   * 每次几何着色器调用是一个实例，`vertex_index` 是第几个输出顶点（第 N 次 `OUT.Append` 的顶点），拓扑三角形带。
+   */
+  geometry?: string;
   /** 头文件源码，键为 `#include` 里写的名字（相对 `shaders/` 根）。 */
   includes?: Record<string, string>;
   /** 材质 / effect 指定的 COMBO（名字不分大小写）。 */
@@ -102,8 +107,17 @@ export interface TranslateResult {
   attributes?: InterfaceVariable[];
   varyings?: InterfaceVariable[];
   combos?: ComboValue[];
+  /**
+   * 只在请求带 `geometry` 时有：顶点输入全部按实例步进（每次几何着色器调用一个实例），每个实例画 `maxVertices` 个顶点，
+   * 拓扑三角形带。
+   */
+  geometry?: {
+    /** `[maxvertexcount(...)]` 展开后的常量，如 `4 + TRAILSUBDIVISION * 2`。 */
+    maxVertices: number;
+  };
   phase?: TranslatePhase;
-  stage?: ShaderStage;
+  /** 出错的阶段；几何段的预处理与展开错误是 `"geometry"`。 */
+  stage?: ShaderStage | "geometry";
   errors?: Diagnostic[];
   missing?: string[];
   requires?: string[];

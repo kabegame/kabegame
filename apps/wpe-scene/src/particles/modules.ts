@@ -59,9 +59,11 @@ export type ParticleFieldValue = number | number[] | string;
  * - `vec3`：`"x y z"` 字符串，少写的分量为 0、多写的忽略；写成数字时没读到 WPE 的处理，按不支持报；
  * - `vec3z`：同 `vec3`，写成数字时只作用于 z，x、y 保持缺省（`rotationrandom` 的 `min` / `max`，B【确】）；
  * - `vec3str`：同 `vec3`，只接受字符串，写成数字时保持缺省、不报（`angularvelocityrandom` 的 `min` / `max`，B【确】）；
- * - `string`：字符串。
+ * - `string`：字符串；
+ * - `bool`：jsoncpp `asBool`（rope 的 `uvscrolling`、`uvsmoothing`，rea-p4d-rope.md 3.1）：布尔原样，数字按非 0 为真，解析成
+ *   1 / 0；字符串、对象 WPE 会抛异常，这里按形状不对报。
  */
-export type ParticleFieldType = "number" | "int" | "vec3" | "vec3z" | "vec3str" | "string";
+export type ParticleFieldType = "number" | "int" | "vec3" | "vec3z" | "vec3str" | "string" | "bool";
 
 /** JSON 单位的缺省值（未换算）。两套时按场景是否正交选（`rea-p4a.md`「基础」）。 */
 export type ParticleFieldDefault =
@@ -315,6 +317,14 @@ function normalizeRenderer(fields: Record<string, ParticleFieldValue>): void {
 }
 
 /**
+ * rope 两类的 `subdivision` 解析期钳制（rea-p4d-rope.md 3.1，rope `0x1401cffcf`、ropetrail `0x1401d01de`）：`asInt` 后按有符号钳到
+ * `[0, 32]`，即每段最多 `4 + 2·32 = 68` 个输出顶点。
+ */
+export function clampRopeSubdivision(value: number): number {
+  return Math.min(32, Math.max(0, value));
+}
+
+/**
  * `positionoffsetrandom` 的 `octaves` 解析期钳制（`0x1401c9387`，`rea-p4b-modules.md` B3【确】）：按**无符号**比较，`≥ 8` 得 8
  * （负数当很大的无符号数，也是 8），`0` 得 1。
  */
@@ -327,7 +337,7 @@ export function clampOctaves(value: number): number {
  * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
  * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`）、步骤 4 的 3 个噪声类模块（initializer `turbulentvelocityrandom`、
  * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`、`spritetrail`
- * （P4c 步骤 5）。rope 两类属 P4d，表外照报。
+ * （P4c 步骤 5）与 `rope`（P4d 步骤 1）。`ropetrail` 属 P4d 步骤 2，表外照报。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -750,6 +760,33 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     normalize: normalizeRenderer,
     run: null,
   },
+  {
+    // rea-p4d-rope.md 3.1（renderer 类型 3，分支 `0x1401cff33`，缺省 `FUN_1401c0c90`，正交透视一套）。绘制：每段一个点、几何着色器
+    // 展开成三角形带，着色器无条件换成 `genericropeparticle`（第 6 节，`compile/bundle.ts`）；段顶点见 `particles/rope.ts`，
+    // 运行时用的派生量（`K`、`L`、`R`、两个系统 flags 位）在 `compile/particles.ts` 的 `particleRenderer`
+    category: "renderer",
+    name: "rope",
+    fields: {
+      // 缺省 4（`0x1401c0d00`，实测 R2 `maxout 12`）；`asInt` 后钳到 [0, 32]（`normalize`），即宏 `TRAILSUBDIVISION`
+      subdivision: int(4),
+      // `asFloat`；存成倒数 `K = 1/uvscale`（`sys+0x30`），写 0 时不改、保持 1（`0x1401d0026`，`particleRenderer`）
+      uvscale: num(1),
+      // 系统 flags `0x20000`（`0x1401d0060`）；为真时不读 `uvsmoothing`
+      uvscrolling: { type: "bool", default: 0 },
+      // 系统 flags `0x40000`（`0x1401d00a4`），缺省 true（`0x1401c0dd3`，实测 R2）
+      uvsmoothing: { type: "bool", default: 1 },
+      // 和 sprite 共用的解析（`FUN_1401c22e0`）：`ORIENTATION ≠ 0` 时几何着色器用 `g_OrientationForward`（rea-p4d-rope.md 1.5）
+      ...RENDERER_FIELDS,
+    },
+    // 写段顶点：按 rope 表（出生序）取存活粒子的位置、当前尺寸、当前颜色与 alpha，以及年龄（`uvsmoothing`）
+    columns: ["age", "life", "position", "size", "color", "alpha"],
+    columnFlags: 0,
+    normalize(fields) {
+      normalizeRenderer(fields);
+      fields.subdivision = clampRopeSubdivision(fields.subdivision as number);
+    },
+    run: null,
+  },
 ];
 
 const byKey = new Map(PARTICLE_MODULES.map((def) => [`${def.category}:${def.name}`, def]));
@@ -792,7 +829,8 @@ function defaultValue(def: ParticleFieldDef, orthographic: boolean): ParticleFie
         ? def.default.orthographic
         : def.default.perspective
       : def.default;
-  const parsed = def.type === "number" || def.type === "int" || def.type === "string" ? raw : vector(raw);
+  const parsed =
+    def.type === "number" || def.type === "int" || def.type === "string" || def.type === "bool" ? raw : vector(raw);
   return applyScale(def, parsed ?? raw);
 }
 
@@ -823,6 +861,10 @@ function parseField(def: ParticleFieldDef, raw: unknown, previous: ParticleField
       return typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : undefined;
     case "string":
       return typeof raw === "string" ? raw : undefined;
+    case "bool":
+      // jsoncpp `asBool`：布尔原样，int / real 按非 0（`ParticleFieldType` 的 `bool`）
+      if (typeof raw === "boolean") return raw ? 1 : 0;
+      return typeof raw === "number" && Number.isFinite(raw) ? (raw !== 0 ? 1 : 0) : undefined;
     case "vec3":
     case "vec3z":
     case "vec3str": {

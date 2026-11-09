@@ -29,6 +29,9 @@
  *   `drawIndexed`。MVP = 视图投影 × 模型矩阵：本地系统是对象世界矩阵，世界空间系统（`flags & 1`）是单位阵；`flags & 4` 换透视
  *   粒子的视图投影。混合、纹理、材质常量走和图像 pass 相同的路径。
  *   帧表（P4b 步骤 2）：槽 0 的纹理带帧表时 `g_RenderVar1` 取它的 `sheet`，顶点多写 `a_TexCoordVec4C1`，帧数学在着色器里。
+ *   rope（P4d 步骤 1）：程序带 `geometry`（翻译器把几何着色器展开进顶点着色器）时，顶点按实例步进、每段一个实例，顶点缓冲按
+ *   `maxcount` 段分配，`encode` 按 rope 表写段顶点（`particles/rope.ts` 的 `writeRopeSegments`），三角形带
+ *   `draw(maxVertices, 段数)`，段数为 0 不画；不用索引缓冲。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -40,6 +43,7 @@ import { FBO_FORMATS } from "../compile/tex";
 import { pointerScenePoint } from "../particles/controlpoints";
 import { orientationBasis, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
+import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { ParticleSystem } from "../particles/system";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import {
@@ -76,7 +80,7 @@ import {
   worldMatrixOf,
 } from "./layout";
 import { identity, type Mat4 } from "./math";
-import { createPipeline, createProgram, vertexPacking, type GpuProgram } from "./programs";
+import { createPipeline, createProgram, programVertexPacking, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
 import {
@@ -162,10 +166,15 @@ type DrawLike = DrawStep | ParticleStep;
 /** 一个粒子层的模拟器与 CPU 侧顶点（P4a 步骤 4）。 */
 interface ParticleDraw {
   system: ParticleSystem;
-  layout: ParticleVertexLayout;
-  /** CPU 侧交错顶点，按 `maxcount` 个粒子（每个 4 个顶点）分配。 */
+  /** 顶点布局：sprite / spritetrail 每粒子 4 个顶点（`particleVertexLayout`）；rope（`rope` 非空）每段一个实例（`ropeVertexLayout`）。 */
+  layout: ParticleVertexLayout | RopeVertexLayout;
+  /**
+   * rope（P4d 步骤 1）：程序带 `geometry` 时非空，每个实例（段）画 `maxVertices` 个顶点（`4 + 2·subdivision`）、三角形带；其余为 null。
+   */
+  rope: { maxVertices: number } | null;
+  /** CPU 侧交错顶点，按 `maxcount` 个粒子（每个 4 个顶点）分配；rope 按 `maxcount` 段（每段一个实例）。 */
   vertices: Float32Array;
-  /** 上次写进缓冲的粒子数，`drawIndexed` 画 6 倍的索引。 */
+  /** 上次写进缓冲的粒子数，`drawIndexed` 画 6 倍的索引；rope 是段数（实例数）。 */
   count: number;
   /** 步进过、还没写成顶点：`encode` 里写 `vertices` 并 `writeBuffer`。 */
   stale: boolean;
@@ -236,6 +245,11 @@ export interface ParticleProfile {
 export interface ParticleOptions {
   /** operator 遍数（`particlePasses(maxFps)`）；缺省 1。 */
   passes?: 1 | 2;
+  /**
+   * 宿主的帧上限（`maxFps`，和 `passes` 同一个值算出来的）：rope 绳没满时把期望粒子数估成 `min(fps, R)·L`（rea-p4d-rope.md 1.2，
+   * WPE 读设置的 `fps`，`particles/rope.ts` 的 `ropeTexCoords`）。缺省 60（同 `passes` 缺省的一遍）。
+   */
+  fps?: number;
   /** 随机种子：第 i 个粒子层（`bundle.layers` 里带 `particle` 的，按顺序）用 `seed + i`，同 `particles/track.ts`。缺省随机。 */
   seed?: number;
   /**
@@ -302,25 +316,30 @@ type Op =
 
 /**
  * 决定一条管线的五项：WebGPU 的管线绑定了混合、目标格式、写掩码与图元拓扑（WPE 的 D3D11 着色器不绑），同一个程序要按它们
- * 各建一份。`list`：粒子的带索引三角形列表；图层四边形是三角形带。
+ * 各建一份。`topology`：sprite / spritetrail 粒子是带索引的三角形列表；图层四边形和 rope（几何着色器展开，每段一个实例，P4d 步骤 1）
+ * 是三角形带。键只给三角形列表加后缀，其余和加这一项之前逐字相同（rope 的程序只给 rope 用，按实例步进的布局跟着程序走）。
  */
 export interface PipelineSpec {
   program: number;
   blending: string | null;
   format: GPUTextureFormat;
   alpha: boolean;
-  list: boolean;
+  topology: "triangle-strip" | "triangle-list";
 }
 
-export function pipelineKey({ program, blending, format, alpha, list }: PipelineSpec): string {
-  return `${program}|${blending}|${format}|${alpha}${list ? "|list" : ""}`;
+export function pipelineKey({ program, blending, format, alpha, topology }: PipelineSpec): string {
+  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}`;
 }
 
-/** 绘制步骤的管线：合成 RT 与场景目标同格式，只有 fbo 有自己的格式；画到场景目标时不写 alpha。粒子只画到场景目标。 */
+/**
+ * 绘制步骤的管线：合成 RT 与场景目标同格式，只有 fbo 有自己的格式；画到场景目标时不写 alpha。粒子只画到场景目标。
+ * `geometry`：程序的翻译结果带几何着色器展开（rope），粒子步骤用三角形带。
+ */
 export function stepPipeline(
   step: DrawLike,
   format: GPUTextureFormat,
   fboFormat: (effect: number, name: string) => GPUTextureFormat,
+  geometry = false,
 ): PipelineSpec {
   const { pass, blending, target } = step;
   return {
@@ -328,14 +347,18 @@ export function stepPipeline(
     blending,
     format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
     alpha: target.kind !== "scene",
-    list: step.kind === "particles",
+    topology: step.kind === "particles" && !geometry ? "triangle-list" : "triangle-strip",
   };
 }
 
-/** 粒子程序的顶点输入能不能由 `writeVertices` 写（`particles/vertices.ts`）。 */
+/**
+ * 粒子程序的顶点输入能不能由 CPU 写：带 `geometry` 的（rope，P4d 步骤 1）按 `writeRopeSegments` 的 6 个输入查（`particles/rope.ts`），
+ * 其余按 `writeVertices`（`particles/vertices.ts`）。
+ */
 function particleAttributeProblems(program: SceneBundle["programs"][number]): string[] {
   try {
-    return particleVertexLayout(vertexPacking(program.attributes ?? [])).problems;
+    const packing = programVertexPacking(program);
+    return (program.geometry ? ropeVertexLayout(packing) : particleVertexLayout(packing)).problems;
   } catch (error) {
     return error instanceof SceneRenderError ? error.reasons : [`render:particle-attribute:${String(error)}`];
   }
@@ -466,6 +489,8 @@ export class GpuScene {
   /** 粒子层（`objects` 下标）→ 第几个粒子层（`bundle.layers` 里带 `particle` 的顺序），定种子用。 */
   private readonly particleOrdinals = new Map<number, number>();
   private readonly particlePasses: 1 | 2;
+  /** 宿主的帧上限（`ParticleOptions.fps`）：rope 的 `TL`、`TP0`（`writeRopeSegments`）。 */
+  private readonly particleFps: number;
   private readonly particleSeed: number;
   private readonly particleROverride: ParticleOptions["rOverride"];
   /**
@@ -498,6 +523,7 @@ export class GpuScene {
     particles: ParticleOptions,
   ) {
     this.particlePasses = particles.passes ?? 1;
+    this.particleFps = particles.fps ?? 60;
     this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
     this.particleROverride = particles.rOverride;
     this.particleCursor = particles.cursor ?? [0.5, 0.5];
@@ -620,12 +646,11 @@ export class GpuScene {
     blending: string | null,
     format: GPUTextureFormat,
     alpha: boolean,
-    list = false,
+    topology: PipelineSpec["topology"] = "triangle-strip",
   ): Promise<GPURenderPipeline> {
-    const key = pipelineKey({ program: program.index, blending, format, alpha, list });
+    const key = pipelineKey({ program: program.index, blending, format, alpha, topology });
     let pipeline = this.pipelines.get(key);
     if (!pipeline) {
-      const topology = list ? "triangle-list" : "triangle-strip";
       pipeline = createPipeline(this.device, program, blending, format, alpha, topology).then((ready) => {
         this.readyPipelines.set(key, ready);
         return ready;
@@ -710,7 +735,13 @@ export class GpuScene {
   }
 
   private pipelineOf(step: DrawLike, resources: LayerResources): PipelineSpec {
-    return stepPipeline(step, this.format, (effect, name) => this.targets[resources.fbos.resolve(effect, name)].format);
+    return stepPipeline(
+      step,
+      this.format,
+      (effect, name) => this.targets[resources.fbos.resolve(effect, name)].format,
+      // rope 的程序带几何着色器展开：三角形带（P4d 步骤 1）
+      !!(step.pass.program !== null && this.bundle.programs[step.pass.program]?.geometry),
+    );
   }
 
   /** 等齐一份计划要用的程序与管线，之后 `buildLayer` 就是同步的。 */
@@ -720,8 +751,8 @@ export class GpuScene {
       plan.steps.map(async (step) => {
         if (step.kind !== "draw" && step.kind !== "particles") return;
         const program = await this.ensureProgram(step.pass.program!);
-        const { blending, format, alpha, list } = this.pipelineOf(step, resources);
-        prepared.set(step, { program, pipeline: await this.pipelineFor(program, blending, format, alpha, list) });
+        const { blending, format, alpha, topology } = this.pipelineOf(step, resources);
+        prepared.set(step, { program, pipeline: await this.pipelineFor(program, blending, format, alpha, topology) });
       }),
     );
     return prepared;
@@ -1057,9 +1088,17 @@ export class GpuScene {
     );
     const world = worldMatrixOf(layer.object, state.layers, new Map());
     system.prewarm({ world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) });
+    const geometry = program.result.geometry;
+    if (geometry) {
+      // rope（P4d 步骤 1）：每段一个实例，最多 `maxcount − 1` 段，按 `maxcount` 段分配
+      const { layout } = ropeVertexLayout(program.vertexPacking);
+      const vertices = new Float32Array(Math.max(1, system.columns.capacity) * Math.max(1, layout.stride));
+      const rope = { maxVertices: geometry.maxVertices };
+      return { system, layout, rope, vertices, count: 0, stale: true, world, trailEye: null, hidden: false };
+    }
     const { layout } = particleVertexLayout(program.vertexPacking);
     const vertices = new Float32Array(Math.max(1, system.columns.capacity) * 4 * Math.max(1, layout.stride));
-    return { system, layout, vertices, count: 0, stale: true, world, trailEye: null, hidden: false };
+    return { system, layout, rope: null, vertices, count: 0, stale: true, world, trailEye: null, hidden: false };
   }
 
   /**
@@ -1075,6 +1114,8 @@ export class GpuScene {
   /**
    * 按当前状态重算粒子层的绘制几何（P4c 步骤 5）：朝向是不是 NaN（`hidden`）、拖尾的眼位（`trailEye`）。建 draw 与就地刷新时调，
    * 和 uniform 同一个模型矩阵。拖尾的眼位变了，下一次画之前重写顶点（退化粒子的判断跟着变）。
+   * rope（P4d 步骤 1）的几何只在 `ORIENTATION ≠ 0` 时读 `g_OrientationForward`（rea-p4d-rope.md 1.5），screen 朝向不受它影响，
+   * 不因它跳过；`ORIENTATION ≠ 0` 时朝向是 NaN 则整条带子的右向量都是 NaN，WPE 的图元全被丢弃，同样整次跳过。
    */
   private refreshParticleGeometry(
     particles: ParticleDraw,
@@ -1085,7 +1126,10 @@ export class GpuScene {
     const renderer = layer.particle?.renderer;
     if (!renderer) return;
     const model = this.particleModel(layer, state, worlds);
-    particles.hidden = orientationBasis(renderer.orientation, model, VIEW_FORWARD, VIEW_UP) === null;
+    particles.hidden =
+      particles.rope && renderer.orientation.mode === 0
+        ? false
+        : orientationBasis(renderer.orientation, model, VIEW_FORWARD, VIEW_UP) === null;
     const eye = renderer.kind === "spritetrail" ? trailEye(this.eye, model) : null;
     const previous = particles.trailEye;
     if (eye && (!previous || eye.some((value, i) => !Object.is(value, previous[i])))) particles.stale = true;
@@ -1527,16 +1571,26 @@ export class GpuScene {
     }
   }
 
-  /** 步进过的粒子层：把列写成顶点，再整段传上去（只传存活的那部分）。 */
+  /**
+   * 步进过的粒子层：把列写成顶点，再整段传上去（只传存活的那部分）。rope（P4d 步骤 1）按 rope 表写段顶点，`count` 是段数
+   * （每段一个实例，`writeRopeSegments`，`fps` 是宿主的帧上限）。
+   */
   private uploadParticles(draw: Draw, particles: ParticleDraw): void {
     if (!particles.stale) return;
     particles.stale = false;
     const timing = this.particleTimings?.get(draw);
     const started = timing ? performance.now() : 0;
-    particles.count = writeVertices(particles.system, particles.layout, particles.vertices, particles.trailEye);
+    particles.count = particles.rope
+      ? writeRopeSegments(particles.system, particles.layout as RopeVertexLayout, particles.vertices, this.particleFps)
+      : writeVertices(
+          particles.system,
+          particles.layout as ParticleVertexLayout,
+          particles.vertices,
+          particles.trailEye,
+        );
     const written = timing ? performance.now() : 0;
     if (particles.count) {
-      const bytes = particles.count * 4 * particles.layout.stride * 4;
+      const bytes = particles.count * (particles.rope ? 1 : 4) * particles.layout.stride * 4;
       this.device.queue.writeBuffer(
         draw.vertexBuffer,
         0,
@@ -1618,9 +1672,13 @@ export class GpuScene {
     program: GpuProgram;
     uniformBuffer: GPUBuffer | null;
     entries: GPUBindGroupEntry[];
+    /** 写好的顶点：sprite 每粒子 4 个顶点；rope 每段一个实例（`rope` 非空）。 */
     vertices: Float32Array;
+    /** 粒子数；rope 是段数。 */
     count: number;
-    layout: ParticleVertexLayout;
+    layout: ParticleVertexLayout | RopeVertexLayout;
+    /** rope（P4d 步骤 1）：每段输出的顶点数；其余为 null。 */
+    rope: { maxVertices: number } | null;
     perspective: boolean;
     system: ParticleSystem;
     hidden: boolean;
@@ -1628,17 +1686,20 @@ export class GpuScene {
   } | null {
     const draw = [...this.draws].find((item) => item.object === object && item.particles);
     if (!draw?.particles || draw.step.kind !== "particles") return null;
-    const { system, layout, trailEye: eye, hidden } = draw.particles;
+    const { system, layout, rope, trailEye: eye, hidden } = draw.particles;
     const vertices = new Float32Array(draw.particles.vertices.length);
-    const count = writeVertices(system, layout, vertices, eye);
+    const count = rope
+      ? writeRopeSegments(system, layout as RopeVertexLayout, vertices, this.particleFps)
+      : writeVertices(system, layout as ParticleVertexLayout, vertices, eye);
     const resources = draw.resources;
     return {
       program: draw.program,
       uniformBuffer: draw.uniformBuffer,
       entries: draw.entries((effect, name) => this.targets[resources.fbos.resolve(effect, name)]),
-      vertices: vertices.subarray(0, count * 4 * layout.stride),
+      vertices: vertices.subarray(0, count * (rope ? 1 : 4) * layout.stride),
       count,
       layout,
+      rope,
       perspective: draw.step.perspective,
       system,
       hidden,
@@ -1695,14 +1756,18 @@ export class GpuScene {
       if (particles) {
         // 朝向是 NaN（P4c 步骤 5）：WPE 的四角全是 NaN、图元被丢弃，这里整次绘制跳过（WGSL 判不了 NaN）
         if (particles.hidden) return;
-        // 粒子：先把这一帧的顶点传上去（队列写入排在本帧提交之前），没有存活粒子就不画
+        // 粒子：先把这一帧的顶点传上去（队列写入排在本帧提交之前），没有存活粒子就不画（rope：没有段就不画，存活数 ≤ 1 时
+        // WPE 不绑也不画，rea-p4d-rope.md 第 4 节）
         this.uploadParticles(item, particles);
-        if (!particles.count || !this.particleIndices) return;
+        if (!particles.count || (!particles.rope && !this.particleIndices)) return;
       }
       pass.setPipeline(item.pipeline);
       pass.setBindGroup(0, this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
-      if (particles) {
+      if (particles?.rope) {
+        // rope（P4d 步骤 1）：每段一个实例、`maxVertices` 个顶点的三角形带（几何着色器展开），不用索引
+        pass.draw(particles.rope.maxVertices, particles.count);
+      } else if (particles) {
         pass.setIndexBuffer(this.particleIndices!.buffer, this.particleIndices!.format);
         pass.drawIndexed(particles.count * 6);
       } else pass.draw(4);

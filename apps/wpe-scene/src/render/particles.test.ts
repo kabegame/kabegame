@@ -242,7 +242,7 @@ interface FakeBuffer {
 class FakeGpu {
   readonly buffers: FakeBuffer[] = [];
   readonly live = new Set<FakeBuffer>();
-  readonly pipelines: { label: string; topology: string }[] = [];
+  readonly pipelines: { label: string; topology: string; stepMode: string }[] = [];
   readonly trace: string[] = [];
   readonly device: GPUDevice;
 
@@ -253,7 +253,9 @@ class FakeGpu {
       setBindGroup() {},
       setVertexBuffer: (_slot: number, buffer: FakeBuffer) => this.trace.push(`vertex ${buffer.label}`),
       setIndexBuffer: (buffer: FakeBuffer, format: string) => this.trace.push(`index ${buffer.label} ${format}`),
-      draw: (count: number) => this.trace.push(`draw ${count}`),
+      // rope（P4d 步骤 1）带实例数：`draw <顶点数> <实例数>`；图层四边形只有顶点数
+      draw: (count: number, instances?: number) =>
+        this.trace.push(instances === undefined ? `draw ${count}` : `draw ${count} ${instances}`),
       drawIndexed: (count: number) => this.trace.push(`drawIndexed ${count}`),
       end() {},
     });
@@ -286,7 +288,11 @@ class FakeGpu {
       createPipelineLayout: () => ({}),
       createRenderPipeline: () => ({ getBindGroupLayout: () => ({}) }),
       createRenderPipelineAsync: async (descriptor: GPURenderPipelineDescriptor) => {
-        const pipeline = { label: descriptor.label ?? "", topology: descriptor.primitive?.topology ?? "" };
+        const pipeline = {
+          label: descriptor.label ?? "",
+          topology: descriptor.primitive?.topology ?? "",
+          stepMode: [...(descriptor.vertex.buffers ?? [])][0]?.stepMode ?? "",
+        };
         this.pipelines.push(pipeline);
         return pipeline;
       },
@@ -1159,6 +1165,125 @@ describe("GpuScene：拖尾与 sprite 朝向（P4c 步骤 5）", () => {
   });
 });
 
+/**
+ * 翻译后 `genericropeparticle`（`GS_ENABLED`、`THICKFORMAT`，几何着色器展开）的反射：6 个 vec4 输入的顺序照真实输出，
+ * `geometry.maxVertices` = 4 + 2·3。
+ */
+const ROPE_PROGRAM = {
+  ok: true,
+  vertex: { wgsl: "// rope v", entryPoint: "main" },
+  fragment: { wgsl: "// rope f", entryPoint: "main" },
+  attributes: [
+    { name: "a_PositionVec4", location: 0, type: "vec4" },
+    { name: "a_TexCoordVec4", location: 1, type: "vec4" },
+    { name: "a_TexCoordVec4C1", location: 2, type: "vec4" },
+    { name: "a_TexCoordVec4C2", location: 3, type: "vec4" },
+    { name: "a_TexCoordVec4C3", location: 4, type: "vec4" },
+    { name: "a_Color", location: 5, type: "vec4" },
+  ],
+  uniforms: [
+    { name: "g_ModelViewProjectionMatrix", type: "mat4x4<f32>", declared: "mat4", offset: 0, size: 64 },
+    { name: "g_ModelMatrixInverse", type: "mat4x4<f32>", declared: "mat4", offset: 64, size: 64 },
+    { name: "g_EyePosition", type: "vec3<f32>", declared: "vec3", offset: 128, size: 12 },
+    { name: "g_OrientationForward", type: "vec3<f32>", declared: "vec3", offset: 144, size: 12 },
+    { name: "g_RenderVar0", type: "vec4<f32>", declared: "vec4", offset: 160, size: 16 },
+  ],
+  uniformBlockSize: 176,
+  textures: [{ slot: 0, binding: 1, samplerBinding: 2, kind: "2d" }],
+  geometry: { maxVertices: 10 },
+} as unknown as TranslateResult;
+
+describe("GpuScene：rope（P4d 步骤 1，几何着色器展开）", () => {
+  const P_ROPE = 2;
+  /** rope 层：同 `particleLayer`，粒子沿 +x 走（每帧位置不同），renderer 是 rope，pass 用 `ROPE_PROGRAM`。 */
+  const ropeLayer = (object: number, rope: JsonObject = {}, json: JsonObject = {}, extra: Partial<SceneLayer> = {}) => {
+    const layer = particleLayer(
+      object,
+      {
+        initializer: [
+          { name: "lifetimerandom", min: 100, max: 100 },
+          { name: "sizerandom", min: 40, max: 40 },
+          { name: "velocityrandom", min: "100 0 0", max: "100 0 0" },
+        ],
+        operator: [{ name: "movement" }],
+        renderer: [{ name: "rope", ...rope }],
+        ...json,
+      },
+      extra,
+    );
+    layer.particle!.passes[0].program = P_ROPE;
+    return layer;
+  };
+  const ropeBundle = (layers: SceneLayer[]) =>
+    bundleOf(layers, { programs: [IMAGE_PROGRAM, PARTICLE_PROGRAM, ROPE_PROGRAM] });
+
+  it("实例步进、三角形带；draw(maxVertices, 段数)，不用索引；段数 0 不画；sprite 的路径不变", async () => {
+    const { gpu, state, scene } = await open(ropeBundle([particleLayer(1), ropeLayer(2)]));
+    const ropeBuffer = gpu.buffer("layer 3 particles 2 particles");
+    // 按 maxcount 段分配，每段 96 字节（WPE 同）
+    expect(ropeBuffer.size).toBe(16 * 96);
+    expect(gpu.buffer("layer 2 particles 1 particles").size).toBe(16 * 4 * 52);
+    const pipeline = (program: number) =>
+      gpu.pipelines.filter((p) => p.label.startsWith(`scene program ${program} `)).map((p) => [p.topology, p.stepMode]);
+    expect(pipeline(P_ROPE)).toEqual([["triangle-strip", "instance"]]);
+    expect(pipeline(P.particle)).toEqual([["triangle-list", "vertex"]]);
+    // 没有粒子：都不画
+    expect(draws(gpu.encode(scene, state))).toEqual([]);
+    // 一个粒子：sprite 画，rope 没有段、不画也不传
+    stepFrame(scene, frame(0.1), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 2 particles 1 particles",
+      "index particle indices uint16",
+      "drawIndexed 6",
+    ]);
+    expect(ropeBuffer.writes).toEqual([]);
+    for (let i = 0; i < 4; i++) stepFrame(scene, frame(0.1), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 2 particles 1 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+      "vertex layer 3 particles 2 particles",
+      "draw 10 4",
+    ]);
+    // 只传 4 段
+    expect(ropeBuffer.writes).toEqual([4 * 96]);
+  });
+
+  it("段顶点按 rope 表写（rea-p4d-rope.md 1.3）；g_RenderVar0 为 0；particleProbe 给段与 maxVertices", async () => {
+    const { gpu, state, scene } = await open(ropeBundle([ropeLayer(1)]));
+    for (let i = 0; i < 5; i++) stepFrame(scene, frame(0.1), state);
+    gpu.encode(scene, state);
+    const draw = particleDraw(scene, 1);
+    const system = draw.particles!.system;
+    const table = Array.from(system.ropeOrder!.slots.subarray(0, system.ropeOrder!.length));
+    const pos = (slot: number) => [0, 1, 2].map((axis) => system.columns.position[axis][slot]);
+    // 段 1：起点 = 表里第 1 个，终点 = 第 2 个；CP0 = 第 0 个，CP1 = 第 3 个；w：尺寸 20、TL、1 + TP0、终点尺寸
+    // TL：R = 10、L = 100，R·L > 存活数 5，Rf = min(60, 10)，N − 1 = 999 > 5，缺省平滑也不平滑：TL = 5
+    expect(floats(draw.vertexBuffer, 96, 4)).toEqual([...pos(table[1]), 20]);
+    expect(floats(draw.vertexBuffer, 96 + 16, 4)).toEqual([...pos(table[2]), 5]);
+    expect(floats(draw.vertexBuffer, 96 + 32, 4)).toEqual([...pos(table[0]), 1]);
+    expect(floats(draw.vertexBuffer, 96 + 48, 4)).toEqual([...pos(table[3]), 20]);
+    expect(floats(draw.vertexBuffer, 96 + 64, 4)).toEqual([1, 1, 1, 1]);
+    expect(floats(draw.vertexBuffer, 96 + 80, 4)).toEqual([1, 1, 1, 1]);
+    expect(floats(draw.uniformBuffer, 160, 4)).toEqual([0, 0, 0, 0]);
+    const probe = scene.particleProbe(1)!;
+    expect([probe.count, probe.rope, probe.vertices.length]).toEqual([4, { maxVertices: 10 }, 4 * 24]);
+  });
+
+  it("朝向：screen 的绳不因 g_Orientation* 跳过；ORIENTATION ≠ 0 且朝向是 NaN 时整次跳过（WPE 整条右向量是 NaN）", async () => {
+    const bundle = ropeBundle([
+      ropeLayer(1, { orientation: "upright", axis: "0 0 1" }),
+      ropeLayer(2, {}, {}, { scale: [0, 0, 0] }),
+    ]);
+    const { gpu, state, scene } = await open(bundle);
+    expect(scene.particleProbe(1)!.hidden).toBe(true);
+    // 对象缩放为 0：screen 朝向的基是 NaN，但 rope 的 screen 分支不读它
+    expect(scene.particleProbe(2)!.hidden).toBe(false);
+    for (let i = 0; i < 3; i++) stepFrame(scene, frame(0.1), state);
+    expect(draws(gpu.encode(scene, state))).toEqual(["vertex layer 3 particles 2 particles", "draw 10 2"]);
+  });
+});
+
 describe("GpuScene：指针的跟随点（P4c 步骤 2）", () => {
   const pointerLayer = (extra: JsonObject = {}) =>
     particleLayer(
@@ -1292,6 +1417,18 @@ describe("渲染器：帧时钟与遍数", () => {
     await renderer.load(bundle);
     return { renderer, frames, gpu, dts };
   }
+
+  it("rope 读的 fps 就是 maxFps（缺省 60，P4d 步骤 1，rea-p4d-rope.md 1.2）", async () => {
+    const fps = async (maxFps: number | undefined) => {
+      const { renderer } = await start(maxFps);
+      const value = (renderer.currentScene as unknown as { particleFps: number }).particleFps;
+      renderer.destroy();
+      return value;
+    };
+    expect(await fps(10)).toBe(10);
+    expect(await fps(undefined)).toBe(60);
+    expect(await fps(144)).toBe(144);
+  });
 
   it("maxFps 1–20 两遍，其余（缺省 60、不限）一遍", async () => {
     const passes = async (maxFps: number | undefined) => {

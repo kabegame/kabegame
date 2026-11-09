@@ -40,7 +40,7 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项，外加 renderer sprite、spritetrail（P4c 步骤 5）；每项都有列和执行函数，renderer 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）；每项都有列和执行函数，renderer 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
@@ -68,6 +68,7 @@ describe("模块表", () => {
       "operator:capvelocity",
       "renderer:sprite",
       "renderer:spritetrail",
+      "renderer:rope",
     ]);
     for (const def of PARTICLE_MODULES) {
       expect(def.columns.length, def.name).toBeGreaterThan(0);
@@ -441,14 +442,16 @@ describe("解析：系统", () => {
       kind: "sprite",
       trail: null,
       orientation: { mode: 0, axis: [0, 1, 0], t: [0, 0, -1], flags: 0 },
+      rope: null,
     });
     expect(parse([])).toEqual(sprite);
     expect(parse([{ name: "sprite", orientation: "upright", flags: 3 }]).orientation).toMatchObject({
       mode: 1,
       flags: 3,
     });
-    // 表外 renderer 不算（能力表报），多个时取第一个表内的（只在强制渲染时用）
-    expect(parse([{ name: "rope" }, { name: "spritetrail" }]).kind).toBe("spritetrail");
+    // 表外 renderer 不算（能力表报），多个时取第一个表内的（只在强制渲染时用）；rope 进表后算（P4d 步骤 1）
+    expect(parse([{ name: "ropetrail" }, { name: "spritetrail" }]).kind).toBe("spritetrail");
+    expect(parse([{ name: "rope" }, { name: "spritetrail" }]).kind).toBe("rope");
     expect(parse([{ name: "sprite" }, { name: "spritetrail" }]).kind).toBe("sprite");
   });
 
@@ -675,13 +678,13 @@ describe("能力表：粒子", () => {
         emitter: [{ name: "layerimage" }],
         initializer: [{ name: "remapinitialvalue" }],
         operator: [{ name: "reducemovementnearcontrolpoint" }],
-        renderer: [{ name: "rope" }],
+        renderer: [{ name: "ropetrail" }],
       }),
     ).toEqual([
       "particle:emitter:layerimage",
       "particle:initializer:remapinitialvalue",
       "particle:operator:reducemovementnearcontrolpoint",
-      "particle:renderer:rope",
+      "particle:renderer:ropetrail",
     ]);
     // 步骤 3 的 8 个模块进了表
     expect(
@@ -1006,7 +1009,7 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ operator: { name: "movement" } })).toEqual(["particle:system:operator"]);
   });
 
-  it("renderer（P4c 步骤 5）：sprite 的 orientation、axis、flags 各种取值不报；spritetrail 不报；两个 renderer 仍报 particle:renderers；rope 两类照报", () => {
+  it("renderer（P4c 步骤 5）：sprite 的 orientation、axis、flags 各种取值不报；spritetrail 不报；两个 renderer 仍报 particle:renderers；rope 不报（P4d 步骤 1），ropetrail 照报", () => {
     for (const name of ["sprite", "spritetrail"]) {
       const renderer = (fields: JsonObject) => particleKeys({ renderer: [{ name, ...fields }] });
       expect(renderer({}), name).toEqual([]);
@@ -1029,9 +1032,26 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "sprite" }] })).toEqual(["particle:renderers"]);
     expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "spritetrail" }] })).toEqual(["particle:renderers"]);
     expect(particleKeys({ renderer: [{ name: "spritetrail" }, { name: "sprite" }] })).toEqual(["particle:renderers"]);
-    // rope 两类属 P4d
-    expect(particleKeys({ renderer: [{ name: "rope" }] })).toEqual(["particle:renderer:rope"]);
+    // rope 进表（P4d 步骤 1）：字段的各种取值都不报；ropetrail 属 P4d 步骤 2，照报
+    expect(particleKeys({ renderer: [{ name: "rope" }] })).toEqual([]);
+    expect(
+      particleKeys({
+        renderer: [
+          { name: "rope", subdivision: 40, uvscale: 0, uvscrolling: true, uvsmoothing: false, orientation: "fixed" },
+        ],
+      }),
+    ).toEqual([]);
+    expect(particleKeys({ renderer: [{ name: "rope", uvsmoothing: 0, uvscrolling: 1, subdivision: -3 }] })).toEqual([]);
+    // 形状不对照报（模块表的统一规则）；绑定照报
+    expect(particleKeys({ renderer: [{ name: "rope", uvscrolling: "yes" }] })).toEqual([
+      "particle:renderer:rope:uvscrolling",
+    ]);
+    expect(particleKeys({ renderer: [{ name: "rope", subdivision: { user: "s", value: 3 } }] })).toEqual([
+      "particle:binding:renderer:rope:subdivision",
+    ]);
     expect(particleKeys({ renderer: [{ name: "ropetrail" }] })).toEqual(["particle:renderer:ropetrail"]);
+    // 绳和别的 renderer 一起仍报多 renderer
+    expect(particleKeys({ renderer: [{ name: "rope" }, { name: "sprite" }] })).toEqual(["particle:renderers"]);
   });
 
   it("风、重力键不报；perspectiveoverridefov 不报", () => {
@@ -1184,6 +1204,24 @@ describe("ShaderCompiler：粒子的 TEX0FORMAT", () => {
     expect(shaderCacheKey("genericimage2", combos, textures, scope, { TEX0FORMAT: "9" })).not.toBe(legacy);
   });
 
+  it("geometry（P4d 步骤 1）：读 .geom 放进请求、进缓存键；不带时缓存键与之前逐字相同", async () => {
+    const { translator, requests } = fakeTranslator();
+    const reader = memoryReader({
+      "P:/p/shaders/genericropeparticle.vert": "v",
+      "P:/p/shaders/genericropeparticle.frag": "f",
+      "P:/p/shaders/genericropeparticle.geom": "g",
+    });
+    const compiler = new ShaderCompiler(new SceneFs("P:/p", ["A:/assets"], reader), translator, new Set());
+    await compiler.compile("genericropeparticle", {}, [], null, undefined, {}, true);
+    await compiler.compile("genericropeparticle", {}, [], null, undefined, {}, true);
+    await compiler.compile("genericropeparticle", {}, [], null, undefined, {});
+    expect(requests.map((request) => request.geometry)).toEqual(["g", undefined]);
+    const textures: ShaderTextureSlot[] = [{ slot: 0, format: 0 }];
+    const legacy = shaderCacheKey("genericparticle", {}, textures, null, { TEX0FORMAT: "9" });
+    expect(shaderCacheKey("genericparticle", {}, textures, null, { TEX0FORMAT: "9" }, false)).toBe(legacy);
+    expect(shaderCacheKey("genericparticle", {}, textures, null, { TEX0FORMAT: "9" }, true)).not.toBe(legacy);
+  });
+
   it("WPE 的条件是槽 0 格式 ∈ 8–11（`(fmt - 8) <= 3` 无符号比较）", () => {
     expect([0, 4, 6, 7, 8, 9, 10, 11, 12, 13].filter(particleWritesTex0Format)).toEqual([8, 9, 10, 11]);
   });
@@ -1321,6 +1359,113 @@ describe("compileScene：粒子对象", () => {
     ]);
     expect(await defines([{ name: "sprite" }])).toEqual([{ SCENE_ORTHO: "1" }]);
     expect(await defines([{ name: "sprite", flags: 1 }])).toEqual([{ SCENE_ORTHO: "1" }]);
+  });
+
+  describe("rope（P4d 步骤 1，rea-p4d-rope.md 3.4、第 6 节）", () => {
+    const ropeFiles = (renderer: JsonObject, format = 0, extra: Record<string, unknown> = {}) =>
+      files({
+        "P:/p/scene.json": scene([{ id: 1, particle: "particles/p.json" }]),
+        "P:/p/particles/p.json": {
+          material: "materials/pm.json",
+          maxcount: 8,
+          emitter: [{ name: "sphererandom", rate: 4 }],
+          renderer: [{ name: "rope", ...renderer }],
+        },
+        "P:/p/materials/pm.json": {
+          passes: [{ shader: "genericparticle", blending: "additive", combos: { REFRACT: 1 }, textures: ["kbt/t"] }],
+        },
+        "P:/p/materials/kbt/t.tex": rawTex(format),
+        "P:/p/shaders/genericropeparticle.vert": "rope vert",
+        "P:/p/shaders/genericropeparticle.frag": "rope frag",
+        "P:/p/shaders/genericropeparticle.geom": "rope geom",
+        ...extra,
+      });
+    const compileRope = async (renderer: JsonObject, format = 0, extra: Record<string, unknown> = {}) => {
+      const { translator, requests } = fakeTranslator(() => ({ ok: true, geometry: { maxVertices: 4 } }));
+      const bundle = await compile(memoryReader(ropeFiles(renderer, format, extra)), translator);
+      return { bundle, requests };
+    };
+
+    it("着色器无条件换成 genericropeparticle、带 .geom 翻译；blending、COMBO、纹理照旧取材质", async () => {
+      const { bundle, requests } = await compileRope({});
+      expect(bundle.unsupported).toEqual([]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        vertex: "rope vert",
+        fragment: "rope frag",
+        geometry: "rope geom",
+        combos: { REFRACT: 1 },
+        textures: [{ slot: 0, format: 0 }],
+      });
+      const pass = bundle.layers[0].particle!.passes[0];
+      expect(pass).toMatchObject({ blending: "additive", textures: { 0: 0 }, program: 0 });
+      expect(bundle.layers[0].particle!.renderer.kind).toBe("rope");
+    });
+
+    it("宏：THICKFORMAT、TRAILSUBDIVISION、ORIENTATION（值为 0 也写）；不写 TRAILRENDERER、SPRITESHEET*", async () => {
+      expect((await compileRope({})).requests[0].defines).toEqual({
+        SCENE_ORTHO: "1",
+        THICKFORMAT: "1",
+        TRAILSUBDIVISION: "4",
+        ORIENTATION: "0",
+      });
+      expect((await compileRope({ subdivision: 40, orientation: "upright" })).requests[0].defines).toEqual({
+        SCENE_ORTHO: "1",
+        THICKFORMAT: "1",
+        TRAILSUBDIVISION: "32",
+        ORIENTATION: "1",
+      });
+      expect((await compileRope({ subdivision: 0, orientation: "fixed" })).requests[0].defines).toMatchObject({
+        TRAILSUBDIVISION: "0",
+        ORIENTATION: "2",
+      });
+    });
+
+    it.each([
+      [0, "screen", undefined],
+      [4, "fixed", undefined],
+      [7, "upright", undefined],
+      [8, "screen", "8"],
+      [9, "fixed", "9"],
+      [11, "screen", "11"],
+      [12, "upright", undefined],
+    ] as const)(
+      "槽 0 格式 %i、朝向 %s：TEX0FORMAT = %s（只看 8–11，不像非厚格式 sprite 那样看朝向）",
+      async (format, orientation, expected) => {
+        const { requests } = await compileRope({ orientation }, format);
+        expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([expected]);
+      },
+    );
+
+    it("缺 .geom：shader:genericropeparticle:missing；材质没写着色器也换（不报 shader:missing）", async () => {
+      const missing = await compileRope({}, 0, { "P:/p/shaders/genericropeparticle.geom": undefined });
+      expect(missing.bundle.unsupported).toEqual(["shader:genericropeparticle:missing"]);
+      expect(missing.requests).toHaveLength(0);
+      const unnamed = await compileRope({}, 0, {
+        "P:/p/materials/pm.json": { passes: [{ textures: ["kbt/t"] }] },
+      });
+      expect(unnamed.bundle.unsupported).toEqual([]);
+      expect(unnamed.requests.map((request) => request.geometry)).toEqual(["rope geom"]);
+    });
+
+    it("sprite 与 rope 同场：各翻译各的，sprite 的请求不带 geometry", async () => {
+      const { translator, requests } = fakeTranslator();
+      const reader = memoryReader(
+        ropeFiles({}, 0, {
+          "P:/p/scene.json": scene([
+            { id: 1, particle: "particles/p.json" },
+            { id: 2, particle: "particles/s.json" },
+          ]),
+          "P:/p/particles/s.json": { material: "materials/pm.json", maxcount: 2 },
+        }),
+      );
+      const bundle = await compile(reader, translator);
+      expect(bundle.unsupported).toEqual([]);
+      expect(requests.map((request) => [request.vertex, request.geometry])).toEqual([
+        ["rope vert", "rope geom"],
+        ["void main(){}", undefined],
+      ]);
+    });
   });
 
   it.each([

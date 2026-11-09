@@ -287,9 +287,11 @@ export class SceneRenderer {
       this.canvas.height,
       this.pixelRatio,
     );
+    // 遍数与 rope 读的 `fps`（P4d 步骤 1，rea-p4d-rope.md 1.2）都取帧上限，对应 WPE 的 `fps` 设置
+    const fps = this.options.maxFps ?? 60;
     const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, {
       ignoreUnsupported: options.ignoreUnsupported,
-      particles: { passes: particlePasses(this.options.maxFps ?? 60), cursor: this.cursorOf(placement) },
+      particles: { passes: particlePasses(fps), fps, cursor: this.cursorOf(placement) },
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
