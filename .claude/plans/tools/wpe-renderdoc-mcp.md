@@ -345,8 +345,9 @@ WPE 是 PID 452412（普通 `-silent` 启动，桌面壁纸在），先注入它
 ## 完全迁移（以后另定，本计划不做）
 
 条件：
-- 新 MCP 覆盖旧 skill 的全部用法（start / open / close / control / capture / stop）；
-- `ignore/` 里还在用 `driver.py` 的脚本已经不再需要，或改成调新 MCP、`kbp-tools`。
+- 新 MCP 覆盖旧 skill 的全部用法（start / open / close / capture / stop）。`control`（pause / play / mute / unmute）不迁：它只作用于桌面壁纸，抓帧已经改成在本会话的测试窗口里做，新 MCP 不碰桌面（2026-11-10 用户定）；
+- `ignore/` 里还在用 `driver.py` 的脚本已经不再需要，或改成调新 MCP、`kbp-tools`；
+- 经旧桥（`ignore/RenderDocMCP` 的 `RenderDocBridge`，要开着 RenderDoc 界面）读抓帧的脚本，改用 `kbp-tools` 的无界面提取：在 `qrenderdoc --python` 里直接调本目录 `renderdoc_worker` 的服务层，不经 MCP（2026-11-10 用户定，见 [kbp-tools.md](kbp-tools.md)）。
 
 到时候再做：
 - 删除旧 skill 的 `driver.py`、`target.py`，把新用法写进 skill；
