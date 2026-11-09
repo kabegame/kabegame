@@ -6,6 +6,9 @@
 - 表锁 `windows.lock`：「查重 + 登记」、关陈旧窗口、restart_wpe 都在锁里做。
 - 进程锁 `wpe.lock`：启动、注入、重启 WPE 在锁里做，免得两个会话同时启动或重复注入。
   两把锁的次序固定为先 wpe.lock 后 windows.lock，不会互相等死。
+- 抓帧锁 `target.lock`（第 3 批）：只覆盖「连目标 → 选中自己的窗口 → 触发 → 收文件 → 断开」这几秒，回放分析不在锁里。
+  持有时不再去拿另外两把锁。持有者（MCP 进程号、创建时刻、窗口、拿到的时刻）写在 `target.holder.json`，
+  等锁超时报出是谁；持有者进程死了锁自动放开，这个文件会过时，读的时候按进程是否还在判断。
 - 锁用 msvcrt.locking 锁住锁文件的第一个字节，持有进程死了系统自动放开。同一进程同一线程可重入。
 - 陈旧：所属进程号不在，或进程号在但创建时刻对不上（进程号被复用）。
 """
@@ -31,17 +34,33 @@ SELF_CREATED = current_process_created()
 
 
 class FileLock:
-    """机器级的文件锁，进程内可重入（同一线程）。"""
+    """机器级的文件锁，进程内可重入（同一线程）。
 
-    def __init__(self, path: str, what: str):
+    holder_path 给了时，拿到锁后把持有者写进去、放锁前删掉，等锁超时就读出来报是谁（抓帧锁用）。"""
+
+    def __init__(self, path: str, what: str, holder_path: str | None = None):
         self.path = path
         self.what = what
+        self.holder_path = holder_path
         self._rlock = threading.RLock()
         self._depth = 0
         self._file = None
 
-    def acquire(self, timeout: float) -> float:
-        """拿到锁返回等待秒数；超时报错。"""
+    def holder(self) -> dict[str, Any] | None:
+        """持有者（没有 holder_path 或没人持有时为 None）；alive 表示那个进程是否还在。"""
+        if not self.holder_path:
+            return None
+        try:
+            with open(self.holder_path, "r", encoding="utf-8") as f:
+                info = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        pid = info.get("pid")
+        info["alive"] = isinstance(pid, int) and process_alive(pid, info.get("created"))
+        return info
+
+    def acquire(self, timeout: float, note: dict[str, Any] | None = None) -> float:
+        """拿到锁返回等待秒数；超时报错。note 是写进持有者文件的附加信息（比如窗口名）。"""
         t0 = time.monotonic()
         if not self._rlock.acquire(timeout=timeout):
             raise WpeError(f"等{self.what}超时（{timeout:g} s，本进程别的线程占着）")
@@ -60,18 +79,38 @@ class FileLock:
                 except OSError:
                     if time.monotonic() >= deadline:
                         f.close()
-                        raise WpeError(f"等{self.what}超时（{timeout:g} s，别的会话占着 {self.path}）")
+                        who = self.holder()
+                        detail = ""
+                        if who:
+                            detail = (f"，持有者 MCP 进程 {who.get('pid')}"
+                                      f"（{'在' if who.get('alive') else '已不在'}），{who.get('since')} 起"
+                                      + (f"，窗口 {who.get('window')}" if who.get("window") else ""))
+                        raise WpeError(f"等{self.what}超时（{timeout:g} s，别的会话占着 {self.path}{detail}）")
                     time.sleep(0.1)
         except BaseException:
             self._rlock.release()
             raise
         self._file = f
         self._depth = 1
+        if self.holder_path:
+            info = {"pid": SELF_PID, "created": SELF_CREATED, "since": now_iso(), **(note or {})}
+            try:
+                tmp = self.holder_path + f".{SELF_PID}.tmp"
+                with open(tmp, "w", encoding="utf-8") as hf:
+                    json.dump(info, hf, ensure_ascii=False)
+                os.replace(tmp, self.holder_path)
+            except OSError:
+                pass
         return round(time.monotonic() - t0, 2)
 
     def release(self) -> None:
         self._depth -= 1
         if self._depth == 0:
+            if self.holder_path:
+                try:
+                    os.remove(self.holder_path)
+                except OSError:
+                    pass
             f, self._file = self._file, None
             try:
                 f.seek(0)
@@ -81,12 +120,12 @@ class FileLock:
             f.close()
         self._rlock.release()
 
-    def held(self, timeout: float = 60.0):
+    def held(self, timeout: float = 60.0, note: dict[str, Any] | None = None):
         lock = self
 
         class _Ctx:
             def __enter__(self_inner):
-                self_inner.waited = lock.acquire(timeout)
+                self_inner.waited = lock.acquire(timeout, note)
                 return self_inner
 
             def __exit__(self_inner, *exc):
@@ -98,6 +137,7 @@ class FileLock:
 
 windows_lock = FileLock(paths.WINDOWS_LOCK, "窗口表锁")
 wpe_lock = FileLock(paths.WPE_LOCK, "WPE 进程锁")
+target_lock = FileLock(paths.TARGET_LOCK, "抓帧锁", holder_path=paths.TARGET_HOLDER)
 
 
 # ==================== 表项 ====================

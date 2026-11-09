@@ -4,7 +4,8 @@ wpe-renderdoc MCP 服务端。
 19 个回放工具的名字、参数、缺省值与说明照旧 renderdoc MCP（ignore/RenderDocMCP/mcp_server/server.py）
 原样搬来，后端从「界面里的扩展」改成本 MCP 自己拉起的常驻回放进程（replay.ReplayWorker）。
 另加 close_capture、show_in_renderdoc。
-第 2 批加 WPE 一侧（mcp_server/wpe/）：ensure_running、自己的测试窗口、配置、日志、状态。抓帧工具在后续批次。
+第 2 批加 WPE 一侧（mcp_server/wpe/）：ensure_running、自己的测试窗口、配置、日志、状态。
+第 3 批加抓帧（mcp_server/wpe/capture.py + renderdoc_worker/target.py）：capture、capture_wallpaper、capture_sweep。
 """
 
 import atexit
@@ -23,13 +24,35 @@ from .replay import (
     ReplayWorker,
     cleanup_stale,
 )
+from .wpe import capture as wpe_capture
 from .wpe import ensure as wpe_ensure
 from .wpe import log as wpe_log
+from .wpe import registry as wpe_registry
 from .wpe import session as wpe_session
 
 INSTRUCTIONS = """\
-读 RenderDoc 抓帧（.rdc）做回放分析，并管理常驻共享的 Wallpaper Engine（WPE）与本会话的测试窗口，\
-给 WPE 的对照工作流用。
+抓 Wallpaper Engine（WPE）的 RenderDoc 帧、读抓帧（.rdc）做回放分析，并管理常驻共享的 WPE 与本会话的测试窗口，\
+给 WPE 的对照工作流用。抓 WPE 真值用这里，不再需要旧的 wpe-renderdoc skill（driver.py）。
+
+典型流程：capture_wallpaper(工程, out) 一步做完「确保在跑 → 开自己的窗口 → 等加载 → 抓帧 → \
+关窗 → 截日志 → 在本会话回放进程里打开第一张」，之后直接调 get_draw_calls、get_mesh_data 等回放工具。\
+一组「工程 × 帧数 × 设置」用 capture_sweep。要在开着的窗口上分步做（先 apply_properties 再抓）用 \
+open_wallpaper → capture → close_wallpaper。
+
+抓帧：
+- out 必须给，约定 A:\\<项目>\\<用途>\\（项目根下散落的不算数）；不接受仓库里的路径。文件名 <tag>-frame<帧号>.rdc，\
+tag 缺省取 out 的末级目录名；out 里已有同 tag 的抓帧时拒绝，除非 overwrite。
+- 抓帧锁：连 RenderDoc 目标是独占的，机器级的 target.lock 保证同一时刻只有一个 MCP 在连；锁只覆盖连接到收完文件\
+这几秒，回放分析在锁外，各会话可以同时分析。连目标一律不抢占：目标被别的客户端（比如 RenderDoc 界面附加了 WPE）\
+连着时报「目标被别的客户端连着」，不踢人。
+- 选窗口：RenderDoc 一次只抓「活动窗口」（各会话共享）。只有一个可抓窗口、屏幕上也只有本窗口时直接认作本窗口，\
+不看尺寸；否则按尺寸认（带容差）：多于一个可抓窗口时先抓 1 帧探测，按缩略图认出自己的窗口，不是就删掉探测文件、\
+切换再探，最多一轮；缩略图认不准就回放核对后备缓冲，仍分不清就报错；锁外再回放第一张核对后备缓冲。\
+缩略图不一定等于后备缓冲（宽按 8 对齐、最宽 2048，如 900x500 → 896x497），交换链总等于窗口客户区。\
+所以同一时刻不允许两个尺寸相差 8 像素以内的测试窗口（open_wallpaper 会拒绝）。探测会让别人的窗口出现一次长帧，\
+结果里报出探测次数（probes）。
+- 结果看 gaps（帧号不连续）、backbuffer（实际的后备缓冲，和请求的不同时带 size_note）和 first_frame（绘制数）。\
+被抓的帧本身是长帧；帧号在每次开窗后重新计数。
 
 回放：
 - 和旧的 `renderdoc` MCP 的区别：不用开 RenderDoc 界面，也不经界面里的扩展。每个会话的 MCP 自己拉起\
@@ -50,11 +73,11 @@ close_wallpaper / apply_properties 只对自己的窗口。别的会话的窗口
 桌面壁纸一律不碰。MCP 退出时关掉自己的窗口。
 - 设置：get_settings 只读 config.json。WPE 只在启动时读这个文件，改设置只能 restart_wpe(settings)：\
 正常退出 → 改文件 → 启动 → 注入，桌面空几秒；只在没有别的会话的窗口、没有外来窗口、设置界面没开着时做。\
-设置不还原，改了哪些键结果里逐项报出。
+设置不还原，改了哪些键结果里逐项报出；例外是 capture_sweep，它自己改的设置跑完会改回扫描开始时的值。
 - 日志：log_mark 取游标，log_since 读之后的新行。log.txt 各会话共用、行里不带窗口名；游标失效（日志被重写）\
 会报出来，不静默从头读。
 - cleanup_project 只删仓库 ignore/ 下测试工程里 WPE 写的 shaders/blobsSM40。
-- 抓帧（连 RenderDoc 目标、触发抓取）的工具在后续批次，现在还没有；要抓帧仍用 wpe-renderdoc skill。
+- 测试窗口会在开窗几秒后拿到前台、盖在屏幕上，这是接受的；WPE 的主窗口（浏览界面、安全启动提示）不会弹。
 """
 
 # Initialize FastMCP server
@@ -667,12 +690,98 @@ def restart_wpe(settings: dict[str, Any] | None = None) -> dict:
 
 
 @mcp.tool
-def status() -> dict:
+def status(target: bool = False) -> dict:
     """
     WPE 进程（命令行、创建时刻、完整性级别、是否已注入）、崩溃标记、桌面壁纸窗口、窗口表（含所属与陈旧）、
-    外来窗口、设置界面是否开着、旧 skill 会话是否存在。顺手关掉陈旧窗口（结果里的 stale_closed）。
+    外来窗口、设置界面是否开着、旧 skill 会话是否存在、抓帧锁由谁持有。顺手关掉陈旧窗口（结果里的 stale_closed）。
+
+    Args:
+        target: 另外连 RenderDoc 目标读 API、是否在呈现、可抓窗口数（不抢占，要拿抓帧锁，约 2 s）
     """
-    return wpe_ensure.status()
+    result = wpe_ensure.status()
+    result["target_lock"] = {"path": paths.TARGET_LOCK, "holder": wpe_registry.target_lock.holder()}
+    if target:
+        try:
+            result["target"] = wpe_capture.target_status(worker)
+        except Exception as e:  # 读不到目标不影响其余状态
+            result["target"] = {"ok": False, "error": str(e)}
+    return result
+
+
+# ==================== 抓帧（第 3 批） ====================
+
+
+@mcp.tool
+def capture(window: str, out: str, frames: int = 3, tag: str | None = None, timeout: float = 60,
+            overwrite: bool = False) -> dict:
+    """
+    在本会话自己开着的测试窗口上连续抓 N 帧，文件放到 out。
+
+    在抓帧锁里：不抢占地连 RenderDoc 目标；可抓窗口只有一个、屏幕上只有本窗口时直接认作本窗口（不看尺寸），
+    否则按尺寸认（带容差）：多于一个可抓窗口时先抓 1 帧探测、按缩略图认出本窗口（不是就删掉探测文件、切换再探，
+    最多一轮；认不准就回放核对）；触发 N 帧并逐张核对；文件从抓帧模板目录（A:\\_rdtemp）移到 out；断开、放锁。
+    锁外核对帧号连续（gaps），并另开一个回放读第一张，用同样的容差核对后备缓冲、报绘制数。
+
+    Args:
+        window: open_wallpaper 返回的本会话窗口名
+        out: 绝对路径，约定 A:\\<项目>\\<用途>\\；不接受仓库里的路径
+        frames: 连续抓几帧（1…100）
+        tag: 文件名前缀，缺省取 out 的末级目录名；文件名 <tag>-frame<帧号>.rdc
+        timeout: 触发后等 N 帧抓完的秒数
+        overwrite: out 里已有同 tag 的抓帧时是否照样抓（同名的替换）；不给就拒绝
+
+    返回文件清单（路径、帧号、大小、缩略图）、gaps、backbuffer（实际的后备缓冲，和请求的不同时带 size_note）、
+    identified_by（怎么认的窗口）、first_frame（绘制数、各绘制索引数、后备缓冲尺寸、backbuffer_ok）、
+    lock_wait_s（等抓帧锁的时间）、probes（探测次数）与 probe_detail（探测到的尺寸、删了没有）、windows（可抓窗口数）。
+    """
+    return wpe_capture.capture(worker, window, out, frames, tag, timeout, overwrite)
+
+
+@mcp.tool
+def capture_wallpaper(project: str, out: str, frames: int = 3, size: str = "1280x720", wait: float = 8,
+                      tag: str | None = None, log_grep: str | None = None, open_first: bool = True) -> dict:
+    """
+    一步抓一张壁纸的对照帧：ensure_running → 开本会话的测试窗口 → 等 wait 秒让场景加载 → capture → 关窗 →
+    截日志 → open_first 时在本会话的回放进程里打开第一张（之后直接调 get_draw_calls 等回放工具）。
+    中途出错也会关掉自己开的窗口。
+
+    Args:
+        project: 工程目录、project.json、工坊 ID、默认工程名或 myprojects 里的名字
+        out: 绝对路径，约定 A:\\<项目>\\<用途>\\；不接受仓库里的路径
+        frames: 连续抓几帧
+        size: 窗口客户区「宽x高」。已有同尺寸的测试窗口时拒绝
+        wait: 开窗后等场景加载的秒数（大场景给长一些，否则抓到的还在加载）
+        tag: 文件名前缀，缺省取 out 的末级目录名
+        log_grep: 日志只要匹配这个正则的行（如 "\\[kbp\\]"）
+        open_first: 抓完在本会话回放进程里打开第一张
+
+    返回窗口、capture 的结果、关窗结果、日志（从开窗前截起，含加载期的报错；各会话共用，同时开着别的窗口时会混进
+    别人的行）、打开的抓帧。
+    """
+    return wpe_capture.capture_wallpaper(worker, project, out, frames, size, wait, tag, log_grep, open_first,
+                                         ensure=wpe_ensure.ensure_running)
+
+
+@mcp.tool
+def capture_sweep(jobs: list[dict[str, Any]], out_root: str, log_dir: str | None = None) -> dict:
+    """
+    一组「工程 × 帧数 × 设置」依次抓完（每个 job 一次 capture_wallpaper，不打开抓帧），抓帧放 out_root\\<tag>。
+
+    - jobs：[{project, frames?=3, size?="1280x720", wait?=8, settings?, tag?}]。settings 是 get_settings 列出的键
+      （如 {"fps": 60}），没给的键取扫描开始时的值；tag 缺省为「工程名-键值…[-尺寸]」，如 p4c-attract-fps60。
+    - 按 settings 分组、相同的连在一起；和当前设置一样的那组先跑。要改设置时调 restart_wpe（有别的会话的窗口、外来窗口
+      或设置界面开着就拒绝，整次扫描停下报告）；全部跑完后，改过的再 restart_wpe 改回扫描开始时的值。
+    - log_dir 给了就照 ignore/p4/sweep_b.py 写 <tag>-log.txt（含 [kbp] 的行）和 <tag>-errors.txt（含 error、不含 [kbp]
+      的行），日志从开窗前截到关窗后。
+
+    Args:
+        jobs: 见上
+        out_root: 绝对路径，约定 A:\\<项目>；不接受仓库里的路径
+        log_dir: 日志文件目录（绝对路径），不给就不写
+
+    返回逐 job 的文件、帧号、gaps、第一帧核对、探测次数、日志行数（[kbp] 行）、报错行数；重启记录；最后的设置值。
+    """
+    return wpe_capture.capture_sweep(worker, jobs, out_root, log_dir, ensure=wpe_ensure.ensure_running)
 
 
 @mcp.tool

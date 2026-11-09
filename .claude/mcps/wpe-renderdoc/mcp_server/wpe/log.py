@@ -56,9 +56,17 @@ def mark(path: str | None = None) -> dict[str, Any]:
         return {"path": path, "size": 0, "created": None, "head": None, "head_len": 0}
 
 
+def read_new(cursor: dict[str, Any]) -> dict[str, Any]:
+    """游标之后新增的全部完整行，不过滤、不截断（capture_sweep 写日志文件用）。
+    返回 {valid, rewritten, lines, next}；游标失效时 lines 为空、带 message。"""
+    result = since(cursor, max_lines=None)
+    return {k: result[k] for k in ("valid", "rewritten", "lines", "next", "message") if k in result}
+
+
 def since(cursor: dict[str, Any], grep: str | None = None, errors: bool = False,
-          max_lines: int = MAX_LINES) -> dict[str, Any]:
-    """游标之后新增的完整行。grep 是正则（区分大小写）；errors 只回含 error / fail 的行（不区分大小写）。"""
+          max_lines: int | None = MAX_LINES) -> dict[str, Any]:
+    """游标之后新增的完整行。grep 是正则（区分大小写）；errors 只回含 error / fail 的行（不区分大小写）。
+    max_lines 为 None 时不截断。"""
     if not isinstance(cursor, dict) or "size" not in cursor:
         raise WpeError("mark 要传 log_mark / open_wallpaper 返回的游标对象")
     path = cursor.get("path") or paths.wpe_log()
@@ -103,7 +111,7 @@ def since(cursor: dict[str, Any], grep: str | None = None, errors: bool = False,
     if pattern is not None:
         lines = [line for line in lines if pattern.search(line)]
     matched = len(lines)
-    truncated = matched > max_lines
+    truncated = max_lines is not None and matched > max_lines
     if truncated:
         lines = lines[:max_lines]
     result.update(valid=True, rewritten=False, lines=lines, count=matched, total_new_lines=total,

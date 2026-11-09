@@ -31,6 +31,27 @@ OWNER_LABEL = {"mine": "本会话", "other": "别的会话", "stale": "陈旧", 
 # 同一 MCP 进程里的窗口操作串行（FastMCP 的同步工具本来就在事件循环里排队，这里再保一层）
 _op_lock = threading.RLock()
 
+# 尺寸容差（窗口像素）：两个测试窗口的尺寸宽、高都差在这以内就算「同尺寸」，开窗时拒绝；抓帧认窗口时
+# 后备缓冲和窗口尺寸差在这以内算对得上。第 3 批实测交换链总等于客户区（差 0），缩略图另有按 8 对齐的规则，
+# 见 capture.py；这里留余量。
+SIZE_TOL = 8
+
+
+def sizes_close(a, b, tol: int = SIZE_TOL) -> bool:
+    return abs(int(a[0]) - int(b[0])) <= tol and abs(int(a[1]) - int(b[1])) <= tol
+
+
+def _sizes_of(entry: dict[str, Any]) -> list[tuple[int, int]]:
+    """一个表项可能对应的尺寸：登记的请求尺寸，以及屏幕上的客户区（系统可能把窗口缩小过）。"""
+    found = []
+    m = SIZE_RE.match(entry.get("size") or "")
+    if m:
+        found.append((int(m.group(1)), int(m.group(2))))
+    w = entry.get("window")
+    if w and w.get("client"):
+        found.append((w["client"][2], w["client"][3]))
+    return found
+
 
 def parse_size(size: str) -> tuple[int, int]:
     m = SIZE_RE.match(size or "")
@@ -123,6 +144,21 @@ def _brief(entry: dict[str, Any]) -> dict[str, Any]:
 # ==================== 开、关、改属性 ====================
 
 
+def _size_conflicts(view: dict[str, Any], size: tuple[int, int]) -> list[dict[str, Any]]:
+    """和 size 相差不超过 SIZE_TOL 的测试窗口：登记的（请求尺寸或屏幕上的客户区）与外来的（客户区）。"""
+    conflicts = []
+    for entry in view["registered"]:
+        if entry["owner"] == "stale" and not entry.get("window"):
+            continue
+        if any(sizes_close(s, size) for s in _sizes_of(entry)):
+            conflicts.append(_brief(entry))
+    for foreign in view["foreign"]:
+        client = foreign.get("client")
+        if client and sizes_close((client[2], client[3]), size):
+            conflicts.append(foreign)
+    return conflicts
+
+
 def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ensure=None) -> dict[str, Any]:
     with _op_lock:
         ensured = ensure() if ensure else None
@@ -131,17 +167,11 @@ def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ens
         size_text = f"{w}x{h}"
         with registry.windows_lock.held(60) as lock:
             view = survey()
-            conflicts = []
-            for entry in view["registered"]:
-                if entry.get("size") == size_text and (entry["owner"] != "stale" or entry.get("window")):
-                    conflicts.append(_brief(entry))
-            for foreign in view["foreign"]:
-                if foreign.get("size") == size_text:
-                    conflicts.append(foreign)
+            conflicts = _size_conflicts(view, (w, h))
             if conflicts:
                 raise WpeError(
-                    f"拒绝开窗：已有同尺寸 {size_text} 的测试窗口，第 3 批抓帧时会分不清是谁的。占用方："
-                    + json.dumps([{k: c.get(k) for k in ("name", "owner_label", "owner_pid", "project", "hwnd")}
+                    f"拒绝开窗：已有和 {size_text} 相差不超过 {SIZE_TOL} 像素的测试窗口，抓帧时会分不清是谁的。占用方："
+                    + json.dumps([{k: c.get(k) for k in ("name", "owner_label", "owner_pid", "project", "size", "hwnd")}
                                   for c in conflicts], ensure_ascii=False)
                     + "。换一个尺寸，或等对方关窗")
             taken = {e["name"] for e in view["registered"]} | {f["name"] for f in view["foreign"]}
@@ -167,6 +197,21 @@ def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ens
             registry.delete(name)
             raise WpeError(f"{wait:g} s 内没等到窗口 {name} 出现（工程 {path}），已撤销登记并补发关窗")
         appeared = round(time.monotonic() - t0, 2)
+        # 系统把窗口缩小过（窗口加标题栏超出屏幕）时，实际客户区可能和别的窗口撞上：撞了就关掉、撤销登记
+        client = info.get("client")
+        if client and (client[2], client[3]) != (w, h):
+            with registry.windows_lock.held(60):
+                clash = [c for c in _size_conflicts(survey(), (client[2], client[3])) if c.get("name") != name]
+            if clash:
+                try:
+                    _close_by_name(name)
+                finally:
+                    registry.delete(name)
+                raise WpeError(
+                    f"开了 {size_text} 的窗口，但系统把客户区缩成了 {client[2]}x{client[3]}，和已有的测试窗口相差不超过 "
+                    f"{SIZE_TOL} 像素，抓帧时会分不清，已关掉并撤销登记。占用方："
+                    + json.dumps([{k: c.get(k) for k in ("name", "owner_label", "owner_pid", "size")} for c in clash],
+                                 ensure_ascii=False))
         fg = win.settle_foreground(fg_before)
         entry.update(hwnd=info["hwnd"], state="open", opened_at=now_iso())
         registry.write(entry)

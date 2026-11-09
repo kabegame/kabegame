@@ -34,6 +34,9 @@ def renderdoccmd() -> str:
 WINDOWS_DIR = os.path.join(STATE_DIR, "windows")
 WINDOWS_LOCK = os.path.join(STATE_DIR, "windows.lock")
 WPE_LOCK = os.path.join(STATE_DIR, "wpe.lock")
+# 抓帧锁：同一时刻只有一个 MCP 连 RenderDoc 的目标；持有者写在旁边的 target.holder.json
+TARGET_LOCK = os.path.join(STATE_DIR, "target.lock")
+TARGET_HOLDER = os.path.join(STATE_DIR, "target.holder.json")
 
 # 旧 skill（.claude/skills/wpe-renderdoc/driver.py）的会话文件：在就说明旧会话正用着它自己注入启动的 WPE
 OLD_SKILL_STATE = os.path.join(REPO_ROOT, ".kabegame", "debug", "wpe-renderdoc", "state.json")

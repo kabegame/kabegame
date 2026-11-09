@@ -653,7 +653,7 @@ development 构建的 `window.__kabegameSceneProbe`：
 | `particleCorners` | 把翻译后的粒子顶点 WGSL 改写成计算着色器，读回我们实际算出的每粒子四角裁剪坐标，和 WPE 的 `gs_out` / `vs_out` 比 |
 | `host.particles({ profile? })` | 当前场景的粒子数与分布、开销记录（`profile: true` 开始、`false` 停止）、当前 `instanceoverride` |
 
-对比台在 `ignore/p4/`（不入库，`python -X utf8 -I` 运行），用法见报告「工具用法」：`gen*.py` 生成确定性工程；`sweep*.py` / `run.py` 注入启动 WPE、采样、抓帧；`rdc_track.py` 从抓帧导出轨迹；`model.py` 是解析模型；`cmp_track.py` 逐帧比较（长程阈值：位置 0.5 场景像素、尺寸 0、透明度 0.004）；P4a 各步骤的验收脚本在 `step1/`–`step5/`。WPE 的真值用 `wpe-renderdoc` skill 抓，放在 `A:\p4-0\`、`A:\p4a\`；对齐用脚本帧号 = RenderDoc 帧号 + 1。
+对比台在 `ignore/p4/`（不入库，`python -X utf8 -I` 运行），用法见报告「工具用法」：`gen*.py` 生成确定性工程；`sweep*.py` / `run.py` 注入启动 WPE、采样、抓帧；`rdc_track.py` 从抓帧导出轨迹；`model.py` 是解析模型；`cmp_track.py` 逐帧比较（长程阈值：位置 0.5 场景像素、尺寸 0、透明度 0.004）；P4a 各步骤的验收脚本在 `step1/`–`step5/`。WPE 的真值用 `wpe-renderdoc` skill 抓，放在 `A:\p4-0\`、`A:\p4a\`；对齐用脚本帧号 = RenderDoc 帧号 + 1。现在抓 WPE 真值改用 `wpe-renderdoc` MCP（`.claude/mcps/wpe-renderdoc/`）：`capture_wallpaper` 一步开窗抓帧并在本会话回放进程里打开，`capture_sweep` 替代 `sweep_b.py`；旧 skill 在完全迁移前保留。
 
 ## 粒子（P4b）
 
@@ -988,7 +988,7 @@ C  = cp[controlpoint].current.t；ks = k·scale；rT = rcp(threshold)
   - 每个目录有本步的 `replay.test.ts`、语料 `corpus.test.ts` 与 `corpus_diff.py`、变异检查 `mutate.py` / `mutate_claude.py`，以及以前各步回放的拷贝（`replay-b3/b4/b6/…`），用 HEAD 导出的源码（`head/src`）对工作区逐字节比；
   - 另有：`c1/scan_cp.py`（控制点语料扫描）；`c3/scan_attract.py`、`consts.py`（从 exe 读缺省值与 `FLT_MIN`）、`claude_onestep.py`（单步核对）；`c4/prestudy.test.ts`（帧顺序预研）、`live_*.ts`（应用里的帧循环）；`c5/corners-offline.*`（离线四角）、`live_corners.ts`（真机四角）、`rot_shape.py`、`orient-scan.test.ts`；
   - 收尾和 WPE 比 `3832772446`：`c5/cmp_scene.py`、`wpe_particles.py`、`ours_particles.ts`、`cmp_particles.py`、`alpha_seeds.ts`；覆盖数 `c5/coverage_p4c.py`。
-- WPE 参照在 `A:\p4b\p4c-*`、`A:\p4b\3832772446-fps60`，用 `wpe-renderdoc` skill 抓，结束后按字节还原 WPE 的 `config.json`、放回桌面壁纸。
+- WPE 参照在 `A:\p4b\p4c-*`、`A:\p4b\3832772446-fps60`，用 `wpe-renderdoc` skill 抓，结束后按字节还原 WPE 的 `config.json`、放回桌面壁纸。新的抓帧用 `wpe-renderdoc` MCP（`.claude/mcps/wpe-renderdoc/`）的 `capture_wallpaper` / `capture_sweep`：WPE 常驻不强杀，改过的设置由 `capture_sweep` 经 `restart_wpe` 改回。
 
 步骤 4、5 与收尾在应用里的验收经 kabegame-dev（`.claude/skills/kabegame-chromium/SKILL.md`）做：
 - `projects_import` / `projects_remove` 把确定性工程导入 dev 库、用完移除，并核对没有残留的行与任务；

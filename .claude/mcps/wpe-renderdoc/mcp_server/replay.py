@@ -234,13 +234,14 @@ class ReplayWorker:
 
     # ---------- 调用 ----------
 
-    def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    def call(self, method: str, params: dict[str, Any] | None = None, timeout: float | None = None) -> Any:
+        """timeout：这一次请求的超时，缺省用 self.timeout（抓帧这类长请求单独给）。"""
         with self._lock:
             if self._closed:
                 raise ReplayWorkerError("MCP 正在退出，工作进程已关闭")
             notice = self._ensure_worker()
             try:
-                result = self._request(method, params or {})
+                result = self._request(method, params or {}, timeout)
             except ReplayWorkerError as e:
                 if notice:
                     raise ReplayWorkerError(f"{e}（{self._describe(notice)}）") from None
@@ -279,15 +280,16 @@ class ReplayWorker:
         self._capture = None
         return notice
 
-    def _request(self, method: str, params: dict[str, Any]) -> Any:
+    def _request(self, method: str, params: dict[str, Any], timeout: float | None = None) -> Any:
         proc = self._proc
         assert proc is not None
+        limit = self.timeout if timeout is None else timeout
         request_id = uuid.uuid4().hex
         response_file = self._file("response.json")
         _remove(response_file)
         _write_atomic(self._file("request.json"),
                       json.dumps({"id": request_id, "method": method, "params": params}))
-        deadline = time.monotonic() + self.timeout
+        deadline = time.monotonic() + limit
         while True:
             response = _read_json(response_file)
             if response is not None:
@@ -310,7 +312,7 @@ class ReplayWorker:
                     f"{self._lost['reason']}。下次调用会重新拉起"
                     + (f"，打开的 {self._capture} 已丢失" if self._capture else ""))
             if time.monotonic() > deadline:
-                reason = f"{method} 超过 {self.timeout:g} s 没有回应，已结束工作进程 {proc.pid}"
+                reason = f"{method} 超过 {limit:g} s 没有回应，已结束工作进程 {proc.pid}"
                 self._lost = {"reason": reason, "capture": self._capture}
                 self._proc = None
                 self._terminate(proc)

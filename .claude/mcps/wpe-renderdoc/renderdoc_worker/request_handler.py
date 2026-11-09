@@ -33,6 +33,11 @@ class RequestHandler:
             "list_captures": self._handle_list_captures,
             "open_capture": self._handle_open_capture,
             "close_capture": self._handle_close_capture,
+            # 第 3 批：抓帧控制（target.py），连 RenderDoc 注入在 WPE 里的目标，一律不抢占
+            "target_find": self._handle_target_find,
+            "target_status": self._handle_target_status,
+            "target_capture": self._handle_target_capture,
+            "target_inspect": self._handle_target_inspect,
         }
 
     def handle(self, request):
@@ -280,3 +285,47 @@ class RequestHandler:
         """关掉本工作进程打开的抓帧（ctx 是 context.ReplayContext）"""
         closed = self.facade.ctx.close()
         return {"success": True, "closed": closed}
+
+    # ==================== 抓帧控制（第 3 批） ====================
+
+    @staticmethod
+    def _target():
+        # 只在 qrenderdoc 里能 import（要 renderdoc 模块），用到时再导入
+        from . import target
+        return target
+
+    def _handle_target_find(self, params):
+        """按进程号找目标号"""
+        if params.get("pid") is None:
+            raise ValueError("pid is required")
+        t = self._target()
+        return t.target_find(int(params["pid"]), float(params.get("timeout", 10)),
+                             params.get("client") or t.DEFAULT_CLIENT)
+
+    def _handle_target_status(self, params):
+        """API、是否在呈现、可抓窗口数"""
+        if params.get("ident") is None:
+            raise ValueError("ident is required")
+        t = self._target()
+        return t.target_status(int(params["ident"]), params.get("client") or t.DEFAULT_CLIENT,
+                               float(params.get("settle", 1.5)))
+
+    def _handle_target_capture(self, params):
+        """不抢占地连目标、认出自己的窗口、抓 N 帧、逐张核对"""
+        for key in ("ident", "frames", "expect_size", "template"):
+            if params.get(key) is None:
+                raise ValueError("%s is required" % key)
+        t = self._target()
+        return t.target_capture(int(params["ident"]), int(params["frames"]), params["expect_size"],
+                                params["template"], params.get("others") or [],
+                                float(params.get("timeout", 60)), params.get("client") or t.DEFAULT_CLIENT,
+                                float(params.get("probe_timeout", 30)), params.get("desktop") or [],
+                                params.get("test_windows"), int(params.get("size_tol", t.SIZE_TOL)),
+                                int(params.get("thumb_tol", t.THUMB_TOL)))
+
+    def _handle_target_inspect(self, params):
+        """另开一个回放读一张抓帧，不动当前打开的抓帧"""
+        path = params.get("path")
+        if path is None:
+            raise ValueError("path is required")
+        return self._target().inspect(path)

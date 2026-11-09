@@ -5,6 +5,8 @@ description: 命令行自动抓 Wallpaper Engine 的 RenderDoc 帧：注入启�
 
 # wpe-renderdoc
 
+> 抓 WPE 用新的 `wpe-renderdoc` MCP（`.claude/mcps/wpe-renderdoc/`）；完全迁移前本 skill 保留。
+
 用命令行完成「注入启动 WPE → 打开工程 → 连续抓帧 → 还原」，全程不用碰 RenderDoc 界面。抓到的 `.rdc` 再用 RenderDoc MCP 读（`get_mesh_data`、`get_shader_info`、`save_texture`）。
 
 ## 用法
