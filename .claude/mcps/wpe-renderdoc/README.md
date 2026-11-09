@@ -48,7 +48,9 @@
 mcp_server/          MCP 服务端（uv 的 Python ≥ 3.10）
   server.py          工具注册
   replay.py          工作进程客户端：拉起、请求、超时与退出后重启、退出时关闭
-  paths.py           仓库根、状态目录、qrenderdoc 位置
+  paths.py           仓库根、状态目录、qrenderdoc / WPE 位置
+  wpe/               第 2 批：常驻共享的 WPE（ensure_running、restart_wpe）、本会话的测试窗口与机器级窗口表、
+                     config.json 读写、log.txt 游标（计划见 wpe-renderdoc-mcp-p2.md）
 renderdoc_worker/    在 qrenderdoc --python 里跑（RenderDoc 内嵌的 Python 3.8）
   worker.py          常驻循环
   context.py         ctx 垫片：服务层用到的 CaptureContext 子集，背后是裸 ReplayController

@@ -4,6 +4,7 @@
 > - **形态：** 这一侧也是有状态的。把 RenderDocMCP vendor 进仓库，放 `.claude/mcps/`，做成一个 MCP。
 > - **范围：** 专做「确保 WPE 在跑 → 开窗口 → 抓帧 → 打开 rdc → 分析」这条工作流。测试工程的生成与比较另做 `kbp-tools` skill，本计划不做。
 > - **自动、无感、不弹窗：** 用户电脑上的 WPE 在不在运行都要无感。弹窗会抢焦点，强杀后的「上次可能崩溃」还要用户点取消。
+>   - 2026-11-10 补充：测试窗口占前台可以接受。不能弹出来抢前台的是 WPE 的主窗口，比如浏览界面、安全启动提示。
 > - **可以操作用户正在开的 WPE。**
 > - **不兼容旧命令行。** 完全迁移之前，旧 skill（`.claude/skills/wpe-renderdoc/`，含 `driver.py`、`target.py`）和旧 MCP（`.mcp.json` 的 `renderdoc`，指向 `ignore/RenderDocMCP`）原样保留，新旧并存。
 > - **不做现场还原，减少复杂度。** 用户接受对 WPE 设置的更改；壁纸、工程与工坊内容照旧不改。
@@ -152,7 +153,7 @@ service 用到的 ctx 方法：`IsCaptureLoaded` 16 处、`GetResourceName` 5、
 | Q3 | **第二个实例** | 不再需要：常驻方案不起第二个实例 |
 | Q4 | **原地注入后新开的窗口能不能抓** | **已答**（记录二）：能，WPE 每个窗口一个设备；桌面设备不被挂上 |
 | Q5 | **运行中改设置** | **读码已答**（[rea-wpe-settings.md](rea-wpe-settings.md)，未实测）：<br>· `config.json` 只在启动时读，没有文件监视；运行中外部改文件不生效，而且 WPE 下一次保存时会用内存里的值整段覆盖回去。<br>· 设置界面经命名管道 `WPEhandlerSettings` 把整份 `general.user` 发给主进程（每改一项发一次 `applyGeneral`，点「确定」才写文件）。<br>· 主进程收到后：`fps` 等就地推给桌面壁纸；`msaa`、`resolution`、`postprocessing` 等会关掉全部桌面壁纸再重开；`safemode`、`windowupdaterate` 等只在启动时读。<br>· 已开的 `-playInWindow` 窗口不受影响，新开的窗口按当时内存里的值建。<br>· 外部没有现成入口：`-control` 没有设置命令；管道只在设置界面开着时存在，且被界面占着。唯一能就地改的办法，是往 WPE 进程内存写消息再发内部消息 `0x401`，有崩溃风险。<br>待实测：报告的 E5（正常退出不写文件、外部改文件后重启生效）是 `restart_wpe` 的前提 |
-| Q6 | **不弹窗、不抢焦点** | 部分已答：`-silent` 启动、注入、开窗、关窗都不弹窗、不抢前台（记录一、二）；`renderdoccmd` 必须用 `CREATE_NO_WINDOW` 或 `ShowWindow=0` 起，否则会弹 Windows Terminal 抢前台。待做：窗口移到屏幕外或被遮住时 WPE 还画不画、还抓不抓得到（窗口会盖在用户屏幕上）；常驻 `qrenderdoc --python` 有没有窗口或任务栏图标 |
+| Q6 | **不弹窗、不抢焦点** | 大部分已答：<br>· `-silent` 启动、注入、开关窗都不弹 WPE 主窗口（记录一、二，第 2 批共 8 次启动）；<br>· `renderdoccmd` 必须用 `CREATE_NO_WINDOW` 或 `ShowWindow=0` 起，否则会弹 Windows Terminal 抢前台；<br>· 常驻回放进程没有任何窗口（第 1 批）；<br>· 测试窗口会在开窗几秒后抢前台，用户 200 s 内有输入时抢不走（`ForegroundLockTimeout`）。用户定：可以接受（第 2 批实施记录）。<br>待做：窗口移到屏幕外或被遮住时 WPE 还画不画、还抓不抓得到（第 3 批） |
 | Q7 | **多个可抓窗口时选中自己的** | **已答**（记录一、三）：活动窗口是目标里的共享状态，第一个注册的默认活动，`CycleActiveWindow` 轮到下一个、跨连接保留；`NewCapture` 的缩略图尺寸等于窗口尺寸，不用回放就能认 |
 | Q8 | **常驻回放进程：** 长时间循环、反复开关 rdc 是否稳定；ctx 垫片要补哪些方法；内嵌 Python 版本 | 待做 |
 | Q9 | **陈旧窗口回收：** MCP 被强行结束后，另一个 MCP 按窗口表认出所属进程已死的窗口并关掉 | 待做 |

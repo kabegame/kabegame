@@ -3,13 +3,15 @@ wpe-renderdoc MCP 服务端。
 
 19 个回放工具的名字、参数、缺省值与说明照旧 renderdoc MCP（ignore/RenderDocMCP/mcp_server/server.py）
 原样搬来，后端从「界面里的扩展」改成本 MCP 自己拉起的常驻回放进程（replay.ReplayWorker）。
-另加 close_capture、show_in_renderdoc。抓帧工具在后续批次。
+另加 close_capture、show_in_renderdoc。
+第 2 批加 WPE 一侧（mcp_server/wpe/）：ensure_running、自己的测试窗口、配置、日志、状态。抓帧工具在后续批次。
 """
 
 import atexit
 import os
 import subprocess
-from typing import Literal
+import threading
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 
@@ -21,10 +23,15 @@ from .replay import (
     ReplayWorker,
     cleanup_stale,
 )
+from .wpe import ensure as wpe_ensure
+from .wpe import log as wpe_log
+from .wpe import session as wpe_session
 
 INSTRUCTIONS = """\
-读 RenderDoc 抓帧（.rdc）做回放分析，给 Wallpaper Engine 的对照工作流用。
+读 RenderDoc 抓帧（.rdc）做回放分析，并管理常驻共享的 Wallpaper Engine（WPE）与本会话的测试窗口，\
+给 WPE 的对照工作流用。
 
+回放：
 - 和旧的 `renderdoc` MCP 的区别：不用开 RenderDoc 界面，也不经界面里的扩展。每个会话的 MCP 自己拉起\
 一个没有窗口的常驻回放进程（qrenderdoc --python），IPC 目录按 MCP 进程私有，所以多个会话可以同时打开\
 不同的 rdc 分析，互不干扰，也不会替换用户在 RenderDoc 界面里正在看的抓帧。
@@ -33,7 +40,21 @@ INSTRUCTIONS = """\
 - 回放进程意外退出或超时（默认 120 s，环境变量 RENDERDOC_MCP_TIMEOUT）会被结束，下一次调用自动重新\
 拉起，结果里带 worker_restarted 和 capture_lost（丢掉的抓帧路径），这时要重新 open_capture。
 - show_in_renderdoc 会弹出 RenderDoc 界面、抢焦点，只在用户明确要求在 RenderDoc 里看时用。
-- 抓帧（连 WPE、触发抓取）的工具在后续批次，现在还没有；要抓帧仍用 wpe-renderdoc skill。
+
+WPE（用户正在用、各会话共享的那一个）：
+- 常驻、不关不杀：ensure_running 确保 WPE 在跑且已注入 RenderDoc（没在跑就 -silent 普通启动、等桌面壁纸出来\
+再注入；在跑没注入就原地注入；已注入不动）。MCP 从不强杀 WPE，也不在退出时关它。
+- 只开关自己的窗口：open_wallpaper 开的测试窗口叫 kb-<MCP 进程号>-<序号>，登记在机器级窗口表里；\
+close_wallpaper / apply_properties 只对自己的窗口。别的会话的窗口、外来窗口（表里没有的）不碰；\
+所属进程已不在的陈旧窗口，ensure_running / status 会顺手关掉。同一时刻不允许两个同尺寸的测试窗口。\
+桌面壁纸一律不碰。MCP 退出时关掉自己的窗口。
+- 设置：get_settings 只读 config.json。WPE 只在启动时读这个文件，改设置只能 restart_wpe(settings)：\
+正常退出 → 改文件 → 启动 → 注入，桌面空几秒；只在没有别的会话的窗口、没有外来窗口、设置界面没开着时做。\
+设置不还原，改了哪些键结果里逐项报出。
+- 日志：log_mark 取游标，log_since 读之后的新行。log.txt 各会话共用、行里不带窗口名；游标失效（日志被重写）\
+会报出来，不静默从头读。
+- cleanup_project 只删仓库 ignore/ 下测试工程里 WPE 写的 shaders/blobsSM40。
+- 抓帧（连 RenderDoc 目标、触发抓取）的工具在后续批次，现在还没有；要抓帧仍用 wpe-renderdoc skill。
 """
 
 # Initialize FastMCP server
@@ -550,17 +571,174 @@ def show_in_renderdoc(path: str) -> dict:
     return {"opened": path, "pid": proc.pid}
 
 
+# ==================== WPE（第 2 批） ====================
+
+
+@mcp.tool
+def ensure_running() -> dict:
+    """
+    确保用户的 WPE 在跑、已注入 RenderDoc（只注入，不连抓帧目标）。
+
+    - 没在跑：崩溃标记（faultyShutdown）为 1 就先写 0（免得弹「上次可能崩溃」），WMI 普通启动 -silent，
+      等桌面壁纸窗口出现再稳 2 s，然后注入；
+    - 在跑没注入：renderdoccmd inject --PID 原地注入，PID 不变；
+    - 已注入：不动。
+    顺手关掉陈旧窗口（所属 MCP 已不在）。旧 wpe-renderdoc skill 的会话在时拒绝。
+
+    返回做了哪几步（steps）、WPE 的 PID、是否清了标记、关了哪些陈旧窗口、外来窗口有哪些。
+    """
+    return wpe_ensure.ensure_running()
+
+
+@mcp.tool
+def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20) -> dict:
+    """
+    在本会话自己的测试窗口里打开一个工程（-playInWindow），先 ensure_running。
+
+    Args:
+        project: 工程目录、project.json、工坊 ID、默认工程名（如 shimmering_particles）或 myprojects 里的名字
+        size: 客户区尺寸「宽x高」，物理像素。已有同尺寸的测试窗口（别的会话的或外来的）时拒绝，并报出是谁
+        wait: 等窗口出现的秒数
+
+    返回窗口名（kb-<MCP 进程号>-<序号>）、hwnd、窗口与客户区矩形（物理像素）、开窗前的日志游标（给 log_since），
+    以及前台有没有被它拿走。
+    """
+    return wpe_session.open_wallpaper(project, size, wait, ensure=wpe_ensure.ensure_running)
+
+
+@mcp.tool
+def close_wallpaper(window: str) -> dict:
+    """
+    关掉本会话自己的测试窗口（closeWallpaper -location），等窗口消失，再从窗口表删掉。
+
+    Args:
+        window: open_wallpaper 返回的窗口名。别的会话的、外来的窗口一律拒绝
+    """
+    return wpe_session.close_wallpaper(window)
+
+
+@mcp.tool
+def apply_properties(window: str, props: dict[str, Any]) -> dict:
+    """
+    运行中改本会话自己窗口的壁纸属性（-control applyProperties ... RAW~(json)~END）。
+
+    Args:
+        window: 本会话的窗口名
+        props: {属性名: 值}，颜色写成 "r g b" 字符串
+    """
+    return wpe_session.apply_properties(window, props)
+
+
+@mcp.tool
+def windows() -> dict:
+    """
+    列出桌面壁纸窗口和全部测试窗口：名字、hwnd、窗口与客户区矩形（物理像素）、所属
+    （mine 本会话 / other 别的会话 / stale 陈旧 / foreign 外来）。只读，不关任何窗口。
+    """
+    return wpe_session.list_windows()
+
+
+@mcp.tool
+def get_settings() -> dict:
+    """
+    只读 WPE 的 config.json：当前用户段 general.user 下清单里的键（fps、postprocessing、msaa、分辨率、
+    各类暂停策略等，附取值范围与生效类别）、崩溃标记、选中的壁纸、设置界面是否开着、上次备份以来改过的键。
+    WPE 只在启动时读这个文件；设置界面开着时文件可能落后于 WPE 内存里的值，结果里会注明。
+    """
+    return wpe_ensure.get_settings()
+
+
+@mcp.tool
+def restart_wpe(settings: dict[str, Any] | None = None) -> dict:
+    """
+    重启 WPE，可顺带改设置：正常退出（托盘「退出」同一条命令）→ 改 config.json → -silent 启动 → 注入。
+    桌面会空几秒；所有测试窗口都会被关掉，所以只在这些都满足时才做，否则拒绝并报原因：
+    窗口表里没有别的会话的窗口、没有外来窗口、WPE 的设置界面没开着、旧 skill 会话不在、settings 合法。
+    20 s 内退不掉就报失败：不强杀、不改文件。设置不还原；第一次改之前在
+    .kabegame/debug/wpe-renderdoc-mcp/ 留一份 config 备份。
+
+    Args:
+        settings: {键: 值}，键是 get_settings 列出的名字（如 {"fps": 30}）。不给就是一次干净的重启
+            （去掉注入的 DLL、重建桌面设备，然后重新注入）
+
+    返回改了哪些键（旧值、新值）、退出与启动的耗时、退出前后 config.json 的哈希核对、崩溃标记、注入状态。
+    """
+    return wpe_ensure.restart_wpe(settings)
+
+
+@mcp.tool
+def status() -> dict:
+    """
+    WPE 进程（命令行、创建时刻、完整性级别、是否已注入）、崩溃标记、桌面壁纸窗口、窗口表（含所属与陈旧）、
+    外来窗口、设置界面是否开着、旧 skill 会话是否存在。顺手关掉陈旧窗口（结果里的 stale_closed）。
+    """
+    return wpe_ensure.status()
+
+
+@mcp.tool
+def log_mark() -> dict:
+    """WPE log.txt 的当前游标（交给 log_since）。open_wallpaper 的结果里也带一个开窗前的游标。"""
+    return wpe_log.mark()
+
+
+@mcp.tool
+def log_since(mark: dict[str, Any], grep: str | None = None, errors: bool = False) -> dict:
+    """
+    读游标之后 log.txt 新增的完整行。
+
+    Args:
+        mark: log_mark / open_wallpaper 返回的游标
+        grep: 只要匹配这个正则（区分大小写）的行
+        errors: 只要含 error / fail 的行（不区分大小写）
+
+    日志各会话共用、行里不带窗口名，别的会话同时开着窗口时会混进它们的行。日志被重写（文件变小、创建时刻或
+    开头变了）时报 rewritten，不从头读；结果里的 next 是下一次用的游标。
+    """
+    return wpe_log.since(mark, grep=grep, errors=errors)
+
+
+@mcp.tool
+def cleanup_project(path: str) -> dict:
+    """
+    删掉 WPE 编译着色器时写进测试工程的 shaders/blobsSM40。只限仓库 ignore/ 下的工程目录（路径规范化后判断），
+    工程正开在某个测试窗口里时拒绝。
+
+    Args:
+        path: 工程目录或它的 project.json 的绝对路径
+    """
+    return wpe_session.cleanup_project(path)
+
+
+_exit_lock = threading.Lock()
+_exited = False
+
+
+def _on_exit() -> None:
+    """退出钩子：先关本会话的测试窗口（WPE 不动），再停回放进程。可重复调用。"""
+    global _exited
+    with _exit_lock:
+        if _exited:
+            return
+        _exited = True
+    try:
+        wpe_session.close_all_mine()
+    except Exception:
+        pass
+    worker.close()
+
+
 def main():
     """Run the MCP server"""
     # 上次没来得及清理的 IPC 目录（所属 MCP 已不在）
     cleanup_stale()
     # 退出钩子：stdin 关闭时 FastMCP 的 stdio 循环结束、mcp.run() 返回，走 finally；
-    # 别的正常退出路径走 atexit。被强行结束时两者都不跑，工作进程握着本进程的句柄，会自己退出并删目录
-    atexit.register(worker.close)
+    # 别的正常退出路径走 atexit。被强行结束时两者都不跑：工作进程握着本进程的句柄，会自己退出并删目录；
+    # 本会话的测试窗口变成陈旧窗口，由别的 MCP 的 ensure_running / status 关掉
+    atexit.register(_on_exit)
     try:
         mcp.run()
     finally:
-        worker.close()
+        _on_exit()
 
 
 if __name__ == "__main__":
