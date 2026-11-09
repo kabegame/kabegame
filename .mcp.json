@@ -12,6 +12,10 @@
       "command": "uv",
       "args": ["--directory", "ignore/RenderDocMCP", "run", "renderdoc-mcp"]
     },
+    "wpe-renderdoc": {
+      "command": "uv",
+      "args": ["--directory", ".claude/mcps/wpe-renderdoc", "run", "wpe-renderdoc-mcp"]
+    },
     "kabegame-dev": {
       "command": "deno",
       "args": [

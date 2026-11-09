@@ -97,5 +97,8 @@ apps/docs/.astro
 
 __pycache__/
 
+# .claude/mcps 下各 MCP 自己的 uv 环境
+/.claude/mcps/*/.venv/
+
 release
 
