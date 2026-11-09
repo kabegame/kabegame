@@ -4,8 +4,9 @@
 //! COMBO 取值与绑定的纹理，crate 内部完成全部处理：
 //! 1. 注释元数据：`// [COMBO]` 声明与采样器注释（`combo` / `formatcombo`），定出宏表；
 //! 2. 预处理（[`preprocess`]）：`#include` 展开、条件编译求值；
-//! 3. 改写（[`rewrite`]）：方言 → Vulkan GLSL 450（uniform 块、纹理 / 采样器拆分、location、内建换名）；
-//! 4. naga：解析、按 WebGPU 基线校验、输出 WGSL，并读出 uniform 块布局。
+//! 3. 请求带几何着色器时（[`geometry`]）：把顶点段的 GS 分支与几何段拼成一个顶点着色器；
+//! 4. 改写（[`rewrite`]）：方言 → Vulkan GLSL 450（uniform 块、纹理 / 采样器拆分、location、内建换名）；
+//! 5. naga：解析、按 WebGPU 基线校验、输出 WGSL，并读出 uniform 块布局。
 //!
 //! 头文件按需提供：缺了的会在结果里列出（`phase: "include"`、`missing`），调用方读到后带上重试。
 //!
@@ -21,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod geometry;
 mod library;
 mod naga_stage;
 pub mod preprocess;
@@ -32,16 +34,25 @@ use preprocess::{scan_annotations, Annotations, Preprocessor};
 /// - `HLSL`：`#ifdef HLSL` 块里是 D3D 坐标约定下的 Y 翻转，WebGPU 的纹理 / 帧缓冲坐标与 D3D 相同；
 /// - `HLSL_SM40`、`SHADERVERSION`：WPE 恒定义。
 ///
-/// `GS_ENABLED`、`REVERSEDEPTH` WPE 也恒定义，这里有意不定义：WebGPU 没有几何着色器，粒子走顶点着色器展开四角；深度也不是反向的。
+/// `GS_ENABLED` WPE 也恒定义，这里只在请求带几何着色器时定义（[`GS_DEFINE`]，三段都定义）：WebGPU 没有几何着色器，
+/// 不带几何段时粒子走顶点着色器自己展开四角的分支（`genericparticle` 的非 GS 分支与 GS 路径几何相同）；
+/// 带几何段时由 [`geometry`] 把 GS 分支与几何着色器拼成一个顶点着色器（`genericropeparticle` 的非 GS 分支与 GS 路径不同）。
+/// `REVERSEDEPTH` WPE 恒定义，这里不定义：深度不是反向的。
 /// `HLSL_GS40_DISABLED` 不能定义：WPE 没有这个宏，`shimmering_particles` 的 `particle.vert` 定义后走给几何着色器准备输入的分支，顶点不经过 MVP。
 const PLATFORM_DEFINES: &[(&str, &str)] =
     &[("HLSL", "1"), ("HLSL_SM40", "1"), ("SHADERVERSION", "69")];
+
+/// 请求带几何着色器时加进宏表（排在平台宏之后、COMBO 之前）。
+const GS_DEFINE: (&str, &str) = ("GS_ENABLED", "1");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Stage {
     Vertex,
     Fragment,
+    /// 几何着色器（请求带 `geometry` 时）：只用于报错定位。几何段与顶点段拼成一个顶点着色器（[`geometry`]），
+    /// 之后的改写与 naga 编译都按顶点阶段走。
+    Geometry,
 }
 
 /// 一次翻译请求（一个材质 pass 的着色器对）。
@@ -50,6 +61,10 @@ pub enum Stage {
 pub struct TranslateRequest {
     pub vertex: String,
     pub fragment: String,
+    /// 几何着色器（`.geom`）原文。给了就定义 `GS_ENABLED`，把顶点着色器的 GS 分支与几何着色器拼成一个顶点着色器：
+    /// 每次几何着色器调用是一个实例，`vertex_index` 是第几个输出顶点，拓扑三角形带（见 [`geometry`]）。
+    #[serde(default)]
+    pub geometry: Option<String>,
     /// 头文件源码，键为 `#include` 里写的名字（相对 `shaders/` 根，如 `common.h`、`base/model_vertex_v1.h`）。
     #[serde(default)]
     pub includes: BTreeMap<String, String>,
@@ -103,6 +118,10 @@ pub struct TranslateResult {
     /// 最终生效的 COMBO 取值。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub combos: Vec<Combo>,
+    /// 请求带几何着色器且翻译成功时才有：渲染器把全部顶点属性按实例步进（每次几何着色器调用一个实例），
+    /// 每个实例画 `maxVertices` 个顶点、拓扑三角形带。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<GeometryInfo>,
     /// 失败阶段：`request` / `include` / `require` / `preprocess` / `rewrite` / `parse` / `validate` / `write`。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phase: Option<&'static str>,
@@ -179,6 +198,13 @@ pub struct Interface {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryInfo {
+    /// `[maxvertexcount(…)]` 按最终宏表求出的常量（`genericropeparticle` 是 `4 + 2·TRAILSUBDIVISION`）。
+    pub max_vertices: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Combo {
     pub name: String,
     pub value: i64,
@@ -240,6 +266,9 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
     let mut annotations = Annotations::default();
     scan_annotations(&request.vertex, &mut annotations);
     scan_annotations(&request.fragment, &mut annotations);
+    if let Some(geometry) = &request.geometry {
+        scan_annotations(geometry, &mut annotations);
+    }
     let mut visited = BTreeSet::new();
     let mut cursor = 0;
     while cursor < annotations.includes.len() {
@@ -261,6 +290,9 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+    if request.geometry.is_some() {
+        defines.insert(GS_DEFINE.0.to_string(), GS_DEFINE.1.to_string());
+    }
     for combo in &combos {
         defines.insert(combo.name.clone(), combo.value.to_string());
     }
@@ -302,18 +334,43 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         }
         stages.push(pp);
     }
+    // 几何段：同一张宏表，跳过顶点段已经展开过的头文件（`common_particles.h` 没有头文件保护，两段都 include 它）
+    let geometry_pp = match &request.geometry {
+        Some(source) => {
+            let mut pp = Preprocessor::new(&request.includes, &defines);
+            pp.skip_includes(stages[0].expanded.clone());
+            if let Err(error) = pp.run("<geometry>", source) {
+                return TranslateResult::failure(
+                    "preprocess",
+                    Some(Stage::Geometry),
+                    vec![Diagnostic {
+                        message: error.message,
+                        file: Some(error.file),
+                        line: Some(error.line),
+                        column: None,
+                    }],
+                );
+            }
+            Some(pp)
+        }
+        None => None,
+    };
     let missing: BTreeSet<String> = stages
         .iter()
+        .chain(&geometry_pp)
         .flat_map(|pp| pp.missing.iter().cloned())
         .collect();
     if !missing.is_empty() {
+        // 只有几何段缺头文件时记作几何阶段；顶点 / 片元缺的（含两段都缺的）照旧不带阶段
+        let geometry_only = stages.iter().all(|pp| pp.missing.is_empty());
         return TranslateResult {
             missing: missing.into_iter().collect(),
-            ..TranslateResult::failure("include", None, vec![])
+            ..TranslateResult::failure("include", geometry_only.then_some(Stage::Geometry), vec![])
         };
     }
     let requires: BTreeSet<String> = stages
         .iter()
+        .chain(&geometry_pp)
         .flat_map(|pp| pp.requires.iter().cloned())
         .collect();
     if !requires.is_empty() {
@@ -323,8 +380,34 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         };
     }
 
-    // 4. 改写成 GLSL 450
-    let program = match rewrite::build(&stages[0].lines, &stages[1].lines) {
+    // 4. 几何着色器展开：顶点段的 GS 分支与几何段拼成一个顶点着色器
+    let mut geometry = None;
+    let merged;
+    let vertex_lines = match &geometry_pp {
+        Some(pp) => match geometry::merge(&stages[0].lines, &pp.lines, pp) {
+            Ok((lines, max_vertices)) => {
+                geometry = Some(GeometryInfo { max_vertices });
+                merged = lines;
+                &merged
+            }
+            Err(error) => {
+                return TranslateResult::failure(
+                    "rewrite",
+                    Some(error.stage),
+                    vec![Diagnostic {
+                        message: error.message,
+                        file: error.file,
+                        line: error.line,
+                        column: None,
+                    }],
+                );
+            }
+        },
+        None => &stages[0].lines,
+    };
+
+    // 5. 改写成 GLSL 450
+    let program = match rewrite::build(vertex_lines, &stages[1].lines) {
         Ok(program) => program,
         Err(error) => {
             return TranslateResult::failure(
@@ -340,7 +423,7 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         }
     };
 
-    // 5. naga 编译两段
+    // 6. naga 编译两段
     let mut outputs = Vec::with_capacity(2);
     for (stage, glsl) in [
         (Stage::Vertex, &program.vertex_glsl),
@@ -356,7 +439,7 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
                 let mut result =
                     TranslateResult::failure(failure.phase, Some(stage), failure.errors);
                 match stage {
-                    Stage::Vertex => result.vertex = Some(output),
+                    Stage::Vertex | Stage::Geometry => result.vertex = Some(output),
                     Stage::Fragment => result.fragment = Some(output),
                 }
                 return result;
@@ -365,7 +448,7 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
     }
     let (vs, fs) = (&outputs[0], &outputs[1]);
 
-    // 6. 反射：两阶段的 uniform 块是同一份声明，取先有的那一侧
+    // 7. 反射：两阶段的 uniform 块是同一份声明，取先有的那一侧
     let block = if vs.block.is_empty() {
         &fs.block
     } else {
@@ -416,6 +499,7 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         attributes: interfaces(&program.attributes),
         varyings: interfaces(&program.varyings),
         combos,
+        geometry,
         ..TranslateResult::default()
     }
 }
@@ -884,6 +968,177 @@ vec3 PointSegmentDelta(vec3 p, vec3 a, vec3 b) { return a - p; }
         let result = translate(&req);
         assert_eq!(result.phase, Some("require"));
         assert_eq!(result.requires, ["LightingV1/shadow"]);
+    }
+
+    // ---- 几何着色器展开 ----
+
+    /// 没有头文件保护、两段都 include 的头文件（同 `common_particles.h`）：uniform、函数与几何段 `#if` 要用的宏。
+    const GS_HEADER: &str = "uniform mat4 g_ModelViewProjectionMatrix;\n#define KB_HALF 0.5\nvec3 Shared(vec3 v) { return v * KB_HALF; }\n";
+
+    const GS_VERT: &str = "#include \"particles.h\"
+#if GS_ENABLED
+attribute vec4 a_PositionVec4;
+varying vec4 v_Color;
+void main() {
+	gl_Position = vec4(Shared(a_PositionVec4.xyz), a_PositionVec4.w);
+	v_Color = vec4(1, 0, 0, 1);
+}
+#else
+attribute vec4 a_PositionVec4;
+void main() { gl_Position = a_PositionVec4; }
+#endif
+";
+
+    /// 带 for 变量遮蔽、HLSL 截断（`vec3 = mul(vec4, mat4)`）、normalize 与两次 Append 的几何着色器。
+    const GS_GEOM: &str = "#include \"particles.h\"
+#ifndef SUB
+#define SUB 0
+#endif
+in vec4 v_Color;
+in vec4 gl_Position;
+out vec2 v_TexCoord;
+out vec4 v_Color;
+out vec4 gl_Position;
+#if defined(KB_HALF)
+[maxvertexcount(4 + SUB * 2)]
+#endif
+void main() {
+	vec3 p = Shared(IN[0].gl_Position.xyz);
+	vec3 eye = mul(vec4(p, 1.0), g_ModelViewProjectionMatrix);
+	vec3 r = normalize(cross(eye, vec3(0, 0, 1))) * IN[0].gl_Position.w;
+	PS_INPUT v;
+	v.v_Color = IN[0].v_Color;
+	for (int s = 0; s < 2 + SUB; ++s)
+	{
+		float s = 0.5;
+		v.v_TexCoord = vec2(s, 0);
+		v.gl_Position = mul(vec4(p + r * s, 1.0), g_ModelViewProjectionMatrix);
+		OUT.Append(v);
+		v.gl_Position = mul(vec4(p - r, 1.0), g_ModelViewProjectionMatrix);
+		OUT.Append(v);
+	}
+}
+";
+
+    fn gs_request() -> TranslateRequest {
+        TranslateRequest {
+            vertex: GS_VERT.into(),
+            fragment: "varying vec2 v_TexCoord;\nvarying vec4 v_Color;\nvoid main() { gl_FragColor = v_Color * v_TexCoord.x; }\n".into(),
+            geometry: Some(GS_GEOM.into()),
+            includes: [("particles.h".to_string(), GS_HEADER.to_string())]
+                .into_iter()
+                .collect(),
+            debug: true,
+            ..TranslateRequest::default()
+        }
+    }
+
+    #[test]
+    fn geometry_expands_into_one_vertex_shader() {
+        let result = translate(&gs_request());
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        assert_eq!(result.geometry.as_ref().map(|g| g.max_vertices), Some(4));
+        let vertex = result.vertex.as_ref().unwrap();
+        let glsl = vertex.glsl.as_deref().unwrap();
+        // 走的是 GS_ENABLED 分支，几何段的 [maxvertexcount] 由头文件里的宏放行
+        assert!(
+            glsl.contains("kb_gsin_gl_Position = vec4(Shared("),
+            "{glsl}"
+        );
+        // 跨段的头文件只展开一次：函数与 uniform 都只有一份
+        assert_eq!(glsl.matches("vec3 Shared(vec3 v)").count(), 1, "{glsl}");
+        assert_eq!(
+            result
+                .uniforms
+                .iter()
+                .filter(|u| u.name == "g_ModelViewProjectionMatrix")
+                .count(),
+            1
+        );
+        // 输出顶点下标是 vertex_index；varying 是几何段的 out
+        assert!(vertex
+            .wgsl
+            .as_deref()
+            .unwrap()
+            .contains("@builtin(vertex_index)"));
+        let varyings: Vec<_> = result
+            .varyings
+            .iter()
+            .map(|v| (v.name.as_str(), v.ty.as_str()))
+            .collect();
+        assert_eq!(varyings, [("v_TexCoord", "vec2"), ("v_Color", "vec4")]);
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["geometry"], serde_json::json!({ "maxVertices": 4 }));
+        // TRAILSUBDIVISION 这类宏按最终宏表求值
+        let mut req = gs_request();
+        req.defines.insert("SUB".into(), "16".into());
+        let result = translate(&req);
+        assert!(result.ok, "{result:#?}");
+        assert_eq!(result.geometry.map(|g| g.max_vertices), Some(36));
+    }
+
+    /// 不带几何段：没有 `geometry` 字段，也不定义 GS_ENABLED（走非 GS 分支）。
+    #[test]
+    fn without_geometry_nothing_changes() {
+        let mut req = gs_request();
+        req.geometry = None;
+        let result = translate(&req);
+        assert!(result.ok, "{result:#?}");
+        assert!(result.geometry.is_none());
+        assert!(serde_json::to_value(&result)
+            .unwrap()
+            .get("geometry")
+            .is_none());
+        let glsl = result.vertex.unwrap().glsl.unwrap();
+        assert!(
+            glsl.contains("gl_Position = a_PositionVec4;") && !glsl.contains("kb_gs"),
+            "{glsl}"
+        );
+    }
+
+    #[test]
+    fn geometry_errors_carry_the_geometry_stage() {
+        // 只有几何段缺头文件
+        let mut req = gs_request();
+        req.geometry = Some(format!("#include \"geom_only.h\"\n{GS_GEOM}"));
+        let result = translate(&req);
+        assert_eq!(result.phase, Some("include"));
+        assert_eq!(result.stage, Some(Stage::Geometry));
+        assert_eq!(result.missing, ["geom_only.h"]);
+        // 两段都缺：照旧不带阶段
+        let mut req = gs_request();
+        req.includes.clear();
+        let result = translate(&req);
+        assert_eq!((result.phase, result.stage), (Some("include"), None));
+        assert_eq!(result.missing, ["particles.h"]);
+        // 预处理错误
+        let mut req = gs_request();
+        req.geometry = Some(format!("{GS_GEOM}#endif\n"));
+        let result = translate(&req);
+        assert_eq!(
+            (result.phase, result.stage),
+            (Some("preprocess"), Some(Stage::Geometry))
+        );
+        assert_eq!(result.errors[0].file.as_deref(), Some("<geometry>"));
+        // 改写错误：IN[1]、RestartStrip
+        for (from, to) in [
+            ("IN[0].v_Color", "IN[1].v_Color"),
+            (
+                "\t\tOUT.Append(v);\n\t}",
+                "\t\tOUT.Append(v);\n\t\tOUT.RestartStrip();\n\t}",
+            ),
+        ] {
+            let mut req = gs_request();
+            req.geometry = Some(GS_GEOM.replace(from, to));
+            let result = translate(&req);
+            assert_eq!(
+                (result.phase, result.stage),
+                (Some("rewrite"), Some(Stage::Geometry)),
+                "{to}"
+            );
+            assert_eq!(serde_json::to_value(&result).unwrap()["stage"], "geometry");
+        }
     }
 
     /// 按 JS 胶水的方式走一遍 C ABI：写请求、调用、读长度头、解析、释放。

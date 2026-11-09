@@ -34,6 +34,37 @@ fn read(path: &Path) -> String {
         .to_string()
 }
 
+/// `WPESL2WGSL_DUMP_DIR` 设了时，每次成功的翻译把生成的 GLSL / WGSL 写到这个目录（供人工审阅、前后逐字节比较）。
+fn dump_dir() -> Option<PathBuf> {
+    std::env::var_os("WPESL2WGSL_DUMP_DIR").map(PathBuf::from)
+}
+
+/// 把一次成功翻译的输出写进 [`dump_dir`]：`<键>.vert.glsl` / `.vert.wgsl` / `.frag.glsl` / `.frag.wgsl`。
+fn dump(key: &str, result: &TranslateResult) {
+    let (Some(dir), true) = (dump_dir(), result.ok) else {
+        return;
+    };
+    fs::create_dir_all(&dir).expect("建 dump 目录");
+    let key: String = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.=".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    for (stage, output) in [("vert", &result.vertex), ("frag", &result.fragment)] {
+        let Some(output) = output else { continue };
+        for (ext, text) in [("glsl", &output.glsl), ("wgsl", &output.wgsl)] {
+            if let Some(text) = text {
+                fs::write(dir.join(format!("{key}.{stage}.{ext}")), text).expect("写 dump");
+            }
+        }
+    }
+}
+
 /// 模拟前端的协议：先不带头文件请求，按 `missing` 补齐后重试。
 fn run(program: &Program, combos: &[(&str, i64)], textures: &[(u32, u32)]) -> TranslateResult {
     run_lit(program, combos, textures, &[])
@@ -46,9 +77,26 @@ fn run_lit(
     textures: &[(u32, u32)],
     lit: &[(&str, &str)],
 ) -> TranslateResult {
+    run_full(program, false, combos, textures, &[], lit)
+}
+
+/// `geometry` 为真时带上与 `.vert` 同名的 `.geom`（几何着色器展开）；`defines` 是请求的额外宏。
+fn run_full(
+    program: &Program,
+    geometry: bool,
+    combos: &[(&str, i64)],
+    textures: &[(u32, u32)],
+    defines: &[(&str, &str)],
+    lit: &[(&str, &str)],
+) -> TranslateResult {
     let mut request = TranslateRequest {
         vertex: read(&program.vertex),
         fragment: read(&program.fragment),
+        geometry: geometry.then(|| read(&program.vertex.with_extension("geom"))),
+        defines: defines
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         combos: combos
             .iter()
             .map(|(k, v)| (k.to_string(), (*v).into()))
@@ -64,6 +112,7 @@ fn run_lit(
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
+        debug: dump_dir().is_some(),
         ..TranslateRequest::default()
     };
     for _ in 0..16 {
@@ -242,6 +291,7 @@ fn corpus() {
     let mut gate_failures = Vec::new();
     for (name, combos, textures) in gates {
         let result = run(program(&programs, name), combos, textures);
+        dump(&format!("gate__{name}"), &result);
         if !result.ok {
             let glsl = result
                 .fragment
@@ -280,6 +330,7 @@ fn corpus() {
                 &[(0, 0), (8, 0)],
                 &defines,
             );
+            dump(&format!("lit__{name}__hdr{}", extra.len()), &result);
             let wgsl = result
                 .fragment
                 .as_ref()
@@ -292,6 +343,11 @@ fn corpus() {
     }
     assert!(lit_failures.is_empty(), "{lit_failures:#?}");
 
+    // 1c. 门槛：几何着色器展开。genericropeparticle 带 .geom（GS_ENABLED 分支 + 几何着色器拼成一个顶点着色器），
+    //     翻译通过、两段 WGSL 回读通过、maxVertices = 4 + 2·TRAILSUBDIVISION。宏照宿主的写法经 defines 传。
+    let geometry_failures = geometry_gates(&programs);
+    assert!(geometry_failures.is_empty(), "{geometry_failures:#?}");
+
     // 2. 基线：全部着色器对、默认 COMBO
     let mut ok = 0;
     let mut reparse_failures = Vec::new();
@@ -300,6 +356,7 @@ fn corpus() {
     let mut report = String::new();
     for program in &programs {
         let result = run(program, &[], &[(0, 0)]);
+        dump(&format!("base__{}", program.name), &result);
         if result.ok {
             ok += 1;
             report.push_str(&format!("ok   {}\n", program.name));
@@ -357,6 +414,142 @@ fn corpus() {
         "输出的 WGSL 回读失败：\n{}",
         reparse_failures.join("\n")
     );
+}
+
+/// 几何着色器展开的门槛组合，返回失败项。
+/// - rope：`THICKFORMAT 1`，`TRAILSUBDIVISION` 0 / 3 / 4 / 16 / 32 × `ORIENTATION` 0 / 1 / 2；
+/// - ropetrail：`TRAILRENDERER 1`，`TRAILSUBDIVISION` 0 / 1 / 2，以及 `TRAILSCROLLALPHA`、`TRAILFADEALPHA`、`TRAILFADESIZE` 全开；
+/// - rope 与 ropetrail 再各加一组 `REFRACT`（绑法线图与 `_rt_FullFrameBuffer`）、`FOG_DIST`、`LIGHTING`（一盏点光）。
+fn geometry_gates(programs: &[Program]) -> Vec<String> {
+    let rope = program(programs, "assets/shaders/genericropeparticle");
+    struct Gate {
+        key: String,
+        combos: Vec<(&'static str, i64)>,
+        textures: Vec<(u32, u32)>,
+        defines: Vec<(&'static str, String)>,
+        lit: Vec<(&'static str, &'static str)>,
+        subdivision: u32,
+    }
+    let gate = |key: String, defines: Vec<(&'static str, String)>, subdivision: u32| Gate {
+        key,
+        combos: Vec::new(),
+        textures: vec![(0, 0)],
+        defines,
+        lit: Vec::new(),
+        subdivision,
+    };
+    let mut gates = Vec::new();
+    for subdivision in [0u32, 3, 4, 16, 32] {
+        for orientation in 0..3 {
+            gates.push(gate(
+                format!("rope__sub{subdivision}__ori{orientation}"),
+                vec![
+                    ("THICKFORMAT", "1".into()),
+                    ("TRAILSUBDIVISION", subdivision.to_string()),
+                    ("ORIENTATION", orientation.to_string()),
+                ],
+                subdivision,
+            ));
+        }
+    }
+    for subdivision in [0u32, 1, 2] {
+        gates.push(gate(
+            format!("ropetrail__sub{subdivision}"),
+            vec![
+                ("TRAILRENDERER", "1".into()),
+                ("TRAILSUBDIVISION", subdivision.to_string()),
+            ],
+            subdivision,
+        ));
+        gates.push(gate(
+            format!("ropetrail__sub{subdivision}__scroll_fade"),
+            vec![
+                ("TRAILRENDERER", "1".into()),
+                ("TRAILSUBDIVISION", subdivision.to_string()),
+                ("TRAILSCROLLALPHA", "1".into()),
+                ("TRAILFADEALPHA", "1".into()),
+                ("TRAILFADESIZE", "1".into()),
+            ],
+            subdivision,
+        ));
+    }
+    for (kind, base, subdivision) in [
+        ("rope", ("THICKFORMAT", "1"), 3u32),
+        ("ropetrail", ("TRAILRENDERER", "1"), 1),
+    ] {
+        let defines = |extra: Option<(&'static str, &str)>| {
+            let mut defines = vec![
+                (base.0, base.1.to_string()),
+                ("TRAILSUBDIVISION", subdivision.to_string()),
+            ];
+            defines.extend(extra.map(|(k, v)| (k, v.to_string())));
+            defines
+        };
+        let mut refract = gate(format!("{kind}__refract"), defines(None), subdivision);
+        refract.combos = vec![("REFRACT", 1)];
+        refract.textures = vec![(0, 0), (1, 0), (3, 0)];
+        gates.push(refract);
+        gates.push(gate(
+            format!("{kind}__fog_dist"),
+            defines(Some(("FOG_DIST", "1"))),
+            subdivision,
+        ));
+        let mut lit = gate(format!("{kind}__lighting"), defines(None), subdivision);
+        lit.combos = vec![("LIGHTING", 1)];
+        lit.lit = vec![("LIGHTS_POINT", "1")];
+        gates.push(lit);
+    }
+
+    let mut failures = Vec::new();
+    for gate in &gates {
+        let defines: Vec<(&str, &str)> =
+            gate.defines.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let result = run_full(
+            rope,
+            true,
+            &gate.combos,
+            &gate.textures,
+            &defines,
+            &gate.lit,
+        );
+        dump(&format!("geom__{}", gate.key), &result);
+        if !result.ok {
+            let glsl = result
+                .vertex
+                .as_ref()
+                .or(result.fragment.as_ref())
+                .and_then(|o| o.glsl.clone())
+                .unwrap_or_default();
+            failures.push(format!("{}: {}\n{glsl}", gate.key, summary(&result)));
+            continue;
+        }
+        let expected = 4 + 2 * gate.subdivision;
+        let max_vertices = result.geometry.as_ref().map(|g| g.max_vertices);
+        if max_vertices != Some(expected) {
+            failures.push(format!(
+                "{}: maxVertices {max_vertices:?}，应为 {expected}",
+                gate.key
+            ));
+        }
+        for (stage, output) in [("vertex", &result.vertex), ("fragment", &result.fragment)] {
+            let wgsl = output
+                .as_ref()
+                .and_then(|o| o.wgsl.as_deref())
+                .unwrap_or_default();
+            if let Err(error) = reparse_wgsl(wgsl) {
+                failures.push(format!("{} {stage} WGSL 回读：{error}", gate.key));
+            }
+            if stage == "vertex" && !wgsl.contains("@builtin(vertex_index)") {
+                failures.push(format!("{} 顶点 WGSL 没有用 vertex_index", gate.key));
+            }
+        }
+    }
+    println!(
+        "几何着色器展开门槛：{}/{} 通过",
+        gates.len() - failures.len(),
+        gates.len()
+    );
+    failures
 }
 
 /// 输出的 WGSL 能否被 naga 自己的 WGSL 前端重新接受（抓写出端的问题；浏览器 Tint 的校验要真机验证）。

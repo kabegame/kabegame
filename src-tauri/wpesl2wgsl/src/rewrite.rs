@@ -357,7 +357,8 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
 
 fn stage_index(stage: Stage) -> usize {
     match stage {
-        Stage::Vertex => 0,
+        // 几何段已拼进顶点段，不会单独到这里
+        Stage::Vertex | Stage::Geometry => 0,
         Stage::Fragment => 1,
     }
 }
@@ -731,7 +732,7 @@ fn render(
         .map(|(decl, _)| decl.name.as_str())
         .collect();
     match stage {
-        Stage::Vertex => {
+        Stage::Vertex | Stage::Geometry => {
             for attribute in attributes {
                 out.push_str(&format!(
                     "layout(location = {}) in {} {}{};\n",

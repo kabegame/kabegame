@@ -49,6 +49,12 @@ pub struct Preprocessor<'a> {
     pub missing: BTreeSet<String>,
     /// 处于有效分支、`library` 展开不了的 `#require`。`LIGHTING` 关闭时的 `LightingV1` 不算，它展开成空。
     pub requires: BTreeSet<String>,
+    /// 实际展开过的头文件（含嵌套）。几何着色器展开时，几何段据此跳过顶点段已经展开过的头文件。
+    pub expanded: BTreeSet<String>,
+    /// 只求宏、不出行的头文件（[`Preprocessor::skip_includes`]）。
+    skip: BTreeSet<String>,
+    /// 正在静默处理的头文件层数：大于 0 时不产出行。
+    silent: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,7 +79,17 @@ impl<'a> Preprocessor<'a> {
             lines: Vec::new(),
             missing: BTreeSet::new(),
             requires: BTreeSet::new(),
+            expanded: BTreeSet::new(),
+            skip: BTreeSet::new(),
+            silent: 0,
         }
+    }
+
+    /// 这些头文件已在拼接后的源码前面展开过（几何段跳过顶点段的头文件）：照常处理，让其中的 `#define`
+    /// 进宏表、驱动本段的 `#if`，但不产出任何行。WPE 的头文件（如 `common_particles.h`）没有头文件保护，
+    /// 原样再展开一次会重复定义函数与 uniform。
+    pub fn skip_includes(&mut self, names: BTreeSet<String>) {
+        self.skip = names;
     }
 
     pub fn run(&mut self, file: &str, source: &str) -> Result<(), PreprocessError> {
@@ -145,7 +161,17 @@ impl<'a> Preprocessor<'a> {
                         match self.includes.get(target) {
                             Some(included) => {
                                 let included = included.clone();
-                                self.process(target, &included, depth + 1)?;
+                                let silent = self.skip.contains(target);
+                                if silent {
+                                    self.silent += 1;
+                                } else if self.silent == 0 {
+                                    self.expanded.insert(target.to_string());
+                                }
+                                let result = self.process(target, &included, depth + 1);
+                                if silent {
+                                    self.silent -= 1;
+                                }
+                                result?;
                             }
                             None => {
                                 self.missing.insert(target.to_string());
@@ -200,6 +226,9 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn push(&mut self, code: String, comment: Option<String>, file: &str, line: u32) {
+        if self.silent > 0 {
+            return;
+        }
         self.lines.push(Line {
             code,
             comment,
@@ -687,6 +716,40 @@ mod tests {
         );
         assert_eq!(code(&pp), ["#define M_PI 3.14", "vec3 f();", "x"]);
         assert_eq!(pp.missing.iter().collect::<Vec<_>>(), ["gone.h"]);
+    }
+
+    /// 几何段跳过顶点段已展开的头文件：头文件里的行不再产出，但其中的 `#define` 照样驱动本段的 `#if`；
+    /// `expanded` 只记真正展开过的（含嵌套）。
+    #[test]
+    fn skipped_includes_keep_macros_but_emit_nothing() {
+        let headers = [
+            (
+                "shared.h",
+                "#include \"inner.h\"\n#define HALF 1\nvec3 Shared();",
+            ),
+            ("inner.h", "float Inner();"),
+        ];
+        let first = run("#include \"shared.h\"\na\n", &[], &headers);
+        assert_eq!(
+            code(&first),
+            ["float Inner();", "#define HALF 1", "vec3 Shared();", "a"]
+        );
+        assert_eq!(
+            first.expanded.iter().collect::<Vec<_>>(),
+            ["inner.h", "shared.h"]
+        );
+
+        let includes: BTreeMap<String, String> = headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let mut second = Preprocessor::new(&includes, &BTreeMap::new());
+        second.skip_includes(first.expanded.clone());
+        second
+            .run("<geometry>", "#include \"shared.h\"\n#if HALF\nb\n#endif\n")
+            .unwrap();
+        assert_eq!(code(&second), ["b"]);
+        assert!(second.expanded.is_empty());
     }
 
     #[test]

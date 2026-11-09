@@ -35,7 +35,8 @@ pub fn compile(
     defines: &BTreeMap<String, String>,
 ) -> Result<Compiled, Failure> {
     let naga_stage = match stage {
-        Stage::Vertex => naga::ShaderStage::Vertex,
+        // 几何段拼进顶点段后按顶点着色器编译，不会单独到这里
+        Stage::Vertex | Stage::Geometry => naga::ShaderStage::Vertex,
         Stage::Fragment => naga::ShaderStage::Fragment,
     };
     let mut options = naga::front::glsl::Options::from(naga_stage);
