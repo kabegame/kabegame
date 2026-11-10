@@ -940,6 +940,7 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
 - 不给新字段时：画面哈希 10 张 × 3 档与步骤 4 的基线全部相同；`kbp regress --corpus`（head 对 ws）`same: true`，语料没有变化。
 - **第二批**（`scripts/kabegame-dev/*`、MCP `tools.ts` 与 `particles.test.ts`、kabegame-chromium `SKILL.md`）2026-11-11 用户点头后合进去：先在临时目录备好再一次拷入，vite 随之重启一次；用 REST 打 `particle-track` 带 `cursors` + `window` 核对新插件已生效（`check_b2.ts`，结果同上）。工作区：插件 26 个、MCP 19 个测试通过，Prettier 通过。
 - **最后一项验收**：`gen_shakepar2.py` 生成 `p5a-shakepar2`（同 `p5a-shakepar`，FR 换成 `FR_CURSOR`），用户在窗口上画圈时抓第 938–941 帧（读回帧前每帧光标移动 40–120 像素）。日志光标与抓到 4 帧的 `pointer` 核对差 0。`render_shakepar2.ts` 经新插件的 render 接口（`pointers` + `window`）渲染第 941 帧，`cmp_shakepar2.py` 对 WPE 上屏帧：FR 块外 0 差异，跟随粒子与透视粒子 1800 个白色像素全部相同，方块位置差 0（C 的中心被我们没跑脚本的纯蓝 FR 块带偏，整帧差为 0，不算）。步骤 3 时 `p5a-shakepar` 的 7 个差异块没有了。用户重连 kabegame-dev MCP 后，`render_scene`（`replay.timeline.cursors: "log"`）复跑：PNG 与脚本那次逐字节相同，时间线说明写出光标来源与核对结果。测试工程 14298、14299 已用 `projects_remove` 移除（图片与任务都确认没了）。
+- **提交**：随 `7811d87a` 进了仓库（和 P7a 步骤 3 同一个提交），内容核对过就是验收的版本。
 
 ## 未实测清单（P5a 收尾统一走查）
 
