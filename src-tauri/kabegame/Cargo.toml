@@ -119,6 +119,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSData",
 ] }
 objc2 = { version = "0.6", default-features = false }
+# 桌面鼠标转发（wallpaper/input_forward/mac.rs）：向窗口服务查窗口层级与边界
+core-graphics = "0.25"
+core-foundation = "0.10"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

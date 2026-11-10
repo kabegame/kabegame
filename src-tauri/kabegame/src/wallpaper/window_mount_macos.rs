@@ -9,10 +9,11 @@ use objc2_app_kit::{
 #[cfg(target_os = "macos")]
 use tauri::WebviewWindow;
 
-/// 将 wallpaper WebView 窗口放到 macOS 桌面层（图标下方）。
+/// 将 wallpaper WebView 窗口放到 macOS 桌面层（图标下方），返回窗口号（`NSWindow.windowNumber`，
+/// 桌面鼠标转发凭它向窗口服务查边界）。
 /// 通过 dispatch2::run_on_main 保证 NSWindow 属性在主线程上设置（若已在主线程则直接执行）。
 #[cfg(target_os = "macos")]
-pub fn mount_to_desktop<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
+pub fn mount_to_desktop<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Result<isize, String> {
     let ns_window_ptr = window
         .ns_window()
         .map_err(|e| format!("获取 NSWindow 句柄失败: {e}"))?;
@@ -28,14 +29,15 @@ pub fn mount_to_desktop<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Result<
 
 /// 实际设置 NSWindow 属性（必须在主线程调用，由 run_on_main 保证）。
 /// 与 LiveWallpaperMacOS 一致：无边框（无红绿灯）、铺满目标屏幕、桌面下层、透明、忽略鼠标。
+/// 窗口忽略鼠标，真实点击穿透给 Finder 的桌面；网页 / 场景壁纸的交互由 `input_forward` 旁路观察后注入。
 #[cfg(target_os = "macos")]
-fn apply_desktop_window_props(ns_window_ptr: *mut std::ffi::c_void) -> Result<(), String> {
+fn apply_desktop_window_props(ns_window_ptr: *mut std::ffi::c_void) -> Result<isize, String> {
     const DESKTOP_WINDOW_LEVEL_MINUS_ONE: i64 = -2_147_483_623;
 
     let mtm = MainThreadMarker::new().ok_or("必须在主线程设置 NSWindow 属性".to_string())?;
 
     #[allow(unused_unsafe)]
-    unsafe {
+    let window_number = unsafe {
         let ns_window: &NSWindow = &*ns_window_ptr.cast();
 
         // 无边框：去掉标题栏与红绿灯，与 LiveWallpaperMacOS 的 NSWindowStyleMaskBorderless 一致
@@ -63,7 +65,8 @@ fn apply_desktop_window_props(ns_window_ptr: *mut std::ffi::c_void) -> Result<()
 
         let clear_color = NSColor::clearColor();
         ns_window.setBackgroundColor(Some(&clear_color));
-    }
+        ns_window.windowNumber()
+    };
 
-    Ok(())
+    Ok(window_number)
 }

@@ -23,17 +23,15 @@ fn ready_notify() -> &'static ReadyNotify {
 ///
 /// 窗口始终停在应用页（`index.html?window=wallpaper`，`WallpaperWindow.vue`），图片 / 视频 / 网页壁纸
 /// 都由 `WallpaperStage` 自驱动渲染：网页壁纸（`x-wpe/web`）是 web 层里的 `file:` iframe，与图库预览
-/// 同一套组件与代码路径，窗口本身不再导航。后端只负责 Windows 的桌面鼠标转发（[`Self::set_mouse_forwarding`]），
+/// 同一套组件与代码路径，窗口本身不再导航。后端只负责桌面鼠标转发（[`Self::set_mouse_forwarding`]），
 /// 以及 ping 看门狗。
 pub struct WallpaperWindow<R: Runtime> {
     window: WebviewWindow<R>,
     /// ping 看门狗：mount 完成后启动，随本对象丢弃而停止。
     pinger: Option<super::ping::Pinger>,
-    /// 窗口句柄：`mount()` 时取，鼠标转发用。
-    #[cfg(target_os = "windows")]
-    hwnd: Option<isize>,
-    /// 桌面鼠标转发：只在显示网页壁纸期间运行，丢弃即停止（见 `InputForwarder` 的 `Drop`）。
-    #[cfg(target_os = "windows")]
+    /// 窗口的原生标识：`mount()` 时取，鼠标转发用。Windows 是 HWND，macOS 是窗口号（`NSWindow.windowNumber`）。
+    native_id: Option<isize>,
+    /// 桌面鼠标转发：只在显示网页 / 场景壁纸期间运行，丢弃即停止（见 `InputForwarder` 的 `Drop`）。
     forwarder: Option<super::input_forward::InputForwarder>,
 }
 
@@ -43,9 +41,7 @@ impl<R: Runtime> WallpaperWindow<R> {
         Self {
             window,
             pinger: None,
-            #[cfg(target_os = "windows")]
-            hwnd: None,
-            #[cfg(target_os = "windows")]
+            native_id: None,
             forwarder: None,
         }
     }
@@ -105,10 +101,10 @@ impl<R: Runtime> WallpaperWindow<R> {
         Self::wait_ready(std::time::Duration::from_secs(100))?;
 
         // 窗口 getter 会同步等主线程回执，只在这里（不持 manager 锁）读一次并记住；
-        // 之后 `set_mouse_forwarding` 在 manager 锁内只用记下的句柄。
+        // 之后 `set_mouse_forwarding` 在 manager 锁内只用记下的标识。
         #[cfg(target_os = "windows")]
         match self.window.hwnd() {
-            Ok(hwnd) => self.hwnd = Some(hwnd.0 as isize),
+            Ok(hwnd) => self.native_id = Some(hwnd.0 as isize),
             Err(error) => tracing::warn!("取壁纸窗口句柄失败: {error}"),
         }
 
@@ -117,7 +113,9 @@ impl<R: Runtime> WallpaperWindow<R> {
 
         #[cfg(target_os = "macos")]
         {
-            crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window)?;
+            self.native_id = Some(crate::wallpaper::window_mount_macos::mount_to_desktop(
+                &self.window,
+            )?);
         }
 
         // 建窗时是 visible(false)（避免挂载前闪一下全屏窗口），挂好后转常显。
@@ -142,33 +140,31 @@ impl<R: Runtime> WallpaperWindow<R> {
         Ok(())
     }
 
-    /// 开关 Windows 的桌面鼠标转发：显示网页 / 场景壁纸时开（桌面上的移动与左键点击注入到窗口，落到 web 层的
+    /// 开关桌面鼠标转发：显示网页 / 场景壁纸时开（桌面上的移动与左键点击注入到窗口，落到 web 层的
     /// iframe 或场景宿主），否则关。「暂停壁纸」不经这里：转发线程每轮自己读设置，暂停期间不注入。
-    /// 重复调用幂等；其它平台什么都不做。
+    /// 重复调用幂等。
     ///
     /// 不调会同步等主线程的 getter：调用方持着 manager 锁。
     pub fn set_mouse_forwarding(&mut self, enabled: bool) {
-        #[cfg(target_os = "windows")]
-        {
-            if !enabled {
-                // 丢弃即置停止标志，线程最多一个周期后自行退出。
-                self.forwarder = None;
-                return;
-            }
-            if self.forwarder.is_some() {
-                return;
-            }
-            match self.hwnd {
-                Some(hwnd) => {
-                    self.forwarder = Some(super::input_forward::InputForwarder::start(
-                        self.window.label(),
-                        hwnd,
-                    ))
-                }
-                None => tracing::warn!("没有壁纸窗口句柄，不转发桌面鼠标"),
-            }
+        if !enabled {
+            // 丢弃即置停止标志，线程最多一个周期后自行退出。
+            self.forwarder = None;
+            return;
         }
-        #[cfg(not(target_os = "windows"))]
-        let _ = enabled;
+        if self.forwarder.is_some() {
+            return;
+        }
+        let Some(native_id) = self.native_id else {
+            tracing::warn!("没有壁纸窗口标识，不转发桌面鼠标");
+            return;
+        };
+        #[cfg(target_os = "windows")]
+        let probe = super::input_forward::win::WindowsProbe::new(native_id);
+        #[cfg(target_os = "macos")]
+        let probe = super::input_forward::mac::MacProbe::new(native_id);
+        self.forwarder = Some(super::input_forward::InputForwarder::start(
+            self.window.label(),
+            probe,
+        ));
     }
 }

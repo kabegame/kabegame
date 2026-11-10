@@ -18,7 +18,7 @@ pub const WALLPAPER_LABEL: &str = "wallpaper";
 ///
 /// 窗口的**内容**：图片 / 视频 / 网页壁纸都由壁纸页面（`WallpaperWindow.vue` → `WallpaperStage`）监听
 /// `setting-change` 自驱动渲染，网页壁纸（`x-wpe/web`）是 web 层里的 `file:` iframe，窗口不导航。
-/// `set_wallpaper_path` 只按当前壁纸开关 Windows 的桌面鼠标转发（[`WallpaperWindow::set_mouse_forwarding`]）。
+/// `set_wallpaper_path` 只按当前壁纸开关桌面鼠标转发（[`WallpaperWindow::set_mouse_forwarding`]）。
 pub struct WindowWallpaperManager<R: Runtime> {
     app: AppHandle<R>,
     wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>>,

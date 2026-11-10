@@ -6,8 +6,8 @@ pub mod rotator;
 pub mod window;
 #[cfg(target_os = "macos")]
 pub mod window_mount_macos;
-// 桌面网页壁纸（x-wpe/web）的 Windows 桌面鼠标转发
-#[cfg(target_os = "windows")]
+// 桌面网页 / 场景壁纸的桌面鼠标转发
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod input_forward;
 // 网页壁纸目录索引：file: 闸门与 wpe_web_pull_state 的数据源
 #[cfg(feature = "wpe")]
