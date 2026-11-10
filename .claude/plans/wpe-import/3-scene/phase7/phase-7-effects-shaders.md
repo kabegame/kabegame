@@ -174,6 +174,8 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 
 ## P7a — 语料与基线
 
+子计划见 [phase-7a-corpus-naga.md](phase-7a-corpus-naga.md)：请求夹具与逐字节基线 → Tint 基线 → 嵌入 naga（不改行为）→ 死代码 `CallResult` 补丁。
+
 - **工坊语料：** 从全部场景的编译过程导出「着色器 × 实际 COMBO × 绑定的纹理」（含 pkg 里的工坊着色器与它们 include 的头文件），存成语料夹具。翻译器的语料测试读夹具，和现在的 WPE 安装目录语料一起跑。夹具在 `ignore/` 下按需生成，测试没有夹具时跳过（同 `KABEGAME_WPE_ROOT` 的约定），不把工坊内容拷进仓库。
 - **逐字节基线：** 改动前用 `WPESL2WGSL_DUMP_DIR` 导出全部成功翻译的 GLSL / WGSL，之后每步对比：已经通过的输出不变，除非这一步本来就要改它，并逐项说明。
 - **完整错误：** 语料测试的报告列出每个着色器的全部错误，而不只是第一条，作为后面各步的进度表。
