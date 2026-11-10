@@ -13,13 +13,19 @@
  * - 日志和轨迹都没有的帧（fps 低时日志每 50 帧才刷一次，尾巴会缺）缺省报错并列出缺哪些帧。`gap: "split"` 时把缺的那一段
  *   按「后一个已知帧的 g_Time − 它的 dt」（即缺的那段结束时刻）减「前一帧的 g_Time」平分，dt 同样舍入到 6 位小数，
  *   `g_Time` 按 dt 累加（b4）；结果里写明哪些帧是平分出来的。缺的那段后面没有已知帧时没法平分，照样报错。
- * - 逐帧光标：`cursors: "track"` 时抓到的帧取轨迹的 `pointer`（没有就退回 `cursor`），其余帧取 `cursor`（缺省场景中心
- *   `[0.5, 0.5]`）；也可以直接给整串（长度 = frame）；只给 `cursor` 时每帧都是它。光标是「光标下的场景纹理坐标」，抓帧窗口和
- *   场景同尺寸时等于 `g_PointerPosition`，不同尺寸时由调用方换算（P4c 步骤 2）。
+ * - 逐帧光标：单位一律是 WPE 的 `g_PointerPosition`（壁纸窗口归一化、原点左上、y 朝下、不钳制），换到场景上由 dev 探针按
+ *   `fill` 铺放做（`sceneCursor`，窗口尺寸用 `Timeline.window`），调用方不自己换算（P5a 收尾：回放逐帧光标）。
+ *   - `cursors: "log"`：第 f 帧取日志第 f 帧的屏幕光标除以窗口尺寸再取 float32（`p5a-cur` / `p5a-cur3` 实测 `g_PointerPosition`
+ *     逐位等于它；脚本第 f 帧记下的光标就是粒子第 f 帧用的，错一帧回放差 340 像素）。日志缺的帧（没刷出来、或那一帧是 `nan`）
+ *     沿用前一个已知帧，开头缺就用后一个，`cursorsFilled` 列出这些帧。抓到的帧上和轨迹的 `pointer` 逐帧核对（`cursorCheck`）。
+ *   - `cursors: "track"`：抓到的帧取轨迹的 `pointer`（没有就退回 `cursor`），其余帧取 `cursor`（缺省 `[0.5, 0.5]`）；
+ *   - 直接给整串（长度 = frame）；只给 `cursor` 时每帧都是它。
+ * - 窗口尺寸：`window` 参数，没给就从轨迹的 tag、再从日志的标签读末尾的 `-<宽>x<高>`，都推不出为 null（`"log"` 时报错）。
  *
- * 日志里只读 `[kbp] 帧号,帧时间,累计时间` 条目，要求两列都是 6 位小数（少了多半是行被截断）、帧号递增不重复（同一个文件里有
- * 两次运行就报错，截出一次的）。轨迹是 Python 写的 JSON，可能带 `NaN` / `Infinity`（`rd-p4c-sprite-fps60.json` 的 corners），
- * 解析前换成 null。
+ * 日志里只读 `[kbp]` 条目，三列 `帧号,帧时间,累计时间` 或五列 `帧号,帧时间,累计时间,屏幕x,屏幕y`（`write_project(…, cursor=True)`
+ * 的 FR_CURSOR），同一个文件里不能混用；两列时间都要是 6 位小数（少了多半是行被截断），光标两列是有限数或 `nan`（脚本读光标失败）；
+ * 帧号递增不重复（同一个文件里有两次运行就报错，截出一次的）。轨迹是 Python 写的 JSON，可能带 `NaN` / `Infinity`
+ * （`rd-p4c-sprite-fps60.json` 的 corners），解析前换成 null。
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -36,9 +42,15 @@ export interface TimelineSource {
   frame?: number;
   /** 日志与轨迹都缺的帧：缺省报错；"split" 按下一个已知 g_Time 平分。 */
   gap?: "error" | "split";
-  /** 逐帧光标："track" 抓到的帧取轨迹 pointer、其余取 cursor；或直接给整串（长度 = frame）。 */
-  cursors?: "track" | Point[];
+  /**
+   * 逐帧光标（`g_PointerPosition`，窗口归一化）："log" 取日志的屏幕光标 ÷ 窗口尺寸（float32），缺的帧沿用相邻帧；
+   * "track" 抓到的帧取轨迹 pointer、其余取 cursor；或直接给整串（长度 = frame）。
+   */
+  cursors?: "log" | "track" | Point[];
+  /** `cursors` 为 "track" 时其余帧的光标（缺省 `[0.5, 0.5]`）；不给 `cursors` 时每帧都是它。和 "log" 不同给。 */
   cursor?: Point;
+  /** 抓帧窗口尺寸 `[宽, 高]`（像素）；缺省从轨迹 tag、再从日志标签末尾的 `-<宽>x<高>` 读。 */
+  window?: Point;
 }
 
 /** 平分出来的一段。 */
@@ -64,6 +76,21 @@ export interface Timeline {
   gaps: TimelineGap[];
   /** `cursors: "track"` 时用了轨迹 pointer 的帧号。 */
   cursorsFromTrack: number[];
+  /** 逐帧光标从哪来：日志（"log"）、轨迹（"track"）、整串（"list"）、只给了 `cursor`（"cursor"）；没有逐帧光标为 null。 */
+  cursorsFrom: "log" | "track" | "list" | "cursor" | null;
+  /** `cursors: "log"` 时日志里没有这一帧的光标（没刷出来或是 `nan`）、沿用相邻已知帧的帧号。 */
+  cursorsFilled: number[];
+  /**
+   * `cursors: "log"` 时抓到的帧上日志光标（换算后）与轨迹 `pointer` 的核对：比了哪几帧（两边都有值的）、最大差（两个分量取大），
+   * 以及不相等的帧。不是 "log" 时为 null。
+   */
+  cursorCheck: { frames: number[]; maxDiff: number; mismatched: number[] } | null;
+  /** 日志条目带光标列（五列）。 */
+  logCursors: boolean;
+  /** 抓帧窗口尺寸 `[宽, 高]`：参数给的，或从标签推出；推不出为 null。 */
+  window: Point | null;
+  /** 窗口尺寸从哪来：参数（"param"）、轨迹 tag（"track"）、日志标签（"log"）。 */
+  windowFrom: "param" | "track" | "log" | null;
   /** 标签：轨迹的 `tag`，没有轨迹时取日志文件名（去掉 `-log.txt`）。 */
   tag: string | null;
   /** 从标签里的 `fps<N>` 推出的 operator 遍数（1–20 两遍），推不出为 null。 */
@@ -97,25 +124,68 @@ const round6 = (value: number) => Number(value.toFixed(6));
 const isPoint = (value: unknown): value is Point =>
   Array.isArray(value) && value.length === 2 && value.every((x) => typeof x === "number" && Number.isFinite(x));
 
-/** WPE 日志里的 `[kbp]` 条目：帧号 → 累计时间（秒）。 */
-export function parseKbpLog(text: string): Map<number, number> {
+/** 读出的 `[kbp]` 日志。 */
+export interface KbpLog {
+  /** 帧号 → 累计时间（秒）。 */
+  runtime: Map<number, number>;
+  /**
+   * 五列时：帧号 → 屏幕光标（`input.cursorScreenPosition`，壁纸窗口内的像素，原点左上、y 朝下，窗口外为负或超出尺寸）；
+   * 这一帧写的是 `nan`（脚本读光标失败）时为 null。三列时整个为 null。
+   */
+  cursors: Map<number, Point | null> | null;
+  /** 条目的列数。 */
+  columns: 3 | 5;
+}
+
+const TIME = String.raw`\d+\.\d{6}`;
+// `String()` 写出的数：整数、小数、指数（`1e-7`、`1e+21`），或 `nan`（脚本读光标失败；`String(NaN)` 的 `NaN` 同样当缺）
+const COORD = String.raw`-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[nN]a[nN]`;
+const THREE_COLUMNS = new RegExp(String.raw`^(\d+),(${TIME}),(${TIME})$`);
+const FIVE_COLUMNS = new RegExp(String.raw`^(\d+),(${TIME}),(${TIME}),(${COORD}),(${COORD})$`);
+
+/** 光标列的一项：`nan` 为 null。 */
+const coord = (text: string): number | null => (/^nan$/i.test(text) ? null : Number(text));
+
+/**
+ * WPE 日志里的 `[kbp]` 条目：三列（帧号,帧时间,累计时间）或五列（另加屏幕x,屏幕y），同一个文件里不能混用。
+ * 回帧号 → 累计时间，五列时另回帧号 → 屏幕光标。
+ */
+export function readKbpLog(text: string): KbpLog {
   const runtime = new Map<number, number>();
+  const cursors = new Map<number, Point | null>();
+  let columns: 3 | 5 | null = null;
   let previous = 0;
-  text.split(/\r?\n/).forEach((line, index) => {
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     const at = line.indexOf("[kbp]");
-    if (at < 0) return;
+    if (at < 0) continue;
     for (const token of line
       .slice(at + 5)
       .trim()
       .split(/\s+/)
       .filter(Boolean)) {
-      const match = /^(\d+),(\d+\.\d{6}),(\d+\.\d{6})$/.exec(token);
+      const three = THREE_COLUMNS.exec(token);
+      const five = three ? null : FIVE_COLUMNS.exec(token);
+      const match = three ?? five;
       if (!match) {
+        // 已经是五列的文件，或第一条就像五列（逗号分出 4 段以上）时按五列说；其余照三列的老文案
+        const asFive = columns === 5 || (columns === null && token.split(",").length >= 4);
         throw new TimelineError(
-          `日志第 ${index + 1} 行有读不懂的条目 ${JSON.stringify(token)}：应为「帧号,帧时间,累计时间」，两列都是 6 位小数（少了多半是行被截断）`,
+          asFive
+            ? `日志第 ${index + 1} 行有读不懂的条目 ${JSON.stringify(token)}：应为「帧号,帧时间,累计时间,屏幕x,屏幕y」，两列时间都是 6 位小数、光标两列是有限数或 nan（少了多半是行被截断）`
+            : `日志第 ${index + 1} 行有读不懂的条目 ${JSON.stringify(token)}：应为「帧号,帧时间,累计时间」，两列都是 6 位小数（少了多半是行被截断）`,
         );
       }
+      const width = three ? 3 : 5;
       const frame = Number(match[1]);
+      if (columns !== null && columns !== width) {
+        throw new TimelineError(
+          `日志第 ${index + 1} 行第 ${frame} 帧是${width === 5 ? "五" : "三"}列，前面的条目是${columns === 5 ? "五" : "三"}列：` +
+            "同一个文件里三列和五列不能混用（多半是两次运行或两个工程的日志拼在一起），只截出一次的 [kbp] 行",
+        );
+      }
+      columns = width;
       if (runtime.has(frame) || frame <= previous) {
         throw new TimelineError(
           `日志第 ${index + 1} 行第 ${frame} 帧${runtime.has(frame) ? "重复" : "帧号倒退"}（前一条是第 ${previous} 帧）：文件里像是有两次运行，只截出一次的 [kbp] 行`,
@@ -123,10 +193,20 @@ export function parseKbpLog(text: string): Map<number, number> {
       }
       previous = frame;
       runtime.set(frame, Number(match[3]));
+      if (five) {
+        const x = coord(five[4]);
+        const y = coord(five[5]);
+        cursors.set(frame, x === null || y === null ? null : [x, y]);
+      }
     }
-  });
+  }
   if (!runtime.size) throw new TimelineError("日志里没有 [kbp] 条目");
-  return runtime;
+  return { runtime, cursors: columns === 5 ? cursors : null, columns: columns ?? 3 };
+}
+
+/** WPE 日志里的 `[kbp]` 条目：帧号 → 累计时间（秒）。三列、五列都收（光标列见 `readKbpLog`）。 */
+export function parseKbpLog(text: string): Map<number, number> {
+  return readKbpLog(text).runtime;
 }
 
 /** 解析 RenderDoc 轨迹 JSON（容忍 Python 写出的 `NaN` / `Infinity`），校验时间线要用的字段。 */
@@ -185,9 +265,25 @@ export function frameRanges(frames: readonly number[]): string {
   return parts.join("、");
 }
 
+/** 标签末尾的 `-<宽>x<高>`（抓帧窗口尺寸，同 kbp replay 的取法），没有为 null。 */
+export function windowFromTag(tag: string | null | undefined): Point | null {
+  const match = tag ? /-(\d+)x(\d+)$/.exec(tag) : null;
+  if (!match) return null;
+  const size: Point = [Number(match[1]), Number(match[2])];
+  return size[0] > 0 && size[1] > 0 ? size : null;
+}
+
+/**
+ * 屏幕光标（窗口内像素）→ `g_PointerPosition`：除以窗口尺寸再取 float32（WPE 的 uniform 是 float32；`p5a-cur` 8 帧、`p5a-cur3`
+ * 4 帧逐位相等）。
+ */
+export function pointerFromScreen(screen: Point, window: Point): Point {
+  return [Math.fround(screen[0] / window[0]), Math.fround(screen[1] / window[1])];
+}
+
 export interface TimelineInput {
-  /** `[kbp]` 日志的文本，或已解析的帧号 → 累计时间。 */
-  log: string | Map<number, number>;
+  /** `[kbp]` 日志的文本、已读出的 `KbpLog`，或已解析的帧号 → 累计时间（没有光标列）。 */
+  log: string | Map<number, number> | KbpLog;
   track?: TrackTiming | null;
   /** 没有轨迹 tag 时用的标签（通常是日志文件名去掉 `-log.txt`）。 */
   logTag?: string | null;
@@ -197,7 +293,13 @@ export interface TimelineInput {
 
 /** 纯函数版：已读出的日志与轨迹 → 时间线。 */
 export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource, "log" | "track"> = {}): Timeline {
-  const log = typeof input.log === "string" ? parseKbpLog(input.log) : input.log;
+  const read: KbpLog =
+    typeof input.log === "string"
+      ? readKbpLog(input.log)
+      : input.log instanceof Map
+        ? { runtime: input.log, cursors: null, columns: 3 }
+        : input.log;
+  const log = read.runtime;
   const track = input.track ?? null;
   const captured = new Map((track?.frames ?? []).map((f) => [f.frame, f]));
   const logFrames = [...log.keys()];
@@ -278,13 +380,69 @@ export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource,
     }
   }
 
+  // 窗口尺寸：参数给的优先，其次轨迹 tag、日志标签末尾的 -<宽>x<高>
+  if (options.window !== undefined && !(isPoint(options.window) && options.window[0] > 0 && options.window[1] > 0)) {
+    throw new TimelineError(`window 要是 [宽, 高]（两个正数，像素），收到 ${JSON.stringify(options.window)}`);
+  }
+  const trackWindow = windowFromTag(track?.tag);
+  const logWindow = windowFromTag(input.logTag);
+  const window: Point | null = options.window ? [options.window[0], options.window[1]] : (trackWindow ?? logWindow);
+  const windowFrom = options.window ? "param" : trackWindow ? "track" : logWindow ? "log" : null;
+
   let cursors: Point[] | undefined;
   const cursorsFromTrack: number[] = [];
+  const cursorsFilled: number[] = [];
+  let cursorCheck: Timeline["cursorCheck"] = null;
+  let cursorsFrom: Timeline["cursorsFrom"] = null;
   if (options.cursor !== undefined && !isPoint(options.cursor)) {
     throw new TimelineError(`cursor 要是 [x, y]（两个有限数），收到 ${JSON.stringify(options.cursor)}`);
   }
   const fallback: Point = options.cursor ?? [0.5, 0.5];
-  if (options.cursors === "track") {
+  if (options.cursors === "log") {
+    if (options.cursor !== undefined) {
+      throw new TimelineError('cursors 为 "log" 时不收 cursor：日志缺光标的帧沿用相邻的已知帧');
+    }
+    const screens = read.cursors;
+    if (!screens) {
+      throw new TimelineError(
+        'cursors: "log" 要日志带光标列（五列「帧号,帧时间,累计时间,屏幕x,屏幕y」），这份日志是三列：生成工程时用 write_project(…, cursor=True)',
+      );
+    }
+    if (!window) {
+      throw new TimelineError(
+        `cursors: "log" 要知道抓帧窗口尺寸：标签（轨迹 ${JSON.stringify(track?.tag ?? null)}、日志 ${JSON.stringify(input.logTag ?? null)}）` +
+          "末尾没有 -<宽>x<高>，传 window: [宽, 高]",
+      );
+    }
+    // 缺的帧沿用前一个已知帧；开头缺（前面还没有已知帧）就用日志里第一个有光标的帧，它一定在后面
+    const first = [...screens.values()].find((p): p is Point => p !== null);
+    if (!first) throw new TimelineError('cursors: "log"：日志里的光标全是 nan，没有可用的逐帧光标');
+    cursors = [];
+    let previous: Point | null = null;
+    for (let f = 1; f <= frame; f++) {
+      const own = screens.get(f);
+      if (own) previous = own;
+      else cursorsFilled.push(f);
+      cursors.push(pointerFromScreen(own ?? previous ?? first, window));
+    }
+    // 抓到的帧上和轨迹 pointer 逐帧比（只比日志真有光标的帧）
+    const frames: number[] = [];
+    const mismatched: number[] = [];
+    let maxDiff = 0;
+    for (const f of [...captured.keys()].filter((f) => f <= frame).sort((a, b) => a - b)) {
+      const pointer = captured.get(f)?.pointer;
+      const own = screens.get(f);
+      if (!pointer || !own) continue;
+      const mine = pointerFromScreen(own, window);
+      const diff = Math.max(Math.abs(mine[0] - pointer[0]), Math.abs(mine[1] - pointer[1]));
+      frames.push(f);
+      if (diff !== 0) mismatched.push(f);
+      maxDiff = Math.max(maxDiff, diff);
+    }
+    cursorCheck = { frames, maxDiff, mismatched };
+    cursorsFrom = "log";
+  } else if (options.cursors === "track") {
+    cursorsFrom = "track";
     cursors = [];
     for (let f = 1; f <= frame; f++) {
       const pointer = captured.get(f)?.pointer;
@@ -301,10 +459,12 @@ export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource,
         throw new TimelineError(`cursors[${i}] 要是 [x, y]（两个有限数），收到 ${JSON.stringify(item)}`);
     });
     cursors = options.cursors.map(([x, y]) => [x, y]);
+    cursorsFrom = "list";
   } else if (options.cursors !== undefined) {
-    throw new TimelineError(`cursors 只能是 "track" 或 [[x, y], …]，收到 ${JSON.stringify(options.cursors)}`);
+    throw new TimelineError(`cursors 只能是 "log"、"track" 或 [[x, y], …]，收到 ${JSON.stringify(options.cursors)}`);
   } else if (options.cursor !== undefined) {
     cursors = Array.from({ length: frame }, () => [fallback[0], fallback[1]] as Point);
+    cursorsFrom = "cursor";
   }
 
   const tag = track?.tag ?? input.logTag ?? null;
@@ -318,6 +478,12 @@ export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource,
     frame,
     gaps,
     cursorsFromTrack,
+    cursorsFrom,
+    cursorsFilled,
+    cursorCheck,
+    logCursors: read.columns === 5,
+    window,
+    windowFrom,
     tag,
     passes,
     log: { file: input.logFile ?? null, first: logFirst, last: logLast },
@@ -352,9 +518,9 @@ export function buildTimeline(source: TimelineSource, options: { root?: string }
       throw new TimelineError(`${trackFile}：${(error as Error).message}`);
     }
   }
-  let log: Map<number, number>;
+  let log: KbpLog;
   try {
-    log = parseKbpLog(logText);
+    log = readKbpLog(logText);
   } catch (error) {
     throw new TimelineError(`${logFile}：${(error as Error).message}`);
   }
@@ -366,7 +532,15 @@ export function buildTimeline(source: TimelineSource, options: { root?: string }
   return timelineFrom({ log, track, logTag, logFile, trackFile }, rest);
 }
 
-/** 时间线的一行说明（工具结果里用）。 */
+const WINDOW_FROM = { param: "参数给的", track: "轨迹标签", log: "日志标签" } as const;
+
+/** 摘要里的小数：3 位有效数字。 */
+const shortNumber = (value: number) => String(Number(value.toPrecision(3)));
+
+/**
+ * 时间线的一行说明（工具结果里用）。逐帧光标写清从哪来（日志 / 轨迹 / 沿用）与窗口尺寸；`cursors: "log"` 时抓到的帧上日志光标
+ * 和轨迹 `pointer` 不同，另起一行写警告（不报错）；日志带光标列、却没要逐帧光标时提示一句。
+ */
 export function describeTimeline(timeline: Timeline): string {
   const parts = [`回放 ${timeline.frame} 帧（第 1–${timeline.frame} 帧）`];
   parts.push(
@@ -381,12 +555,35 @@ export function describeTimeline(timeline: Timeline): string {
       ? `平分的帧 ${timeline.gaps.map((g) => `${g.from === g.to ? g.from : `${g.from}–${g.to}`}（合计 ${g.total.toFixed(6)} s，每帧 ${g.dt}）`).join("、")}`
       : "没有平分的帧",
   );
-  if (timeline.cursors) {
+  const warnings: string[] = [];
+  const window = timeline.window
+    ? `窗口 ${timeline.window[0]}×${timeline.window[1]}（${WINDOW_FROM[timeline.windowFrom ?? "param"]}）`
+    : null;
+  if (timeline.cursors && timeline.cursorsFrom === "log") {
+    const filled = timeline.cursorsFilled;
+    parts.push(
+      `逐帧光标：取日志（屏幕光标 ÷ ${window}，float32）` +
+        (filled.length ? `，日志缺光标、沿用相邻帧的 ${frameRanges(filled)}` : "，每一帧日志都有"),
+    );
+    const check = timeline.cursorCheck;
+    if (check?.frames.length) {
+      parts.push(`抓到的帧上和轨迹 pointer 核对 ${check.frames.length} 帧，最大差 ${shortNumber(check.maxDiff)}`);
+      if (check.mismatched.length) {
+        warnings.push(
+          `警告：第 ${frameRanges(check.mismatched)} 帧日志光标和轨迹 pointer 不同（最大差 ${shortNumber(check.maxDiff)}）：` +
+            "窗口尺寸不对，或日志和轨迹不是同一次运行",
+        );
+      }
+    } else parts.push("抓到的帧上没有可核对的 pointer");
+  } else if (timeline.cursors) {
     parts.push(
       timeline.cursorsFromTrack.length
         ? `逐帧光标：${timeline.cursorsFromTrack.length} 帧取轨迹 pointer，其余 ${JSON.stringify(timeline.cursors.find((_, i) => !timeline.cursorsFromTrack.includes(i + 1)) ?? null)}`
         : "逐帧光标：已给",
     );
+    if (window) parts.push(`${window}，探针按 fill 换到场景上`);
+  } else if (timeline.logCursors) {
+    parts.push('日志带光标列，要按每一帧的光标回放传 cursors: "log"');
   }
-  return `时间线：${parts.join("；")}`;
+  return [`时间线：${parts.join("；")}`, ...warnings].join("\n");
 }

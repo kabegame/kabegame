@@ -77,8 +77,11 @@ export interface RunSpec {
   inputs?: {
     /** 控制点输入的对象世界矩阵：none（不传控制点输入，P4b 及以前）、static（编译期变换）、hook（钩子的 world）。 */
     world?: "none" | "static" | "hook";
-    /** 跟随点：none（不传）、zero（pointer [0, 0]）、track（轨迹指针，窗口之前取窗口第一帧的；标签带 -宽x高 时按 fill 反算）。 */
-    cursors?: "none" | "zero" | "track";
+    /**
+     * 跟随点：none（不传）、zero（pointer [0, 0]）、track（轨迹指针，窗口之前取窗口第一帧的）、log（每帧取日志的屏幕光标 ÷ 窗口尺寸，
+     * 要 cursor=True 生成的工程，P5a 收尾）；track、log 在标签带 -宽x高 时按 fill 反算。
+     */
+    cursors?: "none" | "zero" | "track" | "log";
     /** 传给 step 的场景时间：none（不传，模拟器自己累加）、cur（本帧 g_Time）、prev（上一帧的，第 1 帧为 0）。 */
     time?: "none" | "cur" | "prev";
     /** 运行中改属性的文件（相对数据目录，`{tag}` 换成标签），格式 [{ frame, properties }]（b6）。 */
@@ -697,6 +700,9 @@ export class CaseContext {
     const first = Math.min(...frames);
     const firstPointer = truth.frames.find((f) => f.frame === first)?.pointer;
     const cursorsMode = run.inputs?.cursors ?? "none";
+    const scene: Point = [bundle.general?.width ?? 1920, bundle.general?.height ?? 1080];
+    const m = /-(\d+)x(\d+)$/.exec(tag);
+    const window: Point = m ? [Number(m[1]), Number(m[2])] : scene;
     const timeline = buildTimeline({
       log: logFile,
       track: trackFile,
@@ -704,14 +710,13 @@ export class CaseContext {
       ...(cursorsMode === "track"
         ? { cursors: "track" as const, ...(firstPointer ? { cursor: firstPointer } : {}) }
         : {}),
+      // log：窗口尺寸取这里的 window（标签没带 -宽x高 时当作和场景同尺寸，同 track），时间线不再自己推
+      ...(cursorsMode === "log" ? { cursors: "log" as const, window } : {}),
     });
     const fromTag = timeline.passes?.passes;
     const passes = run.passes ?? fromTag;
     if (!passes) throw new KbpReplayError("data", `${tag}：标签里没有 fps，案例里给 passes`);
     const mode = run.mode ?? "position";
-    const scene: Point = [bundle.general?.width ?? 1920, bundle.general?.height ?? 1080];
-    const m = /-(\d+)x(\d+)$/.exec(tag);
-    const window: Point = m ? [Number(m[1]), Number(m[2])] : scene;
     const captured = new Set(timeline.captured);
     const split = new Set(timeline.split);
     const sources = timeline.dts.map((_, i) =>
@@ -760,8 +765,22 @@ export class CaseContext {
         `日志与轨迹都缺第 ${timeline.gaps.map((g) => `${g.from}–${g.to}`).join("、")} 帧，按 gap: split 平分（每帧 ${timeline.gaps.map((g) => g.dt).join("、")}）`,
       );
     if (this.hook.timeline) await this.hook.timeline(this, sec);
-    // 控制点输入
-    if (cursorsMode === "track") {
+    if (cursorsMode === "log") {
+      const check = timeline.cursorCheck;
+      this.note(
+        sec,
+        `跟随点取日志的逐帧光标（窗口 ${window[0]}×${window[1]}）` +
+          (timeline.cursorsFilled.length
+            ? `，日志缺光标、沿用相邻帧的第 ${timeline.cursorsFilled.join("、")} 帧`
+            : "") +
+          (check?.frames.length
+            ? `；抓到的帧上和轨迹 pointer 核对 ${check.frames.length} 帧，最大差 ${check.maxDiff}` +
+              (check.mismatched.length ? `，第 ${check.mismatched.join("、")} 帧不同` : "")
+            : ""),
+      );
+    }
+    // 控制点输入：track 与 log 的光标都是 g_PointerPosition（窗口归一化），同一段换到场景上
+    if (cursorsMode === "track" || cursorsMode === "log") {
       const { scenePlacement, sceneCursor, sceneViewProjection } = await this.mod("render/layout");
       const { pointerScenePoint } = await this.mod("particles/controlpoints");
       const same = window[0] === scene[0] && window[1] === scene[1];

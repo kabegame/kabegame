@@ -271,6 +271,7 @@ const IMAGE_ID = z
   .transform(String)
   .describe("图片 id");
 const POINT = z.tuple([z.number(), z.number()]);
+const WINDOW = z.tuple([z.number().positive(), z.number().positive()]).describe("抓帧窗口尺寸 [宽, 高]（像素）");
 const PASSES = z.union([z.literal(1), z.literal(2)]);
 const SEED = z.number().int().describe("随机种子，第 i 个粒子层用 seed + i；缺省 1");
 const RANDOM = z
@@ -283,7 +284,9 @@ const TIMELINE = z
     log: z
       .string()
       .min(1)
-      .describe("WPE 日志（ignore/p4/out/<标签>-log.txt，相对路径按仓库根），只读「[kbp] 帧号,帧时间,累计时间」条目"),
+      .describe(
+        "WPE 日志（ignore/p4/out/<标签>-log.txt，相对路径按仓库根），只读 [kbp] 条目：「帧号,帧时间,累计时间」，或 cursor=True 工程的五列「…,屏幕x,屏幕y」",
+      ),
     track: z
       .string()
       .min(1)
@@ -304,14 +307,18 @@ const TIMELINE = z
         '日志与轨迹都没有的帧（fps 低时日志每 50 帧才刷一次，尾巴会缺）：缺省报错并列出；"split" 按后一个已知帧的 g_Time 平分，结果里写明哪些帧是平分的',
       ),
     cursors: z
-      .union([z.literal("track"), z.array(POINT)])
+      .union([z.literal("log"), z.literal("track"), z.array(POINT)])
       .optional()
       .describe(
-        '逐帧光标（只有 particle_track 收）："track" 抓到的帧取轨迹的 pointer、其余取 cursor；或直接给整串（长度 = frame）。' +
-          "光标是「光标下的场景纹理坐标」：抓帧窗口和场景同尺寸时等于 g_PointerPosition，不同尺寸时自己换算",
+        "逐帧光标，单位是 g_PointerPosition（抓帧窗口归一化，原点左上、y 朝下、不钳制），探针按 window 用 fill 换到场景上，不要自己换算：" +
+          '"log" 每帧取日志的屏幕光标 ÷ 窗口尺寸（float32；要 cursor=True 生成的工程，日志缺的帧沿用相邻帧，抓到的帧上和轨迹 pointer 核对）；' +
+          '"track" 抓到的帧取轨迹的 pointer、其余取 cursor；或直接给整串（长度 = frame）。三个回放工具都收',
       ),
     cursor: POINT.optional().describe(
-      "cursors 为 track 时其余帧的光标，缺省场景中心 [0.5, 0.5]；不给 cursors 时每帧都用它",
+      'cursors 为 "track" 时其余帧的光标（g_PointerPosition），缺省 [0.5, 0.5]；不给 cursors 时每帧都用它；和 "log" 不同给',
+    ),
+    window: WINDOW.optional().describe(
+      '抓帧窗口尺寸 [宽, 高]（像素）：缺省从轨迹 tag、再从日志文件名末尾的 -<宽>x<高> 读；"log" 推不出就报错。和场景不同尺寸时探针按 fill 把光标换到场景上',
     ),
   })
   .strict()
@@ -356,7 +363,8 @@ const RENDER_FIELDS = {
   postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
   userProperties: z.record(z.unknown()).optional().describe("用户属性；缺省取库里这张图当前的用户属性"),
   pointer: POINT.optional().describe(
-    "g_PointerPosition（窗口归一化坐标），也作控制点跟随指针的光标，预热、回放的每一帧和读回那一帧都用它；缺省 [0.5, 0.5]",
+    "固定的 g_PointerPosition（窗口归一化坐标），也推出控制点跟随指针的光标，预热、回放的每一帧和读回那一帧都用它；缺省 [0.5, 0.5]。" +
+      "抓帧期间光标在动时改用 replay.timeline 的 cursors（不能同给）",
   ),
   replay: REPLAY.optional(),
 };
@@ -394,14 +402,38 @@ export function passesFor(given: 1 | 2 | undefined, timeline: Timeline | null): 
 }
 
 /**
- * 渲染与四角的回放参数 → 探针的 `particles`。这两个探针接口只有一个固定的光标（渲染是 `pointer`，四角固定在场景中心），
- * 时间线里给了逐帧光标就报错，不静默丢掉。
+ * 交给探针的光标（P5a 收尾）：时间线的逐帧光标（`g_PointerPosition`）连同窗口尺寸（推不出时不交，探针当作和场景同尺寸）。
+ * 窗口只跟着逐帧光标走：没给光标时不交（推出来的窗口不改老调用），显式给了 `timeline.window` 却没给光标报 `[local]`。
+ */
+export function cursorsFor(
+  timeline: Timeline,
+  source: TimelineArg,
+): { cursors?: [number, number][]; window?: [number, number] } {
+  if (!timeline.cursors) {
+    if (source.window) {
+      throw new ToolError("local", "timeline.window 要和逐帧光标（cursors 或 cursor）一起给：它只用来把光标换到场景上");
+    }
+    return {};
+  }
+  return {
+    cursors: timeline.cursors,
+    ...(timeline.window ? { window: [timeline.window[0], timeline.window[1]] as [number, number] } : {}),
+  };
+}
+
+/**
+ * 渲染与四角的回放参数 → 探针的 `particles`，以及时间线的逐帧光标（探针的 `pointers`）与窗口尺寸。
  */
 export function resolveReplay(
   root: string,
   replay: ReplayArg,
-  tool: string,
-): { particles: ParticleReplay; timeline: Timeline | null; lines: string[] } {
+): {
+  particles: ParticleReplay;
+  timeline: Timeline | null;
+  pointers?: [number, number][];
+  window?: [number, number];
+  lines: string[];
+} {
   if ("particles" in replay) {
     const p = replay.particles;
     return {
@@ -414,12 +446,6 @@ export function resolveReplay(
     };
   }
   const source = replay.timeline;
-  if (source.cursors !== undefined || source.cursor !== undefined) {
-    throw new ToolError(
-      "local",
-      `${tool} 不收逐帧光标：探针${tool === "particle_corners" ? " particleCorners 的光标固定在场景中心" : " renderFrame 只有一个固定的 pointer（预热、回放的每一帧和读回那一帧都用它），要固定光标用 pointer"}；逐帧光标只有 particle_track 收`,
-    );
-  }
   const timeline = timelineFor(root, source);
   const passes = passesFor(replay.passes, timeline);
   const particles: ParticleReplay = {
@@ -429,9 +455,12 @@ export function resolveReplay(
     ...(replay.seed !== undefined ? { seed: replay.seed } : {}),
     ...(replay.random ? { random: replay.random } : {}),
   };
+  const { cursors, window } = cursorsFor(timeline, source);
   return {
     particles,
     timeline,
+    ...(cursors ? { pointers: cursors } : {}),
+    ...(window ? { window } : {}),
     lines: [
       describeTimeline(timeline),
       `${passes.line}；seed ${replay.seed ?? 1}${replay.random ? `；random 顶替 ${Object.keys(replay.random).join("、")} 号对象的 R` : ""}`,
@@ -843,8 +872,11 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       tail: [JSON.stringify(response.meta, null, 2)],
     });
 
-  /** 渲染参数：`replay` 与 `time` 互斥；`replay` 换成探针的 `particles`，并回时间线说明。 */
-  const renderBody = (tool: string, imageId: string, render: Args<typeof RENDER_FIELDS>) => {
+  /**
+   * 渲染参数：`replay` 与 `time` 互斥；`replay` 换成探针的 `particles`，时间线的逐帧光标换成探针的 `pointers`（连同 `window`，
+   * 和固定的 `pointer` 互斥），并回时间线说明。
+   */
+  const renderBody = (imageId: string, render: Args<typeof RENDER_FIELDS>) => {
     const { replay, ...rest } = render;
     if (!replay) return { body: { imageId, ...rest }, lines: [] as string[] };
     if (rest.time !== undefined) {
@@ -853,8 +885,25 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "replay 与 time 不能同时给：回放时读回那一帧的 g_Time 取时间线（或 particles.times）的末项，没给 times 时是 dt 累计值",
       );
     }
-    const resolved = resolveReplay(root, replay, tool);
-    return { body: { imageId, ...rest, particles: resolved.particles }, lines: resolved.lines };
+    const timelineCursors =
+      "timeline" in replay && (replay.timeline.cursors !== undefined || replay.timeline.cursor !== undefined);
+    if (timelineCursors && rest.pointer !== undefined) {
+      throw new ToolError(
+        "local",
+        "pointer 与时间线的逐帧光标（replay.timeline 的 cursors / cursor）不能同时给：要固定光标就只给 pointer",
+      );
+    }
+    const resolved = resolveReplay(root, replay);
+    return {
+      body: {
+        imageId,
+        ...rest,
+        particles: resolved.particles,
+        ...(resolved.pointers ? { pointers: resolved.pointers } : {}),
+        ...(resolved.window ? { window: resolved.window } : {}),
+      },
+      lines: resolved.lines,
+    };
   };
 
   /** 给图片 id 开一个屏外宿主（kbScene 为这张图）跑 `run`、关掉；给了 `host` 时用已开的、不开也不关。 */
@@ -904,7 +953,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ handle, imageId, save, size, inline, ...render }) => {
-      const { body, lines } = renderBody("host_render", imageId, render);
+      const { body, lines } = renderBody(imageId, render);
       const response = await client.hostRender(handle, body);
       return renderResult(response, { tool: "host_render", imageId, save, size, inline }, lines);
     },
@@ -990,7 +1039,9 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "给 host 时改用已开的宿主、不开也不关。宿主产物要用 --mode development 构建（要有 dev 探针）。" +
         "屏外宿主不跑帧循环：不给 replay 时画的是固定时刻的一帧，粒子是预热后的状态、不步进（starttime 为 0 的系统是空的）；看实时行为用 open_image_preview。" +
         "给 replay 时按 WPE 的 dt 序列确定性回放粒子（种子固定），再读回最后一帧，用来和 WPE 抓帧逐像素比；时间线用 { timeline: { log, track, frame } } 从 WPE 日志与 RenderDoc 轨迹组，" +
-        "passes 缺省按标签里的 fps<N> 推。回放不收逐帧光标（探针只有一个固定的 pointer）。工具不做比较，比较自己跑 ignore/p4 的脚本。",
+        'passes 缺省按标签里的 fps<N> 推。抓帧期间光标在动时给 timeline.cursors（"log" 按每一帧的光标复现，要 cursor=True 生成的工程），' +
+        "探针第 i 帧用第 i 帧的光标、读回帧的 g_PointerPositionLast 是上一帧的，窗口和场景不同尺寸时按 fill 换到场景上；不给时光标固定为 pointer（不能同给）。" +
+        "工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,
         ...RENDER_FIELDS,
@@ -1002,7 +1053,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ imageId, host, save, size, inline, ...render }) => {
-      const { body, lines } = renderBody("render_scene", imageId, render);
+      const { body, lines } = renderBody(imageId, render);
       const { value: response, hostLine } = await withSceneHost(imageId, host, (handle) =>
         client.hostRender(handle, body),
       );
@@ -1017,7 +1068,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：按 WPE 的一次抓帧回放粒子模拟器（dev 探针 particleTrack：编译场景、不碰 GPU，种子固定），在 frames 输出和 RenderDoc 轨迹" +
         "（ignore/p4/tracks/rd-*.json）同格式的轨迹，写到 out（可直接交给 ignore/p4 的比较脚本，例如 cmp_track.py；工具不做比较）。" +
-        "时间线从 WPE 日志与轨迹组（timeline: { log, track, frame?, gap?, cursors?, cursor? }）；frames 缺省为轨迹里抓到的帧；passes 缺省按标签里的 fps<N> 推。" +
+        "时间线从 WPE 日志与轨迹组（timeline: { log, track, frame?, gap?, cursors?, cursor?, window? }）；逐帧光标（g_PointerPosition）连同窗口尺寸交给探针，" +
+        "探针按 fill 换到场景上；frames 缺省为轨迹里抓到的帧；passes 缺省按标签里的 fps<N> 推。" +
         "自己开屏外宿主、跑、关掉（同 render_scene），给 host 时用已开的。回到会话的只有摘要：每帧每系统的粒子数、位置范围，以及时间线信息。" +
         "场景的用户属性取工程缺省值（探针不收 userProperties）。结果超过 32 MB 报 413，减少 frames。",
       inputSchema: {
@@ -1059,7 +1111,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         passes: resolvedPasses.passes,
         ...(seed !== undefined ? { seed } : {}),
         ...(random ? { random } : {}),
-        ...(timeline.cursors ? { cursors: timeline.cursors } : {}),
+        // 逐帧光标与窗口尺寸（P5a 收尾）：探针按 fill 换到场景上
+        ...cursorsFor(timeline, source),
         ...(timeline.tag ? { tag: timeline.tag } : {}),
       };
       const { value: result, hostLine } = await withSceneHost(imageId, host, (handle) =>
@@ -1086,7 +1139,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       title: "粒子四角",
       description:
         "桌面：读每个粒子四角的裁剪坐标与场景像素坐标（dev 探针 particleCorners：把粒子顶点着色器改成计算着色器、用这一帧的 uniform 跑一遍），" +
-        "和 WPE 几何着色器的 gs_out 比。replay 同 render_scene（不给时是预热后的状态）；光标固定在场景中心。结果（每层每粒子的 corners、pixels、particles）写到 out，" +
+        "和 WPE 几何着色器的 gs_out 比。replay 同 render_scene（不给时是预热后的状态）；时间线带逐帧光标（cursors / cursor）时探针逐帧用，规则同 render_scene，" +
+        "不带时光标固定在场景中心。结果（每层每粒子的 corners、pixels、particles）写到 out，" +
         "回到会话的是摘要：每层画不画（drawn 为 false：朝向是 NaN、渲染时不画，四角照算）、写进顶点的粒子数（拖尾去掉退化的）、前 3 个粒子的四个像素角。自己开屏外宿主、跑、关掉，给 host 时用已开的。结果超过 32 MB 报 413，用 limit 收小。",
       inputSchema: {
         imageId: IMAGE_ID,
@@ -1107,10 +1161,12 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
     async ({ imageId, replay, layer, limit, postprocess, userProperties, wgsl, host, out, overwrite }) => {
       const abs = resolvePath(root, out);
       if (!overwrite && existsSync(abs)) throw new ToolError("local", `${abs} 已存在：换个路径，或传 overwrite: true`);
-      const resolved = replay ? resolveReplay(root, replay, "particle_corners") : null;
+      const resolved = replay ? resolveReplay(root, replay) : null;
       const request = {
         imageId,
         ...(resolved ? { particles: resolved.particles } : {}),
+        ...(resolved?.pointers ? { pointers: resolved.pointers } : {}),
+        ...(resolved?.window ? { window: resolved.window } : {}),
         ...(layer !== undefined ? { layer } : {}),
         ...(limit !== undefined ? { limit } : {}),
         ...(postprocess ? { postprocess } : {}),

@@ -186,12 +186,13 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
      与 GLSL 450 保留字冲突的标识符改名为 `kb_<名字>`：`sample`、`input`、`output`、`texture`、`smooth`、`flat`、`common`、`buffer` 等，完整列表见 `RESERVED_RENAMES`。精度限定符去掉。
    - **HLSL 风格内建**由宏头补上（`MACRO_HEADER`）：`mul(a, b) → ((b) * (a))`（行向量左乘）、`frac`、`lerp`、`atan2`、`saturate`、`ddx / ddy`、`rsqrt`、`fmod`、`log10`、`clip`、`CAST*`。
      正文用到 `pow` / `max` / `min` 时，补一组「标量扩展」重载：HLSL 允许 `pow(v3, 2.4)`、`max(0, v3)`，GLSL 没有这些重载。
-6. **naga 30**（`naga_stage.rs`）：
+6. **naga**（`naga_stage.rs`）：
    - GLSL 450 前端负责解析和隐式的 int → float 转换；
    - 按 WebGPU 基线（`Capabilities::empty()`）校验后输出 WGSL；
    - uniform 块的偏移与步长取自 naga 的 std140 布局。
 
-   naga 30.0.1 的 `glsl-in` 依赖只在 `spv-in` / `wgsl-in` 下编译的模块，只开 `glsl-in` 编不过，所以 `Cargo.toml` 多开了 `wgsl-in`，语料测试也用它回读输出。
+   naga 30.0.1 的源码嵌在 `naga/`（路径依赖），删掉了用不到的前后端，只开 `glsl-in` + `wgsl-out`；`wgsl-in` 只在 `[dev-dependencies]` 里开，给测试回读输出。
+   上游版本、删掉的模块与每处改动见 [naga/KABEGAME.md](naga/KABEGAME.md)。
 
 ## 几何着色器展开
 
@@ -281,6 +282,9 @@ void main() {
 # 单测（预处理、几何着色器展开、改写、naga 阶段、端到端、C ABI）
 CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --lib
 
+# 嵌入的 naga 保留下来的上游单测（feature 的原因见 naga/KABEGAME.md）
+CARGO_TARGET_DIR=target-check cargo test -p naga --lib --features glsl-in,wgsl-in,wgsl-out,stderr
+
 # 本机 WPE 语料：只读访问 WPE 安装目录，未设置环境变量时跳过
 KABEGAME_WPE_ROOT="D:\Applications\Steam\steamapps\common\wallpaper_engine" \
 CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapture
@@ -291,7 +295,7 @@ deno task test -c kabegame --skip cargo
 
 语料测试（`tests/corpus.rs`）前两部分读 WPE 安装目录（没设 `KABEGAME_WPE_ROOT` 时跳过）：
 - **门槛**：P1 样本用到的着色器对，按材质实际的 COMBO 与纹理必须翻译通过。包括 `assets/shaders/flag`（TINT=1）、`genericimage`，以及 deep_space / beach 的 `flowimage`、`swayimage`。
-- **基线**：`assets/shaders`、`assets/effects`、`projects/defaultprojects` 下全部着色器对，在默认 COMBO（只绑定 g_Texture0）下的通过率；并把每份输出 WGSL 交给 naga `wgsl-in` 重新解析、校验。
+- **基线**：`assets/shaders`、`assets/effects`、`projects/defaultprojects` 下全部着色器对，在默认 COMBO（只绑定 g_Texture0）下的通过率；并把每份输出 WGSL 交给嵌入的 naga 的 `wgsl-in` 重新解析、校验。
   完整报告写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-corpus.txt`。
 
 另有两道门槛：

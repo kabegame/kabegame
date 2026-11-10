@@ -280,6 +280,35 @@ describe("视差公式（p5-REPORT 实测）", () => {
     expect(replayed).not.toEqual(replayParallax(initialParallaxState(W, H), f, frame, dts));
     expect(() => replayParallax(initialParallaxState(W, H), f, frame, dts, eyes.slice(1))).toThrow("应等长");
   });
+
+  it("replayParallax 收每帧的指针（P5a 收尾：回放逐帧光标）：和逐帧换指针推进相同；不给时取 frame.pointer；不等长报错", () => {
+    const f = fields({ cameraparallaxdelay: 2.7, cameraparallaxmouseinfluence: 1 });
+    const frame = { pointer: [1, 0] as [number, number], width: W, height: H };
+    const dts = [0.05, 0.05, 0.25];
+    const pointers: [number, number][] = [
+      [0.2, 0.9],
+      [1.4, -0.3],
+      [0.6, 0.5],
+    ];
+    let manual = initialParallaxState(W, H);
+    dts.forEach((frametime, i) => {
+      manual = advanceParallax(manual, parallaxInput(f, { ...frame, frametime, pointer: pointers[i] }));
+    });
+    const replayed = replayParallax(initialParallaxState(W, H), f, frame, dts, undefined, pointers);
+    expect(replayed).toEqual(manual);
+    expect(replayed).not.toEqual(replayParallax(initialParallaxState(W, H), f, frame, dts));
+    // 每帧都是 frame.pointer 时和不给相同
+    expect(
+      replayParallax(initialParallaxState(W, H), f, frame, dts, undefined, [
+        frame.pointer,
+        frame.pointer,
+        frame.pointer,
+      ]),
+    ).toEqual(replayParallax(initialParallaxState(W, H), f, frame, dts));
+    expect(() => replayParallax(initialParallaxState(W, H), f, frame, dts, undefined, pointers.slice(1))).toThrow(
+      "应等长",
+    );
+  });
 });
 
 describe("rootObject", () => {

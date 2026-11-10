@@ -10,8 +10,11 @@
  * - `particleCorners`：把粒子顶点着色器改写成计算着色器，读回每个粒子四角的裁剪坐标（P4a 步骤 4，`particleCorners.ts`）；
  * - `renderFrame` 带 `profile` 时给出每个粒子层的模拟 / 写顶点 / 上传开销（`particleMs`），`host.particles` 对当前场景做同样的
  *   记录，并给出粒子数与分布（P4a 步骤 5）。
- * - 视差（P5a 步骤 2）：`renderFrame`、`hostRenderFrame` 与 `particleCorners` 都从加载时的状态（场景中心）起逐帧推进视差点，用同一个
- *   `pointer` 与同一套 `render/parallax.ts`，读回的那一帧把 P 交给 `GpuScene.setParallax`、`g_ParallaxPosition` 进帧输入。
+ * - 视差（P5a 步骤 2）：`renderFrame`、`hostRenderFrame` 与 `particleCorners` 都从加载时的状态（场景中心）起逐帧推进视差点，用同一套
+ *   `render/parallax.ts`，读回的那一帧把 P 交给 `GpuScene.setParallax`、`g_ParallaxPosition` 进帧输入。
+ * - 逐帧光标（P5a 收尾）：`renderFrame`、`particleCorners` 收 `pointers`（每帧的 `g_PointerPosition`）与 `window`（抓帧窗口尺寸），
+ *   `particleTrack` 收 `cursors` 与 `window`；窗口坐标按壁纸样式 `fill` 推出控制点的 cursor（`replayPointers.ts`），回放到读回帧的
+ *   顺序由 `particleCorners.ts` 的 `replayReadback` 统一。不给这些字段时三者逐字节同以前。
  * - 抖动（P5a 步骤 3）：三者每一帧按这一帧的 `g_Time` 算 s（`render/shake.ts`），粒子先用上一帧的 s 步进、之后才交给
  *   `GpuScene.setCamera`（同渲染器与 WPE），视差点带同一帧的 s 推进；读回的那一帧先 `setCamera` 再 `setParallax`，矩阵与眼位跟着变。
  * - 缩放（P5a 步骤 4）：`general.zoom` 随 s 一起交给 `setCamera`（`frameCamera`），取当时的 `state.general.zoom`；`particleTrack` 的
@@ -26,12 +29,13 @@ import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { particleTrack, type ParticleTrack } from "../particles/track";
 import { acquireGpu } from "../render/device";
-import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, replayParallax } from "../render/parallax";
+import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
 import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
-import { frameCamera, replayParticleOptions, replayParticles, type ParticleReplay } from "./particleCorners";
+import { replayParticleOptions, replayReadback, type ParticleReplay } from "./particleCorners";
+import { replayPointers, sceneCursors } from "./replayPointers";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -150,11 +154,22 @@ export interface RenderFrameOptions {
   time?: number;
   /**
    * `g_PointerPosition` 与 `g_PointerPositionLast`（窗口归一化坐标，原样进 uniform），缺省在中心 `[0.5, 0.5]`。
-   * 和 WPE 抓帧比时填抓帧里读到的值（P4b 步骤 1：`2854083091` 的 x 光随指针）。同一个值也作控制点跟随指针的 `cursor`
-   * （光标下的场景纹理坐标，P4c 步骤 2），加载时的预热、回放的每一帧和读回那一帧都用它：抓帧窗口和场景同尺寸时两者相同。
-   * 视差点（P5a 步骤 2）同样用它从加载起逐帧推进：抓帧期间光标不动，固定一个值就能复现，不加逐帧指针。
+   * 和 WPE 抓帧比时填抓帧里读到的值（P4b 步骤 1：`2854083091` 的 x 光随指针）。同一个值也推出控制点跟随指针的 `cursor`
+   * （光标下的场景纹理坐标，P4c 步骤 2；没给 `window` 或窗口和场景同尺寸时两者相同），加载时的预热、回放的每一帧和读回那一帧都用它。
+   * 视差点（P5a 步骤 2）同样用它从加载起逐帧推进。抓帧期间光标在动时改给 `pointers`。
    */
   pointer?: [number, number];
+  /**
+   * 逐帧的 `g_PointerPosition`（P5a 收尾：回放逐帧光标），和 `particles.dts` 等长（第 i 项是第 i + 1 帧），要有 `particles`，
+   * 不和 `pointer` 同给。第 i 帧步进粒子用第 i 项推出的 cursor、视差点用第 i 项；预热用第 0 项；读回那一帧的 `g_PointerPosition` 是最后
+   * 一项、`g_PointerPositionLast` 是倒数第二项（只有一帧时取自己）；`profile` 帧用第 0 项。
+   */
+  pointers?: [number, number][];
+  /**
+   * 抓帧窗口尺寸 `[宽, 高]`（像素）：和场景不同尺寸时，光标（`pointer` / `pointers`）按壁纸样式 `fill` 换到场景上推出 cursor
+   * （`sceneCursor`，同渲染器与 kbp replay），`g_PointerPosition` 仍是窗口坐标；缺省或同尺寸时原样。
+   */
+  window?: [number, number];
   /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（场景目标尺寸，alpha 置 255）存 `<key>.rgba`。 */
   key?: string;
   /** 有不支持项也渲染（同 dev 强制渲染）。默认 true。 */
@@ -225,13 +240,20 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const gpu = await acquireGpu();
   try {
     const state = SceneState.fromBundle(bundle);
-    const pointer = options.pointer ?? [0.5, 0.5];
+    const { width: sceneWidth, height: sceneHeight } = bundle.general;
+    // 每一帧的 g_PointerPosition 与 cursor（P5a 收尾）：只给 pointer（或都不给）时每帧相同，同加逐帧指针之前
+    const pointers = replayPointers(
+      { pointer: options.pointer, pointers: options.pointers, window: options.window },
+      [sceneWidth, sceneHeight],
+      options.particles?.dts.length,
+    );
     const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], {
       ignoreUnsupported: force,
-      particles: { ...replayParticleOptions(options.particles), cursor: pointer },
+      particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
     });
-    // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器
-    const { width: sceneWidth, height: sceneHeight } = bundle.general;
+    // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
+    const pointer = pointers.pointers[0];
+    const cursor = pointers.cursors[0];
     const parallaxFrame = { pointer, width: sceneWidth, height: sceneHeight };
     let parallax = initialParallaxState(sceneWidth, sceneHeight);
     try {
@@ -253,7 +275,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
             parallaxInput(state.general, { ...parallaxFrame, frametime: 1 / 60, eye: shake }),
           );
           scene.sync(state);
-          scene.stepParticles(1 / 60, startTime + i / 60, state, pointer);
+          scene.stepParticles(1 / 60, startTime + i / 60, state, cursor);
           scene.setCamera({ shake, zoom: state.general.zoom });
           scene.setParallax(drawParallax(parallax, state.general), state);
           scene.update(
@@ -263,7 +285,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
               daytime: 0.5,
               pointer,
               pointerLast: pointer,
-              cursor: pointer,
+              cursor,
               parallax: parallax.position,
             },
             state,
@@ -285,27 +307,16 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         particleMs = scene.particleProfile();
         scene.profileParticles(false);
       }
-      // 粒子回放：前 n−1 帧在 replayParticles 里步进，最后一帧在这里先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。
-      // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同渲染器），读回的那一帧同样，之后才 setParallax
-      const shake = frameCamera(scene, state, sceneHeight);
-      const { time, frametime } = replayParticles(scene, state, options.particles, startTime, pointer, shake.apply);
-      scene.sync(state);
-      scene.stepParticles(frametime, time, state, pointer);
-      shake.apply(time);
-      // 视差点和粒子互不影响：回放的前 n − 1 帧与读回帧按同一串帧时间与每帧的 s 推进（没有回放时读回帧的帧时间是 0）
-      const replayed = options.particles?.dts ?? [];
-      parallax = replayParallax(
+      // 粒子回放：前 n−1 帧在 replayParticles 里步进，最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。
+      // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同渲染器），读回的那一帧同样，之后才 setParallax。
+      // 视差点从 profile 帧推进后的状态接着走；逐帧指针（P5a 收尾）第 i 帧用第 i 项，读回帧的 g_PointerPositionLast 是上一帧的
+      const { time, frametime } = replayReadback(scene, state, {
+        particles: options.particles,
+        time: startTime,
+        pointers,
         parallax,
-        state.general,
-        parallaxFrame,
-        [...replayed.slice(0, -1), frametime],
-        shake.eyes,
-      );
-      scene.setParallax(drawParallax(parallax, state.general), state);
-      scene.update(
-        { time, frametime, daytime: 0.5, pointer, pointerLast: pointer, cursor: pointer, parallax: parallax.position },
-        state,
-      );
+        size: [sceneWidth, sceneHeight],
+      });
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
@@ -493,10 +504,15 @@ export interface ParticleTrackProbeOptions {
   /** 按 `objects` 下标、按出生顺序顶替 `R`，同 `renderFrame` 的 `particles.random`。 */
   random?: Record<number, number[]>;
   /**
-   * 每帧光标下的场景纹理坐标（P4c 步骤 2），和 `dts` 等长，同 `particleTrack` 的 `cursors`；回放 WPE 时填轨迹里每帧的
-   * `g_PointerPosition`（抓帧窗口和场景同尺寸时两者相同）。不给时是场景中心。
+   * 每帧的 `g_PointerPosition`（抓帧窗口归一化坐标，P4c 步骤 2；P5a 收尾起不再要调用方换算），和 `dts` 等长；第 1 项也用于预热。
+   * 探针按 `window` 换成光标下的场景纹理坐标再交给 `particles/track.ts` 的 `cursors`。不给时是场景中心。
    */
   cursors?: [number, number][];
+  /**
+   * 抓帧窗口尺寸 `[宽, 高]`（像素）：和场景不同尺寸时 `cursors` 按壁纸样式 `fill` 换到场景上（`sceneCursor`，同 `renderFrame` 与
+   * kbp replay）；缺省或同尺寸时原样。
+   */
+  window?: [number, number];
   tag?: string;
 }
 
@@ -512,6 +528,7 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
     force: true,
   });
   try {
+    const size: [number, number] = [bundle.general.width, bundle.general.height];
     return particleTrack({
       layers: bundle.layers,
       dts: options.dts,
@@ -520,8 +537,9 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       passes: options.passes,
       seed: options.seed,
       random: options.random,
-      cursors: options.cursors,
-      size: [bundle.general.width, bundle.general.height],
+      // 窗口归一化 → 光标下的场景纹理坐标（P5a 收尾，换算放在 dev 里，`particles/track.ts` 只收场景坐标）
+      cursors: options.cursors && sceneCursors(options.cursors, size, options.window),
+      size,
       // 跟随点按上一帧的抖动反投影（P5a 步骤 3），投影带缩放（步骤 4），同渲染器
       shake: bundle.general.fields,
       zoom: bundle.general.fields.zoom,

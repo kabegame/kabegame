@@ -43,6 +43,7 @@
 
 | 缩放时透视粒子的相机距离（步骤 4 动工前补测 `p5a-zoomx15` / `zoomx08`：缩放 1.5 / 0.8 加视差、抖动，透视粒子出生在本地 z = 300，另有跟随指针的系统） | 透视粒子的 MVP 按 `d = (H/(2·zoom))/tan(fov/2)`、far `max(15000, d + 1000)` 算，两档 3 帧和 WPE 逐项差 < 1e-4；按不带缩放的 d 差上百 | 成立。读码 7.2「d 取已含正交缩放的投影的可见高」 |
 | 缩放下的跟随点与几个不变量（同上） | 跟随粒子出生点按「带缩放的投影反投影 + 上一帧 s」误差 ≤ 3e-4，不带缩放差几百像素；`g_EyePosition` 只带抖动；`g_ParallaxPosition` 与视差点按不缩放的场景宽高；方块矩阵 = 绕中心缩放的正交投影 · `T(o − s)`，差 1e-7 | 成立 |
+| 脚本的光标与 `g_PointerPosition`、粒子是不是同一次采样（收尾前补测 `p5a-cur` / `p5a-cur3`，工具改进的依据，见子计划「收尾前：回放逐帧光标」） | `engine.screenResolution` 报测试窗口的 1920x1080；`g_PointerPosition` 逐位等于 float32(`cursorScreenPosition` / 窗口尺寸)，共 12 帧；`p5a-cur3` 用户在窗口上晃鼠标，按日志第 f 帧的光标回放第 f 帧，491–495 个跟随粒子逐个差 ≤ 2.4e-4，错一帧差 340 像素；`cursorWorldPosition` = (x, H − y) 带 float32 误差 | 成立。`cursorScreenPosition` 是壁纸窗口内像素、y 朝下、不钳制；**脚本、uniform、粒子模拟用的是同一帧的同一次采样**；`cursorWorldPosition` 是反投影（留给 P6） |
 
 **顺带确认的事实（给后面几节）：**
 - 正交 2D 场景里 WPE 也绑着深度目标；深度开时比较函数是 GREATER；光栅状态 `front_ccw` 为真（P5d）。

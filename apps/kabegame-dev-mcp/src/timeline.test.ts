@@ -1,8 +1,9 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   TimelineError,
   buildTimeline,
@@ -11,7 +12,10 @@ import {
   parseKbpLog,
   parseTrackJson,
   passesFromTag,
+  pointerFromScreen,
+  readKbpLog,
   timelineFrom,
+  windowFromTag,
 } from "./timeline.ts";
 import type { TrackTiming } from "./timeline.ts";
 
@@ -24,6 +28,19 @@ function kbpLog(runtimes: number[], perLine = 50, first = 1): string {
   const lines: string[] = [];
   for (let i = 0; i < entries.length; i += perLine) {
     lines.push(`2026-11-08T05:45:09Z, 327008: Error: [kbp] ${entries.slice(i, i + perLine).join(" ")}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/** 五列日志（FR_CURSOR）：每帧 [累计时间, 屏幕x, 屏幕y]，光标列原样写（数或 "nan"），每行 `perLine` 条（FR_CURSOR 是 10）。 */
+function kbpLog5(entries: [number, number | string, number | string][], perLine = 10, first = 1): string {
+  const tokens = entries.map(([t, x, y], i) => {
+    const prev = i === 0 ? 0 : entries[i - 1][0];
+    return `${first + i},${(t - prev).toFixed(6)},${t.toFixed(6)},${String(x)},${String(y)}`;
+  });
+  const lines: string[] = [];
+  for (let i = 0; i < tokens.length; i += perLine) {
+    lines.push(`2026-11-10T16:33:36Z, 84904: Error: [kbp] ${tokens.slice(i, i + perLine).join(" ")}`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -246,6 +263,263 @@ describe("时间线", () => {
       assert.deepEqual(both.captured, [6]);
       throwsTimeline(() => buildTimeline({ log: "nope.txt", frame: 1 }, { root }), /读不了日志/);
       throwsTimeline(() => buildTimeline({ log: "p4b-fps10-log.txt", track: "nope.json" }, { root }), /读不了轨迹/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("五列日志（FR_CURSOR）", () => {
+  const W: [number, number] = [1920, 1080];
+  const runtimes = [0.00068, 0.049093, 0.103004, 0.155745, 0.208563, 0.262631];
+  // 屏幕光标原样（String() 写出的）：负数、float32 误差的小数、读失败的 nan、指数
+  const screens: [number | string, number | string][] = [
+    [1382, -179],
+    [1312, -159],
+    ["nan", "nan"],
+    [1007.9999389648438, -27.999998092651367],
+    [2187, 825],
+    ["1e-7", 540],
+  ];
+  const log5 = kbpLog5(runtimes.map((t, i) => [t, ...screens[i]] as [number, number | string, number | string]));
+  const screen = (i: number) => screens[i].map(Number) as [number, number];
+
+  test("五列：帧号 → 累计时间同三列，另回帧号 → 屏幕光标（nan 为 null）；三列时没有光标", () => {
+    const read = readKbpLog(log5);
+    assert.equal(read.columns, 5);
+    assert.deepEqual([...read.runtime.values()], runtimes);
+    assert.deepEqual([...parseKbpLog(log5).entries()], [...read.runtime.entries()]);
+    assert.deepEqual(
+      [...read.cursors!.entries()],
+      [
+        [1, [1382, -179]],
+        [2, [1312, -159]],
+        [3, null],
+        [4, [1007.9999389648438, -27.999998092651367]],
+        [5, [2187, 825]],
+        [6, [1e-7, 540]],
+      ],
+    );
+    // String(NaN) 写出的 NaN 同样当缺；只有一列是 nan 也当这一帧缺
+    assert.deepEqual(
+      [...readKbpLog("[kbp] 1,0.100000,0.100000,NaN,3 2,0.100000,0.200000,4,nan").cursors!.values()],
+      [null, null],
+    );
+    const three = readKbpLog(kbpLog([0.1, 0.2]));
+    assert.equal(three.columns, 3);
+    assert.equal(three.cursors, null);
+  });
+
+  test("三列与五列混用报错（两个方向）；五列截断按五列说，三列照旧文案", () => {
+    throwsTimeline(
+      () => readKbpLog(`${kbpLog([0.1, 0.2])}${kbpLog5([[0.3, 1, 2]], 10, 3)}`),
+      /第 2 行第 3 帧是五列，前面的条目是三列：同一个文件里三列和五列不能混用/,
+    );
+    throwsTimeline(
+      () => readKbpLog(`${kbpLog5([[0.1, 1, 2]])}${kbpLog([0.2], 50, 2)}`),
+      /第 2 帧是三列，前面的条目是五列/,
+    );
+    throwsTimeline(
+      () => readKbpLog("x [kbp] 1,0.000680,0.000680,1382,-179 2,0.048413,0.049093,13"),
+      /第 1 行有读不懂的条目 "2,0\.048413,0\.049093,13"：应为「帧号,帧时间,累计时间,屏幕x,屏幕y」.*截断/,
+    );
+    throwsTimeline(() => readKbpLog("[kbp] 1,0.000680,0.000680,13"), /应为「帧号,帧时间,累计时间,屏幕x,屏幕y」/);
+    throwsTimeline(() => readKbpLog("[kbp] 1,0.000680,0.000680,Infinity,3"), /读不懂的条目/);
+    // 三列的截断：文案和以前逐字相同
+    throwsTimeline(
+      () => parseKbpLog("x [kbp] 1,0.000376,0.000376 2,0.031870,0.03"),
+      /^日志第 1 行有读不懂的条目 "2,0\.031870,0\.03"：应为「帧号,帧时间,累计时间」，两列都是 6 位小数（少了多半是行被截断）$/,
+    );
+  });
+
+  test("窗口尺寸：标签末尾的 -<宽>x<高>；屏幕光标 ÷ 窗口取 float32", () => {
+    assert.deepEqual(windowFromTag("p5a-cur3-fps20-1920x1080"), [1920, 1080]);
+    assert.deepEqual(windowFromTag("2418800402-fps60-1024x575"), [1024, 575]);
+    assert.equal(windowFromTag("p4c-cp-fps60"), null);
+    assert.equal(windowFromTag("p4c-ptr-fps60-1920x800-b"), null);
+    assert.equal(windowFromTag("x-0x10"), null);
+    assert.equal(windowFromTag(null), null);
+    // p5a-cur3 第 491 帧：屏幕 (1115, 679) 在 1920×1080 窗口里，轨迹的 g_PointerPosition 逐位等于它
+    assert.deepEqual(pointerFromScreen([1115, 679], W), [0.5807291865348816, 0.6287037134170532]);
+  });
+
+  test('cursors: "log"：第 f 帧取日志第 f 帧；缺的帧沿用前一帧；抓到的帧和轨迹 pointer 核对', () => {
+    const track: TrackTiming = {
+      tag: "p5a-cur3-fps20-1920x1080",
+      frames: [
+        // 日志这一帧是 nan：不核对
+        { frame: 3, dt: 0.053911, time: 0.103004, pointer: [0.6, 0.6] },
+        { frame: 5, dt: 0.052818, time: 0.208563, pointer: pointerFromScreen([2187, 825], W) },
+        // 日志没刷到第 7 帧：沿用第 6 帧，不核对
+        { frame: 7, dt: 0.05, time: 0.312631, pointer: [0.3, 0.3] },
+      ],
+    };
+    const t = timelineFrom({ log: log5, track }, { cursors: "log" });
+    assert.equal(t.frame, 7);
+    assert.deepEqual(t.cursors, [
+      pointerFromScreen(screen(0), W),
+      pointerFromScreen(screen(1), W),
+      pointerFromScreen(screen(1), W),
+      pointerFromScreen(screen(3), W),
+      pointerFromScreen(screen(4), W),
+      pointerFromScreen(screen(5), W),
+      pointerFromScreen(screen(5), W),
+    ]);
+    // 逐项都是 float32（屏幕光标 / 窗口）
+    assert.deepEqual(t.cursors![3], [Math.fround(1007.9999389648438 / 1920), Math.fround(-27.999998092651367 / 1080)]);
+    assert.notEqual(t.cursors![3][0], 1007.9999389648438 / 1920);
+    assert.deepEqual(t.cursorsFilled, [3, 7]);
+    assert.equal(t.cursorsFrom, "log");
+    assert.deepEqual(t.cursorsFromTrack, []);
+    assert.deepEqual(t.cursorCheck, { frames: [5], maxDiff: 0, mismatched: [] });
+    assert.deepEqual(t.window, [1920, 1080]);
+    assert.equal(t.windowFrom, "track");
+    assert.equal(t.logCursors, true);
+    const line = describeTimeline(t);
+    assert.match(
+      line,
+      /逐帧光标：取日志（屏幕光标 ÷ 窗口 1920×1080（轨迹标签），float32），日志缺光标、沿用相邻帧的 3、7；抓到的帧上和轨迹 pointer 核对 1 帧，最大差 0$/,
+    );
+    assert.doesNotMatch(line, /警告/);
+
+    // 抓到的帧上和轨迹不同：结果照给，另起一行警告
+    const off: TrackTiming = {
+      ...track,
+      frames: [...track.frames, { frame: 6, dt: 0.05, time: 0.262631, pointer: [0.1, 0.2] }],
+    };
+    const warned = timelineFrom({ log: log5, track: off }, { cursors: "log" });
+    assert.deepEqual(warned.cursorCheck, { frames: [5, 6], maxDiff: 0.3, mismatched: [6] });
+    assert.deepEqual(warned.cursors, t.cursors);
+    assert.match(
+      describeTimeline(warned),
+      /最大差 0\.3\n警告：第 6 帧日志光标和轨迹 pointer 不同（最大差 0\.3）：窗口尺寸不对，或日志和轨迹不是同一次运行$/,
+    );
+  });
+
+  test('cursors: "log"：开头缺用后一个已知帧；窗口从日志标签读、参数优先；没有可核对的帧', () => {
+    const log = kbpLog5([
+      [0.1, "nan", "nan"],
+      [0.2, 960, 400],
+      [0.3, 0, 0],
+    ]);
+    const t = timelineFrom({ log, logTag: "p5a-cur-fps20-1920x800" }, { cursors: "log", frame: 3 });
+    assert.deepEqual(t.cursors, [
+      [0.5, 0.5],
+      [0.5, 0.5],
+      [0, 0],
+    ]);
+    assert.deepEqual(t.cursorsFilled, [1]);
+    assert.deepEqual(t.window, [1920, 800]);
+    assert.equal(t.windowFrom, "log");
+    assert.deepEqual(t.cursorCheck, { frames: [], maxDiff: 0, mismatched: [] });
+    assert.match(describeTimeline(t), /窗口 1920×800（日志标签）.*沿用相邻帧的 1；抓到的帧上没有可核对的 pointer/);
+    // 轨迹 tag 推不出时退回日志标签；参数给的优先
+    const fromLog = timelineFrom(
+      { log, track: { tag: "p5a-cur", frames: [{ frame: 3, dt: 0.1, time: 0.3 }] }, logTag: "p5a-cur-fps20-1920x800" },
+      { cursors: "log" },
+    );
+    assert.equal(fromLog.windowFrom, "log");
+    const given = timelineFrom(
+      { log, logTag: "p5a-cur-fps20-1920x800" },
+      { cursors: "log", frame: 3, window: [960, 400] },
+    );
+    assert.deepEqual(given.cursors![1], [1, 1]);
+    assert.equal(given.windowFrom, "param");
+    assert.match(describeTimeline(given), /窗口 960×400（参数给的）/);
+  });
+
+  test('cursors: "log" 的错误：三列日志、推不出窗口、和 cursor 同给、全是 nan、window 不合法', () => {
+    throwsTimeline(
+      () => timelineFrom({ log: kbpLog([0.1, 0.2]), logTag: "x-1920x1080" }, { cursors: "log", frame: 2 }),
+      /cursors: "log" 要日志带光标列.*这份日志是三列：生成工程时用 write_project\(…, cursor=True\)/,
+    );
+    throwsTimeline(
+      () => timelineFrom({ log: log5, logTag: "p5a-cur-fps20" }, { cursors: "log", frame: 2 }),
+      /要知道抓帧窗口尺寸：标签（轨迹 null、日志 "p5a-cur-fps20"）末尾没有 -<宽>x<高>，传 window: \[宽, 高\]/,
+    );
+    throwsTimeline(
+      () => timelineFrom({ log: log5 }, { cursors: "log", frame: 2, window: W, cursor: [0.5, 0.5] }),
+      /cursors 为 "log" 时不收 cursor/,
+    );
+    throwsTimeline(
+      () => timelineFrom({ log: kbpLog5([[0.1, "nan", "nan"]]) }, { cursors: "log", frame: 1, window: W }),
+      /光标全是 nan/,
+    );
+    throwsTimeline(
+      () => timelineFrom({ log: log5 }, { frame: 2, window: [0, 1080] }),
+      /window 要是 \[宽, 高\]（两个正数，像素）/,
+    );
+    // 不是 "log" 时推不出窗口不报错，window 为 null
+    const plain = timelineFrom({ log: log5 }, { frame: 2, cursor: [0.5, 0.5] });
+    assert.equal(plain.window, null);
+    assert.equal(plain.windowFrom, null);
+  });
+
+  test("日志带光标列、没传 cursors 时提示；track / 整串的光标说明带上窗口", () => {
+    const plain = timelineFrom({ log: log5 }, { frame: 6 });
+    assert.equal(plain.cursors, undefined);
+    assert.equal(plain.cursorCheck, null);
+    assert.match(describeTimeline(plain), /日志带光标列，要按每一帧的光标回放传 cursors: "log"$/);
+    assert.doesNotMatch(describeTimeline(timelineFrom({ log: kbpLog(runtimes) }, { frame: 6 })), /cursors/);
+    const track: TrackTiming = {
+      tag: "p4c-ptr-fps60-1920x800",
+      frames: [{ frame: 6, dt: 0.054068, time: 0.262631, pointer: [1.6, 0.9] }],
+    };
+    const t = timelineFrom({ log: kbpLog(runtimes), track }, { cursors: "track" });
+    assert.equal(t.cursorsFrom, "track");
+    assert.match(
+      describeTimeline(t),
+      /逐帧光标：1 帧取轨迹 pointer，其余 \[0\.5,0\.5\]；窗口 1920×800（轨迹标签），探针按 fill 换到场景上$/,
+    );
+  });
+});
+
+/** 仓库根下的 `ignore/p5/cur/`（快照里往上找）：P5a 收尾实验的真实日志与轨迹，没有就跳过。 */
+function curData(): string | null {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 12; i++) {
+    const candidate = path.join(dir, "ignore", "p5", "cur");
+    if (existsSync(path.join(candidate, "out", "p5a-cur3-fps20-1920x1080-log.txt"))) return candidate;
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
+}
+
+describe("真实数据：p5a-cur3（用户在测试窗口上晃过鼠标）", () => {
+  const data = curData();
+  test("七列实验日志转成五列：抓到的 491–494 帧日志光标和轨迹 pointer 逐位相同", { skip: !data }, () => {
+    const tag = "p5a-cur3-fps20-1920x1080";
+    const root = mkdtempSync(path.join(os.tmpdir(), "kbdev-timeline-cur-"));
+    try {
+      // 实验日志第 6、7 列是 cursorWorldPosition，协议里没有：只留前五列（不改原文件）
+      const text = readFileSync(path.join(data!, "out", `${tag}-log.txt`), "utf8")
+        .split(/\r?\n/)
+        .map((line) => {
+          const at = line.indexOf("[kbp]");
+          if (at < 0) return line;
+          const tokens = line
+            .slice(at + 5)
+            .trim()
+            .split(/\s+/)
+            .map((t) => t.split(",").slice(0, 5).join(","));
+          return `${line.slice(0, at)}[kbp] ${tokens.join(" ")}`;
+        })
+        .join("\n");
+      writeFileSync(path.join(root, `${tag}-log.txt`), text);
+      copyFileSync(path.join(data!, "tracks", `rd-${tag}.json`), path.join(root, `rd-${tag}.json`));
+      const t = buildTimeline({ log: `${tag}-log.txt`, track: `rd-${tag}.json`, cursors: "log" }, { root });
+      assert.equal(t.frame, 494);
+      assert.deepEqual(t.captured, [491, 492, 493, 494]);
+      assert.deepEqual(t.window, [1920, 1080]);
+      assert.deepEqual(t.cursorsFilled, []);
+      assert.deepEqual(t.cursorCheck, { frames: [491, 492, 493, 494], maxDiff: 0, mismatched: [] });
+      assert.deepEqual(t.cursors![490], [0.5807291865348816, 0.6287037134170532]);
+      // 第 25 帧的屏幕 y 是 -27.999998092651367（float32 误差），照原值除
+      assert.equal(t.cursors![24][1], Math.fround(-27.999998092651367 / 1080));
+      // 光标逐帧在变
+      assert.notDeepEqual(t.cursors![1], t.cursors![2]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -27,12 +27,13 @@ import type { ParticleSystem } from "../particles/system";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
 import { acquireGpu } from "../render/device";
-import { drawParallax, initialParallaxState, replayParallax } from "../render/parallax";
+import { drawParallax, initialParallaxState, replayParallax, type ParallaxState } from "../render/parallax";
 import { shakeOffset } from "../render/shake";
 import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
 import { GpuScene, type ParticleOptions } from "../render/scene";
 import { SceneState } from "../render/state";
+import { replayPointers, type ReplayPointers } from "./replayPointers";
 
 /** 计算入口从顶点缓冲读一个输入：location、在顶点里的 float 偏移、分量数与标量类型。 */
 export interface CornerInput {
@@ -252,11 +253,17 @@ export function replayParticleOptions(replay: ParticleReplay | undefined): Parti
   };
 }
 
+/** 一个点，或逐帧的一串点（第一项是数组）。 */
+const isPointList = (
+  value: readonly [number, number] | readonly (readonly [number, number])[],
+): value is readonly (readonly [number, number])[] => Array.isArray(value[0]);
+
 /**
  * 按 dt 序列回放粒子：前 n−1 帧只步进粒子，返回最后一帧的 `g_Time` 与 `g_Frametime`，由调用方先 `stepParticles` 步进最后一帧、
  * 再 `update`（P4c 步骤 4 起 `update` 不步进粒子）。
  * 每帧的 `g_Time` 取 `times`，没给时是 dt 的累计值（double）；同一个值也作粒子的场景时间 `T`。没有回放时时间取 `time`、
- * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是每帧光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心。
+ * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心：一个点时
+ * 每帧都用它；逐帧的一串（和 `dts` 等长，P5a 收尾）时第 i 帧用第 i 项，最后一项留给调用方步进读回那一帧。
  * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 调一次（P5a 步骤 3、4：探针在这里设这一帧的相机，`frameCamera`；同渲染器，
  * 粒子先用上一帧的 s 步进，再换上这一帧的）。
  */
@@ -265,18 +272,21 @@ export function replayParticles(
   state: SceneState,
   replay: ParticleReplay | undefined,
   time = 0,
-  cursor: readonly [number, number] = [0.5, 0.5],
+  cursor: readonly [number, number] | readonly (readonly [number, number])[] = [0.5, 0.5],
   afterStep?: (time: number) => void,
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
   if (times && times.length !== dts.length)
     throw new Error(`times 有 ${times.length} 项，dts 有 ${dts.length} 项，应等长`);
+  const perFrame = isPointList(cursor) ? cursor : null;
+  if (perFrame && perFrame.length !== dts.length)
+    throw new Error(`逐帧 cursor 有 ${perFrame.length} 项，dts 有 ${dts.length} 项，应等长`);
   let elapsed = 0;
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
   for (let i = 0; i < dts.length - 1; i++) {
     const at = timeAt(i);
-    scene.stepParticles(dts[i], at, state, cursor);
+    scene.stepParticles(dts[i], at, state, perFrame ? perFrame[i] : (cursor as readonly [number, number]));
     afterStep?.(at);
   }
   return { time: timeAt(dts.length - 1), frametime: dts[dts.length - 1] };
@@ -305,6 +315,71 @@ export function frameCamera(
   };
 }
 
+export interface ReadbackReplayOptions {
+  particles?: ParticleReplay;
+  /** 没有回放时读回那一帧的 `g_Time`；有回放时取 `times` 末项或 dt 累计值。 */
+  time: number;
+  /** 每一帧的 `g_PointerPosition` 与 `cursor`（`replayPointers`）：下标同 `dts`，没有回放时只有一项。 */
+  pointers: ReplayPointers;
+  /** 视差点的起点：加载时的状态（`renderFrame` 的 `profile` 帧推进过的接着用）。 */
+  parallax: ParallaxState;
+  /** 场景的正交尺寸 W、H（视差点的单位；抖动按 H 算）。 */
+  size: readonly [number, number];
+}
+
+/**
+ * dev 探针从建好的场景回放到读回那一帧并写好这一帧的 uniform（`renderFrame`、`particleCorners` 共用，P5a 收尾）。顺序同渲染器
+ * （P4c 步骤 4、P5a 步骤 3、4）：前 n − 1 帧在 `replayParticles` 里步进，每帧先用上一帧的相机步进、再设这一帧的（`frameCamera`）；
+ * 读回帧 `sync` → `stepParticles` → 设相机；视差点按同一串帧时间与每帧的 s 从 `parallax` 推进，之后 `setParallax`、`update`。
+ * 光标逐帧取 `pointers`：第 i 帧步进用 `cursors[i]`、视差点用 `pointers[i]`；读回帧的 `g_PointerPosition` 是最后一项、
+ * `g_PointerPositionLast` 是倒数第二项（只有一帧时取自己，同渲染器每帧末尾 `pointerLast = pointer`）。
+ * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。返回读回帧的 `g_Time`、`g_Frametime` 与视差状态。
+ */
+export function replayReadback(
+  scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update">,
+  state: SceneState,
+  options: ReadbackReplayOptions,
+): { time: number; frametime: number; parallax: ParallaxState } {
+  const { particles, pointers } = options;
+  const [width, height] = options.size;
+  const last = pointers.pointers.length - 1;
+  const shake = frameCamera(scene, state, height);
+  const { time, frametime } = replayParticles(
+    scene,
+    state,
+    particles,
+    options.time,
+    particles?.dts.length ? pointers.cursors : pointers.cursors[0],
+    shake.apply,
+  );
+  scene.sync(state);
+  scene.stepParticles(frametime, time, state, pointers.cursors[last]);
+  shake.apply(time);
+  // 视差点和粒子互不影响：回放的前 n − 1 帧与读回帧按同一串帧时间与每帧的 s 推进（没有回放时读回帧的帧时间是 0）
+  const parallax = replayParallax(
+    options.parallax,
+    state.general,
+    { pointer: pointers.pointers[0], width, height },
+    [...(particles?.dts ?? []).slice(0, -1), frametime],
+    shake.eyes,
+    pointers.pointers,
+  );
+  scene.setParallax(drawParallax(parallax, state.general), state);
+  scene.update(
+    {
+      time,
+      frametime,
+      daytime: 0.5,
+      pointer: pointers.pointers[last],
+      pointerLast: pointers.pointers[Math.max(0, last - 1)],
+      cursor: pointers.cursors[last],
+      parallax: parallax.position,
+    },
+    state,
+  );
+  return { time, frametime, parallax };
+}
+
 export interface ParticleCornersOptions {
   projectDir: string;
   sceneAssets: string[];
@@ -313,6 +388,13 @@ export interface ParticleCornersOptions {
   /** 粒子层：`objects` 下标或对象名；缺省为全部粒子层。 */
   layer?: number | string;
   particles?: ParticleReplay;
+  /**
+   * 逐帧的 `g_PointerPosition`（抓帧窗口归一化，P5a 收尾），和 `particles.dts` 等长，规则同 `renderFrame` 的 `pointers`。
+   * 不给时光标固定在场景中心 `[0.5, 0.5]`。
+   */
+  pointers?: [number, number][];
+  /** 抓帧窗口尺寸 `[宽, 高]`：和场景不同尺寸时光标按 `fill` 换到场景上（同 `renderFrame`）；缺省或同尺寸时原样。 */
+  window?: [number, number];
   /** 每层只取前这么多个粒子（按槽序）；缺省全部。 */
   limit?: number;
   /** 结果里带上改写后的 WGSL（排查用）。 */
@@ -392,43 +474,31 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
   const gpu = await acquireGpu();
   const device = gpu.device;
   try {
+    const { width, height } = bundle.general;
+    // 光标（P5a 收尾）：不给 pointers 时固定在场景中心；给了时逐帧取，窗口和场景不同尺寸时按 fill 换算，同 `renderFrame`
+    const pointers = replayPointers(
+      { pointers: options.pointers, window: options.window },
+      [width, height],
+      options.particles?.dts.length,
+    );
     const state = SceneState.fromBundle(bundle);
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
       ignoreUnsupported: true,
-      particles: replayParticleOptions(options.particles),
+      // 预热用第 0 帧的 cursor（不给 pointers 时是场景中心，同 `GpuScene` 的缺省）
+      particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
     });
     try {
-      const { width, height } = bundle.general;
-      // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同 `renderFrame` 与渲染器），四角带读回帧的相机
-      const shake = frameCamera(scene, state, height);
-      const { time, frametime } = replayParticles(scene, state, options.particles, 0, [0.5, 0.5], shake.apply);
+      // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同 `renderFrame` 与渲染器），四角带读回帧的相机。
       // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
-      // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算
-      scene.sync(state);
-      scene.stepParticles(frametime, time, state, [0.5, 0.5]);
-      shake.apply(time);
-      // 视差（P5a 步骤 2）：指针固定在 (0.5, 0.5)，从加载时的场景中心起按同一串帧时间与每帧的 s 推进（同 `renderFrame`），四角带视差。
-      // 没有脚本，`setParallax` 放在 `sync` 之后不影响结果（相机或视差变了它整体重写）
-      const parallax = replayParallax(
-        initialParallaxState(width, height),
-        state.general,
-        { pointer: [0.5, 0.5], width, height },
-        [...(options.particles?.dts ?? []).slice(0, -1), frametime],
-        shake.eyes,
-      );
-      scene.setParallax(drawParallax(parallax, state.general), state);
-      scene.update(
-        {
-          time,
-          frametime,
-          daytime: 0.5,
-          pointer: [0.5, 0.5],
-          pointerLast: [0.5, 0.5],
-          cursor: [0.5, 0.5],
-          parallax: parallax.position,
-        },
-        state,
-      );
+      // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算。视差（P5a 步骤 2）：从加载时的场景中心起按同一串帧时间、每帧的 s
+      // 与每帧的指针推进（同 `renderFrame`），四角带视差。没有脚本，`setParallax` 放在 `sync` 之后不影响结果（相机或视差变了它整体重写）
+      replayReadback(scene, state, {
+        particles: options.particles,
+        time: 0,
+        pointers,
+        parallax: initialParallaxState(width, height),
+        size: [width, height],
+      });
       const wanted = scene
         .particleStats()
         .filter(

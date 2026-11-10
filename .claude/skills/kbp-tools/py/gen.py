@@ -11,12 +11,13 @@
 
 库里有：
 - 写文件：`write`、`write_json`（制表符缩进、不转义中文、LF、末尾不加换行，同旧脚本）；
-- 固定图层：`FR_COLOR`（帧号进颜色、每 50 帧写 `[kbp]` 日志）、`CLK_VERT` / `CLK_FRAG`（时钟）、`CLK_PTR_VERT`（带指针）、`layer`；
+- 固定图层：`FR_COLOR`（帧号进颜色、每 50 帧写 `[kbp]` 日志）、`FR_CURSOR`（同 FR_COLOR，条目另加屏幕光标两列、每 10 帧写）、
+  `CLK_VERT` / `CLK_FRAG`（时钟）、`CLK_PTR_VERT`（带指针）、`layer`；
 - 模块与系统：`fixed`、`move`、`FADE`、`OSC_ALPHA`、`CAP`、`OSC_POS`、`numbered`、`system`（gen_b 版）、`particle_object`、
   `material`、`particle_material`、`image_layer`、`image_assets`、`GENERAL`；
 - P4c 起的：`at`、`ring`、`with_cps`、`CENTER`、脚本片段 `MOVE_ORIGIN` / `SPIN_ANGLES`（脚本里图层的 `angles` 是度，
   scene.json 里静态的 `angles` 是弧度；SPIN_ANGLES 每秒转 0.3 度）；
-- `write_project`：gen_b 与 gen_c 的合并版（见函数说明），另有可选的 `track`；
+- `write_project`：gen_b 与 gen_c 的合并版（见函数说明），另有可选的 `track`、`bbox`、`cursor`；
 - 路径：`HERE`（= 数据目录，旧写法 `os.path.join(gen.HERE, 'proj', 名字)` 照旧落在 `<data>/proj`）、`MODELS`（随库的
   `assets/models`，两行版 `solidlayer.json`）、`ASSETS`（`<KABEGAME_WPE_ROOT>/assets`）、`SHIMMER`（默认工程
   shimmering_particles 的 shaders）、`TEXSRC`（`<data>/texsrc`，从创意工坊导出的纹理不入库）。`HERE`、`TEXSRC` 跟着
@@ -103,6 +104,35 @@ export function update(value) {
 	value.z = 1;
 	buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toFixed(6));
 	if (buffer.length >= 50) {
+		console.error('[kbp] ' + buffer.join(' '));
+		buffer = [];
+	}
+	return value;
+}
+"""
+
+# 帧号写进颜色（同 FR_COLOR），每帧另记 input.cursorScreenPosition 的 x、y（String() 原样），每 10 帧刷一次 log.txt：
+#   [kbp] 帧号,帧时间,累计时间,屏幕x,屏幕y
+# 屏幕光标是壁纸窗口内的像素（原点左上、y 朝下；窗口外为负或超出尺寸、不钳制）；g_PointerPosition 逐位等于
+# float32(屏幕光标 / 窗口尺寸)，脚本第 f 帧记下的就是粒子第 f 帧用的（ignore/p5/cur 实测，p5a-cur / p5a-cur3）。
+# 读光标包 try：Kabegame 还没有 input（P6），读不到时两列写 nan，不让整个 update 被禁用。每 10 帧刷一次，fps 低时尾巴丢得少
+FR_CURSOR = r"""'use strict';
+let frame = 0;
+let buffer = [];
+export function update(value) {
+	frame++;
+	value.x = (frame % 256) / 255;
+	value.y = (Math.floor(frame / 256) % 256) / 255;
+	value.z = 1;
+	let cursor = 'nan,nan';
+	try {
+		const s = input.cursorScreenPosition;
+		cursor = String(s.x) + ',' + String(s.y);
+	} catch (e) {
+		cursor = 'nan,nan';
+	}
+	buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toFixed(6) + ',' + cursor);
+	if (buffer.length >= 10) {
 		console.error('[kbp] ' + buffer.join(' '));
 		buffer = [];
 	}
@@ -326,7 +356,7 @@ def bbox_around(origin, half_width, half_height=None):
 
 def write_project(name, title, systems, *, images=(), materials=None, ident=None, overrides=None, files=None,
                   order=None, patches=None, version=3, properties=None, meta=None, object_meta=None, pointer=True,
-                  track=None, bbox=None):
+                  track=None, bbox=None, cursor=False):
     """写一个测试工程到 <proj_dir>/<name>（先删再写；configure(overwrite=False) 时已有就报错）。
 
     gen_b 的参数：systems：{名字: 粒子 JSON}；images：[(名字, 图层对象)]；order：对象顺序（名字列表），缺省图像在前、粒子在后；
@@ -339,7 +369,10 @@ def write_project(name, title, systems, *, images=(), materials=None, ident=None
     track：只在显式给出时写进 kbp-meta.json 的顶层 `track`；`"draws"` 让 `kbp rdc track` 自动按绘制原样保存（P4d 的绳与模块工程）。
     bbox（第 3 批）：{对象名: [x0, y0, x1, y1] | "auto"}，只在给出时写进 kbp-meta.json 对应对象的 `bbox`（场景坐标、y 向上，
     `kbp cmp frame --meta` 按它归类像素差）；"auto" 只对图像层：按 origin、size、scale 算（不看 angles）。粒子会动，包围盒要按实验
-    自己估（`bbox_around(origin, 半宽, 半高)`）。不给时文件和旧生成器的逐字节相同。"""
+    自己估（`bbox_around(origin, 半宽, 半高)`）。不给时文件和旧生成器的逐字节相同。
+    cursor（P5a 收尾）：True 时 FR 用 FR_CURSOR（[kbp] 条目多两列屏幕光标，每 10 帧刷一次），回放可传 cursors: "log" 按每一帧的
+    光标复现；缺省 False 用 FR_COLOR，文件和以前逐字节相同。注意 Kabegame 还没有 input（P6），这种工程编译报
+    script:api:input.cursorScreenPosition（dev 探针强制渲染不受影响，kbp replay 的案例要放行）。"""
     root = _project_root(name)
     if os.path.isdir(root):
         if not _config["overwrite"]:
@@ -366,7 +399,7 @@ def write_project(name, title, systems, *, images=(), materials=None, ident=None
                 f.write(value.to_bytes(4, "little"))
 
     objects = [layer(1, "FR", "1820 40 0", "80 60"), layer(2, "CLK", "1700 40 0", "80 60", image="models/kbp_clk.json")]
-    objects[0]["color"] = {"script": FR_COLOR, "value": "0 0 1"}
+    objects[0]["color"] = {"script": FR_CURSOR if cursor else FR_COLOR, "value": "0 0 1"}
     data = {"order": [], "objects": {}}
     image_table = dict(images)
     names = order or [*image_table, *systems]

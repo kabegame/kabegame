@@ -176,8 +176,9 @@ export function drawParallax(state: ParallaxState, fields: ParallaxFields): Scen
 }
 
 /**
- * dev 探针的确定性回放：从 `state` 起按帧时间序列逐帧推进（开关与指针不变，探针没有脚本）。`eyes` 是每帧的 eye.xy（抖动偏移 s，
- * P5a 步骤 3，探针按每帧的 `g_Time` 用 `shakeOffset` 算），和 `frametimes` 等长；不给时每帧取 `frame.eye`。
+ * dev 探针的确定性回放：从 `state` 起按帧时间序列逐帧推进（开关不变，探针没有脚本）。`eyes` 是每帧的 eye.xy（抖动偏移 s，
+ * P5a 步骤 3，探针按每帧的 `g_Time` 用 `shakeOffset` 算），和 `frametimes` 等长；不给时每帧取 `frame.eye`。`pointers` 是每帧的
+ * `g_PointerPosition`（P5a 收尾：回放逐帧光标），和 `frametimes` 等长；不给时每帧取 `frame.pointer`。
  */
 export function replayParallax(
   state: ParallaxState,
@@ -185,12 +186,23 @@ export function replayParallax(
   frame: Omit<ParallaxFrame, "frametime">,
   frametimes: readonly number[],
   eyes?: readonly (readonly [number, number])[],
+  pointers?: readonly (readonly [number, number])[],
 ): ParallaxState {
   if (eyes && eyes.length !== frametimes.length)
     throw new Error(`eyes 有 ${eyes.length} 项，frametimes 有 ${frametimes.length} 项，应等长`);
+  if (pointers && pointers.length !== frametimes.length)
+    throw new Error(`pointers 有 ${pointers.length} 项，frametimes 有 ${frametimes.length} 项，应等长`);
   let current = state;
   frametimes.forEach((frametime, i) => {
-    current = advanceParallax(current, parallaxInput(fields, { ...frame, frametime, eye: eyes ? eyes[i] : frame.eye }));
+    current = advanceParallax(
+      current,
+      parallaxInput(fields, {
+        ...frame,
+        frametime,
+        eye: eyes ? eyes[i] : frame.eye,
+        pointer: pointers ? pointers[i] : frame.pointer,
+      }),
+    );
   });
   return current;
 }

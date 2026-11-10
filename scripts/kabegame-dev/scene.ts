@@ -450,7 +450,8 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
 
 /**
  * 在宿主里渲染一帧（`__kabegameSceneProbe.renderFrame`），再按 chunk 取回 PNG。场景目录由 `wpe_scene_target` 按图片 id 取。
- * 给了 `particles` 时原样交给探针做确定性回放（不收 `time`：读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计值）。
+ * 给了 `particles` 时原样交给探针做确定性回放（不收 `time`：读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计值）；逐帧光标
+ * `pointers` 与窗口尺寸 `window`（P5a 收尾）校验后同样原样转给探针。
  */
 export async function renderFrame(
   s: DevSession,
@@ -477,6 +478,9 @@ export async function renderFrame(
     ...(particles ? { particles } : { time: request.time ?? 1.5 }),
     key,
     ...(request.pointer ? { pointer: request.pointer } : {}),
+    // 逐帧光标（P5a 收尾）：checkRenderReplay 已校验（要有 particles、等长、不和 pointer 同给）
+    ...(request.pointers ? { pointers: request.pointers } : {}),
+    ...(request.window ? { window: request.window } : {}),
   };
   const task = await hostTask(s, handle, `__kabegameSceneProbe.renderFrame(${JSON.stringify(args)})`, {
     signal: options.signal,
@@ -539,6 +543,8 @@ export async function particleCorners(
     postprocess: checked.postprocess ?? "disabled",
     userProperties,
     ...(checked.particles ? { particles: checked.particles } : {}),
+    ...(checked.pointers ? { pointers: checked.pointers } : {}),
+    ...(checked.window ? { window: checked.window } : {}),
     ...(checked.layer !== undefined ? { layer: checked.layer } : {}),
     ...(checked.limit !== undefined ? { limit: checked.limit } : {}),
     ...(checked.wgsl ? { wgsl: true } : {}),

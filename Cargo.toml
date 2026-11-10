@@ -171,6 +171,13 @@ overflow-checks = false
 [profile.dev.package.deno_core]
 debug-assertions = true
 
+# 嵌进翻译器的 naga（src-tauri/wpesl2wgsl/naga）是工作区目录下的路径依赖，自动成为工作区成员，
+# 上面的 `*` 覆盖不到它；按第三方依赖同样的级别编译，否则 wpesl2wgsl 的语料测试会慢很多。
+[profile.dev.package.naga]
+opt-level = 2
+debug-assertions = false
+overflow-checks = false
+
 # wpesl2wgsl 编到 wasm32-unknown-unknown 专用（`deno task build:wpesl2wgsl`）：按体积优化。
 # lto / panic 只能按 profile 设，不能按 package 覆盖，所以单开一个 profile，不影响其它 crate。
 [profile.wpesl2wgsl]

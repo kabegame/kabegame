@@ -817,6 +817,130 @@ export function particleViewProjection(general): Mat4 {
 - **画面哈希**：对步骤 3 的基线 10 张场景 × 3 档全部相同（`ignore/p5/s4/out/hash-after.json`）。
 - 测试工程已从 dev 库移除；dev 宿主已按工作区重新构建。
 
+## 收尾前：回放逐帧光标（工具，2026-11-11 用户）
+
+### 总体设计思路
+
+回放现在只有一个固定光标。WPE 开窗后光标在动，跟随指针的粒子、视差点都复现不了：`p5a-shakepar` 第 120 帧 WPE 多出的 7 块，就是光标在第 1–118 帧划过时生下的粒子，沿一条斜线排开。RenderDoc 轨迹只有被抓的那几帧有指针，所以只让 `render_scene` 收 `cursors: "track"` 也修不好，要的是**每一帧**的光标。
+
+数据从测试工程自己来：FR 脚本每帧把 `input.cursorScreenPosition` 和帧号、时间一起写进 `[kbp]` 日志。时间线新增 `cursors: "log"`，每帧光标取日志。光标的单位统一成 WPE 的 `g_PointerPosition`（窗口归一化、不钳制），窗口坐标换算到场景坐标由探针用产品的 `sceneCursor("fill", …)` 做，窗口尺寸从标签的 `-<宽>x<高>` 读，和 kbp replay 现在的做法一致，调用方不再自己算。三个回放接口（`render_scene`、`particle_track`、`particle_corners`）收同一套。
+
+关键决策：
+- **为什么从脚本日志取，不让 MCP 轮询系统光标**：脚本按帧号写，和 WPE 的帧天然对齐；轮询要按时间戳对帧，对不准。
+- **光标列做成可选**（生成库 `write_project(…, cursor=True)`），缺省不变：别的会话跑着的 kabegame-dev MCP 是旧的解析器，见到多出的列会报错。等各会话都换上新 MCP 再考虑改缺省。
+- **插件改动最后合**：`scripts/kabegame-dev/` 一改，vite 会自己重启一次，所有会话的宿主句柄、任务都会丢，应用页面整页刷新。探针在快照里先用 `host_eval` 直接调来验收，插件与 MCP 最后一起合进工作区，合之前先告诉用户。
+
+### 实测（动工前，`ignore/p5/cur/`）
+
+工程 `p5a-cur` / `p5a-cur2` 由 `gen_cur.py` 生成：FR 脚本每帧记 `cursorScreenPosition` 和 `cursorWorldPosition`，每 10 帧刷一次。场景里只有一个跟随指针的系统 `pf`（速度 0；`cur2` 的寿命 1000 s、上限 6000，开窗以来每次发射的出生点都留到抓帧那一刻）。抓帧在 `A:\p5a2\p5a-cur*`，读数是 `ana_cur.py` 和 `replay_cur.ts`。
+
+| 问题 | 实测 | 结论 |
+|---|---|---|
+| 脚本里的「屏幕」是什么 | `engine.screenResolution`、`canvasSize` 都报 1920x1080，是测试窗口的尺寸，不是 3840 的显示器 | 壁纸窗口 |
+| `cursorScreenPosition` 的坐标 | `p5a-cur` 8 帧、`p5a-cur3` 4 帧：`g_PointerPosition` 逐位等于 float32(屏幕光标 / 窗口尺寸)；光标在窗口外时是负数或超出尺寸，不钳制 | 窗口内像素、y 朝下，整数 |
+| 脚本第 f 帧的光标，粒子在哪一帧用 | `p5a-cur3`（用户在测试窗口上晃了鼠标，日志第 2–53 帧光标逐帧在变）：按日志组时间线，第 f 帧用日志第 f 帧的光标回放，491–495 个粒子逐个吻合，最大差 2.4e-4；用第 f − 1 帧或第 f + 1 帧的，各有 421 个不同、最大差 340 像素 | **同一帧**。日志可以作为逐帧光标的唯一来源 |
+| `cursorWorldPosition` | 等于 (屏幕 x, H − 屏幕 y)，带 float32 误差（1440.000244）；误差和粒子出生点的同量级 | 经相机反投影，同控制点跟随指针的那一步。留给 P6 实现 `input.*` |
+
+### 现状锚点
+
+**a. 日志只认三列**（`apps/kabegame-dev-mcp/src/timeline.ts:112`）
+```ts
+const match = /^(\d+),(\d+\.\d{6}),(\d+\.\d{6})$/.exec(token);   // 现状：帧号,帧时间,累计时间，多一列就报「读不懂」
+```
+
+**b. 渲染与四角拒收逐帧光标**（`tools.ts:417`）
+```ts
+if (source.cursors !== undefined || source.cursor !== undefined) {
+  throw new ToolError("local", `${tool} 不收逐帧光标：…逐帧光标只有 particle_track 收`);   // 现状
+}
+```
+
+**c. 探针 `renderFrame` 一个光标用到底**（`apps/wpe-scene/src/dev/probe.ts:228`、`:291`、`:297`）
+```ts
+const pointer = options.pointer ?? [0.5, 0.5];   // 现状：预热、回放每一帧、读回帧都用它
+const { time, frametime } = replayParticles(scene, state, options.particles, startTime, pointer, shake.apply);
+parallax = replayParallax(parallax, state.general, parallaxFrame, [...replayed.slice(0, -1), frametime], shake.eyes);   // 现状：parallaxFrame 里是固定的 pointer
+```
+
+**d. `particleTrack` 的 `cursors` 是场景纹理坐标，换算交给调用方**（`dev/probe.ts:496`）
+```ts
+/** 每帧光标下的场景纹理坐标……抓帧窗口和场景同尺寸时两者相同 */
+cursors?: [number, number][];   // 现状：MCP 原样转进来，窗口和场景不同尺寸时不换算（kbp replay 换算）
+```
+
+**e. FR 脚本只记时间**（`.claude/skills/kbp-tools/py/gen.py:96`）
+```js
+buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toFixed(6));   // 现状：每 50 帧刷一次
+```
+
+### 点 1 — 日志协议（`kbp-tools/py/gen.py`、`SKILL.md`）
+- **新增** `FR_CURSOR`：在 `FR_COLOR` 的三列后加 `屏幕x,屏幕y`（`String()` 原样），每 10 帧刷一次。取光标包 `try`，失败写 `nan`，不让整个 `update` 被禁用。
+- **新增** `write_project(…, cursor=False)`：为真时 FR 用 `FR_CURSOR`；缺省不变，旧工程逐字节相同。
+- **修改** `SKILL.md` 的协议节：`[kbp]` 条目是三列或五列，同一个文件里不能混用；五列的单位与实测依据。
+
+### 点 2 — 时间线（`apps/kabegame-dev-mcp/src/timeline.ts`）
+- **修改** `parseKbpLog` 收三列或五列，回帧号 → 累计时间，另回帧号 → 屏幕光标（五列时）。
+- **新增** `cursors: "log"`：第 f 帧光标 = float32(屏幕光标 / 窗口尺寸)。日志里缺的帧沿用前一个已知帧（开头缺就用后一个），结果里列出是哪几帧。日志没有光标列时报错。
+- **新增** `window?: [宽, 高]`：缺省从轨迹或日志的标签读 `-<宽>x<高>`；`"log"` 模式推不出就报错。`Timeline` 多回 `window`。
+- **新增** 抓到的帧上核对：日志光标与轨迹的 `pointer` 逐帧比，结果里报帧数与最大差；不为 0 时写一行警告，不报错。
+- **修改** 光标单位：`"track"`、整串、`cursor` 都是 `g_PointerPosition`（窗口归一化），描述改过来；同尺寸窗口下与现在相同。
+
+### 点 3 — 探针（`apps/wpe-scene/src/dev/`）
+- **新增** `renderFrame` 的 `pointers?: [x, y][]`（和 `particles.dts` 等长，不能和 `pointer` 同给）与 `window?: [宽, 高]`：
+  - 第 i 帧的 `g_PointerPosition` 取 `pointers[i]`，`g_PointerPositionLast` 取 `pointers[i − 1]`（第一帧取自己）；视差点逐帧用 `pointers[i]`；
+  - 控制点光标 = `pointers[i]` 换到场景上；预热用 `pointers[0]` 换算后的值；
+  - 换算：`window` 与场景尺寸相同或没给时原样用，不同时 `sceneCursor("fill", scenePlacement("fill", …), …)`，同 kbp replay。
+- **修改** `replayParticles` 的 `cursor` 收单个或逐帧；`replayParallax` 收逐帧指针。
+- **新增** `particleTrack`、`particleCorners` 的 `window`：`cursors` 照上面换到场景上；`particleCorners` 另收 `pointers`，规则同 `renderFrame`。
+- 不给新字段时，三个接口逐字节同现在。
+
+### 点 4 — 插件与 MCP（`scripts/kabegame-dev/`、`apps/kabegame-dev-mcp/src/tools.ts`）
+- **修改** 插件的请求校验与转发：render、particle-track、particle-corners 收 `pointers` / `cursors` 与 `window`；`types.ts` 同步。
+- **修改** `resolveReplay` 不再拒收逐帧光标：`render_scene`、`particle_corners` 把时间线的光标作 `pointers` 连同 `window` 交给探针，`particle_track` 交 `cursors` + `window`。
+- **修改** schema：`cursors: "log" | "track" | [[x, y], …]`，新增 `window`；`pointer` 与逐帧光标不能同给。工具描述里「回放不收逐帧光标」改掉。
+- **修改** `describeTimeline`：写清每帧光标从哪来（日志 / 轨迹 / 沿用）、抓到的帧上的核对结果，以及日志带光标列、却没传 `cursors` 时提示一句。
+
+### 点 5 — kbp replay（`kbp-tools/ts/replayLib.ts`）
+- **新增** 案例的 `inputs.cursors: "log"`，换算沿用 `"track"` 现成的那段。
+
+### 点 6 — 文档
+- `kabegame-chromium/SKILL.md` 的回放参数；`cocs/wpe/WPE_SCENE.md` 粒子节里 dev 探针一句；本节实施记录；未实测清单「工具与边角」第一条划掉。
+
+### 实施方式
+子代理在 `ignore/p5/cur/ws/` 的 HEAD 快照里改（`apps/wpe-scene` 用 `kbp snapshot export`，其余目录按原布局 `git archive`，`node_modules` 用目录联接）。Claude 独立验收后三方合并：探针、时间线、kbp-tools 先合；插件与 MCP 的合并要等用户点头（会触发 vite 重启），合完由用户重连 kabegame-dev MCP。
+
+### 验收
+1. 单测：时间线（三列 / 五列 / 混用报错、`"log"`、沿用、窗口推断、核对行）、插件校验、探针（同尺寸逐字节同现在、不同尺寸的换算、`pointerLast`）、kbp replay 的 `"log"`。宿主 tsc、vitest、Prettier，`deno test` 两个目录。
+2. 不给新字段时：`kbp regress --corpus` 逐字节相同；画面哈希基线 10×3 相同。
+3. 端到端：
+   - `p5a-cur3` 的 `particle_track`（`cursors: "log"`）与 WPE 逐个比，差 ≤ 2.4e-4，和动工前脚本的结果相同；
+   - 用 `cursor=True` 重新生成 `p5a-shakepar` 再抓一次（请用户在窗口上晃鼠标），`render_scene` 带 `cursors: "log"` 整帧和 WPE 比，FR 块之外 0 差异。
+4. 变异：`"log"` 取第 f − 1 帧、换算不看 `window`、`pointerLast` 取当帧，各自要有单测或端到端失败。
+
+### 实施记录
+
+子代理在 `ignore/p5/cur/ws/`（HEAD 3d0dc4e9 快照）里实现，基线副本在 `ignore/p5/cur/head/`。
+
+**和计划的偏离（子代理报告，Claude 核对过）：**
+- 光标列不止整数：真实日志里有 `1007.9999389648438` 这样的值，按「有限数（含小数、指数）或 `nan`」解析。
+- 探针新增 `dev/replayPointers.ts`（窗口指针 → `g_PointerPosition` 与 cursor），`particleCorners.ts` 新增 `replayReadback`，把 `renderFrame` 和 `particleCorners` 各写一遍的「回放到读回帧」合成一处。
+- `window` 只跟着逐帧光标交，没给光标的老调用请求体不变。经 MCP 用 `cursors: "track"` 且标签带 `-WxH` 时，现在由探针换算（以前原样交，计划要求的单位统一）。
+- 插件现在校验 `pointer` 的形状，格式不对回 400（以前不查）。
+- `cursor=True` 生成的工程在 Kabegame 里编译报 `script:api:input.cursorScreenPosition`（`input` 留给 P6）；dev 探针强制渲染不受影响，kbp replay 的案例要放行。已写进生成库与 kbp-tools 的 SKILL.md。
+
+**Claude 独立验收：**
+- 越界：真实目录里没有子代理的改动；生成库里一处多余的空格改动（`CLK_VERT =r"""`）已改回。
+- 测试（快照）：插件 26 个、MCP 19 个、宿主 tsc 0、vitest 59 个文件 1601 个用例。
+- 变异：`"log"` 取第 f − 1 帧 → 时间线单测失败；`pointerLast` 取当帧 → 2 个探针单测失败。子代理另报：换算不看 `window` 3 个、预热取最后一项 1 个单测失败。
+- **第一批合进工作区**（三方合并，无冲突）：探针与视差（`dev/probe.ts`、`dev/particleCorners.ts`、`dev/replayPointers.ts` 及测试、`render/parallax.ts` 及测试）、`timeline.ts` 及测试、kbp-tools（`gen.py`、`replayLib.ts`、`SKILL.md`）、`WPE_SCENE.md`。工作区：宿主 tsc 0、vitest 63 个文件 1661 个用例（含 P6 会话正在改的）、MCP 19 个、Prettier 通过；dev 宿主按工作区重建。
+- 端到端（插件还没合，`ignore/p5/cur/e2e_probe.ts` 经 `host_eval` 直接调探针，`p5a-cur3` 五列日志在 `ignore/p5/cur/e2e/`）：
+  - `particleTrack`（`cursors` + `window`）4 帧 491–495 个粒子，最大差 2.4e-4，同动工前；
+  - `renderFrame`（`pointers` + `window`）第 494 帧整帧对 WPE 上屏帧：FR 块外 0 差异，跟随粒子画出的光标轨迹 72826 个白色像素全部相同（`cmp_cur3.py`）；
+  - 固定 `pointer` 与「每帧同一个点」的 `pointers` 渲染逐字节相同。
+- 不给新字段时：画面哈希 10 张 × 3 档与步骤 4 的基线全部相同；`kbp regress --corpus`（head 对 ws）`same: true`，语料没有变化。
+- **第二批**（`scripts/kabegame-dev/*`、MCP `tools.ts` 与 `particles.test.ts`、kabegame-chromium `SKILL.md`）2026-11-11 用户点头后合进去：先在临时目录备好再一次拷入，vite 随之重启一次；用 REST 打 `particle-track` 带 `cursors` + `window` 核对新插件已生效（`check_b2.ts`，结果同上）。工作区：插件 26 个、MCP 19 个测试通过，Prettier 通过。
+- **最后一项验收**：`gen_shakepar2.py` 生成 `p5a-shakepar2`（同 `p5a-shakepar`，FR 换成 `FR_CURSOR`），用户在窗口上画圈时抓第 938–941 帧（读回帧前每帧光标移动 40–120 像素）。日志光标与抓到 4 帧的 `pointer` 核对差 0。`render_shakepar2.ts` 经新插件的 render 接口（`pointers` + `window`）渲染第 941 帧，`cmp_shakepar2.py` 对 WPE 上屏帧：FR 块外 0 差异，跟随粒子与透视粒子 1800 个白色像素全部相同，方块位置差 0（C 的中心被我们没跑脚本的纯蓝 FR 块带偏，整帧差为 0，不算）。步骤 3 时 `p5a-shakepar` 的 7 个差异块没有了。用户重连 kabegame-dev MCP 后，`render_scene`（`replay.timeline.cursors: "log"`）复跑：PNG 与脚本那次逐字节相同，时间线说明写出光标来源与核对结果。测试工程 14298、14299 已用 `projects_remove` 移除（图片与任务都确认没了）。
+
 ## 未实测清单（P5a 收尾统一走查）
 
 各步按读码或推断实现、还没有实测核对的项，都汇总在这里，P5a 收尾时统一走查（2026-11-10 用户，照 P4d）。每项写清现状、为什么没测到、怎么补；后面的步骤补测了，就挪到「已测」。
@@ -858,7 +982,6 @@ export function particleViewProjection(general): Mat4 {
 - P 用 double 算、WPE 存 float32：`fit_delay.py` 按 float32 复算，差为 0。
 
 **工具与边角：**
-- kabegame-dev 的 `render_scene` 回放只收一个固定指针，开窗期间光标动过的抓帧复现不了；需要时给探针加逐帧指针（步骤 2 点 7 当时没做）。
 - 命中测试的视差偏移（WPE 按对象自身、不按根算）没做，归 W4。
 - 透视场景开视差不移动对象（读码，语料 0 张）：P5d 实现透视时，连同透视场景里 `g_ParallaxPosition` 除以 0 再钳制的结果一起核对。
 - `alignmentfliph` 水平镜像（`mx = 1 − mx`、`g_ParallaxPosition.x` 翻转）没实现，语料 0 张。
@@ -870,6 +993,7 @@ export function particleViewProjection(general): Mat4 {
 - 抖动把 eye 推开后，视差点跟着移：步骤 3 端到端，`p5a-shakepar` 逐像素、`3830255100` 同一 `g_Time` 整帧比。
 - 粒子模拟用上一帧的相机：步骤 3 端到端补测 `p5a-shakepar`。
 - 缩放与视差、抖动叠加，缩放时透视粒子的相机距离与跟随点：步骤 4 补测与端到端（`p5a-zoompar`、`zoomx15`、`zoomx08`）。
+- 回放只收一个固定指针、开窗期间光标动过的抓帧复现不了：收尾前「回放逐帧光标」，`p5a-shakepar2` 整帧 0 差异。
 
 ## P5a 收尾
 

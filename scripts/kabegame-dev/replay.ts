@@ -6,7 +6,10 @@
  * - `dts` 非空、都是有限正数；`times` 与 `dts` 等长、都是有限数；`passes` 只能 1 / 2；`seed` 是整数；
  * - `random` 的键是 `objects` 下标（非负整数），值是 [0, 1) 内的数组成的数组；
  * - 轨迹的 `frames` 是 [1, dts.length] 内的整数；`cursors` 与 `dts` 等长、每项两个有限数（WPE 的指针可以超出 [0, 1]，不限范围）。
- * 不认识的字段一律拒绝：探针会静默忽略它们（例如给 `renderFrame` 传逐帧光标），宁可当场报错。
+ * - 逐帧光标（P5a 收尾）：单位都是 `g_PointerPosition`（抓帧窗口归一化），渲染与四角的 `pointers` 要有 `particles`、和
+ *   `particles.dts` 等长，渲染的 `pointers` 不和 `pointer` 同给；`window` 是 `[宽, 高]` 两个正数，轨迹的 `window` 要和 `cursors`
+ *   一起给（只用来把光标换到场景上）。
+ * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
  */
 import { badRequest } from "./errors.ts";
 import type { ParticleCornersRequest, ParticleReplay, ParticleTrackRequest, ScenePostprocess } from "./types.ts";
@@ -22,11 +25,14 @@ export const TRACK_FIELDS = [
   "seed",
   "random",
   "cursors",
+  "window",
   "tag",
 ] as const;
 export const CORNERS_FIELDS = [
   "imageId",
   "particles",
+  "pointers",
+  "window",
   "layer",
   "limit",
   "postprocess",
@@ -116,15 +122,37 @@ export function checkRandom(value: unknown, field = "random"): Record<string, nu
   return value as Record<string, number[]>;
 }
 
-export function checkCursors(value: unknown, field: string, length: number): [number, number][] {
+const isPoint = (value: unknown): value is [number, number] =>
+  Array.isArray(value) && value.length === 2 && value.every((x) => typeof x === "number" && Number.isFinite(x));
+
+/** 逐帧的点 `[[x, y], …]`，和 `against`（缺省 `dts`）等长。 */
+export function checkCursors(value: unknown, field: string, length: number, against = "dts"): [number, number][] {
   if (!Array.isArray(value)) fail(field, `要是 [[x, y], …]，收到 ${shown(value)}`);
-  if (value.length !== length) fail(field, `有 ${value.length} 项，应和 dts 等长（${length} 项）`);
+  if (value.length !== length) fail(field, `有 ${value.length} 项，应和 ${against} 等长（${length} 项）`);
   value.forEach((item, i) => {
-    if (!Array.isArray(item) || item.length !== 2 || !item.every((x) => typeof x === "number" && Number.isFinite(x))) {
-      fail(`${field}[${i}]`, `要是 [x, y]（两个有限数），收到 ${shown(item)}`);
-    }
+    if (!isPoint(item)) fail(`${field}[${i}]`, `要是 [x, y]（两个有限数），收到 ${shown(item)}`);
   });
   return value as [number, number][];
+}
+
+/** 一个点 `[x, y]`（两个有限数）。 */
+export function checkPoint(value: unknown, field: string): [number, number] {
+  if (!isPoint(value)) fail(field, `要是 [x, y]（两个有限数），收到 ${shown(value)}`);
+  return value;
+}
+
+/** 抓帧窗口尺寸 `[宽, 高]`（像素，两个正数）：和场景不同尺寸时探针按 `fill` 把光标换到场景上。 */
+export function checkWindow(value: unknown, field = "window"): [number, number] {
+  if (!isPoint(value) || !(value[0] > 0 && value[1] > 0)) {
+    fail(field, `要是 [宽, 高]（两个正数，像素），收到 ${shown(value)}`);
+  }
+  return value;
+}
+
+/** 渲染与四角的逐帧指针 `pointers`：要有 `particles`，和 `particles.dts` 等长。 */
+function checkPointers(value: unknown, particles: ParticleReplay | undefined): [number, number][] {
+  if (!particles) fail("pointers", "要和 particles 一起给（逐帧指针是回放的每一帧）");
+  return checkCursors(value, "pointers", particles.dts.length, "particles.dts");
 }
 
 /** 回放的公共字段（`renderFrame` / `particleCorners` 的 `particles`，以及轨迹请求体本身）。 */
@@ -161,6 +189,10 @@ export function checkTrackRequest(body: unknown): ParticleTrackRequest {
   if (!frames.length) fail("frames", "不能为空");
   const request: ParticleTrackRequest = { imageId, ...replay, frames, passes: replay.passes! };
   if (body.cursors !== undefined) request.cursors = checkCursors(body.cursors, "cursors", replay.dts.length);
+  if (body.window !== undefined) {
+    if (body.cursors === undefined) fail("window", "要和 cursors 一起给（只用来把逐帧光标换到场景上）");
+    request.window = checkWindow(body.window);
+  }
   if (body.tag !== undefined) {
     if (typeof body.tag !== "string") fail("tag", `要是字符串，收到 ${shown(body.tag)}`);
     request.tag = body.tag;
@@ -174,6 +206,8 @@ export function checkCornersRequest(body: unknown): ParticleCornersRequest {
   rejectUnknown(body, CORNERS_FIELDS, "");
   const request: ParticleCornersRequest = { imageId: checkImageId(body.imageId) };
   if (body.particles !== undefined) request.particles = checkReplay(body.particles, "particles");
+  if (body.pointers !== undefined) request.pointers = checkPointers(body.pointers, request.particles);
+  if (body.window !== undefined) request.window = checkWindow(body.window);
   if (body.layer !== undefined) {
     const layer = body.layer;
     const ok =
@@ -210,15 +244,30 @@ export function checkPostprocess(value: unknown, field = "postprocess"): ScenePo
 /**
  * 渲染请求里的回放：给了 `particles` 就校验它，并拒绝同时给 `time`（探针此时忽略 `time`，读回那一帧的 `g_Time` 取
  * `particles.times` 的末项或 dt 累计值）。没给时原样返回 undefined。
+ * 光标一并校验（P5a 收尾）：`pointer` 是一个点；`pointers` 要有 `particles`、和 `particles.dts` 等长、不和 `pointer` 同给；`window` 是
+ * `[宽, 高]`。校验过的值原样留在请求里转给探针。
  */
-export function checkRenderReplay(body: { particles?: unknown; time?: unknown }): ParticleReplay | undefined {
-  if (body.particles === undefined) return undefined;
-  const particles = checkReplay(body.particles, "particles");
-  if (body.time !== undefined) {
+export function checkRenderReplay(body: {
+  particles?: unknown;
+  time?: unknown;
+  pointer?: unknown;
+  pointers?: unknown;
+  window?: unknown;
+}): ParticleReplay | undefined {
+  const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
+  if (particles && body.time !== undefined) {
     fail(
       "time",
       "和 particles 不能同时给：回放时读回那一帧的 g_Time 取 particles.times 的末项（没给 times 时是 dt 累计值）",
     );
   }
+  if (body.pointer !== undefined) checkPoint(body.pointer, "pointer");
+  if (body.pointers !== undefined) {
+    if (body.pointer !== undefined) {
+      fail("pointer", "和 pointers 不能同时给：逐帧给了指针就不要固定的那一个");
+    }
+    checkPointers(body.pointers, particles);
+  }
+  if (body.window !== undefined) checkWindow(body.window);
   return particles;
 }

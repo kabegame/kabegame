@@ -510,4 +510,66 @@ describe("粒子回放、轨迹与四角", () => {
       await method.body?.cancel();
     });
   });
+
+  test("逐帧光标（P5a 收尾）：render / particle-track / particle-corners 收 pointers、cursors 与 window；不对时 400 带 field", async () => {
+    const { backend, calls } = fakeBackend({
+      hostParticleCorners: async (handle, request) => {
+        calls.push(["hostParticleCorners", handle, request]);
+        return [];
+      },
+    });
+    await withServer(backend, async (base) => {
+      const particles = { dts: [0.1, 0.2] };
+      const pointers = [
+        [0.1, 0.2],
+        [1.4, -0.3],
+      ];
+      const window = [1920, 800];
+      const render = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: 9, particles, pointers, window });
+      assert.equal(render.status, 200);
+      await render.body?.cancel();
+      const track = await post(`${base}/__kabegame_dev/hosts/h-1/particle-track`, {
+        imageId: "9",
+        dts: [0.1, 0.2],
+        frames: [2],
+        passes: 1,
+        cursors: pointers,
+        window,
+      });
+      assert.equal(track.status, 200);
+      await track.body?.cancel();
+      const corners = await post(`${base}/__kabegame_dev/hosts/h-1/particle-corners`, {
+        imageId: "9",
+        particles,
+        pointers,
+        window,
+      });
+      assert.equal(corners.status, 200);
+      await corners.body?.cancel();
+      assert.deepEqual(calls, [
+        ["hostRender", "h-1", { imageId: "9", particles, pointers, window }],
+        [
+          "hostParticleTrack",
+          "h-1",
+          { imageId: "9", dts: [0.1, 0.2], frames: [2], passes: 1, cursors: pointers, window },
+        ],
+        ["hostParticleCorners", "h-1", { imageId: "9", particles, pointers, window }],
+      ]);
+      for (const [path, bad, field] of [
+        ["render", { imageId: "9", pointers }, "pointers"],
+        ["render", { imageId: "9", particles, pointers: pointers.slice(1) }, "pointers"],
+        ["render", { imageId: "9", particles, pointers, pointer: [0.5, 0.5] }, "pointer"],
+        ["render", { imageId: "9", window: [1920] }, "window"],
+        ["particle-track", { imageId: "9", dts: [0.1], frames: [1], passes: 1, window }, "window"],
+        ["particle-corners", { imageId: "9", particles: { dts: [0.1] }, pointers }, "pointers"],
+      ] as const) {
+        const r = await post(`${base}/__kabegame_dev/hosts/h-1/${path}`, bad);
+        assert.equal(r.status, 400, JSON.stringify(bad));
+        const error = await r.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field, error.error);
+      }
+      assert.equal(calls.length, 3, "参数错时不调后端");
+    });
+  });
 });
