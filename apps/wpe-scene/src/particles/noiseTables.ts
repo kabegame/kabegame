@@ -1,5 +1,6 @@
 /**
- * 噪声常量表（P4b 步骤 4）。由 `ignore/p4/b4/gen_tables.py` 从 `ignore/p4/rea/p4b-mod/noise-tables.json` 生成，**不要手改**；
+ * 噪声常量表（P4b 步骤 4）。由 `apps/wpe-scene/scripts/fixtures/gen_noise_tables.py` 从同目录的 `noise-tables.json` 生成，
+ * **不要手改**；
  * 来源 wallpaper64.exe 2.8.42, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0（导出脚本 `tables.py`，按地址原样读取）。
  *
  * - `PERM`（`0x140484f40`，256 字节）：`snoise1`、`snoise2` 共用的置换表（Ken Perlin 原表），下标按 u8 回绕；

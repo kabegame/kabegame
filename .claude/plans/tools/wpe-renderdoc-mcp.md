@@ -342,18 +342,26 @@ WPE 是 PID 452412（普通 `-silent` 启动，桌面壁纸在），先注入它
   > 说明：过渡期不新建 skill，免得两个同名；迁移时再把新用法写进 skill。
 - **修改** `AGENTS.md`「单体仓库布局」加 `.claude/mcps/`；`cocs/wpe/WPE_SCENE.md` 里提到 `wpe-renderdoc` skill 的地方补一句新 MCP。
 
-## 完全迁移（以后另定，本计划不做）
+## 完全迁移（随 [kbp-tools.md](kbp-tools.md) 第 4 批做，2026-11-10）
 
-条件：
+条件（第 4 批时都已满足）：
 - 新 MCP 覆盖旧 skill 的全部用法（start / open / close / capture / stop）。`control`（pause / play / mute / unmute）不迁：它只作用于桌面壁纸，抓帧已经改成在本会话的测试窗口里做，新 MCP 不碰桌面（2026-11-10 用户定）；
 - `ignore/` 里还在用 `driver.py` 的脚本已经不再需要，或改成调新 MCP、`kbp-tools`；
 - 经旧桥（`ignore/RenderDocMCP` 的 `RenderDocBridge`，要开着 RenderDoc 界面）读抓帧的脚本，改用 `kbp-tools` 的无界面提取：在 `qrenderdoc --python` 里直接调本目录 `renderdoc_worker` 的服务层，不经 MCP（2026-11-10 用户定，见 [kbp-tools.md](kbp-tools.md)）。
 
-到时候再做：
-- 删除旧 skill 的 `driver.py`、`target.py`，把新用法写进 skill；
-- 删除 `.mcp.json` 的 `renderdoc`；
-- 用户确认后删掉 `ignore/RenderDocMCP`；
-- 更新 memory 里 RenderDoc MCP 的位置。
+要做的事与分工（用户定，2026-11-10）：
+- **已做（kbp-tools 第 4 批，子代理）：**
+  - 删除旧 skill 的 `driver.py`、`target.py`。删前核对：仓库里（不含 `ignore/`）没有代码执行它们，唯一的读取方是
+    `.claude/skills/kbp-tools/tests/accept1.py` 的 `resolve` 对照，已改成从 `driver.py` 最后一次修改的提交（`2b6af1ec`）读；
+    MCP 只读旧会话文件的路径（`.kabegame/debug/wpe-renderdoc/state.json`），当时不存在。同目录的 `config.json` 等是用户 WPE
+    设置的旧备份，留着。
+  - 重写 `.claude/skills/wpe-renderdoc/SKILL.md`：变成本 MCP 的用法说明（典型流程、`out` 约定、常驻共享规则、无界面回放工具、
+    与 kbp-tools 的分工、仍成立的坑），名字不变。
+  - `.claude/mcps/wpe-renderdoc/README.md` 开头一句、`cocs/README.md` 与 `cocs/wpe/WPE_SCENE.md` 里对比台的说法跟着改。
+  - `ignore/` 里还调 `driver.py` 的脚本（`p4/sweep*.py`、`p4/b6/sweep_color.py`，`wpe-mcp/exp/exp.py` 的 `rd` 用旧 `target.py`）
+    从此失效，不改；新步骤用本 MCP 的 `capture_sweep` 与 kbp-tools。
+- **用户自己做：** 删除 `.mcp.json` 的 `renderdoc`；删掉 `ignore/RenderDocMCP`（经旧桥读抓帧的 `ignore/` 脚本随之失效，用 `kbp rdc` 代替）。
+- **Claude 做：** 更新 memory 里 RenderDoc MCP 的位置。
 
 ## 本计划不做
 

@@ -653,7 +653,7 @@ development 构建的 `window.__kabegameSceneProbe`：
 | `particleCorners` | 把翻译后的粒子顶点 WGSL 改写成计算着色器，读回我们实际算出的每粒子四角裁剪坐标，和 WPE 的 `gs_out` / `vs_out` 比 |
 | `host.particles({ profile? })` | 当前场景的粒子数与分布、开销记录（`profile: true` 开始、`false` 停止）、当前 `instanceoverride` |
 
-对比台在 `ignore/p4/`（不入库，`python -X utf8 -I` 运行），用法见报告「工具用法」：`gen*.py` 生成确定性工程；`sweep*.py` / `run.py` 注入启动 WPE、采样、抓帧；`rdc_track.py` 从抓帧导出轨迹；`model.py` 是解析模型；`cmp_track.py` 逐帧比较（长程阈值：位置 0.5 场景像素、尺寸 0、透明度 0.004）；P4a 各步骤的验收脚本在 `step1/`–`step5/`。WPE 的真值用 `wpe-renderdoc` skill 抓，放在 `A:\p4-0\`、`A:\p4a\`；对齐用脚本帧号 = RenderDoc 帧号 + 1。现在抓 WPE 真值改用 `wpe-renderdoc` MCP（`.claude/mcps/wpe-renderdoc/`）：`capture_wallpaper` 一步开窗抓帧并在本会话回放进程里打开，`capture_sweep` 替代 `sweep_b.py`；旧 skill 在完全迁移前保留。
+对比工具是 `kbp-tools` skill（`.claude/skills/kbp-tools/`，入口 `kbp.py`：`kbp gen` 生成确定性工程、`kbp rdc track` 从抓帧提取轨迹、`kbp replay` / `regress` 按 WPE 时间线回放对照、`kbp cmp` 比较、`kbp sample` 采样），数据在 `ignore/p4/`（不入库：工程 `proj/`、轨迹 `tracks/`、日志 `out/`、回放案例 `cases/`；P4a 各步骤原来的脚本与验收在 `step1/`–`step5/`，照旧能跑）。P4a 逐帧比较的长程阈值：位置 0.5 场景像素、尺寸 0、透明度 0.004。抓 WPE 帧用 `wpe-renderdoc` MCP（`.claude/mcps/wpe-renderdoc/`，用法见 `wpe-renderdoc` skill）：`capture_wallpaper` 一步开窗抓帧并在本会话回放进程里打开，`capture_sweep` 抓一组工程 × 设置；P4a 的真值在 `A:\p4-0\`、`A:\p4a\`，对齐用脚本帧号 = RenderDoc 帧号 + 1。驱动 Kabegame（渲染、粒子轨迹与四角、画面哈希、导入测试工程）用 `kabegame-dev` MCP。产品单测用的夹具与常量表的生成脚本在 `apps/wpe-scene/scripts/fixtures/`。
 
 ## 粒子（P4b）
 

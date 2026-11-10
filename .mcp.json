@@ -8,10 +8,6 @@
       "command": "deno",
       "args": ["run", "-A", "npm:agent-browser", "mcp"]
     },
-    "renderdoc": {
-      "command": "uv",
-      "args": ["--directory", "ignore/RenderDocMCP", "run", "renderdoc-mcp"]
-    },
     "wpe-renderdoc": {
       "command": "uv",
       "args": ["--directory", ".claude/mcps/wpe-renderdoc", "run", "wpe-renderdoc-mcp"]

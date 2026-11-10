@@ -329,11 +329,16 @@ def load_module(name, path):
     return module
 
 
+# 旧 driver.py 在 kbp-tools 第 4 批随旧 skill 的迁移删掉了，从它最后一次修改的提交里读（只读 git 对象，不碰工作区）
+OLD_DRIVER_REV = "2b6af1ec"
+OLD_DRIVER_PATH = ".claude/skills/wpe-renderdoc/driver.py"
+
+
 def old_resolve():
     """旧 driver.py 的 resolve_project（driver.py 导入即运行 main，所以只取这个函数的源码来执行）。"""
-    path = os.path.join(REPO, ".claude", "skills", "wpe-renderdoc", "driver.py")
-    with open(path, encoding="utf-8") as f:
-        tree = ast.parse(f.read())
+    path = "%s:%s" % (OLD_DRIVER_REV, OLD_DRIVER_PATH)
+    source = subprocess.run(["git", "-C", REPO, "show", path], capture_output=True, check=True).stdout.decode("utf-8")
+    tree = ast.parse(source)
     node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project")
 
     def die(message):

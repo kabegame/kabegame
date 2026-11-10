@@ -1,7 +1,7 @@
 /**
  * 固定数据回放（P4a 步骤 3）：从 WPE 的 RenderDoc 轨迹截出的短片段（`fixtures/`，来源写在每个文件的 `source`，由
- * `ignore/p4/step3/make_fixtures.py` 生成），按同一 dt 序列步进模拟器、逐帧比。不依赖 `ignore/`。
- * P4b 步骤 4 加了 `positionoffsetrandom` 的两段（`p4b-posoffset60` / `10`，`ignore/p4/b4/make_fixtures.py` 生成），带每帧的
+ * `apps/wpe-scene/scripts/fixtures/make_replay_fixtures.py` 生成），按同一 dt 序列步进模拟器、逐帧比。不依赖 `ignore/`。
+ * P4b 步骤 4 加了 `positionoffsetrandom` 的两段（`p4b-posoffset60` / `10`，同目录的 `make_noise_fixtures.py` 生成），带每帧的
  * 场景时间 `times`（日志 runtime 列）。
  *
  * 配对同 `ignore/p4/cmp_track.py`：按帧号、同一系统内按数组（槽）顺序；另要求每帧粒子数、系统出现与否都相同。

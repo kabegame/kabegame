@@ -1,8 +1,9 @@
 /**
  * P4b 步骤 6：`instanceoverride.colorn`（rea-p4b-render.md 7.1、7.3、7.4，计划 phase-4b-tier2.md「步骤 6」）。
- * - `fixtures/colorn.json`：独立参考实现（`ignore/p4/b6/colorn_ref.py`，照 rea 伪代码、numpy float32、`fmod` 双精度）算出的逐位真值；
+ * - `fixtures/colorn.json`：独立参考实现（`apps/wpe-scene/scripts/fixtures/colorn_ref.py`，照 rea 伪代码、numpy float32、
+ *   `fmod` 双精度）算出的逐位真值；
  * - 生效判断的每一条、`0x200000`（场景 `version` < 5 或没有颜色模块）、系统色的来源、两种颜色模块的平移、运行中改值从基值重算。
- * 和 WPE 抓帧的逐粒子回放在 `ignore/p4/b6/replay.test.ts`。
+ * 和 WPE 抓帧的逐粒子回放是 kbp-tools 的案例 `b6`（`kbp replay b6`，案例在 `ignore/p4/cases/`）。
  */
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "../compile/model";

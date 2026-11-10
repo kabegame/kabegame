@@ -2,8 +2,8 @@
 
 抓 Wallpaper Engine（WPE）的 RenderDoc 帧、读抓帧（`.rdc`）做回放分析的 MCP，给 WPE 的对照工作流用：
 「确保 WPE 在跑 → 开自己的窗口 → 抓帧 → 打开 rdc → 分析」。计划见 `.claude/plans/tools/wpe-renderdoc-mcp.md`（总计划）
-与 `wpe-renderdoc-mcp-p1.md` / `-p2.md` / `-p3.md`（三批）。抓 WPE 真值用这里，不再需要旧的 `wpe-renderdoc` skill
-（`.claude/skills/wpe-renderdoc/`，完全迁移前保留）。
+与 `wpe-renderdoc-mcp-p1.md` / `-p2.md` / `-p3.md`（三批）。抓 WPE 真值用这里：旧 `wpe-renderdoc` skill 的命令行
+`driver.py` / `target.py` 已删，`.claude/skills/wpe-renderdoc/SKILL.md` 现在只是这个 MCP 的用法说明。
 
 ## 用法
 
@@ -76,7 +76,8 @@
 ## 来源
 
 - 上游：[halby24/RenderDocMCP](https://github.com/halby24/RenderDocMCP) `11b6b743a4c02c94eb8a1125a1e025dbd021352a`（MIT，见 `LICENSE`）。
-- 从仓库里的 `ignore/RenderDocMCP`（上游加本地改动）拷来，原处不动，旧的 `renderdoc` MCP 继续用它。
+- 从仓库里的 `ignore/RenderDocMCP`（上游加本地改动）拷来。旧的 `renderdoc` MCP 已从 `.mcp.json` 去掉、`ignore/RenderDocMCP`
+  由用户删除（2026-11-10，kbp-tools 第 4 批）；下面的本地改动清单是拷来时记下的。
 - **以后不跟上游。** 上游的新功能要手工合进来。
 
 ### 拷来时已有的本地改动（相对上游 `11b6b74`）

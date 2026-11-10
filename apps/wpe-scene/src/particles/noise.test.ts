@@ -1,11 +1,12 @@
 /**
  * 噪声类模块（P4b 步骤 4）的单测。真值来源：
  * - `fixtures/noise.json`：从 WPE 粒子位置反推的单点值（snoise1 / snoise2 / snoise3、turbulentvelocityrandom 的方向），来源写在
- *   文件的 `source`，由 `ignore/p4/b4/make_fixtures.py` 生成；
+ *   文件的 `source`，由 `apps/wpe-scene/scripts/fixtures/make_noise_fixtures.py` 生成；
  * - `fixtures/p4b-turb.json`：turb* 连续 6 个抓帧，做短程强制回放（湍流场是混沌的，从加载起整段回放没有判别力，见文件 `source`）；
  * - 读码（`rea-p4b-modules.md` B2、B3、B6、C）确定、但 WPE 实测工程测不到的分支：坐标相等时的顶点顺序、两个 `uA` 的先后、
- *   `forward` 不归一化、速度是加不是覆盖、Z 轴时间取负、`octaves` 钳制。钉的值和 `ignore/p4/noise_ref.py`（照读码独立写的
- *   Python 参考）逐位一致（`ignore/p4/b4/equal_cases.py`、`xcheck.py`）。
+ *   `forward` 不归一化、速度是加不是覆盖、Z 轴时间取负、`octaves` 钳制。钉的值和
+ *   `apps/wpe-scene/scripts/fixtures/noise_ref.py`（照读码独立写的 Python 参考）逐位一致（同目录的 `noise_equal_cases.py`、
+ *   `noise_xcheck.py`）。
  * `positionoffsetrandom` 从加载起的整段回放在 `replay.test.ts`（`p4b-posoffset60` / `10`）。
  */
 import { describe, expect, it } from "vitest";
@@ -34,7 +35,7 @@ import { particleTrack } from "./track";
 const f32 = Math.fround;
 const ONE = { size: 1, speed: 1, count: 1, lifetime: 1, rate: 1 };
 
-/** 32 位 FNV-1a，按小端 u32 逐字节（同 `ignore/p4/b4/gen_tables.py`）。 */
+/** 32 位 FNV-1a，按小端 u32 逐字节（同 `apps/wpe-scene/scripts/fixtures/gen_noise_tables.py`）。 */
 function fnv(values: ArrayLike<number>): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < values.length; i++)
@@ -197,7 +198,7 @@ describe("噪声函数：读码", () => {
   });
 
   it("snoise3 坐标相等时的顶点顺序（C3）：x0 < y0 = z0 时 i1 = j1 = k1 = 0（原版 j1 = 1），其余相等情形与原版相同", () => {
-    // 值由 ignore/p4/noise_ref.py 算（ignore/p4/b4/equal_cases.py）；前一个括号内是原版顺序下的值
+    // 值由 apps/wpe-scene/scripts/fixtures/noise_ref.py 算（同目录的 noise_equal_cases.py）；前一个括号内是原版顺序下的值
     const cases: [number, number, number, number][] = [
       [0.1, 0.3, 0.3, 0.2559826374053955], // 原版 0.24429291486740112
       [12.1, 12.5, 12.5, -0.48059701919555664], // 原版 -0.16989058256149292

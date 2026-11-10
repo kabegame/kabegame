@@ -537,3 +537,69 @@ Claude 独立验收：
 | 采样（另开一个尺寸） | MCP 开 1024×576 的 `p4c-sprite` 窗口：`grab` 出 1024×576 的 PNG，只有客户区（左上角 RenderDoc 叠加文字、右下角 FR / CLK 图层可见）；`series --changed-only` 2 s 正常；窗口已关 |
 | 自写变异清单（HEAD 快照，快照模式） | `colorn` 色相平移加 0.001 → b6 检出；只改注释 → 未检出（预期）；两处都按原字节还原，整树哈希前后相同，9.3 s |
 | 自测重跑（`--out ignore/kbp/accept3-claude`） | 30 项全过（采样没给窗口、跳过，另由上一行核对），约 8 分钟；`ignore/kbp/` 下没有写出 `--out` 以外的东西 |
+
+### 第 4 批 — 产品脚本入库、旧 skill 的完全迁移（2026-11-10）
+
+子代理实现，Claude 独立验收。验收期间 HEAD 由并行会话推进到 ff100954。
+
+- **新增**（`apps/wpe-scene/scripts/fixtures/`）：
+  - 生成：`gen_noise_tables.py` + `noise-tables.json`、`make_replay_fixtures.py`、`make_noise_fixtures.py`、`colorn_ref.py`；
+  - 参考实现与对拍：`noise_ref.py`、`noise_equal_cases.py`、`noise_xcheck.py`、`noise_xcheck.test.ts` + `vitest.config.ts`；
+  - `README.md`：每个脚本生成产品里的哪个文件；没入库的输入（轨迹的抓帧目录与 `kbp rdc track` 命令、日志、工程生成器、
+    `fixture-data.json`）从哪来；怎么核对重新生成的文件。
+- **修改：**
+  - 产品 4 个文件只改注释，路径改成新位置：`noiseTables.ts`、`noise.test.ts`、`colorn.test.ts`、`replay.test.ts`；
+  - `.claude/skills/wpe-renderdoc/SKILL.md` 重写成 MCP 的用法说明（名字不变）；
+  - `.claude/mcps/wpe-renderdoc/README.md` 开头一句、「来源」一句（Claude 验收时改）；
+  - `cocs/README.md`、`cocs/wpe/WPE_SCENE.md` 里对比台的说法；
+  - [wpe-renderdoc-mcp.md](wpe-renderdoc-mcp.md)「完全迁移」：已做、用户做、Claude 做的分工；
+  - `tests/accept1.py`：`resolve` 对照改从旧 `driver.py` 最后一次修改的提交 `2b6af1ec` 读（`git show`，只读）。
+- **删除**：`.claude/skills/wpe-renderdoc/driver.py`、`target.py`。删前确认旧会话文件 `.kabegame/debug/wpe-renderdoc/state.json`
+  不存在；同目录的 `config.json`（用户 WPE 设置的旧备份）留着。
+- **用户做**：`.mcp.json` 去掉 `renderdoc`（已做）；删 `ignore/RenderDocMCP`。
+- **Claude 做**：memory 里 RenderDoc MCP 的位置与 WPE 的使用约定。
+
+和计划不同、由子代理按证据定的：
+
+- **点 9 多入库了几份：**
+  - `make_replay_fixtures.py`（`step3/make_fixtures.py`）：`replay.test.ts` 的 5 个夹具，所以产品注释是 4 个文件，不是计划写的 3 个；
+  - `noise_equal_cases.py`、`noise_xcheck` 两半：没有它们，`noise.test.ts` 钉的值和噪声对拍在仓库里复现不了。
+- **`noise-tables.json` 入库时用 Prettier 格式化过：** 原件过不了 `format:check`。数值与类型逐位不变，只有缩进、数组换行和
+  `e-08` → `e-8`；没选改 `.prettierignore`。
+- **文件改名：** 加 `noise_` 前缀；`step3` 的改叫 `make_replay_fixtures.py`。
+- **夹具 JSON 的 `source` 字段照原样写原路径：** 改了就不能逐字节重新生成。
+- **`fixture-data.json`**（`make_noise_fixtures.py` 的输入）kbp 里没有命令写它：README 写明只能用原回放
+  `ignore/p4/b4/replay.test.ts` 重新生成。要不要给案例 `b4` 加导出，留给用户定。
+- **`ignore/` 里调旧脚本的从此失效，不改：** `p4/sweep*.py`、`p4/b6/sweep_color.py`、`wpe-mcp/exp/exp.py`（`rd` 用旧 `target.py`）。
+- **「验收」的迁移那条放宽：** 仓库里剩下提到 `driver.py`、`RenderDocMCP` 的都是来源说明或历史记录，没有让人去运行的：
+  - MCP 代码里的注释与 `paths.py` 的旧会话文件检查（MCP 代码不在本批改动范围）；
+  - `kbp content` 的 docstring；
+  - `accept1` 的对照及其说明。
+
+验收结果（输出在 `ignore/kbp/accept4/`）：
+
+| 项 | 结果 |
+|---|---|
+| 重新生成 | `noiseTables.ts` 与 10 个夹具（`colorn`、`fps10`、`fps60`、`noise`、`p4a2`、`p4b-posoffset10/60`、`p4b-turb`、`s15`、`s60`）格式化后逐字节相同；显式 `--data` / `--fixture-data` 和 `KBP_DATA` 两种给法结果相同 |
+| 参考脚本 | FNV 四个值和 `noise.test.ts` 钉的一致；`noise_equal_cases` 与 `b4/out/equal-cases.txt` 相同，8 组值逐位相同；对拍 TS 一半的 JSON 与 `b4/out/xcheck-ts.json` 逐字节相同、Python 一半三行「不一致 0」；`colorn.json` 逐字节相同 |
+| 产品测试 | `kbp snapshot export HEAD`（47486b72）打上注释改动：tsc 0 error，全量 53 个文件 1270 过、45 跳过；工作区 `src/particles` 15 个文件 358 个全过 |
+| 格式与类型 | 4 个产品 ts、新增 ts、`noise-tables.json` 过 Prettier；新增 ts 另用临时 tsconfig 跑 tsc，0 error |
+| `accept1` | 27 项全过，113 s，没有界面窗口和残留进程 |
+
+子代理自报：两次误用从 stdin 读脚本的写法 `python -X utf8 -I -`（一次空 heredoc，一次 `< /dev/null`），stdin 都是空的，没执行任何内容；
+运行时留下的 `scripts/fixtures/__pycache__` 已删。
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 本批只有上面列的文件；`.mcp.json` 的 4 行删除是用户做的；`phase-4d-ropes.md`、`todo.md` 是并行会话的，不属于本批 |
+| 产品改动 | 4 个文件的 diff 只有注释 |
+| 测试收录范围 | 产品 vitest 只收 `src/**/*.test.ts`，tsconfig 只收 `src/` 与根下 `*.ts`，`scripts/fixtures/` 不会被带进产品测试和类型检查 |
+| 重新生成（scratchpad） | `noiseTables.ts` 与 10 个夹具格式化后逐字节相同，`src/particles/fixtures` 与 HEAD 相同；`noise-tables.json` 入库版与原件逐值、逐类型相同（float 按位） |
+| 噪声对拍 | TS 一半输出与 `b4/out/xcheck-ts.json` 逐字节相同；Python 一半与 `b4/out/xcheck.txt` 相同，三行「不一致 0」 |
+| 产品测试（工作区，HEAD ff100954） | `src/particles` 15 个文件 361 个全过 |
+| README 的轨迹表 | 子代理没核实过的 4 组（`s15`、`s60`、`fps10`、`p4b-fps10`）按表里的抓帧目录用 `kbp rdc track` 重新提取，都和 `ignore/p4/tracks/` 逐字节相同；加上第 1 批的 3 组，表里 7 组都有实证，README 那句跟着改 |
+| `SKILL.md` 对 MCP | 写到的工具参数和 `server.py` 的签名一致；例子里 `p4c-attract` 的抓帧目录由 `A:\p4b` 改成 `A:\p4c` |
+| 步骤目录 | `ignore/p4/step1`–`step5` 不调旧脚本，`WPE_SCENE.md`「照旧能跑」成立 |
+| `accept1` 重跑 | 第一次 26/27：`env` 一项看到一个跑 `rdc/main.py` 的 qrenderdoc，是 Claude 同时在跑的 `kbp rdc track`，事后已退出；单独重跑 27 项全过 |
