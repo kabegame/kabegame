@@ -1,3 +1,4 @@
+// Kabegame 修改，见 KABEGAME.md
 use alloc::{format, string::String, vec::Vec};
 use core::ops::Index;
 
@@ -1391,6 +1392,67 @@ impl<'a> Context<'a> {
         log::trace!("Lowered {expr:?}\n\tKind = {kind:?}\n\tPos = {pos:?}\n\tResult = {handle:?}");
 
         Ok((Some(handle), meta))
+    }
+
+    /// Kabegame 补丁：裁掉终结语句（`return` / `break` / `continue` / `discard`）之后的死代码。
+    ///
+    /// 上游直接 `body.cull(idx..)`：语句裁掉了，被裁的 `Call` / `Atomic` 语句的结果表达式
+    /// （`CallResult` / `AtomicResult`）却还留在 arena 里。校验器要求每个这类表达式都被对应语句访问，
+    /// 于是报 `UnvisitedExpression`（最小复现 `float g(float x) { return x; return f(x); }`）。
+    /// 这里在裁剪之前把它们改写成同类型的 `ZeroValue`：被裁的表达式没有活语句引用，后端不输出，
+    /// 所以只有本来会校验失败的模块受影响。
+    pub fn cull_dead(&mut self, idx: usize, meta: Span) -> Result<()> {
+        // 收集一个块里（递归进子块）全部 `Call` / `Atomic` 语句的结果表达式
+        fn collect_block(block: &Block, out: &mut Vec<Handle<Expression>>) {
+            for stmt in block.iter() {
+                collect_stmt(stmt, out);
+            }
+        }
+        fn collect_stmt(stmt: &Statement, out: &mut Vec<Handle<Expression>>) {
+            match *stmt {
+                Statement::Call {
+                    result: Some(r), ..
+                }
+                | Statement::Atomic {
+                    result: Some(r), ..
+                } => out.push(r),
+                Statement::Block(ref b) => collect_block(b, out),
+                Statement::If {
+                    ref accept,
+                    ref reject,
+                    ..
+                } => {
+                    collect_block(accept, out);
+                    collect_block(reject, out);
+                }
+                Statement::Loop {
+                    ref body,
+                    ref continuing,
+                    ..
+                } => {
+                    collect_block(body, out);
+                    collect_block(continuing, out);
+                }
+                Statement::Switch { ref cases, .. } => {
+                    for case in cases {
+                        collect_block(&case.body, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut results = Vec::new();
+        for stmt in self.body.iter().skip(idx) {
+            collect_stmt(stmt, &mut results);
+        }
+        for r in results {
+            // 先按原表达式（函数返回类型 / 原子结果类型）解析出类型，再原地换成同类型的零值
+            let ty = self.resolve_type_handle(r, meta)?;
+            *self.expressions.get_mut(r) = Expression::ZeroValue(ty);
+        }
+        self.body.cull(idx..);
+        Ok(())
     }
 
     pub fn expr_scalar_components(

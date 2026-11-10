@@ -201,6 +201,7 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 - **varying 名带分量：** `varying vec4 v_Size.xy;` 当成 `vec4 v_Size`（WPE 的正则只取到名字）。
 - **`main` 之前的打包数组：** `float` / `vec2` / `int` / `uint` 数组 uniform，WPE 在 cbuffer 里声明成 `float4[ceil(n/4)]` 等，`main` 之前的文本看到的是这个打包形态，`main` 里才拆成 `float[n]`。`main` 之前引用这类数组时照这个规则改名（`video` 的 `[i / 4][i % 4]`）。uniform 的内存布局要不要随之改成 WPE 的打包，子计划定；没有在 `main` 之前引用的不改，保证逐字节不变。
 - **`editable`：** 能力表放开，依据写进注释。
+- **几何段展开的指针别名（P7a 步骤 2 的 Tint 基线发现）：** `rope` / `ropetrail` 带 `REFRACT` 时，`ComputeScreenRefractionTangents` 收到同一个 `PS_INPUT` 变量两个字段的指针，Tint 报 `invalid aliased pointer argument`（naga 不查）。语料里还没有场景用到这个组合。改成先写进两个临时变量、调用后再拷回字段；只动带 `REFRACT` 的几何展开，其余输出逐字节不变。
 
 **验收：**
 - 语料测试中这几类着色器通过、回读通过，其余输出逐字节不变。

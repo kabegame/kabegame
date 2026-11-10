@@ -153,11 +153,9 @@ pub(crate) mod interpolator;
 **已定：**
 1. naga 源码嵌进翻译器，裁掉用不到的模块（2026-11-11 用户）。
 2. 步骤 0 不另做（P7 步骤 0 已覆盖）。
-
-**待定（附推荐）：**
-1. **夹具的去重粒度：** 推荐按完整请求的 SHA-1 去重。同一着色器在不同 COMBO 下是不同的请求，都保留。语料里请求数估计上千、总量几十 MB，放在 `ignore/` 下可以接受。
-2. **`naga-types`：** 推荐继续从 crates.io 取、钉 `=30.0.1`。它只有 642 行，没有要改的地方。
-3. **naga 的单测：** 推荐保留 `src` 里的单测（含 GLSL 前端的 `parser_tests.rs`），作为 P7c 改前端时的回归网；上游 `tests/` 目录的快照测试不带进来，体积大、依赖已删的后端。
+3. **夹具的去重粒度：** 按完整请求的 SHA-1 去重，同一着色器在不同 COMBO 下的请求都保留（2026-11-11 用户）。
+4. **`naga-types`：** 继续从 crates.io 取、钉 `=30.0.1`（2026-11-11 用户）。
+5. **naga 的单测：** 保留 `src` 里的单测（含 `parser_tests.rs`），上游 `tests/` 的快照测试不带进来（2026-11-11 用户）。
 
 ## 风险
 
@@ -165,3 +163,37 @@ pub(crate) mod interpolator;
 2. **wasm 与原生结果不同：** 夹具记录的 `ok` 来自 wasm，测试跑原生。一旦不一致，说明翻译器有平台相关的行为，要先查清再往下。
 3. **裁剪删多了：** 某个保留模块间接用到被删的东西时编不过，按编译错误补回来；逐字节基线保证行为不变。
 4. **Tint 基线跑不完：** 上千份模块在应用页里逐个编译可能要几分钟，分批 `eval`；如果 dev 没在跑，步骤 2 推迟，不挡步骤 3、4。
+
+## 实施记录
+
+### 步骤 1 — 请求夹具与逐字节基线（2026-11-11，`3d4e4f84`）
+
+- 代理实现，我独立重跑验收。
+- **夹具：** 777 个请求（2074 次调用去重），215 个着色器（含别名 255），12.6 MB，在 `ignore/p7/requests`。开插件扫描的 `unsupported` 与不开时完全相同；两次扫描的夹具逐字节相同。
+- **重放：** 通过 661、失败 116，`ok` 与夹具记录全部一致（前端 wasm 与源码同步），WGSL 回读失败 0。原有两部分不变：158/167、几何 27/27。
+- **基线：** `ignore/p7/baseline/head-74b65d27`，3460 个文件（WPE 安装目录 816 + 夹具 2644）。重跑全部「相同」；改过的副本上验证了「变了」「新失败」会失败、ALLOW 内的不算。
+- **偏离：**
+  - 名字不按源码内容反查（工坊包常把同一个 effect 拷到别的目录，反查会取错），改成运行时包住产品的 `ShaderCompiler.translate` 取产品自己的名字；同一请求可能有几个名字，夹具多了 `names`。
+  - 夹具里失败的名字 50 个，扫描的 `shader:*` 48 个：多出的 `workshop/2724617030/effects/Simple_Audio_Bars`、`workshop/3168465326/effects/color_grading__extension` 的 `visible` 绑了用户属性、当前值下关着，产品对关着的 effect 不报（`bundle.ts:1084`）。它们同样是 P7 要修的对象。
+  - 多改了 kbp-tools 的 `py/corpus.py`（插件白名单）；语料测试里环境变量的相对路径改按仓库根解析。
+- **我的失误：** 第一次提交把别的会话（P5a）对 kbp-tools `SKILL.md` 的改动一起带上了，推送前发现，撤回后只暂存自己的一行重新提交。
+
+### 步骤 2 — Tint 基线（2026-11-11）
+
+- 基线的 1730 份 WGSL 在 dev 主窗口里加产品前言逐份 `createShaderModule` + `getCompilationInfo`，约 12 s（`ignore/p7/tint.py`、`tint.js`，结果 `ignore/p7/out/tint-head-74b65d27.json`）。
+- 请求夹具（真实场景）全部 0 error、0 warning。
+- **2 个 error，都在几何门槛的合成组合上**：`geom__rope__refract`、`geom__ropetrail__refract` 的顶点段 `invalid aliased pointer argument`。几何段展开后 `ComputeScreenRefractionTangents` 收到同一个 `PS_INPUT` 变量两个字段的指针（`&v.v_ScreenCoord`、`&v.v_ScreenTangents`），Tint 按根变量判别名，naga 不判。P7 之前就有；语料里没有场景同时用绳子与折射，所以现在不影响能渲染数，有了就会整张退回。已登记到 P7b。
+
+### 步骤 3 — 嵌入 naga（2026-11-11，`7811d87a`）
+
+- 代理实现，我独立核对。naga 30.0.1 放进 `src-tauri/wpesl2wgsl/naga/`（109 个文件），`src` 11.9 万行 → 6.2 万行；删掉 SPIR-V / MSL / HLSL / GLSL / dot 后端与 SPIR-V 前端、对应 feature 和 `petgraph` / `spirv` 依赖。
+- 8 个上游文件有改动，我逐个和 registry 原件对过：只有删 cfg 分支、删模块声明、加修改声明与 interpolator 那一行；其余 101 个文件逐字节相同。
+- 验收：基线 3460 个全部相同；翻译器单测 55 个、naga 单测 127 个全过（naga 单测要带 `glsl-in,wgsl-in,wgsl-out,stderr`，上游原本如此）；wasm 1 606 373 → 1 600 789 字节。
+- 根 `Cargo.toml` 加了 `[profile.dev.package.naga]`：嵌入的 naga 自动成为工作区成员，`*` 覆盖不到。我试过放进 `exclude`，仍是成员，已还原。`Cargo.lock` 因此多了 naga 自己单测用的 `diff`、`strum 0.28` 等，只在测试 naga 时编译。`deno task test` 只按 `-p` 测组件，不受 naga 单测的 feature 要求影响。
+
+### 步骤 4 — 死代码里的 `CallResult`（2026-11-11）
+
+- 代理实现，我独立核对。`Context::cull_dead`：GLSL 前端裁掉终结语句之后的死代码前，把其中 `Call` / `Atomic` 的结果表达式改成同类型的 `ZeroValue`，三处 `body.cull(idx..)` 改调它。naga 源码 +69/−3，`KABEGAME.md` 新开「行为补丁」一节。
+- 单测：naga `dead_code_call_result`（6 种变体）、翻译器 `dead_code_after_return_is_dropped`（有无死代码两份 WGSL 逐字节相同）；临时关掉补丁时两个都失败。
+- 验收：对 `head-74b65d27` 基线相同 3460、变了 0、新失败 0，新通过 8 个文件，全是 `effects/fluidsimulation_advection` 的两个请求（ALLOW `effects/fluidsimulation_advection-`）；夹具通过 661 → 663、失败的着色器 44 → 43；WPE 安装目录部分仍 158/167（默认 COMBO 下它本来就通过）；单测 56 / 128 全过；新通过的 4 份 WGSL 补跑 Tint 0 error。
+- 偏离：语料测试原先把「夹具 ok 与重放不一致」一律算失败，ALLOW 管不到；扩成只放过「夹具失败、重放通过、键在 ALLOW 里」这一种。

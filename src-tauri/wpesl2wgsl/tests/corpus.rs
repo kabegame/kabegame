@@ -6,6 +6,8 @@
 //!    （只绑定 g_Texture0）下的通过率，按失败阶段与首条错误汇总，完整报告写到 `CARGO_TARGET_TMPDIR`。
 //! 3. 请求夹具（P7a）：`WPESL2WGSL_REQUESTS` 指向 `kbp corpus scan --extra requests:<目录>` 录下的夹具目录时，逐个重放
 //!    编译管线真实发出的请求；`ok` 必须和夹具里记录的（前端 wasm 的结果）一致。没设就跳过。
+//!    例外：夹具记录失败、重放通过，且键（`<名字>-<sha1 前 8 位>`）在 `WPESL2WGSL_BASELINE_ALLOW` 里的，只列出不算失败
+//!    （夹具是改动前录的，本步预期新通过的请求）。
 //!
 //! 逐字节基线：`WPESL2WGSL_BASELINE_DIR` 指向一份旧的导出目录（`WPESL2WGSL_DUMP_DIR` 导出的）时，本次导出逐文件和它比较，
 //! 「变了」「新失败」非空时失败，`WPESL2WGSL_BASELINE_ALLOW`（逗号分隔的键前缀）列出的除外。
@@ -551,7 +553,7 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
     let mut by_name: BTreeMap<String, Shader> = BTreeMap::new();
     // 全部名字（含别名）与其中失败过的：和语料扫描 `shader:<名>:…` 键的名字集合对照
     let (mut all_names, mut failed_all) = (BTreeSet::new(), BTreeSet::new());
-    let mut mismatches = Vec::new();
+    let (mut mismatches, mut allowed_mismatches) = (Vec::new(), Vec::new());
     let mut reparse_failures = Vec::new();
     let mut ok = 0;
     for file in &files {
@@ -575,7 +577,15 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
             failed_all.insert(fixture.name.clone());
         }
         if result.ok != fixture.result.ok {
-            mismatches.push(format!(
+            // 夹具录的是改动前的结果：本步预期新通过、且列在 ALLOW 里的请求只列出，不算失败
+            let expected =
+                result.ok && baseline_allowed(&sanitize(&format!("{}-{short}", fixture.name)));
+            let list = if expected {
+                &mut allowed_mismatches
+            } else {
+                &mut mismatches
+            };
+            list.push(format!(
                 "{} {short}：夹具 ok={}（{} {}），重放 ok={}（{}）",
                 fixture.name,
                 fixture.result.ok,
@@ -617,7 +627,7 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
         .filter(|(_, s)| !s.failed.is_empty())
         .collect();
     let mut out = format!(
-        "请求夹具：{} 个请求（{} 个着色器，含别名 {}），通过 {ok}、失败 {}；失败的着色器 {} 个（含别名 {}）；ok 与夹具不一致 {}；WGSL 回读失败 {}\n",
+        "请求夹具：{} 个请求（{} 个着色器，含别名 {}），通过 {ok}、失败 {}；失败的着色器 {} 个（含别名 {}）；ok 与夹具不一致 {}（另有 ALLOW 内的新通过 {}）；WGSL 回读失败 {}\n",
         files.len(),
         by_name.len(),
         all_names.len(),
@@ -625,6 +635,7 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
         failed_names.len(),
         failed_all.len(),
         mismatches.len(),
+        allowed_mismatches.len(),
         reparse_failures.len()
     );
     for (name, shader) in &failed_names {
@@ -639,6 +650,9 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
     }
     for line in mismatches.iter().chain(&reparse_failures) {
         out.push_str(&format!("  {line}\n"));
+    }
+    for line in &allowed_mismatches {
+        out.push_str(&format!("  {line}（允许）\n"));
     }
     let mut report = String::new();
     for (name, shader) in &by_name {
@@ -672,6 +686,24 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
     }
 }
 
+/// `WPESL2WGSL_BASELINE_ALLOW` 是否列出了这个键（导出文件名或 `<名字>-<sha1 前 8 位>`）。
+/// 键前缀按导出文件名的规则规整，`effects/foo` 与 `effects_foo` 都能写。
+fn baseline_allowed(key: &str) -> bool {
+    static ALLOW: OnceLock<Vec<String>> = OnceLock::new();
+    ALLOW
+        .get_or_init(|| {
+            std::env::var("WPESL2WGSL_BASELINE_ALLOW")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(sanitize)
+                .collect()
+        })
+        .iter()
+        .any(|p| key.starts_with(p.as_str()))
+}
+
 /// 逐字节基线：本次导出（本次写过的文件）和旧导出目录逐文件比较。
 fn baseline(dir: &Path, failures: &mut Vec<String>) {
     let current_dir = dump_dir().expect("设了 WPESL2WGSL_BASELINE_DIR 就有导出目录");
@@ -682,15 +714,7 @@ fn baseline(dir: &Path, failures: &mut Vec<String>) {
         .filter(|e| e.path().is_file())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
-    // 键前缀按导出文件名的规则规整，`effects/foo` 与 `effects_foo` 都能写
-    let allow: Vec<String> = std::env::var("WPESL2WGSL_BASELINE_ALLOW")
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(sanitize)
-        .collect();
-    let allowed = |file: &str| allow.iter().any(|p| file.starts_with(p.as_str()));
+    let allowed = baseline_allowed;
     let mut same = 0;
     let (mut changed, mut new_pass, mut new_fail) = (Vec::new(), Vec::new(), Vec::new());
     for file in written.keys() {

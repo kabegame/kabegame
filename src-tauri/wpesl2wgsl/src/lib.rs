@@ -808,6 +808,40 @@ void main() {
         }
     }
 
+    /// `fluidsimulation_advection` 的形状：`return` 之后还有 `min(...)`。`min` 被宏成用户函数 `kb_min`，
+    /// 死代码里就有用户函数调用；嵌入的 naga 带了行为补丁（naga/KABEGAME.md「行为补丁」）后能翻译通过。
+    /// 死代码不进输出：同一函数去掉死代码后，两阶段的 WGSL 逐字节相同。
+    #[test]
+    fn dead_code_after_return_is_dropped() {
+        let fragment = |dead: &str| {
+            format!(
+                "uniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\nvec4 AddEmitterColor(vec4 currentColor, float amt)\n{{\n\tvec4 prevColor = texSample2D(g_Texture0, v_TexCoord);\n\treturn mix(currentColor, prevColor, amt);\n{dead}}}\nvoid main() {{\n\tvec4 c = AddEmitterColor(vec4(0.5, 0.5, 0.5, 1.0), 0.25);\n\tgl_FragColor = min(c, vec4(1.0, 1.0, 1.0, 1.0));\n}}\n"
+            )
+        };
+        let translate_with = |dead: &str| {
+            let req = TranslateRequest {
+                vertex: "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }".into(),
+                fragment: fragment(dead),
+                textures: vec![BoundTexture {
+                    slot: 0,
+                    format: Some(0),
+                }],
+                ..TranslateRequest::default()
+            };
+            let result = translate(&req);
+            assert!(result.ok, "{result:#?}");
+            assert_wgsl_reparses(&result);
+            result
+        };
+        let with_dead =
+            translate_with("\treturn min(currentColor + vec4(amt), vec4(1.0, 1.0, 1.0, 1.0));\n");
+        let without_dead = translate_with("");
+        let wgsl = |result: &TranslateResult| {
+            [&result.vertex, &result.fragment].map(|o| o.as_ref().unwrap().wgsl.clone().unwrap())
+        };
+        assert_eq!(wgsl(&with_dead), wgsl(&without_dead));
+    }
+
     /// 标量数组（如音频频谱）在块里补成 vec4 数组，下标访问与整体传参都照常可用，WGSL 合法。
     #[test]
     fn scalar_uniform_arrays_are_padded() {

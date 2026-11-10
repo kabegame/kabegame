@@ -193,6 +193,8 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
 
    naga 30.0.1 的源码嵌在 `naga/`（路径依赖），删掉了用不到的前后端，只开 `glsl-in` + `wgsl-out`；`wgsl-in` 只在 `[dev-dependencies]` 里开，给测试回读输出。
    上游版本、删掉的模块与每处改动见 [naga/KABEGAME.md](naga/KABEGAME.md)。
+   嵌入的 naga 带了行为补丁（KABEGAME.md「行为补丁」）：B1 在 GLSL 前端裁掉 `return` / `break` 等之后的死代码前，把其中用户函数调用的结果换成同类型零值，
+   否则死代码里的 `kb_min` / `kb_max` 调用会让校验报 `Expression not visited by the appropriate statement`（`fluidsimulation_advection`）。
 
 ## 几何着色器展开
 
@@ -312,6 +314,7 @@ deno task test -c kabegame --skip cargo
 - 夹具只放在 `ignore/` 下，工坊内容不进仓库；没设 `WPESL2WGSL_REQUESTS` 时跳过这部分。
 - 报告按着色器名汇总，每条失败列出翻译器返回的全部错误，写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-requests.txt`。成功的照样回读校验，导出键是 `<名字>-<sha1 前 8 位>`。
 - 门槛：重放的 `ok` 必须和夹具记录的一致（wasm 与原生应当相同）。不一致时先查 wasm 是不是比翻译器源码旧。
+  例外：夹具是改动前录的，改动让某些请求从失败变成通过时，键在 `WPESL2WGSL_BASELINE_ALLOW` 里的只列出、标「允许」，不算失败；反方向（通过变失败）照样失败。
 
 环境变量（相对路径按仓库根解析，因为 cargo test 的工作目录是本 crate）：
 
@@ -320,7 +323,7 @@ deno task test -c kabegame --skip cargo
 | `WPESL2WGSL_REQUESTS` | 请求夹具目录，设了才跑第 3 部分 |
 | `WPESL2WGSL_DUMP_DIR` | 每次成功翻译生成的 GLSL / WGSL 写进这个目录（`<键>.vert.glsl`、`.vert.wgsl`、`.frag.glsl`、`.frag.wgsl`），供人工审阅和建基线。WPE 安装目录部分的键是 `gate__…` / `lit__…` / `geom__…` / `base__…`，请求夹具部分是 `<名字>-<sha1 前 8 位>`，非法字符换成 `_` |
 | `WPESL2WGSL_BASELINE_DIR` | 一份旧的导出目录：本次导出（只算本次写过的文件，目录里残留的旧文件不算）逐文件和它比较，报「相同 / 变了 / 新通过 / 新失败（基线有、本次没有）」，清单写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-baseline.txt`；「变了」「新失败」非空时测试失败。没设 `WPESL2WGSL_DUMP_DIR` 时导出到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-dump`（先清空） |
-| `WPESL2WGSL_BASELINE_ALLOW` | 逗号分隔的键前缀（按导出文件名的规则规整，`effects/foo` 与 `effects_foo` 等价）：这些「变了」「新失败」不算失败，但仍列在报告里，标「允许」 |
+| `WPESL2WGSL_BASELINE_ALLOW` | 逗号分隔的键前缀（按导出文件名的规则规整，`effects/foo` 与 `effects_foo` 等价）：这些「变了」「新失败」，以及请求夹具里「夹具失败、重放通过」的，不算失败，但仍列在报告里，标「允许」 |
 
 ```bash
 # 录夹具（产品源码默认 apps/wpe-scene/src，用其中的 wasm）
@@ -339,6 +342,8 @@ CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapt
 ```
 
 2026-11-11（`74b65d27`）：777 个请求、215 个着色器（含别名 255），通过 661；失败的着色器 44 个（含别名 50），比语料扫描的 48 个多两个，都是当前属性下关着的 effect（失败不上报到场景）；`ok` 与夹具全部一致；基线导出 3460 个文件，重跑逐字节相同。
+
+2026-11-11（P7a 步骤 4，行为补丁 B1）：对 `head-74b65d27` 基线相同 3460、变了 0、新失败 0，新通过只有 `effects/fluidsimulation_advection` 的两个请求（`3d4bb453`、`61464738`，各 4 个文件）；夹具部分通过 663、失败的着色器 43 个（含别名 49），这两个请求与夹具记录不一致（夹具失败、重放通过，在 ALLOW 里）；WPE 安装目录部分仍是 158/167（advection 在默认 COMBO 下本来就通过）。
 
 2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0；2026-11-10 加几何着色器展开后不变，几何门槛 27/27。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
 

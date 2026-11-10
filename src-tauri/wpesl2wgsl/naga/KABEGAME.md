@@ -43,7 +43,12 @@
 
 ## 改动
 
-所有改动都只是删掉被删模块的声明与 cfg 分支，不改任何保留代码的行为（翻译器的逐字节基线验证过，见「升级」）。唯一的例外是第 1 条，它修好了上游的编译错误。
+改动分两类：「只删减、不改行为的改动」只删被删模块的声明与 cfg 分支（第 1 条修好上游的编译错误），不改任何保留代码的行为；
+「行为补丁」改变前端或校验的结果，每条都写明最小复现，并有单测。两类都用翻译器的逐字节基线验证（见「升级」）。
+
+### 只删减、不改行为的改动
+
+翻译器的逐字节基线验证过，嵌入前后全部输出相同。
 
 | # | 文件 | 位置 | 改动 | 理由 |
 |---|---|---|---|---|
@@ -62,6 +67,14 @@
 | 13 | `Cargo.toml` | 整个文件 | 以 crates.io 规范化后的 `Cargo.toml` 为底本：加 `publish = false`，删 `exclude`、`readme`，删上面列出的 feature 与依赖，`naga-types` 由 `30.0.0` 改钉 `=30.0.1`；不声明 `[workspace]` | 嵌入与裁剪 |
 
 文档注释里指向已删模块的链接（如 `proc/index.rs` 的 `crate::back::pipeline_constants::process_overrides`、`proc/namer.rs` 的 `crate::back::msl`）没改，只影响 rustdoc。
+
+### 行为补丁
+
+代码里的补丁处都有 `Kabegame 补丁` 注释。升级时先查上游是否已修，修了就去掉这一条，但保留单测。
+
+| # | 文件 | 位置 | 改动 | 理由 | 最小复现 |
+|---|---|---|---|---|---|
+| B1 | `src/front/glsl/context.rs`、`src/front/glsl/parser/functions.rs`（单测在 `src/front/glsl/parser_tests.rs` 的 `dead_code_call_result`） | 新增 `Context::cull_dead`；`parser/functions.rs` 里三处 `ctx.body.cull(idx..)`（`switch` 分支、`do-while` 体、复合语句）改成调用它 | 裁掉终结语句（`return` / `break` / `continue` / `discard`）之后的死代码之前，先把被裁语句里（递归进 `Block` / `If` / `Loop` / `Switch`）`Call` / `Atomic` 的结果表达式原地改成同类型的 `ZeroValue`，再裁剪 | 上游只裁语句，`CallResult` / `AtomicResult` 表达式留在 arena 里；校验器要求每个这类表达式被对应语句访问，于是报 `Expression not visited by the appropriate statement`（`UnvisitedExpression`）。翻译器把 `min` / `max` 宏成用户函数 `kb_min` / `kb_max`，WPE 自带的 `effects/fluidsimulation_advection`（`RENDERING` 为 1、2）死代码里就有这种调用。被裁的表达式没有活语句引用，后端不输出，所以只改变本来校验失败的模块；翻译器的逐字节基线只多了 advection 的新通过 | `float f(float a) { return a * 2.0; }` `float g(float x) { return x; return f(x); }`（`#version 450` 片元，`main` 调 `g`）；把 `f(x)` 换成内置的 `min(x, 1.0)` 上游也通过 |
 
 ## 构建与测试
 
@@ -86,6 +99,7 @@
 4. 删「删掉的内容」里的模块；新版本若多了只给已删前后端用的模块，一并删掉并补进清单。
 5. 按「改动」逐条重放：
    - 先查上游是否已修第 1 条（`interpolator` 的 cfg），修了就去掉这一条；
+   - 「行为补丁」逐条重放（上游已修的去掉），各自的单测必须过；
    - 其余各条靠编译器找：删掉 feature 后，`cargo check -p naga --features glsl-in,wgsl-in,wgsl-out` 的 `unexpected_cfgs` 警告与找不到模块的错误会点出每一处；
    - 改过的文件顶部补上修改声明，更新本文件的上游版本、校验和与改动表。
 6. 同步 `naga-types` 的版本钉（`=<版本>`）。

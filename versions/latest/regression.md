@@ -73,6 +73,19 @@
 | [ ] | R11 弹出层锚点滚出列表 | 桌面 dev | 抽屉里打开某任务的重试记录，期间有新任务插入使该任务被挤出列表可视区 | 弹出层仍跟随锚点 | 已知问题：弹出层跟着锚点被推到窗口底部、只露出标题，点空白处可关；未修 |
 | [ ] | R10 Android 返回键 | Android dev | 打开重试记录弹出层后按返回键 | 关掉弹出层 | 可选 |
 
+## 场景壁纸 P7a：请求夹具、逐字节基线与嵌入 naga
+
+2026-11-11 Windows。P7a 不改变能渲染的场景数（流体 effect 的着色器能翻译了，但用它的唯一一张场景还缺别的能力）。说明见 `src-tauri/wpesl2wgsl/README.md`「测试」与 `naga/KABEGAME.md`，数据见 `.claude/plans/wpe-import/3-scene/phase7/phase-7a-corpus-naga.md`「实施记录」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 请求夹具重放 | Windows，cargo | `kbp corpus scan --extra requests:ignore/p7/requests` 录夹具；`WPESL2WGSL_REQUESTS=… cargo test -p wpesl2wgsl --test corpus` 重放 | 重放的通过与否和夹具记录一致；WGSL 回读 0 失败 | 2026-11-11：777 个请求、215 个着色器；一致性 0 不一致，回读 0 失败；两次录制逐字节相同 |
+| [x] | T2 逐字节基线 | Windows，cargo | 带 `WPESL2WGSL_BASELINE_DIR` 对改动前的导出比较 | 只有预期的键变化 | 2026-11-11：嵌入 naga 前后 3460 个文件全部相同；死代码补丁后只多出 `fluidsimulation_advection` 的 8 个文件 |
+| [x] | T3 Tint 接受度 | Windows dev，主窗口 | 基线全部 WGSL 加产品前言逐份 `createShaderModule` + `getCompilationInfo` | 真实场景的请求 0 error | 2026-11-11 Claude（kabegame-dev）：1730 份、约 12 s；真实场景 0 error 0 warning。几何门槛的合成组合 `rope` / `ropetrail` + `REFRACT` 各 1 个 `invalid aliased pointer argument`（P7 之前就有、语料没用到，P7b 修） |
+| [x] | T4 单测 | Windows，cargo | `cargo test -p wpesl2wgsl --lib`；`cargo test -p naga --lib --features glsl-in,wgsl-in,wgsl-out,stderr` | 全过 | 2026-11-11：56 个、128 个全过 |
+| [x] | T5 wasm 构建 | Windows，cargo | `cargo build -p wpesl2wgsl --target wasm32-unknown-unknown --profile wpesl2wgsl` | 能编出；体积不涨 | 2026-11-11：1 606 373 → 1 600 789 字节 |
+| [ ] | T6 场景画面不变 | Windows dev | 重建 wasm（`deno task build:wpesl2wgsl` 或带前端的 kabegame 命令）后打开几张原本能渲染的场景 | 画面与之前一致 | 待下次重建 wasm 时顺带确认；输出逐字节相同，预期不会变 |
+
 ## 场景壁纸 P4c：控制点、指针、controlpointattract、世界空间、拖尾与 sprite 朝向
 
 2026-11-08 – 11-09 Windows dev。P4c 分 6 步：步骤 0 调研；1 控制点底座；2 指针；3 `controlpointattract`；4 世界空间与帧顺序（一帧里粒子先于脚本步进）；5 `spritetrail` 与 `sprite` 的 `orientation` / `axis` / `flags`。一个系统多个 renderer 继续报不支持。

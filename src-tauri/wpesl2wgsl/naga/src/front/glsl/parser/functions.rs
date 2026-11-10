@@ -1,3 +1,4 @@
+// Kabegame 修改，见 KABEGAME.md
 use alloc::{vec, vec::Vec};
 
 use crate::front::glsl::context::ExprPos;
@@ -278,7 +279,8 @@ impl ParsingContext<'_> {
                                 idx -= 1;
                             }
 
-                            ctx.body.cull(idx..)
+                            // Kabegame 补丁：裁死代码前中和其中的调用结果（见 `Context::cull_dead`）
+                            ctx.cull_dead(idx, Span::default())?;
                         }
 
                         Ok(())
@@ -416,7 +418,8 @@ impl ParsingContext<'_> {
                     );
 
                     if let Some(idx) = terminator {
-                        ctx.body.cull(idx..)
+                        // Kabegame 补丁：同上
+                        ctx.cull_dead(idx, meta)?;
                     }
                     Ok(())
                 })?;
@@ -609,7 +612,8 @@ impl ParsingContext<'_> {
         }
 
         if let Some(idx) = *terminator {
-            ctx.body.cull(idx..)
+            // Kabegame 补丁：同上
+            ctx.cull_dead(idx, meta)?;
         }
 
         ctx.symbol_table.pop_scope();

@@ -1,3 +1,4 @@
+// Kabegame 修改，见 KABEGAME.md
 use alloc::{borrow::ToOwned, vec};
 
 use pp_rs::token::PreprocessorError;
@@ -859,4 +860,38 @@ fn expressions() {
         "#,
         )
         .unwrap();
+}
+
+/// Kabegame 补丁（`Context::cull_dead`）：终结语句之后的死代码里有用户函数调用时，
+/// 被裁掉的 `CallResult` 不能留成「没有语句访问」的表达式，模块必须能通过校验。
+#[test]
+fn dead_code_call_result() {
+    use crate::valid::{Capabilities, ValidationFlags, Validator};
+
+    let cases = [
+        // 最小复现：return 之后的调用
+        "float g(float x) { return x; return f(x); }",
+        // if 分支里 return 之后
+        "float g(float x) { if (x > 0.0) { return x; f(x); } return 0.0; }",
+        // 循环里 break 之后
+        "float g(float x) { float s = 0.0; for (int i = 0; i < 2; i++) { break; s += f(1.0); } return s; }",
+        // do-while 体里 continue 之后
+        "float g(float x) { float s = 0.0; do { continue; s += f(x); } while (s < 1.0); return s; }",
+        // switch 分支里 break 之后
+        "float g(float x) { float s = 0.0; switch (int(x)) { case 0: s = 1.0; break; s += f(x); default: s = 2.0; } return s; }",
+        // 死代码里嵌套块中的调用
+        "float g(float x) { return x; { float y = f(x); if (y > 0.0) { f(y); } } }",
+    ];
+
+    for g in cases {
+        let source = alloc::format!(
+            "#version 450\nlayout(location = 0) out vec4 o;\nfloat f(float a) {{ return a * 2.0; }}\n{g}\nvoid main() {{ o = vec4(g(1.0)); }}\n"
+        );
+        let module = Frontend::default()
+            .parse(&Options::from(ShaderStage::Fragment), &source)
+            .unwrap_or_else(|e| panic!("解析失败：{g}\n{e:?}"));
+        Validator::new(ValidationFlags::all(), Capabilities::default())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("校验失败：{g}\n{e:?}"));
+    }
 }
