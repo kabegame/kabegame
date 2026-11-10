@@ -11,6 +11,7 @@ import type { JsonObject } from "../compile/model";
 import { parseParticle } from "../compile/particles";
 import { ParticleColumns } from "./columns";
 import { ControlPointSet, controlPointCount, IDENTITY_BASIS } from "./controlpoints";
+import { fbm2, simplex2 } from "./fastnoise2";
 import {
   COLUMN_FLAGS,
   particleModuleDef,
@@ -20,6 +21,7 @@ import {
   type ParticleFields,
   type ParticleRunContext,
 } from "./modules";
+import { snoise1 } from "./noise";
 import { blendFactor, readBlend } from "./operators";
 import { SeededRandom } from "./random";
 import { remapControlPointRefs, remapInitialValue, remapParticle, remapValue, type RemapKind } from "./remap";
@@ -165,14 +167,14 @@ describe("字段表（rea 2.1）", () => {
     expect(issuesOf("op", { inputrangemax: true })).toEqual(["value:inputrangemax"]);
   });
 
-  it("照报的取值：timeofday 与未知名字；4a 期间 init 的输入 16–18、两边的输出 controlpoint、两种噪声", () => {
+  it("照报的取值：timeofday 与未知名字；4b 起 init 的输入 16–18、两边的输出 controlpoint、两种噪声放行", () => {
     for (const kind of KINDS) {
       expect(issuesOf(kind, { input: "timeofday" })).toEqual(["value:input"]);
       expect(issuesOf(kind, { input: "Runtime" })).toEqual(["value:input"]);
-      expect(issuesOf(kind, { output: "controlpoint" })).toEqual(["value:output"]);
+      expect(issuesOf(kind, { output: "controlpoint" })).toEqual([]);
       expect(issuesOf(kind, { output: "foo" })).toEqual(["value:output"]);
-      expect(issuesOf(kind, { transformfunction: "simplexnoise" })).toEqual(["value:transformfunction"]);
-      expect(issuesOf(kind, { transformfunction: "fbmnoise" })).toEqual(["value:transformfunction"]);
+      expect(issuesOf(kind, { transformfunction: "simplexnoise" })).toEqual([]);
+      expect(issuesOf(kind, { transformfunction: "fbmnoise" })).toEqual([]);
       expect(issuesOf(kind, { transformfunction: "cosine" })).toEqual(["value:transformfunction"]);
       expect(issuesOf(kind, { operation: "divide" })).toEqual(["value:operation"]);
       expect(issuesOf(kind, { inputcomponent: "w", outputcomponent: "w" })).toEqual([
@@ -192,7 +194,7 @@ describe("字段表（rea 2.1）", () => {
       expect(issuesOf(kind, { flags: 255, outputcomponent: "average", transformfunction: "triangle" })).toEqual([]);
     }
     for (const input of ["controlpoint", "deltatocontrolpoint", "directiontocontrolpoint"]) {
-      expect(issuesOf("init", { input }), input).toEqual(["value:input"]);
+      expect(issuesOf("init", { input }), input).toEqual([]);
       expect(issuesOf("op", { input }), input).toEqual([]);
     }
     // 输出 maxlifetime：op 一直照报，init 放行
@@ -802,27 +804,33 @@ describe("输出区间与写回（rea 2.6、2.7，变体 13–17）", () => {
   });
 });
 
-describe("4a 期间照报的取值：执行函数整条不跑", () => {
-  it("两种噪声、输出 controlpoint、init 的输入 controlpoint / deltatocontrolpoint / directiontocontrolpoint：不写列、不写控制点、不抛", () => {
-    const modules: [RemapKind, JsonObject][] = [
-      ["init", { transformfunction: "simplexnoise" }],
-      ["init", { transformfunction: "fbmnoise", transformoctaves: 0 }],
-      ["op", { transformfunction: "simplexnoise" }],
-      ["op", { transformfunction: "fbmnoise" }],
-      ["init", { output: "controlpoint", outputcontrolpoint0: 1 }],
-      ["op", { output: "controlpoint", outputcontrolpoint0: 1 }],
-      ["init", { input: "controlpoint", inputcontrolpoint0: 1 }],
-      ["init", { input: "deltatocontrolpoint", inputcontrolpoint0: 1 }],
-      ["init", { input: "directiontocontrolpoint", inputcontrolpoint0: 1 }],
+describe("4a 期间照报的取值：4b 起照常执行", () => {
+  it("两种噪声、输出 controlpoint、init 的输入 controlpoint / deltatocontrolpoint / directiontocontrolpoint：只写尺寸列或控制点，不抛", () => {
+    // 期望（4b）：第三项是写进尺寸列的值（init 写 size0、op 写 size；null 表示不写列），第四项是 1 号控制点的平移。槽 0 的 R 是 0。
+    // init 的缺省输入 maxlifetime = 6 夹成 1，op 的 lifetimefraction = rcp(6)·1.5 = 0.25；s = 2。
+    const half = (n: number) => f32(f32(n * 0.5) + 0.5);
+    const modules: [RemapKind, JsonObject, number | null, number[]][] = [
+      ["init", { transformfunction: "simplexnoise" }, half(snoise1(2)), [-200, 100, 0]],
+      ["init", { transformfunction: "fbmnoise", transformoctaves: 0 }, NaN, [-200, 100, 0]],
+      ["op", { transformfunction: "simplexnoise" }, half(simplex2(0, 0.5, 0)), [-200, 100, 0]],
+      ["op", { transformfunction: "fbmnoise" }, half(fbm2(0, 0.5, 0, 3)), [-200, 100, 0]],
+      ["init", { output: "controlpoint", outputcontrolpoint0: 1 }, null, [1, 1, 1]],
+      ["op", { output: "controlpoint", outputcontrolpoint0: 1 }, null, [0.25, 0.25, 0.25]],
+      ["init", { input: "controlpoint", inputcontrolpoint0: 1 }, 0, [0, 0, 0]],
+      ["init", { input: "deltatocontrolpoint", inputcontrolpoint0: 1 }, 0, [0, 0, 0]],
+      ["init", { input: "directiontocontrolpoint", inputcontrolpoint0: 1 }, 0, [0, 0, 0]],
     ];
-    for (const [kind, module] of modules) {
+    for (const [kind, module, size, cp1] of modules) {
       const ctx = context();
       const before = ctx.columns.buffer.slice();
       expect(() => run(kind, { output: "size", operation: "remap", ...module }, ctx, false)).not.toThrow();
+      const column = kind === "init" ? ctx.columns.size0 : ctx.columns.size;
+      if (size !== null) {
+        expect(column[0], `${kind} ${JSON.stringify(module)}`).toBe(size);
+        column[0] = kind === "init" ? 2 : 3;
+      }
       expect(ctx.columns.buffer, `${kind} ${JSON.stringify(module)}`).toEqual(before);
-      expect([...ctx.controlPoints.current(1).translation], `${kind} ${JSON.stringify(module)}`).toEqual([
-        -200, 100, 0,
-      ]);
+      expect([...ctx.controlPoints.current(1).translation], `${kind} ${JSON.stringify(module)}`).toEqual(cp1);
     }
   });
 });

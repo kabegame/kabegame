@@ -17,8 +17,12 @@
  * - 世界空间系统（系统 `flags` bit0，P4c 步骤 4，rea-p4c-sim.md 5.2）：缺省更新是 `current = W·base`（控制点 0 忽略 bit1），
  *   指针点是 `(X, Y, 0)`、不乘 `W`，和本地分支在同一个函数里（`FUN_14022a070`、1.6）。
  *
- * 不做：父控制点（bit2、bit3，只对子系统有意义，P4e；顶层系统的 bit2 走缺省更新，只让实例覆盖不生效）；remap 写控制点
- * （`0x10000`，P4d）；`instanceoverride` 控制点的运行时改值（语料全是静态值，能力表报 `{user}`）。
+ * - remap 写的点（P4d 步骤 4b，rea-p4d-modules.md 2.8）：输出是 `controlpoint` 的 remap 的 `ocp0` 建系统时并进 `0x10000`
+ *   （`controlPointModuleFlags`），之后 `update` 整点跳过、不吃实例覆盖，`current` 只被 remap 改写（初值是 `base = I + offset`）。
+ *   remap 直接改 `current(i).translation`（`remap.ts`）。
+ *
+ * 不做：父控制点（bit2、bit3，只对子系统有意义，P4e；顶层系统的 bit2 走缺省更新，只让实例覆盖不生效）；`instanceoverride` 控制点的
+ * 运行时改值（语料全是静态值，能力表报 `{user}`）。
  */
 import type { ParticleInstance, SceneControlPoint, SceneParticle } from "../compile/particles";
 import { invert, multiply, type Mat4 } from "../render/math";
@@ -50,7 +54,7 @@ export const CONTROL_POINT_FLAGS = {
   scene: 2,
   /** 父控制点（1.8）：顶层系统没有父，走缺省更新，只让实例覆盖不生效。 */
   parent: 4,
-  /** 内部位：remap 模块写的点（1.2），`update` 跳过（P4d）。 */
+  /** 内部位：remap 模块写的点（1.2），建系统时由 `controlPointModuleFlags` 并进，`update` 跳过（P4d 步骤 4b）。 */
   remap: 0x10000,
 } as const;
 
@@ -139,6 +143,27 @@ export function controlPointCount(def: Pick<SceneParticle, "emitters" | "initial
   visit("initializer", def.initializers);
   visit("operator", def.operators);
   return count;
+}
+
+/**
+ * 模块要并进控制点 `flags` 的位（P4d 步骤 4b，rea-p4d-modules.md 2.8【确】）：遍历三类模块里模块表有 `controlPointFlags` 的项，返回
+ * 8 个控制点各自的附加位。WPE 解析时把「输出是 `controlpoint` 的 remap」的 `ocp0` 插进一个集合（`FUN_1401bc470` →
+ * `FUN_140130b20`），解析完控制点数组后对集合里 `< 8` 的下标 `flags |= 0x10000`（`0x1401d0860`–`0x1401d087e`）；输入 16–18、输出
+ * 17、18 不插。表外模块不计（场景已退回，同 `controlPointCount`）。
+ */
+export function controlPointModuleFlags(def: Pick<SceneParticle, "emitters" | "initializers" | "operators">): number[] {
+  const flags = new Array<number>(8).fill(0);
+  const visit = (category: ParticleCategory, modules: readonly ParticleModule[]) => {
+    for (const module of modules) {
+      const known = particleModuleDef(category, module.name);
+      for (const [index, bits] of known?.controlPointFlags?.(module.fields) ?? [])
+        if (index >= 0 && index < 8) flags[index] |= bits;
+    }
+  };
+  visit("emitter", def.emitters);
+  visit("initializer", def.initializers);
+  visit("operator", def.operators);
+  return flags;
 }
 
 /**
@@ -240,11 +265,14 @@ export class ControlPointSet {
   constructor(def: ControlPointSource, count = controlPointCount(def)) {
     this.count = count;
     this.world = (def.flags & 1) !== 0;
+    // remap 写的点并进 0x10000（P4d 步骤 4b，`controlPointModuleFlags`），在实例覆盖与 `update` 之前
+    const moduleFlags = controlPointModuleFlags(def);
     this.points = Array.from({ length: count }, (_, i) => {
       const source = def.controlpoints[i] ?? DEFAULT_POINT;
+      const flags = source.flags | (moduleFlags[i] ?? 0);
       const base = newPoint();
       base.translation.set(source.offset);
-      if (!(source.flags & NO_INSTANCE_OVERRIDE)) {
+      if (!(flags & NO_INSTANCE_OVERRIDE)) {
         // 角度只比较 x 分量是否未设（FLT_MAX），这里未设是 null
         const angle = def.instance.controlpointAngles[i];
         if (angle) base.basis.set(eulerBasis(angle));
@@ -256,14 +284,14 @@ export class ControlPointSet {
       const previous = newPoint();
       copyPoint(current, base);
       copyPoint(previous, base);
-      return { flags: source.flags, base, current, previous };
+      return { flags, base, current, previous };
     });
   }
 
   /**
    * 每帧一次（`FUN_14022e3e0`，1.5），在发射之前。位的优先级 `0x10000` > bit0 > bit2 > 缺省：
    * ```
-   * f & 0x10000：跳过（remap 输出的点，P4d；JSON 写这一位时 current 一直是 base）
+   * f & 0x10000：跳过（remap 输出的点，current 只被 remap 改写；JSON 写这一位而没有 remap 时 current 一直是 base）
    * f & 1：      指针分支（1.6，0x14022e47b）：current = base（3×3 是单位阵：指针点不吃实例覆盖），平移整体覆盖（丢弃 offset）：
    *   世界：current.t = (X, Y, 0)，不乘 W
    *   本地：current.t = inverse(W)·(X, Y, 0, 1)（和 flags 2 共用一次求逆；W 奇异时平移写 NaN）

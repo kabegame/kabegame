@@ -1045,10 +1045,71 @@ export function fbm2(seed: number, x: number, y: number, octaves: number): numbe
 | 回归 `kbp regress --corpus`（Claude 自跑） | 现有 9 个案例（b3、b4、b6、c1–c4、d1、d3）两边逐字节相同。<br>语料 152 张：只去掉两张的 `particle:operator:remapvalue`，3815289650 新增噪声的字段键；干净 24 不变，出错 0 |
 | 变异检查 | 子代理 21 条全部检出（单测加回放 12 条，只有单测 9 条），源码按原字节还原。<br>Claude 另加 2 条（正弦去掉 −π/2；init 的输入 `size` 读当前值列），单测和回放都检出 |
 
-**只有单测、没有 WPE 数据验证的**（已收进「未实测清单」）：
+**4a 里只有单测、没有 WPE 数据验证的**（已收进「未实测清单」）：
 - op 标量输入按 x 分量归一化：rv-vec 的 `flags 1` 把两种写法都夹成 1；
 - init 的 `floor` 对 `trunc`：`ri-*` 新生粒子的 `t = −3` 是整数，两者相同；
 - 输出 `speed` 的除法写法、正弦的乘法顺序、`distance` 的掩码：只差 1 ulp，或要粒子正好在控制点上。
+
+### 步骤 4b 实施记录（2026-11-11）
+
+**做法：**
+- 快照取自 `50d2e9c0`（4a 的提交），子代理只在 `ignore/p4/d4b/ov` 里做。补丁是 `ignore/p4/d4b/step4b.patch`，8 个文件，+1073 / −76。
+- 开工期间 HEAD 前进到 `4dd05464`（别的会话的提交），补丁涉及的文件没人改过，`git apply --check` 对工作区和索引都干净。
+- 回放案例 `d4` 扩充成 4b 版（4a 版备份在 `ignore/p4/d4b/*.4a`），变异清单 `ignore/p4/d4b/mutations.py`，Claude 另加 `ignore/p4/d4b/mut_claude.py`。
+
+**新增和修改的文件（相对 `apps/wpe-scene/src/particles/`）：**
+- 新增 `fastnoise2.ts`（`simplex2`、`fbm2`、`fractalBounding`）、`fastnoise2.test.ts`、`remap4b.test.ts`；
+- 修改：
+  - `remap.ts`：两种噪声、写控制点、init 的输入 16–18、`remapControlPointFlags`；
+  - `noise.ts`：新增 `fbm1`，即 `FUN_14027b4b0`；
+  - `modules.ts`：`ParticleModuleDef.controlPointFlags`，remap 读的列加上 `random`；
+  - `controlpoints.ts`：建系统时把模块要求的位并进控制点的 `flags`；
+- `remap.test.ts` 只改期望：4a 期间照报的几项改成照常执行。
+
+**对照汇编补清的读码：**
+- **FBm**（`fbm2_sse4.asm` 逐条核对）：
+  - 循环次数按无符号比较；
+  - 每层依次是坐标 ×2、种子 +1、`amp·(((n+1)·0.5 − 1)·0 + 1)·0.5`、`sum += n·amp`；
+  - weighted strength 那一步照写，`n` 非有限时得 NaN。
+- **init 的 `fbm1`**（`0x14027b4b0`）：调用方传 `{频率 s, 振幅 1, 倍频 2, 增益 0.5}`，结果是 `Σ snoise1(f·v)·a / Σ a`。y、z 分量只在输出是向量时才算。
+- **lane 0：**
+  - op 每组读一次 `C`，三个分量各自 `shufps 0` 广播后写回，只有槽 `4g`（`4g < count`）生效，死槽也算；
+  - blend 版同样是 `(op(C, o) − C)·b + C`。
+- **`0x10000` 的点：** 初值仍是 `base = I + offset`（rea 2.8）。`add` 运算时 offset 是起点，规格里「offset 不起作用」只对 `remap` 运算成立，照读码做。
+- **init 的输入 `directiontocontrolpoint`：** 粒子在原点时 `normalize(0)` 得 NaN，和 WPE 实测相同（ri-in-directiontocontrolpoint 的尺寸是 NaN）。
+
+**规格之外自定的：**
+- **`transformoctaves` 不钳制、最大到 2³²：** `fbm2`、`fbm1` 和归一系数遇到两种情况提前停下，否则会卡死：
+  - 和已经是 NaN；
+  - 振幅下溢成 0，且坐标或频率为 0。
+
+  提前停下和照常走完逐位相同，单测拿朴素循环在 octaves 600 / 700 时核对过。
+- `REMAP_CONTROL_POINT_FLAG = 0x10000` 在 `remap.ts` 里另写一份，避免 `modules → remap → controlpoints` 成环，由单测核对和 `CONTROL_POINT_FLAGS.remap` 相等。
+
+**回放（`d4.hook.ts`）里新加的处理：**
+- **R 的注入：** 先照常模拟一遍得到每个槽的出生序号（R 不影响寿命和槽位分配），按序号从 frame 列（厚格式的 `TEXCOORD1.w`）收集 R，再按出生序注入。核对过同一序号各帧的值一致。
+- **近似倒数的拟合：**
+  - 只用 rv-noise 的速度（108 个分量），拟合一个标量：remapvalue 里 `rcp` 的相对偏置 b。fps 60 得 −2.4440e-4，fps 10 得 −2.4418e-4。两次独立抓帧一致，约等于 −2⁻¹²，`rcpps(1)` 已知就是 1 − 2⁻¹²。
+  - 用这个 b 去比 rv-fbm1 / rv-fbm3：它们没参与拟合，所以是独立验证。
+  - 发射器的近似倒数另开一份包络，和 remap 的分开偏置。
+  - 速度另加输入精度包络：日志的 dt 只有 6 位小数。
+- **为什么要拟合：** 输出 `speed` 是 `vel·rcp(L)·o`，`o < 0` 时速度反向。一遍模式下，方向等于各帧 `o` 的符号之积；`o` 过零的那一帧，符号取决于 `rcpps` 和精确倒数的差。
+  - 精确倒数下，fps 60 有 6 个粒子·帧和 WPE 整段反向；拟合后是 0。
+  - 两遍模式每帧乘两次，符号抵消，所以 fps 10 不受影响。
+
+**验收结果：**
+
+| 项目 | 结果 |
+|---|---|
+| 越界 | 补丁涉及的 `apps/` 文件从 `50d2e9c0` 起没人改过；工作区另有并行会话（P5a 步骤 4）改的 `particles/simulator.test.ts`、`track.ts`，不在补丁里。`head` 快照和 `50d2e9c0` 逐文件相同 |
+| tsc、vitest、Prettier | Claude 自跑：tsc 0 错（钩子另查 0 错）；57 个文件、1562 个用例全过；Prettier 通过 |
+| 回放 `kbp replay d4`（Claude 自跑） | 四段全部通过：`p4d-remap` 26 个系统、`p4d-remap2` 63 个。<br>4b 新比的系统差/限都 ≤ 0.70：rv-noise、rv-fbm1、rv-fbm3、ri-noise、ri-fbm、rv-cpout、ri-cpbug，以及 remap2 的输入 16–18、输出 `controlpoint`。<br>ri-in-controlpoint 尺寸 5、ri-in-deltatocontrolpoint 尺寸 60，正好证明 init 读的是 0（按 C 读会是 32.5 / 58.2）。<br>FBm 的倍频细节验证了，步骤 0 没能区分的这一项从「未实测清单」划掉 |
+| 回归 `kbp regress --corpus`（Claude 自跑） | 现有 9 个案例两边逐字节相同。<br>语料 165 张（别的会话加了场景、干净数涨到 36），只有 3815289650 去掉 `particle:operator:remapvalue:transformfunction`，不新增键，出错 0 |
+| 变异检查 | 子代理 44 条：42 条检出，2 条是等价变异（y、z 多算了没人读；哈希右移只差高位、梯度只读低 3 位）。<br>只靠单测检出的：控制点每个 lane 都写（rv-cpout 的输入各槽相同）、不置 `0x10000`（rv-cpout 的点本来就不重算）。<br>Claude 另加 2 条（init 不把控制点写成 0；梯度常数改 2e-4），单测和回放都检出 |
+
+**和 WPE 不同、按「近似倒数不复刻」接受的：**
+- 一遍模式下，`remapvalue` 输出 `speed` 且区间跨 0 时，个别粒子在 `o` 过零的那一帧会和 WPE 符号相反，之后整段反向运动。
+- 语料里 3815289650 有一处这样的写法（`fbmnoise`、区间 −5..7）。这些是噪声驱动的粒子，统计上看不出区别，但逐粒子和 WPE 对不上。
 
 ## 步骤 5 — 距离类与 `vortex_v2`
 
@@ -1068,8 +1129,6 @@ export function fbm2(seed: number, x: number, y: number, octaves: number): numbe
 
 | 项 | 来源 | 现状与原因 | 怎么补 |
 |---|---|---|---|
-| FBm 的倍频细节（种子 +1、坐标 ×2、振幅 ×0.5、归一） | 步骤 0 | rv-fbm1 / rv-fbm3 输出标量 `speed`、年龄未知，各种写法都拟合得上 | 步骤 4 用 WPE 帧时间回放，年龄精确，逐粒子比 |
-| `remap2` 里 4b 的几项（init 的输入 16–18、输出 `controlpoint`） | 步骤 0、4a | 4a 回放了其余 58 个系统，全部通过 | 步骤 4b 回放 |
 | `mb2-move` 的定量、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式 | 步骤 0 | 步骤 0 只做了定性或一遍模式的核对 | 步骤 5 用 fps 60 / 10 回放 |
 | WPE 不可见时照常更新控制点（dist-hide） | 步骤 0 | 重新可见后 1 s 才发第一个粒子，第一帧没有粒子可拽 | 步骤 5 重做实验：让重新可见的那一帧就有粒子（如 `instantaneous`） |
 | `reductionouter == reductioninner` 时差存成 1.0（rm-eq） | 步骤 0 | 这组参数下按 0 实现也是 `100·h > 1`，分辨不了 | 步骤 5 换参数，让 `r·h` 落在 (0, 1) 里 |
@@ -1096,7 +1155,8 @@ export function fbm2(seed: number, x: number, y: number, octaves: number): numbe
 
 **已测（从清单里划掉）：**
 - 不可见时复位清零 `mapsequence*` 的序号（步骤 0 没测到）：步骤 3 的回放逐粒子对上，见步骤 3 实施记录。
-- `remap2` 的全部取值（4b 的几项与两个 `timeofday` 除外）：步骤 4a 的回放 58 个系统、两种 fps 全部通过，见步骤 4a 实施记录。
+- `remap2` 的全部取值（两个 `timeofday` 与 op 的 `maxlifetime` 除外，三者照报）：4a 回放 58 个系统，4b 补上输入 16–18 与输出 `controlpoint`，共 63 个，两种 fps 全部通过，见步骤 4a、4b 实施记录。
+- FBm 的倍频细节（步骤 0 没能区分）：步骤 4b 的回放年龄精确，rv-fbm1 / rv-fbm3 逐粒子对上；变异「不加种子 / 不归一 / 振幅不乘 0.5 / 坐标不乘 2」回放都查得出。
 
 ## P4d 收尾
 

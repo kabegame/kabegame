@@ -39,6 +39,7 @@ import {
   type SequenceState,
 } from "./mapsequence";
 import {
+  remapControlPointFlags,
   remapControlPointRefs,
   remapIndex,
   remapInitialValue,
@@ -275,6 +276,11 @@ export interface ParticleModuleDef {
    * 的种类计 `inputcontrolpoint*` / `outputcontrolpoint*`，rea-p4d-modules.md 2.1）。
    */
   controlPointRefs?: (fields: Readonly<Record<string, ParticleFieldValue>>) => number[];
+  /**
+   * 要并进控制点 `flags` 的位（P4d 步骤 4b，参数是解析值）：返回 `[下标, 位]`，`controlpoints.ts` 建系统时按位或进对应控制点。只有
+   * remap 两个模块（`remap.ts` 的 `remapControlPointFlags`：输出是 `controlpoint` 时 `[[ocp0, 0x10000]]`，rea-p4d-modules.md 2.8）。
+   */
+  controlPointFlags?: (fields: Readonly<Record<string, ParticleFieldValue>>) => [number, number][];
 }
 
 const num = (value: ParticleFieldDefault, supported?: ParticleFieldDef["supported"]): ParticleFieldDef => ({
@@ -434,17 +440,17 @@ const named = (value: string, table: readonly string[]): ParticleFieldDef => ({
 });
 
 /**
- * `remapinitialvalue` / `remapvalue` 的字段（rea-p4d-modules.md 2.1 的字段表，P4d 步骤 4a）：缺省不分正交 / 透视，两个模块只有
+ * `remapinitialvalue` / `remapvalue` 的字段（rea-p4d-modules.md 2.1 的字段表，P4d 步骤 4a、4b）：缺省不分正交 / 透视，两个模块只有
  * `input` 的缺省不同，blend 四键只有 op 有。枚举的名字表、照报的取值与执行见 `remap.ts`：
  * - `operation`：`remap` / `multiply` / `add` / `subtract`，其它字符串照报（WPE 存 5，不写）；
  * - `input` / `output`：20 个属性名，`timeofday`（写入点没找到）与未知名字照报；输出的 `lifetimefraction`、9–12、`layerorigin` 读码
- *   确定不写，放行。4a 期间照报 init 的输入 `controlpoint` / `deltatocontrolpoint` / `directiontocontrolpoint` 与两边的输出
- *   `controlpoint`（4b 放开）；op 的输出 `maxlifetime` 一直照报（WPE 按 4 个一组写死槽的 life、存活数下溢，复刻不了），init 的放行；
+ *   确定不写，放行；op 的输出 `maxlifetime` 一直照报（WPE 按 4 个一组写死槽的 life、存活数下溢，复刻不了），init 的放行。init 的输入
+ *   `controlpoint` / `deltatocontrolpoint` / `directiontocontrolpoint` 与两边的输出 `controlpoint` 4a 期间照报，4b 放开；
  * - `inputcomponent` / `outputcomponent`：8 个名字，未知照报；输出分量写出时只认 `all`–`z`，其余不写（读码确定，放行）；
- * - `transformfunction`：7 个名字，未知照报；4a 期间两种噪声照报（4b）；
+ * - `transformfunction`：7 个名字，未知照报（两种噪声 4a 期间照报，4b 放开）；
  * - `inputrange*` / `outputrange*`：`vec3splat`；输入区间为 0 的分量执行时换成 `FLT_EPSILON`，输出区间不防 0；
  * - 四个控制点下标：解析期 `min(·, 7)`（`clampControlPoint`），`inputcontrolpoint1` 两个执行段都不读、只计数；
- * - `transformoctaves`：`asUInt`、不钳制（噪声用，4b）；
+ * - `transformoctaves`：`asUInt`、不钳制（`fbmnoise` 读；很大时噪声函数有界地提前停下，见 `fastnoise2.ts`、`noise.ts`）；
  * - `flags`：bit0 归一化后夹到 [0, 1]，bit1 输出区间后夹到 [0, 1]，别的位没有读者，中性。
  */
 function remapFields(kind: RemapKind): Record<string, ParticleFieldDef> {
@@ -455,7 +461,7 @@ function remapFields(kind: RemapKind): Record<string, ParticleFieldDef> {
   });
   return {
     operation: named("multiply", REMAP_OPERATIONS),
-    input: property(kind === "init" ? "maxlifetime" : "lifetimefraction", (v) => remapInputSupported(kind, v)),
+    input: property(kind === "init" ? "maxlifetime" : "lifetimefraction", remapInputSupported),
     output: property("size", (v) => remapOutputSupported(kind, v)),
     inputcomponent: named("all", REMAP_COMPONENTS),
     outputcomponent: named("all", REMAP_COMPONENTS),
@@ -497,6 +503,8 @@ const REMAP_COLUMNS: readonly ParticleColumn[] = [
   "alpha",
   "color0",
   "alpha0",
+  // op 噪声的种子（P4d 步骤 4b）
+  "random",
 ];
 
 /**
@@ -505,7 +513,7 @@ const REMAP_COLUMNS: readonly ParticleColumn[] = [
  * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`、`spritetrail`
  * （P4c 步骤 5）与 rope 两类（`rope` P4d 步骤 1，`ropetrail` P4d 步骤 2），P4d 步骤 3 的 initializer
  * `mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`（第一批有运行状态的模块，`mapsequence.ts`），以及 P4d 步骤 4a 的
- * initializer `remapinitialvalue`、operator `remapvalue`（同一条管线，`remap.ts`；噪声与写控制点归 4b，按字段照报）。
+ * initializer `remapinitialvalue`、operator `remapvalue`（同一条管线，`remap.ts`；噪声与写控制点是步骤 4b）。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -767,6 +775,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     normalize: normalizeRemap,
     run: remapInitialValue,
     controlPointRefs: remapControlPointRefs,
+    controlPointFlags: remapControlPointFlags,
   },
   {
     // 半隐式欧拉，drag 按 k0 衰减（实测核对过）。`previousPosition` 只在列标志 bit2 时开头拷一次
@@ -988,6 +997,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     normalize: normalizeRemap,
     run: remapValue,
     controlPointRefs: remapControlPointRefs,
+    controlPointFlags: remapControlPointFlags,
   },
   {
     // rea-p4c-render.md 7.1（renderer 类型 1，分支 `0x1401cc5b5`）：只调 `FUN_1401c22e0`，没有别的键。朝向的解析与几何见

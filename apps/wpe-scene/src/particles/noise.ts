@@ -4,6 +4,8 @@
  * `.claude/plans/wpe-import/3-scene/phase4/rea-p4b-modules.md` C1–C3（读码【确】），汇编原件在 `ignore/p4/rea/p4b-mod/`
  * （`noise3_sse4.asm`）与 `ignore/p4/rea/wp.asm`（`0x14027b090`、`0x14027b170`）。
  *
+ * P4d 步骤 4b 另加 `fbm1`（`snoise1` 的分形和，`remapinitialvalue` 的 `fbmnoise`）；`remapvalue` 的噪声是 FastNoise2，在 `fastnoise2.ts`。
+ *
  * 全部是 float32 进、float32 出，每一步 `Math.fround`；加法、乘法的结合顺序照汇编（`a·b + c` 是 `mulss` 再 `addss`，没有 FMA）。
  * 常量表与标量常量在 `noiseTables.ts`（由 `noise-tables.json` 生成）。
  */
@@ -77,6 +79,37 @@ export function snoise1(x: number): number {
   const n0 = f32(f32(grad1(PERM[i0 & 255]) * x0) * pow4(f32(ONE - f32(x0 * x0))));
   const n1 = f32(f32(grad1(PERM[(i0 + 1) & 255]) * x1) * pow4(f32(ONE - f32(x1 * x1))));
   return f32(f32(n1 + n0) * SNOISE1_SCALE);
+}
+
+/**
+ * `snoise1` 的分形和，`FUN_14027b4b0`（P4d 步骤 4b，`remapinitialvalue` 的 `fbmnoise`，rea-p4d-modules.md 2.5；汇编在
+ * `ignore/p4/rea/wp.asm`）。调用方传 `{频率 s, 振幅 1, 倍频 2, 增益 0.5}`（`FUN_14005f580` 建的结构，`xmm8 = 1`、`xmm7 = 2` 是
+ * initializer 段常驻的常量）与 `octaves`（`transformoctaves`，无符号），循环体内联了 C1（同一张置换表 `0x140484f40`、同样的运算顺序）：
+ * ```
+ * sum = 0; total = 0; f = s; a = 1
+ * 共 octaves 次（octaves = 0 时一次都不跑，0/0 得 NaN）:
+ *     n = snoise1(f·v);  total = total + a;  f = f·2;  sum = sum + n·a;  a = a·0.5
+ * return sum / total                                  // divss
+ * ```
+ * 和 FastNoise2 的 FBm（`fastnoise2.ts`）不同：没有种子，归一除的是实际累加的振幅和。两种提前停下和走完逐位相同（不计零的符号）：
+ * `sum` 成了 NaN 之后一直是 NaN；`a` 下溢成 0 且 `f` 是 0（`s = 0`）时之后每层只加 ±0。`f` 非零时每层翻倍，至多约 280 层就溢出、
+ * `n` 不再有限，`sum` 随之成 NaN，所以 `octaves` 很大时循环次数也有界。
+ */
+export function fbm1(v: number, frequency: number, octaves: number): number {
+  let sum = 0;
+  let total = 0;
+  let f = frequency;
+  let a = 1;
+  for (let i = 0; i < octaves; i++) {
+    const n = snoise1(f32(f * v));
+    total = f32(total + a);
+    f = f32(f * 2);
+    sum = f32(sum + f32(n * a));
+    a = f32(a * 0.5);
+    if (Number.isNaN(sum)) break;
+    if (a === 0 && f === 0) break;
+  }
+  return f32(sum / total);
 }
 
 /** `snoise1` 的梯度：`f32(h & 7) + 1`，`h & 8` 时翻符号（`xorps` 符号位）。 */

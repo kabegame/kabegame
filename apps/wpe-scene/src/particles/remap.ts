@@ -1,9 +1,9 @@
 /**
- * `remapinitialvalue`（initializer 15）、`remapvalue`（operator 19，有 blend 键时是 0x27）（P4d 步骤 4a）：一条管线
+ * `remapinitialvalue`（initializer 15）、`remapvalue`（operator 19，有 blend 键时是 0x27）（P4d 步骤 4a、4b）：一条管线
  * 「读输入 → 分量 → 归一化 → 变换 → 输出区间 → 运算写回」，两个模块共用这一份代码，按种类（`init` / `op`）在 18 处取变体。
- * 依据 `.claude/plans/wpe-import/3-scene/phase4/rea-p4d-modules.md` 第 2 节（读码【确】），4a 实施时又逐段对过汇编切片
+ * 依据 `.claude/plans/wpe-import/3-scene/phase4/rea-p4d-modules.md` 第 2 节（读码【确】），4a、4b 实施时又逐段对过汇编切片
  * `ignore/p4/rea/p4d-mod/init15.asm`（`0x14023ce53` 起）、`op19.asm`（`0x140244874` 起）、`op19b.asm`（blend 版），实测见
- * `p4-particles-REPORT.md`「P4d 语义的实测核对」的 remap 表。
+ * `p4-particles-REPORT.md`「P4d 语义的实测核对」的 remap 表，回放见 `ignore/p4/cases/d4.json`。
  *
  * 18 处变体（编号同计划「4a」；其余逐位相同）：
  * 1. 输入 `lifetimefraction`：init 读 `frame` 列（出生时 0，`randomframe` 时是 `R`，WPE 的 bug，实测确认）；op 是 `rcp(life)·age`。
@@ -15,7 +15,7 @@
  * 6. 输入 `particlesystemtime`：init 读系统时间 `St`（`sys+0x3f0`，乘过 `instanceoverride.rate`）；op 读场景时间 `T`，和 `runtime`
  *    相同（实测 rv-time / ri-time）。
  * 7. 输入 `controlpoint` / `deltatocontrolpoint` / `directiontocontrolpoint`：op 读 `C`、`C − P`、`(C − P)·(rsqrt(|C − P|²) & (0 <
- *    |C − P|²))`；init 的这三个输入会把控制点写成 0（WPE 的 bug），归 4b，4a 期间照报、不执行。
+ *    |C − P|²))`；init 先把 `cp[icp0].current` 的平移写成 0（WPE 的 bug，实测 ri-cpbug），输入是 0、`0 − P`、`normalize(0 − P)`（4b）。
  * 8. 输入 `angularspeed`：两边都是有角速度列（列标志 bit1）时读 `angvz`，否则 0。
  * 9. 分量 `sum` / `average` / `max` / `min`：只在输入编号 > 12（向量输入）时生效；init `(x + y) + z`、`max(max(z, y), x)`，op
  *    `(y + x) + z`、`max(max(x, y), z)`（逐位相同，照写）。
@@ -37,9 +37,21 @@
  * 18. 列标志：op 输出 `opacity` 置 alpha 当前值列（bit4）、输出 `color` 置颜色当前值列（bit3）；init 不置（`modules.ts` 的
  *     `columnFlagsOf`）。
  *
- * 4a 期间照报（能力表按字段报，执行函数整条不跑、不写任何列与控制点、不出 NaN），4b 放开：两种噪声变换（init `snoise1` / `fbm1`，
- * op 是 FastNoise2）、输出 `controlpoint`（`0x10000`、op 只写 lane 0）、init 的输入 16–18（把控制点写成 0）。`timeofday`（写入点没
- * 找到）与未知枚举值一直照报：输入按 0、输出不写、分量不变、变换不变。
+ * 4b 放开的三项（4a 期间按字段照报、整条不跑）：
+ * - **噪声变换**（rea 2.5，`s = transforminputscale`）：init 的 `simplexnoise` 是 `snoise1(v·s)·0.5 + 0.5`、`fbmnoise` 是
+ *   `fbm1(v; s, octaves)·0.5 + 0.5`（`noise.ts`），都不用 `R`；op 的是 FastNoise2 `simplex2(seed, v·s, 0)` / `fbm2(…, octaves)` 再
+ *   `·0.5 + 0.5`（`fastnoise2.ts`），种子 x 分量取每粒子 `R` 的位，y 是 `R ^ 0x0b3924ad`、z 是 `R ^ 0x493a8e83`。两边的 y、z 分量都只在
+ *   输出是向量时算（init 是 `0x14023d98b` 的 `FUN_140229370`，op 同变体 13；标量输出只读 x，结果没有差别）。
+ * - **输出 `controlpoint`**（rea 2.7、2.8）：`C = cp[ocp0].current` 的平移按 `outputcomponent` 逐分量运算后写回。init 每个新粒子按
+ *   出生顺序写一次（`remap` 时最后出生的胜出、`add` 时逐个累加）；op 每 4 个槽一组（含死槽）只有 lane 0（槽 `4g`）生效，逐组读当前的
+ *   `C`（WPE 把三个分量各自 `shufps` 成 4 份写到 `&t.x`、`&t.y`、`&t.z`，后写的覆盖前面的）。同一写法还把 `t.w`（写成 z）和 `previous`
+ *   的前两个 float 写坏，没有模块读它们（帧尾 `previous` 整体覆盖），不复刻。被写的控制点由 `remapControlPointFlags` 在建系统时置
+ *   `0x10000`（`controlpoints.ts`：不按 base / `W` 重算、不跟指针、不吃实例覆盖；初值仍是加载时的 `base = I + offset`）。
+ * - **init 的输入 16–18**（rea 2.2）：每个新粒子先把 `cp[icp0].current` 的平移写成 0（`0x14023d31d` 起）。`update` 不重算的点（本地
+ *   系统没有 bit1 的点，`controlpoints.ts`）之后一直是 0；每帧重算的点（世界系统的缺省更新 `W·base` 等）只在每帧第一个新粒子之前是
+ *   重算的值，同一帧后出生的读到 0。
+ *
+ * `timeofday`（写入点没找到）与未知枚举值一直照报：输入按 0、输出不写、分量不变、变换不变。
  *
  * op 的输出 `maxlifetime` 一直照报、不执行（同上，整条不跑）：WPE 的 op 按 4 个一组写到组尾（循环上界 `sys+0x340`），会把死槽和
  * 高水位之外的槽的 `life` 写回非零，死粒子下一帧再被判死、存活数（无符号）连减下溢，之后不再发射（回放案例 `d4` 的 rv-out-maxlifetime：
@@ -47,10 +59,13 @@
  * 照常发射，和 WPE 两样，又复刻不了。init 的 `maxlifetime` 只写新粒子，照常支持。
  *
  * 全部逐步 float32、运算顺序照汇编；WPE 用近似指令（`rcpps` / `rsqrtps`）的地方调 `f32.ts` 的 `rcp` / `rsqrt`，并且在执行时现算。
- * op 对 `[0, count)` 全部槽跑（含死槽），同其它 operator（写死槽的其它输出出生时都会被覆盖，不影响结果）。
+ * op 对 `[0, count)` 全部槽跑（含死槽），同其它 operator（写死槽的其它输出出生时都会被覆盖，不影响结果）；输出 `controlpoint` 只跑
+ * 每组 4 个槽的第一个（含死槽，见 `remapValue`），死槽的输入照样参与写控制点，同 WPE。
  */
+import { fbm2, simplex2 } from "./fastnoise2";
 import { clamp01, f32, PI, rcp, rsqrt } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
+import { fbm1, snoise1 } from "./noise";
 import { blendFactor, readBlend } from "./operators";
 
 type Vec3 = [number, number, number];
@@ -111,28 +126,31 @@ const TIME_OF_DAY = 10;
 const CONTROL_POINT = 16;
 /** 两种噪声变换（`simplexnoise` 5、`fbmnoise` 6）。 */
 const isNoise = (transform: number) => transform === 5 || transform === 6;
-/** init 的输入 16–18：把 `cp[icp0].current.t` 写成 0 再当输入（rea 2.2，`0x14023d31d` 起），4b 做。 */
-const isInitControlInput = (input: number) => input >= 16 && input <= 18;
 
 /**
- * 能力表用（`modules.ts` 的 `supported`）：`input` 的取值。`timeofday` 与未知名字照报；4a 期间 init 的 16–18 也照报（4b 放开）。
+ * 被 remap 写的控制点的内部位（`controlpoints.ts` 的 `CONTROL_POINT_FLAGS.remap`；这里不 import 它，免得 `modules` → `remap` →
+ * `controlpoints` → `modules` 成环，单测核对两者相等）。
  */
-export function remapInputSupported(kind: RemapKind, value: unknown): boolean {
+export const REMAP_CONTROL_POINT_FLAG = 0x10000;
+/** op 噪声 y、z 分量的种子：`R` 的位异或这两个常量（`0x1402456d7`、`0x140245706`，rea 2.5）；x 分量直接用 `R` 的位。 */
+export const REMAP_SEED_XOR: readonly number[] = [0, 0x0b3924ad, 0x493a8e83];
+
+/** 能力表用（`modules.ts` 的 `supported`）：`input` 的取值，两个模块相同。`timeofday` 与未知名字照报。 */
+export function remapInputSupported(value: unknown): boolean {
   const input = remapIndex(REMAP_PROPERTIES, value);
-  return input >= 0 && input !== TIME_OF_DAY && !(kind === "init" && isInitControlInput(input));
+  return input >= 0 && input !== TIME_OF_DAY;
 }
 /**
- * `output` 的取值：未知名字照报；`lifetimefraction`、9–12、`layerorigin` 读码确定不写，照常放行；4a 期间 `controlpoint` 照报（4b）；
- * op 的 `maxlifetime` 一直照报（WPE 写死槽的 life、存活数下溢，复刻不了，见文件头），init 的照常放行。
+ * `output` 的取值：未知名字照报；`lifetimefraction`、9–12、`layerorigin` 读码确定不写，照常放行；op 的 `maxlifetime` 一直照报（WPE 写
+ * 死槽的 life、存活数下溢，复刻不了，见文件头），init 的照常放行。
  */
 export function remapOutputSupported(kind: RemapKind, value: unknown): boolean {
   const output = remapIndex(REMAP_PROPERTIES, value);
-  return output >= 0 && output !== CONTROL_POINT && !(kind === "op" && output === MAX_LIFETIME);
+  return output >= 0 && !(kind === "op" && output === MAX_LIFETIME);
 }
-/** `transformfunction` 的取值：未知照报；4a 期间两种噪声照报（4b）。 */
+/** `transformfunction` 的取值：未知照报。 */
 export function remapTransformSupported(value: unknown): boolean {
-  const transform = remapIndex(REMAP_TRANSFORMS, value);
-  return transform >= 0 && !isNoise(transform);
+  return remapIndex(REMAP_TRANSFORMS, value) >= 0;
 }
 
 /**
@@ -149,6 +167,17 @@ export function remapControlPointRefs(fields: Readonly<Record<string, unknown>>)
   if (uses([7, 8, 16, 17, 18])) refs.push(fields.inputcontrolpoint0 as number, fields.outputcontrolpoint0 as number);
   if (uses([8])) refs.push(fields.inputcontrolpoint1 as number, fields.outputcontrolpoint1 as number);
   return refs;
+}
+
+/**
+ * 要并进控制点 `flags` 的位（`modules.ts` 的 `controlPointFlags`，`controlpoints.ts` 建系统时用）：输出是 `controlpoint` 时 `ocp0` 置
+ * `0x10000`（rea 2.1、2.8【确】：`FUN_1401bc470` 把 `ocp0` 插进解析器的集合，解析完控制点数组后对集合里 `< 8` 的下标按位或，
+ * `0x1401d0860`–`0x1401d087e`）。输入 16–18、输出 17、18 不插。两个模块都是。
+ */
+export function remapControlPointFlags(fields: Readonly<Record<string, unknown>>): [number, number][] {
+  return remapIndex(REMAP_PROPERTIES, fields.output) === CONTROL_POINT
+    ? [[fields.outputcontrolpoint0 as number, REMAP_CONTROL_POINT_FLAG]]
+    : [];
 }
 
 /** `FLT_EPSILON`（`0x34000000`）：输入区间为 0 的分量换成它（解析期）；init 的线段长度下限（`xmm9`，`0x1404925e0`）。 */
@@ -178,6 +207,8 @@ interface RemapPlan {
   scale: number;
   /** op 的正弦用 `s·π`（变体 11）。 */
   sineScale: number;
+  /** `transformoctaves`（解析值，无符号、不钳制；只有 `fbmnoise` 读）。 */
+  octaves: number;
   /** `flags` bit0：归一化后夹到 [0, 1]。 */
   clampInput: boolean;
   /** `flags` bit1：输出区间后夹到 [0, 1]。 */
@@ -216,6 +247,7 @@ function remapPlan(kind: RemapKind, fields: ParticleFields): RemapPlan {
     outRange: outMin.map((min, i) => f32(outMax[i] - min)),
     scale,
     sineScale: f32(scale * PI),
+    octaves: fields.transformoctaves as number,
     clampInput: (flags & 1) !== 0,
     clampOutput: (flags & 2) !== 0,
     icp0: fields.inputcontrolpoint0 as number,
@@ -224,17 +256,9 @@ function remapPlan(kind: RemapKind, fields: ParticleFields): RemapPlan {
   };
 }
 
-/**
- * 照报、整条不跑的取值（见文件头）：4a 期间的两种噪声、输出 `controlpoint`、init 的输入 16–18（4b 放开），以及一直照报的 op 输出
- * `maxlifetime`。
- */
+/** 照报、整条不跑的取值（见文件头）：只剩 op 的输出 `maxlifetime`（4a 期间的噪声、写控制点、init 的输入 16–18 已在 4b 放开）。 */
 function notExecuted(plan: RemapPlan): boolean {
-  return (
-    isNoise(plan.transform) ||
-    plan.output === CONTROL_POINT ||
-    (plan.kind === "init" && isInitControlInput(plan.input)) ||
-    (plan.kind === "op" && plan.output === MAX_LIFETIME)
-  );
+  return plan.kind === "op" && plan.output === MAX_LIFETIME;
 }
 
 const sq = (x: number) => f32(x * x);
@@ -325,13 +349,16 @@ function readInput(plan: RemapPlan, context: ParticleRunContext, slot: number): 
     case 15:
       return lane(c.velocity, slot);
     case 16: {
-      // controlpoint（变体 7，op；init 归 4b，走不到这里）
+      // controlpoint（变体 7）：op 读 `cp[icp0].current.t`；init 先把它写成 0（见 `initControlInput`）
+      if (init) return initControlInput(plan, context, slot);
       const t = translation(context, plan.icp0);
       return [t[0], t[1], t[2]];
     }
     case 17: // deltatocontrolpoint（op）：`C − P`
+      if (init) return initControlInput(plan, context, slot);
       return sub(translation(context, plan.icp0), lane(c.position, slot));
     case 18: {
+      if (init) return initControlInput(plan, context, slot);
       // directiontocontrolpoint（op）：`(C − P)·(rsqrt(|C − P|²) & (0 < |C − P|²))`（`0x140244f59` 起）
       const d = sub(translation(context, plan.icp0), lane(c.position, slot));
       const d2 = norm2yx(d);
@@ -348,6 +375,25 @@ function readInput(plan: RemapPlan, context: ParticleRunContext, slot: number): 
       s = 0;
   }
   return [s, s, s];
+}
+
+/**
+ * init 的输入 16–18（变体 7，rea 2.2【确】，`0x14023d31d`、`0x14023d3af`、`0x14023d473`）：先用 glm 访问器（`FUN_140251ca0` /
+ * `FUN_140251c20`）取 `&cp[icp0].current[3][i]`，把输入累加器（此时是序言清好的 +0）逐分量存进去——控制点的平移被写成 (0, 0, 0)；
+ * 再以那个累加器（0）代替 `C` 算输入（init 自己的写法：精确的 `normalize`，不是 op 的 `rsqrt` 加掩码）：
+ * - `controlpoint`：0；
+ * - `deltatocontrolpoint`：`0 − P`（`FUN_14005f0a0` 逐分量减）；
+ * - `directiontocontrolpoint`：`normalize(0 − P)`（`FUN_14005eb80`：`v·(1/sqrtss((x² + y²) + z²))`，`P` 在原点时 0·inf 得 NaN，WPE
+ *   同样，实测 ri-in-directiontocontrolpoint 的尺寸是 NaN）。
+ * 看起来是输出段的代码被抄进了输入段（rea 2.2）；实测 ri-cpbug 的出生点从 0 出发。每个新粒子都写一次。
+ */
+function initControlInput(plan: RemapPlan, context: ParticleRunContext, slot: number): Vec3 {
+  translation(context, plan.icp0).fill(0);
+  if (plan.input === CONTROL_POINT) return [0, 0, 0];
+  const d = sub([0, 0, 0], lane(context.columns.position, slot));
+  if (plan.input === 17) return d;
+  const inverse = f32(1 / f32(Math.sqrt(norm2(d))));
+  return [f32(d[0] * inverse), f32(d[1] * inverse), f32(d[2] * inverse)];
 }
 
 /**
@@ -428,8 +474,11 @@ function normalizeInput(plan: RemapPlan, v: Vec3): void {
   }
 }
 
-/** 一个分量的变换（rea 2.5，变体 11、12）；`none` 与未知值不变。噪声归 4b（走不到这里）。 */
-function transformLane(plan: RemapPlan, v: number): number {
+/**
+ * 一个分量的变换（rea 2.5，变体 11、12 与 4b 的噪声）；`none` 与未知值不变。`seed` 是 op 噪声这个分量的种子（`mapOutput` 按分量
+ * 异或好），别的变换不读。
+ */
+function transformLane(plan: RemapPlan, v: number, seed: number): number {
   const init = plan.kind === "init";
   switch (plan.transform) {
     case 1: {
@@ -457,16 +506,44 @@ function transformLane(plan: RemapPlan, v: number): number {
       const fraction = f32(a - (init ? Math.floor(a) : Math.trunc(a)));
       return f32(1 - Math.abs(f32(f32(fraction * 2) - 1)));
     }
+    case 5: {
+      // simplexnoise（4b）：init `snoise1(v·s)`（C1，`0x14023d963`，不用 R）；op FastNoise2 `simplex2(seed, v·s, 0)`（槽 1）；
+      // 再 `·0.5 + 0.5`
+      const x = f32(v * plan.scale);
+      const n = init ? snoise1(x) : simplex2(seed, x, 0);
+      return f32(f32(n * 0.5) + 0.5);
+    }
+    case 6: {
+      // fbmnoise（4b）：init `fbm1`（`0x14023d9d8`，频率 s 在里面乘，不用 R）；op `fbm2(seed, v·s, 0, octaves)`（槽 4，归一系数
+      // 按 octaves 现算）；再 `·0.5 + 0.5`
+      const n = init ? fbm1(v, plan.scale, plan.octaves) : fbm2(seed, f32(v * plan.scale), 0, plan.octaves);
+      return f32(f32(n * 0.5) + 0.5);
+    }
     default:
       return v;
   }
 }
 
-/** 变换与输出区间（rea 2.5、2.6，变体 13）：init 三分量；op 标量输出只算 x（y、z 保持归一化的值，不会被读）。 */
-function mapOutput(plan: RemapPlan, v: Vec3): void {
+const seedFloat = new Float32Array(1);
+const seedInt = new Int32Array(seedFloat.buffer);
+/** float32 的位当 int32（op 噪声的种子：`movdqu` 直接把 `R` 列 `sys+0x338` 当整数读，rea 2.9）。 */
+function floatBits(value: number): number {
+  seedFloat[0] = value;
+  return seedInt[0];
+}
+
+/**
+ * 变换与输出区间（rea 2.5、2.6，变体 13）：init 三分量；op 标量输出只算 x（y、z 保持归一化的值，不会被读）。噪声的 y、z 只在输出是
+ * 向量时变换（init 也是，`0x14023d98b`；标量输出的 y、z 仍过输出区间，同 WPE，不会被读）；op 噪声的种子是这个粒子的 `R` 的位，y、z
+ * 分量再异或 `REMAP_SEED_XOR`。
+ */
+function mapOutput(plan: RemapPlan, context: ParticleRunContext, slot: number, v: Vec3): void {
   const lanes = plan.threeLanes ? 3 : 1;
+  const noise = isNoise(plan.transform);
+  const transformed = noise && !isVector(plan.output) ? 1 : lanes;
+  const seed = noise && plan.kind === "op" ? floatBits(context.columns.random[slot]) : 0;
   for (let i = 0; i < lanes; i++) {
-    const t = transformLane(plan, v[i]);
+    const t = i < transformed ? transformLane(plan, v[i], seed ^ REMAP_SEED_XOR[i]) : v[i];
     const o = f32(f32(t * plan.outRange[i]) + plan.outMin[i]);
     v[i] = !plan.clampOutput ? o : plan.kind === "init" ? clamp01(o) : clampOp(o);
   }
@@ -550,6 +627,15 @@ function writeOutput(plan: RemapPlan, context: ParticleRunContext, slot: number,
     case 15:
       byComponent(c.velocity);
       return;
+    case 16: {
+      // controlpoint（4b，rea 2.7、2.8）：`C = cp[ocp0].current` 的平移按分量运算后写回 xyz（init `0x14023eac2`、op `0x140246781`）。
+      // op 只对每组的 lane 0 调到这里（`remapValue`）；WPE 的 op 另把 `t.w` 和 `previous` 的前两个 float 写坏，没有读者，不复刻
+      const t = translation(context, plan.ocp0);
+      const k = plan.outputComponent;
+      if (k === 0) for (let i = 0; i < 3; i++) t[i] = apply(t[i], o[i]);
+      else if (k >= 1 && k <= 3) t[k - 1] = apply(t[k - 1], o[k - 1]);
+      return;
+    }
     case 17: {
       // deltatocontrolpoint：`Δ = C − P`，按分量运算，再无条件写回三分量 `P = C − Δ′`（init `0x14023f086`、op `0x140246bd1`）
       const C = translation(context, plan.ocp0);
@@ -564,7 +650,7 @@ function writeOutput(plan: RemapPlan, context: ParticleRunContext, slot: number,
     case 18:
       writeDirection(plan, context, slot, o, apply);
       return;
-    // 0、9–12、19 读码确定不写；16 归 4b（4a 照报，走不到这里）；未知输出不写
+    // 0、9–12、19 读码确定不写；未知输出不写
   }
 }
 
@@ -690,18 +776,19 @@ function writeDirection(plan: RemapPlan, context: ParticleRunContext, slot: numb
   for (let i = 0; i < 3; i++) P[i][slot] = f32(C[i] - f32(s * n[i]));
 }
 
-/** 一个粒子走一遍管线（不含 4a 的检查）。 */
+/** 一个粒子走一遍管线（不含照报的检查）。 */
 function remapSlot(plan: RemapPlan, context: ParticleRunContext, slot: number, b: number | null): void {
   const v = readInput(plan, context, slot);
   if (isVector(plan.input)) applyComponent(plan.kind, plan.inputComponent, v);
   normalizeInput(plan, v);
-  mapOutput(plan, v);
+  mapOutput(plan, context, slot, v);
   writeOutput(plan, context, slot, v, b);
 }
 
 /**
- * 一个粒子走一遍管线：读输入 → 分量 → 归一化 → 变换 → 输出区间 → 运算写回。init 的 `slot` 是新粒子，op 的是 `[0, count)` 里的每个槽。
- * `blend` 是这个粒子的 blend 系数 `b`（op 的 blend 记录才有，否则 null）。照报的取值（4a 期间的几项与 op 的输出 maxlifetime）整条不跑（见文件头）。
+ * 一个粒子走一遍管线：读输入 → 分量 → 归一化 → 变换 → 输出区间 → 运算写回。init 的 `slot` 是新粒子，op 的是 `[0, count)` 里的槽。
+ * `blend` 是这个粒子的 blend 系数 `b`（op 的 blend 记录才有，否则 null）。照报的取值（op 的输出 maxlifetime）整条不跑（见文件头）。
+ * 只管一个槽：op 输出 `controlpoint` 只有 lane 0 生效是 `remapValue` 的循环决定的。
  */
 export function remapParticle(
   kind: RemapKind,
@@ -722,13 +809,18 @@ export function remapInitialValue(fields: ParticleFields, context: ParticleRunCo
 /**
  * `remapvalue`（op 19，非 blend `0x140244874`、blend `0x140246ec0`）：对 `[0, count)` 每个槽（含死槽）走一遍。有 blend 时每个粒子按
  * `t = age·rcp(life)` 算 `b`（`FUN_14022a530`，同其它 operator）。不用 `h`、`k`：两遍模式下两遍都完整执行，持久列（life、rotation、
- * 角速度、位置、速度）上的 `multiply` / `add` / `subtract` 一帧叠两次（实测 rv-ops）。
+ * 角速度、位置、速度、控制点）上的 `multiply` / `add` / `subtract` 一帧叠两次（实测 rv-ops）。
+ *
+ * 输出 `controlpoint`（4b，rea 2.8【确】，`0x1402469db`–`0x140246a4d`）：WPE 每 4 个槽一组（含死槽）读一次 `C`、4 个 lane 各自运算，
+ * 再把 x、y、z 各自从 lane 0 广播写回，所以只有每组第一个槽 `4g`（`4g < count`）的结果生效，`remap` 时最后一组胜出、`add` 时每组累加
+ * 一次；其余 lane 的结果丢掉、没有别的副作用，这里只算 lane 0。
  */
 export function remapValue(fields: ParticleFields, context: ParticleRunContext): void {
   const plan = remapPlan("op", fields);
   if (notExecuted(plan)) return;
   const blend = readBlend(fields);
   const { age, life } = context.columns;
-  for (let i = 0; i < context.count; i++)
+  const stride = plan.output === CONTROL_POINT ? 4 : 1;
+  for (let i = 0; i < context.count; i += stride)
     remapSlot(plan, context, i, blend.active ? blendFactor(blend, f32(age[i] * rcp(life[i]))) : null);
 }
