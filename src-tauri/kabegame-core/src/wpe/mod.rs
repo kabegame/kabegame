@@ -7,6 +7,7 @@
 //! 本模块只做只读解析与目录展开，不写库、不复制或转码用户目录里的任何文件。
 
 // 入库模型与属性解析在所有构建里都要（Storage、Android 的壁纸目标），发现与识别只随 wpe feature 编译。
+pub mod dir_hash;
 #[cfg(feature = "wpe")]
 pub mod discover;
 #[cfg(feature = "wpe")]

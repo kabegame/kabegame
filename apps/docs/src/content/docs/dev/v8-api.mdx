@@ -123,6 +123,7 @@ await Kabegame.downloadImage(imageUrl, {
 - `downloadImage` 把资源加入下载队列。
 - `opts.metadata` 是任意 JSON，写入 `metadata` 行，用于详情页展示（配合 `templates/description.ejs`）。存储时会由应用自动盖上**运行插件的版本号**；请在 metadata 里自带一个 `schema` 标记供迁移脚本判断。
 - 多张图共享一行 metadata，或需要在解析出图片 URL 前先写 metadata 时，用 `createImageMetadata` 拿到 `metadata_id` 再传给 `downloadImage(url, { metadata_id })`。
+- 第一个参数也可以是 `Kabegame.fs` 的虚拟路径。加上 `relocate: true` <Badge text="4.7.0" variant="note" /> 时，这个文件会被移进输出目录而不是复制一份，调用之后该路径不再存在；虚拟路径还可以是一个 Wallpaper Engine 壁纸目录（必须带 `relocate: true`，仅桌面端）。选项说明见 [Kabegame API 字典](/reference/kabegame-api/)。
 
 ### 元数据搜索片段
 

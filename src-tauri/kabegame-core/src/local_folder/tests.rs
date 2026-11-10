@@ -1272,6 +1272,129 @@ fn album_for_file_matches_direct_parent_only() {
         .is_none());
 }
 
+// ---------- WPE 壁纸子目录：按「文件」对待 ----------
+
+/// 造一个可入库的网页壁纸目录，里面带一张真 PNG（若被当成散图会多出一行）。
+#[cfg(feature = "wpe")]
+fn write_wpe_dir(dir: &Path, seed: &str) {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(
+        dir.join("project.json"),
+        format!(r#"{{"type":"web","file":"index.html","title":"{seed}","preview":"preview.png"}}"#),
+    )
+    .unwrap();
+    fs::write(dir.join("index.html"), format!("<html>{seed}</html>")).unwrap();
+    write_png(&dir.join("preview.png"), [42, 42, 42]);
+}
+
+#[cfg(feature = "wpe")]
+fn image_type_for_path(path: &Path) -> Option<String> {
+    Storage::find_image_by_path(&path.to_string_lossy())
+        .unwrap()
+        .and_then(|image| image.media_type)
+}
+
+#[cfg(feature = "wpe")]
+#[tokio::test(flavor = "current_thread")]
+async fn wpe_subdir_is_one_row_in_parent_album_without_child_album() {
+    let _guard = test_guard();
+    let fast = FastSyncGuard::set(true);
+    let (_temp, root) = temp_album_dir();
+    let wall = root.join("wall");
+    write_wpe_dir(&wall, "sync-full");
+    fs::create_dir(root.join("child")).unwrap();
+    write_png(&root.join("root.png"), [1, 2, 3]);
+    write_png(&root.join("child/child.png"), [3, 2, 1]);
+    let root_id = create_sync_album(&root, None, SyncMode::Recursive);
+
+    run_full_to_idle(&root_id, manual_opts(Descend::CreateMissing)).await;
+
+    assert!(album_id_for_path(&wall).is_none(), "WPE 目录不建子画册");
+    assert!(album_id_for_path(&root.join("child")).is_some());
+    assert_eq!(image_type_for_path(&wall).as_deref(), Some("x-wpe/web"));
+    assert!(
+        image_id_for_path(&wall.join("preview.png")).is_none(),
+        "目录里的文件不单独入库"
+    );
+    assert_eq!(album_image_count(&root_id), 2, "root.png + 壁纸目录一行");
+
+    // 目录 mtime 未变的快速路径直接列子目录：同样不能为壁纸目录补建子画册
+    run_full_to_idle(&root_id, manual_opts(Descend::CreateMissing)).await;
+    assert!(album_id_for_path(&wall).is_none());
+    assert_eq!(album_image_count(&root_id), 2);
+
+    // 整个目录消失：全量同步删行
+    drop(fast);
+    let _fast = FastSyncGuard::set(false);
+    let image_id = image_id_for_path(&wall).unwrap();
+    fs::remove_dir_all(&wall).unwrap();
+    run_full_to_idle(&root_id, manual_opts(Descend::CreateMissing)).await;
+    assert!(Storage::find_image_by_id(&image_id).unwrap().is_none());
+    assert_eq!(album_image_count(&root_id), 1);
+}
+
+/// 旧版本已经为壁纸目录建了子画册：保持原样，照常按子画册同步里面的文件。
+#[cfg(feature = "wpe")]
+#[tokio::test(flavor = "current_thread")]
+async fn wpe_dir_with_existing_child_album_stays_an_album() {
+    let _guard = test_guard();
+    let _fast = FastSyncGuard::set(false);
+    let (_temp, root) = temp_album_dir();
+    let wall = root.join("wall");
+    write_wpe_dir(&wall, "sync-legacy");
+    let root_id = create_sync_album(&root, None, SyncMode::Recursive);
+    let child_id = create_sync_album(&wall, Some(&root_id), SyncMode::None);
+
+    run_full_to_idle(&root_id, manual_opts(Descend::CreateMissing)).await;
+
+    assert!(album_exists(&child_id));
+    assert!(image_id_for_path(&wall).is_none(), "不写 WPE 行");
+    assert!(image_id_for_path(&wall.join("preview.png")).is_some());
+    assert_eq!(album_image_count(&child_id), 1);
+    assert_eq!(album_image_count(&root_id), 0);
+
+    // 监听批次同样不把它当条目
+    process_paths([(wall.clone(), PathHint::Dir)]).await;
+    assert!(image_id_for_path(&wall).is_none());
+}
+
+#[cfg(feature = "wpe")]
+#[tokio::test(flavor = "current_thread")]
+async fn batch_wpe_dir_adds_row_ignores_inner_changes_and_removal_deletes_row() {
+    let _guard = test_guard();
+    let (_temp, root) = temp_album_dir();
+    let album_id = create_sync_album(&root, None, SyncMode::Recursive);
+    let wall = root.join("wall");
+    write_wpe_dir(&wall, "sync-batch");
+
+    process_paths([(wall.clone(), PathHint::Dir)]).await;
+    assert!(album_id_for_path(&wall).is_none(), "事件也不建子画册");
+    assert_eq!(image_type_for_path(&wall).as_deref(), Some("x-wpe/web"));
+    assert_eq!(album_image_count(&album_id), 1);
+    let image_id = image_id_for_path(&wall).unwrap();
+    let hash = image_hash_for_path(&wall);
+
+    // 目录内部写文件：不产生新行、不改这一行
+    let inner = wall.join("inner.png");
+    write_png(&inner, [7, 7, 7]);
+    process_paths([
+        (inner.clone(), PathHint::File),
+        (wall.clone(), PathHint::Dir),
+    ])
+    .await;
+    assert!(image_id_for_path(&inner).is_none());
+    assert_eq!(image_id_for_path(&wall).as_deref(), Some(image_id.as_str()));
+    assert_eq!(image_hash_for_path(&wall), hash);
+    assert_eq!(album_image_count(&album_id), 1);
+    assert!(album_id_for_path(&wall).is_none());
+
+    // 删掉整个目录：行被删
+    fs::remove_dir_all(&wall).unwrap();
+    process_paths([(wall.clone(), PathHint::Dir)]).await;
+    assert!(Storage::find_image_by_id(&image_id).unwrap().is_none());
+    assert_eq!(album_image_count(&album_id), 0);
+}
+
 #[test]
 fn helper_timestamp_is_valid() {
     assert!(now_secs() > 0);

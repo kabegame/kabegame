@@ -403,7 +403,8 @@
     },
     // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
     // name（展示名）、metadata_id（已有 metadata 行）、metadata（任意 JSON）、
-    // url（source url）、searchTexts（元数据搜索片段）。metadata_id 优先于 metadata。
+    // url（source url）、searchTexts（元数据搜索片段）、relocate（VFS 路径移走而不是复制，
+    // 目录即 WPE 壁纸目录）。metadata_id 优先于 metadata。
     // metadata 版本（plugin_version）由应用自动盖章，插件不可传入。
     async downloadImage(url, opts) {
       const rawUrl = String(url ?? "");
@@ -420,6 +421,7 @@
         sourceUrl: o.url ?? undefined,
         labels: o.labels ?? undefined,
         searchTexts: o.searchTexts ?? undefined,
+        relocate: o.relocate ?? undefined,
       }));
     },
     // 监听页面自发触发的浏览器原生下载。成功时 path 可直接交给 downloadImage；

@@ -1,5 +1,35 @@
 # v4.7.0 regression
 
+## WPE 壁纸目录：本地导入识别、经 VFS 目录下载、目录哈希去重
+
+2026-11-10 macOS dev。`postprocess_downloaded_image` 的 `Path` 来源认目录（WPE 壁纸目录），`wpe-import`、local-import、文件夹同步、下载四个入口共用 `ingest_wpe_dir`；WPE 行的 `hash` / `size` 改为目录哈希与目录总字节数，v051 空迁移登记回填作业 `wpe_dir_hash` 重算存量行；`downloadImage` 新增 `relocate`（只对任务 VFS 路径生效，目录即壁纸目录）；桌面 Web 服务器的 `/file` 对 WPE 目录返回清单、对目录内文件流式返回；SDK 新增 `downloadWpeWallpaper`，`kabegame-server` 插件（0.3.0）对 `x-wpe/*` 行改走它。说明见 `cocs/wpe/WPE_IMPORT.md` 第四节、`cocs/downloader-tasks/DOWNLOADER_FLOW.md` §6、`cocs/local-folder/LOCAL_FOLDER_SYNC.md`「WPE 壁纸子目录」。
+
+已知取舍：回填作业跑完之前存量 WPE 行按目录哈希查不到，这段时间下到本机已有的壁纸会多落一份；重跑同一批壁纸仍会先把整张传完再靠哈希判重；存量同步目录里的壁纸子目录要等该目录下一次变化才被识别；旧版本已为壁纸目录建的子画册不迁移。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | W0 单测与检查 | macOS | check-kabegame 全量（vue-tsc + cargo check）、`-c kabegame-cli`、`--mode web`（不开 `wpe` feature）；kabegame-core `--lib` 全量；kabegame 全量；kabegame-cli 全量；前端 vitest 全量；插件仓库 `tsc -p tsconfig.check.json` | 0 error；全过 | 2026-11-10 Claude：三种 check 0 error；core 499 过 / 1 失败（`replace_image_thumbnail_path_deletes_old_independent_thumbnail`，与本次无关：断言缩略图目录之外的文件会被删，实现只删 `thumbnails_dir` 内的）；kabegame 83、cli 27、vitest 71 + 48 个文件全过；插件 tsc 通过。`--mode android` 本机缺 `bin/android/arm64/rusty_v8-build/` 跑不了，用 `--mode web` 代替验证非 wpe 构建 |
+| [x] | W1 目录哈希 | 单测 | `wpe::dir_hash` | 创建顺序不同哈希相同；改一个字节 / 改文件名 / 挪子目录哈希不同；路径与内容边界不混淆；加 `.DS_Store` / `Thumbs.db` / `Desktop.ini` 不变；符号链接跳过；与同内容单文件的文件哈希不相等 | 2026-11-10：7 个单测通过 |
+| [x] | W2 后处理目录分支 | 单测 | `crawler::wpe_import::tests::ingest`：向 `postprocess_downloaded_image` 喂目录 | 原地导入得到一行 `x-wpe/web`、`size` 为目录总字节、metadata 是 `project.json`（调用方的 `metadata_id` 忽略）；再喂一次 `Ok(false)`；`relocate_to: Some` 时目录被移到目标目录、同名得到 `名(1)`；不删源时是复制；去重命中且 `delete_source` 时源目录被删、已有行的目录不动；原地去重命中不删任何东西；关去重时相同内容各入一行；非壁纸目录 / `application` 类型报错且源不动 | 2026-11-10：6 个单测通过；`move_dir_unique` / `copy_dir_unique` 另有 3 个单测 |
+| [x] | W3 去重命中不改 WPE 行 | 单测 | `plain_download_hitting_wpe_row_keeps_its_identity`：WPE 行的 hash 等于某张 PNG 的文件哈希，开「自动去重」+「去重时更新元数据」后以另一个插件下载这张 PNG | 返回 `Ok(false)`；WPE 行的 `plugin_id` / `metadata_id` / `post_url` 不变 | 2026-11-10：通过 |
+| [x] | W4 回填作业 | 单测 + dev 库 | `backfills::wpe_dir_hash` 单测；dev app 升级到 v051 | 入口哈希变为目录哈希、`size` 为目录总字节；目录缺失的行与普通图片原样；只有 `size` 变了的行带补丁；游标可续跑；没有 WPE 行时一批空跑完成 | 2026-11-10 Claude：3 个单测通过；dev 库（18 行 WPE）升级后 `backfill_jobs` 为 `processed 18 / total 18 / done 1 / attempts 0`，用独立的 Python 实现逐行重算，18 行的 `hash` 与 `size` 全部一致。**忙碌卡片没有肉眼确认**（作业在应用自动重启后瞬间跑完） |
+| [x] | W5 本地导入：递归 | dev CLI → 主程序 | `plugin run local-import --var paths=<目录>`：目录下有网页壁纸、嵌套一层的场景壁纸、带无关 `project.json` 的普通目录（内有图片与子目录图片） | 两张壁纸各一行（`x-wpe/web`、`x-wpe/scene`，`plugin_id` 为 `wpe-import`，缩略图是目录里的 `preview.png`），壁纸目录里的预览图不单独成行；普通目录照常递归，两张图片各一行 | 2026-11-10 Claude：下载 4 张、去重 0 |
+| [x] | W6 本地导入：非递归 / 根是壁纸目录 / 幂等 / 空跑 | dev CLI → 主程序 | `--var recursive=false`；`paths` 直接给壁纸目录；同一目录再跑一次；`--dry-run` | 非递归：壁纸一行 + 本层图片，子目录图片不导入；根目录本身作为一张壁纸；重跑日志「已在库中，仅补充画册成员」、去重 1；空跑日志「空跑：跳过导入」、不入库 | 2026-11-10 Claude：四项均符合 |
+| [x] | W7 本地导入：`copy_to_dir` | 桌面 dev（kabegame-dev 调 `start_task`） | 与拖入文件夹画册相同的参数：`outputDir` + `userConfig { paths, recursive: true, copy_to_dir: true }`，源目录含一张图片和一个壁纸目录 | 壁纸目录整个复制到目标目录（同名目录，没有 `.kabegame-part-*` 残留），行的 `local_path` 是副本；图片照常复制；源目录不动 | 2026-11-10 Claude：符合。真实的拖拽手势没有测 |
+| [x] | W8 `wpe-import` 任务 | dev CLI → 主程序 | `plugin run wpe-import --var sources= --var extraDirs=<含壁纸目录的文件夹>`，再跑一次 | 第一次新增 1、挂上 `WPE/genre/<tag>` 标签；第二次「已在库中」、摘要「新增 0，已存在 1」、任务去重数 1 | 2026-11-10 Claude：符合。「壁纸」对话框（自动发现三类来源）没有测，本机没有 Steam 版 WPE |
+| [x] | W9 文件夹同步 | 单测 | `local_folder::tests` 新增 3 个用例 | 同步目录下的壁纸子目录在父画册多一行、没有子画册、目录里的文件不单独入库；目录 mtime 未变的快速路径也不补建子画册；已有子画册的目录保持原样（不写 WPE 行）；监听批次新增壁纸目录只加一行；目录内写文件不产生变化；删整个目录后行被删（全量与监听批次两条路径） | 2026-11-10：通过。桌面真机没有测 |
+| [x] | W10 `relocate` | dev CLI → 主程序（最小 V8 插件） | 插件把 PNG 与三个壁纸目录写进 `tmp` 后 `downloadImage(path, { relocate: true })`；另测只读 `input` 挂载、目录不带 `relocate`、非壁纸目录、挂载根、http URL 带 `relocate` | 文件与三个目录都移到输出目录、`tmp` 里不留；同名壁纸得到 `名` 与 `名(1)`，不传 `name` 时目录名取 `project.json` 标题；壁纸行 `plugin_id` 为 `wpe-import`、metadata 是 `project.json`（插件传的 `metadata` 忽略）；`input` 报「输入挂载为只读」且源文件不动；目录不带 `relocate` 报 `Is a directory`；非壁纸目录报「目录内没有 project.json」且目录留在 `tmp`；挂载根被拒；http 照常下载 | 2026-11-10 Claude：下载 5 张、失败 4，逐项符合。`resolve_relocate_source` 另有 3 个单测（含目录内符号链接被拒） |
+| [x] | W11 服务端 `/file` | 单测（真实 axum 路由 + 回环 TCP） | `http_server::tests::wpe_routes` | `/file/<WPE 目录>` 返回按路径排序的清单（不含 `.DS_Store`，`Cache-Control: no-store`）；目录内文件可取（含中文与空格文件名、大于一个流式分块的文件，带 `Content-Length`）；`Range` 仍返回 206；`..`、指向目录外的符号链接、未入库的目录、不存在的文件、子目录本身都是 404；普通图片行的响应头与内容不变，旁边没入库的文件 404 | 2026-11-10：2 个单测通过。大文件下进程内存没有实测（响应体是 256 KiB 分块的流） |
+| [x] | W12 插件端到端（模拟服务端） | dev CLI → 主程序 + 回环模拟服务端 | 用实现了插件所需协议子集（`/rpc` 与 `/file` 清单 / 文件）的本地模拟服务端提供网页、场景、视频三张壁纸，`plugin run kabegame-server.kgpg --id <测试 id>` 过滤模式复制 | 日志逐文件打印进度；三类各入一行，`plugin_id` 为 `wpe-import`，`hash` 与源目录的目录哈希一致（含中文、空格文件名），标签 `WPE/genre/…` 与帖子地址带过来，视频行 `compatible_path` 指向新目录里的入口视频；任务结束后插件 `tmp/wpe` 为空 | 2026-11-10 Claude：符合。**不是对真实服务端跑的**：开启 dev app 的 Web 服务器被权限策略拒绝，服务端实现由 W11 覆盖 |
+| [x] | W13 插件端到端：去重重跑 / 旧服务端 / 空跑 | 同上 | 开「自动去重」后重跑；模拟服务端对目录请求返回 404；`--dry-run` | 重跑：下载 0、去重 3，输出目录没有多出目录，`tmp/wpe` 为空，已有行的 `plugin_id` / `metadata_id` 不变；旧服务端：每张提示「服务器不支持传输 Wallpaper Engine 壁纸」并跳过；空跑：每张记一次「空跑：跳过下载」，不下载文件 | 2026-11-10 Claude：符合（验证后「自动去重」已恢复为关闭） |
+| [x] | W14 下载来的壁纸能预览、删记录不删目录 | 桌面 dev（kabegame-dev） | 打开 W12 复制来的网页壁纸预览；对 W10 移进输出目录的壁纸执行「删除文件」（`batch_delete_images`） | 预览里页面正常运行（网页壁纸目录索引已包含新目录），属性面板可用；删除后记录没了、目录仍在 | 2026-11-10 Claude：预览显示页面内容，属性面板显示「这张壁纸没有可调属性」；删除后目录完好 |
+| [ ] | W15 真实服务端 → 客户端 | 两台桌面（Windows 服务端 → macOS 客户端） | 服务端开 Web 服务器，库里 video / web / scene 各一张（含一张非 ASCII 文件名的壁纸）；客户端跑 kabegame-server 插件（先 `repack-crawler-plugins`），再重跑一次 | 三类各入一行并能预览，属性面板可用；两端同一张壁纸的 `hash` 一致；重跑全部计入去重、下载目录没有多出目录；拉 GB 级 `scene.pkg` 时服务端内存不随文件大小增长 | 未测 |
+| [ ] | W16 升级后的回填卡片 | 桌面（有较多 WPE 壁纸的旧库） | 从 4.6.x 升级后进入界面 | 「我正在忙这些」出现「更新数据库 · 重新计算 Wallpaper Engine 壁纸的内容指纹」，跑完消失；期间图库正常可用 | 未测 |
+| [ ] | W17 回填没跑完的窗口 | 同上 | 回填进行中，下载一张本机已有的壁纸 | 多落一份（已知取舍）；回填结束后再下同一张计入去重 | 未测 |
+| [ ] | W18 拖入与文件夹画册真机 | 桌面 dev | 把壁纸文件夹拖进主窗口；拖进某个文件夹画册；在同步目录里新建 / 删除壁纸目录 | 都是一行 WPE 且能预览；拖进文件夹画册后目录出现在同步目录里、行挂在该画册、没有子画册；删目录后行消失 | 未测（W7 / W9 覆盖了同一条代码路径） |
+| [ ] | W19 Windows 上的搬运 | Windows 桌面 | 下载目录与数据目录不在同一个盘时跑 W10 / W12 | 壁纸目录经复制落到下载目录（期间目标目录下有隐藏的 `.kabegame-part-*`，结束后消失），源被删除 | 未测 |
+| [ ] | W20 Android / WebView 后端 | Android dev；桌面 WebView 插件 | Android 上对 VFS 文件用 `relocate`；WebView 插件 `downloadImage(vfsPath, { relocate: true })` | Android：文件进系统媒体库、临时文件被删，目录报不支持；WebView 与 V8 行为一致 | 未测（Android 本机无法编译；WebView 只改了命令参数与 bootstrap 透传） |
+
 ## 任务失败重试与重试记录
 
 2026-11-10 macOS dev。任务级「失败重试」（与空跑同级，0–10 次）：运行期失败后由调度器立即按冻结快照重发新任务；任务记 `retry_count` / `retry_attempt` / `retry_root_id`（v050，历史任务回填为自身 id，索引 `idx_tasks_retry_root`）；任务行可点开「重试记录」弹出层，观察 `tasks://retry_root/<原始任务 id>`。说明见 `cocs/crawler/TASK_CONFIG.md` §8 与 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`「重试链观察方」。

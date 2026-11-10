@@ -1,4 +1,7 @@
 //! task-vfs:// 下载实现：从运行中任务的 PluginVfs 流式读取文件。
+//!
+//! `downloadImage(path, { relocate: true })` 不走流式读取：[`resolve_relocate_source`] 把 VFS 路径
+//! 解析成宿主路径，下载 worker 直接把那个文件或目录交给后处理移走。
 
 use async_trait::async_trait;
 use deno_fs::OpenOptions;
@@ -94,6 +97,63 @@ async fn download_from_vfs(
         out.write_all(&buffer[..read]).await.map_err(|error| {
             DownloadAttemptError::fatal(format!("write download buffer: {error}"))
         })?;
+    }
+    Ok(())
+}
+
+/// `relocate` 下载的源：把 `task-vfs://` URL 解析成宿主路径（文件或目录）。
+///
+/// 要求写权限，所以只读的 `input` 挂载移不走；挂载根本身（`/{handle}/tmp` 等）也不行。
+/// 源自身或目录里带符号链接一律拒绝：移出 VFS 之后就没有 VFS 的越界校验了。
+///
+/// 阻塞函数（要遍历目录），异步上下文里放进 `spawn_blocking`。
+pub(super) fn resolve_relocate_source(url: &Url) -> Result<PathBuf, String> {
+    let handle = parse_handle(url).map_err(DownloadAttemptError::into_message)?;
+    let run = TaskScheduler::global()
+        .get_run_by_handle(handle)
+        .ok_or_else(|| format!("Task VFS handle is no longer active: {handle}"))?;
+    relocate_source_in(&run.vfs, handle, url)
+}
+
+fn relocate_source_in(vfs: &PluginVfs, handle: u64, url: &Url) -> Result<PathBuf, String> {
+    let decoded_path = decoded_url_path(url).map_err(DownloadAttemptError::into_message)?;
+    let mut depth = 0usize;
+    for component in Path::new(decoded_path.as_ref()).components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(_) => depth += 1,
+            _ => return Err("Task VFS path to relocate must not contain `.` or `..`".to_string()),
+        }
+    }
+    if depth < 2 {
+        return Err("Task VFS mount roots cannot be relocated".to_string());
+    }
+    let virtual_path = PathBuf::from(format!("/{handle}{decoded_path}"));
+    let host_path = vfs
+        .host_path_for_write(&virtual_path)
+        .map_err(|error| format!("Task VFS path cannot be relocated: {error}"))?;
+    reject_symlinks(&host_path)?;
+    Ok(host_path)
+}
+
+/// `path` 自身是符号链接、或它（作为目录）里面任何一层有符号链接时报错。
+fn reject_symlinks(path: &Path) -> Result<(), String> {
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&current)
+            .map_err(|error| format!("Failed to read task VFS path: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err("Task VFS path to relocate must not contain symbolic links".to_string());
+        }
+        if metadata.is_dir() {
+            let entries = std::fs::read_dir(&current)
+                .map_err(|error| format!("Failed to read task VFS directory: {error}"))?;
+            for entry in entries {
+                let entry =
+                    entry.map_err(|error| format!("Failed to read task VFS directory: {error}"))?;
+                pending.push(entry.path());
+            }
+        }
     }
     Ok(())
 }
@@ -247,5 +307,90 @@ mod tests {
         // 下载只读不会改动用户源文件。
         assert_eq!(std::fs::read(&source).unwrap(), b"input-image");
         let _ = std::fs::remove_file(&source);
+    }
+
+    #[test]
+    fn relocate_source_resolves_writable_files_and_directories() {
+        init_paths();
+        let plugin_id = format!("task-vfs-relocate-{}", std::process::id());
+        let vfs = test_vfs(&plugin_id);
+        let tmp_root = AppPaths::global().plugin_temp_dir(&plugin_id).unwrap();
+        std::fs::create_dir_all(tmp_root.join("wpe/wall")).unwrap();
+        std::fs::write(tmp_root.join("wpe/wall/project.json"), b"{}").unwrap();
+        std::fs::write(tmp_root.join("a.png"), b"png").unwrap();
+
+        let file = Url::parse(&format!("task-vfs://{HANDLE}/tmp/a.png")).unwrap();
+        assert_eq!(
+            relocate_source_in(&vfs, HANDLE, &file).unwrap(),
+            tmp_root.join("a.png")
+        );
+        let dir = Url::parse(&format!("task-vfs://{HANDLE}/tmp/wpe/wall")).unwrap();
+        assert_eq!(
+            relocate_source_in(&vfs, HANDLE, &dir).unwrap(),
+            tmp_root.join("wpe/wall")
+        );
+
+        // 挂载根、越界与不存在的路径都移不走
+        for raw in [
+            format!("task-vfs://{HANDLE}/tmp"),
+            format!("task-vfs://{HANDLE}/tmp/wpe/%2e%2e"),
+            format!("task-vfs://{HANDLE}/tmp/missing.png"),
+            format!("task-vfs://{}/tmp/a.png", HANDLE + 1),
+        ] {
+            let url = Url::parse(&raw).unwrap();
+            let handle = parse_handle(&url).unwrap();
+            assert!(relocate_source_in(&vfs, handle, &url).is_err(), "{raw}");
+        }
+        let _ = std::fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    fn relocate_source_rejects_read_only_input_mount() {
+        init_paths();
+        let plugin_id = format!("task-vfs-relocate-input-{}", std::process::id());
+        let source_dir = std::env::temp_dir().join(format!(
+            "kabegame-task-vfs-relocate-input-{}-{}",
+            std::process::id(),
+            HANDLE
+        ));
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("a.png");
+        std::fs::write(&source, b"input-image").unwrap();
+        let vfs = test_vfs(&plugin_id).with_inputs(vec![InputMount {
+            key: "src".to_string(),
+            kind: InputKind::File {
+                host: source.clone(),
+                name: "a.png".to_string(),
+            },
+            #[cfg(target_os = "android")]
+            owned_fd: None,
+        }]);
+        let url = Url::parse(&format!("task-vfs://{HANDLE}/input/src/a.png")).unwrap();
+
+        let error = relocate_source_in(&vfs, HANDLE, &url).unwrap_err();
+        assert!(error.contains("cannot be relocated"), "{error}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"input-image");
+        let _ = std::fs::remove_dir_all(source_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relocate_source_rejects_symlinks_inside_directory() {
+        init_paths();
+        let plugin_id = format!("task-vfs-relocate-link-{}", std::process::id());
+        let vfs = test_vfs(&plugin_id);
+        let tmp_root = AppPaths::global().plugin_temp_dir(&plugin_id).unwrap();
+        std::fs::create_dir_all(tmp_root.join("wall/sub")).unwrap();
+        std::fs::write(tmp_root.join("wall/project.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink(
+            tmp_root.join("wall/project.json"),
+            tmp_root.join("wall/sub/link.json"),
+        )
+        .unwrap();
+
+        let url = Url::parse(&format!("task-vfs://{HANDLE}/tmp/wall")).unwrap();
+        let error = relocate_source_in(&vfs, HANDLE, &url).unwrap_err();
+        assert!(error.contains("symbolic links"), "{error}");
+        let _ = std::fs::remove_dir_all(tmp_root);
     }
 }

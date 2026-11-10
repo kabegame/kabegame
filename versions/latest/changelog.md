@@ -3,6 +3,9 @@
 ## 用户侧
 
 ### Added
+- Wallpaper Engine 壁纸可以从另一台电脑复制过来（例如把 Windows 上的壁纸传到 macOS）：源电脑开启「设置 → 高级」里的 Web 服务器，这台电脑用「Kabegame 服务器」插件（0.3.0）收集。整个壁纸目录逐个文件下载到下载目录，一张壁纸一个文件夹，标签与创意工坊地址一并带过来，任务日志逐文件显示进度；本机已有内容相同的壁纸时不会多存一份（需开启「自动去重」）。两台电脑的 Kabegame 都需要 4.7.0 或更高版本。从图库删除这类壁纸只删记录，下载目录里的壁纸文件夹不会被删除。
+- 本地导入（含把文件夹拖进主窗口或画册）现在能识别 Wallpaper Engine 壁纸目录：选中的文件夹本身或它下面某一层是壁纸目录时，整个目录作为一张壁纸导入，不再把里面的预览图和视频拆成一张张图片。拖进文件夹画册时整个壁纸目录会原样复制进同步目录。
+- 文件夹画册同步目录里的 Wallpaper Engine 壁纸目录，现在作为一张壁纸出现在这个画册里，不再为它另建子画册；整个目录删掉后，对应的壁纸也从图库移除。旧版本已经为它建了子画册的目录保持原样；已经同步过的文件夹里原有的壁纸目录，要等这个文件夹下次有变化时才会被识别。
 - 收集任务新增「失败重试」：在收集弹窗、网页收集与运行配置里打开开关并填 1–10 次，任务运行中失败后会立即用相同参数重新发起，取消不会重试。重试出来的任务带「重试 k/n」标记，点开可查看整条重试记录（从新到旧，已删除的任务显示占位），运行参数里能跳到原始任务。
 - 「壁纸」收集现在也会导入 Wallpaper Engine 场景壁纸（含创意工坊打包的 `scene.pkg`）。少数简单场景（如自带的 eagleflag、deep_space、beach）已能在图库预览和桌面实时渲染，属性面板改颜色等即时生效；其余场景显示作者预览图，渲染能力会逐步加入。
 - 场景壁纸支持图层效果链与颜色混合模式，自带的 Razer Vortex 现在可实时渲染；设置页壁纸分区新增「场景后处理」（跟随 WPE / 关闭 / 开启 / 超高，默认跟随 Wallpaper Engine 自己的后处理设置）。
@@ -40,6 +43,7 @@
 - 按视频筛选和视频计数在大图库下明显更快；应用启动时会刷新数据库的查询统计，启动页显示「正在优化数据库」，图库越大这一步越久。
 
 ### Fixed
+- 同时开着「自动去重」和「去重时更新元数据」时，下载到与某张 Wallpaper Engine 视频壁纸的视频内容相同的文件，不再把这张壁纸的来源和详情改成下载插件的（改了之后壁纸属性面板与详情会失效）；现在只补画册、标签并计入去重。
 - 场景壁纸的材质参数按 Wallpaper Engine 的规则取值：单个数字填满颜色 / 向量的每个分量，用逗号分隔的数值也能读到，类型不对的值（如给数值参数写了文字或开关）不再被硬塞进去，运行中改属性也不会残留旧分量；两个着色器阶段共用的同名参数取片元着色器的默认值。目前能渲染的场景画面不变，模糊、滚动等以后开放的效果不会再缺一个方向。
 - 在图库预览的网页或场景壁纸上按住 Ctrl 滚动滚轮，不再把整个应用一起放大缩小；以前这样缩放过的，下次打开时自动恢复原大小。
 - 图库预览场景壁纸时，画面不再多出主题色留边、整体缩小，也不再按远大于显示的尺寸渲染。
@@ -61,6 +65,8 @@
 - 安全加固：畅游导航栏、桌面网页壁纸等页面只能监听为它们开放的应用事件，发给某个窗口的事件不会再被其它窗口收到；页面里嵌入的子页面（iframe）不再沿用所在页面的应用权限。
 
 ### Changed
+- Wallpaper Engine 壁纸的「大小」改为整个壁纸目录的总大小（原来只算入口文件），按大小筛选和排序随之变化；判断两张壁纸是否相同也改为比较整个目录的内容。升级后会在后台为已有的壁纸重新计算一次，「我正在忙这些」里能看到进度；算完之前，下载到本机已有的壁纸可能多存一份。
+- 「壁纸」收集任务重新运行时，已经在库里的壁纸计入任务的「去重」数；开着「自动去重」时，内容完全相同的两个壁纸目录只导入一个。
 - 壁纸设置的「关闭壁纸」改为「打开壁纸」，默认开启；升级时原来的开关状态自动换算，关着壁纸的仍是关着。
 - 场景壁纸的脚本用到 Kabegame 还不支持的脚本功能（如运行中新建图层）时，整张改为显示作者预览图，不再实时渲染出缺了内容的画面（例如创意工坊 3304642534 的音频条）。
 - 图库「类型」过滤里，Wallpaper Engine 壁纸单独成一类（显示为 Wallpaper Engine，可再选视频 / 网页 / 场景），不再混在「图片」里；图片详情里的「Wallpaper Engine · 类型」也可点击筛选。没有视频或没有 Wallpaper Engine 壁纸的范围里，对应分类不再显示。
@@ -74,9 +80,13 @@
 ## 插件开发侧
 
 ### Changed
+- kabegame-server（0.3.0）：`x-wpe/*` 行改为先请求 `/file/<目录>` 取文件清单，再经 SDK 的 `downloadWpeWallpaper` 整目录复制；`engines.kabegame` 提到 `>=4.7.0`。
 - 图片详情的插件模板（`description.ejs`）iframe 不再与应用同源（去掉 `allow-same-origin`），并在文档最前带内层 CSP（`connect-src 'none'`、`frame-src about:` 等）：模板里直接 `fetch` / XHR / WebSocket、`<link>` 外链样式、远程字体、嵌套 http(s) 或 `file:` iframe 都会被拒，网络请求一律经 `__bridge.fetch`；`<img>`、CSS 背景等元素级远程图片与嵌套 `srcdoc` iframe 不受影响；`window.parent`、`localStorage` 不可访问（跨次缓存用 `__bridge.getCache` / `setCache`）。
 
 ### Added
+- `Kabegame.downloadImage(vfsPath, { relocate: true })`（V8 与 WebView）：`url` 是 `Kabegame.fs` 的虚拟路径时，把这个文件或目录移进输出目录而不是复制一份，库里已有相同内容时直接删除，调用之后该路径不再存在；只对虚拟路径生效。源必须在可写挂载上，不能是挂载根，也不能包含符号链接。虚拟路径可以是一个 Wallpaper Engine 壁纸目录（必须带 `relocate: true`，仅桌面端），整个目录作为一张壁纸入库，metadata 固定是它自己的 `project.json`（`metadata` / `metadata_id` 被忽略）。`@kabegame/types` 同步新增 `KabegameDownloadImageOptions.relocate`。
+- `@kabegame/plugin-sdk` 新增 `downloadWpeWallpaper`（`@kabegame/plugin-sdk/wpe`）：按文件清单把壁纸目录逐个文件 `fetchToFile` 到任务 VFS 的 `tmp/wpe`，再整目录提交；支持单文件重试、大小校验、逐文件回调与空跑，并清理 12 小时以上的残留。
+- 桌面端 Web 服务器的 `/file/<目录路径>` 对 Wallpaper Engine 壁纸返回文件清单 `{ type, files: [{ path, size }] }`，`/file/<目录路径>/<相对路径>` 返回目录里的文件（越出目录的路径 404）。
 - `kabegame-cli plugin run` 新增 `--freeze-template`：把本次运行插件的 `description.ejs` 冻结进每行 metadata（新列 `metadata.template`），详情面板优先用它渲染。`--id` 测试 id 没有安装，过去它下载的图片只能看原始键值，现在也能直接在应用里调试模板。插件模板与冻结模板并行获取，冻结模板非空时覆盖插件模板。
 
 ### Fixed
@@ -85,6 +95,9 @@
 ## 开发侧
 
 ### Added
+- WPE 壁纸目录的入库统一到 `crawler::wpe_import::ingest_wpe_dir`：`postprocess_downloaded_image` 的 `PostprocessSource::Path` 遇到目录走目录分支（`postprocess_wpe_dir`），`wpe-import`、local-import、插件下载都经它进来，文件夹同步直接调用；原来的 `import_wpe_video` / `import_wpe_web` / `import_wpe_scene` 删除。`relocate_to` 为 `Some` 时整目录移动（`downloader/util.rs` 的 `move_dir_unique` / `copy_dir_unique`，跨文件系统先复制到 `.kabegame-part-<uuid>`、`project.json` 最后复制），去重命中且 `delete_source` 时删除源目录。
+- 目录哈希 `kabegame_core::wpe::dir_hash`（`list_files` / `digest_dir`，不受 `wpe` feature 门控）：相对路径排序 + 域前缀，排除 `.DS_Store` / `Thumbs.db` / `desktop.ini`，不跟随符号链接；WPE 行的 `hash` / `size` 改取整个目录。v051 空迁移登记发布态第一个回填作业 `wpe_dir_hash`（每批 4 行，不持锁读盘，目录缺失跳过），i18n `header.backfill.wpe_dir_hash`。
+- `DownloadRequest.relocate`：下载 worker 对 `task-vfs` + `relocate` 不下载，经 `task_vfs::resolve_relocate_source` 解析宿主路径后直接后处理；`DownloadQueue::download` / `download_image` 多一个参数。
 - 场景壁纸 P4a：图层层级（`compile/hierarchy.ts`、`render/layout.ts` 的 `worldMatrixOf`，`visible` 沿父链继承）；粒子运行时（`apps/wpe-scene/src/particles/`：模块表 `PARTICLE_MODULES` 是唯一事实来源，float32 定长列模拟器，顶点按翻译器反射布局写入，与图像层按 `objects` 顺序混排）、透视粒子相机、正交深度改 ±2000、帧时间钳到 `[0.0001, 0.25]`；`instanceoverride` 进绑定表就地生效；能力表新增 `particle:*`、`value:animation`、`object:parent-cycle` 与 `script:api:*`（`compile/scriptApi.ts`）；预览画布按父页面量的显示缩放渲染（`kabegame:wpe-scene-display`）。dev 探针新增 `particleTrack`、`particleCorners`、`host.particles` 与 `renderFrame` 的粒子回放。详见 `cocs/wpe/WPE_SCENE.md`「层级（P4a）」「粒子（P4a）」。
 - 场景壁纸 P4b：纹理格式表 `TEXTURE_FORMATS`（`compile/tex.ts`，编译期与渲染器共用，新增 DXT3 / DXT1 / RG88 / R8，删 `tex:alpha-priority`）；粒子帧表（TEXS 解析进 bundle，`particleSheetDefines`、`g_RenderVar1`、`a_TexCoordVec4C1`，新增 `tex:animation:multi-image` / `tex:animation:empty`）；发射时序与 `boxrandom`（`particles/emitters.ts`）、8 个确定性档 2 模块、3 个噪声模块（`particles/noise.ts` 逐位移植 WPE，`ParticleSystem.step` 收场景时间）；粒子 COMBO 放行 `REFRACT` / `CUTOUT` / `NORMALMAP`；`instanceoverride.colorn`（`particles/colorn.ts`，绑定目标 `particle-instance` 收 `colorn`，`sceneVersionOf` 与 passthrough 材质共用）；翻译器按材质键拆分两阶段同名 uniform。dev 探针 `renderFrame` 加 `pointer` 与 `particles.random`，`particleTrack` 加 `times`。详见 `cocs/wpe/WPE_SCENE.md`「粒子（P4b）」。
 - 场景壁纸 P4c：粒子控制点（`particles/controlpoints.ts` 的 `ControlPointSet`，个数按模块引用的下标算，`instanceoverride` 控制点静态值；能力表删 `particle:controlpoint`、`particle:instance:controlpoint`，新增 `particle:instance:controlpoint:user`）；指针跟随（`render/layout.ts` 的 `sceneCursor`、`pointerScenePoint`，`FrameInput.cursor`）；`controlpointattract`（模块表新增按字段算的列标志 `columnFlagsOf`）；世界空间（删 `particle:flags:world`，绘制用单位阵模型矩阵，`movement` 的 `flags` bit0，执行上下文加 `model`）与帧顺序（`SceneRenderer.render` 先 `GpuScene.stepParticles` 再跑脚本，`GpuScene.update` 不再步进）；`spritetrail`（`particleRendererDefines`、`g_RenderVar0`）与 `sprite` 朝向（`particles/orientation.ts`、`PARTICLE_REFRESH_UNIFORMS`；拖尾的退化粒子与 NaN 朝向在 CPU 上判定、不画）。dev 探针 `particleTrack` 加 `cursors` / `size`，`particleCorners` 加 `drawn`。详见 `cocs/wpe/WPE_SCENE.md`「粒子（P4c）」。
@@ -106,6 +119,8 @@
 - 新增 dev 工具 `kabegame-dev`：vite 插件（`scripts/kabegame-dev/`）持有到 app 的唯一一条 CDP 连接（桌面读 CDP 端口登记，安卓经 adb 现找）与宿主句柄、控制台流、长任务，对外提供 `/__kabegame_dev/*` 的 REST；stdio MCP `apps/kabegame-dev-mcp/`（`.mcp.json` 的 `kabegame-dev`，Deno 直接跑）提供两层探活、一对一工具与 `render_scene` / `hash_baseline` / `projects_import` / `hash_compare` / `app_log` 等封装，typed 客户端 `src/client.ts` 也供脚本使用。`kabegame-chromium` 去掉 playwright 与 `driver.sh` / `cdp.mjs`，`kabegame-plugin` 在 dev app 里跑任务的脚本改为 Deno 的 `app-run.ts`；不经 vite 直接跑的 dev 二进制不再能被发现。
 
 ### Changed
+- `http_server.rs` 无 `Range` 的整文件响应改为流式读盘（`Body::from_stream`，带 `Content-Length`），不再整份读进内存；`/file` 对 WPE 行由固定 404 改为文件清单 / 目录内文件（`wpe` feature，Web 版仍 404）。
+- 文件夹同步：`FullDirHook::on_subdir`、`handle_subdirs`（含目录未变的快速路径）与 `fs_batch::process_batch` 不再为可入库的 WPE 壁纸目录建子画册，监听批次的 diff 准入放宽到壁纸目录与已消失的 WPE 行路径。
 - 媒体分类 provider 的属性新增 `type_not_glob2`（分三类互补：`video/*`、`x-wpe/*`、其余），`gallery_media_type_router` 新增 `x-wpe` resolve，列举不再补 0 且只按字母序；前端以 `GALLERY_MEDIA_KINDS` 枚举分类。
 - `third-patches/` 补丁序列统一改用两位编号；补丁管理器的读取校验与 `--gen --from` 编号解析、V8 构建脚本及文档示例同步更新。
 - 桌面 CEF runtime 的目录、Cargo crate 与代码引用统一更名为 `tauri-runtime-kbcef`（Rust 标识符 `tauri_runtime_kbcef`），同步更新文档与构建脚本。
@@ -144,6 +159,7 @@
 - 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，CLI 与测试不跑，失败只告警），启动页新增 `analyze` 阶段。媒体分类改成绑定模式串的 `images.type GLOB ? AND images.type NOT GLOB ?`，相关 provider 的属性 `kind` 换成 `type_glob` / `type_not_glob`，视频走 `idx_images_type`；格式过滤的 `SUBSTR` 与宽高比的 `+` 实测改写后更慢，保持原样。
 
 ### Fixed
+- `rebind_deduped_metadata` 对 WPE 行直接返回：去重命中不再改挂它的 metadata 与 `plugin_id`。
 - 新增 CEF 补丁 10：建窗 `extra_info` 带 `kabegame.disable_wheel_zoom` 的 browser 忽略 Ctrl+滚轮缩放（`AlloyBrowserHostImpl::ContentsZoomChange` 提前返回），主窗口与壁纸窗口登记（`tauri_runtime_kbcef::disable_wheel_zoom`）。子 frame 里没被页面取消的 Ctrl+滚轮会缩放整个 WebContents，主文档的 `wheel` 监听收不到子 frame 的事件；这两个窗口的主 frame 加载完时，缩放不是默认值就复位，清掉以前按 host 存进 profile 的缩放。需要重新构建 CEF（`deno task build:chromium`）。
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 12：`ipc-protocol.js` 的自定义协议 IPC fetch 固定 `referrerPolicy: 'origin'`（Windows 上 https 页面请求 `http://ipc.localhost` 时 CEF 把 `Origin` 发成 `null`，Tauri 回 500 且不回退 postMessage）；`tauri-runtime-kbcef` 的 `cef-ipc` 回退 shim 同样设置。

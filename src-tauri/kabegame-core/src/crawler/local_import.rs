@@ -3,9 +3,13 @@
 //! 遍历由通用 `local_folder::scan_service` 负责（可配置递归、跨 file:// / content://）；
 //! 本模块只实现「发现媒体文件后如何导入」的钩子：桌面走下载后处理管线，Android 走 content 入库。
 //! 任务进度 / 取消语义保留，但不再占用 DownloadQueue 槽位。
+//!
+//! 开了 `wpe` feature 的桌面构建里，Wallpaper Engine 壁纸目录按一个条目处理：进入子目录（或根）
+//! 之前先看它是不是可入库的壁纸目录，是就把整个目录交给后处理的目录分支、不再下钻。
 
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
+use crate::crawler::downloader::util::DIR_PART_PREFIX;
 #[cfg(not(target_os = "android"))]
 use crate::crawler::downloader::{build_safe_filename, occupy_unique_path, OccupiedFile};
 use crate::crawler::downloader::{next_download_id, wait_after_download_if_needed, DownloadQueue};
@@ -186,6 +190,105 @@ impl LocalImportHook {
         Ok(())
     }
 
+    /// `dir` 是可入库的 WPE 壁纸目录（`project.json` 可读且类型受支持）时把它整个导入并返回 `true`，
+    /// 调用方不再下钻；其余目录（包括带无关 `project.json` 的）返回 `false`，照常递归。
+    ///
+    /// Android 的 `content://` 目录没有本地路径，不走这里。
+    #[cfg(all(feature = "wpe", not(target_os = "android")))]
+    async fn try_wpe_dir(&mut self, dir: &std::path::Path) -> bool {
+        if !crate::crawler::wpe_import::is_importable_wpe_dir(dir) {
+            return false;
+        }
+        let Ok(url) = Url::from_file_path(dir) else {
+            return false;
+        };
+        if self.run.params.is_dry_run {
+            GlobalEmitter::global().emit_task_log(
+                &self.task_id,
+                "info",
+                &task_log_i18n("taskLogDryRunSkipImport", json!({ "path": url.as_str() })),
+            );
+            self.run.record_dry_run_skip();
+            return true;
+        }
+        let download_start_time = self.next_download_start_time();
+        if let Err(e) = self.import_wpe_dir(dir, &url, download_start_time).await {
+            GlobalEmitter::global().emit_task_log(
+                &self.task_id,
+                "warn",
+                &task_log_i18n(
+                    "taskLogEnqueueFailed",
+                    json!({ "url": url.as_str(), "detail": e }),
+                ),
+            );
+        }
+        true
+    }
+
+    /// 导入一个 WPE 壁纸目录，与 [`Self::import_file_url`] 同一套参数。
+    ///
+    /// `copy_to_dir`（拖进文件夹画册等）时先把整个目录复制到目标目录下的唯一名，再对副本原地入库；
+    /// 目录已直接位于目标目录里就不复制。源目录始终不动。
+    #[cfg(all(feature = "wpe", not(target_os = "android")))]
+    async fn import_wpe_dir(
+        &mut self,
+        dir: &std::path::Path,
+        url: &Url,
+        download_start_time: u64,
+    ) -> Result<(), String> {
+        let final_dir = if self.copy_to_dir {
+            let dest_dir = self.copy_dest.as_ref().unwrap_or(&self.images_dir).clone();
+            fs::create_dir_all(&dest_dir)
+                .await
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+            if is_in_dir(dir, &dest_dir).await {
+                dir.to_path_buf()
+            } else {
+                let src = dir.to_path_buf();
+                let name = dir
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "wallpaper".to_string());
+                tokio::task::spawn_blocking(move || {
+                    crate::crawler::downloader::util::copy_dir_unique(&src, &dest_dir, &name)
+                })
+                .await
+                .map_err(|e| format!("copy task join error: {e}"))?
+                .map_err(|e| format!("Failed to copy wallpaper directory: {}", e))?
+            }
+        } else {
+            dir.to_path_buf()
+        };
+        let headers: HashMap<String, String> = HashMap::new();
+        let imported = crate::crawler::downloader::postprocess_downloaded_image(
+            &*self.download_queue,
+            next_download_id(),
+            crate::crawler::downloader::PostprocessSource::Path {
+                path: &final_dir,
+                relocate_to: None,
+            },
+            false,
+            url,
+            LOCAL_FOLDER_PLUGIN_ID,
+            Some(&self.task_id),
+            None,
+            None,
+            download_start_time,
+            self.output_album_id.as_deref(),
+            &headers,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await;
+        wait_after_download_if_needed(download_start_time, None).await;
+        if imported? {
+            self.image_count += 1;
+        }
+        Ok(())
+    }
+
     #[cfg(target_os = "android")]
     async fn import_file_url(
         &mut self,
@@ -272,13 +375,39 @@ impl FolderScanHook for LocalImportHook {
 
     async fn on_enter_dir(
         &mut self,
-        _enter: &ScannedDir,
+        enter: &ScannedDir,
         _ctx: &ScanCtx<()>,
     ) -> Result<Option<()>, ScanError> {
         if self.is_canceled() {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
+        // 不钻进整目录复制 / 跨盘移动的半成品
+        if enter.name.starts_with(DIR_PART_PREFIX) {
+            return Ok(None);
+        }
+        // WPE 壁纸目录：整目录导入，返回上一级
+        #[cfg(all(feature = "wpe", not(target_os = "android")))]
+        if let Some(path) = enter.path.as_deref() {
+            if self.try_wpe_dir(path).await {
+                return Ok(None);
+            }
+        }
         Ok(Some(()))
+    }
+
+    /// 非递归或到达深度上限时，子目录走这里：其中的 WPE 壁纸目录仍按一个条目导入。
+    async fn on_subdir(&mut self, dir: &ScannedDir, _ctx: &ScanCtx<()>) -> Result<(), ScanError> {
+        if self.is_canceled() {
+            return Err(ScanError::Fatal("Task canceled".to_string()));
+        }
+        if dir.name.starts_with(DIR_PART_PREFIX) {
+            return Ok(());
+        }
+        #[cfg(all(feature = "wpe", not(target_os = "android")))]
+        if let Some(path) = dir.path.as_deref() {
+            self.try_wpe_dir(path).await;
+        }
+        Ok(())
     }
 
     async fn on_file(&mut self, file: &ScannedFile, _ctx: &ScanCtx<()>) -> Result<(), ScanError> {
@@ -426,10 +555,31 @@ pub async fn run_builtin_local_import(run: Arc<Task>) -> Result<(), String> {
         image_count: 0,
         last_download_start_time: download_start_time,
     };
+    // 根目录不触发 `on_enter_dir`：根本身是 WPE 壁纸目录时在这里整目录导入，并从待扫描的根里拿掉
+    let total_roots = roots.len();
+    #[cfg(all(feature = "wpe", not(target_os = "android")))]
+    let roots = {
+        let mut rest = Vec::with_capacity(total_roots);
+        for root in roots {
+            if hook.is_canceled() {
+                return Err("Task canceled".to_string());
+            }
+            let handled = match root.to_file_path() {
+                Ok(path) if path.is_dir() => hook.try_wpe_dir(&path).await,
+                _ => false,
+            };
+            if handled {
+                run.add_progress(100.0 / total_roots as f64);
+            } else {
+                rest.push(root);
+            }
+        }
+        rest
+    };
     let options = ScanOptions {
         recursive,
         min_collect_interval_ms: Some(100),
-        total_progress_share: 100.0,
+        total_progress_share: 100.0 * roots.len() as f64 / total_roots as f64,
         ..Default::default()
     };
     scan_and_visit(&roots, (), &options, &mut hook).await?;

@@ -47,7 +47,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## MCP（`mcp/`）
 
 - [mcp/MCP_SERVER.md](mcp/MCP_SERVER.md)
-  - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由，MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、不可列举的 `_kb_*` 全局续接段，以及画廊末两段 `_kb_x<N>x/<数字>`（原始 images 根仍用 `x<N>x/<数字>`）的 500 行分页护栏；并说明为什么不能在 `gallery_all_router.json5` 加 limit。
+  - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由（`/file` 对目录型 WPE 行返回文件清单、对目录内文件流式返回），MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、不可列举的 `_kb_*` 全局续接段，以及画廊末两段 `_kb_x<N>x/<数字>`（原始 images 根仍用 `x<N>x/<数字>`）的 500 行分页护栏；并说明为什么不能在 `gallery_all_router.json5` 加 limit。
   - 适用场景：新增或排查桌面 Web 服务器、RPC/SSE、MCP 资源/工具/能力开关；维护 PathQL 发现、全局段说明与分页护栏；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
 
 ## Web 版（`web/`）
@@ -101,13 +101,17 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## 本地文件夹（`local-folder/`）
 
 - [local-folder/LOCAL_FOLDER_SYNC.md](local-folder/LOCAL_FOLDER_SYNC.md)
-  - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、`make_visible` 唤醒 + 500ms 快照轮询、延迟卡片和逐任务 toast；并记录手动增删边界（Del/右键删除源文件、拖入经 `local-import` 扁平复制到 `sync_folder`、新文件探测到下载占用标记即放弃导入并由下载器补挂、数据库成员写守卫保持只读）。
-  - 适用场景：新增或排查本地文件夹监听与同步；理解目录删除为什么保留图片行；维护取消、抢占、进度和事件溢出行为。
+  - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、`make_visible` 唤醒 + 500ms 快照轮询、延迟卡片和逐任务 toast；并记录手动增删边界（Del/右键删除源文件、拖入经 `local-import` 扁平复制到 `sync_folder`、新文件探测到下载占用标记即放弃导入并由下载器补挂、数据库成员写守卫保持只读）；以及 **WPE 壁纸子目录按「文件」对待**（挂到父画册、不建子画册、目录内部变化忽略、整个目录消失即删行，已有子画册的目录保持原样，快速路径下存量目录要等下一次变化才识别）。
+  - 适用场景：新增或排查本地文件夹监听与同步；理解目录删除为什么保留图片行；维护取消、抢占、进度和事件溢出行为；排查同步目录里的 Wallpaper Engine 壁纸被拆成散图 / 多出子画册 / 删目录后行还在。
 
 ## Wallpaper Engine 壁纸（`wpe/`）
 
 - [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
-  - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
+  - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`，`plugin_id` / metadata 由宿主定为 `wpe-import` + `project.json`）、
+    **四个入口共用的入库函数 `ingest_wpe_dir`**（`wpe-import`、local-import、插件下载经 `postprocess_downloaded_image` 的目录分支，文件夹同步直接调用；
+    原地入库按路径幂等，下载产物整目录移到下载目录、去重命中时删除）、**目录哈希**（`wpe::dir_hash`：相对路径排序 + 域前缀，`hash` / `size` 取整个目录，
+    存量行由回填作业 `wpe_dir_hash` 重算）、**经 Web 服务器传输**（`/file/<目录>` 返回文件清单、目录内文件流式返回，`kabegame-server` 插件 + SDK
+    `downloadWpeWallpaper` 把另一台机器上的壁纸整目录传过来）、格式表占位条目、
     **`wpe` feature 门控**（桌面主程序与 CLI 开启，Android / Web 不开；三个桌面平台都能导入与预览，Linux 没有桌面壁纸）、Steam 库发现与手选文件夹的两层扫描、导入时的 `WPE/<genre|rating|feature>/<tag>` 标签（作者 `tags` + WPE 工坊缓存的 Steam 标签，缓存没有时从 `project.json` 推导；key 是 Steam 原文，名称按语言翻译）、WPE 安装目录设置 `wpeEngineDir`（为空时查 Steam 库或从库内壁纸往上找并写入，壁纸设置可覆盖）、`wpe-import` 内建任务与「壁纸」收集入口、
     删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WallpaperStage` 独立 web 层（sandbox `file:` iframe，`src` 直接取壁纸目标的 `webEntry`，由补丁 05 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
@@ -120,6 +124,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     **封面**：预览的右键菜单与工具条把当前画面设为壁纸封面（与暂停、清空脚本存储同为预览专属菜单项，由预览弹窗处理、画廊菜单没有），截主窗口整窗（不用 `clip`，它会让整个窗口跳变）再按画布比例裁，写进 `thumbnails_dir`、换 `thumbnail_path`，作者的 `preview.*` 不动、可恢复；画面确定实时渲染之前置灰（场景看 `WallpaperStage` 的 `sceneLive`，网页看 `ready`），后端不记实时状态，恢复默认封面在详情栏，设置页没有封面按钮；
     **音频与媒体集成**（Phase 8，只 Windows）：页面登记音频 / 媒体监听时垫片调 `wpe_web_media_subscribe` 交出 Tauri Channel（只回本 frame），订阅按 `(label, SubframeId, 类型)` 归属调用方 frame（tauri 补丁 18 公开 `ipc::CallerFrame`），`SubframeDestroyed` 即释放、同 frame 同类替换、窗口销毁释放整个 label（Channel 发往已销毁 frame 被静默丢弃、发送不失败，不能靠发送失败）；`WpeMediaHub` 有订阅才开 WASAPI 回环（33ms 一帧、定时器与采集包解耦、静音补零衰减）与 SMTC 监视（设置「媒体集成」`wpeMediaIntegration` 默认开），自定频谱算法常数在 `SpectrumTuning`，封面 PNG data URL 与量化直方图配色 `rgb()`；`audio` 只对 `supportsaudioprocessing: true` 放行。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
+    本地导入把壁纸目录拆成散图、同一张壁纸入库两次或去重不命中、下载的壁纸目录没有移到下载目录 / 临时目录有残留、
+    `/file` 取壁纸清单或目录内文件 404、mac 上经 `kabegame-server` 传 Windows 壁纸失败、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 页面 `fetch` 同目录文件失败或越界读被放行（`deny file:` 日志，看 `requester`）/ 新导入的网页壁纸被闸门拒绝（目录索引没跟上）/ 预览画布比例或交互 / 切走后渲染进程未回收、非 Windows 平台的 WPE 行为；
     排查网页壁纸页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应 / 桌面点击或移动不触发页面事件；
@@ -165,8 +171,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
-  - 主题：当前下载器全链路与模块边界。涵盖任务级 dry-run 的下载/metadata/local-import 三个 nop 点、全局与逐任务下载并发闸门（pending + active 原子判断、运行中实时调整）、`mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、单图字节进度写入 `active_downloads` 并由前端 500ms 快照轮询、Android 通知 1s ticker、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定、入库后 best-effort 原生元数据（EXIF/PNG chunk）逐图计算与一图一行存储（`image_metadata` 表）、桌面落盘（目标名原子占坑 + 原生占用标记：Unix `flock` / Windows share mode，Windows 只经占坑句柄写，守卫持有到入库后才释放，新建文件入库后按直接父目录补挂文件夹画册）、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务的 busy 快照轮询、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理，以及只对实际插入发送、按单画册拆分的 **`album-images-added`**（删除为 deleted、排序才是 change，隐藏只发隐藏画册自身事件）（连同图片新增 / 删除 / 字段补丁与 `hidden-cleanup-finished`）。
-  - 适用场景：下载任务生命周期、偶发 `UNIQUE constraint failed: images.local_path` 或同名图片互相覆盖、下载目录与文件夹画册重叠、Android `content://` 与 HTTP/HTTPS 下载差异、畅游一键下载与取消、页面快照回看、JS 爬虫或畅游窗口的页面自发原生下载、`blob:` / `data:` / MSE 媒体下载、会话 VFS 写入与清理、MSE 多 SourceBuffer 显式合流、surf 导入与终态反馈、源文件删除/回收站护栏、清空隐藏画册、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
+  - 主题：当前下载器全链路与模块边界。涵盖任务级 dry-run 的下载/metadata/local-import 三个 nop 点、全局与逐任务下载并发闸门（pending + active 原子判断、运行中实时调整）、`mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、单图字节进度写入 `active_downloads` 并由前端 500ms 快照轮询、Android 通知 1s ticker、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举；`Path` 来源是目录时按 Wallpaper Engine 壁纸目录入库，整目录移动 / 去重时删除）、`downloadImage` 的 `relocate` 选项（只对任务 VFS 路径生效，worker 不下载、直接把 VFS 里的文件或目录交给后处理移走）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定（命中 WPE 行时不改挂）、入库后 best-effort 原生元数据（EXIF/PNG chunk）逐图计算与一图一行存储（`image_metadata` 表）、桌面落盘（目标名原子占坑 + 原生占用标记：Unix `flock` / Windows share mode，Windows 只经占坑句柄写，守卫持有到入库后才释放，新建文件入库后按直接父目录补挂文件夹画册）、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务的 busy 快照轮询、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理，以及只对实际插入发送、按单画册拆分的 **`album-images-added`**（删除为 deleted、排序才是 change，隐藏只发隐藏画册自身事件）（连同图片新增 / 删除 / 字段补丁与 `hidden-cleanup-finished`）。
+  - 适用场景：下载任务生命周期、偶发 `UNIQUE constraint failed: images.local_path` 或同名图片互相覆盖、插件把 VFS 里的文件或壁纸目录交给下载器（`relocate`）后源没被移走或报错、去重命中后 WPE 行的详情 / 属性面板失效、下载目录与文件夹画册重叠、Android `content://` 与 HTTP/HTTPS 下载差异、畅游一键下载与取消、页面快照回看、JS 爬虫或畅游窗口的页面自发原生下载、`blob:` / `data:` / MSE 媒体下载、会话 VFS 写入与清理、MSE 多 SourceBuffer 显式合流、surf 导入与终态反馈、源文件删除/回收站护栏、清空隐藏画册、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
   - 主题：视频摄入（下载/导入压缩）的平台门控机制。桌面 standard/CLI 使用 rsmpeg/FFmpeg；Android 走 Kotlin `AndroidVideoCompressProvider` 与系统媒体 API，不编译 FFmpeg。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。
@@ -211,7 +217,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：插件升级后历史图片详情或搜索片段变化；排查 metadata 迁移失败或很慢、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
-  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局、`crawl(common, custom)` 的 `common.isDryRun` 与 `Kabegame.*` 宿主桥（含每任务隔离的 `Kabegame.fs` 与虚拟路径媒体工具 `Kabegame.ffmpeg`）。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**文件系统挂载**（`data` / `cache` / `tmp` 可写，路径类变量冻结出的只读 `input`，含 Android `content://` 单文件）；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、当前 fingerprint=4、V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化；**每任务独占 current_thread runtime**，不可借用多线程 runtime 的 `Handle::block_on`，否则 deno_core op 轮询任务跨线程竞争、任务卡死或进程 abort）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛；WebView 后端另见 [crawler/ANDROID_WEBVIEW_CRAWLER.md](crawler/ANDROID_WEBVIEW_CRAWLER.md)）。
+  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局、`crawl(common, custom)` 的 `common.isDryRun` 与 `Kabegame.*` 宿主桥（含每任务隔离的 `Kabegame.fs` 与虚拟路径媒体工具 `Kabegame.ffmpeg`）。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**文件系统挂载**（`data` / `cache` / `tmp` 可写，路径类变量冻结出的只读 `input`，含 Android `content://` 单文件）；`downloadImage` 的 `relocate` 选项（VFS 路径移走而不是复制，目录即 Wallpaper Engine 壁纸目录）与 SDK 的 `downloadWpeWallpaper`；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、当前 fingerprint=4、V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化；**每任务独占 current_thread runtime**，不可借用多线程 runtime 的 `Handle::block_on`，否则 deno_core op 轮询任务跨线程竞争、任务卡死或进程 abort）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛；WebView 后端另见 [crawler/ANDROID_WEBVIEW_CRAWLER.md](crawler/ANDROID_WEBVIEW_CRAWLER.md)）。
   - 适用场景：编写/迁移 V8 插件；排查 startup snapshot 生成/失效/fallback、`Kabegame.fs` / `input` 只读挂载 / `Kabegame.ffmpeg`、`fetch`、`URL`、`crypto`、`DOMParser`；更新 JS 插件模板和类型声明；排查 V8 任务偶发卡死不动（`RefCell already borrowed`）或跑插件时进程闪退；排查 V8 后端 Android 交叉编译（依赖门控 / 自建预编译产物 / NDK 链接）或网络/`Response`/`Headers` 行为。
 
 - [crawler/TASK_CONFIG.md](crawler/TASK_CONFIG.md)
@@ -349,6 +355,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 - [storage/DB_MIGRATIONS_AND_BACKFILLS.md](storage/DB_MIGRATIONS_AND_BACKFILLS.md)
   - 主题：数据库两类迁移——同步 schema 迁移（`user_version` 顺序）与可恢复的异步回填作业（`Backfill` 注册表 + `backfill_jobs` 表，按批 `BEGIN IMMEDIATE` 提交、同事务写回 rowid 游标与进度、崩溃续跑，`BackfillCtx` 的 `with_conn` / `block_on` / `commit`）；`Migration.min_backfill_version` 的同步排干语义与「回填只碰引入时就存在的列」不变量、空迁移登记作业、全新安装不登记、平台门控（被依赖时标记跳过）、CLI 只跑阻塞阶段、`BackfillService` 后台按序运行与忙碌卡片 / `backfill-finished`、失败下次启动重试、`KABEGAME_BACKFILL_SYNC_THROUGH` 调试开关；以及三段式启动（`init_pre` 主线程建窗 → 线程内 `init_heavy_globals` → 主线程 `init_post` → 后台回填 → `Ready`）、`startup_state` watch / `startup-progress` / `get_startup_state`，前端启动页（Init app）mount / unmount 与不安装 i18n 的原因。
   - v049 同步规范化 `images.type` 并建索引；迁移 SQL 与 Rust 写入口的格式表外规则有比对测试，分页执行计划约束见 `provider-dsl/RULES.md` §2.2。
+  - v051 是空迁移，登记发布态第一个回填作业 `wpe_dir_hash`：把存量 WPE 壁纸行的 `hash` / `size` 从入口文件重算为目录哈希与目录总字节数（每批 4 行、不持锁读盘、目录缺失跳过；跑完之前存量行按目录哈希查不到）。
   - 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，启动页 `analyze` 阶段，失败只告警；CLI 不跑）。
   - 适用场景：新增需要补算数据的迁移或回填作业；排查启动统计刷新耗时或执行计划随统计变化；某个迁移要改动回填读写的列；排查启动卡在启动页、启动页报错、回填不前进 / 重复处理 / 失败重试、忙碌卡片不消失；调整桌面 / Android 启动顺序或主线程要求。
 

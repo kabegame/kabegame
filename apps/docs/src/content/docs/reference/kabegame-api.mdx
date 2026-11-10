@@ -45,6 +45,9 @@ import { Badge } from '@astrojs/starlight/components';
 | `url` | `string \| null` | 来源 / 帖子 URL。 |
 | `metadata` | JSON | 写入 `image_metadata` 的任意 JSON；`metadata_id` 已设时忽略。存储时由应用盖上运行插件的版本号；请在 metadata 内自带 `schema` 标记供迁移。 |
 | `metadata_id` | `number \| null` | 复用 `createImageMetadata` 返回的行 id。 |
+| `relocate` | `boolean \| null` <Badge text="4.7.0" variant="note" /> | `url` 是 [`Kabegame.fs`](/dev/v8-api/) 的虚拟路径时，把这个文件或目录**移走**而不是复制：移进输出目录，库里已有相同内容时直接删除。调用之后该路径不再存在。其它来源（`http(s)`、`data:` 等）忽略此项。 |
+
+`url` 传虚拟路径时可以指向一个 **Wallpaper Engine 壁纸目录**（带 `project.json` 的文件夹，仅桌面端），整个目录作为一张壁纸入库。目录必须带 `relocate: true`；它的 metadata 固定是壁纸自己的 `project.json`，`metadata` / `metadata_id` 会被忽略。`relocate` 的源必须在可写挂载（`data` / `cache` / `tmp`）上，不能是挂载根，也不能包含符号链接。逐文件下载并提交壁纸目录可以直接用 SDK 的 [`downloadWpeWallpaper`](/dev/plugin-sdk/#wallpaper-engine-壁纸wpe)。
 
 ## 请求头与 Cookie（V8）
 

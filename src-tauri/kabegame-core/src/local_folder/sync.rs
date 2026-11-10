@@ -216,9 +216,18 @@ async fn handle_subdirs(
         let missing: Vec<_> = dirs
             .iter()
             .filter(|dir| {
-                dir.path
-                    .as_deref()
-                    .is_some_and(|path| !by_path.contains_key(&normalize_path(path)))
+                dir.path.as_deref().is_some_and(|path| {
+                    if by_path.contains_key(&normalize_path(path)) {
+                        return false;
+                    }
+                    // WPE 壁纸目录是父画册里的一个条目，不建子画册。全量扫描时它本来就不在 `dirs` 里；
+                    // 目录 mtime 未变的快速路径直接列子目录，要在这里挡住
+                    #[cfg(feature = "wpe")]
+                    if crate::crawler::wpe_import::is_importable_wpe_dir(path) {
+                        return false;
+                    }
+                    true
+                })
             })
             .cloned()
             .collect();
@@ -260,6 +269,31 @@ struct FullDirHook {
     cancel: Arc<AtomicBool>,
     pending_delete: HashSet<String>,
     subdirs: Vec<ScannedDir>,
+    /// 本轮有 WPE 壁纸子目录没处理成：它在库里的行可能还留在 `pending_delete`，
+    /// 与文件导入失败一样跳过 finalize，免得把还在磁盘上的目录解除关联。
+    wpe_failed: bool,
+}
+
+/// `path` 是否按「一个条目」同步的 WPE 壁纸目录：可入库的壁纸工程，且没有以它为 `sync_folder`
+/// 的画册（旧版本已经为它建了子画册的目录保持原样，照常按子画册同步）。
+#[cfg(feature = "wpe")]
+pub(crate) fn is_wpe_entry(path: &Path) -> bool {
+    if !crate::crawler::wpe_import::is_importable_wpe_dir(path) {
+        return false;
+    }
+    let target = normalize_path(path);
+    match Storage::global().list_local_folder_albums() {
+        Ok(albums) => !albums.iter().any(|album| {
+            album
+                .sync_folder
+                .as_deref()
+                .is_some_and(|folder| normalize_path(Path::new(folder)) == target)
+        }),
+        Err(err) => {
+            tracing::warn!("list albums for wpe entry check failed: {err}");
+            false
+        }
+    }
 }
 
 impl FullDirHook {
@@ -272,6 +306,7 @@ impl FullDirHook {
             album_id,
             cancel,
             subdirs: Vec::new(),
+            wpe_failed: false,
         })
     }
 
@@ -357,6 +392,52 @@ impl FullDirHook {
         Ok(wrote)
     }
 
+    /// 同步一个 WPE 壁纸子目录：整个目录是本画册里的一行，目录内部的变化不看。
+    /// 已入库就只保证成员关系；未入库走四个入口共用的 `ingest_wpe_dir`
+    /// （不按内容去重：磁盘上有几个目录就有几行）。返回是否写了库。
+    #[cfg(feature = "wpe")]
+    async fn sync_wpe_dir(&mut self, path: &Path) -> Result<bool, String> {
+        use crate::crawler::wpe_import::{ingest_wpe_dir, WpeIngest, WpeIngested};
+
+        let local_path = crate::wpe::normalize_local_dir(path)
+            .ok_or_else(|| format!("invalid wallpaper directory: {}", path.display()))?;
+        if let Some(existing) = Storage::find_image_by_path(&local_path.to_string_lossy())? {
+            self.pending_delete.remove(&existing.id);
+            let linked = Storage::global()
+                .add_images_to_album_silent(&self.album_id, &[existing.id.clone()]);
+            if linked > 0 {
+                crate::storage::image_events::emit_membership_added(
+                    &self.album_id,
+                    std::slice::from_ref(&existing.id),
+                )?;
+                self.record_added();
+            }
+            return Ok(linked > 0);
+        }
+
+        let ingested = ingest_wpe_dir(
+            path,
+            WpeIngest {
+                task_id: None,
+                album_id: Some(&self.album_id),
+                relocate_to: None,
+                delete_source: false,
+                dedup_by_hash: false,
+                display_name: None,
+                post_url: None,
+            },
+        )
+        .await?;
+        match ingested {
+            WpeIngested::Imported(_) => self.record_added(),
+            // 另一个入口（下载、本地导入）在这期间抢先写了这一行
+            WpeIngested::Existing(existing) => {
+                self.pending_delete.remove(&existing.id);
+            }
+        }
+        Ok(true)
+    }
+
     async fn finalize(&mut self, synced_at_ms: u64) -> Result<(), String> {
         let mut missing = Vec::new();
         let mut unlink = Vec::new();
@@ -400,6 +481,23 @@ impl FolderScanHook for FullDirHook {
         dir: &ScannedDir,
         _ctx: &ScanCtx<Self::DirCtx>,
     ) -> Result<(), ScanError> {
+        // WPE 壁纸子目录按「文件」对待：挂到本画册、不建子画册
+        #[cfg(feature = "wpe")]
+        if let Some(path) = dir.path.as_deref() {
+            if is_wpe_entry(path) {
+                if self.cancel.load(Ordering::Relaxed) {
+                    return Err(ScanError::Fatal(CANCEL_MARKER.to_string()));
+                }
+                let wrote = self.sync_wpe_dir(path).await.map_err(|err| {
+                    self.wpe_failed = true;
+                    ScanError::Skip(err)
+                })?;
+                if wrote {
+                    tokio::time::sleep(Duration::from_millis(SYNC_WRITE_THROTTLE_MS)).await;
+                }
+                return Ok(());
+            }
+        }
         self.subdirs.push(dir.clone());
         Ok(())
     }
@@ -540,7 +638,7 @@ pub(crate) async fn run_full(
         guard.finish_canceled(preempted.load(Ordering::Relaxed));
         return Ok(());
     }
-    if !scan_ctx.dir_had_errors(&root_url) {
+    if !scan_ctx.dir_had_errors(&root_url) && !hook.wpe_failed {
         if let Err(err) = hook.finalize(scan_started_at_ms).await {
             guard.finish(Some(err.clone()), false, false);
             return Err(err);
@@ -599,6 +697,7 @@ pub(crate) async fn run_diff(
         cancel: cancel.clone(),
         pending_delete: HashSet::new(),
         subdirs: Vec::new(),
+        wpe_failed: false,
     };
     let total = paths.len().max(1) as f64;
     let mut missing_ids = Vec::new();
@@ -621,6 +720,21 @@ pub(crate) async fn run_diff(
                     tokio::time::sleep(Duration::from_millis(SYNC_WRITE_THROTTLE_MS)).await;
                 }
             }
+            // WPE 壁纸子目录：整个目录是一个条目
+            #[cfg(feature = "wpe")]
+            Ok(metadata) if metadata.is_dir() && is_wpe_entry(&path) => {
+                let wrote = match hook.sync_wpe_dir(&path).await {
+                    Ok(wrote) => wrote,
+                    Err(err) => {
+                        guard.finish(Some(err.clone()), false, false);
+                        return Err(err);
+                    }
+                };
+                if wrote {
+                    tokio::time::sleep(Duration::from_millis(SYNC_WRITE_THROTTLE_MS)).await;
+                }
+            }
+            // 路径已消失：按路径查到行就删（WPE 行同样只删记录，目录本来就不在了）
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 if path.parent().is_some_and(Path::exists) {
                     let image = match Storage::find_image_by_path(&path.to_string_lossy()) {

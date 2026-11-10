@@ -456,8 +456,9 @@ pub async fn crawl_set_plugin_data<R: Runtime>(
 }
 
 /// WebView `Kabegame.downloadImage(url, opts)`：支持与 V8 同形的
-/// `opts.name` / `opts.url` / `opts.metadata_id` / `opts.metadata` / `opts.searchTexts`。
+/// `opts.name` / `opts.url` / `opts.metadata_id` / `opts.metadata` / `opts.searchTexts` / `opts.relocate`。
 /// raw metadata 在入口处归一化为 `metadata_id`，下载队列只传 id。
+/// `relocate` 只在 `url` 解析为任务 VFS 路径时生效（移走而不是复制），其余来源忽略。
 #[tauri::command]
 pub async fn crawl_download_image<R: Runtime>(
     webview: WebviewWindow<R>,
@@ -468,6 +469,7 @@ pub async fn crawl_download_image<R: Runtime>(
     source_url: Option<String>,
     labels: Option<Value>,
     search_texts: Option<Value>,
+    relocate: Option<bool>,
 ) -> Result<(), String> {
     let (task_id, run) = run_of(&webview)?;
 
@@ -508,6 +510,7 @@ pub async fn crawl_download_image<R: Runtime>(
     #[cfg(not(target_os = "android"))]
     let http_headers = HashMap::new();
 
+    let relocate = relocate.unwrap_or(false) && parsed.scheme() == "task-vfs";
     let dq = TaskScheduler::global().download_queue();
     // 与 V8 op 同形：统一经容量门控入队；worker 再按插件 backend 选择 CEF 或 scheme downloader。
     let cancel = run.cancel.clone();
@@ -523,6 +526,7 @@ pub async fn crawl_download_image<R: Runtime>(
         metadata_id,
         source_url,
         labels,
+        relocate,
     );
     tokio::select! {
         biased;

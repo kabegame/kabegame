@@ -45,6 +45,10 @@ use tokio::sync::Semaphore;
 #[cfg(not(target_os = "android"))]
 const MAX_RANGE_CHUNK: u64 = 8 * 1024 * 1024;
 
+/// 无 Range 的整文件响应按这个块大小流式读盘，进程内存不随文件大小增长。
+#[cfg(not(target_os = "android"))]
+const STREAM_CHUNK: usize = 256 * 1024;
+
 #[cfg(not(target_os = "android"))]
 fn mime_from_path(path: &str) -> Option<String> {
     if let Some(m) = kabegame_core::media::image_type::mime_type_from_path(Path::new(path)) {
@@ -124,12 +128,34 @@ async fn handle_file_path(
 ) -> Response {
     let path = absolute_path_from_route(rest);
     let path = path.as_str();
+    let range = headers
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     let image_info = match authorize_local_path(path).await {
         Ok(info) => info,
+        // 路径不是任何行：可能是某个 WPE 壁纸目录里面的文件
+        #[cfg(feature = "wpe")]
+        Err(response) => match authorize_wpe_inner_file(path).await {
+            Some(file) => {
+                return serve_file_with_mime(
+                    &file,
+                    Some("application/octet-stream".to_string()),
+                    range,
+                )
+                .await
+            }
+            None => return response,
+        },
+        #[cfg(not(feature = "wpe"))]
         Err(response) => return response,
     };
-    // 目录型 WPE 壁纸的 local_path 是目录，不能当文件读；入口视频走 /compatible（compatible_path）。
+    // 目录型 WPE 壁纸的 local_path 是目录，不能当文件读：返回目录里的文件清单，
+    // 客户端再按清单逐个请求目录内的文件。入口视频的播放仍走 /compatible（compatible_path）。
     if kabegame_core::media::image_type::is_wpe_type(image_info.media_type.as_deref()) {
+        #[cfg(feature = "wpe")]
+        return wpe_dir_listing(&image_info).await;
+        #[cfg(not(feature = "wpe"))]
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
@@ -140,11 +166,90 @@ async fn handle_file_path(
         .map(str::to_string)
         .or_else(|| mime_from_path(path));
 
-    let range = headers
-        .get(RANGE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
     serve_file_with_mime(path, mime, range).await
+}
+
+/// `/file/<WPE 壁纸目录>`：目录里的文件清单 `{ "type": "x-wpe/scene", "files": [{ "path", "size" }] }`。
+///
+/// 文件集合与目录哈希、整目录复制是同一个枚举（`dir_hash::list_files`）：相对路径用 `/` 分隔、
+/// 按字节序排序，不含符号链接与 `.DS_Store` 这类系统文件。
+#[cfg(all(not(target_os = "android"), feature = "wpe"))]
+async fn wpe_dir_listing(image_info: &kabegame_core::storage::ImageInfo) -> Response {
+    let dir = std::path::PathBuf::from(&image_info.local_path);
+    let listed =
+        tokio::task::spawn_blocking(move || kabegame_core::wpe::dir_hash::list_files(&dir)).await;
+    let files = match listed {
+        Ok(Ok(files)) => files,
+        Ok(Err(error)) => {
+            tracing::warn!("列出壁纸目录失败 {}: {error}", image_info.local_path);
+            return (StatusCode::NOT_FOUND, "file not found").into_response();
+        }
+        Err(error) => {
+            tracing::warn!("列出壁纸目录任务异常: {error}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "listing failed").into_response();
+        }
+    };
+    let files: Vec<serde_json::Value> = files
+        .into_iter()
+        .map(|file| serde_json::json!({ "path": file.rel, "size": file.size }))
+        .collect();
+    let mut out = axum::Json(serde_json::json!({
+        "type": image_info.media_type,
+        "files": files,
+    }))
+    .into_response();
+    // 清单随目录内容变，不能像媒体文件那样长期缓存
+    out.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    out
+}
+
+/// `path` 不是任何图片行时，看它是不是某个 WPE 壁纸目录里面的文件。
+///
+/// 逐级向上按路径查行（走 `local_path` 唯一索引），第一个命中的行必须是 WPE 行；
+/// 请求路径规范化后（解开 `..` 与符号链接）必须仍在该目录之内且是普通文件。
+/// 通过时返回规范化后的文件路径。
+#[cfg(all(not(target_os = "android"), feature = "wpe"))]
+async fn authorize_wpe_inner_file(path: &str) -> Option<String> {
+    let requested = Path::new(path);
+    // 文件不存在就不必查表
+    let canonical = tokio::fs::canonicalize(requested).await.ok()?;
+    if !tokio::fs::metadata(&canonical).await.ok()?.is_file() {
+        return None;
+    }
+    for ancestor in requested.ancestors().skip(1) {
+        let ancestor = ancestor.to_str().filter(|text| !text.is_empty())?;
+        let Ok(Some(info)) = kabegame_core::storage::Storage::find_image_by_path(ancestor) else {
+            continue;
+        };
+        if !kabegame_core::media::image_type::is_wpe_type(info.media_type.as_deref()) {
+            return None;
+        }
+        let root = tokio::fs::canonicalize(&info.local_path).await.ok()?;
+        if canonical == root || !canonical.starts_with(&root) {
+            return None;
+        }
+        return canonical.to_str().map(str::to_string);
+    }
+    None
+}
+
+/// 把整个文件作为流式响应体：按 [`STREAM_CHUNK`] 分块读盘，读错即结束流。
+#[cfg(not(target_os = "android"))]
+fn file_stream_body(file: tokio::fs::File) -> axum::body::Body {
+    let stream = futures_util::stream::unfold(Some(file), |state| async move {
+        let mut file = state?;
+        let mut chunk = vec![0u8; STREAM_CHUNK];
+        match file.read(&mut chunk).await {
+            Ok(0) => None,
+            Ok(read) => {
+                chunk.truncate(read);
+                Some((Ok::<_, std::io::Error>(chunk), Some(file)))
+            }
+            Err(error) => Some((Err(error), None)),
+        }
+    });
+    axum::body::Body::from_stream(stream)
 }
 
 #[cfg(not(target_os = "android"))]
@@ -259,18 +364,29 @@ async fn serve_file_with_mime(
         }
     }
 
-    // 无 Range 头:整文件返回(图片走这条;视频的 media 请求 Chromium 总会带 Range)
-    match tokio::fs::read(path).await {
-        Ok(bytes) => {
-            let mut out = (StatusCode::OK, bytes).into_response();
-            out.headers_mut()
-                .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-            set_content_type_if_present(&mut out, mime_type.as_deref());
-            set_immutable_cache(&mut out);
-            out
-        }
-        Err(_) => (StatusCode::NOT_FOUND, "file not found").into_response(),
+    // 无 Range 头:整文件返回(图片走这条;视频的 media 请求 Chromium 总会带 Range)。
+    // 流式读盘:WPE 壁纸目录里的 `scene.pkg` 可以有几个 GB,不能整份读进内存。
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(_) => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    };
+    let file_size = match file.metadata().await {
+        Ok(meta) if meta.is_file() => meta.len(),
+        _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    };
+    let mut out = (StatusCode::OK, file_stream_body(file)).into_response();
+    if let Ok(v) = HeaderValue::from_str(&file_size.to_string()) {
+        out.headers_mut().insert(CONTENT_LENGTH, v);
     }
+    out.headers_mut()
+        .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    // 流式响应体没有默认的 Content-Type：推断不出类型时与原先的字节响应一样按二进制流
+    set_content_type_if_present(
+        &mut out,
+        Some(mime_type.as_deref().unwrap_or("application/octet-stream")),
+    );
+    set_immutable_cache(&mut out);
+    out
 }
 
 #[cfg(not(target_os = "android"))]
@@ -470,5 +586,234 @@ mod tests {
         assert_eq!(query_body, "not found");
         assert_eq!(download_body, "not found");
         server.abort();
+    }
+
+    // ---------- /file 与 WPE 壁纸目录 ----------
+
+    #[cfg(feature = "wpe")]
+    mod wpe_routes {
+        use kabegame_core::app_paths::AppPaths;
+        use kabegame_core::settings::Settings;
+        use kabegame_core::storage::{ImageInfo, Storage};
+        use std::path::{Path, PathBuf};
+        use std::sync::Once;
+
+        /// 本 crate 的其它测试不碰全局单例；这里用一个进程级临时根初始化一次。
+        fn init_globals() {
+            static INIT: Once = Once::new();
+            INIT.call_once(|| {
+                let root =
+                    std::env::temp_dir().join(format!("kabegame-app-tests-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&root);
+                std::fs::create_dir_all(&root).unwrap();
+                AppPaths::init(AppPaths {
+                    data_dir: root.join("data"),
+                    cache_dir: root.join("cache"),
+                    temp_dir: root.join("tmp"),
+                    resource_dir: root.join("resources"),
+                    exe_dir: None,
+                    external_data_dir: None,
+                    pictures_dir: Some(root.join("pictures")),
+                    compatibles_dir_path: root.join("compatibles"),
+                })
+                .unwrap();
+                let _ = Settings::init_global();
+                Storage::init_global().unwrap();
+                let _ = kabegame_core::providers::provider_runtime();
+            });
+        }
+
+        fn temp_root() -> PathBuf {
+            let dir =
+                std::env::temp_dir().join(format!("kabegame-file-route-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.canonicalize().unwrap()
+        }
+
+        fn add_row(local_path: &Path, media_type: &str) {
+            Storage::global()
+                .add_image(ImageInfo {
+                    id: String::new(),
+                    url: None,
+                    local_path: local_path.to_string_lossy().into_owned(),
+                    plugin_id: Some("test".to_string()),
+                    task_id: None,
+                    surf_record_id: None,
+                    crawled_at: 1,
+                    metadata_id: None,
+                    image_metadata_id: None,
+                    thumbnail_path: String::new(),
+                    favorite: false,
+                    is_hidden: false,
+                    local_exists: true,
+                    hash: format!("hash-{}", uuid::Uuid::new_v4()),
+                    width: None,
+                    height: None,
+                    display_name: "row".to_string(),
+                    media_type: Some(media_type.to_string()),
+                    last_set_wallpaper_at: None,
+                    size: None,
+                    album_order: None,
+                    compatible_path: None,
+                    post_url: None,
+                })
+                .unwrap();
+        }
+
+        async fn serve() -> (String, tokio::task::JoinHandle<()>) {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, super::super::file_routes_media())
+                    .await
+                    .unwrap();
+            });
+            (format!("http://{address}"), server)
+        }
+
+        /// 与 kabegame-server 插件同样的地址形态：`/file/<绝对路径去掉前导斜杠>`，各段单独编码。
+        fn file_url(base: &str, path: &Path, rel: &str) -> String {
+            let mut url = reqwest::Url::parse(base).unwrap();
+            {
+                let mut segments = url.path_segments_mut().unwrap();
+                segments.push("file");
+                for segment in path.to_string_lossy().split('/').filter(|s| !s.is_empty()) {
+                    segments.push(segment);
+                }
+                for segment in rel.split('/').filter(|s| !s.is_empty()) {
+                    segments.push(segment);
+                }
+            }
+            url.to_string()
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn wpe_directory_lists_files_and_serves_inner_files_only() {
+            init_globals();
+            let root = temp_root();
+            let wall = root.join("壁纸 dir");
+            std::fs::create_dir_all(wall.join("materials")).unwrap();
+            std::fs::write(wall.join("project.json"), br#"{"type":"scene"}"#).unwrap();
+            // 大于一个流式分块，覆盖多块读取
+            let pkg: Vec<u8> = (0..super::super::STREAM_CHUNK * 2 + 123)
+                .map(|index| (index % 251) as u8)
+                .collect();
+            std::fs::write(wall.join("scene.pkg"), &pkg).unwrap();
+            std::fs::write(wall.join("materials/贴图 a.tex"), b"texture").unwrap();
+            std::fs::write(wall.join(".DS_Store"), b"finder").unwrap();
+            add_row(&wall, "x-wpe/scene");
+
+            // 目录外的文件、另一个没入库的目录
+            std::fs::write(root.join("secret.txt"), b"secret").unwrap();
+            let stranger = root.join("stranger");
+            std::fs::create_dir_all(&stranger).unwrap();
+            std::fs::write(stranger.join("a.txt"), b"not in library").unwrap();
+            // 目录里指向外面的符号链接
+            std::os::unix::fs::symlink(root.join("secret.txt"), wall.join("escape.txt")).unwrap();
+
+            let (base, server) = serve().await;
+
+            // 目录本身：清单
+            let response = reqwest::get(file_url(&base, &wall, "")).await.unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+            let listing: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(listing["type"], "x-wpe/scene");
+            assert_eq!(
+                listing["files"],
+                serde_json::json!([
+                    { "path": "materials/贴图 a.tex", "size": 7 },
+                    { "path": "project.json", "size": 16 },
+                    { "path": "scene.pkg", "size": pkg.len() },
+                ])
+            );
+
+            // 目录内文件：整文件流式返回，带长度
+            let response = reqwest::get(file_url(&base, &wall, "scene.pkg"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(
+                response.content_length(),
+                Some(pkg.len() as u64),
+                "流式响应仍带 Content-Length"
+            );
+            assert_eq!(response.bytes().await.unwrap().as_ref(), pkg.as_slice());
+
+            let response = reqwest::get(file_url(&base, &wall, "materials/贴图 a.tex"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.bytes().await.unwrap().as_ref(), b"texture");
+
+            // Range 仍可用
+            let response = reqwest::Client::new()
+                .get(file_url(&base, &wall, "scene.pkg"))
+                .header("range", "bytes=10-19")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 206);
+            assert_eq!(response.bytes().await.unwrap().as_ref(), &pkg[10..20]);
+
+            // 越界：`..`、符号链接、没入库的目录、目录内不存在的文件、子目录本身
+            for (rel, label) in [
+                ("%2e%2e/secret.txt", "encoded parent"),
+                ("materials/%2e%2e/%2e%2e/secret.txt", "nested parent"),
+                ("escape.txt", "symlink escape"),
+                ("missing.bin", "missing file"),
+                ("materials", "inner directory"),
+            ] {
+                let url = format!("{}/{rel}", file_url(&base, &wall, ""));
+                let response = reqwest::get(&url).await.unwrap();
+                assert_eq!(response.status(), 404, "{label}: {url}");
+            }
+            let response = reqwest::get(file_url(&base, &stranger, "a.txt"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404);
+            let response = reqwest::get(file_url(&base, &root, "secret.txt"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404);
+
+            server.abort();
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        /// 普通图片行的行为不变：整文件返回、类型取自行；它旁边的文件不会被当成「目录内文件」。
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn plain_image_rows_keep_their_behaviour() {
+            init_globals();
+            let root = temp_root();
+            let image = root.join("a.png");
+            std::fs::write(&image, b"png-bytes").unwrap();
+            std::fs::write(root.join("b.png"), b"sibling").unwrap();
+            add_row(&image, "image/png");
+
+            let (base, server) = serve().await;
+
+            let response = reqwest::get(file_url(&base, &image, "")).await.unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+            assert_eq!(response.headers().get("accept-ranges").unwrap(), "bytes");
+            assert_eq!(response.content_length(), Some(9));
+            assert_eq!(response.bytes().await.unwrap().as_ref(), b"png-bytes");
+
+            // 没入库的同目录文件、把图片行当目录往下取：都是 404
+            let response = reqwest::get(file_url(&base, &root, "b.png")).await.unwrap();
+            assert_eq!(response.status(), 404);
+            let response = reqwest::get(file_url(&base, &image, "inner"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404);
+
+            server.abort();
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 }
