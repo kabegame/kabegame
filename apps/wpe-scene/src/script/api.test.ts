@@ -2,12 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
-import { MISSING_SCRIPT_API, type ScriptApiGroup } from "../compile/scriptApi";
+import {
+  MISSING_SCRIPT_API,
+  MISSING_SCRIPT_CALLBACKS,
+  WPE_SCRIPT_CALLBACKS,
+  type ScriptApiGroup,
+} from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState, scriptWriteValue } from "../render/state";
 import { createWpeLocalStorage, ScriptApi } from "./api";
 import { alignScriptEnvironment } from "./environment";
-import { ScriptRuntime, type ScriptRealm } from "./runtime";
+import { RUNTIME_CALLBACKS, ScriptRuntime, type ScriptRealm } from "./runtime";
 import { createMemoryStorage } from "./storage";
 
 class Vec2 {
@@ -765,5 +770,17 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
         for (const name of Object.keys(object))
           expect(missing.has(name), `${group}.${name} 已实现却在表里`).toBe(false);
     }
+  });
+
+  it("未实现回调表与运行时调用的回调互补，合起来是 WPE 的回调表", () => {
+    const wpe = new Set<string>(WPE_SCRIPT_CALLBACKS);
+    const runtime = new Set<string>(RUNTIME_CALLBACKS);
+    for (const name of MISSING_SCRIPT_CALLBACKS) {
+      expect(wpe.has(name), `${name} 不是 WPE 的回调`).toBe(true);
+      expect(runtime.has(name), `${name} 运行时已经调用，从 MISSING_SCRIPT_CALLBACKS 删掉`).toBe(false);
+    }
+    const missing = new Set(MISSING_SCRIPT_CALLBACKS);
+    expect(MISSING_SCRIPT_CALLBACKS).toHaveLength(missing.size);
+    expect(new Set([...wpe].filter((name) => !missing.has(name)))).toEqual(runtime);
   });
 });

@@ -5,7 +5,14 @@ import { compileScene } from "./bundle";
 import { checkScriptFeatures } from "./features";
 import { SceneFs, type SceneReader } from "./fs";
 import { parseProject, parseScene } from "./model";
-import { MISSING_SCRIPT_API, memberAccesses, scanScriptApi, type ScriptApiContext } from "./scriptApi";
+import {
+  MISSING_SCRIPT_API,
+  memberAccesses,
+  scanScriptApi,
+  scanScriptCallbacks,
+  scriptExports,
+  type ScriptApiContext,
+} from "./scriptApi";
 import { collectScripts, type SceneScript } from "./scripts";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
 
@@ -162,6 +169,98 @@ describe("未实现脚本 API 的扫描", () => {
   });
 });
 
+describe("导出回调的扫描", () => {
+  it("函数与类声明：async、生成器", () => {
+    const source = [
+      "export function init() {}",
+      "export async function cursorClick(event) {}",
+      "export function* cursorMove() {}",
+      "export function *cursorUp() {}",
+      "export async function* mediaStatusChanged() {}",
+      "export class animationEvent {}",
+    ].join("\n");
+    expect(scriptExports(source)).toEqual([
+      "animationEvent",
+      "cursorClick",
+      "cursorMove",
+      "cursorUp",
+      "init",
+      "mediaStatusChanged",
+    ]);
+  });
+
+  it("Unicode 空白（U+00A0 等）是分隔符，不进标识符：导出与成员访问都认得出", () => {
+    // 语料 3409595232 等写成 `export function update`；TypeScript 解析器认它，扫描器以前把整串切成一个词
+    expect(scriptExports("export function cursorDown(e) {}\nexport　var﻿update = 1;")).toEqual([
+      "cursorDown",
+      "update",
+    ]);
+    expect(scan("export function init() { thisScene.createLayer ('a'); }")).toEqual(["thisScene.createLayer"]);
+    // 中文标识符照旧是一个词
+    expect(memberAccesses("脚本对象.名字").map((access) => access.name)).toEqual(["名字"]);
+  });
+
+  it("const / let / var：多个声明只认顶层逗号后的名字，解构收绑定名", () => {
+    expect(scriptExports("export const a = f(1, 2), b = { x: 1, y: [3, 4] }, c = (p, q) => p")).toEqual(["a", "b", "c"]);
+    expect(scriptExports("export let cursorDown = function (e, f) {}; export var cursorUp;")).toEqual([
+      "cursorDown",
+      "cursorUp",
+    ]);
+    expect(scriptExports("export const { a, b: c, d = g(1, 2), ...e } = obj, [f, , h = 1, ...i] = arr;")).toEqual([
+      "a",
+      "c",
+      "d",
+      "e",
+      "f",
+      "h",
+      "i",
+    ]);
+    // 计算属性键只认冒号后的绑定；嵌套解构照收
+    expect(scriptExports("export const { [k(1, 2)]: m, n: { o, p: [q] } } = obj;")).toEqual(["m", "o", "q"]);
+    // 没有分号：下一条导出语句不被吞掉
+    expect(scriptExports("export const a = 1\nexport function cursorEnter() {}")).toEqual(["a", "cursorEnter"]);
+  });
+
+  it("export { … } 与 export … from：取 as 后的名字，default 不算", () => {
+    expect(
+      scriptExports("function a() {} function b() {} function d() {} export { a, b as cursorLeave, d as default };"),
+    ).toEqual(["a", "cursorLeave"]);
+    expect(
+      scriptExports("export { cursorHitTest } from './hit.js'; export { x as mediaTimelineChanged } from 'm';"),
+    ).toEqual(["cursorHitTest", "mediaTimelineChanged"]);
+    // `export * from` 转出的名字编译期不知道，不产出；`export * as ns` 的导出名是 ns
+    expect(scriptExports("export * as ns from 'm'; export * from 'n';")).toEqual(["ns"]);
+    expect(scriptExports("export default function cursorClick() {} export default class cursorUp {}")).toEqual([]);
+  });
+
+  it("注释、字符串、模板字面量与属性名里的 export 不算", () => {
+    const source = [
+      "// export function cursorClick() {}",
+      "/* export function cursorDown() {} */",
+      "const a = 'export function cursorMove() {}';",
+      'const b = "export const cursorUp = 1";',
+      "const c = `export function cursorEnter() {} ${'x'}`;",
+      "obj.export = 1; obj?.export; const o = { export: 2 };",
+      "export function update() {}",
+    ].join("\n");
+    expect(scriptExports(source)).toEqual(["update"]);
+  });
+
+  it("只报没实现的回调", () => {
+    const source = [
+      "export function init() {}",
+      "export function update() {}",
+      "export function applyUserProperties() {}",
+      "export function destroy() {}",
+      "export function cursorClick() {}",
+      "export const resizeScreen = () => {}, helper = 1;",
+      "export { mediaPlaybackChanged } from './m.js';",
+    ].join("\n");
+    expect(scanScriptCallbacks(source)).toEqual(["cursorClick", "mediaPlaybackChanged", "resizeScreen"]);
+    expect(scanScriptCallbacks("export function update() { return value; }")).toEqual([]);
+  });
+});
+
 describe("能力表：script:api:*", () => {
   const script = (source: string, errors: string[] = []): SceneScript => ({
     id: "objects/0/visible",
@@ -186,6 +285,18 @@ describe("能力表：script:api:*", () => {
       unsupported,
     );
     expect([...unsupported]).toEqual(["script:api:thisScene.createLayer"]);
+  });
+
+  it("报 script:callback:<名>；不会执行的脚本不扫", () => {
+    const unsupported = new Set<string>();
+    checkScriptFeatures(
+      [
+        script("export function init() {} export function cursorDown(event) {}"),
+        script("export function cursorClick(event) {}", ["不支持的模块说明符：./x.js"]),
+      ],
+      unsupported,
+    );
+    expect([...unsupported]).toEqual(["script:callback:cursorDown"]);
   });
 
   it("编译：用到未实现 API 的场景整张退回，只用已实现 API 的照常", async () => {

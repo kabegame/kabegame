@@ -32,7 +32,7 @@ import {
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
 import type { SceneScript } from "./scripts";
-import { scanScriptApi } from "./scriptApi";
+import { scanScriptApi, scanScriptCallbacks } from "./scriptApi";
 import { TEXTURE_FORMATS } from "./tex";
 
 export const SUPPORTED = {
@@ -310,7 +310,8 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
 }
 
 /**
- * 场景脚本用到 WPE 有、我们没实现的 API：`script:api:<分组>.<成员>`（表与匹配规则见 `scriptApi.ts`，用户定 2026-11-07）。
+ * 场景脚本用到 WPE 有、我们没实现的 API：`script:api:<分组>.<成员>`（表与匹配规则见 `scriptApi.ts`，用户定 2026-11-07）；
+ * 导出了 WPE 会调、运行时还没调的回调（光标、媒体等）：`script:callback:<名>`（P6 前置，否则场景静默缺交互）。
  * 只扫会执行的脚本：`collectScripts` 收集的 scene.json 脚本里，导入说明符无效的整段不求值（`ScriptRuntime.load`），不扫。
  * 脚本运行期的普通错误不在这里，仍只进脚本诊断（3b）。
  */
@@ -318,6 +319,7 @@ export function checkScriptFeatures(scripts: readonly SceneScript[], unsupported
   for (const script of scripts) {
     if (script.errors.length) continue;
     for (const key of scanScriptApi(script)) unsupported.add(`script:api:${key}`);
+    for (const name of scanScriptCallbacks(script.source)) unsupported.add(`script:callback:${name}`);
   }
 }
 

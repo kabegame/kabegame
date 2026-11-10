@@ -274,7 +274,7 @@ document.addEventListener("pointermove", (event) => {
 2. **顺序：** 前置 → P6a 声音 → P6b 文本 → P6c 交互 → P6d 动态图层 → P6e 帧表。推荐这个顺序：前置要赶在 P4、P5 做完之前；声音最独立；文本等 P5b。
 3. **文本验收的精度：** 纹理尺寸、基线和字形包围盒严格一致，像素按误差包络比。推荐这样；要逐像素一致只能自己实现 DirectWrite 的栅格化，代价不成比例。
 4. **声音验收：** 播放状态逐帧比日志，出声靠人耳。推荐这样。
-5. **前置现在做：** 前置只改能力表和测试，量很小，但要动 `compile/scriptApi.ts` 和 `script/api.test.ts`。推荐等 P4、P5 手上的步骤提交后、下一个步骤动工前插进去。
+5. ~~**前置现在做**~~：2026-11-11 用户定现在做，在 HEAD 快照里实现、按块合进仓库，见「实施记录」。
 
 ## 风险
 
@@ -285,3 +285,20 @@ document.addEventListener("pointermove", (event) => {
 5. **声音的资源占用：** 一张场景的声音文件可以上百 MB，Blob 常驻内存；预览和桌面同时开时翻倍。要实测，不行再改成由 Rust 把区间解到缓存文件、用 `file:` 地址播放。
 6. **自动播放策略：** 宿主是 iframe，Chromium 可能要求用户手势才让 `AudioContext` 出声。网页壁纸现在能出声，推断 CEF 已放开；步骤 0 确认。
 7. **和 P4、P5 抢文件：** 见上节。
+
+## 实施记录
+
+### 前置 — 未实现的回调照报（2026-11-11）
+
+**做法：** 并行期在 HEAD `14bdbf99` 的快照里实现（`ignore/p6/pre/`，`kbp snapshot`），改动交子代理，我核对后再打进仓库。工作区里 P5a 会话改着 `scriptApi.ts`、`scriptApi.test.ts`、`api.test.ts` 的 `zoom` 几处，前置的块和它们不重叠，补丁 `ignore/p6/out/pre.patch` 对工作区和索引都能直接打。
+
+**改动：**
+- `compile/scriptApi.ts`：`WPE_SCRIPT_CALLBACKS`（19 个，报告 C 节）、`MISSING_SCRIPT_CALLBACKS`（15 个）、`scriptExports`（用 `tokenizeScript` 认导出名）、`scanScriptCallbacks`。
+- `compile/features.ts`：`checkScriptFeatures` 对会执行的段再报 `script:callback:<名>`。
+- `script/runtime.ts`：已实现的回调导出成 `RUNTIME_CALLBACKS`，行为不变。`compile/` 跑在 Worker 里，不 import 运行时，一致性由 `api.test.ts` 核对：两表不相交、合起来恰好是 19 个。
+- **顺带修了分词器的老漏洞：** U+00A0 等 Unicode 空白以前被当成标识符字符。语料里 3409595232、3426865175、3465215190 有脚本写成 `export` + U+00A0 + `function`，整串被切成一个词，导出认不出；同样的写法放在成员名后面，`script:api:*` 也会漏报。
+
+**核对：**
+- tsc 0 错；vitest 55 个文件、1542 个用例全过（设了 `KABEGAME_WPE_ROOT`）；Prettier 通过。
+- **和真解析器逐段比：** 语料 102 张场景、3491 段脚本，用 TypeScript 编译器取每段的导出名，和 `scriptExports` 比全部导出名（不只回调），修分词器后逐段一致。修之前有 5 段不一致，就是上面 U+00A0 那几段（`ignore/p6/verify/`）。计划里原想用 P3b 的 `scriptCorpus` 探针对真实 `import`，改成这个办法，不用起 dev。
+- **语料：** 165 张，能渲染 36 → 36，没有掉出的；53 张多报 `script:callback:*`（光标 45 张、媒体 28 张、`animationEvent` 1 张），去掉的键为 0，修分词器没有带出新的 `script:api:*`（`ignore/p6/out/pre-diff.txt`）。语料里没人导出 `cursorHitTest`、`mediaStatusChanged`、`resizeScreen`、`applyGeneralSettings`。
