@@ -3,6 +3,7 @@
 > 状态（2026-11-01）：决策 D1–D7 全部按推荐确认。**P1-0（着色器翻译器 `wpesl2wgsl` + wasm 构建链）已完成**，结果见点 P1-0；
 > **`scene.pkg` 读取（`wpe-scene/compile/pkg.ts`）已完成**：本机创意工坊 scene 全是 pkg，原 P9 的 pkg 提前进 P1-3。**P1-1（scene 入库）已完成并真机验证**（29 张：默认 16 + 工坊 13）。**P1-2（WPE 安装目录交给前端）已完成**。**P1-3（前端编译管线）已完成**，本机 29 张语料与 CEF 里的 Worker 编译都验证过。**P1-4（WebGPU 渲染器 + `WpeSceneView.vue`）已完成**：P1 三张真机渲染，全语料 Tint 0 error；beach 与 WPE 桌面实拍一致（作者 `preview.jpg` 另有后期，不能当基准）。**P1-5（接入 `WallpaperStage`）已完成**：图库预览与桌面实时渲染，加载期间不闪预览图；场景 → 场景切换有 0.2–0.4 秒空档待定。
 > P2a / P2b、P3-0（场景宿主，3-0a–3-0c）已完成；**P3（SceneScript）**于 2026-11-03 定方案（D14），拆成 [3a](phase-3a-bindings.md) / [3b](phase-3b-script-runtime.md) / [3c](phase-3c-runtime-graph.md)，见「P3 — SceneScript」一节。
+> **2026-11-11 重分（D15）**：P6 之后不再按壁纸分节。W1–W6、旧 P7 / P8、K、旧 P9 按能力拆散，已被 P2–P6 吸收的划掉，剩下的排成 P7–P13 与「按需」；旧名到新名见「旧名对照表」。
 > 上级：[../PLAN.md](../PLAN.md) 决策 9（Scene 走 WebGPU）。调研：[RESEARCH.md](RESEARCH.md)（格式、方言、WebGPU 可行性）。
 > 翻译器契约：[src-tauri/wpesl2wgsl/README.md](../../../../src-tauri/wpesl2wgsl/README.md)；场景文档：[cocs/wpe/WPE_SCENE.md](../../../../cocs/wpe/WPE_SCENE.md)。
 > 本文件取代调研 §5–§7 里与现架构不符的部分。调研写于网页壁纸改成 `file:` iframe 之前，其中的 `/wpe/<id>/` HTTP 路由、
@@ -17,6 +18,7 @@
 按它们用到的能力从少到多排成 P1–P6、W1–W6、P7–P8，每个 Phase 让一组具名样本**完整正确**：先是 1–3 层静态图层 + 自定义 shader，
 再是 effect 链与混合模式、SceneScript、粒子、透视与静态网格、复杂脚本小游戏；然后是工坊的视频纹理、层级、媒体集成、交互与骨骼动画；
 最后是 3D 模型场景（D7）。每个 Phase 只加这组样本需要、而前面还没有的能力，做完就能拿这几张对照验收。
+（已更新：P4 起改成按语料覆盖一类能力的全部用法，不再只做几张样本；2026-11-11 起 P6 之后的分节也按能力，不再按壁纸，见 D15。）
 
 **能力表让「完成」可以机器检查。** 编译场景时算出它用到的特性（图层类型、shader 变体、effect、粒子算子、脚本 API、
 纹理格式……），与「当前已实现」的表比对，未实现项列进 `unsupported`；清单非空时整张退回预览图，不画半成品（D4）。
@@ -57,6 +59,8 @@ wasm 也只在真要渲染时才加载。上级计划的阶段 3 / 4 合并为�
 
 ## 样本复杂度分级（本机只读扫描，2026-11-01）
 
+> 这张表是 2026-11-01 按样本排的旧分法，保留作样本的能力清单。表里 W1–W6、P7–P9 各行的能力现在分到哪一节，见「旧名对照表」（D15）。
+
 | Phase | 样本 | 相比上一档新增的能力 |
 |---|---|---|
 | P1 | eagleflag · deep_space · beach | 1–3 个 image 图层，正交相机；内置 `genericimage` + 项目自定义 shader（`flag` 顶点动画、`flowimage`、`swayimage`，都用 `g_Time`）；COMBO `TINT`；normal / translucent / additive 混合；纹理 RGBA8888 与 DXT5、ClampUVs；材质 `usershadervalues` 绑定用户颜色（eagleflag 的 `flagcolor1/2`） |
@@ -83,7 +87,7 @@ wasm 也只在真要渲染时才加载。上级计划的阶段 3 / 4 合并为�
 - **材质的 COMBO 与纹理**：eagleflag `flag` 是 `TINT: 1`，纹理 `eagle / flag_normal / cloth`；deep_space `flowimage` 有 4 张纹理，
   `genericimage` 有 1 张；beach 的 `flowimage` / `swayimage` 各 2 张、`genericimage` 1 张；其余均无 COMBO。
 - 这 16 张都没有骨骼 / 动画 mdl、视频纹理、`parent` 层级，也没有在 shader 里用 `g_PointerPosition` 或 `g_AudioSpectrum`
-  （audiophile 的音频在项目 shader 的 uniform 数组里，P7 再核实）。
+  （audiophile 的音频在项目 shader 的 uniform 数组里，P11 再核实）。
 
 创意工坊 13 张（2026-11-01 只读扫描，pkg 解到 scratchpad 后用同一脚本统计）：
 - **全是 `scene.pkg`**：版本 `PKGV0018`–`0024` 布局相同，最大 712 MB；条目首尾相接，最后一条结束在文件末尾；
@@ -665,102 +669,132 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **从别处移来**：dna_fragment、techno 从 P7 提前到 P5d；相机对象从 W3 提前到 P5d；视差不再等 P6，P4c 已接好指针。深度附件由 P5d 建、P4f 复用。
 - **验收**：和 WPE 抓帧比，不比作者的预览图；每节有确定性工程。
 
-## P6 — 复杂脚本、文本、声音（dino_run）
+## P6 — 声音、文本、交互与动态图层（dino_run 等，用到 106 张）
 
-- **新增** 脚本 API：
-  - 图层增删：`createLayer` / `destroyLayer`，宿主侧立即返回代理对象，渲染器在下一帧建出或删掉真实图层。
-  - `sortLayer`、`getLayer`、`getLayerIndex`、`registerAsset`。
-  - `thisObject.getMaterial`，可改材质 uniform。
-  - 输入：`input.cursorWorldPosition` 与 `cursorDown` 事件。壁纸窗口已有 Windows 鼠标转发，Stage 传 `interactive`。
-  - `localStorage.get/set`（`LOCATION_GLOBAL / SCREEN`），持久化位置在本 Phase 定。
-- **新增** 文本图层：从项目 otf 建 `FontFace`，用 `OffscreenCanvas` 栅格化成纹理，脚本改文本时重绘。
-- **新增** 声音图层：WebAudio 播放 `sounds/*`，接 `playbackmode / volume`；桌面是否出声跟随现有壁纸音量设置。
-  - 音量按实例控制：`WallpaperStage` 把已有的 `volume` prop 透传给 `WpeSceneView`，场景的全部声音都经同一个主音量节点出。
-    - 应用背景（`video-muted` → 音量 0）、静音的预览只把主音量设为 0，声音图层照常推进，脚本读到的播放状态不变。
-    - 音量为 0 时不解码、不建 `AudioContext`，等音量大于 0 时再建。
-  - 声音由我们自己的代码播放（脚本只能经暴露的 API 控制声音图层），不存在网页壁纸那种无法从外部静音的问题。
-- **新增** spritesheet（`TEXS` 帧表、COMBO `spritesheet`）、`godrays`（多 pass、多 fbo）、`camerafade`。
-- **验收**：dino_run 可玩，计分显示正确，切换 `dino / level / show_score / god_rays / follow_cursor` 生效，重启后最高分仍在。
+总计划见 [phase-6-script-text-sound.md](phase6/phase-6-script-text-sound.md)。按语料重扫（2026-11-11，165 张）：文本 91 张、声音 77 张、光标输入与回调 47 张、建层与层级 21 张、图像层帧表 16 张，合计 106 张。目标从 dino_run 一张改为覆盖这几类用法：只做 P6，能渲染 35 → 40；P4、P5 先做完时 45 → 56。
 
-## W1 — effect `shake`、`iris`（工坊 3656079027 超时空辉夜姬）
+- **分节**：前置（未实现的导出回调照报 `script:callback:*`）；P6a 声音；P6b 文本；P6c 交互；P6d 动态图层与层级 API；P6e 图像层帧表。
+- **从别处移来**（D15）：光标回调、`input.*`、声音的脚本控制、`systemfont_*` 原在 W4；文本 API 原在 W2；层级 API 原在 W1 / W5。
+- **已经不用做**：`localStorage`（P3b 已实现、持久化）、`camerafade`（能力表当中性）、godrays 等多 pass effect（P2a 起支持）。
+- **验收**：和 WPE 比。文本的纹理尺寸、基线与字形包围盒严格一致，像素按误差包络比；声音按日志逐帧比播放状态，出声靠人耳。范围、顺序、验收方式在总计划里待用户定。
 
-- **前置·翻译器**：~~`#require LightingV1` 打桩~~ 已按 WPE 语义实现，不是打桩：`LIGHTING=0` 展开成空，开启时生成真实的库（[lighting-REPORT](lighting-REPORT.md)）。
-  待做：把 pkg 里的工坊着色器加进翻译器的语料测试。
-- `parent` 层级与分组节点已提前到 P4a。
-- **新增** 形状对象 `shape: "quad"`（读码，[sample-gaps](phase4/sample-gaps.md) §2.1）：图像类的子类，边长等于正交高度的正方形；只画最后一个 effect 的 pass，强制 `DIRECTDRAW=1`、强制 additive。语料 16 张、17 个对象，`3821678218` 在 P4b 之后只差这一项，可以在 P4b 之后单列一步先做。
-- **新增** effect `shake`、`iris`。
-- **验收**：画面与预览图一致；7 处用户属性生效。
+## P6 之后的分节（2026-11-11 重分，D15）
 
-## W2 — 视频纹理、音频频谱（工坊 3429479356 MGS4 · 3600630828 樱羽艾玛）
+P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K、旧 P9 里，已被 P2–P6 吸收的划掉，剩下的排成 P7–P13 与「按需」，编号就是推荐顺序。旧名的去处见本节末的「旧名对照表」。
 
-- **新增** 视频纹理：`.tex` 的 flags 含 Video（32）时，唯一 mip 是完整 MP4，起点按容器版本解析。
-  - 读取：按区间读出 MP4，做成 Blob，交给静音循环的 `<video>`，每帧 `importExternalTexture`；解码交给浏览器。
-  - 单段最大 707 MB：Blob 的内存占用与 4K60 解码开销要实测。不行再看 MSE 分段喂入，或由 Rust 把区间解到缓存文件。
-- **新增** 音频：`g_AudioSpectrum*` uniform。脚本 `engine.registerAudioBuffers` 已在 P3c 点 0 接上 Phase 8 的 `WpeMediaHub`；场景宿主本身是子 frame，不需要主 frame 订阅方，uniform 直接用宿主收到的同一帧。这类 uniform 数组在翻译结果里是补齐过的 `vec4` 数组（见 P1-0）。
-- **新增** 脚本 `thisScene.enumerateLayers`、`thisLayer.text / alpha`；
-  `shine`（5 pass、2 fbo，同 P6 godrays 形态）、`blurprecise`、`opacity`；项目自带的工坊 effect（`effects/workshop/<id>/…`，资源层已覆盖）。
-- **验收**：两张画面与预览图一致；视频流畅循环；音频条随系统音频跳动；调位置的用户属性生效。
+统计基于 HEAD `47486b72` 的语料扫描，2026-11-11 用户新下载 13 张后共 165 张（`ignore/p6/out/corpus-new.json`，`ignore/p6/ana_phases.py`）：新的 13 张没带来新的能力类别，新键都能归进已有各节。
+- 「用到」是报这一节任一键的场景数。导出了没实现的回调的，按 P6 前置的 `script:callback:*` 计。
+- 「只差它」「累计能渲染」都假设 P4–P6 先做完（能渲染 56 张）；累计按表的顺序依次去掉各节的键。
+- 各节动工前另写总计划，覆盖数按那时的能力表重算。
 
-## W3 — 多段视频与音频脚本（工坊 3470764447 伊蕾娜·昼夜）
+| 节 | 内容 | 来自 | 用到 | 只差它 | 累计能渲染 |
+|---|---|---|---|---|---|
+| P7 | effect 与着色器补全 | W1 前置，W4–W6 的工坊 effect，旧 P9 | 65 | 9 | 65 |
+| P8 | 图像层与材质补全 | W1 的形状对象，散项 | 45 | 6 | 72 |
+| P9 | 视频纹理 | W2、W3 | 39 | 12 | 89 |
+| P10 | 关键帧动画 | K，W5 的 `getAnimation` | 40 | 0 | 92 |
+| P11 | 音频、媒体与用户资源 | W2、W3、W5，旧 P7 的音频 | 53 | 2 | 122 |
+| P12 | 骨骼与 puppet | W6 | 35 | 5 | 154 |
+| P13 | 3D 反射、光照与阴影 | 旧 P7、旧 P8 | 11 | 2 | 165 |
 
-- **新增** 5 段视频纹理按时段切换（脚本经 `getLayer` 改 `visible`）：不可见的视频要暂停解码。
-- **新增** 脚本 `engine.canvasSize`、`mediaThumbnailChanged`（接 `WpeMediaHub` 的 SMTC 封面）；`colorBlendMode` 21 / 31。带 `camera` 的对象已移到 P5d（2026-11-10）。
-- **验收**：不同时段显示对应视频；层级动画与预览图一致。
+- 各能力在同一批场景上交叉：一张工坊场景常常同时要视频、关键帧、音频和 puppet。所以「只差它」都小，后几节一次解锁很多。
+- 全部做完，语料 165 张都能渲染。其中还要 P4f 的 `emitParticles`、P6a 的三维声音，已归进那两节。
+- **顺序：** P7 改的是 Rust 翻译器，不碰场景渲染器的共享文件，现在就能和 P4–P6 并行。P8 等 P5b 改完图像层。3D 承接 P5、放在最后，沿用 D7「工坊在 3D 之前」的用意。
 
-## W4 — 交互与声音控制（工坊 3611425904 五河琴里 · 3146703458 P3R 音乐播放器 · 3351163962 椎名真白）
+## P7 — effect 与着色器补全
 
-- **新增** 按图层命中的 `cursorClick / Down / Up / Move / Enter / Leave`：要算图层的命中区域。
-- **新增** 声音图层由脚本控制 `play / pause / stop / isPlaying`；`systemfont_*` 系统字体映射；`engine.setTimeout`、`WEMath`、`WEVector`。
-- **新增** 材质 `genericimage3`、`flat`；effect `sharpen_filter`、`transform`、`foliagesway`、`iris`、`blend`。
-- **验收**：点击语音 / 播放器 / 各按钮触发对应变化与声音；真白 53 个文本显示正确、448 处用户属性生效。
+- **翻译失败的工坊着色器**（`shader:*`，64 张）：作者手写的写法，WPE 能编过、我们的翻译器拒绝。
+  - 类型：隐式类型转换（标量与向量混算、赋值时截断）、两个阶段的 varying 类型不同；
+  - 函数名：`mix`、`texture` 这类 GLSL 名字出现在 WPE 方言里；
+  - 预处理：不配对的 `#endif`、`#if` 里的分号；
+  - 最多的是工坊 effect `Simple_Audio_Bars` 的几个版本。
+  - 类型类的问题要类型信息，规则改写做不到：要么扩展翻译器，要么在 naga 的 IR 上处理（见「风险」）。步骤 0 先查 WPE 自己怎么处理这些写法。
+  - 先把 pkg 里的工坊着色器加进翻译器的语料测试（原 W1 前置）。
+- **effect JSON 的字段：**
+  - `fluidsimulation`（WPE 自带的流体 effect，1 张）：pass、bind、fbo 上的 `conditions`（按 COMBO 选），`functions`（`clear` 动作，经脚本 `executeMaterialFunction` 触发），effect 级 `combos`。模拟 RT 跨帧保留，跟着光标动，所以要 P6c。
+  - `editable`：`wallpaper64.exe` 里没有这个字符串，推断是编辑器键，按中性放开。
+- **验收：** 翻译器的语料测试覆盖 pkg 里的工坊着色器；解锁的场景和 WPE 同一时刻的画面比。
 
-## W5 — 媒体集成、跨脚本共享与大量内置 effect（工坊 2932157836 星浴 · 3524852519 伊蕾娜·初晨偎风 · 3219908811 初音·胧月）
+## P8 — 图像层与材质补全
 
-- **新增** 媒体事件 `mediaPlaybackChanged / PropertiesChanged / ThumbnailChanged / TimelineChanged`（SMTC）；跨脚本的 `shared` 对象（含可拖动图层）；
-  `engine.setInterval`；`thisObject.getAnimation`、`thisLayer.getParent`。
-- **新增** 内置 effect：`waterwaves`、`waterripple`、`shake`、`pulse`、`transform`、`chromaticaberration`、`spin`、`perspective`、`twirl`、
-  `blendgradient`、`motionblur`、`blurradial`；`composelayer`。R8 / RG88 纹理与 AlphaChannelPriority 已提前到 P4b（读码看 AlphaChannelPriority 多半对运行时中性，P4b 步骤 0 确认）。
-- `thisObject.getAnimation` 依赖「K — 属性关键帧动画」。
-- **验收**：播放音乐时歌名 / 封面 / 播放状态卡片随之显示与隐藏；水波等效果与预览图一致；可拖动图层的位置能保存。
+- **形状对象** `shape: "quad"`（原 W1，读码见 [sample-gaps](phase4/sample-gaps.md) §2.1）：图像类的子类，边长等于正交高度的正方形；只画最后一个 effect 的 pass，强制 `DIRECTDRAW=1`、强制 additive。语料 18 张，`3821678218` 在 P4b 之后只差这一项。
+- **图像层的散项：**
+  - 对象 `alignment` 取非 `center`（21 张）、`dependencies`（9 张）、`nointerpolation`（3 张）；
+  - 材质 `alphawriting`（6 张）、混合 `alphatocoverage`（2 张）；
+  - 引用别的图层合成 RT 的 `_rt_imageLayerComposite_*`（8 张）。
+- **依赖：** 等 P5b 改完图像层的几何、UV 和合成 RT。
+- **验收：** 每项一个确定性工程，和 WPE 逐像素比。
 
-## W6 — puppet warp 骨骼动画（工坊 3351072238 妃咲 · 3409595232 长安雪 · 3554161528 空崎日奈）
+## P9 — 视频纹理
 
-- **新增** MDLV0021 / MDLV0023 的骨骼（MDLS）与动画（MDLA），skinning（翻译器经 `defines` 传 `BONECOUNT`）。
-- **新增** DXT3（格式 6）；`REFRACT` / `PARALLAX`、`depthparallax` 与 `g_PointerPosition` / `g_ParallaxPosition`；
-  `blurprecise`、`hue_shift`、`clipping_mask`、`waterflow`、`bloom`、`color_grading`、`rounded_mask`；
-  脚本 `localStorage`。
-- **验收**：人物骨骼动画与预览一致；鼠标视差与折射生效。
+- `.tex` 的 flags 含 Video（32）时，唯一 mip 是完整 MP4，起点按容器版本解析（见「补充事实」）。语料 39 张。
+- **读取：** 按区间读出 MP4，做成 Blob，交给静音循环的 `<video>`，每帧 `importExternalTexture`；解码交给浏览器。
+  - 单段最大 707 MB：Blob 的内存占用和 4K60 的解码开销要实测。不行再看 MSE 分段喂入，或由 Rust 把区间解到缓存文件。
+- **多段视频**（原 W3）：按时段切换，脚本经 `getLayer` 改 `visible`；不可见的视频暂停解码。
+- **脚本：** `getVideoTexture`（6 张）。
+- **验收：** 和 WPE 同一时刻的画面比；视频流畅循环；隐藏、切走时停止解码；预览与桌面同时播放的开销实测。
 
-## P7 — 3D 模型场景（audiophile）
+## P10 — 关键帧动画
 
-- dna_fragment、techno 与 mdl 的全部静态版本已提前到 P5（2026-11-10）：网格探针显示它们只差透视和网格。
-- **新增** 对象 `reflected`、`skin` 与反射 RT（audiophile 的 grid 还缺 `materials/grid/grid.tex`，开工时核实）。
-- **新增** 音频：audiophile 的 `g_AudioSpectrum*`，复用 W2 接好的主 frame 音频订阅。
-- 开工前先核实 audiophile 的 shader 是否用到光照；用到的话挪到 P8。
-- **验收**：和 WPE 画面一致；audiophile 随系统音频跳动，静音后回落。
+- **是什么：** 属性值写成 `{animation: {c0, c1, …, options: {fps, length, mode, …}}, value}`，按时间轴插值，可以和 `user`、`script` 并存。2026-11-07 统计语料 32 张、169 处（不含 puppet 的 `animationlayers`）：图层 `alpha` / `origin` / `angles` / `scale` / `color`、材质常量、`general.zoom` / `bloomstrength`、`instanceoverride` 等。
+- **现状：** 能力表报 `value:animation`（2026-11-11 为 38 张），整张退回。
+- **脚本：** `thisObject.getAnimation`（26 张）、`thisScene.getAnimation`、导出回调 `animationEvent`。
+- **步骤 0：** 求值函数（插值、`loop` / `mirror` / `single` 的时间处理、`startpaused` 时取哪个值）、三种绑定谁优先、`magic` 切线。已读到的部分和查法见 [sample-gaps](phase4/sample-gaps.md) §3.4、§3.5。
+- **实现：** 编译期解析成曲线，运行时每帧求值写进 `SceneState`（复用 P3a 的就地路径）；`getAnimation` 建在它上面。
+- **验收：** 确定性工程和 WPE 逐帧比；`kabegame-sample` 的 `controlpointangle1`。
 
-## P8 — 光照与材质（demon_core · arsenal · fantasticcar · ricepod）
+## P11 — 音频、媒体与用户资源
 
-- **已完成**（lighting-REPORT）：`#require LightingV1`、`general.lightconfig`、四种 V1 灯对象、无 effect 图层的 `LIGHTING`。
-- **新增** 遗留灯（`"light": "point"`，`g_LightsPosition` / `g_LightsColorPremultiplied`，`generic*` 与 `genericimage2` 读）。
-- **新增** `PRELIGHTING`（带 effect 或 passthrough 的图层开光照，`g_Alt*`）、effect 自己开光照、阴影投射与 cookie、体积光。
-- **新增** 内置 `generic` 的 lightmap / normalmap / reflection；车漆 shader 的 metal / paintwork；
-  `camerashake`；无内容的变换节点；`selfillum`。
-- arsenal 扫描时有 1 处引用解析为空，开工时核实。
-- **验收**：四张与预览图一致；fantasticcar 的车身 / 条纹 / 轮毂颜色属性生效。
+三类数据都来自场景外面，宿主只是接收方。
+- **音频：** `g_AudioSpectrum*` uniform（26 张）、`supportsaudioprocessing`。
+  - 脚本 `engine.registerAudioBuffers` 已在 P3c 点 0 接上 `WpeMediaHub`。场景宿主本身是子 frame，uniform 直接用宿主收到的同一帧。这类 uniform 数组在翻译结果里是补齐过的 `vec4` 数组（见 P1-0）。
+  - 和 P4e 的粒子 `audioprocessing*` 共用数据通路，谁先做谁建。
+  - audiophile（旧 P7）的音频在这里。
+- **媒体：** 导出回调 `mediaStatusChanged` / `mediaPlaybackChanged` / `mediaPropertiesChanged` / `mediaThumbnailChanged` / `mediaTimelineChanged`（30 张，SMTC，Phase 8 的 `WpeMediaHub` 已有数据）；系统纹理 `$mediaThumbnail` / `$mediaPreviousThumbnail`（20 张）。
+- **用户资源：**
+  - 用户自选的纹理（`scenetexture` 等属性绑在 `usertextures` 上；带 `usertextures` 的 30 张里，除了媒体缩略图都是这种）。场景的属性面板现在隐藏 `file` / `directory`，这类属性要一起补。
+  - `usershortcut` 属性与 `engine.openUserShortcut`（1 张；只能在光标回调里调，每次点击至多一次）。打开快捷方式要后端启动用户配置的程序或文件，只放行用户在属性面板里配过的那些。
+- **验收：** 固定音频输入下 uniform 与 WPE 一致；播放音乐时媒体回调与封面纹理跟着变；自选纹理与快捷方式在属性面板里能设、能用。
 
-## K — 属性关键帧动画（2026-11-07 由 kabegame-sample 发现）
+## P12 — 骨骼与 puppet
 
-- **是什么**：属性值写成 `{animation: {c0, c1, …, options: {fps, length, mode, …}}, value}`，按时间轴插值。可以和 `user`、`script` 并存。语料 32 张、169 处（不含 puppet 的 `animationlayers`）：图层 `alpha` / `origin` / `angles` / `scale` / `color`、材质常量、`general.zoom` / `bloomstrength`、`instanceoverride` 等。
-- **现状**：能力表报 `value:animation`，整张退回（P4a 步骤 5 之前补上）。此前 `resolveValue` 把这种值解析成 `undefined`，属性静默退回缺省值，能力表不报。
-- **步骤 0**：求值函数（插值、`loop` / `mirror` / `single` 的时间处理、`startpaused` 时取哪个值）、三种绑定谁优先、`magic` 切线。已读到的部分和查法见 [sample-gaps](phase4/sample-gaps.md) §3.4、§3.5。
-- **实现**：编译期解析成曲线，运行时每帧求值写进 `SceneState`（复用 P3a 的就地路径）；W5 的 `thisObject.getAnimation` 建在它上面。
-- **验收**：确定性工程和 WPE 逐帧对比；`kabegame-sample` 的 `controlpointangle1`。
+- MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
+- 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
+- **依赖：** P5c 的 mdl 解析。P5c 对带这些段的模型报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。
+- **验收：** 确定性工程和 WPE 逐帧比骨骼姿态；puppet 场景和 WPE 同一时刻的画面比。
 
-## P9 — 按需：本机样本没用到的能力
+## P13 — 3D 反射、光照与阴影
 
-- `scene.pkg` 已提前完成（现状锚点 h），工坊特性已排进 W1–W6。
-- 剩下本机样本都没用到的能力（如 `attachment`、`cursorripple` / `depthparallax` 等内置 effect、`fluidsimulation`），拿到新样本再排，每类各自成 Phase。
+- dna_fragment、techno、mdl 的全部静态版本、`skin` 都已在 P5；`camerashake` 在 P5a；audiophile 的音频在 P11。
+- **反射（旧 P7）：** 对象 `reflected` 与反射 RT、`REFLECTION` COMBO。audiophile 的 grid 还缺 `materials/grid/grid.tex`，开工时核实。
+- **光照（旧 P8）：**
+  - 已完成（lighting-REPORT）：`#require LightingV1`、`general.lightconfig`、四种 V1 灯对象、无 effect 图层的 `LIGHTING`。
+  - 新增遗留灯（`"light": "point"`，`g_LightsPosition` / `g_LightsColorPremultiplied`，`generic*` 与 `genericimage2` 读）。
+  - 新增 `PRELIGHTING`（带 effect 或 passthrough 的图层开光照，`g_Alt*`）、effect 自己开光照、阴影投射与 cookie（`lightconfig:directionalshadow` / `pointshadow`，3 张）、体积光（`castvolumetrics`）、雾（`general.fog*`）。
+  - 灯挂在父对象下（2 张）：现在灯只取本地位置，所以照报。
+- **材质：** 内置 `generic` 的 lightmap / normalmap / reflection；车漆 shader 的 metal / paintwork；`selfillum`；ricepod 的 `sprite` 对象；无内容的变换节点。arsenal 扫描时有 1 处引用解析为空，开工时核实。
+- **验收：** 和 WPE 同一时刻的画面比；fantasticcar 的车身 / 条纹 / 轮毂颜色属性生效。
+
+## 按需
+
+- 本机语料现在每个能力都有归属。以后的新样本用到这些节都没有的能力，拿到样本再排，每类各自成节。
+
+## 旧名对照表（D15）
+
+代码注释和其它计划里还在用旧名，等 P4、P5 手上的步骤提交后统一改一次；在那之前按这张表对照。
+
+| 旧名 | 现在的去处 |
+|---|---|
+| W1 | 层级 → P4a；`shake`、`iris` 能力表已经不报；形状对象 → P8；工坊着色器进翻译器语料 → P7 |
+| W2 | 视频 → P9；音频频谱 → P11；文本、`thisLayer.text` → P6；绳与跟随指针的控制点 → P4c / P4d；`shine`、`blurprecise`、`opacity` 能力表已经不报 |
+| W3 | 多段视频 → P9；`mediaThumbnailChanged` → P11；相机对象 → P5d；`canvasSize` 已实现；`colorBlendMode` 21 / 31 能力表已经不报 |
+| W4 | 光标回调、`input.*`、声音的脚本控制、`systemfont_*` → P6；`setTimeout`、`WEMath`、`WEVector` 已可用；`genericimage3`、`flat` 能力表已经不报；`sharpen_filter` 翻译失败 → P7；粒子 → P4 |
+| W5 | 媒体回调 → P11；`getAnimation` → P10；`getParent` → P6；`shared`、`setInterval` 已实现；`composelayer` → P5b；R8 / RG88 → P4b；内置 effect 能力表已经不报，翻译失败的工坊 effect → P7 |
+| W6 | 骨骼、动画、puppet → P12；DXT3、`REFRACT` → P4b；视差、`g_ParallaxPosition` → P5a；`localStorage` 已实现；粒子 → P4；`hue_shift`、`clipping_mask` 翻译失败 → P7 |
+| 旧 P7 | dna_fragment、techno → P5d；`reflected` 与反射 RT → P13；audiophile 的音频 → P11 |
+| 旧 P8 | → P13；`camerashake` → P5a |
+| K | → P10 |
+| 旧 P9 | `scene.pkg` → P1-3；`fluidsimulation` → P7；`attachment` → P12；其余 → 按需 |
 
 ---
 
@@ -793,10 +827,11 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   P1-0 的本机语料过了门槛。如果以后 naga 接不住，备选方案是 glslang 出 SPIR-V、再由 Tint 出 WGSL（Babylon.js 的路线）。
 - **D3 资源读取**：前端 `fetch(file:)`；pkg 是 `SceneFs` 的一个来源，条目带 `Range` 头按区间读（2026-11-01 已实现并提前到 P1）。
 - **D4 未实现特性**：整张退回预览图；dev 下加一个开关，可以强制渲染、看半成品。
-- **D5 3D 场景**：P7、P8 共 7 张，留在本阶段、排在最后；P6 做完停下评估，若已有工坊样本可先做工坊。
+- **D5 3D 场景**：P7、P8 共 7 张，留在本阶段、排在最后；P6 做完停下评估，若已有工坊样本可先做工坊。（2026-11-11 被 D15 取代：dna_fragment、techno 已在 P5，其余 3D 合成 P13。）
 - **D6 阶段合并**：上级计划的阶段 3 / 4 合并成本阶段，不再新建 `4-scene-fx/`。
 - **D7 工坊排在 3D 之前（2026-11-01 确认）**：本机已有工坊 scene（2026-11-01 为 13 张），按 D5 的约定排成 P6 → W1–W6 → P7–P8。
   理由：工坊是用户实际订阅的内容，而 3D 默认样本是 WPE 自带的演示；W1 的 `LightingV1` 打桩、W2 的音频订阅也是 P7 / P8 的前置。
+  （2026-11-11 被 D15 取代，「工坊在 3D 之前」的用意保留：3D 的反射、光照与阴影排在最后。）
 - **D8 合成语义以 WPE 逆向为准（2026-11-01）**：用户同意对 WPE 程序做只读静态逆向（复制到 scratchpad 分析副本，不运行、不附加进程、不写安装目录）；
   计划里只写行为、常量与地址，不搬运反编译代码。LWE 只作参考。
 - **D9 后处理档位（2026-11-01）**：Kabegame 设置「场景后处理」，默认跟随 WPE 的 `postprocessing`，也可固定为关闭 / 开启 / 超高；同时充当集显的性能开关。
@@ -819,14 +854,15 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
   - 属性快速路径分两步：3a 先做材质常量 / 变换 / `alpha` / `color` / `visible` / 泛光参数，3c 做到 WPE 的程度；重编译时保留脚本 realm 与状态，不重跑 `init`。
   - 默认照 WPE（报告 D / I 节），不照搬 `engine.userProperties` 丢内置键、CLI 改颜色成字符串两个缺陷；COMBO 绑用户属性按不支持。
   - 推翻 D10、细化 D1。细节与各自的「已定」「待定」见 [3a](phase-3a-bindings.md) / [3b](phase-3b-script-runtime.md) / [3c](phase-3c-runtime-graph.md)。
+- **D15 P6 之后按能力分节（2026-11-11 用户）**：W1–W6、旧 P7 / P8、K、旧 P9 不再按壁纸分。已被 P2–P6 吸收的划掉，剩下的按能力排成 P7–P13 与「按需」，编号即推荐顺序；P5 是 3D 的相机与网格，3D 的其余部分（反射、光照、阴影）合成 P13。见「P6 之后的分节」与「旧名对照表」。取代 D5、D7 的排序。
 
 ---
 
 ## 风险
 
-- **视频纹理**：工坊样本的主画面多是 `.tex` 内嵌的 4K MP4（单段最大 707 MB），Blob 的内存与解码开销、预览与桌面同时播放时的表现都要在 W2 实测。
+- **视频纹理**：工坊样本的主画面多是 `.tex` 内嵌的 4K MP4（单段最大 707 MB），Blob 的内存与解码开销、预览与桌面同时播放时的表现都要在 P9 实测。
 - **翻译覆盖面**：P1–P6 的着色器都已通过；`#require LightingV1` 已实现，
-  剩阴影与工坊着色器里 HLSL 的隐式截断。翻译器的语料测试还没覆盖 pkg 里的工坊着色器，W1 补上。
+  剩阴影与工坊着色器里 HLSL 的隐式截断。翻译器的语料测试还没覆盖 pkg 里的工坊着色器，P7 补上。
   后者需要类型信息，规则改写做不到，遇到时再评估：要么扩展翻译器，要么在 naga 的 IR 上处理。
 - **浏览器 WGSL 校验**：naga 输出、naga 回读都通过，但 Tint 还没验证过（P1 真机首项）。
 - **合成语义**：效果链、混合模式、`copybackground`、fbo、泛光与 HDR 已由 WPE 逆向取得规格（P2，D8）；剩余未知见「P2 仍未知」。
