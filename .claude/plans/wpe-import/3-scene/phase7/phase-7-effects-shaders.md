@@ -193,6 +193,8 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 
 ## P7b — 规则类
 
+子计划见 [phase-7b-rules.md](phase-7b-rules.md)：步骤 0 调研 → 预处理三条 → 声明名带分量 → `main` 之前的打包数组 → 几何展开的指针别名 → `editable`。
+
 **实现**（`preprocess.rs`、`rewrite.rs`，照 WPE 自己的文本处理，rea-p7-shader 2.x）：
 - **预处理：**
   - 栈空时多余的 `#endif` 忽略（WPE 的预处理器就是这样，fxc 看不到它）。
