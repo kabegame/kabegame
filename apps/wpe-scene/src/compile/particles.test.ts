@@ -40,7 +40,7 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项、P4d 步骤 3 的 2 项，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
@@ -53,6 +53,8 @@ describe("模块表", () => {
       "initializer:alpharandom",
       "initializer:turbulentvelocityrandom",
       "initializer:positionoffsetrandom",
+      "initializer:mapsequencearoundcontrolpoint",
+      "initializer:mapsequencebetweencontrolpoints",
       "operator:movement",
       "operator:angularmovement",
       "operator:alphafade",

@@ -34,6 +34,11 @@ export interface EmitterState {
   burst: number;
   /** 周期计时 P（`+0x40`）：正数是本周期剩余时长，负数是剩余间歇，初值 0（下一个发射帧就开始新周期）。 */
   period: number;
+  /**
+   * 本帧进入了新周期（P4d 步骤 3）：`emissionCount` 在新周期分支置位，模拟器（`system.ts` 的 `emit`）读到后先对 initializer 调
+   * `newPeriod`、再清掉。WPE 在同一分支直接调 `FUN_14022f790`（`0x140237ac1`），没有这个字段。
+   */
+  periodStarted: boolean;
 }
 
 export function emitterState(fields: ParticleFields): EmitterState {
@@ -45,6 +50,7 @@ export function emitterState(fields: ParticleFields): EmitterState {
     ended: false,
     burst: 0,
     period: 0,
+    periodStarted: false,
   };
 }
 
@@ -62,6 +68,8 @@ export function resetEmitterTiming(state: EmitterState, fields: ParticleFields):
   state.duration = initial.duration;
   state.burst = initial.burst;
   state.period = initial.period;
+  // 没消费的新周期标记（只有直接调 `emissionCount` 的单测会留下）一并清掉，WPE 没有这个字段
+  state.periodStarted = initial.periodStarted;
 }
 
 /**
@@ -74,7 +82,8 @@ export function resetEmitterTiming(state: EmitterState, fields: ParticleFields):
  *   flags bit2（周期）：
  *     P > 0（周期内）：P −= dt；P < 0 时 P = −(uA·(maxdelay − mindelay) + mindelay)，进入间歇，本帧照常发
  *     否则（间歇，含初值 0）：P += dt；P < 0 时 rate ·= 0；
- *       否则新周期：pending = instantaneous 初值，burst = 0，P = uA·(maxduration − minduration) + minduration（不补零头）
+ *       否则新周期：pending = instantaneous 初值，burst = 0，P = uA·(maxduration − minduration) + minduration（不补零头），
+ *         再调 FUN_14022f790 清 initializer 的序号（置 periodStarted，由模拟器做，P4d 步骤 3）
  *   n0 = pending; pending = 0
  *   x  = rate·dt + acc
  *   x < 1 或 duration < 0：acc = x − n0
@@ -119,6 +128,8 @@ export function emissionCount(
           state.burst = 0;
           const min = fields.minperiodicduration as number;
           state.period = lerp(min, f32((fields.maxperiodicduration as number) - min), u);
+          // `FUN_14022f790`（`0x140237ac1`）：清零 initializer 的序号，由模拟器做（P4d 步骤 3）
+          state.periodStarted = true;
         }
       }
     }

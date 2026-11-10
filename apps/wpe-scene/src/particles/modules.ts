@@ -29,6 +29,16 @@ import {
   velocityRandom,
 } from "./initializers";
 import {
+  aroundState,
+  betweenInstanceState,
+  betweenNewPeriod,
+  betweenState,
+  mapSequenceAround,
+  mapSequenceBetween,
+  resetSequence,
+  type SequenceState,
+} from "./mapsequence";
+import {
   alphaChange,
   alphaFade,
   angularMovement,
@@ -81,6 +91,11 @@ export interface ParticleFieldDef {
   supported?: (value: ParticleFieldValue, fields: Readonly<Record<string, ParticleFieldValue>>) => boolean;
   /** 乘哪一项 `instanceoverride`（`rea-p4a.md` C5）；系统 `flags` 的对应位禁用时不乘（C3，`rate` 没有禁用位）。 */
   instance?: InstanceScale;
+  /**
+   * 按解析值（基值，没乘 `instanceoverride`）决定这一项乘不乘 `instance`；缺省总乘。只有 `mapsequencebetweencontrolpoints` 的
+   * `count`：模块 `flags & 0x10` 时才登记覆盖条目 4（rea-p4d-modules.md 1.2）。
+   */
+  instanceIf?: (fields: Readonly<Record<string, ParticleFieldValue>>) => boolean;
   /**
    * 乘完 `instanceoverride` 再截断成整数（条目类型 1：`int(f32(value)·o)`，`rea-p4b-modules.md`「`instanceoverride` 写回的
    * 条目类型」）。只有 `maxtoemitperperiod`。
@@ -190,8 +205,9 @@ export interface ParticleRunContext {
  * - emitter：给 `slot` 写位置、速度（发射数量是 emitter 共有的逻辑，在 `emitters.ts` 的 `emissionCount`）；
  * - initializer：给 `slot` 写初值（`R` 与缺省值已由模拟器写好）；
  * - operator：对 `[0, count)` 跑一遍，步长 `h`、drag 系数 `k`。
+ * `state` 是模块的运行状态（有 `createState` 的模块才有，P4d 步骤 3 的 `mapsequence*`），其余模块不传。
  */
-export type ParticleModuleRun = (fields: ParticleFields, context: ParticleRunContext) => void;
+export type ParticleModuleRun = (fields: ParticleFields, context: ParticleRunContext, state?: unknown) => void;
 
 export interface ParticleModuleDef {
   category: ParticleCategory;
@@ -211,6 +227,20 @@ export interface ParticleModuleDef {
   /** 字段全部读完后的修正（WPE 解析期的副作用，如 `sign` 非零时置 `flags` bit0）。 */
   normalize?: (fields: Record<string, ParticleFieldValue>) => void;
   run: ParticleModuleRun | null;
+  /**
+   * 模块的运行状态（WPE 存在流记录里、每个系统实例一份，rea-p4d-modules.md 1.3）。有它的模块，模拟器建系统时按模拟用的字段
+   * （已乘 `instanceoverride`）建一份、传给 `run`。P4d 步骤 3 的 `mapsequence*`（序号与步长）。
+   */
+  createState?: (fields: ParticleFields) => unknown;
+  /** 系统复位（`FUN_14022f6c0`，对象不可见且有存活粒子时）时调。 */
+  resetState?: (state: unknown) => void;
+  /** 周期发射进入新周期（`FUN_14022f790`）时调，早于这个 emitter 本帧的新粒子；按字段决定清不清零。 */
+  newPeriod?: (state: unknown, fields: ParticleFields) => void;
+  /**
+   * `instanceoverride` 运行时改值（`setInstance`，`FUN_1401d15a0` 按登记的覆盖条目重写记录）后调：`fields` 是重乘后的字段，
+   * `systemFlags` 是系统 `flags`（禁用位决定条目登没登记）。
+   */
+  instanceState?: (state: unknown, fields: ParticleFields, systemFlags: number) => void;
 }
 
 const num = (value: ParticleFieldDefault, supported?: ParticleFieldDef["supported"]): ParticleFieldDef => ({
@@ -350,10 +380,24 @@ export function clampOctaves(value: number): number {
 }
 
 /**
+ * `mapsequence*` 两者共用的字段（rea-p4d-modules.md 1.1、1.2 的字段表）：
+ * - `bounds`：两个数，缺的分量是 0、不钳制，执行时取 `b0 = x`、`Δb = y − x`；
+ * - `limitbehavior`：只有精确等于 `"mirror"` 才是 mirror（`rec+0x50` / `rec+0x14`），其余都是 repeat。
+ */
+const SEQUENCE_FIELDS: Record<string, ParticleFieldDef> = {
+  bounds: vec3("0 1"),
+  limitbehavior: { type: "string", default: "repeat" },
+};
+
+/** `mapsequencebetweencontrolpoints` 的 `flags` 里有读者的位（rea-p4d-modules.md 1.2【确】）：1、2、4、8、0x10、0x20。 */
+const BETWEEN_FLAGS = 0x3f;
+
+/**
  * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
  * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`）、步骤 4 的 3 个噪声类模块（initializer `turbulentvelocityrandom`、
  * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`、`spritetrail`
- * （P4c 步骤 5）与 rope 两类（`rope` P4d 步骤 1，`ropetrail` P4d 步骤 2）。
+ * （P4c 步骤 5）与 rope 两类（`rope` P4d 步骤 1，`ropetrail` P4d 步骤 2），以及 P4d 步骤 3 的 initializer
+ * `mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`（第一批有运行状态的模块，`mapsequence.ts`）。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -538,6 +582,70 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       fields.octaves = clampOctaves(fields.octaves as number);
     },
     run: positionOffsetRandom,
+  },
+  {
+    // rea-p4d-modules.md 1.1（initializer 13，记录 `FUN_1401d88f0`，解析 `0x1401c9928`–`0x1401ca1cf`，缺省 `FUN_1401bbc90`，正交透视
+    // 一套，执行 `0x14023c4cf`）：按序号把粒子转到控制点轴线周围，保留到轴的距离与沿轴分量。执行与序号见 `mapsequence.ts`
+    category: "initializer",
+    name: "mapsequencearoundcontrolpoint",
+    fields: {
+      // 解析期存 `step = 1/max(count, 1e-4)`（`rec+4`）。**不乘** `instanceoverride.count`：WPE 是否登记条目 3 取决于暂存区里没写过的
+      // `rec+0x58`，实测三种先行解析都是不乘（phase-4d-ropes.md「决定」3）
+      count: num(32),
+      ...SEQUENCE_FIELDS,
+      // 乘 `instanceoverride.speed`（条目 0xa，系统 flags bit4 时不登记）；x 切向、y 径向、z 轴向，执行时求 `Δs = max − min`
+      speedmin: by("speed", vec3("0 0 0")),
+      speedmax: by("speed", vec3("0 0 0")),
+      // 基向量照 `FUN_1401c19e0`（`aroundBasis`）
+      axis: vec3("0 0 1"),
+      // 读这个控制点 current 的 3×3 与平移（无条件乘 3×3）；解析期钳到 0–7
+      controlpoint: CONTROL_POINT_FIELD,
+      // WPE 不解析（`parse13.asm` 全段没有读 `"flags"`，只写回 JSON），任何数值都不起作用
+      flags: int(0),
+    },
+    columns: ["position", "velocity"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
+    run: (fields, context, state) => mapSequenceAround(fields, context, state as SequenceState),
+    createState: aroundState,
+    resetState: (state) => resetSequence(state as SequenceState),
+    // `FUN_14022f790` 读 `rec+0x58 & 2`（残留值），按 0 实现：不清零；配周期发射时能力表照报（`compile/features.ts`）
+  },
+  {
+    // rea-p4d-modules.md 1.2（initializer 14，记录 `FUN_1401d8930`，解析 `0x1401ca1da`–`0x1401ca6c2`，缺省 `FUN_1401bc080`，正交透视
+    // 一套，执行 `0x14023ca93`）：按序号把粒子放到两个控制点的连线上，保留垂直分量。执行与序号见 `mapsequence.ts`
+    category: "initializer",
+    name: "mapsequencebetweencontrolpoints",
+    fields: {
+      // 解析期存 `step = 1/max(count − 1, 1e-4)`；`flags & 0x10` 时乘 `instanceoverride.count`（条目 4，系统 flags bit5 时不登记）
+      count: { ...by("count", num(32)), instanceIf: (fields) => ((fields.flags as number) & 0x10) !== 0 },
+      ...SEQUENCE_FIELDS,
+      // 两个控制点只取 current 的平移；解析期各自钳到 0–7（`normalize`）
+      controlpointstart: int(0),
+      controlpointend: int(1),
+      // 1 垂直偏移 ×w；2 速度 ×w；4 `size0` ×`(1 − srm) + srm·w`；8 加弧；0x10 `count` 乘 `instanceoverride.count`；0x20 周期发射的
+      // 新周期清零序号。别的位没找到读者，保守报
+      flags: int(0, (value) => ((value as number) & ~BETWEEN_FLAGS) === 0),
+      // `0x3e99999a`
+      arcamount: num(0.3),
+      // 不归一化，执行时也不乘控制点矩阵
+      arcdirection: vec3("0 1 0"),
+      // `0x3f666666`
+      sizereductionamount: num(0.9),
+    },
+    columns: ["position", "velocity", "size0"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.controlpointstart = clampControlPoint(fields.controlpointstart as number);
+      fields.controlpointend = clampControlPoint(fields.controlpointend as number);
+    },
+    run: (fields, context, state) => mapSequenceBetween(fields, context, state as SequenceState),
+    createState: betweenState,
+    resetState: (state) => resetSequence(state as SequenceState),
+    newPeriod: (state, fields) => betweenNewPeriod(state as SequenceState, fields),
+    instanceState: (state, fields, systemFlags) => betweenInstanceState(state as SequenceState, fields, systemFlags),
   },
   {
     // 半隐式欧拉，drag 按 k0 衰减（实测核对过）。`previousPosition` 只在列标志 bit2 时开头拷一次
@@ -993,7 +1101,8 @@ export type InstanceMultipliers = Readonly<Record<InstanceScale, number>>;
 
 /**
  * 模拟用的字段：数值舍入成 float32（WPE 的模块记录是 float），带 `instance` 的字段乘对应的 `instanceoverride`，带 `truncate`
- * 的乘完截断成整数（条目类型 1）。每次都从解析值（基值）乘，不累乘（C5「运行时改值」）。字符串原样。
+ * 的乘完截断成整数（条目类型 1）。每次都从解析值（基值）乘，不累乘（C5「运行时改值」）。字符串原样。带 `instanceIf` 的字段按
+ * 基值决定乘不乘（`mapsequencebetweencontrolpoints` 的 `count` 看 `flags & 0x10`）。
  */
 export function resolveParticleFields(
   def: ParticleModuleDef,
@@ -1003,7 +1112,8 @@ export function resolveParticleFields(
   const out: Record<string, ParticleFieldValue> = {};
   for (const [field, value] of Object.entries(fields)) {
     const spec = def.fields[field];
-    const scale = spec?.instance ? f32(multipliers[spec.instance]) : 1;
+    const applies = spec?.instance !== undefined && (spec.instanceIf?.(fields) ?? true);
+    const scale = applies ? f32(multipliers[spec.instance!]) : 1;
     const resolve = (part: number) => {
       const scaled = f32(f32(part) * scale);
       return spec?.truncate ? Math.trunc(scaled) : scaled;

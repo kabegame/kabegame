@@ -665,13 +665,174 @@ export function trailRenderVar0(renderer: …, timer: number): [number, number, 
 
 ## 步骤 3 — `mapsequence*`
 
-- **新增** 两个 initializer，字段、缺省值、公式按步骤 0。序号是模块的运行状态，做法同 emitter 的 `EmitterState`，按 `FUN_14022f790` 的条件清零。
-- **修改** `controlPointCount`：计入它们引用的控制点（`mapsequencebetweencontrolpoints` 引用两个）。
+两个 initializer 按序号把新粒子放到控制点周围或两个控制点之间。新东西只有一样：**initializer 第一次有了运行状态**（序号 `seq` 和步长 `step`），要跟着系统的复位与周期发射清零。公式以 rea-p4d-modules 1.1–1.3 为准，实测见报告「P4d 语义的实测核对」的 mapsequence 表（全部成立）。路径相对 `apps/wpe-scene/src/`。
 
-**验收：**
-- `proj/p4d-map` 回放，和 WPE 逐帧比，限值同 P4c。
-- 变异检查：序号起点、`limitbehavior`、清零时机，各有测试失败。
-- `3811764016`、`3816870245` 不再报粒子键；`3823859141`、`3823864170` 加上步骤 1 后也不报。
+**语料（`ignore/p4/d3/scan_map.py`）：**
+- `around` 有 8 张场景，全是同一个鼠标拖尾文件 `Cherry_Blossoms_2.json`：`count 5`，`speedmin = speedmax = "0 100 0"`，发射器都不是周期发射。其中 3 张的对象带 `instanceoverride.count`：3487328036 是 0.02，3811764016、3811798465 是 0.5。
+- kabegame-sample 的 `dna.json`：同一系统里先 `around`（`axis "0 1 0"`、`count 2.2`），再 `between`（`count 64`）。
+- `between`：
+  - 3832133196 的闪电，`flags 23`，子系统是 `flags 19`，周期发射；对象覆盖了 `controlpoint1`，没有 `count`；
+  - kabegame-sample 的 `dischargearc.json`：`flags 15`，mirror。
+
+**现状锚点：**
+- **模块执行函数没有状态**（`particles/modules.ts:194`、`particles/system.ts:129`）：
+```ts
+export type ParticleModuleRun = (fields: ParticleFields, context: ParticleRunContext) => void; // 现状：只有字段和上下文
+interface ResolvedModule { name; def; base; fields; run }                                      // 现状：只有 emitter 另有 state
+```
+- **`instanceoverride` 无条件乘**（`particles/modules.ts:998` `resolveParticleFields`）：字段定义的 `instance` 有就乘。`between` 的 `count` 只在模块 `flags & 0x10` 时乘，现在表达不了。
+- **周期发射的新周期**（`particles/emitters.ts`，`emissionCount` 的间歇分支）：
+```ts
+else { const u = random.a(); state.pending = …; state.burst = 0; state.period = lerp(…); } // 现状：新周期只重置发射计时
+```
+- **复位**（`particles/system.ts:327` `suspend`）：只复位 emitter 计时（`resetEmitterTiming`，即 `FUN_14022f6c0` 的 emitter 部分），再 `clear`。
+- **控制点个数**（`particles/controlpoints.ts:119`）：只数模块表里带 `controlpoint` 字段的模块，不认 `controlpointstart` / `controlpointend`。
+- **能力表**：两个模块不在表里，照报 `particle:initializer:mapsequence*`。
+
+**做法：**
+- **修改** `particles/modules.ts`：
+```ts
+export type ParticleModuleRun = (fields: ParticleFields, context: ParticleRunContext, state?: unknown) => void; // 修改：可选的模块状态
+export interface ParticleModuleDef {
+  // …其余不变
+  /** 新增：模块的运行状态（WPE 存在流记录里、每实例一份）。有它的模块，模拟器建一份、传给 run。 */
+  createState?: (fields: ParticleFields) => unknown;
+  /** 新增：系统复位（`FUN_14022f6c0`）时调。 */
+  resetState?: (state: unknown) => void;
+  /** 新增：周期发射进入新周期（`FUN_14022f790`）时调；按字段决定清不清零。 */
+  newPeriod?: (state: unknown, fields: ParticleFields) => void;
+}
+interface ParticleFieldDef {
+  // …其余不变
+  /** 新增：按解析值决定这一项乘不乘 `instance`（`between` 的 `count` 只在 `flags & 0x10` 时乘，条目 4）。 */
+  instanceIf?: (fields: Readonly<Record<string, ParticleFieldValue>>) => boolean;
+}
+```
+  - `resolveParticleFields` 照 `instanceIf` 决定乘不乘，看的是基值的 `flags`。
+- **新增** 模块表的两个 initializer，执行函数放在新文件 `particles/mapsequence.ts`。字段照 rea 1.1、1.2 的字段表：
+
+| 模块 | 字段 | 缺省 | 解析 |
+|---|---|---|---|
+| 两者 | `count` | 32 | around：`step = 1/max(count, 1e-4)`；between：`step = 1/max(count − 1, 1e-4)`；都是 float32 `divss` |
+| 两者 | `bounds` | `"0 1"` | 两个数，缺的分量是 0，不钳制；存 `b0 = x`、`Δb = y − x` |
+| 两者 | `limitbehavior` | `"repeat"` | 只有精确等于 `"mirror"` 才是 mirror |
+| around | `speedmin`、`speedmax` | `"0 0 0"` | 乘 `instanceoverride.speed`（`by("speed")`，条目 0xa） |
+| around | `axis` | `"0 0 1"` | 基向量照 rea 1.1 的 `FUN_1401c19e0`：零向量换成 z，`a.x = a.y = 0` 时 `B1 = (1,0,0)`、`B2 = (0,1,0)` |
+| around | `controlpoint` | 0 | `clampControlPoint` |
+| around | `flags` | 0 | WPE 不解析，任何值都不起作用。`count` 不乘 `instanceoverride.count`（「决定」3 实测） |
+| between | `controlpointstart` / `controlpointend` | 0 / 1 | `clampControlPoint` |
+| between | `flags` | 0 | 读的位只有 1、2、4、8、0x10、0x20；别的位照报 `particle:initializer:mapsequencebetweencontrolpoints:flags` |
+| between | `arcamount` | 0.3 | |
+| between | `arcdirection` | `"0 1 0"` | 不归一化，也不乘控制点矩阵 |
+| between | `sizereductionamount` | 0.9 | |
+| between | `count` 的覆盖 | | `instanceIf: flags & 0x10`，乘 `instanceoverride.count` |
+
+```ts
+/** 序号状态（rec+8 与 rec+4 的 step），每个系统实例一份。step 在 mirror 时会变号，复位不恢复它的符号（rea 1.3）。 */
+export interface SequenceState { seq: number; step: number; }
+/** 用完一个序号之后推进（rea 1.1 / 1.2）：seq′ = f32(step + seq)；
+ *  seq′ > 1：repeat 时 around 取 fmodf(seq′, 1)、between 归零；mirror 时 seq = 1 − (seq′ − 1)，step 取反；
+ *  seq′ < 0（只有 mirror 会出现）：seq = −seq′，step 取反。比较都是严格的，所以 around 的第一圈留着 1.0。 */
+export function advanceSequence(state: SequenceState, mirror: boolean, wrapToZero: boolean): void;
+/** around 的基向量（rea 1.1 的 `FUN_1401c19e0`，全部精确 sqrt / 除法）。 */
+export function aroundBasis(axis: readonly number[]): { axis: Vec3; b1: Vec3; b2: Vec3 };
+export function mapSequenceAround(fields: ParticleFields, context: ParticleRunContext, state: SequenceState): void;
+export function mapSequenceBetween(fields: ParticleFields, context: ParticleRunContext, state: SequenceState): void;
+```
+  - **`around` 的执行照 rea 1.1，逐步 float32：**
+    - `M` 是控制点 `current` 的 3×3，`C` 是它的平移。`A = M·axis`，`B1′ = M·B1`，`B2′ = M·B2`，用 `mulBasis`，乘完不再归一化。
+    - `d = P − C`，`proj = (d.x·A.x + d.y·A.y) + d.z·A.z`，`r = d − proj·A`，`L = sqrt((r.x² + r.y²) + r.z²)`。
+    - `θ = ((Δb·seq) + b0)·f32(2π)`；`s = f32(sin θ)`、`c = f32(cos θ)`（CRT 的 `sinf` / `cosf`，可能差 1 ulp，同 `eulerBasis` 的处理）。
+    - `dirA = c·B2′ + s·B1′`，`dirB = (−s)·B2′ + c·B1′`。
+    - **无条件**从 A 区间依次抽 `u1`、`u2`、`u3`；`speed` 全为 0 也照抽。
+    - 位置**覆盖**成 `(dirA·L) + ((proj·A) + C)`。
+    - 速度**加上** `((((dirA·smin.y + u3·(dirA·Δs.y)) + smin.x·dirB) + u2·(Δs.x·dirB)) + smin.z·A) + u1·(Δs.z·A)`。括号就是加法顺序，`Δs = speedmax − speedmin`，在乘过 `speed` 之后求差。
+    - 最后推进序号。
+  - **`between` 的执行照 rea 1.2：**
+    - `S`、`E` 是两个控制点 `current` 的平移；`D = E − S`；`L = sqrt(…)`；`Lc = L > FLT_MIN ? L : FLT_MIN`（NaN 也取 `FLT_MIN`）；`û = D / Lc`。
+    - 世界系统（`context.world`）先 `P −= S`；本地系统按系统原点量，**不减**。
+    - `proj = P·û`，`r = P − proj·û`，`t = seq·Δb + b0`，`w = 1 − f32(x·x)`，其中 `x = |(seq + seq) − 1|`。`w` 用的是 `seq`，不是 `t`。
+    - 各位：`flags & 1` 时 `r *= w`；位置写 `r + ((t·û)·Lc + S)`；`flags & 8` 时再加 `arcdirection·((w·Lc)·arcamount)`；`flags & 2` 时 `vel *= w`；`flags & 4` 时 `size0 *= (1 − srm) + srm·w`。
+    - 不抽随机数。最后推进序号（repeat 时归零）。
+  - `createState` 给 `{ seq: 0, step: f32(1 / …) }`。`instanceoverride` 改值重算时，`between` 在 `flags & 0x10`、且系统 `flags` 没禁用 `count`（bit5）时，`step` 直接重写成正的 `1/max(count·ic − 1, 1e-4)`（条目 4，`FUN_1401d15a0` 的 `case 4`）。所以 mirror 走到一半会回到正向。`around` 不登记条目，不动；两者的 `seq` 都不动。（原规格写「大小更新、符号保留」，是没核对条目 4 的推测，实施时按读码更正。）
+  - `resetState`：两者都 `seq = 0`，`step` 不动。
+  - `newPeriod`：只有 `between` 在 `flags & 0x20` 时 `seq = 0`；`around` 不清零（配周期发射的照报，见「决定」3）。
+- **修改** `particles/system.ts`：
+  - `ResolvedModule` 加 `state`，有 `createState` 的模块才建，`run(fields, context, state)`；`setInstance` 重算字段后按上一条更新 `step`。
+  - `suspend`：在复位 emitter 计时的同一处，对每个有状态的模块调 `resetState`（同在 `FUN_14022f6c0` 里，同样只在有存活粒子时做）。
+  - `emit`：emitter 进入新周期时（`emissionCount` 里 `EmitterState` 新增的 `periodStarted` 标记，算数量时置位），先对全部 initializer 调 `newPeriod`，再出生这个 emitter 本帧的粒子。这个调用在 `FUN_1402378a0` 里，早于本帧的新粒子。
+  - 子系统的复位（`def+0x64 & 2`）归 P4e，不做。
+- **修改** `particles/controlpoints.ts` 的 `controlPointCount`：也数 `controlpointstart`、`controlpointend`。`between` 不写字段时 `end` 缺省为 1，所以控制点个数至少 2（`def+0x2c = max(·, start + 1, end + 1)`）。
+- **修改** 能力表（`compile/features.ts`）：两个模块进表后不再报。另加 `around` 的系统级检查：系统里有发射器开了周期发射（`flags & 4`）时，报 `particle:initializer:mapsequencearoundcontrolpoint:periodic`（「决定」3：bit1 没实测）。
+
+**测试（子代理）：**
+- **单测：**
+  - `advanceSequence`：`count 5` repeat 的前 12 个值（含第一圈的 1.0 和之后的 `0.20000005`）；`count 2.2` repeat 和 mirror；`between` `count 8` 一圈 8 个点含两端、`count 4` mirror。都对 rea 1.1、1.2 的 float32 推演，逐位相同。
+  - `aroundBasis`：缺省轴、零向量、`"0 0 -1"`、`"0 1 0"`（`B1 = (1,0,0)`、`B2 = (0,0,−1)`）。
+  - 两个执行函数：`θ = 0` 在 +y；保留出生点到轴的距离；`speed` 三个分量的方向；每粒子正好抽 3 次 A；`between` 的本地 / 世界两种分支，以及 `flags` 各位。
+  - `instanceIf`：`between` 只在 `flags & 0x10` 时乘 `count`；`setInstance` 后 `step` 重写成正的新值（条目 4）。
+  - 复位：`suspend` 清零 `seq`、`step` 保留符号；周期新周期只清 `between` `flags & 0x20` 的。
+  - `controlPointCount`：`between` 不写字段时得 2。
+- **回放（`ignore/p4/d3/`，做法同 `ignore/p4/d1/replay.test.ts`）：**
+  - 用 WPE 帧时间回放 `proj/p4d-map`，和 `tracks/rd-p4d-map-fps60.json` 每帧**按槽序逐粒子**比位置和尺寸。
+  - 序号的相位取决于加载以来发了多少粒子，所以逐粒子比能同时验发射和序号，步骤 0 的「看圈数集合」做不到这一点。
+  - `ma-hide` 的对象每 10 s 的 [7, 8) 不可见：回放在这些帧调 `suspend` 而不是 `step`。判断用哪一帧的场景时间，照 P4c「一帧里粒子先于脚本」的结论。这一组能验步骤 0 没测到的「复位清零序号」：清零与否，重新可见后各槽的方向不同。
+  - `mb-period32` / `mb-period0` 能验新周期清零的时刻。
+  - `ma-speed` 只在 `Δs = 0` 时可比；随机数和 WPE 不同步，这组只比位置。
+- **离线 / 真机：** 这一步只有模拟，不涉及绘制，不做真机。原来写的「真机渲染 3816870245」做不到：它另有 23 个非粒子的不支持项（文字对象、`general:cameraparallax`、`tex:video`、两处着色器错误），步骤 0 说它「只差 around」是按粒子覆盖的口径。
+
+**验收（Claude）：**
+- `git status` 查越界；tsc、vitest、Prettier、回放自跑。
+- 变异检查，各有测试失败：
+  - 序号先加后用；
+  - `around` 超过 1 时归零（`between` 的写法）；
+  - mirror 不把 `step` 取反；
+  - `θ = 0` 改在 +x；
+  - `between` 本地系统也减 `S`；
+  - `w` 用 `t` 不用 `seq`；
+  - 复位不清零 `seq`；
+  - 新周期不看 `flags & 0x20`。
+- 画面哈希不变：10 张干净场景、三档。
+- **语料：**
+  - 只去掉 `particle:initializer:mapsequencearoundcontrolpoint`、`…betweencontrolpoints`，不新增键（语料里没有周期发射配 `around`）；
+  - 能渲染数不变（24），见上一条；
+  - 覆盖 53 → 57（3811764016、3816870245、3823859141、3823864170）。
+
+### 步骤 3 实施记录（2026-11-10）
+
+**做法：** 并行会话（P5a）在 `apps/wpe-scene` 里有大量未提交改动，也动了 `compile/features.ts`，所以这一步走 kbp-tools 的快照流程：
+- `kbp snapshot export HEAD` 出两份快照：`ignore/p4/d3/head` 是基线，`ignore/p4/d3/ov` 是开发副本；
+- 子代理只在 `ov` 里实现、测试；
+- `kbp snapshot diff` 出补丁 `ignore/p4/d3/step3.patch`（10 个文件，+1141 / −17），提交时再打进工作区和索引，只提交这些块。
+
+**测的是什么：** 先实测「决定」3（`around` 的残留字），结论见那一节。子代理实现期间看门狗中止过一次，从断点续做。
+
+**新增和修改的文件（相对 `apps/wpe-scene/src/`）：**
+- 新增 `particles/mapsequence.ts`（序号状态、`advanceSequence`、`aroundBasis`、两个执行函数、状态钩子）和 `particles/mapsequence.test.ts`（35 个单测）；
+- 修改 `particles/modules.ts`、`particles/system.ts`、`particles/emitters.ts`、`particles/controlpoints.ts`、`compile/features.ts`；
+- 三个测试文件只改了期望值（模块表多两项，`EmitterState` 多一个字段）。
+
+**规格之外自定的几处：**
+- `setInstance` 的钩子起名 `instanceState`；`step` 的符号按读码更正，见「做法」；
+- `resetEmitterTiming` 也清新周期标记；
+- `between` 的 `flags` 多余位，走模块表字段的 `supported`，由现有机制报 `…:flags`。
+
+**验收结果：**
+
+| 项目 | 结果 |
+|---|---|
+| 越界 | `apps/wpe-scene/` 未动（改动条目数和开工前相同，都是 P5a 的）；`head` 快照和 HEAD 逐文件相同 |
+| tsc、vitest（`ov`，带 `KABEGAME_WPE_ROOT`）、Prettier | Claude 自跑：tsc 0 错，52 个文件、1417 个用例全过。Prettier 13 个文件通过：`ignore/` 在 `.gitignore` 里，`--check` 要加 `--ignore-path .prettierignore`，否则是空检查 |
+| 回放 `kbp replay d3`（`p4d-map` fps 60，按槽序逐粒子比位置和尺寸） | 20 个系统，逐帧粒子数相同，全部通过。<br>`mb-*` 9 组逐位为 0，`mb-f2` 3.7e-4。<br>`ma-*` 差/限 0.42–0.69，是 `sphererandom` 的近似倒数。<br>`ma-hide` 在第 421 帧清空，之后逐粒子对上，即「复位清零序号」成立；这一条步骤 0 没测到 |
+| 回放里钉住的变体 | 复位不清零：ma-hide 超限 9.5e4 倍；新周期不清零：mb-period32 超限 5.25e5 倍 |
+| 回归 `kbp regress`（head 对 ov，8 个现有案例） | 全部逐字节相同；ropetrail 的老式回放（`d2/replay.test.ts`，`KB_SRC`）两边也逐字节相同 |
+| 变异检查 | 子代理 9 条（规格的 8 条，「新周期不看 0x20」拆成总清零 / 从不清零），各有单测或回放失败；其中「`w` 用 `t`」回放查不出（`bounds "0 1"` 时 t = seq），只靠单测。<br>Claude 另做 1 条（`around` 的切向 `dirB` 反号）：ma-speed 超限 1.6e5 倍，2 个单测失败。还原后重出的补丁和原补丁逐字节相同 |
+| 语料（`d3/out/corpus-diff.txt`） | 只去掉两个模块键（around 9 张、between 2 张，都含 kabegame-sample），不新增键，编译出错 0。<br>覆盖 53 → 57，能渲染 24 不变 |
+
+**遗留**（都已收进「未实测清单」，P4d 收尾统一走查）：
+- 可见性按上一帧还是本帧的脚本，这组数据分不出（两种都通过）。WPE 不可见期间照不照常模拟（rea 5.3【推】）也分不出：ma-hide 的位置和粒子年龄无关。
+- `around` 配周期发射照报（bit1 没测），语料 0 张。
+- 「干净重启后只解析过桌面壁纸」的情况没测（`restart_wpe` 被权限拦下）。
 
 ## 步骤 4 — `remap*`
 
@@ -693,9 +854,44 @@ export function trailRenderVar0(renderer: …, timer: number): [number, number, 
 - 变异检查：`Δcp` 的方向、`variablestrength` 的钳制、环形分支，各有测试失败。
 - `3832133196` 只剩 `particle:children`；kabegame-sample 不再报 P4d 的键。
 
+## 未实测清单（P4d 收尾统一走查）
+
+各步按读码实现、但没有实测核对的项，汇总在这里，2026-11-10 用户定：P4d 收尾统一走查。每项写清现状、为什么没测到、怎么补。后面的步骤补测了就在这里标「已测」。
+
+**等后面的步骤回放覆盖：**
+
+| 项 | 来源 | 现状与原因 | 怎么补 |
+|---|---|---|---|
+| FBm 的倍频细节（种子 +1、坐标 ×2、振幅 ×0.5、归一） | 步骤 0 | rv-fbm1 / rv-fbm3 输出标量 `speed`、年龄未知，各种写法都拟合得上 | 步骤 4 用 WPE 帧时间回放，年龄精确，逐粒子比 |
+| `remapvalue` 标量输入只用 x 分量归一化再铺满，`remapinitialvalue` 按分量 | 步骤 0 | rv-vec / ri-vec 设计时漏写 `flags 0`，归一化被夹到 1，两种算法都得 50 | 步骤 4 的 `remap2` 回放；不够就补一个 `flags 0` 的工程 |
+| `remap2` 的全部取值 | 步骤 0 | 只确认了 66 个系统都能加载、能读到 | 步骤 4 逐项回放 |
+| `mb2-move` 的定量、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式 | 步骤 0 | 步骤 0 只做了定性或一遍模式的核对 | 步骤 5 用 fps 60 / 10 回放 |
+| WPE 不可见时照常更新控制点（dist-hide） | 步骤 0 | 重新可见后 1 s 才发第一个粒子，第一帧没有粒子可拽 | 步骤 5 重做实验：让重新可见的那一帧就有粒子（如 `instantaneous`） |
+| `reductionouter == reductioninner` 时差存成 1.0（rm-eq） | 步骤 0 | 这组参数下按 0 实现也是 `100·h > 1`，分辨不了 | 步骤 5 换参数，让 `r·h` 落在 (0, 1) 里 |
+
+**要重新抓 WPE 才能补：**
+
+| 项 | 来源 | 现状与原因 | 怎么补 |
+|---|---|---|---|
+| rope 绳没满时 `Rf = min(fps, R)`（R9） | 步骤 0 | 两种 fps 下抓帧时绳都已满 | 抓加载后头几百毫秒、或一个 `rate` 高而 `maxcount` 大到永远不满的系统 |
+| ropetrail 预热后历史塌缩到当前位置（T7） | 步骤 0、2 | T7 的设计里预热期间根本不出粒子（满容量冻结发射计时），WPE 里一直没有存活粒子；现在只有单测 | 让预热期间真的出粒子，如 `rate 2` 或 `instantaneous 1` |
+| 可见性按上一帧还是本帧的脚本生效 | 步骤 3 | ma-hide 两种取法都通过 | 让隐藏、显示的切换帧上有粒子出生，两种取法的出生数会差一 |
+| WPE 不可见期间照不照常模拟粒子（rea-p4d-modules 5.3【推】） | 步骤 3 | ma-hide 的位置和粒子年龄无关 | 隐藏期间仍有存活粒子、且位置随年龄变的工程（WPE 清空前的那一帧） |
+| `around` 配周期发射时新周期清不清零（`rec+0x58 & 2`） | 步骤 3 | 没测，能力表照报 `…:periodic`；语料 0 张 | 测试工程配周期发射，出生方向序列按周期看 |
+| `around` 的残留字在「干净重启后只解析过桌面壁纸」时的值 | 步骤 3 | `restart_wpe` 被权限拦下；另外三种先行解析都是「不乘」 | 用户放行 `restart_wpe` 后补抓一次 `p4d-around-ic` |
+| `2254685070` 和 WPE 的画面对照 | 步骤 1 | 鼠标拖尾，要移动鼠标才有画面 | P4d 收尾抓帧时移动鼠标，做法同 P4c |
+
+**工具与边角：**
+- kabegame-dev MCP 的 `particle_corners` / `render_scene` 回放不传 `fps`，低 fps 下 rope 的 `Rf` 仍按 60 算，只影响绳没满的填充期（步骤 1）。
+- dev 的 `particleTrack` 对 rope 系统按槽序输出，不是表序（步骤 1）。
+- 暂停时改 `instanceoverride` 的 `count` / `lifetime`，rope 的 `TL` 要到下一次步进才更新（步骤 1）。
+
+**已测（从清单里划掉）：**
+- 不可见时复位清零 `mapsequence*` 的序号（步骤 0 没测到）：步骤 3 的回放逐粒子对上，见步骤 3 实施记录。
+
 ## P4d 收尾
 
-和 P4a–P4c 一样，最后统一写 `cocs/wpe/WPE_SCENE.md`（翻译器的几何着色器展开还要写进 `src-tauri/wpesl2wgsl/README.md`）、changelog 和回归文档，并把总计划的覆盖数改成重算的口径。
+先按上面的「未实测清单」逐项走查（2026-11-10 用户定）。和 P4a–P4c 一样，最后统一写 `cocs/wpe/WPE_SCENE.md`（翻译器的几何着色器展开还要写进 `src-tauri/wpesl2wgsl/README.md`）、changelog 和回归文档，并把总计划的覆盖数改成重算的口径。
 
 ## 决定
 
@@ -713,6 +909,38 @@ export function trailRenderVar0(renderer: …, timer: number): [number, number, 
      - `remapvalue`：输入 `particlesystemtime`；变换 `sine`、`simplexnoise`、`fbmnoise`；输出 `opacity`、`velocity`、`speed`；运算 `remap`，加 blend。
      - `remapinitialvalue`：输入 `distancetocontrolpoint`；运算 `multiply`。
      - 其余照报。
+
+**已定（2026-11-10 用户选 C，实测后照实测做）：**
+
+3. `mapsequencearoundcontrolpoint` 的残留字：`count` **不乘** `instanceoverride.count`，不报；配周期发射时照报 `particle:initializer:mapsequencearoundcontrolpoint:periodic`。
+   - **实测：** 工程 `ignore/p4/proj/p4d-around-ic`（`ignore/p4/d3/gen_around.py`），抓帧在 `A:\p4d\around-ic-ctx*`，读数用 `ignore/p4/d3/ana_around.py`。
+     - 系统照抄 `Cherry_Blossoms_2.json` 在 `around` 之前的模块序列，所以 `around` 记录在暂存区里的偏移和语料相同。
+     - 三个系统：ic 的 `count` 覆盖是 0.02，ic50 是 0.5，ref 不覆盖。
+   - **三种先行解析：** 用过一天的 WPE；刚开过 3487328036；刚开过 kabegame-sample。
+     - 三次里三个系统按出生先后的方向都是 0、0.2、0.4…，相邻差 0.2，和对照组一样。
+     - 如果乘了，ic 会全是 0，ic50 相邻差 0.4。
+   - **没测到的：**
+     - 「干净重启后只解析过桌面壁纸」这一种，`restart_wpe` 被权限拦下，没做；
+     - bit1（周期发射的新周期清零）没测。语料里没有周期发射配 `around`，照报不影响覆盖。
+   - 选项留作记录：
+   - **问题：** WPE 解析这个模块时不读 `flags`，记录的 `rec+0x58` 从来没被写过，存的是解析暂存区里上一次解析留下的值（rea-p4d-modules 1.1）。可它有两个读者：
+     - **bit0：** `count` 乘不乘 `instanceoverride.count`；
+     - **bit1：** 周期发射的新周期清不清零序号。
+   - **残留值说不准：** 暂存区在渲染器构造时分配、从不清零，所以这个字取决于这次 WPE 运行里之前解析过什么，包括桌面壁纸和别的窗口。
+   - **语料：**
+     - 没有周期发射配 `around` 的；
+     - 3 张对象带 `instanceoverride.count`：3487328036 是 0.02，3811764016、3811798465 是 0.5。
+   - **差别有多大：** 0.5 时 `step` 是 0.2 还是 0.4，方向集合相同，只是先后顺序不同。0.02 时乘了就是 `step = 10`，每个粒子都在 θ = 0，和不乘完全两样。
+   - **影响：** 3811764016 是步骤 3 要解锁的覆盖之一（它另有 `object:shape`，不影响能不能渲染的计数）。
+   - **A（推荐）：照报。** 系统里有 `around` 且对象的 `instanceoverride.count` 生效值不是 1（或绑了属性 / 脚本）时，报 `particle:initializer:mapsequencearoundcontrolpoint:instance-count`；配周期发射时报 `…:periodic`。其余照「不乘、不清零」实现。
+     - 符合「读不清的照报」；
+     - 3811764016 不解锁，覆盖 53 → 56。
+   - **B：按不乘、不清零实现，不报。** 3811764016 解锁，覆盖到 57；WPE 实际乘了的话，它的方向顺序和 WPE 不同（画面差别很小）。
+   - **C：先实测再定。**
+     - 用 wpe-renderdoc MCP 在测试窗口里抓 3487328036（0.02 那张最好分辨：乘了的话所有粒子都朝 +y）；
+     - 分两种情况各抓一次：只开着桌面壁纸时、先开过别的工程之后；
+     - 两次结果相同，就照实测做，并把这张场景的结果写进报告；不同就退回 A。
+     - 代价是一次抓帧会话。
 
 ## 风险
 

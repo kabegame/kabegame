@@ -651,6 +651,10 @@ export function checkParticleProgram(
  *   （2026-11-09 用户定）。
  * - 属性关键帧（P4a 步骤 5）：系统级键、模块字段写成 `{animation: {…}, value}` 报 `value:animation`，与绑定分开报；
  *   控制点与子系统条目整段 `scanValue`。
+ * - `mapsequence*`（P4d 步骤 3，`particles/mapsequence.ts`）在表里。`between` 的 `flags` 有 1、2、4、8、0x10、0x20 之外的位时由模块表
+ *   报 `particle:initializer:mapsequencebetweencontrolpoints:flags`；系统里有 `around` 且有 emitter 开了周期发射（`flags & 4`）时报
+ *   `particle:initializer:mapsequencearoundcontrolpoint:periodic`：新周期清不清零它的序号看记录里没写过的 `rec+0x58 & 2`（解析暂存区的
+ *   残留值，rea-p4d-modules.md 1.1、1.3），没实测（phase-4d-ropes.md「决定」3）。语料里没有这种组合。
  * 值为 null 的键一律当缺键。
  */
 export function checkParticleFeatures(system: JsonObject, orthographic: boolean, unsupported: Set<string>): void {
@@ -667,6 +671,9 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
   const { flags } = readParticleSystem(system);
   for (let bit = 8; bit < 32; bit++) if (flags & (1 << bit)) unsupported.add(`particle:flags:${(1 << bit) >>> 0}`);
   if (Array.isArray(system.children) && system.children.length > 0) unsupported.add("particle:children");
+  // `mapsequencearoundcontrolpoint` 配周期发射（P4d 步骤 3）：新周期清不清零序号看 `rec+0x58 & 2`，是解析暂存区的残留值、没实测
+  let around = false;
+  let periodic = false;
   for (const category of PARTICLE_CATEGORIES) {
     const entries = particleModuleEntries(system, category);
     if (!entries) {
@@ -682,6 +689,8 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
         unsupported.add(`particle:${module}`);
         continue;
       }
+      if (category === "emitter" && (reading.fields.flags as number) & 4) periodic = true;
+      if (module === "initializer:mapsequencearoundcontrolpoint") around = true;
       for (const issue of reading.issues)
         unsupported.add(
           issue.kind === "animation"
@@ -692,4 +701,5 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
         );
     }
   }
+  if (around && periodic) unsupported.add("particle:initializer:mapsequencearoundcontrolpoint:periodic");
 }

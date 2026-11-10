@@ -238,7 +238,16 @@ describe("发射数量：周期发射（flags bit2，A3）", () => {
     expect(state.burst).toBeGreaterThan(0);
     expect(state.period).not.toBe(0);
     resetEmitterTiming(state, fields);
-    expect(state).toEqual({ acc: 0, pending: 2, delay: 0, duration: 3, ended: false, burst: 0, period: 0 });
+    expect(state).toEqual({
+      acc: 0,
+      pending: 2,
+      delay: 0,
+      duration: 3,
+      ended: false,
+      burst: 0,
+      period: 0,
+      periodStarted: false,
+    });
   });
 });
 

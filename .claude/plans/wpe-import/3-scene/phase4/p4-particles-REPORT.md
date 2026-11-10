@@ -266,6 +266,7 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | mirror | mb-mirror 的 x ∈ {±100, ±300} | 成立 |
 | `flags & 0x20`：周期发射的新周期清零序号 | period32 的 x 到不了 300，对照组 period0 能到 | 成立 |
 | 对象不可见时复位、清零序号 | ma-hide 只看到粒子被清空（15 个对 20 个）；`count 5` 的序号是周期的，清零看不出来 | 没测到 |
+| `around` 不解析 `flags`，记录 `rec+0x58` 是暂存区的残留值，bit0 决定 `count` 乘不乘 `instanceoverride.count`（2026-11-10 补测，wpe-renderdoc MCP 的测试窗口） | 工程 `p4d-around-ic` 照抄 `Cherry_Blossoms_2.json` 在 `around` 之前的模块序列，三个系统的 `count` 覆盖分别是 0.02、0.5、不覆盖。<br>先行解析了三种不同内容：用过一天的 WPE、刚开过 3487328036、刚开过 kabegame-sample。<br>三次里三个系统按出生先后的方向都是相邻差 0.2：乘了的话 0.02 那组会全在 θ = 0，0.5 那组相邻差 0.4 | 这三种情况下都是不乘。bit1（周期发射的新周期清零）没测，干净重启后的情况没测（`restart_wpe` 被权限拦下） |
 
 **距离类与 `vortex_v2`**
 

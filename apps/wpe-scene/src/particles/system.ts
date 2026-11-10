@@ -35,6 +35,10 @@
  * `ropetrail`（P4d 步骤 2，rea-p4d-rope.md 第 5 节）：renderer 是 ropetrail 的系统另有历史（`trail`，`ropetrail.ts` 的
  * `TrailHistory`）：出生时在全部 initializer 之后写满出生位置（`born`），预热结束后塌缩到当前位置（`afterPrewarm`，预热不采样），
  * 每帧模拟之后按计时器采样（`sample`，和模拟同一个 `dt'`）。`clear` 不碰计时器，也不清历史（出生时覆盖）。
+ *
+ * 模块的运行状态（P4d 步骤 3，rea-p4d-modules.md 1.3）：模块表有 `createState` 的 initializer（`mapsequence*` 的序号与步长）每个
+ * 系统一份，`run` 时传入；系统复位（`suspend`）时 `resetState`，周期发射进入新周期时 `newPeriod`（早于该 emitter 本帧的新粒子），
+ * `setInstance` 重乘字段后 `instanceState`。`clear` 不碰它们（WPE 的清空不动记录）。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
 import { identity } from "../render/math";
@@ -134,8 +138,14 @@ interface ResolvedModule {
   /** 模拟用的字段（已乘、已舍入）。 */
   fields: ParticleFields;
   run: ParticleModuleRun;
+  /**
+   * 模块的运行状态（P4d 步骤 3）：模块表有 `createState` 的才有（`mapsequence*` 的序号与步长），按建系统时的字段建一份，
+   * 传给 `run`；其余为 undefined。
+   */
+  state: unknown;
 }
 interface ResolvedEmitter extends ResolvedModule {
+  /** emitter 的状态是发射计时（`emitters.ts`），模块表的 emitter 都没有 `createState`。 */
   state: EmitterState;
 }
 
@@ -224,7 +234,8 @@ export class ParticleSystem {
           return [];
         }
         const fields = resolveParticleFields(known, module.fields, multipliers);
-        return [{ name: module.name, def: known, base: module.fields, fields, run: known.run }];
+        const state = known.createState?.(fields);
+        return [{ name: module.name, def: known, base: module.fields, fields, run: known.run, state }];
       });
     this.emitters = resolve("emitter", def.emitters).map((emitter) => ({
       ...emitter,
@@ -274,12 +285,16 @@ export class ParticleSystem {
    * - `colorn`（P4b 步骤 6）：颜色模块的平移与新粒子的颜色初值从基值重算（`applyColorn`）。`colorrandom` 是出生时的
    *   initializer，只影响之后出生的粒子；`colorchange` 每帧读字段，存活粒子下一帧就跟着变（rea-p4b-render.md 7.3【推】）。
    * - 已结束、新 `rate > 0` 的 emitter 重新打开（`param_2 = 1` 的尾段，`0x14022c1f0` 起）；累积余数等计时保留。
+   * - 有运行状态的模块（P4d 步骤 3）按登记的覆盖条目改状态（`instanceState`）：`mapsequencebetweencontrolpoints` 在 `flags & 0x10`
+   *   时 `step` 重写成正的新值（条目 4），序号不动；`mapsequencearoundcontrolpoint` 不登记，不动。
    */
   setInstance(values: Partial<ParticleInstanceValues>): void {
     this.instance = { ...this.instance, ...values };
     const multipliers = instanceMultipliers(this.instance, this.def.flags);
     for (const module of [...this.emitters, ...this.initializers, ...this.operators])
       module.fields = resolveParticleFields(module.def, module.base, multipliers);
+    for (const module of this.initializers)
+      if (module.state !== undefined) module.def.instanceState?.(module.state, module.fields, this.def.flags);
     this.applyScalars();
     this.applyColorn();
     for (const emitter of this.emitters)
@@ -323,10 +338,13 @@ export class ParticleSystem {
    * emitter 的计时（`resetEmitterTiming`，`FUN_14022f6c0`）。返回这次有没有清空。重新可见后照常 `step`，**不重新预热**。
    * WPE 不可见时控制点照常更新（rea-p4c-sim.md 5.6），这里不更新：可见后第一帧发射前会按当帧的 `W` 重算 `current`，差别只在
    * `previous`（那一帧的 `previous` 是不可见之前最后一帧的值），本步没有读 `previous` 的模块，只影响 P4d。
+   * 同一处（`FUN_14022f6c0`）还复位有运行状态的模块（P4d 步骤 3，`resetState`）：`mapsequence*` 无条件 `seq = 0`、`step` 的符号不
+   * 复位（rea-p4d-modules.md 1.3、5.3）。子系统的复位归 P4e。
    */
   suspend(): boolean {
     if (this.alive === 0) return false;
     for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
+    for (const module of this.initializers) if (module.state !== undefined) module.def.resetState?.(module.state);
     this.clear();
     return true;
   }
@@ -450,11 +468,20 @@ export class ParticleSystem {
     for (let i = 0; i < this.highWater; i++) frame[i] = f32(f32(f32(1 / life[i]) * age[i]) * multiplier);
   }
 
-  /** 按 JSON 顺序逐个 emitter：先算数量（周期发射在这里抽时长，早于本 emitter 的新粒子，A3），再逐个出生。 */
+  /**
+   * 按 JSON 顺序逐个 emitter：先算数量（周期发射在这里抽时长，早于本 emitter 的新粒子，A3），再逐个出生。
+   * 周期发射进入新周期时（`emissionCount` 置 `periodStarted`），先对全部有状态的 initializer 调 `newPeriod`（P4d 步骤 3，
+   * `FUN_14022f790`，在 `FUN_1402378a0` 的新周期分支里 `0x140237ac1`，早于本 emitter 本帧的新粒子），再出生。
+   */
   private emit(dt: number): void {
     const capacity = this.columns.capacity;
     for (const emitter of this.emitters) {
       const count = emissionCount(emitter.state, emitter.fields, dt, this.alive, capacity, this.random);
+      if (emitter.state.periodStarted) {
+        emitter.state.periodStarted = false;
+        for (const module of this.initializers)
+          if (module.state !== undefined) module.def.newPeriod?.(module.state, module.fields);
+      }
       for (let n = 0; n < count; n++) this.spawn(emitter);
     }
   }
@@ -486,7 +513,7 @@ export class ParticleSystem {
       c.color0[i][slot] = this.instanceColor[i];
     }
     c.alpha0[slot] = this.alpha0;
-    for (const initializer of this.initializers) initializer.run(initializer.fields, context);
+    for (const initializer of this.initializers) initializer.run(initializer.fields, context, initializer.state);
     // ropetrail（P4d 步骤 2）：全部 initializer 之后历史写满出生位置、`C = 1`、`U = 0`（rea-p4d-rope.md 5.1，`0x14023f953`）
     this.trail?.born(slot, c);
     // 当前值与上一步位置（拖尾初值）
