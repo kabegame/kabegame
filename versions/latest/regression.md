@@ -1,5 +1,28 @@
 # v4.7.0 regression
 
+## 收藏视图（查询行 ⋯ 面板）与画廊不再恢复上次路径
+
+2026-11-10 macOS dev。查询行 ⋯ 面板新增「收藏的视图」：前端 Dexie 库 `kbg-saved-views` 按来源（画廊 / 画册 / 任务 / 畅游）分区，存不含根前缀 / hide / no-album / 分页尾的查询体；名字可空（为空即用路径），显示名不分大小写唯一；面板打开时读一次并冻结顺序，点一行只应用，收起时只给最后应用的那条记最后使用；编辑浮层可改名、用当前视图更新（预览差异后确定）；× 走与任务抽屉同款 popconfirm。组件库新增 `clickOutsideIgnore` 与 popconfirm `popperClass`，让 teleport 出去的子层不关面板。`gallery-path` 全平台改走 URL query，画廊重启后回到默认视图，本地迁移删除两个旧键；非画廊页的画廊过滤链接改为显式跳 `/gallery`。说明见 `cocs/gallery/SAVED_VIEWS.md`。
+
+已知取舍：收藏存在 CEF / WebView profile 的 IndexedDB 里，清掉 profile 即丢失；差异预览按「维度 + 取值」摊平对比、不分位置；随机排序的收藏不显示轮播标记（种子不可比）。dev 下改了组件库里被两跳类型引用的 props 后，vite 的 SFC 类型缓存可能沿用旧 props（本次 `ElTooltip` 即如此，touch 中间的 `tooltip.ts` 后恢复），生产构建不受影响。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | V0 单测与检查 | macOS | `check-kabegame --skip cargo`（桌面与 `--mode web`）；前端 vitest 全量；新增 `utils/savedViews.test.ts` | 0 error；全过 | 2026-11-10 Claude：两种模式 vue-tsc 0 error（只改前端与 vendored 组件库，未跑 cargo）；vitest 72 个文件 686 个用例全过，其中 savedViews 6 个 |
+| [x] | V1 新增与命名 | macOS 画廊 | 换到未收藏的视图，⋯ → 「收藏当前视图」→ 输入名字回车；再换视图后留空回车 | 新行插到最前并标为当前，顶部变成「当前视图已收藏为「X」」；留空的行以等宽小字显示路径 | 2026-11-10 Claude：真机 CDP 通过 |
+| [x] | V2 名字冲突与 Esc | macOS 画廊 | 新增时输入与已有名字仅大小写不同的名字；回车；按 Esc | 红字「已有名为「X」的视图」，回车不保存；Esc 只收起输入框，面板不关 | 2026-11-10 Claude：通过 |
+| [x] | V3 应用与排序 | macOS 画廊 | 面板里先点 A 再点 B；收起面板再打开 | 每次点击切换视图，当前行竖条跟着移动，打开期间顺序不变；重开后 B 排第一 | 2026-11-10 Claude：通过 |
+| [x] | V4 编辑浮层不关面板 | macOS 画廊 | 悬停一行点编辑；用真实鼠标点浮层内输入框、按钮；改名后点确定 | 浮层锚在行左侧；⋯ 面板始终不关；改名生效、顺序不变 | 2026-11-10 Claude：通过（首次因 dev 类型缓存未生效，见上方取舍） |
+| [x] | V5 用当前视图更新 | macOS 画廊 | 当前视图已被别的收藏占用时打开编辑；换到新视图后编辑另一条 → 「用当前视图更新」→ 确定 | 前者红字指出占用的收藏、无更新按钮；后者预览新增条件粉底、按钮变「撤销更新」，确定后该行路径换新、名字保留并成为当前行 | 2026-11-10 Claude：通过 |
+| [x] | V6 编辑浮层 Esc | macOS 画廊 | 编辑浮层输入框里按 Esc | 只关编辑浮层，⋯ 面板保持打开 | 2026-11-10 Claude：通过 |
+| [x] | V7 移除确认 | macOS 画廊 | 点行尾 ×，先点确认框内的文字，再点「确认」 | 弹出与任务抽屉停止任务同款确认；点框内不关面板；确认后该行消失 | 2026-11-10 Claude：通过 |
+| [x] | V8 来源与共用 | macOS 画册 / 任务 | 在「收藏」画册收藏一条，切到另一个画册打开 ⋯；打开任务详情的 ⋯ | 两个画册看到同一条（「所有画册共用 · 1」）；任务详情是独立的「所有任务共用 · 0」 | 2026-11-10 Claude：通过；畅游详情未单独打开，与任务同一实现 |
+| [x] | V9 轮播来源标记 | macOS 画廊 | 轮播开启时，把轮播所用视图收藏一条 | 该行带 ↻，顶部动作显示「正在轮播此视图」 | 2026-11-10 Claude：通过（未改动轮播设置） |
+| [x] | V10 画廊不再恢复上次路径 | macOS | 写入旧键 `kabegame-gallery-path` / `kabegame-setting-gallery-path` 后从 `/` 重新加载；会话内切到画册再从侧栏回画廊 | 两个旧键被删、画廊为默认视图；会话内切回仍是原视图 | 2026-11-10 Claude：通过 |
+| [x] | V11 非画廊页的画廊过滤链接 | macOS 任务详情 | 在任务详情触发图片详情里的画廊过滤（插件） | 跳到 `/gallery?path=…plugin/…`，任务页自己的路径不被冲掉 | 2026-11-10 Claude：经 ImageGrid 的 `handleOpenGalleryFilter` 触发，未从详情面板 UI 点击 |
+| [ ] | V12 紧凑档 / Android | Android | ⋯ 面板（对话框）里编辑与移除；返回键 | 编辑为叠加对话框；返回键先关编辑 / 确认，再关面板 | 未测 |
+| [ ] | V13 web 版 | Web | 打开 ⋯ | 收藏区可用，无轮播动作 | 未测（`--mode web` 类型检查通过） |
+
 ## WPE 壁纸目录：本地导入识别、经 VFS 目录下载、目录哈希去重
 
 2026-11-10 macOS dev。`postprocess_downloaded_image` 的 `Path` 来源认目录（WPE 壁纸目录），`wpe-import`、local-import、文件夹同步、下载四个入口共用 `ingest_wpe_dir`；WPE 行的 `hash` / `size` 改为目录哈希与目录总字节数，v051 空迁移登记回填作业 `wpe_dir_hash` 重算存量行；`downloadImage` 新增 `relocate`（只对任务 VFS 路径生效，目录即壁纸目录）；桌面 Web 服务器的 `/file` 对 WPE 目录返回清单、对目录内文件流式返回；SDK 新增 `downloadWpeWallpaper`，`kabegame-server` 插件（0.3.0）对 `x-wpe/*` 行改走它。说明见 `cocs/wpe/WPE_IMPORT.md` 第四节、`cocs/downloader-tasks/DOWNLOADER_FLOW.md` §6、`cocs/local-folder/LOCAL_FOLDER_SYNC.md`「WPE 壁纸子目录」。

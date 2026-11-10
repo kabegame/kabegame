@@ -164,28 +164,38 @@
         :title="t('gallery.chipSettings')"
         chip-display="icon"
         :clearable="false"
+        :click-outside-ignore="chipSettingsClickOutsideIgnore"
+        @open="chipSettingsOpen = true"
+        @close="chipSettingsOpen = false"
       >
         <template #icon><MoreFilled /></template>
         <template #panel>
           <div class="chip-settings">
             <!-- 顶部区域：视图级动作。「用当前视图轮播」把本视图（过滤 + 排序，不含分页）的
                  PathQL 路径设为壁纸轮播来源；设置页只展示当前轮播路径，入口在这里。 -->
-            <template v-if="showRotationAction">
-              <button
-                type="button"
-                class="chip-settings__action"
-                :disabled="isRotatingThisView || rotationBusy"
-                @click="rotateWithCurrentView"
-              >
-                <span class="chip-settings__icon"><Picture /></span>
-                <span class="flex-1 text-left">
-                  {{ isRotatingThisView ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
-                </span>
-              </button>
-              <!-- 保存的过滤：预留区域，后续在这里列出用户保存的过滤设置 -->
-              <div class="chip-settings__saved-filters" />
-              <div class="chip-settings__divider" />
-            </template>
+            <button
+              v-if="showRotationAction"
+              type="button"
+              class="chip-settings__action"
+              :disabled="isRotatingThisView || rotationBusy"
+              @click="rotateWithCurrentView"
+            >
+              <span class="chip-settings__icon"><Picture /></span>
+              <span class="flex-1 text-left">
+                {{ isRotatingThisView ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
+              </span>
+            </button>
+            <!-- 收藏视图：本页来源的收藏列表（web 也有，轮播动作只在桌面）。 -->
+            <SavedViewsSection
+              v-if="gridView"
+              :source="gridView.source"
+              :query="query"
+              :sort="sort"
+              :active="chipSettingsOpen"
+              :path-for="gridView.pathFor"
+              @apply="applySavedView"
+            />
+            <div v-if="showRotationAction || gridView" class="chip-settings__divider" />
 
             <template v-for="(group, index) in chipToggleGroups" :key="index">
               <div v-if="index > 0 && group.length" class="chip-settings__divider" />
@@ -247,22 +257,11 @@ import { computed, inject, markRaw, provide, ref, useSlots, watch, type Componen
 import { useI18n } from "@kabegame/i18n";
 import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
 import {
-  Clock,
   Close,
   Filter,
-  FilterAspect,
-  FilterDate,
-  FilterMedia,
-  FilterName,
-  FilterPlugin,
-  FilterSize,
-  FilterWallpaper,
   LetterA,
-  List,
-  MagicStick,
   MoreFilled,
   Picture,
-  Rank,
   Search,
   Sort,
   SortAsc,
@@ -272,6 +271,9 @@ import { withGalleryPrefix } from "@/utils/path";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
 import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
+import SavedViewsSection from "@/components/gallery/savedViews/SavedViewsSection.vue";
+import { FILTER_DIMENSION_ICONS, SORT_FIELD_ICONS } from "@/components/gallery/galleryChipIcons";
+import { SAVED_VIEW_LAYER_CLASS } from "@/components/gallery/savedViews/savedViewLayer";
 import { GallerySearchModesKey } from "@/components/gallery/searchModesContext";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
@@ -296,7 +298,7 @@ import {
 import { galleryDimensionChipValue, gallerySortFieldLabel } from "@/utils/galleryFilterLabels";
 import { filterMediaKind } from "@/utils/galleryQuery";
 import { viewRotationPath, wallpaperModeSupportsVideo } from "@/utils/wallpaperRotationPath";
-import { gridViewPathKey } from "@/components/imageGrid/gridViewPath";
+import { gridViewKey } from "@/components/imageGrid/gridViewPath";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { IS_WEB } from "@/env";
 import { DEFAULT_GALLERY_PAGE_SIZE, GALLERY_PAGE_SIZE_OPTIONS, isGalleryPageSizeOption } from "@/utils/galleryPageSize";
@@ -404,9 +406,9 @@ const labelContext = computed(() => ({
 
 // ---------- 用当前视图轮播 ----------
 const rotationBusy = ref(false);
-// 所在 ImageGrid 注入的当前视图路径；不在 ImageGrid 插槽里则不提供该动作
-const gridViewPath = inject(gridViewPathKey, null);
-const rotationPath = computed(() => (gridViewPath?.value ? viewRotationPath(gridViewPath.value) : ""));
+// 所在 ImageGrid 注入的当前视图上下文；不在 ImageGrid 插槽里则不提供轮播与收藏视图
+const gridView = inject(gridViewKey, null);
+const rotationPath = computed(() => (gridView?.path.value ? viewRotationPath(gridView.path.value) : ""));
 const showRotationAction = computed(() => !IS_WEB && !!rotationPath.value);
 const isRotatingThisView = computed(
   () =>
@@ -438,6 +440,17 @@ async function rotateWithCurrentView() {
 
 function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
   emit("navigate", patch, options);
+}
+
+// ---------- 收藏视图 ----------
+// ⋯ 面板的开合态：收藏列表在打开时读一次库、收起时记最后使用（见 SavedViewsSection）。
+const chipSettingsOpen = ref(false);
+// 编辑浮层与移除确认都 teleport 到 body，点它们不能算 ⋯ 面板的「外部」。
+const chipSettingsClickOutsideIgnore = [`.${SAVED_VIEW_LAYER_CLASS}`];
+
+/** 应用一条收藏视图：整体换掉查询与排序，各页 @navigate 照旧记搜索勾选。 */
+function applySavedView(view: { query: GalleryQuery; sort: GallerySort }) {
+  navigate({ query: view.query, sort: view.sort }, { push: true });
 }
 
 // ---------- 搜索（查询原子的 search 维度）----------
@@ -509,15 +522,7 @@ function clearAdvancedQuery() {
 }
 
 // ---------- 过滤维度 chip ----------
-// 搜索有独立输入组件（GallerySearchDropdown），不进图标表。
-// 过滤维度图标与高级查询弹窗同源(设计稿那套 16px 线性图标)。
-const FILTER_DIMENSION_ICONS: Record<GalleryBrowseDimension, Component> = {
-  plugin: markRaw(FilterPlugin),
-  mediaType: markRaw(FilterMedia),
-  date: markRaw(FilterDate),
-  size: markRaw(FilterSize),
-  aspect: markRaw(FilterAspect),
-};
+// 维度图标表见 galleryChipIcons.ts（与收藏视图的组合展示共用）。
 
 const ALL_FILTER_DIMENSIONS: Array<{
   key: GalleryBrowseDimension;
@@ -625,21 +630,6 @@ const showSortOrderChip = computed(() => props.sortFeatures.length > 0 && isChip
 
 /** 左端固定区是否有内容——空的话它后面那条分隔线就成了行首一根孤立竖线。 */
 const hasFixedSection = computed(() => !!slots.leading || showSortFieldChip.value || showSortOrderChip.value);
-
-/**
- * 排序维度的图标。纯图标 chip 下，通用的「排序」双箭头说不出到底按什么排，
- * 所以每个维度用它自己那张脸——与同名过滤维度共用一张，认过一次就都认得。
- */
-const SORT_FIELD_ICONS: Record<GallerySortField, Component> = {
-  "by-id": markRaw(Rank),
-  "by-time": markRaw(Clock),
-  "by-size": markRaw(FilterSize),
-  "by-name": markRaw(FilterName),
-  "by-aspect": markRaw(FilterAspect),
-  "by-set-time": markRaw(FilterWallpaper),
-  "by-album-order": markRaw(List),
-  random: markRaw(MagicStick),
-};
 
 const sortFieldIcon = computed<Component>(() => SORT_FIELD_ICONS[sortField.value] ?? markRaw(Sort));
 const sortFieldChipValue = computed(() => gallerySortFieldLabel(sortField.value, t));
@@ -879,7 +869,7 @@ defineExpose({
    开关清单是表单，底下透出画作会让人分不清哪个开关是开的。 */
 .chip-settings {
   display: flex;
-  width: 268px;
+  width: 300px;
   max-width: calc(100vw - 32px);
   flex-direction: column;
   padding: 10px;

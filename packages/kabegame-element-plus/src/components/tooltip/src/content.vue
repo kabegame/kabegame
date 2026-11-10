@@ -192,7 +192,7 @@ watch(
             onClose()
           }
         },
-        { detectIframe: true }
+        { detectIframe: true, ignore: props.clickOutsideIgnore }
       )
     }
   },

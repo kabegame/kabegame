@@ -19,9 +19,22 @@ function moveKeyOnce(from: string, to: string): LocalMigration {
   };
 }
 
+/** 删掉不再使用的旧键：没有就什么都不做。 */
+function removeKey(key: string, reason: string): LocalMigration {
+  return {
+    description: `remove ${key} (${reason})`,
+    run(storage) {
+      storage.removeItem(key);
+    },
+  };
+}
+
 const migrations: LocalMigration[] = [
   moveKeyOnce("kabegame-galleryPageSize", `${SETTINGS_PREFIX}galleryPageSize`),
   moveKeyOnce("kabegame-gallery-hide", "pathRoute.hide"),
+  // 画廊不再保存 / 恢复上次浏览路径（gallery-path 全平台改走 URL query，常用视图改用收藏视图）
+  removeKey("kabegame-gallery-path", "gallery last path"),
+  removeKey(`${SETTINGS_PREFIX}gallery-path`, "gallery last path"),
 ];
 
 /**

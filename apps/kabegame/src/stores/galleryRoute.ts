@@ -4,7 +4,6 @@ import {
   buildComposablePath,
   buildGalleryContextPrefix,
   DEFAULT_GALLERY_SEARCH_MODES,
-  GALLERY_STORAGE_KEY_PATH,
   type GalleryQuery,
   type GallerySearchPathMode,
   type GallerySort,
@@ -62,30 +61,12 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("gal
       sort: state.sort,
     }),
   buildContext: (state) => buildGalleryContextPrefix(state.query),
-  defaultState: () => {
-    const stored = IS_WEB ? null : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
-    const parsed = stored ? parseGalleryPath(stored) : null;
-    const defaultSort: GallerySort = IS_WEB
-      ? { field: "random", desc: false, seed: webRandomSeed() }
-      : { field: "by-id", desc: false };
-    return {
-      query: parsed?.query ?? [],
-      sort: parsed?.sort ?? defaultSort,
-    };
-  },
-  onStateChange: (state) => {
-    // 仅持久化 query/sort；分页由 usePagedGallery 本地持有，页大小由 settings 管理。
-    // noAlbum 由全局 store 自己的 localStorage 承担，不再进这条路径。
-    if (!IS_WEB) {
-      localStorage.setItem(
-        GALLERY_STORAGE_KEY_PATH,
-        buildComposablePath({
-          query: state.query,
-          sort: state.sort,
-        }),
-      );
-    }
-  },
+  // 画廊不保存 / 恢复上次浏览路径：路径只活在 URL query 里（gallery-path 全平台走 query），
+  // 重启后就是这里的默认视图；常用视图交给查询行 ⋯ 面板的收藏视图。
+  defaultState: () => ({
+    query: [],
+    sort: IS_WEB ? { field: "random", desc: false, seed: webRandomSeed() } : { field: "by-id", desc: false },
+  }),
 });
 
 /** 回到默认「全部」第 1 页（用于错误兜底等） */

@@ -12,6 +12,7 @@
     :hide-after="0"
     :popper-class="ns.e('popper')"
     :teleported="true"
+    :click-outside-ignore="clickOutsideIgnore"
     pure
     @update:visible="handleVisibleChange"
     @show="focusPanel"

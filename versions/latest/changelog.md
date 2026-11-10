@@ -29,6 +29,7 @@
 - 「壁纸」导入支持 Wallpaper Engine 网页壁纸：原地引用壁纸目录；预览以主屏比例的画布运行页面并可交互，也可在窗口模式设为桌面壁纸，应用背景同样实时显示（静音）。设置里的「壁纸音量」（原「视频壁纸音量」）对网页壁纸同样生效。
 - 桌面网页壁纸改为像 Wallpaper Engine 一样以 `file://` 直接加载壁纸目录：依赖读取同目录数据文件的壁纸（如歌单、字幕类）现在能完整运行；文件访问只对壁纸窗口开启，且只能读当前壁纸目录内的文件。Windows 上桌面的鼠标移动与左键点击会转发给网页壁纸（不拦截桌面本身的点击，桌面框选不受影响）。预览网页壁纸时，鼠标移到画布左右边缘中段即可唤出切换箭头。预览网页壁纸时右键菜单无法弹出（右键会被壁纸页面接收），菜单里的操作改为按原顺序排在底部工具条里。
 - 网页壁纸可读取作者默认属性与界面语言：桌面壁纸与图库预览里的 Wallpaper Engine 网页壁纸会在加载完成后收到 `project.json` 里作者设定的属性值，以及当前界面语言（切换语言后页面随之更新）；依赖这些属性才开始绘制的壁纸现在能正常显示。暂不支持帧率上限。
+- 画廊、画册、任务和畅游的工具条右侧 ⋯ 菜单新增「收藏的视图」：把当前的过滤和排序存成一条，可以起名字（不起就用路径作名字，名字不能重复），以后点一下就切回去。列表按最近使用排序；在菜单里来回切换不会打乱顺序，下次打开菜单时才把最后用的那条排到最前。所有画册共用一份收藏，所有任务、所有网站也各共用一份。行尾的编辑按钮可以改名，或用当前视图更新这条收藏（先预览哪些条件是新增的、哪些会被移除，确定后才保存）；叉号移出收藏，需要确认。正在轮播的那条带轮播标记。收藏保存在本机。
 
 ### Optimized
 - 场景壁纸改颜色、透明度、位置、亮度与滑块类属性时即时生效，不再整场重新加载；按属性条件显示 / 隐藏的图层也能正确切换。
@@ -76,6 +77,7 @@
 - Web 版（demo.kabegame.com）首屏打开明显变快：脚本、样式和插画改从 CDN 加载并自动压缩，不再挤占服务器那点带宽；吉祥物、空状态等插画在 Web 版换成按显示尺寸压缩的 WebP（合计 8.2 MB → 244 KB），桌面与 Android 仍用原图。
 - Windows 桌面网页壁纸与图库预览改为同一套实现（壁纸窗口里嵌入网页壁纸，不再整窗跳转）：图片 / 视频与网页壁纸之间也有切换过渡；预览与桌面的页面存储互通（桌面上此前保存的页面数据不会带过来）；改了文件夹属性后，旧文件夹立即不再可读；网页壁纸只能读取自己的壁纸目录和为它选择的文件。
 - 启动时主窗口立即出现：数据库升级等耗时初始化改在后台进行，期间窗口显示启动页与进度（升级需要先补算数据时显示进度条），完成后自动进入主界面；初始化失败会在启动页显示错误并可直接退出。其余数据补算在进入界面后于后台继续，可在「我正在忙这些」里看到进度，中途退出下次启动接着做。
+- 画廊不再在重启后恢复上次的过滤和排序，每次打开都是全部图片；切到别的页面再回来仍保持原来的视图。常用视图请存进 ⋯ 菜单的「收藏的视图」。
 
 ## 插件开发侧
 
@@ -169,6 +171,7 @@
 - 新增 CEF 补丁 07（需重编 CEF）：建子资源 / 导航工厂时捕获文档与父文档 URL，对非 http(s) 请求写入两个私有归属头；`file:` 闸门按文档头分档，移除 worker 的 `file:` 工厂和垫片首批请求退避重试。
 
 ### Internal
+- 收藏视图：前端 Dexie 库 `kbg-saved-views`（`services/savedViews.ts`），存不含根前缀 / hide / no-album / 分页尾的查询体，随机排序经新增的 `buildComposablePath({ omitRandomSeed })` 去种子；`gridViewPathKey` 扩成 `gridViewKey { path, source, pathFor }`，`GridRouteStore` 增加 `computePath`。`gallery-path` 全平台改走 URL query，`galleryRoute` 删掉自己读写的 `kabegame-gallery-path`，本地迁移删除两个旧键；非画廊页的画廊过滤链接改为显式 `router.push` 到 `/gallery`。组件库：tooltip / `KbFilterDropdown` 新增 `clickOutsideIgnore`，popconfirm 新增可追加的 `popperClass`。见 `cocs/gallery/SAVED_VIEWS.md`。
 - 设置迁移 v004：`wallpaperDisabled` 取反成 `wallpaperEnabled`（默认 true）并删掉旧键，命令改为 `get_wallpaper_enabled` / `set_wallpaper_enabled(enabled)`；`wallpaperPaused` 的作用范围扩到视频壁纸。
 - 网页壁纸音频与媒体集成（Windows）：新增 `wpe_media` 模块（WASAPI 回环 + `realfft` 自定频谱、SMTC 媒体会话、封面配色）与 `wpe_web_media_subscribe` 命令，数据经 Tauri Channel 只推回订阅的 iframe；订阅按调用方 frame 归属、`SubframeDestroyed` 即释放。tauri 补丁 18 增补公开命令参数 `tauri::ipc::CallerFrame`（拉取后须重新应用 tauri 补丁序列）。新设置 `wpeMediaIntegration`。`realfft` 与 `windows` 的音频 / WinRT feature 只在 Windows 依赖段。
 - v049 一次性规范化 `images.type` 并新增 `idx_images_type`；Rust 写入口保证非空小写格式键，媒体分类与格式查询去掉逐行 LOWER / COALESCE，保留画廊排序分页的索引计划；补充迁移、规则比对及 DSL 执行计划回归。

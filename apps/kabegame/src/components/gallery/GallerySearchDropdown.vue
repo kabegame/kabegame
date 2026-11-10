@@ -83,6 +83,7 @@ import { QuestionFilled, Search } from "@kabegame/element-plus-icons";
 import KbText from "@/components/common/form/KbText.vue";
 import { IS_ANDROID } from "@/env";
 import { canonicalSearchModes, GALLERY_SEARCH_MODES, type GallerySearchPathMode } from "@/utils/galleryPath";
+import { gallerySearchModeLabel } from "@/utils/galleryFilterLabels";
 import { parseSearchExpr, type SearchExpr } from "@/utils/searchExpr";
 
 /**
@@ -211,12 +212,7 @@ function onSelectAll(checked: string | number | boolean) {
 }
 
 function searchModeLabel(mode: GallerySearchPathMode): string {
-  if (mode === "metadata") return t("gallery.searchModeMetadata");
-  if (mode === "native-metadata") return t("gallery.searchModeNativeMetadata");
-  if (mode === "local-path") return t("gallery.searchModeLocalPath");
-  if (mode === "url") return t("gallery.searchModeUrl");
-  if (mode === "label") return t("gallery.searchModeLabel");
-  return t("gallery.searchModeDisplayName");
+  return gallerySearchModeLabel(mode, t);
 }
 
 function searchModeHelp(mode: GallerySearchPathMode): string {

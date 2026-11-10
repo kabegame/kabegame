@@ -6,7 +6,7 @@
     v-bind="$attrs"
     :virtual-triggering="virtualTriggering"
     :virtual-ref="virtualRef"
-    :popper-class="`${ns.namespace.value}-popover`"
+    :popper-class="[`${ns.namespace.value}-popover`, popperClass].filter(Boolean).join(' ')"
     :popper-style="style"
     :teleported="teleported"
     :fallback-placements="['bottom', 'top', 'right', 'left']"

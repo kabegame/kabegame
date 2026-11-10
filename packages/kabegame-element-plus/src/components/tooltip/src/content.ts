@@ -52,6 +52,12 @@ export interface ElTooltipContentProps
    * @description whether Tooltip is disabled
    */
   disabled?: boolean
+  /**
+   * @description kabegame: CSS selectors whose elements don't count as "outside" for click-to-close.
+   * Lets a teleported nested layer (popover / popconfirm opened from inside the content) be clicked
+   * without closing this tooltip.
+   */
+  clickOutsideIgnore?: string[]
   ariaLabel?: AriaProps['ariaLabel']
 }
 
