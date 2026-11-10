@@ -152,6 +152,8 @@ document.addEventListener("pointermove", (event) => {
 
 ## P6a — 声音
 
+子计划：[phase-6a-sound.md](phase-6a-sound.md)。
+
 **步骤 0：**
 - **对象字段：** `sound`（文件数组，152 个对象 1 个文件，9 个对象 2–4 个）、`playbackmode`（`loop` 109、`single` 46、`random` 6）、`mintime` / `maxtime`（`mintime` 全是 1，`maxtime` 多是 5，推断是 `random` 两次播放之间的随机间隔）、`startsilent`（79 个为真）、`volume`（70 个绑用户属性、7 个挂脚本，有 3 个写成 1.2，大于 1 时怎么处理要查）。多文件时 `loop` 是顺序轮播还是只放第一个，`random` 怎么选文件。
 - **中性字段：** `muteineditor`（推断只在编辑器里起作用）、`solid`（声音对象上的意义）。
