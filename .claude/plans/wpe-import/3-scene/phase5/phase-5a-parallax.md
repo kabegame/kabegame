@@ -522,7 +522,178 @@ P4d 正在改 `render/scene.ts`、`render/uniforms.ts`、`compile/bundle.ts`、`
 
 ## 步骤 3 — 抖动
 
-动工前写细。纯函数 `shakeOffset`，加到 eye 与 center 上。验收：`3830255100` 解锁，和 WPE 同一 `g_Time` 的画面比；`p5a-shake` 逐帧一致。
+### 思路
+
+抖动是**每帧一次的 eye 偏移 s**，只由本帧的 `g_Time` 和四个 `camerashake*` 字段决定，没有随机源，也没有跨帧状态。WPE 在帧开头更新相机时算它：在 lookAt 之前、视差点之前、粒子模拟之前，脚本之后才跑（rea-p5-camera 5，一帧里的顺序表）。所以渲染器在帧开头、推进视差点之前算 s，脚本写 `camerashake*` 要到下一帧才生效，和 WPE 相同。
+
+**s 同时进四个地方：**
+- **视图。** eye 和 center 加同一个偏移，正交场景的视图就是平移 `T(−s)`，所有绘制都跟着平移，包括透视粒子：它的覆盖矩阵是在「当前 V」上改平移分量，而当前 V 已经带了抖动（7.2）。视差的 `T(o)` 也是纯平移，两者可以交换，所以每次绘制的视图投影是 `VP · T(o − s)`；没开视差时是 `VP · T(−s)`。
+- **`g_EyePosition`。** 变成 `(W/2 + sx, H/2 + sy, 2000)`。拖尾判退化用的眼位（`trailEye`）读同一个值。
+- **视差点。** 目标点里的 eye.xy 就是 s，步骤 0 在 `3830255100` 上按 uniform 核对过。加载时的初值仍是场景中心：WPE 在加载末尾按基准 eye 写初值，那时还没有抖动。
+- **粒子的指针反投影。** 模拟时用的视图带抖动、不带视差（视差只在绘制时乘）。所以跟随指针的控制点会随抖动整体平移 s。
+
+**公式按 float32 算。** 步骤 0 实测：`roughness 0.1` 时 `0.1f³` 正好等于 `0.001f`，「`e > 0.001`」为假，不改长度；按 double 算会进改长度的分支，偏移差 2.5 像素。其余几步也照 WPE 的 float 逐步取整（`Math.fround`）。差别只在 `g_Time` 很大时才显出来，但取整的代价很小，和 WPE 对齐更省事。
+
+**透视场景的抖动不在本步。** 透视下幅度是 `0.1·amplitude` 个世界单位、偏移是三维的，要和透视相机一起做（P5d）。透视场景整张报 `camera:perspective`，能力表在透视场景里照报 `general:camerashake`，提醒 P5d 补上。
+
+**状态与刷新。** s 不跨帧，`GpuScene` 只记本帧的值：`setShake` 在帧开头收下 s，改掉场景级的视图投影、透视粒子的视图投影和眼位，粒子模拟就用新的；所有 draw 的矩阵重写和视差共用一次，在脚本之后的 `setParallax` 里做（s 或视差有一个变了就整体刷一遍）。关着时 s 恒为 (0, 0)，矩阵与眼位逐字节同现在。
+
+### 现状锚点
+
+**a. 帧开头只推进视差点，eye 恒为 0**（`render/renderer.ts:520`）
+```ts
+    const [width, height] = this.projection;
+    this.parallax = advanceParallax(
+      this.parallax,
+      parallaxInput(state.general, { pointer: this.pointer, frametime, width, height }), // 现状：没传 eye，parallaxInput 取 (0, 0)
+    );
+    // …
+      scene.sync(state);
+      scene.stepParticles(frametime, wrapped, state, cursor); // 现状：模拟用 populate 时算好的 this.viewProjection
+    // …
+    if (live) this.options.beforeFrame?.(frametime); // 脚本
+    // …
+      scene.setParallax(drawParallax(this.parallax, state.general), state); // 现状：视差变了才整体刷一遍矩阵
+```
+
+**b. 场景级视图投影与眼位只在建场景时算一次**（`render/scene.ts:920`、`:956`）
+```ts
+    this.eye = eyePosition(general);                                  // 现状：恒为 (W/2, H/2, 2000)
+    // …
+    this.viewProjection = sceneViewProjection(general);               // 现状：正交投影，视图是单位阵
+    this.perspectiveViewProjection = particleViewProjection(general); // 现状：透视粒子的覆盖矩阵，不带 eye 偏移
+```
+
+**c. 每次绘制只乘视差平移**（`render/scene.ts:1402`）
+```ts
+  private viewProjectionOf(layer: SceneLayer, state: SceneState, base: Mat4): Mat4 {
+    const parallax = this.parallax;
+    if (!parallax) return base; // 现状：没有视差就原样返回
+    // …
+    return x === 0 && y === 0 ? base : multiply(base, translation(x, y, 0));
+  }
+```
+
+**d. 眼位函数不收偏移**（`render/layout.ts:236`）
+```ts
+export function eyePosition(general: Pick<SceneGeneral, "width" | "height">): number[] {
+  return [general.width / 2, general.height / 2, 2000];
+}
+```
+
+**e. 能力表整张报抖动**（`compile/features.ts:289`）
+```ts
+  for (const key of ["camerashake", "supportsaudioprocessing"]) if (active(g[key])) unsupported.add(`general:${key}`);
+```
+
+**f. 探针回放的视差不带 eye**（`dev/probe.ts:281`、`dev/particleCorners.ts:373`）
+```ts
+      parallax = replayParallax(parallax, state.general, parallaxFrame, [...replayed.slice(0, -1), frametime]);
+      // 现状：parallaxFrame 没有 eye；replayParallax 只收帧时间序列，不收每帧的 g_Time
+```
+
+### 点 1 — 抖动公式（新增 `render/shake.ts`）
+- **新增** 纯函数，常量照 rea-p5-camera 5 与 p5-REPORT。
+
+```ts
+/** 抖动用到的四个 general 字段（`SceneState.general` 满足）。 */
+export type ShakeFields = Pick<GeneralValues, "camerashake" | "camerashakespeed" | "camerashakeamplitude" | "camerashakeroughness">;
+
+/**
+ * 正交场景一帧的抖动偏移 s（场景单位，加到 eye 与 center 上）；关着时 (0, 0)。按 WPE 的 float 逐步取整：
+ * e = powf(roughness, 3)；amp = 0.01·amplitude·H；T = speed²·time；v = (cos T, sin(1.333·T))（正交时 z 清零）；
+ * 0.001f < e 且 e ≠ 1 时把 v 的长度 L 换成 L^e、方向不变；s = v·amp。
+ */
+export function shakeOffset(fields: ShakeFields, time: number, height: number): [number, number];
+```
+
+### 点 2 — 渲染器（`render/renderer.ts`）
+- **修改** `render`：`frameClock` 之后、推进视差点之前，用 `wrapped`（就是本帧的 `g_Time`）和**脚本之前**的 `state.general` 算 s；先 `scene.setShake(s, state)`，再推进视差点（`parallaxInput` 的帧量带 `eye: s`），然后照旧 `sync` → `stepParticles`。
+- 补画帧的时间不变，s 也不变，不用特殊处理。
+
+### 点 3 — `GpuScene`（`render/scene.ts`、`render/layout.ts`）
+- **修改** `layout.ts`：`eyePosition(general, offset = [0, 0])` 返回 `(W/2 + ox, H/2 + oy, 2000)`。
+- **新增** 字段 `baseViewProjection`、`basePerspectiveViewProjection`（`populate` 里算，就是现在的两个值）、`shake: [number, number]`（初值 (0, 0)）。
+- **新增** `setShake(offset, state)`：和上一帧不同时，记下 s，`viewProjection = base · T(−s)`，`perspectiveViewProjection = basePersp · T(−s)`，`eye = eyePosition(general, s)`，并标记「相机变了」。只改场景级的值，不刷 draw。
+- **修改** `setParallax`：视差变了，或者「相机变了」时，整体刷一遍（一帧至多一次），刷完清标记。
+- **修改** `viewProjectionOf`：`base` 已带 `T(−s)`（来自上面两个字段），视差照旧右乘 `T(o)`；不用再改。
+- 粒子的指针反投影（`pointerScenePoint(this.viewProjection, …)`）自然用上带抖动、不带视差的矩阵，不用改。预热时 s 还是 (0, 0)：WPE 加载期的预热用哪一帧的相机没查过，和 P4 的现状一致，记进未实测清单。
+
+### 点 4 — 能力表（`compile/features.ts`）
+- **修改** `checkSceneFeatures`：`camerashake` 只在透视场景（没有 `orthogonalprojection`）报 `general:camerashake`；正交场景不再报。注释写明透视的抖动归 P5d。
+
+### 点 5 — dev 探针（`dev/probe.ts`、`dev/particleCorners.ts`、`render/parallax.ts`）
+- **修改** 回放：每一帧按这一帧的 `g_Time`（`times[i]`，没给时是 dt 的累计值）算 s，视差点带着同一帧的 s 推进；读回的那一帧先 `setShake(s)`，再 `setParallax`，帧输入里的眼位跟着变。
+- **修改** `replayParallax`：收每帧的 eye（与帧时间等长的数组，或按帧号取的函数），渲染器和探针仍共用同一套推进。
+
+### 点 6 — 单测
+- `render/shake.test.ts`（新增），用步骤 0 的实测值（`ignore/p5/a0/shake_table.py` 导出，`g_EyePosition` 是 float32，容差 2e-3）：
+
+| 工程 | speed / amplitude / roughness | `g_Time` | 实测 s |
+|---|---|---|---|
+| `shake1` | 1 / 1 / 1 | 5.152159690856934 | (4.597900390625, 5.96051025390625) |
+| `shake1` | 1 / 1 / 1 | 5.315052509307861 | (6.12188720703125, 7.76080322265625) |
+| `shaker2` | 1 / 1 / 2 | 5.149637699127197 | (0.35247802734375, 0.45709228515625) |
+| `shaker2` | 1 / 1 / 2 | 5.340617656707764 | (4.318115234375, 5.45074462890625) |
+| `shaker01` | 1 / 1 / 0.1 | 5.100968837738037 | (4.09185791015625, 5.33258056640625) |
+| `shaker005` | 1 / 1 / 0.05 | 5.100132942199707 | (4.08349609375, 5.3221435546875) |
+| `shakes3` | 3 / 0.5 / 1 | 5.165701389312744 | (−4.35516357421875, −4.08856201171875) |
+| `shakes3` | 3 / 0.5 / 1 | 5.336287498474121 | (−3.34527587890625, 5.00836181640625) |
+
+  另测：关着时 (0, 0)；`roughness 0.1` 走「不改长度」（按 double 会差约 2.5 像素，断言能区分）。
+- `uniformValues` / `drawMatrices`：抖动开着时图层与粒子（正交、透视）的矩阵等于 `base · T(o − s)`；`g_EyePosition` 带 s；关着时逐字节不变。
+- 粒子的指针反投影带 s、不带视差。
+- `compile/p2a.test.ts` 或 `p5a.test.ts`：正交场景开 `camerashake` 不再报，透视场景照报。
+
+### 实施方式
+
+照步骤 2：在快照里实现，补丁三方合并进工作区。
+- 快照：`kbp snapshot export HEAD ignore/p5/s3/head` 与 `… ignore/p5/s3/ov`（HEAD 是 `4c088ddd` 之后的最新提交），子代理只改 `ov/src`。
+- 补丁：`kbp snapshot diff ignore/p5/s3/head ignore/p5/s3/ov --out ignore/p5/s3/step3.patch`，`git apply --check` 后 `--3way` 进工作区；合并前看一次 P4 的工作区。
+
+### 验收
+- 快照里 tsc、vitest、Prettier 通过。
+- **语料**（`kbp regress --src head/src --src ov/src --corpus`）：
+  - 回放案例逐字节相同；
+  - 只少正交场景的 `general:camerashake`，不新增键；能渲染 35 → 36，新解锁 `3830255100`；ricepod、3706286085 照报。
+- **合并进工作区之后，和 WPE 端到端比**（方法同步骤 2）：
+  - 测试工程：`p5a-shake1`、`shaker2`、`shaker01`、`shaker005`、`shakes3` 按 1920×1080 窗口重抓，`kbp rdc track` 取时间线，`render_scene` 按时间线回放到同一帧，和 `kbp rdc frame` 的整帧逐像素比；
+  - 再加一个视差加抖动的工程（`mouseinfluence 1`、`delay 0`）：同一帧里视差点、方块位置、CLK 读到的 `g_EyePosition` 与 `g_ParallaxPosition` 一起对上；
+  - `3830255100`：和 WPE 同一 `g_Time` 的整帧比，按图层核对位置；粒子带随机，只比统计量。
+- 不开抖动的场景（现有 35 张能渲染的），画面哈希逐张相同。
+
+### 步骤 3 实施记录（2026-11-10）
+
+**实现**：子代理在快照 `ignore/p5/s3/ov`（HEAD `4c088ddd`）里实现，Claude 独立验收后整份拷进工作区（期间工作区里 `apps/wpe-scene` 没有别人的改动，核对过逐字节）。
+- **新增**
+  - `render/shake.ts`：`shakeOffset`，各步按 float32 取整，比较常量用 `0.001f`；
+  - `render/shake.test.ts`：点 6 的实测表，实际误差不超过 3e-5；`roughness 0.1` 和 1 逐位相同，按 double 算差 2.48 像素。
+- **修改**
+  - `render/renderer.ts`：帧开头算 s，视差点带 s 推进；**粒子步进之后**才 `setShake`（见下）。
+  - `render/scene.ts`：基准视图投影两份、`setShake`、`cameraDirty`；`setParallax` 在视差或相机变了时整体刷一遍，一帧至多一次。
+  - `render/uniforms.ts`：`g_EyePosition` 进 `LAYER_UNIFORMS`。计划没写这一条，但不加的话刷新不重写眼位，眼位就不跟抖动；不开抖动时重写的值不变。
+  - `render/layout.ts`：`eyePosition(general, offset)`。
+  - `render/parallax.ts`：`replayParallax` 收每帧的 eye。
+  - `compile/features.ts`：`general:camerashake` 只在透视场景报。
+  - `dev/probe.ts`、`dev/particleCorners.ts`：回放每帧先用上一帧的 s 步进粒子、再设本帧的 s，读回帧同样。
+  - `particles/track.ts`、`dev/probe.ts`：轨迹回放（`particle_track` 走它）的跟随点同样带上一帧的 s。
+- **端到端补测推翻了计划的一处**：计划写「粒子模拟用带抖动的当帧视图」。`p5a-shakepar` 第 119、120 帧跟随指针的新生粒子，按「当帧指针 + 上一帧 s」两帧误差都是 0，按当帧 s 差 0.3 像素左右（p5-REPORT 补了一行）。原因在读码的帧顺序：`FUN_1401891a0` 先更新对象（粒子模拟），之后才更新相机。所以 `setShake` 挪到粒子步进之后；加载后第一帧的模拟用加载时的相机（s 为 0），和预热一致。未实测清单里「预热时相机带不带抖动」随之有了依据（推断为 0），仍留在清单里。
+
+**验收**（Claude 独立跑）：
+- **类型、测试、格式**：快照里 tsc 0 错误、vitest 54 个文件 1477 个用例全部通过（HEAD 导出 53 个文件 1451 个）、Prettier 通过；第二版拷进工作区后在工作区也跑过一次（1474 个，当时还没有轨迹回放那几个用例）。最后一版拷进工作区时，P4 会话已开始改 `particles/` 下的噪声与回放测试，所以最后一次只在快照里跑；我们的文件和它们不重叠，拷入前逐个核对过工作区里这几个文件仍等于 HEAD 或我们的上一版。
+- **回归与语料**（`kbp regress --src s3/head/src --src s3/ov/src --corpus`）：
+  - 回放案例逐字节相同。`d4` 两边都失败、逐字节相同：它是 P4d 步骤 4 的案例，那一步还没实现；
+  - 语料只少 7 张正交场景的 `general:camerashake`（2251857160、3340707146、3498150384、3560756264、3570560686、3818053626、3830255100），不新增键；能渲染 35 → 36，新解锁 `3830255100`；ricepod、3706286085 两张透视场景照报。
+- **端到端，测试工程**（`ignore/p5/s3/cmp_frames.py`，结果 `out/cmp-frames.txt`）：
+  - 抓帧：`p5a-shake1`、`shaker2`、`shaker01`、`shaker005`、`shakes3`、`shakepar` 按 1920×1080 窗口抓（`A:\p5a2`），`kbp rdc track` / `frame` 取轨迹和 WPE 整帧，导入 dev 库后 `render_scene` 按时间线回放到同一帧；
+  - 5 组纯抖动工程**整帧 0 差异**，包括颜色里含 `g_EyePosition` 的 CLK 方块；FR 帧号块随抖动平移，屏蔽框放宽到抖动幅度；
+  - `shakepar`：方块位置和 CLK 方块 0 差异；整帧的差异只在跟随指针的粒子上。这次抓帧时光标在动，WPE 的这些粒子沿光标历史出生，`render_scene` 只收一个固定指针，复现不了。
+  - 跟随粒子另用 `particle_track`（逐帧光标取轨迹）回放、和 WPE 轨迹逐个比（`follow_cmp.py`）：第 119、120 帧新生的各 2 个粒子，位置差都在 1e-4 像素以内。
+- **端到端，`3830255100`**（`ana_real3.py`、`cmp-real-3830255100.txt`、`region_shift.py`）：
+  - 按 WPE 抓帧（1920×1080）各层的偏移反推，17 个对象给出的视差点一致（离散 0.001 像素），抖动 s 和 `g_EyePosition` 差 1e-4；由此反推指针 (0.928, 0.967)；
+  - 我们按同一 `g_Time` 回放渲染、缩到 1920×1080 比：平均差 0.96，大于 32 的像素 0.038%，热图只有轮廓线；按区域相位相关，5 块区域的平移都在 0.08 像素以内。
+- **画面哈希**：`hash_baseline` 对步骤 2 的基线（`ignore/p5/s2/out/hash-after.json`）10 张场景 × 3 档全部相同（`ignore/p5/s3/out/hash-after.json`）。
+- dev 宿主已按工作区重新构建（`--mode development`）。
 
 ## 步骤 4 — 缩放
 
@@ -543,6 +714,7 @@ P4d 正在改 `render/scene.ts`、`render/uniforms.ts`、`compile/bundle.ts`、`
 | 没开视差时 `g_ParallaxPosition` 恒为 (0.5, 0.5) | 步骤 0 读码 | 步骤 0 只在开视差、`mouseinfluence 0` 时读到过 (0.5, 0.5)；语料 3351072238、3643916956 读它但没开视差，两张都还被别的挡着 | CLK 读它、视差关着的工程抓一帧 |
 | `/* */` 块注释 | 步骤 1 | 推断：和 `//` 是 jsoncpp 的同一个开关；语料 0 处 | `p5a-pre` 加一个带块注释的材质，看能否加载 |
 | `delay > 3` 时 k 为负、P 越走越远 | 步骤 2 | 照公式实现；语料最大 2.0 | 一个 `delay 3.2` 的工程连抓几帧；语料 0 张，可以不补 |
+| 预热时相机带不带抖动（跟随指针的粒子预热位置） | 步骤 3 | 我们预热与加载后第一帧的模拟都用 s = (0, 0)。依据是推断：步骤 3 实测粒子模拟用上一帧的相机，加载时还没有更新过相机。t = 0 时抖动偏移是 (amp, 0)，不是 0 | 开抖动、控制点跟随指针、有 `starttime` 的工程，抓开窗后头几帧的粒子位置；语料里同时开抖动和跟随指针的场景很少，可以只记不补 |
 
 **只能在 Kabegame 里真机走查（需要用户看）：**
 
@@ -559,7 +731,6 @@ P4d 正在改 `render/scene.ts`、`render/uniforms.ts`、`compile/bundle.ts`、`
 
 | 项 | 现状 | 怎么补 |
 |---|---|---|
-| 抖动把 eye 推开后，视差点跟着移 | 步骤 0 在 `3830255100` 上按 uniform 核对过；我们这边还没实现抖动 | 步骤 3 端到端：`3830255100` 和 WPE 同一 `g_Time` 的画面比 |
 | 缩放与视差叠加 | 步骤 0 在 `p5a-zoompar` 上按 uniform 核对过 | 步骤 4 端到端：`p5a-zoompar` 按步骤 2 的方法逐像素比 |
 
 **接受、不补：**
@@ -576,6 +747,8 @@ P4d 正在改 `render/scene.ts`、`render/uniforms.ts`、`compile/bundle.ts`、`
 - effect 的中间 pass、透视粒子都带视差：步骤 2 动工前补测 `p5a-fx`。
 - 跟随指针的控制点不含视差：步骤 0。
 - 场景比例和窗口不同时，视差点用场景宽高：步骤 0 的 `2381978484`，步骤 2 端到端再确认。
+- 抖动把 eye 推开后，视差点跟着移：步骤 3 端到端，`p5a-shakepar` 逐像素、`3830255100` 同一 `g_Time` 整帧比。
+- 粒子模拟用上一帧的相机：步骤 3 端到端补测 `p5a-shakepar`。
 
 ## P5a 收尾
 

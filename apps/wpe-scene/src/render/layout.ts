@@ -232,9 +232,15 @@ export function particleViewProjection(
   return multiply(projection, translation(-width / 2, -height / 2, -d));
 }
 
-/** 正交场景的 `g_EyePosition`：`(W/2, H/2, 2000)`，不取 JSON 的 `eye`（L2、L13）。W、H 是投影尺寸，不随渲染目标缩小。 */
-export function eyePosition(general: Pick<SceneGeneral, "width" | "height">): number[] {
-  return [general.width / 2, general.height / 2, 2000];
+/**
+ * 正交场景的 `g_EyePosition`：`(W/2 + ox, H/2 + oy, 2000)`，不取 JSON 的 `eye`（L2、L13）。W、H 是投影尺寸，不随渲染目标缩小。
+ * `offset` 是本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`）：WPE 先抖动 eye、再写 `g_EyePosition`（rea-p5-camera.md 第 5 节），缺省 (0, 0)。
+ */
+export function eyePosition(
+  general: Pick<SceneGeneral, "width" | "height">,
+  offset: readonly [number, number] = [0, 0],
+): number[] {
+  return [general.width / 2 + offset[0], general.height / 2 + offset[1], 2000];
 }
 
 /** 壁纸样式：与设置 `wallpaperStyle` 同义，几何照 `WallpaperStage` 的图片层。 */

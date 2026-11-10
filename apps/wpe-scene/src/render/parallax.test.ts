@@ -1,5 +1,6 @@
 /**
- * P5a 步骤 2（视差）：`parallax.ts` 的公式、`GpuScene` 的绘制矩阵、编译与就地写、渲染器的帧循环。
+ * P5a 步骤 2（视差）：`parallax.ts` 的公式、`GpuScene` 的绘制矩阵、编译与就地写、渲染器的帧循环。步骤 3（抖动）的 `GpuScene` 矩阵、
+ * 眼位、指针反投影与渲染器帧顺序也在这里（「抖动」两处，共用假设备），公式在 `shake.test.ts`。
  * 期望值取 WPE 实测（p5-REPORT「P5a 语义的实测核对」，逐帧数据在 `ignore/p5/a0/out/ana_a.txt`）；矩阵乘反（`T(o)·VP`）时平移落在
  * NDC 单位里，偏移差上百倍，下面按像素断言的用例都会失败。
  */
@@ -21,8 +22,8 @@ import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { pointerScenePoint } from "../particles/controlpoints";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { acquireGpu } from "./device";
-import { rootObject, sceneViewProjection } from "./layout";
-import { transformPoint, type Mat4 } from "./math";
+import { particleViewProjection, rootObject, sceneViewProjection, worldMatrixOf } from "./layout";
+import { identity, invert, multiply, transformPoint, translation, type Mat4 } from "./math";
 import {
   advanceParallax,
   drawParallax,
@@ -41,8 +42,9 @@ import {
 } from "./parallax";
 import { SceneRenderer } from "./renderer";
 import { GpuScene } from "./scene";
+import { shakeOffset } from "./shake";
 import { SceneState } from "./state";
-import type { FrameInput } from "./uniforms";
+import { drawMatrices, type FrameInput } from "./uniforms";
 
 vi.mock("./device", () => ({ acquireGpu: vi.fn() }));
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -257,6 +259,25 @@ describe("视差公式（p5-REPORT 实测）", () => {
     let manual = initialParallaxState(W, H);
     for (const frametime of dts) manual = advanceParallax(manual, parallaxInput(f, { ...frame, frametime }));
     expect(replayParallax(initialParallaxState(W, H), f, frame, dts)).toEqual(manual);
+  });
+
+  it("replayParallax 收每帧的 eye（P5a 步骤 3 的抖动）：和逐帧带 eye 推进相同；和帧时间不等长时报错", () => {
+    const f = fields({ cameraparallaxdelay: 2.7, cameraparallaxmouseinfluence: 1 });
+    const frame = { pointer: [1, 0] as [number, number], width: W, height: H };
+    const dts = [0.05, 0.05, 0.25];
+    const eyes: [number, number][] = [
+      [4.5, 5.9],
+      [-3, 2],
+      [0.25, -0.5],
+    ];
+    let manual = initialParallaxState(W, H);
+    dts.forEach((frametime, i) => {
+      manual = advanceParallax(manual, parallaxInput(f, { ...frame, frametime, eye: eyes[i] }));
+    });
+    const replayed = replayParallax(initialParallaxState(W, H), f, frame, dts, eyes);
+    expect(replayed).toEqual(manual);
+    expect(replayed).not.toEqual(replayParallax(initialParallaxState(W, H), f, frame, dts));
+    expect(() => replayParallax(initialParallaxState(W, H), f, frame, dts, eyes.slice(1))).toThrow("应等长");
   });
 });
 
@@ -860,6 +881,208 @@ describe("GpuScene：effect 各 pass 与粒子（p5a-fx、p5a-kinds）", () => {
   });
 });
 
+// ———— 抖动（P5a 步骤 3）————
+
+/** `shake1` 的第一行实测（`shake.test.ts`）：speed 1、amplitude 1、roughness 1，g_Time 5.152159690856934。 */
+const SHAKE_FIELDS = { camerashake: true, camerashakespeed: 1, camerashakeamplitude: 1, camerashakeroughness: 1 };
+const SHAKE_TIME = 5.152159690856934;
+const SHAKE = shakeOffset(SHAKE_FIELDS, SHAKE_TIME, H);
+
+/** `IMAGE_PROGRAM` 加 `g_EyePosition`（偏移 208）。 */
+const EYE_PROGRAM = {
+  ...IMAGE_PROGRAM,
+  uniforms: [
+    ...(IMAGE_PROGRAM as unknown as { uniforms: object[] }).uniforms,
+    { name: "g_EyePosition", type: "vec3<f32>", declared: "vec3", offset: 208, size: 12 },
+  ],
+  uniformBlockSize: 224,
+} as unknown as TranslateResult;
+const vec3At = (draw: DrawView, offset: number) =>
+  Array.from(new Float32Array(draw.uniformBuffer!.bytes.buffer.slice(offset, offset + 12)));
+
+/** 逐元素按相对误差比（`(base · T(−s)) · T(o)` 与 `base · T(o − s)` 的 float32 舍入不同）。 */
+function expectMatrixClose(actual: Mat4, expected: Mat4, label: string) {
+  for (let i = 0; i < 16; i++)
+    expect(Math.abs(actual[i] - expected[i]), `${label}[${i}]`).toBeLessThanOrEqual(
+      1e-5 * Math.max(1, Math.abs(expected[i])),
+    );
+}
+
+/** 一帧（同渲染器的调用顺序）：抖动、视差、同步、写每帧 uniform。 */
+function shakeFrame(scene: GpuScene, state: SceneState, shake: [number, number], parallax: SceneParallax | null) {
+  scene.setShake(shake);
+  scene.setParallax(parallax, state);
+  scene.sync(state);
+  scene.update(FRAME, state);
+}
+
+describe("GpuScene：抖动（P5a 步骤 3）", () => {
+  it.each([
+    { tag: "不开视差", parallax: null },
+    { tag: "带视差", parallax: { point: [700, 300], amount: 0.5 } as SceneParallax },
+  ])(
+    "$tag：图层（直接上屏、effect 各 pass）与正交 / 透视 / 世界空间粒子的矩阵都是 base · T(o − s)",
+    async ({ parallax }) => {
+      const bundle = bundleOf([
+        layer(0, { origin: [1460, 540, 0] }),
+        effectLayer(1, { origin: [460, 840, 0] }),
+        particleLayer(2, {}, { origin: [1460, 300, 0] }),
+        particleLayer(3, { flags: 4 }, { origin: [460, 840, 0] }),
+        particleLayer(4, { flags: 1 }, { origin: [300, 200, 0] }),
+      ]);
+      const { scene, state } = await open(bundle);
+      shakeFrame(scene, state, SHAKE, parallax);
+      const ortho = sceneViewProjection(bundle.general);
+      const perspective = particleViewProjection(bundle.general);
+      let checked = 0;
+      for (const draw of drawsOf(scene)) {
+        const layerState = state.layers.get(draw.object)!;
+        const [ox, oy] = parallax
+          ? parallaxOffset(parallax.amount, layerState.parallaxDepth, layerState.origin, parallax.point)
+          : [0, 0];
+        const shift = translation(ox - SHAKE[0], oy - SHAKE[1], 0);
+        const world = worldMatrixOf(draw.object, state.layers, new Map());
+        const sceneLayer = bundle.layers.find((item) => item.object === draw.object)!;
+        const label = `${draw.object} ${roleOf(draw)}`;
+        if (draw.step.kind === "particles") {
+          const flags = sceneLayer.particle!.flags;
+          const vp = multiply(flags & 4 ? perspective : ortho, shift);
+          expectMatrixClose(matrixAt(draw, 0), multiply(vp, flags & 1 ? identity() : world), label);
+        } else {
+          const vp = multiply(ortho, shift);
+          const matrices = drawMatrices(draw.step as Parameters<typeof drawMatrices>[0], world, sceneLayer.size, vp);
+          if (draw.step.role === "effect") {
+            // 中间 pass 读的效果纹理投影的逆
+            expectMatrixClose(matrixAt(draw, 64), invert(matrices.effectTextureProjection!)!, label);
+          } else {
+            // 基础 pass 用自己的整面矩阵，不读 VP：和抖动无关
+            expectMatrixClose(matrixAt(draw, 0), matrices.modelViewProjection, label);
+            if (draw.step.role !== "base") expectMatrixClose(matrixAt(draw, 128), vp, `${label} VP`);
+          }
+        }
+        checked++;
+      }
+      expect(checked).toBe(7);
+      // 本地系统的原点落在 (1460, 300) + o − s
+      const local = drawsOf(scene).find((draw) => draw.object === 2)!;
+      const [ox, oy] = parallax ? parallaxOffset(0.5, [1, 1], [1460, 300], parallax.point) : [0, 0];
+      const [x, y] = projectedOrigin(matrixAt(local, 0));
+      expect(x).toBeCloseTo(1460 + ox - SHAKE[0], 2);
+      expect(y).toBeCloseTo(300 + oy - SHAKE[1], 2);
+    },
+  );
+
+  it("g_EyePosition 与拖尾的眼位带 s，视差不改眼位", async () => {
+    const bundle = bundleOf([
+      layer(0, { origin: [1460, 540, 0] }),
+      particleLayer(1, { flags: 1, renderer: [{ name: "spritetrail" }] }),
+    ]);
+    bundle.programs = [EYE_PROGRAM, PARTICLE_PROGRAM];
+    const { scene, state } = await open(bundle);
+    const image = drawsOf(scene).find((draw) => draw.object === 0)!;
+    expect(vec3At(image, 208)).toEqual([960, 540, 2000]);
+    expect(scene.particleProbe(1)!.trailEye).toEqual([960, 540, 2000]);
+    shakeFrame(scene, state, SHAKE, { point: [700, 300], amount: 0.5 });
+    const eye = [Math.fround(960 + SHAKE[0]), Math.fround(540 + SHAKE[1]), 2000];
+    expect(vec3At(image, 208)).toEqual(eye);
+    // 世界空间系统的模型矩阵是单位阵：拖尾的眼位就是 g_EyePosition
+    expect(scene.particleProbe(1)!.trailEye).toEqual(eye);
+    // WPE 实测：g_EyePosition − (W/2, H/2) 就是表里的 s（shake1 第一行）
+    expect(eye[0] - 960).toBeCloseTo(4.597900390625, 3);
+    expect(eye[1] - 540).toBeCloseTo(5.96051025390625, 3);
+  });
+
+  it("关着时逐字节不变；s 回到 (0, 0) 时恢复原字节；s 与视差都没变时不重写，变了一帧只刷一次", async () => {
+    const bundle = bundleOf([layer(0, { origin: [1460, 540, 0] }), effectLayer(1, { origin: [460, 840, 0] })]);
+    bundle.programs = [EYE_PROGRAM, PARTICLE_PROGRAM];
+    const { scene, state } = await open(bundle);
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const snapshot = () => drawsOf(scene).map((draw) => Buffer.from(draw.uniformBuffer!.bytes).toString("hex"));
+    const plain = snapshot();
+    const refresh = vi.spyOn(scene as unknown as { refreshLayer: () => void }, "refreshLayer");
+    shakeFrame(scene, state, [0, 0], null);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(plain);
+    shakeFrame(scene, state, SHAKE, null);
+    expect(refresh).toHaveBeenCalledTimes(drawsOf(scene).length);
+    expect(snapshot()).not.toEqual(plain);
+    // 同一个 s 再交一次：不刷
+    refresh.mockClear();
+    shakeFrame(scene, state, SHAKE, null);
+    expect(refresh).not.toHaveBeenCalled();
+    // s 与视差同一帧都变：只刷一遍
+    shakeFrame(scene, state, [1, 2], { point: [0, 0], amount: 0.5 });
+    expect(refresh).toHaveBeenCalledTimes(drawsOf(scene).length);
+    refresh.mockClear();
+    shakeFrame(scene, state, [0, 0], null);
+    expect(refresh).toHaveBeenCalledTimes(drawsOf(scene).length);
+    expect(snapshot()).toEqual(plain);
+  });
+
+  it("粒子模拟的指针反投影带最近一次 setShake 的 s、不带视差：跟随点整体平移 s", async () => {
+    const bundle = bundleOf([particleLayer(0, {}, { origin: [1460, 300, 0] })]);
+    const { scene, state } = await open(bundle);
+    const draw = drawsOf(scene)[0];
+    const step = vi.spyOn(draw.particles!.system, "step");
+    const pointerOf = () => (step.mock.lastCall![2] as { pointer: [number, number] }).pointer;
+    const ortho = sceneViewProjection(bundle.general);
+    scene.stepParticles(0.05, 1, state, [0.25, 0.75]);
+    const still = pointerOf();
+    expect(still).toEqual(pointerScenePoint(ortho, [0.25, 0.75]));
+    scene.setShake(SHAKE);
+    scene.setParallax({ point: [0, 0], amount: 0.5 }, state);
+    scene.stepParticles(0.05, 1, state, [0.25, 0.75]);
+    const shaken = pointerOf();
+    expect(shaken).toEqual(pointerScenePoint(multiply(ortho, translation(-SHAKE[0], -SHAKE[1], 0)), [0.25, 0.75]));
+    expect(shaken[0] - still[0]).toBeCloseTo(SHAKE[0], 2);
+    expect(shaken[1] - still[1]).toBeCloseTo(SHAKE[1], 2);
+  });
+
+  it.each([
+    // p5a-shakepar（speed 1 / amplitude 1 / roughness 1，视差开、mouseinfluence 1、delay 0）：控制点 0 跟随指针，速度 0
+    {
+      frame: 119,
+      pointer: [0.8807291388511658, 0.8916666507720947],
+      time: 6.000349998474121,
+      previous: 5.913329601287842,
+      born: [1701.07, 127.796],
+    },
+    {
+      frame: 120,
+      pointer: [0.8947916626930237, 0.979629635810852],
+      time: 6.115821838378906,
+      previous: 6.000349998474121,
+      born: [1728.371, 32.687],
+    },
+  ])(
+    "WPE 实测（p5a-shakepar 第 $frame 帧）：新生粒子出生在「当帧指针 + 上一帧 s」的反投影点，按当帧 s 对不上",
+    async ({ pointer, time, previous, born }) => {
+      const bundle = bundleOf([particleLayer(0, {}, { origin: [960, 540, 0] })], {
+        ...SHAKE_FIELDS,
+        cameraparallaxmouseinfluence: 1,
+      });
+      const { scene, state } = await open(bundle);
+      const step = vi.spyOn(drawsOf(scene)[0].particles!.system, "step");
+      const cursor = pointer as [number, number];
+      // 渲染器的一帧：上一帧末尾交过上一帧的 s，这一帧先步进（用它），之后才交这一帧的 s
+      scene.setShake(shakeOffset(SHAKE_FIELDS, previous, H));
+      scene.stepParticles(1 / 60, time, state, cursor);
+      scene.setShake(shakeOffset(SHAKE_FIELDS, time, H));
+      const point = (step.mock.lastCall![2] as { pointer: [number, number] }).pointer;
+      expect(Math.abs(point[0] - born[0])).toBeLessThan(1e-2);
+      expect(Math.abs(point[1] - born[1])).toBeLessThan(1e-2);
+      // 对照：按当帧的 s 反投影差 0.3 像素左右
+      const current = shakeOffset(SHAKE_FIELDS, time, H);
+      const wrong = pointerScenePoint(
+        multiply(sceneViewProjection(bundle.general), translation(-current[0], -current[1], 0)),
+        cursor,
+      );
+      expect(Math.hypot(wrong[0] - born[0], wrong[1] - born[1])).toBeGreaterThan(0.1);
+    },
+  );
+});
+
 // ———— 渲染器 ————
 
 describe("渲染器：视差点的推进、重置与帧顺序", () => {
@@ -1024,6 +1247,90 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     frames.at(-1)!(now);
     expect(spies.setParallax.mock.lastCall![0]).toEqual({ point: [1920, 1080], amount: 0.25 });
     expect(spies.update.mock.lastCall![0].parallax).toEqual([1, 1]);
+    renderer.destroy();
+  });
+
+  it("抖动（P5a 步骤 3）：帧开头按本帧 g_Time 与脚本之前的字段算 s，粒子步进之后、脚本之前交给场景；视差点的 eye 是 s；脚本写的下一帧生效", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const bundle = bundleOf([layer(0)], { ...SHAKE_FIELDS, cameraparallaxmouseinfluence: 0 });
+    let script: ((renderer: SceneRenderer) => void) | null = null;
+    const { renderer, frames } = await start(bundle, (r) => script?.(r));
+    await renderer.load(bundle);
+    const scene = renderer.currentScene!;
+    const spies = {
+      setShake: vi.spyOn(scene, "setShake"),
+      sync: vi.spyOn(scene, "sync"),
+      stepParticles: vi.spyOn(scene, "stepParticles"),
+      setParallax: vi.spyOn(scene, "setParallax"),
+      update: vi.spyOn(scene, "update"),
+      encode: vi.spyOn(scene, "encode"),
+    };
+    const write = (r: SceneRenderer, value: boolean) =>
+      r.sceneState!.write({ property: "", target: { kind: "general", key: "camerashake" } }, value);
+    script = (r) => write(r, false);
+    now += 50;
+    frames.at(-1)!(now);
+    const order = Object.entries(spies)
+      .flatMap(([name, spy]) => spy.mock.invocationCallOrder.map((index) => [index, name] as const))
+      .sort((a, b) => a[0] - b[0])
+      .map(([, name]) => name);
+    expect(order).toEqual(["sync", "stepParticles", "setShake", "setParallax", "sync", "update", "encode"]);
+    // 脚本这一帧关掉了抖动，s 仍按脚本之前的字段算：本帧的 g_Time（已回绕，同 update 的帧输入）
+    const time = spies.update.mock.lastCall![0].time;
+    const shake = shakeOffset(SHAKE_FIELDS, time, H);
+    expect(shake[0]).not.toBe(0);
+    expect(spies.setShake.mock.lastCall![0]).toEqual(shake);
+    // delay 0、mouseinfluence 0：P = eye.xy + 场景中心
+    expect(sceneParallax(renderer)).toEqual({ point: [960 + shake[0], 540 + shake[1]], amount: 0.5 });
+    script = null;
+    now += 50;
+    frames.at(-1)!(now);
+    expect(spies.setShake.mock.lastCall![0]).toEqual([0, 0]);
+    expect(sceneParallax(renderer)).toEqual({ point: [960, 540], amount: 0.5 });
+    renderer.destroy();
+  });
+
+  it("抖动（P5a 步骤 3）：第 n 帧粒子用第 n − 1 帧的 s、绘制用第 n 帧的 s；加载后第一帧的粒子用 s = 0", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const shakeOf = (scene: GpuScene) => [...(scene as unknown as { shake: [number, number] }).shake];
+    const steps: { shake: number[]; time: number }[] = [];
+    const draws: { shake: number[]; time: number }[] = [];
+    const stepParticles = GpuScene.prototype.stepParticles;
+    vi.spyOn(GpuScene.prototype, "stepParticles").mockImplementation(function (
+      this: GpuScene,
+      ...args: Parameters<GpuScene["stepParticles"]>
+    ) {
+      steps.push({ shake: shakeOf(this), time: args[1] });
+      return stepParticles.apply(this, args);
+    });
+    const update = GpuScene.prototype.update;
+    vi.spyOn(GpuScene.prototype, "update").mockImplementation(function (
+      this: GpuScene,
+      ...args: Parameters<GpuScene["update"]>
+    ) {
+      draws.push({ shake: shakeOf(this), time: args[0].time });
+      return update.apply(this, args);
+    });
+    const bundle = bundleOf([layer(0)], SHAKE_FIELDS);
+    const { renderer, frames } = await start(bundle);
+    // load 里画第一帧
+    await renderer.load(bundle);
+    for (let i = 0; i < 3; i++) {
+      now += 50;
+      frames.at(-1)!(now);
+    }
+    expect(steps.length).toBe(4);
+    expect(draws.map((item) => item.time)).toEqual(steps.map((item) => item.time));
+    const s = (time: number) => shakeOffset(SHAKE_FIELDS, time, H);
+    expect(steps[0].shake).toEqual([0, 0]);
+    for (let n = 0; n < steps.length; n++) {
+      expect(draws[n].shake).toEqual(s(draws[n].time));
+      if (n > 0) expect(steps[n].shake).toEqual(s(steps[n - 1].time));
+    }
+    // 各帧的 s 互不相同，上面的断言能区分「上一帧」与「当帧」
+    expect(new Set(draws.map((item) => item.shake.join(","))).size).toBe(4);
     renderer.destroy();
   });
 });

@@ -15,7 +15,9 @@
  * - **初值**：加载时 P = eye.xy + (W/2, H/2)，即场景中心，开场有一段从中心滑向指针的过渡（`p5a-delay29` 开窗 4 s 后还在途中）。
  *
  * W、H 是场景的正交尺寸（`SceneGeneral.width/height`，不是可能被缩小的渲染目标），偏移是场景单位（`2381978484`：8192×5479 的场景
- * 放进 16:9 窗口，偏移仍按场景单位）。eye 是正交相机的 eye.xy，没有抖动时为 0（步骤 3 起加抖动）。
+ * 放进 16:9 窗口，偏移仍按场景单位）。eye 是正交相机的 eye.xy，就是本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`），没有抖动时为 0；
+ * `3830255100` 的 `g_EyePosition` 与视差点按「抖动 + 视差点」核对过（p5-REPORT）。加载时的初值仍是场景中心：WPE 在加载末尾按基准
+ * eye 写初值，那时还没有抖动。
  * 指针是 `g_PointerPosition`（已按壁纸样式换算，`layout.ts` 的 `scenePointer`）：WPE 的视差点直接用窗口归一化的指针乘场景宽高，
  * 和 `g_PointerPosition` 同源，不是控制点用的反投影。
  *
@@ -37,7 +39,7 @@ export interface ParallaxInput {
   mouseInfluence: number;
   /** `g_PointerPosition`（左上原点、y 向下，可能超出 0…1）。 */
   pointer: readonly [number, number];
-  /** 正交相机的 eye.xy：没有抖动时为 0（步骤 3 起加抖动）。 */
+  /** 正交相机的 eye.xy：本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`），没有抖动时为 0。 */
   eye: readonly [number, number];
   /** 场景的正交尺寸 W、H。 */
   width: number;
@@ -58,7 +60,7 @@ export interface ParallaxFrame {
   frametime: number;
   width: number;
   height: number;
-  /** 缺省 (0, 0)：正交、没有抖动。 */
+  /** 本帧的抖动偏移 s（`shakeOffset`）；缺省 (0, 0)：没有抖动。 */
   eye?: readonly [number, number];
 }
 
@@ -173,15 +175,22 @@ export function drawParallax(state: ParallaxState, fields: ParallaxFields): Scen
   return fields.cameraparallax ? { point: state.point, amount: fields.cameraparallaxamount } : null;
 }
 
-/** dev 探针的确定性回放：从 `state` 起按帧时间序列逐帧推进（开关与指针不变，探针没有脚本）。 */
+/**
+ * dev 探针的确定性回放：从 `state` 起按帧时间序列逐帧推进（开关与指针不变，探针没有脚本）。`eyes` 是每帧的 eye.xy（抖动偏移 s，
+ * P5a 步骤 3，探针按每帧的 `g_Time` 用 `shakeOffset` 算），和 `frametimes` 等长；不给时每帧取 `frame.eye`。
+ */
 export function replayParallax(
   state: ParallaxState,
   fields: ParallaxFields,
   frame: Omit<ParallaxFrame, "frametime">,
   frametimes: readonly number[],
+  eyes?: readonly (readonly [number, number])[],
 ): ParallaxState {
+  if (eyes && eyes.length !== frametimes.length)
+    throw new Error(`eyes 有 ${eyes.length} 项，frametimes 有 ${frametimes.length} 项，应等长`);
   let current = state;
-  for (const frametime of frametimes)
-    current = advanceParallax(current, parallaxInput(fields, { ...frame, frametime }));
+  frametimes.forEach((frametime, i) => {
+    current = advanceParallax(current, parallaxInput(fields, { ...frame, frametime, eye: eyes ? eyes[i] : frame.eye }));
+  });
   return current;
 }

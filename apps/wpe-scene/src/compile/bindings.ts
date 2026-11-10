@@ -36,7 +36,8 @@ type GeneralField =
 
 /**
  * WPE 里只改字段的 general 属性（L1），不重编译。`fov` 起的项正交场景不读，只存值，脚本能读回（已定 13）；`cameraparallax*` 例外，
- * 渲染器每帧读（P5a 步骤 2，`render/parallax.ts`），属性与脚本写入就地生效。
+ * 渲染器每帧读（P5a 步骤 2，`render/parallax.ts`），属性与脚本写入就地生效；`camerashake*` 同样每帧读（P5a 步骤 3，`render/shake.ts`），
+ * 在帧开头、脚本之前读，脚本写入下一帧生效。
  * `fallback` 是缺键时的值（L1 的构造默认值、L14 的实测）。
  */
 export const GENERAL_FIELDS = {

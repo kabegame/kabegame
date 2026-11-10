@@ -128,7 +128,8 @@ const ENGINE_COMBOS = new Set([
  *   实测见 P4a 实施记录（`rea-p4a.md` C7：只在场景属性表里，粒子路径不碰，`movement` 的重力只来自模块自己的 `gravity`）。
  * `cameraparallax*` 已实现（P5a 步骤 2，`render/parallax.ts`）：四个字段由 `GENERAL_FIELDS` 存值，渲染器每帧读，属性与脚本写入就地生效；
  * 透视场景开视差 WPE 不移动对象（rea-p5-camera.md 6.1，语料 0 张），透视整张另报 `camera:perspective`。
- * `camerashake*` 的调节项只在主开关打开时起作用，主开关打开时另报；`zoom` 为 1 时是恒等。
+ * `camerashake*` 已实现正交（P5a 步骤 3，`render/shake.ts`）：四个字段同样由 `GENERAL_FIELDS` 存值、渲染器每帧读；透视场景开抖动
+ * 另报 `general:camerashake`（归 P5d）。`zoom` 为 1 时是恒等。
  * `perspectiveoverridefov` 不是中性：它是透视粒子的 fov（C4，实测核对过），解析进 `SceneGeneral.perspectiveOverrideFov`，
  * 见 `PARSED_GENERAL`。
  */
@@ -286,7 +287,10 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   const g = scene.general ?? {};
   if (!g.orthogonalprojection) unsupported.add("camera:perspective");
   // `cameraparallax` 不再报（P5a 步骤 2）：视差点、`g_ParallaxPosition` 与对象平移已实现
-  for (const key of ["camerashake", "supportsaudioprocessing"]) if (active(g[key])) unsupported.add(`general:${key}`);
+  // `camerashake` 只在透视场景报（P5a 步骤 3）：正交的抖动已实现（`render/shake.ts`）；透视下幅度是 `0.1·amplitude` 个世界单位、
+  // 偏移是三维的，要和透视相机一起做，归 P5d（rea-p5-camera.md 第 5 节），透视场景整张另报 `camera:perspective`，这一条提醒 P5d 补上
+  if (!g.orthogonalprojection && active(g.camerashake)) unsupported.add("general:camerashake");
+  if (active(g.supportsaudioprocessing)) unsupported.add("general:supportsaudioprocessing");
   if (g.zoom !== undefined && g.zoom !== 1) unsupported.add("general:zoom");
   for (const [key, value] of Object.entries(g))
     if (

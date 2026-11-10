@@ -167,12 +167,39 @@ describe("能力表裁决", () => {
     const keys = new Set<string>();
     checkSceneFeatures(
       {
-        general: { ...vortexGeneral, camerashake: true, zoom: 2 },
+        general: { ...vortexGeneral, zoom: 2 },
         objects: [{ ...vortexObject, alignment: "topleft", perspective: true }],
       },
       keys,
     );
-    expect([...keys].sort()).toEqual(["general:camerashake", "general:zoom", "object:alignment", "object:perspective"]);
+    expect([...keys].sort()).toEqual(["general:zoom", "object:alignment", "object:perspective"]);
+  });
+  it("抖动（P5a 步骤 3）：正交场景开 camerashake、绑属性都不报；透视场景照报（透视抖动归 P5d）", () => {
+    const ortho = new Set<string>();
+    checkSceneFeatures(
+      {
+        general: {
+          ...vortexGeneral,
+          camerashake: true,
+          camerashakespeed: 1,
+          camerashakeamplitude: { user: "amp", value: 2 },
+          camerashakeroughness: 0.1,
+        },
+        objects: [vortexObject],
+      },
+      ortho,
+    );
+    expect([...ortho]).toEqual([]);
+    const bound = new Set<string>();
+    checkSceneFeatures({ general: { ...vortexGeneral, camerashake: { user: "s", value: true } }, objects: [] }, bound);
+    expect([...bound]).toEqual([]);
+    const { orthogonalprojection: _, ...perspectiveGeneral } = vortexGeneral;
+    const perspective = new Set<string>();
+    checkSceneFeatures({ general: { ...perspectiveGeneral, camerashake: true }, objects: [] }, perspective);
+    expect([...perspective].sort()).toEqual(["camera:perspective", "general:camerashake"]);
+    const still = new Set<string>();
+    checkSceneFeatures({ general: perspectiveGeneral, objects: [] }, still);
+    expect([...still]).toEqual(["camera:perspective"]);
   });
   it("视差已实现（P5a 步骤 2）：打开 cameraparallax、绑属性都不报，对象的 parallaxDepth 照旧放行", () => {
     const keys = new Set<string>();

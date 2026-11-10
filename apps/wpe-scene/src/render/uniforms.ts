@@ -232,8 +232,9 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
 }
 
 /**
- * 由图层状态算出的内置 uniform：就地刷新时只重写这一组，`pass.uniforms` 里有的名字（材质值，例如 passthrough 的
+ * 由图层状态与相机算出的内置 uniform：就地刷新时只重写这一组，`pass.uniforms` 里有的名字（材质值，例如 passthrough 的
  * `g_Color4 = (1, 1, 1, 1)`、材质自带的 `g_UserAlpha`）一律不动。
+ * `g_EyePosition`（P5a 步骤 3）：眼位带本帧的抖动，和矩阵一起在 `GpuScene.setParallax` 里随相机重写；不开抖动时值恒定，重写字节不变。
  */
 export const LAYER_UNIFORMS: ReadonlySet<string> = new Set([
   "g_ModelViewProjectionMatrix",
@@ -248,6 +249,7 @@ export const LAYER_UNIFORMS: ReadonlySet<string> = new Set([
   "g_EffectModelViewProjectionMatrixInverse",
   "g_EffectTextureProjectionMatrix",
   "g_EffectTextureProjectionMatrixInverse",
+  "g_EyePosition",
   "g_UserAlpha",
   "g_Alpha",
   "g_Color",
@@ -264,8 +266,9 @@ export const LIGHT_UNIFORMS = {
 /**
  * 各角色的变换（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：作用于 P1 的 `direct` 与合成链的三种角色。
  * `world` 是图层的世界矩阵（`layout.ts` 的 `worldMatrixOf`，沿父链累乘，P4a 步骤 1），下文的「模型矩阵」都是它。
- * `viewProjection` 是这次绘制的视图投影：开着视差时已是 `VP · T(o)`（`GpuScene.uniformValues`，P5a 步骤 2），下文的「图层 MVP」与
- * `g_ViewProjectionMatrix` 都带视差，只有 `base` 用自己的整面矩阵、不读它（`p5a-fx` 实测：effect 的中间 pass 读到的效果矩阵也带视差）。
+ * `viewProjection` 是这次绘制的视图投影：开着视差时已是 `VP · T(o)`（`GpuScene.uniformValues`，P5a 步骤 2），开着抖动时再带
+ * `T(−s)`，合起来是 `VP · T(o − s)`（步骤 3）。下文的「图层 MVP」与 `g_ViewProjectionMatrix` 都带视差与抖动，只有 `base` 用自己的
+ * 整面矩阵、不读它（`p5a-fx` 实测：effect 的中间 pass 读到的效果矩阵也带视差）。
  * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层世界矩阵；
  * - `base`：正交投影把图层四边形画满合成 RT，单位模型矩阵（B7）；
  * - `effect`：NDC 全屏四边形、MVP 为单位阵；`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)，

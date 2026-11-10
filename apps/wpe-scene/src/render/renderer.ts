@@ -12,6 +12,8 @@
  * - **视差**（P5a 步骤 2，`parallax.ts`）：视差点 P 在帧开头、粒子与脚本之前推进一次，脚本之后按当时的开关与 amount 交给
  *   `GpuScene.setParallax`（属性与脚本写 `cameraparallax*` 同帧生效），`g_ParallaxPosition` 随每帧 uniform 写。P 归渲染器：
  *   整场重编译保留，新场景回到场景中心（见 `load`）。
+ * - **抖动**（P5a 步骤 3，`shake.ts`）：帧开头、推进视差点之前，按本帧的 `g_Time` 算 eye 偏移 s，同一个 s 作视差点的 eye；粒子步进
+ *   之后、脚本之前才交给 `GpuScene.setShake`，所以粒子模拟用的是上一帧的 s（同 WPE，见 `render`）。渲染器不存 s。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
@@ -34,6 +36,7 @@ import {
 } from "./layout";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, type ParallaxState } from "./parallax";
 import { GpuScene } from "./scene";
+import { shakeOffset } from "./shake";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
 
@@ -517,12 +520,16 @@ export class SceneRenderer {
     const wrapped = time % TIME_WRAP_SECONDS;
     // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上
     const cursor = this.cursorOf(this.placement);
-    // 视差点（P5a 步骤 2）：帧开头、粒子与脚本之前推进一次，用本帧的 `g_PointerPosition` 与帧时间（补画帧为 0，k 也是 0）；
-    // 开关关着时 P 与 `g_ParallaxPosition` 都不动
     const [width, height] = this.projection;
+    // 抖动（P5a 步骤 3）：帧开头、视差点之前，用本帧的 `g_Time` 与脚本之前的字段算 eye 偏移 s（WPE 更新相机时算，在 lookAt 与
+    // 视差点之前，脚本之后才跑，rea-p5-camera.md 第 5 节；脚本写 `camerashake*` 下一帧才生效）。交给场景要等粒子步进之后，见下。
+    // 补画帧时间不变，s 也不变
+    const shake = shakeOffset(state.general, wrapped, height);
+    // 视差点（P5a 步骤 2）：帧开头、粒子与脚本之前推进一次，用本帧的 `g_PointerPosition` 与帧时间（补画帧为 0，k 也是 0）；
+    // 目标点的 eye.xy 就是 s（步骤 3）。开关关着时 P 与 `g_ParallaxPosition` 都不动
     this.parallax = advanceParallax(
       this.parallax,
-      parallaxInput(state.general, { pointer: this.pointer, frametime, width, height }),
+      parallaxInput(state.general, { pointer: this.pointer, frametime, width, height, eye: shake }),
     );
     // 粒子先于脚本（P4c 步骤 4）：WPE 一帧里先模拟粒子、后跑脚本，模拟用的对象变换是本帧脚本运行之前的（依据见
     // `GpuScene.stepParticles`）。步进之前先 `sync`：两帧之间写进状态的属性改值（`instanceoverride` 等）这一帧就进模拟器。
@@ -534,6 +541,12 @@ export class SceneRenderer {
       this.fail(reasonsOf(error, "render:frame"));
       return;
     }
+    // 本帧的 s 在粒子步进之后才交给场景：WPE 一帧里先对对象调更新（粒子模拟在这里），之后才选相机来源、加抖动、算 lookAt
+    // （rea-p5-camera.md 的帧顺序，`FUN_1401891a0`），所以模拟时的指针反投影用的是上一帧的视图（带上一帧的 s、不带视差），指针是当帧的。
+    // 实测 `p5a-shakepar` 第 119、120 帧：跟随指针的新生粒子按「当帧指针 + 上一帧 s」误差 0，按当帧 s 差 0.3 像素左右。加载后第一帧
+    // 的模拟用加载时的相机（s 为 0），同预热。绘制、`g_EyePosition`、视差点用当帧的 s（实测都对）：第一次 `sync` 里新建的 draw 用的是
+    // 旧相机，脚本之后的 `setParallax` 因相机变了整体重写
+    scene.setShake(shake);
     // 脚本在 try 外（同以前）：脚本自己的错误不走 `render:frame` 退回
     if (live) this.options.beforeFrame?.(frametime);
     const encoder = device.createCommandEncoder({ label: "scene frame" });

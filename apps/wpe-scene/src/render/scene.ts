@@ -39,6 +39,13 @@
  *   用自己的整面矩阵，本来就不读 VP）、正交与透视粒子都一样（p5-REPORT `p5a-fx`：WPE 画整个对象之前把视图换成带视差的）。粒子模拟与
  *   控制点反投影仍用不带视差的 `viewProjection`（跟随指针的粒子出生在不含视差的反投影点）。矩阵属于静态 uniform：P、开关或 amount 变了
  *   全部 draw 重写一遍，对象原点、根的 `parallaxDepth` 变了照旧经 `dirty.layers`。
+ * - 抖动（P5a 步骤 3）：渲染器每帧交来 eye 偏移 s（`setShake`，`render/shake.ts`，关着时 (0, 0)）。正交相机的 eye 与 center 加
+ *   同一个 s，视图就是 `T(−s)`：场景级的 `viewProjection`、透视粒子的 `perspectiveViewProjection` 都右乘它（透视粒子的覆盖改的是当前
+ *   V 的平移分量，当前 V 已带抖动，rea-p5-camera.md 7.2），眼位（`g_EyePosition` 与拖尾的 `trailEye`）加 s。视差的 `T(o)` 也是纯平移，
+ *   所以每次绘制是 `VP · T(−s) · T(o) = VP · T(o − s)`。粒子模拟与指针反投影用带抖动、不带视差的 `viewProjection`；渲染器在粒子步进
+ *   之后才交本帧的 s，所以模拟用的是上一帧的（WPE 先更新对象、后更新相机，`p5a-shakepar` 实测，见 `SceneRenderer.render`）。
+ *   `setShake` 只改场景级的值，全部 draw 的重写和视差共用一次，在 `setParallax` 里（s 或视差变了才刷）。
+ *   关着时 s 恒为 (0, 0)，矩阵与眼位逐字节同以前。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -521,10 +528,18 @@ export class GpuScene {
   /** 真正重建图层的次数与用时（毫秒）：计划签名没变的切换不算。dev 探针读。 */
   readonly rebuildStats = { count: 0, totalMs: 0, maxMs: 0 };
   private bloom: BloomChain | null = null;
-  /** 就地刷新 uniform 时复用的场景级常量（建场景时算一次）。 */
+  /** 就地刷新 uniform 时复用的场景级视图投影：`baseViewProjection · T(−s)`，s 是本帧的抖动（`setShake`）。 */
   private viewProjection: Float32Array = new Float32Array(16);
-  /** 透视粒子（`flags & 4`）的视图投影（`particleViewProjection`）。 */
+  /** 透视粒子（`flags & 4`）的视图投影：`basePerspectiveViewProjection · T(−s)`。 */
   private perspectiveViewProjection: Float32Array = new Float32Array(16);
+  /** 不带抖动的场景视图投影（`sceneViewProjection`，建场景时算一次）。 */
+  private baseViewProjection: Float32Array = new Float32Array(16);
+  /** 不带抖动的透视粒子视图投影（`particleViewProjection`，建场景时算一次）。 */
+  private basePerspectiveViewProjection: Float32Array = new Float32Array(16);
+  /** 本帧的抖动偏移 s（P5a 步骤 3，`setShake`）：不跨帧，只记本帧的值。 */
+  private shake: [number, number] = [0, 0];
+  /** `setShake` 改了相机、draw 还没按新相机重写：下一次 `setParallax` 整体刷一遍（与视差的刷新合成一次）。 */
+  private cameraDirty = false;
   /** 本帧的视差（P5a 步骤 2，`setParallax`）：null 为关着，绘制不加平移。 */
   private parallax: SceneParallax | null = null;
   /** 粒子层全场共用的索引缓冲（`quadIndices`），按最大的 `maxcount` 建一次；没有粒子层时为 null。 */
@@ -953,8 +968,9 @@ export class GpuScene {
 
     const fboPool = new Map<string, number>();
     const setup = device.createCommandEncoder({ label: "scene setup" });
-    this.viewProjection = sceneViewProjection(general);
-    this.perspectiveViewProjection = particleViewProjection(general);
+    // 建场景时 s 是 (0, 0)：两份相同，`setShake` 换成带抖动的
+    this.viewProjection = this.baseViewProjection = sceneViewProjection(general);
+    this.perspectiveViewProjection = this.basePerspectiveViewProjection = particleViewProjection(general);
     // 粒子的索引缓冲：全场一份，按最大的 maxcount 建
     const particleCapacity = plans.reduce(
       (max, plan, index) =>
@@ -1345,7 +1361,7 @@ export class GpuScene {
   /**
    * 一个 draw 的全部静态 uniform（建 draw 与就地刷新共用）：图层状态、按父链算的世界矩阵 + 场景级常量（建场景时算一次）。
    * 图层走 `drawUniformValues`，粒子走 `particleUniformValues`（透视粒子换视图投影）。视图投影是取矩阵的唯一入口，开着视差时
-   * 两条路径都换成带视差的（`viewProjectionOf`，P5a 步骤 2）。
+   * 两条路径都换成带视差的（`viewProjectionOf`，P5a 步骤 2）。场景级的视图投影与眼位带本帧的抖动（`setShake`，步骤 3）。
    */
   private uniformValues(
     step: DrawLike,
@@ -1397,7 +1413,8 @@ export class GpuScene {
   /**
    * 一次绘制的视图投影（P5a 步骤 2）：开着视差时是 `base · T(o)`（列向量约定：先把世界坐标平移 o，再投影；WPE 行向量下的
    * `V′ = T(o)·V`，rea-p5-camera.md 6.3），o 由 draw 所属对象的根对象的当前 `origin` 字段与 `parallaxDepth` 算；关着、根不在表里或
-   * o 为 0 时原样返回 `base`，字节不变。
+   * o 为 0 时原样返回 `base`，字节不变。`base` 是 `viewProjection` / `perspectiveViewProjection`，已带抖动的 `T(−s)`（步骤 3），
+   * 两个平移相乘就是 `VP · T(o − s)`。
    */
   private viewProjectionOf(layer: SceneLayer, state: SceneState, base: Mat4): Mat4 {
     const parallax = this.parallax;
@@ -1409,22 +1426,41 @@ export class GpuScene {
   }
 
   /**
+   * 本帧的抖动偏移 s（P5a 步骤 3，`render/shake.ts`）：渲染器每帧在粒子步进之后、脚本之前交来（关着时 (0, 0)）。和上一帧不同时
+   * 记下，换掉场景级的视图投影（`base · T(−s)`，正交与透视粒子各一份）与眼位（`eyePosition(general, s)`），并标记相机变了；s 为
+   * (0, 0) 时直接用基准矩阵，字节同没有抖动。只改场景级的值：下一次 `stepParticles`（即下一帧的模拟，同 WPE 用上一帧的相机）的
+   * 指针反投影用它，draw 的 uniform 留给随后的 `setParallax` 一起重写（一帧至多一次）。
+   */
+  setShake(offset: readonly [number, number]): void {
+    const [x, y] = offset;
+    if (x === this.shake[0] && y === this.shake[1]) return;
+    this.shake = [x, y];
+    const still = x === 0 && y === 0;
+    this.viewProjection = still ? this.baseViewProjection : multiply(this.baseViewProjection, translation(-x, -y, 0));
+    this.perspectiveViewProjection = still
+      ? this.basePerspectiveViewProjection
+      : multiply(this.basePerspectiveViewProjection, translation(-x, -y, 0));
+    this.eye = eyePosition(this.bundle.general, [x, y]);
+    this.cameraDirty = true;
+  }
+
+  /**
    * 本帧的视差（P5a 步骤 2）：渲染器每帧在脚本之后、第二次 `sync` 之前交来（开关关着时为 null）。和上一次不同（开与关互换、P 或
-   * amount 变）时记下，并按 `state` 把全部 draw 由图层算出的那组 uniform 重写一遍（`refreshLayer`，共用一份世界矩阵缓存）；相同时
-   * 什么都不做。之后单图层重建新建的 draw 按记下的值写。
+   * amount 变），或者 `setShake` 改了相机（步骤 3）时记下，并按 `state` 把全部 draw 由图层与相机算出的那组 uniform 重写一遍
+   * （`refreshLayer`，共用一份世界矩阵缓存），清掉相机的标记；都没变时什么都不做。之后单图层重建新建的 draw 按记下的值写。
    */
   setParallax(next: SceneParallax | null, state: SceneState): void {
     const current = this.parallax;
-    if (!current && !next) return;
-    if (
-      current &&
-      next &&
-      current.amount === next.amount &&
-      current.point[0] === next.point[0] &&
-      current.point[1] === next.point[1]
-    )
-      return;
+    const same =
+      (!current && !next) ||
+      (!!current &&
+        !!next &&
+        current.amount === next.amount &&
+        current.point[0] === next.point[0] &&
+        current.point[1] === next.point[1]);
+    if (same && !this.cameraDirty) return;
     this.parallax = next ? { point: [next.point[0], next.point[1]], amount: next.amount } : null;
+    this.cameraDirty = false;
     const worlds = new Map<number, Mat4>();
     for (const draw of this.draws) this.refreshLayer(draw, state, worlds);
   }
@@ -1632,7 +1668,8 @@ export class GpuScene {
    * 共用一份缓存），没给时用加载时的（`ParticleDraw.world`）。
    * 指针点的跟随点（P4c 步骤 2）：`cursor` 是这一帧光标下的场景纹理坐标（`FrameInput.cursor`，缺省场景中心），按场景的正交
    * `P·V` 反投影到 z = 0（`pointerScenePoint`），每次调用只算一次、交给每个系统（没有粒子层时不算）；透视粒子不另算（WPE 模拟时
-   * 栈上是正交投影，透视投影只在绘制时压栈，rea-p4c-sim.md 1.6）。
+   * 栈上是正交投影，透视投影只在绘制时压栈，rea-p4c-sim.md 1.6）。V 带最近一次 `setShake` 的抖动、不带视差（P5a 步骤 3：渲染器在
+   * 步进之后才交本帧的 s，所以是上一帧的，同 WPE；视差只在绘制时乘），跟随指针的控制点随抖动整体平移 s。
    *
    * 调用时机（P4c 步骤 4）：每帧在脚本之前，`update` 之前。WPE 一帧里先模拟粒子、后跑脚本，粒子拿到的是本帧脚本运行之前的对象
    * 变换（即上一帧脚本写完的）：预研回放 `ignore/p4/c4/prestudy.test.ts` 里脚本每帧移动、旋转的世界空间系统 `w-stay-w`，按「本帧

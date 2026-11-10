@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "../compile/model";
 import { parseParticle, type SceneParticle } from "../compile/particles";
+import { sceneViewProjection } from "../render/layout";
 import { identity, multiply, rotationX, rotationZ, scaling, translation } from "../render/math";
+import { shakeOffset } from "../render/shake";
 import { allocatedCount, BASE_COLUMNS, columnCount, ParticleColumns } from "./columns";
-import { IDENTITY_BASIS, identityControlPoints } from "./controlpoints";
+import { IDENTITY_BASIS, identityControlPoints, pointerScenePoint } from "./controlpoints";
 import { emissionCount, emitterState, sphereRandom } from "./emitters";
 import { orBits } from "./f32";
 import {
@@ -995,6 +997,71 @@ describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.m
       }),
     ).toThrow();
     expect(() => particleTrack({ ...options, cursors: [[0, 0]] })).toThrow();
+  });
+
+  describe("particleTrack 的抖动（P5a 步骤 3）：第 n 帧的跟随点按第 n − 1 帧的 s 反投影，第 1 帧与预热用 0", () => {
+    const def = particle({
+      maxcount: 32,
+      starttime: 0.3,
+      emitter: [{ name: "sphererandom", distancemax: 0, rate: 4 }],
+      initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+      controlpoint: [{ flags: 1 }],
+    });
+    // 对象在原点：粒子位置就是跟随点（场景坐标）
+    const layers = [{ object: 1, name: "p", particle: def, origin: [0, 0, 0], angles: [0, 0, 0], scale: [1, 1, 1] }];
+    const size = [1920, 1080] as const;
+    const SHAKE = { camerashake: true, camerashakespeed: 1, camerashakeamplitude: 1, camerashakeroughness: 1 };
+    const base = sceneViewProjection({ width: 1920, height: 1080 });
+    const follow = (cursor: readonly [number, number], s: readonly [number, number] = [0, 0]) =>
+      pointerScenePoint(multiply(base, translation(-s[0], -s[1], 0)), cursor);
+    /** 离 `point` 最近的粒子与它的距离。 */
+    const nearest = (track: ReturnType<typeof particleTrack>, point: readonly number[]) =>
+      Math.min(...track.frames[0].systems.p.map((item) => Math.hypot(item.pos[0] - point[0], item.pos[1] - point[1])));
+
+    it.each([
+      // p5a-shakepar（speed 1 / amplitude 1 / roughness 1）：第 n − 1 帧的指针没用到（那一帧的出生点不比）
+      {
+        frame: 119,
+        pointer: [0.8807291388511658, 0.8916666507720947] as const,
+        times: [5.913329601287842, 6.000349998474121],
+        born: [1701.07, 127.796],
+      },
+      {
+        frame: 120,
+        pointer: [0.8947916626930237, 0.979629635810852] as const,
+        times: [6.000349998474121, 6.115821838378906],
+        born: [1728.371, 32.687],
+      },
+    ])("WPE 实测第 $frame 帧：新生粒子在「当帧指针 + 上一帧 s」，和 WPE 差 < 1e-2；不给 shake 时差十几像素", (item) => {
+      const options = {
+        layers,
+        dts: [0.25, 0.25],
+        times: item.times,
+        frames: [2],
+        passes: 1 as const,
+        size,
+        cursors: [[0.5, 0.5] as const, item.pointer],
+      };
+      expect(nearest(particleTrack({ ...options, shake: SHAKE }), item.born)).toBeLessThan(1e-2);
+      expect(nearest(particleTrack(options), item.born)).toBeGreaterThan(10);
+    });
+
+    it("没给 times 时按累加的场景时间；第 1 帧（和预热）不带抖动；关着时与不给逐字节相同", () => {
+      const cursors = [[0.25, 0.75] as const, [0.5, 0.25] as const, [0.75, 0.5] as const];
+      const options = { layers, dts: [0.25, 0.25, 0.25], frames: [3], passes: 1 as const, size, cursors };
+      const track = particleTrack({ ...options, shake: SHAKE });
+      const s = (time: number) => shakeOffset(SHAKE, time, 1080);
+      expect(nearest(track, follow(cursors[0]))).toBeLessThan(1e-3);
+      expect(nearest(track, follow(cursors[1], s(0.25)))).toBeLessThan(1e-3);
+      expect(nearest(track, follow(cursors[2], s(0.5)))).toBeLessThan(1e-3);
+      // 当帧 s 对不上：s(0.5) 与 s(0.75) 差几像素
+      expect(nearest(track, follow(cursors[2], s(0.75)))).toBeGreaterThan(0.5);
+      const plain = particleTrack(options);
+      expect(particleTrack({ ...options, shake: { ...SHAKE, camerashake: false } })).toEqual(plain);
+      expect(JSON.stringify(particleTrack({ ...options, shake: { ...SHAKE, camerashake: false } }))).toBe(
+        JSON.stringify(plain),
+      );
+    });
   });
 });
 

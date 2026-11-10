@@ -10,10 +10,12 @@
  * `times[n − 1]`，没给时是 `dts` 前 n 项之和（P4b 步骤 4）。可见性（步骤 5）不处理。
  * 控制点的输入（P4c 步骤 1）是对象的世界矩阵：按全部图层的编译期变换沿父链算（`worldMatrixOf`），静态、不跑脚本；指针的跟随点
  * （P4c 步骤 2）按每帧的 `cursors` 与场景的正交投影反投影（`pointerScenePoint`），预热用第 1 项。
+ * 给了 `shake`（P5a 步骤 3）时反投影的视图带上一帧的抖动 `T(−s)`，同渲染器（WPE 先模拟粒子、后更新相机，`render/renderer.ts`）。
  */
 import type { SceneLayer } from "../compile/bundle";
 import { sceneViewProjection, worldMatrixOf } from "../render/layout";
-import type { Mat4 } from "../render/math";
+import { multiply, translation, type Mat4 } from "../render/math";
+import { shakeOffset, type ShakeFields } from "../render/shake";
 import { pointerScenePoint } from "./controlpoints";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { injectedR, SeededRandom } from "./random";
@@ -79,6 +81,13 @@ export interface ParticleTrackOptions {
    * 按 (0, 0)（同 `ParticleSystem` 的缺省输入，只给单测）。
    */
   size?: readonly [number, number];
+  /**
+   * 场景的抖动字段（P5a 步骤 3，`general.fields`）。给了且开着时，第 i 帧（从 1 起）的跟随点按上一帧的 s 反投影：
+   * `pointerScenePoint(sceneViewProjection · T(−s_{i−1}), cursor_i)`，`s_{i−1}` 由第 i − 1 帧的场景时间（同下面的 `times` /
+   * 累加值）与 `size[1]` 代入 `shakeOffset`；第 1 帧与预热用 s = 0（加载后第一帧的模拟用加载时的相机，同渲染器）。不给或关着时
+   * 和以前逐字节相同。
+   */
+  shake?: ShakeFields;
   /** 随机种子；第 i 个粒子层用 `seed + i`。缺省 1。 */
   seed?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`（`injectedR`，用完退回种子随机数），同 dev 探针 `renderFrame` 的 `particles.random`。 */
@@ -170,9 +179,15 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   if (cursors && cursors.length !== options.dts.length)
     throw new Error(`cursors 有 ${cursors.length} 项，dts 有 ${options.dts.length} 项，应等长`);
   const viewProjection = size ? sceneViewProjection({ width: size[0], height: size[1] }) : null;
-  /** 第 i 帧（从 0 起）的跟随点：每帧反投影一次，全部系统共用。 */
-  const pointerAt = (i: number): readonly [number, number] =>
-    viewProjection ? pointerScenePoint(viewProjection, cursors?.[i] ?? [0.5, 0.5]) : [0, 0];
+  /** 第 i 帧（从 0 起）的跟随点：每帧反投影一次，全部系统共用。`shake` 是模拟时相机的抖动（上一帧的 s），为 0 时用原矩阵。 */
+  const pointerAt = (i: number, shake: readonly [number, number] = [0, 0]): readonly [number, number] => {
+    if (!viewProjection) return [0, 0];
+    const view =
+      shake[0] === 0 && shake[1] === 0
+        ? viewProjection
+        : multiply(viewProjection, translation(-shake[0], -shake[1], 0));
+    return pointerScenePoint(view, cursors?.[i] ?? [0.5, 0.5]);
+  };
   const loadPointer = pointerAt(0);
   const names = new Set<string>();
   const systems: { name: string; system: ParticleSystem; world: Mat4 }[] = [];
@@ -213,12 +228,16 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     throw new Error(`times 有 ${options.times.length} 项，dts 有 ${options.dts.length} 项，应等长`);
   const frames: ParticleTrackFrame[] = [];
   let elapsed = 0;
+  /** 上一帧的抖动 s（P5a 步骤 3）：这一帧模拟时的相机；第 1 帧是加载时的 0。 */
+  let previousShake: readonly [number, number] = [0, 0];
   for (let frame = 1; frame <= last; frame++) {
     const dt = options.dts[frame - 1];
     elapsed = (elapsed + dt) % TIME_WRAP_SECONDS;
     const time = options.times ? options.times[frame - 1] : elapsed;
-    const pointer = pointerAt(frame - 1);
+    const pointer = pointerAt(frame - 1, previousShake);
     for (const { system, world } of systems) system.step(dt, time, { world, pointer });
+    // 步进之后才换上这一帧的 s：下一帧的模拟用它
+    if (options.shake && size) previousShake = shakeOffset(options.shake, time, size[1]);
     if (!wanted.has(frame)) continue;
     const out: Record<string, ParticleTrackParticle[]> = {};
     for (const { name, system } of systems) {

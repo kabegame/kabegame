@@ -28,6 +28,7 @@ import { particleSnapshot, type ParticleTrackParticle } from "../particles/track
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
 import { acquireGpu } from "../render/device";
 import { drawParallax, initialParallaxState, replayParallax } from "../render/parallax";
+import { shakeOffset } from "../render/shake";
 import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
 import { GpuScene, type ParticleOptions } from "../render/scene";
@@ -256,6 +257,8 @@ export function replayParticleOptions(replay: ParticleReplay | undefined): Parti
  * 再 `update`（P4c 步骤 4 起 `update` 不步进粒子）。
  * 每帧的 `g_Time` 取 `times`，没给时是 dt 的累计值（double）；同一个值也作粒子的场景时间 `T`。没有回放时时间取 `time`、
  * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是每帧光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心。
+ * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 调一次（P5a 步骤 3：探针在这里设这一帧的抖动，`frameShake`；同渲染器，
+ * 粒子先用上一帧的 s 步进，再换上这一帧的）。
  */
 export function replayParticles(
   scene: Pick<GpuScene, "stepParticles">,
@@ -263,6 +266,7 @@ export function replayParticles(
   replay: ParticleReplay | undefined,
   time = 0,
   cursor: readonly [number, number] = [0.5, 0.5],
+  afterStep?: (time: number) => void,
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
@@ -270,8 +274,34 @@ export function replayParticles(
     throw new Error(`times 有 ${times.length} 项，dts 有 ${dts.length} 项，应等长`);
   let elapsed = 0;
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
-  for (let i = 0; i < dts.length - 1; i++) scene.stepParticles(dts[i], timeAt(i), state, cursor);
+  for (let i = 0; i < dts.length - 1; i++) {
+    const at = timeAt(i);
+    scene.stepParticles(dts[i], at, state, cursor);
+    afterStep?.(at);
+  }
   return { time: timeAt(dts.length - 1), frametime: dts[dts.length - 1] };
+}
+
+/**
+ * 探针回放的抖动（P5a 步骤 3）：每一帧按这一帧的 `g_Time` 算 s（`shakeOffset`，`height` 是场景的正交高）、交给 `GpuScene.setShake`，
+ * 并记下来；`eyes` 按帧序就是 `replayParallax` 的每帧 eye。回放的 n−1 帧经 `replayParticles` 的 `afterStep` 调，读回的那一帧
+ * 由调用方在步进之后、`setParallax` 之前调。和渲染器一样，每一帧的粒子先用上一帧的 s 步进（第一帧是加载时的 0），再换上这一帧的。
+ */
+export function frameShake(
+  scene: Pick<GpuScene, "setShake">,
+  state: SceneState,
+  height: number,
+): { apply: (time: number) => [number, number]; eyes: [number, number][] } {
+  const eyes: [number, number][] = [];
+  return {
+    eyes,
+    apply(time) {
+      const shake = shakeOffset(state.general, time, height);
+      scene.setShake(shake);
+      eyes.push(shake);
+      return shake;
+    },
+  };
 }
 
 export interface ParticleCornersOptions {
@@ -367,20 +397,25 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
       particles: replayParticleOptions(options.particles),
     });
     try {
-      const { time, frametime } = replayParticles(scene, state, options.particles);
-      // 视差（P5a 步骤 2）：指针固定在 (0.5, 0.5)，从加载时的场景中心起按同一串帧时间推进（同 `renderFrame`），四角带视差
       const { width, height } = bundle.general;
+      // 抖动（P5a 步骤 3）：每一帧先用上一帧的 s 步进粒子、再设这一帧的（同 `renderFrame` 与渲染器），四角带读回帧的抖动
+      const shake = frameShake(scene, state, height);
+      const { time, frametime } = replayParticles(scene, state, options.particles, 0, [0.5, 0.5], shake.apply);
+      // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
+      // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算
+      scene.sync(state);
+      scene.stepParticles(frametime, time, state, [0.5, 0.5]);
+      shake.apply(time);
+      // 视差（P5a 步骤 2）：指针固定在 (0.5, 0.5)，从加载时的场景中心起按同一串帧时间与每帧的 s 推进（同 `renderFrame`），四角带视差。
+      // 没有脚本，`setParallax` 放在 `sync` 之后不影响结果（相机或视差变了它整体重写）
       const parallax = replayParallax(
         initialParallaxState(width, height),
         state.general,
         { pointer: [0.5, 0.5], width, height },
         [...(options.particles?.dts ?? []).slice(0, -1), frametime],
+        shake.eyes,
       );
       scene.setParallax(drawParallax(parallax, state.general), state);
-      // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
-      // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算
-      scene.sync(state);
-      scene.stepParticles(frametime, time, state, [0.5, 0.5]);
       scene.update(
         {
           time,

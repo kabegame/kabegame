@@ -39,6 +39,7 @@
 | 前置：translucent / additive 不写深度，`depthtest: disabled` 连带不写 | translucent、additive 写 `depthwrite: enabled` 时深度开、不写、GREATER；normal 时开、写；`depthtest: disabled` 时深度关 | 成立 |
 | 前置：`cropoffset`、对象 `config` 运行时不读 | 写了 `cropoffset "100 100"` 的层、带 `config.passthrough` 的层都画在原点，和对照层相同 | 成立 |
 | 前置：模型 JSON 的布尔键只认 `true` | `fullscreen: 1` 的层照常按 60×60 画在原点，没有铺满 | 成立 |
+| 粒子模拟（指针反投影）用的视图带不带抖动（步骤 3 端到端补测 `p5a-shakepar`：抖动 speed 1 / amplitude 1 / roughness 1，视差 mouseinfluence 1、delay 0，系统 `pf` 的控制点 0 跟随指针、粒子速度 0） | 第 119、120 帧的新生粒子在 (1701.07, 127.796)、(1728.371, 32.687)：按「当帧指针 + **上一帧**的 s」两帧误差都是 0.000；按「当帧指针 + 当帧 s」差 (−0.30, 0.11)、(−0.28, 0.36)；按「上一帧指针 + 当帧 s」差几十像素 | **粒子模拟用上一帧的相机**（带上一帧的抖动、不带视差），指针用当帧的。和读码的帧顺序一致：`FUN_1401891a0` 先对 `G+0x158` 的对象调更新（粒子模拟在这里），之后才选相机来源、加抖动、算 lookAt。绘制、`g_EyePosition`、视差点都用当帧的 s |
 
 **顺带确认的事实（给后面几节）：**
 - 正交 2D 场景里 WPE 也绑着深度目标；深度开时比较函数是 GREATER；光栅状态 `front_ccw` 为真（P5d）。
