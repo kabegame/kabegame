@@ -39,6 +39,19 @@ import {
   type SequenceState,
 } from "./mapsequence";
 import {
+  remapControlPointRefs,
+  remapIndex,
+  remapInitialValue,
+  remapInputSupported,
+  remapOutputSupported,
+  remapTransformSupported,
+  remapValue,
+  REMAP_COMPONENTS,
+  REMAP_OPERATIONS,
+  REMAP_PROPERTIES,
+  type RemapKind,
+} from "./remap";
+import {
   alphaChange,
   alphaFade,
   angularMovement,
@@ -69,11 +82,13 @@ export type ParticleFieldValue = number | number[] | string;
  * - `vec3`：`"x y z"` 字符串，少写的分量为 0、多写的忽略；写成数字时没读到 WPE 的处理，按不支持报；
  * - `vec3z`：同 `vec3`，写成数字时只作用于 z，x、y 保持缺省（`rotationrandom` 的 `min` / `max`，B【确】）；
  * - `vec3str`：同 `vec3`，只接受字符串，写成数字时保持缺省、不报（`angularvelocityrandom` 的 `min` / `max`，B【确】）；
+ * - `vec3splat`：字符串读三个数（少写的分量为 0、多写的忽略），写成数字时原样铺满三分量；缺省值写成数字同样铺满
+ *   （remap 的 `inputrange*` / `outputrange*`，rea-p4d-modules.md 2.1「字符串读三个数，否则 `asFloat` 铺满三分量」，P4d 步骤 4a）；
  * - `string`：字符串；
  * - `bool`：jsoncpp `asBool`（rope 的 `uvscrolling`、`uvsmoothing`，rea-p4d-rope.md 3.1）：布尔原样，数字按非 0 为真，解析成
  *   1 / 0；字符串、对象 WPE 会抛异常，这里按形状不对报。
  */
-export type ParticleFieldType = "number" | "int" | "vec3" | "vec3z" | "vec3str" | "string" | "bool";
+export type ParticleFieldType = "number" | "int" | "vec3" | "vec3z" | "vec3str" | "vec3splat" | "string" | "bool";
 
 /** JSON 单位的缺省值（未换算）。两套时按场景是否正交选（`rea-p4a.md`「基础」）。 */
 export type ParticleFieldDefault =
@@ -198,6 +213,19 @@ export interface ParticleRunContext {
    * 从控制点抄出 9 个分量（`0x140237c42`、`0x1402384c8` 起），不看旋转条件。
    */
   basis: Float32Array;
+  /**
+   * 系统时间 `St`（`sys+0x3f0`，P4d 步骤 4a，rea-p4d-modules.md 2.2）：`remapinitialvalue` 的输入 `particlesystemtime` 读它（op 读的是
+   * `time`）。模拟器每帧在模拟之前 `+= dt′`（乘过 `instanceoverride.rate`，float32，`FUN_1402308a0` 开头 `0x1402308c2`），系统复位
+   * （`suspend`）清零，预热不累加。下面三项只有模拟器填；单测手写的上下文可以不给，按 0。
+   */
+  systemTime?: number;
+  /**
+   * 图层时间（`obj+0x770`，P4d 步骤 4a）：remap 的输入 `layertime`。可见时每帧 `+= dt′`（`FUN_140230650` 的 `0x140230810`，早于
+   * 系统的模拟），不可见且有存活粒子时清零（同 `suspend`）。一个对象一个系统，所以存在系统上。
+   */
+  layerTime?: number;
+  /** 对象原点 `W.t`（本帧控制点输入的世界矩阵的平移，P4d 步骤 4a）：remap 的输入 `layerorigin`，和系统空间无关。 */
+  origin?: Float32Array;
 }
 
 /**
@@ -241,6 +269,12 @@ export interface ParticleModuleDef {
    * `systemFlags` 是系统 `flags`（禁用位决定条目登没登记）。
    */
   instanceState?: (state: unknown, fields: ParticleFields, systemFlags: number) => void;
+  /**
+   * 字段名不是 `controlpoint` / `controlpointstart` / `controlpointend` 的控制点引用（P4d 步骤 4a，参数是解析值）：返回要计入控制点
+   * 个数的下标（`controlpoints.ts` 的 `controlPointCount`）。只有 remap 两个模块（`remap.ts` 的 `remapControlPointRefs`，按输入、输出
+   * 的种类计 `inputcontrolpoint*` / `outputcontrolpoint*`，rea-p4d-modules.md 2.1）。
+   */
+  controlPointRefs?: (fields: Readonly<Record<string, ParticleFieldValue>>) => number[];
 }
 
 const num = (value: ParticleFieldDefault, supported?: ParticleFieldDef["supported"]): ParticleFieldDef => ({
@@ -392,12 +426,86 @@ const SEQUENCE_FIELDS: Record<string, ParticleFieldDef> = {
 /** `mapsequencebetweencontrolpoints` 的 `flags` 里有读者的位（rea-p4d-modules.md 1.2【确】）：1、2、4、8、0x10、0x20。 */
 const BETWEEN_FLAGS = 0x3f;
 
+/** 只认表里名字的字符串字段（remap 的枚举）：不在表里的照报。 */
+const named = (value: string, table: readonly string[]): ParticleFieldDef => ({
+  type: "string",
+  default: value,
+  supported: (v) => remapIndex(table, v) >= 0,
+});
+
+/**
+ * `remapinitialvalue` / `remapvalue` 的字段（rea-p4d-modules.md 2.1 的字段表，P4d 步骤 4a）：缺省不分正交 / 透视，两个模块只有
+ * `input` 的缺省不同，blend 四键只有 op 有。枚举的名字表、照报的取值与执行见 `remap.ts`：
+ * - `operation`：`remap` / `multiply` / `add` / `subtract`，其它字符串照报（WPE 存 5，不写）；
+ * - `input` / `output`：20 个属性名，`timeofday`（写入点没找到）与未知名字照报；输出的 `lifetimefraction`、9–12、`layerorigin` 读码
+ *   确定不写，放行。4a 期间照报 init 的输入 `controlpoint` / `deltatocontrolpoint` / `directiontocontrolpoint` 与两边的输出
+ *   `controlpoint`（4b 放开）；op 的输出 `maxlifetime` 一直照报（WPE 按 4 个一组写死槽的 life、存活数下溢，复刻不了），init 的放行；
+ * - `inputcomponent` / `outputcomponent`：8 个名字，未知照报；输出分量写出时只认 `all`–`z`，其余不写（读码确定，放行）；
+ * - `transformfunction`：7 个名字，未知照报；4a 期间两种噪声照报（4b）；
+ * - `inputrange*` / `outputrange*`：`vec3splat`；输入区间为 0 的分量执行时换成 `FLT_EPSILON`，输出区间不防 0；
+ * - 四个控制点下标：解析期 `min(·, 7)`（`clampControlPoint`），`inputcontrolpoint1` 两个执行段都不读、只计数；
+ * - `transformoctaves`：`asUInt`、不钳制（噪声用，4b）；
+ * - `flags`：bit0 归一化后夹到 [0, 1]，bit1 输出区间后夹到 [0, 1]，别的位没有读者，中性。
+ */
+function remapFields(kind: RemapKind): Record<string, ParticleFieldDef> {
+  const property = (value: string, supported: (v: ParticleFieldValue) => boolean): ParticleFieldDef => ({
+    type: "string",
+    default: value,
+    supported,
+  });
+  return {
+    operation: named("multiply", REMAP_OPERATIONS),
+    input: property(kind === "init" ? "maxlifetime" : "lifetimefraction", (v) => remapInputSupported(kind, v)),
+    output: property("size", (v) => remapOutputSupported(kind, v)),
+    inputcomponent: named("all", REMAP_COMPONENTS),
+    outputcomponent: named("all", REMAP_COMPONENTS),
+    transformfunction: property("none", remapTransformSupported),
+    inputrangemin: { type: "vec3splat", default: 0 },
+    inputrangemax: { type: "vec3splat", default: 1 },
+    outputrangemin: { type: "vec3splat", default: 0 },
+    outputrangemax: { type: "vec3splat", default: 1 },
+    inputcontrolpoint0: int(0),
+    outputcontrolpoint0: int(0),
+    inputcontrolpoint1: int(1),
+    outputcontrolpoint1: int(1),
+    transforminputscale: num(2),
+    transformoctaves: int(3),
+    flags: int(1),
+    ...(kind === "op" ? BLEND : {}),
+  };
+}
+
+/** remap 解析期的修正：四个控制点下标 `min(·, 7)`（无符号），`transformoctaves` 取无符号整数。 */
+function normalizeRemap(fields: Record<string, ParticleFieldValue>): void {
+  for (const key of ["inputcontrolpoint0", "outputcontrolpoint0", "inputcontrolpoint1", "outputcontrolpoint1"])
+    fields[key] = clampControlPoint(fields[key] as number);
+  fields.transformoctaves = asUInt32(fields.transformoctaves as number);
+}
+
+/** remap 读写的列（输入、输出可能碰到的全部列）。 */
+const REMAP_COLUMNS: readonly ParticleColumn[] = [
+  "age",
+  "life",
+  "frame",
+  "size",
+  "size0",
+  "rotation",
+  "angularVelocity",
+  "position",
+  "velocity",
+  "color",
+  "alpha",
+  "color0",
+  "alpha0",
+];
+
 /**
  * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
  * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`）、步骤 4 的 3 个噪声类模块（initializer `turbulentvelocityrandom`、
  * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`、`spritetrail`
- * （P4c 步骤 5）与 rope 两类（`rope` P4d 步骤 1，`ropetrail` P4d 步骤 2），以及 P4d 步骤 3 的 initializer
- * `mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`（第一批有运行状态的模块，`mapsequence.ts`）。
+ * （P4c 步骤 5）与 rope 两类（`rope` P4d 步骤 1，`ropetrail` P4d 步骤 2），P4d 步骤 3 的 initializer
+ * `mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`（第一批有运行状态的模块，`mapsequence.ts`），以及 P4d 步骤 4a 的
+ * initializer `remapinitialvalue`、operator `remapvalue`（同一条管线，`remap.ts`；噪声与写控制点归 4b，按字段照报）。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -648,6 +756,19 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     instanceState: (state, fields, systemFlags) => betweenInstanceState(state as SequenceState, fields, systemFlags),
   },
   {
+    // rea-p4d-modules.md 2.1（initializer 15，记录 `FUN_1401d8970` 类型 0xf，解析 `0x1401ca6cd`–`0x1401cb052`，缺省 `FUN_1401bc4b0` +
+    // `FUN_1401d8040`，执行 `0x14023ce53`）：出生时对新粒子走一遍 remap 管线，写初始值列（`remap.ts`，P4d 步骤 4a）。不置列标志、
+    // 没有 `instanceoverride` 条目、不用音频、不抽随机数
+    category: "initializer",
+    name: "remapinitialvalue",
+    fields: remapFields("init"),
+    columns: REMAP_COLUMNS,
+    columnFlags: 0,
+    normalize: normalizeRemap,
+    run: remapInitialValue,
+    controlPointRefs: remapControlPointRefs,
+  },
+  {
     // 半隐式欧拉，drag 按 k0 衰减（实测核对过）。`previousPosition` 只在列标志 bit2 时开头拷一次
     category: "operator",
     name: "movement",
@@ -851,6 +972,24 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     run: capVelocity,
   },
   {
+    // rea-p4d-modules.md 2.1（operator 19，记录 `FUN_1401d8c70` 类型 0x13，有 blend 键时 0x27；解析 `0x1401ce660`–`0x1401cf140`，缺省
+    // `FUN_1401bfbb0` + `FUN_1401d8040`，执行非 blend `0x140244874`、blend `0x140246ec0`）：每遍对 `[0, count)` 走一遍 remap 管线，写当前
+    // 值列与持久列（`remap.ts`，P4d 步骤 4a）。不用 `h`、`k`；没有 `instanceoverride` 条目、不用音频
+    category: "operator",
+    name: "remapvalue",
+    fields: remapFields("op"),
+    columns: REMAP_COLUMNS,
+    columnFlags: 0,
+    // 输出 opacity 时 `def+0xc |= 0x10`（alpha 当前值列），输出 color 时 `|= 0x08`（颜色当前值列）（rea 2.1【确】）
+    columnFlagsOf: (fields) => {
+      const output = remapIndex(REMAP_PROPERTIES, fields.output);
+      return output === 3 ? COLUMN_FLAGS.alpha : output === 13 ? COLUMN_FLAGS.color : 0;
+    },
+    normalize: normalizeRemap,
+    run: remapValue,
+    controlPointRefs: remapControlPointRefs,
+  },
+  {
     // rea-p4c-render.md 7.1（renderer 类型 1，分支 `0x1401cc5b5`）：只调 `FUN_1401c22e0`，没有别的键。朝向的解析与几何见
     // `orientation.ts`（P4c 步骤 5）
     category: "renderer",
@@ -990,7 +1129,11 @@ function defaultValue(def: ParticleFieldDef, orthographic: boolean): ParticleFie
         : def.default.perspective
       : def.default;
   const parsed =
-    def.type === "number" || def.type === "int" || def.type === "string" || def.type === "bool" ? raw : vector(raw);
+    def.type === "number" || def.type === "int" || def.type === "string" || def.type === "bool"
+      ? raw
+      : def.type === "vec3splat" && typeof raw === "number"
+        ? [raw, raw, raw]
+        : vector(raw);
   return applyScale(def, parsed ?? raw);
 }
 
@@ -1037,6 +1180,11 @@ function parseField(def: ParticleFieldDef, raw: unknown, previous: ParticleField
       }
       const parsed = typeof raw === "string" ? vector(raw) : undefined;
       return parsed && applyScale(def, parsed);
+    }
+    case "vec3splat": {
+      // 数字铺满三分量（WPE `asFloat`），字符串读三个数（P4d 步骤 4a，这类字段没有 scale）
+      if (typeof raw === "number" && Number.isFinite(raw)) return [raw, raw, raw];
+      return typeof raw === "string" ? vector(raw) : undefined;
     }
   }
 }

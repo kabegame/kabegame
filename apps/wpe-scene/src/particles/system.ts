@@ -39,6 +39,10 @@
  * 模块的运行状态（P4d 步骤 3，rea-p4d-modules.md 1.3）：模块表有 `createState` 的 initializer（`mapsequence*` 的序号与步长）每个
  * 系统一份，`run` 时传入；系统复位（`suspend`）时 `resetState`，周期发射进入新周期时 `newPeriod`（早于该 emitter 本帧的新粒子），
  * `setInstance` 重乘字段后 `instanceState`。`clear` 不碰它们（WPE 的清空不动记录）。
+ *
+ * 系统时间与图层时间（P4d 步骤 4a，rea-p4d-modules.md 2.2、5.3，remap 的输入 `particlesystemtime`（init）与 `layertime` 读）：`step` 在
+ * 模拟之前各自 `+= dt′`（float32，乘过 `rate`），`suspend` 在有存活粒子时一起清零，预热不累加（读码没追，计划「未实测清单」）。模拟时的
+ * 对象原点 `W.t`（remap 的 `layerorigin`）和模型矩阵一起由 `advance` 按 `inputs.world` 写进执行上下文。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
 import { identity } from "../render/math";
@@ -190,6 +194,16 @@ export class ParticleSystem {
    * `def.renderer.ropetrail.interval`。
    */
   readonly trail: TrailHistory | null;
+  /**
+   * 系统时间 `St`（`sys+0x3f0`，P4d 步骤 4a）：每帧模拟之前 `+= dt′`（`FUN_1402308a0` 开头 `0x1402308c2`，float32），系统复位
+   * （`FUN_14022f6c0`，`suspend`）清零。`remapinitialvalue` 的 `particlesystemtime` 读它（经执行上下文）。
+   */
+  systemTime = 0;
+  /**
+   * 图层时间（`obj+0x770`，P4d 步骤 4a）：可见时每帧 `+= dt′`（`FUN_140230650` 的 `0x140230810`，早于系统的模拟），不可见且有存活粒子
+   * 时清零。WPE 存在对象上，Kabegame 一个粒子对象一个系统，所以放在这里。remap 的 `layertime` 读它。
+   */
+  layerTime = 0;
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -259,6 +273,10 @@ export class ParticleSystem {
       basis: IDENTITY_BASIS,
       // 每帧由 `advance` 按 `inputs.world` 写（本系统独占一份，不和别的系统共用）
       model: new Float32Array(IDENTITY_BASIS),
+      // P4d 步骤 4a：`step` 写两个时间，`advance` 写原点
+      systemTime: 0,
+      layerTime: 0,
+      origin: new Float32Array(3),
     };
   }
 
@@ -339,12 +357,17 @@ export class ParticleSystem {
    * WPE 不可见时控制点照常更新（rea-p4c-sim.md 5.6），这里不更新：可见后第一帧发射前会按当帧的 `W` 重算 `current`，差别只在
    * `previous`（那一帧的 `previous` 是不可见之前最后一帧的值），本步没有读 `previous` 的模块，只影响 P4d。
    * 同一处（`FUN_14022f6c0`）还复位有运行状态的模块（P4d 步骤 3，`resetState`）：`mapsequence*` 无条件 `seq = 0`、`step` 的符号不
-   * 复位（rea-p4d-modules.md 1.3、5.3）。子系统的复位归 P4e。
+   * 复位（rea-p4d-modules.md 1.3、5.3），并清零系统时间 `sys+0x3f0`；`FUN_140230650` 同时清零图层时间 `obj+0x770`（P4d 步骤 4a）。
+   * WPE 不可见期间系统时间照常累加（5.3【推】，`FUN_1402308a0` 不看可见性），这里不可见的帧不步进，所以不累加。子系统的复位归 P4e。
    */
   suspend(): boolean {
     if (this.alive === 0) return false;
     for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
     for (const module of this.initializers) if (module.state !== undefined) module.def.resetState?.(module.state);
+    this.systemTime = 0;
+    this.layerTime = 0;
+    this.context.systemTime = 0;
+    this.context.layerTime = 0;
     this.clear();
     return true;
   }
@@ -362,6 +385,11 @@ export class ParticleSystem {
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
     this.context.time = f32(time ?? this.elapsed);
     const dt = f32(f32(frameDt) * this.rate);
+    // P4d 步骤 4a：图层时间（`obj+0x770`，`0x140230810`）与系统时间（`sys+0x3f0`，`0x1402308c2`）都在模拟之前 `+= dt′`，float32
+    this.layerTime = f32(this.layerTime + dt);
+    this.systemTime = f32(this.systemTime + dt);
+    this.context.layerTime = this.layerTime;
+    this.context.systemTime = this.systemTime;
     this.advance(dt, frameDt, this.passes, inputs);
     // ropetrail 的历史采样（P4d 步骤 2）：WPE 的顶点函数先模拟、再在存活数非零时采样（`FUN_1402308a0`，rea-p4d-rope.md 1.1、5.2），
     // 用同一个 `dt'`；位置是本帧模拟后的
@@ -415,6 +443,8 @@ export class ParticleSystem {
     // 模拟时的模型矩阵 `M`（rea-p4c-sim.md 1.4，顶层系统就是 `W`）：取前三列的 xyz，同 `FUN_1400dd7d0`（P4c 步骤 4）
     const w = inputs.world;
     context.model.set([w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]]);
+    // 对象原点 `W.t`（P4d 步骤 4a，remap 的 `layerorigin`：对象虚函数 +0x80 的第 3 列）
+    context.origin!.set([w[12], w[13], w[14]]);
     this.emit(dt);
     const { h, k } = operatorPass(dt, frameDt, passes);
     context.count = this.highWater;

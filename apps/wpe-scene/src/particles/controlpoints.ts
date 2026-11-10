@@ -109,7 +109,7 @@ function pointerLocal(target: Float32Array, inverse: Mat4 | null, x: number, y: 
     );
 }
 
-/** 模块里引用控制点的字段：`controlpoint`，以及 `mapsequencebetweencontrolpoints` 的两端（P4d 步骤 3）。 */
+/** 模块里引用控制点的字段：`controlpoint`，以及 `mapsequencebetweencontrolpoints` 的两端（P4d 步骤 3）；remap 的走 `controlPointRefs`。 */
 const CONTROL_POINT_FIELDS = ["controlpoint", "controlpointstart", "controlpointend"] as const;
 
 /**
@@ -117,8 +117,9 @@ const CONTROL_POINT_FIELDS = ["controlpoint", "controlpointstart", "controlpoint
  * 没有这样的模块时为 0。WPE 在解析期对每个读控制点的模块做 `max(已有, controlpoint + 1)`（`0x1401c6ab8` 等，无符号比较）；
  * `controlpointattract` 从 P4c 步骤 3 起在表里，计入（`0x1401ccd88`–`0x1401ccd99`），只被它引用的控制点从此存在，指针与实例覆盖
  * 在这些点上生效。`mapsequencebetweencontrolpoints` 两端都计（`def+0x2c = max(·, start + 1, end + 1)`，rea-p4d-modules.md 1.2），
- * 不写字段时 `end` 缺省为 1，所以至少 2 个。表外模块（P4d 的 `reducemovementnearcontrolpoint` 等）不计：场景已因
- * `particle:<类别>:<名字>` 退回，它们也不执行。
+ * 不写字段时 `end` 缺省为 1，所以至少 2 个。字段名不是这三个的引用由模块表的 `controlPointRefs` 给（P4d 步骤 4a 的 remap 两个模块：
+ * 输入或输出属于 {7, 8, 16, 17, 18} 时计 `icp0`、`ocp0`，是 8 时再计 `icp1`、`ocp1`，`FUN_1401bc480` / `FUN_1401bc4a0`，rea-p4d-modules.md
+ * 2.1）。表外模块（P4d 的 `reducemovementnearcontrolpoint` 等）不计：场景已因 `particle:<类别>:<名字>` 退回，它们也不执行。
  */
 export function controlPointCount(def: Pick<SceneParticle, "emitters" | "initializers" | "operators">): number {
   let count = 0;
@@ -131,6 +132,7 @@ export function controlPointCount(def: Pick<SceneParticle, "emitters" | "initial
         const index = module.fields[field];
         if (typeof index === "number") count = Math.max(count, index + 1);
       }
+      for (const index of known.controlPointRefs?.(module.fields) ?? []) count = Math.max(count, index + 1);
     }
   };
   visit("emitter", def.emitters);

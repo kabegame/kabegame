@@ -836,13 +836,219 @@ export function mapSequenceBetween(fields: ParticleFields, context: ParticleRunC
 
 ## 步骤 4 — `remap*`
 
-- **新增** `particles/remap.ts`：输入、变换函数、运算、输出四张小表，`remapinitialvalue` 和 `remapvalue` 共用，噪声复用 `noise.ts`。
-- **修改** 模块表：两个模块进表，只放开步骤 0 定下要实现的取值。
-- 输出是控制点：如果步骤 0 读清楚了，控制点更新跳过这些点（`controlpoints.ts`）；没读清就照报。
+**设计。** 两个模块是同一条管线：输入 → 分量 → 归一化 → 变换 → 输出区间 → 运算写回。
+- 只写一份 `particles/remap.ts`，每一段按模块种类（`init` / `op`）取变体。WPE 的两份实现在下面列的 18 处不同，其余逐位相同。
+- 读码与实测在 rea-p4d-modules 第 2 节、报告「P4d 语义的实测核对」的 remap 表；按「决定」2，读码确定的全做，`timeofday` 和未知枚举照报。路径相对 `apps/wpe-scene/src/`。
 
-**验收：**
-- `proj/p4d-remap` 里每个实现了的取值都和 WPE 逐帧比，噪声类按 P4b 的误差包络。
-- `3815289650` 只剩 `particle:children`。
+**管线外要补的状态：**
+- 系统时间 `St`（`sys+0x3f0`）、图层时间（`obj+0x770`）、对象原点 `W.t`；
+- 控制点个数的新引用规则；
+- 被 remap 写的控制点打 `0x10000`。
+
+**拆成两步，各自单独验收、单独提交：**
+- **4a**：管线、全部非噪声取值、新状态。
+- **4b**：噪声的两种实现（`init` 的 `snoise1` / `fbm1`，`op` 移植 FastNoise2），以及写控制点的三种情况：输出 `controlpoint`；`op` 只写 lane 0；`init` 的输入 16–18 把控制点写成 0。
+- 4a 期间这几项按字段照报，4b 放开。
+
+**语料（`ignore/p4/d0/out/scan.txt`）：**
+- `remapvalue` 有 6 个（顶层 5、子系统 1），在 3815289650、3832133196 两张场景：
+  - 输入都是 `particlesystemtime`（3 个写了，其余吃缺省 `lifetimefraction`）；
+  - 变换 `sine` 3、`simplexnoise` 2、`fbmnoise` 1；
+  - 输出 `opacity` 3、`velocity` 2、`speed` 1；
+  - 运算 `remap` 2（其余缺省 `multiply`）；`flags` 0 / 3；三个带 `blendin*`。
+- `remapinitialvalue` 只有 3832133196 子系统里的 3 个：`distancetocontrolpoint`、`multiply`。
+
+**现状锚点：**
+- **两个模块不在表里**（`particles/modules.ts:402` 的 `PARTICLE_MODULES`）：
+```ts
+export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [ /* …没有 remapinitialvalue、remapvalue */ ];
+// 现状：能力表照报 particle:initializer:remapinitialvalue、particle:operator:remapvalue
+```
+- **字段类型没有「字符串读三个数、数字铺满」**（`particles/modules.ts:76`）：
+```ts
+export type ParticleFieldType = "number" | "int" | "vec3" | "vec3z" | "vec3str" | "string" | "bool";
+// 现状：vec3 写成数字时报不支持；vec3z 只给 z；vec3str 保持缺省。remap 的 inputrange* / outputrange* 写数字时要铺满三分量
+```
+- **执行上下文没有系统时间、图层时间、对象原点**（`particles/modules.ts:163` 的 `ParticleRunContext`）：
+```ts
+export interface ParticleRunContext {
+  time: number;          // 场景时间 T（现状：唯一的时间）
+  model: Float32Array;   // W 的 3×3（现状：没有平移）
+  // …
+}
+```
+- **系统时间、图层时间没人维护**（`particles/system.ts` 的 `step` / `suspend`）：`step` 只累加 `elapsed`（缺省的场景时间）；`suspend` 只复位 emitter 计时与模块状态，再 `clear`。
+- **控制点个数只认三个字段名**（`particles/controlpoints.ts:123`）：
+```ts
+const CONTROL_POINT_FIELDS = ["controlpoint", "controlpointstart", "controlpointend"] as const; // 现状：remap 的 icp / ocp 不计
+```
+- **`0x10000` 预留了但没人置**（`particles/controlpoints.ts:54`、`:278`）：`update` 见 `CONTROL_POINT_FLAGS.remap` 就跳过、建系统时不吃实例覆盖，但 `flags` 只来自 JSON。
+- **每遍开头从初始值复制当前值**（`particles/system.ts` `advance` 里的 `columns.resetCurrent`）：已经和 WPE 一样。`remapvalue` 写 `size` / `alpha` / `color`，两遍结果不变，不用改。
+- **出生时 frame 列先于 initializer 写**（`particles/system.ts` `spawn`）：`randomframe` 写 `R`、否则 0。`remapinitialvalue` 的 `lifetimefraction` 读它，正是 WPE 的行为（rea 2.2），不用改。
+
+### 4a — 管线与非噪声取值
+
+- **新增** 字段类型 `vec3splat`（`particles/modules.ts`）：字符串读三个数，缺的分量是 0；数字原样铺满三分量（rea 2.1，`inputrange*` / `outputrange*`）。
+- **新增** 模块表的两项。字段照 rea 2.1 的字段表，缺省不分正交 / 透视：
+
+| 字段 | 缺省 | 解析与照报 |
+|---|---|---|
+| `operation` | `"multiply"` | `remap` / `multiply` / `add` / `subtract`；别的字符串照报 `…:operation`（WPE 不写） |
+| `input` | init `"maxlifetime"`，op `"lifetimefraction"` | 20 个名字（rea 2.2 的表）；`timeofday` 和未知名字照报 `…:input`。4a 期间 init 的 `controlpoint` / `deltatocontrolpoint` / `directiontocontrolpoint` 也照报，4b 放开 |
+| `output` | `"size"` | 同一张名字表；`lifetimefraction`、`runtime`、`timeofday`、`particlesystemtime`、`layertime`、`layerorigin` 读码确定不写，照常放行。未知名字照报。4a 期间 `controlpoint` 照报 |
+| `inputcomponent` / `outputcomponent` | `"all"` | `all` / `x` / `y` / `z` / `sum` / `average` / `max` / `min`，未知照报。输出分量写出时只认 `all`–`z`，其余不写（读码确定，放行） |
+| `transformfunction` | `"none"` | `none` / `sine` / `square` / `saw` / `triangle` / `simplexnoise` / `fbmnoise`，未知照报。4a 期间两种噪声照报 |
+| `inputrangemin` / `inputrangemax` | 0 / 1 | `vec3splat`。差为 0 的分量换成 `FLT_EPSILON`；op 在这之上取 `rcp`（WPE 解析期 `rcpps`，这里执行时现算，好让近似运算包络覆盖到） |
+| `outputrangemin` / `outputrangemax` | 0 / 1 | `vec3splat`，差不防 0 |
+| `inputcontrolpoint0` / `outputcontrolpoint0` / `inputcontrolpoint1` / `outputcontrolpoint1` | 0 / 0 / 1 / 1 | `clampControlPoint`；`inputcontrolpoint1` 两个模块都不读，只计数 |
+| `transforminputscale` | 2 | op 的 sine 用 `s·π`（解析期预乘，同样执行时现算） |
+| `transformoctaves` | 3 | `asUInt32`，不钳制（4b 用） |
+| `flags` | 1 | bit0 归一化后夹到 [0, 1]，bit1 输出区间后夹到 [0, 1]；别的位没有读者，中性 |
+| blend 四键 | — | 只有 op（`BLEND`、`readBlend`，类型 0x27） |
+
+- **新增** `particles/remap.ts`：
+```ts
+/** 枚举（rea 2.1 的名字表，下标就是 WPE 的属性编号；-1 是未知）。 */
+export const REMAP_PROPERTIES: readonly string[]; // 20 个，lifetimefraction = 0 … layerorigin = 19
+export type RemapKind = "init" | "op";
+/** 一个粒子走一遍管线：读输入 → 分量 → 归一化 → 变换 → 输出区间 → 运算写回。init 的 slot 是新粒子，op 的是 [0, count) 里的每个槽。 */
+export function remapParticle(kind: RemapKind, fields: ParticleFields, context: ParticleRunContext, slot: number, blend: number | null): void;
+export function remapInitialValue(fields: ParticleFields, context: ParticleRunContext): void; // 对 context.slot 一次
+export function remapValue(fields: ParticleFields, context: ParticleRunContext): void;        // [0, count) 每个槽（含死槽），有 blend 时按年龄算 b
+```
+  - **18 处变体**，逐条按 rea 第 2 节，逐步 float32；WPE 用近似指令的位置调 `rcp` / `rsqrt`：
+    1. 输入 `lifetimefraction`：init 读 `frame` 列；op 是 `rcp(life)·age`。
+    2. 输入 `size` / `opacity` / `color`：init 读初始值（`size0` / `alpha0` / `color0`），op 读当前值。
+    3. 输入 `speed`：init `sqrt((x²+y²)+z²)`；op `sqrt((y²+x²)+z²)`。
+    4. 输入 `distancetocontrolpoint`：同上，加法顺序不同。
+    5. 输入 `positionbetweentwocontrolpoints`：两边都用 `ocp0` / `ocp1`。
+       - init：`L > FLT_EPSILON` 时 `v = dot(P−A, D/L)/L`，否则 0；
+       - op：`v = dot(P−A, D)·rcp(|D|²)`，`|D|² ≤ 0` 时 0，点积顺序 `(Py·Dy + Px·Dx) + Pz·Dz`。
+    6. 输入 `particlesystemtime`：init 读系统时间 `St`，op 读场景时间 `T`（和 `runtime` 相同）。
+    7. 输入 `controlpoint` / `deltatocontrolpoint` / `directiontocontrolpoint`：op 读 `C`、`C − P`、`(C − P)·rsqrt`（带掩码）；init 的写法归 4b。
+    8. 输入 `angularspeed`：两边都是有角速度列时读 `angvz`，否则 0。
+    9. 分量 `sum` / `average` / `max` / `min`：只在输入编号 > 12 时生效；加法顺序 init `(x+y)+z`、op `(y+x)+z`（逐位相同，照写）。
+    10. 归一化：
+        - init 三分量各自 `(in − min)/range`；
+        - op 的向量输入是 `(in − min)·rcp(range)`；
+        - op 的标量输入（编号 ≤ 12）只用 x 分量的 min 和倒数，夹完再铺到 y、z。
+    11. `sine`：init `sin((v·π)·s − π/2)·0.5 + 0.5`；op `sin(v·(s·π) − π/2)·0.5 + 0.5`。两边乘法顺序不同，都用 `Math.sin`（CRT `sinf` / `sin_ps` 不复刻，同 P4a）。
+    12. `square` / `saw` / `triangle`：init 用 `floorf`、`roundf`（半数远离零）；op 用 `trunc`、偶舍入。`saw` 的符号看缩放前的 `v`。
+    13. 输出区间：init 三分量都算；op 只在输出是向量（编号 > 12）时算 y、z。
+    14. 输出 `size` / `opacity` / `color`：init 写初始值，op 写当前值。
+    15. 输出 `speed`：init 是 `L ≠ 0` 时 `s /= L`；op 是 `L > 0` 时 `s = rcp(L)·s`。
+    16. 输出 `distancetocontrolpoint` / `positionbetweentwocontrolpoints` / `directiontocontrolpoint`：照 rea 2.7 表的两列（init 精确除法，op `rsqrt` 加掩码）。
+    17. 运算：`remap` → `o`，`multiply` → `o·old`，`add` → `o + old`，`subtract` → `old − o`。op 有 blend 时是 `(op(old, o) − old)·b + old`，标量输出用 `o.x`。
+    18. 列标志：op 输出 `opacity` 置 `COLUMN_FLAGS.alpha`，输出 `color` 置 `COLUMN_FLAGS.color`（`columnFlagsOf`）；init 不置。
+  - **其余输出与输入：**
+    - 输出 `maxlifetime` 写 `life`；`rotation` 写 z 旋转；`angularspeed` 要有角速度列；`position` / `velocity` / `deltatocontrolpoint` 按分量写。
+    - 输入 `runtime` 读 `T`，`layertime` 读图层时间，`layerorigin` 读 `W.t`，`position` / `velocity` / `color` 读对应列。
+- **修改** `particles/modules.ts` 的 `ParticleRunContext`：新增 `systemTime`（`St`）、`layerTime`、`origin`（`W.t`，Float32Array(3)）。
+- **修改** `particles/system.ts`：
+  - `step` 在模拟之前 `systemTime = f32(systemTime + dt′)`、`layerTime` 同样累加（`FUN_1402308a0` 开头 `0x1402308c2`；`0x140230810`），`advance` 写 `origin`；
+  - `suspend` 在有存活粒子时两者清零（`FUN_14022f6c0`、`FUN_140230650`）；
+  - 预热不累加（读码没追，见「未实测清单」）。
+- **修改** `ParticleModuleDef` 新增 `controlPointRefs?(fields) → number[]`，`controlPointCount` 也认它（`particles/controlpoints.ts`）。remap 的规则（rea 2.1，`FUN_1401bc480` / `FUN_1401bc4a0`）：
+  - 输入或输出属于 {7, 8, 16, 17, 18} 时计 `icp0`、`ocp0`；
+  - 输入或输出是 8 时再计 `icp1`、`ocp1`。
+- 能力表（`compile/features.ts`）不用改：进表后由模块表的 `supported` 报字段键。
+
+### 4b — 噪声与写控制点
+
+- **新增** `particles/fastnoise2.ts`：二维 Simplex、FBm，照 rea 2.9，逐步 float32、32 位回绕。步骤 0 的 Python 移植 `ignore/p4/d0/fastnoise2.py` 已和实测对上（rv-noise 三分量残差 ≤ 4e-4），照它和 rea 写。
+```ts
+export function simplex2(seed: number, x: number, y: number): number;
+export function fbm2(seed: number, x: number, y: number, octaves: number): number; // 归一系数按 octaves 现算，≤ 1 时为 1
+```
+- **修改** `remap.ts` 的变换：
+  - init 的 `simplexnoise` 是 `snoise1(v·s)·0.5 + 0.5`（`noise.ts`，P4b C1），输出是向量时 y、z 各自算；`fbmnoise` 是 `fbm1`：频率从 `s` 起每倍频 ×2、振幅 ×0.5，`Σ a·snoise1(f·v)/Σ a`，`octaves = 0` 时 0/0。
+  - op 的是 `simplex2(seed, v·s, 0)·0.5 + 0.5` 或 `fbm2(…)`；种子 x 取 `R` 的位，y 是 `R ^ 0x0b3924ad`，z 是 `R ^ 0x493a8e83`；y、z 只在输出是向量时算。
+- **修改** 写控制点：
+  - 输出 `controlpoint`：
+    - init 每个新粒子按出生顺序写一次；
+    - op 每 4 个槽一组（含死槽），只有每组的 lane 0（槽 `4g`）生效，逐组读当前的 `C`、按分量运算后写回。
+    - 不复刻的写坏：`t.w` 和 `previous` 的前两个 float 会被写坏，但没有模块读它们。
+  - init 的输入 16–18：每个新粒子把 `cp[icp0].current` 的平移写成 0，输入是 0 / `0 − P` / `normalize(−P)`（rea 2.2，WPE 的 bug，实测确认）。本地系统不重算 `current`，所以一直是 0。
+  - `ControlPointSet` 建系统时，对「输出是 `controlpoint` 的 remap」的 `ocp0` 置 `0x10000`：
+    - `ControlPointSource` 已经带三类模块；
+    - `ParticleModuleDef` 新增 `controlPointFlags?(fields) → [下标, 位][]`，remap 返回 `[[ocp0, 0x10000]]`。
+- 放开 4a 期间照报的几项。
+
+### 测试与回放
+
+- **数据：** 步骤 0 的四份 remap 轨迹原是 draws 认法（`rdc_rope.py`），2026-11-10 用 `kbp rdc track` 按 points 认法重提，旧文件改名为 `*.rdc_rope.json`。fps 10 的 `[kbp]` 日志不满一行就没写出，缺帧用 `gap: "split"`。
+- **单测：** 18 处变体各至少一个（两个模块同输入、给出不同结果）；`vec3splat`；`controlPointRefs`；`St` / 图层时间的累加与复位；4b 的 FastNoise2 已知值（取 `fastnoise2.py` 的输出）、种子异或、lane 0、`0x10000`、init 写 0。
+- **回放案例 `d4`**（`ignore/p4/cases/`，做法同 `d3`）：
+  - `p4d-remap` 与 `p4d-remap2` 的 fps 60（一遍）、fps 10（两遍），按槽序逐粒子比位置、尺寸、颜色、alpha、旋转；
+  - 4a 只比 4a 放开的系统，4b 补上噪声与写控制点的系统；
+  - `timeofday` 两组跳过，`unsupported` 写进期望；
+  - 噪声组从 frame 列（`randomframe`，厚格式 `TEXCOORD1.w`）读出每粒子 `R`，按出生序注入（`r`）。
+- **关注的已知差：** rv-time 的 alpha 在步骤 0 差 0.0006，量级正是 `rcpps(10)` 的近似，应落在包络里。
+
+**验收（Claude）：**
+- `git status` 查越界；tsc、vitest、Prettier、回放自跑；`kbp regress` 现有案例逐字节相同。
+- **变异检查：** 每处变体各一条（op 的 `lifetimefraction` 读 frame、op 的 `particlesystemtime` 读 `St`、init 读 `T`、op 标量输入按分量归一化、op 用 `floor`、init 用 `trunc`、op 写初始列、输出区间 y/z、blend 公式、`flags` bit0 不夹）。4b 另加：
+  - 种子异或常数对调、FBm 不加种子、init 噪声用 `R`；
+  - 控制点每个 lane 都写、不置 `0x10000`、init 不写 0。
+- **语料：**
+  - 4a 后 `remapvalue` / `remapinitialvalue` 的模块键去掉，只剩噪声的字段键；
+  - 4b 后 3815289650、3832133196 都不再报 remap 的键。原来写的「3815289650 只剩 `particle:children`」不对：它另有文字对象（`object:*`）和一处着色器解析错误（4a 语料核对时查到）；`remapinitialvalue` 只在 3832133196 的子系统文件里，子系统不编译，两边都不报；
+  - 能渲染数、覆盖数不变（「范围与解锁」表里步骤 4 是 0）。
+- 画面哈希不变：10 张干净场景、三档。
+- **做法：** 同步骤 3，`kbp snapshot` 出 `ignore/p4/d4/head` 与 `ov`，子代理只在 `ov` 里做，出补丁后按块暂存、只提交自己的。
+
+### 步骤 4a 实施记录（2026-11-10）
+
+**做法：**
+- 快照取自 `6a3c3854`，子代理只在 `ignore/p4/d4/ov` 里做。补丁是 `ignore/p4/d4/step4a.patch`，6 个文件，+1927 / −12。
+- 开工期间 HEAD 前进到 `ff100954`（P5a 的提交），都没碰补丁里的文件，`git apply --check` 对工作区和索引都干净。
+- 回放用的轨迹：步骤 0 的四份 remap 轨迹按 points 认法重提（见「测试与回放」）。
+
+**新增和修改的文件（相对 `apps/wpe-scene/src/`）：**
+- 新增 `particles/remap.ts`（文件头列 18 处变体）和 `particles/remap.test.ts`（44 个单测）；
+- 修改 `particles/modules.ts`、`particles/system.ts`、`particles/controlpoints.ts`；
+- `compile/particles.test.ts` 只改期望值。
+- 补丁之外：回放案例 `ignore/p4/cases/d4.json` + `d4.hook.ts`，变异清单 `ignore/p4/d4/mutations.py`，Claude 另加的 `ignore/p4/d4/mut_claude.py`。
+
+**对照汇编补清的读码（rea 第 2 节没写细的，子代理逐段核对 `init15.asm`、`op19.asm`、`op19b.asm`）：**
+- op 的变换和输出区间一样，y、z 只在输出是向量时算。
+- 掩码因输出而异：`distancetocontrolpoint`、`positionbetween` 用 `L ≠ 0`（NaN 也算不等，粒子正好在控制点上时位置得 NaN，WPE 同样）；`directiontocontrolpoint` 用 `0 < L`。
+- init 的 `positionbetween` / `direction` 输出在 `L ≤ FLT_EPSILON` 时不做除法，不是跳过不写。
+- 未知 `operation` 返回旧值，复合输出照样往下算；blend 也包在复合输出外面。
+- `deltatocontrolpoint` / `directiontocontrolpoint` 输出只对选中的分量运算，位置三分量无条件写回。
+- op 的 `s·π` 在执行段开头算（`0x14024498e`），不是解析期。
+
+**规格之外自定的：**
+- 执行上下文的三项新字段是可选的，缺省按 0。
+- `timeofday` 和未知输入读成 0；它们照报，不影响能渲染的场景。
+- `vec3splat` 对布尔、非数字字符串照报，比 WPE 的 `asFloat` 严。
+- **op 的输出 `maxlifetime` 照报、不执行**（Claude 复核后改）：
+  - WPE 的 op 按 4 个一组写到组尾，把死槽写回非零 `life`，存活数（无符号）下溢后不再发射。这是回放里看到的数据形状：每帧只有一个真实粒子，另有带垃圾值的槽。
+  - 我们的存活数会变负、照常发射，行为两样，又复刻不了。语料 0 处用到；init 的 `maxlifetime` 照常支持。
+
+**回放里的两处处理（`d4.hook.ts`）：**
+- **fps 10 日志缺帧：** 日志只到第 150 帧，151–156 帧没有 dt，按平分时 `rate 2` 的两个系统超限。改用 `ri-time` 出生尺寸反解出生帧的系统时间（系统时间 = 2 × 场景时间）补出各帧的时间。
+  - 日志帧上的核对：系统时间 / 2 和日志的差 2.5e-6。
+  - 缺帧里出生的 `ri-time` 粒子按构造就对得上，不算独立验证；同段别的系统是独立的。
+- **`rv-saw` / `rv-square` 新生粒子落在间断点上：**
+  - 年龄 0 时 `v = (0 − 0.5)·rcp(0.5)` 正好是 −1。精确倒数下 saw 得尺寸 40；WPE 的 `rcpps(0.5) = 1.99951…`，得 5.0256。
+  - 这些粒子改按「rcp 偏置 −2⁻¹²」重模拟（在 2 的幂上正好等于 `rcpps`），和 WPE 逐位相同。
+  - 产品按「近似倒数不复刻」不改：只影响新生粒子的第一帧，且只在输入区间让 `v` 正好落在整数上时出现。
+
+**验收结果：**
+
+| 项目 | 结果 |
+|---|---|
+| 越界 | `apps/` 里补丁的文件没被动过；工作区另有并行会话改的 `particles/colorn.test.ts` 等 4 个文件（22:53 改，把噪声表来源挪进 `apps/wpe-scene/scripts/fixtures`），不在补丁里。`head` 快照和 `6a3c3854` 逐文件相同 |
+| tsc、vitest、Prettier | Claude 自跑：tsc 0 错；53 个文件、1461 个用例全过；Prettier 8 个文件通过 |
+| 回放 `kbp replay d4`（Claude 自跑两次） | 四段全部通过，最大差/限：`p4d-remap` fps 60 0.79、fps 10 0.77；`p4d-remap2` fps 60 0.65、fps 10 0.64。<br>`p4d-remap` 比 19 个系统，`p4d-remap2` 比 58 个；不比的是 4b 的几组、两个 `timeofday`、op 的 `maxlifetime`。编译不支持项和期望精确相等。<br>rv-time 在步骤 0 差 0.0006 的那条，落在近似倒数包络里 |
+| 回归 `kbp regress --corpus`（Claude 自跑） | 现有 9 个案例（b3、b4、b6、c1–c4、d1、d3）两边逐字节相同。<br>语料 152 张：只去掉两张的 `particle:operator:remapvalue`，3815289650 新增噪声的字段键；干净 24 不变，出错 0 |
+| 变异检查 | 子代理 21 条全部检出（单测加回放 12 条，只有单测 9 条），源码按原字节还原。<br>Claude 另加 2 条（正弦去掉 −π/2；init 的输入 `size` 读当前值列），单测和回放都检出 |
+
+**只有单测、没有 WPE 数据验证的**（已收进「未实测清单」）：
+- op 标量输入按 x 分量归一化：rv-vec 的 `flags 1` 把两种写法都夹成 1；
+- init 的 `floor` 对 `trunc`：`ri-*` 新生粒子的 `t = −3` 是整数，两者相同；
+- 输出 `speed` 的除法写法、正弦的乘法顺序、`distance` 的掩码：只差 1 ulp，或要粒子正好在控制点上。
 
 ## 步骤 5 — 距离类与 `vortex_v2`
 
@@ -863,8 +1069,7 @@ export function mapSequenceBetween(fields: ParticleFields, context: ParticleRunC
 | 项 | 来源 | 现状与原因 | 怎么补 |
 |---|---|---|---|
 | FBm 的倍频细节（种子 +1、坐标 ×2、振幅 ×0.5、归一） | 步骤 0 | rv-fbm1 / rv-fbm3 输出标量 `speed`、年龄未知，各种写法都拟合得上 | 步骤 4 用 WPE 帧时间回放，年龄精确，逐粒子比 |
-| `remapvalue` 标量输入只用 x 分量归一化再铺满，`remapinitialvalue` 按分量 | 步骤 0 | rv-vec / ri-vec 设计时漏写 `flags 0`，归一化被夹到 1，两种算法都得 50 | 步骤 4 的 `remap2` 回放；不够就补一个 `flags 0` 的工程 |
-| `remap2` 的全部取值 | 步骤 0 | 只确认了 66 个系统都能加载、能读到 | 步骤 4 逐项回放 |
+| `remap2` 里 4b 的几项（init 的输入 16–18、输出 `controlpoint`） | 步骤 0、4a | 4a 回放了其余 58 个系统，全部通过 | 步骤 4b 回放 |
 | `mb2-move` 的定量、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式 | 步骤 0 | 步骤 0 只做了定性或一遍模式的核对 | 步骤 5 用 fps 60 / 10 回放 |
 | WPE 不可见时照常更新控制点（dist-hide） | 步骤 0 | 重新可见后 1 s 才发第一个粒子，第一帧没有粒子可拽 | 步骤 5 重做实验：让重新可见的那一帧就有粒子（如 `instantaneous`） |
 | `reductionouter == reductioninner` 时差存成 1.0（rm-eq） | 步骤 0 | 这组参数下按 0 实现也是 `100·h > 1`，分辨不了 | 步骤 5 换参数，让 `r·h` 落在 (0, 1) 里 |
@@ -880,6 +1085,9 @@ export function mapSequenceBetween(fields: ParticleFields, context: ParticleRunC
 | `around` 配周期发射时新周期清不清零（`rec+0x58 & 2`） | 步骤 3 | 没测，能力表照报 `…:periodic`；语料 0 张 | 测试工程配周期发射，出生方向序列按周期看 |
 | `around` 的残留字在「干净重启后只解析过桌面壁纸」时的值 | 步骤 3 | `restart_wpe` 被权限拦下；另外三种先行解析都是「不乘」 | 用户放行 `restart_wpe` 后补抓一次 `p4d-around-ic` |
 | `2254685070` 和 WPE 的画面对照 | 步骤 1 | 鼠标拖尾，要移动鼠标才有画面 | P4d 收尾抓帧时移动鼠标，做法同 P4c |
+| `remapvalue` 标量输入只用 x 分量归一化再铺满，`remapinitialvalue` 按分量 | 步骤 0、4a | rv-vec / ri-vec 设计时漏写 `flags 0`，归一化被夹到 1，两种算法都得 50；4a 只有单测 | 补一个 `flags 0`、`inputrange*` 各分量不同的工程 |
+| init 的 `square` / `saw` 用 `floorf`，op 用 `trunc` | 4a | `ri-*` 新生粒子的 `t = −3` 是整数，`floor` 和 `trunc` 相同；只有单测 | 让 init 的输入出生时是负的非整数，如 `randomframe` 配输入 `lifetimefraction`（读到 `R`）、`inputrangemin 0.5` |
+| 系统时间 `St` 在预热期间累不累加、对象不可见期间累不累加（rea 5.3【推】） | 4a | 我们预热不累加；不可见时不步进，所以也不累加 | 带 `starttime` 或会隐藏的对象，配 `remapinitialvalue` 输入 `particlesystemtime` |
 
 **工具与边角：**
 - kabegame-dev MCP 的 `particle_corners` / `render_scene` 回放不传 `fps`，低 fps 下 rope 的 `Rf` 仍按 60 算，只影响绳没满的填充期（步骤 1）。
@@ -888,6 +1096,7 @@ export function mapSequenceBetween(fields: ParticleFields, context: ParticleRunC
 
 **已测（从清单里划掉）：**
 - 不可见时复位清零 `mapsequence*` 的序号（步骤 0 没测到）：步骤 3 的回放逐粒子对上，见步骤 3 实施记录。
+- `remap2` 的全部取值（4b 的几项与两个 `timeofday` 除外）：步骤 4a 的回放 58 个系统、两种 fps 全部通过，见步骤 4a 实施记录。
 
 ## P4d 收尾
 
