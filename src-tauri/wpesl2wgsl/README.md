@@ -289,7 +289,7 @@ CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapt
 deno task test -c kabegame --skip cargo
 ```
 
-语料测试（`tests/corpus.rs`）分两部分：
+语料测试（`tests/corpus.rs`）前两部分读 WPE 安装目录（没设 `KABEGAME_WPE_ROOT` 时跳过）：
 - **门槛**：P1 样本用到的着色器对，按材质实际的 COMBO 与纹理必须翻译通过。包括 `assets/shaders/flag`（TINT=1）、`genericimage`，以及 deep_space / beach 的 `flowimage`、`swayimage`。
 - **基线**：`assets/shaders`、`assets/effects`、`projects/defaultprojects` 下全部着色器对，在默认 COMBO（只绑定 g_Texture0）下的通过率；并把每份输出 WGSL 交给 naga `wgsl-in` 重新解析、校验。
   完整报告写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-corpus.txt`。
@@ -300,7 +300,41 @@ deno task test -c kabegame --skip cargo
   rope 是 `THICKFORMAT 1` × `TRAILSUBDIVISION` 0 / 3 / 4 / 16 / 32 × `ORIENTATION` 0 / 1 / 2；ropetrail 是 `TRAILRENDERER 1` × `TRAILSUBDIVISION` 0 / 1 / 2，
   各带或不带 `TRAILSCROLLALPHA`、`TRAILFADEALPHA`、`TRAILFADESIZE`；rope 与 ropetrail 再各加一组 `REFRACT`、`FOG_DIST`、`LIGHTING`（一盏点光）。
 
-设了 `WPESL2WGSL_DUMP_DIR` 时，语料测试把每次成功翻译生成的 GLSL / WGSL 写进这个目录（`<键>.vert.glsl` 等），用于人工审阅和改动前后逐字节比较。
+第 3 部分是**请求夹具**（P7a）：语料扫描时录下编译管线真实发给翻译器的每个请求（源码、头文件、COMBO、纹理格式、宏、`litDefines` 全在里面），测试逐个重放，覆盖全部场景实际用到的组合。
+- 夹具由 `kbp corpus scan --extra requests:<目录>`（`.claude/skills/kbp-tools/SKILL.md`）写成 `<目录>/<sha1>.json`：`{ name, names, scenes, result: { ok, phase, firstError }, request }`。
+  - 只留头文件补齐后的最终请求，按规范化 JSON 的 SHA-1 去重；
+  - `names` 是用到这个请求的全部着色器名（同产品 `shader:<名>:…`；工坊包常把同一个 effect 拷到别的目录），`name` 是其中第一个；
+  - `result` 是前端 wasm 当时的结果。
+- 夹具只放在 `ignore/` 下，工坊内容不进仓库；没设 `WPESL2WGSL_REQUESTS` 时跳过这部分。
+- 报告按着色器名汇总，每条失败列出翻译器返回的全部错误，写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-requests.txt`。成功的照样回读校验，导出键是 `<名字>-<sha1 前 8 位>`。
+- 门槛：重放的 `ok` 必须和夹具记录的一致（wasm 与原生应当相同）。不一致时先查 wasm 是不是比翻译器源码旧。
+
+环境变量（相对路径按仓库根解析，因为 cargo test 的工作目录是本 crate）：
+
+| 变量 | 作用 |
+|---|---|
+| `WPESL2WGSL_REQUESTS` | 请求夹具目录，设了才跑第 3 部分 |
+| `WPESL2WGSL_DUMP_DIR` | 每次成功翻译生成的 GLSL / WGSL 写进这个目录（`<键>.vert.glsl`、`.vert.wgsl`、`.frag.glsl`、`.frag.wgsl`），供人工审阅和建基线。WPE 安装目录部分的键是 `gate__…` / `lit__…` / `geom__…` / `base__…`，请求夹具部分是 `<名字>-<sha1 前 8 位>`，非法字符换成 `_` |
+| `WPESL2WGSL_BASELINE_DIR` | 一份旧的导出目录：本次导出（只算本次写过的文件，目录里残留的旧文件不算）逐文件和它比较，报「相同 / 变了 / 新通过 / 新失败（基线有、本次没有）」，清单写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-baseline.txt`；「变了」「新失败」非空时测试失败。没设 `WPESL2WGSL_DUMP_DIR` 时导出到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-dump`（先清空） |
+| `WPESL2WGSL_BASELINE_ALLOW` | 逗号分隔的键前缀（按导出文件名的规则规整，`effects/foo` 与 `effects_foo` 等价）：这些「变了」「新失败」不算失败，但仍列在报告里，标「允许」 |
+
+```bash
+# 录夹具（产品源码默认 apps/wpe-scene/src，用其中的 wasm）
+python -X utf8 -I .claude/skills/kbp-tools/kbp.py corpus scan --extra requests:ignore/p7/requests --out ignore/p7/out/corpus.json
+
+# 建基线：改动前导出一份
+KABEGAME_WPE_ROOT="D:\Applications\Steam\steamapps\common\wallpaper_engine" \
+WPESL2WGSL_REQUESTS=ignore/p7/requests WPESL2WGSL_DUMP_DIR=ignore/p7/baseline/head-<提交前 8 位> \
+CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapture
+
+# 与基线比较：改动后跑；预期会变的键用 WPESL2WGSL_BASELINE_ALLOW 列出
+KABEGAME_WPE_ROOT="D:\Applications\Steam\steamapps\common\wallpaper_engine" \
+WPESL2WGSL_REQUESTS=ignore/p7/requests WPESL2WGSL_BASELINE_DIR=ignore/p7/baseline/head-<提交前 8 位> \
+WPESL2WGSL_BASELINE_ALLOW=effects/fluidsimulation_advection \
+CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapture
+```
+
+2026-11-11（`74b65d27`）：777 个请求、215 个着色器（含别名 255），通过 661；失败的着色器 44 个（含别名 50），比语料扫描的 48 个多两个，都是当前属性下关着的 effect（失败不上报到场景）；`ok` 与夹具全部一致；基线导出 3460 个文件，重跑逐字节相同。
 
 2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0；2026-11-10 加几何着色器展开后不变，几何门槛 27/27。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
 

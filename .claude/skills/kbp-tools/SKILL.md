@@ -196,6 +196,7 @@ kbp.py corpus diff <前.json> <后.json> [--out 文件] [--without 键,…] [--e
 | `modules:<category:name,…>` | `modules`（`key=<字段>` 换名） | b3、b4：每个粒子层里这些模块的字段原文（去掉 `id`，带 `file`、`category`）；预置名单 `@b3`（P4b 步骤 3 的 9 个）、`@b4`（步骤 4 的 3 个） |
 | `controlpoints[:norenderer]` | `systems` | c1–c5：每个粒子层的 `file`、`flags`、`controlpoint` 数组、`renderer` 原文（c5 起；c1–c4 没有，`:norenderer` 去掉）、读控制点的模块、`instanceoverride` 的控制点静态值（`io`） |
 | `sheets` | `animatedUsages`、`sheets` | b2：帧表纹理（头标志 bit2）绑在哪里；帧表粒子材质按同样的宏重译一次（宏、格式、帧数、是否翻译成功、问题）。源码没有 `particleSheetDefines` 时只有 `animatedUsages` |
+| `requests:<目录>` | `requests` | P7a：编译管线真实发给翻译器的请求（编译前给翻译器包一层，只留结果不是 `include` 的那次，即头文件补齐后的最终请求），按规范化 JSON（键排序）的 SHA-1 去重写 `<目录>/<sha1>.json`：`{ name, names[], scenes[], result: { ok, phase, firstError }, request }`；`scenes` 跨场景合并；`names` 是用到这个请求的全部着色器名（同产品 `shader:<名>:…`，运行时包住 `ShaderCompiler.translate` 取产品自己的名字；工坊包常把同一个 effect 拷到别的目录，同一请求会有几个名字），`name` 是排序后的第一个；源码里没有 `ShaderCompiler.translate` 时按顶点 / 片元源码在本场景散文件、`scene.pkg`、WPE `assets/` 的 `shaders/**` 里反查（同一份源码在多处时会取错，查不到 `?`），`firstError` 同产品的取法（requires → missing → 首条错误）但不截断。行字段是本场景录到的不同请求数。目录不存在就建；里面已有夹具时要 `--overwrite`（先删掉旧夹具），有夹具以外的文件时拒绝；只有 `scan` 收，`regress --corpus` 不收。夹具由 `src-tauri/wpesl2wgsl/tests/corpus.rs` 第 3 部分重放（`WPESL2WGSL_REQUESTS`） |
 
 - **diff**（替代 `b1|b5|d0/diff_corpus.py`、`c1–c5/corpus_diff.py` 的通用部分、`cmp_corpus_claude.py`）：
   - 场景数与出错（新出错的、不再出错的）、干净场景增减（干净 = 没出错且 `unsupported` 为空）；

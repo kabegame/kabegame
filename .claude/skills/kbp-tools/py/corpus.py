@@ -3,7 +3,7 @@
 
 - scan：照 `ignore/p4/c5/corpus.test.ts`，对默认工程与创意工坊工程跑 `compileScene(exhaustive)`，行格式
   `{ sample, unsupported[], …附加字段 }`，出错 `{ sample, error }`。附加字段是插件（`--extra`，可重复）：
-  `modules:<category:name,…|@b3|@b4>`、`controlpoints[:norenderer]`、`sheets`。
+  `modules:<category:name,…|@b3|@b4>`、`controlpoints[:norenderer]`、`sheets`、`requests:<目录>`（只 scan 收）。
 - diff：照 `b5/diff_corpus.py`、`c5/corpus_diff.py` 的通用部分：场景数与出错、干净场景增减、每个键去掉 / 新增了哪些场景、
   变化的场景逐张列出之后还剩的键，加上「去掉某些键后还剩什么」（`b6/corpus_colorn.py`，`--without`）；`--explain <模块.py>` 挂
   各步自己的解释脚本（模块里的 `explain(before, after, diff) -> [行]`，before / after 是 {sample: 行}）。
@@ -13,6 +13,7 @@ import collections
 import importlib.util
 import json
 import os
+import re
 
 from . import common
 from .common import KbpError
@@ -24,19 +25,45 @@ TEST = "corpus.test.ts"
 # ==================== scan ====================
 
 
-def parse_extras(values):
-    """--extra 的值：`名字[:参数,参数…]`。modules 的参数是 `category:name`（含冒号），所以只按第一个冒号切。"""
+def parse_extras(values, requests=False):
+    """--extra 的值：`名字[:参数,参数…]`。modules 的参数是 `category:name`（含冒号），所以只按第一个冒号切。
+
+    `requests:<目录>`（P7a 步骤 1，录翻译请求夹具）只有 `corpus scan` 收（`requests=True`）：参数整段是目录（可含盘符冒号），
+    转成绝对路径；`regress --corpus` 两边会写同一个目录，不收。"""
+    names = ("modules", "controlpoints", "sheets") + (("requests",) if requests else ())
     out = []
     for value in values or []:
         name, _, rest = value.partition(":")
         name = name.strip()
-        if name not in ("modules", "controlpoints", "sheets"):
-            raise KbpError("kbp", "没有附加字段插件 %r（有 modules、controlpoints、sheets）" % name)
+        if name not in names:
+            raise KbpError("kbp", "没有附加字段插件 %r（有 %s）" % (name, "、".join(names)))
+        if name == "requests":
+            if not rest.strip():
+                raise KbpError("kbp", "requests 要给目录：requests:<目录>")
+            out.append({"name": name, "args": [os.path.abspath(rest.strip())]})
+            continue
         args = [a.strip() for a in rest.split(",") if a.strip()] if rest else []
         if name == "modules" and not args:
             raise KbpError("kbp", "modules 要给名单：modules:category:name,…（或预置 @b3、@b4）")
         out.append({"name": name, "args": args})
     return out
+
+
+def prepare_requests_dir(directory, overwrite):
+    """夹具目录：不存在就建；已有 `<sha1>.json` 时没给 --overwrite 拒绝，给了先删掉它们（别的文件不动，有别的文件也拒绝）。"""
+    if not os.path.isdir(directory):
+        if os.path.exists(directory):
+            raise KbpError("data", "requests 的目录是个文件：%s" % directory)
+        return
+    names = os.listdir(directory)
+    fixtures = [n for n in names if re.fullmatch(r"[0-9a-f]{40}\.json", n)]
+    others = [n for n in names if n not in fixtures]
+    if others:
+        raise KbpError("data", "requests 的目录里有夹具以外的文件（%s 等）：%s" % (others[0], directory))
+    if fixtures and not overwrite:
+        raise KbpError("data", "requests 的目录非空（%d 个夹具，要覆盖加 --overwrite）：%s" % (len(fixtures), directory))
+    for n in fixtures:
+        os.remove(os.path.join(directory, n))
 
 
 def run_scan(src, out_file, extras=(), only=None, dirs=None, timeout=3600, quiet=True, label=""):
@@ -69,7 +96,10 @@ def scan(args):
     out = os.path.abspath(args.out)
     if os.path.exists(out) and not args.overwrite:
         raise KbpError("data", "结果已存在（要覆盖加 --overwrite）：%s" % out)
-    extras = parse_extras(args.extra)
+    extras = parse_extras(args.extra, requests=True)
+    for extra in extras:
+        if extra["name"] == "requests":
+            prepare_requests_dir(extra["args"][0], args.overwrite)
     dirs = []
     for item in args.project or []:
         path = os.path.abspath(item)

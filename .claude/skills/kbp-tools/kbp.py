@@ -122,10 +122,11 @@ def _parser():
     scan.add_argument("--src", help="产品源码目录（快照的 src/），缺省 apps/wpe-scene/src")
     scan.add_argument("--out", required=True, help="结果文件（JSON）；vitest 日志写 <out>.log")
     scan.add_argument("--extra", action="append",
-                      help="附加字段插件，可重复：modules:<category:name,…|@b3|@b4>、controlpoints[:norenderer]、sheets")
+                      help="附加字段插件，可重复：modules:<category:name,…|@b3|@b4>、controlpoints[:norenderer]、sheets、"
+                           "requests:<目录>（录翻译请求夹具，目录非空时要 --overwrite）")
     scan.add_argument("--only", help="只跑这些场景（逗号分隔的目录名）")
     scan.add_argument("--project", action="append", help="另加的工程目录（排在语料之后，sample 是目录名），可重复")
-    scan.add_argument("--overwrite", action="store_true")
+    scan.add_argument("--overwrite", action="store_true", help="结果文件已存在、requests 的夹具目录非空时覆盖")
     scan.add_argument("--timeout", type=float, default=3600)
     scan.add_argument("--quiet", action="store_true", help="不把 vitest 的输出转到 stderr")
     cdiff = corpus_sub.add_parser("diff", help="比两次语料结果：出错、干净场景增减、每个键增减了哪些场景、剩余键")

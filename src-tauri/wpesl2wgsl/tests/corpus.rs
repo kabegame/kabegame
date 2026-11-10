@@ -1,16 +1,24 @@
 //! 本机 WPE 语料测试：`KABEGAME_WPE_ROOT` 指向 WPE 安装目录（如
-//! `D:\Applications\Steam\steamapps\common\wallpaper_engine`）时才跑，没有就跳过；只读，不写任何 WPE 文件。
+//! `D:\Applications\Steam\steamapps\common\wallpaper_engine`）时才跑 1、2，没有就跳过；只读，不写任何 WPE 文件。
 //!
 //! 1. 门槛：P1 样本（eagleflag / deep_space / beach）用到的着色器对按其材质的 COMBO 与纹理必须翻译通过；
 //! 2. 基线：`assets/shaders`、`assets/effects`、`projects/defaultprojects` 下全部着色器对在默认 COMBO
 //!    （只绑定 g_Texture0）下的通过率，按失败阶段与首条错误汇总，完整报告写到 `CARGO_TARGET_TMPDIR`。
+//! 3. 请求夹具（P7a）：`WPESL2WGSL_REQUESTS` 指向 `kbp corpus scan --extra requests:<目录>` 录下的夹具目录时，逐个重放
+//!    编译管线真实发出的请求；`ok` 必须和夹具里记录的（前端 wasm 的结果）一致。没设就跳过。
+//!
+//! 逐字节基线：`WPESL2WGSL_BASELINE_DIR` 指向一份旧的导出目录（`WPESL2WGSL_DUMP_DIR` 导出的）时，本次导出逐文件和它比较，
+//! 「变了」「新失败」非空时失败，`WPESL2WGSL_BASELINE_ALLOW`（逗号分隔的键前缀）列出的除外。
+//! 环境变量里的相对路径按仓库根解析（cargo test 的工作目录是本 crate）。
 //!
 //! 看汇总：`cargo test -p wpesl2wgsl --test corpus -- --nocapture`
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
+use serde::Deserialize;
 use wpesl2wgsl::{translate, BoundTexture, TranslateRequest, TranslateResult};
 
 struct Program {
@@ -34,19 +42,45 @@ fn read(path: &Path) -> String {
         .to_string()
 }
 
-/// `WPESL2WGSL_DUMP_DIR` 设了时，每次成功的翻译把生成的 GLSL / WGSL 写到这个目录（供人工审阅、前后逐字节比较）。
-fn dump_dir() -> Option<PathBuf> {
-    std::env::var_os("WPESL2WGSL_DUMP_DIR").map(PathBuf::from)
+/// 环境变量里的路径；相对路径按仓库根（工作区根）解析，因为 cargo test 的工作目录是本 crate 而不是调用处。
+fn env_path(name: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::var_os(name).filter(|v| !v.is_empty())?);
+    if path.is_absolute() {
+        return Some(path);
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("仓库根");
+    Some(root.join(path))
 }
 
-/// 把一次成功翻译的输出写进 [`dump_dir`]：`<键>.vert.glsl` / `.vert.wgsl` / `.frag.glsl` / `.frag.wgsl`。
-fn dump(key: &str, result: &TranslateResult) {
-    let (Some(dir), true) = (dump_dir(), result.ok) else {
-        return;
-    };
-    fs::create_dir_all(&dir).expect("建 dump 目录");
-    let key: String = key
-        .chars()
+/// 导出目录：`WPESL2WGSL_DUMP_DIR` 设了时，每次成功的翻译把生成的 GLSL / WGSL 写到这个目录（供人工审阅、前后逐字节比较）。
+/// 没设而设了 `WPESL2WGSL_BASELINE_DIR` 时导出到 `CARGO_TARGET_TMPDIR` 下的临时目录（先清空）：基线比较要用本次导出。
+fn dump_dir() -> Option<&'static Path> {
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DIR.get_or_init(|| {
+        if let Some(dir) = env_path("WPESL2WGSL_DUMP_DIR") {
+            return Some(dir);
+        }
+        env_path("WPESL2WGSL_BASELINE_DIR")?;
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("wpesl2wgsl-dump");
+        let _ = fs::remove_dir_all(&dir);
+        Some(dir)
+    })
+    .as_deref()
+}
+
+/// 本次导出写过的文件名与写的次数。基线比较只看本次写过的文件（导出目录里残留的旧文件不算）；写了不止一次说明两个键
+/// 规整后撞名，报告里列出来。
+fn dumped() -> &'static Mutex<BTreeMap<String, usize>> {
+    static WRITTEN: OnceLock<Mutex<BTreeMap<String, usize>>> = OnceLock::new();
+    WRITTEN.get_or_init(Default::default)
+}
+
+/// 导出文件名里的键：字母数字与 `-_.=` 以外的字符换成 `_`。
+fn sanitize(key: &str) -> String {
+    key.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || "-_.=".contains(c) {
                 c
@@ -54,12 +88,24 @@ fn dump(key: &str, result: &TranslateResult) {
                 '_'
             }
         })
-        .collect();
+        .collect()
+}
+
+/// 把一次成功翻译的输出写进 [`dump_dir`]：`<键>.vert.glsl` / `.vert.wgsl` / `.frag.glsl` / `.frag.wgsl`。
+fn dump(key: &str, result: &TranslateResult) {
+    let (Some(dir), true) = (dump_dir(), result.ok) else {
+        return;
+    };
+    fs::create_dir_all(dir).expect("建 dump 目录");
+    let key = sanitize(key);
+    let mut written = dumped().lock().unwrap();
     for (stage, output) in [("vert", &result.vertex), ("frag", &result.fragment)] {
         let Some(output) = output else { continue };
         for (ext, text) in [("glsl", &output.glsl), ("wgsl", &output.wgsl)] {
             if let Some(text) = text {
-                fs::write(dir.join(format!("{key}.{stage}.{ext}")), text).expect("写 dump");
+                let file = format!("{key}.{stage}.{ext}");
+                fs::write(dir.join(&file), text).expect("写 dump");
+                *written.entry(file).or_default() += 1;
             }
         }
     }
@@ -258,11 +304,27 @@ fn program<'a>(programs: &'a [Program], name: &str) -> &'a Program {
 
 #[test]
 fn corpus() {
-    let Some(root) = wpe_root() else {
-        eprintln!("跳过：未设置 KABEGAME_WPE_ROOT（WPE 安装目录）");
-        return;
-    };
-    let programs = collect(&root);
+    // 各部分的失败先攒着，全部报告打完再一起断言（1b、1c 的门槛照旧当场断言）
+    let mut failures: Vec<String> = Vec::new();
+    match wpe_root() {
+        Some(root) => installed(&root, &mut failures),
+        None => eprintln!("跳过 1、2：未设置 KABEGAME_WPE_ROOT（WPE 安装目录）"),
+    }
+    match env_path("WPESL2WGSL_REQUESTS") {
+        Some(dir) => requests(&dir, &mut failures),
+        None => eprintln!(
+            "跳过 3：未设置 WPESL2WGSL_REQUESTS（请求夹具目录，kbp corpus scan --extra requests:<目录>）"
+        ),
+    }
+    if let Some(dir) = env_path("WPESL2WGSL_BASELINE_DIR") {
+        baseline(&dir, &mut failures);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// 1、2：WPE 安装目录里的着色器对。
+fn installed(root: &Path, failures: &mut Vec<String>) {
+    let programs = collect(root);
 
     // 1. 门槛：P1 样本按材质实际的 COMBO 与纹理（格式取样本里的 DXT5 / RGBA8888）
     let gates: &[(&str, &[(&str, i64)], &[(u32, u32)])] = &[
@@ -404,16 +466,319 @@ fn corpus() {
     fs::write(&report_path, format!("{out}\n{report}")).expect("写报告");
     println!("{out}完整报告：{}", report_path.display());
 
-    assert!(
-        gate_failures.is_empty(),
-        "P1 门槛未通过：\n{}",
-        gate_failures.join("\n\n")
+    if !gate_failures.is_empty() {
+        failures.push(format!("P1 门槛未通过：\n{}", gate_failures.join("\n\n")));
+    }
+    if !reparse_failures.is_empty() {
+        failures.push(format!(
+            "输出的 WGSL 回读失败：\n{}",
+            reparse_failures.join("\n")
+        ));
+    }
+}
+
+/// 夹具文件 `<sha1>.json`（`kbp corpus scan --extra requests:<目录>` 写的）。
+#[derive(Deserialize)]
+struct Fixture {
+    /// 着色器名（同产品 `shader:<名>:…`），反查不到是 `?`；同一请求出自几个名字时是 `names` 的第一个。
+    name: String,
+    /// 编译时用这个请求的全部着色器名（工坊包常把同一个 effect 拷到不同目录）。
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    scenes: Vec<String>,
+    /// 前端 wasm 当时的结果。
+    result: FixtureResult,
+    request: TranslateRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureResult {
+    ok: bool,
+    phase: Option<String>,
+    first_error: Option<String>,
+}
+
+/// 失败结果的全部信息：阶段、所在着色器、缺的头文件 / 库、全部诊断（带位置）。
+fn full_errors(result: &TranslateResult) -> String {
+    let mut out = format!(
+        "{} {}",
+        result.phase.unwrap_or("?"),
+        result
+            .stage
+            .map(|s| format!("{s:?}").to_lowercase())
+            .unwrap_or_default()
     );
-    assert!(
-        reparse_failures.is_empty(),
-        "输出的 WGSL 回读失败：\n{}",
-        reparse_failures.join("\n")
+    if !result.missing.is_empty() {
+        out.push_str(&format!("\n    missing {:?}", result.missing));
+    }
+    if !result.requires.is_empty() {
+        out.push_str(&format!("\n    requires {:?}", result.requires));
+    }
+    for error in &result.errors {
+        let at = match (&error.file, error.line) {
+            (file, Some(line)) => format!(
+                "{}{line}:{} ",
+                file.as_deref().map(|f| format!("{f}:")).unwrap_or_default(),
+                error.column.unwrap_or(0)
+            ),
+            (Some(file), None) => format!("{file} "),
+            _ => String::new(),
+        };
+        out.push_str(&format!(
+            "\n    {at}{}",
+            error.message.replace('\n', "\n      ")
+        ));
+    }
+    out
+}
+
+/// 3：重放请求夹具。成功的回读校验并按 `<名字>-<sha1 前 8 位>` 导出；`ok` 与夹具记录的不一致算失败。
+fn requests(dir: &Path, failures: &mut Vec<String>) {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("读夹具目录 {} 失败：{e}", dir.display()))
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    files.sort();
+    #[derive(Default)]
+    struct Shader {
+        ok: usize,
+        failed: Vec<String>,
+    }
+    let mut by_name: BTreeMap<String, Shader> = BTreeMap::new();
+    // 全部名字（含别名）与其中失败过的：和语料扫描 `shader:<名>:…` 键的名字集合对照
+    let (mut all_names, mut failed_all) = (BTreeSet::new(), BTreeSet::new());
+    let mut mismatches = Vec::new();
+    let mut reparse_failures = Vec::new();
+    let mut ok = 0;
+    for file in &files {
+        let sha = file.file_stem().unwrap().to_string_lossy().to_string();
+        let short = &sha[..sha.len().min(8)];
+        let fixture: Fixture = serde_json::from_str(&read(file))
+            .unwrap_or_else(|e| panic!("夹具 {} 解析失败：{e}", file.display()));
+        let mut request = fixture.request;
+        request.debug = dump_dir().is_some();
+        let result = translate(&request);
+        let shader = by_name.entry(fixture.name.clone()).or_default();
+        let aliases: Vec<&String> = fixture
+            .names
+            .iter()
+            .filter(|n| **n != fixture.name)
+            .collect();
+        all_names.extend(fixture.names.iter().cloned());
+        all_names.insert(fixture.name.clone());
+        if !result.ok {
+            failed_all.extend(fixture.names.iter().cloned());
+            failed_all.insert(fixture.name.clone());
+        }
+        if result.ok != fixture.result.ok {
+            mismatches.push(format!(
+                "{} {short}：夹具 ok={}（{} {}），重放 ok={}（{}）",
+                fixture.name,
+                fixture.result.ok,
+                fixture.result.phase.as_deref().unwrap_or("-"),
+                fixture.result.first_error.as_deref().unwrap_or(""),
+                result.ok,
+                summary(&result)
+            ));
+        }
+        if result.ok {
+            ok += 1;
+            shader.ok += 1;
+            for (stage, output) in [("vertex", &result.vertex), ("fragment", &result.fragment)] {
+                let wgsl = output
+                    .as_ref()
+                    .and_then(|o| o.wgsl.as_deref())
+                    .unwrap_or_default();
+                if let Err(error) = reparse_wgsl(wgsl) {
+                    reparse_failures.push(format!("{} {short} {stage}: {error}", fixture.name));
+                }
+            }
+            dump(&format!("{}-{short}", fixture.name), &result);
+        } else {
+            let aliases = if aliases.is_empty() {
+                String::new()
+            } else {
+                format!("，也叫 {aliases:?}")
+            };
+            shader.failed.push(format!(
+                "FAIL {short}（{} 个场景：{}{aliases}）{}",
+                fixture.scenes.len(),
+                fixture.scenes.join(","),
+                full_errors(&result)
+            ));
+        }
+    }
+    let failed_names: Vec<_> = by_name
+        .iter()
+        .filter(|(_, s)| !s.failed.is_empty())
+        .collect();
+    let mut out = format!(
+        "请求夹具：{} 个请求（{} 个着色器，含别名 {}），通过 {ok}、失败 {}；失败的着色器 {} 个（含别名 {}）；ok 与夹具不一致 {}；WGSL 回读失败 {}\n",
+        files.len(),
+        by_name.len(),
+        all_names.len(),
+        files.len() - ok,
+        failed_names.len(),
+        failed_all.len(),
+        mismatches.len(),
+        reparse_failures.len()
     );
+    for (name, shader) in &failed_names {
+        // 第一条失败的首条诊断（第 1 行是 FAIL 头，第 2 行起是错误）
+        let first = shader.failed[0].lines().nth(1).unwrap_or("").trim();
+        out.push_str(&format!(
+            "  {name}  失败 {}/{}  {}\n",
+            shader.failed.len(),
+            shader.failed.len() + shader.ok,
+            first.chars().take(110).collect::<String>()
+        ));
+    }
+    for line in mismatches.iter().chain(&reparse_failures) {
+        out.push_str(&format!("  {line}\n"));
+    }
+    let mut report = String::new();
+    for (name, shader) in &by_name {
+        report.push_str(&format!(
+            "== {name}（通过 {} / 共 {}）\n",
+            shader.ok,
+            shader.ok + shader.failed.len()
+        ));
+        for failure in &shader.failed {
+            report.push_str(&format!("  {failure}\n"));
+        }
+    }
+    let report_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("wpesl2wgsl-requests.txt");
+    fs::write(&report_path, format!("{out}\n{report}")).expect("写报告");
+    println!(
+        "{out}完整报告（每条失败的全部错误）：{}",
+        report_path.display()
+    );
+
+    if !mismatches.is_empty() {
+        failures.push(format!(
+            "请求夹具重放的 ok 与夹具记录的不一致：\n{}",
+            mismatches.join("\n")
+        ));
+    }
+    if !reparse_failures.is_empty() {
+        failures.push(format!(
+            "请求夹具输出的 WGSL 回读失败：\n{}",
+            reparse_failures.join("\n")
+        ));
+    }
+}
+
+/// 逐字节基线：本次导出（本次写过的文件）和旧导出目录逐文件比较。
+fn baseline(dir: &Path, failures: &mut Vec<String>) {
+    let current_dir = dump_dir().expect("设了 WPESL2WGSL_BASELINE_DIR 就有导出目录");
+    let written = dumped().lock().unwrap().clone();
+    let old: BTreeSet<String> = fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("读基线目录 {} 失败：{e}", dir.display()))
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    // 键前缀按导出文件名的规则规整，`effects/foo` 与 `effects_foo` 都能写
+    let allow: Vec<String> = std::env::var("WPESL2WGSL_BASELINE_ALLOW")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(sanitize)
+        .collect();
+    let allowed = |file: &str| allow.iter().any(|p| file.starts_with(p.as_str()));
+    let mut same = 0;
+    let (mut changed, mut new_pass, mut new_fail) = (Vec::new(), Vec::new(), Vec::new());
+    for file in written.keys() {
+        if !old.contains(file) {
+            new_pass.push(file.clone());
+        } else if fs::read(current_dir.join(file)).ok() == fs::read(dir.join(file)).ok() {
+            same += 1;
+        } else {
+            changed.push(file.clone());
+        }
+    }
+    for file in &old {
+        if !written.contains_key(file) {
+            new_fail.push(file.clone());
+        }
+    }
+    let duplicated: Vec<_> = written
+        .iter()
+        .filter(|(_, n)| **n > 1)
+        .map(|(f, n)| format!("{f}（{n} 次）"))
+        .collect();
+    let mark = |file: &String| {
+        if allowed(file) {
+            format!("{file}（允许）")
+        } else {
+            file.clone()
+        }
+    };
+    let mut out = format!(
+        "逐字节基线（{}）：相同 {same}、变了 {}、新通过 {}、新失败 {}（本次 {} 个文件，基线 {} 个）\n",
+        dir.display(),
+        changed.len(),
+        new_pass.len(),
+        new_fail.len(),
+        written.len(),
+        old.len()
+    );
+    let mut report = String::new();
+    for (label, list) in [
+        ("变了", &changed),
+        ("新通过", &new_pass),
+        ("新失败（基线有、本次没有）", &new_fail),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("{label}：\n"));
+        report.push_str(&format!("{label}：\n"));
+        for (i, file) in list.iter().enumerate() {
+            if i < 50 {
+                out.push_str(&format!("  {}\n", mark(file)));
+            }
+            report.push_str(&format!("  {}\n", mark(file)));
+        }
+        if list.len() > 50 {
+            out.push_str(&format!("  ……共 {} 个\n", list.len()));
+        }
+    }
+    if !duplicated.is_empty() {
+        out.push_str(&format!(
+            "本次导出撞名（同一文件写了不止一次）：{duplicated:?}\n"
+        ));
+    }
+    let report_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("wpesl2wgsl-baseline.txt");
+    fs::write(&report_path, format!("{out}\n{report}")).expect("写报告");
+    println!(
+        "{out}完整清单：{}；本次导出：{}",
+        report_path.display(),
+        current_dir.display()
+    );
+
+    let blocking: Vec<_> = changed
+        .iter()
+        .filter(|f| !allowed(f))
+        .map(|f| format!("变了 {f}"))
+        .chain(
+            new_fail
+                .iter()
+                .filter(|f| !allowed(f))
+                .map(|f| format!("新失败 {f}")),
+        )
+        .collect();
+    if !blocking.is_empty() {
+        failures.push(format!(
+            "逐字节基线不一致（WPESL2WGSL_BASELINE_ALLOW 以外）：\n{}",
+            blocking.join("\n")
+        ));
+    }
 }
 
 /// 几何着色器展开的门槛组合，返回失败项。
