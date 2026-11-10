@@ -112,7 +112,7 @@ export function scenePointer(style, placement, canvasWidth, canvasHeight, x, y):
 
 ### 0a — 语料（Claude，已做）
 
-`ignore/p5/a0/scan_a.py`，结果在 `ignore/p5/a0/out/scan_a.txt`，结论见上「范围与解锁」。还要补一项：扫描场景脚本里真正读写 `cameraparallax*`、`camerashake*`、`zoom`、`parallaxDepth` 的地方，现在的脚本把 general 里的键也算进去了。
+`ignore/p5/a0/scan_a.py`，结果在 `ignore/p5/a0/out/scan_a.txt`，结论见上「范围与解锁」。脚本源码里的读写另由 `scan_scripts.py` 扫（`out/scan_scripts.txt`），结论见报告。
 
 ### 0b — 确定性工程与实测（Claude）
 
@@ -133,6 +133,42 @@ export function scenePointer(style, placement, canvasWidth, canvasHeight, x, y):
 真实样本：抓 `2381978484`（模板）、`3445915391`、`3818481122`、`3830255100`，读各图层的 MVP 平移和 `g_ParallaxPosition`（`3818481122` 的 effect 读它），用记下的指针复算。
 
 **验收：** 每条公式都有工程对上，或者写明被推翻的地方和改正后的公式；结论写进 [p5-REPORT.md](p5-REPORT.md)（新建，格式照 `p4-particles-REPORT.md`）；对步骤 1–4 的影响写进本文件的实施记录。
+
+### 步骤 0 实施记录（2026-11-10）
+
+结论全在 [p5-REPORT.md](p5-REPORT.md)「P5a 语义的实测核对」：读码的公式全部成立，没有被推翻的。16 个确定性工程加 4 张真实样本，图层偏移的误差都是 0，只有一张真实样本最大 0.12 像素，原因是那一帧平滑还没收敛。两处读码没写清的，实测补上了：
+- `roughness` 的临界比较要按 float32 算；
+- 视差点 P 本身不钳制，只有 `g_ParallaxPosition` 钳到 0…1。
+
+读码只补的两处：
+- 合成路径：上屏那一下乘偏移，画进合成 RT 的基础 pass 不乘，抓帧直接看到了，不用再读码。
+- `parallaxDepth` 的绑定：I3 记「只改字段、没有回调」，视差每次绘制都重读，所以就地生效。
+
+**对各步的影响：**
+- **步骤 1（前置）：** 五条全部实测成立，按总计划做。
+  - `parseWpeJson` 认 `//` 注释；
+  - `depthwrite` 在 translucent / additive 或 `depthtest: disabled` 时中性；
+  - `cropoffset`、`config` 中性；
+  - 模型 JSON 的布尔键只认 `true`。
+- **步骤 2（视差）：**
+  - P 和 `g_ParallaxPosition` 分开存：P 不钳制，uniform 钳制。
+  - 平滑用本帧的 dt，k 钳到 1，被钳过的帧时钟同样照用。
+  - P 的初值是场景中心，加载时 `g_ParallaxPosition` 写 (0.5, 0.5)。
+  - 偏移按根对象的 `origin` 字段（脚本、属性写回后的当前值）和深度算，缺省深度 (1, 1)。
+  - 偏移只作用在绘制上：上屏 draw 与粒子 draw 乘，画进合成 RT 的 pass 不乘，粒子模拟和控制点的反投影也不乘。
+  - 场景比例和画布不同时，P 用场景宽高；`fill` 下指针就是画布归一化坐标，和 WPE 相同。
+- **步骤 3（抖动）：**
+  - 偏移按 float32 算 `roughness³` 与阈值比较；
+  - 偏移同时加到 eye（`g_EyePosition` 跟着变）和视差点上，图层整体平移 −偏移；
+  - 时间用本帧 `g_Time`。
+- **步骤 4（缩放）：** 绕场景中心缩放；视差偏移在缩放之前、按场景单位加。
+- **给 P5b、P5d：** 正交 2D 场景也绑着深度目标（GREATER、`front_ccw`）；普通绘制的颜色写掩码是 7，不写 alpha。
+
+**工具（留给步骤 2–4 的回放核对）：**
+- 工程：`ignore/p5/a0/gen_a.py`。
+- 导出：`rdc_dump.py`，在 `qrenderdoc --python` 下无界面跑，一次导出整批抓帧的常量。
+- 核对：`ana_a.py`、`ana_pre.py`、`ana_real.py`。
+- 抓帧：`A:\p5a\*`。
 
 ## 步骤 1 — 前置：能力表修正
 
