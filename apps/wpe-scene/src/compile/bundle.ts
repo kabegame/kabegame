@@ -28,6 +28,7 @@ import {
   checkProgramFeatures,
   checkSceneFeatures,
   checkScriptFeatures,
+  modelFlag,
   objectKind,
   PARTICLE_UNIFORMS,
   usesLighting,
@@ -1021,7 +1022,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     const model = parseModel(modelText);
     checkModelFeatures(model, unsupported);
-    layer.solidLayer = !!model.solidlayer && !model.instanced;
+    layer.solidLayer = modelFlag(model, "solidlayer") && !modelFlag(model, "instanced");
     if (!model.material) {
       unsupported.add("material:missing");
       continue;

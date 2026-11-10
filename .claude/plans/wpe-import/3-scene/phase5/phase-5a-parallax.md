@@ -172,7 +172,155 @@ export function scenePointer(style, placement, canvasWidth, canvasHeight, x, y):
 
 ## 步骤 1 — 前置：能力表修正
 
-动工前写细。内容见总计划「前置」与上表。验收：`3778549173` 解锁并和 WPE 比画面；语料的变化只在这几个键上，现有基线逐张相同。
+### 思路
+
+五条都由步骤 0 实测定论（p5-REPORT「P5a 语义的实测核对」最后五行），都是能力表和 JSON 读取的小改动，渲染器不动：
+- **注释**：WPE 读 JSON 用 jsoncpp，缺省允许注释；`parseWpeJson` 严格解析失败时，先去掉注释再去尾逗号。
+- **两个中性键**：`cropoffset` 是编辑器写的偏移，导入时已经加进了 `origin`；对象 `config` 只在托盘与播放列表代码里读。两者都放行。
+- **深度写入**：translucent / additive 的 pass 一律不写深度，`depthtest: disabled` 也连带不写。这两种情况下 `depthwrite: enabled` 不改变画面，不报。其余情况照报，留给 P5d。
+- **布尔键**：模型 JSON 的布尔键只认 JSON `true`。能力表和 `bundle.ts` 读 `solidlayer` 的地方用同一个判断，语料里这些键全写成 `true`（`ignore/p5/s1/scan_bool.py`），收紧后结果不变。
+
+### 现状锚点
+
+**a. 宽松 JSON 只去尾逗号**（`compile/model.ts:97`）
+```ts
+export function parseWpeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const relaxed = text.replace(
+      /("(?:\\[\s\S]|[^"\\])*")|,(\s*[\]}])/g,
+      (match, string: string | undefined, end) => string ?? end,
+    ); // 现状：不认 `//`、`/* */` 注释，fantasticcar 的 materials/car/glass.json 解析失败、整张编译抛错
+```
+
+**b. 对象 `config`、模型 `cropoffset` 落进未知键**（`compile/features.ts:169`、`:210`、`:436`）
+```ts
+const SUPPORTED_OBJECT = new Set([/* … */ "parallaxDepth"]); // 现状：没有 config，报 object:config（14 张）
+const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "solidlayer"]); // 现状：没有 cropoffset
+export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
+  for (const key of ["puppet", "fullscreen", "passthrough"]) if (active(model[key])) unsupported.add(`model:${key}`);
+  for (const [key, value] of Object.entries(model))
+    if (!SUPPORTED_MODEL.has(key) && !["puppet", "fullscreen", "passthrough"].includes(key) && active(value))
+      unsupported.add(`model:${key}`); // 现状：active() 把 1、"true"、"0 0" 都当真
+```
+
+**c. `depthwrite` 不看混合模式**（`compile/features.ts:458`）
+```ts
+  if (pass.depthwrite && pass.depthwrite !== "disabled") unsupported.add(`depthwrite:${pass.depthwrite}`);
+  // 现状：translucent、depthtest disabled 的 pass 写 enabled 也报，3778549173 只差这一个
+```
+
+**d. `solidLayer` 按真值判断**（`compile/bundle.ts:1024`）
+```ts
+    layer.solidLayer = !!model.solidlayer && !model.instanced; // 现状：写成 1 也算
+```
+
+### 点 1 — 注释（`compile/model.ts`）
+- **修改** `parseWpeJson`：严格解析失败时，先去 `//` 行注释与 `/* */` 块注释，再去尾逗号；字符串里的内容都不动。
+  > 说明：`//` 已实测；`/* */` 是 jsoncpp 同一个开关，推断，语料 0 处。
+
+```ts
+// 字符串（第一组）原样保留，其余匹配到的注释删掉
+const JSON_COMMENT = /("(?:\\[\s\S]|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+const JSON_TRAILING_COMMA = /("(?:\\[\s\S]|[^"\\])*")|,(\s*[\]}])/g;
+
+export function parseWpeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const relaxed = text
+      .replace(JSON_COMMENT, (_match, string: string | undefined) => string ?? "") // 新增：先去注释
+      .replace(JSON_TRAILING_COMMA, (_match, string: string | undefined, end: string | undefined) => string ?? end ?? "");
+    if (relaxed === text) throw error;
+    // 以下不变
+```
+
+### 点 2 — 能力表（`compile/features.ts`）
+- **修改** `SUPPORTED_OBJECT` 加 `config`，`SUPPORTED_MODEL` 加 `cropoffset`，注释写明依据。
+- **新增** `MODEL_FLAGS` 与导出的 `modelFlag(model, key)`：布尔键只认 `=== true`。
+- **修改** `checkModelFeatures`：合成一个循环，布尔键用 `modelFlag`，其余（`puppet` 是路径字符串）仍用 `active()`；报出的键名不变。
+- **修改** `checkPassFeatures` 的 `depthwrite`：只在这个 pass 真会写深度时报。
+
+```ts
+/**
+ * 模型 JSON 的布尔键（`FUN_1401fac50`，rea-p5-modelflags §7）：WPE 只认 JSON 的 `true`，写成 1、字符串等于没写
+ * （P5a 步骤 0 实测 `fullscreen: 1` 不生效）。
+ */
+const MODEL_FLAGS = new Set(["fullscreen", "nopadding", "autosize", "passthrough", "solidlayer", "projectlayer", "instanced"]);
+export function modelFlag(model: ModelJson, key: string): boolean {
+  return model[key] === true;
+}
+
+export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
+  for (const [key, value] of Object.entries(model)) {
+    if (SUPPORTED_MODEL.has(key)) continue;
+    if (MODEL_FLAGS.has(key) ? value === true : active(value)) unsupported.add(`model:${key}`);
+  }
+  scanValue(model, unsupported);
+}
+
+/**
+ * 这个 pass 会不会写深度（`FUN_140099f60`，rea-p5-mesh 3.4，P5a 步骤 0 实测）：translucent / additive 一律不写，
+ * `depthtest: disabled` 也不写。缺 `depthtest` 时 WPE 按 enabled（P5d 再改缺省），这里照 WPE 当作会写。
+ */
+function writesDepth(pass: MaterialPass): boolean {
+  const blending = pass.blending ?? "normal";
+  return pass.depthtest !== "disabled" && (blending === "normal" || blending === "alphatocoverage");
+}
+// checkPassFeatures 里：
+  if (pass.depthwrite && pass.depthwrite !== "disabled" && writesDepth(pass))
+    unsupported.add(`depthwrite:${pass.depthwrite}`);
+```
+
+### 点 3 — `bundle.ts` 读布尔键
+- **修改** `layer.solidLayer = modelFlag(model, "solidlayer") && !modelFlag(model, "instanced")`。
+
+### 点 4 — 单测（新增 `compile/p5a.test.ts`）
+- `parseWpeJson`：`//` 行注释、`/* */` 块注释、字符串里的 `//`（如 `"http://x"`）原样保留、注释后紧跟尾逗号。
+- `checkModelFeatures`：`cropoffset` 不报；`fullscreen: 1`、`nopadding: "true"` 不报，`fullscreen: true` 报 `model:fullscreen`。
+- `checkObjectFeatures`：`config: {passthrough: true}` 不报。
+- `checkPassFeatures` 的 `depthwrite: enabled`：translucent、additive、normal 加 `depthtest: disabled` 都不报；normal 加 `depthtest: enabled`、normal 缺 `depthtest` 报 `depthwrite:enabled`。
+
+### 验收
+- `apps/wpe-scene` 的 vitest（`KABEGAME_WPE_ROOT` 指向 WPE）、tsc、Prettier 通过。
+- **语料**（`ignore/p5/s1/corpus.test.ts`，HEAD 导出 `ignore/p5/s1/head/src` 对工作区）：
+  - 只少 `model:cropoffset`、`object:config` 和一部分 `depthwrite:enabled`，不新增键，没有编译出错；
+  - 少掉 `depthwrite:enabled` 的场景，逐张核对它的 pass 都属于中性情况；
+  - 能渲染 23 → 24，新解锁 `3778549173`。
+- **`3778549173` 和 WPE 比画面**：WPE 抓帧用 `wpe-renderdoc` MCP，整帧与粒子统计用 `kbp rdc frame` / `stats`；我们这边用 `kabegame-dev` MCP 渲染同一时刻。粒子以外逐像素比，粒子比数量、尺寸、分布。
+- 文档、changelog 与回归留到 P5a 收尾一起写。
+
+### 步骤 1 实施记录（2026-11-10）
+
+子代理按点 1–4 实现，Claude 独立验收。开工前 P4d 步骤 1 已提交（`b721f636`），共享文件是干净的。
+
+**改动**（`apps/wpe-scene/src/compile/`）：
+- `model.ts`：`JSON_COMMENT`、`JSON_TRAILING_COMMA`；`parseWpeJson` 先去注释、再去尾逗号。
+- `features.ts`：`SUPPORTED_OBJECT` 加 `config`，`SUPPORTED_MODEL` 加 `cropoffset`；`MODEL_FLAGS` 与导出的 `modelFlag`；`checkModelFeatures` 合成一个循环；`writesDepth`。
+- `bundle.ts`：`solidLayer` 用 `modelFlag`。
+- `p5a.test.ts`（新增）：点 4 的用例，另有字符串里的 `/*` 与转义引号、去注释后仍不合法要抛错、`puppet` 与未知键照报、`modelFlag` 对 1 和 `"true"` 为假。
+
+子代理报的两处细节，验收时确认无害：
+- 一个模型报多个键时，Set 里的顺序改成按模型 JSON 的键序；能力表只当集合用。
+- 混合模式不在支持表里时（如 `multiply`），`depthwrite` 不再单独报；这种 pass 照样报 `blend:<模式>`，整张退回不变。
+
+**验收**：
+- **类型、测试、格式**：tsc 通过；vitest 50 个文件、1343 个用例全部通过（带 `KABEGAME_WPE_ROOT`）；Prettier 通过。
+- **语料**（`ignore/p5/s1/corpus.test.ts`，`corpus_diff.py`，结果 `out/corpus-diff.txt`）：
+  - 能渲染 23 → 24，新解锁 `3778549173`，没有场景不再能渲染；
+  - 去掉的键只有 `model:cropoffset`（34 张）、`object:config`（14 张）、`depthwrite:enabled`（5 张）；不新增键，没有编译出错；
+  - 5 张去掉 `depthwrite:enabled` 的逐个材质核对（`check_depthwrite.py`，读法用 kbp-tools 的 `content` 库）：编译路径上的 pass 都是 translucent / additive 或 `depthtest: disabled`。3453730450 另有 4 个 normal 且写深度的材质，都在 `materials/models/` 下，是 mdl 网格的材质，现在不编译，归 P5c、P5d；
+  - 语料里模型布尔键全写成 `true`，带注释的 JSON 只有 fantasticcar 一个（`scan_bool.py`），收紧和注释支持都不改变现有结果。
+- **`3778549173` 和 WPE 比画面**：
+  - WPE 用 `wpe-renderdoc` 开 2560×1440 窗口、fps 20 抓 3 帧（`A:\p5a\3778549173-fps20`）。整帧图、画完图像层时（事件 27）的渲染目标、粒子统计量都用 `kbp rdc frame` / `stats` 导出，放在 `ignore/p5/s1/out/`。这张场景没有着色器读 `g_Time`。
+  - 静态部分（`cmp_static.py`）：WPE 取画完图像层时的渲染目标；我们这边 `render_scene` 不回放，带着预热的雪花、灰烬，两者都是 additive。结果是没有一个像素比 WPE 暗；96.86% 的像素完全相同；更亮的 2.65% 是粒子。
+  - 粒子（`cmp_particles.py`，结果 `out/cmp-particles.txt`）：按 fps 20 的均匀帧时间（`make_log.py` 造的日志）用 `particle_track` 回放到第 286–288 帧。
+    - 灰烬：2306 对 2306–2316，尺寸、透明度、颜色范围逐位相同；
+    - 雪花：288–290 对 280–286（上限 300），尺寸、颜色范围几乎相同；
+    - 光晕：25 对 25，尺寸、颜色、透明度相近；它跟随指针，WPE 抓帧时的指针读不到，位置不比。
+
+**工具**：`ignore/p5/s1/`：`corpus.test.ts`、`vitest.config.ts`、`corpus_diff.py`、`check_depthwrite.py`、`scan_bool.py`、`cmp_static.py`、`cmp_particles.py`、`make_log.py`、`summary.py`；HEAD 源码 `head/src`。
 
 ## 步骤 2 — 视差
 

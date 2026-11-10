@@ -164,6 +164,7 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  * - `locktransforms`：编辑器锁定。
  * - `parallaxDepth`：只在 `general.cameraparallax` 打开时起作用，那时已报 `general:cameraparallax`。
  * - `parent`：层级已实现（P4a 步骤 1，`hierarchy.ts` 与 `render/layout.ts`）；灯对象例外，见 `checkObjectFeatures`。
+ * - `config`：运行时只在托盘、播放列表代码里读，渲染路径不碰；P5a 步骤 0 实测带 `config.passthrough` 的层画面不变。
  * `alignment` 为 `center`、`perspective` 为 false 时中性，其余取值另报。
  */
 const SUPPORTED_OBJECT = new Set([
@@ -186,6 +187,7 @@ const SUPPORTED_OBJECT = new Set([
   "solid",
   "ledsource",
   "parallaxDepth",
+  "config",
 ]);
 /**
  * 打开时改变画面、还没实现的对象开关。`instanceoverride` 不在这里（P4a 步骤 5）：粒子对象上按键检查
@@ -206,8 +208,25 @@ const OBJECT_FLAGS = [
  * - `autosize`：`size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸（`bundle.ts`），否则不起作用。
  * - `solidlayer`：合成 RT 按图层 `size`（`compositeSize`）；UV 不内缩（`uvInset`）。
  *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
+ * - `cropoffset`：编辑器写的偏移，导入时已加进 `origin`；`wallpaper64.exe` 里没有这个字符串，P5a 步骤 0 实测不改位置。
  */
-const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "solidlayer"]);
+const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "solidlayer", "cropoffset"]);
+/**
+ * 模型 JSON 的布尔键（`FUN_1401fac50`，rea-p5-modelflags §7）：WPE 只认 JSON 的 `true`，写成 1、字符串等于没写
+ * （P5a 步骤 0 实测 `fullscreen: 1` 不生效）。能力表与 `bundle.ts` 读这些键都经 `modelFlag`。
+ */
+const MODEL_FLAGS = new Set([
+  "fullscreen",
+  "nopadding",
+  "autosize",
+  "passthrough",
+  "solidlayer",
+  "projectlayer",
+  "instanced",
+]);
+export function modelFlag(model: ModelJson, key: string): boolean {
+  return model[key] === true;
+}
 const SUPPORTED_PASS = new Set([
   "shader",
   "blending",
@@ -433,11 +452,12 @@ export function usesLighting(result: TranslateResult): boolean {
   return (result.combos ?? []).some((combo) => combo.name.toUpperCase() === "LIGHTING" && combo.value !== 0);
 }
 
+/** 模型 JSON 的键：布尔键只认 `true`（`modelFlag`），其余（`puppet` 是路径字符串等）按 `active()`；键名报 `model:<键>`。 */
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
-  for (const key of ["puppet", "fullscreen", "passthrough"]) if (active(model[key])) unsupported.add(`model:${key}`);
-  for (const [key, value] of Object.entries(model))
-    if (!SUPPORTED_MODEL.has(key) && !["puppet", "fullscreen", "passthrough"].includes(key) && active(value))
-      unsupported.add(`model:${key}`);
+  for (const [key, value] of Object.entries(model)) {
+    if (SUPPORTED_MODEL.has(key)) continue;
+    if (MODEL_FLAGS.has(key) ? modelFlag(model, key) : active(value)) unsupported.add(`model:${key}`);
+  }
   // 关键帧（语料 0 处，防御用）；puppet 的 `animationlayers` 是整数 id，不报
   scanValue(model, unsupported);
 }
@@ -451,11 +471,22 @@ function alphaWritingUsed(value: unknown): boolean {
   return active(value) && value !== "default";
 }
 
+/**
+ * 这个 pass 会不会写深度（`FUN_140099f60`，rea-p5-mesh 3.4，P5a 步骤 0 实测）：translucent / additive 一律不写，
+ * `depthtest: disabled` 也连带不写。缺 `depthtest` 时 WPE 按 enabled（P5d 再改缺省），这里照 WPE 当作会写。
+ */
+function writesDepth(pass: MaterialPass): boolean {
+  const blending = pass.blending ?? "normal";
+  return pass.depthtest !== "disabled" && (blending === "normal" || blending === "alphatocoverage");
+}
+
 export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>): void {
   if (pass.blending && !SUPPORTED.blending.includes(pass.blending as never)) unsupported.add(`blend:${pass.blending}`);
   if (pass.cullmode && pass.cullmode !== "nocull") unsupported.add(`cull:${pass.cullmode}`);
   if (pass.depthtest && pass.depthtest !== "disabled") unsupported.add(`depthtest:${pass.depthtest}`);
-  if (pass.depthwrite && pass.depthwrite !== "disabled") unsupported.add(`depthwrite:${pass.depthwrite}`);
+  // 不写深度的 pass 上 `depthwrite: enabled` 不改变画面，不报；其余照报，留给 P5d
+  if (pass.depthwrite && pass.depthwrite !== "disabled" && writesDepth(pass))
+    unsupported.add(`depthwrite:${pass.depthwrite}`);
   // COMBO 只按整数读（I3）：写成 `{user, value}` 时 WPE 断言中止整个进程，这里按不支持退回预览图
   for (const value of Object.values(pass.combos ?? {}))
     if (value && typeof value === "object") unsupported.add("combo:user-binding");

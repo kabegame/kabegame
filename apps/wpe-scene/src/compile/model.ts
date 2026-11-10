@@ -90,18 +90,28 @@ export interface SceneEffectInstance extends JsonObject {
   }[];
 }
 
+// 字符串（第一组）原样保留，其余匹配到的注释删掉
+const JSON_COMMENT = /("(?:\\[\s\S]|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+// 字符串（第一组）原样保留，`]` / `}` 前的逗号删掉
+const JSON_TRAILING_COMMA = /("(?:\\[\s\S]|[^"\\])*")|,(\s*[\]}])/g;
+
 /**
- * WPE 的 JSON 读取比 `JSON.parse` 宽松：工坊 3286859278 自带的 `effects/fluidsimulation/effect.json` 在 `]` 前有尾逗号，
- * WPE 照常加载。严格解析失败时去掉对象 / 数组结尾的逗号（字符串内的不动）再试一次，仍失败就抛原错误。
+ * WPE 的 JSON 读取比 `JSON.parse` 宽松（jsoncpp，缺省允许注释）：
+ * - 注释：`//` 行注释已实测（fantasticcar 的 `materials/car/glass.json` 带注释行，WPE 照常加载，P5a 步骤 0）；
+ *   `/*` 开头的块注释是 jsoncpp 同一个开关，推断，语料 0 处。
+ * - 尾逗号：工坊 3286859278 自带的 `effects/fluidsimulation/effect.json` 在 `]` 前有尾逗号，WPE 照常加载。
+ * 严格解析失败时先去注释、再去对象 / 数组结尾的逗号（字符串内的都不动）再试一次，仍失败就抛原错误。
  */
 export function parseWpeJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch (error) {
-    const relaxed = text.replace(
-      /("(?:\\[\s\S]|[^"\\])*")|,(\s*[\]}])/g,
-      (match, string: string | undefined, end) => string ?? end,
-    );
+    const relaxed = text
+      .replace(JSON_COMMENT, (_match, string: string | undefined) => string ?? "")
+      .replace(
+        JSON_TRAILING_COMMA,
+        (_match, string: string | undefined, end: string | undefined) => string ?? end ?? "",
+      );
     if (relaxed === text) throw error;
     try {
       return JSON.parse(relaxed);
