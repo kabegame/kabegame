@@ -30,6 +30,7 @@
  * - `root`：只认根对象直接访问。全局对象的成员都用它；图层等类型里名字通用的（`play`、`stop`、`text`、`volume` 这类，
  *   会和普通 JS 或脚本自己的对象撞名）只认 `thisLayer.` / `thisObject.`。
  * - `any`：任意接收者上的 `.成员` / `?.成员` / `["成员"]` 都算，只收名字足够独特的，每项写一句理由。
+ * - 例外（P6a 步骤 1）：场景里有声音对象时，`layer` 组的 `play` / `pause` / `stop` / `isPlaying` 按 `any` 匹配（`SOUND_LAYER_METHODS`）。
  * 子对象（`ITextureAnimation`、`IVideoTexture`、`IAnimationLayer`、`IAnimation`、`IModelData`、`IAssetHandle`）只能经表里的入口方法拿到，
  * 入口已经会报，它们自己的成员（`setFrame`、`play`、`applyData` …）不收。
  *
@@ -461,14 +462,32 @@ const ROOT_INDEX: Readonly<Record<ResolvedGroup, Map<string, string>>> = {
 const ANY_INDEX = index(Object.keys(MISSING_SCRIPT_API) as ScriptApiGroup[], (entry) => entry.match === "any");
 
 /**
- * 一段脚本用到的未实现 API，返回 `<分组>.<成员>`（去重、排序）。根对象访问先查该分组（含 `root` 项），查不到再按名字查 `any` 项；
- * 其它接收者只查 `any` 项。
+ * 声音层（`ISoundLayer`）的播放控制（P6a 步骤 1）。表里它们只认 `thisLayer.` / `thisObject.`（名字通用），但脚本多半经
+ * `thisScene.getLayer(…)` 拿到声音层再调，按根对象匹配会漏报、场景静默没声音。所以场景里有声音对象时（`ScriptApiScene.soundLayers`），
+ * 任意接收者上的这几个名字都报 `layer.<名>`（宁可多报：同名的视频、动画方法的入口本来也会报）。名字取自表里还在的项：
+ * 步骤 2 实现、从表里删掉之后，这条随之失效。
  */
-export function scanScriptApi(script: ScriptApiContext): string[] {
+export const SOUND_LAYER_METHODS: readonly string[] = ["play", "pause", "stop", "isPlaying"];
+const SOUND_INDEX = index(["layer"], (entry) => entry.kind === "method" && SOUND_LAYER_METHODS.includes(entry.name));
+
+/** 扫描时用到的场景信息（编译期由 `compileScene` 给出）。 */
+export interface ScriptApiScene {
+  /** 场景里有声音对象（`features.ts` 的 `isSoundObject`）。 */
+  soundLayers?: boolean;
+}
+
+/**
+ * 一段脚本用到的未实现 API，返回 `<分组>.<成员>`（去重、排序）。根对象访问先查该分组（含 `root` 项），查不到再按名字查 `any` 项；
+ * 其它接收者只查 `any` 项。场景里有声音对象时，声音层的播放控制不论接收者都算（`SOUND_INDEX`）。
+ */
+export function scanScriptApi(script: ScriptApiContext, scene: ScriptApiScene = {}): string[] {
   const hits = new Set<string>();
   for (const access of memberAccesses(script.source)) {
     const group = access.root === null ? null : rootGroup(access.root, script);
-    const key = (group ? ROOT_INDEX[group].get(access.name) : undefined) ?? ANY_INDEX.get(access.name);
+    const key =
+      (group ? ROOT_INDEX[group].get(access.name) : undefined) ??
+      ANY_INDEX.get(access.name) ??
+      (scene.soundLayers ? SOUND_INDEX.get(access.name) : undefined);
     if (key) hits.add(key);
   }
   return [...hits].sort();

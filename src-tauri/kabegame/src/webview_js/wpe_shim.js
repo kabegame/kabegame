@@ -4,7 +4,8 @@
 // 协议见 cocs/wpe/WPE_IMPORT.md「运行时垫片与宿主协议」：垫片向宿主拉取完整状态、订阅事件后重拉，
 // 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。音频与媒体是例外：页面登记监听后垫片向宿主订阅，
 // 宿主经 Channel 推（「音频与媒体集成」）。音量也是例外：不走 IPC，垫片经 postMessage 向父页面
-// （WallpaperStage）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」）。
+// （WallpaperStage）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」），
+// 另放成只读的 window.__kabegameHostVolume 并派发 kabegame-host-volume，给场景宿主的声音播放器用（WPE_SCENE.md「声音」）。
 (function () {
   "use strict";
   var direct = window !== window.top && window.parent === window.top && location.protocol === "file:";
@@ -163,6 +164,14 @@
     var host = window.parent;
     // 收到父页面第一次回复之前按静音：页面一开始就放的声音不会先响一下
     var hostVolume = 0;
+    // 场景宿主的声音播放器（P6a）要知道宿主音量：为 0 时不建 AudioContext、不读文件，增益按它钳制。放成 window 上的只读值，
+    // 变化时派发 kabegame-host-volume（见下面的消息处理）。网页壁纸读得到也无妨，只是自己的音量；不调 wallpaperPropertyListener，
+    // 免得和 WPE 网页 API 撞名
+    Object.defineProperty(window, "__kabegameHostVolume", {
+      get: function () {
+        return hostVolume;
+      },
+    });
 
     function clamp01(value) {
       return value > 0 ? (value < 1 ? value : 1) : 0; // NaN 也落到 0
@@ -454,6 +463,14 @@
         }
         if (media) media.refresh();
         if (audio) audio.refresh();
+        // 只是通知：页面能伪造这个事件，读的一方总从只读的 __kabegameHostVolume 取值
+        if (typeof window.dispatchEvent === "function" && typeof CustomEvent === "function") {
+          try {
+            window.dispatchEvent(new CustomEvent("kabegame-host-volume"));
+          } catch (error) {
+            console.warn("[kb-wpe] host volume event", error);
+          }
+        }
       },
       true,
     );

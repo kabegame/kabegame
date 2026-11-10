@@ -1572,3 +1572,17 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | --- | --- | --- | --- | --- | --- |
 | [x] | 修正后的配置可产出 | Windows | theanimegallery 插件（同一配置写法）`deno task build` | `dist/main.js` 产出，打包成功 | 2026-11-08：打包 128.49 KB，CLI 真跑 80 张全部下载 |
 | [ ] | plugin new 全链路 | Windows | 重建 CLI 后 `plugin new` 新插件并构建 | `dist/main.js` 直接产出 | 需重建 CLI 后验证 |
+
+## 场景壁纸声音（P6a 步骤 1）
+
+2026-11-11。声音对象按 Wallpaper Engine 的规则自动播放：编译期声音表（`compile/sounds.ts`）、排期器（`audio/scheduler.ts`，照读码与实测复刻状态机）、播放后端（`audio/player.ts`，媒体元素 + Web Audio，不整段解码）、宿主每帧在粒子之后推进。垫片把宿主音量放进只读的 `window.__kabegameHostVolume` 并派发 `kabegame-host-volume`（要重编 Rust 才生效）。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase6/p6-REPORT.md`，测试工程 `ignore/p6/proj/p6a-*`（`kbp gen p6a --data ignore/p6`），回环录音与分析脚本在 `ignore/p6/a0/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；应用的 `wpeWebVolume.test.ts` | 0 error；全过 | 2026-11-11：tsc 0 error，62 个文件 1652 个用例全过（新增排期器 32、宿主接线 8、播放器 8、声音表 12）；垫片 24 个用例全过（新增宿主音量只读属性与事件） |
+| [x] | S1 语料 | Node，165 个工程 | 前后重扫 `unsupported` | 只在声音相关的键上变化；原来能渲染的不掉出 | 2026-11-11：能渲染 36 → 38（`1967162875`、`3827677885`）；变化的 77 张正好是带声音对象的；新增 `script:api:layer.play` 等（步骤 2 删）与 `sound:volume:script` 4 张 |
+| [x] | S2 播放模式 · 对照 WPE | Windows dev（重编后），回环录音 | 导入 `p6a-loopmulti`、`p6a-random`、`p6a-single`、`p6a-silent`，图库预览里各放 30–40 s（测试工程的探针脚本调了声音层方法，要开 dev 强制渲染），用 `ignore/p6/a0/rec.py` 录、`ana_segs.py` 分析，和 p6-REPORT 的 WPE 结果比；测后删行 | `loop` 多文件段长是文件长、段间不留空；`random` 间隔 1.5–4 s、固定间隔 2.00 s；`single` 放一遍；音量属性从 0 调上去时从头放 | 2026-11-11 Claude：`loop` 多文件每段都是文件长或整数倍、段间 0–0.02 s（WPE 0–0.06 s）；`random` 固定 2.00 s，随机 13 个间隔 1.86–3.92 s、均值 2.70；`single` 只放一遍 2.00 s、之后 `isPlaying` 假；`zvol` 0 → 1 时 Z 从文件开头放、此前连 `AudioContext` 都没建；`startsilent` 的 T 不出声。脚本 `play` / `pause` / `stop` 是步骤 2。强制渲染开关已删，测试行已删 |
+| [x] | S3 音量 · 对照 WPE | Windows dev，回环录音 | 导入 `p6a-vol2`，把「壁纸音量」依次设成 1、0.5、0.25，录音量各频率幅度 | A / B = 1（平方）；D / B = min(1, 9G) / G（钳制） | 2026-11-11 Claude：三档 A / B 都是 1.00，D / B 依次 1.00、2.00、4.00，C / B 2.0、E / B 9.0，改音量当场生效；单声道源输出 = 文件幅度 × G（WPE 另乘约 0.62，已知差异）。壁纸音量已改回 1 |
+| [ ] | S4 应用背景、暂停与音量 0 | Windows dev | 带声音的场景设为应用背景；桌面上打开「暂停壁纸」再关；「壁纸音量」调到 0 再调回 | 应用背景不出声；暂停时停、恢复时接着放；音量 0 时不出声，dev 探针 `host.sounds()` 里没有 `AudioContext` | 2026-11-11 Claude：壁纸音量 0 → 元素暂停在 0.79 s、`isPlaying` 仍真（同 WPE），调回 1 从 0.79 s 续播；音量 0 时打开场景没有 `AudioContext`、没有元素，调回后从头放。应用背景与「暂停壁纸」没测（同一条路：宿主音量为 0 / `setPaused`），待用户确认 |
+| [ ] | S5 释放 | Windows dev | 预览带声音的场景，关掉预览 | 声音立即停；场景宿主销毁后没有残留的元素与 Blob | 2026-11-11 Claude：预览之间切换时上一个场景的声音在切换那一刻断掉、新场景加载完才出声；测试工程都是散文件，没覆盖 pkg 的 Blob 撤销 |
+| [ ] | S6 解锁场景 · 人耳 | Windows dev | `1967162875`、`3827677885` 的图库预览与桌面，和 Wallpaper Engine 对照听 | 开始时机、循环、音量和 WPE 相近；单声道文件可能比 WPE 响约 4 dB（已知差异） | 待用户确认 |

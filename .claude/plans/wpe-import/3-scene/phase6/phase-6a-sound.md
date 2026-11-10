@@ -179,19 +179,184 @@
 
 ## 步骤 1 — 自动播放
 
-**思路：** 编译期解析声音对象进 bundle 的声音表，宿主建播放器、按 WPE 规则排期；音量与暂停接宿主现有通路；能力表放开声音对象和步骤 0 认定的字段。
+### 思路
 
-**要点（步骤 0 之后细化成点）：**
-- **编译**（`compile/bundle.ts`、`compile/features.ts`、`compile/bindings.ts`）：声音表 `SceneSound { object, files, mode, mintime, maxtime, startSilent, volume }`；文件按资源解析顺序定位（散文件给 `file:` 地址，pkg 条目给区间），`volume` 绑用户属性进 P3a 的就地路径。
-- **播放器**（新增 `audio/`）：一个 `AudioContext`（音量为 0 时不建）、每个声音对象一个增益节点、按需建 `<audio>`；排期逻辑写成不依赖 DOM 的纯函数（输入时间与随机数，输出「此刻该放哪个文件、从哪开始」），能在 Node 里单测，也能用 WPE 的日志序列回放核对。
-- **宿主**（`host.ts`、`main.ts`、`wpe_shim.js`）：垫片把音量经 `wallpaperPropertyListener` 交给场景宿主（只在场景宿主里，网页壁纸不受影响）；`setPaused` 同时暂停播放器；场景重编译时保留播放器与播放位置，卸载时释放元素、Blob 与 `AudioContext`。
-- **能力表：** 放开 `object:sound`、`playbackmode`、`mintime`、`maxtime`、`startsilent`、`volume`；`muteineditor`、`solid`、`attenuation`、`mindistance` 中性（步骤 0b）；`spatialization: true` 报 `object:spatialization`。
+声音分三层，彼此只经很窄的接口相连：
+- **编译期的声音表：** bundle 多一个 `sounds`，每个声音对象一条，记文件的磁盘位置和各字段的值。
+- **排期器：** 纯 TS，照 WPE 的状态机逐项复刻（实例状态、暂停位、停止位、计时 `T`、剩余时长 `Rm`），只对抽象的「播放后端」发命令。它不碰 DOM，在 Node 里能单测，也能直接对着 p6-REPORT 的实测序列核对。
+- **播放后端：** 浏览器侧，媒体元素加 Web Audio，按命令建元素、播放、暂停、调增益。
 
-**验收：**
-- 4 张解锁（只做 P6 时 2 张），人耳和 WPE 比：开始时机、循环、音量；`3778592720` 的随机切换间隔。
-- 确定性工程：各播放模式的状态序列和 WPE 的日志、频谱逐帧比（`random` 选哪个文件比分布，不比序列）。
-- 应用背景、暂停、壁纸音量为 0 时不出声，也不建 `AudioContext`；预览关掉后元素和 Blob 都释放。
-- 不含声音的场景，语料与基线逐张相同。
+排期器由渲染器每帧推进：在粒子步进之后、脚本之前，用同一个帧时间，对应 WPE 在对象更新里走声音计时器；暂停时帧不前进，计时自然冻结。
+
+文件时长要到媒体元素拿到元数据才知道，而 WPE 是同步读完再放的。所以后端的「开始」是异步的：排期器发出「放第 k 个文件」后，计时 `T` / `Rm` 从后端报回的真正开始时刻起算。差的只是 WPE 那边「同步读整份文件」占掉的时间。
+
+宿主音量 h 由垫片交给场景宿主，排期器把它当 WPE 的全局音量 G：
+- h 从正变 0：暂停在放的声音；`single` / `random` 已放完的停掉。
+- h 从 0 变正：续播；之前从没开始过的，从头开始。
+- 每个声音的增益节点设成 `min(1, volume²·h) / h`，垫片的主增益再乘 h，合起来就是 WPE 的 `min(1, volume²·G)`。
+- 暂停走同一条路，只是先按 WPE 的指数淡出（时间常数 1/6 s，音频线程上 `setTargetAtTime`），再暂停元素。
+
+### 现状锚点（补充）
+
+**h. 渲染器每帧的顺序**（`render/renderer.ts:537`）
+```ts
+    try {
+      scene.sync(state);
+      scene.stepParticles(frametime, wrapped, state, cursor); // 现状：对象更新只有粒子
+    } catch (error) { /* … */ }
+    scene.setCamera(camera);
+    if (live) this.options.beforeFrame?.(frametime); // 脚本
+```
+
+**i. 就地绑定的样板：粒子 `instanceoverride`**（`compile/bindings.ts:127`、`render/state.ts:328`）
+```ts
+  | { kind: "particle-instance"; object: number; field: InstanceKey } // 编译期登记，SceneState.particleInstances 存值，sync 交给模拟器
+```
+
+**j. 文件的磁盘位置**（`compile/fs.ts:5`）
+```ts
+export interface SceneFile {
+  source: SceneSource;
+  size: number | null; // pkg 条目有确切长度；散文件为 null
+  location: { path: string; offset: number }; // 要读的真实文件与内容起点：散文件就是它本身，pkg 条目是 scene.pkg 加偏移
+```
+
+### 点 1 — 声音表（`compile/bundle.ts`、`compile/bindings.ts`、`render/state.ts`）
+
+- **新增** `SceneSound` 与 `SceneBundle.sounds`：
+```ts
+export interface SceneSound {
+  object: number;                       // objects 下标（稳定键）；同一对象在 layers 里仍有一个没有 pass 的图层
+  files: SceneSoundFile[];              // 解析得到的文件；找不到的、扩展名不是 wav / ogg / flac / mp3 的不进表（WPE 读不出就从列表删掉、不报错）
+  mode: "loop" | "single" | "random";
+  mintime: number;                      // 缺省 1
+  maxtime: number;                      // 缺省 5
+  startSilent: boolean;
+  volume: number;                       // 缺省 1，不钳制；绑用户属性时是解析后的值
+}
+export interface SceneSoundFile {
+  path: string;                         // scene.json 里写的相对路径
+  location: { path: string; offset: number }; // 同 SceneFile.location
+  size: number | null;                  // pkg 条目的长度；散文件 null（直接用 file: 地址）
+}
+```
+- **新增** 绑定目标 `{ kind: "sound"; object: number; field: "volume" }`，`SceneState.sounds: Map<number, { volume: number }>`，起始值 = 编译期的 `volume`；写入不标脏，排期器每帧读。
+- **修改** `compileScene` 的对象循环：`objectKind(object) === "sound"` 时解析 `sound`（字符串或数组，`fs.resolve` 逐个定位）并读各字段，`sound` 键为 null 或缺失的不是声音对象（同 WPE）。
+
+### 点 2 — 能力表（`compile/features.ts`）
+
+- **修改** `checkObjectFeatures`：`kind === "sound"` 不再报 `object:sound`；声音对象上放行 `sound`、`playbackmode`、`volume`、`mintime`、`maxtime`、`startsilent`、`muteineditor`、`attenuation`、`mindistance`、`spatialization: false`。
+- **新增** 报键：
+  - `spatialization` 为真报 `object:spatialization`（三维声音，没做）；
+  - `playbackmode` 不是 `loop` / `single` / `random` 报 `sound:playbackmode:<值>`；
+  - `volume` 挂 `{script}` 报 `sound:volume:script`（步骤 2 删）；
+  - `startsilent` 等布尔键绑用户属性报 `sound:binding:<键>`（语料 0 个，WPE 没有回调）。
+- **修改** `checkScriptFeatures`：场景里有声音对象时，任意接收者上的 `play` / `pause` / `stop` / `isPlaying` 都报 `script:api:layer.<名>`（现在只认 `thisLayer.`，经 `getLayer(…)` 拿到声音层再调会漏报），步骤 2 实现后删掉这条。
+
+### 点 3 — 排期器（新增 `audio/scheduler.ts`）
+
+- **新增** `SoundScheduler`：一个声音对象一个，照 rea-p6a-sound 第 2、5、7 节与 p6-REPORT 实现 `P`（开始 / 续播）、`U`（每帧）、`V`（音量变化）、全局音量变化，以及步骤 2 要用的 `stop` / `pause` / `isPlaying`。
+```ts
+export interface SoundBackend {
+  start(file: number, loop: boolean): void;   // 从头放第 file 个文件；开始后经 onStarted(file, duration) 回报
+  resume(file: number, loop: boolean): void;  // 续播
+  pause(file: number): void;
+  stop(file: number): void;                   // 停并回到开头
+  setGain(gain: number): void;                // 已含 min(1, volume²·h) / h
+}
+export class SoundScheduler {
+  constructor(sound: SceneSound, backend: SoundBackend, random: () => number);
+  load(globalVolume: number): void;           // 对应 WPE 加载虚函数：不是 startSilent 且 volume²·G > 0 才 P
+  update(dt: number, volume: number, globalVolume: number): void; // 每帧：音量变了走 V，G 变了走全局规则，再走 U
+  onStarted(file: number, duration: number): void;                // 后端回报：设 T / Rm
+  // 步骤 2：play() = P、pause()、stop()、isPlaying()
+}
+```
+- 选文件用 `random`（单独的随机源，不动粒子的 `R`：WPE 选文件用 CRT `rand()`、间隔用和粒子共用的 mt19937，序列本来对不上，只照规则）。
+- **新增** `audio/scheduler.test.ts`：假后端记录命令序列，逐条覆盖 p6-REPORT 表里的行为（`loop` 单 / 多文件、`random` 的间隔与 `isPlaying`、`single` 与陷阱、音量 0 起步、全局音量降到 0 再恢复、`volume` 2 的钳制）。
+
+### 点 4 — 播放后端（新增 `audio/player.ts`）
+
+- **新增** `ScenePlayer`：场景一个，管 `AudioContext`、每个声音的增益节点、按文件的 `<audio>` 元素和 Blob。
+  - h = 0 时不建 `AudioContext`、不建元素、不读文件；h 第一次变正时再建。
+  - 散文件：`audio.src = fileToUrl(location.path)`；pkg 条目：主线程 `reader.readRange(location.path, offset, offset + size)` 读成 Blob，`URL.createObjectURL`。元素 `preload = "auto"`，`loadedmetadata` 后才真正 `play()` 并回报 `onStarted(file, duration)`。
+  - 单文件 `loop` 用元素的 `loop`；多文件、`single`、`random` 不循环，换文件由排期器定。
+  - 连线：元素 → `MediaElementAudioSourceNode` → 每个声音的增益 → 场景的淡变增益 → `destination`（垫片把这条接到主增益、乘 h，接进 Web Audio 的元素上不再乘第二次）。
+  - `dispose()`：暂停并清空元素、`revokeObjectURL`、`AudioContext.close()`。
+- 读文件失败、解码失败：照 WPE 从这个声音的文件列表里删掉，宿主日志记一条 warn，不退回。
+
+### 点 5 — 宿主与垫片（`host.ts`、`main.ts`、`render/renderer.ts`、`src-tauri/kabegame/src/webview_js/wpe_shim.js`）
+
+- **修改** `wpe_shim.js`：收到音量消息时，把宿主音量放进一个只读的 `window.__kabegameHostVolume`，再派发 `kabegame-host-volume` 事件。网页壁纸读得到也无妨（只是自己的音量）；不调页面的 `wallpaperPropertyListener`，以免和 WPE 的网页 API 撞名。
+- **修改** `main.ts`：读初值、监听事件，交给 `host.setHostVolume(h)`。
+- **修改** `SceneRenderer`：`options` 加 `stepObjects?(dt)`，在 `stepParticles` 之后、脚本之前调；宿主在里面推进各排期器。补画帧（帧时间 0）不调。
+- **修改** `SceneHost`：
+  - `load` 之后按 `bundle.sounds` 建排期器与播放器；
+  - 重编译时同一对象的排期器保留，播放不中断（文件表变了才重建该对象的）；
+  - `setPaused(true)` 时让播放器淡出后暂停，恢复时续播（暂停期间 h 已经是 0，走全局音量规则）；
+  - `dispose` 时释放播放器。
+- **dev 探针：** `host.sounds()` 返回每个声音对象的模式、当前文件、实例状态、`T`、`Rm`、`isPlaying`、增益，给真机核对用。
+
+### 点 6 — 文档
+
+`cocs/wpe/WPE_SCENE.md` 加「声音（P6a）」一节，cocs 索引与 changelog、回归按惯例补。
+
+### 实施方式
+
+照前置：在 HEAD 快照里实现、交子代理，我核对后按块合进工作区。点 5 改了 Rust 内嵌的 `wpe_shim.js`，要用户重启 dev 才能真机验。
+
+### 验收
+
+- **单测：** 排期器覆盖 p6-REPORT 表里的全部行为；tsc、vitest、Prettier 通过。
+- **语料：** `1967162875`、`3827677885` 解锁（P4、P5 先做完时另有 2 张）。其余变化只在声音相关的键上；不含声音对象的场景，结果和基线逐张相同。
+- **真机：** `p6a-*` 工程导入 Kabegame，用同样的回环录音和分析脚本，和 WPE 的录音逐项比：
+  - 播放模式的段序列与间隔；
+  - 两边都设成同一个壁纸音量后，各对象的幅度比（含 `volume` 2 的钳制）；
+  - 音量 0 起步；
+  - 暂停后续播。
+- **生命周期：** 应用背景、暂停、壁纸音量为 0 时不出声，也不建 `AudioContext`；关掉预览后元素和 Blob 都释放（dev 探针看）。
+- **人耳：** 两张解锁场景和 WPE 比。
+
+### 步骤 1 实施记录（2026-11-11）
+
+**做法：** 在 HEAD `bafb4a93` 的快照（`ignore/p6/a1/work`，基线 `a1/base`）里实现，交子代理；垫片与场景文档在副本上改（`a1/shim/`、`a1/WPE_SCENE.md`）。我逐段读过排期器（对着读码的 `P` / `U` / `V` / `X`）、播放器、宿主接线、垫片与入口，独立重跑验证后，补丁 `ignore/p6/a1/out/step1.patch` 打进工作区。期间 HEAD 只多了一个文档提交，产品代码与快照基线相同。
+
+**新增：** `compile/sounds.ts`、`audio/scheduler.ts`、`audio/sceneSounds.ts`、`audio/player.ts` 与各自的单测。**修改：** `compile/bindings.ts`、`compile/bundle.ts`、`compile/features.ts`、`compile/scriptApi.ts`、`render/state.ts`、`render/renderer.ts`、`host.ts`、`main.ts`、`script/runtime.ts`、`dev/install.ts`；`wpe_shim.js`；`cocs/wpe/WPE_SCENE.md`「声音（P6a）」；我另补了垫片单测（`wpeWebVolume.test.ts`）、cocs 索引、changelog、回归。
+
+**和子计划不同、或子计划没写的取舍（都按最贴近 WPE 实测）：**
+1. **暂停：** 宿主音量在暂停时已经是 0（垫片的主增益立即归零），排期器立即暂停元素；淡变增益只在恢复时听得出淡入。
+2. **文档隐藏按暂停处理：** 渲染循环停转、计时冻结，不暂停的话多文件和 `random` 放完一段就断了。
+3. **`SceneBundle.sounds` 是可选字段：** 测试里手写的 bundle 不用改（那些文件 P4、P5 也在改），读的地方按空表处理。
+4. **开始是异步的：** `T` / `Rm` 从后端回报起算；等回报期间 `isPlaying` 按 WPE 当场的值（真），`random` 不会重复开始。
+5. **文件失败在开始时才知道：** 照 WPE 删掉，正在等它的用剩下的文件重新选；`play()` 被拒（如 `NotAllowedError`）只记 warn，不删文件。
+6. **`sound:binding:<键>`** 扩到 `playbackmode` / `mintime` / `maxtime` / `startsilent` / `spatialization` 绑属性或脚本（语料 0 处）；`playbackmode` 按全小写精确匹配，未知值报 `sound:playbackmode:<值>`。
+7. `single` 的音量从 0 变正不自动开始：照读码 `V` 跳过 `single`，实测没覆盖到。
+8. pkg 的 Blob 只在场景释放时撤销；重编译换掉某个对象的文件时，旧 Blob 留到场景释放。
+
+**我核对时记下的风险：**
+- 某个文件的 `duration` 读出来是无穷大时（流式 MP3 可能如此），多文件 `loop` 拿不到时长，`T` 为 0，放完这个文件后不再切换。语料没见到，真机测到再处理（可改用元素的 `ended` 事件）。
+- 散文件直接用 `file:` 地址接进 `MediaElementAudioSourceNode`：若 CEF 把它判成跨源，输出会静音。要真机确认。
+
+**验证：**
+- tsc 0 error；vitest 62 个文件、1652 个用例全过（基线 58 个、1592 个，新增 60 个）；垫片测试 24 个全过；Prettier 通过。
+- 语料 165 张：能渲染 36 → 38（`1967162875`、`3827677885`），没有掉出；有变化的 77 张正好是含声音对象的。去掉的是 `object:sound` 及其键；新增 `script:api:layer.play` 35 张、`stop` 23、`pause` 15、`isPlaying` 6，以及 `sound:volume:script` 4 张。
+- 真机（回归 S2–S6）没做：垫片是 Rust 内嵌的，要用户重启 dev。
+
+**真机（2026-11-11，用户重启 dev 后）：** 导入 `p6a-vol2`、`-loopmulti`、`-random`、`-single`、`-silent`（`-play` 要步骤 2），图库预览里放，用测 WPE 时同一套回环录音与分析脚本比。测试工程的探针脚本调了声音层的 `isPlaying()`，按步骤 1 的规则会被报不支持，所以临时打开了宿主的 dev 强制渲染开关，测完已删；测试行已用 `projects_remove` 删掉；壁纸音量改回原来的 1。
+
+| 项目 | Kabegame | WPE（p6-REPORT） |
+|---|---|---|
+| 音量平方与钳制 | G = 1 / 0.5 / 0.25 时 A / B 都是 1.00，D / B = 1.00 / 2.00 / 4.00，C / B 2.0、E / B 9.0；改音量当场生效 | 一致 |
+| `loop` 多文件 | 段长是文件长或整数倍，段间 0–0.02 s | 段间 0–0.06 s（20 fps） |
+| `random` | 固定间隔 2.00 s；随机 13 个间隔 1.86–3.92 s、均值 2.70 | 2.00 s；1.70–3.94 s、均值 2.82 |
+| `single` | 放一遍 2.00 s，之后 `isPlaying` 假、实例状态仍是在放 | 一致 |
+| 音量属性 0 → 1 | 之前不建 `AudioContext`；改值后从文件开头放；`startsilent` 的不出声 | 一致 |
+| 壁纸音量 0 → 正 | 暂停在原处、`isPlaying` 仍真，恢复从原处续播；音量 0 时打开场景不建 context、不建元素，调回后从头放 | 一致 |
+| 切预览 | 上一个场景的声音在切换那一刻断掉 | — |
+
+- 散文件经 `file:` 地址接进 `MediaElementAudioSourceNode` 正常出声，「跨源静音」的风险不成立。
+- 单声道源输出是文件幅度 × G，WPE 另乘约 0.62：已知差异，不补偿。
+- **没覆盖：** 应用背景与桌面「暂停壁纸」（与音量 0 同一条路，宿主音量为 0 / `setPaused`）、pkg 条目的 Blob（测试工程都是散文件）、两张解锁场景的人耳对比（回归 S4–S6，待用户）。
 
 ## 步骤 2 — 脚本控制
 

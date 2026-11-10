@@ -125,6 +125,11 @@ export type BindingTarget =
    * `object` 是 `objects` 下标。
    */
   | { kind: "particle-instance"; object: number; field: InstanceKey }
+  /**
+   * 声音对象的 `volume`（P6a 步骤 1，rea-p6a-sound.md 5.2）：WPE 改值经回调 `V` 立即生效、没有渐变。就地写进
+   * `SceneState.sounds`，不标脏，宿主的排期器每帧读（`audio/scheduler.ts`）。`object` 是 `objects` 下标。
+   */
+  | { kind: "sound"; object: number; field: "volume" }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 export interface SceneBinding {

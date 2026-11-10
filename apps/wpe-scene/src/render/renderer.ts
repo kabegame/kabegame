@@ -9,6 +9,7 @@
  *   帧时间照 WPE 钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（T2，`FrameClock`）。粒子每个实时帧按帧时间步进一次，
  *   operator 的遍数由 `maxFps` 定（`particlePasses`：1–20 两遍，否则一遍，对应 WPE 的 `fps` 设置，P4a 步骤 4）。
  *   一帧的顺序（P4c 步骤 4）：`sync` → 步进粒子 → 脚本（`beforeFrame`）→ `sync` → 写每帧 uniform → 编码，粒子先于脚本，同 WPE。
+ *   声音的排期器（P6a 步骤 1，`stepObjects`）在步进粒子之后、脚本之前，同一个帧时间。
  * - **视差**（P5a 步骤 2，`parallax.ts`）：视差点 P 在帧开头、粒子与脚本之前推进一次，脚本之后按当时的开关与 amount 交给
  *   `GpuScene.setParallax`（属性与脚本写 `cameraparallax*` 同帧生效），`g_ParallaxPosition` 随每帧 uniform 写。P 归渲染器：
  *   整场重编译保留，新场景回到场景中心（见 `load`）。
@@ -81,6 +82,11 @@ export interface SceneRendererOptions {
   onLost?: (reasons: string[]) => void;
   /** 每个实际渲染帧在粒子步进之后、第二次状态同步之前执行（P4c 步骤 4，见 `render`）；暂停时不执行。 */
   beforeFrame?: (dt: number) => void;
+  /**
+   * 不画东西的对象的每帧更新（P6a 步骤 1：声音的排期器）：每个实时帧在粒子步进之后、脚本（`beforeFrame`）之前，用同一个钳过的
+   * 帧时间（WPE 在对象更新里走声音计时器，rea-p6a-sound.md 2.3）。补画帧（帧时间 0）与暂停时不执行，计时自然冻结。
+   */
+  stepObjects?: (dt: number) => void;
 }
 
 export interface SceneLoadOptions {
@@ -550,6 +556,8 @@ export class SceneRenderer {
     // 旧相机，脚本之后的 `setParallax` 因相机变了整体重写。缩放随同一个相机交（步骤 4）：模拟的反投影用上一帧的 zoom，绘制用当帧的
     // （静态缩放看不出先后，按读码与抖动的实测实现）
     scene.setCamera(camera);
+    // 声音（P6a 步骤 1）：粒子之后、脚本之前；同脚本在 try 外，声音的问题不让画面退回
+    if (live) this.options.stepObjects?.(frametime);
     // 脚本在 try 外（同以前）：脚本自己的错误不走 `render:frame` 退回
     if (live) this.options.beforeFrame?.(frametime);
     const encoder = device.createCommandEncoder({ label: "scene frame" });

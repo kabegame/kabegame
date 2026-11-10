@@ -12,6 +12,8 @@
  *
  * 粒子（P4a 步骤 5）：`instanceoverride` 的标量与 `colorn`（P4b 步骤 6）存在 `particleInstances`，写入用编译期同一条取值规则
  * （`instanceScalar` / `instanceColorn`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、重算颜色平移。
+ *
+ * 声音（P6a 步骤 1）：`volume` 存在 `sounds`，写入用编译期同一条取值规则（`soundVolume`），不标脏，宿主的排期器每帧读。
  */
 import {
   bindingValue,
@@ -27,6 +29,7 @@ import { materialSetter, memberValue, type MaterialMember } from "../compile/mat
 import type { SceneScalar } from "../compile/model";
 import { instanceColorn, instanceScalar, instanceValues, type ParticleInstanceValues } from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
+import { soundVolume } from "../compile/sounds";
 
 export interface LayerState {
   /** angles 为弧度（同 scene.json）。都是本地值：世界矩阵与继承后的可见性按父链现算（`render/layout.ts`）。 */
@@ -185,6 +188,11 @@ export class SceneState {
    * 只是数据：`GpuScene.sync` 把脏的交给模拟器（`ParticleSystem.setInstance`）。
    */
   readonly particleInstances = new Map<number, ParticleInstanceValues>();
+  /**
+   * 声音对象的就地值（P6a 步骤 1，`objects` 下标 → 值），起始值 = 编译期的 `SceneSound.volume`。写入不标脏：宿主的排期器
+   * 每帧读（`audio/sceneSounds.ts`），值变了才走 WPE 的音量回调。
+   */
+  readonly sounds = new Map<number, { volume: number }>();
   private dirtyLayers = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
@@ -252,6 +260,8 @@ export class SceneState {
       children,
     );
     for (const [object, values] of instances) state.particleInstances.set(object, values);
+    // 手写的测试 bundle 可能没有声音表
+    for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
     return state;
   }
 
@@ -332,6 +342,13 @@ export class SceneState {
       if (target.field === "colorn") values.colorn = instanceColorn(conditioned(binding, raw));
       else values[target.field] = instanceScalar(conditioned(binding, raw));
       this.dirtyParticles.add(target.object);
+      return "applied";
+    }
+    if (target.kind === "sound") {
+      const sound = this.sounds.get(target.object);
+      // 取值规则与编译期相同（`soundVolume`），条件先换成布尔；不合法的值不改字段（WPE 的 float 解析器不收时不写）
+      const value = soundVolume(conditioned(binding, raw));
+      if (sound && value !== undefined) sound.volume = value;
       return "applied";
     }
     if (target.kind === "layer") {

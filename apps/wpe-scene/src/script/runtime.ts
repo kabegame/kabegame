@@ -56,6 +56,8 @@ function targetKey(target: ScriptTarget): string {
       return `${target.script}/scriptproperties/${target.key}`;
     case "particle-instance":
       return `objects/${target.object}/instanceoverride/${target.field}`;
+    case "sound":
+      return `objects/${target.object}/${target.field}`;
     default:
       return target.path;
   }
