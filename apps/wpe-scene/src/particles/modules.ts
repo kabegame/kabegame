@@ -15,6 +15,12 @@
 import { isKeyframedValue, isScriptValue, isUserBinding } from "../compile/bindings";
 import type { ParticleColumns } from "./columns";
 import type { ControlPointSet } from "./controlpoints";
+import {
+  maintainDistanceBetweenControlPoints,
+  maintainDistanceToControlPoint,
+  reduceMovementNearControlPoint,
+  vortexV2,
+} from "./distance";
 import { boxRandom, sphereRandom } from "./emitters";
 import { f32 } from "./f32";
 import {
@@ -513,7 +519,9 @@ const REMAP_COLUMNS: readonly ParticleColumn[] = [
  * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`、`spritetrail`
  * （P4c 步骤 5）与 rope 两类（`rope` P4d 步骤 1，`ropetrail` P4d 步骤 2），P4d 步骤 3 的 initializer
  * `mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`（第一批有运行状态的模块，`mapsequence.ts`），以及 P4d 步骤 4a 的
- * initializer `remapinitialvalue`、operator `remapvalue`（同一条管线，`remap.ts`；噪声与写控制点是步骤 4b）。
+ * initializer `remapinitialvalue`、operator `remapvalue`（同一条管线，`remap.ts`；噪声与写控制点是步骤 4b），以及 P4d 步骤 5 的
+ * operator `maintaindistancetocontrolpoint`、`maintaindistancebetweencontrolpoints`、`reducemovementnearcontrolpoint`、`vortex_v2`
+ * （`distance.ts`）。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -947,6 +955,106 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: controlPointAttract,
+  },
+  {
+    // rea-p4d-modules.md 3.1（operator 11，记录 `FUN_1401d8b70` 类型 0xb，有 blend 键时 0x21；解析 `0x1401ccdc5`–`0x1401ccf6b`，缺省
+    // `FUN_1401be2a0`）：先跟着控制点平移 `current − previous`，再拉回半径 `distance`（`distance.ts`，P4d 步骤 5）。没有
+    // `instanceoverride` 条目
+    category: "operator",
+    name: "maintaindistancetocontrolpoint",
+    fields: {
+      distance: num({ orthographic: 200, perspective: 1 }),
+      // 精确等于 0 时硬约束（强度 1），否则 `clamp01(variablestrength·h)`
+      variablestrength: num(0),
+      // 读这个控制点的 current 与 previous；解析期钳到 0–7
+      controlpoint: CONTROL_POINT_FIELD,
+      ...BLEND,
+    },
+    columns: ["age", "life", "position"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
+    run: maintainDistanceToControlPoint,
+  },
+  {
+    // rea-p4d-modules.md 3.2（operator 12，记录 `FUN_1401d8b90` 类型 0xc，blend 0x22；解析 `0x1401ccf7b`–`0x1401cd199`，缺省
+    // `FUN_1401be5d0`）：没有别的字段。两个点的 current 与 previous 都读；`controlPointCount` 不写字段时也按缺省计 0、1 两个点
+    category: "operator",
+    name: "maintaindistancebetweencontrolpoints",
+    fields: {
+      controlpointstart: CONTROL_POINT_FIELD,
+      controlpointend: int(1),
+      ...BLEND,
+    },
+    columns: ["age", "life", "position"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.controlpointstart = clampControlPoint(fields.controlpointstart as number);
+      fields.controlpointend = clampControlPoint(fields.controlpointend as number);
+    },
+    run: maintainDistanceBetweenControlPoints,
+  },
+  {
+    // rea-p4d-modules.md 3.3（operator 13，记录 `FUN_1401d8bb0` 类型 0xd，blend 0x23；解析 `0x1401cd1a9`–`0x1401cd40c`，缺省
+    // `FUN_1401be810`）：只改速度。两个差在解析期算（相等时存 1.0，`reductionouter == reductioninner` 那个是 WPE 的 bug），这里执行时
+    // 现算（`distance.ts`）
+    category: "operator",
+    name: "reducemovementnearcontrolpoint",
+    fields: {
+      distanceinner: num({ orthographic: 100, perspective: 0.5 }),
+      distanceouter: num({ orthographic: 350, perspective: 1 }),
+      reductioninner: num(100),
+      reductionouter: num(0),
+      controlpoint: CONTROL_POINT_FIELD,
+      ...BLEND,
+    },
+    columns: ["age", "life", "position", "velocity"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
+    run: reduceMovementNearControlPoint,
+  },
+  {
+    // rea-p4d-modules.md 第 4 节（operator 16，记录 `FUN_1401d8c10` 类型 0x10，blend 0x25；解析 `0x1401cde39`–`0x1401ce3eb`，缺省
+    // `FUN_1401bf2d0`）：和 `vortex`（P4b）是两个模块，公式不同（读控制点 3×3、预测偏移的 `centerforce`、环形）。切向乘 `k`
+    category: "operator",
+    name: "vortex_v2",
+    fields: {
+      // 环形（flags bit2）时这两个槽被 `ringwidth`、`ringpulldistance` 占用，不读
+      distanceinner: num({ orthographic: 500, perspective: 1 }),
+      distanceouter: num({ orthographic: 650, perspective: 2 }),
+      // 乘 `speed`（条目类型 7，系统 flags bit4 时不登记，`0x1401ce2f1`）
+      speedinner: by("speed", num({ orthographic: 2500, perspective: 1 })),
+      speedouter: by("speed", num(0)),
+      // 只在 flags bit1 时读（`0x1401ce074`），否则按 0
+      centerforce: num(1),
+      ringradius: num({ orthographic: 300, perspective: 1 }),
+      ringwidth: num({ orthographic: 50, perspective: 0.2 }),
+      ringpulldistance: num({ orthographic: 50, perspective: 0.25 }),
+      ringpullforce: num({ orthographic: 10, perspective: 0.05 }),
+      // 只接受字符串（`asCString` 后按空格切），`|axis|² < 0.001` 时取 0 0 1，否则 `axis·(1/sqrt)`
+      axis: vec3("0 0 1"),
+      // 取无符号整数后只存低 8 位（`movzx eax, r14b`，`normalize`）：bit0 柱形，bit1 `centerforce`，bit2 环形；其余位没有读者
+      flags: int(0),
+      controlpoint: CONTROL_POINT_FIELD,
+      // 音频（`FUN_1401c1e20`，rea-p4b-modules.md D，属 P4e）：`mode ≠ 0` 时乘两个速度，这里不做、照报；`mode` 为 0 时其余四个键
+      // 没有读者，中性
+      audioprocessingmode: int(0, (value) => value === 0),
+      audioprocessingexponent: num(2),
+      audioprocessingbounds: { type: "string", default: "0.8 1.0" },
+      audioprocessingfrequencystart: num(0),
+      audioprocessingfrequencyend: num(1),
+      ...BLEND,
+    },
+    columns: ["age", "life", "position", "velocity"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.flags = asUInt32(fields.flags as number) & 0xff;
+      fields.controlpoint = clampControlPoint(fields.controlpoint as number);
+    },
+    run: vortexV2,
   },
   {
     // `rea-p4b-modules.md` B6（operator 14，blend 0x24，缺省值 `FUN_1401beb80`，执行 `0x14024295a` / `0x140242d6e`）：乘 `k`；

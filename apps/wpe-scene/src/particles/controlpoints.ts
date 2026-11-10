@@ -123,7 +123,8 @@ const CONTROL_POINT_FIELDS = ["controlpoint", "controlpointstart", "controlpoint
  * 在这些点上生效。`mapsequencebetweencontrolpoints` 两端都计（`def+0x2c = max(·, start + 1, end + 1)`，rea-p4d-modules.md 1.2），
  * 不写字段时 `end` 缺省为 1，所以至少 2 个。字段名不是这三个的引用由模块表的 `controlPointRefs` 给（P4d 步骤 4a 的 remap 两个模块：
  * 输入或输出属于 {7, 8, 16, 17, 18} 时计 `icp0`、`ocp0`，是 8 时再计 `icp1`、`ocp1`，`FUN_1401bc480` / `FUN_1401bc4a0`，rea-p4d-modules.md
- * 2.1）。表外模块（P4d 的 `reducemovementnearcontrolpoint` 等）不计：场景已因 `particle:<类别>:<名字>` 退回，它们也不执行。
+ * 2.1）。P4d 步骤 5 的四个 operator 走字段名：`maintaindistancebetweencontrolpoints` 不写字段时按缺省计 0、1 两个点（同 mapsequence）。
+ * 表外模块不计：场景已因 `particle:<类别>:<名字>` 退回，它们也不执行。
  */
 export function controlPointCount(def: Pick<SceneParticle, "emitters" | "initializers" | "operators">): number {
   let count = 0;
