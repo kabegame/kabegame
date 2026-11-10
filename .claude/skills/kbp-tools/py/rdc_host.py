@@ -80,13 +80,26 @@ def plan(action, args):
     outputs = []
     if action == "track":
         project, project_dir = resolve_project(data, args.project, tag)
-        has_meta = os.path.isfile(os.path.join(project_dir, "kbp-meta.json"))
+        meta_path = os.path.join(project_dir, "kbp-meta.json")
+        has_meta = os.path.isfile(meta_path)
+        points = getattr(args, "points", False)
+        if args.draws and points:
+            raise KbpError("kbp", "--draws 与 --points 只能给一个")
+        # 认法：命令行优先；否则 kbp-meta.json 的 track（第 2 批的生成库只在显式给出时写）；再否则有 meta 按粒子、没有按老工程
+        meta_track = common.read_json(meta_path).get("track") if has_meta else None
+        if (args.draws or points) and not has_meta:
+            raise KbpError("data", "%s 要工程有 kbp-meta.json：%s" % ("--draws" if args.draws else "--points", project_dir))
         if args.draws:
-            if not has_meta:
-                raise KbpError("data", "--draws 要工程有 kbp-meta.json：%s" % project_dir)
-            mode = "draws"
+            mode, source = "draws", "flag"
+        elif points:
+            mode, source = "points", "flag"
+        elif meta_track is not None:
+            if meta_track not in ("draws", "points"):
+                raise KbpError("data", "%s 的 track 只能是 draws 或 points，收到 %r" % (meta_path, meta_track))
+            mode, source = meta_track, "meta"
         else:
-            mode = "points" if has_meta else "legacy"
+            mode, source = ("points", "auto") if has_meta else ("legacy", "auto")
+        job["mode_source"] = source
         if mode == "legacy" and not os.path.isfile(os.path.join(project_dir, "scene.json")):
             raise KbpError("data", "工程没有 kbp-meta.json 也没有 scene.json：%s" % project_dir)
         out = os.path.abspath(args.out) if args.out else os.path.join(data, "tracks", "rd-%s.json" % tag)
@@ -207,6 +220,8 @@ def run(action, args):
     for key in ("index", "mode", "project", "frames"):
         if key in result:
             summary[key] = result[key]
+    if "mode_source" in job:
+        summary["mode_source"] = job["mode_source"]  # flag：命令行；meta：kbp-meta.json 的 track；auto：按有没有 meta
     summary["seconds"] = {
         "startup": round(result["ready_at"] - spawned, 3),
         "total": round(finished - spawned, 3),

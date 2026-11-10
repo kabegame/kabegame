@@ -385,3 +385,71 @@ Claude 独立验收：
 | 读码 | 本地桥只调 `RequestHandler.handle`、错误照旧桥抛；qrenderdoc 入口全部 `os._exit`、父进程没了自己退；超时按 `Popen` 句柄只结束自己的进程；输出存在时拒绝 |
 | 另挑两组没验过的抓帧 | `p4c-attract-fps10`（两遍模式，按粒子认）、`p4d-ropetrail-fps10`（`--draws`）提取到 scratchpad，和 `ignore/p4/tracks/` 里的文件逐字节相同；耗时 7.6 s、12.2 s |
 | 自测重跑（输出到 `ignore/kbp/accept1-claude/`） | 27 项全过，用时约 127 s；没有出现界面窗口、没有残留进程，覆盖保护拒绝写 `ignore/p4/tracks/` |
+
+### 第 2 批 — 造工程、回放、回归、快照（2026-11-10）
+
+子代理实现，Claude 独立验收。`kbp-meta.json` 的 `bbox` 挪到第 3 批（只服务于整帧比较）。验收期间 HEAD 由并行会话推进过两次（95715c09 P5a 步骤 1、9f47e8fc P4d 步骤 2），最终结论以 9f47e8fc 为准，两次快照上结论相同。
+
+- **新增**（`.claude/skills/kbp-tools/`）：
+  - `py/gen.py`：生成库与 `kbp gen`；`assets/models/util/solidlayer.json`；
+  - `py/replay_host.py`：`kbp replay`、`kbp regress`；
+  - `py/snapshot.py`：`kbp snapshot export|diff`；
+  - `ts/replayLib.ts`、`ts/replay.test.ts`、`ts/vitest.config.ts`、`ts/tsconfig.json`；
+  - `tests/accept2.py`。
+- **修改：**
+  - `kbp.py`：四个新分类，`rdc track` 加 `--points`；
+  - `py/rdc_host.py`：读 meta 的 `track`；
+  - `SKILL.md`：新命令、案例字段、钩子、新步骤的标准流程。
+- **数据目录：** 新建 `ignore/p4/cases/`，8 个案例（b3、b4、b6、c1、c2、c3、c4、d1），其中 6 个带钩子。
+
+和计划不同、或计划没写、由子代理按证据定的：
+
+- **案例字段比计划多：**
+  - `runs`：一组回放跨多个工程；
+  - `inputs.world`：`none` / `static` / `hook`；
+  - `inputs.cursors`：`none` / `zero` / `track`；
+  - `inputs.time`：`none` / `cur` / `prev`；
+  - `compare.historyUnborn`：预热出生的粒子查不查历史坐标；
+  - `compare.requireParticles`；
+  - `systems.source` / `skipPattern` / `informational`、`unsupported`、`mode: "rope"`。
+
+  原脚本在这几点上各不相同（b3、b4、b6 不传控制点输入，c1 传 `[0, 0]`；b4、b6、d1 传场景时间，c1–c4 不传；b3–c2 与 c3、c4 对预热粒子的历史坐标处理不同），要逐位复现只能显式写出。
+- **钩子有多个入口**：`timeline`、`world`、`section`、`prepare`、`compareOptions`、`after`、`finish`。库经 `ctx.lib` 交给钩子：每个案例前 `vi.resetModules`，钩子自己 import 会拿到另一份实例，偏置开关不同步。
+- **`f32` 的 mock 只给要近似运算包络的案例挂**：b4 挂着 49 s、不挂 17.7 s，结果 JSON 逐字节相同。
+- **报告分两份**：`<名字>.txt` / `.json` 不含路径和耗时，两份源码上可以逐字节比；路径和耗时放 `.meta.json`。案例有失败时退出码仍是 0，跑不下去才报 `[src]`。
+- **生成库**：
+  - `write_project` 缺省 `pointer=True`（带指针的 CLK_PTR，`gen_c` 起的约定），`gen_b` 的写法传 `False`；
+  - `gen.py` 里 P4-0 自己的 `system`（operator 从 id 10 编号）和 `gen_b` 的同名冲突，没收进库；
+  - `HERE` 是惰性属性，等于数据目录，旧写法 `gen.HERE/proj` 照样能用；
+  - `kbp gen` 遇到已有工程拒绝，`--overwrite` 才先删再写；
+  - `p4b-vec` 是 `vec/gen_vec.py` 生成的，不在范围里。
+- **`track` 字段**：只在 `write_project(…, track=…)` 显式给出时写，只认 `draws` / `points`；命令行的 `--draws` / `--points` 优先。现有生成器不传，重新生成的工程字节不变。
+- **快照**：
+  - 目录必须在仓库里（tsc、vitest 沿目录向上找 `node_modules`）；
+  - `--overwrite` 只删带 `snapshot.json` 标记的目录；
+  - `diff` 用 difflib 生成 git 格式补丁，只收文本。
+- **旧脚本对照用 `c5/` 下的最新拷贝**：c1 原件不传 `pointer`，步骤 2 起接口要求它。b3、b4 的拷贝多写几行，把已算好的统计写进 JSON，只改输出不改计算。b4 不再写 `fixture-data.json`（属于点 9）。
+
+验收结果（输出在 `ignore/kbp/accept2/`，自测 93 项全过，约 5 分钟）：
+
+| 项 | 结果 |
+|---|---|
+| 新旧对照（同一份冻结快照，逐系统比最大差、包络、差 / 限、超限数、粒子数、是否通过，数值逐位） | b3 167 项、b4 87、b6 16、c1 11、c2 21、c3 20、c4 39、d1 36（WORKTREE 快照），全部 0 处不同；c3 新旧都是「有失败」（`a-default` 已接受的超限） |
+| HEAD 对 `c5/out` 的记录 | b3、b4、b6、c1–c4 与 `c5/out/*-head*` 逐项相同，d1 与 `d1/out/replay-rope.json` 36 项相同；HEAD 多出的提交没有改变这些结果 |
+| `gen` | 4 个生成器拷到临时目录、只改 import 行，重新生成 27 个工程（p4b 14、p4c 7、p4d 6），与 `ignore/p4/proj/` 逐文件逐字节相同；把副本里的通用函数也换成库的再生成，21 个工程相同 |
+| `track` 自动认法 | 带 `track: draws` 的小例子由 meta 选到 `draws`；`p4d-rope` 加上该字段重新生成后不加 `--draws` 提取，与 `rd-p4d-rope-fps60.json` 逐字节相同 |
+| `snapshot` | `export HEAD`：tsc 0 error，vitest 51 个文件、1246 个用例（1201 过、45 跳过、0 失败）；副本改一行后 `diff` 出的补丁 `git apply --check` 通过 |
+| `regress` | 同一份快照传两次，8 个案例逐字节相同；`DRAG_EXPONENT` 0.7 → 0.71，报出 b3、b4、c1、c3、c4 不同并给出第一处不同，b6、c2、d1 相同；两边并行约 50 s |
+| 耗时（新案例） | b3 18.4 s、b4 18.6、b6 0.4、c1 0.9、c2 4.2、c3 1.0、c4 6.4、d1 4.3 |
+
+子代理自报两处过程不合规：改 `kbp.py` 时、以及一次误操作，用了 `python -X utf8 -I -`（从 stdin 读脚本）；误操作那次挂住，已结束它自己起的进程。
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 仓库里只有 `.claude/skills/kbp-tools/` 的新增与修改；`ignore/` 下只新建了 `ignore/p4/cases/` 和 `ignore/kbp/accept2/` |
+| 读码 | 快照 `--overwrite` 只删带 `snapshot.json` 标记的目录；回放 / 回归的缺省输出在 `<data>/out/replay`、`<data>/out/regress`，已存在时拒绝 |
+| 另做一处变异（和代理的不重复） | 快照副本里 `colorn` 的色相平移加 0.001：`regress` 只报 b6 不同（「有失败」，第一处不同是 `c-red-green` 的蓝分量多了 0.006），其余 7 个案例逐字节相同；两边各 56 s |
+| 自测重跑 | 第一次换输出目录重跑有 10 项失败，都是 `tests/accept2.py` 自身的问题，已由 Claude 修正：① 旧脚本拷贝的输出路径写死成 `ignore/kbp/accept2/old/out`，不跟 `--out`（这次重跑因此把旧脚本结果写进了代理的验收目录，同一份 HEAD 快照，内容等价）；② 「覆盖」检查要求 `proj/` 里除 `p4b-vec` 都由这几个生成器产出，并行会话 10:22 新建的 `p4d-around-ic`（`d3/gen_around.py`）让它失败，改成只核对这几个生成器自己声明的工程。修正后在 `ignore/kbp/accept2-claude2/` 完整重跑，93 项全过，约 6.7 分钟 |
+| c3 的 `a-default` | 用户定（2026-11-10）：已接受的长程超限（2026-11-08）在案例里列为 `systems.informational`，照比照报、不计入是否全部通过。改后 c3 全部通过，`a-default` 标「超限（只报告）」，差 / 限 1.147（fps60）、28.709（fps10），和 P4c 步骤 3 的记录一致；`regress` 的「两边都全部通过」从此有提示作用 |
