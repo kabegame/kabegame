@@ -9,6 +9,9 @@
  *   帧时间照 WPE 钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（T2，`FrameClock`）。粒子每个实时帧按帧时间步进一次，
  *   operator 的遍数由 `maxFps` 定（`particlePasses`：1–20 两遍，否则一遍，对应 WPE 的 `fps` 设置，P4a 步骤 4）。
  *   一帧的顺序（P4c 步骤 4）：`sync` → 步进粒子 → 脚本（`beforeFrame`）→ `sync` → 写每帧 uniform → 编码，粒子先于脚本，同 WPE。
+ * - **视差**（P5a 步骤 2，`parallax.ts`）：视差点 P 在帧开头、粒子与脚本之前推进一次，脚本之后按当时的开关与 amount 交给
+ *   `GpuScene.setParallax`（属性与脚本写 `cameraparallax*` 同帧生效），`g_ParallaxPosition` 随每帧 uniform 写。P 归渲染器：
+ *   整场重编译保留，新场景回到场景中心（见 `load`）。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
@@ -29,6 +32,7 @@ import {
   type ScenePlacement,
   type SceneStyle,
 } from "./layout";
+import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, type ParallaxState } from "./parallax";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
@@ -127,6 +131,13 @@ export class SceneRenderer {
   private canvasPointer: [number, number] | null = null;
   /** `g_Time` / `g_Frametime`：钳过的帧时间与它的累加（T2）。换场景不重置。 */
   private readonly frameClock = new FrameClock();
+  /**
+   * 视差点 P 与 `g_ParallaxPosition`（P5a 步骤 2）。整场重编译保留（同一渲染器上第二次起的 `load`），新场景回到场景中心
+   * （渲染器的第一次 `load`：宿主一个页面只放一张场景，换壁纸是新页面、新渲染器；设备丢失或退回后重建渲染器，P 也随之回到中心）。
+   */
+  private parallax: ParallaxState = initialParallaxState(1, 1);
+  /** 当前场景的正交尺寸 W、H（`SceneGeneral.width/height`，不是可能被缩小的渲染目标）：视差点的单位，加载时取。 */
+  private projection: [number, number] = [1, 1];
   private paused = false;
   private failed = false;
   private lost = false;
@@ -300,6 +311,9 @@ export class SceneRenderer {
     const old = this.scene;
     this.scene = scene;
     this.state = state;
+    this.projection = [bundle.general.width, bundle.general.height];
+    // 视差点：新场景回到场景中心（WPE 加载末尾写初值，rea-p5-camera.md 6.2），重编译（换下的是同一张场景）保留
+    if (!old) this.parallax = initialParallaxState(bundle.general.width, bundle.general.height);
     this.blitBindGroups.clear();
     this.placementKey = "";
     options.beforeFirstFrame?.(state);
@@ -503,6 +517,13 @@ export class SceneRenderer {
     const wrapped = time % TIME_WRAP_SECONDS;
     // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上
     const cursor = this.cursorOf(this.placement);
+    // 视差点（P5a 步骤 2）：帧开头、粒子与脚本之前推进一次，用本帧的 `g_PointerPosition` 与帧时间（补画帧为 0，k 也是 0）；
+    // 开关关着时 P 与 `g_ParallaxPosition` 都不动
+    const [width, height] = this.projection;
+    this.parallax = advanceParallax(
+      this.parallax,
+      parallaxInput(state.general, { pointer: this.pointer, frametime, width, height }),
+    );
     // 粒子先于脚本（P4c 步骤 4）：WPE 一帧里先模拟粒子、后跑脚本，模拟用的对象变换是本帧脚本运行之前的（依据见
     // `GpuScene.stepParticles`）。步进之前先 `sync`：两帧之间写进状态的属性改值（`instanceoverride` 等）这一帧就进模拟器。
     // 补画帧帧时间为 0，`stepParticles` 只记 cursor 就返回
@@ -517,6 +538,8 @@ export class SceneRenderer {
     if (live) this.options.beforeFrame?.(frametime);
     const encoder = device.createCommandEncoder({ label: "scene frame" });
     try {
+      // 绘制用的视差取脚本之后的开关与 amount（WPE 绘制时才读，rea-p5-camera.md 6.3）：脚本写 `cameraparallax*` 同帧生效
+      scene.setParallax(drawParallax(this.parallax, state.general), state);
       // 脚本写回的状态再刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a、P4a）
       scene.sync(state);
       scene.update(
@@ -527,6 +550,7 @@ export class SceneRenderer {
           pointer: this.pointer,
           pointerLast: this.pointerLast,
           cursor,
+          parallax: this.parallax.position,
         },
         state,
       );

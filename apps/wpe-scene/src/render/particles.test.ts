@@ -118,6 +118,7 @@ describe("粒子 uniform", () => {
     color: [1, 1, 1],
     brightness: 1,
     visible: true,
+    parallaxDepth: [1, 1],
     parent: null,
   };
 
@@ -434,6 +435,7 @@ function baseLayer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer 
     brightness: 1,
     visible: true,
     visibleBound: false,
+    parallaxDepth: [1, 1],
     solidLayer: false,
     passes: [],
     colorBlendMode: 0,

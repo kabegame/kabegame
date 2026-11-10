@@ -27,6 +27,7 @@ import type { ParticleSystem } from "../particles/system";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
 import { acquireGpu } from "../render/device";
+import { drawParallax, initialParallaxState, replayParallax } from "../render/parallax";
 import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
 import { GpuScene, type ParticleOptions } from "../render/scene";
@@ -367,12 +368,29 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
     });
     try {
       const { time, frametime } = replayParticles(scene, state, options.particles);
+      // 视差（P5a 步骤 2）：指针固定在 (0.5, 0.5)，从加载时的场景中心起按同一串帧时间推进（同 `renderFrame`），四角带视差
+      const { width, height } = bundle.general;
+      const parallax = replayParallax(
+        initialParallaxState(width, height),
+        state.general,
+        { pointer: [0.5, 0.5], width, height },
+        [...(options.particles?.dts ?? []).slice(0, -1), frametime],
+      );
+      scene.setParallax(drawParallax(parallax, state.general), state);
       // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
       // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算
       scene.sync(state);
       scene.stepParticles(frametime, time, state, [0.5, 0.5]);
       scene.update(
-        { time, frametime, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5], cursor: [0.5, 0.5] },
+        {
+          time,
+          frametime,
+          daytime: 0.5,
+          pointer: [0.5, 0.5],
+          pointerLast: [0.5, 0.5],
+          cursor: [0.5, 0.5],
+          parallax: parallax.position,
+        },
         state,
       );
       const wanted = scene

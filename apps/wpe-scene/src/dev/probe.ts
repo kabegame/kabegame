@@ -10,6 +10,8 @@
  * - `particleCorners`：把粒子顶点着色器改写成计算着色器，读回每个粒子四角的裁剪坐标（P4a 步骤 4，`particleCorners.ts`）；
  * - `renderFrame` 带 `profile` 时给出每个粒子层的模拟 / 写顶点 / 上传开销（`particleMs`），`host.particles` 对当前场景做同样的
  *   记录，并给出粒子数与分布（P4a 步骤 5）。
+ * - 视差（P5a 步骤 2）：`renderFrame`、`hostRenderFrame` 与 `particleCorners` 都从加载时的状态（场景中心）起逐帧推进视差点，用同一个
+ *   `pointer` 与同一套 `render/parallax.ts`，读回的那一帧把 P 交给 `GpuScene.setParallax`、`g_ParallaxPosition` 进帧输入。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -20,6 +22,7 @@ import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { particleTrack, type ParticleTrack } from "../particles/track";
 import { acquireGpu } from "../render/device";
+import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, replayParallax } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
@@ -144,6 +147,7 @@ export interface RenderFrameOptions {
    * `g_PointerPosition` 与 `g_PointerPositionLast`（窗口归一化坐标，原样进 uniform），缺省在中心 `[0.5, 0.5]`。
    * 和 WPE 抓帧比时填抓帧里读到的值（P4b 步骤 1：`2854083091` 的 x 光随指针）。同一个值也作控制点跟随指针的 `cursor`
    * （光标下的场景纹理坐标，P4c 步骤 2），加载时的预热、回放的每一帧和读回那一帧都用它：抓帧窗口和场景同尺寸时两者相同。
+   * 视差点（P5a 步骤 2）同样用它从加载起逐帧推进：抓帧期间光标不动，固定一个值就能复现，不加逐帧指针。
    */
   pointer?: [number, number];
   /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（场景目标尺寸，alpha 置 255）存 `<key>.rgba`。 */
@@ -221,6 +225,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       ignoreUnsupported: force,
       particles: { ...replayParticleOptions(options.particles), cursor: pointer },
     });
+    // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器
+    const { width: sceneWidth, height: sceneHeight } = bundle.general;
+    const parallaxFrame = { pointer, width: sceneWidth, height: sceneHeight };
+    let parallax = initialParallaxState(sceneWidth, sceneHeight);
     try {
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
@@ -231,7 +239,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         const samples: number[] = [];
         for (let i = 0; i < options.profile; i++) {
           const t0 = performance.now();
-          // 顺序同渲染器（P4c 步骤 4）：先步进粒子再写 uniform；探针没有脚本，两次 sync 之间没有改动，省掉第二次
+          // 顺序同渲染器（P4c 步骤 4）：先步进粒子再写 uniform；探针没有脚本，两次 sync 之间没有改动，省掉第二次。
+          // 没有脚本，视差在 sync 之前交给场景，结果同渲染器
+          parallax = advanceParallax(parallax, parallaxInput(state.general, { ...parallaxFrame, frametime: 1 / 60 }));
+          scene.setParallax(drawParallax(parallax, state.general), state);
           scene.sync(state);
           scene.stepParticles(1 / 60, startTime + i / 60, state, pointer);
           scene.update(
@@ -242,6 +253,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
               pointer,
               pointerLast: pointer,
               cursor: pointer,
+              parallax: parallax.position,
             },
             state,
           );
@@ -264,9 +276,16 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       }
       // 粒子回放：前 n−1 帧在 replayParticles 里步进，最后一帧在这里先步进再写 uniform（顺序同渲染器，P4c 步骤 4）
       const { time, frametime } = replayParticles(scene, state, options.particles, startTime, pointer);
+      // 视差点和粒子互不影响：回放的前 n − 1 帧与读回帧按同一串帧时间推进（没有回放时读回帧的帧时间是 0）
+      const replayed = options.particles?.dts ?? [];
+      parallax = replayParallax(parallax, state.general, parallaxFrame, [...replayed.slice(0, -1), frametime]);
+      scene.setParallax(drawParallax(parallax, state.general), state);
       scene.sync(state);
       scene.stepParticles(frametime, time, state, pointer);
-      scene.update({ time, frametime, daytime: 0.5, pointer, pointerLast: pointer, cursor: pointer }, state);
+      scene.update(
+        { time, frametime, daytime: 0.5, pointer, pointerLast: pointer, cursor: pointer, parallax: parallax.position },
+        state,
+      );
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
@@ -365,7 +384,8 @@ export function hostStats(host: SceneHost): {
 
 /**
  * 按固定 `g_Time` 渲染**当前**场景（含就地改过的状态）并读回、给 SHA-256：与 `renderFrame` 的整场重编译结果逐字节比较，
- * 是「就地 = 重编译」的真机判据（P3a 验收 4）。
+ * 是「就地 = 重编译」的真机判据（P3a 验收 4）。指针固定在 (0.5, 0.5)；视差同 `renderFrame`，从加载时的场景中心起推进这一帧
+ * （帧时间 0），不用渲染器正在用的视差点。交给场景的视差留在当前场景上，渲染器的下一帧照常换回自己的。
  */
 export async function hostRenderFrame(
   host: SceneHost,
@@ -377,11 +397,26 @@ export async function hostRenderFrame(
   if (!renderer || !scene || !state) throw new Error("当前没有可渲染的场景");
   const device = renderer.device;
   const encoder = device.createCommandEncoder({ label: "probe host frame" });
+  // 视差点的单位是场景的正交尺寸（`bundle.general`），没有 bundle 时退回场景目标尺寸
+  const { width, height } = host.devScene.bundle?.general ?? scene;
+  const parallax = advanceParallax(
+    initialParallaxState(width, height),
+    parallaxInput(state.general, { pointer: [0.5, 0.5], frametime: 0, width, height }),
+  );
+  scene.setParallax(drawParallax(parallax, state.general), state);
   scene.sync(state);
   // 帧时间 0：粒子不步进，读回的是当前状态（`stepParticles` 只记下 cursor，同以前 `update` 里的那一步）
   scene.stepParticles(0, time, state, [0.5, 0.5]);
   scene.update(
-    { time, frametime: 0, daytime: 0.5, pointer: [0.5, 0.5], pointerLast: [0.5, 0.5], cursor: [0.5, 0.5] },
+    {
+      time,
+      frametime: 0,
+      daytime: 0.5,
+      pointer: [0.5, 0.5],
+      pointerLast: [0.5, 0.5],
+      cursor: [0.5, 0.5],
+      parallax: parallax.position,
+    },
     state,
   );
   scene.encode(encoder, state);

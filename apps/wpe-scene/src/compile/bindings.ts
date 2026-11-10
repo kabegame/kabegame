@@ -20,7 +20,8 @@ export type TargetKey = string;
 /** 目标值的形状：决定字符串 / 数字 / 布尔怎么换成 uniform 分量（3b 的脚本取值、写回也按它换算）。 */
 export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
 
-export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible";
+/** 图层的就地字段。`parallaxDepth`（P5a 步骤 2）只改字段、没有回调（p3-script-REPORT I3），视差每次绘制都重读。 */
+export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible" | "parallaxDepth";
 
 export type RecompileReason =
   | "postprocess-hdr" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）
@@ -34,7 +35,8 @@ type GeneralField =
   | { type: "bool"; fallback: boolean };
 
 /**
- * WPE 里只改字段的 general 属性（L1），不重编译。`fov` 起的项正交场景不读，只存值，脚本能读回（已定 13）。
+ * WPE 里只改字段的 general 属性（L1），不重编译。`fov` 起的项正交场景不读，只存值，脚本能读回（已定 13）；`cameraparallax*` 例外，
+ * 渲染器每帧读（P5a 步骤 2，`render/parallax.ts`），属性与脚本写入就地生效。
  * `fallback` 是缺键时的值（L1 的构造默认值、L14 的实测）。
  */
 export const GENERAL_FIELDS = {

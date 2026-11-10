@@ -336,6 +336,11 @@ export interface SceneLayer {
   visible: boolean;
   /** `visible` 绑了用户属性（含 condition）：运行时可能变，当前不可见也要建 GPU 资源（P3a）。 */
   visibleBound: boolean;
+  /**
+   * 视差深度（P5a 步骤 2），两个分量：缺键 (1, 1)（WPE 基础构造写 1.0，rea-p5-camera.md 6.3；`p5a-static` 不写该键的方块按 (1, 1)
+   * 移动）。绘制时只用根对象的值（`render/parallax.ts`），子对象自己的不参与；只在 `general.cameraparallax` 打开时起作用。
+   */
+  parallaxDepth: number[];
   /** 模型 `solidlayer` 且不是 `instanced`：合成 RT 按 `size`，不看纹理（B5）。 */
   solidLayer: boolean;
   /** 基础材质的 pass。 */
@@ -1010,6 +1015,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       brightness: asNumber(bindings.bind(object.brightness as SceneValue, properties, at("brightness")), 1),
       visible: bindings.bind(object.visible, properties, at("visible")) !== false,
       visibleBound: isUserBinding(object.visible),
+      parallaxDepth: numbers(bindings.bind(object.parallaxDepth, properties, at("parallaxDepth")), [1, 1]),
       solidLayer: false,
       passes: [],
       colorBlendMode: Math.trunc(

@@ -69,6 +69,7 @@ function scene(): SceneBundle {
     brightness: 1,
     visible: true,
     visibleBound: false,
+    parallaxDepth: [1, 1],
     solidLayer: false,
     passes: [],
     colorBlendMode: 0,
@@ -250,6 +251,39 @@ describe("SceneScript API（FakeRealm）", () => {
     h.recompile();
     expect(getLayer(0)).toBe(first);
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(first)).toBe(true);
+  });
+
+  it("parallaxDepth（P5a 步骤 2）：读到 Vec2，写 Vec2 / 普通对象 / 数字（铺满）进 SceneState 并标脏整棵子树，错类型不改", () => {
+    const h = setup();
+    const first = (h.api.thisScene.getLayer as (name: number) => Record<string, unknown>)(0);
+    // 缺键 (1, 1)，是拷贝
+    expect(first.parallaxDepth).toEqual(new Vec2(1, 1));
+    (first.parallaxDepth as Vec2).x = 9;
+    expect(h.state.layers.get(0)?.parallaxDepth).toEqual([1, 1]);
+    h.state.takeDirty();
+    first.parallaxDepth = new Vec2(0, 2);
+    expect(h.state.layers.get(0)?.parallaxDepth).toEqual([0, 2]);
+    expect(first.parallaxDepth).toEqual(new Vec2(0, 2));
+    expect([...h.state.takeDirty().layers]).toEqual([0]);
+    first.parallaxDepth = { x: -0.7, y: 0.5 };
+    expect(h.state.layers.get(0)?.parallaxDepth).toEqual([-0.7, 0.5]);
+    first.parallaxDepth = 0.01;
+    expect(h.state.layers.get(0)?.parallaxDepth).toEqual([0.01, 0.01]);
+    first.parallaxDepth = "1 1";
+    expect(h.state.layers.get(0)?.parallaxDepth).toEqual([0.01, 0.01]);
+  });
+
+  it("{script} 挂在图层的 parallaxDepth 上（P5a 步骤 2）：目标是图层字段，形状 vec2", async () => {
+    const source = "export function update(v) { return v; }";
+    const { list } = await collectScripts(
+      { objects: [{ id: 1, image: "models/a.json", parallaxDepth: { script: source, value: "0.5 0.5" } }] },
+      {},
+      [],
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0].target).toEqual({ kind: "layer", object: 0, field: "parallaxDepth" });
+    expect(list[0].valueType).toBe("vec2");
+    expect(list[0].initial).toBe("0.5 0.5");
   });
 
   it("图层数字下标保持 scene.json 坐标；材质对象暴露同 pass 的全部常量", () => {

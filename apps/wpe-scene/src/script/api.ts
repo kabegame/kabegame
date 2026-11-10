@@ -73,7 +73,7 @@ export interface ScriptApiState {
 }
 
 const DEGREE = 0.017453292;
-const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness"] as const;
+const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness", "parallaxDepth"] as const;
 
 /**
  * 脚本 realm 里的 WPE API。WPE 有、这里还没实现的成员登记在 `compile/scriptApi.ts` 的 `MISSING_SCRIPT_API`，
@@ -173,8 +173,12 @@ export class ScriptApi {
         field,
         () => {
           const value = this.access.state().layers.get(index)?.[field];
+          // `parallaxDepth` 是 Vec2（P5a 步骤 2，WPE 声明 `parallaxDepth: Vec2`），其余向量是 Vec3
           if (Array.isArray(value))
-            return this.vector(field === "angles" ? value.map((part) => part / DEGREE) : value, 3);
+            return this.vector(
+              field === "angles" ? value.map((part) => part / DEGREE) : value,
+              field === "parallaxDepth" ? 2 : 3,
+            );
           return value;
         },
         (value) => {
@@ -188,7 +192,9 @@ export class ScriptApi {
                 ? "bool"
                 : field === "alpha" || field === "brightness"
                   ? "float"
-                  : "vec3",
+                  : field === "parallaxDepth"
+                    ? "vec2"
+                    : "vec3",
           );
         },
       );

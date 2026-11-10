@@ -85,6 +85,7 @@ const BASE_LAYER: LayerState = {
   color: [0.2, 0.4, 0.6],
   brightness: 1,
   visible: true,
+  parallaxDepth: [1, 1],
   parent: null,
 };
 

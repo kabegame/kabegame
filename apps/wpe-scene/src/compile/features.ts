@@ -82,6 +82,7 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_PointerPosition",
   "g_PointerPositionLast",
   "g_PointerState",
+  "g_ParallaxPosition",
 ]);
 /** 光照路径声明了、只有 PRELIGHTING 才读的 uniform（`genericimage4.vert`）：渲染器不写，PRELIGHTING 另报。 */
 const UNREAD_UNIFORMS = new Set(["g_AltModelMatrix", "g_AltNormalModelMatrix", "g_AltViewProjectionMatrix"]);
@@ -125,7 +126,9 @@ const ENGINE_COMBOS = new Set([
  * - `supportsvideo`：只决定 D3D 设备的视频支持标志（G2 0x8000）；视频纹理另报 `tex:video`。
  * - `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength`：REA 没找到引擎读取点，
  *   实测见 P4a 实施记录（`rea-p4a.md` C7：只在场景属性表里，粒子路径不碰，`movement` 的重力只来自模块自己的 `gravity`）。
- * `cameraparallax*` / `camerashake*` 的调节项只在主开关打开时起作用，主开关打开时另报；`zoom` 为 1 时是恒等。
+ * `cameraparallax*` 已实现（P5a 步骤 2，`render/parallax.ts`）：四个字段由 `GENERAL_FIELDS` 存值，渲染器每帧读，属性与脚本写入就地生效；
+ * 透视场景开视差 WPE 不移动对象（rea-p5-camera.md 6.1，语料 0 张），透视整张另报 `camera:perspective`。
+ * `camerashake*` 的调节项只在主开关打开时起作用，主开关打开时另报；`zoom` 为 1 时是恒等。
  * `perspectiveoverridefov` 不是中性：它是透视粒子的 fov（C4，实测核对过），解析进 `SceneGeneral.perspectiveOverrideFov`，
  * 见 `PARSED_GENERAL`。
  */
@@ -162,7 +165,8 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  * - `ledsource`：Razer Chroma 外设灯效的取色来源，不参与渲染。
  * - `brightness`：只在 HDR 下乘进颜色（B10，`render/uniforms.ts` 的 `colorScale`），LDR 下不生效。
  * - `locktransforms`：编辑器锁定。
- * - `parallaxDepth`：只在 `general.cameraparallax` 打开时起作用，那时已报 `general:cameraparallax`。
+ * - `parallaxDepth`：视差已实现（P5a 步骤 2）。缺键 (1, 1)，绘制时只用根对象的值（`render/parallax.ts`），绑用户属性就地写、挂
+ *   `{script}` 的字段脚本写回到它；只在 `general.cameraparallax` 打开时起作用，透视场景不移动对象（读码，语料 0 张）。
  * - `parent`：层级已实现（P4a 步骤 1，`hierarchy.ts` 与 `render/layout.ts`）；灯对象例外，见 `checkObjectFeatures`。
  * - `config`：运行时只在托盘、播放列表代码里读，渲染路径不碰；P5a 步骤 0 实测带 `config.passthrough` 的层画面不变。
  * `alignment` 为 `center`、`perspective` 为 false 时中性，其余取值另报。
@@ -281,8 +285,8 @@ function active(value: unknown): boolean {
 export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): void {
   const g = scene.general ?? {};
   if (!g.orthogonalprojection) unsupported.add("camera:perspective");
-  for (const key of ["cameraparallax", "camerashake", "supportsaudioprocessing"])
-    if (active(g[key])) unsupported.add(`general:${key}`);
+  // `cameraparallax` 不再报（P5a 步骤 2）：视差点、`g_ParallaxPosition` 与对象平移已实现
+  for (const key of ["camerashake", "supportsaudioprocessing"]) if (active(g[key])) unsupported.add(`general:${key}`);
   if (g.zoom !== undefined && g.zoom !== 1) unsupported.add("general:zoom");
   for (const [key, value] of Object.entries(g))
     if (

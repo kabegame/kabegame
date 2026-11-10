@@ -41,6 +41,8 @@ const layerTypes: Record<string, ValueType> = {
   color: "vec3",
   brightness: "float",
   visible: "bool",
+  // P5a 步骤 2：字段脚本写回到视差深度（语料 2582765611、2896608544）
+  parallaxDepth: "vec2",
 };
 
 function valueType(initial: SceneScalar): ValueType | "string" {

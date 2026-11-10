@@ -34,6 +34,11 @@
  *   `draw(maxVertices, 段数)`，段数为 0 不画；不用索引缓冲。ropetrail（P4d 步骤 2）同一条路，按 renderer 换布局与写入函数：每个存活
  *   粒子按槽序恒写 n 段（`particles/ropetrail.ts` 的 `writeTrailSegments`），顶点缓冲按 `maxcount × n` 段分配，`g_RenderVar0` 每帧按
  *   系统的计时器写（`update`，`trailRenderVar0`）。
+ * - 视差（P5a 步骤 2）：渲染器每帧交来视差点 P 与 amount（`setParallax`，关着时为 null）。每次绘制的视图投影换成 `VP · T(o)`，
+ *   o 按 draw 所属对象的根对象算（`render/parallax.ts` 的 `parallaxOffset`）：图像层直接上屏、带 effect 图层的每个 pass（基础 pass
+ *   用自己的整面矩阵，本来就不读 VP）、正交与透视粒子都一样（p5-REPORT `p5a-fx`：WPE 画整个对象之前把视图换成带视差的）。粒子模拟与
+ *   控制点反投影仍用不带视差的 `viewProjection`（跟随指针的粒子出生在不含视差的反投影点）。矩阵属于静态 uniform：P、开关或 amount 变了
+ *   全部 draw 重写一遍，对象原点、根的 `parallaxDepth` 变了照旧经 `dirty.layers`。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -79,11 +84,13 @@ import {
   eyePosition,
   layerQuad,
   particleViewProjection,
+  rootObject,
   sceneTargetSize,
   sceneViewProjection,
   worldMatrixOf,
 } from "./layout";
-import { identity, type Mat4 } from "./math";
+import { identity, multiply, translation, type Mat4 } from "./math";
+import { parallaxOffset, type SceneParallax } from "./parallax";
 import { createPipeline, createProgram, programVertexPacking, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
@@ -518,6 +525,8 @@ export class GpuScene {
   private viewProjection: Float32Array = new Float32Array(16);
   /** 透视粒子（`flags & 4`）的视图投影（`particleViewProjection`）。 */
   private perspectiveViewProjection: Float32Array = new Float32Array(16);
+  /** 本帧的视差（P5a 步骤 2，`setParallax`）：null 为关着，绘制不加平移。 */
+  private parallax: SceneParallax | null = null;
   /** 粒子层全场共用的索引缓冲（`quadIndices`），按最大的 `maxcount` 建一次；没有粒子层时为 null。 */
   private particleIndices: { buffer: GPUBuffer; format: GPUIndexFormat; particles: number } | null = null;
   /** 粒子层（`objects` 下标）→ 第几个粒子层（`bundle.layers` 里带 `particle` 的顺序），定种子用。 */
@@ -1335,7 +1344,8 @@ export class GpuScene {
 
   /**
    * 一个 draw 的全部静态 uniform（建 draw 与就地刷新共用）：图层状态、按父链算的世界矩阵 + 场景级常量（建场景时算一次）。
-   * 图层走 `drawUniformValues`，粒子走 `particleUniformValues`（透视粒子换视图投影）。
+   * 图层走 `drawUniformValues`，粒子走 `particleUniformValues`（透视粒子换视图投影）。视图投影是取矩阵的唯一入口，开着视差时
+   * 两条路径都换成带视差的（`viewProjectionOf`，P5a 步骤 2）。
    */
   private uniformValues(
     step: DrawLike,
@@ -1365,7 +1375,12 @@ export class GpuScene {
         // 世界空间系统（P4c 步骤 4）是单位阵，对象变换改了照样走这里重写，仍是单位阵（`particleModel`）
         world: this.particleModel(layer, state, worlds),
         layer: layerState,
-        viewProjection: step.perspective ? this.perspectiveViewProjection : this.viewProjection,
+        // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）
+        viewProjection: this.viewProjectionOf(
+          layer,
+          state,
+          step.perspective ? this.perspectiveViewProjection : this.viewProjection,
+        ),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
         // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）
         renderer: layer.particle?.renderer,
@@ -1375,8 +1390,43 @@ export class GpuScene {
       ...common,
       step,
       layer: { ...layerState, size: layer.size },
-      viewProjection: this.viewProjection,
+      viewProjection: this.viewProjectionOf(layer, state, this.viewProjection),
     });
+  }
+
+  /**
+   * 一次绘制的视图投影（P5a 步骤 2）：开着视差时是 `base · T(o)`（列向量约定：先把世界坐标平移 o，再投影；WPE 行向量下的
+   * `V′ = T(o)·V`，rea-p5-camera.md 6.3），o 由 draw 所属对象的根对象的当前 `origin` 字段与 `parallaxDepth` 算；关着、根不在表里或
+   * o 为 0 时原样返回 `base`，字节不变。
+   */
+  private viewProjectionOf(layer: SceneLayer, state: SceneState, base: Mat4): Mat4 {
+    const parallax = this.parallax;
+    if (!parallax) return base;
+    const root = state.layers.get(rootObject(layer.object, state.layers));
+    if (!root) return base;
+    const [x, y] = parallaxOffset(parallax.amount, root.parallaxDepth, root.origin, parallax.point);
+    return x === 0 && y === 0 ? base : multiply(base, translation(x, y, 0));
+  }
+
+  /**
+   * 本帧的视差（P5a 步骤 2）：渲染器每帧在脚本之后、第二次 `sync` 之前交来（开关关着时为 null）。和上一次不同（开与关互换、P 或
+   * amount 变）时记下，并按 `state` 把全部 draw 由图层算出的那组 uniform 重写一遍（`refreshLayer`，共用一份世界矩阵缓存）；相同时
+   * 什么都不做。之后单图层重建新建的 draw 按记下的值写。
+   */
+  setParallax(next: SceneParallax | null, state: SceneState): void {
+    const current = this.parallax;
+    if (!current && !next) return;
+    if (
+      current &&
+      next &&
+      current.amount === next.amount &&
+      current.point[0] === next.point[0] &&
+      current.point[1] === next.point[1]
+    )
+      return;
+    this.parallax = next ? { point: [next.point[0], next.point[1]], amount: next.amount } : null;
+    const worlds = new Map<number, Mat4>();
+    for (const draw of this.draws) this.refreshLayer(draw, state, worlds);
   }
 
   /**

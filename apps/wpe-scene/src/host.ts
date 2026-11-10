@@ -493,7 +493,7 @@ export class SceneHost {
     if (path.startsWith("general/bloom/"))
       return state.bloom[path.slice("general/bloom/".length) as keyof SceneState["bloom"]] ?? null;
     if (path.startsWith("general/")) return state.general[path.slice("general/".length) as GeneralKey] ?? null;
-    const layer = /^objects\/(\d+)\/(origin|scale|angles|alpha|color|brightness|visible)$/.exec(path);
+    const layer = /^objects\/(\d+)\/(origin|scale|angles|alpha|color|brightness|visible|parallaxDepth)$/.exec(path);
     if (layer)
       return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;
     // 粒子 `instanceoverride` 的就地值（P4a 步骤 5）：状态里的值，与模拟器正在用的相同

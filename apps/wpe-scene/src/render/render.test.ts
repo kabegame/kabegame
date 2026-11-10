@@ -690,6 +690,7 @@ describe("可渲染性自查", () => {
     brightness: 1,
     visible: true,
     visibleBound: false,
+    parallaxDepth: [1, 1],
     solidLayer: false,
     passes: [pass],
     colorBlendMode: 0,

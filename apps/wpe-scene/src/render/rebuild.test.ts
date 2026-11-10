@@ -317,6 +317,7 @@ function layer(object: number, effects: SceneEffect[], extra: Partial<SceneLayer
     brightness: 1,
     visible: true,
     visibleBound: false,
+    parallaxDepth: [1, 1],
     solidLayer: false,
     passes: [pass(`objects/${object}/passes/0`, P.base, { textures: { 0: 0 } })],
     colorBlendMode: 0,

@@ -138,6 +138,22 @@ export function everyAncestor<T extends Pick<LayerTransform, "parent">>(
   return true;
 }
 
+/**
+ * 沿父链走到根对象（视差的平移只看根，P5a 步骤 2，rea-p5-camera.md 6.3）。父对象不在表里时当根（同 `worldMatrixOf`）；环在编译期已断开，
+ * 这里按走过的节点兜底。对象自己不在表里时返回它自己。
+ */
+export function rootObject(object: number, layers: ReadonlyMap<number, Pick<LayerTransform, "parent">>): number {
+  const seen = new Set<number>();
+  let current = object;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = layers.get(current)?.parent ?? null;
+    if (parent === null || !layers.has(parent)) break;
+    current = parent;
+  }
+  return current;
+}
+
 /** `visible` 沿父链：自身和所有祖先都可见才可见。`alpha`、`color`、`brightness` 不继承（P4a 实测）。 */
 export function effectiveVisible(
   object: number,

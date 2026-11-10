@@ -104,7 +104,10 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
   input: fields(["cursorWorldPosition", "cursorScreenPosition", "cursorLeftDown"]),
   localStorage: [],
   console: [],
-  /** 已实现：`name`、`id`、`size`（只读）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`。 */
+  /**
+   * 已实现：`name`、`id`、`size`（只读）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`
+   * （P5a 步骤 2）。
+   */
   layer: [
     // 层级与变换（W1 / W5）
     ...methods("any", ["getTransformMatrix", "rotateObjectSpace", "lookAtYaw"], UNIQUE),
@@ -160,7 +163,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ...methods("root", ["play", "pause", "stop", "isPlaying"]),
     // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象
     ...fields([
-      "parallaxDepth",
       "alignment",
       "volume",
       "perspective",

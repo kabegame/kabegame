@@ -8,6 +8,7 @@
  *
  * 层级（P4a 步骤 1）：图层存的都是本地值，世界矩阵与继承后的可见性由渲染器按父链现算。所以写一个图层的
  * `origin`、`angles`、`scale`、`visible` 时，它和全部子孙一起标脏；`alpha`、`color`、`brightness` 不继承，只标自己。
+ * 视差（P5a 步骤 2）的平移看根对象的 `origin` 与 `parallaxDepth`，所以 `parallaxDepth` 同样整棵子树标脏。
  *
  * 粒子（P4a 步骤 5）：`instanceoverride` 的标量与 `colorn`（P4b 步骤 6）存在 `particleInstances`，写入用编译期同一条取值规则
  * （`instanceScalar` / `instanceColorn`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、重算颜色平移。
@@ -37,12 +38,20 @@ export interface LayerState {
   brightness: number;
   /** 自身的值；画不画还要看祖先（`effectiveVisible`）。 */
   visible: boolean;
+  /**
+   * 视差深度（P5a 步骤 2，`SceneLayer.parallaxDepth`）：只有根对象的值起作用（WPE 绘制时沿父链取根，rea-p5-camera.md 6.3），
+   * 子孙的平移跟着根变。
+   */
+  parallaxDepth: number[];
   /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中不变。 */
   readonly parent: number | null;
 }
 
-/** 会传给子孙的字段：世界矩阵用到的三项，加沿父链继承的 `visible`。`alpha`、`color`、`brightness` 不继承。 */
-const INHERITED_FIELDS: ReadonlySet<LayerField> = new Set(["origin", "angles", "scale", "visible"]);
+/**
+ * 会传给子孙的字段：世界矩阵用到的三项，加沿父链继承的 `visible`，以及子孙按根对象取的 `parallaxDepth`（P5a 步骤 2，根的 `origin`
+ * 已在前三项里）。`alpha`、`color`、`brightness` 不继承。
+ */
+const INHERITED_FIELDS: ReadonlySet<LayerField> = new Set(["origin", "angles", "scale", "visible", "parallaxDepth"]);
 
 export type WriteResult = "applied" | "recompile";
 
@@ -105,6 +114,7 @@ function layerStateOf(layer: SceneLayer): LayerState {
     color: [...layer.color],
     brightness: layer.brightness,
     visible: layer.visible,
+    parallaxDepth: [...layer.parallaxDepth],
     parent: layer.parent,
   };
 }
@@ -142,6 +152,8 @@ const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible">, number[]> = {
   alpha: [1],
   color: [1, 1, 1],
   brightness: [1],
+  // 缺键与解析不出分量时同编译期（`bundle.ts`）
+  parallaxDepth: [1, 1],
 };
 
 function writeLayer(layer: LayerState, field: LayerField, value: number[] | boolean): void {
@@ -326,7 +338,7 @@ export class SceneState {
       const layer = this.layers.get(target.object);
       if (layer) {
         writeLayer(layer, target.field, bindingValue(raw, binding.condition, target.field));
-        // 变换与可见性传给子孙：子孙的世界矩阵跟着变；alpha、color、brightness 只是自己的
+        // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的
         if (INHERITED_FIELDS.has(target.field))
           for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
         else this.dirtyLayers.add(target.object);

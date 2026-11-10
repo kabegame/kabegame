@@ -264,6 +264,8 @@ export const LIGHT_UNIFORMS = {
 /**
  * 各角色的变换（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：作用于 P1 的 `direct` 与合成链的三种角色。
  * `world` 是图层的世界矩阵（`layout.ts` 的 `worldMatrixOf`，沿父链累乘，P4a 步骤 1），下文的「模型矩阵」都是它。
+ * `viewProjection` 是这次绘制的视图投影：开着视差时已是 `VP · T(o)`（`GpuScene.uniformValues`，P5a 步骤 2），下文的「图层 MVP」与
+ * `g_ViewProjectionMatrix` 都带视差，只有 `base` 用自己的整面矩阵、不读它（`p5a-fx` 实测：effect 的中间 pass 读到的效果矩阵也带视差）。
  * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层世界矩阵；
  * - `base`：正交投影把图层四边形画满合成 RT，单位模型矩阵（B7）；
  * - `effect`：NDC 全屏四边形、MVP 为单位阵；`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)，
@@ -426,7 +428,7 @@ export interface ParticleUniformInput {
   world: Mat4;
   /** 粒子材质 pass 的材质常量（`SceneState.constants.get(pass.key)`）。 */
   constants: Record<string, number[]>;
-  /** 正交场景的视图投影，或透视粒子（`flags & 4`）的 `particleViewProjection`。 */
+  /** 正交场景的视图投影，或透视粒子（`flags & 4`）的 `particleViewProjection`；开着视差时右乘了 `T(o)`（P5a 步骤 2）。 */
   viewProjection: Mat4;
   colorScale: number;
   screenSize: [number, number];
@@ -485,6 +487,11 @@ export interface FrameInput {
    * 它：P4c 步骤 4 起粒子在脚本之前由 `GpuScene.stepParticles` 步进，渲染器把同一个值交给那里，这一项只是记下这一帧的值。
    */
   cursor: [number, number];
+  /**
+   * `g_ParallaxPosition`（P5a 步骤 2，`render/parallax.ts`）：`clamp(P / (W, H), 0, 1)`，开关开着时每帧更新、关着时保留上一次的值。
+   * 缺省 (0.5, 0.5)：加载时的值，视差从没开过时着色器读到的就是它（rea-p5-camera.md 6.2）。
+   */
+  parallax?: [number, number];
 }
 
 /**
@@ -498,6 +505,7 @@ export function frameBuiltins(frame: FrameInput): Record<string, number[]> {
     g_PointerPosition: frame.pointer,
     g_PointerPositionLast: frame.pointerLast,
     g_PointerState: [0, 0, 0, 0],
+    g_ParallaxPosition: frame.parallax ?? [0.5, 0.5],
   };
 }
 

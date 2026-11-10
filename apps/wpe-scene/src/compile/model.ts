@@ -26,6 +26,8 @@ export interface SceneObject extends JsonObject {
   alpha?: SceneValue;
   color?: SceneValue;
   visible?: SceneValue;
+  /** 视差深度（P5a 步骤 2），缺键 (1, 1)。 */
+  parallaxDepth?: SceneValue;
   effects?: unknown[];
 }
 export interface ModelJson extends JsonObject {

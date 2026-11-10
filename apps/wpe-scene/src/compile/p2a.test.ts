@@ -167,17 +167,35 @@ describe("能力表裁决", () => {
     const keys = new Set<string>();
     checkSceneFeatures(
       {
-        general: { ...vortexGeneral, cameraparallax: true, zoom: 2 },
+        general: { ...vortexGeneral, camerashake: true, zoom: 2 },
         objects: [{ ...vortexObject, alignment: "topleft", perspective: true }],
       },
       keys,
     );
-    expect([...keys].sort()).toEqual([
-      "general:cameraparallax",
-      "general:zoom",
-      "object:alignment",
-      "object:perspective",
-    ]);
+    expect([...keys].sort()).toEqual(["general:camerashake", "general:zoom", "object:alignment", "object:perspective"]);
+  });
+  it("视差已实现（P5a 步骤 2）：打开 cameraparallax、绑属性都不报，对象的 parallaxDepth 照旧放行", () => {
+    const keys = new Set<string>();
+    checkSceneFeatures(
+      {
+        general: {
+          ...vortexGeneral,
+          cameraparallax: true,
+          cameraparallaxamount: { user: "amount", value: 0.4 },
+          cameraparallaxdelay: 2.7,
+          cameraparallaxmouseinfluence: -2,
+        },
+        objects: [{ ...vortexObject, parallaxDepth: { user: "depth", value: "0 1" } }],
+      },
+      keys,
+    );
+    expect([...keys]).toEqual([]);
+    const bound = new Set<string>();
+    checkSceneFeatures(
+      { general: { ...vortexGeneral, cameraparallax: { user: "p", value: true } }, objects: [] },
+      bound,
+    );
+    expect([...bound]).toEqual([]);
   });
   it("着色器：没有 meta.material 的引擎 uniform 要在内置表里，引擎 COMBO 照报", () => {
     const keys = new Set<string>();
