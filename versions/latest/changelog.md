@@ -78,6 +78,7 @@
 - Windows 桌面网页壁纸与图库预览改为同一套实现（壁纸窗口里嵌入网页壁纸，不再整窗跳转）：图片 / 视频与网页壁纸之间也有切换过渡；预览与桌面的页面存储互通（桌面上此前保存的页面数据不会带过来）；改了文件夹属性后，旧文件夹立即不再可读；网页壁纸只能读取自己的壁纸目录和为它选择的文件。
 - 启动时主窗口立即出现：数据库升级等耗时初始化改在后台进行，期间窗口显示启动页与进度（升级需要先补算数据时显示进度条），完成后自动进入主界面；初始化失败会在启动页显示错误并可直接退出。其余数据补算在进入界面后于后台继续，可在「我正在忙这些」里看到进度，中途退出下次启动接着做。
 - 画廊不再在重启后恢复上次的过滤和排序，每次打开都是全部图片；切到别的页面再回来仍保持原来的视图。常用视图请存进 ⋯ 菜单的「收藏的视图」。
+- 工具条末尾的 ⋯ 菜单只保留「用当前视图轮播壁纸」和「收藏的视图」，不再提供隐藏 chip 的开关：搜索、各过滤维度与排序 chip 始终显示在工具条上，以前关掉的会重新出现。
 
 ## 插件开发侧
 
@@ -171,7 +172,7 @@
 - 新增 CEF 补丁 07（需重编 CEF）：建子资源 / 导航工厂时捕获文档与父文档 URL，对非 http(s) 请求写入两个私有归属头；`file:` 闸门按文档头分档，移除 worker 的 `file:` 工厂和垫片首批请求退避重试。
 
 ### Internal
-- 收藏视图：前端 Dexie 库 `kbg-saved-views`（`services/savedViews.ts`），存不含根前缀 / hide / no-album / 分页尾的查询体，随机排序经新增的 `buildComposablePath({ omitRandomSeed })` 去种子；`gridViewPathKey` 扩成 `gridViewKey { path, source, pathFor }`，`GridRouteStore` 增加 `computePath`。`gallery-path` 全平台改走 URL query，`galleryRoute` 删掉自己读写的 `kabegame-gallery-path`，本地迁移删除两个旧键；非画廊页的画廊过滤链接改为显式 `router.push` 到 `/gallery`。组件库：tooltip / `KbFilterDropdown` 新增 `clickOutsideIgnore`，popconfirm 新增可追加的 `popperClass`。见 `cocs/gallery/SAVED_VIEWS.md`。
+- 收藏视图：前端 Dexie 库 `kbg-saved-views`（`services/savedViews.ts`），存不含根前缀 / hide / no-album / 分页尾的查询体，随机排序经新增的 `buildComposablePath({ omitRandomSeed })` 去种子；`gridViewPathKey` 扩成 `gridViewKey { path, source, pathFor }`，`GridRouteStore` 增加 `computePath`。`gallery-path` 全平台改走 URL query，`galleryRoute` 删掉自己读写的 `kabegame-gallery-path`，本地迁移删除两个旧键；非画廊页的画廊过滤链接改为显式 `router.push` 到 `/gallery`。组件库：tooltip / `KbFilterDropdown` 新增 `clickOutsideIgnore`，popconfirm 新增可追加的 `popperClass`。删除 8 个 `galleryChip*` 前端设置（工具条 chip 显隐），本地迁移清掉对应的 localStorage 键；i18n `chipSettings` / `chipVisibleTitle` / `chipHiddenHelp` 改为 `viewMenu`。见 `cocs/gallery/SAVED_VIEWS.md`。
 - 设置迁移 v004：`wallpaperDisabled` 取反成 `wallpaperEnabled`（默认 true）并删掉旧键，命令改为 `get_wallpaper_enabled` / `set_wallpaper_enabled(enabled)`；`wallpaperPaused` 的作用范围扩到视频壁纸。
 - 网页壁纸音频与媒体集成（Windows）：新增 `wpe_media` 模块（WASAPI 回环 + `realfft` 自定频谱、SMTC 媒体会话、封面配色）与 `wpe_web_media_subscribe` 命令，数据经 Tauri Channel 只推回订阅的 iframe；订阅按调用方 frame 归属、`SubframeDestroyed` 即释放。tauri 补丁 18 增补公开命令参数 `tauri::ipc::CallerFrame`（拉取后须重新应用 tauri 补丁序列）。新设置 `wpeMediaIntegration`。`realfft` 与 `windows` 的音频 / WinRT feature 只在 Windows 依赖段。
 - v049 一次性规范化 `images.type` 并新增 `idx_images_type`；Rust 写入口保证非空小写格式键，媒体分类与格式查询去掉逐行 LOWER / COALESCE，保留画廊排序分页的索引计划；补充迁移、规则比对及 DSL 执行计划回归。

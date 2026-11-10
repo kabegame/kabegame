@@ -264,15 +264,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("previewSwitchDirection", "auto"),
     frontendLocal("previewSlideshowSpeed", "fast"),
     frontendLocal("linkOpenMode", "unconfigured"),
-    // 画廊工具条 chip：默认全开——新用户先看到完整工具条，再自己裁。
-    frontendLocal("galleryChipSearch", true),
-    frontendLocal("galleryChipDate", true),
-    frontendLocal("galleryChipPlugin", true),
-    frontendLocal("galleryChipMediaType", true),
-    frontendLocal("galleryChipAspect", true),
-    frontendLocal("galleryChipSize", true),
-    frontendLocal("galleryChipSortField", true),
-    frontendLocal("galleryChipSortOrder", true),
   ];
   if (!IS_WEB) {
     // album-detail-path 平台分化：桌面/Android 用 localStorage，query 注册见下方 IS_WEB 分支。

@@ -95,7 +95,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `rowsQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
 
 - [gallery/SAVED_VIEWS.md](gallery/SAVED_VIEWS.md)
-  - 主题：查询行 ⋯ 面板的收藏视图。
+  - 主题：查询行 ⋯ 视图菜单（只剩轮播与收藏视图，chip 显隐开关已删除）的收藏视图。
     - **数据**：前端 Dexie `kbg-saved-views`，存「查询体」，即过滤 + 排序，无根前缀 / hide / no-album / 分页尾；随机排序不带种子。
     - **来源**：按 ImageGrid adapter 分区，所有画册 / 任务 / 站点各共用一份；由扩成 `{ path, source, pathFor }` 的 `gridViewKey` 注入，各页不传 props。
     - **名字**：可空，为空即用路径；显示名不分大小写唯一，路径同来源唯一。

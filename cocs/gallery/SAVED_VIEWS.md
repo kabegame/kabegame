@@ -1,6 +1,8 @@
 # 收藏视图（Saved Views）
 
-查询行（`GalleryQueryBar`）右端 ⋯ 面板里，「用当前视图轮播壁纸」下面的「收藏的视图」：用户把常用的「过滤 + 排序」组合存下来，点一下就切回去。画廊、画册详情、任务详情、畅游详情共用这一套。
+查询行（`GalleryQueryBar`）右端的 ⋯ 视图菜单只有两样东西：「用当前视图轮播壁纸」（仅桌面），以及它下面的「收藏的视图」。原来这里的 chip 显隐开关已删除：工具条上的 chip 始终显示，8 个 `galleryChip*` 设置作废，由本地迁移清键。
+
+「收藏的视图」让用户把常用的「过滤 + 排序」组合存下来，点一下就切回去。画廊、画册详情、任务详情、畅游详情共用这一套。
 
 ## 数据模型
 
@@ -109,5 +111,6 @@ interface GridViewContext {
 - `apps/kabegame/src/utils/savedViews.ts`、`apps/kabegame/src/services/savedViews.ts`
 - `apps/kabegame/src/components/imageGrid/gridViewPath.ts`、`components/ImageGrid.vue`、`components/imageGrid/types.ts`
 - `apps/kabegame/src/utils/galleryPath.ts`（`omitRandomSeed`）
-- `apps/kabegame/src/stores/galleryRoute.ts`、`stores/settingsDescriptors.ts`、`stores/localSettingsMigrations.ts`
+- `apps/kabegame/src/stores/galleryRoute.ts`、`stores/settings.ts`、`stores/settingsDescriptors.ts`、`stores/localSettingsMigrations.ts`
+- `apps/docs/src/content/docs/guide/gallery.md`（用户文档「收藏视图」一节与截图 `saved-views.png`）
 - `packages/kabegame-element-plus/src/components/{tooltip,kb-filter-dropdown,popconfirm}/src/*`

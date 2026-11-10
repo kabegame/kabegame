@@ -1,8 +1,8 @@
 # v4.7.0 regression
 
-## 收藏视图（查询行 ⋯ 面板）与画廊不再恢复上次路径
+## 收藏视图（查询行 ⋯ 面板）、画廊不再恢复上次路径、去掉 chip 显隐开关
 
-2026-11-10 macOS dev。查询行 ⋯ 面板新增「收藏的视图」：前端 Dexie 库 `kbg-saved-views` 按来源（画廊 / 画册 / 任务 / 畅游）分区，存不含根前缀 / hide / no-album / 分页尾的查询体；名字可空（为空即用路径），显示名不分大小写唯一；面板打开时读一次并冻结顺序，点一行只应用，收起时只给最后应用的那条记最后使用；编辑浮层可改名、用当前视图更新（预览差异后确定）；× 走与任务抽屉同款 popconfirm。组件库新增 `clickOutsideIgnore` 与 popconfirm `popperClass`，让 teleport 出去的子层不关面板。`gallery-path` 全平台改走 URL query，画廊重启后回到默认视图，本地迁移删除两个旧键；非画廊页的画廊过滤链接改为显式跳 `/gallery`。说明见 `cocs/gallery/SAVED_VIEWS.md`。
+2026-11-10 macOS dev。查询行 ⋯ 面板新增「收藏的视图」：前端 Dexie 库 `kbg-saved-views` 按来源（画廊 / 画册 / 任务 / 畅游）分区，存不含根前缀 / hide / no-album / 分页尾的查询体；名字可空（为空即用路径），显示名不分大小写唯一；面板打开时读一次并冻结顺序，点一行只应用，收起时只给最后应用的那条记最后使用；编辑浮层可改名、用当前视图更新（预览差异后确定）；× 走与任务抽屉同款 popconfirm。组件库新增 `clickOutsideIgnore` 与 popconfirm `popperClass`，让 teleport 出去的子层不关面板。`gallery-path` 全平台改走 URL query，画廊重启后回到默认视图，本地迁移删除两个旧键；非画廊页的画廊过滤链接改为显式跳 `/gallery`。随后 ⋯ 菜单去掉 chip 显隐开关，删除 8 个 `galleryChip*` 设置并迁移清键，chip 始终显示。说明见 `cocs/gallery/SAVED_VIEWS.md`。
 
 已知取舍：收藏存在 CEF / WebView profile 的 IndexedDB 里，清掉 profile 即丢失；差异预览按「维度 + 取值」摊平对比、不分位置；随机排序的收藏不显示轮播标记（种子不可比）。dev 下改了组件库里被两跳类型引用的 props 后，vite 的 SFC 类型缓存可能沿用旧 props（本次 `ElTooltip` 即如此，touch 中间的 `tooltip.ts` 后恢复），生产构建不受影响。
 
@@ -22,6 +22,7 @@
 | [x] | V11 非画廊页的画廊过滤链接 | macOS 任务详情 | 在任务详情触发图片详情里的画廊过滤（插件） | 跳到 `/gallery?path=…plugin/…`，任务页自己的路径不被冲掉 | 2026-11-10 Claude：经 ImageGrid 的 `handleOpenGalleryFilter` 触发，未从详情面板 UI 点击 |
 | [ ] | V12 紧凑档 / Android | Android | ⋯ 面板（对话框）里编辑与移除；返回键 | 编辑为叠加对话框；返回键先关编辑 / 确认，再关面板 | 未测 |
 | [ ] | V13 web 版 | Web | 打开 ⋯ | 收藏区可用，无轮播动作 | 未测（`--mode web` 类型检查通过） |
+| [x] | V14 去掉 chip 显隐开关 | macOS 画廊 / 画册 / 任务 | 打开 ⋯；把旧键 `kabegame-setting-galleryChip*` 设为 false 后重新加载 | ⋯ 菜单只有轮播与收藏视图，tooltip 为「视图：轮播与收藏」；所有 chip 显示在工具条上，旧键被删 | 2026-11-10 Claude：通过；设为 false 的时间、排序 chip 重新出现，更早版本残留的 `galleryChipCompact` / `galleryChipPageSize` 一并清掉；三页 ⋯ 菜单都没有开关；用户文档截图改为 `saved-views.png` |
 
 ## WPE 壁纸目录：本地导入识别、经 VFS 目录下载、目录哈希去重
 
