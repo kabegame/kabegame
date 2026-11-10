@@ -129,6 +129,11 @@ renderdoc_worker/    在 qrenderdoc --python 里跑（RenderDoc 内嵌的 Python
   request_handler.py renderdoc_facade.py services/ utils/
 ```
 
+**`kbp-tools` 把服务层当库用：** `.claude/skills/kbp-tools/rdc/bridge.py` 在它自己拉起的 `qrenderdoc --python` 里直接 import
+`renderdoc_worker` 的 `ReplayContext`、`RenderDocFacade`、`RequestHandler`，依赖 `handle()` 的返回形状（`{"id", "result"}` 或
+`{"id", "error": {"code", "message"}}`），批量提取轨迹、整帧图、统计量，不经 MCP、不经 IPC。改这三个类或返回形状时同步
+`bridge.py`，并跑一遍 `python -X utf8 -I .claude/skills/kbp-tools/tests/accept1.py`。
+
 ## 工作方式
 
 - 第一次调用工具时，MCP 拉起 `qrenderdoc --python renderdoc_worker/worker.py`。`--python` 的脚本在主界面出现之前运行，

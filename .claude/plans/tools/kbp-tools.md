@@ -341,3 +341,47 @@ MUTATIONS = [
 4. **并行会话还在拷工具。** P4d、P5 的会话在用旧做法；这个计划不改它们的目录，新工具落地后新步骤改用，旧目录留着。
 5. **回放和产品内部 API 绑得紧。** 模拟器接口一改（比如 P4c 步骤 1 的 `prewarm({ world })`），案例和钩子都要跟着改；`regress` 能第一时间报出来，但修要人做。
 6. **删 `ignore/RenderDocMCP` 不可逆。** 只在用户确认、`kbp rdc` 验收通过之后做。
+
+## 实施记录
+
+### 第 1 批 — 骨架、取真值、语料读取（2026-11-10）
+
+子代理实现，Claude 独立验收。只新建了 `.claude/skills/kbp-tools/`，另由 Claude 在 `.claude/mcps/wpe-renderdoc/README.md`「结构」后补一段 `kbp-tools` 对服务层的依赖（风险 2）。
+
+- **新增**
+  - `SKILL.md`：协议（数据目录、FR / CLK / CLK_PTR、`[kbp]` 日志、`kbp-meta.json`、轨迹三种形状、整帧图与统计量、时间线规则摘要并指向 `timeline.ts`）与本批命令。
+  - `kbp.py`：唯一入口，同时充当包 `kbp`（`__path__` 指向 `py/`），脚本可 `from kbp import content`。
+  - `py/common.py`（路径、带层的错误、一行 JSON 摘要）、`py/rdc_host.py`（本机侧：算输出、拒绝覆盖、拉起无窗口的 qrenderdoc、转进度、超时只结束自己拉起的那个）、`py/content.py`。
+  - `rdc/main.py`（qrenderdoc 里的入口，全部退出走 `os._exit`，看门线程握着 `kbp.py` 的进程句柄）、`rdc/bridge.py`（`LocalBridge.call`，返回值先过一遍 JSON，同旧桥）、`rdc/track.py`、`rdc/frame.py`、`rdc/stats.py`、`rdc/util.py`。
+  - `tests/accept1.py`：可重复的验收自测。
+- **命令：** `kbp rdc track|frame|stats <抓帧目录> <标签> …`（公共参数 `--data`、`--out`、`--overwrite`、`--timeout`、`--quiet`、`--keep-work`），`kbp content projects|resolve|ls|cat|grep`。
+
+和计划不同、或计划没写、由子代理按证据定的：
+
+- **`track` 保留两种输出形状：** 现有 `rd-p4d-*.json` 是逐次绘制原样保存（`rdc_rope.py`），其余是每粒子一行；`kbp-meta.json` 里没有能区分的标记（`gen_d.py` 注明 P4d 全部用 `rdc_rope.py`，含不是绳的模块工程），所以 P4d 工程要显式加 `--draws`。没有 meta 的老工程自动退回 `rdc_track.py` 的认法。第 2 批的生成库在 meta 里写一个标记，让它自动选。
+- **`[工程]` 可省略**，从标签 `<工程>-fps<N>` 推出。
+- **缺省拒绝覆盖**：缺省数据目录 `ignore/p4` 里是真值，覆盖要 `--overwrite`。
+- **统计量的真值在 `ignore/p4/b3/out/`**（`ignore/p4/out/` 下没有 `wpe-*-stats.json`）；缺省输出位置仍是 `<data>/out/`。
+- **`frame --present` 的文件名统一成 `wpe-<标签>-f<RenderDoc 帧号 + 1>`**，缺省取法的索引行与 `wpe_rt.py` 的键相同。
+- **写 JSON 用 `json.dumps` 一次写出**：内嵌 Python 的 `json.dump` 走纯 Python 编码器，3 MB 的绳轨迹要写约 19 s；改后整组 30.8 s → 12.2 s，文本相同。
+- **`content projects` 按 `source` / `type` / `pkg` 筛**；旧 `scan_misc_lib.projects()` 等于 `--source default` 加 `--source workshop --pkg`。
+
+验收结果（输出在 `ignore/kbp/accept1/`，汇总 `report.json`）：
+
+| 项 | 结果 |
+|---|---|
+| `track` | 8 组和 `ignore/p4/tracks/rd-*.json` 文件逐字节相同：按粒子认的 `p4b`、`p4b-color`、`p4c-cp`、`p4c-sprite`（四角，含 NaN）、`p4c-world`（指针），按绘制认的 `p4d-rope`，老认法的 `p4-0`（`fps60`）、`p4a2`。新旧服务层源码本来逐字节相同 |
+| `frame` | 缺省取法 `p4b-color`、`b1-2854083091` 各 3 帧逐像素相同；`--event 181` 相同；`--present` 的 4K PNG（`A:\bedroom\enabled`）与 `p3b/compare` 的结果相同，浮点 DDS（`A:\bedroom\highres`）逐字节相同 |
+| `stats` | `b3-1504316159`、`b4-3778549173` 文件逐字节相同 |
+| `content` | `projects` 与 `scan_misc_lib.projects()` 相同（155 个、顺序一致）；`cat` 的 3 个 `scene.pkg` 条目（含二进制 `.tex`）与 `pkg_extract.py` 逐字节相同；`resolve` 五种写法与旧 `driver.py` 的 `resolve_project` 相同 |
+| 不影响别的进程 | 起的 qrenderdoc 没有任何窗口；用户开着的 RenderDoc 界面、MCP 的回放进程、WPE 前后不变；两个 `kbp rdc` 并行互不影响 |
+| 耗时 | qrenderdoc 就绪 2.0–3.2 s；每张抓帧 `track` 0.6–2.0 s、`frame` 0.8–2.1 s、`stats` 0.8–1.7 s；完整自测约 2 分钟 |
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 只有 `.claude/skills/kbp-tools/` 新文件；`ignore/` 已有文件、`apps/`、`.claude/mcps/` 子代理都没碰 |
+| 读码 | 本地桥只调 `RequestHandler.handle`、错误照旧桥抛；qrenderdoc 入口全部 `os._exit`、父进程没了自己退；超时按 `Popen` 句柄只结束自己的进程；输出存在时拒绝 |
+| 另挑两组没验过的抓帧 | `p4c-attract-fps10`（两遍模式，按粒子认）、`p4d-ropetrail-fps10`（`--draws`）提取到 scratchpad，和 `ignore/p4/tracks/` 里的文件逐字节相同；耗时 7.6 s、12.2 s |
+| 自测重跑（输出到 `ignore/kbp/accept1-claude/`） | 27 项全过，用时约 127 s；没有出现界面窗口、没有残留进程，覆盖保护拒绝写 `ignore/p4/tracks/` |
