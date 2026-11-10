@@ -28,6 +28,9 @@ CREATE TABLE tasks (
     trigger_source  TEXT    NOT NULL DEFAULT 'manual',
     max_concurrent_downloads INTEGER,
     is_dry_run      INTEGER NOT NULL DEFAULT 0,
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    retry_attempt   INTEGER NOT NULL DEFAULT 0,
+    retry_root_id   TEXT,
     status          TEXT    NOT NULL,
     progress        REAL    NOT NULL DEFAULT 0,
     deleted_count   INTEGER NOT NULL DEFAULT 0,
@@ -40,6 +43,7 @@ CREATE TABLE tasks (
 );
 CREATE INDEX idx_tasks_start_time ON tasks(start_time DESC);
 CREATE INDEX idx_tasks_run_config ON tasks(run_config_id, start_time DESC);
+CREATE INDEX idx_tasks_retry_root ON tasks(retry_root_id, retry_attempt);
 
 -- ───────────── metadata ─────────────
 CREATE TABLE metadata (
@@ -187,7 +191,8 @@ CREATE TABLE run_configs (
     schedule_planned_at  INTEGER,
     schedule_last_run_at INTEGER,
     max_concurrent_downloads INTEGER,
-    is_dry_run           INTEGER NOT NULL DEFAULT 0
+    is_dry_run           INTEGER NOT NULL DEFAULT 0,
+    retry_count          INTEGER NOT NULL DEFAULT 0
 );
 
 -- ───────────── surf_records ─────────────

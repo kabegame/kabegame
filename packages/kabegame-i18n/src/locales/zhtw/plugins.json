@@ -115,6 +115,8 @@
   "maxConcurrentDownloadsFollowGlobal": "跟隨全域設定（目前 {n}）",
   "dryRun": "空跑（dry-run）",
   "dryRunDesc": "執行外掛但不下載、不寫入圖庫",
+  "retryOnFail": "失敗重試",
+  "retryOnFailDesc": "任務失敗後以相同參數重新發起",
   "pluginSettings": "外掛設定",
   "advancedSettings": "進階設定",
   "httpHeaders": "HTTP 標頭",

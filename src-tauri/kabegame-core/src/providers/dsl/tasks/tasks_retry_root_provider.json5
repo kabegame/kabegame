@@ -1,0 +1,23 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_retry_root_provider",
+    "note": "One retry chain: every task whose retry_root_id is the given original task id, newest attempt first (idx_tasks_retry_root).",
+    "properties": {
+        "root_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "tasks.retry_root_id = ${properties.root_id}",
+        "order": [
+            { "sql": "tasks.retry_attempt", "order": "desc" },
+            { "sql": "tasks.id", "order": "desc" }
+        ]
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "tasks_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

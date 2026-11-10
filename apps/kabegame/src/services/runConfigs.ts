@@ -134,6 +134,7 @@ export function normalizeRunConfigRow(raw: unknown): RunConfig | null {
         ? null
         : Number(row.maxConcurrentDownloads ?? row.max_concurrent_downloads),
     isDryRun: Boolean(row.isDryRun ?? row.is_dry_run ?? false),
+    retryCount: Number(row.retryCount ?? row.retry_count ?? 0),
     createdAt: Number(row.createdAt ?? row.created_at ?? 0),
     scheduleEnabled: Boolean(row.scheduleEnabled ?? row.schedule_enabled),
     scheduleSpec: parseScheduleSpec(row.scheduleSpec ?? row.schedule_spec),

@@ -44,6 +44,7 @@
 | 任务累计两页 | `tasks://x40x/1` | 每次读取从首行开始的累计窗口，与总数同批 |
 | 任务搜索 | `tasks://~any/plugin/<id>/~or/plugin_search/<q>/~end/x20x/1` | 本地化插件名先在前端解析成插件 id，再与 id 子串分支做 OR |
 | 配置关联任务 | `tasks://run_config/<configId>/x20x/1` | 走 `idx_tasks_run_config` |
+| 重试链 | `tasks://retry_root/<原始任务 id>` | 按 `retry_attempt DESC, id DESC`，走 `idx_tasks_retry_root`；一条链最多 11 行，不分页 |
 | 自动配置首页 | `run_configs://sort/next/x20x/1` | 累计窗口；支持 `next/last/result/name/plugin/created` 与 `desc` |
 | 配置过滤 | `run_configs://paused/last/failed/mode/hourly/search/<q>/…` | 状态、最近结果、定时模式、名称/说明搜索可叠加 |
 | chip 计数 | `run_configs://<其它过滤>/state\|last\|mode\|plugin` | 打开下拉时按去掉本维度后的上下文 `GROUP BY` |
@@ -134,6 +135,21 @@ provider 仅持坐标，每次现场解析，版本不符为空；商店只读�
 前端先按清单顺序发布占位，收到行后按 path 替换；已有内容在刷新和失败时保留，首次失败移除占位。
 在途结果的新旧由 pathql 核心 pending 窗口判断，不维护推荐专用序号，也不依赖运行配置事件补位。
 
+### 重试链观察方
+
+任务行在 `retryCount > 0` 时显示重试入口：抽屉的堆叠行是「重试 k/n」徽标，运行配置详情的行内行是
+`RefreshRight` 图标按钮。点开 `TaskRetryChainPopover`，弹出层用 `useRetryChainTasks` 观察
+`tasks://retry_root/<retryRootId>`（`rows`），只在打开期间观察：打开时请求一次，关闭后 key 置空、
+停止观察并清空。刷新过滤器只认两种事件：`TaskAdded` 的 `retryRootId` 等于本链，或 `TaskDeleted`
+的 id 在已持有的行里。其余 `TaskChanged` 由 `useTaskRowPatches` 就地补丁（与 `usePagedTaskList`
+共用，含进度节流与配置名补丁），不重读。
+
+列表按第几次重试从新到旧排列。中间缺的几次是被删除的任务，`retryChainSlots` 按 `max..0` 为它们补占位行；
+原始任务被删时，第 0 行同样是占位。只有链上最新的几次被删时，前端无从得知，不补。弹出层里的行传
+`:retry-chain="false"`，不会嵌套弹出层；行内的看图和看日志事件经 `TaskSummaryRow` 原有的 emit
+往上抛，运行参数由弹出层自己的 `TaskParamsDialog` 打开。运行参数里的「原始任务」会关闭弹窗，并跳到
+该任务的详情页。重试的触发与继承规则见 [../crawler/TASK_CONFIG.md](../crawler/TASK_CONFIG.md)「失败重试」。
+
 ## 4. 涉及代码
 
 | 层级 | 文件 | 职责 |
@@ -141,6 +157,7 @@ provider 仅持坐标，每次现场解析，版本不符为空；商店只读�
 | Provider DSL | `src-tauri/kabegame-core/src/providers/dsl/{tasks,run_configs}/` | 过滤、最后任务 join、分组计数、排序与分页 |
 | 服务 | `apps/kabegame/src/services/{tasks,runConfigs,runConfigWrites}.ts` | 路径构造、行规范化、事件解析与配置写命令 |
 | 分页状态 | `apps/kabegame/src/composables/{usePagedTaskList,usePagedRunConfigs}.ts` | 任务 / 配置累计窗口同批观察行与总数，任务高频展示字段就地补丁 |
+| 行补丁 / 重试链 | `apps/kabegame/src/composables/{useTaskRowPatches,useRetryChainTasks}.ts`、`components/task/TaskRetryChainPopover.vue` | 已持有任务行的就地补丁；重试链观察方、占位补齐与弹出层 |
 | 徽章 | `apps/kabegame/src/stores/taskDrawer.ts` | 状态计数与搜索词 |
 | 页面 | `TaskDrawer.vue`、`AutoConfigs.vue`、`TaskDetail.vue` | 各自观察当前可见数据，用户操作请求自身 key，事件由核心窗口刷新 |
 | 重跑弹窗 store | `apps/kabegame/src/stores/collectDialogs.ts` | 驱动网页收集与本地导入的全局弹窗宿主，并传递任务参数快照 |

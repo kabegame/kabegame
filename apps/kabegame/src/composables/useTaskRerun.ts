@@ -30,6 +30,7 @@ export function useTaskRerun() {
         httpHeaders: { ...(task.httpHeaders ?? {}) },
         outputAlbumId: task.outputAlbumId ?? null,
         isDryRun: task.isDryRun,
+        retryCount: task.retryCount,
       });
       return;
     }

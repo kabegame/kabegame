@@ -115,6 +115,8 @@
   "maxConcurrentDownloadsFollowGlobal": "Follow global setting (currently {n})",
   "dryRun": "Dry run",
   "dryRunDesc": "Run the plugin without downloading or saving to the library",
+  "retryOnFail": "Retry on failure",
+  "retryOnFailDesc": "Start a new task with the same settings when the task fails",
   "pluginSettings": "Plugin settings",
   "advancedSettings": "Advanced settings",
   "httpHeaders": "HTTP headers",

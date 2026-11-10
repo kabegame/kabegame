@@ -115,6 +115,8 @@
   "maxConcurrentDownloadsFollowGlobal": "グローバル設定に従う（現在 {n}）",
   "dryRun": "ドライラン",
   "dryRunDesc": "プラグインを実行しますが、ダウンロードやライブラリへの保存は行いません",
+  "retryOnFail": "失敗時に再試行",
+  "retryOnFailDesc": "タスクが失敗したら同じ設定で新しいタスクを開始します",
   "pluginSettings": "プラグイン設定",
   "advancedSettings": "詳細設定",
   "httpHeaders": "HTTPヘッダー",

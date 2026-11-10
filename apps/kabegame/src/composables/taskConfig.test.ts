@@ -90,6 +90,16 @@ describe("resolveTaskConfig", () => {
     expect(taskConfigFromTask({ pluginId: "p", isDryRun: true } as any).isDryRun).toBe(true);
     expect(taskConfigFromRunConfig({ pluginId: "p", isDryRun: true } as any).isDryRun).toBe(true);
   });
+
+  it("失败重试只取本次入参，缺省 0，不从用户默认继承", () => {
+    expect(resolveTaskConfig({ pluginId: "p" }, { userConfig: {}, retryCount: 5 } as any, defs).retryCount).toBe(0);
+    expect(resolveTaskConfig({ pluginId: "p", retryCount: 3 }, null, defs).retryCount).toBe(3);
+  });
+
+  it("再次执行回填配置的次数而不是第几次", () => {
+    expect(taskConfigFromTask({ pluginId: "p", retryCount: 3, retryAttempt: 2 } as any).retryCount).toBe(3);
+    expect(taskConfigFromRunConfig({ pluginId: "p", retryCount: 4 } as any).retryCount).toBe(4);
+  });
 });
 
 describe("buildSubmitUserConfig", () => {

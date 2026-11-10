@@ -296,7 +296,10 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             end_time INTEGER,
             error TEXT,
             max_concurrent_downloads INTEGER,
-            is_dry_run INTEGER NOT NULL DEFAULT 0
+            is_dry_run INTEGER NOT NULL DEFAULT 0,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            retry_attempt INTEGER NOT NULL DEFAULT 0,
+            retry_root_id TEXT
         );
         CREATE TABLE run_configs (
             id TEXT PRIMARY KEY,
@@ -314,9 +317,11 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             schedule_planned_at INTEGER,
             schedule_last_run_at INTEGER,
             max_concurrent_downloads INTEGER,
-            is_dry_run INTEGER NOT NULL DEFAULT 0
+            is_dry_run INTEGER NOT NULL DEFAULT 0,
+            retry_count INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX idx_tasks_run_config ON tasks(run_config_id, start_time DESC);
+        CREATE INDEX idx_tasks_retry_root ON tasks(retry_root_id, retry_attempt);
         CREATE TABLE task_failed_images (
             id INTEGER PRIMARY KEY,
             task_id TEXT NOT NULL,
@@ -843,6 +848,46 @@ fn tasks_filters_status_counts_and_cursor_pages_are_consistent() {
     assert_eq!(joined[0]["run_config_name"], "Config A");
     assert_eq!(joined[0]["max_concurrent_downloads"], 3);
     assert_eq!(joined[0]["is_dry_run"], 0);
+    assert_eq!(joined[0]["retry_count"], 0);
+    assert_eq!(joined[0]["retry_attempt"], 0);
+    // 列为空（迁移前的行）时按自身 id 读出
+    assert_eq!(joined[0]["retry_root_id"], "task-5");
+}
+
+#[test]
+fn tasks_retry_root_lists_one_chain_newest_attempt_first() {
+    let conn = fixture_db();
+    {
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO tasks (
+                id, plugin_id, status, start_time, retry_count, retry_attempt, retry_root_id
+            ) VALUES
+                ('root',    'pixiv', 'failed',    10, 3, 0, 'root'),
+                ('retry-1', 'pixiv', 'failed',    20, 3, 1, 'root'),
+                ('retry-3', 'pixiv', 'running',   40, 3, 3, 'root'),
+                ('other',   'pixiv', 'completed', 30, 1, 0, 'other');
+            "#,
+        )
+        .unwrap();
+    }
+    let runtime = build_runtime_with(conn);
+
+    let chain = runtime.fetch("tasks://retry_root/root").unwrap();
+    assert_eq!(ids(chain.clone()), vec!["retry-3", "retry-1", "root"]);
+    assert_eq!(chain[0]["retry_attempt"], 3);
+    assert_eq!(chain[0]["retry_count"], 3);
+    assert_eq!(chain[0]["retry_root_id"], "root");
+    assert_eq!(runtime.count("tasks://retry_root/root").unwrap(), 3);
+    assert_eq!(
+        ids(runtime.fetch("tasks://retry_root/other").unwrap()),
+        vec!["other"]
+    );
+    assert!(runtime
+        .fetch("tasks://retry_root/missing")
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

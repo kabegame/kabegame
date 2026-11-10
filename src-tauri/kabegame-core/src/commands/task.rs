@@ -409,6 +409,9 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         max_concurrent_downloads: Option<u32>,
         #[serde(default)]
         is_dry_run: bool,
+        /// 失败重试次数 0..=10；第几次与链根不接受外部传入
+        #[serde(default)]
+        retry_count: u32,
         /// 只经 CLI PluginRun 传入；前端不用
         #[serde(default)]
         freeze_template: bool,
@@ -420,6 +423,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
 
     let p: StartTaskParams = serde_json::from_value(task).map_err(|e| e.to_string())?;
     let max_concurrent_downloads = validate_task_max_downloads(p.max_concurrent_downloads)?;
+    crate::crawler::task_scheduler::retry::validate_retry_count(p.retry_count)?;
     let plugin_manager = PluginManager::global();
     let (plugin, _) = plugin_manager
         .resolve_plugin_for_task_request(&p.plugin_id, p.plugin_file_path.as_deref())
@@ -462,6 +466,10 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         trigger_source: p.trigger_source,
         max_concurrent_downloads,
         is_dry_run: p.is_dry_run,
+        retry_count: p.retry_count,
+        // 重试第几次与链根只由调度器的失败重试产生，外部入口一律是链上的原任务
+        retry_attempt: 0,
+        retry_root_id: task_id.clone(),
         status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,
@@ -472,19 +480,9 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         end_time: None,
         error: None,
     };
-    let payload = serde_json::to_value(&t).map_err(|e| e.to_string())?;
-    Storage::global().add_task(t)?;
-    GlobalEmitter::global().emit_task_added(&payload);
-
-    let req = crate::crawler::CrawlTaskRequest {
-        task_id: task_id.clone(),
-        plugin_file_path: p.plugin_file_path,
-        freeze_template: p.freeze_template,
-    };
     crate::crawler::TaskScheduler::global()
-        .submit_task(req)
-        .await?;
-    Ok(task_id)
+        .add_and_submit(t, p.plugin_file_path, p.freeze_template)
+        .await
 }
 
 pub async fn cancel_task(task_id: String) -> Result<Value, String> {
@@ -685,6 +683,7 @@ fn emit_recommended_diff(before: RecommendedSnapshot) {
 
 pub async fn add_run_config(config: Value) -> Result<Value, String> {
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
+    crate::crawler::task_scheduler::retry::validate_retry_count(run_config.retry_count)?;
     let config_id = run_config.id.clone();
     let before = recommended_diff_scope(vec![run_config.plugin_id.clone()])?;
     Storage::global().add_run_config(run_config)?;
@@ -700,6 +699,7 @@ pub async fn add_run_config(config: Value) -> Result<Value, String> {
 
 pub async fn update_run_config(config: Value) -> Result<Value, String> {
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
+    crate::crawler::task_scheduler::retry::validate_retry_count(run_config.retry_count)?;
     let config_id = run_config.id.clone();
     let mut plugin_ids = vec![run_config.plugin_id.clone()];
     if let Some(old) = Storage::global().get_run_config(&config_id)? {
@@ -1042,6 +1042,7 @@ mod tests {
             http_headers: None,
             max_concurrent_downloads: None,
             is_dry_run: false,
+            retry_count: 0,
             created_at: 1,
             schedule_enabled: true,
             schedule_spec: Some(crate::storage::ScheduleSpec::Hourly { minute: 30 }),

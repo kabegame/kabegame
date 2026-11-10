@@ -64,6 +64,9 @@
           <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
         </div>
       </el-form-item>
+      <el-form-item :label="$t('plugins.retryOnFail')">
+        <RetryCountField v-model="retryCount" />
+      </el-form-item>
 
       <!-- Header 只对 V8 后端生效；WebView 的身份只来自浏览器会话 -->
       <template v-if="isV8">
@@ -102,6 +105,7 @@ import { FolderOpened } from "@kabegame/element-plus-icons";
 import AndroidDrawer from "@/components/AndroidDrawer.vue";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
+import RetryCountField from "@/components/crawler/RetryCountField.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
@@ -161,6 +165,7 @@ const headers = ref<Record<string, string>>({});
 const urlError = ref<WebpageUrlError | null>(null);
 const submitting = ref(false);
 const isDryRun = ref(false);
+const retryCount = ref(0);
 
 const isV8 = computed(() => form.value.vars.backend !== "webview");
 const urlErrorText = computed(() => (urlError.value ? t(`gallery.webpageUrlError.${urlError.value}`) : ""));
@@ -183,6 +188,7 @@ function resetForm() {
   urlError.value = null;
   selectedOutputAlbumId.value = null;
   isDryRun.value = false;
+  retryCount.value = 0;
   newOutputAlbumName.value = "";
   newOutputAlbumParentId.value = null;
 }
@@ -204,6 +210,7 @@ watch(
         headers.value = { ...(props.initialConfig.httpHeaders ?? {}) };
         selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
         isDryRun.value = props.initialConfig.isDryRun ?? false;
+        retryCount.value = props.initialConfig.retryCount ?? 0;
       }
       modal.open();
     } else {
@@ -269,6 +276,7 @@ async function handleSubmit() {
       outputAlbumId,
       httpHeaders,
       isDryRun: isDryRun.value,
+      retryCount: retryCount.value,
       triggerSource: "manual",
     });
     if (!added) {

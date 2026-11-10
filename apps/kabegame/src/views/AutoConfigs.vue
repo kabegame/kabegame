@@ -489,6 +489,7 @@ async function runNow(config: RunConfig) {
     "manual",
     config.maxConcurrentDownloads,
     config.isDryRun,
+    config.retryCount,
   );
   ElMessage[created ? "success" : "error"](t(created ? "autoConfig.runStarted" : "common.operationFailed"));
 }
@@ -506,6 +507,7 @@ const presetPreviewConfig = computed<RunConfig | null>(() =>
         userConfig: previewTarget.value.userConfig,
         httpHeaders: previewTarget.value.httpHeaders,
         isDryRun: previewTarget.value.isDryRun,
+        retryCount: 0,
         createdAt: 0,
         scheduleEnabled: !!previewTarget.value.scheduleSpec,
         scheduleSpec: previewTarget.value.scheduleSpec,

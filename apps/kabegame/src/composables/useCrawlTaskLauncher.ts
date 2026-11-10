@@ -20,6 +20,8 @@ export interface EnqueueTaskParams {
   httpHeaders?: Record<string, string>;
   maxConcurrentDownloads?: number | null;
   isDryRun?: boolean;
+  /** 失败重试次数 0..10，缺省 0（关闭） */
+  retryCount?: number;
   runConfigId?: string;
   triggerSource?: CrawlTask["triggerSource"];
 }
@@ -46,5 +48,6 @@ export async function enqueueTask(params: EnqueueTaskParams): Promise<boolean> {
     params.triggerSource ?? "manual",
     params.maxConcurrentDownloads,
     params.isDryRun ?? false,
+    params.retryCount ?? 0,
   );
 }

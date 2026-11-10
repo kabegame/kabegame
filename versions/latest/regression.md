@@ -1,5 +1,24 @@
 # v4.7.0 regression
 
+## 任务失败重试与重试记录
+
+2026-11-10 macOS dev。任务级「失败重试」（与空跑同级，0–10 次）：运行期失败后由调度器立即按冻结快照重发新任务；任务记 `retry_count` / `retry_attempt` / `retry_root_id`（v050，历史任务回填为自身 id，索引 `idx_tasks_retry_root`）；任务行可点开「重试记录」弹出层，观察 `tasks://retry_root/<原始任务 id>`。说明见 `cocs/crawler/TASK_CONFIG.md` §8 与 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`「重试链观察方」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | R0 单测与检查 | macOS | check-kabegame（vue-tsc + cargo check）；kabegame-core `--lib` 过滤 `retry`、`run_config migrations commands::task task_scheduler storage::tasks scheduler albums`；`--test dsl_e2e`；前端 vitest 全量 | 0 error；全过 | 2026-11-10 Claude：cargo / vue-tsc 0 error；core 6 + 121 个、dsl_e2e 62 个、vitest 71 个文件 680 个用例全过 |
+| [x] | R1 迁移与链索引 | 单测 | v050 在只有 id 的旧表上跑两次 | 列各一份；历史任务 `retry_root_id` 回填为自身 id；链查询走 `idx_tasks_retry_root` | 2026-11-10：`v050_task_retry` 两个单测通过 |
+| [x] | R2 重试链路由 | dsl_e2e | `tasks://retry_root/root` | 只返回本链、按 attempt 倒序；空列的旧行读出自身 id | 2026-11-10：`tasks_retry_root_lists_one_chain_newest_attempt_first` 通过 |
+| [x] | R3 运行期失败按次数重发 | 桌面 dev | 网页收集填必失败的地址（如 `http://127.0.0.1:1/`），失败重试设 2 | 出现 3 个任务，徽标「重试 0/2」「重试 1/2」「重试 2/2」；前两个日志有「已提交第 k/2 次重试」；第 3 个失败后不再重发 | 2026-11-10 Claude（kabegame-dev，macOS）：`start_task` 发起，约 17 s 内 3 个任务依次失败（502），三者 `retry_root_id` 都是原任务、`retry_count` 2、attempt 0/1/2；前两个任务日志各一条 `taskLogRetrySubmitted`（1/2、2/2）；链结束后再等 5 s 仍是 3 行；抽屉里徽标显示正确 |
+| [x] | R4 重试记录弹出层 | 桌面 dev | 链跑完后从中间那个任务点开「重试记录」；行内点看图、看日志、运行参数 | 3 行从新到旧，当前任务高亮；三个动作都能用；弹出层开着时出现新的重试会自动多一行，状态与进度就地变化不闪 | 2026-11-10 Claude：从「重试 1/2」打开，3 行从新到旧、第 1 次高亮；另起重试 3 的链并在打开状态下按 250 ms 采样：9.5 s / 19.3 s / 30.4 s 依次多出第 2、3 次，「运行中」就地变成「失败」；行内运行参数弹窗叠在弹出层之上（z 2020 > 2010） |
+| [x] | R5 删除后的占位 | 桌面 dev | 删除链中间的任务后再打开；再删原始任务 | 对应位置显示「任务已删除」；第 0 行是占位 | 2026-11-10 Claude：弹出层开着时删原始任务，约 1.5 s 内第 0 行变「原始 任务已删除」；另一条链删第 2 次，显示「第 2 次 任务已删除」，其余三行不变 |
+| [ ] | R6 取消不重试 | 桌面 dev | 重试设 3，在第一次重试运行中途取消 | 链停止，不再生成新任务 | 未测（代码路径：取消落到 `Canceled`，worker 只在 `Failed` 时调用重发） |
+| [x] | R7 再次执行与原始任务 | 桌面 dev | 在重试出来的任务上点「再次执行」；在运行参数里点「原始任务」 | 弹窗回填「失败重试 3」（不是减过的次数）；跳到第 0 次任务的详情页并关闭运行参数弹窗 | 2026-11-10 Claude：「重试 3/3」任务的运行参数显示「3 次 · 第 3/3 次重试」，点原始任务 id 后弹窗关闭、路由到 `/tasks/<原始 id>`；该任务详情页 header「再次执行」打开网页收集，失败重试开关开、次数 3 |
+| [x] | R8 运行配置与定时 | 桌面 dev | 运行配置设重试 1 并触发定时；运行配置详情的任务列表里点行内重试图标 | 重试任务带 runConfigId、触发来源仍是定时（闹钟按钮在）；能打开重试记录；卡片「最近结果」是最后一次的结果；配置详情显示「失败重试：1 次」 | 2026-11-10 Claude：`add_run_config`（retryCount 1、每天）后 `run_missed_configs` 触发，2 个任务都是 `scheduled` + 该 runConfigId，第 1 次的链根是定时任务；`last_result` failed、`last_task` 指向第 1 次；配置详情显示「失败重试 1 次」，行内 `RefreshRight` 打开重试记录。**发现并修复**：弹出层原先在弹窗之后（z 低于配置详情），改为 `useModal` 占栈位取 z-index 后在其上；`retryCount: 11` 被后端拒绝 |
+| [x] | R9 历史任务与表单 | 桌面 dev | 看迁移前的任务；收集弹窗开关关闭 / 打开填 10 / 输入超过 10 | 历史任务无重试入口、运行参数「失败重试：关闭」；提交 retryCount 0 / 10，超过 10 钳到 10 | 2026-11-10 Claude：迁移后历史任务 `retry_root_id` 等于自身 id、count/attempt 为 0；网页收集表单输入 15 失焦后为 10，关开关后数字框隐藏，再打开默认 3 |
+| [ ] | R11 弹出层锚点滚出列表 | 桌面 dev | 抽屉里打开某任务的重试记录，期间有新任务插入使该任务被挤出列表可视区 | 弹出层仍跟随锚点 | 已知问题：弹出层跟着锚点被推到窗口底部、只露出标题，点空白处可关；未修 |
+| [ ] | R10 Android 返回键 | Android dev | 打开重试记录弹出层后按返回键 | 关掉弹出层 | 可选 |
+
 ## 场景壁纸 P4c：控制点、指针、controlpointattract、世界空间、拖尾与 sprite 朝向
 
 2026-11-08 – 11-09 Windows dev。P4c 分 6 步：步骤 0 调研；1 控制点底座；2 指针；3 `controlpointattract`；4 世界空间与帧顺序（一帧里粒子先于脚本步进）；5 `spritetrail` 与 `sprite` 的 `orientation` / `axis` / `flags`。一个系统多个 renderer 继续报不支持。

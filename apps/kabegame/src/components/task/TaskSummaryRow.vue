@@ -102,6 +102,19 @@
         </div>
       </div>
       <div class="task-summary-actions">
+        <TaskRetryChainPopover
+          v-if="retryChain && retryCountN > 0"
+          :root-id="retryRootId"
+          :current-id="task.id"
+          @open-task-images="emit('open-task-images', $event)"
+          @open-task-log="emit('open-task-log', $event)"
+        >
+          <el-button text circle size="small" class="task-action-icon" :title="t('tasks.retryChainTitle')">
+            <el-icon>
+              <RefreshRight />
+            </el-icon>
+          </el-button>
+        </TaskRetryChainPopover>
         <el-button
           v-if="showRunParamsButton"
           text
@@ -183,6 +196,20 @@
         <el-tag v-if="task.isDryRun" size="small" type="warning" effect="plain">
           {{ t("tasks.dryRunBadge") }}
         </el-tag>
+        <template v-if="retryCountN > 0">
+          <TaskRetryChainPopover
+            v-if="retryChain"
+            :root-id="retryRootId"
+            :current-id="task.id"
+            @open-task-images="emit('open-task-images', $event)"
+            @open-task-log="emit('open-task-log', $event)"
+          >
+            <el-tag size="small" effect="plain" class="cursor-pointer" :title="t('tasks.retryChainTitle')">
+              {{ retryBadge }}
+            </el-tag>
+          </TaskRetryChainPopover>
+          <el-tag v-else size="small" effect="plain">{{ retryBadge }}</el-tag>
+        </template>
       </div>
       <div class="task-counts">
         <span
@@ -290,7 +317,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, defineAsyncComponent } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import {
   AlarmClock,
@@ -301,9 +328,13 @@ import {
   Document,
   InfoFilled,
   Picture,
+  RefreshRight,
   WarningFilled,
 } from "@kabegame/element-plus-icons";
 import { usePluginStore } from "../../stores/plugins";
+
+// 弹出层里也渲染任务行：异步引入，避免两个组件互相 import
+const TaskRetryChainPopover = defineAsyncComponent(() => import("./TaskRetryChainPopover.vue"));
 
 /** 与 CrawlTask / 抽屉 ScriptTask 共用的最小字段 */
 export type TaskSummaryRowTask = {
@@ -312,6 +343,11 @@ export type TaskSummaryRowTask = {
   runConfigId?: string;
   triggerSource?: string;
   isDryRun: boolean;
+  /** 失败重试次数；> 0 才显示重试徽标与「重试记录」入口 */
+  retryCount?: number;
+  retryAttempt?: number;
+  /** 重试链原始任务 id；缺省为自身 id */
+  retryRootId?: string;
   status: string;
   progress?: number;
   deletedCount?: number;
@@ -337,6 +373,8 @@ const props = withDefaults(
     showRunParamsButton?: boolean;
     /** 任务抽屉：图片/日志改由外侧文字按钮触发，隐藏本行图标按钮 */
     stackedOmitImageLogActions?: boolean;
+    /** 可点开「重试记录」弹出层；弹出层里的行传 false，避免嵌套 */
+    retryChain?: boolean;
   }>(),
   {
     showScheduleButton: false,
@@ -345,6 +383,7 @@ const props = withDefaults(
     tooltipContent: "",
     showRunParamsButton: false,
     stackedOmitImageLogActions: false,
+    retryChain: true,
   },
 );
 
@@ -364,6 +403,11 @@ const successN = computed(() => Number(props.task.successCount ?? 0));
 const failedN = computed(() => Number(props.task.failedCount ?? 0));
 const deletedN = computed(() => Number(props.task.deletedCount ?? 0));
 const dedupN = computed(() => Number(props.task.dedupCount ?? 0));
+const retryCountN = computed(() => Number(props.task.retryCount ?? 0));
+const retryRootId = computed(() => props.task.retryRootId || props.task.id);
+const retryBadge = computed(() =>
+  t("tasks.retryBadge", { k: Number(props.task.retryAttempt ?? 0), n: retryCountN.value }),
+);
 
 function isCanceledTaskStatus(s: string): boolean {
   return s === "canceled" || s === "cancelled";

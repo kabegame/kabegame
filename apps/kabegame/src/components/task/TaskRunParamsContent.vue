@@ -87,6 +87,21 @@
       <el-descriptions-item :label="t('tasks.taskRunParamsColDryRun')" :span="2">
         {{ task.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
       </el-descriptions-item>
+      <el-descriptions-item :label="t('tasks.taskRunParamsColRetry')" :span="2">
+        {{ retryCountN > 0 ? t("tasks.taskRunParamsRetryTimes", { n: retryCountN }) : t("autoConfig.disabled") }}
+        <template v-if="retryAttemptN > 0">
+          · {{ t("tasks.taskRunParamsRetryAttempt", { k: retryAttemptN, n: retryCountN }) }}
+        </template>
+      </el-descriptions-item>
+      <el-descriptions-item
+        v-if="retryAttemptN > 0 && task.retryRootId"
+        :label="t('tasks.taskRunParamsColRetryRoot')"
+        :span="2"
+      >
+        <el-button link type="primary" size="small" class="!h-auto" @click="emit('open-task', task.retryRootId)">
+          <span class="break-all text-left">{{ task.retryRootId }}</span>
+        </el-button>
+      </el-descriptions-item>
     </el-descriptions>
 
     <el-descriptions
@@ -168,6 +183,9 @@ export type TaskRunParamsTask = {
   outputDir?: string | null;
   maxConcurrentDownloads?: number | null;
   isDryRun: boolean;
+  retryCount?: number;
+  retryAttempt?: number;
+  retryRootId?: string;
   userConfig?: Record<string, any> | null;
   startTime?: number | null;
   endTime?: number | null;
@@ -178,7 +196,15 @@ const props = defineProps<{
   task: TaskRunParamsTask;
 }>();
 
+const emit = defineEmits<{
+  /** 点「原始任务」：由承载它的弹窗关闭自己并跳转到该任务 */
+  (e: "open-task", taskId: string): void;
+}>();
+
 const { t, locale } = useI18n();
+
+const retryCountN = computed(() => Number(props.task.retryCount ?? 0));
+const retryAttemptN = computed(() => Number(props.task.retryAttempt ?? 0));
 const pluginStore = usePluginStore();
 
 const pluginIconDisplayUrl = computed(() => {

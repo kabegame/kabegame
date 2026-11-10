@@ -321,6 +321,7 @@ const confirmSaveTaskAsConfig = async () => {
       outputAlbumId: task.outputAlbumId,
       maxConcurrentDownloads: task.maxConcurrentDownloads ?? null,
       isDryRun: task.isDryRun,
+      retryCount: task.retryCount,
       scheduleEnabled: false,
     });
     ElMessage.success(t("tasks.saveConfigSuccess"));
@@ -410,16 +411,18 @@ const handleDeleteTaskById = async (taskId: string) => {
 };
 
 const handleOpenTaskImagesById = (taskId: string) => {
-  const task = tasks.value.find((t) => t.id === taskId);
-  if (!task) return;
-  trackTaskDrawerAction("view_images", task);
+  const id = String(taskId || "").trim();
+  if (!id) return;
+  // 重试记录弹出层里的任务不一定在已加载的列表页里，照样跳转
+  const task = tasks.value.find((t) => t.id === id);
+  if (task) trackTaskDrawerAction("view_images", task);
   if (route.name === "TaskDetail") {
     router.replace({
-      path: `/tasks/${task.id}`,
+      path: `/tasks/${id}`,
     });
   } else {
     router.push({
-      path: `/tasks/${task.id}`,
+      path: `/tasks/${id}`,
     });
   }
   requestAnimationFrame(() => {

@@ -49,6 +49,9 @@ export function normalizeTaskRow(raw: unknown): CrawlTask | null {
     httpHeaders: jsonObject<Record<string, string>>(row.httpHeaders ?? row.http_headers),
     maxConcurrentDownloads: nullableNumberField(row, "maxConcurrentDownloads", "max_concurrent_downloads"),
     isDryRun: Boolean(row.isDryRun ?? row.is_dry_run ?? false),
+    retryCount: Number(row.retryCount ?? row.retry_count ?? 0),
+    retryAttempt: Number(row.retryAttempt ?? row.retry_attempt ?? 0),
+    retryRootId: String(row.retryRootId ?? row.retry_root_id ?? "").trim() || id,
     outputAlbumId: (row.outputAlbumId ?? row.output_album_id) as string | undefined,
     runConfigId: (row.runConfigId ?? row.run_config_id) as string | undefined,
     runConfigName: runConfigNameRaw == null ? null : String(runConfigNameRaw),
@@ -92,6 +95,11 @@ export function normalizeDiffKeys(diff: Record<string, unknown>): Partial<CrawlT
     out.maxConcurrentDownloads = value == null ? null : Number(value);
   }
   return out;
+}
+
+/** 一条重试链（原始任务 id 为 `rootId`）的全部任务，按第几次重试从新到旧；链最多 11 行，不分页。 */
+export function retryChainPath(rootId: string): string {
+  return `tasks://retry_root/${encodeSeg(rootId)}`;
 }
 
 export function taskSearchPath(query: string, pluginIds: string[]): string {

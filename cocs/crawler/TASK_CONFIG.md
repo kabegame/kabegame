@@ -12,8 +12,9 @@ plugin config（插件变量 JSON，后端格式）
   checkbox 在后端是完整对象 `{ a: true, b: false }`，表单内部用数组 `["a"]`（`normalizeVarsForUI` / `expandVarsForBackend`）。
 - **task config**：`TaskConfig`（`apps/kabegame/src/stores/crawler.ts`）——
   `pluginId` / `userConfig` / `outputDir` / `httpHeaders` / `outputAlbumId` /
-  `maxConcurrentDownloads` / `isDryRun`。并发字段为 `null` 时跟随应用全局下载并发；`isDryRun`
-  是本次任务的冻结参数，空跑时仍执行插件逻辑、请求、翻页、日志与进度，但不下载、不入库。
+  `maxConcurrentDownloads` / `isDryRun` / `retryCount`。并发字段为 `null` 时跟随应用全局下载并发；`isDryRun`
+  是本次任务的冻结参数，空跑时仍执行插件逻辑、请求、翻页、日志与进度，但不下载、不入库；
+  `retryCount` 是失败重试次数（0 关闭，1–10），见 §8。
 - **自动任务 config**：`RunConfig`，等于 task config 再加 `name` / `description` / `url` /
   `scheduleEnabled` / `scheduleSpec` / `schedulePlannedAt` / `scheduleLastRunAt`。
   用户保存的配置一律是这一层，「保存为配置」恒为 `scheduleEnabled: false`。
@@ -82,6 +83,8 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
   它不属于插件用户默认配置，不能从 `userDefault` 继承。
 - **空跑**：`isDryRun` 同样只取本次入参，缺失为 `false`，不从 `userDefault` 继承；再次执行和
   `RunConfig` 回填原值，推荐配置导入/导出保留该字段，供定时站点结构检查使用。
+- **失败重试**：`retryCount` 只取本次入参，缺失为 `0`，不从 `userDefault` 继承；再次执行回填任务配置的
+  次数（不是第几次），`RunConfig` 回填原值。它和并发一样属本机偏好，推荐配置不导出、不参与「已导入」比较，导入时为 0。
 
 弹窗内改选来源插件本身也是一次写入：`writeTaskConfig({ pluginId })`，
 于是 vars / outputDir / headers 取「用户默认 > 插件默认」。
@@ -104,13 +107,13 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 
 表单分三段，顺序固定：
 
-1. **任务设置**（最上）：输出目录（仅非紧凑）、输出画册（含「新建画册」）、任务最大下载并发（`MaxDownloadsField`：「跟随全局」开关打开时存 `null`，关闭时以当前全局值为初值显示 `KbNumber`）与空跑开关。
+1. **任务设置**（最上）：输出目录（仅非紧凑）、输出画册（含「新建画册」）、任务最大下载并发（`MaxDownloadsField`：「跟随全局」开关打开时存 `null`，关闭时以当前全局值为初值显示 `KbNumber`）、空跑开关与失败重试（`RetryCountField`：开关关闭存 `0`，打开默认 3，`KbNumber` 限 1–10）。
 2. **插件设置**（中间）：选择源 + 插件变量。
 3. **高级设置**（最下）：HTTP 头。
 
 **没有选源时三段都显示**：任务设置/高级设置编辑的是组件内的本地草稿
 （`draftOutputDir` / `draftOutputAlbumId` / `draftHttpHeaders` / `draftMaxConcurrentDownloads` /
-`draftIsDryRun`），`taskConfig` 仍为 `null`；
+`draftIsDryRun` / `draftRetryCount`），`taskConfig` 仍为 `null`；
 一旦选到源，草稿随 `writeTaskConfig({ pluginId, ...draft })` 一并并入 task config，
 不会白填。（已经选过源之后再换插件不带草稿，避免把上一个任务的目录/头带给新插件。）
 
@@ -132,3 +135,41 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 | `apps/kabegame/src/composables/taskConfig.ts` | `writeTaskConfig` / 优先级纯函数 / 翻译函数 |
 | `apps/kabegame/src/stores/crawlerDrawer.ts` | 只剩 `visible` / `open()` / `close()` |
 | `apps/kabegame/src/stores/crawler.ts` | `taskConfig` / `taskConfigRevision` / `RunConfig` 任务参数与实时并发命令 |
+
+## 8. 失败重试
+
+失败重试是任务级冻结参数，与空跑同级：收集弹窗、网页收集与运行配置提供开关，本地导入、WPE 导入与 CLI 不提供
+（这些入口提交的任务 `retryCount` 恒为 0）。重试的本质是**用相同参数提交一个新任务**，单个任务的运行逻辑不变。
+
+**存储**（v050）：`tasks.retry_count`（配置次数，整条链相同）、`tasks.retry_attempt`（第几次重试，原任务 0）、
+`tasks.retry_root_id`（重试链的原始任务 id），`run_configs.retry_count`。每个任务创建时 `retry_root_id`
+都写自身 id，历史任务由迁移回填，所以每个任务都属于一条链，没开重试的任务就是只有自己的链；
+索引 `idx_tasks_retry_root (retry_root_id, retry_attempt)` 支撑 `tasks://retry_root/<id>`。三列创建后不可变，
+`retryAttempt` / `retryRootId` 不接受外部入口传入，只由调度器产生。
+
+**触发**：只在 worker 的运行期失败收尾（`TaskError::Other` 且未取消，`transition` 确实落到 `Failed`）调用
+`task_scheduler::retry::resubmit_after_failure`。它从库里读失败任务，`next_attempt` 复制出下一次：新 id、计数清零、
+Pending、`retry_attempt + 1`，冻结的 `user_config` / `output_dir` / `http_headers` / `max_concurrent_downloads` /
+`is_dry_run` 与 `run_config_id` / `trigger_source` / `retry_count` / `retry_root_id` 原样继承；然后给失败任务记一条日志
+`taskLogRetrySubmitted`，后台 `TaskScheduler::add_and_submit`（与 `start_task`、定时触发共用的「入库 → 广播 → 提交」）。
+**立即重发、不延迟**；次数用尽（`retry_attempt >= retry_count`）就停。
+
+不触发的情况及原因：
+
+- **取消**：落到 `Canceled`，链停止。
+- **运行前失败**（`enqueue` 冻结阶段：找不到插件、配置不合法、版本不够、输入挂载失败）：这些是确定性失败，
+  重试只会瞬间刷出 n 条失败记录；重试途中插件被卸载或升级失配时链也因此自然结束。
+- **应用重启后的「任务已失效」**：启动期批量 SQL 不经 `transition`，不重试。
+- **单张图片下载失败**：不让任务失败，不属于任务级重试（另有失败图片重试）。
+
+重试任务**照搬数据库里的冻结快照，不重新合并用户默认配置**（§2 的「既有任务不随默认配置漂移」）。继承
+`trigger_source` 与 `run_config_id` 使定时任务的重试仍算作这次定时运行（漏跑检测视其为活跃的定时任务），运行配置的
+「最近结果」自然显示整条链最后一次的结果。前端「重试记录」弹出层见
+[../downloader-tasks/TASK_DRAWER_LOAD.md](../downloader-tasks/TASK_DRAWER_LOAD.md)「重试链观察方」。
+
+| 位置 | 职责 |
+| --- | --- |
+| `src-tauri/kabegame-core/src/crawler/task_scheduler/retry.rs` | 次数校验、`next_attempt`、`resubmit_after_failure` |
+| `src-tauri/kabegame-core/src/crawler/task_scheduler/mod.rs` | worker 失败分支挂钩、`add_and_submit` |
+| `src-tauri/kabegame-core/src/storage/migrations/v050_task_retry.rs` | 三列 + 运行配置列、历史回填、链索引 |
+| `apps/kabegame/src/components/crawler/RetryCountField.vue` | 开关 + 次数输入 |

@@ -3131,6 +3131,7 @@ VALUES
             http_headers: None,
             max_concurrent_downloads: None,
             is_dry_run: false,
+            retry_count: 0,
             created_at: 1,
             schedule_enabled: false,
             schedule_spec: None,

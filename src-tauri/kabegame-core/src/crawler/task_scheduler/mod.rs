@@ -11,7 +11,7 @@ use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOpti
 use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
 use crate::storage::tasks::TaskStatus;
-use crate::storage::Storage;
+use crate::storage::{Storage, TaskInfo};
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -25,6 +25,7 @@ use url::Url;
 
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod input_mounts;
+pub mod retry;
 pub mod task;
 pub use task::{Task, TaskError, TaskParams, TaskResult};
 
@@ -212,6 +213,27 @@ impl TaskScheduler {
     pub async fn submit_task(&self, req: CrawlTaskRequest) -> Result<String, String> {
         self.enqueue(req.clone()).await?;
         Ok(req.task_id)
+    }
+
+    /// 新任务入库 → 广播 `TaskAdded` → 提交。手动入口 `start_task`、定时触发与失败重试共用。
+    /// `plugin_file_path` / `freeze_template` 只在内存中随请求传递，不入任务记录。
+    pub async fn add_and_submit(
+        &self,
+        task: TaskInfo,
+        plugin_file_path: Option<String>,
+        freeze_template: bool,
+    ) -> Result<String, String> {
+        let task_id = task.id.clone();
+        let payload = serde_json::to_value(&task).map_err(|e| e.to_string())?;
+        Storage::global().add_task(task)?;
+        // 入库即广播：前端分页列表只认 TaskAdded 插入新行
+        GlobalEmitter::global().emit_task_added(&payload);
+        self.submit_task(CrawlTaskRequest {
+            task_id,
+            plugin_file_path,
+            freeze_template,
+        })
+        .await
     }
 
     async fn freeze_task(&self, req: CrawlTaskRequest) -> Result<Arc<Task>, String> {
@@ -701,7 +723,7 @@ async fn worker_loop(
                 } else {
                     TaskStatus::Failed
                 };
-                scheduler.transition(
+                let moved = scheduler.transition(
                     &task_id,
                     next,
                     TaskTransition {
@@ -710,6 +732,10 @@ async fn worker_loop(
                         error: Some(e),
                     },
                 );
+                // 只对运行期失败按任务的失败重试配置再提交新任务；运行前失败与取消不重试
+                if moved && next == TaskStatus::Failed {
+                    retry::resubmit_after_failure(&task_id);
+                }
             }
         }
         scheduler.remove_run(&task_id);

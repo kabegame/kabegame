@@ -302,6 +302,9 @@ type ScriptTask = {
   runConfigId?: string;
   runConfigName?: string | null;
   triggerSource?: "manual" | "scheduled" | string;
+  retryCount?: number;
+  retryAttempt?: number;
+  retryRootId?: string;
   status: TaskStatus | string;
   progress: number;
   deletedCount?: number;
