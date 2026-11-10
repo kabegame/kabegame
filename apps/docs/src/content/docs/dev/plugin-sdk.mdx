@@ -5,7 +5,7 @@ description: '@kabegame/plugin-sdk：打包进插件的纯工具函数与 TypeSc
 
 import { Badge } from '@astrojs/starlight/components';
 
-`@kabegame/plugin-sdk` 是一个**打包进插件产物**的 npm 工具库，提供 URL 解析、正则、md5、类型声明等纯工具。
+`@kabegame/plugin-sdk` 是一个**打包进插件产物**的 npm 工具库，提供 URL 解析、正则、md5、类型声明等纯工具，以及少数把几步宿主调用包在一起的辅助函数（如 `downloadWpeWallpaper`）。
 
 :::caution[和 `Kabegame.*` 不是一回事]
 本页的 SDK 与运行时注入的宿主全局 `Kabegame.*` 是**两种完全不同的东西**：
@@ -102,6 +102,51 @@ interface KbRegexMatch {
 ```ts
 md5(value: string): string            // 十六进制 md5，用于构造去重 key、签名参数等
 ```
+
+## Wallpaper Engine 壁纸（wpe）
+
+<Badge text="4.7.0" variant="note" /> Wallpaper Engine 的一张壁纸是一个文件夹（`project.json` 加上视频、网页或场景文件），在 Kabegame 里是一条记录。`downloadWpeWallpaper` 按文件清单把这个文件夹逐个文件下到任务的虚拟文件系统，再用 `Kabegame.downloadImage(目录, { relocate: true })` 整个提交：应用把文件夹移进输出目录，库里已有同一张壁纸时直接删掉刚下载的这份。仅桌面端，V8 与 WebView 后端都能用。
+
+```ts
+downloadWpeWallpaper(opts: DownloadWpeWallpaperOptions): Promise<void>
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `rootUrl` | `string` | 壁纸目录的地址。每个文件从 `rootUrl + "/" + 相对路径` 下载，路径各段会经过 `encodeURIComponent`。 |
+| `files` | `{ path: string; size?: number \| null }[]` | 要下载的文件，`path` 是相对壁纸目录的路径，用 `/` 分隔。必须包含 `project.json`。 |
+| `name` | `string \| null` | 展示名，也是落盘的文件夹名。不传时用 `project.json` 里的标题。 |
+| `workDir` | `string` | 下载用的虚拟目录，默认 `${Kabegame.fs.getRoot()}/tmp/wpe`。 |
+| `headers` | `Record<string, string>` | 每个文件请求附带的请求头。 |
+| `retries` | `number` | 单个文件失败后的重试次数，默认 2。 |
+| `onFileDone` | `(file, index, total) => void` | 每个文件下载成功后调用，通常用来打日志。 |
+| `downloadOptions` | `{ url?, labels? }` | 帖子地址与标签，含义同 `downloadImage` 的同名选项。不能传 metadata：应用把壁纸自己的 `project.json` 存成它的 metadata。 |
+| `dryRun` | `boolean` | 传入 `common.isDryRun`。为 `true` 时不下载任何文件，只让应用记一次空跑。 |
+
+```ts
+import { downloadWpeWallpaper, type kbCrawlFn } from "@kabegame/plugin-sdk";
+
+export const crawl = (async (common) => {
+  const rootUrl = "https://example.test/wallpapers/1234";
+  const listing = (await (await fetch(rootUrl)).json()) as {
+    files: { path: string; size?: number }[];
+  };
+
+  await downloadWpeWallpaper({
+    rootUrl,
+    files: listing.files,
+    name: "My wallpaper",
+    dryRun: common.isDryRun,
+    downloadOptions: { url: "https://example.test/post/1234" },
+    onFileDone: (file, index, total) => console.log(`${index + 1}/${total} ${file.path}`),
+  });
+}) satisfies kbCrawlFn;
+```
+
+- 相对路径里带 `..`、以 `/` 开头、含反斜杠或盘符时直接报错。
+- 一个文件要响应状态为 200、且（给了 `size` 时）大小一致才算成功，否则重试；重试用完后抛错。
+- 函数返回时文件夹已经交给应用的下载队列，由应用移走，成功时 `workDir` 里不留东西。中途抛错会删掉没下完的文件夹；被强行中断留下的残留，在 12 小时后的下一次调用时清理。
+- 文件是依次下载的，不占应用下载队列的并发名额。一次传多张大壁纸时，建议在插件里自己排队，一张一张来。
 
 ## TypeScript 类型
 

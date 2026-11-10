@@ -58,6 +58,7 @@ export function resolveTaskConfig(
     outputAlbumId: input.outputAlbumId ?? null,
     maxConcurrentDownloads: input.maxConcurrentDownloads ?? null,
     isDryRun: input.isDryRun ?? false,
+    retryCount: input.retryCount ?? 0,
   };
 }
 
@@ -71,6 +72,7 @@ export function taskConfigFromTask(task: CrawlTask): TaskConfigInput {
     outputAlbumId: task.outputAlbumId ?? null,
     maxConcurrentDownloads: task.maxConcurrentDownloads ?? null,
     isDryRun: task.isDryRun,
+    retryCount: task.retryCount,
   };
 }
 
@@ -84,6 +86,7 @@ export function taskConfigFromRunConfig(cfg: RunConfig): TaskConfigInput {
     outputAlbumId: cfg.outputAlbumId ?? null,
     maxConcurrentDownloads: cfg.maxConcurrentDownloads ?? null,
     isDryRun: cfg.isDryRun,
+    retryCount: cfg.retryCount,
   };
 }
 

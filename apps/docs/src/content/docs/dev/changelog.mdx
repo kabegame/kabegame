@@ -45,6 +45,17 @@ import { Badge } from '@astrojs/starlight/components';
 | 插件 provider 依赖全局续接段 `_kb_fc` / `_kb_desc` / `_kb_x<N>x` / `_kb_co` | 通用 | <Badge text="4.5.1" variant="note" /> |
 | `kbConfig.required` 与新的 null / `when` 缺键语义 | 通用 | <Badge text="4.5.2" variant="note" /> |
 | `package.json` 的 `name` 去掉 `kabegame-plugin-` 前缀作为插件 ID | 通用 | <Badge text="4.5.2" variant="note" /> |
+| `downloadImage` 的 `relocate` 选项；虚拟路径可以是 Wallpaper Engine 壁纸目录 | V8 / WebView | <Badge text="4.7.0" variant="note" /> |
+| SDK 的 `downloadWpeWallpaper` | V8 / WebView | <Badge text="4.7.0" variant="note" /> |
+
+## 4.7.0
+
+### 新增
+
+- `downloadImage(vfsPath, { relocate: true })`：`url` 是 `Kabegame.fs` 的虚拟路径时，把这个文件或目录移进输出目录，而不是复制一份；库里已有相同内容时直接删除。调用之后该路径不再存在。只对虚拟路径生效，其它来源忽略此项。源必须在可写挂载（`data` / `cache` / `tmp`）上，不能是挂载根，也不能包含符号链接。见 [Kabegame API 字典](/reference/kabegame-api/)。
+- 虚拟路径可以指向一个 Wallpaper Engine 壁纸目录（带 `project.json` 的文件夹，仅桌面端），整个目录作为一张壁纸入库。目录必须带 `relocate: true`；它的 metadata 固定是壁纸自己的 `project.json`，`metadata` / `metadata_id` 会被忽略，标签与帖子地址照常生效。
+- `@kabegame/plugin-sdk` 新增 `downloadWpeWallpaper`：按文件清单把一个壁纸目录逐个文件下到任务 VFS，再整目录提交。见 [plugin-sdk 工具库 · Wallpaper Engine 壁纸](/dev/plugin-sdk/#wallpaper-engine-壁纸wpe)。
+- 桌面端 Web 服务器的 `/file/<目录路径>` 对 Wallpaper Engine 壁纸返回文件清单 `{ type, files: [{ path, size }] }`，`/file/<目录路径>/<相对路径>` 返回目录里的文件。官方的 kabegame-server 插件（0.3.0）用它把另一台电脑上的壁纸复制过来。
 
 ## 4.5.2
 

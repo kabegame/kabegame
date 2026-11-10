@@ -99,9 +99,14 @@ pub async fn surf_import_media<R: Runtime>(
         .vfs
         .host_path_for_read(Path::new(&path))
         .map_err(|error| format!("无法读取待导入媒体“{path}”：{error}"))?;
-    let file_size = std::fs::metadata(&real_path)
-        .map_err(|error| format!("无法读取待导入媒体“{path}”：{error}"))?
-        .len();
+    let source = std::fs::metadata(&real_path)
+        .map_err(|error| format!("无法读取待导入媒体“{path}”：{error}"))?;
+    // 后处理的 `Path` 来源遇到目录会按 Wallpaper Engine 壁纸目录整个入库；畅游只导入单个媒体文件，
+    // 页面脚本写出来的目录不走那条路。
+    if !source.is_file() {
+        return Err(format!("无法读取待导入媒体“{path}”：不是文件"));
+    }
+    let file_size = source.len();
     let parsed = Url::parse(&source_url).map_err(|error| format!("Invalid media URL: {error}"))?;
     let custom_name = name.or_else(|| super::surf_receive::surf_download_name_from_url(&parsed));
     let metadata_id =

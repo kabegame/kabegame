@@ -31,3 +31,17 @@ describe("dry-run 配置解析", () => {
     expect(JSON.parse(runConfigToPresetJson({ ...cfg!, isDryRun: false }))).not.toHaveProperty("isDryRun");
   });
 });
+
+describe("失败重试配置解析", () => {
+  it("RunConfig 兼容 snake_case，缺省为 0", () => {
+    expect(parseRunConfigRaw({ id: "c", plugin_id: "p", name: "C", retry_count: 3, created_at: 1 })?.retryCount).toBe(
+      3,
+    );
+    expect(parseRunConfigRaw({ id: "c", plugin_id: "p", name: "C", created_at: 1 })?.retryCount).toBe(0);
+  });
+
+  it("推荐配置不导出失败重试（本机偏好）", () => {
+    const cfg = parseRunConfigRaw({ id: "c", plugin_id: "p", name: "C", retry_count: 3, created_at: 1 })!;
+    expect(JSON.parse(runConfigToPresetJson(cfg))).not.toHaveProperty("retryCount");
+  });
+});

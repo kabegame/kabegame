@@ -51,6 +51,33 @@ pub fn album_for_file(path: &Path) -> Result<Option<Album>, String> {
         .filter(|album| SyncMode::from_str(&album.sync_mode) != Some(SyncMode::None)))
 }
 
+/// 监听批次里除媒体文件之外还要送进 diff 的路径：没有对应画册的 WPE 壁纸目录，
+/// 以及已经消失、但库里有 WPE 行的路径（整个壁纸目录被删，diff 据此删行）。
+#[cfg(feature = "wpe")]
+fn is_wpe_diff_entry(path: &Path, index: &HashMap<PathBuf, Album>) -> bool {
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            metadata.is_dir()
+                && !index.contains_key(&normalize_path(path))
+                && crate::crawler::wpe_import::is_importable_wpe_dir(path)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Storage::find_image_by_path(&path.to_string_lossy())
+                .ok()
+                .flatten()
+                .is_some_and(|image| {
+                    crate::media::image_type::is_wpe_type(image.media_type.as_deref())
+                })
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(feature = "wpe"))]
+fn is_wpe_diff_entry(_path: &Path, _index: &HashMap<PathBuf, Album>) -> bool {
+    false
+}
+
 pub(crate) async fn process_batch(batch: FsBatch) -> Result<Vec<DiffRequest>, String> {
     let mut albums = Storage::global().list_local_folder_albums()?;
     let mut index = album_index(&albums);
@@ -113,6 +140,11 @@ pub(crate) async fn process_batch(batch: FsBatch) -> Result<Vec<DiffRequest>, St
         {
             continue;
         }
+        // WPE 壁纸目录按「文件」对待：不建子画册，走下面的 diff 挂到父画册
+        #[cfg(feature = "wpe")]
+        if crate::crawler::wpe_import::is_importable_wpe_dir(path) {
+            continue;
+        }
         let canon = normalize_path(path);
         if forbidden
             .iter()
@@ -173,7 +205,7 @@ pub(crate) async fn process_batch(batch: FsBatch) -> Result<Vec<DiffRequest>, St
     let removed_ids: HashSet<_> = removed_roots.into_iter().collect();
     let mut grouped: HashMap<String, DiffRequest> = HashMap::new();
     for path in batch.changes.keys() {
-        if !is_media_by_path(path) {
+        if !is_media_by_path(path) && !is_wpe_diff_entry(path, &index) {
             continue;
         }
         let Some(parent_path) = path.parent().map(normalize_path) else {

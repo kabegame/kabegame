@@ -173,6 +173,9 @@ pub struct RunConfig {
     pub max_concurrent_downloads: Option<u32>,
     #[serde(default)]
     pub is_dry_run: bool,
+    /// 失败重试次数 0..=10（0 关闭），定时触发的任务继承它。
+    #[serde(default)]
+    pub retry_count: u32,
     pub created_at: u64,
     #[serde(default)]
     pub schedule_enabled: bool,
@@ -188,7 +191,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run, retry_count
                  FROM run_configs
                  WHERE id = ?1
                  LIMIT 1",
@@ -243,6 +246,9 @@ impl Storage {
             is_dry_run: row
                 .get(15)
                 .map_err(|e| format!("Failed to parse is_dry_run: {}", e))?,
+            retry_count: row
+                .get(16)
+                .map_err(|e| format!("Failed to parse retry_count: {}", e))?,
             created_at: row
                 .get::<_, i64>(9)
                 .map_err(|e| format!("Failed to parse created_at: {}", e))?
@@ -320,9 +326,9 @@ impl Storage {
         conn.execute(
             "INSERT INTO run_configs (
                 id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
+                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run, retry_count
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 config.id,
                 config.name,
@@ -340,6 +346,7 @@ impl Storage {
                 config.schedule_last_run_at,
                 config.max_concurrent_downloads,
                 config.is_dry_run,
+                config.retry_count,
             ],
         )
         .map_err(|e| format!("Failed to add run config: {}", e))?;
@@ -352,7 +359,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run, retry_count
                  FROM run_configs
                  ORDER BY created_at DESC",
             )
@@ -383,6 +390,7 @@ impl Storage {
                     http_headers,
                     max_concurrent_downloads: row.get(14)?,
                     is_dry_run: row.get(15)?,
+                    retry_count: row.get(16)?,
                     created_at: row.get::<_, i64>(9)? as u64,
                     schedule_enabled: row.get::<_, i64>(10)? != 0,
                     schedule_spec,
@@ -412,8 +420,8 @@ impl Storage {
              SET name = ?1, description = ?2, plugin_id = ?3, url = ?4, output_dir = ?5, output_album_id = ?6,
                  user_config = ?7, http_headers = ?8,
                  schedule_enabled = ?9, schedule_spec = ?10, schedule_planned_at = ?11, schedule_last_run_at = ?12,
-                 max_concurrent_downloads = ?13, is_dry_run = ?14
-             WHERE id = ?15",
+                 max_concurrent_downloads = ?13, is_dry_run = ?14, retry_count = ?15
+             WHERE id = ?16",
             params![
                 config.name,
                 config.description,
@@ -429,6 +437,7 @@ impl Storage {
                 config.schedule_last_run_at,
                 config.max_concurrent_downloads,
                 config.is_dry_run,
+                config.retry_count,
                 config.id,
             ],
         )
@@ -449,7 +458,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run, retry_count
                  FROM run_configs
                  WHERE id = ?1",
             )
@@ -488,6 +497,7 @@ impl Storage {
                 schedule_last_run_at: None,
                 max_concurrent_downloads: row.get(13)?,
                 is_dry_run: row.get(14)?,
+                retry_count: row.get(15)?,
             })
         });
 
@@ -502,9 +512,9 @@ impl Storage {
         conn.execute(
             "INSERT INTO run_configs (
                 id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
+                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run, retry_count
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 copied.id,
                 copied.name,
@@ -522,6 +532,7 @@ impl Storage {
                 copied.schedule_last_run_at,
                 copied.max_concurrent_downloads,
                 copied.is_dry_run,
+                copied.retry_count,
             ],
         )
         .map_err(|e| format!("Failed to insert copied run config: {}", e))?;
@@ -554,6 +565,7 @@ mod tests {
             http_headers: None,
             max_concurrent_downloads: None,
             is_dry_run: false,
+            retry_count: 0,
             created_at: 1,
             schedule_enabled: false,
             schedule_spec: None,

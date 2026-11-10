@@ -116,25 +116,6 @@ export interface AppSettings {
   /** 应用内点击外部链接的打开方式；unconfigured 时首次触发会弹选择框 */
   linkOpenMode: "surf" | "browser" | "unconfigured";
 
-  // --- 画廊工具条 chip 显隐（桌面单行工具条；紧凑端走 fold 菜单，不读这组）---
-  // chip 的形态本身不可配：一律只留图标，选中过滤的那颗才展开写取值。
-  /** 搜索 chip 是否占工具条 */
-  galleryChipSearch: boolean;
-  /** 时间维度 chip 是否占工具条 */
-  galleryChipDate: boolean;
-  /** 插件维度 chip 是否占工具条 */
-  galleryChipPlugin: boolean;
-  /** 媒体类型维度 chip 是否占工具条 */
-  galleryChipMediaType: boolean;
-  /** 比例维度 chip 是否占工具条 */
-  galleryChipAspect: boolean;
-  /** 尺寸维度 chip 是否占工具条 */
-  galleryChipSize: boolean;
-  /** 排序字段 chip 是否占工具条 */
-  galleryChipSortField: boolean;
-  /** 排序顺序 chip 是否占工具条 */
-  galleryChipSortOrder: boolean;
-
   // --- URL query 镜像键（settings 层只做哑同步，页面自己做激活态 guard）---
   /** `/auto-configs?tab=`；缺省为 `"mine"`，`"mine"` 会编码为空并删除参数。 */
   autoConfigTab: "mine" | "recommended";

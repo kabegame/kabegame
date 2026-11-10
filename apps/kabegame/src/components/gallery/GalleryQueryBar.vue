@@ -156,54 +156,47 @@
         </span>
       </button>
 
-      <!-- chip 自定义入口：借 chip 下拉的弹层与开合逻辑，trigger 用 icon 档收成方形。
-           它自己不是过滤维度，所以恒 clearable=false + model-value=null。 -->
+      <!-- 视图菜单：用当前视图轮播 + 收藏的视图。借 chip 下拉的弹层与开合逻辑，trigger 用 icon 档
+           收成方形；它自己不是过滤维度，所以恒 clearable=false + model-value=null。两样都没有时
+           （不在 ImageGrid 插槽里）整颗不渲染。 -->
       <KbFilterDropdown
+        v-if="showRotationAction || gridView"
         :model-value="null"
-        :chip-label="t('gallery.chipSettings')"
-        :title="t('gallery.chipSettings')"
+        :chip-label="t('gallery.viewMenu')"
+        :title="t('gallery.viewMenu')"
         chip-display="icon"
         :clearable="false"
+        :click-outside-ignore="viewMenuClickOutsideIgnore"
+        @open="viewMenuOpen = true"
+        @close="viewMenuOpen = false"
       >
         <template #icon><MoreFilled /></template>
         <template #panel>
-          <div class="chip-settings">
-            <!-- 顶部区域：视图级动作。「用当前视图轮播」把本视图（过滤 + 排序，不含分页）的
-                 PathQL 路径设为壁纸轮播来源；设置页只展示当前轮播路径，入口在这里。 -->
-            <template v-if="showRotationAction">
-              <button
-                type="button"
-                class="chip-settings__action"
-                :disabled="isRotatingThisView || rotationBusy"
-                @click="rotateWithCurrentView"
-              >
-                <span class="chip-settings__icon"><Picture /></span>
-                <span class="flex-1 text-left">
-                  {{ isRotatingThisView ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
-                </span>
-              </button>
-              <!-- 保存的过滤：预留区域，后续在这里列出用户保存的过滤设置 -->
-              <div class="chip-settings__saved-filters" />
-              <div class="chip-settings__divider" />
-            </template>
-
-            <template v-for="(group, index) in chipToggleGroups" :key="index">
-              <div v-if="index > 0 && group.length" class="chip-settings__divider" />
-              <div v-if="index === 0 && group.length" class="chip-settings__title">
-                {{ t("gallery.chipVisibleTitle") }}
-              </div>
-              <div v-for="item in group" :key="item.key" class="chip-settings__row">
-                <span class="chip-settings__icon"><component :is="item.icon" /></span>
-                <span class="flex-1">{{ item.label }}</span>
-                <el-switch
-                  :model-value="isChipEnabled(item.key)"
-                  size="small"
-                  @update:model-value="(v) => saveChipSetting(item.key, !!v)"
-                />
-              </div>
-            </template>
-
-            <p class="chip-settings__help">{{ t("gallery.chipHiddenHelp") }}</p>
+          <div class="view-menu">
+            <!-- 「用当前视图轮播」把本视图（过滤 + 排序，不含分页）的 PathQL 路径设为壁纸轮播来源；
+                 设置页只展示当前轮播路径，入口在这里。 -->
+            <button
+              v-if="showRotationAction"
+              type="button"
+              class="view-menu__action"
+              :disabled="isRotatingThisView || rotationBusy"
+              @click="rotateWithCurrentView"
+            >
+              <span class="view-menu__icon"><Picture /></span>
+              <span class="flex-1 text-left">
+                {{ isRotatingThisView ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
+              </span>
+            </button>
+            <!-- 收藏视图：本页来源的收藏列表（web 也有，轮播动作只在桌面）。 -->
+            <SavedViewsSection
+              v-if="gridView"
+              :source="gridView.source"
+              :query="query"
+              :sort="sort"
+              :active="viewMenuOpen"
+              :path-for="gridView.pathFor"
+              @apply="applySavedView"
+            />
           </div>
         </template>
       </KbFilterDropdown>
@@ -246,36 +239,18 @@
 import { computed, inject, markRaw, provide, ref, useSlots, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
-import {
-  Clock,
-  Close,
-  Filter,
-  FilterAspect,
-  FilterDate,
-  FilterMedia,
-  FilterName,
-  FilterPlugin,
-  FilterSize,
-  FilterWallpaper,
-  LetterA,
-  List,
-  MagicStick,
-  MoreFilled,
-  Picture,
-  Rank,
-  Search,
-  Sort,
-  SortAsc,
-  SortDesc,
-} from "@kabegame/element-plus-icons";
+import { Close, Filter, LetterA, MoreFilled, Picture, Sort, SortAsc, SortDesc } from "@kabegame/element-plus-icons";
 import { withGalleryPrefix } from "@/utils/path";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
 import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
+import SavedViewsSection from "@/components/gallery/savedViews/SavedViewsSection.vue";
+import { FILTER_DIMENSION_ICONS, SORT_FIELD_ICONS } from "@/components/gallery/galleryChipIcons";
+import { SAVED_VIEW_LAYER_CLASS } from "@/components/gallery/savedViews/savedViewLayer";
 import { GallerySearchModesKey } from "@/components/gallery/searchModesContext";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
-import { useSettingsStore, type AppSettingKey } from "@/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
 import {
   FILTER_COMB,
@@ -296,7 +271,7 @@ import {
 import { galleryDimensionChipValue, gallerySortFieldLabel } from "@/utils/galleryFilterLabels";
 import { filterMediaKind } from "@/utils/galleryQuery";
 import { viewRotationPath, wallpaperModeSupportsVideo } from "@/utils/wallpaperRotationPath";
-import { gridViewPathKey } from "@/components/imageGrid/gridViewPath";
+import { gridViewKey } from "@/components/imageGrid/gridViewPath";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { IS_WEB } from "@/env";
 import { DEFAULT_GALLERY_PAGE_SIZE, GALLERY_PAGE_SIZE_OPTIONS, isGalleryPageSizeOption } from "@/utils/galleryPageSize";
@@ -404,9 +379,9 @@ const labelContext = computed(() => ({
 
 // ---------- 用当前视图轮播 ----------
 const rotationBusy = ref(false);
-// 所在 ImageGrid 注入的当前视图路径；不在 ImageGrid 插槽里则不提供该动作
-const gridViewPath = inject(gridViewPathKey, null);
-const rotationPath = computed(() => (gridViewPath?.value ? viewRotationPath(gridViewPath.value) : ""));
+// 所在 ImageGrid 注入的当前视图上下文；不在 ImageGrid 插槽里则不提供轮播与收藏视图
+const gridView = inject(gridViewKey, null);
+const rotationPath = computed(() => (gridView?.path.value ? viewRotationPath(gridView.path.value) : ""));
 const showRotationAction = computed(() => !IS_WEB && !!rotationPath.value);
 const isRotatingThisView = computed(
   () =>
@@ -438,6 +413,17 @@ async function rotateWithCurrentView() {
 
 function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
   emit("navigate", patch, options);
+}
+
+// ---------- 收藏视图 ----------
+// ⋯ 视图菜单的开合态：收藏列表在打开时读一次库、收起时记最后使用（见 SavedViewsSection）。
+const viewMenuOpen = ref(false);
+// 编辑浮层与移除确认都 teleport 到 body，点它们不能算 ⋯ 菜单的「外部」。
+const viewMenuClickOutsideIgnore = [`.${SAVED_VIEW_LAYER_CLASS}`];
+
+/** 应用一条收藏视图：整体换掉查询与排序，各页 @navigate 照旧记搜索勾选。 */
+function applySavedView(view: { query: GalleryQuery; sort: GallerySort }) {
+  navigate({ query: view.query, sort: view.sort }, { push: true });
 }
 
 // ---------- 搜索（查询原子的 search 维度）----------
@@ -509,15 +495,7 @@ function clearAdvancedQuery() {
 }
 
 // ---------- 过滤维度 chip ----------
-// 搜索有独立输入组件（GallerySearchDropdown），不进图标表。
-// 过滤维度图标与高级查询弹窗同源(设计稿那套 16px 线性图标)。
-const FILTER_DIMENSION_ICONS: Record<GalleryBrowseDimension, Component> = {
-  plugin: markRaw(FilterPlugin),
-  mediaType: markRaw(FilterMedia),
-  date: markRaw(FilterDate),
-  size: markRaw(FilterSize),
-  aspect: markRaw(FilterAspect),
-};
+// 维度图标表见 galleryChipIcons.ts（与收藏视图的组合展示共用）。
 
 const ALL_FILTER_DIMENSIONS: Array<{
   key: GalleryBrowseDimension;
@@ -525,51 +503,40 @@ const ALL_FILTER_DIMENSIONS: Array<{
   chipKey: string;
   /** 未选中态的 chip 文案。chip 上没有维度名了，所以「任意」必须自带维度。 */
   anyKey: string;
-  setting: ChipSettingKey;
 }> = [
   {
     key: "date",
     titleKey: "gallery.filterByTime",
     chipKey: "gallery.advancedChipTime",
     anyKey: "gallery.filterAnyTime",
-    setting: "galleryChipDate",
   },
   {
     key: "plugin",
     titleKey: "gallery.filterByPlugin",
     chipKey: "gallery.advancedChipPlugin",
     anyKey: "gallery.filterAnyPlugin",
-    setting: "galleryChipPlugin",
   },
   {
     key: "mediaType",
     titleKey: "gallery.filterByMediaType",
     chipKey: "gallery.advancedChipMediaType",
     anyKey: "gallery.filterAnyMediaType",
-    setting: "galleryChipMediaType",
   },
   {
     key: "aspect",
     titleKey: "gallery.filterByAspect",
     chipKey: "gallery.advancedChipAspect",
     anyKey: "gallery.filterAnyAspect",
-    setting: "galleryChipAspect",
   },
   {
     key: "size",
     titleKey: "gallery.filterBySize",
     chipKey: "gallery.advancedChipSize",
     anyKey: "gallery.filterAnySize",
-    setting: "galleryChipSize",
   },
 ];
 
-/**
- * 本页开放、且用户没在 ⋯ 面板里关掉的过滤维度。
- *
- * 关掉的维度只要**当前真的在过滤**就强行显示：否则查询被一条看不见的条件夹着，
- * 人既不知道为什么少了图，也没地方把它清掉。
- */
+/** 本页开放的过滤维度：工具条上的 chip 一律显示，不再提供显隐开关。 */
 const filterDimensions = computed<
   Array<{
     key: GalleryBrowseDimension;
@@ -579,9 +546,7 @@ const filterDimensions = computed<
     icon: Component;
   }>
 >(() =>
-  ALL_FILTER_DIMENSIONS.filter(
-    (d) => props.filterFeatures.includes(d.key) && (isChipEnabled(d.setting) || isDimensionActive(d.key)),
-  ).map((d) => ({
+  ALL_FILTER_DIMENSIONS.filter((d) => props.filterFeatures.includes(d.key)).map((d) => ({
     key: d.key,
     title: t(d.titleKey),
     chipLabel: t(d.chipKey),
@@ -590,23 +555,7 @@ const filterDimensions = computed<
   })),
 );
 
-// ---------- 工具条 chip：显隐与信息密度 ----------
-/**
- * 每颗 chip 一个 `galleryChip*` 设置键（localStorage 后端），在 ⋯ 面板里直接开关。
- *
- * 读取一律「非 false 即显示」：设置还没落盘（新装、或后来新增的维度）时应当先把
- * chip 显出来，而不是让人对着一条空工具条去找开关。
- */
-type ChipSettingKey = Extract<AppSettingKey, `galleryChip${string}`>;
-
-function isChipEnabled(key: ChipSettingKey) {
-  return settingsStore.values[key] !== false;
-}
-
-function saveChipSetting(key: ChipSettingKey, value: boolean) {
-  void settingsStore.save(key, value);
-}
-
+// ---------- 工具条 chip：信息密度 ----------
 /** tooltip 文案：chip 上一律不写维度名，全靠这里补回来。 */
 function chipTitle(label: string, value?: string) {
   return value ? `${label} · ${value}` : label;
@@ -616,30 +565,12 @@ function dimensionChipTitleValue(dimension: { key: GalleryBrowseDimension; anyLa
   return isDimensionActive(dimension.key) ? dimensionChipValue(dimension.key) : dimension.anyLabel;
 }
 
-/** 搜索同理：关掉的搜索框只要还兜着关键词，就得留在条上让人看得见、清得掉。 */
-const showSearchChip = computed(
-  () => props.enableSearch && (isChipEnabled("galleryChipSearch") || !!searchText.value.trim()),
-);
-const showSortFieldChip = computed(() => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortField"));
-const showSortOrderChip = computed(() => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortOrder"));
+const showSearchChip = computed(() => props.enableSearch);
+const showSortFieldChip = computed(() => props.sortFeatures.length > 0);
+const showSortOrderChip = computed(() => props.sortFeatures.length > 0);
 
 /** 左端固定区是否有内容——空的话它后面那条分隔线就成了行首一根孤立竖线。 */
 const hasFixedSection = computed(() => !!slots.leading || showSortFieldChip.value || showSortOrderChip.value);
-
-/**
- * 排序维度的图标。纯图标 chip 下，通用的「排序」双箭头说不出到底按什么排，
- * 所以每个维度用它自己那张脸——与同名过滤维度共用一张，认过一次就都认得。
- */
-const SORT_FIELD_ICONS: Record<GallerySortField, Component> = {
-  "by-id": markRaw(Rank),
-  "by-time": markRaw(Clock),
-  "by-size": markRaw(FilterSize),
-  "by-name": markRaw(FilterName),
-  "by-aspect": markRaw(FilterAspect),
-  "by-set-time": markRaw(FilterWallpaper),
-  "by-album-order": markRaw(List),
-  random: markRaw(MagicStick),
-};
 
 const sortFieldIcon = computed<Component>(() => SORT_FIELD_ICONS[sortField.value] ?? markRaw(Sort));
 const sortFieldChipValue = computed(() => gallerySortFieldLabel(sortField.value, t));
@@ -651,41 +582,6 @@ const sortOrderToggleHint = computed(() =>
     next: props.sort.desc ? t("gallery.sortAscending") : t("gallery.sortDescending"),
   }),
 );
-
-interface ChipToggleItem {
-  key: ChipSettingKey;
-  label: string;
-  icon: Component;
-}
-
-/**
- * ⋯ 面板里的 chip 开关，分两组：随查询变化的过滤维度，和恒定的排序 / 每页。
- * 只列本页真的会渲染的 chip——页面本就没开的维度，给个开关也开不出东西来。
- */
-const chipToggleGroups = computed<ChipToggleItem[][]>(() => {
-  const filters: ChipToggleItem[] = [];
-  if (props.enableSearch) {
-    filters.push({
-      key: "galleryChipSearch",
-      label: t("gallery.advancedChipSearch"),
-      icon: markRaw(Search),
-    });
-  }
-  for (const d of ALL_FILTER_DIMENSIONS) {
-    if (!props.filterFeatures.includes(d.key)) continue;
-    filters.push({ key: d.setting, label: t(d.chipKey), icon: FILTER_DIMENSION_ICONS[d.key] });
-  }
-
-  const tools: ChipToggleItem[] = [];
-  if (props.sortFeatures.length > 0) {
-    tools.push(
-      { key: "galleryChipSortField", label: t("gallery.sort"), icon: markRaw(Sort) },
-      { key: "galleryChipSortOrder", label: t("gallery.sortOrder"), icon: markRaw(SortAsc) },
-    );
-  }
-
-  return [filters, tools];
-});
 
 const dimensionPopoverOpen = ref<Partial<Record<GalleryBrowseDimension, boolean>>>({});
 
@@ -874,30 +770,19 @@ defineExpose({
   background: var(--anime-bg-card);
 }
 
-/* ⋯ 面板：与 chip 下拉共用弹层外壳，这里只排版内容。
+/* ⋯ 视图菜单：与 chip 下拉共用弹层外壳，这里只排版内容。
    自己铺一层不透明底——共用弹层那档半透明是给「压在缩略图上的过滤树」调的，
-   开关清单是表单，底下透出画作会让人分不清哪个开关是开的。 */
-.chip-settings {
+   收藏列表是可点的清单，底下透出画作会看不清哪一行是当前视图。 */
+.view-menu {
   display: flex;
-  width: 268px;
+  width: 300px;
   max-width: calc(100vw - 32px);
   flex-direction: column;
   padding: 10px;
   background: var(--anime-bg-card);
 }
 
-/* 行距压到刚够点：清单有近十行，每行多 3px 面板就高出一大截，
-   最后要么顶出视口要么盖住半个画廊。 */
-.chip-settings__row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 3px 8px;
-  border-radius: 8px;
-  font-size: 13px;
-}
-
-.chip-settings__icon {
+.view-menu__icon {
   display: inline-flex;
   flex: none;
   width: 15px;
@@ -911,21 +796,7 @@ defineExpose({
   }
 }
 
-.chip-settings__title {
-  padding: 2px 8px 4px;
-  color: var(--anime-text-secondary);
-  font-size: 12px;
-}
-
-.chip-settings__help {
-  margin: 0;
-  padding: 4px 8px 0;
-  color: var(--anime-text-secondary);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.chip-settings__action {
+.view-menu__action {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -945,12 +816,6 @@ defineExpose({
     color: var(--anime-text-secondary);
     cursor: default;
   }
-}
-
-.chip-settings__divider {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--anime-border);
 }
 
 /* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */

@@ -90,7 +90,7 @@ import {
   watch,
 } from "vue";
 import { gridTotalKey } from "@/components/imageGrid/gridTotal";
-import { gridViewPathKey } from "@/components/imageGrid/gridViewPath";
+import { gridViewKey } from "@/components/imageGrid/gridViewPath";
 import type { Subscription } from "rxjs";
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
@@ -267,7 +267,13 @@ async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {
   // 这是 gallery 内部跳转，预览的当前图片可能已不在新 filter 结果中，需要关闭；
   // 等导航 await 完成后再关闭，可保证 previewedId→null 引发的 pvwimgid 写入只
   // 基于已落定的目标 URL，不会与 push 在同一 tick 竞争而把 filter 覆盖回去。
-  await galleryRouteStore.navigate({ query }, { push: true });
+  if (adapter.id === "gallery") {
+    await galleryRouteStore.navigate({ query }, { push: true });
+  } else {
+    // 不在画廊：gallery-path 走 URL query（参数名 path 与任务 / 畅游详情共用），
+    // 直接写会落在当前页上、冲掉本页的 path，所以显式跳到画廊并带上算好的路径。
+    await router.push({ path: "/gallery", query: { path: galleryRouteStore.computePath({ query }) } });
+  }
   imageDetailDialog.close();
   coreRef.value?.closePreview?.();
 }
@@ -470,11 +476,13 @@ provide(gridTotalKey, {
   total: readonly(totalImagesCount),
   unfilteredTotal: readonly(unfilteredTotal),
 });
-// 插槽内的查询行注入当前视图路径（不含分页尾），用于「用当前视图轮播」。
-provide(
-  gridViewPathKey,
-  computed(() => paged.viewBody.value),
-);
+// 插槽内的查询行注入当前视图上下文：路径（不含分页尾）用于「用当前视图轮播」，
+// 来源与 pathFor 用于收藏视图。
+provide(gridViewKey, {
+  path: computed(() => paged.viewBody.value),
+  source: adapter.id,
+  pathFor: (patch) => adapter.routeStore.computePath(patch),
+});
 
 /** 用户操作：next 一个请求即返回，不防抖、不等待；结果与错误经观察方落地。 */
 const requestRows = () => {

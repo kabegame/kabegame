@@ -188,6 +188,9 @@ pub struct DownloadRequest {
     pub post_url: Option<String>,
     /// 入库成功后挂载的已校验标签。
     pub labels: Vec<LabelSpec>,
+    /// `downloadImage` 的 `relocate`：来源是任务 VFS 路径时不复制内容，直接把 VFS 里的文件或
+    /// 目录交给后处理移走。入口只在 URL 解析为 `task-vfs` 时置位，其余来源恒为 `false`。
+    pub relocate: bool,
 }
 
 fn task_inflight(
@@ -611,6 +614,7 @@ impl DownloadQueue {
         metadata_id: Option<i64>,
         post_url: Option<String>,
         labels: Vec<LabelSpec>,
+        relocate: bool,
     ) -> Result<(), String> {
         if let Some(run) = TaskScheduler::global()
             .get_run(&task_id)
@@ -639,6 +643,7 @@ impl DownloadQueue {
             true,
             post_url,
             labels,
+            relocate,
         )
         .await
     }
@@ -676,6 +681,8 @@ impl DownloadQueue {
             false,
             post_url,
             labels,
+            // 失败记录不保存 relocate：重试时任务 VFS 多半已经不在，照常按复制处理
+            false,
         )
         .await
     }
@@ -698,6 +705,7 @@ impl DownloadQueue {
         blocking: bool,
         post_url: Option<String>,
         labels: Vec<LabelSpec>,
+        relocate: bool,
     ) -> Result<(), String> {
         let download_id = next_download_id();
 
@@ -716,6 +724,7 @@ impl DownloadQueue {
             metadata_id,
             post_url,
             labels,
+            relocate,
         };
 
         if !blocking {
@@ -1156,6 +1165,80 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             continue;
         }
 
+        // task-vfs + relocate 不下载：把 VFS 里的文件或目录直接交给后处理移走（目录即 WPE 壁纸目录）。
+        // 不带 relocate 的 task-vfs 照旧走下面的 download_with_retry（整份读进下载缓冲，只能是文件）。
+        #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+        if job_url.scheme() == "task-vfs" && job.relocate {
+            let resolve_url = job_url.clone();
+            let resolved = tokio::task::spawn_blocking(move || {
+                super::task_vfs::resolve_relocate_source(&resolve_url)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("resolve task VFS source join error: {e}")));
+            match resolved {
+                Ok(host_path) => {
+                    dq.switch_state(job.id, DownloadState::Processing, None)
+                        .await;
+                    // Android 的下载产物最后统一复制进系统媒体库并删除临时文件，不搬到输出目录
+                    #[cfg(not(target_os = "android"))]
+                    let relocate_to = Some(job.images_dir.as_path());
+                    #[cfg(target_os = "android")]
+                    let relocate_to = None;
+                    let _ = postprocess_downloaded_image(
+                        &*dq,
+                        job.id,
+                        super::PostprocessSource::Path {
+                            path: &host_path,
+                            relocate_to,
+                        },
+                        // 移走；去重命中时删源
+                        true,
+                        &job_url,
+                        &plugin_id_clone,
+                        (!task_id_clone.trim().is_empty()).then_some(task_id_clone.as_str()),
+                        job.failed_image_id,
+                        job.surf_record_id.as_deref(),
+                        download_start_time,
+                        job.output_album_id.as_deref(),
+                        &job.http_headers,
+                        job.custom_display_name.as_deref(),
+                        job.metadata_id,
+                        job.post_url.as_deref(),
+                        &job.labels,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    if !task_id_clone.trim().is_empty() {
+                        emit_task_log(
+                            &task_id_clone,
+                            "error",
+                            task_log_i18n(
+                                "taskLogDownloadFailed",
+                                json!({ "url": job_url.as_str(), "detail": e }),
+                            ),
+                        );
+                    }
+                    upsert_failed_image_on_failure(
+                        job.failed_image_id,
+                        &task_id_clone,
+                        &plugin_id_clone,
+                        job_url.as_str(),
+                        download_start_time as i64,
+                        &e,
+                        &job.http_headers,
+                        job.metadata_id,
+                        job.custom_display_name.as_deref(),
+                        &job.labels,
+                    );
+                    dq.switch_state(job.id, DownloadState::Failed, Some(&e))
+                        .await;
+                }
+            }
+            dq.wait_then_finish_download(job.id, true).await;
+            continue;
+        }
+
         // Android content:// 不走网络下载，直接交由 postprocess 用 ContentIoProvider 处理
         #[cfg(target_os = "android")]
         if job_url.scheme() == "content" {
@@ -1374,6 +1457,7 @@ mod tests {
                 true,
                 None,
                 Vec::new(),
+                false,
             )
             .await
     }
@@ -1462,6 +1546,7 @@ mod tests {
             metadata_id: None,
             post_url: None,
             labels: Vec::new(),
+            relocate: false,
         }
     }
 

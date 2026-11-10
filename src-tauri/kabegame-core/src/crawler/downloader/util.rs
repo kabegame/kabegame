@@ -534,12 +534,119 @@ pub fn occupy_unique_download_path_with_name(
     )
 }
 
+/// 整目录复制 / 跨文件系统移动时的半成品目录名前缀：`<目标目录>/.kabegame-part-<uuid>`。
+/// 隐藏目录，文件夹同步不会为它建子画册；本地导入遇到它整棵跳过。
+pub const DIR_PART_PREFIX: &str = ".kabegame-part-";
+
+/// 目录候选名的尝试上限，防止异常目录让改名无限循环。
+const MAX_DIR_CANDIDATES: usize = 10_000;
+
+/// 把展示名变成可落盘的目录名（非法字符替换、裁剪长度）。
+fn safe_dir_name(name: &str) -> String {
+    let name = sanitize_stem_for_filename(name);
+    // 裁剪可能让末尾露出空格或点（Windows 不允许），再收一次
+    let name = clamp_utf8_len(&name, MAX_SAFE_FILENAME_LEN).trim_end_matches([' ', '.']);
+    if name.is_empty() {
+        "wallpaper".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// 第 `idx` 个候选目录名：`idx == 0` 为原名，之后依次为 `名(1)`、`名(2)`……
+/// 与 [`candidate_filename`] 同一序列，但目录名里的点不是扩展名分隔符，后缀直接接在末尾。
+fn candidate_dirname(name: &str, idx: usize) -> String {
+    if idx == 0 {
+        return name.to_string();
+    }
+    let suffix = format!("({idx})");
+    let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(suffix.len()).max(1);
+    format!("{}{}", clamp_utf8_len(name, stem_max), suffix)
+}
+
+/// 把目录 `ready` 改名到 `dest_dir` 下第一个未被占用的候选名。
+///
+/// 候选名已存在就换下一个；「检查」与「改名」之间被别人占用时改名失败，同样换下一个
+/// （Unix 上目标恰好是空目录时 `rename` 会顶替它，空目录没有内容可丢）。其它错误原样返回。
+fn rename_dir_unique(ready: &Path, dest_dir: &Path, name: &str) -> io::Result<PathBuf> {
+    for idx in 0..MAX_DIR_CANDIDATES {
+        let candidate = dest_dir.join(candidate_dirname(name, idx));
+        if candidate.symlink_metadata().is_ok() {
+            continue;
+        }
+        match std::fs::rename(ready, &candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(_) if candidate.symlink_metadata().is_ok() => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::other(format!(
+        "no free directory name for {name} in {}",
+        dest_dir.display()
+    )))
+}
+
+/// 把 `src` 的文件逐个复制进新建的 `part` 目录。`project.json` 最后复制：
+/// 中途失败或被打断时，半成品不会被认成 WPE 壁纸目录。
+fn copy_dir_files(src: &Path, part: &Path) -> io::Result<()> {
+    std::fs::create_dir(part)?;
+    let (project, others): (Vec<_>, Vec<_>) = crate::wpe::dir_hash::list_files(src)?
+        .into_iter()
+        .partition(|file| file.rel == crate::wpe::WPE_PROJECT_FILE);
+    for file in others.into_iter().chain(project) {
+        let rel = file
+            .path
+            .strip_prefix(src)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| PathBuf::from(&file.rel));
+        let target = part.join(rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&file.path, &target)?;
+    }
+    Ok(())
+}
+
+/// 把目录 `src` 复制成 `dest_dir` 下的一个新目录（名字取 `name`，重名依次换 `名(1)`、`名(2)`……），
+/// 返回新目录路径；源目录保持不变。
+///
+/// 先复制到 `dest_dir/.kabegame-part-<uuid>`，全部成功后再改名成目标名；失败时删掉半成品。
+/// 复制的文件集合与目录哈希一致（[`crate::wpe::dir_hash::list_files`]）：不带符号链接与
+/// `.DS_Store` 这类系统文件。阻塞函数，异步上下文里放进 `spawn_blocking`。
+pub fn copy_dir_unique(src: &Path, dest_dir: &Path, name: &str) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(dest_dir)?;
+    let part = dest_dir.join(format!("{DIR_PART_PREFIX}{}", uuid::Uuid::new_v4()));
+    let result = copy_dir_files(src, &part)
+        .and_then(|()| rename_dir_unique(&part, dest_dir, &safe_dir_name(name)));
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&part);
+    }
+    result
+}
+
+/// 把目录 `src` 移动到 `dest_dir` 下（命名规则同 [`copy_dir_unique`]），返回新目录路径。
+///
+/// 先试 `rename`（同一文件系统上零拷贝）；改名不成（典型是跨文件系统）就复制一份再删源。
+/// 复制成功后删源失败只记日志：数据已经就位，残留的源由调用方的临时目录清理收走。
+pub fn move_dir_unique(src: &Path, dest_dir: &Path, name: &str) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(dest_dir)?;
+    if let Ok(path) = rename_dir_unique(src, dest_dir, &safe_dir_name(name)) {
+        return Ok(path);
+    }
+    let path = copy_dir_unique(src, dest_dir, name)?;
+    if let Err(err) = std::fs::remove_dir_all(src) {
+        tracing::warn!("移动目录后删除源失败 {}: {err}", src.display());
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_safe_custom_filename, build_safe_filename, is_occupied_for_download,
-        occupy_unique_download_path, occupy_unique_download_path_with_name, occupy_unique_path,
-        page_download_rel_path,
+        build_safe_custom_filename, build_safe_filename, copy_dir_unique, is_occupied_for_download,
+        move_dir_unique, occupy_unique_download_path, occupy_unique_download_path_with_name,
+        occupy_unique_path, page_download_rel_path, DIR_PART_PREFIX,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -844,6 +951,85 @@ mod tests {
     fn page_download_path_falls_back_to_url_segment() {
         let url = Url::parse("https://example.com/files/wallpaper.webp").unwrap();
         assert!(page_download_rel_path(&url, None).ends_with("-wallpaper.webp"));
+    }
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("kabegame-dir-move-{tag}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_wallpaper(dir: &std::path::Path) {
+        fs::create_dir_all(dir.join("materials")).unwrap();
+        fs::write(dir.join("project.json"), b"{}").unwrap();
+        fs::write(dir.join("materials/a.tex"), b"texture").unwrap();
+        fs::write(dir.join(".DS_Store"), b"finder").unwrap();
+    }
+
+    #[test]
+    fn move_dir_unique_renames_and_probes_candidate_names() {
+        let root = temp_root("move");
+        let dest = root.join("out");
+
+        let first = root.join("src-a");
+        write_wallpaper(&first);
+        let moved = move_dir_unique(&first, &dest, "My: Wallpaper v1.2").unwrap();
+        assert_eq!(moved, dest.join("My_ Wallpaper v1.2"));
+        assert!(!first.exists(), "源目录应已移走");
+        assert_eq!(fs::read(moved.join("materials/a.tex")).unwrap(), b"texture");
+
+        // 同名再来一次：目录名里的点不是扩展名，后缀接在末尾
+        let second = root.join("src-b");
+        write_wallpaper(&second);
+        let moved = move_dir_unique(&second, &dest, "My: Wallpaper v1.2").unwrap();
+        assert_eq!(moved, dest.join("My_ Wallpaper v1.2(1)"));
+        assert!(!second.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn copy_dir_unique_keeps_source_and_leaves_no_part_dir() {
+        let root = temp_root("copy");
+        let src = root.join("src");
+        write_wallpaper(&src);
+        let dest = root.join("out");
+        // 目标名已被一个文件占用
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("wall"), b"taken").unwrap();
+
+        let copied = copy_dir_unique(&src, &dest, "wall").unwrap();
+        assert_eq!(copied, dest.join("wall(1)"));
+        assert!(src.join("project.json").is_file(), "复制不动源目录");
+        assert_eq!(fs::read(copied.join("project.json")).unwrap(), b"{}");
+        assert_eq!(
+            fs::read(copied.join("materials/a.tex")).unwrap(),
+            b"texture"
+        );
+        assert!(
+            !copied.join(".DS_Store").exists(),
+            "系统文件不随目录复制（与目录哈希的文件集合一致）"
+        );
+        let leftovers: Vec<String> = fs::read_dir(&dest)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(DIR_PART_PREFIX))
+            .collect();
+        assert!(leftovers.is_empty(), "不应留下半成品目录: {leftovers:?}");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn copy_dir_unique_cleans_part_dir_on_failure() {
+        let root = temp_root("copy-fail");
+        let dest = root.join("out");
+        let error = copy_dir_unique(&root.join("missing"), &dest, "wall").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(root);
     }
 }
 

@@ -118,6 +118,11 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
   （过滤树、搜索模式 + 输入框都是这么接的）。此时面板宽度交给内容（`is-custom`），
   不再走内置列表那条 `clamp(260px, 24vw, 340px)`。
 
+面板里再弹出、teleport 到 body 的子层（浮层、popconfirm）点了会被当成「外部」，连带关掉面板。
+`KbFilterDropdown` 的 `clickOutsideIgnore`（CSS 选择器，透传到 tooltip 内容的 `onClickOutside`
+`ignore`）用来豁免它们，子层自己挂上对应的类即可；popconfirm 为此补了可追加的 `popperClass`。
+用例见 [收藏视图](../gallery/SAVED_VIEWS.md)。dialog 档（紧凑模式）没有点外部关闭，不需要。
+
 `clearable`（默认 `true`）区分两种语义：过滤维度可清空——有「任意」行、选中后 chip
 右上角出清除徽章、chip 进粉色高亮态；排序 / 每页条数这类**恒有值**的必选场景传
 `false`，三者全部关掉——恒有值时高亮不构成对比，只会满行发亮。

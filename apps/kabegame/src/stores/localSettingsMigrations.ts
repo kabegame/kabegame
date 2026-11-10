@@ -19,9 +19,27 @@ function moveKeyOnce(from: string, to: string): LocalMigration {
   };
 }
 
+/** 删掉不再使用的旧键：没有就什么都不做。 */
+function removeKey(key: string, reason: string): LocalMigration {
+  return {
+    description: `remove ${key} (${reason})`,
+    run(storage) {
+      storage.removeItem(key);
+    },
+  };
+}
+
 const migrations: LocalMigration[] = [
   moveKeyOnce("kabegame-galleryPageSize", `${SETTINGS_PREFIX}galleryPageSize`),
   moveKeyOnce("kabegame-gallery-hide", "pathRoute.hide"),
+  // 画廊不再保存 / 恢复上次浏览路径（gallery-path 全平台改走 URL query，常用视图改用收藏视图）
+  removeKey("kabegame-gallery-path", "gallery last path"),
+  removeKey(`${SETTINGS_PREFIX}gallery-path`, "gallery last path"),
+  // 工具条 chip 不再可隐藏（⋯ 菜单只留轮播与收藏视图），显隐开关的设置键作废；
+  // Compact / PageSize 是更早版本留下、早已无人读取的同族键，一并清掉
+  ...["Search", "Date", "Plugin", "MediaType", "Aspect", "Size", "SortField", "SortOrder", "Compact", "PageSize"].map(
+    (name) => removeKey(`${SETTINGS_PREFIX}galleryChip${name}`, "toolbar chip visibility"),
+  ),
 ];
 
 /**

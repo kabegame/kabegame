@@ -20,18 +20,26 @@ Kabegame 把整个目录作为一行 `images`：
 | `type` | `x-wpe/video` / `x-wpe/web` / `x-wpe/scene` 都已入库；场景壁纸由 `WallpaperStage` 的 scene 层实时渲染，渲染器还不支持的场景显示作者预览图（见 [WPE_SCENE.md](WPE_SCENE.md)） |
 | `thumbnail_path` | `<目录>/<preview>`，直接引用 WPE 自带预览图，不生成缩略图 |
 | `compatible_path` | 视频行**始终有值**：浏览器能播时就是入口视频本身（`<目录>/<file>` 绝对路径）；解不了的编码在 `compatibles_dir` 生成 H.264 MP4，生成失败也回落到入口视频。**网页行为空**（没有可播放媒体，页面以入口的 `file://` 加载，见第六节） |
-| `hash` / `size` / `width` / `height` | 入口文件的哈希、大小（创意工坊场景的入口打包在 `scene.pkg` 里，取包本身，`WpeProject::content_path`）；视频行带探测尺寸，场景行是场景分辨率（`WpeProject::scene_resolution`，透视场景为空），网页行为空 |
+| `hash` / `size` | **目录哈希**与目录内全部文件的总字节数（`wpe::dir_hash`，见第四节「目录哈希」）；v051 之前入库的行取的是入口文件，由回填作业 `wpe_dir_hash` 重算 |
+| `width` / `height` | 视频行带探测尺寸，场景行是场景分辨率（`WpeProject::scene_resolution`，透视场景为空），网页行为空 |
 | `post_url` | 有 workshop id 时是创意工坊页面地址 |
 | `metadata` | `project.json` 原文（`plugin_id = wpe-import`），供详情展示 |
 
-**不复制、不转码、不写用户目录**。`local_path` 的唯一约束天然保证同一壁纸只入库一次；
-取消订阅、壁纸更新只影响磁盘上那一个目录，Kabegame 不持有副本。从图库删除只删记录，
-`x-wpe/*` 行的 `local_path` 永远不进源文件回收（`batch_delete_images` 按 type 分流）。
+**WPE 行的身份由宿主定**：不论从哪个入口进来（收集入口、本地导入、文件夹同步、插件下载），`plugin_id` 恒为
+`wpe-import`、metadata 恒为 `project.json` 原文。属性面板与垫片直接读 metadata 顶层字段，详情模板按
+`image.pluginId` 选，换成下载插件自己的 metadata 会全部失效；所以下载时调用方传入的 `metadata_id` 被忽略，
+去重命中时的 metadata 重绑定（`rebind_deduped_metadata`）也对 WPE 行直接跳过。
+
+**原地入库不复制、不转码、不写用户目录**。`local_path` 的唯一约束保证同一个目录只入库一次；
+取消订阅、壁纸更新只影响磁盘上那一个目录，Kabegame 不持有副本。只有**下载产物**（插件下到任务 VFS 里的
+目录）会被移动到下载目录，或在去重命中时删除。从图库删除只删记录，`x-wpe/*` 行的 `local_path` 永远不进
+源文件回收（`batch_delete_images` 按 type 分流）——移进下载目录的壁纸目录同样不随删记录删除。
 
 `type` 以 `x-wpe/` 开头即表示「目录型壁纸」。凡把 `local_path` 当文件用的地方都必须按类型
 分流，不能按扩展名猜：
 
-- `/file/{*path}` 对 `x-wpe/*` 行返回 404；
+- `/file/{*path}`（桌面应用 Web 服务器）对 `x-wpe/*` 行返回目录的**文件清单**，对目录内的文件返回文件内容
+  （见第四节「经 Web 服务器传输」）；非 `wpe` 构建仍是 404；
 - 视频播放（预览大图、应用背景、壁纸窗口）一律走 `compatible_path` → `/compatible/{*path}`；
 - 网页壁纸以入口的 `file://` 直接加载（预览与桌面都是 `WallpaperStage` web 层里的 `file:` iframe，见第五、六节），
   页面能读的文件边界是运行时按网页壁纸目录索引做的 `file:` 请求拦截；没有 HTTP 目录服务；
@@ -121,11 +129,81 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 - `sources`：checkbox，`workshop` / `defaultprojects` / `myprojects`，默认全选；
 - `extraDirs`：`list`，对话框识别出的目录；未选时省略（空数组会被变量校验拒绝）。
 
-`crawler/wpe_import.rs` 逐目录读 `project.json`：`Video` 走 `import_wpe_video`、`Web` 走 `import_wpe_web`
-（`import_wpe_project` 按类型分派，dry-run 与结果计数共用一处），其它类型计入「跳过」并写日志。两类共用
-`base_image_info`（来源、预览图、创意工坊链接、metadata）与 `finish_insert`（写库、`images-added`、画册、标签、日志），
-各自只覆盖 `type` / 宽高 / `compatible_path`。`local_path` 已存在时幂等，只补目标画册成员（视频另补缺失的
-`compatible_path`），不补标签。
+`crawler/wpe_import.rs` 的 `run_builtin_wpe_import` 逐目录读 `project.json`：受支持的类型调
+`postprocess_downloaded_image(PostprocessSource::Path { path: 目录, relocate_to: None }, ..)`，由后处理的目录分支
+入库（见下「入库：四个入口共用 `ingest_wpe_dir`」）；其它类型计入「跳过」并写日志。返回 `Ok(true)` 记新增、
+`Ok(false)` 记已存在、`Err` 记跳过；任务的成功 / 去重 / 失败计数与失败记录由后处理统一处理，与下载任务同口径。
+`local_path` 已存在时幂等，只补目标画册成员（视频另补缺失的 `compatible_path`），不补标签。
+
+### 入库：四个入口共用 `ingest_wpe_dir`
+
+`postprocess_downloaded_image` 的 `PostprocessSource::Path { path, relocate_to }` 里 `path` 是目录时，按 WPE 壁纸目录
+处理（`postprocess_wpe_dir`，薄包装），实际入库只有一个函数 `crawler::wpe_import::ingest_wpe_dir(dir, WpeIngest)`：
+
+| 入口 | 怎么进来 | `relocate_to` | `dedup_by_hash` |
+|---|---|---|---|
+| 收集入口「壁纸」（`wpe-import`） | 后处理目录分支 | `None`（原地） | 跟随「自动去重」 |
+| 本地导入（`local-import`，含拖入） | 后处理目录分支 | `None`（原地；`copy_to_dir` 时先复制再对副本原地入库） | 跟随「自动去重」 |
+| 插件下载（`downloadImage(目录, { relocate: true })`） | 下载 worker → 后处理目录分支 | `Some(下载目录)`，`delete_source = true` | 跟随「自动去重」 |
+| 文件夹同步 | 直接调用（同步不经后处理） | `None` | 恒 `false`（磁盘上有几个目录就有几行） |
+
+步骤：
+
+1. `read_project` 成功且类型受支持，否则报错（不是壁纸目录、`application` 等），源不动。
+2. 原地入库按 `local_path` 幂等：已有行 → 补画册成员（视频行补缺失的 `compatible_path`）→ `Existing`。
+3. 算目录哈希（阻塞线程）。`dedup_by_hash` 且 `find_image_by_hash` 命中 → 补画册成员；`relocate_to` 为 `Some` 且
+   `delete_source` 时删掉源目录（下载产物）→ `Existing`。原地入库命中时不删任何东西。
+4. `relocate_to` 为 `Some`：`delete_source` 时 `move_dir_unique`，否则 `copy_dir_unique`，放到目标目录下以展示名
+   （缺省取 `project.json` 标题）命名的目录，重名依次换 `名(1)`、`名(2)`；之后按新路径重读工程。
+5. 按类型取宽高与 `compatible_path`（同原来的三份导入函数），metadata 写 `project.json` 原文，`hash` / `size` 写
+   目录哈希与总字节数，`add_image` → `images-added` → 挂画册 → 挂 WPE 标签。
+6. `add_image` 撞 `local_path` 唯一约束（另一个入口抢先写了同一个目录，例如复制进同步目录时文件夹同步先到）→
+   回查路径按 `Existing` 处理。其它失败时删掉第 4 步搬过来的目录（与文件下载失败删新建文件一致）。
+
+后处理包装在 `Imported` 时按父目录补挂文件夹画册（`link_into_folder_album`）并挂插件标签，`Existing` 时按
+「去重时更新元数据」设置补挂标签并写任务日志（同一目录是 `taskLogWpeExisting`，内容相同的另一个目录是
+`taskLogDedupByHash`）。
+
+`move_dir_unique` / `copy_dir_unique`（`downloader/util.rs`）：先试 `rename`；改名不成（典型是跨文件系统）时先复制到
+`<目标目录>/.kabegame-part-<uuid>`（`project.json` 最后复制，半成品不会被认成壁纸目录），再改名、删源。复制的文件
+集合与目录哈希相同（不带符号链接与系统文件）。本地导入遇到 `.kabegame-part-*` 整棵跳过；它是隐藏目录，文件夹同步
+不会为它建子画册。
+
+### 目录哈希
+
+`wpe::dir_hash`（不受 `wpe` feature 门控）：`list_files` 迭代枚举目录下的普通文件，不跟随符号链接，相对路径统一用
+`/` 分隔并按字节序排序，排除 `.DS_Store` / `Thumbs.db` / `desktop.ini`（访达、资源管理器会自己写）。`digest_dir` 以域前缀
+`kabegame-wpe-dir-v1\0` 开头，逐个文件喂入「路径长度 u32 LE + 路径 + 文件长度 u64 LE + 该文件的 SHA-256」，输出小写 hex。
+只对内容敏感：与创建顺序、时间戳、所在位置无关；域前缀保证不与散文件哈希相撞。服务端的文件清单、整目录复制与哈希
+共用 `list_files`，三处看到的文件集合一致。
+
+存量行的 `hash` / `size` 是入口文件的，由回填作业 `wpe_dir_hash`（v051 空迁移登记，见
+[DB_MIGRATIONS_AND_BACKFILLS.md](../storage/DB_MIGRATIONS_AND_BACKFILLS.md)）在后台重算。**作业跑完之前存量行按目录哈希
+查不到**，这段时间里下到本机已有的壁纸会多落一份。
+
+### 本地导入与文件夹同步里的壁纸目录
+
+- **本地导入**（`crawler/local_import.rs`，`wpe` feature + 非 Android）：进入子目录之前（`on_enter_dir`）、非递归或到达深度
+  上限时的子目录（`on_subdir`）、以及任务的根目录，都先用 `is_importable_wpe_dir` 判断。是可入库的壁纸目录就整目录交给
+  后处理、不再下钻；带无关 `project.json` 的目录照常递归。空跑照文件记一次 `taskLogDryRunSkipImport`。
+- **文件夹同步**（`local_folder/sync.rs`、`fs_batch.rs`）：同步目录下的壁纸子目录按「文件」对待——挂到父目录的画册、
+  不建子画册、目录内部变化忽略、整个目录消失即删行。细节与已知限制见
+  [LOCAL_FOLDER_SYNC.md](../local-folder/LOCAL_FOLDER_SYNC.md)「WPE 壁纸子目录」。
+
+### 经 Web 服务器传输
+
+mac 上装不了 WPE，但可以把另一台机器（通常是 Windows）上的壁纸传过来：源机器开桌面应用 Web 服务器，
+本机跑 `kabegame-server` 插件。
+
+- **服务端**（`http_server.rs` 的 `handle_file_path`，`wpe` feature）：`/file/<WPE 行的目录>` 返回
+  `{ "type": "x-wpe/scene", "files": [{ "path": "scene.pkg", "size": 123 }] }`（`list_files`，`Cache-Control: no-store`）；
+  路径不是任何行、但某一级上级目录是 WPE 行时，请求路径规范化后（解开 `..` 与符号链接）仍在该目录内且是普通文件
+  才返回文件内容，否则 404。无 `Range` 的整文件响应改为流式读盘（`Body::from_stream`，带 `Content-Length`），
+  GB 级的 `scene.pkg` 不会整份进内存；图片、视频的响应头与内容不变。
+- **客户端**：插件对 `x-wpe/*` 行先请求 `/file/<目录>` 取清单，再调 SDK 的 `downloadWpeWallpaper`：逐个文件
+  `Kabegame.fetchToFile` 到任务 VFS 的 `tmp/wpe/<时间戳-随机>/`，最后
+  `Kabegame.downloadImage(目录的 VFS 路径, { relocate: true })`。宿主把目录移到下载目录并入库，
+  或在目录哈希命中已有行时删掉它。重跑同一批壁纸仍会先把整张传完再靠哈希判重，没有下载前预检。
 
 ### 标签
 
@@ -650,16 +728,27 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 - 未带 CEF 补丁 07 的构建会拒绝网页壁纸 iframe 导航并退回作者预览图；`file:` 文档的 worker 不能读取 `file:`。
 - 图库媒体走 `file://`（Phase 6b）的真机验证只在 Windows 做；Linux / macOS 待测。Phase 6c 的 `fetch(file:)`、XHR 改动仍待重编 CEF 后真机验证；Windows `DownloadURL` 拖出路线已放弃，由 Phase 6d 的真实文件链路取代（同样待重编 CEF 后真机验证）。
 - `wcc_v` 图像滤镜预设（WPE 浏览属性）未实现，忽略。
-- 创意工坊取消订阅后目录消失：行仍在，`local_exists` 为 false，图库标记缺失。
+- 创意工坊取消订阅后目录消失：行仍在，`local_exists` 为 false，图库标记缺失。（文件夹同步目录里的壁纸子目录例外：
+  整个目录消失时同步会删行。）
+- 目录哈希按文件名的字节比较，不做 Unicode 规范化：会改写文件名规范化形式的文件系统（如 HFS+）上，
+  含非 ASCII 文件名的壁纸可能算出与源机器不同的哈希，表现为去重不命中、多落一份。
+- 回填作业 `wpe_dir_hash` 跑完之前，存量 WPE 行按目录哈希查不到，下到本机已有的壁纸会多落一份。
+- 插件下载的壁纸目录里不允许有符号链接（`relocate` 的源整棵检查），跨文件系统搬运时系统文件（`.DS_Store` 等）不随目录走。
 - 虚拟盘、原生壁纸、Plasma 插件模式均看不到 WPE 行（第一阶段）。
 - Web 发布版不提供壁纸入口；Android / Web 的 HTTP 文件服务与桌面应用 Web 服务器都没有壁纸目录路由（`/wpe` 已在 Phase 6a 删除）。
 
 ## 八、涉及文件
 
-- `src-tauri/kabegame-core/src/wpe/`（discover / recognize / project / properties / user_props / locale / scan）
-- `src-tauri/kabegame-core/src/crawler/wpe_import.rs`、`plugin/builtin.rs`、`task_scheduler/mod.rs`
+- `src-tauri/kabegame-core/src/wpe/`（discover / recognize / project / properties / user_props / locale / scan / dir_hash）
+- `src-tauri/kabegame-core/src/crawler/wpe_import.rs`（`ingest_wpe_dir`、`is_importable_wpe_dir`、`wpe-import` 任务）、
+  `crawler/downloader/mod.rs`（后处理目录分支 `postprocess_wpe_dir`、`rebind_deduped_metadata` 跳过 WPE 行）、
+  `crawler/downloader/util.rs`（`move_dir_unique` / `copy_dir_unique`）、`crawler/downloader/task_vfs.rs`（`resolve_relocate_source`）、
+  `crawler/local_import.rs`、`local_folder/{sync.rs,fs_batch.rs}`、`plugin/builtin.rs`、`task_scheduler/mod.rs`
+- 目录哈希回填：`storage/migrations/v051_wpe_dir_hash.rs`、`storage/migrations/backfills/wpe_dir_hash.rs`
+- 经 Web 服务器传输：`packages/kabegame-plugin-sdk/src/wpe.ts`（`downloadWpeWallpaper`）、
+  `src-crawler-plugins/plugins/kabegame-plugin-kabegame-server/`
 - `src-tauri/kabegame-core/src/media/image_type.rs`、`storage/images.rs`、`storage/organize.rs`
-- `src-tauri/kabegame/src/http_server.rs`（`/file` 对 WPE 行 404）、`commands/wallpaper.rs`（`WallpaperTarget.webEntry`）、
+- `src-tauri/kabegame/src/http_server.rs`（`/file` 对 WPE 行返回文件清单、对目录内文件流式返回）、`commands/wallpaper.rs`（`WallpaperTarget.webEntry`）、
   `wallpaper/mod.rs`（`web_entry`，`wpe` feature 门控）、`wallpaper/rotator.rs`、`capabilities/wpe-web.json`、
   `tauri.conf.json.handlebars`（CSP `frame-src … file:`）
 - 网页壁纸 iframe：`src-tauri/kabegame/src/startup.rs` 与 `wallpaper/manager/window.rs`（`allow_file_documents` +

@@ -60,6 +60,12 @@ export interface KbFilterDropdownProps {
   loading?: boolean
   negated?: boolean
   disabled?: boolean
+  /**
+   * popover 档点外部关面板时，命中这些 CSS 选择器的元素不算「外部」。
+   * 面板里再弹出、teleport 到 body 的子层(编辑浮层、popconfirm)要挂上对应的类，
+   * 否则点它们会把面板一起关掉。dialog 档没有点外部关闭，不需要。
+   */
+  clickOutsideIgnore?: string[]
 }
 
 export interface KbFilterDropdownTriggerSlotProps {

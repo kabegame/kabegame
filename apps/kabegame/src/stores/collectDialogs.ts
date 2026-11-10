@@ -7,6 +7,7 @@ export interface WebpageCollectInitialConfig {
   httpHeaders?: Record<string, string>;
   outputAlbumId?: string | null;
   isDryRun?: boolean;
+  retryCount?: number;
 }
 
 export interface LocalImportInitialConfig {

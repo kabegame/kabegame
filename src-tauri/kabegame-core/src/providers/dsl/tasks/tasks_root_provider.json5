@@ -34,7 +34,10 @@
             { "sql": "tasks.end_time", "as": "end_time" },
             { "sql": "tasks.error", "as": "error" },
             { "sql": "tasks.max_concurrent_downloads", "as": "max_concurrent_downloads" },
-            { "sql": "tasks.is_dry_run", "as": "is_dry_run" }
+            { "sql": "tasks.is_dry_run", "as": "is_dry_run" },
+            { "sql": "tasks.retry_count", "as": "retry_count" },
+            { "sql": "tasks.retry_attempt", "as": "retry_attempt" },
+            { "sql": "COALESCE(tasks.retry_root_id, tasks.id)", "as": "retry_root_id" }
         ],
     },
     "resolve": {
@@ -44,7 +47,7 @@
             "provider": "tasks_id_provider",
             "properties": { "task_id": "${capture[1]}" }
         },
-        "status|plugin|plugin_search|run_config|before_.+|x[1-9][0-9]*x": {
+        "status|plugin|plugin_search|run_config|retry_root|before_.+|x[1-9][0-9]*x": {
             "delegate": { "provider": "tasks_filter_router" },
             "child_var": "child",
             "provider": "${child.provider}",

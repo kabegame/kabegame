@@ -28,6 +28,12 @@ export interface CrawlTask {
   httpHeaders?: Record<string, string>;
   maxConcurrentDownloads?: number | null;
   isDryRun: boolean;
+  /** 失败重试次数 0..10（0 关闭），整条重试链相同 */
+  retryCount: number;
+  /** 本任务是重试链里的第几次重试，原任务为 0 */
+  retryAttempt: number;
+  /** 重试链的原始任务 id；原任务等于自身 id */
+  retryRootId: string;
   outputAlbumId?: string;
   runConfigId?: string;
   runConfigName?: string | null;
@@ -76,6 +82,8 @@ export interface RunConfig {
   httpHeaders?: Record<string, string>;
   maxConcurrentDownloads?: number | null;
   isDryRun: boolean;
+  /** 失败重试次数 0..10（0 关闭），定时触发的任务继承它 */
+  retryCount: number;
   /** 输出画册：定时任务与手动任务写入同一画册 */
   outputAlbumId?: string;
   createdAt: number;
@@ -99,6 +107,8 @@ export interface TaskConfig {
   outputAlbumId: string | null;
   maxConcurrentDownloads: number | null;
   isDryRun: boolean;
+  /** 失败重试次数 0..10，0 关闭 */
+  retryCount: number;
 }
 
 export interface MissedRunItem {
@@ -268,6 +278,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     triggerSource: CrawlTask["triggerSource"] = "manual",
     maxConcurrentDownloads?: number | null,
     isDryRun = false,
+    retryCount = 0,
   ): Promise<boolean> {
     if (beforeAddTaskGuard) {
       try {
@@ -291,6 +302,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           triggerSource,
           maxConcurrentDownloads,
           isDryRun,
+          retryCount,
         },
       });
       return true;
@@ -344,6 +356,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
       userConfig: canonicalizeUserConfig(preset.userConfig ?? {}, defs),
       httpHeaders: preset.httpHeaders ?? {},
       isDryRun: preset.isDryRun,
+      // 失败重试属本机偏好，推荐配置不携带
+      retryCount: 0,
       scheduleEnabled,
       scheduleSpec: spec,
       schedulePlannedAt: undefined,
@@ -353,10 +367,11 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   async function addRunConfig(
-    config: Omit<RunConfig, "id" | "createdAt" | "lastResult"> & {
+    config: Omit<RunConfig, "id" | "createdAt" | "lastResult" | "retryCount"> & {
       id?: string;
       createdAt?: number;
       lastResult?: RunConfigLastResult;
+      retryCount?: number;
     },
   ) {
     const cfg: RunConfig = {
@@ -371,6 +386,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       httpHeaders: config.httpHeaders ?? {},
       maxConcurrentDownloads: config.maxConcurrentDownloads ?? null,
       isDryRun: config.isDryRun ?? false,
+      retryCount: config.retryCount ?? 0,
       outputAlbumId: config.outputAlbumId,
       scheduleEnabled: config.scheduleEnabled ?? false,
       scheduleSpec: config.scheduleSpec,
@@ -434,6 +450,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       "manual",
       task.maxConcurrentDownloads ?? null,
       task.isDryRun,
+      task.retryCount,
     );
   }
 

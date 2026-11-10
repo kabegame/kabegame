@@ -28,6 +28,7 @@
             { "sql": "run_configs.schedule_last_run_at", "as": "schedule_last_run_at" },
             { "sql": "run_configs.max_concurrent_downloads", "as": "max_concurrent_downloads" },
             { "sql": "run_configs.is_dry_run", "as": "is_dry_run" },
+            { "sql": "run_configs.retry_count", "as": "retry_count" },
             { "sql": "rc_last.id", "as": "last_task_id" },
             { "sql": "rc_last.status", "as": "last_task_status" },
             { "sql": "rc_last.start_time", "as": "last_task_start_time" },

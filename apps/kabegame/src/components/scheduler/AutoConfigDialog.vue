@@ -91,6 +91,9 @@
             <span class="text-sm text-[var(--anime-text-secondary)]">{{ t("plugins.dryRunDesc") }}</span>
           </div>
         </el-form-item>
+        <el-form-item class="min-w-56 flex-1" :label="t('plugins.retryOnFail')">
+          <RetryCountField v-model="retryCount" />
+        </el-form-item>
       </div>
 
       <PluginVarsForm v-if="visiblePluginVars.length > 0" v-model="form.vars" :plugin-vars="visiblePluginVars" />
@@ -143,6 +146,7 @@ import OutputDirSelect from "@/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
+import RetryCountField from "@/components/crawler/RetryCountField.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { HIDDEN_ALBUM_ID, fetchAlbum } from "@/services/albums";
 import { useModal } from "@/composables/useModal";
@@ -217,6 +221,7 @@ const headersModel = ref<Record<string, string>>({});
 const outputAlbumId = ref<string | null>(null);
 const maxConcurrentDownloads = ref<number | null>(null);
 const isDryRun = ref(false);
+const retryCount = ref(0);
 
 const viewAlbumName = ref("");
 
@@ -286,6 +291,7 @@ const loadFromConfig = async (cfg: RunConfig) => {
   outputAlbumId.value = cfg.outputAlbumId ?? null;
   maxConcurrentDownloads.value = cfg.maxConcurrentDownloads ?? null;
   isDryRun.value = cfg.isDryRun;
+  retryCount.value = cfg.retryCount ?? 0;
 
   scheduleEnabled.value = !!cfg.scheduleEnabled;
   scheduleSpec.value = cfg.scheduleSpec ? cloneScheduleSpec(cfg.scheduleSpec) : undefined;
@@ -300,6 +306,7 @@ const resetCreateForm = () => {
   outputAlbumId.value = null;
   maxConcurrentDownloads.value = null;
   isDryRun.value = false;
+  retryCount.value = 0;
   form.value.pluginId = "";
   form.value.outputDir = "";
   form.value.vars = {};
@@ -459,6 +466,7 @@ const handleSave = async () => {
     outputAlbumId: outputAlbumId.value || undefined,
     maxConcurrentDownloads: maxConcurrentDownloads.value,
     isDryRun: isDryRun.value,
+    retryCount: retryCount.value,
     ...schedule,
   };
 

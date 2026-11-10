@@ -37,6 +37,9 @@
   "backfillTitle": "更新数据库",
   "backfillWaiting": "排队中",
   "backfillFailed": "数据库后台更新失败（{name}），下次启动时会继续",
+  "backfill": {
+    "wpe_dir_hash": "重新计算 Wallpaper Engine 壁纸的内容指纹"
+  },
   "viewLogs": "查看日志",
   "logs": {
     "title": "应用日志",

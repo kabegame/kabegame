@@ -34,8 +34,6 @@ export * from "./galleryQuery.ts";
  * - 旧形态（搜索前缀在最前、no-album 混在维度序列里）仍可解析，见 parse 各处注释。
  */
 
-export const GALLERY_STORAGE_KEY_PATH = "kabegame-gallery-path";
-
 // ---------------------------------------------------------------------------
 // 排序
 // ---------------------------------------------------------------------------
@@ -118,14 +116,20 @@ export interface ComposablePathParams {
   noAlbum?: boolean;
   query: GalleryQuery;
   sort: GallerySort | GalleryStoredSort;
+  /**
+   * 随机排序写成不带种子的 `sort/random`：给收藏视图这类「存下来、以后再用」的查询体用，
+   * 同一视图两次构建结果相同；应用时再现生成种子。解析侧本来就认 `sort/random`。
+   */
+  omitRandomSeed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // 构建
 // ---------------------------------------------------------------------------
 
-function sortBodyPath(sort: GallerySort): string {
-  return sort.field === "random" ? `sort/random-${sort.seed || newRandomSortSeed()}` : `sort/${sort.field}`;
+function sortBodyPath(sort: GallerySort, omitRandomSeed = false): string {
+  if (sort.field !== "random") return `sort/${sort.field}`;
+  return omitRandomSeed ? "sort/random" : `sort/random-${sort.seed || newRandomSortSeed()}`;
 }
 
 /** noAlbum + 查询体 折成一个片段（无排序/分页），count 路径与整路径共用。 */
@@ -138,10 +142,10 @@ function foldContextAndQuery(noAlbum: boolean, query: GalleryQuery): QueryBodyPa
 }
 
 export function buildComposablePath(params: ComposablePathParams): string {
-  const { rootPrefix = "", noAlbum = false, query, sort: sortOrOrder } = params;
+  const { rootPrefix = "", noAlbum = false, query, sort: sortOrOrder, omitRandomSeed = false } = params;
   const sort = normalizeGallerySort(sortOrOrder);
   const body = appendQueryBodyPart(foldContextAndQuery(noAlbum, query), {
-    body: sortBodyPath(sort),
+    body: sortBodyPath(sort, omitRandomSeed),
     endsAtHub: false,
   }).body;
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";

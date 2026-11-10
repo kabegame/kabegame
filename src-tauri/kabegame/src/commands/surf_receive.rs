@@ -175,6 +175,7 @@ pub(crate) async fn enqueue_surf_download<R: Runtime>(
         req.collect_run_id.is_some(),
         req.source_url,
         Vec::new(),
+        false,
     )
     .await
 }

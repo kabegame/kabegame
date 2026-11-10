@@ -37,6 +37,9 @@
           <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
         </div>
       </el-form-item>
+      <el-form-item class="min-w-56 flex-1" :label="$t('plugins.retryOnFail')">
+        <RetryCountField v-model="retryCountValue" />
+      </el-form-item>
     </div>
     <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
       <el-input
@@ -163,6 +166,7 @@ import PluginPickerField from "@/components/PluginPickerField.vue";
 import PluginConfigForm from "@/components/crawler/PluginConfigForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
+import RetryCountField from "@/components/crawler/RetryCountField.vue";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
@@ -245,6 +249,7 @@ function onPluginChange(id: string | null | undefined) {
         httpHeaders: draftHttpHeaders.value,
         maxConcurrentDownloads: draftMaxConcurrentDownloads.value,
         isDryRun: draftIsDryRun.value,
+        retryCount: draftRetryCount.value,
       };
   void writeTaskConfig({ pluginId: id, ...carried });
 }
@@ -257,6 +262,7 @@ const draftOutputAlbumId = ref<string | null>(null);
 const draftHttpHeaders = ref<Record<string, string>>({});
 const draftMaxConcurrentDownloads = ref<number | null>(null);
 const draftIsDryRun = ref(false);
+const draftRetryCount = ref(0);
 
 const outputDirValue = computed<string>({
   get: () => tc.value?.outputDir ?? draftOutputDir.value,
@@ -295,6 +301,14 @@ const isDryRunValue = computed<boolean>({
   set: (value) => {
     if (tc.value) tc.value.isDryRun = value;
     else draftIsDryRun.value = value;
+  },
+});
+
+const retryCountValue = computed<number>({
+  get: () => (tc.value ? tc.value.retryCount : draftRetryCount.value),
+  set: (value) => {
+    if (tc.value) tc.value.retryCount = value;
+    else draftRetryCount.value = value;
   },
 });
 
@@ -391,6 +405,7 @@ async function confirmSaveConfig() {
       outputAlbumId: cfg.outputAlbumId || undefined,
       maxConcurrentDownloads: cfg.maxConcurrentDownloads,
       isDryRun: cfg.isDryRun,
+      retryCount: cfg.retryCount,
       // Dialog 恒为手动任务：保存出来的配置默认不定时
       scheduleEnabled: false,
     });
@@ -446,6 +461,7 @@ async function submit() {
     httpHeaders,
     maxConcurrentDownloads: cfg.maxConcurrentDownloads,
     isDryRun: cfg.isDryRun,
+    retryCount: cfg.retryCount,
     // Dialog 发起的任务一律是手动任务，不带 runConfigId
     triggerSource: "manual",
   });

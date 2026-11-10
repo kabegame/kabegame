@@ -754,6 +754,8 @@ pub async fn op_kabegame_download_image(
     let parsed_url = crate::plugin::parse_download_image_url(&url, run.fs_handle)
         .map_err(JsErrorBox::generic)?;
     let download_start_time = now_ms();
+    // relocate 只对任务 VFS 路径有意义，其余来源忽略
+    let relocate = opts.relocate && parsed_url.scheme() == "task-vfs";
     let fut = download_queue.download_image(
         parsed_url,
         images_dir,
@@ -766,6 +768,7 @@ pub async fn op_kabegame_download_image(
         opts.metadata_id,
         opts.post_url,
         opts.labels,
+        relocate,
     );
     tokio::select! {
         biased;
@@ -855,6 +858,8 @@ struct DownloadOpts {
     metadata_id: Option<i64>,
     post_url: Option<String>,
     labels: Vec<LabelSpec>,
+    /// `relocate: true`：来源是 VFS 路径时移走而不是复制（由调用方按 URL scheme 决定是否生效）。
+    relocate: bool,
 }
 
 fn parse_download_opts(opts: Option<JsonValue>, run: &Task) -> Result<DownloadOpts, JsErrorBox> {
@@ -868,6 +873,10 @@ fn parse_download_opts(opts: Option<JsonValue>, run: &Task) -> Result<DownloadOp
     let custom_name = optional_string(opts, "name", "download_image")?;
     let post_url = optional_string(opts, "url", "download_image")?;
     let metadata_id = optional_i64(opts, "metadata_id", "download_image")?;
+    let relocate = opts
+        .get("relocate")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
     let metadata = opts.get("metadata").filter(|v| !v.is_null()).cloned();
     let labels = parse_download_labels(
         opts.get("labels"),
@@ -903,6 +912,7 @@ fn parse_download_opts(opts: Option<JsonValue>, run: &Task) -> Result<DownloadOp
         metadata_id,
         post_url,
         labels,
+        relocate,
     })
 }
 
@@ -1468,6 +1478,9 @@ mod tests {
             super::desktop_chrome_major("Mozilla/5.0 (Linux; Android 14)"),
             None
         );
-        assert_eq!(super::desktop_chrome_major("Chrome/abc Safari/537.36"), None);
+        assert_eq!(
+            super::desktop_chrome_major("Chrome/abc Safari/537.36"),
+            None
+        );
     }
 }

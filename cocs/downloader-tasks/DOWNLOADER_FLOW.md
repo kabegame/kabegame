@@ -32,10 +32,11 @@ JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通�
 | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | downloader 模块门面；scheme downloader trait/注册表；`download_with_retry`；下载间隔 helper；统一 `postprocess_downloaded_image`；`DownloadSink` / `DownloadOutcome` / `PostprocessSource` 定义；最终目标路径与 Android Pictures copy / content URI 入库 |
 | `src-tauri/kabegame-core/src/crawler/downloader/queue.rs` | `DownloadQueue`、下载池、统一 active download 状态机、CEF worker 分派与完成 oneshot、worker loop、URL 前置去重、失败记录 upsert、任务图片计数快照 |
 | `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度快照、请求头处理 |
-| `src-tauri/kabegame-core/src/crawler/downloader/task_vfs.rs` | `task-vfs://` scheme downloader；校验当前任务 handle 后从 `PluginVfs` 分块读取并写入 `DownloadSink` |
+| `src-tauri/kabegame-core/src/crawler/downloader/task_vfs.rs` | `task-vfs://` scheme downloader；校验当前任务 handle 后从 `PluginVfs` 分块读取并写入 `DownloadSink`；`resolve_relocate_source` 为 `relocate` 下载把 VFS 路径解析成宿主路径 |
 | `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
-| `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助 |
+| `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助；整目录搬运 `move_dir_unique` / `copy_dir_unique` |
+| `src-tauri/kabegame-core/src/crawler/wpe_import.rs`、`src-tauri/kabegame-core/src/wpe/dir_hash.rs` | 后处理目录分支的实际入库函数 `ingest_wpe_dir`（`wpe` feature）；目录哈希 |
 | `src-tauri/kabegame-core/src/storage/source_purge.rs`、`safe_delete.rs` | 图库源文件清除唯一入口；桌面回收站护栏、分块与逐条降级；Android MediaStore / 普通路径分流 |
 | `src-tauri/kabegame-core/src/storage/hidden_cleanup.rs` | 隐藏画册分批清理服务、运行状态快照、取消与完成事件 |
 | `src-tauri/kabegame-core/src/plugin/vfs.rs`、`src-tauri/kabegame-core/src/plugin/ffmpeg.rs` | 任务/会话虚拟路径安全边界；虚拟路径上的显式媒体合流与探测 |
@@ -114,6 +115,7 @@ pub enum PostprocessSource<'a> {
 后处理内部根据 source 类型决定如何计算 hash、推断 MIME 和落盘：
 - `Bytes` 路径：直接从内存计算 hash/MIME，未去重时原子占坑目标文件并经占坑句柄写入（见 §6「目标文件占坑与占用标记」）。
 - `Path` 路径：从临时文件读取计算 hash/MIME，未去重时占坑目标名并把临时文件搬过去（Unix 同设备硬链接零拷贝，Windows / 跨设备复制进占坑句柄；Android 上复制到 MediaStore），完成后删除临时文件。
+- `Path` 且 `path` 是**目录**：按 Wallpaper Engine 壁纸目录处理，一个目录写成一行 `x-wpe/*`，不走文件流程（见 §6「目录来源：Wallpaper Engine 壁纸目录」）。
 
 ---
 
@@ -178,6 +180,10 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 - 发送 Completed，清理对应失败记录
 
 Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
+
+**命中的已有行是 WPE 行（`x-wpe/*`）时不改挂 metadata**（URL 前置去重与 Hash 后置去重都是 `rebind_deduped_metadata`，
+开头按类型直接返回）：WPE 行的 metadata 是 `project.json` 原文、`plugin_id` 恒为 `wpe-import`，属性面板、垫片和详情模板
+都依赖它。v051 之前 WPE 视频行的 `hash` 是入口视频的文件哈希，普通下载可能按哈希命中它；现在只补画册、标签与去重计数。
 
 ---
 
@@ -309,7 +315,45 @@ window.__kb_native_download_finished__?.({
 
 surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`startup.rs` 事件循环统一监听其 `DownloadState::Completed` / `DownloadState::Failed`，经 `surf_common::surf_toast_for_host`（桌面按 `surf-<host>`、安卓按当前会话 label）向内容 webview eval toast，因此右键 HTTP 下载、blob/data 导入和页面自发下载共用同一个成功/失败反馈出口——安卓也没有例外。
 
-桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。
+桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。`file://` 指向 WPE 壁纸目录时
+（`wpe-import` / `local-import` 的失败项重试）同样进目录分支。
+
+### 目录来源：Wallpaper Engine 壁纸目录
+
+`PostprocessSource::Path { path, relocate_to }` 的 `path` 是目录时，在推断 MIME 之前分流到 `postprocess_wpe_dir`
+（`wpe` feature；非 `wpe` 构建直接报「此版本不支持」）。它只是薄包装，入库由 `wpe-import`、local-import、文件夹同步与
+下载四个入口共用的 `crawler::wpe_import::ingest_wpe_dir` 完成，步骤、命名与目录哈希见
+[WPE_IMPORT.md](../wpe/WPE_IMPORT.md) 第四节。与文件流程的对应关系：
+
+| | 文件 | 目录（WPE 壁纸） |
+|---|---|---|
+| 类型判定 | `infer` 推断 MIME | `project.json` 的 `type`，不受支持即报错、源不动 |
+| hash / size | 文件 SHA-256 / 文件大小 | 目录哈希 / 目录内全部文件总字节数 |
+| 去重 | 「自动去重」开启时按 hash | 同左；原地入库另按 `local_path` 幂等 |
+| `relocate_to: Some` | 占坑目标名后搬运文件 | `delete_source` 时整目录移动（`move_dir_unique`），否则整目录复制；重名换 `名(1)` |
+| 去重命中且 `relocate_to: Some` + `delete_source` | 删源文件 | 删源目录（下载产物）；`relocate_to: None` 时不删任何东西 |
+| `plugin_id` / metadata | 调用方传入 | 恒为 `wpe-import` + `project.json` 原文，调用方的 `metadata_id` 忽略 |
+| 缩略图 / 兼容副本 | 生成 | 缩略图直接引用作者的 `preview.*`；只有视频行有 `compatible_path` |
+
+返回值与文件同义（`Ok(true)` 新增、`Ok(false)` 命中已有行），任务计数、下载状态切换、失败记录仍由
+`postprocess_downloaded_image` 的外层统一处理。
+
+### `relocate`：把任务 VFS 里的文件或目录移走
+
+`Kabegame.downloadImage(vfsPath, { relocate: true })`（V8 的 `parse_download_opts` 与 WebView 的 `crawl_download_image`
+都读这个选项）只在 URL 解析为 `task-vfs` 时保留，其余来源忽略；`DownloadRequest.relocate` 把它带到 worker。
+
+worker 在 `file://` 分支之后处理：`task-vfs` + `relocate` 时**不下载**，`task_vfs::resolve_relocate_source` 经
+`get_run_by_handle` → `vfs.host_path_for_write` 解析出宿主路径，直接以
+`PostprocessSource::Path { path, relocate_to: Some(images_dir) }` + `delete_source = true` 进后处理：文件走原有的搬运
+（Unix 同设备硬链接零拷贝），目录走上一小节的目录分支。去重命中时源被删除，所以调用返回后这个 VFS 路径不再存在。
+
+- 要求写权限：只读的 `input` 挂载移不走；挂载根本身（`/{handle}/tmp` 等）、带 `.` / `..` 的路径也拒绝。
+- 源自身或目录里任何一层有符号链接时拒绝：移出 VFS 之后就没有 VFS 的越界校验了。
+- 解析失败按下载失败处理（任务日志 + 失败记录 + `Failed`）。失败记录不保存 `relocate`，重试按普通 `task-vfs` 下载处理
+  （任务结束后 handle 已失效，会直接失败）。
+- 不带 `relocate` 的 `task-vfs` 照旧整份读进下载缓冲再后处理，源文件留在 VFS；此时路径是目录会因打不开而失败。
+- Android 没有输出目录：文件照溢写文件的路径处理（`relocate_to: None`，复制进系统媒体库后删除临时文件），目录不支持。
 
 ### 畅游一键下载与页面快照
 

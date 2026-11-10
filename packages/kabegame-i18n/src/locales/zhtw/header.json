@@ -37,6 +37,9 @@
   "backfillTitle": "更新資料庫",
   "backfillWaiting": "排隊中",
   "backfillFailed": "資料庫背景更新失敗（{name}），下次啟動時會繼續",
+  "backfill": {
+    "wpe_dir_hash": "重新計算 Wallpaper Engine 桌布的內容指紋"
+  },
   "viewLogs": "查看日誌",
   "logs": {
     "title": "應用日誌",

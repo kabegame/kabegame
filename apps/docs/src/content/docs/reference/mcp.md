@@ -43,7 +43,7 @@ MCP、JSON-RPC 与事件订阅共用同一端口。
 |---|---|
 | `POST /rpc/{method}` | JSON-RPC 2.0；URL 方法名须与 body 一致，默认只读，写方法需添加 `?super=1`；兼容旧入口 `/rpc` |
 | `GET /events` | SSE 事件流；连接后先收到 `connected` |
-| `GET /file/{*path}` | 读取图库中已登记的本地文件；`path` 为绝对路径 |
+| `GET /file/{*path}` | 读取图库中已登记的本地文件；`path` 为绝对路径。Wallpaper Engine 壁纸的 `path` 是目录：返回文件清单 `{ type, files: [{ path, size }] }`，再用 `/file/<目录>/<相对路径>` 取目录里的文件 |
 | `GET /thumbnail/{*path}` | 读取图库缩略图；`path` 为绝对路径 |
 | `GET /compatible/{*path}` | 读取兼容格式；`path` 为绝对路径 |
 | `GET /__ping` | 返回 `ok` 的存活探测 |

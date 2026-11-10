@@ -20,6 +20,7 @@ import {
   type GalleryFilterSet,
   type GallerySortField,
 } from "./galleryPath";
+import type { GallerySearchPathMode } from "./galleryQuery";
 import { formatTimeFilterDetail } from "./galleryTimeFilterMenu";
 import { facetValueLabel, mediaFormatLabel } from "@/composables/useAdvancedQueryFacets";
 
@@ -67,6 +68,16 @@ export function gallerySortFieldLabel(field: GallerySortField, t: TFn): string {
     case "random":
       return t("gallery.sortByRandom");
   }
+}
+
+/** 搜索维度（勾选项）的名字：搜索下拉与收藏视图的组合展示共用。 */
+export function gallerySearchModeLabel(mode: GallerySearchPathMode, t: TFn): string {
+  if (mode === "metadata") return t("gallery.searchModeMetadata");
+  if (mode === "native-metadata") return t("gallery.searchModeNativeMetadata");
+  if (mode === "local-path") return t("gallery.searchModeLocalPath");
+  if (mode === "url") return t("gallery.searchModeUrl");
+  if (mode === "label") return t("gallery.searchModeLabel");
+  return t("gallery.searchModeDisplayName");
 }
 
 /** 某个排序维度下「升序 / 降序」各自的完整说法（安卓 picker 与折叠菜单标签用）。 */

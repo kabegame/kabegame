@@ -76,6 +76,11 @@ export interface PopconfirmProps {
    * @description Indicates the reference element to which the popper is attached
    */
   virtualRef?: ElTooltipTriggerProps['virtualRef']
+  /**
+   * @description kabegame: extra class appended to the popper (the base `el-popover` class is kept).
+   * Used to mark the popper so an enclosing layer can ignore clicks on it.
+   */
+  popperClass?: string
 }
 
 /**

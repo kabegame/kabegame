@@ -47,7 +47,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## MCP（`mcp/`）
 
 - [mcp/MCP_SERVER.md](mcp/MCP_SERVER.md)
-  - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由，MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、不可列举的 `_kb_*` 全局续接段，以及画廊末两段 `_kb_x<N>x/<数字>`（原始 images 根仍用 `x<N>x/<数字>`）的 500 行分页护栏；并说明为什么不能在 `gallery_all_router.json5` 加 limit。
+  - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由（`/file` 对目录型 WPE 行返回文件清单、对目录内文件流式返回），MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、不可列举的 `_kb_*` 全局续接段，以及画廊末两段 `_kb_x<N>x/<数字>`（原始 images 根仍用 `x<N>x/<数字>`）的 500 行分页护栏；并说明为什么不能在 `gallery_all_router.json5` 加 limit。
   - 适用场景：新增或排查桌面 Web 服务器、RPC/SSE、MCP 资源/工具/能力开关；维护 PathQL 发现、全局段说明与分页护栏；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
 
 ## Web 版（`web/`）
@@ -94,6 +94,21 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；路由只保存不含分页尾的 `viewBody`，`usePagedGallery` 本地持有页码并通过唯一的 `withPaged(viewBody, pageSize, page)` 生成 `rowsPath`，页大小唯一来自 `settings.galleryPageSize`，改变时保持旧页首张图位置；行取数出口通过 `toLookupRowsPath` 转为 `filter/…/~~/rank/~~p/lookup/gallery`（分页路径仍供 loadedKey / 校验 / 定位，rows 观察方使用转换后的 key），`pathql_fetch` 行读取与 `pathql_all` 计数批分开维护，计数批在阻塞线程钉住连接并开读事务，分子与 adapter 可选分母同一 WAL 快照，按序返回、整批失败（非 SQL 的 `plugin://` 不受快照约束），翻页只读行；ImageGrid 经 `services/kbEvents`（rxjs）维护行与总数：事件源 `kbEvent$` 与 pathql 核心 rows / all 数据源分离，行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批，ImageGrid 向工具栏注入 `{ total, unfilteredTotal }`，唯一请求入口 `pathqlRequest$.next` 即发即返回，主动请求只有事件窗口与用户操作（路径变化、手动刷新、`ctx.mutate` 完成后）两条通路，每个 key 维护 pending 窗口（任一请求返回即取消更早的 pending），观察方只看最后可得的数据与最新请求的 loading / error；adapter `refreshOn` 每条只对一种事件（写命令不再带 `view` / 返回快照），`ctx.patch` 就地改行，后端字段补丁经 `imagePatches$`（单图 / 多图补丁共用窗口，收藏与隐藏成员分别防抖合并，ImageGrid 与预览弹窗共用）；`images-added` 携带完整行、`images-deleted` 只带 id，`image-changed { patch }` / `images-change { patches }` 按图片数量分流，同流补丁按字段依赖 / 查询 / 排序判断是否触发查询，新增按顶层条件与归属判断，网格行删除只比较当前持有行、总数默认对任何删除刷新，画册以 deletesViaMembership 改由本画册成员删除定位；隐藏只发成员事件，hide 开启不打灰而刷新剔除，裸 id 预览字段只补丁；删除 / 清理任务发 taskId 置空补丁并离开当前任务详情；500ms 批次合并、行/总数独立 `seq`、画册 `ancestorPath` 相关性、wildcard 粗过滤和防闪回协议；Phase E 的画册行增删、移动与单条 / 批量补丁，成员增删 / 排序分流、隐藏即隐藏画册自身成员增删（hide 开刷新、关时只打 isHidden 补丁，删图用 imagesDeleted 区分），已持有子孙的路径前缀改写；Phase F 收藏只补丁、无画册 / 标签搜索共用触发、页头按画册类型计数与树分区刷新；写入方只请求自身 key（无本地事件投递）、预览标签面板的观察方例外，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。
   - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `rowsQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
 
+- [gallery/SAVED_VIEWS.md](gallery/SAVED_VIEWS.md)
+  - 主题：查询行 ⋯ 视图菜单（只剩轮播与收藏视图，chip 显隐开关已删除）的收藏视图。
+    - **数据**：前端 Dexie `kbg-saved-views`，存「查询体」，即过滤 + 排序，无根前缀 / hide / no-album / 分页尾；随机排序不带种子。
+    - **来源**：按 ImageGrid adapter 分区，所有画册 / 任务 / 站点各共用一份；由扩成 `{ path, source, pathFor }` 的 `gridViewKey` 注入，各页不传 props。
+    - **名字**：可空，为空即用路径；显示名不分大小写唯一，路径同来源唯一。
+    - **排序**：面板打开时读一次、打开期间冻结；点一行只应用，收起时才给最后应用的那条记最后使用。
+    - **编辑**：改名，或用当前视图更新（先预览差异，确定才写），只读组合展示。
+    - **移除**：popconfirm。
+    - **嵌套弹层**：靠组件库的 `clickOutsideIgnore` / popconfirm `popperClass` 不关面板；紧凑档改对话框。
+    - **画廊路径**：不再恢复上次浏览路径，`gallery-path` 全平台走 URL query；非画廊页点画廊过滤链接改为显式跳 `/gallery`。
+  - 适用场景：
+    - 改收藏视图的存储 / 排序 / 冲突规则；
+    - 排查点编辑或移除时 ⋯ 面板被关掉、列表顺序不对或不更新、画册间收藏不共享、轮播来源 ↻ 不显示；
+    - 排查画廊重启后视图被重置（预期行为），或在任务 / 畅游页点画廊过滤链接把本页路径冲掉。
+
 - [gallery/LABEL_ALBUMS.md](gallery/LABEL_ALBUMS.md)
   - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子按 PathQL 列举计数、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 的完整路径子串匹配与不相关 `IN` 子查询写法（为何不用相关 EXISTS / JOIN + group_by），以及分页查询树 / 选择器 / 预览面板。
   - 适用场景：新增或排查标签画册的建立、移动、改 key；插件下载或迁移没有挂上标签；标签搜索结果不对或变慢；给预览弹窗注入 app 侧信息面板。
@@ -101,13 +116,17 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## 本地文件夹（`local-folder/`）
 
 - [local-folder/LOCAL_FOLDER_SYNC.md](local-folder/LOCAL_FOLDER_SYNC.md)
-  - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、`make_visible` 唤醒 + 500ms 快照轮询、延迟卡片和逐任务 toast；并记录手动增删边界（Del/右键删除源文件、拖入经 `local-import` 扁平复制到 `sync_folder`、新文件探测到下载占用标记即放弃导入并由下载器补挂、数据库成员写守卫保持只读）。
-  - 适用场景：新增或排查本地文件夹监听与同步；理解目录删除为什么保留图片行；维护取消、抢占、进度和事件溢出行为。
+  - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、`make_visible` 唤醒 + 500ms 快照轮询、延迟卡片和逐任务 toast；并记录手动增删边界（Del/右键删除源文件、拖入经 `local-import` 扁平复制到 `sync_folder`、新文件探测到下载占用标记即放弃导入并由下载器补挂、数据库成员写守卫保持只读）；以及 **WPE 壁纸子目录按「文件」对待**（挂到父画册、不建子画册、目录内部变化忽略、整个目录消失即删行，已有子画册的目录保持原样，快速路径下存量目录要等下一次变化才识别）。
+  - 适用场景：新增或排查本地文件夹监听与同步；理解目录删除为什么保留图片行；维护取消、抢占、进度和事件溢出行为；排查同步目录里的 Wallpaper Engine 壁纸被拆成散图 / 多出子画册 / 删目录后行还在。
 
 ## Wallpaper Engine 壁纸（`wpe/`）
 
 - [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
-  - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
+  - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`，`plugin_id` / metadata 由宿主定为 `wpe-import` + `project.json`）、
+    **四个入口共用的入库函数 `ingest_wpe_dir`**（`wpe-import`、local-import、插件下载经 `postprocess_downloaded_image` 的目录分支，文件夹同步直接调用；
+    原地入库按路径幂等，下载产物整目录移到下载目录、去重命中时删除）、**目录哈希**（`wpe::dir_hash`：相对路径排序 + 域前缀，`hash` / `size` 取整个目录，
+    存量行由回填作业 `wpe_dir_hash` 重算）、**经 Web 服务器传输**（`/file/<目录>` 返回文件清单、目录内文件流式返回，`kabegame-server` 插件 + SDK
+    `downloadWpeWallpaper` 把另一台机器上的壁纸整目录传过来）、格式表占位条目、
     **`wpe` feature 门控**（桌面主程序与 CLI 开启，Android / Web 不开；三个桌面平台都能导入与预览，Linux 没有桌面壁纸）、Steam 库发现与手选文件夹的两层扫描、导入时的 `WPE/<genre|rating|feature>/<tag>` 标签（作者 `tags` + WPE 工坊缓存的 Steam 标签，缓存没有时从 `project.json` 推导；key 是 Steam 原文，名称按语言翻译）、WPE 安装目录设置 `wpeEngineDir`（为空时查 Steam 库或从库内壁纸往上找并写入，壁纸设置可覆盖）、`wpe-import` 内建任务与「壁纸」收集入口、
     删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WallpaperStage` 独立 web 层（sandbox `file:` iframe，`src` 直接取壁纸目标的 `webEntry`，由补丁 05 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
@@ -120,6 +139,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     **封面**：预览的右键菜单与工具条把当前画面设为壁纸封面（与暂停、清空脚本存储同为预览专属菜单项，由预览弹窗处理、画廊菜单没有），截主窗口整窗（不用 `clip`，它会让整个窗口跳变）再按画布比例裁，写进 `thumbnails_dir`、换 `thumbnail_path`，作者的 `preview.*` 不动、可恢复；画面确定实时渲染之前置灰（场景看 `WallpaperStage` 的 `sceneLive`，网页看 `ready`），后端不记实时状态，恢复默认封面在详情栏，设置页没有封面按钮；
     **音频与媒体集成**（Phase 8，只 Windows）：页面登记音频 / 媒体监听时垫片调 `wpe_web_media_subscribe` 交出 Tauri Channel（只回本 frame），订阅按 `(label, SubframeId, 类型)` 归属调用方 frame（tauri 补丁 18 公开 `ipc::CallerFrame`），`SubframeDestroyed` 即释放、同 frame 同类替换、窗口销毁释放整个 label（Channel 发往已销毁 frame 被静默丢弃、发送不失败，不能靠发送失败）；`WpeMediaHub` 有订阅才开 WASAPI 回环（33ms 一帧、定时器与采集包解耦、静音补零衰减）与 SMTC 监视（设置「媒体集成」`wpeMediaIntegration` 默认开），自定频谱算法常数在 `SpectrumTuning`，封面 PNG data URL 与量化直方图配色 `rgb()`；`audio` 只对 `supportsaudioprocessing: true` 放行。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
+    本地导入把壁纸目录拆成散图、同一张壁纸入库两次或去重不命中、下载的壁纸目录没有移到下载目录 / 临时目录有残留、
+    `/file` 取壁纸清单或目录内文件 404、mac 上经 `kabegame-server` 传 Windows 壁纸失败、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 页面 `fetch` 同目录文件失败或越界读被放行（`deny file:` 日志，看 `requester`）/ 新导入的网页壁纸被闸门拒绝（目录索引没跟上）/ 预览画布比例或交互 / 切走后渲染进程未回收、非 Windows 平台的 WPE 行为；
     排查网页壁纸页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应 / 桌面点击或移动不触发页面事件；
@@ -165,16 +186,16 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
-  - 主题：当前下载器全链路与模块边界。涵盖任务级 dry-run 的下载/metadata/local-import 三个 nop 点、全局与逐任务下载并发闸门（pending + active 原子判断、运行中实时调整）、`mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、单图字节进度写入 `active_downloads` 并由前端 500ms 快照轮询、Android 通知 1s ticker、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定、入库后 best-effort 原生元数据（EXIF/PNG chunk）逐图计算与一图一行存储（`image_metadata` 表）、桌面落盘（目标名原子占坑 + 原生占用标记：Unix `flock` / Windows share mode，Windows 只经占坑句柄写，守卫持有到入库后才释放，新建文件入库后按直接父目录补挂文件夹画册）、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务的 busy 快照轮询、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理，以及只对实际插入发送、按单画册拆分的 **`album-images-added`**（删除为 deleted、排序才是 change，隐藏只发隐藏画册自身事件）（连同图片新增 / 删除 / 字段补丁与 `hidden-cleanup-finished`）。
-  - 适用场景：下载任务生命周期、偶发 `UNIQUE constraint failed: images.local_path` 或同名图片互相覆盖、下载目录与文件夹画册重叠、Android `content://` 与 HTTP/HTTPS 下载差异、畅游一键下载与取消、页面快照回看、JS 爬虫或畅游窗口的页面自发原生下载、`blob:` / `data:` / MSE 媒体下载、会话 VFS 写入与清理、MSE 多 SourceBuffer 显式合流、surf 导入与终态反馈、源文件删除/回收站护栏、清空隐藏画册、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
+  - 主题：当前下载器全链路与模块边界。涵盖任务级 dry-run 的下载/metadata/local-import 三个 nop 点、全局与逐任务下载并发闸门（pending + active 原子判断、运行中实时调整）、`mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、单图字节进度写入 `active_downloads` 并由前端 500ms 快照轮询、Android 通知 1s ticker、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举；`Path` 来源是目录时按 Wallpaper Engine 壁纸目录入库，整目录移动 / 去重时删除）、`downloadImage` 的 `relocate` 选项（只对任务 VFS 路径生效，worker 不下载、直接把 VFS 里的文件或目录交给后处理移走）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定（命中 WPE 行时不改挂）、入库后 best-effort 原生元数据（EXIF/PNG chunk）逐图计算与一图一行存储（`image_metadata` 表）、桌面落盘（目标名原子占坑 + 原生占用标记：Unix `flock` / Windows share mode，Windows 只经占坑句柄写，守卫持有到入库后才释放，新建文件入库后按直接父目录补挂文件夹画册）、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务的 busy 快照轮询、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理，以及只对实际插入发送、按单画册拆分的 **`album-images-added`**（删除为 deleted、排序才是 change，隐藏只发隐藏画册自身事件）（连同图片新增 / 删除 / 字段补丁与 `hidden-cleanup-finished`）。
+  - 适用场景：下载任务生命周期、偶发 `UNIQUE constraint failed: images.local_path` 或同名图片互相覆盖、插件把 VFS 里的文件或壁纸目录交给下载器（`relocate`）后源没被移走或报错、去重命中后 WPE 行的详情 / 属性面板失效、下载目录与文件夹画册重叠、Android `content://` 与 HTTP/HTTPS 下载差异、畅游一键下载与取消、页面快照回看、JS 爬虫或畅游窗口的页面自发原生下载、`blob:` / `data:` / MSE 媒体下载、会话 VFS 写入与清理、MSE 多 SourceBuffer 显式合流、surf 导入与终态反馈、源文件删除/回收站护栏、清空隐藏画册、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
   - 主题：视频摄入（下载/导入压缩）的平台门控机制。桌面 standard/CLI 使用 rsmpeg/FFmpeg；Android 走 Kotlin `AndroidVideoCompressProvider` 与系统媒体 API，不编译 FFmpeg。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。
   - 适用场景：新增视频处理调用点；排查桌面 FFmpeg 构建环境；排查 Android content URI 视频预览/维度读取；理解 `deno task build:ffmpeg` 与桌面构建的关系。
 
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
-  - 主题：任务列表与运行配置的 PathQL 按需加载；任务与配置累计窗口分页、运行配置最新任务相关子查询 join、chip 过滤/计数/排序、任务 / 配置列表累计行与总数同批观察、任务状态计数与详情观察方、事件刷新及高频字段补丁、写后事件刷新、推荐导入态 plugin-changed 观察刷新，以及任务右键菜单与再次执行的数据流。
-  - 适用场景：任务数量多时打开抽屉卡顿、`loadTasksPage` 与 `get_tasks_page` 行为；排查右键菜单层级、菜单动作或三类任务重跑参数回填。
+  - 主题：任务列表与运行配置的 PathQL 按需加载；任务与配置累计窗口分页、运行配置最新任务相关子查询 join、chip 过滤/计数/排序、任务 / 配置列表累计行与总数同批观察、任务状态计数与详情观察方、事件刷新及高频字段补丁（`useTaskRowPatches` 共用）、写后事件刷新、推荐导入态 plugin-changed 观察刷新、**重试链观察方**（`tasks://retry_root/<原始任务 id>` 走 `idx_tasks_retry_root`、只在弹出层打开期间观察、本链新增 / 已持有行删除才刷新、被删的几次补占位），以及任务右键菜单与再次执行的数据流。
+  - 适用场景：任务数量多时打开抽屉卡顿、`loadTasksPage` 与 `get_tasks_page` 行为；排查右键菜单层级、菜单动作或三类任务重跑参数回填；排查「重试记录」弹出层不刷新、占位行不对或跳原始任务失败。
 
 ## 爬虫（`crawler/`）
 
@@ -211,12 +232,12 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：插件升级后历史图片详情或搜索片段变化；排查 metadata 迁移失败或很慢、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
-  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局、`crawl(common, custom)` 的 `common.isDryRun` 与 `Kabegame.*` 宿主桥（含每任务隔离的 `Kabegame.fs` 与虚拟路径媒体工具 `Kabegame.ffmpeg`）。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**文件系统挂载**（`data` / `cache` / `tmp` 可写，路径类变量冻结出的只读 `input`，含 Android `content://` 单文件）；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、当前 fingerprint=4、V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化；**每任务独占 current_thread runtime**，不可借用多线程 runtime 的 `Handle::block_on`，否则 deno_core op 轮询任务跨线程竞争、任务卡死或进程 abort）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛；WebView 后端另见 [crawler/ANDROID_WEBVIEW_CRAWLER.md](crawler/ANDROID_WEBVIEW_CRAWLER.md)）。
+  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局、`crawl(common, custom)` 的 `common.isDryRun` 与 `Kabegame.*` 宿主桥（含每任务隔离的 `Kabegame.fs` 与虚拟路径媒体工具 `Kabegame.ffmpeg`）。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**文件系统挂载**（`data` / `cache` / `tmp` 可写，路径类变量冻结出的只读 `input`，含 Android `content://` 单文件）；`downloadImage` 的 `relocate` 选项（VFS 路径移走而不是复制，目录即 Wallpaper Engine 壁纸目录）与 SDK 的 `downloadWpeWallpaper`；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、当前 fingerprint=4、V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化；**每任务独占 current_thread runtime**，不可借用多线程 runtime 的 `Handle::block_on`，否则 deno_core op 轮询任务跨线程竞争、任务卡死或进程 abort）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛；WebView 后端另见 [crawler/ANDROID_WEBVIEW_CRAWLER.md](crawler/ANDROID_WEBVIEW_CRAWLER.md)）。
   - 适用场景：编写/迁移 V8 插件；排查 startup snapshot 生成/失效/fallback、`Kabegame.fs` / `input` 只读挂载 / `Kabegame.ffmpeg`、`fetch`、`URL`、`crypto`、`DOMParser`；更新 JS 插件模板和类型声明；排查 V8 任务偶发卡死不动（`RefCell already borrowed`）或跑插件时进程闪退；排查 V8 后端 Android 交叉编译（依赖门控 / 自建预编译产物 / NDK 链接）或网络/`Response`/`Headers` 行为。
 
 - [crawler/TASK_CONFIG.md](crawler/TASK_CONFIG.md)
-  - 主题：收集弹窗的三层配置（plugin config ⊂ task config ⊂ 自动任务 `RunConfig`）、任务级 `isDryRun` 的冻结与继承规则、插件变量的前端转换与后端合并 / 校验 / 链式 `when` 过滤、路径类变量在冻结时解析成只读 VFS 挂载并把运行时 config 改写成虚拟路径，以及全局唯一 `taskConfig` 的回填与交互规则。
-  - 适用场景：改动收集弹窗、任务「再次执行」、「以此配置运行」、插件变量表单或运行配置回填；排查默认值优先级、显式 `null`、`required` 拦截、隐藏字段仍被提交、`when` 链未传播，或路径变量解析 / 改写失败。
+  - 主题：收集弹窗的三层配置（plugin config ⊂ task config ⊂ 自动任务 `RunConfig`）、任务级 `isDryRun` 的冻结与继承规则、**任务级失败重试**（`retryCount` 0–10、`retry_attempt` / `retry_root_id` 重试链、只对运行期失败在 worker 收尾时立即按冻结快照重发新任务、运行前失败与取消不重试、`add_and_submit` 共用提交）、插件变量的前端转换与后端合并 / 校验 / 链式 `when` 过滤、路径类变量在冻结时解析成只读 VFS 挂载并把运行时 config 改写成虚拟路径，以及全局唯一 `taskConfig` 的回填与交互规则。
+  - 适用场景：改动收集弹窗、任务「再次执行」、「以此配置运行」、插件变量表单或运行配置回填；排查默认值优先级、显式 `null`、`required` 拦截、隐藏字段仍被提交、`when` 链未传播，或路径变量解析 / 改写失败；排查失败后没有重试、重试次数不对、取消后仍重试、定时任务的重试丢了运行配置归属。
 
 - [../third-patches/deno/README.md](../third-patches/deno/README.md)
   - 主题：`deno_core` 的上游 vendor base 与 kabegame patch series。`third/deno` = `denoland/deno` monorepo submodule（pin `v2.9.0`，`libs/core` 与 crates.io deno_core 0.405.0 逐字节一致），经 `[patch.crates-io] deno_core = third/deno/libs/core` 单一来源消费；4 个 patch（扩展 JS 内嵌 / 共享 V8 platform 初始化 / Android Bionic errno / 内嵌行为 feature 门控）只作用于 `libs/core`，`deno task patch deno` 按 reset 模型全量应用。Deno CLI 一律使用官方二进制，与这组 patch 无关；`serde_v8`/`deno_ops` 作为 monorepo path 依赖单份解析（无 path-vs-registry 重复）。
@@ -349,6 +370,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 - [storage/DB_MIGRATIONS_AND_BACKFILLS.md](storage/DB_MIGRATIONS_AND_BACKFILLS.md)
   - 主题：数据库两类迁移——同步 schema 迁移（`user_version` 顺序）与可恢复的异步回填作业（`Backfill` 注册表 + `backfill_jobs` 表，按批 `BEGIN IMMEDIATE` 提交、同事务写回 rowid 游标与进度、崩溃续跑，`BackfillCtx` 的 `with_conn` / `block_on` / `commit`）；`Migration.min_backfill_version` 的同步排干语义与「回填只碰引入时就存在的列」不变量、空迁移登记作业、全新安装不登记、平台门控（被依赖时标记跳过）、CLI 只跑阻塞阶段、`BackfillService` 后台按序运行与忙碌卡片 / `backfill-finished`、失败下次启动重试、`KABEGAME_BACKFILL_SYNC_THROUGH` 调试开关；以及三段式启动（`init_pre` 主线程建窗 → 线程内 `init_heavy_globals` → 主线程 `init_post` → 后台回填 → `Ready`）、`startup_state` watch / `startup-progress` / `get_startup_state`，前端启动页（Init app）mount / unmount 与不安装 i18n 的原因。
   - v049 同步规范化 `images.type` 并建索引；迁移 SQL 与 Rust 写入口的格式表外规则有比对测试，分页执行计划约束见 `provider-dsl/RULES.md` §2.2。
+  - v051 是空迁移，登记发布态第一个回填作业 `wpe_dir_hash`：把存量 WPE 壁纸行的 `hash` / `size` 从入口文件重算为目录哈希与目录总字节数（每批 4 行、不持锁读盘、目录缺失跳过；跑完之前存量行按目录哈希查不到）。
   - 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，启动页 `analyze` 阶段，失败只告警；CLI 不跑）。
   - 适用场景：新增需要补算数据的迁移或回填作业；排查启动统计刷新耗时或执行计划随统计变化；某个迁移要改动回填读写的列；排查启动卡在启动页、启动页报错、回填不前进 / 重复处理 / 失败重试、忙碌卡片不消失；调整桌面 / Android 启动顺序或主线程要求。
 

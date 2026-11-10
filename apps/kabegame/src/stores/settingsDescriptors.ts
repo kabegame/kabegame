@@ -264,19 +264,10 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("previewSwitchDirection", "auto"),
     frontendLocal("previewSlideshowSpeed", "fast"),
     frontendLocal("linkOpenMode", "unconfigured"),
-    // 画廊工具条 chip：默认全开——新用户先看到完整工具条，再自己裁。
-    frontendLocal("galleryChipSearch", true),
-    frontendLocal("galleryChipDate", true),
-    frontendLocal("galleryChipPlugin", true),
-    frontendLocal("galleryChipMediaType", true),
-    frontendLocal("galleryChipAspect", true),
-    frontendLocal("galleryChipSize", true),
-    frontendLocal("galleryChipSortField", true),
-    frontendLocal("galleryChipSortOrder", true),
   ];
   if (!IS_WEB) {
-    localEntries.push(frontendLocal("gallery-path", ""));
-    // album-detail-path 照 gallery-path 平台分化：桌面/Android 用 localStorage，query 注册见下方 IS_WEB 分支
+    // album-detail-path 平台分化：桌面/Android 用 localStorage，query 注册见下方 IS_WEB 分支。
+    // gallery-path 不在这里：画廊不再恢复上次浏览路径，全平台走 query（见下方 queryEntries）。
     localEntries.push(frontendLocal("album-detail-path", ""));
   }
   if (!IS_WEB) {
@@ -313,7 +304,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     for (const entry of webReadonlyEntries) assignEntry(map, entry);
   }
 
-  const queryEntries = [
+  const queryEntries: Array<[AppSettingKey, SettingDescriptor]> = [
     query("autoConfigTab", "tab", autoConfigTabCodec),
     // 与 autoConfigTab 共用 `tab` 参数名：各自只在自己的页面读取
     query("pluginBrowserTab", "tab", pluginBrowserTabCodec),
@@ -321,15 +312,13 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     query("superMode", "super", booleanQueryCodec),
     query("task-detail-path", "path"),
     query("surf-images-path", "path"),
+    // 画廊当前视图只活在 URL 里：会话内经侧栏 lastGalleryRoute 带回，重启后回到默认视图。
+    query("gallery-path", "path"),
     // 当前选中画册的祖先 id 链：query 参数名用 "album"，短且不与 "path" 冲突，全平台统一
     query("albumIdPath", "album"),
   ];
   if (IS_WEB) {
-    queryEntries.push(
-      // @ts-expect-error 非web下用localStorage
-      query("gallery-path", "path"),
-      query("album-detail-path", "path"),
-    );
+    queryEntries.push(query("album-detail-path", "path"));
   }
   for (const entry of queryEntries) assignEntry(map, entry);
 

@@ -9,7 +9,8 @@
 |---|---|---|
 | core | `src-tauri/kabegame-core/src/storage/migrations/mod.rs` | `MIGRATIONS` 注册表、`Migration.min_backfill_version`、`run_pending` 两阶段、`StartupProgress`、`BACKFILL_JOBS_DDL` |
 | core | `src-tauri/kabegame-core/src/storage/migrations/backfill.rs` | `Backfill` / `BatchOutcome` / `BackfillCtx`、`BACKFILLS` 注册表、`enqueue_introduced_at`、`pending_jobs`、`run_to_completion`，以及框架测试 |
-| core | `src-tauri/kabegame-core/src/storage/migrations/backfills/` | 作业实现目录（发布态为空） |
+| core | `src-tauri/kabegame-core/src/storage/migrations/backfills/` | 作业实现目录（当前有 `wpe_dir_hash`） |
+| core | `src-tauri/kabegame-core/src/storage/migrations/v051_wpe_dir_hash.rs` | 空迁移，只为登记 `wpe_dir_hash` |
 | core | `src-tauri/kabegame-core/src/storage/migrations/v048_backfill_jobs.rs` | 建 `backfill_jobs` 表（`init::create_all_tables` 共用同一 DDL） |
 | core | `src-tauri/kabegame-core/src/storage/backfill_service.rs` | `BackfillService`：后台按序跑剩余作业，忙碌快照 + `backfill-finished` |
 | core | `src-tauri/kabegame-core/src/storage/mod.rs` | `Storage::init_global_for_app`、`refresh_query_stats`（启动统计刷新） |
@@ -67,6 +68,21 @@ v049 在同步迁移事务内创建 `idx_images_type`，并一次性修正 `imag
 `normalize_stored_media_type`；格式表外 ASCII 输入有 SQL / Rust 规则逐条比对测试，另有迁移幂等与执行计划回归。
 发布态回填注册表没有作业读写该列，`min_backfill_version` 为 `None`；新库在 `init` 同步创建索引。
 遗留 schema 默认值 `image` 保留，但生产写入必须显式提供规范化值。分页索引用法见 `../provider-dsl/RULES.md` §2.2。
+
+## v051：WPE 行的目录哈希（回填作业 `wpe_dir_hash`）
+
+v051 是空迁移，只为登记回填作业 `wpe_dir_hash`（`backfills/wpe_dir_hash.rs`）。WPE 壁纸行（`type` 以 `x-wpe/` 开头）的
+`hash` / `size` 原来取入口文件，现在入库统一写**目录哈希**与目录总字节数（`wpe::dir_hash`，见
+[`../wpe/WPE_IMPORT.md`](../wpe/WPE_IMPORT.md) 第四节），下载到本机已有的壁纸靠它判重；作业把存量行重算成同一口径。
+
+- 候选：`id > 游标 AND type GLOB 'x-wpe/*'`（走 `idx_images_type`），每批 4 行——一行是一个目录，可能有几个 GB。
+- 不持有连接读盘算 `digest_dir`，再在 `ctx.commit` 里 `UPDATE images SET hash, size WHERE id = ? AND local_path = ?`
+  （读盘期间行被删或改指别处时不写）。`size` 变了的行带 `{ size }` 字段补丁。
+- 目录缺失或读不了的行原样跳过并 `warn!`，不算失败。重算幂等：v051 之后入库的行算出来还是同一个值。
+- `platforms: || true`：目录哈希不受 `wpe` feature 门控；Android / Web 没有 `x-wpe` 行，一批空跑即完成。
+- 只读写 `hash` / `size`（v051 之前就存在的列），没有迁移依赖它（`min_backfill_version` 为 `None`），所以只在进入界面后由
+  `BackfillService` 后台跑；CLI 本地模式不跑；全新安装不登记。
+- **作业跑完之前，存量行按目录哈希查不到**：这段时间里下到本机已有的壁纸会多落一份（回归文档里有记）。
 
 ## 执行模型
 
@@ -181,7 +197,7 @@ setup (主线程)
 
 ## 历史验证
 
-框架落地时用两个临时作业做过 dev 真机验证（之后已删除，`BACKFILLS` 发布态为空）：
+框架落地时用两个临时作业做过 dev 真机验证（之后已删除；发布态的第一个作业是 v051 的 `wpe_dir_hash`）：
 `metadata_search_terms_rebuild`（v048 登记，为无映射的 metadata 按默认规则重建 `metadata_search_terms`；
 已知取舍：插件曾用 `searchTexts` 自定义过的行会按默认规则重建，下次插件升级的 `provideSearchTextList` 再覆盖）
 与 `image_compatible_path`（v049 空迁移登记，非 Android，复用整理的逐行兼容副本生成；每批遇到第一个真正生成的

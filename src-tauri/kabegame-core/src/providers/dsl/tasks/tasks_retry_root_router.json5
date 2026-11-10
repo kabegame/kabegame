@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_retry_root_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "tasks_retry_root_provider",
+            "properties": { "root_id": "${capture[1]}" }
+        }
+    }
+}

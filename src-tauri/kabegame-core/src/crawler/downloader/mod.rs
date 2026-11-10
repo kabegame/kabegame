@@ -45,6 +45,11 @@ pub(super) fn rebind_deduped_metadata(
     surf_record_id: Option<&str>,
     post_url: Option<&str>,
 ) {
+    // WPE 行的身份由宿主定：metadata 是 `project.json` 原文（属性面板与垫片直接读），
+    // `plugin_id` 恒为 `wpe-import`（详情模板按它选），换成下载插件自己的会全部失效。
+    if crate::media::image_type::is_wpe_type(existing.media_type.as_deref()) {
+        return;
+    }
     if !Settings::global().get_dedup_update_metadata() {
         return;
     }
@@ -870,7 +875,9 @@ pub enum PostprocessSource<'a> {
         output_dir: &'a Path,
         bytes: &'a [u8],
     },
-    /// 文件已在磁盘上；relocate_to = Some(dir) → 移动到 dir；None → 原地处理
+    /// 文件已在磁盘上；relocate_to = Some(dir) → 移动到 dir；None → 原地处理。
+    /// `path` 是目录时按 Wallpaper Engine 壁纸目录处理（见 `postprocess_wpe_dir`）：
+    /// 一个目录写成一行 `x-wpe/*`，`relocate_to` 为 `Some` 时整目录搬过去。
     Path {
         path: &'a Path,
         relocate_to: Option<&'a Path>,
@@ -878,6 +885,77 @@ pub enum PostprocessSource<'a> {
     /// Android content:// URI —— url 参数即为 URI；所有元数据通过 ContentIoProvider 解析，不在 Rust 持有字节。
     #[cfg(target_os = "android")]
     ContentUri,
+}
+
+/// 后处理的目录分支：`Path` 来源是 Wallpaper Engine 壁纸目录时，交给四个入口共用的
+/// [`crate::crawler::wpe_import::ingest_wpe_dir`] 入库。
+///
+/// 调用方传入的 `plugin_id` / `metadata_id` 不参与：WPE 行的身份由宿主定（见该函数说明）。
+/// 返回值与文件流程同义：`Ok(true)` 新增一行，`Ok(false)` 命中已有行；计数、状态切换与
+/// 失败记录仍由 [`postprocess_downloaded_image`] 的外层统一处理。
+#[cfg(feature = "wpe")]
+async fn postprocess_wpe_dir(
+    dir: &Path,
+    relocate_to: Option<&Path>,
+    delete_source: bool,
+    url: &Url,
+    task_id: Option<&str>,
+    output_album_id: Option<&str>,
+    custom_display_name: Option<&str>,
+    post_url: Option<&str>,
+    labels: &[LabelSpec],
+) -> Result<bool, String> {
+    use crate::crawler::wpe_import::{ingest_wpe_dir, WpeIngest, WpeIngested};
+
+    let ingested = ingest_wpe_dir(
+        dir,
+        WpeIngest {
+            task_id,
+            album_id: output_album_id,
+            relocate_to,
+            delete_source,
+            dedup_by_hash: Settings::global().get_auto_deduplicate(),
+            display_name: custom_display_name,
+            post_url,
+        },
+    )
+    .await?;
+    match ingested {
+        WpeIngested::Imported(image) => {
+            // 目录落在某个文件夹画册的 sync_folder 里时补挂（文件夹同步若抢先处理会按路径命中这一行）
+            #[cfg(not(target_os = "android"))]
+            link_into_folder_album(Path::new(&image.local_path), &image.id, output_album_id);
+            apply_download_labels(task_id, &image.id, labels, false);
+            Ok(true)
+        }
+        WpeIngested::Existing(existing) => {
+            apply_download_labels(task_id, &existing.id, labels, true);
+            if let Some(task_id) = task_id {
+                // 原地入库且路径相同是「这个目录已在库中」；其余是内容相同的另一个目录
+                let same_dir = relocate_to.is_none()
+                    && crate::wpe::normalize_local_dir(dir)
+                        .is_some_and(|dir| dir == Path::new(&existing.local_path));
+                let message = if same_dir {
+                    task_log_i18n(
+                        "taskLogWpeExisting",
+                        json!({ "path": &existing.local_path }),
+                    )
+                } else {
+                    task_log_i18n(
+                        "taskLogDedupByHash",
+                        json!({
+                            "currentUrl": url.to_string(),
+                            "existingId": &existing.id,
+                            "existingUrl": existing.url.as_deref().unwrap_or(""),
+                            "existingPath": &existing.local_path,
+                        }),
+                    )
+                };
+                emit_task_log(task_id, "warn", message);
+            }
+            Ok(false)
+        }
+    }
 }
 
 async fn persist_native_metadata_best_effort(
@@ -964,6 +1042,29 @@ pub async fn postprocess_downloaded_image(
 ) -> Result<bool, String> {
     match async {
         let is_surf_mode = surf_record_id.is_some();
+        // 目录来源：只可能是 Wallpaper Engine 壁纸目录，整个目录是一行，不走下面的文件流程。
+        if let PostprocessSource::Path { path, relocate_to } = &source {
+            if path.is_dir() {
+                #[cfg(feature = "wpe")]
+                return postprocess_wpe_dir(
+                    path,
+                    *relocate_to,
+                    delete_source,
+                    url,
+                    task_id,
+                    output_album_id,
+                    custom_display_name,
+                    post_url,
+                    labels,
+                )
+                .await;
+                #[cfg(not(feature = "wpe"))]
+                {
+                    let _ = relocate_to;
+                    return Err("此版本不支持 Wallpaper Engine 壁纸目录".to_string());
+                }
+            }
+        }
         // 根据不同来源计算 MIME 和哈希。图片/普通文件仍由 infer 负责格式判定；
         // Android content:// 由系统 ContentIoProvider 提供 MIME。
         let (inferred_mime, hash, hash_ms) = match &source {

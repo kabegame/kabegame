@@ -19,6 +19,7 @@ const pendingPreviewBoundary = ref<{ targetPage: number; direction: "next" | "pr
 const currentPage = ref(1);
 const routeStore = reactive({
   computedPath: "hide/sort/by-time/_kb_desc",
+  computePath: vi.fn(() => "hide/sort/by-time/_kb_desc"),
   navigate: vi.fn(async () => {}),
   syncFromUrl: vi.fn(),
 });

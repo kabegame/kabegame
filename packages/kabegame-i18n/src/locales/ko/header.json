@@ -37,6 +37,9 @@
   "backfillTitle": "데이터베이스 업데이트",
   "backfillWaiting": "대기 중",
   "backfillFailed": "데이터베이스 백그라운드 업데이트 실패 ({name}). 다음 실행 시 이어서 진행합니다",
+  "backfill": {
+    "wpe_dir_hash": "Wallpaper Engine 배경화면의 콘텐츠 지문 다시 계산"
+  },
   "viewLogs": "로그 보기",
   "logs": {
     "title": "앱 로그",

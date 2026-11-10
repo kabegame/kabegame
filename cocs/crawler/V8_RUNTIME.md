@@ -33,6 +33,7 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 - 权限分三层：虚拟 `/` 一律拒绝；`/{handle}` 只读；`/{handle}/{data|cache|tmp}/...` 可读写；`/{handle}/input/...` 始终只读（`Access::ReadWrite` 直接拒绝，硬链接也拒绝，复制到 `tmp` 允许）。`resolve()` 统一做词法 normalize、拒绝越界和软链接、校验当前任务 handle；`input` 分支另外拒绝子树内的任何软链接（用户选中路径在冻结时 canonicalize 一次）；`realPath` / `cwd` / `readLink` 等返回路径会反向翻译为虚拟路径。`umask` 是进程级设置，无法由路径沙箱约束，因此始终拒绝。
 - handle 只在任务注册期间有效。任务结束后调度器移除 handle 索引，旧虚拟路径无法再解析；插件不得把 `/{handle}/...` 写进持久配置或 metadata。底层 `data` 内容仍可在下一任务通过新的 `getRoot()` 访问。
 - `downloadImage()` 接受当前任务的虚拟路径并在宿主侧转换为内部 `task-vfs://` 下载；插件不能直接传 `task-vfs://`。这类入库记录使用占位 URL，不做 URL 去重，仍依靠内容 hash 去重。
+- `downloadImage(vfsPath, { relocate: true })`（4.7.0，V8 与 WebView 同形）：不把内容复制进下载缓冲，而是把 VFS 里的文件**或目录**直接交给后处理移到输出目录；去重命中时源被删除，调用之后这个路径不再存在。只在传入 VFS 路径时生效，其余来源忽略该选项。源必须在可写挂载（`data` / `cache` / `tmp`）上，只读的 `input` 移不走；挂载根本身、带 `.` / `..` 的路径、自身或内部含符号链接的源都被拒绝。**目录只能是 Wallpaper Engine 壁纸目录**（带 `project.json`，桌面端），而且必须带 `relocate: true`——不带时按文件读取会失败；这类目录的 metadata 由宿主取 `project.json`，`metadata` / `metadata_id` 被忽略。实现见 [DOWNLOADER_FLOW.md](../downloader-tasks/DOWNLOADER_FLOW.md) §6「`relocate`」。SDK 的 `downloadWpeWallpaper`（`@kabegame/plugin-sdk`）把「逐文件 `fetchToFile` 到 `tmp/wpe/<时间戳-随机>/` → `downloadImage(目录, { relocate: true })`」包成一个函数，并清理 12 小时以上的残留。
 - WebView 后端复用同一个 `PluginVfs` 安全边界，但只提供异步文件系统子集，且 `getRoot()` 返回 Promise。`Kabegame.ffmpeg` 的两个高层函数则与 V8 同形。V8 类型包 `@kabegame/types` 仍只声明 V8 的完整 API，不表示两后端其余能力等价。
 
 ### 虚拟路径媒体工具 `Kabegame.ffmpeg`
@@ -48,7 +49,7 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 - 删除 V8 专属 `fetchJson`；JSON 请求使用 `await (await fetch(url)).json()`。
 - `fetch` 会合并当前任务经 `Kabegame.setHeader()` 设置的请求头。
 - `fetch` 不按当前页自动解析相对 URL；需要 `new URL(relative, await Kabegame.currentUrl())`。
-- SDK 仅保留纯工具模块（`regex` / `md5` / `url` / `misc` / `types`），不再导出 `host` / `dom`。
+- SDK 仅保留工具模块（`regex` / `md5` / `url` / `misc` / `types` / `i18n` / `wpe`），不再导出 `host` / `dom`。
 
 ## 运行时架构与网络（宿主化）
 

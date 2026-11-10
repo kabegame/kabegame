@@ -74,6 +74,12 @@ workspace**，故已平铺成单包：
 - **新增 `kb-filter-dropdown`**：画廊 facet 等场景共用的 chip + 双列计数面板，复用
   `ElTooltip`/Popper 基建；支持本地搜索、loading/empty、排除计数、键盘选择及整体面板插槽，
   样式和 `--anime-*` 映射统一位于 theme-chalk。
+- **点外部关闭可忽略子层**：tooltip 内容新增 `clickOutsideIgnore?: string[]`（CSS 选择器），原样
+  传给 vueuse `onClickOutside` 的 `ignore`；`ElTooltip` 与 `KbFilterDropdown` 透传同名 prop。上游
+  点外部一律关闭，面板里再弹出、teleport 到 body 的子层（编辑浮层、popconfirm）一被点到就会连带
+  关掉外层面板。用法见画廊查询行 ⋯ 面板的收藏视图（`cocs/gallery/SAVED_VIEWS.md`）。
+- **popconfirm 可追加 popper 类**：新增 `popperClass`，追加在固定的 `el-popover` 类之后（上游
+  `popper-class` 写死、调用方无从标记），供外层 `clickOutsideIgnore` 识别。
 
 ## 待办
 

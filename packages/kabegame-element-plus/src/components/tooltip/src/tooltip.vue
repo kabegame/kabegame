@@ -40,6 +40,7 @@
       :z-index="zIndex"
       :append-to="appendTo"
       :loop="loop"
+      :click-outside-ignore="clickOutsideIgnore"
     >
       <slot name="content">
         <span v-if="rawContent" v-html="content" />

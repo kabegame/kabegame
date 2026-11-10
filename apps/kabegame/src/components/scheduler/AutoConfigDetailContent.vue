@@ -73,6 +73,13 @@
       <el-descriptions-item :label="t('tasks.taskRunParamsColDryRun')" :span="2">
         {{ config.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
       </el-descriptions-item>
+      <el-descriptions-item :label="t('tasks.taskRunParamsColRetry')" :span="2">
+        {{
+          (config.retryCount ?? 0) > 0
+            ? t("tasks.taskRunParamsRetryTimes", { n: config.retryCount })
+            : t("autoConfig.disabled")
+        }}
+      </el-descriptions-item>
     </el-descriptions>
 
     <div

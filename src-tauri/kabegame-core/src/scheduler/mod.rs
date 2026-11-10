@@ -1,4 +1,4 @@
-use crate::crawler::{CrawlTaskRequest, TaskScheduler};
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::storage::{RunConfig, ScheduleSpec, Storage, TaskInfo, TaskStatus};
 use chrono::{Datelike, Local, TimeZone, Timelike};
@@ -140,6 +140,9 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
         trigger_source: "scheduled".to_string(),
         max_concurrent_downloads: config.max_concurrent_downloads,
         is_dry_run: config.is_dry_run,
+        retry_count: config.retry_count,
+        retry_attempt: 0,
+        retry_root_id: task_id.clone(),
         status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,
@@ -150,17 +153,9 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
         end_time: None,
         error: None,
     };
-    let payload = serde_json::to_value(&task).map_err(|e| e.to_string())?;
-    Storage::global().add_task(task)?;
-    // 与手动入口 start_task 一致：入库即广播，前端分页列表只认 TaskAdded 插入新行
-    GlobalEmitter::global().emit_task_added(&payload);
-
-    let req = CrawlTaskRequest {
-        task_id: task_id.clone(),
-        plugin_file_path: None,
-        freeze_template: false,
-    };
-    TaskScheduler::global().submit_task(req).await?;
+    TaskScheduler::global()
+        .add_and_submit(task, None, false)
+        .await?;
     let now_s = now_secs();
     let _ = Storage::global().set_run_config_schedule_last_run_at(&config.id, Some(now_s));
     let next_planned = compute_next_planned_at(config, now_s);

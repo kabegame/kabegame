@@ -3,6 +3,7 @@ import type { ImageInfo } from "@/types/image";
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { EventTrigger, ImageViewState } from "@/services/kbEvents";
+import type { GalleryQueryPatch } from "@/utils/galleryPath";
 
 export type GridAdapterId = "gallery" | "task" | "album" | "surf";
 
@@ -12,6 +13,8 @@ export type GridAdapterId = "gallery" | "task" | "album" | "surf";
  */
 export interface GridRouteStore {
   computedPath: string;
+  /** 任意查询 / 排序对应的完整视图路径，不导航（收藏视图判断轮播来源用）。 */
+  computePath: (patch: GalleryQueryPatch) => string;
   navigate: (patch: Record<string, never>, opts?: { push?: boolean }) => Promise<unknown>;
   syncFromUrl: (path: string) => void;
 }
