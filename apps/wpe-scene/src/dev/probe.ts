@@ -13,7 +13,9 @@
  * - 视差（P5a 步骤 2）：`renderFrame`、`hostRenderFrame` 与 `particleCorners` 都从加载时的状态（场景中心）起逐帧推进视差点，用同一个
  *   `pointer` 与同一套 `render/parallax.ts`，读回的那一帧把 P 交给 `GpuScene.setParallax`、`g_ParallaxPosition` 进帧输入。
  * - 抖动（P5a 步骤 3）：三者每一帧按这一帧的 `g_Time` 算 s（`render/shake.ts`），粒子先用上一帧的 s 步进、之后才交给
- *   `GpuScene.setShake`（同渲染器与 WPE），视差点带同一帧的 s 推进；读回的那一帧先 `setShake` 再 `setParallax`，矩阵与眼位跟着变。
+ *   `GpuScene.setCamera`（同渲染器与 WPE），视差点带同一帧的 s 推进；读回的那一帧先 `setCamera` 再 `setParallax`，矩阵与眼位跟着变。
+ * - 缩放（P5a 步骤 4）：`general.zoom` 随 s 一起交给 `setCamera`（`frameCamera`），取当时的 `state.general.zoom`；`particleTrack` 的
+ *   跟随点同样按带缩放的投影反投影。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -29,7 +31,7 @@ import { GpuScene, type ParticleProfile } from "../render/scene";
 import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
-import { frameShake, replayParticleOptions, replayParticles, type ParticleReplay } from "./particleCorners";
+import { frameCamera, replayParticleOptions, replayParticles, type ParticleReplay } from "./particleCorners";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -244,7 +246,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           const t0 = performance.now();
           // 顺序同渲染器（P4c 步骤 4）：先步进粒子再写 uniform；探针没有脚本，两次 sync 之间没有改动，省掉第二次。
           // 没有脚本，视差在步进之后、update 之前交给场景，结果同渲染器。抖动（P5a 步骤 3）：视差点带这一帧的 s，粒子先用上一帧的
-          // s 步进，之后才设这一帧的（同渲染器）
+          // s 步进，之后才设这一帧的（同渲染器）；缩放随同一个相机（步骤 4）
           const shake = shakeOffset(state.general, startTime + i / 60, sceneHeight);
           parallax = advanceParallax(
             parallax,
@@ -252,7 +254,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           );
           scene.sync(state);
           scene.stepParticles(1 / 60, startTime + i / 60, state, pointer);
-          scene.setShake(shake);
+          scene.setCamera({ shake, zoom: state.general.zoom });
           scene.setParallax(drawParallax(parallax, state.general), state);
           scene.update(
             {
@@ -284,8 +286,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         scene.profileParticles(false);
       }
       // 粒子回放：前 n−1 帧在 replayParticles 里步进，最后一帧在这里先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。
-      // 抖动（P5a 步骤 3）：每一帧先用上一帧的 s 步进粒子、再设这一帧的（同渲染器），读回的那一帧同样，之后才 setParallax
-      const shake = frameShake(scene, state, sceneHeight);
+      // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同渲染器），读回的那一帧同样，之后才 setParallax
+      const shake = frameCamera(scene, state, sceneHeight);
       const { time, frametime } = replayParticles(scene, state, options.particles, startTime, pointer, shake.apply);
       scene.sync(state);
       scene.stepParticles(frametime, time, state, pointer);
@@ -403,8 +405,8 @@ export function hostStats(host: SceneHost): {
 /**
  * 按固定 `g_Time` 渲染**当前**场景（含就地改过的状态）并读回、给 SHA-256：与 `renderFrame` 的整场重编译结果逐字节比较，
  * 是「就地 = 重编译」的真机判据（P3a 验收 4）。指针固定在 (0.5, 0.5)；视差同 `renderFrame`，从加载时的场景中心起推进这一帧
- * （帧时间 0），不用渲染器正在用的视差点；抖动按 `time` 现算（P5a 步骤 3）。交给场景的视差与抖动留在当前场景上，渲染器的下一帧
- * 照常换回自己的。
+ * （帧时间 0），不用渲染器正在用的视差点；抖动按 `time` 现算（P5a 步骤 3），缩放取当前状态的 `general.zoom`（步骤 4）。交给场景的
+ * 视差与相机留在当前场景上，渲染器的下一帧照常换回自己的。
  */
 export async function hostRenderFrame(
   host: SceneHost,
@@ -419,7 +421,7 @@ export async function hostRenderFrame(
   // 视差点的单位是场景的正交尺寸（`bundle.general`），没有 bundle 时退回场景目标尺寸
   const { width, height } = host.devScene.bundle?.general ?? scene;
   const shake = shakeOffset(state.general, time, height);
-  scene.setShake(shake);
+  scene.setCamera({ shake, zoom: state.general.zoom });
   const parallax = advanceParallax(
     initialParallaxState(width, height),
     parallaxInput(state.general, { pointer: [0.5, 0.5], frametime: 0, width, height, eye: shake }),
@@ -520,8 +522,9 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       random: options.random,
       cursors: options.cursors,
       size: [bundle.general.width, bundle.general.height],
-      // 跟随点按上一帧的抖动反投影（P5a 步骤 3），同渲染器
+      // 跟随点按上一帧的抖动反投影（P5a 步骤 3），投影带缩放（步骤 4），同渲染器
       shake: bundle.general.fields,
+      zoom: bundle.general.fields.zoom,
       project: options.projectDir.split(/[\\/]/).filter(Boolean).at(-1) ?? "",
       tag: options.tag,
     });

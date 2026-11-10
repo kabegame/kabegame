@@ -19,7 +19,7 @@
  *
  * 渲染器在帧开头（视差点、粒子与脚本之前）用本帧的 `g_Time` 和脚本之前的字段算 s，同一个 s 作视差点的 eye（`parallax.ts`），脚本写
  * `camerashake*` 下一帧才生效，同 WPE（rea-p5-camera.md 第 5 节：WPE 更新相机在脚本之前）。s 在粒子步进之后才交给
- * `GpuScene.setShake`：WPE 先更新对象（粒子模拟）、后更新相机，模拟的指针反投影用上一帧的 s（`p5a-shakepar` 实测，见
+ * `GpuScene.setCamera`（和 `general.zoom` 一起，P5a 步骤 4）：WPE 先更新对象（粒子模拟）、后更新相机，模拟的指针反投影用上一帧的 s（`p5a-shakepar` 实测，见
  * `SceneRenderer.render`）。dev 探针回放按每帧的 `g_Time` 现算，不用推进。
  */
 import type { GeneralValues } from "../compile/bindings";

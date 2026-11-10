@@ -697,7 +697,125 @@ export function shakeOffset(fields: ShakeFields, time: number, height: number): 
 
 ## 步骤 4 — 缩放
 
-动工前写细。正交投影绕场景中心乘 `zoom ×` 相机 zoom。验收：`p5a-zoom` 和 WPE 一致；`general:zoom` 只在关键帧等别的原因下继续报。
+### 思路
+
+`general.zoom` 只改正交投影：投影绕场景中心乘 `zoom × 相机 zoom`（p3 L2：`FUN_14017fa70` 的 `0x14017fd50`）。P5a 没有相机对象和相机路径，基准相机的 zoom 恒为 1，所以只乘 `general.zoom`；P5d 接上相机来源后再乘相机的 zoom。
+
+**动工前补测**（`p5a-zoom15`、`zoom08`、`zoompar` 按 1920×1080 重抓；新加 `p5a-zoomx15` / `zoomx08`：缩放加视差、抖动、离开 z = 0 平面的透视粒子和跟随指针的粒子，`ignore/p5/s4/ana_zoomx.py`、`follow_zoom.py`）：
+- 方块的矩阵 = 绕中心缩放的正交投影 · `T(o − s)`，差 1e-7。视差偏移和抖动偏移都是场景单位，在缩放之前加。
+- **透视粒子的相机距离随缩放变**：`d = (H/(2·zoom))/tan(fov/2)`，far 仍是 `max(15000, d + 1000)`。两档 3 帧和 WPE 逐项差 < 1e-4；不带缩放差上百。读码 7.2 写的是「d 取已含正交缩放的投影的可见高」，实测成立。
+- 跟随指针的点按带缩放的投影反投影，同样用上一帧的抖动，误差 ≤ 3e-4；不带缩放差几百像素。
+- 不随缩放变：`g_EyePosition`（只带抖动）、`g_ParallaxPosition` 与视差点（按场景宽高）、`g_PointerPosition`。
+
+**`zoom` 进 general 字段。** 现在它不在 `GENERAL_FIELDS` 里：绑用户属性、脚本读写都动不了它，能力表看到不等于 1 就报。p3 I 节记「只改字段，正交投影每帧读」，所以按就地字段处理：加进 `GENERAL_FIELDS`（float，缺省 1），`thisScene.zoom` 从脚本 API 缺口表里删掉。语料里 `3253330537` 的 `zoom` 绑了属性，`2887099508` 是关键帧（照报 `value:animation`，属 PLAN K）。
+
+**时机同抖动。** 缩放在相机更新之后、脚本之前读，粒子模拟在相机更新之前，所以模拟用上一帧的投影。渲染器把 zoom 和 s 一起在帧开头按脚本之前的字段取出，粒子步进之后才交给 `GpuScene`。静态缩放下看不出先后，这一点按读码和抖动的实测实现，记进未实测清单。
+
+**接口。** 把步骤 3 的 `setShake(s)` 改成 `setCamera({ shake, zoom })`：zoom 变了时重算两份基准矩阵（正交与透视粒子），s 变了时照旧换平移；`cameraDirty` 与 `setParallax` 的整体刷新不变。
+
+**边界。** zoom ≤ 0 时投影退化、反投影是 NaN，语料最小是 1.0，能力表对 ≤ 0 照报 `general:zoom`，不做别的处理。透视场景里 zoom 不起作用（读码 1.4），整张另报 `camera:perspective`。
+
+### 现状锚点
+
+**a. 能力表见 `zoom ≠ 1` 就报**（`compile/features.ts:294`）
+```ts
+  if (g.zoom !== undefined && g.zoom !== 1) unsupported.add("general:zoom"); // 现状：缩放没实现
+```
+
+**b. `zoom` 不在 general 字段表里**（`compile/bindings.ts:40`、`compile/scriptApi.ts:91`）
+```ts
+export const GENERAL_FIELDS = {
+  // …
+  camerashake: { type: "bool", fallback: false },
+  // …
+  cameraparallaxmouseinfluence: { type: "float", fallback: 0.5 },
+}; // 现状：没有 zoom
+// scriptApi.ts 的 MISSING_SCRIPT_API.thisScene 字段里有 "zoom"
+```
+
+**c. 场景投影与透视粒子投影不收缩放**（`render/layout.ts:208`、`:218`）
+```ts
+export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">): Mat4 {
+  return orthographic(0, general.width, 0, general.height, ORTHO_DEPTH, -ORTHO_DEPTH); // 现状：没有 zoom
+}
+export function particleViewProjection(general): Mat4 {
+  const focal = 1 / Math.tan(general.perspectiveOverrideFov / 2);
+  const d = (height / 2) * focal; // 现状：相机距离按不缩放的可见高
+```
+
+**d. 相机只有抖动**（`render/scene.ts` 的 `setShake`，`render/renderer.ts` 粒子步进之后的 `scene.setShake(shake)`）
+```ts
+  setShake(offset: readonly [number, number]): void {
+    // 现状：只换平移 T(−s)，基准矩阵建场景时算一次
+```
+
+### 点 1 — 字段与能力表（`compile/bindings.ts`、`compile/scriptApi.ts`、`compile/features.ts`）
+- **修改** `GENERAL_FIELDS` 加 `zoom: { type: "float", fallback: 1 }`；`MISSING_SCRIPT_API` 删 `zoom`，更新两边的双向核对测试。
+- **修改** `checkSceneFeatures`：只在 zoom 解析出的值 ≤ 0 时报 `general:zoom`；绑属性、等于 1、大于 0 都不报。注释写明依据与透视场景不起作用。
+
+### 点 2 — 投影（`render/layout.ts`）
+- **修改** `sceneViewProjection(general, zoom = 1)`：正交投影绕场景中心乘 zoom，即 x、y 的线性项乘 zoom、平移项保持中心不动。zoom 为 1 时逐字节同现在。
+- **修改** `particleViewProjection(general, zoom = 1)`：`d = (height/(2·zoom))·focal`，far 用新的 d。zoom 为 1 时逐字节同现在。
+
+### 点 3 — 相机（`render/scene.ts`、`render/renderer.ts`）
+- **修改** `setShake` 改成 `setCamera({ shake, zoom })`：zoom 变了时按新 zoom 重算 `baseViewProjection`、`basePerspectiveViewProjection`，再乘 `T(−s)`；任何一项变了都标 `cameraDirty`。初值 zoom 取编译期的值，建场景时的基准矩阵就带上它。
+- **修改** 渲染器：帧开头和 s 一起取 `state.general.zoom`（脚本之前的值），粒子步进之后 `setCamera`。
+
+### 点 4 — 探针与轨迹回放（`dev/probe.ts`、`dev/particleCorners.ts`、`particles/track.ts`）
+- **修改** 回放与读回帧同样 `setCamera`，zoom 取 `state.general.zoom`。
+- **修改** `particleTrack`：反投影用 `sceneViewProjection(size, zoom)`，zoom 取 `shake` 同一份 general 字段（改名为 `camera` 或另加 `zoom`，由实现定）；没给时为 1。
+
+### 点 5 — 单测
+- `sceneViewProjection` / `particleViewProjection` 带 zoom：zoom 1 逐字节不变；zoom 1.5、0.8 的线性项与 d。
+- 跟随点（`p5a-zoomx*` 实测，场景 1920×1080，抖动 speed 1 / amplitude 1 / roughness 1，上一帧 s 由上一帧 `g_Time` 算）：
+
+| 工程 | zoom | 指针 | 上一帧 `g_Time` | WPE 出生点 |
+|---|---|---|---|---|
+| `zoomx15` 第 118 帧 | 1.5 | (1.1276041269302368, 1.1129629611968994) | 5.870555877685547 | (1773.226806640625, 109.46224975585938) |
+| `zoomx08` 第 119 帧 | 0.8 | (1.0906250476837158, 1.0361111164093018) | 5.914529800415039 | (2387.57421875, −172.95489501953125) |
+
+- `setCamera`：zoom 变了重算基准、标脏；全部 draw 的矩阵等于 `base(zoom) · T(o − s)`（图层、正交与透视粒子）；`g_EyePosition` 不随 zoom 变。
+- 绑属性改 zoom 就地生效、不重编译；脚本写 `thisScene.zoom` 下一帧生效。
+- 能力表：zoom 1.01、1.5 不报，绑属性不报，≤ 0 报。
+
+### 实施方式
+
+照步骤 3：快照 `ignore/p5/s4/head`、`ignore/p5/s4/ov`（HEAD `ff100954`），子代理只改 `ov/src`。P4 会话正在改 `particles/` 下的噪声与回放测试，合并前逐个核对要拷的文件在工作区里仍等于 HEAD。
+
+### 验收
+- 快照里 tsc、vitest、Prettier 通过。
+- **语料**（`kbp regress … --corpus`）：回放案例逐字节相同；只少 `general:zoom`，不新增键。按 0a 的扫描，这 6 张都还被别的键挡着，能渲染数不变（36）。
+- **端到端**（方法同步骤 3）：
+  - `p5a-zoom15`、`zoom08`、`zoompar`、`zoomx15`、`zoomx08` 按时间线回放，和 WPE 整帧逐像素比；
+  - `zoomx*` 里的跟随粒子另用 `particle_track` 逐帧光标比。
+- 不开缩放的场景，画面哈希逐张相同。
+
+### 步骤 4 实施记录（2026-11-10）
+
+**实现**：子代理在快照 `ignore/p5/s4/ov`（HEAD `ff100954`）里实现，Claude 独立验收后拷进工作区。这期间 P4 会话提交了 `50d2e9c0`（P4d 步骤 4a，改 `particles/` 下的 remap、噪声等），和本步的 18 个文件没有重叠；拷入前核对过这 18 个文件在工作区里仍等于 `ff100954`。
+- **新增** `render/zoom.test.ts`：zoom 为 1 时两份投影逐字节同改动前；线性项与 WPE 逐位相等；d、far、z = 0 平面重合。
+- **修改**
+  - `compile/bindings.ts`：`GENERAL_FIELDS` 加 `zoom`。
+  - `compile/scriptApi.ts`：`thisScene` 缺口表删 `zoom`（`layer` 组的 `zoom` 是相机对象的字段，保留）。
+  - `compile/features.ts`：只在正交场景、不绑属性、解析值 ≤ 0 时报 `general:zoom`。
+  - `render/layout.ts`：`sceneViewProjection(general, zoom)` 是 float32 的 `S(zoom)·P`（实测线性项正好等于 `f32(zoom)·f32(2/W)`）；`particleViewProjection(general, zoom)` 的 d 带缩放。
+  - `render/scene.ts`：`setShake` 换成 `setCamera({ shake, zoom })`；建场景时取编译期的 zoom。
+  - `render/renderer.ts`：帧开头和 s 一起取脚本之前的 zoom，粒子步进之后 `setCamera`。
+  - `dev/probe.ts`、`dev/particleCorners.ts`、`particles/track.ts`：回放与轨迹同样带 zoom。
+  - 测试：`parallax.test.ts` 加「缩放」一节（方块与透视粒子的 MVP、眼位、`g_ParallaxPosition` 对 WPE 抓帧逐项比；换 zoom 一帧只刷一次；跟随点两组实测；绑属性就地写等于重编译；脚本写 zoom 绘制晚一帧、粒子再晚一帧），以及 `simulator`、`p2a`、`p3c`、`scriptApi`、`script/api`、`particleCorners` 的同步更新。
+- **和计划不同的两处**（验收时认可）：
+  - 透视场景里 zoom ≤ 0 也不报：zoom 的读取点都在正交分支（读码 1.4），透视场景整张另报 `camera:perspective`。
+  - 探针的 `frameShake` 改名 `frameCamera`；`particleTrack` 另加 `zoom` 参数，没有把 `shake` 改名。
+- 子代理另做了一次变异检查：把 d 改回不带缩放，8 个用例失败。
+
+**验收**（Claude 独立跑）：
+- **类型、测试、格式**：快照里 tsc 0 错误，vitest 55 个文件 1499 个用例全部通过；拷进工作区（含 P4 的新提交）后 tsc 0 错误，vitest 56 个文件 1543 个用例全部通过；Prettier 通过。
+- **回归与语料**（`kbp regress --src s4/head/src --src s4/ov/src --corpus`）：回放案例逐字节相同（`d4` 两边同样失败，原因同步骤 3）；语料只少 6 张的 `general:zoom`，不新增键，能渲染仍是 36。
+- **端到端**（`ignore/p5/s4/cmp_frames.py`、`follow_cmp.py`，结果 `out/cmp-frames.txt`）：
+  - `p5a-zoom15`、`zoom08`、`zoompar`、`zoomx15`、`zoomx08` 按时间线回放，和 WPE 整帧逐像素比，**5 组全部 0 差异**。FR 帧号块的屏蔽框按缩放与抖动现算（1.5 倍时它在画面外）。
+  - `zoomx*` 的跟随粒子用 `particle_track` 逐帧光标回放，两档各帧新生粒子和 WPE 差 ≤ 1e-4。
+- **画面哈希**：对步骤 3 的基线 10 张场景 × 3 档全部相同（`ignore/p5/s4/out/hash-after.json`）。
+- 测试工程已从 dev 库移除；dev 宿主已按工作区重新构建。
 
 ## 未实测清单（P5a 收尾统一走查）
 
@@ -727,11 +845,13 @@ export function shakeOffset(fields: ShakeFields, time: number, height: number): 
 | 重编译保留视差点 | 预览里改一个会整场重编译的属性，画面不跳回中心；换到另一张再换回来，回到中心 |
 | 暂停与隐藏 | 暂停时视差点不动，恢复后接着平滑；应用背景、不交互的预览收不到指针，停在场景中心（只有静止偏移） |
 
-**等步骤 3、4 覆盖：**
+**步骤 4 留下的：**
 
-| 项 | 现状 | 怎么补 |
+| 项 | 现状与原因 | 怎么补 |
 |---|---|---|
-| 缩放与视差叠加 | 步骤 0 在 `p5a-zoompar` 上按 uniform 核对过 | 步骤 4 端到端：`p5a-zoompar` 按步骤 2 的方法逐像素比 |
+| 运行中改 zoom 时，粒子模拟用上一帧的投影 | 按读码与抖动的实测实现；静态缩放下看不出先后 | 测试工程脚本按 `g_Time` 在某一帧改 zoom，抓前后几帧，看跟随粒子的出生点 |
+| 重编译时状态里的 zoom 和编译期不同 | 预热与第一帧的模拟用编译期的值；属性改 zoom 是就地写，不重编译，只有别的原因整场重编译时才碰得到 | 只记不补 |
+| 运行中把 zoom 改成 ≤ 0 | 投影退化、出现 NaN，照计划不处理；语料最小 1.0 | 只记不补 |
 
 **接受、不补：**
 - `delay 2.9` 的回放差 1 像素：开窗最初几帧光标相对窗口的位置抓不到，回放只能假设光标从第一帧起不动；逐帧的 k 已在步骤 0 对上（步骤 2 实施记录）。
@@ -749,6 +869,7 @@ export function shakeOffset(fields: ShakeFields, time: number, height: number): 
 - 场景比例和窗口不同时，视差点用场景宽高：步骤 0 的 `2381978484`，步骤 2 端到端再确认。
 - 抖动把 eye 推开后，视差点跟着移：步骤 3 端到端，`p5a-shakepar` 逐像素、`3830255100` 同一 `g_Time` 整帧比。
 - 粒子模拟用上一帧的相机：步骤 3 端到端补测 `p5a-shakepar`。
+- 缩放与视差、抖动叠加，缩放时透视粒子的相机距离与跟随点：步骤 4 补测与端到端（`p5a-zoompar`、`zoomx15`、`zoomx08`）。
 
 ## P5a 收尾
 

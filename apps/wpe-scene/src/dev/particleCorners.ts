@@ -257,7 +257,7 @@ export function replayParticleOptions(replay: ParticleReplay | undefined): Parti
  * 再 `update`（P4c 步骤 4 起 `update` 不步进粒子）。
  * 每帧的 `g_Time` 取 `times`，没给时是 dt 的累计值（double）；同一个值也作粒子的场景时间 `T`。没有回放时时间取 `time`、
  * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是每帧光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心。
- * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 调一次（P5a 步骤 3：探针在这里设这一帧的抖动，`frameShake`；同渲染器，
+ * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 调一次（P5a 步骤 3、4：探针在这里设这一帧的相机，`frameCamera`；同渲染器，
  * 粒子先用上一帧的 s 步进，再换上这一帧的）。
  */
 export function replayParticles(
@@ -283,12 +283,13 @@ export function replayParticles(
 }
 
 /**
- * 探针回放的抖动（P5a 步骤 3）：每一帧按这一帧的 `g_Time` 算 s（`shakeOffset`，`height` 是场景的正交高）、交给 `GpuScene.setShake`，
- * 并记下来；`eyes` 按帧序就是 `replayParallax` 的每帧 eye。回放的 n−1 帧经 `replayParticles` 的 `afterStep` 调，读回的那一帧
- * 由调用方在步进之后、`setParallax` 之前调。和渲染器一样，每一帧的粒子先用上一帧的 s 步进（第一帧是加载时的 0），再换上这一帧的。
+ * 探针回放的相机（P5a 步骤 3、4）：每一帧按这一帧的 `g_Time` 算 s（`shakeOffset`，`height` 是场景的正交高），连同 `state.general.zoom`
+ * 交给 `GpuScene.setCamera`，并记下 s；`eyes` 按帧序就是 `replayParallax` 的每帧 eye。回放的 n−1 帧经 `replayParticles` 的
+ * `afterStep` 调，读回的那一帧由调用方在步进之后、`setParallax` 之前调。和渲染器一样，每一帧的粒子先用上一帧的相机步进（第一帧是
+ * 加载时的：s 为 0、编译期的 zoom），再换上这一帧的。
  */
-export function frameShake(
-  scene: Pick<GpuScene, "setShake">,
+export function frameCamera(
+  scene: Pick<GpuScene, "setCamera">,
   state: SceneState,
   height: number,
 ): { apply: (time: number) => [number, number]; eyes: [number, number][] } {
@@ -297,7 +298,7 @@ export function frameShake(
     eyes,
     apply(time) {
       const shake = shakeOffset(state.general, time, height);
-      scene.setShake(shake);
+      scene.setCamera({ shake, zoom: state.general.zoom });
       eyes.push(shake);
       return shake;
     },
@@ -398,8 +399,8 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
     });
     try {
       const { width, height } = bundle.general;
-      // 抖动（P5a 步骤 3）：每一帧先用上一帧的 s 步进粒子、再设这一帧的（同 `renderFrame` 与渲染器），四角带读回帧的抖动
-      const shake = frameShake(scene, state, height);
+      // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同 `renderFrame` 与渲染器），四角带读回帧的相机
+      const shake = frameCamera(scene, state, height);
       const { time, frametime } = replayParticles(scene, state, options.particles, 0, [0.5, 0.5], shake.apply);
       // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
       // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算

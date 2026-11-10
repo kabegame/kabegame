@@ -77,7 +77,7 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       "createModelData",
       "destroyModelData",
     ]),
-    // L1 的 47 个字段里 `general` 还没接的 21 个（已接的见 `GENERAL_FIELDS`、`BLOOM_FIELDS` 与 `bloom` / `hdr`）。
+    // L1 的 47 个字段里 `general` 还没接的 20 个（已接的见 `GENERAL_FIELDS`、`BLOOM_FIELDS` 与 `bloom` / `hdr`；`zoom` 在 P5a 步骤 4 接上）。
     // 重力与风渲染器不读（能力表把它们当中性），但脚本读到 undefined 会算出 NaN，照收
     ...fields([
       "fogdistance",
@@ -93,7 +93,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       "fogheightstartdensity",
       "fogheightenddensity",
       "perspectiveoverridefov",
-      "zoom",
       "transparentsorting",
       "customsortorder",
       "gravitydirection",

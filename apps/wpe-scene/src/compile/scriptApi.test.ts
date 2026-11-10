@@ -38,7 +38,7 @@ describe("未实现脚本 API 的扫描", () => {
       "input.cursorWorldPosition",
     ]);
     // 场景字段（L1）只认 thisScene
-    expect(scan("export function update() { thisScene.zoom = 2; }")).toEqual(["thisScene.zoom"]);
+    expect(scan("export function update() { thisScene.fogdistance = 2; }")).toEqual(["thisScene.fogdistance"]);
   });
 
   it("根对象的成员只认裸全局名：属性链上的同名对象不算", () => {
@@ -117,6 +117,8 @@ describe("未实现脚本 API 的扫描", () => {
       "  console.log(engine.frametime, engine.runtime, engine.timeOfDay, engine.canvasSize, engine.screenResolution);",
       "  console.error(engine.userProperties, engine.isPortrait(), engine.isObjectValid(layer));",
       "  thisScene.bloom = true; thisScene.bloomstrength = 2; thisScene.clearcolor = new Vec3(1);",
+      // P5a 步骤 4：zoom 进了 general 字段表
+      "  thisScene.zoom = thisScene.zoom * 1.5;",
       "  thisLayer.origin = layer.origin; thisLayer.alpha = thisObject.visible ? 1 : 0;",
       "  return thisLayer.size.x + thisLayer.name.length;",
       "}",
@@ -136,8 +138,8 @@ describe("未实现脚本 API 的扫描", () => {
     );
     // general：thisObject / thisLayer 都是场景字段对象，只有字段没有方法（L14）
     expect(
-      scan("thisObject.zoom = 1; thisLayer.windstrength; thisObject.createLayer('a');", { kind: "general" }, null),
-    ).toEqual(["thisScene.windstrength", "thisScene.zoom"]);
+      scan("thisObject.fogheight = 1; thisLayer.windstrength; thisObject.createLayer('a');", { kind: "general" }, null),
+    ).toEqual(["thisScene.fogheight", "thisScene.windstrength"]);
     // 材质 / effect 上的脚本，thisLayer 是所在图层
     expect(scan("thisLayer.text = 'a';", { kind: "material" }, 2)).toEqual(["layer.text"]);
   });

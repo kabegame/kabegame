@@ -455,7 +455,7 @@ describe("SceneScript API（FakeRealm）", () => {
     h.bundle.bloom = { hdr: false, passes: {} };
     h.resetState();
     const { thisScene: scene, general } = h.api;
-    // 成员就是 general 的全部字段加四个查询方法：fog*、wind*、zoom 这轮不加
+    // 成员就是 general 的全部字段加四个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
     const methods = ["enumerateLayers", "getLayer", "getLayerCount", "getLayerIndex"];
     expect(Object.keys(scene).sort()).toEqual([...Object.keys(general), ...methods].sort());
     expect(Object.keys(general)).toEqual(
@@ -492,6 +492,7 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(scene.camerashakespeed).toBe(3);
     expect(scene.cameraparallaxdelay).toBe(0.1);
     expect(scene.cameraparallaxmouseinfluence).toBe(0.5);
+    expect(scene.zoom).toBe(1);
   });
 
   it("general 字段：全部字段写入不重编译，当场读回，thisScene 与 general 同一份", () => {
@@ -515,6 +516,7 @@ describe("SceneScript API（FakeRealm）", () => {
       cameraparallaxamount: 0.4,
       cameraparallaxdelay: 0.2,
       cameraparallaxmouseinfluence: 0.6,
+      zoom: 1.5,
     };
     expect(Object.keys(written).sort()).toEqual(Object.keys(GENERAL_FIELDS).sort());
     for (const [key, value] of Object.entries(written)) {
@@ -525,6 +527,8 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(h.state.general.clearcolor).toEqual([0.1, 0.2, 0.3]);
     expect(h.state.general.fov).toBe(33);
     expect(h.state.general.camerashake).toBe(true);
+    // P5a 步骤 4：脚本写 `thisScene.zoom` 落在状态上，渲染器下一帧开头读
+    expect(h.state.general.zoom).toBe(1.5);
     expect(h.recompiles).toEqual([]);
     expect(h.api.recompileWrites.size).toBe(0);
   });

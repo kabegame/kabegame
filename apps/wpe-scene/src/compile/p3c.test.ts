@@ -319,6 +319,7 @@ describe("general 字段表", () => {
       cameraparallaxamount: 0.5,
       cameraparallaxdelay: 0.1,
       cameraparallaxmouseinfluence: 0.5,
+      zoom: 1,
     });
     expect(general.clearVariable).toBe(false);
   });
@@ -365,6 +366,9 @@ describe("general 字段表", () => {
     ["fov", 33, 33],
     ["nearz", 0.5, 0.5],
     ["cameraparallaxamount", "0.4", 0.4],
+    // P5a 步骤 4：zoom 就地写，不重编译
+    ["zoom", 1.5, 1.5],
+    ["zoom", "0.8", 0.8],
   ])("编译与就地写取值相同：%s = %j", async (key, value, expected) => {
     const bound = { [key]: { user: "v", value: null } };
     const compiled = await compileGeneral(bound, { v: value });

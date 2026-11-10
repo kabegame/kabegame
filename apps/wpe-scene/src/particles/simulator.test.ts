@@ -1063,6 +1063,68 @@ describe("控制点：帧内顺序与世界矩阵（P4c 步骤 1，rea-p4c-sim.m
       );
     });
   });
+
+  describe("particleTrack 的缩放（P5a 步骤 4）：跟随点按带缩放的正交投影反投影，叠加上一帧的抖动", () => {
+    const def = particle({
+      maxcount: 32,
+      starttime: 0.3,
+      emitter: [{ name: "sphererandom", distancemax: 0, rate: 4 }],
+      initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+      controlpoint: [{ flags: 1 }],
+    });
+    // 对象在原点：粒子位置就是跟随点（场景坐标）
+    const layers = [{ object: 1, name: "p", particle: def, origin: [0, 0, 0], angles: [0, 0, 0], scale: [1, 1, 1] }];
+    const size = [1920, 1080] as const;
+    const SHAKE = { camerashake: true, camerashakespeed: 1, camerashakeamplitude: 1, camerashakeroughness: 1 };
+    const nearest = (track: ReturnType<typeof particleTrack>, point: readonly number[]) =>
+      Math.min(...track.frames[0].systems.p.map((item) => Math.hypot(item.pos[0] - point[0], item.pos[1] - point[1])));
+
+    it.each([
+      // 计划「步骤 4」补测（`ignore/p5/s4/fixtures.py`，`p5a-zoomx*`，抖动 speed 1 / amplitude 1 / roughness 1）：第 n − 1 帧的指针没用到
+      {
+        tag: "zoomx15 第 118 帧",
+        zoom: 1.5,
+        pointer: [1.1276041269302368, 1.1129629611968994] as const,
+        times: [5.870555877685547, 5.948989391326904],
+        born: [1773.226806640625, 109.46224975585938],
+      },
+      {
+        tag: "zoomx08 第 119 帧",
+        zoom: 0.8,
+        pointer: [1.0906250476837158, 1.0361111164093018] as const,
+        times: [5.914529800415039, 5.995542049407959],
+        born: [2387.57421875, -172.95489501953125],
+      },
+    ])("WPE 实测（$tag）：新生粒子和 WPE 差 < 1e-2；不给 zoom 时差上百", (item) => {
+      const options = {
+        layers,
+        dts: [0.25, 0.25],
+        times: item.times,
+        frames: [2],
+        passes: 1 as const,
+        size,
+        cursors: [[0.5, 0.5] as const, item.pointer],
+        shake: SHAKE,
+      };
+      expect(nearest(particleTrack({ ...options, zoom: item.zoom }), item.born)).toBeLessThan(1e-2);
+      expect(nearest(particleTrack(options), item.born)).toBeGreaterThan(100);
+    });
+
+    it("预热也按带缩放的投影（场景中心不动）；zoom 1 与不给逐字节相同", () => {
+      const cursors = [[0.25, 0.75] as const, [0.75, 0.5] as const];
+      const options = { layers, dts: [0.25, 0.25], frames: [2], passes: 1 as const, size, cursors };
+      const zoomed = particleTrack({ ...options, zoom: 2 });
+      const view = sceneViewProjection({ width: 1920, height: 1080 }, 2);
+      // 第 1 帧（和预热）的指针是 (0.25, 0.75)：带缩放时落在 (720, 405)，不带缩放是 (480, 270)
+      const loaded = pointerScenePoint(view, cursors[0]);
+      expect(loaded[0]).toBeCloseTo(720, 3);
+      expect(loaded[1]).toBeCloseTo(405, 3);
+      expect(nearest(zoomed, [720, 405])).toBeLessThan(1e-3);
+      expect(nearest(zoomed, pointerScenePoint(view, cursors[1]))).toBeLessThan(1e-3);
+      const plain = particleTrack(options);
+      expect(JSON.stringify(particleTrack({ ...options, zoom: 1 }))).toBe(JSON.stringify(plain));
+    });
+  });
 });
 
 describe("世界空间（P4c 步骤 4，rea-p4c-sim.md 5.2、5.5）", () => {

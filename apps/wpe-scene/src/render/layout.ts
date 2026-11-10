@@ -11,7 +11,8 @@
  *   而不是像 LWE 那样把场景坐标烘进顶点；对 P1 着色器结果相同，`g_ModelMatrix` 也有了真实含义。
  *   P4a 起 `g_ModelMatrix` 是沿父链累乘的世界矩阵（`worldMatrixOf`），本地矩阵带完整的三轴旋转（`layerLocalMatrix`）。
  * - **相机**：WPE 在正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵，JSON 的值被丢弃
- *   （L2）；投影是 `ortho(0…w, 0…h)`，这里就用它。eagleflag 的 eye 是编辑器残留的偏移，画面不平移。
+ *   （L2）；投影是 `ortho(0…w, 0…h)`，这里就用它，`general.zoom` 再绕场景中心缩放（P5a 步骤 4）。eagleflag 的 eye 是编辑器残留的
+ *   偏移，画面不平移。
  *   透视粒子（P4a 步骤 4）另用一套透视相机（`particleViewProjection`），z = 0 平面和正交画面重合。
  */
 import type { SceneGeneral, SceneTexture } from "../compile/bundle";
@@ -204,9 +205,16 @@ export function worldMatrixOf(
  * 正交场景的视图投影：场景 `[0, w] × [0, h]`（y 向上）铺满整个渲染目标，z ∈ [−2000, 2000] → 深度 [0, 1]（反向 Z，
  * 见 `ORTHO_DEPTH`）。1920×1080 时是 WPE 的 `[1/960, 0, 0, 0, 0, 1/540, 0, 0, 0, 0, 0.00025, 0, −1, −1, 0.5, 1]`。
  * `orthographic` 按 glm 的「视空间 z ∈ [−far, −near] → [0, 1]」，所以 near、far 反着传。
+ *
+ * `zoom` 是 `general.zoom`（P5a 步骤 4）：WPE 在 P 上绕场景中心乘它（p3-script-REPORT L2，`FUN_14017fa70` 的 `0x14017fd50`），即
+ * `S(zoom, zoom, 1) · P`，x、y 的线性项与平移项都乘 zoom，场景中心仍落在 NDC 原点。按 float32 乘：步骤 4 补测 `p5a-zoomx15` / `zoomx08`
+ * 读到的线性项正好是 `f32(zoom) · f32(2/W)`（换成 `2/(W/zoom)` 的取整对不上），视差与抖动的平移是场景单位、在缩放之前加
+ * （`VP · T(o − s)`，实测差 1e-7）。zoom 为 1 时原样返回，字节同以前。
  */
-export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">): Mat4 {
-  return orthographic(0, general.width, 0, general.height, ORTHO_DEPTH, -ORTHO_DEPTH);
+export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">, zoom = 1): Mat4 {
+  const projection = orthographic(0, general.width, 0, general.height, ORTHO_DEPTH, -ORTHO_DEPTH);
+  // scaling 存成 float32，乘积在 double 里精确、写回时舍入一次，等于 float32 乘法
+  return zoom === 1 ? projection : multiply(scaling(zoom, zoom, 1), projection);
 }
 
 /**
@@ -214,13 +222,18 @@ export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "heigh
  * - 相机在 `(w/2, h/2, d)` 看向 −z、上方 +y，`d = (h/2) / tan(fov/2)`，所以 z = 0 平面和正交画面重合；
  * - 投影的纵向视角是 `fov`（`SceneGeneral.perspectiveOverrideFov`，弧度），宽高比 w/h；
  * - 反向 Z：near 5 → 深度 1，far `max(15000, d + 1000)` → 深度 0，z 系数 `n / (f − n)`。
+ *
+ * `zoom` 是 `general.zoom`（P5a 步骤 4）：d 取已含正交缩放的投影的可见高，`d = (h/(2·zoom)) / tan(fov/2)`（rea-p5-camera.md 7.2 的
+ * `(1/P11)/tan(fov/2)`），far 用新的 d；投影本身（fov、宽高比）与相机的 x、y 不变。步骤 4 补测 `p5a-zoomx15` / `zoomx08` 两档 3 帧和 WPE
+ * 逐项差 < 1e-4，按不缩放的 d 差上百。zoom 为 1 时字节同以前。
  */
 export function particleViewProjection(
   general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">,
+  zoom = 1,
 ): Mat4 {
   const { width, height } = general;
   const focal = 1 / Math.tan(general.perspectiveOverrideFov / 2);
-  const d = (height / 2) * focal;
+  const d = (height / (2 * zoom)) * focal;
   const near = PARTICLE_NEAR;
   const far = Math.max(PARTICLE_FAR_MIN, d + 1000);
   const projection = new Float32Array(16);

@@ -13,7 +13,8 @@
  *   `GpuScene.setParallax`（属性与脚本写 `cameraparallax*` 同帧生效），`g_ParallaxPosition` 随每帧 uniform 写。P 归渲染器：
  *   整场重编译保留，新场景回到场景中心（见 `load`）。
  * - **抖动**（P5a 步骤 3，`shake.ts`）：帧开头、推进视差点之前，按本帧的 `g_Time` 算 eye 偏移 s，同一个 s 作视差点的 eye；粒子步进
- *   之后、脚本之前才交给 `GpuScene.setShake`，所以粒子模拟用的是上一帧的 s（同 WPE，见 `render`）。渲染器不存 s。
+ *   之后、脚本之前才交给 `GpuScene.setCamera`，所以粒子模拟用的是上一帧的 s（同 WPE，见 `render`）。渲染器不存 s。
+ * - **缩放**（P5a 步骤 4）：`general.zoom` 和 s 同一时刻取（脚本之前），随 s 一起交给 `setCamera`，脚本写 `zoom` 下一帧生效。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
@@ -523,8 +524,9 @@ export class SceneRenderer {
     const [width, height] = this.projection;
     // 抖动（P5a 步骤 3）：帧开头、视差点之前，用本帧的 `g_Time` 与脚本之前的字段算 eye 偏移 s（WPE 更新相机时算，在 lookAt 与
     // 视差点之前，脚本之后才跑，rea-p5-camera.md 第 5 节；脚本写 `camerashake*` 下一帧才生效）。交给场景要等粒子步进之后，见下。
-    // 补画帧时间不变，s 也不变
+    // 补画帧时间不变，s 也不变。缩放（P5a 步骤 4）同一时刻取：WPE 在相机更新时读 `zoom`，同在脚本之前（p3-script-REPORT L4）
     const shake = shakeOffset(state.general, wrapped, height);
+    const camera = { shake, zoom: state.general.zoom };
     // 视差点（P5a 步骤 2）：帧开头、粒子与脚本之前推进一次，用本帧的 `g_PointerPosition` 与帧时间（补画帧为 0，k 也是 0）；
     // 目标点的 eye.xy 就是 s（步骤 3）。开关关着时 P 与 `g_ParallaxPosition` 都不动
     this.parallax = advanceParallax(
@@ -545,8 +547,9 @@ export class SceneRenderer {
     // （rea-p5-camera.md 的帧顺序，`FUN_1401891a0`），所以模拟时的指针反投影用的是上一帧的视图（带上一帧的 s、不带视差），指针是当帧的。
     // 实测 `p5a-shakepar` 第 119、120 帧：跟随指针的新生粒子按「当帧指针 + 上一帧 s」误差 0，按当帧 s 差 0.3 像素左右。加载后第一帧
     // 的模拟用加载时的相机（s 为 0），同预热。绘制、`g_EyePosition`、视差点用当帧的 s（实测都对）：第一次 `sync` 里新建的 draw 用的是
-    // 旧相机，脚本之后的 `setParallax` 因相机变了整体重写
-    scene.setShake(shake);
+    // 旧相机，脚本之后的 `setParallax` 因相机变了整体重写。缩放随同一个相机交（步骤 4）：模拟的反投影用上一帧的 zoom，绘制用当帧的
+    // （静态缩放看不出先后，按读码与抖动的实测实现）
+    scene.setCamera(camera);
     // 脚本在 try 外（同以前）：脚本自己的错误不走 `render:frame` 退回
     if (live) this.options.beforeFrame?.(frametime);
     const encoder = device.createCommandEncoder({ label: "scene frame" });

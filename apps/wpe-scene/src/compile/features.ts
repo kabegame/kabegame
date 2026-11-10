@@ -10,6 +10,7 @@
  */
 import {
   numbers,
+  resolveValue,
   staticCombos,
   type EffectJson,
   type JsonObject,
@@ -20,7 +21,7 @@ import {
   type SceneObject,
   type SceneValue,
 } from "./model";
-import { isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
+import { generalValue, isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
 import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
@@ -129,7 +130,8 @@ const ENGINE_COMBOS = new Set([
  * `cameraparallax*` 已实现（P5a 步骤 2，`render/parallax.ts`）：四个字段由 `GENERAL_FIELDS` 存值，渲染器每帧读，属性与脚本写入就地生效；
  * 透视场景开视差 WPE 不移动对象（rea-p5-camera.md 6.1，语料 0 张），透视整张另报 `camera:perspective`。
  * `camerashake*` 已实现正交（P5a 步骤 3，`render/shake.ts`）：四个字段同样由 `GENERAL_FIELDS` 存值、渲染器每帧读；透视场景开抖动
- * 另报 `general:camerashake`（归 P5d）。`zoom` 为 1 时是恒等。
+ * 另报 `general:camerashake`（归 P5d）。`zoom` 已实现（P5a 步骤 4，`render/layout.ts` 的 `sceneViewProjection`）：同样由 `GENERAL_FIELDS`
+ * 存值、渲染器每帧读，只在解析出的值 ≤ 0 时报（见 `checkSceneFeatures`）。
  * `perspectiveoverridefov` 不是中性：它是透视粒子的 fov（C4，实测核对过），解析进 `SceneGeneral.perspectiveOverrideFov`，
  * 见 `PARSED_GENERAL`。
  */
@@ -291,7 +293,14 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   // 偏移是三维的，要和透视相机一起做，归 P5d（rea-p5-camera.md 第 5 节），透视场景整张另报 `camera:perspective`，这一条提醒 P5d 补上
   if (!g.orthogonalprojection && active(g.camerashake)) unsupported.add("general:camerashake");
   if (active(g.supportsaudioprocessing)) unsupported.add("general:supportsaudioprocessing");
-  if (g.zoom !== undefined && g.zoom !== 1) unsupported.add("general:zoom");
+  // `zoom` 已实现（P5a 步骤 4）：正交投影绕场景中心乘它（p5-REPORT 实测），绑属性、脚本写回都就地生效。只在解析出的值 ≤ 0 时报：
+  // 投影退化、指针反投影是 NaN（语料最小 1.0）。常量与 `{script}` 的初值同 `bundle.ts` 的 `generalFields` 解析，不合法时取缺省 1；
+  // 绑用户属性的不看值（运行中的值编译期定不了）；关键帧解析成 undefined，另报 `value:animation`。透视场景里 zoom 不起作用
+  // （rea-p5-camera.md 1.4：读取点都在正交分支），不报，整张另报 `camera:perspective`
+  if (g.orthogonalprojection && !isUserBinding(g.zoom)) {
+    const zoom = generalValue("zoom", resolveValue(g.zoom as SceneValue | undefined, {}));
+    if (typeof zoom === "number" && zoom <= 0) unsupported.add("general:zoom");
+  }
   for (const [key, value] of Object.entries(g))
     if (
       !NEUTRAL_GENERAL.has(key) &&
