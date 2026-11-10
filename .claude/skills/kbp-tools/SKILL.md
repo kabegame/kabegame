@@ -90,6 +90,7 @@ PROJECTS = {"p5x-demo": p5x_demo}
 kbp.py rdc track <抓帧目录> <标签> [工程] [--draws | --points] [--limit N] [--out 文件] [--data 目录]
 kbp.py rdc frame <抓帧目录> <标签> [--event N | --present] [--out 目录] [--data 目录]
 kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
+kbp.py rdc shaders <抓帧目录> <标签> [--out 文件] [--data 目录]
 # 公共：--overwrite（输出已存在时覆盖，缺省拒绝）、--timeout 秒（缺省 1800）、--quiet、--keep-work
 ```
 
@@ -98,6 +99,7 @@ kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
 | `track` | `<data>/tracks/rd-<标签>.json` | `rdc_track_b.py`、`rdc_rope.py`（`--draws`）、`rdc_track.py`（无 meta 时自动退回） |
 | `frame` | `<data>/out/wpe-<标签>-f<脚本帧>.png`，索引 `wpe-<标签>.json` | `step4/wpe_rt.py`；`--present` 为 `p3b/compare/wpe_export.py` |
 | `stats` | `<data>/out/wpe-<标签>-stats.json` | `b3/wpe_stats_b.py` |
+| `shaders` | `<data>/out/wpe-<标签>-shaders.json`，反汇编按哈希存 `wpe-<标签>-shaders/<哈希>.txt` | （P7 新增） |
 
 - 一次启动处理目录里全部 `.rdc`（按帧号排序）。
 - **`track` 的工程**：
@@ -113,6 +115,11 @@ kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
   - `--present` 取 Present 时的后备缓冲，浮点格式存 DDS（原始数据），LDR 存 PNG。
   - 文件名一律按脚本帧号（= RenderDoc 帧号 + 1）。
 - **`stats`** 按顶点布局认粒子绘制，不依赖测试工程，创意工坊场景也能用。
+- **`shaders`**（P7 起）：每次绘制的顶点 / 像素着色器哈希、`g_bufStatic` 的变量名（按名字认是哪个 effect）、是否 WPE 的编译失败回退。
+  - 片元回退只有一句 `mov o0.xyzw, l(0.500000, 0.000000, 0.000000, 1.000000)`；
+  - 顶点回退和纯色图层的顶点着色器指令相同，所以只在配对的像素着色器还读插值输入时才算回退；
+  - 阳性对照：`ignore/p7/gen_sem.py` 生成的 `p7-sem` 里 `kbfail`、`kbhelper` 两个图层是回退。
+  - 摘要的 `items[].fallback_events` 列出回退的事件号。目录参数按正斜杠写更稳（`A:/p7/sweep/<标签>`）。
 - 摘要里的 `seconds`：`startup` 是拉起 qrenderdoc 到就绪，`captures` 是每张抓帧，`total` 是到进程退出。
   - 本机实测（RenderDoc 1.47）：启动 2.3–3.2 s；
   - `track` 测试工程每张 0.6–1.2 s，绳（`--draws`）每张 1.5–2 s；
