@@ -30,8 +30,14 @@
  * - `root`：只认根对象直接访问。全局对象的成员都用它；图层等类型里名字通用的（`play`、`stop`、`text`、`volume` 这类，
  *   会和普通 JS 或脚本自己的对象撞名）只认 `thisLayer.` / `thisObject.`。
  * - `any`：任意接收者上的 `.成员` / `?.成员` / `["成员"]` 都算，只收名字足够独特的，每项写一句理由。
+ * - 例外（P6a 步骤 1）：场景里有声音对象时，`layer` 组的 `play` / `pause` / `stop` / `isPlaying` 按 `any` 匹配（`SOUND_LAYER_METHODS`）。
  * 子对象（`ITextureAnimation`、`IVideoTexture`、`IAnimationLayer`、`IAnimation`、`IModelData`、`IAssetHandle`）只能经表里的入口方法拿到，
  * 入口已经会报，它们自己的成员（`setFrame`、`play`、`applyData` …）不收。
+ *
+ * **导出回调**（文件末段）：WPE 按固定的 19 个回调名（`WPE_SCRIPT_CALLBACKS`，报告 C 节）调用脚本导出的函数，运行时只调
+ * `init` / `update` / `applyUserProperties` / `destroy`。脚本导出了其余回调（光标、媒体等，`MISSING_SCRIPT_CALLBACKS`）时报
+ * `script:callback:<名>`，同样整张退回；导出名由 `scriptExports` 用同一套词法认出，宁可多认。实现一个回调就从表里删一个，
+ * `script/api.test.ts` 核对它与运行时的 `RUNTIME_CALLBACKS`。
  */
 
 export type ScriptApiGroup =
@@ -72,7 +78,7 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       "createModelData",
       "destroyModelData",
     ]),
-    // L1 的 47 个字段里 `general` 还没接的 21 个（已接的见 `GENERAL_FIELDS`、`BLOOM_FIELDS` 与 `bloom` / `hdr`）。
+    // L1 的 47 个字段里 `general` 还没接的 20 个（已接的见 `GENERAL_FIELDS`、`BLOOM_FIELDS` 与 `bloom` / `hdr`；`zoom` 在 P5a 步骤 4 接上）。
     // 重力与风渲染器不读（能力表把它们当中性），但脚本读到 undefined 会算出 NaN，照收
     ...fields([
       "fogdistance",
@@ -88,7 +94,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       "fogheightstartdensity",
       "fogheightenddensity",
       "perspectiveoverridefov",
-      "zoom",
       "transparentsorting",
       "customsortorder",
       "gravitydirection",
@@ -228,12 +233,16 @@ const REGEX_AFTER = new Set([
   "yield",
   "await",
 ]);
-/** 标识符字符：ASCII 字母数字、`_`、`$`，非 ASCII 字符一律算（宽松，只用来切词）。 */
+/**
+ * 标识符字符：ASCII 字母数字、`_`、`$`，非 ASCII 字符除空白外一律算（宽松，只用来切词）。
+ * Unicode 空白（U+00A0 不换行空格、U+FEFF、U+3000 等）在 JS 里是空白、不进标识符：语料里有脚本写成 `export function`
+ * 中间夹 U+00A0（3409595232 等），当成标识符字符会把整串切成一个词，导出与成员访问都认不出来。
+ */
 function identStart(c: string): boolean {
-  return /[A-Za-z_$]/.test(c) || c.charCodeAt(0) >= 0x80;
+  return /[A-Za-z_$]/.test(c) || (c.charCodeAt(0) >= 0x80 && !/\s/.test(c));
 }
 function identPart(c: string): boolean {
-  return /[\w$]/.test(c) || c.charCodeAt(0) >= 0x80;
+  return /[\w$]/.test(c) || (c.charCodeAt(0) >= 0x80 && !/\s/.test(c));
 }
 
 /** 把脚本源码切成粗粒度的词：够用来认出 `a.b`、`a?.b`、`a["b"]`。 */
@@ -453,15 +462,220 @@ const ROOT_INDEX: Readonly<Record<ResolvedGroup, Map<string, string>>> = {
 const ANY_INDEX = index(Object.keys(MISSING_SCRIPT_API) as ScriptApiGroup[], (entry) => entry.match === "any");
 
 /**
- * 一段脚本用到的未实现 API，返回 `<分组>.<成员>`（去重、排序）。根对象访问先查该分组（含 `root` 项），查不到再按名字查 `any` 项；
- * 其它接收者只查 `any` 项。
+ * 声音层（`ISoundLayer`）的播放控制（P6a 步骤 1）。表里它们只认 `thisLayer.` / `thisObject.`（名字通用），但脚本多半经
+ * `thisScene.getLayer(…)` 拿到声音层再调，按根对象匹配会漏报、场景静默没声音。所以场景里有声音对象时（`ScriptApiScene.soundLayers`），
+ * 任意接收者上的这几个名字都报 `layer.<名>`（宁可多报：同名的视频、动画方法的入口本来也会报）。名字取自表里还在的项：
+ * 步骤 2 实现、从表里删掉之后，这条随之失效。
  */
-export function scanScriptApi(script: ScriptApiContext): string[] {
+export const SOUND_LAYER_METHODS: readonly string[] = ["play", "pause", "stop", "isPlaying"];
+const SOUND_INDEX = index(["layer"], (entry) => entry.kind === "method" && SOUND_LAYER_METHODS.includes(entry.name));
+
+/** 扫描时用到的场景信息（编译期由 `compileScene` 给出）。 */
+export interface ScriptApiScene {
+  /** 场景里有声音对象（`features.ts` 的 `isSoundObject`）。 */
+  soundLayers?: boolean;
+}
+
+/**
+ * 一段脚本用到的未实现 API，返回 `<分组>.<成员>`（去重、排序）。根对象访问先查该分组（含 `root` 项），查不到再按名字查 `any` 项；
+ * 其它接收者只查 `any` 项。场景里有声音对象时，声音层的播放控制不论接收者都算（`SOUND_INDEX`）。
+ */
+export function scanScriptApi(script: ScriptApiContext, scene: ScriptApiScene = {}): string[] {
   const hits = new Set<string>();
   for (const access of memberAccesses(script.source)) {
     const group = access.root === null ? null : rootGroup(access.root, script);
-    const key = (group ? ROOT_INDEX[group].get(access.name) : undefined) ?? ANY_INDEX.get(access.name);
+    const key =
+      (group ? ROOT_INDEX[group].get(access.name) : undefined) ??
+      ANY_INDEX.get(access.name) ??
+      (scene.soundLayers ? SOUND_INDEX.get(access.name) : undefined);
     if (key) hits.add(key);
   }
   return [...hits].sort();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 导出回调：脚本导出、由 WPE 在对应时机调用的函数。运行时只调其中几个（`script/runtime.ts` 的 `RUNTIME_CALLBACKS`），
+// 其余导出会被静默忽略、场景缺交互，所以和 API 表一样整张退回，报 `script:callback:<名>`（前置，phase-6-script-text-sound.md）。
+
+/**
+ * WPE 2.8.42 的导出回调表，按编号顺序（逆向报告 `p3-script-REPORT.md` C 节：固定表 `0x1819a3ee0`，导出了哪些就按编号
+ * 用位掩码登记，共 19 个）。另外读取的导出变量 `scriptProperties` 与 `__workshopId` 不是回调，不在表里。
+ */
+export const WPE_SCRIPT_CALLBACKS = [
+  // 0–3
+  "init",
+  "update",
+  "resizeScreen",
+  "destroy",
+  // 4–6
+  "applyUserProperties",
+  "applyGeneralSettings",
+  "animationEvent",
+  // 7–13
+  "cursorHitTest",
+  "cursorEnter",
+  "cursorLeave",
+  "cursorMove",
+  "cursorClick",
+  "cursorDown",
+  "cursorUp",
+  // 14–18
+  "mediaStatusChanged",
+  "mediaPlaybackChanged",
+  "mediaPropertiesChanged",
+  "mediaThumbnailChanged",
+  "mediaTimelineChanged",
+] as const;
+
+/**
+ * WPE 有、运行时还没调用的导出回调。**实现一个就从表里删一个**：`script/api.test.ts` 核对它与 `RUNTIME_CALLBACKS` 不相交、
+ * 两者合起来恰好是 `WPE_SCRIPT_CALLBACKS`（这里是 Worker 里跑的编译期代码，不能 import `script/runtime.ts`）。
+ */
+export const MISSING_SCRIPT_CALLBACKS: readonly string[] = [
+  // 屏幕尺寸变化、general 设置变化 → 后续
+  "resizeScreen",
+  "applyGeneralSettings",
+  // 关键帧动画的事件 → P10
+  "animationEvent",
+  // 光标命中与事件 → P6c
+  "cursorHitTest",
+  "cursorEnter",
+  "cursorLeave",
+  "cursorMove",
+  "cursorClick",
+  "cursorDown",
+  "cursorUp",
+  // 系统媒体集成 → P11
+  "mediaStatusChanged",
+  "mediaPlaybackChanged",
+  "mediaPropertiesChanged",
+  "mediaThumbnailChanged",
+  "mediaTimelineChanged",
+];
+
+function isPunct(token: Token | undefined, value: string): boolean {
+  return token?.type === "punct" && token.value === value;
+}
+function isName(token: Token | undefined, value?: string): boolean {
+  return token?.type === "name" && (value === undefined || token.value === value);
+}
+
+/**
+ * 从 `at` 起跳过一段表达式，停在括号深度为 0 的 `stops` 之一上（返回它的下标），或停在多出来的右括号上。
+ * 深度为 0 的 `export`（不是属性名）也停：没有分号时下一条导出语句不能被吞掉。
+ */
+function skipExpression(tokens: Token[], at: number, stops: readonly string[]): number {
+  let depth = 0;
+  let i = at;
+  for (; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.type === "name") {
+      if (depth === 0 && token.value === "export" && !isDot(tokens[i - 1])) break;
+      continue;
+    }
+    if (token.type !== "punct") continue;
+    if (depth === 0 && stops.includes(token.value)) break;
+    if (token.value === "(" || token.value === "[" || token.value === "{") depth++;
+    else if (token.value === ")" || token.value === "]" || token.value === "}") {
+      if (depth === 0) break;
+      depth--;
+    }
+  }
+  return i;
+}
+
+/**
+ * 读一个绑定模式（名字、`{ … }`、`[ … ]`），把里面的绑定名放进 `out`，返回模式之后的下标。
+ * 默认值整段跳过；计算属性键 `[expr]: x` 跳过键、只认冒号后的绑定。读不懂的地方宁可多收名字。
+ */
+function bindingPattern(tokens: Token[], at: number, out: Set<string>): number {
+  const token = tokens[at];
+  if (token?.type === "name") {
+    out.add(token.value);
+    return at + 1;
+  }
+  const array = isPunct(token, "[");
+  if (!array && !isPunct(token, "{")) return at;
+  const close = array ? "]" : "}";
+  let i = at + 1;
+  while (i < tokens.length && !isPunct(tokens[i], close)) {
+    if (isPunct(tokens[i], ",")) {
+      i++;
+      continue;
+    }
+    if (isPunct(tokens[i], "...")) i++;
+    else if (!array) {
+      // 对象模式的键：`键: 模式`，没有冒号时键就是绑定名（简写）
+      const key = tokens[i];
+      const keyEnd = isPunct(key, "[") ? skipExpression(tokens, i + 1, []) + 1 : i + 1;
+      if (isPunct(tokens[keyEnd], ":")) i = keyEnd + 1;
+    }
+    const next = bindingPattern(tokens, i, out);
+    // 读不懂的词：跳过一个，免得死循环
+    i = next === i ? i + 1 : next;
+    if (isPunct(tokens[i], "=")) i = skipExpression(tokens, i + 1, [","]);
+  }
+  return i + 1;
+}
+
+/**
+ * 认出模块导出的名字（去重、排序），给导出回调的扫描用。用 `tokenizeScript` 切词，注释、字符串、模板文字里的不算，
+ * 前面是 `.` / `?.` 的 `export`（属性名）不算。认这些写法：
+ * - `export [async] function[*] 名`、`export class 名`；
+ * - `export const|let|var` 的每个声明：括号深度为 0 的逗号后面是下一个声明；解构 `{ a, b: c }` / `[a, b]` 收里面的绑定名；
+ * - `export { a, b as c }`、`export { a } from "…"`：取 `as` 后的名字（字符串名取原文），没有 `as` 取原名；
+ * - `export * as ns from "…"`：取 `ns`。
+ *
+ * 有意不认：`export default …`（导出名是 `default`，不是回调）；`export * from "…"`（转出的名字要读另一个模块才知道，
+ * 编译期不跟，静默忽略）。没有分号时可能多收后面语句里逗号后的名字，**漏认会变成静默缺口，宁可多认**。
+ */
+export function scriptExports(source: string): string[] {
+  const tokens = tokenizeScript(source);
+  const names = new Set<string>();
+  const exported = (token: Token | undefined) => {
+    if (token?.type === "name" || token?.type === "string") names.add(token.value);
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    if (!isName(tokens[i], "export") || isDot(tokens[i - 1])) continue;
+    let at = i + 1;
+    const head = tokens[at];
+    if (isName(head, "async")) at++;
+    if (isName(tokens[at], "function")) {
+      at++;
+      if (isPunct(tokens[at], "*")) at++;
+      exported(tokens[at]);
+    } else if (isName(head, "class")) exported(tokens[at + 1]);
+    else if (isName(head, "const") || isName(head, "let") || isName(head, "var")) {
+      at++;
+      for (;;) {
+        at = bindingPattern(tokens, at, names);
+        if (isPunct(tokens[at], "=")) at = skipExpression(tokens, at + 1, [",", ";"]);
+        if (!isPunct(tokens[at], ",")) break;
+        at++;
+      }
+    } else if (isPunct(head, "{")) {
+      at++;
+      while (at < tokens.length && !isPunct(tokens[at], "}")) {
+        if (isPunct(tokens[at], ",")) {
+          at++;
+          continue;
+        }
+        // `本地名 [as 导出名]`
+        if (isName(tokens[at + 1], "as")) {
+          exported(tokens[at + 2]);
+          at += 3;
+        } else exported(tokens[at++]);
+      }
+    } else if (isPunct(head, "*") && isName(tokens[at + 1], "as")) exported(tokens[at + 2]);
+  }
+  // `export { a as default }` 的导出名是 default
+  names.delete("default");
+  return [...names].sort();
+}
+
+const MISSING_CALLBACK_SET = new Set(MISSING_SCRIPT_CALLBACKS);
+
+/** 一段脚本导出的、运行时还没实现的 WPE 回调（排序）。 */
+export function scanScriptCallbacks(source: string): string[] {
+  return scriptExports(source).filter((name) => MISSING_CALLBACK_SET.has(name));
 }

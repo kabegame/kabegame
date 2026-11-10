@@ -18,7 +18,8 @@
  * `instanceoverride.colorn`（P4b 步骤 6，`colorn.ts`）：重乘字段之后从基值重算颜色模块的平移与新粒子的颜色初值（`applyColorn`）。
  *
  * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
- * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热）；暂停时渲染器不步进。
+ * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热；控制点照常更新、拷 `previous`，P4d 步骤 5）；
+ * 暂停时渲染器不步进。
  *
  * 控制点（P4c 步骤 1、2）是系统的一份状态（`controlpoints.ts`）：建系统时按 JSON 的 `offset` 与静态 `instanceoverride` 定基准，
  * 每帧按对象世界矩阵 `W` 与指针的跟随点（`step` / `prewarm` 的 `inputs`，渲染器按父链与壁纸样式算）更新，模块经执行上下文读。
@@ -352,15 +353,19 @@ export class ParticleSystem {
   }
 
   /**
-   * 不可见的一帧（C8，`FUN_140230650` 的不可见分支，读码、未实测）：不发射、不步进；还有存活粒子就清空全部粒子，并复位每个
-   * emitter 的计时（`resetEmitterTiming`，`FUN_14022f6c0`）。返回这次有没有清空。重新可见后照常 `step`，**不重新预热**。
-   * WPE 不可见时控制点照常更新（rea-p4c-sim.md 5.6），这里不更新：可见后第一帧发射前会按当帧的 `W` 重算 `current`，差别只在
-   * `previous`（那一帧的 `previous` 是不可见之前最后一帧的值），本步没有读 `previous` 的模块，只影响 P4d。
+   * 不可见的一帧（C8，`FUN_140230650` 的不可见分支）：不发射、不步进；还有存活粒子就清空全部粒子，并复位每个 emitter 的计时
+   * （`resetEmitterTiming`，`FUN_14022f6c0`）。返回这次有没有清空。重新可见后照常 `step`，**不重新预热**。
+   * 控制点照常更新（rea-p4c-sim.md 5.6、rea-p4d-modules.md 5.3，P4d 步骤 5）：每个不可见的帧按当帧的 `inputs`（`W` 与跟随点，渲染器照
+   * 可见时的算法算）`update`，再 `previous ← current`，没有粒子时也做。这样重新可见的第一帧，读 `previous` 的 maintaindistance* 看到的
+   * `current − previous` 只是一帧的位移，不会把粒子一次拽过整段隐藏期间的位移（实测 p4d-dist2 的 hide-r）。
    * 同一处（`FUN_14022f6c0`）还复位有运行状态的模块（P4d 步骤 3，`resetState`）：`mapsequence*` 无条件 `seq = 0`、`step` 的符号不
    * 复位（rea-p4d-modules.md 1.3、5.3），并清零系统时间 `sys+0x3f0`；`FUN_140230650` 同时清零图层时间 `obj+0x770`（P4d 步骤 4a）。
-   * WPE 不可见期间系统时间照常累加（5.3【推】，`FUN_1402308a0` 不看可见性），这里不可见的帧不步进，所以不累加。子系统的复位归 P4e。
+   * WPE 不可见期间系统时间照常累加、照常模拟（5.3【推】，`FUN_1402308a0` 不看可见性），这里不可见的帧只更新控制点：系统时间不累加、
+   * 不发射（「未实测清单」）。子系统的复位归 P4e。`inputs` 缺省（单位阵、(0, 0)）只给单测用。
    */
-  suspend(): boolean {
+  suspend(inputs: ControlPointInputs = IDENTITY_INPUTS): boolean {
+    this.controlPoints.update(inputs);
+    this.controlPoints.endFrame();
     if (this.alive === 0) return false;
     for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
     for (const module of this.initializers) if (module.state !== undefined) module.def.resetState?.(module.state);

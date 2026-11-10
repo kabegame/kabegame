@@ -10,7 +10,8 @@
  * `times[n − 1]`，没给时是 `dts` 前 n 项之和（P4b 步骤 4）。可见性（步骤 5）不处理。
  * 控制点的输入（P4c 步骤 1）是对象的世界矩阵：按全部图层的编译期变换沿父链算（`worldMatrixOf`），静态、不跑脚本；指针的跟随点
  * （P4c 步骤 2）按每帧的 `cursors` 与场景的正交投影反投影（`pointerScenePoint`），预热用第 1 项。
- * 给了 `shake`（P5a 步骤 3）时反投影的视图带上一帧的抖动 `T(−s)`，同渲染器（WPE 先模拟粒子、后更新相机，`render/renderer.ts`）。
+ * 给了 `shake`（P5a 步骤 3）时反投影的视图带上一帧的抖动 `T(−s)`，同渲染器（WPE 先模拟粒子、后更新相机，`render/renderer.ts`）；
+ * 给了 `zoom`（步骤 4）时投影绕场景中心缩放（`sceneViewProjection(size, zoom)`，静态、预热也用它）。
  */
 import type { SceneLayer } from "../compile/bundle";
 import { sceneViewProjection, worldMatrixOf } from "../render/layout";
@@ -88,6 +89,11 @@ export interface ParticleTrackOptions {
    * 和以前逐字节相同。
    */
   shake?: ShakeFields;
+  /**
+   * 场景的正交缩放（P5a 步骤 4，`general.fields.zoom`）：跟随点按 `sceneViewProjection(size, zoom)` 反投影（`p5a-zoomx*` 实测：不带缩放
+   * 差几百像素）。不跑脚本，整段回放是同一个值，预热也用它（同渲染器建场景时取编译期的值）。不给时 1，和以前逐字节相同。
+   */
+  zoom?: number;
   /** 随机种子；第 i 个粒子层用 `seed + i`。缺省 1。 */
   seed?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`（`injectedR`，用完退回种子随机数），同 dev 探针 `renderFrame` 的 `particles.random`。 */
@@ -178,7 +184,7 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   if (cursors && !size) throw new Error("给了 cursors 时要给 size（场景的投影尺寸）");
   if (cursors && cursors.length !== options.dts.length)
     throw new Error(`cursors 有 ${cursors.length} 项，dts 有 ${options.dts.length} 项，应等长`);
-  const viewProjection = size ? sceneViewProjection({ width: size[0], height: size[1] }) : null;
+  const viewProjection = size ? sceneViewProjection({ width: size[0], height: size[1] }, options.zoom) : null;
   /** 第 i 帧（从 0 起）的跟随点：每帧反投影一次，全部系统共用。`shake` 是模拟时相机的抖动（上一帧的 s），为 0 时用原矩阵。 */
   const pointerAt = (i: number, shake: readonly [number, number] = [0, 0]): readonly [number, number] => {
     if (!viewProjection) return [0, 0];

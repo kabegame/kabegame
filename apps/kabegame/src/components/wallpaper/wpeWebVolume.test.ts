@@ -344,6 +344,32 @@ describe("wpe_shim 音量接管", () => {
     env.sendFromHost({ type: WPE_VOLUME_MESSAGE, volume: 1 });
     expect(setPaused).toHaveBeenLastCalledWith(false);
   });
+  it("宿主音量放进只读的 __kabegameHostVolume，每条宿主消息派发一次 kabegame-host-volume（场景声音用）", () => {
+    const env = createShimEnv();
+    const events: string[] = [];
+    env.sandbox.dispatchEvent = (event: { type: string }) => {
+      events.push(event.type);
+      return true;
+    };
+    env.sandbox.CustomEvent = class {
+      constructor(readonly type: string) {}
+    };
+    // 收到父页面回复之前按静音
+    expect(env.sandbox.__kabegameHostVolume).toBe(0);
+    env.sendFromHost(wpeVolumeMessage(0.4, false));
+    expect(env.sandbox.__kabegameHostVolume).toBe(0.4);
+    expect(events).toEqual(["kabegame-host-volume"]);
+    env.sendFromHost({ type: WPE_VOLUME_MESSAGE, volume: 3 });
+    expect(env.sandbox.__kabegameHostVolume).toBe(1);
+    // 只读、不可重定义；伪造的消息不改值、不派发
+    const descriptor = Object.getOwnPropertyDescriptor(env.sandbox, "__kabegameHostVolume");
+    expect(descriptor?.set).toBeUndefined();
+    expect(descriptor?.configurable).toBe(false);
+    env.sendFromHost(wpeVolumeMessage(0.2, false), { isTrusted: false });
+    expect(env.sandbox.__kabegameHostVolume).toBe(1);
+    expect(events).toHaveLength(2);
+    expect(env.consoleSpy.warn).not.toHaveBeenCalled();
+  });
   it("启动即向父页面请求音量，安装过程不报错", () => {
     const env = createShimEnv();
     expect(env.hostPosts.map((post) => [plain(post.data), post.origin])).toEqual([[{ type: WPE_VOLUME_REQUEST }, "*"]]);

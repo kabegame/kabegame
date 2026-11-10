@@ -364,10 +364,20 @@ export interface RenderRequest {
   postprocess?: ScenePostprocess;
   /** 缺省取库里这张图当前的用户属性（同画面哈希基线的取法）。 */
   userProperties?: Record<string, unknown>;
-  /** `g_PointerPosition`，也作控制点跟随指针的光标（预热、回放的每一帧和读回那一帧都用它）；缺省 `[0.5, 0.5]`。 */
+  /**
+   * `g_PointerPosition`（抓帧窗口归一化），也推出控制点跟随指针的光标（预热、回放的每一帧和读回那一帧都用它）；缺省 `[0.5, 0.5]`。
+   * 不和 `pointers` 同给。
+   */
   pointer?: [number, number];
   /** 确定性粒子回放，原样交给探针 `renderFrame`；不给时画的是预热后的状态（不步进）。 */
   particles?: ParticleReplay;
+  /**
+   * 逐帧的 `g_PointerPosition`（P5a 收尾），和 `particles.dts` 等长：第 i 帧步进与视差点用第 i 项，预热用第 0 项，读回那一帧的
+   * `g_PointerPositionLast` 是倒数第二项。要有 `particles`。
+   */
+  pointers?: [number, number][];
+  /** 抓帧窗口尺寸 `[宽, 高]`：和场景不同尺寸时探针按壁纸样式 `fill` 把光标换到场景上；缺省或同尺寸时原样。 */
+  window?: [number, number];
 }
 
 /** REST `POST /hosts/:h/particle-track` 的请求体：交给探针 `particleTrack`（场景目录按图片 id 取）。 */
@@ -382,8 +392,12 @@ export interface ParticleTrackRequest {
   passes: 1 | 2;
   seed?: number;
   random?: Record<string, number[]>;
-  /** 每帧光标下的场景纹理坐标，和 `dts` 等长；不给时是场景中心。 */
+  /**
+   * 每帧的 `g_PointerPosition`（抓帧窗口归一化，P5a 收尾起不再由调用方换到场景上），和 `dts` 等长；不给时跟随点是场景中心。
+   */
   cursors?: [number, number][];
+  /** 抓帧窗口尺寸 `[宽, 高]`：和场景不同尺寸时探针按壁纸样式 `fill` 把 `cursors` 换到场景上；要和 `cursors` 一起给。 */
+  window?: [number, number];
   /** 写进结果的 `tag`。 */
   tag?: string;
 }
@@ -420,6 +434,10 @@ export interface ParticleTrackResult {
 export interface ParticleCornersRequest {
   imageId: string;
   particles?: ParticleReplay;
+  /** 逐帧的 `g_PointerPosition`，规则同 `RenderRequest.pointers`；不给时光标固定在场景中心。 */
+  pointers?: [number, number][];
+  /** 抓帧窗口尺寸 `[宽, 高]`，同 `RenderRequest.window`。 */
+  window?: [number, number];
   /** 粒子层：`objects` 下标或对象名；缺省全部粒子层。 */
   layer?: number | string;
   /** 每层只取前这么多个粒子（按槽序）；缺省全部。 */

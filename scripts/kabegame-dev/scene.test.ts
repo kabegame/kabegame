@@ -265,5 +265,66 @@ describe("粒子接口的参数透传", () => {
     const plain = f.probeCalls.filter((call) => call.name === "renderFrame")[1].args as Record<string, unknown>;
     assert.equal(plain.time, 1.5);
     assert.equal("particles" in plain, false);
+    assert.equal("pointers" in plain, false);
+    assert.equal("window" in plain, false);
+
+    // 逐帧光标（P5a 收尾）：pointers、window 原样交给探针；和 pointer 同给回 400、不碰页面
+    const pointers: [number, number][] = [
+      [0.1, 0.2],
+      [0.3, 0.4],
+    ];
+    await renderFrame(f.s, "h-1", { imageId: "14108", particles, pointers, window: [1920, 800], userProperties: {} });
+    const perFrame = f.probeCalls.filter((call) => call.name === "renderFrame")[2].args as Record<string, unknown>;
+    assert.deepEqual(perFrame.pointers, pointers);
+    assert.deepEqual(perFrame.window, [1920, 800]);
+    assert.equal("pointer" in perFrame, false);
+    const before = f.conn.evaluated.length;
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14108", particles, pointers, pointer: [0.5, 0.5] }),
+      (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === "pointer",
+    );
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+  });
+
+  test("逐帧光标：轨迹的 window、四角的 pointers / window 原样交给探针", async () => {
+    const f = await fixture({ particleTrack: () => track, particleCorners: () => [] });
+    const cursors: [number, number][] = [
+      [0.5, 0.5],
+      [1.6, 0.9],
+    ];
+    await particleTrack(f.s, "h-1", {
+      imageId: "1",
+      dts: [0.1, 0.1],
+      frames: [2],
+      passes: 1,
+      cursors,
+      window: [1920, 800],
+    });
+    assert.deepEqual(f.probeCalls[0].args, {
+      projectDir: "D:\\proj\\p4c-cp",
+      sceneAssets: ["D:\\assets"],
+      dts: [0.1, 0.1],
+      frames: [2],
+      passes: 1,
+      cursors,
+      window: [1920, 800],
+    });
+    const particles = { dts: [0.1, 0.1] };
+    await particleCorners(f.s, "h-1", {
+      imageId: "1",
+      particles,
+      pointers: cursors,
+      window: [1440, 1080],
+      userProperties: {},
+    });
+    assert.deepEqual(f.probeCalls[1].args, {
+      projectDir: "D:\\proj\\p4c-cp",
+      sceneAssets: ["D:\\assets"],
+      postprocess: "disabled",
+      userProperties: {},
+      particles,
+      pointers: cursors,
+      window: [1440, 1080],
+    });
   });
 });

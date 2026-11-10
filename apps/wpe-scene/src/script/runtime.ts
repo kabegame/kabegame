@@ -14,7 +14,12 @@ export interface ScriptRealm {
 }
 
 export type ScriptTarget = SceneScript["target"];
-type Callback = "init" | "update" | "applyUserProperties" | "destroy";
+/**
+ * 运行时会调用的导出回调。WPE 的其余回调（`compile/scriptApi.ts` 的 `MISSING_SCRIPT_CALLBACKS`）编译期报
+ * `script:callback:*`；实现一个就加到这里、从那张表删掉（`api.test.ts` 核对两者）。
+ */
+export const RUNTIME_CALLBACKS = ["init", "update", "applyUserProperties", "destroy"] as const;
+type Callback = (typeof RUNTIME_CALLBACKS)[number];
 interface ScriptRecord {
   script: SceneScript;
   exports: Record<string, unknown> | null;
@@ -51,6 +56,8 @@ function targetKey(target: ScriptTarget): string {
       return `${target.script}/scriptproperties/${target.key}`;
     case "particle-instance":
       return `objects/${target.object}/instanceoverride/${target.field}`;
+    case "sound":
+      return `objects/${target.object}/${target.field}`;
     default:
       return target.path;
   }

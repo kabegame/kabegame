@@ -10,8 +10,12 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# wgsl-in 本身不用：naga 30.0.1 的 glsl-in 依赖 `front::interpolator`，而该模块只在
-# spv-in / wgsl-in 下编译，只开 glsl-in 会编译失败；wgsl-in 依赖最少，用它补上。
-naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-in", "wgsl-out"] }
+# naga 源码嵌在本目录（naga/KABEGAME.md），只开 GLSL 前端与 WGSL 后端
+naga = { path = "naga", default-features = false, features = ["glsl-in", "wgsl-out"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# 语料测试与单测把输出的 WGSL 再解析、校验一遍，要 WGSL 前端；
+# resolver 2 下 dev 依赖的 feature 不进 wasm 构建
+naga = { path = "naga", default-features = false, features = ["glsl-in", "wgsl-out", "wgsl-in"] }

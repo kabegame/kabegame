@@ -28,6 +28,7 @@ import {
   checkProgramFeatures,
   checkSceneFeatures,
   checkScriptFeatures,
+  isSoundObject,
   modelFlag,
   objectKind,
   PARTICLE_UNIFORMS,
@@ -76,6 +77,7 @@ import {
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
 import { collectScripts, type SceneScripts } from "./scripts";
+import { compileSound, type SceneSound } from "./sounds";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 
@@ -374,6 +376,11 @@ export interface SceneBundle {
    */
   bindings: SceneBinding[];
   scripts: SceneScripts;
+  /**
+   * 声音表（P6a 步骤 1，`sounds.ts`）：每个声音对象一条，按 `objects` 顺序。声音对象在 `layers` 里另有一个没有 pass 的图层；
+   * 播放由宿主按它排期（`audio/`），渲染器不读。`compileScene` 总会给出；可选只是为了不动各处手写的测试 bundle，读的地方按空表处理。
+   */
+  sounds?: SceneSound[];
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -563,7 +570,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
-  checkScriptFeatures(scripts.list, unsupported);
+  // 有声音对象时，任意接收者上的播放控制都算声音层的方法（P6a 步骤 1，步骤 2 实现后随表删掉）
+  checkScriptFeatures(scripts.list, unsupported, { soundLayers: scene.objects.some(isSoundObject) });
   checkSceneFeatures(scene, unsupported);
   const general = scene.general ?? {};
   // 后处理档位：每次加载都解析（设置变了由调用方重新编译）
@@ -581,6 +589,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ? (general.orthogonalprojection as { width?: number; height?: number })
       : {};
   const fields = generalFields(general, properties, bindings);
+  /** 声音表（P6a 步骤 1）：对象循环里按 `objects` 顺序填。 */
+  const sounds: SceneSound[] = [];
   const bundle: SceneBundle = {
     general: {
       width: projection.width ?? 1920,
@@ -606,6 +616,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 同一个数组随编译继续填充，最后就是全部登记项
     bindings: bindings.list,
     scripts,
+    sounds,
   };
   const counts = lightCounts(general);
   for (const issue of lightConfigIssues(general)) unsupported.add(issue);
@@ -1036,6 +1047,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     bundle.layers.push(layer);
     if (objectKind(object) === "particle") {
       await compileParticle(index, object, layer);
+      continue;
+    }
+    // 声音对象（P6a 步骤 1）：图层上只有变换，播放字段进声音表；可见性不影响播放（p6-REPORT `p6a-misc`）
+    if (isSoundObject(object)) {
+      sounds.push(await compileSound(index, object, fs, properties, bindings));
       continue;
     }
     // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）

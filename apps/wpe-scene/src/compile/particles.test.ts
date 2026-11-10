@@ -40,7 +40,7 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项、P4d 步骤 3 的 2 项、步骤 4a 的 2 项，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项、P4d 步骤 3 的 2 项、步骤 4a 的 2 项、步骤 5 的 4 项，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
@@ -67,6 +67,10 @@ describe("模块表", () => {
       "operator:oscillatesize",
       "operator:vortex",
       "operator:controlpointattract",
+      "operator:maintaindistancetocontrolpoint",
+      "operator:maintaindistancebetweencontrolpoints",
+      "operator:reducemovementnearcontrolpoint",
+      "operator:vortex_v2",
       "operator:turbulence",
       "operator:capvelocity",
       "operator:remapvalue",
@@ -687,13 +691,13 @@ describe("能力表：粒子", () => {
       particleKeys({
         emitter: [{ name: "layerimage" }],
         initializer: [{ name: "remapinitialvalue" }],
-        operator: [{ name: "reducemovementnearcontrolpoint" }],
+        operator: [{ name: "boids" }],
         renderer: [{ name: "foo" }],
       }),
     ).toEqual([
       // remapinitialvalue 从 P4d 步骤 4a 起在表里，只写名字时没有键
       "particle:emitter:layerimage",
-      "particle:operator:reducemovementnearcontrolpoint",
+      "particle:operator:boids",
       "particle:renderer:foo",
     ]);
     // 步骤 3 的 8 个模块进了表
@@ -929,10 +933,10 @@ describe("能力表：粒子", () => {
     expect(
       particleKeys({
         emitter: [emitter()],
-        operator: [{ name: "reducemovementnearcontrolpoint", controlpoint: 1 }],
+        operator: [{ name: "boids", controlpoint: 1 }],
         controlpoint: [{}, { flags: 1 }],
       }),
-    ).toEqual(["particle:operator:reducemovementnearcontrolpoint"]);
+    ).toEqual(["particle:operator:boids"]);
     // controlpointattract（P4c 步骤 3）在表里：它引用的指针点不报
     expect(
       particleKeys({

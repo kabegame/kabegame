@@ -1,6 +1,7 @@
 /**
  * P5a 步骤 2（视差）：`parallax.ts` 的公式、`GpuScene` 的绘制矩阵、编译与就地写、渲染器的帧循环。步骤 3（抖动）的 `GpuScene` 矩阵、
- * 眼位、指针反投影与渲染器帧顺序也在这里（「抖动」两处，共用假设备），公式在 `shake.test.ts`。
+ * 眼位、指针反投影与渲染器帧顺序也在这里（「抖动」两处，共用假设备），公式在 `shake.test.ts`；步骤 4（缩放）同样（「缩放」两处），
+ * 投影公式在 `zoom.test.ts`。
  * 期望值取 WPE 实测（p5-REPORT「P5a 语义的实测核对」，逐帧数据在 `ignore/p5/a0/out/ana_a.txt`）；矩阵乘反（`T(o)·VP`）时平移落在
  * NDC 单位里，偏移差上百倍，下面按像素断言的用例都会失败。
  */
@@ -278,6 +279,35 @@ describe("视差公式（p5-REPORT 实测）", () => {
     expect(replayed).toEqual(manual);
     expect(replayed).not.toEqual(replayParallax(initialParallaxState(W, H), f, frame, dts));
     expect(() => replayParallax(initialParallaxState(W, H), f, frame, dts, eyes.slice(1))).toThrow("应等长");
+  });
+
+  it("replayParallax 收每帧的指针（P5a 收尾：回放逐帧光标）：和逐帧换指针推进相同；不给时取 frame.pointer；不等长报错", () => {
+    const f = fields({ cameraparallaxdelay: 2.7, cameraparallaxmouseinfluence: 1 });
+    const frame = { pointer: [1, 0] as [number, number], width: W, height: H };
+    const dts = [0.05, 0.05, 0.25];
+    const pointers: [number, number][] = [
+      [0.2, 0.9],
+      [1.4, -0.3],
+      [0.6, 0.5],
+    ];
+    let manual = initialParallaxState(W, H);
+    dts.forEach((frametime, i) => {
+      manual = advanceParallax(manual, parallaxInput(f, { ...frame, frametime, pointer: pointers[i] }));
+    });
+    const replayed = replayParallax(initialParallaxState(W, H), f, frame, dts, undefined, pointers);
+    expect(replayed).toEqual(manual);
+    expect(replayed).not.toEqual(replayParallax(initialParallaxState(W, H), f, frame, dts));
+    // 每帧都是 frame.pointer 时和不给相同
+    expect(
+      replayParallax(initialParallaxState(W, H), f, frame, dts, undefined, [
+        frame.pointer,
+        frame.pointer,
+        frame.pointer,
+      ]),
+    ).toEqual(replayParallax(initialParallaxState(W, H), f, frame, dts));
+    expect(() => replayParallax(initialParallaxState(W, H), f, frame, dts, undefined, pointers.slice(1))).toThrow(
+      "应等长",
+    );
   });
 });
 
@@ -908,9 +938,15 @@ function expectMatrixClose(actual: Mat4, expected: Mat4, label: string) {
     );
 }
 
-/** 一帧（同渲染器的调用顺序）：抖动、视差、同步、写每帧 uniform。 */
-function shakeFrame(scene: GpuScene, state: SceneState, shake: [number, number], parallax: SceneParallax | null) {
-  scene.setShake(shake);
+/** 一帧（同渲染器的调用顺序）：相机（抖动与缩放）、视差、同步、写每帧 uniform。 */
+function shakeFrame(
+  scene: GpuScene,
+  state: SceneState,
+  shake: [number, number],
+  parallax: SceneParallax | null,
+  zoom = 1,
+) {
+  scene.setCamera({ shake, zoom });
   scene.setParallax(parallax, state);
   scene.sync(state);
   scene.update(FRAME, state);
@@ -1020,7 +1056,7 @@ describe("GpuScene：抖动（P5a 步骤 3）", () => {
     expect(snapshot()).toEqual(plain);
   });
 
-  it("粒子模拟的指针反投影带最近一次 setShake 的 s、不带视差：跟随点整体平移 s", async () => {
+  it("粒子模拟的指针反投影带最近一次 setCamera 的 s、不带视差：跟随点整体平移 s", async () => {
     const bundle = bundleOf([particleLayer(0, {}, { origin: [1460, 300, 0] })]);
     const { scene, state } = await open(bundle);
     const draw = drawsOf(scene)[0];
@@ -1030,7 +1066,7 @@ describe("GpuScene：抖动（P5a 步骤 3）", () => {
     scene.stepParticles(0.05, 1, state, [0.25, 0.75]);
     const still = pointerOf();
     expect(still).toEqual(pointerScenePoint(ortho, [0.25, 0.75]));
-    scene.setShake(SHAKE);
+    scene.setCamera({ shake: SHAKE, zoom: 1 });
     scene.setParallax({ point: [0, 0], amount: 0.5 }, state);
     scene.stepParticles(0.05, 1, state, [0.25, 0.75]);
     const shaken = pointerOf();
@@ -1066,9 +1102,9 @@ describe("GpuScene：抖动（P5a 步骤 3）", () => {
       const step = vi.spyOn(drawsOf(scene)[0].particles!.system, "step");
       const cursor = pointer as [number, number];
       // 渲染器的一帧：上一帧末尾交过上一帧的 s，这一帧先步进（用它），之后才交这一帧的 s
-      scene.setShake(shakeOffset(SHAKE_FIELDS, previous, H));
+      scene.setCamera({ shake: shakeOffset(SHAKE_FIELDS, previous, H), zoom: 1 });
       scene.stepParticles(1 / 60, time, state, cursor);
-      scene.setShake(shakeOffset(SHAKE_FIELDS, time, H));
+      scene.setCamera({ shake: shakeOffset(SHAKE_FIELDS, time, H), zoom: 1 });
       const point = (step.mock.lastCall![2] as { pointer: [number, number] }).pointer;
       expect(Math.abs(point[0] - born[0])).toBeLessThan(1e-2);
       expect(Math.abs(point[1] - born[1])).toBeLessThan(1e-2);
@@ -1081,6 +1117,210 @@ describe("GpuScene：抖动（P5a 步骤 3）", () => {
       expect(Math.hypot(wrong[0] - born[0], wrong[1] - born[1])).toBeGreaterThan(0.1);
     },
   );
+});
+
+// ———— 缩放（P5a 步骤 4）————
+
+/**
+ * WPE 抓帧（`p5a-zoomx15` 第 116 帧、`zoomx08` 第 117 帧，1920×1080，读数 `ignore/p5/s4/out/dump.json`，核对脚本
+ * `ignore/p5/s4/ana_zoomx.py`）：抖动 speed 1 / amplitude 1 / roughness 1，视差 amount 0.5、delay 0、mouseinfluence 1；方块 A 在
+ * (960, 540)，透视粒子 pz（flags 4）在 (1700, 600)，深度都是 (1, 1)。指针在窗口外，钳制后视差点是 s + (1920, 0)。MVP 都是 float32 原值。
+ */
+const ZOOM_MEASURED = [
+  {
+    tag: "zoomx15",
+    zoom: 1.5,
+    time: 5.870555877685547,
+    pointer: [1.1276041269302368, 1.1129629611968994] as [number, number],
+    eye: [969.8935546875, 550.7955932617188, 2000],
+    parallax: [1, 0.009995929896831512],
+    a: [
+      0.0015625001396983862, 0, 0, 0, 0, 0.00277777761220932, 0, 0, 0, 0, 0.0002500000118743628, 0, -0.7731879949569702,
+      0.7050182819366455, 0.5, 1,
+    ],
+    pz: [
+      0.5154362320899963, 0, 0, 0, 0, 0.9163311123847961, 0, 0, 0, 0, 0.00033344447729177773, -1, 317.0755615234375,
+      315.0406494140625, 4.8916707038879395, 329.8792724609375,
+    ],
+  },
+  {
+    tag: "zoomx08",
+    zoom: 0.8,
+    time: 5.914529800415039,
+    pointer: [1.0906250476837158, 1.0361111164093018] as [number, number],
+    eye: [970.0744018554688, 550.7951049804688, 2000],
+    parallax: [1, 0.009995474480092525],
+    a: [
+      0.00083333341171965, 0, 0, 0, 0, 0.00148148147854954, 0, 0, 0, 0, 0.0002500000118743628, 0, -0.4125930070877075,
+      0.37601086497306824, 0.5, 1,
+    ],
+    pz: [
+      0.5154362320899963, 0, 0, 0, 0, 0.9163311123847961, 0, 0, 0, 0, 0.00033344447729177773, -1, 316.93572998046875,
+      315.04132080078125, 4.795423984527588, 618.5235595703125,
+    ],
+  },
+];
+
+describe("GpuScene：缩放（P5a 步骤 4）", () => {
+  /** 方块 A（图层，读 `g_EyePosition`）与透视粒子 pz：同 `zoomx*` 工程，编译期的 zoom 是 `zoom`。 */
+  async function openZoom(zoom: number) {
+    const bundle = bundleOf(
+      [layer(0, { origin: [960, 540, 0] }), particleLayer(1, { flags: 4 }, { origin: [1700, 600, 0] })],
+      { ...SHAKE_FIELDS, cameraparallaxmouseinfluence: 1, zoom },
+    );
+    bundle.programs = [EYE_PROGRAM, PARTICLE_PROGRAM];
+    return { bundle, ...(await open(bundle)) };
+  }
+  const byObject = (scene: GpuScene) => Object.fromEntries(drawsOf(scene).map((draw) => [draw.object, draw]));
+
+  it.each(ZOOM_MEASURED)(
+    "WPE 实测（$tag）：方块 A 与透视粒子的 MVP 逐项对上（VP(zoom) · T(o − s)，透视的 d 按缩放后的可见高）；眼位只带抖动，g_ParallaxPosition 不随缩放变",
+    async (item) => {
+      const { scene, state, bundle } = await openZoom(item.zoom);
+      // 渲染器的一帧：帧开头取 s 与 zoom，视差点带 s 推进（delay 0 一步到位），相机与视差交给场景
+      const shake = shakeOffset(SHAKE_FIELDS, item.time, H);
+      const parallax = advanceParallax(
+        initialParallaxState(W, H),
+        parallaxInput(state.general, { pointer: item.pointer, frametime: 0.05, width: W, height: H, eye: shake }),
+      );
+      scene.setCamera({ shake, zoom: state.general.zoom });
+      scene.setParallax(drawParallax(parallax, state.general), state);
+      scene.sync(state);
+      scene.update({ ...FRAME, time: item.time, pointer: item.pointer, parallax: parallax.position }, state);
+      const draws = byObject(scene);
+      expectMatrixClose(matrixAt(draws[0], 0), new Float32Array(item.a), "A");
+      expectMatrixClose(matrixAt(draws[1], 0), new Float32Array(item.pz), "pz");
+      vec3At(draws[0], 208).forEach((value, i) =>
+        expect(Math.abs(value - item.eye[i]), `eye[${i}]`).toBeLessThan(2e-3),
+      );
+      vec2At(draws[0], 192).forEach((value, i) =>
+        expect(Math.abs(value - item.parallax[i]), `parallax[${i}]`).toBeLessThan(1e-6),
+      );
+      // 对照：透视粒子按不缩放的 d 算，m33（相机距离）差上百
+      expect(Math.abs(particleViewProjection(bundle.general)[15] - item.pz[15])).toBeGreaterThan(100);
+    },
+  );
+
+  it("建场景时的基准就带编译期的 zoom；setCamera 换 zoom 时重算两份基准、一帧只刷一次，回到原值恢复原字节；眼位不随 zoom 变", async () => {
+    const { scene, state, bundle } = await openZoom(1.5);
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const world = (object: number) => worldMatrixOf(object, state.layers, new Map());
+    /** 全部 draw 的 MVP 都是 `base(zoom) · T(−s) · W`（这里不开视差）。 */
+    const expectCamera = (zoom: number, s: readonly [number, number], label: string) => {
+      const shift = translation(-s[0], -s[1], 0);
+      const draws = byObject(scene);
+      expectMatrixClose(
+        matrixAt(draws[0], 0),
+        multiply(multiply(sceneViewProjection(bundle.general, zoom), shift), world(0)),
+        `${label} A`,
+      );
+      expectMatrixClose(
+        matrixAt(draws[1], 0),
+        multiply(multiply(particleViewProjection(bundle.general, zoom), shift), world(1)),
+        `${label} pz`,
+      );
+    };
+    expectCamera(1.5, [0, 0], "建场景");
+    const snapshot = () => drawsOf(scene).map((draw) => Buffer.from(draw.uniformBuffer!.bytes).toString("hex"));
+    const plain = snapshot();
+    const refresh = vi.spyOn(scene as unknown as { refreshLayer: () => void }, "refreshLayer");
+    // 同一个相机：不刷
+    shakeFrame(scene, state, [0, 0], null, 1.5);
+    expect(refresh).not.toHaveBeenCalled();
+    // 只换 zoom：整体刷一遍，眼位不变
+    shakeFrame(scene, state, [0, 0], null, 2);
+    expect(refresh).toHaveBeenCalledTimes(drawsOf(scene).length);
+    expectCamera(2, [0, 0], "zoom 2");
+    expect(vec3At(byObject(scene)[0], 208)).toEqual([960, 540, 2000]);
+    // zoom 与 s 同一帧都变：只刷一遍；眼位只带 s
+    refresh.mockClear();
+    shakeFrame(scene, state, SHAKE, null, 0.8);
+    expect(refresh).toHaveBeenCalledTimes(drawsOf(scene).length);
+    expectCamera(0.8, SHAKE, "zoom 0.8 + s");
+    expect(vec3At(byObject(scene)[0], 208)).toEqual([Math.fround(960 + SHAKE[0]), Math.fround(540 + SHAKE[1]), 2000]);
+    // 回到编译期的值、s 为 0：字节同建场景时
+    refresh.mockClear();
+    shakeFrame(scene, state, [0, 0], null, 1.5);
+    expect(refresh).toHaveBeenCalledTimes(drawsOf(scene).length);
+    expect(snapshot()).toEqual(plain);
+  });
+
+  it.each([
+    // 计划「步骤 4」补测（`ignore/p5/s4/fixtures.py`）：抖动 speed 1 / amplitude 1 / roughness 1，系统 pf 的控制点 0 跟随指针、速度 0
+    {
+      tag: "zoomx15 第 118 帧",
+      zoom: 1.5,
+      pointer: [1.1276041269302368, 1.1129629611968994],
+      previous: 5.870555877685547,
+      time: 5.948989391326904,
+      born: [1773.226806640625, 109.46224975585938],
+    },
+    {
+      tag: "zoomx08 第 119 帧",
+      zoom: 0.8,
+      pointer: [1.0906250476837158, 1.0361111164093018],
+      previous: 5.914529800415039,
+      time: 5.995542049407959,
+      born: [2387.57421875, -172.95489501953125],
+    },
+  ])(
+    "WPE 实测（$tag）：跟随指针的新生粒子出生在「带缩放的投影 + 上一帧 s」的反投影点（差 < 1e-2），按不缩放的投影差上百",
+    async ({ zoom, pointer, previous, time, born }) => {
+      const bundle = bundleOf([particleLayer(0, {}, { origin: [960, 540, 0] })], {
+        ...SHAKE_FIELDS,
+        cameraparallaxmouseinfluence: 1,
+        zoom,
+      });
+      const { scene, state } = await open(bundle);
+      const step = vi.spyOn(drawsOf(scene)[0].particles!.system, "step");
+      const cursor = pointer as [number, number];
+      // 渲染器的一帧：上一帧末尾交过上一帧的相机，这一帧先步进（用它），之后才交这一帧的
+      scene.setCamera({ shake: shakeOffset(SHAKE_FIELDS, previous, H), zoom: state.general.zoom });
+      scene.stepParticles(1 / 20, time, state, cursor);
+      scene.setCamera({ shake: shakeOffset(SHAKE_FIELDS, time, H), zoom: state.general.zoom });
+      const point = (step.mock.lastCall![2] as { pointer: [number, number] }).pointer;
+      expect(Math.abs(point[0] - born[0])).toBeLessThan(1e-2);
+      expect(Math.abs(point[1] - born[1])).toBeLessThan(1e-2);
+      const s = shakeOffset(SHAKE_FIELDS, previous, H);
+      const plain = pointerScenePoint(
+        multiply(sceneViewProjection(bundle.general), translation(-s[0], -s[1], 0)),
+        cursor,
+      );
+      expect(Math.hypot(plain[0] - born[0], plain[1] - born[1])).toBeGreaterThan(100);
+    },
+  );
+
+  it("zoom 绑用户属性：登记成 general 目标、不报不支持；就地写之后下一次 setCamera 生效，字节等于用新值整场编译", async () => {
+    const general = { zoom: { user: "z", value: 1.5 } };
+    const compiled = await compileStatic(staticObjects(), general);
+    expect(compiled.bindings).toContainEqual({ property: "z", target: { kind: "general", key: "zoom" } });
+    expect(compiled.unsupported).not.toContain("general:zoom");
+    expect(compiled.general.fields.zoom).toBe(1.5);
+    const live = await open(compiled);
+    live.state.write(
+      compiled.bindings.find((item) => item.property === "z")!,
+      2,
+    );
+    expect(live.state.general.zoom).toBe(2);
+    // 渲染器的一帧：帧开头取状态里的 zoom，交给场景，再视差、同步、写每帧 uniform
+    const run = ({ scene, state }: { scene: GpuScene; state: SceneState }) => {
+      scene.setCamera({ shake: [0, 0], zoom: state.general.zoom });
+      frame(scene, state, initialParallaxState(W, H), [0.5, 0.5]);
+    };
+    run(live);
+    const fresh = await open(await compileStatic(staticObjects(), general, { z: 2 }));
+    expect(fresh.state.general.zoom).toBe(2);
+    run(fresh);
+    const bytes = (scene: GpuScene) =>
+      Object.fromEntries(
+        drawsOf(scene).map((draw) => [draw.object, Buffer.from(draw.uniformBuffer!.bytes).toString("hex")]),
+      );
+    expect(bytes(live.scene)).toEqual(bytes(fresh.scene));
+    // 方块 B（1460, 540）：视差偏移 250 是场景单位，缩放之后在 NDC 里是 2·(1460 + 250 − 960)/W 再乘 2
+    const b = drawsOf(live.scene).find((draw) => draw.object === 1)!;
+    expect(transformPoint(matrixAt(b, 0), 0, 0, 0)[0]).toBeCloseTo((2 * (1460 + 250 - 960) * 2) / W, 5);
+  });
 });
 
 // ———— 渲染器 ————
@@ -1259,7 +1499,7 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     await renderer.load(bundle);
     const scene = renderer.currentScene!;
     const spies = {
-      setShake: vi.spyOn(scene, "setShake"),
+      setCamera: vi.spyOn(scene, "setCamera"),
       sync: vi.spyOn(scene, "sync"),
       stepParticles: vi.spyOn(scene, "stepParticles"),
       setParallax: vi.spyOn(scene, "setParallax"),
@@ -1275,18 +1515,18 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
       .flatMap(([name, spy]) => spy.mock.invocationCallOrder.map((index) => [index, name] as const))
       .sort((a, b) => a[0] - b[0])
       .map(([, name]) => name);
-    expect(order).toEqual(["sync", "stepParticles", "setShake", "setParallax", "sync", "update", "encode"]);
+    expect(order).toEqual(["sync", "stepParticles", "setCamera", "setParallax", "sync", "update", "encode"]);
     // 脚本这一帧关掉了抖动，s 仍按脚本之前的字段算：本帧的 g_Time（已回绕，同 update 的帧输入）
     const time = spies.update.mock.lastCall![0].time;
     const shake = shakeOffset(SHAKE_FIELDS, time, H);
     expect(shake[0]).not.toBe(0);
-    expect(spies.setShake.mock.lastCall![0]).toEqual(shake);
+    expect(spies.setCamera.mock.lastCall![0]).toEqual({ shake, zoom: 1 });
     // delay 0、mouseinfluence 0：P = eye.xy + 场景中心
     expect(sceneParallax(renderer)).toEqual({ point: [960 + shake[0], 540 + shake[1]], amount: 0.5 });
     script = null;
     now += 50;
     frames.at(-1)!(now);
-    expect(spies.setShake.mock.lastCall![0]).toEqual([0, 0]);
+    expect(spies.setCamera.mock.lastCall![0]).toEqual({ shake: [0, 0], zoom: 1 });
     expect(sceneParallax(renderer)).toEqual({ point: [960, 540], amount: 0.5 });
     renderer.destroy();
   });
@@ -1331,6 +1571,51 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     }
     // 各帧的 s 互不相同，上面的断言能区分「上一帧」与「当帧」
     expect(new Set(draws.map((item) => item.shake.join(","))).size).toBe(4);
+    renderer.destroy();
+  });
+
+  it("缩放（P5a 步骤 4）：帧开头随 s 取脚本之前的 zoom、粒子步进之后交给场景；脚本写的 zoom 下一帧绘制生效，粒子再晚一帧", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const zoomOf = (scene: GpuScene) => (scene as unknown as { zoom: number }).zoom;
+    const steps: number[] = [];
+    const draws: number[] = [];
+    const stepParticles = GpuScene.prototype.stepParticles;
+    vi.spyOn(GpuScene.prototype, "stepParticles").mockImplementation(function (
+      this: GpuScene,
+      ...args: Parameters<GpuScene["stepParticles"]>
+    ) {
+      steps.push(zoomOf(this));
+      return stepParticles.apply(this, args);
+    });
+    const update = GpuScene.prototype.update;
+    vi.spyOn(GpuScene.prototype, "update").mockImplementation(function (
+      this: GpuScene,
+      ...args: Parameters<GpuScene["update"]>
+    ) {
+      draws.push(zoomOf(this));
+      return update.apply(this, args);
+    });
+    const bundle = bundleOf([layer(0)], { zoom: 1.5 });
+    let script: ((renderer: SceneRenderer) => void) | null = null;
+    const { renderer, frames } = await start(bundle, (r) => script?.(r));
+    // load 里画第一帧
+    await renderer.load(bundle);
+    const setCamera = vi.spyOn(renderer.currentScene!, "setCamera");
+    // 第 1 帧的脚本把 zoom 写成 2：这一帧交给场景的仍是脚本之前的 1.5
+    script = (r) => r.sceneState!.write({ property: "", target: { kind: "general", key: "zoom" } }, 2);
+    now += 50;
+    frames.at(-1)!(now);
+    expect(setCamera.mock.lastCall![0].zoom).toBe(1.5);
+    script = null;
+    for (let i = 0; i < 2; i++) {
+      now += 50;
+      frames.at(-1)!(now);
+    }
+    expect(setCamera.mock.calls.map(([camera]) => camera.zoom)).toEqual([1.5, 2, 2]);
+    // 绘制：加载帧、第 1 帧 1.5，第 2 帧起 2；粒子模拟用上一帧的相机，第 3 帧才是 2
+    expect(draws).toEqual([1.5, 1.5, 2, 2]);
+    expect(steps).toEqual([1.5, 1.5, 1.5, 2]);
     renderer.destroy();
   });
 });

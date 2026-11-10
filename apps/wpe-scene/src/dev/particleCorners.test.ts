@@ -8,7 +8,7 @@ import { trailVertexLayout } from "../particles/ropetrail";
 import { programVertexPacking, vertexPacking } from "../render/programs";
 import { shakeOffset } from "../render/shake";
 import { translateWithIncludes, Wpesl2wgsl } from "../wpesl2wgsl";
-import { cornerInputs, frameShake, replayParticles, rewriteVertexAsCompute } from "./particleCorners";
+import { cornerInputs, frameCamera, replayParticles, rewriteVertexAsCompute } from "./particleCorners";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -235,14 +235,21 @@ fn main(@location(0) a_PositionVec4_: vec4<f32>, @location(1) a_TexCoordVec4_: v
     expect(replayParticles(scene, {} as never, { dts: [] }, 3)).toEqual({ time: 3, frametime: 0 });
   });
 
-  it("回放的抖动（P5a 步骤 3）：afterStep 在每帧步进之后收到这一帧的 g_Time；frameShake 按它设 s 并记下每帧的 eye", () => {
+  it("回放的相机（P5a 步骤 3、4）：afterStep 在每帧步进之后收到这一帧的 g_Time；frameCamera 按它设 s、带上状态里的 zoom，并记下每帧的 eye", () => {
     const calls: string[] = [];
     const scene = {
       stepParticles: (dt: number, time: number) => void calls.push(`step ${dt} ${time}`),
-      setShake: (offset: readonly [number, number]) => void calls.push(`shake ${offset.join(" ")}`),
+      setCamera: ({ shake, zoom }: { shake: readonly [number, number]; zoom: number }) =>
+        void calls.push(`shake ${shake.join(" ")} zoom ${zoom}`),
     };
-    const general = { camerashake: true, camerashakespeed: 1, camerashakeamplitude: 1, camerashakeroughness: 1 };
-    const shake = frameShake(scene, { general } as never, 1080);
+    const general = {
+      camerashake: true,
+      camerashakespeed: 1,
+      camerashakeamplitude: 1,
+      camerashakeroughness: 1,
+      zoom: 1.5,
+    };
+    const shake = frameCamera(scene, { general } as never, 1080);
     const { time } = replayParticles(
       scene,
       {} as never,
@@ -262,12 +269,12 @@ fn main(@location(0) a_PositionVec4_: vec4<f32>, @location(1) a_TexCoordVec4_: v
     expect(calls).toEqual([
       "step 0.1 5",
       "after 5",
-      `shake ${s(5).join(" ")}`,
+      `shake ${s(5).join(" ")} zoom 1.5`,
       "step 0.2 5.2",
       "after 5.2",
-      `shake ${s(5.2).join(" ")}`,
+      `shake ${s(5.2).join(" ")} zoom 1.5`,
       "step 0.05 5.25",
-      `shake ${s(5.25).join(" ")}`,
+      `shake ${s(5.25).join(" ")} zoom 1.5`,
     ]);
     expect(shake.eyes).toEqual([s(5), s(5.2), s(5.25)]);
   });

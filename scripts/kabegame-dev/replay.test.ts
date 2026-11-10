@@ -50,7 +50,7 @@ describe("checkReplay", () => {
     rejects400(() => checkReplay({ dts: [0.1], random: { "3": 0.5 } }), "particles.random.3");
   });
 
-  test("不认识的字段拒绝（例如逐帧光标：renderFrame 不收）", () => {
+  test("不认识的字段拒绝（例如把逐帧光标放进 particles：逐帧光标是请求体的 pointers）", () => {
     rejects400(() => checkReplay({ dts: [0.1], cursors: [[0.5, 0.5]] }), "particles.cursors", /不认识/);
     rejects400(() => checkReplay([0.1]), "particles");
   });
@@ -59,6 +59,27 @@ describe("checkReplay", () => {
     assert.equal(checkRenderReplay({ time: 1.5 }), undefined);
     assert.deepEqual(checkRenderReplay({ particles: { dts: [0.1] } }), { dts: [0.1] });
     rejects400(() => checkRenderReplay({ particles: { dts: [0.1] }, time: 1 }), "time", /不能同时给/);
+  });
+
+  test("渲染的逐帧光标：pointers 要有 particles、和 dts 等长、不和 pointer 同给；pointer、window 的形状", () => {
+    const particles = { dts: [0.1, 0.2] };
+    const pointers = [
+      [0.1, 0.2],
+      [1.4, -0.3],
+    ];
+    assert.deepEqual(checkRenderReplay({ particles, pointers, window: [1920, 800] }), particles);
+    assert.equal(checkRenderReplay({ pointer: [0.5, 0.5], window: [1920, 1080] }), undefined);
+    rejects400(() => checkRenderReplay({ pointers }), "pointers", /要和 particles 一起给/);
+    rejects400(
+      () => checkRenderReplay({ particles, pointers: pointers.slice(1) }),
+      "pointers",
+      /应和 particles\.dts 等长/,
+    );
+    rejects400(() => checkRenderReplay({ particles, pointers: [[0.1, 0.2], [0.3]] }), "pointers[1]", /两个有限数/);
+    rejects400(() => checkRenderReplay({ particles, pointers, pointer: [0.5, 0.5] }), "pointer", /不能同时给/);
+    rejects400(() => checkRenderReplay({ pointer: [0.5] }), "pointer", /两个有限数/);
+    rejects400(() => checkRenderReplay({ window: [1920, 0] }), "window", /两个正数/);
+    rejects400(() => checkRenderReplay({ window: "1920x1080" }), "window");
   });
 });
 
@@ -109,6 +130,22 @@ describe("轨迹请求", () => {
     rejects400(() => checkTrackRequest({ ...base, cursors: [[0.5], [0, 0], [0, 0]] }), "cursors[0]");
   });
 
+  test("window：和 cursors 一起给，[宽, 高] 两个正数", () => {
+    const cursors = [
+      [0.5, 0.5],
+      [1.6, -0.2],
+      [0, 0],
+    ];
+    assert.deepEqual(checkTrackRequest({ ...base, cursors, window: [1920, 800] }), {
+      ...base,
+      cursors,
+      window: [1920, 800],
+    });
+    rejects400(() => checkTrackRequest({ ...base, window: [1920, 800] }), "window", /要和 cursors 一起给/);
+    rejects400(() => checkTrackRequest({ ...base, cursors, window: [1920, -1] }), "window", /两个正数/);
+    rejects400(() => checkTrackRequest({ ...base, cursors, window: [1920] }), "window");
+  });
+
   test("imageId、tag、不认识的字段、dts", () => {
     rejects400(() => checkTrackRequest({ ...base, imageId: "abc" }), "imageId");
     rejects400(() => checkTrackRequest({ ...base, tag: 3 }), "tag");
@@ -143,5 +180,39 @@ describe("四角请求", () => {
     rejects400(() => checkCornersRequest({ imageId: "9", wgsl: 1 }), "wgsl");
     rejects400(() => checkCornersRequest({ imageId: "9", particles: { dts: [0.1], passes: 0 } }), "particles.passes");
     rejects400(() => checkCornersRequest({ imageId: "9", pointer: [0.5, 0.5] }), "pointer", /不认识/);
+  });
+
+  test("逐帧光标：pointers 要有 particles、和 particles.dts 等长；window 的形状", () => {
+    const particles = { dts: [0.1, 0.1] };
+    const pointers = [
+      [0.5, 0.5],
+      [0.25, 0.75],
+    ];
+    assert.deepEqual(checkCornersRequest({ imageId: "9", particles, pointers, window: [1440, 1080] }), {
+      imageId: "9",
+      particles,
+      pointers,
+      window: [1440, 1080],
+    });
+    assert.deepEqual(checkCornersRequest({ imageId: "9", window: [1440, 1080] }).window, [1440, 1080]);
+    rejects400(() => checkCornersRequest({ imageId: "9", pointers }), "pointers", /要和 particles 一起给/);
+    rejects400(
+      () => checkCornersRequest({ imageId: "9", particles: { dts: [0.1] }, pointers }),
+      "pointers",
+      /有 2 项，应和 particles\.dts 等长（1 项）/,
+    );
+    rejects400(
+      () =>
+        checkCornersRequest({
+          imageId: "9",
+          particles,
+          pointers: [
+            [0, 0],
+            [0, null],
+          ],
+        }),
+      "pointers[1]",
+    );
+    rejects400(() => checkCornersRequest({ imageId: "9", window: [0, 1080] }), "window", /两个正数/);
   });
 });

@@ -118,12 +118,13 @@ P4 和 WPE 真机核对的三种用法，都是屏外宿主里一次跑完、结
 `replay` 两种写法，给了就不收 `time`（读回那一帧的 `g_Time` 取时间线或 `times` 的末项）：
 
 ```text
-replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor? }, seed?, passes?, random? }   常用：从 WPE 的一次抓帧组时间线
+replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor?, window? }, seed?, passes?, random? }   常用：从 WPE 的一次抓帧组时间线
 replay: { particles: { dts, times?, seed?, passes?, random? } }                                  直接给探针（缺省 seed 1、passes 1）
 ```
 
 **时间线**（`apps/kabegame-dev-mcp/src/timeline.ts`，脚本也能 import `buildTimeline`）：`log` 是 WPE 日志
-`ignore/p4/out/<标签>-log.txt`（只读 `[kbp] 帧号,帧时间,累计时间`），`track` 是 RenderDoc 轨迹 `ignore/p4/tracks/rd-<标签>.json`，
+`ignore/p4/out/<标签>-log.txt`（只读 `[kbp] 帧号,帧时间,累计时间`，`cursor=True` 生成的工程另带两列屏幕光标，见 kbp-tools 的协议），
+`track` 是 RenderDoc 轨迹 `ignore/p4/tracks/rd-<标签>.json`，
 `frame` 是回放到的帧（WPE 脚本帧号，即读回的那一帧，缺省为轨迹最后一帧）。规则照 P4 各步的回放脚本：
 
 - 第 f 帧 dt = 日志累计时间第 f 项减第 f − 1 项（第 1 帧就是它自己），四舍五入到 6 位小数；不用 frametime 列（差分不累积舍入）。
@@ -134,11 +135,18 @@ replay: { particles: { dts, times?, seed?, passes?, random? } }                 
   出生在这两帧、对拆分敏感的粒子会偏。缺的那段后面没有已知帧时没法平分，照样报错。
 - **`passes`**（operator 遍数）缺省按标签里的 `fps<N>` 推：N 在 1–20 两遍，否则一遍（同 `particlePasses`）；标签先看轨迹的 `tag`，推不出
   再看日志文件名。推不出就 1，结果里会写明——P4a 的 `s15` 这类标签不带 `fps`，要两遍得自己传 `passes: 2`。
-- **光标**：`cursors: "track"` 时抓到的帧取轨迹的 `pointer`、其余帧取 `cursor`（缺省场景中心 `[0.5, 0.5]`）；也可以直接给整串（长度 =
-  `frame`）；只给 `cursor` 时每帧都是它。光标是「光标下的场景纹理坐标」，抓帧窗口和场景同尺寸时等于 `g_PointerPosition`，不同尺寸时由
-  调用方换算（P4c 步骤 2）。WPE 只在抓到的帧记了 `pointer`，别的帧的光标是猜的。**只有 `particle_track` 收逐帧光标**：探针
-  `renderFrame` 只有一个固定的 `pointer`（`render_scene` 的 `pointer` 参数，预热、每一帧和读回那一帧都用它），`particleCorners`
-  固定在场景中心；时间线里给了光标会报 `[local]`。
+- **光标**（P5a 收尾起三个工具都收逐帧光标）：单位是 `g_PointerPosition`（抓帧窗口归一化，原点左上、y 朝下、不钳制），**不要自己换算**：
+  工具把它连同窗口尺寸交给探针，探针照渲染器按壁纸样式 `fill` 推出控制点的 cursor（`sceneCursor`，同 kbp replay），窗口和场景同尺寸时原样。
+  - `cursors: "log"`：每帧取日志的屏幕光标 ÷ 窗口尺寸（float32），要 `cursor=True` 生成的工程（五列日志）。脚本第 f 帧记下的光标就是
+    粒子第 f 帧用的，抓帧期间光标在动（跟随指针的粒子、视差）只有它能复现。日志缺的帧沿用相邻帧，结果里列出；抓到的帧上和轨迹 `pointer`
+    逐帧核对，不为 0 时另起一行警告。日志带光标列、却没传 `cursors` 时结果里提示一句。
+  - `cursors: "track"`：抓到的帧取轨迹的 `pointer`、其余帧取 `cursor`（缺省 `[0.5, 0.5]`）；WPE 只在抓到的帧记了 `pointer`，别的帧是猜的。
+  - 也可以直接给整串（长度 = `frame`）；只给 `cursor` 时每帧都是它。
+  - `window: [宽, 高]`：缺省从轨迹 tag、再从日志文件名末尾的 `-<宽>x<高>` 读；`"log"` 推不出就报 `[timeline]`；推不出时（非 `"log"`）
+    探针按和场景同尺寸处理。`window` 要和光标一起给。
+  - 探针怎么用：`render_scene` / `host_render` / `particle_corners` 把逐帧光标作 `pointers` 交给探针，第 i 帧步进粒子与视差点用第 i 项，
+    预热用第 0 项，读回那一帧的 `g_PointerPositionLast` 是上一帧的；`particle_track` 交 `cursors`。`render_scene` 的固定 `pointer` 和时间线
+    的逐帧光标不能同给（`[local]`）。
 
 **结果**：`particle_track` 写 `out`（`{ source: "sim", project, tag, frames: [{ frame, dt, systems: { <系统名>: [粒子] } }], skipped }`，
 和 `rd-*.json` 同格式、可直接交给比较脚本；帧表系统与拖尾的粒子另带 `thick` = `[vx, vy, vz, frame]`）；`particle_corners` 写 `out`（每层
@@ -154,6 +162,8 @@ particle_track   { imageId: 14182, timeline: { log: "ignore/p4/out/p4c-cp-fps60-
 render_scene     { imageId: 14181, replay: { timeline: { log: "ignore/p4/out/p4b-refract-fps60-log.txt", track: "ignore/p4/tracks/rd-p4b-refract-fps60.json", frame: 907 } } }
 particle_track   { imageId: 14180, timeline: { log: "ignore/p4/out/p4b-fps10-log.txt", track: "ignore/p4/tracks/rd-p4b-fps10.json", gap: "split" }, out: … }  → passes 2，平分 151–152
 particle_corners { imageId: 14179, replay: { particles: { dts: [720 个 1/60], seed: 1, passes: 1 } }, limit: 64, out: … }
+render_scene     { imageId: <id>, replay: { timeline: { log: "<数据目录>/out/<工程>-fps60-1920x1080-log.txt", track: "<数据目录>/tracks/rd-<同一标签>.json", cursors: "log" } } }
+                   → 每一帧的光标取日志（工程用 cursor=True 生成），窗口 1920×1080 取自标签
 ```
 
 2026-11-09 核对：`particle_track` 对 `p4c-cp`（927 帧）和 node 里同一时间线直调 `particles/track.ts` 逐字相同，和 WPE 轨迹的差与
@@ -184,9 +194,9 @@ particle_corners { imageId: 14179, replay: { particles: { dts: [720 个 1/60], s
 | `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥 | 桌面 |
-| `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`） | 桌面 |
-| `POST /hosts/:h/particle-corners` | `{ imageId, particles?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果 | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]` | 桌面 |
+| `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, window?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`）；`cursors` 是逐帧的 `g_PointerPosition`，`window` 要和它一起给 | 桌面 |
+| `POST /hosts/:h/particle-corners` | `{ imageId, particles?, pointers?, window?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果；`pointers` / `window` 同 render | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |
 | `POST /jobs` | `{ kind: "host-task" \| "hash-baseline" \| "projects-import", params }` → 任务记录 | 桌面 |
 | `GET /jobs`、`GET /jobs/:id`、`DELETE /jobs/:id` | 列出 / 查（状态、进度、结果）/ 取消 | 都有 |

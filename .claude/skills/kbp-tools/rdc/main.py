@@ -114,9 +114,9 @@ def main():
     sys.path.insert(0, _job["skill_dir"])
     import renderdoc as rd
     from rdc.bridge import LocalBridge
-    from rdc import frame, stats, track
+    from rdc import frame, shaders, stats, track
 
-    modules = {"track": track, "frame": frame, "stats": stats}
+    modules = {"track": track, "frame": frame, "stats": stats, "shaders": shaders}
     module = modules.get(_job["action"])
     if module is None:
         raise ValueError("未知的动作 %s" % _job["action"])

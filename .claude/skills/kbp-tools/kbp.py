@@ -4,7 +4,7 @@
 
 已实现：
 - gen <模块> [工程…]：按 <data>/defs/<模块>.py 的 PROJECTS 生成测试工程（第 2 批）；
-- rdc track|frame|stats <抓帧目录> <标签> …：在 `qrenderdoc --python rdc/main.py` 里无界面读抓帧，写轨迹 / 整帧图 / 统计量；
+- rdc track|frame|stats|shaders <抓帧目录> <标签> …：在 `qrenderdoc --python rdc/main.py` 里无界面读抓帧，写轨迹 / 整帧图 / 统计量 / 着色器清单；
 - replay <案例…>|--all、regress --src A --src B：回放案例（node + vitest）、两份源码的回归（第 2 批）；
 - snapshot export <rev|WORKTREE> <目录>、snapshot diff <基线> <副本>：产品源码快照与补丁（第 2 批）；
 - content projects|resolve|ls|cat|grep …：WPE 语料与 scene.pkg 读取；
@@ -85,6 +85,11 @@ def _parser():
     rdc_common(stats)
     stats.add_argument("--out", help="输出文件，缺省 <data>/out/wpe-<标签>-stats.json")
 
+    shaders = rdc_sub.add_parser("shaders", help="着色器清单：每次绘制的顶点 / 像素着色器、材质常量名、是否编译失败回退；"
+                                                 "写 <data>/out/wpe-<标签>-shaders.json，反汇编存同名目录")
+    rdc_common(shaders)
+    shaders.add_argument("--out", help="输出文件，缺省 <data>/out/wpe-<标签>-shaders.json")
+
     # ---------- replay / regress ----------
     def src_data(p):
         p.add_argument("--data", help="数据目录（cases/、proj/、tracks/、out/），缺省 KBP_DATA，再缺省 ignore/p4")
@@ -117,10 +122,11 @@ def _parser():
     scan.add_argument("--src", help="产品源码目录（快照的 src/），缺省 apps/wpe-scene/src")
     scan.add_argument("--out", required=True, help="结果文件（JSON）；vitest 日志写 <out>.log")
     scan.add_argument("--extra", action="append",
-                      help="附加字段插件，可重复：modules:<category:name,…|@b3|@b4>、controlpoints[:norenderer]、sheets")
+                      help="附加字段插件，可重复：modules:<category:name,…|@b3|@b4>、controlpoints[:norenderer]、sheets、"
+                           "requests:<目录>（录翻译请求夹具，目录非空时要 --overwrite）")
     scan.add_argument("--only", help="只跑这些场景（逗号分隔的目录名）")
     scan.add_argument("--project", action="append", help="另加的工程目录（排在语料之后，sample 是目录名），可重复")
-    scan.add_argument("--overwrite", action="store_true")
+    scan.add_argument("--overwrite", action="store_true", help="结果文件已存在、requests 的夹具目录非空时覆盖")
     scan.add_argument("--timeout", type=float, default=3600)
     scan.add_argument("--quiet", action="store_true", help="不把 vitest 的输出转到 stderr")
     cdiff = corpus_sub.add_parser("diff", help="比两次语料结果：出错、干净场景增减、每个键增减了哪些场景、剩余键")

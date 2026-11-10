@@ -6,7 +6,10 @@
  *   - `controlpoints`：每个粒子层的 flags、控制点数组、读控制点的模块、实例覆盖的控制点、renderer 原文，行字段 `systems[]`
  *     （c1–c5 的写法；c1–c4 没有 `renderer`，c5 起有）；
  *   - `sheets`：帧表纹理绑在哪里（`animatedUsages[]`），以及帧表粒子材质按同样的宏重译一次的结果（`sheets[]`，b2 的写法；
- *     源码没有帧表实现（`particleSheetDefines`）时只有 `animatedUsages`）。
+ *     源码没有帧表实现（`particleSheetDefines`）时只有 `animatedUsages`）；
+ *   - `requests:<目录>`（P7a 步骤 1）：编译前给翻译器包一层，录下编译管线真实发出的翻译请求（只留结果不是 `include` 的那次，
+ *     即头文件补齐后的最终请求），按规范化 JSON 的 SHA-1 去重写 `<目录>/<sha1>.json`，供 `src-tauri/wpesl2wgsl/tests/corpus.rs`
+ *     重放；行字段 `requests`（本场景录到的不同请求数）。目录由 kbp.py 检查（非空且没给 --overwrite 时拒绝）。
  * 参数经环境变量（kbp.py 设）：
  *   KBP_SRC          产品源码目录（快照的 src/），翻译器 wasm 跟着它走
  *   KBP_CORPUS_OUT   结果文件（JSON，indent 1，同旧脚本）
@@ -26,6 +29,8 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import path, { join } from "node:path";
 
 const slash = (p: string) => p.replace(/\\/g, "/");
@@ -127,12 +132,197 @@ type Json = Record<string, unknown>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
+/** 键排序的规范化 JSON（去重与写文件都用它，两次扫描逐字节相同）。 */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    const out: Json = {};
+    for (const key of Object.keys(value as Json).sort()) out[key] = canonical((value as Json)[key]);
+    return out;
+  }
+  return value;
+}
+
+const SHADER_EXT = /\.(vert|frag)$/;
+const decodeText = (bytes: Uint8Array) => new TextDecoder().decode(bytes).replace(/^﻿/, "");
+
+/** 路径里第一个 `shaders` 段之后、去掉扩展名的部分，即产品 `shader:<名>:…` 键里的名字；不在 `shaders/` 下返回 null。 */
+function shaderName(rel: string): string | null {
+  const parts = slash(rel).split("/");
+  const at = parts.indexOf("shaders");
+  if (at < 0 || at === parts.length - 1) return null;
+  return parts.slice(at + 1).join("/").replace(SHADER_EXT, "");
+}
+
+/** 着色器源码 → 名字（按来源顺序：散文件、scene.pkg、assets，同一份源码在多处时第一个在前）。 */
+type ShaderIndex = Map<string, string[]>;
+
+function addShader(index: ShaderIndex, rel: string, text: string) {
+  const name = shaderName(rel);
+  if (!name) return;
+  const key = `${rel.endsWith(".vert") ? "v" : "f"}\0${text}`;
+  const names = index.get(key);
+  if (!names) index.set(key, [name]);
+  else if (!names.includes(name)) names.push(name);
+}
+
+/** 目录下（递归）全部 `.vert` / `.frag`，按名字排序；相对路径用 `/`。 */
+function walkShaders(root: string, index: ShaderIndex, rel = "") {
+  let entries;
+  try {
+    entries = readdirSync(join(root, rel), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    const child = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) walkShaders(root, index, child);
+    else if (SHADER_EXT.test(entry.name)) addShader(index, child, decodeText(readFileSync(join(root, child))));
+  }
+}
+
+interface RecordedRequest {
+  /** 编译时用这个请求的全部着色器名（同一份源码与参数可能出自不同名字，跨场景、同场景都有）。 */
+  names: Set<string>;
+  scenes: Set<string>;
+  result: { ok: boolean; phase: string | null; firstError: string | null };
+  request: unknown;
+}
+
+/** 正在翻译的着色器名：包住 `ShaderCompiler` 的 `translate`（第一个参数就是名字），经异步上下文传到翻译器包装层。 */
+const compiling = new AsyncLocalStorage<string>();
+
+/**
+ * `requests` 插件的记录器：包住翻译器，录下每次结果不是 `include` 的请求（前端 `translateWithIncludes` 按 `missing` 补头文件
+ * 重试，只有最后一次请求是完整的）。
+ * 名字：首选产品自己的名字（{@link attach} 包住 `ShaderCompiler.translate`，和产品 `shader:<名>:…` 键逐字相同）；源码里没有这个
+ * 方法时按请求里的顶点 / 片元源码在本场景的散文件、scene.pkg、WPE `assets/` 的 `shaders/**` 下反查（两段都对上的第一个名字），
+ * 查不到写 `?`。反查在同一份源码出现在多处时会取错（工坊包里常把别人的 effect 原样拷一份、换个目录），所以只作后备。
+ */
+class RequestRecorder {
+  readonly entries = new Map<string, RecordedRequest>();
+  private assets: ShaderIndex | null = null;
+  private scene: {
+    sample: string;
+    index: Promise<ShaderIndex> | null;
+    build: () => Promise<ShaderIndex>;
+    seen: Set<string>;
+  } | null = null;
+
+  constructor(readonly dir: string) {}
+
+  /** 包住 `ShaderCompiler.prototype.translate`（运行时改原型，不改产品源码）。 */
+  attach(ShaderCompiler: Any) {
+    const proto = ShaderCompiler?.prototype;
+    const original = proto?.translate;
+    if (typeof original !== "function") return;
+    proto.translate = function (this: unknown, shader: string, ...rest: unknown[]) {
+      return compiling.run(shader, () => original.call(this, shader, ...rest));
+    };
+  }
+
+  /** 换到下一个场景：散文件与 scene.pkg 的索引按需建（只在反查时用）。 */
+  begin(sample: string, dir: string) {
+    const build = async () => {
+      const out: ShaderIndex = new Map();
+      walkShaders(dir, out);
+      const pkgFile = join(dir, "scene.pkg");
+      if (existsSync(pkgFile)) {
+        const { ScenePkg } = await import(`${SRC}/compile/pkg`);
+        const pkg = await ScenePkg.open((start: number, end: number) => nodeReader.readRange(pkgFile, start, end));
+        for (const entry of pkg.entries as { name: string }[]) {
+          if (!SHADER_EXT.test(entry.name)) continue;
+          const bytes = await pkg.readEntry(entry.name);
+          if (bytes) addShader(out, entry.name, decodeText(bytes));
+        }
+      }
+      if (!this.assets) {
+        this.assets = new Map();
+        walkShaders(ASSETS, this.assets);
+      }
+      for (const [key, names] of this.assets) {
+        const have = out.get(key);
+        if (!have) out.set(key, [...names]);
+        else for (const name of names) if (!have.includes(name)) have.push(name);
+      }
+      return out;
+    };
+    this.scene = { sample, index: null, build, seen: new Set() };
+  }
+
+  /** 本场景录到的不同请求数（行字段 `requests`）。 */
+  get count(): number {
+    return this.scene?.seen.size ?? 0;
+  }
+
+  wrap(translator: Any): Any {
+    const wrapped = Object.create(translator);
+    wrapped.translate = async (request: Any) => {
+      const shader = compiling.getStore();
+      const result = await translator.translate(request);
+      if (result.phase !== "include") await this.record(request, result, shader);
+      return result;
+    };
+    return wrapped;
+  }
+
+  private async record(request: Any, result: Any, shader: string | undefined) {
+    const scene = this.scene!;
+    const normalized = canonical(JSON.parse(JSON.stringify(request)));
+    const sha = createHash("sha1").update(JSON.stringify(normalized)).digest("hex");
+    scene.seen.add(sha);
+    let name = shader;
+    if (name === undefined) {
+      const index = await (scene.index ??= scene.build());
+      const vertex = index.get(`v\0${request.vertex}`) ?? [];
+      const fragment = index.get(`f\0${request.fragment}`) ?? [];
+      name = fragment.find((n) => vertex.includes(n)) ?? "?";
+    }
+    let entry = this.entries.get(sha);
+    if (!entry) {
+      entry = {
+        names: new Set(),
+        scenes: new Set(),
+        result: {
+          ok: !!result.ok,
+          phase: result.phase ?? null,
+          // 同产品 `shader:<名>:<阶段>:<细节>` 的取法（requires → missing → 首条错误），不截断
+          firstError: result.requires?.[0] ?? result.missing?.[0] ?? result.errors?.[0]?.message ?? null,
+        },
+        request: normalized,
+      };
+      this.entries.set(sha, entry);
+    }
+    entry.names.add(name);
+    entry.scenes.add(scene.sample);
+  }
+
+  /**
+   * 写 `<目录>/<sha1>.json`：`{ name, names, scenes, result, request }`。`names` 排好序，`name` 是它的第一个（导出键与报告按它）。
+   */
+  write() {
+    mkdirSync(this.dir, { recursive: true });
+    for (const [sha, entry] of [...this.entries].sort(([a], [b]) => (a < b ? -1 : 1))) {
+      const names = [...entry.names].sort();
+      const out = {
+        name: names[0],
+        names,
+        scenes: [...entry.scenes].sort(),
+        result: entry.result,
+        request: entry.request,
+      };
+      writeFileSync(join(this.dir, `${sha}.json`), JSON.stringify(out, null, 1));
+    }
+  }
+}
+
 interface PluginContext {
   dir: string;
   bundle: Any;
   fs: Any;
   mod: Record<string, Any>;
   translator: Any;
+  recorder: RequestRecorder | null;
 }
 
 /** 每个插件：往行里写附加字段。插件内部出错不吞，整行记 error（同旧脚本的 try 范围）。 */
@@ -284,6 +474,11 @@ const PLUGINS: Record<string, (ctx: PluginContext, args: string[], row: Json) =>
     }
     row.sheets = sheets;
   },
+
+  async requests(ctx, _args, row) {
+    // 记录在编译时已做完（见 RequestRecorder），这里只写计数
+    row.requests = ctx.recorder?.count ?? 0;
+  },
 };
 
 it("kbp corpus scan", async () => {
@@ -303,26 +498,35 @@ it("kbp corpus scan", async () => {
     mod.lights = await import(`${SRC}/compile/lights`);
     mod.features = await import(`${SRC}/compile/features`);
   }
+  // requests 插件：编译管线拿包过一层的翻译器，其余插件仍用原翻译器（它们自己的翻译不录）
+  const requestsExtra = EXTRAS.find((e) => e.name === "requests");
+  if (requestsExtra && !requestsExtra.args[0]) throw new Error("requests 要给目录：requests:<目录>");
+  const recorder = requestsExtra ? new RequestRecorder(requestsExtra.args[0]) : null;
+  recorder?.attach((await import(`${SRC}/compile/shader`)).ShaderCompiler);
+  const compileTranslator = recorder ? recorder.wrap(translator) : translator;
   const rows: unknown[] = [];
   for (const [sample, dir] of listProjects()) {
     if (ONLY && !ONLY.includes(sample)) continue;
+    recorder?.begin(sample, dir);
     try {
       const bundle = await compileScene({
         projectDir: dir,
         sceneAssets: [ASSETS],
         reader: nodeReader,
-        translator,
+        translator: compileTranslator,
         postprocess: "ultra",
         exhaustive: true,
       });
       const row: Json = { sample, unsupported: [...bundle.unsupported].sort() };
       const fs = new SceneFs(dir, [ASSETS], nodeReader);
-      for (const extra of EXTRAS) await PLUGINS[extra.name]({ dir, bundle, fs, mod, translator }, extra.args, row);
+      for (const extra of EXTRAS)
+        await PLUGINS[extra.name]({ dir, bundle, fs, mod, translator, recorder }, extra.args, row);
       rows.push(row);
     } catch (error) {
       rows.push({ sample, error: String(error) });
     }
   }
+  recorder?.write();
   mkdirSync(path.dirname(OUT), { recursive: true });
   writeFileSync(OUT, JSON.stringify(rows, null, 1));
   console.log("done", rows.length, "→", OUT);

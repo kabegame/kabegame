@@ -10,6 +10,7 @@
  */
 import {
   numbers,
+  resolveValue,
   staticCombos,
   type EffectJson,
   type JsonObject,
@@ -20,7 +21,7 @@ import {
   type SceneObject,
   type SceneValue,
 } from "./model";
-import { isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
+import { generalValue, isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
 import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
@@ -32,7 +33,8 @@ import {
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
 import type { SceneScript } from "./scripts";
-import { scanScriptApi } from "./scriptApi";
+import { scanScriptApi, scanScriptCallbacks, type ScriptApiScene } from "./scriptApi";
+import { SOUND_MODES, soundFlag } from "./sounds";
 import { TEXTURE_FORMATS } from "./tex";
 
 export const SUPPORTED = {
@@ -129,7 +131,8 @@ const ENGINE_COMBOS = new Set([
  * `cameraparallax*` 已实现（P5a 步骤 2，`render/parallax.ts`）：四个字段由 `GENERAL_FIELDS` 存值，渲染器每帧读，属性与脚本写入就地生效；
  * 透视场景开视差 WPE 不移动对象（rea-p5-camera.md 6.1，语料 0 张），透视整张另报 `camera:perspective`。
  * `camerashake*` 已实现正交（P5a 步骤 3，`render/shake.ts`）：四个字段同样由 `GENERAL_FIELDS` 存值、渲染器每帧读；透视场景开抖动
- * 另报 `general:camerashake`（归 P5d）。`zoom` 为 1 时是恒等。
+ * 另报 `general:camerashake`（归 P5d）。`zoom` 已实现（P5a 步骤 4，`render/layout.ts` 的 `sceneViewProjection`）：同样由 `GENERAL_FIELDS`
+ * 存值、渲染器每帧读，只在解析出的值 ≤ 0 时报（见 `checkSceneFeatures`）。
  * `perspectiveoverridefov` 不是中性：它是透视粒子的 fov（C4，实测核对过），解析进 `SceneGeneral.perspectiveOverrideFov`，
  * 见 `PARSED_GENERAL`。
  */
@@ -291,7 +294,14 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   // 偏移是三维的，要和透视相机一起做，归 P5d（rea-p5-camera.md 第 5 节），透视场景整张另报 `camera:perspective`，这一条提醒 P5d 补上
   if (!g.orthogonalprojection && active(g.camerashake)) unsupported.add("general:camerashake");
   if (active(g.supportsaudioprocessing)) unsupported.add("general:supportsaudioprocessing");
-  if (g.zoom !== undefined && g.zoom !== 1) unsupported.add("general:zoom");
+  // `zoom` 已实现（P5a 步骤 4）：正交投影绕场景中心乘它（p5-REPORT 实测），绑属性、脚本写回都就地生效。只在解析出的值 ≤ 0 时报：
+  // 投影退化、指针反投影是 NaN（语料最小 1.0）。常量与 `{script}` 的初值同 `bundle.ts` 的 `generalFields` 解析，不合法时取缺省 1；
+  // 绑用户属性的不看值（运行中的值编译期定不了）；关键帧解析成 undefined，另报 `value:animation`。透视场景里 zoom 不起作用
+  // （rea-p5-camera.md 1.4：读取点都在正交分支），不报，整张另报 `camera:perspective`
+  if (g.orthogonalprojection && !isUserBinding(g.zoom)) {
+    const zoom = generalValue("zoom", resolveValue(g.zoom as SceneValue | undefined, {}));
+    if (typeof zoom === "number" && zoom <= 0) unsupported.add("general:zoom");
+  }
   for (const [key, value] of Object.entries(g))
     if (
       !NEUTRAL_GENERAL.has(key) &&
@@ -310,14 +320,21 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
 }
 
 /**
- * 场景脚本用到 WPE 有、我们没实现的 API：`script:api:<分组>.<成员>`（表与匹配规则见 `scriptApi.ts`，用户定 2026-11-07）。
+ * 场景脚本用到 WPE 有、我们没实现的 API：`script:api:<分组>.<成员>`（表与匹配规则见 `scriptApi.ts`，用户定 2026-11-07）；
+ * 导出了 WPE 会调、运行时还没调的回调（光标、媒体等）：`script:callback:<名>`（P6 前置，否则场景静默缺交互）。
  * 只扫会执行的脚本：`collectScripts` 收集的 scene.json 脚本里，导入说明符无效的整段不求值（`ScriptRuntime.load`），不扫。
  * 脚本运行期的普通错误不在这里，仍只进脚本诊断（3b）。
+ * `context.soundLayers`：场景里有声音对象（`isSoundObject`），这时任意接收者上的声音层方法都报（`scanScriptApi`，P6a 步骤 1）。
  */
-export function checkScriptFeatures(scripts: readonly SceneScript[], unsupported: Set<string>): void {
+export function checkScriptFeatures(
+  scripts: readonly SceneScript[],
+  unsupported: Set<string>,
+  context: ScriptApiScene = {},
+): void {
   for (const script of scripts) {
     if (script.errors.length) continue;
-    for (const key of scanScriptApi(script)) unsupported.add(`script:api:${key}`);
+    for (const key of scanScriptApi(script, context)) unsupported.add(`script:api:${key}`);
+    for (const name of scanScriptCallbacks(script.source)) unsupported.add(`script:callback:${name}`);
   }
 }
 
@@ -373,6 +390,58 @@ export function objectKind(object: SceneObject): ObjectKind | undefined {
 }
 
 /**
+ * 声音对象（P6a 步骤 1）：`sound` 键不为 null（rea-p6a-sound.md 1.1，工厂 `0x140190554`）。空字符串、空数组也算，只是没有文件；
+ * `objectKind` 按 `active()` 认不出空字符串，所以没有别的内容时另按键判。`compileScene` 与能力表共用。
+ */
+export function isSoundObject(object: SceneObject): boolean {
+  const kind = objectKind(object);
+  return kind === "sound" || (kind === undefined && object.sound !== undefined && object.sound !== null);
+}
+
+/**
+ * 声音对象自己的键（`FUN_1401f7090` 的描述符表，rea-p6a-sound.md 1.2）。`muteineditor` 在播放器里没有读取点；`attenuation` /
+ * `mindistance` 只在 `spatialization: true` 时用（三维声音，没做，那时另报 `object:spatialization`），语料 0 张打开，所以中性。
+ */
+const SOUND_KEYS = new Set([
+  "sound",
+  "playbackmode",
+  "volume",
+  "mintime",
+  "maxtime",
+  "startsilent",
+  "muteineditor",
+  "attenuation",
+  "mindistance",
+  "spatialization",
+]);
+
+/** 声音对象上 WPE 没有回调、运行时改了不生效的键（rea 1.2）：绑了属性或挂了脚本报 `sound:binding:<键>`（语料 0 个）。 */
+const SOUND_UNBOUND_KEYS = ["playbackmode", "mintime", "maxtime", "startsilent", "spatialization"];
+
+/**
+ * 声音对象的键（P6a 步骤 1）。已实现：三种播放模式、`mintime` / `maxtime`、`startsilent`、`volume`（数字与 `{user}`，就地更新）。
+ * - `spatialization` 为真：`object:spatialization`（三维声音，步骤 0b 取消，语料 0 张）；
+ * - `playbackmode` 不是 `loop` / `single` / `random`：`sound:playbackmode:<值>`（WPE 的枚举解析怎么处理未知值没读）；
+ * - `volume` 挂 `{script}`：`sound:volume:script`（字段脚本写回，步骤 2）；
+ * - `SOUND_UNBOUND_KEYS` 绑了属性或挂了脚本：`sound:binding:<键>`。
+ */
+export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>): void {
+  for (const key of SOUND_UNBOUND_KEYS)
+    if (isUserBinding(object[key]) || isScriptValue(object[key])) unsupported.add(`sound:binding:${key}`);
+  const mode = object.playbackmode;
+  if (
+    mode !== undefined &&
+    mode !== null &&
+    !isUserBinding(mode) &&
+    !isScriptValue(mode) &&
+    !SOUND_MODES.includes(mode as (typeof SOUND_MODES)[number])
+  )
+    unsupported.add(`sound:playbackmode:${typeof mode === "string" ? mode : JSON.stringify(mode)}`);
+  if (isScriptValue(object.volume)) unsupported.add("sound:volume:script");
+  if (soundFlag(object.spatialization)) unsupported.add("object:spatialization");
+}
+
+/**
  * 一个对象的能力检查。`parent` 是解析后的父对象下标（`hierarchy.ts` 的 `resolveParents`），根节点为 null。
  * 没有内容的对象是分组节点：WPE 把它建成只有变换的基类对象（P4a 实测），不报；它的 `effects` 不读（`bundle.ts`
  * 在没有 image 时不编译图层内容），所以也不报。
@@ -389,10 +458,14 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
     if (Array.isArray(effects) ? effects.length > 0 : active(effects)) unsupported.add("particle:effects");
     for (const [key, defaults] of Object.entries(PARTICLE_OBJECT_DEFAULTS))
       if (particleObjectValueUsed(object[key], defaults)) unsupported.add(`particle:object:${key}`);
-  } else if (kind && kind !== "image" && kind !== "light") unsupported.add(`object:${kind}`);
+  } else if (kind && kind !== "image" && kind !== "light" && kind !== "sound") unsupported.add(`object:${kind}`);
   // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
   if (kind === "light" && parent !== null) unsupported.add("object:parent");
   const lightKey = (key: string) => kind === "light" && LIGHT_KEYS.has(key);
+  // 声音对象（P6a 步骤 1）：父层、可见性不影响播放（p6-REPORT `p6a-misc`），`parent` / `origin` 只在三维声音里用
+  const sound = isSoundObject(object);
+  if (sound) checkSoundFeatures(object, unsupported);
+  const soundKey = (key: string) => sound && SOUND_KEYS.has(key);
   for (const key of OBJECT_FLAGS) if (active(object[key]) && !lightKey(key)) unsupported.add(`object:${key}`);
   if (object.alignment !== undefined && object.alignment !== "center") unsupported.add("object:alignment");
   for (const [key, value] of Object.entries(object))
@@ -401,6 +474,7 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !OBJECT_FLAGS.includes(key) &&
       !["alignment", "model", "particle", "sound", "text", "light"].includes(key) &&
       !lightKey(key) &&
+      !soundKey(key) &&
       !(kind === "particle" && key === "instanceoverride") &&
       active(value)
     )

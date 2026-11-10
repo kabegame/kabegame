@@ -151,22 +151,25 @@ const bodiesOf = (rest: Rest, suffix: string) =>
 const TIMELINE = { log: "out/p4c-cp-fps60-log.txt", track: "tracks/rd-p4c-cp-fps60.json" };
 
 describe("粒子回放", () => {
-  test("replay 与 time 互斥；渲染与四角不收逐帧光标；都在发请求之前报 [local]", async () => {
+  test("replay 与 time 互斥；pointer 与时间线的逐帧光标互斥；window 要跟着光标；都在发请求之前报 [local]", async () => {
     await withMcp(async (call, _root, rest) => {
       const both = await call("render_scene", { imageId: "9", time: 1.5, replay: { timeline: TIMELINE } });
       assert.equal(both.isError, true);
       assert.match(textOf(both), /^\[local\].*\n.*replay 与 time 不能同时给/);
-      const cursors = await call("render_scene", {
+      for (const timeline of [
+        { ...TIMELINE, cursors: "track" },
+        { ...TIMELINE, cursor: [0.5, 0.5] },
+      ]) {
+        const clash = await call("render_scene", { imageId: "9", pointer: [0.25, 0.75], replay: { timeline } });
+        assert.equal(clash.isError, true);
+        assert.match(textOf(clash), /^\[local\][\s\S]*pointer 与时间线的逐帧光标.*不能同时给/);
+      }
+      const lonely = await call("particle_corners", {
         imageId: "9",
-        replay: { timeline: { ...TIMELINE, cursors: "track" } },
-      });
-      assert.match(textOf(cursors), /render_scene 不收逐帧光标.*pointer/);
-      const corners = await call("particle_corners", {
-        imageId: "9",
-        replay: { timeline: { ...TIMELINE, cursor: [0.5, 0.5] } },
+        replay: { timeline: { ...TIMELINE, window: [1920, 800] } },
         out: "c.json",
       });
-      assert.match(textOf(corners), /particle_corners 不收逐帧光标.*场景中心/);
+      assert.match(textOf(lonely), /^\[local\][\s\S]*timeline\.window 要和逐帧光标（cursors 或 cursor）一起给/);
       const host = await call("host_render", {
         handle: "h-1",
         imageId: "9",
@@ -193,6 +196,8 @@ describe("粒子回放", () => {
         passes: 1,
         seed: 3,
       });
+      // 没给逐帧光标：请求体和以前一样，不带 pointers / window
+      assert.deepEqual(Object.keys(body).sort(), ["imageId", "particles"]);
       const text = textOf(result);
       assert.match(text, /时间线：回放 5 帧（第 1–5 帧）；抓到的帧 4–5（dt、g_Time 取轨迹的）；没有平分的帧/);
       assert.match(text, /passes 1（标签 p4c-cp-fps60 的 fps60/);
@@ -353,6 +358,107 @@ describe("轨迹与四角", () => {
       const plain = await call("particle_corners", { imageId: "13815", out: "corners2.json" });
       assert.match(textOf(plain), /没有回放：预热后的状态/);
       assert.deepEqual(bodiesOf(rest, "/particle-corners").at(-1), { imageId: "13815" });
+    });
+  });
+
+  test("逐帧光标（P5a 收尾）：时间线的光标作 pointers / cursors 连同 window 交给后端", async () => {
+    await withMcp(async (call, root, rest) => {
+      // 五列日志：第 1..6 帧，每帧 0.1 s，屏幕光标逐帧不同（第 3 帧读失败写 nan）；窗口从标签读 1920×800
+      const screens: [number | string, number | string][] = [
+        [960, 400],
+        [192, 80],
+        ["nan", "nan"],
+        [1920, 800],
+        [-96, 1000],
+        [480, 200],
+      ];
+      writeFileSync(
+        path.join(root, "out", "p5a-cur-fps20-1920x800-log.txt"),
+        `x: [kbp] ${screens.map(([sx, sy], i) => `${i + 1},0.100000,${((i + 1) * 0.1).toFixed(6)},${sx},${sy}`).join(" ")}\n`,
+      );
+      const W: [number, number] = [1920, 800];
+      const at = (i: number) => [Math.fround(Number(screens[i][0]) / W[0]), Math.fround(Number(screens[i][1]) / W[1])];
+      writeFileSync(
+        path.join(root, "tracks", "rd-p5a-cur-fps20-1920x800.json"),
+        JSON.stringify({
+          tag: "p5a-cur-fps20-1920x800",
+          frames: [
+            { frame: 4, dt: 0.25, time: 0.45, pointer: at(3), systems: {} },
+            // 和日志对不上：照给，结果里写警告
+            { frame: 5, dt: 0.25, time: 0.55, pointer: [0.5, 0.5], systems: {} },
+          ],
+        }),
+      );
+      const timeline = {
+        log: "out/p5a-cur-fps20-1920x800-log.txt",
+        track: "tracks/rd-p5a-cur-fps20-1920x800.json",
+        cursors: "log",
+      };
+      const expected = [at(0), at(1), at(1), at(3), at(4)];
+
+      const render = await call("render_scene", { imageId: 9, replay: { timeline } });
+      assert.notEqual(render.isError, true, textOf(render));
+      const [body] = bodiesOf(rest, "/render");
+      assert.deepEqual(body.pointers, expected);
+      assert.deepEqual(body.window, [1920, 800]);
+      assert.equal("pointer" in body, false);
+      assert.equal((body.particles as { passes: number }).passes, 2);
+      const text = textOf(render);
+      assert.match(
+        text,
+        /逐帧光标：取日志（屏幕光标 ÷ 窗口 1920×800（轨迹标签），float32），日志缺光标、沿用相邻帧的 3/,
+      );
+      assert.match(text, /核对 2 帧，最大差 [\d.]+\n警告：第 5 帧日志光标和轨迹 pointer 不同/);
+
+      const corners = await call("particle_corners", {
+        imageId: 9,
+        replay: { timeline: { ...timeline, cursors: "track", window: [1440, 1080] } },
+        out: "c.json",
+      });
+      assert.notEqual(corners.isError, true, textOf(corners));
+      const [cornersBody] = bodiesOf(rest, "/particle-corners");
+      assert.deepEqual(cornersBody.pointers, [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], at(3), [0.5, 0.5]]);
+      assert.deepEqual(cornersBody.window, [1440, 1080]);
+      assert.match(textOf(corners), /窗口 1440×1080（参数给的），探针按 fill 换到场景上/);
+
+      const track = await call("particle_track", { imageId: 9, timeline, out: "sim/cur.json" });
+      assert.notEqual(track.isError, true, textOf(track));
+      const [trackBody] = bodiesOf(rest, "/particle-track");
+      assert.deepEqual(trackBody.cursors, expected);
+      assert.deepEqual(trackBody.window, [1920, 800]);
+      assert.equal("pointers" in trackBody, false);
+
+      // 日志带光标列、没要逐帧光标：请求不带光标与窗口，结果里提示一句
+      const plain = await call("particle_track", {
+        imageId: 9,
+        timeline: { log: timeline.log, track: timeline.track },
+        out: "sim/plain.json",
+      });
+      assert.notEqual(plain.isError, true, textOf(plain));
+      const plainBody = bodiesOf(rest, "/particle-track").at(-1)!;
+      assert.equal("cursors" in plainBody, false);
+      assert.equal("window" in plainBody, false);
+      assert.match(textOf(plain), /日志带光标列，要按每一帧的光标回放传 cursors: "log"/);
+
+      // 只给 cursor：每帧都是它；标签里没有窗口尺寸时不带 window
+      const fixed = await call("host_render", {
+        handle: "h-7",
+        imageId: 9,
+        replay: { timeline: { ...TIMELINE, cursor: [0.2, 0.3] } },
+      });
+      assert.notEqual(fixed.isError, true, textOf(fixed));
+      const [fixedBody] = bodiesOf(rest, "/hosts/h-7/render");
+      assert.deepEqual(
+        fixedBody.pointers,
+        Array.from({ length: 5 }, () => [0.2, 0.3]),
+      );
+      assert.equal("window" in fixedBody, false);
+
+      // "log" 要五列日志：三列报 [timeline]，不发请求
+      const before = rest.seen.length;
+      const three = await call("render_scene", { imageId: 9, replay: { timeline: { ...TIMELINE, cursors: "log" } } });
+      assert.match(textOf(three), /^\[timeline\][\s\S]*这份日志是三列/);
+      assert.equal(rest.seen.length, before);
     });
   });
 

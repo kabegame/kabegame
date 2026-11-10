@@ -64,11 +64,7 @@ describe("个数 n = max(controlpoint + 1)（rea-p4c-sim.md 1.1）", () => {
     expect(controlPointCount(def({ operator: [{ name: "controlpointattract" }] }))).toBe(1);
     expect(controlPointCount(def({ operator: [{ name: "controlpointattract", controlpoint: -1 }] }))).toBe(8);
     // 表外模块（P4d）不计
-    expect(
-      controlPointCount(
-        def({ emitter: [sphere()], operator: [{ name: "reducemovementnearcontrolpoint", controlpoint: 3 }] }),
-      ),
-    ).toBe(1);
+    expect(controlPointCount(def({ emitter: [sphere()], operator: [{ name: "boids", controlpoint: 3 }] }))).toBe(1);
   });
 
   it("n 之外的点不建：JSON 和实例覆盖写了也没有", () => {

@@ -167,12 +167,37 @@ describe("能力表裁决", () => {
     const keys = new Set<string>();
     checkSceneFeatures(
       {
-        general: { ...vortexGeneral, zoom: 2 },
+        general: { ...vortexGeneral, zoom: 0 },
         objects: [{ ...vortexObject, alignment: "topleft", perspective: true }],
       },
       keys,
     );
     expect([...keys].sort()).toEqual(["general:zoom", "object:alignment", "object:perspective"]);
+  });
+  it("缩放（P5a 步骤 4）：正交场景 zoom > 0、绑属性、脚本初值 > 0 都不报，解析出 ≤ 0 才报；透视场景不报（zoom 不起作用）", () => {
+    const keysOf = (general: Record<string, unknown>) => {
+      const keys = new Set<string>();
+      checkSceneFeatures({ general, objects: [] }, keys);
+      return [...keys].sort();
+    };
+    for (const zoom of [
+      1,
+      1.01,
+      1.5,
+      0.8,
+      "2",
+      { user: "z", value: 1.5 },
+      { user: "z", value: 0 },
+      { script: "s", value: 2 },
+    ])
+      expect(keysOf({ ...vortexGeneral, zoom }), JSON.stringify(zoom)).toEqual([]);
+    // 不合法时 WPE 不改字段（缺省 1），同 `generalValue`
+    for (const zoom of ["x", "1 2", true, null]) expect(keysOf({ ...vortexGeneral, zoom }), String(zoom)).toEqual([]);
+    for (const zoom of [0, -1, "-0.5", { script: "s", value: 0 }])
+      expect(keysOf({ ...vortexGeneral, zoom }), JSON.stringify(zoom)).toEqual(["general:zoom"]);
+    const { orthogonalprojection: _, ...perspectiveGeneral } = vortexGeneral;
+    expect(keysOf({ ...perspectiveGeneral, zoom: 0 })).toEqual(["camera:perspective"]);
+    expect(keysOf({ ...perspectiveGeneral, zoom: 2 })).toEqual(["camera:perspective"]);
   });
   it("抖动（P5a 步骤 3）：正交场景开 camerashake、绑属性都不报；透视场景照报（透视抖动归 P5d）", () => {
     const ortho = new Set<string>();

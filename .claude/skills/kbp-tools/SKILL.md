@@ -57,14 +57,16 @@ kbp.py gen <模块> [工程…] [--data 目录] [--defs 目录] [--out 目录] [
   import 行就能用：`import gen` → `from kbp import gen`，`import gen_b` → `from kbp import gen as gen_b`，`import gen_c` →
   `from kbp import gen as gen_c`。
   - 写文件：`write`、`write_json`（制表符缩进、不转义中文、LF、末尾不加换行）；
-  - 固定图层：`FR_COLOR`、`CLK_VERT` / `CLK_FRAG`、`CLK_PTR_VERT`、`layer`；
+  - 固定图层：`FR_COLOR`、`FR_CURSOR`（同 FR_COLOR，`[kbp]` 条目另带屏幕光标两列）、`CLK_VERT` / `CLK_FRAG`、`CLK_PTR_VERT`、`layer`；
   - 模块与系统：`fixed`、`move`、`FADE`、`OSC_ALPHA`、`CAP`、`OSC_POS`、`numbered`、`system`（gen_b 版：operator 从 id 20、renderer
     id 40）、`particle_object`、`material`、`particle_material`、`image_layer`、`image_assets`、`GENERAL`、`TEX_FLAGS` / `TEX_IMAGE_W` /
     `TEX_IMAGE_H`；gen.py 那个 P4-0 专用的 `system`（operator 从 id 10）不在库里；
   - P4c 起：`at`、`ring`、`with_cps`、`CENTER`、`MOVE_ORIGIN`、`SPIN_ANGLES`（脚本里图层的 `angles` 是度，scene.json 里静态的是弧度）；
   - `write_project(name, title, systems, *, images, materials, ident, overrides, files, order, patches, version=3, properties, meta,
-    object_meta, pointer=True, track=None, bbox=None)`：gen_b 与 gen_c 的合并版。`pointer=True`（缺省）CLK 用带指针的 CLK_PTR（gen_c 起），
+    object_meta, pointer=True, track=None, bbox=None, cursor=False)`：gen_b 与 gen_c 的合并版。`pointer=True`（缺省）CLK 用带指针的 CLK_PTR（gen_c 起），
     `False` 是 gen_b 的 CLK；`meta` 并入 kbp-meta.json 顶层，`object_meta` 并入单个对象；`track`、`bbox` 只在显式给出时写进 kbp-meta.json（`bbox` 见「kbp-meta.json」，另有 `layer_bbox`、`bbox_around`）；
+    `cursor=True`（P5a 收尾）时 FR 用 `FR_CURSOR`，日志每帧多记屏幕光标，回放传 `cursors: "log"` 按每一帧的光标复现（见「`[kbp]` 日志」）；
+    缺省 `False`，文件和以前逐字节相同；
   - 路径：`HERE`（= 数据目录；旧写法 `os.path.join(gen.HERE, 'proj', 名字)` 照旧落在 `<data>/proj`，但不认 `--out`）、`MODELS`（随库的
     `assets/models`，两行版 `solidlayer.json`）、`ASSETS`（`<KABEGAME_WPE_ROOT>/assets`）、`SHIMMER`（默认工程 shimmering_particles 的
     shaders）、`TEXSRC`（`<data>/texsrc`，从创意工坊导出的纹理不入库）；
@@ -90,6 +92,7 @@ PROJECTS = {"p5x-demo": p5x_demo}
 kbp.py rdc track <抓帧目录> <标签> [工程] [--draws | --points] [--limit N] [--out 文件] [--data 目录]
 kbp.py rdc frame <抓帧目录> <标签> [--event N | --present] [--out 目录] [--data 目录]
 kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
+kbp.py rdc shaders <抓帧目录> <标签> [--out 文件] [--data 目录]
 # 公共：--overwrite（输出已存在时覆盖，缺省拒绝）、--timeout 秒（缺省 1800）、--quiet、--keep-work
 ```
 
@@ -98,6 +101,7 @@ kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
 | `track` | `<data>/tracks/rd-<标签>.json` | `rdc_track_b.py`、`rdc_rope.py`（`--draws`）、`rdc_track.py`（无 meta 时自动退回） |
 | `frame` | `<data>/out/wpe-<标签>-f<脚本帧>.png`，索引 `wpe-<标签>.json` | `step4/wpe_rt.py`；`--present` 为 `p3b/compare/wpe_export.py` |
 | `stats` | `<data>/out/wpe-<标签>-stats.json` | `b3/wpe_stats_b.py` |
+| `shaders` | `<data>/out/wpe-<标签>-shaders.json`，反汇编按哈希存 `wpe-<标签>-shaders/<哈希>.txt` | （P7 新增） |
 
 - 一次启动处理目录里全部 `.rdc`（按帧号排序）。
 - **`track` 的工程**：
@@ -113,6 +117,11 @@ kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
   - `--present` 取 Present 时的后备缓冲，浮点格式存 DDS（原始数据），LDR 存 PNG。
   - 文件名一律按脚本帧号（= RenderDoc 帧号 + 1）。
 - **`stats`** 按顶点布局认粒子绘制，不依赖测试工程，创意工坊场景也能用。
+- **`shaders`**（P7 起）：每次绘制的顶点 / 像素着色器哈希、`g_bufStatic` 的变量名（按名字认是哪个 effect）、是否 WPE 的编译失败回退。
+  - 片元回退只有一句 `mov o0.xyzw, l(0.500000, 0.000000, 0.000000, 1.000000)`；
+  - 顶点回退和纯色图层的顶点着色器指令相同，所以只在配对的像素着色器还读插值输入时才算回退；
+  - 阳性对照：`ignore/p7/gen_sem.py` 生成的 `p7-sem` 里 `kbfail`、`kbhelper` 两个图层是回退。
+  - 摘要的 `items[].fallback_events` 列出回退的事件号。目录参数按正斜杠写更稳（`A:/p7/sweep/<标签>`）。
 - 摘要里的 `seconds`：`startup` 是拉起 qrenderdoc 到就绪，`captures` 是每张抓帧，`total` 是到进程退出。
   - 本机实测（RenderDoc 1.47）：启动 2.3–3.2 s；
   - `track` 测试工程每张 0.6–1.2 s，绳（`--draws`）每张 1.5–2 s；
@@ -189,6 +198,7 @@ kbp.py corpus diff <前.json> <后.json> [--out 文件] [--without 键,…] [--e
 | `modules:<category:name,…>` | `modules`（`key=<字段>` 换名） | b3、b4：每个粒子层里这些模块的字段原文（去掉 `id`，带 `file`、`category`）；预置名单 `@b3`（P4b 步骤 3 的 9 个）、`@b4`（步骤 4 的 3 个） |
 | `controlpoints[:norenderer]` | `systems` | c1–c5：每个粒子层的 `file`、`flags`、`controlpoint` 数组、`renderer` 原文（c5 起；c1–c4 没有，`:norenderer` 去掉）、读控制点的模块、`instanceoverride` 的控制点静态值（`io`） |
 | `sheets` | `animatedUsages`、`sheets` | b2：帧表纹理（头标志 bit2）绑在哪里；帧表粒子材质按同样的宏重译一次（宏、格式、帧数、是否翻译成功、问题）。源码没有 `particleSheetDefines` 时只有 `animatedUsages` |
+| `requests:<目录>` | `requests` | P7a：编译管线真实发给翻译器的请求（编译前给翻译器包一层，只留结果不是 `include` 的那次，即头文件补齐后的最终请求），按规范化 JSON（键排序）的 SHA-1 去重写 `<目录>/<sha1>.json`：`{ name, names[], scenes[], result: { ok, phase, firstError }, request }`；`scenes` 跨场景合并；`names` 是用到这个请求的全部着色器名（同产品 `shader:<名>:…`，运行时包住 `ShaderCompiler.translate` 取产品自己的名字；工坊包常把同一个 effect 拷到别的目录，同一请求会有几个名字），`name` 是排序后的第一个；源码里没有 `ShaderCompiler.translate` 时按顶点 / 片元源码在本场景散文件、`scene.pkg`、WPE `assets/` 的 `shaders/**` 里反查（同一份源码在多处时会取错，查不到 `?`），`firstError` 同产品的取法（requires → missing → 首条错误）但不截断。行字段是本场景录到的不同请求数。目录不存在就建；里面已有夹具时要 `--overwrite`（先删掉旧夹具），有夹具以外的文件时拒绝；只有 `scan` 收，`regress --corpus` 不收。夹具由 `src-tauri/wpesl2wgsl/tests/corpus.rs` 第 3 部分重放（`WPESL2WGSL_REQUESTS`） |
 
 - **diff**（替代 `b1|b5|d0/diff_corpus.py`、`c1–c5/corpus_diff.py` 的通用部分、`cmp_corpus_claude.py`）：
   - 场景数与出错（新出错的、不再出错的）、干净场景增减（干净 = 没出错且 `unsupported` 为空）；
@@ -365,6 +375,7 @@ kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--
   - `z = 1`。
   - 读回：FR 绘制的像素着色器常量 `g_Color`，帧号 = `round(r·255) + round(g·255)·256`。
   - 这是 WPE 脚本帧号，等于抓帧的 RenderDoc 帧号 + 1。
+  - `write_project(…, cursor=True)` 时脚本换成 `FR_CURSOR`：颜色部分逐字相同，`[kbp]` 条目多两列屏幕光标（见下一节）。
 - **CLK（时钟）**：顶点着色器让 `g_Time`、`g_Frametime` 真的参与输出。
   - 原因：着色器没读的常量 `referenced: false`，值是缓冲里的垃圾，不能当数据，提取器遇到就报错。
   - **CLK_PTR**（P4c 起，`gen_c.py`）同一个着色器另读 `g_PointerPosition`、`g_PointerPositionLast`，轨迹里多出 `pointer` / `pointer_last`。
@@ -377,14 +388,26 @@ kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--
 
 ### `[kbp]` 日志
 
-- **写**：FR 的脚本每帧记一条 `帧号,帧时间,累计时间`。
+- **写**：FR 的脚本每帧记一条 `帧号,帧时间,累计时间`（三列，`FR_COLOR`）。
   - 帧时间是 `engine.frametime.toFixed(6)`，累计时间是 `engine.runtime.toFixed(6)`；
   - 每 50 条用 `console.error('[kbp] ' + 条目.join(' '))` 写进 WPE 的 `log.txt`（`console.log` 不写文件）。
   - 日志行形如 `…: Error: [kbp] 1,0.000376,0.000376 2,0.031870,0.032246 …`。
-- fps 低时尾巴不满 50 条，最后几帧不在日志里。
+- **五列**（`FR_CURSOR`，`write_project(…, cursor=True)`，P5a 收尾）：`帧号,帧时间,累计时间,屏幕x,屏幕y`，每 10 条刷一次。
+  - 屏幕x、屏幕y 是 `input.cursorScreenPosition` 的 x、y，`String()` 原样写；读光标包 `try`，失败（Kabegame 还没有 `input`）两列写
+    `nan`，不让整个 `update` 被禁用。
+  - 单位（`ignore/p5/cur/` 实测，`p5a-cur` / `p5a-cur3`）：壁纸窗口内的像素，原点左上、y 朝下；`engine.screenResolution`、
+    `canvasSize` 报的都是测试窗口尺寸（1920×1080），不是显示器。光标在窗口外时是负数或超出尺寸、不钳制。通常是整数，偶尔带 float32
+    误差（如 `1007.9999389648438`、`-27.999998092651367`）。
+  - 和 `g_PointerPosition` 的关系：逐位等于 `float32(屏幕光标 / 窗口尺寸)`（`p5a-cur` 8 帧、`p5a-cur3` 4 帧）。
+  - 和粒子的对齐：脚本第 f 帧记下的光标就是粒子第 f 帧用的。`p5a-cur3`（用户在窗口上晃过鼠标）按日志第 f 帧回放，491–495 个跟随指针的
+    粒子逐个吻合、最大差 2.4e-4；错一帧（取第 f ± 1 帧）各有 421 个不同、最大差 340 像素。所以日志是逐帧光标的唯一来源。
+  - 这种工程在 Kabegame 里编译报 `script:api:input.cursorScreenPosition`（`input` 留给 P6）：dev 探针强制渲染不受影响，kbp replay
+    的案例要用 `unsupported.allow` / `report` 放行。
+- fps 低时尾巴不满一次刷新的条数，最后几帧不在日志里。
 - **读**的规则：
   - 只认 `[kbp]` 之后的条目；
-  - 两列必须都是 6 位小数（少了多半是行被截断）；
+  - 三列或五列，同一个文件里不能混用（多半是两次运行或两个工程的日志拼在一起），混用报错；
+  - 两列时间必须都是 6 位小数（少了多半是行被截断）；五列的光标两列是有限数或 `nan`，`nan`（`NaN` 同）当这一帧缺光标；
   - 帧号递增不重复（同一个文件里有两次运行就报错，截出一次的）。
 
 ### `kbp-meta.json`（P4b 起，生成库的 `write_project` 写，提取器读）
@@ -490,7 +513,13 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 - 日志与轨迹都没有的帧：
   - 缺省报错；
   - `gap: "split"` 时按「后一个已知帧的 g_Time − 它的 dt」减「前一帧的 g_Time」平分，后面没有已知帧时仍报错。
-- 光标：`cursors: "track"` 时抓到的帧取轨迹 `pointer`，其余取 `cursor`（缺省 `[0.5, 0.5]`）；也可直接给整串。
+- 光标：单位一律是 `g_PointerPosition`（窗口归一化、不钳制），换到场景上由探针 / kbp replay 按壁纸样式 `fill` 做（`sceneCursor`），
+  调用方不自己换算。
+  - `cursors: "log"`：第 f 帧 = `float32(日志第 f 帧的屏幕光标 / 窗口尺寸)`，要五列日志；日志缺的帧（没刷出来或是 `nan`）沿用前一个
+    已知帧，开头缺就用后一个，结果里列出这些帧；抓到的帧上和轨迹 `pointer` 逐帧核对，不为 0 时写一行警告（不报错）。不和 `cursor` 同给。
+  - `cursors: "track"`：抓到的帧取轨迹 `pointer`，其余取 `cursor`（缺省 `[0.5, 0.5]`）；也可直接给整串；只给 `cursor` 时每帧都是它。
+  - 窗口尺寸：`window: [宽, 高]`，缺省从轨迹 tag、再从日志标签末尾的 `-<宽>x<高>` 读（同 kbp replay），`"log"` 推不出就报错。
+  - 日志带光标列、却没传 `cursors` 时，时间线说明里提示一句。
 - 遍数：标签里 `fps<N>` 的 N 在 1–20 时两遍。
 
 ## 回放案例（`<data>/cases/<名字>.json`）
@@ -532,7 +561,7 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 | `mode` | `position`（缺省，逐粒子 pos / size / color / alpha / rot）、`color`（b6：逐粒子 rgb，按线段拟合）、`rope`（d1：绳的段顶点，轨迹是 draws 认法） |
 | `systems` | `only`（只比这些，按这个顺序）、`skip`、`skipPattern`（正则）、`source`（`first` 轨迹第一帧 / `union` 全部帧，缺省）、`informational`（照比照报，不算进是否全部通过） |
 | `inputs.world` | 控制点输入的对象世界矩阵：`none`（缺省，不传控制点输入，P4b 及以前）、`static`（编译期变换）、`hook`（钩子的 `world`） |
-| `inputs.cursors` | 跟随点：`none`、`zero`（pointer `[0, 0]`，c1）、`track`（轨迹指针，窗口之前取窗口第一帧的；窗口比例和场景不同时按 `fill` 反算） |
+| `inputs.cursors` | 跟随点：`none`、`zero`（pointer `[0, 0]`，c1）、`track`（轨迹指针，窗口之前取窗口第一帧的）、`log`（每帧取日志的屏幕光标 ÷ 窗口尺寸，要 `cursor=True` 生成的工程，P5a 收尾；窗口尺寸取标签末尾的 `-宽x高`，没有时当作和场景同尺寸，报告里记一行核对结果）；`track`、`log` 在窗口比例和场景不同时按 `fill` 反算 |
 | `inputs.time` | 传给 `step` 的场景时间：`none`（不传，模拟器自己累加）、`cur`（本帧 g_Time）、`prev`（上一帧的，第 1 帧为 0） |
 | `inputs.changes` | 运行中改属性的文件（相对数据目录，`{tag}` 换成标签），`[{ frame, properties }]`（b6） |
 | `gap` | 日志与轨迹都缺的帧：`error`（缺省）或 `split`（平分，timeline.ts 的规则） |

@@ -37,7 +37,8 @@ type GeneralField =
 /**
  * WPE 里只改字段的 general 属性（L1），不重编译。`fov` 起的项正交场景不读，只存值，脚本能读回（已定 13）；`cameraparallax*` 例外，
  * 渲染器每帧读（P5a 步骤 2，`render/parallax.ts`），属性与脚本写入就地生效；`camerashake*` 同样每帧读（P5a 步骤 3，`render/shake.ts`），
- * 在帧开头、脚本之前读，脚本写入下一帧生效。
+ * 在帧开头、脚本之前读，脚本写入下一帧生效。`zoom` 同样（P5a 步骤 4，`render/layout.ts` 的 `sceneViewProjection`）：只改字段
+ * （p3-script-REPORT I3），正交投影每帧读，和抖动一起在帧开头、脚本之前取（L4），脚本写入下一帧生效；透视场景不读（rea-p5-camera.md 1.4）。
  * `fallback` 是缺键时的值（L1 的构造默认值、L14 的实测）。
  */
 export const GENERAL_FIELDS = {
@@ -57,6 +58,7 @@ export const GENERAL_FIELDS = {
   cameraparallaxamount: { type: "float", fallback: 0.5 },
   cameraparallaxdelay: { type: "float", fallback: 0.1 },
   cameraparallaxmouseinfluence: { type: "float", fallback: 0.5 },
+  zoom: { type: "float", fallback: 1 },
 } as const satisfies Record<string, GeneralField>;
 
 export type GeneralKey = keyof typeof GENERAL_FIELDS;
@@ -123,6 +125,11 @@ export type BindingTarget =
    * `object` 是 `objects` 下标。
    */
   | { kind: "particle-instance"; object: number; field: InstanceKey }
+  /**
+   * 声音对象的 `volume`（P6a 步骤 1，rea-p6a-sound.md 5.2）：WPE 改值经回调 `V` 立即生效、没有渐变。就地写进
+   * `SceneState.sounds`，不标脏，宿主的排期器每帧读（`audio/scheduler.ts`）。`object` 是 `objects` 下标。
+   */
+  | { kind: "sound"; object: number; field: "volume" }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 export interface SceneBinding {

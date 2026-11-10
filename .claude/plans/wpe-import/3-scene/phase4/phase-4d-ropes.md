@@ -1045,34 +1045,254 @@ export function fbm2(seed: number, x: number, y: number, octaves: number): numbe
 | 回归 `kbp regress --corpus`（Claude 自跑） | 现有 9 个案例（b3、b4、b6、c1–c4、d1、d3）两边逐字节相同。<br>语料 152 张：只去掉两张的 `particle:operator:remapvalue`，3815289650 新增噪声的字段键；干净 24 不变，出错 0 |
 | 变异检查 | 子代理 21 条全部检出（单测加回放 12 条，只有单测 9 条），源码按原字节还原。<br>Claude 另加 2 条（正弦去掉 −π/2；init 的输入 `size` 读当前值列），单测和回放都检出 |
 
-**只有单测、没有 WPE 数据验证的**（已收进「未实测清单」）：
+**4a 里只有单测、没有 WPE 数据验证的**（已收进「未实测清单」）：
 - op 标量输入按 x 分量归一化：rv-vec 的 `flags 1` 把两种写法都夹成 1；
 - init 的 `floor` 对 `trunc`：`ri-*` 新生粒子的 `t = −3` 是整数，两者相同；
 - 输出 `speed` 的除法写法、正弦的乘法顺序、`distance` 的掩码：只差 1 ulp，或要粒子正好在控制点上。
 
+### 步骤 4b 实施记录（2026-11-11）
+
+**做法：**
+- 快照取自 `50d2e9c0`（4a 的提交），子代理只在 `ignore/p4/d4b/ov` 里做。补丁是 `ignore/p4/d4b/step4b.patch`，8 个文件，+1073 / −76。
+- 开工期间 HEAD 前进到 `4dd05464`（别的会话的提交），补丁涉及的文件没人改过，`git apply --check` 对工作区和索引都干净。
+- 回放案例 `d4` 扩充成 4b 版（4a 版备份在 `ignore/p4/d4b/*.4a`），变异清单 `ignore/p4/d4b/mutations.py`，Claude 另加 `ignore/p4/d4b/mut_claude.py`。
+
+**新增和修改的文件（相对 `apps/wpe-scene/src/particles/`）：**
+- 新增 `fastnoise2.ts`（`simplex2`、`fbm2`、`fractalBounding`）、`fastnoise2.test.ts`、`remap4b.test.ts`；
+- 修改：
+  - `remap.ts`：两种噪声、写控制点、init 的输入 16–18、`remapControlPointFlags`；
+  - `noise.ts`：新增 `fbm1`，即 `FUN_14027b4b0`；
+  - `modules.ts`：`ParticleModuleDef.controlPointFlags`，remap 读的列加上 `random`；
+  - `controlpoints.ts`：建系统时把模块要求的位并进控制点的 `flags`；
+- `remap.test.ts` 只改期望：4a 期间照报的几项改成照常执行。
+
+**对照汇编补清的读码：**
+- **FBm**（`fbm2_sse4.asm` 逐条核对）：
+  - 循环次数按无符号比较；
+  - 每层依次是坐标 ×2、种子 +1、`amp·(((n+1)·0.5 − 1)·0 + 1)·0.5`、`sum += n·amp`；
+  - weighted strength 那一步照写，`n` 非有限时得 NaN。
+- **init 的 `fbm1`**（`0x14027b4b0`）：调用方传 `{频率 s, 振幅 1, 倍频 2, 增益 0.5}`，结果是 `Σ snoise1(f·v)·a / Σ a`。y、z 分量只在输出是向量时才算。
+- **lane 0：**
+  - op 每组读一次 `C`，三个分量各自 `shufps 0` 广播后写回，只有槽 `4g`（`4g < count`）生效，死槽也算；
+  - blend 版同样是 `(op(C, o) − C)·b + C`。
+- **`0x10000` 的点：** 初值仍是 `base = I + offset`（rea 2.8）。`add` 运算时 offset 是起点，规格里「offset 不起作用」只对 `remap` 运算成立，照读码做。
+- **init 的输入 `directiontocontrolpoint`：** 粒子在原点时 `normalize(0)` 得 NaN，和 WPE 实测相同（ri-in-directiontocontrolpoint 的尺寸是 NaN）。
+
+**规格之外自定的：**
+- **`transformoctaves` 不钳制、最大到 2³²：** `fbm2`、`fbm1` 和归一系数遇到两种情况提前停下，否则会卡死：
+  - 和已经是 NaN；
+  - 振幅下溢成 0，且坐标或频率为 0。
+
+  提前停下和照常走完逐位相同，单测拿朴素循环在 octaves 600 / 700 时核对过。
+- `REMAP_CONTROL_POINT_FLAG = 0x10000` 在 `remap.ts` 里另写一份，避免 `modules → remap → controlpoints` 成环，由单测核对和 `CONTROL_POINT_FLAGS.remap` 相等。
+
+**回放（`d4.hook.ts`）里新加的处理：**
+- **R 的注入：** 先照常模拟一遍得到每个槽的出生序号（R 不影响寿命和槽位分配），按序号从 frame 列（厚格式的 `TEXCOORD1.w`）收集 R，再按出生序注入。核对过同一序号各帧的值一致。
+- **近似倒数的拟合：**
+  - 只用 rv-noise 的速度（108 个分量），拟合一个标量：remapvalue 里 `rcp` 的相对偏置 b。fps 60 得 −2.4440e-4，fps 10 得 −2.4418e-4。两次独立抓帧一致，约等于 −2⁻¹²，`rcpps(1)` 已知就是 1 − 2⁻¹²。
+  - 用这个 b 去比 rv-fbm1 / rv-fbm3：它们没参与拟合，所以是独立验证。
+  - 发射器的近似倒数另开一份包络，和 remap 的分开偏置。
+  - 速度另加输入精度包络：日志的 dt 只有 6 位小数。
+- **为什么要拟合：** 输出 `speed` 是 `vel·rcp(L)·o`，`o < 0` 时速度反向。一遍模式下，方向等于各帧 `o` 的符号之积；`o` 过零的那一帧，符号取决于 `rcpps` 和精确倒数的差。
+  - 精确倒数下，fps 60 有 6 个粒子·帧和 WPE 整段反向；拟合后是 0。
+  - 两遍模式每帧乘两次，符号抵消，所以 fps 10 不受影响。
+
+**验收结果：**
+
+| 项目 | 结果 |
+|---|---|
+| 越界 | 补丁涉及的 `apps/` 文件从 `50d2e9c0` 起没人改过；工作区另有并行会话（P5a 步骤 4）改的 `particles/simulator.test.ts`、`track.ts`，不在补丁里。`head` 快照和 `50d2e9c0` 逐文件相同 |
+| tsc、vitest、Prettier | Claude 自跑：tsc 0 错（钩子另查 0 错）；57 个文件、1562 个用例全过；Prettier 通过 |
+| 回放 `kbp replay d4`（Claude 自跑） | 四段全部通过：`p4d-remap` 26 个系统、`p4d-remap2` 63 个。<br>4b 新比的系统差/限都 ≤ 0.70：rv-noise、rv-fbm1、rv-fbm3、ri-noise、ri-fbm、rv-cpout、ri-cpbug，以及 remap2 的输入 16–18、输出 `controlpoint`。<br>ri-in-controlpoint 尺寸 5、ri-in-deltatocontrolpoint 尺寸 60，正好证明 init 读的是 0（按 C 读会是 32.5 / 58.2）。<br>FBm 的倍频细节验证了，步骤 0 没能区分的这一项从「未实测清单」划掉 |
+| 回归 `kbp regress --corpus`（Claude 自跑） | 现有 9 个案例两边逐字节相同。<br>语料 165 张（别的会话加了场景、干净数涨到 36），只有 3815289650 去掉 `particle:operator:remapvalue:transformfunction`，不新增键，出错 0 |
+| 变异检查 | 子代理 44 条：42 条检出，2 条是等价变异（y、z 多算了没人读；哈希右移只差高位、梯度只读低 3 位）。<br>只靠单测检出的：控制点每个 lane 都写（rv-cpout 的输入各槽相同）、不置 `0x10000`（rv-cpout 的点本来就不重算）。<br>Claude 另加 2 条（init 不把控制点写成 0；梯度常数改 2e-4），单测和回放都检出 |
+
+**和 WPE 不同、按「近似倒数不复刻」接受的：**
+- 一遍模式下，`remapvalue` 输出 `speed` 且区间跨 0 时，个别粒子在 `o` 过零的那一帧会和 WPE 符号相反，之后整段反向运动。
+- 语料里 3815289650 有一处这样的写法（`fbmnoise`、区间 −5..7）。这些是噪声驱动的粒子，统计上看不出区别，但逐粒子和 WPE 对不上。
+
 ## 步骤 5 — 距离类与 `vortex_v2`
 
-- **新增** 四个 operator，字段、缺省值、公式按步骤 0。
-- **修改** `ParticleSystem.suspend`：不可见时照常更新控制点（rea-p4c-sim 5.6），重新可见后第一帧的 previous 和 WPE 一致。
+**设计。** 四个都是普通 operator，只改位置或速度，各自照 rea-p4d-modules 第 3、4 节写。新东西只有两处：
+- 两个 maintaindistance 模块第一次读控制点的 `previous`；
+- `vortex_v2` 的切向项乘 `k`，不是 `h`（步骤 0 实测，球形、柱形逐粒子差 ≤ 1.4e-3）。
 
-**验收：**
-- `proj/p4d-dist` 在 fps 60 和 fps 10 下回放，和 WPE 逐帧比。
-- 变异检查：`Δcp` 的方向、`variablestrength` 的钳制、环形分支，各有测试失败。
-- `3832133196` 只剩 `particle:children`；kabegame-sample 不再报 P4d 的键。
+`previous` 只在帧尾更新（`ControlPointSet.endFrame`，已有），两遍模式下每遍都看到同一个 `Δcp`，一帧平移两次。这是 WPE 的行为（步骤 0 的 md-move 在 fps 10 下以两倍速跟随），按现在的结构自然得到，不用特意做。
+
+读 `previous` 带出 `suspend` 的问题。现在对象不可见时既不更新控制点，也不拷 `previous`。重新可见的第一帧，`Δcp` 就是整段隐藏期间的位移，粒子会被一次拽过去。WPE 不可见时照常更新控制点（rea-p4c-sim 5.6，读码），所以改成：
+- 不可见的每一帧都按当帧的 `W` 更新控制点、帧尾拷 `previous`；
+- 清空粒子的条件不变（有存活粒子时才清）。
+
+步骤 0 的 dist-hide 没测到这一条（重新可见 1 s 后才发出第一个粒子），本步重做实验。
+
+近似指令（`rsqrtps`、`rcpps`）照「近似倒数不复刻」用产品已有的 `rsqrt` / `rcp`，回放挂近似运算包络。`vortex_v2` 带 `centerforce` 时误差被 `|P′|/h` 放大（步骤 0 估的包络 1.3–2.2），要看包络够不够。
+
+**语料**（`ignore/p4/d0/out/scan.txt`）：
+- `reducemovementnearcontrolpoint` 12 个，都在 3832133196：`controlpoint 1`、`distanceinner 20`、`distanceouter 50`、`reductioninner 1000`；
+- `maintaindistancebetweencontrolpoints` 6 个，都在 3832133196，全用缺省；
+- `maintaindistancetocontrolpoint`、`vortex_v2` 各 1 个，在 kabegame-sample 的 `magic_vortex_orb`：
+  - `vortex_v2`：`flags 2`、`distanceinner 0`、`distanceouter 1`、`speedinner 0`、`speedouter 2500`；
+  - 那个系统的 `controlpointangle1` 是关键帧，另报 `value:animation`，不归本步。
+
+**现状锚点：**
+- **四个模块不在表里**（`particles/modules.ts` 的 `PARTICLE_MODULES`）：能力表照报 `particle:operator:<名字>`；
+  `controlPointCount` 不数表外模块（`particles/controlpoints.ts:128`）。
+- **`vortex` 已在表里**（P4b），`vortex_v2` 是另一个模块，不共用执行函数（公式不同：`vortex` 不读控制点 3×3、没有环形分支）。
+- **不可见时什么都不做**（`render/scene.ts` 的 `stepParticles`）：
+```ts
+if (state && !effectiveVisible(draw.object, state.layers)) {
+  if (particles.system.suspend()) particles.stale = true; // 现状：不传 W，控制点不更新、不拷 previous
+  continue;
+}
+```
+```ts
+suspend(): boolean {
+  if (this.alive === 0) return false; // 现状：没有粒子时直接返回
+  // …复位 emitter 计时、模块状态、系统时间与图层时间，clear()
+}
+```
+
+### 点 1 — 四个 operator（`particles/distance.ts`，新增）
+
+字段表照 rea 3.1–3.3、第 4 节。缺省值分正交 / 透视的写成 `num({ orthographic, perspective })`；blend 变体用现成的 `BLEND` / `readBlend`。
+
+| 模块 | 字段（缺省 正交 / 透视） | 要点 |
+|---|---|---|
+| `maintaindistancetocontrolpoint`（op 11，blend 0x21） | `distance` 200 / 1、`variablestrength` 0、`controlpoint` 0 | `s` = 1（`variablestrength` 精确等于 0）或 `clamp01(vs·h)`（NaN 得 0）；先平移 `Δ = current.t − previous.t`；`T = inverse(mat3(current))`（glm：`1/det` 后乘伴随阵）；`f = (rsqrt(\|u\|²)·distance − 1)·s`，blend 只乘 `f` |
+| `maintaindistancebetweencontrolpoints`（op 12，blend 0x22） | `controlpointstart` 0、`controlpointend` 1 | 两个点的 current 和 previous 都读；`n` 或 `np` ≤ 2⁻⁴⁶（`0x28800000`）时整条跳过；比例 `clamp01(t·qp)·L`；垂直偏移不转 |
+| `reducemovementnearcontrolpoint`（op 13，blend 0x23） | `distanceinner` 100 / 0.5、`distanceouter` 350 / 1、`reductioninner` 100、`reductionouter` 0、`controlpoint` 0 | 只改速度：`vel *= 1 − clamp01(r·h)`；`distanceouter == distanceinner` 时倒数存 1.0；`reductionouter == reductioninner` 时差存 1.0（WPE 的 bug，照做）；`n = 0` 时 `t = 1`（`minps` 的 NaN 取第二个操作数） |
+| `vortex_v2`（op 16，blend 0x25） | `distanceinner` 500 / 1、`distanceouter` 650 / 2、`speedinner` 2500 / 1、`speedouter` 0、`centerforce` 1、`ringradius` 300 / 1、`ringwidth` 50 / 0.2、`ringpulldistance` 50 / 0.25、`ringpullforce` 10 / 0.05、`axis` `"0 0 1"`、`flags` 0（只存低 8 位）、`controlpoint` 0 | 两个速度乘 `instanceoverride.speed`（条目 7，系统 `flags` bit4 时不乘）；`axis` 的 `(x²+y²)+z² < 0.001` 时取 (0, 0, 1)，否则精确归一化；轴乘 `current` 的 3×3（不再归一化）；切向 `(r̂ × a)·spd`，`spd` 已乘 `k`；`centerforce` 只在 `flags & 2` 时读，系数 `cf/h`（精确除法）；环形（`flags & 4`）的 `ringwidth`、`ringpulldistance` 占内外距离的槽，`ringpulldistance` 为 0 时倒数存 1.0；`audioprocessing` 的 `mode ≠ 0` 照报 `…:audioprocessing`（P4e） |
+
+- 公式逐步 float32，加法顺序照 rea（例如 `n = (r.y² + r.x²) + r.z²`），WPE 用 `rsqrtps` / `rcpps` 的位置调产品的 `rsqrt` / `rcp`。
+- 每遍处理 `[0, count)` 的全部槽（含死槽），同现有 operator。
+- `columns`：maintaindistance 两个是位置；`reducemovement` 是位置、速度；`vortex_v2` 是位置、速度。有 blend 时加 `age`、`life`。
+
+### 点 2 — 模块表（`particles/modules.ts`）
+
+- **新增** 四项，`run` 指向点 1 的函数，`normalize` 钳控制点下标（`clampControlPoint`）。
+- `controlPointCount` 因此自动计入它们的控制点（字段名 `controlpoint` / `controlpointstart` / `controlpointend` 已认）。核对：`maintaindistancebetweencontrolpoints` 不写字段时也计 0、1 两个点（按缺省值算）。
+
+### 点 3 — 不可见时更新控制点（`particles/system.ts`、`render/scene.ts`）
+
+```ts
+/**
+ * 不可见的一帧：按当帧的 W 更新控制点、帧尾 previous ← current（rea-p4c-sim 5.6，P4d 步骤 5，新增）；
+ * 有存活粒子时照旧清空并复位（返回 true）。
+ */
+suspend(inputs: ControlPointInputs = IDENTITY_INPUTS): boolean {
+  this.controlPoints.update(inputs);   // 新增
+  this.controlPoints.endFrame();       // 新增
+  if (this.alive === 0) return false;
+  // …其余不变
+}
+```
+- 渲染器不可见的分支照可见时的算法算 `world` 与 `pointer`，传给 `suspend`。
+- 只改控制点。系统时间、图层时间、不可见期间发不发射，仍按现状（见「未实测清单」），本步的新实验顺带看。
+- dev 探针、`kbp` 回放里调 `suspend` 的地方一起改（回放钩子自己传 `W`）。
+
+### 测试与回放
+
+**新工程 `p4d-dist2`**（`ignore/p4/defs/p4d5.py`，`kbp gen`），补「未实测清单」里归本步的两项，另顺带看两项：
+
+| 系统 | 设置 | 验什么 |
+|---|---|---|
+| `hide-r` | 世界系统，`maintaindistancetocontrolpoint` 读 1 号点（`offset (200, 0)`、`variablestrength 0.001`），`rate 20`；对象匀速右移、每 10 s 的 [7, 8) 隐藏 | 重新可见的第一帧就有粒子：控制点不可见时照常更新，那个粒子只多平移一帧的 `Δcp`；不更新则多平移约 20 像素 |
+| `hide-ref` | 同上，不隐藏 | 对照 |
+| `rm-eq2` | `reducemovement` `reductioninner = reductionouter = 2`，粒子以 100/s 远离 1 号点 | 差存 1.0 时 `r = 2 + t`（远处 3），按 0 实现是 2：速度衰减 `e^(−3t)` 对 `e^(−2t)`，最终走过 33 对 50 像素 |
+| `rm-ref2` | 同上，`reductionouter` 0 | 对照 |
+
+- 顺带看（钩子里两种取法都跑、只报告）：可见性按上一帧还是本帧的脚本生效（`rate 20` 时切换帧上的出生数会差一）；WPE 不可见期间照不照常模拟（照常的话，最后一个不可见帧发出的粒子会活到可见）。
+- 抓帧用 wpe-renderdoc MCP 的 `capture_sweep`：fps 60、fps 10 各一轮（改 `fps` 要 `restart_wpe`，有别的会话的窗口时会被拒，到时再说），1920×1080 窗口，`log_dir` 写 `ignore/p4/out`。
+
+**数据：**
+- 步骤 0 的 `p4d-dist` 两份轨迹是 draws 认法，用 `kbp rdc track --points` 重提，旧文件改名 `*.rdc_rope.json`（同步骤 4）。fps 10 的日志不全，缺帧用 `gap: "split"` 或钩子补。
+- 新工程的轨迹照常提。
+
+**回放案例 `d5`**（`ignore/p4/cases/`，做法同 `d3`、`d4`）：
+- `p4d-dist` fps 60 / 10、`p4d-dist2` fps 60 / 10，按槽序逐粒子比位置、尺寸。
+- 钩子：
+  - 脚本驱动的对象按上一帧的 `engine.runtime` 算 `W`（同 c4、d3）：`md-move`、`md-move-ref`、`dist-hide`、`hide-r`、`hide-ref` 的 `x = 300 + 20·T`；`mb2-move` 平移加绕 z 旋转（脚本里是度）；
+  - `dist-hide`、`hide-r` 的隐藏帧调 `suspend(inputs)`，同 d3；
+  - 变体（只报告或要求超限）：不可见时不更新控制点（应在 `hide-r` 上超限）、可见性取本帧、不可见期间照常模拟。
+- 不比的：`ma-*` 以外没有随机方向的问题，全比；`v2-*` 的 `centerforce` 组要是超包络，先看是不是近似倒数，再定。
+
+**单测：**
+- 四个模块各自的公式（含 blend）、缺省值、`flags` 各位；
+- 两个 WPE 的 bug（`distanceouter == distanceinner` 存 1.0、`reductionouter == reductioninner` 存 1.0）；
+- `vortex_v2`：乘 `k` 不乘 `h`、`r̂ × a` 的方向、轴乘控制点 3×3、环形拉力的符号与环带内为 0；
+- 两遍模式下 maintaindistance 平移两次 `Δcp`；
+- `suspend` 更新控制点、拷 `previous`，没有粒子时也做。
+
+**验收（Claude）：**
+- `git status` 查越界；tsc、vitest、Prettier、`kbp replay d5` 自跑；`kbp regress --corpus` 现有案例逐字节相同。
+- **变异检查：** `Δcp` 方向反了、`variablestrength` 不钳制、`T` 不求逆、between 只读一个点的 previous、两个 bug 不复刻（各一条）、`vortex_v2` 乘 `h`、切向方向反、轴不乘 3×3、环形拉力符号反、`suspend` 不更新控制点。
+- **语料：** 四个模块的键去掉；3832133196 只剩它别的键（子系统等），kabegame-sample 不再报这四个模块；能渲染数、覆盖数按「范围与解锁」表（步骤 5 是 0）。
+- 画面哈希不变：干净场景、三档。
+- **做法：** 同步骤 3、4，`kbp snapshot` 出 `ignore/p4/d5/head` 与 `ov`，子代理只在 `ov` 里做，出补丁后按块暂存、只提交自己的。
+
+### 步骤 5 实施记录（2026-11-11）
+
+**数据：**
+- 快照取自 `bafb4a93`（`ignore/p4/d5/head`、`ov`），开工时工作区 `apps/` 没有并行改动。
+- `p4d-dist` 的两份轨迹按 points 重提，旧文件改名 `rd-p4d-dist-fps*.rdc_rope.json`。
+- 新工程 `p4d-dist2`（`ignore/p4/defs/p4d5.py`），wpe-renderdoc MCP 的 `capture_sweep` 抓 fps 60 / 10 各 10 帧，在 `A:\p4d\p4d-dist2-fps*`。
+  - 隐藏窗口先按绝对时刻（每 20 s 的 [12, 13)）设计，两次都落空：加载耗时不稳，一次抓帧时场景时间 17.8 s（重新可见那帧的粒子已死），一次 12.1 s（正在隐藏）。改成周期的「每 5 s 隐藏最后 1 s、寿命 4.5 s」后一次抓到。
+  - WPE 的 `fps` 由 MCP 改成 60 / 10 再改回测前的 20；`config.json` 的哈希和测前相同（`4a4c71fd…`）。fps 10 的日志照旧不全。
+- **新实验的直接读数**（回放之前，按对象位置粗看）：
+  - 不可见时控制点照常更新：`hide-r` 的粒子相对对象的偏移是连续的一串（fps 60：100.12–100.32；fps 10：103.7–149.6，每帧约 2），没有多出 20 像素（两遍 40）的离群点。重新可见那一帧有没有粒子出生，由回放确认。
+  - `reductionouter == reductioninner` 时差存成 1.0：`rm-eq2` 两种 fps 都停在 x ≈ 33.33 = 100/3，即 `r = 3`；按 0 实现会停在 50。
+
+**实现：**
+- 子代理只在 `ignore/p4/d5/ov` 里做。补丁 `ignore/p4/d5/step5.patch`，9 个文件，+1066 / −24（相对 `apps/wpe-scene/src/`）：
+  - 新增 `particles/distance.ts`（`inverseBasis` 与四个执行函数）、`particles/distance.test.ts`（30 个用例）；
+  - 修改 `particles/modules.ts`（模块表四项）、`particles/system.ts`（`suspend(inputs)` 先更新控制点、拷 `previous`，再看有没有粒子）、`render/scene.ts`（不可见分支照可见时的算法算 `W` 与跟随点）；`particles/controlpoints.ts` 只改注释；
+  - 三个测试只改期望：原来拿 `reducemovementnearcontrolpoint` 当表外模块的例子，换成 `boids`。
+- 补丁之外：回放案例 `ignore/p4/cases/d5.json` + `d5.hook.ts`，变异清单 `ignore/p4/d5/mutations.py`，Claude 另加的 `ignore/p4/d5/mut_claude.py`。
+- 开工期间 HEAD 前进到 `74b65d27`（文档提交）；工作区另有并行会话（P6a 声音、P5a 收尾的 kbp-tools）改的文件，都不在补丁里，`git apply --check` 干净。
+
+**对照汇编补清的读码（rea 第 3、4 节没写细或写错的）：**
+- `FUN_1401d8df0` 的钳制让 NaN 原样通过（`maxss` / `minss` 取第二操作数），不是 rea 写的「NaN → 0」。
+- `inverse` 的运算顺序逐条照 `FUN_140228b00`：三个余子式、`det = (A·m0 − B·m3) + C·m6`、`1/det` 用 `divss`、余子式先取反再乘。
+- between：跳过的判定是 lane 0 的 `comiss`，NaN 也跳过；blend 乘的是整段增量 `((s·D̂ − t·D̂p) + ΔA)·b`。
+- `vortex_v2`：
+  - 轴的归一化是 `axis·(1/sqrtss)`，舍入两次，不是 rea 写的「精确归一化」；
+  - 轴变换用完整 4×4、`w = 0`；
+  - 环形的 blend 是 `spd·b` 与 `(c₀ + pull)·b`（rea 没写）；拉力的符号是把 `e` 的符号位或上去；
+  - `n = 0` 或 `|P′| = 0` 时照 WPE 写 NaN，不像 `vortex` 那样跳过。
+- `audioprocessingmode` 进字段表，只支持 0，非 0 照报 `…:audioprocessingmode`（P4e）；另外四个 `audioprocessing*` 键中性。
+
+**回放 `d5`（Claude 自跑，和子代理的报告逐项相同，四段全部通过）：**
+- 逐帧比较通过的，差/限都 ≤ 0.77：`md-soft`、`md-move`、`md-move-ref`、`mb2-move`、`mb2-same`、`rm-basic`、`rm-eq`、`v2-sphere`、`v2-cyl`、`v2-axis`、`dist-hide`，两种 fps；`hide-r`、`hide-ref`、`rm-eq2`、`rm-ref2`，两种 fps。
+- **改成只报告、另做单步核对的：** `md-hard`、`md-scale`（两种 fps，差/限 2.2–4.0，绝对差 0.04–0.09 像素），fps 10 的 `v2-ring-in`、`v2-ring-out`（4.5、1.2）。
+  - 原因：WPE 的 `rsqrtps` 误差随输入逐帧变化（md-hard 的半径在 200 上下 ±2.6e-4 相对误差），在把粒子拉回半径的系统里是随机游走；近似运算包络是常量偏置，界不住。
+  - 单步核对：每个抓帧把粒子换成 WPE 上一帧的状态、步进一帧再比，全部通过（位置差/限 ≤ 0.70；`vortex_v2` 比速度，差/限 ≤ 0.43）。
+  - `mb2-move` 两次 `rsqrtps`（`q`、`qp`）的误差可以一正一负，钩子另加「按调用奇偶交替 ±」两个包络变体后 fps 10 的单步通过。
+  - `v2-center`、`v2-ring-*` 在 fps 60 的逐帧包络有上百像素，逐帧比较等于没比，真正起作用的是单步核对。fps 10 的两遍模式下位置反推不出速度（非厚格式没有速度列），两个 ring 组只报告，依据是 fps 60 的单步核对和两种 fps 下相近的绝对差。
+- **缺帧：**
+  - `p4d-dist` fps 10 缺 151–156 帧，平分最好；
+  - `p4d-dist2` fps 10 缺 101–124 帧，钩子按 `hide-ref` 的出生组位置、`rm-ref2` 的锚点和逐帧出生数用加权最小二乘反推场景时间，组残差 RMS 4.7e-3 像素。`hide-r` 的出生数参与了反推，它的位置没参与。
+- **三个变体：**
+  - **不可见时不更新控制点：** `p4d-dist2` fps 10 的 `hide-r` 超限 1156 倍，钉住了「WPE 不可见时照常更新控制点」。fps 60 那段发射器复位后第 3 帧才有粒子出生，`dist-hide` 两段同样如此，区分不了，钩子自动只报告。
+  - **可见性取本帧的 runtime：** 四段都更差（`dist-hide` 差/限 1.05、53.9，`hide-r` 2.80，fps 10 有 10 帧粒子数不同），按上一帧取是对的。
+  - **不可见期间照常模拟发射：** 四段的粒子数都对不上（6、6、8、10 帧），WPE 不可见期间不发射（或最后一个不可见帧发出的粒子活不到可见）。
+
+**验收结果：**
+
+| 项目 | 结果 |
+|---|---|
+| 越界 | 补丁 9 个文件，工作区里没人改过；`apps/` 里并行会话的改动都不在补丁里 |
+| tsc、vitest、Prettier | Claude 自跑：tsc 0 错（钩子另查 0 错）；59 个文件、1622 个用例全过；Prettier 9 个文件通过 |
+| 回放 `kbp replay d5` | 见上，四段全部通过 |
+| 回归 `kbp regress --corpus` | 现有案例两边逐字节相同，只有 `d5` 不同（head 里没有这四个模块，预期）。<br>语料 165 张、干净 36 不变、出错 0：3832133196 去掉 `maintaindistancebetweencontrolpoints`、`reducemovementnearcontrolpoint`；3585875739 去掉 `vortex_v2`，新增 `vortex_v2:audioprocessingmode`（两个粒子文件都是 mode 3，照报正确）。kabegame-sample 另扫：只去掉 `maintaindistancetocontrolpoint`、`vortex_v2` |
+| 变异检查 | 子代理 17 条全部检出：只靠单测的 3 条（`variablestrength` 不钳制、`distanceouter == distanceinner` 不存 1.0、`flags` 不截低 8 位，回放的参数碰不到）。<br>Claude 另加 2 条（`suspend` 不拷 `previous`、环形拉力乘 `k`），单测和回放都检出 |
+| 合并后（2026-11-11，用户同意合并后做） | 补丁打进工作区（工作区另有 P6a 声音、P5a 收尾的未提交改动，和补丁不重叠）。<br>tsc 0 错；vitest 64 个文件、1691 个用例全过（含并行会话的新测试）。<br>`kbp regress --src d5/head --src apps/wpe-scene/src --corpus`：回放案例只有 `d5` 不同；语料里本步的变化同上，其余（去掉 `object:sound` 等、新增 `script:api:layer.*`、`sound:volume:script`）是 P6a 的未提交改动 |
+| 画面哈希 | `hash_baseline` 按 `ignore/p5/cur/out/hash-after.json` 的 10 张场景 × 3 档。<br>撤掉补丁重建宿主（`index-DJgn3uDz.js`）量 `ignore/p4/d5/out/hash-before.json`；打回补丁重建（`index-CkqkbydK.js`）量 `hash-after.json`。<br>`hash_compare` 全部相同。dev 宿主已按合并后的工作区重新构建（`--mode development`） |
 
 ## 未实测清单（P4d 收尾统一走查）
 
 各步按读码实现、但没有实测核对的项，汇总在这里，2026-11-10 用户定：P4d 收尾统一走查。每项写清现状、为什么没测到、怎么补。后面的步骤补测了就在这里标「已测」。
 
-**等后面的步骤回放覆盖：**
-
-| 项 | 来源 | 现状与原因 | 怎么补 |
-|---|---|---|---|
-| FBm 的倍频细节（种子 +1、坐标 ×2、振幅 ×0.5、归一） | 步骤 0 | rv-fbm1 / rv-fbm3 输出标量 `speed`、年龄未知，各种写法都拟合得上 | 步骤 4 用 WPE 帧时间回放，年龄精确，逐粒子比 |
-| `remap2` 里 4b 的几项（init 的输入 16–18、输出 `controlpoint`） | 步骤 0、4a | 4a 回放了其余 58 个系统，全部通过 | 步骤 4b 回放 |
-| `mb2-move` 的定量、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式 | 步骤 0 | 步骤 0 只做了定性或一遍模式的核对 | 步骤 5 用 fps 60 / 10 回放 |
-| WPE 不可见时照常更新控制点（dist-hide） | 步骤 0 | 重新可见后 1 s 才发第一个粒子，第一帧没有粒子可拽 | 步骤 5 重做实验：让重新可见的那一帧就有粒子（如 `instantaneous`） |
-| `reductionouter == reductioninner` 时差存成 1.0（rm-eq） | 步骤 0 | 这组参数下按 0 实现也是 `100·h > 1`，分辨不了 | 步骤 5 换参数，让 `r·h` 落在 (0, 1) 里 |
+**等后面的步骤回放覆盖：** 步骤 5 做完后已经没有了（都移到下面的「已测」）。
 
 **要重新抓 WPE 才能补：**
 
@@ -1080,8 +1300,6 @@ export function fbm2(seed: number, x: number, y: number, octaves: number): numbe
 |---|---|---|---|
 | rope 绳没满时 `Rf = min(fps, R)`（R9） | 步骤 0 | 两种 fps 下抓帧时绳都已满 | 抓加载后头几百毫秒、或一个 `rate` 高而 `maxcount` 大到永远不满的系统 |
 | ropetrail 预热后历史塌缩到当前位置（T7） | 步骤 0、2 | T7 的设计里预热期间根本不出粒子（满容量冻结发射计时），WPE 里一直没有存活粒子；现在只有单测 | 让预热期间真的出粒子，如 `rate 2` 或 `instantaneous 1` |
-| 可见性按上一帧还是本帧的脚本生效 | 步骤 3 | ma-hide 两种取法都通过 | 让隐藏、显示的切换帧上有粒子出生，两种取法的出生数会差一 |
-| WPE 不可见期间照不照常模拟粒子（rea-p4d-modules 5.3【推】） | 步骤 3 | ma-hide 的位置和粒子年龄无关 | 隐藏期间仍有存活粒子、且位置随年龄变的工程（WPE 清空前的那一帧） |
 | `around` 配周期发射时新周期清不清零（`rec+0x58 & 2`） | 步骤 3 | 没测，能力表照报 `…:periodic`；语料 0 张 | 测试工程配周期发射，出生方向序列按周期看 |
 | `around` 的残留字在「干净重启后只解析过桌面壁纸」时的值 | 步骤 3 | `restart_wpe` 被权限拦下；另外三种先行解析都是「不乘」 | 用户放行 `restart_wpe` 后补抓一次 `p4d-around-ic` |
 | `2254685070` 和 WPE 的画面对照 | 步骤 1 | 鼠标拖尾，要移动鼠标才有画面 | P4d 收尾抓帧时移动鼠标，做法同 P4c |
@@ -1095,8 +1313,14 @@ export function fbm2(seed: number, x: number, y: number, octaves: number): numbe
 - 暂停时改 `instanceoverride` 的 `count` / `lifetime`，rope 的 `TL` 要到下一次步进才更新（步骤 1）。
 
 **已测（从清单里划掉）：**
+- `mb2-move` 的定量、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式（步骤 0）：步骤 5 的回放 fps 60 / 10 逐粒子对上；fps 10 的 `v2-ring-*` 只报告，见步骤 5 实施记录。
+- WPE 不可见时照常更新控制点（步骤 0 的 dist-hide 没测到）：步骤 5 新工程 `p4d-dist2` 的 `hide-r`，fps 10 段「不更新」的变体超限 1156 倍。
+- `reductionouter == reductioninner` 时差存成 1.0（步骤 0 的 rm-eq 分辨不了）：`rm-eq2` 两种 fps 都停在 100/3，回放逐粒子对上。
+- 可见性按上一帧还是本帧的脚本生效（步骤 3 两种都通过）：步骤 5 的四段里「本帧」都更差，按上一帧。
+- WPE 不可见期间照不照常模拟（步骤 3）：步骤 5「照常发射」的变体四段粒子数都对不上，不可见期间不发射。
 - 不可见时复位清零 `mapsequence*` 的序号（步骤 0 没测到）：步骤 3 的回放逐粒子对上，见步骤 3 实施记录。
-- `remap2` 的全部取值（4b 的几项与两个 `timeofday` 除外）：步骤 4a 的回放 58 个系统、两种 fps 全部通过，见步骤 4a 实施记录。
+- `remap2` 的全部取值（两个 `timeofday` 与 op 的 `maxlifetime` 除外，三者照报）：4a 回放 58 个系统，4b 补上输入 16–18 与输出 `controlpoint`，共 63 个，两种 fps 全部通过，见步骤 4a、4b 实施记录。
+- FBm 的倍频细节（步骤 0 没能区分）：步骤 4b 的回放年龄精确，rv-fbm1 / rv-fbm3 逐粒子对上；变异「不加种子 / 不归一 / 振幅不乘 0.5 / 坐标不乘 2」回放都查得出。
 
 ## P4d 收尾
 

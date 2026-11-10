@@ -2,12 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
-import { MISSING_SCRIPT_API, type ScriptApiGroup } from "../compile/scriptApi";
+import {
+  MISSING_SCRIPT_API,
+  MISSING_SCRIPT_CALLBACKS,
+  WPE_SCRIPT_CALLBACKS,
+  type ScriptApiGroup,
+} from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState, scriptWriteValue } from "../render/state";
 import { createWpeLocalStorage, ScriptApi } from "./api";
 import { alignScriptEnvironment } from "./environment";
-import { ScriptRuntime, type ScriptRealm } from "./runtime";
+import { RUNTIME_CALLBACKS, ScriptRuntime, type ScriptRealm } from "./runtime";
 import { createMemoryStorage } from "./storage";
 
 class Vec2 {
@@ -450,7 +455,7 @@ describe("SceneScript API（FakeRealm）", () => {
     h.bundle.bloom = { hdr: false, passes: {} };
     h.resetState();
     const { thisScene: scene, general } = h.api;
-    // 成员就是 general 的全部字段加四个查询方法：fog*、wind*、zoom 这轮不加
+    // 成员就是 general 的全部字段加四个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
     const methods = ["enumerateLayers", "getLayer", "getLayerCount", "getLayerIndex"];
     expect(Object.keys(scene).sort()).toEqual([...Object.keys(general), ...methods].sort());
     expect(Object.keys(general)).toEqual(
@@ -487,6 +492,7 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(scene.camerashakespeed).toBe(3);
     expect(scene.cameraparallaxdelay).toBe(0.1);
     expect(scene.cameraparallaxmouseinfluence).toBe(0.5);
+    expect(scene.zoom).toBe(1);
   });
 
   it("general 字段：全部字段写入不重编译，当场读回，thisScene 与 general 同一份", () => {
@@ -510,6 +516,7 @@ describe("SceneScript API（FakeRealm）", () => {
       cameraparallaxamount: 0.4,
       cameraparallaxdelay: 0.2,
       cameraparallaxmouseinfluence: 0.6,
+      zoom: 1.5,
     };
     expect(Object.keys(written).sort()).toEqual(Object.keys(GENERAL_FIELDS).sort());
     for (const [key, value] of Object.entries(written)) {
@@ -520,6 +527,8 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(h.state.general.clearcolor).toEqual([0.1, 0.2, 0.3]);
     expect(h.state.general.fov).toBe(33);
     expect(h.state.general.camerashake).toBe(true);
+    // P5a 步骤 4：脚本写 `thisScene.zoom` 落在状态上，渲染器下一帧开头读
+    expect(h.state.general.zoom).toBe(1.5);
     expect(h.recompiles).toEqual([]);
     expect(h.api.recompileWrites.size).toBe(0);
   });
@@ -765,5 +774,17 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
         for (const name of Object.keys(object))
           expect(missing.has(name), `${group}.${name} 已实现却在表里`).toBe(false);
     }
+  });
+
+  it("未实现回调表与运行时调用的回调互补，合起来是 WPE 的回调表", () => {
+    const wpe = new Set<string>(WPE_SCRIPT_CALLBACKS);
+    const runtime = new Set<string>(RUNTIME_CALLBACKS);
+    for (const name of MISSING_SCRIPT_CALLBACKS) {
+      expect(wpe.has(name), `${name} 不是 WPE 的回调`).toBe(true);
+      expect(runtime.has(name), `${name} 运行时已经调用，从 MISSING_SCRIPT_CALLBACKS 删掉`).toBe(false);
+    }
+    const missing = new Set(MISSING_SCRIPT_CALLBACKS);
+    expect(MISSING_SCRIPT_CALLBACKS).toHaveLength(missing.size);
+    expect(new Set([...wpe].filter((name) => !missing.has(name)))).toEqual(runtime);
   });
 });

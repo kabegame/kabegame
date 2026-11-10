@@ -1,5 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { ScenePlayer } from "./audio/player";
+import { SceneSounds, type SceneSoundProbe } from "./audio/sceneSounds";
 import {
   describeApply,
   mergeProperties,
@@ -112,6 +114,14 @@ export class SceneHost {
   private audioError: string | null = null;
   private audioFrames = 0;
   private lastAudioFrame: number[] | null = null;
+  /**
+   * 声音对象的播放（P6a 步骤 1）：第一张带声音的 bundle 到达时建，重编译保留（同一对象播放不中断），退回预览图与销毁时释放。
+   * 宿主音量 h 由垫片交来（`setHostVolume`），收到之前按 0：不建 `AudioContext`、不读文件。
+   */
+  private sceneSounds: SceneSounds | null = null;
+  private soundPlayer: ScenePlayer | null = null;
+  private hostVolume = 0;
+  private hidden = false;
   /** dev 探针计数：就地应用次数与重编译记录。 */
   readonly stats: SceneHostStats = { applied: 0, recompiled: [] };
   private receivedProperties = false;
@@ -194,6 +204,8 @@ export class SceneHost {
     const applied = this.renderer?.applyBindings(plan.writes) ?? false;
     if (applied) {
       for (const { binding } of plan.writes) this.runtime?.forgetWrite(this.targetPath(binding.target));
+      // 声音的 `volume` 当场生效（WPE 的回调 `V` 在改值时调；暂停时没有帧）
+      if (plan.writes.some(({ binding }) => binding.target.kind === "sound")) this.syncSoundVolumes();
       this.stats.applied++;
       this.options.report.debug(`场景壁纸 ${this.options.imageId} 就地更新：${[...changes.keys()].join(",")}`);
     }
@@ -268,6 +280,7 @@ export class SceneHost {
     if (target.kind === "bloom-enabled") return "general/bloom";
     if (target.kind === "general") return `general/${target.key}`;
     if (target.kind === "particle-instance") return `objects/${target.object}/instanceoverride/${target.field}`;
+    if (target.kind === "sound") return `objects/${target.object}/${target.field}`;
     if (target.kind === "recompile") return target.path;
     return `${target.script}/scriptproperties/${target.key}`;
   }
@@ -289,6 +302,10 @@ export class SceneHost {
     if (target.kind === "general") {
       const value = state.general[target.key];
       return typeof value === "number" ? [value] : value;
+    }
+    if (target.kind === "sound") {
+      const value = state.sounds.get(target.object)?.volume;
+      return value === undefined ? null : [value];
     }
     return null;
   }
@@ -496,6 +513,9 @@ export class SceneHost {
     const layer = /^objects\/(\d+)\/(origin|scale|angles|alpha|color|brightness|visible|parallaxDepth)$/.exec(path);
     if (layer)
       return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;
+    // 声音的 `volume`（P6a 步骤 1）：状态里的值，排期器下一帧（或改值时当场）读到的就是它
+    const sound = /^objects\/(\d+)\/volume$/.exec(path);
+    if (sound) return state.sounds.get(Number(sound[1]))?.volume ?? null;
     // 粒子 `instanceoverride` 的就地值（P4a 步骤 5）：状态里的值，与模拟器正在用的相同
     const instance = /^objects\/(\d+)\/instanceoverride\/(\w+)$/.exec(path);
     if (instance)
@@ -519,6 +539,79 @@ export class SceneHost {
   setPaused(paused: boolean): void {
     this.paused = paused;
     this.renderer?.setPaused(paused);
+    this.syncSoundGlobal();
+  }
+
+  /**
+   * 宿主音量 h（0…1，垫片交来：桌面与预览是壁纸音量，应用背景与暂停时为 0）。声音的排期器把它当 WPE 的全局音量 G：
+   * 从正变 0 暂停在放的（`single` / `random` 已放完的停掉），从 0 变正续播、从没开始过的从头开始（P6a 步骤 1）。
+   */
+  setHostVolume(volume: number): void {
+    this.hostVolume = Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 0;
+    this.syncSoundGlobal();
+  }
+
+  /** 文档隐藏时渲染循环停转、声音的计时冻结，声音也按暂停处理（不然多文件、`random` 会在放完之后断掉）。 */
+  setHidden(hidden: boolean): void {
+    this.hidden = hidden;
+    this.syncSoundGlobal();
+  }
+
+  /** 排期器看到的全局音量：暂停或隐藏时为 0，否则是宿主音量；暂停 / 恢复另交给播放器淡变。 */
+  private syncSoundGlobal(): void {
+    const active = !this.paused && !this.hidden;
+    this.sceneSounds?.setGlobal(active ? this.hostVolume : 0, active);
+  }
+
+  private soundVolumeOf = (object: number): number | undefined => this.renderer?.sceneState?.sounds.get(object)?.volume;
+
+  private syncSoundVolumes(): void {
+    this.sceneSounds?.syncVolumes(this.soundVolumeOf);
+  }
+
+  /**
+   * 换上 bundle 的声音表：没有声音的场景不建播放器。宿主收到 bundle 就开始，不等 GPU 资源（WPE 加载时就开始放，不等第一帧）。
+   * 同一对象的排期器跨重编译保留（`SceneSounds.load`）。
+   */
+  private loadSounds(bundle: SceneBundle): void {
+    // 手写的测试 bundle 可能没有声音表
+    const sounds = bundle.sounds ?? [];
+    if (!sounds.length && !this.sceneSounds) return;
+    if (!this.sceneSounds) {
+      const imageId = this.options.imageId;
+      this.soundPlayer = new ScenePlayer({ reader: this.reader }, this.options.report);
+      this.sceneSounds = new SceneSounds(this.soundPlayer, Math.random, (object, file, error) =>
+        this.options.report.warn(
+          `场景壁纸 ${imageId} 声音对象 ${object} 的文件读不出，已从列表删掉：${file.path}`,
+          error,
+        ),
+      );
+      this.syncSoundGlobal();
+    }
+    this.sceneSounds.load(sounds);
+  }
+
+  private disposeSounds(): void {
+    this.sceneSounds?.dispose();
+    this.sceneSounds = null;
+    this.soundPlayer = null;
+  }
+
+  /** dev 探针：每个声音对象的模式、当前文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的元素与 context。 */
+  sounds(): {
+    hostVolume: number;
+    paused: boolean;
+    hidden: boolean;
+    sounds: SceneSoundProbe[];
+    player: ReturnType<ScenePlayer["probe"]> | null;
+  } {
+    return {
+      hostVolume: this.hostVolume,
+      paused: this.paused,
+      hidden: this.hidden,
+      sounds: this.sceneSounds?.probe() ?? [],
+      player: this.soundPlayer?.probe() ?? null,
+    };
   }
 
   setPointer(x: number, y: number): void {
@@ -546,6 +639,7 @@ export class SceneHost {
     const displayScale = this.displayScale;
     const task: Promise<SceneRenderer> = SceneRenderer.create(this.canvas, {
       displayScale,
+      stepObjects: (dt) => this.sceneSounds?.step(dt, this.soundVolumeOf),
       beforeFrame: (dt) => {
         if (this.state !== "fallback" && this.scriptState) this.runtime?.frame(dt);
       },
@@ -593,6 +687,8 @@ export class SceneHost {
 
   private fallback(reasons: string[]): void {
     this.dropRenderer();
+    // 退回预览图：场景不显示，声音也停（下次能渲染时重新开始）
+    this.disposeSounds();
     this.bundle = null;
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
@@ -664,6 +760,8 @@ export class SceneHost {
         }
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
       }
+      // 声音在对象加载时就开始（WPE 不等第一帧），在脚本与 GPU 资源之前
+      this.loadSounds(bundle);
       // runtime 已赋值但脚本还在加载时也要等，否则会抢在 init 之前进入首帧
       if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;
@@ -740,6 +838,7 @@ export class SceneHost {
     this.controller?.abort();
     for (const unlisten of this.unlisteners.splice(0)) unlisten();
     this.dropRenderer();
+    this.disposeSounds();
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;
