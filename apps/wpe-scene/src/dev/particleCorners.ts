@@ -14,6 +14,8 @@
  * 计算入口的第 `id` 个调用算第 `id / maxVertices` 段的第 `id % maxVertices` 个顶点，按段读输入；除了位置，另把 uv（`v_TexCoord`）、
  * 颜色（`v_Color`）写出，结果按段给出整条带子，和 WPE `gs_out`（还原成带）逐顶点比。几何着色器里 `normalize` 零向量的段整段输出
  * `(2, 2, 2, 1)`（裁剪体外，见翻译器 README），对应 WPE 的 NaN 顶点。
+ * ropetrail（P4d 步骤 2）走同一条路：输入里有一个 vec3（`a_TexCoordVec3C2`，按布局的 float 偏移读 3 个分量），段按槽序、每个存活
+ * 粒子恒 n 段（`writeTrailSegments`），结果同样按段给出整条带子。
  */
 import type { SceneBundle } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
@@ -305,12 +307,15 @@ export interface ParticleCornersLayer {
   /** 写进顶点的粒子输入，按槽序，与 `corners` 一一对应（拖尾系统同样去掉退化的）。 */
   particles: ParticleTrackParticle[];
   /**
-   * rope（P4d 步骤 1）才有：这时 `count` 是段数，`corners` / `pixels` 的每项是一段的整条带子（`maxVertices` 个顶点，三角形带顺序，
-   * 同 WPE `gs_out` 还原成带的顺序），`uv` 为空，`particles` 是按 rope 表（出生序）排的全部存活粒子（段 k 连第 k、k + 1 个）。
+   * rope 两类（P4d 步骤 1、2）才有：这时 `count` 是段数，`corners` / `pixels` 的每项是一段的整条带子（`maxVertices` 个顶点，三角形带
+   * 顺序，同 WPE `gs_out` 还原成带的顺序），`uv` 为空。rope 的 `particles` 是按 rope 表（出生序）排的全部存活粒子（段 k 连第 k、
+   * k + 1 个）；ropetrail 的 `particles` 是按槽序的存活粒子，段 `i·n … i·n + n − 1` 是第 i 个的（`segments` 是 n）。
    * `normalize` 零向量的段整段是 `(2, 2, 2, 1)`（裁剪体外，WPE 是 NaN）。
    */
   rope?: {
     maxVertices: number;
+    /** ropetrail（P4d 步骤 2）每个粒子的段数 n；rope 没有。 */
+    segments?: number;
     /** 每段每个顶点的 `v_TexCoord`（u、v）。 */
     uvs: number[][][];
     /** 每段每个顶点的 `v_Color`（rgba）。 */
@@ -430,12 +435,23 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
           corners,
           pixels,
           particles: rope
-            ? ropeParticles(probe.system)
+            ? probe.system.trail
+              ? particleSnapshot(probe.system)
+              : ropeParticles(probe.system)
             : particleSnapshot(
                 probe.system,
                 probe.trailEye ? (slot) => trailDrawable(probe.system.columns, slot, probe.trailEye!) : undefined,
               ).slice(0, limit),
-          ...(rope ? { rope: { maxVertices: rope.maxVertices, uvs, colors } } : {}),
+          ...(rope
+            ? {
+                rope: {
+                  maxVertices: rope.maxVertices,
+                  ...(probe.system.trail ? { segments: probe.system.trail.segments } : {}),
+                  uvs,
+                  colors,
+                },
+              }
+            : {}),
           wgsl: options.wgsl ? code : undefined,
         });
       }

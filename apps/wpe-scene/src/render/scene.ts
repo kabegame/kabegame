@@ -31,7 +31,9 @@
  *   帧表（P4b 步骤 2）：槽 0 的纹理带帧表时 `g_RenderVar1` 取它的 `sheet`，顶点多写 `a_TexCoordVec4C1`，帧数学在着色器里。
  *   rope（P4d 步骤 1）：程序带 `geometry`（翻译器把几何着色器展开进顶点着色器）时，顶点按实例步进、每段一个实例，顶点缓冲按
  *   `maxcount` 段分配，`encode` 按 rope 表写段顶点（`particles/rope.ts` 的 `writeRopeSegments`），三角形带
- *   `draw(maxVertices, 段数)`，段数为 0 不画；不用索引缓冲。
+ *   `draw(maxVertices, 段数)`，段数为 0 不画；不用索引缓冲。ropetrail（P4d 步骤 2）同一条路，按 renderer 换布局与写入函数：每个存活
+ *   粒子按槽序恒写 n 段（`particles/ropetrail.ts` 的 `writeTrailSegments`），顶点缓冲按 `maxcount × n` 段分配，`g_RenderVar0` 每帧按
+ *   系统的计时器写（`update`，`trailRenderVar0`）。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -39,11 +41,13 @@
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
+import type { ParticleRenderer } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { pointerScenePoint } from "../particles/controlpoints";
 import { orientationBasis, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
+import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
 import { ParticleSystem } from "../particles/system";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import {
@@ -166,15 +170,21 @@ type DrawLike = DrawStep | ParticleStep;
 /** 一个粒子层的模拟器与 CPU 侧顶点（P4a 步骤 4）。 */
 interface ParticleDraw {
   system: ParticleSystem;
-  /** 顶点布局：sprite / spritetrail 每粒子 4 个顶点（`particleVertexLayout`）；rope（`rope` 非空）每段一个实例（`ropeVertexLayout`）。 */
-  layout: ParticleVertexLayout | RopeVertexLayout;
   /**
-   * rope（P4d 步骤 1）：程序带 `geometry` 时非空，每个实例（段）画 `maxVertices` 个顶点（`4 + 2·subdivision`）、三角形带；其余为 null。
+   * 顶点布局：sprite / spritetrail 每粒子 4 个顶点（`particleVertexLayout`）；rope（`rope` 非空）每段一个实例（`ropeVertexLayout`），
+   * ropetrail（`rope` 非空且系统有历史 `system.trail`）同样每段一个实例（`trailVertexLayout`）。
+   */
+  layout: ParticleVertexLayout | RopeVertexLayout | TrailVertexLayout;
+  /**
+   * rope 两类（P4d 步骤 1、2）：程序带 `geometry` 时非空，每个实例（段）画 `maxVertices` 个顶点（`4 + 2·subdivision`）、三角形带；
+   * 其余为 null。
    */
   rope: { maxVertices: number } | null;
-  /** CPU 侧交错顶点，按 `maxcount` 个粒子（每个 4 个顶点）分配；rope 按 `maxcount` 段（每段一个实例）。 */
+  /**
+   * CPU 侧交错顶点，按 `maxcount` 个粒子（每个 4 个顶点）分配；rope 按 `maxcount` 段（每段一个实例），ropetrail 按 `maxcount × n` 段。
+   */
   vertices: Float32Array;
-  /** 上次写进缓冲的粒子数，`drawIndexed` 画 6 倍的索引；rope 是段数（实例数）。 */
+  /** 上次写进缓冲的粒子数，`drawIndexed` 画 6 倍的索引；rope 两类是段数（实例数）。 */
   count: number;
   /** 步进过、还没写成顶点：`encode` 里写 `vertices` 并 `writeBuffer`。 */
   stale: boolean;
@@ -283,6 +293,11 @@ interface Draw {
   block: UniformBlock | null;
   /** 需要每帧刷新的内置 uniform 名（被材质值覆盖的不刷）。 */
   frameNames: string[];
+  /**
+   * ropetrail（P4d 步骤 2）的 `g_RenderVar0` 每帧按系统的计时器重写（`trailRenderVar0`）：粒子层是 ropetrail、块里有这个名字、
+   * 材质没覆盖时为真。
+   */
+  trailRenderVar: boolean;
   /** 按槽位的纹理尺寸（就地刷新时复用，纹理不随属性变化）。 */
   textureSizes: readonly (TextureSize | undefined)[];
   /** 静态 uniform 被就地改过：下一次 `update` 要整块重写。 */
@@ -316,8 +331,9 @@ type Op =
 
 /**
  * 决定一条管线的五项：WebGPU 的管线绑定了混合、目标格式、写掩码与图元拓扑（WPE 的 D3D11 着色器不绑），同一个程序要按它们
- * 各建一份。`topology`：sprite / spritetrail 粒子是带索引的三角形列表；图层四边形和 rope（几何着色器展开，每段一个实例，P4d 步骤 1）
- * 是三角形带。键只给三角形列表加后缀，其余和加这一项之前逐字相同（rope 的程序只给 rope 用，按实例步进的布局跟着程序走）。
+ * 各建一份。`topology`：sprite / spritetrail 粒子是带索引的三角形列表；图层四边形和 rope 两类（几何着色器展开，每段一个实例，
+ * P4d 步骤 1、2）是三角形带。键只给三角形列表加后缀，其余和加这一项之前逐字相同（rope 两类的程序只给自己用，按实例步进的布局跟着
+ * 程序走）。
  */
 export interface PipelineSpec {
   program: number;
@@ -352,26 +368,43 @@ export function stepPipeline(
 }
 
 /**
- * 粒子程序的顶点输入能不能由 CPU 写：带 `geometry` 的（rope，P4d 步骤 1）按 `writeRopeSegments` 的 6 个输入查（`particles/rope.ts`），
- * 其余按 `writeVertices`（`particles/vertices.ts`）。
+ * 粒子程序的顶点输入能不能由 CPU 写：带 `geometry` 的按 renderer 查，rope（P4d 步骤 1）按 `writeRopeSegments` 的 6 个输入
+ * （`particles/rope.ts`），ropetrail（P4d 步骤 2）按 `writeTrailSegments` 的 5 个输入（`particles/ropetrail.ts`）；其余按
+ * `writeVertices`（`particles/vertices.ts`）。
  */
-function particleAttributeProblems(program: SceneBundle["programs"][number]): string[] {
+function particleAttributeProblems(
+  program: SceneBundle["programs"][number],
+  renderer: ParticleRenderer["kind"] | undefined,
+): string[] {
   try {
     const packing = programVertexPacking(program);
-    return (program.geometry ? ropeVertexLayout(packing) : particleVertexLayout(packing)).problems;
+    if (!program.geometry) return particleVertexLayout(packing).problems;
+    return (renderer === "ropetrail" ? trailVertexLayout(packing) : ropeVertexLayout(packing)).problems;
   } catch (error) {
     return error instanceof SceneRenderError ? error.reasons : [`render:particle-attribute:${String(error)}`];
   }
 }
 
-/** 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。 */
-function planProblems(plan: LayerPlan, bundle: SceneBundle): string[] {
+/**
+ * 几何着色器分支（rope 两类）写段顶点：系统有 ropetrail 历史（`system.trail`，P4d 步骤 2）时每个存活粒子恒写 n 段
+ * （`writeTrailSegments`），否则按 rope 表写（`writeRopeSegments`，P4d 步骤 1，`fps` 是宿主的帧上限）。返回段数。
+ */
+function writeSegments(system: ParticleSystem, layout: ParticleDraw["layout"], out: Float32Array, fps: number): number {
+  return system.trail
+    ? writeTrailSegments(system, layout as TrailVertexLayout, out)
+    : writeRopeSegments(system, layout as RopeVertexLayout, out, fps);
+}
+
+/**
+ * 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。`renderer` 是图层的粒子 renderer 种类（粒子程序的输入按它查）。
+ */
+function planProblems(plan: LayerPlan, bundle: SceneBundle, renderer?: ParticleRenderer["kind"]): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
     if (step.kind !== "draw" && step.kind !== "particles") continue;
     const program = step.pass.program === null ? undefined : bundle.programs[step.pass.program];
     if (!program) problems.push("render:no-program");
-    else if (step.kind === "particles") problems.push(...particleAttributeProblems(program));
+    else if (step.kind === "particles") problems.push(...particleAttributeProblems(program, renderer));
     for (const ref of Object.values(step.inputs))
       if (ref.kind === "texture" && !bundle.textures[ref.index]?.mips.length)
         problems.push(`render:texture-missing:${ref.index}`);
@@ -405,7 +438,8 @@ export function checkRenderable(
       if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
     }
   for (const layer of buildableLayers(bundle))
-    for (const reason of planProblems(planLayer(layer, bundle.textures), bundle)) reasons.add(reason);
+    for (const reason of planProblems(planLayer(layer, bundle.textures), bundle, layer.particle?.renderer.kind))
+      reasons.add(reason);
   return [...reasons];
 }
 
@@ -782,7 +816,7 @@ export class GpuScene {
       let failure: unknown = null;
       try {
         for (const plan of plans) {
-          const problems = planProblems(plan, this.bundle);
+          const problems = planProblems(plan, this.bundle, runtime.layer.particle?.renderer.kind);
           if (problems.length) throw new SceneRenderError(problems);
           this.ensureComposites(runtime, plan);
           if (wantsSnapshot(plan)) this.ensureSnapshot();
@@ -1090,10 +1124,17 @@ export class GpuScene {
     system.prewarm({ world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) });
     const geometry = program.result.geometry;
     if (geometry) {
+      const rope = { maxVertices: geometry.maxVertices };
+      if (system.trail) {
+        // ropetrail（P4d 步骤 2）：每个存活粒子恒写 n 段，按 `maxcount × n` 段分配（WPE `segments·maxcount`，rea-p4d-rope.md 3.5）
+        const { layout } = trailVertexLayout(program.vertexPacking);
+        const segments = Math.max(1, system.columns.capacity) * system.trail.segments;
+        const vertices = new Float32Array(segments * Math.max(1, layout.stride));
+        return { system, layout, rope, vertices, count: 0, stale: true, world, trailEye: null, hidden: false };
+      }
       // rope（P4d 步骤 1）：每段一个实例，最多 `maxcount − 1` 段，按 `maxcount` 段分配
       const { layout } = ropeVertexLayout(program.vertexPacking);
       const vertices = new Float32Array(Math.max(1, system.columns.capacity) * Math.max(1, layout.stride));
-      const rope = { maxVertices: geometry.maxVertices };
       return { system, layout, rope, vertices, count: 0, stale: true, world, trailEye: null, hidden: false };
     }
     const { layout } = particleVertexLayout(program.vertexPacking);
@@ -1114,8 +1155,8 @@ export class GpuScene {
   /**
    * 按当前状态重算粒子层的绘制几何（P4c 步骤 5）：朝向是不是 NaN（`hidden`）、拖尾的眼位（`trailEye`）。建 draw 与就地刷新时调，
    * 和 uniform 同一个模型矩阵。拖尾的眼位变了，下一次画之前重写顶点（退化粒子的判断跟着变）。
-   * rope（P4d 步骤 1）的几何只在 `ORIENTATION ≠ 0` 时读 `g_OrientationForward`（rea-p4d-rope.md 1.5），screen 朝向不受它影响，
-   * 不因它跳过；`ORIENTATION ≠ 0` 时朝向是 NaN 则整条带子的右向量都是 NaN，WPE 的图元全被丢弃，同样整次跳过。
+   * rope 两类（P4d 步骤 1、2，同一个几何着色器）的几何只在 `ORIENTATION ≠ 0` 时读 `g_OrientationForward`（rea-p4d-rope.md 1.5），
+   * screen 朝向不受它影响，不因它跳过；`ORIENTATION ≠ 0` 时朝向是 NaN 则整条带子的右向量都是 NaN，WPE 的图元全被丢弃，同样整次跳过。
    */
   private refreshParticleGeometry(
     particles: ParticleDraw,
@@ -1189,6 +1230,7 @@ export class GpuScene {
     let block: UniformBlock | null = null;
     let uniformBuffer: GPUBuffer | null = null;
     let frameNames: string[] = [];
+    let trailRenderVar = false;
     const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));
     const textureSizes = Array.from({ length: slots }, (_, slot) => sizeOf(step.inputs[slot]));
     if (program.uniformSize) {
@@ -1202,6 +1244,8 @@ export class GpuScene {
       frameNames = Object.keys(
         frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0], cursor: [0, 0] }),
       ).filter((name) => block!.has(name) && !(name in pass.uniforms));
+      // ropetrail（P4d 步骤 2）的 g_RenderVar0 随计时器每帧变（建 draw 时的值是计时器初值 0 的，`particleBuiltins`）
+      trailRenderVar = !!particles?.system.trail && block.has("g_RenderVar0") && !("g_RenderVar0" in pass.uniforms);
       uniformBuffer = this.own(
         device.createBuffer({
           label,
@@ -1260,6 +1304,7 @@ export class GpuScene {
       uniformBuffer,
       block,
       frameNames,
+      trailRenderVar,
       textureSizes,
       dirty: false,
       bindGroup,
@@ -1439,7 +1484,7 @@ export class GpuScene {
     if (signature === runtime.signature) return;
     const started = performance.now();
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
-    const problems = planProblems(plan, this.bundle);
+    const problems = planProblems(plan, this.bundle, runtime.layer.particle?.renderer.kind);
     if (problems.length) throw new SceneRenderError(problems);
     const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime.resources), state, worlds);
     for (const draw of runtime.draws) {
@@ -1511,13 +1556,18 @@ export class GpuScene {
   /**
    * 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。不步进粒子：粒子由调用方在脚本之前先
    * `stepParticles`（P4c 步骤 4，见那里），这里只写 uniform。`state` 不读，留着和调用方的写法对称。
+   * ropetrail（P4d 步骤 2）的 `g_RenderVar0` 每帧按系统当时的计时器写（`trailRenderVar0`，WPE 每次绘制前写，rea-p4d-rope.md
+   * 第 4 节）：步进在前，所以是本帧采样之后的计时器。
    */
   update(frame: FrameInput, _state?: SceneState): void {
     const values = frameBuiltins(frame);
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
-      if (!draw.frameNames.length && !draw.dirty) continue;
+      if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar) continue;
       for (const name of draw.frameNames) draw.block.set(name, values[name]);
+      const system = draw.trailRenderVar ? draw.particles?.system : undefined;
+      if (system?.trail && system.def.renderer.ropetrail)
+        draw.block.set("g_RenderVar0", trailRenderVar0(system.def.renderer.ropetrail, system.trail.timer));
       this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
       draw.dirty = false;
     }
@@ -1573,7 +1623,7 @@ export class GpuScene {
 
   /**
    * 步进过的粒子层：把列写成顶点，再整段传上去（只传存活的那部分）。rope（P4d 步骤 1）按 rope 表写段顶点，`count` 是段数
-   * （每段一个实例，`writeRopeSegments`，`fps` 是宿主的帧上限）。
+   * （每段一个实例，`writeRopeSegments`，`fps` 是宿主的帧上限）；ropetrail（P4d 步骤 2）每个存活粒子 n 段（`writeTrailSegments`）。
    */
   private uploadParticles(draw: Draw, particles: ParticleDraw): void {
     if (!particles.stale) return;
@@ -1581,7 +1631,7 @@ export class GpuScene {
     const timing = this.particleTimings?.get(draw);
     const started = timing ? performance.now() : 0;
     particles.count = particles.rope
-      ? writeRopeSegments(particles.system, particles.layout as RopeVertexLayout, particles.vertices, this.particleFps)
+      ? writeSegments(particles.system, particles.layout, particles.vertices, this.particleFps)
       : writeVertices(
           particles.system,
           particles.layout as ParticleVertexLayout,
@@ -1672,12 +1722,12 @@ export class GpuScene {
     program: GpuProgram;
     uniformBuffer: GPUBuffer | null;
     entries: GPUBindGroupEntry[];
-    /** 写好的顶点：sprite 每粒子 4 个顶点；rope 每段一个实例（`rope` 非空）。 */
+    /** 写好的顶点：sprite 每粒子 4 个顶点；rope 两类每段一个实例（`rope` 非空）。 */
     vertices: Float32Array;
-    /** 粒子数；rope 是段数。 */
+    /** 粒子数；rope 两类是段数（ropetrail 是存活数 · n，按槽序每粒子 n 段）。 */
     count: number;
-    layout: ParticleVertexLayout | RopeVertexLayout;
-    /** rope（P4d 步骤 1）：每段输出的顶点数；其余为 null。 */
+    layout: ParticleDraw["layout"];
+    /** rope 两类（P4d 步骤 1、2）：每段输出的顶点数；其余为 null。ropetrail 的系统带历史（`system.trail`）。 */
     rope: { maxVertices: number } | null;
     perspective: boolean;
     system: ParticleSystem;
@@ -1689,7 +1739,7 @@ export class GpuScene {
     const { system, layout, rope, trailEye: eye, hidden } = draw.particles;
     const vertices = new Float32Array(draw.particles.vertices.length);
     const count = rope
-      ? writeRopeSegments(system, layout as RopeVertexLayout, vertices, this.particleFps)
+      ? writeSegments(system, layout, vertices, this.particleFps)
       : writeVertices(system, layout as ParticleVertexLayout, vertices, eye);
     const resources = draw.resources;
     return {
@@ -1765,7 +1815,8 @@ export class GpuScene {
       pass.setBindGroup(0, this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
       if (particles?.rope) {
-        // rope（P4d 步骤 1）：每段一个实例、`maxVertices` 个顶点的三角形带（几何着色器展开），不用索引
+        // rope 两类（P4d 步骤 1、2）：每段一个实例、`maxVertices` 个顶点的三角形带（几何着色器展开），不用索引；ropetrail 的
+        // 段数是存活数 · n
         pass.draw(particles.rope.maxVertices, particles.count);
       } else if (particles) {
         pass.setIndexBuffer(this.particleIndices!.buffer, this.particleIndices!.format);

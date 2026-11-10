@@ -12,6 +12,7 @@
 import type { SceneLayer, SceneSpriteSheet, SceneTexture } from "../compile/bundle";
 import { particleRenderer, type ParticleRenderer } from "../compile/particles";
 import { orientationVectors, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
+import { trailRenderVar0 } from "../particles/ropetrail";
 import type { UniformLayout } from "../wpesl2wgsl";
 import type { DrawStep } from "./graph";
 import { identity, invert, multiply, normalMatrix, orthographic, scaling, type Mat4 } from "./math";
@@ -384,7 +385,8 @@ const DEFAULT_RENDERER: ParticleRenderer = particleRenderer([]);
  *   （rea-p4b-render.md 6.3）。
  * - `g_RenderVar0`（P4c 步骤 5）：拖尾绘制前写 `(length, maxlength, minlength)`（`FUN_1402366f0` `0x140236a3b`，`ctx+0xa8`…`0xb0`，
  *   rea-p4c-render.md 6.3），`w` WPE 不写、保留上一次绘制的值，`genericparticle` 不读，我们写 0。sprite 不写，我们写 0（档 1 的
- *   着色器没读，`referenced: false`，抓帧里是垃圾值）。
+ *   着色器没读，`referenced: false`，抓帧里是垃圾值）。ropetrail（P4d 步骤 2）按计时器写（`particles/ropetrail.ts` 的
+ *   `trailRenderVar0`，`trailTimer` 是系统当时的计时器），计时器每帧变，渲染器在 `GpuScene.update` 里每帧重写。
  * - `g_RenderVar1`（P4b 步骤 2）：粒子 pass 槽 0 的纹理带帧表时是 `sheet.renderVar1`（帧宽、帧高、帧数、帧宽高比，
  *   `FUN_1402366f0` 每次绘制写一次，rea-p4b-render.md 2.2），否则 0。WPE 在帧向量为空时不写、保留上一次绘制的值，
  *   空帧表已由 `parseTex` 报 `tex:animation:empty`，碰不到。
@@ -396,6 +398,7 @@ export function particleBuiltins(
   sheet?: SceneSpriteSheet | null,
   renderer: ParticleRenderer = DEFAULT_RENDERER,
   model: Mat4 = identity(),
+  trailTimer = 0,
 ): Record<string, number[]> {
   const { forward, right, up } = orientationVectors(renderer.orientation, model, VIEW_FORWARD, VIEW_UP);
   return {
@@ -404,7 +407,11 @@ export function particleBuiltins(
     g_OrientationForward: forward,
     g_ViewUp: [0, 1, 0],
     g_ViewRight: [1, 0, 0],
-    g_RenderVar0: renderer.trail ? [...renderer.trail, 0] : [0, 0, 0, 0],
+    g_RenderVar0: renderer.ropetrail
+      ? trailRenderVar0(renderer.ropetrail, trailTimer)
+      : renderer.trail
+        ? [...renderer.trail, 0]
+        : [0, 0, 0, 0],
     g_RenderVar1: sheet ? [...sheet.renderVar1] : [0, 0, 0, 0],
   };
 }
@@ -431,6 +438,8 @@ export interface ParticleUniformInput {
   sheet?: SceneSpriteSheet | null;
   /** 系统的 renderer（`SceneParticle.renderer`，P4c 步骤 5）：朝向与拖尾的 `g_RenderVar0`。缺省是 screen 朝向的 sprite。 */
   renderer?: ParticleRenderer;
+  /** ropetrail（P4d 步骤 2）的计时器（`TrailHistory.timer`），算 `g_RenderVar0`；缺省 0。 */
+  trailTimer?: number;
 }
 
 /**
@@ -455,7 +464,7 @@ export function particleUniformValues(input: ParticleUniformInput): Record<strin
     skylight: input.skylight,
   });
   // 朝向用这次绘制的模型矩阵（同 `g_ModelMatrix`，rea-p4c-render.md 7.2：两者都取 `*(ctx+0x30)`）
-  Object.assign(values, particleBuiltins(input.sheet, input.renderer, input.world));
+  Object.assign(values, particleBuiltins(input.sheet, input.renderer, input.world, input.trailTimer));
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
   return values;
 }

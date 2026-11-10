@@ -215,15 +215,42 @@ export interface RopeRenderer {
 }
 
 /**
+ * `ropetrail` 的绘制参数（P4d 步骤 2，rea-p4d-rope.md 3.1、3.4、第 4、5 节）：解析期定下，历史采样与段顶点（`particles/ropetrail.ts`）、
+ * `g_RenderVar0`（`trailRenderVar0`）与宏（`compile/bundle.ts`）用。
+ */
+export interface RopeTrailRenderer {
+  /** `segments`（n，已钳到 `[2, 32]`）：每粒子恒写 n 段、历史 n 个位置（`sys+0x248`，u16）。 */
+  segments: number;
+  /** 采样间隔 `f32(length / segments)`（`sys+0x250`，`0x1401d29ae`；`length` 已至少 0.001）。 */
+  interval: number;
+  /** `subdivision`，已钳到 `[0, 32]`：宏 `TRAILSUBDIVISION`，每段输出 `4 + 2·subdivision` 个顶点。 */
+  subdivision: number;
+  /** `K = 1/uvscale`（和 rope 共用 `sys+0x30`，float32）；`uvscale` 为 0 时不改，保持 1（3.1）。 */
+  inverseScale: number;
+  /** `uvscrolling`，系统 flags `0x80000`（`0x1401d02d1`）：宏 `TRAILSCROLLALPHA`、`U` 计数、`g_RenderVar0` 的滚动写法。 */
+  scrolling: boolean;
+  /** `fadealpha`（`rec+0x48` bit0）：宏 `TRAILFADEALPHA`，着色器只在 `TRAILSCROLLALPHA` 分支读（5.4）。 */
+  fadeAlpha: boolean;
+  /** `fadesize`（`rec+0x48` bit1）：宏 `TRAILFADESIZE`，同上。 */
+  fadeSize: boolean;
+}
+
+/** 走几何着色器的 renderer（rope 两类，P4d）：着色器换成 `genericropeparticle` 并带 `.geom` 翻译，每段一个实例。 */
+export function isRopeRenderer(kind: ParticleRenderer["kind"] | undefined): kind is "rope" | "ropetrail" {
+  return kind === "rope" || kind === "ropetrail";
+}
+
+/**
  * 绘制用的 renderer（P4c 步骤 5）。一个系统只画一次：多个 renderer 时 WPE 各画一次、共用同一个顶点缓冲（rea-p4c-render.md 6.3），
  * 这里没做，能力表报 `particle:renderers`（`checkParticleFeatures`），强制渲染时取第一个。
  */
 export interface ParticleRenderer {
-  kind: "sprite" | "spritetrail" | "rope";
+  kind: "sprite" | "spritetrail" | "rope" | "ropetrail";
   /**
    * 拖尾的 `g_RenderVar0.xyz`：`(length, maxlength, minlength)`，float32，原样（不钳制、不排序，6.1）；`w` WPE 不写、
    * `genericparticle` 不读，我们写 0。sprite、rope 为 null（`g_RenderVar0` 全 0：rope 分支不读它，WPE 写的 `z = 0`、
-   * `w = 存活数` 不复刻，rea-p4d-rope.md 第 4 节）。
+   * `w = 存活数` 不复刻，rea-p4d-rope.md 第 4 节）。ropetrail 也为 null：它的 `g_RenderVar0` 每帧按计时器写
+   * （`particles/ropetrail.ts` 的 `trailRenderVar0`）。
    */
   trail: [number, number, number] | null;
   /**
@@ -233,10 +260,12 @@ export interface ParticleRenderer {
   orientation: ParticleOrientation;
   /** `rope` 的绘制参数；其余 renderer 为 null。 */
   rope: RopeRenderer | null;
+  /** `ropetrail` 的绘制参数（P4d 步骤 2）；其余 renderer 为 null。 */
+  ropetrail: RopeTrailRenderer | null;
 }
 
-/** 表内的 renderer（`ropetrail` 属 P4d 步骤 2，表外照报）。 */
-const DRAWN_RENDERERS: ReadonlySet<string> = new Set(["sprite", "spritetrail", "rope"]);
+/** 表内的 renderer。 */
+const DRAWN_RENDERERS: ReadonlySet<string> = new Set(["sprite", "spritetrail", "rope", "ropetrail"]);
 
 /**
  * `rope` 的 `L`、`R`（rea-p4d-rope.md 3.2）：WPE 在解析 emitter / initializer 时顺带记下，`L`、`R` 初值 0、只在当前为 0 时写，
@@ -261,8 +290,8 @@ function ropeRateAndLifetime(
 }
 
 /**
- * 系统的 renderer：第一个表内的 renderer（`sprite` / `spritetrail` / `rope`）；一个都没有时按缺省的 `sprite` 画。表外 renderer
- * （`ropetrail`，P4d 步骤 2）已由能力表报；`renderer: []` 时 WPE 不画，现在仍按缺省的 sprite 画（只靠子系统出图的发射器，随
+ * 系统的 renderer：第一个表内的 renderer（`sprite` / `spritetrail` / `rope` / `ropetrail`）；一个都没有时按缺省的 `sprite` 画。
+ * 表外 renderer 已由能力表报；`renderer: []` 时 WPE 不画，现在仍按缺省的 sprite 画（只靠子系统出图的发射器，随
  * `particle:children` 退回）。`emitters`、`initializers` 给 rope 的 `R`、`L`（`ropeRateAndLifetime`），缺省为空（`R = L = 0`）。
  */
 export function particleRenderer(
@@ -273,26 +302,44 @@ export function particleRenderer(
   const module = renderers.find((item) => DRAWN_RENDERERS.has(item.name));
   const fields = module?.fields ?? readParticleModule("renderer", { name: "sprite" }, true).fields;
   const trail = module?.name === "spritetrail";
+  // `divss`：`1.0f / uvscale`，0 时不写（def 构造值 1.0，`0x1401c17c6`）；rope 两类共用 `sys+0x30`
+  const inverseScale = () => {
+    const scale = f32(fields.uvscale as number);
+    return scale !== 0 ? f32(1 / scale) : 1;
+  };
   let rope: RopeRenderer | null = null;
   if (module?.name === "rope") {
-    const scale = f32(fields.uvscale as number);
     const scrolling = fields.uvscrolling === 1;
     rope = {
       subdivision: fields.subdivision as number,
-      // `divss`：`1.0f / uvscale`，0 时不写（def 构造值 1.0，`0x1401c17c6`）
-      inverseScale: scale !== 0 ? f32(1 / scale) : 1,
+      inverseScale: inverseScale(),
       scrolling,
       smoothing: !scrolling && fields.uvsmoothing === 1,
       ...ropeRateAndLifetime(emitters, initializers),
     };
   }
+  let ropetrail: RopeTrailRenderer | null = null;
+  if (module?.name === "ropetrail") {
+    const segments = fields.segments as number;
+    ropetrail = {
+      segments,
+      // `sys+0x250 = rec+0x3c / (float)rec+0x40`（`0x1401d29ae`）：`length` 已是钳过的 float32（`clampTrailLength`）
+      interval: f32(f32(fields.length as number) / segments),
+      subdivision: fields.subdivision as number,
+      inverseScale: inverseScale(),
+      scrolling: fields.uvscrolling === 1,
+      fadeAlpha: fields.fadealpha === 1,
+      fadeSize: fields.fadesize === 1,
+    };
+  }
   return {
-    kind: trail ? "spritetrail" : rope ? "rope" : "sprite",
+    kind: trail ? "spritetrail" : rope ? "rope" : ropetrail ? "ropetrail" : "sprite",
     trail: trail
       ? [f32(fields.length as number), f32(fields.maxlength as number), f32(fields.minlength as number)]
       : null,
     orientation: readOrientation(fields),
     rope,
+    ropetrail,
   };
 }
 

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { compileScene } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
 import { ropeVertexLayout } from "../particles/rope";
+import { trailVertexLayout } from "../particles/ropetrail";
 import { programVertexPacking, vertexPacking } from "../render/programs";
 import { translateWithIncludes, Wpesl2wgsl } from "../wpesl2wgsl";
 import { cornerInputs, replayParticles, rewriteVertexAsCompute } from "./particleCorners";
@@ -308,5 +309,49 @@ describe.skipIf(!root || !existsSync(wasm))("本机样本：翻译出的粒子�
     expect(out).toContain("kb_corner_out[kb_corner_index * 3u + 2u] = kb_corner_result.v_Color;");
     expect(out).toContain("(kb_corner_index % 10u)");
     expect(out).not.toContain("@vertex");
+  }, 60000);
+
+  it("WPE 的 genericropeparticle 按 ropetrail 的宏翻译（P4d 步骤 2）：5 个输入（含 vec3 的 a_TexCoordVec3C2）、步长 19、maxVertices = 4 + 2·1；按段改写、vec3 读 3 个分量", async () => {
+    const shaders = join(root!, "assets", "shaders");
+    const read = (name: string) => readFileSync(join(shaders, name), "utf8");
+    for (const scroll of [false, true]) {
+      const result = await translateWithIncludes(
+        await Wpesl2wgsl.fromBytes(readFileSync(wasm)),
+        {
+          vertex: read("genericropeparticle.vert"),
+          fragment: read("genericropeparticle.frag"),
+          geometry: read("genericropeparticle.geom"),
+          defines: {
+            TRAILSUBDIVISION: "1",
+            ORIENTATION: "0",
+            TRAILRENDERER: "1",
+            SCENE_ORTHO: "1",
+            ...(scroll ? { TRAILSCROLLALPHA: "1", TRAILFADEALPHA: "1", TRAILFADESIZE: "1" } : {}),
+          },
+        },
+        async (name) => (existsSync(join(shaders, name)) ? read(name) : null),
+      );
+      expect(result.ok, JSON.stringify(result.errors)).toBe(true);
+      expect(result.geometry).toEqual({ maxVertices: 6 });
+      const packing = programVertexPacking(result);
+      expect(packing.layout.stepMode).toBe("instance");
+      const { layout, problems } = trailVertexLayout(packing);
+      expect(problems).toEqual([]);
+      // WPE 76 字节一段（rea-p4d-rope.md 1.3）
+      expect(layout.stride).toBe(19);
+      const inputs = cornerInputs(packing.attributes);
+      const out = rewriteVertexAsCompute(result.vertex!.wgsl!, result.vertex!.entryPoint!, inputs, layout.stride, {
+        maxVertices: 6,
+        outputs: ["v_TexCoord", "v_Color"],
+      });
+      const cp1 = inputs.find((input) => input.offset === layout.cp1)!;
+      expect(cp1.components).toBe(3);
+      expect(out).toContain(
+        `vec3<f32>(kb_corner_in[kb_corner_base + ${layout.cp1}u], kb_corner_in[kb_corner_base + ${layout.cp1 + 1}u], ` +
+          `kb_corner_in[kb_corner_base + ${layout.cp1 + 2}u])`,
+      );
+      expect(out).toContain("(kb_corner_index % 6u)");
+      expect(out).not.toContain("@vertex");
+    }
   }, 60000);
 });

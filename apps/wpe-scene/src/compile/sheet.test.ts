@@ -464,6 +464,36 @@ describe("renderer 的宏（P4c 步骤 5，FUN_1401d2340，rea-p4c-render.md 6.2
       ).toEqual({ THICKFORMAT: "1", TRAILSUBDIVISION: "16", ORIENTATION: String(mode) });
   });
 
+  it("particleRendererDefines：ropetrail 写 TRAILSUBDIVISION、ORIENTATION、TRAILRENDERER，开关为真时写 TRAILSCROLLALPHA / TRAILFADE*，不写 THICKFORMAT（P4d 步骤 2，rea-p4d-rope.md 3.4）", () => {
+    const trail = (mode: 0 | 1 | 2, flags: { scrolling?: boolean; fadeAlpha?: boolean; fadeSize?: boolean } = {}) =>
+      particleRendererDefines({
+        flags: 0,
+        animationMode: "sequence",
+        renderer: {
+          kind: "ropetrail",
+          orientation: { mode },
+          ropetrail: { subdivision: 2, scrolling: false, fadeAlpha: false, fadeSize: false, ...flags },
+        },
+      });
+    for (const mode of [0, 1, 2] as const)
+      expect(trail(mode)).toEqual({ TRAILSUBDIVISION: "2", ORIENTATION: String(mode), TRAILRENDERER: "1" });
+    expect(trail(0, { scrolling: true, fadeAlpha: true, fadeSize: true })).toEqual({
+      TRAILSUBDIVISION: "2",
+      ORIENTATION: "0",
+      TRAILRENDERER: "1",
+      TRAILSCROLLALPHA: "1",
+      TRAILFADEALPHA: "1",
+      TRAILFADESIZE: "1",
+    });
+    expect(trail(1, { fadeSize: true })).toEqual({
+      TRAILSUBDIVISION: "2",
+      ORIENTATION: "1",
+      TRAILRENDERER: "1",
+      TRAILFADESIZE: "1",
+    });
+    expect(trail(0, { scrolling: true })).not.toHaveProperty("THICKFORMAT");
+  });
+
   it("particleTex0Format：厚格式只看 8–11；非厚格式 sprite 的非 screen 朝向对任何格式都写；格式未知不写", () => {
     for (const format of [0, 4, 6, 7, 12]) {
       expect(particleTex0Format(format, false, system("sprite", 0)), `${format}`).toBeUndefined();

@@ -17,6 +17,7 @@ import { parseParticle, particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { replayParticleOptions, replayParticles } from "../dev/particleCorners";
 import { pointerScenePoint } from "../particles/controlpoints";
+import { trailRenderVar0 } from "../particles/ropetrail";
 import { particleSnapshot, particleTrack } from "../particles/track";
 import type { ParticleSystem } from "../particles/system";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -1281,6 +1282,117 @@ describe("GpuScene：rope（P4d 步骤 1，几何着色器展开）", () => {
     expect(scene.particleProbe(2)!.hidden).toBe(false);
     for (let i = 0; i < 3; i++) stepFrame(scene, frame(0.1), state);
     expect(draws(gpu.encode(scene, state))).toEqual(["vertex layer 3 particles 2 particles", "draw 10 2"]);
+  });
+});
+
+/**
+ * 翻译后 `genericropeparticle`（`GS_ENABLED`、非 `THICKFORMAT`、`TRAILRENDERER`，几何着色器展开）的反射：4 个 vec4 + 1 个 vec3 输入，
+ * 顺序照真实输出，`geometry.maxVertices` = 4 + 2·1。uniform 里故意没有每帧的 `g_Time`：`g_RenderVar0` 也要每帧写。
+ */
+const TRAIL_PROGRAM = {
+  ...ROPE_PROGRAM,
+  vertex: { wgsl: "// ropetrail v", entryPoint: "main" },
+  attributes: [
+    { name: "a_PositionVec4", location: 0, type: "vec4" },
+    { name: "a_TexCoordVec4", location: 1, type: "vec4" },
+    { name: "a_TexCoordVec4C1", location: 2, type: "vec4" },
+    { name: "a_TexCoordVec3C2", location: 3, type: "vec3" },
+    { name: "a_Color", location: 4, type: "vec4" },
+  ],
+  geometry: { maxVertices: 6 },
+} as unknown as TranslateResult;
+
+describe("GpuScene：ropetrail（P4d 步骤 2，几何着色器展开 + 每粒子 n 段）", () => {
+  const P_ROPE = 2;
+  const P_TRAIL = 3;
+  /** ropetrail 层：同 `particleLayer`，粒子沿 +x 走，renderer 是 ropetrail（缺省 n 3、间隔 0.15），pass 用 `TRAIL_PROGRAM`。 */
+  const trailLayer = (object: number, trail: JsonObject = {}) => {
+    const layer = particleLayer(object, {
+      initializer: [
+        { name: "lifetimerandom", min: 100, max: 100 },
+        { name: "sizerandom", min: 40, max: 40 },
+        { name: "velocityrandom", min: "100 0 0", max: "100 0 0" },
+      ],
+      operator: [{ name: "movement" }],
+      renderer: [{ name: "ropetrail", segments: 3, length: 0.45, ...trail }],
+    });
+    layer.particle!.passes[0].program = P_TRAIL;
+    return layer;
+  };
+  const ropeLayer = (object: number) => {
+    const layer = particleLayer(object, { renderer: [{ name: "rope" }] });
+    layer.particle!.passes[0].program = P_ROPE;
+    return layer;
+  };
+  const trailBundle = (layers: SceneLayer[]) =>
+    bundleOf(layers, { programs: [IMAGE_PROGRAM, PARTICLE_PROGRAM, ROPE_PROGRAM, TRAIL_PROGRAM] });
+
+  it("实例步进、三角形带；缓冲按 maxcount × n 段（每段 76 字节）；draw(maxVertices, 存活数 · n)；sprite、rope 的路径不变", async () => {
+    const { gpu, state, scene } = await open(trailBundle([particleLayer(1), ropeLayer(2), trailLayer(3)]));
+    const trailBuffer = gpu.buffer("layer 4 particles 3 particles");
+    expect(trailBuffer.size).toBe(16 * 3 * 76);
+    expect(gpu.buffer("layer 3 particles 2 particles").size).toBe(16 * 96);
+    const pipeline = (program: number) =>
+      gpu.pipelines.filter((p) => p.label.startsWith(`scene program ${program} `)).map((p) => [p.topology, p.stepMode]);
+    expect(pipeline(P_TRAIL)).toEqual([["triangle-strip", "instance"]]);
+    expect(pipeline(P_ROPE)).toEqual([["triangle-strip", "instance"]]);
+    expect(pipeline(P.particle)).toEqual([["triangle-list", "vertex"]]);
+    expect(draws(gpu.encode(scene, state))).toEqual([]);
+    // 一个粒子：rope 没有段、不画；ropetrail 画 n 段
+    stepFrame(scene, frame(0.1), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 2 particles 1 particles",
+      "index particle indices uint16",
+      "drawIndexed 6",
+      "vertex layer 4 particles 3 particles",
+      "draw 6 3",
+    ]);
+    for (let i = 0; i < 3; i++) stepFrame(scene, frame(0.1), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 2 particles 1 particles",
+      "index particle indices uint16",
+      "drawIndexed 24",
+      "vertex layer 3 particles 2 particles",
+      "draw 10 3",
+      "vertex layer 4 particles 3 particles",
+      "draw 6 12",
+    ]);
+    // 只传 4 个粒子 × 3 段
+    expect(trailBuffer.writes).toEqual([3 * 76, 12 * 76]);
+  });
+
+  it("段顶点按槽序每粒子 n 段（rea-p4d-rope.md 5.3）；g_RenderVar0 每帧按计时器写（没有 g_Time 也写）；particleProbe 给段与 maxVertices", async () => {
+    const { gpu, state, scene } = await open(trailBundle([trailLayer(1)]));
+    const draw = particleDraw(scene, 1);
+    const system = draw.particles!.system;
+    const renderer = system.def.renderer.ropetrail!;
+    // 建 draw 时：计时器初值 0
+    expect(floats(draw.uniformBuffer, 160, 4)).toEqual(trailRenderVar0(renderer, 0));
+    const seen: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const writes = draw.uniformBuffer.writes.length;
+      stepFrame(scene, frame(0.1), state);
+      expect(draw.uniformBuffer.writes.length).toBe(writes + 1);
+      expect(floats(draw.uniformBuffer, 160, 4)).toEqual(trailRenderVar0(renderer, system.trail!.timer));
+      seen.push(floats(draw.uniformBuffer, 160, 4)[2]);
+    }
+    // 间隔 0.15、dt 0.1：出生帧采样（z 0），下一帧剩 0.05（z 2/3），再下一帧采样（z 0）
+    expect(seen[0]).toBe(0);
+    expect(seen[1]).toBeCloseTo(2 / 3, 6);
+    expect(seen[2]).toBe(0);
+    gpu.encode(scene, state);
+    // 槽 0 的段 1：起点 h[0]、终点 h[1]，CP0 是当前位置，w：尺寸 20、C·K、k
+    const trail = system.trail!;
+    const h = (slot: number, j: number) =>
+      Array.from(trail.positions.subarray((slot * 3 + j) * 3, (slot * 3 + j) * 3 + 3));
+    const pos = [0, 1, 2].map((axis) => system.columns.position[axis][0]);
+    expect(floats(draw.vertexBuffer, 76, 4)).toEqual([...h(0, 0), 20]);
+    expect(floats(draw.vertexBuffer, 76 + 16, 4)).toEqual([...h(0, 1), trail.counts[0]]);
+    expect(floats(draw.vertexBuffer, 76 + 32, 4)).toEqual([...pos, 1]);
+    expect(floats(draw.vertexBuffer, 76 + 48, 3)).toEqual(h(0, 2));
+    expect(floats(draw.vertexBuffer, 76 + 60, 4)).toEqual([1, 1, 1, 1]);
+    const probe = scene.particleProbe(1)!;
+    expect([probe.count, probe.rope, probe.vertices.length]).toEqual([12, { maxVertices: 6 }, 12 * 19]);
   });
 });
 

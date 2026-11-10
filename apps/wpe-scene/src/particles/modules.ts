@@ -325,6 +325,22 @@ export function clampRopeSubdivision(value: number): number {
 }
 
 /**
+ * `ropetrail` 的 `segments` 解析期钳制（rea-p4d-rope.md 3.1，`0x1401d01a0`，`r15d = 2`）：`asInt` 后按有符号钳到 `[2, 32]`，即每粒子
+ * 写 n 段、历史存 n 个位置。实测 `segments` 0 / 40 → 2 / 32 段（p4-particles-REPORT.md「P4d 语义的实测核对」）。
+ */
+export function clampTrailSegments(value: number): number {
+  return Math.min(32, Math.max(2, value));
+}
+
+/**
+ * `ropetrail` 的 `length` 解析期钳制（rea-p4d-rope.md 3.1，`0x1401d015f`）：`asFloat` 取 float 后和 `0.001f` 取大，存 float32。
+ * 实测 `length 0` 每帧都采样（间隔 `0.001 / segments`）。
+ */
+export function clampTrailLength(value: number): number {
+  return Math.max(f32(value), f32(0.001));
+}
+
+/**
  * `positionoffsetrandom` 的 `octaves` 解析期钳制（`0x1401c9387`，`rea-p4b-modules.md` B3【确】）：按**无符号**比较，`≥ 8` 得 8
  * （负数当很大的无符号数，也是 8），`0` 得 1。
  */
@@ -337,7 +353,7 @@ export function clampOctaves(value: number): number {
  * 档 1 的 12 个模块、P4b 步骤 3 的 8 个（emitter `boxrandom`，initializer `alpharandom`，operator `sizechange`、`alphachange`、
  * `colorchange`、`oscillatesize`、`vortex`、`capvelocity`）、步骤 4 的 3 个噪声类模块（initializer `turbulentvelocityrandom`、
  * `positionoffsetrandom`，operator `turbulence`）、P4c 步骤 3 的 operator `controlpointattract`，加 renderer `sprite`、`spritetrail`
- * （P4c 步骤 5）与 `rope`（P4d 步骤 1）。`ropetrail` 属 P4d 步骤 2，表外照报。
+ * （P4c 步骤 5）与 rope 两类（`rope` P4d 步骤 1，`ropetrail` P4d 步骤 2）。
  */
 export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   {
@@ -783,6 +799,42 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columnFlags: 0,
     normalize(fields) {
       normalizeRenderer(fields);
+      fields.subdivision = clampRopeSubdivision(fields.subdivision as number);
+    },
+    run: null,
+  },
+  {
+    // rea-p4d-rope.md 3.1（renderer 类型 4，分支 `0x1401d00bf`，缺省 `FUN_1401c1070`，正交透视一套）。每个粒子拖一条带子，由它的
+    // 历史位置连成：模拟器每系统一个计时器、每粒子一份历史（`particles/ropetrail.ts` 的 `TrailHistory`，第 5 节），段顶点同样
+    // 每段一个点、几何着色器展开（着色器换成 `genericropeparticle`，宏见 `compile/bundle.ts`，3.4）；运行时用的派生量（间隔、`K`、
+    // 系统 flags `0x80000`）在 `compile/particles.ts` 的 `particleRenderer`
+    category: "renderer",
+    name: "ropetrail",
+    fields: {
+      // `asFloat` 后至少 0.001（`0x1401d015f`，`normalize`）：采样间隔是 `length / segments`（`sys+0x250`，3.4 `0x1401d29ae`）
+      length: num(1),
+      // `asInt` 后钳到 [2, 32]（`0x1401d01a0`，`normalize`）：每粒子恒写 n 段、历史 n 个位置
+      segments: int(4),
+      // 缺省 1（实测 T1 `maxout 6`）；`asInt` 后钳到 [0, 32]（`0x1401d01de`，`normalize`），即宏 `TRAILSUBDIVISION`
+      subdivision: int(1),
+      // `rec+0x48` bit0 / bit1：宏 `TRAILFADEALPHA` / `TRAILFADESIZE`，着色器只在 `TRAILSCROLLALPHA` 分支读（5.4，实测 T3）
+      fadealpha: { type: "bool", default: 0 },
+      fadesize: { type: "bool", default: 0 },
+      // 同 rope：存成倒数 `K = 1/uvscale`（和 rope 共用 `sys+0x30`），写 0 时不改、保持 1
+      uvscale: num(1),
+      // 系统 flags `0x80000`（`0x1401d02d1`）：宏 `TRAILSCROLLALPHA`、`U` 计数、`g_RenderVar0` 的另一种写法（rea-p4b-render 记作
+      // 「rope uvscrolling」，应为 ropetrail，步骤 0 更正）
+      uvscrolling: { type: "bool", default: 0 },
+      // 和 sprite 共用的解析（`FUN_1401c22e0`）：`ORIENTATION ≠ 0` 时几何着色器用 `g_OrientationForward`（rea-p4d-rope.md 1.5）
+      ...RENDERER_FIELDS,
+    },
+    // 写段顶点：按槽序、跳过 `life == 0`，取当前位置、当前尺寸、当前颜色与 alpha（非厚格式只有一份，5.3）；历史在 `TrailHistory`
+    columns: ["life", "position", "size", "color", "alpha"],
+    columnFlags: 0,
+    normalize(fields) {
+      normalizeRenderer(fields);
+      fields.length = clampTrailLength(fields.length as number);
+      fields.segments = clampTrailSegments(fields.segments as number);
       fields.subdivision = clampRopeSubdivision(fields.subdivision as number);
     },
     run: null,

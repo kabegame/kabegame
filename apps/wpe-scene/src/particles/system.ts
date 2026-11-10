@@ -31,6 +31,10 @@
  * `rope`（P4d 步骤 1，rea-p4d-rope.md 第 2 节）：renderer 是 rope 的系统另维护 rope 表（`ropeOrder`，存槽号、表序就是出生序）
  * 和累计死亡数（`deaths`，`sys+0x350`，只给 `uvscrolling` 用）：出生时追加，每帧判死后保序删除当帧的死亡槽、死亡数累加（删除在
  * 发射之前），`clear` 时一起清零。两遍模式只影响 operator，预热照常维护（2.4）。段顶点见 `rope.ts`。
+ *
+ * `ropetrail`（P4d 步骤 2，rea-p4d-rope.md 第 5 节）：renderer 是 ropetrail 的系统另有历史（`trail`，`ropetrail.ts` 的
+ * `TrailHistory`）：出生时在全部 initializer 之后写满出生位置（`born`），预热结束后塌缩到当前位置（`afterPrewarm`，预热不采样），
+ * 每帧模拟之后按计时器采样（`sample`，和模拟同一个 `dt'`）。`clear` 不碰计时器，也不清历史（出生时覆盖）。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
 import { identity } from "../render/math";
@@ -55,6 +59,7 @@ import {
 } from "./modules";
 import type { ParticleRandom, ParticleROverride } from "./random";
 import { RopeOrder } from "./rope";
+import { TrailHistory } from "./ropetrail";
 
 /** 没给控制点输入时用：对象世界矩阵按单位阵、指针的跟随点按 (0, 0)（单测；渲染器与 `particleTrack` 都显式传）。 */
 const IDENTITY_INPUTS: ControlPointInputs = { world: identity(), pointer: [0, 0] };
@@ -170,6 +175,11 @@ export class ParticleSystem {
   deaths = 0;
   /** 当帧判死的槽号（升序，`ageAndKill` 收集，rope 系统才用），复用同一个数组。 */
   private readonly dead: number[] = [];
+  /**
+   * ropetrail 的历史与计时器（P4d 步骤 2，`sys+0x230`…`0x24c`）：renderer 是 ropetrail 的系统才有，其余为 null。间隔取
+   * `def.renderer.ropetrail.interval`。
+   */
+  readonly trail: TrailHistory | null;
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -199,6 +209,9 @@ export class ParticleSystem {
     this.columns = new ParticleColumns(def.maxcount, particleColumnFlags(def));
     // WPE 在 rope 的段缓冲（`sys+0x208`）存在时才维护表（2.2、2.3），即 renderer 是 rope
     this.ropeOrder = def.renderer?.kind === "rope" ? new RopeOrder(this.columns.capacity) : null;
+    // WPE 在 ropetrail 的 `sys+0x248`（segments）非零时分配历史（rea-p4d-rope.md 3.5），即 renderer 是 ropetrail
+    const ropetrail = def.renderer?.ropetrail;
+    this.trail = ropetrail ? new TrailHistory(this.columns.capacity, ropetrail.segments, ropetrail.scrolling) : null;
     this.instance = instanceValues(def.instance);
     // 从基值乘，不累乘（C5）；颜色模块的字段乘完再按 `colorn` 平移（`applyColorn`）。`brightness` 不做（能力表按
     // `checkParticleInstance` 报）
@@ -330,7 +343,12 @@ export class ParticleSystem {
   step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
     this.context.time = f32(time ?? this.elapsed);
-    this.advance(f32(f32(frameDt) * this.rate), frameDt, this.passes, inputs);
+    const dt = f32(f32(frameDt) * this.rate);
+    this.advance(dt, frameDt, this.passes, inputs);
+    // ropetrail 的历史采样（P4d 步骤 2）：WPE 的顶点函数先模拟、再在存活数非零时采样（`FUN_1402308a0`，rea-p4d-rope.md 1.1、5.2），
+    // 用同一个 `dt'`；位置是本帧模拟后的
+    const trail = this.trail;
+    if (trail) trail.sample(dt, this.def.renderer.ropetrail!.interval, this.columns, this.highWater, this.alive);
   }
 
   /**
@@ -351,11 +369,14 @@ export class ParticleSystem {
     const end = f32(this.def.starttime);
     this.context.time = 0;
     for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs);
+    // ropetrail（P4d 步骤 2）：预热的步进不调顶点函数、不采样，结束后历史塌缩到当前位置（rea-p4d-rope.md 5.1，`0x14022f2fc`）
+    this.trail?.afterPrewarm(this.columns, this.highWater);
   }
 
   /**
    * 清空全部粒子（不重置发射状态）。rope 表与累计死亡数一起清零（`FUN_14022fd90` / `FUN_14022f990` 在高水位 > 0 时同时清零
    * 高水位、存活数、`sys+0x350` 并清空表，rea-p4d-rope.md 2.4；累计死亡数非零时高水位一定非零，所以无条件清零结果相同）。
+   * ropetrail 的计时器不重置、历史不清（5.1：计时器只有采样写；历史出生时覆盖）。
    */
   clear(): void {
     this.columns.clear();
@@ -466,6 +487,8 @@ export class ParticleSystem {
     }
     c.alpha0[slot] = this.alpha0;
     for (const initializer of this.initializers) initializer.run(initializer.fields, context);
+    // ropetrail（P4d 步骤 2）：全部 initializer 之后历史写满出生位置、`C = 1`、`U = 0`（rea-p4d-rope.md 5.1，`0x14023f953`）
+    this.trail?.born(slot, c);
     // 当前值与上一步位置（拖尾初值）
     c.size[slot] = c.size0[slot];
     for (let i = 0; i < 3; i++) {

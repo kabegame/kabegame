@@ -502,24 +502,166 @@ export function writeRopeSegments(system: ParticleSystem, layout: RopeVertexLayo
 - 和 WPE 比画面要在抓帧时移动鼠标，照 P4c 的做法留到 P4d 收尾。
 
 **遗留：**
-- **死亡计数的清零：**
-  - WPE 在高水位 > 0 时就清零死亡计数和 rope 表（rea-p4d-rope 2.4）；我们的 `suspend` 只在有存活粒子时清空。
-  - 差别在「全部粒子已死后再隐藏」时，`uvscrolling` 的 `TP0` 起点不同。
-  - 步骤 2 要改同一段清空逻辑（ropetrail 的历史），一起处理。
+- **死亡计数的清零（2026-11-10 核对，不是问题）：** 1b 子代理担心 WPE 在高水位 > 0 时就清零、我们只在有存活粒子时清零。看反汇编：
+  - 不可见分支先在 `0x14023068e` 查存活数（`obj+0x604`），为 0 就整段跳过；
+  - 复位发射器（`0x1402306bc`）、清零高水位与存活数（`obj+0x600` 按 qword 写 0）、死亡计数（`obj+0x610`）、rope 表（`obj+0x4e0 = obj+0x4d8`）都在这个分支里；
+  - 「高水位 > 0」只是分支里的又一道检查。
+
+  所以存活数为 0 时 WPE 也不清零，和我们的 `suspend` 一致。rea-p4d-rope 2.4 的写法容易误读，以 rea-p4d-modules 5.3 为准。
 - **探针不传 `fps`：** kabegame-dev MCP 的 `particle_corners` / `render_scene` 回放只传 `passes`，低 fps 下 rope 的 `Rf` 仍按 60 算。只影响绳没满的填充期。
 - `dev` 的 `particleTrack` 对 rope 系统仍按槽序输出粒子，不是表序。
 - 暂停时改 `instanceoverride` 的 `count` / `lifetime`，`TL` 要到下一次步进才更新。
 
 ## 步骤 2 — `ropetrail`
 
-- **新增** 历史环形缓冲：`段数 × N4` 个位置、每粒子已存段数、`uvscrolling` 计数，计时和后移照步骤 0。
-- **修改** 顶点写入：每个粒子一串段；写 `g_RenderVar0` 的 x、z、w，以及宏 `TRAILRENDERER`、`TRAILSCROLLALPHA`、`TRAILFADEALPHA`、`TRAILFADESIZE`。
-- **修改** 模块表与能力表：`ropetrail` 进表。
+几何着色器展开、实例步进的三角形带、四角探针，都直接用步骤 1 的。新的是模拟侧：每系统一个计时器，加上每粒子的位置历史。另外 `g_RenderVar0` 要每帧写。语义以 rea-p4d-rope 第 3.1、3.4、4、5 节为准，实测见报告「P4d 语义的实测核对」的 ropetrail 表。路径相对 `apps/wpe-scene/src/`。
 
-**验收：**
-- `proj/p4d-ropetrail` 在 fps 60 和 fps 10 下，`gs_out` 与整帧都和 WPE 一致。
-- 变异检查：计时器余量、后移方向、首段 UV，各有测试失败。
-- 现有画面哈希不变。
+**现状锚点**（步骤 1 之后）：
+- **renderer 表：** `compile/particles.ts:239` 的 `DRAWN_RENDERERS = new Set(["sprite", "spritetrail", "rope"])`，不含 `ropetrail`，能力表照报 `particle:renderer:ropetrail`。
+- **编译：** `compile/bundle.ts:194` 只给 rope 换着色器、写宏：
+```ts
+if (renderer?.kind === "rope")
+  return { THICKFORMAT: "1", TRAILSUBDIVISION: String(renderer.rope?.subdivision ?? 0), ORIENTATION: … };
+```
+- **`g_RenderVar0`：** `render/uniforms.ts:407` 在建 draw 时写一次（`renderer.trail ? [...trail, 0] : 0`）。每帧只写 `frameNames` 里的帧内建。
+- **模拟：** `particles/system.ts:330` 的 `step` 只调 `advance(dt')`，模拟之后没有挂钩；`clear` 不碰别的状态；`suspend` 只在存活数 > 0 时清空，和 WPE 一致（见步骤 1 实施记录）。
+- **绘制：** `render/scene.ts:1093` 的几何着色器分支固定用 `ropeVertexLayout`（rope 的 6 个属性）和 `writeRopeSegments`。
+
+**做法：**
+- **新增** 模块表的 `ropetrail` 条目（`particles/modules.ts`），`DRAWN_RENDERERS` 加 `ropetrail`。字段与缺省照 rea 3.1：
+
+| 字段 | 缺省 | 钳制 |
+|---|---|---|
+| `length` | 1 | 至少 0.001 |
+| `segments` | 4 | `[2, 32]` |
+| `subdivision` | 1 | `[0, 32]` |
+| `fadealpha` | false | |
+| `fadesize` | false | |
+| `uvscale` | 1 | 0 时不改 |
+| `uvscrolling` | false | |
+
+  另加共用的 `RENDERER_FIELDS`。
+- **修改** `ParticleRenderer`，`kind` 加 `"ropetrail"`，新增：
+```ts
+ropetrail: {
+  segments: number;      // n
+  interval: number;      // f32(length / segments)，sys+0x250
+  subdivision: number;   // TRAILSUBDIVISION
+  inverseScale: number;  // K = 1/uvscale，和 rope 共用 sys+0x30
+  scrolling: boolean;    // 0x80000
+  fadeAlpha: boolean;
+  fadeSize: boolean;
+} | null;
+```
+- **修改** 编译：ropetrail 也换成 `genericropeparticle` 并读 `.geom`，和 rope 同一条路。宏照 rea 3.4：
+  - `TRAILSUBDIVISION`、`ORIENTATION`、`TRAILRENDERER=1`；
+  - `TRAILSCROLLALPHA=1`，只在 `uvscrolling` 时写；
+  - `TRAILFADEALPHA`、`TRAILFADESIZE`，只在对应字段为真时写；
+  - 格式在 8–11 时写 `TEX0FORMAT`；
+  - 不写 `THICKFORMAT`、`SPRITESHEET*`。
+- **新增** `particles/ropetrail.ts`：
+```ts
+/** ropetrail 的历史（rea-p4d-rope 第 5 节）：每粒子 n 个位置（新的在前）、已存段数 C、uvscrolling 计数 U，每系统一个计时器。 */
+export class TrailHistory {
+  constructor(capacity: number, segments: number, scrolling: boolean);
+  timer: number;                                            // sys+0x24c，初值 0；clear、预热都不重置
+  born(slot: number, columns: ParticleColumns): void;      // 出生，在全部 initializer 之后：h[*] = 出生位置，C = 1，U = 0
+  afterPrewarm(columns: ParticleColumns, highWater: number): void; // 预热后 0..高水位−1 每个槽：C = 1，h[*] = 当前位置，U = 0
+  sample(dt: number, interval: number, columns: ParticleColumns, highWater: number, alive: number): void;
+}
+/** 每个存活粒子按槽序恒写 n 段（rea 5.3），返回段数（存活数 · n）。 */
+export function writeTrailSegments(system: TrailSource, layout: TrailVertexLayout, out: Float32Array): number;
+/** g_RenderVar0（rea 第 4 节）：z = 1 − max(timer, 0)/interval；w = n − 0.5，uvscrolling 时 w = (n − 1)·K、x = n − 1。 */
+export function trailRenderVar0(renderer: …, timer: number): [number, number, number, number];
+```
+  - **`sample` 照 5.2，每步 float32：**
+    1. 存活数为 0 时直接返回，计时器停走；
+    2. `timer = timer − dt'`，`dt'` 已乘 `instanceoverride.rate`；
+    3. `!(0 < timer)` 时：`timer = interval`，余量丢掉；每个存活粒子的历史整体后移一格，`h[0]` 写本帧模拟后的位置，`C = min(C + 1, n)`，`U` 加 1（u16 回绕）。
+    - 每帧最多采一次；`dt' > interval` 时也只采一次。
+  - **段的内容照 5.3：**
+    - 段 0：`p → h[0]`，CP0 是 `p`，CP1 是 `h[1]`；
+    - 段 1：`h[0] → h[1]`，CP0 是 `p`，CP1 是 `h[2]`；
+    - 段 k（2 … n−2）：`h[k−1] → h[k]`，CP0 是 `h[k−2]`，CP1 是 `h[k+1]`；
+    - 末段：`h[n−2] → h[n−1]`，CP0 是 `h[n−3]`，CP1 是终点自身；
+    - `n = 2` 时段 1 的 CP0 是 `p`、CP1 是 `h[1]`。
+  - **段的属性：**
+    - `a_PositionVec4 = (起点, size)`；
+    - `a_TexCoordVec4 = (终点, w)`，`a_TexCoordVec4C1 = (CP0, w)`，`a_TexCoordVec3C2 = CP1`；
+    - `a_Color` 是当前颜色和 alpha；
+    - w 分量：不滚动时依次是 `C·K` 和 `k`；滚动时依次是 `k` 和 `k − U`。
+  - 未填满的段零长，由几何着色器展开的退化规则整段不画，不另外处理。
+- **修改** `particles/system.ts`：
+  - ropetrail 系统建 `TrailHistory`；
+  - `spawn` 在全部 initializer 之后调 `born`；
+  - `prewarm` 末尾调 `afterPrewarm`；
+  - `step` 在 `advance` 之后调 `sample`，`dt'` 用同一个值。预热不采样（预热不走顶点函数，5.1）。
+- **修改** 绘制（`render/scene.ts`、`render/uniforms.ts`）：
+  - 几何着色器分支按 renderer 种类选布局和写入函数：rope 是 6 个属性和 `writeRopeSegments`，ropetrail 是 5 个属性和 `writeTrailSegments`；
+  - ropetrail 的顶点缓冲按 `capacity × n` 段分配，`draw(maxVertices, 存活数 · n)`；
+  - ropetrail 的 `g_RenderVar0` 每帧按当时的 `timer` 写（`trailRenderVar0`）。不滚动时 `x` 写 0（着色器只在 `TRAILSCROLLALPHA` 分支读它，WPE 留的是上一次绘制的值）。
+- **修改** `dev/particleCorners.ts`：确认 ropetrail 能读回，它有 `vec3` 输入，按段给出整条带子。
+
+**测试（子代理）：**
+- **单测：**
+  - `TrailHistory`：出生；`timer` 恰好为 0 时采样；余量丢掉；`dt' > interval` 也只采一次；存活数为 0 时停走；新的在前；`C` 封顶；`U` 加 1；`afterPrewarm`；`clear` 不重置计时器。
+  - `writeTrailSegments`：段 0、1、k 和末段的 CP；`n = 2`；两种 w；按槽序、跳过死槽。
+  - `trailRenderVar0`。
+  - 模块表的缺省值与钳制（`segments` 0 / 40、`length` 0、`subdivision` 40）。
+  - 编译：宏，以及不写 `THICKFORMAT`。
+  - 假设备：`draw(maxVertices, 存活数 · n)`，`g_RenderVar0` 每帧更新。
+- **回放（`ignore/p4/d2/`，做法同 `ignore/p4/d1/replay.test.ts`）：**
+  - 用 WPE 帧时间回放 `proj/p4d-ropetrail`，每个抓到的帧和 `tracks/rd-p4d-ropetrail-fps*.json` 逐段比：`vs_in` 的 `POSITION`、`TEXCOORD0`、`TEXCOORD1`、`TEXCOORD2`（vec3）、`COLOR`；`g_RenderVar0` 取 `consts.vertex`。
+  - 轨迹 JSON 里有 Python 写的 `NaN`，读前换成 `null`。
+  - fps 10 的日志只到第 150 帧，第 151–156 帧要反推：用 T4seg40 在第 157 帧的历史（32 段、每帧采样、x 方向匀速 300 px/s）求逐帧 dt，和第 157 帧的 `time` 核对合计。
+  - T7（`starttime 1`）在 WPE 的抓帧里一直没有绘制。我们的回放在这些帧里也应当没有存活粒子；对不上就查清原因写进汇报。猜测是满容量时发射计时冻结，周期变成约 3.95 s。
+- **离线展开：** 同 `ignore/p4/d1/corners-offline.*`，ropetrail 12 个系统、两种 fps，和 `gs_out` 逐顶点比，差 ≤ 0.01 像素，NaN 段对应整段落在裁剪体外。
+
+**验收（Claude）：**
+- `git status` 查越界；tsc、vitest、Prettier、回放、离线展开自跑。
+- 变异检查，各有测试失败：
+  - 余量带进下一周期；
+  - 后移方向反了（新的在后）；
+  - 首段 CP0 改取 `h[0]`；
+  - `RV0.z` 不取 `max(timer, 0)`；
+  - 一帧可采多次。
+- **真机：** dev app 四角探针读回 `p4d-ropetrail` 的带子，和 WPE `gs_out` 比，fps 60 差 ≤ 0.01 像素。
+- 画面哈希不变：10 张干净场景三档，对 `ignore/p4/d1/out/hash-after.json`。
+- **语料：** 只去掉 `particle:renderer:ropetrail`，不新增键。用到它的 8 张都还差子系统或属性绑定，所以能渲染数（23）和覆盖数（53）预计不变。
+
+### 步骤 2 实施记录（2026-11-10）
+
+子代理实现，Claude 验收。
+
+**新增和修改的文件：**
+- 新增 `particles/ropetrail.ts`（`TrailHistory`、`writeTrailSegments`、`trailRenderVar0`）；
+- 修改 `particles/modules.ts`、`particles/system.ts`、`compile/particles.ts`、`compile/bundle.ts`、`render/scene.ts`、`render/uniforms.ts`、`dev/particleCorners.ts`。
+
+**规格之外自定的几处：**
+- 新增 `isRopeRenderer(kind)`，编译两处共用；
+- 段写入按 `system.trail` 分派，`ParticleDraw.rope` 的形状不变；
+- `particleUniformValues` 多一个参数 `trailTimer`：建 draw 时写计时器初值的 `RV0`，之后每帧由 `update` 重写；
+- 不滚动时 `RV0.x`、`RV0.y` 写 0；
+- `writeTrailSegments` 放不下一整个粒子的 n 段时就停。
+
+**其间别的会话提交了 `95715c09`（P5a）**，也动过 `bundle.ts`、`features.ts`。核对过，这两个文件里未提交的改动只有 ropetrail 的。
+
+**验收结果：**
+
+| 项目 | 结果 |
+|---|---|
+| tsc、vitest（51 个文件、1382 个测试）、Prettier | Claude 自跑，通过 |
+| 回放（`ignore/p4/d2/replay.test.ts`），和 `vs_in`、`g_RenderVar0` 逐段、逐帧比 | 12 个系统、两种 fps，每帧段数和 WPE 相同。位置 ≤ 4.4e-4；尺寸、颜色、alpha、两个 w 分量都是 0；`RV0` ≤ 2.2e-6 |
+| fps 10 缺的第 151–156 帧 | 用 T4seg40 在第 157 帧的历史反推：和日志重叠的 13 帧逐帧差 ≤ 1.3e-6；6 帧的合计和按 `time` 算出的差 −7.8e-7 |
+| T7 为什么在 WPE 里一直没画 | 我们的回放在两段抓帧窗口里同样没有存活粒子。满容量时发射计时冻结（P4b 已实现），周期约 3.94 s：2 s 攒满，加 1.95 s 存活；预热 1 s 只攒到 0.5。T1 的出生时刻（fps 60 下 2.02、5.94、9.87、13.81 s）也对得上 |
+| 离线展开（Deno WebGPU），和 `gs_out` 逐顶点比 | 22 组（T7 两种 fps 都没有绘制），位置 ≤ 2.3e-4 像素，uv ≤ 2.4e-7，颜色 0；NaN 段一一对应 |
+| 真机（dev app 四角探针，fps 60 第 926 帧，`ignore/p4/d1/cmp_live.py`） | 11 个系统 ≤ 4.6e-4 像素，NaN 段一一对应；T7 双方都没有绘制 |
+| rope 不回退 | `ignore/p4/d1` 的回放通过，离线展开的输出和步骤 1 逐字相同 |
+| 变异检查 | 子代理做了 5 条（规格「验收」所列），Claude 另做 1 条（已存段数不封顶），各有单测失败。其中「`RV0.z` 不取 `max(timer, 0)`」回放查不出：采样后计时器重置为间隔，存下的值总在 (0, 间隔] 内，只能靠单测 |
+| 画面哈希（`ignore/p4/d2/out/hash-after.json` 对 `d1/out/hash-after.json`） | 10 张干净场景、三档，全部相同 |
+| 语料（`ignore/p4/d2/out/corpus-*.json`，基线是 HEAD 导出的） | 只去掉 `particle:renderer:ropetrail`（8 张工坊场景加 kabegame-sample），不新增键。能渲染 24、覆盖 53，前后不变；24 比步骤 1 多出的 1 张来自 P5a |
+
+**遗留：** 「预热后历史塌缩到当前位置」只有单测。T7 的设计里预热期间根本不出粒子，WPE 实测测不到。要补测，得让预热期间真的出粒子，比如 `rate 2` 或 `instantaneous 1`。
 
 ## 步骤 3 — `mapsequence*`
 
