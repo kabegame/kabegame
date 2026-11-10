@@ -453,3 +453,87 @@ Claude 独立验收：
 | 另做一处变异（和代理的不重复） | 快照副本里 `colorn` 的色相平移加 0.001：`regress` 只报 b6 不同（「有失败」，第一处不同是 `c-red-green` 的蓝分量多了 0.006），其余 7 个案例逐字节相同；两边各 56 s |
 | 自测重跑 | 第一次换输出目录重跑有 10 项失败，都是 `tests/accept2.py` 自身的问题，已由 Claude 修正：① 旧脚本拷贝的输出路径写死成 `ignore/kbp/accept2/old/out`，不跟 `--out`（这次重跑因此把旧脚本结果写进了代理的验收目录，同一份 HEAD 快照，内容等价）；② 「覆盖」检查要求 `proj/` 里除 `p4b-vec` 都由这几个生成器产出，并行会话 10:22 新建的 `p4d-around-ic`（`d3/gen_around.py`）让它失败，改成只核对这几个生成器自己声明的工程。修正后在 `ignore/kbp/accept2-claude2/` 完整重跑，93 项全过，约 6.7 分钟 |
 | c3 的 `a-default` | 用户定（2026-11-10）：已接受的长程超限（2026-11-08）在案例里列为 `systems.informational`，照比照报、不计入是否全部通过。改后 c3 全部通过，`a-default` 标「超限（只报告）」，差 / 限 1.147（fps60）、28.709（fps10），和 P4c 步骤 3 的记录一致；`regress` 的「两边都全部通过」从此有提示作用 |
+
+### 第 3 批 — 语料、变异、比较、离线四角、采样、bbox（2026-11-10）
+
+子代理实现（中途卡住一次：读旧脚本时 600 s 无进展被看门狗中断，没写出文件，续跑后完成），Claude 独立验收。验收期间 HEAD 由并行会话推进到 6a3c3854、4c088ddd。
+
+- **新增**（`.claude/skills/kbp-tools/`）：
+  - `py/corpus.py`、`ts/corpus.test.ts`：`corpus scan` / `diff`；
+  - `py/mutate.py`；
+  - `py/cmp.py`；
+  - `py/corners.py`、`ts/corners.test.ts`（备料）、`ts/corners.ts`（Deno WebGPU）；
+  - `py/sample.py`；
+  - `tests/accept3.py`。
+- **修改：**
+  - `kbp.py`：五个新分类，`regress` 加 `--corpus`、`--extra`、`--no-cases`，`snapshot export` 加 `--wasm`；
+  - `py/replay_host.py`、`py/snapshot.py`；
+  - `py/gen.py`：`bbox=`、`layer_bbox`、`bbox_around`；
+  - `ts/tsconfig.json`：排除 Deno 脚本；
+  - `tests/accept2.py`：c3 改成 informational 后，旧脚本仍记「有失败」，结论只在差别正好来自 informational 系统时算相同；
+  - `SKILL.md`。
+- **命令：**
+  - `corpus scan --out … [--extra modules:<名单|@b3|@b4>[,key=字段] | controlpoints[:norenderer] | sheets]`；
+  - `corpus diff 前 后 [--without 键] [--explain x.py]`；
+  - `regress … --corpus [--no-cases] [--extra …]`；
+  - `mutate --spec <.py|.json> [--mode snapshot|workspace] [id…]`；
+  - `cmp track|frame|stats`（`frame` 有 `--meta`、`--heat`、`--zoom`、`--crop`、`--resize`）；
+  - `corners offline <标签…> [--skip] [--expect-hidden] [--strict]`；
+  - `sample grab|series|read`。
+
+和计划不同、或计划没写、由子代理按证据定的：
+
+- **`snapshot export --wasm`**：翻译器 wasm 不入库，旧提交要配当时的 wasm。`a0a84322` 快照配上 `c5/head` 里的 wasm 后，变异检查开始的树哈希和 `c5/out/mutate.txt` 记的逐字相同。
+- **离线四角：**
+  - 按轨迹形状选 c5（按粒子）或 d1（按绘制）的写法；
+  - c5 写死的设置改成 `--skip`（两个 renderer 的系统）、`--expect-hidden`（应该不画的系统）；
+  - d1 的 uniform 核对（1e-6）计入不符处；
+  - 不符是结果、退出码 0，`--strict` 才非 0（给变异检查用）；
+  - 新错误层 `[deno]`。
+- **mutate：**
+  - 先在没改的源码上把检出方跑一遍当基线；
+  - 快照模式要求 `--src` 带 `snapshot.json`，防止在工作区按原字节写回；
+  - 工作区模式整树哈希不同只提示；
+  - 删除型变异遇到并发改动时停下报 `[data]`。
+- **corpus：**
+  - `modules` 加 `key=`，同一次扫描并存 b3、b4 两套名单；
+  - 剩余键按（场景数降序、键名）排序，同 c5；
+  - `regress --corpus` 比整行（unsupported、出错、附加字段）。
+- **cmp：**
+  - `frame` 尺寸不同时居中裁（同 c5）或 cover 后 BOX 缩放（同 b1）；
+  - FR / CLK 的排除框取 step4 的（x ≥ 1640、y ≥ 990），只在给了 `--meta` / `--kbp-layers` 时排除；
+  - 连通块排序改成确定的；
+  - `stats` 合并各帧后舍入到 3 位，同 b3；
+  - `track` 照 JS 的数值语义（NaN 读成 null、数组里的 null 当 0）。
+- **sample：**
+  - 用 `PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT)` 直接取客户区（旧脚本是整窗加 16 再裁）；
+  - `read` 另认 `w1080.py` 的格式；
+  - FR 帧号按 p4 测试工程的位置读。
+- **`bbox`**：`[x0, y0, x1, y1]`，场景坐标、y 向上；`"auto"` 只对图像层。不传时工程字节不变。
+- **没做：** d0 的「表外模块」语料插件、`cmp-wpe.ts` 的 `--c1` 并排列、`c5/cmp_particles.py`（3832772446 专用的屏幕框统计）。
+
+验收结果（输出在 `ignore/kbp/accept3/`；`accept3` 30 项、采样 4 项、`accept1` 27 项、`accept2` 93 项全过）：
+
+| 项 | 结果 |
+|---|---|
+| `corpus scan`（HEAD 快照，152 个场景，0 出错，24 张干净） | c5 的 `systems`、b3 / b4 的 `modules`、b2 的 `animatedUsages` 与 `sheets`：unsupported 与附加字段 152/152 相同；四个插件一次扫描约 31 s（旧脚本每份 21–25 s） |
+| `corpus diff`（`c5/out` 的前后两份） | 对 `c5/corpus_diff.py`、`b5/diff_corpus.py`、`b6/corpus_colorn.py`（`--without`）各 5 项相同，`--explain` 示例 29 张一致 |
+| `regress --corpus` | 同一份快照两次相同；能力表删掉 `camerafade` 的中性项，报出 140 个场景、每个只多 `general:camerafade`，等于独立从 scene.json 数出的 140 张 |
+| `mutate`（`a0a84322` 快照副本） | 快照模式 23 处的检出与否、检出方、单测摘要、四角不符处数全部和 `c5/out/mutate.txt` 相同，树哈希前后相同，261 s；工作区模式 4 处相同；并发演练（检出期间往被改文件追加一行）按反向替换还原、追加行保留 |
+| `cmp track`（p4c-cp） | 12 行和 `dev4/cmp-wpe.ts` 逐行相同 |
+| `cmp frame`（3832772446 三帧） | 差异统计与连通块和 `c5/cmp_scene.py` 相同（如 f2062：>0 47577、>32 12111、最大差 142、连通块 29），热图逐像素相同 |
+| `cmp stats` | 两个场景（20 行、5 行）和 `b3/cmp_stats.py` 逐行相同 |
+| `bbox` | 带 / 不带只差 `kbp-meta.json`；合成图按对象归类正确；没有 bbox 只报整帧；accept2 的 27 个工程仍逐字节相同 |
+| `corners offline` | c5（`a0a84322`）135 行与 `c5/out/corners.txt` 逐行相同，32 个系统最大差 1.14e-4 像素；d1（`b721f636`）236 行与 `d1/out/corners.txt` 逐行相同，最大差 2.29e-4 像素，uniform 5.96e-8 |
+| `sample`（MCP 开的 960×540 窗口，`p4c-cp`） | `grab` 尺寸等于客户区；`series` 5 s 采 320 次、存 101 帧，`read --fr` 帧号 279 → 379 连续；网格 5 s 424 次；采完已关窗 |
+
+子代理自报：一次误带 `python -X utf8 -I -`（stdin 为空，没执行任何内容）；第一遍自测的日志短暂写在 `ignore/kbp/` 下、后挪进 `accept3/`。
+
+Claude 独立验收：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 仓库里只有 `.claude/skills/kbp-tools/` 的新增与修改 |
+| 采样（另开一个尺寸） | MCP 开 1024×576 的 `p4c-sprite` 窗口：`grab` 出 1024×576 的 PNG，只有客户区（左上角 RenderDoc 叠加文字、右下角 FR / CLK 图层可见）；`series --changed-only` 2 s 正常；窗口已关 |
+| 自写变异清单（HEAD 快照，快照模式） | `colorn` 色相平移加 0.001 → b6 检出；只改注释 → 未检出（预期）；两处都按原字节还原，整树哈希前后相同，9.3 s |
+| 自测重跑（`--out ignore/kbp/accept3-claude`） | 30 项全过（采样没给窗口、跳过，另由上一行核对），约 8 分钟；`ignore/kbp/` 下没有写出 `--out` 以外的东西 |

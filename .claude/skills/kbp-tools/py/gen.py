@@ -303,9 +303,30 @@ def _project_root(name):
     return os.path.join(proj_dir(), name)
 
 
+def _vec(text, n=3):
+    parts = [float(v) for v in str(text).split()]
+    return (parts + [0.0] * n)[:n]
+
+
+def layer_bbox(obj):
+    """图像层对象（origin、size、scale；不看 angles）的场景包围盒 [x0, y0, x1, y1]（y 向上）。"""
+    ox, oy, _ = _vec(obj.get("origin", "0 0 0"))
+    w, h = _vec(obj.get("size", "0 0"), 2)
+    sx, sy, _ = _vec(obj.get("scale", "1 1 1"))
+    hw, hh = abs(w * sx) / 2, abs(h * sy) / 2
+    return [ox - hw, oy - hh, ox + hw, oy + hh]
+
+
+def bbox_around(origin, half_width, half_height=None):
+    """以 origin（"x y z" 或 (x, y)）为中心、半宽半高的场景包围盒 [x0, y0, x1, y1]。"""
+    x, y = (_vec(origin)[:2] if isinstance(origin, str) else origin[:2])
+    hh = half_width if half_height is None else half_height
+    return [x - half_width, y - hh, x + half_width, y + hh]
+
+
 def write_project(name, title, systems, *, images=(), materials=None, ident=None, overrides=None, files=None,
                   order=None, patches=None, version=3, properties=None, meta=None, object_meta=None, pointer=True,
-                  track=None):
+                  track=None, bbox=None):
     """写一个测试工程到 <proj_dir>/<name>（先删再写；configure(overwrite=False) 时已有就报错）。
 
     gen_b 的参数：systems：{名字: 粒子 JSON}；images：[(名字, 图层对象)]；order：对象顺序（名字列表），缺省图像在前、粒子在后；
@@ -315,7 +336,10 @@ def write_project(name, title, systems, *, images=(), materials=None, ident=None
     gen_c 的参数：meta：并入 kbp-meta.json 顶层（如 `corners: True` 让提取器读四角）；object_meta：{系统名: 并入该对象的键}
     （如 `draws: 2`，一个系统两个 renderer）。
     pointer：True（缺省，gen_c 起）CLK 用带指针的 CLK_PTR_VERT；False 是 gen_b 的 CLK_VERT。
-    track：只在显式给出时写进 kbp-meta.json 的顶层 `track`；`"draws"` 让 `kbp rdc track` 自动按绘制原样保存（P4d 的绳与模块工程）。"""
+    track：只在显式给出时写进 kbp-meta.json 的顶层 `track`；`"draws"` 让 `kbp rdc track` 自动按绘制原样保存（P4d 的绳与模块工程）。
+    bbox（第 3 批）：{对象名: [x0, y0, x1, y1] | "auto"}，只在给出时写进 kbp-meta.json 对应对象的 `bbox`（场景坐标、y 向上，
+    `kbp cmp frame --meta` 按它归类像素差）；"auto" 只对图像层：按 origin、size、scale 算（不看 angles）。粒子会动，包围盒要按实验
+    自己估（`bbox_around(origin, 半宽, 半高)`）。不给时文件和旧生成器的逐字节相同。"""
     root = _project_root(name)
     if os.path.isdir(root):
         if not _config["overwrite"]:
@@ -375,6 +399,16 @@ def write_project(name, title, systems, *, images=(), materials=None, ident=None
     data.update(meta or {})
     for key, extra in (object_meta or {}).items():
         data["objects"][key].update(extra)
+    for key, box in (bbox or {}).items():
+        if key not in data["objects"]:
+            raise KbpError("data", "%s：bbox 给了不存在的对象 %s" % (name, key))
+        if box == "auto":
+            if key not in image_table:
+                raise KbpError("data", "%s：bbox 的 auto 只对图像层，%s 是粒子系统（用 bbox_around 估）" % (name, key))
+            box = layer_bbox(image_table[key])
+        if not (isinstance(box, (list, tuple)) and len(box) == 4 and box[0] <= box[2] and box[1] <= box[3]):
+            raise KbpError("data", "%s：%s 的 bbox 要是 [x0, y0, x1, y1]（x0 ≤ x1、y0 ≤ y1）" % (name, key))
+        data["objects"][key]["bbox"] = [float(v) for v in box]
     if track is not None:
         data["track"] = track
     write_json(os.path.join(root, "kbp-meta.json"), data)

@@ -150,8 +150,10 @@ def run_vitest(directory):
     return out
 
 
-def export(rev, directory, overwrite=False, tsc=True, vitest=False):
+def export(rev, directory, overwrite=False, tsc=True, vitest=False, wasm_from=None):
     directory = os.path.abspath(directory)
+    if wasm_from and not os.path.isfile(wasm_from):
+        raise KbpError("data", "找不到 --wasm 给的翻译器 wasm：%s" % wasm_from)
     if not _inside_repo(directory):
         raise KbpError("kbp", "快照目录要在仓库里（tsc / vitest 沿目录向上找 node_modules）：%s" % directory)
     worktree_src = os.path.join(common.REPO_ROOT, *SRC_REL.split("/"))
@@ -171,7 +173,12 @@ def export(rev, directory, overwrite=False, tsc=True, vitest=False):
         info = {"kind": "rev", "rev": rev, "commit": commit}
         base_tsconfig = _git(["show", "%s:apps/wpe-scene/tsconfig.json" % commit])
     wasm = os.path.join(directory, "src", *WASM_REL.split("/"))
-    if not os.path.isfile(wasm):
+    if wasm_from:
+        # 翻译器 wasm 不入库：老提交要配当时的 wasm（如 P4c 的 ignore/p4/c5/head/src/wpesl2wgsl/wpesl2wgsl.wasm）
+        os.makedirs(os.path.dirname(wasm), exist_ok=True)
+        shutil.copyfile(wasm_from, wasm)
+        info["wasm_from"] = os.path.abspath(wasm_from)
+    elif not os.path.isfile(wasm):
         source = os.path.join(worktree_src, *WASM_REL.split("/"))
         if os.path.isfile(source):
             os.makedirs(os.path.dirname(wasm), exist_ok=True)
@@ -315,7 +322,8 @@ def diff(base, copy, out, overwrite=False):
 
 def cli(args):
     if args.action == "export":
-        return export(args.rev, args.dir, overwrite=args.overwrite, tsc=not args.no_tsc, vitest=args.vitest)
+        return export(args.rev, args.dir, overwrite=args.overwrite, tsc=not args.no_tsc, vitest=args.vitest,
+                      wasm_from=getattr(args, "wasm", None))
     if args.action == "diff":
         return diff(args.base, args.copy, args.out, overwrite=args.overwrite)
     raise KbpError("kbp", "未知的动作 %s" % args.action)

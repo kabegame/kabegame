@@ -1,6 +1,6 @@
 ---
 name: kbp-tools
-description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
+description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）；语料编译扫描与两次结果比较（kbp corpus scan|diff，附加字段插件，regress --corpus，替代各步的 corpus.test.ts、diff_corpus.py、corpus_diff.py）；变异检查（kbp mutate，快照模式按原字节还原、工作区模式反向替换，替代各步的 mutate.py）；比真机结果与 WPE 真值（kbp cmp track|frame|stats，按 kbp-meta.json 的 bbox 归类像素差、热图，替代 cmp-wpe.ts、cmp_scene.py、cmp_stats.py、heat.py）；离线四角（kbp corners offline，替代 corners-offline*）；PrintWindow 采样 MCP 开的测试窗口（kbp sample grab|series|read，替代 sampler_pw.py、run.py、w1080.py、wread.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
 ---
 
 # kbp-tools
@@ -13,8 +13,8 @@ WPE 场景对比的中间一层：认识我们的测试工程约定、把 WPE �
 两个 MCP 不认识这些约定，唯一的例外是 `kabegame-dev` 的 `apps/kabegame-dev-mcp/src/timeline.ts`（按 `[kbp]` 日志与轨迹组时间线），
 本 skill 不另做一份。
 
-> 已有：`gen`、`rdc`、`replay`、`regress`、`snapshot`、`content`（第 1、2 批）。`corpus`、`mutate`、`cmp`、`corners`、`sample`
-> 在第 3 批，届时补进本文件；在那之前照旧用 `ignore/p4/` 里的脚本。`ignore/` 里现有的生成器与回放脚本不迁、照旧能跑，新步骤用本工具。
+> 已有：`gen`、`rdc`、`replay`、`regress`、`snapshot`、`content`（第 1、2 批）；`corpus`、`mutate`、`cmp`、`corners`、`sample`
+> （第 3 批）。`ignore/` 里现有的生成器、回放、语料、变异、比较、采样脚本不迁、照旧能跑，新步骤用本工具。
 
 ## 用法与输出约定
 
@@ -25,7 +25,8 @@ python -X utf8 -I .claude/skills/kbp-tools/kbp.py <分类> <动作> …
 - stdout 只有一行 JSON 摘要（`ok`、产物路径、要点），细节写文件。`content cat` 不给 `--out` 时例外：原始字节写 stdout。
 - 失败：退出码非 0，stderr 一行错误、stdout 一行 `{"ok": false, "error": …}`；错误以层开头：
   `[data]`（输入数据、工程、抓帧不符合约定，输出已存在）、`[renderdoc]`（qrenderdoc 起不来、超时、服务层报错）、
-  `[wpe]`（WPE 目录不对）、`[src]`（产品源码不对、案例跑不下去）、`[node]`（node / vitest 起不来、超时）、`[kbp]`（参数）。
+  `[wpe]`（WPE 目录不对、采样找不到窗口）、`[src]`（产品源码不对、案例或备料跑不下去）、`[node]`（node / vitest 起不来、超时）、
+  `[deno]`（离线四角的 Deno WebGPU 出错）、`[kbp]`（参数）。
 - 已有的输出（工程、轨迹、报告、快照）缺省拒绝覆盖，要覆盖加 `--overwrite`。
 - 只用 `python -X utf8 -I`，不要 `python -c`。脚本里要用库时：把 `.claude/skills/kbp-tools` 放进 `sys.path`，再
   `from kbp import content`（`kbp.py` 本身充当包 `kbp`，`__path__` 指向 `py/`）。
@@ -62,8 +63,8 @@ kbp.py gen <模块> [工程…] [--data 目录] [--defs 目录] [--out 目录] [
     `TEX_IMAGE_H`；gen.py 那个 P4-0 专用的 `system`（operator 从 id 10）不在库里；
   - P4c 起：`at`、`ring`、`with_cps`、`CENTER`、`MOVE_ORIGIN`、`SPIN_ANGLES`（脚本里图层的 `angles` 是度，scene.json 里静态的是弧度）；
   - `write_project(name, title, systems, *, images, materials, ident, overrides, files, order, patches, version=3, properties, meta,
-    object_meta, pointer=True, track=None)`：gen_b 与 gen_c 的合并版。`pointer=True`（缺省）CLK 用带指针的 CLK_PTR（gen_c 起），
-    `False` 是 gen_b 的 CLK；`meta` 并入 kbp-meta.json 顶层，`object_meta` 并入单个对象；`track` 只在显式给出时写进 kbp-meta.json；
+    object_meta, pointer=True, track=None, bbox=None)`：gen_b 与 gen_c 的合并版。`pointer=True`（缺省）CLK 用带指针的 CLK_PTR（gen_c 起），
+    `False` 是 gen_b 的 CLK；`meta` 并入 kbp-meta.json 顶层，`object_meta` 并入单个对象；`track`、`bbox` 只在显式给出时写进 kbp-meta.json（`bbox` 见「kbp-meta.json」，另有 `layer_bbox`、`bbox_around`）；
   - 路径：`HERE`（= 数据目录；旧写法 `os.path.join(gen.HERE, 'proj', 名字)` 照旧落在 `<data>/proj`，但不认 `--out`）、`MODELS`（随库的
     `assets/models`，两行版 `solidlayer.json`）、`ASSETS`（`<KABEGAME_WPE_ROOT>/assets`）、`SHIMMER`（默认工程 shimmering_particles 的
     shaders）、`TEXSRC`（`<data>/texsrc`，从创意工坊导出的纹理不入库）；
@@ -145,18 +146,22 @@ kbp.py regress --src A --src B [--cases a,b] [--data 目录] [--out 目录] [--o
   （缺省 `<data>/out/regress/`）。
 - 逐字节比较每个案例的 `.txt`、`.json`，列出不同的文件和第一处不同（行、列、两边那一行）；同时核对两边各自是否全部通过、有没有跑不下去的。
 - 结果：`<out>/regress.txt`（给人看）、`regress.json`；摘要里 `same`、`differ`、`all_passed`、`crashed`。全部案例两边并行约 50 s。
-- 语料扫描在第 3 批（`--corpus` 留了接口，现在报 `[kbp]`）。
+- `--corpus`：两边另各跑一遍语料扫描（`<out>/a|b/corpus.json`，`--extra` 同 `corpus scan`），逐场景比 unsupported 集合、出错与附加字段；
+  不同时 `differ` 里有 `corpus`，摘要的 `corpus.affected` 列出受影响的场景，`regress.txt` 列出 b 去掉 / 新增了哪些键、在哪些场景。
+  `--no-cases` 只比语料（两边并行约 25 s）。
 
 ### `kbp snapshot` — 产品源码快照与补丁
 
 ```bash
-kbp.py snapshot export <rev | WORKTREE> <目录> [--overwrite] [--no-tsc] [--vitest]
+kbp.py snapshot export <rev | WORKTREE> <目录> [--overwrite] [--no-tsc] [--vitest] [--wasm 文件]
 kbp.py snapshot diff <基线目录> <副本目录> --out x.patch [--overwrite]
 ```
 
 - `export <rev>`：`git archive` 导出该提交的 `apps/wpe-scene/src` 到 `<目录>/src`（只读，不碰索引与工作区），拷入未入库的翻译器 wasm
   （工作区的 `apps/wpe-scene/src/wpesl2wgsl/wpesl2wgsl.wasm`）。`WORKTREE` 原样拷当前工作区的 `apps/wpe-scene/src`（含未入库的文件），
   用来冻结并行会话正在改的代码。
+- 翻译器 wasm 不入库，缺省拷工作区现在的那份；老提交要配当时的 wasm 时用 `--wasm`（P4c 步骤 5 的 `a0a84322` 配
+  `ignore/p4/c5/head/src/wpesl2wgsl/wpesl2wgsl.wasm`，P4d 步骤 1a 起的几何着色器展开改过翻译器，两份 wasm 不同）。
 - 另写 `<目录>/tsconfig.json`（extends 仓库根的，`types` 照 `apps/wpe-scene/tsconfig.json` 再加 `node`）、`vitest.config.ts`（root
   是快照目录，跑 `src/**/*.test.ts`）、`snapshot.json`（来源、文件数、wasm 哈希、tsc 结果）；导出后跑一次 tsc（`tsc.log`），`--vitest`
   另跑产品测试并报文件数、用例数（`vitest.json`、`vitest.log`）。
@@ -164,6 +169,140 @@ kbp.py snapshot diff <基线目录> <副本目录> --out x.patch [--overwrite]
 - `diff`：两边 `src/` 逐文件比，写成 git 格式的补丁，路径是 `apps/wpe-scene/src/…`，可以 `git apply --check`、`git apply --3way` 直接
   打进仓库；只收文本，二进制文件（如 wasm）不同时报错。
 - 2026-11-10 实测（HEAD 95715c09）：tsc 0 error，vitest 50 个文件、1207 个用例（1163 过、44 跳过）；导出约 2 s，tsc 约 8 s，vitest 约 9 s。
+
+### `kbp corpus` — 语料扫描与比较
+
+```bash
+kbp.py corpus scan --out 文件 [--src 产品源码] [--extra 插件]… [--only 场景,…] [--project 目录]… [--overwrite] [--quiet]
+kbp.py corpus diff <前.json> <后.json> [--out 文件] [--without 键,…] [--explain 脚本.py] [--overwrite]
+```
+
+- **scan**（`ts/corpus.test.ts`，替代各步拷来拷去的 `corpus.test.ts`）：对默认工程（有 `project.json` + `scene.pkg`，或 `scene.json`，或
+  `project.json` 的 `file` 是现存的 `.json`）与有 `scene.pkg` 的创意工坊工程跑真实编译管线 `compileScene({ exhaustive: true,
+  postprocess: "ultra" })`，结果是行数组（indent 1，同旧脚本）：`{ sample, unsupported[]（排好序）, …附加字段 }`，出错 `{ sample, error }`。
+  - `--project` 另加工程目录（如 d0 的 `kabegame-sample`），排在语料之后，sample 是目录名；`--only` 只跑这些场景。
+  - vitest 日志写 `<out>.log`。本机 155 个场景约 17 s。
+- **附加字段插件**（`--extra`，可重复；不再每步改测试文件）：
+
+| 插件 | 行字段 | 收的是 |
+|---|---|---|
+| `modules:<category:name,…>` | `modules`（`key=<字段>` 换名） | b3、b4：每个粒子层里这些模块的字段原文（去掉 `id`，带 `file`、`category`）；预置名单 `@b3`（P4b 步骤 3 的 9 个）、`@b4`（步骤 4 的 3 个） |
+| `controlpoints[:norenderer]` | `systems` | c1–c5：每个粒子层的 `file`、`flags`、`controlpoint` 数组、`renderer` 原文（c5 起；c1–c4 没有，`:norenderer` 去掉）、读控制点的模块、`instanceoverride` 的控制点静态值（`io`） |
+| `sheets` | `animatedUsages`、`sheets` | b2：帧表纹理（头标志 bit2）绑在哪里；帧表粒子材质按同样的宏重译一次（宏、格式、帧数、是否翻译成功、问题）。源码没有 `particleSheetDefines` 时只有 `animatedUsages` |
+
+- **diff**（替代 `b1|b5|d0/diff_corpus.py`、`c1–c5/corpus_diff.py` 的通用部分、`cmp_corpus_claude.py`）：
+  - 场景数与出错（新出错的、不再出错的）、干净场景增减（干净 = 没出错且 `unsupported` 为空）；
+  - 每个键去掉 / 新增了哪些场景（按场景数降序）；变化的场景逐张列出去掉、新增与之后还剩的键；
+  - 去掉了键但仍不干净的场景，剩下的键按场景数（同 `c5/corpus_diff.py` 的「仍不干净」）；
+  - `--without 键,…`（`b6/corpus_colorn.py`）：「后」里带这些键的场景，去掉它们后干净的、只差 1–2 项的、剩余键；
+  - `--explain 脚本.py`：各步自己的解释（模块导出 `explain(before, after, diff) -> [行]`，`before` / `after` 是 `{sample: 行}`，`diff`
+    是上面的结果），行接在报告后面。各步特有的核对（如 c5 的「按粒子 JSON 原文核对」）写在这里。
+  - 不给 `--out` 时报告行放在摘要的 `text`；给了另写 `<out>.json`。
+
+### `kbp mutate` — 变异检查
+
+```bash
+kbp.py mutate --spec 清单 [id…] [--src 产品源码] [--mode snapshot|workspace] [--data 目录] [--out 文件] [--overwrite] [--no-baseline]
+```
+
+- 每处：改坏 → 跑检出方 → 还原 → 核对；开头和结尾各求一次 `--src` 的整树哈希（同 `c5/mutate.py` 的算法）。
+- **清单格式**（数据，留在各步目录；`.py` 的 `MUTATIONS` / `DEFAULTS`，或 `.json` 的 `mutations` / `defaults`）：
+
+```python
+MUTATIONS = [
+    {"id": "trail-macro-missing", "label": "宏漏 TRAILRENDERER",
+     "edits": [{"file": "compile/bundle.ts", "old": '…{ THICKFORMAT: "1", TRAILRENDERER: "1" }…', "new": "…", "count": 1}],
+     # 可直接写 file / old / new / count（单处改动）；count 是改前 old 必须出现的次数
+     "tests": ["src/particles/orientation.test.ts"],     # vitest 过滤，在 --src 的上一级（要有 vitest.config.ts）跑
+     "cases": ["c1"],                                     # 回放案例（<data>/cases/），有失败或跑不下去算检出
+     "commands": [{"label": "四角", "kbp": ["corners", "offline", "p4c-trail-fps60", "--src", "{src}", "--out", "{work}/corners",
+                                           "--strict", "--overwrite", "--quiet"]}]},
+]
+DEFAULTS = {"tests": […], "cases": […], "commands": […]}   # 变异没写这几个键时用
+```
+
+  - 命令写法：`[argv…]`、`{"argv": […], "cwd", "env", "label"}`、`{"kbp": [kbp.py 的参数…], "label"}`；退出码非 0 算检出。
+    占位符 `{src}`、`{root}`（src 的上一级）、`{work}`（本处的工作目录）、`{data}`、`{repo}`、`{id}`、`{python}`、`{kbp}`。
+  - 四角当检出方时加 `--strict`（有不符退出码非 0）。
+- **基线**：先在没改的源码上把用到的检出方各跑一遍（同样的只跑一次）；基线就失败的检出方，结论里标「基线就失败」，它的检出不算数。
+  `--no-baseline` 跳过。
+- **两种模式**：
+  - `snapshot`（缺省）：要求 `--src` 在 `kbp snapshot export` 的快照里（上一级有 `snapshot.json`），按原字节写回并核对哈希；整树哈希必须
+    前后相同。
+  - `workspace`：在工作区（并行会话可能在改）里用。文件期间没被改过就按原字节写回（等于反向替换）；被改过就把本处的 `new` 逐条换回
+    `old`，别人的改动保留。删除型变异（`new` 为空）、改前已有 `new`、`new` 的出现次数不对时停下报 `[data]` 要人工核对。整树哈希不同只
+    提示（可能是别人的改动），本工具改过的文件逐个核对。
+- 结果：`--out`（缺省 `<清单所在目录>/out/mutate.txt`，只跑部分 id 时 `mutate-partial.txt`）与同名 `.json`；每处一段：改了哪些文件、
+  检出方、单测摘要（`3 failed | 209 passed (212)`）与失败的用例名、案例结论、命令退出码与尾行。工作目录 `<out 去掉扩展名>-work/<id>/`
+  （带标记文件，只删自己的）。
+- 2026-11-10 实测：`c5/mutate.py` 的 23 处转成 JSON 清单（单测 + 四角），在 `a0a84322` 快照上每处约 20 s（单测约 8 s、四角约 8 s）。
+
+### `kbp cmp` — 比真机结果和 WPE 真值
+
+```bash
+kbp.py cmp track <我们.json> <rd-标签.json> [--skip 系统,…] [--out 文件]
+kbp.py cmp frame <我们.png> <wpe.png> [--meta kbp-meta.json | --kbp-layers] [--crop 上,下,左,右] [--resize] [--threshold 32] [--cell 32]
+                 [--heat 热图.png [--heat-gain 8]] [--zoom x,y,w,h --zoom-out 放大.png] [--out 文件]
+kbp.py cmp stats <real.json> <wpe-标签-stats.json> [--label 样本] [--out 文件]
+# 公共：--overwrite；不给 --out 时报告行放在摘要的 text，给了另写 <out>.json
+```
+
+- **track**（`dev4/cmp-wpe.ts`）：kabegame-dev 的 `particle_track` 结果（或任何「每粒子一行」的轨迹）对 WPE 轨迹：WPE 的每一帧、两边系统
+  的并集，同帧同系统按数组顺序配对，报 `pos` / `size` / `color` / `alpha` / `rot` 的最大差；粒子数不同的帧只计次数；我们缺的帧列出来。
+  不做包络判定（判定在 `replay`）。数值语义照 JS（NaN 读成 null、数组里的 null 当 0、越界当 NaN、NaN 不更新最大值），输出和旧脚本逐行相同。
+- **frame**（`step4/cmp_real.py`、`b1/cmp.py`、`b1/heat.py`、`b6/px/cmp.py`、`c5/cmp_scene.py`）：
+  - 对齐：`--crop` 先裁我们的图；尺寸仍不同、一边相等或同比例时居中裁成 WPE 的大小（c5：WPE 窗口高被屏幕压到 2130）；比例不同或
+    `--resize` 时 cover 取中间一块再 BOX 缩到 WPE 的大小；
+  - 差值：每像素三通道绝对差的最大值；测试工程（`--meta` 或 `--kbp-layers`）排除右下角 FR / CLK（场景 x ≥ 1640、图片 y ≥ 990 按比例）；
+  - 报 `> 0 / 2 / 8 / 32` 的像素数、最大差、平均差、256 档直方图；超过 `--threshold` 的像素按 `--cell` 格子聚 8 连通块，列包围盒；
+  - `--meta` 的对象有 `bbox` 时按对象归类（按 `order` 取第一个包含它的对象，其余算 `other`），没有时只报整帧；
+  - `--heat`：差异图转灰度（PIL 的 `L`）乘增益，和 `c5/cmp_scene.py` 的热图逐像素相同；`--zoom` 存我们 | WPE 并排放大 2 倍。
+- **stats**（`b3/cmp_stats.py`、`b4v/cmp_stats.py`）：我们是屏外宿主回放的 `real.json`（`samples.<名字>.particles[]` 每层 `alive`、`capacity`、
+  `summary`），WPE 是 `kbp rdc stats` 的结果。层按绘制顺序一一对应，WPE 各帧合并取范围（先舍入到 3 位，同 b3），报粒子数、尺寸、x、y、
+  alpha；WPE 多出的绘制（我们不支持的子系统）单列。粒子随机，只比统计量。
+
+### `kbp corners offline` — 离线四角
+
+```bash
+kbp.py corners offline <标签…> [--src 产品源码] [--data 目录] [--project 工程] [--out 目录] [--skip 系统,…]
+                       [--expect-hidden <标签或工程>/<系统>,…] [--limit 0.01] [--strict] [--overwrite]
+```
+
+- 取 WPE 轨迹（`<data>/tracks/rd-<标签>.json`，工程取轨迹的 `project`）里的顶点输入，按产品代码算 uniform、写顶点、判朝向，把翻译出的
+  顶点（几何）着色器改写成计算着色器（dev 探针 `particleCorners` 的同一段改写），在 Deno 的 WebGPU 上跑，和 WPE 的 `gs_out` 比，限值 0.01 像素：
+  1. 备料：`node … vitest` 跑 `ts/corners.test.ts`，写 `<out>/offline*`；
+  2. 比较：`deno run --unstable-webgpu ts/corners.ts`，写 `<out>/corners.txt`、`corners-result.json`。
+- 按轨迹形状选路径：
+  - **按粒子认**（P4c 的 sprite / 拖尾，c5）：4 个角按 uv 对上 WPE 的角；「不画」（朝向 NaN 整次跳过，或拖尾退化一个也没写）⇔ WPE 四角全
+    是 NaN，给了 `--expect-hidden` 时还要在名单里（c5 的 `NOT_DRAWN`）；两个 renderer 的系统用 `--skip`（c5 的 `T8,T8r`）。
+  - **按绘制认**（P4d 的绳，d1）：几何着色器展开，`gs_out` 的三角形列表还原成带后逐顶点比位置、uv、颜色；NaN 段 ⇔ 我们整段在裁剪体外；
+    另把我们算的 uniform 和 WPE 读到的常量逐项比（限值 1e-6）。
+- 老源码兼容：P4c 的源码只有 `vertexPacking(attributes)`，P4d 起用 `programVertexPacking(result)`；要配当时的翻译器 wasm（见 `snapshot --wasm`）。
+- 不符（超限、画不画不符、uniform 超限）是结果：摘要 `failures`，退出码 0；`--strict` 时退出码非 0（变异检查用）。
+- 2026-11-10 实测：`a0a84322` 快照上 `p4c-trail-fps60 p4c-sprite-fps60` 和 `c5/out/corners.txt` 逐行相同（32 个系统、1.14e-4 像素、不符 0），
+  `b721f636` 快照上 `p4d-rope-fps60 p4d-rope-fps10` 和 `d1/out/corners.txt` 逐行相同（34 组、2.29e-4）；备料约 4 s、Deno 4–7 s。
+
+### `kbp sample` — PrintWindow 采样
+
+```bash
+kbp.py sample grab <窗口标题> --out x.png
+kbp.py sample series <窗口标题> --seconds N (--grid 步长,x0,y0 --out x.bin | --changed-only --out 目录) [--interval 秒]
+kbp.py sample read <x.bin | 目录> [--fr] [--png 目录 [--frames 0,10]] [--point x,y] [--out 明细.json]
+```
+
+- **前提**：窗口由 wpe-renderdoc MCP 的 `open_wallpaper` 开（标题 `kb-<MCP 进程号>-<序号>`，客户区尺寸就是 `size`），用完 `close_wallpaper`。
+  本命令只按标题找窗口（先精确匹配、再唯一前缀），**只读**：不开关窗口、不发 WPE 命令、不改设置、不碰桌面壁纸；用到 WPE 进程时按窗口
+  动态查（摘要里的 `pid`、`exe`），没有写死的 PID。
+- 抓法：`PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT)` 直接得客户区（被遮挡也能抓、不会读到别的窗口），不支持时退回整窗再裁；进程按
+  每显示器 DPI 感知运行，尺寸是物理像素。
+- **限制**：
+  - 注入了 RenderDoc 的 WPE 在窗口左上角画叠加文字（约 340×40 像素：「Capturing D3D11. Window 1 active.」两行），网格起点缺省 (10, 50) 避开；
+  - 测试工程的 FR / CLK 在右下角（FR 中心场景 (1820, 40)），`read --fr` 按它读帧号（蓝 ≈ 255、红绿是整数时帧号 = r + 256·g），
+    窗口要是 16:9（按线性比例换算）；
+  - 每次抓取约 10 ms（960×540），`--changed-only` 只存 CRC32 变了的帧，整帧边采边写（zlib）；PrintWindow 读到的是窗口已呈现的画面，
+    不保证每个 WPE 帧都抓到（实测 960×540 窗口 5 s 采 320 次、存 101 帧，FR 帧号连续）。
+- 格式：`--grid` 同 `sampler_pw.py`（头 `<iiiiii` cols、rows、步长、x0、y0、0，每样本 `<dd` + 各点 RGB）；`--changed-only` 的
+  `frames.bin` 同 `run.py`（头 `<ii` 宽、高，每帧 `<ddI` + zlib(BGRA)），另写 `meta.json`；`read` 另认 `w1080.py` 的格式。
 
 ### `kbp content` — 语料与 scene.pkg
 
@@ -272,7 +411,11 @@ kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--
 - `corners`（顶层）：为 true 时提取四角。
 - `track`（顶层，可选）：`"draws"` 时 `kbp rdc track` 自动按绘制原样保存（绳与 P4d 模块工程），`"points"` 按粒子；只在
   `write_project(…, track=…)` 显式给出时写，不给时文件和旧生成器的逐字节相同。
-- 计划中（第 3 批，和整帧比较一起）：每个对象加 `bbox`（场景包围盒），给 `cmp frame` 按对象归类像素差；旧工程没有时只报整帧。
+- `bbox`（对象级，可选，第 3 批）：`[x0, y0, x1, y1]`，场景坐标（1920×1080、y 向上，同 `origin`），`kbp cmp frame --meta` 按它把
+  像素差归到对象。只在 `write_project(…, bbox={名字: 框 | "auto"})` 给出时写，不给时文件和旧生成器的逐字节相同：
+  - `"auto"` 只对图像层：按 `origin`、`size`、`scale` 算（不看 `angles`），库里的 `layer_bbox(对象)`；
+  - 粒子会动，框按实验自己估：`bbox_around(origin, 半宽[, 半高])`（origin 是 `"x y z"` 或 `(x, y)`）；
+  - 旧工程没有 `bbox` 时 `cmp frame` 只报整帧。可另在顶层写 `scene: [宽, 高]` 改场景尺寸（缺省 1920×1080）。
 
 ### 轨迹 JSON（`tracks/rd-<标签>.json`）
 
@@ -441,8 +584,12 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 4. **取轨迹**：`kbp rdc track A:\<项目>\<用途> <标签>`（写 `<data>/tracks/rd-<标签>.json`）。
 5. **写案例**：`<data>/cases/<名字>.json`，个案逻辑写钩子。
 6. **回放**：`kbp replay <名字> --src ignore/<步骤>/ov/src`。
-7. **回归**：改动前后 `kbp regress --src ignore/<步骤>/head/src --src ignore/<步骤>/ov/src`：`same` 为 true（或逐条解释 `differ` 里的案例），
-   两边都全部通过（c3 的 `a-default` 是已知失败）。
+7. **回归**：改动前后 `kbp regress --src ignore/<步骤>/head/src --src ignore/<步骤>/ov/src --corpus`：`same` 为 true（或逐条解释
+   `differ` 里的案例与语料增减，语料的解释用 `kbp corpus diff a/corpus.json b/corpus.json --explain <步骤>/explain.py`），两边都全部通过。
+8. **变异检查**：清单写在 `<步骤>/mutations.py`，`kbp mutate --spec … --src ignore/<步骤>/ov/src`（快照模式）；四角当检出方时用
+   `kbp corners offline … --strict`。
+9. **画面**：kabegame-dev 的 `render_scene` 出我们的图、`kbp rdc frame` 出 WPE 的图，`kbp cmp frame … --meta <工程>/kbp-meta.json --heat …`；
+   真实场景的粒子统计用 `kbp cmp stats`；真机轨迹对 WPE 用 `kbp cmp track`。
 
 ## `kbp rdc` 怎么跑
 
@@ -464,6 +611,28 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 
 ## 验收自测
 
+### 第 3 批（`tests/accept3.py`）
+
+```bash
+python -X utf8 -I .claude/skills/kbp-tools/tests/accept3.py [--out ignore/kbp/accept3] [--only snap,corpus,cdiff,cregress,mutate,cmp,bbox,corners,sample]
+                                                             [--window kb-<进程号>-<序号> --window-size 960x540]
+```
+
+- 全部输出（快照、旧脚本拷贝、中间产物、报告）都在 `--out` 下；旧脚本拷到 `<out>/old/`、只改输出路径；产品源码只用 `<out>/snap/` 的冻结快照
+  （HEAD、`a0a84322` 配 P4c 的 wasm、`b721f636`），从不改 `apps/`。
+- `corpus`：旧 `c5`（控制点）、`b3`、`b4`（模块）、`b2`（帧表）的 `corpus.test.ts` 与新 `corpus scan`（四个插件）在 HEAD 快照上逐场景比。
+- `cdiff`：`c5/out` 的两份结果上，新 `corpus diff` 对 `c5/corpus_diff.py`、`b5/diff_corpus.py` 的通用部分，`--without` 对 `b6/corpus_colorn.py`，
+  `--explain` 示例。
+- `cregress`：`regress --corpus --no-cases`：同一份快照两次；能力表删掉 `camerafade` 的中性项，受影响的场景和 scene.json 里写了它的场景比。
+- `mutate`：`c5/mutate.py` 的清单（AST 只取常量与 `MUTATIONS`）转成 JSON spec；快照模式全部 23 处、工作区模式 4 处，逐处和
+  `c5/out/mutate.txt` 比检出结论与检出方；另演练「检出期间文件被改」的反向替换。约 10 分钟。
+- `cmp`：`dev4/cmp-wpe.ts`、`c5/cmp_scene.py`（含热图逐像素）、`b3/cmp_stats.py` 各在原输入上对照。
+- `bbox`：带 / 不带 bbox 各生成一个小工程；合成图上 `cmp frame --meta` 按对象归类。
+- `corners`：`a0a84322`、`b721f636` 快照上和 `c5/out/corners.txt`、`d1/out/corners.txt` 逐行比。
+- `sample`：要先用 wpe-renderdoc MCP 的 `open_wallpaper` 开窗（如 `ignore/p4/proj/p4c-cp`、`960x540`），把标题传给 `--window`，跑完
+  `close_wallpaper`；不给就跳过。
+- 并行会话往数据目录里加的新工程、轨迹、案例不影响这些检查：每项只核对本批工具负责、自己声明的那部分。
+
 ### 第 2 批（`tests/accept2.py`）
 
 ```bash
@@ -476,7 +645,8 @@ python -X utf8 -I .claude/skills/kbp-tools/tests/accept2.py [--out ignore/kbp/ac
 - `track`：带 `track: "draws"` 的工程上 `kbp rdc track` 自动选 draws（认法选择只算 job；p4d-rope 真跑一遍，和 `--draws` 的真值逐字节相同）。
 - `snapshot`：`export HEAD`（tsc、vitest）与 `export WORKTREE`；HEAD 副本改一行后 `diff`，`git apply --check`。
 - `replay`：旧回放脚本拷到 `<out>/old/`（只改输出路径；b3、b4 另把已算好的统计写进 JSON），和新案例在同一份冻结快照上各跑一遍，
-  逐系统比最大差、包络、差 / 限、超限数、是否通过（数值逐位），以及 particleTrack 对照与结论。
+  逐系统比最大差、包络、差 / 限、超限数、是否通过（数值逐位），以及 particleTrack 对照与结论。旧脚本没有 informational：比结论时
+  把只报告的系统（`judged: false`，如 c3 的 `a-default`）的失败也算进去（第 3 批改）。
 - `c5`：HEAD 快照上的结果和 `ignore/p4/c5/out/*-head*`、`d1/out/replay-rope.json` 的记录比。
 - `regress`：同一份快照传两次（全部相同）；拷一份快照把 `particles/system.ts` 的 `DRAG_EXPONENT` 改成 0.71，和原快照比。
 - 结果写 `<out>/report.json`（`--only` 时 `report-<段>.json`）。完整一遍约 6 分钟。

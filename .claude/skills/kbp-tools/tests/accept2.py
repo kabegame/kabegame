@@ -719,12 +719,23 @@ def check_replay(out_dir, report):
         new = load_json(new_json)
         rows, bad = compare_case(case, old, new)
         old_pass = verdict_of_txt(old_txt)
-        same_verdict = old_pass == new["ok"]
+        # 案例 JSON 的 systems.informational 照比照报、不判定。有的旧脚本本来就不判定它们（b4 的 turb、c4 的 w-stay-w），
+        # 有的是案例后来才列进去的（2026-11-10 起 c3 的 a-default，旧脚本仍记失败）。所以结论相同即可；「旧有失败、新全部通过」
+        # 时，要求差别正好来自列出的 informational 系统的失败
+        spec = load_json(os.path.join(P4, "cases", case + ".json"))
+        listed = set((spec.get("systems") or {}).get("informational") or [])
+        for run in spec.get("runs") or []:
+            listed |= set((run.get("systems") or {}).get("informational") or [])
+        informational_failed = sorted({name for sec in new["sections"] for name, r in sec["systems"].items()
+                                       if name in listed and r.get("judged") is False and not r.get("ok")})
+        raw_pass = new["ok"] and not informational_failed
+        same_verdict = old_pass == new["ok"] or (not old_pass and new["ok"] and bool(informational_failed))
         tc_old, tc_new = track_checks_of_txt(old_txt), track_checks_of_new(new)
         same_track = [tuple(x) for x in tc_old] == [tuple(x) for x in tc_new]
         row.update(ok=(bad == 0 and same_verdict and same_track) or snap == "head-d1", items=len(rows), differ=bad,
-                   verdict={"old": old_pass, "new": new["ok"]}, particle_track={"old": tc_old, "new": tc_new},
-                   rows=[r for r in rows if not r["ok"]][:20])
+                   verdict={"old": old_pass, "new": new["ok"], "new_with_informational": raw_pass,
+                            "informational_failed": informational_failed},
+                   particle_track={"old": tc_old, "new": tc_new}, rows=[r for r in rows if not r["ok"]][:20])
         report.append(row)
         print("replay %-3s %s 快照：%d 项逐项比，不同 %d；结论 旧 %s / 新 %s；particleTrack 对照 %s；耗时 旧 %s s 新 %s s" % (
             case, snap, len(rows), bad, "全部通过" if old_pass else "有失败", "全部通过" if new["ok"] else "有失败",
