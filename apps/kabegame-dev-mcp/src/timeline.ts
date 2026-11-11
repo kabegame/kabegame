@@ -26,12 +26,24 @@
  * 的 FR_CURSOR），同一个文件里不能混用；两列时间都要是 6 位小数（少了多半是行被截断），光标两列是有限数或 `nan`（脚本读光标失败）；
  * 帧号递增不重复（同一个文件里有两次运行就报错，截出一次的）。轨迹是 Python 写的 JSON，可能带 `NaN` / `Infinity`
  * （`rd-p4c-sprite-fps60.json` 的 corners），解析前换成 null。
+ *
+ * FR 帧号块的颜色（kabegame-chromium 第 6 批，`frColor`）：kbp 测试工程第一个对象 FR 的颜色由字段脚本每帧写，只取决于 WPE 脚本帧号，
+ * 回放到第 N 帧时 MCP 按它把 FR 涂成那一帧的颜色交给探针（探针不跑脚本）。
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
 export type Point = [number, number];
+
+/**
+ * kbp 测试工程 FR 帧号块在第 `frame` 帧（WPE 脚本帧号，从 1 起）的颜色：`((N % 256) / 255, (⌊N / 256⌋ % 256) / 255, 1)`。
+ * 这是第二份：唯一属主是 `.claude/skills/kbp-tools/py/gen.py` 的 `FR_COLOR` / `FR_CURSOR`（`update` 里的 `value.x` / `.y` / `.z`），
+ * 改了要两边一起改。写法照脚本（先取模再除以 255），值和 WPE 里脚本算出的双精度相同，进 uniform 时同样取 float32。
+ */
+export function frColor(frame: number): [number, number, number] {
+  return [(frame % 256) / 255, (Math.floor(frame / 256) % 256) / 255, 1];
+}
 
 export interface TimelineSource {
   /** WPE 日志文件（`ignore/p4/out/<标签>-log.txt`），只读里面的 `[kbp]` 行。 */

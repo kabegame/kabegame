@@ -357,6 +357,37 @@ export interface ParticleReplay {
   random?: Record<string, number[]>;
 }
 
+/** 图层字段（`apps/wpe-scene/src/compile/bindings.ts` 的 `LayerField`）。 */
+export type SceneLayerField =
+  "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible" | "parallaxDepth";
+
+/**
+ * 脚本值（第 6 批，`apps/wpe-scene/src/dev/scriptValues.ts` 的 `ScriptValue`）：某个对象某个字段上的字段脚本在读回那一帧会返回的值。
+ * 探针不跑场景脚本，按它找到 bundle 里挂在这个字段上的字段脚本，用绑定目标写进状态（同宿主的脚本写回）。
+ */
+export interface ScriptValue {
+  /** `objects` 下标（非负整数），或对象名（非空，重名时探针报错）。 */
+  object: number | string;
+  field: SceneLayerField;
+  /** 1–4 个有限数（同宿主脚本写回铺满后的分量），或布尔。 */
+  value: number[] | boolean;
+  /** 找不到对象、或这个字段没挂字段脚本时跳过（结果里 `applied: false`），不报错。 */
+  optional?: boolean;
+}
+
+/** 探针每一项脚本值的结果，顺序同请求。 */
+export interface ScriptValueResult {
+  /** 解析出的 `objects` 下标；按名字没找到时为 null。 */
+  object: number | null;
+  /** 解析出的对象名；按下标没找到时为 null。 */
+  name: string | null;
+  field: SceneLayerField;
+  value: number[] | boolean;
+  /** 写进了状态；`optional` 跳过时为 false，`reason` 写明原因。 */
+  applied: boolean;
+  reason?: string;
+}
+
 export interface RenderRequest {
   imageId: string;
   /** `g_Time`（秒），缺省 1.5（同画面哈希基线）。给了 `particles` 时不收（读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计）。 */
@@ -388,6 +419,11 @@ export interface RenderRequest {
    * 光标按它换算（`window ?? canvas`）。只改读回、不改渲染：`g_Screen` 等内置 uniform 仍按场景目标算。
    */
   canvas?: [number, number];
+  /**
+   * 脚本值（第 6 批，最多 64 项）：原样交给探针，探针在建好场景之后、回放之前经字段脚本的绑定目标写进状态。用途：kbp 测试工程的 FR
+   * 帧号块（MCP 按读回帧号算颜色，带 `optional: true`）。结果的 `meta.scriptValues` 逐项写明写没写。
+   */
+  scriptValues?: ScriptValue[];
 }
 
 /** REST `POST /hosts/:h/particle-track` 的请求体：交给探针 `particleTrack`（场景目录按图片 id 取）。 */
@@ -503,6 +539,8 @@ export interface RenderMeta {
   bloomLevels: number | null;
   time: number;
   frametime: number;
+  /** 每一项脚本值写没写进状态（第 6 批；没给时空数组，之前的宿主产物没有这一项）。 */
+  scriptValues?: ScriptValueResult[];
   key: string;
   [key: string]: unknown;
 }

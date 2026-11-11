@@ -941,3 +941,143 @@ Claude 独立验收（2026-11-12；不采信自报，脚本与输出在 `ignore/
 | 不留痕迹 | 导入的 14313 已 `projects_remove`（`imagesGone` / `tasksGone` 为真）；`app_state` 前后逐字相同；只剩开始就在的应用背景宿主 13635 |
 
 没有另起 stdio MCP 验 MCP 层（子代理验过，冲突与提示行另有单测与变异）；本会话的 kabegame-dev MCP 要 `/mcp` 重连才有 `canvas`。
+
+## 第 6 批 — 回放时给 FR 帧号块涂上那一帧的颜色（2026-11-12 用户）
+
+**来源：** 工具缺口清单里的一条：「回放不跑脚本。FR 帧号块在两边颜色不同，比较时要屏蔽。加了抖动和缩放后，它的屏幕位置每个工程都不一样，屏蔽框得逐个现算」。用户同意「回放时把 FR 涂成那一帧的颜色」，并要求验证是否正确。另一条（探针交出读回那一帧的相机，供 `kbp cmp frame` 换算 `kbp-meta.json` 的 bbox）不在本批。
+
+### 总体设计思路
+
+FR 是 `kbp gen` 工程的第一个对象（`solidlayer`，场景坐标 1780–1860 × 10–70），颜色由字段脚本 `FR_COLOR` / `FR_CURSOR` 每帧写：第 N 帧（WPE 脚本帧号，从 1 起）是 `((N % 256) / 255, (⌊N / 256⌋ % 256) / 255, 1)`。探针回放为了确定性不跑脚本，FR 一直是初值 `0 0 1`。但颜色只取决于帧号，而回放到第几帧是已知的（`dts.length`），所以不用跑脚本，直接把「脚本这一帧会返回的值」写进去就行。
+
+分两层。**探针**加一个通用能力 `scriptValues`：调用方给出某个对象某个字段的脚本在读回那一帧返回的值，探针找到 bundle 里挂在这个字段上的字段脚本，用它的绑定目标经 `SceneState.write`（和宿主脚本写回同一条路径，`host.ts` 的 `writeScript`）写进状态。值写在回放开始之前，颜色不影响模拟，只有读回那一帧被画出来。对象按 `objects` 下标或名字找，没有挂脚本时报错，`optional` 的跳过并在结果里写明。探针不知道 FR 是什么。
+
+**MCP** 是 kbp 协议的使用方（时间线本来就解析 `[kbp]` 日志和标签），由它按公式算出读回帧的 FR 颜色，带 `optional: true` 交给探针。缺省开（`replay.fr` 缺省 true），结果里写一行涂了没有、涂成什么。不是 kbp 工程时探针跳过，不影响别的场景。公式在 `gen.py` 的 `FR_COLOR`，MCP 这边是第二份，注释指回去。是否正确由验收里对 WPE 抓帧的解码与整帧比较来保证。
+
+这样 `render_scene` 按时间线回放出来的 FR 块和 WPE 逐像素相同，比较时不再屏蔽它，抖动、缩放之下也不用算屏蔽框。
+
+### 现状锚点
+
+**a. 探针不跑脚本，FR 停在初值**（`apps/wpe-scene/src/dev/probe.ts`，`renderFrame`）
+```ts
+const state = SceneState.fromBundle(bundle);   // 现状：字段脚本的值只有编译期的 initial（FR 是 "0 0 1"）
+// …建场景、回放，没有任何脚本写回
+const { time, frametime } = replayReadback(scene, state, { particles: options.particles, /* … */ });
+```
+
+**b. 宿主的脚本写回路径**（`apps/wpe-scene/src/host.ts`，`writeScript`）
+```ts
+const result = state.write({ property: "", target }, scriptWriteValue(value));   // target 是 SceneScript.target
+```
+
+**c. 比较时手算 FR 屏蔽框**（`ignore/p5/s4/cmp_frames.py` 头注释）
+```text
+FR 帧号块（场景 1780–1860 × 10–70）的颜色是脚本帧号，我们的回放不跑脚本，去掉不比；它的屏幕位置按「绕中心缩放 + 抖动平移」现算
+```
+
+### 点 1 — 探针（`apps/wpe-scene/src/dev/probe.ts`，纯函数放 `dev/` 下新文件或 `replayPointers.ts` 旁）
+- **新增** `RenderFrameOptions.scriptValues?: { object: number | string; field: LayerField; value: number[] | boolean; optional?: boolean }[]`。
+- **新增** 纯函数：在 `bundle.layers`（按名字，重名报错）与 `bundle.scripts.list`（`target.kind === "layer"`、同 `object`、同 `field`）里解析出绑定目标；找不到时 `optional` 记为跳过，否则抛错。有单测。
+- **修改** `renderFrame`：建好场景之后、回放之前，逐项 `state.write({ property: "", target }, scriptWriteValue(value))`。
+- **修改** `RenderFrameResult` 加 `scriptValues: { object: number | null; name: string | null; field; value; applied: boolean }[]`（没给时空数组）。
+
+### 点 2 — vite（`scripts/kabegame-dev/replay.ts`、`scene.ts`、`types.ts`）
+- **修改** `RenderRequest.scriptValues`；校验（数组、最多 64 项；`object` 是非负整数或非空字符串；`field` 是图层字段之一；`value` 是 1–4 个有限数或布尔；`optional` 是布尔），不合法回 400；原样转给探针。`RenderMeta.scriptValues`。
+
+### 点 3 — MCP（`apps/kabegame-dev-mcp/src/tools.ts`，公式可放 `timeline.ts`）
+- **新增** `replay.fr?: boolean`（`timeline` 与 `particles` 两种写法都收，缺省 true）：读回帧 N = `dts.length`，发 `{ object: "FR", field: "color", value: [(N % 256) / 255, (Math.floor(N / 256) % 256) / 255, 1], optional: true }`。
+- **修改** 结果说明加一行：「FR 涂成第 N 帧的颜色 (r, g, b)（objects[i]）」/「场景里没有挂颜色脚本的 FR，没涂」/「没涂（replay.fr: false）」。
+- **修改** `render_scene` / `host_render` 描述。
+
+### 点 4 — 文档
+- `.claude/skills/kabegame-chromium/SKILL.md`：`replay.fr`、REST 的 `scriptValues`。
+- `.claude/skills/kbp-tools/SKILL.md`：`render_scene` 按时间线回放出来的图和 WPE 比时不用再屏蔽 FR（`--exclude-kbp`、手算框）；写在说 FR 屏蔽的地方。
+- `cocs/wpe/WPE_SCENE.md`：dev 探针 `renderFrame` 一行加 `scriptValues`。
+
+### 验收
+- **单测**：探针的解析（按下标、按名字、重名、没挂脚本时报错与 `optional` 跳过、字段不同不匹配）；vite 的校验与转发；MCP 的公式（N = 1、255、256、941）、`fr: false` 不发、两种回放写法都发、结果说明。三个包全过，`deno check`、宿主 tsc、Prettier 通过。
+- **公式与帧号对齐（不经我们的渲染）**：从现有 WPE 抓帧里解出 FR 块的颜色，对文件名帧号 N 应是 `(N % 256, ⌊N / 256⌋ % 256, 255)`。至少含一组 N ≥ 256 的（`p5a-shakepar2` 第 941 帧，或 P4 的高帧号抓帧）。
+- **整帧不屏蔽比较**（dev 在跑；`projects_import` 导入，验完 `projects_remove`；宿主重建；vite 侧改动在副本里写好一次拷回）：照 P5a 步骤 3、4 与收尾的做法，按时间线回放到抓到的帧，和 WPE 上屏帧**整帧逐像素比、不挖任何区域**：
+  - 纯抖动 `p5a-shake1`、`shaker2`、`shaker01`、`shaker005`、`shakes3`，缩放 `p5a-zoom15`、`zoom08`、`zoompar`、`zoomx15`、`zoomx08`，逐帧光标 `p5a-shakepar2`（第 941 帧，`cursors: "log"`）：当时挖掉 FR 后是 0 差异，现在应整帧 0 差异；
+  - 有不是 0 的，先确认差异在不在 FR 块里，再查原因，写进记录。
+- **对照（说明比较分得出对错）**：同一组里 `replay.fr: false` 时差异正好落在 FR 块；经 REST 直接给 N − 1 帧的颜色时 FR 块有差。
+- **不留痕迹**：`app_state` 前后一致，没有残留宿主，测试工程已移除。
+
+### 实施记录 / 第 6 批（2026-11-12，子代理实现）
+
+- **新增：**
+  - `apps/wpe-scene/src/dev/scriptValues.ts`：`resolveScriptValues`（纯函数：对象按下标在 `bundle.layers` 里按 `object` 找、按名字找且重名抛错；
+    字段脚本在 `bundle.scripts.list` 里按 `target.kind === "layer"`、同 `object`、同 `field` 找；找不到时 `optional` 记跳过、否则抛错）与
+    `applyScriptValues`（先全部解析、再逐项 `state.write({ property: "", target }, scriptWriteValue(value))`，同 `host.ts` 的 `writeScript`）。
+    单测 `scriptValues.test.ts` 9 条：内存里编译带 FR 颜色脚本的最小场景，用真的 `SceneState` 核对。
+  - MCP `timeline.ts` 的 `frColor(N)`（`gen.py` 的 `FR_COLOR` 的第二份，注释指回去）；`tools.ts` 的 `frScriptValue`、`frLine`、类型 `FrPlan`。
+- **修改：**
+  - 探针 `probe.ts`：`RenderFrameOptions.scriptValues`；建好场景之后（profile 帧与回放之前）写进状态；`RenderFrameResult.scriptValues`。
+  - vite：`replay.ts` 的 `checkScriptValues`（`LAYER_FIELDS`、`MAX_SCRIPT_VALUES = 64`），`checkRenderReplay` 收 `scriptValues`；`scene.ts` 原样转给探针；
+    `types.ts` 的 `SceneLayerField`、`ScriptValue`、`ScriptValueResult`、`RenderRequest.scriptValues`、`RenderMeta.scriptValues`。单测加在
+    `replay.test.ts`、`scene.test.ts`、`rest.test.ts`（各 1 条）。`rest.ts` 不用改：渲染路由把请求体原样交给 `checkRenderReplay` 与后端。
+  - MCP `tools.ts`：`render_scene` / `host_render` 的 `replay` 改成 `RENDER_REPLAY`（两种写法都多一个 `fr`）；`renderBody` 按 N = `dts.length`
+    发一项 `scriptValues`；结果多一行 FR；两个工具的描述。`particles.test.ts`：假 REST 像新探针那样逐项回结果，第 4 批两条断言请求体的用例
+    跟着改（回放时请求体多了 `scriptValues`），新增一组 5 条。
+  - 文档：kabegame-chromium `SKILL.md`（工具表、`replay` 写法、新增「FR 帧号块」一节、REST 表）、kbp-tools `SKILL.md`（FR 协议处记第二份与
+    上屏帧核对结果；`cmp frame` 的 FR / CLK 排除处写明按时间线回放的图不用再为 FR 屏蔽）、`WPE_SCENE.md` 的 `renderFrame` 一行。
+
+和计划不同、或计划没写、由代理按证据定的：
+
+- **`particle_corners` 不收 `fr`。** 它和渲染共用 `REPLAY`，但不渲染，涂 FR 没有意义。拆成 `REPLAY`（四角）与 `RENDER_REPLAY`（渲染，另收
+  `fr`），四角给了 `fr` 由 SDK 参数校验拒绝（有单测）。
+- **重名不论 `optional` 都抛错。** 计划写「按名字，重名报错」；`optional` 管的是「缺」，重名是认不出，不该静默跳过。
+- **按下标找时也要在 `bundle.layers` 里。** 只在 `scripts.list` 里有、图层没进 bundle 的对象，`SceneState.write` 会静默什么都不写，这里按
+  「找不到对象」处理。
+- **结果多一个 `reason`**（只在跳过时），MCP 的结果行把它写出来。
+- **vite 多一道 409**（同第 5 批的 `canvas`）：给了 `scriptValues`、`meta.scriptValues` 却不是逐项的数组时报 409 `[host]`：旧宿主产物不认识
+  这一项、会静默不写。只有单测。
+- **`scriptValues` 不要求有 `particles`**（REST 与探针）：固定时刻的渲染也能写。MCP 只在回放时发 FR。
+- **FR 结果行写 8 位值**：「FR 涂成第 941 帧的颜色 (173, 3, 255) / 255（objects[0]）」，和 WPE 上屏帧的像素值直接对得上。
+- **端到端的光标与缺帧**（P5a 记录没写，按证据定）：步骤 3、4 的 10 组用轨迹里读回那一帧的 `pointer` 作固定 `pointer`，时间线加
+  `gap: "split"`（这些日志多数只刷到第 100 帧，抓帧在 117–132 帧）；`shakepar2` 用 `cursors: "log"`。结果整帧 0 差异，说明和当时的做法一致。
+- **暂存在 `ignore/tools6/stage/`**（理由同第 4、5 批）：根下临时建了指向仓库 `node_modules` 的 junction、拷了 `.mcp.json` 与
+  `scripts/vite-debug-server.ts`（`plugin.ts` 的依赖，`deno check` 要）。拷回用 `ignore/tools6/swap.py`：测试与 MCP 文件普通复制，`types.ts`、
+  `replay.ts`、`scene.ts` 先复制到同卷再 `os.replace`，1.3 ms 换完；之后用 REST 打一个不合法的 `scriptValues` 回 400 `field: "scriptValues"`，
+  确认新校验已生效。用完先 `rmdir` 掉 junction、确认仓库依赖还在，再核对副本与仓库逐字节相同后删掉暂存。
+
+验收结果（子代理自测；脚本与输出在 `ignore/tools6/`）：
+
+| 项 | 结果 |
+|---|---|
+| 单测 | `scripts/kabegame-dev/` 26 组 116 步（本批加 3 步）、`apps/kabegame-dev-mcp/` 21 组 74 步（本批加 1 组 5 步，改 2 条旧断言），`apps/wpe-scene` vitest 67 个文件 1560 条通过、45 条跳过（本批加 1 个文件 9 条；工作区里另有 P5b 会话没提交的改动与测试，一并跑过） |
+| 检查 | `deno check apps/kabegame-dev-mcp/src/*.ts scripts/kabegame-dev/*.ts` 通过；宿主 `tsc --noEmit` 通过；Prettier（`--ignore-path .prettierignore --check`，本批 12 个 TS 文件）通过；`deno.lock` 没变 |
+| 宿主产物 | `--mode development` 重建：`index-CwAz3KBM.js` / `worker-4CYl8sgH.js`（01:41 别的会话建的）→ `index-DXZMaZLe.js` / `worker-Bv_m5Kmy.js`；wasm 哈希 `8ed07a4d…` 不变（`src/wpesl2wgsl/wpesl2wgsl.wasm` 01:37 已被别的会话更新，01:41 那次就带着）。产物含 P5b 会话在 `apps/wpe-scene` 里没提交的改动 |
+| 公式与帧号（`fr_decode.py`，结果 `fr-decode.txt`） | 扫已有 WPE 上屏帧 85 张：正交工程里 FR 块看得到的 **61 张，解出的 (R, G, 255) 全部等于文件名帧号 N 的 (N % 256, ⌊N / 256⌋ % 256, 255)**，相邻帧（N ± 1）的颜色一个像素都没有；其中 N ≥ 256 的 16 张（`p5a-cur3` 491–494、`p5a-shakepar2` 938–941、`p5a-wk-prop` 345–787）。抖动、缩放下块会移动：按颜色找，不按位置，包围盒随抖动平移（如 `shakes3` 三帧 x 1780 / 1777 / 1775）、`zoom08` / `zoomx08` 缩成 64×48。另 12 张 P5a 的块在画面外（`shaker2`、`zoom15`、`zoompar`、`zoomx15` 各 3 张），12 张是 P5b 会话的透视工程（`p5b-persp*`），FR 不是正交下的块，不适用。`p5a-cur3` 的块里有 8 个像素被跟随粒子盖住（4792 / 4800），颜色照样对 |
+| 整帧不屏蔽比较（`e2e6.mjs` 经另起的 stdio MCP 调 `render_scene`，`cmp6.py`，结果 `cmp6.txt`） | **11 组全部整帧 0 差异**，不挖任何区域：`shake1` f182、`shaker2` f122、`shaker01` f122、`shaker005` f120、`shakes3` f124、`zoom15` f132、`zoom08` f124、`zoompar` f122、`zoomx15` f119、`zoomx08` f120、`shakepar2` f941，差 > 0 的像素都是 0。FR 块在画面里的 7 组，我们图里帧号色的像素数与包围盒和 WPE 逐一相同（如 `shakepar2` 4800 像素 x 1791–1870 y 1010–1069，`zoom08` 3072 像素）；另 4 组 FR 在画面外，0 差异不涉及 FR。结果行都是「FR 涂成第 N 帧的颜色 …（objects[0]）」 |
+| 对照 1：`replay.fr: false` | `shake1` 差 4800 像素、最大 182，`shakepar2` 4800 像素、最大 173，`zoom08` 3072 像素、最大 124：差异的连通块正好是 WPE 图里帧号色的包围盒，块外有差 0；最大差就是初值 `0 0 1` 与 N % 256 的红通道之差。结果行「FR：没涂（replay.fr: false）」，请求体没有 `scriptValues` |
+| 对照 2：经 REST 给 N − 1 帧的颜色（`rest6.ts`，直接用 `client.ts`、自己开关屏外宿主） | 三组 FR 块全部有差（4800 / 4800 / 3072 像素，最大差 1），图里是第 N − 1 帧的颜色；同组给 N 帧的颜色时和 MCP 的 PNG 逐像素相同 |
+| 报错路径（经 REST，真宿主） | 不存在的对象不带 `optional` → 422 `[host]`「scriptValues[0]：没有叫 "kbp-FR" 的图层」；`CLK` 的 `color`（没挂字段脚本）→ 422「objects[1]（CLK）的 color 没有挂字段脚本」；带 `optional` 时 `applied: false`、`reason` 写明 |
+| 不留痕迹 | 导入的 11 个工程（14330–14340，导入前都不在库里）已 `projects_remove`，`imagesGone` / `tasksGone` 为真。渲染那一轮 `app_state`、`hosts` 前后逐字相同；最后只剩应用背景的宿主 13635 |
+
+端到端期间别的会话在用同一个 dev：
+- app 在 01:40 到 02:03 之间重启过（CDP 端口 41122 / pid 338184 → 6730 / pid 23904），不是本批做的（vite 重启不重启 app）；
+- 有一个 P5b 的画面哈希任务和它的屏外宿主（13513），还开过 13658 的预览；路由在本批端到端开始之前已被改成 `hide/media-type/x-wpe/scene/…`；
+- 所以「前后一致」按本批自己每一轮的前后比，不和 01:40 的快照比。
+
+**没做 / 没在真环境验的：**
+- 旧宿主产物不认识 `scriptValues` 时的 409：只有单测。
+- `host_render` 带 `replay.fr` 只有单测（`render_scene` 走同一个 `renderBody`）；REST 那条路用的是 `client.hostRender`。
+- 本会话里的 kabegame-dev MCP 是旧代码，要 `/mcp` 重连才有 `fr`。
+- `versions/latest` 的 changelog / regression 没加：按约束只改规格列出的文件。
+
+Claude 独立验收（2026-11-12；不采信自报，脚本与输出在 `ignore/tools6/claude/`：`fr_wpe.py`、自写 stdio MCP 客户端 `e2e.ts`、`cmp.py`）：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 本批是 `dev/probe.ts`、新增 `dev/scriptValues.ts`（+ 测试）、vite 三个文件与测试、MCP `timeline.ts` / `tools.ts` / `particles.test.ts`、三份文档与本计划；`apps/wpe-scene` 里 `bundle.ts`、`features.ts`、`graph.ts`、`scene.ts` 与一批测试是 P5b 会话的，不在本批 |
+| 代码 | 探针按字段脚本的绑定目标经 `state.write({ property: "", target }, scriptWriteValue(value))` 写，同 `host.ts` 的 `writeScript`；MCP 按 N = `dts.length` 发一项 `optional` 的 FR |
+| 单测、检查 | 自跑：vite 26 组 116 步、MCP 21 组 74 步全过；宿主 `src/dev/` 48 条全过；`deno check`、宿主 tsc、Prettier（12 个 TS 文件）通过 |
+| 变异 | MCP `frColor` 改成第 N − 1 帧：`particles.test.ts` 失败；恢复后与改前相同 |
+| 公式与帧号（只读 WPE 上屏帧，`fr_wpe.py`） | `ignore/` 下 154 张 kbp 工程上屏帧：122 张里第 N 帧颜色是实心矩形、N ± 1 的颜色 0 像素，其中 41 张 N ≥ 256（P4 的 719–957 帧、`shakepar2` 938–941、`wk-prop` 345–787）；块大小 80×60、抖动下 80×59、缩放 0.8 下 64×48。其余：FR 在画面外的 `shaker2`、`zoom15`、`zoompar`、`zoomx15` 和透视工程找不到（透视工程里匹配到的是一条横向渐变，相邻帧号的颜色挨着出现，不是 FR）；`p5a-cur3` 四帧 4800 个像素里 4792 个对（这个工程有跟光标走的粒子） |
+| 整帧不挖比较（新 MCP `render_scene`，时间线到轨迹最后一帧、`gap: "split"`、指针取轨迹那一帧的 `pointer`；`shakepar2` 第 941 帧 `cursors: "log"`） | 11 组全部 **0 差异**：`shake1` f182、`shaker2` f122、`shaker01` f122、`shaker005` f120、`shakes3` f124、`zoom15` f132、`zoom08` f124、`zoompar` f122、`zoomx15` f119、`zoomx08` f120、`shakepar2` f941。FR 在画面里的 7 组，我们的 FR 块包围盒和 WPE 的逐个相同（如 `shake1` (1790, 1006)–(1870, 1066)、`zoom08` 64×48 的 (1616, 916)–(1680, 964)） |
+| 对照 | `shake1` 加 `replay.fr: false`：差异 4800 像素（最大 182），范围正好等于 WPE 的 FR 块；经 REST 给第 181 帧颜色：同样 4800 像素、最大差 1、范围等于 FR 块；给第 182 帧颜色和 MCP 渲染逐像素相同 |
+| 结果说明 | 11 组都写「FR 涂成第 N 帧的颜色 (…) / 255（objects[0]）」，`fr: false` 写「没涂（replay.fr: false）」 |
+| 不留痕迹 | 11 个测试工程（14342–14352）`projects_remove` 后 `imagesGone` / `tasksGone` 为真；`app_state` 与宿主列表前后逐字相同（只剩应用背景 13635） |
+
+宿主产物里带着 P5b 会话在 `apps/wpe-scene` 未提交的改动（子代理重建时就在），不影响上面的结论：比较对象是 WPE 抓帧，结果为 0 差异。本会话的 kabegame-dev MCP 要 `/mcp` 重连才有 `replay.fr`。

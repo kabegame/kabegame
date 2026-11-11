@@ -40,6 +40,7 @@ import type {
   ProjectManifest,
   RenderMeta,
   RenderResponse,
+  ScriptValue,
   ShowWindowResult,
   WindowFrontState,
 } from "./client.ts";
@@ -48,7 +49,7 @@ import type { ImageOutputOptions } from "./imageOutput.ts";
 import { LEVELS, formatMark, markNow, parseMark, readSince, readTail } from "./appLog.ts";
 import { compareBaselines, formatCompare, loadBaseline } from "./hashCompare.ts";
 import { formatStatus, probeStatus } from "./status.ts";
-import { TimelineError, buildTimeline, describeTimeline, frameRanges } from "./timeline.ts";
+import { TimelineError, buildTimeline, describeTimeline, frColor, frameRanges } from "./timeline.ts";
 import type { Timeline, TimelineSource } from "./timeline.ts";
 
 export type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
@@ -327,38 +328,41 @@ const TIMELINE = z
   .describe(
     "按 WPE 日志与 RenderDoc 轨迹组时间线：第 f 帧 dt = 日志累计时间第 f 项减第 f − 1 项（6 位小数），g_Time 取日志累计时间；抓到的帧换成轨迹的 dt 与 g_Time",
   );
-const REPLAY = z
-  .union([
-    z
-      .object({
-        timeline: TIMELINE,
-        seed: SEED.optional(),
-        passes: PASSES.optional().describe(
-          "operator 遍数；缺省按标签里的 fps<N> 推（1–20 两遍，否则一遍），推不出就 1",
-        ),
-        random: RANDOM.optional(),
-      })
-      .strict(),
-    z
-      .object({
-        particles: z
-          .object({
-            dts: z
-              .array(z.number().positive())
-              .min(1)
-              .describe("每帧 g_Frametime，dts[0] 是第 1 帧，最后一帧是读回的那一帧"),
-            times: z.array(z.number()).optional().describe("每帧 g_Time，和 dts 等长；不给时按 dts 累加"),
-            seed: SEED.optional(),
-            passes: PASSES.optional().describe("缺省 1"),
-            random: RANDOM.optional(),
-          })
-          .strict(),
-      })
-      .strict(),
-  ])
+const TIMELINE_REPLAY = z.object({
+  timeline: TIMELINE,
+  seed: SEED.optional(),
+  passes: PASSES.optional().describe("operator 遍数；缺省按标签里的 fps<N> 推（1–20 两遍，否则一遍），推不出就 1"),
+  random: RANDOM.optional(),
+});
+const PARTICLES_REPLAY = z.object({
+  particles: z
+    .object({
+      dts: z.array(z.number().positive()).min(1).describe("每帧 g_Frametime，dts[0] 是第 1 帧，最后一帧是读回的那一帧"),
+      times: z.array(z.number()).optional().describe("每帧 g_Time，和 dts 等长；不给时按 dts 累加"),
+      seed: SEED.optional(),
+      passes: PASSES.optional().describe("缺省 1"),
+      random: RANDOM.optional(),
+    })
+    .strict(),
+});
+const REPLAY_TEXT =
+  "确定性粒子回放：{ timeline, seed?, passes?, random? }（按 WPE 的一次抓帧组时间线，常用），或 { particles: { dts, times?, seed?, passes?, random? } }（直接给探针）。" +
+  "给了就不收 time：读回那一帧的 g_Time 取时间线（或 times）的末项";
+/** `particle_corners` 的回放：不渲染，没有 `fr`。 */
+const REPLAY = z.union([TIMELINE_REPLAY.strict(), PARTICLES_REPLAY.strict()]).describe(REPLAY_TEXT);
+/** FR 帧号块（第 6 批）：只有渲染的两种回放写法收。 */
+const FR = z
+  .boolean()
+  .optional()
   .describe(
-    "确定性粒子回放：{ timeline, seed?, passes?, random? }（按 WPE 的一次抓帧组时间线，常用），或 { particles: { dts, times?, seed?, passes?, random? } }（直接给探针）。" +
-      "给了就不收 time：读回那一帧的 g_Time 取时间线（或 times）的末项",
+    "把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色 ((N % 256) / 255, (⌊N / 256⌋ % 256) / 255, 1)，" +
+      "同 WPE 里它的颜色脚本（探针不跑脚本，否则 FR 停在初值 0 0 1）；缺省 true。场景里没有挂颜色脚本的 FR 时跳过、不报错，结果里写一行涂了没有",
+  );
+/** `render_scene` / `host_render` 的回放：另收 `fr`。 */
+const RENDER_REPLAY = z
+  .union([TIMELINE_REPLAY.extend({ fr: FR }).strict(), PARTICLES_REPLAY.extend({ fr: FR }).strict()])
+  .describe(
+    `${REPLAY_TEXT}。fr（缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色，和 WPE 抓帧比时不用再屏蔽它`,
   );
 /** 读回画布的边长上限，同 vite 的 `MAX_CANVAS`。 */
 const MAX_CANVAS = 16384;
@@ -380,7 +384,7 @@ const RENDER_FIELDS = {
     "固定的 g_PointerPosition（窗口归一化坐标），也推出控制点跟随指针的光标，预热、回放的每一帧和读回那一帧都用它；缺省 [0.5, 0.5]。" +
       "抓帧期间光标在动时改用 replay.timeline 的 cursors（不能同给）",
   ),
-  replay: REPLAY.optional(),
+  replay: RENDER_REPLAY.optional(),
   canvas: CANVAS.optional(),
 };
 const OUT = z.string().describe("结果写到这个文件（相对路径按仓库根）");
@@ -391,6 +395,7 @@ const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
 // ---------------------------------------------------------------- 粒子回放（第 4 批）
 
 type ReplayArg = z.infer<typeof REPLAY>;
+type RenderReplayArg = z.infer<typeof RENDER_REPLAY>;
 type TimelineArg = z.infer<typeof TIMELINE>;
 
 /** 时间线：读文件、组 dts / times / 光标；出错报 `[timeline]`。 */
@@ -592,6 +597,29 @@ export function readbackLines(
     );
   }
   return lines;
+}
+
+/** FR 帧号块的处理（第 6 批）：回放到第 `frame` 帧时涂成那一帧的颜色；`false` 是 `replay.fr: false`；没有回放时为 null（不发、不写行）。 */
+export type FrPlan = { frame: number } | false | null;
+
+/**
+ * 交给探针的 FR 脚本值（第 6 批）：回放到第 N 帧（N = `dts.length`）时 `{ object: "FR", field: "color", value: frColor(N), optional: true }`。
+ * `optional`：不是 kbp 测试工程（没有叫 FR 的图层，或 FR 的颜色没挂脚本）时探针跳过，不影响别的场景。`fr: false` 时 null。
+ */
+export function frScriptValue(fr: boolean | undefined, frame: number): ScriptValue | null {
+  if (fr === false) return null;
+  return { object: "FR", field: "color", value: frColor(frame), optional: true };
+}
+
+/** 结果里写一行 FR 涂了没有；探针逐项结果的第 0 项就是 FR（MCP 只发这一项）。 */
+export function frLine(fr: FrPlan, meta: Pick<RenderMeta, "scriptValues">): string | null {
+  if (fr === null) return null;
+  if (fr === false) return "FR：没涂（replay.fr: false）";
+  const item = meta.scriptValues?.[0];
+  if (!item) return "FR：宿主没回 scriptValues，涂没涂不知道（宿主产物要重建）";
+  if (!item.applied) return `FR：场景里没有挂颜色脚本的 FR，没涂（${item.reason ?? "探针跳过"}）`;
+  const n = fr.frame;
+  return `FR 涂成第 ${n} 帧的颜色 (${n % 256}, ${Math.floor(n / 256) % 256}, 255) / 255（objects[${item.object}]）`;
 }
 
 /** 渲染元数据里的粒子数（探针 `particleStats`）。 */
@@ -919,6 +947,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       /** 请求的读回画布（第 5 批）与时间线推出的窗口：结果里写明读回的是什么，没给 canvas 时按窗口提示。 */
       canvas?: [number, number];
       timelineWindow?: readonly [number, number] | null;
+      /** FR 帧号块（第 6 批）：结果里写一行涂了没有。 */
+      fr?: FrPlan;
     },
     lead: string[] = [],
   ) =>
@@ -933,6 +963,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       lead: [
         ...lead,
         ...readbackLines(response.meta, options.canvas, options.timelineWindow),
+        frLine(options.fr ?? null, response.meta) ?? "",
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
         `读回那一帧 g_Time ${response.meta.time}，g_Frametime ${response.meta.frametime}`,
         particleStatsLine(response.meta) ?? "",
@@ -944,10 +975,14 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
    * 渲染参数：`replay` 与 `time` 互斥；`replay` 换成探针的 `particles`，时间线的逐帧光标换成探针的 `pointers`（连同 `window`，
    * 和固定的 `pointer` 互斥），并回时间线说明。读回画布 `canvas`（第 5 批）原样转，和交给探针的窗口不同时报 `[local]`；
    * `timelineWindow` 是时间线推出的窗口（不论交没交给探针），结果里按它提示 `canvas`。
+   * FR 帧号块（第 6 批）：回放时缺省（`replay.fr` 不是 false）按读回帧号 N = `dts.length` 发一项 `scriptValues`（`frScriptValue`），
+   * 两种回放写法都发；`fr` 是返回给结果说明用的。
    */
   const renderBody = (imageId: string, render: Args<typeof RENDER_FIELDS>) => {
     const { replay, ...rest } = render;
-    if (!replay) return { body: { imageId, ...rest }, lines: [] as string[], timelineWindow: null };
+    if (!replay) {
+      return { body: { imageId, ...rest }, lines: [] as string[], timelineWindow: null, fr: null as FrPlan };
+    }
     if (rest.time !== undefined) {
       throw new ToolError(
         "local",
@@ -964,6 +999,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
     }
     const resolved = resolveReplay(root, replay);
     checkCanvasWindow(rest.canvas, resolved.window);
+    const frame = resolved.particles.dts.length;
+    const fr = frScriptValue((replay as RenderReplayArg).fr, frame);
     return {
       body: {
         imageId,
@@ -971,9 +1008,11 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         particles: resolved.particles,
         ...(resolved.pointers ? { pointers: resolved.pointers } : {}),
         ...(resolved.window ? { window: resolved.window } : {}),
+        ...(fr ? { scriptValues: [fr] } : {}),
       },
       lines: resolved.lines,
       timelineWindow: resolved.timeline?.window ?? null,
+      fr: (fr ? { frame } : false) as FrPlan,
     };
   };
 
@@ -1012,7 +1051,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       title: "宿主里渲染一帧",
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
-        "replay、canvas 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回；给 canvas 时读回按 fill 上屏到这么大的画布。",
+        "replay、canvas 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
+        "给 canvas 时读回按 fill 上屏到这么大的画布。",
       inputSchema: {
         handle: z.string().min(1),
         imageId: IMAGE_ID,
@@ -1024,11 +1064,11 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ handle, imageId, save, size, inline, ...render }) => {
-      const { body, lines, timelineWindow } = renderBody(imageId, render);
+      const { body, lines, timelineWindow, fr } = renderBody(imageId, render);
       const response = await client.hostRender(handle, body);
       return renderResult(
         response,
-        { tool: "host_render", imageId, save, size, inline, canvas: render.canvas, timelineWindow },
+        { tool: "host_render", imageId, save, size, inline, canvas: render.canvas, timelineWindow, fr },
         lines,
       );
     },
@@ -1118,6 +1158,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "探针第 i 帧用第 i 帧的光标、读回帧的 g_PointerPositionLast 是上一帧的，窗口和场景不同尺寸时按 fill 换到场景上；不给时光标固定为 pointer（不能同给）。" +
         "不给 canvas 时读回场景目标（场景分辨率）；给 canvas: [宽, 高] 时用产品上屏的同一份着色器按 fill 铺进这么大的画布再读回，" +
         "和 WPE 抓帧比时传抓帧窗口的尺寸（要和时间线交给探针的窗口相同），比较前不用再缩放；只改读回、不改渲染。" +
+        "回放时探针不跑场景脚本，replay.fr（缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色，" +
+        "同 WPE 里它的颜色脚本，比较时不用再屏蔽 FR；不是 kbp 工程（没有挂颜色脚本的 FR）时跳过，结果里写一行涂了没有。" +
         "工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,
@@ -1130,13 +1172,13 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ imageId, host, save, size, inline, ...render }) => {
-      const { body, lines, timelineWindow } = renderBody(imageId, render);
+      const { body, lines, timelineWindow, fr } = renderBody(imageId, render);
       const { value: response, hostLine } = await withSceneHost(imageId, host, (handle) =>
         client.hostRender(handle, body),
       );
       return renderResult(
         response,
-        { tool: "render_scene", imageId, save, size, inline, canvas: render.canvas, timelineWindow },
+        { tool: "render_scene", imageId, save, size, inline, canvas: render.canvas, timelineWindow, fr },
         [hostLine, ...lines],
       );
     },

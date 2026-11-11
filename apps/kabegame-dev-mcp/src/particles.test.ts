@@ -9,7 +9,8 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { createClient } from "./client.ts";
 import { createDevMcpServer } from "./main.ts";
-import { readbackLines, summarizeCorners } from "./tools.ts";
+import { frLine, frScriptValue, readbackLines, summarizeCorners } from "./tools.ts";
+import { frColor } from "./timeline.ts";
 import type { DevMcpDeps } from "./tools.ts";
 import { Client, InMemoryTransport } from "./testdata/sdkClient.ts";
 import { PNG, fakeRest, sendJson } from "./testdata/fakeRest.ts";
@@ -56,8 +57,25 @@ const handler: Handler = (req, body, res) => {
   if (req.method === "DELETE") return sendJson(res, 200, { handle: "h-1", previewHostsLeft: 0 });
   if (url.endsWith("/render")) {
     // 读回画布（第 5 批）：给了 canvas 时像新探针那样按它回尺寸
-    const canvas = (body as { canvas?: [number, number] }).canvas;
-    const meta = canvas ? { ...META, width: canvas[0], height: canvas[1], canvas, sceneTarget: [3840, 2160] } : META;
+    const { canvas, scriptValues, imageId } = body as {
+      canvas?: [number, number];
+      scriptValues?: Array<Record<string, unknown>>;
+      imageId?: string;
+    };
+    let meta: Record<string, unknown> = canvas
+      ? { ...META, width: canvas[0], height: canvas[1], canvas, sceneTarget: [3840, 2160] }
+      : META;
+    // 脚本值（第 6 批）：像新探针那样逐项回结果；图片 8 当作不是 kbp 工程（没有 FR，optional 跳过）
+    if (scriptValues) {
+      meta = {
+        ...meta,
+        scriptValues: scriptValues.map((v) =>
+          imageId === "8"
+            ? { ...v, object: null, name: null, applied: false, reason: '没有叫 "FR" 的图层' }
+            : { ...v, object: 0, name: "FR", applied: true },
+        ),
+      };
+    }
     return sendJson(res, 200, { meta, png: Buffer.from(PNG).toString("base64"), pngSha256: "file", pngBytes: 1 });
   }
   if (url.endsWith("/particle-track")) {
@@ -199,8 +217,8 @@ describe("粒子回放", () => {
         passes: 1,
         seed: 3,
       });
-      // 没给逐帧光标：请求体和以前一样，不带 pointers / window
-      assert.deepEqual(Object.keys(body).sort(), ["imageId", "particles"]);
+      // 没给逐帧光标：请求体不带 pointers / window；回放缺省涂 FR（第 6 批）
+      assert.deepEqual(Object.keys(body).sort(), ["imageId", "particles", "scriptValues"]);
       const text = textOf(result);
       assert.match(text, /时间线：回放 5 帧（第 1–5 帧）；抓到的帧 4–5（dt、g_Time 取轨迹的）；没有平分的帧/);
       assert.match(text, /passes 1（标签 p4c-cp-fps60 的 fps60/);
@@ -226,7 +244,13 @@ describe("粒子回放", () => {
       const particles = { dts: [0.1, 0.2], times: [0.1, 0.3], seed: 2, passes: 2, random: { "3": [0.5] } };
       const direct = await call("host_render", { handle: "h-7", imageId: "9", replay: { particles } });
       assert.notEqual(direct.isError, true, textOf(direct));
-      assert.deepEqual(bodiesOf(rest, "/hosts/h-7/render"), [{ imageId: "9", particles }]);
+      assert.deepEqual(bodiesOf(rest, "/hosts/h-7/render"), [
+        {
+          imageId: "9",
+          particles,
+          scriptValues: [{ object: "FR", field: "color", value: [2 / 255, 0, 1], optional: true }],
+        },
+      ]);
       assert.match(textOf(direct), /回放：直接给的 2 帧 dt（带 times）；seed 2；passes 2；random 顶替 3 号对象的 R/);
       assert.equal(rest.seen.filter((r) => r.method === "POST" && r.path.endsWith("/hosts")).length, 4);
     });
@@ -386,6 +410,102 @@ describe("读回画布（第 5 批）", () => {
         [1920, 1080],
       ).length,
       1,
+    );
+  });
+});
+
+describe("FR 帧号块（第 6 批）", () => {
+  const fr = (frame: number) => ({ object: "FR", field: "color", value: frColor(frame), optional: true });
+
+  test("frColor：同 gen.py 的 FR_COLOR（N = 1、255、256、941、65535、65536），8 位值就是 (N % 256, ⌊N / 256⌋ % 256, 255)", () => {
+    assert.deepEqual(frColor(1), [1 / 255, 0, 1]);
+    assert.deepEqual(frColor(255), [1, 0, 1]);
+    assert.deepEqual(frColor(256), [0, 1 / 255, 1]);
+    assert.deepEqual(frColor(941), [173 / 255, 3 / 255, 1]);
+    for (const [n, rgb] of [
+      [1, [1, 0, 255]],
+      [255, [255, 0, 255]],
+      [256, [0, 1, 255]],
+      [941, [173, 3, 255]],
+      [65535, [255, 255, 255]],
+      [65536, [0, 0, 255]],
+    ] as const) {
+      assert.deepEqual(
+        frColor(n).map((v) => Math.round(Math.fround(v) * 255)),
+        rgb,
+        `第 ${n} 帧`,
+      );
+    }
+  });
+
+  test("回放缺省涂 FR：两种回放写法都发，N = 回放的帧数；结果写一行涂成什么", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const timeline = await call("render_scene", { imageId: "9", replay: { timeline: TIMELINE } });
+      assert.notEqual(timeline.isError, true, textOf(timeline));
+      assert.deepEqual(bodiesOf(rest, "/render")[0].scriptValues, [fr(5)]);
+      assert.match(textOf(timeline), /FR 涂成第 5 帧的颜色 \(5, 0, 255\) \/ 255（objects\[0\]）/);
+
+      const dts = Array(941).fill(1 / 60);
+      const direct = await call("host_render", { handle: "h-7", imageId: "9", replay: { particles: { dts } } });
+      assert.notEqual(direct.isError, true, textOf(direct));
+      assert.deepEqual(bodiesOf(rest, "/hosts/h-7/render")[0].scriptValues, [fr(941)]);
+      assert.match(textOf(direct), /FR 涂成第 941 帧的颜色 \(173, 3, 255\) \/ 255（objects\[0\]）/);
+
+      // fr: true 同缺省；时间线回放到第 3 帧（frame 截短）
+      await call("render_scene", { imageId: "9", replay: { timeline: { ...TIMELINE, frame: 3 }, fr: true } });
+      assert.deepEqual(bodiesOf(rest, "/render").at(-1)!.scriptValues, [fr(3)]);
+    });
+  });
+
+  test("replay.fr: false 不发、结果写明没涂；不给 replay 时不发、不写这一行", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const off = await call("render_scene", { imageId: "9", replay: { timeline: TIMELINE, fr: false } });
+      assert.notEqual(off.isError, true, textOf(off));
+      assert.equal("scriptValues" in bodiesOf(rest, "/render")[0], false);
+      assert.match(textOf(off), /FR：没涂（replay\.fr: false）/);
+      const offDirect = await call("host_render", {
+        handle: "h-7",
+        imageId: "9",
+        replay: { particles: { dts: [0.1] }, fr: false },
+      });
+      assert.equal("scriptValues" in bodiesOf(rest, "/hosts/h-7/render")[0], false);
+      assert.match(textOf(offDirect), /FR：没涂/);
+
+      const plain = await call("render_scene", { imageId: "9", time: 2 });
+      assert.deepEqual(bodiesOf(rest, "/render").at(-1), { imageId: "9", time: 2 });
+      assert.doesNotMatch(textOf(plain), /FR/);
+    });
+  });
+
+  test("不是 kbp 工程：探针跳过，结果写明没涂；particle_corners 不收 fr", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const skipped = await call("render_scene", { imageId: "8", replay: { timeline: TIMELINE } });
+      assert.notEqual(skipped.isError, true, textOf(skipped));
+      assert.match(textOf(skipped), /FR：场景里没有挂颜色脚本的 FR，没涂（没有叫 "FR" 的图层）/);
+      const before = rest.seen.length;
+      const corners = await call("particle_corners", {
+        imageId: "9",
+        replay: { timeline: TIMELINE, fr: false },
+        out: "c.json",
+      });
+      assert.equal(corners.isError, true, "四角不渲染，replay 里没有 fr，SDK 参数校验拒绝");
+      assert.equal(rest.seen.length, before);
+    });
+  });
+
+  test("frScriptValue / frLine：fr 为 false 时不发；宿主没回 scriptValues 时说明", () => {
+    assert.equal(frScriptValue(false, 9), null);
+    assert.deepEqual(frScriptValue(undefined, 9), fr(9));
+    assert.deepEqual(frScriptValue(true, 256), fr(256));
+    assert.equal(frLine(null, {}), null);
+    assert.equal(frLine(false, {}), "FR：没涂（replay.fr: false）");
+    assert.match(frLine({ frame: 4 }, {})!, /宿主没回 scriptValues/);
+    assert.equal(
+      frLine(
+        { frame: 941 },
+        { scriptValues: [{ object: 0, name: "FR", field: "color", value: frColor(941), applied: true }] },
+      ),
+      "FR 涂成第 941 帧的颜色 (173, 3, 255) / 255（objects[0]）",
     );
   });
 });

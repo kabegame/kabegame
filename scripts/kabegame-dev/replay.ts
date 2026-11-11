@@ -11,12 +11,35 @@
  *   一起给（只用来把光标换到场景上）。
  * - 读回画布（第 5 批）：渲染的 `canvas` 是 `[宽, 高]` 两个正整数、各不超过 `MAX_CANVAS`；探针的光标换算窗口是 `window ?? canvas`，
  *   两个都给而不相等时 400（`field` 为 `canvas`）。
+ * - 脚本值（第 6 批）：渲染的 `scriptValues` 是数组、最多 `MAX_SCRIPT_VALUES` 项；每项 `object` 是非负整数或非空字符串，`field` 是
+ *   图层字段之一，`value` 是 1–4 个有限数或布尔，`optional` 是布尔。
  * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
  */
 import { badRequest } from "./errors.ts";
-import type { ParticleCornersRequest, ParticleReplay, ParticleTrackRequest, ScenePostprocess } from "./types.ts";
+import type {
+  ParticleCornersRequest,
+  ParticleReplay,
+  ParticleTrackRequest,
+  SceneLayerField,
+  ScenePostprocess,
+  ScriptValue,
+} from "./types.ts";
 
 export const POSTPROCESS_LEVELS: readonly ScenePostprocess[] = ["disabled", "enabled", "ultra", "follow"];
+/** 图层字段（探针 `scriptValues.ts` 的 `SCRIPT_VALUE_FIELDS`，即 `LayerField`）。 */
+export const LAYER_FIELDS: readonly SceneLayerField[] = [
+  "origin",
+  "scale",
+  "angles",
+  "alpha",
+  "color",
+  "brightness",
+  "visible",
+  "parallaxDepth",
+];
+export const SCRIPT_VALUE_FIELDS = ["object", "field", "value", "optional"] as const;
+/** 渲染一次最多给这么多项脚本值。 */
+export const MAX_SCRIPT_VALUES = 64;
 export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random"] as const;
 export const TRACK_FIELDS = [
   "imageId",
@@ -267,11 +290,45 @@ export function checkPostprocess(value: unknown, field = "postprocess"): ScenePo
 }
 
 /**
+ * 脚本值（第 6 批）：数组、最多 `MAX_SCRIPT_VALUES` 项；每项只收 `object`（非负整数或非空字符串）、`field`（图层字段之一）、`value`
+ * （1–4 个有限数或布尔）、`optional`（布尔）。对象找不找得到、字段有没有挂脚本要编译之后才知道，由探针判（重名、缺且不 `optional`
+ * 时探针报错，回 422）。
+ */
+export function checkScriptValues(value: unknown, field = "scriptValues"): ScriptValue[] {
+  if (!Array.isArray(value)) fail(field, `要是 [{ object, field, value, optional? }, …]，收到 ${shown(value)}`);
+  if (value.length > MAX_SCRIPT_VALUES) fail(field, `有 ${value.length} 项，最多 ${MAX_SCRIPT_VALUES} 项`);
+  value.forEach((item, i) => {
+    const at = `${field}[${i}]`;
+    if (!isObject(item)) fail(at, `要是 { object, field, value, optional? }，收到 ${shown(item)}`);
+    rejectUnknown(item, SCRIPT_VALUE_FIELDS, at);
+    const object = item.object;
+    const objectOk =
+      (typeof object === "number" && Number.isInteger(object) && object >= 0) ||
+      (typeof object === "string" && object.length > 0);
+    if (!objectOk) fail(`${at}.object`, `要是 objects 下标（非负整数）或对象名（非空字符串），收到 ${shown(object)}`);
+    if (!LAYER_FIELDS.includes(item.field as SceneLayerField)) {
+      fail(`${at}.field`, `只能是 ${LAYER_FIELDS.join(" / ")}，收到 ${shown(item.field)}`);
+    }
+    const v = item.value;
+    if (typeof v !== "boolean") {
+      if (!Array.isArray(v) || v.length < 1 || v.length > 4) {
+        fail(`${at}.value`, `要是 1–4 个有限数，或布尔，收到 ${shown(v)}`);
+      }
+      numberArray(v, `${at}.value`, Number.isFinite, "有限数");
+    }
+    if (item.optional !== undefined && typeof item.optional !== "boolean") {
+      fail(`${at}.optional`, `要是布尔值，收到 ${shown(item.optional)}`);
+    }
+  });
+  return value as ScriptValue[];
+}
+
+/**
  * 渲染请求里的回放：给了 `particles` 就校验它，并拒绝同时给 `time`（探针此时忽略 `time`，读回那一帧的 `g_Time` 取
  * `particles.times` 的末项或 dt 累计值）。没给时原样返回 undefined。
  * 光标一并校验（P5a 收尾）：`pointer` 是一个点；`pointers` 要有 `particles`、和 `particles.dts` 等长、不和 `pointer` 同给；`window` 是
- * `[宽, 高]`。读回画布 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。校验过的值原样留在请求里
- * 转给探针。
+ * `[宽, 高]`。读回画布 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。脚本值 `scriptValues`（第 6 批）
+ * 见 `checkScriptValues`，不要求有 `particles`。校验过的值原样留在请求里转给探针。
  */
 export function checkRenderReplay(body: {
   particles?: unknown;
@@ -280,6 +337,7 @@ export function checkRenderReplay(body: {
   pointers?: unknown;
   window?: unknown;
   canvas?: unknown;
+  scriptValues?: unknown;
 }): ParticleReplay | undefined {
   const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
   if (particles && body.time !== undefined) {
@@ -297,5 +355,6 @@ export function checkRenderReplay(body: {
   }
   const window = body.window === undefined ? undefined : checkWindow(body.window);
   if (body.canvas !== undefined) checkCanvas(body.canvas, window);
+  if (body.scriptValues !== undefined) checkScriptValues(body.scriptValues);
   return particles;
 }

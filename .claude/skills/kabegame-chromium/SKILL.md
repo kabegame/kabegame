@@ -74,9 +74,9 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay`、`canvas` 同 `render_scene`） | 要 | 桌面 |
 | `projects_remove` | 按清单移除测试工程（只 `batch_remove_images`） | 要 | 桌面 |
 | `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
-| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」）。不给 `canvas` 时读回场景目标（场景分辨率）；给 `canvas: [宽, 高]` 时按 `fill` 上屏到这么大的画布再读回（见下方「读回画布」） | 要 | 桌面 |
+| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」），kbp 测试工程的 FR 帧号块缺省涂成读回那一帧的颜色（`replay.fr`，见下方「FR 帧号块」）。不给 `canvas` 时读回场景目标（场景分辨率）；给 `canvas: [宽, 高]` 时按 `fill` 上屏到这么大的画布再读回（见下方「读回画布」） | 要 | 桌面 |
 | `particle_track` | 按 WPE 的一次抓帧回放粒子模拟器，在 `frames`（缺省为抓到的帧）输出和 `rd-*.json` 同格式的轨迹，写 `out`；回摘要（每帧每系统的粒子数、位置范围、时间线信息） | 要 | 桌面 |
-| `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层画不画、写进顶点的粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene` | 要 | 桌面 |
+| `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层画不画、写进顶点的粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene`（没有 `fr`：不渲染） | 要 | 桌面 |
 | `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
 | `projects_import` | 导入 `ignore/` 下的测试工程并等完成，清单写 `out` | 要 | 桌面 |
 | `hash_compare` | 只读两份基线，按 `input.path` 对应，比哈希与 unsupported | 不要 | — |
@@ -123,9 +123,11 @@ P4 和 WPE 真机核对的三种用法，都是屏外宿主里一次跑完、结
 `replay` 两种写法，给了就不收 `time`（读回那一帧的 `g_Time` 取时间线或 `times` 的末项）：
 
 ```text
-replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor?, window? }, seed?, passes?, random? }   常用：从 WPE 的一次抓帧组时间线
-replay: { particles: { dts, times?, seed?, passes?, random? } }                                  直接给探针（缺省 seed 1、passes 1）
+replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor?, window? }, seed?, passes?, random?, fr? }   常用：从 WPE 的一次抓帧组时间线
+replay: { particles: { dts, times?, seed?, passes?, random? }, fr? }                                  直接给探针（缺省 seed 1、passes 1）
 ```
+
+`fr`（只有 `render_scene` / `host_render` 收，缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色，见下方「FR 帧号块」。
 
 真实工坊场景没有 FR、抓帧没有 `[kbp]` 日志：不要手写 `dts`，先用 kbp-tools 的 `kbp content unpack <工坊 ID> --instrument` 解包一份
 末尾加了日志图层的副本去抓帧，回放写 `timeline: { log, frame, cursors: "log" }`（不给 `track`），流程见 kbp-tools SKILL.md「真实场景的回放」。
@@ -205,6 +207,28 @@ render_scene { imageId: <id>, replay: { timeline: { log: "ignore/p5/inst/out/383
 2026-11-12 核对（`3830255100-kbp`，记录见 `.claude/plans/tools/kabegame-chromium-lib.md` 第 5 批）：不给 `canvas` 时摘要与改动前相同；回放到
 173 帧给 `canvas: [1920, 1080]` 的输出和场景目标的 2×2 平均最大差 1；`[1080, 1080]` 和场景目标中间 2160×2160 裁出缩小的图最大差 1。
 
+### FR 帧号块（`render_scene` / `host_render` 的 `replay.fr`）
+
+kbp 测试工程的第一个对象 FR（`solidlayer`，场景 1780–1860 × 10–70）的颜色由字段脚本每帧写：第 N 帧（WPE 脚本帧号）是
+`((N % 256) / 255, (⌊N / 256⌋ % 256) / 255, 1)`（kbp-tools 的 `FR_COLOR` / `FR_CURSOR`）。探针回放为了确定性不跑场景脚本，FR 原来一直是
+初值 `0 0 1`，比较时要屏蔽，抖动、缩放之下屏蔽框还得逐个现算。
+
+- **回放时缺省涂上**：`replay.fr` 不是 false 时，MCP 按读回帧号 N（= 回放的帧数，`dts.length`）算出颜色（`timeline.ts` 的 `frColor`，是 `gen.py`
+  的第二份，改了要两边一起改），作一项 `scriptValues: [{ object: "FR", field: "color", value, optional: true }]` 交给探针。结果里写一行：
+  「FR 涂成第 N 帧的颜色 (r, g, b) / 255（objects[i]）」「FR：场景里没有挂颜色脚本的 FR，没涂（原因）」或「FR：没涂（replay.fr: false）」。
+  `timeline` 与 `particles` 两种写法都发；不给 `replay` 时不发。
+- **不是 kbp 工程时跳过**：`optional` 的项找不到对象、或这个字段没挂字段脚本时探针跳过（`applied: false`），不影响别的场景。真实场景解包的
+  `kbp-FR`（在画面外、名字不同）也不涂。
+- **探针的通用能力 `scriptValues`**（REST 渲染请求体也收）：`{ object: objects 下标或对象名, field: 图层字段, value: 1–4 个数或布尔, optional? }[]`，
+  最多 64 项，是某个对象某个字段上的字段脚本在读回那一帧会返回的值。探针找到 bundle 里挂在这个字段上的字段脚本，建好场景之后、回放之前
+  用它的绑定目标经 `SceneState.write` 写进状态（同宿主的脚本写回）；值不影响模拟，只有读回那一帧被画出来。按名字认对象时重名报错；不带
+  `optional` 时找不到对象或没挂字段脚本报错（REST 回 422 `[host]`）。`meta.scriptValues` 逐项写明写没写（`applied`、跳过时的 `reason`）。
+  宿主产物不认识这一项（改了探针没重建）时 vite 报 409 `[host]`。
+
+2026-11-12 核对（记录见 `.claude/plans/tools/kabegame-chromium-lib.md` 第 6 批）：已有 WPE 抓帧里能看到 FR 块的 61 张（含第 345–941 帧）
+解出的颜色全部等于文件名帧号的公式值；P5a 的 5 组抖动、5 组缩放与 `p5a-shakepar2` 第 941 帧按时间线回放，和 WPE 上屏帧**整帧逐像素比、
+不挖任何区域，11 组都是 0 差异**；`replay.fr: false` 时差异正好是 FR 块，经 REST 给 N − 1 帧的颜色时 FR 块差 1。
+
 ## REST（`/__kabegame_dev/*`，vite 上）
 
 请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`，以及原图的 `X-Png-Original-Width` / `-Height`）。
@@ -229,7 +253,7 @@ render_scene { imageId: <id>, replay: { timeline: { log: "ignore/p5/inst/out/383
 | `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」） | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, scriptValues?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」）；`scriptValues` 是 `[{ object, field, value, optional? }]`（最多 64 项，`object` 是非负整数或非空字符串、`field` 是图层字段、`value` 是 1–4 个有限数或布尔，不合法 400 带 `field`），探针写进状态，`meta.scriptValues` 逐项回 `applied`（见「FR 帧号块」） | 桌面 |
 | `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, window?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`）；`cursors` 是逐帧的 `g_PointerPosition`，`window` 要和它一起给 | 桌面 |
 | `POST /hosts/:h/particle-corners` | `{ imageId, particles?, pointers?, window?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果；`pointers` / `window` 同 render | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |

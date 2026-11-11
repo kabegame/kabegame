@@ -479,6 +479,37 @@ describe("粒子回放、轨迹与四角", () => {
     });
   });
 
+  test("render 的脚本值（第 6 批）：scriptValues 原样转给后端；不合法回 400，field 指到那一项", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const scriptValues = [{ object: "FR", field: "color", value: [173 / 255, 3 / 255, 1], optional: true }];
+      const particles = { dts: [0.1, 0.1] };
+      const ok = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: 14108, particles, scriptValues });
+      assert.equal(ok.status, 200);
+      await ok.body?.cancel();
+      assert.deepEqual(calls, [["hostRender", "h-1", { imageId: "14108", particles, scriptValues }]]);
+      for (const [scriptValuesBad, field] of [
+        ["FR", "scriptValues"],
+        [[{ object: "FR", field: "color", value: [1, 1, 1], extra: 1 }], "scriptValues[0].extra"],
+        [[{ object: -1, field: "color", value: [1] }], "scriptValues[0].object"],
+        [[{ object: "FR", field: "tint", value: [1] }], "scriptValues[0].field"],
+        [[{ object: "FR", field: "color", value: [1, 1, 1, 1, 1] }], "scriptValues[0].value"],
+        [[{ object: "FR", field: "color", value: [1], optional: 1 }], "scriptValues[0].optional"],
+      ] as const) {
+        const res = await post(`${base}/__kabegame_dev/hosts/h-1/render`, {
+          imageId: "1",
+          scriptValues: scriptValuesBad,
+        });
+        assert.equal(res.status, 400, JSON.stringify(scriptValuesBad));
+        const error = await res.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field, error.error);
+        assert.ok(error.error.startsWith(`${field} `), error.error);
+      }
+      assert.equal(calls.length, 1, "参数错时不调后端");
+    });
+  });
+
   test("particle-track：校验后转给后端（imageId 转字符串），400 的形状", async () => {
     const { backend, calls } = fakeBackend();
     await withServer(backend, async (base) => {

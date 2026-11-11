@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { DevError } from "./errors.ts";
-import { checkCornersRequest, checkRenderReplay, checkReplay, checkTrackRequest } from "./replay.ts";
+import { checkCornersRequest, checkRenderReplay, checkReplay, checkScriptValues, checkTrackRequest } from "./replay.ts";
 
 /** 断言抛 400，`field` 与信息符合预期。 */
 function rejects400(fn: () => unknown, field: string, message?: RegExp) {
@@ -107,6 +107,42 @@ describe("checkReplay", () => {
     );
     // window 本身不对时先报 window
     rejects400(() => checkRenderReplay({ window: [0, 1080], canvas: [1280, 720] }), "window", /两个正数/);
+  });
+
+  test("渲染的脚本值（第 6 批）：数组、最多 64 项；object / field / value / optional 的形状，错在哪项报哪项", () => {
+    const fr = { object: "FR", field: "color", value: [173 / 255, 3 / 255, 1], optional: true };
+    assert.equal(checkRenderReplay({ scriptValues: [fr] }), undefined);
+    assert.deepEqual(checkRenderReplay({ particles: { dts: [0.1] }, scriptValues: [fr] }), { dts: [0.1] });
+    assert.deepEqual(checkScriptValues([]), []);
+    // 下标、布尔、单分量、四分量、不带 optional 都收；不要求有 particles
+    const ok = [
+      { object: 0, field: "visible", value: false },
+      { object: 3, field: "alpha", value: [0.5] },
+      { object: "x", field: "parallaxDepth", value: [1, 2, 3, 4], optional: false },
+    ];
+    assert.deepEqual(checkScriptValues(ok), ok);
+    assert.equal(checkScriptValues(Array.from({ length: 64 }, () => fr)).length, 64);
+
+    rejects400(() => checkRenderReplay({ scriptValues: fr }), "scriptValues", /要是 \[\{ object, field, value/);
+    rejects400(
+      () => checkRenderReplay({ scriptValues: Array.from({ length: 65 }, () => fr) }),
+      "scriptValues",
+      /65 项，最多 64 项/,
+    );
+    rejects400(() => checkScriptValues([fr, "FR"]), "scriptValues[1]", /要是 \{ object/);
+    rejects400(() => checkScriptValues([{ ...fr, frame: 3 }]), "scriptValues[0].frame", /不认识/);
+    for (const object of [-1, 1.5, "", null, undefined]) {
+      rejects400(() => checkScriptValues([{ ...fr, object }]), "scriptValues[0].object", /非负整数.*非空字符串/);
+    }
+    for (const field of ["size", "Color", 3, undefined]) {
+      rejects400(() => checkScriptValues([{ ...fr, field }]), "scriptValues[0].field", /只能是 origin \/ scale/);
+    }
+    for (const value of [[], [1, 2, 3, 4, 5], "0 0 1", null, 1]) {
+      rejects400(() => checkScriptValues([{ ...fr, value }]), "scriptValues[0].value", /1–4 个有限数，或布尔/);
+    }
+    rejects400(() => checkScriptValues([{ ...fr, value: [0.5, Number.NaN] }]), "scriptValues[0].value[1]", /有限数/);
+    rejects400(() => checkScriptValues([{ ...fr, value: [0.5, "1"] }]), "scriptValues[0].value[1]");
+    rejects400(() => checkScriptValues([{ ...fr, optional: "true" }]), "scriptValues[0].optional", /布尔/);
   });
 });
 

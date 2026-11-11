@@ -454,6 +454,8 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * `pointers` 与窗口尺寸 `window`（P5a 收尾）校验后同样原样转给探针。
  * 读回画布 `canvas`（第 5 批）校验后原样转给探针，探针按 `fill` 上屏到这么大的画布再读回；结果的 `meta.canvas` 对不上时（宿主产物
  * 不认识这一项，静默读回了场景目标）报 409。
+ * 脚本值 `scriptValues`（第 6 批）校验后原样转给探针；给了而结果没有逐项的 `meta.scriptValues` 时（宿主产物不认识这一项，静默没写）
+ * 同样报 409。
  */
 export async function renderFrame(
   s: DevSession,
@@ -485,6 +487,8 @@ export async function renderFrame(
     ...(request.window ? { window: request.window } : {}),
     // 读回画布（第 5 批）：checkRenderReplay 已校验（两个正整数、不超过上限、和 window 相同）
     ...(request.canvas ? { canvas: request.canvas } : {}),
+    // 脚本值（第 6 批）：checkRenderReplay 已校验（形状、项数）；对象与字段脚本由探针解析
+    ...(request.scriptValues ? { scriptValues: request.scriptValues } : {}),
   };
   const task = await hostTask(s, handle, `__kabegameSceneProbe.renderFrame(${JSON.stringify(args)})`, {
     signal: options.signal,
@@ -502,6 +506,15 @@ export async function renderFrame(
         canvas,
         meta: { width: meta.width, height: meta.height, canvas: meta.canvas ?? null },
       },
+    );
+  }
+  const scriptValues = request.scriptValues;
+  if (scriptValues?.length && !(Array.isArray(meta.scriptValues) && meta.scriptValues.length === scriptValues.length)) {
+    throw new DevError(
+      409,
+      "host",
+      `宿主产物没有回逐项的 scriptValues（请求 ${scriptValues.length} 项）：探针不认识 scriptValues、静默没写，重建宿主（--mode development）`,
+      { imageId: request.imageId, scriptValues, meta: { scriptValues: meta.scriptValues ?? null } },
     );
   }
   const png = await probeBytes(s, handle, `${key}.png`);

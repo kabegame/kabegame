@@ -265,6 +265,10 @@ kbp.py cmp stats <real.json> <wpe-标签-stats.json> [--label 样本] [--out 文
   - 对齐：`--crop` 先裁我们的图；尺寸仍不同、一边相等或同比例时居中裁成 WPE 的大小（c5：WPE 窗口高被屏幕压到 2130）；比例不同或
     `--resize` 时 cover 取中间一块再 BOX 缩到 WPE 的大小；
   - 差值：每像素三通道绝对差的最大值；测试工程（`--meta` 或 `--kbp-layers`）排除右下角 FR / CLK（场景 x ≥ 1640、图片 y ≥ 990 按比例）；
+    - kabegame-dev 的 `render_scene` 按时间线回放（`replay`）出来的图**不用再为 FR 屏蔽**：`replay.fr` 缺省把 FR 涂成读回那一帧的颜色
+      （探针不跑脚本，原来停在初值 `0 0 1`），和 WPE 逐像素相同；抖动、缩放下也不用再手算 FR 屏蔽框（`ignore/p5/s3`、`s4` 的
+      `cmp_frames.py` 那样）。2026-11-12 P5a 的 11 组（5 组抖动、5 组缩放、`p5a-shakepar2` 第 941 帧）整帧不挖区域 0 差异，CLK 也相同
+      （kabegame-chromium 第 6 批）。不按时间线回放的图（`time` 固定时刻）FR 仍是初值，照旧要排除。
   - 报 `> 0 / 2 / 8 / 32` 的像素数、最大差、平均差、256 档直方图；超过 `--threshold` 的像素按 `--cell` 格子聚 8 连通块，列包围盒；
   - `--meta` 的对象有 `bbox` 时按对象归类（按 `order` 取第一个包含它的对象，其余算 `other`），没有时只报整帧；
   - `--heat`：差异图转灰度（PIL 的 `L`）乘增益，和 `c5/cmp_scene.py` 的热图逐像素相同；`--zoom` 存我们 | WPE 并排放大 2 倍。
@@ -391,7 +395,9 @@ kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--
   - `y = floor(frame / 256) % 256 / 255`；
   - `z = 1`。
   - 读回：FR 绘制的像素着色器常量 `g_Color`，帧号 = `round(r·255) + round(g·255)·256`。
-  - 这是 WPE 脚本帧号，等于抓帧的 RenderDoc 帧号 + 1。
+  - 这是 WPE 脚本帧号，等于抓帧的 RenderDoc 帧号 + 1。上屏帧（`kbp rdc frame --present`）里 FR 块的 8 位颜色就是
+    `(N % 256, ⌊N / 256⌋ % 256, 255)`，N 是文件名里的帧号（2026-11-12 核对 61 张，含第 345–941 帧）。
+  - 第二份：kabegame-dev MCP 的 `frColor`（`apps/kabegame-dev-mcp/src/timeline.ts`）按同一公式在回放时给探针涂 FR，改这里的颜色写法要同步改它。
   - `write_project(…, cursor=True)` 时脚本换成 `FR_CURSOR`：颜色部分逐字相同，`[kbp]` 条目多两列屏幕光标（见下一节）。
 - **CLK（时钟）**：顶点着色器让 `g_Time`、`g_Frametime` 真的参与输出。
   - 原因：着色器没读的常量 `referenced: false`，值是缓冲里的垃圾，不能当数据，提取器遇到就报错。

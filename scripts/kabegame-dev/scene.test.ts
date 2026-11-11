@@ -359,6 +359,71 @@ describe("粒子接口的参数透传", () => {
     );
   });
 
+  test("脚本值（第 6 批）：scriptValues 原样交给探针；不给时不带；不合法回 400 不碰页面；结果没有逐项记录回 409", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const values = (args as { scriptValues?: Array<{ object: unknown; field: string; value: unknown }> })
+          .scriptValues;
+        // 新探针：逐项回 applied；第一项的 object 是 "old" 时模拟不认识这一项的旧探针（结果里没有 scriptValues）
+        if (values?.[0]?.object === "old") return { width: 1, height: 1, sha256: "old", time: 0.3, frametime: 0.2 };
+        return {
+          width: 1,
+          height: 1,
+          sha256: "x",
+          time: 0.3,
+          frametime: 0.2,
+          scriptValues: (values ?? []).map((v) => ({ ...v, object: 0, name: "FR", applied: true })),
+        };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? ${JSON.stringify(png)} : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const particles = { dts: [0.1, 0.2] };
+    const scriptValues = [{ object: "FR", field: "color" as const, value: [2 / 255, 0, 1], optional: true }];
+    const response = await renderFrame(f.s, "h-1", { imageId: "14108", particles, scriptValues, userProperties: {} });
+    assert.deepEqual(calls()[0].scriptValues, scriptValues);
+    assert.deepEqual(calls()[0].particles, particles);
+    assert.equal(response.meta.scriptValues?.[0].applied, true);
+    // 不要求有 particles（固定时刻也能写）
+    await renderFrame(f.s, "h-1", { imageId: "14108", scriptValues, userProperties: {} });
+    assert.deepEqual(calls()[1].scriptValues, scriptValues);
+    assert.equal(calls()[1].time, 1.5);
+    await renderFrame(f.s, "h-1", { imageId: "14108", particles, userProperties: {} });
+    assert.equal("scriptValues" in calls()[2], false, "不给 scriptValues 时请求和以前一样");
+
+    const before = f.conn.evaluated.length;
+    for (const [request, field] of [
+      [{ imageId: "14108", scriptValues: [{ object: "FR", field: "size", value: [1] }] }, "scriptValues[0].field"],
+      [{ imageId: "14108", scriptValues: [{ object: "FR", field: "color", value: [] }] }, "scriptValues[0].value"],
+      [{ imageId: "14108", scriptValues: { object: "FR" } }, "scriptValues"],
+    ] as const) {
+      await assert.rejects(
+        renderFrame(f.s, "h-1", request as never),
+        (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === field,
+      );
+    }
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    // 旧探针不认识 scriptValues：静默没写，报 409 而不是把没涂的画面交回去
+    await assert.rejects(
+      renderFrame(f.s, "h-1", {
+        imageId: "14108",
+        scriptValues: [{ object: "old", field: "color", value: [1, 1, 1] }],
+        userProperties: {},
+      }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /探针不认识 scriptValues/.test(error.message),
+    );
+  });
+
   test("逐帧光标：轨迹的 window、四角的 pointers / window 原样交给探针", async () => {
     const f = await fixture({ particleTrack: () => track, particleCorners: () => [] });
     const cursors: [number, number][] = [

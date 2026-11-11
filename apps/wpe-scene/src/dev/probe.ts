@@ -22,6 +22,8 @@
  * - 读回画布（kabegame-chromium 第 5 批）：`renderFrame` 收 `canvas: [宽, 高]` 时，读回那一帧编码完场景之后，用产品上屏的同一份
  *   着色器与采样器（`render/blit.ts`）按 `fill` 把场景目标铺进这么大的 `rgba8unorm` 纹理、读回它；光标的换算窗口是 `window ?? canvas`。
  *   只改读回、不改渲染（`g_Screen` 等仍按场景目标算）。不给 `canvas` 时读回场景目标，逐字节同以前。
+ * - 脚本值（kabegame-chromium 第 6 批）：探针不跑场景脚本，`renderFrame` 收 `scriptValues`（某对象某字段的字段脚本在读回那一帧返回的
+ *   值），建好场景之后、回放之前经字段脚本的绑定目标写进 `SceneState`（`scriptValues.ts`，同宿主的脚本写回）。不给时逐字节同以前。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -48,6 +50,7 @@ import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
 import { replayParticleOptions, replayReadback, type ParticleReplay } from "./particleCorners";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
+import { applyScriptValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -209,6 +212,13 @@ export interface RenderFrameOptions {
    * 系统和 WPE 比像素时填 WPE 轨迹里的 frame。
    */
   particles?: ParticleReplay;
+  /**
+   * 脚本值（kabegame-chromium 第 6 批）：`{ object: objects 下标或对象名, field: 图层字段, value: 1–4 个数或布尔, optional? }[]`，
+   * 某个对象某个字段上的字段脚本在读回那一帧会返回的值。探针找到 bundle 里挂在这个字段上的字段脚本，建好场景之后、回放之前用它的
+   * 绑定目标经 `SceneState.write` 写进状态（同宿主的脚本写回）；值不影响模拟，只有读回那一帧被画出来。名字重名抛错；找不到对象或
+   * 没挂字段脚本时 `optional` 的跳过，否则抛错。用途：kbp 测试工程的 FR 帧号块（颜色只取决于帧号），见 `scriptValues.ts`。
+   */
+  scriptValues?: ScriptValue[];
 }
 
 export interface RenderFrameResult {
@@ -244,6 +254,8 @@ export interface RenderFrameResult {
   frametime: number;
   /** 各粒子层读回时的数量：存活数（即画了几个）、高水位、容量，以及分布（位置范围、尺寸、alpha，`summarizeParticles`）。 */
   particles: ReturnType<GpuScene["particleStats"]>;
+  /** 每一项脚本值写没写进状态（`applied`；跳过时带 `reason`），顺序同请求；没给 `scriptValues` 时空数组。 */
+  scriptValues: ScriptValueResult[];
   /** PNG 的存放键是 `<key>.png`，原始 RGBA 是 `<key>.rgba`，都用 `chunk` 取（base64 分块）。 */
   key: string;
 }
@@ -335,6 +347,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const parallaxFrame = { pointer, width: sceneWidth, height: sceneHeight };
     let parallax = initialParallaxState(sceneWidth, sceneHeight);
     try {
+      // 脚本值（第 6 批）：建好场景之后、回放之前写进状态，同宿主的脚本写回；第一次 `sync` 把它刷进 uniform
+      const scriptValues = applyScriptValues(state, bundle, options.scriptValues);
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
@@ -448,6 +462,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         time,
         frametime,
         particles: scene.particleStats(true),
+        scriptValues,
         key,
       };
     } finally {
