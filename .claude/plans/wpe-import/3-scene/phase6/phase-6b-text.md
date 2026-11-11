@@ -32,7 +32,7 @@
 | 2 脚本 API | `ITextLayer` 字段的读写（`text`、`font`、`pointsize`、`padding`、对齐、`anchor`、`limit*` / `max*`、背景） | 39 | 51 |
 | ~~3 视步骤 0 定~~ | 步骤 0 后取消：MSDF 报 `text:msdf:*`（语料 2 张、5 个对象）；`depthtest` 在正交场景中性，透视场景随 P5d | — | — |
 
-步骤 1 之前另有一步 **1a 选型探针**：把 FreeType + HarfBuzz 编成能在宿主里跑的 wasm，用离线参考的基线核对逐像素一致（见步骤 0c 实施记录「对后面几步的影响」）。
+步骤 1 之前另有一步 **1a 选型探针**：把 FreeType + HarfBuzz 编成能在宿主里跑的 wasm，核对和 WPE 逐像素一致（已做，见「步骤 1a」：FreeType 2.14.x 与 WPE 只差 1 个像素，是 WPE 图集装箱的副作用）。
 
 解锁明细：
 - **步骤 1：** `2391389126`（时钟，`systemfont_cambria`，挂脚本的 `text`，`alpha` 绑属性）。P4、P5 先做完时再加 `2304304373`：工程自带的 `otf` / `ttf`，`text` / `color` / `pointsize` 绑属性，6 个时钟按条件可见，其中 2 个带 `blurprecise` effect、`scale` 的 y 是 −1（倒影）。
@@ -176,7 +176,35 @@
 
 **补测（同日，`p6b-extra`）：** 4 个 CFF 的 `otf`、3 个 TrueType（没有 hinting 表的 opensticks、8bitOperator，带完整指令的 Blackout）和两种省略号情形。CFF 要走原生引擎（第 3 条因此改成两条规则）；opensticks 有 3 个字形没对上，见风险 2。
 
-## 步骤 1 — 静态文本（细节待 1a 之后补写）
+## 步骤 1a — 选型探针（2026-11-12，已做）
+
+**做法：** 全在 `ignore/p6/b1a/`，不碰产品代码。
+- **源码与工具链：** FreeType 2.13.2 / 2.13.3 / 2.14.0–2.14.3 / 2.15.0、HarfBuzz 15.0.0（与离线参考 `uharfbuzz` 同版本）的源码包解到 `src/` 各自目录，只编译、不运行其中的脚本。FreeType 2.13.2 的 SHA-256 与官方值一致。libc 用 wasi-sdk 34 的 `wasi-sysroot`（119 MB，用户手动下载、SHA-256 与发布页一致）和 `libclang_rt`，编译器用本机 LLVM clang 22.1.6，目标 `wasm32-wasip1`（reactor）。没有装 emscripten。
+- **构建**（`build.py`）：FreeType 只编 `truetype`、`cff`、`autofit`、`psaux`、`pshinter`、`psnames`、`sfnt`、`smooth`（加 `gzip`），HarfBuzz 用单文件合并编译、带 `hb-ft`，不用异常与 RTTI；`setjmp`（光栅化器的池溢出要用）走 wasm 异常处理（`-mllvm -wasm-enable-sjlj`，链 `libsetjmp`）。C 胶水 `kbfont.c` 只导出：加载字体（300 DPI、Unicode 字符表、`hb_ft_font_create`、两条 hinting 规则）、查字、度量、排字、取字形位图。
+- **对照：** `harness.mjs` 在 Node 26 里用 `node:wasi` 加载，对 `p6b-*` 的 44 个静态文本对象逐行做回退分段、排字、栅格化，输出规范 JSON；`ref_dump.py`（离线参考）同格式，`compare.py` 逐字段比；`wpe_cmp.py` 直接和 WPE 抓帧的图集逐像素比；`px_where.py`、`atlas_overlap.py` 查残差；`perf.mjs` 量耗时。
+
+**结果：**
+1. **能编，能跑。** 本机 clang 22 + wasi-sysroot 34（LLVM 23 编的）链接没问题；Node 26 跑 wasm 异常处理没问题。产物 1.85 MB（没做体积优化）。
+2. **2.13.2 先差了 27 个字形（覆盖率 ±1）：** x64 上 `ftgrays.c` 因 `FT_SSE2` 成立而用 DDA 展平二次曲线，wasm32 不满足条件、退回二分细分。把 `BEZIER_USE_DDA` 改成 1 之后，wasm 和离线参考（x64）在 44 个对象、557 个字形上**每个字段都相同**（含位图、emoji 的彩色位图）。2.14 起 FreeType 自己改成「有 64 位整数就用 DDA」，不用补。
+3. **WPE 用的是 FreeType 2.14 系列。** 直接和 WPE 图集比（约 70 万像素）：
+
+| 版本 | 和 WPE 不同的像素 |
+|---|---|
+| 2.13.2、2.13.3 | opensticks 3 个字形、37 个像素（「M」宽差 1） |
+| 2.14.0、2.14.1、2.14.2、2.14.3 | **1 个像素**（opensticks 的「2」） |
+| 2.14.3 + 自动 hinter 用 HarfBuzz（`FT_CONFIG_OPTION_USE_HARFBUZZ`） | 同上，1 个像素 |
+| 2.15.0 | 另加微软雅黑 / Malgun 251 个像素 |
+
+4. **剩下那 1 个像素是 WPE 图集装箱的副作用，不是栅格化：** 「2」的格子从 x 32 开始，同一张图集在 (32, 0) 还有一个 1×1 的格子，属于 e5 里的零尺寸字形（空格）。装箱器放下字形后会把格子四周各清零 1 行 / 1 列，这一清盖到了「2」格子的 (32, 1)，WPE 画出来就是 0。2.13.2 的离线参考在同一个像素上也差同样的值。照抄 WPE 的装箱器（rea-p6b-raster「装箱」，`FUN_1401ae080`）就能对上；零尺寸字形怎么定位还要看一眼代码。
+5. **耗时（Node）：** 编译加实例化 21 ms；加载字体 3–5 ms（19.7 MB 的 `msyh.ttc` 也是 5 ms）；排一行 28 个字 0.017 ms；首次栅格化每个字形约 0.2 ms（之后进图集）。每帧都变的文字也撑得住。
+
+**对步骤 1 的影响：**
+1. **版本：** FreeType 2.14.3、HarfBuzz 15.0.0，自动 hinter 不开 HarfBuzz（结果相同，少一层依赖）。2.14 不需要 DDA 补丁。
+2. **装箱器照抄 WPE**，包括零尺寸字形的 1×1 格子和四周清零；验收以「和 WPE 图集逐字节相同」为准。
+3. **还没在浏览器里跑：** CEF 149 应支持 wasm 异常处理（exnref），步骤 1 接进宿主时第一件事核对；浏览器里的 WASI 只需要几个桩（不读文件、不写 stdout）。
+4. **构建怎么进仓库要定（待定 5）：** 源码、sysroot 与 clang 的来源，见「决定」。macOS 的 Apple clang 没有 wasm 后端，要 Homebrew 的 LLVM。
+
+## 步骤 1 — 静态文本（细节待写）
 
 大致的点：
 - **编译期：** 文本表（字体文件、字号、排版字段、文字初值、绑定）；选 `basefont*` 材质并翻译；能力表放开 `object:text` 与实现了的字段，没实现的照报细分键（`text:msdf:*` 等）。
@@ -208,9 +236,14 @@
 
 **已定：**
 1. 进入 P6b（2026-11-11 用户）。
+2. 栅格化与排字用 FreeType + HarfBuzz 编成的 wasm，不用浏览器画布；画法照 WPE，逐字四边形加图集（2026-11-12 用户，按推荐）。1a 之后版本定为 FreeType 2.14.3、HarfBuzz 15.0.0。
+3. MSDF 报 `text:msdf:<键>`、不做（2026-11-12 用户，按推荐）。
+4. 正交场景的 `depthtest` 直接放开，透视场景随 P5d（2026-11-12 用户，按推荐）。
+5. 宿主读 `C:\Windows\Fonts` 下回退链与 `systemfont_*` 的那几个文件，不随应用分发字体（2026-11-12 用户，按推荐）。
+6. 字体引擎叫 **`wpefont`**，构建照推荐进仓库（2026-11-12 用户）：
+   - **源码：** FreeType、HarfBuzz 照 `third/` 的惯例做成子模块（pin `VER-2-14-3`、`15.0.0`），补丁走 `third-patches/`（2.14 目前不需要补丁）。
+   - **工具链：** 构建脚本按固定版本与 SHA-256 下载 `wasi-sysroot` 和 `libclang_rt` 到缓存目录，编译器用本机 LLVM clang（Windows 已有；Linux 构建 guest 要装；macOS 要 Homebrew 的 LLVM，Apple clang 没有 wasm 后端）。
+   - **入口与产物：** 照 `build:wpesl2wgsl` 加 `deno task build:wpefont`，产物进 `bin/wasm/wpefont/` 再拷进场景宿主，不入库；缺失时文本对象照报不支持、不影响别的。
+   - 1a 探针里的 C 胶水叫 `kbfont.c`，进仓库时一并改名。
 
-**待定（附推荐）：**
-1. **栅格化与排字：** 推荐把 FreeType 2.13.2 + HarfBuzz 编成 wasm（步骤 1a 先探工具链），和 WPE 逐像素一致；不用浏览器画布（做不到一致）。画法随之照 WPE，逐字四边形加图集（原待定 1「整段一张纹理」作废）。
-2. **MSDF 路径：** 推荐 P6b 报 `text:msdf:<键>`、不做（语料 2 张、5 个对象），以后要做再移植 msdfgen。
-3. **`depthtest`：** 推荐正交场景直接放开（读码加实测：正交场景 WPE 不测深度），透视场景随 P5d。
-4. **系统字体：** 推荐宿主读 `C:\Windows\Fonts` 下回退链与 `systemfont_*` 的那几个文件（`file:` 闸门对这几个文件放行），不随应用分发字体。
+**待定：** 无。步骤 1 的子计划细节（点、现状锚点、目标代码）动工前补写。
