@@ -186,3 +186,13 @@ const SUPPORTED_EFFECT = new Set([
 - 夹具里没有 `main(void)` 或数组长度是源码宏的着色器，这两种「WPE 编不过」暂不处理。
 - 计划调整：步骤 3 的越界规则按实测改写（见上文与「决定」第 3 条）；声明名带分量对 `uniform` 一样适用。
 - 我的失误：子计划起初写「越界读到 0」，只照了 D3D11 规范里「出了缓冲」那一半；第一版 `kbpack` 的 `g_Time` 没被直接引用，结果也区分不了，改成直接引用后才得出结论。
+
+### 步骤 1–4 — 翻译器规则（2026-11-11）
+
+- 代理实现，我独立核对。改动在 `src-tauri/wpesl2wgsl/`：`preprocess.rs`（步骤 1）、`rewrite.rs` 的 `parse_decl`（步骤 2）、新文件 `pack.rs` 与 `rewrite.rs` 的接入（步骤 3，内置名表 140 项写成常量、注明来源）、`geometry.rs`（步骤 4）。翻译器单测 68 个、naga 128 个全过；几何门槛 27/27；WPE 安装目录 158/167 不变。
+- **步骤 1 预处理：** 对 `p7a-9508c531` 基线 3468 个文件全部不变。多余 `#endif` 的 5 个着色器与带分号的 1 个越过了预处理，但在夹具里报缺头文件：夹具是旧翻译器录的，那时预处理就失败、没走到补头文件。代理从 WPE `assets/` 补齐头文件另试（`ignore/p7/requests-p7b-aug`），49 个请求通过 26 个，其余 23 个是类型类。工坊 `audio`：`DefineRedefined` → `Variable cannot be used in LHS position`（类型类）。
+- **步骤 2 声明名带分量：** 基线不变。`frame_builder` 露出 `if` 条件不是布尔（类型类）。
+- **步骤 3 打包数组：** `audioline`、`highly_customizable_audio_visualizer` 从通过变成失败——在 `float` 的位置用了打包出来的整行，WPE 靠 HLSL 隐式截断取 `.x`，要等 P7c；用到它们的 4 张场景（`3811769317`、`3817779853`、`3823859141`、`3823864170`）本来就因音频 uniform（P11）整张退回，画面无变化。`video` 露出浮点下标（P7c）。用户 2026-11-11 定：现在提交，退步在测试里刻意列出。为此语料测试加了 `WPESL2WGSL_BASELINE_ALLOW_REGRESS`，和普通的 ALLOW 分开；不列时测试照样失败（已验证）。
+- **步骤 4 指针别名：** 只有 `geom__rope__refract`、`geom__ropetrail__refract` 的顶点段变化，两份 Tint 0 error（dev 主窗口），其余不变。
+- **偏离：** `#if` 去掉三元（WPE 没有，语料也没用到）；`g_Bones` 与 `g_L*` 灯光按 rea 表另有缓冲，不进 dynamic；WPE 声明正则不认的类型不进布局；几何展开拼成的顶点段不做打包；`main` 之前不带下标地用打包数组、`vec2` 数组、`main(void)` 不处理（README 写明）；别名改写只处理单独成句的调用。
+- 本步的比较命令：`WPESL2WGSL_BASELINE_DIR=ignore/p7/baseline/p7a-9508c531`，`ALLOW` = `effects/fluidsimulation_advection-`、两个 `geom__rope*__refract`、`audioline`、`highly_customizable_audio_visualizer`，`ALLOW_REGRESS` = 后两个。新基线 `ignore/p7/baseline/p7b-final`（3460 个文件）。

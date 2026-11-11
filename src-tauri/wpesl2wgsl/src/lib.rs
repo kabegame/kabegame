@@ -25,6 +25,7 @@ use serde_json::Value;
 pub mod geometry;
 mod library;
 mod naga_stage;
+mod pack;
 pub mod preprocess;
 pub mod rewrite;
 
@@ -861,6 +862,38 @@ void main() {
         assert_eq!((spectrum.stride, spectrum.size), (Some(16), 64));
     }
 
+    /// P7b 步骤 3：`main` 之前的下标访问是 WPE 的打包形态（`[i/4][i%4]` 取元素、`[i]` 取整行、越界读后面的成员），
+    /// `main` 里仍是还原后的 `float[n]`；naga 接受、WGSL 能回读，且只有这个阶段生成 `kb_pack_*`。
+    #[test]
+    fn packed_arrays_before_main_end_to_end() {
+        let fragment = "uniform float g_AudioSpectrum16Left[16];\nuniform float g_Time;\nfloat bar(int i) { return g_AudioSpectrum16Left[i / 4][i % 4]; }\nvec4 row(int i) { return g_AudioSpectrum16Left[i]; }\nvoid main() { gl_FragColor = vec4(bar(5) + g_AudioSpectrum16Left[5]) + row(4); }";
+        let req = TranslateRequest {
+            vertex: "uniform float g_AudioSpectrum16Left[16];\nvoid main() { gl_Position = vec4(g_AudioSpectrum16Left[0]); }".into(),
+            fragment: fragment.into(),
+            debug: true,
+            ..TranslateRequest::default()
+        };
+        let result = translate(&req);
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        let glsl = |output: &Option<StageOutput>| output.as_ref().unwrap().glsl.clone().unwrap();
+        let fs = glsl(&result.fragment);
+        assert!(
+            fs.contains("float bar(int i) { return kb_pack_g_AudioSpectrum16Left(i / 4)[i % 4]; }"),
+            "{fs}"
+        );
+        assert!(fs.contains("vec4 row(int i) { return kb_pack_g_AudioSpectrum16Left(i); }"));
+        // 第 4 行越界读到同一缓冲里紧跟的 g_Time，再往后是 0
+        assert!(
+            fs.contains(
+                "    if (k == 4) return vec4(g_Time, 0.0, 0.0, 0.0);\n    return vec4(0.0);\n}\n"
+            ),
+            "{fs}"
+        );
+        assert!(fs.contains("vec4(bar(5) + g_AudioSpectrum16Left[5])"));
+        assert!(!glsl(&result.vertex).contains("kb_pack_"));
+    }
+
     /// 两阶段同名、材质键不同的 uniform 拆成两格：各自的偏移、注解，改名的一格带 `stage` / `original`，WGSL 合法，
     /// 每个阶段只读自己那一格。补齐过的数组（`kb_u_`）同样能拆。
     #[test]
@@ -1146,9 +1179,9 @@ void main() {
         let result = translate(&req);
         assert_eq!((result.phase, result.stage), (Some("include"), None));
         assert_eq!(result.missing, ["particles.h"]);
-        // 预处理错误
+        // 预处理错误（多余的 #endif 照 WPE 忽略，没闭合的 #if 仍报错）
         let mut req = gs_request();
-        req.geometry = Some(format!("{GS_GEOM}#endif\n"));
+        req.geometry = Some(format!("{GS_GEOM}#if 1\n"));
         let result = translate(&req);
         assert_eq!(
             (result.phase, result.stage),

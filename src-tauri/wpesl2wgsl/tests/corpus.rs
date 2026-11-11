@@ -7,7 +7,8 @@
 //! 3. 请求夹具（P7a）：`WPESL2WGSL_REQUESTS` 指向 `kbp corpus scan --extra requests:<目录>` 录下的夹具目录时，逐个重放
 //!    编译管线真实发出的请求；`ok` 必须和夹具里记录的（前端 wasm 的结果）一致。没设就跳过。
 //!    例外：夹具记录失败、重放通过，且键（`<名字>-<sha1 前 8 位>`）在 `WPESL2WGSL_BASELINE_ALLOW` 里的，只列出不算失败
-//!    （夹具是改动前录的，本步预期新通过的请求）。
+//!    （夹具是改动前录的，本步预期新通过的请求）；反过来记录通过、重放失败的，要列在单独的
+//!    `WPESL2WGSL_BASELINE_ALLOW_REGRESS` 里才不算失败（预期的退步，必须刻意列出）。
 //!
 //! 逐字节基线：`WPESL2WGSL_BASELINE_DIR` 指向一份旧的导出目录（`WPESL2WGSL_DUMP_DIR` 导出的）时，本次导出逐文件和它比较，
 //! 「变了」「新失败」非空时失败，`WPESL2WGSL_BASELINE_ALLOW`（逗号分隔的键前缀）列出的除外。
@@ -577,9 +578,14 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
             failed_all.insert(fixture.name.clone());
         }
         if result.ok != fixture.result.ok {
-            // 夹具录的是改动前的结果：本步预期新通过、且列在 ALLOW 里的请求只列出，不算失败
-            let expected =
-                result.ok && baseline_allowed(&sanitize(&format!("{}-{short}", fixture.name)));
+            // 夹具录的是改动前的结果：本步预期新通过、且列在 ALLOW 里的请求只列出，不算失败；
+            // 预期从通过变失败的（P7b 起，依赖后续步骤才能再通过）要单独列进 ALLOW_REGRESS
+            let key = sanitize(&format!("{}-{short}", fixture.name));
+            let expected = if result.ok {
+                baseline_allowed(&key)
+            } else {
+                regress_allowed(&key)
+            };
             let list = if expected {
                 &mut allowed_mismatches
             } else {
@@ -627,7 +633,7 @@ fn requests(dir: &Path, failures: &mut Vec<String>) {
         .filter(|(_, s)| !s.failed.is_empty())
         .collect();
     let mut out = format!(
-        "请求夹具：{} 个请求（{} 个着色器，含别名 {}），通过 {ok}、失败 {}；失败的着色器 {} 个（含别名 {}）；ok 与夹具不一致 {}（另有 ALLOW 内的新通过 {}）；WGSL 回读失败 {}\n",
+        "请求夹具：{} 个请求（{} 个着色器，含别名 {}），通过 {ok}、失败 {}；失败的着色器 {} 个（含别名 {}）；ok 与夹具不一致 {}（另有 ALLOW 内的预期变化 {}）；WGSL 回读失败 {}\n",
         files.len(),
         by_name.len(),
         all_names.len(),
@@ -693,6 +699,24 @@ fn baseline_allowed(key: &str) -> bool {
     ALLOW
         .get_or_init(|| {
             std::env::var("WPESL2WGSL_BASELINE_ALLOW")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(sanitize)
+                .collect()
+        })
+        .iter()
+        .any(|p| key.starts_with(p.as_str()))
+}
+
+/// `WPESL2WGSL_BASELINE_ALLOW_REGRESS` 是否列出了这个键：夹具记录通过、重放失败的请求只有列在这里才不算失败。
+/// 和 `WPESL2WGSL_BASELINE_ALLOW` 分开，退步必须单独、刻意地列出（P7b 起：照 WPE 改规则后，有的着色器要等后续步骤才能再通过）。
+fn regress_allowed(key: &str) -> bool {
+    static ALLOW: OnceLock<Vec<String>> = OnceLock::new();
+    ALLOW
+        .get_or_init(|| {
+            std::env::var("WPESL2WGSL_BASELINE_ALLOW_REGRESS")
                 .unwrap_or_default()
                 .split(',')
                 .map(str::trim)

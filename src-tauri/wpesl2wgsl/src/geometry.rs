@@ -12,8 +12,8 @@ use crate::preprocess::{split_ident, Line, Preprocessor};
 use crate::rewrite::RewriteError;
 use crate::Stage;
 
-/// 生成的行记在这个文件名下（不会产生诊断）。
-const GENERATED_FILE: &str = "<geometry>";
+/// 生成的行记在这个文件名下（不会产生诊断）。改写层据此认出拼好的顶点段。
+pub(crate) const GENERATED_FILE: &str = "<geometry>";
 
 /// D3D11 的 `maxvertexcount` 上限。
 const MAX_VERTEX_COUNT: i64 = 1024;
@@ -34,6 +34,8 @@ const MAX_VERTEX_COUNT: i64 = 1024;
 /// 5. 拼接顺序：私有全局 → `struct PS_INPUT` 与选中的顶点 → 辅助函数 → 顶点段 → 几何段 → 新的 `main`。
 /// 6. `kb_gs_normalize` 遇到零向量时置 `kb_gs_degenerate`，整个图元放到裁剪体外：WPE 下 `normalize(0)` 得 NaN，
 ///    D3D 丢弃含 NaN 顶点的三角形；WGSL 允许实现假定没有 NaN，不能靠检测 NaN。
+/// 7. 同一个 `PS_INPUT` 变量的两个以上字段同时作为 `out` / `inout` 实参传给同一个函数时，改成先传临时变量、
+///    调用后拷回字段（Tint 按根变量判指针别名，[`split_aliased_out_args`]）。
 pub fn merge(
     vertex: &[Line],
     geometry: &[Line],
@@ -293,6 +295,8 @@ pub fn merge(
         .collect();
     fields.insert("kb_Position".into(), "vec4".into());
     let casts = wrap_truncations(&mut tokens, &directives, &fields);
+    let functions = param_dirs(&vs_tokens.iter().chain(&tokens).cloned().collect::<Vec<_>>());
+    split_aliased_out_args(&mut tokens, &functions, &fields, &mut taken);
 
     // ---- 拼接 ----
     let mut out: Vec<Line> = Vec::new();
@@ -381,6 +385,204 @@ pub fn merge(
 }
 
 /// `in` / `out` / `varying` 声明里的一个变量。
+/// 参数方向：`in`（含不写）、`out`、`inout`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParamDir {
+    In,
+    Out,
+    InOut,
+}
+
+/// 函数定义 / 原型的参数方向（按参数顺序）。同名重载按参数个数区分，同个数的取第一个。
+fn param_dirs(tokens: &[Tok]) -> BTreeMap<String, Vec<Vec<ParamDir>>> {
+    let mut out: BTreeMap<String, Vec<Vec<ParamDir>>> = BTreeMap::new();
+    for i in 0..tokens.len() {
+        // <返回类型> <函数名> ( … ) 后面跟 `{` 或 `;`；返回类型是内建类型、void 或 PS_INPUT
+        if tokens[i].kind != Kind::Ident || after_dot(tokens, i) {
+            continue;
+        }
+        let returns = prev_sig(tokens, i).is_some_and(|p| {
+            tokens[p].kind == Kind::Ident
+                && (is_type(&tokens[p].text)
+                    || matches!(tokens[p].text.as_str(), "void" | "PS_INPUT"))
+        });
+        if !returns {
+            continue;
+        }
+        let Some(open) = next_sig(tokens, i).filter(|&j| tokens[j].is_punct('(')) else {
+            continue;
+        };
+        let Some(close) = matching(tokens, open) else {
+            continue;
+        };
+        if !next_sig(tokens, close)
+            .is_some_and(|j| tokens[j].is_punct('{') || tokens[j].is_punct(';'))
+        {
+            continue;
+        }
+        let dirs: Vec<ParamDir> = top_level_args(tokens, open, close)
+            .into_iter()
+            .filter(|&(from, to)| first_sig(tokens, from, to).is_some())
+            .map(|(from, to)| {
+                let word = |w: &str| {
+                    (from..to).any(|j| tokens[j].kind == Kind::Ident && tokens[j].text == w)
+                };
+                if word("inout") {
+                    ParamDir::InOut
+                } else if word("out") {
+                    ParamDir::Out
+                } else {
+                    ParamDir::In
+                }
+            })
+            .collect();
+        let overloads = out.entry(tokens[i].text.clone()).or_default();
+        if !overloads.iter().any(|o| o.len() == dirs.len()) {
+            overloads.push(dirs);
+        }
+    }
+    out
+}
+
+/// `[from, to)` 里第一个有效记号。
+fn first_sig(tokens: &[Tok], from: usize, to: usize) -> Option<usize> {
+    (from..to).find(|&j| tokens[j].kind != Kind::Space && !tokens[j].text.is_empty())
+}
+
+/// `(` 与配对的 `)` 之间按顶层逗号切开的各段（记号下标的左闭右开区间）。
+fn top_level_args(tokens: &[Tok], open: usize, close: usize) -> Vec<(usize, usize)> {
+    let mut args = Vec::new();
+    let mut depth = 0i32;
+    let mut start = open + 1;
+    for (j, token) in tokens.iter().enumerate().take(close).skip(open + 1) {
+        if token.is_punct('(') || token.is_punct('[') || token.is_punct('{') {
+            depth += 1;
+        } else if token.is_punct(')') || token.is_punct(']') || token.is_punct('}') {
+            depth -= 1;
+        } else if depth == 0 && token.is_punct(',') {
+            args.push((start, j));
+            start = j + 1;
+        }
+    }
+    args.push((start, close));
+    args
+}
+
+/// [`merge`] 第 7 条（README「几何着色器展开」第 9 条）：同一个 `PS_INPUT` 变量的两个以上字段同时作为 `out` / `inout` 实参传给同一个函数
+/// （`.geom` 带 `REFRACT` 时的 `ComputeScreenRefractionTangents(…, v.v_ScreenCoord, v.v_ScreenTangents)`）。
+/// naga 把 `out` 参数写成指针，两个指针的根变量相同，Tint 按根变量判别名、报 `invalid aliased pointer argument`
+/// （P7a 步骤 2 发现；WGSL 规范的指针别名规则）。改成先传临时变量、调用后拷回字段：
+/// `{ T0 kb_gs_alias0 = v.f0; … F(…, kb_gs_alias0, …); v.f0 = kb_gs_alias0; … }`（`out` 参数的临时变量不初始化）。
+///
+/// 在第 4 条（隐式截断，[`wrap_truncations`]）之后做。只改写成一条语句的调用（前面是 `;`、`{`、`}` 或 `else`，后面紧跟 `;`），实参必须正好是 `<变量>.<字段>`；
+/// 参数方向从顶点段与几何段里的函数定义查（`common_particles.h` 在顶点段展开）。其余调用不动。
+fn split_aliased_out_args(
+    tokens: &mut [Tok],
+    functions: &BTreeMap<String, Vec<Vec<ParamDir>>>,
+    fields: &BTreeMap<String, String>,
+    taken: &mut BTreeSet<String>,
+) {
+    let structs: BTreeSet<String> = (0..tokens.len())
+        .filter(|&i| tokens[i].kind == Kind::Ident && tokens[i].text == "PS_INPUT")
+        .filter_map(|i| next_sig(tokens, i).filter(|&j| tokens[j].kind == Kind::Ident))
+        .map(|j| tokens[j].text.clone())
+        .collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        let overloads = if tokens[i].kind == Kind::Ident && !after_dot(tokens, i) {
+            functions.get(&tokens[i].text)
+        } else {
+            None
+        };
+        let Some(overloads) = overloads else {
+            i += 1;
+            continue;
+        };
+        // 前一个记号可能已被第 4 条插了 `)`（`v.f = kb_gs_as_vec3(x);` 的分号记号是 `);`），按结尾字符判断
+        let statement = prev_sig(tokens, i).is_none_or(|p| {
+            (tokens[p].kind == Kind::Punct && tokens[p].text.ends_with([';', '{', '}']))
+                || tokens[p].text == "else"
+        });
+        let call = next_sig(tokens, i)
+            .filter(|&j| tokens[j].is_punct('('))
+            .and_then(|open| Some((open, matching(tokens, open)?)))
+            .and_then(|(open, close)| {
+                let semi = next_sig(tokens, close).filter(|&j| tokens[j].is_punct(';'))?;
+                Some((open, close, semi))
+            });
+        let (true, Some((open, close, semi))) = (statement, call) else {
+            i += 1;
+            continue;
+        };
+        let args = top_level_args(tokens, open, close);
+        let Some(dirs) = overloads.iter().find(|o| o.len() == args.len()) else {
+            i = close + 1;
+            continue;
+        };
+        // out / inout 实参里正好是 `<PS_INPUT 变量>.<字段>` 的：(实参下标, 变量, 字段, 类型)
+        let mut candidates: Vec<(usize, String, String, String)> = Vec::new();
+        for (index, &(from, to)) in args.iter().enumerate() {
+            if dirs[index] == ParamDir::In {
+                continue;
+            }
+            let sig: Vec<usize> = (from..to)
+                .filter(|&j| tokens[j].kind != Kind::Space && !tokens[j].text.is_empty())
+                .collect();
+            let [root, dot, field] = sig[..] else {
+                continue;
+            };
+            if tokens[root].kind == Kind::Ident
+                && structs.contains(&tokens[root].text)
+                && tokens[dot].is_punct('.')
+                && tokens[field].kind == Kind::Ident
+            {
+                if let Some(ty) = fields.get(&tokens[field].text) {
+                    candidates.push((
+                        index,
+                        tokens[root].text.clone(),
+                        tokens[field].text.clone(),
+                        ty.clone(),
+                    ));
+                }
+            }
+        }
+        // 同一个根变量出现两次以上才有别名
+        let roots: Vec<String> = candidates.iter().map(|c| c.1.clone()).collect();
+        candidates.retain(|c| roots.iter().filter(|r| **r == c.1).count() >= 2);
+        if candidates.is_empty() {
+            i = semi + 1;
+            continue;
+        }
+        let mut before = String::from("{ ");
+        let mut after = String::new();
+        for (index, root, field, ty) in &candidates {
+            let mut n = 0;
+            let temp = loop {
+                let name = format!("kb_gs_alias{n}");
+                if taken.insert(name.clone()) {
+                    break name;
+                }
+                n += 1;
+            };
+            let init = if dirs[*index] == ParamDir::InOut {
+                format!(" = {root}.{field}")
+            } else {
+                String::new()
+            };
+            before.push_str(&format!("{ty} {temp}{init}; "));
+            after.push_str(&format!(" {root}.{field} = {temp};"));
+            let (from, to) = args[*index];
+            let first = first_sig(tokens, from, to).expect("实参非空");
+            clear(tokens, first, to);
+            tokens[first].text.insert_str(0, temp.as_str());
+        }
+        tokens[i].text.insert_str(0, &before);
+        tokens[semi].text.push_str(&after);
+        tokens[semi].text.push_str(" }");
+        i = semi + 1;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct Var {
     ty: String,
@@ -1054,6 +1256,79 @@ void main() {
         let body = gs_body(&text);
         assert_eq!(body.matches("kb_gs_append(v);").count(), 2, "{body}");
         assert!(!body.contains("OUT"), "{body}");
+    }
+
+    /// P7b 步骤 4：同一个 PS_INPUT 变量的两个字段同时作为 out / inout 实参（`.geom` 带 REFRACT 的
+    /// `ComputeScreenRefractionTangents`）改成临时变量 + 拷回；只有一个字段、`in` 参数、不同变量的不动。
+    #[test]
+    fn aliased_out_fields_go_through_temporaries() {
+        let vs = format!(
+            "void Tangents(in vec3 p, in vec3 r, out vec3 a, out vec4 b) {{ a = p; b = vec4(r, 1.0); }}\nvoid Bump(inout vec3 a, inout vec4 b) {{ a += 1.0; b += 1.0; }}\nvoid Read(vec3 a, vec4 b) {{ }}\n{VS}"
+        );
+        let gs = "in vec4 gl_Position;
+in vec4 v_Color;
+in vec3 v_End;
+out vec3 v_ScreenCoord;
+out vec4 v_ScreenTangents;
+out vec4 gl_Position;
+[maxvertexcount(2)]
+void main() {
+\tvec3 start = IN[0].gl_Position.xyz;
+\tPS_INPUT v;
+\tPS_INPUT w;
+\tv.gl_Position = vec4(start, 1.0);
+\tv.v_ScreenCoord = start;
+\tTangents(v.gl_Position.xyw, start, v.v_ScreenCoord, v.v_ScreenTangents);
+\tif (start.x > 0.0) Bump(v.v_ScreenCoord, v.v_ScreenTangents); else Bump(v.v_ScreenCoord, w.v_ScreenTangents);
+\tTangents(start, start, v.v_ScreenCoord, w.v_ScreenTangents);
+\tRead(v.v_ScreenCoord, v.v_ScreenTangents);
+\tOUT.Append(v);
+\tOUT.Append(v);
+}";
+        let (out, _) = merge(
+            &lines("<vertex>", &vs),
+            &lines("<geometry>", gs),
+            &pp_with(&[]),
+        )
+        .unwrap();
+        let text = out
+            .iter()
+            .map(|l| l.code.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = gs_body(&text);
+        // out 参数：临时变量不初始化，调用后拷回
+        assert!(body.contains("\t{ vec3 kb_gs_alias0; vec4 kb_gs_alias1; Tangents(v.kb_Position.xyw, start, kb_gs_alias0, kb_gs_alias1); v.v_ScreenCoord = kb_gs_alias0; v.v_ScreenTangents = kb_gs_alias1; }\n"), "{body}");
+        // inout 参数：临时变量从字段初始化；if 后面那一句不是语句开头，不动；else 后面的两个字段不同变量，也不动
+        assert!(body.contains("\tif (start.x > 0.0) Bump(v.v_ScreenCoord, v.v_ScreenTangents); else Bump(v.v_ScreenCoord, w.v_ScreenTangents);\n"), "{body}");
+        assert!(
+            body.contains("\tTangents(start, start, v.v_ScreenCoord, w.v_ScreenTangents);\n"),
+            "{body}"
+        );
+        // in 参数传两个字段没有指针，不动
+        assert!(
+            body.contains("\tRead(v.v_ScreenCoord, v.v_ScreenTangents);\n"),
+            "{body}"
+        );
+        // 顶点段里的函数定义本身不动
+        assert!(text.contains("void Bump(inout vec3 a, inout vec4 b) { a += 1.0; b += 1.0; }"));
+
+        let gs_inout = gs.replace(
+            "\tRead(v.v_ScreenCoord, v.v_ScreenTangents);",
+            "\tBump(v.v_ScreenCoord, v.v_ScreenTangents);",
+        );
+        let (out, _) = merge(
+            &lines("<vertex>", &vs),
+            &lines("<geometry>", &gs_inout),
+            &pp_with(&[]),
+        )
+        .unwrap();
+        let text = out
+            .iter()
+            .map(|l| l.code.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(gs_body(&text).contains("\t{ vec3 kb_gs_alias2 = v.v_ScreenCoord; vec4 kb_gs_alias3 = v.v_ScreenTangents; Bump(kb_gs_alias2, kb_gs_alias3); v.v_ScreenCoord = kb_gs_alias2; v.v_ScreenTangents = kb_gs_alias3; }\n"), "{text}");
     }
 
     /// 零向量 normalize：四个重载都置 `kb_gs_degenerate` 并原样返回，main 把整个图元放到裁剪体外；顶点段的 normalize 不动。

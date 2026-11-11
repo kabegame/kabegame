@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::pack;
 use crate::preprocess::{parse_json_object, split_ident, Line};
 use crate::Stage;
 
@@ -194,6 +195,9 @@ struct Decl {
 struct StageParts {
     decls: Vec<(Decl, Option<serde_json::Value>)>,
     body: Vec<String>,
+    /// 几何着色器展开拼成的顶点段：`main` 是生成的，顶点段与几何段各自的 `main` 已改名，
+    /// 「`main` 签名之前」在这里没有 WPE 的含义，不做打包形态（[`pack`]）。绳着色器没有这类数组。
+    merged_geometry: bool,
 }
 
 pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError> {
@@ -535,10 +539,18 @@ fn split_stage(stage: Stage, lines: &[Line]) -> Result<StageParts, RewriteError>
             decls.push((decl, meta.clone()));
         }
     }
-    Ok(StageParts { decls, body })
+    let merged_geometry = lines
+        .iter()
+        .any(|line| line.file == crate::geometry::GENERATED_FILE);
+    Ok(StageParts {
+        decls,
+        body,
+        merged_geometry,
+    })
 }
 
-/// `uniform [lowp] vec3 a, b[4];`：只接受一行内写完的声明，带初始值或跨行的直接报错。
+/// `uniform [lowp] vec3 a, b[4];`：只接受一行内写完的声明，带初始值或跨行的直接报错；名字后带分量（`v_Size.xy`）的
+/// 照 WPE 当成不带分量的同名声明。
 fn parse_decl(storage: Storage, text: &str) -> Result<Vec<Decl>, String> {
     let Some(body) = text.strip_suffix(';') else {
         return Err(format!("全局声明没有在本行结束：{text}"));
@@ -568,7 +580,14 @@ fn parse_decl(storage: Storage, text: &str) -> Result<Vec<Decl>, String> {
             return Err(format!("全局声明缺少名字：{text}"));
         }
         let after = after.trim();
-        let array = if after.is_empty() {
+        // 名字后带分量（`varying vec4 v_Size.xy;`）：WPE 的声明正则 `(\w+)\s+<类型>\s+(\w+)(\[…\])?` 在 `.` 处停下，
+        // 只取名字、`.xy` 丢弃（rea-p7-shader「P7b 补查」第 3 条，uniform / varying 一样；attribute 按整词找属性名，
+        // `a_Position.xyz` 里 `.` 是词边界，同样只认名字）。p7-sem 的 `kbswz` 实测按 `vec4 v_Size` 编译
+        let swizzle = after
+            .strip_prefix('.')
+            .map(|rest| split_ident(rest.trim_start()))
+            .is_some_and(|(component, tail)| !component.is_empty() && tail.trim().is_empty());
+        let array = if after.is_empty() || swizzle {
             None
         } else if let Some(size) = after.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             Some(
@@ -689,6 +708,32 @@ fn render(
     attributes: &[InterfaceDecl],
     varyings: &[InterfaceDecl],
 ) -> Result<String, RewriteError> {
+    let body = rewrite_identifiers(stage, &parts.body.join("\n"), renames);
+    // main 之前对 float / int / uint 数组 uniform 的下标访问是 WPE 的打包形态（P7b 步骤 3，见 pack.rs）
+    let (body, pack_functions) = if parts.merged_geometry {
+        (body, String::new())
+    } else {
+        let declared: Vec<pack::Declared> = parts
+            .decls
+            .iter()
+            .filter(|(decl, _)| decl.storage == Storage::Uniform)
+            .map(|(decl, _)| pack::Declared {
+                wpe_name: &decl.name,
+                glsl_name: renames.get(&decl.name).unwrap_or(&decl.name),
+                ty: &decl.ty,
+                array: decl.array,
+                padded: decl.array.is_some() && padded_array(&decl.ty).is_some(),
+            })
+            .collect();
+        pack::rewrite_head(&declared, &body)
+    };
+    let body = rewrite_texture_calls(&body, textures).map_err(|message| RewriteError {
+        stage,
+        message,
+        file: None,
+        line: None,
+    })?;
+
     let mut out = String::from("#version 450\n");
     out.push_str(MACRO_HEADER);
     if !uniforms.is_empty() {
@@ -714,6 +759,7 @@ fn render(
                 name = uniform.name,
             ));
         }
+        out.push_str(&pack_functions);
     }
     for texture in textures {
         out.push_str(&format!(
@@ -765,13 +811,6 @@ fn render(
         ));
     }
 
-    let body = rewrite_identifiers(stage, &parts.body.join("\n"), renames);
-    let body = rewrite_texture_calls(&body, textures).map_err(|message| RewriteError {
-        stage,
-        message,
-        file: None,
-        line: None,
-    })?;
     out.push_str(&broadcast_helpers(&body));
     out.push_str(&body);
     out.push('\n');
@@ -1287,6 +1326,43 @@ mod tests {
             "{}",
             program.fragment_glsl
         );
+    }
+
+    /// P7b 步骤 2：声明名后带分量照 WPE 只取名字（p7-sem 的 `kbswz`；工坊 `frame_builder` 的 `varying vec4 v_Size.xy;`）。
+    #[test]
+    fn declarations_with_a_component_suffix_keep_the_name() {
+        let vs = "attribute vec3 a_Position.xyz;\nuniform vec2 g_Offset.xy; // {\"material\":\"offset\"}\nvarying vec4 v_Size.xy;\nvoid main() { v_Size = vec4(g_Offset, 0.3, 0.4); gl_Position = vec4(a_Position, 1.0); }";
+        let fs = "varying vec4 v_Size.xy;\nvoid main() { gl_FragColor = vec4(v_Size.xyz, 1.0); }";
+        let program = build(&lines(vs), &lines(fs)).unwrap();
+        assert_eq!(program.attributes[0].name, "a_Position");
+        assert_eq!(program.attributes[0].ty, "vec3");
+        assert_eq!(uniform_names(&program), ["g_Offset"]);
+        assert_eq!(uniform(&program, "g_Offset").ty, "vec2");
+        assert_eq!(program.varyings.len(), 1);
+        assert_eq!(
+            (
+                program.varyings[0].name.as_str(),
+                program.varyings[0].ty.as_str()
+            ),
+            ("v_Size", "vec4")
+        );
+        assert!(program
+            .fragment_glsl
+            .contains("layout(location = 0) in vec4 v_Size;"));
+        // 反例：带初始值、分量后还有别的内容的照旧报错
+        for decl in [
+            "uniform float g_X = 1.0;",
+            "varying vec4 v_Size.xy[2];",
+            "varying vec4 v_Size.;",
+        ] {
+            let vs = format!("{decl}\nvoid main() {{}}");
+            let error = build(&lines(&vs), &lines("void main() {}")).unwrap_err();
+            assert!(
+                error.message.contains("全局声明"),
+                "{decl}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

@@ -82,7 +82,7 @@ interface TranslateRequest {
 | `request` | 请求 JSON 无法解析，或 COMBO 值不是整数 / 布尔 |
 | `include` | 缺头文件，见 `missing`；只有几何段缺时 `stage` 为 `"geometry"` |
 | `require` | `#require` 展开不了，见 `requires`：未知的库名，或要阴影 / cookie 的 `LightingV1/shadow` |
-| `preprocess` | 条件编译不配对、`#if` 表达式错误、未知预处理指令（`file` / `line` 指向原文） |
+| `preprocess` | `#if` 没有闭合、`#if` 里宏展开过深、未知预处理指令（`file` / `line` 指向原文） |
 | `rewrite` | 不支持的全局声明、两阶段同名的引擎 uniform（都没有 `material`）类型不同、纹理函数参数不是已声明的纹理；几何着色器展开不支持的写法（`IN[1]`、`OUT.RestartStrip()` 等） |
 | `parse` / `validate` / `write` | naga 阶段的错误（行号指向生成的 GLSL） |
 | `trap` | wasm 实例 trap（仅前端胶水产生） |
@@ -159,8 +159,16 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
    COMBO 名按大写处理：材质里写 `version: 2`，源码里是 `VERSION`。
 3. **预处理**（`preprocess.rs`）：
    - 剥离块注释，保留行号；处理行续接；`#include` 原地展开。
-   - `#if / #ifdef / #ifndef / #elif / #else / #endif` 按 C 优先级求整数表达式，支持 `defined`。未定义的标识符按 0 处理：大量 COMBO 不写声明，直接 `#if MULTI`。
-   - `#define` / `#undef` 行保留，交给 naga 自带的预处理器展开正文；函数宏不参与 `#if`。
+   - `#if / #ifdef / #ifndef / #elif / #else / #endif` 照 WPE 自己的预处理器（`wallpaper64.exe` 的 `FUN_14016b0e0` / `FUN_140167e10`，
+     `.claude/plans/wpe-import/3-scene/phase7/rea-p7-shader.md` §2.3 与「P7b 补查」第 1、2 条），不照 C 预处理器：
+     - 先做宏替换，未定义的标识符按 0（大量 COMBO 不写声明，直接 `#if MULTI`）；支持 `defined X` / `defined(X)`；函数宏在 `#if` 里按 0。
+     - 32 位有符号整数，优先级同 C，**没有三元运算符**；数字是十进制或 `0x` 十六进制，小数部分与 `u` / `f` / `l` 后缀丢掉。
+     - **只解析一个表达式，后面的尾随字符忽略**：`#elif AUDIOSAMPLES == 32;` 的分号、多余的右括号、单个 `=` 之后都不看；缺右括号、缺操作数、除以 0 都不报错（缺的按 0，除以 0 得 0）。
+     - **栈空时的 `#else` / `#elif` / `#endif` 忽略**、不出行，后面的代码保持活跃。没闭合的 `#if` 仍报错（WPE 不报错，语料里没有）。
+     - p7-sem 的 `kbsemi`（尾随分号）与 `kbtrunc`（多余的 `#endif`）在 WPE 里实测编过（`.claude/plans/wpe-import/3-scene/phase7/p7-REPORT.md`「P7b 规则的实测」）。
+   - `#define` / `#undef` 行保留，交给 naga 自带的预处理器展开正文。**同名、内容不同的重定义**照 WPE / fxc 后者覆盖前者：输出里先补一行 `#undef <名>`
+     再输出新定义，`#if` 也用新值（naga 对记号不同的重定义报 `DefineRedefined`）；内容相同（按记号比，只差空白）的照旧不动。
+     请求的宏（COMBO 等）同样经 naga 的 `Options::defines` 进它的宏表，源码改它们的值也补 `#undef`。p7-sem 的 `kbredef` 实测后者生效。
    - 全局声明的数组长度如果写成宏（`g_Bones[BONECOUNT]`），按当前宏表算成数字。
    - `#require` 按 WPE 语义现场展开（`library.rs`）：`LightingV1` 在 `LIGHTING` 非 0 时按 `LIGHTS_*` 生成灯光 uniform 与 `PerformLighting_V1`，
      否则什么都不插；逐灯计算在公开头文件 `common_pbr_2.h`，这里只负责遍历。未知的库、阴影与 cookie 报 `phase: "require"`。
@@ -170,10 +178,25 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
 5. **改写成 Vulkan GLSL 450**（`rewrite.rs`）：
    - **声明**：
      - 普通 uniform 并入 uniform 块，标量 / 二三分量向量的数组补成 `kb_u_<名字>`，再由 `kb_load_<名字>()` 还原、宏指回原名。这样下标访问和整个数组传参都照常可用。
+     - 声明名后带分量（`varying vec4 v_Size.xy;`）照 WPE 当成不带分量的同名声明：WPE 的声明正则 `(\w+)\s+<类型>\s+(\w+)(\[…\])?` 在 `.` 处停下，
+       `uniform` / `varying` 都只取名字；`attribute` 按整词找属性名，同样只认名字（rea「P7b 补查」第 3 条，p7-sem 的 `kbswz` 实测）。分量后还有别的内容的照旧报错。
        两阶段同名、取值来源不同的拆成两格，一侧改名为 `kb_vs_` / `kb_fs_<名字>`，见「两阶段同名 uniform」。
      - 采样器拆成纹理 + `kb_sampler_<名字>`；`attribute` / `varying` 加 `layout(location)`。
      - 只在片元阶段声明的 varying，也给顶点阶段补一个输出。顶点阶段不写入时值为零，对应 D3D 下的未定义值；不补的话，WebGPU 建管线会失败。
      - `gl_*` 名的全局声明（几何着色器遗留的 `varying uint gl_ViewportIndex`、fur4 的 `in uint gl_InstanceID`）忽略。
+   - **`main` 之前的打包数组**（`src/pack.rs`）：WPE 把 `float` / `vec2` / `int` / `uint` 数组 uniform 在常量缓冲里声明成 `float4` / `int4` / `uint4`、长度 `ceil(n/4)`，
+     只有 `main` 签名之后的文本换成拆包后的 `float[n]`；`main` 之前（全局辅助函数、文件顶部的 `#define`）看到的是打包形态（rea「accessArray 的适用条件」、「P7b 补查」第 4 条）。
+     - `main` 签名照 WPE 的正则 `\bvoid\s+main\s*\(\s*\)\s*\{` 认第一处；认不出（`main(void)`）的不做。
+     - 签名之前对 `float` / `int` / `uint` 数组的下标访问 `X[e]` 改成 `kb_pack_X(e)`，返回第 `e` 行（`vec4` / `ivec4` / `uvec4`，第 k 行是原数组 4k…4k+3 号元素，不足补 0）。
+       `X[i/4][i%4]` 是第 i 个元素，`X[i]` 是整行。`main` 里照旧是 `kb_load_X()`。
+     - **越界**照 D3D11 实测（p7-sem 的 `kbpack`）：读同一常量缓冲里按本阶段声明顺序排在后面（或前面）的成员，出了整个常量缓冲是 0。
+       所以按 HLSL cbuffer 默认打包规则复刻本阶段的 `g_bufStatic` / `g_bufDynamic`（成员不跨 16 字节，数组与矩阵从寄存器边界开始、元素步长 16；
+       矩阵 column_major，寄存器 j 的分量 c 是 GLSL 的 `M[c][j]`；类型不同的分量按位重解释），生成一串常量下标的分支。
+       分流按名字：内置名表（`pack.rs` 的 `ENGINE_UNIFORMS`，`wallpaper64.exe` 2.8.42，140 项）之外的、以及 `g_TexelSizeHalf` `g_TexelSize` `g_Screen`
+       `g_TextureReductionScale` `g_HDRParams` 进 static，`g_Texture0`–`9`、`g_Bones`、`g_L*` 灯光不在这两个缓冲里，其余进 dynamic。
+       WPE 声明正则不认的类型（`mat2`、`ivec2`、`bool`……）不进布局。
+     - 只有签名之前下标访问了这类数组的着色器才生成 `kb_pack_*`，其余输出逐字节不变；几何展开拼成的顶点段不做（绳着色器没有这类数组）。
+     - `vec2` 数组 WPE 也只给 `4·ceil(n/4)` 个分量（装不下），语料没有实例，不做；签名之前不带下标地用到（整体传参、`#define SPEC X`）的照旧是还原后的数组。
    - **纹理函数**：
      - `texSample2D(t, uv)` 改成 `texture(sampler2D(t, kb_sampler_t), uv)`；
      - `texSample2DLod` 改成 `textureLod`；
@@ -258,6 +281,12 @@ void main() {
 }
 ```
 
+9. **`out` 实参的指针别名**：几何段里同一个 `PS_INPUT` 变量的两个以上字段同时作为 `out` / `inout` 实参传给同一个函数时
+   （`.geom` 带 `REFRACT` 的 `ComputeScreenRefractionTangents(…, v.v_ScreenCoord, v.v_ScreenTangents)`），改成先传临时变量、调用后拷回字段：
+   `{ vec3 kb_gs_alias0; vec4 kb_gs_alias1; F(…, kb_gs_alias0, kb_gs_alias1); v.v_ScreenCoord = kb_gs_alias0; v.v_ScreenTangents = kb_gs_alias1; }`
+   （`inout` 的临时变量从字段初始化）。naga 把 `out` 参数写成指针，Tint 按根变量判别名、拒绝 `invalid aliased pointer argument`（P7a 步骤 2 发现）。
+   参数方向从顶点段与几何段的函数定义查；只改写成一条语句、实参正好是 `<变量>.<字段>` 的调用，在第 6 条之后做。
+
 限制：
 - 只支持点输入与每次调用一条带，见第 4 条。
 - **画的顶点数必须等于实际 `Append` 次数**：多出来的顶点放在裁剪体外，会和前面的真实顶点连成三角形。`genericropeparticle` 每次调用都正好输出 `maxVertices` 个，渲染器按 `maxVertices` 画即可。
@@ -273,6 +302,8 @@ void main() {
 | `Unknown function 'rotateVec2'` 这类 | HLSL 允许 vec4 → vec2 隐式截断，GLSL 不允许；没有类型信息无法改写 |
 | `varying … 在两个阶段的类型不同` | 同上（片元阶段读更少分量） |
 | `Array size must be greater than zero` | `BONECOUNT` 等引擎宏未定义（骨骼蒙皮），可经 `defines` 传入 |
+| `Unknown function 'kb_pack_<名>'` | `main` 之前打包数组的下标是 `float`（工坊 `video` 的 `[barID / 4]`），fxc 截断成整数，要类型信息（P7c） |
+| `main` 之前打包数组的一行赋给 `float` 等（`return` / 初始化类型不符） | HLSL 把 `float4` 隐式截断成 `.x`，GLSL 不允许；工坊 `audioline`、`highly_customizable_audio_visualizer` 由此从「能翻、画法和 WPE 不同」变成失败（P7c） |
 | `不支持的采样器类型 sampler2DBackBuffer` | 体积光专用采样器类型 |
 
 另外，glsl-in 只认 Vulkan 语义的 GLSL 450，这正是改写这一步存在的原因；naga 的 `glsl-in` / `wgsl-out` 在其支持表里是二档（维护但测试较少）。
@@ -314,7 +345,7 @@ deno task test -c kabegame --skip cargo
 - 夹具只放在 `ignore/` 下，工坊内容不进仓库；没设 `WPESL2WGSL_REQUESTS` 时跳过这部分。
 - 报告按着色器名汇总，每条失败列出翻译器返回的全部错误，写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-requests.txt`。成功的照样回读校验，导出键是 `<名字>-<sha1 前 8 位>`。
 - 门槛：重放的 `ok` 必须和夹具记录的一致（wasm 与原生应当相同）。不一致时先查 wasm 是不是比翻译器源码旧。
-  例外：夹具是改动前录的，改动让某些请求从失败变成通过时，键在 `WPESL2WGSL_BASELINE_ALLOW` 里的只列出、标「允许」，不算失败；反方向（通过变失败）照样失败。
+  例外：夹具是改动前录的，改动让某些请求从失败变成通过时，键在 `WPESL2WGSL_BASELINE_ALLOW` 里的只列出、标「允许」，不算失败；反方向（通过变失败）要列在单独的 `WPESL2WGSL_BASELINE_ALLOW_REGRESS` 里才不算失败。
 
 环境变量（相对路径按仓库根解析，因为 cargo test 的工作目录是本 crate）：
 
@@ -324,6 +355,7 @@ deno task test -c kabegame --skip cargo
 | `WPESL2WGSL_DUMP_DIR` | 每次成功翻译生成的 GLSL / WGSL 写进这个目录（`<键>.vert.glsl`、`.vert.wgsl`、`.frag.glsl`、`.frag.wgsl`），供人工审阅和建基线。WPE 安装目录部分的键是 `gate__…` / `lit__…` / `geom__…` / `base__…`，请求夹具部分是 `<名字>-<sha1 前 8 位>`，非法字符换成 `_` |
 | `WPESL2WGSL_BASELINE_DIR` | 一份旧的导出目录：本次导出（只算本次写过的文件，目录里残留的旧文件不算）逐文件和它比较，报「相同 / 变了 / 新通过 / 新失败（基线有、本次没有）」，清单写到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-baseline.txt`；「变了」「新失败」非空时测试失败。没设 `WPESL2WGSL_DUMP_DIR` 时导出到 `CARGO_TARGET_TMPDIR/wpesl2wgsl-dump`（先清空） |
 | `WPESL2WGSL_BASELINE_ALLOW` | 逗号分隔的键前缀（按导出文件名的规则规整，`effects/foo` 与 `effects_foo` 等价）：这些「变了」「新失败」，以及请求夹具里「夹具失败、重放通过」的，不算失败，但仍列在报告里，标「允许」 |
+| `WPESL2WGSL_BASELINE_ALLOW_REGRESS` | 同样格式：请求夹具里「夹具通过、重放失败」的预期退步。和上一个分开，退步必须刻意列出（P7b 起：照 WPE 改规则后，有的着色器要等后续步骤才能再通过） |
 
 ```bash
 # 录夹具（产品源码默认 apps/wpe-scene/src，用其中的 wasm）
