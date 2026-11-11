@@ -70,6 +70,19 @@ export interface ScriptApiState {
   read?(target: ApiTarget): number[] | boolean | null;
   /** 脚本注册了音频缓冲：宿主据此订阅音频。语料与 `realmCheck` 不传，缓冲保持全零。 */
   audioRegistered?(): void;
+  /**
+   * 声音对象的排期器（P6a 步骤 2，宿主从 `SceneSounds` 取）：声音层的 `play` / `pause` / `stop` / `isPlaying` 接到它上面。
+   * 不传或返回 null（没有播放器、场景已退回）时方法什么都不做，`isPlaying` 为假。
+   */
+  sound?(object: number): SoundScriptTarget | null;
+}
+
+/** 声音层脚本方法的落点（`audio/scheduler.ts` 的 `SoundScheduler` 满足它）：WPE `ISoundLayer` 的四个方法。 */
+export interface SoundScriptTarget {
+  play(): void;
+  pause(): void;
+  stop(): void;
+  isPlaying(): boolean;
 }
 
 const DEGREE = 0.017453292;
@@ -199,8 +212,41 @@ export class ScriptApi {
         },
       );
     }
+    if (this.isSoundLayer(index)) this.installSound(api, index);
     this.layers.set(object, api);
     return api;
+  }
+
+  /** 是不是声音对象的图层：声音表里有它（对象类别跨重编译不变，图层代理建一次就定）。 */
+  private isSoundLayer(object: number): boolean {
+    return this.access.bundle().sounds?.some((sound) => sound.object === object) ?? false;
+  }
+
+  /**
+   * 声音层的 `ISoundLayer`（P6a 步骤 2，rea-p6a-sound.md 第 7 节）：只登记在声音对象的图层上（WPE 的方法表按对象类型登记），
+   * 其它图层上调用照旧是 `TypeError`；粒子层的同名方法是 P4f 的事（编译期另报 `script:api:particle.<名>`）。
+   * 四个方法直接接到排期器（`play` = `P`、`stop` = `X`），
+   * `volume` 读 `SceneState.sounds`、写落到就地目标 `{ kind: "sound" }`，不钳制（增益在乘积上钳，`audio/scheduler.ts`），
+   * 宿主写完当场交给排期器（WPE 的回调 `V`，暂停时也生效）。
+   */
+  private installSound(api: ApiObject, object: number): void {
+    const target = () => this.access.sound?.(object) ?? null;
+    this.method(api, "play", () => {
+      target()?.play();
+    });
+    this.method(api, "pause", () => {
+      target()?.pause();
+    });
+    this.method(api, "stop", () => {
+      target()?.stop();
+    });
+    this.method(api, "isPlaying", () => target()?.isPlaying() ?? false);
+    this.define(
+      api,
+      "volume",
+      () => this.access.state().sounds.get(object)?.volume,
+      (value) => this.write({ kind: "sound", object, field: "volume" }, value, "float"),
+    );
   }
 
   private object(): ApiObject {

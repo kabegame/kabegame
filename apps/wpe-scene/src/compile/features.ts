@@ -324,7 +324,7 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
  * 导出了 WPE 会调、运行时还没调的回调（光标、媒体等）：`script:callback:<名>`（P6 前置，否则场景静默缺交互）。
  * 只扫会执行的脚本：`collectScripts` 收集的 scene.json 脚本里，导入说明符无效的整段不求值（`ScriptRuntime.load`），不扫。
  * 脚本运行期的普通错误不在这里，仍只进脚本诊断（3b）。
- * `context.soundLayers`：场景里有声音对象（`isSoundObject`），这时任意接收者上的声音层方法都报（`scanScriptApi`，P6a 步骤 1）。
+ * `context.particleLayers`：场景里有粒子层，这时任意接收者上的粒子播放控制都报 `script:api:particle.<名>`（`scanScriptApi`，P6a 步骤 2）。
  */
 export function checkScriptFeatures(
   scripts: readonly SceneScript[],
@@ -419,10 +419,10 @@ const SOUND_KEYS = new Set([
 const SOUND_UNBOUND_KEYS = ["playbackmode", "mintime", "maxtime", "startsilent", "spatialization"];
 
 /**
- * 声音对象的键（P6a 步骤 1）。已实现：三种播放模式、`mintime` / `maxtime`、`startsilent`、`volume`（数字与 `{user}`，就地更新）。
+ * 声音对象的键（P6a 步骤 1）。已实现：三种播放模式、`mintime` / `maxtime`、`startsilent`、`volume`（数字与 `{user}`，就地更新；
+ * 挂 `{script}` 时字段脚本每帧写回到同一个就地目标，P6a 步骤 2）。
  * - `spatialization` 为真：`object:spatialization`（三维声音，步骤 0b 取消，语料 0 张）；
  * - `playbackmode` 不是 `loop` / `single` / `random`：`sound:playbackmode:<值>`（WPE 的枚举解析怎么处理未知值没读）；
- * - `volume` 挂 `{script}`：`sound:volume:script`（字段脚本写回，步骤 2）；
  * - `SOUND_UNBOUND_KEYS` 绑了属性或挂了脚本：`sound:binding:<键>`。
  */
 export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>): void {
@@ -437,7 +437,6 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
     !SOUND_MODES.includes(mode as (typeof SOUND_MODES)[number])
   )
     unsupported.add(`sound:playbackmode:${typeof mode === "string" ? mode : JSON.stringify(mode)}`);
-  if (isScriptValue(object.volume)) unsupported.add("sound:volume:script");
   if (soundFlag(object.spatialization)) unsupported.add("object:spatialization");
 }
 

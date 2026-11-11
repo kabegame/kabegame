@@ -360,10 +360,52 @@ export class SoundScheduler {
 
 ## 步骤 2 — 脚本控制
 
-- 声音层的脚本对象加上 `play` / `pause` / `stop` / `isPlaying` / `volume`，其它图层照旧；写回落进播放器。
-- `volume` 挂 `{script}` 的字段脚本（7 个）写回到增益。
-- `compile/scriptApi.ts` 删掉这几项；`api.test.ts` 的双向核对照旧。
-- **验收：** 确定性工程的脚本序列和 WPE 日志逐帧比；`script:api:layer.play` 等从语料消失。
+### 思路
+
+声音层的脚本对象加上 WPE 的 `ISoundLayer`：`play` / `pause` / `stop` / `isPlaying` 四个方法和可读写的 `volume`，直接接到步骤 1 的排期器上（方法在排期器里已经实现并测过）。`volume` 的写入和用户属性走同一条路：落到就地目标 `{ kind: "sound" }`，并当场调排期器的 `V`（WPE 改值立即生效、没有渐变，暂停时也是）。`volume` 挂 `{script}` 的字段脚本（4 张）每帧把返回值写回到同一个目标。
+
+**粒子层也有这四个名字。** WPE 的 `IParticleSystem` 同样有 `play` / `pause` / `stop` / `isPlaying`（重新发射、停止发射、清空），那是 P4f 的事。语料里这些调用的接收者绝大多数静态认不出类型（463 处认不出，能认出的 16 处都是声音层；`ignore/p6/a2/overlap.py`），所以不能按接收者区分。规则改成：
+- 把这四个名字从缺口表的 `layer` 组删掉（声音层有了）；
+- 场景里**有粒子层**时，任意接收者访问这四个名字都报 `script:api:particle.<名>`，P4f 实现粒子的这几个方法后删掉这条；
+- 语料里同时有声音、粒子并调了这几个方法的有 28 张，它们在 P4f 之前继续退回（多半另有文本等阻塞）。
+
+### 点 1 — 声音层的脚本对象（`script/api.ts`）
+
+- **新增** 访问排期器的接口：`ScriptApiAccess` 加 `sound(object): SoundScriptTarget | null`（宿主从 `SceneSounds` 取），`SoundScriptTarget` 只露 `play()` / `pause()` / `stop()` / `isPlaying()`。
+- **修改** `layer(object)`：对象是声音对象时多定义这四个方法（同 WPE 的方法表，只登记在声音层上）和 `volume` 访问器：读 `SceneState.sounds` 的值；写走 `write({ kind: "sound", object, field: "volume" }, value, "float")`，不钳制。其它图层不加，调用照旧报 `TypeError`（WPE 的方法也只登记在对应类型上）。
+
+### 点 2 — 写回与字段脚本（`compile/scripts.ts`、`host.ts`、`compile/features.ts`）
+
+- **修改** 字段脚本的目标：声音对象的 `volume` 挂 `{script}` 时，目标是 `{ kind: "sound", object, field: "volume" }`，`update` 的返回值每帧写回。
+- **修改** `host.ts`：脚本写到 `sound` 目标后当场 `syncSoundVolumes`（同属性就地写）。
+- **删除** 能力键 `sound:volume:script`。
+
+### 点 3 — 能力表（`compile/scriptApi.ts`）
+
+- **删除** `MISSING_SCRIPT_API.layer` 的 `play` / `pause` / `stop` / `isPlaying` 与字段 `volume`，以及步骤 1 加的「有声音对象时任意接收者照报」。
+- **新增** 「有粒子层时任意接收者照报」：`script:api:particle.<名>`，名单在 `PARTICLE_LAYER_METHODS`（不进 `MISSING_SCRIPT_API`，那张表由 `api.test.ts` 和 `ScriptApi` 双向核对，粒子的方法不在 `ScriptApi` 上也不该在声音层之外出现）。
+
+### 验收
+
+- **单测：** 声音层有、其它层没有这几个方法；`volume` 读写、写入当场生效、字段脚本写回；能力表的新旧规则；`api.test.ts` 双向核对照旧。
+- **语料：** `script:api:layer.play` 等全部消失；有粒子层的场景出现 `script:api:particle.*`；`sound:volume:script` 消失；能渲染的场景不减少。
+- **真机：** `p6a-single`（放完后 `pause` 再 `play` 的陷阱）与 `p6a-play`（在放时 `play` 从头、`pause` → `play` 续播、`stop` → `play` 从头、重复 `pause`）导入 Kabegame，回环录音和 WPE 的段序列比，CTRL 脚本的 `[p6c]` 日志（调前调后的 `isPlaying`）逐条比。
+
+### 步骤 2 实施记录（2026-11-11）
+
+**做法：** 同步骤 1：HEAD `b4d57aaa` 的快照（`ignore/p6/a2/work`，基线 `a2/base`）里实现、交子代理，我读过 `script/api.ts`、`host.ts`、`compile/scripts.ts` 的改动、独立复跑后，补丁 `ignore/p6/a2/out/step2.patch` 打进工作区；期间 HEAD 没动这些文件。宿主产物按 `scripts/plugins/wpe-scene-host-plugin.ts` 的说明用 `deno task --cwd apps/wpe-scene build --mode development` 重建，不重启 dev。
+
+**改动：** `script/api.ts`（`SoundScriptTarget`、`ScriptApiState.sound`、只在声音层装 `play` / `pause` / `stop` / `isPlaying` 与 `volume`）、`host.ts`（把排期器交给脚本 API；脚本写 `sound` 目标后当场 `setVolume`）、`compile/scripts.ts`（声音对象的 `volume` 字段脚本目标是 `sound`）、`compile/features.ts`（删 `sound:volume:script`）、`compile/scriptApi.ts`（删表里的四个方法与 `volume`、删步骤 1 的声音规则、加 `PARTICLE_LAYER_METHODS`）、`compile/bundle.ts`；单测在 `api.test.ts`、`host.script.test.ts`、`sounds.test.ts`、`scriptApi.test.ts`。
+
+**取舍：**
+1. 脚本写音量后只同步写到的那个对象，值取脚本看到的状态（首次加载 `init` 时它还不是渲染器的状态），首帧前重放写入时再同步一次。
+2. 粒子规则照子计划：任意接收者都报，包括声音层自己脚本里的 `thisLayer.play()`（静态能确定不是粒子，这一种可以放过，没做，留给 P4f 一起定）。
+3. 字段脚本只认对象顶层的 `objects/<i>/volume`。
+
+**验证：**
+- tsc 0 error；vitest 64 个文件、1701 个用例全过；Prettier 通过。
+- 语料 165 张，能渲染 38 → 38、没有掉出；去掉 `script:api:layer.play` 36 张、`stop` 24、`pause` 16、`isPlaying` 7、`layer.volume` 1、`sound:volume:script` 4；新增 `script:api:particle.play` 38、`stop` 29、`pause` 16、`isPlaying` 8；变化 46 张。
+- **真机：** 测试工程写了 `supportsaudioprocessing: true`（WPE 那边的探针要频谱），这一项报不支持，所以仍要临时开强制渲染（测完已删）。`p6a-play` 的 `[p6c]` 日志 8 条和 WPE 逐条相同；录音里在放时 `play` 从头重来、`pause` → `play` 接着放、`stop` → `play` 从头放都成立。`p6a-single` 三段 2 秒的声音对应自动播放、陷阱重放、12 秒的 `play`，日志 `pause 0 0`、`play 0 0`、`play 0 1` 与 WPE 相同。录音里有一次 40–60 ms 的整体输出中断（两个声音同时静音），像音频设备欠载，不是排期问题，记作观察。测试行已删。
 
 ## ~~步骤 3 — 三维声音~~（步骤 0b 取消）
 

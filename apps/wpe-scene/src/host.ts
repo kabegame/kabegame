@@ -316,6 +316,12 @@ export class SceneHost {
     const state = this.scriptState;
     if (!state) return false;
     const result = state.write({ property: "", target }, scriptWriteValue(value));
+    // 声音的 `volume`（P6a 步骤 2：API 写入与字段脚本写回）当场交给排期器：WPE 的回调 `V` 在改值时调、没有渐变，暂停时也生效。
+    // 读脚本看到的状态：首次加载 `init` 期间它还不是渲染器的状态（首帧前重放写入时再同步一次）
+    if (target.kind === "sound") {
+      const volume = state.sounds.get(target.object)?.volume;
+      if (volume !== undefined) this.sceneSounds?.scheduler(target.object)?.setVolume(volume);
+    }
     // 打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景：状态没变，结果由整场编译决定，编译要拿到脚本的值
     return result === "recompile" ? this.overrideAndReload(this.targetPath(target), value) : true;
   }
@@ -445,6 +451,8 @@ export class SceneHost {
         },
         read: (target) => this.readScript(target),
         audioRegistered: () => this.subscribeAudio(),
+        // 声音层的 play / pause / stop / isPlaying（P6a 步骤 2）：每次调用现取，重编译重建的排期器也接得上
+        sound: (object) => this.sceneSounds?.scheduler(object) ?? null,
       });
       const runtime = new ScriptRuntime(realm, {
         report: this.options.report,

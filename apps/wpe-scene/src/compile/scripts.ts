@@ -7,7 +7,8 @@ import {
   type TargetKey,
   type ValueType,
 } from "./bindings";
-import { resolveValue, type SceneJson, type SceneScalar, type SceneValue } from "./model";
+import { isSoundObject } from "./features";
+import { resolveValue, type SceneJson, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import { BLOOM_FIELDS } from "./postprocess";
 
 export type ScriptOwner =
@@ -57,7 +58,19 @@ function valueType(initial: SceneScalar): ValueType | "string" {
   return "string";
 }
 
-function targetOf(path: string, owner: ScriptOwner, key: string, initial: SceneScalar): SceneScript["target"] {
+/**
+ * 字段脚本的写回目标。`sound`：声音对象自己的 `volume`（P6a 步骤 2）写回到就地目标 `{ kind: "sound" }`，返回值每帧写回、
+ * 当场交给排期器（同 API 写 `thisLayer.volume`）。只认对象顶层的 `objects/<i>/volume`。
+ */
+function targetOf(
+  path: string,
+  owner: ScriptOwner,
+  key: string,
+  initial: SceneScalar,
+  sound: boolean,
+): SceneScript["target"] {
+  if (owner.kind === "layer" && sound && path === `objects/${owner.object}/volume`)
+    return { kind: "sound", object: owner.object, field: "volume" };
   if (owner.kind === "layer" && key in layerTypes)
     return { kind: "layer", object: owner.object, field: key as Extract<BindingTarget, { kind: "layer" }>["field"] };
   if (owner.kind === "effect" && key === "visible")
@@ -116,16 +129,21 @@ export async function collectScripts(
           });
         }
       }
+      const object = owner.kind === "layer" ? (scene.objects as SceneObject[])[owner.object] : undefined;
+      const sound = !!object && typeof object === "object" && isSoundObject(object);
+      const target = targetOf(path, owner, key, initial, sound);
       list.push({
         id: path,
         source: raw.script,
-        target: targetOf(path, owner, key, initial),
+        target,
         valueType:
-          owner.kind === "layer" && key in layerTypes
-            ? layerTypes[key]
-            : owner.kind === "general" && key in GENERAL_FIELDS
-              ? GENERAL_FIELDS[key as GeneralKey].type
-              : valueType(initial),
+          target.kind === "sound"
+            ? "float"
+            : owner.kind === "layer" && key in layerTypes
+              ? layerTypes[key]
+              : owner.kind === "general" && key in GENERAL_FIELDS
+                ? GENERAL_FIELDS[key as GeneralKey].type
+                : valueType(initial),
         initial,
         owner,
         layer,

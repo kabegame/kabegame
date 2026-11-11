@@ -28,6 +28,8 @@ let frozen = false;
 let realmGate: Promise<void> | null = null;
 let moduleGate: Promise<void> | null = null;
 let realmsCreated = 0;
+/** 假播放器收到的命令（`<命令>:<对象>:<文件或增益>`），P6a 步骤 2 的声音层用例读。 */
+const soundCommands: string[] = [];
 
 class Vec3 {
   constructor(
@@ -125,6 +127,27 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => compile(input) }));
+// 声音的播放后端换成记命令的假货：排期器（`audio/scheduler.ts`）与 `SceneSounds` 是真的
+vi.mock("./audio/player", () => ({
+  ScenePlayer: class {
+    voice(object: number) {
+      const log = (name: string, value: number) => void soundCommands.push(`${name}:${object}:${value}`);
+      return {
+        start: (file: number) => log("start", file),
+        resume: (file: number) => log("resume", file),
+        pause: (file: number) => log("pause", file),
+        stop: (file: number) => log("stop", file),
+        setGain: (gain: number) => log("gain", gain),
+      };
+    }
+    release() {}
+    setActive() {}
+    dispose() {}
+    probe() {
+      return null;
+    }
+  },
+}));
 vi.mock("./script/realm", () => ({
   getJsModuleIndex: () => ({}),
   createIframeRealm: async () => {
@@ -1088,6 +1111,97 @@ describe("SceneHost 脚本接线", () => {
     await vi.waitFor(() => expect(renderer.sceneState?.layers.get(0)?.alpha).toBe(0.4));
     expect(events.filter((value) => value === "init")).toHaveLength(1);
     host.dispose();
+  });
+
+  describe("声音层（P6a 步骤 2）", () => {
+    /** 图层 1 是声音对象（一个文件、loop、volume 1）；脚本挂在它的 `volume` 上（字段脚本写回到 sound 目标）。 */
+    function soundBundle(): SceneBundle {
+      const result = bundle();
+      result.layers.push({ ...result.layers[0], id: 2, object: 1, name: "music" });
+      result.sounds = [
+        {
+          object: 1,
+          files: [{ path: "a.wav", location: { path: "P:/test/a.wav", offset: 0 }, size: null }],
+          mode: "loop",
+          mintime: 1,
+          maxtime: 5,
+          startSilent: false,
+          volume: 1,
+        },
+      ];
+      result.bindings = [{ property: "p", target: { kind: "layer", object: 0, field: "alpha" } }];
+      result.scripts.list[0] = {
+        ...result.scripts.list[0],
+        id: "objects/1/volume",
+        target: { kind: "sound", object: 1, field: "volume" },
+        owner: { kind: "layer", object: 1 },
+        layer: 1,
+        scriptProperties: null,
+      };
+      return result;
+    }
+    type SoundLayer = { play(): void; pause(): void; stop(): void; isPlaying(): boolean; volume: number };
+
+    async function start() {
+      soundCommands.length = 0;
+      compile.mockImplementation(async () => soundBundle());
+      const reporter = report();
+      const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+      host.setHostVolume(1);
+      host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+      await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+      const volume = () => host.sounds().sounds[0].volume;
+      return { host, volume };
+    }
+
+    it("volume 的字段脚本：init 与 update 的返回值写回、当场交给排期器（增益 = volume²）", async () => {
+      onUpdate = () => 0.5;
+      const { host, volume } = await start();
+      expect(volume()).toBe(0.5);
+      expect(host.readTarget("objects/1/volume")).toBe(0.5);
+      // init 的 0.8 在首帧前就交给了排期器
+      expect(soundCommands).toContain(`gain:1:${0.8 * 0.8}`);
+      expect(soundCommands.at(-1)).toBe("gain:1:0.25");
+      onUpdate = () => 0.25;
+      renderer.tick();
+      // 渲染器的对象步进在假渲染器里不跑：值只能是脚本写入当场同步过去的
+      expect(volume()).toBe(0.25);
+      expect(soundCommands.at(-1)).toBe(`gain:1:${0.25 * 0.25}`);
+      host.dispose();
+    });
+
+    it("API：play / pause / stop / isPlaying 接到排期器，volume 写入当场生效，暂停时也生效", async () => {
+      let music: SoundLayer | null = null;
+      onInit = () => {
+        music = activeGlobal.thisLayer as SoundLayer;
+        return null;
+      };
+      onUpdate = () => null;
+      const { host, volume } = await start();
+      const layer = music! as SoundLayer;
+      expect(soundCommands).toEqual(["gain:1:1", "start:1:0"]);
+      expect(layer.isPlaying()).toBe(true);
+      expect(layer.volume).toBe(1);
+      // 脚本暂停 → 续播
+      layer.pause();
+      expect(layer.isPlaying()).toBe(false);
+      layer.play();
+      expect(soundCommands.slice(-2)).toEqual(["pause:1:0", "resume:1:0"]);
+      // 宿主暂停（全局音量 0）时写 volume：值当场进排期器，不等帧
+      host.setPaused(true);
+      layer.volume = 0.5;
+      expect(volume()).toBe(0.5);
+      expect(layer.volume).toBe(0.5);
+      // stop 停掉并回到开头；暂停中 play 不出声（音量为 0 的 P），恢复时从头开始
+      layer.stop();
+      expect(layer.isPlaying()).toBe(false);
+      layer.play();
+      expect(soundCommands.slice(-2)).toEqual(["gain:1:0", "stop:1:0"]);
+      host.setPaused(false);
+      expect(soundCommands.slice(-3)).toEqual(["gain:1:0.25", "start:1:0", "gain:1:0.25"]);
+      expect(layer.isPlaying()).toBe(true);
+      host.dispose();
+    });
   });
 
   it("暂停时就地写属性补画一帧，排在脚本回调之后；不暂停或要重编译时不补画", async () => {

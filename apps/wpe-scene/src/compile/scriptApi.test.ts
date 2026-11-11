@@ -65,7 +65,7 @@ describe("未实现脚本 API 的扫描", () => {
     expect(scan("thisScene.getAnimation('x');")).toEqual(["thisScene.getAnimation"]);
   });
 
-  it("通用名不按名字收：play / stop / copy / text / lookAt 只认 thisLayer / thisObject", () => {
+  it("通用名不按名字收：stop / copy / text / lookAt 只认 thisLayer / thisObject（play 已在声音层上实现，P6a 步骤 2）", () => {
     const source = [
       "export function update() {",
       "  sound.play(); anim.stop(); song.isPlaying(); v.copy();",
@@ -77,7 +77,6 @@ describe("未实现脚本 API 的扫描", () => {
     expect(scan(source)).toEqual([]);
     expect(scan("export function init() { thisLayer.play(); thisObject.text = 'a'; thisLayer.lookAt(p); }")).toEqual([
       "layer.lookAt",
-      "layer.play",
       "layer.text",
     ]);
   });
@@ -203,7 +202,11 @@ describe("导出回调的扫描", () => {
   });
 
   it("const / let / var：多个声明只认顶层逗号后的名字，解构收绑定名", () => {
-    expect(scriptExports("export const a = f(1, 2), b = { x: 1, y: [3, 4] }, c = (p, q) => p")).toEqual(["a", "b", "c"]);
+    expect(scriptExports("export const a = f(1, 2), b = { x: 1, y: [3, 4] }, c = (p, q) => p")).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
     expect(scriptExports("export let cursorDown = function (e, f) {}; export var cursorUp;")).toEqual([
       "cursorDown",
       "cursorUp",

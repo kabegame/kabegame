@@ -1007,7 +1007,7 @@ C  = cp[controlpoint].current.t；ks = k·scale；rT = rcp(threshold)
 | 层 | 位置 | 做什么 |
 |---|---|---|
 | 声音表 | `compile/sounds.ts` → `SceneBundle.sounds` | 有非 null 的 `sound` 键就是声音对象（`features.ts` 的 `isSoundObject`，空字符串、空数组也算）。文件按场景的资源查找顺序定位，记磁盘位置（散文件 / `scene.pkg` 加偏移）；找不到的、扩展名不是 wav / ogg / flac / mp3（不分大小写）的不进表。缺省值 `volume` 1（不钳制）、`mintime` 1、`maxtime` 5、`loop`、`startsilent` 假 |
-| 排期器 | `audio/scheduler.ts` | 纯 TS、Node 可单测，一个声音对象一个。照读码的 `P`（开始 / 续播）、`U`（每帧）、`V`（音量回调）、`X`（停掉全部）与全局音量规则复刻状态机，只对抽象后端发命令；脚本 API 的 `play` / `pause` / `stop` / `isPlaying` 已在这里（步骤 2 接到脚本上） |
+| 排期器 | `audio/scheduler.ts` | 纯 TS、Node 可单测，一个声音对象一个。照读码的 `P`（开始 / 续播）、`U`（每帧）、`V`（音量回调）、`X`（停掉全部）与全局音量规则复刻状态机，只对抽象后端发命令；`play` / `pause` / `stop` / `isPlaying` 也在这里，宿主经 `ScriptApiState.sound(object)` 交给声音层的脚本对象（`script/api.ts`，步骤 2） |
 | 播放后端 | `audio/player.ts` | 场景一个 `AudioContext`，每个文件一个 `<audio>`：散文件用 `file:` 地址，pkg 条目按区间读成 Blob（同一条目只读一次）。元素 → `MediaElementAudioSourceNode` → 本声音的增益 → 淡变增益 → `destination`。不整段解码（语料最大一段 114 MB FLAC） |
 | 宿主接线 | `audio/sceneSounds.ts`、`host.ts`、`main.ts` | 宿主收到 bundle 就建、立即开始（不等 GPU，WPE 加载时就放）；渲染器每个实时帧在粒子步进之后、脚本之前调 `stepObjects(dt)` 推进排期器（补画帧、暂停时不调，计时冻结）；重编译时声音表没变的对象保留排期器、播放不中断；退回预览图与销毁时释放元素、Blob 和 context |
 
@@ -1018,11 +1018,13 @@ C  = cp[controlpoint].current.t；ks = k·scale；rT = rcp(threshold)
 - `startsilent`：不放，直到脚本 `play()`。对象音量或全局音量为 0 时不开始、不读文件，变成正数时才从文件开头放（`single` 例外，WPE 的音量回调跳过它）。
 - 可见性不影响声音：自身或父层不可见照样放。多个声音在同一次调用里按对象顺序开始。
 
-**音量**：WPE 的增益是 `min(1, volume² · G)`（对象音量取平方，钳在乘积上，实测 `p6a-vol2`），没有渐变。我们的 G 是宿主音量 h：垫片把父页面的音量放进只读的 `window.__kabegameHostVolume` 并派发 `kabegame-host-volume`（只当通知，值总从只读属性读），宿主经 `setHostVolume` 收下；暂停或文档隐藏时 G 为 0。垫片的主增益已经乘 h（接进 Web Audio 的元素不在元素上再乘），所以每个声音的增益节点设成 `min(1, volume²·h) / h`。G 从正变 0：暂停在放的，`single` / `random` 已放完的停掉，计时冻结；从 0 变正：续播，从没开始过的从头开始。`volume` 绑用户属性是就地目标（`{ kind: "sound" }`，`SceneState.sounds`），改值当场生效。
+**音量**：WPE 的增益是 `min(1, volume² · G)`（对象音量取平方，钳在乘积上，实测 `p6a-vol2`），没有渐变。我们的 G 是宿主音量 h：垫片把父页面的音量放进只读的 `window.__kabegameHostVolume` 并派发 `kabegame-host-volume`（只当通知，值总从只读属性读），宿主经 `setHostVolume` 收下；暂停或文档隐藏时 G 为 0。垫片的主增益已经乘 h（接进 Web Audio 的元素不在元素上再乘），所以每个声音的增益节点设成 `min(1, volume²·h) / h`。G 从正变 0：暂停在放的，`single` / `random` 已放完的停掉，计时冻结；从 0 变正：续播，从没开始过的从头开始。`volume` 绑用户属性是就地目标（`{ kind: "sound" }`，`SceneState.sounds`），改值当场生效；脚本写 `volume`（API 写入或字段脚本写回）走同一条路，同样当场生效。
 
 **暂停**：WPE 暂停时全局音量按 `k = min(1, 6·dt)` 指数淡出再暂停、恢复时淡回。播放器的淡变增益用 `setTargetAtTime`（时间常数 1/6 s）；但暂停消息到达时垫片的主增益已立即变 0、排期器也立即暂停元素，所以只有恢复时的淡入听得见。文档隐藏（渲染循环停转）按暂停处理。
 
-**能力表**：不再报 `object:sound` 与声音对象自己的键（`muteineditor`、`attenuation`、`mindistance` 中性）。新键：`object:spatialization`（三维声音，语料 0 张打开）、`sound:playbackmode:<值>`、`sound:volume:script`（字段脚本写回，步骤 2）、`sound:binding:<键>`（`playbackmode` / `mintime` / `maxtime` / `startsilent` / `spatialization` 绑了属性或脚本，WPE 没有回调）。场景里有声音对象时，任意接收者上的 `play` / `pause` / `stop` / `isPlaying` 都报 `script:api:layer.<名>`（脚本多经 `getLayer(…)` 拿声音层，按根对象匹配会漏报），步骤 2 实现后随表删掉。
+**脚本控制**（步骤 2）：只有声音对象的图层有 WPE `ISoundLayer` 的 `play`（= `P`：暂停中续播，否则停掉、重新随机选、从头放）、`pause`、`stop`（= `X`：停并回到开头）、`isPlaying()` 和可读写的 `volume`，别的图层调用照旧报 `TypeError`（WPE 的方法按对象类型登记）。`volume` 读 `SceneState.sounds`，写入落到就地目标、不钳制，宿主写完当场交给排期器（暂停时也生效）；声音对象的 `volume` 挂 `{script}` 时，字段脚本的返回值每帧写回同一个目标。没有播放器时（宿主没建、或已退回预览图）方法什么都不做，`isPlaying` 为假。真机和 WPE 逐条对过 `p6a-play` / `p6a-single` 的调用前后 `isPlaying` 与录音段序列（含 `single` 放完后 `pause` 再 `play` 会重放而 `isPlaying` 仍假）。
+
+**能力表**：不再报 `object:sound` 与声音对象自己的键（`muteineditor`、`attenuation`、`mindistance` 中性）。新键：`object:spatialization`（三维声音，语料 0 张打开）、`sound:playbackmode:<值>`、`sound:binding:<键>`（`playbackmode` / `mintime` / `maxtime` / `startsilent` / `spatialization` 绑了属性或脚本，WPE 没有回调）。场景里有粒子层时，任意接收者访问 `play` / `pause` / `stop` / `isPlaying` 都报 `script:api:particle.<名>`（`scriptApi.ts` 的 `PARTICLE_LAYER_METHODS`）：WPE 的粒子系统也有这四个方法（P4f），而语料里这些调用的接收者绝大多数静态认不出类型，所以宁可多报；这张名单不进 `MISSING_SCRIPT_API`，P4f 实现后删掉。
 
 **已知差异**：
 - 开始是异步的：元素拿到元数据才从头放并回报时长，`T` / `Rm` 从那一刻起算；WPE 是同步读完整个文件。等回报期间 `isPlaying` 按 WPE 当场的值（真）。
@@ -1030,6 +1032,6 @@ C  = cp[controlpoint].current.t；ks = k·scale；rT = rcp(threshold)
 - 单声道源：WPE 在本机每个前置声道约 −4.1 dB（OpenAL Soft 的声像，随输出设备变），Web Audio 原样复制到两个声道，同一文件我们这边约响 4 dB，不补偿。
 - 预览与桌面同时放同一张场景时各放各的，同网页壁纸。
 
-**语料**（165 个工程）：能渲染 36 → 38（`1967162875`、`3827677885`）；带声音的 77 张里去掉 `object:sound` 及其键，新增 `script:api:layer.play` 35 张、`stop` 23、`pause` 15、`isPlaying` 6、`sound:volume:script` 4；不含声音对象的场景不变。`1514925620`、`3778592720` 只剩 `particle:children`。
+**语料**（165 个工程）：能渲染 36 → 38（`1967162875`、`3827677885`）；带声音的 77 张里去掉 `object:sound` 及其键，不含声音对象的场景不变。步骤 2 之后仍 38 张：`script:api:layer.*` 与 `sound:volume:script` 消失，有粒子层的场景报 `script:api:particle.play` 38 张、`stop` 29、`pause` 16、`isPlaying` 8。`1514925620`、`3778592720` 只剩 `particle:children`。
 
 **dev 探针**：`__kabegameSceneProbe.host.sounds()` 给宿主音量、暂停 / 隐藏，每个声音对象的模式、当前文件、可用文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的 context 状态、淡变值、Blob 数与各元素的状态。

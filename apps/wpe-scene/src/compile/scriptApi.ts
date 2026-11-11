@@ -27,10 +27,11 @@
  *   键写 `thisScene.<字段>`。`thisLayer` 在 general 上的脚本里就是 `thisObject`，其余情况是所在图层。
  *
  * **匹配方式**（`match`）：
- * - `root`：只认根对象直接访问。全局对象的成员都用它；图层等类型里名字通用的（`play`、`stop`、`text`、`volume` 这类，
+ * - `root`：只认根对象直接访问。全局对象的成员都用它；图层等类型里名字通用的（`text`、`zoom` 这类，
  *   会和普通 JS 或脚本自己的对象撞名）只认 `thisLayer.` / `thisObject.`。
  * - `any`：任意接收者上的 `.成员` / `?.成员` / `["成员"]` 都算，只收名字足够独特的，每项写一句理由。
- * - 例外（P6a 步骤 1）：场景里有声音对象时，`layer` 组的 `play` / `pause` / `stop` / `isPlaying` 按 `any` 匹配（`SOUND_LAYER_METHODS`）。
+ * - 表外的例外（P6a 步骤 2）：场景里有粒子层时，`play` / `pause` / `stop` / `isPlaying` 不论接收者都报 `particle.<名>`
+ *   （`PARTICLE_LAYER_METHODS`）。
  * 子对象（`ITextureAnimation`、`IVideoTexture`、`IAnimationLayer`、`IAnimation`、`IModelData`、`IAssetHandle`）只能经表里的入口方法拿到，
  * 入口已经会报，它们自己的成员（`setFrame`、`play`、`applyData` …）不收。
  *
@@ -111,7 +112,8 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
   console: [],
   /**
    * 已实现：`name`、`id`、`size`（只读）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`
-   * （P5a 步骤 2）。
+   * （P5a 步骤 2）；声音层（`ISoundLayer`）的 `play` / `pause` / `stop` / `isPlaying` 与 `volume`（P6a 步骤 2，只在声音层上）。
+   * 粒子层（`IParticleSystem`）的同名方法另由 `PARTICLE_LAYER_METHODS` 报。
    */
   layer: [
     // 层级与变换（W1 / W5）
@@ -164,12 +166,9 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ...methods("any", ["getEffect", "getEffectCount", "transformAttachmentToTexture"], UNIQUE),
     // 粒子（P4f）
     ...methods("any", ["emitParticles"], UNIQUE),
-    // 声音 / 粒子 / 动画共用的播放控制：名字通用（`isPlaying` 也常是脚本自己记播放状态的字段），只认根对象
-    ...methods("root", ["play", "pause", "stop", "isPlaying"]),
     // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象
     ...fields([
       "alignment",
-      "volume",
       "perspective",
       "solid",
       "rootmotion",
@@ -462,23 +461,26 @@ const ROOT_INDEX: Readonly<Record<ResolvedGroup, Map<string, string>>> = {
 const ANY_INDEX = index(Object.keys(MISSING_SCRIPT_API) as ScriptApiGroup[], (entry) => entry.match === "any");
 
 /**
- * 声音层（`ISoundLayer`）的播放控制（P6a 步骤 1）。表里它们只认 `thisLayer.` / `thisObject.`（名字通用），但脚本多半经
- * `thisScene.getLayer(…)` 拿到声音层再调，按根对象匹配会漏报、场景静默没声音。所以场景里有声音对象时（`ScriptApiScene.soundLayers`），
- * 任意接收者上的这几个名字都报 `layer.<名>`（宁可多报：同名的视频、动画方法的入口本来也会报）。名字取自表里还在的项：
- * 步骤 2 实现、从表里删掉之后，这条随之失效。
+ * 粒子层（`IParticleSystem`）的播放控制（P6a 步骤 2）：WPE 的粒子层也有 `play` / `pause` / `stop` / `isPlaying`（重新发射、
+ * 停止发射、清空），我们还没实现（P4f）。声音层的同名方法已实现（`script/api.ts`，只在声音层上），而这些调用的接收者绝大多数
+ * 静态认不出类型（语料 463 处认不出、能认出的 16 处都是声音层，`ignore/p6/a2/overlap.py`），不能按接收者区分。所以场景里有
+ * 粒子层时（`ScriptApiScene.particleLayers`），任意接收者上的这几个名字都报 `particle.<名>`（宁可多报）。
+ *
+ * 不进 `MISSING_SCRIPT_API`：那张表由 `script/api.test.ts` 与 `ScriptApi` 双向核对，而这几个名字在声音层上已经有了。
+ * P4f 实现粒子的这几个方法后删掉这条。
  */
-export const SOUND_LAYER_METHODS: readonly string[] = ["play", "pause", "stop", "isPlaying"];
-const SOUND_INDEX = index(["layer"], (entry) => entry.kind === "method" && SOUND_LAYER_METHODS.includes(entry.name));
+export const PARTICLE_LAYER_METHODS: readonly string[] = ["play", "pause", "stop", "isPlaying"];
+const PARTICLE_INDEX = new Map(PARTICLE_LAYER_METHODS.map((name) => [name, `particle.${name}`]));
 
 /** 扫描时用到的场景信息（编译期由 `compileScene` 给出）。 */
 export interface ScriptApiScene {
-  /** 场景里有声音对象（`features.ts` 的 `isSoundObject`）。 */
-  soundLayers?: boolean;
+  /** 场景里有粒子层（`features.ts` 的 `objectKind` 为 `particle` 的对象）。 */
+  particleLayers?: boolean;
 }
 
 /**
  * 一段脚本用到的未实现 API，返回 `<分组>.<成员>`（去重、排序）。根对象访问先查该分组（含 `root` 项），查不到再按名字查 `any` 项；
- * 其它接收者只查 `any` 项。场景里有声音对象时，声音层的播放控制不论接收者都算（`SOUND_INDEX`）。
+ * 其它接收者只查 `any` 项。场景里有粒子层时，粒子层的播放控制不论接收者都算（`PARTICLE_INDEX`）。
  */
 export function scanScriptApi(script: ScriptApiContext, scene: ScriptApiScene = {}): string[] {
   const hits = new Set<string>();
@@ -487,7 +489,7 @@ export function scanScriptApi(script: ScriptApiContext, scene: ScriptApiScene = 
     const key =
       (group ? ROOT_INDEX[group].get(access.name) : undefined) ??
       ANY_INDEX.get(access.name) ??
-      (scene.soundLayers ? SOUND_INDEX.get(access.name) : undefined);
+      (scene.particleLayers ? PARTICLE_INDEX.get(access.name) : undefined);
     if (key) hits.add(key);
   }
   return [...hits].sort();

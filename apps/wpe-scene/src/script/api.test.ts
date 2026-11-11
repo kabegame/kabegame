@@ -5,12 +5,13 @@ import { BLOOM_FIELDS } from "../compile/postprocess";
 import {
   MISSING_SCRIPT_API,
   MISSING_SCRIPT_CALLBACKS,
+  PARTICLE_LAYER_METHODS,
   WPE_SCRIPT_CALLBACKS,
   type ScriptApiGroup,
 } from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState, scriptWriteValue } from "../render/state";
-import { createWpeLocalStorage, ScriptApi } from "./api";
+import { createWpeLocalStorage, ScriptApi, type SoundScriptTarget } from "./api";
 import { alignScriptEnvironment } from "./environment";
 import { RUNTIME_CALLBACKS, ScriptRuntime, type ScriptRealm } from "./runtime";
 import { createMemoryStorage } from "./storage";
@@ -59,7 +60,8 @@ class FakeRealm implements ScriptRealm {
   dispose() {}
 }
 
-function scene(): SceneBundle {
+/** `sound`：多一个声音对象的图层（objects 下标 2，名字 Music，声音表里 volume 0.5）。 */
+function scene(sound = false): SceneBundle {
   const layer = (object: number, name: string): SceneLayer => ({
     id: object + 10,
     object,
@@ -101,13 +103,18 @@ function scene(): SceneBundle {
         hdrIterations: 4,
       },
     },
-    layers: [layer(0, "First"), layer(1, "Second")],
+    layers: [layer(0, "First"), layer(1, "Second"), ...(sound ? [layer(2, "Music")] : [])],
     programs: [],
     textures: [],
     bloom: null,
     unsupported: [],
     bindings: [],
     scripts: { list: [] },
+    ...(sound
+      ? {
+          sounds: [{ object: 2, files: [], mode: "loop", mintime: 1, maxtime: 5, startSilent: false, volume: 0.5 }],
+        }
+      : {}),
   } as SceneBundle;
 }
 
@@ -126,9 +133,10 @@ function script(id: string, owner: SceneScript["owner"], layer: number | null): 
   };
 }
 
-function setup(audioRegistered?: () => void) {
+/** `sound`：场景带声音层（`scene(true)`），`target` 是宿主交给声音层方法的排期器（null = 没有播放器）。 */
+function setup(audioRegistered?: () => void, sound?: { target: SoundScriptTarget | null }) {
   const realm = new FakeRealm();
-  let bundle = scene();
+  let bundle = scene(!!sound);
   let state = SceneState.fromBundle(bundle);
   let resolution: [number, number] = [800, 600];
   const recompiles: { path: string; value: number[] | boolean }[] = [];
@@ -149,6 +157,7 @@ function setup(audioRegistered?: () => void) {
       return true;
     },
     audioRegistered,
+    ...(sound ? { sound: (object: number) => (object === 2 ? sound.target : null) } : {}),
   });
   return {
     realm,
@@ -161,7 +170,7 @@ function setup(audioRegistered?: () => void) {
       return state;
     },
     recompile() {
-      bundle = scene();
+      bundle = scene(!!sound);
       state = SceneState.fromBundle(bundle);
     },
     resetState() {
@@ -256,6 +265,78 @@ describe("SceneScript API（FakeRealm）", () => {
     h.recompile();
     expect(getLayer(0)).toBe(first);
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(first)).toBe(true);
+  });
+
+  describe("声音层（P6a 步骤 2，ISoundLayer）", () => {
+    function scheduler(playing = true) {
+      const calls: string[] = [];
+      const target: SoundScriptTarget = {
+        play: () => void calls.push("play"),
+        pause: () => void calls.push("pause"),
+        stop: () => void calls.push("stop"),
+        isPlaying: () => {
+          calls.push("isPlaying");
+          return playing;
+        },
+      };
+      return { calls, target };
+    }
+
+    it("只有声音层有 play / pause / stop / isPlaying / volume；其它图层上调用是 TypeError", () => {
+      const h = setup(undefined, scheduler());
+      const plain = h.api.layer(0)!;
+      const music = h.api.layer(2)!;
+      for (const name of ["play", "pause", "stop", "isPlaying", "volume"]) {
+        expect(name in music, name).toBe(true);
+        expect(name in plain, name).toBe(false);
+      }
+      expect(() => (plain.play as () => void)()).toThrow(TypeError);
+      // 没有声音的场景：所有图层都没有
+      const quiet = setup();
+      expect("play" in quiet.api.layer(0)!).toBe(false);
+    });
+
+    it("四个方法接到宿主给的排期器，返回值照排期器（play / pause / stop 无返回值）", () => {
+      const sound = scheduler(true);
+      const h = setup(undefined, sound);
+      const music = (h.api.thisScene.getLayer as (name: string) => Record<string, () => unknown>)("Music");
+      expect(music.play()).toBeUndefined();
+      expect(music.pause()).toBeUndefined();
+      expect(music.stop()).toBeUndefined();
+      expect(music.isPlaying()).toBe(true);
+      expect(sound.calls).toEqual(["play", "pause", "stop", "isPlaying"]);
+      // 重编译后同一个代理照样接得上
+      h.recompile();
+      (h.api.layer(2)!.play as () => void)();
+      expect(sound.calls.at(-1)).toBe("play");
+    });
+
+    it("没有播放器（宿主给 null）时方法什么都不做，isPlaying 为假", () => {
+      const h = setup(undefined, { target: null });
+      const music = h.api.layer(2)! as Record<string, () => unknown>;
+      expect(() => music.play()).not.toThrow();
+      expect(() => music.stop()).not.toThrow();
+      expect(music.isPlaying()).toBe(false);
+    });
+
+    it("volume 读 SceneState.sounds；写落到就地目标 sound，不钳制，数字与 { x } 都收，错类型不改", () => {
+      const h = setup(undefined, scheduler());
+      const music = h.api.layer(2)!;
+      expect(music.volume).toBe(0.5);
+      music.volume = 2;
+      expect(h.state.sounds.get(2)?.volume).toBe(2);
+      expect(music.volume).toBe(2);
+      music.volume = -0.5;
+      expect(music.volume).toBe(-0.5);
+      music.volume = { x: 0.25 };
+      expect(music.volume).toBe(0.25);
+      music.volume = "loud";
+      music.volume = true;
+      expect(music.volume).toBe(0.25);
+      // 写入走的是 sound 目标：重编译后状态回到编译期的值（宿主重放写入，不留在 API 层）
+      h.recompile();
+      expect(music.volume).toBe(0.5);
+    });
   });
 
   it("parallaxDepth（P5a 步骤 2）：读到 Vec2，写 Vec2 / 普通对象 / 数字（铺满）进 SceneState 并标脏整棵子树，错类型不改", () => {
@@ -730,7 +811,7 @@ describe("SceneScript API（FakeRealm）", () => {
 describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () => {
   /** 各分组在 realm 里对应的真实对象：表项必须不在上面，上面已有的成员必须不在表里。 */
   function objects(): Record<ScriptApiGroup, Record<string, unknown>[]> {
-    const h = setup();
+    const h = setup(undefined, { target: null });
     h.api.enterScript(script("e", { kind: "effect", object: 0, effect: 0 }, 0));
     const effect = h.realm.global.thisObject as Record<string, unknown>;
     h.api.enterScript(script("m", { kind: "material", pass: "objects/0/passes/0", layer: 0 }, 0));
@@ -745,6 +826,8 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
     const frame = {} as Window;
     alignScriptEnvironment(frame, { log() {}, error() {} }, localStorage);
     const layer = h.api.layer(0)!;
+    // 声音层（P6a 步骤 2）多 play / pause / stop / isPlaying / volume：同样逐成员核对
+    const sound = h.api.layer(2)!;
     return {
       thisScene: [h.api.thisScene, h.api.general],
       engine: [h.api.engine],
@@ -752,9 +835,9 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
       input: [(h.realm.global.input as Record<string, unknown> | undefined) ?? {}],
       localStorage: [localStorage],
       console: [(frame as unknown as Record<string, Record<string, unknown>>).console],
-      layer: [layer],
+      layer: [layer, sound],
       effect: [effect],
-      object: [layer, effect, material, h.api.general, h.api.thisScene],
+      object: [layer, sound, effect, material, h.api.general, h.api.thisScene],
     };
   }
 
@@ -773,6 +856,16 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
       for (const object of groups[group])
         for (const name of Object.keys(object))
           expect(missing.has(name), `${group}.${name} 已实现却在表里`).toBe(false);
+    }
+  });
+
+  it("粒子层的播放控制（PARTICLE_LAYER_METHODS）只在声音层上有，不在别的对象上（P6a 步骤 2）", () => {
+    const groups = objects();
+    const [plain, sound] = groups.layer;
+    for (const name of PARTICLE_LAYER_METHODS) {
+      expect(name in sound, `声音层没有 ${name}`).toBe(true);
+      for (const object of [plain, ...groups.effect, ...groups.object.slice(2), ...groups.engine])
+        expect(name in object, `${name} 出现在声音层之外`).toBe(false);
     }
   });
 

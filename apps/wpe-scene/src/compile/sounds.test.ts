@@ -1,6 +1,7 @@
 /**
- * 声音表与能力表（P6a 步骤 1）：编译期把声音对象解析进 `bundle.sounds`、`volume` 登记成就地目标、各键的报与不报，
- * 以及场景里有声音对象时脚本的播放控制按任意接收者报（`scriptApi.ts` 的 `SOUND_LAYER_METHODS`）。
+ * 声音表与能力表（P6a 步骤 1、2）：编译期把声音对象解析进 `bundle.sounds`、`volume` 登记成就地目标、各键的报与不报，
+ * `volume` 挂 `{script}` 的写回目标（步骤 2），以及场景里有粒子层时脚本的播放控制按任意接收者报（`scriptApi.ts` 的
+ * `PARTICLE_LAYER_METHODS`）。
  */
 import { describe, expect, it, vi } from "vitest";
 import { planApply } from "./bindings";
@@ -8,7 +9,7 @@ import { compileScene } from "./bundle";
 import { checkObjectFeatures, isSoundObject } from "./features";
 import type { SceneReader } from "./fs";
 import type { SceneObject } from "./model";
-import { scanScriptApi } from "./scriptApi";
+import { MISSING_SCRIPT_API, PARTICLE_LAYER_METHODS, scanScriptApi } from "./scriptApi";
 import { soundExtension, soundFlag, soundMode, soundVolume } from "./sounds";
 import { SceneState } from "../render/state";
 
@@ -193,13 +194,13 @@ describe("能力表：声音对象", () => {
     ).toEqual([]);
   });
 
-  it("新键：三维声音、未知播放模式、volume 挂脚本、没有回调的键绑了属性", () => {
+  it("新键：三维声音、未知播放模式、没有回调的键绑了属性；volume 挂脚本不再报（步骤 2）", () => {
     expect(check({ sound: "a.mp3", spatialization: true })).toEqual(["object:spatialization"]);
     expect(check({ sound: "a.mp3", spatialization: { value: true } })).toEqual(["object:spatialization"]);
     expect(check({ sound: "a.mp3", playbackmode: "shuffle" })).toEqual(["sound:playbackmode:shuffle"]);
-    expect(check({ sound: "a.mp3", volume: { script: "export function update(v) { return v; }", value: 1 } })).toEqual([
-      "sound:volume:script",
-    ]);
+    expect(check({ sound: "a.mp3", volume: { script: "export function update(v) { return v; }", value: 1 } })).toEqual(
+      [],
+    );
     expect(
       check({
         sound: "a.mp3",
@@ -226,40 +227,82 @@ describe("能力表：声音对象", () => {
   });
 });
 
-describe("能力表：有声音对象时的脚本播放控制", () => {
+describe("能力表：播放控制（步骤 2）", () => {
   const source = [
     "export function init() {",
     "  let music = thisScene.getLayer('music');",
     "  music.play(); music.pause(); thisScene.getLayer(1).stop();",
     "  if (music.isPlaying()) {}",
+    "  thisLayer.volume = 0.5;",
     "}",
   ].join("\n");
 
-  it("任意接收者上的 play / pause / stop / isPlaying 都报 layer.<名>；没有声音对象时照旧只认 thisLayer", () => {
+  it("有粒子层时任意接收者上的 play / pause / stop / isPlaying 都报 particle.<名>；没有粒子层时不报，thisLayer 上也不报", () => {
     const script = { source, owner: { kind: "layer" as const }, layer: 0 };
-    expect(scanScriptApi(script, { soundLayers: true })).toEqual([
-      "layer.isPlaying",
-      "layer.pause",
-      "layer.play",
-      "layer.stop",
+    expect(scanScriptApi(script, { particleLayers: true })).toEqual([
+      "particle.isPlaying",
+      "particle.pause",
+      "particle.play",
+      "particle.stop",
     ]);
     expect(scanScriptApi(script)).toEqual([]);
-    // general 上的脚本同样
+    // 根对象上同样：thisLayer / thisObject 不再按 layer 组报（声音层有了），有粒子层时照报 particle
+    for (const root of ["thisLayer", "thisObject"]) {
+      const rooted = { source: `${root}.play(); ${root}.isPlaying();`, owner: { kind: "layer" as const }, layer: 0 };
+      expect(scanScriptApi(rooted)).toEqual([]);
+      expect(scanScriptApi(rooted, { particleLayers: true })).toEqual(["particle.isPlaying", "particle.play"]);
+    }
     expect(
-      scanScriptApi({ source: "thisLayer.play();", owner: { kind: "general" }, layer: null }, { soundLayers: true }),
-    ).toEqual(["layer.play"]);
+      scanScriptApi(
+        { source: "thisLayer['stop']?.();", owner: { kind: "general" }, layer: null },
+        { particleLayers: true },
+      ),
+    ).toEqual(["particle.stop"]);
   });
 
-  it("编译：场景有声音对象时报，没有时不报", async () => {
+  it("PARTICLE_LAYER_METHODS 不在 MISSING_SCRIPT_API 里；volume 与四个方法也从 layer 组删掉了", () => {
+    const layer = MISSING_SCRIPT_API.layer.map((entry) => entry.name);
+    for (const name of [...PARTICLE_LAYER_METHODS, "volume"]) expect(layer).not.toContain(name);
+    for (const entries of Object.values(MISSING_SCRIPT_API))
+      for (const { name } of entries) expect(PARTICLE_LAYER_METHODS).not.toContain(name);
+  });
+
+  it("编译：场景有粒子层时报 particle.<名>，只有声音层时不报（不再报 layer.<名>）", async () => {
     const scripted = { id: 9, name: "ctrl", visible: { script: source, value: true } };
+    const apiKeys = (bundle: { unsupported: string[] }) =>
+      bundle.unsupported.filter((key) => key.startsWith("script:api:"));
     const withSound = await compile([scripted, { name: "music", sound: "sounds/a.mp3" }]);
-    expect(withSound.unsupported).toEqual([
-      "script:api:layer.isPlaying",
-      "script:api:layer.pause",
-      "script:api:layer.play",
-      "script:api:layer.stop",
+    expect(withSound.unsupported).toEqual([]);
+    const withParticle = await compile([
+      scripted,
+      { name: "music", sound: "sounds/a.mp3" },
+      { name: "fx", particle: "particles/a.json" },
+    ]);
+    expect(apiKeys(withParticle)).toEqual([
+      "script:api:particle.isPlaying",
+      "script:api:particle.pause",
+      "script:api:particle.play",
+      "script:api:particle.stop",
     ]);
     const without = await compile([scripted]);
     expect(without.unsupported).toEqual([]);
+  });
+});
+
+describe("volume 挂 {script}（步骤 2）", () => {
+  const update = "export function update(value) { return value * 0.5; }";
+
+  it("声音对象：写回目标是就地的 sound 目标、形状 float，不报；volume 取脚本的 value", async () => {
+    const bundle = await compile([{ name: "music", sound: "sounds/a.mp3", volume: { script: update, value: 0.8 } }]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.sounds?.[0].volume).toBe(0.8);
+    expect(bundle.scripts.list.map((script) => [script.id, script.target, script.valueType])).toEqual([
+      ["objects/0/volume", { kind: "sound", object: 0, field: "volume" }, "float"],
+    ]);
+  });
+
+  it("不是声音对象的 volume 脚本不写回到声音目标", async () => {
+    const bundle = await compile([{ name: "img", volume: { script: update, value: 1 } }]);
+    expect(bundle.scripts.list[0].target).toEqual({ kind: "unsupported", path: "objects/0/volume" });
   });
 });

@@ -570,8 +570,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
-  // 有声音对象时，任意接收者上的播放控制都算声音层的方法（P6a 步骤 1，步骤 2 实现后随表删掉）
-  checkScriptFeatures(scripts.list, unsupported, { soundLayers: scene.objects.some(isSoundObject) });
+  // 有粒子层时，任意接收者上的播放控制都可能是粒子层的方法（P6a 步骤 2，P4f 实现后删掉）
+  checkScriptFeatures(scripts.list, unsupported, {
+    particleLayers: scene.objects.some((object) => objectKind(object) === "particle"),
+  });
   checkSceneFeatures(scene, unsupported);
   const general = scene.general ?? {};
   // 后处理档位：每次加载都解析（设置变了由调用方重新编译）
