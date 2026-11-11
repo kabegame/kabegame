@@ -86,6 +86,26 @@
 | [x] | T5 wasm 构建 | Windows，cargo | `cargo build -p wpesl2wgsl --target wasm32-unknown-unknown --profile wpesl2wgsl` | 能编出；体积不涨 | 2026-11-11：1 606 373 → 1 600 789 字节 |
 | [ ] | T6 场景画面不变 | Windows dev | 重建 wasm（`deno task build:wpesl2wgsl` 或带前端的 kabegame 命令）后打开几张原本能渲染的场景 | 画面与之前一致 | 待下次重建 wasm 时顺带确认；输出逐字节相同，预期不会变 |
 
+## 场景壁纸 P4d：绳、映射类与距离类模块、不可见的帧
+
+2026-11-09 – 11-11 Windows dev。P4d 分 6 步加收尾：步骤 0 调研；1 `rope` 与翻译器的几何着色器展开；2 `ropetrail`；3 `mapsequence*`；4 `remap*`（4a 管线与非噪声取值、4b 噪声与写控制点）；5 距离类与 `vortex_v2`、不可见时更新控制点；收尾 A 走查「未实测清单」（顺带改了不可见时的系统时间），收尾 B 文档与覆盖数。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「粒子（P4d）」，每步的验收数据见 `.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md`「实施记录」。验收工具：回放案例 `ignore/p4/cases/d1`、`d3`–`d6`（`kbp replay`；ropetrail 没有案例，是 `ignore/p4/d2/replay.test.ts`），各步的快照、补丁、变异清单与离线展开在 `ignore/p4/d0/`–`d7/`。确定性工程由 `ignore/p4/gen_d.py`（步骤 0）与 `ignore/p4/defs/`（`p4d5.py`、`p4d6.py`，`kbp gen`）生成，WPE 参照在 `A:\p4b\p4d-*`（步骤 0）与 `A:\p4d\`（之后）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | D1 `rope` · 段顶点与几何 | Node 回放 + Deno WebGPU 离线 + Windows dev 屏外宿主（kabegame-dev 导入工程） | `p4d-rope` 两种 fps 按 WPE 日志 dt 回放，`writeRopeSegments` 的输出和 `vs_in` 逐段比；我们翻译的着色器吃 WPE 的 `vs_in`，输出和 `gs_out` 逐顶点比；真机四角探针读回带子再比；测后 `projects_remove` | 段数逐帧相同；位置在包络内，`TL` / `TP` ≤ 1e-4；带子差不超过 0.01 像素；WPE 的 NaN 段我们整段不画 | 2026-11-10：16 个系统段数逐帧相同，位置 ≤ 4.3e-4（R11 7.3e-4），`TL` 差 0、`TP` ≤ 5.7e-5；离线 34 组 201 帧位置 ≤ 2.3e-4 像素、uv ≤ 9.5e-7、颜色 0；真机 fps 60 第 918 帧 17 个系统 ≤ 0.004 像素，R9 的 19 个 NaN 段一一对应。真机 R11 差 494 像素：对象由脚本移动，探针不跑脚本，由前两项覆盖 |
+| [x] | D2 `ropetrail` · 历史与几何 | 同 D1 | `p4d-ropetrail` 两种 fps 回放，和 `vs_in`、`g_RenderVar0` 逐段逐帧比；离线展开、真机四角同 D1 | 每帧段数相同；位置在包络内；`RV0` 一致；带子差不超过 0.01 像素 | 2026-11-10：12 个系统每帧段数相同，位置 ≤ 4.4e-4，尺寸 / 颜色 / alpha / w 分量差 0，`RV0` ≤ 2.2e-6；离线 22 组位置 ≤ 2.3e-4 像素、uv ≤ 2.4e-7；真机 fps 60 第 926 帧 11 个系统 ≤ 4.6e-4 像素。T7 在 WPE 与我们这边都没有存活粒子（满容量时发射计时冻结，周期约 3.94 s）。rope 的回放与离线展开不回退 |
+| [x] | D3 `mapsequence*` · 确定性工程 | Node 回放 | `kbp replay d3`：`p4d-map` fps 60 按槽序逐粒子比位置与尺寸；另跑「复位不清零」「新周期不清零」两个变体 | 逐帧粒子数相同、在包络内；变体超限 | 2026-11-10：20 个系统全部通过，between 9 组逐位为 0，around 差 / 限 0.42–0.69（`sphererandom` 的近似倒数）；`ma-hide` 清空后逐粒子对上；变体分别超限 9.5e4、5.25e5 倍。around 的残留字另用 `p4d-around-ic` 实测为「不乘 `count` 覆盖」 |
+| [x] | D4 `remap*` · 确定性工程 | Node 回放 | `kbp replay d4`：`p4d-remap`、`p4d-remap2` 的 fps 60 / 10 按槽序逐粒子比位置、尺寸、颜色、alpha、旋转；噪声组按出生序注入 WPE 的 `R` | 全部在包络内；照报的项（两个 `timeofday`、op 输出 `maxlifetime`）和期望一致 | 2026-11-10（4a）：`p4d-remap` 19 个、`p4d-remap2` 58 个系统，差 / 限 ≤ 0.79。2026-11-11（4b）：26 个、63 个系统，4b 新比的噪声、写控制点、init 输入 16–18 ≤ 0.70；`ri-in-controlpoint` 尺寸 5、`ri-in-deltatocontrolpoint` 60，证明 init 读到的是被写成 0 的点 |
+| [x] | D5 距离类与 `vortex_v2` · 确定性工程 | Node 回放 | `kbp replay d5`：`p4d-dist`、`p4d-dist2` 的 fps 60 / 10 逐粒子比；超包络的组另做单步核对 | 在包络内；单步核对通过；`rm-eq2` 停在 100/3 | 2026-11-11：逐帧比较通过的差 / 限都 ≤ 0.77；`md-hard`、`md-scale`（绝对差 0.04–0.09 像素）与 fps 10 的 `v2-ring-*` 只报告，单步核对位置 ≤ 0.70、`vortex_v2` 速度 ≤ 0.43；`rm-eq2` 两种 fps 都停在 x ≈ 33.33 |
+| [x] | D6 不可见的帧 · 控制点与系统时间 | Node 回放 | `p4d-dist2` 的 `hide-r` 与收尾 A `p4d-close` 的 `st-hide` 周期隐藏对象；钩子在隐藏帧调 `suspend(inputs, frameDt)`；另跑「不更新控制点」「系统时间不累加」「先累加再复位」「可见性取本帧」「不可见期间照常发射」的变体 | 本实现通过，变体超限或粒子数对不上 | 2026-11-11：「不更新控制点」在 fps 10 的 `hide-r` 超限 1156 倍；`st-hide` 本实现差 ≤ 7.6e-6，「不累加」差 3.5、「先累加再复位」差 0.06–0.35 都超限；「可见性取本帧」四段都更差；「照常发射」四段的粒子数都对不上 |
+| [x] | D7 收尾 A · 走查未实测清单 | Node 回放 + WPE 抓帧（`p4d-close`、`p4d-close-rope`，fps 60 / 10 各 10 帧；`restart_wpe` 后的 `p4d-around-ic`） | `kbp replay d6` 逐项判定 8 项；对不上的在快照里改、出补丁 | 每项有结论；改动后现有回放逐字节相同 | 2026-11-11：`Rf = min(fps, R)`、预热后历史塌缩、op 标量输入只用 x 分量、init 用 `floorf`、预热不累加系统时间都成立；around 干净重启后不乘；`around-period` 这次不清零（照报不变）；不可见时系统时间累加，和原实现不同，已改（4 个文件）。tsc 0 错，vitest 1703 个里 1702 个通过，失败的 `compile/pipeline.test.ts` 语料用例（`3830255100` 请求次数超限）撤掉补丁也失败，和本步无关。fps 10 的 `around-period` 有一个粒子早 11 帧发出，没查清，留在未实测清单 |
+| [x] | D8 `2254685070` · 和 WPE 比画面 | Windows dev 屏外宿主 + WPE 抓帧（1920×1080 窗口，抓帧时用户在窗口里移动鼠标） | 离线展开绳；`render_scene` 按抓帧的 `g_Time` 渲染、挖掉绳后整帧比；按反推的光标时间线回放绳 | 没有不支持项；绳逐顶点在 0.01 像素以内；绳以外逐像素一致 | 2026-11-11：10 帧 137 段，位置最大差 1.72e-4 像素、uv 6e-8、颜色 0；宏、材质、管线状态和 WPE 一致；绳以外最大差 1 个色阶、> 2 的像素 0；回放段数逐帧相同（20 → 8），位置、`CP0` / `CP1`、`TL` 差 0，alpha ≤ 2.7e-4（`rcpps`）。WPE 是 20 fps，Kabegame 帧上限 60 时绳填充期的 uv 会不同（预期） |
+| [x] | D9 语料变化 | Node，152 / 165 个工程 | 每步前后重扫 `unsupported`；收尾在 HEAD（`c22b66a2`）快照上重扫，按 P4b、P4c 的口径重算覆盖数（`ignore/p4/d7/coverage_p4d.py`） | 只在对应键上变化，原来能渲染的场景不掉出，没有新增的 `particle:*` 键 | 2026-11-11：152 张口径带粒子 95 张里完全覆盖 44 → 57（步骤 1–5、收尾 A 之后依次 53、53、57、57、57、57、57）；165 张口径（基线是 P4c 收尾的代码重扫）108 张里 46 → 61。P4d 解锁 `2254685070`，能渲染 22 → 38 里其余 15 张来自同期别的阶段。没有新增的 `particle:*` 键；165 张里的 `3585875739` 把 `vortex_v2` 换成 `vortex_v2:audioprocessingmode`（P4e） |
+| [x] | D10 原有场景画面不变 | Windows dev，屏外宿主 | 10 张原本能渲染的场景 × 三档后处理，读回画面哈希 | 和前一步相同 | 2026-11-10 – 11-11：步骤 1（对 P4c 收尾）、2、5、收尾 A 各自 30 组都相同；步骤 3、4a、4b 没有单独量，步骤 2 之后与步骤 5 之前（`ignore/p4/d2/out/hash-after.json`、`ignore/p4/d5/out/hash-before.json`）的 30 个哈希逐个相同 |
+| [ ] | D11 `2254685070` · 预览与桌面跟随鼠标 | Windows，窗口模式 | 图库预览里打开、设为桌面壁纸，移动鼠标 | 光标后面拖出一条绳状的轨迹，鼠标停下后轨迹收拢消失 | 待用户确认。Claude 只做了 D8 的抓帧对照，没在应用里移动鼠标看过 |
+
 ## 场景壁纸 P4c：控制点、指针、controlpointattract、世界空间、拖尾与 sprite 朝向
 
 2026-11-08 – 11-09 Windows dev。P4c 分 6 步：步骤 0 调研；1 控制点底座；2 指针；3 `controlpointattract`；4 世界空间与帧顺序（一帧里粒子先于脚本步进）；5 `spritetrail` 与 `sprite` 的 `orientation` / `axis` / `flags`。一个系统多个 renderer 继续报不支持。

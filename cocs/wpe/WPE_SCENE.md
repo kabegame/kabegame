@@ -998,6 +998,189 @@ C  = cp[controlpoint].current.t；ks = k·scale；rT = rcp(threshold)
 - `render_scene` 看单张场景的固定时刻画面（不步进粒子）；
 - 客户端的 `hostParticleCorners` / `hostRender`（`apps/kabegame-dev-mcp/src/client.ts`）在屏外宿主里按给定 dt 回放后读四角、渲染整帧。
 
+## 粒子（P4d）
+
+P4d 有两块性质不同的内容，底座的形状仍不变：
+- 绳（`rope`、`ropetrail`）是新的**绘制**：WPE 用几何着色器把每段一个点展开成三角形带，我们由翻译器把几何着色器展开进顶点着色器。模拟侧只多两份状态：rope 的出生序表、ropetrail 的位置历史。
+- 映射类（`mapsequence*`、`remap*`）与距离类（`maintaindistance*`、`reducemovementnearcontrolpoint`、`vortex_v2`）是普通模块，读 P4c 的控制点。`mapsequence*` 是第一批带运行状态的 initializer；两个 maintaindistance 第一次读控制点的 `previous`，由此带出「不可见的帧也更新控制点」。
+
+依据：
+- 步骤 0 的读码：[rea-p4d-rope](../../.claude/plans/wpe-import/3-scene/phase4/rea-p4d-rope.md)（绳的段顶点、rope 表、字段与宏、ropetrail 历史）、[rea-p4d-modules](../../.claude/plans/wpe-import/3-scene/phase4/rea-p4d-modules.md)（映射类、距离类、`vortex_v2`、不可见时的行为）；
+- 确定性工程的实测：[报告](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)「P4d 语义的实测核对」；
+- 逐步的验收数据与收尾走查：[子计划](../../.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md)「步骤 1–5 实施记录」「收尾 A 实施记录」。下面每条只点出依据是读码还是实测，数字和例外以子计划为准。
+
+验收照 P4a–P4c：随机范围收成 min = max，按 WPE 日志的 dt 回放，逐粒子（绳逐段）和 RenderDoc 抓帧比，近似倒数按误差包络放宽。
+- 绳另比几何：离线把 WPE 的 `vs_in` 喂给我们翻译的着色器（Deno 的 WebGPU），和 WPE 的 `gs_out` 逐顶点比；真机由 dev 探针 `particleCorners` 读回整条带子。
+- 回放案例在 `ignore/p4/cases/`（`d1`、`d3`–`d6`，`kbp replay`；ropetrail 是 `ignore/p4/d2/replay.test.ts`）；每步 `kbp regress` 现有案例逐字节相同；变异检查子代理与 Claude 各做一组，全部检出（只靠单测的几条在子计划里逐条写明）。
+
+### 绳的绘制：几何着色器展开
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| WPE 的画法 | `POINTLIST` 加 `genericropeparticle.geom`：每段一个点，几何着色器输出 `4 + 2·subdivision` 个顶点的三角形带，中间点走三次贝塞尔。`.vert` 的非 GS 分支和 GS 路径不同（没有细分、不看 `ORIENTATION`、`right * uvs.x * 2.0 - 1.0` 的优先级错误），WPE 恒定义 `GS_ENABLED`，所以只能复刻 GS | 实测：所有绳的绘制都是 `PointList`，`dcl_maxout` 随 `subdivision` 0 / 3 / 4 / 16 / 40 是 4 / 10 / 12 / 36 / 68 |
+| 翻译器 | 请求带 `geometry`（`.geom` 原文）时定义 `GS_ENABLED`，把几何段拼进顶点段：每段一个实例，`vertex_index` 是第几个输出顶点，第 `vertex_index` 次 `OUT.Append` 的顶点就是输出；结果带 `geometry.maxVertices`。只支持点输入（`IN[0]`）、单条带；`normalize` 的参数是零向量时整个图元落到裁剪体外。规则与限制见 [wpesl2wgsl README](../../src-tauri/wpesl2wgsl/README.md)「几何着色器展开」 | 实测：零长段在 WPE 里是 NaN 顶点（D3D 丢掉含 NaN 的三角形），NaN 段和我们落到裁剪体外的段逐段一一对应 |
+| 着色器替换 | rope 两类系统的 pass 一律换成 `genericropeparticle`，不论材质写的是什么；混合、深度、纹理、常量照旧取材质。`ShaderCompiler.compile` 的 `geometry` 选项读 `shaders/<名>.geom`，进缓存键 | 读码第 6 节；`2254685070` 的管线状态和 WPE 一致 |
+| 宏 | rope：`THICKFORMAT=1`、`TRAILSUBDIVISION`、`ORIENTATION`。ropetrail：`TRAILRENDERER=1`、`TRAILSUBDIVISION`、`ORIENTATION`，`uvscrolling` 时 `TRAILSCROLLALPHA=1`，`fadealpha` / `fadesize` 为真时 `TRAILFADEALPHA` / `TRAILFADESIZE`，不写 `THICKFORMAT`。两者都只在槽 0 是格式 8–11 时写 `TEX0FORMAT`，不写 `SPRITESHEET*`（`compile/bundle.ts`，`isRopeRenderer`） | 读码 3.4 |
+| 管线与绘制 | 翻译结果带 `geometry` 时顶点布局按实例步进（`stepMode: "instance"`）、拓扑是三角形带（`PipelineSpec.topology`，进管线键），`pass.draw(maxVertices, 段数)`，段数为 0 不画。顶点缓冲：rope 按 `capacity` 段，ropetrail 按 `capacity × n` 段。属性检查：rope 6 个、ropetrail 5 个（含一个 `vec3`），别的照报 `render:particle-attribute:*` | — |
+| 剔除与朝向 | 绳的光栅化是 `NoCull`；`upright` / `fixed` 只让 u 左右对调，不会整条不画。`ORIENTATION ≠ 0` 时用 P4c 的 `g_Orientation*`；`ORIENTATION 0` 的绳不因它们是 NaN 而跳过 | 实测 R6u：Forward 是 (0, 0, 1)，宽度正好 40 |
+| `g_RenderVar0` | rope 写 0（rope 分支不读）；ropetrail 每帧写，见下 | 读码第 4 节 |
+
+**验收**：离线展开 rope 34 组 201 帧、ropetrail 22 组，位置差 ≤ 2.3e-4 像素，uv ≤ 9.5e-7，颜色 0；真机四角 rope 17 个系统 ≤ 0.004 像素，ropetrail 11 个系统 ≤ 4.6e-4。翻译器不带 `geometry` 的请求，177 次翻译、708 个输出文件逐字节不变。
+
+### `rope`
+
+实现在 `particles/rope.ts`（`RopeOrder`、`writeRopeSegments`），模块记录在 `particles/modules.ts`。
+
+| 字段 | 缺省 | 说明 |
+|---|---|---|
+| `subdivision` | 4 | 钳到 `[0, 32]`，即 `TRAILSUBDIVISION`；一段最多 68 个顶点，语料最大 16 |
+| `uvscale` | 1 | 存倒数 `K = 1/uvscale`；写 0 时不改，保持 1 |
+| `uvscrolling` | false | 为真时不看 `uvsmoothing` |
+| `uvsmoothing` | true | |
+
+- **rope 表**（WPE 的 `sys+0x218`）：存槽号，出生时追加，判死后保序删除（同一槽出现多次也删光），表序就是出生序，同帧出生的按 emitter 顺序排。我们的槽位复用第一个空槽，所以另记这张表和累计死亡数；`clear`（预热、复位都经过它）清空两者。实测：稳态下槽位已复用，绳上的位置仍严格单调。
+- **段顶点**：段 k 连接表的第 k、k + 1 项，存活数 ≤ 1 时不画：
+```
+a = idx[k]  b = idx[k+1]  c = idx[k−1]（首段取 a）  d = idx[k+2]（末段取 b）
+a_PositionVec4   = (pos[a], size[a])     a_TexCoordVec4   = (pos[b], TL)
+a_TexCoordVec4C1 = (pos[c], k + TP0)     a_TexCoordVec4C2 = (pos[d], size[b])
+a_TexCoordVec4C3 = rgba[b]               a_Color          = rgba[a]
+```
+- **`TL` 与 `TP0`**（整条绳共用，逐步 float32）：
+```
+R = 第一个 rate 非零的发射器的 rate · io.count               // 不看系统 flags 的禁用位
+L = 第一个中点非零的 lifetimerandom 的中点 · io.lifetime        // 没有则 0
+Rf = (R·L > 存活数) ? min(fps, R) : R;  N = Rf·L
+uvscrolling：TL = N − 1，TP0 = 累计死亡数
+否则：TL = 存活数，TP0 = 0；N > 0、!(存活数 < N − 1) 且 uvsmoothing 时
+      TL = N − 1，TP0 = saturate((L − age[idx[0]]) / (1/Rf)) − 1   // 先求倒数再除
+TL *= K
+```
+  存活数正好是 2 时另按特例：`c = a`、`d = b`、`TL = 2`、`TP = 0`，不乘 `K`，也不看滚动和平滑。
+- **`fps`** 是宿主的帧上限（`maxFps`，缺省 60），和两遍模式用的是同一个值，不是 WPE 设置的 `fps`。所以 Kabegame 的帧上限和 WPE 设置不同时，绳在填充期（存活数还没到 `R·L`）的 uv 就和 WPE 不同，满了以后相同。
+- **依据**：段内容、表序、缺省值、两粒子特例、`uvscale`、滚动在步骤 0 实测成立；`Rf = min(fps, R)` 由收尾 A 的 `r9-fill`（`rate 100`、寿命 2、`maxcount 64`，一直走「没满」）实测：fps 10 下 `TL` 两边都是 19。
+- **回放**：`p4d-rope` 16 个系统、两种 fps，段数逐帧相同；位置 ≤ 4.3e-4（坐标过千的 R11 7.3e-4），`TL` 差 0，`TP` ≤ 5.7e-5。
+
+### `ropetrail`
+
+实现在 `particles/ropetrail.ts`（`TrailHistory`、`writeTrailSegments`、`trailRenderVar0`）。
+
+| 字段 | 缺省 | 钳制 |
+|---|---|---|
+| `length` | 1 | 至少 0.001 |
+| `segments`（n） | 4 | `[2, 32]` |
+| `subdivision` | 1 | `[0, 32]` |
+| `fadealpha`、`fadesize`、`uvscrolling` | false | |
+| `uvscale` | 1 | 0 时不改；和 rope 共用 `K` |
+
+- **历史**：每粒子 n 个位置（新的在前）、已存段数 `C`、`uvscrolling` 计数 `U`（u16 回绕）；计时器每系统一个，间隔 `f32(length / n)`，初值 0，复位与预热都不重置它。
+  - 出生（全部 initializer 之后）：历史全写出生位置，`C = 1`、`U = 0`。
+  - 预热后：高水位以内的每个槽塌缩到当前位置，`C = 1`、`U = 0`。收尾 A 的 `t7-pre` 实测：抓帧时 `h[1]` 是预热结束时的位置，不是出生点。
+  - 采样（每帧模拟之后，`dt'` 已乘 `rate`）：存活数为 0 时计时器停走；否则 `timer −= dt'`，`!(0 < timer)` 时 `timer = 间隔`、**余量丢掉**，全部存活粒子的历史后移一格，`h[0]` 写本帧位置，`C = min(C + 1, n)`，`U + 1`。每帧最多采一次，`dt'` 大于间隔也只采一次。预热不采样。
+- **段**：每个存活粒子按槽序恒写 n 段。段 0 是 `p → h[0]`，CP0 是 `p`、CP1 是 `h[1]`；段 1 是 `h[0] → h[1]`，CP0 是 `p`；中间段 `h[k−1] → h[k]`，CP 取 `h[k−2]`、`h[k+1]`；末段的 CP1 取终点自身。w 分量不滚动时是 `C·K` 和 `k`，滚动时是 `k` 和 `k − U`。没填满的段零长，由展开的退化规则整段不画，不另外处理。
+- **`g_RenderVar0`**（每帧按当时的计时器写）：`z = 1 − max(timer, 0)/间隔`；`w = n − 0.5`；滚动时 `w = (n − 1)·K`、`x = n − 1`，不滚动时 `x`、`y` 写 0。
+- **渐隐**：`fadealpha` / `fadesize` 只在 `uvscrolling` 时起作用（宏照写，着色器只在滚动分支里用）。实测：开渐隐、不滚动的 T3 和不渐隐的展开逐位相同。
+- **依据**：采样、余量丢掉、每帧一采、钳制、`RV0` 在步骤 0 实测成立；T7（`starttime 1`）在 WPE 里一直没画，是满容量时发射计时冻结（P4b 已实现），周期约 3.94 s，我们的回放同样没有存活粒子。
+- **回放**：`p4d-ropetrail` 12 个系统、两种 fps，每帧段数相同；位置 ≤ 4.4e-4，尺寸、颜色、alpha、两个 w 分量差 0，`RV0` ≤ 2.2e-6。
+
+### `mapsequencearoundcontrolpoint`、`mapsequencebetweencontrolpoints`
+
+实现在 `particles/mapsequence.ts`。这是第一批有运行状态的 initializer，模块表为此多了三个钩子：`createState`（每个系统实例一份）、`resetState`（系统复位）、`newPeriod`（周期发射进入新周期，在本帧的新粒子出生之前）；字段多了 `instanceIf`（按解析值决定乘不乘 `instanceoverride`）。
+
+- **序号**：状态是 `seq` 与 `step`，先用后加：`seq′ = f32(step + seq)`。
+  - `step`：around `1/max(count, 1e-4)`，between `1/max(count − 1, 1e-4)`。
+  - `seq′ > 1`：repeat 时 around 取 `fmodf(seq′, 1)`、between 归零；mirror 时反射、`step` 取反。比较都是严格的，所以 around 的第一圈留着 1.0。
+- **清零**：
+  - 系统复位（对象不可见且有存活粒子）：两者 `seq = 0`，`step` 不动。实测（步骤 3 的 `ma-hide`）：清空之后逐粒子对上。
+  - 新周期：只有 between 在 `flags & 0x20` 时清零（实测 `mb-period32`）。
+  - around 不解析 `flags`，记录里那个字是解析暂存区的残留值，取决于这次 WPE 运行里之前解析过什么。四次先行解析（含一次干净重启）里 `count` 都不乘 `instanceoverride.count`，照此实现、不报；配周期发射时新周期清不清零只测到一次（收尾 A 的 `around-period`：这次是不清零），能力表照报 `particle:initializer:mapsequencearoundcontrolpoint:periodic`（语料 0 张）。
+- **around**：`M`、`C` 是控制点 `current` 的 3×3 与平移，基向量乘 `M`。保留出生点到轴的距离 `L`，`θ = (Δb·seq + b0)·2π`，`θ = 0` 在 +y、往 +x 转；位置覆盖成 `dirA·L + proj·A + C`；`speedmin` / `speedmax`（乘 `instanceoverride.speed`）的 x 切向、y 径向、z 轴向加到速度上；无条件抽 3 个随机数。`axis "0 1 0"` 时基向量是 `(1, 0, 0)`、`(0, 0, −1)`。
+- **between**：两个控制点的平移 `S`、`E`；本地系统按系统原点量垂直分量（**不减** `S`），世界系统先减 `S`；`w = 1 − (2·seq − 1)²`（用 `seq`，不是 `t`）。`flags` 1 / 2 / 4 / 8 分别是垂直分量乘 `w`、速度乘 `w`、尺寸按 `sizereductionamount` 缩、加 `arcdirection` 方向的弧；别的位照报 `…:flags`。`count` 只在 `flags & 0x10` 时乘 `instanceoverride.count`，改值时 `step` 重写成正的新值（mirror 走到一半会回到正向）。不抽随机数。
+- **控制点个数**：`controlpointstart` / `controlpointend` 也计入，between 不写字段时也有 2 个点。
+- **回放**：`p4d-map` 20 个系统按槽序逐粒子比；between 9 组逐位为 0（`f2` 3.7e-4），around 差/限 0.42–0.69（`sphererandom` 的近似倒数）。「复位不清零」「新周期不清零」两个变体分别超限 9.5e4、5.25e5 倍。
+
+### `remapinitialvalue`、`remapvalue`
+
+实现在 `particles/remap.ts`：一条管线「读输入 → 分量 → 归一化 → 变换 → 输出区间 → 运算写回」，两个模块共用，按种类（init / op）在 18 处取变体，文件头逐条列出。读码确定的取值全做（20 个输入、8 个分量、7 个变换、4 个运算、14 个有效输出）。新字段类型 `vec3splat`：字符串读三个数，数字铺满三分量（`inputrange*` / `outputrange*`）。
+
+最容易弄错的几处（init 对 op）：
+
+| 项 | init（`remapinitialvalue`） | op（`remapvalue`） | 依据 |
+|---|---|---|---|
+| 输入 `particlesystemtime` | 系统时间 `St`（乘 `rate`） | 场景时间 `T`，和 `runtime` 相同 | 实测 ri-time / rv-time |
+| 输入 `lifetimefraction` | 读 frame 列（出生时 0，`randomframe` 时是 `R`） | `rcp(life)·age` | 读码 |
+| 归一化 | 三分量各自 `(in − min)/range` | 向量输入 `(in − min)·rcp(range)`；标量输入只用 x 分量的 min 与倒数，夹完再铺满 | 收尾 A 实测 `rv-vec2` / `ri-vec2` |
+| `square` / `saw` | `floorf`、`roundf` | 截断、偶舍入 | 实测 rv-square / rv-saw；收尾 A 实测 `ri-square2` / `ri-saw2` |
+| 噪声 | `snoise1` / `fbm1`（P4b 的 WPE 噪声），和 `R` 无关 | FastNoise2 二维 Simplex / FBm（`particles/fastnoise2.ts`），种子取每粒子 `R`，y、z 分量再异或 `0x0b3924ad`、`0x493a8e83` | 实测：rv-noise 三分量残差 ≤ 4e-4；FBm 倍频在步骤 4b 的回放里定下 |
+| 写 size / opacity / color | 初始值列 | 当前值列（置列标志） | 读码 |
+| 输入 `positionbetweentwocontrolpoints` | 读 `outputcontrolpoint0` / `1`（不是 input） | 同左 | 实测 |
+
+- **写控制点**：输出 `controlpoint` 时按 `outputcomponent` 运算后写回 `cp[ocp0].current` 的平移；init 每个新粒子写一次，op 每 4 个槽一组（含死槽）只有槽 `4g` 生效。这个点在建系统时置 `0x10000`（模块表的 `controlPointFlags`），`update` 跳过它、不吃实例覆盖。init 的输入 `controlpoint` / `deltatocontrolpoint` / `directiontocontrolpoint` 先把 `cp[icp0].current` 的平移写成 0（WPE 的 bug，实测 ri-cpbug），照做。
+- **控制点个数**：输入或输出是 7、8、16、17、18 号时计 `icp0`、`ocp0`，是 8 号时再计 `icp1`、`ocp1`（`controlPointRefs`）。
+- **系统时间 `St`**：每次步进在模拟之前 `St = f32(St + dt′)`；预热期间不累加（收尾 A `st-pre`）；不可见期间也累加（见下「不可见的帧」）。图层时间只在可见时累加。
+- **照报**：输入、输出 `timeofday`（写入点没找到），未知的输入 / 输出 / 分量 / 变换 / 运算名；op 的输出 `maxlifetime`（WPE 按 4 个一组写到组尾、把死槽写回非零寿命，存活数下溢后不再发射，复刻不了），init 的照常支持。
+- **回放**：`p4d-remap` 26 个系统、`p4d-remap2` 63 个系统（除两个 `timeofday` 与 op 的 `maxlifetime`），两种 fps，差/限 ≤ 0.79。
+
+### 距离类与 `vortex_v2`
+
+实现在 `particles/distance.ts`，四个都是普通 operator，每遍处理 `[0, count)` 的全部槽，逐步 float32、加法顺序照汇编。blend 变体用现成的 `readBlend`。
+
+| 模块 | 要点 | 依据 |
+|---|---|---|
+| `maintaindistancetocontrolpoint` | 先平移 `Δ = current.t − previous.t`，再拉回 `T = inverse(mat3(current))` 下半径 `distance` 的球面；强度 `variablestrength` 为 0 时是硬约束，否则 `clamp01(vs·h)` | 实测：对象 `scale "2 1 1"` 时落在 400 × 200 的椭圆上 |
+| `maintaindistancebetweencontrolpoints` | 两个点的 `current` 与 `previous` 都读；`n` 或 `np` ≤ 2⁻⁴⁶ 时整条跳过（NaN 也跳过） | 读码；实测 mb2-same 是直线 |
+| `reducemovementnearcontrolpoint` | 只改速度：`vel *= 1 − clamp01(r·h)`。`distanceouter == distanceinner` 时倒数存 1.0，`reductionouter == reductioninner` 时差存 1.0（两处都是 WPE 的 bug，照做） | 实测 `rm-eq2`：两种 fps 都停在 100/3，按 0 实现会停在 50 |
+| `vortex_v2` | 切向 `(r̂ × a)·spd`，`spd` 乘 drag 系数 `k`（不是步长 `h`）；轴的 `(x² + y²) + z² < 0.001` 时取 (0, 0, 1)，否则 `axis·(1/sqrt)` 再乘控制点 `current` 的 3×3；`flags & 2` 时读 `centerforce`（系数 `cf/h`），`flags & 4` 是环形；`n = 0` 或 `\|P′\| = 0` 时照 WPE 写 NaN；`audioprocessingmode ≠ 0` 照报（P4e） | 实测：换成 `h` 差 2.1–2.7，sample-gaps 写的方向是反的 |
+
+- **两遍模式**：`previous` 只在帧尾更新，两遍都看到同一个 `Δcp`，一帧平移两次。这是 WPE 的行为（实测 md-move 在 fps 10 下两倍速跟随，世界空间粒子会跑到对象前面），按现在的结构自然得到。
+- **NaN 的钳制**：`clamp01`（`minss(1, maxss(0, x))`）让 NaN 原样通过，`saturatePs` 让 NaN 得 1，按汇编各用在各自的位置；rea 写的「NaN → 0」不对。
+- **回放**：`p4d-dist`、`p4d-dist2` 两种 fps，逐帧比较通过的差/限都 ≤ 0.77。`md-hard`、`md-scale`（绝对差 0.04–0.09 像素）与 fps 10 的 `v2-ring-*` 只报告、另做单步核对（每帧换成 WPE 上一帧的状态步进一帧，全部通过）：WPE 的 `rsqrtps` 误差随输入逐帧变化，在把粒子拉回半径的系统里是随机游走，常量偏置的包络界不住。
+
+### 不可见的帧
+
+对象不可见（自身或父链）时，渲染器调 `ParticleSystem.suspend(inputs, frameDt)`，不步进粒子：
+1. **控制点照常更新**：按当帧的 `W` 与跟随点更新，帧尾 `previous ← current`；没有存活粒子时也做。依据：读码 rea-p4c-sim 5.6；实测 `p4d-dist2` 的 `hide-r`，「不更新」的变体超限 1156 倍。没有这一条，重新可见的第一帧 `Δcp` 是整段隐藏期间的位移，maintaindistance 的粒子会被一次拽过去。
+2. **有存活粒子时复位**（和 WPE 一样，没有粒子时不做）：emitter 计时、模块状态（`mapsequence*` 的 `seq`）、系统时间与图层时间清零，再 `clear`（rope 表与累计死亡数一起清）。
+3. **系统时间照常累加**：复位之后无条件 `St += f32(frameDt)·rate`，图层时间不累加。依据：收尾 A 实测 `st-hide`，「不累加」「先累加再复位」都超限，「复位后累加本帧」差 ≤ 7.6e-6；原实现不累加，收尾 A 改正。
+4. **不发射**：实测「不可见期间照常发射」的变体四段粒子数都对不上（WPE 不可见期间不发射，或最后一个不可见帧发出的粒子活不到可见，这组数据分不出）。
+5. **可见性按脚本之前的状态**（同 P4c「粒子先于脚本」）：实测「按本帧」的变体四段都更差。
+
+### 已知差异
+
+都按「近似倒数不复刻」接受，或是能力表照报的残留行为：
+- **`remapvalue` 输出 `speed` 且区间跨 0**：一遍模式下，`o` 过零的那一帧符号取决于 `rcpps` 和精确倒数的差，个别粒子会和 WPE 反向、之后整段反向运动（精确倒数下 `rv-noise` fps 60 有 6 个粒子·帧）。语料里 3815289650 有一处（`fbmnoise`、区间 −5..7），噪声驱动的粒子统计上看不出区别。
+- **`maintaindistance*` 与 `vortex_v2` 的 `centerforce`**：`rsqrtps` 的随机游走与 `|P′|/h` 放大，见上「回放」；单步核对在包络内。
+- **rope 的 alpha**：`age·rcpps(1)` 少算的量随年龄线性增长（`2254685070` 对照里 ≤ 2.7e-4）。
+- **周期发射在计时余量极小时**：fps 10 的 `around-period` 有一个粒子我们早 11 帧发出（周期计时只剩 2e-4、发射余数 1.0001），没查清，留在子计划「未实测清单」；fps 60 逐帧对上。
+- **工具边角**：kabegame-dev MCP 的 `particle_corners` / `render_scene` 不传 `fps`，低 fps 下 rope 的 `Rf` 仍按 60 算；dev `particleTrack` 对 rope 系统按槽序输出，不是表序；暂停时改 `instanceoverride` 的 `count` / `lifetime`，rope 的 `TL` 要到下一次步进才更新。
+
+### 语料与解锁
+
+覆盖的口径同 P4b、P4c：带粒子的场景里不报任何 `particle:*` 键的场景数（`ignore/p4/d7/coverage_p4d.py`，结果 `coverage.txt`）。语料在 P4d 期间从 152 个工程涨到 165 个（别的会话加了 13 张，都带粒子），两种口径都给：
+
+| 口径 | 带粒子 | 粒子用法完全覆盖 | 能渲染 |
+|---|---|---|---|
+| 152 张（P4c 收尾时的名单） | 95 | 44 → 57；步骤 1–5、收尾 A 之后依次 53、53、57、57、57、57、57 | P4d 解锁 1 张（`2254685070`，步骤 1）；HEAD 共 38 张，其余 15 张来自同期别的阶段（P5a、P6a 等） |
+| 165 张（现在的全集，基线是 P4c 收尾的代码 `c345e1cd` 重扫） | 108 | 46 → 61（后加的 13 张里 `3486806915`、`3660962877` 由 P4d 覆盖） | 同上，后加的 13 张都还不能渲染 |
+
+- **P4d 去掉的键**（152 张口径的场景数）：`particle:renderer:rope` 22、`particle:initializer:mapsequencearoundcontrolpoint` 8、`particle:renderer:ropetrail` 8、`particle:operator:remapvalue` 2、`mapsequencebetweencontrolpoints`、`maintaindistancebetweencontrolpoints`、`reducemovementnearcontrolpoint` 各 1；165 张口径另有 `particle:operator:vortex_v2` 1。没有新增的 `particle:*` 键；165 张口径的 `3585875739` 把 `vortex_v2` 换成 `vortex_v2:audioprocessingmode`（两个粒子文件都是 mode 3，属 P4e）。kabegame-sample 各步另扫，步骤 5 之后粒子只剩 `particle:children`（另有 `object:shape`、`value:animation`、`depthtest:enabled`）。
+- **新覆盖的 13 张**（152 张口径）：只差 `rope` 的 9 张、只差 `mapsequencearoundcontrolpoint` 的 2 张、两者都要的 2 张。只有 `2254685070` 能渲染；`3811764016` 只差 `object:shape`，其余还差文字对象、`model:*` 等 16–59 项。
+- **`2254685070`**（收尾 A，鼠标拖尾，用户在测试窗口里移动鼠标抓帧）：绳逐顶点和 WPE 的 `gs_out` 最大差 1.72e-4 像素；挖掉绳的三角形后整帧最大差 1 个色阶；按反推出的光标时间线回放，段数逐帧相同（20 → 8），位置、`CP0` / `CP1`、`TL` 差 0。
+- **还挡得最多的粒子键**（152 / 165 张）：`particle:children` 32 / 36（其中只差它的 22 / 24 张）、模块上的 `audioprocessing*` 字段各 2–8 张（P4e）；`particle:binding:instance:rate` 7 / 8、`colorn` 5、`count`、`size` 各 3（`{script}`，P4f）。
+- **基线**：10 张干净场景 × 三档后处理共 30 个画面哈希，步骤 1、2、5、收尾 A 各自量过前后，全部相同；步骤 3、4a、4b 没有单独量，步骤 2 之后（`ignore/p4/d2/out/hash-after.json`）和步骤 5 之前（`ignore/p4/d5/out/hash-before.json`）的 30 个哈希逐个相同。
+
+### dev 探针与对比台的增补
+
+| 探针 | P4d 增补 |
+|---|---|
+| `particleCorners` | 程序带 `geometry` 时第 `id` 个调用算第 `id / maxVertices` 段的第 `id % maxVertices` 个顶点、按段读输入；结果多一个 `rope`（`maxVertices`，ropetrail 另有 `segments`），`corners` / `pixels` 每项是一段的整条带子（同 WPE `gs_out` 还原成带的顺序），rope 的 `particles` 按 rope 表排；选项多一个 `fps`（缺省 60） |
+| `particleTrack` | 没有改：rope 系统仍按槽序输出 |
+
+对比台在 `ignore/p4/`：
+- 确定性工程：步骤 0 的 `gen_d.py`（`p4d-rope`、`p4d-ropetrail`、`p4d-map`、`p4d-remap`、`p4d-remap2`、`p4d-dist`），之后改用 `kbp gen`：`defs/p4d5.py`（`p4d-dist2`）、`defs/p4d6.py`（收尾 A 的 `p4d-close`、`p4d-close-rope`），以及 `d3/gen_around.py`（`p4d-around-ic`）。
+- 回放案例 `cases/d1.json`、`d3`–`d6`（`kbp replay`，钩子 `*.hook.ts` 处理 fps 10 日志的缺帧、`R` 的注入与近似倒数的拟合）；离线展开 `kbp corners offline`；各步的快照、补丁与变异清单在 `d1/`–`d6/`，覆盖数在 `d7/`。
+- WPE 参照：步骤 0 在 `A:\p4b\p4d-*`，步骤 3 之后在 `A:\p4d\`（wpe-renderdoc MCP 的 `capture_sweep` / `capture_wallpaper`），读取用 `kbp rdc track --points`；步骤 0 的旧轨迹（draws 认法）改名为 `*.rdc_rope.json`。
+
 ## 声音（P6a）
 
 声音对象不画东西：在 `layers` 里仍是一个没有 pass 的图层（层级、名字、`getLayer` 照旧），播放字段另进 bundle 的声音表，由宿主按 WPE 的规则排期播放。渲染图不碰。依据：读码 [rea-p6a-sound](../../.claude/plans/wpe-import/3-scene/phase6/rea-p6a-sound.md)，实测 [p6-REPORT](../../.claude/plans/wpe-import/3-scene/phase6/p6-REPORT.md)「P6a 声音语义的实测核对」（冲突时以实测为准，读码的结论除暂停淡出外都已实测成立）。

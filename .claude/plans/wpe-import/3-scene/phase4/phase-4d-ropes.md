@@ -1409,6 +1409,36 @@ suspend(inputs: ControlPointInputs = IDENTITY_INPUTS): boolean {
 - `versions/latest/changelog.md`、`versions/latest/regression.md`：P4d 的条目与回归用例。
 - 总计划 `phase-4-particles.md`：语料重扫，覆盖数、能渲染数改成实际值。
 
+#### 收尾 B 实施记录（2026-11-11）
+
+**改的文件**（只动文档，不改产品代码）：
+- `cocs/wpe/WPE_SCENE.md`：P4c 之后新增「粒子（P4d）」一节，分绳的绘制（几何着色器展开）、`rope`、`ropetrail`、`mapsequence*`、`remap*`、距离类与 `vortex_v2`、不可见的帧、已知差异、语料与解锁、dev 探针与对比台。翻译器的展开规则只引用 `src-tauri/wpesl2wgsl/README.md`「几何着色器展开」（步骤 1a 已写进去并提交，本段没改它）。
+- `cocs/README.md`：WPE_SCENE.md 条目加 P4d 子项，「适用场景」补绳、拖尾、映射、remap、距离类与不可见帧的排查场景。
+- `versions/latest/changelog.md`：「场景壁纸 P4d：…」一条（开发者向，同 P4c 那条）。没有另加面向用户的条目（P4b、P4c 各有一条），P4d 对用户可见的只有 `2254685070` 一张，要不要加由用户定。
+- `versions/latest/regression.md`：「场景壁纸 P4d：…」一节，D1–D10 已测，另加 D11（`2254685070` 在预览与桌面跟随鼠标）待用户确认。
+- 总计划 `phase-4-particles.md`：P4d 的「完成情况」，「范围与覆盖」的重算说明，P4d 开头的覆盖预期注明实际值。
+
+**覆盖数**（`ignore/p4/d7/`）：
+- `kbp snapshot export HEAD d7/head`（`c22b66a2`，tsc 0 错；翻译器 wasm 取工作区的 `apps/wpe-scene/src/wpesl2wgsl/wpesl2wgsl.wasm`，和 d3–d6 的快照同一份），`kbp corpus scan --src d7/head/src --extra controlpoints --out d7/corpus.json`：165 个工程，出错 0，干净 38。`--extra controlpoints` 是为了行里有 `systems`，判「带粒子」。
+- 165 张口径的基线：`kbp snapshot export c345e1cd d7/p4c --wasm ignore/p4/c5/head/src/wpesl2wgsl/wpesl2wgsl.wasm`，同样扫一遍（`d7/corpus-p4c.json`，干净 22）。
+- 统计 `d7/coverage_p4d.py`，结果 `d7/coverage.txt`；口径同 `c5/coverage_p4c.py`，「带粒子」取 HEAD 扫描的 `systems`（和 P4c 扫描的判定逐张核对过，一致）。
+
+| 口径 | 带粒子 | 完全覆盖 | 能渲染 |
+|---|---|---|---|
+| 152 张（P4c 收尾的名单） | 95 | 44 → 57（P4c 收尾、步骤 1、2、3、4a、4b、5、收尾 A、HEAD：44、53、53、57、57、57、57、57、57） | 22 → 38；P4d 只解锁 `2254685070`，`3778549173`（步骤 2 期间）、步骤 4b 期间的 12 张、`1967162875` / `3827677885`（P6a）来自别的阶段 |
+| 165 张（全集） | 108 | 46（P4c 收尾的代码）→ 61（HEAD）；后加的 13 张里 `3486806915`、`3660962877` 由 P4d 覆盖，`3287715210`、`3463520581` 在 P4c 时已覆盖 | 22 → 38，后加的 13 张都还不能渲染 |
+
+- 和预期对照：152 张口径 57 张，正是本子计划「范围与解锁」的预期，新覆盖的 13 张和那里列的名单逐张相同。
+- 还挡住的：`particle:children` 32 / 36（只差它的 22 / 24 张），其余是 `audioprocessing*`（P4e）与 `binding:instance:*`（P4f）。
+
+**画面哈希的补查**（`d7/hash_bridge.py`，结果 `d7/hash-bridge.txt`）：步骤 3、4a、4b 的实施记录里没有画面哈希这一项（验收清单里写了）。拿已有的文件比：步骤 2 之后（`d2/out/hash-after.json`）和步骤 5 之前（`d5/out/hash-before.json`，即撤掉步骤 5 补丁的 HEAD）的 10 张 × 3 档 30 个 sha256 逐个相同，中间夹着别的会话的提交也没变，所以这三步没有改到干净场景的画面。
+
+**发现的问题与拿不准的：**
+- 能渲染数在 P4d 期间从 22 涨到 38，其中 15 张不归 P4d。步骤 4b 期间那 12 张具体来自哪个阶段没有逐张追（`3830255100` 在收尾 A 记录里写的是 P5a 刚解锁的），文档里只写「来自同期别的阶段」。
+- 语料从 152 涨到 165：P4b、P4c 的覆盖数都是 152 张口径，这次两种都给；后面各节要统一口径，建议改用 165 张并以本次的 61 为 P4d 收尾基线。
+- kabegame-sample 这次没扫（任务说明不加 `--project`），文档里引用的是步骤 5 另扫的结果（`d5/corpus-sample-*.json`）。
+- 翻译器 wasm 是工作区里 2026-11-10 的那份（步骤 1a 之后、P7a 之前），快照的 `src/` 是 HEAD。P7a 的逐字节基线只多出流体 effect（`fluidsimulation_advection`）的输出，用它的唯一一张场景还缺别的能力，所以不影响能渲染数，也碰不到 `particle:*` 键；d3–d6 的快照用的也是同一份。
+
 ## 决定
 
 **已定（2026-11-10 用户，两项都按推荐 A）：**

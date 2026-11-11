@@ -33,6 +33,8 @@ WPE 语义以 REA 和实验为准，LWE 只作线索：它解析了 `starttime` 
 
 > 2026-11-09 P4c 收尾重算覆盖数（`ignore/p4/c5/coverage_p4c.py`）：口径同 P4b 收尾，是重扫语料（152 个工程）里带粒子的 95 张中，不报任何 `particle:*` 键的场景数。P4b 收尾 22 张，P4c 收尾 44 张。上表的 4 / 22 / 34 / 47 / 60 / 70 是 2026-11-07 按本机 117 张、带粒子 70 张、按特性名统计的估计，和重算的数不能直接比；P4d 起的目标留到各节步骤 0 用能力表重算。`3832772446` 在 P4c 步骤 5 解锁。
 
+> 2026-11-11 P4d 收尾重算（`ignore/p4/d7/coverage_p4d.py`，HEAD `c22b66a2` 的快照）：同一口径 152 张里 44 → 57 张，和 P4d 步骤 0 的预期相同。语料此时已有 165 个工程（别的会话加了 13 张，都带粒子）：165 张口径带粒子 108 张，P4c 收尾的代码重扫是 46 张，P4d 收尾 61 张。以后各节两种口径都给，或改用 165 张重定基线。
+
 **P4 不做，继续报不支持：**
 - 带 `effects` 的粒子对象，本机 0 个。
 - 粒子开 `LIGHTING`，本机 0 张。`ENGINE_COMBOS` 已不再拦 `LIGHTING`，粒子材质开了它要自己报不支持。
@@ -198,7 +200,7 @@ const OBJECT_FLAGS = [
 
 ## P4d — 绳与映射
 
-子计划：[phase-4d-ropes.md](phase-4d-ropes.md)。2026-11-09 按 P4c 收尾后的代码重扫：P4d 做完，粒子用法完全覆盖从 44 张到 57 张（口径同 P4b「完成情况」，本表的 47 张是旧口径）；解锁只有 `2254685070`，它现在只差 `rope`。绳在 WPE 里走几何着色器。步骤 0 已在 2026-11-09 做完（读码两份、确定性工程 6 个、抓帧 11 组），结论见报告「P4d 语义的实测核对」。2026-11-10 用户定了两项（子计划「决定」）：绳由翻译器加几何着色器展开复刻；`remap*` 读码确定的取值全做，`timeofday` 和未知枚举照报。
+子计划：[phase-4d-ropes.md](phase-4d-ropes.md)。2026-11-09 按 P4c 收尾后的代码重扫：P4d 做完，粒子用法完全覆盖从 44 张到 57 张（口径同 P4b「完成情况」，本表的 47 张是旧口径；2026-11-11 收尾重算实际也是 57 张，165 张口径 46 → 61，见下「完成情况」）；解锁只有 `2254685070`，它现在只差 `rope`。绳在 WPE 里走几何着色器。步骤 0 已在 2026-11-09 做完（读码两份、确定性工程 6 个、抓帧 11 组），结论见报告「P4d 语义的实测核对」。2026-11-10 用户定了两项（子计划「决定」）：绳由翻译器加几何着色器展开复刻；`remap*` 读码确定的取值全做，`timeofday` 和未知枚举照报。
 
 **步骤 0：**
 - 绳的几何：分段、细分、UV 和 `ropetrail` 的长度。
@@ -212,6 +214,18 @@ const OBJECT_FLAGS = [
 - `vortex_v2`、`maintaindistancetocontrolpoint`（语料 0 张，为 kabegame-sample）。
 
 **验收：** `2254685070` 解锁（它依赖 P4b 的发射器 `flags` bit1）；语料中粒子用法覆盖达到 47 张；绳和映射模块的确定性工程和 WPE 一致。
+
+**完成情况（2026-11-11）：** 步骤 0–5 与收尾 A 都已提交（步骤 0 `55948709`；1 `5f9f58c9` 翻译器、`b721f636` 宿主；2 `9f47e8fc`；3 `6a3c3854`；4a `50d2e9c0`；4b `3d0dc4e9`；5 `a5ca3874`；收尾 A `c22b66a2`），收尾 B 写进了 `cocs/wpe/WPE_SCENE.md`「粒子（P4d）」、changelog 与回归文档。
+- 解锁：只有 `2254685070`（步骤 1）。和 WPE 比过画面：绳逐顶点最大差 1.72e-4 像素，绳以外最大差 1 个色阶（子计划「收尾 A 实施记录」）。同期能渲染的场景 22 → 38，其余 15 张来自别的阶段（P5a、P6a 等）。
+- 覆盖：152 张口径（同 P4b、P4c 的口径）粒子用法完全覆盖 44 → 57，各步之后依次 53、53、57、57、57、57、57，和步骤 0 的预期相同；本节验收写的 47 张是旧口径的估计，见上「范围与覆盖」的说明。165 张口径（现在的全集，基线是 P4c 收尾的代码重扫）46 → 61。新覆盖的 13 张（152 张口径）里只有 `2254685070` 能渲染，`3811764016` 只差 `object:shape`，其余还差文字对象、`model:*` 等 16–59 项。
+- 去掉的键（152 张口径）：`particle:renderer:rope` 22、`mapsequencearoundcontrolpoint` 8、`ropetrail` 8、`remapvalue` 2、`mapsequencebetweencontrolpoints`、`maintaindistancebetweencontrolpoints`、`reducemovementnearcontrolpoint` 各 1；165 张另有 `vortex_v2` 1（`3585875739` 换成 `vortex_v2:audioprocessingmode`，属 P4e）。没有新增的 `particle:*` 键。
+- 还挡住粒子覆盖的（152 / 165 张）：`particle:children` 32 / 36，其中只差它的 22 / 24 张（P4e）；模块上的 `audioprocessing*` 字段各 2–8 张（P4e）；`particle:binding:instance:rate` 7 / 8、`colorn` 5、`count`、`size` 各 3（P4f）。
+- 确定性工程：rope、ropetrail 逐段与 `vs_in` 比、离线展开与真机四角和 `gs_out` 比；`mapsequence*`、`remap*`、距离类与 `vortex_v2` 逐粒子回放，见[子计划](phase-4d-ropes.md)各步实施记录。只报告不判定的：`md-hard`、`md-scale` 与 fps 10 的 `v2-ring-*`（`rsqrtps` 的随机游走，单步核对通过）。
+- 读码被实测或汇编更正的：`maintaindistancebetweencontrolpoints` 读两个点的 `current` 与 `previous`；`vortex_v2` 的切向是 `r̂ × a`、乘 `k`；`clamp01` 让 NaN 通过；`vortex_v2` 的轴是 `axis·(1/sqrt)`；不可见期间系统时间照常累加（rea-p4d-modules 5.3 原为【推】，收尾 A 实测后改了实现）。
+- 留给后面各节的：
+  - P4e：子系统（含 `remapinitialvalue` 唯一的语料用法、子系统的复位）、`audioprocessing*`（含 `vortex_v2`）；
+  - P4f：脚本写控制点、`emitParticles`；
+  - 没有排期：一个系统多个 renderer、`around` 配周期发射（`…:periodic`，语料 0 张）、周期发射在计时余量极小时的出生帧（子计划「未实测清单」），以及 kabegame-dev MCP 的回放不传 `fps`。
 
 ## P4e — 子系统与音频
 
