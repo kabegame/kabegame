@@ -87,3 +87,23 @@
 | 确定性工程 | `ignore/p7/gen_sem.py` → `proj/p7-sem` |
 | 「WPE 编不过」的粗扫 | `ignore/p7/scan_quirks.py` → `out/quirks.json` |
 | 抓帧 | `A:\p7\step0`、`A:\p7\sweep`、`A:\p7\sem` |
+
+## P7b 规则的实测（2026-11-11）
+
+读码见 [rea-p7-shader](rea-p7-shader.md)「P7b 补查（预处理、声明、打包）」。确定性工程 `p7-sem` 加了四个图层（`ignore/p7/gen_sem.py`），抓帧 `A:\p7\sem\p7-sem-b0`、`-b1`、`-b2`：
+
+| 图层 | 写法 | 预测 | WPE |
+|---|---|---|---|
+| `kbsemi` | `#if KB_ONE == 1;`（尾随分号） | 求值器只读一个表达式，分支照常选中，画绿 | 编过，`mov o0, l(0, 1, 0, 1)` |
+| `kbswz` | 两段都声明 `varying vec4 v_Size.xy;`，顶点写 `(0.1, 0.2, 0.3, 0.4)`、片元输出 `.xyz` | 当成 `vec4 v_Size` | 编过，片元读第二个插值寄存器 `v1.xyz` |
+| `kbredef` | `#define KB_V 0.2` 后 `#define KB_V 0.8` | 后者覆盖前者 | 编过，`mov o0, l(0.8, 0.8, 0.8, 1)` |
+| `kbpack` | `main` 之前读 `g_AudioSpectrum16Left[i].x`（`i` 来自 varying，运行时为 4），声明后面紧跟 `g_Time`；`main` 里另读 `frac(g_Time)`，再读 `[i + 100]` | 打包形态 `float4[4]`；越界读到同一 cbuffer 里下一个成员，出了缓冲是 0 | 编过，`cb1[r0.x + 0].x`；像素 `(0.051, 0.051, 0)`，`g_Time` = 9.0511：越界的第 5 行就是 `g_Time`，`[i + 100]` 是 0 |
+
+另外：
+- `-b1` 那一版 `g_Time` 只被越界读到、没被直接引用，fxc 把声明缩成 `cb1[4]`，像素读到 0。区分不了是「越界出了声明范围」还是「没引用的成员 WPE 不上传」；真实的音频着色器里两个数组都被引用，属于 `-b2` 的情形。
+- 夹具里没有 WPE 认不出 `main`（`main(void)`、`)` 与 `{` 之间有行注释）或数组长度是源码里 `#define` 的宏的着色器（`ignore/p7/scan_quirks2.py`），这两种「WPE 编不过」暂不处理。
+
+对 P7b 的影响：
+- 预处理三条按读码实现：尾随字符忽略（只解析一个表达式）、栈空时的 `#else` / `#elif` / `#endif` 忽略、宏后者覆盖前者。
+- 声明名带分量：`uniform` / `varying` 都只取名字。
+- 打包数组越界：照 D3D11 的实际行为，读到同一 cbuffer 里按本阶段声明顺序排在后面的成员，出了整个缓冲才是 0。子计划原写「读到 0」，按实测改正。

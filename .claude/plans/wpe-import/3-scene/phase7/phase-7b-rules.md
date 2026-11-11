@@ -113,16 +113,21 @@ const SUPPORTED_EFFECT = new Set([
 
 ### 步骤 3 — `main` 之前的打包数组
 
-- **修改** `rewrite.rs`：打了 accessArray 标的类型（步骤 0 定）的数组 uniform，在 `main` 签名之前的正文里出现时，改指一个返回打包形态的函数 `kb_pack_<名>()`。
-  - 它按 WPE 的布局把 `kb_u_<名>` 打成 `vec4[ceil(n/4)]` 等，越界读按步骤 0 的结论处理（D3D11 是 0）；
-  - `main` 里照旧用 `kb_load_<名>()`。
-  - 只有 `main` 之前引用了数组的着色器才生成 `kb_pack_*`，其余输出逐字节不变。
+- **修改** `rewrite.rs`：`float` / `int` / `uint` 数组 uniform（accessArray 只看类型，rea「P7b 补查」第 4 条），在 `main` 签名之前的正文里出现时，`X[e]` 改成 `kb_pack_X(e)`，返回打包后的一行（`vec4` / `ivec4` / `uvec4`）：
+  - 第 `k` 行是原数组的 `4k … 4k+3` 号元素，不足的补 0；
+  - **越界照 D3D11**（步骤 0 实测）：`k` 超出本数组时，读同一 cbuffer 里按本阶段声明顺序排在后面的成员（按 HLSL cbuffer 的打包规则换算成行），出了整个 cbuffer 是 0。cbuffer 的分流按名字（rea 第 5 条：材质名与 5 个内置名进 `g_bufStatic`，其余内置名进 `g_bufDynamic`）；
+  - `main` 里照旧用 `kb_load_<名>()`；
+  - 只有 `main` 之前引用了这类数组的着色器才生成 `kb_pack_*`，其余输出逐字节不变。
   ```glsl
-  // 新增（示意）：g_AudioSpectrum64Left 是 float[64]，main 之前看到的是 vec4[16]
-  vec4[16] kb_pack_g_AudioSpectrum64Left() { vec4 r[16]; for (int k = 0; k < 16; k++) { r[k] = vec4(kb_u_…[4*k].x, …); } return r; }
+  // 新增（示意）：g_AudioSpectrum64Left / Right 都是 float[64]，同在 g_bufDynamic；main 之前看到的是 vec4[16]，越界读到 Right
+  vec4 kb_pack_g_AudioSpectrum64Left(int k) {
+      if (k >= 0 && k < 16) return vec4(kb_u_g_AudioSpectrum64Left[4 * k].x, /* … */);
+      if (k >= 16 && k < 32) return vec4(kb_u_g_AudioSpectrum64Right[4 * (k - 16)].x, /* … */);
+      return vec4(0.0);                       // 出了整个 cbuffer
+  }
   ```
-  越界判断要能落到「下标表达式」上，函数返回整个数组做不到，按步骤 0 的结论再定写法。
-- **单测**：`[i/4][i%4]` 两级下标、`arr[i]` 取整个 `vec4`、越界。
+  `vec2` 数组 WPE 也声明成 `float4[ceil(n/4)]`（装不下，WPE 的缺陷），语料没有实例，不做、照旧报错。
+- **单测**：`[i/4][i%4]` 两级下标、`arr[i]` 取整个 `vec4`、越界到下一个成员、出了缓冲。
 
 **验收：**
 - 对基线：`audioline`、`highly_customizable_audio_visualizer` 等 5 个 effect 的输出变化（ALLOW），其余不变；`video` 预期露出浮点下标（P7c）的错误。
@@ -157,7 +162,7 @@ const SUPPORTED_EFFECT = new Set([
 **已定：**
 1. 规则照 WPE 自己的文本处理，不照 GLSL 规范（P7 总计划）。
 2. 只改用到这些写法的着色器，其余逐字节不变。
-3. **打包数组越界读：** 照 D3D11 读到 0（步骤 0 实测确认），不照 WGSL 的钳位（2026-11-11 用户）。
+3. **打包数组越界读：** 照 D3D11 的实际行为，不照 WGSL 的钳位（2026-11-11 用户）。步骤 0 实测改正了细节：越界先读到同一 cbuffer 里后面的成员，出了整个缓冲才是 0。
 4. **步骤 5 放在哪：** 跟在步骤 4 之后、单独提交；别的会话正在改 `features.ts` 时挪到收尾（2026-11-11 用户）。
 
 ## 风险
@@ -165,3 +170,19 @@ const SUPPORTED_EFFECT = new Set([
 1. **WPE 的预处理规则还有未知：** 步骤 0 若查不清尾随字符的规则，就只认语料里出现的写法（尾随 `;`），别的照旧报错，不猜。
 2. **打包数组的写法不止一种：** 语料里只有 `g_AudioSpectrum64*`，`vec2` / `int` 数组没有实例，只按读码实现，测试用合成的着色器覆盖。
 3. **修好一处露出下一处：** 规则类修好后，多数着色器会露出类型类的错误（P7c），所以 P7b 的验收看「错误换成了下一个」，不看通过数。
+
+## 实施记录
+
+### 步骤 0 — 调研（2026-11-11）
+
+- 读码（REA，续 rea-p7-shader「P7b 补查」）：
+  - `#if` 先按 WPE 的宏表做宏替换，未定义按 0；只解析一个表达式，后面的一律忽略、不报错；栈空的 `#else` / `#elif` / `#endif` 都抹掉。
+  - 宏重定义后者覆盖前者，`#undef` 处理；`#define` / `#undef` 行原样留给 fxc。
+  - `uniform` / `varying` 名字后带分量都只取名字，初始值丢弃，多个声明符只认第一个。
+  - accessArray 只看类型，长度一律 `ceil(n/4)` 行（`vec2` 也是，装不下）。
+  - uniform 进哪个 cbuffer 按名字分；每个 cbuffer 按本阶段声明顺序排，两阶段各自一份。
+  - `main` 的识别正则认不出 `main(void)`。
+- 实测见 [p7-REPORT](p7-REPORT.md)「P7b 规则的实测」：分号、声明名带分量、宏重定义、打包数组四个图层的 WPE 结果都和读码一致；打包数组越界读到同一 cbuffer 的下一个成员（`g_Time`），出了缓冲是 0。
+- 夹具里没有 `main(void)` 或数组长度是源码宏的着色器，这两种「WPE 编不过」暂不处理。
+- 计划调整：步骤 3 的越界规则按实测改写（见上文与「决定」第 3 条）；声明名带分量对 `uniform` 一样适用。
+- 我的失误：子计划起初写「越界读到 0」，只照了 D3D11 规范里「出了缓冲」那一半；第一版 `kbpack` 的 `g_Time` 没被直接引用，结果也区分不了，改成直接引用后才得出结论。

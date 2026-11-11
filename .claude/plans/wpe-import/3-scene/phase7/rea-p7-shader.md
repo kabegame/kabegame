@@ -120,13 +120,13 @@
 - **指令识别**：去掉行首空白后以 `#` 开头，再用正则 `^\s*#\s*([a-z]+)\b\s*(.*)`（`0x14048d048`）取指令名与参数；参数在 `//` 处截断（`0x14048ba14`），去掉尾部 ` \n\r\t`。
 - **条件栈**：每层两个字节 `{active, taken}`。
   - `#ifdef X` / `#ifndef X`：当前活跃且条件成立压 `{1,1}`，否则压 `{0,0}`。
-  - `#if expr`：同上，`expr` 由 `FUN_140167e10` 求值（递归下降，支持 `defined X` / `defined(X)`，`FUN_1401669a0` 查宏表）。
+  - `#if expr`：同上，`expr` 由 `FUN_140167e10` 求值（递归下降，支持 `defined X` / `defined(X)`，`FUN_1401669a0` 查宏表；先做宏替换、未定义标识符按 0、表达式后的尾随内容忽略、从不报错，见「P7b 补查」第 1 条）。
   - `#elif expr`：栈空则忽略；父层全活跃且本层 `taken==0` 且 `expr` 成立 → `{1,1}`，否则本层 `active=0`。
   - `#else`：栈空则忽略；父层全活跃且本层 `taken==0` → `active=1`，否则 `active=0`。
   - `#endif`：**栈非空才弹出**；栈空时什么也不做（`0x14016bf40`–`0x14016bf60`：`cmp [rsp+0x58], rcx; jz` 跳过 `sub rcx,2`，栈空直接跳到 `0x14016bdc3` 置「抹行」标志）。
   - 处理后「当前活跃」= 栈里所有层 `active` 的与。
 - **`#define`**：活跃时登记进宏表（名字与值以空格 / 制表符分开，没有值记作 `1`），**这一行保留**在文本里，留给 `D3DCompile` 的预处理器做宏展开；失效分支里的 `#define` 不登记，并抹掉。
-- **`#undef`**：从宏表删除。
+- **`#undef`**：活跃时从宏表删除，这一行保留给 fxc（与 `#define` 一样不抹）。
 - **`#require X`**：`FUN_140169140` 生成一段代码（`LightingV1` 的光照函数），插在这一行的位置，这一行本身抹掉。
 - **抹行规则**（`0x14016bc5a`）：当前不活跃、或者这一行是已处理的指令（`ifdef/ifndef/if/elif/else/endif/require`）时，整行（从行首非空白处到行尾）`memset` 成空格。换行符不动，**行号保持不变**。
 - 不认识的指令（如 `#pragma`、`#error`、`#line`）在活跃区域里原样留下，交给 `D3DCompile`。
@@ -161,7 +161,7 @@
 对这一行做 `regex_search`（`FUN_1400dc300`，同一函数也用来在整篇 HLSL 里找 `\bVS_INPUT\b`，所以是 search 不是 match），第一个命中的类型胜出：
 
 - 第 1 组 = 类型前面那个单词。它是 `in` 记方向 1，是 `out` 记方向 2，其他（`varying`、`uniform`、`lowp` 等）记 0。
-- 第 2 组 = 名字；第 3 组 = 数组长度：去掉方括号后是数字就 `atoi`，否则把它当宏名去 COMBO 表里取值。
+- 第 2 组 = 名字；第 3 组 = 数组长度：去掉方括号后是数字就 `atoi`，否则把它当宏名去 **COMBO 表**里取值（不查着色器里 `#define` 的宏；查不到长度为 0，按非数组声明，见「P7b 补查」第 3 条）。
 - 声明带 `[…]` 且类型是 `float / vec2 / int / uint` 时打「accessArray」标记（掩码 `0x2803`，`0x1400f4fcd`–`0x1400f4fe0`），只看类型，不看名字、方向、声明位置（补查一节）。
 - 声明的初值、精度修饰、尾部内容全部丢弃。
 - **表里没有的类型**：`mat2`、`ivec2/3`、`uvec2/3`、`bool`、`mat3x4` 等。这些类型的 uniform / varying 声明解析失败，行被丢掉并写 `HLSL var error`，正文里再用到这个名字就是未声明标识符（推断：编译失败）。宏头里有 `mat2`，所以 `mat2` 在函数体里能用，只是不能声明成 uniform / varying。
@@ -248,8 +248,8 @@ uniform 列表按声明出现顺序（include 展开、预处理之后，只含�
 |---|---|
 | 不在名表里（**所有材质自定义 uniform**）、ID < 0、ID > 0x8b | `g_bufStatic`（b0） |
 | ID 0x20–0x29（`g_Texture0`–`g_Texture9`） | 纹理 + 采样器，寄存器号 = ID − 0x20 |
-| ID 0x8c | 单独一档（−1），用途未追 |
-| 其余按跳转表（`0x1400f8494` / `0x1400f8480`）：多数 → 1；0x71 → 2；0x78–0x86 → 3；6、7、8（`g_TexelSizeHalf`、`g_TexelSize`、`g_Screen`）、0x5c、0x8b（`g_HDRParams`）→ 0 | 0 = `g_bufStatic`(b0)，1 = `g_bufDynamic`(b1)，2 = `g_bufAnimation`(b2)，3 = `g_bufLights`(b3) |
+| ID 0x8c | 没有这个 uniform：0x8c 是名表的条目数（`0x1400042fd` 处 `movl $0x8c, %r8d` 传给建表函数），这个分支是哨兵 |
+| 其余按跳转表（`0x1400f8494` / `0x1400f8480`）：多数 → 1；0x71（`g_Bones`）→ 2；0x78–0x86（`g_L*`）→ 3；6、7、8（`g_TexelSizeHalf`、`g_TexelSize`、`g_Screen`）、0x5c（`g_TextureReductionScale`）、0x8b（`g_HDRParams`）→ 0。逐项名单见「P7b 补查」第 5 条 | 0 = `g_bufStatic`(b0)，1 = `g_bufDynamic`(b1)，2 = `g_bufAnimation`(b2)，3 = `g_bufLights`(b3) |
 
 纹理声明（`local_508`），`<N>` = ID − 0x20：
 
@@ -528,10 +528,10 @@ PS_OUTPUT main(VS_OUTPUT IN)
 2. **`FUN_14016c800` 那组 `#define <名字> 1`** 具体来自哪些标志（推断与纹理格式 / `formatcombo` 有关），以及 `FUN_140164690`、`FUN_140164850` 对 COMBO 表做了什么。
 3. **`GS_ENABLED` 的开关**：`(*(mgr+8)+0x118)` 的 bit3 由什么设置。
 4. **SHA-1 里那个 4 字节整数**（`ctx+0x1518` 虚表 +0x30）的含义。
-5. **`#if` 里的未定义标识符**：分词器 `FUN_140166a90` 是否先做宏替换、未定义名字是否按 0 处理（推断与 C 一致），没逐条确认；`#if` 里能用的运算符全集没列。
+5. ~~`#if` 里的未定义标识符~~：已查清，见「P7b 补查」第 1 条。
 6. **`#require` 生成的文本**（`FUN_140169140`）没有逐字取出，P4 / P3 的光照读码已有相关结论。
 7. **系统值表**（`DAT_1404e7e98`）的完整内容，推断只有 `gl_VertexID`、`gl_InstanceID`。
-8. **ID 0x8c** 是哪个 uniform、为什么单独一档；跳转表逐项对应的名字只核对了边界几项。
+8. ~~ID 0x8c 与跳转表逐项名字~~：已查清，见「P7b 补查」第 5 条。
 9. **上层对回退的反应**：材质 / 图层代码是否另外检查着色器是否用了回退（本层没有失败标志，推断没有）；回退的暗红实际是否画出来需要抓帧确认。
 10. **日志开关** `DAT_1404e52b8` 的默认值，即 `%s shader %s error` 默认是否写进 `log.txt`。
 11. **不带 `static` 的全局变量**进 `$Globals` 后 WPE 是否绑定；**`ENABLE_STRICTNESS`** 具体拒绝哪些写法；隐式截断、`float` 条件、标量取下标等 fxc 语义 —— 这些留给 p7 实测（本机 fxc 编译 + 反汇编）。
@@ -626,3 +626,119 @@ void main() { ... drawSence(uv) ... }   // main 里没有直接用这个名字
 
 - `vec2` 数组：声明长度用 `ceil(n/4)`、拆包按 `2n` 个标量算，`n` 较大时 `(float2[m])` 转换两边元素数对不上，是否让 fxc 报错没验证；本机语料里没看到 `vec2` 数组 uniform。
 - `float` 下标（`barID / 4`）在 fxc 里是截断还是就近取整，归入 p7 实测的「`float` → `int`」一项。
+
+---
+
+## P7b 补查（预处理、声明、打包）
+
+同一副本（SHA-256 `40e2ce02…`），REA 从本轮快照 `wallpaper64-2.8.42-p7shader.rea-snapshot` 打开，关键分支对照 `llvm-objdump`。uniform 名表用脚本（scratchpad `py\uniemu2.py`、`py\uni2.py`）模拟 `FUN_140002860` 的建表指令提取，结果在 `uniids.txt`、`uniids2.txt`。
+
+### 1. `#if` 求值器：尾随字符、未定义标识符、栈空的 `#else` / `#elif`
+
+**分词器 `FUN_140166a90`（静态确认）**：
+
+- 跳过空白；`//` 跳到行尾，`/* … */` 整段跳过。这是第二层保险：参数在交给求值器之前已经在 `//` 处截断，块注释也已被抹成空格。
+- 数字：十进制、`0x` 十六进制；`0` 开头的按十进制（不支持八进制）；`.` 后的小数部分丢弃，`u` / `f` / `l` 后缀（不分大小写）丢弃。记号类型 1。
+- 标识符 `[A-Za-z_][A-Za-z0-9_]*`：不是 `defined`、且不在 `defined` 的操作数位置（标志 `+0x44`）时，**去 WPE 的宏表查**；查到就把当前位置压栈，转去分词宏的值文本（宏替换，嵌套深度上限 99），值文本读完再弹回。查不到才作为标识符记号（类型 2）。
+- 运算符：`( ) + - * / % ~ ^ ! != == < <= << > >= >> & && | ||` 各有记号。**其他任何字符**（`;`、`,`、`?`、`:`、单个 `=`、`.`、`#`、引号等）都是「未知」记号（类型 0x19）。文本结束且宏栈空 → 结束记号（类型 0）。
+
+**求值（`FUN_140167e10` 和它内联 / 调用的各层，静态确认）**：
+
+- 优先级与 C 一致：`||` < `&&` < `|` < `^` < `&` < `== !=` < `< <= > >=` < `<< >>` < `+ -` < `* / %` < 一元（`! ~ - +`），全部按 32 位有符号整数运算；除以 0 和对 0 取模得 0，移位数 ≥ 32 得 0。**没有三元运算符**（`?` 是未知记号）。
+- 基本项 `FUN_140167c00`：
+  - 数字取值；`defined X` / `defined ( X )` 查宏表得 0 / 1；
+  - `( expr )`：求值后若下一个是 `)` 就吃掉，**不是也不报错**；
+  - **未定义的标识符（宏替换后剩下的）得 0**（`FUN_140167c00` 末尾 `FUN_140166a90(); return 0;`）；
+  - 未知记号吃掉一个后得 0；其他记号（如多出的运算符）不吃、得 0。
+- **入口只解析一个表达式就返回**（`FUN_140167e10` 在 `||` 层遇到不是 `||` 的记号就 `return`），**不检查是否到达结尾**。所以：
+  - `#elif AUDIOSAMPLES == 32;`：`32` 之后是 `;`（未知记号），比较层和逻辑层都停下，结果就是 `AUDIOSAMPLES == 32`，分号被忽略；
+  - `#if X // 注释`：注释已被截掉 / 跳过，等价于 `#if X`；
+  - 多余的右括号 `#if (A))`：第二个 `)` 被忽略；缺右括号 `#if (A` 也不报错；
+  - `#if A = 1`：单个 `=` 是未知记号，结果就是 `A`；`#if A ? B : C` 结果就是 `A`。
+- **整条路径上没有报错**：`FUN_14016b0e0` 以及 `0x140166xxx`–`0x140167xxx` 这组求值函数里没有对日志函数 `FUN_140098760` / `FUN_1400986c0` 的调用（汇编里计数为 0）。求值结果非 0 即真，着色器照常往下走。
+
+**栈空时的 `#else` / `#elif`（静态确认）**：与 `#endif` 相同。`#else`（`0x14016be91`：`cmp rcx, rdx; jz 0x14016bdc3`）和 `#elif`（`0x14016c029` 同样跳到 `0x14016bdc3`）在栈空时什么也不改，只把这一行抹成空格；后面的代码保持活跃。
+
+### 2. WPE 的宏表
+
+- **重定义（静态确认）**：`#define` 分支用 `unordered_map::operator[]`（`FUN_140030830`）取到值槽再赋值（`FUN_14000f880`），**后定义覆盖前定义**，之后的 `#if` 用新值。两行 `#define` 都原样留在文本里交给 fxc；fxc 那边怎么处理属于 p7 实测（推断为 X1519 宏重定义警告、后者生效）。
+- **`#undef`（静态确认）**：活跃时按名字从宏表删掉（`0x14016c215` 起）；处理完走 `0x14016bbb0`，抹行标志取行首的初值 0，所以这一行**保留**给 fxc。失效分支里的 `#undef` 不执行、被抹掉。
+- **`#define` 行本身（静态确认）**：活跃时登记并保留原文；失效分支里的不登记、被抹掉。不认识的指令（`#pragma` 等）同样走 `0x14016bbb0`，保留。
+- **函数式宏（静态确认，后果推断）**：名字与值按第一个空格 / 制表符切开，`#define F(x) ((x)*2)` 登记的名字是 **`F(x)`**、值是 `((x)*2)`。所以 `#ifdef F` 为假；`#if F(1)` 里的 `F` 查不到、按 0，后面的 `(1)` 不是运算符，被忽略，整式为 0。这一行仍然留给 fxc，fxc 按真正的函数式宏处理正文。
+- 没有值的 `#define X` 登记为 `"1"`；预置宏只有 `SHADERVERSION = 69`。
+
+### 3. 声明解析：分量、初始值、多个声明符、数组长度
+
+正则（`0x1404875a0`，`FUN_1400f4630` 按 15 种类型各建一个）：
+
+```
+(\w+)[\s]+<类型>[\s]+(\w+)(\[[\d\w]+\])?
+```
+
+用 `regex_search` 在**整行**里搜（静态确认，见第 2.5 节），所以：
+
+- **名字带分量**：`uniform vec2 g_X.xy;` 与 `varying` 一样，搜到 `uniform vec2 g_X`，名字取 `g_X`，`.xy` 丢弃（静态确认）。`attribute` 不走这条正则，而是在整行里按整词找固定的属性名（`FUN_1400f4460`，第 2.7 节）：`attribute vec3 a_Position.xyz;` 里 `a_Position` 后面是 `.`，算词边界，照样命中 `a_Position`，类型和语义取表里的值（静态确认）。
+- **带初始值**：`uniform float x = 1.0;` 匹配到 `uniform float x`，初始值连同后面全部丢弃，cbuffer 里是 `const float x;`（静态确认）。材质默认值只来自行尾 JSON 注释，与这里无关。
+- **多个声明符**：`uniform float a, b;` 只取第一个名字 `a`（第 3 组只认紧跟的 `[…]`，`,` 之后不再看），`b` 不进任何列表，正文用到 `b` 就是未声明标识符（静态确认；后果推断为编译失败）。
+- **注释里的误匹配**：搜索覆盖整行（包括行尾注释），类型按表顺序试（`float` 第一个）。如果行尾注释里恰好有「单词 空白 float 空白 单词」，会先被 `float` 的正则命中，名字取成注释里的词（正则语义，静态确认；语料里是否出现过没有统计）。
+- **数组长度（更正第 2.5 节）**：`[…]` 里是数字就 `atoi`；否则查的是 `FUN_1400f4810` 的 `param_1`，即 `FUN_1400f5cb0` 的 `param_2` = **材质的 COMBO 表**，不是 WPE 预处理器的宏表。所以 `uniform float x[N];` 里的 `N` 若是着色器里自己 `#define` 的宏而不是 COMBO，就查不到，长度按 0，声明成 `const float x;`（非数组）。`BONECOUNT`、`LIGHTS_*` 等是 COMBO，能查到。后果（正文对一个标量取下标）推断为编译失败。
+
+### 4. accessArray 的确切布局与 `main` 签名
+
+**cbuffer 里的声明（静态确认，`0x1400f7162`–`0x1400f721e`）**：长度 = `n/4 + (n%4 != 0)`（`sar ebx,2; cmp eax,1; sbb ebx,-1`），**不分类型**都是 `ceil(n/4)`；类型查表 `0x140482e30`（`3,3,…,3,12,12,14,14`）：
+
+| 声明 | cbuffer 里 |
+|---|---|
+| `uniform float X[n]` | `const float4 X[ceil(n/4)];` |
+| `uniform vec2 X[n]` | `const float4 X[ceil(n/4)];`（**不是** `ceil(n/2)`；只有 `4·ceil(n/4)` 个分量，`n > 2` 时装不下 `2n` 个） |
+| `uniform int X[n]` | `const int4 X[ceil(n/4)];` |
+| `uniform uint X[n]` | `const uint4 X[ceil(n/4)];` |
+
+**`main` 开头的拆包（静态确认，`FUN_1400f5680`）**：
+
+```hlsl
+<原类型> accessArray<名>[m] = (<原类型>[m])<名>;
+```
+
+- `m`：先取 `k = n`（`vec2` 时 `k = 2n`），`m = ceil(k/4)*4 / (vec2 ? 2 : 1)`。也就是 `float` / `int` / `uint` 为 `n` 向上取到 4 的倍数，`vec2` 为 `n` 向上取到偶数。
+- 例：`float[64]` → `float accessArrayX[64] = (float[64])X;`；`vec2[3]` → `float2 accessArrayX[4] = (float2[4])X;`，而 `X` 是 `float4[1]`，两边分量数 8 对 4 对不上。fxc 接不接受这种转换没验证（推断大概率报错；语料里没见到 `vec2` 数组 uniform）。
+- 片元里 varying 数组的拆包同形，源是 `IN.<名>`；顶点里 varying 数组置零是 `(<原类型>[m])0`。
+- varying 数组的结构体成员（`FUN_1400f52e0`）与 uniform 不同：打标时类型一律 `float4`；长度在 `n·(类型下标+1) > 4` 时为 `n/4`（`vec2` 为 `n/2`）向上取整，否则不写 `[…]`（静态确认）。
+
+**`main` 签名的识别（静态确认，`0x140487cd0`，`std::regex` 默认 ECMAScript 语法，`regex_replace` 替换所有匹配）**：
+
+```
+\bvoid[\s]+main[\s]*\([\s]*\)[\s\r\n]*\{
+```
+
+- 能认：`void main(){`、`void main() {`、`void  main ( )`、`void main()` 换行再 `{`、`void` 与 `main` 之间换行（`\s` 含换行）；`)` 与 `{` 之间的块注释已在预处理时抹成空格，也能认。
+- 不能认：`void main( void )`、`void main(void)`；`)` 与 `{` 之间有行注释（`void main() // x` 换行 `{`）。
+- 认不出时：代码仍会用 `find("main(")` 确认有 `main(`，再找签名文本，找不到就把切分点设成 0，于是整篇都当成「签名之后」做标识符替换，又没有插入签名，`IN` / `OUT` 未定义（推断：编译失败）。连 `main(` 都找不到时，切分、替换、`static const`、`return OUT;` 全部跳过。
+- 切分用的是签名文本本身的位置，不受前面出现 `domain(` 之类子串影响（`find("main(")` 只作存在性检查）。
+
+### 5. uniform 进哪个 cbuffer、成员顺序、打包
+
+**分流规则（静态确认，`0x1400f6d6d`–`0x1400f709f`，跳转表 `0x1400f8494` 字节索引 → `0x1400f8480` 目标）**：按**名字**查内置名表（`FUN_140002860` 建的哈希表，共 0x8c = 140 项，`0x1400042fd`），与有没有材质注解无关：
+
+| cbuffer | 名字 |
+|---|---|
+| 纹理 t / s 寄存器 | `g_Texture0`–`g_Texture9`（0x20–0x29） |
+| `g_bufDynamic`（b1） | 名表里其余 109 项：`g_Alpha g_Color g_Color4 g_Time g_Frametime g_Daytime`、全部矩阵（`g_ModelMatrix` … `g_LayerModelMatrix`、`g_ViewportViewProjectionMatrices`）、`g_EyePosition g_View{Forward,Right,Up} g_Orientation{Forward,Right,Up}`、`g_Texture<n>{Rotation,Translation,Resolution,Texel,MipMapInfo}`、`g_LightsColorRadius g_LightsColorPremultiplied g_LightsPosition g_LightAmbientColor g_LightSkylightColor`、**`g_AudioSpectrum{16,32,64}{Left,Right}`**、`g_PointerPositionLast g_PointerPosition g_PointerState g_ParallaxPosition`、`g_RenderVar0`–`4`、`g_BonesAlpha g_BlendMap g_MorphOffsets g_MorphWeights g_MorphBoneTransform g_MorphBoneRules`、`g_Fog{Distance,Height}{Color,Params}` |
+| `g_bufStatic`（b0） | **所有不在名表里的名字**（材质自定义 uniform，不管有没有 JSON 注解），以及名表里的 `g_TexelSizeHalf g_TexelSize g_Screen g_TextureReductionScale g_HDRParams` |
+| `g_bufAnimation`（b2） | `g_Bones`：不按作者声明输出，而是固定写 `const float4x3 g_Bones[BONECOUNT];` |
+| `g_bufLights`（b3） | `g_LPoint_* g_LSpot_* g_LTube_* g_LDirectional_* g_LFeature_Shadow*`（15 项）：不按作者声明输出，固定模板按 `LIGHTS_*` COMBO 生成 |
+
+名字 → ID 的全表（含以前缺的 0x5c `g_TextureReductionScale`、0x5e `g_LightsColorPremultiplied`、0x82 `g_LDirectional_Direction`、0x84 / 0x86 两个 `…ProjectionTransform`）在 scratchpad `uniids.txt` + `uniids2.txt`。
+
+**成员顺序（静态确认）**：`FUN_1400f5cb0` 按 uniform 列表顺序逐个处理，也就是本阶段源码里 `uniform` 行出现的顺序（`#include` 在展开处，只含活跃分支），按分类追加到对应 cbuffer 的文本缓冲（`&local_4a8 + 分类*4`）里。所以**每个 cbuffer 内部是声明顺序**；不同分类的 uniform 交错声明时，也只在各自的 cbuffer 里保持相对顺序。
+
+**没有跨阶段合并（静态确认，后果推断）**：顶点、几何、片元各调一次 `FUN_1400f5cb0`，各有自己的 uniform 列表，各自生成 cbuffer。两个阶段的 `g_bufDynamic` 只包含本阶段声明过的成员，布局可以不同，寄存器号相同（b1）。CPU 端按各阶段的 `D3DReflect` 结果分别取偏移（`FUN_1400d5070` 里对 VS、GS、PS 各反射一次，接着调 `FUN_1400dab40`），推断每个阶段各自填写。
+
+**打包（推断，按 HLSL / fxc 的 cbuffer 规则，没有 `packoffset`、没有矩阵打包标志）**：成员按声明顺序排；一个成员不跨 16 字节边界，放不下就从下一个 16 字节开始；数组每个元素从 16 字节边界开始（最后一个元素只占自身大小）；矩阵默认 column_major，`float4x4` 占 4 个寄存器。fxc 不删没用到的成员，也不重排。
+
+**对照 `video` effect（场景 3815289650）**：片元的声明顺序是 `g_Texture0`（纹理）、`g_AudioSpectrum64Left[64]`（dynamic）、`R`、`u_userNewColor`、`u_soundStrength`（三个都是材质名 → static）、`g_AudioSpectrum64Right[64]`（dynamic）。按上面的规则，`g_bufDynamic` = `float4 Left[16]`（0–255 字节）+ `float4 Right[16]`（256–511 字节），共 512 字节，与抓帧一致。`main` 之前对 `Left` 的 `[i/4]` 在 `i/4 ≥ 16` 时落到同一 cbuffer 后面的 `Right` 上，超出 512 字节才读到 0（D3D11 常量缓冲越界语义，属实测范畴）。
+
+### 本节仍未知
+
+- fxc 对 `vec2` 数组拆包 `(float2[m])float4[k]`（分量数不等）、宏重定义、留在文本里的 `#undef` 的具体反应，留给 p7 实测。
+- CPU 端是否真的按阶段各填一份常量缓冲（反射之后的 `FUN_1400dab40` / `FUN_1400dc080` 没有逐行读）。
