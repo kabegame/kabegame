@@ -257,6 +257,8 @@ const SUPPORTED_EFFECT = new Set([
   "replacementkey",
   "performance",
   "gizmos",
+  // 编辑器键（P7b 步骤 5）：wallpaper64.exe 2.8.42 里没有 "editable" 这个字符串，运行时不读，按中性放开
+  "editable",
   "passes",
   "fbos",
 ]);
