@@ -173,7 +173,10 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  *   `{script}` 的字段脚本写回到它；只在 `general.cameraparallax` 打开时起作用，透视场景不移动对象（读码，语料 0 张）。
  * - `parent`：层级已实现（P4a 步骤 1，`hierarchy.ts` 与 `render/layout.ts`）；灯对象例外，见 `checkObjectFeatures`。
  * - `config`：运行时只在托盘、播放列表代码里读，渲染路径不碰；P5a 步骤 0 实测带 `config.passthrough` 的层画面不变。
- * `alignment` 为 `center`、`perspective` 为 false 时中性，其余取值另报。
+ * 另判的两个键（不在这张表里，`checkObjectFeatures` 单独检查，未知键循环跳过）：
+ * - `alignment` 为 `center` 时中性，其余取值另报。
+ * - `perspective`：图像层上的 JSON `true` 已实现（P5b 步骤 1，画到场景目标的绘制换透视视图投影，`render/scene.ts`）；false 等不为
+ *   真的值中性；绑属性、挂脚本或别的真值，以及非图像对象上为真，报 `object:perspective`。
  */
 const SUPPORTED_OBJECT = new Set([
   "id",
@@ -200,9 +203,9 @@ const SUPPORTED_OBJECT = new Set([
 /**
  * 打开时改变画面、还没实现的对象开关。`instanceoverride` 不在这里（P4a 步骤 5）：粒子对象上按键检查
  * （`checkParticleInstance`），其它对象上 WPE 不读，照未知键报 `object:instanceoverride`（语料 0 个）。
+ * `perspective` 也不在这里（P5b 步骤 1）：图像层的 JSON `true` 已实现，其余在 `checkObjectFeatures` 里另判。
  */
 const OBJECT_FLAGS = [
-  "perspective",
   "fullscreen",
   "passthrough",
   "attachment",
@@ -213,12 +216,14 @@ const OBJECT_FLAGS = [
 ];
 /**
  * 支持或中性的模型键。
- * - `autosize`：`size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸（`bundle.ts`），否则不起作用。
+ * - `autosize`：纹理就绪时用槽 0 纹理的图像尺寸覆盖对象 `size` 与模型 `width` / `height`（P5b 步骤 1，`bundle.ts` 的
+ *   `imageLayerSize`，p5-REPORT `p5b-autosize`）；没有纹理时不覆盖。精灵表的帧尺寸随图像层帧动画（`tex:animation`）另报。
+ * - `nopadding`：直接上屏的四边形不内缩，带 effect 时末 pass 照旧内缩（P5b 步骤 1，`render/graph.ts`，p5-REPORT `p5b-nopad`）。
  * - `solidlayer`：合成 RT 按图层 `size`（`compositeSize`）；UV 不内缩（`uvInset`）。
  *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
  * - `cropoffset`：编辑器写的偏移，导入时已加进 `origin`；`wallpaper64.exe` 里没有这个字符串，P5a 步骤 0 实测不改位置。
  */
-const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "solidlayer", "cropoffset"]);
+const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "nopadding", "solidlayer", "cropoffset"]);
 /**
  * 模型 JSON 的布尔键（`FUN_1401fac50`，rea-p5-modelflags §7）：WPE 只认 JSON 的 `true`，写成 1、字符串等于没写
  * （P5a 步骤 0 实测 `fullscreen: 1` 不生效）。能力表与 `bundle.ts` 读这些键都经 `modelFlag`。
@@ -469,11 +474,14 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   const soundKey = (key: string) => sound && SOUND_KEYS.has(key);
   for (const key of OBJECT_FLAGS) if (active(object[key]) && !lightKey(key)) unsupported.add(`object:${key}`);
   if (object.alignment !== undefined && object.alignment !== "center") unsupported.add("object:alignment");
+  // 图像层 perspective（P5b 步骤 1）：JSON true 已实现；绑属性、挂脚本或别的取值，以及非图像对象上为真，照报
+  if (active(object.perspective) && !(kind === "image" && object.perspective === true))
+    unsupported.add("object:perspective");
   for (const [key, value] of Object.entries(object))
     if (
       !SUPPORTED_OBJECT.has(key) &&
       !OBJECT_FLAGS.includes(key) &&
-      !["alignment", "model", "particle", "sound", "text", "light"].includes(key) &&
+      !["alignment", "perspective", "model", "particle", "sound", "text", "light"].includes(key) &&
       !lightKey(key) &&
       !soundKey(key) &&
       !(kind === "particle" && key === "instanceoverride") &&

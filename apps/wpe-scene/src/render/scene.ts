@@ -50,6 +50,12 @@
  *   （`sceneViewProjection`），透视粒子的相机距离按缩放后的可见高算（`particleViewProjection`，rea-p5-camera.md 7.2）；zoom 变了只重算
  *   这两份基准矩阵，平移照旧右乘，所以每次绘制是 `VP(zoom) · T(o − s)`（视差、抖动是场景单位，在缩放之前加，步骤 4 补测）。眼位与视差点
  *   不随缩放变。建场景时取编译期的值，zoom 为 1 时逐字节同以前。
+ * - 透视图层（P5b 步骤 1，p5-REPORT `p5b-persp`）：对象 `perspective: true` 的图像层只在画到场景目标的绘制（直接上屏、带 effect 的
+ *   末 pass、passthrough 上屏）把视图投影换成透视粒子那一份（`perspectiveViewProjection`），所以和透视粒子同一份矩阵：相机距离随
+ *   `perspectiveoverridefov` 与 `zoom` 变，带抖动的 `T(−s)`。视差平移照旧右乘，在投影之前，每次绘制是 `P_persp · T(o − s) · W`
+ *   （`p5b-persp-par`：偏移落在 z = 0 平面上正好是屏幕上的 o 像素）。画进合成 RT 的基础 pass 不变；effect 中间 pass 的效果矩阵
+ *   （`g_EffectModelViewProjectionMatrix` 等）仍按正交算：rea-p5-modelflags 1.3 读到的是只在上屏时压相机，rea-p5-camera 7.1 另提到
+ *   正交 + bit7 时图层合成矩阵经 `FUN_140184f00` 换算，都没有实测（语料里透视图层的 effect 只读 MVP）。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -1421,7 +1427,13 @@ export class GpuScene {
       ...common,
       step,
       layer: { ...layerState, size: layer.size },
-      viewProjection: this.viewProjectionOf(layer, state, this.viewProjection),
+      // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
+      // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变
+      viewProjection: this.viewProjectionOf(
+        layer,
+        state,
+        layer.perspective && step.target.kind === "scene" ? this.perspectiveViewProjection : this.viewProjection,
+      ),
     });
   }
 

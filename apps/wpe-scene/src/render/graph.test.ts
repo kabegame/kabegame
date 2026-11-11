@@ -69,6 +69,8 @@ function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    noPadding: false,
+    perspective: false,
     passes: [pass({ blending: "translucent", textures: { 0: 0 } })],
     colorBlendMode: 0,
     effects: [],

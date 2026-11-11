@@ -168,10 +168,11 @@ describe("能力表裁决", () => {
     checkSceneFeatures(
       {
         general: { ...vortexGeneral, zoom: 0 },
-        objects: [{ ...vortexObject, alignment: "topleft", perspective: true }],
+        objects: [{ ...vortexObject, alignment: "topleft", perspective: { user: "p", value: true } }],
       },
       keys,
     );
+    // 图像层 `perspective: true` 已实现（P5b 步骤 1）；绑属性的照报
     expect([...keys].sort()).toEqual(["general:zoom", "object:alignment", "object:perspective"]);
   });
   it("缩放（P5a 步骤 4）：正交场景 zoom > 0、绑属性、脚本初值 > 0 都不报，解析出 ≤ 0 才报；透视场景不报（zoom 不起作用）", () => {
@@ -410,7 +411,7 @@ describe("FreeImage .tex 与解码缓存", () => {
         general: { orthogonalprojection: { width: 3840, height: 2160 } },
         objects: [{ id: 1, image: "models/a.json" }],
       }),
-      "P:\\models\\a.json": JSON.stringify({ material: "materials/a.json" }),
+      "P:\\models\\a.json": JSON.stringify({ material: "materials/a.json", autosize: true }),
       "P:\\materials\\a.json": JSON.stringify({ passes: [{ textures: ["a"] }] }),
       "P:\\materials\\a.tex": tex,
     };
@@ -425,7 +426,7 @@ describe("FreeImage .tex 与解码缓存", () => {
     expect(bundle.textures[0]).toMatchObject({ width: 3840, height: 2160, textureWidth: 3840, textureHeight: 2160 });
     expect(bundle.textures[0].mips).toEqual([]);
     expect(bundle.textures[0].encoded?.mips).toHaveLength(2);
-    // 尺寸缺失时取基础纹理的图像尺寸（autosize）
+    // `autosize` 时尺寸取基础纹理的图像尺寸（P5b 步骤 1 起只有 `autosize` 才取，三者都缺时是 1×1，见 compile/p5b.test.ts）
     expect(bundle.layers[0].size).toEqual([3840, 2160]);
   });
   it("缓存：同一区间只读、只解码一次；retain 关闭不再用的位图；失败不进缓存", async () => {

@@ -190,9 +190,164 @@ export function particleViewProjection(general: Pick<SceneGeneral, "width" | "he
 - 导出：`rdc_dump_b.py`（`RD_DUMP_LIST` / `RD_DUMP_OUT` / `RD_DUMP_PNG`），摘要 `ana_b.py`；
 - 抓帧：`A:\p5b\*`，日志 `ignore/p5/b0/out/logs/`。
 
-## 步骤 1–5（提纲，步骤 0 之后补全）
+## 步骤 1 — 尺寸、UV 内缩与透视图层
 
-- **步骤 1 — 尺寸、UV 与透视图层。** `SceneLayer` 记下模型标志；`uvInset` 按直接上屏 `0x226`、末 pass `0x222` 分两种；尺寸按 WPE 的顺序取（模型宽高 → 对象 `size` → 纹理就绪时 `autosize` 覆盖：精灵表帧、`projectlayer` 的正交投影、图像尺寸）；上屏角色的 draw 在 `perspective` 时换透视 VP。能力表放开 `model:nopadding`、`object:perspective`。解锁 `1923929928`。
+### 思路
+
+三件事都只改一个图像层自己，不碰渲染图的形状。尺寸是编译期的量：照 WPE 的顺序，先取模型宽高（缺了是 1），再被对象 `size` 覆盖，最后在「纹理就绪」时被 `autosize` 覆盖成槽 0 纹理的图像尺寸；我们没有异步的纹理就绪，编译期按同一顺序一次算完。UV 内缩分成两种：直接上屏的四边形看 `fullscreen | nopadding | passthrough | solidlayer`，末 pass 和 passthrough 上屏的四边形不看 `nopadding`。透视图层只在画到场景目标的那几次绘制（直接上屏、末 pass、passthrough 上屏）把视图投影换成透视粒子那一份（`perspectiveViewProjection`，已带抖动与缩放），视差平移照旧右乘，所以是 `P_persp · T(o − s) · W`；画进合成 RT 的 pass 和 effect 中间 pass 不变。
+
+步骤 0 已经量好：`autosize` 改优先级对语料是中性的，`nopadding`、透视矩阵都有 WPE 的四角坐标可比。`projectlayer` 的尺寸来源也属于 `autosize`，但它是组合层，放到步骤 2 和组合层一起做；步骤 1 只做普通图像层的 `autosize`。
+
+### 现状锚点
+
+**a. 尺寸**（`compile/bundle.ts:1018`、`:1081`）
+```ts
+      size: numbers(bindings.bind(object.size, properties, recompile("layer-structure", `objects/${index}/size`))),
+    // …
+    if (!layer.size.length) {   // 现状：对象 size 优先；没写时模型宽高，再没有就取纹理图像尺寸（WPE：autosize 覆盖 size，三者都缺时 1×1）
+      layer.size = model.width && model.height ? [model.width, model.height] : texture ? [texture.width, texture.height] : [model.width ?? 0, model.height ?? 0];
+    }
+```
+
+**b. UV 内缩：直接上屏和末 pass 共用一个**（`render/graph.ts:195`）
+```ts
+  // WPE 的 `nopadding` 只关直接上屏这一块，`fullscreen`、`passthrough` 模型两块都关；这三个现在都报不支持
+  const screenInset = layer.solidLayer ? NO_INSET : uvInset(layer.size, baseTexture);
+  // direct：inset: screenInset；final：inset: final ? screenInset : NO_INSET；passthrough：inset: screenInset
+```
+
+**c. 图像层的绘制一律用正交的场景视图投影**（`render/scene.ts:1420`）
+```ts
+    return drawUniformValues({
+      ...common,
+      step,
+      layer: { ...layerState, size: layer.size },
+      viewProjection: this.viewProjectionOf(layer, state, this.viewProjection), // 现状：只有粒子按 step.perspective 换透视
+    });
+```
+
+**d. 能力表**（`compile/features.ts:204`、`:221`、`:470`）
+```ts
+const OBJECT_FLAGS = ["perspective", "fullscreen", "passthrough", /* … */]; // 现状：perspective 为真就报 object:perspective
+const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "solidlayer", "cropoffset"]); // 现状：nopadding 报 model:nopadding
+```
+
+### 点 1 — 图层记下两个标志（`compile/bundle.ts`）
+- **新增** `SceneLayer` 两个字段：
+```ts
+  /** 模型 `nopadding`（只认 JSON true）：直接上屏的四边形不内缩，末 pass 照旧内缩（p5-REPORT `p5b-nopad`）。 */
+  noPadding: boolean;
+  /** 对象 `perspective`（只认 JSON true，图像层）：画到场景目标的绘制换成透视视图投影（`p5b-persp`）。 */
+  perspective: boolean;
+```
+- 粒子、分组、声音等没有图像模型的图层两者都是 false。
+
+### 点 2 — 尺寸按 WPE 的顺序（`compile/bundle.ts`）
+- **新增** 导出纯函数，`compileScene` 读完模型与基础纹理后调用：
+```ts
+/**
+ * 图像层的尺寸（rea-p5-modelflags §7「尺寸的最终取值顺序」，p5-REPORT `p5b-autosize` 实测）：1×1 → 模型 `width` / `height`（数字才算，
+ * 两个分量各自生效）→ 对象 `size` → `autosize` 时槽 0 纹理的图像尺寸（覆盖前面的值；没有纹理时不覆盖）。
+ * 精灵表的帧尺寸、`projectlayer` 的正交投影、用户纹理的参考尺寸不在这里：前者随图像层帧动画（`tex:animation`），后两者属步骤 2 / 照报。
+ */
+export function imageLayerSize(model: ModelJson, objectSize: readonly number[], texture: Pick<SceneTexture, "width" | "height"> | undefined): number[];
+```
+- **修改** 原来的 `if (!layer.size.length) { … }` 换成 `layer.size = imageLayerSize(model, layer.size, texture)`。
+  > 说明：语料里两种取法结果全部相同（0a），基线逐张核对；`size` 绑属性又 `autosize` 的语料 0 个，WPE 运行中改 `size` 不会重跑纹理回调、我们会重编译重算，记进未实测清单。
+
+### 点 3 — UV 内缩分两种（`render/graph.ts`）
+```ts
+  // 直接上屏（WPE `+0x490`，flags & 0x226）：fullscreen、nopadding、passthrough、solidlayer 不内缩；
+  // 末 pass 与 passthrough 上屏（`+0x2e8`，flags & 0x222）不看 nopadding（p5-REPORT `p5b-nopad`）
+  const directInset = layer.solidLayer || layer.noPadding ? NO_INSET : uvInset(layer.size, baseTexture);
+  const finalInset = layer.solidLayer ? NO_INSET : uvInset(layer.size, baseTexture);
+```
+- **修改** `direct` 用 `directInset`；`final`、`passthrough` 用 `finalInset`。`fullscreen`、`passthrough` 模型在步骤 2、3 加进这两个条件。
+
+### 点 4 — 透视图层（`render/scene.ts`）
+- **修改** `uniformValues` 的图像分支：
+```ts
+      // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
+      // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT 的 pass 不变
+      viewProjection: this.viewProjectionOf(
+        layer,
+        state,
+        layer.perspective && step.target.kind === "scene" ? this.perspectiveViewProjection : this.viewProjection,
+      ),
+```
+- 文件头的注释补一条「透视图层」。
+  > 说明：effect 中间 pass 的效果矩阵（`g_EffectModelViewProjectionMatrix` 等）仍按正交算，WPE 读码是只在上屏时压相机（rea 1.3）；语料里透视图层的 effect（scroll、perspective、pulse）都只读 MVP，记进未实测清单。
+
+### 点 5 — 能力表（`compile/features.ts`）
+- **修改** `SUPPORTED_MODEL` 加 `nopadding`；`autosize` 的注释改成「纹理就绪时覆盖 `size`」。
+- **修改** `OBJECT_FLAGS` 去掉 `perspective`，另写一条：
+```ts
+  // 图像层 perspective（P5b 步骤 1）：JSON true 已实现；绑属性、挂脚本或别的取值，以及非图像对象上为真，照报
+  if (active(object.perspective) && !(kind === "image" && object.perspective === true)) unsupported.add("object:perspective");
+```
+- `SUPPORTED_OBJECT` 的注释补 `perspective`。
+
+### 点 6 — 单测（新增 `compile/p5b.test.ts`、`render/p5b.test.ts`）
+- `imageLayerSize`：`p5b-autosize` 的五种组合（48×40、1×1、100×50、48×40、48×40），模型宽高只写一个分量、写成字符串时的取值。
+- `planLayer`：`nopadding` 的直接上屏 inset 为 0，带 effect 时末 pass inset = `0.15 / 纹理尺寸`；`solidLayer` 两者都是 0。
+- 透视图层：用 `drawUniformValues` 加透视视图投影算 P1、P2（末 pass）、P3 四角的裁剪坐标，和 WPE 抓帧（`ignore/p5/b1/persp_fixture.json` 抄进测试的常量，四个变体：缺省、`fov 30`、视差、`zoom 1.5`）逐个比，x、y、w 相对误差 < 1e-4。
+- 能力表：图像层 `perspective: true` 不报；`{user}`、粒子对象上为真报 `object:perspective`；`nopadding` 不报。
+
+### 实施方式
+
+并行期在 HEAD 快照里实现：`kbp snapshot export HEAD ignore/p5/b1/head` 与 `ignore/p5/b1/ov`，子代理只改 `ov/src`，Claude 用 `kbp snapshot diff` 出补丁、`git apply --3way` 合进仓库。
+
+### 验收
+1. 子代理：快照里 tsc 0 error，vitest 全过（带 `KABEGAME_WPE_ROOT`），Prettier。
+2. Claude 独立：`git status` 查越界；变异检查（`imageLayerSize` 去掉 `autosize` 覆盖、`directInset` 去掉 `noPadding`、透视换回正交）各有用例失败。
+3. 语料：`kbp corpus diff` 前后只少 `model:nopadding`、`object:perspective`，干净场景 39 → 40（`1923929928`），别的场景的键不变。
+4. 基线：10 张原本能渲染的场景 × 三档后处理，画面哈希不变（同 P5a A11）。
+5. 和 WPE 整帧比：`p5b-nopad`、`p5b-autosize`、`p5b-persp`（四个变体）用 `render_scene` 按日志的时间线回放，和 WPE 抓帧逐像素比；`1923929928` 和 WPE 同一时刻比。
+
+### 步骤 1 实施记录（2026-11-12）
+
+子代理在 `ignore/p5/b1/ov`（HEAD `37606401` 快照）里实现，Claude 用 `kbp snapshot diff` 出补丁（`ignore/p5/b1/step1.patch`），工作区里这几个文件没有别的会话的改动，`git apply` 直接打进（不经索引）。
+
+**改动：** 4 个产品文件照点 1–5 落地，和计划没有出入：
+- `bundle.ts`：`noPadding`、`perspective` 两个字段与 `imageLayerSize`；
+- `graph.ts`：`directInset` / `finalInset`；
+- `scene.ts`：透视图层换 `perspectiveViewProjection`，加文件头注释；
+- `features.ts`：放开 `model:nopadding`；图像层 `perspective: true` 不再报，别的取值照报。
+
+新增 `compile/p5b.test.ts`（17 个）、`render/p5b.test.ts`（16 个）。改了 2 个已有测试的期望：
+- `p5a.test.ts`：`nopadding` 不再报；
+- `p2a.test.ts`：照报的用例换成绑属性的 `perspective`；靠「三者都缺取纹理尺寸」的用例给模型加上 `autosize`。
+
+另有 8 个测试文件只是给手写的 `SceneLayer` 补两个字段。
+
+**验收：**
+1. **检查（Claude 在工作区复跑）：**
+   - 宿主 tsc 0 error；
+   - vitest 1761 过、1 败。失败的是 `pipeline.test.ts` 的 `3830255100: 219 次请求`，HEAD 上同样失败，与本次无关；
+   - Prettier 通过。
+2. **变异：** `kbp mutate`（`ignore/p5/b1/mutate_s1.py`）8 处全部检出，源码原样还原：
+   - 去掉 `autosize` 覆盖；退回纹理尺寸；
+   - `directInset` 去掉 `noPadding`；末 pass 也看 `noPadding`；
+   - 透视换回正交；合成 RT 里也用透视；
+   - 放行绑属性的 `perspective`；`nopadding` 照报。
+3. **语料**（`kbp corpus diff`，`ignore/p5/b1/out/corpus-diff.txt`）：只去掉 40 张的 `model:nopadding` 和 5 张的 `object:perspective`，没有新增的键；干净场景 39 → 40（`1923929928`）。
+4. **画面哈希：** 合并前（`hash-before.json`，和 P5a 收尾的基线相同）与合并后重建宿主（`index-DXZMaZLe.js`）的 10 张 × 3 档全部相同。
+5. **和 WPE 整帧比**（`render_scene` 固定时刻，视差变体给 40 帧 dt 收敛；`kbp cmp frame --kbp-layers` 排除 FR / CLK）：
+   - `p5b-autosize`：0 个像素不同。
+   - `p5b-nopad`：1845 个像素差 1。第一版的测试纹理标志位写成 0x22，0x20 是视频位，我们把它当视频纹理没解码；改成 2 后重抓（`p5b-nopad-v2`）。
+   - 透视四个变体（棋盘纹理）：差异 0.1%–0.4%，最大 98–184。差异全在纵向被压扁的 32 像素棋盘格上，是采样混叠；不是透视层的正交对照 Q 也有同样的横线。
+   - 为此补测 `p5b-persp-smooth`：平滑渐变纹理，四个透视层，含 x、y 两轴旋转和带 effect 的。结果 2268 个像素差 1、最大 1。
+   - `1923929928`：解包加日志（`kbp content unpack --instrument`），按 WPE 日志的帧时间与逐帧光标回放到第 190 帧，缩到 1920×1080 和 WPE 比。透视网格的线位、汇聚方向、间距和颜色一致（`zoom-1923929928.png`）。其余差异是随机星空粒子和 3840 → 1920 的缩放。
+6. 测试工程（8 个）已用 `projects_remove` 移除。
+
+**更正读码：** rea-p5-modelflags 5.1 推断「纹理标志 0x20 对应未补边」，实际 0x20 是视频位（`compile/tex.ts` 的 `TEX_FLAGS.video`）。语料里写 `nopadding` 的纹理带 0x20，是因为编辑器给视频纹理写了 `nopadding`。`3822149301`、`3824550659`、`3828359750` 去掉 `model:nopadding` 后只剩 `tex:video` 也是这个原因。
+
+**未实测清单（P5b 收尾时走查）：**
+- 透视图层带多 pass effect 时，中间 pass 的效果矩阵（`g_EffectModelViewProjectionMatrix` 等）。我们按正交算：rea-p5-modelflags 1.3 读到的是只在上屏时压相机，rea-p5-camera 7.1 另提到正交 + bit7 时合成矩阵经 `FUN_140184f00` 换算。语料里透视图层的 effect 只读 MVP。
+- `size` 绑属性、同时 `autosize`：WPE 运行中改 `size` 不会重跑纹理回调，我们整场重编译会重新按 `autosize` 覆盖。语料 0 个。
+- 对象 `size` 只写一个分量时，另一个取模型值或 1（按「各分量各自覆盖」推的）。
+
+## 步骤 2–5（提纲，步骤 0 之后补全）
 - **步骤 2 — 组合层：无子层。** 计划新增两种基础 pass（composelayer 着色器从快照铺进合成 RT、清成透明）与「不画」；合成 RT 按 `size`；`projectlayer` 只是尺寸来源。能力表把 `model:passthrough` 细分，带子层的照报 `model:passthrough:children`。
 - **步骤 3 — `fullscreen`。** 合成路径的第一步换成 `copy`（当前目标 → 合成 RT 0），上屏单位阵 + NDC；无 effect 时 2×2 四边形、MVP 照常算。组里的 fullscreen（当前目标是组的合成 RT）留到步骤 4 一起验。
 - **步骤 4 — 组合层：子层。** 编译期算每个图层归属的组；顶层跳过；组的计划插 `subtree`；子孙的 draw 按组的局部坐标系现算矩阵；`copybackground: false` 的组里写 RGBA、alpha MAX 的管线变体；无 effect 带子层时透传着色器画世界四边形（`copybackground` true 不混合、false translucent）；嵌套；组里的粒子（世界空间系统用组的模型矩阵，rea-p4c 的 `ctx+0xaf0`）。

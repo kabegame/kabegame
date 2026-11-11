@@ -191,8 +191,11 @@ export function planLayer(
   if (layer.passes.length > 1) reasons.push("render:multi-pass");
   const baseTexture = base.textures[0] === undefined ? undefined : textures[base.textures[0]];
   const uv = textureUvExtent(baseTexture);
-  // WPE 的 `nopadding` 只关直接上屏这一块，`fullscreen`、`passthrough` 模型两块都关；这三个现在都报不支持
-  const screenInset = layer.solidLayer ? NO_INSET : uvInset(layer.size, baseTexture);
+  // UV 内缩分两种（P5b 步骤 1，p5-REPORT `p5b-nopad`）：直接上屏（WPE `+0x490`，flags & 0x226）在 fullscreen、nopadding、
+  // passthrough、solidlayer 时不内缩；末 pass 与 passthrough 上屏（`+0x2e8`，flags & 0x222）不看 nopadding。
+  // `fullscreen`、`passthrough` 模型照报不支持，步骤 2、3 再加进这两个条件
+  const directInset = layer.solidLayer || layer.noPadding ? NO_INSET : uvInset(layer.size, baseTexture);
+  const finalInset = layer.solidLayer ? NO_INSET : uvInset(layer.size, baseTexture);
   const additive = layer.colorBlendMode === 31;
   const passthrough = isPassthroughBlend(layer.colorBlendMode);
   let snapped = false;
@@ -225,7 +228,7 @@ export function planLayer(
       inputs: staticInputs(base, null),
       geometry: "layer",
       uv,
-      inset: screenInset,
+      inset: directInset,
       blending: additive ? "additive" : base.blending,
     });
     return { composite: null, steps, reasons };
@@ -311,7 +314,7 @@ export function planLayer(
         inputs,
         geometry: final ? "layer" : "fullscreen",
         uv: [1, 1],
-        inset: final ? screenInset : NO_INSET,
+        inset: final ? finalInset : NO_INSET,
         // 上屏借用基础材质的 blend（B7 `FUN_140209160`），colorBlendMode 31 强制 additive
         blending: final ? (additive ? "additive" : base.blending) : step.pass.blending,
       });
@@ -334,7 +337,7 @@ export function planLayer(
         inputs,
         geometry: "layer",
         uv: [1, 1],
-        inset: screenInset,
+        inset: finalInset,
         blending: base.blending,
       });
     }

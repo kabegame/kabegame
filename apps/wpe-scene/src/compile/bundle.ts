@@ -47,6 +47,7 @@ import {
   type EffectFboJson,
   type JsonObject,
   type MaterialPass,
+  type ModelJson,
   type SceneEffectInstance,
   type SceneObject,
   type SceneScalar,
@@ -345,6 +346,16 @@ export interface SceneLayer {
   parallaxDepth: number[];
   /** 模型 `solidlayer` 且不是 `instanced`：合成 RT 按 `size`，不看纹理（B5）。 */
   solidLayer: boolean;
+  /**
+   * 模型 `nopadding`（只认 JSON true，P5b 步骤 1）：直接上屏的四边形不内缩，带 effect 时末 pass 照旧内缩（p5-REPORT `p5b-nopad`）。
+   * 没有图像模型的图层为 false。
+   */
+  noPadding: boolean;
+  /**
+   * 对象 `perspective`（只认 JSON true，只在图像层上，P5b 步骤 1）：画到场景目标的绘制换成透视视图投影（`render/scene.ts`，
+   * p5-REPORT `p5b-persp`）。粒子、分组、声音等图层为 false。
+   */
+  perspective: boolean;
   /** 基础材质的 pass。 */
   passes: ScenePass[];
   /** 0 普通；31 上屏改 additive；其它值走 passthrough（B7 / B8）。 */
@@ -417,6 +428,25 @@ export function passthroughMaterial(sceneVersion: unknown): string {
 /** passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED = 1`。 */
 export function passthroughCombos(colorBlendMode: number): Record<string, number> {
   return { BLENDMODE: colorBlendMode, FOG_COMPUTED: 1 };
+}
+
+/**
+ * 图像层的尺寸（P5b 步骤 1；rea-p5-modelflags §7「尺寸的最终取值顺序」，p5-REPORT `p5b-autosize` 实测）：1×1 → 模型 `width` /
+ * `height`（是数字才算，两个分量各自生效）→ 对象 `size`（`objectSize`，解析出的分量各自覆盖）→ `autosize` 时槽 0 纹理的图像尺寸
+ * （覆盖前面的值；没有纹理时不覆盖）。WPE 的 `autosize` 在纹理就绪时覆盖对象 `size`，我们没有异步的纹理就绪，编译期按同一顺序一次算完。
+ * 精灵表的帧尺寸、`projectlayer` 的正交投影、用户纹理的参考尺寸不在这里：前者随图像层帧动画（`tex:animation`），后两者属步骤 2 / 照报。
+ */
+export function imageLayerSize(
+  model: ModelJson,
+  objectSize: readonly number[],
+  texture: Pick<SceneTexture, "width" | "height"> | undefined,
+): number[] {
+  if (texture && modelFlag(model, "autosize")) return [texture.width, texture.height];
+  const fromModel = [model.width, model.height];
+  return [0, 1].map((axis) => {
+    const value = fromModel[axis];
+    return objectSize[axis] ?? (typeof value === "number" ? value : 1);
+  });
 }
 
 /**
@@ -1030,6 +1060,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       visibleBound: isUserBinding(object.visible),
       parallaxDepth: numbers(bindings.bind(object.parallaxDepth, properties, at("parallaxDepth")), [1, 1]),
       solidLayer: false,
+      noPadding: false,
+      perspective: false,
       passes: [],
       colorBlendMode: Math.trunc(
         asNumber(
@@ -1066,6 +1098,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const model = parseModel(modelText);
     checkModelFeatures(model, unsupported);
     layer.solidLayer = modelFlag(model, "solidlayer") && !modelFlag(model, "instanced");
+    layer.noPadding = modelFlag(model, "nopadding");
+    // 只认 JSON true：绑属性、挂脚本等由能力表报 `object:perspective`
+    layer.perspective = object.perspective === true;
     if (!model.material) {
       unsupported.add("material:missing");
       continue;
@@ -1078,18 +1113,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const material = parseMaterial(materialText);
     for (const [k, pass] of material.passes.entries())
       layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
-    // 没写 size：先取模型的 width / height，没有再取基础纹理的图像尺寸（`autosize`）。不能反过来：deep_space 的
-    // Background 模型写 1920×1080，槽 0 却是 480×270 的流向遮罩，按纹理取会缩成中间一小块（P1 一直按模型取）
-    if (!layer.size.length) {
-      const base = layer.passes[0]?.textures[0];
-      const texture = base === undefined ? undefined : bundle.textures[base];
-      layer.size =
-        model.width && model.height
-          ? [model.width, model.height]
-          : texture
-            ? [texture.width, texture.height]
-            : [model.width ?? 0, model.height ?? 0];
-    }
+    // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸。deep_space 的 Background
+    // 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
+    const base = layer.passes[0]?.textures[0];
+    layer.size = imageLayerSize(model, layer.size, base === undefined ? undefined : bundle.textures[base]);
 
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;

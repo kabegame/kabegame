@@ -501,6 +501,8 @@ function layer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    noPadding: false,
+    perspective: false,
     passes: [pass(`objects/${object}/passes/0`, 0, { textures: { 0: 0 } })],
     colorBlendMode: 0,
     effects: [],

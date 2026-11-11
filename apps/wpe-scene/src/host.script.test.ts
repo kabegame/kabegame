@@ -211,6 +211,8 @@ function bundle(): SceneBundle {
         visibleBound: false,
         parallaxDepth: [1, 1],
         solidLayer: false,
+        noPadding: false,
+        perspective: false,
         passes: [],
         effects: [],
         colorBlendMode: 0,

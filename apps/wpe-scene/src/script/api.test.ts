@@ -78,6 +78,8 @@ function scene(sound = false): SceneBundle {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    noPadding: false,
+    perspective: false,
     passes: [],
     colorBlendMode: 0,
     effects: [],
