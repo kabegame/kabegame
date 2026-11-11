@@ -236,6 +236,8 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 
 ## P7d — 流体
 
+子计划见 [phase-7d-fluid.md](phase-7d-fluid.md)：步骤 0 调研 → 材质常量照 WPE 的存储 → 两个引擎 uniform → 流体 effect → 收尾。下面是写子计划之前的原始范围。
+
 **步骤 0（本节单独做）：**
 - `conditions` 怎么按 COMBO 选 pass 与 fbo；
 - `functions` 的 `clear` 动作和脚本 `executeMaterialFunction` 的调用约定；
