@@ -1,7 +1,7 @@
 # P5 — 相机、网格与图像模型标志（总计划）
 
 > 上级：[PLAN.md](../PLAN.md)「P5 — 透视相机与静态网格」。前置：P4c（指针、`g_PointerPosition`）。调研与总计划和 P4d–P4f 并行（2026-11-09 用户）。
-> 范围：按语料覆盖相机、网格与图像模型标志的全部用法，不再只做 retro、neon_sunset 两张（2026-11-10 用户）。本文件只定目标、分节和验收，各节动工前另写子计划：[P5a](phase-5a-parallax.md)。
+> 范围：按语料覆盖相机、网格与图像模型标志的全部用法，不再只做 retro、neon_sunset 两张（2026-11-10 用户）。本文件只定目标、分节和验收，各节动工前另写子计划：[P5a](phase-5a-parallax.md)、[P5b](phase-5b-modelflags.md)。
 > 统计基于 P4c 收尾的语料扫描（`ignore/p4/c5/out/corpus-wsc.json`，152 个工程，能渲染 22 张），以及 2026-11-09 的只读扫描和网格材质探针（`ignore/p5/`）。
 > 读码：[rea-p5-camera](rea-p5-camera.md)（透视、路径、相机对象、抖动、视差、uniform）、[rea-p5-mesh](rea-p5-mesh.md)（mdl、模型对象、深度、绘制顺序）、[rea-p5-modelflags](rea-p5-modelflags.md)（图像模型 JSON 的标志）。都是静态逆向，没有实测；我抽查了视差平滑的常量（3、0.5、1、10）、深度模板状态（三个都是 GREATER）、`cropoffset` 不在 `wallpaper64.exe` 里，都对得上。
 

@@ -68,3 +68,46 @@
 - `bar.parallaxDepth = new Vec2(0, 0)` 出现在 3304642534、3549863808、3570308528 的音频条脚本里，它们还要 `createLayer`（P6）。
 - 写 `cameraparallax*` 的只有 2887099508 的一段混淆脚本。
 - p3-script-REPORT I3：`parallaxDepth` 改值只改字段、没有回调；视差每次绘制都重读，下一帧生效。
+
+## P5b 语义的实测核对（2026-11-12）
+
+读码在 [rea-p5-modelflags.md](rea-p5-modelflags.md)，子计划见 [phase-5b-modelflags.md](phase-5b-modelflags.md)「步骤 0」。
+
+**工具：**
+- **工程**：`ignore/p5/b0/gen_b.py` 生成 21 个，放在 `ignore/p5/proj/p5b-*`。复用 P5a 的骨架（FR、CLK 两个图层），测试纹理是自写的 RGBA8 单层 `.tex`，自写 effect `kbfx`（g、b 减半，alpha 不变）与 `kbmask`（alpha 乘槽 1 遮罩的 r）。
+- **抓帧**：`capture_sweep`，窗口 1920×1080（`p5b-fs` 另抓 1344×756），fps 20，各 3 帧，放在 `A:\p5b\<tag>`。全部成功，日志没有报错行。
+- **读数**：`ignore/p5/b0/rdc_dump_b.py` 在 `qrenderdoc --python` 下无界面导出每个 action 的着色器、纹理、RT 尺寸、视口、混合与写掩码、变换后的顶点和常量，画进离屏 RT 的内容另存 PNG（`out/dump_b.json`、`out/png/`）；`ana_b.py` 打摘要。像素值、几何着色器的输出用 MCP 的 `pick_pixel`、`get_mesh_data` 补读。
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| `nopadding` 只关直接上屏的 0.15 texel 内缩，带 effect 时末 pass 照旧内缩 | `p5b-nopad`：直接上屏 UV 0–1（不写时 0.0003–0.9997，= 0.15/480、0.15/270）；带 effect 的两个末 pass 都是 0.0003–0.9997 | 成立 |
+| `autosize` 在纹理就绪时覆盖对象 `size`（取图像尺寸）；三者都缺时 1×1 | `p5b-autosize`：`size 24 20`、`300 300` 与模型宽高 100×50 都被覆盖成 48×40；没有 `autosize` 时模型宽高 100×50 生效；什么都没写的画成 1×1 | 成立 |
+| `projectlayer` 的尺寸取正交投影宽高 | `p5b-proj`：`size 500 300` 变成 1920×1080，合成 RT 1920×1080；正交投影 1280×720 时合成 RT 1280×720 | 成立 |
+| composelayer 基础 pass：composelayer 着色器从快照铺满合成 RT（尺寸 = `size`），MVP = `W` 与场景相机 | `p5b-cl`：合成 RT 600×300，基础 pass 关混合、写掩码 RGBA、顶点铺满 RT，槽 0 是 1920×1080 的快照，MVP 带旋转 | 成立 |
+| 末 pass 画世界四边形、借基础材质的 translucent、UV 不内缩 | 同上：上屏是旋转的矩形，SrcAlpha / InvSrcAlpha，写掩码 RGB，UV 0–1 | 成立 |
+| `copybackground: false`：清成 (0, 0, 0, 0)、不画基础材质 | `p5b-cl` 的 CL2：一次 Clear，没有基础 draw，直接跑 effect | 成立 |
+| 无 effect、无子层、`colorBlendMode` 0 / 31 时整层不画 | CL3、CL5（`copybackground` true）只有层开始时的快照，没有 draw | 成立。快照照拷，看不出来 |
+| `colorBlendMode` 混合：effect 全留在合成 RT，passthrough 材质上屏 | CL4（cbm 2）：基础 pass → effect（单位阵、整面）→ 混合着色器（槽 0 合成 RT、槽 1 快照）画世界四边形 | 成立 |
+| fullscreen 带 effect：不画基础材质，合成 RT 0 = 当前目标的整张拷贝，末 pass 单位阵 + NDC | `p5b-fs`：一次 Resolve 拷进合成 RT，effect 直接画 ±1 的四边形，MVP 是 `ortho(−1, 1, −1, 1, −1, 1)`，`origin` / `scale` / `angles` / `size` 都不起作用 | 成立 |
+| fullscreen 无 effect：没有 draw（组合层）；非组合层的 2×2 四边形靠着色器决定铺不铺满 | `p5b-fsnofx` 没有 draw；`p5b-fsmvp`：不乘 MVP 的着色器铺满全屏，乘 MVP 的是 `W` 变换的 2×2 方块（`scale 50` → 100×100） | 成立 |
+| 【推】fullscreen 走拷贝路径时 `g_Color4` 是上一个设置过颜色的层的 | `p5b-fs`：effect 拿到 (0, 1, 0, 0.5)，正是前面绿层的颜色 | **成立**，见下「`g_Color4`」 |
+| 【未查清】`_rt_FullFrameBuffer` 的尺寸 | 1920×1080 窗口里是 1920×1080，1344×756 窗口里是 1344×756（后备缓冲） | **窗口尺寸**。我们离屏按场景分辨率渲染，对应场景目标的尺寸 |
+| 组合层子孙不在顶层画，按先序画进组的合成 RT；模型 `inverse(W)`、单位视图、`ortho(±w/2, ±h/2, ±1000)`，矩形外裁掉 | `p5b-grp-*`：三个子层只画进 800×400 的合成 RT，位置按组的本地坐标（R 在 x 130–430），伸出的黄块在 RT 外的部分被裁掉；组之后的顶层层照常画 | 成立 |
+| `copybackground: false` 的组：子层写 RGBA、alpha 取 MAX | `p5b-grp-cb0`：子层 alpha 混合 One / One / Max、写掩码 RGBA；红蓝重叠处 (0.25, 0, 0.5, 0.5)，空白 (0, 0, 0, 0) | 成立 |
+| 【推】无 effect、带子层的组直接上屏会铺满全屏并拉伸 | `p5b-grp-nofx` / `nofx0`：上屏画的是世界四边形（和带 effect 时同一块），着色器是「采样 × `g_Color4`」的透传（带 `TRANSFORM`），`g_Color4` = 1，UV 0–1；`copybackground` true 时**不混合**，false 时 translucent | **推翻**：不拉伸 |
+| 【推】嵌套组的基础 pass 换回场景相机，采外层开始时的快照 | `p5b-nest`：内层基础 pass 的 MVP 是场景相机，槽 0 和外层用的是同一张快照，不含外层里先画的绿方块；内层上屏按外层的局部正交画进外层的合成 RT | 成立 |
+| 组里的粒子：本地系统按组的局部坐标，世界空间系统用 `ctx+0xaf0`（组的模型矩阵） | `p5b-grpptc`：本地系统画在本地 (150, 50)；世界空间系统的顶点是世界坐标 (1220.9, 511.3)，经 `inverse(W_组)` 回到本地 (250, −80)；带 effect 的子层在组里照常走合成路径，末 pass 画进组的 RT | 成立 |
+| 视差（未写） | `p5b-grp-par`：组的基础 pass 与上屏都带偏移 (150, 50)（按组自己的原点和深度算），子层在组里不受视差影响 | 视差只作用在组本身 |
+| 场景普通绘制不写 alpha | `p5b-alpha`：translucent、additive 图层画完后，组采到的快照 alpha 都是 1 | 成立。和我们的写掩码 7、清屏 alpha 1 一致 |
+| 图像层 `perspective`：上屏换成透视，`z = 0` 平面和正交画面重合 | `p5b-persp*`：直接上屏与带 effect 的末 pass 是透视 MVP，基础 pass 仍是合成 RT 的正交；只绕 z 转的层和正交一样；`perspectiveoverridefov 30` 时相机距离 2015.3 = 540 / tan 15°；`zoom 1.5` 时距离除以 1.5 | 成立。和透视粒子同一套矩阵（P4、P5a 已实测），步骤 1 逐元素比 |
+| 视差和透视的先后 | `p5b-persp-par`：偏移 o = (−130, 80) 落在 z = 0 平面上正好是屏幕上的 o 像素，即先平移再投影 | 先乘视差平移再换投影 |
+| `instanced`：合成 RT 按纹理图像尺寸（`util/white` 32×32） | `p5b-inst`：实例层的基础 pass 画进 32×32，对照组（不带 `instanced` 的 solidlayer）画进 900×1000；`instance.textures` 换成棋盘后槽 0 是棋盘；颜色 (1, 0.6, 0.2) 在基础 pass 照常生效 | 成立 |
+| 【推】带 effect 时遮罩会明显变糊 | 单个 effect 时末 pass 直接上屏，槽 0 是拉伸的 32×32，遮罩按自己的分辨率采样，边缘清楚 | **部分推翻**：只有多 pass 的 effect，中间 pass 才在 32×32 上跑 |
+
+**`g_Color4`：** effect pass 不设颜色，拿到的是这一帧里最后一次设置的值（B10）。所以：
+- 普通带 effect 的层、无子层的组：是层自己的颜色（基础 pass 刚设过）；
+- fullscreen 走拷贝路径（不画基础材质）：是前一个画过的层的颜色；
+- 带子层的组：是最后画的那个子层的颜色（`p5b-grp-*` 的上屏拿到黄块的 (1, 1, 0, 1)，`p5b-nest` 拿到蓝块的）。
+只有读 `g_Color4` 的 effect 着色器受影响。
+
+**对步骤 1–5 的影响：** 读码的流程全部成立，只改两处：无 effect 带子层的组怎么上屏（透传着色器画世界四边形，`copybackground` true 时不混合），以及 effect pass 的 `g_Color4` 取值。`instanced` 的 32×32 只影响多 pass 的 effect。
