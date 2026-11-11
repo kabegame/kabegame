@@ -1298,14 +1298,9 @@ suspend(inputs: ControlPointInputs = IDENTITY_INPUTS): boolean {
 
 | 项 | 来源 | 现状与原因 | 怎么补 |
 |---|---|---|---|
-| rope 绳没满时 `Rf = min(fps, R)`（R9） | 步骤 0 | 两种 fps 下抓帧时绳都已满 | 抓加载后头几百毫秒、或一个 `rate` 高而 `maxcount` 大到永远不满的系统 |
-| ropetrail 预热后历史塌缩到当前位置（T7） | 步骤 0、2 | T7 的设计里预热期间根本不出粒子（满容量冻结发射计时），WPE 里一直没有存活粒子；现在只有单测 | 让预热期间真的出粒子，如 `rate 2` 或 `instantaneous 1` |
-| `around` 配周期发射时新周期清不清零（`rec+0x58 & 2`） | 步骤 3 | 没测，能力表照报 `…:periodic`；语料 0 张 | 测试工程配周期发射，出生方向序列按周期看 |
-| `around` 的残留字在「干净重启后只解析过桌面壁纸」时的值 | 步骤 3 | `restart_wpe` 被权限拦下；另外三种先行解析都是「不乘」 | 用户放行 `restart_wpe` 后补抓一次 `p4d-around-ic` |
-| `2254685070` 和 WPE 的画面对照 | 步骤 1 | 鼠标拖尾，要移动鼠标才有画面 | P4d 收尾抓帧时移动鼠标，做法同 P4c |
-| `remapvalue` 标量输入只用 x 分量归一化再铺满，`remapinitialvalue` 按分量 | 步骤 0、4a | rv-vec / ri-vec 设计时漏写 `flags 0`，归一化被夹到 1，两种算法都得 50；4a 只有单测 | 补一个 `flags 0`、`inputrange*` 各分量不同的工程 |
-| init 的 `square` / `saw` 用 `floorf`，op 用 `trunc` | 4a | `ri-*` 新生粒子的 `t = −3` 是整数，`floor` 和 `trunc` 相同；只有单测 | 让 init 的输入出生时是负的非整数，如 `randomframe` 配输入 `lifetimefraction`（读到 `R`）、`inputrangemin 0.5` |
-| 系统时间 `St` 在预热期间累不累加、对象不可见期间累不累加（rea 5.3【推】） | 4a | 我们预热不累加；不可见时不步进，所以也不累加 | 带 `starttime` 或会隐藏的对象，配 `remapinitialvalue` 输入 `particlesystemtime` |
+| 周期发射在计时余量极小时的出生帧 | 收尾 A | fps 10 的 `around-period` 有一个粒子我们早 11 帧发出（周期计时只剩 2e-4、发射余数 1.0001），挪 dt、改起始帧扣减都对不上；fps 60 逐帧对上 | 专门的周期发射工程，让周期边界和帧边界贴得很近，fps 10 / 20 多抓几轮 |
+
+原来的 8 项都在收尾 A 走查完（2026-11-11），见「已测」。
 
 **工具与边角：**
 - kabegame-dev MCP 的 `particle_corners` / `render_scene` 回放不传 `fps`，低 fps 下 rope 的 `Rf` 仍按 60 算，只影响绳没满的填充期（步骤 1）。
@@ -1313,6 +1308,15 @@ suspend(inputs: ControlPointInputs = IDENTITY_INPUTS): boolean {
 - 暂停时改 `instanceoverride` 的 `count` / `lifetime`，rope 的 `TL` 要到下一次步进才更新（步骤 1）。
 
 **已测（从清单里划掉）：**
+- 收尾 A（2026-11-11）走查的 8 项，见「收尾 A 实施记录」：
+  - rope 绳没满时 `Rf = min(fps, R)`：成立（`r9-fill`）；
+  - ropetrail 预热后历史塌缩：成立（`t7-pre`）；
+  - `around` 配周期发射：这次是不清零，能力表照报不变；
+  - `around` 的残留字在干净重启后：不乘（第四种先行解析，同前三种）；
+  - `2254685070` 和 WPE 的画面对照：绳逐顶点 1.72e-4 像素，绳外整帧最大差 1；
+  - op 标量输入只用 x 分量归一化、init 按分量：成立；
+  - init 的 `square` / `saw` 用 `floorf`：成立；
+  - 系统时间：预热期间不累加（同现状）；对象不可见期间**累加**（和原实现不同，已改）。
 - `mb2-move` 的定量、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式（步骤 0）：步骤 5 的回放 fps 60 / 10 逐粒子对上；fps 10 的 `v2-ring-*` 只报告，见步骤 5 实施记录。
 - WPE 不可见时照常更新控制点（步骤 0 的 dist-hide 没测到）：步骤 5 新工程 `p4d-dist2` 的 `hide-r`，fps 10 段「不更新」的变体超限 1156 倍。
 - `reductionouter == reductioninner` 时差存成 1.0（步骤 0 的 rm-eq 分辨不了）：`rm-eq2` 两种 fps 都停在 100/3，回放逐粒子对上。
@@ -1325,6 +1329,85 @@ suspend(inputs: ControlPointInputs = IDENTITY_INPUTS): boolean {
 ## P4d 收尾
 
 先按上面的「未实测清单」逐项走查（2026-11-10 用户定）。和 P4a–P4c 一样，最后统一写 `cocs/wpe/WPE_SCENE.md`（翻译器的几何着色器展开还要写进 `src-tauri/wpesl2wgsl/README.md`）、changelog 和回归文档，并把总计划的覆盖数改成重算的口径。
+
+2026-11-11 开始，分两段，各自单独提交。
+
+### 收尾 A — 走查未实测清单
+
+清单剩 8 项，都要重新抓 WPE。实验定义写在 `ignore/p4/defs/p4d6.py`（`kbp gen p4d6`），分两个工程：绳按绘制认（`track="draws"`），模块按粒子认。
+
+| 清单项 | 系统 | 设计 | 怎么判 |
+|---|---|---|---|
+| rope 绳没满时 `Rf = min(fps, R)` | `r9-fill`（`p4d-close-rope`） | `rate 100`、寿命 2、`maxcount 64`：`R·L = 200`，存活数永远不到，一直走「没满」这一支 | fps 10：`Rf = 10`、`N = 20`，存活 64 ≥ 19 进平滑，`TL = 19`；fps 60：`N = 120`，`TL = 存活数`。按 `R` 算两种 fps 都是 `TL = 存活数` |
+| ropetrail 预热后历史塌缩 | `t7-pre`（`p4d-close-rope`） | `starttime 1`、`rate 2`、`maxcount 2`、寿命 60，带重力的曲线轨迹；`segments 2`、`length 30`（采样间隔 15 s） | 抓帧时两个粒子都是预热里出生的、只采过加载后第一帧那一次：`h[1]` 是预热结束时的位置（塌缩），不是出生位置 |
+| `around` 配周期发射时新周期清不清零 | `around-period`（`p4d-close`） | `count 2.2`（序列不成周期）配周期发射（`flags 4`、发 2 s 停 1 s、`rate 4`） | 每个周期第一个粒子的方向是不是回到 0。残留字取决于之前解析过什么，只记这一次的结果 |
+| `around` 的残留字在干净重启后的值 | 现有 `p4d-around-ic` | `restart_wpe`（不改设置）之后第一个开的窗口就是它 | 同步骤 3 的读法：方向相邻差 0.2 是「不乘」 |
+| `2254685070` 和 WPE 的画面对照 | 创意工坊场景 | 鼠标拖尾 | 抓帧时请用户在测试窗口里移动鼠标（同 P4c），`kbp rdc frame` 对 `render_scene`，跟随粒子按 P5a 的做法另用 `particle_track` 对 |
+| op 标量输入只用 x 分量归一化 | `rv-vec2`、`ri-vec2`（`p4d-close`） | `flags 0`，`inputrangemin "0 5 0"`、`inputrangemax "10 6 1"`，输入 `particlesystemtime`，输出 `velocity` | 回放逐粒子比位置：op 三分量同速，init 三分量不同 |
+| init 的 `square` / `saw` 用 `floorf` | `ri-square2`、`ri-saw2`（`p4d-close`） | 帧表材质加 `randomframe`，输入 `lifetimefraction`（init 读到的是 `R`），`inputrangemin 0.5`、`flags 0` | 一半粒子出生时 `t` 是负的非整数，`floor` 与 `trunc` 不同；回放注入 `R`（同 d4） |
+| 系统时间 `St` 在预热、不可见期间累不累加 | `st-pre`、`st-hide`（`p4d-close`） | `remapinitialvalue` 输入 `particlesystemtime` 写尺寸；一个 `starttime 2`，一个周期隐藏（每 5 s 最后 1 s） | 回放按两种假设各跑一遍，尺寸只和一种对得上 |
+
+- 抓帧：wpe-renderdoc MCP 的 `capture_sweep`，两个工程 × fps 60 / 10，1920×1080；`around` 那项单独一次 `restart_wpe` 后抓。
+- 回放：子代理写案例 `d6`（钩子照 d1、d4、d5 的写法），用 HEAD 的产品代码跑，逐项判定。
+- 对不上的项：在 `kbp snapshot` 的副本里改，出补丁，照常验收后提交；对得上的从清单划掉。
+
+#### 收尾 A 实施记录（2026-11-11）
+
+**抓帧：**
+- `p4d-close-rope`、`p4d-close` 两个工程，wpe-renderdoc MCP 的 `capture_sweep` 抓 fps 60 / 10 各 10 帧（`A:\p4d\p4d-close*`），`fps` 改回测前的 20，`config.json` 哈希和测前相同。
+- `around`：`restart_wpe`（不改设置）这次放行了；重启后开 `p4d-around-ic` 抓 3 帧（`A:\p4d\around-ic-clean`）。
+- `2254685070`：1920×1080 窗口，抓帧时用户在窗口里移动鼠标（`A:\p4d\close-2254685070`）。
+
+**`r9-fill`（绳没满时 `Rf = min(fps, R)`）：** 抓帧当场读：fps 10 下 `TL = 19`、`TP0` ∈ [−1, 0]；fps 60 下 `TL = 存活数`，和读码一致。回放见下。
+
+**`around` 的残留字（干净重启后）：** 三个系统按出生先后的方向都是 0、0.2、0.4…，相邻差 0.2，即「不乘」。
+- 抓帧时另一个会话的 1920×1080 测试窗口也开着，可能在重启之后、本窗口之前打开过，这一次不能算严格的「只解析过桌面壁纸」。
+- 连同步骤 3 的三种先行解析，四次都是「不乘」，决定 3 的做法不变。
+
+**`2254685070` 和 WPE 的画面对照**（子代理，产物 `ignore/p4/d6/s2254/`，HEAD `b4d57aaa` 的快照；Claude 抽查了离线展开与整帧比较的结果）：
+- **绳的几何：** 场景没有 kbp-meta.json，子代理写了最小适配（复用 kbp 的桥与 `read_draw`）取出绳的绘制，`kbp corners offline` 直接跑通。10 帧 137 段，按我们的路径（翻译器的几何着色器展开 + 我们算的 uniform）展开 WPE 的顶点输入，和 `gs_out` 比：位置最大差 1.72e-4 像素，uv 6e-8，颜色 0，不符 0 处。MVP 差 3e-8，`g_ModelMatrixInverse`、`g_EyePosition` 差 0。
+- **宏、材质、管线：** `genericropeparticle` 带 `.geom`、`THICKFORMAT 1`、`TRAILSUBDIVISION 4`、`ORIENTATION 0`、不写 `TEX0FORMAT`（纹理是格式 0）；additive 混合、写掩码、无深度、NoCull、clamp 加各向异性 8、片元式子，都和 WPE 的管线状态一致。
+- **绳以外的画面：** `render_scene` 按帧 221 / 226 / 230 的 `g_Time` 渲染，把绳的三角形（膨胀 4 像素，占画面 1.3–1.7%）挖掉后和 WPE 整帧比：最大差 1 个色阶，> 2 的像素 0。
+- **按反推的光标回放：** 这个发射器每帧最多发 1 个、距离 0，新粒子的位置就是那一帧的跟随点，所以能反推出光标时间线。产品 `ParticleSystem` + `writeRopeSegments`（fps 20、两遍）回放：段数逐帧相同（20 → 8），位置、`CP0` / `CP1`、`TL` 差 0。
+  - alpha 差 ≤ 2.7e-4，随年龄线性增长，正是 WPE 的 `age·rcpps(1)` 少算的量，近似倒数，按约定不复刻。
+  - 尺寸、颜色是随机抽的，注入 WPE 的值后差 0。
+- **帧率的影响：** 抓帧时 WPE 是 20 fps。按 fps 60 回放时，绳填充期的 `TL` / `TP0` 和 WPE 不同（`Rf = min(fps, R)`）。这是预期的：Kabegame 的帧上限缺省 60，和 WPE 设置不同时，绳填充期的 uv 就会不同。
+
+**回放 `d6`**（子代理，快照取自 `b4d57aaa`；Claude 在两份快照上自跑，结果相同）：
+
+| 项 | 判定 | 关键数据 |
+|---|---|---|
+| `r9-fill`：`Rf = min(fps, R)` | 成立 | fps 10：`TL` 两边都是 19，位置差/限 0.12、`TP` 差/限 0.11；变体「`Rf` 按 `R`」的 `TL` 超限 1119 处。fps 60 两种 `Rf` 都得 `TL = 存活数`，只报告 |
+| `t7-pre`：预热后历史塌缩 | 成立 | 两种 fps 的 40 段都通过；`h[1]` 是预热结束时的位置 (22.0, 15.675)、(2.0, 1.4875)，不是出生点；变体「不塌缩」差/限 2.2e4 |
+| `around-period`：周期发射的新周期清不清零 | 这次是不清零 | fps 60「不清零」通过（0.57），「清零」差 196 像素。只代表这次 WPE 运行里残留字的值，能力表照报 `…:periodic` 不变 |
+| `rv-vec2` / `ri-vec2`：标量输入的归一化 | 成立 | 两种 fps 通过（≤ 0.78）；变体「op 按分量」「init 只用 x」各差约 3e3 |
+| `ri-square2` / `ri-saw2`：init 用 `floorf` | 成立 | `R` 从 `TEXCOORD1.w` 按出生序注入，出生时 `t` 为负的 14–20 个；尺寸差 0；变体「init 用 trunc」差 35 |
+| `st-pre`：预热期间系统时间累不累加 | 不累加（同产品现状） | 尺寸差 1.5e-5；变体「累加」差 7.2 |
+| `st-hide`：不可见期间系统时间累不累加 | **累加，和产品现状不同，已改** | 不累加（原产品）差 3.5、超限；先累加再复位差 0.06–0.35、超限；复位后累加本帧差 ≤ 7.6e-6、通过。rea-p4d-modules 5.3 原来标【推】，实测确认 |
+
+- **fps 10 缺帧：** 两个工程的日志只到第 100 帧，第一个抓帧是 122。钩子用匀速粒子的位移、`st-pre` 的尺寸、`r9-fill` 的 `TP0` 反推锚点，其间线性插值。同一套方法在日志完整的 fps 60 上和日志差 ≤ 2.7e-6，fps 10 不同来源的锚点彼此差 ≤ 1.7e-6。作锚点的数据在缺帧上是按构造对上的，不算独立验证；`r9-fill` 的 `TL = 19` 不依赖时间线。
+- **没查清的一处：** fps 10 的 `around-period` 第 122、123 帧，WPE 比我们少一个粒子（我们第 113 帧发的那个，WPE 到第 124 帧才发）。当时周期计时只剩 2e-4、发射余数 1.0001，都是很小的余量，挪 dt、改周期起始帧的扣减都对不上。周期发射的计时没动，这一段只报告；fps 60 粒子数逐帧对上。已收进「未实测清单」。
+
+**产品改动**（补丁 `ignore/p4/d6/close.patch`，4 个文件，+59 / −16）：
+- `particles/system.ts`：`suspend(inputs, frameDt = 0)`，有存活粒子时先复位，之后无条件 `systemTime += f32(frameDt)·rate`；图层时间不累加（读码：只在可见时加）。
+- `render/scene.ts`：不可见帧调 `suspend({ world, pointer }, frametime)`。
+- 新增单测：`particles/remap.test.ts`、`render/particles.test.ts` 各一个。
+- 变异 5 条全部检出：不累加、先累加再复位、只在清空那一帧累加（单测与 d6 都检出）；不乘 `rate`（只有单测，工程里 `rate` 是 1）；渲染器不传帧时间（只有渲染器单测）。
+
+**验收（Claude 自跑）：** `git apply --check` 干净；快照 tsc 0 错；vitest 64 个文件、1693 个用例全过；`kbp regress --corpus` 现有案例逐字节相同、只有 `d6` 不同，语料 165 张逐张相同。
+
+**合并后（2026-11-11，用户同意）：** 补丁打进工作区（HEAD `4891ff71`），工作区里没有别的会话改这 4 个文件。
+- 画面哈希：不带补丁重建宿主（`index-Coc4o0R9.js`）量 `ignore/p4/d6/out/hash-before.json`，打补丁重建（`index-C6uDNZh4.js`）量 `hash-after.json`，10 张 × 3 档全部相同。dev 宿主已按合并后的工作区重新构建。
+- tsc 0 错；`kbp regress`（对 `d6/head`）现有案例逐字节相同，只有 `d6` 不同。
+- vitest 1703 个用例里 1702 个通过。失败的是 `compile/pipeline.test.ts` 的语料用例：`3830255100: 219 次请求`，超了请求次数上限。撤掉补丁也同样失败，这张是 P5a 刚解锁的场景，和本补丁无关，已转告用户。
+- 环境的坑：会话的工作目录变成小写盘符 `d:\Codes\kabegame` 后，vitest 64 个文件全部报 `Cannot read properties of undefined (reading 'config')`、一个用例都不跑（盘符大小写不一致，vitest 自身被加载两份）；换成大写盘符 `D:\` 就正常。
+
+### 收尾 B — 文档与覆盖数
+
+- `cocs/wpe/WPE_SCENE.md` 的粒子一节补 P4d：绳与几何着色器展开、ropetrail、mapsequence、remap、距离类、不可见时的控制点；`cocs/README.md` 索引同步。
+- `src-tauri/wpesl2wgsl/README.md`：几何着色器展开的规则与限制。
+- `versions/latest/changelog.md`、`versions/latest/regression.md`：P4d 的条目与回归用例。
+- 总计划 `phase-4-particles.md`：语料重扫，覆盖数、能渲染数改成实际值。
 
 ## 决定
 

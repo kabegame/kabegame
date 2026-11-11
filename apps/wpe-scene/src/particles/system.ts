@@ -42,7 +42,8 @@
  * `setInstance` 重乘字段后 `instanceState`。`clear` 不碰它们（WPE 的清空不动记录）。
  *
  * 系统时间与图层时间（P4d 步骤 4a，rea-p4d-modules.md 2.2、5.3，remap 的输入 `particlesystemtime`（init）与 `layertime` 读）：`step` 在
- * 模拟之前各自 `+= dt′`（float32，乘过 `rate`），`suspend` 在有存活粒子时一起清零，预热不累加（读码没追，计划「未实测清单」）。模拟时的
+ * 模拟之前各自 `+= dt′`（float32，乘过 `rate`），`suspend` 在有存活粒子时一起清零；系统时间在不可见的帧上（复位之后）照常累加，预热不
+ * 累加（P4d 收尾 A 实测 st-hide、st-pre）。模拟时的
  * 对象原点 `W.t`（remap 的 `layerorigin`）和模型矩阵一起由 `advance` 按 `inputs.world` 写进执行上下文。
  */
 import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
@@ -197,7 +198,8 @@ export class ParticleSystem {
   readonly trail: TrailHistory | null;
   /**
    * 系统时间 `St`（`sys+0x3f0`，P4d 步骤 4a）：每帧模拟之前 `+= dt′`（`FUN_1402308a0` 开头 `0x1402308c2`，float32），系统复位
-   * （`FUN_14022f6c0`，`suspend`）清零。`remapinitialvalue` 的 `particlesystemtime` 读它（经执行上下文）。
+   * （`FUN_14022f6c0`，`suspend`）清零；不可见的帧上 `suspend` 照样累加，预热不累加（P4d 收尾 A 实测）。`remapinitialvalue` 的
+   * `particlesystemtime` 读它（经执行上下文）。
    */
   systemTime = 0;
   /**
@@ -360,21 +362,27 @@ export class ParticleSystem {
    * `current − previous` 只是一帧的位移，不会把粒子一次拽过整段隐藏期间的位移（实测 p4d-dist2 的 hide-r）。
    * 同一处（`FUN_14022f6c0`）还复位有运行状态的模块（P4d 步骤 3，`resetState`）：`mapsequence*` 无条件 `seq = 0`、`step` 的符号不
    * 复位（rea-p4d-modules.md 1.3、5.3），并清零系统时间 `sys+0x3f0`；`FUN_140230650` 同时清零图层时间 `obj+0x770`（P4d 步骤 4a）。
-   * WPE 不可见期间系统时间照常累加、照常模拟（5.3【推】，`FUN_1402308a0` 不看可见性），这里不可见的帧只更新控制点：系统时间不累加、
-   * 不发射（「未实测清单」）。子系统的复位归 P4e。`inputs` 缺省（单位阵、(0, 0)）只给单测用。
+   * 系统时间不看可见性（P4d 收尾 A 实测 p4d-close 的 st-hide，两种 fps 都对上；rea-p4d-modules.md 5.3 原是【推】）：不可见的每一帧在
+   * 复位（有存活粒子时）之后照常 `+= dt′`（`frameDt` 乘 `instanceoverride.rate`，同 `step`），所以重新可见后新粒子读到的 St 从隐藏的第一
+   * 帧算起、含那一帧的 dt′；「不累加」与「先累加再复位」都超限。图层时间只在可见时累加，这里不动。其余照旧：不发射、不模拟（步骤 5
+   * 实测不可见期间不发射）。子系统的复位归 P4e。`inputs` 缺省（单位阵、(0, 0)）、`frameDt` 缺省 0 只给单测用。
    */
-  suspend(inputs: ControlPointInputs = IDENTITY_INPUTS): boolean {
+  suspend(inputs: ControlPointInputs = IDENTITY_INPUTS, frameDt = 0): boolean {
     this.controlPoints.update(inputs);
     this.controlPoints.endFrame();
-    if (this.alive === 0) return false;
-    for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
-    for (const module of this.initializers) if (module.state !== undefined) module.def.resetState?.(module.state);
-    this.systemTime = 0;
-    this.layerTime = 0;
-    this.context.systemTime = 0;
-    this.context.layerTime = 0;
-    this.clear();
-    return true;
+    const cleared = this.alive !== 0;
+    if (cleared) {
+      for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
+      for (const module of this.initializers) if (module.state !== undefined) module.def.resetState?.(module.state);
+      this.systemTime = 0;
+      this.layerTime = 0;
+      this.context.layerTime = 0;
+      this.clear();
+    }
+    // 系统时间（`FUN_1402308a0` 开头 `sys+0x3f0 += dt′`，不可见时照样调）：复位之后累加本帧
+    this.systemTime = f32(this.systemTime + f32(f32(frameDt) * this.rate));
+    this.context.systemTime = this.systemTime;
+    return cleared;
   }
 
   /**

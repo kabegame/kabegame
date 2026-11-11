@@ -1687,7 +1687,8 @@ export class GpuScene {
    * 全部粒子层按帧时间步进一帧（`ParticleSystem.step` 乘 `instanceoverride.rate`）；帧时间不是正数（补画帧、暂停）时不动。
    * `state` 给出时，不可见（含祖先，`effectiveVisible`）的粒子层不发射、不步进，还有存活粒子就清空并复位 emitter 计时
    * （`ParticleSystem.suspend`，C8 读码）；重新可见时照常步进，不重新预热。清空后标 `stale`：之后哪一帧再画，都先写成 0 个。
-   * 不可见的帧照样把这一帧的世界矩阵与跟随点交给 `suspend`，控制点照常更新、拷 `previous`（P4d 步骤 5）。
+   * 不可见的帧照样把这一帧的世界矩阵与跟随点交给 `suspend`，控制点照常更新、拷 `previous`（P4d 步骤 5）；帧时间也交给它，系统时间照常
+   * 累加（P4d 收尾 A）。
    * `time` 是这一帧的 `g_Time`（和 uniform 同一个值，已回绕），作噪声类模块的场景时间 `T`（P4b 步骤 4）。
    * 控制点的输入是对象的世界矩阵（P4c 步骤 1）：给了 `state` 时每帧按它沿父链算（脚本改变换、父链变化下一帧就跟上，一次调用
    * 共用一份缓存），没给时用加载时的（`ParticleDraw.world`）。
@@ -1721,7 +1722,8 @@ export class GpuScene {
         // 不可见时控制点照常更新（P4d 步骤 5，rea-p4d-modules.md 5.3）：`W` 与跟随点照可见时的算法算
         const world = worldMatrixOf(draw.object, state.layers, worlds);
         pointer ??= pointerScenePoint(this.viewProjection, cursor);
-        if (particles.system.suspend({ world, pointer })) particles.stale = true;
+        // 系统时间在不可见的帧上照常累加（P4d 收尾 A），所以把帧时间也交给它
+        if (particles.system.suspend({ world, pointer }, frametime)) particles.stale = true;
         continue;
       }
       const timing = this.particleTimings?.get(draw);

@@ -926,6 +926,25 @@ describe("模拟器：系统时间、图层时间、对象原点（P4d 步骤 4a
     expect([warm.systemTime, warm.layerTime]).toEqual([0, 0]);
   });
 
+  it("suspend 带帧时间：系统时间复位之后照常累加（乘 rate），图层时间不累加；没有存活粒子时也累加（P4d 收尾 A 实测 st-hide）", () => {
+    const s = system({ input: "particlesystemtime" }, { instanceoverride: { rate: 2 } });
+    s.step(0.1, 0.1);
+    s.step(0.1, 0.2);
+    // 第一个不可见帧：复位再加本帧 dt′
+    expect(s.suspend(undefined, 0.05)).toBe(true);
+    expect([s.systemTime, s.layerTime]).toEqual([f32(f32(0.05) * 2), 0]);
+    // 之后不可见的帧（已经没有粒子）：不复位、照常累加
+    expect(s.suspend(undefined, 0.1)).toBe(false);
+    let st = f32(f32(f32(0.05) * 2) + f32(f32(0.1) * 2));
+    expect([s.systemTime, s.layerTime]).toEqual([st, 0]);
+    // 重新可见：新粒子读到的 St 含隐藏期间的累加
+    s.step(0.1, 0.4);
+    st = f32(st + f32(f32(0.1) * 2));
+    expect(s.systemTime).toBe(st);
+    expect(s.layerTime).toBe(f32(f32(0.1) * 2));
+    expect(s.columns.size0[newborn(s)]).toBe(st);
+  });
+
   it("layerorigin 读本帧控制点输入的世界矩阵平移", () => {
     const s = system({ input: "layerorigin", inputcomponent: "y" });
     const world = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1]);

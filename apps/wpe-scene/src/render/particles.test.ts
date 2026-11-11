@@ -1873,6 +1873,20 @@ describe("GpuScene：粒子生命周期（P4a 步骤 5）", () => {
     expect(system.alive).toBe(0);
   });
 
+  it("不可见的帧把帧时间交给模拟器：系统时间复位后照常累加（P4d 收尾 A，st-hide 实测）", async () => {
+    const { state, scene } = await open(bundleOf([particleLayer(1, {}, { visibleBound: true })]));
+    stepFrame(scene, frame(0.5), state);
+    const system = particleDraw(scene, 1).particles!.system;
+    state.write({ property: "v", target: VISIBLE }, false);
+    scene.sync(state);
+    stepFrame(scene, frame(0.1), state);
+    expect(system.alive).toBe(0);
+    expect(system.systemTime).toBe(Math.fround(0.1));
+    stepFrame(scene, frame(0.2), state);
+    expect(system.systemTime).toBe(Math.fround(Math.fround(0.1) + Math.fround(0.2)));
+    expect(system.layerTime).toBe(0);
+  });
+
   it("清空后标 stale：暂停中重新可见（没有实时帧），画出来的是 0 个，不是清空前的顶点", async () => {
     const { gpu, state, scene } = await open(bundleOf([particleLayer(1, {}, { visibleBound: true })]));
     stepFrame(scene, frame(0.5), state);
