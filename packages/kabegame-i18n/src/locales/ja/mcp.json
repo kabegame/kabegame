@@ -4,6 +4,7 @@
     "albums": "アルバム",
     "tasks": "タスク",
     "surf_records": "サーフ記録",
+    "color_buckets": "カラーバケット",
     "plugin": "プラグイン"
   },
   "kind": {
@@ -43,6 +44,11 @@
       "read": {
         "list": { "name": "サーフ記録一覧", "desc": "すべてのサーフ記録を参照します" },
         "by_id": { "name": "単一サーフ記録", "desc": "ID でサーフ記録の詳細を読み取ります" }
+      }
+    },
+    "color_buckets": {
+      "read": {
+        "list": { "name": "カラーバケット一覧", "desc": "色での並べ替えに使えるカラーバケットを読み取ります" }
       }
     },
     "plugin": {

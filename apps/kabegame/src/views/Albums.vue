@@ -614,6 +614,7 @@ const albumSortFeatures: GallerySortField[] = [
   "by-name",
   "by-aspect",
   "by-set-time",
+  "by-color",
   "by-album-order",
 ];
 

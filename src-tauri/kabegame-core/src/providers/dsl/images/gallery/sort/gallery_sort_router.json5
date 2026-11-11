@@ -1,7 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_sort_router",
-    "note": "Sort keys: by-id | by-time | by-size | by-name | by-aspect | by-set-time | by-album-order | random-<seed>. Applies to whatever filter set precedes it; append /_kb_desc to reverse. Default order is crawledAt ascending, so /_kb_desc means newest first. random-<seed> produces a stable seeded permutation for pagination.",
+    "note": "Sort keys: by-id | by-time | by-size | by-name | by-aspect | by-set-time | by-album-order | random-<seed> | by-color_0x<rrggbb> | by-any-color_0x<rrggbb>. Applies to whatever filter set precedes it; append /_kb_desc to reverse. Default order is crawledAt ascending, so /_kb_desc means newest first. random-<seed> produces a stable seeded permutation for pagination. by-color_0x<rrggbb> sorts by precomputed distance to a color bucket (only colors in color_buckets://, 6 lowercase hex digits); by-any-color_0x<rrggbb> computes the distance to any color at query time (slower). Both give the same order for the same color.",
     "query": {
         "delegate": { "provider": "kb_co_provider" }
     },
@@ -32,6 +32,17 @@
         "random-([0-9]{1,18})": {
             "provider": "gallery_sort_by_random_provider",
             "properties": { "seed": "${capture[1]}" }
+        },
+        // 两个颜色排序段互不知道对方，用哪个由调用方决定（颜色在 color_buckets:// 里用前者）。
+        // 只认六位小写十六进制；resolve 的正则整段匹配，两个前缀不会互相吞。
+        // 捕获带着 `0x`：纯数字的颜色（黑 `000000`、棕 `804000`）不带前缀会被属性求值转成整数。
+        "by-color_(0x[0-9a-f]{6})": {
+            "provider": "gallery_sort_by_color_provider",
+            "properties": { "color": "${capture[1]}" }
+        },
+        "by-any-color_(0x[0-9a-f]{6})": {
+            "provider": "gallery_sort_by_color_computed_provider",
+            "properties": { "color": "${capture[1]}" }
         }
     }
 }

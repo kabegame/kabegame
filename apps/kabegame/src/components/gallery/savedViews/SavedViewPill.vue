@@ -7,6 +7,13 @@
   >
     <component :is="pill.icon" class="h-[13px] w-[13px] flex-none" :class="iconClass" />
     <span class="truncate">{{ pill.label }}</span>
+    <!-- 细边框：白色、黑色的色块不会融进 chip 背景 -->
+    <span
+      v-if="pill.swatch"
+      class="box-border h-2.5 w-2.5 flex-none rounded-[3px] border border-solid border-[var(--anime-border)]"
+      :style="{ backgroundColor: pill.swatch }"
+    />
+    <span v-if="pill.swatchLabel" class="truncate">{{ pill.swatchLabel }}</span>
   </span>
 </template>
 

@@ -217,7 +217,15 @@ const adapter = createTaskDetailAdapter({
 const { taskId } = storeToRefs(taskDetailRouteStore);
 
 const taskFilterFeatures: GalleryBrowseDimension[] = ["plugin", "mediaType", "date", "size", "aspect"];
-const taskSortFeatures: GallerySortField[] = ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time"];
+const taskSortFeatures: GallerySortField[] = [
+  "by-id",
+  "by-time",
+  "by-size",
+  "by-name",
+  "by-aspect",
+  "by-set-time",
+  "by-color",
+];
 const taskSearchFeatures = GALLERY_SEARCH_MODES_BASIC;
 
 const taskViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);

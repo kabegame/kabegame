@@ -8,6 +8,7 @@ use crate::crawler::downloader::{
 use crate::emitter::GlobalEmitter;
 use crate::media::dimensions::{resolve_file_size_sync, resolve_media_dimensions_sync};
 use crate::media::image_type::{is_video_by_path, mime_type_from_path};
+use crate::media::palette::Palette;
 use crate::storage::{ImageInfo, Storage};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -90,6 +91,21 @@ pub async fn import_local_file(
 
     let compatible_path = build_compatible_path(path, is_video, &media_type, width, height).await;
 
+    // 色盘：尽力而为，算不出来就没有，不阻断入库
+    let palette = match media_type.as_deref() {
+        Some(media_type) => {
+            crate::media::palette::compute_for_row(
+                media_type,
+                &path_str,
+                &thumbnail_path,
+                compatible_path.as_deref(),
+                None,
+            )
+            .await
+        }
+        None => None,
+    };
+
     let image = ImageInfo {
         id: String::new(),
         url: None,
@@ -114,6 +130,7 @@ pub async fn import_local_file(
         album_order: None,
         compatible_path,
         post_url: None,
+        palette: palette.as_ref().map(Palette::to_json),
     };
 
     let storage = Storage::global();

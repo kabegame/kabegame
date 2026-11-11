@@ -34,7 +34,7 @@ images://filter/<视图>/_kb_x<N>x/<页> /~~/ rank /~~p/ lookup/gallery
 
 - `images_root_provider` 只贡献 `images.id AS id`。`filter` 直接进入 `gallery_router`，后者持有全部
   list / resolve 与默认排序；hide、搜索、画册、任务、畅游等子 provider 的 delegate 全部折回窄路由。
-- `gallery_route` 只持有 21 个列表字段，list / resolve 委托 `gallery_router`。宽入口 `images://gallery`
+- `gallery_route` 只持有 22 个列表字段（含色盘 `palette`，JSON 文本，见 [COLOR_PALETTE.md](COLOR_PALETTE.md)），list / resolve 委托 `gallery_router`。宽入口 `images://gallery`
   在根 resolve 经过 `gallery_entry_router` 先折默认排序，再进入字段层，保证裸 `gallery/~not/...`
   组合器在组外已有排序基线；原有裸 gallery 与全局分页默认顺序也保留。
 - `rank` 扫内层物化 CTE，为本页行打从 1 起的 `row_index`；`lookup` 将 images 按 `images.id = p.id`
@@ -287,6 +287,7 @@ ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否�
 | --- | --- |
 | `thumbnailPath`、`compatiblePath` | 只打补丁 |
 | `lastSetWallpaperAt` | 按设壁纸时间排序 |
+| `palette` | 按颜色排序（`by-color` / `by-any-color` 两个字段都算）；其它视图只打补丁。色盘回填每批最多发 32 条这种补丁，不登记的话所有网格都会跟着刷新 |
 | `displayName` | 按名称排序或有效 display-name 搜索 |
 | `metadataId` | 有效 metadata 搜索或插件维度（含扩展） |
 | `imageMetadataId` | 有效 native-metadata 搜索 |

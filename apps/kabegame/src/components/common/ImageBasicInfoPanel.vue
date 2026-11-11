@@ -134,6 +134,26 @@
         </button>
       </div>
 
+      <!-- 代表色：按占比分段的色带。点一段 = 当前页面按这个颜色排序（过滤不变）。
+           没有色盘时整条不渲染、不占位。细边框与段间的 1px 间隔同色，白色、黑色段不会融进面板背景 -->
+      <div
+        v-if="paletteColors.length"
+        class="box-content flex h-2.5 gap-px overflow-hidden rounded-[5px] border border-solid border-[var(--anime-border)] bg-[var(--anime-border)]"
+        role="group"
+        :aria-label="t('gallery.imageDetailPalette')"
+      >
+        <button
+          v-for="(color, index) in paletteColors"
+          :key="`${index}:${color.hex}`"
+          type="button"
+          class="min-w-1.5 basis-0 cursor-pointer appearance-none border-0 p-0 hover:brightness-110"
+          :style="{ flexGrow: color.percent, backgroundColor: `#${color.hex}` }"
+          :title="`${t('gallery.colorSortByThis')} · #${color.hex} · ${color.percent}%`"
+          :aria-label="`${t('gallery.colorSortByThis')} #${color.hex}`"
+          @click="emit('open-color-sort', color.hex)"
+        />
+      </div>
+
       <div v-if="showPostUrl || image.localPath" class="basic-info-links">
         <div v-if="showPostUrl" class="basic-info-link-row">
           <el-icon class="basic-info-row-icon"><Link /></el-icon>
@@ -192,6 +212,7 @@ import { displayImageMimeType, isVideoMediaType, isWpeMediaType } from "../../ut
 import { aspectBucketForDimensions, type GalleryMediaKind } from "../../utils/galleryQuery";
 import { facetValueLabel, mediaFormatLabel } from "../../composables/useAdvancedQueryFacets";
 import { openExternalLink } from "../../utils/openExternalLink";
+import { parsePalette } from "../../utils/palette";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -219,6 +240,8 @@ export type ImageDetailLike = {
   taskId?: string;
   surfRecordId?: string;
   postUrl?: string;
+  /** 色盘 JSON 文本（`parsePalette` 解析）；没有色盘时为 null / 缺省。 */
+  palette?: string | null;
 };
 
 export type ImageDetailSurfRecordTarget = {
@@ -251,7 +274,12 @@ const emit = defineEmits<{
   "open-task": [taskId: string];
   "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
   "open-surf-record": [target: ImageDetailSurfRecordTarget];
+  /** 点了代表色的一段：按这个颜色（六位小写十六进制）排序，过滤不变。 */
+  "open-color-sort": [hex: string];
 }>();
+
+/** 代表色：直接来自图片行，面板自己不发请求；回填的 `palette` 补丁打到行上后这里跟着更新。 */
+const paletteColors = computed(() => parsePalette(props.image?.palette));
 
 function handleOpenTask() {
   const tid = props.image?.taskId;

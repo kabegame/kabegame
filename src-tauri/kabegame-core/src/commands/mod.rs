@@ -1,5 +1,6 @@
 pub mod album;
 pub mod busy_tasks;
+pub mod color_bucket;
 pub mod hidden_cleanup;
 pub mod image;
 pub mod misc;

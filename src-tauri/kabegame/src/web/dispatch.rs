@@ -2131,6 +2131,48 @@ pub fn init_registry() {
         },
     );
 
+    // ── color buckets ─────────────────────────────────────────────────────────
+
+    map.insert(
+        "add_color_bucket",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    struct Args {
+                        rgb: u32,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    let bucket = kabegame_core::commands::color_bucket::add_color_bucket(args.rgb)
+                        .await
+                        .map_err(RpcError::internal)?;
+                    serde_json::to_value(bucket).map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "delete_color_bucket",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    struct Args {
+                        rgb: u32,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::color_bucket::delete_color_bucket(args.rgb)
+                        .await
+                        .map_err(RpcError::internal)?;
+                    Ok(Value::Null)
+                })
+            }),
+        },
+    );
+
     // ── hidden cleanup ────────────────────────────────────────────────────────
 
     map.insert(

@@ -123,7 +123,7 @@ const disabledSet = computed(() => new Set(disabledValue.value ?? []));
 const endpoint = computed(() => `http://127.0.0.1:${port.value}/mcp`);
 
 // ── 能力矩阵（capabilities 是后端元数据；启用/禁用是 mcpDisabledCapabilities 设置）──
-const CATEGORY_ORDER = ["images", "albums", "tasks", "surf_records", "plugin"];
+const CATEGORY_ORDER = ["images", "albums", "tasks", "surf_records", "color_buckets", "plugin"];
 const capabilities = ref<McpCapability[]>([]);
 const capsLoading = ref(false);
 

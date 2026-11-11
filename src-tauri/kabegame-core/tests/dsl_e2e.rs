@@ -6,8 +6,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use kabegame_core::media::palette::{distance_to, Palette, PaletteColor, NO_PALETTE_DISTANCE};
 use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
 use kabegame_core::providers::programmatic::plugin_resource::register_plugin_resource_provider;
+use kabegame_core::storage::color_buckets::{
+    add_color_bucket_in, delete_color_bucket_in, ERR_BUILTIN, ERR_NOT_FOUND,
+};
+use kabegame_core::storage::migrations::{
+    seed_builtin_color_buckets, BUILTIN_COLOR_BUCKETS, COLOR_DISTANCE_INDEX_DDL, COLOR_TABLES_DDL,
+};
 use kabegame_core::storage::{Album, ImageInfo, SurfRecord};
 use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
@@ -192,6 +199,9 @@ fn register_fixture_functions(conn: &Connection) {
     )
     .unwrap();
 
+    // 现算颜色排序与保存色桶都用它：直接登记 core 的实现，不在夹具里另写一份
+    kabegame_core::storage::dsl_funcs::register_kb_palette_distance(conn).unwrap();
+
     for fn_name in ["get_album", "get_task", "get_surf_record"] {
         conn.create_scalar_function(
             fn_name,
@@ -233,6 +243,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             post_url TEXT,
             wallpaper_compatible_path TEXT,
             image_metadata_id INTEGER,
+            palette TEXT,
             aspect_ratio REAL GENERATED ALWAYS AS (CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END) VIRTUAL
         );
         CREATE TABLE album_images (
@@ -498,6 +509,18 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         .unwrap();
     }
 
+    // 色桶表与关系表用迁移的 DDL 与种子（12 个基本色桶）；夹具图片都没有色盘，
+    // 和 v052 一样给每张图 × 每个色桶铺一行「没有色盘」。
+    conn.execute_batch(COLOR_TABLES_DDL).unwrap();
+    conn.execute_batch(COLOR_DISTANCE_INDEX_DDL).unwrap();
+    seed_builtin_color_buckets(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO image_color_distances (image_id, bucket_rgb, distance)
+         SELECT i.id, b.rgb, ?1 FROM images AS i CROSS JOIN color_buckets AS b ORDER BY i.id, b.rgb",
+        [i64::from(NO_PALETTE_DISTANCE)],
+    )
+    .unwrap();
+
     // 画册目录分页与 LIKE 字面转义夹具；UUID 保持可由新节点按 id 寻址。
     for i in 0..105_u32 {
         let id = format!("80000000-0000-0000-0000-{i:012}");
@@ -636,6 +659,14 @@ fn build_runtime_with(conn: Arc<Mutex<Connection>>) -> Arc<ProviderRuntime> {
             "surf_records_root_provider",
         )
         .unwrap();
+    runtime
+        .register_schema(
+            "color_buckets",
+            "color_buckets",
+            "kabegame",
+            "color_buckets_root_provider",
+        )
+        .unwrap();
     register_plugin_resource_provider(&runtime).unwrap();
     runtime
         .register_programmatic_schema("plugin", "kabegame", "plugin_resource_root_provider")
@@ -687,6 +718,7 @@ fn schema_registration_smoke_and_schemaless_paths_fail() {
         runtime.registered_schemes(),
         vec![
             "albums".to_string(),
+            "color_buckets".to_string(),
             "fail-images".to_string(),
             "images".to_string(),
             "plugin".to_string(),
@@ -3477,4 +3509,1014 @@ fn media_type_wpe_lists_subtypes() {
     // 原生壁纸的有效路径只留图片：WPE 行 rank 查不到
     let native = effective_path("images://gallery/hide/sort/by-time", "native");
     assert_eq!(rank(&runtime, &native, "9999"), None);
+}
+
+// ---------------------------------------------------------------------------
+// 按颜色排序：`sort/by-color_0x<rrggbb>`（色桶，预计算）、`sort/by-any-color_0x<rrggbb>`（现算）
+// 与色桶列表 `color_buckets://`
+// ---------------------------------------------------------------------------
+
+const RED: u32 = 0xff0000;
+
+/// 给夹具里的图写色盘，并像 `Storage::add_image` / 回填那样用 `distance_to` 重写它对当前全部色桶的距离。
+fn set_palette(conn: &Connection, image_id: i64, palette: Option<&Palette>) {
+    conn.execute(
+        "UPDATE images SET palette = ?1 WHERE id = ?2",
+        (palette.map(Palette::to_json), image_id),
+    )
+    .unwrap();
+    let buckets: Vec<u32> = conn
+        .prepare("SELECT rgb FROM color_buckets")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for rgb in buckets {
+        conn.execute(
+            "INSERT OR REPLACE INTO image_color_distances (image_id, bucket_rgb, distance)
+             VALUES (?1, ?2, ?3)",
+            (image_id, rgb, i64::from(distance_to(palette, rgb))),
+        )
+        .unwrap();
+    }
+}
+
+fn colors(pairs: &[(u32, u8)]) -> Palette {
+    Palette(
+        pairs
+            .iter()
+            .map(|&(rgb, percent)| PaletteColor { rgb, percent })
+            .collect(),
+    )
+}
+
+/// 夹具库 + 十来张有色盘的图（其余一百多张没有色盘）。返回连接与 `图片 id → 色盘`。
+/// 20 与 30 的色盘相同（并列组）；9 在隐藏画册，118 是视频，119 是 webp，3 在画册 A。
+fn color_fixture() -> (Arc<Mutex<Connection>>, HashMap<i64, Palette>) {
+    let conn = fixture_db();
+    let shared = colors(&[(0x3a7bd5, 62), (0xffffff, 33), (0x102030, 5)]);
+    let palettes: HashMap<i64, Palette> = [
+        (50, colors(&[(RED, 100)])),
+        (7, colors(&[(0xf06010, 100)])),
+        (90, colors(&[(0x1040e0, 100)])),
+        (20, shared.clone()),
+        (30, shared),
+        (61, colors(&[(0xd02020, 55), (0x202020, 45)])),
+        (118, colors(&[(0x20c040, 70), (0xf0f0f0, 30)])),
+        (9, colors(&[(0x700808, 100)])),
+        (119, colors(&[(0xffffff, 100)])),
+        (3, colors(&[(0x000000, 100)])),
+        (122, colors(&[(0x808080, 80), (0xff80c0, 20)])),
+    ]
+    .into_iter()
+    .collect();
+    {
+        let db = conn.lock().unwrap();
+        for (id, palette) in &palettes {
+            set_palette(&db, *id, Some(palette));
+        }
+    }
+    (conn, palettes)
+}
+
+/// 参考顺序：按 `(distance_to(色盘, rgb), id)` 升序。没有色盘的图得到 `NO_PALETTE_DISTANCE`，排在最后。
+fn color_order(
+    palettes: &HashMap<i64, Palette>,
+    image_ids: impl IntoIterator<Item = i64>,
+    rgb: u32,
+) -> Vec<String> {
+    let mut keyed: Vec<(i64, i64)> = image_ids
+        .into_iter()
+        .map(|id| (i64::from(distance_to(palettes.get(&id), rgb)), id))
+        .collect();
+    keyed.sort();
+    keyed.into_iter().map(|(_, id)| id.to_string()).collect()
+}
+
+fn fetch_ids(runtime: &ProviderRuntime, path: &str) -> Vec<String> {
+    ids(runtime
+        .fetch(path)
+        .unwrap_or_else(|err| panic!("{path}: {err}")))
+}
+
+fn reversed(mut ids: Vec<String>) -> Vec<String> {
+    ids.reverse();
+    ids
+}
+
+/// `join.on` 里的 `${properties.hex}` 渲染成绑定参数（此前模板只出现在 where / order / list.sql）。
+#[test]
+fn gallery_sort_by_color_binds_hex_in_join_on() {
+    let runtime = build_runtime();
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    let resolved = runtime
+        .resolve("images://filter/sort/by-color_0xff0000/_kb_x100x/1")
+        .unwrap();
+    let (sql, params) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    assert!(
+        sql.contains(
+            "INNER JOIN image_color_distances AS cd ON cd.image_id = images.id AND cd.bucket_rgb = \
+             (SELECT b.rgb FROM color_buckets AS b WHERE printf('0x%06x', b.rgb) = ?)"
+        ),
+        "{sql}"
+    );
+    assert!(!sql.contains("ff0000"), "{sql}");
+    assert!(
+        sql.contains("ORDER BY cd.distance ASC, cd.image_id ASC"),
+        "{sql}"
+    );
+    assert!(
+        params
+            .iter()
+            .any(|value| matches!(value, TemplateValue::Text(text) if text == "0xff0000")),
+        "{params:?}"
+    );
+    // 内层只投影 id，排序段不把宽列带进来
+    assert!(
+        sql.starts_with("SELECT images.id AS id FROM images"),
+        "{sql}"
+    );
+
+    // 现算段：排序表达式里的 hex 同样是绑定参数
+    let resolved = runtime
+        .resolve("images://filter/sort/by-any-color_0x3a7bd5/_kb_x100x/1")
+        .unwrap();
+    let (sql, params) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    assert!(
+        sql.contains("ORDER BY kb_palette_distance(images.palette, ?) ASC, images.id ASC"),
+        "{sql}"
+    );
+    assert!(!sql.contains("image_color_distances"), "{sql}");
+    assert!(
+        params
+            .iter()
+            .any(|value| matches!(value, TemplateValue::Text(text) if text == "0x3a7bd5")),
+        "{params:?}"
+    );
+}
+
+#[test]
+fn gallery_sort_by_color_orders_by_distance() {
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn);
+    let expected = color_order(&palettes, 1..=122, RED);
+
+    // 三张已知的图：纯红最近，橙次之，蓝最远；色盘相同的 20 与 30 并列、按 id 先后
+    let distance = |id: i64| distance_to(palettes.get(&id), RED);
+    assert!(distance(50) < distance(7) && distance(7) < distance(90));
+    assert_eq!(distance(20), distance(30));
+    let position = |id: &str| expected.iter().position(|item| item == id).unwrap();
+    assert_eq!(position("50"), 0);
+    assert!(position("50") < position("7") && position("7") < position("90"));
+    assert_eq!(position("30"), position("20") + 1);
+
+    assert_eq!(
+        fetch_ids(&runtime, "images://filter/sort/by-color_0xff0000"),
+        expected
+    );
+    // `_kb_desc` 整条倒过来（并列组内也倒）
+    assert_eq!(
+        fetch_ids(&runtime, "images://filter/sort/by-color_0xff0000/_kb_desc"),
+        reversed(expected.clone())
+    );
+
+    // 逐页拼起来就是整条序列；行分页的回表形态与宽入口同序
+    let mut paged = Vec::new();
+    let mut looked_up = Vec::new();
+    let mut wide = Vec::new();
+    for page in 1..=18 {
+        let tail = format!("sort/by-color_0xff0000/_kb_x7x/{page}");
+        paged.extend(fetch_ids(&runtime, &format!("images://filter/{tail}")));
+        looked_up.extend(fetch_ids(
+            &runtime,
+            &format!("images://filter/{tail}/~~/rank/~~p/lookup/gallery"),
+        ));
+        wide.extend(fetch_ids(&runtime, &format!("images://gallery/{tail}")));
+    }
+    assert_eq!(paged, expected);
+    assert_eq!(looked_up, expected);
+    assert_eq!(wide, expected);
+
+    // 换一个色桶顺序随之变化：每个基本色桶都与参考顺序一致
+    for (key, rgb) in BUILTIN_COLOR_BUCKETS {
+        assert_eq!(
+            fetch_ids(
+                &runtime,
+                &format!("images://filter/sort/by-color_0x{rgb:06x}")
+            ),
+            color_order(&palettes, 1..=122, rgb),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn gallery_sort_by_color_keeps_all_rows() {
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn);
+    let total = runtime.count("images://filter/all").unwrap();
+    assert_eq!(total, 122);
+
+    // 排序不改变结果集与总数；没有色盘的图排在最后（它们之间按 id）
+    let sorted = fetch_ids(&runtime, "images://filter/sort/by-color_0xff0000");
+    assert_eq!(sorted.len(), total);
+    assert_eq!(
+        runtime
+            .count("images://filter/sort/by-color_0xff0000")
+            .unwrap(),
+        total
+    );
+    assert_eq!(sorted.iter().collect::<HashSet<_>>().len(), total);
+    let without: Vec<String> = (1..=122_i64)
+        .filter(|id| !palettes.contains_key(id))
+        .map(|id| id.to_string())
+        .collect();
+    assert_eq!(sorted[palettes.len()..], without[..]);
+    assert!(sorted[..palettes.len()]
+        .iter()
+        .all(|id| palettes.contains_key(&id.parse().unwrap())));
+    // 没有色盘的图距离是哨兵值，比任何有色盘的图都远
+    assert!(palettes
+        .values()
+        .all(|palette| distance_to(Some(palette), RED) < NO_PALETTE_DISTANCE));
+
+    // 叠加过滤：总数等于同过滤下不排序的总数，顺序是参考顺序在该结果集上的限制
+    for (filter, members) in [
+        (
+            "hide".to_string(),
+            (1..=122).filter(|id| *id != 9).collect::<Vec<i64>>(),
+        ),
+        (format!("album/{ALBUM_A_ID}"), (1..=5).collect()),
+        ("media-type/video".to_string(), vec![118]),
+        (
+            "media-type/image".to_string(),
+            (1..=122).filter(|id| *id != 118).collect(),
+        ),
+    ] {
+        let unsorted = runtime.count(&format!("images://filter/{filter}")).unwrap();
+        assert_eq!(unsorted, members.len(), "{filter}");
+        for tail in [
+            format!("{filter}/sort/by-color_0xff0000"),
+            format!("{filter}/_kb_fc/sort/by-color_0xff0000"),
+            format!("sort/by-color_0xff0000/_kb_fc/{filter}"),
+        ] {
+            let path = format!("images://filter/{tail}");
+            // 不是每种过滤都两种写法可用（`_kb_fc` 只续接过滤维度）：解析不了的写法跳过，能解析的必须一致
+            if runtime.resolve(&path).is_err() {
+                continue;
+            }
+            assert_eq!(
+                fetch_ids(&runtime, &path),
+                color_order(&palettes, members.iter().copied(), RED),
+                "{path}"
+            );
+            assert_eq!(runtime.count(&path).unwrap(), unsorted, "{path}");
+        }
+    }
+    // 上面的循环里每种过滤至少有一种写法真的跑到了
+    for path in [
+        "images://filter/hide/sort/by-color_0xff0000".to_string(),
+        format!("images://filter/album/{ALBUM_A_ID}/sort/by-color_0xff0000"),
+        "images://filter/sort/by-color_0xff0000/_kb_fc/media-type/video".to_string(),
+        "images://filter/sort/by-color_0xff0000/_kb_fc/media-type/image".to_string(),
+    ] {
+        runtime
+            .resolve(&path)
+            .unwrap_or_else(|err| panic!("{path}: {err}"));
+    }
+}
+
+#[test]
+fn gallery_sort_by_color_unknown_bucket_is_empty() {
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn);
+
+    // 不是色桶的颜色：能解析，连接为空，结果是空集而不是报错
+    for path in [
+        "images://filter/sort/by-color_0x123456",
+        "images://filter/sort/by-color_0x123456/_kb_desc",
+        "images://filter/sort/by-color_0x123456/_kb_x100x/1",
+        "images://filter/sort/by-color_0x123456/_kb_x100x/1/~~/rank/~~p/lookup/gallery",
+        "images://gallery/sort/by-color_0x123456/_kb_x100x/1",
+    ] {
+        runtime
+            .resolve(path)
+            .unwrap_or_else(|err| panic!("{path}: {err}"));
+        assert!(fetch_ids(&runtime, path).is_empty(), "{path}");
+        assert_eq!(runtime.count(path).unwrap(), 0, "{path}");
+    }
+    assert_eq!(
+        rank(&runtime, "images://gallery/sort/by-color_0x123456", "50"),
+        None
+    );
+
+    // 同一个颜色的现算段返回全部行
+    assert_eq!(
+        fetch_ids(&runtime, "images://filter/sort/by-any-color_0x123456"),
+        color_order(&palettes, 1..=122, 0x123456)
+    );
+
+    // 只认六位小写十六进制
+    for path in [
+        "images://filter/sort/by-color_0xFF0000",
+        "images://filter/sort/by-color_0xff000",
+        "images://filter/sort/by-color_0xff00000",
+        "images://filter/sort/by-color_ff0000",
+        "images://filter/sort/by-color_0xgg0000",
+        "images://filter/sort/by-color",
+    ] {
+        assert!(
+            matches!(runtime.resolve(path), Err(EngineError::PathNotFound(_))),
+            "{path}"
+        );
+    }
+}
+
+/// 对实际 DSL 生成的 SQL 取执行计划（已 ANALYZE，与主程序启动后一致）：按色桶排序由关系表驱动、
+/// 沿 `idx_image_color_distances_bucket` 读到一页就停，没有整批排序；叠一个低选择性的媒体类型过滤后同样成立。
+/// 这是「预计算存表」这条路成立的前提。
+#[test]
+fn gallery_sort_by_color_plan_uses_bucket_index() {
+    let conn = color_plan_fixture();
+    let runtime = build_runtime_with(conn.clone());
+    let plan = |path: &str| explain_query_plan(&runtime, &conn, path);
+    // 行分页的内层 SQL（`…/~~/rank/~~p/lookup/gallery` 之前的部分）：无过滤，以及叠一个媒体类型过滤的两种写法
+    for path in [
+        "images://filter/sort/by-color_0xff0000/_kb_x100x/1",
+        "images://filter/sort/by-color_0xff0000/_kb_desc/_kb_x100x/1",
+        "images://filter/sort/by-color_0xff0000/_kb_fc/media-type/image/_kb_x100x/1",
+        "images://filter/media-type/image/_kb_fc/sort/by-color_0xff0000/_kb_x100x/1",
+    ] {
+        let plan = plan(path);
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("idx_image_color_distances_bucket")),
+            "{path}: {plan:?}"
+        );
+        // 排序键逐列等于索引列：整批排序与「最后几项」的局部排序都不该出现
+        assert!(
+            !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+            "{path}: {plan:?}"
+        );
+        // 由关系表驱动、images 按主键逐行取，而不是反过来扫 images
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("SEARCH images USING INTEGER PRIMARY KEY")),
+            "{path}: {plan:?}"
+        );
+    }
+
+    // 计划之外再核对结果：第一页确实是按 (distance, image_id) 的前 100 行
+    let expected: Vec<String> = {
+        let db = conn.lock().unwrap();
+        let mut stmt = db
+            .prepare(
+                "SELECT CAST(image_id AS TEXT) FROM image_color_distances
+                  WHERE bucket_rgb = ?1 ORDER BY distance, image_id LIMIT 100",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([RED], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
+    };
+    assert_eq!(expected.len(), 100);
+    assert_eq!(
+        fetch_ids(
+            &runtime,
+            "images://filter/sort/by-color_0xff0000/_kb_x100x/1"
+        ),
+        expected
+    );
+}
+
+/// `…/~~/rank/~~/id_<id>` 的序号与分页查询逐项一致（含一百多行的并列组）。
+fn assert_rank_matches_pages(runtime: &Arc<ProviderRuntime>, sort: &str) {
+    for view in [
+        format!("images://gallery/sort/{sort}"),
+        format!("images://gallery/sort/{sort}/_kb_desc"),
+        format!("images://gallery/hide/sort/{sort}"),
+    ] {
+        let paged = fetch_ids(runtime, &format!("{view}/_kb_x200x/1"));
+        assert!(paged.len() >= 121, "{view}");
+        for (index, id) in paged.iter().enumerate() {
+            assert_eq!(
+                rank(runtime, &view, id),
+                Some(index as i64 + 1),
+                "{view}: id {id} 的 rank 与分页位置不一致"
+            );
+        }
+    }
+    // 被隐藏的图不在 hide/ 视图里；不存在的图同样是空集
+    assert_eq!(
+        rank(runtime, &format!("images://gallery/hide/sort/{sort}"), "9"),
+        None
+    );
+    assert_eq!(
+        rank(runtime, &format!("images://gallery/sort/{sort}"), "99999"),
+        None
+    );
+}
+
+#[test]
+fn gallery_rank_locates_image_under_color_sort() {
+    let (conn, _) = color_fixture();
+    let runtime = build_runtime_with(conn);
+    assert_rank_matches_pages(&runtime, "by-color_0xff0000");
+    // 纯红的 50 号图在按红桶排序时是第一张
+    assert_eq!(
+        rank(&runtime, "images://gallery/sort/by-color_0xff0000", "50"),
+        Some(1)
+    );
+}
+
+#[test]
+fn color_buckets_root_lists_in_position_order() {
+    let conn = fixture_db();
+    let runtime = build_runtime_with(conn.clone());
+    let listed = |runtime: &ProviderRuntime| -> Vec<(i64, Option<String>, i64)> {
+        runtime
+            .fetch("color_buckets://")
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let object = row.as_object().unwrap();
+                // 行只有这三列
+                let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+                keys.sort();
+                assert_eq!(keys, ["key", "position", "rgb"], "{row}");
+                (
+                    row["rgb"].as_i64().unwrap(),
+                    row["key"].as_str().map(str::to_string),
+                    row["position"].as_i64().unwrap(),
+                )
+            })
+            .collect()
+    };
+
+    // 12 个基本色桶，按显示顺序
+    let builtin: Vec<(i64, Option<String>, i64)> = BUILTIN_COLOR_BUCKETS
+        .iter()
+        .enumerate()
+        .map(|(position, (key, rgb))| (i64::from(*rgb), Some(key.to_string()), position as i64))
+        .collect();
+    assert_eq!(builtin.len(), 12);
+    assert_eq!(listed(&runtime), builtin);
+    assert_eq!(runtime.count("color_buckets://").unwrap(), 12);
+
+    // 用户保存的排在后面、key 为 null；position 并列时按 rgb
+    {
+        let db = conn.lock().unwrap();
+        add_color_bucket_in(&db, 0x3a7bd5).unwrap();
+        add_color_bucket_in(&db, 0x000001).unwrap();
+    }
+    let mut expected = builtin.clone();
+    expected.push((0x3a7bd5, None, 12));
+    expected.push((0x000001, None, 13));
+    assert_eq!(listed(&runtime), expected);
+
+    conn.lock()
+        .unwrap()
+        .execute(
+            "UPDATE color_buckets SET position = 12 WHERE key IS NULL",
+            [],
+        )
+        .unwrap();
+    let mut expected = builtin;
+    expected.push((0x000001, None, 12));
+    expected.push((0x3a7bd5, None, 12));
+    assert_eq!(listed(&runtime), expected);
+}
+
+/// 画廊行分页（回表形态与宽入口）与裸 id 预览读出的行都带 `palette`：有色盘的是 JSON 文本，没有的是 null。
+#[test]
+fn gallery_rows_carry_palette() {
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn);
+    let check = |path: &str, expected_rows: usize| {
+        let rows = runtime
+            .fetch(path)
+            .unwrap_or_else(|err| panic!("{path}: {err}"));
+        assert_eq!(rows.len(), expected_rows, "{path}");
+        for row in rows {
+            let id = ids(vec![row.clone()])[0].parse::<i64>().unwrap();
+            let value = row
+                .get("palette")
+                .unwrap_or_else(|| panic!("{path}: 行里没有 palette: {row}"));
+            match palettes.get(&id) {
+                Some(palette) => {
+                    assert_eq!(value.as_str(), Some(palette.to_json().as_str()), "{path}");
+                    assert_eq!(
+                        Palette::from_json(value.as_str().unwrap()).as_ref(),
+                        Some(palette)
+                    );
+                }
+                None => assert!(value.is_null(), "{path}: {row}"),
+            }
+            // 行能照常反序列化成 ImageInfo，色盘原样带上
+            let info: ImageInfo = serde_json::from_value(row).unwrap();
+            assert_eq!(
+                info.palette,
+                palettes.get(&id).map(Palette::to_json),
+                "{path}"
+            );
+        }
+    };
+    // 默认排序的前 10 张里有 3、7、9 三张有色盘的
+    check(
+        "images://filter/all/_kb_x10x/1/~~/rank/~~p/lookup/gallery",
+        10,
+    );
+    check("images://gallery/all/_kb_x10x/1", 10);
+    // 按颜色排序的第一页全是有色盘的图
+    check(
+        "images://filter/sort/by-color_0xff0000/_kb_x5x/1/~~/rank/~~p/lookup/gallery",
+        5,
+    );
+    check(
+        "images://filter/sort/by-any-color_0x3a7bd5/_kb_x5x/1/~~/rank/~~p/lookup/gallery",
+        5,
+    );
+    // 裸 id 预览（深链接）与原始行分页
+    check("images://id_50", 1);
+    check("images://id_51", 1);
+    check("images://x10x/1", 10);
+    check("images://gallery/by_id/50", 1);
+}
+
+#[test]
+fn gallery_sort_by_arbitrary_color_orders_by_distance() {
+    const COLOR: u32 = 0x3a7bd5;
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn);
+    let expected = color_order(&palettes, 1..=122, COLOR);
+
+    // 不是色桶的颜色：按 distance_to 手算的顺序；总数不变，没有色盘的图在最后
+    assert!(!BUILTIN_COLOR_BUCKETS.iter().any(|(_, rgb)| *rgb == COLOR));
+    let sorted = fetch_ids(&runtime, "images://filter/sort/by-any-color_0x3a7bd5");
+    assert_eq!(sorted, expected);
+    assert_eq!(sorted.len(), 122);
+    assert_eq!(
+        runtime
+            .count("images://filter/sort/by-any-color_0x3a7bd5")
+            .unwrap(),
+        122
+    );
+    let without: Vec<String> = (1..=122_i64)
+        .filter(|id| !palettes.contains_key(id))
+        .map(|id| id.to_string())
+        .collect();
+    assert_eq!(sorted[palettes.len()..], without[..]);
+    // 三张单色图的相对顺序：蓝比红、橙都更接近这个蓝色
+    let position = |id: &str| sorted.iter().position(|item| item == id).unwrap();
+    let distance = |id: i64| distance_to(palettes.get(&id), COLOR);
+    assert!(distance(90) < distance(50) && distance(90) < distance(7));
+    assert!(position("90") < position("50") && position("90") < position("7"));
+    assert_eq!(position("30"), position("20") + 1);
+
+    assert_eq!(
+        fetch_ids(
+            &runtime,
+            "images://filter/sort/by-any-color_0x3a7bd5/_kb_desc"
+        ),
+        reversed(expected.clone())
+    );
+    let mut paged = Vec::new();
+    let mut looked_up = Vec::new();
+    for page in 1..=18 {
+        let tail = format!("sort/by-any-color_0x3a7bd5/_kb_x7x/{page}");
+        paged.extend(fetch_ids(&runtime, &format!("images://filter/{tail}")));
+        looked_up.extend(fetch_ids(
+            &runtime,
+            &format!("images://filter/{tail}/~~/rank/~~p/lookup/gallery"),
+        ));
+    }
+    assert_eq!(paged, expected);
+    assert_eq!(looked_up, expected);
+
+    // 只贡献排序、不连表，可以和任何过滤组合
+    assert_eq!(
+        fetch_ids(
+            &runtime,
+            &format!("images://filter/album/{ALBUM_A_ID}/sort/by-any-color_0x3a7bd5")
+        ),
+        color_order(&palettes, 1..=5, COLOR)
+    );
+    assert_eq!(
+        fetch_ids(&runtime, "images://filter/hide/sort/by-any-color_0x3a7bd5"),
+        color_order(&palettes, (1..=122).filter(|id| *id != 9), COLOR)
+    );
+}
+
+/// 同一个色桶颜色，现算段与预计算段排出的 id 序列完全相同（含并列组与没有色盘的图）。
+/// 防两件事：两条路算法漂移；入库 / 回填写错了关系行。前端在两个段之间切换时画面不跳也靠它。
+#[test]
+fn gallery_sort_computed_matches_precomputed() {
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn);
+    for (key, rgb) in BUILTIN_COLOR_BUCKETS {
+        for tail in [
+            "",
+            "/_kb_desc",
+            "/_kb_fc/media-type/image",
+            "/_kb_x50x/2",
+            "/_kb_x50x/2/~~/rank/~~p/lookup/gallery",
+        ] {
+            let precomputed = fetch_ids(
+                &runtime,
+                &format!("images://filter/sort/by-color_0x{rgb:06x}{tail}"),
+            );
+            let computed = fetch_ids(
+                &runtime,
+                &format!("images://filter/sort/by-any-color_0x{rgb:06x}{tail}"),
+            );
+            assert_eq!(computed, precomputed, "{key} {tail}");
+            assert!(!precomputed.is_empty(), "{key} {tail}");
+        }
+        for prefix in ["hide/", "search/display-name/image/"] {
+            assert_eq!(
+                fetch_ids(
+                    &runtime,
+                    &format!("images://filter/{prefix}sort/by-any-color_0x{rgb:06x}")
+                ),
+                fetch_ids(
+                    &runtime,
+                    &format!("images://filter/{prefix}sort/by-color_0x{rgb:06x}")
+                ),
+                "{key} {prefix}"
+            );
+        }
+    }
+    // 整条序列（红桶）：并列组与没有色盘的图都在，且等于参考顺序
+    let full = fetch_ids(&runtime, "images://filter/sort/by-any-color_0xff0000");
+    assert_eq!(full.len(), 122);
+    assert_eq!(full, color_order(&palettes, 1..=122, RED));
+    assert_eq!(
+        full,
+        fetch_ids(&runtime, "images://filter/sort/by-color_0xff0000")
+    );
+}
+
+#[test]
+fn gallery_sort_by_any_color_rejects_bad_hex() {
+    let runtime = build_runtime();
+    for path in [
+        "images://filter/sort/by-any-color_0xFF0000",
+        "images://filter/sort/by-any-color_0xff000",
+        "images://filter/sort/by-any-color_0xff00000",
+        "images://filter/sort/by-any-color_ff0000",
+        "images://filter/sort/by-any-color_0xgg0000",
+        "images://filter/sort/by-any-color_0x",
+        "images://filter/sort/by-any-color",
+        "images://gallery/sort/by-any-color_0xFF0000",
+    ] {
+        assert!(
+            matches!(runtime.resolve(path), Err(EngineError::PathNotFound(_))),
+            "{path}"
+        );
+    }
+    runtime
+        .resolve("images://filter/sort/by-any-color_0xff0000")
+        .unwrap();
+}
+
+#[test]
+fn gallery_rank_locates_image_under_computed_color_sort() {
+    let (conn, _) = color_fixture();
+    let runtime = build_runtime_with(conn);
+    assert_rank_matches_pages(&runtime, "by-any-color_0x3a7bd5");
+    assert_rank_matches_pages(&runtime, "by-any-color_0xff0000");
+    assert_eq!(
+        rank(
+            &runtime,
+            "images://gallery/sort/by-any-color_0xff0000",
+            "50"
+        ),
+        Some(1)
+    );
+}
+
+/// 一个颜色保存成色桶前后：现算段不变，保存后预计算段与它同序；删除后预计算段为空、现算段仍不变。
+#[test]
+fn color_bucket_save_and_delete_keep_sort_segments_consistent() {
+    const COLOR: u32 = 0x3a7bd5;
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn.clone());
+    let any = "images://filter/sort/by-any-color_0x3a7bd5";
+    let bucket = "images://filter/sort/by-color_0x3a7bd5";
+    let expected = color_order(&palettes, 1..=122, COLOR);
+
+    // 保存前：现算可用，色桶段为空
+    assert_eq!(fetch_ids(&runtime, any), expected);
+    assert!(fetch_ids(&runtime, bucket).is_empty());
+
+    let saved = add_color_bucket_in(&conn.lock().unwrap(), COLOR).unwrap();
+    assert_eq!((saved.rgb, saved.key.as_deref()), (COLOR, None));
+
+    // 保存后：两个段同序（含反序、分页回表形态），现算段与保存前相同
+    assert_eq!(fetch_ids(&runtime, any), expected);
+    assert_eq!(fetch_ids(&runtime, bucket), expected);
+    for tail in [
+        "/_kb_desc",
+        "/_kb_x40x/2",
+        "/_kb_x40x/3/~~/rank/~~p/lookup/gallery",
+    ] {
+        assert_eq!(
+            fetch_ids(&runtime, &format!("{bucket}{tail}")),
+            fetch_ids(&runtime, &format!("{any}{tail}")),
+            "{tail}"
+        );
+    }
+    assert_eq!(runtime.count(bucket).unwrap(), 122);
+    assert!(runtime
+        .fetch("color_buckets://")
+        .unwrap()
+        .iter()
+        .any(|row| row["rgb"] == COLOR && row["key"].is_null()));
+    // 基本色桶的关系行没被动过
+    assert_eq!(
+        fetch_ids(&runtime, "images://filter/sort/by-color_0xff0000"),
+        color_order(&palettes, 1..=122, RED)
+    );
+
+    delete_color_bucket_in(&conn.lock().unwrap(), COLOR).unwrap();
+
+    // 删除后：色桶段为空（仍能解析），现算段不变
+    assert!(fetch_ids(&runtime, bucket).is_empty());
+    assert_eq!(runtime.count(bucket).unwrap(), 0);
+    assert_eq!(fetch_ids(&runtime, any), expected);
+    assert_eq!(runtime.count("color_buckets://").unwrap(), 12);
+    assert_eq!(
+        fetch_ids(&runtime, "images://filter/sort/by-color_0xff0000"),
+        color_order(&palettes, 1..=122, RED)
+    );
+
+    // 再删一次、删基本色桶都被拒
+    let db = conn.lock().unwrap();
+    assert!(delete_color_bucket_in(&db, COLOR)
+        .unwrap_err()
+        .starts_with(ERR_NOT_FOUND));
+    assert!(delete_color_bucket_in(&db, RED)
+        .unwrap_err()
+        .starts_with(ERR_BUILTIN));
+}
+
+/// 看起来像数字的颜色（纯数字的黑 `000000`、棕 `804000`，带 `e` 的 `1e1000`）必须按文本绑定：
+/// 属性求值会把像数字的模板结果转成整数 / 浮点，丢掉前导零，所以两个段的属性带着 `0x` 前缀。
+#[test]
+fn color_sort_segments_bind_numeric_looking_hex_as_text() {
+    let (conn, palettes) = color_fixture();
+    let runtime = build_runtime_with(conn.clone());
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    for hex in [
+        "000000", "804000", "808080", "000123", "123456", "999999", "1e1000", "123e45", "00000e",
+    ] {
+        let rgb = u32::from_str_radix(hex, 16).unwrap();
+        let expected = color_order(&palettes, 1..=122, rgb);
+        let any = format!("images://filter/sort/by-any-color_0x{hex}");
+        let bucket = format!("images://filter/sort/by-color_0x{hex}");
+        for path in [&any, &bucket] {
+            let (_, params) = runtime
+                .resolve(path)
+                .unwrap()
+                .composed
+                .build_sql(&ctx, SqlDialect::Sqlite)
+                .unwrap();
+            assert!(
+                params.iter().any(
+                    |value| matches!(value, TemplateValue::Text(text) if *text == format!("0x{hex}"))
+                ),
+                "{path}: {params:?}"
+            );
+        }
+        assert_eq!(fetch_ids(&runtime, &any), expected, "{any}");
+
+        let builtin = BUILTIN_COLOR_BUCKETS.iter().any(|(_, value)| *value == rgb);
+        if !builtin {
+            assert!(fetch_ids(&runtime, &bucket).is_empty(), "{bucket}");
+            add_color_bucket_in(&conn.lock().unwrap(), rgb).unwrap();
+        }
+        assert_eq!(fetch_ids(&runtime, &bucket), expected, "{bucket}");
+        if !builtin {
+            delete_color_bucket_in(&conn.lock().unwrap(), rgb).unwrap();
+            assert!(fetch_ids(&runtime, &bucket).is_empty(), "{bucket}");
+        }
+    }
+}
+
+/// 执行计划夹具：e2e 库 + 按真实 schema 建的索引 + 4000 张图，每张图 × 每个色桶一行（距离铺开，
+/// 五分之一的图没有色盘），已 `ANALYZE`（主程序每次启动都会跑）。
+fn color_plan_fixture() -> Arc<Mutex<Connection>> {
+    let conn = fixture_db();
+    {
+        let db = conn.lock().unwrap();
+        // images 上的索引照真实 schema 建（`migrations/init.rs`），规划器看到的备选与线上一致
+        db.execute_batch(
+            "CREATE INDEX idx_images_type ON images(type);
+             CREATE INDEX idx_crawled_at ON images(crawled_at DESC);
+             CREATE INDEX idx_plugin_id ON images(plugin_id);
+             CREATE INDEX idx_task_id ON images(task_id);
+             CREATE INDEX idx_images_surf_record_id ON images(surf_record_id);
+             CREATE INDEX idx_images_hash ON images(hash);
+             CREATE UNIQUE INDEX idx_images_local_path ON images(local_path);
+             CREATE INDEX idx_images_thumbnail_path ON images(thumbnail_path);
+             CREATE INDEX idx_images_last_set_wallpaper_at ON images(last_set_wallpaper_at DESC);
+             CREATE INDEX idx_images_aspect_ratio ON images(aspect_ratio);
+             CREATE INDEX idx_images_metadata_id ON images(metadata_id);
+             CREATE INDEX idx_album_images_album_order ON album_images(album_id, \"order\");
+             CREATE INDEX idx_album_images_image ON album_images(image_id);
+             WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 4000)
+             INSERT INTO images(id, local_path, plugin_id, crawled_at, type, width, height)
+             SELECT 100000 + n, '/plan/' || n, 'plan', 2000000000 + n,
+                    CASE WHEN n % 200 = 0 THEN 'video/mp4' WHEN n % 500 = 1 THEN 'x-wpe/web' WHEN n % 4 = 0 THEN 'image/webp' ELSE 'image/jpg' END,
+                    CASE WHEN n % 2 = 0 THEN 1600 ELSE 900 END,
+                    CASE WHEN n % 2 = 0 THEN 1000 ELSE 1600 END
+             FROM seq;",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO image_color_distances (image_id, bucket_rgb, distance)
+             SELECT i.id, b.rgb,
+                    CASE WHEN i.id % 5 = 0 THEN ?1 ELSE (i.id * 37 + b.rgb) % ?1 END
+               FROM images AS i CROSS JOIN color_buckets AS b
+              ORDER BY i.id, b.rgb",
+            [i64::from(NO_PALETTE_DISTANCE)],
+        )
+        .unwrap();
+        db.execute_batch("ANALYZE;").unwrap();
+    }
+    conn
+}
+
+/// `path` 折叠出的 SQL 的 `EXPLAIN QUERY PLAN`（detail 列）；同时打印 SQL 与计划，`--nocapture` 可见。
+fn explain_query_plan(
+    runtime: &ProviderRuntime,
+    conn: &Arc<Mutex<Connection>>,
+    path: &str,
+) -> Vec<String> {
+    let resolved = runtime
+        .resolve(path)
+        .unwrap_or_else(|err| panic!("{path}: {err}"));
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    let (sql, params) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    let db = conn.lock().unwrap();
+    let mut stmt = db.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    let plan: Vec<String> = stmt
+        .query_map(
+            rusqlite::params_from_iter(local_params_for(&params)),
+            |row| row.get(3),
+        )
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    println!("EXPLAIN QUERY PLAN {path}\n  SQL: {sql}");
+    for line in &plan {
+        println!("  | {line}");
+    }
+    plan
+}
+
+/// 画廊默认开着「隐藏」，实际发出的行分页路径带 `hide/` 前缀
+/// （`[hide/]<查询体>[/_kb_fc]/sort/<字段>[/_kb_desc]/_kb_x<N>x/<页>`，取数时把 `gallery/` 换成 `filter/`）。
+/// hide 贡献一条相关 `NOT EXISTS`（按 `album_images` 主键探测）：按色桶排序仍由关系表驱动、沿索引读到一页就停，
+/// 没有任何临时排序，隐藏成员只是在沿索引读的过程中被逐行探测掉。
+#[test]
+fn gallery_sort_by_color_plan_under_hide_uses_bucket_index() {
+    let conn = color_plan_fixture();
+    {
+        let db = conn.lock().unwrap();
+        // 隐藏画册行与隐藏成员：每 40 张隐藏一张（100 张），再把按红桶排序最靠前的 5 张也隐藏，
+        // 第一页必须真的跳过它们（夹具本来只有 9 号一张隐藏图）。
+        db.execute(
+            "INSERT OR IGNORE INTO albums(id, name, created_at, parent_id, ancestor_path)
+             VALUES (?1, 'hidden', 0, NULL, '/' || ?1 || '/')",
+            [HIDDEN_ALBUM_ID],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT OR IGNORE INTO album_images(album_id, image_id, \"order\")
+             SELECT ?1, id, id FROM images WHERE id > 100000 AND id % 40 = 0",
+            [HIDDEN_ALBUM_ID],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT OR IGNORE INTO album_images(album_id, image_id, \"order\")
+             SELECT ?1, image_id, image_id FROM image_color_distances
+              WHERE bucket_rgb = ?2 ORDER BY distance, image_id LIMIT 5",
+            (HIDDEN_ALBUM_ID, RED),
+        )
+        .unwrap();
+        db.execute_batch("ANALYZE;").unwrap();
+    }
+    let hidden: HashSet<String> = {
+        let db = conn.lock().unwrap();
+        let mut stmt = db
+            .prepare("SELECT CAST(image_id AS TEXT) FROM album_images WHERE album_id = ?1")
+            .unwrap();
+        let rows = stmt
+            .query_map([HIDDEN_ALBUM_ID], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
+    };
+    assert!(hidden.len() > 100, "{}", hidden.len());
+
+    let runtime = build_runtime_with(conn.clone());
+    for path in [
+        "images://filter/hide/sort/by-color_0xff0000/_kb_x100x/1",
+        "images://filter/hide/sort/by-color_0xff0000/_kb_desc/_kb_x100x/1",
+        "images://filter/hide/sort/by-color_0xff0000/_kb_x100x/3",
+        "images://filter/hide/media-type/image/_kb_fc/sort/by-color_0xff0000/_kb_x100x/1",
+    ] {
+        let plan = explain_query_plan(&runtime, &conn, path);
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("idx_image_color_distances_bucket")),
+            "{path}: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+            "{path}: {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("SEARCH images USING INTEGER PRIMARY KEY")),
+            "{path}: {plan:?}"
+        );
+        // 隐藏判定是按主键的逐行探测，不是扫成员表
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("SEARCH hid_ex")
+                    && line.contains("album_id=? AND image_id=?")),
+            "{path}: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.contains("SCAN hid_ex")),
+            "{path}: {plan:?}"
+        );
+    }
+
+    // 结果：按 (distance, image_id) 去掉隐藏成员后的前 100 行；被隐藏的最靠前 5 张不在里面
+    let reference = |limit: usize| -> Vec<String> {
+        let db = conn.lock().unwrap();
+        let mut stmt = db
+            .prepare(
+                "SELECT CAST(cd.image_id AS TEXT) FROM image_color_distances AS cd
+                  WHERE cd.bucket_rgb = ?1
+                    AND cd.image_id NOT IN (SELECT image_id FROM album_images WHERE album_id = ?2)
+                  ORDER BY cd.distance, cd.image_id LIMIT ?3",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map((RED, HIDDEN_ALBUM_ID, limit as i64), |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
+    };
+    let first_page = fetch_ids(
+        &runtime,
+        "images://filter/hide/sort/by-color_0xff0000/_kb_x100x/1",
+    );
+    assert_eq!(first_page.len(), 100);
+    assert_eq!(first_page, reference(100));
+    assert!(first_page.iter().all(|id| !hidden.contains(id)));
+    let unfiltered = fetch_ids(
+        &runtime,
+        "images://filter/sort/by-color_0xff0000/_kb_x100x/1",
+    );
+    assert!(unfiltered[..5].iter().all(|id| hidden.contains(id)));
+    assert_ne!(first_page, unfiltered);
+    // 第 3 页接在前两页之后
+    assert_eq!(
+        fetch_ids(
+            &runtime,
+            "images://filter/hide/sort/by-color_0xff0000/_kb_x100x/3"
+        ),
+        reference(300)[200..]
+    );
+    // 总数 = 全部图片 − 隐藏成员
+    let total = runtime.count("images://filter/all").unwrap();
+    assert_eq!(
+        runtime
+            .count("images://filter/hide/sort/by-color_0xff0000")
+            .unwrap(),
+        total - hidden.len()
+    );
 }

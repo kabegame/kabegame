@@ -38,7 +38,8 @@
   "backfillWaiting": "待機中",
   "backfillFailed": "データベースのバックグラウンド更新に失敗しました（{name}）。次回起動時に再開します",
   "backfill": {
-    "wpe_dir_hash": "Wallpaper Engine 壁紙のコンテンツ指紋を再計算"
+    "wpe_dir_hash": "Wallpaper Engine 壁紙のコンテンツ指紋を再計算",
+    "image_palette": "壁紙の代表色を計算"
   },
   "viewLogs": "ログを表示",
   "logs": {

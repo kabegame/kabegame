@@ -23,6 +23,7 @@
           :fill-when-expanded="!stacked"
           @open-task="emit('open-task', $event)"
           @open-gallery-filter="emit('open-gallery-filter', $event)"
+          @open-color-sort="emit('open-color-sort', $event)"
           @open-surf-record="emit('open-surf-record', $event)"
         />
       </div>
@@ -88,6 +89,7 @@ interface Props {
 interface Emits {
   (e: "open-task", taskId: string): void;
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
+  (e: "open-color-sort", hex: string): void;
   (e: "open-surf-record", target: ImageDetailSurfRecordTarget): void;
   (e: "close"): void;
 }

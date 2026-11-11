@@ -1,3 +1,4 @@
+use crate::media::palette::{distance_to, Palette};
 use crate::storage::metadata_search_text::{
     native_search_text_from_json_str, search_terms_from_json_str,
 };
@@ -104,6 +105,41 @@ pub struct ImageInfo {
     pub compatible_path: Option<String>,
     #[serde(rename(serialize = "postUrl"), alias = "postUrl", default)]
     pub post_url: Option<String>,
+    /// 色盘：`[[rgb, 百分比], …]` 的 JSON 文本（`images.palette` 列里的原样）；没有色盘为 None。
+    /// 入库时由调用方算好放进来，[`Storage::add_image`] 据此写列与对全部色桶的距离。
+    #[serde(default)]
+    pub palette: Option<String>,
+}
+
+/// 写（或重写）一张图对当前全部色桶的距离，入库与回填共用。
+///
+/// `palette` 为 `None` 时每个色桶都写 65536（没有色盘）。调用方负责事务：色桶列表在这里现读，
+/// 必须与图片行（或 `palette` 列）的写入在同一个事务里，才不会和保存色桶互相漏行。
+pub(crate) fn write_color_distances(
+    conn: &rusqlite::Connection,
+    image_id: i64,
+    palette: Option<&Palette>,
+) -> Result<(), String> {
+    let buckets: Vec<i64> = conn
+        .prepare_cached("SELECT rgb FROM color_buckets")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("Failed to list color buckets: {e}"))?;
+    let mut insert = conn
+        .prepare_cached(
+            "INSERT OR REPLACE INTO image_color_distances (image_id, bucket_rgb, distance)
+             VALUES (?1, ?2, ?3)",
+        )
+        .map_err(|e| format!("Failed to prepare color distance write: {e}"))?;
+    for rgb in buckets {
+        let distance = distance_to(palette, rgb as u32);
+        insert
+            .execute(params![image_id, rgb, i64::from(distance)])
+            .map_err(|e| format!("Failed to write color distance of image {image_id}: {e}"))?;
+    }
+    Ok(())
 }
 
 fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -969,6 +1005,8 @@ impl Storage {
             .map_err(|e| format!("read list_album_image_ids_for_sync: {e}"))
     }
 
+    /// 写入一张图片行。同一个事务里写图片行（含 `palette` 列）与它对当前全部色桶的距离，
+    /// 维持关系表「每张图对每个色桶恒有一行」的不变量；`image.palette` 解析不了时当作没有色盘。
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -986,10 +1024,19 @@ impl Storage {
             image.thumbnail_path.clone()
         };
 
+        // 只认能解析的色盘，写回规范形态；解析不了的当作没有
+        let palette = image.palette.as_deref().and_then(Palette::from_json);
+        image.palette = palette.as_ref().map(Palette::to_json);
+
+        // 图片行与距离行同一个事务：色桶列表在事务里现读，与保存色桶的事务互斥（同一把 `self.db` 锁）
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
         let crawled_at_i64 = image.crawled_at as i64;
-        conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size, compatible_path, post_url)
-             VALUES (?1, ?2, ?3, (SELECT id FROM tasks WHERE id = ?4), ?5, ?6, (SELECT id FROM metadata WHERE id = ?7), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        tx.execute(
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size, compatible_path, post_url, palette)
+             VALUES (?1, ?2, ?3, (SELECT id FROM tasks WHERE id = ?4), ?5, ?6, (SELECT id FROM metadata WHERE id = ?7), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 &image.url,
                 image.local_path,
@@ -1007,22 +1054,28 @@ impl Storage {
                 image.size.map(|v| v as i64),
                 image.compatible_path,
                 image.post_url,
+                image.palette,
             ],
         )
         .map_err(|e| format!("Failed to add image: {}", e))?;
 
-        let id = conn.last_insert_rowid();
-        image.id = id.to_string();
-        image.thumbnail_path = thumbnail_path;
+        let id = tx.last_insert_rowid();
+        write_color_distances(&tx, id, palette.as_ref())?;
 
         if let Some(ref tid) = image.task_id {
             if !tid.trim().is_empty() {
-                let _ = conn.execute(
+                let _ = tx.execute(
                     "UPDATE tasks SET success_count = success_count + 1 WHERE id = ?1",
                     params![tid],
                 );
             }
         }
+
+        tx.commit()
+            .map_err(|e| format!("Failed to commit image: {}", e))?;
+
+        image.id = id.to_string();
+        image.thumbnail_path = thumbnail_path;
 
         self.invalidate_images_total_cache();
 
@@ -1158,6 +1211,11 @@ impl Storage {
             }
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
+            // 与成员行同样处理：显式删除，外键 ON DELETE CASCADE 只是兜底
+            let _ = tx.execute(
+                "DELETE FROM image_color_distances WHERE image_id = ?1",
+                params![id],
+            );
         }
 
         // 更新所有相关任务的 deleted_count 与 success_count
@@ -1269,6 +1327,11 @@ impl Storage {
             }
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
+            // 与成员行同样处理：显式删除，外键 ON DELETE CASCADE 只是兜底
+            let _ = tx.execute(
+                "DELETE FROM image_color_distances WHERE image_id = ?1",
+                params![id],
+            );
         }
 
         // 更新所有相关任务的 deleted_count 与 success_count
@@ -2183,5 +2246,254 @@ mod wpe_web_rows_tests {
             !plan.iter().any(|line| line.starts_with("SCAN images")),
             "{plan:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+    use crate::media::palette::{PaletteColor, NO_PALETTE_DISTANCE};
+    use crate::storage::migrations::BUILTIN_COLOR_BUCKETS;
+
+    /// 完整 schema 的内存库（含 12 个基本色桶）。
+    fn storage(foreign_keys: bool) -> Storage {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", foreign_keys)
+            .unwrap();
+        crate::storage::migrations::init::create_all_tables(&conn);
+        Storage::from_test_connection(conn)
+    }
+
+    fn image(local_path: &str, palette: Option<&str>) -> ImageInfo {
+        ImageInfo {
+            id: String::new(),
+            url: None,
+            local_path: local_path.to_string(),
+            plugin_id: Some("test".to_string()),
+            task_id: None,
+            surf_record_id: None,
+            crawled_at: 1,
+            metadata_id: None,
+            image_metadata_id: None,
+            thumbnail_path: String::new(),
+            favorite: false,
+            is_hidden: false,
+            local_exists: true,
+            hash: String::new(),
+            width: None,
+            height: None,
+            display_name: "row".to_string(),
+            media_type: Some("image/png".to_string()),
+            last_set_wallpaper_at: None,
+            size: None,
+            album_order: None,
+            compatible_path: None,
+            post_url: None,
+            palette: palette.map(str::to_string),
+        }
+    }
+
+    fn palette_column(storage: &Storage, id: &str) -> Option<String> {
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT palette FROM images WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    fn distances(storage: &Storage, id: &str) -> Vec<(i64, i64)> {
+        let conn = storage.db.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT bucket_rgb, distance FROM image_color_distances
+                  WHERE image_id = ?1 ORDER BY bucket_rgb",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        rows
+    }
+
+    fn expected(palette: Option<&Palette>) -> Vec<(i64, i64)> {
+        let mut rows: Vec<(i64, i64)> = BUILTIN_COLOR_BUCKETS
+            .iter()
+            .map(|(_, rgb)| (i64::from(*rgb), i64::from(distance_to(palette, *rgb))))
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    fn distance_rows(storage: &Storage) -> i64 {
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM image_color_distances", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn add_image_writes_palette_column_and_a_distance_per_bucket() {
+        let storage = storage(true);
+        let palette = Palette(vec![
+            PaletteColor {
+                rgb: 0xff0000,
+                percent: 70,
+            },
+            PaletteColor {
+                rgb: 0xffffff,
+                percent: 30,
+            },
+        ]);
+        let json = palette.to_json();
+
+        let inserted = storage
+            .add_image(image("/lib/red.png", Some(&json)))
+            .unwrap();
+
+        // 返回值、列里是同一份色盘
+        assert_eq!(inserted.palette.as_deref(), Some(json.as_str()));
+        assert_eq!(palette_column(&storage, &inserted.id), Some(json));
+        // 每个色桶一行，值就是 distance_to 的结果
+        let rows = distances(&storage, &inserted.id);
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows, expected(Some(&palette)));
+        assert!(rows.iter().all(|(_, distance)| *distance <= 65535));
+        let to = |bucket: i64| rows.iter().find(|(rgb, _)| *rgb == bucket).unwrap().1;
+        assert!(to(0xff0000) < to(0x0000ff), "偏红的图到红桶比到蓝桶近");
+        // 发给前端的行带着色盘
+        assert_eq!(
+            serde_json::to_value(&inserted).unwrap()["palette"],
+            serde_json::Value::String(inserted.palette.clone().unwrap())
+        );
+    }
+
+    #[test]
+    fn add_image_without_palette_writes_the_sentinel_for_every_bucket() {
+        let storage = storage(true);
+        let inserted = storage.add_image(image("/lib/none.png", None)).unwrap();
+
+        assert_eq!(inserted.palette, None);
+        assert_eq!(palette_column(&storage, &inserted.id), None);
+        let rows = distances(&storage, &inserted.id);
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows, expected(None));
+        assert!(rows
+            .iter()
+            .all(|(_, distance)| *distance == i64::from(NO_PALETTE_DISTANCE)));
+    }
+
+    #[test]
+    fn add_image_treats_unparsable_palette_as_none() {
+        let storage = storage(true);
+        for (index, bad) in ["not json", "[]", "[[16777216,50]]", "[[255,0]]", "{}"]
+            .into_iter()
+            .enumerate()
+        {
+            let inserted = storage
+                .add_image(image(&format!("/lib/bad-{index}.png"), Some(bad)))
+                .unwrap();
+            assert_eq!(inserted.palette, None, "{bad}");
+            assert_eq!(palette_column(&storage, &inserted.id), None, "{bad}");
+            assert_eq!(distances(&storage, &inserted.id), expected(None), "{bad}");
+        }
+    }
+
+    /// 入库时色桶表里有用户存的色桶：新图对它同样有一行。
+    #[test]
+    fn add_image_covers_user_buckets_present_at_insert_time() {
+        let storage = storage(true);
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO color_buckets (rgb, key, position) VALUES (?1, NULL, 12)",
+                [0x32fe98],
+            )
+            .unwrap();
+        let palette = Palette::single([0x32, 0xfe, 0x98]);
+        let inserted = storage
+            .add_image(image("/lib/custom.png", Some(&palette.to_json())))
+            .unwrap();
+        let rows = distances(&storage, &inserted.id);
+        assert_eq!(rows.len(), 13);
+        assert!(rows.contains(&(0x32fe98, 0)));
+    }
+
+    /// 图片行与距离行同一个事务：图片行写不进去（local_path 唯一约束）时不留下任何关系行。
+    #[test]
+    fn add_image_failure_leaves_no_distance_rows() {
+        let storage = storage(true);
+        storage.add_image(image("/lib/dup.png", None)).unwrap();
+        assert!(storage.add_image(image("/lib/dup.png", None)).is_err());
+        assert_eq!(distance_rows(&storage), 12);
+    }
+
+    #[test]
+    fn serde_roundtrip_defaults_missing_palette_to_none() {
+        // 自己拼 SELECT 的查询行没有这一列
+        let row: ImageInfo = serde_json::from_value(serde_json::json!({
+            "id": 1, "url": null, "local_path": "/lib/a.png", "task_id": null, "crawled_at": 1
+        }))
+        .unwrap();
+        assert_eq!(row.palette, None);
+        // 列表字段带着它
+        let row: ImageInfo = serde_json::from_value(serde_json::json!({
+            "id": 1, "url": null, "local_path": "/lib/a.png", "task_id": null, "crawled_at": 1,
+            "palette": "[[255,100]]"
+        }))
+        .unwrap();
+        assert_eq!(row.palette.as_deref(), Some("[[255,100]]"));
+    }
+
+    /// 两个删图入口都清关系行。外键关着时也清得掉，说明是显式删除而不只靠级联。
+    #[test]
+    fn both_delete_entries_clear_distance_rows() {
+        for foreign_keys in [true, false] {
+            let storage = storage(foreign_keys);
+            let palette = Palette::single([255, 0, 0]).to_json();
+            let ids: Vec<String> = (0..3)
+                .map(|index| {
+                    storage
+                        .add_image(image(&format!("/lib/{index}.png"), Some(&palette)))
+                        .unwrap()
+                        .id
+                })
+                .collect();
+            assert_eq!(distance_rows(&storage), 36);
+
+            storage.batch_delete_images(&ids[..1]).unwrap();
+            assert!(distances(&storage, &ids[0]).is_empty());
+            assert_eq!(distance_rows(&storage), 24, "foreign_keys = {foreign_keys}");
+
+            storage.batch_remove_images(&ids[1..2]).unwrap();
+            assert!(distances(&storage, &ids[1]).is_empty());
+            assert_eq!(distance_rows(&storage), 12, "foreign_keys = {foreign_keys}");
+            assert_eq!(distances(&storage, &ids[2]).len(), 12);
+        }
+    }
+
+    #[test]
+    fn write_color_distances_rewrites_existing_rows() {
+        let storage = storage(true);
+        let inserted = storage.add_image(image("/lib/late.png", None)).unwrap();
+        let id: i64 = inserted.id.parse().unwrap();
+        let palette = Palette::single([0, 0, 255]);
+        {
+            let conn = storage.db.lock().unwrap();
+            write_color_distances(&conn, id, Some(&palette)).unwrap();
+        }
+        let rows = distances(&storage, &inserted.id);
+        assert_eq!(rows.len(), 12, "改写不多出行");
+        assert_eq!(rows, expected(Some(&palette)));
     }
 }

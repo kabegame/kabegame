@@ -96,6 +96,13 @@ Other read schemes:
     next page, put before_{startTime}_{id}/ (taken from the last row) ahead of x20x/1.
   surf_records://all                     all SurfRecords (Vec<SurfRecord>)
   surf_records://id_{id}                 one SurfRecord
+  color_buckets://                       all color buckets, in display order: rgb (integer
+                                         0xRRGGBB), hex (6 lowercase hex digits), key (built-in
+                                         name such as red; null for user-saved), position
+    Sort a gallery view by color with gallery/sort/by-color_0x<hex>/… when the color is listed
+    here (precomputed, fast). For any other color use gallery/sort/by-any-color_0x<rrggbb>/…
+    (computed per row, slower). Both put the closest images first and images without a palette
+    last; a color that is not a bucket gives an empty result under by-color.
   plugin://                              all installed Plugins, trimmed
   plugin://byStore/{sourceId}/{pluginId}/{version}/…  cached store package, same sub-resources
   plugin://byPreview/{token}/{pluginId}/{version}/…   preview package, resolve only (not listed)
@@ -120,7 +127,9 @@ ImageInfo fields (camelCase):
   id, url, localPath, pluginId, taskId, surfRecordId, crawledAt (Unix seconds),
   metadataId, pluginVersion, thumbnailPath, favorite, isHidden, localExists, hash,
   width, height, displayName, type, lastSetWallpaperAt, size, albumOrder,
-  compatiblePath, postUrl.
+  compatiblePath, postUrl, palette.
+palette is JSON text `[[rgb,percent],…]` with up to 5 representative colors (rgb is an integer
+0xRRGGBB), or null when the image has none.
 type is a stored media format such as "image/jpg" or "video/mp4"; the key is `type`, not
 `mediaType`. Use images://id_{id}/metadata for crawl-time JSON metadata.
 favorite, isHidden, and albumOrder are computed only on images://gallery/... paths.
@@ -361,6 +370,25 @@ fn metadata_rows_to_value(rows: Vec<Value>, uri: &str) -> Result<Value, McpError
     }
 }
 
+/// 色桶行（`rgb` / `key` / `position`）补一个 `hex`：排序段 `by-color_0x<hex>` 要的是六位小写十六进制，
+/// 调用方不必自己把整数换算过去。`rgb` 不是 24 位整数的行原样返回。
+fn color_bucket_rows_to_value(rows: Vec<Value>) -> Value {
+    Value::Array(
+        rows.into_iter()
+            .map(|mut row| {
+                let rgb = row
+                    .get("rgb")
+                    .and_then(Value::as_u64)
+                    .filter(|rgb| *rgb <= 0x00ff_ffff);
+                if let (Some(rgb), Some(object)) = (rgb, row.as_object_mut()) {
+                    object.insert("hex".to_string(), json!(format!("{rgb:06x}")));
+                }
+                row
+            })
+            .collect(),
+    )
+}
+
 fn json_value_resource(
     value: Value,
     uri: impl Into<String>,
@@ -442,6 +470,14 @@ impl ServerHandler for KabegameMcpServer {
                     .with_mime_type("application/json"),
             ),
             (
+                "color_buckets://",
+                Resource::new("color_buckets://", "Color buckets")
+                    .with_description(
+                        "Colors with precomputed distances, for gallery/sort/by-color_0x<hex>",
+                    )
+                    .with_mime_type("application/json"),
+            ),
+            (
                 "plugin://",
                 Resource::new("plugin://", "All plugins (trimmed)")
                     .with_description(
@@ -515,6 +551,10 @@ impl ServerHandler for KabegameMcpServer {
                     rows_to_value::<SurfRecord>(rows, is_single, &request.uri)?,
                     request.uri,
                 )
+            }
+            "color_buckets" => {
+                let rows = fetch_resource_rows(&runtime_uri).await?;
+                json_value_resource(color_bucket_rows_to_value(rows), request.uri)
             }
             "plugin" => {
                 let rows = fetch_resource_rows(&runtime_uri).await?;
@@ -1246,8 +1286,52 @@ mod tests {
     use kabegame_core::providers::child_runtime_path;
 
     use super::{
-        is_paginated_image_path, normalize_mcp_uri_path, resource_scheme, resource_segments,
+        color_bucket_rows_to_value, is_paginated_image_path, is_uri_capability_enabled,
+        normalize_mcp_uri_path, resource_scheme, resource_segments,
     };
+
+    #[test]
+    fn color_buckets_resource_is_gated_by_its_read_capability() {
+        let uri = normalize_mcp_uri_path("color_buckets://");
+        assert_eq!(resource_scheme(&uri).unwrap(), "color_buckets");
+        assert!(resource_segments(&uri).is_empty());
+        assert!(is_uri_capability_enabled(&uri, &[]));
+        // 别的分类全关不影响它；关掉自己的读能力就读不到
+        assert!(is_uri_capability_enabled(
+            &uri,
+            &["surf_records.read.list".to_string()]
+        ));
+        assert!(!is_uri_capability_enabled(
+            &uri,
+            &["color_buckets.read.list".to_string()]
+        ));
+        // 没有登记的 scheme 一律不可读
+        assert!(!is_uri_capability_enabled("run_configs://", &[]));
+    }
+
+    #[test]
+    fn color_bucket_rows_gain_a_six_digit_hex() {
+        let rows = vec![
+            serde_json::json!({ "rgb": 0xff0000, "key": "red", "position": 0 }),
+            serde_json::json!({ "rgb": 0, "key": "black", "position": 9 }),
+            serde_json::json!({ "rgb": 0x00012c, "key": null, "position": 12 }),
+            // 不是 24 位整数的行不补
+            serde_json::json!({ "rgb": 0x0100_0000, "key": null, "position": 13 }),
+            serde_json::json!({ "rgb": "x", "key": null, "position": 14 }),
+        ];
+        let value = color_bucket_rows_to_value(rows);
+        let rows = value.as_array().unwrap();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(
+            rows[0],
+            serde_json::json!({ "rgb": 0xff0000, "hex": "ff0000", "key": "red", "position": 0 })
+        );
+        assert_eq!(rows[1]["hex"], "000000");
+        assert_eq!(rows[2]["hex"], "00012c");
+        assert!(rows[2]["key"].is_null());
+        assert!(rows[3].get("hex").is_none());
+        assert!(rows[4].get("hex").is_none());
+    }
 
     #[test]
     fn pagination_requires_global_gallery_pair_or_raw_root_pair() {

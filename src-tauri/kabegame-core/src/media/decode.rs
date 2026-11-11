@@ -165,6 +165,11 @@ pub(crate) fn largest_video_stream_index(fmt: &AVFormatContextInput) -> Option<u
 }
 
 fn frame_to_rgb(frame: &AVFrame) -> Result<RgbImage, String> {
+    frame_to_rgb_within(frame, None)
+}
+
+/// 同 [`frame_to_rgb`]；给了 `max_edge` 且帧的最长边超过它时，按面积平均等比缩到最长边等于它。
+fn frame_to_rgb_within(frame: &AVFrame, max_edge: Option<u32>) -> Result<RgbImage, String> {
     let width = frame.width;
     let height = frame.height;
     if width <= 0 || height <= 0 {
@@ -172,20 +177,35 @@ fn frame_to_rgb(frame: &AVFrame) -> Result<RgbImage, String> {
             "decoded frame has invalid dimensions: {width}x{height}"
         ));
     }
-    let width_u32 = width as u32;
-    let height_u32 = height as u32;
+    let longest = width.max(height) as u32;
+    let (width_u32, height_u32, flags) = match max_edge {
+        Some(max_edge) if max_edge > 0 && longest > max_edge => {
+            let scale = |edge: i32| {
+                ((u64::from(edge as u32) * u64::from(max_edge) + u64::from(longest) / 2)
+                    / u64::from(longest))
+                .max(1) as u32
+            };
+            (scale(width), scale(height), ffi::SWS_AREA)
+        }
+        _ => (width as u32, height as u32, ffi::SWS_BILINEAR),
+    };
     let buffer_len = checked_image_len(width_u32, height_u32)?;
-    let image = AVImage::new(ffi::AV_PIX_FMT_RGB24, width, height, 1)
-        .ok_or_else(|| format!("failed to allocate RGB frame: {width}x{height}"))?;
+    let image = AVImage::new(
+        ffi::AV_PIX_FMT_RGB24,
+        width_u32 as i32,
+        height_u32 as i32,
+        1,
+    )
+    .ok_or_else(|| format!("failed to allocate RGB frame: {width_u32}x{height_u32}"))?;
     let mut rgb_frame = AVFrameWithImage::new(image);
     let mut sws = SwsContext::get_context(
         width,
         height,
         frame.format,
-        width,
-        height,
+        width_u32 as i32,
+        height_u32 as i32,
         ffi::AV_PIX_FMT_RGB24,
-        ffi::SWS_BILINEAR,
+        flags,
         None,
         None,
         None,
@@ -215,28 +235,35 @@ fn receive_first_frame(decoder: &mut AVCodecContext) -> Result<Option<RgbImage>,
     }
 }
 
+fn open_stream_decoder(
+    fmt: &AVFormatContextInput,
+    stream_index: usize,
+) -> Result<AVCodecContext, String> {
+    let stream = fmt
+        .streams()
+        .get(stream_index)
+        .ok_or_else(|| format!("image stream index out of bounds: {stream_index}"))?;
+    let codecpar = stream.codecpar();
+    let decoder = AVCodec::find_decoder(codecpar.codec_id)
+        .ok_or_else(|| format!("no decoder for image stream {stream_index}"))?;
+    let mut context = AVCodecContext::new(&decoder);
+    context
+        .apply_codecpar(&codecpar)
+        .map_err(|e| format!("failed to apply image codec parameters: {e:?}"))?;
+    context.set_pkt_timebase(stream.time_base);
+    context
+        .open(None)
+        .map_err(|e| format!("failed to open image decoder: {e:?}"))?;
+    Ok(context)
+}
+
 fn decode_streams(
     fmt: &mut AVFormatContextInput,
     stream_indices: &HashSet<usize>,
 ) -> Result<HashMap<usize, RgbImage>, String> {
     let mut decoders = HashMap::with_capacity(stream_indices.len());
     for &stream_index in stream_indices {
-        let stream = fmt
-            .streams()
-            .get(stream_index)
-            .ok_or_else(|| format!("image stream index out of bounds: {stream_index}"))?;
-        let codecpar = stream.codecpar();
-        let decoder = AVCodec::find_decoder(codecpar.codec_id)
-            .ok_or_else(|| format!("no decoder for image stream {stream_index}"))?;
-        let mut context = AVCodecContext::new(&decoder);
-        context
-            .apply_codecpar(&codecpar)
-            .map_err(|e| format!("failed to apply image codec parameters: {e:?}"))?;
-        context.set_pkt_timebase(stream.time_base);
-        context
-            .open(None)
-            .map_err(|e| format!("failed to open image decoder: {e:?}"))?;
-        decoders.insert(stream_index, context);
+        decoders.insert(stream_index, open_stream_decoder(fmt, stream_index)?);
     }
 
     let mut decoded = HashMap::with_capacity(stream_indices.len());
@@ -363,4 +390,314 @@ pub fn decode_image_via_ffmpeg_bytes(bytes: &[u8]) -> Result<RgbImage, String> {
     let result = decode_image_via_ffmpeg(&temp_path);
     let _ = std::fs::remove_file(&temp_path);
     result
+}
+
+/// 抽帧结果的最长边上限。抽帧只用来取色，不需要原尺寸：4K 视频 8 帧的原尺寸 RGB 约 200 MB，
+/// 缩到色盘采样的边长以内后每帧不到 1 MB。
+const SAMPLED_FRAME_MAX_EDGE: u32 = crate::media::palette::SAMPLE_SIZE;
+
+/// 一个时间点上为了等到一帧最多读多少个包（含音频等其它流的包）。
+const SAMPLE_MAX_PACKETS_PER_POINT: usize = 2048;
+
+fn open_video_input(path: &Path) -> Result<(AVFormatContextInput, usize, AVCodecContext), String> {
+    let path_c = CString::new(path.to_string_lossy().as_ref())
+        .map_err(|e| format!("video path contains NUL byte: {e}"))?;
+    let fmt = AVFormatContextInput::open(&path_c)
+        .map_err(|e| format!("failed to open video with FFmpeg: {e:?}"))?;
+    let stream_index = match fmt.find_best_stream(ffi::AVMEDIA_TYPE_VIDEO) {
+        Ok(Some((index, _))) => index,
+        _ => largest_video_stream_index(&fmt)
+            .ok_or_else(|| "no decodable video stream found".to_string())?,
+    };
+    let decoder = open_stream_decoder(&fmt, stream_index)?;
+    Ok((fmt, stream_index, decoder))
+}
+
+fn receive_sampled_frame(decoder: &mut AVCodecContext) -> Result<Option<(i64, RgbImage)>, String> {
+    match decoder.receive_frame() {
+        Ok(frame) => {
+            let image = frame_to_rgb_within(&frame, Some(SAMPLED_FRAME_MAX_EDGE))?;
+            Ok(Some((frame.best_effort_timestamp, image)))
+        }
+        Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => Ok(None),
+        Err(e) => Err(format!("failed to receive decoded video frame: {e:?}")),
+    }
+}
+
+/// 从当前读位置起解出 `stream_index` 的下一帧，返回（时间戳，缩小后的画面）。
+/// 读到文件尾或读满 [`SAMPLE_MAX_PACKETS_PER_POINT`] 个包仍没有帧时返回 `None`。
+fn decode_next_frame(
+    fmt: &mut AVFormatContextInput,
+    decoder: &mut AVCodecContext,
+    stream_index: usize,
+) -> Result<Option<(i64, RgbImage)>, String> {
+    for _ in 0..SAMPLE_MAX_PACKETS_PER_POINT {
+        let packet = match fmt.read_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => {
+                // 文件尾：把解码器里压着的帧冲出来
+                match decoder.send_packet(None) {
+                    Ok(()) | Err(RsmpegError::DecoderFlushedError) => {}
+                    Err(e) => return Err(format!("failed to flush video decoder: {e:?}")),
+                }
+                return receive_sampled_frame(decoder);
+            }
+            Err(e) => return Err(format!("failed to read video packet: {e:?}")),
+        };
+        if packet.stream_index as usize != stream_index {
+            continue;
+        }
+        // seek 之后的头几个包可能解不了（缺参考帧），跳过等下一个
+        if decoder.send_packet(Some(&packet)).is_err() {
+            continue;
+        }
+        if let Some(found) = receive_sampled_frame(decoder)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+/// 在视频时长上均匀取 `count` 个时间点各解一帧：第 i 个点在时长的 `(i + 0.5) / count` 处，
+/// seek 到它之前最近的关键帧、解出第一帧。只解关键帧附近的一帧，不逐帧解码。
+///
+/// 帧数可能少于 `count`：seek 或解码失败的点跳过，相邻的点落在同一帧上时只留一份（短视频、
+/// 关键帧稀疏）。时长未知或所有点都没解出来时，只返回从头解出的第一帧。
+///
+/// 返回的画面最长边不超过 [`SAMPLED_FRAME_MAX_EDGE`]（等比缩小），供取色用，不是原尺寸。
+pub fn sample_video_frames(path: &Path, count: usize) -> Result<Vec<RgbImage>, String> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let (mut fmt, stream_index, mut decoder) = open_video_input(path)?;
+
+    // 容器级的时长与起点，单位是 AV_TIME_BASE（微秒）
+    let duration = fmt.duration;
+    let start = if fmt.start_time == ffi::AV_NOPTS_VALUE {
+        0
+    } else {
+        fmt.start_time
+    };
+
+    let mut frames = Vec::with_capacity(count);
+    if duration != ffi::AV_NOPTS_VALUE && duration > 0 {
+        let mut last_timestamp = None;
+        for index in 0..count {
+            let offset = (duration as f64 * (index as f64 + 0.5) / count as f64) as i64;
+            if fmt
+                .seek(-1, start + offset, ffi::AVSEEK_FLAG_BACKWARD as i32)
+                .is_err()
+            {
+                continue;
+            }
+            decoder.flush_buffers();
+            let Ok(Some((timestamp, image))) =
+                decode_next_frame(&mut fmt, &mut decoder, stream_index)
+            else {
+                continue;
+            };
+            if timestamp != ffi::AV_NOPTS_VALUE && last_timestamp == Some(timestamp) {
+                continue;
+            }
+            last_timestamp = Some(timestamp);
+            frames.push(image);
+        }
+    }
+
+    if frames.is_empty() {
+        // 重新打开再从头解：前面失败的 seek 可能已经把读位置挪走了
+        let (mut fmt, stream_index, mut decoder) = open_video_input(path)?;
+        match decode_next_frame(&mut fmt, &mut decoder, stream_index)? {
+            Some((_, image)) => frames.push(image),
+            None => return Err("no decodable video frame found".to_string()),
+        }
+    }
+    Ok(frames)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use rsmpeg::avformat::AVFormatContextOutput;
+    use rsmpeg::avutil::{ra, AVDictionary};
+
+    const TEST_VIDEO_SIZE: usize = 64;
+
+    /// 用 libx264 + MP4（与桌面视频预览相同的编码路径）写一段测试视频：
+    /// 灰度画面，亮度随帧号从暗到亮；每 `gop` 帧一个关键帧。
+    pub(crate) fn write_test_video(path: &Path, frame_count: usize, fps: i32, gop: i32) {
+        let encoder = AVCodec::find_encoder_by_name(c"libx264").expect("libx264 encoder");
+        let mut encoder_context = AVCodecContext::new(&encoder);
+        encoder_context.set_width(TEST_VIDEO_SIZE as i32);
+        encoder_context.set_height(TEST_VIDEO_SIZE as i32);
+        encoder_context.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+        encoder_context.set_time_base(ra(1, fps));
+        encoder_context.set_framerate(ra(fps, 1));
+        encoder_context.set_gop_size(gop);
+        encoder_context.set_max_b_frames(0);
+
+        let path_c = CString::new(path.to_str().unwrap()).unwrap();
+        let mut output = AVFormatContextOutput::create(&path_c).expect("create output");
+        if output.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
+            encoder_context
+                .set_flags(encoder_context.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
+        }
+        // scenecut=0：关键帧只按 gop 出，测试里的时间点才对得上
+        let options =
+            AVDictionary::new(c"preset", c"ultrafast", 0).set(c"x264-params", c"scenecut=0", 0);
+        encoder_context.open(Some(options)).expect("open encoder");
+        {
+            let mut stream = output.new_stream();
+            stream.set_codecpar(encoder_context.extract_codecpar());
+            stream.set_time_base(encoder_context.time_base);
+        }
+        output.write_header(&mut None).expect("write header");
+
+        let mut frame = AVFrame::new();
+        frame.set_format(ffi::AV_PIX_FMT_YUV420P);
+        frame.set_width(TEST_VIDEO_SIZE as i32);
+        frame.set_height(TEST_VIDEO_SIZE as i32);
+        frame.alloc_buffer().expect("alloc frame");
+
+        let mut write_packets = |encoder_context: &mut AVCodecContext, frame: Option<&AVFrame>| {
+            encoder_context.send_frame(frame).expect("send frame");
+            loop {
+                let mut packet = match encoder_context.receive_packet() {
+                    Ok(packet) => packet,
+                    Err(RsmpegError::EncoderDrainError) | Err(RsmpegError::EncoderFlushedError) => {
+                        break
+                    }
+                    Err(e) => panic!("receive packet: {e:?}"),
+                };
+                packet.set_stream_index(0);
+                packet.rescale_ts(encoder_context.time_base, output.streams()[0].time_base);
+                output
+                    .interleaved_write_frame(&mut packet)
+                    .expect("write packet");
+            }
+        };
+
+        for index in 0..frame_count {
+            frame.make_writable().expect("writable frame");
+            let luma = (16 + index * 200 / frame_count.saturating_sub(1).max(1)) as u8;
+            let data = frame.data;
+            let linesize = frame.linesize;
+            unsafe {
+                for plane in 0..3 {
+                    let rows = if plane == 0 {
+                        TEST_VIDEO_SIZE
+                    } else {
+                        TEST_VIDEO_SIZE / 2
+                    };
+                    let value = if plane == 0 { luma } else { 128 };
+                    std::ptr::write_bytes(data[plane], value, rows * linesize[plane] as usize);
+                }
+            }
+            frame.set_pts(index as i64);
+            write_packets(&mut encoder_context, Some(&frame));
+        }
+        write_packets(&mut encoder_context, None);
+        output.write_trailer().expect("write trailer");
+    }
+
+    fn brightness(image: &RgbImage) -> u32 {
+        let pixel = image.get_pixel(image.width() / 2, image.height() / 2);
+        u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2])
+    }
+
+    #[test]
+    fn sample_video_frames_spreads_over_the_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.mp4");
+        // 4 秒、每 0.5 秒一个关键帧：8 个时间点各落在不同的关键帧上
+        write_test_video(&path, 40, 10, 5);
+
+        let frames = sample_video_frames(&path, 8).unwrap();
+
+        assert_eq!(frames.len(), 8);
+        let levels: Vec<u32> = frames.iter().map(brightness).collect();
+        assert!(
+            levels.windows(2).all(|pair| pair[0] < pair[1]),
+            "frames are not in time order: {levels:?}"
+        );
+        assert!(
+            levels[levels.len() - 1] > levels[0] + 150,
+            "first and last frames look the same: {levels:?}"
+        );
+        assert_eq!(frames[0].dimensions(), (64, 64));
+    }
+
+    #[test]
+    fn decode_image_via_ffmpeg_returns_the_first_frame_at_full_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        write_test_video(&path, 10, 10, 5);
+
+        let image = decode_image_via_ffmpeg(&path).unwrap();
+
+        assert_eq!(image.dimensions(), (64, 64));
+        // 第一帧是最暗的一帧
+        assert!(brightness(&image) < 60, "{}", brightness(&image));
+    }
+
+    #[test]
+    fn sample_video_frames_handles_a_sub_second_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("short.mp4");
+        // 0.5 秒、只有开头一个关键帧
+        write_test_video(&path, 5, 10, 250);
+
+        let frames = sample_video_frames(&path, 8).unwrap();
+
+        // 8 个时间点都落在同一个关键帧上，只留一份
+        assert_eq!(frames.len(), 1);
+    }
+
+    #[test]
+    fn sample_video_frames_reports_missing_and_non_video_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(sample_video_frames(&dir.path().join("missing.mp4"), 8).is_err());
+
+        let text = dir.path().join("not-a-video.mp4");
+        std::fs::write(&text, b"this is not a video").unwrap();
+        assert!(sample_video_frames(&text, 8).is_err());
+    }
+
+    #[test]
+    fn sample_video_frames_with_zero_count_returns_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(sample_video_frames(&dir.path().join("missing.mp4"), 0)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn frame_to_rgb_within_keeps_the_aspect_ratio_and_never_upscales() {
+        let mut frame = AVFrame::new();
+        frame.set_format(ffi::AV_PIX_FMT_YUV420P);
+        frame.set_width(640);
+        frame.set_height(320);
+        frame.alloc_buffer().unwrap();
+        let data = frame.data;
+        let linesize = frame.linesize;
+        unsafe {
+            std::ptr::write_bytes(data[0], 200, 320 * linesize[0] as usize);
+            std::ptr::write_bytes(data[1], 128, 160 * linesize[1] as usize);
+            std::ptr::write_bytes(data[2], 128, 160 * linesize[2] as usize);
+        }
+
+        assert_eq!(frame_to_rgb(&frame).unwrap().dimensions(), (640, 320));
+        assert_eq!(
+            frame_to_rgb_within(&frame, Some(1024))
+                .unwrap()
+                .dimensions(),
+            (640, 320)
+        );
+        let small = frame_to_rgb_within(&frame, Some(128)).unwrap();
+        assert_eq!(small.dimensions(), (128, 64));
+        // 缩小不改变颜色（整幅同一个灰度）
+        let (first, last) = (small.get_pixel(0, 0), small.get_pixel(127, 63));
+        assert_eq!(first, last);
+        assert!(first[0] > 150, "{first:?}");
+    }
 }

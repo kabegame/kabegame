@@ -4,6 +4,7 @@
     "albums": "Albums",
     "tasks": "Tasks",
     "surf_records": "Surf records",
+    "color_buckets": "Color buckets",
     "plugin": "Plugins"
   },
   "kind": {
@@ -43,6 +44,11 @@
       "read": {
         "list": { "name": "Surf record list", "desc": "Browse all surf records" },
         "by_id": { "name": "Single surf record", "desc": "Read one surf record by ID" }
+      }
+    },
+    "color_buckets": {
+      "read": {
+        "list": { "name": "Color bucket list", "desc": "Read the color buckets available for sorting by color" }
       }
     },
     "plugin": {

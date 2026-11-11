@@ -8,7 +8,7 @@ import {
   queryUsesSearchMode,
   type GalleryQuery,
 } from "@/utils/galleryQuery";
-import type { GallerySort } from "@/utils/galleryPath";
+import { isColorSortField, type GallerySort } from "@/utils/galleryPath";
 import {
   albumChangeKinds,
   albumPatchTriggers,
@@ -115,6 +115,8 @@ const FIELD_DEPS: FieldDeps = {
   thumbnailPath: () => false,
   compatiblePath: () => false,
   lastSetWallpaperAt: (v) => v.sort.field === "by-set-time",
+  // 回填会分批发色盘补丁：只有按颜色排序（两个段都依赖色盘）的视图需要刷新
+  palette: (v) => isColorSortField(v.sort.field),
   displayName: (v) => v.sort.field === "by-name" || queryUsesSearchMode(v.query, "display-name"),
   metadataId: (v) => queryUsesSearchMode(v.query, "metadata") || queryUsesDimension(v.query, "plugin"),
   imageMetadataId: (v) => queryUsesSearchMode(v.query, "native-metadata"),

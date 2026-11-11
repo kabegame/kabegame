@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub mod albums;
 pub mod backfill_service;
+pub mod color_buckets;
 pub mod dsl_funcs;
 pub mod gallery;
 pub mod gallery_time;

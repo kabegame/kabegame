@@ -1,0 +1,18 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_sort_by_color_computed_provider",
+    "properties": {
+        // `0x` + 六位小写十六进制，即路径段里 `by-any-color_` 之后的原样。带着前缀传的原因见
+        // gallery_sort_by_color_provider：不带前缀时 `000000`、`123456` 这类会被属性求值转成数字。
+        "color": { "type": "string", "optional": false }
+    },
+    "query": {
+        // 只贡献排序、不连表：对全部候选行现算再排序，和 random-<seed> 是同一种代价。
+        // kb_palette_distance 与入库写进关系表的距离是同一段代码，所以与 by-color_0x… 同序。
+        "order": [
+            { "sql": "kb_palette_distance(images.palette, ${properties.color})", "order": "asc" },
+            { "sql": "images.id", "order": "asc" }
+        ]
+    },
+    "note": "Sort by distance to an arbitrary color, computed per row at query time (same cost class as random-<seed>): .../sort/by-any-color_0x3a7bd5/_kb_x100x/1. Works for any 6-digit lowercase hex color; images without a palette come last. For colors listed in color_buckets:// prefer sort/by-color_0x<rrggbb>, which is precomputed and much faster on large libraries. Append /_kb_desc for farthest first."
+}

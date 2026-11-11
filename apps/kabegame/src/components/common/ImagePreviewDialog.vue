@@ -123,6 +123,7 @@
               :plugins="plugins"
               @open-task="emit('open-task', $event)"
               @open-gallery-filter="handleOpenGalleryFilter"
+              @open-color-sort="emit('open-color-sort', $event)"
               @open-surf-record="emit('open-surf-record', $event)"
             />
             <!-- 标签面板：点标签跳画册页后要顺手关掉预览，故把本地 closePreview 接到 navigate 上 -->
@@ -537,6 +538,8 @@ const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
   (e: "open-task", taskId: string): void;
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
+  /** 与 open-gallery-filter 同理：不在此处关闭预览，由上层导航完成后再关 */
+  (e: "open-color-sort", hex: string): void;
   (e: "open-surf-record", target: ImageDetailSurfRecordTarget): void;
   /** 用户要求切换；上层算出目标并回设 props.image */
   /** source：用户手动（箭头 / 键盘 / 滑动）还是幻灯片自动播放；上层只用手动翻页推断「自动」切图方向 */

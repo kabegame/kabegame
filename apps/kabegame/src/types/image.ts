@@ -50,6 +50,9 @@ export interface ImageInfo {
 
   /** 帖子/页面地址（与下载 url 分开）；本地导入或无帖子概念时为 null。 */
   postUrl?: string;
+
+  /** 色盘：JSON 文本 `[[rgb, 百分比], …]`（最多 5 个代表色）；没有色盘时为 null / 缺省。解析用 `parsePalette`。 */
+  palette?: string | null;
 }
 
 export interface TaskFailedImage {

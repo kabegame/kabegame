@@ -38,7 +38,8 @@
   "backfillWaiting": "Queued",
   "backfillFailed": "Background database update failed ({name}); it will resume on next launch",
   "backfill": {
-    "wpe_dir_hash": "Recomputing content fingerprints of Wallpaper Engine wallpapers"
+    "wpe_dir_hash": "Recomputing content fingerprints of Wallpaper Engine wallpapers",
+    "image_palette": "Computing representative colors of wallpapers"
   },
   "viewLogs": "View logs",
   "logs": {

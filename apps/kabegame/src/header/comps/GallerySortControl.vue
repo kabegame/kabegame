@@ -28,7 +28,7 @@ import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
 import { ArrowDown, Sort } from "@kabegame/element-plus-icons";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
-import { queryUsesDimension } from "@/utils/galleryPath";
+import { isColorSortField, queryUsesDimension } from "@/utils/galleryPath";
 
 const route = useRoute();
 const galleryRouteStore = useGalleryRouteStore();
@@ -46,6 +46,7 @@ const sortAscLabel = computed(() => {
   if (galleryRouteStore.sort.field === "by-aspect") return t("gallery.byAspectWidthHeight");
   if (galleryRouteStore.sort.field === "by-set-time") return t("gallery.bySetTimeAsc");
   if (galleryRouteStore.sort.field === "random") return t("gallery.byRandomAsc");
+  if (isColorSortField(galleryRouteStore.sort.field)) return t("gallery.byColorAsc");
   if (isSizeRoot.value) return t("gallery.bySizeAsc");
   if (isAspectRoot.value) return t("gallery.byAspectWidthHeight");
   return t("gallery.byTimeAsc");
@@ -59,6 +60,7 @@ const sortDescLabel = computed(() => {
   if (galleryRouteStore.sort.field === "by-aspect") return t("gallery.byAspectHeightWidth");
   if (galleryRouteStore.sort.field === "by-set-time") return t("gallery.bySetTimeDesc");
   if (galleryRouteStore.sort.field === "random") return t("gallery.byRandomDesc");
+  if (isColorSortField(galleryRouteStore.sort.field)) return t("gallery.byColorDesc");
   if (isSizeRoot.value) return t("gallery.bySizeDesc");
   if (isAspectRoot.value) return t("gallery.byAspectHeightWidth");
   return t("gallery.byTimeDesc");

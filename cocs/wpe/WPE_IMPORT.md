@@ -156,7 +156,7 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 4. `relocate_to` 为 `Some`：`delete_source` 时 `move_dir_unique`，否则 `copy_dir_unique`，放到目标目录下以展示名
    （缺省取 `project.json` 标题）命名的目录，重名依次换 `名(1)`、`名(2)`；之后按新路径重读工程。
 5. 按类型取宽高与 `compatible_path`（同原来的三份导入函数），metadata 写 `project.json` 原文，`hash` / `size` 写
-   目录哈希与总字节数，`add_image` → `images-added` → 挂画册 → 挂 WPE 标签。
+   目录哈希与总字节数，尽力算色盘（见下「色盘来源」），`add_image` → `images-added` → 挂画册 → 挂 WPE 标签。
 6. `add_image` 撞 `local_path` 唯一约束（另一个入口抢先写了同一个目录，例如复制进同步目录时文件夹同步先到）→
    回查路径按 `Existing` 处理。其它失败时删掉第 4 步搬过来的目录（与文件下载失败删新建文件一致）。
 
@@ -168,6 +168,24 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 `<目标目录>/.kabegame-part-<uuid>`（`project.json` 最后复制，半成品不会被认成壁纸目录），再改名、删源。复制的文件
 集合与目录哈希相同（不带符号链接与系统文件）。本地导入遇到 `.kabegame-part-*` 整棵跳过；它是隐藏目录，文件夹同步
 不会为它建子画册。
+
+### 色盘来源
+
+WPE 行与普通图片一样在入库时算一份色盘（详情里的代表色、按颜色排序的依据，见
+[COLOR_PALETTE.md](../gallery/COLOR_PALETTE.md)）。`insert_wpe_row` 在 `add_image` 之前调
+`media::palette::compute_for_row(类型, 目录, 预览图, compatible_path, scheme_color_from_raw(&project.raw))`，
+来源由 `source_for_row` 按类型决定——`local_path` 是目录，任何类型都不会把它当文件读：
+
+| 类型 | 来源 |
+|---|---|
+| `x-wpe/video` | 从 `compatible_path`（入口视频或兼容副本）均匀抽 8 帧；解不了时退到预览图；没有 `compatible_path` 时直接用预览图 |
+| `x-wpe/web`、`x-wpe/scene` | `project.json` 的 `general.properties.schemecolor.value`（`"r g b"`，0–1 浮点），得到「一个颜色 100%」的色盘；没有这个属性时用预览图（`preview.gif` 抽帧，`preview.jpg` 等取一帧）；连预览图也没有的没有色盘 |
+
+- 取的是 `schemecolor` 的**作者值**，不跟用户在属性面板里改的值走（用户值在 metadata 顶层的 `userProperties`，
+  `scheme_color_from_raw` 不读它）；用户之后改颜色、换封面都不会重算色盘。
+- 没有色盘的壁纸在按颜色排序时排在最后，基本信息里不显示色带。
+- 存量 WPE 行由回填作业 `image_palette` 按同一规则补算：它从 metadata 里的 `project.json` 原文取 `schemecolor`。
+  `wpe::properties`（`scheme_color_from_raw`）不随 `wpe` feature 门控，各平台对同一行算出同一个色盘。
 
 ### 目录哈希
 

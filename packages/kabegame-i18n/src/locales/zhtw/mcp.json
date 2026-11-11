@@ -4,6 +4,7 @@
     "albums": "畫冊",
     "tasks": "任務",
     "surf_records": "暢遊記錄",
+    "color_buckets": "色桶",
     "plugin": "外掛"
   },
   "kind": {
@@ -43,6 +44,11 @@
       "read": {
         "list": { "name": "暢遊記錄列表", "desc": "瀏覽全部暢遊記錄" },
         "by_id": { "name": "單條暢遊記錄", "desc": "按 ID 讀取暢遊記錄詳情" }
+      }
+    },
+    "color_buckets": {
+      "read": {
+        "list": { "name": "色桶列表", "desc": "讀取依顏色排序可用的色桶" }
       }
     },
     "plugin": {

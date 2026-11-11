@@ -158,13 +158,14 @@ images://filter/<过滤…>/sort/random-<seed>/_kb_desc/_kb_x100x/200 /~~/ rank 
   `ReservedPathSegment`（原因写明是别名非法）；字面段写 `\~~xxx`。
 - 外层规则不变：从 schema 根起步、初始只有一条 `<别名>.*`、**不继承内层排序**。回表 join 由路径上的 provider
   显式贡献（引擎不知道主键）。画廊先在中层用 `rank` 按物化 CTE 的扫描序打 `row_index`，再经 `~~p`
-  回表；外层只按 `p.row_index` 排序，**不重放内层排序段**，因此 `by-album-order` 等引用内层 JOIN 别名的排序也成立。
+  回表；外层只按 `p.row_index` 排序，**不重放内层排序段**，因此 `by-album-order`（`ai`）、`by-color_0x<rrggbb>`
+  （关系表别名 `cd`，见 `cocs/gallery/COLOR_PALETTE.md`）等引用内层 JOIN 别名的排序也成立。
   不能省掉最后的 ORDER BY：外层出现 INNER JOIN 时规划器可能改由被 join 的表驱动。rank 取序依赖内层全序，
   与预览定位共用同一约定；本页内序号从 1 开始。
 - 内层宽度由路径上的 provider 决定：没有 provider 贡献 fields 时渲染器回退成 `SELECT <表名>.*`，并不会变窄，
   需要窄内层就让某个 provider 只贡献主键列（Kabegame 的 `images://` 根只贡献 `images.id AS id`）。
 - Kabegame 的宽入口 `gallery` 经 `gallery_entry_router` 在组外折入 `gallery_router` 的默认排序，再由
-  `gallery_route` 补 21 个字段；`filter` 直接进入 `gallery_router`，所有子 provider 的 delegate 也折回它。
+  `gallery_route` 补 22 个字段；`filter` 直接进入 `gallery_router`，所有子 provider 的 delegate 也折回它。
   `lookup/gallery` 直接进入只含字段的 `gallery_route`，外层不会再叠默认排序。入口先折排序是为了兼容
   `gallery/~not/...`：若直到组内才由 delegate 加默认排序，会违反分支只贡献 WHERE / LEFT JOIN 的约束。
 - `filter` / `lookup` 只挂根 resolve，不列举。filter 下只做路径解析与行查询，维度列举仍走 gallery：列举 SQL
@@ -834,6 +835,43 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 - `${ref:<ident>}` 的参数必须是单个 ident
 - `${global:<prefix>|<selector>}` 的 `prefix` 是 runtime global key 前缀，`selector` 是不带 `${...}` 外壳的普通模板路径（如 `root.name` / `row.id`）
 
+### 6.5 属性值会被数字化
+
+`ProviderCall.properties` 里**含 `${...}` 的字符串值**在求值后不一定还是字符串。引擎（`pathql-rs` 的
+`eval_properties_in_ctx`）先把模板渲染成文本，再依次尝试解析成 `i64`、`f64`，都不成才保留为文本；求值时不看
+被调 provider 对该属性声明的 `type`。不含 `${` 的字面字符串原样是文本。数字型的属性（`x<N>x` 的页大小、
+`random-<seed>` 的种子）因此以整数进 SQL；属性在 SQL 里按求值后的类型作为绑定参数。
+
+踩坑的是**值看起来像数字、语义上却是文本**的属性，典型是十六进制、带前导零的编号、形如 `1e5` 的串：
+
+| 捕获到的文本 | 求值结果 | 症状 |
+|---|---|---|
+| `000000`、`000123` | 整数 0、123（前导零丢失） | 与文本列或 `printf` 的结果比较恒不相等 → 查不到、空集，不报错 |
+| `804000`、`123456` | 整数 | 同上；传给只收文本的宿主函数时报错 |
+| `1e1000`、`123e45` | 浮点（可能是无穷大） | 同上 |
+| `ff0000`、`0x000000` | 文本 | 正常 |
+
+症状有迷惑性：大多数取值正常，只有恰好全是数字（或含一个 `e`）的那几个取值出错。画廊的颜色排序段若把六位
+十六进制不带前缀地传给属性，纯数字的颜色（基本色桶里的黑 `000000`、棕 `804000` 就是）按色桶排序得到空集、
+现算排序报错，其余颜色一切正常。
+
+规避写法：让捕获的值带一个不可能被解析成数字的固定前缀或后缀，SQL 一侧按同样的写法比较或由宿主函数剥掉。
+颜色排序段的做法是把 `0x` 放进捕获组，属性值就是 `0xff0000`：
+
+```json5
+"by-color_(0x[0-9a-f]{6})": {                 // 捕获带着 0x
+    "provider": "gallery_sort_by_color_provider",
+    "properties": { "color": "${capture[1]}" }
+}
+// provider 内：… WHERE printf('0x%06x', b.rgb) = ${properties.color}
+```
+
+不要指望在 SQL 里把整数转回来（`printf('%06d', ?)` 之类）：前导零的个数、原来是不是浮点都已经丢了。新增这类属性时
+补一条 e2e，断言渲染出的绑定参数是文本（先例：`tests/dsl_e2e.rs` 的 `color_sort_segments_bind_numeric_looking_hex_as_text`）。
+
+顺带一提，`join.on` 里可以用 `${properties.X}`，同样渲染成绑定参数（先例：`gallery_sort_by_color_provider`，
+e2e `gallery_sort_by_color_binds_hex_in_join_on`）。
+
 ---
 
 ## 7. 安全契约
@@ -1013,6 +1051,14 @@ is_search_dummy_url(url) -> INTEGER
 
 vd_display_name(canonical) -> TEXT
   读取当前 VD locale, 把 canonical 段名映射为本地化路径显示名。
+
+kb_palette_distance(palette, hex) -> INTEGER
+  色盘到参考色的距离，`media::palette::distance_to` 的 SQL 外壳（纯计算，不访问连接）。
+  palette 是 `images.palette` 的 JSON 文本；hex 是六位十六进制文本，可带 `0x` 前缀。
+  返回 0..=65535，越小越接近；palette 为 NULL、不是文本或解析不了时返回 65536。hex 不是文本或
+  不合法时报错。第二个参数在一条查询里不变，用 auxdata 缓存换算好的参考色。
+  用于 `sort/by-any-color_0x<rrggbb>` 的现算排序，以及保存色桶时一条语句补齐全库距离；
+  与入库写进关系表的距离是同一段代码，见 `cocs/gallery/COLOR_PALETTE.md`。
 ```
 
 **DSL 调用模式**：

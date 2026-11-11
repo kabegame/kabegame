@@ -219,7 +219,9 @@
       max-width: none;
     }
 
-    .#{$namespace}-kb-filter-dropdown__body {
+    // 展开态放宽后的高度同样不适用：滚动交给对话框主体，不在里面再套一层。
+    .#{$namespace}-kb-filter-dropdown__body,
+    .#{$namespace}-kb-filter-dropdown__body.is-expanded {
       max-height: none;
     }
   }
@@ -250,6 +252,12 @@
     padding: 6px;
     overflow-y: auto;
     overscroll-behavior: contain;
+
+    // 有选项展开时放宽高度：展开区（如色块 + 取色面板）比一列选项高得多，
+    // 仍卡在 300px 会变成弹层里再套一层滚动。
+    @include when(expanded) {
+      max-height: min(72vh, 560px);
+    }
   }
 
   @include e(list) {
@@ -311,6 +319,30 @@
         color: getCssVar('kb-filter-dropdown', 'option-zero-color');
       }
     }
+
+    // 可展开的行：名称占满剩余宽度，计数与箭头靠右排在一起。
+    @include when(expandable) {
+      .#{$namespace}-kb-filter-dropdown__option-label {
+        flex: 1;
+      }
+    }
+  }
+
+  // 可展开选项右侧的箭头：收起朝右，展开转向下。
+  @include e(option-arrow) {
+    flex: none;
+    color: getCssVar('kb-filter-dropdown', 'option-muted-color');
+    font-size: 12px;
+    transition: transform 0.18s ease;
+
+    @include when(expanded) {
+      transform: rotate(90deg);
+    }
+  }
+
+  // 可展开选项的展开区：内容由调用侧的 option-panel 插槽给，这里只留内边距。
+  @include e(option-panel) {
+    padding: 6px 10px 8px;
   }
 
   @include e(option-label) {

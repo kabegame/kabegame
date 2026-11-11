@@ -5,6 +5,8 @@ export interface KbFilterDropdownOption {
   value: string
   /** null/undefined 表示不显示；0 是有效计数。 */
   count?: number
+  /** 点它不选中，而是在它下方展开 `option-panel` 插槽（由调用侧在面板里完成选择）。 */
+  expandable?: boolean
 }
 
 export interface KbFilterDropdownProps {
@@ -74,6 +76,12 @@ export interface KbFilterDropdownTriggerSlotProps {
 }
 
 export interface KbFilterDropdownPanelSlotProps {
+  close: () => void
+}
+
+/** `option-panel` 插槽：可展开选项的展开区。`close` 让面板内容在完成选择后关掉整个下拉。 */
+export interface KbFilterDropdownOptionPanelSlotProps {
+  option: KbFilterDropdownOption
   close: () => void
 }
 

@@ -660,6 +660,8 @@ pub(crate) fn configure_app(
             batch_delete_images,
             batch_remove_images,
             get_images_count,
+            add_color_bucket,
+            delete_color_bucket,
             get_gallery_plugin_groups,
             get_gallery_media_type_counts,
             get_album_media_type_counts,

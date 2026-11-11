@@ -59,6 +59,8 @@ export interface KbEventMap {
   "album-moved": AlbumMovedPayload;
   "albums-added": { seq: number; albums: Album[] };
   "albums-deleted": { seq: number; albums: { id: string; ancestorPath: string }[] };
+  /** 色桶表有增删；不带内容，观察方重读 `color_buckets://`。 */
+  "color-buckets-change": { seq: number };
 }
 
 /** 一种事件的触发条件：每条只对一种事件。 */

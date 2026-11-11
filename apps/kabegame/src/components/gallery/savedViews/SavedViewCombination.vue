@@ -64,9 +64,10 @@ import { computed, markRaw } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { CopyDocument, SortAsc, SortDesc } from "@kabegame/element-plus-icons";
 import { SORT_FIELD_ICONS } from "@/components/gallery/galleryChipIcons";
+import { useColorBuckets } from "@/composables/useColorBuckets";
 import { usePluginStore } from "@/stores/plugins";
-import type { GallerySort } from "@/utils/galleryPath";
-import { gallerySortFieldLabel, type GalleryLabelContext } from "@/utils/galleryFilterLabels";
+import { isColorSortField, type GallerySort } from "@/utils/galleryPath";
+import { colorLabel, gallerySortFieldLabel, type GalleryLabelContext } from "@/utils/galleryFilterLabels";
 import { conditionCount, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import SavedViewPill from "./SavedViewPill.vue";
@@ -114,9 +115,16 @@ const anyDimsText = computed(() => {
 });
 
 // ---------- 排序 ----------
+// 色桶列表只用来把基本色桶显示成名字（「红」）；不是颜色排序时不观察。列表到之前先显示 #rrggbb。
+const { buckets: colorBuckets } = useColorBuckets(() => isColorSortField(props.sort.field));
 const sortFieldPill = computed<Pill>(() => {
-  const label = gallerySortFieldLabel(props.sort.field, t);
-  return { key: `sort:${props.sort.field}`, icon: SORT_FIELD_ICONS[props.sort.field], label, title: label };
+  const { field, color } = props.sort;
+  const label = gallerySortFieldLabel(field, t);
+  const pill: Pill = { key: `sort:${field}`, icon: SORT_FIELD_ICONS[field], label, title: label };
+  if (!isColorSortField(field) || !color) return pill;
+  // 颜色排序：维度名后跟一个小色块与颜色名
+  const name = colorLabel(color, colorBuckets.value, t);
+  return { ...pill, title: `${label} · ${name}`, swatch: `#${color}`, swatchLabel: name };
 });
 /** 随机排序没有方向可言（升降只是同一次洗牌倒着读），不出方向 chip。 */
 const sortOrderPill = computed<Pill | null>(() => {
@@ -124,7 +132,11 @@ const sortOrderPill = computed<Pill | null>(() => {
   const label = props.sort.desc ? t("gallery.sortDescending") : t("gallery.sortAscending");
   return { key: `order:${props.sort.desc}`, icon: markRaw(props.sort.desc ? SortDesc : SortAsc), label, title: label };
 });
-const sortFieldChanged = computed(() => !!props.base && props.base.sort.field !== props.sort.field);
+/** 排序维度的身份：两个颜色字段是同一个维度，换了颜色才算变。 */
+function sortIdentity(sort: GallerySort): string {
+  return isColorSortField(sort.field) ? `color:${sort.color ?? ""}` : sort.field;
+}
+const sortFieldChanged = computed(() => !!props.base && sortIdentity(props.base.sort) !== sortIdentity(props.sort));
 const sortOrderChanged = computed(() => !!props.base && props.base.sort.desc !== props.sort.desc);
 
 // ---------- 差异 ----------

@@ -139,6 +139,13 @@ fn parse_scheme_color(props: &serde_json::Map<String, Value>) -> Option<[u8; 3]>
     Some(channels)
 }
 
+/// `general.properties.schemecolor` 的作者值，直接吃 `project.json` 原文。
+/// 色盘用它当网页 / 场景壁纸的代表色（`media::palette::source_for_row` 的 `scheme_color`）。
+/// 色盘回填在所有构建里都调它（WPE 入库只随 wpe feature 编译）。
+pub(crate) fn scheme_color_from_raw(raw: &Value) -> Option<[u8; 3]> {
+    parse_scheme_color(properties(raw)?)
+}
+
 fn clamp_unit(value: f32) -> f32 {
     value.clamp(-1.0, 1.0)
 }
@@ -254,6 +261,31 @@ mod tests {
             content_rating: None,
             raw,
         }
+    }
+
+    #[test]
+    fn scheme_color_from_raw_reads_the_author_value() {
+        let raw = json!({
+            "type": "web",
+            "general": { "properties": {
+                "schemecolor": { "type": "color", "value": "0.5 0.25 1" }
+            }},
+            // 用户在属性面板里改的值不参与
+            "userProperties": { "schemecolor": "0 0 0" }
+        });
+        assert_eq!(scheme_color_from_raw(&raw), Some([128, 64, 255]));
+
+        assert_eq!(scheme_color_from_raw(&json!({ "type": "web" })), None);
+        assert_eq!(
+            scheme_color_from_raw(&json!({ "general": { "properties": {} } })),
+            None
+        );
+        assert_eq!(
+            scheme_color_from_raw(&json!({ "general": { "properties": {
+                "schemecolor": { "value": "not a color" }
+            }}})),
+            None
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@
     @preview-detail-toggle="handlePreviewDetailToggle"
     @preview-close="handlePreviewClose"
     @open-gallery-filter="handleOpenGalleryFilter"
+    @open-color-sort="handleOpenColorSort"
     @open-surf-record="handleOpenSurfRecord"
     :enable-virtual-scroll="!uiStore.isCompact"
   >
@@ -48,6 +49,7 @@
     @close="imageDetailDialog.close()"
     @open-task="handleOpenTask"
     @open-gallery-filter="handleOpenGalleryFilter"
+    @open-color-sort="handleOpenColorSort"
     @open-surf-record="handleOpenSurfRecord"
   />
 
@@ -275,6 +277,17 @@ async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {
     // 直接写会落在当前页上、冲掉本页的 path，所以显式跳到画廊并带上算好的路径。
     await router.push({ path: "/gallery", query: { path: galleryRouteStore.computePath({ query }) } });
   }
+  imageDetailDialog.close();
+  coreRef.value?.closePreview?.();
+}
+
+// 点详情里代表色的一段：只换当前页面的排序（最接近的在前），过滤与上下文原样保留。
+// 与过滤跳转不同，这里不跳画廊——四个网格页都有颜色排序，用户是想在眼前这批图里找相近的颜色。
+// 色盘的颜色是聚合出来的平均色，几乎不会恰好是色桶，所以直接给现算段，网格不为此去读色桶表；
+// 万一恰好是色桶，查询行的排序段校正会把它换成预计算段（两个段顺序相同）。
+async function handleOpenColorSort(hex: string) {
+  await adapter.routeStore.navigate({ sort: { field: "by-any-color", desc: false, color: hex } }, { push: true });
+  // 与 handleOpenGalleryFilter 同理：导航落定后再关预览，避免 pvwimgid 的写入与 push 竞争
   imageDetailDialog.close();
   coreRef.value?.closePreview?.();
 }

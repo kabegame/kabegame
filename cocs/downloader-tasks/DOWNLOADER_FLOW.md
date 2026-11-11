@@ -197,7 +197,12 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 2. 计算 hash（同 source 分发）。
 3. 查 `Storage::find_image_by_hash` 做 hash 去重。
 4. 未命中去重时，根据格式键计算最终目标路径/文件名，落盘（或映射回标准 MIME 后执行 Android MediaStore copy）。
-5. 生成缩略图/预览，写入 `images` 表。
+5. 生成缩略图/预览与兼容副本；随后**尽力算色盘**：`media::palette::compute_for_row(格式键, local_path, thumbnail_path, compatible_path, None)`
+   在阻塞线程里按类型取来源（图片读刚生成的缩略图，GIF 读原文件抽帧，视频从原视频均匀抽 8 帧、解不了退到预览），
+   算不出来（文件读不了、解码失败、全透明）就是 `None`，不阻断入库。结果以 JSON 文本放进 `ImageInfo.palette`，再写入
+   `images` 表：`Storage::add_image` 在同一个事务里写图片行、`palette` 列与它对全部色桶的距离行，所以 `images-added`
+   发出时行里带着色盘、按颜色排序的视图也已经能查到这张图。色盘之后不再重算。这一步必须排在缩略图与兼容副本
+   都定下之后；新增入库入口同样要算（见 [COLOR_PALETTE.md](../gallery/COLOR_PALETTE.md)）。
 6. `add_image` 成功后 best-effort 计算**原生元数据**（JPEG EXIF / PNG chunk，`media::native_metadata`）：仅对 `image/jpg`、`image/png`，逐张解析（优先内存 `bytes`，桌面 `Path` 读文件；Android 无 bytes 的 content:// 溢写场景跳过，留给 `get_image_native_metadata` 查看时懒计算），经 `replace_image_native_metadata(image_id, parser_version, json)` 存为一图一行，不按 hash 共享。任何失败仅 log，不阻断入库；将挂上的 id 写回新图 `ImageInfo.imageMetadataId` 后发 `images-added { images }`，不另发挂载事件。查看与整理先读解析器版本，版本不符才解析并替换为新行，通过逐图字段补丁（`imageMetadataId`）按图片数量分流为 `image-changed` / `images-change`，更新缓存和搜索成员。换版本或删图时直接删除本图旧行；历史共享行仍有其它图片引用时，忽略外键拒绝、留给最后一张图替换或删除时清理，不做历史数据迁移。注意 `image_metadata` 表指原生元数据（v024 起），插件业务元数据表已改名 `metadata`。
 
 ### 图片事件（过滤走查 Phase A）
@@ -334,6 +339,7 @@ surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`st
 | 去重命中且 `relocate_to: Some` + `delete_source` | 删源文件 | 删源目录（下载产物）；`relocate_to: None` 时不删任何东西 |
 | `plugin_id` / metadata | 调用方传入 | 恒为 `wpe-import` + `project.json` 原文，调用方的 `metadata_id` 忽略 |
 | 缩略图 / 兼容副本 | 生成 | 缩略图直接引用作者的 `preview.*`；只有视频行有 `compatible_path` |
+| 色盘 | 缩略图（GIF、视频读原文件抽帧） | 视频行从 `compatible_path` 抽帧；网页 / 场景取 `schemecolor` 的作者值，没有则预览图 |
 
 返回值与文件同义（`Ok(true)` 新增、`Ok(false)` 命中已有行），任务计数、下载状态切换、失败记录仍由
 `postprocess_downloaded_image` 的外层统一处理。
