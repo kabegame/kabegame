@@ -76,6 +76,8 @@
   "shareFailed": "Failed to share",
   "openFolderFailed": "Failed to open folder",
   "wallpaperSetSuccess": "Wallpaper set successfully",
+  "wallpaperSetSuccessOn": "Wallpaper set on \"{screen}\"",
+  "listSeparator": ", ",
   "wallpaperSetFailed": "Failed to set wallpaper",
   "addToAlbumFailed": "Failed to add images to album",
   "exportFailed": "Export failed",

@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
 /// v3 重命名 `PluginRunParams.printConfig`，并新增任务级 `isDryRun`；
-/// v4 新增 `PluginRunParams.freezeTemplate`（旧主程序会静默丢弃，故升版让新 CLI 回退本地）。
-pub const IPC_PROTOCOL_VERSION: u32 = 4;
+/// v4 新增 `PluginRunParams.freezeTemplate`（旧主程序会静默丢弃，故升版让新 CLI 回退本地）；
+/// v5 壁纸设置按目标寻址：轮播路径 / 样式 / 过渡 / 当前壁纸的读写变体新增可选 `target`
+/// （旧主程序会静默丢弃），并删除 `ByMode` 两个 getter 与切模式交换样式的变体。
+pub const IPC_PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
@@ -361,17 +363,31 @@ pub enum IpcRequest {
     SettingsGetAutoDeduplicate,
     SettingsGetDefaultDownloadDir,
     SettingsGetWallpaperRotationEnabled,
-    SettingsGetWallpaperRotationPath,
+    /// 壁纸目标的轮播路径。`target` 为壁纸目标 id（`multiple` / `span` / `screen:<id>`），
+    /// 缺省为当前显示器模式的默认目标；下面带 `target` 的变体同此约定。
+    SettingsGetWallpaperRotationPath {
+        #[serde(default)]
+        target: Option<String>,
+    },
     SettingsGetWallpaperRotationIntervalMinutes,
-    SettingsGetWallpaperStyle,
-    SettingsGetWallpaperRotationTransition,
-    SettingsGetWallpaperStyleByMode,
-    SettingsGetWallpaperTransitionByMode,
+    /// 目标在当前壁纸模式下的有效样式（已按能力归一化）
+    SettingsGetWallpaperStyle {
+        #[serde(default)]
+        target: Option<String>,
+    },
+    /// 目标在当前壁纸模式下的有效过渡（已按能力归一化）
+    SettingsGetWallpaperRotationTransition {
+        #[serde(default)]
+        target: Option<String>,
+    },
     SettingsGetWallpaperMode,
     SettingsGetWallpaperVolume,
     SettingsGetWallpaperVideoPlaybackRate,
     SettingsGetWindowState,
-    SettingsGetCurrentWallpaperImageId,
+    SettingsGetCurrentWallpaperImageId {
+        #[serde(default)]
+        target: Option<String>,
+    },
     SettingsGetDefaultImagesDir,
     /// 解析后的界面语言（如 `zh` / `en`）
     SettingsGetLanguage,
@@ -389,12 +405,18 @@ pub enum IpcRequest {
     },
     SettingsSetWallpaperRotationPath {
         path: Option<String>,
+        #[serde(default)]
+        target: Option<String>,
     },
     SettingsSetWallpaperRotationTransition {
         transition: String,
+        #[serde(default)]
+        target: Option<String>,
     },
     SettingsSetWallpaperStyle {
         style: String,
+        #[serde(default)]
+        target: Option<String>,
     },
     SettingsSetWallpaperMode {
         mode: String,
@@ -433,10 +455,8 @@ pub enum IpcRequest {
     },
     SettingsSetCurrentWallpaperImageId {
         image_id: Option<String>,
-    },
-    SettingsSwapStyleTransitionForModeSwitch {
-        old_mode: String,
-        new_mode: String,
+        #[serde(default)]
+        target: Option<String>,
     },
 
     // ======== Gallery / Provider 相关 ========
@@ -715,4 +735,44 @@ pub async fn request(req: IpcRequest) -> Result<IpcResponse, String> {
     }
 
     return Err("ipc request failed: not supported platform".to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IpcRequest;
+    use serde_json::json;
+
+    /// 壁纸设置变体新增的 `target` 可省略：不带 `target` 的旧形状请求仍能解析，落到默认目标。
+    #[test]
+    fn wallpaper_settings_requests_accept_missing_target() {
+        let request: IpcRequest =
+            serde_json::from_value(json!({ "cmd": "settings-get-wallpaper-rotation-path" }))
+                .unwrap();
+        assert!(matches!(
+            request,
+            IpcRequest::SettingsGetWallpaperRotationPath { target: None }
+        ));
+
+        let request: IpcRequest = serde_json::from_value(json!({
+            "cmd": "settings-set-wallpaper-style",
+            "style": "fit"
+        }))
+        .unwrap();
+        assert!(matches!(
+            request,
+            IpcRequest::SettingsSetWallpaperStyle { style, target: None } if style == "fit"
+        ));
+
+        let request: IpcRequest = serde_json::from_value(json!({
+            "cmd": "settings-set-wallpaper-rotation-path",
+            "path": "images://gallery/hide/all",
+            "target": "screen:abc"
+        }))
+        .unwrap();
+        assert!(matches!(
+            request,
+            IpcRequest::SettingsSetWallpaperRotationPath { path: Some(path), target: Some(target) }
+                if path == "images://gallery/hide/all" && target == "screen:abc"
+        ));
+    }
 }

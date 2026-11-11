@@ -261,5 +261,21 @@
   "quickEmpty": "此頁面暫無可快捷調整的設定",
   "mcpSelectAll": "全選",
   "mcpClearAll": "清空",
-  "wallpaperCurrentProperties": "桌布屬性"
+  "wallpaperCurrentProperties": "桌布屬性",
+  "displayMode": "顯示器模式",
+  "displayModeDesc": "接了多個顯示器時桌布怎麼鋪；變灰的選項目前無法使用，滑鼠停留可查看原因",
+  "screenLayout": "顯示器配置",
+  "screenLayoutMultipleDesc": "所有顯示器顯示同一張桌布，下方的輪播路徑、目前桌布、顯示方式與過渡對每個顯示器都生效",
+  "screenLayoutSpanDesc": "所有顯示器拼成一塊畫布，下方的設定作用於整塊畫布",
+  "screenLayoutSingleDesc": "點選一個顯示器，下方的輪播路徑、目前桌布、顯示方式與過渡就是它的設定",
+  "screenNumbered": "顯示器 {n}",
+  "screenPrimary": "主螢幕",
+  "screenDefault": "預設",
+  "screenSetDefault": "設為預設",
+  "screenOnlyOne": "只接了一個顯示器，三種顯示器模式效果相同",
+  "screenDisconnected": "已中斷連線：",
+  "screenForget": "忘記",
+  "pickTargetTitleSetWallpaper": "設為哪個顯示器的桌布",
+  "pickTargetTitleSetRotation": "在哪個顯示器上輪播",
+  "pickTargetHint": "目前是逐屏獨立，每個顯示器各有自己的桌布與輪播。點選一個顯示器再確認，也可以直接按兩下。"
 }

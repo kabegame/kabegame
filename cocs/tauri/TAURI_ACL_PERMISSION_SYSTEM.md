@@ -48,7 +48,8 @@
 
 ### 2) capability 定义
 
-- `capabilities/main.json`（由 `main.json.handlebars` 生成）：主窗口与壁纸窗口（`main` / `wallpaper`）。两者的本地应用页
+- `capabilities/main.json`（由 `main.json.handlebars` 生成）：主窗口与壁纸窗口（`main` 与壁纸窗口 label 池 `wallpaper`、
+  `wallpaper-1` … `wallpaper-7`，窗口模式下每块屏一个壁纸窗口，见下文「特赦 webview」）。它们的本地应用页
   **免 ACL**（见下文「特赦 webview」），所以这里不再列应用命令，只保留 `core:default` 等核心权限与插件权限——
   特赦不影响 ACL 解析，插件命令的作用域（如 opener 的 URL 范围）仍靠这些授权传下去。
 - `capabilities/crawler.json`：爬虫窗口权限（`crawler`）+ remote URL 访问范围，没有任何事件权限。
@@ -56,15 +57,15 @@
 - `capabilities/surf-navbar.json`：畅游导航栏（本地页面），`surf` + `surf-navbar` 两组命令，`listen` 只能听
   `surf-url-changed` / `surf-collect-state`，外加 `allow-unlisten`。
 - `capabilities/wpe-web.json`：WPE 网页壁纸页面，即 `WallpaperStage` web 层里的 `file:` iframe（`wpe-web-capability`，
-  `windows: ["main", "wallpaper"]`——图库预览在主窗口、桌面在壁纸窗口，同一份；`frames: "sub"`——只给 iframe，两个窗口的
-  主 frame 都是应用页、靠特赦；`local: false`、`remote.urls: ["file:///*"]`）。`listen` 只能听 `wallpaper-ping` /
+  `windows` 是 `main` 加整个壁纸窗口 label 池——图库预览在主窗口、桌面在各壁纸窗口，同一份；`frames: "sub"`——只给 iframe，
+  这些窗口的主 frame 都是应用页、靠特赦；`local: false`、`remote.urls: ["file:///*"]`）。`listen` 只能听 `wallpaper-ping` /
   `setting-change` / `image-changed` / `images-change`，外加 `allow-unlisten` 与 `permissions/wpe-web.toml` 的
   `wpe_web_pull_state` / `wallpaper_pong`；只在桌面分支的 `tauri.conf.json.handlebars` 里启用。网页壁纸里再嵌的 `file:`
   iframe 同样匹配（同一作者的内容，信任级别相同）。
 - **运行时注册** `wpe-scene-host-capability`（场景宿主 `apps/wpe-scene`，P3-0，`wallpaper/wpe_scene_host.rs` 的
   `register_capability`，`init_pre` 里 `add_capability`，只 Windows）：`remote.urls` 只有宿主 `index.html` 的**确切**
   `file:///` 地址（运行时由 `resource_dir` 算出，URLPattern 特殊字符逐个转义；盘符冒号不转义会被当成具名组而解析失败），
-    不用路径通配——工坊内容可以造同名目录冒充；`frames: "sub"`，窗口 main / wallpaper，`local: false`。权限只有
+    不用路径通配——工坊内容可以造同名目录冒充；`frames: "sub"`，窗口是 main 与整个壁纸窗口 label 池，`local: false`。权限只有
   `permissions/wpe-scene-host.toml`（场景专用命令：`get_wpe_scene_postprocess`、`wpe_scene_target`、`wpe_scene_report`）。状态事件 `wpe-scene-status` 由后端 `emit_to` 调用方 webview label，应用页按实例号认领。场景宿主是一种特殊的网页壁纸：
   它同样匹配 `wpe-web-capability` 的 `file:///*`，网页壁纸的命令与四个事件都从那里拿（应答 ping、按 `image-changed`
   跟随用户属性等），这里不重复。
@@ -133,7 +134,7 @@ if (plugin_command.is_some() || has_app_acl_manifest || !is_local)
 ## 新增一个 `#[tauri::command]` 时（最常见情形）
 
 本工程处于 ACL 强校验（存在 app 级 manifest），但**主窗口与壁纸窗口的本地应用页免 ACL**
-（`lib.rs` 的 `.acl_exempt_webview("main").acl_exempt_webview("wallpaper")`）。所以只给主界面 / 壁纸窗口应用页用的
+（`lib.rs` 对 `main` 与壁纸窗口 label 池里的每个 label 调 `acl_exempt_webview`）。所以只给主界面 / 壁纸窗口应用页用的
 命令，**只需在 `lib.rs` 的 `generate_handler!` 注册**，不用登记任何权限文件（原 `permissions/main.toml` 已删除）。
 
 要给其它页面调用的命令，按调用方补对应的 `permissions/*.toml`：
@@ -235,8 +236,14 @@ debug-assertions 编译时存在；本仓根 `Cargo.toml` 的 `[profile.dev.pack
 - invoke 不因 ACL 被拒，显式 deny 也一样；
 - `listen` 不受事件名作用域限制。
 
-ACL 仍照常解析：已授权命令的作用域照常传给命令，未授权的命令拿到空作用域。本应用特赦 `main` 与 `wallpaper`，两个窗口的主
+ACL 仍照常解析：已授权命令的作用域照常传给命令，未授权的命令拿到空作用域。本应用特赦 `main` 与壁纸窗口，它们的主
 frame 始终是应用页（网页壁纸是子 frame 里的 iframe，窗口不再导航）；任何子 frame 都不特赦。
+
+**壁纸窗口的 label 池**：窗口模式下每块在线屏一个壁纸窗口，label 取自固定的池 `wallpaper::WALLPAPER_LABELS`
+（`wallpaper`、`wallpaper-1` … `wallpaper-7`）。特赦只能在 Builder 期登记，所以池是固定的、整池登记，不按屏动态起名；
+没有对应窗口的 label 多登记没有影响。同一个池还出现在 `capabilities/main.json(.handlebars)`、`capabilities/wpe-web.json`
+的 `windows` 与场景宿主的运行时 capability 里：改池时这几处一起改（`wallpaper/mod.rs` 有单测比对两个 capability 文件与池
+一致）。代码里判断「是不是壁纸窗口」用 `wallpaper::is_wallpaper_label`。见 [多显示器壁纸](../wallpaper/MULTI_SCREEN.md)。
 
 | 请求方 | frame | invoke 应用命令 | listen `images-added` | listen `setting-change` |
 | --- | --- | --- | --- | --- |

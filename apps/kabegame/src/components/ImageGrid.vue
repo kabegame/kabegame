@@ -117,6 +117,7 @@ import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
 import { locateImageRowIndex, pageOfRowIndex } from "@/services/imageLocate";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useActiveWallpaperImageIds } from "@/composables/useWallpaperTarget";
 import { useSettingsStore } from "@/stores/settings";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { rowToImageInfo } from "@/utils/imageRow";
@@ -342,12 +343,9 @@ const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 
 const { loading: internalLoading, showLoading: showInternalLoading, startLoading, finishLoading } = useLoadingDelay();
 
-const currentWallpaperImageId = computed<string | null>({
-  get: () => settingsStore.values.currentWallpaperImageId ?? null,
-  set: (value) => {
-    settingsStore.values.currentWallpaperImageId = value;
-  },
-});
+// 所有活跃壁纸目标的当前壁纸：只用来在删除确认框里提示「其中有当前壁纸」。
+// 图片被删后由后端清目标并发 setting-change，这里不做本地清空。
+const activeWallpaperImageIds = useActiveWallpaperImageIds();
 
 const totalImagesCount = ref(0);
 const unfilteredTotal = ref<number | null>(null);
@@ -424,9 +422,6 @@ const applyRows = async (snapshot: PathqlRows) => {
   if (removedIds.length > 0) {
     const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
     if (selected && removedIds.some((id) => selected.has(id))) clearSelection();
-    if (currentWallpaperImageId.value && removedIds.includes(currentWallpaperImageId.value)) {
-      currentWallpaperImageId.value = null;
-    }
   }
   if (removedIds.length > 0 || images.value.length === 0) {
     await ensurePageAfterRemoval();
@@ -593,7 +588,7 @@ const {
   shareImage,
   openImageFolder,
   setWallpaper,
-} = useImageOperations(images, currentWallpaperImageId, coreRef, mutate, patch);
+} = useImageOperations(images, coreRef, mutate, patch);
 
 const readRouteQueryPath = (): string => {
   const rawPath = route.query.path;
@@ -1115,8 +1110,7 @@ const openRemoveDialog = (mode: "remove" | "deleteFile", images: ImageInfo[]) =>
   const cfg = mode === "remove" ? adapter.remove : adapter.deleteFile;
   if (!cfg) return;
   if (cfg.guard?.()) return;
-  const includesCurrentWallpaper =
-    !!currentWallpaperImageId.value && images.some((img) => img.id === currentWallpaperImageId.value);
+  const includesCurrentWallpaper = images.some((img) => activeWallpaperImageIds.value.has(img.id));
   pendingRemove.value = { mode, images };
   removeDialogText.value = cfg.dialogText(images.length, { includesCurrentWallpaper });
   removeDialog.open();

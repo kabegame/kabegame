@@ -179,12 +179,22 @@
               v-if="showRotationAction"
               type="button"
               class="view-menu__action"
-              :disabled="isRotatingThisView || rotationBusy"
+              :disabled="isRotatingThisViewEverywhere || rotationBusy"
               @click="rotateWithCurrentView"
             >
               <span class="view-menu__icon"><Picture /></span>
-              <span class="flex-1 text-left">
-                {{ isRotatingThisView ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
+              <span class="flex min-w-0 flex-1 flex-col text-left">
+                <span>
+                  {{ isRotatingThisViewEverywhere ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
+                </span>
+                <!-- 逐屏独立下只有部分屏在轮播本视图：仍可点（给另一块屏），写明已经是哪几块 -->
+                <span
+                  v-if="rotatingThisViewScreens"
+                  class="truncate text-11px leading-[1.4] text-[var(--anime-text-muted)]"
+                  :title="rotatingThisViewScreens"
+                >
+                  {{ rotatingThisViewScreens }}
+                </span>
               </span>
             </button>
             <!-- 收藏视图：本页来源的收藏列表（web 也有，轮播动作只在桌面）。 -->
@@ -270,7 +280,13 @@ import {
 } from "@/utils/galleryPath";
 import { galleryDimensionChipValue, gallerySortFieldLabel } from "@/utils/galleryFilterLabels";
 import { filterMediaKind } from "@/utils/galleryQuery";
-import { viewRotationPath, wallpaperModeSupportsVideo } from "@/utils/wallpaperRotationPath";
+import { rotatingTargetIds, viewRotationPath, wallpaperModeSupportsVideo } from "@/utils/wallpaperRotationPath";
+import {
+  setWallpaperRotationPath,
+  useWallpaperRotationSources,
+  wallpaperTargetScreenName,
+} from "@/composables/useWallpaperTarget";
+import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { gridViewKey } from "@/components/imageGrid/gridViewPath";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { IS_WEB } from "@/env";
@@ -383,27 +399,51 @@ const rotationBusy = ref(false);
 const gridView = inject(gridViewKey, null);
 const rotationPath = computed(() => (gridView?.path.value ? viewRotationPath(gridView.path.value) : ""));
 const showRotationAction = computed(() => !IS_WEB && !!rotationPath.value);
-const isRotatingThisView = computed(
-  () =>
-    !!settingsStore.values.wallpaperRotationEnabled &&
-    settingsStore.values.wallpaperRotationPath === rotationPath.value,
+// 各活跃壁纸目标的轮播来源（逐屏独立下每块屏一个）；轮播关着时没有目标算「在轮播本视图」
+const rotationSources = useWallpaperRotationSources();
+const rotatingThisViewTargets = computed(() =>
+  settingsStore.values.wallpaperRotationEnabled
+    ? rotatingTargetIds(rotationSources.value, (path) => path === rotationPath.value)
+    : [],
 );
+// 每个目标都已在轮播本视图才禁用：还有屏没设时仍可点，给另一块屏（只有一个目标时就是「正在轮播本视图」）
+const isRotatingThisViewEverywhere = computed(
+  () =>
+    rotatingThisViewTargets.value.length > 0 && rotatingThisViewTargets.value.length === rotationSources.value.length,
+);
+// 只有部分屏在轮播本视图时的说明；其余情况为空
+const rotatingThisViewScreens = computed(() => {
+  const hits = rotatingThisViewTargets.value;
+  if (hits.length === 0 || hits.length === rotationSources.value.length) return "";
+  const names = hits.map((targetId) => wallpaperTargetScreenName(targetId)).filter((name): name is string => !!name);
+  return names.length > 0 ? t("gallery.rotatingThisViewOn", { screens: names.join(t("common.listSeparator")) }) : "";
+});
 
 async function rotateWithCurrentView() {
   const path = rotationPath.value;
   if (!path || rotationBusy.value) return;
   rotationBusy.value = true;
   try {
-    // 先换路径再开启：开启时直接按新路径拉起轮播
-    if (!(await settingsStore.save("wallpaperRotationPath", path))) return;
+    // 逐屏独立且不止一块屏时先选给哪块屏轮播；取消就什么都不做。只有一个壁纸目标时不弹
+    const target = await pickWallpaperTarget({ action: "setRotation" });
+    if (!target) return;
+    // 先换选中目标的路径再开启：开关是全局的，开启时直接按新路径拉起轮播
+    if (!(await setWallpaperRotationPath(path, target))) return;
     if (!settingsStore.values.wallpaperRotationEnabled) await settingsStore.save("wallpaperRotationEnabled", true);
+    // 有多个壁纸目标时提示里带上是哪块屏
+    const screen = pickedScreenName(target);
     // 原生壁纸只能显示图片：后端有效路径会追加图片过滤（见 rotator 的 wallpaper_file_available），
     // 这里直接看过滤对象是否已限定为图片，没有就提示视频会被跳过
     const skipsVideo =
       !wallpaperModeSupportsVideo(settingsStore.values.wallpaperMode) &&
       filterMediaKind(activeFilters.value) !== "image";
-    if (skipsVideo) ElMessage.warning(t("gallery.rotateThisViewSkipsVideo"));
-    else ElMessage.success(t("gallery.rotateThisViewSuccess"));
+    if (skipsVideo) {
+      ElMessage.warning(
+        screen ? t("gallery.rotateThisViewSkipsVideoOn", { screen }) : t("gallery.rotateThisViewSkipsVideo"),
+      );
+    } else {
+      ElMessage.success(screen ? t("gallery.rotateThisViewSuccessOn", { screen }) : t("gallery.rotateThisViewSuccess"));
+    }
   } catch (e: any) {
     ElMessage.error(e?.message || String(e));
   } finally {

@@ -274,13 +274,21 @@ Rust 不解析场景）推导不出来，只有缓存里才有。
 
 ## 六、壁纸窗口
 
-壁纸窗口与主窗口加载同一个 `index.html`，URL 为 `index.html?window=wallpaper`（`wallpaper/manager/window.rs`）。
+窗口模式下**每块在线屏一个壁纸窗口**（`wallpaper/manager/window.rs`）：label 取自固定的池 `wallpaper`、`wallpaper-1` …
+`wallpaper-7`，各有各的就绪握手、ping 看门狗与桌面鼠标转发，后端给每个窗口一条布置（显示哪个壁纸目标、出不出声）。
+窗口集合如何随显示器模式与热插拔对齐见 [多显示器壁纸](../wallpaper/MULTI_SCREEN.md)「窗口模式：每屏一窗」；没有显示器枚举的
+平台（Windows）仍只有 `wallpaper` 一个窗口、铺主屏。本文其余部分说「壁纸窗口」时，对池里每个窗口都成立。
+
+壁纸窗口与主窗口加载同一个 `index.html`，URL 为 `index.html?window=wallpaper&slot=<label 在池里的序号>`（`slot` 页面不读，
+只为让调试工具按 URL 分清窗口）。
 `main.ts` 只做分发：按 `windowKind.ts` 的 `WINDOW_KIND` 动态导入 `bootstrap/app.ts`（主界面，原 `main.ts` 全部内容）
 或 `bootstrap/wallpaper.ts`（只装 pinia、i18n、UnoCSS 与主题变量，不装 router / 组件库 / vant，不 `loadAll` 设置）。
 Web 发布版与 Android 硬门控为主窗口。
 
 - `views/WallpaperWindow.vue`：壁纸窗口根，负责 init 看门狗（`sessionStorage.wallpaperInitRetry` + reload）、挂载即监听并按 label 应答 `wallpaper-ping`、`setting-change`
-  监听、启动时五个 getter 并行、`wallpaper_window_ready` 握手与 dev 调试面板，结果作为 props 交给渲染组件。
+  监听、启动时先取本窗口的布置（`get_wallpaper_window_assignment`，之后跟 `wallpaper-assignment`）再并行拉目标表 / 能力表 /
+  音量 / 倍速 / 暂停 / 当前壁纸、`wallpaper_window_ready` 握手与 dev 调试面板，结果作为 props 交给渲染组件；样式、过渡、
+  当前壁纸取自布置的目标，布置不出声时音量传 0。
 - `components/wallpaper/WallpaperStage.vue`：纯渲染组件（不 invoke / listen / 读 store；web 层 iframe 也只是把目标里的
   `webEntry` 赋给 `src`，页面里的垫片自己做 IPC，见「网页壁纸 iframe」「运行时垫片与宿主协议」），base / top 双层、
   prep → enter → commit 过渡（两帧 rAF、1400ms 兜底）、去重与严格串行、tile、base 图退避重试、视频 base / top 元素交换、
@@ -319,7 +327,7 @@ Web 发布版与 Android 硬门控为主窗口。
 
 WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://` 从壁纸目录直接加载，靠关掉同源策略读同目录文件。Kabegame 在
 两个地方显示网页壁纸，**都是 `WallpaperStage` web 层里的 `file:` iframe**，组件与代码路径同一套：图库预览在主窗口（`main`），
-桌面在壁纸窗口（`wallpaper`）。tauri 补丁 18 / 19 之前，子 frame 没有 IPC，预览 iframe 只能 `postMessage` 请主窗口代办、
+桌面在壁纸窗口（label 池里的任一个，每块屏一个；同一张网页壁纸显示在几块屏上就是几个独立的页面实例）。tauri 补丁 18 / 19 之前，子 frame 没有 IPC，预览 iframe 只能 `postMessage` 请主窗口代办、
 桌面则把整个壁纸窗口导航到 `file://`；现在 frame 是 IPC 的基本单位，两种宿主合成一种（见 [ACL 文档](../tauri/TAURI_ACL_PERMISSION_SYSTEM.md)「子 frame IPC」）。
 
 - **加载**：`WallpaperStage` 建 iframe、插入 DOM 后直接 `frame.src = target.webEntry`，没有命令往返、没有要维护的状态
@@ -350,13 +358,14 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
   `teardownWeb`（先 `about:blank` 再移除，frame 销毁）后重建 iframe，不在原 iframe 上改 `src`：闸门把「原 iframe 的 `file:`
   文档发起的导航」算作这个文档发起，跨到另一张壁纸会被拒。
 - **CSP**：`tauri.conf.json.handlebars` 的 `frame-src 'self' blob: data: about: file:`（生成的 `tauri.conf.json` 被 gitignore）。
-- **IPC**：CEF 给每个子 frame 注入桥；CEF 补丁 07 在建子资源工厂时捕获文档 URL 与父文档 URL，运行时按 initiator 与完整文档 URL 合成 `Origin`。`file:` iframe 只匹配绑定 `main` / `wallpaper` 且 `frames: "sub"` 的 `wpe-web-capability`。回退通道来源不合法时用占位来源交给 ACL 拒绝。历史上按 `frame.url()` 读取会遇到首批请求竞态。
+- **IPC**：CEF 给每个子 frame 注入桥；CEF 补丁 07 在建子资源工厂时捕获文档 URL 与父文档 URL，运行时按 initiator 与完整文档 URL 合成 `Origin`。`file:` iframe 只匹配绑定 `main` 与壁纸窗口 label 池、且 `frames: "sub"` 的 `wpe-web-capability`。回退通道来源不合法时用占位来源交给 ACL 拒绝。历史上按 `frame.url()` 读取会遇到首批请求竞态。
 - **事件只投递到这个 iframe**：监听登记在调用方 frame 的表里，投递 eval 进这个 frame；iframe 销毁时 runtime 报
   `SubframeDestroyed`，Tauri 删掉它的全部监听，切换壁纸不会积累监听，也不再需要按导航调 `clear_js_listeners()`。
 - **`localStorage`**：Chromium 按顶层站点分区存储，预览与桌面的顶层都是应用页，所以两处是**同一分区、互通**。以前桌面顶层是
   `file://`，那时桌面里存下的页面数据不会带过来。
 - **触发点**：图库预览随预览打开 / 切图；桌面随 `WallpaperWindow.vue` 收到的当前壁纸目标（`setting-change` 的
-  `currentWallpaperImageId` → `get_current_wallpaper_target`）。后端 `WindowWallpaperManager::set_wallpaper_path` 不再导航，只按
+  `wallpaperTargets` 里默认壁纸目标的 `currentImageId` 变了 → `get_current_wallpaper_target`，见
+  [../wallpaper/MULTI_SCREEN.md](../wallpaper/MULTI_SCREEN.md)）。后端 `WindowWallpaperManager::set_wallpaper` 不导航，只按
   `web_entry(path).is_some()` 开关 Windows 的桌面鼠标转发（`WallpaperWindow::set_mouse_forwarding`，见下）；设壁纸、轮播、
   启动恢复、切换到窗口模式、重新开启壁纸、改样式都会走到它。
 - **过渡**：桌面与预览一样，图片 / 视频与网页壁纸之间走 web 层的淡入淡出；壁纸样式、倍速对页面不生效。
@@ -364,7 +373,7 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
 
 ### ping 看门狗
 
-`wallpaper/ping.rs` 的 `Pinger` 随 `WallpaperWindow` 持有，在 `mount()` 挂载、显示完成后启动；丢弃对象时
+`wallpaper/ping.rs` 的 `Pinger` 随 `WallpaperWindow` 持有（每个壁纸窗口一个，序号各自独立，一个窗口失联只重载它自己），在 `mount()` 挂载、显示完成后启动；丢弃对象时
 reset 通道关闭，任务退出。后端用 sleep 循环每 10s 探测，页面收到事件才应答、不自己计时：窗口被遮挡变成 hidden
 时页面定时器会被 Chromium 节流，页面心跳容易误报。sleep 不补发错过的 tick，系统睡眠唤醒后最多多算一次未应答。
 
@@ -402,7 +411,7 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
   `kabegame.allow_local_resources` 给非弹窗 browser 的最外层主 frame 加 `content::CreateFileURLLoaderFactory`。工厂照常经
   `WillCreateURLLoaderFactory` 包成 CEF 的代理工厂，每个请求仍到 `OnBeforeResourceLoad`。Phase 6c 给每个工厂实例创建只允许该文档 origin 读 `file:` 的私有 CORS 列表；运行时还调用 `CefAddCrossOriginWhitelistEntry(origin, "file", "", true)` 通过 CEF proxy 的跨源闸门，profile 的共享列表不变。
 - **登记**：`allow_app_local_resources` 给主窗口（`startup.rs`，三个桌面平台）与壁纸窗口（`wallpaper/manager/window.rs`，
-  它的 Vue 页同样显示图片 / 视频；窗口壁纸模式只有 Windows / macOS）登记；`allow_file_documents`（04）只为 WPE，同样两个窗口都登记。
+  它的 Vue 页同样显示图片 / 视频；窗口壁纸模式只有 Windows / macOS；每个壁纸窗口建窗前按自己的 label 登记）登记；`allow_file_documents`（04）只为 WPE，主窗口与每个壁纸窗口同样都登记。
 - **运行时按发起方分档**（`tauri-runtime-kbcef` 的 `resource_request_handler` + `file_access::classify_file_requester`；登记了任一
   能力的 label 的 `file:` 请求才进入分档）。不免检的请求在 `OnBeforeResourceLoad` 里向应用注册的解析器要访问范围
   （`set_file_scope_resolver`，即网页壁纸目录索引），再经 `check_file_request` 判定（百分号解码成路径，必须是普通文件，拒绝
@@ -567,7 +576,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），预览的上
 ### 桌面鼠标转发（Windows）
 
 `wallpaper/input_forward.rs`：照 WPE 的做法不装鼠标钩子，由后台线程每 16ms 轮询 `GetCursorPos` 与
-`GetAsyncKeyState(VK_LBUTTON)`，只在「窗口模式 + 当前是网页壁纸」运行：`set_wallpaper_path` 按 `web_entry` 调
+`GetAsyncKeyState(VK_LBUTTON)`，只在「窗口模式 + 当前是网页壁纸」运行：窗口后端的 `set_wallpaper` 按 `web_entry` 调
 `WallpaperWindow::set_mouse_forwarding(true / false)` 启停（幂等），窗口对象丢弃时由 `InputForwarder` 的 `Drop` 停止。注入落到
 窗口里的 web 层 iframe，所以壁纸窗口给 `WallpaperStage` 传 `interactive`，iframe 接收指针事件。
 
@@ -775,7 +784,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   音量：`wpe_shim.js` 的 `installVolume`、`apps/kabegame/src/components/wallpaper/wpeWebVolume.ts`（消息协议）与
   `WallpaperStage.vue` 的 `onWindowMessage` / `postWebVolume`，单测 `wpeWebVolume.test.ts`（node:vm 里跑垫片原文）与
   `WallpaperStage.webVolume.test.ts`
-- 桌面网页壁纸：`src-tauri/kabegame/src/wallpaper/manager/window.rs`（`set_wallpaper_path` 开关鼠标转发、`WALLPAPER_LABEL`）、
+- 桌面网页壁纸：`src-tauri/kabegame/src/wallpaper/manager/window.rs`（`set_wallpaper` 开关鼠标转发、`WALLPAPER_LABEL`）、
   `wallpaper/window.rs`（`WallpaperWindow`：`set_mouse_forwarding`、看门狗）、`wallpaper/input_forward.rs`
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/mediaMime.ts`

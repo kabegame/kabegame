@@ -261,5 +261,21 @@
   "quickEmpty": "No quick settings on this page",
   "mcpSelectAll": "Select all",
   "mcpClearAll": "Clear all",
-  "wallpaperCurrentProperties": "Wallpaper Properties"
+  "wallpaperCurrentProperties": "Wallpaper Properties",
+  "displayMode": "Display mode",
+  "displayModeDesc": "How a wallpaper is laid out across multiple displays. Greyed-out options are unavailable right now; hover to see why",
+  "screenLayout": "Display arrangement",
+  "screenLayoutMultipleDesc": "All displays show the same wallpaper. The rotation path, current wallpaper, style and transition below apply to every display",
+  "screenLayoutSpanDesc": "All displays form one canvas. The settings below apply to the whole canvas",
+  "screenLayoutSingleDesc": "Click a display to edit its rotation path, current wallpaper, style and transition below",
+  "screenNumbered": "Display {n}",
+  "screenPrimary": "Main",
+  "screenDefault": "Default",
+  "screenSetDefault": "Set as default",
+  "screenOnlyOne": "Only one display is connected, so all three display modes look the same",
+  "screenDisconnected": "Disconnected:",
+  "screenForget": "Forget",
+  "pickTargetTitleSetWallpaper": "Set wallpaper on which display",
+  "pickTargetTitleSetRotation": "Rotate on which display",
+  "pickTargetHint": "Displays are set individually: each has its own wallpaper and rotation. Click a display and confirm, or double-click it."
 }

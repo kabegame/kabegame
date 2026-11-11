@@ -76,6 +76,8 @@
   "shareFailed": "共有に失敗しました",
   "openFolderFailed": "フォルダーを開けませんでした",
   "wallpaperSetSuccess": "壁紙を設定しました",
+  "wallpaperSetSuccessOn": "「{screen}」の壁紙を設定しました",
+  "listSeparator": "、",
   "wallpaperSetFailed": "壁紙の設定に失敗しました",
   "addToAlbumFailed": "アルバムに画像を追加できませんでした",
   "exportFailed": "エクスポートに失敗しました",

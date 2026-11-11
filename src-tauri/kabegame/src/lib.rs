@@ -601,14 +601,16 @@ pub(crate) fn configure_app(
         });
     }
 
+    // 主窗口与壁纸窗口的应用页免 ACL（tauri 补丁 17）：只认本地来源的主 frame，导航到外部 /
+    // `file:` 页面或请求来自子 frame 时照常按 capability 判定。应用命令因此不再逐条登记权限；
+    // 插件权限仍留在 main-capability，插件命令的作用域靠它们传下去。
+    // 壁纸窗口每屏一个，label 取自固定的池 `wallpaper::WALLPAPER_LABELS`，整池都登记（特赦只能在 Builder 期
+    // 登记，所以池是固定的）；没有壁纸窗口的平台多登记几个 label 没有影响。
+    let builder = std::iter::once("main")
+        .chain(crate::wallpaper::WALLPAPER_LABELS)
+        .fold(builder, |builder, label| builder.acl_exempt_webview(label));
+
     builder
-        // 主窗口与壁纸窗口的应用页免 ACL（tauri 补丁 17）：只认本地来源的主 frame，导航到外部 /
-        // `file:` 页面或请求来自子 frame 时照常按 capability 判定。应用命令因此不再逐条登记权限；
-        // 插件权限仍留在 main-capability，插件命令的作用域靠它们传下去。
-        // 壁纸窗口的 label 即 `wallpaper::manager::window::WALLPAPER_LABEL`，该模块只在 Windows / macOS
-        // 编译，这里写字面量；没有壁纸窗口的平台多登记一个 label 没有影响。
-        .acl_exempt_webview("main")
-        .acl_exempt_webview("wallpaper")
         .setup(|app| {
             if let Err(e) = init(app) {
                 #[cfg(not(feature = "web"))]
@@ -821,19 +823,22 @@ pub(crate) fn configure_app(
             get_current_wallpaper_path,
             get_current_wallpaper_target,
             get_wallpaper_target_for_image,
+            get_wallpaper_targets,
+            get_wallpaper_window_assignment,
+            list_wallpaper_screens,
+            get_wallpaper_display_mode,
+            set_wallpaper_display_mode,
+            get_wallpaper_default_screen,
+            set_wallpaper_default_screen,
+            forget_wallpaper_target,
             set_wallpaper_rotation_enabled,
             get_wallpaper_rotation_enabled,
             set_wallpaper_rotation_path,
-            get_wallpaper_rotation_path,
             start_wallpaper_rotation,
             set_wallpaper_rotation_interval_minutes,
             get_wallpaper_rotation_interval_minutes,
             set_wallpaper_style,
-            get_wallpaper_style_by_mode,
-            get_wallpaper_rotation_style,
             set_wallpaper_rotation_transition,
-            get_wallpaper_rotation_transition,
-            get_wallpaper_transition_by_mode,
             get_wallpaper_mode,
             get_wallpaper_volume,
             set_wallpaper_volume,

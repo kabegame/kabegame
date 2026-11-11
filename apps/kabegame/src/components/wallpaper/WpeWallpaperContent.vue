@@ -15,6 +15,7 @@
 import { computed, ref, watch } from "vue";
 import { invoke } from "@/api/rpc";
 import { useSettingsStore } from "@/stores/settings";
+import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
 import type { ImageInfo } from "@/types/image";
 import WallpaperStage from "./WallpaperStage.vue";
 import type { Mode, Transition, WallpaperTarget } from "./types";
@@ -50,7 +51,9 @@ const emit = defineEmits<{
 const settings = useSettingsStore();
 
 const styleMode = computed<Mode>(() => (props.fit === "cover" ? "fill" : "fit"));
-const transition = computed(() => (settings.values.wallpaperRotationTransition ?? "none") as Transition);
+// 预览里的过渡与桌面一致：取默认壁纸目标在当前壁纸模式下的有效过渡
+const { transition: targetTransition } = useWallpaperTarget();
+const transition = computed(() => targetTransition.value as Transition);
 const volume = computed(() => (props.muted ? 0 : (settings.values.wallpaperVolume ?? 1)));
 const playbackRate = computed(() => settings.values.wallpaperVideoPlaybackRate ?? 1);
 

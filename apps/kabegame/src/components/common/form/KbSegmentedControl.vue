@@ -1,24 +1,48 @@
 <template>
   <div class="segmented-control" :class="{ 'is-disabled': disabled }" role="radiogroup">
-    <button
-      v-for="opt in options"
-      :key="String(opt.value)"
-      type="button"
-      class="segmented-control-item"
-      role="radio"
-      :aria-checked="opt.value === modelValue"
-      :class="{ 'is-active': opt.value === modelValue }"
-      :disabled="disabled"
-      :title="opt.label"
-      @click="onSelect(opt.value)"
-    >
-      {{ opt.label }}
-    </button>
+    <template v-for="opt in options" :key="String(opt.value)">
+      <!-- 带说明的选项用 tooltip 包一层。不可选的选项不加原生 disabled：那样悬停事件到不了它，说明就弹不出来 -->
+      <el-tooltip v-if="opt.tip" :content="opt.tip" placement="top" :show-after="200">
+        <button
+          type="button"
+          class="segmented-control-item"
+          role="radio"
+          :aria-checked="opt.value === modelValue"
+          :aria-disabled="opt.disabled || disabled ? 'true' : undefined"
+          :class="{ 'is-active': opt.value === modelValue, 'is-unavailable': opt.disabled }"
+          :disabled="disabled"
+          @click="onSelect(opt)"
+        >
+          {{ opt.label }}
+        </button>
+      </el-tooltip>
+      <button
+        v-else
+        type="button"
+        class="segmented-control-item"
+        role="radio"
+        :aria-checked="opt.value === modelValue"
+        :aria-disabled="opt.disabled || disabled ? 'true' : undefined"
+        :class="{ 'is-active': opt.value === modelValue, 'is-unavailable': opt.disabled }"
+        :disabled="disabled"
+        :title="opt.label"
+        @click="onSelect(opt)"
+      >
+        {{ opt.label }}
+      </button>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-type Option = { label: string; value: string };
+type Option = {
+  label: string;
+  value: string;
+  /** 这一项不可选：置灰、点了没反应（整组的 `disabled` 另算） */
+  disabled?: boolean;
+  /** 悬停说明；不可选的项用它写原因。给了就不再用选项名作原生 title */
+  tip?: string;
+};
 
 const props = defineProps<{
   modelValue: string;
@@ -30,9 +54,9 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
 }>();
 
-function onSelect(value: string) {
-  if (props.disabled || value === props.modelValue) return;
-  emit("update:modelValue", value);
+function onSelect(option: Option) {
+  if (props.disabled || option.disabled || option.value === props.modelValue) return;
+  emit("update:modelValue", option.value);
 }
 </script>
 
@@ -91,7 +115,13 @@ function onSelect(value: string) {
   cursor: not-allowed;
 }
 
-.segmented-control-item:not(.is-active):not(:disabled):hover {
+/* 单个不可选的选项：比整组禁用更淡，一眼看得出是这一项选不了 */
+.segmented-control-item.is-unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.segmented-control-item:not(.is-active):not(.is-unavailable):not(:disabled):hover {
   color: var(--anime-primary);
 }
 

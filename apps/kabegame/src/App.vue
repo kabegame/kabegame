@@ -177,6 +177,7 @@
       @dismiss="handleDismissMissed"
     />
     <SettingChoiceHost />
+    <WallpaperTargetPickerHost />
     <FrameMonitor />
   </el-config-provider>
 </template>
@@ -226,6 +227,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@/stores/modalStack";
 import { useModal } from "@/composables/useModal";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
 import { ElMessageBox, kbFilterDropdownContextKey } from "@kabegame/element-plus";
 import { useModalBack } from "@/composables/useModalBack";
 import { useThrottleFn } from "@vueuse/core";
@@ -243,6 +245,7 @@ import UpdateDialog from "./components/updater/UpdateDialog.vue";
 import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
 import ImageContent from "@/components/image/ImageContent.vue";
 import SettingChoiceHost from "@/components/common/SettingChoiceHost.vue";
+import WallpaperTargetPickerHost from "@/components/wallpaper/WallpaperTargetPickerHost.vue";
 import SettingsDialog from "./components/settings/SettingsDialog.vue";
 import { useGlobalShortcuts } from "./composables/useGlobalShortcuts";
 import SidebarActivityBar from "./components/busy/SidebarActivityBar.vue";
@@ -408,10 +411,11 @@ const isVideoBackground = (image: ImageInfo | undefined) => isVideoPlaybackType(
 const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
   !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
 
+// 应用背景跟随默认壁纸目标的当前壁纸（不需要用户选目标）
+const { currentImageId: bgWallpaperImageId } = useWallpaperTarget();
+
 const shouldShowAppBackground = () =>
-  !!settingsStore.values.appBackgroundEnabled &&
-  !!settingsStore.values.currentWallpaperImageId &&
-  hasAppBackgroundSource(bgImage.value);
+  !!settingsStore.values.appBackgroundEnabled && !!bgWallpaperImageId.value && hasAppBackgroundSource(bgImage.value);
 
 const syncBgVisible = () => {
   bgVisible.value = shouldShowAppBackground();
@@ -442,7 +446,7 @@ const handleBgMediaError = () => {
 };
 
 watch(
-  () => settingsStore.values.currentWallpaperImageId,
+  bgWallpaperImageId,
   async (id) => {
     const token = ++bgResolveToken;
     const imageId = typeof id === "string" ? id.trim() : "";
@@ -479,7 +483,7 @@ watch(
 watch(
   () => [
     settingsStore.values.appBackgroundEnabled,
-    settingsStore.values.currentWallpaperImageId,
+    bgWallpaperImageId.value,
     bgImage.value?.localPath,
     bgImage.value?.thumbnailPath,
     bgImage.value?.compatiblePath,

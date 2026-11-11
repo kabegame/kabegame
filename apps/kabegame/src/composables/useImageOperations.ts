@@ -5,12 +5,14 @@ import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import type { ImageInfo } from "@/types/image";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/services/albums";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { setWallpaperRotationPath } from "@/composables/useWallpaperTarget";
+import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { useSettingsStore } from "@/stores/settings";
 import { fileNameFromUrlOrPath, fileToUrl, thumbnailToUrl } from "@/utils/fileUrl";
 import { isWpeMediaType } from "@/utils/mediaMime";
 import { IS_WEB } from "@/env";
 import { openLocalImage } from "@/utils/openLocalImage";
-import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
+import { clearWebBackgroundIfRemoved, setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
@@ -26,7 +28,6 @@ export type FavoriteStatusChangedDetail = {
  */
 export function useImageOperations(
   _displayedImages: Readonly<Ref<ImageInfo[]>>,
-  currentWallpaperImageId: Ref<string | null>,
   galleryViewRef: Ref<any>,
   mutate: GridRefreshContext["mutate"],
   patch: GridRefreshContext["patch"],
@@ -34,7 +35,6 @@ export function useImageOperations(
   const settingsStore = useSettingsStore();
 
   const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
-  const { set: setWallpaperRotationPath } = useSettingKeyState("wallpaperRotationPath");
   const detectImageMimeByPath = (path: string): string => {
     const ext = (path.split(".").pop() || "").toLowerCase();
     if (ext === "png") return "image/png";
@@ -233,14 +233,10 @@ export function useImageOperations(
 
       const count = imagesToProcess.length;
       const imageIds = imagesToProcess.map((img) => img.id);
-      const includesCurrent =
-        !!currentWallpaperImageId.value && imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
+      // 被删的图若是某个壁纸目标的当前壁纸，后端会清掉并发 setting-change；Web 版的本地背景在这里清
       await mutate(() => invoke("batch_delete_images", { imageIds }));
-
-      if (includesCurrent) {
-        currentWallpaperImageId.value = null;
-      }
+      await clearWebBackgroundIfRemoved(imageIds);
 
       ElMessage.success(i18n.global.t("common.deletedCountSuccess", { count }));
       galleryViewRef.value?.clearSelection?.();
@@ -353,11 +349,15 @@ export function useImageOperations(
     try {
       if (IS_WEB && imagesToProcess.length > 0) {
         await setWallpaperOrBackground(imagesToProcess[0].id);
-        currentWallpaperImageId.value = imagesToProcess[0].id;
         ElMessage.success(i18n.global.t("common.wallpaperSetSuccess"));
         galleryViewRef.value?.clearSelection?.();
         return;
       }
+
+      // 逐屏独立且不止一块屏时先选要设到哪块屏；取消就什么都不做（多选时也不建画册）。
+      // 只有一个壁纸目标时不弹，直接是它。
+      const target = await pickWallpaperTarget({ action: "setWallpaper" });
+      if (!target) return;
 
       if (imagesToProcess.length > 1) {
         // 多选：创建"桌面画册x"，添加到画册，开启轮播
@@ -386,27 +386,35 @@ export function useImageOperations(
           throw error;
         }
 
-        // 5. 轮播路径换成新画册的默认视图，再开启轮播（开启时直接按新路径拉起）
-        await setWallpaperRotationPath(albumRotationPath(createdAlbum.id));
+        // 5. 选中目标的轮播路径换成新画册的默认视图，再开启轮播（开关是全局的，开启时直接按新路径拉起）
+        await setWallpaperRotationPath(albumRotationPath(createdAlbum.id), target);
         if (!settingsStore.values.wallpaperRotationEnabled) {
           await setWallpaperRotationEnabled(true);
         }
 
+        // 有多个壁纸目标时提示里带上是哪块屏
+        const screen = pickedScreenName(target);
+        const params = { name: albumName, count: imageIds.length };
         ElMessage.success(
-          i18n.global.t("gallery.rotationStartedWithCount", {
-            name: albumName,
-            count: imageIds.length,
-          }),
+          screen
+            ? i18n.global.t("gallery.rotationStartedWithCountOn", { ...params, screen })
+            : i18n.global.t("gallery.rotationStartedWithCount", params),
         );
       } else {
-        // 单选：直接设置壁纸
-        await setWallpaperOrBackground(imagesToProcess[0].id);
-        currentWallpaperImageId.value = imagesToProcess[0].id;
-        ElMessage.success(i18n.global.t("common.wallpaperSetSuccess"));
+        // 单选：直接设置壁纸。这张图需要别的壁纸模式时会先引导切换，切换后原目标可能不再活跃，
+        // 以实际设到的目标为准
+        const screen = pickedScreenName(await setWallpaperOrBackground(imagesToProcess[0].id, target));
+        ElMessage.success(
+          screen
+            ? i18n.global.t("common.wallpaperSetSuccessOn", { screen })
+            : i18n.global.t("common.wallpaperSetSuccess"),
+        );
       }
 
       galleryViewRef.value?.clearSelection?.();
     } catch (error: any) {
+      // 用户在「需要切换壁纸模式」的确认框里取消：不算失败
+      if (error === "cancel" || error === "close") return;
       console.error("设置壁纸失败:", error);
       // 提取友好的错误信息
       const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "未知错误";

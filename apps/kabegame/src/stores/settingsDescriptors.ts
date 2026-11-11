@@ -170,22 +170,16 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     tauri("autoDeduplicate", "get_auto_deduplicate", "set_auto_deduplicate", "enabled"),
     tauri("dedupUpdateMetadata", "get_dedup_update_metadata", "set_dedup_update_metadata", "enabled"),
     tauri("wallpaperRotationEnabled", "get_wallpaper_rotation_enabled", "set_wallpaper_rotation_enabled", "enabled"),
-    tauri("wallpaperRotationPath", "get_wallpaper_rotation_path", "set_wallpaper_rotation_path", "path"),
     tauri(
       "wallpaperRotationIntervalMinutes",
       "get_wallpaper_rotation_interval_minutes",
       "set_wallpaper_rotation_interval_minutes",
       "minutes",
     ),
-    tauri("wallpaperStyle", "get_wallpaper_rotation_style", "set_wallpaper_style", "style"),
-    tauri(
-      "wallpaperRotationTransition",
-      "get_wallpaper_rotation_transition",
-      "set_wallpaper_rotation_transition",
-      "transition",
-    ),
-    tauri("wallpaperStyleByMode", "get_wallpaper_style_by_mode", "set_wallpaper_style_by_mode"),
-    tauri("wallpaperTransitionByMode", "get_wallpaper_transition_by_mode", "set_wallpaper_transition_by_mode"),
+    // 壁纸目标没有 setter：写入走带 target 的命令（见 useWallpaperTarget），等 setting-change 落地
+    tauri("wallpaperTargets", "get_wallpaper_targets"),
+    tauri("wallpaperDisplayMode", "get_wallpaper_display_mode", "set_wallpaper_display_mode", "mode"),
+    tauri("wallpaperDefaultScreen", "get_wallpaper_default_screen", "set_wallpaper_default_screen", "screenId"),
     tauri("wallpaperMode", "get_wallpaper_mode", "set_wallpaper_mode", "mode"),
     tauri("wallpaperEnabled", "get_wallpaper_enabled", "set_wallpaper_enabled", "enabled"),
     tauri("wallpaperVolume", "get_wallpaper_volume", "set_wallpaper_volume", "volume"),
@@ -196,7 +190,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
       "rate",
     ),
     tauri("windowState", "get_window_state", "set_window_state"),
-    tauri("currentWallpaperImageId", "get_current_wallpaper_image_id", "set_current_wallpaper_image_id"),
   ];
 
   if (!IS_ANDROID) {
@@ -278,21 +271,22 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   for (const entry of localEntries) assignEntry(map, entry);
 
   if (IS_WEB) {
-    const webLocalEntries = [frontendLocal("language", null), frontendLocal("currentWallpaperImageId", null)];
+    // Web 没有壁纸后端：「设为壁纸」只是把图记成应用背景，存在本地的 multiple 目标里
+    const webLocalEntries = [
+      frontendLocal("language", null),
+      frontendLocal("wallpaperTargets", {} as AppSettings["wallpaperTargets"]),
+    ];
     for (const entry of webLocalEntries) assignEntry(map, entry);
 
     const webReadonlyEntries = [
       readonly("imageClickAction", "preview"),
       readonly("wallpaperRotationEnabled", false),
-      readonly("wallpaperRotationPath", null),
       readonly("wallpaperRotationIntervalMinutes", 30),
       readonly("wallpaperVolume", 0.5),
       readonly("wallpaperVideoPlaybackRate", 1),
       readonly("wallpaperPaused", false),
-      readonly("wallpaperStyle", "fill"),
-      readonly("wallpaperRotationTransition", "none"),
-      readonly("wallpaperStyleByMode", {} as Record<string, string>),
-      readonly("wallpaperTransitionByMode", {} as Record<string, string>),
+      readonly("wallpaperDisplayMode", "multiple"),
+      readonly("wallpaperDefaultScreen", null),
       readonly("wallpaperMode", "native"),
       readonly("windowState", null),
       readonly("albumDriveEnabled", false),

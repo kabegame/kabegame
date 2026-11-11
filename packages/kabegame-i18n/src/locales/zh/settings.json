@@ -261,5 +261,21 @@
   "quickEmpty": "此页面暂无可快捷调整的设置",
   "mcpSelectAll": "全选",
   "mcpClearAll": "清空",
-  "wallpaperCurrentProperties": "壁纸属性"
+  "wallpaperCurrentProperties": "壁纸属性",
+  "displayMode": "显示器模式",
+  "displayModeDesc": "接了多块显示器时壁纸怎么铺；置灰的选项当前不可用，悬停可看原因",
+  "screenLayout": "显示器布局",
+  "screenLayoutMultipleDesc": "所有显示器显示同一张壁纸，下面的轮播路径、当前壁纸、显示方式与过渡对每块显示器都生效",
+  "screenLayoutSpanDesc": "所有显示器拼成一块画布，下面的设置作用于整块画布",
+  "screenLayoutSingleDesc": "点一块显示器，下面的轮播路径、当前壁纸、显示方式与过渡就是它的设置",
+  "screenNumbered": "显示器 {n}",
+  "screenPrimary": "主屏",
+  "screenDefault": "默认",
+  "screenSetDefault": "设为默认",
+  "screenOnlyOne": "只接了一块显示器，三种显示器模式效果相同",
+  "screenDisconnected": "已断开：",
+  "screenForget": "忘记",
+  "pickTargetTitleSetWallpaper": "设为哪块显示器的壁纸",
+  "pickTargetTitleSetRotation": "在哪块显示器上轮播",
+  "pickTargetHint": "当前是逐屏独立，每块显示器各有自己的壁纸与轮播。点一块显示器再确认，也可以直接双击。"
 }

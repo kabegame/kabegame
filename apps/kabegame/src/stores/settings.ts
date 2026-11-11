@@ -12,6 +12,7 @@ import {
   type SettingsSaveOptions,
 } from "./settingsDescriptors";
 import { runLocalSettingsMigrations } from "./localSettingsMigrations";
+import type { WallpaperDisplayMode, WallpaperTargets } from "../utils/wallpaperTargets";
 
 // 与后端 settings.rs 的 AppSettings（serde rename_all = camelCase）保持一致。
 export interface AppSettings {
@@ -33,15 +34,19 @@ export interface AppSettings {
   /** 畅游一键下载时冻结页面（HTML+CSS 快照写入 metadata，详情可回看） */
   surfFreezePage: boolean;
   defaultDownloadDir: string | null;
+  /** 轮播开关与间隔是全局的：一开全开，所有壁纸目标同一个节拍 */
   wallpaperRotationEnabled: boolean;
-  /** 轮播来源 PathQL 路径（不含分页尾）；null 表示默认全画廊随机路径。由「用当前视图轮播」写入 */
-  wallpaperRotationPath: string | null;
   wallpaperRotationIntervalMinutes: number;
-  wallpaperStyle: "fill" | "fit" | "stretch" | "center" | "tile" | string;
-  wallpaperRotationTransition: "none" | "fade" | "slide" | "zoom" | string;
-  /** 按 wallpaperMode 记忆各模式的最后 style/transition（切换模式时用于恢复） */
-  wallpaperStyleByMode: Record<string, string>;
-  wallpaperTransitionByMode: Record<string, string>;
+  /**
+   * 壁纸目标 id → 配置（轮播路径与位置、按壁纸模式存的样式 / 过渡、当前壁纸）。目标 id 为 `multiple`、
+   * `span` 或 `screen:<屏幕持久标识>`。没有 setter：读写经 `useWallpaperTarget`，后端每次写入发整个 map。
+   * Web 版没有壁纸后端，这个键落在 localStorage，只用 `multiple.currentImageId` 记应用背景图。
+   */
+  wallpaperTargets: WallpaperTargets;
+  /** 显示器模式：各屏复制 / 跨屏拼接 / 逐屏独立 */
+  wallpaperDisplayMode: WallpaperDisplayMode;
+  /** 逐屏独立下的默认显示器（屏幕持久标识）；null 表示跟随主屏 */
+  wallpaperDefaultScreen: string | null;
   wallpaperMode: "native" | "window" | string;
   /** 打开壁纸（默认开）：关掉时整体禁用壁纸功能（后端拒绝壁纸操作、隐藏壁纸窗口、启动不恢复） */
   wallpaperEnabled: boolean;
@@ -64,7 +69,6 @@ export interface AppSettings {
     height: number;
     maximized: boolean;
   } | null;
-  currentWallpaperImageId: string | null;
 
   // Windows：画册虚拟盘（Dokan）
   albumDriveEnabled: boolean;

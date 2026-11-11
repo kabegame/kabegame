@@ -59,7 +59,8 @@
 </template>
 
 <script setup lang="ts">
-import { rotationAlbumIdFromPath } from "@/utils/wallpaperRotationPath";
+import { rotationAlbumIdsFromPaths } from "@/utils/wallpaperRotationPath";
+import { useActiveWallpaperRotationPaths } from "@/composables/useWallpaperTarget";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Delete, Folder, Monitor, Picture, PriceTag, StarFilled } from "@kabegame/element-plus-icons";
@@ -360,11 +361,11 @@ function displayName(node: Album) {
   return node.id === HIDDEN_ALBUM_ID ? t("albums.hiddenAlbumName") : node.name;
 }
 const settings = useSettingsStore();
+// 轮播开着、且任一活跃壁纸目标的轮播路径以该画册为根，就标记
+const rotationPaths = useActiveWallpaperRotationPaths();
+const rotationAlbumIds = computed(() => rotationAlbumIdsFromPaths(rotationPaths.value));
 function isRotatingAlbum(node: Album) {
-  return (
-    !!settings.values.wallpaperRotationEnabled &&
-    rotationAlbumIdFromPath(settings.values.wallpaperRotationPath) === node.id
-  );
+  return !!settings.values.wallpaperRotationEnabled && rotationAlbumIds.value.includes(node.id);
 }
 function folderStatusBad(node: Album) {
   return !!node.folderStatus && node.folderStatus.state !== "ok";

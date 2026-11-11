@@ -1,7 +1,7 @@
 //! 壁纸轮播的 PathQL 路径约定（纯字符串，不访问 Storage / provider runtime）。
 //!
-//! 轮播只认一个设置路径 `wallpaperRotationPath`（不含分页尾）与位置 `wallpaperRotationPosition`
-//! （下一张的 0 起序号）。rotator 每次切换：
+//! 每个壁纸目标（`settings::WallpaperTargetConfig`）各有一个轮播路径 `rotationPath`（不含分页尾）与位置
+//! `rotationPosition`（下一张的 0 起序号）。rotator 对一个目标每次切换：
 //! 1. 按壁纸模式算出有效路径 [`effective_path`]（原生模式只留图片）；
 //! 2. `count(有效路径)`，出错落回 [`default_path`]；
 //! 3. 取 [`rows_path`]`(有效路径, 位置 + 1)` 这一张。

@@ -29,6 +29,15 @@ settings:
   modeNative: "네이티브 모드"
   modeWindow: "창 모드"
   modePlugin: "플러그인 모드"
+  displayModeMultiple: "복제"
+  displayModeMultipleDesc: "모든 디스플레이에 같은 배경화면을 표시합니다"
+  displayModeSpan: "스팬"
+  displayModeSpanDesc: "모든 디스플레이를 하나의 캔버스로 보고 배경화면 한 장을 걸쳐서 표시합니다"
+  displayModeSingle: "디스플레이별"
+  displayModeSingleDesc: "디스플레이마다 배경화면과 순환을 따로 설정합니다"
+  displayModeLater: "이 디스플레이 모드는 이후 버전에서 제공됩니다"
+  displayModeSpanWindow: "창 모드는 아직 스팬을 지원하지 않습니다"
+  displayModeSpanNoSystem: "시스템에 여러 디스플레이에 걸친 배경화면 표시 기능이 없습니다"
 
 tray:
   show: 표시

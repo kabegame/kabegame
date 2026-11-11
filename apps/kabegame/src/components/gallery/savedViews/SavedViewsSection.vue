@@ -74,7 +74,7 @@
           {{ savedViewDisplayName(row) }}
         </span>
         <el-icon
-          v-if="row.id === rotationRowId"
+          v-if="row.id != null && rotationRowIds.has(row.id)"
           class="flex-none text-[var(--anime-primary)]"
           :title="t('gallery.savedViewRotationSource')"
         >
@@ -190,6 +190,7 @@ import type { GalleryQuery } from "@/utils/galleryQuery";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { logger } from "@/utils/logger";
 import { viewRotationPath } from "@/utils/wallpaperRotationPath";
+import { useActiveWallpaperRotationPaths } from "@/composables/useWallpaperTarget";
 import {
   findNameConflict,
   normalizeSavedViewName,
@@ -275,15 +276,19 @@ function applyRow(row: SavedView) {
 
 // ---------- 轮播来源标记 ----------
 // 随机排序的种子不可比，跳过；web 没有轮播。
-const rotationRowId = computed(() => {
-  const values = settingsStore.values;
-  if (IS_WEB || !values.wallpaperRotationEnabled || !values.wallpaperRotationPath) return null;
+// 任一活跃壁纸目标的轮播路径命中即标记；逐屏独立下各屏可以各用一条收藏视图，所以可能不止一行。
+const activeRotationPaths = useActiveWallpaperRotationPaths();
+const rotationRowIds = computed(() => {
+  const ids = new Set<NonNullable<SavedView["id"]>>();
+  const paths = activeRotationPaths.value;
+  if (IS_WEB || !settingsStore.values.wallpaperRotationEnabled || paths.length === 0) return ids;
   for (const row of rows.value) {
+    if (row.id == null) continue;
     const { query, sort } = parseComposablePath(row.path);
     if (sort.field === "random") continue;
-    if (viewRotationPath(props.pathFor({ query, sort })) === values.wallpaperRotationPath) return row.id ?? null;
+    if (paths.includes(viewRotationPath(props.pathFor({ query, sort })))) ids.add(row.id);
   }
-  return null;
+  return ids;
 });
 
 // ---------- 新增 ----------

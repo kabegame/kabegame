@@ -57,6 +57,8 @@
             :is-hidden="selectedAlbumId === HIDDEN_ALBUM_ID"
             :stats="selectedAlbumStats"
             :is-rotating="isSelectedAlbumRotating"
+            :can-set-rotation="canSetSelectedAlbumRotation"
+            :rotating-screens="selectedAlbumRotatingScreens"
             :can-create-sub-album="canCreateSubAlbumForSelected"
             :can-rename="selectedAlbumId !== HIDDEN_ALBUM_ID"
             :cover="albumCover"
@@ -179,6 +181,8 @@
         :is-hidden="selectedAlbumId === HIDDEN_ALBUM_ID"
         :stats="selectedAlbumStats"
         :is-rotating="isSelectedAlbumRotating"
+        :can-set-rotation="canSetSelectedAlbumRotation"
+        :rotating-screens="selectedAlbumRotatingScreens"
         :can-create-sub-album="canCreateSubAlbumForSelected"
         :can-rename="selectedAlbumId !== HIDDEN_ALBUM_ID"
         :cover="albumCover"
@@ -308,7 +312,18 @@
 
 <script setup lang="ts">
 import { useWindowTitlePart } from "@/composables/useWindowTitle";
-import { albumRotationPath, rotationAlbumIdFromPath } from "@/utils/wallpaperRotationPath";
+import {
+  albumRotationPath,
+  rotatingTargetIds,
+  rotationAlbumIdFromPath,
+  rotationAlbumIdsFromPaths,
+} from "@/utils/wallpaperRotationPath";
+import {
+  setWallpaperRotationPath,
+  useWallpaperRotationSources,
+  wallpaperTargetScreenName,
+} from "@/composables/useWallpaperTarget";
+import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { ref, computed, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
@@ -452,8 +467,24 @@ const selectedAlbumStats = computed(() => {
   };
 });
 
-const isSelectedAlbumRotating = computed(
-  () => wallpaperRotationEnabled.value && currentRotationAlbumId.value === selectedAlbumId.value,
+// 正在轮播选中画册的壁纸目标（轮播关着时为空）
+const selectedAlbumRotatingTargets = computed(() =>
+  wallpaperRotationEnabled.value
+    ? rotatingTargetIds(rotationSources.value, (path) => rotationAlbumIdFromPath(path) === selectedAlbumId.value)
+    : [],
+);
+const isSelectedAlbumRotating = computed(() => selectedAlbumRotatingTargets.value.length > 0);
+// 还有壁纸目标没在轮播它：仍可「设为轮播」（只有一个目标时就是「没在轮播」）
+const canSetSelectedAlbumRotation = computed(
+  () => selectedAlbumRotatingTargets.value.length < rotationSources.value.length,
+);
+// 多个壁纸目标时，徽标上写明是哪几块屏在轮播它
+const selectedAlbumRotatingScreens = computed(() =>
+  rotationSources.value.length > 1
+    ? selectedAlbumRotatingTargets.value
+        .map((targetId) => wallpaperTargetScreenName(targetId))
+        .filter((name): name is string => !!name)
+    : [],
 );
 
 const canCreateSubAlbumForSelected = computed(() => {
@@ -595,7 +626,6 @@ const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean })
 // ---------- 虚拟磁盘 ----------
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
-const { set: setWallpaperRotationPath } = useSettingKeyState("wallpaperRotationPath");
 const albumDriveEnabled = computed(
   () => !IS_ANDROID && !IS_WEB && !IS_LIGHT_MODE && !!settingsStore.values.albumDriveEnabled,
 );
@@ -610,8 +640,16 @@ const openVirtualDrive = async () => {
   }
 };
 
-// 当前轮播画册ID：轮播路径直接以某画册为根时才有
-const currentRotationAlbumId = computed(() => rotationAlbumIdFromPath(settingsStore.values.wallpaperRotationPath));
+// 各活跃壁纸目标的轮播来源（逐屏独立下每块屏一个）
+const rotationSources = useWallpaperRotationSources();
+// 当前轮播画册 id：任一活跃壁纸目标的轮播路径直接以某画册为根时才有
+const rotationAlbumIds = computed(() => rotationAlbumIdsFromPaths(rotationSources.value.map((source) => source.path)));
+// 每个活跃壁纸目标都在轮播的画册：没有哪块屏还能再「设为轮播」。只有一个目标时与上面相同
+const fullRotationAlbumIds = computed(() =>
+  rotationAlbumIds.value.filter((id) =>
+    rotationSources.value.every((source) => rotationAlbumIdFromPath(source.path) === id),
+  ),
+);
 // 轮播是否开启
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
@@ -727,16 +765,6 @@ const isRefreshing = ref(false);
 const createAlbumParentScope = computed<AlbumTreeViewScope>(() =>
   isNewLabelForestAlbum.value ? { sections: ["label"], kinds: ["label_dir"] } : { sections: ["normal"] },
 );
-
-// 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
-const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
-  if (currentRotationAlbumId.value !== deletedAlbumId) return;
-  try {
-    await setWallpaperRotationPath(null);
-  } catch {
-    // 静默失败
-  }
-};
 
 const handleRefresh = async () => {
   isRefreshing.value = true;
@@ -856,7 +884,8 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     target: album,
     selectedIds: new Set<string>(),
     selectedCount: 0,
-    currentRotationAlbumId: currentRotationAlbumId.value,
+    rotationAlbumIds: rotationAlbumIds.value,
+    fullRotationAlbumIds: fullRotationAlbumIds.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
     albumImageCount: album
       ? album.id === selectedAlbumId.value
@@ -1013,11 +1042,17 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "setWallpaperRotation") {
     try {
-      // 如果轮播未开启，先开启轮播
-      // 先换成该画册默认视图的轮播路径，再开启轮播（开启时直接按新路径拉起）
-      await setWallpaperRotationPath(albumRotationPath(id));
+      // 逐屏独立且不止一块屏时先选给哪块屏轮播；取消就什么都不做。只有一个壁纸目标时不弹
+      const target = await pickWallpaperTarget({ action: "setRotation" });
+      if (!target) return;
+      // 先把选中目标换成该画册默认视图的轮播路径，再开启轮播（开关是全局的，开启时直接按新路径拉起）
+      if (!(await setWallpaperRotationPath(albumRotationPath(id), target))) return;
       if (!wallpaperRotationEnabled.value) await setWallpaperRotationEnabled(true);
-      ElMessage.success(t("albums.rotationStarted", { name }));
+      // 有多个壁纸目标时提示里带上是哪块屏
+      const screen = pickedScreenName(target);
+      ElMessage.success(
+        screen ? t("albums.rotationStartedOn", { name, screen }) : t("albums.rotationStarted", { name }),
+      );
     } catch (error) {
       console.error("设置轮播画册失败:", error);
       ElMessage.error(t("albums.setFailed"));
@@ -1079,9 +1114,8 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       t("albums.confirmDelete"),
       { type: "warning" },
     );
+    // 删的若是某个壁纸目标的轮播画册，后端把该目标的轮播路径退回默认并发 setting-change
     await deleteAlbum(id);
-    // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
-    await handleDeletedRotationAlbum(id);
     ElMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {

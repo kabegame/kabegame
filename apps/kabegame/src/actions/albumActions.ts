@@ -27,7 +27,10 @@ const LOCAL_FOLDER_SUPPORTED = !IS_ANDROID && !IS_WEB;
  * Must include ActionContext<Album> so ActionRenderer receives compatible context.
  */
 export interface AlbumActionContext extends ActionContext<Album> {
-  currentRotationAlbumId: string | null;
+  /** 活跃壁纸目标里轮播路径直接以画册为根的那些画册 id */
+  rotationAlbumIds: readonly string[];
+  /** 其中每个活跃壁纸目标都在轮播的画册 id（只有一个目标时与上面相同） */
+  fullRotationAlbumIds: readonly string[];
   wallpaperRotationEnabled: boolean;
   albumImageCount: number;
   favoriteAlbumId: string;
@@ -193,10 +196,12 @@ export function createAlbumActions(): ActionItem<Album>[] {
       label: t("contextMenu.setWallpaperRotation"),
       icon: Picture,
       command: "setWallpaperRotation",
+      // 多块屏逐屏独立时，只要还有屏没在轮播这个画册就仍可设（给另一块屏）；每块屏都在轮播它才收起
       visible: (ctx) => {
         const ext = ctx as AlbumActionContext;
-        const isCurrent = ext.wallpaperRotationEnabled && ext.target && ext.currentRotationAlbumId === ext.target.id;
-        return ext.albumImageCount > 0 && !isCurrent;
+        const everywhere =
+          ext.wallpaperRotationEnabled && ext.target && ext.fullRotationAlbumIds.includes(ext.target.id);
+        return ext.albumImageCount > 0 && !everywhere;
       },
     },
     {
@@ -204,9 +209,10 @@ export function createAlbumActions(): ActionItem<Album>[] {
       label: t("contextMenu.stopWallpaperRotation"),
       icon: VideoPause,
       command: "stopWallpaperRotation",
+      // 任一块屏在轮播这个画册就给出；关的是全局的轮播开关
       visible: (ctx) => {
         const ext = ctx as AlbumActionContext;
-        return !!ext.wallpaperRotationEnabled && !!ext.target && ext.currentRotationAlbumId === ext.target.id;
+        return !!ext.wallpaperRotationEnabled && !!ext.target && ext.rotationAlbumIds.includes(ext.target.id);
       },
     },
     {

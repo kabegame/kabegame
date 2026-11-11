@@ -281,9 +281,10 @@ export interface AppState {
   /** 壁纸是否启用（`get_wallpaper_enabled`）。 */
   enabled: unknown;
   postprocess: unknown;
-  transition: unknown;
-  transitionByMode: unknown;
-  styleByMode: unknown;
+  /** 显示器模式（`get_wallpaper_display_mode`）：multiple / span / single。 */
+  displayMode: unknown;
+  /** 壁纸目标配置（`get_wallpaper_targets`）：目标 id → 轮播路径与位置、样式、过渡、当前壁纸。 */
+  targets: unknown;
   rotationEnabled: unknown;
   route: string;
   /** 现有场景宿主的 [所在窗口, kbScene]，用来核对没有残留宿主。 */

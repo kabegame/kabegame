@@ -188,6 +188,25 @@
               </SettingRow>
 
               <div :class="{ 'pointer-events-none opacity-50': wallpaperDisabled }">
+                <!-- 第一层：全局设置。壁纸模式排在最前，它决定下面哪些显示器模式可选 -->
+                <SettingRow
+                  v-if="IS_WINDOWS || IS_MACOS || IS_LINUX"
+                  :label="$t('settings.wallpaperModeLabel')"
+                  :description="$t('settings.wallpaperModeDesc')"
+                >
+                  <WallpaperModeSetting />
+                </SettingRow>
+
+                <!-- 能力表只列一种显示器模式时（Android、Plasma 插件模式）没有可选的，不显示 -->
+                <SettingRow
+                  v-if="displayModeSelectable"
+                  :label="$t('settings.displayMode')"
+                  :description="$t('settings.displayModeDesc')"
+                >
+                  <WallpaperDisplayModeSetting />
+                </SettingRow>
+
+                <!-- 轮播开关与间隔是全局的：一开全开，所有目标同一个节拍 -->
                 <SettingRow
                   :label="$t('settings.wallpaperRotationEnabled')"
                   :description="$t('settings.wallpaperRotationEnabledDesc')"
@@ -195,7 +214,50 @@
                   <WallpaperRotationEnabledSetting />
                 </SettingRow>
 
-                <!-- 轮播来源只读展示：入口已迁到画廊过滤栏 ⋯ 面板的「用当前视图轮播」 -->
+                <SettingRow
+                  :label="$t('settings.wallpaperRotationInterval')"
+                  :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })"
+                >
+                  <SettingNumberControl
+                    setting-key="wallpaperRotationIntervalMinutes"
+                    :min="rotationIntervalMin"
+                    :max="1440"
+                    :step="10"
+                  />
+                </SettingRow>
+
+                <!-- 第二层：显示器布局图，点一块屏选中要设置的目标。没有屏幕信息的平台不显示 -->
+                <!-- 上边线与 SettingRow 的分隔线同色 -->
+                <div
+                  v-if="showScreenLayout"
+                  class="min-w-0 border-0 border-t border-solid border-[color-mix(in_srgb,var(--anime-primary)_15%,transparent)] py-[15px]"
+                >
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0 text-[14px] font-600 leading-5 text-[var(--anime-text-primary)]">
+                      {{ $t("settings.screenLayout") }}
+                    </div>
+                    <!-- 逐屏独立下：把选中的屏设为默认屏 -->
+                    <el-button
+                      v-if="selectedScreenCanBeDefault"
+                      size="small"
+                      :disabled="defaultScreenBusy"
+                      @click="setSelectedScreenAsDefault"
+                    >
+                      {{ $t("settings.screenSetDefault") }}
+                    </el-button>
+                  </div>
+                  <p class="m-0 mb-3 mt-1 text-[12px] leading-[1.55] text-[var(--anime-text-muted)]">
+                    {{ screenLayoutDescription }}
+                  </p>
+                  <WallpaperScreenLayout
+                    v-model:selected="selectedTargetId"
+                    :display-mode="displayMode"
+                    :default-screen="settingsStore.values.wallpaperDefaultScreen"
+                    show-disconnected
+                  />
+                </div>
+
+                <!-- 第三层：选中目标的设置。轮播来源只读展示：入口在画廊过滤栏 ⋯ 面板的「用当前视图轮播」 -->
                 <SettingRow
                   :label="$t('settings.wallpaperRotationPath')"
                   :description="$t('settings.wallpaperRotationPathDesc')"
@@ -219,33 +281,12 @@
                   :title="currentWallpaperName"
                 />
 
-                <!-- 视频、网页、场景共用：只有窗口模式的桌面上有在播放的实例 -->
-                <SettingRow
-                  v-if="desktopWallpaperLive"
-                  :label="$t('settings.wallpaperPaused')"
-                  :description="$t('settings.wallpaperPausedDesc')"
-                >
-                  <SettingSwitchControl setting-key="wallpaperPaused" />
-                </SettingRow>
-
-                <SettingRow
-                  :label="$t('settings.wallpaperRotationInterval')"
-                  :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })"
-                >
-                  <SettingNumberControl
-                    setting-key="wallpaperRotationIntervalMinutes"
-                    :min="rotationIntervalMin"
-                    :max="1440"
-                    :step="10"
-                  />
-                </SettingRow>
-
                 <SettingRow
                   v-if="IS_WINDOWS || IS_LINUX || IS_MACOS"
                   :label="$t('settings.wallpaperStyle')"
                   :description="$t('settings.wallpaperStyleDesc')"
                 >
-                  <WallpaperStyleSetting />
+                  <WallpaperStyleSetting :target-id="selectedTargetId" />
                 </SettingRow>
 
                 <SettingRow
@@ -253,7 +294,17 @@
                   :label="$t('settings.wallpaperTransition')"
                   :description="$t('settings.wallpaperTransitionDesc')"
                 >
-                  <WallpaperTransitionSetting />
+                  <WallpaperTransitionSetting :target-id="selectedTargetId" />
+                </SettingRow>
+
+                <!-- 以下回到全局设置 -->
+                <!-- 视频、网页、场景共用：只有窗口模式的桌面上有在播放的实例 -->
+                <SettingRow
+                  v-if="desktopWallpaperLive"
+                  :label="$t('settings.wallpaperPaused')"
+                  :description="$t('settings.wallpaperPausedDesc')"
+                >
+                  <SettingSwitchControl setting-key="wallpaperPaused" />
                 </SettingRow>
 
                 <SettingRow
@@ -300,14 +351,6 @@
                   :description="$t('settings.wpeEngineDirDesc')"
                 >
                   <WpeEngineDirSetting />
-                </SettingRow>
-
-                <SettingRow
-                  v-if="IS_WINDOWS || IS_MACOS || IS_LINUX"
-                  :label="$t('settings.wallpaperModeLabel')"
-                  :description="$t('settings.wallpaperModeDesc')"
-                >
-                  <WallpaperModeSetting />
                 </SettingRow>
               </div>
             </SettingsSection>
@@ -419,13 +462,23 @@ import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
+import {
+  useActiveWallpaperTargets,
+  useWallpaperDisplayMode,
+  useWallpaperTarget,
+} from "@/composables/useWallpaperTarget";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
+import { useWallpaperScreens } from "@/composables/useWallpaperScreens";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { trackEvent } from "@/track/umami";
 import SettingRow from "@/components/settings/SettingRow.vue";
+import WallpaperScreenLayout from "@/components/wallpaper/WallpaperScreenLayout.vue";
 import WpeWebPropertiesDialog from "@/components/wallpaper/WpeWebPropertiesDialog.vue";
 import { fetchImageById } from "@/utils/imageRow";
 import { hasWpeUserProperties } from "@/utils/mediaMime";
+import { defaultScreenId, screenIdOfTarget } from "@/utils/wallpaperTargets";
 import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
@@ -439,6 +492,7 @@ import WallpaperRotationEnabledSetting from "@/components/settings/items/Wallpap
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
+import WallpaperDisplayModeSetting from "@/components/settings/items/WallpaperDisplayModeSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
 import SuperModeSetting from "@/components/settings/items/SuperModeSetting.vue";
@@ -611,11 +665,62 @@ watch(activeTab, (tab, previousTab) => {
   });
 });
 
+// ---- 壁纸分区：全局设置 → 显示器布局图（选目标）→ 选中目标的设置 ----
+const wallpaperCapabilities = useWallpaperCapabilities();
+const wallpaperScreens = useWallpaperScreens();
+/** 生效的显示器模式（设置里的值在当前壁纸模式下不可用时是 multiple） */
+const displayMode = useWallpaperDisplayMode();
+const activeWallpaperTargets = useActiveWallpaperTargets();
+/** 当前壁纸模式下列出不止一种显示器模式才有得选（不可用的项也算：置灰并给原因） */
+const displayModeSelectable = computed(
+  () => wallpaperCapabilities.displayModesFor(settingsStore.values.wallpaperMode || "native").length > 1,
+);
+/** 有在线屏信息才画布局图（Android、Web 与还没有屏幕枚举的平台没有） */
+const showScreenLayout = computed(() => wallpaperScreens.value.length > 0);
+const screenLayoutDescription = computed(() => {
+  if (displayMode.value === "single") return t("settings.screenLayoutSingleDesc");
+  if (displayMode.value === "span") return t("settings.screenLayoutSpanDesc");
+  return t("settings.screenLayoutMultipleDesc");
+});
+
+/**
+ * 正在设置哪个目标：页面本地状态，记在 localStorage，不进设置。记下的目标不在当前活跃集合里
+ * （换了显示器模式、那块屏拔了）时回到默认目标；记录不动，屏接回来还是它。
+ */
+const storedWallpaperTarget = useLocalStorage("kabegame-settings-wallpaper-target", "");
+const selectedTargetId = computed<string>({
+  get: () =>
+    activeWallpaperTargets.value.includes(storedWallpaperTarget.value)
+      ? storedWallpaperTarget.value
+      : activeWallpaperTargets.value[0],
+  set: (targetId) => {
+    storedWallpaperTarget.value = targetId;
+  },
+});
+
+// 逐屏独立下把选中的屏设为默认屏（目标选择弹窗的预选项，也是不带目标的操作落到的屏）
+const { disabled: defaultScreenBusy, set: setDefaultScreen } = useSettingKeyState("wallpaperDefaultScreen");
+const selectedScreenId = computed(() => screenIdOfTarget(selectedTargetId.value));
+const selectedScreenCanBeDefault = computed(
+  () =>
+    displayMode.value === "single" &&
+    !!selectedScreenId.value &&
+    selectedScreenId.value !== defaultScreenId(wallpaperScreens.value, settingsStore.values.wallpaperDefaultScreen),
+);
+async function setSelectedScreenAsDefault() {
+  if (!selectedScreenId.value) return;
+  try {
+    await setDefaultScreen(selectedScreenId.value);
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
+// 轮播路径、当前壁纸、样式、过渡都挂在壁纸目标上；这里读写选中的目标
+const wallpaperTarget = useWallpaperTarget(selectedTargetId);
 // 未设置时后端落到默认全画廊随机路径
 const wallpaperRotationPathDisplay = computed(
-  () =>
-    (settingsStore.values.wallpaperRotationPath as string | null | undefined) ||
-    t("settings.wallpaperRotationPathDefault"),
+  () => wallpaperTarget.rotationPath.value || t("settings.wallpaperRotationPathDefault"),
 );
 const rotationIntervalMin = computed(() => (IS_ANDROID ? 15 : 1));
 const currentWallpaperPath = ref<string | null>(null);
@@ -625,10 +730,7 @@ const currentWallpaperHasProps = ref(false);
 const currentWallpaperType = ref<string | null>(null);
 /** 当前网页 / 场景壁纸的显示名，作属性弹窗标题（面板自带「壁纸属性」标题栏） */
 const currentWallpaperName = ref<string | null>(null);
-const currentWallpaperImageId = computed(() => {
-  const id = settingsStore.values.currentWallpaperImageId;
-  return typeof id === "string" ? id : null;
-});
+const currentWallpaperImageId = wallpaperTarget.currentImageId;
 const wpePropsOpen = ref(false);
 let wallpaperLookup = 0;
 async function refreshCurrentWallpaperPath() {
@@ -636,7 +738,7 @@ async function refreshCurrentWallpaperPath() {
   const id = currentWallpaperImageId.value;
   currentWallpaperHasProps.value = false;
   try {
-    const path = await invoke<string | null>("get_current_wallpaper_path");
+    const path = await invoke<string | null>("get_current_wallpaper_path", { target: selectedTargetId.value });
     currentWallpaperPath.value = path && path.trim() ? path : null;
   } catch {
     currentWallpaperPath.value = null;
@@ -662,12 +764,10 @@ async function openCurrentWallpaperPath() {
     ElMessage.error(t("settings.messageOpenFailed"));
   }
 }
-watch(
-  () => settingsStore.values.currentWallpaperImageId,
-  () => {
-    void refreshCurrentWallpaperPath();
-  },
-);
+// 当前壁纸换了、或换了要看的目标，都重新取路径
+watch([currentWallpaperImageId, selectedTargetId], () => {
+  void refreshCurrentWallpaperPath();
+});
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 /** 只有窗口模式的桌面上有在播放的视频、网页与场景（原生模式交给系统，Android / Web 没有窗口壁纸），暂停只在这时显示 */
 const desktopWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window");
@@ -881,6 +981,8 @@ onActivated(async () => {
   display: flex;
   flex-direction: column;
   max-width: 660px;
+  // 行内的长路径按面板宽度的比例封顶（见 .setting-rotation-path），需要面板作容器
+  container-type: inline-size;
 }
 
 :deep(.setting-control .el-input__wrapper),
@@ -889,9 +991,10 @@ onActivated(async () => {
   min-height: 34px;
 }
 
+// 路径很长，不封顶会把左边的标题列挤成一个字宽（窗口缩到最窄时面板只有四百多像素）
 .setting-rotation-path {
   display: block;
-  max-width: 460px;
+  max-width: min(460px, 70cqw);
   overflow: hidden;
   color: var(--anime-text-secondary);
   font-size: 12px;
@@ -902,7 +1005,7 @@ onActivated(async () => {
 
 .setting-current-wallpaper-path {
   appearance: none;
-  max-width: 460px;
+  max-width: min(460px, 70cqw);
   padding: 0;
   overflow: hidden;
   border: 0;

@@ -113,10 +113,24 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSRunningApplication",
   "NSScreen",
   "NSPasteboard",
+  # 显示器枚举（wallpaper/screens/mac.rs）：deviceDescription 与 backingScaleFactor
+  "NSGraphics",
+  # 原生壁纸逐屏设置（wallpaper/manager/native_mac.rs）：setDesktopImageURL:forScreen:options:error:
+  "NSWorkspace",
+  "objc2-core-foundation",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "NSData",
+  # 显示器枚举：读 NSScreen.deviceDescription 里的 NSScreenNumber
+  "NSArray",
+  "NSDictionary",
+  "NSString",
+  "NSValue",
+  # 原生壁纸逐屏设置：文件 URL、选项字典与返回的 NSError
+  "NSObject",
+  "NSURL",
+  "NSError",
 ] }
 objc2 = { version = "0.6", default-features = false }
 # 桌面鼠标转发（wallpaper/input_forward/mac.rs）：向窗口服务查窗口层级与边界

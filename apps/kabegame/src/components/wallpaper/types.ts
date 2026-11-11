@@ -1,6 +1,6 @@
-/** 壁纸样式：与设置 `wallpaperStyle`（窗口模式）一致。 */
+/** 壁纸样式：与壁纸目标配置里的 `style.window`（窗口模式）一致。 */
 export type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
-/** 壁纸切换过渡：与设置 `wallpaperRotationTransition`（窗口模式）一致。 */
+/** 壁纸切换过渡：与壁纸目标配置里的 `transition.window`（窗口模式）一致。 */
 export type Transition = "none" | "fade" | "slide" | "zoom";
 
 /** WPE 视频壁纸的作者默认播放属性（后端 `WpeVideoProps`）。 */

@@ -29,6 +29,35 @@ function removeKey(key: string, reason: string): LocalMigration {
   };
 }
 
+/**
+ * Web 版的应用背景图：原先是单独的本地键 `currentWallpaperImageId`（裸 id 字符串），现在并入本地的
+ * 壁纸目标 map，记在 `multiple` 目标的 `currentImageId` 上。桌面 / Android 的这个值一直在后端设置里
+ * （由后端迁移处理），本地没有旧键，这条规则对它们什么都不做。
+ */
+function moveWebBackgroundIntoTargets(): LocalMigration {
+  const from = `${SETTINGS_PREFIX}currentWallpaperImageId`;
+  const to = `${SETTINGS_PREFIX}wallpaperTargets`;
+  return {
+    description: `${from} -> ${to}`,
+    run(storage) {
+      const legacy = storage.getItem(from);
+      if (legacy === null) return;
+      const imageId = legacy.trim();
+      if (storage.getItem(to) === null && imageId && imageId !== "null") {
+        const multiple = {
+          rotationPath: null,
+          rotationPosition: 0,
+          style: {},
+          transition: {},
+          currentImageId: imageId,
+        };
+        storage.setItem(to, JSON.stringify({ multiple }));
+      }
+      storage.removeItem(from);
+    },
+  };
+}
+
 const migrations: LocalMigration[] = [
   moveKeyOnce("kabegame-galleryPageSize", `${SETTINGS_PREFIX}galleryPageSize`),
   moveKeyOnce("kabegame-gallery-hide", "pathRoute.hide"),
@@ -40,6 +69,7 @@ const migrations: LocalMigration[] = [
   ...["Search", "Date", "Plugin", "MediaType", "Aspect", "Size", "SortField", "SortOrder", "Compact", "PageSize"].map(
     (name) => removeKey(`${SETTINGS_PREFIX}galleryChip${name}`, "toolbar chip visibility"),
   ),
+  moveWebBackgroundIntoTargets(),
 ];
 
 /**

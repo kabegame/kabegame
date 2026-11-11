@@ -4,9 +4,8 @@ import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID, removeImagesFromAlbum } from "@/services/albums";
-import { useSettingsStore } from "@/stores/settings";
+import { clearWebBackgroundIfRemoved } from "@/utils/wallpaperMode";
 import { stripComposablePathTail } from "@/utils/galleryPath";
-import type { ImageInfo } from "@/types/image";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
 import { labelSearchTriggers, hiddenTrigger, patchTriggers, on } from "@/services/kbEvents";
@@ -25,19 +24,9 @@ export function createAlbumDetailAdapter(params: {
   analytics: ImageAnalytics;
 }): GridAdapter {
   const routeStore = useAlbumDetailRouteStore();
-  const settingsStore = useSettingsStore();
   const t = i18n.global.t;
   const view = () => ({ query: routeStore.query, sort: routeStore.sort, hide: routeStore.hide });
 
-  const includesCurrentWallpaper = (images: ImageInfo[]) => {
-    const current = settingsStore.values.currentWallpaperImageId;
-    return !!current && images.some((img) => img.id === current);
-  };
-  const clearCurrentWallpaperIfIncluded = (images: ImageInfo[]) => {
-    if (includesCurrentWallpaper(images)) {
-      settingsStore.values.currentWallpaperImageId = null;
-    }
-  };
   const wallpaperHint = (included: boolean) => (included ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "");
 
   const deleteFileConfig: GridRemoveConfig = {
@@ -51,8 +40,10 @@ export function createAlbumDetailAdapter(params: {
     confirm: async (images, ctx) => {
       const count = images.length;
       try {
-        await ctx.mutate(() => invoke("batch_delete_images", { imageIds: images.map((img) => img.id) }));
-        clearCurrentWallpaperIfIncluded(images);
+        // 被删的图若是某个壁纸目标的当前壁纸，后端会清掉并发 setting-change；Web 版的本地背景在这里清
+        const imageIds = images.map((img) => img.id);
+        await ctx.mutate(() => invoke("batch_delete_images", { imageIds }));
+        await clearWebBackgroundIfRemoved(imageIds);
         ElMessage.success(
           count > 1 ? t("gallery.deletedAndRemovedCountSuccess", { count }) : t("gallery.deletedAndRemovedSuccess"),
         );
@@ -132,7 +123,6 @@ export function createAlbumDetailAdapter(params: {
               images.map((img) => img.id),
             ),
           );
-          clearCurrentWallpaperIfIncluded(images);
           ElMessage.success(
             count > 1 ? t("gallery.removedFromAlbumCountSuccess", { count }) : t("gallery.removedFromAlbumSuccess"),
           );
@@ -158,7 +148,6 @@ export function createAlbumDetailAdapter(params: {
             images.map((img) => img.id),
           ),
         );
-        clearCurrentWallpaperIfIncluded(images);
       } catch (error) {
         console.error("移除图片失败:", error);
         ElMessage.error(t("gallery.removeImageFailed"));

@@ -163,7 +163,6 @@ fn run_hidden_cleanup(
     let mut removed = 0usize;
     let mut kept_files = 0usize;
     let mut previous_batch: Option<Vec<String>> = None;
-    let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -189,13 +188,8 @@ fn run_hidden_cleanup(
         previous_batch = Some(signature);
 
         let purge = handle.block_on(delete_images_with_events(&batch, true))?;
-        // 检查壁纸是否被移除
-        if let Some(cur) = current_wallpaper_id.as_deref() {
-            if batch.iter().any(|id| id == cur) {
-                let _ = Settings::global().set_current_wallpaper_image_id(None);
-                current_wallpaper_id = None;
-            }
-        }
+        // 被移除的图若是某个壁纸目标的当前壁纸，清空该目标
+        let _ = Settings::global().clear_wallpaper_targets_current_images(&batch);
         processed += batch.len();
         removed += batch.len();
         kept_files += purge.kept;

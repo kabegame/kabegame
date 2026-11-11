@@ -75,7 +75,8 @@
 
         <div v-if="isRotating" class="album-detail-rotating-badge mt-2">
           <el-icon><Monitor /></el-icon>
-          <span>{{ t("albums.detailRotatingBadge") }}</span>
+          <!-- 逐屏独立且不止一块屏时写明是哪几块屏在轮播它 -->
+          <span class="min-w-0 truncate" :title="rotatingBadge">{{ rotatingBadge }}</span>
         </div>
       </div>
 
@@ -101,9 +102,18 @@
           v-if="!isLabelDir"
           class="album-detail-primary-btn"
           type="button"
-          @click="emit('command', isRotating ? 'stopWallpaperRotation' : 'setWallpaperRotation')"
+          @click="emit('command', canStartRotation ? 'setWallpaperRotation' : 'stopWallpaperRotation')"
         >
-          {{ isRotating ? t("albums.detailStopRotation") : t("albums.detailStartRotation") }}
+          {{ canStartRotation ? t("albums.detailStartRotation") : t("albums.detailStopRotation") }}
+        </button>
+        <!-- 只有部分屏在轮播它：主按钮仍是「设为轮播」（给另一块屏），停止另给一个入口（关的是全局开关） -->
+        <button
+          v-if="!isLabelDir && isRotating && canStartRotation"
+          class="album-detail-secondary-btn"
+          type="button"
+          @click="emit('command', 'stopWallpaperRotation')"
+        >
+          {{ t("albums.detailStopRotation") }}
         </button>
         <div class="grid grid-cols-2 gap-2">
           <button v-if="canRename" class="album-detail-secondary-btn" type="button" @click="emit('command', 'rename')">
@@ -154,13 +164,19 @@ interface Props {
   album: Album | null;
   isHidden: boolean;
   stats: { imageCount: number; subAlbumCount: number };
+  /** 轮播开着，且有壁纸目标在轮播这个画册 */
   isRotating: boolean;
+  /** 还有壁纸目标没在轮播它（多块屏逐屏独立时可能与 `isRotating` 同时为 true）；缺省按「没在轮播才能设」 */
+  canSetRotation?: boolean;
+  /** 多个壁纸目标时，正在轮播它的屏的名字；只有一个目标时为空 */
+  rotatingScreens?: readonly string[];
   canCreateSubAlbum: boolean;
   canRename: boolean;
   cover: ImageInfo | null;
 }
 
-const props = defineProps<Props>();
+// 布尔 prop 不传时 Vue 会给 false，这里要能区分「没传」
+const props = withDefaults(defineProps<Props>(), { canSetRotation: undefined, rotatingScreens: () => [] });
 
 const emit = defineEmits<{
   close: [];
@@ -174,6 +190,14 @@ const isLocalFolder = computed(() => props.album?.type === "local_folder");
 const isLabel = computed(() => props.album?.type === "label");
 const isLabelDir = computed(() => props.album?.type === "label_dir");
 const isLabelForest = computed(() => isLabel.value || isLabelDir.value);
+
+// 主按钮是「设为轮播」还是「停止轮播」：还有屏能设就是前者
+const canStartRotation = computed(() => props.canSetRotation ?? !props.isRotating);
+const rotatingBadge = computed(() =>
+  props.rotatingScreens.length > 0
+    ? t("albums.detailRotatingBadgeOn", { screens: props.rotatingScreens.join(t("common.listSeparator")) })
+    : t("albums.detailRotatingBadge"),
+);
 
 const displayName = computed(() => {
   if (!props.album) return "";

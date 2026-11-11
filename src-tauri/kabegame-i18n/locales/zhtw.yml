@@ -29,6 +29,15 @@ settings:
   modeNative: "原生模式"
   modeWindow: "視窗模式"
   modePlugin: "插件模式"
+  displayModeMultiple: "各螢幕複製"
+  displayModeMultipleDesc: "所有顯示器顯示同一張桌布"
+  displayModeSpan: "跨螢幕拼接"
+  displayModeSpanDesc: "把所有顯示器當成一塊畫布，一張桌布跨螢幕顯示"
+  displayModeSingle: "逐螢幕獨立"
+  displayModeSingleDesc: "每個顯示器各自設定桌布與輪播"
+  displayModeLater: "此顯示器模式將在後續版本提供"
+  displayModeSpanWindow: "視窗模式暫不支援跨螢幕拼接"
+  displayModeSpanNoSystem: "系統沒有跨螢幕鋪放，此模式無法使用"
 
 tray:
   show: 顯示

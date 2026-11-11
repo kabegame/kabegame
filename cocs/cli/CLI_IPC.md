@@ -19,8 +19,9 @@
 `--data` 参数），再以
 短超时执行 `IpcClient::connect()` 与 `Status`：
 
-1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`（当前为 v4。v3 把 `PluginRunParams.dryRun` 更名为
-   `printConfig`，并新增真正执行任务的 `isDryRun`；v4 新增 `freezeTemplate`）；
+1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`（当前为 v5。v3 把 `PluginRunParams.dryRun` 更名为
+   `printConfig`，并新增真正执行任务的 `isDryRun`；v4 新增 `freezeTemplate`；v5 壁纸设置变体按目标寻址，
+   见下文「壁纸设置变体」）；
 2. `Status.dataDir` 与 CLI 的数据目录规范化后相同。
 
 两项都满足才选 `App`。socket / 命名管道地址按 `debug_assertions` 区分：debug 构建（`deno task dev` 的
@@ -81,6 +82,30 @@ IPC，不能回退 local。`TaskSetMaxConcurrentDownloads` 转发到唯一领域
 `init_global_without_metadata_migrations()`：`plugin import`、`plugin run` 的 local 回退和
 `pathql query` 都不会调度 metadata 迁移；应用下次启动全量刷新插件时会按版本门控补跑。经 app 后端
 安装插件仍由主程序正常调度迁移。
+
+### 壁纸设置变体（v5）
+
+壁纸的轮播路径、样式、过渡与当前壁纸挂在「壁纸目标」上（目标 id 为 `multiple`、`span` 或
+`screen:<屏幕持久标识>`，见 [../wallpaper/MULTI_SCREEN.md](../wallpaper/MULTI_SCREEN.md)）。相应的 IPC 变体新增可选字段
+`target`（`#[serde(default)]`），缺省为当前显示器模式的默认目标，指定的目标不在活跃集合里时返回错误：
+
+| 变体 | 说明 |
+| --- | --- |
+| `SettingsGetWallpaperRotationPath { target? }`、`SettingsSetWallpaperRotationPath { path, target? }` | 目标的轮播路径；写入与 Tauri 命令同一实现（校验、路径变化时立即把该目标切到第 1 张） |
+| `SettingsGetWallpaperStyle { target? }`、`SettingsSetWallpaperStyle { style, target? }` | 目标在当前壁纸模式下的样式。读到的是按能力归一化后的有效值；写入与 Tauri 命令同一实现（按能力校验，并把当前壁纸重新输出一次） |
+| `SettingsGetWallpaperRotationTransition { target? }`、`SettingsSetWallpaperRotationTransition { transition, target? }` | 目标在当前壁纸模式下的过渡，约定同样式；写入后轮播开着且过渡不是 `none` 时切一张演示 |
+| `SettingsGetCurrentWallpaperImageId { target? }`、`SettingsSetCurrentWallpaperImageId { image_id, target? }` | 目标的当前壁纸 id |
+
+删除了三个变体：`SettingsGetWallpaperStyleByMode`、`SettingsGetWallpaperTransitionByMode`、
+`SettingsSwapStyleTransitionForModeSwitch`（样式与过渡改为在目标里按壁纸模式存，不再有按模式交换的缓存）。
+轮播开关、间隔与壁纸模式的变体是全局的，没有变化。
+
+不带 `target` 的旧形状请求仍能解析并落到默认目标。升到 v5 是因为旧主程序会静默丢弃 `target`、把请求
+当成对默认目标的操作，版本门控让新客户端不会把带目标的请求发给旧主程序。Web 版构建没有壁纸后端与
+显示器模式，handler 只读写设置里的目标（缺省 `multiple`），不做能力校验。
+
+`kabegame-cli` 目前没有壁纸相关的子命令，也没有 `--target` 参数；这些变体与 `IpcClient` 上对应的
+`settings_*` 方法供 CLI 以外经 app IPC 接入的集成使用。
 
 ### log tail
 

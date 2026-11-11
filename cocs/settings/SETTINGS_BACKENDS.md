@@ -7,7 +7,7 @@
 
 ## 后端类型
 
-- `tauri`：通过 `get_settings` 批量读取，通过 descriptor 中的 setter IPC 写入。getter-only key 允许没有 setter；调用方用 `settingsStore.refresh(key)` 走 descriptor 的 getter 做单键刷新（例如 `albumDriveDriverInstalled` 这类运行时状态）。
+- `tauri`：通过 `get_settings` 批量读取，通过 descriptor 中的 setter IPC 写入。getter-only key 允许没有 setter；调用方用 `settingsStore.refresh(key)` 走 descriptor 的 getter 做单键刷新（例如 `albumDriveDriverInstalled` 这类运行时状态）。`wallpaperTargets` 也是 getter-only：它由带 `target` 的专用命令写入（经 `useWallpaperTarget`，不走 `save`），值随后端的 `setting-change` 落地，保存中状态由各设置项自己持有，见 [多显示器壁纸](../wallpaper/MULTI_SCREEN.md)。
 - `localStorage`：前端本地偏好，使用 `kabegame-setting-${key}` 持久化。
 - `query`：URL query 镜像。settings 层只同步参数值，不判断 routeName 或激活态。四个 path-route 的路径里，`gallery-path`、`task-detail-path`、`surf-images-path` 全平台都走 query，参数名同为 `path`，所以只能在自己的页面上写，跨页要显式 `router.push` 到目标页。`album-detail-path` 只在 web 走 query，桌面 / Android 用 localStorage。画廊因此不再在重启后恢复上次浏览路径，见 [收藏视图](../gallery/SAVED_VIEWS.md)。
 - `readonly`：web 下桌面能力占位，写入由 `useSettingKeyState` 拦截并提示桌面版。
