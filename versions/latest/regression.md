@@ -73,6 +73,20 @@
 | [ ] | R11 弹出层锚点滚出列表 | 桌面 dev | 抽屉里打开某任务的重试记录，期间有新任务插入使该任务被挤出列表可视区 | 弹出层仍跟随锚点 | 已知问题：弹出层跟着锚点被推到窗口底部、只露出标题，点空白处可关；未修 |
 | [ ] | R10 Android 返回键 | Android dev | 打开重试记录弹出层后按返回键 | 关掉弹出层 | 可选 |
 
+## 场景壁纸 P7b：照 WPE 的预处理、声明与打包数组
+
+2026-11-11 Windows。翻译器照 WPE 自己的文本处理：`#if` 只解析一个表达式、多余的 `#endif` / `#else` / `#elif` 忽略、宏后者覆盖前者、声明名带分量只取名字、`main` 之前的 `float` 数组用打包形态（越界读到同一 cbuffer 的下一个成员）；几何展开避开 Tint 的指针别名；effect 的 `editable` 放开。P7b 单独不增加能渲染的场景（多数着色器露出类型类错误，等 P7c）。说明见 `src-tauri/wpesl2wgsl/README.md`，数据见 `.claude/plans/wpe-import/3-scene/phase7/phase-7b-rules.md`「实施记录」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | B1 WPE 语义实测 | Windows，WPE 抓帧 | 确定性工程 `p7-sem`（`ignore/p7/gen_sem.py`）：尾随分号、`v_Size.xy`、宏重定义、`main` 之前读打包数组 | 和读码一致 | 2026-11-11 Claude：四项都和读码一致；打包数组越界读到同一 cbuffer 的 `g_Time`，出缓冲为 0 |
+| [x] | B2 逐字节基线 | Windows，cargo | 对 P7a 基线比较，ALLOW / ALLOW_REGRESS 列出预期变化 | 只有用到这些写法的着色器变化 | 2026-11-11：变了 4（两组绳子 + 折射）、新失败 8（`audioline`、`highly_customizable_audio_visualizer`，待 P7c；所在 4 张场景本就因音频退回）；不列 ALLOW_REGRESS 时测试失败 |
+| [x] | B3 Tint | Windows dev，主窗口 | 新基线 1786 份 WGSL 加产品前言逐份编译 | 0 error | 2026-11-11 Claude（kabegame-dev）：0 error 0 warning，约 8 s |
+| [x] | B4 夹具重录 | Windows，Node + cargo | 用 P7b 的 wasm 在 HEAD 产品源码快照上重扫并录夹具，原生重放 | 一致 | 2026-11-11：779 个请求，通过 689 / 失败 90，原生与 wasm 0 不一致 |
+| [x] | B5 语料扫描 | Node，165 个工程 | 同一份产品源码，P7 之前与之后的 wasm 各扫一次 | 能渲染数不变，退回原因换成下一个错误 | 2026-11-11：38 → 38；`editable` 只少一个键 |
+| [x] | B6 单测与检查 | Windows | `cargo test -p wpesl2wgsl --lib`、naga 单测、`apps/wpe-scene` 的 tsc / vitest | 全过 | 2026-11-11：68 个、128 个全过；tsc 0 error；vitest 1702 / 1703，`pipeline.test` 的请求次数上限（`3830255100` 219 次）在不带改动的 HEAD 上同样失败，与 P7b 无关 |
+| [ ] | B7 Kabegame 里的画面 | Windows dev | 重建 wasm 后在 Kabegame 渲染 `p7-sem` 的 `kbsemi` / `kbswz` / `kbredef` / `kbpack`，和 WPE 抓帧逐像素比；打开几张原本能渲染的场景 | 一致；原有画面不变 | 待重建 wasm（dev 里还是 P7 之前那份） |
+
 ## 场景壁纸 P7a：请求夹具、逐字节基线与嵌入 naga
 
 2026-11-11 Windows。P7a 不改变能渲染的场景数（流体 effect 的着色器能翻译了，但用它的唯一一张场景还缺别的能力）。说明见 `src-tauri/wpesl2wgsl/README.md`「测试」与 `naga/KABEGAME.md`，数据见 `.claude/plans/wpe-import/3-scene/phase7/phase-7a-corpus-naga.md`「实施记录」。

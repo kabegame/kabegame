@@ -196,3 +196,19 @@ const SUPPORTED_EFFECT = new Set([
 - **步骤 4 指针别名：** 只有 `geom__rope__refract`、`geom__ropetrail__refract` 的顶点段变化，两份 Tint 0 error（dev 主窗口），其余不变。
 - **偏离：** `#if` 去掉三元（WPE 没有，语料也没用到）；`g_Bones` 与 `g_L*` 灯光按 rea 表另有缓冲，不进 dynamic；WPE 声明正则不认的类型不进布局；几何展开拼成的顶点段不做打包；`main` 之前不带下标地用打包数组、`vec2` 数组、`main(void)` 不处理（README 写明）；别名改写只处理单独成句的调用。
 - 本步的比较命令：`WPESL2WGSL_BASELINE_DIR=ignore/p7/baseline/p7a-9508c531`，`ALLOW` = `effects/fluidsimulation_advection-`、两个 `geom__rope*__refract`、`audioline`、`highly_customizable_audio_visualizer`，`ALLOW_REGRESS` = 后两个。新基线 `ignore/p7/baseline/p7b-final`（3460 个文件）。
+
+### 步骤 5 — `editable`（2026-11-11，`58253353`）
+
+- `features.ts` 的 `SUPPORTED_EFFECT` 加 `editable`，注释写依据。动工时别的会话没有在改这个文件。
+- 在 HEAD 快照上加这一行重扫：只少 `effect:jian:editable` 一个键，能渲染 38 → 38。
+- tsc 0 error；vitest 1702 / 1703。唯一的失败是 `pipeline.test.ts` 的请求次数上限（`3830255100` 发了 219 次，上限 200），在不带本改动的 HEAD 快照上同样失败，与 P7b 无关，原样报告。
+
+### 收尾（2026-11-11）
+
+- **重录夹具：** 用 `e2345b19` 编出的 wasm（`ignore/p7/wasm/p7b-e2345b19.wasm`，1 652 802 字节）放进 HEAD 的产品源码快照（`ignore/p7/snap-p7b`），重扫语料并录夹具到 `ignore/p7/requests-p7b`：779 个请求，通过 689、失败 90；原生重放与 wasm 的结果全部一致。新基线 `ignore/p7/baseline/p7b-e2345b19`（3572 个文件），供 P7c 比较。
+- **Tint：** 新基线 1786 份 WGSL 在 dev 主窗口全部 0 error、0 warning（P7a 时几何门槛的两个 error 已消失）。
+- **语料扫描**（同一份 HEAD 产品源码，P7 之前的 wasm 对 P7b 的 wasm，`ignore/p7/out/diff-before-p7b.txt`）：能渲染 38 → 38。
+  - 预处理、声明名带分量、宏重定义、分号这几类全部换成下一个错误（类型类，P7c）；
+  - `Simple_Audio_Bars`（`3082978660` 版）用到它的 21 张里 10 张已完整翻译，只剩音频 uniform（P11）；
+  - 流体那张（`3286859278`）在 advection 能翻译后露出新键 `constant:slots`，留给 P7d。
+- **没做的：** 在 Kabegame 里渲染 `p7-sem` 的新图层、和 WPE 逐像素比。dev 里的 wasm 是 P7 之前的，要等重建 wasm（`deno task build:wpesl2wgsl`，各会话的 dev 重启时生效）之后再比。规则的语义已由 WPE 抓帧（步骤 0）与翻译器单测覆盖。

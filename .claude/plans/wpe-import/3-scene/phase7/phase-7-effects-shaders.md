@@ -286,3 +286,15 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 我的失误：
 - 总计划把 `audio` 归为「源码损坏、WPE 多半也编不过」，只看了宏的值，没看宏有没有被用到。
 - 回退判据第一版两处写错（顶点判据把纯色图层认成回退、片元常量的格式写错），阳性对照之前的「0 次回退」不可信；修好后全部抓帧重扫，结论不变。
+
+### P7a — 语料、基线与嵌入 naga（2026-11-11）
+
+见 [phase-7a](phase-7a-corpus-naga.md)「实施记录」：请求夹具与逐字节基线（`3d4e4f84`）、Tint 基线、naga 嵌入并裁剪（`7811d87a`）、死代码 `CallResult` 补丁（`9508c531`）。能渲染数不变。
+
+### P7b — 规则类（2026-11-11）
+
+见 [phase-7b](phase-7b-rules.md)「实施记录」：步骤 0（`57426efd`）、翻译器规则（`e2345b19`）、`editable`（`58253353`）。
+- 能渲染数不变（38 → 38，同一份产品源码前后 wasm 比）：规则类修好后，多数着色器露出类型类错误，归 P7c。
+- `audioline`、`highly_customizable_audio_visualizer` 因打包数组退步到失败，等 P7c 的隐式截断；所在场景本就因音频退回。
+- 新夹具 `ignore/p7/requests-p7b`、新基线 `ignore/p7/baseline/p7b-e2345b19`，P7c 以它们为准。
+- 流体场景露出 `constant:slots`，留给 P7d。
