@@ -610,6 +610,8 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
         album_order: i("album_order"),
         compatible_path: s("compatible_path"),
         post_url: s("post_url"),
+        // 列表字段里有 `palette` 时带上；没有这一列的查询读不到就是 None
+        palette: s("palette"),
     })
 }
 
@@ -671,6 +673,7 @@ mod tests {
                 post_url TEXT,
                 wallpaper_compatible_path TEXT,
                 image_metadata_id INTEGER,
+                palette TEXT,
                 aspect_ratio REAL GENERATED ALWAYS AS (CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END) VIRTUAL
             );
             CREATE TABLE album_images (

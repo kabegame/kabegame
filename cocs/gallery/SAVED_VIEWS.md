@@ -58,7 +58,7 @@ interface GridViewContext {
 - **行**：
   - 显示名字；没起名的行用等宽小字显示路径，悬停 title 也是路径。
   - 当前视图那一行左侧有粉色竖条。
-  - 轮播来源那一行有 ↻：`viewRotationPath(pathFor(...))` 与设置 `wallpaperRotationPath` 相同即是。随机排序的行跳过，因为种子不可比。
+  - 轮播来源那一行有 ↻：轮播开着，且 `viewRotationPath(pathFor(...))` 与任一活跃壁纸目标的轮播路径（`useActiveWallpaperRotationPaths()`，见 [壁纸轮播](../wallpaper/ROTATION_PATHQL.md)）相同即是。随机排序的行跳过，因为种子不可比。
   - 编辑、× 两个按钮悬停才出现；紧凑档常显，正在编辑或确认的那一行也常显。
 - **移除**：× 弹出与任务抽屉「停止任务」同款的 `el-popconfirm`（`bottom-end`、`danger`，按钮为确认 / 取消）。受控，同一时刻只开一个，接 `useModalBack`。
 - **编辑**（`SavedViewEditor`）：

@@ -155,6 +155,7 @@
               @open-task="emit('open-task', $event)"
               @open-surf-record="emit('open-surf-record', $event)"
               @open-gallery-filter="emit('open-gallery-filter', $event)"
+              @open-color-sort="emit('open-color-sort', $event)"
             />
           </div>
         </div>
@@ -287,6 +288,7 @@ const emit = defineEmits<{
   addedToAlbum: [];
   "open-task": [taskId: string];
   "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
+  "open-color-sort": [hex: string];
   "open-surf-record": [target: ImageDetailSurfRecordTarget];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   /** 用户在预览里要求切换；由上层算出目标 id 并回设 previewImage */

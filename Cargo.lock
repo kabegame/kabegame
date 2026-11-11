@@ -4533,6 +4533,8 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "cef",
+ "core-foundation 0.10.1",
+ "core-graphics",
  "deno_fs",
  "deno_permissions",
  "dirs 5.0.1",

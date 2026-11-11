@@ -12,6 +12,7 @@
     @preview-detail-toggle="handlePreviewDetailToggle"
     @preview-close="handlePreviewClose"
     @open-gallery-filter="handleOpenGalleryFilter"
+    @open-color-sort="handleOpenColorSort"
     @open-surf-record="handleOpenSurfRecord"
     :enable-virtual-scroll="!uiStore.isCompact"
   >
@@ -48,6 +49,7 @@
     @close="imageDetailDialog.close()"
     @open-task="handleOpenTask"
     @open-gallery-filter="handleOpenGalleryFilter"
+    @open-color-sort="handleOpenColorSort"
     @open-surf-record="handleOpenSurfRecord"
   />
 
@@ -117,6 +119,7 @@ import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
 import { locateImageRowIndex, pageOfRowIndex } from "@/services/imageLocate";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useActiveWallpaperImageIds } from "@/composables/useWallpaperTarget";
 import { useSettingsStore } from "@/stores/settings";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { rowToImageInfo } from "@/utils/imageRow";
@@ -278,6 +281,17 @@ async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {
   coreRef.value?.closePreview?.();
 }
 
+// 点详情里代表色的一段：只换当前页面的排序（最接近的在前），过滤与上下文原样保留。
+// 与过滤跳转不同，这里不跳画廊——四个网格页都有颜色排序，用户是想在眼前这批图里找相近的颜色。
+// 色盘的颜色是聚合出来的平均色，几乎不会恰好是色桶，所以直接给现算段，网格不为此去读色桶表；
+// 万一恰好是色桶，查询行的排序段校正会把它换成预计算段（两个段顺序相同）。
+async function handleOpenColorSort(hex: string) {
+  await adapter.routeStore.navigate({ sort: { field: "by-any-color", desc: false, color: hex } }, { push: true });
+  // 与 handleOpenGalleryFilter 同理：导航落定后再关预览，避免 pvwimgid 的写入与 push 竞争
+  imageDetailDialog.close();
+  coreRef.value?.closePreview?.();
+}
+
 const attrs = useAttrs();
 const pluginStore = usePluginStore();
 const plugins = computed(() => pluginStore.plugins);
@@ -342,12 +356,9 @@ const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 
 const { loading: internalLoading, showLoading: showInternalLoading, startLoading, finishLoading } = useLoadingDelay();
 
-const currentWallpaperImageId = computed<string | null>({
-  get: () => settingsStore.values.currentWallpaperImageId ?? null,
-  set: (value) => {
-    settingsStore.values.currentWallpaperImageId = value;
-  },
-});
+// 所有活跃壁纸目标的当前壁纸：只用来在删除确认框里提示「其中有当前壁纸」。
+// 图片被删后由后端清目标并发 setting-change，这里不做本地清空。
+const activeWallpaperImageIds = useActiveWallpaperImageIds();
 
 const totalImagesCount = ref(0);
 const unfilteredTotal = ref<number | null>(null);
@@ -424,9 +435,6 @@ const applyRows = async (snapshot: PathqlRows) => {
   if (removedIds.length > 0) {
     const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
     if (selected && removedIds.some((id) => selected.has(id))) clearSelection();
-    if (currentWallpaperImageId.value && removedIds.includes(currentWallpaperImageId.value)) {
-      currentWallpaperImageId.value = null;
-    }
   }
   if (removedIds.length > 0 || images.value.length === 0) {
     await ensurePageAfterRemoval();
@@ -593,7 +601,7 @@ const {
   shareImage,
   openImageFolder,
   setWallpaper,
-} = useImageOperations(images, currentWallpaperImageId, coreRef, mutate, patch);
+} = useImageOperations(images, coreRef, mutate, patch);
 
 const readRouteQueryPath = (): string => {
   const rawPath = route.query.path;
@@ -1115,8 +1123,7 @@ const openRemoveDialog = (mode: "remove" | "deleteFile", images: ImageInfo[]) =>
   const cfg = mode === "remove" ? adapter.remove : adapter.deleteFile;
   if (!cfg) return;
   if (cfg.guard?.()) return;
-  const includesCurrentWallpaper =
-    !!currentWallpaperImageId.value && images.some((img) => img.id === currentWallpaperImageId.value);
+  const includesCurrentWallpaper = images.some((img) => activeWallpaperImageIds.value.has(img.id));
   pendingRemove.value = { mode, images };
   removeDialogText.value = cfg.dialogText(images.length, { includesCurrentWallpaper });
   removeDialog.open();

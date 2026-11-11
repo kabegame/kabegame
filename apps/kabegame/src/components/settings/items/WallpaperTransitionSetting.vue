@@ -5,7 +5,7 @@
     :options="options"
     :title="t('settings.transitionTitle')"
     :placeholder="t('settings.transitionPlaceholder')"
-    :disabled="props.disabled || wallpaperModeSwitching || disabled"
+    :disabled="props.disabled || wallpaperModeSwitching || busy"
     @update:model-value="(v) => handleChange(v ?? 'none')"
   />
   <el-select
@@ -13,7 +13,7 @@
     v-model="localValue"
     :placeholder="t('settings.transitionPlaceholder')"
     style="min-width: 180px"
-    :disabled="props.disabled || wallpaperModeSwitching || disabled"
+    :disabled="props.disabled || wallpaperModeSwitching || busy"
     @change="handleChange"
   >
     <!-- 下拉宽度已统一为输入框宽度，长文案会被 ellipsis 截断；补原生 title 让鼠标能看全 -->
@@ -22,33 +22,41 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, ref, toRef, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { invoke } from "@/api/rpc";
-import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { IS_ANDROID } from "@/env";
-import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
+import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
+import { logger } from "@/utils/logger";
 import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
   disabled?: boolean;
+  /** 壁纸目标 id；缺省为默认目标 */
+  targetId?: string | null;
 }>();
 
 const { t, locale } = useI18n();
 
-const { settingValue, disabled, set } = useSettingKeyState("wallpaperRotationTransition");
+// 过渡挂在壁纸目标上（按壁纸模式存）：值读目标的有效过渡（存的值不在选项里时按能力取第一项，
+// 归一化只在读取时做、不写回），选项取当前「壁纸模式 × 显示器模式」的能力
+const target = useWallpaperTarget(toRef(props, "targetId"));
 const { wallpaperModeSwitching } = useUiStore();
 const settingsStore = useSettingsStore();
-const capabilities = useWallpaperCapabilities();
 
-const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
+/**
+ * 保存中状态由本组件自己持有（目标配置没有 setter，不经设置 store 的保存状态机）：
+ * 新值随 setting-change 落地或命令返回即结束，先到者为准——轮播开着时命令还要切一张演示过渡，不必等它。
+ */
+const saving = ref(false);
+const busy = computed(() => target.loading.value || saving.value);
+
 const options = computed(() =>
-  capabilities.transitionsFor(mode.value).map((opt) => ({
+  (target.combo.value?.transitions ?? []).map((opt) => ({
     value: opt.value,
     label: resolveManifestText(opt.label, locale.value),
   })),
@@ -56,35 +64,28 @@ const options = computed(() =>
 
 const localValue = ref<string>("none");
 watch(
-  () => settingValue.value,
+  target.transition,
   (v) => {
-    localValue.value = (v as any as string) || "none";
+    localValue.value = v || "none";
+    saving.value = false;
   },
   { immediate: true },
 );
 
-onMounted(async () => {
-  await capabilities.load();
-  const cur = (settingValue.value as any as string) || "none";
-  const values = options.value.map((opt) => opt.value);
-  if (values.length > 0 && !values.includes(cur)) {
-    const fallback = values[0] ?? "none";
-    settingsStore.values.wallpaperRotationTransition = fallback as any;
-    localValue.value = fallback;
-    if (rotationEnabled.value) {
-      try {
-        await invoke("set_wallpaper_rotation_transition", { transition: fallback });
-      } catch {
-        // 后端纠正失败时保留本地回退，等待下一次设置同步。
-      }
-    }
-  }
-});
-
 const handleChange = async (transition: string) => {
+  if (saving.value) return;
   if (!rotationEnabled.value) {
     ElMessage.info(t("settings.transitionRotationRequired"));
   }
-  await set(transition);
+  saving.value = true;
+  try {
+    // 不乐观写：成功后由后端的 setting-change 落到目标配置
+    await target.setTransition(transition);
+  } catch (error) {
+    logger.warn("设置壁纸过渡失败:", error);
+    localValue.value = target.transition.value || "none";
+  } finally {
+    saving.value = false;
+  }
 };
 </script>

@@ -123,6 +123,7 @@ app_event_kinds! {
     Log,
     WallpaperPing,
     WallpaperPong,
+    ColorBucketsChange,
 }
 
 impl AppEventKind {
@@ -167,6 +168,7 @@ impl AppEventKind {
             AppEventKind::Log => "log",
             AppEventKind::WallpaperPing => "wallpaper-ping",
             AppEventKind::WallpaperPong => "wallpaper-pong",
+            AppEventKind::ColorBucketsChange => "color-buckets-change",
         }
         .to_string()
     }
@@ -206,6 +208,7 @@ impl AppEventKind {
             "log" => Some(AppEventKind::Log),
             "wallpaper-ping" => Some(AppEventKind::WallpaperPing),
             "wallpaper-pong" => Some(AppEventKind::WallpaperPong),
+            "color-buckets-change" => Some(AppEventKind::ColorBucketsChange),
             "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(AppEventKind::TasksChange),
             _ => None,
         }
@@ -469,6 +472,11 @@ pub enum AppEvent {
         seq: u64,
     },
 
+    /// 色桶表有增删；不带内容，观察方重读 `color_buckets://`。
+    ColorBucketsChange {
+        seq: u64,
+    },
+
     /// 应用日志（opt-in：只推给显式订阅 `log` 的客户端）
     Log {
         #[serde(flatten)]
@@ -575,6 +583,34 @@ mod tests {
     }
 
     #[test]
+    fn color_buckets_change_carries_only_seq_and_is_a_default_kind() {
+        let event = AppEvent::ColorBucketsChange { seq: 7 };
+        assert_eq!(event.kind(), AppEventKind::ColorBucketsChange);
+        let payload = serde_json::to_value(event).unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({"type": "color-buckets-change", "seq": 7})
+        );
+        let decoded: AppEvent = serde_json::from_value(payload).unwrap();
+        assert!(matches!(decoded, AppEvent::ColorBucketsChange { seq: 7 }));
+        assert_eq!(
+            AppEventKind::ColorBucketsChange.as_event_name(),
+            "color-buckets-change"
+        );
+        assert_eq!(
+            AppEventKind::from_event_name("color-buckets-change"),
+            Some(AppEventKind::ColorBucketsChange)
+        );
+        assert_eq!(
+            AppEventKind::from_str("color-buckets-change"),
+            Some(AppEventKind::ColorBucketsChange)
+        );
+        // 「订阅全部」的客户端（主窗口的事件转发）收得到
+        assert!(AppEventKind::default_kinds().contains(&AppEventKind::ColorBucketsChange));
+        assert!(AppEventKind::ALL.contains(&AppEventKind::ColorBucketsChange));
+    }
+
+    #[test]
     fn app_shutdown_uses_app_event_name() {
         let event = AppEvent::AppShutdown {
             reason: "exit".to_string(),
@@ -654,6 +690,7 @@ impl AppEvent {
             AppEvent::Log { .. } => AppEventKind::Log,
             AppEvent::WallpaperPing { .. } => AppEventKind::WallpaperPing,
             AppEvent::WallpaperPong { .. } => AppEventKind::WallpaperPong,
+            AppEvent::ColorBucketsChange { .. } => AppEventKind::ColorBucketsChange,
         }
     }
 }

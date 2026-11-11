@@ -439,6 +439,22 @@ async fn insert_wpe_row(
         .unwrap_or_default()
         .as_secs();
     let workshop_url = project.workshop_url();
+    let media_type = project.kind.media_type();
+    // 色盘：视频从 compatible_path（入口视频或兼容副本）抽帧；网页 / 场景取作者的 schemecolor，
+    // 没有时 `source_for_row` 自己落到预览图。尽力而为，算不出来就没有，不阻断入库。
+    let palette = match media_type {
+        Some(media_type) => {
+            crate::media::palette::compute_for_row(
+                media_type,
+                &dir_string,
+                &thumbnail_path,
+                compatible_path.as_deref(),
+                crate::wpe::properties::scheme_color_from_raw(&project.raw),
+            )
+            .await
+        }
+        None => None,
+    };
     let image = ImageInfo {
         id: String::new(),
         url: workshop_url.clone(),
@@ -459,7 +475,7 @@ async fn insert_wpe_row(
         display_name: non_empty(opts.display_name)
             .unwrap_or(&project.title)
             .to_string(),
-        media_type: project.kind.media_type().map(str::to_string),
+        media_type: media_type.map(str::to_string),
         last_set_wallpaper_at: None,
         size: Some(digest.total_bytes),
         album_order: None,
@@ -467,6 +483,9 @@ async fn insert_wpe_row(
         post_url: non_empty(opts.post_url)
             .map(str::to_string)
             .or(workshop_url),
+        palette: palette
+            .as_ref()
+            .map(crate::media::palette::Palette::to_json),
     };
 
     let inserted = match storage.add_image(image) {
@@ -1021,6 +1040,7 @@ mod tests {
                     album_order: None,
                     compatible_path: None,
                     post_url: None,
+                    palette: None,
                 })
                 .unwrap();
 
@@ -1062,6 +1082,150 @@ mod tests {
             assert_eq!(after.plugin_id.as_deref(), Some(WPE_IMPORT_PLUGIN_ID));
             assert_eq!(after.metadata_id, Some(wpe_metadata));
             assert_eq!(after.post_url, None);
+        }
+
+        /// 某一行的 `palette` 列与它的距离行（按色桶 rgb 排）。
+        fn color_state(where_sql: &str, arg: &str) -> (Option<String>, Vec<(i64, i64)>) {
+            let conn = Storage::global().db.lock().unwrap();
+            let (id, palette): (i64, Option<String>) = conn
+                .query_row(
+                    &format!("SELECT id, palette FROM images WHERE {where_sql}"),
+                    [arg],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bucket_rgb, distance FROM image_color_distances
+                      WHERE image_id = ?1 ORDER BY bucket_rgb",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            (palette, rows)
+        }
+
+        fn set_project(dir: &Path, project: serde_json::Value) {
+            fs::write(
+                dir.join("project.json"),
+                serde_json::to_vec(&project).unwrap(),
+            )
+            .unwrap();
+        }
+
+        /// 网页壁纸的色盘：有 `schemecolor` 取它；没有则用预览图算；预览图也解不了就没有色盘。
+        /// 三种情况都对每个色桶各有一行距离。
+        #[tokio::test]
+        async fn wpe_rows_take_scheme_color_then_preview_then_nothing() {
+            use crate::media::palette::{Palette, NO_PALETTE_DISTANCE};
+
+            let _guard = guard();
+            let _dedup = DedupGuard::set(true, true);
+            let (_temp, root) = temp_root();
+
+            // ① 作者的 schemecolor（纯蓝）；预览图是坏的也不影响
+            let scheme = web_wallpaper(&root, "scheme", "有代表色", &unique("scheme"));
+            set_project(
+                &scheme,
+                json!({
+                    "type": "web", "file": "index.html", "title": "有代表色",
+                    "preview": "preview.jpg",
+                    "general": { "properties": {
+                        "schemecolor": { "type": "color", "value": "0 0 1" }
+                    }},
+                }),
+            );
+            assert_eq!(postprocess(&scheme, None, false).await, Ok(true));
+            let (palette, rows) = color_state("local_path = ?1", &scheme.to_string_lossy());
+            assert_eq!(palette, Some(Palette::single([0, 0, 255]).to_json()));
+            assert_eq!(rows.len(), 12);
+            assert!(rows.contains(&(0x0000ff, 0)), "{rows:?}");
+
+            // ② 没有 schemecolor：用预览图（纯红）
+            let preview = web_wallpaper(&root, "preview", "看预览图", &unique("preview"));
+            fs::remove_file(preview.join("preview.jpg")).unwrap();
+            image::RgbImage::from_pixel(32, 32, image::Rgb([255, 0, 0]))
+                .save(preview.join("preview.png"))
+                .unwrap();
+            set_project(
+                &preview,
+                json!({
+                    "type": "web", "file": "index.html", "title": "看预览图",
+                    "preview": "preview.png",
+                }),
+            );
+            assert_eq!(postprocess(&preview, None, false).await, Ok(true));
+            let (palette, rows) = color_state("local_path = ?1", &preview.to_string_lossy());
+            assert_eq!(palette, Some(Palette::single([255, 0, 0]).to_json()));
+            assert!(rows.contains(&(0xff0000, 0)), "{rows:?}");
+
+            // ③ 预览图解不了：没有色盘，距离全是 65536，照常入库
+            let bare = web_wallpaper(&root, "bare", "没有色盘", &unique("bare"));
+            assert_eq!(postprocess(&bare, None, false).await, Ok(true));
+            let (palette, rows) = color_state("local_path = ?1", &bare.to_string_lossy());
+            assert_eq!(palette, None);
+            assert_eq!(rows.len(), 12);
+            assert!(rows
+                .iter()
+                .all(|(_, distance)| *distance == i64::from(NO_PALETTE_DISTANCE)));
+        }
+
+        /// 普通下载（字节来源）入库时带着色盘与距离行。
+        #[tokio::test]
+        async fn plain_download_gets_palette_and_distances() {
+            use crate::media::palette::Palette;
+
+            let _guard = guard();
+            // 关掉去重：内容固定的测试图不会被别的用例的同哈希行挡住
+            let _dedup = DedupGuard::set(false, false);
+            let (_temp, root) = temp_root();
+
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::RgbImage::from_pixel(32, 32, image::Rgb([200, 30, 40]))
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            let png = png.into_inner();
+            let url = format!("https://example.com/{}.png", unique("palette"));
+
+            let imported = postprocess_downloaded_image(
+                &DownloadQueue::new(),
+                next_download_id(),
+                PostprocessSource::Bytes {
+                    output_dir: &root.join("downloads"),
+                    bytes: &png,
+                },
+                false,
+                &Url::parse(&url).unwrap(),
+                "other-plugin",
+                None,
+                None,
+                None,
+                0,
+                None,
+                &HashMap::new(),
+                None,
+                None,
+                None,
+                &[],
+            )
+            .await;
+            assert_eq!(imported, Ok(true));
+
+            let (palette, rows) = color_state("url = ?1", &url);
+            let palette = Palette::from_json(&palette.expect("下载的图有色盘")).unwrap();
+            assert_eq!(palette.0.len(), 1, "{palette:?}");
+            assert_eq!(palette.0[0].percent, 100);
+            let rgb = palette.0[0].rgb;
+            for (shift, expected) in [(16, 200i64), (8, 30), (0, 40)] {
+                let channel = i64::from((rgb >> shift) & 0xff);
+                assert!((channel - expected).abs() <= 3, "{rgb:06x}");
+            }
+            assert_eq!(rows.len(), 12);
+            let nearest = rows.iter().min_by_key(|(_, distance)| *distance).unwrap();
+            assert_eq!(nearest.0, 0xff0000, "偏红的图离红桶最近: {rows:?}");
         }
     }
 }

@@ -540,9 +540,6 @@ fn run_organize(
             100
         };
 
-    // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
-    let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
-
     loop {
         if cancel.load(Ordering::Relaxed) {
             emit_organize_finished(
@@ -680,13 +677,8 @@ fn run_organize(
                 false,
             ))?;
 
-            // 检查壁纸是否被移除
-            if let Some(cur) = current_wallpaper_id.as_deref() {
-                if remove_ids.iter().any(|id| id == cur) {
-                    let _ = Settings::global().set_current_wallpaper_image_id(None);
-                    current_wallpaper_id = None;
-                }
-            }
+            // 被移除的图若是某个壁纸目标的当前壁纸，清空该目标（与历史行为保持一致）
+            let _ = Settings::global().clear_wallpaper_targets_current_images(&remove_ids);
 
             removed_total += remove_ids.len();
 

@@ -29,6 +29,15 @@ settings:
   modeNative: "ネイティブモード"
   modeWindow: "ウィンドウモード"
   modePlugin: "プラグインモード"
+  displayModeMultiple: "複製"
+  displayModeMultipleDesc: "すべてのディスプレイに同じ壁紙を表示します"
+  displayModeSpan: "スパン"
+  displayModeSpanDesc: "すべてのディスプレイを 1 枚のキャンバスとして、1 枚の壁紙をまたいで表示します"
+  displayModeSingle: "ディスプレイごと"
+  displayModeSingleDesc: "ディスプレイごとに壁紙とローテーションを設定します"
+  displayModeLater: "このディスプレイモードは今後のバージョンで提供されます"
+  displayModeSpanWindow: "ウィンドウモードはスパン表示にまだ対応していません"
+  displayModeSpanNoSystem: "このシステムには複数ディスプレイにまたがる壁紙表示がありません"
 
 tray:
   show: 表示

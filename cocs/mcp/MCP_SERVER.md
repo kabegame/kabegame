@@ -62,7 +62,7 @@ restart，失败返回错误且不写入新值。应用启动恢复失败时会�
 协议层的单一入口。它负责：
 
 - 声明预置资源、18 条资源模板和 5 个工具。
-- 将 `images://`、`albums://`、`tasks://`、`surf_records://`、`plugin://` 读取交给 Provider Runtime。
+- 将 `images://`、`albums://`、`tasks://`、`surf_records://`、`color_buckets://`、`plugin://` 读取交给 Provider Runtime。
   `tasks://` 除 `all` / `id_<id>` 外，还支持可组合过滤段（`status/`、`plugin/`、`plugin_search/`、`run_config/`）、
   游标段 `before_<startTime>_<id>` 与 `x<N>x/<页>`；`tasks://status` 的列举在 `meta.count` 里给出各状态计数。
 - 对返回行反序列化、单条/列表形态、插件二进制/文本/PathQL provider 子资源做协议适配。
@@ -101,6 +101,7 @@ restart，失败返回错误且不写入新值。应用启动恢复失败时会�
 - `images://x100x/1` → `images.read.raw`
 - `images://id_{id}` → `images.read.by_id`
 - `images://id_{id}/metadata` → `images.read.metadata`
+- `color_buckets://`（只有裸根）→ `color_buckets.read.list`；色桶表只读，没有 by_id 子路径，也没有写工具
 - 其它表资源按 list / by_id，plugin 再细分 info、icon、doc、provider 等子资源
 
 插件资源按来源和版本寻址，各段单独编码：
@@ -191,6 +192,26 @@ provider 的 resolve/list 解析。它们是合法续接段，但不是当前 pr
 - `sort` 是 `all` 的兄弟，不是 `all` 的子节点。
 - `_kb_desc` 反转当前排序。
 - `hide` 是排除隐藏图片的前缀。
+
+### 色桶与按颜色排序
+
+`color_buckets://` 是一条预置资源（也写在服务器 instructions 里）：整张色桶表按显示顺序一次读完，每行
+`rgb`（整数 0xRRGGBB）、`key`（基本色桶的名称键如 `red`，用户保存的为 null）、`position`，外加 MCP 层补的派生字段
+**`hex`**（六位小写十六进制，`mcp_server.rs` 的 `color_bucket_rows_to_value`）。`hex` 只在 MCP 的返回里有——provider
+的行与前端读到的行都没有它；补它是为了让调用方不必自己把整数换算成排序段要的写法。
+
+画廊的排序路由下有两个按颜色排序的段，都是参数化的 resolve 段，`list_pathql_entry("images://gallery/sort")`
+列不出来，靠排序路由与两个 provider 的 `note` 以及 instructions 说明：
+
+| 段 | 适用 | 代价 |
+|---|---|---|
+| `gallery/sort/by-color_0x<hex>/…` | 只对 `color_buckets://` 里列出的颜色有效；别的颜色能解析但结果是**空集**，不会自动退到下一种 | 预计算，沿索引读 |
+| `gallery/sort/by-any-color_0x<rrggbb>/…` | 任何颜色 | 每行现算再排序，图库大时慢 |
+
+两个段都只认六位小写十六进制，最接近的在前、没有色盘的图排在最后，`_kb_desc` 反过来；对同一个颜色两个段的顺序
+相同。用哪个由调用方决定：先读 `color_buckets://`，颜色在里面就用前者。读画廊行仍受 `images.read.gallery` 与分页
+护栏约束，行里的 `palette` 字段是色盘 JSON 文本 `[[rgb, 百分比], …]`。MCP 没有保存 / 删除色桶的工具。机制见
+[色盘文档](../gallery/COLOR_PALETTE.md)。
 
 ## 分页护栏
 

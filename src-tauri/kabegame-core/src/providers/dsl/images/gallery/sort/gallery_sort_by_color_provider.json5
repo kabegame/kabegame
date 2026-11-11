@@ -1,0 +1,27 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_sort_by_color_provider",
+    "properties": {
+        // `0x` + 六位小写十六进制，即路径段里 `by-color_` 之后的原样。带着前缀传是有意的：
+        // 属性求值会把看起来像数字的模板结果转成数字（`000000` → 0、`804000` → 804000、`1e1000` → 浮点），
+        // 丢掉前导零，和文本比较不相等；带 `0x` 的串不会被当成数字。
+        "color": { "type": "string", "optional": false }
+    },
+    "query": {
+        // 关系表「每张图对每个色桶恒有一行」，INNER JOIN 不丢行。色桶条件写在 on 里：
+        // 标量子查询不相关、只算一次；色桶不存在 → NULL → 连接为空，结果是空集而不是报错。
+        "join": [{
+            "kind": "INNER",
+            "table": "image_color_distances",
+            "as": "cd",
+            "on": "cd.image_id = images.id AND cd.bucket_rgb = (SELECT b.rgb FROM color_buckets AS b WHERE printf('0x%06x', b.rgb) = ${properties.color})"
+        }],
+        "order": [
+            { "sql": "cd.distance", "order": "asc" },
+            // 收尾用 cd.image_id 而不是 images.id：值相同（连接条件），但这样排序键逐列等于
+            // idx_image_color_distances_bucket 的索引列，规划器不必推等价关系就能省掉排序。
+            { "sql": "cd.image_id", "order": "asc" }
+        ]
+    },
+    "note": "Sort by precomputed distance to a color bucket: .../sort/by-color_0xff0000/_kb_x100x/1. Closest first; images without a palette come last. Only colors listed in color_buckets:// work here (rgb as 6 lowercase hex digits); any other color yields an empty result - use sort/by-any-color_0x<rrggbb> for those. Append /_kb_desc for farthest first."
+}

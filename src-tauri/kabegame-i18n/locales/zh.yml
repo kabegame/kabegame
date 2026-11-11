@@ -29,6 +29,15 @@ settings:
   modeNative: "原生模式"
   modeWindow: "窗口模式"
   modePlugin: "插件模式"
+  displayModeMultiple: "各屏复制"
+  displayModeMultipleDesc: "所有显示器显示同一张壁纸"
+  displayModeSpan: "跨屏拼接"
+  displayModeSpanDesc: "把所有显示器当成一块画布，一张壁纸跨屏显示"
+  displayModeSingle: "逐屏独立"
+  displayModeSingleDesc: "每个显示器各自设置壁纸与轮播"
+  displayModeLater: "该显示器模式将在后续版本提供"
+  displayModeSpanWindow: "窗口模式暂不支持跨屏拼接"
+  displayModeSpanNoSystem: "系统没有跨屏铺放，该模式不可用"
 
 tray:
   show: 显示

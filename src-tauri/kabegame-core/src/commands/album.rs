@@ -43,15 +43,18 @@ pub fn set_label_key(album_id: String, new_key: String) -> Result<Value, String>
 
 pub fn delete_album(album_id: String) -> Result<Value, String> {
     Storage::global().delete_album(&album_id)?;
-    // 轮播路径以该画册为根：回到默认路径（位置随之清零）
-    let rotation_path = Settings::global().get_wallpaper_rotation_path();
-    if rotation_path
-        .as_deref()
-        .and_then(crate::wallpaper_rotation::album_id_of)
-        == Some(album_id.as_str())
-    {
-        Settings::global().set_wallpaper_rotation_path(None)?;
-    }
+    // 轮播路径以该画册为根的目标：回到默认路径（位置随之置为从头开始）。不只看活跃目标，
+    // 休眠屏与其它显示器模式的目标也一并处理。
+    Settings::global().update_all_wallpaper_targets(|_, config| {
+        if config
+            .rotation_path
+            .as_deref()
+            .and_then(crate::wallpaper_rotation::album_id_of)
+            == Some(album_id.as_str())
+        {
+            config.set_rotation_path(None);
+        }
+    })?;
     #[cfg(feature = "virtual-driver")]
     crate::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)

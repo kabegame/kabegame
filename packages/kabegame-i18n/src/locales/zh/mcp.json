@@ -4,6 +4,7 @@
     "albums": "画册",
     "tasks": "任务",
     "surf_records": "畅游记录",
+    "color_buckets": "色桶",
     "plugin": "插件"
   },
   "kind": {
@@ -43,6 +44,11 @@
       "read": {
         "list": { "name": "畅游记录列表", "desc": "浏览全部畅游记录" },
         "by_id": { "name": "单条畅游记录", "desc": "按 ID 读取畅游记录详情" }
+      }
+    },
+    "color_buckets": {
+      "read": {
+        "list": { "name": "色桶列表", "desc": "读取按颜色排序可用的色桶" }
       }
     },
     "plugin": {

@@ -17,11 +17,12 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 - [cli/CLI_IPC.md](cli/CLI_IPC.md)
   - 主题：`kabegame-cli` 的 app 优先/local 回退进程模型，`Backend` 抽象、`--via`
-    选择、`ipcProtocol` / `dataDir` 门控（当前 v4）、`PluginRun` 共享实现、`--print-config` / 任务级 dry-run、只在内存中传递的 `--freeze-template`、逐任务下载并发的
+    选择、`ipcProtocol` / `dataDir` 门控（当前 v5）、`PluginRun` 共享实现、`--print-config` / 任务级 dry-run、只在内存中传递的 `--freeze-template`、逐任务下载并发的
     `TaskSetMaxConcurrentDownloads`、`local-import` 任务、`pathql query` 本进程只读 Storage、
-    CLI 禁用 metadata 迁移、`KABEGAME_SQL_DEBUG` 以及 `IpcClient` 连接/事件语义。
+    CLI 禁用 metadata 迁移、v5 起带可选 `target` 的壁纸设置变体（轮播路径 / 样式 / 过渡 / 当前壁纸，
+    删除 `ByMode` 两个 getter 与切模式交换样式的变体）、`KABEGAME_SQL_DEBUG` 以及 `IpcClient` 连接/事件语义。
   - 适用场景：新增 CLI 数据命令、IPC 协议变体，或排查 CLI 与运行中主程序的数据/任务差异、
-    PathQL 实际 SQL 与耗时。
+    PathQL 实际 SQL 与耗时；外部集成经 IPC 读写某个壁纸目标的设置。
 
 ## Provider DSL（`provider-dsl/`）
 
@@ -32,8 +33,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   `register_programmatic_provider` 注册。
 
 - [provider-dsl/RULES.md](provider-dsl/RULES.md)
-  - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖文件格式（json5 / YAML 双 loader，按扩展名选择；长 SQL 用 YAML `|-` 块标量换行书写及其禁忌）、路径折叠、ContribQuery 累积语义（fields/join/where/group_by/order 各自规则；排序项仅 `{sql, order: asc|desc, prepend?}`，全局排序指令为 `{all: revert|clear}`；offset 累加、limit 末次胜；schema 只登记数据表名、`plugin://` 走程序化 schema）、**`where` 的 WhereQuery 谓词树**（字符串=原子 / 数组=OR / `{not}`=取非；fold 期坍缩成一条，树上无 AND 节点；`where_clear` 按坍缩串整棵匹配）、嵌套目录清除上一层等值条件、分页写法（列举子项在 `list.sql` 里 bind 分页；`albums://` 等本地路由的行分页仍用 `x<N>x/<页>`，画廊续接用全局 `_kb_x<N>x/<页>`；分页节点只切页）、**全局前缀表**（`register_global_table`、本仓 `_kb_` 与 `kb_global.json5`、全局表优先解析及 provider key 缓存失效）与 **Resolve 透传条目 `passthrough: true`**（只折叠目标 query、current 不变，`_kb_co` 必须放在维度路径末尾）、**子查询边界 `~~`**（此前查询冻结成物化 CTE FROM，内层 ORDER BY/LIMIT 保留，外层不重放根贡献；配合 `group_by` 按外层行计数；物化顺序支撑 rank 定位；`~~<别名>` 把内层挂到别名下、表名留给外层回表，用于不可走索引排序的延迟回表；画廊实际路径为 `filter/…/~~/rank/~~p/lookup/gallery`，外层按序号取序）、**路径 WHERE 组合器 `~any`/`~or`/`~not`/`~end`**（分支旁路、组内只许 where + LEFT JOIN、`\~` 转义、尾部不自动闭合）、List 静态/动态项、`${...}` 模板、`as + in_need`、缓存、安全、保留标识符（`~` 与 `_kb_` 前缀）和主机协调模式；以及**插件 provider 与宿主的 `plugin_im` 约定**（§3.3.2：宿主只 join 不投影，插件 where 读 `plugin_im.data` 并包 `COALESCE`，`list.sql` 自行 join `metadata`，这样细分条件才能进 `~any` / `~not`）。
-  - 适用场景：实现引擎 loader / 解析器；随机 / 名称等排序翻深页慢、想让内层只排 id 再回表；编写 *.provider.json5 / *.yaml 文件；编写或迁移插件的 extend provider；调整 `_kb_*` 全局续接段、透传或排序链；给 where 写 OR / NOT；分页之后按行计数（`~~` + `group_by`）或排查子查询慢；排查解析优先级、缓存失效、跨字段约束、组内贡献或未闭合组错误；设计第三方插件可贡献的 provider。
+  - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖文件格式（json5 / YAML 双 loader，按扩展名选择；长 SQL 用 YAML `|-` 块标量换行书写及其禁忌）、路径折叠、ContribQuery 累积语义（fields/join/where/group_by/order 各自规则；排序项仅 `{sql, order: asc|desc, prepend?}`，全局排序指令为 `{all: revert|clear}`；offset 累加、limit 末次胜；schema 只登记数据表名、`plugin://` 走程序化 schema）、**`where` 的 WhereQuery 谓词树**（字符串=原子 / 数组=OR / `{not}`=取非；fold 期坍缩成一条，树上无 AND 节点；`where_clear` 按坍缩串整棵匹配）、嵌套目录清除上一层等值条件、分页写法（列举子项在 `list.sql` 里 bind 分页；`albums://` 等本地路由的行分页仍用 `x<N>x/<页>`，画廊续接用全局 `_kb_x<N>x/<页>`；分页节点只切页）、**全局前缀表**（`register_global_table`、本仓 `_kb_` 与 `kb_global.json5`、全局表优先解析及 provider key 缓存失效）与 **Resolve 透传条目 `passthrough: true`**（只折叠目标 query、current 不变，`_kb_co` 必须放在维度路径末尾）、**子查询边界 `~~`**（此前查询冻结成物化 CTE FROM，内层 ORDER BY/LIMIT 保留，外层不重放根贡献；配合 `group_by` 按外层行计数；物化顺序支撑 rank 定位；`~~<别名>` 把内层挂到别名下、表名留给外层回表，用于不可走索引排序的延迟回表；画廊实际路径为 `filter/…/~~/rank/~~p/lookup/gallery`，外层按序号取序）、**路径 WHERE 组合器 `~any`/`~or`/`~not`/`~end`**（分支旁路、组内只许 where + LEFT JOIN、`\~` 转义、尾部不自动闭合）、List 静态/动态项、`${...}` 模板（含 §6.5：属性值求值后像数字就变成数字，十六进制、前导零要带前缀传）、`as + in_need`、缓存、安全、保留标识符（`~` 与 `_kb_` 前缀）和主机协调模式；以及**插件 provider 与宿主的 `plugin_im` 约定**（§3.3.2：宿主只 join 不投影，插件 where 读 `plugin_im.data` 并包 `COALESCE`，`list.sql` 自行 join `metadata`，这样细分条件才能进 `~any` / `~not`）。
+  - 适用场景：实现引擎 loader / 解析器；随机 / 名称等排序翻深页慢、想让内层只排 id 再回表；编写 *.provider.json5 / *.yaml 文件；编写或迁移插件的 extend provider；调整 `_kb_*` 全局续接段、透传或排序链；给 where 写 OR / NOT；分页之后按行计数（`~~` + `group_by`）或排查子查询慢；排查解析优先级、缓存失效、跨字段约束、组内贡献或未闭合组错误；排查某个参数化路径段只对个别取值（纯数字、前导零、含 `e`）查不到或报错；设计第三方插件可贡献的 provider。
   - 配套：[../src-tauri/kabegame-core/src/providers/schema.json5](../src-tauri/kabegame-core/src/providers/schema.json5) 为语法 schema。
 
 - [provider-dsl/VD_INTEGRATION.md](provider-dsl/VD_INTEGRATION.md)
@@ -113,6 +114,21 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子按 PathQL 列举计数、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 的完整路径子串匹配与不相关 `IN` 子查询写法（为何不用相关 EXISTS / JOIN + group_by），以及分页查询树 / 选择器 / 预览面板。
   - 适用场景：新增或排查标签画册的建立、移动、改 key；插件下载或迁移没有挂上标签；标签搜索结果不对或变慢；给预览弹窗注入 app 侧信息面板。
 
+- [gallery/COLOR_PALETTE.md](gallery/COLOR_PALETTE.md)
+  - 主题：壁纸色盘（最多 5 个代表色 + 占比，`images.palette` 的 JSON 文本）与按颜色排序。
+    - **提取**：`media::palette` 的四步（16×16 区域平均 → 从包围盒中心向外按合并半径收点、成员取平均 → 再并一遍 → 按占比取前几个）与各自的理由；各类型的来源（图片读缩略图、GIF 原文件抽帧、视频均匀抽 8 帧、WPE 网页 / 场景取 `schemecolor` 作者值再退到预览图）；常量及依据。
+    - **距离**：OKLab 色差（明度折半）按占比加权平均，0–65535，65536 留给没有色盘；算例与量程的理由。
+    - **存储**：色桶表 `color_buckets`（主键即 rgb，12 个基本色桶 + 用户保存的最多 24 个）、关系表 `image_color_distances`，「每张图对每个色桶恒有一行」的不变量与维持它的三处写入（v052 铺行、`add_image`、保存色桶），删图 / 删色桶；v052 与回填作业 `image_palette`（只处理 `palette IS NULL` 的行，算不出的不重试）。
+    - **查询**：两个排序段 `sort/by-color_0x<rrggbb>`（INNER JOIN 关系表、沿索引读、只认色桶）与 `sort/by-any-color_0x<rrggbb>`（宿主函数 `kb_palette_distance` 现算），两段同序、用哪个由调用方选；属性带 `0x` 是因为引擎会把像数字的属性值转成数字；`color_buckets://` 与 MCP 行的 `hex` 派生字段；列表字段 `palette`；实测耗时。
+    - **命令与事件**：`add_color_bucket` / `delete_color_bucket`、错误码、`color-buckets-change`。
+    - **前端**：`colorSortFor` 选段与色桶列表变化时的校正、排序下拉里就地展开的色桶面板、基本信息里的色带、回填补丁与字段依赖表的 `palette`。
+    - **调参**：约 3.5 万张真实缩略图上的聚合方式、黄绿青色桶颜色、距离量程三张对比表与结论；已知的局限。
+  - 适用场景：
+    - 新增入库入口（必须算色盘并填 `ImageInfo.palette`）、改色盘算法或常量、改基本色桶；
+    - 排查按颜色排序结果为空（颜色不是色桶却用了 `by-color`、色桶被删、纯数字颜色被数字化）、新图或存量图排在最后、两个段顺序不一致、排序变慢或执行计划不走 `idx_image_color_distances_bucket`；
+    - 排查基本信息里没有色带、回填期间网格反复刷新、保存色桶很慢或被拒、删色桶后视图 / 轮播为空；
+    - 排查某类图的代表色不对（淡色图只剩 1 色、视频只取到第一帧、WPE 壁纸的颜色来源）。
+
 ## 本地文件夹（`local-folder/`）
 
 - [local-folder/LOCAL_FOLDER_SYNC.md](local-folder/LOCAL_FOLDER_SYNC.md)
@@ -128,10 +144,11 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     存量行由回填作业 `wpe_dir_hash` 重算）、**经 Web 服务器传输**（`/file/<目录>` 返回文件清单、目录内文件流式返回，`kabegame-server` 插件 + SDK
     `downloadWpeWallpaper` 把另一台机器上的壁纸整目录传过来）、格式表占位条目、
     **`wpe` feature 门控**（桌面主程序与 CLI 开启，Android / Web 不开；三个桌面平台都能导入与预览，Linux 没有桌面壁纸）、Steam 库发现与手选文件夹的两层扫描、导入时的 `WPE/<genre|rating|feature>/<tag>` 标签（作者 `tags` + WPE 工坊缓存的 Steam 标签，缓存没有时从 `project.json` 推导；key 是 Steam 原文，名称按语言翻译）、WPE 安装目录设置 `wpeEngineDir`（为空时查 Steam 库或从库内壁纸往上找并写入，壁纸设置可覆盖）、`wpe-import` 内建任务与「壁纸」收集入口、
-    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
+    WPE 行的色盘来源（视频从 `compatible_path` 抽帧，网页 / 场景取 `schemecolor` 的作者值、没有则预览图）、
+    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口（窗口模式每块在线屏一个，label 池见 [wallpaper/MULTI_SCREEN.md](wallpaper/MULTI_SCREEN.md)）为 `index.html?window=wallpaper&slot=<序号>` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手，按后端的布置读壁纸目标）+ 纯渲染组件 `WallpaperStage.vue`；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WallpaperStage` 独立 web 层（sandbox `file:` iframe，`src` 直接取壁纸目标的 `webEntry`，由补丁 05 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览画布 `WallpaperPreviewCanvas`（按内容固有尺寸，和单独的图片一样显示；网页壁纸按主屏尺寸排版）、`get_wallpaper_target_for_image`、应用背景与预览同走原图形态实时渲染（不交互、静音），以及子 frame 也有 IPC 桥之后由 ACL 兜底的纵深防御；
-    **网页壁纸 iframe**（tauri 补丁 18–19 起预览与桌面统一）：图库预览（主窗口）与桌面（壁纸窗口）都是 `WallpaperStage` web 层里的 `file:` iframe，两个窗口建窗前都登记 `allow_file_documents` 与 `allow_app_local_resources`，壁纸窗口不再整窗导航，`set_wallpaper_path` 只开关 Windows 轮询式鼠标移动 / 左键转发（`set_mouse_forwarding`、`input_forward`、`inject_mouse`，壁纸窗口给 Stage 传 `interactive`）；ping 在网页壁纸显示期间交给 iframe 里的垫片应答；`localStorage` 预览与桌面同一分区、互通；CSP `frame-src … file:`；
+    **网页壁纸 iframe**（tauri 补丁 18–19 起预览与桌面统一）：图库预览（主窗口）与桌面（壁纸窗口）都是 `WallpaperStage` web 层里的 `file:` iframe，两个窗口建窗前都登记 `allow_file_documents` 与 `allow_app_local_resources`，壁纸窗口不再整窗导航，窗口后端的 `set_wallpaper` 只开关 Windows 轮询式鼠标移动 / 左键转发（`set_mouse_forwarding`、`input_forward`、`inject_mouse`，壁纸窗口给 Stage 传 `interactive`）；ping 在网页壁纸显示期间交给 iframe 里的垫片应答；`localStorage` 预览与桌面同一分区、互通；CSP `frame-src … file:`；
     **网页壁纸目录索引**：`wallpaper/wpe_web_dir_index.rs` 在 `init_heavy_globals` 里 Storage 就绪后、Services 前先订阅图片事件再全量扫描（`list_wpe_web_rows` 走 `idx_images_type`），向 runtime 注册 `set_file_scope_resolver`，随图片事件维护；`file:` 文档只能访问自己的壁纸目录与它的用户选择、应用页发起的 iframe 导航只能落进库里某个网页壁纸目录，建表失败时全拒；
     **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（只在顶层直接子 `file:` iframe 且有子 frame 桥时启用）、一种传输（直接 `invoke("wpe_web_pull_state")` 与 `listen`，命令按 `CallerOrigin` 的文档 URL 认出是哪张，事件只投递到本 frame、frame 销毁时随 `SubframeDestroyed` 清掉，首批请求由 CEF 07 文档头直接归属）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、运行时按 initiator 与 CEF 07 文档 URL 合成 IPC `Origin`（远程 `file:` 来源 + `frames: "sub"` 只得 `wpe-web-capability`，绑定 `main` 与 `wallpaper`），以及网页壁纸只能监听四个事件（`allow-listen` 作用域，tauri 补丁 15）；**音量**：垫片经 `postMessage` 向父页面 `WallpaperStage` 要宿主音量（`kabegame:wpe-volume-request` / `kabegame:wpe-volume`，协议在 `wpeWebVolume.ts`，只认 `isTrusted` 且来自父窗口的消息，回复前按静音），桌面与预览回设置里的壁纸音量、应用背景与 `paused` 回 0，变化时父页面主动推；垫片把它乘到 `HTMLMediaElement`（接管 `volume` / `muted` / `play`，页面读到自己设的值）与 Web Audio（连到实时 `destination` 的连接改接到每个 context 一个主增益，不 `suspend`），嵌套 iframe 的声音与经嵌套 frame 拿原始原型的绕过管不到；**右键**：垫片（场景宿主也加载）在捕获阶段把可信的 `contextmenu` 经 `postMessage`（`kabegame:wpe-contextmenu`，`wpeContextMenu.ts`）交给父页面，`WallpaperStage` / `WpeSceneView` 校验来源、按 iframe 显示矩形换算坐标，预览弹窗在那里弹出上下文菜单；
     **图库媒体走 `file://` 与按发起 frame 分档的闸门**（Phase 6b，CEF 补丁 06）：三个桌面平台的主窗口与壁纸窗口都登记 05，应用页主 frame 的 `<img>` / `<video>` / CSS 子资源免检，子 frame 导航与 `file:` 文档按网页壁纸目录索引裁决；前端 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 在桌面产出 `file://`，下载 / 复制兜底直接 `fetch(file:)`、Windows 拖出自 Phase 6d 起改走 03 真实文件链路（`CF_HDROP`）；插件详情 EJS iframe 改 opaque origin + 内层 CSP；删除桌面本地 HTTP 服务；插件文件改由 Tauri 原始字节命令读取，06 的私有 CORS 列表与运行时跨源白名单开放 `fetch(file:)`。
@@ -188,7 +205,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
-  - 主题：当前下载器全链路与模块边界。涵盖任务级 dry-run 的下载/metadata/local-import 三个 nop 点、全局与逐任务下载并发闸门（pending + active 原子判断、运行中实时调整）、`mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、单图字节进度写入 `active_downloads` 并由前端 500ms 快照轮询、Android 通知 1s ticker、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举；`Path` 来源是目录时按 Wallpaper Engine 壁纸目录入库，整目录移动 / 去重时删除）、`downloadImage` 的 `relocate` 选项（只对任务 VFS 路径生效，worker 不下载、直接把 VFS 里的文件或目录交给后处理移走）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定（命中 WPE 行时不改挂）、入库后 best-effort 原生元数据（EXIF/PNG chunk）逐图计算与一图一行存储（`image_metadata` 表）、桌面落盘（目标名原子占坑 + 原生占用标记：Unix `flock` / Windows share mode，Windows 只经占坑句柄写，守卫持有到入库后才释放，新建文件入库后按直接父目录补挂文件夹画册）、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务的 busy 快照轮询、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理，以及只对实际插入发送、按单画册拆分的 **`album-images-added`**（删除为 deleted、排序才是 change，隐藏只发隐藏画册自身事件）（连同图片新增 / 删除 / 字段补丁与 `hidden-cleanup-finished`）。
+  - 主题：当前下载器全链路与模块边界。涵盖任务级 dry-run 的下载/metadata/local-import 三个 nop 点、全局与逐任务下载并发闸门（pending + active 原子判断、运行中实时调整）、`mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、单图字节进度写入 `active_downloads` 并由前端 500ms 快照轮询、Android 通知 1s ticker、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举；`Path` 来源是目录时按 Wallpaper Engine 壁纸目录入库，整目录移动 / 去重时删除）、`downloadImage` 的 `relocate` 选项（只对任务 VFS 路径生效，worker 不下载、直接把 VFS 里的文件或目录交给后处理移走）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定（命中 WPE 行时不改挂）、入库前尽力算色盘（`compute_for_row`，随 `ImageInfo.palette` 交给 `add_image`）、入库后 best-effort 原生元数据（EXIF/PNG chunk）逐图计算与一图一行存储（`image_metadata` 表）、桌面落盘（目标名原子占坑 + 原生占用标记：Unix `flock` / Windows share mode，Windows 只经占坑句柄写，守卫持有到入库后才释放，新建文件入库后按直接父目录补挂文件夹画册）、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务的 busy 快照轮询、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理，以及只对实际插入发送、按单画册拆分的 **`album-images-added`**（删除为 deleted、排序才是 change，隐藏只发隐藏画册自身事件）（连同图片新增 / 删除 / 字段补丁与 `hidden-cleanup-finished`）。
   - 适用场景：下载任务生命周期、偶发 `UNIQUE constraint failed: images.local_path` 或同名图片互相覆盖、插件把 VFS 里的文件或壁纸目录交给下载器（`relocate`）后源没被移走或报错、去重命中后 WPE 行的详情 / 属性面板失效、下载目录与文件夹画册重叠、Android `content://` 与 HTTP/HTTPS 下载差异、畅游一键下载与取消、页面快照回看、JS 爬虫或畅游窗口的页面自发原生下载、`blob:` / `data:` / MSE 媒体下载、会话 VFS 写入与清理、MSE 多 SourceBuffer 显式合流、surf 导入与终态反馈、源文件删除/回收站护栏、清空隐藏画册、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
@@ -275,7 +292,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     JS 事件按接收方 webview 身份投递（忽略前端 `listen` 传的 `target`，`emit_to(App)` 不再送给 JS，`unlisten` 只作用于调用方 webview）、
     `core:event:allow-listen` 的事件名作用域（`{ "event": "x" }`，末尾 `*` 前缀匹配，deny 优先）、capability 的 `frames` 维度
     （`main` 默认 / `sub` / `any`，frame 由 runtime 经请求 extension 上报，CEF 给不出时记 `Unknown`，Android 缺省按主 frame）、
-    特赦 webview（`Builder::acl_exempt_webview`，本应用为 `main` / `wallpaper`，只认本地来源主 frame，显式 deny 与 listen 作用域都跳过，
+    特赦 webview（`Builder::acl_exempt_webview`，本应用为 `main` 与壁纸窗口 label 池 `wallpaper`、`wallpaper-1` … `wallpaper-7`，只认本地来源主 frame，显式 deny 与 listen 作用域都跳过，
     ACL 照常解析以传递插件作用域）；`permissions/main.toml` 已删除，各窗口的权限文件与判定结果表；
     以及补丁 18–19 的**子 frame IPC**：CEF 下每个子 frame 无条件注入 Tauri 桥（ACL 是唯一闸门），子 frame 请求带 `SubframeId`，
     监听登记 / 事件 / Channel 消息 / 回退响应都送回调用方 frame（JS 监听表 webview → frame → 事件），Channel 取数按 frame 归属，
@@ -344,12 +361,46 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：Windows 窗口壁纸按 WPE 运行时层级挂到 WorkerW，移除旧 Progman 同级 Z-order 修正；列出证据、实现边界与真机验证项。
 
 - [wallpaper/NATIVE_WALLPAPER_COMPAT.md](wallpaper/NATIVE_WALLPAPER_COMPAT.md)
-  - 主题：Linux / Windows 原生壁纸的图片格式兼容层。涵盖独立的 `wallpaper_compatible_path`、惰性 JPEG/PNG 转码与复用、样式重应用路径、best-effort 回退，以及删除图片时对兼容副本的安全清理。
+  - 主题：Linux / Windows 原生壁纸的图片格式兼容层。涵盖独立的 `wallpaper_compatible_path`、惰性 JPEG/PNG 转码与复用、样式重应用路径、best-effort 回退，以及删除图片时对兼容副本的安全清理；macOS 的原生后端经 `NSWorkspace` 逐屏设图、直接交原图，不接入这一层。
   - 适用场景：排查 GNOME/Windows 设置 WebP、AVIF、HEIC、HEIF 后壁纸空白；扩展原生壁纸格式白名单；维护兼容副本生命周期。
 
 - [wallpaper/ROTATION_PATHQL.md](wallpaper/ROTATION_PATHQL.md)
-  - 主题：壁纸轮播只认一个 PathQL 路径 `wallpaperRotationPath` 与持久化位置 `wallpaperRotationPosition`（换路径置 `-1` 并立即切到第 1 张，停开轮播保持）；每次切换 count → 出错回落默认随机路径 → 按当前壁纸 id 经 `~~/rank` 定起点（不在路径里才用位置）→ 取该张（画廊走 lookup 形态）；轮播线程跳过 notify 残留 permit；原生模式在尾部拼 `_kb_fc/media-type/image` 只留图片；切换壁纸模式按当前壁纸 id 经 `~~/rank` 重定位；兼容副本仍由原生后端按需生成；「用当前视图轮播」经 `ImageGrid` 注入的视图路径；Android Worker 只消费 Rust 预取的 `rotation_queue.json`；旧三键的 v003 设置迁移。
-  - 适用场景：改轮播选图 / 位置语义、加新的轮播入口；排查轮播不前进、停开后从头开始、换模式后跳张、路径失效回落、原生模式出现视频；Android 后台轮播不换图或位置不同步。
+  - 主题：每个壁纸目标的轮播只认目标配置里的一个 PathQL 路径 `rotationPath` 与持久化位置 `rotationPosition`（换路径置 `-1` 并立即把该目标切到第 1 张，停开轮播保持），开关与间隔仍是全局设置；轮播线程一个 ticker，到点对所有活跃目标各切一张（一个失败不影响其它），`rotate(Option<目标>)` 可只切一个目标（换路径、演示过渡、托盘「下一张」），手动切换与改间隔后计时从现在起算，跳过 notify 残留 permit；一个目标的一次切换：count → 出错回落默认随机路径 → 按该目标当前壁纸 id 经 `~~/rank` 定起点（不在路径里才用位置）→ 取该张（画廊走 lookup 形态）→ 带有效样式 / 过渡与布置交给后端；原生模式在尾部拼 `_kb_fc/media-type/image` 只留图片；切换壁纸模式时各目标按当前壁纸 id 经 `~~/rank` 重定位；兼容副本仍由原生后端按需生成；设置页以外的前端入口先经目标选择弹窗选目标再写该目标的路径，轮播来源标记按任一活跃目标命中、「还能不能再设」按是否全部命中；Android Worker 只消费 Rust 预取的 `rotation_queue.json`、读 `wallpaperTargets.multiple`；设置迁移 v003（旧三键换算成路径）与 v005（并入目标）。
+  - 适用场景：改轮播选图 / 位置语义、加新的轮播入口；排查轮播不前进、停开后从头开始、换模式后跳张、路径失效回落、原生模式出现视频、手动切换后自动切换的时间不对、托盘「下一张」切错目标；Android 后台轮播不换图或位置不同步。
+
+- [wallpaper/MULTI_SCREEN.md](wallpaper/MULTI_SCREEN.md)
+  - 主题：多显示器壁纸的模型与现阶段范围（完成了目标化骨架、macOS 的显示器枚举与设置页布局图、窗口模式每屏一窗、macOS 原生模式逐屏设置：**macOS 的窗口模式与原生模式都可选 `multiple` / `single`**，其余组合只有 `multiple`；多个活跃目标时设壁纸 / 设轮播先经目标选择弹窗；`span`、Windows / Linux 原生模式的 `single`、Windows / Linux 的显示器枚举尚未实现，Windows 窗口模式仍是一个窗口铺主屏）。
+    - **原生模式：macOS 逐屏**：`manager/native_mac.rs` 经 `NSWorkspace.setDesktopImageURL(_:for:options:)` 一块屏一块屏地设（`All` 对每块屏各设一次、`One` 设一次，osascript 路径已删除）；屏按 display UUID 在主线程现查 `NSScreen`（`screens::find_ns_screen`），设图在调用线程（一次要等系统 0.6 s 上下，不放主线程）；样式 → 选项的映射（`fill` / `fit` / `stretch` / `center`，逐屏生效、留边黑色、没有平铺）与 macOS 26 实测读回；视频与目录型 WPE 壁纸跳过、保持系统壁纸现状（`can_display`）；WebP 等直接交原图；屏幕变化后只给新接入的屏输出（`outputs_for_new_screens`）；只改各屏当前 Space。
+    - **窗口模式每屏一窗**：壁纸窗口 label 池 `wallpaper::WALLPAPER_LABELS`（`wallpaper`、`wallpaper-1` … `wallpaper-7`）与 `is_wallpaper_label`，池要同步登记的四处（ACL 特赦、两个 capability 文件、场景宿主 capability、建窗前的 `file:` 能力）；`plan_windows` / `diff_windows` 按屏的持久标识对齐窗口表（同屏保留不重载、矩形变了重铺、布置变了推事件、多的销毁、缺的新建），`init` / `reconcile` / `cleanup` 串行、布局在后端锁内现算；macOS 按屏矩形铺放；布置 `WindowAssignment { targetId, audible }`（`get_wallpaper_window_assignment` + 只发给该窗口的 `wallpaper-assignment`，`multiple` 下只有主屏窗口出声）；就绪握手、ping 看门狗、桌面鼠标转发每个窗口各一份；壁纸窗口地址带 `&slot=<序号>`。
+    - **显示器枚举**：`wallpaper/screens.rs` 的 `ScreenInfo`（持久标识、左上原点的平台桌面坐标、物理像素分辨率、缩放、主屏；主屏第一、其余按 (y, x)）与进程内缓存；macOS 取 `NSScreen`（主线程）+ display UUID，Cocoa 坐标按主屏高度翻转 Y；watcher 线程每 2 s 重新枚举、系统重排通知只负责唤醒，快照稳定 300 ms 才提交，提交顺序是换缓存 → `on_screens_changed(变化前的在线屏)`（重算布局、补种目标，窗口模式下再对齐窗口集合，能逐屏输出的原生后端只给新接入的屏输出；不碰轮播计时）→ 事件 `wallpaper-screens-change { screens }`；`screen_at_cursor`。
+    - **显示器模式与目标 id**：`wallpaperDisplayMode`（`multiple` / `span` / `single`）与目标 `multiple` / `span` / `screen:<屏幕持久标识>`，默认显示器 `wallpaperDefaultScreen`。
+    - **设置模型**：一个键 `wallpaperTargets: { [目标 id]: WallpaperTargetConfig }`（轮播路径与位置、按壁纸模式存的样式 / 过渡、当前壁纸），core 只按目标 id 读写、有变化才发一次带整个 map 的 `setting-change`；轮播开关与间隔仍是全局键；设置迁移 v005 把 7 个扁平键并入 `multiple`（旧键胜出、幂等）。
+    - **控制器**：`Layout` / `Placement`、活跃目标与默认目标的规则、生效的显示器模式（不可用时回落 `multiple` 并写回设置）、缺失目标的补种、`resolve_target` / `target_at_cursor`（规则在纯函数 `target_for_cursor`：逐屏独立下取光标所在屏的目标，取不到或那块屏不在布局里用默认目标；托盘「下一张」用它）。
+    - **能力**：`get_wallpaper_capabilities` 为「壁纸模式 → 三个显示器模式各自的可用性 / 样式 / 过渡 / `sharedStyle`」，后端是唯一来源。
+    - **有效样式 / 过渡**：只在读取时按能力归一化（存的值在选项里就用，否则取第一项），前后端同规则。
+    - **manager trait**：`set_wallpaper(文件, 样式, 过渡, 布置)` 一次输出、后端不反读设置，不带参数的 `reconcile`（布局在后端锁内现算）与 `window_assignment`；删除 `set_style` / `set_transition` / `set_wallpaper_path`。
+    - **切换**：改样式 / 过渡（按能力校验、`reapply_target`）、切壁纸模式时样式沿用（`carry_to_mode`：样式 / 过渡按壁纸模式各记各的，只在目标的新模式名下还没有值时才把旧模式的有效值带过去，已有值不动）、切显示器模式、关开壁纸与启动恢复逐目标进行。
+    - **命令与事件**：带可选 `target` 的命令（「当前壁纸」类命令不带 `target` 时，壁纸窗口调用取它自己的布置目标）、新增的 `get_wallpaper_targets` / 显示器模式 / 默认屏 / `forget_wallpaper_target` / `list_wallpaper_screens` / `get_wallpaper_window_assignment`、删除的 5 个扁平 getter。
+    - **前端**：`utils/wallpaperTargets.ts` 纯规则、`useWallpaperTarget` / `useActiveWallpaperTargets` / `useActiveWallpaperImageIds` / `useActiveWallpaperRotationPaths`，不做本地乐观副本、不再本地清当前壁纸；在线屏 `useWallpaperScreens` 全应用一份、跟随 `wallpaper-screens-change`；壁纸窗口按后端的布置读目标、自己留一份目标数据，不出声的布置把音量压到 0；Web 版把应用背景记在本地的 `multiple` 目标上。
+    - **目标选择弹窗与各入口**：`pickWallpaperTarget({ action })`（`useWallpaperTargetPicker.ts` + 挂在 `App.vue` 的 `WallpaperTargetPickerHost.vue`，写法同 `askSettingChoice`）只有一个活跃目标时不弹、同时只有一个请求、打开期间屏减少到一块自动返回；图库 / 预览「设为壁纸」（多选时先选屏再建画册）、画册「设为轮播」、查询行「用当前视图轮播」先选目标再带 `target` 调命令，多目标时成功提示带屏名；与「需要窗口模式」引导的先后（先选屏，引导切模式后按后端的显示器模式重判目标是否仍活跃，不活跃就落到新的默认目标）；多目标下轮播来源标记分「有目标命中」与「全部命中」两档（`useWallpaperRotationSources` + `rotatingTargetIds`），部分命中时「设为轮播」仍可点并另给「停止」入口。
+    - **设置页**：壁纸分区分三层（全局 → 显示器布局图 → 选中目标的设置），选中的目标是页面本地状态；显示器模式选择器照能力表置灰并显示原因（`KbSegmentedControl` 的单项 `disabled` / `tip`）；布局图 `WallpaperScreenLayout` 与几何纯函数 `layoutScreens`（并集外接矩形等比缩进容器，块小时依次省略文字）。
+    - **其它**：删画册 / 删图对所有目标生效、Android Worker 与 dev 工具 `app_state` 的字段、与重构前的行为差异、加功能时的入口。
+  - 适用场景：
+    - 开放 `span` 或 Windows / Linux 原生模式的 `single`、给 Windows / Linux 接入显示器枚举、给 Windows 接每屏一窗；
+    - 排查 macOS 原生模式下图设到了另一块屏、某块屏没换图、改显示方式不生效或铺法不对、换壁纸时界面卡顿、当前壁纸是视频时桌面没变、接上显示器后新屏不是该有的那张或已有的屏被重设、只有当前桌面（Space）换了图、`span` 置灰的原因；
+    - 排查某块屏没有壁纸 / 壁纸窗口数与在线屏数不一致、某个窗口显示的不是它那块屏的目标、插拔显示器后窗口没销毁或没重建、副屏窗口位置或大小不对、关开壁纸或切模式后留下孤儿窗口；
+    - 排查各屏复制时副屏也出声或主屏没声、逐屏独立下改一块屏另一块也变、轮播只切了一块屏；
+    - 排查副屏上的网页 / 场景壁纸被 ACL 或 `file:` 闸门拒绝、不响应鼠标、某个壁纸窗口反复重载（ping）；
+    - 新增要按壁纸窗口 label 登记或判断的代码、改 label 池；
+    - 排查布局图不显示、与系统排布不一致、插拔显示器后不更新或更新慢、屏的标识重启后变了、光标所在屏判断不对；
+    - 排查显示器模式选项置灰的原因不显示、设置页改的是哪个目标、分段控件里单项禁用；
+    - 新增要落到某个壁纸目标的操作入口；排查只有一个目标时也弹窗、选了屏却落到默认屏、弹窗不关或留下遮罩、弹窗里布局图不显示、成功提示的屏名不对、引导切到窗口模式后报「目标不在活跃集合」；
+    - 排查逐屏独立下画册 / 视图的「设为轮播」被收起或置灰、轮播标记与实际不符、托盘「下一张」切错了屏；
+    - 排查来回切壁纸模式后显示方式 / 过渡被改掉或没有沿用；
+    - 给壁纸目标加字段、加按目标读写的命令或前端入口；
+    - 排查升级后样式 / 过渡 / 轮播路径 / 当前壁纸丢失或与旧版本不同、切壁纸模式后样式不对、改样式不生效或被拒绝、「壁纸目标不在当前显示器模式的活跃集合里」报错；
+    - 排查应用背景或网格的当前壁纸标记不更新、设置项卡在保存中、壁纸窗口没跟上样式 / 过渡 / 当前壁纸的变化；
+    - 外部读取壁纸设置（`get_settings`、app IPC、能力表）的形状变化。
 
 ## 构建打包（`build/`）
 
@@ -373,6 +424,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：数据库两类迁移——同步 schema 迁移（`user_version` 顺序）与可恢复的异步回填作业（`Backfill` 注册表 + `backfill_jobs` 表，按批 `BEGIN IMMEDIATE` 提交、同事务写回 rowid 游标与进度、崩溃续跑，`BackfillCtx` 的 `with_conn` / `block_on` / `commit`）；`Migration.min_backfill_version` 的同步排干语义与「回填只碰引入时就存在的列」不变量、空迁移登记作业、全新安装不登记、平台门控（被依赖时标记跳过）、CLI 只跑阻塞阶段、`BackfillService` 后台按序运行与忙碌卡片 / `backfill-finished`、失败下次启动重试、`KABEGAME_BACKFILL_SYNC_THROUGH` 调试开关；以及三段式启动（`init_pre` 主线程建窗 → 线程内 `init_heavy_globals` → 主线程 `init_post` → 后台回填 → `Ready`）、`startup_state` watch / `startup-progress` / `get_startup_state`，前端启动页（Init app）mount / unmount 与不安装 i18n 的原因。
   - v049 同步规范化 `images.type` 并建索引；迁移 SQL 与 Rust 写入口的格式表外规则有比对测试，分页执行计划约束见 `provider-dsl/RULES.md` §2.2。
   - v051 是空迁移，登记发布态第一个回填作业 `wpe_dir_hash`：把存量 WPE 壁纸行的 `hash` / `size` 从入口文件重算为目录哈希与目录总字节数（每批 4 行、不持锁读盘、目录缺失跳过；跑完之前存量行按目录哈希查不到）。
+  - v052 加 `images.palette`、色桶表与关系表，同步给存量图 × 每个色桶铺一行 65536（铺完再建排序索引），并登记回填作业 `image_palette`：每批 32 行给 `palette IS NULL` 的图算色盘、改写距离、发 `palette` 补丁，算不出的不重试。表的含义见 [gallery/COLOR_PALETTE.md](gallery/COLOR_PALETTE.md)。
   - 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，启动页 `analyze` 阶段，失败只告警；CLI 不跑）。
   - 适用场景：新增需要补算数据的迁移或回填作业；排查启动统计刷新耗时或执行计划随统计变化；某个迁移要改动回填读写的列；排查启动卡在启动页、启动页报错、回填不前进 / 重复处理 / 失败重试、忙碌卡片不消失；调整桌面 / Android 启动顺序或主线程要求。
 

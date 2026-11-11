@@ -379,9 +379,9 @@ export async function appState(s: DevSession): Promise<AppState> {
     // 原 state.mjs 的 get_wallpaper_disabled 已不存在，「禁用」看 get_wallpaper_enabled
     enabled: await call("get_wallpaper_enabled"),
     postprocess: await call("get_wpe_scene_postprocess"),
-    transition: await call("get_wallpaper_rotation_transition"),
-    transitionByMode: await call("get_wallpaper_transition_by_mode"),
-    styleByMode: await call("get_wallpaper_style_by_mode"),
+    displayMode: await call("get_wallpaper_display_mode"),
+    // 轮播路径与位置、样式、过渡、当前壁纸都挂在壁纸目标上（目标 id → 配置）
+    targets: await call("get_wallpaper_targets"),
     rotationEnabled: await call("get_wallpaper_rotation_enabled"),
     route: await evalValue<string>(s, await mainTargetId(s), "location.pathname + location.search"),
     sceneHosts,

@@ -290,6 +290,10 @@ fn activate_macos_window<R: tauri::Runtime>(
 // 壁纸组件，壁纸设置、轮播等功能
 #[cfg(not(feature = "web"))]
 pub fn init_wallpaper_controller(app_handle: &AppHandle<crate::AppRuntime>) {
+    // 先读一次在线显示器并启动 watcher：控制器初始化时就要按在线屏算布局、补种目标。
+    // 本函数在主线程执行（init_post），首次枚举因此是同步的。
+    crate::wallpaper::screens::start_watcher();
+
     // 初始化全局壁纸控制器（基础 manager）
     // 使用全局单例（不再使用 manage）
     if let Err(e) = WallpaperController::init_global(app_handle.clone()) {
@@ -940,11 +944,10 @@ pub fn start_task_scheduler() {
     tokio::spawn(task_future);
 }
 
-/// 启动时初始化"当前壁纸"并按规则回退/降级
+/// 启动时逐个活跃目标恢复"当前壁纸"
 ///
-/// 规则（按用户需求）：
-/// - 非轮播：尝试设置 currentWallpaperImageId；失败则清空并停止
-/// - 轮播：优先在轮播源中找到 currentWallpaperImageId；找不到则回退到轮播源的一张；源无可用则画册->画廊->关闭轮播并清空
+/// 每个目标只"尝试还原自己的当前壁纸"：图片行或文件已不存在、设置失败都清空该目标的当前壁纸；
+/// 选图与回退由 rotator 负责。
 #[cfg(not(feature = "web"))]
 pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     use std::path::Path;
@@ -968,29 +971,45 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     }
 
     let controller = WallpaperController::global();
-    // 启动时只"尝试还原 currentWallpaperImageId"，不在客户端做大规模选图/回退，
-    // 回退与轮播逻辑由 rotator 负责（避免客户端依赖 Storage/Settings）。
+    // 启动时只"尝试还原各目标的当前壁纸"，不在这里做大规模选图/回退，
+    // 回退与轮播逻辑由 rotator 负责。
     let settings = Settings::global();
-    let style = settings.get_wallpaper_rotation_style();
-    let Some(id) = settings.get_current_wallpaper_image_id() else {
-        return Ok(());
+    let clear_current = |target_id: &str| {
+        let _ = settings.update_wallpaper_target(target_id, Default::default, |config| {
+            config.set_current_image_id(None)
+        });
     };
+    let manager = controller.active_manager().await?;
+    for (target_id, placement) in controller.layout().targets {
+        let config = settings
+            .get_wallpaper_target(&target_id)
+            .unwrap_or_default();
+        let Some(id) = config.current_image_id.as_deref() else {
+            continue;
+        };
 
-    let img_v = Storage::find_image_by_id(&id).map_err(|e| format!("Storage error: {}", e))?;
+        let img_v = Storage::find_image_by_id(id).map_err(|e| format!("Storage error: {}", e))?;
 
-    let Some(img_info) = img_v else {
-        let _ = settings.set_current_wallpaper_image_id(None);
-        return Ok(());
-    };
-    let path = img_info.local_path;
+        let Some(img_info) = img_v else {
+            clear_current(&target_id);
+            continue;
+        };
+        let path = img_info.local_path;
 
-    if !Path::new(&path).exists() {
-        let _ = settings.set_current_wallpaper_image_id(None);
-        return Ok(());
-    }
+        if !Path::new(&path).exists() {
+            clear_current(&target_id);
+            continue;
+        }
 
-    if controller.set_wallpaper(&path, &style).await.is_err() as bool {
-        let _ = settings.set_current_wallpaper_image_id(None);
+        // 恢复不带过渡
+        let style = controller.effective_style(&config);
+        if manager
+            .set_wallpaper(&path, &style, "none", &placement)
+            .await
+            .is_err()
+        {
+            clear_current(&target_id);
+        }
     }
 
     Ok(())

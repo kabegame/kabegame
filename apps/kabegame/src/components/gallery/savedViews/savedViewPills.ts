@@ -15,6 +15,9 @@ export interface SavedViewPill {
   icon: Component;
   label: string;
   title: string;
+  /** 跟在 label 后面的小色块（CSS 颜色）与它的名字：按颜色排序时用。 */
+  swatch?: string;
+  swatchLabel?: string;
 }
 
 const SEARCH_ICON = markRaw(Search);

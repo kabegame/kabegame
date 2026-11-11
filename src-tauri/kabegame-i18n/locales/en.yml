@@ -29,6 +29,15 @@ settings:
   modeNative: "Native mode"
   modeWindow: "Window mode"
   modePlugin: "Plugin mode"
+  displayModeMultiple: "Duplicate"
+  displayModeMultipleDesc: "All displays show the same wallpaper"
+  displayModeSpan: "Span"
+  displayModeSpanDesc: "Treat all displays as one canvas and stretch a single wallpaper across them"
+  displayModeSingle: "Per display"
+  displayModeSingleDesc: "Each display has its own wallpaper and rotation"
+  displayModeLater: "This display mode will be available in a later version"
+  displayModeSpanWindow: "Window mode does not support spanning displays yet"
+  displayModeSpanNoSystem: "The system cannot span a wallpaper across displays"
 
 tray:
   show: Show

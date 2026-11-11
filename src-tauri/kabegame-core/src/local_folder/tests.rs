@@ -513,6 +513,7 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
             album_order: None,
             compatible_path: None,
             post_url: None,
+            palette: None,
         })
         .unwrap();
 
@@ -1398,4 +1399,65 @@ async fn batch_wpe_dir_adds_row_ignores_inner_changes_and_removal_deletes_row() 
 #[test]
 fn helper_timestamp_is_valid() {
     assert!(now_secs() > 0);
+}
+
+/// 文件夹同步入库的图带着色盘，并对每个色桶各有一行距离；删行后关系行一并消失。
+#[tokio::test(flavor = "current_thread")]
+async fn sync_computes_palette_and_color_distances() {
+    use crate::media::palette::Palette;
+
+    let _guard = test_guard();
+    let (_temp, root) = temp_album_dir();
+    let _album_id = create_sync_album(&root, None, SyncMode::Shallow);
+    let file = root.join("solid.png");
+    RgbImage::from_pixel(32, 32, Rgb([200, 30, 40]))
+        .save(&file)
+        .unwrap();
+    process_paths([(file.clone(), PathHint::File)]).await;
+    let id = image_id_for_path(&file).expect("row inserted");
+
+    let distance_rows = |id: &str| -> Vec<(i64, i64)> {
+        let conn = Storage::global().db.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT bucket_rgb, distance FROM image_color_distances
+                  WHERE image_id = ?1 ORDER BY distance, bucket_rgb",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map(params![id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        rows
+    };
+
+    let stored: Option<String> = Storage::global()
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT palette FROM images WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let palette = Palette::from_json(&stored.expect("palette computed at ingest")).unwrap();
+    assert_eq!(palette.0.len(), 1, "{palette:?}");
+    assert_eq!(palette.0[0].percent, 100);
+    let rgb = palette.0[0].rgb;
+    for (shift, expected) in [(16, 200i64), (8, 30), (0, 40)] {
+        let channel = i64::from((rgb >> shift) & 0xff);
+        assert!((channel - expected).abs() <= 3, "{rgb:06x}");
+    }
+
+    let rows = distance_rows(&id);
+    assert_eq!(rows.len(), 12);
+    assert!(rows.iter().all(|(_, distance)| *distance <= 65535));
+    assert_eq!(rows[0].0, 0xff0000, "偏红的图离红桶最近: {rows:?}");
+
+    fs::remove_file(&file).unwrap();
+    process_paths([(file.clone(), PathHint::File)]).await;
+    assert!(image_id_for_path(&file).is_none());
+    assert!(distance_rows(&id).is_empty());
 }

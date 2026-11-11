@@ -12,7 +12,7 @@
 //! - **IPC**：场景壁纸是一种特殊的网页壁纸。宿主同样匹配 `wpe-web-capability`（`file:///*`、`frames: "sub"`），
 //!   网页壁纸的命令与事件它都有（应答 ping、按 `image-changed` 跟随用户属性、`setting-change` 等）。
 //!   场景专用的命令另由启动时按宿主 `index.html` 的**确切** `file:` 地址注册的 capability 放行（[`register_capability`]，
-//!   `frames: "sub"`，窗口 main / wallpaper）。不用路径通配：工坊内容可以造同名目录冒充。
+//!   `frames: "sub"`，窗口 main 与壁纸窗口池 `WALLPAPER_LABELS`）。不用路径通配：工坊内容可以造同名目录冒充。
 //!   `file:` 文档的 IPC 来源就是去掉 query / fragment 的文档 URL（runtime `ipc_origin`，CEF 补丁 07）。
 //!
 //! 内存表只在这里与 [`WpeWebDirIndex`] 里，解析器在 CEF IO 线程上同步调用，不碰数据库与 Steam 库清单。
@@ -193,7 +193,7 @@ pub fn register_capability<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Resu
     let capability = CapabilityBuilder::new(SCENE_HOST_CAPABILITY)
         .remote(url_pattern_literal(&url))
         .local(false)
-        .windows(["main", "wallpaper"])
+        .windows(std::iter::once("main").chain(crate::wallpaper::WALLPAPER_LABELS))
         .frames(CapabilityFrames::Sub)
         .permission(SCENE_HOST_PERMISSION);
     app.add_capability(capability)

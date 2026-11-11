@@ -1577,6 +1577,16 @@ pub async fn postprocess_downloaded_image(
                 }
             };
 
+            // 色盘：尽力而为，算不出来就没有，不阻断入库。缩略图与兼容副本此时都已定下。
+            let palette = crate::media::palette::compute_for_row(
+                &inferred_mime,
+                &local_path,
+                &thumbnail_path_str,
+                compatible_path_str.as_deref(),
+                None,
+            )
+            .await;
+
             let image_info = ImageInfo {
                 id: "".to_string(),
                 url: if is_content {
@@ -1613,6 +1623,7 @@ pub async fn postprocess_downloaded_image(
                 album_order: None,
                 compatible_path: compatible_path_str,
                 post_url: post_url.map(|s| s.to_string()),
+                palette: palette.as_ref().map(crate::media::palette::Palette::to_json),
             };
 
             let t_add = (!auto_deduplicate).then(Instant::now);

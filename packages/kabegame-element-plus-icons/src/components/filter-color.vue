@@ -1,0 +1,9 @@
+<template>
+  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.2a6.2 6.2 0 1 1 0-12.4c3.5 0 6.3 2.4 6.3 5.5 0 1.9-1.5 3.3-3.4 3.3H9.5a1.1 1.1 0 0 0-.9 1.8l.2.3a1.1 1.1 0 0 1-.8 1.5z"></path><path d="M4.9 8.5h.01"></path><path d="M6.4 5.3h.01"></path><path d="M9.7 4.7h.01"></path><path d="M11.6 7.3h.01"></path></svg>
+</template>
+
+<script lang="ts" setup>
+defineOptions({
+  name: "FilterColor",
+})
+</script>

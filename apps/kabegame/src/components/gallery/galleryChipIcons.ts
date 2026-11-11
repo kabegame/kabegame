@@ -2,6 +2,7 @@ import { markRaw, type Component } from "vue";
 import {
   Clock,
   FilterAspect,
+  FilterColor,
   FilterDate,
   FilterMedia,
   FilterName,
@@ -40,4 +41,7 @@ export const SORT_FIELD_ICONS: Record<GallerySortField, Component> = {
   "by-set-time": markRaw(FilterWallpaper),
   "by-album-order": markRaw(List),
   random: markRaw(MagicStick),
+  // 两个颜色字段在界面上是同一个维度，共用调色板
+  "by-color": markRaw(FilterColor),
+  "by-any-color": markRaw(FilterColor),
 };

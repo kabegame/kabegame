@@ -2,6 +2,8 @@
 
 Windows 标准版的窗口壁纸由 `tauri-plugin-wemt` 挂到 Explorer 的背景 `WorkerW`。壁纸页面（`index.html?window=wallpaper`，根组件 `WallpaperWindow.vue`）仍由 `WindowWallpaperManager` 按需创建，等页面 ready 后挂载，离开窗口壁纸模式时先解绑再销毁。主程序保留 CEF 窗口与页面生命周期，插件只处理桌面宿主、父子关系、窗口样式、位置及状态。
 
+多显示器现状：窗口模式的每屏一窗目前只在 macOS 实现（见 [MULTI_SCREEN.md](MULTI_SCREEN.md)「窗口模式：每屏一窗」）。Windows 还没有显示器枚举，`WindowWallpaperManager` 在这里退化成一个不绑定屏的壁纸窗口（label `wallpaper`），挂载方式与本文相同、只铺主屏；要支持每屏一窗，本插件的挂载选项需要能按屏的矩形挂载。
+
 ## WPE 证据与实现边界
 
 本机 Wallpaper Engine 2.8.0.42 的 `wallpaper64.exe` SHA-256 为 `40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0`。REA 静态证据 `ev_98646988f59bc6e9d8dc6a5f0ff9cf811e579189b8a41df17f008a0553c6c1ac` 显示：桌面准备函数查找 `Progman`，按条件发送 `0x52c`（新桌面分支参数 `0xd,1`），枚举并重试查找 `WorkerW`，设置 `WallpaperEngineParent`。运行时切换壁纸记录显示：主渲染窗口创建时已经是 WorkerW 子窗口，不经过临时容器的 `0x404` 路径。报告见 [step3-callchain-report-20261025.md](../../src-tauri/tauri-plugin-wemt/step3-callchain-report-20261025.md)。

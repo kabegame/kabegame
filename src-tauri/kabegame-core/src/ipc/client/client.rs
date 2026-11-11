@@ -330,7 +330,8 @@ impl IpcClient {
     }
 
     pub async fn storage_clear_finished_tasks(&self) -> Result<serde_json::Value, String> {
-        self.request_data(IpcRequest::StorageClearFinishedTasks).await
+        self.request_data(IpcRequest::StorageClearFinishedTasks)
+            .await
     }
 
     // ==================== Storage - Run Configs ====================
@@ -584,9 +585,13 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    pub async fn settings_get_wallpaper_rotation_path(&self) -> Result<Option<String>, String> {
+    /// `target` 为壁纸目标 id，None = 当前显示器模式的默认目标（下面带 `target` 的方法同此约定）。
+    pub async fn settings_get_wallpaper_rotation_path(
+        &self,
+        target: Option<String>,
+    ) -> Result<Option<String>, String> {
         let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperRotationPath)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationPath { target })
             .await?;
         if v.is_null() {
             Ok(None)
@@ -602,34 +607,22 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    pub async fn settings_get_wallpaper_rotation_style(&self) -> Result<String, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperStyle)
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    pub async fn settings_get_wallpaper_rotation_transition(&self) -> Result<String, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperRotationTransition)
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    pub async fn settings_get_wallpaper_style_by_mode(
+    pub async fn settings_get_wallpaper_rotation_style(
         &self,
-    ) -> Result<std::collections::HashMap<String, String>, String> {
+        target: Option<String>,
+    ) -> Result<String, String> {
         let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperStyleByMode)
+            .request_data(IpcRequest::SettingsGetWallpaperStyle { target })
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    pub async fn settings_get_wallpaper_transition_by_mode(
+    pub async fn settings_get_wallpaper_rotation_transition(
         &self,
-    ) -> Result<std::collections::HashMap<String, String>, String> {
+        target: Option<String>,
+    ) -> Result<String, String> {
         let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperTransitionByMode)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationTransition { target })
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -654,9 +647,12 @@ impl IpcClient {
         }
     }
 
-    pub async fn settings_get_current_wallpaper_image_id(&self) -> Result<Option<String>, String> {
+    pub async fn settings_get_current_wallpaper_image_id(
+        &self,
+        target: Option<String>,
+    ) -> Result<Option<String>, String> {
         let v = self
-            .request_data(IpcRequest::SettingsGetCurrentWallpaperImageId)
+            .request_data(IpcRequest::SettingsGetCurrentWallpaperImageId { target })
             .await?;
         if v.is_null() {
             Ok(None)
@@ -712,21 +708,27 @@ impl IpcClient {
     pub async fn settings_set_wallpaper_rotation_path(
         &self,
         path: Option<String>,
+        target: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetWallpaperRotationPath { path })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationPath { path, target })
             .await
     }
 
     pub async fn settings_set_wallpaper_rotation_transition(
         &self,
         transition: String,
+        target: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetWallpaperRotationTransition { transition })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationTransition { transition, target })
             .await
     }
 
-    pub async fn settings_set_wallpaper_style(&self, style: String) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetWallpaperStyle { style })
+    pub async fn settings_set_wallpaper_style(
+        &self,
+        style: String,
+        target: Option<String>,
+    ) -> Result<(), String> {
+        self.request_ok(IpcRequest::SettingsSetWallpaperStyle { style, target })
             .await
     }
 
@@ -799,33 +801,10 @@ impl IpcClient {
     pub async fn settings_set_current_wallpaper_image_id(
         &self,
         image_id: Option<String>,
+        target: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetCurrentWallpaperImageId { image_id })
+        self.request_ok(IpcRequest::SettingsSetCurrentWallpaperImageId { image_id, target })
             .await
-    }
-
-    pub async fn settings_swap_style_transition_for_mode_switch(
-        &self,
-        old_mode: String,
-        new_mode: String,
-    ) -> Result<(String, String), String> {
-        let v = self
-            .request_data(IpcRequest::SettingsSwapStyleTransitionForModeSwitch {
-                old_mode,
-                new_mode,
-            })
-            .await?;
-        let style = v
-            .get("style")
-            .and_then(|x| x.as_str())
-            .unwrap_or("fill")
-            .to_string();
-        let transition = v
-            .get("transition")
-            .and_then(|x| x.as_str())
-            .unwrap_or("none")
-            .to_string();
-        Ok((style, transition))
     }
 
     // ==================== Task scheduling ====================
@@ -994,10 +973,7 @@ impl IpcClient {
 
         // 持续接收事件
         while let Some(event) = event_rx.recv().await {
-            tracing::trace!(
-                "IpcClient::subscribe_events_stream 收到事件: {:?}",
-                event
-            );
+            tracing::trace!("IpcClient::subscribe_events_stream 收到事件: {:?}", event);
             let raw = serde_json::to_value(&*event)
                 .map_err(|error| format!("序列化 IPC 事件失败: {error}"))?;
             on_event(raw).await;

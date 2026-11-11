@@ -55,6 +55,8 @@ export function rowToImageInfo(row: Row): ImageInfo {
     ["type", stringField(row, "type")],
     ["compatiblePath", stringField(row, "compatible_path", "compatiblePath")],
     ["postUrl", stringField(row, "post_url")],
+    // 色盘是 JSON 文本，原样带上，展示时再解析；没有色盘的行是 NULL，不设字段
+    ["palette", stringField(row, "palette")],
   ];
   for (const [key, value] of optionalStrings) {
     if (value !== undefined) (image as unknown as Record<string, unknown>)[key] = value;

@@ -126,6 +126,12 @@ mcp_capabilities! {
             SURF_RECORDS_READ_BY_ID => "by_id",
         }
     }
+    // 色桶表只读：整张表一次读完（`color_buckets://`），没有按 id 的子路径，也没有写工具。
+    ColorBuckets("color_buckets") {
+        read {
+            COLOR_BUCKETS_READ_LIST => "list",
+        }
+    }
     Plugin("plugin") {
         read {
             PLUGIN_READ_LIST => "list",
@@ -155,6 +161,7 @@ pub fn read_capability_id(scheme: &str, segments: &[&str]) -> Option<&'static st
             ids::SURF_RECORDS_READ_LIST,
             ids::SURF_RECORDS_READ_BY_ID,
         ),
+        "color_buckets" => segments.is_empty().then_some(ids::COLOR_BUCKETS_READ_LIST),
         "plugin" => read_plugin_capability_id(segments),
         _ => None,
     }
@@ -272,6 +279,48 @@ mod plugin_resource_tests {
             Some(ids::PLUGIN_READ_LIST)
         );
         assert_eq!(read_capability_id("plugin", &["old-id", "doc"]), None);
+    }
+}
+
+#[cfg(test)]
+mod color_bucket_tests {
+    use super::*;
+
+    #[test]
+    fn color_buckets_expose_one_read_capability_and_no_tools() {
+        assert_eq!(ids::COLOR_BUCKETS_READ_LIST, "color_buckets.read.list");
+        assert_eq!(
+            read_capability_id("color_buckets", &[]),
+            Some(ids::COLOR_BUCKETS_READ_LIST)
+        );
+        // 根 provider 没有子路径：别的写法不对应具体能力（读取时由 PathQL 报 path not found）
+        assert_eq!(read_capability_id("color_buckets", &["all"]), None);
+        assert_eq!(read_capability_id("color_buckets", &["id_255"]), None);
+
+        let capabilities: Vec<&McpCapability> = all_mcp_capabilities()
+            .iter()
+            .filter(|capability| capability.category == "color_buckets")
+            .collect();
+        assert_eq!(capabilities.len(), 1);
+        let capability = capabilities[0];
+        assert_eq!(capability.id, ids::COLOR_BUCKETS_READ_LIST);
+        assert!(capability.kind == McpCapabilityKind::Read);
+        assert_eq!(capability.tool, None);
+        // 设置面板按这两个键取文案（`mcp.cap.<id>.name` / `.desc`）
+        assert_eq!(capability.name_key, "mcp.cap.color_buckets.read.list");
+        assert_eq!(capability.desc_key, "mcp.cap.color_buckets.read.list.desc");
+
+        // 能力开关
+        assert!(is_capability_enabled(ids::COLOR_BUCKETS_READ_LIST, &[]));
+        assert!(!is_capability_enabled(
+            ids::COLOR_BUCKETS_READ_LIST,
+            &["color_buckets.read.list".to_string()]
+        ));
+        // 没有任何工具挂在这个分类上
+        assert!(all_mcp_capabilities()
+            .iter()
+            .filter(|capability| capability.kind == McpCapabilityKind::Write)
+            .all(|capability| capability.category != "color_buckets"));
     }
 }
 

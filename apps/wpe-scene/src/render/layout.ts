@@ -256,7 +256,7 @@ export function eyePosition(
   return [general.width / 2 + offset[0], general.height / 2 + offset[1], 2000];
 }
 
-/** 壁纸样式：与设置 `wallpaperStyle` 同义，几何照 `WallpaperStage` 的图片层。 */
+/** 壁纸样式：与壁纸目标的样式（窗口模式）同义，几何照 `WallpaperStage` 的图片层。 */
 export type SceneStyle = "fill" | "fit" | "stretch" | "center" | "tile";
 
 /** 场景目标铺到画布的方式。 */

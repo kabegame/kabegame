@@ -55,7 +55,7 @@
               </el-input>
             </div>
 
-            <div :class="ns.e('body')">
+            <div :class="[ns.e('body'), ns.is('expanded', expandedValue !== null)]">
               <div v-if="loading" :class="ns.e('loading')">
                 <el-icon :class="[ns.e('loading-icon'), ns.is('loading')]">
                   <Loading />
@@ -83,28 +83,51 @@
                     </span>
                   </button>
 
-                  <button
+                  <template
                     v-for="(option, index) in filteredOptions"
                     :key="option.value"
-                    type="button"
-                    role="option"
-                    :class="[
-                      ...optionClasses(index + optionIndexOffset, modelValue === option.value),
-                      ns.is('zero', option.count === 0),
-                    ]"
-                    :aria-selected="modelValue === option.value"
-                    :data-kb-filter-index="index + optionIndexOffset"
-                    @mouseenter="highlightedIndex = index + optionIndexOffset"
-                    @click="selectValue(option.value)"
                   >
-                    <span :class="ns.e('option-label')">{{ option.label }}</span>
-                    <span
-                      v-if="option.count != null"
-                      :class="[ns.e('count'), ns.is('negated', negated)]"
+                    <button
+                      type="button"
+                      role="option"
+                      :class="[
+                        ...optionClasses(index + optionIndexOffset, modelValue === option.value),
+                        ns.is('zero', option.count === 0),
+                        ns.is('expandable', !!option.expandable),
+                      ]"
+                      :aria-selected="modelValue === option.value"
+                      :aria-expanded="option.expandable ? expandedValue === option.value : undefined"
+                      :data-kb-filter-index="index + optionIndexOffset"
+                      @mouseenter="highlightedIndex = index + optionIndexOffset"
+                      @click="activateOption(option)"
                     >
-                      {{ formatCount(option.count) }}
-                    </span>
-                  </button>
+                      <span :class="ns.e('option-label')">{{ option.label }}</span>
+                      <span
+                        v-if="option.count != null"
+                        :class="[ns.e('count'), ns.is('negated', negated)]"
+                      >
+                        {{ formatCount(option.count) }}
+                      </span>
+                      <el-icon
+                        v-if="option.expandable"
+                        :class="[
+                          ns.e('option-arrow'),
+                          ns.is('expanded', expandedValue === option.value),
+                        ]"
+                      >
+                        <ArrowRight />
+                      </el-icon>
+                    </button>
+                    <!-- 展开区：内容由调用侧给；close 让它在完成选择后关掉整个下拉 -->
+                    <div
+                      v-if="option.expandable && expandedValue === option.value"
+                      :class="ns.e('option-panel')"
+                      role="group"
+                      :aria-label="option.label"
+                    >
+                      <slot name="option-panel" :option="option" :close="close" />
+                    </div>
+                  </template>
                 </div>
 
                 <div v-if="filteredOptions.length === 0" :class="ns.e('empty')">
@@ -184,6 +207,7 @@ import { ElTooltip } from '@kabegame/element-plus/components/tooltip'
 import { useNamespace } from '@kabegame/element-plus/hooks'
 import {
   ArrowDown,
+  ArrowRight,
   Close,
   Loading,
   Search,
@@ -193,6 +217,7 @@ import type { InputInstance } from '@kabegame/element-plus/components/input'
 import { kbFilterDropdownContextKey } from './kb-filter-dropdown'
 import type {
   KbFilterDropdownOption,
+  KbFilterDropdownOptionPanelSlotProps,
   KbFilterDropdownPanelSlotProps,
   KbFilterDropdownProps,
   KbFilterDropdownTriggerSlotProps,
@@ -223,6 +248,8 @@ const slots = defineSlots<{
   trigger(props: KbFilterDropdownTriggerSlotProps): unknown
   icon?(): unknown
   panel?(props: KbFilterDropdownPanelSlotProps): unknown
+  /** 可展开选项（`expandable`）的展开区，只在内置列表形态下渲染。 */
+  'option-panel'?(props: KbFilterDropdownOptionPanelSlotProps): unknown
 }>()
 
 const ns = useNamespace('kb-filter-dropdown')
@@ -232,6 +259,8 @@ const isDialog = computed(() => unref(context.panelMode) === 'dialog')
 const visible = ref(false)
 const query = ref('')
 const highlightedIndex = ref(0)
+/** 当前展开的可展开选项；同一时间至多一个。 */
+const expandedValue = ref<string | null>(null)
 const panelRef = ref<HTMLElement>()
 const searchInputRef = ref<InputInstance>()
 
@@ -245,6 +274,8 @@ watch(
   (open) => {
     if (open) {
       query.value = ''
+      // 面板重新打开时收起
+      expandedValue.value = null
       syncHighlightToSelection()
       emit('open')
     } else {
@@ -372,6 +403,8 @@ function handlePanelKeydown(event: KeyboardEvent) {
   }
 
   if (slots.panel || props.loading) return
+  // 展开区里的按键（取色面板的输入框等）归面板内容自己，不当成列表导航
+  if (isInsideOptionPanel(event.target)) return
   if (event.key === 'ArrowDown') {
     event.preventDefault()
     moveHighlight(1)
@@ -380,8 +413,50 @@ function handlePanelKeydown(event: KeyboardEvent) {
     moveHighlight(-1)
   } else if (event.key === 'Enter') {
     event.preventDefault()
-    selectValue(navigableValues.value[highlightedIndex.value] ?? null)
+    activateHighlighted()
+  } else if (event.key === ' ' && event.target === panelRef.value) {
+    // 空格只在焦点落在面板容器上时接管：焦点在选项按钮上由原生 click 处理，在搜索框里是输入
+    const option = highlightedOption()
+    if (!option?.expandable) return
+    event.preventDefault()
+    toggleExpanded(option.value)
   }
+}
+
+function isInsideOptionPanel(target: EventTarget | null) {
+  return (
+    target instanceof Element && !!target.closest(`.${ns.e('option-panel')}`)
+  )
+}
+
+/** 键盘高亮的那一行对应的选项；高亮在「任意」行或列表为空时为 null。 */
+function highlightedOption(): KbFilterDropdownOption | null {
+  const value = navigableValues.value[highlightedIndex.value] ?? null
+  if (value === null) return null
+  return filteredOptions.value.find((option) => option.value === value) ?? null
+}
+
+function activateHighlighted() {
+  const option = highlightedOption()
+  if (option) activateOption(option)
+  else selectValue(navigableValues.value[highlightedIndex.value] ?? null)
+}
+
+/** 可展开的选项只切换展开，不选中、不关闭；其余选项选中并关闭。 */
+function activateOption(option: KbFilterDropdownOption) {
+  if (option.expandable) toggleExpanded(option.value)
+  else selectValue(option.value)
+}
+
+function toggleExpanded(value: string) {
+  expandedValue.value = expandedValue.value === value ? null : value
+  if (expandedValue.value === null) return
+  // 展开区可能落在滚动区之外，带进视野
+  nextTick(() => {
+    panelRef.value
+      ?.querySelector<HTMLElement>(`.${ns.e('option-panel')}`)
+      ?.scrollIntoView({ block: 'nearest' })
+  })
 }
 
 function selectValue(value: string | null) {

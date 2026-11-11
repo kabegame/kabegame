@@ -130,18 +130,8 @@ pub fn get_wallpaper_rotation_enabled() -> bool {
 }
 
 #[tauri::command]
-pub fn get_wallpaper_rotation_path() -> Option<String> {
-    Settings::global().get_wallpaper_rotation_path()
-}
-
-#[tauri::command]
 pub fn get_wallpaper_rotation_interval_minutes() -> u32 {
     Settings::global().get_wallpaper_rotation_interval_minutes()
-}
-
-#[tauri::command]
-pub fn get_wallpaper_rotation_style() -> String {
-    Settings::global().get_wallpaper_rotation_style()
 }
 
 #[tauri::command]
@@ -165,23 +155,20 @@ pub fn set_wallpaper_video_playback_rate(rate: f64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_wallpaper_rotation_transition() -> String {
-    Settings::global().get_wallpaper_rotation_transition()
-}
-
-#[tauri::command]
-pub fn get_wallpaper_style_by_mode() -> std::collections::HashMap<String, String> {
-    Settings::global().get_wallpaper_style_by_mode()
-}
-
-#[tauri::command]
-pub fn get_wallpaper_transition_by_mode() -> std::collections::HashMap<String, String> {
-    Settings::global().get_wallpaper_transition_by_mode()
-}
-
-#[tauri::command]
 pub fn get_wallpaper_mode() -> String {
     Settings::global().get_wallpaper_mode()
+}
+
+/// 显示器模式：`multiple` / `span` / `single`。
+#[tauri::command]
+pub fn get_wallpaper_display_mode() -> String {
+    Settings::global().get_wallpaper_display_mode()
+}
+
+/// 逐屏独立下的默认显示器（屏幕持久标识）；未设置为 null。
+#[tauri::command]
+pub fn get_wallpaper_default_screen() -> Option<String> {
+    Settings::global().get_wallpaper_default_screen()
 }
 
 #[tauri::command]

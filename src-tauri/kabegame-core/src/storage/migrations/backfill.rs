@@ -185,7 +185,10 @@ impl<'a> BackfillCtx<'a> {
 }
 
 /// 发布态注册表（作业实现放在 `backfills/`）。框架行为由下方测试里的内存作业覆盖。
-const BACKFILLS: &[Backfill] = &[super::backfills::wpe_dir_hash::JOB];
+const BACKFILLS: &[Backfill] = &[
+    super::backfills::wpe_dir_hash::JOB,
+    super::backfills::image_palette::JOB,
+];
 
 pub(crate) fn registry() -> &'static [Backfill] {
     BACKFILLS

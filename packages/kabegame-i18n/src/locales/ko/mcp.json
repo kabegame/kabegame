@@ -4,6 +4,7 @@
     "albums": "앨범",
     "tasks": "작업",
     "surf_records": "서프 기록",
+    "color_buckets": "색상 버킷",
     "plugin": "플러그인"
   },
   "kind": {
@@ -46,6 +47,11 @@
       "read": {
         "list": { "name": "서프 기록 목록", "desc": "모든 서프 기록을 탐색합니다" },
         "by_id": { "name": "단일 서프 기록", "desc": "ID로 서프 기록 상세 정보를 읽습니다" }
+      }
+    },
+    "color_buckets": {
+      "read": {
+        "list": { "name": "색상 버킷 목록", "desc": "색상 정렬에 쓸 수 있는 색상 버킷을 읽습니다" }
       }
     },
     "plugin": {

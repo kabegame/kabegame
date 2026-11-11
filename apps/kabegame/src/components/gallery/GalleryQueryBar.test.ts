@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 import { shallowMount } from "@vue/test-utils";
 import { createPinia } from "pinia";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { computed, ref, shallowRef } from "vue";
 import GalleryQueryBar from "./GalleryQueryBar.vue";
+import { COLOR_BUCKET_LAYER_CLASS } from "./colorBucketLayer";
+import type { ColorBucket } from "@/services/colorBuckets";
+import type { GallerySort, GallerySortField } from "@/utils/galleryPath";
 import { composeQueryFilters, GALLERY_SEARCH_MODES, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
 
 const ui = vi.hoisted(() => ({ isCompact: false }));
@@ -20,6 +24,17 @@ vi.mock("@/services/pathql", () => ({
 vi.mock("@kabegame/i18n", () => ({
   useI18n: () => ({ t: (key: string) => key, locale: { value: "zh" } }),
 }));
+// 色桶列表由用例直接给：`colorBuckets.state` 在每个用例前重建，`enabled` 记下组件传进来的开关。
+const colorBuckets = vi.hoisted(() => ({
+  state: null as unknown,
+  enabled: null as (() => boolean) | null,
+}));
+vi.mock("@/composables/useColorBuckets", () => ({
+  useColorBuckets: (enabled: () => boolean) => {
+    colorBuckets.enabled = enabled;
+    return colorBuckets.state;
+  },
+}));
 
 const simple = { plugin: { pluginId: "pixiv" } };
 const extra: GalleryQuery = [
@@ -30,6 +45,19 @@ const extra: GalleryQuery = [
     ],
   },
 ];
+// 色桶列表默认是「还没读到」的空表，颜色排序的用例自己填。
+const bucketList = shallowRef<ColorBucket[]>([]);
+const bucketsLoaded = ref(false);
+beforeEach(() => {
+  bucketList.value = [];
+  bucketsLoaded.value = false;
+  colorBuckets.state = {
+    buckets: bucketList,
+    bucketHexes: computed(() => new Set(bucketList.value.map((b) => b.hex))),
+    loaded: bucketsLoaded,
+    loading: ref(false),
+  };
+});
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 function render(query: GalleryQuery = composeQueryFilters(simple, extra)) {
   const wrapper = shallowMount(GalleryQueryBar, {
@@ -135,5 +163,195 @@ describe("查询条追加高级 chip", () => {
     await wrapper.get(advancedSelector).trigger("click");
     wrapper.findComponent({ name: "GalleryAdvancedQueryDialog" }).vm.$emit("update:visible", false);
     expect(wrapper.emitted("navigate")).toHaveLength(1);
+  });
+});
+
+describe("按颜色排序", () => {
+  const bucket = (rgb: number, key: string | null, position: number): ColorBucket => ({
+    rgb,
+    hex: rgb.toString(16).padStart(6, "0"),
+    key,
+    position,
+  });
+  const red = bucket(0xff0000, "red", 0);
+  const saved = bucket(0x32fe98, null, 12);
+  const list = bucketList;
+  const loaded = bucketsLoaded;
+  beforeEach(() => {
+    list.value = [red, saved];
+    loaded.value = true;
+  });
+
+  const features: GallerySortField[] = ["by-time", "by-color", "random"];
+  /** 弹层内容也渲染出来：排序下拉的选项与展开区才够得着。 */
+  function renderSort(sort: GallerySort, sortFeatures: GallerySortField[] = features) {
+    const wrapper = shallowMount(GalleryQueryBar, {
+      props: { query: [], sort, sortFeatures },
+      global: {
+        plugins: [createPinia()],
+        mocks: { $t: (key: string) => key },
+        directives: { "hscroll-fade": {} },
+        renderStubDefaultSlot: true,
+        stubs: {
+          ElScrollbar: { template: "<div><slot /></div>" },
+          ElIcon: true,
+          VanPicker: true,
+          VanPopup: true,
+          KbFilterDropdown: false,
+          ElTooltip: {
+            name: "ElTooltip",
+            emits: ["update:visible"],
+            template: '<div><slot /><div class="popper"><slot name="content" /></div></div>',
+          },
+        },
+      },
+    });
+    wrappers.push(wrapper);
+    return wrapper;
+  }
+  const sortDropdown = (wrapper: ReturnType<typeof renderSort>) => wrapper.findComponent({ name: "KbFilterDropdown" });
+  const navigations = (wrapper: ReturnType<typeof renderSort>) => wrapper.emitted("navigate") ?? [];
+
+  describe("校正排序段", () => {
+    it("by-color 的颜色不在色桶里 → 换成 by-any-color（replace，不压历史）", () => {
+      const wrapper = renderSort({ field: "by-color", desc: true, color: "123456" });
+      expect(navigations(wrapper)).toEqual([
+        [{ sort: { field: "by-any-color", desc: true, color: "123456" } }, { push: false }],
+      ]);
+    });
+
+    it("by-any-color 的颜色在色桶里 → 换成 by-color", () => {
+      const wrapper = renderSort({ field: "by-any-color", desc: false, color: "32fe98" });
+      expect(navigations(wrapper)).toEqual([
+        [{ sort: { field: "by-color", desc: false, color: "32fe98" } }, { push: false }],
+      ]);
+    });
+
+    it("段与色桶列表对得上时不动", () => {
+      expect(navigations(renderSort({ field: "by-color", desc: false, color: "ff0000" }))).toEqual([]);
+      expect(navigations(renderSort({ field: "by-any-color", desc: false, color: "123456" }))).toEqual([]);
+    });
+
+    it("色桶未加载完成时不动，加载完成后才校正", async () => {
+      loaded.value = false;
+      list.value = [];
+      const wrapper = renderSort({ field: "by-color", desc: false, color: "ff0000" });
+      expect(navigations(wrapper)).toEqual([]);
+
+      // 列表到了：ff0000 是色桶，不用换
+      list.value = [red];
+      loaded.value = true;
+      await wrapper.vm.$nextTick();
+      expect(navigations(wrapper)).toEqual([]);
+
+      loaded.value = false;
+      const stale = renderSort({ field: "by-color", desc: false, color: "123456" });
+      expect(navigations(stale)).toEqual([]);
+      loaded.value = true;
+      await stale.vm.$nextTick();
+      expect(navigations(stale)).toEqual([
+        [{ sort: { field: "by-any-color", desc: false, color: "123456" } }, { push: false }],
+      ]);
+    });
+
+    it("不是颜色排序时不动", async () => {
+      const wrapper = renderSort({ field: "by-time", desc: false });
+      list.value = [];
+      await wrapper.vm.$nextTick();
+      expect(navigations(wrapper)).toEqual([]);
+      expect(navigations(renderSort({ field: "random", desc: false, seed: "7" }))).toEqual([]);
+    });
+
+    it("正按用户色桶排序时色桶被删 → 换成现算段；现算的颜色被存成色桶 → 换成色桶段", async () => {
+      const wrapper = renderSort({ field: "by-color", desc: false, color: "32fe98" });
+      expect(navigations(wrapper)).toEqual([]);
+      list.value = [red];
+      await wrapper.vm.$nextTick();
+      expect(navigations(wrapper)).toEqual([
+        [{ sort: { field: "by-any-color", desc: false, color: "32fe98" } }, { push: false }],
+      ]);
+
+      const computedSort = renderSort({ field: "by-any-color", desc: true, color: "abcdef" });
+      list.value = [red, bucket(0xabcdef, null, 13)];
+      await computedSort.vm.$nextTick();
+      expect(navigations(computedSort)).toEqual([
+        [{ sort: { field: "by-color", desc: true, color: "abcdef" } }, { push: false }],
+      ]);
+    });
+
+    it("排序换成另一个过期的段时再校正一次", async () => {
+      const wrapper = renderSort({ field: "by-time", desc: false });
+      await wrapper.setProps({ sort: { field: "by-color", desc: false, color: "123456" } });
+      expect(navigations(wrapper)).toEqual([
+        [{ sort: { field: "by-any-color", desc: false, color: "123456" } }, { push: false }],
+      ]);
+    });
+  });
+
+  describe("排序下拉接线", () => {
+    it("「颜色」一行可展开；两个颜色字段都点亮它，tooltip 带颜色名", () => {
+      const byBucket = sortDropdown(renderSort({ field: "by-color", desc: false, color: "ff0000" }));
+      expect(byBucket.props("options")).toEqual([
+        { label: "gallery.sortByTime", value: "by-time" },
+        { label: "gallery.sortByColor", value: "by-color", expandable: true },
+        { label: "gallery.sortByRandom", value: "random" },
+      ]);
+      expect(byBucket.props("modelValue")).toBe("by-color");
+      expect(byBucket.props("title")).toBe("gallery.sort · gallery.sortByColor · gallery.colorBucket.red");
+      expect(byBucket.props("clickOutsideIgnore")).toEqual([`.${COLOR_BUCKET_LAYER_CLASS}`]);
+
+      const computedSort = sortDropdown(renderSort({ field: "by-any-color", desc: false, color: "123456" }));
+      expect(computedSort.props("modelValue")).toBe("by-color");
+      expect(computedSort.props("title")).toBe("gallery.sort · gallery.sortByColor · #123456");
+
+      const other = sortDropdown(renderSort({ field: "by-time", desc: false }));
+      expect(other.props("modelValue")).toBe("by-time");
+      expect(other.props("title")).toBe("gallery.sort · gallery.sortByTime");
+    });
+
+    it("只在本页开放颜色排序或当前就是颜色排序时读色桶表", () => {
+      renderSort({ field: "by-time", desc: false }, ["by-time", "random"]);
+      expect(colorBuckets.enabled?.()).toBe(false);
+      renderSort({ field: "by-time", desc: false });
+      expect(colorBuckets.enabled?.()).toBe(true);
+      // 清单里没有，但带着颜色排序的路径进来：仍要读，才能校正
+      renderSort({ field: "by-any-color", desc: false, color: "123456" }, ["by-time", "random"]);
+      expect(colorBuckets.enabled?.()).toBe(true);
+    });
+
+    it("点「颜色」只展开面板不导航；面板选色后按色桶 / 现算给段并关闭下拉", async () => {
+      const wrapper = renderSort({ field: "by-time", desc: true });
+      const dropdown = sortDropdown(wrapper);
+      expect(wrapper.findComponent({ name: "ColorBucketPanel" }).exists()).toBe(false);
+      dropdown.findComponent({ name: "ElTooltip" }).vm.$emit("update:visible", true);
+      await wrapper.vm.$nextTick();
+      await dropdown.get(".is-expandable").trigger("click");
+      expect(navigations(wrapper)).toEqual([]);
+      expect(dropdown.emitted("close")).toBeUndefined();
+
+      const panel = wrapper.findComponent({ name: "ColorBucketPanel" });
+      expect(panel.props("buckets")).toEqual([red, saved]);
+      expect(panel.props("selected")).toBeUndefined();
+
+      panel.vm.$emit("select", "ff0000");
+      expect(dropdown.emitted("close")).toHaveLength(1);
+      panel.vm.$emit("select", "123456");
+      expect(navigations(wrapper)).toEqual([
+        [{ sort: { field: "by-color", desc: true, color: "ff0000" } }, undefined],
+        [{ sort: { field: "by-any-color", desc: true, color: "123456" } }, undefined],
+      ]);
+    });
+
+    it("面板拿到当前排序的颜色", async () => {
+      const wrapper = renderSort({ field: "by-any-color", desc: false, color: "123456" });
+      await sortDropdown(wrapper).get(".is-expandable").trigger("click");
+      expect(wrapper.findComponent({ name: "ColorBucketPanel" }).props("selected")).toBe("123456");
+    });
+
+    it("普通排序项照常导航", async () => {
+      const wrapper = renderSort({ field: "by-color", desc: true, color: "ff0000" });
+      await sortDropdown(wrapper).get('[data-kb-filter-index="0"]').trigger("click");
+      expect(navigations(wrapper)).toEqual([[{ sort: { field: "by-time", desc: true } }, undefined]]);
+    });
   });
 });

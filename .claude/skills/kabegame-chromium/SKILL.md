@@ -53,6 +53,11 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 目标写法：`main`（主窗口，缺省）/ `wallpaper`（壁纸窗口）/ `url:<URL 子串>`（page 优先，其次 iframe）/
 `host:<宿主句柄或 kbInstance>`。参数里的相对路径一律按仓库根解析。
 
+**多个壁纸窗口**：窗口模式下每块在线屏一个壁纸窗口（macOS），`wallpaper` 只会选中其中一个（不保证是哪个）。
+各窗口的地址是 `index.html?window=wallpaper&slot=<n>`，`n` 是 label 在池里的序号（`wallpaper` 为 0、`wallpaper-1` 为 1 …），
+要指定某一个就写 `url:slot=<n>`；哪个序号在哪块屏，在该页面里 eval `get_wallpaper_window_assignment`（返回 `{ targetId, audible }`）
+或看 `screenX` / `screenY`。同一张网页 / 场景壁纸显示在几个窗口（以及主窗口的应用背景）里时 iframe 的地址相同，`url:` 只会命中第一个。
+
 | 工具 | 做什么 | 要 vite | 平台 |
 |---|---|---|---|
 | `status` | 两层探活：vite 在不在；经 vite 问 CDP 在不在。不在时报可能原因和下一步 | 不要（探的就是它） | 都有 |
@@ -62,7 +67,7 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `click`、`text` | 取元素中心派发鼠标事件（强制，不等可操作性）；取 innerText | 要 | 都有 |
 | `invoke` | 调 Tauri 命令（主窗口里的 `__TAURI_INTERNALS__.invoke`） | 要 | 都有 |
 | `console` | `start` / `read`（`since`）/ `stop`：按目标收集控制台消息与未捕获异常 | 要 | 都有 |
-| `app_state` | 当前壁纸、模式、暂停、启用、后处理、过渡、样式、轮播、路由、现有宿主 | 要 | 都有 |
+| `app_state` | 默认壁纸目标的当前壁纸（`currentWallpaper`）、壁纸模式、暂停、启用、后处理、显示器模式（`displayMode`）、全部壁纸目标的配置（`targets`：目标 id → 轮播路径与位置、按壁纸模式存的样式 / 过渡、当前壁纸）、轮播开关、路由、现有宿主 | 要 | 都有 |
 | `show_window` | 把主窗口带到前台：最小化时 unminimize、不可见时 show，再 set_focus；没到前台（Windows 前台限制）时临时置顶再取消。回走了哪条路径、前后的 `visibilityState` / `hasFocus` | 要 | 桌面 |
 | `open_image_preview` | 主窗口打开某张图的预览，再 `show_window`。导航到 `/gallery`（保留 query，加 `pvwimgid`）并整页重载；图在当前视图里就跳到它所在的页，不在就降级成单图预览，不改筛选条件。回最终路由、预览开没开、是哪张、在不在视图里 | 要 | 桌面（安卓未验，不显示窗口） |
 | `android_screen` | adb 整屏截图（含系统栏、原生对话框）；`save` / `size` 同 `screenshot` | 要 | 安卓 |

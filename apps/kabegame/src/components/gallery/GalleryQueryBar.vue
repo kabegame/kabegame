@@ -16,12 +16,13 @@
            ——排序恒有值，写出来就是一段永远占位的常量；名字与取值全在 tooltip 里。 -->
       <KbFilterDropdown
         v-if="showSortFieldChip"
-        :model-value="sortField"
+        :model-value="sortFieldModel"
         :options="sortFieldItems"
         :chip-label="t('gallery.sort')"
         chip-display="icon"
         :title="chipTitle(t('gallery.sort'), sortFieldChipValue)"
         :clearable="false"
+        :click-outside-ignore="sortFieldClickOutsideIgnore"
         @update:model-value="
           (value) => {
             if (value) onSortFieldCommand(value);
@@ -36,6 +37,15 @@
             <Sort class="sort-combo__base" />
             <component :is="sortFieldIcon" class="sort-combo__badge" />
           </span>
+        </template>
+        <!-- 「颜色」一行不直接选中，而是就地展开色桶面板；点了色块才导航并关闭。 -->
+        <template #option-panel="{ option, close }">
+          <ColorBucketPanel
+            v-if="option.value === 'by-color'"
+            :selected="sortColor"
+            :buckets="colorBuckets"
+            @select="(hex) => onSortColorSelect(hex, close)"
+          />
         </template>
       </KbFilterDropdown>
 
@@ -179,12 +189,22 @@
               v-if="showRotationAction"
               type="button"
               class="view-menu__action"
-              :disabled="isRotatingThisView || rotationBusy"
+              :disabled="isRotatingThisViewEverywhere || rotationBusy"
               @click="rotateWithCurrentView"
             >
               <span class="view-menu__icon"><Picture /></span>
-              <span class="flex-1 text-left">
-                {{ isRotatingThisView ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
+              <span class="flex min-w-0 flex-1 flex-col text-left">
+                <span>
+                  {{ isRotatingThisViewEverywhere ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
+                </span>
+                <!-- 逐屏独立下只有部分屏在轮播本视图：仍可点（给另一块屏），写明已经是哪几块 -->
+                <span
+                  v-if="rotatingThisViewScreens"
+                  class="truncate text-11px leading-[1.4] text-[var(--anime-text-muted)]"
+                  :title="rotatingThisViewScreens"
+                >
+                  {{ rotatingThisViewScreens }}
+                </span>
               </span>
             </button>
             <!-- 收藏视图：本页来源的收藏列表（web 也有，轮播动作只在桌面）。 -->
@@ -242,19 +262,24 @@ import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element
 import { Close, Filter, LetterA, MoreFilled, Picture, Sort, SortAsc, SortDesc } from "@kabegame/element-plus-icons";
 import { withGalleryPrefix } from "@/utils/path";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
+import ColorBucketPanel from "@/components/gallery/ColorBucketPanel.vue";
+import { COLOR_BUCKET_LAYER_CLASS } from "@/components/gallery/colorBucketLayer";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
 import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
 import SavedViewsSection from "@/components/gallery/savedViews/SavedViewsSection.vue";
 import { FILTER_DIMENSION_ICONS, SORT_FIELD_ICONS } from "@/components/gallery/galleryChipIcons";
 import { SAVED_VIEW_LAYER_CLASS } from "@/components/gallery/savedViews/savedViewLayer";
 import { GallerySearchModesKey } from "@/components/gallery/searchModesContext";
+import { useColorBuckets } from "@/composables/useColorBuckets";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
 import {
+  colorSortFor,
   FILTER_COMB,
   filterForDimension,
+  isColorSortField,
   newRandomSortSeed,
   noAlbumContextPrefix,
   removeFilterDimension,
@@ -268,9 +293,15 @@ import {
   type GallerySort,
   type GallerySortField,
 } from "@/utils/galleryPath";
-import { galleryDimensionChipValue, gallerySortFieldLabel } from "@/utils/galleryFilterLabels";
+import { colorLabel, galleryDimensionChipValue, gallerySortFieldLabel } from "@/utils/galleryFilterLabels";
 import { filterMediaKind } from "@/utils/galleryQuery";
-import { viewRotationPath, wallpaperModeSupportsVideo } from "@/utils/wallpaperRotationPath";
+import { rotatingTargetIds, viewRotationPath, wallpaperModeSupportsVideo } from "@/utils/wallpaperRotationPath";
+import {
+  setWallpaperRotationPath,
+  useWallpaperRotationSources,
+  wallpaperTargetScreenName,
+} from "@/composables/useWallpaperTarget";
+import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { gridViewKey } from "@/components/imageGrid/gridViewPath";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { IS_WEB } from "@/env";
@@ -338,7 +369,7 @@ const props = withDefaults(defineProps<Props>(), {
   contextBase: "",
   // withDefaults 的工厂会被提升到 setup 外，只能写字面量：引用模块内常量会编译失败。
   filterFeatures: () => ["date", "plugin", "mediaType", "aspect", "size"],
-  sortFeatures: () => ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "random"],
+  sortFeatures: () => ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "by-color", "random"],
   searchFeatures: () => ["display-name", "local-path", "url", "metadata", "native-metadata", "label"],
   enableSearch: true,
   enablePageSize: true,
@@ -383,27 +414,51 @@ const rotationBusy = ref(false);
 const gridView = inject(gridViewKey, null);
 const rotationPath = computed(() => (gridView?.path.value ? viewRotationPath(gridView.path.value) : ""));
 const showRotationAction = computed(() => !IS_WEB && !!rotationPath.value);
-const isRotatingThisView = computed(
-  () =>
-    !!settingsStore.values.wallpaperRotationEnabled &&
-    settingsStore.values.wallpaperRotationPath === rotationPath.value,
+// 各活跃壁纸目标的轮播来源（逐屏独立下每块屏一个）；轮播关着时没有目标算「在轮播本视图」
+const rotationSources = useWallpaperRotationSources();
+const rotatingThisViewTargets = computed(() =>
+  settingsStore.values.wallpaperRotationEnabled
+    ? rotatingTargetIds(rotationSources.value, (path) => path === rotationPath.value)
+    : [],
 );
+// 每个目标都已在轮播本视图才禁用：还有屏没设时仍可点，给另一块屏（只有一个目标时就是「正在轮播本视图」）
+const isRotatingThisViewEverywhere = computed(
+  () =>
+    rotatingThisViewTargets.value.length > 0 && rotatingThisViewTargets.value.length === rotationSources.value.length,
+);
+// 只有部分屏在轮播本视图时的说明；其余情况为空
+const rotatingThisViewScreens = computed(() => {
+  const hits = rotatingThisViewTargets.value;
+  if (hits.length === 0 || hits.length === rotationSources.value.length) return "";
+  const names = hits.map((targetId) => wallpaperTargetScreenName(targetId)).filter((name): name is string => !!name);
+  return names.length > 0 ? t("gallery.rotatingThisViewOn", { screens: names.join(t("common.listSeparator")) }) : "";
+});
 
 async function rotateWithCurrentView() {
   const path = rotationPath.value;
   if (!path || rotationBusy.value) return;
   rotationBusy.value = true;
   try {
-    // 先换路径再开启：开启时直接按新路径拉起轮播
-    if (!(await settingsStore.save("wallpaperRotationPath", path))) return;
+    // 逐屏独立且不止一块屏时先选给哪块屏轮播；取消就什么都不做。只有一个壁纸目标时不弹
+    const target = await pickWallpaperTarget({ action: "setRotation" });
+    if (!target) return;
+    // 先换选中目标的路径再开启：开关是全局的，开启时直接按新路径拉起轮播
+    if (!(await setWallpaperRotationPath(path, target))) return;
     if (!settingsStore.values.wallpaperRotationEnabled) await settingsStore.save("wallpaperRotationEnabled", true);
+    // 有多个壁纸目标时提示里带上是哪块屏
+    const screen = pickedScreenName(target);
     // 原生壁纸只能显示图片：后端有效路径会追加图片过滤（见 rotator 的 wallpaper_file_available），
     // 这里直接看过滤对象是否已限定为图片，没有就提示视频会被跳过
     const skipsVideo =
       !wallpaperModeSupportsVideo(settingsStore.values.wallpaperMode) &&
       filterMediaKind(activeFilters.value) !== "image";
-    if (skipsVideo) ElMessage.warning(t("gallery.rotateThisViewSkipsVideo"));
-    else ElMessage.success(t("gallery.rotateThisViewSuccess"));
+    if (skipsVideo) {
+      ElMessage.warning(
+        screen ? t("gallery.rotateThisViewSkipsVideoOn", { screen }) : t("gallery.rotateThisViewSkipsVideo"),
+      );
+    } else {
+      ElMessage.success(screen ? t("gallery.rotateThisViewSuccessOn", { screen }) : t("gallery.rotateThisViewSuccess"));
+    }
   } catch (e: any) {
     ElMessage.error(e?.message || String(e));
   } finally {
@@ -573,7 +628,11 @@ const showSortOrderChip = computed(() => props.sortFeatures.length > 0);
 const hasFixedSection = computed(() => !!slots.leading || showSortFieldChip.value || showSortOrderChip.value);
 
 const sortFieldIcon = computed<Component>(() => SORT_FIELD_ICONS[sortField.value] ?? markRaw(Sort));
-const sortFieldChipValue = computed(() => gallerySortFieldLabel(sortField.value, t));
+const sortFieldChipValue = computed(() => {
+  const label = gallerySortFieldLabel(sortField.value, t);
+  // 颜色排序把颜色也写进 tooltip：「颜色 · 红」/「颜色 · #32fe98」
+  return sortColor.value ? `${label} · ${colorLabel(sortColor.value, colorBuckets.value, t)}` : label;
+});
 const sortOrderChipValue = computed(() => (props.sort.desc ? t("gallery.sortDescending") : t("gallery.sortAscending")));
 /** 顺序 chip 点了就翻，tooltip 得把「翻过去是什么」说清楚。 */
 const sortOrderToggleHint = computed(() =>
@@ -635,7 +694,44 @@ const sortFieldItems = computed<KbFilterDropdownOption[]>(() =>
   props.sortFeatures.map((field) => ({
     label: gallerySortFieldLabel(field, t),
     value: field,
+    // 「颜色」点了不选中，在下拉里就地展开色桶面板
+    ...(field === "by-color" ? { expandable: true } : {}),
   })),
+);
+
+// ---------- 按颜色排序 ----------
+// 清单里只有 "by-color" 一项，它同时代表色桶段与现算段；本页不开放颜色排序、当前也不是颜色排序时不读色桶表。
+const {
+  buckets: colorBuckets,
+  bucketHexes,
+  loaded: colorBucketsLoaded,
+} = useColorBuckets(() => props.sortFeatures.includes("by-color") || isColorSortField(props.sort.field));
+/** 下拉里只有「颜色」一行，两个颜色字段都点亮它。 */
+const sortFieldModel = computed(() => (isColorSortField(sortField.value) ? "by-color" : sortField.value));
+/** 当前排序的颜色；不是颜色排序时为 undefined。 */
+const sortColor = computed(() => (isColorSortField(props.sort.field) ? props.sort.color : undefined));
+// 色桶面板的删除确认 teleport 到 body，点它不能算排序下拉的「外部」。
+const sortFieldClickOutsideIgnore = [`.${COLOR_BUCKET_LAYER_CLASS}`];
+
+function onSortColorSelect(hex: string, close: () => void) {
+  // 「保存为色桶」后立刻 select 时，事件可能还没把色桶列表刷回来，这里会先给出现算段；
+  // 列表刷新后由下面的校正换成色桶段，两段顺序相同
+  navigate({ sort: colorSortFor(hex, bucketHexes.value, props.sort.desc) });
+  close();
+}
+
+// 校正排序段：色桶被删（→ 现算段，否则结果是空集）、颜色被存成色桶（→ 色桶段）、
+// 收藏视图 / 链接里的段与现在的色桶列表对不上。只换当前页面的路径，两段顺序相同、画面不跳；
+// 色桶列表还没读到时不动。
+watch(
+  [bucketHexes, colorBucketsLoaded, () => props.sort],
+  () => {
+    const sort = props.sort;
+    if (!colorBucketsLoaded.value || !isColorSortField(sort.field) || !sort.color) return;
+    const expected = colorSortFor(sort.color, bucketHexes.value, sort.desc);
+    if (expected.field !== sort.field) navigate({ sort: expected }, { push: false });
+  },
+  { immediate: true },
 );
 
 // 工具条没有每页条数 chip（改从设置页与安卓 picker 走）；这里只留 picker 用的候选。
@@ -643,6 +739,8 @@ const pageSizeOptions = GALLERY_PAGE_SIZE_OPTIONS;
 
 function onSortFieldCommand(cmd: string) {
   if (!props.sortFeatures.includes(cmd as GallerySortField)) return;
+  // 颜色排序必须带颜色，只从色桶面板进（onSortColorSelect）
+  if (isColorSortField(cmd as GallerySortField)) return;
   if (cmd === "random") {
     // 已处于随机也重新洗牌：不做 already-active 提前返回。
     navigate({ sort: { field: "random", desc: props.sort.desc, seed: newRandomSortSeed() } });

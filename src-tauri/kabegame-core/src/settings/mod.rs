@@ -10,6 +10,12 @@ use tokio::time::Instant;
 use crate::emitter::GlobalEmitter;
 
 mod migrations;
+mod wallpaper_targets;
+
+pub use wallpaper_targets::{
+    screen_id_of_target, screen_target, WallpaperTargetConfig, WallpaperTargets, TARGET_MULTIPLE,
+    TARGET_SPAN, WALLPAPER_ROTATION_FROM_START,
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use dirs;
@@ -102,20 +108,15 @@ pub enum SettingKey {
     DefaultDownloadDir,
     /// 壁纸轮播启用
     WallpaperRotationEnabled,
-    /// 壁纸轮播来源 PathQL 路径（不含分页尾）；None 表示默认全画廊随机路径
-    WallpaperRotationPath,
-    /// 壁纸轮播下一张在路径中的 0 起序号；路径变化时清零
-    WallpaperRotationPosition,
     /// 壁纸轮播间隔分钟
     WallpaperRotationIntervalMinutes,
-    /// 壁纸样式
-    WallpaperStyle,
-    /// 壁纸轮播过渡效果
-    WallpaperRotationTransition,
-    /// 不同轮播模式下单独存储的style
-    WallpaperStyleByMode,
-    /// 不同轮播模式下单独存储的transition
-    WallpaperTransitionByMode,
+    /// 壁纸目标配置：目标 id → 轮播路径与位置、样式、过渡、当前壁纸（见 `wallpaper_targets`）；
+    /// v005 由 7 个扁平键并入 `multiple` 目标
+    WallpaperTargets,
+    /// 显示器模式：multiple（各屏复制）/ span（跨屏拼接）/ single（逐屏独立）
+    WallpaperDisplayMode,
+    /// 逐屏独立下的默认显示器（屏幕持久标识）；None 时取主屏
+    WallpaperDefaultScreen,
     /// 壁纸模式（原生等）
     WallpaperMode,
     /// 打开壁纸，默认开（关掉时整体禁用壁纸功能：拒绝壁纸相关操作、隐藏壁纸窗口、启动不恢复）；v004 由 `wallpaperDisabled` 取反迁来
@@ -135,8 +136,6 @@ pub enum SettingKey {
     WpeEngineDir,
     /// 窗口状态（窗口位置、大小、是否最大化）
     WindowState,
-    /// 当前壁纸图片ID
-    CurrentWallpaperImageId,
     /// 画册盘启用
     #[cfg(feature = "virtual-driver")]
     AlbumDriveEnabled,
@@ -157,10 +156,6 @@ pub enum SettingKey {
     McpDisabledCapabilities,
 }
 
-/// `wallpaperRotationPosition` 的特殊值：刚换了轮播路径，下一次切换从第 1 张开始，
-/// 不按当前壁纸 id 定位。切换成功后被写成正常位置。
-pub const WALLPAPER_ROTATION_FROM_START: i64 = -1;
-
 // 用于序列化的值类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -173,8 +168,8 @@ pub enum SettingValue {
     OptionString(Option<String>),
     WindowState(WindowState),
     OptionWindowState(Option<WindowState>),
-    HashMapStringString(HashMap<String, String>),
     VecString(Vec<String>),
+    WallpaperTargets(WallpaperTargets),
 }
 
 impl SettingValue {
@@ -188,13 +183,6 @@ impl SettingValue {
     fn as_u32(&self) -> Option<u32> {
         match self {
             SettingValue::U32(n) => Some(*n),
-            _ => None,
-        }
-    }
-
-    fn as_i64(&self) -> Option<i64> {
-        match self {
-            SettingValue::I64(n) => Some(*n),
             _ => None,
         }
     }
@@ -237,9 +225,9 @@ impl SettingValue {
         }
     }
 
-    fn as_hashmap_string_string(&self) -> Option<HashMap<String, String>> {
+    fn as_wallpaper_targets(&self) -> Option<&WallpaperTargets> {
         match self {
-            SettingValue::HashMapStringString(m) => Some(m.clone()),
+            SettingValue::WallpaperTargets(targets) => Some(targets),
             _ => None,
         }
     }
@@ -344,19 +332,11 @@ impl Settings {
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WpeEngineDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
-            SettingKey::WallpaperRotationPath => SettingValue::OptionString(None),
-            SettingKey::WallpaperRotationPosition => SettingValue::I64(0),
             SettingKey::WallpaperRotationIntervalMinutes => SettingValue::U32(60),
-            SettingKey::WallpaperStyle => {
-                SettingValue::String(Self::default_wallpaper_rotation_style())
-            }
-            SettingKey::WallpaperRotationTransition => {
-                SettingValue::String(Self::default_wallpaper_rotation_transition())
-            }
-            SettingKey::WallpaperStyleByMode => SettingValue::HashMapStringString(HashMap::new()),
-            SettingKey::WallpaperTransitionByMode => {
-                SettingValue::HashMapStringString(HashMap::new())
-            }
+            // 空表：活跃目标缺失时由 app 的壁纸控制器补种（它知道平台默认值与从哪个目标复制）
+            SettingKey::WallpaperTargets => SettingValue::WallpaperTargets(WallpaperTargets::new()),
+            SettingKey::WallpaperDisplayMode => SettingValue::String(TARGET_MULTIPLE.to_string()),
+            SettingKey::WallpaperDefaultScreen => SettingValue::OptionString(None),
             SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
             SettingKey::WallpaperEnabled => SettingValue::Bool(true),
             SettingKey::WallpaperVolume => SettingValue::F64(1.0),
@@ -367,7 +347,6 @@ impl Settings {
                 SettingValue::String(DEFAULT_WPE_SCENE_POSTPROCESS.to_string())
             }
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
-            SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
             #[cfg(feature = "virtual-driver")]
@@ -380,21 +359,6 @@ impl Settings {
             SettingKey::WebServerPort => SettingValue::U32(7490),
             SettingKey::WebServerLanAccess => SettingValue::Bool(false),
             SettingKey::McpDisabledCapabilities => SettingValue::VecString(vec![]),
-        }
-    }
-
-    fn default_wallpaper_rotation_style() -> String {
-        "fill".to_string()
-    }
-
-    fn default_wallpaper_rotation_transition() -> String {
-        #[cfg(target_os = "windows")]
-        {
-            "fade".to_string()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            "none".to_string()
         }
     }
 
@@ -452,13 +416,10 @@ impl Settings {
             SettingKey::SurfFreezePage,
             SettingKey::DefaultDownloadDir,
             SettingKey::WallpaperRotationEnabled,
-            SettingKey::WallpaperRotationPath,
-            SettingKey::WallpaperRotationPosition,
             SettingKey::WallpaperRotationIntervalMinutes,
-            SettingKey::WallpaperStyle,
-            SettingKey::WallpaperRotationTransition,
-            SettingKey::WallpaperStyleByMode,
-            SettingKey::WallpaperTransitionByMode,
+            SettingKey::WallpaperTargets,
+            SettingKey::WallpaperDisplayMode,
+            SettingKey::WallpaperDefaultScreen,
             SettingKey::WallpaperMode,
             SettingKey::WallpaperEnabled,
             SettingKey::WallpaperVolume,
@@ -468,7 +429,6 @@ impl Settings {
             SettingKey::WpeScenePostprocess,
             SettingKey::WpeEngineDir,
             SettingKey::WindowState,
-            SettingKey::CurrentWallpaperImageId,
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled,
             #[cfg(feature = "virtual-driver")]
@@ -569,19 +529,7 @@ impl Settings {
     }
 
     fn get_value_from_json(key: SettingKey, json: &serde_json::Value) -> Option<SettingValue> {
-        // 兼容历史键名
-        let value = match key {
-            SettingKey::WallpaperStyleByMode => json
-                .get("wallpaperStyleByMode")
-                .or_else(|| json.get("wallpaper_style_by_mode")),
-            SettingKey::WallpaperTransitionByMode => json
-                .get("wallpaperTransitionByMode")
-                .or_else(|| json.get("wallpaper_transition_by_mode")),
-            _ => {
-                let key_str = Self::key_to_json_string(key);
-                json.get(&key_str)
-            }
-        }?;
+        let value = json.get(Self::key_to_json_string(key))?;
         Self::json_value_to_setting_value(key, value).ok()
     }
 
@@ -623,9 +571,6 @@ impl Settings {
             | SettingKey::NetworkRetryCount
             | SettingKey::WallpaperRotationIntervalMinutes
             | SettingKey::WebServerPort => Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32)),
-            SettingKey::WallpaperRotationPosition => {
-                Ok(SettingValue::I64(json.as_i64().unwrap_or(0).max(-1)))
-            }
             SettingKey::DownloadIntervalMs => {
                 let v = json.as_u64().unwrap_or(500) as u32;
                 let v = v.clamp(100, 10000);
@@ -643,10 +588,14 @@ impl Settings {
             }
             SettingKey::ImageClickAction
             | SettingKey::GalleryImageObjectPosition
-            | SettingKey::WallpaperStyle
-            | SettingKey::WallpaperRotationTransition
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
+            )),
+            SettingKey::WallpaperDisplayMode => Ok(SettingValue::String(
+                json.as_str()
+                    .filter(|value| wallpaper_targets::is_wallpaper_display_mode(value))
+                    .unwrap_or(TARGET_MULTIPLE)
+                    .to_string(),
             )),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
@@ -655,8 +604,7 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio
             | SettingKey::DefaultDownloadDir
             | SettingKey::WpeEngineDir
-            | SettingKey::CurrentWallpaperImageId
-            | SettingKey::WallpaperRotationPath => match json {
+            | SettingKey::WallpaperDefaultScreen => match json {
                 serde_json::Value::String(s) if !s.trim().is_empty() => {
                     Ok(SettingValue::OptionString(Some(s.clone())))
                 }
@@ -668,17 +616,9 @@ impl Settings {
                 }
                 _ => Ok(SettingValue::OptionString(None)),
             },
-            SettingKey::WallpaperStyleByMode | SettingKey::WallpaperTransitionByMode => {
-                let mut map = HashMap::new();
-                if let Some(obj) = json.as_object() {
-                    for (k, v) in obj {
-                        if let Some(s) = v.as_str() {
-                            map.insert(k.clone(), s.to_string());
-                        }
-                    }
-                }
-                Ok(SettingValue::HashMapStringString(map))
-            }
+            SettingKey::WallpaperTargets => Ok(SettingValue::WallpaperTargets(
+                wallpaper_targets::targets_from_json(json),
+            )),
             SettingKey::McpDisabledCapabilities => {
                 let values = json
                     .as_array()
@@ -798,15 +738,12 @@ impl Settings {
             SettingKey::SurfFreezePage => "surfFreezePage".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
             SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
-            SettingKey::WallpaperRotationPath => "wallpaperRotationPath".to_string(),
-            SettingKey::WallpaperRotationPosition => "wallpaperRotationPosition".to_string(),
             SettingKey::WallpaperRotationIntervalMinutes => {
                 "wallpaperRotationIntervalMinutes".to_string()
             }
-            SettingKey::WallpaperStyle => "wallpaperStyle".to_string(),
-            SettingKey::WallpaperRotationTransition => "wallpaperRotationTransition".to_string(),
-            SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
-            SettingKey::WallpaperTransitionByMode => "wallpaperTransitionByMode".to_string(),
+            SettingKey::WallpaperTargets => "wallpaperTargets".to_string(),
+            SettingKey::WallpaperDisplayMode => "wallpaperDisplayMode".to_string(),
+            SettingKey::WallpaperDefaultScreen => "wallpaperDefaultScreen".to_string(),
             SettingKey::WallpaperMode => "wallpaperMode".to_string(),
             SettingKey::WallpaperEnabled => "wallpaperEnabled".to_string(),
             SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
@@ -816,7 +753,6 @@ impl Settings {
             SettingKey::WpeScenePostprocess => "wpeScenePostprocess".to_string(),
             SettingKey::WpeEngineDir => "wpeEngineDir".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
-            SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
             #[cfg(feature = "virtual-driver")]
@@ -855,13 +791,8 @@ impl Settings {
                     .map_err(|e| format!("Failed to serialize WindowState: {}", e)),
                 None => Ok(serde_json::Value::Null),
             },
-            SettingValue::HashMapStringString(map) => {
-                let mut json_map = serde_json::Map::new();
-                for (k, v) in map {
-                    json_map.insert(k.clone(), serde_json::Value::String(v.clone()));
-                }
-                Ok(serde_json::Value::Object(json_map))
-            }
+            SettingValue::WallpaperTargets(targets) => serde_json::to_value(targets)
+                .map_err(|e| format!("Failed to serialize wallpaper targets: {}", e)),
             SettingValue::VecString(values) => Ok(serde_json::Value::Array(
                 values
                     .iter()
@@ -1076,23 +1007,6 @@ impl Settings {
             .unwrap_or(false)
     }
 
-    /// 轮播来源路径；None 表示尚未设置，由 rotator 落到默认随机路径。
-    pub fn get_wallpaper_rotation_path(&self) -> Option<String> {
-        Self::cells()
-            .get(&SettingKey::WallpaperRotationPath)
-            .and_then(|c| c.load().as_option_string())
-            .flatten()
-    }
-
-    /// 下一张在轮播路径中的 0 起序号（调用方按当前 count 取模）；
-    /// [`WALLPAPER_ROTATION_FROM_START`] 表示刚换了路径，下一次从第 1 张开始、不按当前壁纸定位。
-    pub fn get_wallpaper_rotation_position(&self) -> i64 {
-        Self::cells()
-            .get(&SettingKey::WallpaperRotationPosition)
-            .map(|c| c.load().as_i64().unwrap_or(0))
-            .unwrap_or(0)
-    }
-
     /// 「打开壁纸」：关掉时拒绝壁纸相关操作、隐藏壁纸窗口、启动不恢复。默认开。
     pub fn get_wallpaper_enabled(&self) -> bool {
         Self::cells()
@@ -1106,43 +1020,6 @@ impl Settings {
             .get(&SettingKey::WallpaperRotationIntervalMinutes)
             .map(|c| c.load().as_u32().unwrap_or(60))
             .unwrap_or(60)
-    }
-
-    pub fn get_wallpaper_rotation_style(&self) -> String {
-        let style = Self::cells()
-            .get(&SettingKey::WallpaperStyle)
-            .map(|c| c.load().as_string().unwrap_or_else(|| "fill".to_string()))
-            .unwrap_or_else(|| "fill".to_string());
-        if style == "system" {
-            "fill".to_string()
-        } else {
-            style
-        }
-    }
-
-    pub fn get_wallpaper_rotation_transition(&self) -> String {
-        Self::cells()
-            .get(&SettingKey::WallpaperRotationTransition)
-            .map(|c| {
-                c.load()
-                    .as_string()
-                    .unwrap_or_else(|| Self::default_wallpaper_rotation_transition())
-            })
-            .unwrap_or_else(|| Self::default_wallpaper_rotation_transition())
-    }
-
-    pub fn get_wallpaper_style_by_mode(&self) -> HashMap<String, String> {
-        Self::cells()
-            .get(&SettingKey::WallpaperStyleByMode)
-            .map(|c| c.load().as_hashmap_string_string().unwrap_or_default())
-            .unwrap_or_default()
-    }
-
-    pub fn get_wallpaper_transition_by_mode(&self) -> HashMap<String, String> {
-        Self::cells()
-            .get(&SettingKey::WallpaperTransitionByMode)
-            .map(|c| c.load().as_hashmap_string_string().unwrap_or_default())
-            .unwrap_or_default()
     }
 
     pub fn get_wallpaper_mode(&self) -> String {
@@ -1196,13 +1073,6 @@ impl Settings {
         Self::cells()
             .get(&SettingKey::WindowState)
             .and_then(|c| c.load().as_option_window_state())
-            .flatten()
-    }
-
-    pub fn get_current_wallpaper_image_id(&self) -> Option<String> {
-        Self::cells()
-            .get(&SettingKey::CurrentWallpaperImageId)
-            .and_then(|c| c.load().as_option_string())
             .flatten()
     }
 
@@ -1518,43 +1388,6 @@ impl Settings {
         Ok(())
     }
 
-    /// 设置轮播来源路径。值真正变化时把位置置为 [`WALLPAPER_ROTATION_FROM_START`]
-    /// （路径变化从第一张开始）；停止 / 开始轮播不经过这里，所以同一路径的位置得以保持。
-    pub fn set_wallpaper_rotation_path(&self, path: Option<String>) -> Result<(), String> {
-        let normalized = path.and_then(|s| {
-            let t = s.trim().trim_end_matches('/').to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        });
-        if self.get_wallpaper_rotation_path() == normalized {
-            return Ok(());
-        }
-        let cells = Self::cells();
-        let new_value = SettingValue::OptionString(normalized);
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationPath) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::WallpaperRotationPath, &new_value);
-        self.set_wallpaper_rotation_position(WALLPAPER_ROTATION_FROM_START)
-    }
-
-    pub fn set_wallpaper_rotation_position(&self, position: i64) -> Result<(), String> {
-        let position = position.max(WALLPAPER_ROTATION_FROM_START);
-        if self.get_wallpaper_rotation_position() == position {
-            return Ok(());
-        }
-        let cells = Self::cells();
-        let new_value = SettingValue::I64(position);
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationPosition) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::WallpaperRotationPosition, &new_value);
-        Ok(())
-    }
-
     pub fn set_wallpaper_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
@@ -1572,76 +1405,6 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationIntervalMinutes, &new_value);
-        Ok(())
-    }
-
-    pub fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
-        let style = if style == "system" {
-            "fill".to_string()
-        } else {
-            style
-        };
-        let mode = self.get_wallpaper_mode();
-        let cells = Self::cells();
-
-        // 更新 style
-        let new_style_value = SettingValue::String(style.clone());
-        if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
-            cell.store(Arc::new(new_style_value.clone()));
-        }
-
-        // 更新 style_by_mode
-        let mut style_by_mode_value = None;
-        if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
-            let current = cell.load();
-            if let SettingValue::HashMapStringString(ref map) = **current {
-                let mut new_map = map.clone();
-                new_map.insert(mode, style);
-                let new_val = SettingValue::HashMapStringString(new_map);
-                style_by_mode_value = Some(new_val.clone());
-                cell.store(Arc::new(new_val));
-            }
-        }
-
-        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value);
-        if let Some(ref v) = style_by_mode_value {
-            Self::emit_setting_change(SettingKey::WallpaperStyleByMode, v);
-        }
-
-        Ok(())
-    }
-
-    pub fn set_wallpaper_rotation_transition(&self, transition: String) -> Result<(), String> {
-        let mode = self.get_wallpaper_mode();
-        let cells = Self::cells();
-
-        // 更新 transition
-        let new_transition_value = SettingValue::String(transition.clone());
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
-            cell.store(Arc::new(new_transition_value.clone()));
-        }
-
-        // 更新 transition_by_mode
-        let mut transition_by_mode_value = None;
-        if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
-            let current = cell.load();
-            if let SettingValue::HashMapStringString(ref map) = **current {
-                let mut new_map = map.clone();
-                new_map.insert(mode, transition);
-                let new_val = SettingValue::HashMapStringString(new_map);
-                transition_by_mode_value = Some(new_val.clone());
-                cell.store(Arc::new(new_val));
-            }
-        }
-
-        Self::emit_setting_change(
-            SettingKey::WallpaperRotationTransition,
-            &new_transition_value,
-        );
-        if let Some(ref v) = transition_by_mode_value {
-            Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, v);
-        }
-
         Ok(())
     }
 
@@ -1781,139 +1544,6 @@ impl Settings {
         Self::emit_setting_change(SettingKey::Language, &new_value);
         Ok(())
     }
-
-    pub fn set_current_wallpaper_image_id(&self, image_id: Option<String>) -> Result<(), String> {
-        let normalized = image_id.and_then(|s| {
-            let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        });
-        let cells = Self::cells();
-        let new_value = SettingValue::OptionString(normalized);
-        if let Some(cell) = cells.get(&SettingKey::CurrentWallpaperImageId) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::CurrentWallpaperImageId, &new_value);
-        Ok(())
-    }
-
-    /// 切换模式前调用：交换 style/transition
-    pub fn swap_style_transition_for_mode_switch(
-        &self,
-        old_mode: &str,
-        new_mode: &str,
-    ) -> Result<(String, String), String> {
-        // 获取当前值
-        let cur_style = self.get_wallpaper_rotation_style();
-        let cur_transition = self.get_wallpaper_rotation_transition();
-
-        // 缓存旧模式的值
-        let mut style_by_mode = self.get_wallpaper_style_by_mode();
-        let mut transition_by_mode = self.get_wallpaper_transition_by_mode();
-        style_by_mode.insert(old_mode.to_string(), cur_style.clone());
-        transition_by_mode.insert(old_mode.to_string(), cur_transition.clone());
-
-        // 尽量保留当前值
-        let mut next_style = Self::normalize_style_for_mode(new_mode, &cur_style);
-        let mut next_transition = Self::normalize_transition_for_mode(new_mode, &cur_transition);
-
-        // 如果 normalize 改变了值，尝试用新模式缓存兜底
-        if next_style != cur_style {
-            if let Some(v) = style_by_mode.get(new_mode).cloned() {
-                next_style = Self::normalize_style_for_mode(new_mode, &v);
-            }
-        }
-        if next_transition != cur_transition {
-            if let Some(v) = transition_by_mode.get(new_mode).cloned() {
-                next_transition = Self::normalize_transition_for_mode(new_mode, &v);
-            }
-        }
-
-        // 更新当前值和缓存
-        style_by_mode.insert(new_mode.to_string(), next_style.clone());
-        transition_by_mode.insert(new_mode.to_string(), next_transition.clone());
-
-        let cells = Self::cells();
-        let new_style_value = SettingValue::String(next_style.clone());
-        let new_transition_value = SettingValue::String(next_transition.clone());
-        let new_style_by_mode_value = SettingValue::HashMapStringString(style_by_mode);
-        let new_transition_by_mode_value = SettingValue::HashMapStringString(transition_by_mode);
-
-        if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
-            cell.store(Arc::new(new_style_value.clone()));
-        }
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
-            cell.store(Arc::new(new_transition_value.clone()));
-        }
-        if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
-            cell.store(Arc::new(new_style_by_mode_value.clone()));
-        }
-        if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
-            cell.store(Arc::new(new_transition_by_mode_value.clone()));
-        }
-
-        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value);
-        Self::emit_setting_change(
-            SettingKey::WallpaperRotationTransition,
-            &new_transition_value,
-        );
-        Self::emit_setting_change(SettingKey::WallpaperStyleByMode, &new_style_by_mode_value);
-        Self::emit_setting_change(
-            SettingKey::WallpaperTransitionByMode,
-            &new_transition_by_mode_value,
-        );
-        Ok((next_style, next_transition))
-    }
-
-    fn normalize_transition_for_mode(mode: &str, transition: &str) -> String {
-        if mode == "native" {
-            #[cfg(target_os = "windows")]
-            match transition {
-                "none" | "fade" => transition.to_string(),
-                _ => "none".to_string(),
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                "none".to_string()
-            }
-        } else {
-            transition.to_string()
-        }
-    }
-
-    fn normalize_style_for_mode(mode: &str, style: &str) -> String {
-        let style = if style == "system" { "fill" } else { style };
-        if mode != "native" {
-            return style.to_string();
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            return style.to_string();
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let supported = ["fill"];
-            if supported.contains(&style) {
-                return style.to_string();
-            }
-            return "fill".to_string();
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            return style.to_string();
-        }
-
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        {
-            "fill".to_string()
-        }
-    }
 }
 
 /// 场景后处理档位的默认值：跟随 WPE 安装目录 `config.json` 的 `postprocessing`（前端 `wpe-scene/compile/postprocess.ts` 解析）。
@@ -2012,20 +1642,14 @@ mod tests {
             .load()
             .as_bool()
             .unwrap());
+        // v003 把旧三键收敛成路径，v005 再并入 multiple 目标
+        let targets = cells[&SettingKey::WallpaperTargets].load();
+        let multiple = &targets.as_wallpaper_targets().unwrap()[TARGET_MULTIPLE];
         assert_eq!(
-            cells[&SettingKey::WallpaperRotationPath]
-                .load()
-                .as_option_string()
-                .flatten()
-                .as_deref(),
+            multiple.rotation_path.as_deref(),
             Some("images://gallery/hide/album/11111111-1111-1111-1111-111111111111/sort/by-album-order")
         );
-        assert_eq!(
-            cells[&SettingKey::WallpaperRotationPosition]
-                .load()
-                .as_i64(),
-            Some(0)
-        );
+        assert_eq!(multiple.rotation_position, 0);
     }
 
     #[test]

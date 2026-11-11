@@ -97,7 +97,15 @@ const surfStore = useSurfStore();
 const surfImagesRouteStore = useSurfImagesRouteStore();
 
 const surfFilterFeatures: GalleryBrowseDimension[] = ["plugin", "mediaType", "date", "size", "aspect"];
-const surfSortFeatures: GallerySortField[] = ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time"];
+const surfSortFeatures: GallerySortField[] = [
+  "by-id",
+  "by-time",
+  "by-size",
+  "by-name",
+  "by-aspect",
+  "by-set-time",
+  "by-color",
+];
 const surfSearchFeatures = GALLERY_SEARCH_MODES_BASIC;
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */

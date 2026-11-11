@@ -460,6 +460,13 @@ impl GlobalEmitter {
         }
     }
 
+    /// 色桶表有增删；不带内容，观察方重读 `color_buckets://`。
+    pub fn emit_color_buckets_change(&self) {
+        dispatch_view_event(Arc::new(AppEvent::ColorBucketsChange {
+            seq: next_change_seq(),
+        }));
+    }
+
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
     pub fn emit_auto_config_change(&self, reason: &str, config_id: &str) -> u64 {
         let seq = next_change_seq();
@@ -639,6 +646,7 @@ impl GlobalEmitter {
     pub fn emit_albums_added(&self, _albums: &[crate::storage::Album]) {}
     pub fn emit_albums_deleted(&self, _albums: &[DeletedAlbum]) {}
     pub fn emit_album_moved(&self, _id: &str, _old: &str, _new: &str) {}
+    pub fn emit_color_buckets_change(&self) {}
 
     pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) -> u64 {
         0

@@ -48,6 +48,17 @@ describe("savedViews", () => {
     expect(random.sort.seed).toMatch(/^[0-9]{1,18}$/);
   });
 
+  it("颜色排序的段原样保留：现算段不会被换成色桶段，解析回来还是同一个排序", () => {
+    for (const field of ["by-color", "by-any-color"] as const) {
+      const sort = { field, desc: true, color: "32fe98" };
+      const body = savedViewBody(pixivImages, sort);
+      expect(body.endsWith(`sort/${field}_0x32fe98/_kb_desc`)).toBe(true);
+      const parsed = parseSavedViewBody(body);
+      expect(parsed.sort).toEqual(sort);
+      expect(savedViewBody(parsed.query, parsed.sort)).toBe(body);
+    }
+  });
+
   it("名字：去首尾空白，空串即用路径作名字", () => {
     expect(normalizeSavedViewName("  十月插画 ")).toBe("十月插画");
     expect(normalizeSavedViewName("   ")).toBeNull();

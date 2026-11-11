@@ -3,8 +3,8 @@ import type { TreePage } from "@/components/tree/types";
 import { pathqlEntry, pathqlFetch, type PathqlQuery } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
-import { useSettingsStore } from "@/stores/settings";
-import { rotationAlbumIdFromPath } from "@/utils/wallpaperRotationPath";
+import { rotationAlbumIdsFromPaths } from "@/utils/wallpaperRotationPath";
+import { activeWallpaperRotationPaths } from "@/composables/useWallpaperTarget";
 import { isLabelForestKind, type AlbumKind, type AlbumSyncMode } from "@/types/album";
 
 export type { AlbumKind, AlbumSyncMode } from "@/types/album";
@@ -322,8 +322,8 @@ export async function setLabelKey(albumId: string, newKey: string) {
 }
 
 export async function deleteAlbum(albumId: string) {
-  const settingsStore = useSettingsStore();
-  if (rotationAlbumIdFromPath(settingsStore.values.wallpaperRotationPath) === albumId) {
+  // 只是删前提醒：轮播路径的回退由后端删画册时对所有目标处理，前端等 setting-change
+  if (rotationAlbumIdsFromPaths(activeWallpaperRotationPaths()).includes(albumId)) {
     await ElMessageBox.confirm(
       i18n.global.t("albums.deleteAlbumRotationConfirm"),
       i18n.global.t("albums.deleteAlbumRotationTitle"),

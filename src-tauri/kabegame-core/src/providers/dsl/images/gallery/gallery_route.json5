@@ -114,6 +114,12 @@
                 "sql": "images.post_url",
                 "as": "post_url",
                 "in_need": true
+            },
+            {
+                // 色盘 JSON 文本（`[[rgb,百分比],…]`），没有为 NULL；不在 SQL 里拆，前端解析。
+                "sql": "images.palette",
+                "as": "palette",
+                "in_need": true
             }
         ]
     },

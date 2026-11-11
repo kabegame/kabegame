@@ -119,6 +119,14 @@ fn init_runtime() -> Arc<ProviderRuntime> {
             "surf_records_root_provider",
         )
         .unwrap_or_else(|e| panic!("register `surf_records` schema failed: {}", e));
+    runtime
+        .register_schema(
+            "color_buckets",
+            "color_buckets",
+            "kabegame",
+            "color_buckets_root_provider",
+        )
+        .unwrap_or_else(|e| panic!("register `color_buckets` schema failed: {}", e));
     register_plugin_resource_provider(&runtime)
         .unwrap_or_else(|e| panic!("register `plugin` provider failed: {}", e));
     runtime

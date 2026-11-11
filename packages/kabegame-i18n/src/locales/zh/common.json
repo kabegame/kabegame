@@ -76,6 +76,8 @@
   "shareFailed": "分享失败",
   "openFolderFailed": "打开文件夹失败",
   "wallpaperSetSuccess": "壁纸设置成功",
+  "wallpaperSetSuccessOn": "已设为「{screen}」的壁纸",
+  "listSeparator": "、",
   "wallpaperSetFailed": "设置壁纸失败",
   "addToAlbumFailed": "添加图片到画册失败",
   "exportFailed": "导出失败",

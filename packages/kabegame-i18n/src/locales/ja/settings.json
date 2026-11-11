@@ -261,5 +261,21 @@
   "quickEmpty": "このページにはクイック設定がありません",
   "mcpSelectAll": "すべて選択",
   "mcpClearAll": "すべて解除",
-  "wallpaperCurrentProperties": "壁紙のプロパティ"
+  "wallpaperCurrentProperties": "壁紙のプロパティ",
+  "displayMode": "ディスプレイモード",
+  "displayModeDesc": "複数のディスプレイに壁紙をどう配置するか。グレーの項目は現在の壁紙モードでは使えません（カーソルを合わせると理由を表示）",
+  "screenLayout": "ディスプレイの配置",
+  "screenLayoutMultipleDesc": "すべてのディスプレイに同じ壁紙を表示します。下のローテーションパス、現在の壁紙、スタイル、トランジションはすべてのディスプレイに適用されます",
+  "screenLayoutSpanDesc": "すべてのディスプレイを 1 枚のキャンバスとして扱います。下の設定はキャンバス全体に適用されます",
+  "screenLayoutSingleDesc": "ディスプレイをクリックすると、下のローテーションパス、現在の壁紙、スタイル、トランジションがそのディスプレイの設定になります",
+  "screenNumbered": "ディスプレイ {n}",
+  "screenPrimary": "メイン",
+  "screenDefault": "既定",
+  "screenSetDefault": "既定にする",
+  "screenOnlyOne": "接続されているディスプレイは 1 台だけのため、3 つのディスプレイモードの結果は同じです",
+  "screenDisconnected": "未接続：",
+  "screenForget": "削除",
+  "pickTargetTitleSetWallpaper": "どのディスプレイの壁紙にしますか",
+  "pickTargetTitleSetRotation": "どのディスプレイでローテーションしますか",
+  "pickTargetHint": "現在はディスプレイごとの個別設定で、壁紙とローテーションはディスプレイごとに異なります。ディスプレイをクリックして確定するか、ダブルクリックしてください。"
 }

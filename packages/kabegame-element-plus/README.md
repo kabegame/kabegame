@@ -74,6 +74,9 @@ workspace**，故已平铺成单包：
 - **新增 `kb-filter-dropdown`**：画廊 facet 等场景共用的 chip + 双列计数面板，复用
   `ElTooltip`/Popper 基建；支持本地搜索、loading/empty、排除计数、键盘选择及整体面板插槽，
   样式和 `--anime-*` 映射统一位于 theme-chalk。
+  内置列表的选项可带 `expandable: true`：点它不选中、不关闭，而是在该行下方就地展开
+  `#option-panel="{ option, close }"` 插槽（同一时间至多一个，面板重开时收起），由调用方在面板里完成选择
+  后调 `close()`。用例是画廊排序下拉「颜色」一行的色桶面板（`cocs/gallery/COLOR_PALETTE.md`）。
 - **点外部关闭可忽略子层**：tooltip 内容新增 `clickOutsideIgnore?: string[]`（CSS 选择器），原样
   传给 vueuse `onClickOutside` 的 `ignore`；`ElTooltip` 与 `KbFilterDropdown` 透传同名 prop。上游
   点外部一律关闭，面板里再弹出、teleport 到 body 的子层（编辑浮层、popconfirm）一被点到就会连带

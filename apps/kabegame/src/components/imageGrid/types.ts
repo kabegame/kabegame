@@ -15,7 +15,8 @@ export interface GridRouteStore {
   computedPath: string;
   /** 任意查询 / 排序对应的完整视图路径，不导航（收藏视图判断轮播来源用）。 */
   computePath: (patch: GalleryQueryPatch) => string;
-  navigate: (patch: Record<string, never>, opts?: { push?: boolean }) => Promise<unknown>;
+  /** 网格自己只做两种导航：空补丁（重置为默认路径）与只换排序（点代表色按该颜色排序）。 */
+  navigate: (patch: Pick<GalleryQueryPatch, "sort">, opts?: { push?: boolean }) => Promise<unknown>;
   syncFromUrl: (path: string) => void;
 }
 

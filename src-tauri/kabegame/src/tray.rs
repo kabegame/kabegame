@@ -180,11 +180,13 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
             app.exit(0);
         }
         "next_wallpaper" => {
+            // 只切光标所在那块屏的目标：光标位置在菜单事件到达时读（逐屏独立以外的模式只有一个目标）
+            let target_id = crate::wallpaper::WallpaperController::global().target_at_cursor();
             // 后台切换下一张壁纸，避免阻塞托盘事件线程
             tauri::async_runtime::spawn(async move {
                 // 使用全局单例（不再使用 state）
                 let rotator = crate::wallpaper::WallpaperRotator::global();
-                if let Err(e) = rotator.rotate().await {
+                if let Err(e) = rotator.rotate(Some(&target_id)).await {
                     tracing::warn!("托盘切换下一张壁纸失败: {}", e);
                 }
             });

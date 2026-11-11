@@ -55,17 +55,21 @@ class WallpaperRotationWorker(
      *
      * Worker 在冷进程里跑、没有 PathQL，选图规则全在 Rust（`wallpaper/rotator.rs` 的 android_queue）：
      * 这里只弹出首个文件仍在的 item，把推进后的位置与当前壁纸 id 写回队列文件，
-     * 由 Rust 下次刷新队列时同步回 settings.json（Worker 不写 settings.json，避免与运行中的应用互相覆盖）。
+     * 由 Rust 下次刷新队列时同步回 settings.json 的 `wallpaperTargets.multiple`
+     * （Worker 不写 settings.json，避免与运行中的应用互相覆盖）。
      */
     private fun rotateWallpaper(): RotationPayload? {
         val dataDir = appContext.filesDir
         val settingsJson = readJsonObject(File(dataDir, "settings.json")) ?: JSONObject()
 
+        // 轮播开关是全局键；路径与样式挂在壁纸目标上。Android 只有 multiple 一个目标、只有原生模式：
+        // settings.json 里是 wallpaperTargets.multiple = { rotationPath, style: { native }, … }
         val enabled = settingsJson.optBoolean("wallpaperRotationEnabled", false)
         if (!enabled) {
             return null
         }
-        var style = settingsJson.optString("wallpaperStyle", "fill").ifBlank { "fill" }
+        val target = settingsJson.optJSONObject("wallpaperTargets")?.optJSONObject("multiple")
+        var style = target?.optJSONObject("style")?.optString("native", "fill").orEmpty().ifBlank { "fill" }
         if (style == "system") {
             style = "fill"
         }
@@ -73,7 +77,9 @@ class WallpaperRotationWorker(
         val queueFile = File(dataDir, "rotation_queue.json")
         val queue = readJsonObject(queueFile) ?: return null
         // 队列属于旧路径（设置已改、Rust 尚未刷新）：不动作，等 Rust 重建
-        val settingsPath = settingsJson.optString("wallpaperRotationPath", "")
+        // rotationPath 未设置时在 JSON 里是 null：optString 对 JSONObject.NULL 会给出字符串 "null"，先判空
+        val settingsPath =
+            if (target == null || target.isNull("rotationPath")) "" else target.optString("rotationPath", "")
         if (queue.optString("path", "") != settingsPath) {
             return null
         }

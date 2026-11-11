@@ -20,7 +20,8 @@ interface Props {
   position: { x: number; y: number };
   albumId?: string;
   albumName?: string; // 画册名称（保留用于显示）
-  currentRotationAlbumId?: string | null;
+  /** 活跃壁纸目标里轮播路径直接以画册为根的那些画册 id */
+  rotationAlbumIds?: readonly string[];
   wallpaperRotationEnabled?: boolean;
   albumImageCount?: number; // 画册图片数量
 }
@@ -30,7 +31,7 @@ const { t } = useI18n();
 
 const isCurrentRotationAlbum = computed(() => {
   // 只有在轮播已开启且画册ID匹配时才显示"已设置"
-  return props.wallpaperRotationEnabled && props.albumId && props.currentRotationAlbumId === props.albumId;
+  return props.wallpaperRotationEnabled && props.albumId && !!props.rotationAlbumIds?.includes(props.albumId);
 });
 
 const hasImages = computed(() => (props.albumImageCount ?? 0) > 0);

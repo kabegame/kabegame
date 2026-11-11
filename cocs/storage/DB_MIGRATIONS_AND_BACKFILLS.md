@@ -9,8 +9,9 @@
 |---|---|---|
 | core | `src-tauri/kabegame-core/src/storage/migrations/mod.rs` | `MIGRATIONS` 注册表、`Migration.min_backfill_version`、`run_pending` 两阶段、`StartupProgress`、`BACKFILL_JOBS_DDL` |
 | core | `src-tauri/kabegame-core/src/storage/migrations/backfill.rs` | `Backfill` / `BatchOutcome` / `BackfillCtx`、`BACKFILLS` 注册表、`enqueue_introduced_at`、`pending_jobs`、`run_to_completion`，以及框架测试 |
-| core | `src-tauri/kabegame-core/src/storage/migrations/backfills/` | 作业实现目录（当前有 `wpe_dir_hash`） |
+| core | `src-tauri/kabegame-core/src/storage/migrations/backfills/` | 作业实现目录（当前有 `wpe_dir_hash`、`image_palette`） |
 | core | `src-tauri/kabegame-core/src/storage/migrations/v051_wpe_dir_hash.rs` | 空迁移，只为登记 `wpe_dir_hash` |
+| core | `src-tauri/kabegame-core/src/storage/migrations/v052_image_palette.rs` | 色盘列、色桶表与关系表；登记 `image_palette` |
 | core | `src-tauri/kabegame-core/src/storage/migrations/v048_backfill_jobs.rs` | 建 `backfill_jobs` 表（`init::create_all_tables` 共用同一 DDL） |
 | core | `src-tauri/kabegame-core/src/storage/backfill_service.rs` | `BackfillService`：后台按序跑剩余作业，忙碌快照 + `backfill-finished` |
 | core | `src-tauri/kabegame-core/src/storage/mod.rs` | `Storage::init_global_for_app`、`refresh_query_stats`（启动统计刷新） |
@@ -83,6 +84,43 @@ v051 是空迁移，只为登记回填作业 `wpe_dir_hash`（`backfills/wpe_dir
 - 只读写 `hash` / `size`（v051 之前就存在的列），没有迁移依赖它（`min_backfill_version` 为 `None`），所以只在进入界面后由
   `BackfillService` 后台跑；CLI 本地模式不跑；全新安装不登记。
 - **作业跑完之前，存量行按目录哈希查不到**：这段时间里下到本机已有的壁纸会多落一份（回归文档里有记）。
+
+## v052：色盘、色桶与关系表（回填作业 `image_palette`）
+
+v052 给按颜色排序建存储：列 `images.palette`（色盘 JSON 文本，`NULL` = 没有）、色桶表 `color_buckets`（主键是 rgb）、
+关系表 `image_color_distances(image_id, bucket_rgb, distance)` 与排序索引 `idx_image_color_distances_bucket`。
+表的含义、距离的算法与「每张图对每个色桶恒有一行」的不变量见 [`../gallery/COLOR_PALETTE.md`](../gallery/COLOR_PALETTE.md)，
+这里只记迁移与作业本身。
+
+迁移（`v052_image_palette.rs`）在一个 `IMMEDIATE` 事务里做五步，各步幂等：
+
+1. `images` 没有 `palette` 列时 `ALTER TABLE … ADD COLUMN palette TEXT`（用 `pragma_table_xinfo` 判断）。
+2. 执行 `COLOR_TABLES_DDL`（`IF NOT EXISTS`）。
+3. 写 12 个基本色桶（`seed_builtin_color_buckets`，`INSERT OR IGNORE`）。
+4. 给存量图铺行：`INSERT OR IGNORE … SELECT i.id, b.rgb, 65536 FROM images i CROSS JOIN color_buckets b ORDER BY i.id, b.rgb`。
+   65536 是「没有色盘」的距离，所以升级后按颜色排序立刻可用，只是存量图全部排在最后。`OR IGNORE` 保证重跑不覆盖
+   已经算出来的距离。
+5. 建排序索引。放在铺行之后：关系表是 `WITHOUT ROWID`，按主键顺序追加最快，此时还没有二级索引要维护。
+
+DDL、索引与种子放在 `migrations/mod.rs`，`init::create_all_tables` 共用；有测试核对「全新建库」与「旧库 + v052」的
+列定义、表与索引、色桶行一致。全新安装没有存量图，不铺行、不登记作业。
+
+作业 `image_palette`（`backfills/image_palette.rs`）把铺的 65536 改写成真实距离：
+
+- 候选：`id > 游标 AND palette IS NULL`，每批 32 行。只处理没有色盘的行——v052 之后入库的图在 `Storage::add_image`
+  里已经带着色盘。进度的总数同样是 `COUNT(*) WHERE palette IS NULL`。
+- `with_conn` 取候选（`x-wpe/web`、`x-wpe/scene` 的行另读 `metadata.data` 里的 `project.json` 原文取 `schemecolor`）→
+  `block_on` 里不持有连接逐行 `media::palette::compute_for_row`（来源规则与入库相同；Android 的 `content://` fd 处理
+  只在它里面）→ `ctx.commit` 里逐行 `UPDATE images SET palette = ? WHERE id = ? AND local_path = ?`，改到行了才
+  `write_color_distances`（读盘期间行被删或改指别处时不写）。
+- 算出色盘且改到行的图各带一条 `{ id, palette }` 字段补丁；前端字段依赖表里 `palette` 只让按颜色排序的视图刷新，
+  其它视图只打补丁（已打开的详情自己补上色带）。
+- 算不出色盘的行（文件不在、格式解不了）保持 `NULL` / 65536，不算失败、**不重试**；一批全都算不出时本批没有写入，
+  进度由 `run_to_completion` 提交。
+- `platforms: || true`：图片用 `image` crate，视频用 FFmpeg（除 iOS 外都有）；`wpe::properties` 不随 `wpe` feature 门控。
+- 只读写 v052 引入的列与表以及此前就存在的列，没有迁移依赖它（`min_backfill_version` 为 `None`），只在进入界面后由
+  `BackfillService` 后台跑；CLI 本地模式不跑。忙碌卡片副标题是 `header.backfill.image_palette`。
+- 以后若有迁移要改 `images.palette` 的格式或关系表的结构，必须用 `min_backfill_version: Some(52)` 先排干它。
 
 ## 执行模型
 

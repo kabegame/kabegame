@@ -3,7 +3,7 @@
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
-use kabegame_core::settings::Settings;
+use kabegame_core::settings::{Settings, WallpaperTargetConfig};
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::{
@@ -23,17 +23,17 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsGetAutoDeduplicate => Some(get_auto_deduplicate()),
         IpcRequest::SettingsGetDefaultDownloadDir => Some(get_default_download_dir()),
         IpcRequest::SettingsGetWallpaperRotationEnabled => Some(get_wallpaper_rotation_enabled()),
-        IpcRequest::SettingsGetWallpaperRotationPath => Some(get_wallpaper_rotation_path()),
+        IpcRequest::SettingsGetWallpaperRotationPath { target } => {
+            Some(get_wallpaper_rotation_path(target.as_deref()))
+        }
         IpcRequest::SettingsGetWallpaperRotationIntervalMinutes => {
             Some(get_wallpaper_rotation_interval_minutes())
         }
-        IpcRequest::SettingsGetWallpaperStyle => Some(get_wallpaper_rotation_style()),
-        IpcRequest::SettingsGetWallpaperRotationTransition => {
-            Some(get_wallpaper_rotation_transition())
+        IpcRequest::SettingsGetWallpaperStyle { target } => {
+            Some(get_wallpaper_rotation_style(target.as_deref()))
         }
-        IpcRequest::SettingsGetWallpaperStyleByMode => Some(get_wallpaper_style_by_mode()),
-        IpcRequest::SettingsGetWallpaperTransitionByMode => {
-            Some(get_wallpaper_transition_by_mode())
+        IpcRequest::SettingsGetWallpaperRotationTransition { target } => {
+            Some(get_wallpaper_rotation_transition(target.as_deref()))
         }
         IpcRequest::SettingsGetWallpaperMode => Some(get_wallpaper_mode()),
         IpcRequest::SettingsGetWallpaperVolume => Some(get_wallpaper_volume()),
@@ -41,7 +41,9 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
             Some(get_wallpaper_video_playback_rate())
         }
         IpcRequest::SettingsGetWindowState => Some(get_window_state()),
-        IpcRequest::SettingsGetCurrentWallpaperImageId => Some(get_current_wallpaper_image_id()),
+        IpcRequest::SettingsGetCurrentWallpaperImageId { target } => {
+            Some(get_current_wallpaper_image_id(target.as_deref()))
+        }
         IpcRequest::SettingsGetDefaultImagesDir => Some(get_default_images_dir()),
         IpcRequest::SettingsGetLanguage => Some(IpcResponse::ok_with_data(
             "ok",
@@ -58,13 +60,15 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetWallpaperRotationEnabled { enabled } => {
             Some(set_wallpaper_rotation_enabled(*enabled))
         }
-        IpcRequest::SettingsSetWallpaperRotationPath { path } => {
-            Some(set_wallpaper_rotation_path(path.clone()).await)
+        IpcRequest::SettingsSetWallpaperRotationPath { path, target } => {
+            Some(set_wallpaper_rotation_path(path.clone(), target.clone()).await)
         }
-        IpcRequest::SettingsSetWallpaperRotationTransition { transition } => {
-            Some(set_wallpaper_rotation_transition(transition.clone()))
+        IpcRequest::SettingsSetWallpaperRotationTransition { transition, target } => {
+            Some(set_wallpaper_rotation_transition(transition.clone(), target.clone()).await)
         }
-        IpcRequest::SettingsSetWallpaperStyle { style } => Some(set_wallpaper_style(style.clone())),
+        IpcRequest::SettingsSetWallpaperStyle { style, target } => {
+            Some(set_wallpaper_style(style.clone(), target.clone()).await)
+        }
         IpcRequest::SettingsSetWallpaperMode { mode } => Some(set_wallpaper_mode(mode.clone())),
         #[cfg(feature = "standard")]
         IpcRequest::SettingsSetAlbumDriveEnabled { enabled } => {
@@ -93,11 +97,8 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetWallpaperRotationIntervalMinutes { minutes } => {
             Some(set_wallpaper_rotation_interval_minutes(*minutes))
         }
-        IpcRequest::SettingsSetCurrentWallpaperImageId { image_id } => {
-            Some(set_current_wallpaper_image_id(image_id.clone()))
-        }
-        IpcRequest::SettingsSwapStyleTransitionForModeSwitch { old_mode, new_mode } => Some(
-            swap_style_transition_for_mode_switch(old_mode.clone(), new_mode.clone()),
+        IpcRequest::SettingsSetCurrentWallpaperImageId { image_id, target } => Some(
+            set_current_wallpaper_image_id(image_id.clone(), target.as_deref()),
         ),
         _ => None,
     }
@@ -117,34 +118,93 @@ fn set_wallpaper_rotation_enabled(enabled: bool) -> IpcResponse {
     }
 }
 
-/// 与 Tauri 命令同一实现：校验路径、换路径时立即设第 1 张。web 版没有壁纸后端，只写设置。
-async fn set_wallpaper_rotation_path(path: Option<String>) -> IpcResponse {
+/// 把请求里的可选 `target` 解析成壁纸目标 id：缺省为当前显示器模式的默认目标，指定的目标必须活跃。
+/// web 版没有壁纸后端与显示器模式，只有 `multiple` 这一个目标。
+fn resolve_wallpaper_target(target: Option<&str>) -> Result<String, String> {
     #[cfg(not(feature = "web"))]
-    let res =
-        crate::commands::wallpaper::set_wallpaper_rotation_path(path.unwrap_or_default()).await;
+    {
+        crate::wallpaper::WallpaperController::global()
+            .resolve_target(target)
+            .map(|(id, _)| id)
+    }
     #[cfg(feature = "web")]
-    let res = Settings::global().set_wallpaper_rotation_path(
-        path.as_deref()
-            .and_then(kabegame_core::wallpaper_rotation::normalize_path),
-    );
+    {
+        Ok(target
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(kabegame_core::settings::TARGET_MULTIPLE)
+            .to_string())
+    }
+}
+
+/// 读-改-写一个壁纸目标的配置。
+fn update_wallpaper_target(
+    target: Option<&str>,
+    f: impl FnOnce(&mut WallpaperTargetConfig),
+) -> Result<(), String> {
+    let target_id = resolve_wallpaper_target(target)?;
+    Settings::global().update_wallpaper_target(&target_id, WallpaperTargetConfig::default, f)
+}
+
+/// 壁纸目标的当前配置；目标不活跃时为错误。
+fn wallpaper_target_config(target: Option<&str>) -> Result<WallpaperTargetConfig, String> {
+    let target_id = resolve_wallpaper_target(target)?;
+    Ok(Settings::global()
+        .get_wallpaper_target(&target_id)
+        .unwrap_or_default())
+}
+
+fn updated(res: Result<(), String>) -> IpcResponse {
     match res {
         Ok(()) => IpcResponse::ok("updated"),
         Err(e) => IpcResponse::err(e),
     }
 }
 
-fn set_wallpaper_rotation_transition(transition: String) -> IpcResponse {
-    match Settings::global().set_wallpaper_rotation_transition(transition) {
-        Ok(()) => IpcResponse::ok("updated"),
-        Err(e) => IpcResponse::err(e),
-    }
+/// 与 Tauri 命令同一实现：校验路径、换路径时立即把该目标设到第 1 张。web 版没有壁纸后端，只写设置。
+async fn set_wallpaper_rotation_path(path: Option<String>, target: Option<String>) -> IpcResponse {
+    #[cfg(not(feature = "web"))]
+    let res =
+        crate::commands::wallpaper::set_wallpaper_rotation_path(path.unwrap_or_default(), target)
+            .await;
+    #[cfg(feature = "web")]
+    let res = update_wallpaper_target(target.as_deref(), |config| {
+        config.set_rotation_path(
+            path.as_deref()
+                .and_then(kabegame_core::wallpaper_rotation::normalize_path),
+        );
+    });
+    updated(res)
 }
 
-fn set_wallpaper_style(style: String) -> IpcResponse {
-    match Settings::global().set_wallpaper_style(style) {
-        Ok(()) => IpcResponse::ok("updated"),
-        Err(e) => IpcResponse::err(e),
-    }
+/// 与 Tauri 命令同一实现：按能力校验、写该目标在当前壁纸模式下的过渡。web 版只写设置。
+async fn set_wallpaper_rotation_transition(
+    transition: String,
+    target: Option<String>,
+) -> IpcResponse {
+    #[cfg(not(feature = "web"))]
+    let res =
+        crate::commands::wallpaper::set_wallpaper_rotation_transition(transition, target).await;
+    #[cfg(feature = "web")]
+    let res = update_wallpaper_target(target.as_deref(), |config| {
+        config
+            .transition
+            .insert(Settings::global().get_wallpaper_mode(), transition);
+    });
+    updated(res)
+}
+
+/// 与 Tauri 命令同一实现：按能力校验、写该目标在当前壁纸模式下的样式并重新输出。web 版只写设置。
+async fn set_wallpaper_style(style: String, target: Option<String>) -> IpcResponse {
+    #[cfg(not(feature = "web"))]
+    let res = crate::commands::wallpaper::set_wallpaper_style(style, target).await;
+    #[cfg(feature = "web")]
+    let res = update_wallpaper_target(target.as_deref(), |config| {
+        config
+            .style
+            .insert(Settings::global().get_wallpaper_mode(), style);
+    });
+    updated(res)
 }
 
 fn set_wallpaper_mode(mode: String) -> IpcResponse {
@@ -309,8 +369,11 @@ fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> IpcResponse {
     }
 }
 
-fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
-    match Settings::global().set_current_wallpaper_image_id(image_id.clone()) {
+fn set_current_wallpaper_image_id(image_id: Option<String>, target: Option<&str>) -> IpcResponse {
+    let written = update_wallpaper_target(target, |config| {
+        config.set_current_image_id(image_id.clone())
+    });
+    match written {
         Ok(()) => {
             if let Some(id) = image_id {
                 let now = std::time::SystemTime::now()
@@ -328,16 +391,6 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
             }
             IpcResponse::ok("updated")
         }
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-fn swap_style_transition_for_mode_switch(old_mode: String, new_mode: String) -> IpcResponse {
-    match Settings::global().swap_style_transition_for_mode_switch(&old_mode, &new_mode) {
-        Ok((style, transition)) => IpcResponse::ok_with_data(
-            "ok",
-            serde_json::json!({ "style": style, "transition": transition }),
-        ),
         Err(e) => IpcResponse::err(e),
     }
 }
@@ -395,12 +448,14 @@ fn get_wallpaper_rotation_enabled() -> IpcResponse {
     IpcResponse::ok_with_data("ok", serde_json::json!(v))
 }
 
-fn get_wallpaper_rotation_path() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_rotation_path();
-    IpcResponse::ok_with_data(
-        "ok",
-        serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-    )
+fn get_wallpaper_rotation_path(target: Option<&str>) -> IpcResponse {
+    match wallpaper_target_config(target) {
+        Ok(config) => IpcResponse::ok_with_data(
+            "ok",
+            serde_json::to_value(config.rotation_path).unwrap_or(serde_json::Value::Null),
+        ),
+        Err(e) => IpcResponse::err(e),
+    }
 }
 
 fn get_wallpaper_rotation_interval_minutes() -> IpcResponse {
@@ -408,30 +463,48 @@ fn get_wallpaper_rotation_interval_minutes() -> IpcResponse {
     IpcResponse::ok_with_data("ok", serde_json::json!(v))
 }
 
-fn get_wallpaper_rotation_style() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_rotation_style();
-    IpcResponse::ok_with_data("ok", serde_json::json!(v))
+/// 目标在当前壁纸模式下的有效样式（按能力归一化）。web 版没有能力表，读存的值，缺省 `fill`。
+fn get_wallpaper_rotation_style(target: Option<&str>) -> IpcResponse {
+    let style = wallpaper_target_config(target).map(|config| {
+        #[cfg(not(feature = "web"))]
+        {
+            crate::wallpaper::WallpaperController::global().effective_style(&config)
+        }
+        #[cfg(feature = "web")]
+        {
+            config
+                .style
+                .get(&Settings::global().get_wallpaper_mode())
+                .cloned()
+                .unwrap_or_else(|| "fill".to_string())
+        }
+    });
+    match style {
+        Ok(v) => IpcResponse::ok_with_data("ok", serde_json::json!(v)),
+        Err(e) => IpcResponse::err(e),
+    }
 }
 
-fn get_wallpaper_rotation_transition() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_rotation_transition();
-    IpcResponse::ok_with_data("ok", serde_json::json!(v))
-}
-
-fn get_wallpaper_style_by_mode() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_style_by_mode();
-    IpcResponse::ok_with_data(
-        "ok",
-        serde_json::to_value(v).unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
-    )
-}
-
-fn get_wallpaper_transition_by_mode() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_transition_by_mode();
-    IpcResponse::ok_with_data(
-        "ok",
-        serde_json::to_value(v).unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
-    )
+/// 目标在当前壁纸模式下的有效过渡（按能力归一化）。web 版读存的值，缺省 `none`。
+fn get_wallpaper_rotation_transition(target: Option<&str>) -> IpcResponse {
+    let transition = wallpaper_target_config(target).map(|config| {
+        #[cfg(not(feature = "web"))]
+        {
+            crate::wallpaper::WallpaperController::global().effective_transition(&config)
+        }
+        #[cfg(feature = "web")]
+        {
+            config
+                .transition
+                .get(&Settings::global().get_wallpaper_mode())
+                .cloned()
+                .unwrap_or_else(|| "none".to_string())
+        }
+    });
+    match transition {
+        Ok(v) => IpcResponse::ok_with_data("ok", serde_json::json!(v)),
+        Err(e) => IpcResponse::err(e),
+    }
 }
 
 fn get_wallpaper_mode() -> IpcResponse {
@@ -457,12 +530,14 @@ fn get_window_state() -> IpcResponse {
     )
 }
 
-fn get_current_wallpaper_image_id() -> IpcResponse {
-    let v = Settings::global().get_current_wallpaper_image_id();
-    IpcResponse::ok_with_data(
-        "ok",
-        serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-    )
+fn get_current_wallpaper_image_id(target: Option<&str>) -> IpcResponse {
+    match wallpaper_target_config(target) {
+        Ok(config) => IpcResponse::ok_with_data(
+            "ok",
+            serde_json::to_value(config.current_image_id).unwrap_or(serde_json::Value::Null),
+        ),
+        Err(e) => IpcResponse::err(e),
+    }
 }
 
 fn get_default_images_dir() -> IpcResponse {

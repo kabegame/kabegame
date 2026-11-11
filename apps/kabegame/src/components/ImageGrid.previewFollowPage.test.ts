@@ -32,7 +32,6 @@ const settings = reactive({
     galleryPageSize: 2,
     previewFollowPage: true,
     previewSwitchDirection: "auto",
-    currentWallpaperImageId: null,
   },
 });
 
@@ -111,6 +110,10 @@ vi.mock("@/composables/useImageMetadataCache", () => ({
   useProvideImageMetadataCache: () => ({ clearCache: vi.fn() }),
 }));
 vi.mock("@/composables/useImageOperations", () => ({ useImageOperations: () => ({}) }));
+// 网格只用它在删除确认框里提示「其中有当前壁纸」；这里没有壁纸目标。
+vi.mock("@/composables/useWallpaperTarget", () => ({
+  useActiveWallpaperImageIds: () => computed(() => new Set<string>()),
+}));
 vi.mock("@/stores/galleryRoute", () => ({ useGalleryRouteStore: () => routeStore }));
 vi.mock("@/stores/settings", () => ({
   useSettingsStore: () => settings,

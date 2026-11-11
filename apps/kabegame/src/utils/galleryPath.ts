@@ -42,13 +42,42 @@ export type GalleryTimeSort = "asc" | "desc";
 export type GalleryStoredSort = GalleryTimeSort | "";
 
 export type GallerySortField =
-  "by-id" | "by-time" | "by-size" | "by-name" | "by-aspect" | "by-set-time" | "by-album-order" | "random";
+  | "by-id"
+  | "by-time"
+  | "by-size"
+  | "by-name"
+  | "by-aspect"
+  | "by-set-time"
+  | "by-album-order"
+  | "random"
+  // 色桶，预计算（`sort/by-color_0x<rrggbb>`）
+  | "by-color"
+  // 任意颜色，现算（`sort/by-any-color_0x<rrggbb>`）
+  | "by-any-color";
 
 export interface GallerySort {
   field: GallerySortField;
   desc: boolean;
   /** 随机排序种子（十进制字符串，1-18 位）；field 为 "random" 时必填。 */
   seed?: string;
+  /** 颜色（六位小写十六进制，不带前缀）；field 为 "by-color" / "by-any-color" 时必填。 */
+  color?: string;
+}
+
+/** 两个颜色排序字段在界面上是同一个维度。 */
+export function isColorSortField(field: GallerySortField): field is "by-color" | "by-any-color" {
+  return field === "by-color" || field === "by-any-color";
+}
+
+/** 排序颜色的合法写法：六位小写十六进制，不带前缀。 */
+const SORT_COLOR_RE = /^[0-9a-f]{6}$/;
+
+/**
+ * 按某个颜色排序该用哪个段：在色桶里用预计算段，否则用现算段。
+ * 用色桶还是现算只在这里判断。
+ */
+export function colorSortFor(hex: string, bucketHexes: ReadonlySet<string>, desc: boolean): GallerySort {
+  return { field: bucketHexes.has(hex) ? "by-color" : "by-any-color", desc, color: hex };
 }
 
 /** 生成新的随机排序种子：落在后端 `[0-9]{1,18}` 约束与 i64 范围内。 */
@@ -61,6 +90,12 @@ export const DEFAULT_GALLERY_SORT: GallerySort = { field: "by-time", desc: false
 export function normalizeGallerySort(sort: GallerySort | GalleryStoredSort | undefined): GallerySort {
   if (sort && typeof sort === "object") {
     const field = isGallerySortField(sort.field) ? sort.field : "by-time";
+    if (isColorSortField(field)) {
+      // 颜色排序缺颜色或写法不对：与无法识别的字段一样回落默认排序
+      const color = sort.color;
+      if (!color || !SORT_COLOR_RE.test(color)) return { field: "by-time", desc: !!sort.desc };
+      return { field, desc: !!sort.desc, color };
+    }
     return {
       field,
       desc: !!sort.desc,
@@ -79,7 +114,9 @@ export function isGallerySortField(field: string | undefined): field is GalleryS
     field === "by-aspect" ||
     field === "by-set-time" ||
     field === "by-album-order" ||
-    field === "random"
+    field === "random" ||
+    field === "by-color" ||
+    field === "by-any-color"
   );
 }
 
@@ -128,6 +165,8 @@ export interface ComposablePathParams {
 // ---------------------------------------------------------------------------
 
 function sortBodyPath(sort: GallerySort, omitRandomSeed = false): string {
+  // 两个颜色段同一种写法；颜色已由 normalizeGallerySort 校验过
+  if (isColorSortField(sort.field)) return `sort/${sort.field}_0x${sort.color}`;
   if (sort.field !== "random") return `sort/${sort.field}`;
   return omitRandomSeed ? "sort/random" : `sort/random-${sort.seed || newRandomSortSeed()}`;
 }
@@ -273,6 +312,7 @@ export function parseComposablePath(
     field: sortField,
     desc: order === "desc",
     ...(sortField === "random" && parsedSort.sortSeed ? { seed: parsedSort.sortSeed } : {}),
+    ...(isColorSortField(sortField) && parsedSort.sortColor ? { color: parsedSort.sortColor } : {}),
   };
   return { noAlbum, query, sort };
 }
@@ -409,11 +449,15 @@ function dimensionForPathSegment(segment: string): GalleryBrowseDimension | null
 function parseSortChunk(chunk: readonly string[]): {
   sortField?: GallerySortField;
   sortSeed?: string;
+  sortColor?: string;
 } {
   const field = chunk[1];
   const randomMatch = /^random-([0-9]{1,18})$/.exec(field ?? "");
   if (randomMatch) return { sortField: "random", sortSeed: randomMatch[1] };
-  return isGallerySortField(field) ? { sortField: field } : {};
+  const colorMatch = /^(by-color|by-any-color)_0x([0-9a-f]{6})$/.exec(field ?? "");
+  if (colorMatch) return { sortField: colorMatch[1] as GallerySortField, sortColor: colorMatch[2] };
+  // 不带颜色的裸 "by-color" / "by-any-color" 不是合法排序段：返回 {}，调用方回落默认排序
+  return isGallerySortField(field) && !isColorSortField(field) ? { sortField: field } : {};
 }
 
 function findSortIndex(body: readonly string[]): number {

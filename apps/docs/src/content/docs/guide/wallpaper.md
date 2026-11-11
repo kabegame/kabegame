@@ -53,7 +53,7 @@ Kabegame 的壁纸系统围绕两个维度组合：**来源**（单张 / 轮播�
 直接调用系统壁纸 API。资源占用低、应用退出后壁纸由系统保留，但过渡与显示方式受系统限制。
 
 - **Windows**：支持 fill / fit / stretch / center / tile 以及「跟随系统」；过渡只有「跟随系统」（Windows 会触发系统级淡入）。
-- **macOS**：显示方式**仅支持「跟随系统」**，样式由系统决定；无自定义过渡。
+- **macOS**：显示方式支持 fill / fit / stretch / center（不包含 tile），适应与居中的留边为黑色；无自定义过渡。接了多块显示器时可以每块显示器各设一张、各用各的显示方式。只更换各显示器当前桌面（Space）的壁纸，其它桌面保持原样。
 - **Linux GNOME / 其他桌面**：支持全部显示方式；无自定义过渡。
 - **Linux KDE Plasma**：显示方式支持 fill / fit / center / tile（不包含 stretch）；无自定义过渡。
 
@@ -146,7 +146,7 @@ Android 没有壁纸模式选择，统一走系统 `WallpaperManager`：
 
 | 能力 | Windows | macOS | Linux（GNOME / 其他） | Linux（Plasma） | Linux（Plasma + 插件） | Android |
 |---|---|---|---|---|---|---|
-| 原生模式 | 是 | 是（样式跟随系统） | 是 | 是（无 stretch） | 是 | — |
+| 原生模式 | 是 | 是（无 tile） | 是 | 是（无 stretch） | 是 | — |
 | 窗口模式 | 是 | 是（视频实验性） | 否 | 否 | 否 | 否 |
 | Plasma 插件模式 | 否 | 否 | 否 | 否 | 是 | 否 |
 | 单张图片壁纸 | 是 | 是 | 是 | 是 | 是 | 是（仅填充） |

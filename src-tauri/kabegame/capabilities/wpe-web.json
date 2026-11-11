@@ -2,7 +2,7 @@
   "identifier": "wpe-web-capability",
   "description": "WPE web wallpaper pages: the file: iframe of WallpaperStage in the main window (gallery preview) and in the wallpaper window (desktop). Pull state, answer pings, listen to five events, subscribe to audio / media data over a channel. Only subframes match: both windows' main frames are app pages, covered by the ACL exemption",
   "local": false,
-  "windows": ["main", "wallpaper"],
+  "windows": ["main", "wallpaper", "wallpaper-1", "wallpaper-2", "wallpaper-3", "wallpaper-4", "wallpaper-5", "wallpaper-6", "wallpaper-7"],
   "frames": "sub",
   "remote": {
     "urls": ["file:///*"]

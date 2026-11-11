@@ -39,17 +39,14 @@ function trackSettingChange(
  * 这里负责把 key 映射到 `web.feature.*` 的展示文案。
  */
 const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
-  currentWallpaperImageId: "wallpaper",
+  wallpaperTargets: "wallpaper",
+  wallpaperDisplayMode: "wallpaper",
+  wallpaperDefaultScreen: "wallpaper",
   wallpaperVolume: "wallpaperPlayback",
   wallpaperVideoPlaybackRate: "wallpaperPlayback",
   wallpaperPaused: "wallpaperPlayback",
   wallpaperRotationEnabled: "wallpaperRotation",
-  wallpaperRotationPath: "wallpaperRotation",
   wallpaperRotationIntervalMinutes: "wallpaperRotation",
-  wallpaperRotationTransition: "wallpaperRotation",
-  wallpaperStyle: "wallpaper",
-  wallpaperStyleByMode: "wallpaper",
-  wallpaperTransitionByMode: "wallpaper",
   wallpaperMode: "wallpaper",
   albumDriveEnabled: "albumDrive",
   albumDriveMountPoint: "albumDrive",

@@ -16,6 +16,10 @@ vi.mock("@/api", () => ({
 vi.mock("@/api/rpc", () => ({ invoke: vi.fn() }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }), i18n: {} }));
 vi.mock("@/stores/settings", () => ({ useSettingsStore: () => ({ values: {} }) }));
+// 轮播画册标记不在本文件的范围内：没有任何壁纸目标在轮播
+vi.mock("@/composables/useWallpaperTarget", () => ({
+  useActiveWallpaperRotationPaths: () => ({ value: [] as string[] }),
+}));
 vi.mock("@/stores/pathRoute", () => ({ useGlobalPathRoute: () => route }));
 vi.mock("@/components/tree/KbTreePanel.vue", () => ({ default: { render: () => null } }));
 vi.mock("@/components/tree/useTreeModel", () => ({

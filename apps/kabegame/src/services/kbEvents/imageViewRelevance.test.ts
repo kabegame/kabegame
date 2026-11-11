@@ -160,6 +160,12 @@ describe("patchTriggers 字段依赖表", () => {
     ["compatiblePath", view(), false],
     ["lastSetWallpaperAt", view(), false],
     ["lastSetWallpaperAt", view({ sort: { field: "by-set-time", desc: false } }), true],
+    // 色盘补丁（回填分批发）只让颜色排序的视图刷新：色桶段与现算段都依赖色盘
+    ["palette", view(), false],
+    ["palette", view({ sort: { field: "by-name", desc: false } }), false],
+    ["palette", view({ sort: { field: "random", desc: false, seed: "1" } }), false],
+    ["palette", view({ sort: { field: "by-color", desc: false, color: "ff0000" } }), true],
+    ["palette", view({ sort: { field: "by-any-color", desc: true, color: "32fe98" } }), true],
     ["displayName", view(), false],
     ["displayName", view({ sort: { field: "by-name", desc: false } }), true],
     ["displayName", view({ query: search("display-name") }), true],

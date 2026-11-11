@@ -1,7 +1,7 @@
-use super::{style_options, transition_options, WallpaperManager, WallpaperOption};
+use super::{
+    style_options, transition_options, DisplayMode, Placement, WallpaperManager, WallpaperOption,
+};
 use async_trait::async_trait;
-use kabegame_core::settings::Settings;
-use kabegame_core::storage::Storage;
 use tauri::{AppHandle, Runtime};
 #[cfg(target_os = "android")]
 use tauri_plugin_wallpaper::WallpaperExt;
@@ -14,66 +14,6 @@ pub struct NativeWallpaperManager<R: Runtime> {
 impl<R: Runtime> NativeWallpaperManager<R> {
     pub fn new(app: AppHandle<R>) -> Self {
         Self { _app: app }
-    }
-
-    fn current_wallpaper_path_from_settings(&self) -> Option<String> {
-        let id = Settings::global().get_current_wallpaper_image_id()?;
-        let img = Storage::find_image_by_id(&id).ok().flatten()?;
-        Some(img.local_path)
-    }
-
-    #[cfg(target_os = "windows")]
-    fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
-        Some(Settings::global().get_wallpaper_rotation_transition())
-    }
-
-    /// 使用 osascript 设置 macOS 壁纸（仅设置路径，样式跟随系统）
-    #[cfg(target_os = "macos")]
-    fn set_wallpaper_macos(&self, file_path: &str) -> Result<(), String> {
-        use std::path::Path;
-        use std::process::Command;
-
-        let path = Path::new(file_path);
-        if !path.exists() {
-            return Err("File does not exist".to_string());
-        }
-
-        // 获取绝对路径
-        let abs = path
-            .canonicalize()
-            .map_err(|e| format!("Failed to canonicalize path: {}", e))?
-            .to_string_lossy()
-            .to_string();
-
-        // macOS 使用 osascript 设置壁纸
-        // 转义路径中的特殊字符（反斜杠和双引号）
-        let escaped_path = abs.replace('\\', "\\\\").replace('"', "\\\"");
-
-        let script = format!(
-            r#"tell application "System Events"
-    tell every desktop
-        set picture to "{}"
-    end tell
-end tell"#,
-            escaped_path
-        );
-
-        let output = Command::new("osascript")
-            .args(["-e", &script])
-            .output()
-            .map_err(|e| format!("执行 `osascript` 失败：{}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "`osascript` 设置壁纸失败 (code={:?})。\nstderr: {}",
-                output.status.code(),
-                stderr.trim()
-            ));
-        }
-
-        tracing::debug!("macOS 壁纸路径设置完成（使用 osascript，样式跟随系统）");
-        Ok(())
     }
 
     /// 将路径转换为 file:// URI，并进行 percent-encode
@@ -331,62 +271,81 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
             Ok(())
         }
     }
-}
 
-#[async_trait]
-impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
+    /// 把样式写进系统的壁纸位置（注册表，全局）并广播设置变更；不重设壁纸。
     #[cfg(target_os = "windows")]
-    fn supported_styles(&self) -> Vec<WallpaperOption> {
-        style_options(&["fill", "fit", "stretch", "center", "tile"])
-    }
+    fn apply_style(&self, style: &str) -> Result<(), String> {
+        use winreg::enums::*;
+        use winreg::RegKey;
 
-    #[cfg(target_os = "linux")]
-    fn supported_styles(&self) -> Vec<WallpaperOption> {
-        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
+        // 将样式字符串映射到注册表值
+        // Windows 注册表值：
+        // center: WallpaperStyle = 0, TileWallpaper = 0
+        // tile: WallpaperStyle = 0, TileWallpaper = 1
+        // stretch: WallpaperStyle = 2, TileWallpaper = 0
+        // fit: WallpaperStyle = 6, TileWallpaper = 0 (适应 - 保持比例，完整显示)
+        // fill: WallpaperStyle = 10, TileWallpaper = 0 (填充 - 填满屏幕，可能裁剪)
+        let (style_value, tile_value) = match style {
+            "center" => (0, 0),
+            "tile" => (0, 1),
+            "stretch" => (2, 0),
+            "fit" => (6, 0),
+            "fill" => (10, 0),
+            _ => (10, 0), // 默认填充
+        };
 
-        match linux_desktop() {
-            LinuxDesktop::Plasma => style_options(&["fill", "fit", "center", "tile"]),
-            LinuxDesktop::Gnome | LinuxDesktop::Unknown => {
-                style_options(&["fill", "fit", "stretch", "center", "tile"])
-            }
+        // 优化：直接使用 winreg crate 操作注册表，而不是通过 PowerShell
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let desktop_key = hkcu
+            .open_subkey_with_flags("Control Panel\\Desktop", KEY_WRITE)
+            .map_err(|e| format!("无法打开注册表键: {}", e))?;
+
+        // 将数值转换为字符串（Windows 注册表中这些值存储为字符串）
+        desktop_key
+            .set_value("WallpaperStyle", &style_value.to_string())
+            .map_err(|e| format!("设置 WallpaperStyle 失败: {}", e))?;
+        desktop_key
+            .set_value("TileWallpaper", &tile_value.to_string())
+            .map_err(|e| format!("设置 TileWallpaper 失败: {}", e))?;
+
+        // 发送 WM_SETTINGCHANGE 消息刷新桌面
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+        };
+
+        unsafe {
+            let mut result: usize = 0;
+            let _ = SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                0,
+                SMTO_ABORTIFHUNG,
+                5000,
+                &mut result,
+            );
         }
+
+        // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局：
+        // 调用方（`set_all`）随后会设置一次壁纸路径，新 style 由那一次反映到桌面。
+        tracing::debug!("壁纸样式设置完成（使用 winreg，快速），style={}", style);
+        Ok(())
     }
 
-    #[cfg(target_os = "macos")]
-    fn supported_styles(&self) -> Vec<WallpaperOption> {
-        style_options(&["fill"])
-    }
-
-    #[cfg(target_os = "android")]
-    fn supported_styles(&self) -> Vec<WallpaperOption> {
-        style_options(&["fill"])
-    }
-
-    #[cfg(not(any(
-        target_os = "windows",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "android"
-    )))]
-    fn supported_styles(&self) -> Vec<WallpaperOption> {
-        style_options(&["fill"])
-    }
-
-    #[cfg(target_os = "windows")]
-    fn supported_transitions(&self) -> Vec<WallpaperOption> {
-        transition_options(&["none", "fade"], "settings.transitionFollowSystem")
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn supported_transitions(&self) -> Vec<WallpaperOption> {
-        transition_options(&["none"], "settings.transitionFollowSystem")
-    }
-
-    async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String> {
+    /// 给所有显示器设同一张壁纸：样式、过渡全部由参数带入。
+    /// macOS 不走这里：它没有「所有显示器」的系统入口，由 `set_wallpaper` 按布置逐屏设（`native_mac`）。
+    #[cfg(not(target_os = "macos"))]
+    async fn set_all(&self, file_path: &str, style: &str, transition: &str) -> Result<(), String> {
         use std::path::Path;
 
-        tracing::debug!("NativeWallpaperManager::set_wallpaper_path 被调用");
+        tracing::debug!("NativeWallpaperManager::set_all 被调用");
         tracing::debug!("file_path: {}", file_path);
+        // 各平台用到的参数不同（只有 Windows 有过渡）
+        let _ = (style, transition);
+
+        // Windows 的样式是系统的全局壁纸位置：先写样式，随后的设壁纸让它生效
+        #[cfg(target_os = "windows")]
+        self.apply_style(style)?;
 
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let file_path_owned =
@@ -417,10 +376,6 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                 .encode_wide()
                 .chain(Some(0))
                 .collect();
-
-            let transition = self
-                .current_wallpaper_transition_from_ipc()
-                .unwrap_or_else(|| "none".to_string());
 
             // 参考 wallpaper_rotator.rs 的实现：使用模拟方式实现淡入淡出
             // wallpaper_rotator.rs 中的实现能工作，它使用延迟 + SPIF_SENDWININICHANGE 来触发系统动画
@@ -506,7 +461,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
             };
 
             tracing::debug!(
-                "set_wallpaper_path: transition={}, fuWinIni={}",
+                "set_all: transition={}, fuWinIni={}",
                 transition,
                 fu_win_ini
             );
@@ -550,7 +505,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
         {
             use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
-            let effective = Settings::global().get_wallpaper_rotation_style();
+            let effective = style.to_string();
 
             let desktop = linux_desktop();
 
@@ -593,18 +548,11 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
             }
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            // macOS 不设置样式，只设置壁纸路径，样式由系统决定
-            return self.set_wallpaper_macos(file_path);
-        }
-
         #[cfg(target_os = "android")]
         {
-            let style = Settings::global().get_wallpaper_rotation_style();
             self._app
                 .wallpaper()
-                .set_wallpaper(file_path, style.as_str())
+                .set_wallpaper(file_path, style)
                 .await
                 .map_err(|e| e.to_string())?;
             return Ok(());
@@ -622,249 +570,145 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    async fn set_style(&self, style: &str) -> Result<(), String> {
-        use winreg::enums::*;
-        use winreg::RegKey;
+    /// macOS：把壁纸设到 `screens` 里的每一块屏，样式随这次调用逐屏生效。
+    ///
+    /// `screens` 为空表示没有屏幕信息（显示器枚举还没填充或失败），这时对系统当前的每一块屏都设一遍。
+    /// 一块屏失败（比如布局算出之后它才断开）不影响其余屏，全部试过后把失败的屏一起报出来。
+    #[cfg(target_os = "macos")]
+    async fn set_on_screens(
+        &self,
+        file_path: &str,
+        style: &str,
+        screens: &[crate::wallpaper::screens::ScreenInfo],
+    ) -> Result<(), String> {
+        use super::native_mac;
+        use std::path::PathBuf;
 
-        // 将样式字符串映射到注册表值
-        // Windows 注册表值：
-        // center: WallpaperStyle = 0, TileWallpaper = 0
-        // tile: WallpaperStyle = 0, TileWallpaper = 1
-        // stretch: WallpaperStyle = 2, TileWallpaper = 0
-        // fit: WallpaperStyle = 6, TileWallpaper = 0 (适应 - 保持比例，完整显示)
-        // fill: WallpaperStyle = 10, TileWallpaper = 0 (填充 - 填满屏幕，可能裁剪)
-        let (style_value, tile_value) = match style {
-            "center" => (0, 0),
-            "tile" => (0, 1),
-            "stretch" => (2, 0),
-            "fit" => (6, 0),
-            "fill" => (10, 0),
-            _ => (10, 0), // 默认填充
-        };
-
-        // 优化：直接使用 winreg crate 操作注册表，而不是通过 PowerShell
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let desktop_key = hkcu
-            .open_subkey_with_flags("Control Panel\\Desktop", KEY_WRITE)
-            .map_err(|e| format!("无法打开注册表键: {}", e))?;
-
-        // 将数值转换为字符串（Windows 注册表中这些值存储为字符串）
-        desktop_key
-            .set_value("WallpaperStyle", &style_value.to_string())
-            .map_err(|e| format!("设置 WallpaperStyle 失败: {}", e))?;
-        desktop_key
-            .set_value("TileWallpaper", &tile_value.to_string())
-            .map_err(|e| format!("设置 TileWallpaper 失败: {}", e))?;
-
-        // 发送 WM_SETTINGCHANGE 消息刷新桌面
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
-        };
-
-        unsafe {
-            let mut result: usize = 0;
-            let _ = SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                0,
-                0,
-                SMTO_ABORTIFHUNG,
-                5000,
-                &mut result,
-            );
-        }
-
-        // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
-        // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
-        if let Some(path) = self.current_wallpaper_path_from_settings() {
-            if std::path::Path::new(&path).exists() {
-                let _ = self.set_wallpaper_path(&path).await;
+        let path = PathBuf::from(file_path);
+        let style = style.to_string();
+        let screen_ids: Vec<String> = screens.iter().map(|screen| screen.id.clone()).collect();
+        // 设桌面图片要等系统的壁纸服务（实测一块屏 0.6 s 上下），放到阻塞线程上：
+        // 不占异步运行时的工作线程，也不在主线程上做（见 native_mac 的模块说明）
+        tokio::task::spawn_blocking(move || {
+            if screen_ids.is_empty() {
+                return native_mac::set_desktop_image_on_every_screen(&path, &style);
             }
-        }
+            let errors: Vec<String> = screen_ids
+                .iter()
+                .filter_map(|screen_id| {
+                    native_mac::set_desktop_image(screen_id, &path, &style)
+                        .err()
+                        .map(|e| format!("屏 {screen_id}: {e}"))
+                })
+                .collect();
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors.join("；"))
+            }
+        })
+        .await
+        .map_err(|e| format!("设置原生壁纸的任务异常退出: {e}"))?
+    }
+}
 
-        tracing::debug!("壁纸样式设置完成（使用 winreg，快速），style={}", style);
-        Ok(())
+#[async_trait]
+impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
+    #[cfg(target_os = "windows")]
+    fn supported_styles(&self, _display: DisplayMode) -> Vec<WallpaperOption> {
+        style_options(&["fill", "fit", "stretch", "center", "tile"])
     }
 
-    /// Linux：根据运行时桌面环境设置样式，失败回退
     #[cfg(target_os = "linux")]
-    async fn set_style(&self, style: &str) -> Result<(), String> {
+    fn supported_styles(&self, _display: DisplayMode) -> Vec<WallpaperOption> {
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
-        let desktop = linux_desktop();
-
-        async fn set_style_plasma<R: Runtime>(
-            manager: &NativeWallpaperManager<R>,
-            style: &str,
-        ) -> Result<(), String> {
-            if let Some(path) = manager.current_wallpaper_path_from_settings() {
-                if std::path::Path::new(&path).exists() {
-                    let path =
-                        kabegame_core::wallpaper_compat::ensure_native_wallpaper_path(&path).await;
-                    manager.set_wallpaper_plasma(&path, style)?;
-                } else {
-                    return Err(format!("当前壁纸路径不存在: {}", path));
-                }
-            } else {
-                // 如果没有当前壁纸，仍然尝试通过 qdbus 只设置 FillMode（不改变图片）
-                let fill_mode = NativeWallpaperManager::<R>::style_to_plasma_fill_mode(style);
-                let script = format!(
-                    "var allDesktops = desktops();\n\
-                    for (var i=0; i<allDesktops.length; i++) {{\n\
-                      var d = allDesktops[i];\n\
-                      if (d.wallpaperPlugin === 'org.kde.image') {{\n\
-                        d.currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];\n\
-                        d.writeConfig('FillMode', '{}');\n\
-                      }}\n\
-                    }}\n",
-                    fill_mode
-                );
-                tracing::debug!("fill_mode {}", fill_mode);
-                NativeWallpaperManager::<R>::run_qdbus_evaluate_script(&script)?;
-            }
-            Ok(())
-        }
-
-        async fn set_style_gnome<R: Runtime>(
-            manager: &NativeWallpaperManager<R>,
-            style: &str,
-        ) -> Result<(), String> {
-            use std::process::Command;
-
-            // 设置 picture-options
-            let picture_options =
-                NativeWallpaperManager::<R>::style_to_gnome_picture_options(style);
-            let output = Command::new("gsettings")
-                .args([
-                    "set",
-                    "org.gnome.desktop.background",
-                    "picture-options",
-                    picture_options,
-                ])
-                .output()
-                .map_err(|e| format!("执行 `gsettings set picture-options` 失败：{}", e))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "`gsettings set picture-options` 失败 (code={:?})。\nstderr: {}",
-                    output.status.code(),
-                    stderr.trim()
-                ));
-            }
-
-            // 如果有当前壁纸路径，重新设置壁纸以应用新样式
-            if let Some(path) = manager.current_wallpaper_path_from_settings() {
-                if std::path::Path::new(&path).exists() {
-                    let path =
-                        kabegame_core::wallpaper_compat::ensure_native_wallpaper_path(&path).await;
-                    manager.set_wallpaper_gnome(&path, style)?;
-                }
-            }
-
-            Ok(())
-        }
-
-        async fn try_plasma_then_gnome<R: Runtime>(
-            manager: &NativeWallpaperManager<R>,
-            style: &str,
-        ) -> Result<(), String> {
-            match set_style_plasma(manager, style).await {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    tracing::warn!("设置 Plasma 样式失败，尝试 GNOME: {}", e);
-                    set_style_gnome(manager, style).await
-                }
-            }
-        }
-
-        async fn try_gnome_then_plasma<R: Runtime>(
-            manager: &NativeWallpaperManager<R>,
-            style: &str,
-        ) -> Result<(), String> {
-            match set_style_gnome(manager, style).await {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    tracing::warn!("设置 GNOME 样式失败，尝试 Plasma: {}", e);
-                    set_style_plasma(manager, style).await
-                }
-            }
-        }
-
-        match desktop {
-            LinuxDesktop::Plasma => try_plasma_then_gnome(self, style).await,
-            LinuxDesktop::Gnome => try_gnome_then_plasma(self, style).await,
-            LinuxDesktop::Unknown => {
-                // Unknown 时先尝试 GNOME，再尝试 Plasma
-                try_gnome_then_plasma(self, style).await
+        match linux_desktop() {
+            LinuxDesktop::Plasma => style_options(&["fill", "fit", "center", "tile"]),
+            LinuxDesktop::Gnome | LinuxDesktop::Unknown => {
+                style_options(&["fill", "fit", "stretch", "center", "tile"])
             }
         }
     }
 
-    /// macOS 原生壁纸：样式跟随系统，不设置样式
+    /// macOS：`NSWorkspace` 的缩放选项，逐屏生效；没有平铺。
     #[cfg(target_os = "macos")]
-    async fn set_style(&self, _style: &str) -> Result<(), String> {
-        // macOS 样式跟随系统，不进行任何设置操作
-        tracing::debug!("macOS 壁纸样式跟随系统，不设置样式");
-        Ok(())
+    fn supported_styles(&self, _display: DisplayMode) -> Vec<WallpaperOption> {
+        style_options(&super::native_mac::STYLES)
     }
 
-    /// Android 原生壁纸：仅保存设置，不进行系统级设置
     #[cfg(target_os = "android")]
-    async fn set_style(&self, _style: &str) -> Result<(), String> {
-        // Android 平台：仅保存设置到配置，不进行系统级设置
-        tracing::debug!("Android 壁纸样式仅保存设置");
-        Ok(())
+    fn supported_styles(&self, _display: DisplayMode) -> Vec<WallpaperOption> {
+        style_options(&["fill"])
+    }
+
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android"
+    )))]
+    fn supported_styles(&self, _display: DisplayMode) -> Vec<WallpaperOption> {
+        style_options(&["fill"])
     }
 
     #[cfg(target_os = "windows")]
-    async fn set_transition(&self, transition: &str) -> Result<(), String> {
-        use std::thread;
-        use std::time::Duration;
-
-        // 保存设置到用户配置中
-        let settings = kabegame_core::settings::Settings::global();
-        settings
-            .set_wallpaper_rotation_transition(transition.to_string())
-            .map_err(|e| format!("保存过渡效果设置失败: {}", e))?;
-
-        // 方案 A：不修改系统级动画相关注册表。
-        // 原生模式的"无过渡"仅表示：应用不会额外触发/预览过渡；
-        // Windows 自身在切换壁纸时可能仍有系统级淡入动画，这属于系统行为，应用不强控。
-
-        // "none" 表示无过渡，不应该重新设置壁纸（避免触发系统默认的淡入效果）
-        if transition == "none" {
-            tracing::debug!(
-                "壁纸过渡效果设置为无过渡，仅保存设置，不重新设置壁纸，transition={}",
-                transition
-            );
-            return Ok(());
-        }
-
-        // 从全局设置读取当前壁纸路径（由应用维护）
-        let Some(current_wallpaper) = self.current_wallpaper_path_from_settings() else {
-            return Ok(());
-        };
-
-        // 对于 fade 效果，先短暂延迟，然后重新设置壁纸
-        if transition == "fade" {
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        self.set_wallpaper_path(&current_wallpaper).await?;
-
-        tracing::debug!("壁纸过渡效果设置完成，transition={}", transition);
-        Ok(())
+    fn supported_transitions(&self, _display: DisplayMode) -> Vec<WallpaperOption> {
+        transition_options(&["none", "fade"], "settings.transitionFollowSystem")
     }
 
     #[cfg(not(target_os = "windows"))]
-    async fn set_transition(&self, transition: &str) -> Result<(), String> {
-        // 非 Windows 平台：仅保存设置，不做系统级预览
-        Settings::global()
-            .set_wallpaper_rotation_transition(transition.to_string())
-            .map_err(|e| format!("Settings error: {}", e))?;
-        Ok(())
+    fn supported_transitions(&self, _display: DisplayMode) -> Vec<WallpaperOption> {
+        transition_options(&["none"], "settings.transitionFollowSystem")
+    }
+
+    /// macOS：逐屏 API 让「各屏复制」「逐屏独立」都可用；系统没有跨屏铺放，`span` 不提供。
+    /// 其余平台的逐屏与跨屏尚未接入，用 trait 的默认实现（只开放 `multiple`）。
+    #[cfg(target_os = "macos")]
+    fn unavailable_reason(&self, display: DisplayMode) -> Option<&'static str> {
+        (display == DisplayMode::Span).then_some("settings.displayModeSpanNoSystem")
+    }
+
+    /// macOS：系统只有逐屏的入口，`All` 就是对布置里的每块屏各设一次，`One` 设一次；过渡跟随系统。
+    /// 视频与目录型 WPE 壁纸在原生模式没有内容，跳过并保持系统壁纸现状（见 `native_mac::can_display`）。
+    #[cfg(target_os = "macos")]
+    async fn set_wallpaper(
+        &self,
+        file_path: &str,
+        style: &str,
+        _transition: &str,
+        placement: &Placement,
+    ) -> Result<(), String> {
+        if !super::native_mac::can_display(std::path::Path::new(file_path)) {
+            tracing::debug!("原生模式不能显示视频 / 目录型壁纸，保持系统壁纸不变: {file_path}");
+            return Ok(());
+        }
+        match placement {
+            Placement::All { screens } => self.set_on_screens(file_path, style, screens).await,
+            Placement::One { screen } => {
+                self.set_on_screens(file_path, style, std::slice::from_ref(screen))
+                    .await
+            }
+            // 能力表里 span 标为不可用，正常流程走不到这里
+            Placement::Span => Err("macOS 原生模式不支持跨屏拼接".to_string()),
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    async fn set_wallpaper(
+        &self,
+        file_path: &str,
+        style: &str,
+        transition: &str,
+        placement: &Placement,
+    ) -> Result<(), String> {
+        match placement {
+            Placement::All { .. } => self.set_all(file_path, style, transition).await,
+            // 逐屏 API 与系统自带的跨屏铺放尚未接入；能力表里这两种显示器模式标为不可用，正常流程走不到这里
+            Placement::One { .. } | Placement::Span => {
+                Err("原生模式尚未支持该显示器模式".to_string())
+            }
+        }
     }
 
     fn cleanup(&self) -> Result<(), String> {

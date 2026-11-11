@@ -17,26 +17,32 @@ pub(crate) fn hide_main_window<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> R
     Ok(())
 }
 
-/// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）
+/// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）：池里每个现存的壁纸窗口都重新挂一次桌面层属性，
+/// 各自留在自己所在的屏上。
 #[tauri::command]
 #[cfg(target_os = "macos")]
 pub async fn fix_wallpaper_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     {
         use tauri::Manager;
-        if let Some(window) = app.get_webview_window("wallpaper") {
-            let _ = crate::wallpaper::window_mount_macos::mount_to_desktop(&window);
+        for label in crate::wallpaper::WALLPAPER_LABELS {
+            if let Some(window) = app.get_webview_window(label) {
+                let _ = crate::wallpaper::window_mount_macos::mount_to_desktop(&window, None);
+            }
         }
     }
 }
 
-/// 壁纸窗口前端 ready 后调用，用于触发一次"推送当前壁纸到壁纸窗口"。
-/// 解决壁纸窗口尚未注册事件监听时，后端先 emit 导致事件丢失的问题。
+/// 壁纸窗口前端 ready 后调用：按调用方 label 标记该窗口已完全初始化，后端等到它才挂载并显示这个窗口
+/// （每个壁纸窗口各握各的手）。不是壁纸窗口的调用方不作数。
 #[tauri::command]
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-pub fn wallpaper_window_ready<R: tauri::Runtime>(_app: tauri::AppHandle<R>) -> Result<(), String> {
-    // 标记窗口已完全初始化
-    tracing::debug!("壁纸窗口已就绪");
-    crate::wallpaper::WallpaperWindow::<R>::mark_ready();
+pub fn wallpaper_window_ready<R: tauri::Runtime>(webview: tauri::Webview<R>) -> Result<(), String> {
+    let label = webview.label();
+    if !crate::wallpaper::is_wallpaper_label(label) {
+        return Err(format!("not a wallpaper window: {label}"));
+    }
+    tracing::debug!("壁纸窗口 {label} 已就绪");
+    crate::wallpaper::WallpaperWindow::<R>::mark_ready(label);
     Ok(())
 }
 

@@ -32,6 +32,7 @@ mod v001_wallpaper_drop_system;
 mod v002_mcp_settings;
 mod v003_wallpaper_rotation_path;
 mod v004_wallpaper_enabled;
+mod v005_wallpaper_targets;
 
 type MigrationFn = fn(&mut Value) -> Result<(), String>;
 
@@ -63,9 +64,14 @@ const MIGRATIONS: &[Migration] = &[
         name: "wallpaper_enabled",
         up: v004_wallpaper_enabled::up,
     },
+    Migration {
+        version: 5,
+        name: "wallpaper_targets",
+        up: v005_wallpaper_targets::up,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 4;
+pub const LATEST_VERSION: u32 = 5;
 pub const VERSION_KEY: &str = "schemaVersion";
 
 pub fn current_version(json: &Value) -> u32 {
@@ -141,8 +147,14 @@ mod tests {
         let mut v = json!({ "wallpaperStyle": "system", "wallpaperDisabled": true });
         assert!(run_pending(&mut v).unwrap());
         assert_eq!(current_version(&v), LATEST_VERSION);
-        assert_eq!(v["wallpaperStyle"], "fill");
-        assert!(v.get("wallpaperRotationPath").is_some());
+        // v001 把 system 换成 fill、v003 生成轮播路径，v005 再一起并入 multiple 目标
+        let target = &v["wallpaperTargets"]["multiple"];
+        let mode = crate::settings::Settings::default_wallpaper_mode();
+        assert_eq!(target["style"][mode.as_str()], "fill");
+        assert!(target["rotationPath"].is_string());
+        assert!(v.get("wallpaperStyle").is_none());
+        assert!(v.get("wallpaperRotationPath").is_none());
+        assert_eq!(v["wallpaperDisplayMode"], "multiple");
         assert_eq!(v["wallpaperEnabled"], false);
         assert!(v.get("wallpaperDisabled").is_none());
     }

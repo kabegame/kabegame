@@ -3,6 +3,10 @@
 ## 用户侧
 
 ### Added
+- macOS 窗口模式支持多显示器：每块显示器都有壁纸（原来只有主屏）。设置页「显示器模式」可选「各屏复制」（所有显示器同一张，视频只有主屏出声）或「逐屏独立」：点显示器布局图里的一块屏，就能给它单独设当前壁纸、轮播路径、显示方式与过渡；轮播到点时每块屏各换一张。显示器拔掉后它的设置会保留，接回来自动恢复，用不上了可以在布局图下方「忘记」。
+- macOS 原生模式支持多显示器逐屏独立：每块显示器各设当前壁纸、轮播路径与显示方式，轮播到点时各换一张；新接上的显示器自动换成它该显示的壁纸。窗口模式与原生模式互切时「逐屏独立」会保留。
+- macOS 原生模式的壁纸显示方式新增「适应」「拉伸」「居中」（原来只有填充，铺法由系统决定），改了立即生效，每块显示器可以不同。
+- 多块显示器逐屏独立时，图库「设为壁纸」、画册「设为桌面轮播」、查询行「用当前视图轮播壁纸」会先让你选显示器（默认选中默认显示器，双击即可），成功提示带显示器名；画册只在部分显示器上轮播时仍可设给另一块。托盘「下一张壁纸」只切鼠标所在的那块显示器。
 - Wallpaper Engine 壁纸可以从另一台电脑复制过来（例如把 Windows 上的壁纸传到 macOS）：源电脑开启「设置 → 高级」里的 Web 服务器，这台电脑用「Kabegame 服务器」插件（0.3.0）收集。整个壁纸目录逐个文件下载到下载目录，一张壁纸一个文件夹，标签与创意工坊地址一并带过来，任务日志逐文件显示进度；本机已有内容相同的壁纸时不会多存一份（需开启「自动去重」）。两台电脑的 Kabegame 都需要 4.7.0 或更高版本。从图库删除这类壁纸只删记录，下载目录里的壁纸文件夹不会被删除。
 - 本地导入（含把文件夹拖进主窗口或画册）现在能识别 Wallpaper Engine 壁纸目录：选中的文件夹本身或它下面某一层是壁纸目录时，整个目录作为一张壁纸导入，不再把里面的预览图和视频拆成一张张图片。拖进文件夹画册时整个壁纸目录会原样复制进同步目录。
 - 文件夹画册同步目录里的 Wallpaper Engine 壁纸目录，现在作为一张壁纸出现在这个画册里，不再为它另建子画册；整个目录删掉后，对应的壁纸也从图库移除。旧版本已经为它建了子画册的目录保持原样；已经同步过的文件夹里原有的壁纸目录，要等这个文件夹下次有变化时才会被识别。
@@ -32,6 +36,9 @@
 - 桌面网页壁纸改为像 Wallpaper Engine 一样以 `file://` 直接加载壁纸目录：依赖读取同目录数据文件的壁纸（如歌单、字幕类）现在能完整运行；文件访问只对壁纸窗口开启，且只能读当前壁纸目录内的文件。Windows 上桌面的鼠标移动与左键点击会转发给网页壁纸（不拦截桌面本身的点击，桌面框选不受影响）。预览网页壁纸时，鼠标移到画布左右边缘中段即可唤出切换箭头。预览网页壁纸时右键菜单无法弹出（右键会被壁纸页面接收），菜单里的操作改为按原顺序排在底部工具条里。
 - 网页壁纸可读取作者默认属性与界面语言：桌面壁纸与图库预览里的 Wallpaper Engine 网页壁纸会在加载完成后收到 `project.json` 里作者设定的属性值，以及当前界面语言（切换语言后页面随之更新）；依赖这些属性才开始绘制的壁纸现在能正常显示。暂不支持帧率上限。
 - 画廊、画册、任务和畅游的工具条右侧 ⋯ 菜单新增「收藏的视图」：把当前的过滤和排序存成一条，可以起名字（不起就用路径作名字，名字不能重复），以后点一下就切回去。列表按最近使用排序；在菜单里来回切换不会打乱顺序，下次打开菜单时才把最后用的那条排到最前。所有画册共用一份收藏，所有任务、所有网站也各共用一份。行尾的编辑按钮可以改名，或用当前视图更新这条收藏（先预览哪些条件是新增的、哪些会被移除，确定后才保存）；叉号移出收藏，需要确认。正在轮播的那条带轮播标记。收藏保存在本机。
+- 设置页壁纸分区新增「显示器布局」（目前仅 macOS）：按系统里的排布画出接着的每块显示器及其名字、分辨率，插拔显示器、改排布后约一两秒内自动更新。壁纸设置的各项按「全局设置 → 显示器 → 轮播路径、当前壁纸、显示方式与过渡」重新排了顺序，「壁纸模式」移到了前面。
+- 新增按颜色排序：画廊、画册、任务和畅游的排序菜单多了「颜色」，点开选一个色块（红橙黄绿青蓝紫粉棕黑白灰），画面最接近这个颜色的排在前面；也可以点「＋」自己取色，直接按它排序，或把常用的颜色保存下来（最多 24 个，保存后排序更快）。Wallpaper Engine 壁纸与视频同样参与。
+- 图片详情的「基本信息」里新增代表色：一条按占比分段的色带，鼠标停在上面显示色值与百分比，点其中一段可以让当前页面按这个颜色排序（过滤条件不变）。升级后会在后台为已有图片计算一次代表色，期间可正常使用，还没算到的图片按颜色排序时暂时排在最后。
 
 ### Optimized
 - 场景壁纸改颜色、透明度、位置、亮度与滑块类属性时即时生效，不再整场重新加载；按属性条件显示 / 隐藏的图层也能正确切换。
@@ -46,6 +53,12 @@
 - 按视频筛选和视频计数在大图库下明显更快；应用启动时会刷新数据库的查询统计，启动页显示「正在优化数据库」，图库越大这一步越久。
 
 ### Fixed
+- 主窗口缩到很窄时，设置页「当前轮播路径」「当前壁纸」两行的标题不再被长路径挤成一列字。
+- 修改壁纸轮播间隔后，从修改的那一刻起按新间隔切换，不用再多等一轮。
+- 窗口模式与原生模式的显示方式、过渡各记各的：窗口 → 原生 → 窗口来回切换后，窗口模式原来的显示方式与过渡不再被原生模式的值覆盖（第一次切到另一个模式时仍沿用当前的值）。
+- 设视频或 Wallpaper Engine 壁纸时，在「需要切换到窗口模式」的确认框里点取消，不再弹出「壁纸设置失败: cancel」。
+- 把当前壁纸那张图隐藏、移出画册，或它被当前的过滤条件排除时，应用背景不再消失（只有删除这张图才会清掉）。
+- 原生壁纸模式下从图库设一张壁纸，不再把「过渡效果」改回「跟随系统」；Windows 原生模式下轮播切换时系统壁纸只更换一次，不再连续刷新；还没有设过壁纸时修改显示方式，不再直接改动系统当前的壁纸，下次设壁纸时才生效。
 - 同时开着「自动去重」和「去重时更新元数据」时，下载到与某张 Wallpaper Engine 视频壁纸的视频内容相同的文件，不再把这张壁纸的来源和详情改成下载插件的（改了之后壁纸属性面板与详情会失效）；现在只补画册、标签并计入去重。
 - 场景壁纸的材质参数按 Wallpaper Engine 的规则取值：单个数字填满颜色 / 向量的每个分量，用逗号分隔的数值也能读到，类型不对的值（如给数值参数写了文字或开关）不再被硬塞进去，运行中改属性也不会残留旧分量；两个着色器阶段共用的同名参数取片元着色器的默认值。目前能渲染的场景画面不变，模糊、滚动等以后开放的效果不会再缺一个方向。
 - 在图库预览的网页或场景壁纸上按住 Ctrl 滚动滚轮，不再把整个应用一起放大缩小；以前这样缩放过的，下次打开时自动恢复原大小。
@@ -125,6 +138,10 @@
 - 新增 dev 工具 `kabegame-dev`：vite 插件（`scripts/kabegame-dev/`）持有到 app 的唯一一条 CDP 连接（桌面读 CDP 端口登记，安卓经 adb 现找）与宿主句柄、控制台流、长任务，对外提供 `/__kabegame_dev/*` 的 REST；stdio MCP `apps/kabegame-dev-mcp/`（`.mcp.json` 的 `kabegame-dev`，Deno 直接跑）提供两层探活、一对一工具与 `render_scene` / `hash_baseline` / `projects_import` / `hash_compare` / `app_log` 等封装，typed 客户端 `src/client.ts` 也供脚本使用。`kabegame-chromium` 去掉 playwright 与 `driver.sh` / `cdp.mjs`，`kabegame-plugin` 在 dev app 里跑任务的脚本改为 Deno 的 `app-run.ts`；不经 vite 直接跑的 dev 二进制不再能被发现。
 
 ### Changed
+- 壁纸设置目标化（多显示器壁纸的第一期，目前只有「所有显示器同一张」可用）：轮播路径 / 位置、样式、过渡、当前壁纸从 7 个扁平键并入 `wallpaperTargets: { [目标 id]: 配置 }`（设置迁移 v005，样式与过渡按壁纸模式存），新增 `wallpaperDisplayMode` / `wallpaperDefaultScreen`；轮播开关与间隔仍是全局键，到点对每个活跃目标各切一张，`rotate(Option<目标>)` 可只切一个。manager trait 的 `set_wallpaper` 带 `Placement`，删除 `set_style` / `set_transition` / `set_wallpaper_path`，后端不再反读设置；`get_wallpaper_capabilities` 改为「壁纸模式 → 显示器模式各自的可用性 / 样式 / 过渡」。壁纸命令加可选 `target`，新增 `get_wallpaper_targets`、`get/set_wallpaper_display_mode`、`get/set_wallpaper_default_screen`、`forget_wallpaper_target`、`list_wallpaper_screens`，删除 `get_wallpaper_rotation_path` / `get_wallpaper_rotation_style` / `get_wallpaper_rotation_transition` / `get_wallpaper_style_by_mode` / `get_wallpaper_transition_by_mode`。前端经 `useWallpaperTarget` 读写目标。Android Worker 改读 `wallpaperTargets.multiple`。详见 `cocs/wallpaper/MULTI_SCREEN.md`。
+- 多显示器壁纸第二期：新增显示器枚举 `wallpaper/screens.rs`（`ScreenInfo`：平台持久标识、左上原点的平台桌面坐标、物理像素分辨率、缩放、主屏；进程内缓存 + watcher 线程，2 s 轮询、系统重排通知只负责唤醒、快照稳定 300 ms 才提交），**目前只有 macOS 有平台实现**（`NSScreen` + display UUID），其余平台列表为空；变化时依次换缓存、调 `WallpaperController::on_screens_changed()`（只重算布局与补种目标，不重新输出壁纸、不碰轮播计时）、发事件 `wallpaper-screens-change { screens }`，`list_wallpaper_screens` 返回真实数据。前端在线屏 `useWallpaperScreens` 全应用一份并跟随事件；设置页壁纸分区分三层，新增 `WallpaperDisplayModeSetting`（照能力表置灰并显示原因）与 `WallpaperScreenLayout`（几何为纯函数 `layoutScreens`）；`KbSegmentedControl` 的选项支持 `disabled` / `tip`。能用的显示器模式仍只有 `multiple`。详见 `cocs/wallpaper/MULTI_SCREEN.md`。
+- 多显示器壁纸第三期后半：目标选择弹窗 `pickWallpaperTarget({ action })`（`composables/useWallpaperTargetPicker.ts` + 挂在 `App.vue` 的 `WallpaperTargetPickerHost.vue`，只有一个活跃目标时不弹），图库「设为壁纸」、画册「设为轮播」、查询行「用当前视图轮播」先选目标再带 `target` 调命令；`setWallpaperByImageIdWithModeFallback` 接受目标并在引导切模式后按后端的显示器模式重判目标是否仍活跃；轮播来源标记区分「有目标命中」与「全部命中」（`useWallpaperRotationSources` + `rotatingTargetIds`）。后端把托盘「下一张」的选目标规则抽成纯函数 `target_for_cursor`（行为不变，补单测与一条 debug 日志），切壁纸模式的样式沿用改为 `carry_to_mode`：只在目标的新模式名下还没有值时才带过去。`WallpaperScreenLayout` 新增 `confirm` 事件，可用宽度改量一个高度恒为 0 的元素（在对话框里挂载时不再触发 `ResizeObserver loop`）。见 `cocs/wallpaper/MULTI_SCREEN.md`。
+- app IPC 协议升到 v5：轮播路径 / 样式 / 过渡 / 当前壁纸的读写变体新增可选 `target`，删除 `SettingsGetWallpaperStyleByMode`、`SettingsGetWallpaperTransitionByMode`、`SettingsSwapStyleTransitionForModeSwitch`；经 IPC 设样式 / 过渡与 Tauri 命令同一实现。详见 `cocs/cli/CLI_IPC.md`。
 - `http_server.rs` 无 `Range` 的整文件响应改为流式读盘（`Body::from_stream`，带 `Content-Length`），不再整份读进内存；`/file` 对 WPE 行由固定 404 改为文件清单 / 目录内文件（`wpe` feature，Web 版仍 404）。
 - 文件夹同步：`FullDirHook::on_subdir`、`handle_subdirs`（含目录未变的快速路径）与 `fs_batch::process_batch` 不再为可入库的 WPE 壁纸目录建子画册，监听批次的 diff 准入放宽到壁纸目录与已消失的 WPE 行路径。
 - 媒体分类 provider 的属性新增 `type_not_glob2`（分三类互补：`video/*`、`x-wpe/*`、其余），`gallery_media_type_router` 新增 `x-wpe` resolve，列举不再补 0 且只按字母序；前端以 `GALLERY_MEDIA_KINDS` 枚举分类。

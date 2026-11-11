@@ -727,7 +727,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
     {
       title: "应用状态快照",
       description:
-        "当前壁纸、模式、暂停、启用、场景后处理、过渡、样式、轮播、路由、现有场景宿主。验收前后各取一次核对不留痕迹。",
+        "当前壁纸、模式、暂停、启用、场景后处理、显示器模式、壁纸目标（各目标的轮播路径 / 位置 / 样式 / 过渡 / 当前壁纸）、轮播、路由、现有场景宿主。验收前后各取一次核对不留痕迹。",
       inputSchema: {},
       annotations: READ_ONLY,
     },

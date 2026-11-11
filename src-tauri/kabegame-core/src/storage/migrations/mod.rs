@@ -82,6 +82,7 @@ mod v048_backfill_jobs;
 pub(crate) mod v049_images_type_normalized;
 mod v050_task_retry;
 mod v051_wpe_dir_hash;
+mod v052_image_palette;
 
 use backfill::{Backfill, BackfillCtx};
 use rusqlite::Connection;
@@ -110,6 +111,64 @@ CREATE TABLE IF NOT EXISTS backfill_jobs (
     updated_at    INTEGER NOT NULL
 );
 "#;
+
+/// 色桶表与「图片 × 色桶 → 距离」关系表，v052 迁移与 [`init::create_all_tables`] 共用。
+///
+/// 关系表的不变量：每张图对每个色桶恒有一行（没有色盘的图距离是 65536）。
+pub const COLOR_TABLES_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS color_buckets (
+    rgb        INTEGER PRIMARY KEY,          -- 0xRRGGBB
+    key        TEXT UNIQUE,                  -- 基本色桶的名称键（red…）；用户保存的色桶为 NULL
+    position   INTEGER NOT NULL,             -- 显示顺序
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS image_color_distances (
+    image_id   INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    bucket_rgb INTEGER NOT NULL REFERENCES color_buckets(rgb) ON DELETE CASCADE,
+    distance   INTEGER NOT NULL,             -- 0..=65535；65536 = 没有色盘
+    PRIMARY KEY (image_id, bucket_rgb)
+) WITHOUT ROWID;
+"#;
+
+/// 按色桶排序用的索引：按色桶取一片，片内 `(distance, image_id)` 即排序键。
+/// 迁移里放在给存量图铺行之后建（先按主键顺序批量插入，再一次建好二级索引）。
+pub const COLOR_DISTANCE_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_image_color_distances_bucket
+        ON image_color_distances(bucket_rgb, distance, image_id);";
+
+/// 基本色桶 `(名称键, 0xRRGGBB)`，数组下标即显示顺序。发版后不宜再改 rgb：
+/// 改它等于换色桶，要迁移重算这些色桶的关系行。
+///
+/// 黄 / 绿 / 青不取纯色（`ffff00` / `00ff00` / `00ffff`）：纯色太亮太艳，图库里真正的黄绿青离它们
+/// 反而远，纯白图在这三个桶里会排到全库前 5%–15%；换成图库里实际出现的明度后，白图退到
+/// 40% / 96% / 84% 的位置，绿桶的前几十张也从黄绿变成真正的绿。
+pub const BUILTIN_COLOR_BUCKETS: [(&str, u32); 12] = [
+    ("red", 0xff0000),
+    ("orange", 0xff8000),
+    ("yellow", 0xe6c200),
+    ("green", 0x2e9e3f),
+    ("cyan", 0x1fb5b5),
+    ("blue", 0x0000ff),
+    ("purple", 0x8000ff),
+    ("pink", 0xff80c0),
+    ("brown", 0x804000),
+    ("black", 0x000000),
+    ("white", 0xffffff),
+    ("gray", 0x808080),
+];
+
+/// 写入基本色桶种子（`INSERT OR IGNORE`，可重复执行）。v052 迁移与 [`init::create_all_tables`] 共用。
+pub fn seed_builtin_color_buckets(conn: &Connection) -> Result<(), String> {
+    let mut insert = conn
+        .prepare("INSERT OR IGNORE INTO color_buckets (rgb, key, position) VALUES (?1, ?2, ?3)")
+        .map_err(|e| format!("prepare color bucket seed: {e}"))?;
+    for (position, (key, rgb)) in BUILTIN_COLOR_BUCKETS.iter().enumerate() {
+        insert
+            .execute(rusqlite::params![i64::from(*rgb), key, position as i64])
+            .map_err(|e| format!("seed color bucket {key}: {e}"))?;
+    }
+    Ok(())
+}
 
 /// `run_pending` 上报的启动进度。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,13 +455,20 @@ const MIGRATIONS: &[Migration] = &[
         up: v051_wpe_dir_hash::up,
         min_backfill_version: None,
     },
+    // 色盘列、色桶表与关系表；同时登记回填作业 image_palette
+    Migration {
+        version: 52,
+        name: "image_palette",
+        up: v052_image_palette::up,
+        min_backfill_version: None,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 51;
+pub const LATEST_VERSION: u32 = 52;
 
 pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

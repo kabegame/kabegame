@@ -103,7 +103,9 @@ CREATE TABLE images (
     -- 宽高比数值，SQLite 随 width/height 自动维护（同 v036）
     aspect_ratio          REAL GENERATED ALWAYS AS (
         CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END
-    ) VIRTUAL
+    ) VIRTUAL,
+    -- 色盘 JSON `[[rgb, 百分比], …]`，NULL = 没有色盘（同 v052）
+    palette               TEXT
 );
 -- 同 v049；按 type 过滤的分页查询不要写成可走此索引的形态。
 CREATE INDEX idx_images_type                   ON images(type);
@@ -248,4 +250,117 @@ CREATE INDEX idx_task_logs_task_id ON task_logs(task_id);
     // ───────────── backfill_jobs（v048，与迁移共用 DDL） ─────────────
     conn.execute_batch(super::BACKFILL_JOBS_DDL)
         .expect("Failed to create backfill_jobs");
+    // ───────────── color_buckets / image_color_distances（v052，与迁移共用 DDL 与种子） ─────────────
+    // 全新安装没有存量图：不铺行，也不登记回填作业。
+    conn.execute_batch(super::COLOR_TABLES_DDL)
+        .expect("Failed to create color tables");
+    conn.execute_batch(super::COLOR_DISTANCE_INDEX_DDL)
+        .expect("Failed to create idx_image_color_distances_bucket");
+    super::seed_builtin_color_buckets(conn).expect("Failed to seed builtin color buckets");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_all_tables;
+    use rusqlite::Connection;
+
+    /// 库里与色盘相关的全部结构与数据：`sqlite_master` 里两张表与索引的建表语句、
+    /// `images.palette` 的列定义、色桶行。
+    fn color_schema(
+        conn: &Connection,
+    ) -> (
+        Vec<(String, String)>,
+        (String, i64, Option<String>),
+        Vec<(i64, Option<String>, i64, i64)>,
+    ) {
+        let objects = conn
+            .prepare(
+                "SELECT name, sql FROM sqlite_master
+                  WHERE tbl_name IN ('color_buckets', 'image_color_distances')
+                    AND name NOT LIKE 'sqlite_%'
+                  ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let palette_column = conn
+            .query_row(
+                "SELECT type, \"notnull\", dflt_value FROM pragma_table_xinfo('images')
+                  WHERE name = 'palette'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let buckets = conn
+            .prepare("SELECT rgb, key, position, created_at FROM color_buckets ORDER BY rgb")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        (objects, palette_column, buckets)
+    }
+
+    fn master_dump(conn: &Connection) -> Vec<(String, String, Option<String>)> {
+        conn.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// 全新建库与「旧库 + v052」在色盘相关的表、索引、列与种子上逐项一致。
+    #[test]
+    fn fresh_schema_matches_an_upgraded_database_for_color_tables() {
+        let fresh = Connection::open_in_memory().unwrap();
+        create_all_tables(&fresh);
+
+        // 旧库：v051 时 images 还没有 palette 列，也没有两张色盘表
+        let upgraded = Connection::open_in_memory().unwrap();
+        upgraded
+            .execute_batch(
+                "CREATE TABLE images (
+                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                     local_path TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+        super::super::v052_image_palette::up(&upgraded).unwrap();
+
+        let fresh_schema = color_schema(&fresh);
+        assert_eq!(fresh_schema, color_schema(&upgraded));
+        assert_eq!(
+            fresh_schema.0.len(),
+            3,
+            "两张表 + 一个索引: {:?}",
+            fresh_schema.0
+        );
+        assert_eq!(fresh_schema.2.len(), 12);
+        // 全新安装没有存量图：不铺行、不登记回填
+        let rows: i64 = fresh
+            .query_row("SELECT COUNT(*) FROM image_color_distances", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0);
+        let jobs: i64 = fresh
+            .query_row("SELECT COUNT(*) FROM backfill_jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(jobs, 0);
+    }
+
+    /// 在全新建出的库上再跑 v052 是空操作：整份 schema 与色桶行都不变。
+    #[test]
+    fn v052_is_a_noop_on_a_fresh_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_all_tables(&conn);
+        let before = (master_dump(&conn), color_schema(&conn));
+        super::super::v052_image_palette::up(&conn).unwrap();
+        assert_eq!(before, (master_dump(&conn), color_schema(&conn)));
+    }
 }

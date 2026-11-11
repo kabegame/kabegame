@@ -67,7 +67,26 @@ export function gallerySortFieldLabel(field: GallerySortField, t: TFn): string {
       return t("gallery.byAlbumDefaultSort");
     case "random":
       return t("gallery.sortByRandom");
+    // 两个颜色字段在界面上是同一个维度
+    case "by-color":
+    case "by-any-color":
+      return t("gallery.sortByColor");
   }
+}
+
+/** `colorLabel` 需要的色桶信息：基本色桶带名称键（`red` 等），用户保存的色桶没有。 */
+export interface ColorBucketLabelSource {
+  hex: string;
+  key?: string | null;
+}
+
+/**
+ * 一个颜色的显示名：基本色桶用它的名字（「红」），其它颜色（用户保存的色桶、没保存的颜色）用 `#rrggbb`。
+ * `hex` 是六位小写十六进制，不带前缀。
+ */
+export function colorLabel(hex: string, buckets: readonly ColorBucketLabelSource[], t: TFn): string {
+  const key = buckets.find((bucket) => bucket.hex === hex)?.key;
+  return key ? t(`gallery.colorBucket.${key}`) : `#${hex}`;
 }
 
 /** 搜索维度（勾选项）的名字：搜索下拉与收藏视图的组合展示共用。 */
@@ -105,6 +124,9 @@ export function gallerySortOrderLabels(field: GallerySortField, t: TFn): { asc: 
       };
     case "random":
       return { asc: t("gallery.byRandomAsc"), desc: t("gallery.byRandomDesc") };
+    case "by-color":
+    case "by-any-color":
+      return { asc: t("gallery.byColorAsc"), desc: t("gallery.byColorDesc") };
   }
 }
 

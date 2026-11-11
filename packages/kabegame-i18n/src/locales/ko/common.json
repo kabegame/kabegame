@@ -76,6 +76,8 @@
   "shareFailed": "공유에 실패했습니다",
   "openFolderFailed": "폴더를 열지 못했습니다",
   "wallpaperSetSuccess": "배경화면 설정 완료",
+  "wallpaperSetSuccessOn": "\"{screen}\"의 배경화면으로 설정했습니다",
+  "listSeparator": ", ",
   "wallpaperSetFailed": "배경화면 설정 실패",
   "addToAlbumFailed": "앨범에 이미지 추가 실패",
   "exportFailed": "내보내기 실패",

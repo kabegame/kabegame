@@ -10,7 +10,7 @@
 
 ## 当前 DSL 路由与行查询
 
-画廊过滤、排序、分页共用 `gallery_router`，它不贡献字段；`gallery_route` 只枚举 21 个列表字段，
+画廊过滤、排序、分页共用 `gallery_router`，它不贡献字段；`gallery_route` 只枚举 22 个列表字段（末尾的 `palette` 是色盘），
 并将 list / resolve 委托给窄路由。所有 hide、搜索、画册、任务、畅游等子 provider 的 delegate 回到
 `gallery_router`，不会给窄查询重新补宽列。images 根仍只投影 `images.id AS id`。
 
@@ -262,6 +262,24 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
     LEFT JOIN 不论用不用都逐行执行（聚合里也不会被 SQLite 的 noop-join 优化剪掉）。100 万图 `gallery/all` COUNT 约 1.7s → 0.86s。
   - **为什么不是不相关 `IN` / `NOT IN`**：每条查询都要先物化整个集合。测试只在集合小时占优；隐藏 50%、收藏 30% 时
     第 1 页 2.5ms → 57ms。EXISTS 每行一次主键探测，翻页与 JOIN 同价且不受集合大小影响。
+
+## 排序维度（`sort/<段>`）
+
+`gallery_sort_router`（`providers/dsl/images/gallery/sort/`）进入时先经 `kb_co_provider` 清空上游排序，再由具体的
+排序 provider 贡献；各排序都以 id 收尾保证全序，`_kb_desc` 整体翻转。
+
+| 段 | 形态 | 说明 |
+|---|---|---|
+| `by-id`、`by-time`、`by-size`、`by-name`、`by-aspect`、`by-set-time`、`by-album-order` | 静态 list 项 | `by-album-order` 依赖画册成员 join 的别名，只在画册路径下有意义 |
+| `random-<seed>` | resolve 正则 | 按宿主函数 `kb_rand(seed, id)` 排序，对全部候选行求值再排序 |
+| `by-color_0x<rrggbb>` | resolve 正则 | 色桶：INNER JOIN 关系表 `image_color_distances`，按 `(distance, image_id)` 沿索引读；只认 `color_buckets://` 里的颜色，其它颜色是空集 |
+| `by-any-color_0x<rrggbb>` | resolve 正则 | 任意颜色：按宿主函数 `kb_palette_distance(images.palette, 颜色)` 现算再排序，和随机同一类代价 |
+
+两个颜色段对同一个颜色给出同一个顺序，没有色盘的图排在最后、不丢行；**用哪个由调用方选**，路由不判断颜色是不是
+色桶。前端把它们当成一个维度「颜色」：各页 `sortFeatures` 里只列 `"by-color"`（画廊、画册、任务详情、畅游图片
+四处都有），实际用哪个字段由 `colorSortFor` 按色桶列表决定，色桶列表变化时 `GalleryQueryBar` 校正当前排序段。
+`list_pathql_entry("images://gallery/sort")` 只能列出静态项，参数化的三种段要看路由的 `note`。色盘、距离、
+两个段的 SQL 与代价详见 [COLOR_PALETTE.md](COLOR_PALETTE.md)。
 
 ## 抓取时间分组（gallery_time / main_date_browse）
 

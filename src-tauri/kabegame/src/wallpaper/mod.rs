@@ -2,12 +2,14 @@ pub mod manager;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod ping;
 pub mod rotator;
+// 显示器枚举与热插拔 watcher（目前只有 macOS 有平台实现，其余平台列表恒为空）
+pub mod screens;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod window;
 #[cfg(target_os = "macos")]
 pub mod window_mount_macos;
-// 桌面网页壁纸（x-wpe/web）的 Windows 桌面鼠标转发
-#[cfg(target_os = "windows")]
+// 桌面网页 / 场景壁纸的桌面鼠标转发
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod input_forward;
 // 网页壁纸目录索引：file: 闸门与 wpe_web_pull_state 的数据源
 #[cfg(feature = "wpe")]
@@ -27,6 +29,30 @@ pub use manager::WallpaperController;
 use kabegame_core::wpe::{read_project, WpeKind};
 use std::path::{Path, PathBuf};
 use url::Url;
+
+/// 壁纸窗口的 label 池：窗口模式下每块在线屏一个窗口，label 从这里取（先到先得，同一块屏在窗口存续期间不换）。
+///
+/// 用固定池而不是按屏动态起名：ACL 特赦（`Builder::acl_exempt_webview`）在 Builder 期登记，capability 的窗口列表
+/// 也是静态的。超过 8 块屏只给前 8 块开窗口。本常量在没有窗口模式的平台上也编译：`lib.rs` 的特赦登记与
+/// 场景宿主 capability 都要用它，多登记几个不存在的 label 没有影响。
+///
+/// 新增或改名时同步 `capabilities/main.json(.handlebars)`、`capabilities/wpe-web.json` 的 `windows`
+/// （有单测比对）。
+pub const WALLPAPER_LABELS: [&str; 8] = [
+    "wallpaper",
+    "wallpaper-1",
+    "wallpaper-2",
+    "wallpaper-3",
+    "wallpaper-4",
+    "wallpaper-5",
+    "wallpaper-6",
+    "wallpaper-7",
+];
+
+/// `label` 是不是壁纸窗口。凡是按 label 判断「调用方 / 这个窗口是不是壁纸窗口」的地方都用它。
+pub fn is_wallpaper_label(label: &str) -> bool {
+    WALLPAPER_LABELS.contains(&label)
+}
 
 /// `path` 若是网页壁纸（`x-wpe/web`）目录，解析出规范化目录与入口的 `file://` URL；其它路径返回 `None`。
 ///
@@ -65,9 +91,47 @@ fn web_entry_on_platform(supported: bool, path: &Path) -> Result<Option<(PathBuf
 
 #[cfg(test)]
 mod tests {
-    use super::web_entry_on_platform;
+    use super::{is_wallpaper_label, web_entry_on_platform, WALLPAPER_LABELS};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn wallpaper_labels_are_a_fixed_pool() {
+        assert_eq!(WALLPAPER_LABELS[0], "wallpaper");
+        for (index, label) in WALLPAPER_LABELS.iter().enumerate().skip(1) {
+            assert_eq!(*label, format!("wallpaper-{index}"));
+        }
+        assert!(is_wallpaper_label("wallpaper"));
+        assert!(is_wallpaper_label("wallpaper-7"));
+        assert!(!is_wallpaper_label("wallpaper-8"));
+        assert!(!is_wallpaper_label("main"));
+        assert!(!is_wallpaper_label("wallpaper-"));
+    }
+
+    /// 静态 capability 里的窗口列表必须覆盖整个池（主窗口另算）：池里的窗口少了哪个，那个窗口的插件权限
+    /// 或网页壁纸 iframe 的 IPC 就会被 ACL 拒绝。
+    #[test]
+    fn capability_files_list_every_wallpaper_label() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        // main.json 由 main.json.handlebars 生成，两份都要查；生成物可能不在（未跑过构建），不在就跳过
+        for name in ["main.json.handlebars", "main.json", "wpe-web.json"] {
+            let Ok(text) = fs::read_to_string(dir.join(name)) else {
+                assert_ne!(name, "main.json.handlebars", "模板必须存在");
+                continue;
+            };
+            let line = text
+                .lines()
+                .find(|line| line.trim_start().starts_with("\"windows\""))
+                .unwrap_or_else(|| panic!("{name} 没有 windows 列表"));
+            let listed: Vec<&str> = line
+                .split('"')
+                .skip(3)
+                .step_by(2)
+                .filter(|label| *label != "main")
+                .collect();
+            assert_eq!(listed, WALLPAPER_LABELS, "{name}");
+        }
+    }
 
     /// 临时目录：`<tmp>/kabegame-web-entry-<name>-<pid>/`，写入 `project.json` 与入口文件。
     fn fixture(name: &str, kind: &str, file: &str) -> PathBuf {

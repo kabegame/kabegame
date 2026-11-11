@@ -141,14 +141,9 @@ pub fn toggle_image_favorite(image_id: String, favorite: bool) -> Result<Value, 
     Ok(Value::Null)
 }
 
-/// 图片被移出图库后，若它正是当前壁纸，则清空该设置，避免留下悬空引用。
+/// 图片被移出图库后，把所有壁纸目标里指向它的当前壁纸清空，避免留下悬空引用。
 fn clear_current_wallpaper_if_removed(removed_ids: &[String]) {
-    let Some(current) = Settings::global().get_current_wallpaper_image_id() else {
-        return;
-    };
-    if removed_ids.iter().any(|id| id == &current) {
-        let _ = Settings::global().set_current_wallpaper_image_id(None);
-    }
+    let _ = Settings::global().clear_wallpaper_targets_current_images(removed_ids);
 }
 
 pub async fn delete_image(image_id: String) -> Result<Value, String> {

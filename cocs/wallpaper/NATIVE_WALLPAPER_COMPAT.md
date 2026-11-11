@@ -24,9 +24,16 @@ Linux 和 Windows 的 `NativeWallpaperManager` 在把路径交给系统前统一
 4. WebP、AVIF、HEIC、HEIF 等格式强制转码为 JPEG（无 alpha）或 PNG（有 alpha），再落库。
 5. 查询、转码或落库失败时记录警告并回退原路径，保持 best-effort 行为。
 
-Linux 修改原生壁纸样式时会重新应用当前壁纸，因此 GNOME 和 Plasma 的样式路径也经过
-同一解析器。Windows 样式重应用会回到 `set_wallpaper_path`，自然复用该流程。window、
-Plasma 插件、macOS 与 Android manager 不接入此逻辑。
+原生后端的输出只有一个入口 `set_wallpaper`，设图、轮播、启动恢复、切换壁纸模式都走它；
+Windows / Linux 在其中的 `set_all` 里解析兼容副本。修改壁纸样式不再由后端自己重设壁纸：
+命令层取该壁纸目标的当前壁纸，带上新样式再调一次 `set_wallpaper`
+（`WallpaperController::reapply_target`），所以样式重应用自然经过同一解析器。
+
+window、Plasma 插件、macOS 与 Android 不接入此逻辑。macOS 的原生后端不走 `set_all`，而是
+经 `NSWorkspace` 逐屏设桌面图片（`manager/native_mac.rs`），WebP、AVIF、HEIC 由系统自己
+解码，直接交原图。以后给 Windows / Linux 的原生后端加逐屏输出（`Placement::One`）时，
+要在那条路径上同样先调 `ensure_native_wallpaper_path`。目标与布置见
+[MULTI_SCREEN.md](MULTI_SCREEN.md)。
 
 ## 删除清理
 

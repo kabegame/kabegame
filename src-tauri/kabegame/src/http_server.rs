@@ -656,6 +656,7 @@ mod tests {
                     album_order: None,
                     compatible_path: None,
                     post_url: None,
+                    palette: None,
                 })
                 .unwrap();
         }

@@ -1,0 +1,17 @@
+{
+    "namespace": "kabegame",
+    "name": "color_buckets_root_provider",
+    "note": "Color buckets with precomputed distances, used by images://…/sort/by-color_0x<rrggbb>. Rows: rgb (integer 0xRRGGBB), key (built-in name such as red; null for buckets saved by the user), position. For a color that is not listed here use sort/by-any-color_0x<rrggbb>.",
+    "query": {
+        // 色桶表很小，前端的色桶面板整张读；逐列枚举，不带 created_at。
+        "fields": [
+            { "sql": "color_buckets.rgb", "as": "rgb" },
+            { "sql": "color_buckets.key", "as": "key" },
+            { "sql": "color_buckets.position", "as": "position" }
+        ],
+        "order": [
+            { "sql": "color_buckets.position", "order": "asc" },
+            { "sql": "color_buckets.rgb", "order": "asc" }
+        ]
+    }
+}
