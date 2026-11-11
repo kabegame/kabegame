@@ -226,6 +226,8 @@ async fn handle_organize_start(
                 regen_thumbnails,
                 regen_compatible: false,
                 backfill_native_metadata: false,
+                // CLI 没有整理命令，IPC 请求也不带这一项
+                recompute_palette: false,
                 delete_source_files,
                 offset,
                 limit,

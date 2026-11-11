@@ -116,9 +116,9 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 - [gallery/COLOR_PALETTE.md](gallery/COLOR_PALETTE.md)
   - 主题：壁纸色盘（最多 5 个代表色 + 占比，`images.palette` 的 JSON 文本）与按颜色排序。
-    - **提取**：`media::palette` 的四步（16×16 区域平均 → 从包围盒中心向外按合并半径收点、成员取平均 → 再并一遍 → 按占比取前几个）与各自的理由；各类型的来源（图片读缩略图、GIF 原文件抽帧、视频均匀抽 8 帧、WPE 网页 / 场景取 `schemecolor` 作者值再退到预览图）；常量及依据。
+    - **提取**：`media::palette` 的四步（16×16 区域平均 → 按整张图的平均彩度定合并半径 → 从最密处取种子、按半径收点、成员取平均 → 再并一遍 → 按占比取前几个、再给鲜艳色留一个名额）与各自的理由；各类型的来源（图片读缩略图、GIF 原文件抽帧、视频均匀抽 8 帧、WPE 网页 / 场景取 `schemecolor` 作者值再退到预览图）；常量及依据。
     - **距离**：OKLab 色差（明度折半）按占比加权平均，0–65535，65536 留给没有色盘；算例与量程的理由。
-    - **存储**：色桶表 `color_buckets`（主键即 rgb，12 个基本色桶 + 用户保存的最多 24 个）、关系表 `image_color_distances`，「每张图对每个色桶恒有一行」的不变量与维持它的三处写入（v052 铺行、`add_image`、保存色桶），删图 / 删色桶；v052 与回填作业 `image_palette`（只处理 `palette IS NULL` 的行，算不出的不重试）。
+    - **存储**：色桶表 `color_buckets`（主键即 rgb，12 个基本色桶 + 用户保存的最多 24 个）、关系表 `image_color_distances`，「每张图对每个色桶恒有一行」的不变量与维持它的三处写入（v052 铺行、`add_image`、保存色桶），删图 / 删色桶；v052 与回填作业 `image_palette`（只处理 `palette IS NULL` 的行，算不出的不重试）；整理的「重新计算代表色」（`recompute_palette`，与回填共用 `PaletteSourceRow` / `store_recomputed_palette`，算不出保留原色盘、没变不写，计数 `palettes_updated`）。
     - **查询**：两个排序段 `sort/by-color_0x<rrggbb>`（INNER JOIN 关系表、沿索引读、只认色桶）与 `sort/by-any-color_0x<rrggbb>`（宿主函数 `kb_palette_distance` 现算），两段同序、用哪个由调用方选；属性带 `0x` 是因为引擎会把像数字的属性值转成数字；`color_buckets://` 与 MCP 行的 `hex` 派生字段；列表字段 `palette`；实测耗时。
     - **命令与事件**：`add_color_bucket` / `delete_color_bucket`、错误码、`color-buckets-change`。
     - **前端**：`colorSortFor` 选段与色桶列表变化时的校正、排序下拉里就地展开的色桶面板、基本信息里的色带、回填补丁与字段依赖表的 `palette`。

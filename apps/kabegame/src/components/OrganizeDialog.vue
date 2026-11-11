@@ -58,6 +58,14 @@
           </div>
         </div>
         <div class="option-item">
+          <el-checkbox v-model="options.recomputePalette" />
+          <div class="option-content">
+            <div class="option-title">{{ $t("gallery.organizeRecomputePalette") }}</div>
+            <div class="option-desc">{{ $t("gallery.organizeRecomputePaletteDesc") }}</div>
+            <div class="option-slow-hint">{{ $t("gallery.organizeRecomputePaletteSlowHint") }}</div>
+          </div>
+        </div>
+        <div class="option-item">
           <el-checkbox v-model="options.deleteSourceFiles" />
           <div class="option-content">
             <div class="option-title">{{ $t("gallery.deleteSourceFiles") }}</div>
@@ -133,6 +141,14 @@
           </div>
         </div>
         <div class="option-item">
+          <el-checkbox v-model="options.recomputePalette" />
+          <div class="option-content">
+            <div class="option-title">{{ $t("gallery.organizeRecomputePalette") }}</div>
+            <div class="option-desc">{{ $t("gallery.organizeRecomputePaletteDesc") }}</div>
+            <div class="option-slow-hint">{{ $t("gallery.organizeRecomputePaletteSlowHint") }}</div>
+          </div>
+        </div>
+        <div class="option-item">
           <el-checkbox v-model="options.deleteSourceFiles" />
           <div class="option-content">
             <div class="option-title">{{ $t("gallery.deleteSourceFiles") }}</div>
@@ -175,6 +191,7 @@ interface OrganizeOptions {
   regenThumbnails: boolean;
   regenCompatible: boolean;
   backfillNativeMetadata: boolean;
+  recomputePalette: boolean;
   deleteSourceFiles: boolean;
   rangeStart: number | null;
   rangeEnd: number | null;
@@ -203,6 +220,7 @@ const options = reactive({
   regenThumbnails: true, // 默认开启补充缩略图
   regenCompatible: false, // 默认关闭（重量级操作，用户按需选择）
   backfillNativeMetadata: false, // 默认关闭（需逐个读取并解析文件）
+  recomputePalette: false, // 默认关闭（需逐张解码图片与视频）
   deleteSourceFiles: false,
 });
 
@@ -269,6 +287,7 @@ const handleConfirm = async () => {
     regenThumbnails: options.regenThumbnails,
     regenCompatible: options.regenCompatible,
     backfillNativeMetadata: options.backfillNativeMetadata,
+    recomputePalette: options.recomputePalette,
     deleteSourceFiles: options.deleteSourceFiles,
     rangeStart: null,
     rangeEnd: null,

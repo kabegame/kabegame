@@ -19,10 +19,16 @@
       </span>
       <span class="ml-auto min-w-0 truncate">
         {{
-          t("gallery.organizingDetail", {
-            removed: store.progress.removed,
-            regenerated: store.progress.regenerated,
-          })
+          showPalettes
+            ? t("gallery.organizingDetailWithPalette", {
+                removed: store.progress.removed,
+                regenerated: store.progress.regenerated,
+                palettes: store.progress.palettesUpdated,
+              })
+            : t("gallery.organizingDetail", {
+                removed: store.progress.removed,
+                regenerated: store.progress.regenerated,
+              })
         }}
       </span>
     </div>
@@ -30,6 +36,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { Close, FolderOpened } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useOrganizeStore } from "@/stores/organize";
@@ -37,4 +44,7 @@ import * as organizeService from "@/services/organize";
 
 const { t } = useI18n();
 const store = useOrganizeStore();
+
+/** 本次勾了「重新计算代表色」才显示代表色计数 */
+const showPalettes = computed(() => !!store.lastRunOptions?.recomputePalette || store.progress.palettesUpdated > 0);
 </script>

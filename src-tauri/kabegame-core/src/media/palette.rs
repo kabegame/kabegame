@@ -3,8 +3,9 @@
 //! 只有 [`compute_for_row`] 是异步的：它把同步的 [`compute`] 放进阻塞线程。
 //!
 //! 一帧画面 → 色盘分四步：[`sample_cells`]（切成 16×16 个区域取平均）→ [`merge_cells`]
-//! （从包围盒中心向外、按合并半径收点）→ [`remerge`]（把平均色相近的聚合点并回去）→
-//! [`select_top`]（按占比取前几个）。
+//! （从最密处开始取种子、按合并半径收点）→ [`remerge`]（把平均色相近的聚合点并回去）→
+//! [`select_top`]（按占比取前几个，再给一个更鲜艳的点缀色留名额）。合并半径每张图一个：
+//! 由全部区域色的平均彩度定（[`merge_radius_for`]），淡色的图用更小的半径。
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -19,13 +20,27 @@ use crate::media::image_type;
 pub const SAMPLE_SIZE: u32 = 512;
 /// 每边切成多少个区域：16×16 = 256 个区域，512 的图上每个 32×32 像素。
 pub const GRID: u32 = 16;
-/// 合并半径（`color_diff` 的单位）：聚合时离种子不超过它的区域色并进同一个聚合点，
-/// 再并时平均色相距不到它的两个聚合点并成一个。
+/// 合并半径的上限（`color_diff` 的单位）：聚合时离种子不超过半径的区域色并进同一个聚合点，
+/// 再并时平均色相距不到半径的两个聚合点并成一个。彩度够高的图就用它。
 pub const MERGE_RADIUS: f32 = 0.06;
+/// 合并半径的下限：整张图很淡（区域平均彩度 ≤ [`RADIUS_LOW_CHROMA`]）时用它。
+/// 淡粉与淡蓝的色差约 0.04–0.05，比上限小、比它大，用上限会并成一个颜色。
+const MIN_MERGE_RADIUS: f32 = 0.03;
+/// 整张图的区域平均彩度在这两个值之间时，半径从 [`MIN_MERGE_RADIUS`] 线性升到 [`MERGE_RADIUS`]。
+/// 全库 16×16 区域彩度的均值约 0.042；只剩 1 个颜色的淡色图的色盘彩度约 0.015。
+const RADIUS_LOW_CHROMA: f32 = 0.02;
+/// 见 [`RADIUS_LOW_CHROMA`]。
+const RADIUS_HIGH_CHROMA: f32 = 0.05;
 /// 色盘最多几个颜色。
 pub const MAX_COLORS: usize = 5;
-/// 累计占比超过它就不再取。
+/// 累计占比超过它就不再按面积取。
 pub const COVERAGE: f32 = 0.95;
+/// 鲜艳色名额的候选：面积占比不低于它（小于它的多是噪点）。
+const ACCENT_MIN_SHARE: f32 = 0.005;
+/// 鲜艳色名额的候选：彩度不低于它（OKLab 的 √(a²+b²)）。
+const ACCENT_MIN_CHROMA: f32 = 0.06;
+/// 鲜艳色名额的候选：彩度至少比留下的颜色里最鲜艳的那个高出这么多。
+const ACCENT_CHROMA_MARGIN: f32 = 0.02;
 /// 视频 / 动图抽几帧。
 pub const FRAME_SAMPLES: usize = 8;
 /// 区域的平均 alpha 低于它时不参与（透明背景）。
@@ -177,7 +192,7 @@ pub fn oklab_to_srgb(color: Oklab) -> u32 {
 
 /// 两个颜色的色差：OKLab 欧氏距离，明度差乘 [`LIGHTNESS_WEIGHT`]。
 ///
-/// 合并半径、到包围盒中心的距离、到参考色的距离共用这一个函数：「多近算同一个颜色」和
+/// 合并半径（含聚合时算密度的邻域）与到参考色的距离共用这一个函数：「多近算同一个颜色」和
 /// 「离色桶多远」是同一把尺。
 pub fn color_diff(x: Oklab, y: Oklab) -> f32 {
     let dl = (x.l - y.l) * LIGHTNESS_WEIGHT;
@@ -251,40 +266,33 @@ fn sample_cells(frame: &RgbaImage) -> Vec<Cell> {
     cells
 }
 
-/// 从包围盒中心向外聚合。
+/// 从最密处开始聚合。
 ///
-/// 1. 中心 = 全部点的包围盒中心（OKLab 各通道最小值与最大值的中点），整个过程不变。
-/// 2. 点按到中心的 `color_diff` 升序排一次（并列按输入下标，保证同一输入得到同一结果）。
-/// 3. 顺序扫：遇到还没被取走的点，就以它为种子，把剩余点里 `color_diff(种子, 点) <= MERGE_RADIUS`
+/// 1. 密度：每个点的密度 = 离它 `color_diff <= radius` 的点（含自身）的权重之和。
+///    O(n²)，只在开始时算一次（单帧至多 256 个点，8 帧视频至多 2048 个）。
+/// 2. 点按密度降序排一次（并列按输入下标，保证同一输入得到同一结果）。
+/// 3. 顺序扫：遇到还没被取走的点，就以它为种子，把剩余点里 `color_diff(种子, 点) <= radius`
 ///    的全部取走，产出一个聚合点：颜色 = 取走的点（含种子）按权重的 OKLab 平均，权重 = 它们的权重之和。
 ///
-/// 到中心的距离与合并半径用同一个 `color_diff`（明度折半）。输出按种子被取到的先后排列。
-fn merge_cells(cells: Vec<Cell>) -> Vec<Cell> {
-    let Some(first) = cells.first() else {
-        return Vec::new();
-    };
-    let mut low = first.color;
-    let mut high = first.color;
-    for cell in &cells {
-        low.l = low.l.min(cell.color.l);
-        low.a = low.a.min(cell.color.a);
-        low.b = low.b.min(cell.color.b);
-        high.l = high.l.max(cell.color.l);
-        high.a = high.a.max(cell.color.a);
-        high.b = high.b.max(cell.color.b);
+/// `radius` 是这张图的合并半径（[`merge_radius_for`]）。
+///
+/// 种子是剩下的点里原本最密的那个，落在色团的聚集处而不是边缘，最大的一块颜色先被完整收走。
+/// 密度不随取走的点更新。之前的种子取「离包围盒中心最近的点」，常落在色团朝向中心的边缘，
+/// 换成密度后只剩 1 个颜色的图少了约三分之一（见 `cocs/gallery/COLOR_PALETTE.md`）。
+/// 输出按种子被取到的先后排列。
+fn merge_cells(cells: Vec<Cell>, radius: f32) -> Vec<Cell> {
+    let mut density = vec![0.0f64; cells.len()];
+    for (first, x) in cells.iter().enumerate() {
+        density[first] += f64::from(x.weight);
+        for (offset, y) in cells[first + 1..].iter().enumerate() {
+            if color_diff(x.color, y.color) <= radius {
+                density[first] += f64::from(y.weight);
+                density[first + 1 + offset] += f64::from(x.weight);
+            }
+        }
     }
-    let center = Oklab {
-        l: (low.l + high.l) / 2.0,
-        a: (low.a + high.a) / 2.0,
-        b: (low.b + high.b) / 2.0,
-    };
-
-    let to_center: Vec<f32> = cells
-        .iter()
-        .map(|cell| color_diff(cell.color, center))
-        .collect();
     let mut order: Vec<usize> = (0..cells.len()).collect();
-    order.sort_by(|&x, &y| to_center[x].total_cmp(&to_center[y]).then(x.cmp(&y)));
+    order.sort_by(|&x, &y| density[y].total_cmp(&density[x]).then(x.cmp(&y)));
 
     let mut taken = vec![false; cells.len()];
     let mut clusters = Vec::new();
@@ -301,7 +309,7 @@ fn merge_cells(cells: Vec<Cell>) -> Vec<Cell> {
                 continue;
             }
             let cell = cells[index];
-            if color_diff(seed, cell.color) > MERGE_RADIUS {
+            if color_diff(seed, cell.color) > radius {
                 continue;
             }
             taken[index] = true;
@@ -325,21 +333,21 @@ fn merge_cells(cells: Vec<Cell>) -> Vec<Cell> {
     clusters
 }
 
-/// 把平均色相近的聚合点并回去：反复找平均色相距最近的一对，色差 < [`MERGE_RADIUS`] 就按权重
+/// 把平均色相近的聚合点并回去：反复找平均色相距最近的一对，色差 < `radius` 就按权重
 /// 并成一个（颜色取加权平均，留在下标小的那个位置上），直到最近的一对也不小于半径。
-/// 并列取下标小的一对。
+/// 并列取下标小的一对。`radius` 与 [`merge_cells`] 用的是同一个（这张图的合并半径）。
 ///
-/// [`merge_cells`] 里种子落在色团朝向中心的一侧，一块颜色常被拆成几个平均色几乎一样的聚合点，
-/// 占掉色盘的名额；这一步把它们并回去。并是连锁的，所以并完之后一个代表色可能盖住比两倍半径
-/// 更宽的一段颜色。聚合点通常只有几十个，朴素扫描即可（8 帧视频最多 2048 个区域色时实测
-/// 每个约 1.3 毫秒）。
-fn remerge(mut clusters: Vec<Cell>) -> Vec<Cell> {
+/// [`merge_cells`] 收成员用的是固定半径，比半径宽的一块颜色（渐变、略有明暗变化的大块同色）
+/// 会被拆成几个平均色几乎一样的聚合点，占掉色盘的名额；这一步把它们并回去。并是连锁的，
+/// 所以并完之后一个代表色可能盖住比两倍半径更宽的一段颜色。聚合点通常只有几十个，朴素扫描
+/// 即可（8 帧视频最多 2048 个区域色时实测每个约 1.3 毫秒）。
+fn remerge(mut clusters: Vec<Cell>, radius: f32) -> Vec<Cell> {
     loop {
         let mut closest: Option<(f32, usize, usize)> = None;
         for first in 0..clusters.len() {
             for second in first + 1..clusters.len() {
                 let diff = color_diff(clusters[first].color, clusters[second].color);
-                if diff < MERGE_RADIUS && closest.map_or(true, |(best, _, _)| diff < best) {
+                if diff < radius && closest.map_or(true, |(best, _, _)| diff < best) {
                     closest = Some((diff, first, second));
                 }
             }
@@ -361,40 +369,123 @@ fn remerge(mut clusters: Vec<Cell>) -> Vec<Cell> {
     }
 }
 
-/// 按权重降序（并列按 rgb 升序），累计占比 > [`COVERAGE`] 或取满 [`MAX_COLORS`] 即停。
-/// 百分比按全部聚合点的总权重算、四舍五入、至少为 1；被截掉的尾部不再分摊。
-fn select_top(clusters: Vec<Cell>) -> Option<Palette> {
+fn chroma(color: Oklab) -> f32 {
+    color.a.hypot(color.b)
+}
+
+/// 这张图的合并半径：全部区域色（多帧来源是全部帧的区域色一起）按权重的平均彩度，
+/// ≤ [`RADIUS_LOW_CHROMA`] 用 [`MIN_MERGE_RADIUS`]，≥ [`RADIUS_HIGH_CHROMA`] 用 [`MERGE_RADIUS`]，
+/// 中间线性。整张图一个半径，聚合、算密度与再并都用它。
+///
+/// 只按整张图定、不按每个点的彩度定：按点定时，彩色图里的浅色区（白、肤色、浅灰）也会被拆细，
+/// 把 5 个名额占满、点缀色挤掉（见 `cocs/gallery/COLOR_PALETTE.md`「调参对比」）。
+fn merge_radius_for(cells: &[Cell]) -> f32 {
+    let total: f32 = cells.iter().map(|cell| cell.weight).sum();
+    if total <= 0.0 {
+        return MERGE_RADIUS;
+    }
+    let mean = cells
+        .iter()
+        .map(|cell| chroma(cell.color) * cell.weight)
+        .sum::<f32>()
+        / total;
+    let t = ((mean - RADIUS_LOW_CHROMA) / (RADIUS_HIGH_CHROMA - RADIUS_LOW_CHROMA)).clamp(0.0, 1.0);
+    MIN_MERGE_RADIUS + (MERGE_RADIUS - MIN_MERGE_RADIUS) * t
+}
+
+/// 选取，两步：
+///
+/// 1. 按面积：按权重降序（并列按 rgb 升序），累计占比 > [`COVERAGE`] 或取满 [`MAX_COLORS`] 即停。
+/// 2. 鲜艳色名额：在没选上的聚合点里找同时满足下面几条的，取彩度最高的一个（并列取面积大的，
+///    再并列取排在前面的）：
+///    - 面积占比 ≥ [`ACCENT_MIN_SHARE`]；
+///    - 彩度 ≥ [`ACCENT_MIN_CHROMA`]，且比「留下的颜色」里最鲜艳的高出 [`ACCENT_CHROMA_MARGIN`]；
+///    - 与每个「留下的颜色」的色差都 ≥ 两倍 `radius`（这张图的合并半径）。
+///
+///    第 1 步不满 [`MAX_COLORS`] 个就追加，留下的颜色是全部已选；满了就换掉最后一个（面积最小的），
+///    留下的颜色是前 4 个。95% 的规则只管第 1 步：不满 5 个时即使已覆盖 95% 也会追加。
+///
+/// 百分比都是真实面积占比（按全部聚合点的总权重算、四舍五入、至少为 1），被截掉的尾部不再分摊。
+/// 没选上的聚合点面积都不大于第 1 步的末位，所以鲜艳色总排在最后，色盘仍按占比降序。
+/// 它面积小，对按颜色排序的距离影响很小，主要让色带上能看到画面里那一点鲜艳的颜色。
+fn select_top(clusters: Vec<Cell>, radius: f32) -> Option<Palette> {
     let total: f32 = clusters.iter().map(|cluster| cluster.weight).sum();
     if clusters.is_empty() || total <= 0.0 {
         return None;
     }
-    let mut entries: Vec<(u32, f32)> = clusters
+    // (rgb, 权重, 聚合点下标)
+    let mut entries: Vec<(u32, f32, usize)> = clusters
         .iter()
-        .map(|cluster| (oklab_to_srgb(cluster.color), cluster.weight))
+        .enumerate()
+        .map(|(index, cluster)| (oklab_to_srgb(cluster.color), cluster.weight, index))
         .collect();
     entries.sort_by(|x, y| y.1.total_cmp(&x.1).then(x.0.cmp(&y.0)));
 
-    let mut colors = Vec::with_capacity(MAX_COLORS);
+    let mut chosen: Vec<(u32, f32, usize)> = Vec::with_capacity(MAX_COLORS);
     let mut covered = 0.0f32;
-    for (rgb, weight) in entries {
-        let share = weight / total;
-        colors.push(PaletteColor {
-            rgb,
-            percent: (share * 100.0).round().clamp(1.0, 100.0) as u8,
-        });
-        covered += share;
-        if covered > COVERAGE || colors.len() == MAX_COLORS {
+    for entry in &entries {
+        chosen.push(*entry);
+        covered += entry.1 / total;
+        if covered > COVERAGE || chosen.len() == MAX_COLORS {
             break;
         }
     }
-    Some(Palette(colors))
+
+    let full = chosen.len() == MAX_COLORS;
+    let kept = if full {
+        &chosen[..MAX_COLORS - 1]
+    } else {
+        &chosen[..]
+    };
+    let kept_max = kept
+        .iter()
+        .map(|(_, _, index)| chroma(clusters[*index].color))
+        .fold(0.0f32, f32::max);
+    let accent = entries
+        .iter()
+        .filter(|(_, weight, index)| {
+            let color = clusters[*index].color;
+            let vividness = chroma(color);
+            !chosen.iter().any(|(_, _, other)| other == index)
+                && weight / total >= ACCENT_MIN_SHARE
+                && vividness >= ACCENT_MIN_CHROMA
+                && vividness >= kept_max + ACCENT_CHROMA_MARGIN
+                && kept
+                    .iter()
+                    .all(|(_, _, other)| color_diff(clusters[*other].color, color) >= 2.0 * radius)
+        })
+        .max_by(|x, y| {
+            chroma(clusters[x.2].color)
+                .total_cmp(&chroma(clusters[y.2].color))
+                .then(x.1.total_cmp(&y.1))
+                .then(y.2.cmp(&x.2))
+        })
+        .copied();
+    if let Some(accent) = accent {
+        if full {
+            chosen.pop();
+        }
+        chosen.push(accent);
+    }
+
+    Some(Palette(
+        chosen
+            .into_iter()
+            .map(|(rgb, weight, _)| PaletteColor {
+                rgb,
+                percent: ((weight / total) * 100.0).round().clamp(1.0, 100.0) as u8,
+            })
+            .collect(),
+    ))
 }
 
 fn palette_from_cells(cells: Vec<Cell>) -> Option<Palette> {
-    select_top(remerge(merge_cells(cells)))
+    let radius = merge_radius_for(&cells);
+    select_top(remerge(merge_cells(cells, radius), radius), radius)
 }
 
-/// 各帧的区域色合在一起，聚合一次、再并一次、选取一次。没有帧、或全部区域都透明时返回 `None`。
+/// 各帧的区域色合在一起，定一次半径、聚合一次、再并一次、选取一次。没有帧、或全部区域都透明时
+/// 返回 `None`。
 pub fn palette_from_frames<'a>(frames: impl Iterator<Item = &'a RgbaImage>) -> Option<Palette> {
     palette_from_cells(frames.flat_map(sample_cells).collect())
 }

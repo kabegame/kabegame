@@ -279,10 +279,14 @@ pub enum AppEvent {
     },
 
     /// 整理完成事件
+    #[serde(rename_all = "camelCase")]
     OrganizeFinished {
         removed: usize,
         regenerated: usize,
         backfilled: usize,
+        /// 「重新计算代表色」写回的张数（色盘有变化的）；旧版本的事件没有这个字段
+        #[serde(default)]
+        palettes_updated: usize,
         canceled: bool,
         error: Option<String>,
     },

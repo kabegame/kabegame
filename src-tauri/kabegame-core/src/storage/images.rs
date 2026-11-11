@@ -142,6 +142,130 @@ pub(crate) fn write_color_distances(
     Ok(())
 }
 
+/// 对已入库的图重算色盘要的一行。回填作业 `image_palette` 与整理的「重新计算代表色」共用：
+/// 读行（[`Self::query`]）→ 不持连接计算（[`Self::compute`]）→ 写回（[`store_recomputed_palette`]）。
+/// 来源规则只在 `media::palette::source_for_row` 一处。
+pub(crate) struct PaletteSourceRow {
+    pub(crate) id: i64,
+    pub(crate) local_path: String,
+    media_type: String,
+    thumbnail_path: String,
+    compatible_path: Option<String>,
+    /// WPE 网页 / 场景壁纸的 `schemecolor`（作者值，取自 metadata 里的 `project.json` 原文）。
+    scheme_color: Option<[u8; 3]>,
+}
+
+impl PaletteSourceRow {
+    /// 读 `SELECT … FROM images WHERE {where_tail}` 的行；`where_tail` 是 `WHERE` 之后的条件、排序与 LIMIT。
+    pub(crate) fn query(
+        conn: &rusqlite::Connection,
+        where_tail: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<Self>, String> {
+        let rows = conn
+            .prepare(&format!(
+                "SELECT id, type, local_path, thumbnail_path, compatible_path, metadata_id
+                   FROM images WHERE {where_tail}"
+            ))
+            .and_then(|mut stmt| {
+                stmt.query_map(params, |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| format!("Failed to read palette sources: {e}"))?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, media_type, local_path, thumbnail_path, compatible_path, metadata_id)| {
+                    let media_type = media_type.unwrap_or_default();
+                    let scheme_color = read_scheme_color(conn, &media_type, metadata_id);
+                    Self {
+                        id,
+                        local_path,
+                        media_type,
+                        thumbnail_path: thumbnail_path.unwrap_or_default(),
+                        compatible_path,
+                        scheme_color,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    /// 算色盘。尽力而为：文件缺失、解码失败都是 `None`。经 `compute_for_row`：Android 上
+    /// `content://` 的 fd 处理只在它里面。
+    pub(crate) async fn compute(&self) -> Option<Palette> {
+        crate::media::palette::compute_for_row(
+            &self.media_type,
+            &self.local_path,
+            &self.thumbnail_path,
+            self.compatible_path.as_deref(),
+            self.scheme_color,
+        )
+        .await
+    }
+}
+
+/// 网页 / 场景壁纸的代表色：读 metadata 里的 `project.json` 原文。属性解析在所有构建里都编译
+/// （`wpe::properties` 不随 `wpe` feature 门控），各平台对同一行算出同一个色盘。
+fn read_scheme_color(
+    conn: &rusqlite::Connection,
+    media_type: &str,
+    metadata_id: Option<i64>,
+) -> Option<[u8; 3]> {
+    use crate::media::image_type::{is_wpe_type, is_wpe_video_type};
+
+    if !is_wpe_type(Some(media_type)) || is_wpe_video_type(Some(media_type)) {
+        return None;
+    }
+    let data: String = conn
+        .query_row(
+            "SELECT data FROM metadata WHERE id = ?1",
+            params![metadata_id?],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()?;
+    let raw: Value = serde_json::from_str(&data).ok()?;
+    crate::wpe::properties::scheme_color_from_raw(&raw)
+}
+
+/// 把重算出的色盘写回：`palette` 列与它对全部色桶的距离。调用方负责事务（两者必须同一个事务）。
+///
+/// 不写的两种情况，都返回 `None`：读盘期间行被删掉或改指别处（`local_path` 守卫）；色盘与原来相同。
+/// 写了返回一条 `{ id, palette }` 字段补丁。
+pub(crate) fn store_recomputed_palette(
+    conn: &rusqlite::Connection,
+    row: &PaletteSourceRow,
+    palette: &Palette,
+) -> Result<Option<crate::ipc::events::ImageFieldPatch>, String> {
+    let json = palette.to_json();
+    let changed = conn
+        .execute(
+            "UPDATE images SET palette = ?1
+              WHERE id = ?2 AND local_path = ?3 AND palette IS NOT ?1",
+            params![json, row.id, row.local_path],
+        )
+        .map_err(|e| format!("Failed to store palette of image {}: {e}", row.id))?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    write_color_distances(conn, row.id, Some(palette))?;
+    Ok(Some(crate::ipc::events::ImageFieldPatch {
+        id: row.id.to_string(),
+        fields: serde_json::Map::from_iter([("palette".to_string(), Value::String(json))]),
+    }))
+}
+
 fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1007,6 +1131,37 @@ impl Storage {
 
     /// 写入一张图片行。同一个事务里写图片行（含 `palette` 列）与它对当前全部色桶的距离，
     /// 维持关系表「每张图对每个色桶恒有一行」的不变量；`image.palette` 解析不了时当作没有色盘。
+    /// 按 id 读重算色盘要的行（整理用）；不存在的 id 不出行，顺序按 id。
+    pub(crate) fn palette_source_rows(&self, ids: &[i64]) -> Result<Vec<PaletteSourceRow>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        // 整理一批 ≤ 100 行，占位符数量安全
+        let placeholders = vec!["?"; ids.len()].join(",");
+        PaletteSourceRow::query(
+            &conn,
+            &format!("id IN ({placeholders}) ORDER BY id"),
+            rusqlite::params_from_iter(ids.iter()),
+        )
+    }
+
+    /// 在一个事务里写回一张图重算出的色盘（见 [`store_recomputed_palette`]）；没写返回 `None`。
+    pub(crate) fn store_recomputed_palette(
+        &self,
+        row: &PaletteSourceRow,
+        palette: &Palette,
+    ) -> Result<Option<crate::ipc::events::ImageFieldPatch>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
+        let patch = store_recomputed_palette(&tx, row, palette)?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit palette: {}", e))?;
+        Ok(patch)
+    }
+
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 

@@ -109,14 +109,16 @@ DDL、索引与种子放在 `migrations/mod.rs`，`init::create_all_tables` 共�
 
 - 候选：`id > 游标 AND palette IS NULL`，每批 32 行。只处理没有色盘的行——v052 之后入库的图在 `Storage::add_image`
   里已经带着色盘。进度的总数同样是 `COUNT(*) WHERE palette IS NULL`。
-- `with_conn` 取候选（`x-wpe/web`、`x-wpe/scene` 的行另读 `metadata.data` 里的 `project.json` 原文取 `schemecolor`）→
-  `block_on` 里不持有连接逐行 `media::palette::compute_for_row`（来源规则与入库相同；Android 的 `content://` fd 处理
-  只在它里面）→ `ctx.commit` 里逐行 `UPDATE images SET palette = ? WHERE id = ? AND local_path = ?`，改到行了才
-  `write_color_distances`（读盘期间行被删或改指别处时不写）。
+- `with_conn` 取候选（`PaletteSourceRow::query`；`x-wpe/web`、`x-wpe/scene` 的行另读 `metadata.data` 里的
+  `project.json` 原文取 `schemecolor`）→ `block_on` 里不持有连接逐行 `PaletteSourceRow::compute`（即
+  `media::palette::compute_for_row`，来源规则与入库相同；Android 的 `content://` fd 处理只在它里面）→ `ctx.commit` 里
+  逐行 `store_recomputed_palette`：`UPDATE images SET palette = ? WHERE id = ? AND local_path = ? AND palette IS NOT ?`，
+  改到行了才 `write_color_distances`（读盘期间行被删或改指别处时不写）。这三步都在 `storage/images.rs`，整理的
+  「重新计算代表色」调的是同一份（见 `../gallery/COLOR_PALETTE.md`）。
 - 算出色盘且改到行的图各带一条 `{ id, palette }` 字段补丁；前端字段依赖表里 `palette` 只让按颜色排序的视图刷新，
   其它视图只打补丁（已打开的详情自己补上色带）。
 - 算不出色盘的行（文件不在、格式解不了）保持 `NULL` / 65536，不算失败、**不重试**；一批全都算不出时本批没有写入，
-  进度由 `run_to_completion` 提交。
+  进度由 `run_to_completion` 提交。之后要补算由用户在整理里勾「重新计算代表色」。
 - `platforms: || true`：图片用 `image` crate，视频用 FFmpeg（除 iOS 外都有）；`wpe::properties` 不随 `wpe` feature 门控。
 - 只读写 v052 引入的列与表以及此前就存在的列，没有迁移依赖它（`min_backfill_version` 为 `None`），只在进入界面后由
   `BackfillService` 后台跑；CLI 本地模式不跑。忙碌卡片副标题是 `header.backfill.image_palette`。

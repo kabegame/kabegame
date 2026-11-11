@@ -333,11 +333,21 @@ describe("按颜色排序", () => {
       expect(panel.props("buckets")).toEqual([red, saved]);
       expect(panel.props("selected")).toBeUndefined();
 
+      // 从时间倒序切过来：不沿用倒序，一律「最接近的在前」
       panel.vm.$emit("select", "ff0000");
       expect(dropdown.emitted("close")).toHaveLength(1);
       panel.vm.$emit("select", "123456");
       expect(navigations(wrapper)).toEqual([
-        [{ sort: { field: "by-color", desc: true, color: "ff0000" } }, undefined],
+        [{ sort: { field: "by-color", desc: false, color: "ff0000" } }, undefined],
+        [{ sort: { field: "by-any-color", desc: false, color: "123456" } }, undefined],
+      ]);
+    });
+
+    it("已经在按颜色排序时换颜色保留方向", async () => {
+      const wrapper = renderSort({ field: "by-color", desc: true, color: "ff0000" });
+      await sortDropdown(wrapper).get(".is-expandable").trigger("click");
+      wrapper.findComponent({ name: "ColorBucketPanel" }).vm.$emit("select", "123456");
+      expect(navigations(wrapper)).toEqual([
         [{ sort: { field: "by-any-color", desc: true, color: "123456" } }, undefined],
       ]);
     });

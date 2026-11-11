@@ -197,6 +197,7 @@ impl GlobalEmitter {
         removed: usize,
         regenerated: usize,
         backfilled: usize,
+        palettes_updated: usize,
         canceled: bool,
         error: Option<String>,
     ) {
@@ -204,6 +205,7 @@ impl GlobalEmitter {
             removed,
             regenerated,
             backfilled,
+            palettes_updated,
             canceled,
             error,
         });
@@ -593,6 +595,7 @@ impl GlobalEmitter {
         _removed: usize,
         _regenerated: usize,
         _backfilled: usize,
+        _palettes_updated: usize,
         _canceled: bool,
         _error: Option<String>,
     ) {

@@ -714,9 +714,12 @@ const sortColor = computed(() => (isColorSortField(props.sort.field) ? props.sor
 const sortFieldClickOutsideIgnore = [`.${COLOR_BUCKET_LAYER_CLASS}`];
 
 function onSortColorSelect(hex: string, close: () => void) {
+  // 方向：从别的排序切过来一律「最接近的在前」——别的维度的倒序（如时间倒序 = 最新在前）
+  // 搬到颜色上就成了「离这个颜色最远的在前」，几乎不是想要的；已经在按颜色排序时保留用户选的方向。
+  const desc = isColorSortField(props.sort.field) ? props.sort.desc : false;
   // 「保存为色桶」后立刻 select 时，事件可能还没把色桶列表刷回来，这里会先给出现算段；
   // 列表刷新后由下面的校正换成色桶段，两段顺序相同
-  navigate({ sort: colorSortFor(hex, bucketHexes.value, props.sort.desc) });
+  navigate({ sort: colorSortFor(hex, bucketHexes.value, desc) });
   close();
 }
 

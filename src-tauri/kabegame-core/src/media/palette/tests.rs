@@ -116,7 +116,7 @@ fn narrow_gradient_merges_into_its_average() {
         .map(|index| cell(0.6, -0.02 + 0.04 * index as f32 / 255.0, 0.05))
         .collect();
 
-    let clusters = merge_cells(cells);
+    let clusters = merge_cells(cells, MERGE_RADIUS);
 
     assert_eq!(clusters.len(), 1);
     assert_eq!(clusters[0].weight, 256.0);
@@ -125,32 +125,37 @@ fn narrow_gradient_merges_into_its_average() {
     assert!((clusters[0].color.b - 0.05).abs() < 1e-5);
 }
 
-#[test]
-fn gradient_four_radii_wide_splits_from_the_center_outwards() {
-    // a 通道从 -0.1188 到 0.1188（略小于合并半径的 4 倍），步长 0.00099
-    let cells: Vec<Cell> = (-120..=120)
+/// a 通道从 -0.1188 到 0.1188 的均匀渐变（略小于合并半径的 4 倍），步长 0.00099、241 个点。
+/// 离一个点不超过半径的是它左右各 60 步。
+fn wide_gradient() -> Vec<Cell> {
+    (-120..=120)
         .map(|step| cell(0.6, step as f32 * 0.00099, 0.0))
-        .collect();
+        .collect()
+}
 
-    let clusters = merge_cells(cells);
+#[test]
+fn gradient_four_radii_wide_is_cut_from_its_densest_points() {
+    let clusters = merge_cells(wide_gradient(), MERGE_RADIUS);
 
-    // 中间一个盖两倍半径（种子在中心，两边各 60 步），两侧向外各一个
+    // 第 -60..=60 步的点左右都有满 60 步的邻居，密度同为 121，并列按下标取第 -60 步当种子，
+    // 收走 -120..=0；剩下的点里 1..=60 步密度仍是 121，取第 1 步，收走 1..=61；
+    // 最后 62..=120 步里第 62 步最密，收走其余。
     assert_eq!(clusters.len(), 3, "{clusters:?}");
     assert_eq!(clusters[0].weight, 121.0);
-    assert!(clusters[0].color.a.abs() < 1e-5);
-    // 两侧到中心等距，按输入下标先取负的一侧
-    assert_eq!(clusters[1].weight, 60.0);
-    assert!((clusters[1].color.a + 90.5 * 0.00099).abs() < 1e-5);
-    assert_eq!(clusters[2].weight, 60.0);
-    assert!((clusters[2].color.a - 90.5 * 0.00099).abs() < 1e-5);
-
-    // 三个平均色彼此相距 0.0896，不到半径的才并：再并一遍后原样保留
-    let merged = remerge(clusters.clone());
-    assert_eq!(merged.len(), 3, "{merged:?}");
-    for (before, after) in clusters.iter().zip(&merged) {
-        assert_eq!(before.color, after.color);
-        assert_eq!(before.weight, after.weight);
-    }
+    assert!(
+        (clusters[0].color.a + 60.0 * 0.00099).abs() < 1e-5,
+        "{clusters:?}"
+    );
+    assert_eq!(clusters[1].weight, 61.0);
+    assert!(
+        (clusters[1].color.a - 31.0 * 0.00099).abs() < 1e-5,
+        "{clusters:?}"
+    );
+    assert_eq!(clusters[2].weight, 59.0);
+    assert!(
+        (clusters[2].color.a - 91.0 * 0.00099).abs() < 1e-5,
+        "{clusters:?}"
+    );
 }
 
 #[test]
@@ -166,7 +171,7 @@ fn two_distant_blobs_give_their_own_averages() {
         cells.push(cell(0.6, -0.10 - offset, 0.0));
     }
 
-    let mut clusters = merge_cells(cells);
+    let mut clusters = merge_cells(cells, MERGE_RADIUS);
     clusters.sort_by(|x, y| y.weight.total_cmp(&x.weight));
 
     assert_eq!(clusters.len(), 2, "{clusters:?}");
@@ -178,21 +183,65 @@ fn two_distant_blobs_give_their_own_averages() {
 
 #[test]
 fn cluster_color_is_the_member_average_not_the_seed() {
-    // 一团点在 a ∈ [0.10, 0.14]，另有一个很远的点把包围盒中心拉到 a = -0.03：
-    // 这团点全在中心的同一侧，种子是其中离中心最近的 a = 0.10。
-    let mut cells: Vec<Cell> = (0..=40)
+    // 41 个点均匀铺在 a ∈ [0.10, 0.14]，两两都不到半径：密度全是 41，并列按下标取 a = 0.10 当种子。
+    // 聚合点的颜色是全部成员的平均 0.12，不是种子。
+    let cells: Vec<Cell> = (0..=40)
         .map(|step| cell(0.6, 0.10 + step as f32 * 0.001, 0.0))
         .collect();
-    cells.push(cell(0.6, -0.20, 0.0));
 
-    let clusters = merge_cells(cells);
+    let clusters = merge_cells(cells, MERGE_RADIUS);
 
-    let blob = clusters
-        .iter()
-        .find(|cluster| cluster.weight == 41.0)
-        .expect("the blob is one cluster");
-    assert!((blob.color.a - 0.12).abs() < 1e-5, "{blob:?}");
-    assert!((blob.color.a - 0.10).abs() > 0.015, "color is the seed");
+    assert_eq!(clusters.len(), 1, "{clusters:?}");
+    assert_eq!(clusters[0].weight, 41.0);
+    assert!((clusters[0].color.a - 0.12).abs() < 1e-5, "{clusters:?}");
+    assert!(
+        (clusters[0].color.a - 0.10).abs() > 0.015,
+        "color is the seed"
+    );
+}
+
+#[test]
+fn seed_is_the_densest_point() {
+    // 输入顺序：一个离群点、3 个点的稀疏团（a = 0）、10 个点的密集团（a = 0.20）。
+    // 包围盒中心在 a = -0.05，旧做法会先从稀疏团取种子；按密度取，先取密集团。
+    let mut cells = vec![cell(0.6, -0.30, 0.0)];
+    cells.extend((0..3).map(|_| cell(0.6, 0.0, 0.0)));
+    cells.extend((0..10).map(|step| cell(0.6, 0.20 + step as f32 * 0.002, 0.0)));
+
+    let clusters = merge_cells(cells, MERGE_RADIUS);
+
+    assert_eq!(clusters.len(), 3, "{clusters:?}");
+    // 输出按种子被取到的先后：最密的在前，离群点（密度 1）在最后
+    assert_eq!(clusters[0].weight, 10.0);
+    assert!((clusters[0].color.a - 0.209).abs() < 1e-5, "{clusters:?}");
+    assert_eq!(clusters[1].weight, 3.0);
+    assert_eq!(clusters[2].weight, 1.0);
+
+    // 密度相同时按下标：两团一样大，先取排在前面的那团
+    let mut tie: Vec<Cell> = (0..4).map(|_| cell(0.6, 0.20, 0.0)).collect();
+    tie.extend((0..4).map(|_| cell(0.6, -0.20, 0.0)));
+    let clusters = merge_cells(tie, MERGE_RADIUS);
+    assert_eq!(clusters.len(), 2);
+    assert!((clusters[0].color.a - 0.20).abs() < 1e-6);
+    assert!((clusters[1].color.a + 0.20).abs() < 1e-6);
+
+    // 权重算进密度：一个权重 5 的点比 3 个权重 1 的点密
+    let weighted = vec![
+        cell(0.6, 0.0, 0.0),
+        cell(0.6, 0.0, 0.0),
+        cell(0.6, 0.0, 0.0),
+        Cell {
+            color: Oklab {
+                l: 0.6,
+                a: 0.30,
+                b: 0.0,
+            },
+            weight: 5.0,
+        },
+    ];
+    let clusters = merge_cells(weighted, MERGE_RADIUS);
+    assert_eq!(clusters[0].weight, 5.0);
+    assert_eq!(clusters[1].weight, 3.0);
 }
 
 #[test]
@@ -279,23 +328,14 @@ fn frames_are_merged_before_clustering() {
 
 #[test]
 fn select_top_stops_at_coverage_and_keeps_percent_of_the_whole() {
-    // 60% + 36% 已超过 95%，剩下的 4% 不取，也不摊给前两个
+    // 60% + 36% 已超过 95%，剩下的 4% 不取，也不摊给前两个（剩下的是灰，不够鲜艳，不占鲜艳色名额）
     let clusters = vec![
-        Cell {
-            color: srgb_to_oklab(WHITE),
-            weight: 36.0,
-        },
-        Cell {
-            color: srgb_to_oklab(RED),
-            weight: 60.0,
-        },
-        Cell {
-            color: srgb_to_oklab(BLUE),
-            weight: 4.0,
-        },
+        cluster(WHITE, 36.0),
+        cluster(RED, 60.0),
+        cluster(0x808080, 4.0),
     ];
     assert_eq!(
-        select_top(clusters),
+        select_top(clusters, MERGE_RADIUS),
         Some(palette(&[(RED, 60), (WHITE, 36)]))
     );
 
@@ -313,7 +353,7 @@ fn select_top_stops_at_coverage_and_keeps_percent_of_the_whole() {
             weight: 3.0,
         });
     }
-    let result = select_top(clusters).unwrap();
+    let result = select_top(clusters, MERGE_RADIUS).unwrap();
     assert_eq!(result.0.len(), 5);
     assert!(result.0[..4].iter().all(|color| color.percent == 23));
     assert_eq!(
@@ -324,7 +364,235 @@ fn select_top_stops_at_coverage_and_keeps_percent_of_the_whole() {
         }
     );
 
-    assert_eq!(select_top(Vec::new()), None);
+    assert_eq!(select_top(Vec::new(), MERGE_RADIUS), None);
+}
+
+fn cluster(rgb: u32, weight: f32) -> Cell {
+    Cell {
+        color: srgb_to_oklab(rgb),
+        weight,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 鲜艳色名额
+// ---------------------------------------------------------------------------
+
+#[test]
+fn accent_is_appended_when_the_palette_is_not_full() {
+    // 白 90% + 灰 6% 已超过 95%，按面积只取两个；剩下的红 4% 够鲜艳、离白和灰都远：追加在最后，
+    // 百分比是它真实的面积
+    let clusters = vec![
+        cluster(WHITE, 90.0),
+        cluster(0x808080, 6.0),
+        cluster(RED, 4.0),
+    ];
+    assert_eq!(
+        select_top(clusters, MERGE_RADIUS),
+        Some(palette(&[(WHITE, 90), (0x808080, 6), (RED, 4)]))
+    );
+}
+
+#[test]
+fn accent_replaces_the_last_color_when_the_palette_is_full() {
+    // 按面积取满 5 个灰（累计 96%）；红只占 4%，换掉末位 6% 的那个灰
+    let clusters = vec![
+        cluster(WHITE, 40.0),
+        cluster(0xe0e0e0, 25.0),
+        cluster(0xc0c0c0, 15.0),
+        cluster(0xa0a0a0, 10.0),
+        cluster(0x808080, 6.0),
+        cluster(RED, 4.0),
+    ];
+    assert_eq!(
+        select_top(clusters, MERGE_RADIUS),
+        Some(palette(&[
+            (WHITE, 40),
+            (0xe0e0e0, 25),
+            (0xc0c0c0, 15),
+            (0xa0a0a0, 10),
+            (RED, 4),
+        ]))
+    );
+}
+
+#[test]
+fn accent_keeps_its_true_share_and_respects_the_minimum_area() {
+    // 0.6%：够格，记为 1（百分比至少为 1）
+    let clusters = vec![
+        cluster(WHITE, 960.0),
+        cluster(0x808080, 34.0),
+        cluster(RED, 6.0),
+    ];
+    assert_eq!(
+        select_top(clusters, MERGE_RADIUS),
+        Some(palette(&[(WHITE, 96), (RED, 1)]))
+    );
+    // 0.4%：不到面积下限，不给名额
+    let clusters = vec![
+        cluster(WHITE, 960.0),
+        cluster(0x808080, 36.0),
+        cluster(RED, 4.0),
+    ];
+    assert_eq!(
+        select_top(clusters, MERGE_RADIUS),
+        Some(palette(&[(WHITE, 96)]))
+    );
+}
+
+#[test]
+fn accent_needs_a_vivid_color_more_vivid_than_the_kept_ones() {
+    // 没选上的只有灰：彩度不够，不给名额
+    let clusters = vec![cluster(WHITE, 90.0), cluster(0x808080, 10.0)];
+    assert_eq!(
+        select_top(clusters.clone(), MERGE_RADIUS),
+        Some(palette(&[(WHITE, 90), (0x808080, 10)]))
+    );
+    let clusters = vec![cluster(WHITE, 96.0), cluster(0x808080, 4.0)];
+    assert_eq!(
+        select_top(clusters, MERGE_RADIUS),
+        Some(palette(&[(WHITE, 96)]))
+    );
+
+    // 已选的红 0xc04040 彩度 0.164；候选蓝 0x4060c0 彩度 0.155，没有比它高出 0.02，不给名额；
+    // 0x3050d0 彩度 0.200，给
+    let base = || vec![cluster(0xc04040, 50.0), cluster(WHITE, 46.0)];
+    let mut dull = base();
+    dull.push(cluster(0x4060c0, 4.0));
+    assert_eq!(
+        select_top(dull, MERGE_RADIUS),
+        Some(palette(&[(0xc04040, 50), (WHITE, 46)]))
+    );
+    let mut vivid = base();
+    vivid.push(cluster(0x3050d0, 4.0));
+    assert_eq!(
+        select_top(vivid, MERGE_RADIUS),
+        Some(palette(&[(0xc04040, 50), (WHITE, 46), (0x3050d0, 4)]))
+    );
+
+    // 几个都够格时取彩度最高的，不看面积：红占 2%、蓝只占 0.6%，纯蓝（0.313）比纯红（0.258）鲜艳
+    let clusters = vec![
+        cluster(WHITE, 960.0),
+        cluster(RED, 20.0),
+        cluster(0x808080, 14.0),
+        cluster(BLUE, 6.0),
+    ];
+    assert_eq!(
+        select_top(clusters, MERGE_RADIUS),
+        Some(palette(&[(WHITE, 96), (BLUE, 1)]))
+    );
+}
+
+#[test]
+fn accent_must_be_two_radii_away_from_the_kept_colors() {
+    // 纯红比已选的 0xc04040 鲜艳得多，但两者色差 0.102：
+    // 半径 0.06 时不到两倍半径（0.12），不给名额；半径 0.03 时超过两倍半径（0.06），给
+    let clusters = vec![
+        cluster(0xc04040, 50.0),
+        cluster(WHITE, 46.0),
+        cluster(RED, 4.0),
+    ];
+    let diff = color_diff(srgb_to_oklab(0xc04040), srgb_to_oklab(RED));
+    assert!(diff > 0.06 && diff < 0.12, "{diff}");
+    assert_eq!(
+        select_top(clusters.clone(), MERGE_RADIUS),
+        Some(palette(&[(0xc04040, 50), (WHITE, 46)]))
+    );
+    assert_eq!(
+        select_top(clusters, 0.03),
+        Some(palette(&[(0xc04040, 50), (WHITE, 46), (RED, 4)]))
+    );
+}
+
+#[test]
+fn accent_does_not_change_vivid_images() {
+    // 已经有纯色的色盘：没选上的颜色不会比它更鲜艳，色盘与只按面积选的相同
+    let mut image = solid(64, 64, [255, 0, 0, 255]);
+    for (x, _, pixel) in image.enumerate_pixels_mut() {
+        if x >= 48 {
+            *pixel = Rgba([255, 255, 255, 255]);
+        }
+    }
+    assert_eq!(
+        palette_from_frames(std::iter::once(&image)),
+        Some(palette(&[(RED, 75), (WHITE, 25)]))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 按整张图定合并半径
+// ---------------------------------------------------------------------------
+
+/// 淡粉与薄荷色：彩度 0.028 / 0.023，色差 0.051——比合并半径的上限小、比淡色图的半径大。
+const PASTEL_PINK: u32 = 0xf6dee4;
+const PASTEL_MINT: u32 = 0xdef0e6;
+
+fn pastel_halves() -> RgbaImage {
+    let mut image = solid(64, 64, [0xf6, 0xde, 0xe4, 255]);
+    for (x, _, pixel) in image.enumerate_pixels_mut() {
+        if x >= 32 {
+            *pixel = Rgba([0xde, 0xf0, 0xe6, 255]);
+        }
+    }
+    image
+}
+
+#[test]
+fn merge_radius_follows_the_mean_chroma_of_the_whole_image() {
+    let grays: Vec<Cell> = (0..10).map(|_| cluster(0x808080, 1.0)).collect();
+    assert!((merge_radius_for(&grays) - 0.03).abs() < 1e-6);
+    let reds: Vec<Cell> = (0..10).map(|_| cluster(RED, 1.0)).collect();
+    assert_eq!(merge_radius_for(&reds), MERGE_RADIUS);
+    // 均值 0.035 落在 0.02→0.05 的正中：半径也在 0.03→0.06 的正中
+    let middle: Vec<Cell> = (0..4).map(|_| cell(0.7, 0.035, 0.0)).collect();
+    assert!((merge_radius_for(&middle) - 0.045).abs() < 1e-5);
+    // 按权重平均：一个权重 3 的红比三个灰重
+    let mut weighted: Vec<Cell> = (0..3).map(|_| cluster(0x808080, 1.0)).collect();
+    weighted.push(cluster(RED, 3.0));
+    assert_eq!(merge_radius_for(&weighted), MERGE_RADIUS);
+    assert_eq!(merge_radius_for(&[]), MERGE_RADIUS);
+
+    let diff = color_diff(srgb_to_oklab(PASTEL_PINK), srgb_to_oklab(PASTEL_MINT));
+    let cells = sample_cells(&pastel_halves());
+    let radius = merge_radius_for(&cells);
+    assert!(radius < diff && diff < MERGE_RADIUS, "{radius} {diff}");
+}
+
+#[test]
+fn pale_image_keeps_its_pastel_tones_apart() {
+    // 用上限半径时淡粉与薄荷色会并成一个颜色；按这张图的平均彩度定的半径更小，两色分开
+    let cells = sample_cells(&pastel_halves());
+    assert_eq!(
+        select_top(
+            remerge(merge_cells(cells, MERGE_RADIUS), MERGE_RADIUS),
+            MERGE_RADIUS
+        )
+        .unwrap()
+        .0
+        .len(),
+        1
+    );
+
+    let result = palette_from_frames(std::iter::once(&pastel_halves())).unwrap();
+
+    assert_eq!(result, palette(&[(PASTEL_MINT, 50), (PASTEL_PINK, 50)]));
+}
+
+#[test]
+fn multi_frame_radius_uses_all_frames_together() {
+    // 淡色帧单独算时两色分开；和一帧纯红合在一起，平均彩度高，半径回到上限，淡粉与薄荷色并成一个
+    let red = solid(64, 64, [255, 0, 0, 255]);
+    let result = palette_from_frames([&pastel_halves(), &red].into_iter()).unwrap();
+
+    assert_eq!(result.0.len(), 2, "{result:?}");
+    assert_eq!(result.0[1].percent, 50);
+    assert_eq!(result.0.iter().filter(|c| c.rgb == RED).count(), 1);
+    let pastel = result.0.iter().find(|c| c.rgb != RED).unwrap();
+    assert!(
+        color_diff(srgb_to_oklab(pastel.rgb), srgb_to_oklab(PASTEL_PINK)) < 0.03
+            && color_diff(srgb_to_oklab(pastel.rgb), srgb_to_oklab(PASTEL_MINT)) < 0.03,
+        "{result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -333,29 +601,23 @@ fn select_top_stops_at_coverage_and_keeps_percent_of_the_whole() {
 
 #[test]
 fn remerge_joins_clusters_with_close_averages() {
-    // 一团颜色 a ∈ [0, 0.0792]（步长 0.00099）比合并半径宽；另有一个远点把包围盒中心拉到
-    // a = -0.11，种子落在这团颜色朝向中心的一端（a = 0），只盖得住前 61 个点，剩下 20 个另成一个聚合点
-    let mut cells: Vec<Cell> = (0..=80)
-        .map(|step| cell(0.6, step as f32 * 0.00099, 0.0))
-        .collect();
-    cells.push(cell(0.6, -0.30, 0.0));
+    // 均匀渐变被聚合切成 121 / 61 / 59 三段（见 gradient_four_radii_wide_is_cut_from_its_densest_points）。
+    // 后两段的平均色相距 60 步 = 0.0594，不到半径：并成一个，颜色是两者按权重的平均（第 60.5 步）；
+    // 它离第一段 120.5 步，不再并。
+    let merged = remerge(merge_cells(wide_gradient(), MERGE_RADIUS), MERGE_RADIUS);
 
-    let clusters = merge_cells(cells);
-    assert_eq!(clusters.len(), 3, "{clusters:?}");
-    let near = clusters.iter().find(|c| c.weight == 61.0).unwrap();
-    let rest = clusters.iter().find(|c| c.weight == 20.0).unwrap();
-    assert!((near.color.a - 30.0 * 0.00099).abs() < 1e-5, "{near:?}");
-    assert!((rest.color.a - 70.5 * 0.00099).abs() < 1e-5, "{rest:?}");
-
-    // 两个平均色相距 0.0401，不到半径：并成一个，颜色是两者按权重的平均（也就是整团的平均）
-    let merged = remerge(clusters);
     assert_eq!(merged.len(), 2, "{merged:?}");
-    let blob = merged.iter().find(|c| c.weight == 81.0).unwrap();
-    assert!((blob.color.a - 40.0 * 0.00099).abs() < 1e-5, "{blob:?}");
-    assert!((blob.color.l - 0.6).abs() < 1e-6 && blob.color.b.abs() < 1e-6);
-    // 远点不受影响
-    let far = merged.iter().find(|c| c.weight == 1.0).unwrap();
-    assert!((far.color.a + 0.30).abs() < 1e-6, "{far:?}");
+    assert_eq!(merged[0].weight, 121.0);
+    assert!(
+        (merged[0].color.a + 60.0 * 0.00099).abs() < 1e-5,
+        "{merged:?}"
+    );
+    assert_eq!(merged[1].weight, 120.0);
+    assert!(
+        (merged[1].color.a - 60.5 * 0.00099).abs() < 1e-5,
+        "{merged:?}"
+    );
+    assert!((merged[1].color.l - 0.6).abs() < 1e-6 && merged[1].color.b.abs() < 1e-6);
 }
 
 #[test]
@@ -380,7 +642,7 @@ fn remerge_weights_the_average_and_keeps_the_lower_slot() {
         },
     ];
 
-    let merged = remerge(clusters);
+    let merged = remerge(clusters, MERGE_RADIUS);
 
     assert_eq!(merged.len(), 2);
     // 没参与的聚合点原样留在原位
@@ -415,21 +677,21 @@ fn remerge_leaves_clusters_at_least_a_radius_apart() {
         },
     ];
     assert_eq!(color_diff(exactly[0].color, exactly[1].color), MERGE_RADIUS);
-    assert_eq!(remerge(exactly).len(), 2);
+    assert_eq!(remerge(exactly, MERGE_RADIUS).len(), 2);
 
     let apart = vec![
         cell(0.6, 0.0, 0.0),
         cell(0.6, 0.061, 0.0),
         cell(0.6, 0.0, 0.2),
     ];
-    assert_eq!(remerge(apart).len(), 3);
+    assert_eq!(remerge(apart, MERGE_RADIUS).len(), 3);
 
     // 略小于半径的并
     let close = vec![cell(0.6, 0.0, 0.0), cell(0.6, 0.059, 0.0)];
-    assert_eq!(remerge(close).len(), 1);
+    assert_eq!(remerge(close, MERGE_RADIUS).len(), 1);
 
-    assert!(remerge(Vec::new()).is_empty());
-    assert_eq!(remerge(vec![cell(0.6, 0.0, 0.0)]).len(), 1);
+    assert!(remerge(Vec::new(), MERGE_RADIUS).is_empty());
+    assert_eq!(remerge(vec![cell(0.6, 0.0, 0.0)], MERGE_RADIUS).len(), 1);
 }
 
 #[test]
@@ -442,7 +704,7 @@ fn remerge_takes_the_closest_pair_first_and_chains() {
         cell(0.6, 0.09, 0.0),
         cell(0.6, 0.14, 0.0),
     ];
-    let merged = remerge(line);
+    let merged = remerge(line, MERGE_RADIUS);
     assert_eq!(merged.len(), 3, "{merged:?}");
     assert_eq!(merged[1].weight, 2.0);
     assert!((merged[1].color.a - 0.07).abs() < 1e-6, "{merged:?}");
@@ -454,7 +716,7 @@ fn remerge_takes_the_closest_pair_first_and_chains() {
         cell(0.6, 0.075, 0.0),
     ];
     assert!(color_diff(chain[0].color, chain[2].color) > MERGE_RADIUS);
-    let merged = remerge(chain);
+    let merged = remerge(chain, MERGE_RADIUS);
     assert_eq!(merged.len(), 1, "{merged:?}");
     assert_eq!(merged[0].weight, 3.0);
     assert!((merged[0].color.a - 0.115 / 3.0).abs() < 1e-6, "{merged:?}");
@@ -471,7 +733,7 @@ fn remerge_takes_the_closest_pair_first_and_chains() {
         color_diff(tie[0].color, tie[1].color),
         color_diff(tie[1].color, tie[2].color)
     );
-    let merged = remerge(tie);
+    let merged = remerge(tie, MERGE_RADIUS);
     assert_eq!(merged.len(), 2, "{merged:?}");
     assert_eq!(merged[0].color.a, step / 2.0);
     assert_eq!(merged[0].weight, 2.0);
@@ -493,8 +755,8 @@ fn remerge_gives_the_same_result_for_the_same_input() {
         .collect();
     let total: f32 = clusters.iter().map(|c| c.weight).sum();
 
-    let first = remerge(clusters.clone());
-    let second = remerge(clusters);
+    let first = remerge(clusters.clone(), MERGE_RADIUS);
+    let second = remerge(clusters, MERGE_RADIUS);
 
     assert!(first.len() < 200 && !first.is_empty());
     assert_eq!(first.len(), second.len());
@@ -516,9 +778,8 @@ fn remerge_gives_the_same_result_for_the_same_input() {
 }
 
 #[test]
-fn split_block_comes_back_as_one_palette_color() {
-    // 经整条流程：左边一大块略有明暗变化的同一种蓝，右边一条红。蓝的跨度比合并半径宽，
-    // 聚合会把它拆开；再并之后色盘里只有一个蓝和一个红。
+fn shaded_block_gives_one_palette_color() {
+    // 经整条流程：左边一大块略有明暗变化的同一种蓝，右边一条红。色盘里只有一个蓝和一个红。
     let mut image = solid(512, 512, [0, 0, 0, 255]);
     for (x, _, pixel) in image.enumerate_pixels_mut() {
         *pixel = if x < 384 {
@@ -534,9 +795,6 @@ fn split_block_comes_back_as_one_palette_color() {
             Rgba([255, 0, 0, 255])
         };
     }
-    let cells = sample_cells(&image);
-    assert!(merge_cells(cells).len() > 2, "聚合这一步应当把蓝拆开");
-
     let result = palette_from_frames(std::iter::once(&image)).unwrap();
 
     assert_eq!(result.0.len(), 2, "{result:?}");

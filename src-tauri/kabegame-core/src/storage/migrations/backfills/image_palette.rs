@@ -1,15 +1,16 @@
 //! 给存量图算色盘（`images.palette`），并把 v052 铺的 65536 改写成到各色桶的真实距离。
 //!
 //! v052 之后入库的图在 [`crate::storage::Storage::add_image`] 里已经带着色盘；这里只处理
-//! `palette IS NULL` 的行。来源规则与入库相同（[`palette::compute_for_row`]）：图片读缩略图，
+//! `palette IS NULL` 的行。来源规则与入库相同（`media::palette::compute_for_row`）：图片读缩略图，
 //! GIF 与视频抽帧，WPE 网页 / 场景取 `project.json` 的 `schemecolor`、没有则用预览图。
+//! 读行、计算与写回是 `storage::images` 里的 [`PaletteSourceRow`] / [`store_recomputed_palette`]，
+//! 整理的「重新计算代表色」用的是同一份。
 //!
 //! 只读写 v052 引入的列与表。算不出色盘的行（文件不在、格式解不了）保持 NULL、距离保持 65536，
-//! 不重试；算出色盘且改到行的图各发一条 `palette` 字段补丁。
+//! 不重试（要重试就在整理里勾「重新计算代表色」）；算出色盘且改到行的图各发一条 `palette` 字段补丁。
 
-use crate::ipc::events::ImageFieldPatch;
-use crate::media::palette::{self, Palette};
-use crate::storage::images::write_color_distances;
+use crate::media::palette::Palette;
+use crate::storage::images::{store_recomputed_palette, PaletteSourceRow};
 use crate::storage::migrations::backfill::{Backfill, BackfillCtx, BatchOutcome};
 use rusqlite::{params, Connection};
 
@@ -34,82 +35,15 @@ fn count_remaining(conn: &Connection) -> Result<usize, String> {
     .map_err(|e| format!("image_palette count: {e}"))
 }
 
-struct Candidate {
-    id: i64,
-    media_type: String,
-    local_path: String,
-    thumbnail_path: String,
-    compatible_path: Option<String>,
-    /// WPE 网页 / 场景壁纸的 `schemecolor`（作者值）。
-    scheme_color: Option<[u8; 3]>,
-}
-
-/// 网页 / 场景壁纸的代表色：读 metadata 里的 `project.json` 原文。属性解析在所有构建里都编译
-/// （`wpe::properties` 不随 `wpe` feature 门控），各平台对同一行算出同一个色盘。
-fn read_scheme_color(
-    conn: &Connection,
-    media_type: &str,
-    metadata_id: Option<i64>,
-) -> Option<[u8; 3]> {
-    use crate::media::image_type::{is_wpe_type, is_wpe_video_type};
-    use rusqlite::OptionalExtension;
-
-    if !is_wpe_type(Some(media_type)) || is_wpe_video_type(Some(media_type)) {
-        return None;
-    }
-    let data: String = conn
-        .query_row(
-            "SELECT data FROM metadata WHERE id = ?1",
-            params![metadata_id?],
-            |row| row.get(0),
-        )
-        .optional()
-        .ok()
-        .flatten()?;
-    let raw: serde_json::Value = serde_json::from_str(&data).ok()?;
-    crate::wpe::properties::scheme_color_from_raw(&raw)
-}
-
 fn run_batch(ctx: &BackfillCtx, cursor: i64, limit: usize) -> Result<BatchOutcome, String> {
+    // 行的读取、计算与写回和整理的「重新计算代表色」共用（`storage::images`）
     let candidates = ctx.with_conn(|conn| {
-        let rows = conn
-            .prepare(
-                "SELECT id, type, local_path, thumbnail_path, compatible_path, metadata_id
-                   FROM images
-                  WHERE id > ?1 AND palette IS NULL
-                  ORDER BY id LIMIT ?2",
-            )
-            .and_then(|mut stmt| {
-                stmt.query_map(params![cursor, limit as i64], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, Option<i64>>(5)?,
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()
-            })
-            .map_err(|e| format!("image_palette select: {e}"))?;
-        Ok(rows
-            .into_iter()
-            .map(
-                |(id, media_type, local_path, thumbnail_path, compatible_path, metadata_id)| {
-                    let media_type = media_type.unwrap_or_default();
-                    let scheme_color = read_scheme_color(conn, &media_type, metadata_id);
-                    Candidate {
-                        id,
-                        media_type,
-                        local_path,
-                        thumbnail_path: thumbnail_path.unwrap_or_default(),
-                        compatible_path,
-                        scheme_color,
-                    }
-                },
-            )
-            .collect::<Vec<_>>())
+        PaletteSourceRow::query(
+            conn,
+            "id > ?1 AND palette IS NULL ORDER BY id LIMIT ?2",
+            params![cursor, limit as i64],
+        )
+        .map_err(|e| format!("image_palette select: {e}"))
     })?;
 
     let processed = candidates.len();
@@ -126,20 +60,11 @@ fn run_batch(ctx: &BackfillCtx, cursor: i64, limit: usize) -> Result<BatchOutcom
         });
     }
 
-    // 不持有连接读盘计算。经 compute_for_row：Android 上 content:// 的 fd 处理只在它里面。
-    // 文件缺失、解码失败都是 None，这些行不写。
-    let computed: Vec<(Candidate, Palette)> = ctx.block_on(async move {
+    // 不持有连接读盘计算。文件缺失、解码失败都是 None，这些行不写。
+    let computed: Vec<(PaletteSourceRow, Palette)> = ctx.block_on(async move {
         let mut computed = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let palette = palette::compute_for_row(
-                &candidate.media_type,
-                &candidate.local_path,
-                &candidate.thumbnail_path,
-                candidate.compatible_path.as_deref(),
-                candidate.scheme_color,
-            )
-            .await;
-            if let Some(palette) = palette {
+            if let Some(palette) = candidate.compute().await {
                 computed.push((candidate, palette));
             }
         }
@@ -157,25 +82,12 @@ fn run_batch(ctx: &BackfillCtx, cursor: i64, limit: usize) -> Result<BatchOutcom
     ctx.commit(|conn| {
         let mut patches = Vec::new();
         for (candidate, palette) in &computed {
-            let json = palette.to_json();
-            // 带上 local_path：读盘期间行被删掉或改指别处时不写
-            let changed = conn
-                .execute(
-                    "UPDATE images SET palette = ?1 WHERE id = ?2 AND local_path = ?3",
-                    params![json, candidate.id, candidate.local_path],
-                )
-                .map_err(|e| format!("image_palette update {}: {e}", candidate.id))?;
-            if changed == 0 {
-                continue;
+            // 带 local_path 守卫：读盘期间行被删掉或改指别处时不写
+            if let Some(patch) = store_recomputed_palette(conn, candidate, palette)
+                .map_err(|e| format!("image_palette {e}"))?
+            {
+                patches.push(patch);
             }
-            write_color_distances(conn, candidate.id, Some(palette))?;
-            patches.push(ImageFieldPatch {
-                id: candidate.id.to_string(),
-                fields: serde_json::Map::from_iter([(
-                    "palette".to_string(),
-                    serde_json::Value::String(json),
-                )]),
-            });
         }
         Ok(BatchOutcome {
             next_cursor,
@@ -188,7 +100,9 @@ fn run_batch(ctx: &BackfillCtx, cursor: i64, limit: usize) -> Result<BatchOutcom
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::events::ImageFieldPatch;
     use crate::media::palette::{distance_to, NO_PALETTE_DISTANCE};
+    use crate::storage::images::write_color_distances;
     use crate::storage::migrations::backfill::{
         enqueue_introduced_at_in, pending_jobs_in, run_to_completion,
     };

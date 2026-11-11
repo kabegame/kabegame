@@ -13,6 +13,8 @@ export interface OrganizeOptions {
   regenCompatible: boolean;
   /** 为缺失或版本过旧的 JPEG/PNG/WebP/GIF 补充原生元数据 */
   backfillNativeMetadata: boolean;
+  /** 重新计算代表色（色盘）：范围内每张图都重算，不管现在有没有 */
+  recomputePalette: boolean;
   deleteSourceFiles: boolean;
   rangeStart: number | null;
   rangeEnd: number | null;
@@ -27,6 +29,8 @@ export interface OrganizeProgress {
   removed: number;
   regenerated: number;
   backfilled: number;
+  /** 重算后代表色有变化、已写回的张数 */
+  palettesUpdated: number;
 }
 
 /** 与后端聚合忙碌任务快照中的整理字段一致。 */
@@ -39,6 +43,8 @@ export interface OrganizeFinished {
   removed: number;
   regenerated: number;
   backfilled: number;
+  /** 旧版本后端的事件没有这一项 */
+  palettesUpdated?: number;
   canceled: boolean;
   error: string | null;
 }
@@ -51,6 +57,7 @@ const emptyProgress = (): OrganizeProgress => ({
   removed: 0,
   regenerated: 0,
   backfilled: 0,
+  palettesUpdated: 0,
 });
 
 /** 整理任务的前端镜像；后端运行态通过快照轮询同步。 */
@@ -91,6 +98,7 @@ export const useOrganizeStore = defineStore("organize", () => {
       removed: payload.removed ?? progress.value.removed,
       regenerated: payload.regenerated ?? progress.value.regenerated,
       backfilled: payload.backfilled ?? progress.value.backfilled,
+      palettesUpdated: payload.palettesUpdated ?? progress.value.palettesUpdated,
     };
     running.value = false;
     startedAtMs.value = null;
@@ -110,6 +118,7 @@ export const useOrganizeStore = defineStore("organize", () => {
       removed: state.removed ?? 0,
       regenerated: state.regenerated ?? 0,
       backfilled: state.backfilled ?? 0,
+      palettesUpdated: state.palettesUpdated ?? 0,
     };
     if (state.running) {
       startedAtMs.value = wasRunning ? startedAtMs.value : Date.now();
@@ -121,6 +130,7 @@ export const useOrganizeStore = defineStore("organize", () => {
         regenThumbnails: state.regenThumbnails,
         regenCompatible: state.regenCompatible,
         backfillNativeMetadata: state.backfillNativeMetadata,
+        recomputePalette: state.recomputePalette ?? false,
         deleteSourceFiles: state.deleteSourceFiles,
         rangeStart: state.rangeStart ?? null,
         rangeEnd: state.rangeEnd ?? null,
