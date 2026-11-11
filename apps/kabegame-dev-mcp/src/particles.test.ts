@@ -9,7 +9,7 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { createClient } from "./client.ts";
 import { createDevMcpServer } from "./main.ts";
-import { summarizeCorners } from "./tools.ts";
+import { readbackLines, summarizeCorners } from "./tools.ts";
 import type { DevMcpDeps } from "./tools.ts";
 import { Client, InMemoryTransport } from "./testdata/sdkClient.ts";
 import { PNG, fakeRest, sendJson } from "./testdata/fakeRest.ts";
@@ -55,7 +55,10 @@ const handler: Handler = (req, body, res) => {
   }
   if (req.method === "DELETE") return sendJson(res, 200, { handle: "h-1", previewHostsLeft: 0 });
   if (url.endsWith("/render")) {
-    return sendJson(res, 200, { meta: META, png: Buffer.from(PNG).toString("base64"), pngSha256: "file", pngBytes: 1 });
+    // 读回画布（第 5 批）：给了 canvas 时像新探针那样按它回尺寸
+    const canvas = (body as { canvas?: [number, number] }).canvas;
+    const meta = canvas ? { ...META, width: canvas[0], height: canvas[1], canvas, sceneTarget: [3840, 2160] } : META;
+    return sendJson(res, 200, { meta, png: Buffer.from(PNG).toString("base64"), pngSha256: "file", pngBytes: 1 });
   }
   if (url.endsWith("/particle-track")) {
     const request = body as { frames: number[]; tag?: string };
@@ -265,6 +268,125 @@ describe("粒子回放", () => {
       assert.equal(bodiesOf(rest, "/render").length, 1, "出错的调用不发渲染请求");
       assert.equal(rest.seen.filter((r) => r.method === "POST" && r.path.endsWith("/hosts")).length, 1, "也不开宿主");
     });
+  });
+});
+
+describe("读回画布（第 5 批）", () => {
+  /** 三列日志，标签末尾带窗口 1920×800：时间线推得出窗口。 */
+  const WINDOW_LOG = "out/c5-fps20-1920x800-log.txt";
+  const cursors = Array.from({ length: 4 }, (_, i) => [0.1 * (i + 1), 0.5]);
+
+  test("canvas 原样转给 REST；结果写明读回的是画布还是场景目标；host_render 同样转", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const result = await call("render_scene", { imageId: "9", canvas: [1920, 1080] });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.deepEqual(bodiesOf(rest, "/render"), [{ imageId: "9", canvas: [1920, 1080] }]);
+      assert.match(
+        textOf(result),
+        /读回：画布 1920×1080，场景目标 3840×2160 按 fill（居中盖满裁切）铺进去，同产品上屏/,
+      );
+      assert.doesNotMatch(textOf(result), /提示：/);
+
+      const plain = await call("render_scene", { imageId: "9" });
+      assert.deepEqual(bodiesOf(rest, "/render")[1], { imageId: "9" }, "不给 canvas 时请求和以前一样");
+      assert.match(textOf(plain), /读回：场景目标 1×1（没给 canvas，不经过上屏）/);
+
+      const host = await call("host_render", { handle: "h-7", imageId: "9", canvas: [1080, 1080], time: 2 });
+      assert.notEqual(host.isError, true, textOf(host));
+      assert.deepEqual(bodiesOf(rest, "/hosts/h-7/render"), [{ imageId: "9", canvas: [1080, 1080], time: 2 }]);
+      assert.match(textOf(host), /读回：画布 1080×1080，场景目标 3840×2160/);
+    });
+  });
+
+  test("和时间线交给探针的窗口不同报 [local]、不开宿主；相同时 window 与 canvas 一起转", async () => {
+    await withMcp(async (call, root, rest) => {
+      writeFileSync(path.join(root, WINDOW_LOG), kbpLog(4));
+      const timeline = { log: WINDOW_LOG, frame: 4, cursors };
+      const clash = await call("render_scene", { imageId: "9", canvas: [1280, 720], replay: { timeline } });
+      assert.equal(clash.isError, true);
+      assert.match(
+        textOf(clash),
+        /^\[local\][\s\S]*canvas 1280×720 和时间线交给探针的窗口 1920×800 不同[\s\S]*传 canvas: \[1920, 800\]/,
+      );
+      const hostClash = await call("host_render", {
+        handle: "h-7",
+        imageId: "9",
+        canvas: [1920, 801],
+        replay: { timeline: { ...timeline, window: [1920, 800] } },
+      });
+      assert.match(textOf(hostClash), /^\[local\][\s\S]*canvas 1920×801 和时间线交给探针的窗口 1920×800 不同/);
+      assert.deepEqual(rest.seen, [], "冲突时不开宿主、不发请求");
+
+      const same = await call("render_scene", { imageId: "9", canvas: [1920, 800], replay: { timeline } });
+      assert.notEqual(same.isError, true, textOf(same));
+      const [body] = bodiesOf(rest, "/render");
+      assert.deepEqual(body.canvas, [1920, 800]);
+      assert.deepEqual(body.window, [1920, 800]);
+      assert.deepEqual(body.pointers, cursors);
+      assert.doesNotMatch(textOf(same), /提示：/);
+
+      // 没给逐帧光标：窗口不交给探针（同第 4 批），canvas 和推出来的窗口不同也不报错
+      const noCursor = await call("render_scene", {
+        imageId: "9",
+        canvas: [1280, 720],
+        replay: { timeline: { log: WINDOW_LOG, frame: 4 } },
+      });
+      assert.notEqual(noCursor.isError, true, textOf(noCursor));
+      const last = bodiesOf(rest, "/render").at(-1)!;
+      assert.deepEqual(last.canvas, [1280, 720]);
+      assert.equal("window" in last, false);
+    });
+  });
+
+  test("没给 canvas、时间线推得出窗口而读回尺寸不同：提示该传的 canvas", async () => {
+    await withMcp(async (call, root) => {
+      writeFileSync(path.join(root, WINDOW_LOG), kbpLog(4));
+      const result = await call("render_scene", { imageId: "9", replay: { timeline: { log: WINDOW_LOG, frame: 4 } } });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.match(
+        textOf(result),
+        /提示：时间线的窗口是 1920×800，读回的是 1×1；要和这次 WPE 抓帧逐像素比、不用再缩放，传 canvas: \[1920, 800\]/,
+      );
+      // 推不出窗口（标签里没有尺寸）：不提示
+      const unknown = await call("render_scene", { imageId: "9", replay: { timeline: TIMELINE } });
+      assert.doesNotMatch(textOf(unknown), /提示：/);
+    });
+  });
+
+  test("canvas 的形状由 SDK 参数校验拒绝：非整数、0、超过 16384、长度不对", async () => {
+    await withMcp(async (call, _root, rest) => {
+      for (const canvas of [[1920.5, 1080], [0, 1080], [16385, 1080], [1920], "1920x1080"]) {
+        const bad = await call("render_scene", { imageId: "9", canvas });
+        assert.equal(bad.isError, true, JSON.stringify(canvas));
+      }
+      assert.deepEqual(rest.seen, [], "参数错时不发请求");
+    });
+  });
+
+  test("readbackLines：旧宿主产物没有 canvas / sceneTarget 时按场景目标；读回尺寸等于窗口时不提示", () => {
+    assert.deepEqual(readbackLines({ width: 3840, height: 2160 }, undefined, null), [
+      "读回：场景目标 3840×2160（没给 canvas，不经过上屏）",
+    ]);
+    assert.deepEqual(
+      readbackLines({ width: 1920, height: 1080, canvas: null, sceneTarget: [1920, 1080] }, undefined, [1920, 1080]),
+      ["读回：场景目标 1920×1080（没给 canvas，不经过上屏）"],
+    );
+    const hint = readbackLines(
+      { width: 3840, height: 2160, canvas: null, sceneTarget: [3840, 2160] },
+      undefined,
+      [1920, 1080],
+    );
+    assert.equal(hint.length, 2);
+    assert.match(hint[1], /传 canvas: \[1920, 1080\]/);
+    // 给了 canvas 就不提示（哪怕和窗口不同：冲突在发请求前已经拦下）
+    assert.equal(
+      readbackLines(
+        { width: 1280, height: 720, canvas: [1280, 720], sceneTarget: [3840, 2160] },
+        [1280, 720],
+        [1920, 1080],
+      ).length,
+      1,
+    );
   });
 });
 

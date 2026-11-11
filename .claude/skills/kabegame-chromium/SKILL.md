@@ -71,10 +71,10 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `show_window` | 把主窗口带到前台：最小化时 unminimize、不可见时 show，再 set_focus；没到前台（Windows 前台限制）时临时置顶再取消。回走了哪条路径、前后的 `visibilityState` / `hasFocus` | 要 | 桌面 |
 | `open_image_preview` | 主窗口打开某张图的预览，再 `show_window`。导航到 `/gallery`（保留 query，加 `pvwimgid`）并整页重载；图在当前视图里就跳到它所在的页，不在就降级成单图预览，不改筛选条件。回最终路由、预览开没开、是哪张、在不在视图里 | 要 | 桌面（安卓未验，不显示窗口） |
 | `android_screen` | adb 整屏截图（含系统栏、原生对话框）；`save` / `size` 同 `screenshot` | 要 | 安卓 |
-| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay` 同 `render_scene`） | 要 | 桌面 |
+| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay`、`canvas` 同 `render_scene`） | 要 | 桌面 |
 | `projects_remove` | 按清单移除测试工程（只 `batch_remove_images`） | 要 | 桌面 |
 | `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
-| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」） | 要 | 桌面 |
+| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」）。不给 `canvas` 时读回场景目标（场景分辨率）；给 `canvas: [宽, 高]` 时按 `fill` 上屏到这么大的画布再读回（见下方「读回画布」） | 要 | 桌面 |
 | `particle_track` | 按 WPE 的一次抓帧回放粒子模拟器，在 `frames`（缺省为抓到的帧）输出和 `rd-*.json` 同格式的轨迹，写 `out`；回摘要（每帧每系统的粒子数、位置范围、时间线信息） | 要 | 桌面 |
 | `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层画不画、写进顶点的粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene` | 要 | 桌面 |
 | `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
@@ -178,6 +178,33 @@ render_scene     { imageId: <id>, replay: { timeline: { log: "<数据目录>/out
 `ignore/p4/c1/out/replay-cp.txt` 逐系统相同；`render_scene` 回放 `p4b-refract` 到 907 帧，RGBA 摘要等于 `b5v/out/real-summary.json`；
 `particle_corners` 对 `p4a` 和 `step4/out/ours-p4a-corners.json` 逐位相同（记录见 `.claude/plans/tools/kabegame-chromium-lib.md` 第 4 批）。
 
+### 读回画布（`render_scene` / `host_render` 的 `canvas`）
+
+不给 `canvas` 时读回的是场景目标（场景分辨率，比如 3840×2160），和加这一项之前逐字节相同。给 `canvas: [宽, 高]`（两个正整数，各不超过
+16384）时，探针在读回那一帧编码完场景之后，用产品上屏的**同一份**着色器与线性采样器（`apps/wpe-scene/src/render/blit.ts`，渲染器也用它）
+按 `fill`（`scenePlacement("fill", …)`，居中盖满裁切，同 WPE 测试窗口）把场景目标铺进这么大的 `rgba8unorm` 纹理，读回它：PNG 与
+`meta.sha256` 都是画布的，`meta.width` / `height` 是画布尺寸，另有 `meta.canvas`（不给时 null）与 `meta.sceneTarget`（场景目标尺寸）。
+结果第一段写明读回的是什么。
+
+- **和 WPE 抓帧比时传抓帧窗口的尺寸**，比较前不用再缩放。场景是窗口的 2 倍（3840×2160 对 1920×1080）时线性采样正好落在 2×2 的中点，
+  输出就是 2×2 平均（实测和浮点平均最大差 0.5，和四舍五入后的平均最大差 1）。
+- **画布就是模拟的壁纸窗口，光标按它换算**：探针用 `window ?? canvas`。时间线交给探针的窗口（有逐帧光标时才交）和 `canvas` 不同时报
+  `[local]`、不开宿主；REST 同时给 `window` 与 `canvas` 而不同回 400（`field: "canvas"`）。没给逐帧光标时窗口不交给探针，不比较。
+- 没给 `canvas`、时间线推得出窗口（标签末尾的 `-<宽>x<高>`）而读回尺寸和它不同时，结果里提示该传的 `canvas`。`canvas` 不反过来喂给
+  时间线，也不默认取时间线的窗口（老调用的读回尺寸不变）。
+- **只改读回、不改渲染**：`g_Screen`、`g_TexelSize` 等内置 uniform 仍按场景目标算，同产品。**已知差异**：WPE 场景比窗口大时按窗口分辨率
+  直接画图层（`3830255100-kbp` 的抓帧：图层画进 1920×1080 的后备缓冲，只有图层合成 RT 是 3840×2160），我们先按场景分辨率画、上屏再缩，
+  这部分差别会留在比较结果里（是产品的差异）。
+- 宿主产物不认识 `canvas`（改了探针没重建）时 vite 报 409 `[host]`，不会把场景目标当画布交回。
+
+```text
+render_scene { imageId: <id>, replay: { timeline: { log: "ignore/p5/inst/out/3830255100-kbp-fps20-1920x1080-log.txt", frame: 173, cursors: "log" } },
+               canvas: [1920, 1080] }   → 读回 1920×1080，直接和 WPE 第 173 帧比
+```
+
+2026-11-12 核对（`3830255100-kbp`，记录见 `.claude/plans/tools/kabegame-chromium-lib.md` 第 5 批）：不给 `canvas` 时摘要与改动前相同；回放到
+173 帧给 `canvas: [1920, 1080]` 的输出和场景目标的 2×2 平均最大差 1；`[1080, 1080]` 和场景目标中间 2160×2160 裁出缩小的图最大差 1。
+
 ## REST（`/__kabegame_dev/*`，vite 上）
 
 请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`，以及原图的 `X-Png-Original-Width` / `-Height`）。
@@ -202,7 +229,7 @@ render_scene     { imageId: <id>, replay: { timeline: { log: "<数据目录>/out
 | `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]` | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」） | 桌面 |
 | `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, window?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`）；`cursors` 是逐帧的 `g_PointerPosition`，`window` 要和它一起给 | 桌面 |
 | `POST /hosts/:h/particle-corners` | `{ imageId, particles?, pointers?, window?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果；`pointers` / `window` 同 render | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |

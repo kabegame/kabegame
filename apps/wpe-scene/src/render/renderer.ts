@@ -24,6 +24,15 @@ import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
+import {
+  BLIT_SAMPLER,
+  createBlitBindGroup,
+  createBlitPipeline,
+  encodeBlit,
+  PLACEMENT_BYTES,
+  placementUniform,
+  TILE_SAMPLER,
+} from "./blit";
 import { FrameClock, FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
@@ -41,25 +50,6 @@ import { GpuScene } from "./scene";
 import { shakeOffset } from "./shake";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
-
-/** 上屏：在视口（铺放矩形）里画全屏三角形，按 `offset + uv * scale` 采样离屏目标，输出不透明。 */
-const BLIT_WGSL = /* wgsl */ `
-struct Placement { offset: vec2<f32>, scale: vec2<f32> }
-@group(0) @binding(0) var<uniform> placement: Placement;
-@group(0) @binding(1) var sceneTexture: texture_2d<f32>;
-@group(0) @binding(2) var sceneSampler: sampler;
-struct VsOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
-@vertex fn vs(@builtin(vertex_index) index: u32) -> VsOut {
-  let p = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
-  var out: VsOut;
-  out.position = vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
-  out.uv = placement.offset + vec2<f32>(p.x, 1.0 - p.y) * placement.scale;
-  return out;
-}
-@fragment fn fs(in: VsOut) -> @location(0) vec4<f32> {
-  return vec4<f32>(textureSample(sceneTexture, sceneSampler, in.uv).rgb, 1.0);
-}
-`;
 
 /**
  * 帧循环里核对画布尺寸的间隔：DPR 变化（换显示器、改系统缩放）不触发 ResizeObserver，这样最多晚这么久跟上。
@@ -174,27 +164,14 @@ export class SceneRenderer {
     this.context = context;
     this.format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format: this.format, alphaMode: "opaque" });
-    const module = device.createShaderModule({ label: "scene blit", code: BLIT_WGSL });
-    this.blitPipeline = device.createRenderPipeline({
-      label: "scene blit",
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: { module, entryPoint: "fs", targets: [{ format: this.format }] },
-      primitive: { topology: "triangle-list" },
+    // 上屏的着色器、采样器参数与 pass 在 `blit.ts`，dev 探针读回画布时用同一份
+    this.blitPipeline = createBlitPipeline(device, this.format);
+    this.blitSampler = device.createSampler(BLIT_SAMPLER);
+    this.tileSampler = device.createSampler(TILE_SAMPLER);
+    this.placementBuffer = device.createBuffer({
+      size: PLACEMENT_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.blitSampler = device.createSampler({
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge",
-    });
-    this.tileSampler = device.createSampler({
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "repeat",
-      addressModeV: "repeat",
-    });
-    this.placementBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.onuncapturederror = (event) => this.fail([`webgpu:validation:${oneLine(event.error.message)}`]);
     void device.lost.then((info) => {
       if (this.destroyed || info.reason === "destroyed") return;
@@ -475,14 +452,13 @@ export class SceneRenderer {
   private blitBindGroup(view: GPUTextureView): GPUBindGroup {
     let group = this.blitBindGroups.get(view);
     if (!group) {
-      group = this.gpu.device.createBindGroup({
-        layout: this.blitPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: this.placementBuffer } },
-          { binding: 1, resource: view },
-          { binding: 2, resource: this.style === "tile" ? this.tileSampler : this.blitSampler },
-        ],
-      });
+      group = createBlitBindGroup(
+        this.gpu.device,
+        this.blitPipeline,
+        this.placementBuffer,
+        view,
+        this.style === "tile" ? this.tileSampler : this.blitSampler,
+      );
       this.blitBindGroups.set(view, group);
     }
     return group;
@@ -505,11 +481,7 @@ export class SceneRenderer {
       this.canvas.height,
       ratio,
     );
-    this.gpu.device.queue.writeBuffer(
-      this.placementBuffer,
-      0,
-      new Float32Array([...this.placement.offset, ...this.placement.scale]),
-    );
+    this.gpu.device.queue.writeBuffer(this.placementBuffer, 0, placementUniform(this.placement));
   }
 
   /** 光标下的场景纹理坐标（`sceneCursor`，P4c 步骤 2）：按当前样式与给定铺放从 `canvasPointer` 现算；没收到过指针时取场景中心。 */
@@ -592,24 +564,16 @@ export class SceneRenderer {
       return;
     }
     this.pointerLast = this.pointer;
-    const pass = encoder.beginRenderPass({
-      label: "scene blit",
-      colorAttachments: [
-        {
-          view: this.context.getCurrentTexture().createView(),
-          // 留白：整屏清成这个颜色，再把场景画进铺放矩形
-          clearValue: { r: this.background[0], g: this.background[1], b: this.background[2], a: 1 },
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-    });
-    pass.setViewport(...this.placement.rect, 0, 1);
-    pass.setPipeline(this.blitPipeline);
-    // `encode` 之后取：有两张目标时它开头才换，上屏的必须是这一帧画的那张
-    pass.setBindGroup(0, this.blitBindGroup(scene.targetView!));
-    pass.draw(3);
-    pass.end();
+    // 留白：整屏清成背景色，再把场景画进铺放矩形（`blit.ts`）。bind group 在 `encode` 之后取：有两张目标时它开头才换，
+    // 上屏的必须是这一帧画的那张
+    encodeBlit(
+      encoder,
+      this.context.getCurrentTexture().createView(),
+      this.background,
+      this.placement.rect,
+      this.blitPipeline,
+      this.blitBindGroup(scene.targetView!),
+    );
     device.queue.submit([encoder.finish()]);
     this.frameCosts.push(performance.now() - started);
     if (this.frameCosts.length > 600) this.frameCosts.splice(0, this.frameCosts.length - 600);

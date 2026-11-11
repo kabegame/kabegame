@@ -81,6 +81,33 @@ describe("checkReplay", () => {
     rejects400(() => checkRenderReplay({ window: [1920, 0] }), "window", /两个正数/);
     rejects400(() => checkRenderReplay({ window: "1920x1080" }), "window");
   });
+
+  test("渲染的读回画布（第 5 批）：canvas 是两个正整数、各不超过 16384；和 window 都给时要相同", () => {
+    assert.equal(checkRenderReplay({ canvas: [1920, 1080] }), undefined);
+    assert.equal(checkRenderReplay({ canvas: [16384, 1] }), undefined);
+    assert.deepEqual(checkRenderReplay({ particles: { dts: [0.1] }, canvas: [1080, 1080] }), { dts: [0.1] });
+    // 和 window 相同：照收
+    assert.equal(checkRenderReplay({ window: [1920, 1080], canvas: [1920, 1080] }), undefined);
+    for (const bad of [
+      [1920.5, 1080],
+      [0, 1080],
+      [1920, -720],
+      [16385, 1080],
+      [1920, 16385],
+      [1920],
+      "1920x1080",
+      [1920, null],
+    ]) {
+      rejects400(() => checkRenderReplay({ canvas: bad }), "canvas", /两个正整数.*各不超过 16384/);
+    }
+    rejects400(
+      () => checkRenderReplay({ window: [1920, 1080], canvas: [1280, 720] }),
+      "canvas",
+      /1280×720 和 window 1920×1080 不同/,
+    );
+    // window 本身不对时先报 window
+    rejects400(() => checkRenderReplay({ window: [0, 1080], canvas: [1280, 720] }), "window", /两个正数/);
+  });
 });
 
 describe("轨迹请求", () => {

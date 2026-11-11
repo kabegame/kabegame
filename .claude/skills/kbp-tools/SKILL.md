@@ -653,12 +653,16 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
      不必为此改设置，job 里带 `settings` 会让 `capture_sweep` 重启 WPE；
    - 日志在 `<data>/out/<标签>-log.txt`，`<标签>-errors.txt` 应为空。
 3. **回放我们的**：kabegame-dev 的 `projects_import` 导入副本目录，再
-   `render_scene { imageId, replay: { timeline: { log: "<data>/out/<标签>-log.txt", frame: <RenderDoc 帧号 + 1>, cursors: "log" } } }`。
+   `render_scene { imageId, replay: { timeline: { log: "<data>/out/<标签>-log.txt", frame: <RenderDoc 帧号 + 1>, cursors: "log" } }, canvas: [<宽>, <高>] }`。
    - 不给 `track`：没有 CLK，`kbp rdc track` 不管这种工程；
    - `frame` 是 WPE 脚本帧号，等于抓帧文件名里的 RenderDoc 帧号 + 1；光标逐帧取自日志。
+   - `canvas` 传和抓帧窗口相同的尺寸（标签里的 `<宽>x<高>`）：探针把这一帧按 `fill` 用产品上屏的同一份着色器铺进这么大的画布再读回，
+     读回的就是窗口尺寸，比较不用再缩放（kabegame-chromium 第 5 批，见其 SKILL.md「读回画布」）。和时间线的窗口不同会报 `[local]`；
+     不传时读回场景目标（场景分辨率），结果里会提示该传的 `canvas`。
+   - 只改读回、不改渲染：场景比窗口大时 WPE 按窗口分辨率直接画图层，我们先按场景分辨率画再缩，这部分差别留在比较结果里。
 4. **WPE 的图**：`kbp rdc frame A:\<项目>\<标签> <标签> --present --data <data>`（文件名 `wpe-<标签>-f<RenderDoc 帧号 + 1>`）。
-5. **比图**：`kbp cmp frame <我们的.png> <WPE 的.png> --resize`（我们的图比 WPE 大时按 cover 缩到同尺寸）。不传 `--meta` /
-   `--kbp-layers`：FR 在画面外，没有要屏蔽的块。
+5. **比图**：`kbp cmp frame <我们的.png> <WPE 的.png>`。第 3 步传了 `canvas` 时两张同尺寸；没传、我们的图比 WPE 大时加 `--resize`（按
+   cover 缩到同尺寸）。不传 `--meta` / `--kbp-layers`：FR 在画面外，没有要屏蔽的块。
 
 取舍：
 
@@ -679,6 +683,8 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 - 副本 21 行 `[kbp]`、无报错行，日志从第 1 帧到第 210 帧；
 - `render_scene` 只给 `{ log, frame: 173, cursors: "log" }`，3840×2160 按 2×2 平均缩到 1920×1080 对 WPE 第 173 帧：平均差 0.81，各区域
   相位相关平移 ≤ 0.08 像素。
+- 2026-11-12 加 `canvas: [1920, 1080]` 直接读回 1920×1080（kabegame-chromium 第 5 批）：和上面的 2×2 平均最大差 1；对 WPE 第 173 帧
+  平均差 0.69、差 > 8 的像素 0.76%，各区域平移 ≤ 0.08 像素，和缩小图同量级。
 
 `kbp content unpack` 的产物和原型的除 FR 的 id（393 对 391）与标记文件外逐字节相同（`tests/accept5.py` 的 real 段）。
 

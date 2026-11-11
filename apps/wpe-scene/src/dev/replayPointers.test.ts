@@ -19,7 +19,7 @@ import {
 } from "../render/parallax";
 import type { SceneState } from "../render/state";
 import { frameCamera, replayParticles, replayReadback, type ParticleReplay } from "./particleCorners";
-import { replayPointers, sceneCursors, windowPointer } from "./replayPointers";
+import { checkCanvas, pointerWindow, replayPointers, sceneCursors, windowPointer } from "./replayPointers";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -173,6 +173,53 @@ describe("逐帧指针（replayPointers）", () => {
     const convert = windowPointer(SCENE, [1440, 1080]);
     expect(sceneCursors(cursors, SCENE, [1440, 1080])).toEqual(cursors.map((p) => convert(p).cursor));
     expect(sceneCursors(cursors, SCENE, [1440, 1080])[0]).not.toEqual(cursors[0]);
+  });
+});
+
+describe("读回画布与光标窗口（第 5 批：checkCanvas、pointerWindow）", () => {
+  it("checkCanvas：两个正整数，给了上限时各不超过它；合法原样返回", () => {
+    expect(checkCanvas([1920, 1080])).toEqual([1920, 1080]);
+    expect(checkCanvas([8192, 1], 8192)).toEqual([8192, 1]);
+    for (const bad of [
+      [1920.5, 1080],
+      [0, 1080],
+      [1920, -1],
+      [1920],
+      [1920, 1080, 1],
+      "1920x1080",
+      [1920, Number.NaN],
+    ]) {
+      expect(() => checkCanvas(bad)).toThrow("canvas 要是 [宽, 高]（两个正整数");
+    }
+    expect(() => checkCanvas([8193, 1080], 8192)).toThrow("超过设备的纹理上限 8192");
+    expect(() => checkCanvas([1080, 8193], 8192)).toThrow("超过设备的纹理上限 8192");
+  });
+
+  it("pointerWindow：window ?? canvas；都没给为 undefined；都给而不同抛错，相同时照用", () => {
+    expect(pointerWindow(undefined, undefined)).toBeUndefined();
+    expect(pointerWindow([1920, 800], undefined)).toEqual([1920, 800]);
+    expect(pointerWindow(undefined, [1280, 720])).toEqual([1280, 720]);
+    expect(pointerWindow([1920, 1080], [1920, 1080])).toEqual([1920, 1080]);
+    expect(() => pointerWindow([1920, 1080], [1280, 720])).toThrow("window 1920×1080 与 canvas 1280×720 不同");
+    expect(() => pointerWindow([1920, 1080], [1920, 1081])).toThrow("不同");
+    // 形状不对时报形状，不报「不同」
+    expect(() => pointerWindow([0, 1080], [1920, 1080])).toThrow("window 要是");
+    expect(() => pointerWindow([1920, 1080], [1920.5, 1080])).toThrow("canvas 要是");
+  });
+
+  it("只给 canvas 时光标按画布换算，等于把同一尺寸当 window 给", () => {
+    const pointers: Point[] = [
+      [0.1, 0.2],
+      [0.9, 0.95],
+    ];
+    const particles = { dts: [0.05, 0.05] };
+    const byCanvas = replayPointers({ pointers, window: pointerWindow(undefined, [1080, 1080]) }, SCENE, 2);
+    expect(byCanvas).toEqual(replayPointers({ pointers, window: [1080, 1080] }, SCENE, 2));
+    expect(byCanvas.cursors).not.toEqual(pointers);
+    // 画布和场景同尺寸：原样，同不给
+    expect(replayPointers({ pointers, window: pointerWindow(undefined, SCENE) }, SCENE, 2)).toEqual(
+      replayPointers({ pointers }, SCENE, particles.dts.length),
+    );
   });
 });
 

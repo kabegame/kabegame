@@ -9,6 +9,8 @@
  * - 逐帧光标（P5a 收尾）：单位都是 `g_PointerPosition`（抓帧窗口归一化），渲染与四角的 `pointers` 要有 `particles`、和
  *   `particles.dts` 等长，渲染的 `pointers` 不和 `pointer` 同给；`window` 是 `[宽, 高]` 两个正数，轨迹的 `window` 要和 `cursors`
  *   一起给（只用来把光标换到场景上）。
+ * - 读回画布（第 5 批）：渲染的 `canvas` 是 `[宽, 高]` 两个正整数、各不超过 `MAX_CANVAS`；探针的光标换算窗口是 `window ?? canvas`，
+ *   两个都给而不相等时 400（`field` 为 `canvas`）。
  * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
  */
 import { badRequest } from "./errors.ts";
@@ -149,6 +151,29 @@ export function checkWindow(value: unknown, field = "window"): [number, number] 
   return value;
 }
 
+/** 读回画布的边长上限（像素）：WebGPU 常见的 `maxTextureDimension2D`，设备更小时探针再报。 */
+export const MAX_CANVAS = 16384;
+
+/**
+ * 读回画布尺寸 `[宽, 高]`（第 5 批）：两个正整数，各不超过 `MAX_CANVAS`。给了 `window` 时要和它相同（探针的光标换算窗口是
+ * `window ?? canvas`，读回画布就是模拟的壁纸窗口）。
+ */
+export function checkCanvas(value: unknown, window?: [number, number], field = "canvas"): [number, number] {
+  const ok =
+    Array.isArray(value) &&
+    value.length === 2 &&
+    value.every((x) => typeof x === "number" && Number.isInteger(x) && x > 0 && x <= MAX_CANVAS);
+  if (!ok) fail(field, `要是 [宽, 高]（两个正整数，像素，各不超过 ${MAX_CANVAS}），收到 ${shown(value)}`);
+  const canvas = value as [number, number];
+  if (window && (window[0] !== canvas[0] || window[1] !== canvas[1])) {
+    fail(
+      field,
+      `${canvas[0]}×${canvas[1]} 和 window ${window[0]}×${window[1]} 不同：读回画布就是模拟的窗口，光标按它换算，两者要相同（或只给一个）`,
+    );
+  }
+  return canvas;
+}
+
 /** 渲染与四角的逐帧指针 `pointers`：要有 `particles`，和 `particles.dts` 等长。 */
 function checkPointers(value: unknown, particles: ParticleReplay | undefined): [number, number][] {
   if (!particles) fail("pointers", "要和 particles 一起给（逐帧指针是回放的每一帧）");
@@ -245,7 +270,8 @@ export function checkPostprocess(value: unknown, field = "postprocess"): ScenePo
  * 渲染请求里的回放：给了 `particles` 就校验它，并拒绝同时给 `time`（探针此时忽略 `time`，读回那一帧的 `g_Time` 取
  * `particles.times` 的末项或 dt 累计值）。没给时原样返回 undefined。
  * 光标一并校验（P5a 收尾）：`pointer` 是一个点；`pointers` 要有 `particles`、和 `particles.dts` 等长、不和 `pointer` 同给；`window` 是
- * `[宽, 高]`。校验过的值原样留在请求里转给探针。
+ * `[宽, 高]`。读回画布 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。校验过的值原样留在请求里
+ * 转给探针。
  */
 export function checkRenderReplay(body: {
   particles?: unknown;
@@ -253,6 +279,7 @@ export function checkRenderReplay(body: {
   pointer?: unknown;
   pointers?: unknown;
   window?: unknown;
+  canvas?: unknown;
 }): ParticleReplay | undefined {
   const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
   if (particles && body.time !== undefined) {
@@ -268,6 +295,7 @@ export function checkRenderReplay(body: {
     }
     checkPointers(body.pointers, particles);
   }
-  if (body.window !== undefined) checkWindow(body.window);
+  const window = body.window === undefined ? undefined : checkWindow(body.window);
+  if (body.canvas !== undefined) checkCanvas(body.canvas, window);
   return particles;
 }

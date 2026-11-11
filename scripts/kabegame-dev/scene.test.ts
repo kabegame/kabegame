@@ -286,6 +286,79 @@ describe("粒子接口的参数透传", () => {
     assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
   });
 
+  test("读回画布（第 5 批）：canvas 原样交给探针；不给时不带；和 window 冲突回 400 不碰页面；结果对不上回 409", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const canvas = (args as { canvas?: [number, number] }).canvas;
+        // 新探针：给了 canvas 就按它读回；把 canvas 设成 [1, 1] 时模拟不认识这一项的旧探针（读回场景目标、结果里没有 canvas）
+        if (canvas && canvas[0] === 1) return { width: 3840, height: 2160, sha256: "old", time: 1.5, frametime: 0 };
+        return {
+          width: canvas?.[0] ?? 3840,
+          height: canvas?.[1] ?? 2160,
+          canvas: canvas ?? null,
+          sceneTarget: [3840, 2160],
+          sha256: "x",
+          time: 1.5,
+          frametime: 0,
+        };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? ${JSON.stringify(png)} : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const response = await renderFrame(f.s, "h-1", { imageId: "14312", canvas: [1920, 1080], userProperties: {} });
+    assert.deepEqual(response.meta.canvas, [1920, 1080]);
+    assert.deepEqual(response.meta.sceneTarget, [3840, 2160]);
+    assert.deepEqual(calls()[0].canvas, [1920, 1080]);
+    assert.equal(calls()[0].time, 1.5);
+    await renderFrame(f.s, "h-1", { imageId: "14312", userProperties: {} });
+    assert.equal("canvas" in calls()[1], false, "不给 canvas 时请求和以前一样");
+    // 和 window 相同照转；回放时也带上
+    const particles = { dts: [0.1, 0.2] };
+    const pointers: [number, number][] = [
+      [0.1, 0.2],
+      [0.3, 0.4],
+    ];
+    await renderFrame(f.s, "h-1", {
+      imageId: "14312",
+      particles,
+      pointers,
+      window: [1920, 1080],
+      canvas: [1920, 1080],
+      userProperties: {},
+    });
+    assert.deepEqual(calls()[2].canvas, [1920, 1080]);
+    assert.deepEqual(calls()[2].window, [1920, 1080]);
+
+    const before = f.conn.evaluated.length;
+    for (const [request, field] of [
+      [{ imageId: "14312", window: [1920, 1080], canvas: [1280, 720] }, "canvas"],
+      [{ imageId: "14312", canvas: [0, 720] }, "canvas"],
+      [{ imageId: "14312", canvas: [1280.5, 720] }, "canvas"],
+      [{ imageId: "14312", canvas: [16385, 720] }, "canvas"],
+    ] as const) {
+      await assert.rejects(
+        renderFrame(f.s, "h-1", request as never),
+        (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === field,
+      );
+    }
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    // 旧探针不认识 canvas：静默读回了场景目标，报 409 而不是把场景目标当画布交回去
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14312", canvas: [1, 1], userProperties: {} }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /探针不认识 canvas/.test(error.message),
+    );
+  });
+
   test("逐帧光标：轨迹的 window、四角的 pointers / window 原样交给探针", async () => {
     const f = await fixture({ particleTrack: () => track, particleCorners: () => [] });
     const cursors: [number, number][] = [

@@ -42,6 +42,41 @@ function checkWindow(window: unknown): asserts window is readonly [number, numbe
 }
 
 /**
+ * 读回画布尺寸 `[宽, 高]`（`renderFrame` 的 `canvas`，第 5 批）：两个正整数；给了 `maxDimension`（设备的 `maxTextureDimension2D`）
+ * 时各不超过它。不合法抛错，合法原样返回。
+ */
+export function checkCanvas(canvas: unknown, maxDimension?: number): [number, number] {
+  const ok =
+    Array.isArray(canvas) &&
+    canvas.length === 2 &&
+    canvas.every((x) => typeof x === "number" && Number.isInteger(x) && x > 0);
+  if (!ok) throw new Error(`canvas 要是 [宽, 高]（两个正整数，像素），收到 ${JSON.stringify(canvas)}`);
+  const size = canvas as [number, number];
+  if (maxDimension !== undefined && (size[0] > maxDimension || size[1] > maxDimension)) {
+    throw new Error(`canvas ${size[0]}×${size[1]} 超过设备的纹理上限 ${maxDimension}`);
+  }
+  return size;
+}
+
+/**
+ * 光标换算用的窗口（第 5 批）：`window ?? canvas`。读回画布就是模拟的壁纸窗口，没给 `window` 时光标按画布换算；两个都给而不相等时
+ * 抛错（光标和读回的画面会对不上）。都没给时为 undefined（光标原样，同以前）。
+ */
+export function pointerWindow(
+  window: readonly [number, number] | undefined,
+  canvas: readonly [number, number] | undefined,
+): readonly [number, number] | undefined {
+  if (window !== undefined) checkWindow(window);
+  if (canvas !== undefined) checkCanvas(canvas);
+  if (window && canvas && (window[0] !== canvas[0] || window[1] !== canvas[1])) {
+    throw new Error(
+      `window ${window[0]}×${window[1]} 与 canvas ${canvas[0]}×${canvas[1]} 不同：读回画布就是模拟的窗口，光标按它换算，两者要相同（或只给一个）`,
+    );
+  }
+  return window ?? canvas;
+}
+
+/**
  * 窗口上的指针 → `g_PointerPosition` 与 `cursor`（壁纸样式 `fill`）。`window` 没给或与场景同尺寸时原样（cursor 与 pointer 相同）。
  */
 export function windowPointer(

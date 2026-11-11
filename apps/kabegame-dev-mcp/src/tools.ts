@@ -6,6 +6,8 @@
  *   一步，长任务等完成并报 MCP 进度），以及不需要 vite 的 `hash_compare`、`app_log`。
  * - 粒子回放（第 4 批）：WPE 的一次抓帧（日志 + RenderDoc 轨迹）在 MCP 里经 `timeline.ts` 组成探针要的 `dts` / `times` /
  *   逐帧光标，工具只收文件路径与回放到的帧号。
+ * - 读回画布（第 5 批）：`render_scene` / `host_render` 的 `canvas` 原样交给探针，探针按 `fill` 上屏到这么大的画布再读回；和时间线
+ *   交给探针的窗口不同时在 MCP 里报 `[local]`，结果里写明读回的是什么。
  *
  * 工具表是静态的：vite 不在时照常列出，调用时回 `isError` 并写明是哪一层不在（文本以 `[层]` 开头）。
  * 参数里的相对路径一律按仓库根解析。图片类工具的落盘与缩小见 `imageOutput.ts`。
@@ -358,6 +360,18 @@ const REPLAY = z
     "确定性粒子回放：{ timeline, seed?, passes?, random? }（按 WPE 的一次抓帧组时间线，常用），或 { particles: { dts, times?, seed?, passes?, random? } }（直接给探针）。" +
       "给了就不收 time：读回那一帧的 g_Time 取时间线（或 times）的末项",
   );
+/** 读回画布的边长上限，同 vite 的 `MAX_CANVAS`。 */
+const MAX_CANVAS = 16384;
+const CANVAS_SIDE = z.number().int().positive().max(MAX_CANVAS);
+const CANVAS = z
+  .tuple([CANVAS_SIDE, CANVAS_SIDE])
+  .describe(
+    `读回画布 [宽, 高]（像素，正整数，各不超过 ${MAX_CANVAS}）：把读回那一帧用产品上屏的同一份着色器与线性采样器，按 fill（居中盖满裁切，` +
+      "同 WPE 测试窗口）铺进这么大的画布，读回画布，PNG 就是这个尺寸；不给时读回场景目标（场景分辨率，和以前逐字节相同）。" +
+      "画布就是模拟的壁纸窗口，光标按它换算，所以要和时间线交给探针的窗口（逐帧光标的 timeline.window）相同，不同时报 [local]。" +
+      "和 WPE 抓帧比时传抓帧窗口的尺寸，比较前不用再缩放。只改读回、不改渲染：g_Screen 等内置 uniform 仍按场景目标算（同产品）；" +
+      "WPE 场景比窗口大时按窗口分辨率直接画，我们先按场景分辨率画再缩，细节会有差",
+  );
 const RENDER_FIELDS = {
   time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）；给了 replay 时不收"),
   postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
@@ -367,6 +381,7 @@ const RENDER_FIELDS = {
       "抓帧期间光标在动时改用 replay.timeline 的 cursors（不能同给）",
   ),
   replay: REPLAY.optional(),
+  canvas: CANVAS.optional(),
 };
 const OUT = z.string().describe("结果写到这个文件（相对路径按仓库根）");
 const OVERWRITE = z.boolean().default(false).describe("out 已存在时是否覆盖，缺省拒绝");
@@ -533,6 +548,49 @@ export function summarizeCorners(layers: ParticleCornersLayer[]): string[] {
   if (!layers.length) lines.push("没有粒子层（或 layer 没匹配上）");
   if (layers[0])
     lines.push(`角的顺序（uv）：${layers[0].uv.map(([u, v]) => `(${u},${v})`).join(" ")}；像素坐标原点左上、y 向下`);
+  return lines;
+}
+
+const sizeText = (size: readonly number[]) => `${size[0]}×${size[1]}`;
+
+/**
+ * 读回画布与时间线交给探针的窗口（第 5 批）：探针的光标换算窗口是 `window ?? canvas`，两个都有而不同时光标和读回的画面对不上，
+ * 在发请求（开宿主）之前报 `[local]`。窗口只跟着逐帧光标交给探针（`cursorsFor`），没给逐帧光标时没有冲突。
+ */
+export function checkCanvasWindow(
+  canvas: readonly [number, number] | undefined,
+  window: readonly [number, number] | undefined,
+): void {
+  if (!canvas || !window || (canvas[0] === window[0] && canvas[1] === window[1])) return;
+  throw new ToolError(
+    "local",
+    `canvas ${sizeText(canvas)} 和时间线交给探针的窗口 ${sizeText(window)} 不同：读回画布就是模拟的壁纸窗口，光标按它换算，两者要相同。` +
+      `要和这次 WPE 抓帧比就传 canvas: [${window[0]}, ${window[1]}]`,
+  );
+}
+
+/**
+ * 结果里说明读回的是什么（第 5 批）：给了 canvas 时「画布 W×H，场景目标 SW×SH 按 fill 铺进去」，否则「场景目标 SW×SH」。
+ * 没给 canvas、时间线推得出窗口而读回尺寸和它不同时，再提示一行该传的 canvas。之前的宿主产物没有 `canvas` / `sceneTarget`，
+ * 按读回尺寸就是场景目标处理。
+ */
+export function readbackLines(
+  meta: Pick<RenderMeta, "width" | "height" | "canvas" | "sceneTarget">,
+  canvas: readonly [number, number] | undefined,
+  timelineWindow: readonly [number, number] | null | undefined,
+): string[] {
+  const target = meta.sceneTarget ?? [meta.width, meta.height];
+  const lines = [
+    meta.canvas
+      ? `读回：画布 ${sizeText(meta.canvas)}，场景目标 ${sizeText(target)} 按 fill（居中盖满裁切）铺进去，同产品上屏`
+      : `读回：场景目标 ${sizeText(target)}（没给 canvas，不经过上屏）`,
+  ];
+  if (!canvas && timelineWindow && (timelineWindow[0] !== meta.width || timelineWindow[1] !== meta.height)) {
+    lines.push(
+      `提示：时间线的窗口是 ${sizeText(timelineWindow)}，读回的是 ${meta.width}×${meta.height}；` +
+        `要和这次 WPE 抓帧逐像素比、不用再缩放，传 canvas: [${timelineWindow[0]}, ${timelineWindow[1]}]`,
+    );
+  }
   return lines;
 }
 
@@ -852,7 +910,16 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
 
   const renderResult = (
     response: RenderResponse,
-    options: { tool: string; imageId: string; save?: string; size?: z.infer<typeof SIZE>; inline?: boolean },
+    options: {
+      tool: string;
+      imageId: string;
+      save?: string;
+      size?: z.infer<typeof SIZE>;
+      inline?: boolean;
+      /** 请求的读回画布（第 5 批）与时间线推出的窗口：结果里写明读回的是什么，没给 canvas 时按窗口提示。 */
+      canvas?: [number, number];
+      timelineWindow?: readonly [number, number] | null;
+    },
     lead: string[] = [],
   ) =>
     imageContent(Buffer.from(response.png, "base64"), {
@@ -865,6 +932,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       inline: options.inline,
       lead: [
         ...lead,
+        ...readbackLines(response.meta, options.canvas, options.timelineWindow),
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
         `读回那一帧 g_Time ${response.meta.time}，g_Frametime ${response.meta.frametime}`,
         particleStatsLine(response.meta) ?? "",
@@ -874,11 +942,12 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
 
   /**
    * 渲染参数：`replay` 与 `time` 互斥；`replay` 换成探针的 `particles`，时间线的逐帧光标换成探针的 `pointers`（连同 `window`，
-   * 和固定的 `pointer` 互斥），并回时间线说明。
+   * 和固定的 `pointer` 互斥），并回时间线说明。读回画布 `canvas`（第 5 批）原样转，和交给探针的窗口不同时报 `[local]`；
+   * `timelineWindow` 是时间线推出的窗口（不论交没交给探针），结果里按它提示 `canvas`。
    */
   const renderBody = (imageId: string, render: Args<typeof RENDER_FIELDS>) => {
     const { replay, ...rest } = render;
-    if (!replay) return { body: { imageId, ...rest }, lines: [] as string[] };
+    if (!replay) return { body: { imageId, ...rest }, lines: [] as string[], timelineWindow: null };
     if (rest.time !== undefined) {
       throw new ToolError(
         "local",
@@ -894,6 +963,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       );
     }
     const resolved = resolveReplay(root, replay);
+    checkCanvasWindow(rest.canvas, resolved.window);
     return {
       body: {
         imageId,
@@ -903,6 +973,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         ...(resolved.window ? { window: resolved.window } : {}),
       },
       lines: resolved.lines,
+      timelineWindow: resolved.timeline?.window ?? null,
     };
   };
 
@@ -941,7 +1012,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       title: "宿主里渲染一帧",
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
-        "replay 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回。",
+        "replay、canvas 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回；给 canvas 时读回按 fill 上屏到这么大的画布。",
       inputSchema: {
         handle: z.string().min(1),
         imageId: IMAGE_ID,
@@ -953,9 +1024,13 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ handle, imageId, save, size, inline, ...render }) => {
-      const { body, lines } = renderBody(imageId, render);
+      const { body, lines, timelineWindow } = renderBody(imageId, render);
       const response = await client.hostRender(handle, body);
-      return renderResult(response, { tool: "host_render", imageId, save, size, inline }, lines);
+      return renderResult(
+        response,
+        { tool: "host_render", imageId, save, size, inline, canvas: render.canvas, timelineWindow },
+        lines,
+      );
     },
   );
 
@@ -1041,6 +1116,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "给 replay 时按 WPE 的 dt 序列确定性回放粒子（种子固定），再读回最后一帧，用来和 WPE 抓帧逐像素比；时间线用 { timeline: { log, track, frame } } 从 WPE 日志与 RenderDoc 轨迹组，" +
         'passes 缺省按标签里的 fps<N> 推。抓帧期间光标在动时给 timeline.cursors（"log" 按每一帧的光标复现，要 cursor=True 生成的工程），' +
         "探针第 i 帧用第 i 帧的光标、读回帧的 g_PointerPositionLast 是上一帧的，窗口和场景不同尺寸时按 fill 换到场景上；不给时光标固定为 pointer（不能同给）。" +
+        "不给 canvas 时读回场景目标（场景分辨率）；给 canvas: [宽, 高] 时用产品上屏的同一份着色器按 fill 铺进这么大的画布再读回，" +
+        "和 WPE 抓帧比时传抓帧窗口的尺寸（要和时间线交给探针的窗口相同），比较前不用再缩放；只改读回、不改渲染。" +
         "工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,
@@ -1053,11 +1130,15 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       annotations: READ_ONLY,
     },
     async ({ imageId, host, save, size, inline, ...render }) => {
-      const { body, lines } = renderBody(imageId, render);
+      const { body, lines, timelineWindow } = renderBody(imageId, render);
       const { value: response, hostLine } = await withSceneHost(imageId, host, (handle) =>
         client.hostRender(handle, body),
       );
-      return renderResult(response, { tool: "render_scene", imageId, save, size, inline }, [hostLine, ...lines]);
+      return renderResult(
+        response,
+        { tool: "render_scene", imageId, save, size, inline, canvas: render.canvas, timelineWindow },
+        [hostLine, ...lines],
+      );
     },
   );
 

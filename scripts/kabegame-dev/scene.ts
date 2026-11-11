@@ -452,6 +452,8 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * 在宿主里渲染一帧（`__kabegameSceneProbe.renderFrame`），再按 chunk 取回 PNG。场景目录由 `wpe_scene_target` 按图片 id 取。
  * 给了 `particles` 时原样交给探针做确定性回放（不收 `time`：读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计值）；逐帧光标
  * `pointers` 与窗口尺寸 `window`（P5a 收尾）校验后同样原样转给探针。
+ * 读回画布 `canvas`（第 5 批）校验后原样转给探针，探针按 `fill` 上屏到这么大的画布再读回；结果的 `meta.canvas` 对不上时（宿主产物
+ * 不认识这一项，静默读回了场景目标）报 409。
  */
 export async function renderFrame(
   s: DevSession,
@@ -481,12 +483,27 @@ export async function renderFrame(
     // 逐帧光标（P5a 收尾）：checkRenderReplay 已校验（要有 particles、等长、不和 pointer 同给）
     ...(request.pointers ? { pointers: request.pointers } : {}),
     ...(request.window ? { window: request.window } : {}),
+    // 读回画布（第 5 批）：checkRenderReplay 已校验（两个正整数、不超过上限、和 window 相同）
+    ...(request.canvas ? { canvas: request.canvas } : {}),
   };
   const task = await hostTask(s, handle, `__kabegameSceneProbe.renderFrame(${JSON.stringify(args)})`, {
     signal: options.signal,
   });
   if (task.status !== "done") throw new DevError(422, "host", `渲染失败：${task.error}`, { imageId: request.imageId });
   const meta = task.result as RenderMeta;
+  const canvas = request.canvas;
+  if (canvas && !(Array.isArray(meta.canvas) && meta.canvas[0] === canvas[0] && meta.canvas[1] === canvas[1])) {
+    throw new DevError(
+      409,
+      "host",
+      `宿主产物没有按 canvas ${canvas[0]}×${canvas[1]} 读回（结果 ${meta.width}×${meta.height}）：探针不认识 canvas，重建宿主（--mode development）`,
+      {
+        imageId: request.imageId,
+        canvas,
+        meta: { width: meta.width, height: meta.height, canvas: meta.canvas ?? null },
+      },
+    );
+  }
   const png = await probeBytes(s, handle, `${key}.png`);
   return {
     meta,

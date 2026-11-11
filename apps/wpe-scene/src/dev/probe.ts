@@ -19,8 +19,11 @@
  *   `GpuScene.setCamera`（同渲染器与 WPE），视差点带同一帧的 s 推进；读回的那一帧先 `setCamera` 再 `setParallax`，矩阵与眼位跟着变。
  * - 缩放（P5a 步骤 4）：`general.zoom` 随 s 一起交给 `setCamera`（`frameCamera`），取当时的 `state.general.zoom`；`particleTrack` 的
  *   跟随点同样按带缩放的投影反投影。
+ * - 读回画布（kabegame-chromium 第 5 批）：`renderFrame` 收 `canvas: [宽, 高]` 时，读回那一帧编码完场景之后，用产品上屏的同一份
+ *   着色器与采样器（`render/blit.ts`）按 `fill` 把场景目标铺进这么大的 `rgba8unorm` 纹理、读回它；光标的换算窗口是 `window ?? canvas`。
+ *   只改读回、不改渲染（`g_Screen` 等仍按场景目标算）。不给 `canvas` 时读回场景目标，逐字节同以前。
  *
- * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过画布（画布要在同一任务内同步取，否则是全透明空图）。
+ * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
 import type { SceneBundle } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
@@ -28,14 +31,23 @@ import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { particleTrack, type ParticleTrack } from "../particles/track";
+import {
+  BLIT_SAMPLER,
+  createBlitBindGroup,
+  createBlitPipeline,
+  encodeBlit,
+  PLACEMENT_BYTES,
+  placementUniform,
+} from "../render/blit";
 import { acquireGpu } from "../render/device";
+import { scenePlacement } from "../render/layout";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
 import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
 import { replayParticleOptions, replayReadback, type ParticleReplay } from "./particleCorners";
-import { replayPointers, sceneCursors } from "./replayPointers";
+import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -167,10 +179,19 @@ export interface RenderFrameOptions {
   pointers?: [number, number][];
   /**
    * 抓帧窗口尺寸 `[宽, 高]`（像素）：和场景不同尺寸时，光标（`pointer` / `pointers`）按壁纸样式 `fill` 换到场景上推出 cursor
-   * （`sceneCursor`，同渲染器与 kbp replay），`g_PointerPosition` 仍是窗口坐标；缺省或同尺寸时原样。
+   * （`sceneCursor`，同渲染器与 kbp replay），`g_PointerPosition` 仍是窗口坐标；缺省或同尺寸时原样。没给时取 `canvas`；两个都给
+   * 而不相等时抛错（`pointerWindow`）。
    */
   window?: [number, number];
-  /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（场景目标尺寸，alpha 置 255）存 `<key>.rgba`。 */
+  /**
+   * 读回画布尺寸 `[宽, 高]`（像素，两个正整数，各不超过设备的 `maxTextureDimension2D`，否则抛错）：读回那一帧编码完场景之后，用产品
+   * 上屏的同一份着色器与线性采样器（`render/blit.ts`），按 `fill`（`scenePlacement("fill", …)`，居中盖满裁切，同 WPE 测试窗口）把
+   * 场景目标铺进这么大的 `rgba8unorm` 纹理（留白色黑，`fill` 没有留白），读回它；PNG 与 `.rgba` 都是画布尺寸。画布就是模拟的壁纸
+   * 窗口，没给 `window` 时光标按它换算。只改读回、不改渲染：内置 uniform（`g_Screen`、`g_TexelSize`）仍按场景目标算，同产品。
+   * 不给时读回场景目标，逐字节同以前。
+   */
+  canvas?: [number, number];
+  /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（读回的尺寸，alpha 置 255）存 `<key>.rgba`。 */
   key?: string;
   /** 有不支持项也渲染（同 dev 强制渲染）。默认 true。 */
   force?: boolean;
@@ -191,8 +212,14 @@ export interface RenderFrameOptions {
 }
 
 export interface RenderFrameResult {
+  /** 读回图片的尺寸：给了 `canvas` 时是画布，否则是场景目标。 */
   width: number;
   height: number;
+  /** 读回的画布 `[宽, 高]`；没给 `canvas`（读回场景目标）时为 null。 */
+  canvas: [number, number] | null;
+  /** 场景目标（离屏渲染目标）的尺寸：场景分辨率，超过设备上限时等比缩小。 */
+  sceneTarget: [number, number];
+  /** 场景目标的格式（`rgba16float` 是 HDR 场景）；读回的画布总是 `rgba8unorm`。 */
   format: string;
   unsupported: string[];
   postprocess: SceneBundle["general"]["postprocess"];
@@ -221,8 +248,57 @@ export interface RenderFrameResult {
   key: string;
 }
 
-/** 编译并按固定时刻渲染一帧，读回离屏场景目标（不经过画布、不做 cover）。 */
+/**
+ * 读回画布（第 5 批）：在 `scene.encode` 之后、同一个编码器里，用产品上屏的同一份着色器与采样器参数（`render/blit.ts`）按 `fill`
+ * 把这一帧的场景目标铺进 `canvas` 尺寸的 `rgba8unorm` 纹理。铺放按场景目标尺寸算，同渲染器的 `syncPlacement`；留白色黑（`fill`
+ * 盖满，没有留白）。返回画布纹理，以及读回之后释放资源的函数。
+ */
+function encodeCanvasBlit(
+  device: GPUDevice,
+  encoder: GPUCommandEncoder,
+  scene: GpuScene,
+  [width, height]: readonly [number, number],
+): { texture: GPUTexture; release: () => void } {
+  const texture = device.createTexture({
+    label: "probe canvas",
+    size: [width, height],
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const placement = scenePlacement("fill", scene.width, scene.height, width, height);
+  const placementBuffer = device.createBuffer({
+    label: "probe canvas placement",
+    size: PLACEMENT_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(placementBuffer, 0, placementUniform(placement));
+  const pipeline = createBlitPipeline(device, "rgba8unorm");
+  // `encode` 之后取：有两张目标时它开头才换，铺进画布的必须是这一帧画的那张（同渲染器）
+  const bindGroup = createBlitBindGroup(
+    device,
+    pipeline,
+    placementBuffer,
+    scene.targetView!,
+    device.createSampler(BLIT_SAMPLER),
+  );
+  encodeBlit(encoder, texture.createView(), [0, 0, 0], placement.rect, pipeline, bindGroup);
+  return {
+    texture,
+    release: () => {
+      texture.destroy();
+      placementBuffer.destroy();
+    },
+  };
+}
+
+/**
+ * 编译并按固定时刻渲染一帧，读回离屏场景目标（不经过页面上的画布、不做铺放）；给了 `canvas` 时读回按 `fill` 上屏到这么大的画布
+ * （`encodeCanvasBlit`）。
+ */
 export async function renderFrame(options: RenderFrameOptions): Promise<RenderFrameResult> {
+  // 先查读回画布与光标窗口（`window ?? canvas`，两个都给而不同时抛错），参数错时不编译；纹理上限要等取到设备再查
+  const canvas = options.canvas === undefined ? undefined : checkCanvas(options.canvas);
+  const cursorWindow = pointerWindow(options.window, canvas);
   const started = performance.now();
   const reader = new FetchSceneReader();
   const cache = new TextureDecodeCache(reader);
@@ -239,11 +315,13 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const compileMs = performance.now() - started;
   const gpu = await acquireGpu();
   try {
+    if (canvas) checkCanvas(canvas, gpu.device.limits.maxTextureDimension2D);
     const state = SceneState.fromBundle(bundle);
     const { width: sceneWidth, height: sceneHeight } = bundle.general;
-    // 每一帧的 g_PointerPosition 与 cursor（P5a 收尾）：只给 pointer（或都不给）时每帧相同，同加逐帧指针之前
+    // 每一帧的 g_PointerPosition 与 cursor（P5a 收尾）：只给 pointer（或都不给）时每帧相同，同加逐帧指针之前。
+    // 换算窗口是 `window ?? canvas`（第 5 批）：读回画布就是模拟的壁纸窗口
     const pointers = replayPointers(
-      { pointer: options.pointer, pointers: options.pointers, window: options.window },
+      { pointer: options.pointer, pointers: options.pointers, window: cursorWindow },
       [sceneWidth, sceneHeight],
       options.particles?.dts.length,
     );
@@ -320,13 +398,30 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
-      const read = scheduleReadback(gpu.device, encoder, scene.targetTexture!, scene.width, scene.height, format);
-      gpu.device.queue.submit([encoder.finish()]);
-      const raw = await read();
+      let raw: Uint8Array | Float32Array;
+      if (canvas) {
+        // 读回画布（第 5 批）：场景之后在同一个编码器里按 fill 上屏到画布纹理再读回。校验错误（比如管线建不出来）不静默读回空图
+        gpu.device.pushErrorScope("validation");
+        const blit = encodeCanvasBlit(gpu.device, encoder, scene, canvas);
+        try {
+          const read = scheduleReadback(gpu.device, encoder, blit.texture, canvas[0], canvas[1], "rgba8unorm");
+          gpu.device.queue.submit([encoder.finish()]);
+          const error = await gpu.device.popErrorScope();
+          if (error) throw new Error(`读回画布时 WebGPU 校验出错：${error.message}`);
+          raw = await read();
+        } finally {
+          blit.release();
+        }
+      } else {
+        const read = scheduleReadback(gpu.device, encoder, scene.targetTexture!, scene.width, scene.height, format);
+        gpu.device.queue.submit([encoder.finish()]);
+        raw = await read();
+      }
+      const [width, height] = canvas ?? [scene.width, scene.height];
       const rgba = raw instanceof Uint8Array ? raw : quantize8(raw);
       for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
       const key = options.key ?? `frame-${Date.now()}`;
-      storeProbeBytes(`${key}.png`, await encodePng(rgba, scene.width, scene.height));
+      storeProbeBytes(`${key}.png`, await encodePng(rgba, width, height));
       storeProbeBytes(`${key}.rgba`, rgba);
       const sums = [0, 0, 0];
       for (let i = 0; i < rgba.length; i += 4) {
@@ -336,8 +431,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       }
       const count = rgba.length / 4;
       return {
-        width: scene.width,
-        height: scene.height,
+        width,
+        height,
+        canvas: canvas ? [canvas[0], canvas[1]] : null,
+        sceneTarget: [scene.width, scene.height],
         format,
         unsupported: bundle.unsupported,
         postprocess: bundle.general.postprocess,

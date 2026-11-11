@@ -446,6 +446,39 @@ describe("粒子回放、轨迹与四角", () => {
     });
   });
 
+  test("render 的读回画布（第 5 批）：canvas 原样转给后端；不合法或和 window 不同回 400，field 是 canvas", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const ok = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: 14312, canvas: [1920, 1080] });
+      assert.equal(ok.status, 200);
+      await ok.body?.cancel();
+      const same = await post(`${base}/__kabegame_dev/hosts/h-1/render`, {
+        imageId: "14312",
+        window: [1920, 1080],
+        canvas: [1920, 1080],
+      });
+      assert.equal(same.status, 200);
+      await same.body?.cancel();
+      assert.deepEqual(calls, [
+        ["hostRender", "h-1", { imageId: "14312", canvas: [1920, 1080] }],
+        ["hostRender", "h-1", { imageId: "14312", window: [1920, 1080], canvas: [1920, 1080] }],
+      ]);
+      for (const body of [
+        { imageId: "1", canvas: [1920, 0] },
+        { imageId: "1", canvas: [1920.5, 1080] },
+        { imageId: "1", canvas: [16385, 1080] },
+        { imageId: "1", window: [1920, 1080], canvas: [1280, 720] },
+      ]) {
+        const res = await post(`${base}/__kabegame_dev/hosts/h-1/render`, body);
+        assert.equal(res.status, 400, JSON.stringify(body));
+        const error = await res.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, "canvas", error.error);
+      }
+      assert.equal(calls.length, 2, "参数错时不调后端");
+    });
+  });
+
   test("particle-track：校验后转给后端（imageId 转字符串），400 的形状", async () => {
     const { backend, calls } = fakeBackend();
     await withServer(backend, async (base) => {

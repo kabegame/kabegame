@@ -778,3 +778,166 @@ P4c 步骤 5（`a0a84322`）改了探针 `particleCorners` 的结果：新增 `d
 - **修改** `particles.test.ts`（加 `drawn` 与 NaN 四角的摘要用例）、`SKILL.md`（结果字段、NaN 在文件里是 `null`）。
 
 验收：两个包单测全过（MCP 17 组 55 步、vite 26 组 105 步），`deno check`、Prettier 通过；另起 stdio MCP 导入 `p4c-sprite`、按 WPE 抓帧回放后读四角：24 层都带 `drawn`，只有 S7（`upright` 轴平行于视线，步骤 0 预测不画）为 false，摘要正常；测试工程已移除，`app_state` 前后相同。脚本 `ignore/p4/dev4/claude/e2e-drawn.mjs`。
+
+## 第 5 批 — 渲染读回指定画布尺寸（2026-11-12 用户）
+
+**来源：** 用户：「render_scene 需要指定大小，这样不用缩放可以和 wpe 抓帧窗口一致」。起因是 `3830255100-kbp` 的端到端（场景 3840×2160、抓帧窗口 1920×1080）：`render_scene` 读回的是场景目标，比较前要自己 2×2 平均缩到 1920×1080（`ignore/p5/inst/cmp_proto.py`）。
+
+### 总体设计思路
+
+`render_scene` / `host_render` 多收一个 `canvas: [宽, 高]`，意思是「把这一帧上屏到这么大的画布，读回画布」。做法照产品：渲染器上屏时把场景目标用全屏三角形、线性采样按壁纸样式铺进画布（`renderer.ts` 的 scene blit），探针在读回那一帧编码完场景之后，用**同一份**着色器、同样的采样器，按 `fill`（`scenePlacement("fill", …)`，等于 WPE 的居中盖满裁切）铺进一张 `canvas` 尺寸的 `rgba8unorm` 纹理，读回它。不给 `canvas` 时读回场景目标，和现在逐字节相同。
+
+画布就是模拟的壁纸窗口，所以它同时是光标的换算基准：探针换算光标用 `window ?? canvas`，两个都给而不相等时报错（REST 回 400，MCP 在时间线交给探针的窗口与 `canvas` 不同时报 `[local]`；窗口只跟着逐帧光标交给探针，没给逐帧光标时不比较，实施时按点 4 定，见实施记录）。`canvas` 不反过来喂给时间线（标签里通常就有 `-<宽>x<高>`），也不默认取时间线的窗口：老调用的读回尺寸不变。MCP 在时间线推得出窗口、没给 `canvas`、读回尺寸又和窗口不同时，结果里提示一行该传什么。
+
+只改读回，不改渲染：内置 uniform（`g_Screen`、`g_TexelSize`）仍按场景目标算，同产品。这一点和 WPE 不同，见下面的已知差异；它是产品的差异，不在这批改。
+
+**已知差异（2026-11-12 核对 `A:\p5inst\3830255100-kbp-fps20-1920x1080\…-frame172.rdc`）：** WPE 把图层直接画进 1920×1080 的后备缓冲（视口 1920×1080，最后一个绘制 770 的目标就是 Present 的 `ResourceId::466`），只有图层合成 RT 是 3840×2160（绘制 28）。也就是说场景比窗口大时，WPE 按窗口分辨率光栅化，我们先按场景分辨率画、上屏再缩。`canvas` 读回的是产品实际显示的画面，和 WPE 比时这部分差别会留在结果里。
+
+### 现状锚点
+
+**a. 探针只读回场景目标**（`apps/wpe-scene/src/dev/probe.ts`，`renderFrame`）
+```ts
+const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
+scene.encode(encoder, state);
+const format = scene.targetTexture!.format as ReadbackFormat;
+// 现状：读回场景目标（场景分辨率），不经过上屏
+const read = scheduleReadback(gpu.device, encoder, scene.targetTexture!, scene.width, scene.height, format);
+```
+
+**b. 上屏的着色器与管线只在渲染器里**（`apps/wpe-scene/src/render/renderer.ts`）
+```ts
+const BLIT_WGSL = /* wgsl */ `…`;   // 现状：模块内常量
+this.blitPipeline = device.createRenderPipeline({ label: "scene blit", layout: "auto", /* … */ targets: [{ format: this.format }] });
+this.blitSampler = device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
+```
+
+**c. 光标的窗口只来自 `window`**（`probe.ts`）
+```ts
+const pointers = replayPointers(
+  { pointer: options.pointer, pointers: options.pointers, window: options.window },   // 现状：没有画布
+  [sceneWidth, sceneHeight],
+  options.particles?.dts.length,
+);
+```
+
+### 点 1 — 上屏共用（新增 `apps/wpe-scene/src/render/blit.ts`，修改 `renderer.ts`）
+- **新增** `blit.ts`：上屏着色器、建管线（按目标格式）、两种采样器的参数、一次上屏 pass 的编码（清成留白色、视口设铺放矩形、画 3 个顶点），渲染器与探针共用。
+- **修改** `renderer.ts` 改用它，行为不变（同一着色器、同一采样器参数、同一 pass）。
+
+### 点 2 — 探针（`apps/wpe-scene/src/dev/probe.ts`、`replayPointers.ts`）
+- **修改** `RenderFrameOptions` 加 `canvas?: [number, number]`（正整数，不超过设备的 `maxTextureDimension2D`，否则抛错）。
+- **修改** 读回：给了 `canvas` 时，读回那一帧 `scene.encode` 之后在同一个编码器里按 `fill` 铺进 `canvas` 尺寸的 `rgba8unorm` 纹理（留白色黑，`fill` 没有留白），读回这张；PNG 与 `.rgba` 都是画布尺寸。
+- **新增** 纯函数（放 `replayPointers.ts`）：光标窗口 = `window ?? canvas`，两者都给而不同时抛错；有单测。
+- **修改** `RenderFrameResult`：`width` / `height` 是读回图片的尺寸；新增 `canvas: [w, h] | null`、`sceneTarget: [w, h]`。
+
+### 点 3 — vite（`scripts/kabegame-dev/replay.ts`、`scene.ts`、`types.ts`）
+- **修改** `RenderRequest` 加 `canvas?: [number, number]`；`checkRenderReplay` 校验（两个正整数、各不超过 16384）与 `window` 冲突（都给且不同回 400，字段 `canvas`）；`renderFrame` 原样转给探针。
+- **修改** `RenderMeta` 加 `canvas`、`sceneTarget`。
+
+### 点 4 — MCP（`apps/kabegame-dev-mcp/src/tools.ts`）
+- **修改** `RENDER_FIELDS` 加 `canvas`（`render_scene`、`host_render` 共用），描述写明：读回画布、`fill`、同产品上屏；光标按它换算；和时间线推出的窗口要相同；只改读回、不改渲染（`g_Screen` 等按场景目标）；WPE 按窗口分辨率直接画，场景比窗口大时细节会有差。
+- **修改** `renderBody`：时间线交给探针的窗口与 `canvas` 不同时报 `[local]`。
+- **修改** 结果说明：加一行读回的是什么（「画布 W×H，场景目标 SW×SH 按 fill 铺进去」或「场景目标 SW×SH」）；没给 `canvas`、时间线推得出窗口且与读回尺寸不同时，提示传 `canvas: [W, H]`。
+
+### 点 5 — 文档
+- `.claude/skills/kabegame-chromium/SKILL.md`：渲染参数与 REST 渲染请求体加 `canvas`，读回规则与已知差异。
+- `.claude/skills/kbp-tools/SKILL.md`「真实场景的回放」：渲染时传与抓帧窗口相同的 `canvas`，比较不用再缩放。
+- `cocs/wpe/WPE_SCENE.md`：dev 探针 `renderFrame` 一行加 `canvas`。
+
+### 验收
+- **单测**：光标窗口的纯函数；vite 的 `canvas` 校验（非整数、0、超上限、与 `window` 冲突）与转发；MCP 的转发、冲突报 `[local]`、提示行。两个 TS 包与 `apps/wpe-scene` 的单测全过，`deno check`、宿主 tsc、Prettier 通过。
+- **端到端**（dev 在跑；`projects_import` 导入 `ignore/p5/proj/3830255100-kbp`，验完 `projects_remove`；宿主改完用 `--mode development` 重建；vite 侧改动在临时副本里写好一次拷回）：
+  1. 改动前先用现有宿主渲染一帧（`time` 1.5）记下 `meta.sha256`；改动后不给 `canvas` 渲染同一帧，摘要相同。
+  2. 按时间线回放到 173 帧（日志 `ignore/p5/inst/out/3830255100-kbp-fps20-1920x1080-log.txt`，`cursors: "log"`）：给 `canvas: [1920, 1080]` 的输出与不给时的输出按 2×2 平均缩小后逐像素比，最大差 ≤ 1；再和 WPE 第 173 帧比，统计与 `cmp_proto.py` 对缩小图的结果同量级。
+  3. 宽高比不同的画布（`[1080, 1080]`）：与场景目标中间 2160×2160 裁出后 2×2 平均缩小的图比，最大差 ≤ 1。
+  4. 时间线窗口 1920×1080 时给 `canvas: [1280, 720]`：`[local]` 报错，没开宿主。
+  5. 不留痕迹：`app_state` 前后一致，没有残留宿主，测试工程已移除。
+
+### 实施记录 / 第 5 批（2026-11-12，子代理实现）
+
+- **新增** `apps/wpe-scene/src/render/blit.ts`：上屏着色器 `BLIT_WGSL`、两种采样器参数（`BLIT_SAMPLER` / `TILE_SAMPLER`）、`PLACEMENT_BYTES`、
+  `createBlitPipeline(device, format)`、`placementUniform`、`createBlitBindGroup`、`encodeBlit`（清成留白色、视口设铺放矩形、画 3 个顶点）。
+- **修改：**
+  - `renderer.ts`：改用 `blit.ts`，只做抽取。着色器、管线与采样器参数、缓冲大小、label、pass 内的调用顺序都同前；bind group 改在
+    `beginRenderPass` 之前取（仍在 `encode` 之后）。
+  - `probe.ts`：`RenderFrameOptions.canvas`；`encodeCanvasBlit`（同一个编码器，`scenePlacement("fill", 场景目标宽高, 画布宽高)`，`rgba8unorm`，
+    留白黑）；`RenderFrameResult` 的 `width` / `height` 是读回尺寸，新增 `canvas`、`sceneTarget`。
+  - `replayPointers.ts`：纯函数 `checkCanvas(canvas, maxDimension?)`、`pointerWindow(window, canvas)`。单测加 3 条（文件内 8 → 11）。
+  - vite：
+    - `replay.ts`：`MAX_CANVAS = 16384`、`checkCanvas`；`checkRenderReplay` 收 `canvas`。
+    - `scene.ts`：转发 `canvas`。
+    - `types.ts`：`RenderRequest.canvas`、`RenderMeta.canvas` / `sceneTarget`。
+    - 单测加在 `replay.test.ts`、`scene.test.ts`、`rest.test.ts`。
+    - `rest.ts` 不用改：渲染路由把请求体原样交给后端，校验在 `checkRenderReplay`。
+  - MCP `tools.ts`：`RENDER_FIELDS.canvas`（zod：两个正整数、≤ 16384）、`checkCanvasWindow`、`readbackLines`；`renderBody` 多回
+    `timelineWindow`；`render_scene` / `host_render` 的描述。`particles.test.ts` 新增一组 5 条。
+  - 文档：kabegame-chromium `SKILL.md`（工具表、新增「读回画布」一节、REST 表）、kbp-tools `SKILL.md`「真实场景的回放」（第 3、5 步与实测）、
+    `WPE_SCENE.md` 的 `renderFrame` 一行。
+
+和计划不同、或计划没写、由代理按证据定的：
+
+- **冲突比的是「交给探针的窗口」，照点 4 的写法。**
+  - 窗口只跟着逐帧光标交给探针（第 4 批的 `cursorsFor`）。没给逐帧光标时，`canvas` 和推出来的窗口不同也不报错（有单测）。
+  - 「总体设计思路」写的是「时间线推出的窗口与 `canvas` 不同时报 `[local]`」，在没给光标时比点 4 宽，取了点 4。
+  - 提示行按时间线推出的窗口算，不论交没交给探针。
+  - 端到端 4 用 `cursors: "log"` 做，两种读法都满足。
+- **vite 多一道 409。** 给了 `canvas`、探针结果的 `meta.canvas` 却对不上时报 409 `[host]`：旧宿主产物不认识这一项，会静默读回场景目标，
+  不能把它当画布交回。
+- **`RenderMeta.canvas` / `sceneTarget` 标成可选。** 旧宿主产物不回这两项；MCP 的「读回：…」行没有 `canvas` 就按场景目标写。
+- **`meta.format` 仍是场景目标的格式。** 画布总是 `rgba8unorm`，注释写明；画面哈希基线（`hash.ts`）读这一项。
+- **探针的画布路径包一层 `pushErrorScope("validation")`，只在给 `canvas` 时。** 管线建不出来这类校验错误直接抛出，不静默读回空图。
+- **参数先查。** 探针在编译之前查 `canvas` 的形状、和 `window` 的冲突；纹理上限要等取到设备才查。MCP 里 `canvas` 的形状由 SDK 参数校验
+  拒绝（zod），和窗口冲突才报 `[local]`。
+- **vite 拷回。**
+  - 测试文件与 MCP 文件不是 vite 配置的依赖，普通拷回。
+  - `types.ts`、`replay.ts`、`scene.ts` 用 `ignore/tools5/swap.py` 换：先复制到同卷的 `ignore/tools5/swap/`，再逐个 `os.replace`，
+    三个文件 2.3 ms 换完。
+  - 之后 vite 会话重置（第 0 条连接），新的校验与转发都生效。没法直接数重启次数，没看到第 4 批那种一半新一半旧的迹象。
+- **暂存在 `ignore/tools5/stage/`，理由同第 4 批。** 根下临时建了指向仓库 `node_modules` 的 junction，并拷了 `.mcp.json`
+  （`main.test.ts` 读它）。用完先 `rmdir` 掉 junction、确认仓库依赖还在，再删暂存。
+
+验收结果（子代理自测）：
+
+| 项 | 结果 |
+|---|---|
+| 单测 | `scripts/kabegame-dev/` 26 组 113 步（本批加 3 步）、`apps/kabegame-dev-mcp/` 20 组 69 步（本批加 1 组 5 步）、`apps/wpe-scene` vitest 64 个文件 1518 条，全过 |
+| 检查 | `deno check apps/kabegame-dev-mcp/src/*.ts scripts/kabegame-dev/*.ts` 通过；宿主 `tsc --noEmit` 通过；Prettier（`--ignore-path .prettierignore --check`，改动的 13 个 TS 文件）通过；`deno.lock` 没变 |
+| 宿主产物 | `index-CTTG_-O-.js` → `index-DC6GXG04.js`。worker `worker-B1uUPbEL.js` 与 wasm 的哈希不变：wasm 就是 `apps/wpe-scene/src/wpesl2wgsl/` 里那份，另一会话正改着的 wpesl2wgsl Rust 源没进这次构建 |
+| 1. 不给 `canvas` | 改动前（旧产物）time 1.5：RGBA 摘要 `4575fa24…`、PNG sha256 `f6080c5c…`，改动后两者都相同。回放到 173 帧不给 `canvas`：改动前后都是 `c114a40e…`，PNG 和 `ignore/p5/inst/out/ours-3830255100-kbp-f173.png` 逐像素相同 |
+| 2. `canvas: [1920, 1080]`，回放到 173 帧 | 摘要 `b3e79e08…`。和不给 `canvas` 的输出的 2×2 浮点平均比，最大差 0.50；和四舍五入后的平均比，最大差 1（2073600 个像素里 603631 个差 1），整体偏差 RGB 约 −0.05 / −0.06 / −0.07 |
+| 2. 对 WPE 第 173 帧 | 直接比：平均差 0.69、差 > 8 的 0.76%、差 > 32 的 0.02%、最大 73，六个区域平移都 ≤ 0.08 像素。同一段代码对 BOX 缩小图：0.81 / 0.75% / 0.02% / 74（`cmp_proto.py` 当时记的是 0.81） |
+| 3. `canvas: [1080, 1080]`（time 1.5） | 摘要 `70136717…`。和场景目标 `x ∈ [840, 3000)` 裁出后的 2×2 平均比，最大差 0.50（浮点）/ 1（四舍五入）；对照：裁切错开 2 个场景像素时最大差 128 |
+| 附：`host_render` 带 `canvas: [1920, 1080]`（time 1.5，`host_open` 开、`host_close` 关） | 摘要 `2d435c55…`，和场景目标的 2×2 平均最大差 1 |
+| 4. 时间线窗口 1920×1080 + `canvas: [1280, 720]` | `[local] … canvas 1280×720 和时间线交给探针的窗口 1920×1080 不同 … 传 canvas: [1920, 1080]`，用时 2 ms；前后 `hosts` 逐字相同 |
+| 提示行 | 回放不给 `canvas` 时：「提示：时间线的窗口是 1920×1080，读回的是 3840×2160；… 传 canvas: [1920, 1080]」。四次渲染的「读回：…」行都对 |
+| 产品渲染器 | 用新产物开屏外宿主（13635）：加载时的第一帧 `render(true)` 走了抽取后的上屏，`frameMs` 记下 1 帧（2.2 ms），渲染器还在、没有退回 |
+| 5. 不留痕迹 | 导入的 14312 导入前不在库里；`projects_remove` 后 `imagesGone` / `tasksGone` 为真。`app_state` 前后逐字相同。最后只剩应用背景的宿主 13635：开始就在，`kbInstance` 没变，vite 重启没有重载主窗口，它仍跑旧产物 |
+
+端到端方式：
+- 第 1 项与不给 `canvas` 的回放用会话里的 MCP，在 vite 拷回之前做（旧 MCP 代码，新宿主产物）。
+- 第 2–4 项照 `.mcp.json` 另起 stdio MCP（`ignore/tools5/e2e.mjs`，带 `NO_PROXY`）。
+- 比较脚本 `ignore/tools5/cmp5.py`；输出 `out-cmp5.txt`、`out-e2e.json`、`out-e2e.log`，PNG 都在 `ignore/tools5/`。
+
+**没做 / 没在真环境验的：**
+- 超过设备纹理上限时探针抛错：只有单测，真环境里 vite 的 16384 先拦下。
+- HDR 场景（`rgba16float` 目标）带 `canvas`：没实测，走的是和产品上屏相同的路径。
+- `canvas` 对不上时的 409：只有单测。
+- 产品渲染器在可见窗口里的上屏没看（约定不开预览），只看了屏外宿主加载时的那一帧。
+- `versions/latest` 的 changelog / regression 没加：按约束只改规格列出的文件。
+
+Claude 独立验收（2026-11-12；不采信自报，脚本与输出在 `ignore/tools5/claude/`：直接调 vite REST 的 `e2e.ts`、numpy 参考的 `cmp.py`）：
+
+| 项 | 结果 |
+|---|---|
+| 改动范围 | 本批只有点 1–5 列的文件、三个包的测试与本计划；工作区里 `gen.py`、`track.py`、`src-tauri/wpesl2wgsl/`、P4 / P5b 计划、`todo.md` 是别的会话的 |
+| 代码 | `renderer.ts` 是逐项抽取（着色器、采样器参数、缓冲、pass 同前）；探针在 `encode` 之后取 `targetView` 铺画布，同渲染器 |
+| 单测、检查 | 自跑：vite 26 组 113 步、MCP 20 组 69 步、宿主 vitest 1518 条全过；`deno check`、宿主 tsc、Prettier（13 个 TS 文件）通过 |
+| 变异 | `pointerWindow` 不取 `canvas`：宿主单测 2 条失败；MCP `checkCanvasWindow` 改成空操作：1 步失败；vite 去掉 `canvas` 与 `window` 的冲突检查（在副本里改，不碰 vite 在用的文件）：2 步失败。恢复后全过 |
+| 不给 `canvas` | 回放到 173 帧摘要 `c114a40e…`，和改动前我渲染的 `ignore/p5/inst/out/ours-3830255100-kbp-f173.png` 逐像素相同；time 1.5 `4575fa24…` 同子代理记录 |
+| `canvas: [1920, 1080]` 回放到 173 帧 | 摘要 `b3e79e08…`（同子代理）；对 2×2 平均最大差 1（四舍五入）/ 0.5（浮点） |
+| 非整数倍、裁切的画布 | numpy 独立实现 `fill` + WebGPU 双线性（坐标 = uv·尺寸 − 0.5）作参考：`[900, 600]`（横向裁切）最大差 1，差 1 的 6.6%；`[1366, 768]`（缩放比 2.81）最大差 1，差 1 的 3.4%。参考横移 1 像素时最大差 183 / 171，比较分得出铺放错 |
+| 对 WPE 第 173 帧 | 画布直接读回：平均差 0.686、差 > 8 的 0.76%、差 > 32 的 0.021%、最大 73；场景目标 BOX 缩小：0.812 / 0.75% / 0.021% / 74 |
+| REST 护栏 | `window` 1920×1080 + `canvas` 1280×720 回 400 `field: "canvas"`；`canvas: [1920.5, 1080]` 回 400 |
+| 不留痕迹 | 导入的 14313 已 `projects_remove`（`imagesGone` / `tasksGone` 为真）；`app_state` 前后逐字相同；只剩开始就在的应用背景宿主 13635 |
+
+没有另起 stdio MCP 验 MCP 层（子代理验过，冲突与提示行另有单测与变异）；本会话的 kabegame-dev MCP 要 `/mcp` 重连才有 `canvas`。

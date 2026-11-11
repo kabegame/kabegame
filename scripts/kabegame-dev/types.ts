@@ -377,8 +377,17 @@ export interface RenderRequest {
    * `g_PointerPositionLast` 是倒数第二项。要有 `particles`。
    */
   pointers?: [number, number][];
-  /** 抓帧窗口尺寸 `[宽, 高]`：和场景不同尺寸时探针按壁纸样式 `fill` 把光标换到场景上；缺省或同尺寸时原样。 */
+  /**
+   * 抓帧窗口尺寸 `[宽, 高]`：和场景不同尺寸时探针按壁纸样式 `fill` 把光标换到场景上；缺省或同尺寸时原样。没给时探针用 `canvas`；
+   * 两个都给时要相同。
+   */
   window?: [number, number];
+  /**
+   * 读回画布尺寸 `[宽, 高]`（第 5 批，两个正整数，各不超过 16384）：探针在读回那一帧编码完场景之后，用产品上屏的同一份着色器与
+   * 线性采样器按 `fill`（居中盖满裁切）把场景目标铺进这么大的 `rgba8unorm` 纹理，读回它；不给时读回场景目标（逐字节同以前）。
+   * 光标按它换算（`window ?? canvas`）。只改读回、不改渲染：`g_Screen` 等内置 uniform 仍按场景目标算。
+   */
+  canvas?: [number, number];
 }
 
 /** REST `POST /hosts/:h/particle-track` 的请求体：交给探针 `particleTrack`（场景目录按图片 id 取）。 */
@@ -476,8 +485,14 @@ export interface ParticleCornersLayer {
 
 /** 探针 `renderFrame` 的结果（`sha256` 是 8 位 RGBA 的摘要，不是 PNG 文件的）。 */
 export interface RenderMeta {
+  /** 读回图片的尺寸：给了 `canvas` 时是画布，否则是场景目标。 */
   width: number;
   height: number;
+  /** 读回的画布 `[宽, 高]`，没给 `canvas` 时为 null（第 5 批；之前的宿主产物没有这一项）。 */
+  canvas?: [number, number] | null;
+  /** 场景目标（离屏渲染目标）的尺寸（第 5 批；之前的宿主产物没有这一项）。 */
+  sceneTarget?: [number, number];
+  /** 场景目标的格式（`rgba16float` 是 HDR 场景）；读回的画布总是 `rgba8unorm`。 */
   format: string;
   unsupported: string[];
   postprocess: unknown;
