@@ -101,8 +101,13 @@ impl ParsingContext<'_> {
                         let mut stmt = ctx.stmt_ctx();
                         let expr = self.parse_expression(frontend, ctx, &mut stmt)?;
                         self.expect(frontend, TokenValue::Semicolon)?;
-                        let (handle, meta) =
+                        let (mut handle, meta) =
                             ctx.lower_expect(stmt, frontend, expr, ExprPos::Rhs)?;
+                        // Kabegame 补丁（HLSL 模式）：返回值转到函数的返回类型
+                        if let Some(ty) = ctx.return_ty {
+                            let target = ctx.module.types[ty].inner.clone();
+                            ctx.hlsl_coerce(&mut handle, &target, meta)?;
+                        }
                         (Some(handle), meta)
                     }
                 };
@@ -128,8 +133,10 @@ impl ParsingContext<'_> {
                 let condition = {
                     let mut stmt = ctx.stmt_ctx();
                     let expr = self.parse_expression(frontend, ctx, &mut stmt)?;
-                    let (handle, more_meta) =
+                    let (mut handle, more_meta) =
                         ctx.lower_expect(stmt, frontend, expr, ExprPos::Rhs)?;
+                    // Kabegame 补丁（HLSL 模式）：条件转成布尔
+                    ctx.hlsl_condition(&mut handle, more_meta)?;
                     meta.subsume(more_meta);
                     handle
                 };
@@ -342,7 +349,10 @@ impl ParsingContext<'_> {
                     let root = self.parse_expression(frontend, ctx, &mut stmt)?;
                     meta.subsume(self.expect(frontend, TokenValue::RightParen)?.meta);
 
-                    let (expr, expr_meta) = ctx.lower_expect(stmt, frontend, root, ExprPos::Rhs)?;
+                    let (mut expr, expr_meta) =
+                        ctx.lower_expect(stmt, frontend, root, ExprPos::Rhs)?;
+                    // Kabegame 补丁（HLSL 模式）：条件转成布尔
+                    ctx.hlsl_condition(&mut expr, expr_meta)?;
                     let condition = ctx.add_expression(
                         Expression::Unary {
                             op: UnaryOperator::LogicalNot,
@@ -397,7 +407,10 @@ impl ParsingContext<'_> {
 
                     meta.subsume(end_meta);
 
-                    let (expr, expr_meta) = ctx.lower_expect(stmt, frontend, root, ExprPos::Rhs)?;
+                    let (mut expr, expr_meta) =
+                        ctx.lower_expect(stmt, frontend, root, ExprPos::Rhs)?;
+                    // Kabegame 补丁（HLSL 模式）：条件转成布尔
+                    ctx.hlsl_condition(&mut expr, expr_meta)?;
                     let condition = ctx.add_expression(
                         Expression::Unary {
                             op: UnaryOperator::LogicalNot,
@@ -454,7 +467,7 @@ impl ParsingContext<'_> {
 
                 let loop_body = ctx.new_body(|ctx| {
                     if self.bump_if(frontend, TokenValue::Semicolon).is_none() {
-                        let (expr, expr_meta) = if self.peek_type_name(frontend)
+                        let (mut expr, expr_meta) = if self.peek_type_name(frontend)
                             || self.peek_type_qualifier(frontend)
                         {
                             let mut qualifiers = self.parse_type_qualifiers(frontend, ctx)?;
@@ -486,6 +499,8 @@ impl ParsingContext<'_> {
                             let root = self.parse_expression(frontend, ctx, &mut stmt)?;
                             ctx.lower_expect(stmt, frontend, root, ExprPos::Rhs)?
                         };
+                        // Kabegame 补丁（HLSL 模式）：条件转成布尔
+                        ctx.hlsl_condition(&mut expr, expr_meta)?;
 
                         let condition = ctx.add_expression(
                             Expression::Unary {

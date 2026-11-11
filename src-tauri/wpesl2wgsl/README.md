@@ -183,6 +183,8 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
        两阶段同名、取值来源不同的拆成两格，一侧改名为 `kb_vs_` / `kb_fs_<名字>`，见「两阶段同名 uniform」。
      - 采样器拆成纹理 + `kb_sampler_<名字>`；`attribute` / `varying` 加 `layout(location)`。
      - 只在片元阶段声明的 varying，也给顶点阶段补一个输出。顶点阶段不写入时值为零，对应 D3D 下的未定义值；不补的话，WebGPU 建管线会失败。
+     - 两阶段都声明、类型不同的 varying（不论哪边宽），片元按顶点的类型声明，见「HLSL 隐式转换」。
+     - 全局 `const` 的初始值引用运行期值时改成私有全局、在 `main` 开头赋值，见「HLSL 隐式转换」。
      - `gl_*` 名的全局声明（几何着色器遗留的 `varying uint gl_ViewportIndex`、fur4 的 `in uint gl_InstanceID`）忽略。
    - **`main` 之前的打包数组**（`src/pack.rs`）：WPE 把 `float` / `vec2` / `int` / `uint` 数组 uniform 在常量缓冲里声明成 `float4` / `int4` / `uint4`、长度 `ceil(n/4)`，
      只有 `main` 签名之后的文本换成拆包后的 `float[n]`；`main` 之前（全局辅助函数、文件顶部的 `#define`）看到的是打包形态（rea「accessArray 的适用条件」、「P7b 补查」第 4 条）。
@@ -210,14 +212,51 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
    - **HLSL 风格内建**由宏头补上（`MACRO_HEADER`）：`mul(a, b) → ((b) * (a))`（行向量左乘）、`frac`、`lerp`、`atan2`、`saturate`、`ddx / ddy`、`rsqrt`、`fmod`、`log10`、`clip`、`CAST*`。
      正文用到 `pow` / `max` / `min` 时，补一组「标量扩展」重载：HLSL 允许 `pow(v3, 2.4)`、`max(0, v3)`，GLSL 没有这些重载。
 6. **naga**（`naga_stage.rs`）：
-   - GLSL 450 前端负责解析和隐式的 int → float 转换；
+   - GLSL 450 前端负责解析和隐式类型转换：打开了嵌入 naga 的 HLSL 模式（`Options::hlsl_implicit`），GLSL 会报错的地方按 fxc 的隐式规则转换，见「HLSL 隐式转换」；
    - 按 WebGPU 基线（`Capabilities::empty()`）校验后输出 WGSL；
    - uniform 块的偏移与步长取自 naga 的 std140 布局。
 
    naga 30.0.1 的源码嵌在 `naga/`（路径依赖），删掉了用不到的前后端，只开 `glsl-in` + `wgsl-out`；`wgsl-in` 只在 `[dev-dependencies]` 里开，给测试回读输出。
    上游版本、删掉的模块与每处改动见 [naga/KABEGAME.md](naga/KABEGAME.md)。
    嵌入的 naga 带了行为补丁（KABEGAME.md「行为补丁」）：B1 在 GLSL 前端裁掉 `return` / `break` 等之后的死代码前，把其中用户函数调用的结果换成同类型零值，
-   否则死代码里的 `kb_min` / `kb_max` 调用会让校验报 `Expression not visited by the appropriate statement`（`fluidsimulation_advection`）。
+   否则死代码里的 `kb_min` / `kb_max` 调用会让校验报 `Expression not visited by the appropriate statement`（`fluidsimulation_advection`）；
+   B2 让声明列表的数组后缀只属于所在的声明符；B3–B10 是 HLSL 模式。
+
+## HLSL 隐式转换
+
+WPE 在 Windows 上把着色器交给 fxc 编译，作者照 HLSL 的隐式转换写：宽向量赋给窄的、`if (float)`、`mix(vec4, vec3, float)`、片元改写 varying 等。
+GLSL 不接受这些写法。翻译器打开嵌入 naga 的 **HLSL 模式**（`naga_stage.rs` 的 `options.hlsl_implicit = true`），前端在 GLSL 本来会报错的地方改按 fxc 的规则转换；
+另有两条规则在改写阶段做。规则都按实测定：本机 fxc（WPE 自带的 `d3dcompiler_47.dll`）编译、反汇编，WPE 抓帧（`p7-sem` 的 `kbconv1–4`、`kbwidth`），
+见 `.claude/plans/wpe-import/3-scene/phase7/p7-REPORT.md`「fxc 的隐式规则」「P7c 规则的实测」。
+
+**naga 前端**（落点与单测见 [naga/KABEGAME.md](naga/KABEGAME.md)「HLSL 隐式转换模式」）：
+
+| 写法 | 规则 |
+|---|---|
+| 赋值、复合赋值、初始化、`return`、实参：宽向量给窄的 | 取前几个分量（fxc 警告 X3206）；窄给宽照旧报错 |
+| 同上：标量给向量 / 向量给标量 | 铺满 / 取 `.x` |
+| 同上：分量类型不同 | `float → int` 向零截断（WGSL `i32(f)`）；`bool` 转数值为 0 / 1 |
+| 不同宽度的向量做算术、位运算 | 宽的一边截到窄的；比较运算不截（HLSL 得 bvec，语义不同，照旧报错） |
+| `if` / `while` / `do` / `for` / `?:` 的条件、`!`、`&&` / `\|\|` 的操作数是非布尔标量 | `x != 0`；向量条件照旧报错（`if (float2)` fxc 报 X3019） |
+| 浮点下标 | 转 `u32`（fxc 的 `ftou`，向零截断、负数为 0） |
+| `bool` 参与 `+ - * / %` | 按 0 / 1 |
+| 标量的分量访问 `f.x`、`f.xx` | 一个分量是它自己，多个铺满 |
+| 片元写 varying | 输入可写 |
+| 函数调用的实参类型对不上 | GLSL 规则选不出重载时才走第二遍，所以原来能选出的调用不变。用户函数只有一个重载能经隐式转换匹配才选它，多个报二义（fxc X3067）；内置函数，以及我们代替内置函数补的 `kb_pow` / `kb_min` / `kb_max`（`broadcast_helpers`）、`kb_gs_normalize`（`naga_stage::INTRINSIC_WRAPPERS`，经 `Options::hlsl_intrinsics` 传给前端），按代价取截掉分量最少的：维度取最窄的向量实参、标量铺满（`mix(vec4, vec3, float)` 取三维，`pow(float, vec3)` 取三维）；带 `depth` 形参的候选不参与 |
+
+不做、照旧报错（语料里没有，以后遇到样本再补）：矩阵截断与铺满、`out` 实参截断、向量比较的 bvec 语义、`%` 与比较运算的向量 ⊕ 标量铺满、向量当 `?:` 的条件、两边都是 `bool` 的算术、
+标量取下标（fxc 也报错 X3121）。
+
+**改写阶段**（`rewrite.rs`）：
+- **片元的 varying 按顶点的类型声明**：WPE 两阶段只有一份 `VS_OUTPUT`，片元自己的 varying 声明作废（rea-p7-shader §2.6；`kbwidth` 实测片元声明 `vec2` 也能读顶点写的 `.zw`）。
+  两阶段类型不同时不论哪边宽，片元都按顶点的类型声明，正文里的截断交给 HLSL 模式；片元读了顶点没有的分量时 naga 照常报错（`Invalid swizzle`），与 fxc 一致。
+  反射里的 `varyings` 也是顶点的类型。只在片元自己声明、顶点没有的 varying 照旧按片元的类型（顶点补的输出是零）。
+- **全局 `const` 现算**：WPE 给每个以 `const` 开头的行前面插 `static `，fxc 接受初始值不是常量的 `static const`，每次调用现算（`ignore/p7/fxc/c4.hlsl`）；
+  naga 要求全局 `const` 的初始值是常量表达式（工坊 `radial_blur`：`const float strength = -u_strength * 0.1 / u_samples;`）。初始值引用本阶段的 uniform / attribute / varying、
+  `gl_*` 内建、`kb_pack_*` 或已改写的这类 const 时，改成私有全局 `T 名;`，在 `main` 的 `{` 之后按声明顺序赋值（行数不变）。`main` 与它调用的辅助函数读到的都是这次调用的值。
+  只认一个声明符的 `const T 名[数组]? = 初始值;`、写在 `main` 签名之前、认得出 `main`（`void main() {`）的；常量初始值的 const 与局部 const 不动。
+
+每条规则只在 GLSL 本来会报错的地方生效：开关打开后，原来能翻译的着色器输出逐字节不变（P7c 对 `p7b-e2345b19` 基线验证，见「测试」）。
 
 ## 几何着色器展开
 
@@ -253,7 +292,8 @@ WebGPU 没有几何着色器。WPE 画绳（`rope` / `ropetrail`）用 `genericr
 6. **HLSL 隐式截断**：HLSL 允许把更宽的向量赋给较窄的（取前几个分量）、把标量铺满成向量，GLSL 不允许。几何段里浮点标量 / 向量（`float`、`vec2`–`vec4`）
    局部声明的初始值，以及 `PS_INPUT` 变量字段的整体赋值，右边包一层 `kb_gs_as_<类型>(…)`，按实参类型重载（同类型原样返回）。
    `.geom` 的 `vec3 eyeModel = mul(vec4(…), g_ModelMatrixInverse)`（`ORIENTATION 0`）与 `LIGHTING` 下的 `v.v_WorldPos = mul(vec4(…), g_ModelMatrix)` 靠它通过。
-   只看语句开头的写法，不碰 `const`、for 头、多个声明符、普通变量的再赋值和分量赋值；顶点 / 片元段不做（见「已知不支持」）。
+   只看语句开头的写法，不碰 `const`、for 头、多个声明符、普通变量的再赋值和分量赋值。这条早于 naga 的 HLSL 模式（见「HLSL 隐式转换」），
+   现在已经多余，但去掉会改变绳着色器的输出，留着；顶点 / 片元段的隐式截断都交给 HLSL 模式。
 7. **零向量 `normalize` 时整个图元不画**：`kb_gs_normalize` 有 `float` / `vec2` / `vec3` / `vec4` 四个重载，`dot(v, v) == 0.0`（`float` 是 `v * v`，
    naga 不接受标量的 `dot`）时置 `kb_gs_degenerate`、原样返回，否则返回 `v * inversesqrt(dot(v, v))`。
    - 依据：WPE 下 `normalize(0)` 得 NaN，D3D 丢弃含 NaN 顶点的三角形。绳的两种 GS 里右向量一旦是 NaN，带上每个三角形都含 NaN 顶点，
@@ -299,11 +339,7 @@ void main() {
 |---|---|
 | `phase: "require"`，`LightingV1/shadow` | 阴影与 cookie 要 `_rt_shadowAtlas` / `_alias_lightCookie`，渲染器没有 |
 | `Unknown variable: gl_ViewportIndex` | 阴影投射走的几何着色器路径 |
-| `Unknown function 'rotateVec2'` 这类 | HLSL 允许 vec4 → vec2 隐式截断，GLSL 不允许；没有类型信息无法改写 |
-| `varying … 在两个阶段的类型不同` | 同上（片元阶段读更少分量） |
 | `Array size must be greater than zero` | `BONECOUNT` 等引擎宏未定义（骨骼蒙皮），可经 `defines` 传入 |
-| `Unknown function 'kb_pack_<名>'` | `main` 之前打包数组的下标是 `float`（工坊 `video` 的 `[barID / 4]`），fxc 截断成整数，要类型信息（P7c） |
-| `main` 之前打包数组的一行赋给 `float` 等（`return` / 初始化类型不符） | HLSL 把 `float4` 隐式截断成 `.x`，GLSL 不允许；工坊 `audioline`、`highly_customizable_audio_visualizer` 由此从「能翻、画法和 WPE 不同」变成失败（P7c） |
 | `不支持的采样器类型 sampler2DBackBuffer` | 体积光专用采样器类型 |
 
 另外，glsl-in 只认 Vulkan 语义的 GLSL 450，这正是改写这一步存在的原因；naga 的 `glsl-in` / `wgsl-out` 在其支持表里是二档（维护但测试较少）。
@@ -376,6 +412,11 @@ CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapt
 2026-11-11（`74b65d27`）：777 个请求、215 个着色器（含别名 255），通过 661；失败的着色器 44 个（含别名 50），比语料扫描的 48 个多两个，都是当前属性下关着的 effect（失败不上报到场景）；`ok` 与夹具全部一致；基线导出 3460 个文件，重跑逐字节相同。
 
 2026-11-11（P7a 步骤 4，行为补丁 B1）：对 `head-74b65d27` 基线相同 3460、变了 0、新失败 0，新通过只有 `effects/fluidsimulation_advection` 的两个请求（`3d4bb453`、`61464738`，各 4 个文件）；夹具部分通过 663、失败的着色器 43 个（含别名 49），这两个请求与夹具记录不一致（夹具失败、重放通过，在 ALLOW 里）；WPE 安装目录部分仍是 158/167（advection 在默认 COMBO 下本来就通过）。
+
+2026-11-12（P7c 步骤 1–3，HLSL 模式 B2–B10 与改写阶段两条）：对 `p7b-e2345b19` 基线相同 3572、变了 0、新失败 0，新通过 372 个文件（导出 `ignore/p7/baseline/p7c-final`，
+新通过的 WGSL 另拷在 `p7c-new`）；请求夹具 779 个全部通过（P7b 之后是 689），新通过的 90 个请求清单在 `ignore/p7/out/p7c-steps.txt`；WPE 安装目录 158 → 161/167
+（`effects/shimmer`、`shaders/editorpaintbrush`、`effects/glitter_prepare`），剩下 6 对是 `gl_ViewportIndex` ×3、`fur4` 基线没绑槽 8、`puppettexturechannels` 数组长度 0、
+`volumetricsfront` 的 `sampler2DBackBuffer`，都与 HLSL 隐式转换无关；几何门槛 27/27；WGSL 回读失败 0。
 
 2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0；2026-11-10 加几何着色器展开后不变，几何门槛 27/27。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
 

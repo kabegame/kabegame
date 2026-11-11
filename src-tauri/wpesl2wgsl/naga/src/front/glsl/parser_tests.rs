@@ -895,3 +895,32 @@ fn dead_code_call_result() {
             .unwrap_or_else(|e| panic!("校验失败：{g}\n{e:?}"));
     }
 }
+
+/// Kabegame 补丁（`parse_init_declarator_list`）：数组后缀只属于它所在的声明符，`float color[4], f;` 里 `f` 是 `float`
+/// （`procedural_noise` 的 `perlin`）。上游把 `f` 也当成 `float[4]`，后面 `f` 参与标量运算时校验失败。
+#[test]
+fn declarator_list_array_suffix() {
+    use crate::valid::{Capabilities, ValidationFlags, Validator};
+    use crate::TypeInner;
+
+    let source = "#version 450\nlayout(location = 0) out vec4 o;\nvoid main() {\n    float color[4], f, rest[2];\n    f = 0.5;\n    color[1] = f;\n    rest[1] = color[1] + f;\n    o = vec4(rest[1] + f);\n}\n";
+    let module = Frontend::default()
+        .parse(&Options::from(ShaderStage::Fragment), source)
+        .unwrap();
+    Validator::new(ValidationFlags::all(), Capabilities::default())
+        .validate(&module)
+        .unwrap();
+    // 入口包装函数之外，用户的 `main` 在 `module.functions` 里
+    let local = |name: &str| {
+        let var = module
+            .functions
+            .iter()
+            .flat_map(|(_, f)| f.local_variables.iter().map(|(_, v)| v))
+            .find(|v| v.name.as_deref() == Some(name))
+            .unwrap();
+        module.types[var.ty].inner.clone()
+    };
+    assert!(matches!(local("color"), TypeInner::Array { .. }));
+    assert!(matches!(local("f"), TypeInner::Scalar(_)));
+    assert!(matches!(local("rest"), TypeInner::Array { .. }));
+}

@@ -29,6 +29,12 @@ pub struct Failure {
     pub errors: Vec<Diagnostic>,
 }
 
+/// 我们代替 HLSL 内置函数补的包装：在 naga 里是用户函数，HLSL 模式的重载第二遍要按内置函数的规则选
+/// （实参截到最窄的维度、标量铺满），不能按用户函数「多个能匹配就报二义」（`water_caustics` 的 `pow(float, vec3)`
+/// 有 6 个能匹配的 `kb_pow`）。`kb_pow` / `kb_max` / `kb_min` 是 `rewrite::broadcast_helpers` 的标量扩展重载，
+/// `kb_gs_normalize` 是几何着色器展开给 `normalize` 换的版本（`geometry.rs`）。
+const INTRINSIC_WRAPPERS: &[&str] = &["kb_pow", "kb_max", "kb_min", "kb_gs_normalize"];
+
 pub fn compile(
     stage: Stage,
     source: &str,
@@ -40,6 +46,9 @@ pub fn compile(
         Stage::Fragment => naga::ShaderStage::Fragment,
     };
     let mut options = naga::front::glsl::Options::from(naga_stage);
+    // 作者的代码按 HLSL 的隐式转换编译（WPE 交给 fxc），见 naga/KABEGAME.md「行为补丁」
+    options.hlsl_implicit = true;
+    options.hlsl_intrinsics.extend(INTRINSIC_WRAPPERS.iter().map(|name| name.to_string()));
     options.defines.extend(
         defines
             .iter()

@@ -1,3 +1,4 @@
+// Kabegame 修改，见 KABEGAME.md
 /*!
 Frontend for [GLSL][glsl] (OpenGL Shading Language).
 
@@ -27,6 +28,8 @@ mod builtins;
 mod context;
 mod error;
 mod functions;
+#[cfg(all(test, feature = "wgsl-out"))]
+mod hlsl_tests;
 mod lex;
 mod offset;
 mod parser;
@@ -58,6 +61,17 @@ pub struct Options {
     /// ```
     /// for each key value pair in the map.
     pub defines: FastHashMap<String, String>,
+    /// Kabegame 补丁：HLSL 隐式转换模式，默认关闭。
+    ///
+    /// 打开后，GLSL 本来会报错的地方改按 HLSL（fxc）的隐式规则转换：宽向量截断、标量铺满、
+    /// 非布尔条件按 `!= 0` 等，规则与落点见 `KABEGAME.md`「行为补丁」。GLSL 本来就接受的写法不受影响。
+    pub hlsl_implicit: bool,
+    /// Kabegame 补丁：HLSL 模式下按 HLSL 内置函数（intrinsic）的规则选重载的用户函数名。
+    ///
+    /// 重载第二遍里，用户函数只有一个重载能经隐式转换匹配时才选它、多个就报二义（fxc X3067）；
+    /// 内置函数则按代价取实参截到最窄的那个。调用方自己写来代替内置函数的包装（如翻译器给 `pow` / `min` / `max`
+    /// 补的标量扩展重载 `kb_pow` / `kb_min` / `kb_max`）列在这里，按内置函数的规则选。
+    pub hlsl_intrinsics: FastHashSet<String>,
 }
 
 impl From<ShaderStage> for Options {
@@ -65,6 +79,8 @@ impl From<ShaderStage> for Options {
         Options {
             stage,
             defines: FastHashMap::default(),
+            hlsl_implicit: false,
+            hlsl_intrinsics: FastHashSet::default(),
         }
     }
 }
@@ -177,6 +193,11 @@ pub struct Frontend {
     layouter: Layouter,
 
     errors: Vec<Error>,
+
+    /// Kabegame 补丁：本次解析是否开了 HLSL 隐式转换模式（[`Options::hlsl_implicit`]）。
+    hlsl: bool,
+    /// Kabegame 补丁：[`Options::hlsl_intrinsics`]。
+    hlsl_intrinsics: FastHashSet<String>,
 }
 
 impl Frontend {
@@ -200,6 +221,8 @@ impl Frontend {
         source: &str,
     ) -> core::result::Result<Module, ParseErrors> {
         self.reset(options.stage);
+        self.hlsl = options.hlsl_implicit;
+        self.hlsl_intrinsics.clone_from(&options.hlsl_intrinsics);
 
         let lexer = lex::Lexer::new(source, &options.defines);
         let mut ctx = ParsingContext::new(lexer);

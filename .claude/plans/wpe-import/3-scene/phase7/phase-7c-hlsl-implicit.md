@@ -188,3 +188,22 @@ P7b 收尾的扫描（`ignore/p7/ana_p7c.py`，`corpus-p7b.json`）：
 - **fxc 补测**与 **WPE 抓帧**：见 [p7-REPORT](p7-REPORT.md)「P7c 规则的实测」。用户函数重载多个可行时 fxc 报二义；`kbconv1–4` 四层的 WPE 结果都和预测一致。另测 `static const` 引用 uniform（`ignore/p7/fxc/c4.hlsl`）：fxc 接受，每次调用现算。
 - **规则表定稿**：步骤 2 加了 2f（标量分量访问）、2g（声明列表缺陷）、2h（全局 `const` 现算），2d、2e 按实测细化；步骤 3 改成 varying 两个方向都按顶点类型。
 - **我的失误：** 子计划把 `color_grading__extension` 的来源猜成 `LINEAR ? …`，并把 4 个 `bool` 算术、1 个 naga 缺陷误归进「不同宽度混算」，都是只看首条错误的消息没看源码。
+
+### 步骤 1–3 — HLSL 模式与片元 varying（2026-11-12）
+
+- 代理实现，我独立核对。改动在 `src-tauri/wpesl2wgsl/`：嵌入 naga 的 `front/glsl/` 下 `context.rs`、`functions.rs`、`mod.rs`、`variables.rs`、`parser/declarations.rs`、`parser/functions.rs`，新单测文件 `hlsl_tests.rs`；翻译器 `src/rewrite.rs`（2h、步骤 3）、`src/naga_stage.rs`（打开开关、传 `hlsl_intrinsics`）；`naga/KABEGAME.md` 记 B2–B10；README 删掉「已知不支持」里隐式截断的 4 行，新增「HLSL 隐式转换」一节。合计约 +890 / −24。
+- 每小步都对 `p7b-e2345b19` 基线跑过，都是「变了 0、新失败 0」；夹具通过数 689 → 706（2a）→ 712（2b）→ 715（2c）→ 724（2d）→ 735（2e）→ 735（2f）→ 736（2g）→ 736（2h）→ 779（步骤 3）。逐步记录 `ignore/p7/out/p7c-steps.txt`。
+- 我重跑：夹具 779 / 779；原来通过的 3572 个文件逐字节不变；WPE 安装目录 161 / 167（剩下 6 个是阴影 `gl_ViewportIndex` ×3、`fur4` 基线没绑槽 8、`puppettexturechannels` 数组长度 0、`volumetricsfront` 的 `sampler2DBackBuffer`，都与隐式转换无关）；几何 27 / 27；翻译器单测 71、naga 136 全过；新通过的 186 份 WGSL Tint 0 error。
+- **偏离：**
+  - 新增选项 `Options.hlsl_intrinsics`：翻译器把 `kb_pow` / `kb_max` / `kb_min` / `kb_gs_normalize` 传进去，第二遍按内置规则选，naga 里不写死函数名；
+  - 内置函数同代价取先声明的，选截掉分量最少的重载；
+  - `v.xy = v4` 这类 GLSL 本来合法的 swizzle 赋值不做转换，实参转换只用在第二遍选出的重载上（保证逐字节不变）；
+  - 2b 也覆盖位运算和移位，比较运算不截；
+  - 2g 不受开关控制（上游缺陷，B2）；
+  - 实参的 `float → int` 跟形参走 `i32`，只有下标用 `u32`；
+  - 2h 只认引用 uniform / attribute / varying / `gl_*` / `kb_pack_*` / 已改写的 const 的初始值，调用用户函数的照旧报错；
+  - 步骤 3 只要顶点声明过这个 varying，任何类型差异都按顶点的类型。
+- **语料重扫**（工作区翻译器编的 wasm 放进 HEAD 产品源码快照 `ignore/p7/snap-p7c`，夹具录到 `ignore/p7/requests-p7c`；对比同一快照配 P7 之前的 wasm，`ignore/p7/out/diff-before-p7c.txt`，语料现为 173 张）：
+  - 能渲染 39 → 42（`3822495444`、`3831518461`、新下载的 `3837598414`）；语料里不再有 `shader:*` 键；
+  - P4–P6 先做完的口径 56 → 62（`2981249186`、`3668499717`、`3822495444`、`3824424509`、`3831518461`、`3837598414`）。比计划少 3 张：`Simple_Audio_Bars`（`3021673417` 版）与 `video` 翻译通过后露出音频 uniform（P11）；
+  - 新露出的产品侧键：`uniform:g_LayerModelMatrix`（4 张）、`constant:mixed-type`（3）、`constant:slots`（2）、`uniform:g_FrameTime`（1），以及音频 uniform。用户 2026-11-12 定：前四个并进 P7d。

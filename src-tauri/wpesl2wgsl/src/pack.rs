@@ -452,7 +452,7 @@ fn pack_function(name: &str, packed: &Packed, registers: &Registers) -> String {
 
 /// WPE 认 `main` 签名的正则 `\bvoid[\s]+main[\s]*\([\s]*\)[\s\r\n]*\{`（`0x140487cd0`，rea-p7-shader §2.9 第 2 条）：
 /// 返回第一处匹配的起点。认不出（`main(void)` 等）时 WPE 整篇都当成签名之后，这里返回 None、不做打包。
-fn main_signature(body: &str) -> Option<usize> {
+pub(crate) fn main_signature(body: &str) -> Option<usize> {
     let bytes = body.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let skip_ws = |mut i: usize| {

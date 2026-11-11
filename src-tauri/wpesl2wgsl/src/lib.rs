@@ -1245,4 +1245,66 @@ void main() {
             assert_eq!(value["phase"], "request");
         }
     }
+
+    /// P7c 2h（工坊 `radial_blur` 的形状）：全局 const 的初始值引用 uniform，`main` 之前的辅助函数也用它。
+    /// WPE 写成 `static const`，fxc 每次调用现算；这里改成私有全局、在 `main` 开头赋值，翻译通过、WGSL 能回读。
+    #[test]
+    fn runtime_global_const_end_to_end() {
+        let req = TranslateRequest {
+            vertex: "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }".into(),
+            fragment: "uniform float u_strength; // {\"material\":\"strength\",\"default\":1}\nuniform float u_samples; // {\"material\":\"samples\",\"default\":8}\nvarying vec2 v_TexCoord;\nconst float strength = -u_strength * 0.1 / u_samples;\nconst vec2 offset = vec2(strength, 0.0);\nvec2 computeUV(vec2 uv) { return uv + offset; }\nvoid main() {\n\tgl_FragColor = vec4(computeUV(v_TexCoord), strength, 1.0);\n}\n".into(),
+            debug: true,
+            ..TranslateRequest::default()
+        };
+        let result = translate(&req);
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        let fs = result.fragment.as_ref().unwrap().glsl.clone().unwrap();
+        assert!(fs.contains("float strength;\nvec2 offset;\n"), "{fs}");
+        assert!(
+            fs.contains("void main() { strength = -u_strength * 0.1 / u_samples; offset = vec2(strength, 0.0);\n"),
+            "{fs}"
+        );
+    }
+
+    /// P7c 步骤 3：片元的 varying 按顶点的类型声明（WPE 只有一份 `VS_OUTPUT`），不论哪边宽；片元可以改写 varying。
+    /// p7-sem 的 `kbwidth`：顶点写 vec4，片元声明 vec2、改 `.x` 读 `.zw`。片元更宽的（`glitter_prepare`）只读顶点有的分量就能过，
+    /// 读了顶点没有的分量照常报错（fxc 也报错）。
+    #[test]
+    fn fragment_varyings_follow_vertex_types() {
+        let translate_pair = |vs_ty: &str, fs: &str| {
+            translate(&TranslateRequest {
+                vertex: format!("attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying {vs_ty} v_TexCoord;\nvoid main() {{ gl_Position = vec4(a_Position, 1.0); v_TexCoord = {vs_ty}(a_TexCoord, 0.25, 0.75); }}"),
+                fragment: fs.into(),
+                debug: true,
+                ..TranslateRequest::default()
+            })
+        };
+        // 顶点更宽：片元按 vec4 声明，改写 `.x`、读 `.zw`
+        let result = translate_pair(
+            "vec4",
+            "varying vec2 v_TexCoord;\nvoid main() { v_TexCoord.x = 0.5; gl_FragColor = vec4(v_TexCoord.zw, v_TexCoord.x, 1.0); }",
+        );
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        let fs = result.fragment.as_ref().unwrap().glsl.clone().unwrap();
+        assert!(fs.contains("layout(location = 0) in vec4 v_TexCoord;"), "{fs}");
+        let varyings: Vec<_> = result.varyings.iter().map(|v| (v.name.as_str(), v.ty.as_str())).collect();
+        assert_eq!(varyings, [("v_TexCoord", "vec4")]);
+
+        // 片元更宽：按顶点的 vec2 声明，只读 `.xy` 能过，读 `.zw` 报错
+        let narrow = |fs: &str| {
+            translate(&TranslateRequest {
+                vertex: "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }".into(),
+                fragment: fs.into(),
+                ..TranslateRequest::default()
+            })
+        };
+        let result = narrow("varying vec4 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord.xy, 0.0, 1.0); }");
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        let result = narrow("varying vec4 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord.zw, 0.0, 1.0); }");
+        assert!(!result.ok);
+        assert_eq!(result.phase, Some("parse"), "{result:#?}");
+    }
 }

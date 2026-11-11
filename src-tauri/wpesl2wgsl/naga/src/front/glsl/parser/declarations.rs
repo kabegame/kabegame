@@ -1,3 +1,4 @@
+// Kabegame 修改，见 KABEGAME.md
 use alloc::{string::String, vec, vec::Vec};
 
 use super::{DeclarationContext, ParsingContext, Result};
@@ -156,6 +157,9 @@ impl ParsingContext<'_> {
             if let Some(scalar) = scalar_components {
                 ctx.implicit_conversion(&mut init, init_meta, scalar)?;
             }
+            // Kabegame 补丁（HLSL 模式）：初始值转到声明的类型
+            let target = ctx.module.types[ty].inner.clone();
+            ctx.hlsl_coerce(&mut init, &target, init_meta)?;
 
             Ok((init, init_meta))
         }
@@ -192,7 +196,11 @@ impl ParsingContext<'_> {
             self.next(frontend);
         }
 
+        // Kabegame 补丁：数组后缀只属于它所在的声明符。上游跨声明符复用 `ty`，`parse_array_specifier` 把前一个声明符的
+        // 数组类型留在 `ty` 上，`float color[4], f;` 里的 `f` 也成了 `float[4]`（GLSL、HLSL 里都是 `float`）
+        let base_ty = ty;
         loop {
+            ty = base_ty;
             let token = self.bump(frontend)?;
             let name = match token.value {
                 TokenValue::Semicolon => break,
@@ -333,6 +341,8 @@ impl ParsingContext<'_> {
                                 false,
                                 ctx.global_expression_kind_tracker,
                             )?;
+                            // Kabegame 补丁：HLSL 模式下 `return` 按返回类型转换
+                            context.return_ty = ty;
 
                             self.parse_function_args(frontend, &mut context)?;
 

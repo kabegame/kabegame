@@ -1,3 +1,4 @@
+// Kabegame 修改，见 KABEGAME.md
 use alloc::{format, string::String, vec::Vec};
 
 use super::{
@@ -403,6 +404,39 @@ impl Frontend {
                     })
                 }
             }
+            // Kabegame 补丁（HLSL 模式）：标量的分量访问（fxc 合法：标量只有一个分量，`x` / `r` 可重复 1–4 次）。
+            // 一个分量就是标量自己（左值时仍是指针），多个就铺满成向量；别的分量名照旧报错
+            TypeInner::Scalar(_) | TypeInner::ValuePointer { size: None, .. }
+                if self.hlsl && is_scalar_swizzle(name) =>
+            {
+                let is_pointer = is_pointer || matches!(*ty, TypeInner::ValuePointer { .. });
+                if pos == ExprPos::Lhs && name.len() > 1 {
+                    self.errors.push(Error {
+                        kind: ErrorKind::SemanticError(
+                            format!(
+                                concat!(
+                                    "swizzle cannot have duplicate components in ",
+                                    "left-hand-side expression for \"{:?}\""
+                                ),
+                                name
+                            )
+                            .into(),
+                        ),
+                        meta,
+                    })
+                }
+                let mut value = expression;
+                if is_pointer && (pos == ExprPos::Rhs || name.len() > 1) {
+                    value = ctx.add_expression(Expression::Load { pointer: value }, meta)?;
+                }
+                let size = match name.len() {
+                    1 => return Ok(value),
+                    2 => VectorSize::Bi,
+                    3 => VectorSize::Tri,
+                    _ => VectorSize::Quad,
+                };
+                ctx.add_expression(Expression::Splat { size, value }, meta)
+            }
             _ => Err(Error {
                 kind: ErrorKind::SemanticError(
                     format!("Can't lookup field on this type \"{name}\"").into(),
@@ -477,7 +511,9 @@ impl Frontend {
                 let lookup = GlobalLookup {
                     kind: GlobalLookupKind::Variable(handle),
                     entry_arg: Some(idx),
-                    mutable: !input,
+                    // Kabegame 补丁（HLSL 模式）：输入可写。HLSL 的 PS 输入是函数参数，可以改写（rea-p7-shader §2.x，
+                    // WPE 片元改写 varying 实测编过）；输入在 IR 里本来就是 Private 全局、由入口包装函数拷进来，写它没有障碍
+                    mutable: !input || self.hlsl,
                 };
 
                 (GlobalOrConstant::Global(handle), lookup)
@@ -705,4 +741,9 @@ impl Frontend {
 
         Ok(expr)
     }
+}
+
+/// Kabegame 补丁（HLSL 模式）：标量能用的分量名：`x` 或 `r` 重复 1–4 次。
+fn is_scalar_swizzle(name: &str) -> bool {
+    (1..=4).contains(&name.len()) && (name.bytes().all(|c| c == b'x') || name.bytes().all(|c| c == b'r'))
 }

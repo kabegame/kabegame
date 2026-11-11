@@ -1,3 +1,4 @@
+// Kabegame 修改，见 KABEGAME.md
 use alloc::{
     format,
     string::{String, ToString},
@@ -757,6 +758,31 @@ impl Frontend {
             }
         }
 
+        // Kabegame 补丁（HLSL 模式）：GLSL 的规则一个重载也选不出时，按 HLSL 的隐式转换再选一遍。
+        // 只在选不出时才走：GLSL 能选出的调用一定不变，也不会把原来能选出唯一重载的调用变成二义
+        let mut hlsl_selected = false;
+        if maybe_overload.is_none() && ctx.hlsl {
+            let intrinsic = declaration.overloads.iter().any(|o| o.internal)
+                || self.hlsl_intrinsics.contains(&name);
+            let (picked, viable) = hlsl_pick_overload(&declaration.overloads, &args, ctx);
+            if picked.is_some() {
+                hlsl_selected = true;
+                maybe_overload = picked;
+            }
+            // 用户函数有不止一个重载能匹配：fxc 报 X3067 ambiguous function call（实测 `g(float2)` / `g(float3)` 传 float4）
+            if !intrinsic && viable > 1 {
+                self.errors.push(Error {
+                    kind: ErrorKind::SemanticError(
+                        format!(
+                            "Ambiguous best function for '{name}' ({viable} overloads match under HLSL implicit conversions, fxc X3067)"
+                        )
+                        .into(),
+                    ),
+                    meta,
+                })
+            }
+        }
+
         if ambiguous {
             self.errors.push(Error {
                 kind: ErrorKind::SemanticError(
@@ -811,6 +837,11 @@ impl Frontend {
             // Apply implicit conversions as needed
             if let Some(scalar) = scalar_comps {
                 ctx.implicit_conversion(&mut handle, meta, scalar)?;
+            }
+            // Kabegame 补丁（HLSL 模式）：第二遍选出的重载，实参再按 HLSL 转到形参类型（截断、铺满、降级）
+            if hlsl_selected {
+                let target = ctx.module.types[*parameter].inner.clone();
+                ctx.hlsl_coerce(&mut handle, &target, meta)?;
             }
 
             arguments.push(handle)
@@ -1585,6 +1616,105 @@ fn conversion(target: &TypeInner, source: &TypeInner) -> Option<Conversion> {
         ) => Conversion::IntToDouble,
         _ => Conversion::Other,
     })
+}
+
+/// Kabegame 补丁（HLSL 模式）：重载的第二遍，返回选中的重载与能匹配的重载个数。
+///
+/// - 带 `depth` 形参的候选跳过：第一遍对它们调了 `sampled_to_depth`，会改全局纹理的类型；
+/// - `out` / `inout` 形参照旧要求类型完全相同（HLSL 允许 `out` 窄写宽，语料没有，不做）；
+/// - 其余实参按 [`hlsl_cost`] 求代价，有一个不能转就不算匹配。
+///
+/// 取总代价最小的，同代价取先声明的。这是内置函数的选法：截掉一个分量的代价远大于铺满一个标量，
+/// 所以结果就是 HLSL 内置函数的规则，维度取最窄的向量实参、标量铺满（`mix(float4, float3, float)` → 三维，
+/// `pow(float, float3)` → 三维）。用户函数只在恰好一个匹配时选它，多个时调用方报二义（照样用代价最小的那个，
+/// 好让解析继续收集错误）。
+fn hlsl_pick_overload<'a>(
+    overloads: &'a [Overload],
+    args: &[(Handle<Expression>, Span)],
+    ctx: &Context,
+) -> (Option<&'a Overload>, usize) {
+    let mut best: Option<(u32, &Overload)> = None;
+    let mut viable = 0;
+    'outer: for overload in overloads {
+        if overload.parameters.len() != args.len()
+            || overload.parameters_info.iter().any(|info| info.depth)
+        {
+            continue;
+        }
+        let mut cost = 0;
+        for ((parameter, info), &(arg, _)) in overload
+            .parameters
+            .iter()
+            .zip(&overload.parameters_info)
+            .zip(args)
+        {
+            let parameter_ty = &ctx.module.types[*parameter].inner;
+            let arg_ty = ctx.get_type(arg);
+            if info.qualifier.is_lhs() {
+                if parameter_ty != arg_ty {
+                    continue 'outer;
+                }
+                continue;
+            }
+            match hlsl_cost(parameter_ty, arg_ty) {
+                Some(c) => cost += c,
+                None => continue 'outer,
+            }
+        }
+        viable += 1;
+        if best.is_none_or(|(best_cost, _)| cost < best_cost) {
+            best = Some((cost, overload));
+        }
+    }
+    (best.map(|(_, overload)| overload), viable)
+}
+
+/// Kabegame 补丁（HLSL 模式）：实参从 `source` 隐式转换到形参 `target` 的代价，不能转换为 `None`。
+/// 转换本身由 `Context::hlsl_coerce` 做，这里的可转范围与它一致：
+/// - 类型相同 0；纹理、采样器、矩阵、数组、结构体只认相同；
+/// - 分量类型：相同 0，按 GLSL 等级往高处提升 1，往低处（`float → int`）4；布尔与数值之间不转；
+/// - 宽向量截到窄的、向量给标量（取 `.x`）：每截掉一个分量 8（fxc 截断，警告 X3206）；
+/// - 标量铺满成向量：2；
+/// - 窄向量到宽的：不能转（fxc 也报错）。
+fn hlsl_cost(target: &TypeInner, source: &TypeInner) -> Option<u32> {
+    let kind = |target: Scalar, source: Scalar| -> Option<u32> {
+        if target == source {
+            return Some(0);
+        }
+        if target.kind == ScalarKind::Bool || source.kind == ScalarKind::Bool {
+            return None;
+        }
+        Some(match (type_power(target), type_power(source)) {
+            (Some(t), Some(s)) if t >= s => 1,
+            _ => 4,
+        })
+    };
+    if target == source {
+        return Some(0);
+    }
+    match (target, source) {
+        (&TypeInner::Scalar(t), &TypeInner::Scalar(s)) => kind(t, s),
+        (
+            &TypeInner::Vector {
+                size: target_size,
+                scalar: t,
+            },
+            &TypeInner::Vector {
+                size: source_size,
+                scalar: s,
+            },
+        ) => {
+            if (source_size as u8) < (target_size as u8) {
+                return None;
+            }
+            Some(kind(t, s)? + 8 * u32::from(source_size as u8 - target_size as u8))
+        }
+        (&TypeInner::Vector { scalar: t, .. }, &TypeInner::Scalar(s)) => Some(kind(t, s)? + 2),
+        (&TypeInner::Scalar(t), &TypeInner::Vector { size, scalar: s }) => {
+            Some(kind(t, s)? + 8 * u32::from(size as u8 - 1))
+        }
+        _ => None,
+    }
 }
 
 /// Helper method returning all the non standard builtin variations needed

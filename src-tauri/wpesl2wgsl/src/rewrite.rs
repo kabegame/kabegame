@@ -211,6 +211,8 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
     let mut varyings: Vec<InterfaceDecl> = Vec::new();
     let mut next_attribute = 0;
     let mut next_varying = 0;
+    // 顶点阶段声明过的 varying：片元按它们的类型声明（见下）
+    let mut vertex_varyings: BTreeSet<String> = BTreeSet::new();
 
     for (stage, parts) in [(Stage::Vertex, &vs), (Stage::Fragment, &fs)] {
         let fail = |message: String| RewriteError {
@@ -296,6 +298,11 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
                     next_attribute += location_slots(&decl.ty, decl.array);
                 }
                 Storage::Varying => match varyings.iter().find(|v| v.name == decl.name) {
+                    // 片元自己的 varying 声明作废、用顶点那份：WPE 两阶段只有一份 `VS_OUTPUT`（rea-p7-shader §2.6），
+                    // p7-sem 的 `kbwidth` 实测片元声明 vec2 也能读顶点写的 `.zw`。所以类型不同时不论哪边宽，片元都按顶点的类型
+                    // 声明（`render` 用共享表里的类型），正文里的截断交给 naga 的 HLSL 模式；片元读了顶点没有的分量时 naga 照常
+                    // 报错，与 fxc 一致。类型相同时与原来一样，输出不变
+                    Some(_) if stage == Stage::Fragment && vertex_varyings.contains(&decl.name) => {}
                     Some(existing) if existing.ty != decl.ty || existing.array != decl.array => {
                         return Err(fail(format!("varying {} 在两个阶段的类型不同", decl.name)));
                     }
@@ -304,6 +311,9 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
                     // 顶点阶段渲染全部 varying，没写的输出是零（WGSL 私有变量零初始化），对应 D3D 下的未定义值；
                     // 否则 WebGPU 建管线会因片元输入没有对应的顶点输出而失败。
                     None => {
+                        if stage == Stage::Vertex {
+                            vertex_varyings.insert(decl.name.clone());
+                        }
                         varyings.push(InterfaceDecl {
                             name: decl.name.clone(),
                             ty: decl.ty.clone(),
@@ -733,6 +743,13 @@ fn render(
         file: None,
         line: None,
     })?;
+    // 全局 const 的初始值引用 uniform 等运行期值：改成私有全局、在 main 开头赋值（P7c 2h）
+    let runtime: BTreeSet<&str> = parts
+        .decls
+        .iter()
+        .map(|(decl, _)| renames.get(&decl.name).unwrap_or(&decl.name).as_str())
+        .collect();
+    let body = hoist_runtime_consts(&body, &runtime);
 
     let mut out = String::from("#version 450\n");
     out.push_str(MACRO_HEADER);
@@ -815,6 +832,192 @@ fn render(
     out.push_str(&body);
     out.push('\n');
     Ok(out)
+}
+
+/// 全局 `const` 的初始值不是常量（引用 uniform、varying、attribute、`gl_*` 内建，或引用了已改写的这类 const）时，
+/// 改成私有全局，在 `main` 开头按声明顺序赋值。
+///
+/// WPE 给每个以 `const` 开头的行前面插 `static `（rea-p7-shader §2.x 第 5 条），fxc 接受初始值不是常量的 `static const`，
+/// 每次调用现算（`ignore/p7/fxc/c4.hlsl` 实测）；naga 要求全局 `const` 的初始值是常量表达式，报 `Unexpected runtime-expression`
+/// （工坊 `radial_blur`：`const float strength = -u_strength * 0.1 / u_samples;`）。私有全局在 `main` 开头赋值后，`main` 与它调用的
+/// 辅助函数读到的都是这次调用现算的值，与 fxc 相同。
+///
+/// 只改这种 const（这类着色器本来就编不过），其余原样返回、逐字节不变。只认一个声明符的 `const T 名[数组]? = 初始值;`；
+/// 找不到 `main` 签名（WPE 的写法 `void main() {`）、或 const 写在 `main` 之后的，不改。行数不变：声明处保留原有换行，
+/// 赋值插在 `main` 的 `{` 之后同一行。
+fn hoist_runtime_consts(body: &str, runtime: &BTreeSet<&str>) -> String {
+    let Some(main_at) = pack::main_signature(body) else {
+        return body.to_string();
+    };
+    let bytes = body.as_bytes();
+    // （起点, `;` 的位置, 换成的声明, main 里的赋值）
+    let mut hoisted: Vec<(usize, usize, String, String)> = Vec::new();
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let (mut i, mut depth, mut at_start, mut line_start) = (0, 0usize, true, true);
+    while i < main_at {
+        let c = bytes[i];
+        // 预处理行（`#define` 等）整行跳过，不打断「语句开头」，里面的括号也不计
+        if line_start {
+            let indent = body[i..]
+                .find(|ch: char| ch != ' ' && ch != '\t')
+                .map_or(body.len(), |at| i + at);
+            if bytes.get(indent) == Some(&b'#') {
+                i = body[indent..]
+                    .find('\n')
+                    .map_or(body.len(), |at| indent + at);
+                continue;
+            }
+        }
+        match c {
+            b'\n' => {
+                line_start = true;
+                i += 1;
+                continue;
+            }
+            b' ' | b'\t' | b'\r' => {
+                i += 1;
+                continue;
+            }
+            _ => line_start = false,
+        }
+        if depth == 0 && at_start && (c.is_ascii_alphabetic() || c == b'_') {
+            let (word, _) = split_ident(&body[i..]);
+            if word == "const" {
+                if let Some((end, decl, assign, name)) = runtime_const(body, i, runtime, &names) {
+                    names.insert(name);
+                    hoisted.push((i, end, decl, assign));
+                    i = end + 1;
+                    at_start = true;
+                    continue;
+                }
+            }
+            at_start = false;
+            i += word.len();
+            continue;
+        }
+        match c {
+            b'{' => {
+                depth += 1;
+                at_start = false;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                at_start = depth == 0;
+            }
+            b';' if depth == 0 => at_start = true,
+            _ => at_start = false,
+        }
+        i += 1;
+    }
+    if hoisted.is_empty() {
+        return body.to_string();
+    }
+    let mut out = String::with_capacity(body.len() + 64);
+    let mut from = 0;
+    for (start, end, decl, _) in &hoisted {
+        out.push_str(&body[from..*start]);
+        out.push_str(decl);
+        from = end + 1;
+    }
+    // 被改写的 const 都在 main 之前；赋值插在 main 的 `{` 之后
+    let brace = main_at + body[main_at..].find('{').expect("main 签名以 `{` 结尾");
+    out.push_str(&body[from..=brace]);
+    for (_, _, _, assign) in &hoisted {
+        out.push(' ');
+        out.push_str(assign);
+    }
+    out.push_str(&body[brace + 1..]);
+    out
+}
+
+/// [`hoist_runtime_consts`] 的一条：`body[start..]` 以 `const` 开头，初始值用到运行期值时返回
+/// （`;` 的位置, 换成的声明（保留原有换行）, `main` 里的赋值, 名字）。
+fn runtime_const(
+    body: &str,
+    start: usize,
+    runtime: &BTreeSet<&str>,
+    hoisted: &BTreeSet<String>,
+) -> Option<(usize, String, String, String)> {
+    // 语句到顶层的 `;` 为止（初始值里可能有括号、花括号）
+    let mut depth = 0usize;
+    let end = start
+        + body[start..].find(|c: char| {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                ';' if depth == 0 => return true,
+                _ => {}
+            }
+            false
+        })?;
+    let statement = &body[start..end];
+    let rest = split_ident(statement).1.trim_start();
+    let (ty, rest) = split_ident(rest);
+    let (name, rest) = split_ident(rest.trim_start());
+    if ty.is_empty() || name.is_empty() {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let (array, rest) = match rest.strip_prefix('[') {
+        Some(after) => {
+            let close = after.find(']')?;
+            (&rest[..close + 2], after[close + 1..].trim_start())
+        }
+        None => ("", rest),
+    };
+    let init = rest.strip_prefix('=')?.trim();
+    // 多个声明符（顶层逗号）不改
+    let mut depth = 0usize;
+    for c in init.chars() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    if !uses_runtime_value(init, runtime, hoisted) {
+        return None;
+    }
+    let newlines = "\n".repeat(statement.matches('\n').count());
+    let decl = format!("{ty} {name}{array};{newlines}");
+    let assign = format!(
+        "{name} = {};",
+        init.split_whitespace().collect::<Vec<_>>().join(" ")
+    );
+    Some((end, decl, assign, name.to_string()))
+}
+
+/// 初始值里有没有运行期的值：本阶段声明的 uniform / attribute / varying（含纹理）、`gl_*` 内建、`main` 之前打包数组的
+/// 访问函数 `kb_pack_*`（读 uniform），或已经改成私有全局的 const。成员访问（`.x`）与数字字面量不算。
+fn uses_runtime_value(init: &str, runtime: &BTreeSet<&str>, hoisted: &BTreeSet<String>) -> bool {
+    let mut rest = init;
+    let mut after_dot = false;
+    while let Some(c) = rest.chars().next() {
+        if c.is_ascii_digit() {
+            let end = rest
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.'))
+                .unwrap_or(rest.len());
+            rest = &rest[end..];
+            after_dot = false;
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            let (ident, after) = split_ident(rest);
+            if !after_dot
+                && (runtime.contains(ident)
+                    || hoisted.contains(ident)
+                    || ident.starts_with("gl_")
+                    || ident.starts_with("kb_pack_"))
+            {
+                return true;
+            }
+            rest = after;
+            after_dot = false;
+        } else {
+            after_dot = c == '.';
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    false
 }
 
 /// HLSL 会把标量自动扩展成向量（`pow(v3, 2.4)`、`max(0, v3)`），GLSL 没有这些重载。
@@ -1374,5 +1577,32 @@ mod tests {
         assert!(program
             .fragment_glsl
             .contains("layout(location = 0) flat in uvec4 v_Bones;"));
+    }
+
+    /// P7c 2h：全局 const 的初始值引用运行期值（uniform、已改写的 const）时改成私有全局、在 main 开头按声明顺序赋值；
+    /// 常量初始值的 const、函数里的局部 const 不动，行数不变。
+    #[test]
+    fn runtime_global_consts_are_hoisted_into_main() {
+        let runtime: BTreeSet<&str> = ["u_strength", "u_samples", "g_Texture0Resolution"]
+            .into_iter()
+            .collect();
+        let body = "#define KB_K 2.0\nconst float k = KB_K;\nconst float strength = -u_strength * 0.1 /\n    u_samples;\nconst vec2 type = vec2(g_Texture0Resolution.x / g_Texture0Resolution.y, strength);\nfloat helper() { const float local = u_strength; return strength * k + type.x; }\nvoid main()\n{\n\tgl_FragColor = vec4(helper());\n}";
+        let out = hoist_runtime_consts(body, &runtime);
+        assert_eq!(
+            out,
+            "#define KB_K 2.0\nconst float k = KB_K;\nfloat strength;\n\nvec2 type;\nfloat helper() { const float local = u_strength; return strength * k + type.x; }\nvoid main()\n{ strength = -u_strength * 0.1 / u_samples; type = vec2(g_Texture0Resolution.x / g_Texture0Resolution.y, strength);\n\tgl_FragColor = vec4(helper());\n}"
+        );
+        assert_eq!(out.lines().count(), body.lines().count());
+
+        // 不改的：常量初始值；认不出 main 签名；const 写在 main 之后；多个声明符；成员名恰好同名
+        for unchanged in [
+            "const float k = 2.0 * 3.0;\nvoid main() { gl_FragColor = vec4(k); }",
+            "const float s = u_strength;\nvoid main(void) { gl_FragColor = vec4(s); }",
+            "void main() { gl_FragColor = vec4(1.0); }\nconst float s = u_strength;",
+            "const float a = u_strength, b = 1.0;\nvoid main() { gl_FragColor = vec4(a); }",
+            "const vec2 v = vec2(1.0).u_samples;\nvoid main() { gl_FragColor = vec4(v.x); }",
+        ] {
+            assert_eq!(hoist_runtime_consts(unchanged, &runtime), unchanged);
+        }
     }
 }

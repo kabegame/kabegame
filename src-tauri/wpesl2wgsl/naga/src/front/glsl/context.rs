@@ -85,6 +85,10 @@ pub(crate) struct Context<'a> {
     pub local_expression_kind_tracker: crate::proc::ExpressionKindTracker,
     /// Tracks the expression kind of `Expression`s residing in `self.module.global_expressions`
     pub global_expression_kind_tracker: &'a mut crate::proc::ExpressionKindTracker,
+    /// Kabegame 补丁：HLSL 隐式转换模式（`Options::hlsl_implicit`），见 [`Context::hlsl_coerce`]。
+    pub hlsl: bool,
+    /// Kabegame 补丁：所在函数的返回类型（`void` 与全局上下文为 `None`），HLSL 模式下 `return` 按它转换。
+    pub return_ty: Option<Handle<Type>>,
 }
 
 impl<'a> Context<'a> {
@@ -115,6 +119,8 @@ impl<'a> Context<'a> {
             is_const: false,
             local_expression_kind_tracker: crate::proc::ExpressionKindTracker::new(),
             global_expression_kind_tracker,
+            hlsl: frontend.hlsl,
+            return_ty: None,
         };
 
         this.emit_start();
@@ -555,7 +561,19 @@ impl<'a> Context<'a> {
 
         let handle = match *kind {
             HirExprKind::Access { base, index } => {
-                let (index, _) = self.lower_expect_inner(stmt, frontend, index, ExprPos::Rhs)?;
+                let (mut index, index_meta) =
+                    self.lower_expect_inner(stmt, frontend, index, ExprPos::Rhs)?;
+                // Kabegame 补丁（HLSL 模式）：浮点下标向零截断成无符号整数（fxc 的 `ftou`，负数也走它；
+                // WGSL 的 `u32(f)` 同样向零截断、负数饱和到 0）
+                if self.hlsl {
+                    if let TypeInner::Scalar(Scalar {
+                        kind: crate::ScalarKind::Float,
+                        ..
+                    }) = *self.resolve_type(index, index_meta)?
+                    {
+                        self.conversion(&mut index, index_meta, Scalar::U32)?;
+                    }
+                }
                 let maybe_constant_index = match pos {
                     // Don't try to generate `AccessIndex` if in a LHS position, since it
                     // wouldn't produce a pointer.
@@ -608,12 +626,23 @@ impl<'a> Context<'a> {
                 let (mut right, right_meta) =
                     self.lower_expect_inner(stmt, frontend, right, ExprPos::Rhs)?;
 
+                // Kabegame 补丁（HLSL 模式）：`&&` / `||` 的两边按条件转成布尔
+                if let BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr = op {
+                    self.hlsl_condition(&mut left, left_meta)?;
+                    self.hlsl_condition(&mut right, right_meta)?;
+                }
+
                 match op {
                     BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
                         self.implicit_conversion(&mut right, right_meta, Scalar::U32)?
                     }
                     _ => self
                         .binary_implicit_conversion(&mut left, left_meta, &mut right, right_meta)?,
+                }
+
+                // Kabegame 补丁（HLSL 模式）：bool 参与算术、不同宽度的向量混算
+                if self.hlsl {
+                    self.hlsl_binary(op, &mut left, left_meta, &mut right, right_meta)?;
                 }
 
                 self.typifier_grow(left, left_meta)?;
@@ -996,9 +1025,12 @@ impl<'a> Context<'a> {
                 }
             }
             HirExprKind::Unary { op, expr } if pos != ExprPos::Lhs => {
-                let expr = self
-                    .lower_expect_inner(stmt, frontend, expr, ExprPos::Rhs)?
-                    .0;
+                let (mut expr, expr_meta) =
+                    self.lower_expect_inner(stmt, frontend, expr, ExprPos::Rhs)?;
+                // Kabegame 补丁（HLSL 模式）：`!` 的操作数按条件转成布尔
+                if op == crate::UnaryOperator::LogicalNot {
+                    self.hlsl_condition(&mut expr, expr_meta)?;
+                }
 
                 if let TypeInner::Matrix { scalar, .. } = *self.resolve_type(expr, meta)? {
                     // Naga IR doesn't support matrix negation, so we need to turn it into
@@ -1116,9 +1148,10 @@ impl<'a> Context<'a> {
                 // conditional expression in subsequent code.
 
                 // Lower the condition first to the current bodyy
-                let condition = self
-                    .lower_expect_inner(stmt, frontend, condition, ExprPos::Rhs)?
-                    .0;
+                let (mut condition, condition_meta) =
+                    self.lower_expect_inner(stmt, frontend, condition, ExprPos::Rhs)?;
+                // Kabegame 补丁（HLSL 模式）：条件转成布尔
+                self.hlsl_condition(&mut condition, condition_meta)?;
 
                 let (mut accept_body, (mut accept, accept_meta)) =
                     self.new_body_with_ret(|ctx| {
@@ -1221,9 +1254,27 @@ impl<'a> Context<'a> {
                     TypeInner::Pointer { base, .. } => &self.module.types[base].inner,
                     ref ty => ty,
                 };
+                let ty = ty.clone();
 
-                if let Some(scalar) = scalar_components(ty) {
+                if let Some(scalar) = scalar_components(&ty) {
                     self.implicit_conversion(&mut value, value_meta, scalar)?;
+                }
+                // Kabegame 补丁（HLSL 模式）：值转到目标类型。例外：swizzle 目标（`v.xy = …`）由 `lower_store`
+                // 逐分量存、对值逐个取分量，值是同分量类型、不更窄的向量时 GLSL 下本来就合法，结果与截断相同，
+                // 这时不转，已经能翻译的输出逐字节不变
+                let swizzle_fits = matches!(self.expressions[pointer], Expression::Swizzle { .. })
+                    && match (&ty, self.resolve_type(value, value_meta)?) {
+                        (
+                            &TypeInner::Vector { size, scalar },
+                            &TypeInner::Vector {
+                                size: value_size,
+                                scalar: value_scalar,
+                            },
+                        ) => value_size as u8 >= size as u8 && value_scalar == scalar,
+                        _ => false,
+                    };
+                if !swizzle_fits {
+                    self.hlsl_coerce(&mut value, &ty, value_meta)?;
                 }
 
                 self.lower_store(pointer, value, meta)?;
@@ -1452,6 +1503,202 @@ impl<'a> Context<'a> {
             *self.expressions.get_mut(r) = Expression::ZeroValue(ty);
         }
         self.body.cull(idx..);
+        Ok(())
+    }
+
+    /// Kabegame 补丁（HLSL 模式）：标量 / 向量的分量类型转成 `scalar`，形状不变。
+    /// - 转成布尔：`x != 0`，向量和铺满的 0 逐分量比（fxc 的 `ne`）；
+    /// - 布尔转数值：`true` 为 1、`false` 为 0（`As`，WGSL 写成 `f32(b)`，fxc 的 `bfi` / `and`）；
+    /// - 数值之间：`As`；`float → int` 向零截断（WGSL `i32(f)`，fxc 的 `round_z` + `ftoi`）。
+    ///
+    /// 不是标量 / 向量（矩阵等）时不动。
+    fn hlsl_kind(
+        &mut self,
+        expr: &mut Handle<Expression>,
+        meta: Span,
+        scalar: Scalar,
+    ) -> Result<()> {
+        let (source, size) = match *self.resolve_type(*expr, meta)? {
+            TypeInner::Scalar(source) => (source, None),
+            TypeInner::Vector {
+                scalar: source,
+                size,
+            } => (source, Some(size)),
+            _ => return Ok(()),
+        };
+        if source == scalar {
+            return Ok(());
+        }
+        if scalar.kind == crate::ScalarKind::Bool {
+            let Some(zero) = Literal::zero(source) else {
+                return Ok(());
+            };
+            let mut zero = self.add_expression(Expression::Literal(zero), meta)?;
+            if let Some(size) = size {
+                zero = self.add_expression(Expression::Splat { size, value: zero }, meta)?;
+            }
+            *expr = self.add_expression(
+                Expression::Binary {
+                    op: BinaryOperator::NotEqual,
+                    left: *expr,
+                    right: zero,
+                },
+                meta,
+            )?;
+            return Ok(());
+        }
+        self.conversion(expr, meta, scalar)
+    }
+
+    /// Kabegame 补丁（HLSL 模式）：把值转到目标类型，规则照 fxc（`KABEGAME.md`「行为补丁」）。
+    /// 开关关闭时直接返回。
+    ///
+    /// 用在赋值、初始化、`return` 与第二遍选出的重载的实参上：
+    /// - 宽向量给窄向量：取前几个分量（fxc 警告 X3206）；
+    /// - 标量给向量：铺满；
+    /// - 向量给标量：取 `.x`（X3206）；
+    /// - 分量类型不同：见 [`Self::hlsl_kind`]。
+    ///
+    /// 窄向量给宽向量、矩阵、数组等 fxc 也报错或语料没有的不动，留给校验器报错。
+    /// 类型已经相同时什么也不加，所以 GLSL 本来就接受的代码输出不变。
+    pub fn hlsl_coerce(
+        &mut self,
+        expr: &mut Handle<Expression>,
+        target: &TypeInner,
+        meta: Span,
+    ) -> Result<()> {
+        if !self.hlsl {
+            return Ok(());
+        }
+        // `v.x = …` 的目标解析成 ValuePointer，按它指向的标量 / 向量算
+        let target = match *target {
+            TypeInner::ValuePointer {
+                size: Some(size),
+                scalar,
+                ..
+            } => TypeInner::Vector { size, scalar },
+            TypeInner::ValuePointer {
+                size: None, scalar, ..
+            } => TypeInner::Scalar(scalar),
+            ref target => target.clone(),
+        };
+        let source = self.resolve_type(*expr, meta)?.clone();
+        if source == target {
+            return Ok(());
+        }
+        match (target, source) {
+            (TypeInner::Vector { size, scalar }, TypeInner::Scalar(_)) => {
+                self.hlsl_kind(expr, meta, scalar)?;
+                *expr = self.add_expression(Expression::Splat { size, value: *expr }, meta)?;
+            }
+            (
+                TypeInner::Vector { size, scalar },
+                TypeInner::Vector {
+                    size: source_size, ..
+                },
+            ) => {
+                if (source_size as u8) < (size as u8) {
+                    return Ok(());
+                }
+                if source_size != size {
+                    *expr = self.vector_resize(size, *expr, meta)?;
+                }
+                self.hlsl_kind(expr, meta, scalar)?;
+            }
+            (TypeInner::Scalar(scalar), TypeInner::Vector { .. }) => {
+                *expr = self.add_expression(
+                    Expression::AccessIndex {
+                        base: *expr,
+                        index: 0,
+                    },
+                    meta,
+                )?;
+                self.hlsl_kind(expr, meta, scalar)?;
+            }
+            (TypeInner::Scalar(scalar), TypeInner::Scalar(_)) => {
+                self.hlsl_kind(expr, meta, scalar)?
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Kabegame 补丁（HLSL 模式）：二元运算两边的隐式转换，在 GLSL 的分量类型提升之后、按形状降 IR 之前做。
+    /// 只处理 GLSL 下必然报错的组合，GLSL 本来接受的运算不变。
+    fn hlsl_binary(
+        &mut self,
+        op: BinaryOperator,
+        left: &mut Handle<Expression>,
+        left_meta: Span,
+        right: &mut Handle<Expression>,
+        right_meta: Span,
+    ) -> Result<()> {
+        use BinaryOperator as Bo;
+        // bool 参与算术（`+ - * / %`，复合赋值经这一步）：按 0 / 1 转成另一边的分量类型（fxc 的 `and` / `bfi`，
+        // `x += a < b`、`d *= (d < l) * 6.0`）。两边都是 bool 的不动
+        if let Bo::Add | Bo::Subtract | Bo::Multiply | Bo::Divide | Bo::Modulo = op {
+            let l = self.expr_scalar_components(*left, left_meta)?;
+            let r = self.expr_scalar_components(*right, right_meta)?;
+            match (l, r) {
+                (Some(l), Some(r))
+                    if l.kind == crate::ScalarKind::Bool && r.kind != crate::ScalarKind::Bool =>
+                {
+                    self.conversion(left, left_meta, r)?
+                }
+                (Some(l), Some(r))
+                    if r.kind == crate::ScalarKind::Bool && l.kind != crate::ScalarKind::Bool =>
+                {
+                    self.conversion(right, right_meta, l)?
+                }
+                _ => {}
+            }
+        }
+        // 不同宽度的向量逐分量运算：宽的一边截到窄的（fxc 截到较窄的宽度再逐分量算，警告 X3206）。
+        // 比较运算不动：HLSL 的向量比较得 bvec，GLSL 前端把 `==` / `!=` 包成 all() / any()，语义不同，语料没有，照旧报错
+        if let Bo::Add
+        | Bo::Subtract
+        | Bo::Multiply
+        | Bo::Divide
+        | Bo::Modulo
+        | Bo::And
+        | Bo::ExclusiveOr
+        | Bo::InclusiveOr
+        | Bo::ShiftLeft
+        | Bo::ShiftRight = op
+        {
+            let sizes = match (
+                self.resolve_type(*left, left_meta)?.clone(),
+                self.resolve_type(*right, right_meta)?,
+            ) {
+                (TypeInner::Vector { size: l, .. }, &TypeInner::Vector { size: r, .. }) => {
+                    Some((l, r))
+                }
+                _ => None,
+            };
+            if let Some((l, r)) = sizes {
+                if (l as u8) > (r as u8) {
+                    *left = self.vector_resize(r, *left, left_meta)?;
+                } else if (r as u8) > (l as u8) {
+                    *right = self.vector_resize(l, *right, right_meta)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Kabegame 补丁（HLSL 模式）：条件表达式转成布尔，规则照 fxc（`KABEGAME.md`「行为补丁」）。
+    /// 开关关闭时直接返回。
+    ///
+    /// 用在 `if` / `while` / `do` / `for` 的条件、`?:` 的条件、`!` 的操作数、`&&` / `||` 的两边：
+    /// 非布尔的标量按 `x != 0`（fxc：`if (float)` 是 `ne r0.x, l(0), …`，`!f` 是 `== 0`，`f && g` 两边各自 `!= 0`）。
+    /// 向量不动、照旧报错：`if (float2)` fxc 报 X3019；向量当 `?:` 的条件 fxc 是逐分量选择，语料没有，不做。
+    pub fn hlsl_condition(&mut self, expr: &mut Handle<Expression>, meta: Span) -> Result<()> {
+        if !self.hlsl {
+            return Ok(());
+        }
+        if let TypeInner::Scalar(_) = *self.resolve_type(*expr, meta)? {
+            self.hlsl_kind(expr, meta, Scalar::BOOL)?;
+        }
         Ok(())
     }
 
