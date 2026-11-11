@@ -12,12 +12,15 @@
  *   (0.75, 0.25)）。加载时 (0.5, 0.5)，只在开关开着时每帧更新，关着时保留上一次的值。
  * - **对象平移**：`o = amount · depth(根) ⊙ (origin(根).xy − P)`，z 恒 0。只用根对象（沿父链走到顶）的 `origin` 字段与
  *   `parallaxDepth`，子对象整体跟着根走、自己的深度不参与；静止时原点不在中心的层也有偏移（`p5a-static` 7 个方块误差 0）。
- * - **初值**：加载时 P = eye.xy + (W/2, H/2)，即场景中心，开场有一段从中心滑向指针的过渡（`p5a-delay29` 开窗 4 s 后还在途中）。
+ * - **初值**：加载时 P = (W/2 + 2, H/2 + 2)，开场有一段从这里滑向指针的过渡（`p5a-delay29` 开窗 4 s 后还在途中）。多出的 2 是相机的
+ *   缺省 eye：WPE 加载末尾按 `[G+0xf0]` + (W, H)·0.5 写初值（`0x14018870c`），那时场景的 `camera.eye` 还没套进去，`G+0xf0` 是
+ *   函数开头写的缺省 (2, 2, 2)（`0x140186db3`）；之后每帧的目标点用真实的 eye，这 2 像素按 k 衰减（P5a 收尾 `p5a-wk-prop` 实测，
+ *   开场残差折回第 0 帧四次都是 (2.00, 2.00)，p5-REPORT「收尾走查」）。透视场景 WPE 的初值是 0，这里只有正交。
  *
  * W、H 是场景的正交尺寸（`SceneGeneral.width/height`，不是可能被缩小的渲染目标），偏移是场景单位（`2381978484`：8192×5479 的场景
  * 放进 16:9 窗口，偏移仍按场景单位）。eye 是正交相机的 eye.xy，就是本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`），没有抖动时为 0；
- * `3830255100` 的 `g_EyePosition` 与视差点按「抖动 + 视差点」核对过（p5-REPORT）。加载时的初值仍是场景中心：WPE 在加载末尾按基准
- * eye 写初值，那时还没有抖动。
+ * `3830255100` 的 `g_EyePosition` 与视差点按「抖动 + 视差点」核对过（p5-REPORT）。加载时的初值不带抖动，也不看场景的 eye，
+ * 见上面「初值」。
  * 指针是 `g_PointerPosition`（已按壁纸样式换算，`layout.ts` 的 `scenePointer`）：WPE 的视差点直接用窗口归一化的指针乘场景宽高，
  * 和 `g_PointerPosition` 同源，不是控制点用的反投影。
  *
@@ -83,13 +86,12 @@ function clamp01(value: number): number {
   return value > 0 ? Math.min(1, value) : 0;
 }
 
-/** 场景中心 = 加载时的 P（eye 为 0 时）。 */
-export function initialParallaxPoint(
-  width: number,
-  height: number,
-  eye: readonly [number, number] = [0, 0],
-): [number, number] {
-  return [eye[0] + width / 2, eye[1] + height / 2];
+/** WPE 加载时相机 eye 的缺省 xy（`0x140186db3` 写的 (2, 2, 2)），视差点初值按它算、不看场景的 `camera.eye`。 */
+const LOAD_EYE = 2;
+
+/** 加载时的 P：场景中心加相机缺省 eye 的 (2, 2)（见文件头「初值」）。 */
+export function initialParallaxPoint(width: number, height: number): [number, number] {
+  return [LOAD_EYE + width / 2, LOAD_EYE + height / 2];
 }
 
 /** 目标点：指针钳到 0…1、y 翻成向上，再在场景中心与指针之间按 `mouseInfluence` 插值，加 eye.xy。 */
@@ -155,7 +157,7 @@ export function parallaxInput(fields: ParallaxFields, frame: ParallaxFrame): Par
   };
 }
 
-/** 加载新场景时的状态：P 在场景中心，`g_ParallaxPosition` 为 (0.5, 0.5)。 */
+/** 加载新场景时的状态：P 在场景中心加 (2, 2)，`g_ParallaxPosition` 为 (0.5, 0.5)（WPE 加载时写的 0.5，`0x1401886ea`）。 */
 export function initialParallaxState(width: number, height: number): ParallaxState {
   return { point: initialParallaxPoint(width, height), position: [0.5, 0.5] };
 }

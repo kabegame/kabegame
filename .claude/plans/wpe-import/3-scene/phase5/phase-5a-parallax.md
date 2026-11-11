@@ -950,12 +950,6 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
 
 | 项 | 来源 | 现状与原因 | 怎么补 |
 |---|---|---|---|
-| `parallaxDepth` 绑单个数字的用户属性时，铺满两个分量 | 步骤 2 | 子代理按 WPE 向量 setter 推断；语料 65 处（最多的是 `hudparallax` 0.01），这些场景还被文本等挡着，现在看不到效果 | 测试工程在 `project.json` 加一个滑块属性，绑到方块的 `parallaxDepth`，看偏移 |
-| 运行中改 `parallaxDepth`（用户属性）就地生效 | 步骤 2 | p3 I3 记「只改字段、没有回调」，视差每次绘制都重读；我们按就地字段实现，没和 WPE 比 | 同一工程开窗后 `apply_properties` 改值再抓，比偏移；Kabegame 里改属性确认不整场重编译 |
-| 运行中开关 `cameraparallax`：关时 P 冻结、`g_ParallaxPosition` 留旧值、偏移撤掉，再开时 P 从旧值续 | 步骤 2 | 读码；语料 9 张的开关绑了用户属性 | `apply_properties` 切开关，前后各抓几帧，读 CLK 的 `g_ParallaxPosition` 和方块位置 |
-| 脚本写 `thisScene.cameraparallax*` 同帧生效；脚本读写 `thisLayer.parallaxDepth` | 步骤 2 | 读码（P 在脚本之前推进、绘制时读 `amount`）；语料只有 2887099508 的混淆脚本和 3304642534 等音频条脚本，后者还要 `createLayer` | 脚本按 `g_Time` 在某一帧改 `amount` 和某层的 `parallaxDepth`，抓那一帧前后 |
-| 没开视差时 `g_ParallaxPosition` 恒为 (0.5, 0.5) | 步骤 0 读码 | 步骤 0 只在开视差、`mouseinfluence 0` 时读到过 (0.5, 0.5)；语料 3351072238、3643916956 读它但没开视差，两张都还被别的挡着 | CLK 读它、视差关着的工程抓一帧 |
-| `/* */` 块注释 | 步骤 1 | 推断：和 `//` 是 jsoncpp 的同一个开关；语料 0 处 | `p5a-pre` 加一个带块注释的材质，看能否加载 |
 | `delay > 3` 时 k 为负、P 越走越远 | 步骤 2 | 照公式实现；语料最大 2.0 | 一个 `delay 3.2` 的工程连抓几帧；语料 0 张，可以不补 |
 | 预热时相机带不带抖动（跟随指针的粒子预热位置） | 步骤 3 | 我们预热与加载后第一帧的模拟都用 s = (0, 0)。依据是推断：步骤 3 实测粒子模拟用上一帧的相机，加载时还没有更新过相机。t = 0 时抖动偏移是 (amp, 0)，不是 0 | 开抖动、控制点跟随指针、有 `starttime` 的工程，抓开窗后头几帧的粒子位置；语料里同时开抖动和跟随指针的场景很少，可以只记不补 |
 
@@ -974,12 +968,10 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
 
 | 项 | 现状与原因 | 怎么补 |
 |---|---|---|
-| 运行中改 zoom 时，粒子模拟用上一帧的投影 | 按读码与抖动的实测实现；静态缩放下看不出先后 | 测试工程脚本按 `g_Time` 在某一帧改 zoom，抓前后几帧，看跟随粒子的出生点 |
 | 重编译时状态里的 zoom 和编译期不同 | 预热与第一帧的模拟用编译期的值；属性改 zoom 是就地写，不重编译，只有别的原因整场重编译时才碰得到 | 只记不补 |
 | 运行中把 zoom 改成 ≤ 0 | 投影退化、出现 NaN，照计划不处理；语料最小 1.0 | 只记不补 |
 
 **接受、不补：**
-- `delay 2.9` 的回放差 1 像素：开窗最初几帧光标相对窗口的位置抓不到，回放只能假设光标从第一帧起不动；逐帧的 k 已在步骤 0 对上（步骤 2 实施记录）。
 - P 用 double 算、WPE 存 float32：`fit_delay.py` 按 float32 复算，差为 0。
 
 **工具与边角：**
@@ -995,10 +987,29 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
 - 粒子模拟用上一帧的相机：步骤 3 端到端补测 `p5a-shakepar`。
 - 缩放与视差、抖动叠加，缩放时透视粒子的相机距离与跟随点：步骤 4 补测与端到端（`p5a-zoompar`、`zoomx15`、`zoomx08`）。
 - 回放只收一个固定指针、开窗期间光标动过的抓帧复现不了：收尾前「回放逐帧光标」，`p5a-shakepar2` 整帧 0 差异。
+- 收尾走查（2026-11-11，p5-REPORT「收尾走查」）：
+  - `parallaxDepth` 绑单个数字的用户属性时铺满两个分量（`p5a-wk-prop`，(0.6, 0.6)）；
+  - 运行中改 `parallaxDepth` 属性就地生效（WPE 侧；Kabegame 侧不整场重编译留给真机走查）；
+  - 运行中开关 `cameraparallax`：关时 P 冻结、`g_ParallaxPosition` 留旧值、偏移撤掉，再开时 P 接着走；
+  - 脚本写 `cameraparallaxamount`、`parallaxDepth` 同帧生效，读写都通（`p5a-wk-script`）；
+  - 没开视差时 `g_ParallaxPosition` 恒为 (0.5, 0.5)（`p5a-wk-noplx`）；
+  - 材质 `/* */` 块注释照常加载；
+  - 运行中改 zoom：画面用上一帧写的、粒子模拟用两帧前写的（`p5a-wk-zoom3`），和实现相同；
+  - 视差点初值是 (W/2 + 2, H/2 + 2)（相机缺省 eye），已对齐，见「P5a 收尾」的实施记录。步骤 2 记的「`delay 2.9` 回放差 1 像素」就是它，不是光标抓不到。
 
 ## P5a 收尾
 
-先按「未实测清单」逐项走查（2026-11-10 用户）。再和 P4 各节一样统一写文档：
+先按「未实测清单」逐项走查（2026-11-10 用户）。
+
+**实施记录：**
+- **WPE 走查（2026-11-11）**：四个工程 `p5a-wk-prop` / `script` / `zoom3` / `noplx`（`ignore/p5/wk/gen_wk.py`），清单里要抓 WPE 的 7 项全部成立，结果在 p5-REPORT「收尾走查」。另查出视差点初值多 (2, 2)。
+- **视差点初值对齐（2026-11-11 用户「对齐吧」）**：REA 查清初值是 (W/2 + 2, H/2 + 2)（相机缺省 eye），Claude 直接改 `render/parallax.ts` 的 `initialParallaxPoint`（加常量 `LOAD_EYE = 2`，去掉没人用的 `eye` 参数），`parallax.test.ts` 的初值期望改成 (962, 542)。
+  - 测试：宿主 tsc 0、vitest 64 个文件 1701 个用例（含 P6 会话正在改的），Prettier 通过。
+  - 数值核对（`ignore/p5/wk/p_product.ts`，产品的 `replayParallax` 按日志逐帧光标推进）：`p5a-wk-prop` 第 176、177、345、346 帧 P 和 WPE 反推值差 ≤ 0.001（改之前差 0.46、0.11）。步骤 2 的 `delay 2.9` 复算（`ignore/p5/s2/fit_delay.py` 起点加 (2, 2)）残差从 (0.37, 0.37) 归零。
+  - 端到端：`render_scene`（`cursors: "log"`）回放 `p5a-wk-prop` 到第 177 帧，FR 块外 0 差异。0.46 像素的 P 差落到画面上只有 0.14 像素，这一项只能说明没改坏，对不对靠上面的数值核对。
+  - 画面哈希 10 张 × 3 档与步骤 4 的基线全部相同（基线里没有开视差的场景）。测试工程 14308 已移除。
+
+再和 P4 各节一样统一写文档：
 - `cocs/wpe/WPE_SCENE.md`：视差、抖动、缩放与前置几条；
 - `cocs/README.md` 的场景文档条目；
 - changelog、回归文档；

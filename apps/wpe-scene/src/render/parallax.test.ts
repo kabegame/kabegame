@@ -137,10 +137,11 @@ const MEASURED: {
 ];
 
 describe("视差公式（p5-REPORT 实测）", () => {
-  it("初值是场景中心；g_ParallaxPosition 初值 (0.5, 0.5)", () => {
-    expect(initialParallaxPoint(W, H)).toEqual([960, 540]);
-    expect(initialParallaxPoint(W, H, [8, -4])).toEqual([968, 536]);
-    expect(initialParallaxState(W, H)).toEqual({ point: [960, 540], position: [0.5, 0.5] });
+  it("初值是场景中心加相机缺省 eye 的 (2, 2)，不随场景尺寸变；g_ParallaxPosition 初值 (0.5, 0.5)", () => {
+    // P5a 收尾 `p5a-wk-prop`：开场残差折回第 0 帧四次都是 (2.00, 2.00)，即 (962, 542)
+    expect(initialParallaxPoint(W, H)).toEqual([962, 542]);
+    expect(initialParallaxPoint(8192, 5479)).toEqual([4098, 2741.5]);
+    expect(initialParallaxState(W, H)).toEqual({ point: [962, 542], position: [0.5, 0.5] });
   });
 
   it.each(MEASURED)("$tag：指针先钳到 0…1、y 翻成向上，再按 mouseinfluence 插值；uniform 钳制", (item) => {
@@ -1360,7 +1361,7 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
   const sceneParallax = (renderer: SceneRenderer) =>
     (renderer.currentScene as unknown as { parallax: SceneParallax | null }).parallax;
 
-  it("新场景从场景中心开始，重编译（同一渲染器上再次 load）保留 P；新渲染器回到中心", async () => {
+  it("新场景从初值（场景中心加 (2, 2)）开始，重编译（同一渲染器上再次 load）保留 P；新渲染器回到初值", async () => {
     let now = 1000;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const bundle = () =>
@@ -1370,7 +1371,7 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     const load = (target: SceneRenderer) =>
       target.load(bundle(), { beforeFirstFrame: () => loaded.push([...parallaxOf(target).point]) });
     await load(renderer);
-    expect(loaded.at(-1)).toEqual([960, 540]);
+    expect(loaded.at(-1)).toEqual([962, 542]);
     // fill：g_PointerPosition 就是画布坐标；钳制后 (1, 1)，目标 (1920, 1080)
     renderer.setPointer(1, 0);
     for (let i = 0; i < 5; i++) {
@@ -1378,15 +1379,15 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
       frames.at(-1)!(now);
     }
     const moved = parallaxOf(renderer).point;
-    expect(moved[0]).toBeGreaterThan(960);
-    expect(moved[1]).toBeGreaterThan(540);
+    expect(moved[0]).toBeGreaterThan(962);
+    expect(moved[1]).toBeGreaterThan(542);
     // 重编译：新 bundle 换上之前 P 不动
     await load(renderer);
     expect(loaded.at(-1)).toEqual(moved);
     renderer.destroy();
     const second = await start(bundle());
     await load(second.renderer);
-    expect(loaded.at(-1)).toEqual([960, 540]);
+    expect(loaded.at(-1)).toEqual([962, 542]);
     second.renderer.destroy();
   });
 
@@ -1431,7 +1432,7 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     };
     renderer.setPointer(1, 0);
     expect(next()).toEqual([0.5, 0.5]);
-    expect(parallaxOf(renderer).point).toEqual([960, 540]);
+    expect(parallaxOf(renderer).point).toEqual([962, 542]);
     expect(sceneParallax(renderer)).toBeNull();
     const toggle = (value: boolean) =>
       renderer.sceneState!.write({ property: "", target: { kind: "general", key: "cameraparallax" } }, value);
@@ -1479,8 +1480,8 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
       .map(([, name]) => name);
     expect(order).toEqual(["sync", "stepParticles", "setParallax", "sync", "update", "encode"]);
     expect(calls).toEqual(["script"]);
-    // 这一帧推进 P 时开关还关着：P 仍在中心，g_ParallaxPosition 仍是 (0.5, 0.5)；绘制已经按脚本写的值加平移
-    expect(spies.setParallax.mock.lastCall![0]).toEqual({ point: [960, 540], amount: 0.25 });
+    // 这一帧推进 P 时开关还关着：P 仍是初值，g_ParallaxPosition 仍是 (0.5, 0.5)；绘制已经按脚本写的值加平移
+    expect(spies.setParallax.mock.lastCall![0]).toEqual({ point: [962, 542], amount: 0.25 });
     expect(spies.update.mock.lastCall![0].parallax).toEqual([0.5, 0.5]);
     script = null;
     now += 50;
