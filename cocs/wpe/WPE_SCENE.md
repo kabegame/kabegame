@@ -873,12 +873,13 @@ P4a、P4b 的粒子系统是封闭的：控制点 0 当单位阵，粒子都在�
 
 **数据流**：
 - 宿主 `pointermove` → `SceneRenderer.setPointer` 只记画布上的原始坐标；
+- 开场指针（P5a 收尾）：`interactive` 时 `WpeSceneView` 在 iframe `load` 与宿主 ready 时各问一次 `wpe_scene_cursor`（Windows：`GetCursorPos` + `ScreenToClient` + DPI，同鼠标转发；其它平台 `null`，退回父页面最近一次 `pointermove` / `pointerdown`），按 iframe 显示矩形换成归一化坐标（不钳制），经 `kabegame:wpe-scene-pointer` 交给宿主当初值；宿主收到过真实 `pointermove` 后初值作废（`scenePointerFeed`）。`SceneHost` 记住最近的指针，渲染器建好时先于 `load` 带进去，没有场景时原样记下的指针在 `load` 里按新场景铺放换成 `g_PointerPosition`，所以预热与第一帧就用真实光标；
 - 每帧在 `syncPlacement` 之后按当前样式现算 `cursor`，放进 `FrameInput.cursor`，改样式、改尺寸下一帧就对；
 - `GpuScene.stepParticles` 每次调用反投影一次，作为 `ControlPointInputs.pointer` 交给每个系统。模拟器只收场景坐标，不知道样式；
 - 加载时按新场景的尺寸（`sceneTargetSize`）算一次 `cursor`，给加载时的更新与预热；
 - 暂停时照记坐标、不画，恢复后的第一帧用最新值。WPE 暂停时指针冻结、恢复后读当时的光标，效果相同。
 
-**已知差别**：WPE 用全局光标（`GetCursorPos`），光标在窗口外也跟踪。我们只在宿主收到 `pointermove` 时更新（预览里是光标在 iframe 上时，桌面是鼠标转发时），之外保持最后的值；没收到过事件时 `cursor` 取场景中心 (0.5, 0.5)。
+**已知差别**：WPE 用全局光标（`GetCursorPos`），光标在窗口外也跟踪。我们开场取一次真实光标（见上，不交互时不取），之后只在宿主收到 `pointermove` 时更新（预览里是光标在 iframe 上时，桌面是鼠标转发时），之外保持最后的值；两样都没有时 `cursor` 取场景中心 (0.5, 0.5)。
 
 ### `controlpointattract`
 

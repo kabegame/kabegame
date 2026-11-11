@@ -35,6 +35,11 @@ const rendererStyle = vi.hoisted(() => ({ setStyle: vi.fn(), setBackground: vi.f
 const rendererCreate = vi.hoisted(() => vi.fn((_options: unknown) => {}));
 /** 就地写的落点（P4a 步骤 5 核对 instanceoverride 走就地一侧）。 */
 const rendererWrites = vi.hoisted(() => ({ applyBindings: vi.fn((_writes: unknown) => true) }));
+/** 指针与加载（P5a 收尾核对开场指针先于加载交给渲染器）。 */
+const rendererPointer = vi.hoisted(() => ({
+  setPointer: vi.fn((_x: number, _y: number) => {}),
+  load: vi.fn(async (_bundle: unknown, _options?: unknown) => {}),
+}));
 
 vi.mock("./render", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./render")>();
@@ -42,7 +47,8 @@ vi.mock("./render", async (importOriginal) => {
     adapterInfo: { vendor: "test", architecture: "", description: "", features: [] },
     warnings: [],
     sceneStats: null,
-    load: async () => {},
+    load: (bundle: unknown, options?: unknown) => rendererPointer.load(bundle, options),
+    setPointer: (x: number, y: number) => rendererPointer.setPointer(x, y),
     setPaused: () => {},
     ...rendererStyle,
     applyBindings: (writes: unknown) => rendererWrites.applyBindings(writes),
@@ -415,6 +421,44 @@ describe("SceneHost：粒子 instanceoverride（P4a 步骤 5）", () => {
     expect(host.stats).toEqual({ applied: 1, recompiled: [] });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+});
+
+describe("SceneHost：开场指针（P5a 收尾）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    rendererPointer.setPointer.mockClear();
+    rendererPointer.load.mockClear();
+    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("渲染器建好前收到的指针：建好时、加载之前带进去（只带最近的一次）；之后就地交", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.setPointer(0.2, 0.8);
+    host.setPointer(0.3, 0.7);
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect(rendererPointer.setPointer).toHaveBeenCalledExactlyOnceWith(0.3, 0.7);
+    // 先于第一次 load：渲染器加载时的预热与第一帧用它
+    expect(rendererPointer.setPointer.mock.invocationCallOrder[0]).toBeLessThan(
+      rendererPointer.load.mock.invocationCallOrder[0],
+    );
+    host.setPointer(0.9, 0.1);
+    expect(rendererPointer.setPointer).toHaveBeenLastCalledWith(0.9, 0.1);
+    host.dispose();
+  });
+
+  it("没收到过指针就不设，渲染器保持场景中心", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect(rendererPointer.load).toHaveBeenCalled();
+    expect(rendererPointer.setPointer).not.toHaveBeenCalled();
     host.dispose();
   });
 });

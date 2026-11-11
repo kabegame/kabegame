@@ -1,6 +1,6 @@
 import { SceneHost, type SceneProperty } from "./host";
 import { createReporter } from "./report";
-import { listenSceneParent } from "./sceneStyle";
+import { listenSceneParent, scenePointerFeed } from "./sceneStyle";
 import { installSceneDevProbe } from "./dev/install";
 
 declare global {
@@ -19,9 +19,12 @@ const instance = params.get("kbInstance") ?? "";
 const canvas = document.querySelector<HTMLCanvasElement>("#scene-canvas");
 if (!canvas) throw new Error("场景画布不存在");
 const host = new SceneHost(canvas, { imageId: params.get("kbScene"), report: createReporter(instance) });
+// 指针：父页面交来的开场初值只在还没收到真实 pointermove 时生效（P5a 收尾）
+const pointer = scenePointerFeed((x, y) => host.setPointer(x, y));
 listenSceneParent({
   style: (style) => host.setStyle(style),
   displayScale: (scale) => host.setDisplayScale(scale),
+  pointer: pointer.initial,
 });
 
 window.wallpaperPropertyListener = {
@@ -40,7 +43,7 @@ document.addEventListener("visibilitychange", syncHidden);
 syncHidden();
 
 document.addEventListener("pointermove", (event) => {
-  host.setPointer(event.clientX / innerWidth, event.clientY / innerHeight);
+  pointer.move(event.clientX / innerWidth, event.clientY / innerHeight);
 });
 window.addEventListener("pagehide", () => host.dispose(), { once: true });
 

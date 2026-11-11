@@ -78,6 +78,11 @@ export class SceneHost {
   private style: SceneStyle = "fill";
   /** 父页面量的显示缩放（`sceneStyle.ts` 的协议），渲染器建好前先存着。 */
   private displayScale = 1;
+  /**
+   * 最近一次的指针（画布上的归一化坐标，`setPointer`），没收到过为 null。渲染器建好前先存着、建好时带进去（P5a 收尾）：
+   * 父页面交来的开场初值往往早于渲染器，丢了的话加载时的预热与第一帧都只能按场景中心算。
+   */
+  private pointer: [number, number] | null = null;
   private renderer: SceneRenderer | null = null;
   private rendererTask: Promise<SceneRenderer> | null = null;
   private controller: AbortController | null = null;
@@ -623,6 +628,7 @@ export class SceneHost {
   }
 
   setPointer(x: number, y: number): void {
+    this.pointer = [x, y];
     this.renderer?.setPointer(x, y);
   }
 
@@ -676,6 +682,8 @@ export class SceneHost {
         // 取设备期间父页面可能又推了新的显示缩放
         if (this.displayScale !== displayScale) created.setDisplayScale(this.displayScale);
         created.setStyle(this.style);
+        // 先于 load：加载时的预热与第一帧用它（渲染器按新场景的铺放换算，见 `SceneRenderer.load`）
+        if (this.pointer) created.setPointer(...this.pointer);
         created.setBackground(schemeColor(this.properties));
         const info = created.adapterInfo;
         this.options.report.debug(

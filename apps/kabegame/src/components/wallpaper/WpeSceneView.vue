@@ -14,15 +14,26 @@
  *   大小。预览画布（`WallpaperPreviewCanvas`）按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到，
  *   只能在这里量。宿主请求时必回；iframe 尺寸变化（ResizeObserver）、窗口尺寸变化时量一次；只有祖先 transform
  *   变了时（弹窗缩放、预览弹窗动画）布局尺寸不变、哪个 observer 都不触发，所以再按 250ms 轮询比较，只在值变时推。
- * - 指针：`interactive` 时 iframe 接收指针事件，宿主自己算 `g_PointerPosition`。
+ * - 指针：`interactive` 时 iframe 接收指针事件，宿主自己算 `g_PointerPosition`。开场（P5a 收尾）宿主还没收到过事件，
+ *   iframe 建好（`load`）与宿主报 ready 时各问一次 Rust 光标在本窗口里的位置（`wpe_scene_cursor`，桌面壁纸窗口的页面
+ *   收不到鼠标事件，只能问 Rust），按 iframe 显示矩形换成归一化坐标交给宿主当初值；命令返回 null（非 Windows）或
+ *   非桌面环境时用本页最近一次 `pointermove` / `pointerdown` 的位置，也没有就不发。不交互时不发。
  */
 import { invoke } from "@/api";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import { logger } from "@/utils/logger";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Mode, WallpaperTarget } from "./types";
 import { WEB_SANDBOX } from "./webSandbox";
-import { displayScaleOf, isWpeSceneStyleRequest, wpeSceneDisplayMessage, wpeSceneStyleMessage } from "./wpeSceneStyle";
+import {
+  displayScaleOf,
+  isWpeSceneStyleRequest,
+  scenePointerIn,
+  wpeSceneDisplayMessage,
+  wpeScenePointerMessage,
+  wpeSceneStyleMessage,
+} from "./wpeSceneStyle";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 
@@ -62,6 +73,12 @@ let unlisten: UnlistenFn | null = null;
 let postedScale: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let displayTimer: number | undefined;
+/** 本页最近一次 `pointermove` / `pointerdown` 的视口坐标（CSS 像素）：问不到 Rust 时的开场指针。 */
+let pagePointer: { x: number; y: number } | null = null;
+
+function onPagePointer(event: PointerEvent) {
+  pagePointer = { x: event.clientX, y: event.clientY };
+}
 
 function postVolume() {
   const target = frame.value?.contentWindow;
@@ -90,6 +107,32 @@ function postDisplay(force = false) {
   if (!force && postedScale !== null && Math.abs(scale - postedScale) <= postedScale * DISPLAY_SCALE_EPSILON) return;
   postedScale = scale;
   target.postMessage(wpeSceneDisplayMessage(scale), "*");
+}
+
+/** 光标在本窗口里的视口坐标：先问 Rust（真实光标），拿不到（null、报错、非桌面环境）用本页最近一次鼠标位置。 */
+async function cursorPoint(): Promise<{ x: number; y: number } | null> {
+  if (!IS_WEB && !IS_ANDROID) {
+    try {
+      const point = await invoke<{ x: number; y: number } | null>("wpe_scene_cursor");
+      if (point) return point;
+    } catch (error) {
+      logger.debug(`取光标位置失败: ${error}`);
+    }
+  }
+  return pagePointer;
+}
+
+/** 开场指针（P5a 收尾）：`interactive` 时把光标在 iframe 里的归一化坐标交给宿主当初值。等命令期间换了宿主就不发。 */
+async function postPointer() {
+  if (!props.interactive) return;
+  const id = generation;
+  const element = frame.value;
+  const point = await cursorPoint();
+  if (disposed || id !== generation || !props.interactive || !point || frame.value !== element || !element) return;
+  const target = element.contentWindow;
+  const position = scenePointerIn(element, point);
+  if (!target || !position) return;
+  target.postMessage(wpeScenePointerMessage(...position), "*");
 }
 
 /** 窗口 resize 在祖先的 ResizeObserver 之前派发：预览画布要在那里重算 scale，等这一轮渲染更新跑完再量。 */
@@ -141,14 +184,18 @@ async function start() {
 onMounted(async () => {
   window.addEventListener("message", onWindowMessage);
   window.addEventListener("resize", onWindowResize);
+  window.addEventListener("pointermove", onPagePointer, { capture: true, passive: true });
+  window.addEventListener("pointerdown", onPagePointer, { capture: true, passive: true });
   resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => postDisplay());
   if (frame.value) resizeObserver?.observe(frame.value);
   displayTimer = window.setInterval(() => postDisplay(), DISPLAY_CHECK_INTERVAL_MS);
   try {
     const stop = await listen<{ instance: string; kind: string; reasons?: string[] }>("wpe-scene-status", (event) => {
       if (disposed || event.payload.instance !== instance) return;
-      if (event.payload.kind === "ready") emit("ready");
-      else if (event.payload.kind === "fallback") emit("fallback", event.payload.reasons ?? []);
+      if (event.payload.kind === "ready") {
+        emit("ready");
+        void postPointer();
+      } else if (event.payload.kind === "fallback") emit("fallback", event.payload.reasons ?? []);
     });
     if (disposed) stop();
     else unlisten = stop;
@@ -183,6 +230,8 @@ onBeforeUnmount(() => {
   generation++;
   window.removeEventListener("message", onWindowMessage);
   window.removeEventListener("resize", onWindowResize);
+  window.removeEventListener("pointermove", onPagePointer, { capture: true });
+  window.removeEventListener("pointerdown", onPagePointer, { capture: true });
   resizeObserver?.disconnect();
   resizeObserver = null;
   window.clearInterval(displayTimer);
@@ -202,5 +251,6 @@ onBeforeUnmount(() => {
     title="wallpaper-scene"
     class="block w-full h-full border-0"
     :class="interactive ? 'pointer-events-auto' : 'pointer-events-none'"
+    @load="postPointer"
   />
 </template>

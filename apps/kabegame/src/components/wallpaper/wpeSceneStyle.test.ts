@@ -3,11 +3,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   WPE_SCENE_DISPLAY,
+  WPE_SCENE_POINTER,
   WPE_SCENE_STYLE,
   WPE_SCENE_STYLE_REQUEST,
   displayScaleOf,
   isWpeSceneStyleRequest,
+  scenePointerIn,
   wpeSceneDisplayMessage,
+  wpeScenePointerMessage,
   wpeSceneStyleMessage,
 } from "./wpeSceneStyle";
 
@@ -19,6 +22,11 @@ describe("wpeSceneStyle", () => {
     expect(source).toContain(`SCENE_DISPLAY_MESSAGE = "${WPE_SCENE_DISPLAY}"`);
     // 宿主按字段名 scale 取值
     expect(source).toContain("data.scale");
+  });
+
+  it("宿主的开场指针字面量与这里一致（P5a 收尾）", () => {
+    const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
+    expect(source).toContain(`SCENE_POINTER_MESSAGE = "${WPE_SCENE_POINTER}"`);
   });
 
   it("识别样式请求", () => {
@@ -33,6 +41,27 @@ describe("wpeSceneStyle", () => {
 
   it("显示缩放消息带缩放", () => {
     expect(wpeSceneDisplayMessage(0.25)).toEqual({ type: WPE_SCENE_DISPLAY, scale: 0.25 });
+  });
+
+  it("开场指针消息带坐标", () => {
+    expect(wpeScenePointerMessage(0.25, -0.5)).toEqual({ type: WPE_SCENE_POINTER, x: 0.25, y: -0.5 });
+  });
+});
+
+describe("scenePointerIn", () => {
+  const element = (left: number, top: number, width: number, height: number) =>
+    ({ getBoundingClientRect: () => ({ left, top, width, height }) }) as unknown as HTMLElement;
+
+  it("按显示矩形换算，不钳制", () => {
+    expect(scenePointerIn(element(100, 50, 960, 540), { x: 340, y: 185 })).toEqual([0.25, 0.25]);
+    expect(scenePointerIn(element(100, 50, 960, 540), { x: 100, y: 590 })).toEqual([0, 1]);
+    // 光标在 iframe 外
+    expect(scenePointerIn(element(100, 50, 960, 540), { x: 0, y: 1130 })).toEqual([-100 / 960, 2]);
+  });
+
+  it("显示矩形为空时为 null", () => {
+    expect(scenePointerIn(element(0, 0, 0, 540), { x: 1, y: 1 })).toBeNull();
+    expect(scenePointerIn(element(0, 0, 960, 0), { x: 1, y: 1 })).toBeNull();
   });
 });
 

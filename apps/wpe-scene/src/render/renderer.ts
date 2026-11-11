@@ -135,8 +135,8 @@ export class SceneRenderer {
   /**
    * 最近一次 `setPointer` 收到的画布原始坐标（0…1，左上原点），没收到过时为 null。控制点跟随指针用的 `cursor`
    * （`sceneCursor`）每帧按当前样式与铺放从它现算（P4c 步骤 2），改样式、改尺寸后下一帧就对，不用等下一次 `pointermove`。
-   * 只在宿主收到事件时更新（预览是光标在 iframe 上时，桌面是鼠标转发时），之外保持最后的值；WPE 用全局光标、窗口外也跟踪，
-   * 这点差别不处理。
+   * 开场由父页面交一次真实光标（P5a 收尾，宿主 `scenePointerFeed`），之后只在宿主收到事件时更新（预览是光标在 iframe 上时，
+   * 桌面是鼠标转发时），之外保持最后的值；WPE 每帧读全局光标、窗口外也跟踪，这点差别不处理。
    */
   private canvasPointer: [number, number] | null = null;
   /** `g_Time` / `g_Frametime`：钳过的帧时间与它的累加（T2）。换场景不重置。 */
@@ -326,6 +326,13 @@ export class SceneRenderer {
     if (!old) this.parallax = initialParallaxState(bundle.general.width, bundle.general.height);
     this.blitBindGroups.clear();
     this.placementKey = "";
+    // 场景换上之前收到的指针（开场初值早于第一次加载，P5a 收尾）：没有场景时 `setPointer` 只能原样记下，这里按新场景的铺放
+    // 换成 `g_PointerPosition`，第一帧与视差点就用它；`pointerLast` 不动（同 `setPointer` 的规则）。重编译时同一张场景换算结果不变
+    const canvasPointer = this.canvasPointer;
+    if (canvasPointer) {
+      this.syncPlacement(scene);
+      this.pointer = scenePointer(this.style, this.placement, this.canvas.width, this.canvas.height, ...canvasPointer);
+    }
     options.beforeFirstFrame?.(state);
     old?.destroy();
     this.failed = false;

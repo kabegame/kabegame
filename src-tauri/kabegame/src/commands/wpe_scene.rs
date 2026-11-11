@@ -57,6 +57,63 @@ pub fn wpe_scene_clear_storage<R: tauri::Runtime>(
     .map_err(|error| error.to_string())
 }
 
+/// 窗口客户区里的一点，CSS 像素（和应用页的 `clientX` / `getBoundingClientRect` 同一坐标系）。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct WpeSceneCursor {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// 客户区物理像素 → CSS 像素：除以窗口的 DPI 缩放（`dpi / 96`，取不到 DPI 时 `dpi` 为 0，按 1 算）。和
+/// `wallpaper::input_forward` 把光标换成视图坐标的映射相同，只是不取整：这里交给页面按显示矩形换算，不注入事件。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn client_to_css(x: i32, y: i32, dpi: u32) -> WpeSceneCursor {
+    let scale = if dpi == 0 { 1.0 } else { dpi as f64 / 96.0 };
+    WpeSceneCursor {
+        x: x as f64 / scale,
+        y: y as f64 / scale,
+    }
+}
+
+/// 开场指针（P5a 收尾）：光标在调用方 webview 所在窗口客户区里的位置（CSS 像素），不论光标在不在窗口里（可为负或越界）。
+/// `WpeSceneView` 在宿主建好时问一次，按 iframe 的显示矩形换成宿主里的归一化坐标交过去，宿主开场就用真实光标，
+/// 不必等第一个 `pointermove`（桌面壁纸窗口的页面本身收不到鼠标事件）。Windows 用 `GetCursorPos` + `ScreenToClient`
+/// + `GetDpiForWindow`，同鼠标转发；拿不到或其它平台返回 `null`，调用方退回页面自己记的鼠标位置。
+/// 只给主窗口 / 壁纸窗口的应用页用（免 ACL）。异步命令：取窗口句柄要等主线程回执，不能在主线程上同步等。
+#[tauri::command]
+pub async fn wpe_scene_cursor<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+) -> Option<WpeSceneCursor> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::{HWND, POINT};
+        use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+        use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+        let hwnd = match webview.window().hwnd() {
+            Ok(hwnd) => hwnd.0 as isize as HWND,
+            Err(error) => {
+                tracing::debug!("取窗口句柄失败: {error}");
+                return None;
+            }
+        };
+        let mut point = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut point) } == 0
+            || unsafe { ScreenToClient(hwnd, &mut point) } == 0
+        {
+            return None;
+        }
+        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        Some(client_to_css(point.x, point.y, dpi))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = webview;
+        None
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum WpeSceneReport {
@@ -116,7 +173,34 @@ pub fn wpe_scene_report<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::WpeSceneReport;
+    use super::{client_to_css, WpeSceneCursor, WpeSceneReport};
+
+    #[test]
+    fn client_to_css_divides_by_dpi_scale() {
+        // 96 DPI 是 100%：物理像素就是 CSS 像素
+        assert_eq!(
+            client_to_css(300, 200, 96),
+            WpeSceneCursor { x: 300.0, y: 200.0 }
+        );
+        // 150%：除以 1.5，不取整
+        assert_eq!(
+            client_to_css(301, 150, 144),
+            WpeSceneCursor {
+                x: 301.0 / 1.5,
+                y: 100.0
+            }
+        );
+        // 光标在窗口外：负数与越界照原样换算
+        assert_eq!(
+            client_to_css(-192, 4000, 192),
+            WpeSceneCursor {
+                x: -96.0,
+                y: 2000.0
+            }
+        );
+        // 取不到 DPI（0）按 100%
+        assert_eq!(client_to_css(7, 9, 0), WpeSceneCursor { x: 7.0, y: 9.0 });
+    }
 
     #[test]
     fn scene_report_deserializes_each_kind() {

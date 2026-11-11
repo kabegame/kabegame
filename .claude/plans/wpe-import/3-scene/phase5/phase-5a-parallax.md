@@ -953,16 +953,16 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
 | `delay > 3` 时 k 为负、P 越走越远 | 步骤 2 | 照公式实现；语料最大 2.0 | 一个 `delay 3.2` 的工程连抓几帧；语料 0 张，可以不补 |
 | 预热时相机带不带抖动（跟随指针的粒子预热位置） | 步骤 3 | 我们预热与加载后第一帧的模拟都用 s = (0, 0)。依据是推断：步骤 3 实测粒子模拟用上一帧的相机，加载时还没有更新过相机。t = 0 时抖动偏移是 (amp, 0)，不是 0 | 开抖动、控制点跟随指针、有 `starttime` 的工程，抓开窗后头几帧的粒子位置；语料里同时开抖动和跟随指针的场景很少，可以只记不补 |
 
-**只能在 Kabegame 里真机走查（需要用户看）：**
+**只能在 Kabegame 里真机走查（需要用户看）：** 2026-11-11 用户走查：除「开场」外都和预期一致。「开场」不一致：WPE 打开就在光标位置（delay 0.1 几帧内追上）；我们打开后停在中间，鼠标动一下才滑过去——宿主只在收到 pointermove 时更新指针，预览 iframe 开场收不到，桌面转发只在光标位置变化时注入（`input_forward.rs` 的 `last_move`），跟随指针的粒子同样受影响，待定修法；桌面壁纸光标停在别的窗口上移动时我们也跟随，和 WPE 相同（Windows 的鼠标转发是轮询光标，不只在桌面收到事件时更新）。
 
 | 项 | 看什么 |
 |---|---|
-| 预览里移动鼠标 | 11 张新解锁场景的图层跟随方向、幅度和 WPE 一致：10 张模板场景只在纵向动，`3445915391` 纵向动且 iris 照常；`3818481122` 图层不动，`depthparallax` 跟着变 |
-| 壁纸样式 | `fill` 之外的 `fit`、`center`、`tile` 下，光标在画面上的位置决定视差点（沿用 `g_PointerPosition` 的样式换算），留白处外推、钳到边 |
-| 桌面壁纸 | 设为桌面后，Windows 鼠标转发下视差跟随光标。WPE 每帧用 `GetCursorPos`，光标在别的窗口上时照样跟随；我们只在收到 `pointermove` 时更新，记下两边是否不同 |
-| 开场滑动 | 加载后视差点从场景中心滑向光标；`delay 2.0` 的 5 张场景能看出这段过渡 |
-| 重编译保留视差点 | 预览里改一个会整场重编译的属性，画面不跳回中心；换到另一张再换回来，回到中心 |
-| 暂停与隐藏 | 暂停时视差点不动，恢复后接着平滑；应用背景、不交互的预览收不到指针，停在场景中心（只有静止偏移） |
+| 预览里移动鼠标 | 9 张深度 (0, 1) 的场景（X-Ray 模板 8 张：`2272499163` Rem & Yui、`2279259068` Striped bikini Girl、`2381978484` Celestial Method、`2382002554` Alice 1、`2382120706` Sachiko、`2382121137` CINDERELLA GIRLS、`2570822804` Mona、`2955749185` Nabari；另 `3000769374` 魔女之旅 伊蕾娜）只在纵向动、左右移鼠标不动，方向和光标相反（光标往上、图层往下）；`3445915391` 史尔特尔 同样纵向、iris 照常；`3818481122` 八奈见 图层不动，`depthparallax` 的效果跟着变；`3830255100` AQUAMARINE 的 mouseinfluence 只有 0.04，几乎不跟鼠标，只有静止偏移和抖动 |
+| 壁纸样式 | `2381978484`（8192×5479，比 16:9 高）切 `fit`、`center`、`tile`：光标在画面上的位置决定视差点，光标在留白处时图层停在最远处（钳到边），不乱跳 |
+| 桌面壁纸 | 设为桌面后（如 `3000769374`），在桌面上移鼠标图层跟着动。WPE 每帧读光标，光标停在别的窗口上移动时照样跟随；我们只在收到桌面的鼠标移动时更新，记下两边是否不同 |
+| 开场 | 能渲染的视差场景 `delay` 全是 0.1（`ignore/p5/wk/delays.py`），开场滑动只有零点几秒；看加载时没有跳一下。计划原写的「`delay 2.0` 的 5 张」目前都渲染不了 |
+| 重编译保留视差点 | 预览里改一个会整场重编译的属性，画面不跳回中心；换到另一张再换回来，回到中心。上面这些场景没有明显会重编译的属性时可以跳过（渲染器单测已覆盖：`parallax.test.ts`「重编译保留 P」） |
+| 暂停与应用背景 | 预览里右键「暂停」后移鼠标图层不动，恢复后接着跟；设成应用背景时不跟鼠标，只有静止偏移 |
 
 **步骤 4 留下的：**
 
@@ -989,7 +989,7 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
 - 回放只收一个固定指针、开窗期间光标动过的抓帧复现不了：收尾前「回放逐帧光标」，`p5a-shakepar2` 整帧 0 差异。
 - 收尾走查（2026-11-11，p5-REPORT「收尾走查」）：
   - `parallaxDepth` 绑单个数字的用户属性时铺满两个分量（`p5a-wk-prop`，(0.6, 0.6)）；
-  - 运行中改 `parallaxDepth` 属性就地生效（WPE 侧；Kabegame 侧不整场重编译留给真机走查）；
+  - 运行中改 `parallaxDepth` 属性就地生效（WPE 侧实测；Kabegame 侧由单测锁住：绑定登记成图层字段 `parallax.test.ts`「就地改根的 parallaxDepth」，就地改与整场编译逐字节相同；一个分量时铺满两个也有单测。屏外宿主不加载场景、读不到 applied 计数，开主窗口预览会占用户的图库界面，没做真机计数）；
   - 运行中开关 `cameraparallax`：关时 P 冻结、`g_ParallaxPosition` 留旧值、偏移撤掉，再开时 P 接着走；
   - 脚本写 `cameraparallaxamount`、`parallaxDepth` 同帧生效，读写都通（`p5a-wk-script`）；
   - 没开视差时 `g_ParallaxPosition` 恒为 (0.5, 0.5)（`p5a-wk-noplx`）；
@@ -1008,6 +1008,29 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
   - 数值核对（`ignore/p5/wk/p_product.ts`，产品的 `replayParallax` 按日志逐帧光标推进）：`p5a-wk-prop` 第 176、177、345、346 帧 P 和 WPE 反推值差 ≤ 0.001（改之前差 0.46、0.11）。步骤 2 的 `delay 2.9` 复算（`ignore/p5/s2/fit_delay.py` 起点加 (2, 2)）残差从 (0.37, 0.37) 归零。
   - 端到端：`render_scene`（`cursors: "log"`）回放 `p5a-wk-prop` 到第 177 帧，FR 块外 0 差异。0.46 像素的 P 差落到画面上只有 0.14 像素，这一项只能说明没改坏，对不对靠上面的数值核对。
   - 画面哈希 10 张 × 3 档与步骤 4 的基线全部相同（基线里没有开视差的场景）。测试工程 14308 已移除。
+
+### 收尾：开场指针（2026-11-11 用户「现在修」）
+
+**总体设计思路。** 真机走查发现开场和 WPE 不一致：WPE 每帧 `GetCursorPos`，加载第一帧就用真实光标；我们的宿主只在收到 `pointermove` 时更新指针，预览 iframe 开场收不到，桌面转发只在光标位置变化时注入，所以打开后视差点、`g_ParallaxPosition`、跟随指针的粒子都按场景中心算，鼠标动一下才跳过去。修法是让宿主一开始就拿到一次真实光标：应用页（`WpeSceneView`，预览与桌面共用）在 `interactive` 时向 Rust 问光标在本窗口客户区的位置，按 iframe 的显示矩形换成 iframe 内的归一化坐标，经 `postMessage` 交给宿主；宿主把它当一次 `setPointer`，渲染器还没建好就先存着、建好时带进去（加载时的预热也用上）。之后真正的 `pointermove` 照常覆盖。关键决策：问 Rust 而不是只用父页面记的鼠标位置，因为桌面壁纸窗口的页面收不到鼠标事件、只有注入给 iframe 的；Rust 侧用和鼠标转发同一套映射（`ScreenToClient` + DPI），Windows 之外返回空、退回父页面最近一次收到的鼠标位置。非 `interactive`（应用背景、不交互的预览）照旧不给指针。
+
+**点：**
+1. **Rust**（`src-tauri/kabegame/src/commands/wpe_scene.rs`、`lib.rs` 注册）：新增命令，返回调用方窗口里光标的客户区坐标（CSS 像素，`{ x, y }` 或 `null`）。Windows 按 `input_forward.rs` 的映射，其他平台 `null`。主窗口与壁纸窗口免 ACL，只注册。
+2. **应用页**（`WpeSceneView.vue`）：`interactive` 时，iframe 建好后（以及宿主报 ready 时再补一次）调命令，用 iframe 的 `getBoundingClientRect` 换算成归一化坐标（不钳制），发新消息 `kabegame:wpe-scene-pointer`；命令返回 `null` 时用本页最近一次 `pointermove` / `pointerdown` 的位置，也没有就不发。
+3. **宿主**（`sceneStyle.ts` 的父页面监听、`main.ts`、`host.ts`）：认这条消息（同现有消息只认父窗口、`isTrusted`），收到后 `setPointer`；已经收到过真实 `pointermove` 的就忽略这条初值。`SceneHost` 记住最近的指针，渲染器创建、加载新场景时先带上，预热与第一帧用它。
+4. **文档**：`cocs/wpe/WPE_SCENE.md` 里「只在收到 `pointermove` 时更新」的说法改掉；本节实施记录。
+
+**实施记录：** 子代理实现。宿主部分在 `ignore/p5/ptr/ws`（HEAD c22b66a2 快照）里改、Claude 三方合并（7 个文件与基线相同，直接替换）；应用页与 Rust 直接在工作区改。
+- Rust：`commands/wpe_scene.rs` 新增异步命令 `wpe_scene_cursor`（取窗口句柄要等主线程回执）与纯函数 `client_to_css`（除以 `dpi/96`，不取整），`lib.rs` 在 `wpe` feature 下注册。
+- 应用页：`wpeSceneStyle.ts` 新增消息与按显示矩形换算的 `scenePointerIn`；`WpeSceneView.vue` 在 `interactive` 时于 iframe load 与 ready 各发一次，命令返回 null、出错或在 Web / Android 时退回本页最近一次 `pointermove` / `pointerdown`，等命令期间换了宿主就不发。
+- 宿主：`sceneStyle.ts` 认 `kabegame:wpe-scene-pointer`，`scenePointerFeed` 让收到真实 `pointermove` 之后的初值作废；`SceneHost` 记住指针、建渲染器时先于 `load` 带上；`renderer.load` 把先前的原始指针按新场景铺放换成 `g_PointerPosition`。
+- 文档：`cocs/wpe/WPE_SCENE.md`、`cocs/README.md` 里「只在收到 `pointermove` 时更新」改掉。
+- 检查（Claude 复跑）：宿主 tsc 0、vitest 1708 过 / 1 败（`pipeline.test.ts` 的 `3830255100: 219 次请求`，HEAD 基线上同样失败，与本次无关）；应用 `src/components/wallpaper` 8 个文件 86 个用例过；Prettier 过；Rust `wpe_scene` 10 个单测过（`CARGO_TARGET_DIR=target-check`，dev 占着默认目录），子代理另报 vue-tsc 0、cargo check 0。
+- 运行中的应用：Rust 改动后 tauri dev 自己重编、重启了应用；`invoke wpe_scene_cursor` 在主窗口返回 CSS 像素坐标。dev 宿主已按工作区重建。
+- 拿不准的：首帧 `g_PointerPositionLast` 仍是 (0.5, 0.5)，和初值之间有一次跳变（WPE 首帧没核对）。
+- **真机核对主窗口坐标**（用户同意由我们控制鼠标，`ignore/p5/ptr/cursor_probe.ps1`：per-monitor DPI 感知下 `ClientToScreen` 找客户区、`SetCursorPos` 移到客户区 (0.3, 0.6)）：主窗口带系统边框（外框比页面宽 14、高 37 CSS 像素），客户区 1778 × 1090 物理像素 = 1185.3 × 726.7 CSS，页面 `innerWidth/innerHeight` 1186 × 727；页面收到的最后一次 `pointermove` 是 (355.3333, 436)，`wpe_scene_cursor` 返回 (355.3333, 436)，一致。注意：不开 DPI 感知时 `SetCursorPos` 的坐标被系统按 1.5 倍虚拟化，光标落点不对。当时主页面里只有应用背景的场景宿主（不交互、`pointer-events: none`），预览里的 iframe 换算留到预览打开时再核。
+- **真机核对预览换算**（用户打开「超市冰箱八奈见」预览）：预览 iframe 显示矩形 736 × 503.6，宿主文档 7296 × 4992（预览画布缩放）。用户光标在预览上方外面时，父页面算出的初值是 (0.702, −0.137)，不钳制、同 WPE。把光标移到预览中间：宿主收到的真实 `pointermove` 归一化为 (0.499999, 0.499092)，按初值算法（`wpe_scene_cursor` + 显示矩形）算出 (0.500042, 0.499611)，差 < 0.4 物理像素（鼠标坐标量化）。临时监听已停掉。
+
+**验收：** 单测（宿主收初值、早于渲染器的初值被带进加载、真实事件之后的初值被忽略；`WpeSceneView` 在 `interactive` 时发、不交互时不发、换算按显示矩形；Rust 映射的纯函数部分）；宿主 tsc、vitest，应用 vue-tsc 与 vitest，`cargo check`；真机由用户看「超市冰箱八奈见」与一张 X-Ray 场景在预览、桌面的开场不再停在中间。
 
 再和 P4 各节一样统一写文档：
 - `cocs/wpe/WPE_SCENE.md`：视差、抖动、缩放与前置几条；

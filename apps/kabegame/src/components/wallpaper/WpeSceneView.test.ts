@@ -2,18 +2,29 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WpeSceneView from "./WpeSceneView.vue";
-import { WPE_SCENE_DISPLAY, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
+import { WPE_SCENE_DISPLAY, WPE_SCENE_POINTER, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 
-vi.mock("@/api", () => ({ invoke: async () => "file:///D:/host/index.html" }));
-vi.mock("@/utils/logger", () => ({ logger: { warn: vi.fn() } }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
+/** `wpe_scene_cursor` 的返回（开场指针）；其余命令都当取宿主地址。 */
+const cursor = vi.hoisted(() => ({ value: null as { x: number; y: number } | null }));
+/** 本组件订阅的 `wpe-scene-status` 处理函数（测试里模拟宿主报 ready）。 */
+const status = vi.hoisted(() => ({ handler: null as ((event: { payload: unknown }) => void) | null }));
+vi.mock("@/api", () => ({
+  invoke: async (command: string) => (command === "wpe_scene_cursor" ? cursor.value : "file:///D:/host/index.html"),
+}));
+vi.mock("@/utils/logger", () => ({ logger: { warn: vi.fn(), debug: vi.fn() } }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: async (_name: string, handler: (event: { payload: unknown }) => void) => {
+    status.handler = handler;
+    return () => {};
+  },
+}));
 
 const wrappers: ReturnType<typeof mount>[] = [];
 
-async function mountView(styleMode = "fit") {
+async function mountView(styleMode = "fit", interactive = false) {
   const wrapper = mount(WpeSceneView, {
-    props: { target: { id: "7", path: "D:/wpe/7" }, styleMode, volume: 1 } as never,
+    props: { target: { id: "7", path: "D:/wpe/7" }, styleMode, volume: 1, interactive } as never,
     attachTo: document.body,
   });
   wrappers.push(wrapper);
@@ -171,5 +182,64 @@ describe("WpeSceneView 右键", () => {
     expect(wrapper.emitted("contextmenu")).toEqual([[{ x: 300, y: 150 }]]);
     fromHost({ type: WPE_CONTEXT_MENU, x: 1, y: 1 }, window);
     expect(wrapper.emitted("contextmenu")).toHaveLength(1);
+  });
+});
+
+describe("WpeSceneView 开场指针（P5a 收尾）", () => {
+  afterEach(() => {
+    cursor.value = null;
+  });
+
+  const pointerPosts = (post: { mock: { calls: unknown[][] } }) =>
+    post.mock.calls.filter(([data]) => (data as { type?: unknown }).type === WPE_SCENE_POINTER).map(([data]) => data);
+  /** 显示矩形：左上 (100, 50)、960×540（布局可以更大，按显示矩形算）。 */
+  const place = (frame: HTMLIFrameElement) => {
+    frame.getBoundingClientRect = () => ({ left: 100, top: 50, width: 960, height: 540 }) as DOMRect;
+  };
+  /** 宿主报 ready：后端发回的 `wpe-scene-status`，实例号取 iframe 地址里的。 */
+  const ready = (frame: HTMLIFrameElement) =>
+    status.handler!({ payload: { instance: new URL(frame.src).searchParams.get("kbInstance"), kind: "ready" } });
+
+  it("interactive：iframe load 与宿主 ready 时各发一次，按显示矩形换算、不钳制", async () => {
+    const { wrapper, post, frame } = await mountView("fit", true);
+    place(frame);
+    cursor.value = { x: 340, y: 185 };
+    frame.dispatchEvent(new Event("load"));
+    await flushPromises();
+    expect(pointerPosts(post)).toEqual([{ type: WPE_SCENE_POINTER, x: 0.25, y: 0.25 }]);
+    expect(post).toHaveBeenLastCalledWith({ type: WPE_SCENE_POINTER, x: 0.25, y: 0.25 }, "*");
+    // 光标在 iframe 外（窗口里别处）：越界照发
+    cursor.value = { x: 1060, y: 1130 };
+    ready(frame);
+    await flushPromises();
+    expect(wrapper.emitted("ready")).toHaveLength(1);
+    expect(pointerPosts(post)).toEqual([
+      { type: WPE_SCENE_POINTER, x: 0.25, y: 0.25 },
+      { type: WPE_SCENE_POINTER, x: 1, y: 2 },
+    ]);
+  });
+
+  it("不交互时不发（也不问光标）", async () => {
+    const { wrapper, post, frame } = await mountView("fit", false);
+    place(frame);
+    cursor.value = { x: 340, y: 185 };
+    frame.dispatchEvent(new Event("load"));
+    ready(frame);
+    await flushPromises();
+    expect(wrapper.emitted("ready")).toHaveLength(1);
+    expect(pointerPosts(post)).toEqual([]);
+  });
+
+  it("命令返回 null：退回本页最近一次鼠标位置；也没有就不发", async () => {
+    const { post, frame } = await mountView("fit", true);
+    place(frame);
+    frame.dispatchEvent(new Event("load"));
+    await flushPromises();
+    expect(pointerPosts(post)).toEqual([]);
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 580, clientY: 320 }));
+    window.dispatchEvent(new PointerEvent("pointerdown", { clientX: 820, clientY: 455 }));
+    ready(frame);
+    await flushPromises();
+    expect(pointerPosts(post)).toEqual([{ type: WPE_SCENE_POINTER, x: 0.75, y: 0.75 }]);
   });
 });

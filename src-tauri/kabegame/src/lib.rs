@@ -971,6 +971,8 @@ pub(crate) fn configure_app(
             wpe_scene_report,
             #[cfg(feature = "wpe")]
             wpe_scene_clear_storage,
+            #[cfg(feature = "wpe")]
+            wpe_scene_cursor,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

@@ -23,7 +23,15 @@ import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { pointerScenePoint } from "../particles/controlpoints";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { acquireGpu } from "./device";
-import { particleViewProjection, rootObject, sceneViewProjection, worldMatrixOf } from "./layout";
+import {
+  particleViewProjection,
+  rootObject,
+  sceneCursor,
+  scenePlacement,
+  scenePointer,
+  sceneViewProjection,
+  worldMatrixOf,
+} from "./layout";
 import { identity, invert, multiply, transformPoint, translation, type Mat4 } from "./math";
 import {
   advanceParallax,
@@ -1617,6 +1625,30 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     // 绘制：加载帧、第 1 帧 1.5，第 2 帧起 2；粒子模拟用上一帧的相机，第 3 帧才是 2
     expect(draws).toEqual([1.5, 1.5, 2, 2]);
     expect(steps).toEqual([1.5, 1.5, 1.5, 2]);
+    renderer.destroy();
+  });
+
+  it("开场指针（P5a 收尾）：场景换上之前收到的指针进加载时的预热（cursor），并按新场景的铺放换成第一帧的 g_PointerPosition", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(1000);
+    const bundle = bundleOf([layer(0)], { cameraparallaxmouseinfluence: 1 });
+    const { renderer } = await start(bundle);
+    const build = vi.spyOn(GpuScene, "build");
+    // 画布 100×100、场景 16:9：fit 有留白，换算和画布原始坐标不同
+    renderer.setStyle("fit");
+    renderer.setPointer(1, 0);
+    const pointers = () => renderer as unknown as { pointer: [number, number]; pointerLast: [number, number] };
+    // 还没有场景：只能原样记下
+    expect(pointers().pointer).toEqual([1, 0]);
+    let firstFrame: [number, number] | null = null;
+    await renderer.load(bundle, { beforeFirstFrame: () => (firstFrame = [...pointers().pointer]) });
+    const scene = renderer.currentScene!;
+    const placement = scenePlacement("fit", scene.width, scene.height, 100, 100, 1);
+    const options = build.mock.calls[0][5] as { particles: { cursor: [number, number] } };
+    expect(options.particles.cursor).toEqual(sceneCursor("fit", placement, 100, 100, 1, 0));
+    const expected = scenePointer("fit", placement, 100, 100, 1, 0);
+    expect(expected).not.toEqual([1, 0]);
+    expect(firstFrame).toEqual(expected);
+    expect(pointers().pointer).toEqual(expected);
     renderer.destroy();
   });
 });
