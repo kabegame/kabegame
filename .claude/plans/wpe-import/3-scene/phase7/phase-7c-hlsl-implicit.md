@@ -60,6 +60,8 @@ pub struct Options {
 - 浮点下标 2 个（`video` 的 `kb_pack_*` 下标、`simple_gradient_audio_bar` 的局部数组）；
 - 来源待查 1 个（`color_grading__extension`：`InvalidAccess { indexed: true }`，源码里有 `LINEAR ? … : …`）。
 
+（步骤 0 改正：「不同宽度混算」9 个里真正混算宽度的只有 4 个，`gaussian` 与两个 `Simple_Audio_Bars` 是 `bool` 参与算术、`procedural_noise` 是 naga 自身的声明列表缺陷；`color_grading__extension` 是把标量赋给 swizzle，见「实施记录 / 步骤 0」。）
+
 ## 步骤
 
 ### 步骤 0 — 调研
@@ -105,15 +107,18 @@ pub struct Options {
 | 2a | 赋值、初始化、`return` 的截断与铺满，向量 → 标量取 `.x`，`float → int` 向零截断 | `context.rs` Assign、`declarations.rs` 初始化、`parser/functions.rs` return |
 | 2b | 不同宽度向量混算截到窄的 | `context.rs` Binary |
 | 2c | 非布尔条件 `!= 0`：`if` / `while` / `do` / `for` / `?:` / `!` / `&&` / `||` | 各条件落点 |
-| 2d | 实参的第二遍（用户函数与内置函数一起；带 `depth` 形参的候选跳过） | `functions.rs` `function_call` |
-| 2e | 浮点下标转 `u32`（照 fxc 的 `ftou`）；`bool` 参与算术为 0 / 1 | `context.rs` Access、`hlsl_kind` |
-| 2f | 步骤 0 定下来的其余规则（如标量分量访问）；没出现在语料里的（矩阵截断、`out` 实参截断、向量比较的 bvec 语义）不做，照旧报错 | — |
+| 2d | 实参的第二遍：用户函数只有一个重载能经隐式转换匹配时才选它，多个报二义（fxc X3067）；内置函数与我们自己的 `kb_pow` / `kb_min` / `kb_max` 等包装按内置规则，按代价取截到最窄的那个；带 `depth` 形参的候选跳过 | `functions.rs` `function_call` |
+| 2e | 浮点下标转 `u32`（照 fxc 的 `ftou`）；`bool` 参与算术（`+`、`*`、复合赋值）为 0 / 1 | `context.rs` Access、Binary、`hlsl_kind` |
+| 2f | 标量分量访问 `f.x` / `f.xx`（fxc 合法；语料会执行到的代码里没有，`p7-sem` 的 `kbconv4` 用到，约 15 行） | `variables.rs` swizzle |
+| 2g | naga 的声明列表缺陷：`float color[4], f;` 把 `f` 也当成数组（与 HLSL 无关，上游缺陷），单独一个行为补丁 | `parser/declarations.rs` |
+| 2h | 全局 `const` 的初始值不是常量（引用 uniform）：WPE 写成 `static const`，fxc 每次调用现算（实测 `c4.hlsl`）。改写阶段改成私有全局，在 `main` 开头按声明顺序赋值 | `src/rewrite.rs` |
+| — | 不做，照旧报错：矩阵截断、`out` 实参截断、向量比较的 bvec 语义、`%` 的向量铺满、向量当 `?:` 条件（fxc 逐分量，语料没有） | — |
 
 `KABEGAME.md` 的「行为补丁」一节逐条写：落点、规则、fxc 依据。
 
 ### 步骤 3 — 片元的 varying
 
-- **修改** `src/rewrite.rs`：两阶段 varying 类型不同、而且顶点阶段的更宽时，片元的声明换成顶点的类型（WPE 只有一份 `VS_OUTPUT`），不再报错；片元更宽的照旧报错（WPE 会读到未定义的寄存器分量，语料没有）。只在类型不同时改，保证逐字节不变。
+- **修改** `src/rewrite.rs`：两阶段 varying 类型不同时，不论哪边更宽，片元的声明都换成顶点的类型（WPE 只有一份 `VS_OUTPUT`，片元自己的声明作废）。片元更宽、又读了顶点没有的分量时，naga 照常报错，和 fxc 一致。`glitter_prepare`（只做 P7 的解锁 `3822495444`）就是片元更宽。只在类型不同时改，保证逐字节不变。
 - **修改** 嵌入的 naga：HLSL 模式下输入可写。
   ```rust
                       mutable: !input || self.hlsl, // 修改：HLSL 的 PS 输入是可写的局部副本（rea-p7-shader §2.x）
@@ -163,3 +168,23 @@ P7b 收尾的扫描（`ignore/p7/ana_p7c.py`，`corpus-p7b.json`）：
 2. **第二遍选错重载：** 代价函数是近似 HLSL 的规则。用户函数的重载在语料里很少，代价相同时照 fxc；Kabegame 渲染和 WPE 比是最后的检查。
 3. **截断语义的细节：** 赋值截断、混算截断已实测；`out` 实参、矩阵等没实测的不做。
 4. **naga 的维护：** HLSL 模式约 300–350 行，加单测约 150 行，集中在 GLSL 前端。`KABEGAME.md` 逐条记录，升级 naga 时重放。
+
+## 实施记录
+
+### 步骤 0 — 调研（2026-11-12）
+
+- **原型重放**（代理，scratchpad 副本，`ignore/p7/out/p7c-step0-proto.md`）：naga 原型加「varying 顶点更宽时片元按顶点类型」打在嵌入的 naga 副本上，重放 `requests-p7b`：
+  - 失败从 90 个请求 / 45 个着色器降到 13 / 8；原来通过的 3572 个文件逐字节不变；WPE 安装目录 158 → 160；
+  - 剩下四类：
+    - `bool` 参与算术（4 个着色器、9 个请求，如 `x += a - b < 0.0`、`d *= (d < l) * 6.0`）；
+    - 片元的 varying 比顶点宽（`glitter_prepare`、`topographic`）；
+    - 全局 `const` 的初始值引用 uniform（`radial_blur`）；
+    - naga 自身的声明列表缺陷（`float color[4], f;`，`procedural_noise`）；
+  - 再补前两类和声明列表（proto2）：779 个请求通过 778 个，逐字节仍不变，WPE 安装目录 161 / 167；`radial_blur` 的全局 `const` 临时改成 `#define` 后也通过。
+  - `color_grading__extension` 是把标量赋给 swizzle（`albedo.rgb = greyscale(albedo.rgb)`，`greyscale` 返回 `float`），原型的赋值铺满已解决；子计划原以为与 `LINEAR ? …` 有关，不是。
+  - 标量分量访问：语料里会执行到的代码没有（只有 `genericropeparticle.vert` 不编译的分支）。
+  - 两处浮点下标原型之后都通过；正式实现按 fxc 的 `ftou` 转 `u32`。
+  - 第二遍重载的全部 20 次调用里，作者的用户函数都只有一个可行候选；我们的 `kb_pow` / `kb_min` / `kb_max` 必须按内置规则选（`water_caustics` 的 `pow(float, vec3)` 有 6 个可行候选）。
+- **fxc 补测**与 **WPE 抓帧**：见 [p7-REPORT](p7-REPORT.md)「P7c 规则的实测」。用户函数重载多个可行时 fxc 报二义；`kbconv1–4` 四层的 WPE 结果都和预测一致。另测 `static const` 引用 uniform（`ignore/p7/fxc/c4.hlsl`）：fxc 接受，每次调用现算。
+- **规则表定稿**：步骤 2 加了 2f（标量分量访问）、2g（声明列表缺陷）、2h（全局 `const` 现算），2d、2e 按实测细化；步骤 3 改成 varying 两个方向都按顶点类型。
+- **我的失误：** 子计划把 `color_grading__extension` 的来源猜成 `LINEAR ? …`，并把 4 个 `bool` 算术、1 个 naga 缺陷误归进「不同宽度混算」，都是只看首条错误的消息没看源码。
