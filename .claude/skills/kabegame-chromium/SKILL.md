@@ -122,6 +122,9 @@ replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor?, window? }, s
 replay: { particles: { dts, times?, seed?, passes?, random? } }                                  直接给探针（缺省 seed 1、passes 1）
 ```
 
+真实工坊场景没有 FR、抓帧没有 `[kbp]` 日志：不要手写 `dts`，先用 kbp-tools 的 `kbp content unpack <工坊 ID> --instrument` 解包一份
+末尾加了日志图层的副本去抓帧，回放写 `timeline: { log, frame, cursors: "log" }`（不给 `track`），流程见 kbp-tools SKILL.md「真实场景的回放」。
+
 **时间线**（`apps/kabegame-dev-mcp/src/timeline.ts`，脚本也能 import `buildTimeline`）：`log` 是 WPE 日志
 `ignore/p4/out/<标签>-log.txt`（只读 `[kbp] 帧号,帧时间,累计时间`，`cursor=True` 生成的工程另带两列屏幕光标，见 kbp-tools 的协议），
 `track` 是 RenderDoc 轨迹 `ignore/p4/tracks/rd-<标签>.json`，

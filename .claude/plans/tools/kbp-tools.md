@@ -285,6 +285,26 @@ MUTATIONS = [
 
 依赖旧桥的 `ignore/` 脚本从此失效，用 `kbp rdc` 代替。
 
+## 点 11 — 真实场景解包加日志（`py/content.py`，`kbp content unpack`，第 5 批，2026-11-12 用户）
+
+**总体设计思路。** 回放（`render_scene` / `particle_track` / `particle_corners`）要从加载起每一帧的 dt、`g_Time` 与光标。我们的测试工程有 FR 图层写 `[kbp]` 日志，时间线直接用；真实工坊场景没有，只能把上百个 dt 和 `g_Time` 手写进调用（P5a 步骤 3 对 `3830255100` 就是用 `ignore/p5/s3/make_times.py` 生成 100 帧固定 dt 再贴进去），冗长，也和 WPE 实际的帧时间对不上。做法是把工坊场景复制、解包成测试工程，再往 `scene.json` 里加一个只写日志的 FR 图层：拿这份副本去 WPE 抓帧，日志照常截出来，回放写 `timeline: { log, frame, cursors: "log" }` 即可。工坊目录只读不写。关键决策：
+- **FR 加在 `objects` 末尾、挪到画面外**（1×1、`origin -100000 -100000`、视差深度 0）：加在开头会让按下标 `getLayer` 的脚本错位；画面外不改一个像素，比图时也不用屏蔽 FR 块。代价是不满足「前两个对象是 FR、CLK」的约定，所以不加 CLK、不写 `kbp-meta.json`，`kbp rdc track` 不管这种工程；时间线只要日志和回放到的帧号（RenderDoc 帧号 + 1），光标也在日志里。
+- **包解成散文件、不带 `scene.pkg`**：散文件已有的条目不覆盖（同 Kabegame 编译管线「散文件 → 包」的优先级），包内同名取第一个（同 `Pkg.by_name`）。
+- 脚本用生成库的 `FR_CURSOR`（五列）。这种工程在 Kabegame 里报 `script:api:input.cursorScreenPosition`（`input` 留给 P6），dev 探针强制渲染不受影响。
+
+**原型实测（`ignore/p5/inst/unpack_proto.py`）：** `3830255100`（AQUAMARINE：粒子、抖动、视差）解包：18 个散文件照拷、67 个包内条目解出，FR 加在末尾（id 391）。WPE 抓帧：原工程 35 个绘制、副本 36 个（多出 FR），副本 21 行 `[kbp]`、无报错行，日志从第 1 帧到第 210 帧。`render_scene` 只给 `{ log, frame: 173, cursors: "log" }` 回放，我们的 3840×2160 按 2×2 平均缩到 1920×1080 对 WPE 第 173 帧：平均差 0.81（重采样），各区域相位相关平移 ≤ 0.08 像素（`cmp_proto.py`），左侧气泡粒子带 0.001 像素；差 > 32 的 0.02% 散在光环与右侧的细边（`bigdiff.py`，最大一块 19 像素），和步骤 3 手写时间线时同类。
+
+**点：**
+- **新增** `kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--overwrite]`（`py/content.py` 的 `unpack(...)`，`kbp.py` 接线）：
+  - 工程的写法同 `content` 其余动作（工坊 ID、目录、`project.json` …）；缺省输出 `<data>/proj/<工程目录名>-kbp`；
+  - 输出目录必须在仓库 `ignore/` 下，落在 WPE 安装目录、Steam 工坊目录或源工程里一律拒绝；已存在时缺省拒绝，`--overwrite` 只删带本命令标记文件 `kbp-unpack.json` 的目录（同 `snapshot` 只删带 `snapshot.json` 的）；
+  - 散文件照拷（不拷 `scene.pkg`），包内条目解成散文件；`project.json` 标题加「 (kbp)」，其余原样；
+  - `--instrument`：入口 `scene.json`（`project.json` 的 `file`）末尾追加 FR（名字 `kbp-FR`，id = 现有整数 id 最大值 + 1，模型 `models/kbp/fr.json` → `materials/util/solidlayer.json`，颜色脚本 `FR_CURSOR`）；`scene.json` 不是严格 JSON（带注释）时报 `[data]`，不猜；
+  - 写 `kbp-unpack.json`：来源目录、工坊 ID、散文件数、解出条目数、是否加了 FR 与它的 id、写入时间；
+  - stdout 一行摘要：输出目录、计数、FR id、总字节数，以及下一步怎么用（抓帧标签约定 `<名>-fps<N>-<宽>x<高>`、`render_scene` 的 timeline）。
+- **修改** `SKILL.md`：`kbp content` 节加 `unpack`；新增一小节「真实场景的回放」写清流程（解包 → `capture_sweep`（`log_dir`）→ `render_scene` timeline → `kbp rdc frame --present` 比图）与上面的取舍。`.claude/skills/kabegame-chromium/SKILL.md` 回放参数处加一句指过去。
+- **测试**：`tests/` 加 `unpack` 的自测（造一个带 `scene.pkg` 的小工程：包内与散文件同名时散文件优先、包内重名取第一个、FR 追加在末尾且 id 不撞、`--overwrite` 只删带标记的目录、拒绝写进 WPE / 工坊目录与源工程）。
+
 ## 分批
 
 每批子代理在独立的工作区副本里实现（并行会话还在改 `ignore/p4/` 和产品代码），Claude 独立验收后再提交。
@@ -293,6 +313,7 @@ MUTATIONS = [
 - **第 2 批 — 造工程与回放：** 点 2、点 4（库、案例表、`regress`、`snapshot`）。
 - **第 3 批 — 语料、变异、比较、采样：** 点 5 的 `corpus`、点 6、点 7、点 8。
 - **第 4 批 — 产品脚本与迁移：** 点 9、点 10。
+- **第 5 批 — 真实场景解包加日志：** 点 11（2026-11-12）。
 
 ## 验收
 
@@ -603,3 +624,23 @@ Claude 独立验收：
 | `SKILL.md` 对 MCP | 写到的工具参数和 `server.py` 的签名一致；例子里 `p4c-attract` 的抓帧目录由 `A:\p4b` 改成 `A:\p4c` |
 | 步骤目录 | `ignore/p4/step1`–`step5` 不调旧脚本，`WPE_SCENE.md`「照旧能跑」成立 |
 | `accept1` 重跑 | 第一次 26/27：`env` 一项看到一个跑 `rdc/main.py` 的 qrenderdoc，是 Claude 同时在跑的 `kbp rdc track`，事后已退出；单独重跑 27 项全过 |
+
+### 第 5 批 — 真实场景解包加日志（2026-11-12）
+
+子代理实现，Claude 独立验收。
+
+- **新增**：`py/content.py` 的 `unpack(...)` 与 `kbp.py content unpack <工程> [--out] [--instrument] [--data] [--overwrite]`；`tests/accept5.py`（mini / guard / real 三段）。
+- **修改**：`SKILL.md`（`kbp content` 节、数据目录表与「固定图层」各一条例外、新节「真实场景的回放」、验收自测第 5 批）；`.claude/skills/kabegame-chromium/SKILL.md` 回放参数后一句指过去。
+- **和计划的偏离（子代理报告，Claude 核对过）：**
+  - FR 的 id 取 `scene.json` 里**全部**整数 `id` 的最大值 + 1，不只看对象：对象、effect、pass、`instanceoverride`、`animationlayers` 共用编辑器的计数器。原型给 `3830255100` 的 391 和 `objects[16].effects[0]` 撞号（Claude 独立核对：全场景最大 id 392、对象最大 390），新命令给 393。
+  - 先写到输出目录旁的临时目录，全部成功才换上，失败清掉；包含关系两个方向都查；链接 / junction 不删；Windows 上按落盘（不分大小写）判同名；源里的 `kbp-unpack.json` 不拷；`kbp-FR` 只在 `--instrument` 时查。
+- **Claude 改的**：摘要 `next` 与 `SKILL.md` 第 2 步原写 `settings: {fps: N}`，照抄会让 `capture_sweep` 重启 WPE 改帧率；改成显式给标签、N 写 WPE 当前帧率，不改设置。
+
+**Claude 独立验收：**
+
+| 项 | 结果 |
+|---|---|
+| 越界 | 只动了计划里的文件；`gen.py`、`rdc/track.py` 是别的会话的未提交改动，没碰 |
+| `accept5` 自跑 | 33 项全过（mini 0.3 s、guard 2.5 s、real 0.7 s）；real 段除 `scene.json` 的 FR id 外与原型逐字节相同 |
+| 删目录的逻辑 | 读过 `_check_unpack_out` 与 `unpack`：写前先校验，临时目录换上，删之前再核一遍标记与链接 |
+| 按 `SKILL.md`「真实场景的回放」原样走一遍 | `unpack 3830255100 --instrument` → `capture_sweep`（`A:\kbp-accept5`，36 个绘制、19 行日志、0 报错行）→ `projects_import` → `render_scene { log, frame: 165, cursors: "log" }` → `kbp rdc frame --present` → `kbp cmp frame --resize`：差 > 32 的 246 像素、最大 69；区域相位相关平移 ≤ 0.09 像素，左侧气泡粒子带 0.004 像素，和原型（第 173 帧）一致。测试工程 14311 已移除 |

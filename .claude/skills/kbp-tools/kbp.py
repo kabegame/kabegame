@@ -7,7 +7,7 @@
 - rdc track|frame|stats|shaders <抓帧目录> <标签> …：在 `qrenderdoc --python rdc/main.py` 里无界面读抓帧，写轨迹 / 整帧图 / 统计量 / 着色器清单；
 - replay <案例…>|--all、regress --src A --src B：回放案例（node + vitest）、两份源码的回归（第 2 批）；
 - snapshot export <rev|WORKTREE> <目录>、snapshot diff <基线> <副本>：产品源码快照与补丁（第 2 批）；
-- content projects|resolve|ls|cat|grep …：WPE 语料与 scene.pkg 读取；
+- content projects|resolve|ls|cat|grep …：WPE 语料与 scene.pkg 读取；content unpack：真实场景解包成加日志的测试工程（第 5 批）；
 - corpus scan|diff：语料编译扫描与两次结果的比较，regress --corpus 用它（第 3 批）；
 - mutate --spec <清单>：变异检查（快照模式按原字节还原，工作区模式反向替换）（第 3 批）；
 - cmp track|frame|stats、corners offline：比真机结果与 WPE 真值、离线四角（第 3 批）；
@@ -281,6 +281,15 @@ def _parser():
     grep.add_argument("-i", "--ignore-case", action="store_true")
     grep.add_argument("--max", type=int, default=200, help="最多返回几条，缺省 200")
     grep.add_argument("--out", help="结果写到这个 JSON 文件，stdout 只给摘要")
+
+    unpack = content_sub.add_parser("unpack", help="把真实场景解包成测试工程（散文件 + scene.pkg 条目），--instrument 在末尾加只写 "
+                                                   "[kbp] 日志的 FR（第 5 批）")
+    unpack.add_argument("project", help="工程（同 resolve 的写法，或任意目录）；只读")
+    unpack.add_argument("--out", help="输出目录（要在仓库 ignore/ 下），缺省 <data>/proj/<工程目录名>-kbp")
+    unpack.add_argument("--instrument", action="store_true",
+                        help="入口 scene.json 的 objects 末尾加 FR（kbp-FR，画面外，脚本 FR_CURSOR）")
+    unpack.add_argument("--data", help="数据目录（缺省输出位置与 next 里的日志位置），缺省 KBP_DATA，再缺省 ignore/p4")
+    unpack.add_argument("--overwrite", action="store_true", help="输出已存在时先删（只删带 kbp-unpack.json 的目录）")
     return parser
 
 

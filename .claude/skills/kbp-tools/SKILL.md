@@ -1,6 +1,6 @@
 ---
 name: kbp-tools
-description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）；语料编译扫描与两次结果比较（kbp corpus scan|diff，附加字段插件，regress --corpus，替代各步的 corpus.test.ts、diff_corpus.py、corpus_diff.py）；变异检查（kbp mutate，快照模式按原字节还原、工作区模式反向替换，替代各步的 mutate.py）；比真机结果与 WPE 真值（kbp cmp track|frame|stats，按 kbp-meta.json 的 bbox 归类像素差、热图，替代 cmp-wpe.ts、cmp_scene.py、cmp_stats.py、heat.py）；离线四角（kbp corners offline，替代 corners-offline*）；PrintWindow 采样 MCP 开的测试窗口（kbp sample grab|series|read，替代 sampler_pw.py、run.py、w1080.py、wread.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
+description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）；把真实工坊场景解包成带 [kbp] 日志的测试工程、按 WPE 实际帧时间回放（kbp content unpack --instrument，替代 unpack_proto.py 与手写 dt）；语料编译扫描与两次结果比较（kbp corpus scan|diff，附加字段插件，regress --corpus，替代各步的 corpus.test.ts、diff_corpus.py、corpus_diff.py）；变异检查（kbp mutate，快照模式按原字节还原、工作区模式反向替换，替代各步的 mutate.py）；比真机结果与 WPE 真值（kbp cmp track|frame|stats，按 kbp-meta.json 的 bbox 归类像素差、热图，替代 cmp-wpe.ts、cmp_scene.py、cmp_stats.py、heat.py）；离线四角（kbp corners offline，替代 corners-offline*）；PrintWindow 采样 MCP 开的测试窗口（kbp sample grab|series|read，替代 sampler_pw.py、run.py、w1080.py、wread.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
 ---
 
 # kbp-tools
@@ -14,7 +14,8 @@ WPE 场景对比的中间一层：认识我们的测试工程约定、把 WPE �
 本 skill 不另做一份。
 
 > 已有：`gen`、`rdc`、`replay`、`regress`、`snapshot`、`content`（第 1、2 批）；`corpus`、`mutate`、`cmp`、`corners`、`sample`
-> （第 3 批）。`ignore/` 里现有的生成器、回放、语料、变异、比较、采样脚本不迁、照旧能跑，新步骤用本工具。
+> （第 3 批）；`content unpack`（第 5 批，见「真实场景的回放」）。`ignore/` 里现有的生成器、回放、语料、变异、比较、采样脚本
+> 不迁、照旧能跑，新步骤用本工具。
 
 ## 用法与输出约定
 
@@ -322,6 +323,7 @@ kbp.py content resolve <工程>
 kbp.py content ls <工程> [前缀] [--from project,pkg] [--out 文件]
 kbp.py content cat <工程> <相对路径> [--from project,pkg,assets] [--out 文件 [--overwrite]]
 kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--glob '*.json']… [--from project,pkg] [-i] [--max N] [--out 文件]
+kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--overwrite]
 ```
 
 - **工程的写法**同 wpe-renderdoc：
@@ -337,11 +339,26 @@ kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--
   - `--from pkg` 只取包内条目；
   - 同名条目先出现的算。
 - **`grep`** 跳过开头 8 KiB 有 NUL 的二进制文件，最多返回 `--max` 条，摘要里 `truncated` 标出是否截断。
+- **`unpack`**（第 5 批）：把真实场景复制、解包成测试工程，源工程只读。用法与取舍见下面「真实场景的回放」。
+  - **输出**：缺省 `<data>/proj/<工程目录名>-kbp`。
+    - 必须在仓库 `ignore/` 下（按解析链接后的路径），和 WPE 安装目录、Steam 工坊目录、源工程互不包含，否则 `[kbp]`；
+    - 已存在缺省拒绝，`--overwrite` 只删带 `kbp-unpack.json` 的目录（链接、junction 不删），否则 `[data]`；
+    - 先写旁边的临时目录、全部成功才换上，失败不留半成品。
+  - **拷贝**：散文件照拷（不拷 `scene.pkg`）；包内条目解成散文件，名字过 `normalize`，散文件已有的不覆盖、包内同名取第一个
+    （同名按落盘算：Windows 上不分大小写）。
+  - **`project.json`**：标题加「 (kbp)」，其余原样（按生成库的 `write_json` 重新写出）。
+  - **`--instrument`**：入口文件（`project.json` 的 `file`，缺省 `scene.json`）严格 JSON 解析，带注释报 `[data]`、不猜；`objects`
+    末尾加 FR，写 `models/kbp/fr.json`；源里已有 `kbp-FR` 报 `[data]`（防止重复解包加过日志的副本）。
+  - **标记** `kbp-unpack.json`：来源目录、工坊 ID（目录名是纯数字时）、`loose` / `extracted` / `skipped`、`instrument`、`fr_id`、`bytes`、
+    时间。不写 `kbp-meta.json`。
+  - **摘要**：`out`、`loose`（散文件数）、`extracted`（解出的条目数）、`skipped`（被散文件或包内前面的同名条目盖住的）、`fr_id`
+    （没加为 null）、`bytes`（不含标记）、`next`（下一步怎么抓、怎么回放）。
 - **库**（`from kbp import content`）：
   - `projects(source, type, pkg)`、`resolve(名字)`、`project_dir(名字)`；
   - `read_pkg(路径)` → `Pkg`（`version`、`entries`、`base`、`by_name`、`read(名字)`）；
   - `files(工程)`、`locate(工程, 相对路径)`、`read(工程, 相对路径)` → `(字节, 位置)`；
-  - `scene_files(工程)`（`scan_misc_lib` 的原样版本，迁移旧脚本用）、`grep(…)`。
+  - `scene_files(工程)`（`scan_misc_lib` 的原样版本，迁移旧脚本用）、`grep(…)`；
+  - `unpack(工程, out=None, instrument=False, data=None, overwrite=False)` → 摘要 dict（同命令行）。
 
 ## 协议
 
@@ -349,7 +366,7 @@ kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--
 
 | 子目录 | 内容 |
 |---|---|
-| `proj/<工程>/` | 生成的测试工程（`scene.json`、`project.json`、`particles/`、`materials/`、`shaders/`、`models/`、`kbp-meta.json`） |
+| `proj/<工程>/` | 生成的测试工程（`scene.json`、`project.json`、`particles/`、`materials/`、`shaders/`、`models/`、`kbp-meta.json`）；`<名>-kbp/` 是 `content unpack` 解包的真实场景（有 `kbp-unpack.json`、没有 `kbp-meta.json`） |
 | `tracks/rd-<标签>.json` | 从抓帧提取的轨迹（`kbp rdc track`） |
 | `out/<标签>-log.txt` | WPE `log.txt` 里截出的 `[kbp]` 行（wpe-renderdoc MCP 的 `capture_sweep(log_dir=…)` 写） |
 | `cases/<名字>.json`、`cases/<名字>.hook.ts` | 回放案例与钩子（`kbp replay`、`kbp regress`） |
@@ -385,6 +402,8 @@ kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--
 - 场景 `general`：
   - 正交 1920×1080，`hdr` / `bloom` 关，黑底清屏；
   - `version` 缺省 3，可另给，`None` 时不写这个键。
+- **例外**：`content unpack --instrument` 解包的真实场景只有一个 FR，名字 `kbp-FR`、在 `objects` **末尾**、画面外，没有 CLK、没有
+  `kbp-meta.json`，`kbp rdc track` 不管这种工程（见「真实场景的回放」）。
 
 ### `[kbp]` 日志
 
@@ -620,6 +639,49 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 9. **画面**：kabegame-dev 的 `render_scene` 出我们的图、`kbp rdc frame` 出 WPE 的图，`kbp cmp frame … --meta <工程>/kbp-meta.json --heat …`；
    真实场景的粒子统计用 `kbp cmp stats`；真机轨迹对 WPE 用 `kbp cmp track`。
 
+## 真实场景的回放（`kbp content unpack --instrument`，第 5 批）
+
+回放（kabegame-dev 的 `render_scene` / `particle_track` / `particle_corners`）要从加载起每一帧的 dt、`g_Time` 与光标。测试工程的 FR 写
+`[kbp]` 日志，时间线直接用；真实工坊场景没有，以前只能把上百个 dt 手写进调用（P5a 步骤 3 的 `make_times.py`），也和 WPE 实际的帧时间
+对不上。做法是解包一份副本、在 `scene.json` 末尾加一个只写日志的 FR，拿副本去 WPE 抓帧。工坊目录只读不写。
+
+1. **解包**：`kbp content unpack <工坊 ID> --instrument --data ignore/<步骤>` → `ignore/<步骤>/proj/<ID>-kbp`（摘要的 `next` 写好了后面
+   几步要填的路径）。
+2. **抓帧与日志**：wpe-renderdoc MCP 的
+   `capture_sweep(jobs=[{project: <副本目录>, size: "1920x1080", tag: "<ID>-kbp-fps<N>-1920x1080"}], out_root: "A:\<项目>", log_dir: "<data>/out")`。
+   - 标签照约定 `<名>-fps<N>-<宽>x<高>` 显式给：时间线从它推遍数与窗口尺寸。N 写 WPE 当前设置的帧率（`get_settings` 看）；
+     不必为此改设置，job 里带 `settings` 会让 `capture_sweep` 重启 WPE；
+   - 日志在 `<data>/out/<标签>-log.txt`，`<标签>-errors.txt` 应为空。
+3. **回放我们的**：kabegame-dev 的 `projects_import` 导入副本目录，再
+   `render_scene { imageId, replay: { timeline: { log: "<data>/out/<标签>-log.txt", frame: <RenderDoc 帧号 + 1>, cursors: "log" } } }`。
+   - 不给 `track`：没有 CLK，`kbp rdc track` 不管这种工程；
+   - `frame` 是 WPE 脚本帧号，等于抓帧文件名里的 RenderDoc 帧号 + 1；光标逐帧取自日志。
+4. **WPE 的图**：`kbp rdc frame A:\<项目>\<标签> <标签> --present --data <data>`（文件名 `wpe-<标签>-f<RenderDoc 帧号 + 1>`）。
+5. **比图**：`kbp cmp frame <我们的.png> <WPE 的.png> --resize`（我们的图比 WPE 大时按 cover 缩到同尺寸）。不传 `--meta` /
+   `--kbp-layers`：FR 在画面外，没有要屏蔽的块。
+
+取舍：
+
+- **FR 加在 `objects` 末尾、挪到画面外**（名字 `kbp-FR`、1×1、`origin -100000 -100000 0`、视差深度 0，模型 `models/kbp/fr.json` →
+  WPE 自带的 `materials/util/solidlayer.json`）：
+  - 加在开头会让按下标 `getLayer` 的脚本错位；画面外不改一个像素，比图时也不用屏蔽 FR 块。
+  - 代价是不满足「前两个对象是 FR、CLK」的约定：不加 CLK、不写 `kbp-meta.json`。时间线只要日志和回放到的帧号，光标也在日志里。
+- **FR 的 id 是 `scene.json` 里全部整数 `id` 的最大值 + 1**：对象、effect、pass、`instanceoverride`、`animationlayers` 共用编辑器的同一个
+  计数器（语料 163 个场景里 77 个的最大 id 不在对象上）。只看对象会撞号：原型给 3830255100 的 391 就和一个 effect 撞了。
+- **包解成散文件、不带 `scene.pkg`**：散文件已有的条目不覆盖（同 Kabegame 编译管线「散文件 → 包」），包内同名取第一个（同
+  `Pkg.by_name`）。工坊目录里 WPE 写的 `shaders/blobsSM40` 是散文件，照拷；WPE 跑副本时会再往里写 FR 的那一份。
+- **脚本是生成库的 `FR_CURSOR`**（五列：帧号、帧时间、累计时间、屏幕光标 x、y，每 10 帧刷一次）：这种工程在 Kabegame 里报
+  `script:api:input.cursorScreenPosition`（`input` 留给 P6），dev 探针强制渲染不受影响。
+- **入口不是严格 JSON 时报 `[data]`、不猜**：语料里 163 个场景的入口目前都是严格 JSON。
+
+原型实测（`ignore/p5/inst/unpack_proto.py`，3830255100 AQUAMARINE：粒子、抖动、视差）：
+- 18 个散文件照拷、67 个包内条目解出；WPE 抓帧原工程 35 个绘制、副本 36 个（多出 FR）；
+- 副本 21 行 `[kbp]`、无报错行，日志从第 1 帧到第 210 帧；
+- `render_scene` 只给 `{ log, frame: 173, cursors: "log" }`，3840×2160 按 2×2 平均缩到 1920×1080 对 WPE 第 173 帧：平均差 0.81，各区域
+  相位相关平移 ≤ 0.08 像素。
+
+`kbp content unpack` 的产物和原型的除 FR 的 id（393 对 391）与标记文件外逐字节相同（`tests/accept5.py` 的 real 段）。
+
 ## `kbp rdc` 怎么跑
 
 - `kbp.py` 拉起 `qrenderdoc --python .claude/skills/kbp-tools/rdc/main.py`，参数经 `KBP_RDC_JOB` 指向系统临时目录里的
@@ -639,6 +701,27 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 - 读的都是本地 `.rdc`，不需要 WPE 在跑；抓帧用 wpe-renderdoc MCP 的 `capture_wallpaper` / `capture_sweep`。
 
 ## 验收自测
+
+### 第 5 批（`tests/accept5.py`）
+
+```bash
+python -X utf8 -I .claude/skills/kbp-tools/tests/accept5.py [--out ignore/kbp/accept5] [--only mini,guard,real] [--real 3830255100]
+                                                             [--proto ignore/p5/proj/3830255100-kbp]
+```
+
+- 全部输出在 `--out` 下（要在 `ignore/` 下）；WPE 安装目录、工坊目录只读，拒绝类检查只核对被拒、没写出任何东西、没有临时目录残留。
+- `mini`：自己写一个带 `scene.pkg` 的小工程（`scene.json` 只在包里）：
+  - 散文件与包内同名时散文件优先；包内重名取第一个；`./`、反斜杠归一化；Windows 上大小写不同算同名；
+  - FR 追加在末尾、id 不撞 effect / pass / `instanceoverride`、脚本就是 `FR_CURSOR`；
+  - `project.json` 只改标题；标记的计数与字节数；缺省输出位置与工坊 ID。
+- `guard`：
+  - 拒绝 `ignore/` 之外（含 `ignore/` 本身）与真实 WPE / 工坊目录；
+  - 经 `KABEGAME_WPE_ROOT` 指向 `<out>/fake` 下的假 WPE，分别核对「落在 WPE 安装目录」「落在工坊目录」「包含了 WPE 安装目录」，并按工坊 ID 解析；
+  - 拒绝写进 / 包含源工程；`--overwrite` 只删带标记的目录；源已有 `kbp-FR`、`scene.json` 带注释报 `[data]`。
+- `real`：`unpack 3830255100 --instrument --out <out>/real` 和原型产物逐文件比：
+  - 只多 `kbp-unpack.json`；原型多出的只有 WPE 跑副本时写的 `shaders/blobsSM40`；
+  - 其余逐字节相同，`scene.json` 把原型 FR 的 id 换成本命令的值后逐字节相同；工坊目录前后哈希不变。
+- 结果写 `<out>/report.json`，约 4 秒。
 
 ### 第 3 批（`tests/accept3.py`）
 
