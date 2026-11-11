@@ -111,12 +111,13 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | 放行 | 依据 |
 |---|---|
 | general 的 `bloom` / `hdr` 与全部 `bloom*` 调节项 | 由后处理档位裁决，泛光 / HDR 已实现（P2b，见「泛光与 HDR」）；其中的脚本交给 P3b 运行时 |
-| 关闭的 `cameraparallax` / `camerashake` 及其调节项；`zoom` 为 1 | 主开关关闭时调节项不起作用；主开关打开、`zoom` ≠ 1 照报 |
+| general 的 `cameraparallax*`、`camerashake*`、`zoom` | 视差、抖动、正交缩放已实现（P5a，见「相机：视差、抖动与缩放（P5a）」）；透视场景开 `camerashake` 照报 `general:camerashake`（归 P5d），正交场景里解析出的常量 `zoom` ≤ 0 照报 `general:zoom` |
 | `camerafade`、`camerapreview`、`norecompile`；正交投影下的 `farz` / `fov` / `nearz`；`supportsvideo` | 加载淡入 / 编辑器选项 / 透视另报 `camera:perspective` / 只决定 D3D 设备标志 |
 | 对象 `copybackground` | 只对 passthrough 模型生效，普通图像模型上没有渲染效果；passthrough 模型照报 `model:passthrough` |
 | `solid`、`ledsource`、`locktransforms` | 渲染路径不读（推断与鼠标命中有关）/ Razer Chroma 灯效来源 / 编辑器锁定 |
 | `brightness` | 只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效 |
-| `parallaxDepth`；`alignment` 为 `center`；`perspective` 为 false；模型 `autosize` | 只在 cameraparallax 打开时起作用 / 居中是恒等 / 透视另报 / `size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸 |
+| `parallaxDepth`；`alignment` 为 `center`；`perspective` 为 false；模型 `autosize` | 视差已实现（P5a），绘制时只用根对象的值 / 居中是恒等 / 透视另报 / `size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸 |
+| 模型 `cropoffset`、对象 `config`；translucent / additive 或 `depthtest: disabled` 的 pass 上的 `depthwrite: enabled` | P5a 前置，实测中性：编辑器的裁剪偏移导入时已并进 `origin` / 只在托盘与播放列表读 / 这两种 pass 不写深度；其余 `depthwrite:*` 照报（P5d）。模型 JSON 的布尔键只认 `true`，见「相机：视差、抖动与缩放（P5a）」的「前置几条」 |
 | `colorBlendMode` | 0 普通、31 上屏改 additive、其它走 passthrough，都已实现 |
 | 模型 `solidlayer` | 合成 RT 按图层 `size`，上屏不做 UV 内缩。`assets` 的 `solidlayer.json` 用 `flat`、不带纹理；`instanced` 另报 `model:instanced` |
 | effect.json 的元数据键（`name`、`group`、`preview`、`dependencies`、`gizmos`…） | 编辑器显示用 |
@@ -186,7 +187,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - 顶点在模型空间：以图层中心为原点、未缩放的 `size`。
   - `g_ModelMatrix` 是世界矩阵 `W_parent · T(origin) · Rz·Ry·Rx · S(scale)`，角度为弧度、正角度为逆时针（P4a 起带父链与三轴旋转，见「层级（P4a）」；P1 只处理 z 轴）。
   - 视图投影为 `ortho(0…w, 0…h)`，`w` / `h` 是 `orthogonalprojection`；z ∈ [−2000, 2000] 映射到深度 `0.00025·z + 0.5`（反向 Z，`ORTHO_DEPTH`，P4a 起照 WPE 抓帧，原来是 ±10000）。
-  - 相机 `eye` 对正交场景不起作用：LWE 的投影里 `translate(eye)` 与 `lookAt` 恰好抵消。eagleflag 的 eye 有 (−378, −186) 的偏移，预览图里画面并未平移。
+  - 场景 JSON 的相机 `eye` 对正交场景不起作用：LWE 的投影里 `translate(eye)` 与 `lookAt` 恰好抵消（抖动加在 eye 上的偏移会平移画面，见「相机：视差、抖动与缩放（P5a）」）。eagleflag 的 eye 有 (−378, −186) 的偏移，预览图里画面并未平移。
 - 矩阵按列主序写进 uniform：翻译器把 `mul(v, M)` 改写成 `M * v`，缓冲里放「列向量」约定的数学矩阵，与 glm 的 `value_ptr` 相同。
 - **纹理坐标**：图像顶边对应 v = 0。按图层主纹理（基础材质槽位 0）的 UV 缩放 = 图像尺寸 / 纹理尺寸（`width / textureWidth`，WPE `FUN_1402091e0`）收缩。
   WPE 把 1920×1080 的图放进 2048×2048 这类纹理，同一张图层各槽位的填充比例一致；FreeImage 形态的纹理尺寸已改成图像尺寸，UV 为 1。
@@ -201,7 +202,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 按 `offset` 写；标量 / 二三分量向量的数组按 `stride` 16 写前几个分量；`mat3` 列步长 16；整数写成 `i32` / `u32`。
   - 值来源：`drawUniformValues`（纯函数）先写内置值，再用材质常量覆盖。材质常量取自 `SceneState.constants`（编译期初值就是 `pass.uniforms`），就地改值时同一个函数重算，所以两条路逐字节一致（单测核对）。
   - **材质常量的取值照 WPE**（`compile/materialValues.ts`，`.claude/plans/wpe-import/3-scene/vector-constant-REPORT.md`，`p4b-vec` 实测）：缺键插注解缺省（先转字符串，所以数字缺省进向量不铺满）；setter 里数字进向量铺满，字符串进向量先清零、只按空格切、逐段 `atof`（`"a, b"` 得 (a, b)），float 只收数字，布尔 / 数组不写；`{user}` 先写 JSON 的 `value`，再把属性值交给同一个 setter，带 condition 的、布尔 / 下拉字符串 / 颜色绑 float 的都不写；就地写与脚本写回用同一个 setter、整体重写。同键不同类型被翻译器拆开的两半共用片元那一半的类型与缺省。按用户决定不复刻同阶段同键只上传后声明的、按声明行子串定类型两条。
-  - 只有 `g_Time`、`g_Frametime`、`g_Daytime`、`g_PointerPosition(Last)`、`g_PointerState` 每帧刷新；被就地改过的 draw 由 `update` 整块重写一次。
+  - 只有 `g_Time`、`g_Frametime`、`g_Daytime`、`g_PointerPosition(Last)`、`g_PointerState`、`g_ParallaxPosition`（P5a）每帧刷新；被就地改过的 draw 由 `update` 整块重写一次；视差或相机（抖动、缩放）变了的那一帧，全部 draw 的矩阵与眼位重写一遍（P5a）。
   - **就地刷新**（`GpuScene.refreshLayer` / `refreshPass`）：图层状态变化只重写由图层算出的那组名字（`LAYER_UNIFORMS`：矩阵、`g_Color*`、`g_Alpha` / `g_UserAlpha`、`g_CompositeColor`），`pass.uniforms` 里有的名字一律不动（材质值优先，如 passthrough 的 `g_Color4 = (1,1,1,1)`、材质自带的 `g_UserAlpha`）；材质常量变化重写本 pass 的全部常量。
 - **内置 uniform**：P2a 起按 WPE `FUN_1400d8300` 校正（PLAN P2a「内置 uniform」），名字表 `features.ts` 的 `ENGINE_UNIFORMS` 与 `uniforms.ts` 写的值一一对应。
   - 变换：`g_ModelViewProjectionMatrix`（及 Inverse）、`g_ModelMatrix`（及 Inverse）、`g_ViewProjectionMatrix`、`g_NormalModelMatrix`。
@@ -210,7 +211,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 纹理：`g_Texture<n>Resolution` = (纹理宽, 纹理高, 图像宽, 图像高)，空槽 (2, 2, 2, 2)；`g_Texture<n>Texel` = (1/纹理宽, 1/纹理高, 纹理宽, 纹理高)，空槽 (0.5, 0.5, 2, 2)。合成 RT、fbo、快照按各自尺寸（纹理 = 图像）。`g_Texture<n>MipMapInfo` 还没实现（用到报 `uniform:`）。
   - 屏幕：`g_TexelSize` = 1 / 屏幕尺寸、`g_TexelSizeHalf` = 0.5 / 屏幕尺寸、`g_Screen` = (w, h, w/h)。WPE 取窗口（后备缓冲）尺寸，画合成 RT、fbo 时也不随目标变；我们取场景目标尺寸，与窗口同分辨率时等价。
   - 时间：`g_Frametime` = 本帧间隔，钳到 `[0.0001, 0.25]`；`g_Time` = 钳后帧时间的累加（P4a 起，`FrameClock`，见「粒子（P4a）」的「绘制」），超过 432000（5 天）归零；`g_Daytime` = h/24 + m/1440 + s/86400 + ms/8.64e7。
-  - 指针：`g_PointerPosition` = 光标在画布上的归一化坐标（原点左上、y 向下，WPE 取窗口归一化坐标；P1 曾按 LWE 换算成场景坐标、左下原点），`g_PointerPositionLast` = 上一帧；`g_PointerState` = (按下, 按下, 本帧刚按下, 0)，还不跟踪按键（P6），恒为 0。粒子控制点跟随指针用的是另一个量（光标下的场景点，`FrameInput.cursor`），见「粒子（P4c）」的「指针」。
+  - 指针：`g_PointerPosition` = 光标在画布上的归一化坐标（原点左上、y 向下，WPE 取窗口归一化坐标；P1 曾按 LWE 换算成场景坐标、左下原点），`g_PointerPositionLast` = 上一帧；`g_PointerState` = (按下, 按下, 本帧刚按下, 0)，还不跟踪按键（P6），恒为 0。粒子控制点跟随指针用的是另一个量（光标下的场景点，`FrameInput.cursor`），见「粒子（P4c）」的「指针」。`g_ParallaxPosition` = 视差点除以场景宽高再钳到 0…1，见「相机：视差、抖动与缩放（P5a）」。
   - 其它：`g_Texture0Rotation` = (1, 0, 0, 1)、`g_Texture0Translation` = 0、`g_LightAmbientColor` / `g_LightSkylightColor` 取 `general.ambientcolor` / `skylightcolor`。
   - 材质值优先于对象值：例如 beach 的云层材质 `Alpha` = 0.26，对象没有 alpha。LWE 会用对象值覆盖材质值，这里不照搬。
 - **混合**：照 LWE `CPass::setupRenderFramebuffer`，颜色与 alpha 用同一组因子；其余模式关闭混合。
@@ -248,18 +249,19 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 
 ### general 字段、清屏与相机（P3c）
 
-`GENERAL_FIELDS`（`compile/bindings.ts`）列出 WPE 里只改字段、不用重编译的 16 个 general 键。编译、就地写和脚本读写都走 `generalValue`，所以就地结果和整场编译相同。
+`GENERAL_FIELDS`（`compile/bindings.ts`）列出 WPE 里只改字段、不用重编译的 17 个 general 键（P5a 加了 `zoom`）。编译、就地写和脚本读写都走 `generalValue`，所以就地结果和整场编译相同。
 
 | 字段 | 运行时 |
 |---|---|
 | `clearcolor`、`clearenabled` | `encode` 每帧读，不走脏项，脚本写入同帧生效 |
 | `ambientcolor`、`skylightcolor` | 脏位 `lights`，`sync` 刷进声明了这两个 uniform 的 draw |
-| `fov`、`nearz`、`farz`、`camerafade`、`camerashake*`、`cameraparallax*` | 只存值，脚本能读回，正交场景里不影响画面。脚本打开 `camerashake` / `cameraparallax` 时继续实时渲染，没有效果；JSON 写 `true` 的场景加载时仍报不支持 |
+| `fov`、`nearz`、`farz`、`camerafade` | 只存值，脚本能读回，正交场景里不影响画面 |
+| `camerashake*`、`cameraparallax*`、`zoom` | 渲染器每帧读（P5a）：抖动与缩放在帧开头按脚本之前的值取，视差点按脚本之前的值推进，绘制用的视差开关与 `amount` 取脚本之后的值，见「相机：视差、抖动与缩放（P5a）」的「一帧里的顺序」 |
 
 - **`clearenabled: false`**：颜色和深度都不清，不是清成黑色，初始底色是黑，`clearcolor` 不出现。WPE 画进两张交替的后备缓冲，第 N 帧的底图是第 N−2 帧的成品，两条链互不相交；泛光写回当前缓冲，所以底图含泛光，LDR 每两帧累加一次，HDR 趋于收敛。我们用两张场景目标逐帧交替，泛光的 combine 写当前这张。
 - **第二张目标**：当前关着，或 `clearenabled` 绑了属性、挂了脚本（`SceneGeneral.clearVariable`）时，加载就建，从第一帧开始交替，清屏开着也换，运行中关掉时手上正好是 N−2。别的脚本写入时才建，并把当前画面拷过去，这一帧的底图是 N−1，静止内容相同。多一张全尺寸目标，4K LDR 约 32 MiB，HDR 约 63 MiB。
 - **HDR 不清屏**：WPE 的后备缓冲存 `lin(x)`，我们的目标存 `x`，所以每帧切完目标先把底图过一次 `lin`（`GpuScene.linearizeBase`）：拷到快照，再全屏画回目标。快照当中转用，因为 `snapshot` 步骤读之前总会重新拷。
-- **相机不能绑**：WPE 加载时直接读 `camera` 的字符串，写成对象就跳过。正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵，JSON 的值被丢弃。所以我们不登记这三个绑定，投影用 `ortho(0…w, 0…h)`，`g_EyePosition` 是 `(W/2, H/2, 2000)`（`layout.ts` 的 `eyePosition`）。
+- **相机不能绑**：WPE 加载时直接读 `camera` 的字符串，写成对象就跳过。正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵（开抖动时是 `T(−s)`，P5a），JSON 的值被丢弃。所以我们不登记这三个绑定，投影用 `ortho(0…w, 0…h)`（P5a 起绕中心乘 `zoom`），`g_EyePosition` 是 `(W/2, H/2, 2000)` 加本帧的抖动偏移（`layout.ts` 的 `eyePosition`）。
 
 ### 泛光与 HDR（`compile/bloom.ts` + `render/bloom.ts`，P2b）
 
@@ -392,7 +394,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属性名 → 目标 + condition」，运行时按增量逐键写字段再调改值回调（`p3-script-REPORT.md` I3）。P3a 照这个形状做，先不碰脚本：
 
 - **一个应用函数，两个来源**：垫片入口 `applyUserProperties(δ)` 只转调 `apply(δ)`。加载期传全集、运行时传增量，先并进累计全集（跳过 `group` / `text` / 空值，按值去重、保留 `type`，不学 WPE 的整项覆盖），再按编译期产出的 `bundle.bindings` 分成两组：**就地写**交给 `SceneRenderer.applyBindings`（写之前先问 `SceneState.needsRecompile`：打开带不支持项的 effect、切换不能就地的图层、打开没有泛光链的场景都要重编译，这时一条都不写）；只要**有任意一条重编译目标**，就带全集整场重编译（重新解析、翻译、建 GPU 场景）。
-- **就地写的范围**：材质常量（`usershadervalues` 与 `constantshadervalues` 的 `{user}`）、图层 `origin` / `scale` / `angles` / `alpha` / `color` / `brightness`、图层 `visible`（含条件可见）、effect `visible`、`general.bloom`、泛光参数（含级数）、`GENERAL_FIELDS` 的字段。重编译日志是 `debug`（用户不关心；看探针 `stats()` 判断是否走了快速路径）。
+- **就地写的范围**：材质常量（`usershadervalues` 与 `constantshadervalues` 的 `{user}`）、图层 `origin` / `scale` / `angles` / `alpha` / `color` / `brightness` / `parallaxDepth`（P5a）、图层 `visible`（含条件可见）、effect `visible`、`general.bloom`、泛光参数（含级数）、`GENERAL_FIELDS` 的字段。重编译日志是 `debug`（用户不关心；看探针 `stats()` 判断是否走了快速路径）。
 - **重编译原因**：
 
   | 原因键 | 触发 | 为什么要重编译 |
@@ -411,7 +413,8 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
   | 泛光调节项，含 `bloomhdriterations` | 脏位，下一帧开头重算 | 就地 |
   | `clearcolor`、`clearenabled` | 只改字段，脚本之后每帧读 | 就地，`encode` 每帧读 |
   | `ambientcolor`、`skylightcolor` | 回调拷进渲染上下文 | 就地，脏位刷 uniform |
-  | `fov`、`nearz`、`farz`、`camerafade`、`camerashake*`、`cameraparallax*` | 只改字段 | 只存值，效果随 P5 / W6 |
+  | `fov`、`nearz`、`farz`、`camerafade` | 只改字段 | 只存值，效果随 P5 / W6 |
+  | `camerashake*`、`cameraparallax*`、`zoom`、图层 `parallaxDepth` | 只改字段，相机更新与绘制时重读 | 就地，渲染器每帧读（P5a） |
   | `general.hdr` | 运行中改不生效，加载时也只读 JSON | 重编译，改值即生效（有意不跟） |
   | 图层 `size` | 只改字段，不重建几何，画面不变 | 重编译，改值即生效（有意不跟） |
   | `colorBlendMode` | 没有实测，推断属图层结构 | 重编译 |
@@ -479,8 +482,8 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 | 全局 | `engine`、`thisScene`、`localStorage`、按当前脚本切换的 `thisLayer` / `thisObject`；`baseclasses.js` 的 `shared`、`createScriptProperties`、向量 / 矩阵类 |
 | `engine` | `frametime`、`runtime`、`timeOfDay`、`canvasSize`、`screenResolution`（按显示缩放 1 算的画布像素尺寸，预览缩小显示时仍与桌面一致）、`userProperties`；`setTimeout` / `setInterval` / `clearTimeout`（按渲染帧 dt 推进）；`isRunningInEditor`、`isMobileDevice`、`isDesktopDevice`、`isWallpaper`、`isScreensaver`、`isPortrait`、`isLandscape`、`isObjectValid`；`registerAudioBuffers`、`AUDIO_RESOLUTION_16 / 32 / 64`。时序属性及计时器不能在模块求值时访问 / 登记 |
 | `thisScene` | `getLayer`（名称或 `objects` 下标）、`getLayerCount`、`getLayerIndex`（名称或图层对象）、`enumerateLayers`，未命中返回 `null` / `-1`；general 的字段同下一行 |
-| 图层对象 | `name`、`id`、`size`（只读写入无效）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness` |
-| `thisObject` 的其它 owner | general 的 `bloom`、`bloom*` 泛光参数、`GENERAL_FIELDS` 的 16 个字段，以及写入走重编译的 `hdr`；effect 的 `visible`；材质 pass 中全部带 `meta.material` 的常量。`zoom`、`fog*`、`wind*`、`gravity*` 等还没有 |
+| 图层对象 | `name`、`id`、`size`（只读写入无效）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`（`Vec2`，P5a） |
+| `thisObject` 的其它 owner | general 的 `bloom`、`bloom*` 泛光参数、`GENERAL_FIELDS` 的 17 个字段（含 P5a 的 `zoom`），以及写入走重编译的 `hdr`；effect 的 `visible`；材质 pass 中全部带 `meta.material` 的常量。`fog*`、`wind*`、`gravity*` 等还没有 |
 
 **本机语料里出现、当前未提供的 API**：运行时报错最多的是 `thisLayer.getParent` / `getChildren` / `getTextureAnimation`、声音图层 `play` / `stop` / `isPlaying`、`thisObject.getAnimation`、`input.cursorWorldPosition`、图层 `getVideoTexture`；还有 `engine.registerAsset`、`thisObject.getMaterial`。静态扫描另见 `getTransformMatrix`、`thisScene.createLayer` / `sortLayer` / `destroyLayer`、图层 `setFrame` / `getEffect` / `emitParticles` / `getAnimationLayer`、`input.cursorLeftDown`；文本字段 `text`、`maxwidth`、`horizontalalign`、`verticalalign` 及 `cursor*` / `media*Changed` 回调也未接通。语料中的 `scene.getLayer` 是样本伪代码自身的未定义变量；`localStorage.remove`、`console.warn`、`originalOrigin` 也不是应补的 WPE API。
 
@@ -869,7 +872,7 @@ P4a、P4b 的粒子系统是封闭的：控制点 0 当单位阵，粒子都在�
 | 反投影（`pointerScenePoint`） | 照 WPE 逐步 float32：`x = 2px − 1`、`y = 2(1 − py) − 1`，用场景的正交 `P·V`（`sceneViewProjection`，不裁切）的逆，把 NDC z = 0 的点反投影；1920×1080 的场景就是 `(px·1920, (1 − py)·1080)`。求逆没按 float32 复刻，回放里 y 最大差 6.9e-5 | 读码 1.6；实测：指针 (1.4115, 0.7398) 那一帧粒子出生在 (2810, 281)，y 不翻转的式子差 518；光标在窗口外照样外推 |
 | 光标下的场景纹理坐标（`render/layout.ts` 的 `sceneCursor`） | 画布指针按当前样式的铺放反算：<br>- `fill`：等于 WPE 把居中盖满裁切做进投影的结果，和 WPE 一致；<br>- `fit` / `center`：Kabegame 自己的样式，按同一原则，留白处线性外推（不钳制）；<br>- `stretch`：恒等；<br>- `tile`：取所在那一块（小数部分） | 补测：1920×800、1440×1080 窗口下 WPE 的跟随点都是 `inverse(P·V)` 作用在窗口指针上，即光标下的场景点，朴素换算差 12–45 像素 |
 | 和 `g_PointerPosition` 的关系 | 不是一个量。`g_PointerPosition` 照 P2a 不变：`fill` / `stretch` 是画布归一化坐标（补测：WPE 裁切时也仍是窗口坐标），其余样式换算到场景上（`scenePointer`）。两者只在 `fill` 下不同 | 补测 |
-| 透视粒子与透视场景 | 透视粒子（系统 `flags & 4`）不用另算：WPE 模拟时栈上是场景的正交投影，透视粒子的 z = 0 平面和正交画面重合。透视场景（`camera:perspective`）、相机视差、`zoom ≠ 1` 照报，所以 `P·V` 只有正交一种 | 读码 1.6 |
+| 透视粒子与透视场景 | 透视粒子（系统 `flags & 4`）不用另算：WPE 模拟时栈上是场景的正交投影，透视粒子的 z = 0 平面和正交画面重合。透视场景（`camera:perspective`）照报，所以 `P·V` 只有正交一种。P5a 起它带抖动与缩放、不带视差，而且是上一帧交给场景的相机，见「相机：视差、抖动与缩放（P5a）」的「一帧里的顺序」 | 读码 1.6；P5a 实测 `p5a-shakepar`、`p5a-zoomx*` |
 
 **数据流**：
 - 宿主 `pointermove` → `SceneRenderer.setPointer` 只记画布上的原始坐标；
@@ -1181,6 +1184,161 @@ TL *= K
 - 确定性工程：步骤 0 的 `gen_d.py`（`p4d-rope`、`p4d-ropetrail`、`p4d-map`、`p4d-remap`、`p4d-remap2`、`p4d-dist`），之后改用 `kbp gen`：`defs/p4d5.py`（`p4d-dist2`）、`defs/p4d6.py`（收尾 A 的 `p4d-close`、`p4d-close-rope`），以及 `d3/gen_around.py`（`p4d-around-ic`）。
 - 回放案例 `cases/d1.json`、`d3`–`d6`（`kbp replay`，钩子 `*.hook.ts` 处理 fps 10 日志的缺帧、`R` 的注入与近似倒数的拟合）；离线展开 `kbp corners offline`；各步的快照、补丁与变异清单在 `d1/`–`d6/`，覆盖数在 `d7/`。
 - WPE 参照：步骤 0 在 `A:\p4b\p4d-*`，步骤 3 之后在 `A:\p4d\`（wpe-renderdoc MCP 的 `capture_sweep` / `capture_wallpaper`），读取用 `kbp rdc track --points`；步骤 0 的旧轨迹（draws 认法）改名为 `*.rdc_rope.json`。
+
+## 相机：视差、抖动与缩放（P5a）
+
+视差、抖动和缩放都只改相机，不碰几何，也不新增图层种类：
+- 每帧在帧开头求一次相机：抖动偏移 s、缩放 `zoom`、视差点 P。
+- 每次绘制在视图投影上右乘一个平移。图像层（直接上屏、合成链的每个 pass、passthrough 上屏）和正交 / 透视粒子都经同一个入口 `GpuScene.uniformValues`。
+- 同一节还有几条能力表的前置修正：材质 JSON 的注释、深度写入、`cropoffset` 与对象 `config`、模型 JSON 的布尔键。
+
+依据：
+- 读码：[rea-p5-camera](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-camera.md) 5、6 节（抖动、视差）与 `p3-script-REPORT.md` L2（`zoom`）；前置几条在 [rea-p5-mesh](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-mesh.md) 3 节、[rea-p5-modelflags](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-modelflags.md) 4、7 节。
+- 确定性工程的实测：[报告](../../.claude/plans/wpe-import/3-scene/phase5/p5-REPORT.md)「P5a 语义的实测核对」（读码公式全部成立，补了 float32 临界与「P 不钳制」两处）与「收尾走查」（推翻一处：视差点初值）。
+- 逐步的验收数据：[子计划](../../.claude/plans/wpe-import/3-scene/phase5/phase-5a-parallax.md)「实施记录」「P5a 收尾」。下面每条只点出依据是读码还是实测，数字和例外以子计划为准。
+
+验收照 P4：
+- 确定性工程的方块是纯色的，按 `g_Color` 认；CLK 层另读 `g_ParallaxPosition`、`g_EyePosition`。
+- 按 WPE 日志的时间线回放到同一帧，和 `kbp rdc frame` 的整帧逐像素比；跟随指针的粒子另用 `particle_track` 逐个比。
+- 结果：视差 7 组、抖动 5 组、缩放 5 组整帧 0 差异；真实样本按图层位置和相位相关比（见下「语料与解锁」）。
+- 抓帧不移动用户的鼠标，指针从 CLK 层读；光标在动的抓帧用逐帧光标日志（见下「dev 探针与对比台的增补」）。
+
+### 一帧里的顺序
+
+`SceneRenderer.render`（`render/renderer.ts`）一帧：
+1. 按本帧 `g_Time` 和**脚本之前**的 general 字段算抖动 s（`render/shake.ts`）、取 `zoom`；
+2. 推进视差点 P（目标点以 s 作 eye），更新 `g_ParallaxPosition`（`render/parallax.ts`）；
+3. `sync` → `stepParticles`：粒子模拟（跟随指针的控制点反投影）用的还是**上一帧**交给场景的相机，带上一帧的 s 与 `zoom`，不带视差；
+4. `setCamera({ shake, zoom })`：改场景级视图投影、透视粒子视图投影与眼位；
+5. 脚本（`beforeFrame`）；
+6. `setParallax`：按**脚本之后**的开关与 `amount` 交本帧视差。视差或相机有一个变了，就把全部 draw 由图层与相机算出的 uniform 重写一遍，一帧至多一次；
+7. `sync` → `update`（`g_ParallaxPosition` 随每帧 uniform 写）→ `encode`。
+
+依据：
+- 读码：WPE 一帧里先更新对象（粒子模拟，`FUN_1401891a0`），再更新相机（抖动、视差点），最后才跑脚本。
+- 实测 `p5a-shakepar`：跟随指针的新生粒子，按「当帧指针 + 上一帧 s」误差 0，按当帧 s 差 0.3 像素。
+- 实测 `p5a-wk-zoom3`：脚本写 `zoom` 后画面晚一帧、粒子模拟晚两帧。
+- 实测 `p5a-wk-script`：脚本写 `cameraparallaxamount`、`parallaxDepth`，同一帧就画出来。
+
+### 视差
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 目标点 | 指针先钳到 0…1、y 翻成向上（`mx = clamp(ptr.x)`、`my = clamp(1 − ptr.y)`），再在场景中心与指针之间按 `mi = cameraparallaxmouseinfluence` 插值：`P* = s + (W·(0.5(1 − mi) + mx·mi), H·(0.5(1 − mi) + my·mi))`。`mi` 不钳制，可以为负（语料有 −2、−0.21、−0.22）。W、H 是场景的正交尺寸，不是渲染目标 | 读码 6；实测 `p5a-ptr`：`mi` 1、0.5 时 P 为 (1920, 0)、(1440, 270)，各层偏移误差 0；`mi −2` 时反推 P = (−960, 1620)，在场景外 |
+| 指针 | 用 `g_PointerPosition`（已按壁纸样式换算，`scenePointer`），和它同源，不是控制点跟随用的反投影。`fill` 下就是窗口归一化坐标，和 WPE 相同；`fit` / `center` / `tile` 换算到场景上，光标落在画面上，留白处被钳到边 | 读码；实测 `2381978484`（8192×5479 的场景放进 16:9 窗口，偏移仍按场景单位）；样式由真机走查 |
+| 平滑 | `delay > 0` 时 `k = min(1, (1 − delay/3)·10·dt)`，`P ← P + (P* − P)·k`。dt 是本帧的帧时间（钳过的 `g_Frametime`），k 钳到 1 的帧照用。`delay ≤ 0` 时 P 直接取目标；补画帧 dt 为 0，P 不动。P 不钳制 | 实测 `p5a-delay27` / `29`：逐帧 k 和公式差 < 1e-5，用上一帧的 dt 对不上 |
+| `g_ParallaxPosition` | `clamp(P / (W, H), 0, 1)`，只进 uniform，和对象平移无关；在 `ENGINE_UNIFORMS` 里，每帧写 | 实测 `3818481122`：`depthparallax` 读到 (0.75, 0.25)，它的图层深度 0、不动；`mi −2` 时为 (0, 1) |
+| 对象平移 | `o = amount · depth(根) ⊙ (origin(根).xy − P)`，z 为 0。根是沿父链走到顶的对象（`layout.ts` 的 `rootObject`，父对象不在图层表里时当根）；`origin` 取当前值（属性、脚本写回之后）；缺省深度 (1, 1)。指针在中心时，原点不在中心的层也有偏移 | 实测 `p5a-static`（`mi 0`，P 恒为中心）7 个方块误差 0：(1460, 540) 深度 (1, 1) 偏 250，(460, 540) 深度 (−0.7, −0.7) 偏 175；根分组深度 (0, 0) 下深度 (1, 1) 的子方块不动 |
+| 乘在哪 | 一个对象的每次绘制都把视图投影换成 `VP · T(o)`（`GpuScene.viewProjectionOf`）：直接上屏、effect 的中间 pass（它读的效果矩阵也带视差）、上屏 pass、正交与透视粒子。画进合成 RT 的基础 pass 用自己的整面矩阵，本来就不读 VP。粒子模拟与控制点的指针反投影用不带视差的视图 | 实测 `p5a-fx`：`cursorripple` 第一个 pass 读的 `g_EffectTextureProjectionMatrixInverse` 平移 −25，不带视差应为 −16.67；透视粒子的偏移和正交相同。`p5a-kinds`：跟随粒子的出生点正好是不含视差的反投影点 |
+| 初值 | 加载时 P = (W/2 + 2, H/2 + 2)，`g_ParallaxPosition` = (0.5, 0.5)，开场从这里按 k 滑向目标。多出的 2 是 WPE 相机的缺省 eye：加载末尾按 `[G+0xf0]` + (W, H)·0.5 写初值（`0x14018870c`），那时场景的相机还没套进 `G+0xf0`，用的是函数开头写的缺省 (2, 2, 2)（`0x140186db3`）。之后每帧的目标点用真实的 eye，所以这 2 像素只在开场、按 k 衰减。P 归渲染器：重编译保留，渲染器第一次加载时才取初值 | **推翻读码**（读码是场景中心）：收尾走查 `p5a-wk-prop` 把开场残差按各帧 k 折回第 0 帧，四次都是 (2.00, 2.00)，再由 REA 反汇编查清。对齐后 P 和 WPE 反推值差 ≤ 0.001；步骤 2 的 `delay 2.9` 回放差 1 像素就是它 |
+| 开关关掉 | `cameraparallax` 关着时 P 不推进（冻结），`g_ParallaxPosition` 保留上一次的值（加载时是 (0.5, 0.5)），不加平移。再打开时 P 从冻结的值接着走，不回中心 | 实测 `p5a-wk-noplx`：没开视差时 `g_ParallaxPosition` 恒为 (0.5, 0.5)。`p5a-wk-prop` 运行中关、开：关着时偏移 0、uniform 不变；「关着照常推进」差 78 像素，「再开时回中心」差 778 像素 |
+| 属性与脚本 | `cameraparallax*` 四个字段在 `GENERAL_FIELDS` 里，渲染器每帧读 `SceneState.general`，绑属性就地写。推进 P 用脚本之前的值；绘制时的开关与 `amount` 取脚本之后的值（WPE 绘制时才读，读码 6.3）。`parallaxDepth` 是图层字段：编译期缺省 (1, 1) 并登记绑定，绑属性就地写，挂 `{script}` 的字段脚本写回到它，`thisLayer.parallaxDepth` 读写是 `Vec2`。它和 `origin` 一样整棵子树标脏（子孙的偏移看根）；绑单个数字的属性时铺满两个分量 | 实测 `p5a-wk-script`：6 帧都用这一帧写的 `amount` 与深度画；`p5a-wk-prop`：绑滑块 0.6 时深度 (0.6, 0.6)，运行中改成 0.3 就地生效、不重新加载 |
+
+能力表不再报 `general:cameraparallax`、`uniform:g_ParallaxPosition`，`thisLayer.parallaxDepth` 从脚本 API 缺口表里删掉。
+
+### 抖动
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 公式 | `e = powf(roughness, 3)`；`T = speed²·g_Time`（场景时间，已回绕）；`v = (cos T, sin 1.333T)`（正交时 z 清零）；`0.001f < e` 且 `e ≠ 1` 时把 v 的长度 L 换成 `L^e`、方向不变；`s = v · 0.01·amplitude·H`（`render/shake.ts` 的 `shakeOffset`）。没有随机源，也没有跨帧状态，给定 `g_Time` 就能复现 | 读码 5（`FUN_140199580`）；实测 5 组各 4 帧，`g_EyePosition` 的偏移和公式差 ≤ 1e-4；`roughness 2`（e = 8）改了长度，0.05 不改 |
+| float32 | 每步按 `Math.fround` 取整，比较的常量也是 `0.001f`。`roughness 0.1` 时 `powf(0.1f, 3)` 正好等于 `0.001f`，「e > 0.001」为假，不改长度；按 double 算会进改长度的分支，差约 2.5 像素 | 实测 `p5a-shaker01`；单测 `render/shake.test.ts` 能区分两种算法 |
+| s 进哪里 | eye 和 center 加同一个 s，正交视图就是 `T(−s)`。每次绘制的视图投影是 `VP · T(o − s)`（没开视差时 `VP · T(−s)`），透视粒子也一样。`g_EyePosition` 是 `(W/2 + sx, H/2 + sy, 2000)`，拖尾判退化的眼位（`trailEye`）读同一个值；视差目标点的 eye 就是 s | 实测 `p5a-shake*`：图层整体平移 −s；`3830255100` 的 `g_EyePosition` 偏 (8.717, 10.165)，17 个对象按「抖动 + 视差点」预测全部吻合 |
+| 时机 | 帧开头按本帧 `g_Time` 和脚本之前的字段算，脚本写 `camerashake*` 下一帧生效。粒子步进之后才交给场景（`setCamera`），所以粒子模拟用上一帧的 s；加载后第一帧的模拟与预热用 s = (0, 0) | 读码帧顺序；实测 `p5a-shakepar`（见「一帧里的顺序」）。预热那一条是推断，见「已知差异」 |
+| 刷新 | `setCamera` 只改场景级的视图投影、透视粒子视图投影与眼位；全部 draw 的重写和视差合在一次，在 `setParallax` 里。`g_EyePosition` 为此进了 `LAYER_UNIFORMS`。关着时 s 恒为 0，矩阵与眼位逐字节同以前 | — |
+| 透视场景 | 透视下幅度是 `0.1·amplitude` 个世界单位、偏移是三维的，归 P5d：能力表只在透视场景报 `general:camerashake`（透视场景整张另报 `camera:perspective`） | 读码 5 |
+
+### 缩放
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 投影 | 正交投影绕场景中心缩放，即 `S(zoom) · P`：x、y 的线性项是 `zoom·2/W`、`zoom·2/H`，按 float32 乘（`layout.ts` 的 `sceneViewProjection(general, zoom)`）。视差偏移与抖动都是场景单位，在缩放之前加，方块的矩阵 = 缩放后的正交投影 · `T(o − s)` | 读码 p3-script-REPORT L2（`0x14017fd50`）；实测 `p5a-zoom15` / `zoom08` 线性项逐位相等，`zoompar` 偏移误差 0，`zoomx*` 差 1e-7 |
+| 相机 zoom | WPE 乘的是 `general.zoom × 相机 zoom`。P5a 没有相机对象，相机 zoom 恒为 1；P5d 接上相机来源后再乘 | 读码 |
+| 透视粒子 | 相机距离随缩放变：`d = (H/(2·zoom))/tan(fov/2)`，far 仍是 `max(15000, d + 1000)`（`particleViewProjection(general, zoom)`） | 读码 7.2；实测 `p5a-zoomx15` / `zoomx08`：3 帧 MVP 和 WPE 逐项差 < 1e-4，按不带缩放的 d 差上百 |
+| 不随缩放变 | `g_EyePosition`（只带抖动）、视差点与 `g_ParallaxPosition`（按场景宽高）、`g_PointerPosition` | 实测，同上 |
+| 跟随指针 | 控制点的指针反投影用带缩放的投影，同样是上一帧交给场景的 | 实测：跟随粒子出生点误差 ≤ 3e-4，不带缩放差几百像素 |
+| 时机 | 和 s 同一时刻取（脚本之前），一起交给 `setCamera`，`zoom` 变了才重算两份基准矩阵。脚本在第 f 帧写 `zoom`：第 f + 1 帧的画面用它，第 f + 2 帧的粒子模拟才用它。建场景时取编译期的值，预热的反投影带上它 | 实测 `p5a-wk-zoom3`（`zoom` 按帧号 mod 3 轮换）：画面 9 帧都是上一帧写的，跟随粒子 12 个新生点都按两帧前写的 `zoom` 反投影，差 ≤ 2e-4 |
+| 字段与能力表 | `zoom` 进 `GENERAL_FIELDS`（float，缺省 1），绑属性就地写，`thisScene.zoom` 能读写（从脚本 API 缺口表删掉）。能力表只在正交场景、不绑属性、解析出的值 ≤ 0 时报 `general:zoom`（投影退化、反投影是 NaN），绑属性时不看值；透视场景里 `zoom` 不起作用（读码 1.4：读取点都在正交分支），不报 | 读码；语料最小 1.0 |
+
+### 开场指针
+
+视差点、`g_ParallaxPosition` 和跟随指针的粒子都要从第一帧起就用真实光标。WPE 每帧 `GetCursorPos`，加载第一帧就用真实光标。我们的宿主原来只在收到 `pointermove` 时更新指针：预览 iframe 开场收不到，桌面鼠标转发只在光标移动时注入。所以打开后视差停在中间，鼠标动一下才滑过去（2026-11-11 真机走查发现，跟随指针的粒子同样受影响）。现在让宿主一开始就拿到一次真实光标：
+- **只在可交互时**：应用页 `WpeSceneView`（预览与桌面共用）在 `interactive` 时，于 iframe `load` 与宿主 ready 各调一次 `wpe_scene_cursor`。非 `interactive`（应用背景、不交互的预览）照旧不给指针，视差目标点就是场景中心加 s，只剩静止偏移。
+- **Rust**：`wpe_scene_cursor` 在 `src-tauri/kabegame/src/commands/wpe_scene.rs`，`wpe` feature 下注册。Windows 用 `GetCursorPos` + `ScreenToClient`，再除以 `dpi/96`，得到光标在调用方窗口客户区的 CSS 像素，和鼠标转发同一套映射；其它平台返回 `null`。问 Rust 而不只用父页面记的鼠标位置，是因为桌面壁纸窗口的页面收不到鼠标事件，只有注入给 iframe 的。
+- **应用页**：按 iframe 的显示矩形换成 iframe 内的归一化坐标，不钳制（`wpeSceneStyle.ts` 的 `scenePointerIn`），经 `kabegame:wpe-scene-pointer` 交给宿主。命令返回 `null`、出错，或在 Web / Android 上时，退回本页最近一次 `pointermove` / `pointerdown`，也没有就不发；等命令期间换了宿主也不发。
+- **宿主**：`sceneStyle.ts` 只认父窗口发来的可信消息，当一次 `setPointer`；收到过真实 `pointermove` 之后，初值作废（`scenePointerFeed`）。`SceneHost` 记住最近的指针，渲染器建好时先于 `load` 带进去，`load` 按新场景的铺放换成 `g_PointerPosition`，所以预热与第一帧就用它。
+
+实测：
+- 主窗口：`wpe_scene_cursor` 返回 (355.3333, 436)，和页面最后一次 `pointermove` 相同。
+- 预览 iframe（「超市冰箱八奈见」）：按初值算法算出 (0.500042, 0.499611)，宿主收到的真实 `pointermove` 是 (0.499999, 0.499092)，差 < 0.4 物理像素。
+
+数据流的其它部分见「粒子（P4c）」的「指针」。
+
+### 前置几条
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| JSON 注释 | WPE 用 jsoncpp 读 JSON，缺省允许注释。`parseWpeJson`（`compile/model.ts`）严格解析失败时先去 `//` 行注释与 `/* */` 块注释（字符串里的原样保留），再去尾逗号 | 实测：带 `//` 注释行的材质照常加载（步骤 0）；整行与行内的 `/* */` 同样（收尾走查 `p5a-wk-prop` 的方块 F）。语料只有 fantasticcar 的 `materials/car/glass.json` 一处 |
+| 深度写入 | translucent / additive 的 pass 一律不写深度，`depthtest: disabled` 也连带不写。这两种情况下 `depthwrite: enabled` 中性、不报（`features.ts` 的 `writesDepth`）；其余照报 `depthwrite:*`，留给 P5d | 读码 rea-p5-mesh 3.4；实测：translucent / additive 写 `enabled` 时深度开、不写、GREATER，normal 时开、写，`depthtest: disabled` 时深度关 |
+| `cropoffset`、对象 `config` | 中性。`cropoffset` 是编辑器裁掉透明边后的偏移，导入时已经并进 `origin`（`wallpaper64.exe` 里没有这个字符串）；对象 `config` 只在托盘与播放列表代码里读 | 实测：写了 `cropoffset "100 100"` 的层、带 `config.passthrough` 的层都画在原点，和对照层相同 |
+| 模型 JSON 的布尔键 | `fullscreen`、`nopadding`、`autosize`、`passthrough`、`solidlayer`、`projectlayer`、`instanced` 只认 JSON `true`（`modelFlag`），写成 1 或字符串等于没写；能力表和 `bundle.ts` 读 `solidlayer` 用同一个判断 | 读码 rea-p5-modelflags §7；实测：`fullscreen: 1` 的层照常按 60×60 画在原点 |
+
+语料里模型布尔键全写成 `true`，带注释的 JSON 只有 fantasticcar 一个，所以收紧与注释支持都不改变已有结果。
+
+### 已知差异与只记不补
+
+- **`delay > 3`**：k 为负，P 越走越远。照公式实现，没有实测；语料的 `delay` 最大 2.0。
+- **预热时的抖动**：预热与加载后第一帧的粒子模拟用 s = (0, 0)。依据是推断：模拟用上一帧的相机，加载时还没有更新过相机。t = 0 时抖动偏移是 (amp, 0)，不是 0；语料里同时开抖动和跟随指针的场景很少，只记不补。
+- **重编译时的 `zoom`**：预热与第一帧的模拟用编译期的 `zoom`。属性改 `zoom` 是就地写、不重编译，只有因别的原因整场重编译、而状态里的 `zoom` 已经改过时才碰得到。只记不补。
+- **`zoom` ≤ 0**：运行中改成 ≤ 0 时投影退化、出现 NaN，不处理；能力表只拦编译期的常量（语料最小 1.0）。
+- **`alignmentfliph`**：水平镜像时 WPE 把 `mx` 换成 `1 − mx`、`g_ParallaxPosition.x` 翻转。没实现，语料 0 张。
+- **命中测试的视差偏移**：WPE 按对象自身（不按根）算，没做，归 W4 的按图层命中。
+- **透视场景开视差**：WPE 不移动对象（读码，语料 0 张）。透视场景整张报 `camera:perspective`；P5d 实现透视时，连同透视场景里 `g_ParallaxPosition` 除以 0 再钳制的结果一起核对。
+- **壁纸属性 `cameraparallax`**：WPE 设置里给单张壁纸的开关，只把 `mouseinfluence` 归零，静止偏移不变。Kabegame 没有这个开关，按缺省（开）处理。
+- **首帧的 `g_PointerPositionLast`**：开场指针之后，首帧的 `g_PointerPositionLast` 仍是 (0.5, 0.5)，和初值之间有一次跳变；WPE 首帧没有核对。
+- **P 的精度**：我们用 double 算 P，WPE 存 float32；按 float32 复算差为 0（`fit_delay.py`），接受。
+
+### 语料与解锁
+
+| 步骤 | 去掉的键 | 能渲染 | 新解锁 |
+|---|---|---|---|
+| 1 前置 | `model:cropoffset` 34 张、`object:config` 14、`depthwrite:enabled` 5 | 23 → 24 | `3778549173` |
+| 2 视差 | `general:cameraparallax` 41、`uniform:g_ParallaxPosition` 16、`script:api:layer.parallaxDepth` 1 | 24 → 35 | `2272499163`、`2279259068`、`2381978484`、`2382002554`、`2382120706`、`2382121137`、`2570822804`、`2955749185`、`3000769374`、`3445915391`、`3818481122` |
+| 3 抖动 | 正交场景的 `general:camerashake` 7 | 35 → 36 | `3830255100` |
+| 4 缩放 | `general:zoom` 6 | 36 | 不单独解锁：这 6 张还被别的键挡着（`2887099508` 的 `zoom` 是关键帧，报 `value:animation`） |
+
+- 每步都不新增键，没有场景不再能渲染。起点是 23 而不是子计划开头写的 22，因为同期 P4d 解锁了 `2254685070`。去掉 `depthwrite:enabled` 的 5 张逐个材质核对过，都属于中性情况。
+- **解锁的场景**：
+  - 步骤 2 的前 10 张是同一类模板：1–2 个图像层，其中一个带 effect，深度 `0 1` 或 `0 2`，只在纵向动；原点都在场景中心，静止时没有偏移。
+  - `3818481122` 的唯一图层深度 (0, 0)、不动，它的 `depthparallax` effect 读 `g_ParallaxPosition`。
+  - `3830255100` 有 14 个图像层和 3 个粒子，原点偏离中心几百像素、深度 0.44–1.87，`mouseinfluence` 只有 0.04。它是检验「静止偏移」与抖动的真实样本。
+  - `3778549173` 只差一个粒子 pass 的 `depthwrite: enabled`：这个 pass 是 translucent、`depthtest: disabled`。
+- **和 WPE 比**：
+  - `3778549173`（2560×1440 窗口、fps 20）：静态部分没有一个像素比 WPE 暗，96.86% 完全相同，更亮的 2.65% 是粒子；按均匀帧时间回放粒子，灰烬 2306 对 2306–2316，尺寸、透明度、颜色范围逐位相同，雪花、光晕相近。
+  - `2381978484`、`3445915391`、`3818481122`（步骤 0 的 1344×756 抓帧）：按回放渲染整幅场景，照 WPE 的居中裁切缩到同一尺寸，相位相关估计的平移都是 (0, 0)，平均像素差 0.6–2.3（缩放重采样）。`2381978484` 的视差偏移在这个尺寸下约 67 像素，所以这个比较能检出视差错误。
+  - `3830255100`（1920×1080）：按 WPE 各层的偏移反推，17 个对象给出同一个视差点（离散 0.001 像素），抖动和 `g_EyePosition` 差 1e-4；按同一 `g_Time` 回放渲染，平均差 0.96，大于 32 的像素占 0.038%（只在轮廓线），5 块区域的平移都在 0.08 像素以内。
+- **真机走查**（2026-11-11 用户）：预览里移动鼠标、壁纸样式、桌面壁纸跟随、暂停与应用背景都和预期一致；桌面上光标停在别的窗口上移动时也跟随，和 WPE 相同（Windows 的鼠标转发是轮询光标）。开场原先停在中间，补了上面的「开场指针」后在预览里确认。
+- **基线**：10 张原本能渲染的场景 × 三档后处理，共 30 个画面哈希，在步骤 2、3、4、视差点初值对齐与逐帧光标之后各量一次，都和之前的基线相同。基线里没有开视差的场景，所以初值对齐只能说明没改坏别的，对不对靠上面的数值核对。
+
+### dev 探针与对比台的增补
+
+| 探针 | P5a 增补 |
+|---|---|
+| `renderFrame` | 从加载起逐帧推进视差点与抖动：每帧按 `g_Time` 现算 s，粒子先用上一帧的相机步进，再设本帧的，读回帧带视差与 `g_ParallaxPosition`（步骤 2–4）。收逐帧指针 `pointers`（和 `particles.dts` 等长，不能和 `pointer` 同给）与抓帧窗口 `window`：第 i 帧的 `g_PointerPosition` 取 `pointers[i]`，`g_PointerPositionLast` 取 `pointers[i − 1]`，视差点逐帧用它；控制点光标按 `fill` 从窗口换到场景上，窗口和场景同尺寸或没给 `window` 时原样用（收尾前） |
+| `particleCorners` | 同 `renderFrame`。两者「回放到读回帧」的部分合成一处（`replayReadback`），窗口指针的换算在 `dev/replayPointers.ts` |
+| `particleTrack` | 跟随点带上一帧的 s 与 `zoom`；`cursors` 收 `window`，按 `fill` 换到场景上 |
+| 不给新字段时 | 三个接口逐字节同以前（`kbp regress --corpus` 与画面哈希核对过） |
+
+**回放逐帧光标**（收尾前补的工具）。起因：WPE 开窗后光标在动，跟随指针的粒子、视差点都复现不了，而 RenderDoc 轨迹只有被抓的那几帧有指针。所以光标从测试工程自己的脚本日志取，和 WPE 的帧天然对齐：
+- **日志**：kbp-tools 生成库 `write_project(…, cursor=True)` 时，FR 用 `FR_CURSOR`，`[kbp]` 条目是五列 `帧号,帧时间,累计时间,屏幕x,屏幕y`。屏幕坐标是 `input.cursorScreenPosition`，每 10 条刷一次，取不到写 `nan`。缺省仍是三列，旧工程逐字节相同。这类工程在 Kabegame 里编译报 `script:api:input.cursorScreenPosition`（`input` 留给 P6），dev 强制渲染不受影响。
+- **时间线**（kabegame-dev MCP 的 `apps/kabegame-dev-mcp/src/timeline.ts`）：新增 `cursors: "log"`，第 f 帧光标 = float32(日志第 f 帧的屏幕光标 / 窗口尺寸)，缺的帧沿用相邻帧并列出来，抓到的帧上和轨迹的 `pointer` 逐帧核对。`window` 缺省从轨迹或日志标签末尾的 `-<宽>x<高>` 读。`"track"`、整串、`cursor` 的单位统一成 `g_PointerPosition`（窗口归一化）。`render_scene`、`particle_corners` 把光标作 `pointers` 连同 `window` 交给探针，`particle_track` 交 `cursors` + `window`。`kbp replay` 案例的 `inputs.cursors` 同样收 `"log"`。
+- **依据**：`p5a-cur` / `p5a-cur3` 实测 `cursorScreenPosition` 是壁纸窗口内的像素、y 朝下、不钳制，`g_PointerPosition` 逐位等于 float32(屏幕光标 / 窗口尺寸)。脚本、uniform、粒子模拟用的是同一帧的同一次采样：按日志第 f 帧回放第 f 帧，491–495 个跟随粒子差 ≤ 2.4e-4，错一帧差 340 像素。
+- **端到端**：`p5a-shakepar2`（用户在窗口上画圈时抓帧）经 `render_scene`（`cursors: "log"`）整帧和 WPE 比，FR 块外 0 差异，跟随粒子与透视粒子 1800 个白色像素全部相同。
+
+对比台在 `ignore/p5/`：
+- 确定性工程：`a0/gen_a.py`（步骤 0 的 `p5a-*`，之后各步按 1920×1080 窗口重抓）、`cur/gen_cur.py`（`p5a-cur*`）、`wk/gen_wk.py`（收尾走查的 `p5a-wk-*`），工程放在 `proj/`。
+- 读数：`a0/rdc_dump.py` 在 `qrenderdoc --python` 下无界面导出整批抓帧的常量，`ana_a.py` / `ana_pre.py` / `ana_real.py` 核对。
+- 各步的快照、补丁、语料比较与整帧比对在 `s1/`–`s4/`（`cmp_frames.py`、`follow_cmp.py` 等），逐帧光标在 `cur/`，开场指针在 `ptr/`，收尾走查在 `wk/`。
+- WPE 参照：步骤 0、1 在 `A:\p5a\`，之后在 `A:\p5a2\`（wpe-renderdoc MCP 的 `capture_wallpaper` / `capture_sweep`）。
 
 ## 声音（P6a）
 

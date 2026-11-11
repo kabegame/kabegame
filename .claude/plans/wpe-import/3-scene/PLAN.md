@@ -668,6 +668,7 @@ function isSceneTarget(target: WallpaperTarget): boolean {   // 新增
 - **分节**：前置（能力表修正）；P5a 视差、抖动与缩放（[子计划](phase5/phase-5a-parallax.md)）；P5b 图像模型标志（组合层、`fullscreen`、`projectlayer`、`nopadding`、`instanced`、图像层 `perspective`）；P5c 静态网格（全部 mdl 版本，不含骨骼与变形）；P5d 透视相机、相机路径、相机对象与深度。
 - **从别处移来**：dna_fragment、techno 从 P7 提前到 P5d；相机对象从 W3 提前到 P5d；视差不再等 P6，P4c 已接好指针。深度附件由 P5d 建、P4f 复用。
 - **验收**：和 WPE 抓帧比，不比作者的预览图；每节有确定性工程。
+- **P5a 已完成**（2026-11-10 – 11-12，[子计划](phase5/phase-5a-parallax.md)「实施记录」「P5a 收尾」）：前置并进了 P5a 步骤 1。能渲染 23 → 36，解锁 13 张（前置 1 张、视差 11 张、抖动 1 张，缩放不单独解锁），和总计划的预期一致；起点 23 是因为同期 P4d 解锁了一张。视差、抖动、缩放的测试工程和 WPE 整帧逐像素一致。收尾另查出视差点初值多 (2, 2) 并对齐，补了开场指针（`wpe_scene_cursor`）与回放逐帧光标。文档见 `cocs/wpe/WPE_SCENE.md`「相机：视差、抖动与缩放（P5a）」。
 
 ## P6 — 声音、文本、交互与动态图层（dino_run 等，用到 106 张）
 
