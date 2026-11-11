@@ -9,8 +9,10 @@
  * null 为假）取值，否则取缺省；`animationmode` 用 `isString`（`0x140088890`）后与 `"randomframe"` 比。
  */
 import type { ScenePass } from "./bundle";
+import { isScriptValue, isUserBinding } from "./bindings";
 import type { JsonObject, SceneScalar } from "./model";
 import { roundTrip5 } from "../particles/colorn";
+import { eulerBasis } from "../particles/controlpoints";
 import { f32 } from "../particles/f32";
 import { asUInt32, readParticleModule, type ParticleCategory, type ParticleModule } from "../particles/modules";
 import { readOrientation, type ParticleOrientation } from "../particles/orientation";
@@ -80,15 +82,16 @@ export interface ParticleInstance {
 }
 
 /**
- * 控制点数组的一项（rea-p4c-sim.md 1.2，`FUN_1401c5490` 段 `0x1401d04d8`–`0x1401d080e`）。`angles`、`parentcontrolpoint`、
- * `locktopointer`、`id` 不读：`angles` 解析了但运行时没有读者（实测不起作用），`parentcontrolpoint` 只对子系统有意义（P4e），
- * `locktopointer` 这个键 WPE 不认（二进制里没有这个字符串，实测不跟随），`id` 是编辑器键。
+ * 控制点数组的一项（rea-p4c-sim.md 1.2，`FUN_1401c5490` 段 `0x1401d04d8`–`0x1401d080e`）。`angles`、`locktopointer`、`id` 不读：
+ * `angles` 解析了但运行时没有读者（实测不起作用），`locktopointer` 这个键 WPE 不认（二进制里没有这个字符串，实测不跟随），`id` 是
+ * 编辑器键。`parentcontrolpoint` 只对子系统有意义（P4e 步骤 1 起读，`parent`）。
  */
 export interface SceneControlPoint {
   /**
    * `flags`：按 jsoncpp 取无符号整数（`FUN_140085f70`，`0x1401d05a2`）：数字取整后取低 32 位（负数当很大的无符号数），布尔为
    * 1 / 0，其余 0（WPE 对字符串、对象会抛异常，语料没有）。bit0 跟随指针（P4c 步骤 2 已实现）、bit1 base 是场景坐标、bit2 父
-   * 控制点（顶层只让实例覆盖不生效），其余位没有读者（`particles/controlpoints.ts`）。
+   * 控制点（子系统读父系统的点，P4e 步骤 1；顶层只让实例覆盖不生效）、bit3 父分支不换算（P4e 步骤 1），其余位没有读者
+   * （`particles/controlpoints.ts`）。
    */
   flags: number;
   /**
@@ -97,6 +100,11 @@ export interface SceneControlPoint {
    * 读不出数取 0。
    */
   offset: [number, number, number];
+  /**
+   * `parentcontrolpoint`（`cp+0xc4`，rea-p4c-sim.md 1.2、1.8）：`asInt`、不钳制，存成 u32（取值同 `flags`），父分支里和父系统的
+   * 控制点个数按无符号比较。只在 JSON 写了这个键时有（缺键是 0，读的地方按 `?? 0`）。
+   */
+  parent?: number;
 }
 
 /** 控制点 `flags` 的取值（见 `SceneControlPoint.flags`）。 */
@@ -131,12 +139,148 @@ export function readControlPoints(json: JsonObject): SceneControlPoint[] {
   return Array.from({ length: 8 }, (_, i) => {
     const entry: unknown = Array.isArray(raw) ? raw[i] : undefined;
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return { flags: 0, offset: [0, 0, 0] };
-    const { flags, offset } = entry as Record<string, unknown>;
-    return {
+    const { flags, offset, parentcontrolpoint } = entry as Record<string, unknown>;
+    const point: SceneControlPoint = {
       flags: controlPointFlags(flags),
       offset: typeof offset === "string" ? controlPointOffset(offset) : [0, 0, 0],
     };
+    // 父控制点下标（P4e 步骤 1）：只在写了时带上，没写的点和以前逐字相同
+    if (parentcontrolpoint !== undefined && parentcontrolpoint !== null)
+      point.parent = controlPointFlags(parentcontrolpoint);
+    return point;
   });
+}
+
+/**
+ * 子系统的嵌套上限（rea-p4e-children 1.6，`FUN_14022ebe0` 的 `sys.depth < 10`，`0x14022ec04`）：深度 < 10 的系统才建自己的子系统，
+ * 所以顶层（深度 0）下面最多 10 层，第 10 层的 `children` 不读。自引用的文件因此到第 10 层停（实测 `st-depth` 11 次绘制）。
+ */
+export const MAX_CHILD_DEPTH = 10;
+
+/** 子系统条目的 `type`（rea-p4e-children 1.2）：`static` 1、`eventfollow` 2、`eventspawn` 3、`eventdeath` 4。 */
+export type ParticleChildType = "static" | "eventfollow" | "eventspawn" | "eventdeath";
+const CHILD_TYPES: readonly ParticleChildType[] = ["static", "eventfollow", "eventspawn", "eventdeath"];
+
+/**
+ * `children` 一项（rea-p4e-children 1.1–1.4，`FUN_1401c1430` 缺省、`0x1401d0880`–`0x1401d1455` 解析）。`type` 不认识（含大小写
+ * 不同）的条目解析时丢掉，同 WPE 编号 0 整条既不建也不画（`0x14022ec60`–`0x14022ec7a`，实测 `st-type`）。
+ */
+export interface SceneParticleChild {
+  type: ParticleChildType;
+  /**
+   * 条目 `flags`（`E+0x64`，`asInt` 原值）：bit0 父的存活粒子写子系统控制点（第 5 节）、bit1 父系统周期发射进入新周期时复位这个
+   * static 子系统（3.7）；其余位没有读者（1.3【确，有界】）。
+   */
+  flags: number;
+  /** `controlpointstartindex`（`E+0x68`，`asInt`、有符号、不钳制）：只在 `flags` bit0 时起作用（第 5 节）。 */
+  controlPointStartIndex: number;
+  /** `probability`（`E+0x6c`，float32，缺省 1）：只有事件类读（4.4，P4e 步骤 2、3）；static 条目不读，保持 1。 */
+  probability: number;
+  /** `maxcount`（`E+0x70`，u32，缺省 10）：事件类同时活跃的实例上限（4.1）；static 条目不读，保持 10。 */
+  maxcount: number;
+  /**
+   * 局部矩阵 `L = T(origin)·Rz·Ry·Rx·S(scale)`（1.4，列主序 16 个 float32，弧度）。`L` 在解析期算好，运行时不再读这三个键。存数组
+   * 不存 `Float32Array`：bundle 要经 Worker 传、也会被工具转成 JSON。
+   */
+  local: number[];
+  /**
+   * 条目在 JSON `children` 数组里的下标：`children` 跳过了不认识的类型与读不到的文件，所以它的下标（系统树的路径用这个）不等于 JSON
+   * 下标；材质 pass 的稳定键（`…/children/<index>/…`）与对照工具按子系统起名用这个。
+   */
+  index: number;
+  /** 子系统（按 `name` 读的粒子 JSON，结构同顶层系统）。 */
+  system: SceneParticle;
+}
+
+/** 解析出的条目（还没读子系统 JSON）：`type` 为 null 是不认识的类型（整条忽略）。 */
+export type ParticleChildEntry = Omit<SceneParticleChild, "type" | "system" | "index"> & {
+  name: string;
+  type: ParticleChildType | null;
+};
+
+/** jsoncpp `asInt`：数字截断，布尔 1 / 0，其余（WPE 对字符串、对象会抛异常，语料没有）取缺省。 */
+function childInt(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return fallback;
+}
+
+/**
+ * 条目的三个向量（1.4）：各自先清零，按控制点 `offset` 同一套 `atof` 读三个分量（`controlPointOffset`），**缺的分量是 0**
+ * （`scale "2"` 得 `(2, 0, 0)`，实测 `st-scale1`），舍入成 float。只认字符串：缺键（含 null）取缺省串；写成别的类型 WPE 把数值当
+ * 指针读（未定义行为，语料没有），返回 null 由能力表报 `particle:child:<键>`。
+ */
+function childVector(value: unknown, fallback: string): number[] | null {
+  if (value === undefined || value === null) return controlPointOffset(fallback).map(f32);
+  return typeof value === "string" ? controlPointOffset(value).map(f32) : null;
+}
+
+/**
+ * 局部矩阵 `L = T·Rz·Ry·Rx·S`（1.4，`0x1401d09e1`–`0x1401d1211`）：旋转部分和 `controlpointangleN` 是同一套公式（`eulerBasis`，
+ * CRT `cosf` / `sinf`，弧度、没有度换算，实测 `s-xf` 的 `angles "0 0 30"` 转 −81.13°），三列逐分量乘缩放（`mulss`），第 4 列是平移。
+ */
+export function childLocalMatrix(
+  origin: readonly number[],
+  angles: readonly number[],
+  scale: readonly number[],
+): number[] {
+  const basis = eulerBasis(angles);
+  const out = new Array<number>(16).fill(0);
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) out[c * 4 + r] = f32(basis[c * 3 + r] * f32(scale[c]));
+  out[12] = f32(origin[0]);
+  out[13] = f32(origin[1]);
+  out[14] = f32(origin[2]);
+  out[15] = 1;
+  return out;
+}
+
+/** 条目里写成绑定或不是字符串的向量键（能力表报 `particle:binding:child:<键>` / `particle:child:<键>`）。 */
+export interface ParticleChildIssue {
+  field: string;
+  kind: "binding" | "value";
+}
+
+/**
+ * 解析 `children` 的一项（1.1–1.4）：缺省 `type "static"`、`flags 0`、`controlpointstartindex 0`、`probability 1`、`maxcount 10`、
+ * `origin "0 0 0"`、`angles "0 0 0"`、`scale "1 1 1"`（`FUN_1401c1430` 写回 JSON 的缺省）。`static` 条目不读 `probability`、`maxcount`
+ * （`0x1401d1220` 之后直接跳过，实测 `s-p0`、`s-max`）。`id` 不读。不是对象、或 `name` 不是非空字符串时返回 null（调用方报
+ * `particle:child:name`：WPE 读到空文件名，加载失败，整棵子树不画）。值为 null 的键当缺键。`issues` 收集绑定与向量键的形状问题。
+ */
+export function parseParticleChildEntry(raw: unknown, issues: ParticleChildIssue[] = []): ParticleChildEntry | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  for (const [field, value] of Object.entries(entry))
+    if (field !== "id" && (isUserBinding(value) || isScriptValue(value))) issues.push({ field, kind: "binding" });
+  if (typeof entry.name !== "string" || !entry.name) return null;
+  const rawType = entry.type === undefined || entry.type === null ? "static" : entry.type;
+  // 逐字节比较（`strcmp`），大小写不同的写法落到编号 0
+  const type = typeof rawType === "string" ? (CHILD_TYPES.find((name) => name === rawType) ?? null) : null;
+  const vector = (field: string, fallback: string) => {
+    const parsed = childVector(entry[field], fallback);
+    if (parsed) return parsed;
+    issues.push({ field, kind: "value" });
+    return controlPointOffset(fallback);
+  };
+  const origin = vector("origin", "0 0 0");
+  const angles = vector("angles", "0 0 0");
+  const scale = vector("scale", "1 1 1");
+  const event = type !== null && type !== "static";
+  return {
+    name: entry.name,
+    type,
+    flags: childInt(entry.flags, 0),
+    controlPointStartIndex: childInt(entry.controlpointstartindex, 0),
+    probability: event
+      ? typeof entry.probability === "number" && Number.isFinite(entry.probability)
+        ? f32(entry.probability)
+        : typeof entry.probability === "boolean"
+          ? Number(entry.probability)
+          : 1
+      : 1,
+    // `asInt` 后存 u32（`E+0x70`）
+    maxcount: event ? asUInt32(childInt(entry.maxcount, 10)) : 10,
+    local: childLocalMatrix(origin, angles, scale),
+  };
 }
 
 export interface SceneParticle {
@@ -187,6 +331,12 @@ export interface SceneParticle {
    * `buildableLayers`、`checkRenderable` 都按 `passes` 判断。
    */
   passes: ScenePass[];
+  /**
+   * 子系统（P4e 步骤 1，rea-p4e-children 第 1 节）：`children` 里认得的条目，JSON 顺序，不认识的类型已丢掉；`parseParticle` 给
+   * 空数组，`compileScene` 读子系统 JSON 后填（深度 < `MAX_CHILD_DEPTH` 的系统才填）。模拟器只建 `static` 的（事件类由能力表报
+   * `particle:children:<type>`，步骤 2、3），绘制按先序展开（`render/graph.ts` 的 `planParticleLayer`）。
+   */
+  children: SceneParticleChild[];
 }
 
 /**
@@ -291,8 +441,9 @@ function ropeRateAndLifetime(
 
 /**
  * 系统的 renderer：第一个表内的 renderer（`sprite` / `spritetrail` / `rope` / `ropetrail`）；一个都没有时按缺省的 `sprite` 画。
- * 表外 renderer 已由能力表报；`renderer: []` 时 WPE 不画，现在仍按缺省的 sprite 画（只靠子系统出图的发射器，随
- * `particle:children` 退回）。`emitters`、`initializers` 给 rope 的 `R`、`L`（`ropeRateAndLifetime`），缺省为空（`R = L = 0`）。
+ * 表外 renderer 已由能力表报；`renderer: []` 时 WPE 不画这个系统（只靠子系统出图的发射器），这里照样给出缺省的 sprite（材质的宏
+ * 按它编），绘制由 `render/graph.ts` 的 `planParticleLayer` 按 `renderers` 为空跳过（P4e 步骤 1）。`emitters`、`initializers` 给 rope 的
+ * `R`、`L`（`ropeRateAndLifetime`），缺省为空（`R = L = 0`）。
  */
 export function particleRenderer(
   renderers: readonly ParticleModule[],
@@ -583,5 +734,6 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),
     colorSystem: particleColorSystem(json, options.sceneVersion ?? 0),
     passes: [],
+    children: [],
   };
 }

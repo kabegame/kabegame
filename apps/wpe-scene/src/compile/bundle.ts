@@ -56,7 +56,9 @@ import {
 import {
   isOrthographic,
   isRopeRenderer,
+  MAX_CHILD_DEPTH,
   parseParticle,
+  parseParticleChildEntry,
   particleFov,
   readParticleSystem,
   sceneVersionOf,
@@ -824,13 +826,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   /**
    * 粒子对象（P4a 步骤 2）：读粒子 JSON（按现有查找顺序：项目 → `scene.pkg` → assets），解析成 `layer.particle`，
    * 逐模块检查能力，再编粒子材质。材质的 pass 放进 `layer.particle.passes`，稳定键 `objects/<i>/particle/passes/<n>`。
+   * 子系统（P4e 步骤 1）由 `compileParticleSystem` 沿 `children` 递归编进 `particle.children`。
    */
   async function compileParticle(index: number, object: SceneObject, layer: SceneLayer): Promise<void> {
-    const file = object.particle;
+    const system = await readParticleJson(object.particle);
+    if (!system) return;
+    layer.particle = await compileParticleSystem(index, object, system, object.particle as string, null, 0);
+  }
+
+  /** 读一个粒子 JSON；读不到报 `particle:missing:<文件>`，不是对象报 `particle:parse:<文件>`，都返回 null。 */
+  async function readParticleJson(file: unknown): Promise<JsonObject | null> {
     const text = typeof file === "string" && file ? await fs.text(file) : null;
     if (!text) {
       unsupported.add(`particle:missing:${String(file)}`);
-      return;
+      return null;
     }
     let json: unknown;
     try {
@@ -840,10 +849,34 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     if (!json || typeof json !== "object" || Array.isArray(json)) {
       unsupported.add(`particle:parse:${file}`);
-      return;
+      return null;
     }
-    const system = json as JsonObject;
-    checkParticleFeatures(system, orthographic, unsupported);
+    return json as JsonObject;
+  }
+
+  /**
+   * 一个粒子系统（顶层与子系统共用，P4e 步骤 1）：能力检查 → 解析 → 编材质的 pass → 递归 `children`。`root` 是顶层系统（顶层自己给
+   * null），`depth` 是嵌套深度（顶层 0）。
+   * - 稳定键：顶层 `objects/<i>/particle/passes/<k>`（不变），子系统 `objects/<i>/particle/children/<n>/…/passes/<k>`，`<n>` 是条目在
+   *   JSON `children` 里的下标（不认识的类型丢掉之后也不移位）。
+   * - `instanceoverride`：只有顶层登记绑定（就地目标是对象的）；子系统按缺省值解析，实例值由模拟器从对象上传下去（`ParticleSystem`
+   *   的 `link`，rea-p4e-children 3.4）。能力上子系统按自己的 `flags` 再查一遍对象的 `instanceoverride`（`brightness`、`colorn` 的照报项
+   *   看各自的 bit3）。
+   * - `children`：深度 < `MAX_CHILD_DEPTH` 才读（1.6，自引用的文件到第 10 层停）。四种类型的子系统都编进来（事件类由能力表报
+   *   `particle:children:<type>`，编出来让 `exhaustive` 列全它们自己的问题，也给步骤 2、3 用），不认识的类型、读不到的文件不进。
+   *   材质缺失时照样编子系统：WPE 这时整棵子树不画（`FUN_1402366f0` 基础材质为空直接返回），已由 `material:missing` 报。
+   */
+  async function compileParticleSystem(
+    index: number,
+    object: SceneObject,
+    system: JsonObject,
+    file: string,
+    root: SceneParticle | null,
+    depth: number,
+    key = `objects/${index}/particle`,
+  ): Promise<SceneParticle> {
+    const nested = depth < MAX_CHILD_DEPTH;
+    checkParticleFeatures(system, orthographic, unsupported, { children: nested });
     // `instanceoverride` 的标量键与 `colorn` 登记成就地目标（P4a 步骤 5、P4b 步骤 6）。`brightness` 只在 HDR 且系统 flags 没有
     // bit3 时生效（C5），这时没实现：绑了属性就登记成重编译，改成非默认值后由能力表报，否则（LDR 或 bit3）是中性的就地目标
     const { flags } = readParticleSystem(system);
@@ -853,15 +886,55 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         ? recompile("layer-structure", `objects/${index}/instanceoverride/brightness`)
         : { kind: "particle-instance", object: index, field };
     const particle = parseParticle(system, {
-      file: file as string,
+      file,
       orthographic,
-      instanceoverride: object.instanceoverride,
-      resolveInstance: (field, raw) => bindings.bind(raw as SceneValue | undefined, properties, instanceTarget(field)),
+      // 子系统不登记绑定（P4e 步骤 1）：实例值由模拟器从对象上传
+      ...(root
+        ? {}
+        : {
+            instanceoverride: object.instanceoverride,
+            resolveInstance: (field: InstanceKey, raw: unknown) =>
+              bindings.bind(raw as SceneValue | undefined, properties, instanceTarget(field)),
+          }),
       // `0x200000` 看场景 `version`（rea-p4b-render.md 7.4），和 passthrough 材质同一个取值函数
       sceneVersion: sceneVersionOf(scene.version),
     });
-    checkParticleInstance(object.instanceoverride, particle.instance, { flags, hdr: postprocess.hdr }, unsupported);
-    layer.particle = particle;
+    checkParticleInstance(
+      object.instanceoverride,
+      (root ?? particle).instance,
+      { flags, hdr: postprocess.hdr },
+      unsupported,
+    );
+    await compileParticleMaterial(system, particle, flags, key);
+    if (!nested || !Array.isArray(system.children)) return particle;
+    for (const [n, raw] of system.children.entries()) {
+      if (settled()) break;
+      const entry = parseParticleChildEntry(raw);
+      if (!entry || entry.type === null) continue;
+      const json = await readParticleJson(entry.name);
+      if (!json) continue;
+      const { name: childFile, type, ...fields } = entry;
+      const child = await compileParticleSystem(
+        index,
+        object,
+        json,
+        childFile,
+        root ?? particle,
+        depth + 1,
+        `${key}/children/${n}`,
+      );
+      particle.children.push({ type, ...fields, index: n, system: child });
+    }
+    return particle;
+  }
+
+  /** 粒子系统的材质（P4a 步骤 2）：pass 放进 `particle.passes`，稳定键 `<key>/passes/<k>`；帧表纹理定 `spriteSheet`。 */
+  async function compileParticleMaterial(
+    system: JsonObject,
+    particle: SceneParticle,
+    flags: number,
+    key: string,
+  ): Promise<void> {
     const materialPath = system.material;
     if (typeof materialPath !== "string" || !materialPath) {
       unsupported.add("material:missing");
@@ -881,9 +954,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       renderer: particle.renderer,
     };
     for (const [k, pass] of material.passes.entries())
-      particle.passes.push(
-        await compilePass(pass, { key: `objects/${index}/particle/passes/${k}`, particle: sheetSystem }),
-      );
+      particle.passes.push(await compilePass(pass, { key: `${key}/passes/${k}`, particle: sheetSystem }));
     // 基础材质槽 0 的纹理带帧表：WPE 置系统的 `0x1000000`，模拟器据此每帧算 frame（rea-p4b-render.md 2.3、2.5）
     const slot0 = particle.passes[0]?.textures[0];
     particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet;

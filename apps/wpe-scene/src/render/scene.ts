@@ -24,6 +24,8 @@
  * - 层级（P4a 步骤 1）：模型矩阵是沿父链累乘的世界矩阵（`worldMatrixOf`），`visible` 沿父链继承（`visibleObjects`），
  *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。
  * - 粒子（P4a 步骤 4）：粒子层是计划里的 `particles` 步骤，和图像步骤按 `objects` 顺序混排、画在同一个场景 pass 里。
+ *   有 static 子系统时一个粒子层是若干次绘制（P4e 步骤 1，系统树的先序，`planParticleLayer`）：整棵树一个模拟器（根 `ParticleSystem`，
+ *   子系统挂在它下面），每次绘制取树里自己的节点、各有顶点缓冲与 uniform，模型矩阵按 `particleDrawModel`；只步进根。
  *   每个粒子层一个 `ParticleSystem`（种子默认随机，探针可固定；建场景时预热），顶点缓冲按 `maxcount` 分配，索引缓冲全场一份、
  *   只建一次。调用方每帧先 `stepParticles`（脚本之前，P4c 步骤 4）再 `update`，`encode` 把列写成顶点、`writeBuffer` 后
  *   `drawIndexed`。MVP = 视图投影 × 模型矩阵：本地系统是对象世界矩阵，世界空间系统（`flags & 1`）是单位阵；`flags & 4` 换透视
@@ -69,14 +71,14 @@
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
-import type { ParticleRenderer } from "../compile/particles";
+import type { ParticleRenderer, SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { pointerScenePoint } from "../particles/controlpoints";
 import { orientationBasis, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
-import { ParticleSystem } from "../particles/system";
+import { ParticleSystem, particleDrawModel, particleNode } from "../particles/system";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import {
   particleVertexLayout,
@@ -233,6 +235,12 @@ interface ParticleDraw {
    * 同样随模型矩阵更新（`refreshParticleGeometry`）。
    */
   hidden: boolean;
+}
+
+/** 一个粒子层的系统树（P4e 步骤 1）：根系统（子系统挂在它下面）与加载时对象的世界矩阵。 */
+interface ParticleTree {
+  system: ParticleSystem;
+  world: Mat4;
 }
 
 /** 一个粒子层最近若干帧的开销样本（dev 探针，`GpuScene.profileParticles`）。 */
@@ -425,6 +433,13 @@ function particleAttributeProblems(
   }
 }
 
+/** 系统树的根（P4e 步骤 1）：模拟、实例改值都只交给根，由它递归到子系统。 */
+function rootSystem(system: ParticleSystem): ParticleSystem {
+  let root = system;
+  while (root.parent) root = root.parent;
+  return root;
+}
+
 /**
  * 几何着色器分支（rope 两类）写段顶点：系统有 ropetrail 历史（`system.trail`，P4d 步骤 2）时每个存活粒子恒写 n 段
  * （`writeTrailSegments`），否则按 rope 表写（`writeRopeSegments`，P4d 步骤 1，`fps` 是宿主的帧上限）。返回段数。
@@ -436,15 +451,19 @@ function writeSegments(system: ParticleSystem, layout: ParticleDraw["layout"], o
 }
 
 /**
- * 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。`renderer` 是图层的粒子 renderer 种类（粒子程序的输入按它查）。
+ * 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。`particle` 是图层的粒子系统树：每个粒子步骤按它自己那个系统的
+ * renderer 种类查程序的输入（子系统的 renderer 可以和父不同，P4e 步骤 1）。
  */
-function planProblems(plan: LayerPlan, bundle: SceneBundle, renderer?: ParticleRenderer["kind"]): string[] {
+function planProblems(plan: LayerPlan, bundle: SceneBundle, particle?: SceneParticle | null): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
     if (step.kind !== "draw" && step.kind !== "particles") continue;
     const program = step.pass.program === null ? undefined : bundle.programs[step.pass.program];
     if (!program) problems.push("render:no-program");
-    else if (step.kind === "particles") problems.push(...particleAttributeProblems(program, renderer));
+    else if (step.kind === "particles")
+      problems.push(
+        ...particleAttributeProblems(program, particle ? particleNode(particle, step.node).renderer.kind : undefined),
+      );
     for (const ref of Object.values(step.inputs))
       if (ref.kind === "texture" && !bundle.textures[ref.index]?.mips.length)
         problems.push(`render:texture-missing:${ref.index}`);
@@ -478,8 +497,7 @@ export function checkRenderable(
       if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
     }
   for (const layer of buildableLayers(bundle))
-    for (const reason of planProblems(planLayer(layer, bundle.textures), bundle, layer.particle?.renderer.kind))
-      reasons.add(reason);
+    for (const reason of planProblems(planLayer(layer, bundle.textures), bundle, layer.particle)) reasons.add(reason);
   return [...reasons];
 }
 
@@ -502,16 +520,20 @@ export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">)
  * 要上传的纹理：除了只被「关着且带不支持项」的 effect 用到的，其余全部上传。这种 effect 打开时整场重编译，用不到这份
  * GPU 纹理；它的纹理可能没有 mip 或格式不认识，上传会抛错，让本来能画的场景退回（3c）。关着的 effect 编译到一半出错时
  * 步骤不留，已解析的纹理同样不被引用。没有可变 effect 的场景，bundle 里的纹理都有 pass 引用，结果是全集。
- * 粒子材质的纹理同样上传（P4a 步骤 4）。
+ * 粒子材质的纹理同样上传（P4a 步骤 4），含系统树里全部子系统的（P4e 步骤 1）。
  */
 export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<number> {
   const used = new Set<number>();
   const add = (pass: ScenePass) => {
     for (const index of Object.values(pass.textures)) used.add(index);
   };
+  const addParticle = (particle: SceneParticle) => {
+    particle.passes.forEach(add);
+    for (const child of particle.children ?? []) addParticle(child.system);
+  };
   for (const layer of bundle.layers) {
     layer.passes.forEach(add);
-    layer.particle?.passes.forEach(add);
+    if (layer.particle) addParticle(layer.particle);
     if (layer.passthrough) add(layer.passthrough);
     for (const effect of layer.effects) {
       if (!effect.enabled && effect.unsupported.length) continue;
@@ -868,7 +890,7 @@ export class GpuScene {
       let failure: unknown = null;
       try {
         for (const plan of plans) {
-          const problems = planProblems(plan, this.bundle, runtime.layer.particle?.renderer.kind);
+          const problems = planProblems(plan, this.bundle, runtime.layer.particle);
           if (problems.length) throw new SceneRenderError(problems);
           this.ensureComposites(runtime, plan);
           if (wantsSnapshot(plan)) this.ensureSnapshot();
@@ -928,6 +950,9 @@ export class GpuScene {
     this.checkPlanOps(plan, runtime);
     const ops: Op[] = [];
     const draws: Draw[] = [];
+    // 粒子层的系统树（P4e 步骤 1）：第一个粒子步骤建（整棵树一起建、一起预热），子系统的步骤取树里的节点
+    let tree: ParticleTree | null = null;
+    const treeOf = (): ParticleTree => (tree ??= this.createParticleTree(layer, state));
     for (const step of plan.steps) {
       if (step.kind === "snapshot") ops.push({ kind: "snapshot" });
       else if (step.kind === "swap")
@@ -936,7 +961,7 @@ export class GpuScene {
         ops.push({ kind: "copy", resources, effect: step.effect, source: step.source, target: step.target });
       else if (step.kind === "clear") ops.push({ kind: "clear", resources, target: step.target });
       else {
-        const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds);
+        const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds, treeOf);
         ops.push({ kind: "draw", draw });
         draws.push(draw);
       }
@@ -1005,14 +1030,13 @@ export class GpuScene {
     this.zoom = general.fields.zoom;
     this.viewProjection = this.baseViewProjection = sceneViewProjection(general, this.zoom);
     this.perspectiveViewProjection = this.basePerspectiveViewProjection = particleViewProjection(general, this.zoom);
-    // 粒子的索引缓冲：全场一份，按最大的 maxcount 建
-    const particleCapacity = plans.reduce(
-      (max, plan, index) =>
-        plan.steps.some((step) => step.kind === "particles")
-          ? Math.max(max, built[index].particle?.maxcount ?? 0)
-          : max,
-      -1,
-    );
+    // 粒子的索引缓冲：全场一份，按最大的 maxcount 建（含子系统的，每个粒子步骤按它画的那个系统，P4e 步骤 1）
+    const particleCapacity = plans.reduce((max, plan, index) => {
+      const particle = built[index].particle;
+      for (const step of plan.steps)
+        if (step.kind === "particles" && particle) max = Math.max(max, particleNode(particle, step.node).maxcount);
+      return max;
+    }, -1);
     if (particleCapacity >= 0) this.createParticleIndices(particleCapacity);
 
     const runtimes = plans.map((plan, index) => {
@@ -1163,13 +1187,13 @@ export class GpuScene {
   }
 
   /**
-   * 一个粒子层的模拟器：种子 = `particleSeed` + 第几个粒子层，建好就预热（C1）。顶点按 `maxcount` 分配，
-   * 第一次 `encode` 时写（`stale`）。布局的问题 `checkRenderable` 已经查过。
-   * `instanceoverride` 取状态里的当前值（建场景时与编译期相同；万一单图层重建，用的也是就地写过的值）。
+   * 一个粒子层的模拟器（整棵系统树，P4e 步骤 1：子系统由根系统构造时一起建）：种子 = `particleSeed` + 第几个粒子层，建好就预热（C1；
+   * 子系统先于父预热，`ParticleSystem.prewarm`）。
+   * `instanceoverride` 取状态里的当前值（建场景时与编译期相同；万一单图层重建，用的也是就地写过的值），子系统从根上取。
    * 预热按状态里对象当前的世界矩阵更新控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）；指针点的跟随点按最近的 cursor
    * （`particleCursor`，加载时是 `ParticleOptions.cursor`）反投影（P4c 步骤 2）。
    */
-  private createParticles(layer: SceneLayer, program: GpuProgram, state: SceneState): ParticleDraw {
+  private createParticleTree(layer: SceneLayer, state: SceneState): ParticleTree {
     const compiled = layer.particle!;
     const def = { ...compiled, instance: { ...compiled.instance, ...state.particleInstances.get(layer.object) } };
     const ordinal = this.particleOrdinals.get(layer.object) ?? 0;
@@ -1181,6 +1205,17 @@ export class GpuScene {
     );
     const world = worldMatrixOf(layer.object, state.layers, new Map());
     system.prewarm({ world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) });
+    return { system, world };
+  }
+
+  /**
+   * 一次粒子绘制的 CPU 侧顶点：系统是树里 `step.node` 那个节点（P4e 步骤 1），顶点按它自己的 `maxcount` 与 renderer 分配，
+   * 第一次 `encode` 时写（`stale`）。布局的问题 `checkRenderable` 已经查过。
+   */
+  private createParticles(step: ParticleStep, program: GpuProgram, tree: ParticleTree): ParticleDraw {
+    const system = tree.system.node(step.node);
+    if (!system) throw new SceneRenderError([`render:particle-node:${step.node.join("/")}`]);
+    const world = tree.world;
     const geometry = program.result.geometry;
     if (geometry) {
       const rope = { maxVertices: geometry.maxVertices };
@@ -1206,9 +1241,12 @@ export class GpuScene {
    * WPE 绘制时把模型矩阵栈顶整个换成 `ctx+0xaf0`（`FUN_1402366f0`，`0x14023670c`–`0x140236748`，rea-p4c-sim.md 5.3），普通场景里
    * 是单位阵，所以只乘视图投影。uniform、朝向与拖尾的眼位都用它（rea-p4c-render.md 7.2：`g_Orientation*` 和 `g_ModelMatrix` 都取
    * `*(ctx+0x30)`）。
+   * 子系统的绘制（P4e 步骤 1，rea-p4e-children 第 6 节）：本地子系统是 `父绘制栈顶 · L`，世界子系统是单位阵（`particleDrawModel`）。
    */
-  private particleModel(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>): Mat4 {
-    return (layer.particle?.flags ?? 0) & 1 ? identity() : worldMatrixOf(layer.object, state.layers, worlds);
+  private particleModel(layer: SceneLayer, step: ParticleStep, state: SceneState, worlds: Map<number, Mat4>): Mat4 {
+    if (!step.node.length || !layer.particle)
+      return (layer.particle?.flags ?? 0) & 1 ? identity() : worldMatrixOf(layer.object, state.layers, worlds);
+    return particleDrawModel(worldMatrixOf(layer.object, state.layers, worlds), layer.particle, step.node);
   }
 
   /**
@@ -1220,12 +1258,14 @@ export class GpuScene {
   private refreshParticleGeometry(
     particles: ParticleDraw,
     layer: SceneLayer,
+    step: ParticleStep,
     state: SceneState,
     worlds: Map<number, Mat4>,
   ): void {
-    const renderer = layer.particle?.renderer;
+    // 子系统按它自己的 renderer 与模型矩阵（P4e 步骤 1）
+    const renderer = particles.system.def.renderer;
     if (!renderer) return;
-    const model = this.particleModel(layer, state, worlds);
+    const model = this.particleModel(layer, step, state, worlds);
     particles.hidden =
       particles.rope && renderer.orientation.mode === 0
         ? false
@@ -1243,17 +1283,23 @@ export class GpuScene {
     { program, pipeline }: PreparedDraw,
     state: SceneState,
     worlds: Map<number, Mat4>,
+    /** 粒子层的系统树（`buildLayer` 第一次要时建，P4e 步骤 1）；图像层不用。 */
+    treeOf?: () => ParticleTree,
   ): Draw {
     const { device, bundle } = this;
     const { pass } = step;
-    const label = `layer ${layer.id} ${layer.name} ${step.kind === "particles" ? "particles" : step.role}`;
+    // 子系统的绘制在标签后面带上树里的路径（P4e 步骤 1），顶层的标签不变
+    const label =
+      step.kind === "particles"
+        ? `layer ${layer.id} ${layer.name} particles${step.node.length ? ` ${step.node.join("/")}` : ""}`
+        : `layer ${layer.id} ${layer.name} ${step.role}`;
 
     let vertexBuffer: GPUBuffer;
     let particles: ParticleDraw | null = null;
     if (step.kind === "particles") {
       // 粒子：每帧由 `encode` 写，按容量分配
-      particles = this.createParticles(layer, program, state);
-      this.refreshParticleGeometry(particles, layer, state, worlds);
+      particles = this.createParticles(step, program, (treeOf ?? (() => this.createParticleTree(layer, state)))());
+      this.refreshParticleGeometry(particles, layer, step, state, worlds);
       vertexBuffer = this.own(
         device.createBuffer({
           label,
@@ -1422,8 +1468,8 @@ export class GpuScene {
       const base = step.inputs[0];
       return particleUniformValues({
         ...common,
-        // 世界空间系统（P4c 步骤 4）是单位阵，对象变换改了照样走这里重写，仍是单位阵（`particleModel`）
-        world: this.particleModel(layer, state, worlds),
+        // 世界空间系统（P4c 步骤 4）是单位阵，对象变换改了照样走这里重写，仍是单位阵（`particleModel`）；子系统按树算（P4e 步骤 1）
+        world: this.particleModel(layer, step, state, worlds),
         layer: layerState,
         // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）
         viewProjection: this.viewProjectionOf(
@@ -1432,8 +1478,8 @@ export class GpuScene {
           step.perspective ? this.perspectiveViewProjection : this.viewProjection,
         ),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
-        // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）
-        renderer: layer.particle?.renderer,
+        // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）
+        renderer: layer.particle ? particleNode(layer.particle, step.node).renderer : undefined,
       });
     }
     return drawUniformValues({
@@ -1528,10 +1574,16 @@ export class GpuScene {
       for (const draw of this.drawsByLayer.get(object) ?? []) this.refreshLayer(draw, state, worlds);
     for (const key of dirty.passes) for (const draw of this.drawsByPass.get(key) ?? []) this.refreshPass(draw, state);
     if (dirty.lights) for (const draw of this.draws) this.refreshLights(draw, state);
-    // `instanceoverride` 改值：模拟器从基值重新乘，不重建缓冲、不清粒子（P4a 步骤 5，C5）
+    // `instanceoverride` 改值：模拟器从基值重新乘，不重建缓冲、不清粒子（P4a 步骤 5，C5）。只交给根系统，由它递归到子系统
+    // （P4e 步骤 1，rea-p4e-children 3.4）
     for (const object of dirty.particles) {
       const values = state.particleInstances.get(object);
-      if (values) for (const draw of this.drawsByLayer.get(object) ?? []) draw.particles?.system.setInstance(values);
+      if (values) {
+        const roots = new Set<ParticleSystem>();
+        for (const draw of this.drawsByLayer.get(object) ?? [])
+          if (draw.particles) roots.add(rootSystem(draw.particles.system));
+        for (const root of roots) root.setInstance(values);
+      }
     }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
@@ -1619,7 +1671,7 @@ export class GpuScene {
     if (signature === runtime.signature) return;
     const started = performance.now();
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
-    const problems = planProblems(plan, this.bundle, runtime.layer.particle?.renderer.kind);
+    const problems = planProblems(plan, this.bundle, runtime.layer.particle);
     if (problems.length) throw new SceneRenderError(problems);
     const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime.resources), state, worlds);
     for (const draw of runtime.draws) {
@@ -1655,7 +1707,8 @@ export class GpuScene {
   /** 图层（或它某个祖先）状态变化：只重写由图层算出的那组内置 uniform（材质值优先，不覆盖）。 */
   private refreshLayer(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
     // 粒子层的朝向是否 NaN、拖尾的眼位随模型矩阵变（P4c 步骤 5），没有 uniform 块也要跟上
-    if (draw.particles) this.refreshParticleGeometry(draw.particles, draw.layer, state, worlds);
+    if (draw.particles && draw.step.kind === "particles")
+      this.refreshParticleGeometry(draw.particles, draw.layer, draw.step, state, worlds);
     const layerState = state.layers.get(draw.object);
     if (!draw.block || !layerState) return;
     const values = this.uniformValues(draw.step, draw.layer, layerState, draw.textureSizes, state, worlds);
@@ -1740,27 +1793,36 @@ export class GpuScene {
     if (!(frametime > 0)) return;
     const worlds = new Map<number, Mat4>();
     let pointer: [number, number] | null = null;
+    // 一个粒子层若干次绘制共用一棵系统树（P4e 步骤 1）：只步进根（子系统由它递归），每棵树一次；步进后这一层的全部粒子绘制都标 `stale`
+    const stepped = new Set<ParticleSystem>();
+    const markStale = (object: number) => {
+      for (const item of this.drawsByLayer.get(object) ?? []) if (item.particles) item.particles.stale = true;
+    };
     for (const draw of this.draws) {
       const particles = draw.particles;
       if (!particles) continue;
+      const root = rootSystem(particles.system);
+      if (stepped.has(root)) continue;
+      stepped.add(root);
       if (state && !effectiveVisible(draw.object, state.layers)) {
         // 不可见时控制点照常更新（P4d 步骤 5，rea-p4d-modules.md 5.3）：`W` 与跟随点照可见时的算法算
         const world = worldMatrixOf(draw.object, state.layers, worlds);
         pointer ??= pointerScenePoint(this.viewProjection, cursor);
-        // 系统时间在不可见的帧上照常累加（P4d 收尾 A），所以把帧时间也交给它
-        if (particles.system.suspend({ world, pointer }, frametime)) particles.stale = true;
+        // 系统时间在不可见的帧上照常累加（P4d 收尾 A），所以把帧时间也交给它；子系统这时以 `emit = false` 照常步进（rea-p4e-children
+        // 3.6），所以有子系统时每帧都要重写
+        if (root.suspend({ world, pointer }, frametime, time) || root.statics.length) markStale(draw.object);
         continue;
       }
       const timing = this.particleTimings?.get(draw);
       const started = timing ? performance.now() : 0;
       const world = state ? worldMatrixOf(draw.object, state.layers, worlds) : particles.world;
       pointer ??= pointerScenePoint(this.viewProjection, cursor);
-      particles.system.step(frametime, time, { world, pointer });
+      root.step(frametime, time, { world, pointer });
       if (timing) {
         recordSample(timing.simulate, performance.now() - started);
-        recordSample(timing.alive, particles.system.alive);
+        recordSample(timing.alive, root.alive);
       }
-      particles.stale = true;
+      markStale(draw.object);
     }
   }
 
@@ -1805,6 +1867,8 @@ export class GpuScene {
   particleStats(detail = false): {
     object: number;
     name: string;
+    /** 子系统的绘制才有（P4e 步骤 1）：在系统树里的路径（`ParticleStep.node`），顶层的条目不带这一项、和以前逐字相同。 */
+    node?: number[];
     alive: number;
     highWater: number;
     capacity: number;
@@ -1816,6 +1880,7 @@ export class GpuScene {
             {
               object: draw.object,
               name: draw.layer.name,
+              ...(draw.step.kind === "particles" && draw.step.node.length ? { node: [...draw.step.node] } : {}),
               alive: draw.particles.system.alive,
               highWater: draw.particles.system.highWater,
               capacity: draw.particles.system.columns.capacity,
@@ -1860,8 +1925,12 @@ export class GpuScene {
    * dev 探针（`particleCorners`）：一个粒子层的程序、uniform 缓冲、bind group 条目，以及按当前状态写好的顶点
    * （存活粒子按槽序，`count` 个，每个 4 个顶点；拖尾系统跳过退化的粒子，同 `encode`）。`hidden`：朝向是 NaN，`encode` 不画这一层
    * （P4c 步骤 5）；`trailEye`：拖尾系统写顶点用的眼位（`trailDrawable` 按它挑出写了的粒子）。不是粒子层时为 null。
+   * `node`：系统树里的哪一次绘制（P4e 步骤 1，`ParticleStep.node`），缺省顶层。
    */
-  particleProbe(object: number): {
+  particleProbe(
+    object: number,
+    node: readonly number[] = [],
+  ): {
     program: GpuProgram;
     uniformBuffer: GPUBuffer | null;
     entries: GPUBindGroupEntry[];
@@ -1877,7 +1946,11 @@ export class GpuScene {
     hidden: boolean;
     trailEye: [number, number, number] | null;
   } | null {
-    const draw = [...this.draws].find((item) => item.object === object && item.particles);
+    const key = node.join("/");
+    const draw = [...this.draws].find(
+      (item) =>
+        item.object === object && item.particles && item.step.kind === "particles" && item.step.node.join("/") === key,
+    );
     if (!draw?.particles || draw.step.kind !== "particles") return null;
     const { system, layout, rope, trailEye: eye, hidden } = draw.particles;
     const vertices = new Float32Array(draw.particles.vertices.length);

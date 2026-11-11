@@ -26,8 +26,21 @@
  * 同一个 `W` 也是模拟时的模型矩阵 `M`（执行上下文的 `model`，`movement` 的 `flags` bit0 用）。
  * 世界空间（系统 `flags` bit0，P4c 步骤 4，rea-p4c-sim.md 第 5 节）只是坐标系的切换：控制点是 `W·base`，出生点经控制点的 3×3
  * 进世界坐标（`origin` 不经 `W`），之后对象移动、旋转，已发出的粒子留在原地；绘制时模型矩阵是单位阵（渲染器负责）。
- * 子系统不在这里。
  * 表外模块（`skipped`）不执行：场景已因 `particle:<类别>:<名字>` 退回预览图。
+ *
+ * 子系统（P4e 步骤 1，rea-p4e-children）：一个粒子对象是一棵系统树，子系统的状态归父系统所有。本步只有 `static`（`statics`，条目顺序；
+ * 事件类条目由能力表报，不建）：
+ * - 建立（3.1）：父系统构造时一起建（深度 < `MAX_CHILD_DEPTH`），和父共用同一个 `ParticleRandom`（WPE 全场一个 MT19937，7.3；我们不复刻
+ *   流，共用只让「一个对象一个随机源」的种子规则不变）。实例值是对象的 `instanceoverride`（按子系统自己的 `flags` bit3–7 决定乘哪些，
+ *   3.4），控制点覆盖到不了子系统（3.4，实测 `st-iocp`）。
+ * - 预热（3.1、3.5）：`prewarm` 先深度优先预热全部 static 子孙（各按**自己的** `starttime`），再做本系统的控制点初始化与预热；父的
+ *   预热循环不步进子系统。预热的模型矩阵：本地子系统 `父 M · L`，世界子系统 `L`（实测 `st-wwarm`）。
+ * - 每帧（3.2，`FUN_1402308a0`）：父模拟 → 写顶点（采样拖尾）→ 按条目顺序：条目 `flags` bit0 时父粒子写子系统控制点（第 5 节，
+ *   `writeParentPoints`），子系统用父的 `dt′`（不再乘自己的 `rate`）与父的 `emit` 递归步进，模型矩阵是 `父 M · L`（本地、世界子系统
+ *   都一样，3.3）。父存活数为 0 照样更新子系统。
+ * - 周期复位（3.7）：父的周期发射进入新周期时，条目 `flags` bit1（值 2）的 static 子系统复位计时并重开发射器（`restart`），不清粒子。
+ * - 不可见（3.6）：顶层有存活粒子时，复位与清空递归到 static 子孙；之后整棵子树照常以 `emit = false` 步进（`suspend`）。
+ * 子系统的 remap `layertime`、`layerorigin` 读对象的（和根共用 `obj`，3.1）。
  *
  * `rope`（P4d 步骤 1，rea-p4d-rope.md 第 2 节）：renderer 是 rope 的系统另维护 rope 表（`ropeOrder`，存槽号、表序就是出生序）
  * 和累计死亡数（`deaths`，`sys+0x350`，只给 `uvscrolling` 用）：出生时追加，每帧判死后保序删除当帧的死亡槽、死亡数累加（删除在
@@ -46,12 +59,24 @@
  * 累加（P4d 收尾 A 实测 st-hide、st-pre）。模拟时的
  * 对象原点 `W.t`（remap 的 `layerorigin`）和模型矩阵一起由 `advance` 按 `inputs.world` 写进执行上下文。
  */
-import { instanceValues, type ParticleInstanceValues, type SceneParticle } from "../compile/particles";
-import { identity } from "../render/math";
+import {
+  instanceValues,
+  MAX_CHILD_DEPTH,
+  type ParticleInstanceValues,
+  type SceneParticle,
+  type SceneParticleChild,
+} from "../compile/particles";
+import { identity, invert, multiply, type Mat4 } from "../render/math";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { colornState, type Rgb } from "./colorn";
 import { ParticleColumns } from "./columns";
-import { ControlPointSet, IDENTITY_BASIS, type ControlPointInputs } from "./controlpoints";
+import {
+  controlPointCount,
+  ControlPointSet,
+  IDENTITY_BASIS,
+  NO_INSTANCE_OVERRIDE,
+  type ControlPointInputs,
+} from "./controlpoints";
 import { emissionCount, emitterState, resetEmitterTiming, type EmitterState } from "./emitters";
 import { f32 } from "./f32";
 import {
@@ -173,6 +198,117 @@ export function particleColumnFlags(def: Pick<SceneParticle, "emitters" | "initi
   return flags;
 }
 
+/** 一帧里整棵系统树共用的量（`step` / `suspend` 算好，`stepNode` 逐层往下传，rea-p4e-children 3.2）。 */
+interface TreeFrame {
+  /** `dt′`：根的帧时间乘根的 `instanceoverride.rate`，子孙共用，不再乘自己的 `rate`（3.2、3.4）。 */
+  dt: number;
+  /** 当帧未乘 `rate` 的 `g_Frametime`（drag 系数用）。 */
+  frameDt: number;
+  /** 场景时间 `T`（float32）。 */
+  time: number;
+  /** 图层时间（`obj+0x770`，对象的，根上那一份）：remap 的 `layertime`。 */
+  layerTime: number;
+  /** 对象世界矩阵 `W`：remap 的 `layerorigin`（对象的，和系统的模拟矩阵无关）。 */
+  object: Mat4;
+  /** 对象可见（`FUN_1402308a0` 的 `emit`）：不可见时整棵树不发射（3.2、3.6）。 */
+  emit: boolean;
+}
+
+/** 一个 static 子系统（rea-p4e-children 2 节的 `sys+0x480` 表项）。 */
+export interface ParticleChildSystem {
+  /** 条目在父的 `def.children` 里的下标（`ParticleSystem.node` 的路径按它走）。 */
+  index: number;
+  entry: SceneParticleChild;
+  /** 条目的局部矩阵 `L`（`entry.local` 的 float32 形态）。 */
+  local: Mat4;
+  system: ParticleSystem;
+}
+
+/**
+ * 条目 `flags` bit0：父系统的存活粒子按槽号写进子系统控制点的平移（`FUN_14022a580`，rea-p4e-children 第 5 节【确】，实测 `st-cpw`、
+ * `ef-cpw`）。在子系统步进之前调，`top` 是父的模拟矩阵 `M`（栈顶）：
+ * ```
+ * X = parW ? (childW ? I : inverse(top)) : (childW ? top : I)
+ * j = controlpointstartindex
+ * for i in 0 .. 父高水位 − 1:
+ *     if j ≥ 8: break
+ *     if 父 life[i] == 0: continue                    // 空槽不占控制点
+ *     if 子 cp[j].flags & 0x10005: continue           // 指针 / 父控制点 / remap 点：这个粒子被跳过，j 不变
+ *     子 cp[j].current.t = ((X00·px + X10·py) + (X20·pz + X30), …)   // 只写平移，3×3 与 previous 不动
+ *     j += 1
+ * ```
+ * 写的是**父的全部存活粒子**的前几个，不补偿 `L`（本地子系统里这些点和父粒子的实际位置差一个 `L`）。条目 bit0 时子系统的控制点个数
+ * 强制为 8（1.5），所以下标不越界；`controlpointstartindex` 为负时 WPE 从负下标写（越界，【推】），能力表报
+ * `particle:child:controlpointstartindex`，这里跳过负下标、照样往后数。
+ */
+export function writeParentPoints(
+  parent: ParticleSystem,
+  entry: Pick<SceneParticleChild, "flags" | "controlPointStartIndex">,
+  child: ParticleSystem,
+  top: Mat4,
+): void {
+  if (!(entry.flags & 1)) return;
+  const childWorld = (child.def.flags & 1) !== 0;
+  const parentWorld = (parent.def.flags & 1) !== 0;
+  let matrix: Mat4 | null = null;
+  if (parentWorld && !childWorld) matrix = invert(top) ?? new Float32Array(16).fill(Number.NaN);
+  else if (!parentWorld && childWorld) matrix = top;
+  const { life, position } = parent.columns;
+  const points = child.controlPoints;
+  let j = entry.controlPointStartIndex;
+  for (let i = 0; i < parent.highWater; i++) {
+    if (j >= 8 || j >= points.count) break;
+    if (life[i] === 0) continue;
+    if (j < 0) {
+      j++;
+      continue;
+    }
+    if (points.pointFlags(j) & NO_INSTANCE_OVERRIDE) continue;
+    const px = position[0][i];
+    const py = position[1][i];
+    const pz = position[2][i];
+    const t = points.current(j).translation;
+    if (!matrix) t.set([px, py, pz]);
+    else
+      for (let k = 0; k < 3; k++)
+        t[k] = f32(f32(f32(matrix[k] * px) + f32(matrix[4 + k] * py)) + f32(f32(matrix[8 + k] * pz) + matrix[12 + k]));
+    j++;
+  }
+}
+
+/** 系统树里一个节点的定义：`node` 是从根起每层的 `children` 下标（顶层 `[]`）。 */
+export function particleNode(root: SceneParticle, node: readonly number[]): SceneParticle {
+  let current = root;
+  for (const index of node) current = current.children[index].system;
+  return current;
+}
+
+/**
+ * 一次绘制的模型矩阵（`FUN_1402366f0` 的先序递归，rea-p4e-children 第 6 节、3.3【确】）。`object` 是对象世界矩阵 `W`：
+ * ```
+ * 顶层：     model = 世界 ? I : W；画完后栈顶是 W（世界系统画完恢复成 X = W，0x140236ae9）
+ * 子系统：   model = 世界 ? I : top(父) · L
+ *            top   = 世界 ? L : model                // 世界子系统画完把栈顶恢复成 X = L
+ * ```
+ * 所以世界 static 子系统的本地孙辈绘制时是 `L·L₂`，模拟时却是 `W·L·L₂`（3.3「两处不一致」，照复刻）。顶层返回的就是传入的 `object`
+ * 或新的单位阵，和 P4c 的 `particleModel` 逐字节相同。
+ */
+export function particleDrawModel(object: Mat4, root: SceneParticle, node: readonly number[]): Mat4 {
+  if (!node.length) return root.flags & 1 ? identity() : object;
+  let top = object;
+  let current = root;
+  let model = object;
+  for (const index of node) {
+    const child = current.children[index];
+    const local = new Float32Array(child.local);
+    const world = (child.system.flags & 1) !== 0;
+    model = world ? identity() : multiply(top, local);
+    top = world ? local : model;
+    current = child.system;
+  }
+  return model;
+}
+
 export class ParticleSystem {
   readonly def: SceneParticle;
   readonly columns: ParticleColumns;
@@ -207,6 +343,14 @@ export class ParticleSystem {
    * 时清零。WPE 存在对象上，Kabegame 一个粒子对象一个系统，所以放在这里。remap 的 `layertime` 读它。
    */
   layerTime = 0;
+  /** 父系统（rea-p4e-children 2 节的 `sys+0x10`）；顶层为 null。控制点父分支、父粒子写控制点读它。 */
+  readonly parent: ParticleSystem | null;
+  /** 本系统在父系统里的条目（子系统才有）。 */
+  readonly entry: SceneParticleChild | null;
+  /** 嵌套深度（`sys+0x3f8`，顶层 0，1.6）：< `MAX_CHILD_DEPTH` 才建子系统。 */
+  readonly depth: number;
+  /** static 子系统（3.1，`sys+0x480`），条目顺序；事件条目的实例池在 P4e 步骤 2 加。 */
+  readonly statics: ParticleChildSystem[] = [];
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -218,6 +362,11 @@ export class ParticleSystem {
   private alpha0 = 1;
   /** 新粒子的 rgb 初值（WPE 的 `sys+0x3e0..0x3e8`，`colornState` 的 `instanceColor`），颜色 initializer 乘在它上面。 */
   private instanceColor: Rgb = [1, 1, 1];
+  /**
+   * `colorn` 生效位（`sys+0x3f7` bit1，rea-p4e-children 2 节、3.4）：顶层是自己的生效判断；子系统建立时从父拷、每帧被父的覆盖，所以
+   * 整棵树都是顶层的值。子系统的 `colorn` 生效另要父的这一位（`applyColorn`）。
+   */
+  private colornGate = false;
   /** `instanceoverride.rate`，下限 0.01。 */
   private rate = 1;
   /** 下一次找空槽的起点：它之前没有空槽。 */
@@ -228,18 +377,31 @@ export class ParticleSystem {
   /** 出生时 `R` 的替换（dev 探针按出生顺序注入 WPE 的值，`random.ts` 的 `injectedR`）；缺省照常用抽到的值。 */
   private readonly rOverride: ParticleROverride | undefined;
 
-  constructor(def: SceneParticle, random: ParticleRandom, passes: 1 | 2, rOverride?: ParticleROverride) {
+  /**
+   * `link` 只给子系统（父系统构造时自己建，P4e 步骤 1）：父与条目。子系统的 `instanceoverride` 取父当时的值（即对象的，3.4：
+   * `FUN_14022f890` 用同一个对象的 `obj+0x778`），不看子系统定义里的 `instance`（编译期给的是缺省值）；`rOverride` 只给顶层。
+   */
+  constructor(
+    def: SceneParticle,
+    random: ParticleRandom,
+    passes: 1 | 2,
+    rOverride?: ParticleROverride,
+    link?: { parent: ParticleSystem; entry: SceneParticleChild },
+  ) {
     this.def = def;
     this.random = random;
     this.passes = passes;
     this.rOverride = rOverride;
+    this.parent = link?.parent ?? null;
+    this.entry = link?.entry ?? null;
+    this.depth = link ? link.parent.depth + 1 : 0;
     this.columns = new ParticleColumns(def.maxcount, particleColumnFlags(def));
     // WPE 在 rope 的段缓冲（`sys+0x208`）存在时才维护表（2.2、2.3），即 renderer 是 rope
     this.ropeOrder = def.renderer?.kind === "rope" ? new RopeOrder(this.columns.capacity) : null;
     // WPE 在 ropetrail 的 `sys+0x248`（segments）非零时分配历史（rea-p4d-rope.md 3.5），即 renderer 是 ropetrail
     const ropetrail = def.renderer?.ropetrail;
     this.trail = ropetrail ? new TrailHistory(this.columns.capacity, ropetrail.segments, ropetrail.scrolling) : null;
-    this.instance = instanceValues(def.instance);
+    this.instance = instanceValues(link ? link.parent.instance : def.instance);
     // 从基值乘，不累乘（C5）；颜色模块的字段乘完再按 `colorn` 平移（`applyColorn`）。`brightness` 不做（能力表按
     // `checkParticleInstance` 报）
     const multipliers = instanceMultipliers(this.instance, def.flags);
@@ -262,7 +424,14 @@ export class ParticleSystem {
     this.operators = resolve("operator", def.operators);
     this.applyScalars();
     this.applyColorn();
-    this.controlPoints = new ControlPointSet(def);
+    // 子系统（P4e 步骤 1）：控制点接上父系统；条目 `flags` bit0 时个数强制 8、`i ≥ (u8)startindex` 的点由父粒子写（1.5）
+    const writes = link && link.entry.flags & 1 ? link.entry.controlPointStartIndex & 0xff : undefined;
+    this.controlPoints = link
+      ? new ControlPointSet(def, writes !== undefined ? 8 : controlPointCount(def), {
+          parent: { points: link.parent.controlPoints, world: (link.parent.def.flags & 1) !== 0 },
+          parentWrites: writes,
+        })
+      : new ControlPointSet(def);
     this.context = {
       columns: this.columns,
       random,
@@ -281,6 +450,40 @@ export class ParticleSystem {
       layerTime: 0,
       origin: new Float32Array(3),
     };
+    // static 子系统（3.1，`FUN_14022ebe0`）：深度 < 10 才建，条目顺序；类型 0（不认识的）编译期已丢掉，事件类本步不建（能力表报）
+    if (this.depth < MAX_CHILD_DEPTH)
+      (def.children ?? []).forEach((entry, index) => {
+        if (entry.type !== "static") return;
+        this.statics.push({
+          index,
+          entry,
+          local: new Float32Array(entry.local),
+          system: new ParticleSystem(entry.system, random, passes, undefined, { parent: this, entry }),
+        });
+      });
+  }
+
+  /** 系统树里的一个节点（`node` 是每层 `def.children` 的下标，顶层 `[]`）；路径不是 static 子系统时为 null。 */
+  node(path: readonly number[]): ParticleSystem | null {
+    let current: ParticleSystem = this;
+    for (const index of path) {
+      const child = current.statics.find((item) => item.index === index);
+      if (!child) return null;
+      current = child.system;
+    }
+    return current;
+  }
+
+  /**
+   * 按绘制先序（rea-p4e-children 第 6 节：父 → static 子系统按条目顺序、深度优先；事件实例在 P4e 步骤 2 接在 static 之后）列出本系统
+   * 与全部子孙，`node` 是相对本系统的路径。渲染器、轨迹与回放共用。
+   */
+  forEachDrawn(
+    callback: (system: ParticleSystem, node: readonly number[]) => void,
+    node: readonly number[] = [],
+  ): void {
+    callback(this, node);
+    for (const child of this.statics) child.system.forEachDrawn(callback, [...node, child.index]);
   }
 
   /** 当前的 `instanceoverride` 标量与 `colorn`（一份拷贝）。 */
@@ -320,6 +523,9 @@ export class ParticleSystem {
     this.applyColorn();
     for (const emitter of this.emitters)
       if (emitter.state.ended && (emitter.fields.rate as number) > 0) emitter.state.ended = false;
+    // 递归到 static 子系统（P4e 步骤 1，3.4：`FUN_14022bd40` 传原 `p2`，所以已结束的发射器同样重开）：子系统按自己的 `flags` 重乘；
+    // `rate` 照样记下，但子系统步进用父的 `dt′`、不乘它（3.2）
+    for (const child of this.statics) child.system.setInstance(this.instance);
   }
 
   /**
@@ -330,7 +536,10 @@ export class ParticleSystem {
    *   相同，所以换两端即可（7.4）。
    */
   private applyColorn(): void {
-    const state = colornState(this.def, this.instance.colorn);
+    // 子系统另要父的生效位（3.4），生效位本身整棵树都是顶层的值（`colornGate`）
+    const parent = this.parent;
+    const state = colornState(this.def, this.instance.colorn, parent ? parent.colornGate : true);
+    this.colornGate = parent ? parent.colornGate : state.active;
     this.instanceColor = state.instanceColor;
     for (const module of this.initializers)
       if (module.name === "colorrandom")
@@ -365,24 +574,69 @@ export class ParticleSystem {
    * 系统时间不看可见性（P4d 收尾 A 实测 p4d-close 的 st-hide，两种 fps 都对上；rea-p4d-modules.md 5.3 原是【推】）：不可见的每一帧在
    * 复位（有存活粒子时）之后照常 `+= dt′`（`frameDt` 乘 `instanceoverride.rate`，同 `step`），所以重新可见后新粒子读到的 St 从隐藏的第一
    * 帧算起、含那一帧的 dt′；「不累加」与「先累加再复位」都超限。图层时间只在可见时累加，这里不动。其余照旧：不发射、不模拟（步骤 5
-   * 实测不可见期间不发射）。子系统的复位归 P4e。`inputs` 缺省（单位阵、(0, 0)）、`frameDt` 缺省 0 只给单测用。
+   * 实测不可见期间不发射）。`inputs` 缺省（单位阵、(0, 0)）、`frameDt` 缺省 0 只给单测用。
+   *
+   * 子系统（P4e 步骤 1，rea-p4e-children 3.6，`FUN_140230650` `0x14023068e`–`0x1402307b8`）：只在顶层有存活粒子时，复位（`resetTiming`，
+   * `FUN_14022f6c0` 递归 static 子孙）与清粒子（`clearTree`，`FUN_14022fd90`）都递归到 static 子孙；不清发射器结束位。之后整棵子树照常
+   * 以 `emit = false` 步进（`stepStatics`，WPE 的 `FUN_1402308a0(sys, dt′, 0)`），顶层存活数为 0 时不复位，子系统里还活着的粒子照常
+   * 模拟到死。顶层自己保持上面的现状（它这时没有存活粒子，模拟与否结果相同）。`time` 是这一帧的场景时间（子系统的噪声类模块用），
+   * 不给时用本系统收到的帧时间之和（同 `step`）。返回值仍只表示顶层清没清空；有子系统时子系统每帧都可能变，渲染器另看 `statics`。
    */
-  suspend(inputs: ControlPointInputs = IDENTITY_INPUTS, frameDt = 0): boolean {
+  suspend(inputs: ControlPointInputs = IDENTITY_INPUTS, frameDt = 0, time?: number): boolean {
     this.controlPoints.update(inputs);
     this.controlPoints.endFrame();
     const cleared = this.alive !== 0;
     if (cleared) {
-      for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
-      for (const module of this.initializers) if (module.state !== undefined) module.def.resetState?.(module.state);
-      this.systemTime = 0;
+      // 计时复位递归到 static 子孙（3.6 第 1 步），系统时间一起清零
+      this.resetTiming();
       this.layerTime = 0;
       this.context.layerTime = 0;
       this.clear();
+      // 3.6 第 3 步：static 子孙清粒子（事件实例的销毁在 P4e 步骤 2）
+      for (const child of this.statics) child.system.clearTree();
     }
     // 系统时间（`FUN_1402308a0` 开头 `sys+0x3f0 += dt′`，不可见时照样调）：复位之后累加本帧
-    this.systemTime = f32(this.systemTime + f32(f32(frameDt) * this.rate));
+    const dt = f32(f32(frameDt) * this.rate);
+    this.systemTime = f32(this.systemTime + dt);
     this.context.systemTime = this.systemTime;
+    if (this.statics.length)
+      this.stepStatics(
+        { dt, frameDt, time: f32(time ?? this.elapsed), layerTime: this.layerTime, object: inputs.world, emit: false },
+        inputs,
+      );
     return cleared;
+  }
+
+  /**
+   * 系统复位（`FUN_14022f6c0`，rea-p4e-children 3.6、3.7）：发射器计时从初值重抄（`resetEmitterTiming`，不清结束位）、有状态模块复位
+   * （`resetState`，mapsequence 序号归零）、系统时间清零，递归 static 子孙。不清粒子。
+   */
+  private resetTiming(): void {
+    for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
+    for (const module of this.initializers) if (module.state !== undefined) module.def.resetState?.(module.state);
+    this.systemTime = 0;
+    this.context.systemTime = 0;
+    for (const child of this.statics) child.system.resetTiming();
+  }
+
+  /** 清全部粒子，递归 static 子孙（`FUN_14022fd90`，3.6 第 3 步）。 */
+  private clearTree(): void {
+    this.clear();
+    for (const child of this.statics) child.system.clearTree();
+  }
+
+  /**
+   * 父的周期发射进入新周期时复位这个 static 子系统（条目 `flags` bit1，`FUN_14022f790`，3.7【确】，实测 `st-per2`）：系统复位
+   * （`resetTiming`，递归 static 子孙），再清全部发射器的结束位、重新打开（递归 static 子孙，`FUN_14022f5b0`）。不清粒子。
+   */
+  private restart(): void {
+    this.resetTiming();
+    this.reopen();
+  }
+
+  private reopen(): void {
+    for (const emitter of this.emitters) emitter.state.ended = false;
+    for (const child of this.statics) child.system.reopen();
   }
 
   /**
@@ -396,18 +650,48 @@ export class ParticleSystem {
    */
   step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
-    this.context.time = f32(time ?? this.elapsed);
     const dt = f32(f32(frameDt) * this.rate);
-    // P4d 步骤 4a：图层时间（`obj+0x770`，`0x140230810`）与系统时间（`sys+0x3f0`，`0x1402308c2`）都在模拟之前 `+= dt′`，float32
+    // P4d 步骤 4a：图层时间（`obj+0x770`，`0x140230810`）与系统时间（`sys+0x3f0`，`0x1402308c2`，`stepNode` 里）都在模拟之前 `+= dt′`，
+    // float32。图层时间是对象的，整棵树共用这一份（P4e 步骤 1）
     this.layerTime = f32(this.layerTime + dt);
-    this.systemTime = f32(this.systemTime + dt);
-    this.context.layerTime = this.layerTime;
-    this.context.systemTime = this.systemTime;
-    this.advance(dt, frameDt, this.passes, inputs);
+    this.stepNode(
+      { dt, frameDt, time: f32(time ?? this.elapsed), layerTime: this.layerTime, object: inputs.world, emit: true },
+      inputs,
+    );
+  }
+
+  /**
+   * 树里一个系统的一帧（`FUN_1402308a0`，rea-p4e-children 3.2）：系统时间 `+= dt′` → 模拟（`emit` 为假时不发射）→ 拖尾采样（写顶点的
+   * 位置）→ static 子系统（`stepStatics`）。`inputs.world` 是本系统的模拟矩阵 `M`（顶层是 `W`）。
+   */
+  private stepNode(frame: TreeFrame, inputs: ControlPointInputs): void {
+    const context = this.context;
+    context.time = frame.time;
+    this.systemTime = f32(this.systemTime + frame.dt);
+    context.layerTime = frame.layerTime;
+    context.systemTime = this.systemTime;
+    this.advance(frame.dt, frame.frameDt, this.passes, inputs, frame.emit, frame.object);
     // ropetrail 的历史采样（P4d 步骤 2）：WPE 的顶点函数先模拟、再在存活数非零时采样（`FUN_1402308a0`，rea-p4d-rope.md 1.1、5.2），
     // 用同一个 `dt'`；位置是本帧模拟后的
     const trail = this.trail;
-    if (trail) trail.sample(dt, this.def.renderer.ropetrail!.interval, this.columns, this.highWater, this.alive);
+    if (trail) trail.sample(frame.dt, this.def.renderer.ropetrail!.interval, this.columns, this.highWater, this.alive);
+    this.stepStatics(frame, inputs);
+  }
+
+  /**
+   * static 子系统的一帧（3.2，`0x140236380`–`0x140236445`），条目顺序：条目 `flags` bit0 时父的存活粒子写子系统控制点
+   * （`writeParentPoints`，压子系统矩阵之前，栈顶是本系统的 `M`），再以 `M · L` 递归步进（`FUN_140229810` 不看子系统的世界位，本地、
+   * 世界子系统都一样，3.3）。`Mprev`（控制点父分支）是本系统的 `M`。父存活数为 0 照样更新子系统。
+   */
+  private stepStatics(frame: TreeFrame, inputs: ControlPointInputs): void {
+    for (const child of this.statics) {
+      writeParentPoints(this, child.entry, child.system, inputs.world);
+      child.system.stepNode(frame, {
+        world: multiply(inputs.world, child.local),
+        pointer: inputs.pointer,
+        parent: inputs.world,
+      });
+    }
   }
 
   /**
@@ -420,14 +704,33 @@ export class ParticleSystem {
    * 控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）：加载时 `FUN_14022feb0` 先写好 `W`，压模型矩阵，`FUN_14022e3e0` 更新一次、全部
    * 控制点 `previous ← current`，再预热，预热的每一步照常更新、照常拷 `previous`。`starttime` 为 0 时也做前两步。
    * `inputs` 是加载时的 `W` 与加载时刻光标的跟随点（P4c 步骤 2；预热不走帧函数，指针不变）。
+   *
+   * 子系统（P4e 步骤 1，rea-p4e-children 3.1、3.5【确】，实测 `st-warmp` / `st-warmc` / `st-wwarm`）：本系统的控制点初始化与预热**之前**，
+   * 先深度优先把全部 static 子孙建好并预热完，各按**自己的** `starttime` 与步长；父的预热循环只模拟自己、不步进子系统。子系统预热的模型
+   * 矩阵（`FUN_140229760(child)`）：本地 `本系统 M · L`，**世界 `L`**（不含父 `W`，3.3「两处不一致」照复刻）；控制点父分支读到的是父的
+   * 初值（父还没更新，`current = base`），`Mprev` 是本系统预热的 `M`。
    */
   prewarm(inputs: ControlPointInputs = IDENTITY_INPUTS): void {
+    this.prewarmNode(inputs, inputs.world);
+  }
+
+  /** `prewarm` 的一层：`object` 是对象世界矩阵（remap 的 `layerorigin`，整棵树共用）。 */
+  private prewarmNode(inputs: ControlPointInputs, object: Mat4): void {
+    for (const child of this.statics)
+      child.system.prewarmNode(
+        {
+          world: child.system.def.flags & 1 ? child.local : multiply(inputs.world, child.local),
+          pointer: inputs.pointer,
+          parent: inputs.world,
+        },
+        object,
+      );
     this.controlPoints.update(inputs);
     this.controlPoints.endFrame();
     const step = prewarmStep(this.def.maxcount);
     const end = f32(this.def.starttime);
     this.context.time = 0;
-    for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs);
+    for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs, true, object);
     // ropetrail（P4d 步骤 2）：预热的步进不调顶点函数、不采样，结束后历史塌缩到当前位置（rea-p4d-rope.md 5.1，`0x14022f2fc`）
     this.trail?.afterPrewarm(this.columns, this.highWater);
   }
@@ -446,19 +749,30 @@ export class ParticleSystem {
     this.deaths = 0;
   }
 
-  private advance(dt: number, frameDt: number, passes: 1 | 2, inputs: ControlPointInputs): void {
+  /**
+   * 模拟一步（`FUN_140236cd0`）。`emit` 为假（对象不可见，子系统在 `suspend` 里步进，P4e 步骤 1）时不调发射，发射计时也不走；`object`
+   * 是对象世界矩阵（`layerorigin`），顶层就是 `inputs.world`。
+   */
+  private advance(
+    dt: number,
+    frameDt: number,
+    passes: 1 | 2,
+    inputs: ControlPointInputs,
+    emit = true,
+    object: Mat4 = inputs.world,
+  ): void {
     if (!(dt > 0)) return;
     this.ageAndKill(dt);
     this.sequenceFrames();
     // O1 第 5 步（`0x1402376fe`）：序列帧（`0x140237022`）之后、发射之前，两遍模式也只一次
     this.controlPoints.update(inputs);
     const context = this.context;
-    // 模拟时的模型矩阵 `M`（rea-p4c-sim.md 1.4，顶层系统就是 `W`）：取前三列的 xyz，同 `FUN_1400dd7d0`（P4c 步骤 4）
+    // 模拟时的模型矩阵 `M`（rea-p4c-sim.md 1.4，顶层系统就是 `W`，子系统是 `父 M · L`）：取前三列的 xyz，同 `FUN_1400dd7d0`（P4c 步骤 4）
     const w = inputs.world;
     context.model.set([w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]]);
-    // 对象原点 `W.t`（P4d 步骤 4a，remap 的 `layerorigin`：对象虚函数 +0x80 的第 3 列）
-    context.origin!.set([w[12], w[13], w[14]]);
-    this.emit(dt);
+    // 对象原点 `W.t`（P4d 步骤 4a，remap 的 `layerorigin`：对象虚函数 +0x80 的第 3 列，子系统读的也是对象的）
+    context.origin!.set([object[12], object[13], object[14]]);
+    if (emit) this.emit(dt);
     const { h, k } = operatorPass(dt, frameDt, passes);
     context.count = this.highWater;
     context.h = h;
@@ -524,6 +838,8 @@ export class ParticleSystem {
         emitter.state.periodStarted = false;
         for (const module of this.initializers)
           if (module.state !== undefined) module.def.newPeriod?.(module.state, module.fields);
+        // 同一处（`FUN_14022f790`，rea-p4e-children 3.7）：条目 `flags` bit1 的 static 子系统复位并重开，每个周期发射器的新周期各一次
+        for (const child of this.statics) if (child.entry.flags & 2) child.system.restart();
       }
       for (let n = 0; n < count; n++) this.spawn(emitter);
     }

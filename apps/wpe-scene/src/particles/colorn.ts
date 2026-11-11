@@ -8,7 +8,7 @@
  * - **实例颜色：** 系统标志 `0x200000`（场景 `version` < 5，或没有颜色模块）时，新粒子的颜色初值是 `colorn`，颜色模块再乘到它上面。
  *
  * 运行中改值时从基值重算（记录里保留基色与系统色的 HSV），不在上一次的结果上累加。`brightness`（HDR 时乘实例颜色）不做，
- * 由能力表照报；子系统（父系统不生效时子系统一律不生效）属 P4e。
+ * 由能力表照报；子系统另要父的生效位（`colornState` 的 `parentActive`，P4e 步骤 1）。
  *
  * 全部按 float32 逐步舍入（WPE 是 `divss` / `mulss` / `subss`），只有 `hsv2rgb` 里两次 `fmod` 是双精度（`cvtss2sd` 后调 CRT
  * `fmod`，再转回 float）。JS 的 `%` 和 C 的 `fmod` 一样按被除数的符号取余、结果精确。
@@ -126,16 +126,22 @@ export interface ColornState {
 /**
  * `FUN_14022bd40` + `FUN_1401d15a0` 开头（7.3）：从系统色（`def.colorSystem`，加载期从颜色模块推出、已 `%.5f` 往返）与当前
  * `colorn` 算一次。`colorn` 为 null 等同 WPE 的 `−1 −1 −1`（未设）。每次改值都整个重算，不保留上一次的结果。
+ * `parentActive`：子系统（P4e 步骤 1，rea-p4e-children 3.4）另要父的生效位（`+0x3f7` bit1）为真；顶层不给（真）。
  */
 export function colornState(
   def: Pick<SceneParticle, "colorSystem" | "flags">,
   colorn: readonly number[] | null,
+  parentActive = true,
 ): ColornState {
   const system = def.colorSystem.rgb;
   const value = colorn ? ([f32(colorn[0]), f32(colorn[1]), f32(colorn[2])] as const) : null;
   const near = (i: number) => f32(Math.abs(f32(system[i] - value![i]))) < COLORN_NEAR;
   const active =
-    value !== null && !(value[0] < 0) && !(near(0) && near(1) && near(2)) && (def.flags & DISABLE_COLORN) === 0;
+    parentActive &&
+    value !== null &&
+    !(value[0] < 0) &&
+    !(near(0) && near(1) && near(2)) &&
+    (def.flags & DISABLE_COLORN) === 0;
   const unchanged = (color: readonly number[]) => [f32(color[0]), f32(color[1]), f32(color[2])];
   if (!active) return { active, instanceColor: [1, 1, 1], shift: unchanged };
   const target = rgb2hsv(value);

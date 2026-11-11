@@ -118,6 +118,14 @@ describe("模块表", () => {
 
 describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
   const BLEND = { blendinstart: 0, blendinend: 0, blendoutstart: 1, blendoutend: 1 };
+  /** 音频的五个键（P4e 步骤 1 登记进读它的模块，rea-p4e-audio.md 第 2 节的缺省值）。 */
+  const AUDIO = {
+    audioprocessingmode: 0,
+    audioprocessingexponent: 2,
+    audioprocessingbounds: "0.8 1.0",
+    audioprocessingfrequencystart: 0,
+    audioprocessingfrequencyend: 1,
+  };
   const ortho: [ParticleCategory, string, Record<string, unknown>][] = [
     [
       "emitter",
@@ -142,6 +150,7 @@ describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
         minperiodicdelay: 1,
         maxperiodicdelay: 2,
         maxtoemitperperiod: 0,
+        ...AUDIO,
       },
     ],
     ["initializer", "lifetimerandom", { min: 0, max: 1, exponent: 1 }],
@@ -195,6 +204,7 @@ describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
         minperiodicdelay: 1,
         maxperiodicdelay: 2,
         maxtoemitperperiod: 0,
+        ...AUDIO,
       },
     ],
     ["initializer", "alpharandom", { min: 0.05, max: 1, exponent: 1 }],
@@ -218,6 +228,7 @@ describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
         speedouter: 0,
         flags: 0,
         controlpoint: 0,
+        ...AUDIO,
       },
     ],
     ["operator", "capvelocity", { maxspeed: 100, ...BLEND }],
@@ -558,7 +569,7 @@ describe("解析：控制点数组（P4c 步骤 1，rea-p4c-sim.md 1.2）", () =
     expect(controlPointOffset("1   2  3")).toEqual([1, 2, 3]);
   });
 
-  it("flags：数字取整后按无符号 32 位，布尔 1 / 0，其余 0；angles、parentcontrolpoint、locktopointer、id 不读", () => {
+  it("flags：数字取整后按无符号 32 位，布尔 1 / 0，其余 0；angles、locktopointer、id 不读；parentcontrolpoint 写了才带（P4e 步骤 1）", () => {
     const flags = (value: unknown) => readControlPoints({ controlpoint: [{ flags: value as never }] })[0].flags;
     expect(flags(2)).toBe(2);
     expect(flags(1.9)).toBe(1);
@@ -569,9 +580,16 @@ describe("解析：控制点数组（P4c 步骤 1，rea-p4c-sim.md 1.2）", () =
     expect(flags(null)).toBe(0);
     expect(
       readControlPoints({
-        controlpoint: [{ id: 3, angles: "0 0 1.5708", parentcontrolpoint: 2, locktopointer: true, foo: 1 }],
+        controlpoint: [{ id: 3, angles: "0 0 1.5708", locktopointer: true, foo: 1 }],
       })[0],
     ).toEqual({ flags: 0, offset: [0, 0, 0] });
+    // `parentcontrolpoint`（rea-p4c-sim.md 1.2）：`asInt`、存 u32（负数当很大的无符号数），null 当缺键
+    const parent = (value: unknown) =>
+      readControlPoints({ controlpoint: [{ parentcontrolpoint: value as never }] })[0].parent;
+    expect(parent(2)).toBe(2);
+    expect(parent(-1)).toBe(0xffffffff);
+    expect(parent(null)).toBeUndefined();
+    expect(parent(undefined)).toBeUndefined();
   });
 
   it("parseParticle 填 controlpoints", () => {
@@ -754,14 +772,15 @@ describe("能力表：粒子", () => {
     ).toEqual([]);
   });
 
-  it("表内模块的未知字段：particle:<类别>:<名字>:<字段>（含 audioprocessing*、不带 blend 的模块写 blend）", () => {
+  it("表内模块的未知字段：particle:<类别>:<名字>:<字段>（不带 blend 的模块写 blend、不读音频的模块写 audioprocessing*）", () => {
+    // 音频的五个键只在读它的六个模块里登记（P4e 步骤 1）：mode 非 0 只报 mode，其余键形状对就不报
     expect(
       particleKeys(
         withModule("emitter", { name: "sphererandom", audioprocessingmode: 3, audioprocessingbounds: "0 1" }),
       ),
-    ).toEqual([
-      "particle:emitter:sphererandom:audioprocessingbounds",
-      "particle:emitter:sphererandom:audioprocessingmode",
+    ).toEqual(["particle:emitter:sphererandom:audioprocessingmode"]);
+    expect(particleKeys(withModule("operator", { name: "movement", audioprocessingmode: 0 }))).toEqual([
+      "particle:operator:movement:audioprocessingmode",
     ]);
     expect(particleKeys(withModule("operator", { name: "movement", blendinstart: 0.2 }))).toEqual([
       "particle:operator:movement:blendinstart",
@@ -834,15 +853,46 @@ describe("能力表：粒子", () => {
     ]);
   });
 
-  it("vortex：flags 只认 bit0，controlpoint 任意值都支持（P4c 步骤 1），audioprocessing* 照报（P4e）", () => {
+  it("vortex：flags 只认 bit0，controlpoint 任意值都支持（P4c 步骤 1），audioprocessingmode 非 0 照报（P4e 步骤 4）", () => {
     const vortex = (fields: JsonObject) => particleKeys(withModule("operator", { name: "vortex", ...fields }));
     expect(vortex({ flags: 1, offset: "100 0 0", axis: "0 1 0", controlpoint: 0 })).toEqual([]);
     expect(vortex({ flags: 2 })).toEqual(["particle:operator:vortex:flags"]);
     expect(vortex({ controlpoint: 2 })).toEqual([]);
     expect(vortex({ audioprocessingmode: 1, audioprocessingbounds: "0 1" })).toEqual([
-      "particle:operator:vortex:audioprocessingbounds",
       "particle:operator:vortex:audioprocessingmode",
     ]);
+  });
+
+  it("mode 0 的音频字段中性（P4e 步骤 1）：读音频的六个模块都登记了五个键，mode 非 0 只报 mode", () => {
+    const audio = {
+      audioprocessingmode: 0,
+      audioprocessingexponent: 1.5,
+      audioprocessingbounds: "0.5 1",
+      audioprocessingfrequencystart: 2,
+      audioprocessingfrequencyend: 16,
+    };
+    const modules: [ParticleCategory, string][] = [
+      ["emitter", "sphererandom"],
+      ["emitter", "boxrandom"],
+      ["initializer", "turbulentvelocityrandom"],
+      ["operator", "turbulence"],
+      ["operator", "vortex"],
+      ["operator", "vortex_v2"],
+    ];
+    for (const [category, name] of modules) {
+      expect(particleKeys(withModule(category, { name, ...audio })), name).toEqual([]);
+      expect(particleKeys(withModule(category, { name, ...audio, audioprocessingmode: 3 })), name).toEqual([
+        `particle:${category}:${name}:audioprocessingmode`,
+      ]);
+      // 缺省值（rea-p4e-audio.md 第 2 节）
+      expect(defaults(category, name, true), name).toMatchObject({
+        audioprocessingmode: 0,
+        audioprocessingexponent: 2,
+        audioprocessingbounds: "0.8 1.0",
+        audioprocessingfrequencystart: 0,
+        audioprocessingfrequencyend: 1,
+      });
+    }
   });
 
   it("步骤 3 的其余模块：blend 只在 oscillatesize、capvelocity 上有；colorchange 的颜色只接受字符串", () => {
@@ -895,11 +945,35 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ flags: 256 + 1024 + 5 })).toEqual(["particle:flags:1024", "particle:flags:256"]);
   });
 
-  it("children 非空报 particle:children；null、[] 不报", () => {
+  it("children（P4e 步骤 1）：static 不报，事件类报 particle:children:<type>，不认识的类型中性；条目形状问题", () => {
     expect(particleKeys({ children: null })).toEqual([]);
     expect(particleKeys({ children: [] })).toEqual([]);
-    expect(particleKeys({ children: [{ name: "particles/c.json", type: "eventfollow" }] })).toEqual([
-      "particle:children",
+    expect(particleKeys({ children: { name: "particles/c.json" } })).toEqual([]);
+    expect(
+      particleKeys({
+        children: [
+          { name: "particles/c.json" },
+          { name: "particles/c.json", type: "static", origin: "60 0 0", angles: "0 0 -50", scale: "2" },
+          // 大小写不同的类型整条忽略（实测 st-type）
+          { name: "particles/c.json", type: "Static" },
+          { name: "particles/c.json", type: "Eventfollow" },
+        ],
+      }),
+    ).toEqual([]);
+    for (const type of ["eventfollow", "eventspawn", "eventdeath"])
+      expect(particleKeys({ children: [{ name: "particles/c.json", type }] }), type).toEqual([
+        `particle:children:${type}`,
+      ]);
+    expect(particleKeys({ children: [{ type: "static" }, 5, { name: "" }] })).toEqual(["particle:child:name"]);
+    expect(particleKeys({ children: [{ name: "c.json", origin: 5, scale: { user: "s", value: "1 1 1" } }] })).toEqual([
+      "particle:binding:child:scale",
+      "particle:child:origin",
+      "particle:child:scale",
+    ]);
+    // 负的 controlpointstartindex 只在条目 flags bit0 时报（WPE 从负下标写，越界）
+    expect(particleKeys({ children: [{ name: "c.json", controlpointstartindex: -1 }] })).toEqual([]);
+    expect(particleKeys({ children: [{ name: "c.json", flags: 1, controlpointstartindex: -1 }] })).toEqual([
+      "particle:child:controlpointstartindex",
     ]);
   });
 

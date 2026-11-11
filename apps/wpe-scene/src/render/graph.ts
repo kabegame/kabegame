@@ -24,9 +24,11 @@
  *   屏幕上的位置去采快照；false 不画基础材质，合成 RT 0 清成 (0, 0, 0, 0)（`clear` 步骤）。两种都占合成链的第一次写入。合成 RT 按
  *   图层 size、上屏（末 pass、passthrough）不内缩。快照照上面的规则：composelayer 材质的槽 0 是 `_rt_FullFrameBuffer`，规则 1 在图层
  *   开始时拷（`copyBackground` 为 false 时同样拷，同 WPE 的拷贝时机，只是没人读）。
- * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：一个 `particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序。
+ * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：`particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序；有子系统时
+ *   按系统树先序展开成若干次（P4e 步骤 1）。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
+import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";
 
 export type TextureRef =
@@ -81,6 +83,13 @@ export interface ParticleStep {
   blending: string;
   /** 系统 `flags & 4`：换透视粒子的视图投影（`layout.ts` 的 `particleViewProjection`）。 */
   perspective: boolean;
+  /**
+   * 这次绘制的系统在树里的路径（P4e 步骤 1）：顶层 `[]`，static 子系统 `[n]`、`[n, m]`…，每层是 `SceneParticle.children` 的下标。
+   * 渲染器只为 `[]` 建模拟器（整棵树），子系统的绘制取树里对应的节点（`ParticleSystem.node`）。
+   */
+  node: number[];
+  /** 这个系统 `flags & 1`（世界空间）：绘制的模型矩阵是单位阵（`particles/system.ts` 的 `particleDrawModel`）。 */
+  world: boolean;
 }
 export type LayerStep =
   | DrawStep
@@ -165,31 +174,55 @@ export function isPassthroughBlend(colorBlendMode: number): boolean {
  *   passthrough、其它粒子层）都在本层内自己重拷，泛光也在全部图层之后再拷一次，没有哪一步读到的是这次多拷的内容。
  * - WPE 的场景目标开了 MSAA，快照是 `ResolveSubresource`，我们是 `copyTextureToTexture`；轴对齐、落在整像素上的四边形
  *   两者相同，差异只可能在边缘。逐像素比较见 P4b 计划步骤 5 的验收。
- * 父子系统共用「本对象已拷」位的规则不用管：子系统由能力表报 `particle:children`。
+ *
+ * 子系统（P4e 步骤 1，rea-p4e-children 第 6 节，`FUN_1402366f0` 的先序递归）：一个粒子层按系统树的先序展开成若干次绘制——父自己 →
+ * static 子系统（条目顺序、深度优先）；事件实例在 P4e 步骤 2 接在 static 之后。每次绘制用自己系统的 pass、混合、透视位，`node` 是它在
+ * 树里的路径。
+ * - 基础材质为空（没有 pass）的系统整棵子树都不画（`sys+0x358 == 0` 直接返回）。
+ * - `renderer: []`（`renderers` 为空）的系统自己不画，照常递归子系统（语料里只靠子系统出图的发射器）；它的材质要帧缓冲时快照照拷
+ *   （WPE 在存活数 > 0 时、逐 renderer 画之前拷）。
+ * - 快照（折射位在对象上，父子共用）：先序里第一个需要帧缓冲的系统之前拷一次，同一个粒子层只拷一次。WPE 在存活数为 0 时不拷、由下一个
+ *   需要的系统拷，两者之间这层没画任何东西（存活数 0 的系统不画），读到的内容相同。
  */
 export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPlan {
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const particle = layer.particle;
-  const pass = particle?.passes[0];
-  if (!particle || !pass) return { composite: null, steps, reasons };
-  // 编译期已报 `particle:material:passes`；渲染器只画第一个
-  if (particle.passes.length > 1) reasons.push("render:multi-pass");
-  const inputs: Record<number, TextureRef> = {};
-  for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
-  for (const [slot, name] of Object.entries(pass.runtime)) {
-    if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
-    else reasons.push(`render:texture-rt:${name}`);
-  }
-  if (pass.framebuffer) steps.push({ kind: "snapshot" });
-  steps.push({
-    kind: "particles",
-    pass,
-    target: { kind: "scene" },
-    inputs,
-    blending: pass.blending,
-    perspective: (particle.flags & 4) !== 0,
-  });
+  if (!particle) return { composite: null, steps, reasons };
+  let snapped = false;
+  const visit = (system: SceneParticle, node: number[]): void => {
+    const pass = system.passes[0];
+    if (!pass) return;
+    // 编译期已报 `particle:material:passes`；渲染器只画第一个
+    if (system.passes.length > 1) reasons.push("render:multi-pass");
+    const inputs: Record<number, TextureRef> = {};
+    for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+    for (const [slot, name] of Object.entries(pass.runtime)) {
+      if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+      else reasons.push(`render:texture-rt:${name}`);
+    }
+    if (pass.framebuffer && !snapped) {
+      snapped = true;
+      steps.push({ kind: "snapshot" });
+    }
+    if (system.renderers.length)
+      steps.push({
+        kind: "particles",
+        pass,
+        target: { kind: "scene" },
+        inputs,
+        blending: pass.blending,
+        perspective: (system.flags & 4) !== 0,
+        node,
+        world: (system.flags & 1) !== 0,
+      });
+    // 深度上限同模拟器（`MAX_CHILD_DEPTH`，编译期已按它截断；这里防手写的环）
+    if (node.length < MAX_CHILD_DEPTH)
+      system.children.forEach((child, index) => {
+        if (child.type === "static") visit(child.system, [...node, index]);
+      });
+  };
+  visit(particle, []);
   return { composite: null, steps, reasons };
 }
 

@@ -10,7 +10,8 @@
  * 依据：`.claude/plans/wpe-import/3-scene/phase4/rea-p4a.md` B 节、`rea-p4b-modules.md` A、B 节（WPE 2.8.42 读码【确】），
  * 列与标志见 `p4-particles-REPORT.md`「对 P4a 底座的要求」。公式不在这里重抄，见各执行函数。
  *
- * 不在表里的字段一律按未知报：包括 `audioprocessing*`（属 P4e；`boxrandom`、`vortex` 等模块带这组键，`rea-p4b-modules.md` D）。
+ * 不在表里的字段一律按未知报。`audioprocessing*`（`rea-p4b-modules.md` D）在读它的六个模块里登记（`AUDIO_FIELDS`，P4e 步骤 1）：
+ * `mode` 为 0 时中性，非 0 报 `…:audioprocessingmode`（P4e 步骤 4）。
  */
 import { isKeyframedValue, isScriptValue, isUserBinding } from "../compile/bindings";
 import type { ParticleColumns } from "./columns";
@@ -353,6 +354,20 @@ const EMITTER_FIELDS: Record<string, ParticleFieldDef> = {
   maxtoemitperperiod: { ...by("count", num(0)), truncate: true },
 };
 
+/**
+ * 音频的五个键（`FUN_1401c1e20`，rea-p4b-modules.md D、rea-p4e-audio.md 第 2 节【确】），读它的六个模块共用同一个解析函数、同一套
+ * 缺省：`sphererandom`、`boxrandom`（乘 `rate`）、`turbulentvelocityrandom`（乘相位范围）、`turbulence`、`vortex`、`vortex_v2`（乘速度）。
+ * `mode ≠ 0` 时才乘系数，这里不做、照报（P4e 步骤 4）；`mode` 为 0 时其余四个键没有读者，中性（P4e 步骤 1 放开，语料 `3233141951`
+ * 等写了字段、`mode` 为 0）。
+ */
+const AUDIO_FIELDS: Record<string, ParticleFieldDef> = {
+  audioprocessingmode: int(0, (value) => value === 0),
+  audioprocessingexponent: num(2),
+  audioprocessingbounds: { type: "string", default: "0.8 1.0" },
+  audioprocessingfrequencystart: num(0),
+  audioprocessingfrequencyend: num(1),
+};
+
 /** 解析期的周期字段修正（A0）：`min = min(min, max)`，时长、间歇各一对。 */
 function normalizeEmitter(fields: Record<string, ParticleFieldValue>): void {
   for (const kind of ["duration", "delay"]) {
@@ -540,6 +555,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       controlpoint: CONTROL_POINT_FIELD,
       cone: num(0),
       ...EMITTER_FIELDS,
+      ...AUDIO_FIELDS,
     },
     columns: ["position", "velocity"],
     columnFlags: 0,
@@ -566,6 +582,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       // 读这个控制点的平移与 3×3（P4c 步骤 1，`emitters.ts`）；解析期钳到 0–7
       controlpoint: CONTROL_POINT_FIELD,
       ...EMITTER_FIELDS,
+      ...AUDIO_FIELDS,
     },
     columns: ["position", "velocity"],
     columnFlags: 0,
@@ -659,7 +676,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   },
   {
     // `rea-p4b-modules.md` B2（initializer 9，缺省值 `FUN_1401bb030`，执行 `0x14023bdbc`）：方向由出生时刻的一维噪声决定，
-    // 速度**加**上去。`audioprocessing*`（乘相位范围，D）属 P4e，表外照报
+    // 速度**加**上去。`audioprocessing*`（乘相位范围，D）见 `AUDIO_FIELDS`
     category: "initializer",
     name: "turbulentvelocityrandom",
     fields: {
@@ -679,6 +696,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       // WPE 不读 `up`（解析段 `0x1401c8748` 起只读 scale、timescale、offset、phasemin/max、speedmin/max、forward、right），
       // 中性：登记成不参与计算的字段，免得按表外字段报（语料 2 张写了 "0.2 0.2 0"）
       up: vec3("0 0 0", "vec3str"),
+      ...AUDIO_FIELDS,
     },
     columns: ["velocity"],
     columnFlags: 0,
@@ -916,6 +934,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       flags: int(0, (value) => (Number(value) & ~1) === 0),
       // 中心取这个控制点的平移（P4c 步骤 1，不用 3×3）；解析期钳到 0–7
       controlpoint: CONTROL_POINT_FIELD,
+      ...AUDIO_FIELDS,
     },
     columns: ["position", "velocity"],
     columnFlags: 0,
@@ -1039,13 +1058,8 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       // 取无符号整数后只存低 8 位（`movzx eax, r14b`，`normalize`）：bit0 柱形，bit1 `centerforce`，bit2 环形；其余位没有读者
       flags: int(0),
       controlpoint: CONTROL_POINT_FIELD,
-      // 音频（`FUN_1401c1e20`，rea-p4b-modules.md D，属 P4e）：`mode ≠ 0` 时乘两个速度，这里不做、照报；`mode` 为 0 时其余四个键
-      // 没有读者，中性
-      audioprocessingmode: int(0, (value) => value === 0),
-      audioprocessingexponent: num(2),
-      audioprocessingbounds: { type: "string", default: "0.8 1.0" },
-      audioprocessingfrequencystart: num(0),
-      audioprocessingfrequencyend: num(1),
+      // 音频（`AUDIO_FIELDS`）：`mode ≠ 0` 时乘两个速度，这里不做、照报
+      ...AUDIO_FIELDS,
       ...BLEND,
     },
     columns: ["age", "life", "position", "velocity"],
@@ -1058,7 +1072,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   },
   {
     // `rea-p4b-modules.md` B6（operator 14，blend 0x24，缺省值 `FUN_1401beb80`，执行 `0x14024295a` / `0x140242d6e`）：乘 `k`；
-    // 三维噪声场。`audioprocessing*`（乘速度，D）属 P4e，表外照报
+    // 三维噪声场。`audioprocessing*`（乘速度，D）见 `AUDIO_FIELDS`
     category: "operator",
     name: "turbulence",
     fields: {
@@ -1073,6 +1087,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       phasemax: num(0),
       // 乘 `rate`（条目类型 2，无条件登记）
       timescale: by("rate", num({ orthographic: 20, perspective: 1 })),
+      ...AUDIO_FIELDS,
       ...BLEND,
     },
     columns: ["age", "life", "random", "position", "velocity"],

@@ -13,7 +13,7 @@ import {
 } from "../compile/bundle";
 import { isEngineUniform, PARTICLE_UNIFORMS } from "../compile/features";
 import type { JsonObject } from "../compile/model";
-import { parseParticle, particleFov } from "../compile/particles";
+import { childLocalMatrix, parseParticle, particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { replayParticleOptions, replayParticles } from "../dev/particleCorners";
 import { pointerScenePoint } from "../particles/controlpoints";
@@ -1968,5 +1968,109 @@ describe("GpuScene：粒子生命周期（P4a 步骤 5）", () => {
     const many = Array.from({ length: 100 }, (_, i) => i + 1);
     expect(timingStats(many)).toEqual({ mean: 50.5, p95: 96, max: 100 });
     expect(timingStats([1 / 3])).toEqual({ mean: 0.33, p95: 0.33, max: 0.33 });
+  });
+});
+
+describe("GpuScene：static 子系统（P4e 步骤 1，rea-p4e-children 第 6 节）", () => {
+  /** 粒子层 1（对象原点 (10, 0)）挂一个 static 子系统：条目 `origin "200 0 0"`，`childJson` 覆盖子系统的键。 */
+  function treeLayer(childJson: JsonObject = {}): SceneLayer {
+    const layer = particleLayer(1, {}, { origin: [10, 0, 0] });
+    const child = parseParticle(
+      {
+        maxcount: 8,
+        emitter: [{ name: "sphererandom", distancemax: 0, rate: 10 }],
+        initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+        ...childJson,
+      },
+      { file: "particles/c.json", orthographic: true },
+    );
+    child.passes = [pass("objects/1/particle/children/0/passes/0", P.particle, { textures: { 0: 1 } })];
+    layer.particle!.children.push({
+      index: 0,
+      type: "static",
+      flags: 0,
+      controlPointStartIndex: 0,
+      probability: 1,
+      maxcount: 10,
+      local: childLocalMatrix([200, 0, 0], [0, 0, 0], [1, 1, 1]),
+      system: child,
+    });
+    return layer;
+  }
+  const treeDraws = (scene: GpuScene) =>
+    [...internals(scene).draws].filter((draw) => draw.object === 1 && draw.particles) as (DrawView & {
+      step: { node: number[] };
+    })[];
+
+  it("一个粒子层按先序画两次：各自的顶点缓冲、标签带路径；子系统取根系统树里的节点；只步进根，两次绘制都重写", async () => {
+    const { gpu, state, scene } = await open(bundleOf([treeLayer()]));
+    const [root, child] = treeDraws(scene);
+    expect([root.label, child.label]).toEqual(["layer 2 particles 1 particles", "layer 2 particles 1 particles 0"]);
+    expect(child.step.node).toEqual([0]);
+    expect(child.particles!.system).toBe(root.particles!.system.statics[0].system);
+    // 子系统的顶点缓冲按它自己的 maxcount
+    expect(gpu.buffer("layer 2 particles 1 particles 0").size).toBe(8 * 4 * 52);
+    stepFrame(scene, frame(0.5), state);
+    expect(draws(gpu.encode(scene, state))).toEqual([
+      "vertex layer 2 particles 1 particles",
+      "index particle indices uint16",
+      "drawIndexed 30",
+      "vertex layer 2 particles 1 particles 0",
+      "index particle indices uint16",
+      "drawIndexed 30",
+    ]);
+    // 子系统的 MVP = 视图投影 · W · L
+    expect(floats(child.uniformBuffer, 0, 16)).toEqual(
+      Array.from(multiply(sceneViewProjection(GENERAL_1080), translation(210, 0, 0))),
+    );
+    expect(floats(root.uniformBuffer, 0, 16)).toEqual(
+      Array.from(multiply(sceneViewProjection(GENERAL_1080), translation(10, 0, 0))),
+    );
+    expect(scene.particleStats().map((stats) => [stats.node, stats.alive])).toEqual([
+      [undefined, 5],
+      [[0], 5],
+    ]);
+    expect(scene.particleProbe(1, [0])?.system).toBe(child.particles!.system);
+    // 世界子系统：模型矩阵是单位阵
+    const world = await open(bundleOf([treeLayer({ flags: 1 })]));
+    expect(floats(treeDraws(world.scene)[1].uniformBuffer, 0, 16)).toEqual(
+      Array.from(sceneViewProjection(GENERAL_1080)),
+    );
+  });
+
+  it("不可见：顶层有存活粒子时子系统一起清空，之后不发射；两次绘制都写成 0 个、不画", async () => {
+    const { gpu, state, scene } = await open(bundleOf([treeLayer()]));
+    stepFrame(scene, frame(0.5), state);
+    gpu.encode(scene, state);
+    state.write({ property: "v", target: { kind: "layer", object: 1, field: "visible" } }, false);
+    scene.sync(state);
+    stepFrame(scene, frame(0.5), state);
+    const [root, child] = treeDraws(scene);
+    expect([root.particles!.system.alive, child.particles!.system.alive]).toEqual([0, 0]);
+    state.write({ property: "v", target: { kind: "layer", object: 1, field: "visible" } }, true);
+    scene.sync(state);
+    expect(draws(gpu.encode(scene, state))).toEqual([]);
+  });
+
+  it("instanceoverride 改值只交给根，由它递归到子系统（count 2 → 子系统每秒 20 个）", async () => {
+    const { state, scene } = await open(bundleOf([treeLayer({ maxcount: 32 })]));
+    state.write({ property: "c", target: { kind: "particle-instance", object: 1, field: "count" } }, 2);
+    scene.sync(state);
+    stepFrame(scene, frame(0.5), state);
+    const [root, child] = treeDraws(scene);
+    expect([root.particles!.system.alive, child.particles!.system.alive]).toEqual([10, 10]);
+  });
+
+  it("uploadableTextures 与 SceneState 的材质常量含子系统的 pass", () => {
+    const layer = treeLayer();
+    layer.particle!.children[0].system.passes[0] = pass("objects/1/particle/children/0/passes/0", P.particle, {
+      textures: { 0: 0 },
+      uniforms: { g_Overbright: [3] },
+    });
+    const bundle = bundleOf([layer]);
+    expect([...uploadableTextures(bundle)].sort()).toEqual([0, 1]);
+    expect(SceneState.fromBundle(bundle).constants.get("objects/1/particle/children/0/passes/0")).toEqual({
+      g_Overbright: [3],
+    });
   });
 });

@@ -26,8 +26,10 @@ import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
   PARTICLE_SYSTEM_KEYS,
+  parseParticleChildEntry,
   particleModuleEntries,
   readParticleSystem,
+  type ParticleChildIssue,
   type ParticleInstance,
 } from "./particles";
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
@@ -520,7 +522,8 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
  *   `colorn` 的 `{user}` 都不报（就地更新）。没有 bit3 时下面两种 WPE 的处理没读到（语料 0 处），照报：
  *   - `color` 绑了用户属性：`particle:instance:color:user`（属性值怎么 ÷255 没读到）；
  *   - `colorn` 的 `{user: {name, condition}}`：`particle:instance:colorn:condition`（布尔值怎么转颜色没读到）。
- *   `brightness`（HDR 时乘实例颜色）见上条；子系统不生效的传递属 P4e（`particle:children` 照报）。
+ *   `brightness`（HDR 时乘实例颜色）见上条。子系统（P4e 步骤 1）用同一个对象的值，`compileScene` 按子系统自己的 `flags` 再调一次
+ *   （`colorn` 另要父生效，`particles/colorn.ts` 的 `parentActive`）。
  * - `controlpoint0..7`、`controlpointangle0..7`（P4c 步骤 1，`particles/controlpoints.ts`）：静态值已实现，不报（下标 ≥ 控制点
  *   个数、或点上带 `flags` 1 / 4 时 WPE 不用它，同样中性）；绑了用户属性报 `particle:instance:controlpoint:user`（运行时改值
  *   没做，语料 0 处）。
@@ -738,6 +741,35 @@ export function checkParticleProgram(
 }
 
 /**
+ * `children` 的条目（P4e 步骤 1，rea-p4e-children 第 1 节，`parseParticleChildEntry`）。只在是数组时读（`0x1401d0899`），值为 null 的
+ * 键当缺键，不认识的键（含 `id`）没有读者、中性：
+ * - 不是对象，或 `name` 不是非空字符串：`particle:child:name`（WPE 读到空文件名，加载失败，这棵子树不画）；
+ * - 不认识的 `type`（含大小写不同的 `"Static"`）：中性，WPE 整条忽略（编号 0，实测 `st-type`）；
+ * - 事件类：`particle:children:<type>`（eventfollow 步骤 2、eventspawn / eventdeath 步骤 3）；
+ * - 条目键写成 `{user}` / `{script}`：`particle:binding:child:<键>`（WPE 按 `asString` / `asInt` 读，对象会抛异常）；
+ * - `origin` / `angles` / `scale` 不是字符串：`particle:child:<键>`（WPE 把数值当指针读，语料都是字符串）；
+ * - `flags` bit0 且 `controlpointstartindex` 为负：`particle:child:controlpointstartindex`（WPE 从负下标写控制点，越界，第 5 节【推】）。
+ * 子系统文件读不到、解析失败由 `compileScene` 报（`particle:missing:<name>`、`particle:parse:<name>`）。
+ */
+export function checkParticleChildren(children: unknown, unsupported: Set<string>): void {
+  if (!Array.isArray(children)) return;
+  for (const raw of children) {
+    const issues: ParticleChildIssue[] = [];
+    const entry = parseParticleChildEntry(raw, issues);
+    for (const issue of issues)
+      unsupported.add(
+        issue.kind === "binding" ? `particle:binding:child:${issue.field}` : `particle:child:${issue.field}`,
+      );
+    if (!entry) {
+      unsupported.add("particle:child:name");
+      continue;
+    }
+    if (entry.type !== null && entry.type !== "static") unsupported.add(`particle:children:${entry.type}`);
+    if (entry.flags & 1 && entry.controlPointStartIndex < 0) unsupported.add("particle:child:controlpointstartindex");
+  }
+}
+
+/**
  * 粒子 JSON 的能力检查，规则从模块表（`particles/modules.ts`）生成。依据见各条注释，系统级键见 `particles.ts`。
  * - 表外模块：`particle:<类别>:<名字>`；表内模块的未知字段、形状不对或本节不支持的取值：`particle:<类别>:<名字>:<字段>`；
  *   写成 `{user}` / `{script}`：`particle:binding:<类别>:<名字>:<字段>`。
@@ -747,10 +779,12 @@ export function checkParticleProgram(
  *   bit1 唯一的读取点是关混帧
  *   （rea-p4b-render.md 2.3【确，有界】，P4b 步骤 2）。更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，
  *   `0x1401c56e9`，高位其实被丢掉；没有样本，保守报）。
- * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。
- * - 控制点：全部支持或中性（P4c 步骤 1、2，`particles/controlpoints.ts`：`offset`、`flags` bit0 指针、bit1 已实现，bit2 在顶层
- *   系统上只让实例覆盖不生效；`angles`、`locktopointer`、bit3、bit4 没有读者，理由见 `SceneControlPoint`），父控制点归 P4e
- *   （只对子系统有意义，随 `particle:children` 报）。关键帧照下面整段 `scanValue`。
+ * - `children`（P4e 步骤 1，`checkParticleChildren`；WPE 只读数组，`0x1401d0899`）：`static` 条目已实现，子系统 JSON 由
+ *   `compileScene` 读出后照顶层同样检查；事件类条目报 `particle:children:<type>`（步骤 2、3 实现一种删一种）。`options.children`
+ *   为 false 时不看（深度已到 `MAX_CHILD_DEPTH` 的系统，WPE 不读它的 `children`）。
+ * - 控制点：全部支持或中性（P4c 步骤 1、2，`particles/controlpoints.ts`：`offset`、`flags` bit0 指针、bit1 已实现，bit2 父控制点、
+ *   bit3 父分支不换算与 `parentcontrolpoint` 在子系统里实现（P4e 步骤 1），在顶层系统上 bit2 只让实例覆盖不生效、bit3 没有读者；
+ *   `angles`、`locktopointer`、bit4 没有读者，理由见 `SceneControlPoint`）。关键帧照下面整段 `scanValue`。
  * - `animationmode`、`sequencemultiplier` 任意取值都支持（P4b 步骤 2）：只在材质槽 0 是帧表纹理时起作用（frame 列、混帧宏），
  *   否则是中性的。写成绑定或关键帧照下面两条报。帧表纹理用在粒子其它槽位是普通纹理（P4b 步骤 5），用在图像层、effect 由纹理
  *   报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
@@ -771,7 +805,12 @@ export function checkParticleProgram(
  *   残留值，rea-p4d-modules.md 1.1、1.3），没实测（phase-4d-ropes.md「决定」3）。语料里没有这种组合。
  * 值为 null 的键一律当缺键。
  */
-export function checkParticleFeatures(system: JsonObject, orthographic: boolean, unsupported: Set<string>): void {
+export function checkParticleFeatures(
+  system: JsonObject,
+  orthographic: boolean,
+  unsupported: Set<string>,
+  options: { children?: boolean } = {},
+): void {
   for (const [key, value] of Object.entries(system)) {
     if (value === null || value === undefined) continue;
     if (isUserBinding(value) || isScriptValue(value)) unsupported.add(`particle:binding:system:${key}`);
@@ -784,7 +823,7 @@ export function checkParticleFeatures(system: JsonObject, orthographic: boolean,
   scanValue(system.children, unsupported);
   const { flags } = readParticleSystem(system);
   for (let bit = 8; bit < 32; bit++) if (flags & (1 << bit)) unsupported.add(`particle:flags:${(1 << bit) >>> 0}`);
-  if (Array.isArray(system.children) && system.children.length > 0) unsupported.add("particle:children");
+  if (options.children !== false) checkParticleChildren(system.children, unsupported);
   // `mapsequencearoundcontrolpoint` 配周期发射（P4d 步骤 3）：新周期清不清零序号看 `rec+0x58 & 2`，是解析暂存区的残留值、没实测
   let around = false;
   let periodic = false;

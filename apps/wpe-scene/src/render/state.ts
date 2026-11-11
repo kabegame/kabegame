@@ -27,7 +27,13 @@ import {
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
-import { instanceColorn, instanceScalar, instanceValues, type ParticleInstanceValues } from "../compile/particles";
+import {
+  instanceColorn,
+  instanceScalar,
+  instanceValues,
+  type ParticleInstanceValues,
+  type SceneParticle,
+} from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import { soundVolume } from "../compile/sounds";
 
@@ -236,8 +242,12 @@ export class SceneState {
         else children.set(layer.parent, [layer.object]);
       }
       for (const pass of layer.passes) constants.set(pass.key, { ...pass.uniforms });
-      // 粒子材质的常量（P4a 步骤 4）：粒子 draw 的 uniform 同样从这里取，绑定也按 pass 键就地写
-      for (const pass of layer.particle?.passes ?? []) constants.set(pass.key, { ...pass.uniforms });
+      // 粒子材质的常量（P4a 步骤 4）：粒子 draw 的 uniform 同样从这里取，绑定也按 pass 键就地写；含系统树里的子系统（P4e 步骤 1）
+      const addParticle = (particle: SceneParticle) => {
+        for (const pass of particle.passes) constants.set(pass.key, { ...pass.uniforms });
+        for (const child of particle.children ?? []) addParticle(child.system);
+      };
+      if (layer.particle) addParticle(layer.particle);
       for (const effect of layer.effects) {
         effects.set(effectKey(layer.object, effect.source), {
           enabled: effect.enabled,

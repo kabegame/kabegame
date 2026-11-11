@@ -224,7 +224,9 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     );
     const world = worldMatrixOf(layer.object, transforms, worlds);
     system.prewarm({ world, pointer: loadPointer });
-    if (system.skipped.length) skipped[name] = system.skipped;
+    system.forEachDrawn((node, path) => {
+      if (node.skipped.length) skipped[path.length ? `${name}/${path.join("/")}` : name] = node.skipped;
+    });
     systems.push({ name, system, world });
   }
   const wanted = new Set(options.frames);
@@ -246,10 +248,13 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     if (options.shake && size) previousShake = shakeOffset(options.shake, time, size[1]);
     if (!wanted.has(frame)) continue;
     const out: Record<string, ParticleTrackParticle[]> = {};
-    for (const { name, system } of systems) {
-      const particles = particleSnapshot(system);
-      if (particles.length) out[name] = particles;
-    }
+    // 子系统（P4e 步骤 1）按绘制先序接在父后面，键 `<名字>/<树里的路径>`（`ParticleSystem.forEachDrawn`）；位置是子系统自己坐标里的
+    // （同 WPE 的 `vs_in`，模型矩阵另算）。没有子系统时和以前逐字节相同
+    for (const { name, system } of systems)
+      system.forEachDrawn((node, path) => {
+        const particles = particleSnapshot(node);
+        if (particles.length) out[path.length ? `${name}/${path.join("/")}` : name] = particles;
+      });
     frames.push({ frame, dt, systems: out });
   }
   return { source: "sim", project: options.project ?? "", tag: options.tag ?? "", frames, skipped };

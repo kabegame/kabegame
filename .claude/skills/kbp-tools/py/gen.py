@@ -180,6 +180,17 @@ void main() {
 """
 
 
+def clk_audio_vert(resolutions):
+    """CLK_PTR_VERT 加读 g_AudioSpectrum<n>Left / Right（P4e 起）：每个数组的和乘 1e-6 加进输出，让常量被读到、值不影响时钟读数
+    （提取器只读常量，不读像素）。kbp rdc track 把它们原样记进帧的 `audio`。"""
+    decls = "".join("uniform float g_AudioSpectrum%d%s[%d];\n" % (n, side, n) for n in resolutions for side in ("Left", "Right"))
+    sums = "".join("\tfor (int i%d = 0; i%d < %d; i%d++) s += g_AudioSpectrum%dLeft[i%d] + g_AudioSpectrum%dRight[i%d];\n"
+                   % (n, n, n, n, n, n, n, n) for n in resolutions)
+    return CLK_PTR_VERT.replace("attribute vec3 a_Position;", decls + "\nattribute vec3 a_Position;").replace(
+        "\tgl_Position = mul(", "\tfloat s = 0.0;\n" + sums + "\tgl_Position = mul(").replace(
+        "g_Frametime + (g_PointerPositionLast.x", "g_Frametime + s * 0.000001 + (g_PointerPositionLast.x")
+
+
 def layer(oid, name, origin, size, image="models/util/solidlayer.json", color="1 1 1"):
     return {"id": oid, "name": name, "image": image, "origin": origin, "scale": "1 1 1", "angles": "0 0 0",
             "size": size, "color": color, "alpha": 1, "brightness": 1, "visible": True, "colorBlendMode": 0,
@@ -356,7 +367,7 @@ def bbox_around(origin, half_width, half_height=None):
 
 def write_project(name, title, systems, *, images=(), materials=None, ident=None, overrides=None, files=None,
                   order=None, patches=None, version=3, properties=None, meta=None, object_meta=None, pointer=True,
-                  track=None, bbox=None, cursor=False):
+                  track=None, bbox=None, cursor=False, audio=None):
     """写一个测试工程到 <proj_dir>/<name>（先删再写；configure(overwrite=False) 时已有就报错）。
 
     gen_b 的参数：systems：{名字: 粒子 JSON}；images：[(名字, 图层对象)]；order：对象顺序（名字列表），缺省图像在前、粒子在后；
@@ -370,6 +381,8 @@ def write_project(name, title, systems, *, images=(), materials=None, ident=None
     bbox（第 3 批）：{对象名: [x0, y0, x1, y1] | "auto"}，只在给出时写进 kbp-meta.json 对应对象的 `bbox`（场景坐标、y 向上，
     `kbp cmp frame --meta` 按它归类像素差）；"auto" 只对图像层：按 origin、size、scale 算（不看 angles）。粒子会动，包围盒要按实验
     自己估（`bbox_around(origin, 半宽, 半高)`）。不给时文件和旧生成器的逐字节相同。
+    audio（P4e 起）：频谱分辨率的序列（如 (16, 64)）。给了时 CLK 用 clk_audio_vert（要 pointer 为 True），project.json 的 general
+    声明 supportsaudioprocessing（WPE 才采集；写在 scene.json 里 Kabegame 会整张报不支持，p3c 的教训）。不给时文件和以前逐字节相同。
     cursor（P5a 收尾）：True 时 FR 用 FR_CURSOR（[kbp] 条目多两列屏幕光标，每 10 帧刷一次），回放可传 cursors: "log" 按每一帧的
     光标复现；缺省 False 用 FR_COLOR，文件和以前逐字节相同。注意 Kabegame 还没有 input（P6），这种工程编译报
     script:api:input.cursorScreenPosition（dev 探针强制渲染不受影响，kbp replay 的案例要放行）。"""
@@ -382,7 +395,10 @@ def write_project(name, title, systems, *, images=(), materials=None, ident=None
     shutil.copytree(MODELS, os.path.join(root, "models"))
     write_json(os.path.join(root, "models", "kbp_clk.json"), {"material": "materials/kbp_clk.json"})
     write_json(os.path.join(root, "materials", "kbp_clk.json"), material("kbp_clk"))
-    write(os.path.join(root, "shaders", "kbp_clk.vert"), CLK_PTR_VERT if pointer else CLK_VERT)
+    if audio and not pointer:
+        raise KbpError("kbp", "%s：audio 要和 pointer=True 一起用" % name)
+    write(os.path.join(root, "shaders", "kbp_clk.vert"),
+          clk_audio_vert(audio) if audio else (CLK_PTR_VERT if pointer else CLK_VERT))
     write(os.path.join(root, "shaders", "kbp_clk.frag"), CLK_FRAG)
     write_json(os.path.join(root, "materials", "particle", "white.json"), material("genericparticle", ["util/white"]))
     for path, value in (materials or {}).items():
@@ -427,7 +443,8 @@ def write_project(name, title, systems, *, images=(), materials=None, ident=None
     write_json(os.path.join(root, "scene.json"), scene)
     write_json(os.path.join(root, "project.json"), {
         "file": "scene.json", "type": "scene", "title": title,
-        "general": {"properties": {"schemecolor": {"order": 0, "text": "ui_browse_properties_scheme_color",
+        "general": {**({"supportsaudioprocessing": True} if audio else {}),
+                    "properties": {"schemecolor": {"order": 0, "text": "ui_browse_properties_scheme_color",
                                                    "type": "color", "value": "0 0 0"}, **(properties or {})}}})
     data.update(meta or {})
     for key, extra in (object_meta or {}).items():

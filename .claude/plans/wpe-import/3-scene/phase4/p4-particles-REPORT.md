@@ -306,3 +306,63 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 - `mb2-move` 的定量（fps 10 已抓）、`md-soft` 的收敛、`reducemovement` 在 fps 10 下的停止位置、`vortex_v2` 的两遍模式；
 - FBm 的倍频细节、op 标量输入的归一化、`remap2` 的全部取值；
 - R9 的读 `fps` 分支、T7 的预热（WPE 里一直没有存活粒子，原因待查）。
+
+## P4e 语义的实测核对（2026-11-12）
+
+读码在 [rea-p4e-children.md](rea-p4e-children.md)（子系统）和 [rea-p4e-audio.md](rea-p4e-audio.md)（`audioprocessing*`）。
+- **工程：** `ignore/p4/defs/p4e0.py`（`kbp gen p4e0`），子系统 6 个：`proj/p4e-static`、`p4e-follow`、`p4e-event`（第一轮），`p4e-static2`、`p4e-follow2`、`p4e-event2`（第二轮，按读码的建议实验补）。子系统 JSON 另写进 `particles/`，`kbp-meta.json` 按绘制先序（父 → static → 事件实例）给子系统颜色条目，事件子系统给 `draws`。
+- **抓帧：** 全部 fps 60，`p4e-static`、`p4e-follow`、`p4e-follow2` 另抓 fps 10，在 `A:\p4e\<标签>`，开窗约 12 s 后连抓 5 帧；`kbp rdc track` 按绘制认（`track: "draws"`），轨迹 `ignore/p4/tracks/rd-p4e-*.json`。
+- **读数脚本**在 `ignore/p4/e0/`：`ana_draws.py`（每次绘制的粒子数、位置范围）、`ana_consts.py`（几何着色器的 `g_ModelViewProjectionMatrix`）、`ana_ages.py`（速度 (0, v) 的子系统按 y / v 读年龄，并换出实例的平移）。
+- 子粒子的 `vs_in` 是子系统坐标，子系统的变换都在模型矩阵里；下文「平移」由 MVP 第 4 行换回场景坐标。
+
+**static**
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| 局部矩阵 `L = T·Rz·Ry·Rx·S`，角度是弧度 | `s-xf` 条目 `angles "0 0 30"`、`scale "2 2 1"`、`origin "200 0 0"`：子系统 MVP 的 x 轴长 2.0、转 −81.13°（30 rad = 278.87°），平移 +200 | 成立 |
+| 向量缺分量补 0 | `st-scale1` 条目 `scale "2"`：MVP 的 y、z 列全为 0 | 成立 |
+| `type` 只认小写 `static` 等四个，其余整条忽略；缺 `type` 即 static | `st-type` 的 `"Static"` 条目没有绘制，同系统缺省类型的条目照画 | 成立 |
+| static 不读 `probability`、`maxcount` | `s-p0`（`probability 0`）、`s-max`（`maxcount 3`）与缺省条目逐帧相同 | 成立 |
+| 模拟与绘制 `M = 父栈顶 · L`；本地子系统粒子存子系统坐标 | `s-def` 等：子粒子在子系统原点发射，MVP 与父相同（`L` 为单位阵时）；父世界、子本地（`s-pw`）时子系统仍乘 `W` | 成立 |
+| 世界子系统的预热用 `M = L`（不含 `W`） | `st-wwarm`（子 `flags 1`、`starttime 1`、`origin "200 0 0"`，对象在 (960, 540)）：预热出的粒子在场景 x = 200，运行时的在 1160 | 成立 |
+| 子系统不跟父预热，按自己的 `starttime` | 子发射器 `duration 3`、速度 (0, 10)：`st-warmp`（父 2 s、子 0）子粒子年龄 9.82–12.63，发射窗口是运行时 0.19–3.0 s；`st-warmc`（子 2 s）年龄 11.87–14.72，窗口是预热 −1.9 s 到运行时 0.95 s，`duration` 把预热算在内 | 成立 |
+| `instanceoverride` 作用到子系统，受子系统自己 `flags` bit3–7 约束 | `s-io`（`count 2`、`size 2`）子粒子 16 个、比缺省多；`st-io248`（子 `flags 248`）子系统不变、父 8 个 | 成立 |
+| （读码没列）对象的 `rate` 是否也乘子系统的 `timescale` | `p4e-rate`（步骤 1 补测，fps 20，FR 每 10 帧刷日志）：对象 `rate 0.5` 下 static 子系统的 `turbulentvelocityrandom` 粒子与同参数顶层系统逐粒子位置完全相同（差 0），`rate 1` 的对照差几百像素 | 乘，rea-p4e-children 3.4 已更正 |
+| 加载时对象的控制点覆盖到不了子系统 | `st-iocp`：子 cp1 `offset (100, 0)`、对象覆盖 `controlpoint1 (0, 200)`，子粒子全在 x = 100 | 成立（运行时改值后能到，没测） |
+| 条目 `flags` bit1：父周期发射进入新周期时复位子系统 | `st-per2`（子 `duration 0.3`）每 2 s 重发一批，共 21 个；`st-per0` 只有开头 3 个 | 成立 |
+| 父系统存活数为 0 照常更新、绘制子系统 | `st-parent0`（父 `rate 0`）子系统照画 | 成立 |
+| 条目 `flags` bit0：父存活粒子按槽号写进子 `cp[startindex..]`，父本地坐标、不补偿 `L` | `st-cpw`（读 cp1、`origin "0 100 0"`）子粒子沿父的第二个存活粒子出生，画出来整体再上移 100 | 成立 |
+| 嵌套上限 10 层 | `st-depth` 自引用：11 次绘制。第 8 层起平移跳到画面外（MVP 平移 (2, 2.33)），像是 WPE 的矩阵栈到深度上限；语料最深 2 层，不复刻 | 层数成立 |
+
+**事件子系统**
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| 每个实例单独一次绘制，按建立先后；static 一律在事件实例之前 | `f-*` 每个实例一次绘制；`st-order` 的 JSON 先写 eventfollow，绘制仍是父 → static → 实例 | 成立 |
+| 实例矩阵 `X = T(p)·L`；本地父时外面乘 `W`（带对象旋转），世界父时不带 | `f-base` 实例平移等于父粒子位置；`f-xf` 加 `origin` 偏移；`ef-rotl`（对象转 90°）实例矩阵带旋转、`origin (50, 0)` 转成向上 50；`ef-rotw`（父世界）不带旋转、`origin` 不转 | 成立 |
+| 本地 eventfollow 实例的已有粒子跟着父粒子走，世界实例留在原地 | `f-base`（本地、速度 0）子粒子顶点全在 (0, 0)；`f-cw`、`ef-world`（世界）在父粒子身后排成一串 | 成立 |
+| 条目 `maxcount` 是活跃实例上限，满了丢弃 | `f-max`（父 12 个存活）3 个实例；`ef-max`（上限 2）2 个；`es-max`（持续发射的 eventspawn，永不回收）只有前 3 个父粒子触发 | 成立 |
+| `probability` 按 `uA ≤ p` 建 | `f-prob`（0.5）父 12 个存活、实例 8 个 | 成立（统计） |
+| 父粒子死亡那一帧 eventfollow 停跟随、停发射，已有粒子活完后回收 | `f-death`、`ef-death`：死亡父粒子的实例停在死亡点，最新的子粒子就在死亡位置，此后不再出新粒子 | 成立 |
+| 实例出现时按自己的 `starttime` 预热，位置是父粒子出生点 | `ef-start`（子 `starttime 0.5`、世界）刚建的实例已有 5 个粒子，年龄 0.1–0.5，都在出生点 | 成立 |
+| 条目 `flags` bit0 在实例里同样写控制点，不补偿 `T(p)` | `ef-cpw`（startindex 2、读 cp2）子粒子在实例坐标里位于父的第一个存活粒子处，画出来再叠一个 `T(p)` | 成立 |
+| 多个 eventdeath 条目时上限失守 | `ed-max2` 两条目各 `maxcount 1`、子系统永不结束：12 s 后分别 60、59 个实例（每个死粒子各建一个），两个条目都失守 | 成立，比读码的预测更彻底（第二个条目也失守，照代码推下去是对的） |
+| 父带 rope 时预热里的死亡也建 eventdeath 实例；实例要到预热后的第一帧才步进 | `ed-rope`（父 `starttime 2`）比 `ed-sprite` 多 1 个实例，粒子年龄 12.899 = 运行时间，位置是父粒子活满 0.5 s 的死亡点 | 成立 |
+
+**留给步骤 1–3 回放核对的：** 每帧的出生 / 死亡时刻（`ef-world` 的首个子粒子位置、`es-*` / `ed-*` 的出生点）、复用实例时 mapsequence 序号归零（`es-recycle`）、fps 10 下每帧只建一次实例，以及 `s-hide` 的递归复位。随机数流（`uA` 的消耗顺序）不核对：回放把随机范围收成 min = max，不复刻 WPE 的 MT19937。
+
+**音频**
+
+- **工程：** `proj/p4e-audio` 自带一个立体声循环音（左 1 kHz、右 250 Hz，节奏不同，一圈 4 s），`project.json` 声明 `supportsaudioprocessing`；CLK 着色器另读 `g_AudioSpectrum16` / `64` 的左右声道（`gen.write_project(audio=(16, 64))`，`kbp rdc track` 记进帧的 `audio`）。8 个发射系统 `rate 200`、速度 (0, 100)、寿命 0.5，每帧出生数由 y ≈ 100·dt 数出；另有带音频的 `vortex`。`proj/p4e-audio-off` 是去掉开关的副本。
+- **抓帧：** fps 20 连抓 30 帧、fps 60 连抓 40 帧，`p4e-audio-off` fps 20 抓 5 帧。测试窗口出声，期间没有别的声音。
+- **读数：** `ignore/p4/e0/ana_audio.py`。
+- **RenderDoc 的格式：** WPE 把 `uniform float x[16]` 打包成 `float4[4]`，值在常量的 `members` 里，按顺序展开就是 16 个。
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| 粒子读的就是 `g_AudioSpectrum16Left` / `Right` 那份数组 | 下一行的公式直接用同一帧 CLK 读到的这两个数组 | 成立 |
+| `f = clamp01(smoothstep(clamp01((v − lo)/(hi − lo)))^exponent)`；mode 1 左、2 右、3 是 `0.5·max(L + R)`；发射数 `acc += rate·f·dt`，`f` 乘在加余数之前 | 8 个系统、两种 fps：存在余数初值让每一帧的出生数都对上；「不乘 `f`」全部对不上；「mode 3 取 (L + R)/2 的平均」在 `a-m3` 上对不上 | 成立（出生数 0–58，是一致性检查；定量回放在步骤 4） |
+| `bounds "1 1"` 是 v ≥ 1 才为 1 的阶跃；缺省 `bounds "0.8 1"`、`exponent 2`、频段 0–1 | `a-step`、`a-def` 两种 fps 都没有出生，按读到的频谱算 `f` 恒为 0 | 成立 |
+| 没声明 `supportsaudioprocessing` 时频谱全 0、系数为 0 | `p4e-audio-off`：CLK 读到的 4 个数组全 0，带音频的发射系统没有粒子 | 成立 |
+
+**留给步骤 4 的：** `vortex` 与 `turbulence` 的速度缩放、`turbulentvelocityrandom` 的相位范围；Kabegame 这边 16 段归一化频谱的来源（宿主现在拿到的是 `WpeMediaHub` 的原始值，归一化与 64 → 16 的归并要在宿主里照 rea-p4e-audio 第 6 节做）。

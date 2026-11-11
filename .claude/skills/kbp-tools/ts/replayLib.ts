@@ -687,6 +687,13 @@ export class CaseContext {
     return stats;
   }
 
+  /** 工程 kbp-meta.json 的 children（P4e 起，`ignore/p4/defs/p4e0.py` 写）：系统名 → 条目顺序的子系统名；没有时为空表。 */
+  metaChildren(project: string): Record<string, string[]> {
+    const file = path.join(this.data, "proj", project, "kbp-meta.json");
+    if (!existsSync(file)) return {};
+    return JSON.parse(readFileSync(file, "utf8")).children ?? {};
+  }
+
   // ---------- 段 ----------
 
   async prepareSection(run: RunSpec, tag: string, index: number): Promise<Section> {
@@ -872,24 +879,61 @@ export class CaseContext {
       o.timeMode === "cur" ? o.times[f - 1] : o.timeMode === "prev" ? (f > 1 ? o.times[f - 2] : 0) : undefined;
     const inputs = (layer: any, f: number) =>
       o.controls ? { world: o.world?.(layer, f), pointer: o.follows?.[Math.max(0, f - 1)] ?? [0, 0] } : undefined;
-    const entries: { name: string; layer: any; system: any; births: Map<number, [number, number]>; count: number }[] =
-      [];
+    const entries: {
+      name: string;
+      layer: any;
+      system: any;
+      births: Map<number, [number, number]>;
+      count: number;
+      /** 子系统（P4e 起）：由根系统的 step 带着走，这里只记录。 */
+      child?: boolean;
+    }[] = [];
+    // 子系统的名字（P4e 起）：kbp-meta.json 的 children 是「系统名 → 条目顺序的子系统名」，产品的路径下标就是条目下标
+    const metaChildren = this.metaChildren(sec.project);
+    const roots = new Set<unknown>();
     for (const layer of o.layers ?? sec.layers) {
       if (!layer.particle) continue;
-      let random: RandomLike = new SeededRandom(1 + entries.length);
+      let random: RandomLike = new SeededRandom(1 + roots.size);
       if (o.random?.[layer.name]) random = o.random[layer.name](random);
       const injected = o.r?.[layer.name];
       const system = new ParticleSystem(layer.particle, random, o.passes, injected ? injectedR(injected) : undefined);
       o.patch?.(system, layer);
       system.prewarm(inputs(layer, 0) as never);
+      roots.add(system);
       entries.push({ name: layer.name, layer, system, births: new Map(), count: 0 });
+      system.forEachDrawn?.((child: any, node: readonly number[]) => {
+        if (!node.length) return;
+        // 产品的路径是 SceneParticle.children 的下标（跳过了不认识的类型），meta 按 JSON 条目下标：经 children[i].index 换算
+        let name: string | undefined = layer.name;
+        let def = layer.particle;
+        for (const index of node) {
+          const link = def?.children?.[index];
+          name = name === undefined ? undefined : metaChildren[name]?.[link?.index ?? index];
+          def = link?.system;
+        }
+        if (name === undefined)
+          throw new KbpReplayError(
+            "data",
+            `${sec.project}：kbp-meta.json 的 children 里找不到 ${layer.name} 的子系统 ${node}`,
+          );
+        // 同名的第 2 次起记 `名字#n`（自引用的子系统同色连画，提取器同样这样记）
+        const seen = entries.filter((e) => e.name === name || e.name.startsWith(`${name}#`)).length;
+        entries.push({
+          name: seen ? `${name}#${seen + 1}` : name,
+          layer,
+          system: child,
+          births: new Map(),
+          count: 0,
+          child: true,
+        });
+      });
     }
     const out: SimFrames = new Map();
     const history = new Map<string, number>();
     for (let frame = 1; frame <= last; frame++) {
       for (const entry of entries) {
         const before = entry.system.alive;
-        entry.system.step(o.dts[frame - 1], timeArg(frame), inputs(entry.layer, frame) as never);
+        if (!entry.child) entry.system.step(o.dts[frame - 1], timeArg(frame), inputs(entry.layer, frame) as never);
         const c = entry.system.columns;
         for (let slot = 0; slot < entry.system.highWater; slot++) {
           if (c.life[slot] === 0) continue;

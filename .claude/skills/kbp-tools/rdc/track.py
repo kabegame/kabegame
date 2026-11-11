@@ -53,6 +53,13 @@ def clock(bridge, path, with_pointer):
         for key, uniform in (("pointer", "g_PointerPosition"), ("pointer_last", "g_PointerPositionLast")):
             if uniform in names:
                 out[key] = constant(info, uniform)[:2]
+    # P4e 起：CLK 着色器另读 g_AudioSpectrum* 时（音频工程，gen.write_project(audio=…)），记下 WPE 当帧的频谱数组。
+    # WPE 把 float[n] 打包成 float4[n/4]，RenderDoc 的值在 members 里（每个成员 4 个分量），按顺序展开成 n 个
+    audio = {v["name"]: v["value"] or [x for m in v.get("members") or [] for x in m["value"]]
+             for b in info["constant_buffers"] for v in b["variables"]
+             if v["name"].startswith("g_AudioSpectrum") and v.get("referenced") is not False}
+    if audio:
+        out["audio"] = audio
     return out, rest
 
 
@@ -109,7 +116,11 @@ def assign_points(draws, meta):
     cursor = 0
     last, repeat = None, 0
     for event, particles in draws:
-        if particles and last is not None and repeat < meta["objects"][last].get("draws", 1):
+        # 连续绘制记成 `名字#n`。按颜色认的系统还要颜色对得上（P4e 起：事件子系统的实例数不定，后面紧跟别的系统时不能吞进来）；
+        # 多 renderer 的系统各次绘制颜色相同，结果不变
+        if (particles and last is not None and repeat < meta["objects"][last].get("draws", 1)
+                and (meta["objects"][last]["ident"] != "color"
+                     or color_match(particles[0]["color"], meta, [last]) == last)):
             repeat += 1
             result["%s#%d" % (last, repeat)] = particles
             continue

@@ -64,10 +64,13 @@ kbp.py gen <模块> [工程…] [--data 目录] [--defs 目录] [--out 目录] [
     `TEX_IMAGE_H`；gen.py 那个 P4-0 专用的 `system`（operator 从 id 10）不在库里；
   - P4c 起：`at`、`ring`、`with_cps`、`CENTER`、`MOVE_ORIGIN`、`SPIN_ANGLES`（脚本里图层的 `angles` 是度，scene.json 里静态的是弧度）；
   - `write_project(name, title, systems, *, images, materials, ident, overrides, files, order, patches, version=3, properties, meta,
-    object_meta, pointer=True, track=None, bbox=None, cursor=False)`：gen_b 与 gen_c 的合并版。`pointer=True`（缺省）CLK 用带指针的 CLK_PTR（gen_c 起），
+    object_meta, pointer=True, track=None, bbox=None, cursor=False, audio=None)`：gen_b 与 gen_c 的合并版。`pointer=True`（缺省）CLK 用带指针的 CLK_PTR（gen_c 起），
     `False` 是 gen_b 的 CLK；`meta` 并入 kbp-meta.json 顶层，`object_meta` 并入单个对象；`track`、`bbox` 只在显式给出时写进 kbp-meta.json（`bbox` 见「kbp-meta.json」，另有 `layer_bbox`、`bbox_around`）；
     `cursor=True`（P5a 收尾）时 FR 用 `FR_CURSOR`，日志每帧多记屏幕光标，回放传 `cursors: "log"` 按每一帧的光标复现（见「`[kbp]` 日志」）；
     缺省 `False`，文件和以前逐字节相同；
+    `audio=(16, 64)` 这类频谱分辨率序列（P4e 起）时 CLK 另读这些分辨率的 `g_AudioSpectrum<n>Left/Right`（`clk_audio_vert`，要 `pointer=True`），
+    `project.json` 的 `general` 声明 `supportsaudioprocessing`（WPE 才采集；写在 `scene.json` 里 Kabegame 会整张报不支持），轨迹里多出 `audio`；
+    不给时文件和以前逐字节相同；
   - 路径：`HERE`（= 数据目录；旧写法 `os.path.join(gen.HERE, 'proj', 名字)` 照旧落在 `<data>/proj`，但不认 `--out`）、`MODELS`（随库的
     `assets/models`，两行版 `solidlayer.json`）、`ASSETS`（`<KABEGAME_WPE_ROOT>/assets`）、`SHIMMER`（默认工程 shimmering_particles 的
     shaders）、`TEXSRC`（`<data>/texsrc`，从创意工坊导出的纹理不入库）；
@@ -142,7 +145,9 @@ kbp.py replay <案例…> | --all [--src 产品源码] [--data 目录] [--out �
 - 摘要：`cases`（每个案例的 `ok`、`seconds`）、`all_passed`。案例「有失败」是结果，退出码仍是 0；案例跑不下去（钩子或产品接口出错）
   报 `[src]`，退出码非 0。
 - 现有案例（`ignore/p4/cases/`）：`b3`（P4a 的 9 个标签、`p4b` 模块、`p4b-emit`）、`b4`（噪声）、`b6`（三组 `colorn`）、`c1`（`p4c-cp`）、
-  `c2`（`p4c-ptr`）、`c3`（`p4c-attract`，`a-default` 的已知超限照原脚本记失败）、`c4`（`p4c-world`，`p4c-ptr` 加 `p-world`）、`d1`（绳）。
+  `c2`（`p4c-ptr`）、`c3`（`p4c-attract`，`a-default` 的已知超限照原脚本记失败）、`c4`（`p4c-world`，`p4c-ptr` 加 `p-world`）、`d1`（绳）、`e1`（P4e static 子系统）。
+  子系统（P4e 起）：产品的系统树由根系统带着步进，回放只步进根，按 `forEachDrawn` 的先序与 `kbp-meta.json` 的 `children` 给子系统起名
+  （路径下标经 `SceneParticleChild.index` 换成 JSON 条目下标），同名第 2 次起记 `名字#n`（自引用）。
   2026-11-10 在同一份冻结快照上和原脚本（`c5/` 下的最新拷贝、`d1/replay.test.ts`）逐系统逐项比过，数值逐位相同。
 - 本机耗时（同一进程里，不含 vitest 启动约 1.5 s）：`b3` 约 16 s、`b4` 约 17 s、`c4` 约 5 s、`d1` 约 4 s、`c2` 约 3 s，其余 1 s 左右。
 
@@ -402,6 +407,7 @@ kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--
 - **CLK（时钟）**：顶点着色器让 `g_Time`、`g_Frametime` 真的参与输出。
   - 原因：着色器没读的常量 `referenced: false`，值是缓冲里的垃圾，不能当数据，提取器遇到就报错。
   - **CLK_PTR**（P4c 起，`gen_c.py`）同一个着色器另读 `g_PointerPosition`、`g_PointerPositionLast`，轨迹里多出 `pointer` / `pointer_last`。
+  - **音频**（P4e 起，`write_project(…, audio=…)`）再读 `g_AudioSpectrum*`（各数组之和乘 1e-6 加进输出，只为让常量被读到），轨迹里多出 `audio`。
   - 读回：CLK 绘制的顶点着色器常量。
 - `models/util/solidlayer.json` 是我们自己写的两行（只有 `material`），和 WPE 自带的那份不同（后者另有 `"solidlayer": true`）。
 - 对象 id：图像层 `10 + i`，粒子对象 `100 + i`（`gen_b.py` 起；`p4-0` 是 `10 + i`）。
@@ -455,7 +461,9 @@ kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--
 - `ident`：系统怎么认。
   - `color`：按 `rgb` 认，即 `colorrandom` 的 min，0–1；
   - `order`：颜色会变或没有 `colorrandom` 的系统，按绘制顺序认。
-- `draws`：一个系统有多个 renderer 时每帧连着画几次，缺省 1。
+- `draws`：一个系统每帧连着画几次（多个 renderer；P4e 起也用于事件子系统的实例，给上限），缺省 1。
+- `children`（顶层，P4e 起，`ignore/p4/defs/p4e0.py` 写）：`{系统名: [条目顺序的子系统名]}`。子系统的条目也在 `objects` 里（`child: true`），
+  `order` 里按绘制先序（父 → static → 事件实例）紧跟父系统；回放据此给产品系统树里的子系统起名。
 - `corners`（顶层）：为 true 时提取四角。
 - `track`（顶层，可选）：`"draws"` 时 `kbp rdc track` 自动按绘制原样保存（绳与 P4d 模块工程），`"points"` 按粒子；只在
   `write_project(…, track=…)` 显式给出时写，不给时文件和旧生成器的逐字节相同。
@@ -487,7 +495,9 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 - **帧级字段**：
   - `frame`：FR 帧号（WPE 脚本帧）；`rdc_frame`：文件名里的 RenderDoc 帧号；
   - `time` / `dt`：CLK 的 `g_Time` / `g_Frametime`，float32 原值；
-  - `pointer` / `pointer_last`：只有 CLK_PTR 工程有，是 `g_PointerPosition` / `g_PointerPositionLast` 的前两个分量，原值。
+  - `pointer` / `pointer_last`：只有 CLK_PTR 工程有，是 `g_PointerPosition` / `g_PointerPositionLast` 的前两个分量，原值；
+  - `audio`（P4e 起，音频工程）：`{"g_AudioSpectrum16Left": [16 个], …}`，CLK 读到的原值。WPE 把 `float[n]` 打包成 `float4[n/4]`，RenderDoc 的值
+    在常量的 `members` 里，提取时按顺序展开成 n 个。粒子的 `audioprocessing*` 读的就是 16 段这份（rea-p4e-audio）。
 - **points 认法**（有 `kbp-meta.json`）：`systems` 是 `{名字: [每粒子一条]}`，每条从 `vs_in` 折出。
   - 几何着色器路径（`PointList`）：每粒子 1 个顶点；
     - `size = TEXCOORD.w`，`rot = TEXCOORD.xyz`；
@@ -501,7 +511,8 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
     - 粒子绘制先在游标之后的 `ident: color` 系统里按首个粒子的颜色找，L1 距离 ≤ 0.03；
     - 找不到取游标之后第一个 `ident: order` 的系统；
     - 某帧没有存活粒子时那次绘制为空，跳过。
-  - **`名字#2`**：系统 `draws: n` 时，紧跟着的第 2…n 次粒子绘制记成 `名字#2`…`名字#n`。
+  - **`名字#2`**：系统 `draws: n` 时，紧跟着的第 2…n 次粒子绘制记成 `名字#2`…`名字#n`；按颜色认的系统还要这次绘制的颜色也对得上
+    （P4e 起：事件子系统的实例数不定，后面紧跟别的系统时不能吞进来），多 renderer 的系统各次同色，结果不变。
   - **`corners`**（meta 有 `corners: true`）：`{名字: {stage, rows} | null}`。
     - 先读 `gs_out`，没有再读 `vs_out`；
     - 前 48 个顶点的 `[UV, 裁剪空间 xyzw]`，UV 取 `TEXCOORD0`（没有取 `TEXCOORD`）。

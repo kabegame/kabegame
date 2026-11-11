@@ -21,8 +21,13 @@
  *   （`controlPointModuleFlags`），之后 `update` 整点跳过、不吃实例覆盖，`current` 只被 remap 改写（初值是 `base = I + offset`）。
  *   remap 直接改 `current(i).translation`（`remap.ts`）。
  *
- * 不做：父控制点（bit2、bit3，只对子系统有意义，P4e；顶层系统的 bit2 走缺省更新，只让实例覆盖不生效）；`instanceoverride` 控制点的
- * 运行时改值（语料全是静态值，能力表报 `{user}`）。
+ * - 子系统（P4e 步骤 1，rea-p4e-children 7.1、第 5 节）：`ControlPointLinks` 接上父系统的控制点。父控制点（bit2、bit3、
+ *   `parentcontrolpoint`）照 rea-p4c-sim.md 1.8 的父分支换算，`M` 是本系统的模拟矩阵、`Mprev` 是父的（`inputs.parent`）；顶层系统
+ *   没有父，bit2 走缺省更新、只让实例覆盖不生效。条目 `flags` bit0 时个数强制 8、`i ≥ startindex` 的点不做缺省更新（由父粒子写，
+ *   `particles/system.ts` 的 `writeParentPoints`）。
+ *
+ * 不做：`instanceoverride` 控制点的运行时改值（语料全是静态值，能力表报 `{user}`）；子系统加载时不吃对象的控制点覆盖（3.4，实测
+ * `st-iocp`），运行时改值才到，我们不支持运行时改值，所以子系统永远没有覆盖。
  */
 import type { ParticleInstance, SceneControlPoint, SceneParticle } from "../compile/particles";
 import { invert, multiply, type Mat4 } from "../render/math";
@@ -44,22 +49,46 @@ export interface ControlPointInputs {
    * 只有指针点读它。
    */
   pointer: readonly [number, number];
+  /**
+   * 子系统（P4e 步骤 1）：父系统的模拟矩阵 `Mprev`（rea-p4c-sim.md 1.8 的 `*(ctx+0x30) − 0x40`，模型矩阵栈的下一层）。父分支读它；
+   * 顶层系统不给。子系统的 `world` 是它自己的模拟矩阵（运行时 `父 M · L`，预热见 `ParticleSystem.prewarm`）。
+   */
+  parent?: Mat4;
 }
 
-/** 控制点 `flags` 的位（rea-p4c-sim.md 1.9）。bit3（父分支不换算）、bit4（没有读者）这里用不到。 */
+/**
+ * 子系统的控制点接上父系统（P4e 步骤 1）。顶层系统不给。
+ */
+export interface ControlPointLinks {
+  /** 父系统的控制点与世界空间位（父分支读 `parent.points.current(parentcontrolpoint)`，rea-p4c-sim.md 1.8）。 */
+  parent?: { points: ControlPointSet; world: boolean };
+  /**
+   * 条目 `flags` bit0 时的 `sys+0x3f5`（`(u8)controlpointstartindex`，rea-p4e-children 1.5）：下标 ≥ 它、又不是指针 / 父 / remap 的点
+   * 不做缺省更新，保留父粒子写进去的值（rea-p4c-sim.md 1.5 的 `sys+0x3f6 & 1` 分支）。不给时没有这条。
+   */
+  parentWrites?: number;
+}
+
+/** 控制点 `flags` 的位（rea-p4c-sim.md 1.9）。bit4（没有读者）这里用不到。 */
 export const CONTROL_POINT_FLAGS = {
   /** 跟随指针（1.6，P4c 步骤 2）：平移是光标下的场景点，丢弃 `offset`，不吃实例覆盖。 */
   pointer: 1,
   /** `base` 是场景坐标：本地系统乘 `inverse(W)`；世界系统的控制点 0 忽略它（1.5）。 */
   scene: 2,
-  /** 父控制点（1.8）：顶层系统没有父，走缺省更新，只让实例覆盖不生效。 */
+  /** 父控制点（1.8）：子系统读父系统的点（P4e 步骤 1）；顶层系统没有父，走缺省更新，只让实例覆盖不生效。 */
   parent: 4,
+  /** 父分支不做坐标换算（1.8，`0x14022e6b3`）：只在父分支里有用。 */
+  parentRaw: 8,
   /** 内部位：remap 模块写的点（1.2），建系统时由 `controlPointModuleFlags` 并进，`update` 跳过（P4d 步骤 4b）。 */
   remap: 0x10000,
 } as const;
 
-/** `FUN_14022bd40` 跳过实例覆盖的位（`test [cp+0xc0], 0x10005`，`0x14022bf26`）：指针、父控制点、remap 输出。 */
-const NO_INSTANCE_OVERRIDE = CONTROL_POINT_FLAGS.pointer | CONTROL_POINT_FLAGS.parent | CONTROL_POINT_FLAGS.remap;
+/**
+ * `FUN_14022bd40` 跳过实例覆盖的位（`test [cp+0xc0], 0x10005`，`0x14022bf26`）：指针、父控制点、remap 输出。父粒子写子系统控制点
+ * （`FUN_14022a580`，rea-p4e-children 第 5 节）跳过的也是这三位。
+ */
+export const NO_INSTANCE_OVERRIDE =
+  CONTROL_POINT_FLAGS.pointer | CONTROL_POINT_FLAGS.parent | CONTROL_POINT_FLAGS.remap;
 
 /** 单位 3×3（列主序）。只读：执行上下文的缺省 `basis`，不要改写。 */
 export const IDENTITY_BASIS: Float32Array = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
@@ -207,6 +236,8 @@ export type ControlPointSource = Pick<SceneParticle, "emitters" | "initializers"
 
 interface PointState {
   flags: number;
+  /** `parentcontrolpoint`（u32，缺省 0）：父分支读父系统的哪个点。 */
+  parent: number;
   base: ControlPoint;
   current: ControlPoint;
   previous: ControlPoint;
@@ -248,24 +279,68 @@ function applyMatrix(target: ControlPoint, matrix: Mat4 | null, base: ControlPoi
 
 const DEFAULT_POINT: SceneControlPoint = { flags: 0, offset: [0, 0, 0] };
 
+/**
+ * 父分支（rea-p4c-sim.md 1.8，`0x14022e66e` 起，P4e 步骤 1）：`pcp` 是父系统那个点的 `current`（4×4 整体，含 3×3），`inverse` 是
+ * `inverse(M)`（null 时写 NaN，同 `applyMatrix`），`parentMatrix` 是 `Mprev`（子系统一定给；万一没给按单位阵）。两边都是世界空间，
+ * 或 `flags` bit3 时原样拷 `pcp`。乘法与求逆用 `render/math.ts`（double 累加、末尾舍入），和 WPE 的 float32 逐步舍入可能差 1–2 ulp。
+ */
+function parentBranch(
+  point: PointState,
+  flags: number,
+  pcp: ControlPoint,
+  selfWorld: boolean,
+  parentWorld: boolean,
+  inverse: Mat4 | null,
+  parentMatrix: Mat4 | undefined,
+): void {
+  if ((selfWorld && parentWorld) || flags & CONTROL_POINT_FLAGS.parentRaw) {
+    copyPoint(point.current, pcp);
+    return;
+  }
+  const source = pointMatrix(pcp);
+  const target: ControlPoint = { basis: point.current.basis, translation: point.current.translation };
+  if (!selfWorld && !parentWorld) {
+    // current = inverse(M) · (Mprev · pcp)
+    const lifted = parentMatrix ? multiply(parentMatrix, source) : source;
+    if (!inverse) {
+      target.basis.fill(Number.NaN);
+      target.translation.fill(Number.NaN);
+      return;
+    }
+    const m = multiply(inverse, lifted);
+    target.basis.set([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
+    target.translation.set([m[12], m[13], m[14]]);
+  } else if (!selfWorld) applyMatrix(target, inverse, pcp);
+  else applyMatrix(target, parentMatrix ?? IDENTITY_MATRIX, pcp);
+}
+
+/** 单位 4×4（`parentBranch` 在没给 `Mprev` 时用）。 */
+const IDENTITY_MATRIX: Mat4 = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
 /** 一个系统的控制点（见文件头）。 */
 export class ControlPointSet {
-  /** 控制点个数 `n`（`controlPointCount`）。 */
+  /** 控制点个数 `n`（`controlPointCount`；子系统条目 `flags` bit0 时是 8）。 */
   readonly count: number;
   /** 系统 `flags` bit0（世界空间）。 */
   private readonly world: boolean;
   private readonly points: PointState[];
+  /** 父系统的控制点（子系统，P4e 步骤 1）；顶层为 null。 */
+  private readonly parent: { points: ControlPointSet; world: boolean } | null;
+  /** 父粒子写的点从这个下标起（`ControlPointLinks.parentWrites`，u8）；没有时为 null。 */
+  private readonly parentWrites: number | null;
 
   /**
    * base = I + offset，再按静态实例覆盖（`flags & 0x10005` 的点跳过）；current = previous = base。`count` 缺省按模块算
-   * （`controlPointCount`），只有单测指定。
+   * （`controlPointCount`），单测与子系统（条目 `flags` bit0 强制 8，rea-p4e-children 1.5）指定。`links` 只给子系统。
    *
    * 加载时 WPE 的 `FUN_14022bd40` 还会按当时的 `W`（构造函数写的单位阵）写一次 `current`，紧接着加载时的那次 `update`
    * （`FUN_14022e3e0`，见 `ParticleSystem.prewarm`）按真实 `W` 重算，结果相同，所以这里直接 `current = base`。
    */
-  constructor(def: ControlPointSource, count = controlPointCount(def)) {
+  constructor(def: ControlPointSource, count = controlPointCount(def), links: ControlPointLinks = {}) {
     this.count = count;
     this.world = (def.flags & 1) !== 0;
+    this.parent = links.parent ?? null;
+    this.parentWrites = links.parentWrites ?? null;
     // remap 写的点并进 0x10000（P4d 步骤 4b，`controlPointModuleFlags`），在实例覆盖与 `update` 之前
     const moduleFlags = controlPointModuleFlags(def);
     this.points = Array.from({ length: count }, (_, i) => {
@@ -285,7 +360,7 @@ export class ControlPointSet {
       const previous = newPoint();
       copyPoint(current, base);
       copyPoint(previous, base);
-      return { flags, base, current, previous };
+      return { flags, parent: source.parent ?? 0, base, current, previous };
     });
   }
 
@@ -296,14 +371,24 @@ export class ControlPointSet {
    * f & 1：      指针分支（1.6，0x14022e47b）：current = base（3×3 是单位阵：指针点不吃实例覆盖），平移整体覆盖（丢弃 offset）：
    *   世界：current.t = (X, Y, 0)，不乘 W
    *   本地：current.t = inverse(W)·(X, Y, 0, 1)（和 flags 2 共用一次求逆；W 奇异时平移写 NaN）
-   * 其余（含 f & 4：顶层系统没有父，走缺省更新 FUN_14022a070，1.8）：
+   * f & 4：有父（子系统）且 parentcontrolpoint < 父的个数（无符号）时走父分支（1.8，P4e 步骤 1），否则缺省更新
+   *   pcp = 父 cp[parentcontrolpoint].current（父本帧已更新的；子系统预热时是父的初值 base）
+   *   (!selfW || !parW) 且 !(f & 8)：
+   *     !selfW && !parW：current = inverse(M)·(Mprev·pcp)
+   *     !selfW &&  parW：current = inverse(M)·pcp
+   *      selfW && !parW：current = Mprev·pcp
+   *   否则：            current = pcp
+   * 条目 flags bit0 的子系统（parentWrites）：i ≥ parentWrites 的点跳过（父粒子写的，`sys+0x3f5` / `0x3f6`，P4e 步骤 1）
+   * 其余（缺省更新 FUN_14022a070）：
    *   世界：!(f & 2) 或 i == 0 → current = W·base；否则不动
    *   本地：f & 2 → current = inverse(W)·base；否则不动
    * ```
-   * `(X, Y)` 是 `inputs.pointer`（本帧的跟随点）。「不动」的点 `current` 一直是建系统时的 `base`（没有运行时改值）。
+   * `(X, Y)` 是 `inputs.pointer`（本帧的跟随点）。「不动」的点 `current` 一直是建系统时的 `base`（没有运行时改值）。`W` 即 `M`
+   * （`inputs.world`，子系统是它自己的模拟矩阵），`Mprev` 是 `inputs.parent`（子系统才给）。
    */
-  update({ world: matrix, pointer }: ControlPointInputs): void {
+  update({ world: matrix, pointer, parent: parentMatrix }: ControlPointInputs): void {
     let inverse: Mat4 | null | undefined;
+    const parent = this.parent;
     this.points.forEach((point, i) => {
       const f = point.flags;
       if (f & CONTROL_POINT_FLAGS.remap) return;
@@ -319,6 +404,14 @@ export class ControlPointSet {
         }
         return;
       }
+      if (f & CONTROL_POINT_FLAGS.parent) {
+        if (parent && point.parent >>> 0 < parent.points.count) {
+          if (inverse === undefined) inverse = invert(matrix);
+          parentBranch(point, f, parent.points.current(point.parent), this.world, parent.world, inverse, parentMatrix);
+          return;
+        }
+        // 顶层系统（或父没有这个点）：走缺省更新（0x14022eb4c），不看 parentWrites
+      } else if (this.parentWrites !== null && i >= this.parentWrites) return;
       const scene = (f & CONTROL_POINT_FLAGS.scene) !== 0;
       if (this.world) {
         // 世界系统里控制点 0 忽略 bit1（1.5「怪处」）
@@ -328,6 +421,11 @@ export class ControlPointSet {
         applyMatrix(point.current, inverse, point.base);
       }
     });
+  }
+
+  /** 第 `index` 个点的 `flags`（含 remap 并进的 `0x10000`）：父粒子写控制点时按它跳过（P4e 步骤 1）。 */
+  pointFlags(index: number): number {
+    return this.points[index].flags;
   }
 
   /** 帧尾 `previous ← current`（`0x140237798`–`0x1402377dd`，4×4 整体），全部 operator 之后。 */
