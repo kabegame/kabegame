@@ -361,9 +361,24 @@ export interface SceneLayer {
   /**
    * 模型 `passthrough`（只认 JSON true，P5b 步骤 2）：组合层（composelayer、projectlayer 等）。基础 pass 见 `copyBackground`；
    * 合成 RT 按 `size`、上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31 时整层不画（`render/graph.ts`，p5-REPORT `p5b-cl`）。
-   * 带子层的报 `model:passthrough:children`（步骤 4），`fullscreen` 的另报 `model:fullscreen`（步骤 3）。没有图像模型的图层为 false。
+   * 带子层的报 `model:passthrough:children`（步骤 4）。fullscreenlayer 同时是 `fullscreen`，基础 pass 换成拷贝（步骤 3）。
+   * 没有图像模型的图层为 false。
    */
   passthroughModel: boolean;
+  /**
+   * 模型 `fullscreen`（只认 JSON true，P5b 步骤 3，p5-REPORT `p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp`）：几何一律是 2×2 的 NDC 四边形
+   * （`size` 固定为 (2, 2)，排在 `imageLayerSize` 之前）。直接上屏时 MVP 照常（场景视图投影 · 视差 · W），着色器乘不乘 MVP 决定铺不铺满；
+   * 走合成路径时不画基础材质、合成 RT 0 拷贝当前画面（快照），上屏与 effect pass 用单位阵加 NDC 正交，`origin` / `scale` / `angles`、
+   * 视差、抖动都不起作用（`render/graph.ts`、`render/scene.ts`）。没有图像模型的图层为 false。
+   */
+  fullscreen: boolean;
+  /**
+   * fullscreen 图层的合成 RT 尺寸（P5b 步骤 3）：槽 0 是静态纹理时取它的图像尺寸；槽 0 是运行时 RT（fullscreenlayer 的
+   * `_rt_FullFrameBuffer`）或没有纹理时取场景尺寸 `[general.width, general.height]`（WPE 取窗口尺寸，我们离屏按场景分辨率渲染，
+   * 对应的就是场景目标；p5-REPORT「`_rt_FullFrameBuffer` 的尺寸」）。不除纹理降级系数。非 fullscreen 为 null，合成 RT 照
+   * `compositeSize` 的旧规则。
+   */
+  fullscreenSize: [number, number] | null;
   /**
    * 对象 `copybackground`（缺省 true，只有 JSON false 才关，P5b 步骤 2）：组合层的基础 pass 用基础材质（composelayer 着色器）把层
    * 背后的快照铺进合成 RT；关掉时不画基础材质、合成 RT 0 清成 (0, 0, 0, 0)（`p5b-cl` 的 CL2）。只对组合层起作用，别的图层上中性。
@@ -452,6 +467,8 @@ export function passthroughCombos(colorBlendMode: number): Record<string, number
  * WPE 的 `autosize` 在纹理就绪时覆盖对象 `size`，我们没有异步的纹理就绪，编译期按同一顺序一次算完。精灵表的帧尺寸、用户纹理的参考
  * 尺寸不在这里：前者随图像层帧动画（`tex:animation`），后者照报（`material:usertextures`）。透视场景（正交投影为空）里 `projectlayer`
  * 的尺寸来源读码未知，那种场景整张报 `camera:perspective`，这里按渲染器的场景尺寸取。
+ * `fullscreen` 模型也不在这里：WPE 在纹理就绪时先判它（几何 2×2，排在 `autosize` 之前），`compileScene` 在调本函数之前就定了
+ * （`SceneLayer.fullscreen`，P5b 步骤 3）。
  */
 export function imageLayerSize(
   model: ModelJson,
@@ -1154,6 +1171,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       perspective: false,
       passthroughModel: false,
       copyBackground: true,
+      fullscreen: false,
+      fullscreenSize: null,
       passes: [],
       colorBlendMode: Math.trunc(
         asNumber(
@@ -1197,6 +1216,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // rea-p5-modelflags 开头的标志表），只有 JSON false 才关
     layer.passthroughModel = modelFlag(model, "passthrough");
     layer.copyBackground = object.copybackground !== false;
+    // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs`）：只认 JSON true（P5a 步骤 0 实测 `fullscreen: 1` 不生效）
+    layer.fullscreen = modelFlag(model, "fullscreen");
     if (layer.passthroughModel) {
       // 带子层（有对象的父指向它）：子孙要由组按局部正交画进合成 RT、不在顶层画，步骤 4 才做
       if (parents.includes(index)) unsupported.add("model:passthrough:children");
@@ -1218,10 +1239,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸（`projectlayer` 取正交投影宽高，
     // 步骤 2）。deep_space 的 Background 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
     const base = layer.passes[0]?.textures[0];
-    layer.size = imageLayerSize(model, layer.size, base === undefined ? undefined : bundle.textures[base], [
-      bundle.general.width,
-      bundle.general.height,
-    ]);
+    const baseTexture = base === undefined ? undefined : bundle.textures[base];
+    if (layer.fullscreen) {
+      // fullscreen（P5b 步骤 3）排在 autosize 之前（rea-p5-modelflags §7：纹理就绪时 fullscreen 先判，取纹理图像尺寸、几何 2×2）。
+      // 两份尺寸：几何是 2×2 的 NDC 四边形；合成 RT 取槽 0 静态纹理的图像尺寸，槽 0 是运行时 RT（fullscreenlayer 的
+      // `_rt_FullFrameBuffer`，在 pass 的 `runtime` 里）或没有纹理时取场景尺寸
+      layer.size = [2, 2];
+      layer.fullscreenSize = baseTexture
+        ? [baseTexture.width, baseTexture.height]
+        : [bundle.general.width, bundle.general.height];
+    } else layer.size = imageLayerSize(model, layer.size, baseTexture, [bundle.general.width, bundle.general.height]);
 
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;

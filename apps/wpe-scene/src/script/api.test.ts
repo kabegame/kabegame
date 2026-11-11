@@ -82,6 +82,8 @@ function scene(sound = false): SceneBundle {
     perspective: false,
     passthroughModel: false,
     copyBackground: true,
+    fullscreen: false,
+    fullscreenSize: null,
     passes: [],
     colorBlendMode: 0,
     effects: [],

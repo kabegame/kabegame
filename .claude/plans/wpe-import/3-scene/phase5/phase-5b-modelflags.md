@@ -487,8 +487,134 @@ export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): 
 - `copybackground` 绑属性或挂脚本时按 true、不报（语料 0 个）。
 - fullscreenlayer 的 `passthroughModel` 也是 true：照报 `model:fullscreen`，dev 强制渲染时会按普通组合层画，步骤 3 改。
 
-## 步骤 3–5（提纲，步骤 0 之后补全）
-- **步骤 3 — `fullscreen`。** 合成路径的第一步换成 `copy`（当前目标 → 合成 RT 0），上屏单位阵 + NDC；无 effect 时 2×2 四边形、MVP 照常算。组里的 fullscreen（当前目标是组的合成 RT）留到步骤 4 一起验。
+## 步骤 3 — `fullscreen`
+
+### 思路
+
+`fullscreen` 模型的几何一律是 NDC 的 2×2 四边形，铺不铺满全屏分两种情况：
+- **直接上屏**（没有 effect、cbm 是 0 / 31、不是组合层）：MVP 照常算（场景视图投影 · 视差 · `W`），交给着色器。着色器不乘 MVP 就铺满全屏（neon_sunset 的 `cloudsbg`、`p5b-fsmvp` 的 FSBG），乘了就是一块被 `W` 变换的 2×2 方块（FSQ）。
+- **走合成路径**：不画基础材质，合成 RT 0 直接拷贝当前画面。我们先拍快照，再把快照拷进合成 RT 0；快照就是当前场景目标，内容相同，只多一次整屏拷贝。之后照常跑 effect 链。上屏的模型、视图都是单位阵，投影是 `ortho(−1, 1, −1, 1)`，所以正好铺满全屏，`origin`、`scale`、`angles`、视差、抖动都不起作用。effect 中间 pass 同样按单位阵算效果矩阵。
+
+尺寸分成两份：
+- **几何尺寸**：`layer.size`，固定为 (2, 2)，四边形与效果矩阵的 `w/2, h/2` 都用它；
+- **合成 RT 尺寸**：`fullscreenSize`，取槽 0 纹理的图像尺寸。槽 0 是 `_rt_FullFrameBuffer` 时（语料里全是）取场景目标尺寸。WPE 取的是窗口尺寸，我们离屏按场景分辨率渲染，对应的就是场景目标。不除纹理降级系数。
+
+两份都不内缩。
+
+fullscreenlayer 是组合层：没有 effect、cbm 是 0 / 31 时整层不画，步骤 2 已经按空计划处理；有 effect 时基础 pass 从 `compose` 换成拷贝。组里的 fullscreen（当前目标是组的合成 RT）属于步骤 4。
+
+### 现状锚点
+
+**a. 能力表照报 `model:fullscreen`**（`compile/features.ts`，`MODEL_FLAGS` 里有它、不在 `SUPPORTED_MODEL`）
+
+**b. 组合层的基础 pass 只有 compose 与 clear 两种**（`render/graph.ts`，步骤 2）
+```ts
+  if (layer.passthroughModel && !layer.copyBackground) steps.push({ kind: "clear", target: nextComposite() });
+  else if (layer.passthroughModel) steps.push({ kind: "draw", role: "compose", /* … */ geometry: "layer", uv: [1, 1] });
+  else steps.push({ kind: "draw", role: "base", /* … */ geometry: "fill" });
+  // 现状：fullscreen 走哪一支取决于是不是组合层，几何按 layer.size（图像尺寸），上屏按图层 MVP
+```
+
+**c. NDC 四边形固定 UV 1**（`render/scene.ts:1267`）
+```ts
+        step.geometry === "fullscreen" ? layerQuad([2, 2], [1, 1]) : layerQuad(layer.size, step.uv, step.inset);
+```
+
+### 点 1 — 图层（`compile/bundle.ts`）
+- **新增** `SceneLayer.fullscreen: boolean`（模型 `fullscreen`，只认 JSON true）与 `fullscreenSize: [number, number] | null`（合成 RT 尺寸：槽 0 静态纹理的图像尺寸，槽 0 是运行时 RT 时取 `[general.width, general.height]`；非 fullscreen 为 null）。
+- **修改** 尺寸：fullscreen 时 `layer.size = [2, 2]`，排在 `imageLayerSize` 之前（rea §7：fullscreen 先于 autosize）。
+
+### 点 2 — 能力表（`compile/features.ts`）
+- **修改** `fullscreen` 进支持表，注释写清两条路径与尺寸；`checkModelFeatures` 的说明去掉「步骤 3 照报」。
+
+### 点 3 — 渲染图（`render/graph.ts`）
+- **修改** `compositeSize`：`fullscreenSize` 非空时用它（再 max(4, ·)）。
+- **修改** 内缩：`flat` 加上 `fullscreen`。
+- **修改** 直接上屏：fullscreen 时 `geometry: "fullscreen"`（2×2，UV 取纹理上界，不内缩）。
+- **修改** 合成路径的基础 pass：fullscreen 时先 `snapshot`，再 `{ kind: "copy", source: { kind: "framebuffer" }, target: nextComposite() }`，不画基础材质；排在组合层的 compose / clear 之前判断。
+- **修改** 上屏（final、passthrough）：fullscreen 时 `geometry: "fullscreen"`。
+
+### 点 4 — 矩阵与渲染器（`render/scene.ts`）
+- **修改** `uniformValues`：fullscreen 图层除 `direct` 以外的角色，世界矩阵用单位阵、视图投影用 `orthographic(−1, 1, −1, 1, …)`（不经 `viewProjectionOf`，没有视差、抖动、透视）；`direct` 照常。
+- **修改** 几何：`geometry === "fullscreen"` 时 `layerQuad([2, 2], step.uv, step.inset)`（effect 步骤本来就是 `[1, 1]` / 不内缩，字节不变）。
+- 文件头加「fullscreen（P5b 步骤 3）」一条。
+- `copy` 的源是 `framebuffer` 时 `effect` 不参与解析；`checkPlanOps` 等按现有写法放行。
+
+### 点 5 — 单测
+- 能力表：fullscreen 模型不报；fullscreenlayer 不报。
+- 尺寸：fullscreen 的 `size` 是 (2, 2)，`fullscreenSize` 取纹理图像尺寸或场景尺寸。
+- `planLayer`（`p5b-fs` 的 F1、`p5b-fsnofx`、`p5b-fsmvp` 的 FSBG / FSQ）：
+  - F1：snapshot → copy(framebuffer → c0) → final(scene, geometry fullscreen)，合成 RT = 场景尺寸；
+  - fsnofx：空计划；
+  - FSBG、FSQ：direct、geometry fullscreen、不内缩。
+- 矩阵（真值 `ignore/p5/b3/fs_fixture.json`）：
+  - F1 末 pass 的 MVP 是 NDC 正交（`p5b-fs` 事件 76，x、y 两行与平移逐元素相同）；
+  - FSQ 直接上屏的 MVP = VP · W（事件 55，box 1450–1550 × 230–330）；
+  - 视差、抖动、透视对 F1 的末 pass 不起作用。
+- GpuScene 假设备：op 序列里 F1 有 copy、没有基础 draw；顶点是 ±1。
+
+### 实施方式
+
+同步骤 2：HEAD 快照 `ignore/p5/b3/head` 与 `ov`，补丁三方合并进工作区，提交时只把补丁打进索引。
+
+### 验收
+1. 子代理：快照里 tsc、vitest、Prettier。
+2. Claude：变异检查（拷贝换回 compose、上屏换回图层 MVP、合成 RT 回到图层 size、直接上屏几何换回图层四边形、`model:fullscreen` 照报）；临时索引上「HEAD + 补丁」的 tsc / vitest。
+3. 语料：只去掉 `model:fullscreen`，看解锁。
+4. 基线：10 张 × 三档画面哈希不变。
+5. 和 WPE 整帧比：`p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp`；真实样本挑 fullscreenlayer 多、其余键少的。
+
+### 步骤 3 实施记录（2026-11-12）
+
+子代理在 `ignore/p5/b3/ov`（HEAD `644628cd` 快照）里实现，补丁 `ignore/p5/b3/step3.patch`。
+
+**改动：** 4 个产品文件照点 1–4 落地。
+- `bundle.ts`：`fullscreen` 与 `fullscreenSize`，fullscreen 时 `size = [2, 2]`、排在 `imageLayerSize` 之前。
+- `features.ts`：`fullscreen` 进支持表；对象级的 `fullscreen` 键照报，不受影响。
+- `graph.ts`：
+  - `compositeSize` 先看 `fullscreenSize`；
+  - `flat` 加 fullscreen；
+  - 直接上屏与上屏用 `geometry: "fullscreen"`；
+  - 合成路径的基础 pass 是 `snapshot` + `copy(framebuffer → c0)`，排在 compose / clear 之前；
+  - `copy` 的 `effect` 改成 `number | null`，这里是 null。
+- `scene.ts`：fullscreen 除 `direct` 以外的角色用单位阵加 NDC 正交（`FULLSCREEN_VIEW_PROJECTION = orthographic(−1, 1, −1, 1, 1, −1)`，z 也和 WPE 相同）；NDC 四边形按 `step.uv` / `step.inset`。
+
+测试：新增 `render/p5b-fullscreen.test.ts`，`compile/p5b.test.ts` 续写 11 个；`p5a.test.ts` 与 `p5b.test.ts` 共 4 处期望从「报 `model:fullscreen`」改成不报；其余 11 个测试文件只是补字段。
+
+**验收中发现并修掉的问题：** 真机渲染 `p5b-fs` 与 `dino_run` 整帧全黑。原因是快照纹理 `_rt_FullFrameBuffer` 没有 `COPY_SRC`，「快照 → 合成 RT 0」这次拷贝过不了 WebGPU 校验，整个命令缓冲被丢掉。
+- 修法：快照加 `COPY_SRC`。
+- 单测：`p5b-fullscreen.test.ts` 的假设备模拟拷贝的用途校验（源要 `COPY_SRC`、目标要 `COPY_DST`），去掉 `COPY_SRC` 的变异能检出（`mutate_s3b.py`）。
+- 假设备原来不做用途校验，所以单测没查出来；画面哈希的 10 张基线里也没有 fullscreen。
+
+**合并：** P4e 在快照之后提交了（`3a22fd83`），还合进了一次 `origin/main`（`182fbc94`）。
+- `git merge-file` 逐文件三方合并：只有 `graph.ts` 文件头注释一处冲突（fullscreen 一段与 P4e 的粒子层一条），沿用 `resolve_graph.py`；`scene.ts` 自动合上。
+- 合并后核对：17 个文件逐个等于「HEAD 版本 + 本补丁」的三方合并结果。
+
+**验收：**
+1. **检查：**
+   - 子代理快照：tsc 0，vitest 1841 过、1 败（`3830255100: 219 次请求`，HEAD 上同样失败）；
+   - 合并后的工作区（含修正）：tsc 0，vitest 1892 过、1 败（同一条）；
+   - 「HEAD + 本步骤」用临时索引导出：tsc 0，vitest 1672 过、0 败；
+   - Prettier 通过。工作区里 P6b 未跟踪的 `wpefont/index.ts` 不过，不是本步骤的文件。
+2. **变异：** 7 + 1 处全部检出：
+   - 拷贝换回 compose；上屏换回图层 MVP；合成 RT 回到图层 size；
+   - 几何换回图层四边形；size 不固定 2×2；`model:fullscreen` 照报；fullscreen 照旧内缩；
+   - 快照没有 `COPY_SRC`。
+3. **语料**（`ignore/p5/b3/out/corpus-diff.txt`）：只去掉 27 张的 `model:fullscreen`，没有新增的键，干净场景 43 → 43。neon_sunset 剩 `camera:perspective`、`object:model`（P5d）。
+4. **画面哈希：** 和步骤 2 的基线比，10 张 × 3 档全部相同（宿主 `index-DrSk0MEq.js`；之后的修正只加用途位）。
+5. **和 WPE 整帧比**（修正后的宿主 `index-DAPqkDP2.js`）：
+   - `p5b-fs`：最大差 1（13992 个像素差 1）；
+   - `p5b-fsnofx`、`p5b-fsmvp`：0 差异；
+   - `dino_run`：场景 343×193，我们读回的是场景分辨率，WPE 在 1920 窗口里直接渲染，没法逐像素比。并排看，背景、月亮、云、山、树林、草地与整屏后处理一致；差别在脚本动态创建的游戏内容（恐龙、金币、分数文字：`createLayer`、文本对象都不支持）。
+6. 测试工程（4 个）已移除。
+
+**未实测清单（续）：**
+- 非组合层 fullscreen 带 effect、槽 0 是静态纹理时：合成 RT 是纹理图像尺寸，我们只拷快照左上角那一块。WPE 遇到两边尺寸不同时怎么拷没测过；语料唯一的非组合层 fullscreen（cloudsbg）没挂 effect。
+- fullscreen 带 cbm 混合上屏：拷贝 → effect → passthrough 用 NDC 铺满，没测。
+- 脚本读 fullscreen 图层的 `thisLayer.size` 得到 (2, 2)，WPE 给的可能是图像尺寸。
+- `g_Texture0Resolution`：fullscreen 的合成 RT 是场景尺寸，WPE 是窗口尺寸。窗口和场景比例或尺寸不同时，按纹素算偏移的 effect（如模糊）相对画面内容和 WPE 不一样（风险 4）。
+
+## 步骤 4–5（提纲，步骤 0 之后补全）
 - **步骤 4 — 组合层：子层。** 编译期算每个图层归属的组；顶层跳过；组的计划插 `subtree`；子孙的 draw 按组的局部坐标系现算矩阵；`copybackground: false` 的组里写 RGBA、alpha MAX 的管线变体；无 effect 带子层时透传着色器画世界四边形（`copybackground` true 不混合、false translucent）；嵌套；组里的粒子（世界空间系统用组的模型矩阵，rea-p4c 的 `ctx+0xaf0`）。
 - **步骤 5 — `instanced`。** 编译材质前合并 `instance.textures` / `combos`；`usertextures` 照报；合成 RT 按纹理图像尺寸（`solidLayer` 已经排除了 instanced）。
 

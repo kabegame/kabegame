@@ -3,9 +3,11 @@
  * - 步骤 1：图像层尺寸的取值顺序（`imageLayerSize`）、图层上的 `noPadding` / `perspective` 两个标志、能力表放开 `nopadding` 与
  *   图像层的 `perspective: true`；
  * - 步骤 2：组合层（无子层）的 `passthroughModel` / `copyBackground`、`projectlayer` 取正交投影宽高、能力表放开 `passthrough` 与
- *   `projectlayer`，带子层报 `model:passthrough:children`、组合层又透视报 `object:perspective`。
+ *   `projectlayer`，带子层报 `model:passthrough:children`、组合层又透视报 `object:perspective`；
+ * - 步骤 3：`fullscreen` 模型的 `fullscreen` / `fullscreenSize`（几何 2×2，合成 RT 取槽 0 静态纹理的图像尺寸或场景尺寸）、能力表放开
+ *   `fullscreen`（fullscreenlayer 不再报）。
  * 依据是 p5-REPORT「P5b 语义的实测核对」：`p5b-autosize`（`autosize` 覆盖 `size`，三者都缺时 1×1）、`p5b-nopad`、`p5b-persp`、
- * `p5b-cl`、`p5b-proj`。
+ * `p5b-cl`、`p5b-proj`、`p5b-fs`、`p5b-fsmvp`。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -290,8 +292,15 @@ const UTIL_MODELS: Record<string, ModelJson> = {
   fullscreenlayer: { material: "materials/util/composelayer.json", fullscreen: true, passthrough: true },
 };
 
-/** 场景里放一组对象；`models/util/*` 是组合层，`models/a.json` 是普通图像层（同 `compileImage`）。 */
-async function compileObjects(objects: Record<string, unknown>[], general: Record<string, unknown> = {}) {
+/**
+ * 场景里放一组对象；`models/util/*` 是组合层，`models/a.json` 是普通图像层（同 `compileImage`）。`extra` 是另加的文件
+ * （键是工程内路径，同名覆盖上面的默认文件）。
+ */
+async function compileObjects(
+  objects: Record<string, unknown>[],
+  general: Record<string, unknown> = {},
+  extra: Record<string, Uint8Array | string> = {},
+) {
   const files: Record<string, Uint8Array | string> = {
     "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
     "P:/p/scene.json": JSON.stringify({
@@ -309,6 +318,7 @@ async function compileObjects(objects: Record<string, unknown>[], general: Recor
   };
   for (const [name, model] of Object.entries(UTIL_MODELS))
     files[`P:/p/models/util/${name}.json`] = JSON.stringify(model);
+  for (const [path, value] of Object.entries(extra)) files[`P:/p/${path}`] = value;
   return compileScene({
     projectDir: "P:/p",
     sceneAssets: ["A:/assets"],
@@ -402,9 +412,9 @@ describe("compileScene：组合层的两个字段与照报项（P5b 步骤 2）"
     expect(plain.unsupported).toEqual([]);
   });
 
-  it("fullscreenlayer 只报 model:fullscreen", async () => {
+  it("fullscreenlayer 不报（P5b 步骤 3 起；以前报 model:fullscreen）", async () => {
     const bundle = await compileObjects([{ id: 10, image: "models/util/fullscreenlayer.json", origin: "960 540 0" }]);
-    expect(bundle.unsupported).toEqual(["model:fullscreen"]);
+    expect(bundle.unsupported).toEqual([]);
   });
 
   it("普通图像层、分组节点：passthroughModel false；copyBackground 在普通图像层上照记、分组节点缺省 true", async () => {
@@ -426,8 +436,8 @@ describe("能力表：组合层与 projectlayer 模型（P5b 步骤 2）", () =>
     // 单独写 projectlayer（没有 autosize）只剩透明排序键，正交场景中性
     expect(modelKeys({ material: MATERIAL, projectlayer: true })).toEqual([]);
   });
-  it("fullscreenlayer 只报 model:fullscreen；instanced 的组合层照报 model:instanced", () => {
-    expect(modelKeys(UTIL_MODELS.fullscreenlayer)).toEqual(["model:fullscreen"]);
+  it("fullscreenlayer 不报（P5b 步骤 3 起）；instanced 的组合层照报 model:instanced", () => {
+    expect(modelKeys(UTIL_MODELS.fullscreenlayer)).toEqual([]);
     expect(modelKeys({ material: MATERIAL, passthrough: true, instanced: true })).toEqual(["model:instanced"]);
   });
   it("对象上的 copybackground 不报（true / false 都是）", () => {
@@ -443,8 +453,165 @@ describe.skipIf(!root || !existsSync(utilModel("composelayer")))("WPE 自带的�
     ["composelayer", []],
     ["composelayer_depthtest", []],
     ["projectlayer", []],
-    ["fullscreenlayer", ["model:fullscreen"]],
+    // P5b 步骤 3 起不报（以前报 model:fullscreen）
+    ["fullscreenlayer", []],
   ])("%s → %j", (name, expected) => {
     expect(modelKeys(parseModel(readFileSync(utilModel(name), "utf8")))).toEqual(expected);
   });
 });
+
+// ———— P5b 步骤 3：fullscreen ————
+
+/** WPE 的 `materials/util/fullscreenlayer.json`：passthrough 着色器，槽 0 是 `_rt_FullFrameBuffer`。 */
+const FULLSCREEN_MATERIAL = {
+  passes: [
+    {
+      shader: "passthrough",
+      depthtest: "disabled",
+      depthwrite: "disabled",
+      blending: "translucent",
+      cullmode: "nocull",
+      textures: ["_rt_FullFrameBuffer"],
+    },
+  ],
+};
+/** fullscreenlayer 换成 WPE 原样的材质（上面那份）；`p5b-fs` 的 F1 那样的对象（`ignore/p5/b0/gen_b.py` 的 `p_fs`）。 */
+const FULLSCREEN_FILES = {
+  "models/util/fullscreenlayer.json": JSON.stringify({
+    material: "materials/util/fullscreenlayer.json",
+    fullscreen: true,
+    passthrough: true,
+  }),
+  "materials/util/fullscreenlayer.json": JSON.stringify(FULLSCREEN_MATERIAL),
+  "shaders/passthrough.vert": "void main() {}",
+  "shaders/passthrough.frag": "void main() {}",
+};
+const f1 = (id: number, extra: Record<string, unknown> = {}) => ({
+  id,
+  name: "F1",
+  image: "models/util/fullscreenlayer.json",
+  origin: "100 50 0",
+  size: "300 200",
+  scale: "0.5 0.5 1",
+  angles: "0 0 0.7",
+  ...extra,
+});
+
+describe("compileScene：fullscreen 的两份尺寸（P5b 步骤 3）", () => {
+  it("fullscreenlayer（槽 0 是 _rt_FullFrameBuffer）：size 固定 2×2，fullscreenSize 取场景尺寸，不报", async () => {
+    const bundle = await compileObjects([f1(11)], {}, FULLSCREEN_FILES);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({
+      fullscreen: true,
+      passthroughModel: true,
+      size: [2, 2],
+      fullscreenSize: [1920, 1080],
+    });
+    // 槽 0 没有静态纹理，在运行时表里
+    expect(bundle.layers[0].passes[0]).toMatchObject({ runtime: { 0: "_rt_FullFrameBuffer" }, framebuffer: true });
+    expect(bundle.layers[0].passes[0].textures[0]).toBeUndefined();
+  });
+
+  it("fullscreenlayer 在 1280×720 的场景里：fullscreenSize 跟着场景尺寸", async () => {
+    const bundle = await compileObjects(
+      [f1(11)],
+      { orthogonalprojection: { width: 1280, height: 720 } },
+      FULLSCREEN_FILES,
+    );
+    expect(bundle.layers[0]).toMatchObject({ size: [2, 2], fullscreenSize: [1280, 720] });
+  });
+
+  it("非组合层的 fullscreen 模型、槽 0 是静态纹理：fullscreenSize 取图像尺寸（48×40，不是纹理尺寸 64×64），size 2×2", async () => {
+    const bundle = await compileImage({ fullscreen: true }, { size: "300 300", scale: "50 50 1" });
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({
+      fullscreen: true,
+      passthroughModel: false,
+      size: [2, 2],
+      fullscreenSize: [48, 40],
+    });
+  });
+
+  it("fullscreen 排在 autosize、模型宽高、对象 size 之前：几何仍是 2×2", async () => {
+    for (const [model, object] of [
+      [{ fullscreen: true, autosize: true }, { size: "24 20" }],
+      [{ fullscreen: true, width: 100, height: 50 }, {}],
+      [{ fullscreen: true, autosize: true, projectlayer: true, passthrough: true }, { size: "500 300" }],
+    ] as const) {
+      const bundle = await compileImage(model, object);
+      expect(bundle.layers[0].size, JSON.stringify(model)).toEqual([2, 2]);
+      expect(bundle.layers[0].fullscreenSize, JSON.stringify(model)).toEqual([48, 40]);
+    }
+  });
+
+  it("槽 0 没有纹理（材质不写 textures）：fullscreenSize 取场景尺寸", async () => {
+    const bundle = await compileObjects(
+      [{ id: 10, image: "models/notex.json", origin: "960 540 0" }],
+      {},
+      {
+        "models/notex.json": JSON.stringify({ material: "materials/notex.json", fullscreen: true }),
+        "materials/notex.json": JSON.stringify({ passes: [{ shader: "s" }] }),
+      },
+    );
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({ fullscreen: true, size: [2, 2], fullscreenSize: [1920, 1080] });
+  });
+
+  it("`fullscreen: 1` 不算：普通图像层，尺寸照 imageLayerSize，fullscreenSize 为 null", async () => {
+    const bundle = await compileImage({ fullscreen: 1 }, { size: "300 300" });
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({ fullscreen: false, size: [300, 300], fullscreenSize: null });
+  });
+
+  it("普通图像层、组合层、分组节点：fullscreen false、fullscreenSize null", async () => {
+    const bundle = await compileObjects([
+      { id: 10, image: "models/a.json", origin: "960 540 0" },
+      compose(11),
+      { id: 12, name: "group", origin: "0 0 0" },
+    ]);
+    for (const layer of bundle.layers) expect(layer).toMatchObject({ fullscreen: false, fullscreenSize: null });
+  });
+});
+
+describe("能力表：fullscreen 模型（P5b 步骤 3）", () => {
+  it("fullscreen 模型、fullscreenlayer 都不报 model:fullscreen", () => {
+    expect(modelKeys({ material: MATERIAL, fullscreen: true })).toEqual([]);
+    expect(modelKeys({ material: "materials/util/fullscreenlayer.json", fullscreen: true, passthrough: true })).toEqual(
+      [],
+    );
+    // 和 autosize 等一起写也不报
+    expect(modelKeys({ material: MATERIAL, fullscreen: true, autosize: true, nopadding: true })).toEqual([]);
+  });
+  it("对象上的 fullscreen 键是另一回事，照报 object:fullscreen", () => {
+    expect(objectKeys({ id: 1, image: "models/a.json", fullscreen: true })).toEqual(["object:fullscreen"]);
+  });
+  it("整场检查：fullscreenlayer 场景没有 model:fullscreen（能力表只看模型 JSON，这里经 compileScene）", async () => {
+    const bundle = await compileObjects([f1(11, { effects: [] })], {}, FULLSCREEN_FILES);
+    expect(bundle.unsupported.filter((key) => key.includes("fullscreen"))).toEqual([]);
+  });
+});
+
+const utilMaterial = join(root ?? "", "assets", "materials", "util", "fullscreenlayer.json");
+describe.skipIf(!root || !existsSync(utilModel("fullscreenlayer")) || !existsSync(utilMaterial))(
+  "WPE 自带的 fullscreenlayer（assets/models/util、assets/materials/util）",
+  () => {
+    it("原样的模型与材质：不报，size 2×2，fullscreenSize 取场景尺寸", async () => {
+      const bundle = await compileObjects(
+        [f1(11)],
+        {},
+        {
+          ...FULLSCREEN_FILES,
+          "models/util/fullscreenlayer.json": readFileSync(utilModel("fullscreenlayer"), "utf8"),
+          "materials/util/fullscreenlayer.json": readFileSync(utilMaterial, "utf8"),
+        },
+      );
+      expect(bundle.unsupported).toEqual([]);
+      expect(bundle.layers[0]).toMatchObject({
+        fullscreen: true,
+        passthroughModel: true,
+        size: [2, 2],
+        fullscreenSize: [1920, 1080],
+      });
+    });
+  },
+);

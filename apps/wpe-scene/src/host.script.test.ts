@@ -215,6 +215,8 @@ function bundle(): SceneBundle {
         perspective: false,
         passthroughModel: false,
         copyBackground: true,
+        fullscreen: false,
+        fullscreenSize: null,
         passes: [],
         effects: [],
         colorBlendMode: 0,

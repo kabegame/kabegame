@@ -123,6 +123,8 @@ function synthetic(
     perspective: false,
     passthroughModel: false,
     copyBackground: true,
+    fullscreen: false,
+    fullscreenSize: null,
     passes: [scenePass({ uniforms })],
     colorBlendMode: 0,
     effects: [],

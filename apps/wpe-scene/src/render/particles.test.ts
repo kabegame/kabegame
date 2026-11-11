@@ -441,6 +441,8 @@ function baseLayer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer 
     perspective: false,
     passthroughModel: false,
     copyBackground: true,
+    fullscreen: false,
+    fullscreenSize: null,
     passes: [],
     colorBlendMode: 0,
     effects: [],

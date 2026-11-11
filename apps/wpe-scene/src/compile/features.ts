@@ -207,6 +207,7 @@ const SUPPORTED_OBJECT = new Set([
  * 打开时改变画面、还没实现的对象开关。`instanceoverride` 不在这里（P4a 步骤 5）：粒子对象上按键检查
  * （`checkParticleInstance`），其它对象上 WPE 不读，照未知键报 `object:instanceoverride`（语料 0 个）。
  * `perspective` 也不在这里（P5b 步骤 1）：图像层的 JSON `true` 已实现，其余在 `checkObjectFeatures` 里另判。
+ * 这里的 `fullscreen`、`passthrough` 是对象上的键，和模型 JSON 的同名标志（P5b 步骤 2、3 已实现，见 `SUPPORTED_MODEL`）不是一回事。
  */
 const OBJECT_FLAGS = [
   "fullscreen",
@@ -227,8 +228,17 @@ const OBJECT_FLAGS = [
  *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
  * - `passthrough`：组合层（P5b 步骤 2，`SceneLayer.passthroughModel`，p5-REPORT `p5b-cl`）：基础 pass 按 `copybackground` 从快照铺进
  *   合成 RT 或清成透明，之后照常跑 effect 链、借基础材质的 blend 上屏（`colorBlendMode` 混合时 passthrough 上屏）；合成 RT 按 `size`、
- *   上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31 时整层不画。没实现的两种形态另报：带子层的 `model:passthrough:children`
- *   （`bundle.ts` 报，步骤 4），`fullscreen` 的（fullscreenlayer）由 `model:fullscreen` 报（步骤 3）。
+ *   上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31 时整层不画。带子层的还没实现，另报 `model:passthrough:children`
+ *   （`bundle.ts` 报，步骤 4）。fullscreenlayer 同时带 `fullscreen`，基础 pass 换成拷贝，见下一条。
+ * - `fullscreen`（P5b 步骤 3，`SceneLayer.fullscreen`，p5-REPORT `p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp`）：几何一律是 2×2 的 NDC 四边形，
+ *   两条路径：
+ *   - 直接上屏（没有启用的 effect、`colorBlendMode` 是 0 / 31、不是组合层）：MVP 照常（场景视图投影 · 视差 · W），着色器不乘 MVP 就
+ *     铺满全屏（neon_sunset 的 `cloudsbg`、`p5b-fsmvp` 的 FSBG），乘了就是被 W 变换的 2×2 方块（FSQ）；
+ *   - 合成路径：不画基础材质，合成 RT 0 拷贝当前画面（先拍快照、再拷进去），照常跑 effect 链；上屏与 effect pass 的模型、视图是
+ *     单位阵，投影是 `ortho(−1, 1, −1, 1)`，`origin` / `scale` / `angles`、视差、抖动都不起作用。
+ *   两份尺寸：几何尺寸 `size` 固定 (2, 2)；合成 RT 尺寸 `fullscreenSize` 取槽 0 静态纹理的图像尺寸，槽 0 是 `_rt_FullFrameBuffer`
+ *   （fullscreenlayer）或没有纹理时取场景尺寸。两者都不内缩。fullscreenlayer 没有 effect、cbm 是 0 / 31 时同普通组合层整层不画。
+ *   对象级的 `fullscreen` 键（`OBJECT_FLAGS`）是另一回事，照报。
  * - `projectlayer`：只在 `autosize` 时起作用，尺寸取正交投影宽高（rea-p5-modelflags §3.1，`p5b-proj`）；另一个作用是透明排序键 −∞，
  *   只在透视场景起作用（P5d），正交场景按列表顺序画。
  * - `cropoffset`：编辑器写的偏移，导入时已加进 `origin`；`wallpaper64.exe` 里没有这个字符串，P5a 步骤 0 实测不改位置。
@@ -242,6 +252,7 @@ const SUPPORTED_MODEL = new Set([
   "solidlayer",
   "passthrough",
   "projectlayer",
+  "fullscreen",
   "cropoffset",
 ]);
 /**
@@ -566,8 +577,8 @@ export function usesLighting(result: TranslateResult): boolean {
 
 /**
  * 模型 JSON 的键：布尔键只认 `true`（`modelFlag`），其余（`puppet` 是路径字符串等）按 `active()`；键名报 `model:<键>`。
- * `passthrough`、`projectlayer` 已实现（P5b 步骤 2，见 `SUPPORTED_MODEL`），`fullscreen`、`instanced` 照报，所以 fullscreenlayer
- * 只报 `model:fullscreen`。组合层带子层要看场景的父子关系，由 `bundle.ts` 报 `model:passthrough:children`。
+ * `passthrough`、`projectlayer`（P5b 步骤 2）与 `fullscreen`（步骤 3）已实现（见 `SUPPORTED_MODEL`），`instanced` 照报，所以
+ * WPE 自带的四个组合层模型（含 fullscreenlayer）都不报。组合层带子层要看场景的父子关系，由 `bundle.ts` 报 `model:passthrough:children`。
  */
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
   for (const [key, value] of Object.entries(model)) {

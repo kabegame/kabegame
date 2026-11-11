@@ -73,6 +73,8 @@ function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
     perspective: false,
     passthroughModel: false,
     copyBackground: true,
+    fullscreen: false,
+    fullscreenSize: null,
     passes: [pass({ blending: "translucent", textures: { 0: 0 } })],
     colorBlendMode: 0,
     effects: [],
@@ -176,10 +178,12 @@ describe("图层渲染图：合成 RT 计数与上屏 pass", () => {
     expect(kinds(plan.steps)).toEqual(["base→c0", "effect→c1", "final→scene"]);
   });
   it("没有纹理时合成 RT 取图层 size，至少 4", () => {
-    expect(compositeSize({ size: [2, 300], solidLayer: false, passthroughModel: false }, undefined)).toEqual([4, 300]);
-    expect(compositeSize({ size: [2, 300], solidLayer: false, passthroughModel: false }, textures[0])).toEqual([
-      219, 216,
-    ]);
+    expect(
+      compositeSize({ size: [2, 300], solidLayer: false, passthroughModel: false, fullscreenSize: null }, undefined),
+    ).toEqual([4, 300]);
+    expect(
+      compositeSize({ size: [2, 300], solidLayer: false, passthroughModel: false, fullscreenSize: null }, textures[0]),
+    ).toEqual([219, 216]);
   });
   it("UV 内缩：上屏的四边形才有，分母是基础纹理的纹理尺寸", () => {
     const e = [Math.fround(0.15) / 256, Math.fround(0.15) / 256].map(Math.fround);
@@ -214,7 +218,9 @@ describe("图层渲染图：合成 RT 计数与上屏 pass", () => {
     expect(uvInset([0, 0], undefined)).toEqual([0, 0]);
   });
   it("solidlayer 带纹理时合成 RT 也取图层 size", () => {
-    expect(compositeSize({ size: [2, 300], solidLayer: true, passthroughModel: false }, textures[0])).toEqual([4, 300]);
+    expect(
+      compositeSize({ size: [2, 300], solidLayer: true, passthroughModel: false, fullscreenSize: null }, textures[0]),
+    ).toEqual([4, 300]);
     const plan = planLayer(layer({ solidLayer: true, effects: [effect([draw()])] }), textures);
     expect(plan.composite).toMatchObject({ width: 200, height: 100 });
   });

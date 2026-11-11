@@ -52,7 +52,9 @@ describe("模型 JSON", () => {
     expect(modelKeys({ material: "materials/a.json", fullscreen: 1 })).toEqual([]);
     expect(modelKeys({ material: "materials/a.json", nopadding: "true" })).toEqual([]);
     expect(modelKeys({ material: "materials/a.json", instanced: 1, passthrough: "1" })).toEqual([]);
-    expect(modelKeys({ material: "materials/a.json", fullscreen: true })).toEqual(["model:fullscreen"]);
+    // `fullscreen` 已实现（P5b 步骤 3），写成 true 也不再报；「只认 true」改由仍照报的 `instanced` 核对
+    expect(modelKeys({ material: "materials/a.json", fullscreen: true })).toEqual([]);
+    expect(modelKeys({ material: "materials/a.json", instanced: true })).toEqual(["model:instanced"]);
     // `nopadding` 已实现（P5b 步骤 1），写成 true 也不再报
     expect(modelKeys({ material: "materials/a.json", nopadding: true, instanced: true })).toEqual(["model:instanced"]);
   });

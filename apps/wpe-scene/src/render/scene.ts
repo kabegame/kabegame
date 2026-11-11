@@ -64,6 +64,12 @@
  *   （`copybackground: false`）建成一个 op：先结束场景 pass，再对目标开一个 `loadOp: "clear"`、清成 (0, 0, 0, 0) 的 render pass，
  *   不画基础材质。不画的组合层（没有启用的 effect、colorBlendMode ∈ {0, 31}）是空计划，没有 op、不建 draw；运行时 effect 开关切到
  *   这种状态时图层重建成空计划（`variantPlans` 的「全关」那份就是它）。
+ * - fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp`）：`geometry: "fullscreen"` 的绘制画 2×2 的 NDC 四边形，
+ *   UV 取步骤的 `uv` / `inset`（effect 中间 pass 本来就是 (1, 1)、不内缩，字节同以前）。fullscreen 图层直接上屏（`direct`）时矩阵照常
+ *   （场景视图投影 · 视差 · W，透视图层换透视），着色器乘 MVP 就是被 W 变换的 2×2 方块；其余角色（effect、末 pass、passthrough
+ *   上屏）的世界矩阵是单位阵、视图投影是 NDC 正交 `FULLSCREEN_VIEW_PROJECTION`，不经 `viewProjectionOf`，所以没有视差、抖动、
+ *   透视，正好铺满全屏（`p5b-fs` 事件 76 的 MVP）。合成路径的基础 pass 是 `copy`（快照 → 合成 RT 0）：源是 `framebuffer`，
+ *   `resolveTexture` 取快照，拷贝尺寸取两边较小值；合成 RT 是场景尺寸时就是整张。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -114,7 +120,7 @@ import {
   sceneViewProjection,
   worldMatrixOf,
 } from "./layout";
-import { identity, multiply, translation, type Mat4 } from "./math";
+import { identity, multiply, orthographic, translation, type Mat4 } from "./math";
 import { parallaxOffset, type SceneParallax } from "./parallax";
 import { createPipeline, createProgram, programVertexPacking, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
@@ -137,6 +143,13 @@ export { drawMatrices } from "./uniforms";
 export const SCENE_TARGET_FORMAT: GPUTextureFormat = "rgba8unorm";
 /** HDR 下的场景目标、快照与合成 RT（A4，J5 抓帧：后备缓冲与合成 RT 都是 RGBA16F）。 */
 export const HDR_TARGET_FORMAT: GPUTextureFormat = "rgba16float";
+
+/**
+ * fullscreen 图层（P5b 步骤 3）除直接上屏以外的视图投影：WPE 的 `ortho(−1, 1, −1, 1, −1, 1)`（`p5b-fs` 事件 76 的 MVP
+ * `[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 1]`），x、y 不变、z ∈ [−1, 1] → 深度 [0, 1]，z = 0 落在 0.5（同场景正交）。
+ * `orthographic` 按 glm 的「视空间 z ∈ [−far, −near] → [0, 1]」，所以 near、far 反着传（同 `sceneViewProjection`）。只读，不要改它。
+ */
+const FULLSCREEN_VIEW_PROJECTION: Mat4 = orthographic(-1, 1, -1, 1, 1, -1);
 
 export function sceneTargetFormat(hdr: boolean): GPUTextureFormat {
   return hdr ? HDR_TARGET_FORMAT : SCENE_TARGET_FORMAT;
@@ -372,7 +385,7 @@ interface LayerRuntime {
 type Op =
   | { kind: "draw"; draw: Draw }
   | { kind: "snapshot" }
-  | { kind: "copy"; resources: LayerResources; effect: number; source: TextureRef; target: TargetRef }
+  | { kind: "copy"; resources: LayerResources; effect: number | null; source: TextureRef; target: TargetRef }
   | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string }
   /** 把合成 RT 清成 (0, 0, 0, 0)（组合层 `copybackground: false`，P5b 步骤 2）。 */
   | { kind: "clear"; resources: LayerResources; target: TargetRef };
@@ -471,11 +484,12 @@ function planProblems(plan: LayerPlan, bundle: SceneBundle, particle?: ScenePart
   return problems;
 }
 
-/** 计划要不要 `_rt_FullFrameBuffer`。 */
+/** 计划要不要 `_rt_FullFrameBuffer`。fullscreen 的基础拷贝（P5b 步骤 3）读快照，`planLayer` 在它之前总有 `snapshot`，这里另认一遍。 */
 function wantsSnapshot(plan: LayerPlan): boolean {
   return plan.steps.some(
     (step) =>
       step.kind === "snapshot" ||
+      (step.kind === "copy" && step.source.kind === "framebuffer") ||
       ((step.kind === "draw" || step.kind === "particles") &&
         Object.values(step.inputs).some((ref) => ref.kind === "framebuffer")),
   );
@@ -790,7 +804,8 @@ export class GpuScene {
         label: "_rt_FullFrameBuffer",
         size: { width, height },
         format,
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        // COPY_SRC：fullscreen 的基础拷贝（P5b 步骤 3）把快照整张拷进合成 RT 0，没有它 WebGPU 校验失败、整个命令缓冲被丢掉（画面全黑）
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
       }),
     );
     this.targetBytes += width * height * texelBytes(format);
@@ -1308,9 +1323,12 @@ export class GpuScene {
         }),
       );
     } else {
-      // 几何：图层四边形（模型空间、未缩放的 size），或 NDC 全屏四边形
+      // 几何：图层四边形（模型空间、未缩放的 size），或 2×2 的 NDC 四边形。后者的 UV 取步骤的：effect 中间 pass 是 (1, 1)、不内缩
+      // （字节同以前），fullscreen 图层直接上屏取纹理上界（P5b 步骤 3）
       const vertices =
-        step.geometry === "fullscreen" ? layerQuad([2, 2], [1, 1]) : layerQuad(layer.size, step.uv, step.inset);
+        step.geometry === "fullscreen"
+          ? layerQuad([2, 2], step.uv, step.inset)
+          : layerQuad(layer.size, step.uv, step.inset);
       const vertexData = program.vertexPacking.pack(vertices);
       vertexBuffer = this.own(
         device.createBuffer({
@@ -1482,6 +1500,17 @@ export class GpuScene {
         renderer: layer.particle ? particleNode(layer.particle, step.node).renderer : undefined,
       });
     }
+    // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs` 事件 76）：直接上屏以外的角色（effect、末 pass、passthrough 上屏）模型与视图都是
+    // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
+    // 正好铺满全屏。效果矩阵跟着是单位阵（`size` 是 (2, 2)，`scale(w/2, h/2)` 也是单位阵）。直接上屏照常（下面）
+    if (layer.fullscreen && step.role !== "direct")
+      return drawUniformValues({
+        ...common,
+        world: identity(),
+        step,
+        layer: { ...layerState, size: layer.size },
+        viewProjection: FULLSCREEN_VIEW_PROJECTION,
+      });
     return drawUniformValues({
       ...common,
       step,

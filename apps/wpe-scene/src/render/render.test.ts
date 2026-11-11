@@ -696,6 +696,8 @@ describe("可渲染性自查", () => {
     perspective: false,
     passthroughModel: false,
     copyBackground: true,
+    fullscreen: false,
+    fullscreenSize: null,
     passes: [pass],
     colorBlendMode: 0,
     effects: [],
