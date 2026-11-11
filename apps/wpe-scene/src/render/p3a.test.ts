@@ -121,6 +121,8 @@ function synthetic(
     solidLayer: false,
     noPadding: false,
     perspective: false,
+    passthroughModel: false,
+    copyBackground: true,
     passes: [scenePass({ uniforms })],
     colorBlendMode: 0,
     effects: [],

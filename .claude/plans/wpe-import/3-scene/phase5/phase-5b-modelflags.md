@@ -347,8 +347,147 @@ export function imageLayerSize(model: ModelJson, objectSize: readonly number[], 
 - `size` 绑属性、同时 `autosize`：WPE 运行中改 `size` 不会重跑纹理回调，我们整场重编译会重新按 `autosize` 覆盖。语料 0 个。
 - 对象 `size` 只写一个分量时，另一个取模型值或 1（按「各分量各自覆盖」推的）。
 
-## 步骤 2–5（提纲，步骤 0 之后补全）
-- **步骤 2 — 组合层：无子层。** 计划新增两种基础 pass（composelayer 着色器从快照铺进合成 RT、清成透明）与「不画」；合成 RT 按 `size`；`projectlayer` 只是尺寸来源。能力表把 `model:passthrough` 细分，带子层的照报 `model:passthrough:children`。
+## 步骤 2 — 组合层：无子层
+
+### 思路
+
+不带子层的组合层就是「一个基础 pass 换了写法的带 effect 图层」，渲染图的形状不变：基础 pass → effect 链 → 借基础材质的 blend 上屏（或 `colorBlendMode` 混合上屏）。和普通图层只差四处，全部落在 `planLayer` 里：
+- **基础 pass**：`copybackground` 为 true（缺省）时画基础材质本身（composelayer 着色器），矩阵是图层的 MVP（场景视图投影 · 视差 · `W`），不是普通基础 pass 那个铺满 RT 的正交。着色器自己用 UV 铺满合成 RT，用 MVP 算这块在屏幕上的位置去采快照。为 false 时不画基础材质，合成 RT 0 清成 (0, 0, 0, 0)。
+- **不画**：没有启用的 effect、`colorBlendMode` 是 0 或 31 时整层没有步骤（WPE 照拷一次快照，看不出来，我们不拷）。
+- **合成 RT 尺寸**：按图层 `size`，同 `solidlayer`。
+- **UV 内缩**：上屏四边形（末 pass、passthrough 上屏）不内缩；组合层没有直接上屏这条路。
+
+渲染器只多认一种步骤 `clear`（把合成 RT 清成透明），和一种绘制角色 `compose`（基础 pass，矩阵取图层 MVP）。`projectlayer` 只是尺寸来源：`autosize` 时尺寸取正交投影宽高，排序键 −∞ 只在透视场景起作用（步骤 0，P5d 的事）。
+
+带子层的组合层留到步骤 4，照报 `model:passthrough:children`；`fullscreen` 的组合层（fullscreenlayer）留到步骤 3，照报 `model:fullscreen`。
+
+### 现状锚点
+
+**a. 能力表把 passthrough、projectlayer 模型整个报掉**（`compile/features.ts:539`）
+```ts
+export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
+  for (const [key, value] of Object.entries(model)) {
+    if (SUPPORTED_MODEL.has(key)) continue;
+    // 现状：fullscreen、passthrough、projectlayer、instanced 为 true 时报 model:<键>
+    if (MODEL_FLAGS.has(key) ? modelFlag(model, key) : active(value)) unsupported.add(`model:${key}`);
+  }
+```
+
+**b. 基础 pass 一律关混合、用铺满 RT 的正交画**（`render/graph.ts:255` 起、`render/uniforms.ts:283`）
+```ts
+  steps.push({ kind: "draw", role: "base", pass: base, effect: null, target: nextComposite(),
+    inputs: staticInputs(base, null), geometry: "fill", uv, inset: NO_INSET, blending: null });
+    case "base": {   // drawMatrices：现状只有这一种基础 pass 的矩阵
+      const fill = orthographic(-(hw || 1), hw || 1, -(hh || 1), hh || 1, -FILL_DEPTH, FILL_DEPTH);
+      return { modelViewProjection: fill, model: identity(), viewProjection: fill };
+    }
+```
+
+**c. 没有 effect、没有 cbm 时走直接上屏**（`render/graph.ts:236`）
+```ts
+  if (!needsComposite(layer, enabled)) {   // 现状：组合层也会走这里，按 composelayer 着色器画一块「铺满全屏」的四边形
+```
+
+**d. 合成 RT 尺寸与内缩只认 `solidLayer`**（`render/graph.ts:102`、`:230`）
+```ts
+    texture && !layer.solidLayer ? [texture.width, texture.height] : [layer.size[0] ?? 0, layer.size[1] ?? 0];
+  const finalInset = layer.solidLayer ? NO_INSET : uvInset(layer.size, baseTexture);
+```
+
+### 点 1 — 图层记下组合层（`compile/bundle.ts`）
+- **新增** `SceneLayer` 两个字段：
+```ts
+  /** 模型 `passthrough`（只认 JSON true）：组合层，基础 pass 见 `copyBackground`（P5b 步骤 2）。 */
+  passthroughModel: boolean;
+  /** 对象 `copybackground`（缺省 true，JSON false 才关）：基础 pass 从快照铺进合成 RT，否则合成 RT 清成透明。 */
+  copyBackground: boolean;
+```
+- **修改** `imageLayerSize` 加一个参数：`autosize` 且 `projectlayer` 时取正交投影宽高（`general.width` / `height`），排在纹理之前（rea §7，`p5b-proj` 实测）。
+- **新增** 两条照报，在读完模型之后：
+  - 组合层有子层（`parents` 里有指向它的）：`model:passthrough:children`（步骤 4）；
+  - 组合层同时 `perspective: true`：`object:perspective`（语料 0 个，WPE 这时基础 pass 用哪套相机没测）。
+
+### 点 2 — 能力表（`compile/features.ts`）
+- **修改** `checkModelFeatures`：`passthrough`、`projectlayer` 不再报（`fullscreen`、`instanced` 照报）；注释写清组合层的语义与子层、fullscreen 的去向。
+- **修改** `SUPPORTED_OBJECT` 里 `copybackground` 的注释（组合层读它，普通模型上中性）。
+
+### 点 3 — 渲染图（`render/graph.ts`）
+- **新增** `DrawRole` 加 `"compose"`；`LayerStep` 加 `{ kind: "clear"; target: TargetRef }`（清成 (0, 0, 0, 0)）。
+- **修改** `planLayer`：
+```ts
+  // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl`）：没有启用的 effect、cbm 是 0 / 31 时整层不画；否则基础 pass 按 copybackground 分两种
+  if (layer.passthroughModel && !needsComposite(layer, enabled)) return { composite: null, steps, reasons };
+  // …
+  if (layer.passthroughModel && !layer.copyBackground) steps.push({ kind: "clear", target: nextComposite() });
+  else steps.push({ kind: "draw", role: layer.passthroughModel ? "compose" : "base", /* geometry 组合层用 "layer" */ … });
+```
+- **修改** `compositeSize`、`finalInset`：`solidLayer || passthroughModel` 时按 `size`、不内缩。
+- `variantPlans`、`planSignature` 照旧（`clear` 步骤进签名）。
+
+### 点 4 — 矩阵与渲染器（`render/uniforms.ts`、`render/scene.ts`）
+- **修改** `drawMatrices`：`compose` 和 `final` 一样取图层 MVP（`viewProjection · W`，视差、抖动已在 `viewProjection` 里）。
+- **修改** `GpuScene`：`clear` 步骤建成一个 op，`runOps` 里 `end()` 之后对目标开一个 `loadOp: "clear"`、清成透明的 render pass；`wantsSnapshot`、`checkPlanOps`、`ensureComposites` 等遍历步骤的地方认它。`compose` 的管线同基础 pass（关混合、写 RGBA）。
+
+### 点 5 — 单测（`compile/p5b.test.ts`、`render/p5b.test.ts` 续写）
+- 能力表：composelayer / projectlayer 模型不报；带子层报 `model:passthrough:children`；fullscreenlayer 只报 `model:fullscreen`。
+- `imageLayerSize`：projectlayer + `autosize` 取正交投影；没有 `autosize` 时照常。
+- `planLayer`（`p5b-cl` 的 CL1–CL5 与 `p5b-proj`）：步骤序列（compose → effect 末 pass；clear → effect；无 effect 时空；cbm 2 时 compose → effect → passthrough）、合成 RT 尺寸、inset 为 0。
+- `drawMatrices` / GpuScene 假设备：compose 的 MVP 和 WPE 抓帧的基础 pass 常量逐元素相同（`p5b-cl` 事件 62，`p5b-grp-par` 事件 62 带视差），`clear` 进了 op 序列。
+
+### 实施方式
+
+同步骤 1：HEAD 快照 `ignore/p5/b2/head` 与 `ignore/p5/b2/ov`，子代理只改 `ov/src`，Claude 出补丁合进工作区。P4e 正在改 `bundle.ts`、`features.ts`、`graph.ts`、`scene.ts`，合并用三方合并，提交时只把补丁打进索引。
+
+### 验收
+1. 子代理：快照里 tsc 0 error，vitest 全过，Prettier。
+2. Claude 独立：变异检查（composelayer 的基础 pass 换回铺满正交、`copybackground: false` 不清屏、无 effect 时照画、合成 RT 回到纹理尺寸、projectlayer 不取投影尺寸）。
+3. 语料：`model:passthrough` 全部去掉，新增 `model:passthrough:children`（带子层的场景），`model:projectlayer` 去掉；别的键不变。
+4. 基线：10 张 × 三档画面哈希不变。
+5. 和 WPE 整帧比：`p5b-cl`、`p5b-proj`、`p5b-proj-720`（固定时刻）；真实样本挑 2–3 张组合层多、其余键少的（如 `2251857160` 的 `copybackground: false`、`3823859141` 的 cbm 30），强制渲染后只比组合层所在区域。
+
+### 步骤 2 实施记录（2026-11-12）
+
+子代理在 `ignore/p5/b2/ov`（HEAD `f6293632` 快照）里实现，补丁 `ignore/p5/b2/step2.patch`。
+
+**改动：** 5 个产品文件照点 1–4 落地：
+- `bundle.ts`：`passthroughModel`、`copyBackground`；`imageLayerSize` 加正交投影参数，`autosize && projectlayer` 时取投影宽高并取整（rea §3.1）；带子层报 `model:passthrough:children`，加 `perspective` 的报 `object:perspective`。
+- `features.ts`：`passthrough`、`projectlayer` 进支持表。
+- `graph.ts`：`compose` 角色与 `clear` 步骤；无 effect 的组合层是空计划；合成 RT 按 `size`、不内缩。
+- `uniforms.ts`：`compose` 取图层 MVP。
+- `scene.ts`：`clear` op。
+
+测试：新增 `render/p5b-compose.test.ts`（23 个），`compile/p5b.test.ts` 续写 21 个；另有 9 个测试文件只是给手写的 `SceneLayer` 补字段，`compositeSize`、`imageLayerSize` 的已有调用补了参数。没有哪个已有断言要改。
+
+**合并：** P4e（粒子子系统）同时在改 `bundle.ts`、`features.ts`、`graph.ts`、`scene.ts`、`render/particles.test.ts`，还没提交。我用 `git merge-file` 逐文件三方合并（基线快照 / 工作区 / 副本），只有 `graph.ts` 文件头注释冲突一处：两边改的是同一段说明，条件那句与「组合层」一条取 P5b，「粒子层」一条取 P4e（`ignore/p5/b2/resolve_graph.py`）。
+
+**验收：**
+1. **检查：**
+   - 子代理快照：tsc 0，vitest 1805 过、1 败（`3830255100: 219 次请求`，HEAD 上同样失败）；
+   - 合并后的工作区（含 P4e 未提交的改动）：tsc 0，vitest 1842 过、1 败（同一条）；
+   - 「HEAD + 本补丁」用临时索引导出：tsc 0，vitest 1600 过、0 败；
+   - Prettier 通过。
+2. **变异：** 9 处全部检出（`mutate_s2.py` 里第一版有两处写错：`compose` 与 `default` 同一分支、`clear` 的原文带花括号，改正后另跑 `mutate_s2b.py`）。
+   - 基础 pass 换回铺满正交；`copybackground: false` 不清屏；无 effect 照画；
+   - 合成 RT 回到纹理尺寸；projectlayer 不取投影；上屏照旧内缩；
+   - 带子层不报；`copybackground` 缺省成 false；渲染器不执行 `clear`。
+3. **语料**（`ignore/p5/b2/out/corpus-diff.txt`）：去掉 68 张的 `model:passthrough`、12 张的 `model:projectlayer`；新增 9 张的 `model:passthrough:children`；别的键不变，干净场景 43 → 43。
+4. **画面哈希：** 和步骤 1 合并后的基线比，10 张 × 3 档全部相同。合并后重建的宿主 `index-DdD5IEiw.js` 含 P4e 未提交的改动。
+5. **和 WPE 整帧比**（`kbp cmp frame`）：
+   - `p5b-cl`（五个组合层：旋转、`copybackground: false`、无 effect 两种、cbm 2）：32 个像素差 1；
+   - `p5b-proj`：0 差异；
+   - `p5b-proj-720` 我们读回的是 1280×720 场景目标，这次会话的 MCP 还没有 `canvas` 参数，没逐像素比：平均色和 1920×1080 那份一致，组合层铺满投影尺寸，合成 RT 尺寸另有单测。
+   - 真实样本：按 WPE 日志回放到抓到的那一帧。
+     - `1333579536`：整屏组合层一致，差异是随机粒子与 2500 → 1920 的缩放。P4e 的子系统在工作区里，这张两步合起来已经没有不支持项。
+     - `3825170583`：经过组合层的人物、翅膀、背景一致；左上角的光束差异来自 `shape` 对象（`object:shape`，没画）；另有随机粒子。`音阶` 组合层读音频频谱，另报不支持。
+     - `3502090109`：差异超过 8 的约 2.4%，最大 92。场景另有 `cull:normal`、音频频谱两项不支持。
+6. 测试工程（6 个）已用 `projects_remove` 移除。
+
+**未实测清单（续）：**
+- `copybackground: false` 的组合层上屏时 `g_Color4`：WPE 没有基础 draw，上屏拿到前一个画过的层的颜色，我们给的是自己的（同步骤 0 的 `g_Color4` 一条，语料不读）。
+- `copybackground` 绑属性或挂脚本时按 true、不报（语料 0 个）。
+- fullscreenlayer 的 `passthroughModel` 也是 true：照报 `model:fullscreen`，dev 强制渲染时会按普通组合层画，步骤 3 改。
+
+## 步骤 3–5（提纲，步骤 0 之后补全）
 - **步骤 3 — `fullscreen`。** 合成路径的第一步换成 `copy`（当前目标 → 合成 RT 0），上屏单位阵 + NDC；无 effect 时 2×2 四边形、MVP 照常算。组里的 fullscreen（当前目标是组的合成 RT）留到步骤 4 一起验。
 - **步骤 4 — 组合层：子层。** 编译期算每个图层归属的组；顶层跳过；组的计划插 `subtree`；子孙的 draw 按组的局部坐标系现算矩阵；`copybackground: false` 的组里写 RGBA、alpha MAX 的管线变体；无 effect 带子层时透传着色器画世界四边形（`copybackground` true 不混合、false translucent）；嵌套；组里的粒子（世界空间系统用组的模型矩阵，rea-p4c 的 `ctx+0xaf0`）。
 - **步骤 5 — `instanced`。** 编译材质前合并 `instance.textures` / `combos`；`usertextures` 照报；合成 RT 按纹理图像尺寸（`solidLayer` 已经排除了 instanced）。

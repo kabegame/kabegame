@@ -1,13 +1,19 @@
 /**
- * P5b 步骤 1 的编译侧单测（`.claude/plans/wpe-import/3-scene/phase5/phase-5b-modelflags.md`「步骤 1」）：图像层尺寸的取值顺序
- * （`imageLayerSize`）、图层上的 `noPadding` / `perspective` 两个标志、能力表放开 `nopadding` 与图像层的 `perspective: true`。
- * 依据是 p5-REPORT「P5b 语义的实测核对」：`p5b-autosize`（`autosize` 覆盖 `size`，三者都缺时 1×1）、`p5b-nopad`、`p5b-persp`。
+ * P5b 的编译侧单测（`.claude/plans/wpe-import/3-scene/phase5/phase-5b-modelflags.md`）：
+ * - 步骤 1：图像层尺寸的取值顺序（`imageLayerSize`）、图层上的 `noPadding` / `perspective` 两个标志、能力表放开 `nopadding` 与
+ *   图像层的 `perspective: true`；
+ * - 步骤 2：组合层（无子层）的 `passthroughModel` / `copyBackground`、`projectlayer` 取正交投影宽高、能力表放开 `passthrough` 与
+ *   `projectlayer`，带子层报 `model:passthrough:children`、组合层又透视报 `object:perspective`。
+ * 依据是 p5-REPORT「P5b 语义的实测核对」：`p5b-autosize`（`autosize` 覆盖 `size`，三者都缺时 1×1）、`p5b-nopad`、`p5b-persp`、
+ * `p5b-cl`、`p5b-proj`。
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, imageLayerSize } from "./bundle";
 import { checkModelFeatures, checkObjectFeatures, checkSceneFeatures } from "./features";
 import type { SceneReader } from "./fs";
-import type { ModelJson, SceneObject } from "./model";
+import { parseModel, type ModelJson, type SceneObject } from "./model";
 import type { Wpesl2wgsl } from "../wpesl2wgsl";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -15,6 +21,8 @@ vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 /** `p5b-autosize` 的纹理：纹理尺寸 64×64，图像尺寸 48×40（NPOT 图像补到 2 的幂）。 */
 const TEXTURE = { width: 48, height: 40, textureWidth: 64, textureHeight: 64 };
 const MATERIAL = "materials/a.json";
+/** 场景的正交投影宽高（`SceneGeneral` 的 `width` / `height`）：只有 `projectlayer` + `autosize` 才读。 */
+const PROJECTION: [number, number] = [1920, 1080];
 
 describe("imageLayerSize：1×1 → 模型宽高 → 对象 size → autosize（p5b-autosize）", () => {
   it.each<[string, ModelJson, number[], number[]]>([
@@ -29,31 +37,38 @@ describe("imageLayerSize：1×1 → 模型宽高 → 对象 size → autosize（
     ],
     ["autosize + size 300×300：取图像尺寸", { material: MATERIAL, autosize: true }, [300, 300], [48, 40]],
   ])("%s", (_name, model, size, expected) => {
-    expect(imageLayerSize(model, size, TEXTURE)).toEqual(expected);
+    expect(imageLayerSize(model, size, TEXTURE, PROJECTION)).toEqual(expected);
   });
 
   it("对象 size 覆盖模型宽高（没有 autosize）", () => {
-    expect(imageLayerSize({ material: MATERIAL, width: 100, height: 50 }, [24, 20], TEXTURE)).toEqual([24, 20]);
+    expect(imageLayerSize({ material: MATERIAL, width: 100, height: 50 }, [24, 20], TEXTURE, PROJECTION)).toEqual([
+      24, 20,
+    ]);
   });
 
   it("模型宽高两个分量各自生效：只写一个时另一个保持 1", () => {
-    expect(imageLayerSize({ material: MATERIAL, width: 100 }, [], TEXTURE)).toEqual([100, 1]);
-    expect(imageLayerSize({ material: MATERIAL, height: 50 }, [], TEXTURE)).toEqual([1, 50]);
+    expect(imageLayerSize({ material: MATERIAL, width: 100 }, [], TEXTURE, PROJECTION)).toEqual([100, 1]);
+    expect(imageLayerSize({ material: MATERIAL, height: 50 }, [], TEXTURE, PROJECTION)).toEqual([1, 50]);
   });
 
   it("模型宽高写成字符串不算（只认 JSON 数字）", () => {
     const model = { material: MATERIAL, width: "100", height: 50 } as unknown as ModelJson;
-    expect(imageLayerSize(model, [], TEXTURE)).toEqual([1, 50]);
+    expect(imageLayerSize(model, [], TEXTURE, PROJECTION)).toEqual([1, 50]);
     expect(
-      imageLayerSize({ material: MATERIAL, width: "100", height: "50" } as unknown as ModelJson, [], TEXTURE),
+      imageLayerSize(
+        { material: MATERIAL, width: "100", height: "50" } as unknown as ModelJson,
+        [],
+        TEXTURE,
+        PROJECTION,
+      ),
     ).toEqual([1, 1]);
   });
 
   it("autosize 没有纹理时不覆盖；autosize 写成 1、字符串不算", () => {
-    expect(imageLayerSize({ material: MATERIAL, autosize: true }, [24, 20], undefined)).toEqual([24, 20]);
-    expect(imageLayerSize({ material: MATERIAL, autosize: true }, [], undefined)).toEqual([1, 1]);
-    expect(imageLayerSize({ material: MATERIAL, autosize: 1 }, [24, 20], TEXTURE)).toEqual([24, 20]);
-    expect(imageLayerSize({ material: MATERIAL, autosize: "true" }, [], TEXTURE)).toEqual([1, 1]);
+    expect(imageLayerSize({ material: MATERIAL, autosize: true }, [24, 20], undefined, PROJECTION)).toEqual([24, 20]);
+    expect(imageLayerSize({ material: MATERIAL, autosize: true }, [], undefined, PROJECTION)).toEqual([1, 1]);
+    expect(imageLayerSize({ material: MATERIAL, autosize: 1 }, [24, 20], TEXTURE, PROJECTION)).toEqual([24, 20]);
+    expect(imageLayerSize({ material: MATERIAL, autosize: "true" }, [], TEXTURE, PROJECTION)).toEqual([1, 1]);
   });
 });
 
@@ -220,5 +235,216 @@ describe("能力表：图像层 perspective 与模型 nopadding（P5b 步骤 1�
   it("模型 nopadding: true 不报 model:nopadding", () => {
     expect(modelKeys({ material: MATERIAL, nopadding: true })).toEqual([]);
     expect(modelKeys({ material: MATERIAL, width: 1920, height: 1080, nopadding: true, autosize: true })).toEqual([]);
+  });
+});
+
+// ———— P5b 步骤 2：组合层（无子层）与 projectlayer ————
+
+describe("imageLayerSize：projectlayer + autosize 取正交投影宽高（p5b-proj）", () => {
+  const PROJECT_LAYER: ModelJson = { material: MATERIAL, passthrough: true, autosize: true, projectlayer: true };
+
+  it("对象 size 500×300 被正交投影覆盖：1920×1080、1280×720", () => {
+    expect(imageLayerSize(PROJECT_LAYER, [500, 300], undefined, [1920, 1080])).toEqual([1920, 1080]);
+    expect(imageLayerSize(PROJECT_LAYER, [500, 300], undefined, [1280, 720])).toEqual([1280, 720]);
+  });
+  it("排在纹理之前：槽 0 有纹理也取正交投影", () => {
+    expect(imageLayerSize(PROJECT_LAYER, [500, 300], TEXTURE, [1280, 720])).toEqual([1280, 720]);
+  });
+  it("正交投影取整（WPE `0x1401875eb`）", () => {
+    expect(imageLayerSize(PROJECT_LAYER, [], undefined, [1280.7, 720.2])).toEqual([1280, 720]);
+  });
+  it("没有 autosize 时 projectlayer 不改尺寸：照常取对象 size、模型宽高", () => {
+    const noAuto: ModelJson = { material: MATERIAL, passthrough: true, projectlayer: true };
+    expect(imageLayerSize(noAuto, [500, 300], TEXTURE, [1920, 1080])).toEqual([500, 300]);
+    expect(imageLayerSize({ ...noAuto, width: 100, height: 50 }, [], TEXTURE, [1920, 1080])).toEqual([100, 50]);
+    expect(imageLayerSize(noAuto, [], undefined, [1920, 1080])).toEqual([1, 1]);
+  });
+  it("projectlayer 写成 1 不算：autosize 回到纹理尺寸", () => {
+    const model = { material: MATERIAL, autosize: true, projectlayer: 1 } as unknown as ModelJson;
+    expect(imageLayerSize(model, [500, 300], TEXTURE, [1920, 1080])).toEqual([48, 40]);
+  });
+  it("普通 composelayer（没有 autosize）的尺寸就是对象 size", () => {
+    expect(imageLayerSize({ material: MATERIAL, passthrough: true }, [600, 300], undefined, [1920, 1080])).toEqual([
+      600, 300,
+    ]);
+  });
+});
+
+/** WPE 的 `materials/util/composelayer.json`：槽 0 是 `_rt_FullFrameBuffer`，没有静态纹理。 */
+const COMPOSE_MATERIAL = {
+  passes: [
+    {
+      shader: "composelayer",
+      depthtest: "disabled",
+      depthwrite: "disabled",
+      blending: "translucent",
+      cullmode: "nocull",
+      textures: ["_rt_FullFrameBuffer"],
+    },
+  ],
+};
+/** WPE 自带的三个组合层模型（`assets/models/util/*.json`），材质都换成上面那份。 */
+const UTIL_MODELS: Record<string, ModelJson> = {
+  composelayer: { material: "materials/util/composelayer.json", passthrough: true },
+  projectlayer: { material: "materials/util/composelayer.json", passthrough: true, autosize: true, projectlayer: true },
+  fullscreenlayer: { material: "materials/util/composelayer.json", fullscreen: true, passthrough: true },
+};
+
+/** 场景里放一组对象；`models/util/*` 是组合层，`models/a.json` 是普通图像层（同 `compileImage`）。 */
+async function compileObjects(objects: Record<string, unknown>[], general: Record<string, unknown> = {}) {
+  const files: Record<string, Uint8Array | string> = {
+    "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+    "P:/p/scene.json": JSON.stringify({
+      general: { orthogonalprojection: { width: 1920, height: 1080 }, ...general },
+      objects,
+    }),
+    "P:/p/models/a.json": JSON.stringify({ material: MATERIAL }),
+    "P:/p/materials/a.json": JSON.stringify({ passes: [{ shader: "s", textures: ["a"] }] }),
+    "P:/p/materials/a.tex": tex(),
+    "P:/p/materials/util/composelayer.json": JSON.stringify(COMPOSE_MATERIAL),
+    "P:/p/shaders/s.vert": "void main() {}",
+    "P:/p/shaders/s.frag": "void main() {}",
+    "P:/p/shaders/composelayer.vert": "void main() {}",
+    "P:/p/shaders/composelayer.frag": "void main() {}",
+  };
+  for (const [name, model] of Object.entries(UTIL_MODELS))
+    files[`P:/p/models/util/${name}.json`] = JSON.stringify(model);
+  return compileScene({
+    projectDir: "P:/p",
+    sceneAssets: ["A:/assets"],
+    reader: memoryReader(files),
+    translator,
+    postprocess: "disabled",
+    exhaustive: true,
+  });
+}
+/** `p5b-cl` 的 CL1 那样的 composelayer 对象（`ignore/p5/b0/gen_b.py` 的 `p_cl`）。 */
+const compose = (id: number, extra: Record<string, unknown> = {}) => ({
+  id,
+  name: `CL${id}`,
+  image: "models/util/composelayer.json",
+  origin: "500 300 0",
+  size: "600 300",
+  angles: "0 0 0.4",
+  ...extra,
+});
+
+describe("compileScene：组合层的两个字段与照报项（P5b 步骤 2）", () => {
+  it("composelayer：passthroughModel，copybackground 缺省 true，尺寸 = 对象 size，不报", async () => {
+    const bundle = await compileObjects([compose(10)]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({
+      passthroughModel: true,
+      copyBackground: true,
+      size: [600, 300],
+      perspective: false,
+    });
+    // 基础 pass 的槽 0 是快照：需要帧缓冲、没有静态纹理
+    expect(bundle.layers[0].passes[0]).toMatchObject({ runtime: { 0: "_rt_FullFrameBuffer" }, framebuffer: true });
+    expect(bundle.layers[0].passes[0].textures[0]).toBeUndefined();
+  });
+
+  it("copybackground：只有 JSON false 才关；true、写成 0 / 字符串都按缺省 true", async () => {
+    const bundle = await compileObjects([
+      compose(10, { copybackground: false }),
+      compose(11, { copybackground: true }),
+      compose(12, { copybackground: 0 }),
+      compose(13, { copybackground: "false" }),
+    ]);
+    expect(bundle.layers.map((layer) => layer.copyBackground)).toEqual([false, true, true, true]);
+  });
+
+  it("projectlayer：尺寸取正交投影宽高（对象 size 500×300 被覆盖），1280×720 的场景同样", async () => {
+    const object = (id: number) => ({
+      id,
+      image: "models/util/projectlayer.json",
+      origin: "960 540 0",
+      size: "500 300",
+    });
+    const full = await compileObjects([object(10)]);
+    expect(full.unsupported).toEqual([]);
+    expect(full.layers[0]).toMatchObject({ passthroughModel: true, size: [1920, 1080] });
+    const small = await compileObjects([object(10)], { orthogonalprojection: { width: 1280, height: 720 } });
+    expect(small.unsupported).toEqual([]);
+    expect(small.layers[0].size).toEqual([1280, 720]);
+  });
+
+  it("带子层：报 model:passthrough:children；子层是分组节点也算", async () => {
+    const bundle = await compileObjects([
+      compose(10),
+      { id: 11, image: "models/a.json", origin: "0 0 0", parent: 10 },
+      compose(12),
+    ]);
+    expect(bundle.unsupported).toEqual(["model:passthrough:children"]);
+    const group = await compileObjects([compose(10), { id: 11, name: "group", origin: "0 0 0", parent: 10 }]);
+    expect(group.unsupported).toEqual(["model:passthrough:children"]);
+  });
+
+  it("普通图像层带子层不报；组合层作为子层（父是普通图像层）不报", async () => {
+    const plain = await compileObjects([
+      { id: 10, image: "models/a.json", origin: "960 540 0" },
+      { id: 11, image: "models/a.json", origin: "0 0 0", parent: 10 },
+    ]);
+    expect(plain.unsupported).toEqual([]);
+    const child = await compileObjects([
+      { id: 10, image: "models/a.json", origin: "960 540 0" },
+      compose(11, { parent: 10 }),
+    ]);
+    expect(child.unsupported).toEqual([]);
+    expect(child.layers[1].passthroughModel).toBe(true);
+  });
+
+  it("组合层又 perspective: true：报 object:perspective（普通图像层不报）", async () => {
+    const bundle = await compileObjects([compose(10, { perspective: true })]);
+    expect(bundle.unsupported).toEqual(["object:perspective"]);
+    expect(bundle.layers[0]).toMatchObject({ passthroughModel: true, perspective: true });
+    const plain = await compileObjects([{ id: 10, image: "models/a.json", origin: "960 540 0", perspective: true }]);
+    expect(plain.unsupported).toEqual([]);
+  });
+
+  it("fullscreenlayer 只报 model:fullscreen", async () => {
+    const bundle = await compileObjects([{ id: 10, image: "models/util/fullscreenlayer.json", origin: "960 540 0" }]);
+    expect(bundle.unsupported).toEqual(["model:fullscreen"]);
+  });
+
+  it("普通图像层、分组节点：passthroughModel false；copyBackground 在普通图像层上照记、分组节点缺省 true", async () => {
+    const bundle = await compileObjects([
+      { id: 10, image: "models/a.json", origin: "960 540 0", copybackground: false },
+      { id: 11, name: "group", origin: "0 0 0" },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    // 普通图像层上 copybackground 中性：渲染图只在组合层上读它
+    expect(bundle.layers[0]).toMatchObject({ passthroughModel: false, copyBackground: false });
+    expect(bundle.layers[1]).toMatchObject({ passthroughModel: false, copyBackground: true });
+  });
+});
+
+describe("能力表：组合层与 projectlayer 模型（P5b 步骤 2）", () => {
+  it("composelayer、projectlayer 模型不报", () => {
+    expect(modelKeys(UTIL_MODELS.composelayer)).toEqual([]);
+    expect(modelKeys(UTIL_MODELS.projectlayer)).toEqual([]);
+    // 单独写 projectlayer（没有 autosize）只剩透明排序键，正交场景中性
+    expect(modelKeys({ material: MATERIAL, projectlayer: true })).toEqual([]);
+  });
+  it("fullscreenlayer 只报 model:fullscreen；instanced 的组合层照报 model:instanced", () => {
+    expect(modelKeys(UTIL_MODELS.fullscreenlayer)).toEqual(["model:fullscreen"]);
+    expect(modelKeys({ material: MATERIAL, passthrough: true, instanced: true })).toEqual(["model:instanced"]);
+  });
+  it("对象上的 copybackground 不报（true / false 都是）", () => {
+    expect(objectKeys({ id: 1, image: "models/util/composelayer.json", copybackground: false })).toEqual([]);
+    expect(objectKeys({ id: 1, image: "models/util/composelayer.json", copybackground: true })).toEqual([]);
+  });
+});
+
+const root = process.env.KABEGAME_WPE_ROOT;
+const utilModel = (name: string) => join(root ?? "", "assets", "models", "util", `${name}.json`);
+describe.skipIf(!root || !existsSync(utilModel("composelayer")))("WPE 自带的组合层模型（assets/models/util）", () => {
+  it.each<[string, string[]]>([
+    ["composelayer", []],
+    ["composelayer_depthtest", []],
+    ["projectlayer", []],
+    ["fullscreenlayer", ["model:fullscreen"]],
+  ])("%s → %j", (name, expected) => {
+    expect(modelKeys(parseModel(readFileSync(utilModel(name), "utf8")))).toEqual(expected);
   });
 });

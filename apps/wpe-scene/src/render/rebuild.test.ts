@@ -321,6 +321,8 @@ function layer(object: number, effects: SceneEffect[], extra: Partial<SceneLayer
     solidLayer: false,
     noPadding: false,
     perspective: false,
+    passthroughModel: false,
+    copyBackground: true,
     passes: [pass(`objects/${object}/passes/0`, P.base, { textures: { 0: 0 } })],
     colorBlendMode: 0,
     effects,

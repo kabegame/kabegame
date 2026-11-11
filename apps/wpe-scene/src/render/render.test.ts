@@ -694,6 +694,8 @@ describe("可渲染性自查", () => {
     solidLayer: false,
     noPadding: false,
     perspective: false,
+    passthroughModel: false,
+    copyBackground: true,
     passes: [pass],
     colorBlendMode: 0,
     effects: [],

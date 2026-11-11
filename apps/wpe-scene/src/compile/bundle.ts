@@ -356,6 +356,17 @@ export interface SceneLayer {
    * p5-REPORT `p5b-persp`）。粒子、分组、声音等图层为 false。
    */
   perspective: boolean;
+  /**
+   * 模型 `passthrough`（只认 JSON true，P5b 步骤 2）：组合层（composelayer、projectlayer 等）。基础 pass 见 `copyBackground`；
+   * 合成 RT 按 `size`、上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31 时整层不画（`render/graph.ts`，p5-REPORT `p5b-cl`）。
+   * 带子层的报 `model:passthrough:children`（步骤 4），`fullscreen` 的另报 `model:fullscreen`（步骤 3）。没有图像模型的图层为 false。
+   */
+  passthroughModel: boolean;
+  /**
+   * 对象 `copybackground`（缺省 true，只有 JSON false 才关，P5b 步骤 2）：组合层的基础 pass 用基础材质（composelayer 着色器）把层
+   * 背后的快照铺进合成 RT；关掉时不画基础材质、合成 RT 0 清成 (0, 0, 0, 0)（`p5b-cl` 的 CL2）。只对组合层起作用，别的图层上中性。
+   */
+  copyBackground: boolean;
   /** 基础材质的 pass。 */
   passes: ScenePass[];
   /** 0 普通；31 上屏改 additive；其它值走 passthrough（B7 / B8）。 */
@@ -432,16 +443,24 @@ export function passthroughCombos(colorBlendMode: number): Record<string, number
 
 /**
  * 图像层的尺寸（P5b 步骤 1；rea-p5-modelflags §7「尺寸的最终取值顺序」，p5-REPORT `p5b-autosize` 实测）：1×1 → 模型 `width` /
- * `height`（是数字才算，两个分量各自生效）→ 对象 `size`（`objectSize`，解析出的分量各自覆盖）→ `autosize` 时槽 0 纹理的图像尺寸
- * （覆盖前面的值；没有纹理时不覆盖）。WPE 的 `autosize` 在纹理就绪时覆盖对象 `size`，我们没有异步的纹理就绪，编译期按同一顺序一次算完。
- * 精灵表的帧尺寸、`projectlayer` 的正交投影、用户纹理的参考尺寸不在这里：前者随图像层帧动画（`tex:animation`），后两者属步骤 2 / 照报。
+ * `height`（是数字才算，两个分量各自生效）→ 对象 `size`（`objectSize`，解析出的分量各自覆盖）→ `autosize` 时覆盖前面的值：
+ * - `projectlayer`（P5b 步骤 2，rea §3.1，`p5b-proj` 实测）：正交投影宽高（`projection`，即 `SceneGeneral` 的 `width` / `height`），
+ *   WPE 取整（`0x1401875eb`）。排在纹理之前，组合层的槽 0 是 `_rt_FullFrameBuffer`、本来就没有纹理；
+ * - 否则槽 0 纹理的图像尺寸；没有纹理时不覆盖。
+ * WPE 的 `autosize` 在纹理就绪时覆盖对象 `size`，我们没有异步的纹理就绪，编译期按同一顺序一次算完。精灵表的帧尺寸、用户纹理的参考
+ * 尺寸不在这里：前者随图像层帧动画（`tex:animation`），后者照报（`material:usertextures`）。透视场景（正交投影为空）里 `projectlayer`
+ * 的尺寸来源读码未知，那种场景整张报 `camera:perspective`，这里按渲染器的场景尺寸取。
  */
 export function imageLayerSize(
   model: ModelJson,
   objectSize: readonly number[],
   texture: Pick<SceneTexture, "width" | "height"> | undefined,
+  projection: readonly [number, number],
 ): number[] {
-  if (texture && modelFlag(model, "autosize")) return [texture.width, texture.height];
+  if (modelFlag(model, "autosize")) {
+    if (modelFlag(model, "projectlayer")) return [Math.trunc(projection[0]), Math.trunc(projection[1])];
+    if (texture) return [texture.width, texture.height];
+  }
   const fromModel = [model.width, model.height];
   return [0, 1].map((axis) => {
     const value = fromModel[axis];
@@ -1062,6 +1081,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       solidLayer: false,
       noPadding: false,
       perspective: false,
+      passthroughModel: false,
+      copyBackground: true,
       passes: [],
       colorBlendMode: Math.trunc(
         asNumber(
@@ -1101,6 +1122,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     layer.noPadding = modelFlag(model, "nopadding");
     // 只认 JSON true：绑属性、挂脚本等由能力表报 `object:perspective`
     layer.perspective = object.perspective === true;
+    // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl`）：`copybackground` 缺省 true（基类构造 `FUN_1401e6980` 给 `+0x304` 置 0x40，
+    // rea-p5-modelflags 开头的标志表），只有 JSON false 才关
+    layer.passthroughModel = modelFlag(model, "passthrough");
+    layer.copyBackground = object.copybackground !== false;
+    if (layer.passthroughModel) {
+      // 带子层（有对象的父指向它）：子孙要由组按局部正交画进合成 RT、不在顶层画，步骤 4 才做
+      if (parents.includes(index)) unsupported.add("model:passthrough:children");
+      // 组合层又 `perspective: true`：基础 pass 与上屏各用哪套相机没测过（语料 0 个），照报
+      if (layer.perspective) unsupported.add("object:perspective");
+    }
     if (!model.material) {
       unsupported.add("material:missing");
       continue;
@@ -1113,10 +1144,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const material = parseMaterial(materialText);
     for (const [k, pass] of material.passes.entries())
       layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
-    // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸。deep_space 的 Background
-    // 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
+    // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸（`projectlayer` 取正交投影宽高，
+    // 步骤 2）。deep_space 的 Background 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
     const base = layer.passes[0]?.textures[0];
-    layer.size = imageLayerSize(model, layer.size, base === undefined ? undefined : bundle.textures[base]);
+    layer.size = imageLayerSize(model, layer.size, base === undefined ? undefined : bundle.textures[base], [
+      bundle.general.width,
+      bundle.general.height,
+    ]);
 
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;

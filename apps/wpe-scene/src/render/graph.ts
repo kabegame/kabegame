@@ -12,11 +12,18 @@
  *   colorBlendMode ∉ {0, 31} 时所有 effect 都留在合成 RT，最后由 passthrough 上屏（B8）。
  * - **合成 RT 数** = min(2, 写进合成链的次数)。每个 effect 的最后一个绘制 pass 与每个 `compose` pass 各写一次，基础 pass 写一次、
  *   上屏的那次不算，正好是 WPE 的 `min(2, passthrough + Σ(1 + compose))`（B5）：passthrough 的 +1 就是最后一个 effect 也留在合成链。
- *   第 n 次写进合成 RT `n % 2`。尺寸取基础材质槽 0 纹理的图像尺寸（没有纹理取图层 size），再取 max(4, ·)。
+ *   第 n 次写进合成 RT `n % 2`。尺寸取基础材质槽 0 纹理的图像尺寸（没有纹理、`solidLayer` 或组合层取图层 size），再取 max(4, ·)。
  * - **`_rt_FullFrameBuffer`**（B8）：场景目标的整帧快照，每图层至多拷一次，时机是三处里最早满足的一处：
  *   图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前。
  *   合成链不画进场景，所以三处拷到的都是画到本图层之前的场景。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」
- *   的条件；`fullscreen` 与 `passthrough` 对象另报 unsupported（P4a 起有父子层，但父层不会是 passthrough），条件恒成立。
+ *   的条件；`fullscreen` 另报 unsupported，带子层的组合层也照报（`model:passthrough:children`），所以没有哪个图层的父层是组合层，
+ *   条件恒成立。
+ * - **组合层**（P5b 步骤 2，`SceneLayer.passthroughModel`，p5-REPORT `p5b-cl`）：不带子层时就是基础 pass 换了写法的合成路径。
+ *   没有启用的 effect、colorBlendMode ∈ {0, 31} 时整层不画（空计划；WPE 照拷一次快照，看不出来，不拷）。否则基础 pass 按
+ *   `copyBackground` 分两种：true 画基础材质（composelayer 着色器，角色 `compose`），用 a_TexCoord 铺满合成 RT，按图层 MVP 算这块在
+ *   屏幕上的位置去采快照；false 不画基础材质，合成 RT 0 清成 (0, 0, 0, 0)（`clear` 步骤）。两种都占合成链的第一次写入。合成 RT 按
+ *   图层 size、上屏（末 pass、passthrough）不内缩。快照照上面的规则：composelayer 材质的槽 0 是 `_rt_FullFrameBuffer`，规则 1 在图层
+ *   开始时拷（`copyBackground` 为 false 时同样拷，同 WPE 的拷贝时机，只是没人读）。
  * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：一个 `particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
@@ -32,9 +39,11 @@ export type TargetRef =
 
 /**
  * - `direct`：直接上屏的基础 pass；`base`：画进合成 RT 的基础 pass；`effect`：画全屏四边形到合成 RT / fbo；
- * - `final`：最后一个 effect 的最后一个绘制 pass，上屏；`passthrough`：colorBlendMode 混合的上屏 pass。
+ * - `final`：最后一个 effect 的最后一个绘制 pass，上屏；`passthrough`：colorBlendMode 混合的上屏 pass；
+ * - `compose`：组合层（`copyBackground` 为 true）画进合成 RT 的基础 pass（P5b 步骤 2）：图层四边形、图层 MVP（同直接上屏），
+ *   composelayer 着色器自己按 a_TexCoord 铺满合成 RT。和 effect pass 的 `compose` 字段（B5，`SceneEffectStep.compose`）不是一回事。
  */
-export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough";
+export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough" | "compose";
 /**
  * - `layer`：图层世界四边形（模型空间、未缩放的 size），场景视图投影 × 图层模型矩阵；
  * - `fill`：同一个四边形用正交投影画满目标、单位模型矩阵（基础 pass 画进合成 RT）；
@@ -78,7 +87,9 @@ export type LayerStep =
   | ParticleStep
   | { kind: "snapshot" }
   | { kind: "copy"; effect: number; source: TextureRef; target: TargetRef }
-  | { kind: "swap"; effect: number; source: string; target: string };
+  | { kind: "swap"; effect: number; source: string; target: string }
+  /** 把目标清成 (0, 0, 0, 0)：组合层 `copyBackground` 为 false 时代替基础 pass（P5b 步骤 2，WPE 只清颜色、不清深度）。 */
+  | { kind: "clear"; target: TargetRef };
 
 export interface LayerPlan {
   /** 合成 RT 的张数与尺寸；直接上屏时为 null。 */
@@ -90,13 +101,18 @@ export interface LayerPlan {
 
 type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
 
-/** 合成 RT 尺寸（B5 `FUN_1402091e0`）：基础材质槽 0 纹理的图像尺寸，没有纹理或 `solidLayer` 取图层 size，再取 max(4, ·)。精灵表取单帧留到 P6。 */
+/**
+ * 合成 RT 尺寸（B5 `FUN_1402091e0`）：基础材质槽 0 纹理的图像尺寸，没有纹理、`solidLayer` 或组合层（非 fullscreen 的取
+ * `round(size)`，rea-p5-modelflags §2.3，`p5b-cl` 实测 600×300）取图层 size，再取 max(4, ·)。精灵表取单帧留到 P6。
+ */
 export function compositeSize(
-  layer: Pick<SceneLayer, "size" | "solidLayer">,
+  layer: Pick<SceneLayer, "size" | "solidLayer" | "passthroughModel">,
   texture: TextureSize | undefined,
 ): [number, number] {
   const [w, h] =
-    texture && !layer.solidLayer ? [texture.width, texture.height] : [layer.size[0] ?? 0, layer.size[1] ?? 0];
+    texture && !layer.solidLayer && !layer.passthroughModel
+      ? [texture.width, texture.height]
+      : [layer.size[0] ?? 0, layer.size[1] ?? 0];
   return [Math.max(4, Math.round(w)), Math.max(4, Math.round(h))];
 }
 
@@ -193,9 +209,11 @@ export function planLayer(
   const uv = textureUvExtent(baseTexture);
   // UV 内缩分两种（P5b 步骤 1，p5-REPORT `p5b-nopad`）：直接上屏（WPE `+0x490`，flags & 0x226）在 fullscreen、nopadding、
   // passthrough、solidlayer 时不内缩；末 pass 与 passthrough 上屏（`+0x2e8`，flags & 0x222）不看 nopadding。
-  // `fullscreen`、`passthrough` 模型照报不支持，步骤 2、3 再加进这两个条件
-  const directInset = layer.solidLayer || layer.noPadding ? NO_INSET : uvInset(layer.size, baseTexture);
-  const finalInset = layer.solidLayer ? NO_INSET : uvInset(layer.size, baseTexture);
+  // 组合层（步骤 2）两块都不内缩（rea-p5-modelflags §2.3，`p5b-cl` 上屏 UV 0–1）；它不会走直接上屏，加进去只为和 WPE 的条件一致。
+  // `fullscreen` 模型照报不支持，步骤 3 再加
+  const flat = layer.solidLayer || layer.passthroughModel;
+  const directInset = flat || layer.noPadding ? NO_INSET : uvInset(layer.size, baseTexture);
+  const finalInset = flat ? NO_INSET : uvInset(layer.size, baseTexture);
   const additive = layer.colorBlendMode === 31;
   const passthrough = isPassthroughBlend(layer.colorBlendMode);
   let snapped = false;
@@ -217,6 +235,9 @@ export function planLayer(
   };
 
   if (!needsComposite(layer, enabled)) {
+    // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl` 的 CL3、CL5）：没有启用的 effect、colorBlendMode ∈ {0, 31}、没有子层时整层不画。
+    // WPE 在图层开始时照拷一次快照，没人读，不拷。带子层的照报（`model:passthrough:children`），步骤 4 再画子树
+    if (layer.passthroughModel) return { composite: null, steps, reasons };
     // 规则 1：基础材质需要帧缓冲
     if (base.framebuffer) snapshot();
     steps.push({
@@ -245,18 +266,39 @@ export function planLayer(
     current = index;
     return { kind: "composite", index };
   };
-  steps.push({
-    kind: "draw",
-    role: "base",
-    pass: base,
-    effect: null,
-    target: nextComposite(),
-    inputs: staticInputs(base, null),
-    geometry: "fill",
-    uv,
-    inset: NO_INSET,
-    blending: null,
-  });
+  if (layer.passthroughModel && !layer.copyBackground) {
+    // 组合层 `copybackground: false`（`p5b-cl` 的 CL2）：不画基础材质，合成 RT 0 清成 (0, 0, 0, 0)，同样占合成链的第一次写入
+    steps.push({ kind: "clear", target: nextComposite() });
+  } else if (layer.passthroughModel) {
+    // 组合层的基础 pass（`p5b-cl` 的 CL1、CL4，事件 62 / 132）：基础材质本身（composelayer 着色器），图层四边形配图层 MVP
+    // （场景视图投影 · 视差 · W，WPE 的模型 = W、视图投影 = 场景相机）。着色器用 a_TexCoord 铺满合成 RT，所以 UV 取 0–1、不内缩
+    // （rea-p5-modelflags §2.3：有 effect 或 colorBlendMode 混合时 UV 上界取 1，走到这里两者必有其一）；关混合、四通道直写
+    // （实测写掩码 RGBA、不混合）
+    steps.push({
+      kind: "draw",
+      role: "compose",
+      pass: base,
+      effect: null,
+      target: nextComposite(),
+      inputs: staticInputs(base, null),
+      geometry: "layer",
+      uv: [1, 1],
+      inset: NO_INSET,
+      blending: null,
+    });
+  } else
+    steps.push({
+      kind: "draw",
+      role: "base",
+      pass: base,
+      effect: null,
+      target: nextComposite(),
+      inputs: staticInputs(base, null),
+      geometry: "fill",
+      uv,
+      inset: NO_INSET,
+      blending: null,
+    });
 
   // 上屏的那一步：最后一个启用 effect 的最后一个绘制 pass（passthrough 时没有）
   let finalEffect = -1,
@@ -361,12 +403,15 @@ export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]
     planLayer(layer, textures, (e) => (variable.includes(e) ? open(e) : layer.effects[e].enabled));
   return [
     plan(() => true), // 每个 pass 的普通角色
-    plan(() => false), // 基础 pass 直接上屏
+    plan(() => false), // 基础 pass 直接上屏；组合层（cbm 0 / 31）是空计划，整层不画
     ...variable.map((v) => plan((e) => e <= v)), // v 的上屏角色
   ];
 }
 
-/** 渲染图的签名：步骤序列、角色、目标、合成 RT。相同就不用重建（同 WPE「数值变了才重建」）。pass 只取稳定键。 */
+/**
+ * 渲染图的签名：步骤序列、角色、目标、合成 RT。相同就不用重建（同 WPE「数值变了才重建」）。pass 只取稳定键；`clear` 等没有 pass 的
+ * 步骤原样进签名。
+ */
 export function planSignature(plan: LayerPlan): string {
   const steps = plan.steps.map((step) =>
     step.kind === "draw" || step.kind === "particles" ? { ...step, pass: step.pass.key } : step,

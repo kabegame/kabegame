@@ -164,7 +164,8 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
 /**
  * 支持或中性的对象键。
  * - `colorBlendMode`：0 普通，31 改成 additive，其它值走 passthrough 上屏（B7 / B8）。
- * - `copybackground`：只对 passthrough 模型生效（B9），普通图像模型上没有渲染效果；passthrough 模型另报 `model:passthrough`。
+ * - `copybackground`：只对组合层（passthrough 模型）生效（B9），普通图像模型上没有渲染效果。组合层已实现（P5b 步骤 2，
+ *   `SceneLayer.copyBackground`）：缺省 true，基础 pass 从快照铺进合成 RT；JSON false 时合成 RT 0 清成透明（p5-REPORT `p5b-cl`）。
  * - `solid`：渲染路径不读（B9，推断与鼠标命中有关）。
  * - `ledsource`：Razer Chroma 外设灯效的取色来源，不参与渲染。
  * - `brightness`：只在 HDR 下乘进颜色（B10，`render/uniforms.ts` 的 `colorScale`），LDR 下不生效。
@@ -216,14 +217,31 @@ const OBJECT_FLAGS = [
 ];
 /**
  * 支持或中性的模型键。
- * - `autosize`：纹理就绪时用槽 0 纹理的图像尺寸覆盖对象 `size` 与模型 `width` / `height`（P5b 步骤 1，`bundle.ts` 的
- *   `imageLayerSize`，p5-REPORT `p5b-autosize`）；没有纹理时不覆盖。精灵表的帧尺寸随图像层帧动画（`tex:animation`）另报。
+ * - `autosize`：纹理就绪时覆盖对象 `size` 与模型 `width` / `height`（P5b 步骤 1，`bundle.ts` 的 `imageLayerSize`，p5-REPORT
+ *   `p5b-autosize`）：带 `projectlayer` 时取正交投影宽高（步骤 2，`p5b-proj`），否则取槽 0 纹理的图像尺寸、没有纹理时不覆盖。
+ *   精灵表的帧尺寸随图像层帧动画（`tex:animation`）另报。
  * - `nopadding`：直接上屏的四边形不内缩，带 effect 时末 pass 照旧内缩（P5b 步骤 1，`render/graph.ts`，p5-REPORT `p5b-nopad`）。
  * - `solidlayer`：合成 RT 按图层 `size`（`compositeSize`）；UV 不内缩（`uvInset`）。
  *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
+ * - `passthrough`：组合层（P5b 步骤 2，`SceneLayer.passthroughModel`，p5-REPORT `p5b-cl`）：基础 pass 按 `copybackground` 从快照铺进
+ *   合成 RT 或清成透明，之后照常跑 effect 链、借基础材质的 blend 上屏（`colorBlendMode` 混合时 passthrough 上屏）；合成 RT 按 `size`、
+ *   上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31 时整层不画。没实现的两种形态另报：带子层的 `model:passthrough:children`
+ *   （`bundle.ts` 报，步骤 4），`fullscreen` 的（fullscreenlayer）由 `model:fullscreen` 报（步骤 3）。
+ * - `projectlayer`：只在 `autosize` 时起作用，尺寸取正交投影宽高（rea-p5-modelflags §3.1，`p5b-proj`）；另一个作用是透明排序键 −∞，
+ *   只在透视场景起作用（P5d），正交场景按列表顺序画。
  * - `cropoffset`：编辑器写的偏移，导入时已加进 `origin`；`wallpaper64.exe` 里没有这个字符串，P5a 步骤 0 实测不改位置。
  */
-const SUPPORTED_MODEL = new Set(["material", "width", "height", "autosize", "nopadding", "solidlayer", "cropoffset"]);
+const SUPPORTED_MODEL = new Set([
+  "material",
+  "width",
+  "height",
+  "autosize",
+  "nopadding",
+  "solidlayer",
+  "passthrough",
+  "projectlayer",
+  "cropoffset",
+]);
 /**
  * 模型 JSON 的布尔键（`FUN_1401fac50`，rea-p5-modelflags §7）：WPE 只认 JSON 的 `true`，写成 1、字符串等于没写
  * （P5a 步骤 0 实测 `fullscreen: 1` 不生效）。能力表与 `bundle.ts` 读这些键都经 `modelFlag`。
@@ -543,7 +561,11 @@ export function usesLighting(result: TranslateResult): boolean {
   return (result.combos ?? []).some((combo) => combo.name.toUpperCase() === "LIGHTING" && combo.value !== 0);
 }
 
-/** 模型 JSON 的键：布尔键只认 `true`（`modelFlag`），其余（`puppet` 是路径字符串等）按 `active()`；键名报 `model:<键>`。 */
+/**
+ * 模型 JSON 的键：布尔键只认 `true`（`modelFlag`），其余（`puppet` 是路径字符串等）按 `active()`；键名报 `model:<键>`。
+ * `passthrough`、`projectlayer` 已实现（P5b 步骤 2，见 `SUPPORTED_MODEL`），`fullscreen`、`instanced` 照报，所以 fullscreenlayer
+ * 只报 `model:fullscreen`。组合层带子层要看场景的父子关系，由 `bundle.ts` 报 `model:passthrough:children`。
+ */
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
   for (const [key, value] of Object.entries(model)) {
     if (SUPPORTED_MODEL.has(key)) continue;
@@ -721,7 +743,8 @@ export function checkParticleProgram(
  *   写成 `{user}` / `{script}`：`particle:binding:<类别>:<名字>:<字段>`。
  * - 系统 `flags`（C3）：bit0–7 支持。bit0 世界空间（P4c 步骤 4，rea-p4c-sim.md 第 5 节，实测见报告「P4c 语义的实测核对」与
  *   `ignore/p4/c4` 的回放）：模拟侧见 `particles/system.ts`，绘制时模型矩阵是单位阵（`render/scene.ts`）；组合层里的世界空间系统
- *   WPE 另有一条路径（`ctx+0xaf0` 临时设成模型矩阵），我们没有组合层（`model:passthrough` 等照报）。bit1 唯一的读取点是关混帧
+ *   WPE 另有一条路径（`ctx+0xaf0` 临时设成模型矩阵），我们的组合层还不带子层（`model:passthrough:children` 照报，P5b 步骤 4）。
+ *   bit1 唯一的读取点是关混帧
  *   （rea-p4b-render.md 2.3【确，有界】，P4b 步骤 2）。更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，
  *   `0x1401c56e9`，高位其实被丢掉；没有样本，保守报）。
  * - `children` 是非空数组：`particle:children`（P4e；WPE 只读数组，`0x1401d0899`）。

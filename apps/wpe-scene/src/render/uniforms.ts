@@ -273,7 +273,11 @@ export const LIGHT_UNIFORMS = {
  * - `base`：正交投影把图层四边形画满合成 RT，单位模型矩阵（B7）；
  * - `effect`：NDC 全屏四边形、MVP 为单位阵；`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)，
  *   `g_EffectModelViewProjectionMatrix` = 图层 MVP × 同一缩放，纹理投影与后者相同；
- * - `final` / `passthrough`：图层四边形用图层 MVP 上屏；效果矩阵不缩放，纹理投影 = MVP × scale(w/2, h/2)。
+ * - `final` / `passthrough`：图层四边形用图层 MVP 上屏；效果矩阵不缩放，纹理投影 = MVP × scale(w/2, h/2)；
+ * - `compose`（组合层画进合成 RT 的基础 pass，P5b 步骤 2）：和 `direct` 一样取图层 MVP，`g_ModelMatrix` = 图层世界矩阵、
+ *   `g_ViewProjectionMatrix` 照给（带视差与抖动）。WPE 这一下的模型是 `W`、视图投影是场景相机（rea-p5-modelflags §2.4），`p5b-cl`
+ *   事件 62 / 132 与带视差的 `p5b-grp-par` 事件 62 的 MVP 逐元素对上（`render/p5b-compose.test.ts`）。composelayer 着色器只读 MVP；
+ *   效果矩阵同直接上屏取缺省（同 MVP、纹理投影为单位阵），没有实测。
  */
 export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: readonly number[], viewProjection: Mat4) {
   const model = world;
@@ -307,6 +311,8 @@ export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: re
         effectModelViewProjection: layerMvp,
         effectTextureProjection: multiply(layerMvp, half),
       };
+    case "compose":
+    case "direct":
     default:
       return { modelViewProjection: layerMvp, model, viewProjection };
   }

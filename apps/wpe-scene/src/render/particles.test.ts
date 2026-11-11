@@ -439,6 +439,8 @@ function baseLayer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer 
     solidLayer: false,
     noPadding: false,
     perspective: false,
+    passthroughModel: false,
+    copyBackground: true,
     passes: [],
     colorBlendMode: 0,
     effects: [],

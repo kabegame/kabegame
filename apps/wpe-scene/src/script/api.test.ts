@@ -80,6 +80,8 @@ function scene(sound = false): SceneBundle {
     solidLayer: false,
     noPadding: false,
     perspective: false,
+    passthroughModel: false,
+    copyBackground: true,
     passes: [],
     colorBlendMode: 0,
     effects: [],

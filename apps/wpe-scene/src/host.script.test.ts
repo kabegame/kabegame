@@ -213,6 +213,8 @@ function bundle(): SceneBundle {
         solidLayer: false,
         noPadding: false,
         perspective: false,
+        passthroughModel: false,
+        copyBackground: true,
         passes: [],
         effects: [],
         colorBlendMode: 0,

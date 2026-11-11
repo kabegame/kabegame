@@ -56,6 +56,12 @@
  *   （`p5b-persp-par`：偏移落在 z = 0 平面上正好是屏幕上的 o 像素）。画进合成 RT 的基础 pass 不变；effect 中间 pass 的效果矩阵
  *   （`g_EffectModelViewProjectionMatrix` 等）仍按正交算：rea-p5-modelflags 1.3 读到的是只在上屏时压相机，rea-p5-camera 7.1 另提到
  *   正交 + bit7 时图层合成矩阵经 `FUN_140184f00` 换算，都没有实测（语料里透视图层的 effect 只读 MVP）。
+ * - 组合层（P5b 步骤 2，p5-REPORT `p5b-cl`、`p5b-proj`）：不带子层的组合层在 `graph.ts` 里排成普通的合成路径，这里只多认两样东西。
+ *   `compose` 角色的绘制是基础 pass：管线同 `base`（关混合、四通道直写），uniform 取图层 MVP（`drawMatrices`，视差与抖动照常在
+ *   视图投影里）；顶点是图层四边形，composelayer 着色器自己按 a_TexCoord 铺满合成 RT，按 MVP 算出的屏幕位置采快照。`clear` 步骤
+ *   （`copybackground: false`）建成一个 op：先结束场景 pass，再对目标开一个 `loadOp: "clear"`、清成 (0, 0, 0, 0) 的 render pass，
+ *   不画基础材质。不画的组合层（没有启用的 effect、colorBlendMode ∈ {0, 31}）是空计划，没有 op、不建 draw；运行时 effect 开关切到
+ *   这种状态时图层重建成空计划（`variantPlans` 的「全关」那份就是它）。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -359,7 +365,9 @@ type Op =
   | { kind: "draw"; draw: Draw }
   | { kind: "snapshot" }
   | { kind: "copy"; resources: LayerResources; effect: number; source: TextureRef; target: TargetRef }
-  | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string };
+  | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string }
+  /** 把合成 RT 清成 (0, 0, 0, 0)（组合层 `copybackground: false`，P5b 步骤 2）。 */
+  | { kind: "clear"; resources: LayerResources; target: TargetRef };
 
 /**
  * 决定一条管线的五项：WebGPU 的管线绑定了混合、目标格式、写掩码与图元拓扑（WPE 的 D3D11 着色器不绑），同一个程序要按它们
@@ -882,10 +890,14 @@ export class GpuScene {
     }
   }
 
-  /** copy / swap 的检查：切换时不能再失败，所以 `prepareVariants` 对每份计划先过一遍。 */
+  /** copy / swap / clear 的检查：切换时不能再失败，所以 `prepareVariants` 对每份计划先过一遍。 */
   private checkPlanOps(plan: LayerPlan, { layer, resources }: LayerRuntime): void {
     for (const step of plan.steps) {
-      if (step.kind === "swap") {
+      if (step.kind === "clear") {
+        // 组合层的 clear 只清合成 RT（P5b 步骤 2）：`ensureComposites` 之后应当解析得到
+        if (!this.resolveTarget(step.target, resources))
+          throw new SceneRenderError([`render:clear-target:${layer.name}`]);
+      } else if (step.kind === "swap") {
         const a = this.targets[resources.fbos.resolve(step.effect, step.source)];
         const b = this.targets[resources.fbos.resolve(step.effect, step.target)];
         if (a.format !== b.format || a.width !== b.width || a.height !== b.height)
@@ -922,6 +934,7 @@ export class GpuScene {
         ops.push({ kind: "swap", resources, effect: step.effect, source: step.source, target: step.target });
       else if (step.kind === "copy")
         ops.push({ kind: "copy", resources, effect: step.effect, source: step.source, target: step.target });
+      else if (step.kind === "clear") ops.push({ kind: "clear", resources, target: step.target });
       else {
         const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds);
         ops.push({ kind: "draw", draw });
@@ -1985,6 +1998,11 @@ export class GpuScene {
               { texture: target.texture },
               { width: Math.min(source.width, target.width), height: Math.min(source.height, target.height) },
             );
+        } else if (op.kind === "clear") {
+          // 组合层 `copybackground: false`（P5b 步骤 2）：合成 RT 清成 (0, 0, 0, 0)，代替基础 pass。不碰场景目标，不算开过场景 pass
+          end();
+          const target = this.resolveTarget(op.target, op.resources);
+          if (target) this.clearTarget(encoder, target, [0, 0, 0, 0], "clear composite");
         } else op.resources.fbos.swap(op.effect, op.source, op.target);
       }
     };

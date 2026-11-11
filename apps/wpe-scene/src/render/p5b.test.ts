@@ -80,6 +80,8 @@ function layer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer {
     solidLayer: false,
     noPadding: false,
     perspective: false,
+    passthroughModel: false,
+    copyBackground: true,
     passes: [pass(`objects/${object}/passes/0`, { textures: { 0: 0 } })],
     colorBlendMode: 0,
     effects: [],
