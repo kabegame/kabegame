@@ -52,7 +52,8 @@
 | 前端接口 | `apps/wpe-scene/src/wpesl2wgsl/index.ts`：`loadWpesl2wgsl()`、`translateWithIncludes(translator, request, readInclude)` |
 | 输入 | 一个材质 pass 的 `.vert` / `.frag` 原文、按需提供的头文件、COMBO、绑定的纹理槽位与格式 |
 | 输出 | 两段 WGSL；uniform 块（group 0 / binding 0，两阶段共用，std140 偏移）；纹理绑定（槽位 n → 纹理 `1 + 2n`、采样器 `2 + 2n`）；attribute / varying 的 location；最终 COMBO |
-| 本机语料 | 2026-11-01：167 对通过 153 对（91.6%），输出 WGSL 回读 0 失败；P1 样本全部通过。2026-11-11（P7a）起另有**请求夹具**：语料扫描录下编译管线真实发出的全部请求（`kbp corpus scan --extra requests:<目录>`），语料测试重放并和旧导出**逐字节**比较，改翻译器时据此判断哪些输出变了（README「测试」） |
+| 本机语料 | 2026-11-12（P7c）：WPE 安装目录 167 对通过 161 对；全部场景实际发出的 798 个请求全部通过，语料里没有因着色器翻译退回的场景，输出 WGSL 回读与 Tint 都是 0 失败。**请求夹具**（P7a）：语料扫描录下编译管线真实发出的全部请求（`kbp corpus scan --extra requests:<目录>`），语料测试重放并和旧导出**逐字节**比较，改翻译器时据此判断哪些输出变了（README「测试」） |
+| 规则来源 | WPE 先把方言转成 HLSL 再交给 fxc，所以翻译器照 WPE 的文本处理（P7b：`#if` 只解析一个表达式、多余的 `#endif` 忽略、宏后者覆盖前者、声明名带分量只取名字、`main` 之前的 `float` 数组是打包形态）与 fxc 的隐式转换（P7c：naga GLSL 前端的 HLSL 模式，截断、铺满、混算截到窄的、非布尔条件 `!= 0`、片元 varying 按顶点的类型）。只在 GLSL 本来会报错的地方生效，原来能翻译的输出逐字节不变。规则表与 fxc 依据见 README「HLSL 隐式转换」与 `naga/KABEGAME.md` |
 
 翻译结果里的几个约定会直接影响渲染器：
 - **平台宏**：照 WPE 的 Windows HLSL 路径，定义 `HLSL`（WebGPU 坐标约定与 D3D 相同）。

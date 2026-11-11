@@ -207,3 +207,14 @@ P7b 收尾的扫描（`ignore/p7/ana_p7c.py`，`corpus-p7b.json`）：
   - 能渲染 39 → 42（`3822495444`、`3831518461`、新下载的 `3837598414`）；语料里不再有 `shader:*` 键；
   - P4–P6 先做完的口径 56 → 62（`2981249186`、`3668499717`、`3822495444`、`3824424509`、`3831518461`、`3837598414`）。比计划少 3 张：`Simple_Audio_Bars`（`3021673417` 版）与 `video` 翻译通过后露出音频 uniform（P11）；
   - 新露出的产品侧键：`uniform:g_LayerModelMatrix`（4 张）、`constant:mixed-type`（3）、`constant:slots`（2）、`uniform:g_FrameTime`（1），以及音频 uniform。用户 2026-11-12 定：前四个并进 P7d。
+
+### 步骤 4 — 收尾与对照（2026-11-12）
+
+- **夹具与基线：** 产品源码快照配工作区翻译器的 wasm 录到 `ignore/p7/requests-p7c`（语料 173 张，798 个请求），原生重放 798 / 798、与 wasm 0 不一致；新基线 `ignore/p7/baseline/p7c-8bddb0a1`（4020 个文件）。
+- **Tint：** 新基线 2010 份 WGSL 在 dev 主窗口 0 error、0 warning。
+- **重建 wasm：** `bin/wasm` 在 01:37 已由 dev 重启时的构建换成新翻译器（与提交的源码编出的逐字节相同），dev 重启时拷进前端、01:41 重建场景宿主；我再跑 `deno task build:wpesl2wgsl` 确认一致。
+- **`p7-sem` 在 Kabegame 里渲染**（去掉两个阳性对照的变体 `p7-sem-k`，`gen_sem.py --kabegame`，屏外宿主 `render_scene`，测后 `projects_remove`）：`kbwidth`、`kbtrunc`、`kbsemi`、`kbswz`、`kbredef`、`kbconv1–4` 九层与 WPE 抓帧 `p7-sem-c0` 的颜色 8 位相同；`kbpack` 满足 红 = 绿 = `frac(g_Time)`、蓝 = 0（两边 `g_Time` 不同，WPE 那一帧同样满足）。
+- **解锁的两张与 WPE 逐像素比**（WPE 窗口按场景分辨率开，`kbp rdc stats` 取抓帧的 `g_Time`，`render_scene` 按同一时刻渲染，`kbp cmp frame`）：
+  - `3822495444`（3840×2160，WPE 窗口被屏幕压到 2130，居中裁）：最大差 2，> 0 的像素 0.117%；
+  - `3831518461`（2560×1440）：最大差 2，> 0 的像素 0.116%。
+- **原有画面：** 原来能翻译的着色器 P7 前后输出逐字节相同（每步的基线比较），所以 P7 不改变原本能渲染的场景；渲染器同期被别的会话改过，拿旧画面哈希比说明不了 P7，不另跑。

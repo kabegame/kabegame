@@ -247,6 +247,12 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 
 **验收：** WPE 自带的 fluidsimulation 预览工程，固定光标轨迹下和 WPE 逐帧比。语料里唯一用它的 `3286859278` 还要 P4–P6、P8、P11，P7 内解锁不了。
 
+**P7c 之后并进来的产品侧缺口**（2026-11-12 用户）：着色器能翻译之后，渲染器这一侧露出的不支持项。动工前另写子计划，步骤 0 查 WPE 的语义：
+- `uniform:g_LayerModelMatrix`（4 张）：引擎 uniform，推断是图层的模型矩阵；
+- `uniform:g_FrameTime`（1 张）：引擎 uniform，推断是帧时间（`g_Frametime` 的另一种写法？）；
+- `constant:mixed-type`（3 张，`frame_builder` 的 `u_refResolution`：顶点 `vec2`、片元 `float`）：翻译器 README「两阶段同名 uniform」里已知的情况，宿主按片元的类型写、顶点多出的分量现在照报；
+- `constant:slots`（2 张，含流体那张 `3286859278`）：材质常量的槽位超限，步骤 0 先查是哪一侧的限制。
+
 ## 和 P4–P6 的交界
 
 - **翻译器 wasm 共用：** P7 改的是 `src-tauri/wpesl2wgsl`，别的会话不改它。但 dev 会把新 wasm 拷进前端，各会话都会用上。所以每步提交前必须过逐字节基线；重建 wasm 前先看一次另两边的状态。
@@ -300,3 +306,11 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 - `audioline`、`highly_customizable_audio_visualizer` 因打包数组退步到失败，等 P7c 的隐式截断；所在场景本就因音频退回。
 - 新夹具 `ignore/p7/requests-p7b`、新基线 `ignore/p7/baseline/p7b-e2345b19`，P7c 以它们为准。
 - 流体场景露出 `constant:slots`，留给 P7d。
+
+### P7c — HLSL 隐式转换（2026-11-12）
+
+见 [phase-7c](phase-7c-hlsl-implicit.md)「实施记录」：步骤 0（`fa5650f0`）、HLSL 模式与片元 varying（`8bddb0a1`）、收尾与对照。
+- 请求夹具 798 / 798 通过，语料里不再有 `shader:*` 键；原来通过的输出逐字节不变；Tint 0 error。
+- 能渲染 39 → 42（`3822495444`、`3831518461`、新下载的 `3837598414`）；P4–P6 先做完的口径 56 → 62。两张解锁场景与 WPE 逐像素比，最大差 2。
+- `p7-sem` 的规则层在 Kabegame 里与 WPE 颜色相同。
+- 翻译通过后露出的产品侧缺口并进 P7d（2026-11-12 用户）：`uniform:g_LayerModelMatrix`（4 张）、`constant:mixed-type`（3）、`constant:slots`（2，含流体那张）、`uniform:g_FrameTime`（1）。音频 uniform 归 P11。

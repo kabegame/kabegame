@@ -299,6 +299,21 @@
 | [ ] | R11 弹出层锚点滚出列表 | 桌面 dev | 抽屉里打开某任务的重试记录，期间有新任务插入使该任务被挤出列表可视区 | 弹出层仍跟随锚点 | 已知问题：弹出层跟着锚点被推到窗口底部、只露出标题，点空白处可关；未修 |
 | [ ] | R10 Android 返回键 | Android dev | 打开重试记录弹出层后按返回键 | 关掉弹出层 | 可选 |
 
+## 场景壁纸 P7c：HLSL 隐式转换
+
+2026-11-12 Windows。嵌入的 naga GLSL 前端加 HLSL 模式（翻译器打开），规则照 fxc 实测：截断、铺满、混算截到窄的、非布尔条件 `!= 0`、`float → int` 向零截断、浮点下标、`bool` 参与算术、用户函数重载唯一可行才选；改写阶段让片元 varying 按顶点的类型、全局 `const` 引用 uniform 时在 `main` 开头现算。只在 GLSL 本来会报错的地方生效。语料里不再有因着色器翻译退回的场景，能渲染 39 → 42。说明见 `src-tauri/wpesl2wgsl/README.md`「HLSL 隐式转换」与 `naga/KABEGAME.md`，数据见 `.claude/plans/wpe-import/3-scene/phase7/phase-7c-hlsl-implicit.md`「实施记录」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | C1 fxc 与 WPE 语义 | Windows，本机 fxc + WPE 抓帧 | `ignore/p7/fxc/c1–c4.hlsl`；`p7-sem` 的 `kbconv1–4` | 和预测一致 | 2026-11-12 Claude：用户函数多个可行重载 fxc 报二义；向量 `?:` 逐分量；`static const` 引用 uniform 现算；四层 WPE 颜色与预测一致 |
+| [x] | C2 逐字节基线与夹具 | Windows，cargo | 对 P7b 基线比较；重放 P7b 录的夹具 | 原来通过的不变；夹具全过 | 2026-11-12：3572 个文件变了 0、新失败 0；779 / 779；WPE 安装目录 161 / 167；几何 27 / 27 |
+| [x] | C3 单测 | Windows，cargo | 翻译器 `--lib`、naga（`--features glsl-in,wgsl-in,wgsl-out,stderr`） | 全过 | 2026-11-12：71 个、136 个 |
+| [x] | C4 Tint | Windows dev，主窗口 | 新基线 2010 份 WGSL 加产品前言逐份编译 | 0 error | 2026-11-12 Claude（kabegame-dev）：0 error 0 warning |
+| [x] | C5 语料与解锁 | Node，173 个工程 | 同一份产品源码快照，P7 之前与 P7c 的 wasm 各扫一次 | 不再有 `shader:*` | 2026-11-12：能渲染 39 → 42（`3822495444`、`3831518461`、`3837598414`）；P4–P6 先做完的口径 56 → 62 |
+| [x] | C6 Kabegame 里的规则层 | Windows dev，屏外宿主 | 导入 `p7-sem-k`（`gen_sem.py --kabegame`），`render_scene`，和 WPE 抓帧逐层比颜色；测后 `projects_remove` | 相同 | 2026-11-12 Claude：九个规则层 8 位颜色相同，`kbpack` 两边都满足 红 = 绿 = `frac(g_Time)`、蓝 = 0；导入的工程已移除 |
+| [x] | C7 解锁的两张与 WPE 比 | Windows dev，屏外宿主 + WPE 抓帧 | 按场景分辨率开 WPE 窗口抓 1 帧，同一 `g_Time` 渲染，`kbp cmp frame` | 逐像素一致 | 2026-11-12 Claude：`3822495444` 最大差 2、> 0 的像素 0.117%；`3831518461` 最大差 2、0.116% |
+| [ ] | C8 预览与桌面 | Windows，窗口模式 | 图库预览里打开 `3822495444`、`3831518461`，设为桌面壁纸，和 WPE 对照看一会儿 | 实时渲染，水面、光线、闪光与 WPE 观感一致 | 待用户确认 |
+
 ## 场景壁纸 P7b：照 WPE 的预处理、声明与打包数组
 
 2026-11-11 Windows。翻译器照 WPE 自己的文本处理：`#if` 只解析一个表达式、多余的 `#endif` / `#else` / `#elif` 忽略、宏后者覆盖前者、声明名带分量只取名字、`main` 之前的 `float` 数组用打包形态（越界读到同一 cbuffer 的下一个成员）；几何展开避开 Tint 的指针别名；effect 的 `editable` 放开。P7b 单独不增加能渲染的场景（多数着色器露出类型类错误，等 P7c）。说明见 `src-tauri/wpesl2wgsl/README.md`，数据见 `.claude/plans/wpe-import/3-scene/phase7/phase-7b-rules.md`「实施记录」。
@@ -311,7 +326,7 @@
 | [x] | B4 夹具重录 | Windows，Node + cargo | 用 P7b 的 wasm 在 HEAD 产品源码快照上重扫并录夹具，原生重放 | 一致 | 2026-11-11：779 个请求，通过 689 / 失败 90，原生与 wasm 0 不一致 |
 | [x] | B5 语料扫描 | Node，165 个工程 | 同一份产品源码，P7 之前与之后的 wasm 各扫一次 | 能渲染数不变，退回原因换成下一个错误 | 2026-11-11：38 → 38；`editable` 只少一个键 |
 | [x] | B6 单测与检查 | Windows | `cargo test -p wpesl2wgsl --lib`、naga 单测、`apps/wpe-scene` 的 tsc / vitest | 全过 | 2026-11-11：68 个、128 个全过；tsc 0 error；vitest 1702 / 1703，`pipeline.test` 的请求次数上限（`3830255100` 219 次）在不带改动的 HEAD 上同样失败，与 P7b 无关 |
-| [ ] | B7 Kabegame 里的画面 | Windows dev | 重建 wasm 后在 Kabegame 渲染 `p7-sem` 的 `kbsemi` / `kbswz` / `kbredef` / `kbpack`，和 WPE 抓帧逐像素比；打开几张原本能渲染的场景 | 一致；原有画面不变 | 待重建 wasm（dev 里还是 P7 之前那份） |
+| [x] | B7 Kabegame 里的画面 | Windows dev | 重建 wasm 后在 Kabegame 渲染 `p7-sem` 的 `kbsemi` / `kbswz` / `kbredef` / `kbpack`，和 WPE 抓帧逐像素比；打开几张原本能渲染的场景 | 一致；原有画面不变 | 2026-11-12 Claude（P7c 收尾时一起做，见 C6）：四层与 WPE 一致。原有画面：原来能翻译的着色器 P7 前后输出逐字节相同，翻译器不改变它们；渲染器同期被别的会话改过，旧画面哈希比说明不了 P7，没另跑 |
 
 ## 场景壁纸 P7a：请求夹具、逐字节基线与嵌入 naga
 
