@@ -163,6 +163,8 @@ pub struct OrganizeOptions {
     pub regen_compatible: bool,
     /// 为缺失或解析器版本过旧的 JPEG/PNG 补充原生元数据
     pub backfill_native_metadata: bool,
+    /// 重新计算代表色：范围内每张不会被本次删除的图都重算色盘，不管现在有没有
+    pub recompute_palette: bool,
     /// 在 DB 记录删除后是否同时删除磁盘上的源文件
     pub delete_source_files: bool,
     /// 从有序列表（按 id ASC）中跳过的前若干条
@@ -181,6 +183,8 @@ pub struct OrganizeRunState {
     pub removed: usize,
     pub regenerated: usize,
     pub backfilled: usize,
+    /// 重算后色盘有变化、已写回的张数
+    pub palettes_updated: usize,
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
     pub dedupe: bool,
@@ -190,7 +194,18 @@ pub struct OrganizeRunState {
     pub regen_thumbnails: bool,
     pub regen_compatible: bool,
     pub backfill_native_metadata: bool,
+    pub recompute_palette: bool,
     pub delete_source_files: bool,
+}
+
+/// 整理的累计计数：进运行状态、进度快照与完成事件。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct OrganizeCounts {
+    removed: usize,
+    regenerated: usize,
+    backfilled: usize,
+    /// 重算后色盘有变化、已写回的张数（与 `regenerated` / `backfilled` 分开计）
+    palettes_updated: usize,
 }
 
 static GLOBAL_ORGANIZE: OnceLock<Arc<OrganizeService>> = OnceLock::new();
@@ -232,6 +247,7 @@ impl OrganizeService {
             removed: 0,
             regenerated: 0,
             backfilled: 0,
+            palettes_updated: 0,
             range_start,
             range_end,
             dedupe: options.dedupe,
@@ -241,6 +257,7 @@ impl OrganizeService {
             regen_thumbnails: options.regen_thumbnails,
             regen_compatible: options.regen_compatible,
             backfill_native_metadata: options.backfill_native_metadata,
+            recompute_palette: options.recompute_palette,
             delete_source_files: options.delete_source_files,
         };
         let mut g = self
@@ -251,18 +268,13 @@ impl OrganizeService {
         Ok(())
     }
 
-    fn update_run_state_progress(
-        &self,
-        processed_global: usize,
-        removed: usize,
-        regenerated: usize,
-        backfilled: usize,
-    ) {
+    fn update_run_state_progress(&self, processed_global: usize, counts: OrganizeCounts) {
         if let Ok(mut g) = self.run_state.lock() {
             g.processed_global = processed_global;
-            g.removed = removed;
-            g.regenerated = regenerated;
-            g.backfilled = backfilled;
+            g.removed = counts.removed;
+            g.regenerated = counts.regenerated;
+            g.backfilled = counts.backfilled;
+            g.palettes_updated = counts.palettes_updated;
         }
     }
 
@@ -311,9 +323,12 @@ impl OrganizeService {
             if let Err(e) = res {
                 let state = svc.get_run_state();
                 emit_organize_finished(
-                    state.removed,
-                    state.regenerated,
-                    state.backfilled,
+                    OrganizeCounts {
+                        removed: state.removed,
+                        regenerated: state.regenerated,
+                        backfilled: state.backfilled,
+                        palettes_updated: state.palettes_updated,
+                    },
                     false,
                     Some(e.clone()),
                 );
@@ -355,33 +370,16 @@ fn range_bounds_for_ui(options: &OrganizeOptions) -> (Option<usize>, Option<usiz
     }
 }
 
-fn push_organize_progress(
-    _library_total: usize,
-    _options: &OrganizeOptions,
-    processed_global: usize,
-    removed_total: usize,
-    regenerated_total: usize,
-    backfilled_total: usize,
-) {
-    OrganizeService::global().update_run_state_progress(
-        processed_global,
-        removed_total,
-        regenerated_total,
-        backfilled_total,
-    );
+fn push_organize_progress(processed_global: usize, counts: OrganizeCounts) {
+    OrganizeService::global().update_run_state_progress(processed_global, counts);
 }
 
-fn emit_organize_finished(
-    removed: usize,
-    regenerated: usize,
-    backfilled: usize,
-    canceled: bool,
-    error: Option<String>,
-) {
+fn emit_organize_finished(counts: OrganizeCounts, canceled: bool, error: Option<String>) {
     GlobalEmitter::global().emit_organize_finished(
-        removed,
-        regenerated,
-        backfilled,
+        counts.removed,
+        counts.regenerated,
+        counts.backfilled,
+        counts.palettes_updated,
         canceled,
         error,
     );
@@ -516,39 +514,188 @@ fn remove_replaced_compatible_file(previous_path: &str, replacement_path: &str) 
     }
 }
 
+/// 一批扫描行的处理计划：删哪些，给哪些补缩略图 / 兼容副本 / 原生元数据、重算色盘。
+#[derive(Default)]
+struct BatchPlan {
+    remove_ids: Vec<String>,
+    should_remove: HashSet<i64>,
+    refresh_list: Vec<ThumbnailRefreshAction>,
+    #[cfg(not(target_os = "android"))]
+    compat_list: Vec<(i64, String, String)>,
+    native_metadata_list: Vec<(i64, String, String)>,
+    /// 重算色盘的图：范围内、不在本批删除之列
+    palette_ids: Vec<i64>,
+    /// 走到区间上界：本批做完即结束整理
+    finish: bool,
+}
+
+/// 逐行决定本批要做什么，推进 `row_index`（全表序号，用于 offset / limit 区间）与 `last_id`（id 游标）。
+fn plan_batch(
+    batch: &[OrganizeScanRow],
+    options: &OrganizeOptions,
+    winner_ids: &HashMap<String, i64>,
+    row_index: &mut usize,
+    last_id: &mut i64,
+) -> BatchPlan {
+    let mut plan = BatchPlan::default();
+    let upper = organize_range_upper_bound(options.offset, options.limit);
+
+    for row in batch {
+        // 推进游标：即使本行因区间上界跳过，也已"看过"，下一批从其后继续。
+        *last_id = row.id;
+        if let Some(ub) = upper {
+            if *row_index >= ub {
+                plan.finish = true;
+                break;
+            }
+        }
+
+        let in_range = row_in_organize_range(*row_index, options.offset, options.limit);
+        *row_index += 1;
+        if !in_range {
+            continue;
+        }
+
+        // 1. 去重判断：非胜者 id 即重复项，移除。
+        // 目录型 WPE 壁纸不参与哈希去重：删掉目录型记录会静默丢失壁纸来源，
+        // 且入口视频的哈希与普通视频相同并不代表二者可互相替代。
+        if options.dedupe && !row.hash.is_empty() && !is_wpe_row(row) {
+            if let Some(&winner) = winner_ids.get(&row.hash) {
+                if row.id != winner {
+                    plan.remove_ids.push(row.id.to_string());
+                    plan.should_remove.insert(row.id);
+                }
+            }
+        }
+
+        // 2. 清除失效图片判断
+        if options.remove_missing
+            && !plan.should_remove.contains(&row.id)
+            && !Path::new(&row.local_path).exists()
+        {
+            plan.remove_ids.push(row.id.to_string());
+            plan.should_remove.insert(row.id);
+        }
+
+        // 3. 移除磁盘存在但 infer 无法在支持 MIME 列表中识别的媒体
+        // WPE 行的 local_path 是目录，infer 必然失败；不能据此把整张壁纸判成「无法识别」。
+        if options.remove_unrecognized
+            && !plan.should_remove.contains(&row.id)
+            && !is_wpe_row(row)
+            && Path::new(&row.local_path).exists()
+            && crate::media::image_type::mime_type_from_path(Path::new(&row.local_path)).is_none()
+        {
+            plan.remove_ids.push(row.id.to_string());
+            plan.should_remove.insert(row.id);
+        }
+
+        // 4. 补充缩略图判断
+        if options.regen_thumbnails && !plan.should_remove.contains(&row.id) {
+            if let Some(action) = thumbnail_refresh_action(row) {
+                plan.refresh_list.push(action);
+            }
+        }
+
+        // 5. 补充兼容格式。仅在缺失 compatible_path 时生成；已有兼容副本不做平台迁移式重建。
+        #[cfg(not(target_os = "android"))]
+        {
+            let compatible_path = row.compatible_path.trim();
+            if options.regen_compatible
+                && !plan.should_remove.contains(&row.id)
+                && !is_wpe_row(row)
+                && (compatible_path.is_empty() || !Path::new(compatible_path).exists())
+            {
+                let local = row.local_path.trim();
+                if !local.is_empty() && Path::new(local).exists() {
+                    plan.compat_list
+                        .push((row.id, local.to_string(), compatible_path.to_string()));
+                }
+            }
+        }
+
+        // 6. 补充原生元数据。即将删除的图片不处理；版本不符的图片逐张解析。
+        if options.backfill_native_metadata && !plan.should_remove.contains(&row.id) {
+            let format_key = row.format_key.as_deref().unwrap_or("").to_string();
+            if let Some(expected_version) =
+                crate::media::native_metadata::parser_version_for(&format_key)
+            {
+                if row.native_parser_version != Some(i64::from(expected_version)) {
+                    plan.native_metadata_list
+                        .push((row.id, row.local_path.clone(), format_key));
+                }
+            }
+        }
+
+        // 7. 重新计算代表色：不管现在有没有色盘都重算；即将删除的图片不处理。
+        if options.recompute_palette && !plan.should_remove.contains(&row.id) {
+            plan.palette_ids.push(row.id);
+        }
+    }
+    plan
+}
+
+/// 「重新计算代表色」：逐张重算色盘，与原来不同才写回（`palette` 列 + 距离，一个事务）并推补丁；
+/// 算不出来（文件不在、解码失败）的保留原色盘。读行、计算与写回和回填作业 `image_palette` 共用。
+/// 返回 `(写回的张数, 是否被取消)`。
+fn recompute_palettes(
+    handle: &tokio::runtime::Handle,
+    storage: &Storage,
+    ids: &[i64],
+    cancel: &AtomicBool,
+    patches: &mut Vec<ImageFieldPatch>,
+) -> Result<(usize, bool), String> {
+    let rows = storage.palette_source_rows(ids)?;
+    let mut updated = 0;
+    for row in rows {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok((updated, true));
+        }
+        let Some(palette) = handle.block_on(row.compute()) else {
+            tracing::debug!(
+                "palette recompute: no palette for {} ({}), keep the old one",
+                row.id,
+                row.local_path
+            );
+            continue;
+        };
+        match storage.store_recomputed_palette(&row, &palette) {
+            Ok(Some(patch)) => {
+                patches.push(patch);
+                updated += 1;
+            }
+            // 色盘没变，或读盘期间行被删 / 改指别处
+            Ok(None) => {}
+            Err(e) => tracing::warn!("palette recompute store failed for {}: {e}", row.id),
+        }
+    }
+    Ok((updated, false))
+}
+
 fn run_organize(
     handle: &tokio::runtime::Handle,
     storage: Arc<Storage>,
     options: OrganizeOptions,
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let total = storage.get_images_total_count()?; // 总图片数
-
     let mut row_index: usize = 0;
-    let mut removed_total: usize = 0;
-    let mut regenerated_total: usize = 0;
-    let mut backfilled_total: usize = 0;
+    let mut counts = OrganizeCounts::default();
     // id 游标：上一批处理到的最大 id。用游标分页而非 OFFSET，避免边扫边删导致漏扫。
     let mut last_id: i64 = 0;
 
-    // 缩略图、兼容格式和原生元数据补算都会读文件并解析，保持小批；其余操作用大批减少往返。
-    let batch_size =
-        if options.regen_thumbnails || options.regen_compatible || options.backfill_native_metadata
-        {
-            10
-        } else {
-            100
-        };
+    // 缩略图、兼容格式、原生元数据补算与重算色盘都会读文件并解码，保持小批；其余操作用大批减少往返。
+    let batch_size = if options.regen_thumbnails
+        || options.regen_compatible
+        || options.backfill_native_metadata
+        || options.recompute_palette
+    {
+        10
+    } else {
+        100
+    };
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            emit_organize_finished(
-                removed_total,
-                regenerated_total,
-                backfilled_total,
-                true,
-                None,
-            );
+            emit_organize_finished(counts, true, None);
             return Ok(());
         }
 
@@ -572,103 +719,10 @@ fn run_organize(
             HashMap::new()
         };
 
-        let mut remove_ids: Vec<String> = Vec::new();
-        let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
+        let plan = plan_batch(&batch, &options, &winner_ids, &mut row_index, &mut last_id);
         let mut changed_image_patches: Vec<ImageFieldPatch> = Vec::new();
-        let mut should_remove: HashSet<i64> = HashSet::new();
-        let mut native_metadata_list: Vec<(i64, String, String)> = Vec::new();
-        #[cfg(not(target_os = "android"))]
-        let mut compat_list: Vec<(i64, String, String)> = Vec::new();
-
-        let upper = organize_range_upper_bound(options.offset, options.limit);
-        let mut finish_organize = false;
-
-        for row in &batch {
-            // 推进游标：即使本行因区间上界跳过，也已"看过"，下一批从其后继续。
-            last_id = row.id;
-            if let Some(ub) = upper {
-                if row_index >= ub {
-                    finish_organize = true;
-                    break;
-                }
-            }
-
-            let in_range = row_in_organize_range(row_index, options.offset, options.limit);
-            row_index += 1;
-            if !in_range {
-                continue;
-            }
-
-            // 1. 去重判断：非胜者 id 即重复项，移除。
-            // 目录型 WPE 壁纸不参与哈希去重：删掉目录型记录会静默丢失壁纸来源，
-            // 且入口视频的哈希与普通视频相同并不代表二者可互相替代。
-            if options.dedupe && !row.hash.is_empty() && !is_wpe_row(row) {
-                if let Some(&winner) = winner_ids.get(&row.hash) {
-                    if row.id != winner {
-                        remove_ids.push(row.id.to_string());
-                        should_remove.insert(row.id);
-                    }
-                }
-            }
-
-            // 2. 清除失效图片判断
-            if options.remove_missing
-                && !should_remove.contains(&row.id)
-                && !Path::new(&row.local_path).exists()
-            {
-                remove_ids.push(row.id.to_string());
-                should_remove.insert(row.id);
-            }
-
-            // 3. 移除磁盘存在但 infer 无法在支持 MIME 列表中识别的媒体
-            // WPE 行的 local_path 是目录，infer 必然失败；不能据此把整张壁纸判成「无法识别」。
-            if options.remove_unrecognized
-                && !should_remove.contains(&row.id)
-                && !is_wpe_row(row)
-                && Path::new(&row.local_path).exists()
-                && crate::media::image_type::mime_type_from_path(Path::new(&row.local_path))
-                    .is_none()
-            {
-                remove_ids.push(row.id.to_string());
-                should_remove.insert(row.id);
-            }
-
-            // 4. 补充缩略图判断
-            if options.regen_thumbnails && !should_remove.contains(&row.id) {
-                let refresh_action = thumbnail_refresh_action(row);
-                if let Some(action) = refresh_action {
-                    refresh_list.push(action);
-                }
-            }
-
-            // 5. 补充兼容格式。仅在缺失 compatible_path 时生成；已有兼容副本不做平台迁移式重建。
-            #[cfg(not(target_os = "android"))]
-            {
-                let compatible_path = row.compatible_path.trim();
-                if options.regen_compatible
-                    && !should_remove.contains(&row.id)
-                    && !is_wpe_row(row)
-                    && (compatible_path.is_empty() || !Path::new(compatible_path).exists())
-                {
-                    let local = row.local_path.trim();
-                    if !local.is_empty() && Path::new(local).exists() {
-                        compat_list.push((row.id, local.to_string(), compatible_path.to_string()));
-                    }
-                }
-            }
-
-            // 6. 补充原生元数据。即将删除的图片不处理；版本不符的图片逐张解析。
-            if options.backfill_native_metadata && !should_remove.contains(&row.id) {
-                let format_key = row.format_key.as_deref().unwrap_or("").to_string();
-                if let Some(expected_version) =
-                    crate::media::native_metadata::parser_version_for(&format_key)
-                {
-                    if row.native_parser_version != Some(i64::from(expected_version)) {
-                        native_metadata_list.push((row.id, row.local_path.clone(), format_key));
-                    }
-                }
-            }
-        }
+        let remove_ids = plan.remove_ids;
+        let should_remove = plan.should_remove;
 
         // 执行删除
         if !remove_ids.is_empty() {
@@ -680,7 +734,7 @@ fn run_organize(
             // 被移除的图若是某个壁纸目标的当前壁纸，清空该目标（与历史行为保持一致）
             let _ = Settings::global().clear_wallpaper_targets_current_images(&remove_ids);
 
-            removed_total += remove_ids.len();
+            counts.removed += remove_ids.len();
 
             if options.delete_source_files {
                 let paths: Vec<String> = batch
@@ -694,16 +748,10 @@ fn run_organize(
         }
 
         // 执行缩略图补充（进度仅在整批——含缩略图——结束后发送，避免扫描已 100% 仍在补图）
-        for action in refresh_list {
+        for action in plan.refresh_list {
             if cancel.load(Ordering::Relaxed) {
                 emit_organize_images_change(&mut changed_image_patches);
-                emit_organize_finished(
-                    removed_total,
-                    regenerated_total,
-                    backfilled_total,
-                    true,
-                    None,
-                );
+                emit_organize_finished(counts, true, None);
                 return Ok(());
             }
             match action {
@@ -719,7 +767,7 @@ fn run_organize(
                             .unwrap()
                             .clone(),
                     });
-                    regenerated_total += 1;
+                    counts.regenerated += 1;
                 }
                 ThumbnailRefreshAction::Regenerate { id, local_path } => {
                     let thumbnail_result =
@@ -741,7 +789,7 @@ fn run_organize(
                                 .unwrap()
                                 .clone(),
                         });
-                        regenerated_total += 1;
+                        counts.regenerated += 1;
                     }
                 }
                 ThumbnailRefreshAction::RegenerateVideo { id, local_path } => {
@@ -775,7 +823,7 @@ fn run_organize(
                                     .unwrap()
                                     .clone(),
                             });
-                            regenerated_total += 1;
+                            counts.regenerated += 1;
                         }
                         Err(e) => {
                             tracing::warn!("video thumbnail generation failed for {id}: {e}");
@@ -787,16 +835,10 @@ fn run_organize(
 
         // 执行兼容格式补充（仅桌面）
         #[cfg(not(target_os = "android"))]
-        for (id, local_path, previous_compatible_path) in compat_list {
+        for (id, local_path, previous_compatible_path) in plan.compat_list {
             if cancel.load(Ordering::Relaxed) {
                 emit_organize_images_change(&mut changed_image_patches);
-                emit_organize_finished(
-                    removed_total,
-                    regenerated_total,
-                    backfilled_total,
-                    true,
-                    None,
-                );
+                emit_organize_finished(counts, true, None);
                 return Ok(());
             }
             let local = Path::new(&local_path);
@@ -872,7 +914,7 @@ fn run_organize(
                                 .unwrap()
                                 .clone(),
                         });
-                        regenerated_total += 1;
+                        counts.regenerated += 1;
                     }
                 }
                 CompatResult::NotNeeded => {
@@ -896,7 +938,7 @@ fn run_organize(
         }
 
         // 执行原生元数据补充。失败只记录并跳过，不中断整批整理。
-        for (id, local_path, format_key) in native_metadata_list {
+        for (id, local_path, format_key) in plan.native_metadata_list {
             let Some(expected_version) =
                 crate::media::native_metadata::parser_version_for(&format_key)
             else {
@@ -904,13 +946,7 @@ fn run_organize(
             };
             if cancel.load(Ordering::Relaxed) {
                 emit_organize_images_change(&mut changed_image_patches);
-                emit_organize_finished(
-                    removed_total,
-                    regenerated_total,
-                    backfilled_total,
-                    true,
-                    None,
-                );
+                emit_organize_finished(counts, true, None);
                 return Ok(());
             }
 
@@ -941,7 +977,7 @@ fn run_organize(
             };
             match storage.replace_image_native_metadata(&image_id, expected_version, &json) {
                 Ok(metadata_id) => {
-                    backfilled_total += 1;
+                    counts.backfilled += 1;
                     // 原生元数据参与搜索：随本批逐图补丁按图片数量分流发送。
                     changed_image_patches.push(native_metadata_image_patch(&image_id, metadata_id));
                 }
@@ -951,30 +987,33 @@ fn run_organize(
             }
         }
 
+        // 重新计算代表色。读行失败会中止整理：先把本批已写入的补丁发出
+        let (palettes_updated, canceled) = recompute_palettes(
+            handle,
+            &storage,
+            &plan.palette_ids,
+            &cancel,
+            &mut changed_image_patches,
+        )
+        .inspect_err(|_| emit_organize_images_change(&mut changed_image_patches))?;
+        counts.palettes_updated += palettes_updated;
+        if canceled {
+            emit_organize_images_change(&mut changed_image_patches);
+            emit_organize_finished(counts, true, None);
+            return Ok(());
+        }
+
         emit_organize_images_change(&mut changed_image_patches);
 
-        // 本批（扫描 + 删除 + 缩略图 + 兼容格式 + 原生元数据）完成后发送进度
-        push_organize_progress(
-            total,
-            &options,
-            row_index,
-            removed_total,
-            regenerated_total,
-            backfilled_total,
-        );
+        // 本批（扫描 + 删除 + 缩略图 + 兼容格式 + 原生元数据 + 色盘）完成后发送进度
+        push_organize_progress(row_index, counts);
 
-        if finish_organize {
+        if plan.finish {
             break;
         }
     }
 
-    emit_organize_finished(
-        removed_total,
-        regenerated_total,
-        backfilled_total,
-        false,
-        None,
-    );
+    emit_organize_finished(counts, false, None);
     Ok(())
 }
 
@@ -1107,5 +1146,333 @@ mod tests {
             native_parser_version: None,
         };
         assert!(thumbnail_refresh_action(&row).is_none());
+    }
+
+    // ---------- 重新计算代表色 ----------
+
+    fn options(recompute_palette: bool) -> OrganizeOptions {
+        OrganizeOptions {
+            dedupe: false,
+            dedupe_keep_new: true,
+            remove_missing: false,
+            remove_unrecognized: false,
+            regen_thumbnails: false,
+            regen_compatible: false,
+            backfill_native_metadata: false,
+            recompute_palette,
+            delete_source_files: false,
+            offset: None,
+            limit: None,
+        }
+    }
+
+    fn scan_row(id: i64, local_path: &Path, hash: &str) -> OrganizeScanRow {
+        OrganizeScanRow {
+            hash: hash.to_string(),
+            ..row(id, local_path, local_path)
+        }
+    }
+
+    /// 范围内、不在本批删除之列的每一张都重算，不管现在有没有色盘；范围外与要删的不算。
+    #[test]
+    fn plan_recomputes_palettes_in_range_except_rows_being_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("present.png");
+        std::fs::write(&present, [1u8; 16]).unwrap();
+        let missing = dir.path().join("missing.png");
+        let batch: Vec<OrganizeScanRow> = (1..=6)
+            .map(|id| scan_row(id, if id == 3 { &missing } else { &present }, ""))
+            .collect();
+
+        // 序号区间 [1, 5)：id 2..=5；id 3 的文件不在、本次删除
+        let mut opts = options(true);
+        opts.remove_missing = true;
+        opts.offset = Some(1);
+        opts.limit = Some(4);
+        let (mut row_index, mut last_id) = (0, 0);
+        let plan = plan_batch(&batch, &opts, &HashMap::new(), &mut row_index, &mut last_id);
+        assert_eq!(plan.palette_ids, vec![2, 4, 5]);
+        assert_eq!(plan.remove_ids, vec!["3".to_string()]);
+        assert!(plan.finish, "走到区间上界");
+        assert_eq!((row_index, last_id), (5, 6));
+
+        // 去重的非胜者同样不算
+        let batch = vec![
+            scan_row(1, &present, "same"),
+            scan_row(2, &present, "same"),
+            scan_row(3, &present, ""),
+        ];
+        let mut opts = options(true);
+        opts.dedupe = true;
+        let winners = HashMap::from([("same".to_string(), 2)]);
+        let (mut row_index, mut last_id) = (0, 0);
+        let plan = plan_batch(&batch, &opts, &winners, &mut row_index, &mut last_id);
+        assert_eq!(plan.palette_ids, vec![2, 3]);
+        assert!(!plan.finish);
+
+        // 开关关着不算
+        let (mut row_index, mut last_id) = (0, 0);
+        let plan = plan_batch(
+            &batch,
+            &options(false),
+            &winners,
+            &mut row_index,
+            &mut last_id,
+        );
+        assert!(plan.palette_ids.is_empty());
+    }
+
+    mod palette_recompute {
+        use super::super::*;
+        use crate::media::palette::{distance_to, Palette, NO_PALETTE_DISTANCE};
+        use crate::storage::images::write_color_distances;
+        use crate::storage::migrations::BUILTIN_COLOR_BUCKETS;
+
+        fn storage() -> Storage {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+            crate::storage::migrations::init::create_all_tables(&conn);
+            Storage::from_test_connection(conn)
+        }
+
+        /// 一张已入库的图：图片行（带原色盘或没有）+ 对每个色桶的距离。
+        fn insert(
+            storage: &Storage,
+            local_path: &str,
+            media_type: &str,
+            palette: Option<&Palette>,
+        ) -> i64 {
+            let conn = storage.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO images (local_path, thumbnail_path, crawled_at, type, palette)
+                 VALUES (?1, ?1, 1, ?2, ?3)",
+                rusqlite::params![local_path, media_type, palette.map(Palette::to_json)],
+            )
+            .unwrap();
+            let id = conn.last_insert_rowid();
+            write_color_distances(&conn, id, palette).unwrap();
+            id
+        }
+
+        fn solid_png(dir: &Path, name: &str, rgb: [u8; 3]) -> String {
+            let path = dir.join(name);
+            image::RgbImage::from_pixel(64, 64, image::Rgb(rgb))
+                .save(&path)
+                .unwrap();
+            path.to_string_lossy().into_owned()
+        }
+
+        fn palette_of(storage: &Storage, id: i64) -> Option<String> {
+            storage
+                .db
+                .lock()
+                .unwrap()
+                .query_row("SELECT palette FROM images WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        }
+
+        fn distances_of(storage: &Storage, id: i64) -> Vec<(i64, i64)> {
+            let conn = storage.db.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bucket_rgb, distance FROM image_color_distances
+                      WHERE image_id = ?1 ORDER BY bucket_rgb",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            rows
+        }
+
+        fn expected(palette: Option<&Palette>) -> Vec<(i64, i64)> {
+            let mut rows: Vec<(i64, i64)> = BUILTIN_COLOR_BUCKETS
+                .iter()
+                .map(|(_, rgb)| (i64::from(*rgb), i64::from(distance_to(palette, *rgb))))
+                .collect();
+            rows.sort();
+            rows
+        }
+
+        fn run(storage: &Storage, ids: &[i64]) -> (usize, bool, Vec<ImageFieldPatch>) {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let mut patches = Vec::new();
+            let (updated, canceled) = recompute_palettes(
+                runtime.handle(),
+                storage,
+                ids,
+                &AtomicBool::new(false),
+                &mut patches,
+            )
+            .unwrap();
+            (updated, canceled, patches)
+        }
+
+        /// 原来没有色盘、原来的色盘过时：都写回 palette 列与距离，各发一条 `palette` 补丁。
+        #[test]
+        fn writes_new_palettes_with_distances_and_patches() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = storage();
+            let red = solid_png(dir.path(), "red.png", [255, 0, 0]);
+            let blue = solid_png(dir.path(), "blue.png", [0, 0, 255]);
+            let none = insert(&storage, &red, "image/png", None);
+            let stale = insert(
+                &storage,
+                &blue,
+                "image/png",
+                Some(&Palette::single([255, 255, 0])),
+            );
+
+            let (updated, canceled, patches) = run(&storage, &[none, stale]);
+
+            assert_eq!((updated, canceled), (2, false));
+            let red_palette = Palette::single([255, 0, 0]);
+            let blue_palette = Palette::single([0, 0, 255]);
+            assert_eq!(palette_of(&storage, none), Some(red_palette.to_json()));
+            assert_eq!(palette_of(&storage, stale), Some(blue_palette.to_json()));
+            assert_eq!(distances_of(&storage, none), expected(Some(&red_palette)));
+            assert_eq!(distances_of(&storage, stale), expected(Some(&blue_palette)));
+            assert_eq!(
+                patches,
+                vec![
+                    ImageFieldPatch {
+                        id: none.to_string(),
+                        fields: serde_json::Map::from_iter([(
+                            "palette".to_string(),
+                            serde_json::Value::String(red_palette.to_json()),
+                        )]),
+                    },
+                    ImageFieldPatch {
+                        id: stale.to_string(),
+                        fields: serde_json::Map::from_iter([(
+                            "palette".to_string(),
+                            serde_json::Value::String(blue_palette.to_json()),
+                        )]),
+                    },
+                ]
+            );
+        }
+
+        /// 色盘与原来相同：不写库（距离行原样，连被改过的标记值都不动）、不发补丁、不计数。
+        #[test]
+        fn unchanged_palette_is_not_written() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = storage();
+            let red = solid_png(dir.path(), "red.png", [255, 0, 0]);
+            let id = insert(
+                &storage,
+                &red,
+                "image/png",
+                Some(&Palette::single([255, 0, 0])),
+            );
+            storage
+                .db
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE image_color_distances SET distance = 7 WHERE image_id = ?1",
+                    [id],
+                )
+                .unwrap();
+
+            let (updated, canceled, patches) = run(&storage, &[id]);
+
+            assert_eq!((updated, canceled), (0, false));
+            assert!(patches.is_empty());
+            assert!(distances_of(&storage, id)
+                .iter()
+                .all(|(_, distance)| *distance == 7));
+        }
+
+        /// 算不出来（文件不在）：保留原色盘与距离，不发补丁；原来没有色盘的仍是 65536。
+        #[test]
+        fn uncomputable_rows_keep_their_palette() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = storage();
+            let gone = dir.path().join("gone.png").to_string_lossy().into_owned();
+            let old = Palette::single([0, 255, 0]);
+            let kept = insert(&storage, &gone, "image/png", Some(&old));
+            let gone2 = dir.path().join("gone2.png").to_string_lossy().into_owned();
+            let bare = insert(&storage, &gone2, "image/png", None);
+
+            let (updated, _, patches) = run(&storage, &[kept, bare]);
+
+            assert_eq!(updated, 0);
+            assert!(patches.is_empty());
+            assert_eq!(palette_of(&storage, kept), Some(old.to_json()));
+            assert_eq!(distances_of(&storage, kept), expected(Some(&old)));
+            assert_eq!(palette_of(&storage, bare), None);
+            assert!(distances_of(&storage, bare)
+                .iter()
+                .all(|(_, distance)| *distance == i64::from(NO_PALETTE_DISTANCE)));
+        }
+
+        /// 只处理给定的 id；WPE 网页壁纸照回填从 metadata 取 schemecolor。
+        #[test]
+        fn only_given_ids_and_wpe_scheme_color() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = storage();
+            let red = solid_png(dir.path(), "red.png", [255, 0, 0]);
+            let outside = insert(&storage, &red, "image/png", None);
+            let web = insert(&storage, "/no/such/wallpaper-dir", "x-wpe/web", None);
+            {
+                let conn = storage.db.lock().unwrap();
+                conn.execute(
+                    "INSERT INTO metadata (data, plugin_id) VALUES (?1, 'wpe-import')",
+                    [serde_json::json!({
+                        "type": "web",
+                        "general": { "properties": {
+                            "schemecolor": { "type": "color", "value": "0 0 1" }
+                        }}
+                    })
+                    .to_string()],
+                )
+                .unwrap();
+                let metadata_id = conn.last_insert_rowid();
+                conn.execute(
+                    "UPDATE images SET metadata_id = ?1 WHERE id = ?2",
+                    [metadata_id, web],
+                )
+                .unwrap();
+            }
+
+            let (updated, _, patches) = run(&storage, &[web]);
+
+            assert_eq!(updated, 1);
+            assert_eq!(
+                palette_of(&storage, web),
+                Some(Palette::single([0, 0, 255]).to_json())
+            );
+            assert_eq!(palette_of(&storage, outside), None, "不在 ids 里的不算");
+            assert_eq!(
+                patches.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+                vec![web.to_string()]
+            );
+        }
+
+        /// 取消：一张都不算就返回，标记为已取消。
+        #[test]
+        fn cancel_stops_before_computing() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = storage();
+            let red = solid_png(dir.path(), "red.png", [255, 0, 0]);
+            let id = insert(&storage, &red, "image/png", None);
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let mut patches = Vec::new();
+            let result = recompute_palettes(
+                runtime.handle(),
+                &storage,
+                &[id],
+                &AtomicBool::new(true),
+                &mut patches,
+            )
+            .unwrap();
+            assert_eq!(result, (0, true));
+            assert_eq!(palette_of(&storage, id), None);
+        }
     }
 }

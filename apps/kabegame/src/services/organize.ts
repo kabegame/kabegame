@@ -11,6 +11,25 @@ import { busyPoller } from "@/services/busyTasks";
 
 let unlistenFinished: UnlistenFn | null = null;
 
+/**
+ * 整理成功完成时的提示文案。本次勾了「重新计算代表色」（或确实更新了代表色）才带上代表色计数；
+ * 运行态快照可能先于完成事件把本次参数清掉，所以计数大于 0 也算。
+ */
+export function organizeDoneMessage(
+  payload: OrganizeFinished,
+  recomputePalette: boolean,
+): { key: string; params: Record<string, number> } {
+  const params = {
+    removed: payload.removed ?? 0,
+    regenerated: payload.regenerated ?? 0,
+  };
+  const palettes = payload.palettesUpdated ?? 0;
+  if (recomputePalette || palettes > 0) {
+    return { key: "gallery.organizeDoneWithPalette", params: { ...params, palettes } };
+  }
+  return { key: "gallery.organizeDone", params };
+}
+
 function errorMessage(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
@@ -21,6 +40,8 @@ export async function init(): Promise<void> {
   const store = useOrganizeStore();
   unlistenFinished = await listen<OrganizeFinished>("organize-finished", (event) => {
     const payload = event.payload;
+    // applyFinished 会清掉本次参数，先取出来
+    const recomputePalette = store.lastRunOptions?.recomputePalette ?? false;
     busyPoller.invalidate();
     store.applyFinished(payload);
     if (payload.error) {
@@ -28,12 +49,8 @@ export async function init(): Promise<void> {
     } else if (payload.canceled) {
       ElMessage.info(i18n.global.t("gallery.organizeCanceled"));
     } else {
-      ElMessage.success(
-        i18n.global.t("gallery.organizeDone", {
-          removed: payload.removed ?? 0,
-          regenerated: payload.regenerated ?? 0,
-        }),
-      );
+      const { key, params } = organizeDoneMessage(payload, recomputePalette);
+      ElMessage.success(i18n.global.t(key, params));
     }
   });
 }
@@ -58,6 +75,7 @@ export async function start(options: OrganizeOptions): Promise<void> {
         regenThumbnails: options.regenThumbnails,
         regenCompatible: options.regenCompatible,
         backfillNativeMetadata: options.backfillNativeMetadata,
+        recomputePalette: options.recomputePalette,
         deleteSourceFiles: options.deleteSourceFiles,
         rangeStart: options.rangeStart,
         rangeEnd: options.rangeEnd,
@@ -69,6 +87,7 @@ export async function start(options: OrganizeOptions): Promise<void> {
       removed: 0,
       regenerated: 0,
       backfilled: 0,
+      palettesUpdated: 0,
       canceled: false,
       error: errorMessage(error),
     });
