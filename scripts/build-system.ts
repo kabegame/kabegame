@@ -23,6 +23,7 @@ import { ReleasePlugin } from "./plugins/release-plugin.ts";
 import { DataPlugin } from "./plugins/data-plugin.ts";
 import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.ts";
 import { Wpesl2wgslPlugin } from "./plugins/wpesl2wgsl-plugin.ts";
+import { WpefontPlugin } from "./plugins/wpefont-plugin.ts";
 import { WpeSceneHostPlugin } from "./plugins/wpe-scene-host-plugin.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -195,6 +196,9 @@ export class BuildSystem {
 
     // wpesl2wgsl 的 wasm：不带 --skip vue 时拷进前端，缺了只告警
     this.use(new Wpesl2wgslPlugin());
+
+    // wpefont（字体引擎）的 wasm：同上，必须在构建宿主之前拷进去
+    this.use(new WpefontPlugin());
 
     // 场景宿主 apps/wpe-scene：桌面 dev / build 不带 --skip vue 时构建进应用的 resources/wpe-scene
     this.use(new WpeSceneHostPlugin());

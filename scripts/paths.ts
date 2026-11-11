@@ -84,6 +84,40 @@ export const WPESL2WGSL_FE_WASM: string = path.join(
   "wpesl2wgsl.wasm",
 );
 
+/**
+ * wpefont（FreeType + HarfBuzz 编成的字体引擎）的 wasm 产物：`deno task build:wpefont` 写入，
+ * kabegame 命令不带 `--skip vue` 时由 WpefontPlugin 拷进场景宿主。与平台无关，所以不按 platform/arch 分目录。
+ */
+export const WPEFONT_WASM: string = path.join(
+  ROOT,
+  "bin",
+  "wasm",
+  "wpefont",
+  "wpefont.wasm",
+);
+
+/** 场景宿主引用 wpefont wasm 的位置（git 忽略），见 apps/wpe-scene/src/wpefont/index.ts。 */
+export const WPEFONT_FE_WASM: string = path.join(
+  ROOT,
+  "apps",
+  "wpe-scene",
+  "src",
+  "wpefont",
+  "wpefont.wasm",
+);
+
+/**
+ * wpefont 的工具链缓存：wasi-sdk 的 `wasi-sysroot` 与 `libclang_rt` 压缩包（按 SHA-256 校验）及其解压目录。
+ * 在 /bin/wasm/ 下，git 忽略；删掉即从头下载。
+ */
+export const WPEFONT_TOOLCHAIN_DIR: string = path.join(
+  ROOT,
+  "bin",
+  "wasm",
+  "wpefont",
+  "toolchain",
+);
+
 /** chromium checkout 工作区（build-chromium 的构建根，原仓库外 cefbuild）。 */
 export const CHROMIUM_DIR: string = path.join(THIRD_DIR, "chromium");
 

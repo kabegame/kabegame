@@ -46,3 +46,11 @@
 	url = https://github.com/denoland/rusty_v8.git
 	shallow = true
 	ignore = dirty
+[submodule "third/freetype"]
+	path = third/freetype
+	url = https://github.com/freetype/freetype.git
+	shallow = true
+[submodule "third/harfbuzz"]
+	path = third/harfbuzz
+	url = https://github.com/harfbuzz/harfbuzz.git
+	shallow = true

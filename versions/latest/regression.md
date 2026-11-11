@@ -1,5 +1,23 @@
 # v4.7.0 regression
 
+## 场景壁纸 P6b 1b：字体引擎 `wpefont` 进仓库
+
+2026-11-12 Windows。FreeType 2.14.3（`third/freetype`）+ HarfBuzz 15.0.0（`third/harfbuzz`）+ C 胶水 `src-tauri/wpefont/wpefont.c` 编成 wasm32-wasip1 reactor，给场景宿主的文本对象用（文本对象本身还没实现，1c 起）。构建 `deno task build:wpefont`（`scripts/build-wpefont.ts`，工具链经 `scripts/download.ts` 的 `fetchPinned` 下载），`WpefontPlugin` 拷进 `apps/wpe-scene/src/wpefont/`，包装 `apps/wpe-scene/src/wpefont/index.ts`；宿主的 `file:` 范围逐个放行 13 个系统字体文件（`wpe_scene_host.rs` 的 `font_grants`）。契约见 `src-tauri/wpefont/README.md`，计划见 `.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「1b」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 构建 | Windows，LLVM clang 22.1.6 | 两个工具链压缩包先拷进 `bin/wasm/wpefont/toolchain/`，`deno task build:wpefont` | 摘要对就不下载；解压、编 23 个单元、链接；导出齐全 | 2026-11-12 Claude：58.6 s，产物 1,850,118 字节（1807 KiB），WASI 导入 13 个（同 1a）；第二次运行跳过解压 |
+| [ ] | T2 干净缓存 | Windows | 清空 `bin/wasm/wpefont/toolchain/` 后 `deno task build:wpefont` | 下载 119 MB 的 sysroot 与 libclang_rt、校验、解压、编译成功 | 未测：网络下大文件不稳，本轮预置了压缩包；下载本身见 T3 |
+| [x] | T3 `fetchPinned` | Windows，GitHub release | 临时目录里下 libclang_rt（756 KiB）：从空下载、再调一次、`.part` 只有前 300000 字节、`.part` 是坏数据、摘要写错 | 下载并校验；已缓存跳过；续传；摘要不符后从头重下；错误摘要报错、不留文件 | 2026-11-12 Claude：五项都符合，续传日志「已有 293 KiB，共 756 KiB」 |
+| [x] | T4 找不到 clang | Windows | `WPEFONT_CLANG=D:/no/such/clang.exe deno run -A scripts/build-wpefont.ts` | 列出试过的候选与安装办法，退出码非 0，产物不动 | 2026-11-12 Claude：退出码 1 |
+| [x] | T5 和 1a 发布包逐字段相同 | Node 26 | `ignore/p6/b1b/harness.mjs` 跑 `p6b-geom`、`p6b-align`、`p6b-fx`、`p6b-fallback`、`p6b-extra`，`ignore/p6/b1a/compare.py` 对 `ignore/p6/b1a/out/ft2.14.3/wasm-b.json` | 字段不同：无 | 2026-11-12 Claude：38 个对象、342 个字形，字段不同：无，整数步进不同 0；`glyph` 的像素框与位图框不一致 0 |
+| [x] | T6 包装单测 | Node，vitest | `apps/wpe-scene` 下 `KABEGAME_WPE_ROOT=<WPE> node ../../node_modules/vitest/vitest.mjs run src/wpefont`；再不带 `KABEGAME_WPE_ROOT` 跑一次 | 全过；不带时只剩不读字体的用例 | 2026-11-12 Claude：14 passed；不带时 1 passed、13 skipped。同轮整个宿主 72 个文件 1892 passed、1 failed（`compile/pipeline.test.ts` 的语料请求次数 `3830255100: 219 次请求`，`compile/` 正被别的会话修改，不引用 wpefont） |
+| [x] | T7 拷进宿主 | Windows | 直接调 `WpefontPlugin` 的拷贝两次；挪走产物再调一次 | 第一次「复制 …」、第二次没有输出；缺产物黄字告警；两处 wasm 都被 git 忽略 | 2026-11-12 Claude：符合；`git check-ignore` 命中 `/bin/wasm/` 与 `apps/wpe-scene/src/wpefont/*.wasm`。没有经 `deno task dev` / `check`（不带 `--skip vue`）整条走一遍 |
+| [x] | T8 系统字体放行 | Windows，cargo test | `CARGO_TARGET_DIR=target-check` 下 `test-kabegame` driver：`kabegame wpe_scene_host` | 清单里存在的文件放行，清单外 / 同名目录 / 不存在的不放；宿主文档范围含字体；字体文件自身没有宿主范围；真实 `%WINDIR%\Fonts` 只放该目录下的文件 | 2026-11-12 Claude：11 passed（新增 3 个、改 2 个）。本机 13 个里只缺 `arialuni.ttf` |
+| [x] | T9 类型与编译 | Windows | 宿主 `tsc --noEmit`、Prettier `--check`、`check-kabegame --skip vue`（`target-check`） | 0 error | 2026-11-12 Claude：tsc 0、Prettier 通过、cargo 0 error（`wpe_scene_host.rs` 无警告） |
+| [x] | T10 CEF 里实例化 | Windows dev（Chrome/149.0.7827.201），屏外场景宿主 | wasm 临时拷进 dev 宿主目录，宿主里编译、带 WASI 桩实例化，排字并栅格化 NotoSans 32 / 200 号、`arial.ttf`、`msyh.ttc`，再读没放行的 `times.ttf`；同一段探针在 Node 里跑一遍 | 实例化成功（wasm 异常处理可用）、放行的系统字体读得到、哈希和 Node 相同；`times.ttf` 被拒 | 2026-11-12 Claude：四组排字与位图哈希逐项相同，全程 61 ms；`times.ttf` 报 `deny file: … OutsideRoot`。测完关宿主、删临时文件。宿主还没有调用方，没走 `loadWpefont()` 本身 |
+| [ ] | T11 macOS / Linux 构建 | macOS（Homebrew llvm + lld）/ Linux | `deno task build:wpefont`，再跑 T5 | 产物与 Windows 逐字段相同 | 未测 |
+
 ## 多显示器壁纸 P4（macOS 原生逐屏）
 
 2026-11-11。macOS 的原生模式改经 `NSWorkspace.setDesktopImageURL(_:for:options:)` 一块屏一块屏地设系统桌面图片（新增 `wallpaper/manager/native_mac.rs`；原来用 osascript 让 System Events 给每个桌面设图的路径删除）。原生后端按布置分派：`Placement::All` 对每块在线屏各设一次，`Placement::One` 只设那一块屏；屏按持久标识（display UUID）在主线程现查 `NSScreen`，设图本身在调用线程上做（实测一次要等系统 0.6 s 上下，不能放主线程）。显示方式是每次设图带给系统的选项，逐屏生效：填充 / 适应 / 拉伸 / 居中四种（没有平铺），留边黑色。能力表里 macOS 原生的「各屏复制」「逐屏独立」可用，「跨屏拼接」不可用，原因是新键 `settings.displayModeSpanNoSystem`（「系统没有跨屏铺放，该模式不可用」）。在线屏变化时 `on_screens_changed(previous)` 在原生模式下只给新接入的屏输出（纯函数 `outputs_for_new_screens`）。

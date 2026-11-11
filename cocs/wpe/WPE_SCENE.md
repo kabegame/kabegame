@@ -380,10 +380,10 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **P3-0b 加载与 ping**：`WpeSceneView` 首次收到本 iframe 的可信音量请求时才 emit `alive`；`WallpaperStage.delegatesPing()` 此后把桌面 ping 交给场景宿主垫片，换场景或卸载时收回。宿主没起来时仍由应用页应答，避免反复重载；宿主脚本卡死时垫片不再应答，壁纸窗口看门狗会重载。暂停和音量走与网页壁纸共用的消息协议；状态与日志走 `wpe_scene_report`，日志 target 是 `kabegame::wpe_scene_host`。
 - **开发与测试**：dev 构建用 `--mode development`，`vite.config.ts` 的 `__SCENE_DEV__` 只在该模式安装 `window.__kabegameSceneProbe`。CDP 应先按 frame URL 中的 `/wpe-scene/index.html` 选宿主 frame，再调探针。`deno task test -c kabegame --skip cargo` 依次运行 `apps/kabegame` 与 `apps/wpe-scene` 的 Vitest；宿主可单独运行 `deno task --cwd apps/wpe-scene test`，语料测试继续使用 `KABEGAME_WPE_ROOT`。
 - **`file:` 访问范围**（`wallpaper/wpe_scene_host.rs` 的 `access_scope_of`，就是注册给 runtime 的解析器：宿主目录优先，其它路径照旧按网页壁纸目录）：
-  - 宿主目录里的文档：根为宿主目录，另放行 WPE 安装目录（`wpe::discover::engine_dir`）的 `assets/` 与 `config.json`，以及库里全部 `x-wpe/scene` 行的目录。
+  - 宿主目录里的文档：根为宿主目录，另放行 WPE 安装目录（`wpe::discover::engine_dir`）的 `assets/` 与 `config.json`、Windows 上文本对象要读的 13 个系统字体文件（P6b 1b，见「字体引擎 `wpefont`」），以及库里全部 `x-wpe/scene` 行的目录。
   - 场景目录由网页壁纸目录索引顺带维护（`WpeWebDirIndex::scene_dir_grants`，随 `images-added` / `images-deleted` / 带 `localPath` 的补丁更新），但**不**构成网页壁纸范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
   - 应用页导航 iframe：目标只能落在宿主目录（runtime 对导航目标去掉放行项）。
-  - 宿主目录与 WPE 安装目录在启动时（`init_heavy_globals`）和每次取地址时刷新，闸门只读内存。
+  - 宿主目录、WPE 安装目录与系统字体在启动时（`init_heavy_globals`）和每次取地址时刷新，闸门只读内存。
   - 范围按文档路径算、不分实例：宿主能读库里所有场景目录与 WPE 资源。按实例收窄要让解析器拿到文档 URL 的 query，以后再做。
 - **IPC**：两份 capability 叠加。
   - 网页壁纸的 `wpe-web-capability`（`file:///*`）同样匹配宿主，网页壁纸的命令与事件宿主都有：`wallpaper_pong`、`setting-change` / `image-changed` / `images-change` / `wallpaper-ping` 监听。垫片拉 `wpe_web_pull_state` 时带 `kbScene` 的 `imageId`；后端只在调用方是宿主入口且 id 是库内场景壁纸时接受，返回与网页壁纸同形的 `user`，`directories` 为空，不写用户文件 grants。普通网页壁纸仍按文档目录认图，忽略传入的 id。
@@ -1378,3 +1378,23 @@ TL *= K
 **语料**（165 个工程）：能渲染 36 → 38（`1967162875`、`3827677885`）；带声音的 77 张里去掉 `object:sound` 及其键，不含声音对象的场景不变。步骤 2 之后仍 38 张：`script:api:layer.*` 与 `sound:volume:script` 消失，有粒子层的场景报 `script:api:particle.play` 38 张、`stop` 29、`pause` 16、`isPlaying` 8。`1514925620`、`3778592720` 只剩 `particle:children`。
 
 **dev 探针**：`__kabegameSceneProbe.host.sounds()` 给宿主音量、暂停 / 隐藏，每个声音对象的模式、当前文件、可用文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的 context 状态、淡变值、Blob 数与各元素的状态。
+
+## 字体引擎 `wpefont`（P6b 1b 起）
+
+文本对象（P6b）照 WPE 的画法：FreeType 栅格化、HarfBuzz 排字，逐字四边形加图集。WPE 的字形位置和位图由这两个库的具体版本与加载参数决定，自己写栅格化器对不上像素，所以直接把同版本的库编成 wasm 放进场景宿主，排版规则（回退链、断行、对齐、图集装箱）另在 TS 里照读码写（1c 起）。**文本对象本身还没实现**，场景里有文本对象照旧退回预览图；1b 只把字体引擎接进仓库。完整接口契约见 [src-tauri/wpefont/README.md](../../src-tauri/wpefont/README.md)，计划与实测见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「步骤 1a」「1b」。
+
+| 项 | 内容 |
+|---|---|
+| 版本 | FreeType 2.14.3（子模块 `third/freetype`，标签 `VER-2-14-3`）、HarfBuzz 15.0.0（`third/harfbuzz`），都没有补丁，vendor base 记在 `third-patches/{freetype,harfbuzz}/README.md`。1a 把 2.13.2 – 2.15.0 编成 wasm 和 WPE 抓帧的图集比：2.14 系列只差 1 个像素（WPE 装箱器清零格子四周造成，不是栅格化），2.13 差 37 个，2.15 另差 251 个 |
+| 位置 | `src-tauri/wpefont/`：C 胶水 `wpefont.c`、FreeType 模块表 `ftmodule.h`；编成 wasm32-wasip1 reactor，不链进应用 |
+| 构建 | `deno task build:wpefont` → `bin/wasm/wpefont/wpefont.wasm`（git 忽略，约 1.8 MB，全量约 1 分钟）。首次把 wasi-sdk 34 的 `wasi-sysroot` 与 `libclang_rt` 下到 `bin/wasm/wpefont/toolchain/`（`scripts/download.ts` 的 `fetchPinned`：SHA-256 校验、可续传、已有就不下）；要带 wasm32 目标的 LLVM clang（`WPEFONT_CLANG` → `PATH` → macOS Homebrew 的 llvm）。编译参数照 1a：`-O2`、不加改数值的开关，setjmp 走 wasm 异常处理 |
+| 进宿主 | kabegame 命令不带 `--skip vue` 时，`WpefontPlugin` 拷到 `apps/wpe-scene/src/wpefont/`（内容相同不重写）；缺失只告警，文本对象会退回预览图 |
+| 前端接口 | `apps/wpe-scene/src/wpefont/index.ts`：`loadWpefont()`（主线程 `fetch` → `compile` → 带 WASI 桩实例化 → `_initialize`；失败返回 null，原因见 `wpefontLoadError()`）；`Wpefont.face(bytes, pointsize)` → `WpefontFace` 的 `has` / `metrics` / `shape` / `glyph` / `dispose`。排字结果与度量是 26.6，位图与像素框是整数像素；位图拷出成按行紧排的 `Uint8Array`（灰度 1 字节、BGRA 4 字节 / 像素），`glyph` 另给本次加载的 `FT_Glyph_Get_CBox(FT_GLYPH_BBOX_PIXELS)` 框（等于位图框；WPE 定图集格子用的是另一次 `FT_LOAD_NO_BITMAP` 加载的轮廓框，彩色字形、内嵌点阵时不同，1c 补） |
+| 加载参数 | 第 0 个 face、Unicode 字符表、`FT_Set_Char_Size(0, trunc(pointsize · 64), 300, 300)`（300 DPI）、`hb_ft_font_create`；加载字形用 `FT_LOAD_RENDER \| FT_LOAD_COLOR` |
+| 两条 hinting 规则 | TrueType（有 `glyf`）**没有 `fpgm`** 时加 `FT_LOAD_FORCE_AUTOHINT`（FreeType 自己判「没有 hinting」还看 `prep`，所以在胶水里补）；CFF 不强制，走原生 CFF 引擎。两条都和 WPE 图集逐字节对过 |
+| 系统字体 | `systemfont_*` 与回退链要读 `C:\Windows\Fonts` 下的字体（WPE 不随壁纸分发）。宿主的 `file:` 范围逐个放行 `%WINDIR%\Fonts` 下 13 个文件（`wpe_scene_host.rs` 的 `SYSTEM_FONT_FILES`：`arial.ttf calibri.ttf cambria.ttc comic.ttf consola.ttf micross.ttf segoeui.ttf verdana.ttf`，rea-p6b-raster 2.2；`seguiemj.ttf arialuni.ttf seguisym.ttf msyh.ttc Malgun.ttf`，2.3），不放行整个目录，不存在的跳过；非 Windows 不放行 |
+| 测试 | `src/wpefont/index.test.ts`：wasm 不存在整组跳过；`KABEGAME_WPE_ROOT` 指向 WPE 时用 WPE 自带字体跑基础用例和 `fixtures/baseline.json` 的逐项基线（9 个单行、不需要回退的对象，gid、步进、位图尺寸、left / top、位图 SHA-1，由 `scripts/fixtures/make_wpefont_baseline.py` 从 1a 的结果生成）；测试不读系统字体 |
+
+**对照结论**（1b）：子模块版本的产物对 `p6b-geom`、`p6b-align`、`p6b-fx`、`p6b-fallback`、`p6b-extra` 的 38 个对象、342 个字形，和 1a 发布包 2.14.3 的结果逐字段相同；`glyph` 的像素框在这 342 个字形上都等于位图框 `(left, top − rows, left + width, top)`（加载时已栅格化，取到的是位图字形的框）。
+
+**CEF**（1b，dev，Chrome/149.0.7827.201）：宿主里编译、实例化成功（wasm 异常处理可用）；NotoSans 32 / 200 号、`arial.ttf`、`msyh.ttc` 的排字与位图哈希和 Node 逐项相同；没放行的 `times.ttf` 被 `file:` 闸门拒（`deny file: … OutsideRoot`）。

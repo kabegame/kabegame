@@ -29,6 +29,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `src-tauri/tauri-runtime-kbcef/` — 桌面端 Tauri CEF runtime 适配器
 - `src-tauri/tauri-plugin-*/` — 自定义 Tauri 插件（picker、pathes、share、wallpaper、task-notification），与应用和共享 Rust 库同级
 - `src-tauri/wpesl2wgsl/` — Wallpaper Engine 着色器（WPESL）→ WGSL 翻译器，编成 wasm 给场景壁纸渲染器用、不链进应用；见 [场景壁纸文档](cocs/wpe/WPE_SCENE.md)
+- `src-tauri/wpefont/` — 场景文本的字体引擎：FreeType 2.14.3（`third/freetype`）+ HarfBuzz 15.0.0（`third/harfbuzz`）+ C 胶水，编成 wasm 给场景宿主用、不链进应用；见 [wpefont 说明](src-tauri/wpefont/README.md)
 - `src-tauri/tauri-plugin-wemt/` — Windows 窗口壁纸的 WorkerW 挂载插件；主应用不再对 Progman 图标层反复修正 Z-order，见 [挂载说明](cocs/wallpaper/WINDOW_MOUNT_WEMT.md)
 - `src-crawler-plugins/` — JS/TS 爬虫插件子仓库，一个单独的 pnpm workspace 根
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块gitlink指向上游，但运行时附带仓库的补丁
@@ -130,6 +131,7 @@ deno task --cwd src-crawler-plugins generate-index  # 重新生成插件商店�
 - `deno task build:ffmpeg`：构建桌面端或 Android 的 FFmpeg 静态库。
 - `deno task build:chromium`：构建 CEF/Chromium 运行时。
 - `deno task build:wpesl2wgsl`：构建场景壁纸着色器翻译器的 wasm（产物 `bin/wasm/wpesl2wgsl/`；kabegame 命令不带 `--skip vue` 时自动拷进前端，缺失只告警）。
+- `deno task build:wpefont`：构建场景文本的字体引擎 wasm（FreeType + HarfBuzz，产物 `bin/wasm/wpefont/`；首次下载 wasi-sdk 工具链到 `bin/wasm/wpefont/toolchain/`，要带 wasm32 目标的 LLVM clang；kabegame 命令不带 `--skip vue` 时自动拷进场景宿主，缺失只告警）。
 
 ### 计划与变更说明格式
 编写计划或描述代码变更时，按明确的**点**来组织内容。每个点下面按**新增 / 修改 / 删除**分组，每项可选择附带缩进说明。将现状与变更分开：

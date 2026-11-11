@@ -1,6 +1,6 @@
-# 粒子测试数据的生成与参考脚本
+# 场景宿主测试数据的生成与参考脚本
 
-`src/particles/` 里几份测试数据和常量文件的生成脚本，以及单测钉的值所用的独立参考实现。它们原来散在对比台
+`src/particles/` 里几份测试数据和常量文件的生成脚本、`src/wpefont/` 的字形基线，以及单测钉的值所用的独立参考实现。它们原来散在对比台
 `ignore/p4/` 的各步骤目录里（原件照旧留在那里），挪进来是为了产品自己能复现这些文件。
 
 - 脚本只认自己的位置：输出缺省写进 `apps/wpe-scene/src/particles/`，都可以用 `--out` 改到别处。
@@ -23,6 +23,7 @@ Node 与 vitest；格式化用仓库根的 Prettier。命令都从仓库根运�
 | `noise_ref.py` | 噪声的独立参考实现（照读码，float32 逐步舍入），给下面两个脚本 import；命令行 `noise_ref.py a b c` 打印 `snoise3(a, b, c)` | `noise-tables.json` |
 | `noise_equal_cases.py` | 核对 `noise.test.ts`「snoise3 坐标相等时的顶点顺序」钉的 8 个值，并打印原版 Gustavson 顺序下的值 | `noise_ref.py` |
 | `noise_xcheck.test.ts` + `noise_xcheck.py` | 对拍：20 万组随机 float32 输入，产品的 `snoise1/2/3` 与 `noise_ref.py` 逐位比较 | 产品代码 `src/particles/noise.ts` |
+| `make_wpefont_baseline.py` | 生成 `src/wpefont/fixtures/baseline.json`（`wpefont/index.test.ts` 用）：9 个单行、不需要回退的文本对象的逐字形基线 | P6b 1a 发布包 2.14.3 的输出 `ignore/p6/b1a/out/ft2.14.3/wasm-b.json`、测试工程 `ignore/p6/b0/proj/p6b-*` |
 
 ## 用法
 
@@ -74,6 +75,15 @@ python -X utf8 -I apps/wpe-scene/scripts/fixtures/noise_xcheck.py [--input 文�
 
 对拍三行都是「不一致 0」才说明两份实现逐位一致。`vitest.config.ts` 只收本目录的 `*.test.ts`，产品测试不受影响。
 对拍只证明两份实现一致，真值仍来自 WPE 轨迹。
+
+### wpefont 字形基线（P6b 1b）
+
+```bash
+python -X utf8 -I apps/wpe-scene/scripts/fixtures/make_wpefont_baseline.py [--results 文件] [--proj 目录] [--out 文件]
+node node_modules/prettier/bin/prettier.cjs --write apps/wpe-scene/src/wpefont/fixtures/baseline.json
+```
+
+`--results` 是 1a 用 FreeType 2.14.3 / HarfBuzz 15.0.0 发布包编出的 wasm 跑 `p6b-*` 工程的输出（`ignore/p6/b1a/harness.mjs` 的格式），1a 已把它和 WPE 抓帧的图集逐像素核对过（`.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「步骤 1a」）。对象表写在脚本里；对象多行或出现回退字体时报错。只存位图 SHA-1。
 
 ### 核对重新生成的文件和仓库里的相同
 
