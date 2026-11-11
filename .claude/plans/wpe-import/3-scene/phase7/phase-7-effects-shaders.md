@@ -212,6 +212,8 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 
 ## P7c — 类型类
 
+子计划见 [phase-7c-hlsl-implicit.md](phase-7c-hlsl-implicit.md)：步骤 0 调研 → HLSL 模式骨架 → 逐条加规则 → 片元的 varying → 收尾与对照（含重建 wasm、在 Kabegame 里和 WPE 比）。
+
 **实现：**
 - **HLSL 隐式转换模式：** 在 P7a 嵌入的 naga 里，GLSL 前端加一个选项，默认关闭，翻译器打开。照步骤 0 的 fxc 结论补上：
   - 赋值、初始化、返回、实参的向量 / 矩阵截断；
