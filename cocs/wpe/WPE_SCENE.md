@@ -94,7 +94,7 @@ count × { sizedString name, u32 offset, u32 length }
 |---|---|
 | `general` | 正交尺寸、清屏色与开关、相机、`ambient` / `skylight`、`postprocess`（解析出的档位与场景实际的泛光 / HDR 状态）、`bloom`（泛光参数，缺键补 WPE 默认值、未换算） |
 | `bloom` | 泛光链（`compile/bloom.ts` 的 `SceneBloom`：`hdr` 与各 pass 编好的 WPE util 材质）；泛光实际关着时为 null |
-| `layers` | 按场景合成顺序的图层：`object`（scene.json 的 `objects` 下标，稳定键）、`parent`（父对象的 `objects` 下标，P4a）、变换、尺寸、颜色、可见性与 `visibleBound`（`visible` 绑了用户属性，运行时可变，**不可见也要建 GPU 资源**）、基础材质的 `passes`；`colorBlendMode`；启用的 `effects`（每个带 `source`、`fbos` 与按序的 `steps`：`draw` / `copy` / `swap`）；colorBlendMode ∉ {0, 31} 时的 `passthrough` pass；粒子对象的 `particle`（解析后的粒子系统与粒子材质的 pass，P4a，见「粒子（P4a）」） |
+| `layers` | 按场景合成顺序的图层：`object`（scene.json 的 `objects` 下标，稳定键）、`parent`（父对象的 `objects` 下标，P4a）、变换、尺寸、颜色、可见性与 `visibleBound`（`visible` 绑了用户属性，运行时可变，**不可见也要建 GPU 资源**）、基础材质的 `passes`；`colorBlendMode`；启用的 `effects`（每个带 `source`、`fbos` 与按序的 `steps`：`draw` / `copy` / `swap`）；colorBlendMode ∉ {0, 31} 时的 `passthrough` pass；粒子对象的 `particle`（解析后的粒子系统与粒子材质的 pass，P4a，见「粒子（P4a）」）；图像模型标志 `solidLayer` / `instanced` / `noPadding` / `perspective` / `passthroughModel` / `copyBackground` / `fullscreen` / `fullscreenSize` 与组的 `group` / `subtree` / `groupUpload`（P5b，见「图像模型标志（P5b）」） |
 | `programs` | `wpesl2wgsl` 成功结果，保留 WGSL、uniform 布局、纹理绑定与顶点属性 |
 | `textures` | 格式枚举、图像尺寸与纹理尺寸、采样 flags、mip 字节；视频只带 MP4 区间；FreeImage 形态只带 `encoded`（PNG / JPG 的磁盘区间，`mips` 由主线程解码后填）。`unsupported` 非空时，编译器可能只读头部，`mips` 因此可能为空 |
 | `bindings` | 属性绑定表（P3a）：编译期每处解析 `{user}` 的地方登记一条「属性名（可带 condition）→ 目标」，按登记顺序；同一属性可以有多条。宿主按它把属性增量分成就地写与重编译（见「场景宿主」的「属性与快速路径」） |
@@ -114,13 +114,12 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | general 的 `bloom` / `hdr` 与全部 `bloom*` 调节项 | 由后处理档位裁决，泛光 / HDR 已实现（P2b，见「泛光与 HDR」）；其中的脚本交给 P3b 运行时 |
 | general 的 `cameraparallax*`、`camerashake*`、`zoom` | 视差、抖动、正交缩放已实现（P5a，见「相机：视差、抖动与缩放（P5a）」）；透视场景开 `camerashake` 照报 `general:camerashake`（归 P5d），正交场景里解析出的常量 `zoom` ≤ 0 照报 `general:zoom` |
 | `camerafade`、`camerapreview`、`norecompile`；正交投影下的 `farz` / `fov` / `nearz`；`supportsvideo` | 加载淡入 / 编辑器选项 / 透视另报 `camera:perspective` / 只决定 D3D 设备标志 |
-| 对象 `copybackground` | 只对 passthrough 模型生效，普通图像模型上没有渲染效果；passthrough 模型照报 `model:passthrough` |
+| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及非图像对象、组合层上为真，照报 `object:perspective`。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
 | `solid`、`ledsource`、`locktransforms` | 渲染路径不读（推断与鼠标命中有关）/ Razer Chroma 灯效来源 / 编辑器锁定 |
 | `brightness` | 只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效 |
-| `parallaxDepth`；`alignment` 为 `center`；`perspective` 为 false；模型 `autosize` | 视差已实现（P5a），绘制时只用根对象的值 / 居中是恒等 / 透视另报 / `size` 与模型 `width` / `height` 都缺失时取基础纹理的图像尺寸 |
+| `parallaxDepth`；`alignment` 为 `center`；`perspective` 为 false | 视差已实现（P5a），绘制时只用根对象的值 / 居中是恒等 / 不为真时中性 |
 | 模型 `cropoffset`、对象 `config`；translucent / additive 或 `depthtest: disabled` 的 pass 上的 `depthwrite: enabled` | P5a 前置，实测中性：编辑器的裁剪偏移导入时已并进 `origin` / 只在托盘与播放列表读 / 这两种 pass 不写深度；其余 `depthwrite:*` 照报（P5d）。模型 JSON 的布尔键只认 `true`，见「相机：视差、抖动与缩放（P5a）」的「前置几条」 |
 | `colorBlendMode` | 0 普通、31 上屏改 additive、其它走 passthrough，都已实现 |
-| 模型 `solidlayer` | 合成 RT 按图层 `size`，上屏不做 UV 内缩。`assets` 的 `solidlayer.json` 用 `flat`、不带纹理；`instanced` 另报 `model:instanced` |
 | effect.json 的元数据键（`name`、`group`、`preview`、`dependencies`、`gizmos`…） | 编辑器显示用 |
 | 对象 `parent`（灯除外）；没有内容的分组节点 | 层级已实现（P4a，实测），见「层级（P4a）」；不再报 `object:parent` / `object:empty` |
 | general 的 `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength` | 实测中性：同一工程只改这 5 个键，两份轨迹对解析模型最大差 6.7e-5、1.9e-5，16 个系统的 y 都不漂移；场景重力若生效每帧会偏约 0.08 像素（`proj/p4a-wind`）。读码也没找到引擎读取点 |
@@ -164,9 +163,9 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | `textures.ts` | 按 `compile/tex.ts` 的 `TEXTURE_FORMATS`（格式支持范围的唯一来源，P4b）连同全部 mip 上传：0 RGBA8888 → `rgba8unorm`、4 DXT5 → `bc3-rgba-unorm`、6 DXT3 → `bc2-rgba-unorm`、7 DXT1 → `bc1-rgba-unorm`、8 RG88 → `rg8unorm`、9 R8 → `r8unorm`，原样上传、不转通道；FreeImage 位图 `copyExternalImageToTexture` 到纹理尺寸的左上角；采样器 |
 | `programs.ts` | 着色器模块 + `getCompilationInfo()` 检查、bind group layout、顶点布局、混合状态、管线（目标格式与是否写 alpha 随目标） |
 | `uniforms.ts` | 按翻译结果的 std140 布局打包 uniform 块；内置 uniform |
-| `layout.ts` | 图层四边形、世界矩阵与沿父链的可见性（P4a）、正交 / 透视粒子的视图投影、样式铺放与画布尺寸（纯函数） |
+| `layout.ts` | 图层四边形、世界矩阵与沿父链的可见性（P4a）、正交 / 透视粒子的视图投影（透视图层同用后者，P5b）、组的局部正交 `groupViewProjection`（P5b）、样式铺放与画布尺寸（纯函数） |
 | `math.ts` | 最小 mat4（列主序） |
-| `graph.ts` | 图层渲染图：把每个图层排成步骤（直接上屏 / 合成链 / passthrough / 快照 / copy / swap / 粒子），fbo 尺寸，`swap` 的名字 → 实体对应（纯函数，见下） |
+| `graph.ts` | 图层渲染图：把每个图层排成步骤（直接上屏 / 合成链 / passthrough / 快照 / copy / swap / 粒子；P5b 加组合层的 `compose` 与 `clear`、fullscreen 的拷贝、组的 `subtree`），fbo 尺寸，`swap` 的名字 → 实体对应（纯函数，见下） |
 | `scene.ts` | 一份 bundle 在某个设备上的全部 GPU 资源与每帧编码（`GpuScene`，照 `graph.ts` 的步骤执行，ops 按图层分组）；粒子层的模拟器与顶点缓冲；`checkRenderable` 自查；`buildableLayers` 与 `visibleObjects` 的可见性跳过 |
 | `state.ts` | CPU 侧场景状态 `SceneState`（`P3a`）：图层的可变字段、材质常量覆盖、泛光参数与脏集合；就地写落在它上面，`GpuScene.sync` 每帧取脏项。不依赖 GPU，单测在 Node 里核对「就地 = 重编译」 |
 | `renderer.ts` | `SceneRenderer`：设备、画布上下文、时钟、帧循环、cover 铺放，场景可无缝替换 |
@@ -220,6 +219,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - additive：`src-alpha` / `one`
   - normal：`one` / `zero`
   - 画到场景目标的 pass 不写 alpha（LWE 最后一个 pass 前 `glColorMask(…, false)`），场景 alpha 一直是清屏时的 1；画进合成 RT / fbo 的 pass 写四通道，合成链带着 alpha 走到上屏。
+  - 组里例外（P5b）：子孙「画到场景」的绘制落在组的合成 RT 里，直接画的写 RGBA，组 `copybackground: false` 时 alpha 用 One / One / Max，见「图像模型标志（P5b）」的「组」。
 
 ### 图层渲染图（`graph.ts` + `scene.ts`，P2a）
 
@@ -231,11 +231,12 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - effect 逐 pass：没有 `bind` 时槽 0 = 上一步输出（当前合成 RT）；有 `bind` 时只按 bind 赋值，找不到的名字（如 `previous`）= 当前合成 RT。`target` 是本 effect 的 fbo 就画进 fbo，缺省或 `compose: true` 写进合成链（ping-pong 下一张）；画全屏四边形，混合用 pass 自己的；
   - 上屏：只有最后一个启用 effect 的最后一个绘制 pass 用图层世界四边形、场景视图投影 × 图层模型矩阵画到场景，借用基础材质的 blend（colorBlendMode 31 强制 additive）；
   - colorBlendMode ∉ {0, 31}：effect 都留在合成链，最后用 passthrough 材质上屏（combos `BLENDMODE = cbm`、`FOG_COMPUTED = 1`，槽 0 = 最终合成 RT，`g_Texture4` 由注解默认绑到快照，颜色 (1,1,1,1)，blend 取基础材质的）。材质看 `scene.json` 顶层 `version`：> 2 用 `effectpassthrough_4.json`（genericimage4），否则 `effectpassthrough.json`（genericimage3），见 `bundle.ts` 的 `passthroughMaterial`。没有 effect 时也走「基础 pass → 合成 RT → passthrough」。
-- **合成 RT 数** = min(2, 写进合成链的次数)：基础 pass、每个 effect 的最后一个绘制 pass 与每个 `compose` pass 各写一次，上屏那次不算，即 WPE 的 `min(2, passthrough + Σ(1 + compose))`；第 n 次写进 `n % 2`。尺寸取基础材质槽 0 纹理的图像尺寸（没有纹理或模型 `solidlayer` 取图层 `size`），max(4, ·)；格式 LDR `rgba8unorm`、HDR `rgba16float`。合成 RT 按尺寸与采样方式跨图层共享（WPE `sc.<W>.<H>…`），采样跟随基础纹理的 clamp / nointerpolation。
+  - 组合层、fullscreen 与组（P5b）换掉的是基础 pass（`compose` / `clear` / 拷贝当前画面）与几何、矩阵，之后的 effect 链与上屏照上面走，见「图像模型标志（P5b）」。
+- **合成 RT 数** = min(2, 写进合成链的次数)：基础 pass、每个 effect 的最后一个绘制 pass 与每个 `compose` pass 各写一次，上屏那次不算，即 WPE 的 `min(2, passthrough + Σ(1 + compose))`；第 n 次写进 `n % 2`。尺寸（`compositeSize`）：fullscreen 取 `fullscreenSize`；否则取基础材质槽 0 纹理的图像尺寸，没有纹理、模型 `solidlayer` 且不是 `instanced`、组合层取 `round(size)`（P5b）；max(4, ·)；格式 LDR `rgba8unorm`、HDR `rgba16float`。合成 RT 按尺寸与采样方式跨图层共享（WPE `sc.<W>.<H>…`），采样跟随基础纹理的 clamp / nointerpolation；组里的图层按父链上组的层数另分一池（P5b）。
 - **fbo**（effect.json `fbos`）：格式 `rgba_backbuffer` / `rgb_backbuffer` 随 HDR，其它查格式表（`FBO_FORMATS`：rgba8888、rgb888、rg88、r8、rg1616f、r16f、rgba16161616f、rgb161616f），不认识的按 rgba8888；尺寸 W′ / H′ 取 `width` / `height`（≤4096）否则合成 RT，`fit`（≤4096）时 W′ < H′ 则 h = min(fit, H′)、w = W′/H′·h，否则 w = min(fit, W′)、h = H′/W′·w，截断后整除 `scale`，最小 2；`unique` 每层独占，否则按名字、尺寸、格式、寻址共享；`clear` 创建后清成该色；`uvs: "repeat"` 重复寻址，否则 clamp。
 - **命令**：`copy` = `copyTextureToTexture` 把 source 整张拷到 target（格式必须一致）；`swap` 不做 GPU 工作，只交换后续 pass（含之后各帧）里这两个名字指向的实体（`FboBindings`），引用 fbo 的 bind group 按当前对应取并缓存。
-- **UV 内缩**（`layout.ts` 的 `uvInset`）：上屏的四边形两端各缩 `0.15 / 分母`，float32 逐步算，包括直接上屏、最后一个 effect 上屏和 passthrough 上屏；基础 pass 和 effect 中间 pass 不缩，模型 `solidlayer` 不缩。分母是基础纹理的纹理尺寸，走合成路径时也是，不是合成 RT；没有纹理时是图层 `size` 的整数部分。
-- **`_rt_FullFrameBuffer` 快照**：场景目标整张 `copyTextureToTexture` 到独立纹理，**绝不采样正在写的目标**。每图层至多拷一次，时机是三处里最早满足的一处：图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前；内容都是画到本图层之前的场景（合成链不画进场景）。本帧还没画过场景时先清屏再拷。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」的条件；`fullscreen` 与 `passthrough` 对象仍报 unsupported，P4a 放开父子层后照样恒成立。
+- **UV 内缩**（`layout.ts` 的 `uvInset`）：上屏的四边形两端各缩 `0.15 / 分母`，float32 逐步算，包括直接上屏、最后一个 effect 上屏和 passthrough 上屏；基础 pass 和 effect 中间 pass 不缩。分母是基础纹理的纹理尺寸，走合成路径时也是，不是合成 RT；没有纹理时是图层 `size` 的整数部分。不缩的条件分两块（P5b）：直接上屏在模型 `fullscreen`、`nopadding`、`passthrough`、`solidlayer`（含 instanced）时不缩，末 pass 与 passthrough 上屏不看 `nopadding`。
+- **`_rt_FullFrameBuffer` 快照**：场景目标整张 `copyTextureToTexture` 到独立纹理，**绝不采样正在写的目标**。每图层至多拷一次，时机是三处里最早满足的一处：图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前；内容都是画到本图层之前的场景（合成链不画进场景）。本帧还没画过场景时先清屏再拷。快照纹理带 `COPY_SRC`：fullscreen 的合成路径要把它拷进合成 RT 0（P5b）。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」的条件：组合层的基础 pass 本来就读快照；组里的子孙要读快照时 WPE 读的是组开始时那份，我们没实现，照报 `model:passthrough:children:framebuffer`（P5b）。
 - **需要帧缓冲**（`bundle.ts` 的 `needsFramebuffer`，WPE `FUN_1401515b0`）：某个纹理槽最终解析到的名字是 `_rt_FullFrameBuffer`，解析顺序是材质 `textures` 里给的名字 → 着色器注解 `default`；effect 里任一 pass 需要，该 effect 就需要。
 - **编码**：画到场景目标的步骤合并进同一个 render pass；画进合成 RT / fbo、拷快照与 copy 时先结束场景 pass，之后以 `load` 接着画。场景目标带 `COPY_SRC`。
 - **可见性运行时可变**（P3a）：ops 按图层分组（泛光的 op 单独放在最后），`encode` 先按 `SceneState` 的 `visible` 过滤（`visibleObjects`），不可见图层整段跳过——包括它的快照与 copy / swap；全部图层都不可见时只清屏（泛光照旧跑）。`visible` 绑了用户属性（`visibleBound`）的图层即使当前不可见也建资源，`checkRenderable` 同样检查；没有绑定、写死 `false` 的图层照旧不建。
@@ -1340,6 +1341,121 @@ TL *= K
 - 读数：`a0/rdc_dump.py` 在 `qrenderdoc --python` 下无界面导出整批抓帧的常量，`ana_a.py` / `ana_pre.py` / `ana_real.py` 核对。
 - 各步的快照、补丁、语料比较与整帧比对在 `s1/`–`s4/`（`cmp_frames.py`、`follow_cmp.py` 等），逐帧光标在 `cur/`，开场指针在 `ptr/`，收尾走查在 `wk/`。
 - WPE 参照：步骤 0、1 在 `A:\p5a\`，之后在 `A:\p5a2\`（wpe-renderdoc MCP 的 `capture_wallpaper` / `capture_sweep`）。
+
+## 图像模型标志（P5b）
+
+P5b 的标志都作用在图像层上，不新增图层种类，改的是一个图像层「画什么、画多大、画到哪」。按改动的深浅分三类：
+- **只改编译期的量**：`autosize` / `projectlayer` 改尺寸来源，`nopadding` 改 UV 内缩，`instanced` 改材质与合成 RT 尺寸。
+- **只改一次绘制的矩阵**：图像层 `perspective: true` 在上屏时换透视；`fullscreen` 画 NDC 四边形，带 effect 时不画基础材质、改拷贝当前画面。
+- **结构变化只有组合层**：passthrough 模型画进自己的合成 RT；带子层的组合层（「组」）把子孙画进去，子孙不在顶层画。
+
+依据：
+- 读码：[rea-p5-modelflags](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-modelflags.md)（全部没有实测），透视图层另见 [rea-p5-camera](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-camera.md)。
+- 实测：[报告](../../.claude/plans/wpe-import/3-scene/phase5/p5-REPORT.md)「P5b 语义的实测核对」。21 个确定性工程，读码的流程全部成立，推翻两处推断：无 effect 带子层的组怎么上屏；`instanced` 的遮罩只在多 pass effect 时变糊。
+- 逐步的验收数据：[子计划](../../.claude/plans/wpe-import/3-scene/phase5/phase-5b-modelflags.md)「实施记录」「P5b 收尾」。下面每条只点出依据，数字和例外以子计划为准。
+
+验收：
+- 确定性工程按固定时刻渲染，和 WPE 抓帧整帧逐像素比（`kbp cmp frame`），各步最大差 1–2；
+- 真实样本按 WPE 日志回放到抓到的那一帧，比对应区域；
+- 10 张基线场景 × 三档后处理的画面哈希每步不变。
+
+### 尺寸、UV 内缩与透视图层
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 尺寸来源 | 照 WPE 的顺序（`bundle.ts` 的 `imageLayerSize`）：<br>1. 模型 `width` / `height`（数字，缺了是 1，逐分量）；<br>2. 对象 `size` 逐分量覆盖；<br>3. `autosize` 在「纹理就绪」时再覆盖：`projectlayer` 取正交投影宽高（取整），否则取槽 0 纹理的图像尺寸，没有纹理时不覆盖。<br>三者都缺时是 1×1（原来取纹理尺寸） | 读码 §7；实测 `p5b-autosize`、`p5b-proj`。语料里同时写 `autosize` 和 `size` 的 1514 个对象，两种顺序取值全部一致，所以改顺序对现有场景中性；精灵表的帧尺寸随图像层帧动画（P6） |
+| `fullscreen` 的尺寸 | 排在 `autosize` 之前，几何固定 2×2，合成 RT 另取 `fullscreenSize`（见「fullscreen」） | 读码 §7 |
+| UV 内缩 | 直接上屏（WPE `+0x490`）在模型 `fullscreen`、`nopadding`、`passthrough`、`solidlayer` 时不内缩；末 pass 与 passthrough 上屏（`+0x2e8`）不看 `nopadding`（`graph.ts` 的 `directInset` / `finalInset`）。`solidLayer` 只表示模型那一位，instanced 也不内缩 | 实测 `p5b-nopad-v2`（1845 个像素差 1）、`p5b-inst2` |
+| 透视图层 | 图像层 `perspective: true` 时，画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）把视图投影换成透视粒子那一份 `perspectiveViewProjection`，已带抖动与缩放，相机距离随 `perspectiveoverridefov` 与 `zoom` 变。视差平移照旧右乘：`P_persp · T(o − s) · W`。画进合成 RT 的 pass、effect 中间 pass 不变 | 读码；实测 `p5b-persp*`：fov 30 时距离 2015.3 = 540 / tan 15°，`zoom 1.5` 时距离除以 1.5，视差偏移落在 z = 0 平面上正好是屏幕上的 o 像素；平滑纹理的 `p5b-persp-smooth` 最大差 1 |
+
+**更正读码：** rea-p5-modelflags 推断纹理标志 `0x20` 表示「未补边」，实际 `0x20` 是视频位（`compile/tex.ts` 的 `TEX_FLAGS.video`）。语料里写了 `nopadding` 的纹理带 `0x20`，是因为编辑器给视频纹理写了 `nopadding`。
+
+### 组合层（passthrough 模型）
+
+`composelayer`、`composelayer_depthtest`、`fullscreenlayer`、`projectlayer` 都是 passthrough 模型（`SceneLayer.passthroughModel`）。渲染图的形状同带 effect 的图层：基础 pass → effect 链 → 借基础材质的 blend 上屏（`colorBlendMode` 混合时用 passthrough 上屏）。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 基础 pass | `copybackground` 缺省 true，只有 JSON `false` 才关（`SceneLayer.copyBackground`）。<br>true：画材质本身（composelayer 着色器），角色 `compose`，MVP 是图层的 `VP · T(o − s) · W`，关混合、写 RGBA。着色器按 UV 铺满合成 RT，按 MVP 算这块在屏幕上的位置去采快照。<br>false：不画基础材质，合成 RT 0 清成 (0, 0, 0, 0)（`clear` 步骤） | 实测 `p5b-cl`（旋转、`copybackground: false`、无 effect 两种、cbm 2 五个层，32 个像素差 1） |
+| 不画 | 没有启用的 effect、`colorBlendMode` 是 0 / 31、没有子层时整层是空计划。WPE 照拷一次快照，看不出来，我们不拷 | 实测 |
+| 合成 RT 与内缩 | 合成 RT 按 `round(size)`，上屏不内缩 | 实测：600×300，上屏 UV 0–1 |
+| `projectlayer` | 尺寸取正交投影宽高（`autosize`）；排序键 −∞ 只在透视场景的透明排序里起作用（P5d） | 实测 `p5b-proj`，0 差异 |
+| 照报 | 组合层同时 `perspective: true`：`object:perspective`（基础 pass 与上屏各用哪套相机没测，语料 0 个） | — |
+
+### fullscreen
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 直接上屏 | 没有启用的 effect、cbm 是 0 / 31、不是组合层：几何是 2×2 的 NDC 四边形，MVP 照常算。着色器不乘 MVP 就铺满全屏（neon_sunset 的 `cloudsbg`），乘了是一块被 `W` 变换的 2×2 方块 | 实测 `p5b-fsmvp`，0 差异 |
+| 合成路径 | 不画基础材质：先拍快照，再整张拷进合成 RT 0（`copy`，源是 `framebuffer`），之后照常跑 effect 链。上屏与 effect pass 的模型、视图是单位阵，投影是 `ortho(−1, 1, −1, 1, 1, −1)`（`FULLSCREEN_VIEW_PROJECTION`），`origin` / `scale` / `angles`、视差、抖动都不起作用 | 实测 `p5b-fs`，最大差 1 |
+| 合成 RT 尺寸 | `fullscreenSize` 取槽 0 静态纹理的图像尺寸；槽 0 是 `_rt_FullFrameBuffer`（fullscreenlayer 都是）或没有纹理时取场景目标尺寸。WPE 取的是窗口尺寸，我们离屏按场景分辨率渲染，对应的是场景目标；两份都不内缩 | 实测 `p5b-fs-1344`（1344×756 窗口） |
+| fullscreenlayer | 组合层加 `fullscreen`：没有 effect、cbm 是 0 / 31 时同组合层整层不画；带子层照报 `model:fullscreen:children`（WPE 这时子层按场景相机画进全屏 RT，没测，语料 0 个） | 读码 §2.5 |
+
+### 组（带子层的组合层）
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 归属 | 编译期定（`bundle.ts` 的 `assignGroups`）：`group` 是最近的组合层祖先；`subtree` 按先序展开，子层按 `objects` 下标排，嵌套组只收它本身。顶层循环跳过 `group` 非空的图层，缺这个字段（手写的图层）当顶层 | 读码 §2.5 |
+| 画子树 | 基础 pass（`compose` / `clear`）之后紧跟 `subtree` 步骤：结束当前 pass，对可见的子孙依次跑它们的 ops，「场景目标」换成组的合成 RT。`subtree` 不算一次合成链的写入 | 实测 `p5b-grp-cb1` / `cb0` |
+| 视图投影 | 子孙画到「场景」的绘制（含粒子）换成 `groupViewProjection = ortho(±w/2, ±h/2, 1000, −1000) · inverse(W_组)`（w、h 取组的 `size`），所以子层落在组的本地坐标系，组矩形外的部分裁掉。组里没有视差、抖动、透视，这些作用在组本身的上屏上。世界空间粒子的顶点乘 `inverse(W_组)` 回到本地。嵌套组的 `compose` 照旧用场景视图投影采快照，采到的是外层开始时那份 | 实测 `p5b-grp-par`、`p5b-grpptc`（最大差 2）、`p5b-nest` |
+| 写 alpha | 直接画的子层写 RGBA；组里的上屏（带 effect 子层的末 pass、嵌套组画回外层）只写 RGB。组 `copybackground: false` 时 alpha 用 One / One / Max，颜色照绘制自己的混合（`programs.ts` 的 `groupBlendState`，管线键加 `\|max`） | 实测：`p5b-grp-cb1` 子层写掩码 15，`p5b-grpptc`、`p5b-nest` 的上屏是 7；`p5b-grp-cb0` 重叠处 alpha 0.5 |
+| 无 effect 的组 | 基础 pass → 子树 → 上屏：用 `effectpassthrough` 材质（`version` > 2 用 `_4`，`BLENDMODE 0`，`SceneLayer.groupUpload`，`g_Color4` 置 1）画世界四边形，UV 0–1；`copybackground` 为 true 时用材质的 normal（不混合），false 时 translucent | 实测 `p5b-grp-nofx` / `nofx0`，**推翻读码**（读码推断是 composelayer 着色器铺满全屏并拉伸） |
+| 合成 RT 池 | 组里的图层按父链上组的层数另分一池（键加 `\|k<层数>`），不然和组同尺寸的子孙会共用组的合成 RT | 步骤 4 实现时发现 |
+| 照报 | `features.ts` 的 `groupChildIssues`：子孙要读快照（基础 pass 或启用的 effect 读 `_rt_FullFrameBuffer`，或 cbm 混合）报 `model:passthrough:children:framebuffer`，WPE 在组里读的是组开始时那份；`fullscreen` 报 `…:fullscreen`；透视图层、透视粒子报 `…:perspective`。关着、运行时可能打开、又要读快照的 effect，记进它自己的不支持项，打开时整场重编译 | 读码 |
+
+### instanced（纯色图层）
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 模型 | 编辑器的「纯色图层」：`{instanced, solidlayer, material: materials/util/solidlayer_instance*.json}`，材质是 translucent 的 genericimage2 / 4，槽 0 是 `util/white`（32×32） | 语料 167 个对象 |
+| 材质覆盖 | 编译材质前，对象的 `instance` 覆盖每个 pass：`combos` 合并，`textures` 按槽合并，规则同 effect 实例覆盖（`bundle.ts` 的 `instanceOverride`）。语料 167 个对象的 `textures` 都是一个非空字符串（94 个 `util/white`、73 个工程纹理），`combos` 都是 `{"version": 2}` | 实测 `p5b-inst` I2、`p5b-inst2` J2：槽 0 换成覆盖的那张 |
+| 合成 RT | 按槽 0 纹理的图像尺寸，不按 `size`（`compositeSize` 的条件是 `solidLayer && !instanced`）。`util/white` 时是 32×32，fbo 跟着它：多 pass effect 的中间结果在 32×32 上，遮罩变糊；单 pass effect 的末 pass 直接上屏，遮罩按自己的分辨率采样 | 实测 `p5b-inst2`：J1 合成 RT 与 fbo 都是 32×32，对照组 900×1000；`instance.textures` 换成补边纹理时取图像尺寸 48×40。整帧 0 差异 |
+| 内缩与颜色 | 不内缩（`solidlayer` 那一位）；颜色照常进基础 pass | 实测：J1、J2 末 pass UV 0–1，J3 直接上屏 UV 正好是图像 / 纹理；`p5b-inst` 的 `g_Color4` = (1, 0.6, 0.2, 1) |
+| 照报 | `features.ts` 的 `checkInstanceFeatures`：<br>- `usertextures` → `material:usertextures`（媒体封面、用户属性纹理、`usershortcut`；WPE 绑用户纹理时还强制 `g_Color4 = 1`）；<br>- `instance` 缺失或不是对象 → `model:instanced:instance`；<br>- 对象 `size` 不是字符串 → `model:instanced:size`（WPE 按 `"w h"` 读）；<br>- `textures` 不是非空字符串的数组、`combos` 不是对象、其它键 → `object:instance:<键>`。<br>`id` 是编辑器键，不是 instanced 的对象上 `instance` 不读 | 语料：只有 `usertextures` 出现过 |
+
+### 已知差异与只记不补
+
+- **effect pass 的 `g_Color4`**：WPE 是这一帧最后设置的值。fullscreen 拷贝路径、`copybackground: false` 的组合层拿到前一个画过的层的颜色，组拿到最后一个子层的颜色；我们给层自己的颜色。语料 2190 个着色器文件和 WPE 自带的 46 个 effect 都不读 `g_Color4`。
+- **组里 alpha 的写开关**：WPE 的写开关是全局状态，一个子层的合成链结束后，同组之后的普通绘制也只写 RGB（`p5b-grpptc` 的粒子写掩码是 7）。这取决于运行时的可见性与 effect 开关，没照搬，只影响组 `copybackground` 为 true、排在带 effect 子层之后的绘制的 alpha。另外，`copybackground: false` 的组里，WPE 的 alpha MAX 也作用到子孙自己合成链里开了混合的 pass，我们没照搬。
+- **effect 中间 pass 的矩阵**：组里按局部正交算、透视图层按正交算。WPE 的规则见 [effect-matrices-REPORT](../../.claude/plans/wpe-import/3-scene/effect-matrices-REPORT.md)，归 P7d。收尾时统计过语料：组里带多 pass effect 的子层有 17 个，在 3 张场景里，都还有 20 项以上别的不支持项；透视图层的 effect 合计多于一个 pass 的有 3 张，能渲染的 `1923929928` 的三个 effect 各 1 个 pass，前两个是「非最后一个 effect」（WPE 的 MVP 也是 `ortho(±1)`），最后一个是上屏，没有差异。
+- **组里跟随指针的粒子**：控制点仍按场景坐标反投影。语料 0 个。
+- **fullscreen**：
+  - 非组合层带 effect、槽 0 是静态纹理时，合成 RT 是纹理图像尺寸，我们只拷快照左上角那一块，WPE 两边尺寸不同时怎么拷没测（语料 0 个）；
+  - 带 cbm 混合上屏没测（语料 1 个对象，`3554161528`，另有 38 项不支持）；
+  - 脚本读 `thisLayer.size` 得 (2, 2)，WPE 可能给图像尺寸；
+  - `g_Texture0Resolution` 等按场景目标尺寸，WPE 是窗口尺寸。窗口和场景比例或尺寸不同时，按纹素算偏移的 effect（如模糊）相对画面内容和 WPE 不一样。
+- **尺寸**：`size` 绑属性同时 `autosize` 时，WPE 运行中改 `size` 不重跑纹理回调，我们整场重编译会重新按 `autosize` 覆盖；对象 `size` 只写一个分量时另一个取模型值或 1（推断）。语料都是 0 个。
+- **组合层**：`copybackground` 绑属性或挂脚本时按 true、不报；无 effect 组的 `groupUpload` 在 cbm 31 时取 additive（读码）。语料都是 0 个。
+- **instanced**：`instance.textures` 按槽合并还是整键替换、`combos` 合并还是替换，语料里两种结果相同；null 槽、比材质短的数组在 WPE 里什么样没测。
+- **归 P5d**：`composelayer_depthtest` 的深度测试，透视场景里的透明排序（`projectlayer` 与 `fullscreen` 的排序键 −∞），透视场景里 `projectlayer` 的尺寸来源。
+
+### 语料与解锁
+
+| 步骤 | 去掉的键 | 新增的键 | 能渲染 | 新解锁 |
+|---|---|---|---|---|
+| 1 尺寸、内缩、透视图层 | `model:nopadding` 40 张、`object:perspective` 5 | — | 39 → 40 | `1923929928` |
+| 2 组合层：无子层 | `model:passthrough` 68、`model:projectlayer` 12 | `model:passthrough:children` 9 | 43 → 43 | `1333579536` 加上同期 P4e 的粒子子系统，两步合起来能渲染 |
+| 3 fullscreen | `model:fullscreen` 27 | — | 43 → 43 | — |
+| 4 组 | `model:passthrough:children` 9 | `model:passthrough:children:framebuffer` 1（`3465215190`，组里的雨滴粒子要读快照） | 45 → 45 | — |
+| 5 instanced | `model:instanced` 30、`object:instance` 30 | `material:usertextures` 9（它们的 instance 带用户纹理） | 46 → 46 | — |
+
+- 各步的起点不同，是同期 P4e、P6、P7 也在解锁。没有场景因 P5b 不再能渲染。
+- 去掉这些键之后，剩下的场景大多还差文本（P6b）、木偶动画（`model:puppet`，P12）、视频纹理（P9）、光标回调（P6）。`3822149301`、`3824550659`、`3828359750` 去掉 `model:nopadding` 后只差 `tex:video`，原因见上「更正读码」；`3810092560` 去掉 instanced 后只差两个光标回调。
+- **和 WPE 比**：
+  - 确定性工程：`p5b-autosize`、`p5b-proj`、`p5b-fsnofx`、`p5b-fsmvp`、`p5b-inst`、`p5b-inst2` 0 差异，`p5b-nopad-v2`、`p5b-cl`、`p5b-fs`、组的 6 个工程最大差 1，`p5b-grpptc` 最大差 2；
+  - `1923929928`：透视网格的线位、汇聚方向、间距、颜色一致，其余是随机星空粒子与缩放；
+  - `1333579536`：整屏组合层一致；
+  - `3340707146`：28 个子层的人物组，位置和形状一致；
+  - `3810092560`：差异只在细线条的边缘（2560 → 1920 缩放与 waterwaves 采样），instanced 白色背景露出的地方 0 差异。
+- **基线**：10 张原本能渲染的场景 × 三档后处理，共 30 个画面哈希，每步都和之前相同。基线里没有用到这些标志的场景，所以这只能说明没改坏别的，对不对靠上面的整帧比较。
+
+### 对比台
+
+在 `ignore/p5/` 下：
+- 确定性工程：`b0/gen_b.py`（步骤 0 的 `p5b-*`，自写 `.tex` 与 `kbfx` / `kbmask` effect）、`b5/gen_b5.py`（`p5b-inst2`，两 pass 遮罩的中间 pass 不乘 MVP，同 WPE 自带 effect），工程放在 `proj/`；
+- 读数：`b0/rdc_dump_b.py` 在 `qrenderdoc --python` 下导出每次绘制的 RT、混合、顶点、UV 与常量，`ana_b.py` / `b5/ana_b5.py` 摘要；单测的真值由 `b2/fixture_compose.py`、`b3/fixture_fs.py`、`b4/fixture_grp.py` 从导出里抄出；
+- 各步的快照、补丁、变异清单、语料比较与整帧比对在 `b1/`–`b5/`，收尾的语料统计是 `b5/walk_scan.py`；
+- WPE 参照在 `A:\p5b\`。
 
 ## 声音（P6a）
 

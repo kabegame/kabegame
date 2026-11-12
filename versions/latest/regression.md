@@ -1,5 +1,38 @@
 # v4.7.0 regression
 
+## 场景壁纸 P5b：图像模型标志（组合层、fullscreen、instanced、透视图层等）
+
+2026-11-12 Windows dev。P5b 分 6 步加收尾：
+- 步骤 0：确定性工程实测核对读码；
+- 1 尺寸来源（`autosize` / 模型宽高 / `size` 的顺序）、UV 内缩（`nopadding`）、图像层 `perspective`；
+- 2 组合层（无子层）与 `projectlayer`，3 `fullscreen`，4 带子层的组合层（组），5 `instanced`（纯色图层）；
+- 收尾：按语料统计走查各步的「未实测清单」，写文档。
+
+能渲染的场景解锁 `1923929928`；`1333579536` 需要 P5b 步骤 2 加同期 P4e 的粒子子系统，两者合起来才能渲染。别的用到这些标志的场景大多还缺文本、木偶动画、视频纹理等。说明见 `cocs/wpe/WPE_SCENE.md`「图像模型标志（P5b）」；每步的验收数据见 `.claude/plans/wpe-import/3-scene/phase5/phase-5b-modelflags.md`「实施记录」「P5b 收尾」，实测结论见同目录 `p5-REPORT.md`「P5b 语义的实测核对」。
+
+验收工具在 `ignore/p5/`：
+- 确定性工程由 `b0/gen_b.py`（步骤 0）、`b5/gen_b5.py`（`p5b-inst2`）生成；
+- 各步的快照、补丁、变异清单、语料比较与整帧比对在 `b1/`–`b5/`；
+- WPE 参照在 `A:\p5b\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | B0 单测与检查 | Windows | 每步：子代理在 HEAD 快照里跑 tsc、vitest、Prettier；Claude 合并后在工作区复跑（带 `KABEGAME_WPE_ROOT`），并用临时索引导出「HEAD + 本步骤」再跑 | 0 error；全过 | 2026-11-12 Claude：步骤 5 合并后的工作区 tsc 0、vitest 2020 过 / 1 败（`pipeline.test.ts` 的 `3830255100: 219 次请求`，HEAD 上同样失败，与本节无关）；「HEAD `8dcd01aa` + 步骤 5」tsc 0、vitest 1799 过 / 0 败；Prettier 过。各步的数字见子计划 |
+| [x] | B1 读码 · 实测核对 | WPE 抓帧（1920×1080 窗口，`_rt_FullFrameBuffer` 另用 1344×756） | 21 个确定性工程 `p5b-*`；`rdc_dump_b.py` 导出每次绘制的 RT 尺寸、混合、写掩码、顶点、UV 与常量 | 读码结论逐条成立，或写明推翻处 | 2026-11-12：流程全部成立。推翻两处：无 effect 带子层的组用透传着色器画世界四边形，不是 composelayer 铺满全屏；`instanced` 的遮罩只在多 pass effect 时变糊。另更正纹理标志 `0x20` 是视频位，不是「未补边」 |
+| [x] | B2 尺寸与内缩 · 确定性工程 | Windows dev 屏外宿主 + WPE 抓帧 | `p5b-autosize`、`p5b-nopad-v2` 用 `render_scene` 渲染，`kbp cmp frame` 排除 FR / CLK 后和 WPE 整帧比 | 逐像素一致或差 ≤ 2 | 2026-11-12：`p5b-autosize` 0 差异；`p5b-nopad-v2` 1845 个像素差 1 |
+| [x] | B3 透视图层 | 同 B2 | `p5b-persp`、`-fov30`、`-par`、`-zoom` 与平滑纹理的 `p5b-persp-smooth` 整帧比；`1923929928` 解包加日志，按 WPE 日志的帧时间与逐帧光标回放到第 190 帧，缩到 1920×1080 比 | 平滑纹理差 ≤ 2；网格线一致 | 2026-11-12：棋盘纹理的四个变体差异全在被压扁的棋盘格上（采样混叠，正交对照层也有）；`p5b-persp-smooth` 2268 个像素差 1、最大 1。`1923929928` 透视网格的线位、汇聚方向、间距、颜色一致，其余是随机星空粒子与缩放 |
+| [x] | B4 组合层（无子层） | 同 B2 | `p5b-cl`（旋转、`copybackground: false`、无 effect 两种、cbm 2）、`p5b-proj` 整帧比；真实样本 `1333579536`、`3825170583`、`3502090109` 按日志回放到抓到的那一帧比组合层区域 | 差 ≤ 2；组合层区域一致 | 2026-11-12：`p5b-cl` 32 个像素差 1，`p5b-proj` 0 差异。`1333579536` 整屏组合层一致；`3825170583` 经过组合层的人物、翅膀、背景一致，差异来自没画的 `shape` 对象与随机粒子；`3502090109` 另有 `cull:normal`、音频频谱两项不支持 |
+| [x] | B5 fullscreen | 同 B2 | `p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp` 整帧比；`dino_run` 并排看 | 差 ≤ 2 | 2026-11-12：第一次真机渲染整帧全黑，查明快照纹理缺 `COPY_SRC`、拷进合成 RT 的命令被丢掉，补上并让单测的假设备校验拷贝用途。之后 `p5b-fs` 最大差 1，另两个 0 差异；`dino_run` 背景、月亮、云、山、树林、草地与整屏后处理一致，差在脚本动态创建的游戏内容（不支持） |
+| [x] | B6 组（带子层的组合层） | 同 B2 | `p5b-grp-cb1`、`cb0`、`nofx`、`nofx0`、`par`、`p5b-nest`、`p5b-grpptc` 整帧比；真实样本 `3340707146`、`3554161528` 按日志回放并排看 | 差 ≤ 2；子层位置一致 | 2026-11-12：前 6 个最大差 1，`p5b-grpptc`（本地 / 世界空间粒子 + 带 effect 的子层）最大差 2。`3340707146` 28 个子层的人物组位置和形状一致，差在文本、随机花瓣和摆动相位；`3554161528` 天空里组的星星粒子与构图一致 |
+| [x] | B7 instanced | 同 B2 | `p5b-inst`、`p5b-inst2`（instanced + 两 pass 遮罩、对照组、`instance.textures` 换补边纹理）整帧比；`3810092560` 按日志回放到第 273 帧，缩到 1920×1080 比 | 0 差异；纯色背景一致 | 2026-11-12：两个工程都是 0 差异，J1 的遮罩按 32×32 变糊、和 WPE 一样。`p5b-inst2` 第一版的中间 pass 乘了 MVP，在 WPE 里缩成不到一个像素（effect 中间 pass 矩阵的已知差异，归 P7d），改成不乘 MVP 后重抓。`3810092560` 差异只在细线条边缘（缩放与 waterwaves 采样），白色背景露出处 0 差异 |
+| [x] | B8 变异检查 | Node | 每步 `kbp mutate` 逐处改坏实现，跑相关单测 | 每处都有用例失败，源码原样还原 | 2026-11-12：步骤 1 8 处、2 9 处、3 8 处（含后补的快照 `COPY_SRC`）、4 8 处、5 8 处，全部检出 |
+| [x] | B9 语料变化 | Node | 每步前后重扫 `unsupported`（`kbp corpus diff`） | 只在对应键上变化，原来能渲染的场景不掉出 | 2026-11-12：去掉 `model:nopadding` 40 张、`object:perspective` 5、`model:passthrough` 68、`model:projectlayer` 12、`model:fullscreen` 27、`model:instanced` 30、`object:instance` 30；新增 `model:passthrough:children:framebuffer` 1（`3465215190`）、`material:usertextures` 9（instance 带用户纹理）。步骤 1 解锁 `1923929928`，其余各步能渲染的数量不变，没有场景掉出 |
+| [x] | B10 原有场景画面不变 | Windows dev，屏外宿主 | 10 张原本能渲染的场景 × 三档后处理，读回画面哈希 | 和之前的基线相同 | 2026-11-12：步骤 1–5 每步合并前后 30 组都相同 |
+| [x] | B11 未实测清单走查 | Node 语料统计 | `ignore/p5/b5/walk_scan.py` 统计各步「未实测清单」的用法在语料里出现几次 | 能渲染的场景不受影响，或写明差异 | 2026-11-12：只有一项落在能渲染的场景上：`1923929928` 透视网格的三个 effect 各 1 个 pass，前两个是「非最后一个 effect」（WPE 的 MVP 也是 `ortho(±1)`），最后一个是上屏，没有差异。其余在语料里 0 个，或只出现在还有 20 项以上别的不支持项的场景里，记入文档的「已知差异与只记不补」 |
+| [ ] | B12 预览 · `1923929928` | Windows，图库预览 | 打开创意工坊 `1923929928` 的预览 | 实时渲染、不退回预览图；透视网格向远处汇聚并滚动，和 WPE 一致 | 待用户确认。屏外宿主的渲染和 WPE 比过（B3） |
+| [ ] | B13 预览 · `1333579536` | Windows，图库预览 | 打开创意工坊 `1333579536` 的预览 | 实时渲染；整屏组合层的效果和 WPE 一致 | 待用户确认。需要 P4e 的粒子子系统一起 |
+| [ ] | B14 桌面 | Windows，窗口模式 | 把 B12、B13 的场景各设为桌面壁纸 | 和预览一致 | 待用户确认 |
+
 ## 场景壁纸 P6b 1c：文本的字体回退、排版与图集
 
 2026-11-12 Windows。场景宿主新增 `apps/wpe-scene/src/text/`（纯 TS、不碰 GPU，还没有调用方，文本对象照旧退回预览图）：`fonts.ts`（按「字体 + 字号」的 face 列表与 WPE 回退链、逐码点分段）、`layout.ts`（照 `FUN_1401b0410` 排版：分行、断行、省略号、两端对齐、行内对齐、文字框、对齐偏移、图层与合成 RT 尺寸）、`atlas.ts`（逐行移植 `FUN_1401ae080` 的装箱器）、`mesh.ts`。`wpefont` 加导出 `wpefont_glyph_box`（WPE 取框的 `FT_LOAD_NO_BITMAP` 轮廓框，TS `WpefontFace.box`），`wpefont_glyph` 回到 6 个 int。基线 `src/text/fixtures/p6b.json` 由 `apps/wpe-scene/scripts/fixtures/make_text_fixture.py` 从 WPE 抓帧生成。计划见 `.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「1c」。

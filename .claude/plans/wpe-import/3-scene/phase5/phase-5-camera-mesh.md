@@ -211,6 +211,21 @@ export function particleViewProjection(/* … */): Mat4 {
 - `instanced` 带 effect 的 32×32 合成 RT 实测确认。
 - 不用这些标志的场景，基线逐张相同。
 
+**完成情况**（2026-11-12，[子计划](phase-5b-modelflags.md)「实施记录」「P5b 收尾」，实测见 [p5-REPORT](p5-REPORT.md)「P5b 语义的实测核对」）：
+- **分步**：步骤 0 实测核对读码；1 尺寸来源、UV 内缩与图像层透视；2 组合层（无子层）与 `projectlayer`；3 `fullscreen`；4 带子层的组合层（组）；5 `instanced`；收尾按语料统计走查「未实测清单」。
+- **解锁**：只有 `1923929928`（步骤 1），和上面「解锁」的预期一致；`1333579536` 加上同期 P4e 的粒子子系统一起能渲染。P5b 的七个键全部去掉，用到这些标志的其余场景大多还差文本、木偶动画、视频纹理、光标回调。
+- **读码**：流程全部成立，推翻两处推断：
+  - 无 effect 带子层的组用透传着色器（`effectpassthrough`）画世界四边形，`copybackground` 为 true 时不混合，不是 composelayer 着色器铺满全屏；
+  - `instanced` 的遮罩只在多 pass effect 时变糊，单个 effect 的末 pass 直接上屏。
+  - 另更正纹理标志 `0x20` 是视频位，不是「未补边」。
+- **和计划的差别**：
+  - `_rt_FullFrameBuffer` 是窗口尺寸，fullscreen 的合成 RT 按我们的场景目标取；
+  - 组里的上屏只写 RGB、直接画的子层写 RGBA；WPE 的 alpha 写开关是全局状态，没照搬；
+  - 组的合成 RT 按父链上组的层数另分一池；
+  - `instanced` 的 `solidLayer` 拆成两位：原来连内缩也打开了，是个现有错误。
+- **验收**：确定性工程和 WPE 整帧最大差 2（多数 0–1）；真实样本 `1923929928`、`1333579536`、`3340707146`、`3810092560` 等按日志回放比对上；10 张基线场景 × 三档的画面哈希每步不变。真机预览与桌面待用户确认。
+- **只记不补**：effect pass 的 `g_Color4`、组里 alpha 的写开关、组与透视图层里 effect 中间 pass 的矩阵（归 P7d）、fullscreen 的几处窗口尺寸与非组合层带 effect、`size` 绑属性加 `autosize` 等，见 `cocs/wpe/WPE_SCENE.md`「图像模型标志（P5b）」的「已知差异与只记不补」。
+
 ## P5c — 静态网格
 
 **步骤 0：**

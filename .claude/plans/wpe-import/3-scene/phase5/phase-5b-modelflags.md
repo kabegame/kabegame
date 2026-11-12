@@ -943,6 +943,36 @@ const MODEL_FLAGS = new Set([/* … */ "instanced"]);   // 现状：不在 SUPPO
 
 每步的回归同 P5a：语料前后比（`kbp corpus diff`），原来能渲染的场景画面哈希不变（基线 10 张 × 三档后处理），确定性工程和 WPE 整帧比。
 
+## P5b 收尾（2026-11-12）
+
+### 未实测清单走查
+
+先按语料统计各项实际出现几次（`ignore/p5/b5/walk_scan.py`，对「HEAD `8dcd01aa` + 步骤 5」的扫描结果），只对落在能渲染场景上的项补测。结果没有一项要补抓 WPE：
+
+| 项（出处） | 语料 | 结论 |
+|---|---|---|
+| 透视图层带多 pass effect 时中间 pass 的效果矩阵（步骤 1） | 3 张；能渲染的只有 `1923929928` | 它的 grid 挂 scroll、perspective、pulse 三个 effect，各 1 个 pass，顶点着色器都乘 MVP。前两个是「非最后一个 effect」，WPE 给 `ortho(±1)`（effect-matrices-REPORT 情况 ①），和我们相同；最后一个是上屏，透视矩阵步骤 1 已对齐。没有差异 |
+| 组里子孙的 effect 中间 pass 矩阵（步骤 4） | 17 个子层、3 张，都还有 20 项以上别的不支持项 | 归 P7d 的 effect 矩阵 |
+| 组里跟随指针的粒子（步骤 4） | 0 | 只记 |
+| `size` 绑属性加 `autosize`；`size` 只写一个分量（步骤 1） | 0；0 | 只记 |
+| `copybackground` 绑属性或挂脚本（步骤 2） | 0 | 只记 |
+| 非组合层 fullscreen 带 effect（步骤 3） | 0 | 只记 |
+| fullscreen 带 cbm 混合（步骤 3） | 1 个对象（`3554161528`，另有 38 项不支持） | 只记 |
+| `thisLayer.size`、`g_Texture0Resolution` 的窗口尺寸（步骤 3） | 没统计（要看脚本与着色器读不读） | 只记；风险 4 |
+| 组里 alpha 写开关的全局状态、`copybackground: false` 组里 alpha MAX 作用到合成链（步骤 4） | 只在带子层的 9 张里，都不能渲染 | 只记 |
+| effect pass 的 `g_Color4`（步骤 0、2、4） | 语料着色器 0 处读 | 只记 |
+| 无 effect 组的 `groupUpload` 在 cbm 31（步骤 4） | 0 | 只记 |
+| `instance` 的合并规则、缺失、`size` 不是字符串（步骤 5） | 语料里两种规则结果相同；后两项 0 | 只记 |
+
+能渲染且用到 P5b 的场景只有两张：`1923929928`（步骤 1 解锁）、`1333579536`（步骤 2 加 P4e 的粒子子系统）（`ignore/p5/b5/clean_p5b.py`）。P5b 起点带的七个键（`model:passthrough` 68 张、`model:nopadding` 40、`model:instanced` 30、`object:instance` 30、`model:fullscreen` 27、`model:projectlayer` 12、`object:perspective` 5）现在全部没有了，只剩新增的 `model:passthrough:children:framebuffer` 1 张（`ignore/p5/b5/remain_keys.py`）。
+
+### 文档
+
+- `cocs/wpe/WPE_SCENE.md`：新增「图像模型标志（P5b）」一节（尺寸与内缩、组合层、fullscreen、组、instanced、已知差异与只记不补、语料与解锁、对比台）；改正前面的过时说法：能力表放行表、`layers` 字段、模块表的 `layout.ts` / `graph.ts`、混合的组里例外、合成 RT 尺寸与分池、UV 内缩条件、快照的 `COPY_SRC` 与组里读快照。
+- `cocs/README.md`：场景条目补 P5b 一条与排查场景。
+- 回归文档新增 P5b 一节 B0–B14（B12–B14 真机预览与桌面待用户确认）；changelog 一行。
+- `PLAN.md`、P5 总计划补 P5b 完成情况。
+
 ## 风险
 
 1. **`autosize` 改尺寸来源**：语料里取值全部一致（0a），但它改的是每个图像层都走的路径，基线照样逐张核对；精灵表的帧尺寸留给图像层帧动画（P6），这里不改。
