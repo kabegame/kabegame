@@ -34,6 +34,8 @@ import {
 } from "./particles";
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
+import type { SceneEffect, SceneLayer } from "./bundle";
+import type { SceneParticle } from "./particles";
 import type { SceneScript } from "./scripts";
 import { scanScriptApi, scanScriptCallbacks, type ScriptApiScene } from "./scriptApi";
 import { SOUND_MODES, soundFlag } from "./sounds";
@@ -228,8 +230,10 @@ const OBJECT_FLAGS = [
  *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
  * - `passthrough`：组合层（P5b 步骤 2，`SceneLayer.passthroughModel`，p5-REPORT `p5b-cl`）：基础 pass 按 `copybackground` 从快照铺进
  *   合成 RT 或清成透明，之后照常跑 effect 链、借基础材质的 blend 上屏（`colorBlendMode` 混合时 passthrough 上屏）；合成 RT 按 `size`、
- *   上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31 时整层不画。带子层的还没实现，另报 `model:passthrough:children`
- *   （`bundle.ts` 报，步骤 4）。fullscreenlayer 同时带 `fullscreen`，基础 pass 换成拷贝，见下一条。
+ *   上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31、没有子层时整层不画。带子层的是「组」（步骤 4，p5-REPORT `p5b-grp-*`、
+ *   `p5b-nest`、`p5b-grpptc`）：子孙不在顶层画，由组在基础 pass 之后按先序、组的局部正交画进合成 RT（`copybackground: false` 时
+ *   alpha 取 MAX），没有 effect 时用 `effectpassthrough` 上屏；组里还不支持的用法由 `groupChildIssues` 报（`bundle.ts` 在全部对象之后
+ *   查）。fullscreenlayer 同时带 `fullscreen`，基础 pass 换成拷贝，见下一条；它带子层报 `model:fullscreen:children`。
  * - `fullscreen`（P5b 步骤 3，`SceneLayer.fullscreen`，p5-REPORT `p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp`）：几何一律是 2×2 的 NDC 四边形，
  *   两条路径：
  *   - 直接上屏（没有启用的 effect、`colorBlendMode` 是 0 / 31、不是组合层）：MVP 照常（场景视图投影 · 视差 · W），着色器不乘 MVP 就
@@ -578,7 +582,8 @@ export function usesLighting(result: TranslateResult): boolean {
 /**
  * 模型 JSON 的键：布尔键只认 `true`（`modelFlag`），其余（`puppet` 是路径字符串等）按 `active()`；键名报 `model:<键>`。
  * `passthrough`、`projectlayer`（P5b 步骤 2）与 `fullscreen`（步骤 3）已实现（见 `SUPPORTED_MODEL`），`instanced` 照报，所以
- * WPE 自带的四个组合层模型（含 fullscreenlayer）都不报。组合层带子层要看场景的父子关系，由 `bundle.ts` 报 `model:passthrough:children`。
+ * WPE 自带的四个组合层模型（含 fullscreenlayer）都不报。组合层带子层（组，步骤 4）要看场景的父子关系，组里还不支持的用法由
+ * `bundle.ts` 按 `groupChildIssues` 报。
  */
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
   for (const [key, value] of Object.entries(model)) {
@@ -587,6 +592,56 @@ export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): 
   }
   // 关键帧（语料 0 处，防御用）；puppet 的 `animationlayers` 是整数 id，不报
   scanValue(model, unsupported);
+}
+
+/** 组里的图层要拷快照（P5b 步骤 4，`groupChildIssues`）。 */
+export const GROUP_CHILD_FRAMEBUFFER = "model:passthrough:children:framebuffer";
+
+/** effect 的任一绘制 pass 读 `_rt_FullFrameBuffer`（同 `render/graph.ts` 的快照规则 2）。 */
+export function effectNeedsFramebuffer(effect: Pick<SceneEffect, "steps">): boolean {
+  return effect.steps.some((step) => step.kind === "draw" && step.pass.framebuffer);
+}
+
+/** 粒子系统树（P4e 步骤 1）里有一个系统满足 `test`。 */
+function someParticleSystem(system: SceneParticle, test: (system: SceneParticle) => boolean): boolean {
+  return test(system) || (system.children ?? []).some((child) => someParticleSystem(child.system, test));
+}
+
+/**
+ * 组里的图层（`SceneLayer.group` 非空，P5b 步骤 4）还不支持的用法。要子孙的模型、材质、effect、粒子都编完才能判断，所以
+ * `compileScene` 在全部对象之后逐个调（`assignGroups` 之后）。WPE 在组里画子孙时换了相机与渲染目标（rea-p5-modelflags §2.5），
+ * 下面这些用法读的东西和组的局部坐标对不上或没有实测，照报：
+ * - `model:passthrough:children:framebuffer`：要拷快照。基础 pass 或任一启用 effect 的 pass 读 `_rt_FullFrameBuffer`、粒子系统树里
+ *   任一 pass 读它（`REFRACT` 等），或 colorBlendMode ∉ {0, 31}（passthrough 混合上屏要读快照）。WPE 在组里不拍新的快照、读的是组开始
+ *   时那份，着色器按屏幕坐标采样，而子孙画在组的局部坐标里。例外是嵌套组自己的基础 pass（composelayer 读快照）：`p5b-nest` 实测它用
+ *   场景相机采组开始时那份，已实现（渲染器在组里拍的快照和组开始时那份内容相同：组里的绘制都不落在场景目标上）。关着、运行时可能
+ *   打开的 effect 读快照时，`bundle.ts` 把这个键记进那个 effect 自己的不支持项。
+ * - `model:passthrough:children:fullscreen`：fullscreen 模型。当前目标是组的合成 RT，没有实测。
+ * - `model:passthrough:children:perspective`：图层 `perspective: true`，或粒子系统树里有透视系统（`flags & 4`）。组里的投影是局部正交，
+ *   没有实测。
+ */
+export function groupChildIssues(
+  layer: Pick<
+    SceneLayer,
+    "passthroughModel" | "passes" | "effects" | "colorBlendMode" | "fullscreen" | "perspective" | "particle"
+  >,
+): string[] {
+  const keys: string[] = [];
+  const cbm = layer.colorBlendMode;
+  const framebuffer =
+    (!layer.passthroughModel && layer.passes.some((pass) => pass.framebuffer)) ||
+    layer.effects.some((effect) => effect.enabled && effectNeedsFramebuffer(effect)) ||
+    (cbm !== 0 && cbm !== 31) ||
+    (!!layer.particle &&
+      someParticleSystem(layer.particle, (system) => system.passes.some((pass) => pass.framebuffer)));
+  if (framebuffer) keys.push(GROUP_CHILD_FRAMEBUFFER);
+  if (layer.fullscreen) keys.push("model:passthrough:children:fullscreen");
+  if (
+    layer.perspective ||
+    (!!layer.particle && someParticleSystem(layer.particle, (system) => (system.flags & 4) !== 0))
+  )
+    keys.push("model:passthrough:children:perspective");
+  return keys;
 }
 
 /**
@@ -787,8 +842,9 @@ export function checkParticleChildren(children: unknown, unsupported: Set<string
  * - 表外模块：`particle:<类别>:<名字>`；表内模块的未知字段、形状不对或本节不支持的取值：`particle:<类别>:<名字>:<字段>`；
  *   写成 `{user}` / `{script}`：`particle:binding:<类别>:<名字>:<字段>`。
  * - 系统 `flags`（C3）：bit0–7 支持。bit0 世界空间（P4c 步骤 4，rea-p4c-sim.md 第 5 节，实测见报告「P4c 语义的实测核对」与
- *   `ignore/p4/c4` 的回放）：模拟侧见 `particles/system.ts`，绘制时模型矩阵是单位阵（`render/scene.ts`）；组合层里的世界空间系统
- *   WPE 另有一条路径（`ctx+0xaf0` 临时设成模型矩阵），我们的组合层还不带子层（`model:passthrough:children` 照报，P5b 步骤 4）。
+ *   `ignore/p4/c4` 的回放）：模拟侧见 `particles/system.ts`，绘制时模型矩阵是单位阵（`render/scene.ts`）；组里的世界空间系统
+ *   WPE 把模型矩阵换成 `ctx+0xaf0`（组画子树时设的 `inverse(W_组)`），我们是单位模型矩阵乘组的视图投影 `ortho · inverse(W_组)`，
+ *   结果相同（P5b 步骤 4，`p5b-grpptc` 实测：世界坐标的顶点回到组的本地坐标）。
  *   bit1 唯一的读取点是关混帧
  *   （rea-p4b-render.md 2.3【确，有界】，P4b 步骤 2）。更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，
  *   `0x1401c56e9`，高位其实被丢掉；没有样本，保守报）。

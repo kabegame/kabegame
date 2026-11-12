@@ -257,6 +257,8 @@ export class SceneState {
           if (step.kind === "draw") constants.set(step.pass.key, { ...step.pass.uniforms });
       }
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
+      // 组的上屏（P5b 步骤 4）：同 passthrough，g_Color4 由材质值置 1
+      if (layer.groupUpload) constants.set(layer.groupUpload.key, { ...layer.groupUpload.uniforms });
     }
     const { bloom, postprocess, fields } = bundle.general;
     const state = new SceneState(

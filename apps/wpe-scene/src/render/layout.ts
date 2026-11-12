@@ -18,6 +18,7 @@
 import type { SceneGeneral, SceneTexture } from "../compile/bundle";
 import {
   identity,
+  invert,
   multiply,
   orthographic,
   rotationX,
@@ -243,6 +244,25 @@ export function particleViewProjection(
   projection[11] = -1;
   projection[14] = (far * near) / (far - near);
   return multiply(projection, translation(-width / 2, -height / 2, -d));
+}
+
+/** 组的局部正交的深度范围 ±1000（WPE `ortho(−w/2, w/2, −h/2, h/2, −1000, 1000)`，rea-p5-modelflags §2.5）。 */
+export const GROUP_DEPTH = 1000;
+
+/**
+ * 组（P5b 步骤 4，带子层的组合层）里子孙的视图投影：`ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，w、h 是组的 `size`，`world` 是组当前的
+ * 世界矩阵。WPE 画子树时模型栈换成 `inverse(W)`、视图单位阵、投影换成层的局部正交（rea-p5-modelflags §2.5），子孙再乘自己的世界矩阵，
+ * 所以落在组的本地坐标系里，组矩形外的部分裁掉；世界空间粒子的模型矩阵是单位阵，乘上它正好回到本地（`p5b-grpptc`）。
+ * 深度和场景正交同一约定（反向 Z，z = 0 落在 0.5）：`p5b-grp-cb1` 事件 78 的 MVP 是 `[2/w, 0, 0, 0, 0, 2/h, 0, 0, 0, 0, 1/2000, 0, x, y, 0.5, 1]`，
+ * `orthographic` 的 near、far 照 `sceneViewProjection` 反着传。没有视差、抖动、缩放、透视：这些只作用在组本身的绘制上（`p5b-grp-par`）。
+ * size 为 0 的分量按 1（同 `drawMatrices` 的 `base`，避免除以 0）；`W` 不可逆（缩放为 0）时只取投影，这时组的四边形面积为 0、画不出来。
+ */
+export function groupViewProjection(size: readonly number[], world: Mat4): Mat4 {
+  const hw = (size[0] ?? 0) / 2 || 0.5,
+    hh = (size[1] ?? 0) / 2 || 0.5;
+  const projection = orthographic(-hw, hw, -hh, hh, GROUP_DEPTH, -GROUP_DEPTH);
+  const inverse = invert(world);
+  return inverse ? multiply(projection, inverse) : projection;
 }
 
 /**

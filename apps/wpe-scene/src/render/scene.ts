@@ -61,7 +61,7 @@
  *   （`p5b-persp-par`：偏移落在 z = 0 平面上正好是屏幕上的 o 像素）。画进合成 RT 的基础 pass 不变；effect 中间 pass 的效果矩阵
  *   （`g_EffectModelViewProjectionMatrix` 等）仍按正交算：rea-p5-modelflags 1.3 读到的是只在上屏时压相机，rea-p5-camera 7.1 另提到
  *   正交 + bit7 时图层合成矩阵经 `FUN_140184f00` 换算，都没有实测（语料里透视图层的 effect 只读 MVP）。
- * - 组合层（P5b 步骤 2，p5-REPORT `p5b-cl`、`p5b-proj`）：不带子层的组合层在 `graph.ts` 里排成普通的合成路径，这里只多认两样东西。
+ * - 组合层（P5b 步骤 2，p5-REPORT `p5b-cl`、`p5b-proj`）：组合层在 `graph.ts` 里排成普通的合成路径（带子层的见下「组」），这里只多认两样东西。
  *   `compose` 角色的绘制是基础 pass：管线同 `base`（关混合、四通道直写），uniform 取图层 MVP（`drawMatrices`，视差与抖动照常在
  *   视图投影里）；顶点是图层四边形，composelayer 着色器自己按 a_TexCoord 铺满合成 RT，按 MVP 算出的屏幕位置采快照。`clear` 步骤
  *   （`copybackground: false`）建成一个 op：先结束场景 pass，再对目标开一个 `loadOp: "clear"`、清成 (0, 0, 0, 0) 的 render pass，
@@ -73,6 +73,23 @@
  *   上屏）的世界矩阵是单位阵、视图投影是 NDC 正交 `FULLSCREEN_VIEW_PROJECTION`，不经 `viewProjectionOf`，所以没有视差、抖动、
  *   透视，正好铺满全屏（`p5b-fs` 事件 76 的 MVP）。合成路径的基础 pass 是 `copy`（快照 → 合成 RT 0）：源是 `framebuffer`，
  *   `resolveTexture` 取快照，拷贝尺寸取两边较小值；合成 RT 是场景尺寸时就是整张。
+ * - 组（P5b 步骤 4，带子层的组合层，p5-REPORT `p5b-grp-*`、`p5b-nest`、`p5b-grpptc`）：子孙（`SceneLayer.group` 非空）在顶层不画，
+ *   由组的 `subtree` op 画：先结束当前 pass，按 `layer.subtree`（先序）依次跑可见子孙的 op，它们「画到场景」的绘制改画进组当前的
+ *   合成 RT（连着的合进一个 pass），画进自己合成 RT / fbo 的照旧；嵌套组同样递归，它的上屏画进外层组的合成 RT。
+ *   - 矩阵：组里图层的绘制（除了嵌套组自己的 `compose` 基础 pass）视图投影换成 `groupViewProjection`（`layout.ts`，
+ *     `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，w、h 是组的 `size`），不经 `viewProjectionOf`：没有视差、抖动、缩放、透视，这些只作用在
+ *     组本身（`p5b-grp-par`）。世界矩阵照旧，粒子同样（世界空间系统的单位模型矩阵乘它正好回到本地）。嵌套组的 compose 照旧用场景视图
+ *     投影采快照（`p5b-nest` 事件 94）。组的 `W` 变了时子孙随父链标脏（`SceneState.write`），uniform 跟着重写；组的 `size` 改值整场重编译。
+ *   - 管线：组里画到「场景」的绘制写 RGBA（`p5b-grp-cb1` 事件 78–106 写掩码 15）；组 `copyBackground` 为 false 时 alpha 通道换成
+ *     One / One / Max，颜色通道照绘制自己的混合、不混合的用 One / Zero（`p5b-grp-cb0` 事件 73–101，红蓝重叠处 alpha 0.5），管线键带
+ *     `alphaMax`。例外是 `copyBackground` 为 true 的组里的上屏（`final` / `passthrough`：带 effect 的子层、嵌套组画回组里）只写 RGB：
+ *     WPE 合成渲染结束时关掉 alpha 写入（rea-p5-modelflags §2.5 的 `vfunc_0xd8(1, 0)`），`p5b-grpptc` 事件 102、`p5b-nest` 事件 129 的
+ *     写掩码都是 7。WPE 的这个开关是全局状态，之后同组里的普通绘制也不写 alpha（`p5b-grpptc` 的粒子事件 116 / 129），这一条我们没有
+ *     复刻（取决于运行时可见性与 effect 开关），记为已知差异。
+ *   - 快照：组里的 `snapshot` op 照常拷真正的场景目标（组里的绘制都不落在场景目标上，内容就是组开始时那份，同 WPE）。
+ *   - 合成 RT 池按「父链上组的层数」分开（WPE B5 的池化 RT 名里的 k）：组画子树期间它的合成 RT 一直在用，子孙自己的合成 RT 不能和它
+ *     共享同一张，否则子孙的基础 pass 会把组的内容覆盖掉，或者同一张纹理在一个 pass 里既是目标又被采样。顶层图层的池键不变。
+ *   - 组隐藏时（含祖先）整棵子树不画：组的 op 整段跳过，子孙在顶层本来就不画。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -117,6 +134,7 @@ import {
   effectiveVisible,
   everyAncestor,
   eyePosition,
+  groupViewProjection,
   layerQuad,
   particleViewProjection,
   rootObject,
@@ -460,7 +478,9 @@ type Op =
   | { kind: "copy"; resources: LayerResources; effect: number | null; source: TextureRef; target: TargetRef }
   | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string }
   /** 把合成 RT 清成 (0, 0, 0, 0)（组合层 `copybackground: false`，P5b 步骤 2）。 */
-  | { kind: "clear"; resources: LayerResources; target: TargetRef };
+  | { kind: "clear"; resources: LayerResources; target: TargetRef }
+  /** 组画子树（P5b 步骤 4）：`layer.subtree` 里可见的子孙依次画进 `target`（组当前的合成 RT）。 */
+  | { kind: "subtree"; resources: LayerResources; target: TargetRef; layer: SceneLayer };
 
 /**
  * 决定一条管线的五项：WebGPU 的管线绑定了混合、目标格式、写掩码与图元拓扑（WPE 的 D3D11 着色器不绑），同一个程序要按它们
@@ -474,29 +494,43 @@ export interface PipelineSpec {
   format: GPUTextureFormat;
   alpha: boolean;
   topology: "triangle-strip" | "triangle-list";
+  /**
+   * alpha 通道换成 One / One / Max（P5b 步骤 4：`copyBackground` 为 false 的组里画到「场景」的绘制，颜色通道照 `blending`，不混合的用
+   * One / Zero，`programs.ts` 的 `groupBlendState`）。缺省 false；为 true 时管线键多一个后缀，其余键和加这一项之前逐字相同。
+   */
+  alphaMax?: boolean;
 }
 
-export function pipelineKey({ program, blending, format, alpha, topology }: PipelineSpec): string {
-  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}`;
+export function pipelineKey({ program, blending, format, alpha, topology, alphaMax }: PipelineSpec): string {
+  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}`;
 }
 
 /**
  * 绘制步骤的管线：合成 RT 与场景目标同格式，只有 fbo 有自己的格式；画到场景目标时不写 alpha。粒子只画到场景目标。
  * `geometry`：程序的翻译结果带几何着色器展开（rope），粒子步骤用三角形带。
+ * `group`：这一步所属图层在组里时是那个组（`SceneLayer.group`，P5b 步骤 4），否则为 null。组里「画到场景」的绘制实际落在组的合成 RT
+ * 上（格式同场景目标）：写 RGBA（`p5b-grp-cb1` 事件 78–106）；组 `copyBackground` 为 false 时 alpha 取 MAX、写 RGBA（`p5b-grp-cb0`
+ * 事件 73–101，rea-p5-modelflags §2.5 的状态 `0x10`）；组 `copyBackground` 为 true 时上屏角色（`final` / `passthrough`）只写 RGB，
+ * WPE 在每个合成渲染结束时关掉 alpha 写入（`p5b-grpptc` 事件 102、`p5b-nest` 事件 129 的写掩码 7）。
  */
 export function stepPipeline(
   step: DrawLike,
   format: GPUTextureFormat,
   fboFormat: (effect: number, name: string) => GPUTextureFormat,
   geometry = false,
+  group: Pick<SceneLayer, "copyBackground"> | null = null,
 ): PipelineSpec {
   const { pass, blending, target } = step;
+  const inGroup = !!group && target.kind === "scene";
+  const alphaMax = inGroup && !group.copyBackground;
+  const upload = step.kind === "draw" && (step.role === "final" || step.role === "passthrough");
   return {
     program: pass.program!,
     blending,
     format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
-    alpha: target.kind !== "scene",
+    alpha: target.kind !== "scene" || alphaMax || (inGroup && !upload),
     topology: step.kind === "particles" && !geometry ? "triangle-list" : "triangle-strip",
+    ...(alphaMax ? { alphaMax: true } : {}),
   };
 }
 
@@ -614,6 +648,7 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
     layer.passes.forEach(add);
     if (layer.particle) addParticle(layer.particle);
     if (layer.passthrough) add(layer.passthrough);
+    if (layer.groupUpload) add(layer.groupUpload);
     for (const effect of layer.effects) {
       if (!effect.enabled && effect.unsupported.length) continue;
       for (const step of effect.steps) if (step.kind === "draw") add(step.pass);
@@ -707,8 +742,12 @@ export class GpuScene {
   /** 已建好的程序与管线：切换时同步取（`preparedOf`）。 */
   private readonly readyPrograms = new Map<number, GpuProgram>();
   private readonly readyPipelines = new Map<string, GPURenderPipeline>();
-  /** 合成 RT 的共享池，键是尺寸与采样方式；重建时不够也从这里补。 */
+  /** 合成 RT 的共享池，键是尺寸与采样方式（组里的图层另加组的层数，P5b 步骤 4）；重建时不够也从这里补。 */
   private readonly compositePool = new Map<string, RenderTarget[]>();
+  /** bundle 的全部图层（含没有资源的分组节点），按 `objects` 下标：组的尺寸、`copyBackground` 与父链上组的层数从这里查。 */
+  private readonly layerByObject = new Map<number, SceneLayer>();
+  /** 建了资源的图层按 `objects` 下标：组的 `subtree` op 按它找子孙的 op（P5b 步骤 4）。 */
+  private readonly runtimeByObject = new Map<number, LayerRuntime>();
 
   private constructor(
     private readonly device: GPUDevice,
@@ -723,6 +762,23 @@ export class GpuScene {
     this.particleCursor = particles.cursor ?? [0.5, 0.5];
     let ordinal = 0;
     for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
+    for (const layer of bundle.layers) this.layerByObject.set(layer.object, layer);
+  }
+
+  /** 替这个图层作画的组（P5b 步骤 4）；顶层图层，或组不在 bundle 里时为 null。 */
+  private groupOf(layer: SceneLayer): SceneLayer | null {
+    return layer.group === null ? null : (this.layerByObject.get(layer.group) ?? null);
+  }
+
+  /** 父链上组的层数（P5b 步骤 4）：顶层 0，组的子孙 1，嵌套组的子孙 2……按 `group` 往上数，环按走过的节点兜底。 */
+  private groupDepth(layer: SceneLayer): number {
+    let depth = 0;
+    const seen = new Set<number>();
+    for (let group = layer.group; group !== null && !seen.has(group); depth++) {
+      seen.add(group);
+      group = this.layerByObject.get(group)?.group ?? null;
+    }
+    return depth;
   }
 
   /** 这一帧画的那张场景目标（dev 探针同步读回用）。有两张时 `encode` 开头才换，要在它之后取。 */
@@ -841,11 +897,12 @@ export class GpuScene {
     format: GPUTextureFormat,
     alpha: boolean,
     topology: PipelineSpec["topology"] = "triangle-strip",
+    alphaMax = false,
   ): Promise<GPURenderPipeline> {
-    const key = pipelineKey({ program: program.index, blending, format, alpha, topology });
+    const key = pipelineKey({ program: program.index, blending, format, alpha, topology, alphaMax });
     let pipeline = this.pipelines.get(key);
     if (!pipeline) {
-      pipeline = createPipeline(this.device, program, blending, format, alpha, topology).then((ready) => {
+      pipeline = createPipeline(this.device, program, blending, format, alpha, topology, alphaMax).then((ready) => {
         this.readyPipelines.set(key, ready);
         return ready;
       });
@@ -905,7 +962,10 @@ export class GpuScene {
     // 合成 RT 的采样跟随基础纹理（WPE 用图层的 nointerpolation / clampuvs，LWE 用基础纹理的 flags）
     const clamp = baseTexture ? baseTexture.clampUVs : true;
     const nearest = baseTexture?.noInterpolation ?? false;
-    const key = `${width}x${height}|${clamp}|${nearest}`;
+    // 组里的图层按父链上组的层数另开一个池（P5b 步骤 4，WPE B5 池化 RT 名里的 k）：组画子树期间它的合成 RT 一直在用，子孙的合成 RT
+    // 不能和它是同一张。顶层（层数 0）的键不变
+    const depth = this.groupDepth(runtime.layer);
+    const key = `${width}x${height}|${clamp}|${nearest}${depth ? `|k${depth}` : ""}`;
     const pool = this.compositePool.get(key) ?? [];
     this.compositePool.set(key, pool);
     const address: GPUAddressMode = clamp ? "clamp-to-edge" : "repeat";
@@ -929,36 +989,44 @@ export class GpuScene {
     return planLayer(layer, this.bundle.textures, (e) => state.effectEnabled(layer.object, layer.effects[e].source));
   }
 
-  private pipelineOf(step: DrawLike, resources: LayerResources): PipelineSpec {
+  private pipelineOf(step: DrawLike, { layer, resources }: Pick<LayerRuntime, "layer" | "resources">): PipelineSpec {
     return stepPipeline(
       step,
       this.format,
       (effect, name) => this.targets[resources.fbos.resolve(effect, name)].format,
       // rope 的程序带几何着色器展开：三角形带（P4d 步骤 1）
       !!(step.pass.program !== null && this.bundle.programs[step.pass.program]?.geometry),
+      // 组里画到「场景」的绘制落在组的合成 RT 上（P5b 步骤 4）：写 alpha，`copyBackground` 为 false 时 alpha 取 MAX
+      this.groupOf(layer),
     );
   }
 
   /** 等齐一份计划要用的程序与管线，之后 `buildLayer` 就是同步的。 */
-  private async prepareLayer(plan: LayerPlan, resources: LayerResources): Promise<Map<DrawLike, PreparedDraw>> {
+  private async prepareLayer(
+    plan: LayerPlan,
+    runtime: Pick<LayerRuntime, "layer" | "resources">,
+  ): Promise<Map<DrawLike, PreparedDraw>> {
     const prepared = new Map<DrawLike, PreparedDraw>();
     await Promise.all(
       plan.steps.map(async (step) => {
         if (step.kind !== "draw" && step.kind !== "particles") return;
         const program = await this.ensureProgram(step.pass.program!);
-        const { blending, format, alpha, topology } = this.pipelineOf(step, resources);
-        prepared.set(step, { program, pipeline: await this.pipelineFor(program, blending, format, alpha, topology) });
+        const { blending, format, alpha, topology, alphaMax } = this.pipelineOf(step, runtime);
+        prepared.set(step, {
+          program,
+          pipeline: await this.pipelineFor(program, blending, format, alpha, topology, alphaMax),
+        });
       }),
     );
     return prepared;
   }
 
   /** 从就绪表同步取一份计划的程序与管线。`prepareVariants` 都备好了，缺了说明枚举漏了。 */
-  private preparedOf(plan: LayerPlan, resources: LayerResources): Map<DrawLike, PreparedDraw> {
+  private preparedOf(plan: LayerPlan, runtime: Pick<LayerRuntime, "layer" | "resources">): Map<DrawLike, PreparedDraw> {
     const prepared = new Map<DrawLike, PreparedDraw>();
     for (const step of plan.steps) {
       if (step.kind !== "draw" && step.kind !== "particles") continue;
-      const spec = this.pipelineOf(step, resources);
+      const spec = this.pipelineOf(step, runtime);
       const program = this.readyPrograms.get(spec.program);
       const pipeline = this.readyPipelines.get(pipelineKey(spec));
       if (!program || !pipeline) throw new SceneRenderError(["render:variant-missing"]);
@@ -982,7 +1050,7 @@ export class GpuScene {
           this.ensureComposites(runtime, plan);
           if (wantsSnapshot(plan)) this.ensureSnapshot();
           this.checkPlanOps(plan, runtime);
-          await this.prepareLayer(plan, runtime.resources);
+          await this.prepareLayer(plan, runtime);
         }
       } catch (error) {
         failure = error;
@@ -999,13 +1067,13 @@ export class GpuScene {
     }
   }
 
-  /** copy / swap / clear 的检查：切换时不能再失败，所以 `prepareVariants` 对每份计划先过一遍。 */
+  /** copy / swap / clear / subtree 的检查：切换时不能再失败，所以 `prepareVariants` 对每份计划先过一遍。 */
   private checkPlanOps(plan: LayerPlan, { layer, resources }: LayerRuntime): void {
     for (const step of plan.steps) {
-      if (step.kind === "clear") {
-        // 组合层的 clear 只清合成 RT（P5b 步骤 2）：`ensureComposites` 之后应当解析得到
+      if (step.kind === "clear" || step.kind === "subtree") {
+        // 组合层的 clear 只清合成 RT（P5b 步骤 2），组的子树画进合成 RT（步骤 4）：`ensureComposites` 之后应当解析得到
         if (!this.resolveTarget(step.target, resources))
-          throw new SceneRenderError([`render:clear-target:${layer.name}`]);
+          throw new SceneRenderError([`render:${step.kind}-target:${layer.name}`]);
       } else if (step.kind === "swap") {
         const a = this.targets[resources.fbos.resolve(step.effect, step.source)];
         const b = this.targets[resources.fbos.resolve(step.effect, step.target)];
@@ -1065,6 +1133,7 @@ export class GpuScene {
       else if (step.kind === "copy")
         ops.push({ kind: "copy", resources, effect: step.effect, source: step.source, target: step.target });
       else if (step.kind === "clear") ops.push({ kind: "clear", resources, target: step.target });
+      else if (step.kind === "subtree") ops.push({ kind: "subtree", resources, target: step.target, layer });
       else {
         const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds);
         ops.push({ kind: "draw", draw });
@@ -1199,9 +1268,10 @@ export class GpuScene {
         tree: null,
       };
       this.layers.push(runtime);
+      this.runtimeByObject.set(layer.object, runtime);
       return runtime;
     });
-    const prepared = await Promise.all(plans.map((plan, index) => this.prepareLayer(plan, runtimes[index].resources)));
+    const prepared = await Promise.all(plans.map((plan, index) => this.prepareLayer(plan, runtimes[index])));
     // 泛光：全部图层之后（A1 / A3）
     if (bundle.bloom) {
       this.ensureSnapshot();
@@ -1586,6 +1656,15 @@ export class GpuScene {
       ambient: state.general.ambientcolor,
       skylight: state.general.skylightcolor,
     };
+    // 组里的图层（P5b 步骤 4，p5-REPORT `p5b-grp-*`、`p5b-grpptc`）：视图投影换成组的局部正交 `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，
+    // 不经 `viewProjectionOf`（组里没有视差、抖动、缩放、透视，它们只作用在组本身，`p5b-grp-par`）。嵌套组自己的 compose 基础 pass
+    // 例外，照旧用场景视图投影按屏幕位置采快照（`p5b-nest` 事件 94）；effect 中间 pass 的效果矩阵也按组的局部正交算（WPE 画子树时
+    // 投影栈就是它，没有实测）
+    const group = this.groupOf(layer);
+    const groupVp =
+      group && !(step.kind === "draw" && step.role === "compose")
+        ? groupViewProjection(group.size, worldMatrixOf(group.object, state.layers, worlds))
+        : null;
     if (step.kind === "particles") {
       // 帧表（P4b 步骤 2）：槽 0 的纹理带帧表时写 `g_RenderVar1`
       const base = step.inputs[0];
@@ -1595,12 +1674,11 @@ export class GpuScene {
         // （P4e 步骤 1、2）
         world: model ?? identity(),
         layer: layerState,
-        // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）
-        viewProjection: this.viewProjectionOf(
-          layer,
-          state,
-          step.perspective ? this.perspectiveViewProjection : this.viewProjection,
-        ),
+        // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）；组里的透视粒子照报
+        // （`model:passthrough:children:perspective`），强制渲染时按组的局部正交画
+        viewProjection:
+          groupVp ??
+          this.viewProjectionOf(layer, state, step.perspective ? this.perspectiveViewProjection : this.viewProjection),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
         // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）
         renderer: layer.particle ? particleNode(layer.particle, step.node).renderer : undefined,
@@ -1622,12 +1700,15 @@ export class GpuScene {
       step,
       layer: { ...layerState, size: layer.size },
       // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
-      // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变
-      viewProjection: this.viewProjectionOf(
-        layer,
-        state,
-        layer.perspective && step.target.kind === "scene" ? this.perspectiveViewProjection : this.viewProjection,
-      ),
+      // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
+      // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
+      viewProjection:
+        groupVp ??
+        this.viewProjectionOf(
+          layer,
+          state,
+          layer.perspective && step.target.kind === "scene" ? this.perspectiveViewProjection : this.viewProjection,
+        ),
     });
   }
 
@@ -1804,7 +1885,7 @@ export class GpuScene {
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
     const problems = planProblems(plan, this.bundle, runtime.layer.particle);
     if (problems.length) throw new SceneRenderError(problems);
-    const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime.resources), state, worlds);
+    const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime), state, worlds);
     for (const draw of runtime.draws) {
       this.draws.delete(draw);
       this.drawsByPass.delete(draw.passKey);
@@ -2286,28 +2367,37 @@ export class GpuScene {
           { width: this.width, height: this.height },
         );
     };
-    let open: GPURenderPassEncoder | null = null;
+    /** 当前开着的「画到场景」的 pass 与它的目标：同一目标上连着的绘制合进一个 pass。 */
+    let open: { pass: GPURenderPassEncoder; view: GPUTextureView } | null = null;
     let started = false;
-    const begin = (): GPURenderPassEncoder => {
-      if (!open) {
-        open = encoder.beginRenderPass({
-          label: "scene",
-          colorAttachments: [
-            {
-              view: sceneView,
-              clearValue: { r, g, b, a: 1 },
-              // 第一个 pass：开着清成 clearcolor，关着接着这张目标上次的成品画
-              loadOp: started || !clearenabled ? "load" : "clear",
-              storeOp: "store",
-            },
-          ],
-        });
-        started = true;
-      }
-      return open;
+    /**
+     * 「画到场景」的 pass。`view` 缺省是真正的场景目标；组画子树时（P5b 步骤 4）是组的合成 RT，以 `load` 接着画、不碰 `started`。
+     * 目标换了先结束旧的。
+     */
+    const begin = (view: GPUTextureView = sceneView): GPURenderPassEncoder => {
+      if (open && open.view === view) return open.pass;
+      end();
+      const scene = view === sceneView;
+      const pass = encoder.beginRenderPass({
+        label: scene ? "scene" : "group",
+        colorAttachments: [
+          scene
+            ? {
+                view,
+                clearValue: { r, g, b, a: 1 },
+                // 第一个 pass：开着清成 clearcolor，关着接着这张目标上次的成品画
+                loadOp: started || !clearenabled ? "load" : "clear",
+                storeOp: "store",
+              }
+            : { view, loadOp: "load", storeOp: "store" },
+        ],
+      });
+      if (scene) started = true;
+      open = { pass, view };
+      return pass;
     };
     const end = () => {
-      open?.end();
+      open?.pass.end();
       open = null;
     };
     const draw = (pass: GPURenderPassEncoder, item: Draw) => {
@@ -2332,12 +2422,15 @@ export class GpuScene {
         pass.drawIndexed(particles.count * 6);
       } else pass.draw(4);
     };
-    const runOps = (ops: readonly Op[]) => {
+    // 不可见图层整段跳过（含它的快照与 copy / swap）；运行时可见性由 `SceneState` 决定（P3a），沿父链继承（组隐藏时子孙也不可见）
+    const visible = new Set(visibleObjects(this.layers, state));
+    /** `sceneTarget`：「画到场景」的绘制落在哪；缺省是真正的场景目标，组画子树时是组的合成 RT（P5b 步骤 4）。 */
+    const runOps = (ops: readonly Op[], sceneTarget: GPUTextureView = sceneView) => {
       for (const op of ops) {
         if (op.kind === "draw") {
           const { draw: item } = op;
           if (item.step.target.kind === "scene") {
-            draw(begin(), item);
+            draw(begin(sceneTarget), item);
             continue;
           }
           end();
@@ -2350,7 +2443,8 @@ export class GpuScene {
           draw(pass, item);
           pass.end();
         } else if (op.kind === "snapshot") {
-          // 快照要包含清屏色：本帧还没画过场景就先清一次
+          // 快照要包含清屏色：本帧还没画过场景就先清一次。组里（P5b 步骤 4）也拷真正的场景目标：组里的绘制都不落在它上面，
+          // 拍到的就是组开始时那份（WPE 在组里读的正是那份）
           if (!started) begin();
           end();
           snapshot();
@@ -2365,8 +2459,19 @@ export class GpuScene {
               end();
               snapshot();
             },
-            (item) => draw(begin(), item),
+            (item) => draw(begin(sceneTarget), item),
           );
+        } else if (op.kind === "subtree") {
+          // 组画子树（P5b 步骤 4）：子孙按先序画，「画到场景」的绘制改画进组当前的合成 RT（嵌套组递归，它的上屏画进这一张）。
+          // 不可见的子孙（含祖先）整段跳过；没有资源的（分组节点、声音）没有 op
+          end();
+          const target = this.resolveTarget(op.target, op.resources);
+          if (!target) continue;
+          for (const object of op.layer.subtree) {
+            const child = visible.has(object) ? this.runtimeByObject.get(object) : undefined;
+            if (child) runOps(child.ops, target.view);
+          }
+          end();
         } else if (op.kind === "copy") {
           end();
           const source = this.resolveTexture(op.source, op.resources);
@@ -2385,9 +2490,9 @@ export class GpuScene {
         } else op.resources.fbos.swap(op.effect, op.source, op.target);
       }
     };
-    // 不可见图层整段跳过（含它的快照与 copy / swap）；运行时可见性由 `SceneState` 决定（P3a）
-    const visible = new Set(visibleObjects(this.layers, state));
-    for (const layer of this.layers) if (visible.has(layer.object)) runOps(layer.ops);
+    // 组的子孙（`group` 非空）在顶层不画，由组的 `subtree` op 画（P5b 步骤 4）
+    // `group == null`：缺这个字段（手写的图层）也当顶层
+    for (const layer of this.layers) if (layer.layer.group == null && visible.has(layer.object)) runOps(layer.ops);
     if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!started) begin();
@@ -2404,6 +2509,7 @@ export class GpuScene {
     this.owned.clear();
     this.draws.clear();
     this.layers.length = 0;
+    this.runtimeByObject.clear();
     this.drawsByLayer.clear();
     this.drawsByPass.clear();
     this.targets.length = 0;

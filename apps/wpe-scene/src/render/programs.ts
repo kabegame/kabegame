@@ -36,6 +36,20 @@ export function blendState(mode: string): GPUBlendState | undefined {
   }
 }
 
+/**
+ * `copyBackground` 为 false 的组里画到「场景」（组的合成 RT）的混合（P5b 步骤 4，rea-p5-modelflags §2.5 的 `FUN_140099f60`，
+ * p5-REPORT `p5b-grp-cb0`）：alpha 通道 One / One / Max，颜色通道照绘制自己的混合；绘制本身不混合（null 或不认识的模式）时颜色用
+ * One / Zero，等于直写。WebGPU 要求 max 的两个因子都是 one。
+ */
+export function groupBlendState(mode: string | null): GPUBlendState {
+  const color: GPUBlendComponent = (mode ? blendState(mode)?.color : undefined) ?? {
+    operation: "add",
+    srcFactor: "one",
+    dstFactor: "zero",
+  };
+  return { color, alpha: { operation: "max", srcFactor: "one", dstFactor: "one" } };
+}
+
 interface AttributeFormat {
   format: GPUVertexFormat;
   components: number;
@@ -272,10 +286,13 @@ export async function createPipeline(
   format: GPUTextureFormat,
   writeAlpha = false,
   topology: "triangle-strip" | "triangle-list" = "triangle-strip",
+  /** alpha 通道 One / One / Max（P5b 步骤 4，`groupBlendState`）；为 true 时标签多一个 ` max`。 */
+  alphaMax = false,
 ): Promise<GPURenderPipeline> {
+  const blend = alphaMax ? groupBlendState(blending) : blending ? blendState(blending) : undefined;
   try {
     return await device.createRenderPipelineAsync({
-      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}`,
+      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}${alphaMax ? " max" : ""}`,
       layout: program.pipelineLayout,
       vertex: {
         module: program.vertex,
@@ -286,7 +303,7 @@ export async function createPipeline(
         module: program.fragment,
         entryPoint: program.result.fragment?.entryPoint ?? "main",
         // 0x7 = RED | GREEN | BLUE，0xf 再加 ALPHA
-        targets: [{ format, blend: blending ? blendState(blending) : undefined, writeMask: writeAlpha ? 0xf : 0x7 }],
+        targets: [{ format, blend, writeMask: writeAlpha ? 0xf : 0x7 }],
       },
       primitive: { topology, cullMode: "none" },
     });

@@ -614,8 +614,174 @@ fullscreenlayer 是组合层：没有 effect、cbm 是 0 / 31 时整层不画，
 - 脚本读 fullscreen 图层的 `thisLayer.size` 得到 (2, 2)，WPE 给的可能是图像尺寸。
 - `g_Texture0Resolution`：fullscreen 的合成 RT 是场景尺寸，WPE 是窗口尺寸。窗口和场景比例或尺寸不同时，按纹素算偏移的 effect（如模糊）相对画面内容和 WPE 不一样（风险 4）。
 
-## 步骤 4–5（提纲，步骤 0 之后补全）
-- **步骤 4 — 组合层：子层。** 编译期算每个图层归属的组；顶层跳过；组的计划插 `subtree`；子孙的 draw 按组的局部坐标系现算矩阵；`copybackground: false` 的组里写 RGBA、alpha MAX 的管线变体；无 effect 带子层时透传着色器画世界四边形（`copybackground` true 不混合、false translucent）；嵌套；组里的粒子（世界空间系统用组的模型矩阵，rea-p4c 的 `ctx+0xaf0`）。
+## 步骤 4 — 组合层：子层
+
+### 思路
+
+带子层的组合层是一个「组」：它的子孙不在顶层画，而是由它按先序画进自己的合成 RT。组和普通组合层的区别，就是基础 pass（compose 或 clear）之后多出一步「画子树」，之后照常跑 effect 链、上屏。
+
+**归属在编译期定。** 每个图层记下替它作画的组（`group`）：沿父链往上，最近的那个组合层祖先。组记下自己代画的图层（`subtree`）：按先序展开子层，子层的顺序取 `objects` 顺序（即 WPE 的加载顺序）；遇到嵌套组只收这个组本身，它的子孙由它自己画。顶层循环跳过 `group` 非空的图层。
+
+**组里的绘制换一套视图投影。** 子孙原本「画到场景目标」的那几次绘制（直接上屏、末 pass、passthrough 上屏、粒子），在组里改成画进组的合成 RT。视图投影换成组的局部正交：`ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，其中 w、h 取组的 `size`，子孙的世界矩阵照常算。所以子层落在组的本地坐标系里，组矩形外的部分自然裁掉。组里没有视差、抖动、透视，这些都作用在组本身的上屏上（`p5b-grp-par`）。世界空间粒子的顶点是世界坐标，乘 `inverse(W_组)` 正好回到本地（`p5b-grpptc`）。嵌套组的基础 pass 照旧用场景视图投影去采快照，采到的是外层开始时那份（`p5b-nest`）；它的上屏画进外层组的合成 RT。
+
+**组里写 alpha。** 子孙画进组的合成 RT 时写 RGBA。组 `copybackground: false` 时，alpha 通道改用 One / One / Max 混合，颜色通道照子孙自己的混合（`p5b-grp-cb0` 的像素值逐个对上）。
+
+**无 effect 的组也要画。** 只要有子层，没有 effect、cbm 是 0 / 31 时就是「基础 pass → 子树 → 上屏」。上屏用 WPE 的 `effectpassthrough` 材质（`genericimage3`，场景 `version` > 2 时 `_4`），画世界四边形，槽 0 是合成 RT。混合规则：`copybackground` 为 true 时用材质的 normal（不混合），为 false 时强制 translucent（`p5b-grp-nofx` / `nofx0`）。
+
+**不做的组里用法，照报：**
+- 子孙要拷 `_rt_FullFrameBuffer`：WPE 在组里不拍新的快照，读的是组开始时那份，我们没实现这条规则；子孙的 cbm 混合上屏也要读快照，一并照报。
+- 组里的 fullscreen：当前目标是组的合成 RT，没测。
+- 组里的透视图层、透视粒子。
+
+语料的 9 张带子层场景都还带着 23 项以上别的不支持项（文本、puppet、instanced 等），所以这一步不会直接解锁场景，价值在于补齐组合层的用法。
+
+### 现状锚点
+
+**a. 带子层的组合层照报**（`compile/bundle.ts`，步骤 2）
+```ts
+    if (layer.passthroughModel) {
+      if (parents.includes(index)) unsupported.add("model:passthrough:children");
+```
+
+**b. 顶层循环逐层平铺**（`render/scene.ts`，`encode`）
+```ts
+    const visible = new Set(visibleObjects(this.layers, state));
+    for (const layer of this.layers) if (visible.has(layer.object)) runOps(layer.ops); // 现状：没有「由组代画、顶层跳过」
+```
+
+**c. 「画到场景目标」的绘制都开在场景目标的 pass 里**（`render/scene.ts`，`runOps`）
+```ts
+          if (item.step.target.kind === "scene") {
+            draw(begin(), item);   // 现状：begin() 只会开场景目标
+            continue;
+          }
+```
+
+**d. 管线的 alpha 只按「目标是不是场景」决定**（`render/scene.ts`，`pipelineSpec`）
+```ts
+    alpha: target.kind !== "scene",   // 现状：没有「画到场景目标的绘制其实落在组里」与 alpha MAX 两种变体
+```
+
+### 点 1 — 编译：归属、子树与上屏材质（`compile/bundle.ts`、`compile/features.ts`）
+- **新增** `SceneLayer.group: number | null`：替它作画的组的 `objects` 下标（最近的组合层祖先），顶层图层为 null。
+- **新增** `SceneLayer.subtree: number[]`：组代画的图层，按先序，嵌套组只收它本身。普通图层为空。
+- **新增** `SceneLayer.groupUpload: ScenePass | null`：有子层的组的上屏 pass（`effectpassthrough` 材质，按 `version` 选 3 / 4），编译方式同 cbm 混合的 `layer.passthrough`；没有子层时为 null。
+- **删除** `model:passthrough:children`。
+- **新增** 照报，按子孙逐个检查：
+  - 要拷快照（基础 pass 或任一启用 effect 的 pass 读 `_rt_FullFrameBuffer`，或 cbm ∉ {0, 31}）：`model:passthrough:children:framebuffer`；
+  - fullscreen：`model:passthrough:children:fullscreen`；
+  - `perspective` 图层或透视粒子（系统 `flags & 4`）：`model:passthrough:children:perspective`。
+
+### 点 2 — 渲染图（`render/graph.ts`）
+- **新增** `LayerStep` 加 `{ kind: "subtree"; target: TargetRef }`：把 `layer.subtree` 画进 `target`（当前的合成 RT）。
+- **修改** `planLayer` 对组：基础 pass（compose / clear）之后紧跟 `subtree`，它不算一次合成链的写入。
+  - 有 effect 或 cbm 混合时照旧往下走；
+  - 没有时不返回空计划，改为上屏：`role: "final"`，pass 取 `groupUpload`，槽 0 是当前合成 RT，`geometry: "layer"`，uv [1, 1]，不内缩，blending 按 `copyBackground` 取材质的值或 `"translucent"`。
+- 文件头注释加「组」一段。
+
+### 点 3 — 渲染器（`render/scene.ts`）
+- **修改** `encode`：
+  - 顶层跳过 `group` 非空的图层；
+  - `runOps` 收一个「场景目标」参数（缺省为真正的场景目标）；
+  - `subtree` op 结束当前 pass，按 `layer.subtree` 依次对可见的子孙递归 `runOps`，场景目标换成组的合成 RT。
+- **修改** uniform：
+  - 组里图层的绘制若目标是 `scene`（含粒子），视图投影换成 `groupViewProjection(组) = ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`；
+  - 世界矩阵照旧，不经 `viewProjectionOf`，没有视差、抖动、透视；
+  - 组的 `W` 变了时，子孙本来就随父链标脏重写。
+- **修改** 管线：组里图层画到「场景」的绘制写 RGBA；所在组 `copyBackground` 为 false 时 alpha 通道用 One / One / Max。管线键加这一项。
+- 文件头注释加「组（P5b 步骤 4）」一条。
+
+### 点 4 — 单测
+- **编译：**
+  - `group` / `subtree` 的归属与顺序：嵌套、分组节点下的子孙、`objects` 顺序与父子顺序不一致时的先序；
+  - `groupUpload`；
+  - 照报的三类。
+- **`planLayer`：** 照 `p5b-grp-*`、`p5b-nest`、`p5b-grpptc` 构造：
+  - 有 effect：compose / clear → subtree → effect → final；
+  - 无 effect：compose / clear → subtree → final（`groupUpload`，blending 两种）。
+- **矩阵**（真值从 `ignore/p5/b0/out/dump_b.json` 取，抄成常量）：
+  - 子层在组里的 MVP（`p5b-grp-cb1` 事件 78、92、106）；
+  - 组上屏（125）；
+  - 嵌套：内层基础 pass（`p5b-nest` 事件 94）、内层上屏画进外层（129）；
+  - 组里的世界空间粒子（`p5b-grpptc` 事件 129 的 `gs_out` 中心 → 本地 (250, −80)）；
+  - 视差只作用在组本身（`p5b-grp-par`）。
+- **GpuScene 假设备：**
+  - 顶层不画子孙；subtree 的绘制目标是组的合成 RT；
+  - `copybackground: false` 时子层管线的 alpha 是 One / One / Max、写掩码 15；
+  - 组隐藏时子树整段不画。
+
+### 实施方式
+
+同前几步：HEAD 快照 `ignore/p5/b4/head` 与 `ov`，补丁三方合并进工作区，提交时只暂存自己的文件，并核对暂存的内容和测过的逐字节相同。
+
+### 验收
+1. 子代理：快照里 tsc、vitest、Prettier。
+2. Claude：
+   - 变异检查：顶层照画子孙、组里用场景视图投影、alpha MAX 去掉、无 effect 的组不画、`subtree` 不画嵌套组本身、先序换成 `objects` 顺序；
+   - 临时索引上「HEAD + 补丁」的 tsc / vitest。
+3. 语料：`model:passthrough:children` 去掉，新增的细分键逐张列出。
+4. 基线：10 张 × 三档画面哈希不变。
+5. 和 WPE 整帧比：
+   - 确定性工程：`p5b-grp-cb1`、`cb0`、`nofx`、`nofx0`、`par`、`p5b-nest`、`p5b-grpptc`（粒子随机，只比图像层部分与粒子位置）；
+   - 真实样本：`3340707146`（人物组，子层挂 waterwaves / twirl）、`3554161528` 或 `3465215190`（组里的粒子），强制渲染后比组所在区域。
+
+### 步骤 4 实施记录（2026-11-12）
+
+子代理在 `ignore/p5/b4/ov`（HEAD `013499e0` 快照）里实现。中途在写渲染器时卡住，被看门狗中断过一次，用同一个代理续上后完成。补丁 `ignore/p5/b4/step4.patch`。
+
+**改动：** 7 个产品文件。
+- `bundle.ts`：
+  - `group` / `subtree` / `groupUpload` 三个字段；
+  - 纯函数 `assignGroups`（最近的组合层祖先；先序，子层按 `objects` 下标，嵌套组只收本身）；
+  - `groupUpload` 用 `passthroughMaterial(version)` + `passthroughCombos(0)`，`g_Color4` 置 1；
+  - 照报项在全部对象编译完、泛光之前统一检查。
+- `features.ts`：`groupChildIssues`（framebuffer / fullscreen / perspective 三类）。fullscreenlayer 带子层另报 `model:fullscreen:children`：语料 0 个，WPE 那时子层按场景相机画进全屏 RT，规则不同、没测。
+- `graph.ts`：`subtree` 步骤；无 effect 的组改为「基础 pass → 子树 → `groupUpload` 上屏」，cbm 31 取 additive（读码，没测）。
+- `layout.ts`：`groupViewProjection = orthographic(±w/2, ±h/2, 1000, −1000) · invert(W)`。
+- `scene.ts`：
+  - 顶层跳过 `group` 非空的图层；
+  - `runOps(ops, sceneTarget)`，`begin(view)` 同一目标并进一个 pass；
+  - `subtree` op 递归画子孙；
+  - 组里除嵌套组的 compose 以外，绘制都用 `groupViewProjection`；
+  - 管线键加 `|max`；
+  - 合成 RT 池按「父链上组的层数」分开（键加 `|k<层数>`）。不分的话，和组同尺寸的子孙会共用组的合成 RT。
+- `programs.ts`：`groupBlendState`，alpha 用 One / One / Max，颜色照绘制自己的混合，不混合时用 One / Zero。
+- `state.ts`：补字段。
+
+**和计划的出入：**
+- 组 `copybackground` 为 true 时，组里的上屏（带 effect 子层的末 pass、嵌套组画回外层）只写 RGB：WPE 抓帧 `p5b-grpptc` 事件 102、`p5b-nest` 事件 129 的写掩码是 7。直接画的子层写 RGBA（`p5b-grp-cb1` 事件 78–106 是 15）。
+- WPE 的 alpha 写开关是全局状态：一个子层的合成链结束后，同组里之后的普通绘制也只写 RGB（`p5b-grpptc` 的粒子事件 116 / 129 是 7）。我们没照搬，这取决于运行时的可见性与 effect 开关，记为已知差异。
+
+**合并：** P4e 步骤 2（粒子事件实例）在工作区里改着 `bundle.ts`、`features.ts`、`graph.ts`、`scene.ts` 等，还没提交。三方合并只有 `scene.ts` 一处冲突：两边各加了一种 op（P4e 的 `particle-tree`、本步骤的 `subtree`），两个分支都保留。P4e 分支里「画到场景」的 `begin()` 改成 `begin(sceneTarget)`，组里的粒子树才画进组的合成 RT（`ignore/p5/b4/resolve_scene.py`）。
+
+合并后 P4e 未提交的 `render/events.test.ts` 有 6 个用例失败：它手写的图层没有 `group` 字段，顶层判断 `group === null` 把它当成组里的跳过了。顶层判断改成 `group == null`（缺字段当顶层）后全部通过。它的 tsc 还会报缺三个字段，那是它自己的测试夹具，提交时在我这边补。
+
+**验收：**
+1. **检查：**
+   - 子代理快照：tsc 0，vitest 1925 过、1 败（`3830255100: 219 次请求`，HEAD 上同样失败）；
+   - 合并后的工作区（含 P4e 未提交的改动）：vitest 1981 过、1 败（同一条）；
+   - 「HEAD + 本补丁」用临时索引导出：tsc 0，vitest 1719 过、0 败；
+   - Prettier 通过。
+2. **变异：** 8 处全部检出：
+   - 顶层照画子孙；组里用场景视图投影；去掉 alpha MAX；无 effect 的组不画；
+   - subtree 不收嵌套组本身；subtree 下探进嵌套组；`group` 取最远的组合层祖先；组里上屏也写 RGBA。
+3. **语料：** 9 张都去掉了 `model:passthrough:children`；`3465215190` 新增 `model:passthrough:children:framebuffer`（组里的雨滴粒子要读快照）；干净场景 45 → 45。
+4. **画面哈希：** 10 张 × 3 档和步骤 3 的基线全部相同（宿主 `index-5_hNcEnr.js`）。
+5. **和 WPE 整帧比：**
+   - `p5b-grp-cb1`、`cb0`、`nofx`、`nofx0`、`par`、`p5b-nest`：最大差 1；
+   - `p5b-grpptc`（本地 / 世界空间粒子 + 带 effect 的子层）：最大差 2。
+   - 真实样本按 WPE 日志回放到抓到的那一帧，并排看：
+     - `3340707146`：28 个子层、多数挂 waterwaves / twirl 的人物组，位置和形状一致；差别是文本、随机花瓣和摆动相位。
+     - `3554161528`：天空里组的星星粒子与构图一致。人物头部散开来自 `model:puppet`；钢琴上的白块是组 `1111`，它的 effect 引用别的组的合成 RT（`texture:rendertarget:_rt_imageLayerComposite_411_a`），都在不支持之列。
+6. 测试工程（9 个）已移除。
+
+**未实测清单（续）：**
+- 组里 alpha 写开关的全局状态（见上），只影响组 `copybackground` 为 true、且排在带 effect 子层之后的绘制的 alpha。
+- `copybackground: false` 的组里，WPE 的 alpha MAX 也作用到子孙自己合成链里开了混合的 pass，我们没照搬。
+- 组里 effect 中间 pass 的效果矩阵按局部正交算；组里跟随指针的粒子控制点仍按场景坐标反投影。
+- 无 effect 组的 `groupUpload` 在 cbm 31 时取 additive；组的 effect pass 的 `g_Color4` 给的是组自己的颜色（WPE 是最后一个子层的颜色，语料不读）。
+
+## 步骤 5（提纲，步骤 0 之后补全）
 - **步骤 5 — `instanced`。** 编译材质前合并 `instance.textures` / `combos`；`usertextures` 照报；合成 RT 按纹理图像尺寸（`solidLayer` 已经排除了 instanced）。
 
 每步的回归同 P5a：语料前后比（`kbp corpus diff`），原来能渲染的场景画面哈希不变（基线 10 张 × 三档后处理），确定性工程和 WPE 整帧比。

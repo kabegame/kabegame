@@ -5,15 +5,19 @@
  * - 步骤 2：组合层（无子层）的 `passthroughModel` / `copyBackground`、`projectlayer` 取正交投影宽高、能力表放开 `passthrough` 与
  *   `projectlayer`，带子层报 `model:passthrough:children`、组合层又透视报 `object:perspective`；
  * - 步骤 3：`fullscreen` 模型的 `fullscreen` / `fullscreenSize`（几何 2×2，合成 RT 取槽 0 静态纹理的图像尺寸或场景尺寸）、能力表放开
- *   `fullscreen`（fullscreenlayer 不再报）。
+ *   `fullscreen`（fullscreenlayer 不再报）；
+ * - 步骤 4：组（带子层的组合层）的归属 `group` 与子树 `subtree`（`assignGroups`）、上屏材质 `groupUpload`，不再报
+ *   `model:passthrough:children`，组里还不支持的用法细分成 `model:passthrough:children:framebuffer` / `:fullscreen` / `:perspective`
+ *   （`groupChildIssues`），fullscreenlayer 带子层报 `model:fullscreen:children`。
  * 依据是 p5-REPORT「P5b 语义的实测核对」：`p5b-autosize`（`autosize` 覆盖 `size`，三者都缺时 1×1）、`p5b-nopad`、`p5b-persp`、
  * `p5b-cl`、`p5b-proj`、`p5b-fs`、`p5b-fsmvp`。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { compileScene, imageLayerSize } from "./bundle";
-import { checkModelFeatures, checkObjectFeatures, checkSceneFeatures } from "./features";
+import { assignGroups, compileScene, imageLayerSize, type SceneLayer, type ScenePass } from "./bundle";
+import { checkModelFeatures, checkObjectFeatures, checkSceneFeatures, groupChildIssues } from "./features";
+import type { SceneParticle } from "./particles";
 import type { SceneReader } from "./fs";
 import { parseModel, type ModelJson, type SceneObject } from "./model";
 import type { Wpesl2wgsl } from "../wpesl2wgsl";
@@ -339,6 +343,23 @@ const compose = (id: number, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+/**
+ * 组的上屏材质（P5b 步骤 4）：WPE 的 `materials/util/effectpassthrough.json` / `_4.json`（genericimage3 / 4，normal、没有纹理），
+ * 着色器是空壳（假翻译器不读）。
+ */
+const GROUP_FILES: Record<string, string> = {
+  "materials/util/effectpassthrough.json": JSON.stringify({
+    passes: [{ shader: "genericimage3", blending: "normal", depthtest: "disabled", depthwrite: "disabled" }],
+  }),
+  "materials/util/effectpassthrough_4.json": JSON.stringify({
+    passes: [{ shader: "genericimage4", blending: "normal", depthtest: "disabled", depthwrite: "disabled" }],
+  }),
+  "shaders/genericimage3.vert": "// genericimage3\nvoid main() {}",
+  "shaders/genericimage3.frag": "// genericimage3\nvoid main() {}",
+  "shaders/genericimage4.vert": "// genericimage4\nvoid main() {}",
+  "shaders/genericimage4.frag": "// genericimage4\nvoid main() {}",
+};
+
 describe("compileScene：组合层的两个字段与照报项（P5b 步骤 2）", () => {
   it("composelayer：passthroughModel，copybackground 缺省 true，尺寸 = 对象 size，不报", async () => {
     const bundle = await compileObjects([compose(10)]);
@@ -379,15 +400,26 @@ describe("compileScene：组合层的两个字段与照报项（P5b 步骤 2）"
     expect(small.layers[0].size).toEqual([1280, 720]);
   });
 
-  it("带子层：报 model:passthrough:children；子层是分组节点也算", async () => {
-    const bundle = await compileObjects([
-      compose(10),
-      { id: 11, image: "models/a.json", origin: "0 0 0", parent: 10 },
-      compose(12),
+  it("带子层（P5b 步骤 4 起不再报 model:passthrough:children）：是组，子层是分组节点也算", async () => {
+    const bundle = await compileObjects(
+      [compose(10), { id: 11, image: "models/a.json", origin: "0 0 0", parent: 10 }, compose(12)],
+      {},
+      GROUP_FILES,
+    );
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers.map((layer) => [layer.group, layer.subtree])).toEqual([
+      [null, [1]],
+      [0, []],
+      [null, []],
     ]);
-    expect(bundle.unsupported).toEqual(["model:passthrough:children"]);
-    const group = await compileObjects([compose(10), { id: 11, name: "group", origin: "0 0 0", parent: 10 }]);
-    expect(group.unsupported).toEqual(["model:passthrough:children"]);
+    const group = await compileObjects(
+      [compose(10), { id: 11, name: "group", origin: "0 0 0", parent: 10 }],
+      {},
+      GROUP_FILES,
+    );
+    expect(group.unsupported).toEqual([]);
+    expect(group.layers[0].subtree).toEqual([1]);
+    expect(group.layers[0].groupUpload).not.toBeNull();
   });
 
   it("普通图像层带子层不报；组合层作为子层（父是普通图像层）不报", async () => {
@@ -615,3 +647,344 @@ describe.skipIf(!root || !existsSync(utilModel("fullscreenlayer")) || !existsSyn
     });
   },
 );
+
+// ———— P5b 步骤 4：组（带子层的组合层） ————
+
+type GroupNode = Pick<SceneLayer, "object" | "parent" | "passthroughModel" | "group" | "subtree">;
+/** `[object, parent, 是不是组合层]` → assignGroups 的输入，按给的顺序（即 `objects` 顺序）。 */
+const nodes = (list: [number, number | null, boolean][]): GroupNode[] =>
+  list.map(([object, parent, passthroughModel]) => ({ object, parent, passthroughModel, group: -1, subtree: [-1] }));
+const groupsOf = (layers: GroupNode[]) =>
+  Object.fromEntries(layers.map((layer) => [layer.object, { group: layer.group, subtree: layer.subtree }]));
+
+describe("assignGroups：归属与先序子树（rea-p5-modelflags §2.2）", () => {
+  it("p5b-grp：组下三个子层，按 objects 下标；组之后的顶层层不归组", () => {
+    const layers = nodes([
+      [0, null, false],
+      [1, null, true],
+      [2, 1, false],
+      [3, 1, false],
+      [4, 1, false],
+      [5, null, false],
+    ]);
+    assignGroups(layers);
+    expect(groupsOf(layers)).toEqual({
+      0: { group: null, subtree: [] },
+      1: { group: null, subtree: [2, 3, 4] },
+      2: { group: 1, subtree: [] },
+      3: { group: 1, subtree: [] },
+      4: { group: 1, subtree: [] },
+      5: { group: null, subtree: [] },
+    });
+  });
+
+  it("p5b-nest：嵌套组只收它本身，它的子孙归它；外层的兄弟层排在前面", () => {
+    const layers = nodes([
+      [0, null, false],
+      [1, null, true],
+      [2, 1, false],
+      [3, 1, true],
+      [4, 3, false],
+    ]);
+    assignGroups(layers);
+    expect(groupsOf(layers)).toEqual({
+      0: { group: null, subtree: [] },
+      1: { group: null, subtree: [2, 3] },
+      2: { group: 1, subtree: [] },
+      3: { group: 1, subtree: [4] },
+      4: { group: 3, subtree: [] },
+    });
+  });
+
+  it("分组节点下的子孙也归组，先序：节点自己 → 它的子树 → 下一个子层", () => {
+    // 组 G(1) 下：分组节点 N(2)、图层 A(5)；N 下：B(3)、C(4)；C 下 D(6)
+    const layers = nodes([
+      [0, null, false],
+      [1, null, true],
+      [2, 1, false],
+      [3, 2, false],
+      [4, 2, false],
+      [5, 1, false],
+      [6, 4, false],
+    ]);
+    assignGroups(layers);
+    expect(layers[1].subtree).toEqual([2, 3, 4, 6, 5]);
+    for (const object of [2, 3, 4, 5, 6]) expect(layers[object].group, String(object)).toBe(1);
+  });
+
+  it("objects 顺序与父子顺序不一致：子在父前、子层之间按 objects 下标", () => {
+    // 子 4、2 排在组 3 前面；2 的子 0 排在最前
+    const layers = nodes([
+      [0, 2, false],
+      [1, null, false],
+      [2, 3, false],
+      [3, null, true],
+      [4, 3, false],
+    ]);
+    assignGroups(layers);
+    expect(layers[3].subtree).toEqual([2, 0, 4]);
+    expect([layers[0].group, layers[2].group, layers[4].group, layers[1].group]).toEqual([3, 3, 3, null]);
+  });
+
+  it("没有子层的组合层不是组；组合层的子孙再往上有组合层时取最近的；父不在表里当根", () => {
+    const layers = nodes([
+      [0, null, true],
+      [1, null, true],
+      [2, 1, true],
+      [3, 2, false],
+      [4, 99, false],
+    ]);
+    assignGroups(layers);
+    expect(groupsOf(layers)).toEqual({
+      0: { group: null, subtree: [] },
+      1: { group: null, subtree: [2] },
+      2: { group: 1, subtree: [3] },
+      3: { group: 2, subtree: [] },
+      4: { group: null, subtree: [] },
+    });
+  });
+});
+
+function scenePass(extra: Partial<ScenePass> = {}): ScenePass {
+  return {
+    key: "k",
+    program: 0,
+    blending: "translucent",
+    cullmode: "nocull",
+    depthtest: "disabled",
+    depthwrite: "disabled",
+    textures: {},
+    runtime: {},
+    uniforms: {},
+    framebuffer: false,
+    ...extra,
+  };
+}
+type ChildIssueLayer = Parameters<typeof groupChildIssues>[0];
+const child = (extra: Partial<ChildIssueLayer> = {}): ChildIssueLayer => ({
+  passthroughModel: false,
+  passes: [scenePass()],
+  effects: [],
+  colorBlendMode: 0,
+  fullscreen: false,
+  perspective: false,
+  particle: null,
+  ...extra,
+});
+const effect = (framebuffer: boolean, enabled = true) =>
+  ({
+    source: 0,
+    id: 1,
+    name: "fx",
+    file: "effects/fx/effect.json",
+    fbos: [],
+    steps: [{ kind: "draw", pass: scenePass({ framebuffer }), target: null, compose: false, binds: null }],
+    enabled,
+    visibleBound: !enabled,
+    unsupported: [],
+  }) as SceneLayer["effects"][number];
+/** 粒子系统树：根与一个 static 子系统，只填 `groupChildIssues` 读的字段。 */
+const particle = (
+  root: { flags?: number; framebuffer?: boolean },
+  sub: { flags?: number; framebuffer?: boolean } = {},
+) =>
+  ({
+    flags: root.flags ?? 0,
+    passes: [scenePass({ framebuffer: root.framebuffer ?? false })],
+    children: [
+      {
+        type: "static",
+        system: { flags: sub.flags ?? 0, passes: [scenePass({ framebuffer: sub.framebuffer ?? false })], children: [] },
+      },
+    ],
+  }) as unknown as SceneParticle;
+
+describe("groupChildIssues：组里还不支持的用法", () => {
+  it("普通图层、带不读快照的 effect、colorBlendMode 31、本地 / 世界空间粒子：不报", () => {
+    expect(groupChildIssues(child())).toEqual([]);
+    expect(groupChildIssues(child({ effects: [effect(false)] }))).toEqual([]);
+    expect(groupChildIssues(child({ colorBlendMode: 31 }))).toEqual([]);
+    expect(groupChildIssues(child({ passes: [], particle: particle({ flags: 1 }, { flags: 2 }) }))).toEqual([]);
+  });
+
+  it("要拷快照：基础 pass、启用 effect 的 pass、colorBlendMode ∉ {0, 31}、粒子树里任一 pass（含子系统）", () => {
+    const key = ["model:passthrough:children:framebuffer"];
+    expect(groupChildIssues(child({ passes: [scenePass({ framebuffer: true })] }))).toEqual(key);
+    expect(groupChildIssues(child({ effects: [effect(false), effect(true)] }))).toEqual(key);
+    expect(groupChildIssues(child({ colorBlendMode: 2 }))).toEqual(key);
+    expect(groupChildIssues(child({ passes: [], particle: particle({ framebuffer: true }) }))).toEqual(key);
+    expect(groupChildIssues(child({ passes: [], particle: particle({}, { framebuffer: true }) }))).toEqual(key);
+    // 关着的 effect 不算（它自己的不支持项由 compileScene 补，见下）
+    expect(groupChildIssues(child({ effects: [effect(true, false)] }))).toEqual([]);
+  });
+
+  it("嵌套组：基础 pass（composelayer 读快照）不算；它的 effect 读快照、colorBlendMode 混合照报", () => {
+    const nested = child({ passthroughModel: true, passes: [scenePass({ framebuffer: true })] });
+    expect(groupChildIssues(nested)).toEqual([]);
+    expect(groupChildIssues({ ...nested, effects: [effect(true)] })).toEqual([
+      "model:passthrough:children:framebuffer",
+    ]);
+    expect(groupChildIssues({ ...nested, colorBlendMode: 5 })).toEqual(["model:passthrough:children:framebuffer"]);
+  });
+
+  it("fullscreen；perspective 图层、粒子树里有透视系统（flags & 4，含子系统）", () => {
+    expect(groupChildIssues(child({ fullscreen: true }))).toEqual(["model:passthrough:children:fullscreen"]);
+    const perspective = ["model:passthrough:children:perspective"];
+    expect(groupChildIssues(child({ perspective: true }))).toEqual(perspective);
+    expect(groupChildIssues(child({ passes: [], particle: particle({ flags: 4 }) }))).toEqual(perspective);
+    expect(groupChildIssues(child({ passes: [], particle: particle({ flags: 1 }, { flags: 5 }) }))).toEqual(
+      perspective,
+    );
+  });
+});
+
+/** 读快照的 effect（槽 1 是 `_rt_FullFrameBuffer`）与不读的 effect。 */
+const FX_FILES: Record<string, string> = {
+  "effects/fb/effect.json": JSON.stringify({ passes: [{ material: "materials/fxfb.json" }] }),
+  "materials/fxfb.json": JSON.stringify({ passes: [{ shader: "s", textures: [null, "_rt_FullFrameBuffer"] }] }),
+  "effects/plain/effect.json": JSON.stringify({ passes: [{ material: "materials/fxplain.json" }] }),
+  "materials/fxplain.json": JSON.stringify({ passes: [{ shader: "s" }] }),
+};
+const image = (id: number, parent: number | null, extra: Record<string, unknown> = {}) => ({
+  id,
+  name: `I${id}`,
+  image: "models/a.json",
+  origin: "0 0 0",
+  ...(parent === null ? {} : { parent }),
+  ...extra,
+});
+const compileGroup = (objects: Record<string, unknown>[], general: Record<string, unknown> = {}) =>
+  compileObjects(objects, general, { ...GROUP_FILES, ...FX_FILES });
+
+describe("compileScene：组（P5b 步骤 4）", () => {
+  it("p5b-grp 的结构：组的 subtree、子层的 group、groupUpload（effectpassthrough，g_Color4 = 1，槽 0 由渲染图填）", async () => {
+    const bundle = await compileGroup([
+      image(1, null),
+      compose(10, { origin: "960 540 0", size: "800 400", angles: "0 0 0.2" }),
+      image(20, 10),
+      image(21, 10),
+      image(22, 10),
+      image(30, null),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers.map((layer) => layer.group)).toEqual([null, null, 1, 1, 1, null]);
+    expect(bundle.layers[1].subtree).toEqual([2, 3, 4]);
+    const upload = bundle.layers[1].groupUpload!;
+    expect(upload).toMatchObject({ key: "objects/1/groupupload", blending: "normal", framebuffer: false });
+    expect(upload.program).not.toBeNull();
+    expect(upload.uniforms.g_Color4).toEqual([1, 1, 1, 1]);
+    expect(upload.textures[0]).toBeUndefined();
+    expect(upload.runtime[0]).toBeUndefined();
+    // 子层、普通图层、没有子层的组合层都没有
+    for (const index of [0, 2, 3, 4, 5]) expect(bundle.layers[index].groupUpload, String(index)).toBeNull();
+    expect((await compileGroup([compose(10)])).layers[0].groupUpload).toBeNull();
+  });
+
+  it("上屏材质按场景 version（同 colorBlendMode 混合的 passthrough）：> 2 用 effectpassthrough_4；缺材质报 material:missing", async () => {
+    const objects = [compose(10), image(11, 10)];
+    const shaderOf = async (version: number | undefined) => {
+      const shaders: string[] = [];
+      const recording = {
+        async translate(input: unknown) {
+          shaders.push(JSON.stringify(input).match(/genericimage\d/)?.[0] ?? "");
+          return { ok: true, uniforms: [], textures: [], combos: [] };
+        },
+      } as unknown as Wpesl2wgsl;
+      const scene = JSON.stringify({
+        version,
+        general: { orthogonalprojection: { width: 1920, height: 1080 } },
+        objects,
+      });
+      const files: Record<string, string | Uint8Array> = { "P:/p/scene.json": scene };
+      for (const [path, value] of Object.entries({ ...GROUP_FILES, ...FX_FILES })) files[`P:/p/${path}`] = value;
+      const bundle = await compileScene({
+        projectDir: "P:/p",
+        sceneAssets: ["A:/assets"],
+        reader: memoryReader({
+          "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+          "P:/p/models/util/composelayer.json": JSON.stringify(UTIL_MODELS.composelayer),
+          "P:/p/materials/util/composelayer.json": JSON.stringify(COMPOSE_MATERIAL),
+          "P:/p/models/a.json": JSON.stringify({ material: MATERIAL }),
+          "P:/p/materials/a.json": JSON.stringify({ passes: [{ shader: "s", textures: ["a"] }] }),
+          "P:/p/materials/a.tex": tex(),
+          "P:/p/shaders/s.vert": "void main() {}",
+          "P:/p/shaders/s.frag": "void main() {}",
+          "P:/p/shaders/composelayer.vert": "void main() {}",
+          "P:/p/shaders/composelayer.frag": "void main() {}",
+          ...files,
+        }),
+        translator: recording,
+        postprocess: "disabled",
+        exhaustive: true,
+      });
+      expect(bundle.unsupported).toEqual([]);
+      expect(bundle.layers[0].groupUpload).not.toBeNull();
+      return shaders.filter(Boolean);
+    };
+    expect(await shaderOf(undefined)).toEqual(["genericimage3"]);
+    expect(await shaderOf(2)).toEqual(["genericimage3"]);
+    expect(await shaderOf(3)).toEqual(["genericimage4"]);
+    const missing = await compileObjects(objects, {}, {});
+    expect(missing.unsupported).toEqual(["material:missing:materials/util/effectpassthrough.json"]);
+    expect(missing.layers[0].groupUpload).toBeNull();
+  });
+
+  it("组里的照报：读快照的 effect、colorBlendMode 混合、fullscreen、perspective；嵌套组本身不报", async () => {
+    const fb = await compileGroup([
+      compose(10),
+      image(11, 10, { effects: [{ file: "effects/fb/effect.json" }] }),
+      image(12, 10, { effects: [{ file: "effects/plain/effect.json" }] }),
+    ]);
+    expect(fb.unsupported).toEqual(["model:passthrough:children:framebuffer"]);
+    expect((await compileGroup([compose(10), image(11, 10, { colorBlendMode: 2 })])).unsupported).toEqual([
+      "model:passthrough:children:framebuffer",
+    ]);
+    expect((await compileGroup([compose(10), image(11, 10, { perspective: true })])).unsupported).toEqual([
+      "model:passthrough:children:perspective",
+    ]);
+    const fullscreen = await compileObjects(
+      [compose(10), image(11, 10, { image: "models/fs.json" })],
+      {},
+      { ...GROUP_FILES, "models/fs.json": JSON.stringify({ material: MATERIAL, fullscreen: true }) },
+    );
+    expect(fullscreen.unsupported).toEqual(["model:passthrough:children:fullscreen"]);
+    // p5b-nest：嵌套组（composelayer 读快照）与它的子层都不报
+    const nest = await compileGroup([
+      image(1, null),
+      compose(10, { size: "1200 600", effects: [{ file: "effects/plain/effect.json" }] }),
+      image(11, 10),
+      compose(12, { parent: 10, size: "300 300", effects: [{ file: "effects/plain/effect.json" }] }),
+      image(13, 12),
+    ]);
+    expect(nest.unsupported).toEqual([]);
+    expect(nest.layers.map((layer) => layer.group)).toEqual([null, null, 1, 1, 3]);
+    expect(nest.layers[1].subtree).toEqual([2, 3]);
+    expect(nest.layers[3].subtree).toEqual([4]);
+    // 组外的同样用法不报
+    expect(
+      (await compileGroup([compose(10), image(11, 10), image(12, null, { colorBlendMode: 2, perspective: true })]))
+        .unsupported,
+    ).toEqual([]);
+  });
+
+  it("关着、绑了属性的 effect 读快照：场景级不报，记进那个 effect 自己的不支持项（打开时整场重编译）", async () => {
+    const bundle = await compileGroup([
+      compose(10),
+      image(11, 10, { effects: [{ file: "effects/fb/effect.json", visible: { user: "p", value: false } }] }),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[1].effects[0]).toMatchObject({
+      enabled: false,
+      visibleBound: true,
+      unsupported: ["model:passthrough:children:framebuffer"],
+    });
+  });
+
+  it("fullscreenlayer 带子层：报 model:fullscreen:children（没有子层时不报）", async () => {
+    const files = { ...FULLSCREEN_FILES, ...GROUP_FILES };
+    expect((await compileObjects([f1(10), image(11, 10)], {}, files)).unsupported).toEqual([
+      "model:fullscreen:children",
+    ]);
+    expect((await compileObjects([f1(10)], {}, files)).unsupported).toEqual([]);
+  });
+});

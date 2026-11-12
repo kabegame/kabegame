@@ -28,6 +28,9 @@ import {
   checkProgramFeatures,
   checkSceneFeatures,
   checkScriptFeatures,
+  effectNeedsFramebuffer,
+  GROUP_CHILD_FRAMEBUFFER,
+  groupChildIssues,
   isSoundObject,
   modelFlag,
   objectKind,
@@ -360,11 +363,30 @@ export interface SceneLayer {
   perspective: boolean;
   /**
    * 模型 `passthrough`（只认 JSON true，P5b 步骤 2）：组合层（composelayer、projectlayer 等）。基础 pass 见 `copyBackground`；
-   * 合成 RT 按 `size`、上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31 时整层不画（`render/graph.ts`，p5-REPORT `p5b-cl`）。
-   * 带子层的报 `model:passthrough:children`（步骤 4）。fullscreenlayer 同时是 `fullscreen`，基础 pass 换成拷贝（步骤 3）。
-   * 没有图像模型的图层为 false。
+   * 合成 RT 按 `size`、上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31、没有子层时整层不画（`render/graph.ts`，p5-REPORT
+   * `p5b-cl`）。带子层的是「组」（步骤 4，`subtree` 非空）：子孙由它画进合成 RT。fullscreenlayer 同时是 `fullscreen`，基础 pass 换成
+   * 拷贝（步骤 3）。没有图像模型的图层为 false。
    */
   passthroughModel: boolean;
+  /**
+   * 替它作画的组（P5b 步骤 4，p5-REPORT `p5b-grp-*`、`p5b-nest`、`p5b-grpptc`）：父链上最近的组合层祖先的 `objects` 下标，顶层图层为
+   * null。非空时顶层循环跳过它，由组在 `subtree` 步骤里画进组的合成 RT（`render/scene.ts`）；画到「场景」的绘制改用组的局部正交。
+   * 嵌套组自己也有 `group`（外层组）。`assignGroups` 在全部对象编完之后填。
+   */
+  group: number | null;
+  /**
+   * 组代画的图层（P5b 步骤 4，rea-p5-modelflags §2.2 `FUN_1401eca70` 的先序）：按先序展开子孙，每个节点的子层按 `objects` 下标
+   * （WPE 的加载顺序）；遇到嵌套组只收这个组本身，它的子孙由它自己画。不是组（不是组合层或没有子层）时为空。含没有 pass 的对象
+   * （分组节点、声音等），渲染器跳过没有资源的。`assignGroups` 填。
+   */
+  subtree: number[];
+  /**
+   * 组的上屏 pass（P5b 步骤 4，p5-REPORT `p5b-grp-nofx` / `nofx0`）：没有启用的 effect、colorBlendMode ∈ {0, 31} 时用它把合成 RT
+   * 画到世界四边形上。材质是 WPE 的 `effectpassthrough`（`passthroughMaterial`，场景 `version` > 2 用 `_4`），`BLENDMODE` 0，槽 0
+   * 由渲染图填合成 RT，`g_Color4` 置 (1, 1, 1, 1)（实测 `采样 × g_Color4`、`g_Color4` = 1）。有子层的组合层才编（effect 运行时
+   * 可能全关），其余为 null。
+   */
+  groupUpload: ScenePass | null;
   /**
    * 模型 `fullscreen`（只认 JSON true，P5b 步骤 3，p5-REPORT `p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp`）：几何一律是 2×2 的 NDC 四边形
    * （`size` 固定为 (2, 2)，排在 `imageLayerSize` 之前）。直接上屏时 MVP 照常（场景视图投影 · 视差 · W），着色器乘不乘 MVP 决定铺不铺满；
@@ -453,9 +475,61 @@ export function passthroughMaterial(sceneVersion: unknown): string {
   const version = sceneVersionOf(sceneVersion);
   return version > 2 ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json";
 }
-/** passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED = 1`。 */
+/** passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED = 1`。组的上屏（P5b 步骤 4）用 `BLENDMODE` 0。 */
 export function passthroughCombos(colorBlendMode: number): Record<string, number> {
   return { BLENDMODE: colorBlendMode, FOG_COMPUTED: 1 };
+}
+
+/**
+ * 组的归属与子树（P5b 步骤 4，rea-p5-modelflags §2.2，p5-REPORT `p5b-grp-*`、`p5b-nest`）：就地填每个图层的 `group` 与 `subtree`。
+ * - `group`：沿父链往上最近的组合层祖先（WPE 设父对象时，父层是组合层或在组合层子树里的，子孙都置 `0x2`、顶层不画）。
+ * - `subtree`：组合层有子层时才是组。先序展开：每个节点的直接子层按 `objects` 下标排（WPE 子 vector 是加载顺序），先收子层自己，
+ *   它不是组合层就接着收它的子树；是组合层（嵌套组）就停止下探，它的子孙由它自己画。
+ * 父对象不在 `layers` 里（编译中途停下）时当根节点；环在 `resolveParents` 里已断开，这里按走过的节点兜底。
+ */
+export function assignGroups(
+  layers: Pick<SceneLayer, "object" | "parent" | "passthroughModel" | "group" | "subtree">[],
+): void {
+  const byObject = new Map(layers.map((layer) => [layer.object, layer]));
+  const children = new Map<number, number[]>();
+  for (const layer of layers) {
+    if (layer.parent === null || !byObject.has(layer.parent)) continue;
+    const list = children.get(layer.parent);
+    if (list) list.push(layer.object);
+    else children.set(layer.parent, [layer.object]);
+  }
+  for (const list of children.values()) list.sort((a, b) => a - b);
+  for (const layer of layers) {
+    layer.group = null;
+    layer.subtree = [];
+    const seen = new Set([layer.object]);
+    let current = layer.parent;
+    while (current !== null && !seen.has(current)) {
+      const parent = byObject.get(current);
+      if (!parent) break;
+      if (parent.passthroughModel) {
+        layer.group = current;
+        break;
+      }
+      seen.add(current);
+      current = parent.parent;
+    }
+  }
+  for (const layer of layers) {
+    if (!layer.passthroughModel || !children.has(layer.object)) continue;
+    const out: number[] = [];
+    const seen = new Set([layer.object]);
+    const visit = (object: number): void => {
+      for (const child of children.get(object) ?? []) {
+        if (seen.has(child)) continue;
+        seen.add(child);
+        out.push(child);
+        if (!byObject.get(child)!.passthroughModel) visit(child);
+      }
+    };
+    visit(layer.object);
+    layer.subtree = out;
+  }
 }
 
 /**
@@ -1171,6 +1245,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       noPadding: false,
       perspective: false,
       passthroughModel: false,
+      group: null,
+      subtree: [],
+      groupUpload: null,
       copyBackground: true,
       fullscreen: false,
       fullscreenSize: null,
@@ -1219,11 +1296,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     layer.copyBackground = object.copybackground !== false;
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs`）：只认 JSON true（P5a 步骤 0 实测 `fullscreen: 1` 不生效）
     layer.fullscreen = modelFlag(model, "fullscreen");
+    // 组（P5b 步骤 4）：有对象的父指向这个组合层。子孙由它按局部正交画进合成 RT、不在顶层画（`assignGroups` 在全部对象之后定归属）
+    const hasChildren = layer.passthroughModel && parents.includes(index);
     if (layer.passthroughModel) {
-      // 带子层（有对象的父指向它）：子孙要由组按局部正交画进合成 RT、不在顶层画，步骤 4 才做
-      if (parents.includes(index)) unsupported.add("model:passthrough:children");
       // 组合层又 `perspective: true`：基础 pass 与上屏各用哪套相机没测过（语料 0 个），照报
       if (layer.perspective) unsupported.add("object:perspective");
+      // fullscreenlayer 带子层：WPE 这时子层按场景相机画进全屏 RT（rea-p5-modelflags §2.5），没有实测，语料 0 个，照报
+      if (hasChildren && layer.fullscreen) unsupported.add("model:fullscreen:children");
     }
     if (!model.material) {
       unsupported.add("material:missing");
@@ -1301,6 +1380,32 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];
       }
     }
+    if (hasChildren) {
+      // 组的上屏（P5b 步骤 4，p5-REPORT `p5b-grp-nofx` / `nofx0`）：无 effect、colorBlendMode ∈ {0, 31} 时用。effect 运行时可能全关，
+      // 所以有子层就编。同 colorBlendMode 混合的 passthrough 材质，`BLENDMODE` 0（不读快照），槽 0 是合成 RT
+      const path = passthroughMaterial(scene.version);
+      const text = await fs.text(path);
+      const pass = text ? parseMaterial(text).passes[0] : undefined;
+      if (!pass) unsupported.add(`material:missing:${path}`);
+      else {
+        layer.groupUpload = await compilePass(
+          { ...pass, combos: { ...pass.combos, ...passthroughCombos(0) } },
+          { key: `objects/${index}/groupupload`, planned: [{ slot: 0 }] },
+        );
+        // 实测上屏颜色是 (1, 1, 1, 1)（`p5b-grp-nofx` 事件 125 的 g_Color4）
+        layer.groupUpload.uniforms.g_Color4 = [1, 1, 1, 1];
+      }
+    }
+  }
+  // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
+  assignGroups(bundle.layers);
+  for (const layer of bundle.layers) {
+    if (layer.group === null) continue;
+    for (const key of groupChildIssues(layer)) unsupported.add(key);
+    // 关着、运行时可能打开的 effect 读快照：记进它自己的不支持项，打开时整场重编译（`SceneState.needsRecompile`），重编译后按上面报
+    for (const effect of layer.effects)
+      if (!effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER))
+        effect.unsupported = [...effect.unsupported, GROUP_CHILD_FRAMEBUFFER].sort();
   }
   // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光且对象列表非空（A1）。当前开着，或运行中可能打开（绑了属性或挂了脚本）才建；
   // 不按「场景有脚本」判定：`bloom: false` 的场景大多带脚本，会平白多占显存。别的写入打开时走整场重编译（`SceneState.needsRecompile`）。

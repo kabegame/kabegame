@@ -17,11 +17,13 @@
  * - **`_rt_FullFrameBuffer`**（B8）：场景目标的整帧快照，每图层至多拷一次，时机是三处里最早满足的一处：
  *   图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前。
  *   合成链不画进场景，所以三处拷到的都是画到本图层之前的场景。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」
- *   的条件。带子层的组合层照报（`model:passthrough:children`），所以没有哪个图层的父层是组合层，后半恒成立；前半只差在 fullscreen
- *   走合成路径时：WPE 在图层开始时不拷快照，而是把当前目标直接拷进合成 RT 0，我们为了这次拷贝先拍一次快照（见下「fullscreen」），
- *   内容相同（都是画到本图层之前的场景），之后规则 2、3 不再重拷。fullscreen 直接上屏时照规则 1。
+ *   的条件。前半只差在 fullscreen 走合成路径时：WPE 在图层开始时不拷快照，而是把当前目标直接拷进合成 RT 0，我们为了这次拷贝先拍
+ *   一次快照（见下「fullscreen」），内容相同（都是画到本图层之前的场景），之后规则 2、3 不再重拷。fullscreen 直接上屏时照规则 1。
+ *   后半是组里的图层（P5b 步骤 4）：WPE 在组里不拍新的快照、读组开始时那份；我们照规则拍，拍的是真正的场景目标（`scene.ts`），
+ *   组里的绘制都落在组的合成 RT 上、不碰场景目标，所以拍到的和组开始时那份内容相同。组里要读快照的用法照报
+ *   （`model:passthrough:children:framebuffer`），只有嵌套组自己的基础 pass 例外（`p5b-nest`：它采的正是组开始时那份）。
  * - **组合层**（P5b 步骤 2，`SceneLayer.passthroughModel`，p5-REPORT `p5b-cl`）：不带子层时就是基础 pass 换了写法的合成路径。
- *   没有启用的 effect、colorBlendMode ∈ {0, 31} 时整层不画（空计划；WPE 照拷一次快照，看不出来，不拷）。否则基础 pass 按
+ *   没有启用的 effect、colorBlendMode ∈ {0, 31}、没有子层时整层不画（空计划；WPE 照拷一次快照，看不出来，不拷）。否则基础 pass 按
  *   `copyBackground` 分两种：true 画基础材质（composelayer 着色器，角色 `compose`），用 a_TexCoord 铺满合成 RT，按图层 MVP 算这块在
  *   屏幕上的位置去采快照；false 不画基础材质，合成 RT 0 清成 (0, 0, 0, 0)（`clear` 步骤）。两种都占合成链的第一次写入。合成 RT 按
  *   图层 size、上屏（末 pass、passthrough）不内缩。快照照上面的规则：composelayer 材质的槽 0 是 `_rt_FullFrameBuffer`，规则 1 在图层
@@ -34,6 +36,13 @@
  *     （`final`、`passthrough`）也是 NDC 四边形，矩阵是单位阵加 NDC 正交（`scene.ts`），所以正好铺满全屏。这个判断排在组合层的
  *     compose / clear 之前：fullscreenlayer 有 effect 时走拷贝，不看 `copyBackground`（`p5b-fs` 的 F1：一次 Resolve、没有基础 draw）。
  *   - 合成 RT 取 `fullscreenSize`（槽 0 静态纹理的图像尺寸；`_rt_FullFrameBuffer` 或没有纹理时取场景尺寸）。
+ * - **组**（P5b 步骤 4，带子层的组合层，`SceneLayer.subtree` 非空，p5-REPORT `p5b-grp-*`、`p5b-nest`、`p5b-grpptc`）：基础 pass
+ *   （compose / clear；fullscreenlayer 带子层照报，这里照拷贝）之后紧跟 `subtree` 步骤，把 `layer.subtree` 画进当前的合成 RT（组的
+ *   子孙在顶层不画，`scene.ts`）。它不算合成链的一次写入（子孙画在基础 pass 写的那张上）。之后有 effect 或 colorBlendMode 混合时
+ *   照常往下；都没有时不是空计划，而是用 `layer.groupUpload`（`effectpassthrough`，`采样 × g_Color4`）上屏：角色 `final`、槽 0 是
+ *   当前合成 RT、图层四边形、UV 0–1、不内缩；混合 `copyBackground` 为 true 时取材质的（normal，即不混合），false 时 translucent
+ *   （`p5b-grp-nofx` 事件 125 关混合、`nofx0` 事件 120 translucent；rea-p5-modelflags §2.6 的 `(flags & 0x60) == 0x20`），
+ *   colorBlendMode 31 照普通上屏改 additive（读码，没有实测）。
  * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：`particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序；有子系统时
  *   按模板树先序给出每个模板的步骤（P4e 步骤 1、2），绘制顺序与快照由渲染器每帧现排。
  */
@@ -118,7 +127,12 @@ export type LayerStep =
   | { kind: "copy"; effect: number | null; source: TextureRef; target: TargetRef }
   | { kind: "swap"; effect: number; source: string; target: string }
   /** 把目标清成 (0, 0, 0, 0)：组合层 `copyBackground` 为 false 时代替基础 pass（P5b 步骤 2，WPE 只清颜色、不清深度）。 */
-  | { kind: "clear"; target: TargetRef };
+  | { kind: "clear"; target: TargetRef }
+  /**
+   * 组画子树（P5b 步骤 4）：按 `layer.subtree` 依次画可见的子孙，它们「画到场景」的绘制改画进 `target`（组当前的合成 RT），视图投影
+   * 换成组的局部正交（`scene.ts`）。不算合成链的写入。
+   */
+  | { kind: "subtree"; target: TargetRef };
 
 export interface LayerPlan {
   /** 合成 RT 的张数与尺寸；直接上屏时为 null。 */
@@ -315,9 +329,11 @@ export function planLayer(
     return inputs;
   };
 
-  if (!needsComposite(layer, enabled)) {
+  // 组（P5b 步骤 4）：带子层的组合层。没有 effect、colorBlendMode ∈ {0, 31} 时也要画：基础 pass → 子树 → `groupUpload` 上屏
+  const group = layer.passthroughModel && layer.subtree.length > 0;
+  if (!needsComposite(layer, enabled) && !group) {
     // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl` 的 CL3、CL5）：没有启用的 effect、colorBlendMode ∈ {0, 31}、没有子层时整层不画。
-    // WPE 在图层开始时照拷一次快照，没人读，不拷。带子层的照报（`model:passthrough:children`），步骤 4 再画子树。
+    // WPE 在图层开始时照拷一次快照，没人读，不拷。带子层的是组，走下面的合成路径（步骤 4）。
     // fullscreenlayer 也是组合层，同样不画（P5b 步骤 3，`p5b-fsnofx` 没有 draw）
     if (layer.passthroughModel) return { composite: null, steps, reasons };
     // 规则 1：基础材质需要帧缓冲
@@ -390,6 +406,8 @@ export function planLayer(
       inset: NO_INSET,
       blending: null,
     });
+  // 组画子树（P5b 步骤 4，`p5b-grp-*`：子层画进基础 pass 写的那张合成 RT）：不占合成链的写入，之后的 effect 读的就是这张
+  if (group) steps.push({ kind: "subtree", target: { kind: "composite", index: current } });
 
   // 上屏的那一步：最后一个启用 effect 的最后一个绘制 pass（passthrough 时没有）
   let finalEffect = -1,
@@ -476,6 +494,29 @@ export function planLayer(
         blending: base.blending,
       });
     }
+  } else if (finalEffect < 0 && group) {
+    // 没有 effect 的组（P5b 步骤 4，`p5b-grp-nofx` 事件 125、`nofx0` 事件 120）：`effectpassthrough` 把合成 RT 画到图层四边形上，
+    // UV 0–1、不内缩（组合层的上屏本来就不内缩）。混合：colorBlendMode 31 改 additive（读码），`copybackground` 为 true 取材质的
+    // normal（实测关混合），false 强制 translucent（实测 SrcAlpha / InvSrcAlpha）
+    const pass = layer.groupUpload;
+    if (!pass) reasons.push("render:no-group-upload");
+    else {
+      const inputs = staticInputs(pass, null);
+      inputs[0] = { kind: "composite", index: current };
+      if (pass.framebuffer) snapshot();
+      steps.push({
+        kind: "draw",
+        role: "final",
+        pass,
+        effect: null,
+        target: { kind: "scene" },
+        inputs,
+        geometry: screenGeometry,
+        uv: [1, 1],
+        inset: finalInset,
+        blending: additive ? "additive" : layer.copyBackground ? pass.blending : "translucent",
+      });
+    }
   } else if (finalEffect < 0) reasons.push("render:no-final-pass");
 
   const [width, height] = compositeSize(layer, baseTexture);
@@ -496,7 +537,7 @@ export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]
     planLayer(layer, textures, (e) => (variable.includes(e) ? open(e) : layer.effects[e].enabled));
   return [
     plan(() => true), // 每个 pass 的普通角色
-    plan(() => false), // 基础 pass 直接上屏；组合层（cbm 0 / 31）是空计划，整层不画
+    plan(() => false), // 基础 pass 直接上屏；组合层（cbm 0 / 31）是空计划，整层不画；组是基础 pass → 子树 → `groupUpload` 上屏
     ...variable.map((v) => plan((e) => e <= v)), // v 的上屏角色
   ];
 }
