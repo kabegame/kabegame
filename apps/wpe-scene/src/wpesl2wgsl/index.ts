@@ -84,6 +84,11 @@ export interface InterfaceVariable {
   location: number;
   type: string;
   array?: number;
+  /**
+   * 只在属性上（P5c 步骤 1）：顶点阶段入口可达的代码没读它。WPE 的 fxc 把没读的输入从签名里去掉，网格缺这个属性也照常画
+   * （p5-REPORT「P5c 语义的实测核对」，`p5c-attr` 的 M3）；判据同 uniform 的 `unused`，缺失当被读。
+   */
+  unused?: boolean;
 }
 
 export interface ComboValue {

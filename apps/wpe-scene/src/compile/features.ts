@@ -41,6 +41,7 @@ import type { SceneScript } from "./scripts";
 import { scanScriptApi, scanScriptCallbacks, type ScriptApiScene } from "./scriptApi";
 import { SOUND_MODES, soundFlag } from "./sounds";
 import { TEXTURE_FORMATS } from "./tex";
+import { attributeSemantic, MDL_FORMAT_BITS, meshAttributes, semanticKey, type MdlFile } from "./mdl";
 
 export const SUPPORTED = {
   objects: ["image"],
@@ -235,6 +236,15 @@ const OBJECT_FLAGS = [
   "reflected",
   "skin",
 ];
+/**
+ * 模型对象上中性的 `OBJECT_FLAGS`（P5c 步骤 1，rea-p5-mesh 2.2，p5-REPORT「P5c 语义的实测核对」）：
+ * - `skin`：选材质（`mdl.ts` 的 `meshSkin`，`p5c-skin` 实测）；
+ * - `castshadow`、`reflected`：只决定是不是阴影 pass 的投射者、在不在反射 pass 的名单里。没有消费者时不改变画面，而消费者现在都照报
+ *   （读 `_rt_Reflection` 报 `texture:rendertarget:_rt_Reflection`，`REFLECTION` 非 0 报 `combo:REFLECTION`，投影灯报 `lightconfig:*`）；
+ * - `disablepropagation`：渲染侧没有读取点（p2 I6）。
+ * 图像、粒子等对象上这几个键照旧报。
+ */
+const MODEL_NEUTRAL_FLAGS = ["skin", "castshadow", "reflected", "disablepropagation"];
 /**
  * 支持或中性的模型键。
  * - `autosize`：纹理就绪时覆盖对象 `size` 与模型 `width` / `height`（P5b 步骤 1，`bundle.ts` 的 `imageLayerSize`，p5-REPORT
@@ -624,15 +634,24 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * 粒子对象自己的键（`origin`、`angles`、`scale`、`visible`、`parent` 等）照对象规则走；`instanceoverride` 要看粒子 JSON 的
  * `flags` 与场景 HDR，由 `checkParticleInstance` 在读到文件后检查；粒子 JSON 的用法由 `checkParticleFeatures` 检查。
  * 粒子不再有总括键（步骤 5 删掉了 `particle:pending`）：不支持的用法都要由这些细分键挡住。
+ *
+ * 模型对象（P5c 步骤 1）不再整个报 `object:model`：mdl 与网格的用法由 `bundle.ts` 读到文件后按 `checkMdlFeatures`、
+ * `checkMeshAttributes` 与模型 pass 的 `checkPassFeatures` 报，绘制接上之前另报过渡键 `model:pending`。对象上：
+ * - `MODEL_NEUTRAL_FLAGS` 中性，`perspective: true` 中性（和 P5b 的透视图层同一套，`p5c-matrix` 实测）；
+ * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers`（W6）、`dependencies` 等照未知键报。
  */
 export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>, parent: number | null = null): void {
   const kind = objectKind(object);
+  const effects = object.effects as unknown;
+  const hasEffects = Array.isArray(effects) ? effects.length > 0 : active(effects);
   if (kind === "particle") {
     // 带 effects 的粒子对象本机 0 个，P4 不做
-    const effects = object.effects as unknown;
-    if (Array.isArray(effects) ? effects.length > 0 : active(effects)) unsupported.add("particle:effects");
+    if (hasEffects) unsupported.add("particle:effects");
     for (const [key, defaults] of Object.entries(PARTICLE_OBJECT_DEFAULTS))
       if (particleObjectValueUsed(object[key], defaults)) unsupported.add(`particle:object:${key}`);
+  } else if (kind === "model") {
+    // 模型对象的 effect（WPE 怎么画没读，语料 0 个）：`bundle.ts` 也不编译它
+    if (hasEffects) unsupported.add("model:effects");
   } else if (kind && kind !== "image" && kind !== "light" && kind !== "sound" && kind !== "text")
     unsupported.add(`object:${kind}`);
   // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
@@ -646,10 +665,12 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   const text = isTextObject(object);
   if (text) checkTextFeatures(object, unsupported);
   const textKey = (key: string) => text && TEXT_KEYS.has(key);
-  for (const key of OBJECT_FLAGS) if (active(object[key]) && !lightKey(key)) unsupported.add(`object:${key}`);
+  const modelKey = (key: string) => kind === "model" && MODEL_NEUTRAL_FLAGS.includes(key);
+  for (const key of OBJECT_FLAGS)
+    if (active(object[key]) && !lightKey(key) && !modelKey(key)) unsupported.add(`object:${key}`);
   if (object.alignment !== undefined && object.alignment !== "center" && !text) unsupported.add("object:alignment");
-  // 图像层 perspective（P5b 步骤 1）：JSON true 已实现；绑属性、挂脚本或别的取值，以及非图像对象上为真，照报
-  if (active(object.perspective) && !(kind === "image" && object.perspective === true))
+  // 图像层（P5b 步骤 1）与模型（P5c 步骤 1）的 perspective：JSON true 已实现；绑属性、挂脚本或别的取值，以及别的对象上为真，照报
+  if (active(object.perspective) && !((kind === "image" || kind === "model") && object.perspective === true))
     unsupported.add("object:perspective");
   // `instance`（P5b 步骤 5）：WPE 只在模型是 instanced 时读它（rea-p5-modelflags §6.2），那时由 `bundle.ts` 调
   // `checkInstanceFeatures` 查；非 instanced 对象上中性（语料 0 个）
@@ -773,6 +794,64 @@ export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): 
   scanValue(model, unsupported);
 }
 
+const hex = (value: number) => `0x${(value >>> 0).toString(16)}`;
+
+/**
+ * 尾部段的标签 → 能力键（rea-p5-mesh 1.7 的识别规则：`MDLS`、`MDLA` 只比较前 4 个字符，`MDAT0001`、`MDMP0001` 比较 8 个字符，
+ * `MDLE0002` 全串比较）。其余标签 WPE 整段跳过，中性（`p5c-ver` 的 S14、S23 带 `ZZZZ0001`、`MDLX0001` 照常显示）。
+ */
+function sectionIssue(tag: string): string | undefined {
+  if (tag.startsWith("MDLS") || tag === "MDLE0002") return "mdl:skeleton";
+  if (tag.startsWith("MDLA")) return "mdl:animation";
+  if (tag.startsWith("MDMP0001")) return "mdl:morph";
+  if (tag.startsWith("MDAT0001")) return "mdl:attachment";
+  return undefined;
+}
+
+/**
+ * 一个 mdl 文件（`mdl.ts` 的 `parseMdl`，P5c 步骤 1）还不支持的用法。静态网格（无段或只有不认识的段、无木偶数据）都不报。
+ * - `mdl:truncated`：读越界（语料 0 个，WPE 的读取原语越界返回 0，不猜）；
+ * - `mdl:skeleton` / `mdl:animation` / `mdl:morph` / `mdl:attachment`：骨骼、动画层、变形目标、挂点段（W6，语料只在 3706286085）；
+ * - `mdl:puppet`：网格带可选块或记录表（木偶数据，语料只在 puppet mdl，模型对象用的都是空的）；
+ * - `mdl:flags:<十六进制>`：网格标志除 bit0（u32 索引）、bit1（多一个 u32）外还有位，值是多出来的位（bit10 是 `MORPHING_NORMALS`，
+ *   bit2、bit12 含义没查，rea 1.3）；
+ * - `mdl:format:<十六进制>`：格式有表外的位，或同一个语义出现两次（如 `a_Position` 与 `a_PositionVec4`，语料 0 个，WPE 的输入布局
+ *   怎么建没测），值是整个格式。
+ * 材质多于一个 pass 在编译材质时报（`bundle.ts` 的 `compileMesh`，`mdl:material-passes`）。
+ */
+export function checkMdlFeatures(file: MdlFile, unsupported: Set<string>): void {
+  if (file.truncated) unsupported.add("mdl:truncated");
+  for (const tag of file.sections) {
+    const issue = sectionIssue(tag);
+    if (issue) unsupported.add(issue);
+  }
+  for (const mesh of file.meshes) {
+    if (mesh.puppet) unsupported.add("mdl:puppet");
+    if (mesh.flags & ~3) unsupported.add(`mdl:flags:${hex(mesh.flags & ~3)}`);
+    const semantics = meshAttributes(mesh.format).map(semanticKey);
+    if (mesh.format & ~MDL_FORMAT_BITS || new Set(semantics).size !== semantics.length)
+      unsupported.add(`mdl:format:${hex(mesh.format)}`);
+  }
+}
+
+/**
+ * 网格格式和着色器属性对不上（P5c 步骤 1，p5-REPORT「P5c 语义的实测核对」的缺属性一行）：着色器按语义配对，同语义不同宽度共用一个槽
+ * （`p5c-attr` 的 M1、M4 照常画）。只看被读的属性（不带翻译器的 `unused`）：
+ * - 读了网格没有的语义：WPE 建不出输入布局，画出来是未定义的值（M2、M5），报 `mdl:missing-attribute:<名>`；
+ * - 声明了却没读的：fxc 把它从输入签名里去掉，正常画（M3；语料 fantasticcar、audiophile 的 `grid` 声明 `a_Normal` 但不读），不报，
+ *   步骤 2 给 WebGPU 一个占位；
+ * - 名字不在属性表里：`FUN_1400f4460` 只认表里的 26 个名字，别的没有 HLSL 语义，报 `mdl:attribute:<名>`。
+ */
+export function checkMeshAttributes(program: TranslateResult, format: number, unsupported: Set<string>): void {
+  const present = new Set(meshAttributes(format).map(semanticKey));
+  for (const attribute of program.attributes ?? []) {
+    if (attribute.unused) continue;
+    const semantic = attributeSemantic(attribute.name);
+    if (!semantic) unsupported.add(`mdl:attribute:${attribute.name}`);
+    else if (!present.has(semantic)) unsupported.add(`mdl:missing-attribute:${attribute.name}`);
+  }
+}
+
 /** 组里的图层要拷快照（P5b 步骤 4，`groupChildIssues`）。 */
 export const GROUP_CHILD_FRAMEBUFFER = "model:passthrough:children:framebuffer";
 
@@ -799,11 +878,20 @@ function someParticleSystem(system: SceneParticle, test: (system: SceneParticle)
  * - `model:passthrough:children:fullscreen`：fullscreen 模型。当前目标是组的合成 RT，没有实测。
  * - `model:passthrough:children:perspective`：图层 `perspective: true`，或粒子系统树里有透视系统（`flags & 4`）。组里的投影是局部正交，
  *   没有实测。
+ * - `model:passthrough:children:model`：模型对象（P5c 步骤 1）。语料 0 个，组里的网格怎么画（深度、剔除、视锥剔除用哪个相机）没有实测。
  */
 export function groupChildIssues(
   layer: Pick<
     SceneLayer,
-    "passthroughModel" | "passes" | "effects" | "colorBlendMode" | "fullscreen" | "perspective" | "particle" | "text"
+    | "passthroughModel"
+    | "passes"
+    | "effects"
+    | "colorBlendMode"
+    | "fullscreen"
+    | "perspective"
+    | "particle"
+    | "text"
+    | "model"
   >,
 ): string[] {
   const keys: string[] = [];
@@ -823,6 +911,7 @@ export function groupChildIssues(
     (!!layer.particle && someParticleSystem(layer.particle, (system) => (system.flags & 4) !== 0))
   )
     keys.push("model:passthrough:children:perspective");
+  if (layer.model) keys.push("model:passthrough:children:model");
   return keys;
 }
 
@@ -844,13 +933,38 @@ function writesDepth(pass: MaterialPass): boolean {
   return pass.depthtest !== "disabled" && (blending === "normal" || blending === "alphatocoverage");
 }
 
-export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>): void {
+/**
+ * 材质 pass 的能力检查。图像层、effect、粒子的深度 / 剔除照旧：缺键当 disabled / nocull（P5d 再和深度附件一起统一），所以 `cullmode`
+ * 只认 `nocull`、`depthtest` 只认 `disabled`，会写深度的 `depthwrite` 照报。
+ *
+ * 模型的 pass（`context.model`，P5c 步骤 1）照 WPE 的缺省推：材质 pass 字节缺省为 0，即 `depthtest` enabled、`depthwrite` enabled、
+ * `cullmode` normal（rea-p5-mesh 3、p5-REPORT「P5c 语义的实测核对」的剔除与深度两行）。
+ * - `cullmode`：缺键 / `normal`（剔背面，屏幕上逆时针是正面，`p5c-cull`）/ `nocull` 支持，其余照报；
+ * - `depthtest`：缺键 / `enabled` / `disabled` 中性，其余照报。只测不写的中性：语料里会写深度的 pass 都照报，场景里没有别人写过深度，
+ *   GREATER 对清屏值 0 总是通过（retro 的 `bgfade` 就是这样，深度 0.5）；
+ * - `depthwrite`：会写深度（`writesDepth`）且没写成 `disabled`（缺键按 enabled）时报 `depthwrite:<值>`，缺键报 `depthwrite:enabled`，
+ *   留给 P5d（`p5c-depth` 实测正交场景里模型照样测深度、写深度）。
+ */
+export function checkPassFeatures(
+  pass: MaterialPass,
+  unsupported: Set<string>,
+  context: { model?: boolean } = {},
+): void {
   if (pass.blending && !SUPPORTED.blending.includes(pass.blending as never)) unsupported.add(`blend:${pass.blending}`);
-  if (pass.cullmode && pass.cullmode !== "nocull") unsupported.add(`cull:${pass.cullmode}`);
-  if (pass.depthtest && pass.depthtest !== "disabled") unsupported.add(`depthtest:${pass.depthtest}`);
-  // 不写深度的 pass 上 `depthwrite: enabled` 不改变画面，不报；其余照报，留给 P5d
-  if (pass.depthwrite && pass.depthwrite !== "disabled" && writesDepth(pass))
-    unsupported.add(`depthwrite:${pass.depthwrite}`);
+  if (context.model) {
+    if (pass.cullmode && pass.cullmode !== "normal" && pass.cullmode !== "nocull")
+      unsupported.add(`cull:${pass.cullmode}`);
+    if (pass.depthtest && pass.depthtest !== "enabled" && pass.depthtest !== "disabled")
+      unsupported.add(`depthtest:${pass.depthtest}`);
+    if (pass.depthwrite !== "disabled" && writesDepth(pass))
+      unsupported.add(`depthwrite:${pass.depthwrite || "enabled"}`);
+  } else {
+    if (pass.cullmode && pass.cullmode !== "nocull") unsupported.add(`cull:${pass.cullmode}`);
+    if (pass.depthtest && pass.depthtest !== "disabled") unsupported.add(`depthtest:${pass.depthtest}`);
+    // 不写深度的 pass 上 `depthwrite: enabled` 不改变画面，不报；其余照报，留给 P5d
+    if (pass.depthwrite && pass.depthwrite !== "disabled" && writesDepth(pass))
+      unsupported.add(`depthwrite:${pass.depthwrite}`);
+  }
   // COMBO 只按整数读（I3）：写成 `{user, value}` 时 WPE 断言中止整个进程，这里按不支持退回预览图
   for (const value of Object.values(pass.combos ?? {}))
     if (value && typeof value === "object") unsupported.add("combo:user-binding");

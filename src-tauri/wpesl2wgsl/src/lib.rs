@@ -202,6 +202,11 @@ pub struct Interface {
     pub ty: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub array: Option<u32>,
+    /// 只用于属性：顶点阶段入口可达的代码没读它（naga compact 之后没有落在它上面的 `Load`，见 `naga_stage::inputs_read`）。
+    /// WPE 的 fxc 把没读的输入从签名里去掉，网格缺这个属性也照常画（p5-REPORT「P5c 语义的实测核对」，`p5c-attr` 的 M3）。
+    /// 判据与已知差别同 uniform 的 `unused`；varying 恒为假。为假时不输出。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unused: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -511,15 +516,16 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
                 meta: texture.meta.clone(),
             })
             .collect(),
-        attributes: interfaces(&program.attributes),
-        varyings: interfaces(&program.varyings),
+        attributes: interfaces(&program.attributes, Some(&vs.inputs_read)),
+        varyings: interfaces(&program.varyings, None),
         combos,
         geometry,
         ..TranslateResult::default()
     }
 }
 
-fn interfaces(decls: &[rewrite::InterfaceDecl]) -> Vec<Interface> {
+/// `read`：属性传顶点阶段读到的输入（`naga_stage::inputs_read`），不在其中的标 `unused`；varying 传 `None`、恒不标。
+fn interfaces(decls: &[rewrite::InterfaceDecl], read: Option<&BTreeSet<String>>) -> Vec<Interface> {
     decls
         .iter()
         .map(|decl| Interface {
@@ -527,6 +533,7 @@ fn interfaces(decls: &[rewrite::InterfaceDecl]) -> Vec<Interface> {
             location: decl.location,
             ty: decl.ty.clone(),
             array: decl.array,
+            unused: read.is_some_and(|read| !read.contains(&decl.name)),
         })
         .collect()
 }
@@ -1464,6 +1471,113 @@ void main() {
         assert_eq!(
             unused_flags(&result),
             [("g_ModelViewProjectionMatrix", None, false)]
+        );
+    }
+
+    // ---- P5c 步骤 1：属性的 `unused` ----
+
+    /// 按声明顺序列出（属性名, 没被读）。
+    fn attribute_flags(result: &TranslateResult) -> Vec<(&str, bool)> {
+        result
+            .attributes
+            .iter()
+            .map(|a| (a.name.as_str(), a.unused))
+            .collect()
+    }
+
+    /// 直接读、只读分量、在被 `main` 调用的函数里读的不标；只声明、只在没被调用的函数里读、只在关掉的 `#if` 里读的标
+    /// （p5-REPORT「P5c 语义的实测核对」：fxc 把没读的输入从签名里去掉，`p5c-attr` 的 M3 照常画）。varying 恒不标。
+    #[test]
+    fn unused_marks_attributes_no_reachable_code_reads() {
+        let vertex = "attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+attribute vec3 a_Normal;
+attribute vec4 a_Tangent4;
+attribute vec4 a_Color;
+attribute vec4 a_TexCoordVec4C1;
+attribute vec3 a_PositionC1;
+varying vec2 v_TexCoord;
+varying vec3 v_Unwritten;
+float lit() { return a_Normal.z; }
+float orphan() { return a_Tangent4.w; }
+void main() {
+	gl_Position = vec4(a_Position, lit());
+#if 0
+	gl_Position.x += a_Color.x;
+#endif
+	v_TexCoord = a_TexCoord.xy;
+}";
+        let result = translate_ok(
+            vertex,
+            "varying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord, 0.0, 1.0); }",
+        );
+        assert_eq!(
+            attribute_flags(&result),
+            [
+                ("a_Position", false),
+                ("a_TexCoord", false),
+                ("a_Normal", false),
+                ("a_Tangent4", true),
+                ("a_Color", true),
+                ("a_TexCoordVec4C1", true),
+                ("a_PositionC1", true),
+            ]
+        );
+        assert!(result.varyings.iter().all(|v| !v.unused));
+        // 被读的与 varying 不输出这个字段，没被读的是 true
+        let json = serde_json::to_value(&result).unwrap();
+        assert!(json["attributes"][0].get("unused").is_none(), "{json}");
+        assert_eq!(json["attributes"][3]["unused"], true);
+        assert!(json["varyings"][1].get("unused").is_none(), "{json}");
+        // 只改反射：没读的属性照旧是入口参数、占着自己的 location
+        let wgsl = result.vertex.as_ref().unwrap().wgsl.as_deref().unwrap();
+        for attribute in &result.attributes {
+            assert!(
+                wgsl.contains(&format!("@location({})", attribute.location)),
+                "{wgsl}"
+            );
+        }
+    }
+
+    /// 没读的属性：WGSL 与读了它的同一份着色器只差读它的那一处，入口参数逐字相同。
+    #[test]
+    fn unused_attribute_keeps_wgsl_entry() {
+        let shader = |read: bool| {
+            translate_ok(
+                &format!(
+                    "attribute vec3 a_Position;\nattribute vec3 a_Normal;\nvoid main() {{ gl_Position = vec4(a_Position{}, 1.0); }}",
+                    if read { " * a_Normal" } else { "" }
+                ),
+                "void main() { gl_FragColor = vec4(1.0); }",
+            )
+        };
+        let (read, unread) = (shader(true), shader(false));
+        assert_eq!(
+            attribute_flags(&read),
+            [("a_Position", false), ("a_Normal", false)]
+        );
+        assert_eq!(
+            attribute_flags(&unread),
+            [("a_Position", false), ("a_Normal", true)]
+        );
+        let entry = |result: &TranslateResult| {
+            let wgsl = result.vertex.as_ref().unwrap().wgsl.clone().unwrap();
+            let start = wgsl.find("@vertex").expect("entry");
+            wgsl[start..wgsl[start..].find('{').unwrap() + start].to_string()
+        };
+        assert_eq!(entry(&read), entry(&unread));
+    }
+
+    /// 几何段拼进顶点段后按顶点算：绳着色器的属性都在展开后的顶点段里被读。
+    #[test]
+    fn unused_attributes_follow_geometry_merge() {
+        let result = translate(&gs_request());
+        assert!(result.ok, "{result:#?}");
+        assert!(!result.attributes.is_empty());
+        assert!(
+            result.attributes.iter().all(|a| !a.unused),
+            "{:?}",
+            attribute_flags(&result)
         );
     }
 }

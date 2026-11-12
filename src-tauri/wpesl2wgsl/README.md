@@ -71,7 +71,7 @@ interface TranslateRequest {
 | `uniforms` | uniform 块成员：`{ name, type, declared, offset, size, array?, stride?, meta?, stage?, original?, unused? }`（`stage` / `original` 见「两阶段同名 uniform」，`unused` 见「没被读的 uniform」） |
 | `uniformBlockSize` | uniform 块总字节数（没有普通 uniform 时缺省） |
 | `textures` | `{ slot, name, kind: "2d" \| "2d-comparison" \| "3d" \| "cube", binding, samplerBinding, meta? }` |
-| `attributes` / `varyings` | `{ name, location, type, array? }` |
+| `attributes` / `varyings` | `{ name, location, type, array?, unused? }`（`unused` 只出现在属性上，见「没被读的属性」） |
 | `combos` | 最终生效的 COMBO：`{ name, value, source: "default" \| "texture" \| "request" }` |
 | `geometry` | 只在请求带 `geometry` 时有：`{ maxVertices }`，见「几何着色器展开」 |
 
@@ -168,6 +168,19 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
 **与 fxc 的差别**：fxc 还会删掉结果没被用到的读、乘 0 之类，所以我们多算被读，只会让宿主多报（偏保守）：少一处读既不会多占槽位，也造不出同键不同类型。
 取值会不同的只有一种情况：两阶段同键、类型或缺省不同，片元的读被 fxc 删掉了。这时 WPE 取顶点那一半的类型与缺省，我们取片元的。语料里没有（phase-7d-fluid 风险 2）。
 
+### 没被读的属性（`unused`）
+
+属性（`attributes`）上的 `unused: true`：顶点阶段入口可达的代码没读这个输入；几何段拼进顶点段后按拼好的顶点段算。varying 上没有这个字段。
+为假时不输出。同样只改反射：没读的输入照旧是 WGSL 入口参数、占着自己的 location，WGSL 与不加这个字段时逐字节相同。
+
+**依据**（p5-REPORT「P5c 语义的实测核对」，`p5c-attr`）：网格缺着色器声明的属性时，声明了却没读的（M3 的 `a_Normal`），WPE 的 fxc 把它从输入签名里
+去掉，输入布局正常、画面正常；读了的（M2），WPE 建不出输入布局，画出来是未定义的值。宿主据此只对读了的缺属性报 `mdl:missing-attribute:<名>`
+（`features.ts` 的 `checkMeshAttributes`）；没读的 WGSL 入口仍带这个 location，渲染器要给它一个占位的顶点属性（P5c 步骤 2）。
+
+**判据**（`naga_stage::inputs_read`，和块成员共用同一次 compact）：GLSL 前端把每个 `in` 声明做成同名的私有全局变量，入口包装函数先把入口参数
+`Store` 进去、再调用户的 `main`；compact 之后，还有 `Load`（直接，或经 `AccessIndex` / `Access` 链）落在这个全局变量上，就算读了。只在关掉的
+`#if` 里读、只在没被调用的函数里读不算；结果没被用到的读仍算，和「没被读的 uniform」同一个已知差别（多算被读，宿主多报）。
+
 ## 内部流程
 
 源码在 `src/`：`lib.rs`（请求 / 结果、编排、C ABI）、`preprocess.rs`、`library.rs`（`#require`）、`geometry.rs`（几何着色器展开）、`rewrite.rs`、`naga_stage.rs`。
@@ -247,7 +260,7 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
    - GLSL 450 前端负责解析和隐式类型转换：打开了嵌入 naga 的 HLSL 模式（`Options::hlsl_implicit`），GLSL 会报错的地方按 fxc 的隐式规则转换，见「HLSL 隐式转换」；
    - 按 WebGPU 基线（`Capabilities::empty()`）校验后输出 WGSL；
    - uniform 块的偏移与步长取自 naga 的 std140 布局；
-   - 最后对模块做一次 compact，读出入口可达的代码读到了哪些块成员，给反射的 `unused`（见「没被读的 uniform」）。
+   - 最后对模块做一次 compact，读出入口可达的代码读到了哪些块成员与输入，给反射的 `unused`（见「没被读的 uniform」「没被读的属性」）。
 
    naga 30.0.1 的源码嵌在 `naga/`（路径依赖），删掉了用不到的前后端，只开 `glsl-in` + `wgsl-out`；`wgsl-in` 只在 `[dev-dependencies]` 里开，给测试回读输出。
    上游版本、删掉的模块与每处改动见 [naga/KABEGAME.md](naga/KABEGAME.md)。

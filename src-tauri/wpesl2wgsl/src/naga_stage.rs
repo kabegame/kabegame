@@ -16,6 +16,8 @@ pub struct Compiled {
     pub block_size: Option<u32>,
     /// 本阶段入口可达的代码读到的块成员名（见 [`read_members`]）。
     pub read: BTreeSet<String>,
+    /// 本阶段入口可达的代码读到的私有全局变量名（顶点阶段的输入属性在其中，见 [`inputs_read`]）。
+    pub inputs_read: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,18 +98,31 @@ pub fn compile(
         .map(|entry| entry.name.clone())
         .unwrap_or_else(|| "main".to_string());
     let (block, block_size) = uniform_block(&module);
-    // 布局与 WGSL 都取完了才做：compact 会删掉没用到的函数、表达式与全局变量
-    let read = read_members(&mut module);
+    // 布局与 WGSL 都取完了才做：compact 会删掉没用到的函数、表达式与全局变量。块成员与输入两种「读」共用这一次
+    naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
+    let read = read_members(&module);
+    let inputs_read = inputs_read(&module);
     Ok(Compiled {
         wgsl,
         entry_point,
         block,
         block_size,
         read,
+        inputs_read,
     })
 }
 
-/// 本阶段入口可达的代码读到的 uniform 块成员（按成员名，即 `rewrite::block_member_name`），`module` 必须已通过校验。
+/// compact 之后剩下的函数：被 `Call` 到的普通函数与入口点。
+fn reachable_functions(module: &Module) -> impl Iterator<Item = &naga::Function> {
+    module
+        .functions
+        .iter()
+        .map(|(_, function)| function)
+        .chain(module.entry_points.iter().map(|entry| &entry.function))
+}
+
+/// 本阶段入口可达的代码读到的 uniform 块成员（按成员名，即 `rewrite::block_member_name`），`module` 必须已通过校验、
+/// 已做过 compact（`compile` 里做，见下）。
 ///
 /// 判据是 naga IR 里的语法引用：从入口函数出发、沿 `Statement::Call` 可达的函数里，有语句（或被语句用到的表达式）
 /// 用到 `AccessIndex { base: GlobalVariable(块), index }`。所以：
@@ -125,8 +140,7 @@ pub fn compile(
 ///
 /// 匿名块（`uniform KbUniforms { … };`）没有实例名，GLSL 里只能按成员名引用，前端一律生成 `AccessIndex`
 /// （`GlobalLookupKind::BlockSelect`）；整块 `Load` 或把块指针传给函数的写法不会出现。
-fn read_members(module: &mut Module) -> BTreeSet<String> {
-    naga::compact::compact(module, naga::compact::KeepUnused::No);
+fn read_members(module: &Module) -> BTreeSet<String> {
     let mut read = BTreeSet::new();
     let Some((block, members)) = module.global_variables.iter().find_map(|(handle, var)| {
         let is_block = var.space == AddressSpace::Uniform
@@ -140,12 +154,7 @@ fn read_members(module: &mut Module) -> BTreeSet<String> {
     }) else {
         return read;
     };
-    let functions = module
-        .functions
-        .iter()
-        .map(|(_, function)| function)
-        .chain(module.entry_points.iter().map(|entry| &entry.function));
-    for function in functions {
+    for function in reachable_functions(module) {
         for (_, expression) in function.expressions.iter() {
             let Expression::AccessIndex { base, index } = *expression else {
                 continue;
@@ -159,6 +168,45 @@ fn read_members(module: &mut Module) -> BTreeSet<String> {
                 .and_then(|member| member.name.clone())
             {
                 read.insert(name);
+            }
+        }
+    }
+    read
+}
+
+/// 本阶段入口可达的代码读到的私有全局变量（按名字），`module` 必须已做过 compact（同 [`read_members`]）。
+///
+/// GLSL 前端把每个 `in` 声明做成同名的私有全局变量，入口包装函数（`front/glsl/functions.rs` 的 `add_entry_point`）先把入口参数
+/// `Store` 进去、再调用户的 `main`。所以顶点属性被读，就是有 `Load` 的指针沿 `AccessIndex` / `Access` 链回到这个全局变量：
+/// 读整个变量与 `.x` / `.xy` 这类分量是直接 `Load` 全局变量再取；下标写法（常量下标 `a[2]`、动态下标 `a[i]`、属性数组的元素）
+/// 是在全局变量的指针上建 `AccessIndex` / `Access` 链再 `Load`（单测 `inputs_read_follow_pointer_chains`）。包装函数对输入只有
+/// `Store`，不算。包装函数对输出（`gl_Position`、varying）的 `Load` 也会进结果，调用方只按属性名查。
+///
+/// 判据同 [`read_members`]：只在没被调用的函数里读、只在关掉的 `#if` 里读不算；结果没被用到的读仍算。WPE 的 fxc 会把这种读连同
+/// 输入一起从签名里删掉，我们多算被读，宿主只会多报（p5-REPORT「P5c 语义的实测核对」的缺属性一行）。
+fn inputs_read(module: &Module) -> BTreeSet<String> {
+    let mut read = BTreeSet::new();
+    for function in reachable_functions(module) {
+        for (_, expression) in function.expressions.iter() {
+            let Expression::Load { mut pointer } = *expression else {
+                continue;
+            };
+            let global = loop {
+                match function.expressions[pointer] {
+                    Expression::AccessIndex { base, .. } | Expression::Access { base, .. } => {
+                        pointer = base
+                    }
+                    Expression::GlobalVariable(global) => break Some(global),
+                    _ => break None,
+                }
+            };
+            let Some(var) = global.map(|global| &module.global_variables[global]) else {
+                continue;
+            };
+            if var.space == AddressSpace::Private {
+                if let Some(name) = &var.name {
+                    read.insert(name.clone());
+                }
             }
         }
     }
@@ -333,6 +381,62 @@ void main() { o = vec4(u_a + helper(), u_d.y, 0.0, 1.0); }
         // 没被调用的函数照样写进 WGSL：只改反射
         assert!(compiled.wgsl.contains("fn orphan"), "{}", compiled.wgsl);
         assert_eq!(compiled.block.len(), 4);
+    }
+
+    /// 输入属性：直接读、只读分量、在被 `main` 调用的函数里读都算；只声明、只在没被调用的函数里读不算。包装函数的 `Store` 不算读。
+    #[test]
+    fn inputs_read_follow_reachable_loads() {
+        let source = "#version 450
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec2 a_TexCoord;
+layout(location = 2) in vec3 a_Normal;
+layout(location = 3) in vec4 a_Color;
+layout(location = 4) in vec4 a_Tangent4;
+layout(location = 5) in vec4 a_BlendWeights;
+float helper() { return a_Normal.y; }
+float orphan() { return a_Tangent4.x; }
+void main() { gl_Position = vec4(a_Position, 1.0) * a_TexCoord.x * helper(); }
+";
+        let compiled = compile(Stage::Vertex, source, &BTreeMap::new())
+            .ok()
+            .expect("compiles");
+        assert!(compiled.inputs_read.contains("a_Position"));
+        assert!(compiled.inputs_read.contains("a_TexCoord"));
+        assert!(compiled.inputs_read.contains("a_Normal"));
+        for name in ["a_Color", "a_Tangent4", "a_BlendWeights"] {
+            assert!(!compiled.inputs_read.contains(name), "{name}");
+        }
+        // 没读的输入照样是入口参数：只改反射
+        assert!(
+            compiled.wgsl.contains("@location(3) a_Color"),
+            "{}",
+            compiled.wgsl
+        );
+    }
+
+    /// 在指针上取下标再 `Load` 的写法：GLSL 前端对 `.x`、`.xy` 这类分量是先整体 `Load` 再取（上一个用例），对下标写法则在全局变量的
+    /// 指针上建 `AccessIndex` / `Access` 链再 `Load`：常量下标取分量 `a_Const[2]`（`AccessIndex { base: GlobalVariable }`）、动态下标
+    /// `a_Dyn[i]`（`Access { base: GlobalVariable, index }`）、属性数组的元素再取分量 `a_Arr[1][2]`（两层 `AccessIndex`）。每个属性都只在
+    /// 这种写法里读，回溯链断了就会被漏掉。矩阵属性在 WebGPU 里不能做入口输入（naga 校验报错），属性表里也没有，不在这里。
+    #[test]
+    fn inputs_read_follow_pointer_chains() {
+        let source = "#version 450
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec4 a_Const;
+layout(location = 2) in vec4 a_Dyn;
+layout(location = 3) in vec4 a_Arr[2];
+layout(location = 5) in vec4 a_Unread;
+void main() {
+    gl_Position = vec4(a_Position, a_Const[2] + a_Dyn[gl_VertexIndex & 3] + a_Arr[1][2]);
+}
+";
+        let compiled = compile(Stage::Vertex, source, &BTreeMap::new())
+            .ok()
+            .expect("compiles");
+        for name in ["a_Position", "a_Const", "a_Dyn", "a_Arr"] {
+            assert!(compiled.inputs_read.contains(name), "{name}");
+        }
+        assert!(!compiled.inputs_read.contains("a_Unread"));
     }
 
     #[test]

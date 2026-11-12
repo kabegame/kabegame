@@ -15,13 +15,16 @@ import {
   type TargetKey,
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
-import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
+import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
+import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
 import { constantTargetFields, materialSlots } from "./materialValues";
 import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import {
   checkEffectFeatures,
   checkInstanceFeatures,
+  checkMdlFeatures,
+  checkMeshAttributes,
   checkModelFeatures,
   checkParticleFeatures,
   checkParticleInstance,
@@ -376,7 +379,8 @@ export interface SceneLayer {
   noPadding: boolean;
   /**
    * 对象 `perspective`（只认 JSON true，只在图像层上，P5b 步骤 1）：画到场景目标的绘制换成透视视图投影（`render/scene.ts`，
-   * p5-REPORT `p5b-persp`）。粒子、分组、声音等图层为 false。
+   * p5-REPORT `p5b-persp`）。模型对象同样取（P5c 步骤 1，`p5c-matrix` 实测和透视图层同一套，绘制在步骤 2）。粒子、分组、声音等
+   * 图层为 false。
    */
   perspective: boolean;
   /**
@@ -442,6 +446,38 @@ export interface SceneLayer {
    * 读不到字体材质时为 null；可选只是为了不动各处手写的测试图层，读的地方按 null 处理。
    */
   text?: SceneText | null;
+  /**
+   * 模型对象的静态网格（P5c 步骤 1，`compileModel`）；其它对象、`model` 不是字符串或 mdl 读不到时为 null。网格材质的 pass 在
+   * `model.meshes[m].passes` 里，不在上面的 `passes`。绘制在步骤 2 接上，之前另报 `model:pending`。可选同 `text`：不动各处手写的
+   * 测试图层，读的地方按 null 处理。
+   */
+  model?: SceneModel | null;
+}
+/** 模型的一个网格（P5c 步骤 1）：mdl 里的顶点 / 索引字节原样交给渲染器，不在 CPU 上重排。 */
+export interface SceneMesh {
+  /** 顶点格式（`mdl.ts` 的 `MDL_ATTRIBUTES` 的位），属性的偏移按表序算（`meshAttributes`）。 */
+  format: number;
+  stride: number;
+  /** mdl 文件缓冲上的视图（不拷贝；`transferableBuffers` 带上整个文件缓冲）。 */
+  vertices: Uint8Array;
+  indices: Uint8Array;
+  vertexCount: number;
+  indexFormat: "uint16" | "uint32";
+  indexCount: number;
+  /** 按 `skin` 选中的材质路径与它的 pass（语料都是一个 pass，多于一个报 `mdl:material-passes`）。 */
+  material: string;
+  passes: ScenePass[];
+}
+/** 模型对象（P5c 步骤 1，rea-p5-mesh 第 2 节）。 */
+export interface SceneModel {
+  /** 对象的 `model` 路径。 */
+  path: string;
+  version: number;
+  meshes: SceneMesh[];
+  /** 绘制顺序（网格下标，`meshDrawOrder`：不透明的在前，MSVC `std::sort`）。 */
+  order: number[];
+  /** 视锥剔除用的包围盒并集（`MdlFile.bounds`，min xyz、max xyz；v < 17 是 ±131072，等于不剔）。 */
+  bounds: number[];
 }
 export interface SceneBundle {
   general: SceneGeneral;
@@ -687,6 +723,12 @@ interface PassContext {
   particle?: ParticleSheetSystem;
   /** 字体着色器的 pass（P6b 1d）：程序检查放行 `TEXT_UNIFORMS`（MSDF 才读的 `g_RenderVar0–3`）。 */
   text?: boolean;
+  /**
+   * 模型网格的材质（P5c 步骤 1）：深度 / 剔除按 WPE 的缺省推（缺 `cullmode` 为 normal、缺 `depthtest` / `depthwrite` 为 enabled），
+   * 推出的值写进 `ScenePass`，能力检查走模型规则（`checkPassFeatures` 的 `model`）。静态网格不追加任何引擎 COMBO（rea-p5-mesh 2.4），
+   * 全局宏（`HDR`、`SCENE_ORTHO`）照常，所以着色器的编译和图像层同一条路。
+   */
+  model?: boolean;
 }
 
 /**
@@ -1100,10 +1142,94 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet;
   }
 
+  /** 解析过的 mdl，按规范化后的路径；读不到为 null。同一个 mdl 被多个对象引用时只读、只解析一次（3354366708 的两个圆环）。 */
+  const mdls = new Map<string, MdlFile | null>();
+  async function readMdl(path: string): Promise<MdlFile | null> {
+    const key = normalizeScenePath(path);
+    let file = mdls.get(key);
+    if (file === undefined) {
+      const read = await fs.read(key);
+      file = read && parseMdl(read.bytes);
+      mdls.set(key, file);
+    }
+    return file;
+  }
+
+  /**
+   * 模型对象（P5c 步骤 1，rea-p5-mesh 第 1、2 节，p5-REPORT「P5c 语义的实测核对」）：读 mdl、查能力，每个网格按对象的 `skin` 选一个
+   * 材质（`meshSkin`），走图像层同一条 `compilePass`（`model: true`：深度 / 剔除按 WPE 缺省推，静态网格不追加引擎 COMBO）；稳定键
+   * `objects/<i>/meshes/<m>/passes/<k>`。网格的顶点 / 索引字节是文件缓冲的视图，材质按对象各编一份（`skin` 可能不同）。
+   * 绘制顺序在这里排好（`meshDrawOrder`，看每个网格第一个 pass 的 blending）。
+   * 绘制没接上之前一律报过渡键 `model:pending`（`model` 不是字符串、mdl 读不到时也报），任何模型场景都不会因此解锁或改变画面。
+   */
+  async function compileModel(index: number, object: SceneObject, layer: SceneLayer): Promise<void> {
+    unsupported.add("model:pending");
+    // 只认 JSON true（P5b 透视图层那一套，`p5c-matrix` 实测模型相同）；绑属性等由能力表报 `object:perspective`
+    layer.perspective = object.perspective === true;
+    // 数字是脚本 `createModelData` 建的模型（rea 2.1），语料 0 个
+    const path: unknown = object.model;
+    if (typeof path !== "string") {
+      unsupported.add("model:id");
+      return;
+    }
+    const file = await readMdl(path);
+    if (!file) {
+      unsupported.add(`mdl:missing:${path}`);
+      return;
+    }
+    checkMdlFeatures(file, unsupported);
+    const skin = meshSkin(object.skin, file.skins);
+    const meshes: SceneMesh[] = [];
+    for (const [m, mesh] of file.meshes.entries()) {
+      if (settled()) break;
+      meshes.push(await compileMesh(index, m, mesh, mesh.materials[skin]));
+    }
+    const opaque = meshes.map((mesh) => ["normal", "alphatocoverage"].includes(mesh.passes[0]?.blending ?? ""));
+    layer.model = { path, version: file.version, meshes, order: meshDrawOrder(opaque), bounds: file.bounds };
+  }
+
+  /** 模型的一个网格：编选中的材质，按网格格式查程序读到的属性（`checkMeshAttributes`）。 */
+  async function compileMesh(
+    index: number,
+    m: number,
+    mesh: MdlMesh,
+    material: string | undefined,
+  ): Promise<SceneMesh> {
+    const out: SceneMesh = {
+      format: mesh.format,
+      stride: mesh.stride,
+      vertices: mesh.vertices,
+      indices: mesh.indices,
+      vertexCount: mesh.vertexCount,
+      indexFormat: mesh.indexFormat,
+      indexCount: mesh.indexCount,
+      material: material ?? "",
+      passes: [],
+    };
+    if (!material) {
+      unsupported.add("material:missing");
+      return out;
+    }
+    const text = await fs.text(material);
+    if (!text) {
+      unsupported.add(`material:missing:${material}`);
+      return out;
+    }
+    const { passes } = parseMaterial(text);
+    // 语料的模型材质都是一个 pass；多 pass 的网格 WPE 怎么画没测
+    if (passes.length > 1) unsupported.add("mdl:material-passes");
+    for (const [k, pass] of passes.entries()) {
+      const compiled = await compilePass(pass, { key: `objects/${index}/meshes/${m}/passes/${k}`, model: true });
+      if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
+      out.passes.push(compiled);
+    }
+    return out;
+  }
+
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
   async function compilePass(pass: MaterialPass, context: PassContext): Promise<ScenePass> {
     const issues = context.unsupported ?? unsupported;
-    checkPassFeatures(pass, issues);
+    checkPassFeatures(pass, issues, { model: context.model });
     const scope = context.scope ?? null;
     const names = (pass.textures ?? []).map(textureName);
     const slots: Record<number, number> = {};
@@ -1184,13 +1310,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
       program = addProgram(result);
     }
+    // 缺键：模型照 WPE 的缺省（材质 pass 字节缺省 0，rea-p5-mesh 3）；图像层、effect、粒子保持现状，P5d 和深度附件一起统一
     return {
       key: context.key,
       program,
       blending: pass.blending ?? "normal",
-      cullmode: pass.cullmode ?? "nocull",
-      depthtest: pass.depthtest ?? "disabled",
-      depthwrite: pass.depthwrite ?? "disabled",
+      cullmode: pass.cullmode ?? (context.model ? "normal" : "nocull"),
+      depthtest: pass.depthtest ?? (context.model ? "enabled" : "disabled"),
+      depthwrite: pass.depthwrite ?? (context.model ? "enabled" : "disabled"),
       textures: slots,
       runtime,
       uniforms: {
@@ -1435,11 +1562,17 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       passthrough: null,
       particle: null,
       text: null,
+      model: null,
     };
     // 每个对象都进 `layers`（分组节点、灯、粒子是没有 pass 的图层），子孙算世界矩阵与可见性时父的状态都在
     bundle.layers.push(layer);
     if (objectKind(object) === "particle") {
       await compileParticle(index, object, layer);
+      continue;
+    }
+    // 模型对象（P5c 步骤 1）：和粒子一样挂在图层上（`layer.model`），`effects` 不编译（能力表报 `model:effects`）
+    if (objectKind(object) === "model") {
+      await compileModel(index, object, layer);
       continue;
     }
     // 声音对象（P6a 步骤 1）：图层上只有变换，播放字段进声音表；可见性不影响播放（p6-REPORT `p6a-misc`）
@@ -1567,14 +1700,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   return bundle;
 }
 
+/** 交给主线程时转移的缓冲：纹理 mip 与 mdl 文件（网格的顶点 / 索引是它的视图，同一个 mdl 的对象共用一份），去重。 */
 export function transferableBuffers(bundle: SceneBundle): ArrayBuffer[] {
-  return [
-    ...new Set(
-      bundle.textures.flatMap((texture) =>
-        texture.mips
-          .map((mip) => mip.bytes?.buffer)
-          .filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer),
-      ),
+  const buffers = [
+    ...bundle.textures.flatMap((texture) => texture.mips.map((mip) => mip.bytes?.buffer)),
+    ...bundle.layers.flatMap(
+      (layer) => layer.model?.meshes.flatMap((mesh) => [mesh.vertices.buffer, mesh.indices.buffer]) ?? [],
     ),
   ];
+  return [...new Set(buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer))];
 }
