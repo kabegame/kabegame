@@ -756,6 +756,8 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 ## P11 — 音频、媒体与用户资源
 
+总计划见 [phase-11-audio-media.md](phase11/phase-11-audio-media.md)（2026-11-13）。按 173 张重算：75 张用到；只做 P11 解锁 0 张，P4–P10 先做完时 85 → 126（41 张只差 P11）。分四节：音频 uniform（频谱 P4e 已建、数组打包 P7 已做，只剩接线）、用户纹理、媒体、快捷方式；`usertextures` 的三种来源（属性文件、封面、快捷方式图标）照 WPE 并成一个「纹理来源」机制。下面是写总计划之前的原始范围。
+
 三类数据都来自场景外面，宿主只是接收方。
 - **音频：** `g_AudioSpectrum*` uniform（26 张）、`supportsaudioprocessing`。
   - 脚本 `engine.registerAudioBuffers` 已在 P3c 点 0 接上 `WpeMediaHub`。场景宿主本身是子 frame，uniform 直接用宿主收到的同一帧。这类 uniform 数组在翻译结果里是补齐过的 `vec4` 数组（见 P1-0）。
