@@ -464,8 +464,8 @@ export interface SceneLayer {
   text?: SceneText | null;
   /**
    * 模型对象的静态网格（P5c 步骤 1，`compileModel`）；其它对象、`model` 不是字符串或 mdl 读不到时为 null。网格材质的 pass 在
-   * `model.meshes[m].passes` 里，不在上面的 `passes`。绘制在步骤 2 接上，之前另报 `model:pending`。可选同 `text`：不动各处手写的
-   * 测试图层，读的地方按 null 处理。
+   * `model.meshes[m].passes` 里，不在上面的 `passes`。渲染图排成每个网格一个 `mesh` 步骤（P5c 步骤 2，`render/graph.ts` 的
+   * `planModelLayer`）。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
    */
   model?: SceneModel | null;
 }
@@ -1175,11 +1175,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    * 模型对象（P5c 步骤 1，rea-p5-mesh 第 1、2 节，p5-REPORT「P5c 语义的实测核对」）：读 mdl、查能力，每个网格按对象的 `skin` 选一个
    * 材质（`meshSkin`），走图像层同一条 `compilePass`（`model: true`：深度 / 剔除按 WPE 缺省推，静态网格不追加引擎 COMBO）；稳定键
    * `objects/<i>/meshes/<m>/passes/<k>`。网格的顶点 / 索引字节是文件缓冲的视图，材质按对象各编一份（`skin` 可能不同）。
-   * 绘制顺序在这里排好（`meshDrawOrder`，看每个网格第一个 pass 的 blending）。
-   * 绘制没接上之前一律报过渡键 `model:pending`（`model` 不是字符串、mdl 读不到时也报），任何模型场景都不会因此解锁或改变画面。
+   * 绘制顺序在这里排好（`meshDrawOrder`，看每个网格第一个 pass 的 blending）。绘制在 P5c 步骤 2 接上（`render/graph.ts` 的
+   * `planModelLayer`），步骤 1 的过渡键 `model:pending` 已去掉。
    */
   async function compileModel(index: number, object: SceneObject, layer: SceneLayer): Promise<void> {
-    unsupported.add("model:pending");
     // 只认 JSON true（P5b 透视图层那一套，`p5c-matrix` 实测模型相同）；绑属性等由能力表报 `object:perspective`
     layer.perspective = object.perspective === true;
     // 数字是脚本 `createModelData` 建的模型（rea 2.1），语料 0 个
@@ -1204,7 +1203,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     layer.model = { path, version: file.version, meshes, order: meshDrawOrder(opaque), bounds: file.bounds };
   }
 
-  /** 模型的一个网格：编选中的材质，按网格格式查程序读到的属性（`checkMeshAttributes`）。 */
+  /**
+   * 模型的一个网格：编选中的材质，按网格格式查程序读到的属性（`checkMeshAttributes`）。材质读 `_rt_FullFrameBuffer` 报
+   * `mdl:framebuffer`（P5c 步骤 2）：WPE 的模型绘制不拷快照（rea-p5-mesh 2.6 没有拷贝这一步），读到的是什么没测，语料 0 个。
+   */
   async function compileMesh(
     index: number,
     m: number,
@@ -1237,6 +1239,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     for (const [k, pass] of passes.entries()) {
       const compiled = await compilePass(pass, { key: `objects/${index}/meshes/${m}/passes/${k}`, model: true });
       if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
+      if (compiled.framebuffer) unsupported.add("mdl:framebuffer");
       out.passes.push(compiled);
     }
     return out;

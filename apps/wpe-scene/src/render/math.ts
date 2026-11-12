@@ -142,22 +142,39 @@ export function transformPoint(m: Mat4, x: number, y: number, z: number): [numbe
   ];
 }
 
-/** 法线矩阵：左上 3×3 的逆转置，列主序 9 个数；不可逆时退回单位阵。 */
+/** `fastInverseSqrt` 的位转换用的 4 字节暂存。 */
+const FLOAT_BITS = new DataView(new ArrayBuffer(4));
+
+/**
+ * WPE 的快速倒数平方根（rea-p5-mesh 2.3）：魔数 `0x5f375a86` 给初值，再一次牛顿迭代，全程 float32。迭代照 Quake 的写法
+ * `y · (1.5 − (0.5x · y) · y)`（C 的 `x2 * y * y` 左结合）：`p5c-matrix` 三个模型的 `g_NormalModelMatrix` 27 个值逐位相同；换成
+ * `0.5x · (y · y)` 或 `1.5y − …` 的结合方式有 1 ulp 的差（`ignore/p5/c2/nmm_variants.mjs`）。x 为 0 时得到一个很大的有限数，
+ * 乘回 0 分量仍是 0，不出 NaN（同 WPE）。
+ */
+export function fastInverseSqrt(x: number): number {
+  const f = Math.fround;
+  FLOAT_BITS.setFloat32(0, x, true);
+  FLOAT_BITS.setUint32(0, (0x5f375a86 - (FLOAT_BITS.getUint32(0, true) >>> 1)) >>> 0, true);
+  const y = FLOAT_BITS.getFloat32(0, true);
+  return f(y * f(1.5 - f(f(f(0.5 * x) * y) * y)));
+}
+
+/**
+ * 法线矩阵（`g_NormalModelMatrix`，P5c 步骤 2）：不是逆转置，是世界矩阵左上 3×3 的三个本地轴（列主序的三列，WPE 内存里的三行）各自
+ * 归一化（rea-p5-mesh 2.3，`0x1400d8840`）。长度平方按 float32 逐项累加，乘 `fastInverseSqrt`，结果取 float32。p5-REPORT「P5c 语义的
+ * 实测核对」：`p5c-matrix` 三个模型（3D 旋转、非均匀缩放、挂在带变换的父层下）逐位相同；精确归一化差 0.9e-3–1.7e-3（就是快速倒数平方根
+ * 的误差），逆转置差 0.4–0.67。WPE 的 uniform 写入函数是所有对象共用的，图像层光照路径（`genericimage2/3/4`）读到的也是它。
+ * 列主序 9 个数。
+ */
 export function normalMatrix(m: Mat4): number[] {
-  const [a, b, c, , d, e, f, , g, h, i] = m;
-  const det = a * (e * i - f * h) - d * (b * i - c * h) + g * (b * f - c * e);
-  if (!det || !Number.isFinite(det)) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
-  const k = 1 / det;
-  // 逆矩阵的转置 = 余子式矩阵 / det（列主序直接按余子式排）
-  return [
-    (e * i - f * h) * k,
-    (f * g - d * i) * k,
-    (d * h - e * g) * k,
-    (c * h - b * i) * k,
-    (a * i - c * g) * k,
-    (b * g - a * h) * k,
-    (b * f - c * e) * k,
-    (c * d - a * f) * k,
-    (a * e - b * d) * k,
-  ];
+  const f = Math.fround;
+  const out: number[] = [];
+  for (let c = 0; c < 3; c++) {
+    const x = m[c * 4],
+      y = m[c * 4 + 1],
+      z = m[c * 4 + 2];
+    const k = fastInverseSqrt(f(f(f(x * x) + f(y * y)) + f(z * z)));
+    out.push(f(x * k), f(y * k), f(z * k));
+  }
+  return out;
 }

@@ -374,8 +374,16 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
   it("全部场景编译、P1 / P2a 解锁、读取及请求次数有界", async () => {
     const translator = await Wpesl2wgsl.fromBytes(readFileSync(wasm));
     const rows: { sample: string; unsupported: string; calls: number; misses: number; bytes: number }[] = [];
-    // shimmering_particles：粒子档 1（P4a 步骤 5 解锁，真机核对由主会话做）
-    const unlocked = ["eagleflag", "deep_space", "beach", "razer_vortex", "razer_bedroom", "shimmering_particles"];
+    // shimmering_particles：粒子档 1（P4a 步骤 5 解锁，真机核对由主会话做）；retro：静态网格（P5c 步骤 2 解锁，真机核对由主会话做）
+    const unlocked = [
+      "eagleflag",
+      "deep_space",
+      "beach",
+      "razer_vortex",
+      "razer_bedroom",
+      "shimmering_particles",
+      "retro",
+    ];
     // 工坊样本：用户真机确认过（2026-11-07）。不是每台机器都订阅，所以不要求存在
     const workshopUnlocked = ["2077883354", "2077888249", "2418800402", "2833452727", "2961807954"];
     for (const name of [...unlocked, "razer_bedroom"])

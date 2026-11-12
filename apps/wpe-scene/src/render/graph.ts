@@ -53,6 +53,9 @@
  *   `[背景] → 普通字形 → [彩色字形]`；合成路径的基础 pass 是「清成背景色」（开了 `opaquebackground`）或 `composelayer_clearalpha`
  *   （`compose` 角色，读快照），之后字形画进同一张合成 RT，effect 链、passthrough 与上屏照图像层（上屏借 `basefont` 的 translucent，
  *   UV 内缩的分母是文字框的整数部分）。文本层的 effect 开关会改 `padding` 与文字框，切换走整场重编译，不预备变体。
+ * - **模型层**（P5c 步骤 2，`SceneLayer.model`，`planModelLayer`）：每个网格一个 `mesh` 步骤，顺序是编译期排好的 `model.order`（不透明在前，
+ *   MSVC `std::sort`），全部直接画到场景目标，和图像步骤、粒子同样按 `objects` 顺序。没有合成路径：WPE 的模型对象不读 `effects`（编译期报
+ *   `model:effects`），也没有 colorBlendMode 的上屏（rea-p5-mesh 2.6）。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
@@ -151,6 +154,22 @@ export interface TextStep {
   blending: string;
 }
 
+/**
+ * 模型图层的一次网格绘制（P5c 步骤 2，rea-p5-mesh 2.6、4.3）：几何是 mdl 的顶点与索引（`SceneMesh`，原样上传），带索引的三角形列表，直接
+ * 画到场景目标。矩阵同图像层直接上屏（`g_ModelMatrix` 是世界矩阵、不乘 `size`），颜色组固定为 1（`p5c-color`，`render/scene.ts`）。
+ * 剔除按 `pass.cullmode`（normal 剔背面、屏幕上逆时针为正面，`p5c-cull`），顶点布局按网格格式（`render/mesh.ts`）。
+ */
+export interface MeshStep {
+  kind: "mesh";
+  /** `layer.model.meshes` 的下标（步骤按 `model.order` 排）。 */
+  mesh: number;
+  pass: ScenePass;
+  target: { kind: "scene" };
+  /** 每个槽位的纹理来源（材质静态纹理，或 `_rt_FullFrameBuffer`）。 */
+  inputs: Record<number, TextureRef>;
+  blending: string;
+}
+
 /** 渲染图要的那部分排版结果（`text/layout.ts` 的 `TextLayout`）：有没有字形、文字框与合成 RT 尺寸。 */
 export interface TextPlanLayout {
   mesh: { glyphs: readonly unknown[]; colorGlyphs: readonly unknown[] } | null;
@@ -162,6 +181,7 @@ export type LayerStep =
   | DrawStep
   | ParticleStep
   | TextStep
+  | MeshStep
   | { kind: "snapshot" }
   /**
    * 整张拷贝（B6，D3D CopyResource）。`effect` 同 `DrawStep.effect`：effect 的 `copy` 命令是它的下标；fullscreen 的基础 pass
@@ -356,6 +376,34 @@ export function particleTreeWantsFramebuffer(particle: SceneParticle): boolean {
   return wanted;
 }
 
+/**
+ * 模型层的计划（P5c 步骤 2）：按 `model.order` 每个网格一个 `mesh` 步骤，画到场景目标，没有合成 RT。
+ * - 每个网格取 `passes[0]`；多于一个 pass 编译期已报 `mdl:material-passes`，这里同图像层、粒子另记 `render:multi-pass`（渲染器自查）。
+ *   没有 pass 的网格（材质读不到）跳过。
+ * - 运行时纹理只认 `_rt_FullFrameBuffer`：编译期已报 `mdl:framebuffer`（WPE 的模型绘制不拷快照，读到的是什么没测），所以这里不排快照
+ *   步骤，强制渲染时读到的是快照纹理此刻的内容；其余名字照报 `render:texture-rt:<名>`。
+ */
+export function planModelLayer(layer: Pick<SceneLayer, "model">): LayerPlan {
+  const reasons: string[] = [];
+  const steps: LayerStep[] = [];
+  const model = layer.model;
+  if (!model) return { composite: null, steps, reasons };
+  for (const m of model.order) {
+    const mesh = model.meshes[m];
+    const pass = mesh?.passes[0];
+    if (!pass) continue;
+    if (mesh.passes.length > 1) reasons.push("render:multi-pass");
+    const inputs: Record<number, TextureRef> = {};
+    for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+    for (const [slot, name] of Object.entries(pass.runtime)) {
+      if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+      else reasons.push(`render:texture-rt:${name}`);
+    }
+    steps.push({ kind: "mesh", mesh: m, pass, target: { kind: "scene" }, inputs, blending: pass.blending });
+  }
+  return { composite: null, steps, reasons };
+}
+
 export function planLayer(
   layer: SceneLayer,
   textures: readonly TextureSize[],
@@ -365,6 +413,8 @@ export function planLayer(
 ): LayerPlan {
   // 粒子对象没有图像 pass，也不编 effect（`compileScene`）
   if (layer.particle) return planParticleLayer(layer);
+  // 模型对象（P5c 步骤 2）同样没有图像 pass、不编 effect
+  if (layer.model) return planModelLayer(layer);
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   // 文本层（P6b 1d）：基础 pass 是字形，effect 链与上屏照图像层，上屏借 `basefont` 的 translucent
@@ -696,7 +746,9 @@ export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]
  */
 export function planSignature(plan: LayerPlan): string {
   const steps = plan.steps.map((step) =>
-    step.kind === "draw" || step.kind === "particles" || step.kind === "text" ? { ...step, pass: step.pass.key } : step,
+    step.kind === "draw" || step.kind === "particles" || step.kind === "text" || step.kind === "mesh"
+      ? { ...step, pass: step.pass.key }
+      : step,
   );
   return JSON.stringify({ composite: plan.composite, steps });
 }

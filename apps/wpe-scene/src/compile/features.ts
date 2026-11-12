@@ -41,7 +41,14 @@ import type { SceneScript } from "./scripts";
 import { scanScriptApi, scanScriptCallbacks, type ScriptApiScene } from "./scriptApi";
 import { SOUND_MODES, soundFlag } from "./sounds";
 import { TEXTURE_FORMATS } from "./tex";
-import { attributeSemantic, MDL_FORMAT_BITS, meshAttributes, semanticKey, type MdlFile } from "./mdl";
+import {
+  attributeSemantic,
+  attributeTypeMatches,
+  MDL_FORMAT_BITS,
+  meshAttributes,
+  semanticKey,
+  type MdlFile,
+} from "./mdl";
 
 export const SUPPORTED = {
   objects: ["image"],
@@ -641,7 +648,7 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * 粒子不再有总括键（步骤 5 删掉了 `particle:pending`）：不支持的用法都要由这些细分键挡住。
  *
  * 模型对象（P5c 步骤 1）不再整个报 `object:model`：mdl 与网格的用法由 `bundle.ts` 读到文件后按 `checkMdlFeatures`、
- * `checkMeshAttributes` 与模型 pass 的 `checkPassFeatures` 报，绘制接上之前另报过渡键 `model:pending`。对象上：
+ * `checkMeshAttributes` 与模型 pass 的 `checkPassFeatures` 报（P5c 步骤 2 接上绘制后去掉了过渡键 `model:pending`）。对象上：
  * - `MODEL_NEUTRAL_FLAGS` 中性，`perspective: true` 中性（和 P5b 的透视图层同一套，`p5c-matrix` 实测）；
  * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers`（W6）、`dependencies` 等照未知键报。
  */
@@ -861,16 +868,21 @@ export function checkMdlFeatures(file: MdlFile, unsupported: Set<string>): void 
  * （`p5c-attr` 的 M1、M4 照常画）。只看被读的属性（不带翻译器的 `unused`）：
  * - 读了网格没有的语义：WPE 建不出输入布局，画出来是未定义的值（M2、M5），报 `mdl:missing-attribute:<名>`；
  * - 声明了却没读的：fxc 把它从输入签名里去掉，正常画（M3；语料 fantasticcar、audiophile 的 `grid` 声明 `a_Normal` 但不读），不报，
- *   步骤 2 给 WebGPU 一个占位；
- * - 名字不在属性表里：`FUN_1400f4460` 只认表里的 26 个名字，别的没有 HLSL 语义，报 `mdl:attribute:<名>`。
+ *   渲染器给 WebGPU 一个占位（`render/mesh.ts` 的 `meshVertexLayout`）；
+ * - 名字不在属性表里：`FUN_1400f4460` 只认表里的 26 个名字，别的没有 HLSL 语义，报 `mdl:attribute:<名>`；
+ * - 分量类型和网格数据对不上（`mdl.ts` 的 `attributeTypeMatches`：`a_BlendIndices` 是 uint，其余 float；P5c 步骤 2）：报
+ *   `mdl:attribute-type:<名>`。语料 0 个，WPE 的 D3D11 输入布局遇到它怎么样没测；WebGPU 建管线是校验错误。
  */
 export function checkMeshAttributes(program: TranslateResult, format: number, unsupported: Set<string>): void {
-  const present = new Set(meshAttributes(format).map(semanticKey));
+  const present = new Map(meshAttributes(format).map((item) => [semanticKey(item), item]));
   for (const attribute of program.attributes ?? []) {
     if (attribute.unused) continue;
     const semantic = attributeSemantic(attribute.name);
+    const item = semantic === undefined ? undefined : present.get(semantic);
     if (!semantic) unsupported.add(`mdl:attribute:${attribute.name}`);
-    else if (!present.has(semantic)) unsupported.add(`mdl:missing-attribute:${attribute.name}`);
+    else if (!item) unsupported.add(`mdl:missing-attribute:${attribute.name}`);
+    else if (attribute.array !== undefined || !attributeTypeMatches(attribute.type, item))
+      unsupported.add(`mdl:attribute-type:${attribute.name}`);
   }
 }
 

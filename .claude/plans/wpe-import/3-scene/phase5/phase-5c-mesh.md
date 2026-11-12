@@ -351,3 +351,137 @@ Claude 独立验收：
 - **wasm 过时**：开工时工作区的翻译器 wasm（`8ed07a4…`）早于 `049420f0`（P7d 步骤 1），按当前源码重编后另有 4 张不带模型的场景少了 `constant:*` / `uniform:g_FrameTime`，那是 P7d 步骤 1 的效果，和本步无关（`diff-wasm.txt`）。工作区与 `bin/wasm` 的 wasm 后来被别的会话重编过。
 - **画面哈希没做**：验收时 dev 应用没在跑（CDP 不应答），不能代起。渲染器本步没改，非模型场景的编译结果只多一个值为 null 的 `model` 字段。
 - 子代理开工早期误跑过一次 `python - <<'EOF'`（heredoc 是空的，什么也没执行），违反了「禁止从标准输入喂 Python」。
+
+提交：`b2070b2f`（用户提交，核对过本步的改动与测过的版本逐行一致）。
+
+## 步骤 2 — 绘制
+
+### 思路
+
+模型图层在渲染图里排成「每个网格一个 `mesh` 步骤」，顺序取编译期排好的 `model.order`，全部直接画到场景目标，和图像层、粒子在同一个场景 pass 里按 `objects` 顺序混排。模型没有合成路径：WPE 的模型对象不读 `effects`（编译期已报 `model:effects`），也没有 colorBlendMode 的上屏。
+
+几何来自 mdl：顶点字节原样上传成一个顶点缓冲（同一个 mdl 的网格视图共用一份 GPU 缓冲，按视图去重），索引上传成索引缓冲（`writeBuffer` 要 4 字节对齐，u16 奇数个时补齐长度），`drawIndexed(indexCount)`，三角形列表。顶点布局不能用 `vertexPacking`（那是按着色器属性紧排、给图层四边形用的），新写一个按网格格式建的：stride 取 mdl 的，程序的每个属性按名字查语义，再在网格格式里找同一语义的那一项，偏移、格式（`float32xN` / `uint32x4`，宽度按数据）照它，`shaderLocation` 照程序。程序声明了、网格没有、而且没读（`unused`）的属性，接到一个 `arrayStride` 0 的全零占位缓冲上（WGSL 入口仍带这个 location，WebGPU 建管线要有）；读了的在编译期已报 `mdl:missing-attribute`，渲染器不会遇到。
+
+管线多两个维度：顶点布局（按网格格式区分）和剔除。模型 pass 的 `cullmode` 为 normal 时 `frontFace: "ccw"`、`cullMode: "back"`，nocull 时不剔；图像层、粒子、文本照旧不剔。`pipelineKey` 只在这两项出现时加后缀，现有管线的键逐字不变（同 P5b 加 `alphaMax` 的做法）。
+
+uniform 走图像层同一个函数，只换三处输入：颜色 (1, 1, 1)、alpha 1、颜色系数 1（WPE 不读模型的 `color` / `alpha` / `brightness`，`p5c-color`）；尺寸不参与（模型矩阵就是世界矩阵）；视图投影同图像层直接上屏（带视差、抖动、缩放，`perspective: true` 换透视那一份）。`g_NormalModelMatrix` 全局改成 WPE 的算法：世界矩阵 3×3 的三个本地轴各自归一化，长度平方按 float32 累加，用 `0x5f375a86` 快速倒数平方根加一次牛顿迭代（`p5c-matrix` 三个模型逐位到 1.2e-7）。WPE 的 uniform 写入函数是所有对象共用的，图像层光照路径读它，所以有光照的场景要过基线。
+
+视锥剔除每帧在画模型之前算一次：模型包围盒并集的两个角经世界矩阵（不含视差）变换，中点为球心、半对角线为半径，对场景视图投影（带抖动、缩放，不带每个对象的视差，WPE 在场景绘制开头算一次平面）的六个平面判断，球完全在某个平面外就整个模型不画。v < 17 的 ±131072 盒子等于不剔。
+
+### 现状锚点
+
+**a. 渲染图没有模型图层**（`render/graph.ts:346`）
+```ts
+export function planLayer(layer: SceneLayer, textures, enabled, text = null): LayerPlan {
+  if (layer.particle) return planParticleLayer(layer);
+  // …文本层…
+  const base = sceneText ? sceneText.glyphPass : layer.passes[0];
+  if (!base) return { composite: null, steps, reasons }; // 现状：模型图层没有 passes，是空计划
+```
+
+**b. 模型图层不建资源**（`render/scene.ts:670`）
+```ts
+      (layer.passes.length > 0 || (layer.particle?.passes.length ?? 0) > 0 || !!layer.text) && // 现状：不认 layer.model
+```
+
+**c. 管线的五项与键**（`render/scene.ts:545`、`render/programs.ts:308`）
+```ts
+export function pipelineKey({ program, blending, format, alpha, topology, alphaMax }: PipelineSpec): string {
+      primitive: { topology, cullMode: "none" }, // 现状：顶点布局取 program.vertexPacking，不剔除
+```
+
+**d. 法线矩阵是逆转置**（`render/math.ts:146`）
+```ts
+export function normalMatrix(m: Mat4): number[] { // 现状：左上 3×3 的逆转置；WPE 是三个轴各自归一化（快速倒数平方根）
+```
+
+**e. 编译期的过渡键**（`compile/bundle.ts` 的 `compileModel`）
+```ts
+    unsupported.add("model:pending"); // 现状：绘制接上之前一律退回
+```
+
+### 点 1 — 渲染图（`render/graph.ts`）
+- **新增** `MeshStep` 与 `planModelLayer(layer)`：
+```ts
+/** 模型图层的一次网格绘制（P5c 步骤 2）：mdl 的顶点 / 索引，三角形列表，直接画到场景目标。 */
+export interface MeshStep {
+  kind: "mesh";
+  /** `layer.model.meshes` 的下标（步骤按 `model.order` 排）。 */
+  mesh: number;
+  pass: ScenePass;
+  target: { kind: "scene" };
+  inputs: Record<number, TextureRef>;
+  blending: string;
+}
+```
+  - 每个网格取 `passes[0]`（多 pass 编译期已报），没有 pass 的网格跳过；运行时纹理只认 `_rt_FullFrameBuffer`（见点 4 的编译期键，渲染器不会遇到），其余照报 `render:texture-rt:<名>`。
+- **修改** `planLayer`：`layer.model` 非空时走 `planModelLayer`（在粒子之后、文本之前）。`LayerStep` 加 `MeshStep`。
+
+### 点 2 — 顶点布局与管线（`render/programs.ts`、新增 `render/mesh.ts`）
+- **新增** `meshVertexLayout(attributes, format)`：返回 `{ buffers: GPUVertexBufferLayout[]（网格一个、占位一个可选）, key, problems }`，规则见「思路」；类型（float / sint / uint）和数据对不上时进 `problems`（编译期另有键，见点 4）。
+- **新增** 网格 GPU 缓冲：顶点缓冲按 `vertices` 视图（`buffer` + `byteOffset` + `byteLength`）去重共用；索引缓冲按 4 字节补齐。
+- **修改** `createPipeline` 收可选的 `vertexBuffers` 与 `cull`；`PipelineSpec` 加 `mesh?: string`（布局键）与 `cull?: "back"`，`pipelineKey` 只在它们出现时加后缀。
+- **修改** `stepPipeline`：`mesh` 步骤用三角形列表、按 `pass.cullmode` 定剔除、按布局键区分。
+
+### 点 3 — 渲染器（`render/scene.ts`、`render/uniforms.ts`、`render/math.ts`）
+- **修改** `buildableLayers` 认 `layer.model`（有网格 pass 才建）；`uploadableTextures` 带上网格材质的纹理；自查（`planProblems`）对网格程序用 `meshVertexLayout` 的 `problems`。
+- **新增** `Draw.mesh`（顶点缓冲、索引缓冲、索引格式、索引数）；`createDraw` 的 `mesh` 分支；编码时 `setVertexBuffer(0, 网格)`、需要时 `setVertexBuffer(1, 占位)`、`setIndexBuffer`、`drawIndexed`。
+- **新增** 模型图层的视锥剔除（`render/layout.ts` 或 `mesh.ts` 的纯函数 `frustumCulled(bounds, world, viewProjection)`），编码时每帧判一次，被剔的整个模型跳过。
+- **修改** `uniformValues` 的 `mesh` 分支：同图像层直接上屏，图层状态的颜色换成 (1, 1, 1)、alpha 1、颜色系数 1；就地刷新（`refreshLayer`）、视差 / 相机重写照常经过它。
+- **修改** `normalMatrix`：改成 WPE 的算法（见「思路」），注释写依据。
+
+### 点 4 — 编译期（`compile/bundle.ts`、`compile/features.ts`）
+- **删除** `model:pending`。
+- **新增** 网格材质读 `_rt_FullFrameBuffer` 报 `mdl:framebuffer`（WPE 的模型绘制不拷快照，读到的是什么没测，语料 0 个）。
+- **新增** `checkMeshAttributes` 查类型：程序属性的分量类型（float / int / uint）和网格数据（`a_BlendIndices` uint，其余 float）对不上报 `mdl:attribute-type:<名>`（语料 0 个）。
+
+### 点 5 — 单测
+- `render/graph`：模型图层的步骤（顺序同 `model.order`、混合、输入、没有 pass 的网格跳过、没有合成 RT）。
+- `render/mesh`：`p5c-layout` 两种格式与 0x8009 的布局（偏移、格式、`shaderLocation` 按语义配对），同语义不同宽度（M1、M4），占位属性（M3），类型不符进 `problems`。
+- `render/math`：`normalMatrix` 对 `p5c-matrix` 三个模型的世界矩阵，和 WPE 实测值（`ignore/p5/c0/out/ana_c.txt`）逐项差 ≤ 2e-7。
+- 视锥剔除：`p5c-frustum3` 的 F1–F10 十个包围盒逐个得到 WPE 的结果（F1、F5、F7、F10 剔掉）。
+- `pipelineKey`：已有规格的键逐字不变，`mesh` / `cull` 各加后缀。
+- 编译：retro 不再报 `model:pending`；`mdl:framebuffer`、`mdl:attribute-type`。
+
+### 实施方式
+
+子代理在 HEAD 快照里实现（P9 的会话正在改工作区的 `render/scene.ts`、`renderer.ts`），我独立验收后三方合并。
+
+### 验收
+
+子代理：快照 tsc 0 错误；vitest 除已知的 `3830255100: 219 次请求` 外全过；Prettier。
+
+Claude 独立验收：
+1. 越界检查、自跑 tsc / vitest；变异：剔除方向反了、占位属性不接、法线矩阵改回精确归一化、视锥剔除用盒子不用球、网格顺序不按 `model.order`、模型颜色不固定为 1。
+2. 语料：retro 从 `model:pending` 变成能渲染（能渲染 47 → 48），其余模型场景只少 `model:pending`，不带模型的场景逐张相同。
+3. 确定性工程（`ignore/p5/proj/p5c-*`）在 Kabegame 里渲染、和 WPE 抓帧逐像素比：layout、ver、color、skin、matrix（含视差、缩放）、cull、frustum；attr 与 order 另生成不含会退回的对象的版本（M2 / M5、alphatocoverage）再抓、再比。depth 归 P5d，不比。
+4. retro：`kbp content unpack --instrument` 解包，WPE 按 2520×1080 抓帧，Kabegame 按日志里同一时刻回放，整帧比。
+5. 画面哈希基线：10 张基线场景 × 三档不变；另挑有光照的场景核对法线矩阵的变化（变了要能用 WPE 抓帧说明是对齐）。
+6. 三方合并进工作区，合并后再跑 tsc、vitest。
+
+### 步骤 2 实施记录（2026-11-13）
+
+子代理在 HEAD 快照（`b2070b2f`）里实现，我独立验收后合到 `ff4ad0e3`（中间 P9a 步骤 2、P6b 1d2、P8 步骤 1 改过 `render/scene.ts`，三处冲突都是两边各加一段，照两边都留解；P8 给 `SceneLayer` 加的 `clampUVs` / `noInterpolation` 在新测试的字面量里补上）。
+
+**和计划不一致或计划没写到的：**
+- **`render/state.ts`**：`SceneState.fromBundle` 原来不收集网格 pass 的材质常量，网格 draw 会丢掉 `constantshadervalues`（retro 的 `g_Tint`），属性绑定也写不进去，补上了。
+- **模型层整层一个 `model` op**：编码时先做视锥剔除，再按 `model.order` 画各网格；顶点缓冲放在原有的 `Draw.vertexBuffer`，`Draw.mesh` 存索引缓冲、格式、个数与占位缓冲。网格缓冲按「文件缓冲 + 用途 + 偏移 + 长度」去重共用，图层重建时不释放、随场景销毁。
+- **占位缓冲**：全场一份 256 字节的全零缓冲，每个占位属性占 16 字节，格式按着色器自己的类型。读了的缺属性（编译期已报）也接占位，强制渲染时读到 0。
+- **法线矩阵的运算顺序**：牛顿迭代照 Quake 原式 `y·(1.5 − ((0.5x·y)·y))`，对 WPE 实测的 `g_ModelMatrix` 输入，三个模型 27 个值逐位相同（`ignore/p5/c2/nmm_variants.mjs`）；步骤 0 分析脚本的写法 `0.5x·(y·y)` 差 1 ulp。
+- **新增 `attributeTypeMatches`**（`compile/mdl.ts`）：着色器属性类型能不能读这项网格数据的唯一一处规则，编译期 `mdl:attribute-type` 与渲染器的布局共用。
+- **组里的模型不剔**：组里的模型照报 `model:passthrough:children:model`，只有强制渲染才到这里，WPE 在组里用哪组平面没测。
+- `compile/pipeline.test.ts` 的 `unlocked` 加上 retro。
+
+**验收：**
+- 越界：快照对 HEAD 的差异只在计划内的文件（加上 `render/state.ts`）。
+- 快照与合并树：tsc 0 错误；vitest 合并树 2319 通过，只有已知的 `3830255100: 219 次请求`；Prettier 通过；合并后的工作区 tsc 0 错误。
+- 变异（`ignore/p5/c2/mutate_s2.py`）14 处全部检出、还原后整树哈希一致：正面换成顺时针、normal 不剔、不接占位、法线矩阵改回精确归一化、视锥剔除半径为 0、不做视锥剔除、网格不按 `model.order`、模型颜色不固定为 1、索引不补齐、管线键不带剔除、属性偏移取 0、类型不符不报、又报 `model:pending`、不收集网格材质常量。
+- 语料（配同一份 wasm 的对照）：只有 13 张模型场景少了 `model:pending`，retro 变成能渲染，其余逐张相同（`b2070b2f` 上 47 → 48，`ff4ad0e3` 上 48 → 49）。
+- 画面哈希：合并前后各构建一次宿主，10 张基线场景 × 三档全部相同。语料里能渲染的场景没有一张有打开 `LIGHTING` 的图像层（`ignore/p5/c2/lit_scenes.py`、`lit_where.py`：`LIGHTING` 只出现在透视场景的模型材质和一个流体 effect 里），所以全局改法线矩阵对现有画面中性。
+- **真机对 WPE**（dev 应用渲染、按 WPE 抓帧日志回放、`kbp cmp frame --kbp-layers`）：
+  - `p5c-layout`、`p5c-attr-ok`（M1 / M3 / M4）、`p5c-ver`、`p5c-color`、`p5c-skin`、`p5c-matrix`、`p5c-matrix-par`、`p5c-matrix-zoom`、`p5c-order-ok`、`p5c-cull`：整帧逐像素相同（差 0）；
+  - `p5c-frustum3`（1600×900 窗口）：画了的方块与 WPE 相同（F2、F3、F4、F6、F8、F9，剔掉 F1、F5、F7、F10），只有 6 个方块一圈边缘差（我们按 1920×1080 画再缩放）；
+  - retro（2520×1080、按日志回放到第 199 帧）：整帧最大差 1（1171 个像素差 1）。
+  - `p5c-attr-ok`、`p5c-order-ok` 是去掉了编译期会退回的对象（M2 / M5 读了缺的属性、alphatocoverage）的对照版，另抓了 WPE 帧（`A:\p5c\p5c-attr-ok`、`p5c-order-ok`）。`p5c-depth` 归 P5d，不比。
+- **wasm**：工作区里给宿主打包的翻译器 wasm（`d3ed5a82`，别的会话早先编的）不带属性的 `unused`，`p5c-attr-ok` 的 M3 因此误报 `mdl:missing-attribute:a_Normal`；按当前源码重编（`deno task build:wpesl2wgsl`，`ba25b097`，和快照测试用的同一份）拷进 `apps/wpe-scene/src/wpesl2wgsl/` 后不再报，画面不变。
+

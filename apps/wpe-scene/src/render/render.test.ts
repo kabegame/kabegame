@@ -98,12 +98,14 @@ describe("矩阵", () => {
     close(ndc(p, 0, 0, 100), [-1, -1, 0]);
     close(ndc(p, 0, 0, -100), [-1, -1, 1]);
   });
-  it("法线矩阵是左上 3×3 的逆转置", () => {
-    close(normalMatrix(scaling(2, 4, 1)), [0.5, 0, 0, 0, 0.25, 0, 0, 0, 1]);
+  it("法线矩阵是左上 3×3 的三个轴各自归一化（P5c 步骤 2，WPE 的快速倒数平方根，误差约 0.2%；逐位对照见 `p5c-mesh.test.ts`）", () => {
+    // 不是逆转置：缩放 (2, 4, 1) 归一化后每个轴长度约 1
+    close(normalMatrix(scaling(2, 4, 1)), [1, 0, 0, 0, 1, 0, 0, 0, 1], 2);
     const r = normalMatrix(rotationZ(0.7));
     close(
       r,
       Array.from(rotationZ(0.7)).filter((_, i) => i % 4 < 3 && i < 12),
+      2,
     );
   });
 });

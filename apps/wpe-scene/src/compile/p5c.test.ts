@@ -1,22 +1,31 @@
 /**
- * P5c 步骤 1 的编译侧单测（`.claude/plans/wpe-import/3-scene/phase5/phase-5c-mesh.md`「步骤 1」点 3、点 4、点 5）：
- * - 模型对象进 `layer.model`（网格的顶点 / 索引视图、格式、stride、索引宽度、按 `skin` 选的材质 pass、绘制顺序、包围盒），报过渡键
- *   `model:pending`、不再报 `object:model`；同一个 mdl 被两个对象引用时只读一次、缓冲共用，材质各编一份；`transferableBuffers` 带上 mdl；
+ * P5c 步骤 1、2 的编译侧单测（`.claude/plans/wpe-import/3-scene/phase5/phase-5c-mesh.md`「步骤 1」点 3、点 4、点 5，「步骤 2」点 4、点 5）：
+ * - 模型对象进 `layer.model`（网格的顶点 / 索引视图、格式、stride、索引宽度、按 `skin` 选的材质 pass、绘制顺序、包围盒），不报
+ *   `object:model`；步骤 2 接上绘制后过渡键 `model:pending` 去掉了，静态网格不报任何键；同一个 mdl 被两个对象引用时只读一次、缓冲共用，
+ *   材质各编一份；`transferableBuffers` 带上 mdl；
  * - 模型 pass 的深度 / 剔除按 WPE 缺省推（缺 `cullmode` = normal、缺 `depthtest` / `depthwrite` = enabled），会写深度的报
  *   `depthwrite:enabled`，只测不写的中性；图像层的缺省和检查不变；
- * - `mdl:missing-attribute` 只对读了的属性报（真翻译器，`p5c-attr` 的 M1–M5）；
- * - `mdl:*` 各键、`model:id`、`model:effects`、模型在组里（`model:passthrough:children:model`）；`castshadow` 等在模型上中性、在图像层上照报。
+ * - `mdl:missing-attribute` 只对读了的属性报（真翻译器，`p5c-attr` 的 M1–M5）；分量类型对不上报 `mdl:attribute-type`（步骤 2）；
+ * - `mdl:*` 各键（步骤 2 加 `mdl:framebuffer`）、`model:id`、`model:effects`、模型在组里（`model:passthrough:children:model`）；
+ *   `castshadow` 等在模型上中性、在图像层上照报；
+ * - 本机有 WPE 时 retro 不再报任何键（步骤 2 解锁）。
  * 依据是 p5-REPORT「P5c 语义的实测核对」。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, transferableBuffers, type SceneBundle } from "./bundle";
-import { checkMdlFeatures, checkObjectFeatures, checkPassFeatures, groupChildIssues } from "./features";
+import {
+  checkMdlFeatures,
+  checkMeshAttributes,
+  checkObjectFeatures,
+  checkPassFeatures,
+  groupChildIssues,
+} from "./features";
 import type { SceneReader } from "./fs";
 import { mdlStride, parseMdl } from "./mdl";
 import type { MaterialPass, SceneObject } from "./model";
-import { Wpesl2wgsl } from "../wpesl2wgsl";
+import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -140,9 +149,9 @@ const modelObject = (id: number, extra: Record<string, unknown> = {}) => ({
 });
 
 describe("compileScene：模型对象进 layer.model（P5c 步骤 1 点 3）", () => {
-  it("网格的格式、stride、顶点 / 索引、材质 pass、顺序与包围盒；报 model:pending、不报 object:model", async () => {
+  it("网格的格式、stride、顶点 / 索引、材质 pass、顺序与包围盒；静态网格不报任何键（不报 object:model / model:pending）", async () => {
     const bundle = await compileModels([modelObject(1)]);
-    expect(bundle.unsupported).toEqual(["model:pending"]);
+    expect(bundle.unsupported).toEqual([]);
     const [layer] = bundle.layers;
     expect(layer.passes).toEqual([]);
     expect(layer.perspective).toBe(false);
@@ -166,16 +175,23 @@ describe("compileScene：模型对象进 layer.model（P5c 步骤 1 点 3）", (
     expect(mixed.layers[1].model).not.toBeNull();
   });
 
-  it("快速路径：第一个模型对象就确定退回（model:pending 先报，网格不再编）", async () => {
-    const bundle = await compileModels([modelObject(1), modelObject(2)], {}, { exhaustive: false });
-    expect(bundle.unsupported).toEqual(["model:pending"]);
-    expect(bundle.layers).toHaveLength(1);
-    expect(bundle.layers[0].model?.meshes).toEqual([]);
+  it("快速路径：静态网格照常编完；mdl 带骨骼段时确定退回，网格不再编、后面的对象不再编", async () => {
+    const statics = await compileModels([modelObject(1), modelObject(2)], {}, { exhaustive: false });
+    expect(statics.unsupported).toEqual([]);
+    expect(statics.layers.map((layer) => layer.model?.meshes.length)).toEqual([1, 1]);
+    const skeleton = await compileModels(
+      [modelObject(1), modelObject(2)],
+      { "models/a.mdl": mdl([{ materials: ["materials/a.json"] }], { sections: ["MDLS0004"] }) },
+      { exhaustive: false },
+    );
+    expect(skeleton.unsupported).toEqual(["mdl:skeleton"]);
+    expect(skeleton.layers).toHaveLength(1);
+    expect(skeleton.layers[0].model?.meshes).toEqual([]);
   });
 
   it("perspective: true 落到图层上（和透视图层同一套，p5c-matrix），不报", async () => {
     const bundle = await compileModels([modelObject(1, { perspective: true })]);
-    expect(bundle.unsupported).toEqual(["model:pending"]);
+    expect(bundle.unsupported).toEqual([]);
     expect(bundle.layers[0].perspective).toBe(true);
   });
 
@@ -199,7 +215,7 @@ describe("compileScene：模型对象进 layer.model（P5c 步骤 1 点 3）", (
       "materials/red.json",
     ]);
     // `skin` 在模型上中性
-    expect(bundle.unsupported).toEqual(["model:pending"]);
+    expect(bundle.unsupported).toEqual([]);
   });
 
   it("同一个 mdl 两个对象：只读一次、缓冲共用，材质按对象各编一份；transferableBuffers 带上它一次", async () => {
@@ -245,46 +261,53 @@ describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、
     const { pass, unsupported } = await passOf({ blending: "translucent" });
     expect(pass).toMatchObject({ cullmode: "normal", depthtest: "enabled", depthwrite: "enabled" });
     // translucent 不写深度：只测不写，中性
-    expect(unsupported).toEqual(["model:pending"]);
+    expect(unsupported).toEqual([]);
   });
 
   it("会写深度（normal / alphatocoverage，没关测试、没关写入）报 depthwrite:enabled，留给 P5d", async () => {
-    expect((await passOf({ blending: "normal" })).unsupported).toEqual(["depthwrite:enabled", "model:pending"]);
-    expect((await passOf({})).unsupported).toEqual(["depthwrite:enabled", "model:pending"]);
-    expect((await passOf({ blending: "normal", depthwrite: "enabled" })).unsupported).toEqual([
-      "depthwrite:enabled",
-      "model:pending",
-    ]);
+    expect((await passOf({ blending: "normal" })).unsupported).toEqual(["depthwrite:enabled"]);
+    expect((await passOf({})).unsupported).toEqual(["depthwrite:enabled"]);
+    expect((await passOf({ blending: "normal", depthwrite: "enabled" })).unsupported).toEqual(["depthwrite:enabled"]);
     expect((await passOf({ blending: "alphatocoverage" })).unsupported).toEqual([
       "blend:alphatocoverage",
       "depthwrite:enabled",
-      "model:pending",
     ]);
   });
 
   it("只测不写、不测：中性", async () => {
-    expect((await passOf({ blending: "normal", depthwrite: "disabled" })).unsupported).toEqual(["model:pending"]);
-    expect((await passOf({ blending: "normal", depthtest: "disabled" })).unsupported).toEqual(["model:pending"]);
-    expect((await passOf({ blending: "additive", depthwrite: "enabled" })).unsupported).toEqual(["model:pending"]);
+    expect((await passOf({ blending: "normal", depthwrite: "disabled" })).unsupported).toEqual([]);
+    expect((await passOf({ blending: "normal", depthtest: "disabled" })).unsupported).toEqual([]);
+    expect((await passOf({ blending: "additive", depthwrite: "enabled" })).unsupported).toEqual([]);
     // retro 的 bgfade：translucent、缺 depthtest、depthwrite disabled、nocull
     const retro = await passOf({ blending: "translucent", depthwrite: "disabled", cullmode: "nocull" });
-    expect(retro.unsupported).toEqual(["model:pending"]);
+    expect(retro.unsupported).toEqual([]);
     expect(retro.pass).toMatchObject({ cullmode: "nocull", depthtest: "enabled", depthwrite: "disabled" });
   });
 
   it("cullmode 只认 normal / nocull，depthtest 只认 enabled / disabled，其余照报", async () => {
     const cull = await passOf({ blending: "translucent", cullmode: "normal" });
-    expect(cull.unsupported).toEqual(["model:pending"]);
+    expect(cull.unsupported).toEqual([]);
     expect(cull.pass.cullmode).toBe("normal");
-    expect((await passOf({ blending: "translucent", cullmode: "front" })).unsupported).toEqual([
-      "cull:front",
-      "model:pending",
-    ]);
-    expect((await passOf({ blending: "translucent", depthtest: "enabled" })).unsupported).toEqual(["model:pending"]);
+    expect((await passOf({ blending: "translucent", cullmode: "front" })).unsupported).toEqual(["cull:front"]);
+    expect((await passOf({ blending: "translucent", depthtest: "enabled" })).unsupported).toEqual([]);
     expect((await passOf({ blending: "translucent", depthtest: "greater" })).unsupported).toEqual([
       "depthtest:greater",
-      "model:pending",
     ]);
+  });
+
+  it("网格材质读 _rt_FullFrameBuffer：mdl:framebuffer（P5c 步骤 2，WPE 的模型绘制不拷快照）；图像层不报这个键", async () => {
+    const framebuffer = material({ blending: "translucent", textures: ["_rt_FullFrameBuffer"] });
+    const model = await compileModels([modelObject(1)], { "materials/a.json": framebuffer });
+    expect(model.unsupported).toEqual(["mdl:framebuffer"]);
+    expect(model.layers[0].model!.meshes[0].passes[0]).toMatchObject({
+      framebuffer: true,
+      runtime: { 0: "_rt_FullFrameBuffer" },
+    });
+    const image = await compileModels([{ id: 1, image: "models/i.json" }], {
+      "models/i.json": JSON.stringify({ material: "materials/a.json" }),
+      "materials/a.json": framebuffer,
+    });
+    expect(image.unsupported).toEqual([]);
   });
 
   it("图像层的缺省与检查不变：缺键按 nocull / disabled，normal 缺深度键不报", () => {
@@ -367,12 +390,99 @@ describe.skipIf(!existsSync(wasm))("mdl:missing-attribute：只对读了的属�
       },
       { translator },
     );
-    expect(bundle.unsupported).toEqual([...expected, "model:pending"].sort());
+    expect(bundle.unsupported).toEqual([...expected].sort());
     const program = bundle.programs[bundle.layers[0].model!.meshes[0].passes[0].program!];
     expect(program.ok).toBe(true);
     // M3：翻译器把声明了没读的属性标 unused
     if (name.startsWith("M3")) expect(program.attributes?.find((item) => item.name === "a_Normal")?.unused).toBe(true);
   });
+});
+
+describe("checkMeshAttributes：分量类型（P5c 步骤 2，mdl:attribute-type）", () => {
+  const keys = (attributes: { name: string; type: string; unused?: boolean; array?: number }[], format: number) => {
+    const out = new Set<string>();
+    const program = {
+      ok: true,
+      attributes: attributes.map((item, location) => ({ location, ...item })),
+    } as unknown as TranslateResult;
+    checkMeshAttributes(program, format, out);
+    return [...out].sort();
+  };
+  // 0x800009：位置 + uv + BlendIndices（u32×4）
+  const SKINNED = 0x800009;
+
+  it("uint 读 a_BlendIndices、float 读其余：不报；宽度不同（M1、M4）不报", () => {
+    expect(
+      keys(
+        [
+          { name: "a_Position", type: "vec3" },
+          { name: "a_TexCoordVec4", type: "vec4" },
+          { name: "a_BlendIndices", type: "uvec4" },
+        ],
+        SKINNED,
+      ),
+    ).toEqual([]);
+    expect(keys([{ name: "a_PositionVec4", type: "vec4" }], 0x9)).toEqual([]);
+  });
+
+  it("读了、类型对不上：mdl:attribute-type（float 读 u32、uint 读 float、int、矩阵、数组）", () => {
+    expect(keys([{ name: "a_BlendIndices", type: "vec4" }], SKINNED)).toEqual(["mdl:attribute-type:a_BlendIndices"]);
+    expect(keys([{ name: "a_BlendIndices", type: "ivec4" }], SKINNED)).toEqual(["mdl:attribute-type:a_BlendIndices"]);
+    expect(keys([{ name: "a_TexCoord", type: "uvec2" }], 0x9)).toEqual(["mdl:attribute-type:a_TexCoord"]);
+    expect(keys([{ name: "a_Position", type: "mat3" }], 0x9)).toEqual(["mdl:attribute-type:a_Position"]);
+    expect(keys([{ name: "a_TexCoord", type: "vec2", array: 2 }], 0x9)).toEqual(["mdl:attribute-type:a_TexCoord"]);
+  });
+
+  it("没读的不报（渲染器接占位）；网格没有的照旧报 mdl:missing-attribute", () => {
+    expect(keys([{ name: "a_BlendIndices", type: "vec4", unused: true }], SKINNED)).toEqual([]);
+    expect(keys([{ name: "a_BlendIndices", type: "uvec4" }], 0x9)).toEqual(["mdl:missing-attribute:a_BlendIndices"]);
+  });
+});
+
+const root = process.env.KABEGAME_WPE_ROOT;
+const retro = root ? join(root, "projects", "defaultprojects", "retro") : "";
+/** 磁盘读取（本机语料），同 `p2a.test.ts` 的 `fsReader`。 */
+const diskReader: SceneReader = {
+  async readWhole(path) {
+    try {
+      return new Uint8Array(readFileSync(path));
+    } catch {
+      throw new TypeError("Failed to fetch");
+    }
+  },
+  async readRange(path, start, end) {
+    try {
+      return new Uint8Array(readFileSync(path).subarray(start, end));
+    } catch {
+      throw new TypeError("Failed to fetch");
+    }
+  },
+};
+
+describe.skipIf(!root || !existsSync(retro) || !existsSync(wasm))("本机语料：retro（P5c 步骤 2 解锁）", () => {
+  it("不再报任何键；bgfade 是一个模型层、一个网格，pass 是 translucent / nocull / 测不写", async () => {
+    const bundle = await compileScene({
+      projectDir: retro,
+      sceneAssets: [join(root!, "assets")],
+      reader: diskReader,
+      translator: await Wpesl2wgsl.fromBytes(readFileSync(wasm)),
+      postprocess: "disabled",
+      exhaustive: true,
+    });
+    expect(bundle.unsupported).toEqual([]);
+    const models = bundle.layers.filter((layer) => layer.model);
+    expect(models.map((layer) => [layer.object, layer.model!.path, layer.model!.version])).toEqual([
+      [0, "models/bgfade/bgfade.mdl", 14],
+    ]);
+    const [mesh] = models[0].model!.meshes;
+    expect(mesh).toMatchObject({ format: 0x9, stride: 20, indexCount: 6 });
+    expect(mesh.passes[0]).toMatchObject({
+      blending: "translucent",
+      cullmode: "nocull",
+      depthtest: "enabled",
+      depthwrite: "disabled",
+    });
+  }, 60000);
 });
 
 // ———— 能力表 ————
@@ -422,7 +532,7 @@ describe("compileScene：模型的细分键（点 3、点 4）", () => {
           "models/a.mdl": mdl([{ materials: ["materials/a.json"] }], { sections: ["MDLS0004"] }),
         })
       ).unsupported,
-    ).toEqual(["mdl:skeleton", "model:pending"]);
+    ).toEqual(["mdl:skeleton"]);
     const twoPasses = JSON.stringify({
       passes: [
         { shader: "s", blending: "translucent" },
@@ -430,7 +540,7 @@ describe("compileScene：模型的细分键（点 3、点 4）", () => {
       ],
     });
     const bundle = await compileModels([modelObject(1)], { "materials/a.json": twoPasses });
-    expect(bundle.unsupported).toEqual(["mdl:material-passes", "model:pending"]);
+    expect(bundle.unsupported).toEqual(["mdl:material-passes"]);
     expect(bundle.layers[0].model!.meshes[0].passes.map((pass) => pass.key)).toEqual([
       "objects/0/meshes/0/passes/0",
       "objects/0/meshes/0/passes/1",
@@ -439,20 +549,20 @@ describe("compileScene：模型的细分键（点 3、点 4）", () => {
 
   it("mdl 读不到：mdl:missing:<路径>；材质读不到：material:missing:<路径>；model 不是字符串：model:id", async () => {
     const missing = await compileModels([modelObject(1, { model: "models/none.mdl" })]);
-    expect(missing.unsupported).toEqual(["mdl:missing:models/none.mdl", "model:pending"]);
+    expect(missing.unsupported).toEqual(["mdl:missing:models/none.mdl"]);
     expect(missing.layers[0].model).toBeNull();
     const noMaterial = await compileModels([modelObject(1)], {
       "models/a.mdl": mdl([{ materials: ["materials/x.json"] }]),
     });
-    expect(noMaterial.unsupported).toEqual(["material:missing:materials/x.json", "model:pending"]);
+    expect(noMaterial.unsupported).toEqual(["material:missing:materials/x.json"]);
     expect(noMaterial.layers[0].model!.meshes[0]).toMatchObject({ material: "materials/x.json", passes: [] });
     const id = await compileModels([modelObject(1, { model: 3 })]);
-    expect(id.unsupported).toEqual(["model:id", "model:pending"]);
+    expect(id.unsupported).toEqual(["model:id"]);
   });
 
   it("模型带 effect：model:effects（不编译）", async () => {
     const bundle = await compileModels([modelObject(1, { effects: [{ file: "effects/tint/effect.json" }] })]);
-    expect(bundle.unsupported).toEqual(["model:effects", "model:pending"]);
+    expect(bundle.unsupported).toEqual(["model:effects"]);
     expect(bundle.layers[0].effects).toEqual([]);
   });
 
@@ -466,7 +576,7 @@ describe("compileScene：模型的细分键（点 3、点 4）", () => {
       },
     );
     expect(bundle.layers[1].group).toBe(0);
-    expect(bundle.unsupported).toEqual(["model:passthrough:children:model", "model:pending"]);
+    expect(bundle.unsupported).toEqual(["model:passthrough:children:model"]);
     expect(
       groupChildIssues({
         passthroughModel: false,

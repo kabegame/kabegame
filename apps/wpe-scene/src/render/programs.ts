@@ -50,7 +50,7 @@ export function groupBlendState(mode: string | null): GPUBlendState {
   return { color, alpha: { operation: "max", srcFactor: "one", dstFactor: "one" } };
 }
 
-interface AttributeFormat {
+export interface AttributeFormat {
   format: GPUVertexFormat;
   components: number;
   kind: "f32" | "i32" | "u32";
@@ -121,6 +121,18 @@ export interface VertexPacking {
 }
 
 /**
+ * 一个属性占几个连续 location、每个的格式：矩阵 / 数组按列（元素）展开（`vertexPacking` 与网格的 `meshVertexLayout` 共用）。类型不认识时
+ * 为 null（调用方报 `render:attribute:<名>:<类型>`）。
+ */
+export function attributeColumns(
+  attribute: Pick<InterfaceVariable, "type" | "array">,
+): { info: AttributeFormat; columns: number } | null {
+  const mat = /^mat(\d)$/.exec(attribute.type);
+  const info = mat ? ATTRIBUTE_FORMATS[`vec${mat[1]}`] : ATTRIBUTE_FORMATS[attribute.type];
+  return info ? { info, columns: (mat ? Number(mat[1]) : 1) * (attribute.array ?? 1) } : null;
+}
+
+/**
  * 按 `attributes` 的 name → location 建交错顶点布局；矩阵 / 数组属性按列（元素）展开成连续 location。`stepMode`：翻译结果带
  * `geometry`（几何着色器展开，P4d 步骤 1）时按实例步进（每次几何着色器调用一个实例），其余按顶点。
  */
@@ -131,10 +143,9 @@ export function vertexPacking(
   const packed: PackedAttribute[] = [];
   let offset = 0;
   for (const attribute of attributes) {
-    const mat = /^mat(\d)$/.exec(attribute.type);
-    const info = mat ? ATTRIBUTE_FORMATS[`vec${mat[1]}`] : ATTRIBUTE_FORMATS[attribute.type];
-    if (!info) throw new SceneRenderError([`render:attribute:${attribute.name}:${attribute.type}`]);
-    const columns = (mat ? Number(mat[1]) : 1) * (attribute.array ?? 1);
+    const slots = attributeColumns(attribute);
+    if (!slots) throw new SceneRenderError([`render:attribute:${attribute.name}:${attribute.type}`]);
+    const { info, columns } = slots;
     for (let column = 0; column < columns; column++) {
       packed.push({ name: attribute.name, location: attribute.location + column, offset, info, column });
       offset += info.components * 4;
@@ -278,6 +289,9 @@ export async function createProgram(
  * 画进合成 RT / fbo 时为 true（合成链要带着 alpha 走到上屏那一步）。`topology`：图层四边形是三角形带，
  * 粒子是带索引的三角形列表（每粒子 `0 1 2 0 2 3`，P4a 步骤 4）；rope（几何着色器展开，P4d 步骤 1）是三角形带，每段一个实例，
  * 实例之间本来就断开，和 WPE 每次几何着色器调用输出一条带等价。
+ * 模型网格（P5c 步骤 2）另给两项：`vertexBuffers` 是按网格格式建的顶点布局（`render/mesh.ts` 的 `meshVertexLayout`，代替程序自己的
+ * `vertexPacking`）；`cull` 为 `"back"` 时剔背面、屏幕上逆时针为正面（D3D11 光栅状态 `CullMode BACK`、`FrontCounterClockwise 1`，
+ * rea-p5-mesh 3.4，p5-REPORT `p5c-cull`），标签各多一个 ` mesh`、` cull`。都不给时管线与以前逐项相同。
  */
 export async function createPipeline(
   device: GPUDevice,
@@ -288,16 +302,18 @@ export async function createPipeline(
   topology: "triangle-strip" | "triangle-list" = "triangle-strip",
   /** alpha 通道 One / One / Max（P5b 步骤 4，`groupBlendState`）；为 true 时标签多一个 ` max`。 */
   alphaMax = false,
+  vertexBuffers?: GPUVertexBufferLayout[],
+  cull?: "back",
 ): Promise<GPURenderPipeline> {
   const blend = alphaMax ? groupBlendState(blending) : blending ? blendState(blending) : undefined;
   try {
     return await device.createRenderPipelineAsync({
-      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}${alphaMax ? " max" : ""}`,
+      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}${alphaMax ? " max" : ""}${vertexBuffers ? " mesh" : ""}${cull ? " cull" : ""}`,
       layout: program.pipelineLayout,
       vertex: {
         module: program.vertex,
         entryPoint: program.result.vertex?.entryPoint ?? "main",
-        buffers: [program.vertexPacking.layout],
+        buffers: vertexBuffers ?? [program.vertexPacking.layout],
       },
       fragment: {
         module: program.fragment,
@@ -305,7 +321,7 @@ export async function createPipeline(
         // 0x7 = RED | GREEN | BLUE，0xf 再加 ALPHA
         targets: [{ format, blend, writeMask: writeAlpha ? 0xf : 0x7 }],
       },
-      primitive: { topology, cullMode: "none" },
+      primitive: cull ? { topology, cullMode: cull, frontFace: "ccw" } : { topology, cullMode: "none" },
     });
   } catch (error) {
     throw new SceneRenderError([

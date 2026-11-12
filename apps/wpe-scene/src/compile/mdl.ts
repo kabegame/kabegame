@@ -103,6 +103,19 @@ export function attributeSemantic(name: string): string | undefined {
   return item && semanticKey(item);
 }
 
+/**
+ * 着色器属性（翻译器反射的 GLSL 类型名）能不能读这一项网格数据（P5c 步骤 2）：分量类型要相同（`uint` / `uvec*` 读 `a_BlendIndices` 的
+ * u32，`float` / `vec*` 读其余的 float；`int` / `ivec*` 与矩阵哪个都不能读），分量数不管（少了截断、多了补 (0, 0, 0, 1)，`p5c-attr` 的
+ * M1、M4）。WebGPU 的顶点格式与着色器类型也是这条规则：基础类型不同是管线校验错误，分量数不同照截断、补齐。编译期的
+ * `mdl:attribute-type:<名>`（`features.ts` 的 `checkMeshAttributes`）与渲染器的顶点布局（`render/mesh.ts`）都按它判断。语料 0 个
+ * 不相符的。
+ */
+export function attributeTypeMatches(type: string, item: Pick<MdlAttribute, "type">): boolean {
+  if (/^(?:uint|uvec[234])$/.test(type)) return item.type === "uint";
+  if (/^(?:float|vec[234])$/.test(type)) return item.type === "float";
+  return false;
+}
+
 export interface MdlMesh {
   /** 每个皮肤一个材质路径（长度 = 文件头的皮肤数）。 */
   materials: string[];

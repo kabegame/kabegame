@@ -265,6 +265,9 @@ export class SceneState {
         for (const child of particle.children ?? []) addParticle(child.system);
       };
       if (layer.particle) addParticle(layer.particle);
+      // 模型网格材质的常量（P5c 步骤 2）：网格 draw 的 uniform 同样从这里取（retro 的 `g_Tint`），属性绑定按 pass 键就地写
+      for (const mesh of layer.model?.meshes ?? [])
+        for (const pass of mesh.passes) constants.set(pass.key, { ...pass.uniforms });
       for (const effect of layer.effects) {
         effects.set(effectKey(layer.object, effect.source), {
           enabled: effect.enabled,

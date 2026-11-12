@@ -103,10 +103,16 @@
  *   （`textMatrices`）。字形图集是第一种运行时纹理（`render/text.ts`）：每个 `GlyphAtlas` 对象一张，同一「字体 + 字号」的层共用，建场景
  *   时整张上传，`sync` 按脏区增量上传；`atlas` 引用经图层资源解析。文本层的图层四边形、合成 RT 与 fbo 都按排版的尺寸；开了背景、走合成
  *   时 `clear` op 每帧按背景常量与图层 alpha 现算清屏色。
+ * - 模型（P5c 步骤 2，p5-REPORT「P5c 语义的实测核对」）：模型层是一个 `model` op，编码时先做视锥剔除（`render/mesh.ts` 的
+ *   `frustumCulled`，平面取场景级的视图投影），没被剔就按 `model.order` 画各网格，和图像步骤、粒子在同一个场景 pass 里按 `objects` 顺序。
+ *   网格的顶点与索引是 mdl 的字节原样上传，按文件缓冲上的视图去重（同一个 mdl 的几个对象共用一份，`meshBuffer`），随场景销毁；
+ *   `drawIndexed`、三角形列表。顶点布局按网格格式（`meshVertexLayout`），网格没有的属性接全场一份的全零占位缓冲（槽 1，`arrayStride` 0）。
+ *   管线比图像层多两项：布局键、`cullmode: normal` 的背面剔除（`pipelineKey` 只在出现时加后缀）。uniform 同图像层直接上屏（视差、抖动、
+ *   缩放，`perspective: true` 换透视那一份），颜色组固定为 1。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
-import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
+import type { SceneBundle, SceneLayer, SceneModel, ScenePass, SceneTexture } from "../compile/bundle";
 import type { ParticleRenderer, SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
@@ -141,6 +147,7 @@ import {
   variantPlans,
   type DrawStep,
   type LayerPlan,
+  type MeshStep,
   type ParticleStep,
   type TargetRef,
   type TextStep,
@@ -159,6 +166,7 @@ import {
   worldMatrixOf,
 } from "./layout";
 import { identity, multiply, orthographic, translation, type Mat4 } from "./math";
+import { alignedBytes, frustumCulled, MESH_PLACEHOLDER_BYTES, meshVertexLayout, type MeshVertexLayout } from "./mesh";
 import { parallaxOffset, type SceneParallax } from "./parallax";
 import { createPipeline, createProgram, programVertexPacking, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
@@ -251,14 +259,25 @@ interface PreparedDraw {
   pipeline: GPURenderPipeline;
 }
 
-/** 图层的绘制步骤、粒子层的绘制，或文本层的绘制（`graph.ts`）：都画一次，共用 draw 的 uniform / bind group / 管线路径。 */
-type DrawLike = DrawStep | ParticleStep | TextStep;
+/** 图层的绘制步骤、粒子层的绘制、文本层的绘制，或模型的网格绘制（`graph.ts`）：都画一次，共用 draw 的 uniform / bind group / 管线路径。 */
+type DrawLike = DrawStep | ParticleStep | TextStep | MeshStep;
 
 /** 文本层一次绘制的索引（P6b 1d）：三角形列表，每四边形 6 个。 */
 interface TextDraw {
   indexBuffer: GPUBuffer;
   indexFormat: GPUIndexFormat;
   count: number;
+}
+
+/**
+ * 一次网格绘制（P5c 步骤 2）：索引缓冲（按 mdl 视图共用，`meshBuffer`）、索引格式（网格标志 bit0）与个数，以及占位缓冲（网格没有、着色器
+ * 声明了的属性接到槽 1，`meshVertexLayout`；没有时为 null）。顶点缓冲在 `Draw.vertexBuffer`，同样共用，图层重建时不释放。
+ */
+interface MeshDraw {
+  indexBuffer: GPUBuffer;
+  indexFormat: GPUIndexFormat;
+  count: number;
+  placeholder: GPUBuffer | null;
 }
 
 /** 一次粒子绘制的系统与 CPU 侧顶点（P4a 步骤 4）。 */
@@ -458,6 +477,8 @@ interface Draw {
   particles: ParticleDraw | null;
   /** 文本层的索引缓冲（P6b 1d）；其余为 null。 */
   text: TextDraw | null;
+  /** 模型的网格绘制（P5c 步骤 2）；其余为 null。 */
+  mesh: MeshDraw | null;
   /** 本 draw 的程序（dev 探针改写顶点着色器用）。 */
   program: GpuProgram;
   /** 所属图层（`objects` 下标与 bundle 里的图层，就地刷新用）。 */
@@ -522,7 +543,9 @@ type Op =
    */
   | { kind: "clear"; resources: LayerResources; target: TargetRef; layer: SceneLayer; color?: "text-background" }
   /** 组画子树（P5b 步骤 4）：`layer.subtree` 里可见的子孙依次画进 `target`（组当前的合成 RT）。 */
-  | { kind: "subtree"; resources: LayerResources; target: TargetRef; layer: SceneLayer };
+  | { kind: "subtree"; resources: LayerResources; target: TargetRef; layer: SceneLayer }
+  /** 一个模型（P5c 步骤 2）：编码时先做视锥剔除，没被剔就按 `model.order` 画各网格（`draws` 就是这个顺序）。 */
+  | { kind: "model"; layer: SceneLayer; draws: Draw[] };
 
 /**
  * 决定一条管线的五项：WebGPU 的管线绑定了混合、目标格式、写掩码与图元拓扑（WPE 的 D3D11 着色器不绑），同一个程序要按它们
@@ -541,10 +564,26 @@ export interface PipelineSpec {
    * One / Zero，`programs.ts` 的 `groupBlendState`）。缺省 false；为 true 时管线键多一个后缀，其余键和加这一项之前逐字相同。
    */
   alphaMax?: boolean;
+  /**
+   * 模型网格的顶点布局键（P5c 步骤 2，`render/mesh.ts` 的 `MeshVertexLayout.key`）：布局按网格格式建，不由程序推出，同一个程序在不同格式的
+   * 网格上要各建一份。只有网格步骤有；有时管线键多一个后缀，其余键和加这一项之前逐字相同。
+   */
+  mesh?: string;
+  /** 剔背面（P5c 步骤 2：模型 pass 的 `cullmode` 为 normal，`p5c-cull`）；不剔时不写，管线键不变。 */
+  cull?: "back";
 }
 
-export function pipelineKey({ program, blending, format, alpha, topology, alphaMax }: PipelineSpec): string {
-  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}`;
+export function pipelineKey({
+  program,
+  blending,
+  format,
+  alpha,
+  topology,
+  alphaMax,
+  mesh,
+  cull,
+}: PipelineSpec): string {
+  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}${mesh !== undefined ? `|mesh:${mesh}` : ""}${cull ? `|cull:${cull}` : ""}`;
 }
 
 /**
@@ -554,6 +593,8 @@ export function pipelineKey({ program, blending, format, alpha, topology, alphaM
  * 上（格式同场景目标）：写 RGBA（`p5b-grp-cb1` 事件 78–106）；组 `copyBackground` 为 false 时 alpha 取 MAX、写 RGBA（`p5b-grp-cb0`
  * 事件 73–101，rea-p5-modelflags §2.5 的状态 `0x10`）；组 `copyBackground` 为 true 时上屏角色（`final` / `passthrough`）只写 RGB，
  * WPE 在每个合成渲染结束时关掉 alpha 写入（`p5b-grpptc` 事件 102、`p5b-nest` 事件 129 的写掩码 7）。
+ * `mesh`：网格步骤（P5c 步骤 2）的顶点布局键（`meshVertexLayout`）。网格是三角形列表；`cullmode` 为 normal 时剔背面（缺键编译期已按 WPE
+ * 缺省写成 normal），nocull 不剔。图像层、粒子、文本的剔除缺省照旧不剔，等 P5d 和深度附件一起统一。
  */
 export function stepPipeline(
   step: DrawLike,
@@ -561,6 +602,7 @@ export function stepPipeline(
   fboFormat: (effect: number, name: string) => GPUTextureFormat,
   geometry = false,
   group: Pick<SceneLayer, "copyBackground"> | null = null,
+  mesh?: string,
 ): PipelineSpec {
   const { pass, blending, target } = step;
   const inGroup = !!group && target.kind === "scene";
@@ -571,8 +613,13 @@ export function stepPipeline(
     blending,
     format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
     alpha: target.kind !== "scene" || alphaMax || (inGroup && !upload),
-    topology: step.kind === "text" || (step.kind === "particles" && !geometry) ? "triangle-list" : "triangle-strip",
+    topology:
+      step.kind === "text" || step.kind === "mesh" || (step.kind === "particles" && !geometry)
+        ? "triangle-list"
+        : "triangle-strip",
     ...(alphaMax ? { alphaMax: true } : {}),
+    ...(step.kind === "mesh" ? { mesh: mesh ?? "" } : {}),
+    ...(step.kind === "mesh" && pass.cullmode === "normal" ? { cull: "back" as const } : {}),
   };
 }
 
@@ -606,18 +653,29 @@ function writeSegments(system: ParticleSystem, layout: ParticleDraw["layout"], o
 
 /**
  * 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。`particle` 是图层的粒子系统树：每个粒子步骤按它自己那个系统的
- * renderer 种类查程序的输入（子系统的 renderer 可以和父不同，P4e 步骤 1）。
+ * renderer 种类查程序的输入（子系统的 renderer 可以和父不同，P4e 步骤 1）。`model` 是图层的模型（P5c 步骤 2）：每个网格步骤按网格格式查
+ * 程序的输入（`meshVertexLayout`）。
  */
-function planProblems(plan: LayerPlan, bundle: SceneBundle, particle?: SceneParticle | null): string[] {
+function planProblems(
+  plan: LayerPlan,
+  bundle: SceneBundle,
+  particle?: SceneParticle | null,
+  model?: SceneModel | null,
+): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
-    if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text") continue;
+    if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text" && step.kind !== "mesh") continue;
     const program = step.pass.program === null ? undefined : bundle.programs[step.pass.program];
     if (!program) problems.push("render:no-program");
     else if (step.kind === "particles")
       problems.push(
         ...particleAttributeProblems(program, particle ? particleNode(particle, step.node).renderer.kind : undefined),
       );
+    else if (step.kind === "mesh") {
+      const mesh = model?.meshes[step.mesh];
+      if (!mesh) problems.push(`render:mesh:${step.mesh}`);
+      else problems.push(...meshVertexLayout(program.attributes ?? [], mesh.format).problems);
+    }
     // 视频纹理（P9a）没有 mip：渲染器建空纹理、运行时拷帧，不算缺
     for (const ref of Object.values(step.inputs))
       if (ref.kind === "texture" && !bundle.textures[ref.index]?.mips.length && !bundle.textures[ref.index]?.video)
@@ -632,7 +690,7 @@ function wantsSnapshot(plan: LayerPlan): boolean {
     (step) =>
       step.kind === "snapshot" ||
       (step.kind === "copy" && step.source.kind === "framebuffer") ||
-      ((step.kind === "draw" || step.kind === "particles" || step.kind === "text") &&
+      ((step.kind === "draw" || step.kind === "particles" || step.kind === "text" || step.kind === "mesh") &&
         Object.values(step.inputs).some((ref) => ref.kind === "framebuffer")),
   );
 }
@@ -658,22 +716,26 @@ export function checkRenderable(
       planLayer(layer, bundle.textures, undefined, options.texts?.get(layer.object) ?? null),
       bundle,
       layer.particle,
+      layer.model,
     ))
       reasons.add(reason);
   return [...reasons];
 }
 
 /**
- * 要建 GPU 资源的图层（有 pass 的，含粒子材质的 pass，P4a 步骤 4）：自身和每个祖先都可能可见，即当前可见、`visible`
- * 绑了用户属性，或场景带脚本。`visibleBound` 的图层当前可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组
- * 下面的子孙永远画不出来（`visible` 沿父链继承，P4a 步骤 1）：不建资源，它们的问题也不让整场退回。
+ * 要建 GPU 资源的图层（有 pass 的，含粒子材质的 pass，P4a 步骤 4；模型有网格 pass 的，P5c 步骤 2）：自身和每个祖先都可能可见，即当前
+ * 可见、`visible` 绑了用户属性，或场景带脚本。`visibleBound` 的图层当前可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组
+ * 下面的子孙永远画不出来（`visible` 沿父链继承，P4a 步骤 1）：不建资源，它们的问题也不让整场退回（`p5c-ver` 的 HID 不画）。
  */
 export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">): SceneLayer[] {
   const scripted = bundle.scripts.list.length > 0;
   const byObject = new Map(bundle.layers.map((layer) => [layer.object, layer]));
   return bundle.layers.filter(
     (layer) =>
-      (layer.passes.length > 0 || (layer.particle?.passes.length ?? 0) > 0 || !!layer.text) &&
+      (layer.passes.length > 0 ||
+        (layer.particle?.passes.length ?? 0) > 0 ||
+        !!layer.text ||
+        !!layer.model?.meshes.some((mesh) => mesh.passes.length > 0)) &&
       everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted),
   );
 }
@@ -703,6 +765,8 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
     if (text)
       for (const pass of [text.glyphPass, text.colorPass, text.backgroundPass, text.clearAlphaPass])
         if (pass) add(pass);
+    // 模型网格的材质（P5c 步骤 2）
+    for (const mesh of layer.model?.meshes ?? []) mesh.passes.forEach(add);
     for (const effect of layer.effects) {
       if (!effect.enabled && effect.unsupported.length) continue;
       for (const step of effect.steps) if (step.kind === "draw") add(step.pass);
@@ -813,6 +877,13 @@ export class GpuScene {
   private videoSink: VideoSink | null = null;
   /** 已经记过 warning 的视频纹理（`size:<下标>` / `copy:<下标>`）：每张纹理每种只记一次。 */
   private readonly videoWarned = new Set<string>();
+  /**
+   * 模型网格的 GPU 缓冲（P5c 步骤 2，`meshBuffer`）：按 mdl 文件缓冲 → 「用途、视图偏移与长度」去重，同一个 mdl 被几个对象引用时共用一份
+   * （编译期同一路径只解析一次，几个对象的网格是同一块缓冲上的同一个视图）。随场景销毁，图层重建不释放。
+   */
+  private readonly meshBuffers = new Map<ArrayBufferLike, Map<string, GPUBuffer>>();
+  /** 网格的占位顶点缓冲（全零，`MESH_PLACEHOLDER_BYTES`）：第一个有占位属性的网格建，全场共用。 */
+  private meshPlaceholder: GPUBuffer | null = null;
 
   private constructor(
     private readonly device: GPUDevice,
@@ -987,6 +1058,7 @@ export class GpuScene {
     return this.sampler(samplerDescriptor(texture, texture.mips.length > 1));
   }
 
+  /** `mesh`、`cull`：网格步骤（P5c 步骤 2）的顶点布局与剔除，见 `createPipeline`；键里只在出现时加后缀（`pipelineKey`）。 */
   private pipelineFor(
     program: GpuProgram,
     blending: string | null,
@@ -994,17 +1066,81 @@ export class GpuScene {
     alpha: boolean,
     topology: PipelineSpec["topology"] = "triangle-strip",
     alphaMax = false,
+    mesh?: MeshVertexLayout,
+    cull?: PipelineSpec["cull"],
   ): Promise<GPURenderPipeline> {
-    const key = pipelineKey({ program: program.index, blending, format, alpha, topology, alphaMax });
+    const key = pipelineKey({
+      program: program.index,
+      blending,
+      format,
+      alpha,
+      topology,
+      alphaMax,
+      mesh: mesh?.key,
+      cull,
+    });
     let pipeline = this.pipelines.get(key);
     if (!pipeline) {
-      pipeline = createPipeline(this.device, program, blending, format, alpha, topology, alphaMax).then((ready) => {
+      pipeline = createPipeline(
+        this.device,
+        program,
+        blending,
+        format,
+        alpha,
+        topology,
+        alphaMax,
+        mesh?.buffers,
+        cull,
+      ).then((ready) => {
         this.readyPipelines.set(key, ready);
         return ready;
       });
       this.pipelines.set(key, pipeline);
     }
     return pipeline;
+  }
+
+  /**
+   * 网格步骤的顶点布局（P5c 步骤 2）：程序的属性按网格格式配对（`meshVertexLayout`）。管线键、建管线与建 draw 都从这里取。
+   * 网格不在图层上（手写的计划）时报 `render:mesh:<下标>`，自查（`planProblems`）已先挡下。
+   */
+  private meshLayoutOf(layer: SceneLayer, step: MeshStep): MeshVertexLayout {
+    const mesh = layer.model?.meshes[step.mesh];
+    if (!mesh) throw new SceneRenderError([`render:mesh:${step.mesh}`]);
+    const program = step.pass.program === null ? undefined : this.bundle.programs[step.pass.program];
+    return meshVertexLayout(program?.attributes ?? [], mesh.format);
+  }
+
+  /**
+   * 网格的顶点 / 索引缓冲（P5c 步骤 2）：mdl 的字节原样上传（不在 CPU 上逐顶点重排），按文件缓冲上的视图去重（`meshBuffers`）。
+   * `writeBuffer` 的长度要 4 字节对齐，u16 索引奇数个时补齐（`alignedBytes`）。
+   */
+  private meshBuffer(view: Uint8Array, usage: GPUBufferUsageFlags, label: string): GPUBuffer {
+    let byView = this.meshBuffers.get(view.buffer);
+    if (!byView) this.meshBuffers.set(view.buffer, (byView = new Map()));
+    const key = `${usage}|${view.byteOffset}|${view.byteLength}`;
+    let buffer = byView.get(key);
+    if (!buffer) {
+      const bytes = alignedBytes(view);
+      buffer = this.own(
+        this.device.createBuffer({ label, size: bytes.byteLength, usage: usage | GPUBufferUsage.COPY_DST }),
+      );
+      this.device.queue.writeBuffer(buffer, 0, bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      byView.set(key, buffer);
+    }
+    return buffer;
+  }
+
+  /** 网格的占位顶点缓冲（P5c 步骤 2）：全零，WebGPU 的缓冲建出来就是 0，不用写。 */
+  private meshPlaceholderBuffer(): GPUBuffer {
+    this.meshPlaceholder ??= this.own(
+      this.device.createBuffer({
+        label: "mesh placeholder",
+        size: MESH_PLACEHOLDER_BYTES,
+        usage: GPUBufferUsage.VERTEX,
+      }),
+    );
+    return this.meshPlaceholder;
   }
 
   /** 用到才建，只在加载时走到。失败抛错，由调用方决定退回还是冻结图层。 */
@@ -1098,6 +1234,8 @@ export class GpuScene {
       !!(step.pass.program !== null && this.bundle.programs[step.pass.program]?.geometry),
       // 组里画到「场景」的绘制落在组的合成 RT 上（P5b 步骤 4）：写 alpha，`copyBackground` 为 false 时 alpha 取 MAX
       this.groupOf(layer),
+      // 网格（P5c 步骤 2）的顶点布局按网格格式
+      step.kind === "mesh" ? this.meshLayoutOf(layer, step).key : undefined,
     );
   }
 
@@ -1109,12 +1247,13 @@ export class GpuScene {
     const prepared = new Map<DrawLike, PreparedDraw>();
     await Promise.all(
       plan.steps.map(async (step) => {
-        if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text") return;
+        if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text" && step.kind !== "mesh") return;
         const program = await this.ensureProgram(step.pass.program!);
-        const { blending, format, alpha, topology, alphaMax } = this.pipelineOf(step, runtime);
+        const { blending, format, alpha, topology, alphaMax, cull } = this.pipelineOf(step, runtime);
+        const mesh = step.kind === "mesh" ? this.meshLayoutOf(runtime.layer, step) : undefined;
         prepared.set(step, {
           program,
-          pipeline: await this.pipelineFor(program, blending, format, alpha, topology, alphaMax),
+          pipeline: await this.pipelineFor(program, blending, format, alpha, topology, alphaMax, mesh, cull),
         });
       }),
     );
@@ -1125,7 +1264,7 @@ export class GpuScene {
   private preparedOf(plan: LayerPlan, runtime: Pick<LayerRuntime, "layer" | "resources">): Map<DrawLike, PreparedDraw> {
     const prepared = new Map<DrawLike, PreparedDraw>();
     for (const step of plan.steps) {
-      if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text") continue;
+      if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text" && step.kind !== "mesh") continue;
       const spec = this.pipelineOf(step, runtime);
       const program = this.readyPrograms.get(spec.program);
       const pipeline = this.readyPipelines.get(pipelineKey(spec));
@@ -1145,7 +1284,7 @@ export class GpuScene {
       let failure: unknown = null;
       try {
         for (const plan of plans) {
-          const problems = planProblems(plan, this.bundle, runtime.layer.particle);
+          const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model);
           if (problems.length) throw new SceneRenderError(problems);
           this.ensureComposites(runtime, plan);
           if (wantsSnapshot(plan)) this.ensureSnapshot();
@@ -1226,6 +1365,14 @@ export class GpuScene {
       ops.push({ kind: "particle-tree", tree });
       return { ops, draws, tree };
     }
+    if (layer.model) {
+      // 模型层（P5c 步骤 2）：整个层一个 `model` op（编码时先做视锥剔除），网格按计划的顺序（`model.order`）；没有网格步骤时没有 op
+      for (const step of plan.steps)
+        if (step.kind === "mesh")
+          draws.push(this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds));
+      if (draws.length) ops.push({ kind: "model", layer, draws: [...draws] });
+      return { ops, draws, tree: null };
+    }
     for (const step of plan.steps) {
       if (step.kind === "snapshot") ops.push({ kind: "snapshot" });
       else if (step.kind === "swap")
@@ -1302,7 +1449,10 @@ export class GpuScene {
     const used = new Set<number>();
     for (const plan of plans)
       for (const step of plan.steps)
-        if ((step.kind === "draw" || step.kind === "particles" || step.kind === "text") && step.pass.program !== null)
+        if (
+          (step.kind === "draw" || step.kind === "particles" || step.kind === "text" || step.kind === "mesh") &&
+          step.pass.program !== null
+        )
           used.add(step.pass.program);
     for (const pass of Object.values(bundle.bloom?.passes ?? {}))
       if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
@@ -1619,13 +1769,28 @@ export class GpuScene {
         ? `layer ${layer.id} ${layer.name} particles${step.node.length ? ` ${step.node.join("/")}` : ""}${occurrence ? `#${occurrence + 1}` : ""}`
         : step.kind === "text"
           ? `layer ${layer.id} ${layer.name} text ${step.part}`
-          : `layer ${layer.id} ${layer.name} ${step.role}`;
+          : step.kind === "mesh"
+            ? `layer ${layer.id} ${layer.name} mesh ${step.mesh}`
+            : `layer ${layer.id} ${layer.name} ${step.role}`;
 
     let vertexBuffer: GPUBuffer;
     let particles: ParticleDraw | null = null;
     let text: TextDraw | null = null;
+    let meshDraw: MeshDraw | null = null;
     let model: Mat4 | null = null;
-    if (step.kind === "text") {
+    if (step.kind === "mesh") {
+      // 模型网格（P5c 步骤 2）：mdl 的顶点与索引原样上传、按视图共用；网格没有的属性接占位缓冲（`meshVertexLayout`）
+      const mesh = layer.model?.meshes[step.mesh];
+      if (!mesh) throw new SceneRenderError([`render:mesh:${step.mesh}`]);
+      const name = `${layer.model!.path}#${step.mesh}`;
+      vertexBuffer = this.meshBuffer(mesh.vertices, GPUBufferUsage.VERTEX, `${name} vertices`);
+      meshDraw = {
+        indexBuffer: this.meshBuffer(mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
+        indexFormat: mesh.indexFormat,
+        count: mesh.indexCount,
+        placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
+      };
+    } else if (step.kind === "text") {
       // 文本（P6b 1d）：排版出的逐字四边形或背景四边形，按程序布局打包；索引照 WPE 的顺序，三角形列表
       const layout = state.texts.get(layer.object);
       const mesh = layout?.mesh;
@@ -1771,6 +1936,7 @@ export class GpuScene {
       step,
       particles,
       text,
+      mesh: meshDraw,
       program,
       object: layer.object,
       layer,
@@ -1877,6 +2043,20 @@ export class GpuScene {
         renderer: layer.particle ? particleNode(layer.particle, step.node).renderer : undefined,
       });
     }
+    if (step.kind === "mesh")
+      // 模型网格（P5c 步骤 2）：同图像层直接上屏（`direct` 角色：`g_ModelMatrix` 是世界矩阵、MVP = VP · W，不乘 `size`），只换颜色组：
+      // WPE 画网格之前把 `g_Color` / `g_Alpha` 写成 1（rea-p5-mesh 2.5，p5-REPORT `p5c-color`：对象写 `color 1 0 0`、`alpha 0.5`、
+      // `brightness 3` 时 `g_Color4` 仍是 (1, 1, 1, 1)，HDR 同样）。视图投影带视差、抖动、缩放，`perspective: true` 换透视那一份
+      // （`p5c-matrix` 的视差、缩放、透视三份，和图像层相同）；组里的模型照报，强制渲染时用组的局部正交
+      return drawUniformValues({
+        ...common,
+        colorScale: 1,
+        step: { role: "direct", inputs: step.inputs },
+        layer: { ...layerState, color: [1, 1, 1], alpha: 1, size: layer.size },
+        viewProjection:
+          groupVp ??
+          this.viewProjectionOf(layer, state, layer.perspective ? this.perspectiveViewProjection : this.viewProjection),
+      });
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs` 事件 76）：直接上屏以外的角色（effect、末 pass、passthrough 上屏）模型与视图都是
     // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
     // 正好铺满全屏。效果矩阵跟着是单位阵（`size` 是 (2, 2)，`scale(w/2, h/2)` 也是单位阵）。直接上屏照常（下面）
@@ -2078,13 +2258,14 @@ export class GpuScene {
     if (signature === runtime.signature) return;
     const started = performance.now();
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
-    const problems = planProblems(plan, this.bundle, runtime.layer.particle);
+    const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model);
     if (problems.length) throw new SceneRenderError(problems);
     const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime), state, worlds);
     for (const draw of runtime.draws) {
       this.draws.delete(draw);
       this.drawsByPass.delete(draw.passKey);
-      this.release(draw.vertexBuffer);
+      // 网格的顶点 / 索引缓冲按视图共用（`meshBuffer`），随场景销毁，这里不释放
+      if (!draw.mesh) this.release(draw.vertexBuffer);
       if (draw.uniformBuffer) this.release(draw.uniformBuffer);
       if (draw.text) this.release(draw.text.indexBuffer);
     }
@@ -2643,6 +2824,8 @@ export class GpuScene {
         const source = this.videoSink?.drawn(index);
         if (source) this.copyVideo(index, source);
       }
+      // 网格没有索引（空网格）就不画
+      if (item.mesh && !item.mesh.count) return;
       const particles = item.particles;
       if (particles) {
         // 朝向是 NaN（P4c 步骤 5）：WPE 的四角全是 NaN、图元被丢弃，这里整次绘制跳过（WGSL 判不了 NaN）
@@ -2655,7 +2838,12 @@ export class GpuScene {
       pass.setPipeline(item.pipeline);
       pass.setBindGroup(0, this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
-      if (item.text) {
+      if (item.mesh) {
+        // 模型网格（P5c 步骤 2）：mdl 的索引，三角形列表；网格没有的属性从槽 1 的全零占位缓冲读
+        if (item.mesh.placeholder) pass.setVertexBuffer(1, item.mesh.placeholder);
+        pass.setIndexBuffer(item.mesh.indexBuffer, item.mesh.indexFormat);
+        pass.drawIndexed(item.mesh.count);
+      } else if (item.text) {
         // 文本（P6b 1d）：逐字四边形，带索引的三角形列表
         pass.setIndexBuffer(item.text.indexBuffer, item.text.indexFormat);
         pass.drawIndexed(item.text.count);
@@ -2707,6 +2895,19 @@ export class GpuScene {
             },
             (item) => draw(begin(sceneTarget), item),
           );
+        } else if (op.kind === "model") {
+          // 模型（P5c 步骤 2）：先做视锥剔除（p5-REPORT `p5c-frustum`，rea-p5-mesh 4.4），被剔就整个模型不画。平面取场景级的视图投影
+          // （带抖动与缩放、不带每个对象的视差：WPE 在场景绘制开头从相机算一次平面），世界矩阵不含视差；`perspective: true` 的模型也按它
+          // 判（WPE 先剔除、后换透视投影，rea 2.6）。组里的模型照报（`model:passthrough:children:model`），强制渲染时不剔：组的局部
+          // 正交下 WPE 用哪组平面没有实测
+          const model = op.layer.model;
+          if (
+            model &&
+            op.layer.group == null &&
+            frustumCulled(model.bounds, worldMatrixOf(op.layer.object, state.layers, worlds), this.viewProjection)
+          )
+            continue;
+          for (const item of op.draws) draw(begin(sceneTarget), item);
         } else if (op.kind === "subtree") {
           // 组画子树（P5b 步骤 4）：子孙按先序画，「画到场景」的绘制改画进组当前的合成 RT（嵌套组递归，它的上屏画进这一张）。
           // 不可见的子孙（含祖先）整段跳过；没有资源的（分组节点、声音）没有 op
@@ -2769,5 +2970,7 @@ export class GpuScene {
     this.particleIndices = null;
     this.particleTimings = null;
     this.atlasTextures = null;
+    this.meshBuffers.clear();
+    this.meshPlaceholder = null;
   }
 }
