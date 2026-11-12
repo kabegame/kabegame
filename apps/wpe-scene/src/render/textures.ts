@@ -2,6 +2,7 @@
  * 纹理上传：`compile/tex.ts` 的 `TEXTURE_FORMATS` 里的格式（RGBA8888、DXT5 / DXT3 / DXT1 → BC3 / BC2 / BC1、RG88、R8）
  * 连同全部 mip 按原格式直接交给 GPU，不做 CPU 解码、不改通道；格式表是编译期与渲染器共用的唯一来源。
  * FreeImage 形态（PNG / JPG）由主线程解成 `ImageBitmap`（`compile/decode.ts`），这里 `copyExternalImageToTexture`。
+ * 视频纹理（P9a）只建空纹理，帧由 `GpuScene` 在画到它时拷进来。
  * 采样方式照 linux-wallpaperengine（GPLv3）`src/WallpaperEngine/Render/CTexture.cpp` 的 `setupOpenGLParameters`：
  * ClampUVs → clamp，否则 repeat；NoInterpolation → nearest，否则线性 + 三线性 mip + 8 倍各向异性。
  *
@@ -111,6 +112,16 @@ export function samplerDescriptor(
 
 /** 建 GPU 纹理并写入全部 mip。 */
 export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUTexture {
+  // 视频纹理（P9a）：同 WPE 是一张普通纹理（rea-p9-video 第 2 节：R8G8B8A8_UNORM、一级 mip、尺寸取 `.tex` 头的纹理尺寸，语料 60 段
+  // 都等于视频尺寸）。不写数据，初值全 0：第一帧之前与解不了时图层透明，同 WPE（第 8 节 memset 0、p9-REPORT「坏视频」）。之后由
+  // GpuScene 画到它时 `copyExternalImageToTexture`（要 RENDER_ATTACHMENT）
+  if (texture.video)
+    return device.createTexture({
+      label: texture.path,
+      size: { width: texture.textureWidth, height: texture.textureHeight },
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
   if (texture.mips[0]?.bitmap) {
     const levels = planBitmapUpload(texture);
     const gpu = device.createTexture({

@@ -5,6 +5,7 @@
  * 能按原格式上传的格式见 `TEXTURE_FORMATS`（编译期与渲染器共用），其余报 `tex:format:<n>`；FreeImage 形态（PNG / JPG）
  * 由主线程解码，只收格式 0。
  */
+import type { SceneVideoSource } from "../video/player";
 import type { SceneFile } from "./fs";
 
 export const TEX_FLAGS = {
@@ -134,7 +135,11 @@ export interface TexResult {
   gifHeight?: number;
   /** 头标志 bit2（`animated`）置位时的帧表，按文件顺序（`TexFrame`）。 */
   frames?: TexFrame[];
-  videoRange?: { start: number; end: number };
+  /**
+   * 视频纹理（头标志 `video`，P9a）：第 0 张图像第 0 级 mip（就是整段 MP4）在磁盘上的绝对区间，写法同 `encoded`（`SceneFile.location`
+   * 加 mip 偏移，散文件偏移 0、pkg 条目带条目偏移）。Worker 一个字节都不读，由主线程的播放器（`video/player.ts`）按区间读。
+   */
+  video?: SceneVideoSource;
   /**
    * FreeImage 形态（`freeImageFormat` 为 2 JPEG / 13 PNG）：每个 mip 的数据是一整份图片文件。Worker 不读这些字节，
    * 只给出它们在磁盘上的位置（`SceneFile.location`），由主线程区间读、`createImageBitmap` 解码并跨重新编译缓存。
@@ -300,7 +305,10 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   if (flags & TEX_FLAGS.clampBorder) unsupported.push("tex:clamp-border");
   // FreeImage 的 mip 交给主线程解码，这里永远不读字节。`tex:animation` 不挡解码：帧表纹理在粒子槽 0 要上传；用在图像层时
   // 场景反正退回，多解一张纹理只在 `exhaustive` / `force` 下发生。`tex:animation:empty` 在 mip 之后才读到，同样不挡
-  const shouldDecode = decode && unsupported.every((key) => key === ANIMATION_ISSUE) && !freeImageMime;
+  // 视频的 mip 就是整段视频（语料最大 674 MiB）：显式按 Video 标志跳过，不靠 `tex:video` 挡（步骤 3 删掉这个键之后它就挡不住了），
+  // 否则 Worker 会经主线程代读整段视频。只给区间，由主线程的播放器读（P9a）
+  const shouldDecode =
+    decode && !(flags & TEX_FLAGS.video) && unsupported.every((key) => key === ANIMATION_ISSUE) && !freeImageMime;
   const images: TexImage[] = [];
   for (let image = 0; image < imageCount; image++) {
     const mipCount = await c.u32();
@@ -359,8 +367,14 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
     if (frameCount === 0) unsupported.push("tex:animation:empty");
   }
   const first = images[0]?.mips[0];
-  const videoRange =
-    flags & TEX_FLAGS.video && first ? { start: first.offset, end: first.offset + first.length } : undefined;
+  const video =
+    flags & TEX_FLAGS.video && first
+      ? {
+          path: file.location.path,
+          start: file.location.offset + first.offset,
+          end: file.location.offset + first.offset + first.length,
+        }
+      : undefined;
   const encoded =
     freeImageMime && !(flags & TEX_FLAGS.video) && images[0]
       ? {
@@ -387,7 +401,7 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
     gifWidth,
     gifHeight,
     frames,
-    videoRange,
+    video,
     encoded,
     unsupported,
   };

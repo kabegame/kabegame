@@ -90,6 +90,11 @@
  *   - 合成 RT 池按「父链上组的层数」分开（WPE B5 的池化 RT 名里的 k）：组画子树期间它的合成 RT 一直在用，子孙自己的合成 RT 不能和它
  *     共享同一张，否则子孙的基础 pass 会把组的内容覆盖掉，或者同一张纹理在一个 pass 里既是目标又被采样。顶层图层的池键不变。
  *   - 组隐藏时（含祖先）整棵子树不画：组的 op 整段跳过，子孙在顶层本来就不画。
+ * - 视频纹理（P9a 步骤 2）：建成初值全 0 的 `rgba8unorm`（`uploadTexture`），绑定组建一次不再变。每个 draw 建时记下它绑定的视频纹理
+ *   （`Draw.videos`，只看着色器真正绑定的槽，同 WPE 逐槽更新，rea-p9-video 第 2 节第 4 条），编码时画到它就问 `VideoSink`（`drawn`），
+ *   有新帧就 `copyExternalImageToTexture`（`copyVideo`），对应 WPE 绑定纹理时的 `TransferVideoFrame`。拷贝是队列操作，排在本帧
+ *   提交之前，所以先于这一帧的绘制（同粒子顶点的 `writeBuffer`）。图像、effect、粒子的 draw 一视同仁；不可见图层整段跳过，
+ *   不问 → 播放器 30 帧后暂停（rea 第 4 节）。没有 sink（dev 探针自己建的场景）时纹理保持全 0。
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
@@ -120,6 +125,7 @@ import {
   type ParticleVertexLayout,
 } from "../particles/vertices";
 import type { TextLayout } from "../text/layout";
+import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { oneLine, SceneRenderError } from "./errors";
@@ -472,6 +478,11 @@ interface Draw {
   trailRenderVar: boolean;
   /** 按槽位的纹理尺寸（就地刷新时复用，纹理不随属性变化）。 */
   textureSizes: readonly (TextureSize | undefined)[];
+  /**
+   * 着色器绑定的视频纹理（bundle 纹理下标，去重，P9a）：建 draw 时算一次，编码时逐个问 `VideoSink`（`encode` 的 `draw`）。
+   * 没有视频时为空。
+   */
+  videos: number[];
   /** 静态 uniform 被就地改过：下一次 `update` 要整块重写。 */
   dirty: boolean;
   /** 不引用 fbo 时建一次；引用 fbo 时按当前 swap 状态取（`bindGroups` 缓存）。 */
@@ -606,8 +617,9 @@ function planProblems(plan: LayerPlan, bundle: SceneBundle, particle?: ScenePart
       problems.push(
         ...particleAttributeProblems(program, particle ? particleNode(particle, step.node).renderer.kind : undefined),
       );
+    // 视频纹理（P9a）没有 mip：渲染器建空纹理、运行时拷帧，不算缺
     for (const ref of Object.values(step.inputs))
-      if (ref.kind === "texture" && !bundle.textures[ref.index]?.mips.length)
+      if (ref.kind === "texture" && !bundle.textures[ref.index]?.mips.length && !bundle.textures[ref.index]?.video)
         problems.push(`render:texture-missing:${ref.index}`);
   }
   return problems;
@@ -796,6 +808,10 @@ export class GpuScene {
   private readonly runtimeByObject = new Map<number, LayerRuntime>();
   /** 文本层的字形图集纹理（P6b 1d，`render/text.ts`），按图集对象共享；`populate` 里建。 */
   private atlasTextures: TextAtlasTextures | null = null;
+  /** 视频纹理的帧来源（P9a，`setVideoSink`）；null 时视频纹理保持全 0。 */
+  private videoSink: VideoSink | null = null;
+  /** 已经记过 warning 的视频纹理（`size:<下标>` / `copy:<下标>`）：每张纹理每种只记一次。 */
+  private readonly videoWarned = new Set<string>();
 
   private constructor(
     private readonly device: GPUDevice,
@@ -1706,6 +1722,16 @@ export class GpuScene {
       device.queue.writeBuffer(uniformBuffer, 0, block.data);
     }
 
+    // 视频纹理（P9a）：只看着色器真正绑定的槽（WPE 绑定时遍历程序用到的槽表，只更新这些，rea-p9-video 第 2 节第 4 条）
+    const videos = [
+      ...new Set(
+        program.textures.flatMap((binding) => {
+          const ref = step.inputs[binding.slot];
+          return ref?.kind === "texture" && bundle.textures[ref.index]?.video ? [ref.index] : [];
+        }),
+      ),
+    ];
+
     const entries = (resolveFbo: (effect: number, name: string) => RenderTarget): GPUBindGroupEntry[] => {
       const list: GPUBindGroupEntry[] = [];
       if (uniformBuffer) list.push({ binding: 0, resource: { buffer: uniformBuffer } });
@@ -1757,6 +1783,7 @@ export class GpuScene {
       frameNames,
       trailRenderVar,
       textureSizes,
+      videos,
       dirty: false,
       bindGroup,
       bindGroups: new Map(),
@@ -2222,6 +2249,46 @@ export class GpuScene {
   }
 
   /**
+   * 视频纹理的帧来源（P9a）：渲染器换上场景时交来（`SceneRenderer.load`，宿主的 `SceneVideos`）；dev 探针的确定性回放可以换上自己的。
+   * null 时视频纹理保持全 0。
+   */
+  setVideoSink(sink: VideoSink | null): void {
+    this.videoSink = sink;
+  }
+
+  /**
+   * 把视频元素当前的帧拷进第 `index` 张纹理（P9a）。拷的尺寸取视频与纹理的较小者：WPE 是缩放到纹理尺寸（rea-p9-video 第 2 节第 3 条），
+   * 语料 60 段两者都相同，不同时只拷重叠部分并记一条 warning（决定 3）。还没有尺寸（`videoWidth` 为 0）时跳过；拷贝抛错（元素状态
+   * 不对等）时记一条 warning，不让这一帧失败。两种 warning 每张纹理各记一次。
+   */
+  private copyVideo(index: number, source: HTMLVideoElement): void {
+    const texture = this.textures[index];
+    const info = this.bundle.textures[index];
+    const { videoWidth, videoHeight } = source;
+    if (!texture || !info || !videoWidth || !videoHeight) return;
+    if (videoWidth !== info.textureWidth || videoHeight !== info.textureHeight)
+      this.warnVideo(
+        `size:${index}`,
+        `场景视频 ${info.path} 的尺寸 ${videoWidth}×${videoHeight} 和纹理 ${info.textureWidth}×${info.textureHeight} 不同，只拷重叠部分`,
+      );
+    try {
+      this.device.queue.copyExternalImageToTexture(
+        { source },
+        { texture },
+        { width: Math.min(videoWidth, info.textureWidth), height: Math.min(videoHeight, info.textureHeight) },
+      );
+    } catch (error) {
+      this.warnVideo(`copy:${index}`, `场景视频 ${info.path} 拷进纹理失败：${oneLine(String(error))}`);
+    }
+  }
+
+  private warnVideo(key: string, message: string): void {
+    if (this.videoWarned.has(key)) return;
+    this.videoWarned.add(key);
+    this.warnings.push(message);
+  }
+
+  /**
    * 步进过的粒子层：把列写成顶点，再整段传上去（只传存活的那部分）。rope（P4d 步骤 1）按 rope 表写段顶点，`count` 是段数
    * （每段一个实例，`writeRopeSegments`，`fps` 是宿主的帧上限）；ropetrail（P4d 步骤 2）每个存活粒子 n 段（`writeTrailSegments`）。
    */
@@ -2570,6 +2637,12 @@ export class GpuScene {
       open = null;
     };
     const draw = (pass: GPURenderPassEncoder, item: Draw) => {
+      // 视频纹理（P9a）：画到它就记下帧号；有新帧就拷进来，排在本帧提交之前（同 WPE 绑定时 TransferVideoFrame，rea-p9-video
+      // 第 2 节第 4 条）。视频尺寸和纹理不同时只拷重叠部分并记一条 warn（决定 3，语料 0 段）
+      for (const index of item.videos) {
+        const source = this.videoSink?.drawn(index);
+        if (source) this.copyVideo(index, source);
+      }
       const particles = item.particles;
       if (particles) {
         // 朝向是 NaN（P4c 步骤 5）：WPE 的四角全是 NaN、图元被丢弃，这里整次绘制跳过（WGSL 判不了 NaN）

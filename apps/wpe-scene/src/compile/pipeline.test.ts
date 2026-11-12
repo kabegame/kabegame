@@ -167,7 +167,7 @@ describe("场景编译基础", () => {
     expect((await parseTex(memoryFile(tex(2, 4)))).format).toBe(4);
     const video = await parseTex(memoryFile(tex(4, 0, 32, 0, new Uint8Array([0, 0, 0, 0, 102, 116, 121, 112]))));
     expect(video.unsupported).toContain("tex:video");
-    expect(video.videoRange?.end).toBe(video.videoRange!.start + 8);
+    expect(video.video?.end).toBe(video.video!.start + 8);
     expect(video.images[0].mips[0].bytes).toBeUndefined();
     const extended = parts(
       magic("TEXV0005"),
@@ -195,7 +195,7 @@ describe("场景编译基础", () => {
       u32(4),
       new Uint8Array([1, 2, 3, 4]),
     );
-    expect((await parseTex(memoryFile(extended))).videoRange?.end).toBe(extended.length);
+    expect((await parseTex(memoryFile(extended))).video?.end).toBe(extended.length);
     const animated = await parseTex(memoryFile(parts(tex(3, 0, 4), magic("TEXS0003"), u32(0), u32(1), u32(1))));
     expect(animated.animatedVersion).toBe(3);
     expect(animated.frameCount).toBe(0);

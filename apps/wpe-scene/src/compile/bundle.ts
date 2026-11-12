@@ -94,6 +94,7 @@ import { collectScripts, type SceneScripts } from "./scripts";
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
+import type { SceneVideoSource } from "../video/player";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
 
@@ -139,7 +140,11 @@ export interface SceneTexture {
   mips: SceneMip[];
   /** FreeImage 形态的 mip 位置（PNG / JPG 原文件），见 `TexResult.encoded`。 */
   encoded?: TexResult["encoded"];
-  videoRange?: { start: number; end: number };
+  /**
+   * 视频纹理（P9a）：视频在磁盘上的绝对区间（`TexResult.video`）。没有 mip，渲染器建一张初值全 0 的 `rgba8unorm`，画到它时由
+   * 主线程的播放器交来帧（`render/textures.ts`、`GpuScene.copyVideo`）。
+   */
+  video?: SceneVideoSource;
   /** 头标志 bit2（帧表）置位、帧表非空时有（`spriteSheet`）。只有粒子材质的槽 0 用它（P4b 步骤 2）。 */
   sheet?: SceneSpriteSheet;
 }
@@ -951,7 +956,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           mip.bytes ? [{ width: mip.width, height: mip.height, bytes: mip.bytes }] : [],
         ) ?? [],
       encoded: tex.encoded,
-      videoRange: tex.videoRange,
+      video: tex.video,
     });
     const sheet = spriteSheet(tex, textureWidth, textureHeight);
     if (sheet) bundle.textures[index].sheet = sheet;

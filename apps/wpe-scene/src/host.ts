@@ -19,6 +19,7 @@ import type { SceneScalar } from "./compile/model";
 import { SCENE_POSTPROCESS_SETTINGS, type ScenePostprocessSetting } from "./compile/postprocess";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import type { SceneStyle } from "./render/layout";
+import { uploadableTextures, visibleObjects } from "./render/scene";
 import { SceneState, scriptWriteValue } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
@@ -29,6 +30,8 @@ import { ScriptRuntime, type ScriptTarget } from "./script/runtime";
 import { browserStorage, clearSceneStorage } from "./script/storage";
 import { SceneTexts } from "./text/host";
 import type { TextLayout } from "./text/layout";
+import { videoSourceKey } from "./video/player";
+import { SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
 
 interface SceneTarget {
   path: string;
@@ -52,6 +55,8 @@ export interface SceneHostStats {
 }
 
 const LOST_RETRY_WINDOW_MS = 60_000;
+/** 第一次 ready 之前最多等视频纹理出第一帧这么久（P9a 决定 1）。 */
+const FIRST_VIDEO_FRAME_TIMEOUT_MS = 2000;
 const FORCE_RENDER_KEY = "kabegame-dev-scene-force-render";
 
 function forceRender(): boolean {
@@ -78,6 +83,18 @@ function bloomLabel(bloom: SceneBundle["bloom"], enabled: boolean): string {
   if (!bloom) return "无泛光";
   const label = enabled ? "泛光" : "泛光（关）";
   return bloom.hdr ? `${label} + HDR` : label;
+}
+
+/**
+ * 第一次 ready 之前要等第一帧的视频纹理（P9a 决定 1）：当前可见（含父链；按渲染器的状态，脚本 `init` 的写入已经在里面）的图层的
+ * pass、effect、粒子、passthrough 用到的视频纹理下标，取法同 `uploadableTextures`。拿不到状态时退化成全部视频纹理。
+ */
+function visibleVideoTextures(bundle: SceneBundle, state: SceneState | null | undefined): number[] {
+  const all = (bundle.textures ?? []).flatMap((texture, index) => (texture.video ? [index] : []));
+  if (!state || !all.length) return all;
+  const visible = new Set(visibleObjects(bundle.layers, state));
+  const used = uploadableTextures({ layers: bundle.layers.filter((layer) => visible.has(layer.object)) });
+  return all.filter((index) => used.has(index));
 }
 
 /** 每个 iframe 只有一个 SceneHost；属性由垫片推送，实例随 iframe 一同销毁。 */
@@ -142,6 +159,33 @@ export class SceneHost {
    * 文本对象的排版（P6b 1d，`text/host.ts`）：第一张带文本层的 bundle 到达时建，wasm 实例与读过的字体跨重编译保留，每次加载新建图集。
    */
   private sceneTexts: SceneTexts | null = null;
+  /**
+   * 视频纹理的播放（P9a 步骤 2）：第一张带视频纹理的 bundle 到达时建，重编译保留（按区间复用播放器，决定 2），退回预览图与销毁时释放。
+   * `videoBundle` 是它的下标表对应的 bundle（`loadVideos`），`drawingBundle` 是渲染器正在画的那份（换场景那一刻记下）。
+   */
+  private sceneVideos: SceneVideos | null = null;
+  private videoBundle: SceneBundle | null = null;
+  private drawingBundle: SceneBundle | null = null;
+  /**
+   * 交给渲染器的 `VideoSink`：同一份转给当前的 `sceneVideos`，没有时空操作。重编译时 `loadVideos` 在新场景换上之前就按新 bundle 的
+   * 下标重建了表（好早点读新出现的视频），这期间旧场景还在画、问的是旧下标：按视频区间换算成新下标，换算不到（新 bundle 里没有这段
+   * 视频）就不交帧，免得把别的视频拷进旧场景的纹理。
+   */
+  private readonly videoSink: VideoSink = {
+    beginFrame: () => this.sceneVideos?.beginFrame(),
+    drawn: (texture) => {
+      const videos = this.sceneVideos;
+      if (!videos) return null;
+      const drawing = this.drawingBundle;
+      const loaded = this.videoBundle;
+      if (!drawing || !loaded || drawing === loaded) return videos.drawn(texture);
+      const source = drawing.textures?.[texture]?.video;
+      if (!source) return null;
+      const key = videoSourceKey(source);
+      const index = (loaded.textures ?? []).findIndex((item) => !!item.video && videoSourceKey(item.video) === key);
+      return index < 0 ? null : videos.drawn(index);
+    },
+  };
   /** dev 探针计数：就地应用次数与重编译记录。 */
   readonly stats: SceneHostStats = { applied: 0, recompiled: [] };
   private receivedProperties = false;
@@ -587,6 +631,8 @@ export class SceneHost {
     this.paused = paused;
     this.renderer?.setPaused(paused);
     this.syncSoundGlobal();
+    // 视频纹理（P9a）：宿主暂停时全部 pause，恢复时全部放（rea-p9-video 第 3 节第 5 条）
+    this.sceneVideos?.setPaused(this.paused || this.hidden);
   }
 
   /**
@@ -602,6 +648,8 @@ export class SceneHost {
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
     this.syncSoundGlobal();
+    // 视频纹理同样按暂停处理：循环停了帧号不走，不停的话视频会在后台一直放
+    this.sceneVideos?.setPaused(this.paused || this.hidden);
   }
 
   /** 排期器看到的全局音量：暂停或隐藏时为 0，否则是宿主音量；暂停 / 恢复另交给播放器淡变。 */
@@ -642,6 +690,35 @@ export class SceneHost {
     this.sceneSounds?.dispose();
     this.sceneSounds = null;
     this.soundPlayer = null;
+  }
+
+  /**
+   * 换上 bundle 的视频纹理（P9a 步骤 2）：没有视频纹理的场景不建 `SceneVideos`。宿主收到 bundle 就开始读、开始放，不等 GPU 资源
+   * （WPE 建纹理时 `SetTarget` 就起工作线程，rea-p9-video 第 2 节第 2 条）。同一区间的播放器跨重编译复用（决定 2）。
+   */
+  private loadVideos(bundle: SceneBundle): void {
+    // 手写的测试 bundle 可能没有纹理表
+    const textures = bundle.textures ?? [];
+    if (!this.sceneVideos && !textures.some((texture) => texture.video)) return;
+    if (!this.sceneVideos) {
+      this.sceneVideos = new SceneVideos(this.options.report);
+      // 先定暂停再建播放器：暂停中加载的场景，新播放器一开始就不放
+      this.sceneVideos.setPaused(this.paused || this.hidden);
+    }
+    this.sceneVideos.load(textures);
+    this.videoBundle = bundle;
+  }
+
+  private disposeVideos(): void {
+    this.sceneVideos?.dispose();
+    this.sceneVideos = null;
+    this.videoBundle = null;
+    this.drawingBundle = null;
+  }
+
+  /** dev 探针（P9a）：每段视频的位置、`currentTime`、`paused`、`lastDrawn`、`fresh`、`failed`、尺寸与丢帧数；没有视频时为空。 */
+  videos(): SceneVideoProbe[] {
+    return this.sceneVideos?.probe() ?? [];
   }
 
   /** dev 探针：每个声音对象的模式、当前文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的元素与 context。 */
@@ -690,6 +767,7 @@ export class SceneHost {
       // 场景频谱的输入（P4e 步骤 4）：Hub 最近一次的原值，渲染器每帧开头取一次
       audioFrame: () => this.lastAudioFrame,
       stepObjects: (dt) => this.sceneSounds?.step(dt, this.soundVolumeOf),
+      videos: this.videoSink,
       beforeFrame: (dt, spectrum) => {
         // 脚本的音频缓冲改读归一化频谱（P4e 步骤 4，「决定」5）：渲染器这一帧推进之后、脚本之前拷一次
         this.scriptApi?.applySpectrum(spectrum);
@@ -745,6 +823,7 @@ export class SceneHost {
     this.dropRenderer();
     // 退回预览图：场景不显示，声音也停（下次能渲染时重新开始）
     this.disposeSounds();
+    this.disposeVideos();
     this.bundle = null;
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
@@ -829,6 +908,8 @@ export class SceneHost {
       this.loadSounds(bundle);
       // 场景用音频（P4e 步骤 4）：声明了开关且有带音频的粒子模块，加载就订阅（只订一次）
       if (bundle.audio) this.subscribeAudio();
+      // 视频纹理同样在脚本与 GPU 资源之前开始读、开始放（P9a）
+      this.loadVideos(bundle);
       // runtime 已赋值但脚本还在加载时也要等，否则会抢在 init 之前进入首帧
       if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;
@@ -843,6 +924,8 @@ export class SceneHost {
         ignoreUnsupported: force,
         texts,
         beforeFirstFrame: (state) => {
+          // 渲染器从这一帧起画这份 bundle：视频的下标按它换算（`videoSink`）
+          this.drawingBundle = bundle;
           this.scriptBundle = bundle;
           this.scriptState = state;
           this.runtime?.replayWrites();
@@ -866,6 +949,18 @@ export class SceneHost {
           ? `，目标 ${stats.width}×${stats.height} ${stats.format}、渲染目标约 ${Math.round(stats.targetBytes / 2 ** 20)} MiB`
           : "");
       if (this.state !== "ready") {
+        // 视频纹理（P9a 决定 1）：第一次 ready 之前等可见图层用到的视频出第一帧，最多 2 s。WPE 不等（第一帧之前图层透明），但 ready 之后
+        // 应用页要淡入，透明的那几帧会被看见。等完补画一帧，把第一帧拷进来（循环在跑时 `redraw` 什么都不做，下一帧自然拷）。
+        // 重新加载（已经 ready）时不等
+        if (this.sceneVideos) {
+          await this.sceneVideos.firstFrames(
+            visibleVideoTextures(bundle, current.sceneState),
+            FIRST_VIDEO_FRAME_TIMEOUT_MS,
+          );
+          // 等的期间被新的加载取代，或渲染器运行期失败已退回
+          if (id !== this.generation || this.renderer !== current) return;
+          current.redraw();
+        }
         this.state = "ready";
         this.lastFallback = "";
         this.options.report.info(
@@ -909,6 +1004,7 @@ export class SceneHost {
     this.disposeSounds();
     this.sceneTexts?.dispose();
     this.sceneTexts = null;
+    this.disposeVideos();
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;

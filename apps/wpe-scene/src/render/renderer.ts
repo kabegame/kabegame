@@ -9,7 +9,9 @@
  *   帧时间照 WPE 钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（T2，`FrameClock`）。粒子每个实时帧按帧时间步进一次，
  *   operator 的遍数由 `maxFps` 定（`particlePasses`：1–20 两遍，否则一遍，对应 WPE 的 `fps` 设置，P4a 步骤 4）。
  *   一帧的顺序（P4c 步骤 4）：`sync` → 步进粒子 → 脚本（`beforeFrame`）→ `sync` → 写每帧 uniform → 编码，粒子先于脚本，同 WPE。
- *   声音的排期器（P6a 步骤 1，`stepObjects`）在步进粒子之后、脚本之前，同一个帧时间。
+ *   声音的排期器（P6a 步骤 1，`stepObjects`）在步进粒子之后、脚本之前，同一个帧时间。视频纹理（P9a 步骤 2，`videos`）的帧号在
+ *   帧时钟推进之后、第一次 `sync` 之前加一（`beginFrame`，只在实时帧，补画帧与暂停期间帧号不走），视频的结束回调因此先于脚本；
+ *   编码时画到视频纹理才拷帧（`GpuScene` 问 `drawn`）。
  * - **场景频谱**（P4e 步骤 4，`audio/spectrum.ts`）：帧开头、粒子步进之前按宿主给的原始频谱（`audioFrame`）推进一次，补画帧不推进；
  *   粒子读它的 16 段，脚本的音频缓冲在 `beforeFrame` 里从它拷。重编译保留。
  * - **视差**（P5a 步骤 2，`parallax.ts`）：视差点 P 在帧开头、粒子与脚本之前推进一次，脚本之后按当时的开关与 amount 交给
@@ -28,6 +30,7 @@ import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
 import type { TextLayout } from "../text/layout";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
+import type { VideoSink } from "../video/sceneVideos";
 import {
   BLIT_SAMPLER,
   createBlitBindGroup,
@@ -89,6 +92,11 @@ export interface SceneRendererOptions {
    * 帧时间（WPE 在对象更新里走声音计时器，rea-p6a-sound.md 2.3）。补画帧（帧时间 0）与暂停时不执行，计时自然冻结。
    */
   stepObjects?: (dt: number) => void;
+  /**
+   * 视频纹理的帧来源（P9a 步骤 2，宿主的 `SceneVideos`）：每个实时帧开头 `beginFrame`（帧时钟推进之后、粒子步进之前；补画帧不调），
+   * 换上的每个场景都交给 `GpuScene.setVideoSink`，编码时画到视频纹理才问 `drawn`。缺省时视频纹理保持全 0。
+   */
+  videos?: VideoSink;
 }
 
 export interface SceneLoadOptions {
@@ -325,6 +333,8 @@ export class SceneRenderer {
       scene.destroy();
       throw new DOMException("已被新的场景取代", "AbortError");
     }
+    // 视频纹理（P9a）：画第一帧之前接上，第一帧就能问 `drawn`
+    scene.setVideoSink(this.options.videos ?? null);
     const old = this.scene;
     this.scene = scene;
     this.state = state;
@@ -540,6 +550,10 @@ export class SceneRenderer {
     const live = !this.paused && !document.hidden && (runScripts || this.shouldRun);
     if (live) this.frameClock.advance(this.clock.seconds());
     else this.frameClock.hold();
+    // 视频纹理（P9a）：实时帧开头帧号加一，按「30 帧没画到」暂停空闲的视频，并判定绕回 / 结束：结束回调要在这一帧的脚本之前
+    // （p9-REPORT「时钟、循环」），所以在粒子步进之前。补画帧不调，暂停期间帧号不走（WPE 的帧号每个渲染帧加一，rea-p9-video 第 4 节）。
+    // 同声音在 try 外：视频的问题不让画面退回
+    if (live) this.options.videos?.beginFrame();
     const { time, frametime } = this.frameClock;
     const wrapped = time % TIME_WRAP_SECONDS;
     // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上

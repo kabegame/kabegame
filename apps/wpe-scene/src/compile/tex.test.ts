@@ -4,11 +4,12 @@
  * 不依赖 `ignore/` 与本机 WPE。
  */
 import { describe, expect, it } from "vitest";
-import type { SceneTexture } from "./bundle";
+import { compileScene, type SceneTexture } from "./bundle";
 import { SUPPORTED } from "./features";
 import type { SceneFile } from "./fs";
 import { parseTex, TEX_FLAGS, TEXTURE_FORMATS, textureFormat } from "./tex";
 import { mipCopyLayout, planTextureUpload, requiredFeatures } from "../render/textures";
+import type { Wpesl2wgsl } from "../wpesl2wgsl";
 
 function parts(...buffers: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(buffers.reduce((sum, bytes) => sum + bytes.length, 0));
@@ -314,5 +315,156 @@ describe("真实样本的头部形态：解析、解码与上传计划一致", (
     expect(requiredFeatures([texture])).toEqual(
       spec.format === 6 || spec.format === 7 ? ["texture-compression-bc"] : [],
     );
+  });
+});
+
+// ———— 视频纹理（P9a 步骤 2）：Worker 一个字节都不读，只给出视频在磁盘上的绝对区间 ————
+
+/** 视频长度：远大于解析头部的 4 KiB 窗口，读了就看得出来（语料最大 674 MiB，经主线程代读不可接受）。 */
+const VIDEO_LENGTH = 256 * 1024;
+
+/**
+ * 照 `ignore/p9/gen_v.py` 的 `make_tex`（头照语料 3828359750）：格式 0、标志 34（Video + ClampUVs）、纹理与图像都是 1280×720、
+ * 一张图、一个 mip、uncompressedSize 0。`TEXB0004` 多一个 isVideoMp4（0），头共 91 字节；`TEXB0003` 87 字节。
+ */
+function videoTex(container: 3 | 4, video: Uint8Array): Uint8Array {
+  return parts(
+    magic("TEXV0005"),
+    magic("TEXI0001"),
+    u32(0),
+    u32(TEX_FLAGS.video | TEX_FLAGS.clampUVs),
+    u32(1280),
+    u32(720),
+    u32(1280),
+    u32(720),
+    u32(0),
+    magic(`TEXB000${container}`),
+    u32(1),
+    u32(-1),
+    ...(container === 4 ? [u32(0)] : []),
+    u32(1),
+    u32(1280),
+    u32(720),
+    u32(0),
+    u32(0),
+    u32(video.length),
+    video,
+  );
+}
+
+/** 记下每次区间读（相对文件开头）的替身文件。 */
+function recordingFile(
+  bytes: Uint8Array,
+  file: Omit<SceneFile, "readRange" | "source" | "path">,
+  reads: [number, number][],
+): SceneFile {
+  return {
+    source: "project",
+    path: "materials/v.tex",
+    ...file,
+    async readRange(start: number, end: number) {
+      reads.push([start, end]);
+      return bytes.slice(start, end);
+    },
+  };
+}
+
+describe("parseTex：视频纹理不读 mip，只给磁盘上的绝对区间（P9a 步骤 2）", () => {
+  const containers = [
+    [4, 91],
+    [3, 87],
+  ] as const;
+
+  it.each(containers)(
+    "TEXB000%i（头 %i 字节）散文件：区间从文件开头算，头在首个 4 KiB 里、不再读任何东西",
+    async (container, header) => {
+      const bytes = videoTex(container, pattern(VIDEO_LENGTH, 7));
+      expect(bytes.length).toBe(header + VIDEO_LENGTH);
+      for (const decode of [true, false]) {
+        const reads: [number, number][] = [];
+        // 散文件同 `SceneFs.loose`：大小未知，head 是存在性探测那次 4 KiB 读的结果
+        const file = recordingFile(
+          bytes,
+          { size: null, head: bytes.slice(0, 4096), location: { path: "P:/p/materials/v.tex", offset: 0 } },
+          reads,
+        );
+        const result = await parseTex(file, decode);
+        // 这一步照报（步骤 3 才删键）
+        expect(result.unsupported).toEqual(["tex:video"]);
+        const mip = result.images[0].mips[0];
+        expect([mip.offset, mip.length, mip.bytes]).toEqual([header, VIDEO_LENGTH, undefined]);
+        expect(result.video).toEqual({ path: "P:/p/materials/v.tex", start: header, end: header + VIDEO_LENGTH });
+        expect(reads).toEqual([]);
+      }
+    },
+  );
+
+  it.each(containers)(
+    "TEXB000%i（头 %i 字节）scene.pkg 条目：区间带条目偏移；只读头所在的 4 KiB 窗口一次",
+    async (container, header) => {
+      const bytes = videoTex(container, pattern(VIDEO_LENGTH, 9));
+      const offset = 123_457;
+      const reads: [number, number][] = [];
+      const file = recordingFile(bytes, { size: bytes.length, location: { path: "P:/p/scene.pkg", offset } }, reads);
+      const result = await parseTex(file);
+      expect(result.images[0].mips[0].bytes).toBeUndefined();
+      expect(result.video).toEqual({
+        path: "P:/p/scene.pkg",
+        start: offset + header,
+        end: offset + header + VIDEO_LENGTH,
+      });
+      // 读头的窗口会顺带盖住视频开头不到 4 KiB（同散文件的 head）；没有从视频区间开始的读，也没有整段读
+      expect(reads).toEqual([[0, 4096]]);
+    },
+  );
+
+  it("编译：bundle 的纹理带绝对区间、没有 mip；经 SceneFs 读到的只有存在性探测那 4 KiB", async () => {
+    const bytes = videoTex(4, pattern(VIDEO_LENGTH, 3));
+    const reads: [string, number, number][] = [];
+    const files: Record<string, Uint8Array | string> = {
+      "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+      "P:/p/scene.json": JSON.stringify({
+        general: { orthogonalprojection: { width: 1280, height: 720 } },
+        objects: [{ id: 1, name: "v", image: "models/v.json", origin: "640 360 0" }],
+      }),
+      "P:/p/models/v.json": JSON.stringify({ material: "materials/v.json" }),
+      "P:/p/materials/v.json": JSON.stringify({ passes: [{ shader: "s", textures: ["v"] }] }),
+      "P:/p/materials/v.tex": bytes,
+      "P:/p/shaders/s.vert": "void main() {}",
+      "P:/p/shaders/s.frag": "void main() {}",
+    };
+    const content = (path: string) => {
+      const value = files[path.replace(/\\/g, "/")];
+      if (value === undefined) throw new TypeError("Failed to fetch");
+      return typeof value === "string" ? new TextEncoder().encode(value) : value;
+    };
+    const bundle = await compileScene({
+      projectDir: "P:/p",
+      sceneAssets: ["A:/assets"],
+      reader: {
+        readWhole: async (path) => content(path),
+        readRange: async (path, start, end) => {
+          reads.push([path.replace(/\\/g, "/"), start, end]);
+          return content(path).slice(start, end);
+        },
+      },
+      // 假翻译器：一律成功、没有接口，不依赖 wasm
+      translator: {
+        translate: async () => ({ ok: true, uniforms: [], textures: [], combos: [] }),
+      } as unknown as Wpesl2wgsl,
+      postprocess: "disabled",
+      exhaustive: true,
+    });
+    expect(bundle.unsupported).toContain("tex:video");
+    expect(bundle.textures).toHaveLength(1);
+    const [texture] = bundle.textures;
+    expect(texture.mips).toEqual([]);
+    expect({ ...texture.video, path: texture.video?.path.replace(/\\/g, "/") }).toEqual({
+      path: "P:/p/materials/v.tex",
+      start: 91,
+      end: 91 + VIDEO_LENGTH,
+    });
+    const videoReads = reads.filter(([path]) => path === "P:/p/materials/v.tex");
+    expect(videoReads).toEqual([["P:/p/materials/v.tex", 0, 4096]]);
   });
 });

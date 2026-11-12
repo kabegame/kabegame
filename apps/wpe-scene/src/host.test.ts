@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "./audio/spectrum";
 import type { SceneBundle } from "./compile/bundle";
 import type { ScriptRealm } from "./script/runtime";
+import type { VideoSink } from "./video/sceneVideos";
 
 const subscribeAudio = vi.fn<(args: Record<string, unknown>) => Promise<void>>();
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -69,6 +70,46 @@ vi.mock("./render", async (importOriginal) => {
     },
   };
 });
+
+/**
+ * 视频纹理（P9a 步骤 2）：替身 `SceneVideos`，每个实例把调用记进 `log`。真的会建 `<video>`、按区间 `fetch(file:)`，Node 里没有。
+ * `firstFrames` 交回的 Promise 由 `firstFrameGate` 控制（缺省立即 resolve）。
+ */
+const videoFakes = vi.hoisted(() => ({
+  instances: [] as { log: string[]; disposed: boolean }[],
+  firstFrameGate: null as Promise<void> | null,
+}));
+vi.mock("./video/sceneVideos", () => ({
+  SceneVideos: class {
+    readonly record = { log: [] as string[], disposed: false };
+    constructor() {
+      videoFakes.instances.push(this.record);
+    }
+    load(textures: { video?: unknown }[]) {
+      this.record.log.push(`load ${textures.map((texture) => (texture.video ? "v" : "-")).join("")}`);
+    }
+    setPaused(paused: boolean) {
+      this.record.log.push(`paused ${paused}`);
+    }
+    firstFrames(textures: readonly number[], timeoutMs: number) {
+      this.record.log.push(`firstFrames ${textures.join(",")} ${timeoutMs}`);
+      return videoFakes.firstFrameGate ?? Promise.resolve();
+    }
+    beginFrame() {
+      this.record.log.push("beginFrame");
+    }
+    drawn(texture: number) {
+      this.record.log.push(`drawn ${texture}`);
+      return null;
+    }
+    probe() {
+      return [];
+    }
+    dispose() {
+      this.record.disposed = true;
+    }
+  },
+}));
 
 const { SceneHost } = await import("./host");
 const { Channel } = await import("@tauri-apps/api/core");
@@ -544,6 +585,154 @@ describe("SceneHost：开场指针（P5a 收尾）", () => {
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
     expect(rendererPointer.load).toHaveBeenCalled();
     expect(rendererPointer.setPointer).not.toHaveBeenCalled();
+    host.dispose();
+  });
+});
+
+describe("SceneHost：视频纹理（P9a 步骤 2）", () => {
+  /** `names` 里 `-` 是普通纹理，其余是视频（区间按名字区分）；`fx` 绑在重编译目标上，改它就整场重编译。 */
+  function videoBundle(names: string[]): SceneBundle {
+    return {
+      ...bundleFor({}),
+      bindings: [
+        { property: "fx", target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" } },
+      ],
+      textures: names.map((name) =>
+        name === "-"
+          ? { path: "materials/i.tex" }
+          : { path: `materials/${name}.tex`, video: { path: `P:/p/materials/${name}.tex`, start: 91, end: 1091 } },
+      ),
+    } as unknown as SceneBundle;
+  }
+  /** 渲染器拿到的 `videos` 选项（宿主的 sink）。 */
+  const rendererSink = () => (rendererCreate.mock.calls[0][0] as { videos: VideoSink }).videos;
+
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    rendererCreate.mockClear();
+    videoFakes.instances.length = 0;
+    videoFakes.firstFrameGate = null;
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rendererPointer.load.mockImplementation(async () => {});
+  });
+
+  it("没有视频纹理的 bundle 不建 SceneVideos；没有纹理表的手写 bundle 也一样", async () => {
+    compile.mockImplementationOnce(async () => videoBundle(["-"]));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    host.dispose();
+
+    compile.mockImplementationOnce(async () => ({ ...bundleFor({}), textures: undefined }) as unknown as SceneBundle);
+    const bare = reporter();
+    const other = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report: bare });
+    other.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(bare.ready).toHaveBeenCalledOnce());
+    expect(videoFakes.instances).toEqual([]);
+    expect(other.videos()).toEqual([]);
+    other.dispose();
+  });
+
+  it("建好先按宿主暂停定状态再 load；之后暂停 / 隐藏都转给 setPaused(paused || hidden)；销毁时释放", async () => {
+    compile.mockImplementation(async () => videoBundle(["v0", "-"]));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    // 建之前暂停：只记下，建的时候带上
+    host.setPaused(true);
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect(videoFakes.instances).toHaveLength(1);
+    const [videos] = videoFakes.instances;
+    // 渲染器替身没有状态，可见性取不到：等全部视频纹理
+    expect(videos.log).toEqual(["paused true", "load v-", "firstFrames 0 2000"]);
+    expect(rendererCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        videos: expect.objectContaining({ beginFrame: expect.any(Function), drawn: expect.any(Function) }),
+      }),
+    );
+    videos.log.length = 0;
+    host.setHidden(true);
+    host.setPaused(false);
+    host.setHidden(false);
+    expect(videos.log).toEqual(["paused true", "paused true", "paused false"]);
+    host.dispose();
+    expect(videos.disposed).toBe(true);
+  });
+
+  it("第一次 ready 等可见视频的第一帧；重编译不等，沿用同一个 SceneVideos", async () => {
+    let release!: () => void;
+    videoFakes.firstFrameGate = new Promise((resolve) => (release = resolve));
+    compile.mockImplementation(async () => videoBundle(["-", "v1"]));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(videoFakes.instances[0]?.log).toContain("firstFrames 1 2000"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(report.ready).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(report.debug).toHaveBeenCalledWith(expect.stringContaining("重新加载")));
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(videoFakes.instances).toHaveLength(1);
+    const log = videoFakes.instances[0].log;
+    expect(log.filter((line) => line.startsWith("load"))).toEqual(["load -v", "load -v"]);
+    expect(log.filter((line) => line.startsWith("firstFrames"))).toHaveLength(1);
+    host.dispose();
+  });
+
+  it("渲染器运行期失败退回预览图时释放", async () => {
+    compile.mockImplementation(async () => videoBundle(["v0"]));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    (rendererCreate.mock.calls[0][0] as { onError(reasons: string[]): void }).onError(["webgpu:validation:x"]);
+    expect(report.fallback).toHaveBeenCalledWith(["webgpu:validation:x"]);
+    expect(videoFakes.instances[0].disposed).toBe(true);
+    expect(rendererSink().drawn(0)).toBeNull();
+    host.dispose();
+  });
+
+  it("sink：新场景换上之前，旧场景问的旧下标按视频区间换算成新下标；新 bundle 里没有的视频不交帧", async () => {
+    const first = videoBundle(["vx", "vy", "vz"]);
+    const second = videoBundle(["vy", "-", "vx"]);
+    compile.mockImplementationOnce(async () => first).mockImplementation(async () => second);
+    // 渲染器替身在换场景那一刻调 beforeFirstFrame（同 `SceneRenderer.load`）；`gate` 挡住第二次换场景
+    let gate: Promise<void> = Promise.resolve();
+    rendererPointer.load.mockImplementation(async (_bundle: unknown, options?: unknown) => {
+      await gate;
+      (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({});
+    });
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    const sink = rendererSink();
+    const log = videoFakes.instances[0].log;
+    sink.beginFrame();
+    sink.drawn(1);
+    expect(log.slice(-2)).toEqual(["beginFrame", "drawn 1"]);
+
+    let swap!: () => void;
+    gate = new Promise((resolve) => (swap = resolve));
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(log).toContain("load v-v"));
+    log.length = 0;
+    // 旧场景还在画：vx 0 → 2、vy 1 → 0，vz 新 bundle 里没有
+    expect([sink.drawn(0), sink.drawn(1), sink.drawn(2)]).toEqual([null, null, null]);
+    expect(log).toEqual(["drawn 2", "drawn 0"]);
+
+    swap();
+    await vi.waitFor(() => expect(report.debug).toHaveBeenCalledWith(expect.stringContaining("重新加载")));
+    log.length = 0;
+    sink.drawn(0);
+    expect(log).toEqual(["drawn 0"]);
     host.dispose();
   });
 });

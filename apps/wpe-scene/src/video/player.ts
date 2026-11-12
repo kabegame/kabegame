@@ -372,9 +372,10 @@ export class VideoTexturePlayer {
       return;
     }
     const played = this.element.play();
-    // 紧跟着的 pause 打断 play 是正常的（AbortError）；静音视频一般不会被自动播放策略拦，真被拦只记一次
+    // 紧跟着的 pause 打断 play 是正常的（AbortError）；静音视频一般不会被自动播放策略拦，真被拦只记一次。已经失败的（解码出错时
+    // play() 必然被拒，NotSupportedError）由 `fail` 记过一条，这里不再重复
     played?.catch?.((error: unknown) => {
-      if (isAbort(error) || this.disposed || this.playWarned) return;
+      if (isAbort(error) || this.disposed || this.failed || this.playWarned) return;
       this.playWarned = true;
       this.report.warn(`场景视频播放失败：${this.source.path}`, error);
     });
