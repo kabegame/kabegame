@@ -91,6 +91,7 @@ const EXPORTS = [
   "wpefont_font_metrics",
   "wpefont_shape",
   "wpefont_glyph",
+  "wpefont_glyph_box",
 ];
 
 // setjmp / longjmp 走 wasm 异常处理（exnref），链接 libsetjmp（wasi-libc 的做法）

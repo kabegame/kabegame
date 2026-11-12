@@ -1,6 +1,6 @@
 # 场景宿主测试数据的生成与参考脚本
 
-`src/particles/` 里几份测试数据和常量文件的生成脚本、`src/wpefont/` 的字形基线，以及单测钉的值所用的独立参考实现。它们原来散在对比台
+`src/particles/` 里几份测试数据和常量文件的生成脚本、`src/wpefont/` 的字形基线、`src/text/` 的排版与图集基线，以及单测钉的值所用的独立参考实现。它们原来散在对比台
 `ignore/p4/` 的各步骤目录里（原件照旧留在那里），挪进来是为了产品自己能复现这些文件。
 
 - 脚本只认自己的位置：输出缺省写进 `apps/wpe-scene/src/particles/`，都可以用 `--out` 改到别处。
@@ -24,6 +24,7 @@ Node 与 vitest；格式化用仓库根的 Prettier。命令都从仓库根运�
 | `noise_equal_cases.py` | 核对 `noise.test.ts`「snoise3 坐标相等时的顶点顺序」钉的 8 个值，并打印原版 Gustavson 顺序下的值 | `noise_ref.py` |
 | `noise_xcheck.test.ts` + `noise_xcheck.py` | 对拍：20 万组随机 float32 输入，产品的 `snoise1/2/3` 与 `noise_ref.py` 逐位比较 | 产品代码 `src/particles/noise.ts` |
 | `make_wpefont_baseline.py` | 生成 `src/wpefont/fixtures/baseline.json`（`wpefont/index.test.ts` 用）：9 个单行、不需要回退的文本对象的逐字形基线 | P6b 1a 发布包 2.14.3 的输出 `ignore/p6/b1a/out/ft2.14.3/wasm-b.json`、测试工程 `ignore/p6/b0/proj/p6b-*` |
+| `make_text_fixture.py` | 生成 `src/text/fixtures/p6b.json`（`text/layout.test.ts` 用）：`p6b-*` 六个静态工程、44 个文本对象的四边形、原点、文字框、合成 RT 尺寸，21 张图集的像素 SHA-256 | WPE 抓帧的回放导出 `ignore/p6/b0/out/rd/dump.json`、`dump2.json` 与图集 PNG、测试工程 `ignore/p6/b0/proj/p6b-*`、本机 `%WINDIR%\Fonts` |
 
 ## 用法
 
@@ -84,6 +85,24 @@ node node_modules/prettier/bin/prettier.cjs --write apps/wpe-scene/src/wpefont/f
 ```
 
 `--results` 是 1a 用 FreeType 2.14.3 / HarfBuzz 15.0.0 发布包编出的 wasm 跑 `p6b-*` 工程的输出（`ignore/p6/b1a/harness.mjs` 的格式），1a 已把它和 WPE 抓帧的图集逐像素核对过（`.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「步骤 1a」）。对象表写在脚本里；对象多行或出现回退字体时报错。只存位图 SHA-1。
+
+### 文本排版与图集基线（P6b 1c）
+
+```bash
+python -X utf8 -I apps/wpe-scene/scripts/fixtures/make_text_fixture.py [--dump 文件 …] [--proj 目录] [--fonts 目录] [--out 文件]
+node node_modules/prettier/bin/prettier.cjs --write apps/wpe-scene/src/text/fixtures/p6b.json
+```
+
+- `--dump` 是 WPE 2.8.42 抓帧（`A:\p6b\<工程>\*.rdc`，P6b 0c）的回放导出：每个绘制的网格顶点（`POSITION` / `TEXCOORD`）、
+  纹理、`g_ModelViewProjectionMatrix`，图集存成 PNG（`saved`）。重新导出用 `ignore/p6/b0/rdc_text.py`；抓帧没了就用
+  wpe-renderdoc MCP 重抓 `ignore/p6/b0/proj/p6b-*`（新抓的图集与顶点应当相同，脚本里的资源号会变）。`p6b-script` 的文字
+  逐帧变，不收。
+- 只用标准库，PNG 自己解码（8 位、不隔行）。R8 图集存成 RGBA PNG，取 R 通道；RGBA8 取四个通道。
+- 绘制按场景对象顺序认：一个对象是连续的字形绘制（`g_Color4`，R8 在前、彩色 RGBA8 在后）；合成对象再找把它的 RT 画上屏的
+  那次绘制；开背景的直接上屏对象，字形前面那次 `flat` 绘制是背景。网格必须是 WPE 的四边形写法（索引 `4i, 4i+2, 4i+1,
+  4i+1, 4i+2, 4i+3`），MVP 必须是正交投影，否则报错。
+- `--fonts` 记下 `systemfont_*` 与回退链里 13 个系统字体的有无与 SHA-256 前 16 位（抓帧那台机器的字体环境），测试在本机
+  不同时跳过那个工程。
 
 ### 核对重新生成的文件和仓库里的相同
 

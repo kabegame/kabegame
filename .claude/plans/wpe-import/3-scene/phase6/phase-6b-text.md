@@ -428,6 +428,15 @@ fn font_grants() -> Vec<FileGrant> {
 
 ### 1c — 排版与图集（新增 `apps/wpe-scene/src/text/`）
 
+**动工前的实验（2026-11-12，`ignore/p6/b1c/`）：WPE 的字形框与图集格子各取什么。** 反编译里 WPE 取框（`FUN_1401addb0`）是 `FT_Load_Glyph(face, gid, 8)`，标志只有 `FT_LOAD_NO_BITMAP`，没有强制自动 hinting 的位（渲染那次也只有 `RENDER | COLOR`，opensticks 走自动 hinter 是 WPE 那份 FreeType 自己定的，两次加载一样）。`box.c` 在产品胶水上加一个按标志取框的导出，`boxes.mjs` 对 p6b 六个工程的全部字形（含省略号）算位图框与三组 NO_BITMAP 标志下的框，和抓帧里每个四边形的顶点尺寸、UV 格子比：
+
+| | 普通字形（499 个 WPE 四边形） | 彩色 emoji（seguiemj 😀，p6b-fallback b1） |
+|---|---|---|
+| WPE 四边形尺寸 | 位图框 = 轮廓框（三组标志全一样，加不加强制规则也一样） | **141×142 = NO_BITMAP 轮廓框**（`21,-24,162,118`） |
+| WPE 图集 UV 区域 | 等于四边形 | **133×132 = 位图尺寸**（`25,-19,158,113`），在 (0, 0) |
+
+结论（和 rea-p6b-raster 3.2「格子 = 位图宽高」、rea-p6b-layout 2.4「字形四边形用 `FUN_1401addb0` 的边界」一致）：**几何一律用轮廓框**（四边形、断行的墨迹右沿、行与文字框的包围盒），**图集格子与 UV 用位图宽高**；两者不同时位图被拉伸到四边形上。普通字形两者相同，所以 0c 的离线参考（全用位图框）能对上。我们的轮廓框取法：`FT_LOAD_NO_BITMAP | (强制规则成立时 FT_LOAD_FORCE_AUTOHINT)`。没覆盖到、照读码推的：只有内嵌点阵的彩色字体（sbix / CBDT，`NO_BITMAP` 加载失败）、基础字形没有轮廓的 COLR 字体（框为空）、小字号下的单色内嵌点阵（WPE 按宽度当灰度拷，结果是乱码）。
+
 **点 1 — 字体与回退链（`text/fonts.ts`）**
 - **新增** `TextFonts`：按「字体文件 + 字号」缓存 face 列表（主字体在前，回退字体按 WPE 的表顺序追加、加载过的永久留下，rea-p6b-raster 2.3）；字体字节由宿主注入的读取器提供（工程字体走 `SceneFs`，`systemfont_*` 与回退链走 `C:\Windows\Fonts`，Twemoji 走 WPE `assets`）。查字是同步的：某个回退字体还没读进来时记下「缺」，返回当前能用的结果，由调用方异步读完再排。
 - 分段规则照 WPE：逐码点在已加载的 face 里找，找不到就按表加载下一项；相邻 face 不同就切段，空白与 ZWJ 不切段。
@@ -435,7 +444,7 @@ fn font_grants() -> Vec<FileGrant> {
 **点 2 — 排版（`text/layout.ts`）**
 - **新增** `layoutText(fields, fonts): TextLayout`，逐条照 rea-p6b-layout 2–3 与 0c 的补充（离线参考 `ignore/p6/b0/ft_layout.py` 已和 WPE 逐坐标对上）：
   - 预处理：删 `\r`、按 `\n` 分段、尾部 `\n` 不成行；`limitrows` 时超出的段丢掉、最后一段去尾部空白、按需接「…」；
-  - 逐行：每段 HarfBuzz 排字，笔位 `pen += (x_advance >> 6) + spacing.x`，字形四边形 = 位图框；
+  - 逐行：每段 HarfBuzz 排字，笔位 `pen += (x_advance >> 6) + spacing.x`，字形四边形 = 轮廓框（`WpefontFace.box`，见上面的实验）加 `x_offset >> 6`、`y_offset >> 6`；墨迹、断行、包围盒也都用它；
   - 断行：`limitwidth` 时按「笔位 + 墨迹右沿 > maxwidth」触发，往前找空白断词、找不到按字断；行满时加省略号逐字回退（接「…」前去掉前缀尾部空白）或在第一个越界的非空白字形处截断；
   - 行高 `(height >> 6) + spacing.y`，行内对齐，`blockalign` 两端对齐；
   - 包围盒（高至少「行数 × 行高」）、`padding`（有 effect、`colorBlendMode` 合成或背景时才加，钳到 512）、横纵对齐写进原点偏移。
@@ -452,17 +461,63 @@ export interface TextLayout {
 
 **点 3 — 图集（`text/atlas.ts`）**
 - **新增** 照抄 WPE 的装箱器（rea-p6b-raster「装箱」与 `FUN_1401ae080` 的反编译，`ignore/p6/rea/text/raster/f_1401ae080.c`）：
-  - 格子尺寸取 `FT_Glyph_Get_CBox` 的像素框（不是位图尺寸），按行（shelf）放，每行一张按 x 排序的格子表，在已有格子之间找第一个放得下的空隙（判定 `w ≤ 下一格.x0 − 上一格.x1`，起点 `上一格.x1 + 1`，**保留会和下一格重叠的那个差一**）；
+  - 格子尺寸取位图宽高（rea-p6b-raster 3.2，上面的实验），UV 是格子的像素矩形；按行（shelf）放，每行一张按 x 排序的格子表，在已有格子之间找第一个放得下的空隙（判定 `w ≤ 下一格.x0 − 上一格.x1`，起点 `上一格.x1 + 1`，**保留会和下一格重叠的那个差一**）；
   - 放下后清零四周各一行 / 一列（x 或 y 为 0 时清最后一列 / 一行）；
   - 满了先回收引用数为 0 的旧字形，再宽高翻倍（512 → 4096）、旧 UV × 0.5；
   - R8 与 RGBA8 两张，按「字体 + 字号」共享；记录脏区，供渲染层增量上传。
     > 说明：零尺寸字形（空格）在这套规则下会占位、清零相邻格子的边缘像素（1a 那 1 个像素）；照抄才能和 WPE 逐字节相同。
-    > 说明：WPE 的格子框来自另一次 `FT_LOAD_NO_BITMAP` 加载的轮廓框（`FUN_1401addb0`，按 `faceIdx << 24 | glyph` 缓存），不是 1b `glyph()` 里那个等于位图框的 `cbox`。`wpefont` 补一个导出 `wpefont_glyph_box(font, gid, out)`：`FT_Load_Glyph(gid, FT_LOAD_NO_BITMAP [| FORCE_AUTOHINT])` → `FT_Get_Glyph` → `FT_Glyph_Get_CBox(PIXELS)`。带不带强制自动 hinting、彩色字形（框比位图小或大时位图怎么放进格子）、内嵌点阵三处用 WPE 图集定，测试工程加一个彩色 emoji 与一个小字号的雅黑。
+    > 说明：`wpefont` 补导出 `wpefont_glyph_box(font, gid, out)`：`FT_Load_Glyph(gid, FT_LOAD_NO_BITMAP | 强制规则)` → `FT_Get_Glyph` → `FT_Glyph_Get_CBox(PIXELS)`，TS 侧 `WpefontFace.box(gid)`，按「face + gid」缓存（WPE 按 `faceIdx << 24 | glyph` 缓存）。1b `glyph()` 里那个等于位图框的 `cbox` 删掉，免得两个框混用。
+    > 说明：灰度位图逐行拷进 R8；BGRA 交换 R、B 成 RGBA、不反预乘（rea-p6b-raster 3.2）。单色内嵌点阵（`pixel_mode 1`）WPE 当灰度按宽度拷、画出乱码，我们照 WPE 的拷法照抄没有意义，展开成 0 / 255 并在实施记录里记为已知差异。
 
-**点 4 — 基线与单测（新增 `text/fixtures/p6b.json`、`text/*.test.ts`；新增 `ignore/p6/b0/make_fixture.py`）**
-- **新增** 从 `ignore/p6/b0/out/rd/dump*.json` 与图集 PNG 生成小体积的基线：每个对象的四边形（排版坐标与 UV）、局部原点在场景里的位置、文字框、合成 RT 尺寸，每张图集的 SHA-256。单测在 `KABEGAME_WPE_ROOT` 与 wasm 都在时运行，逐项相等。
+**点 4 — 基线与单测（新增 `text/fixtures/p6b.json`、`text/*.test.ts`；新增 `apps/wpe-scene/scripts/fixtures/make_text_fixture.py`）**
+- **新增** 从 `ignore/p6/b0/out/rd/dump*.json` 与图集 PNG 生成小体积的基线：每个对象的四边形（排版坐标与 UV）、局部原点在场景里的位置、文字框、合成 RT 尺寸，每张图集解码后像素的 SHA-256。生成脚本照 1b 的惯例放 `scripts/fixtures/`、在同目录 README 登记。单测在 `KABEGAME_WPE_ROOT` 与 wasm 都在时运行，逐项相等；要读系统字体的对象（`systemfont_*`、回退链）在字体文件缺失时跳过。图集按「字体 + 字号」跨对象共享，单测按场景里的对象顺序把一个工程整个排一遍再比图集。
 
-**验收（1c）：** `p6b-*` 的 45 个对象：四边形、原点、文字框、合成 RT 尺寸全部相同；15 张 WPE 图集的 SHA-256 全部相同（含 opensticks 那 1 个像素）。
+**验收（1c）：** `p6b-*` 的 44 个静态对象：四边形、原点、文字框、合成 RT 尺寸全部相同；静态工程的 21 张 WPE 图集（含 1 张彩色）解码后逐字节相同（含 opensticks 那 1 个像素）。`p6b-script` 的两帧图集随计数器变，1c 不比。
+
+### 1c 实施记录（2026-11-12）
+
+照点 1–4 做完，子代理实现。验收全部达成：44 个对象的四边形（排版坐标与 UV）、排版原点、文字框、合成 RT 尺寸和 WPE 相同，21 张图集（含彩色那张）解码后逐字节相同，opensticks「2」那 1 个像素也对上（空格的 1×1 格子按差一规则放在「1」「2」之间只有 1 列的空隙里，压在「2」的第一列上，清零下一行时清掉了 (32, 1)）。第一次跑就全过，所以另做了变异检查确认基线在比（见下表）。
+
+**接口（和计划的形状不同处）：**
+- `wpefont`：`wpefont_glyph` 回到 6 个 int；新导出 `wpefont_glyph_box(font, gid, out[4]) -> 0/非 0`（`NO_BITMAP | 强制规则`），TS `WpefontFace.box(gid): GlyphBox | null`，按 gid 缓存；`GlyphBitmap` 删掉 `cbox`。Twemoji 能复现「框 ≠ 位图框」（COLR，基础字形没有轮廓，框为空），单测加了这一条。
+- `fonts.ts`：字体位置约定 `system:<文件>` = `%WINDIR%\Fonts\<文件>`，其余是引擎路径（先工程、再 WPE `assets`；回退链里的 Twemoji 是 `fonts/TwemojiMozilla.ttf`，走引擎路径，同 WPE）。`TextFonts(engine, read)`：`load(paths)` 异步读字节；`faceList` / `lookup` / `segment` 同步，缺字节时把路径记进 `missing`、不推进回退链。排版先对「截行之后的全部码点 + 可能接的省略号」预查一遍，缺字体就返回 `missingFonts`、**不碰图集**，调用方读完重排。查字结果只取决于「主字体 + 回退链里存在的文件」这个顺序，和加载先后无关，所以预查多加载的字体不改结果（只多占内存）。
+- `layout.ts`：`layoutText(fields, fonts, atlases): TextLayout`，`TextLayout = { missingFonts, mesh: TextMesh | null, padding, size, compositeSize, offset }`；`TextMesh` 有 `glyphs` / `colorGlyphs`（`TextQuad`：排版坐标的左、下、右、上 + 图集字形的引用，**UV 不烤进去**，扩容后从字形读）、`box`、`lineHeight`、`rows`、`refs`；`releaseTextLayout` 减引用；`directTranslation` / `compositeTranslation` 是两条绘制路径的平移（`FUN_140258050` / `FUN_140257d70`）。`TextFields` 多两项 `visibleEffects`、`colorBlendMode`（决定加不加 `padding`）。`mesh.ts` 的 `textVertices` / `textIndices` 照 WPE 的顶点、索引布局，给 1d。
+- `atlas.ts`：`TextAtlases`（按字体键）→ `FontAtlases { main, color }` → `GlyphAtlas`；`rasterizeGlyph` 是 `FUN_1401ae080` 的非 MSDF 路径；`generation`（扩容次数）与 `takeDirty()`（矩形或整张）给渲染层。
+
+**照反编译补的规则（计划与 `ft_layout.py` 没写或写得不同）：**
+1. **字形进图集的时机：** 逐行、逐段排字时每个字形先 `FUN_1401ae080` 进图集，再判断越界——越界的那个进了图集但不画；越界后这一段剩下的与后面的段都不碰；省略号回退量宽只取框（`FUN_1401addb0`），不进图集；重排的行（折行后、加省略号后）再排一遍，已在图集里的直接复用。对象按场景顺序。`p6b` 的图集里没有任何格子外的像素（`ignore/p6/b1c/work/atlas_cover.py`），解析期没有用缺省字体的中间排版。
+2. **分段（`FUN_1401ad670`，读汇编）：** 每个码点都先查（空白、ZWJ 也查，可能触发加载回退字体），找到的 face 不同才切段，但 ZWJ 与 `\t \n \r` 空格不切；**还没有段时，开头的空白、ZWJ 与哪个字体都没有的码点不进任何段**（不排、不占步进）。`ft_ref.py` 把开头的空白放进第一段，p6b 里没有这种文字。
+3. **行的包围盒**含零尺寸字形（空格在笔位置上，行末的空格会撑大右沿）；`ft_layout.py` 排除了它们。
+4. **折行**往前找空白时包括下标 0；末尾去空白、后半段去开头空白用同一个掩码（`\t \r` 空格，`FUN_1401b0340`）。WPE 折行后只在断点「不能安全断开」（HarfBuzz `UNSAFE_TO_BREAK`）时重排这一行，否则直接截掉排好的字形；我们一律重排——按 HarfBuzz 的约定两者结果相同，重排时的字形都已在图集里。这样 `wpefont_shape` 不用多输出字形标志。
+5. **省略号量宽**不加 `spacing.x`（只累加 `x_advance >> 6`），宽度是最后一个字形的右沿；前缀为空或已以「…」结尾时不改写，本行截在越界处、不画省略号。加了 `spacing.x` 时省略号行可能每次都越界，WPE 会死循环，这里一行最多重排 64 次。
+6. **截行后的收尾**（`LAB_1401b205c`）：折行使行数超过 `maxrows` 时丢掉后面的行，最后一行去尾部空白、按开关接「…」（`FUN_1401b0360`）。
+7. **尺寸**：图层 `size = (w + p) + p`，`p` 按 `512 ≤ p` 钳；合成 RT `trunc((p + p) + w)`，`p` 按 `minss` 钳（只在 NaN 上不同）；没有排版结果时 `size = 2 + 2p`、RT 1×1。全部 float32 逐步舍入。
+8. **装箱器**另几处怪处（照抄）：非最后一行要 `h + 1 ≤ 行高`，所以同样高的字形用不上前面行里回收出来的格子；回收后行的最大空隙取 `max(原值, x1 − x0 + 1)`；翻倍后每行的最大空隙一律记成旧宽度；图集宽到 4096 还满时 WPE 清空每行的格子（行高不动、像素不清）、全部标成已回收再从头排，这张图集之后基本放不进东西。
+9. **取框失败**（只有内嵌点阵的字体）时 WPE 沿用上一个字形的框（栈上的旧值），照做；没有实测。
+10. **单色点阵**：WPE 不是「按宽度当灰度拷」，而是**根本不拷**（只认 `pixel_mode` 2 与 7），格子保持原样、字形画不出来。照计划展开成 0 / 255，记为已知差异。
+11. 回退到 Twemoji 的 emoji 在 WPE 里是零尺寸四边形（框为空），看不见。
+
+**验证（我跑的）：**
+
+| 项 | 结果 |
+|---|---|
+| `deno task build:wpefont` | 成功，产物 1,850,248 字节，WASI 导入 13 个 |
+| 位图不变 | `ignore/p6/b1c/work/harness.mjs`（1b harness 改新接口）+ `b1a/compare.py` 对 `ft2.14.3/wasm-b.json`：38 个对象、342 个字形，字段不同：无；新框只在 😀 上和位图框不同 |
+| 单测 | `src/text src/wpefont` 带 `KABEGAME_WPE_ROOT`：34 passed（`layout.test.ts` 8、`atlas.test.ts` 8、`fonts.test.ts` 4、wpefont 14）；不带：10 passed、24 skipped |
+| 变异检查 | 差一改成 `w + 1` → `p6b-extra` 挂；去掉下一行清零 → `p6b-extra` 挂；BGRA 不交换 → `p6b-fallback` 挂；纵向居中不乘 0.5 → 六个工程全挂；关两端对齐 → `p6b-wrap` 挂。右一列绕回清零、行末空格撑右沿、省略号量宽阈值改坏后基线仍过（抓帧覆盖不到），前两处由 `atlas.test.ts`、`layout.test.ts` 的读码用例钉住（改坏即挂） |
+| 基线可复现 | `make_text_fixture.py` 重新生成、Prettier 后与仓库里的逐字节相同；PNG 自己解码，用 PIL 核对过 21 张图集的哈希 |
+| tsc / 格式 | 本步文件 0 error；Prettier、`deno fmt` 通过。同轮 `src/render/events.test.ts` 有 1 个别的会话的错误 |
+| 整个宿主 vitest | 1933 passed、1 failed（`compile/pipeline.test.ts` 语料请求次数，1b 时就在） |
+| 耗时（Node） | 字体就绪后同一对象重排：9 字 0.03 ms、70 字两行带省略号 0.13 ms；新图集（含栅格化）1–2.7 ms |
+
+**没做：** CEF 里跑 `text/`（还没有调用方，1d 接进宿主时做）；changelog 不在本步允许改的文件里，没写。字体字节按「字体 + 字号」各拷一份进 wasm 堆（`msyh.ttc` 19.7 MB，两个主字体都回退到它时有两份；WPE 按路径共享），1d 接宿主时看要不要加共享字节的导出。
+
+**我复核的：**
+- 重新 `build:wpefont`，产物与宿主里的副本逐字节相同；`src/text src/wpefont` 34 passed，详细输出里 6 个工程的用例都真跑了，没有因字体环境不同而跳过。vitest 要在大写盘符的目录下跑（`cd "D:/Codes/kabegame/apps/wpe-scene"`），`d:/` 小写盘符下三个测试文件报 `Cannot read properties of undefined (reading 'config')`，和代码无关。
+- `make_text_fixture.py` 重新生成、Prettier 后与仓库里的 `p6b.json` 逐字节相同；图集哈希取自 RenderDoc 存下的 WPE 图集 PNG。
+- 自己做的两处变异：差一判定改成 `w + 1` → `p6b-extra` 与合成用例挂；`box()` 改返回位图框 → `p6b-fallback` 与 wpefont 两个用例挂。改回后逐字节还原。
+- 位图对 1a 的 2.14.3 结果仍字段不同：无；宿主 tsc 0 error；Prettier、`deno fmt`、LF 通过。
+- 循环都有界：折行每次前进至少一个码点，省略号回退到前缀为空为止，图集满后的第二轮遇到放不下直接跳过，省略号重排有 64 次上限；测试里没有构造会让 WPE 死循环的输入。
 
 ### 1d — 静态文本的编译与渲染
 

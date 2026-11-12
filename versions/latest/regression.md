@@ -1,5 +1,22 @@
 # v4.7.0 regression
 
+## 场景壁纸 P6b 1c：文本的字体回退、排版与图集
+
+2026-11-12 Windows。场景宿主新增 `apps/wpe-scene/src/text/`（纯 TS、不碰 GPU，还没有调用方，文本对象照旧退回预览图）：`fonts.ts`（按「字体 + 字号」的 face 列表与 WPE 回退链、逐码点分段）、`layout.ts`（照 `FUN_1401b0410` 排版：分行、断行、省略号、两端对齐、行内对齐、文字框、对齐偏移、图层与合成 RT 尺寸）、`atlas.ts`（逐行移植 `FUN_1401ae080` 的装箱器）、`mesh.ts`。`wpefont` 加导出 `wpefont_glyph_box`（WPE 取框的 `FT_LOAD_NO_BITMAP` 轮廓框，TS `WpefontFace.box`），`wpefont_glyph` 回到 6 个 int。基线 `src/text/fixtures/p6b.json` 由 `apps/wpe-scene/scripts/fixtures/make_text_fixture.py` 从 WPE 抓帧生成。计划见 `.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「1c」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 构建 | Windows，LLVM clang 22.1.6 | `deno task build:wpefont`，产物拷到 `apps/wpe-scene/src/wpefont/` | 编译链接成功、导出多一个 `wpefont_glyph_box`、WASI 导入不变 | 2026-11-12 Claude：产物 1,850,248 字节，WASI 导入 13 个 |
+| [x] | T2 位图不变 | Node 26 | `ignore/p6/b1c/work/harness.mjs`（1b harness 改成新接口）跑 `p6b-geom/align/fx/fallback/extra`，`ignore/p6/b1a/compare.py` 对 `ignore/p6/b1a/out/ft2.14.3/wasm-b.json` | 字段不同：无 | 2026-11-12 Claude：38 个对象、342 个字形，字段不同：无，整数步进不同 0；新框与位图框只在 Segoe UI Emoji 的 😀 上不同 |
+| [x] | T3 排版与图集和 WPE 逐坐标、逐字节相同 | Node，vitest | `apps/wpe-scene` 下 `KABEGAME_WPE_ROOT=<WPE> node ../../node_modules/vitest/vitest.mjs run src/text src/wpefont` | 44 个对象的四边形（排版坐标与 UV）、排版原点、图层 size / 背景、合成 RT 尺寸全部相同；21 张图集（含 1 张彩色）像素 SHA-256 相同 | 2026-11-12 Claude：4 个文件 34 passed（text 20、wpefont 14）。opensticks「2」那 1 个像素也对上 |
+| [x] | T4 基线确实在比 | Node，vitest | 逐条改坏后跑 T3：差一判定改成 `w + 1`、去掉下一行清零、BGRA 不交换、纵向居中不乘 0.5、关掉两端对齐 | 每条都有工程失败 | 2026-11-12 Claude：分别挂 `p6b-extra`、`p6b-extra`、`p6b-fallback`、六个工程全挂、`p6b-wrap`；改回后全过。右一列绕回清零、行末空格撑右沿、省略号量宽阈值这三处改坏后基线仍过（抓帧覆盖不到），前两处另由 `atlas.test.ts` / `layout.test.ts` 的读码用例钉住 |
+| [x] | T5 不带 WPE 目录 | Node，vitest | 不设 `KABEGAME_WPE_ROOT` 跑 T3 的命令 | 只剩不读字体的用例 | 2026-11-12 Claude：10 passed、24 skipped |
+| [x] | T6 基线可复现 | Windows，Python 3 标准库 | `make_text_fixture.py --out <临时>`，Prettier（`--config .prettierrc.json --ignore-path <空文件>`）后 `cmp` 仓库里的 `p6b.json` | 逐字节相同 | 2026-11-12 Claude：相同；PNG 解码另用 PIL 核对 21 张图集的哈希，全同 |
+| [x] | T7 类型与格式 | Windows | 宿主 `tsc --noEmit`、Prettier `--check src/text src/wpefont`、`deno fmt --check scripts/build-wpefont.ts` | 本步的文件 0 error、格式通过 | 2026-11-12 Claude：本步 0 error；同轮另有 1 个错误在别的会话正改的 `src/render/events.test.ts`（`SceneLayer` 缺 `group` 等字段），与本步无关 |
+| [x] | T8 整个宿主 vitest | Node，vitest | `apps/wpe-scene` 下带 `KABEGAME_WPE_ROOT` 跑全部 | 本步的用例全过 | 2026-11-12 Claude：77 个文件 1933 passed、1 failed——`compile/pipeline.test.ts` 的语料请求次数（`3830255100: 219 次请求`），1b 时就在，`compile/` 正被别的会话修改 |
+| [x] | T9 耗时 | Node 26 | `ignore/p6/b1c/work/perf/` 的 vitest：字体就绪后同一对象反复排（热），新图集再排（冷，含栅格化） | 每帧都排也撑得住 | 2026-11-12 Claude：热 0.03 ms（9 字）– 0.13 ms（70 字、两行带省略号），冷 1–2.7 ms |
+| [ ] | T10 CEF 里跑 `text/` | Windows dev | 宿主里加载字体、排 `p6b-*`、比图集 | 和 Node 相同 | 未测：`text/` 还没有调用方，1d 接进宿主时做 |
+
 ## 场景壁纸 P6b 1b：字体引擎 `wpefont` 进仓库
 
 2026-11-12 Windows。FreeType 2.14.3（`third/freetype`）+ HarfBuzz 15.0.0（`third/harfbuzz`）+ C 胶水 `src-tauri/wpefont/wpefont.c` 编成 wasm32-wasip1 reactor，给场景宿主的文本对象用（文本对象本身还没实现，1c 起）。构建 `deno task build:wpefont`（`scripts/build-wpefont.ts`，工具链经 `scripts/download.ts` 的 `fetchPinned` 下载），`WpefontPlugin` 拷进 `apps/wpe-scene/src/wpefont/`，包装 `apps/wpe-scene/src/wpefont/index.ts`；宿主的 `file:` 范围逐个放行 13 个系统字体文件（`wpe_scene_host.rs` 的 `font_grants`）。契约见 `src-tauri/wpefont/README.md`，计划见 `.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「1b」。

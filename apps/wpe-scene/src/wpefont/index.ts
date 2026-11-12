@@ -1,6 +1,6 @@
 /**
  * wpefont（FreeType 2.14.3 + HarfBuzz 15.0.0 编成的 wasm，C 胶水 `src-tauri/wpefont/wpefont.c`）的 JS 包装：
- * 文本对象的「加载字体、查字、度量、排字、取字形位图」。排版规则一条都不在这里（见 P6b 1c 的 `text/`）。
+ * 文本对象的「加载字体、查字、度量、排字、取字形位图与字形框」。排版规则一条都不在这里（见 P6b 1c 的 `text/`）。
  *
  * - wasm 由 `deno task build:wpefont` 产出到 `bin/wasm/wpefont/`，kabegame 命令不带 `--skip vue` 时拷到本目录
  *   （git 忽略）。缺失时 {@link loadWpefont} 返回 null，{@link wpefontLoadError} 给出原因，调用方把文本对象标成不支持。
@@ -44,7 +44,11 @@ export interface FontMetrics {
   forceAutohint: boolean;
 }
 
-/** `FT_Glyph_Get_CBox(FT_GLYPH_BBOX_PIXELS)` 的像素框，y 向上。 */
+/**
+ * 字形框：`FT_LOAD_NO_BITMAP` 加载后 `FT_Glyph_Get_CBox(FT_GLYPH_BBOX_PIXELS)` 的像素框（轮廓框向外取整），y 向上。
+ * WPE 的四边形、断行的墨迹右沿、行与文字框的包围盒都用它（`FUN_1401addb0`）；图集格子用位图宽高。
+ * 普通灰度字形两者相同，彩色字形（COLR）、内嵌点阵时不同（P6b 1c 实验）。
+ */
 export interface GlyphBox {
   xMin: number;
   yMin: number;
@@ -69,11 +73,6 @@ export interface GlyphBitmap {
    * 单色 1 位 / 像素、每行 `ceil(width / 8)` 字节（高位在左）。
    */
   pixels: Uint8Array;
-  /**
-   * 本次加载（已栅格化）的字形框，等于位图框。WPE 定图集格子用的是另一次 `FT_LOAD_NO_BITMAP` 加载的轮廓框，
-   * 彩色字形、内嵌点阵时和这个不同（见 `src-tauri/wpefont/README.md`）。
-   */
-  cbox: GlyphBox;
 }
 
 interface Exports {
@@ -87,6 +86,7 @@ interface Exports {
   wpefont_font_metrics(font: number, out: number): void;
   wpefont_shape(font: number, text: number, length: number, out: number, cap: number): number;
   wpefont_glyph(font: number, gid: number, out: number): number;
+  wpefont_glyph_box(font: number, gid: number, out: number): number;
 }
 
 const ERRNO_SUCCESS = 0;
@@ -215,6 +215,8 @@ class Engine {
 /** 一个字号下的一个字体（`FT_Face` + `hb_font_t`）。用完调 {@link dispose}。 */
 export class WpefontFace {
   private handle: number;
+  /** {@link box} 的缓存（WPE 也缓存，键 `face 下标 << 24 | gid`）；失败记 null。 */
+  private readonly boxes = new Map<number, GlyphBox | null>();
 
   /** @internal 由 {@link Wpefont.face} 创建。 */
   constructor(
@@ -288,9 +290,9 @@ export class WpefontFace {
   glyph(gid: number): GlyphBitmap | null {
     const handle = this.live();
     return this.engine.run((e) => {
-      const out = this.engine.scratch(40);
+      const out = this.engine.scratch(24);
       const buffer = e.wpefont_glyph(handle, gid, out) >>> 0;
-      const [width, rows, pitch, left, top, mode, xMin, yMin, xMax, yMax] = new Int32Array(this.engine.buffer, out, 10);
+      const [width, rows, pitch, left, top, mode] = new Int32Array(this.engine.buffer, out, 6);
       if (mode < 0) return null;
       const stride = rowBytes(mode, width, pitch);
       const pixels = new Uint8Array(stride * rows);
@@ -310,9 +312,26 @@ export class WpefontFace {
         mode,
         color: mode === PIXEL_MODE_BGRA,
         pixels,
-        cbox: { xMin, yMin, xMax, yMax },
       };
     });
+  }
+
+  /**
+   * 字形框（{@link GlyphBox}，`FT_LOAD_NO_BITMAP` 加载的轮廓框），按 gid 缓存；加载失败（gid 越界、只有点阵没有
+   * 轮廓等）返回 null。会覆盖字形槽，所以和 {@link glyph} 交替调用没问题（`glyph` 已把位图拷出）。
+   */
+  box(gid: number): GlyphBox | null {
+    const cached = this.boxes.get(gid);
+    if (cached !== undefined) return cached;
+    const handle = this.live();
+    const box = this.engine.run((e) => {
+      const out = this.engine.scratch(16);
+      if (e.wpefont_glyph_box(handle, gid, out) !== 0) return null;
+      const [xMin, yMin, xMax, yMax] = new Int32Array(this.engine.buffer, out, 4);
+      return { xMin, yMin, xMax, yMax };
+    });
+    this.boxes.set(gid, box);
+    return box;
   }
 
   /** 释放字体（连同交给它的字体数据）。重复调用无害。 */

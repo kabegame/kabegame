@@ -6,8 +6,9 @@
  *   - wpefont_font_has：FT_Get_Char_Index（回退链逐码点查）；
  *   - wpefont_font_metrics：size->metrics 的 ascender / descender / height（26.6）与 units_per_EM；
  *   - wpefont_shape：hb_buffer_add_utf32 + guess_segment_properties + hb_shape（无 features），每个字形 6 个 int；
- *   - wpefont_glyph：FT_Load_Glyph(gid, RENDER | COLOR [| FORCE_AUTOHINT])，返回位图指针与 10 个 int
- *     （位图的 6 个 + FT_Glyph_Get_CBox 的像素框 4 个）。
+ *   - wpefont_glyph：FT_Load_Glyph(gid, RENDER | COLOR [| FORCE_AUTOHINT])，返回位图指针与位图的 6 个 int；
+ *   - wpefont_glyph_box：FT_Load_Glyph(gid, NO_BITMAP [| FORCE_AUTOHINT]) → FT_Get_Glyph →
+ *     FT_Glyph_Get_CBox(PIXELS)，即 WPE 取字形框的 FUN_1401addb0（四边形、断行、包围盒用它，图集格子用位图）。
  * hinting 规则（2026-11-12 实测，和 WPE 图集一致）：TrueType（有 glyf）没有 fpgm 时强制自动 hinting；CFF 走原生引擎。
  * 排版规则一条都不放在这里，见 apps/wpe-scene/src/wpefont/ 与 README.md。
  */
@@ -116,22 +117,18 @@ EXPORT(wpefont_shape) int wpefont_shape(WpeFont *font, const uint32_t *text, int
   return (int)count;
 }
 
-/* out[10]：width、rows、pitch、bitmap_left、bitmap_top、pixel_mode，
- *          本次加载的字形经 FT_Get_Glyph → FT_Glyph_Get_CBox(FT_GLYPH_BBOX_PIXELS) 的 xMin、yMin、xMax、yMax。
- *          加载时已栅格化，取到的是位图字形的框，等于位图框。WPE 定图集格子与四边形用的是另一次
- *          FT_LOAD_NO_BITMAP 加载的轮廓框（rea-p6b-raster「加载标志」表，FUN_1401addb0）：彩色字形、内嵌点阵、
- *          两次加载 hinting 不同时和这里不同，1c 照它补导出。
+/* out[6]：width、rows、pitch、bitmap_left、bitmap_top、pixel_mode。图集格子取位图宽高（WPE 的 FUN_1401ae080
+ *         对这次加载的位图字形取 FT_Glyph_Get_CBox，就是位图框）。
  * 返回位图缓冲（字形槽里的，同一字体下次加载前有效；空字形可能为 0）。
- * 失败（gid 越界、字形坏）时返回 0，out 除 pixel_mode 外全写 0，pixel_mode 写 -1。 */
+ * 失败（gid 越界、字形坏，或 FT_Get_Glyph 失败，同 WPE 两步都要成功）时返回 0，out 除 pixel_mode 外全写 0，
+ * pixel_mode 写 -1。 */
 EXPORT(wpefont_glyph) unsigned char *wpefont_glyph(WpeFont *font, uint32_t gid, int32_t *out) {
-  for (int i = 0; i < 10; i++) out[i] = 0;
+  for (int i = 0; i < 6; i++) out[i] = 0;
   out[5] = -1;
   if (FT_Load_Glyph(font->face, gid, font->load_flags)) return 0;
   FT_GlyphSlot slot = font->face->glyph;
   FT_Glyph glyph;
   if (FT_Get_Glyph(slot, &glyph)) return 0;
-  FT_BBox box;
-  FT_Glyph_Get_CBox(glyph, FT_GLYPH_BBOX_PIXELS, &box);
   FT_Done_Glyph(glyph);
   out[0] = (int32_t)slot->bitmap.width;
   out[1] = (int32_t)slot->bitmap.rows;
@@ -139,9 +136,24 @@ EXPORT(wpefont_glyph) unsigned char *wpefont_glyph(WpeFont *font, uint32_t gid, 
   out[3] = slot->bitmap_left;
   out[4] = slot->bitmap_top;
   out[5] = slot->bitmap.pixel_mode;
-  out[6] = (int32_t)box.xMin;
-  out[7] = (int32_t)box.yMin;
-  out[8] = (int32_t)box.xMax;
-  out[9] = (int32_t)box.yMax;
   return slot->bitmap.buffer;
+}
+
+/* WPE 的取框（FUN_1401addb0）：FT_Load_Glyph(gid, FT_LOAD_NO_BITMAP) → FT_Get_Glyph →
+ * FT_Glyph_Get_CBox(FT_GLYPH_BBOX_PIXELS)，即轮廓框向外取整到整像素，y 向上。强制自动 hinting 的规则同
+ * wpefont_glyph（WPE 那份 FreeType 两次加载的 hinting 一样，P6b 1c 实验）。
+ * out[4]：xMin、yMin、xMax、yMax。成功返回 0；加载或 FT_Get_Glyph 失败返回非 0，out 不写（同 WPE）。
+ * 会覆盖字形槽：wpefont_glyph 返回的位图指针在这之后失效。 */
+EXPORT(wpefont_glyph_box) int wpefont_glyph_box(WpeFont *font, uint32_t gid, int32_t *out) {
+  if (FT_Load_Glyph(font->face, gid, FT_LOAD_NO_BITMAP | (font->load_flags & FT_LOAD_FORCE_AUTOHINT))) return 1;
+  FT_Glyph glyph;
+  if (FT_Get_Glyph(font->face->glyph, &glyph)) return 2;
+  FT_BBox box;
+  FT_Glyph_Get_CBox(glyph, FT_GLYPH_BBOX_PIXELS, &box);
+  FT_Done_Glyph(glyph);
+  out[0] = (int32_t)box.xMin;
+  out[1] = (int32_t)box.yMin;
+  out[2] = (int32_t)box.xMax;
+  out[3] = (int32_t)box.yMax;
+  return 0;
 }

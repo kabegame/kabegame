@@ -53,7 +53,8 @@ HarfBuzz 用 15.0.0，与离线参考 `uharfbuzz` 同版本。
 1b 用子模块（git checkout，`src/`、`include/` 与发布包逐字节相同）重新构建，跑同一套对照（`p6b-geom`、`p6b-align`、
 `p6b-fx`、`p6b-fallback`、`p6b-extra` 的 38 个对象、342 个字形），和 1a 发布包 2.14.3 的结果逐字段相同（gid、cluster、
 步进、偏移、位图尺寸、left / top、像素格式、位图 SHA-1）。`apps/wpe-scene/src/wpefont/index.test.ts` 用其中 9 个单行、
-不需要回退的对象做基线。
+不需要回退的对象做基线。1c 改接口（`wpefont_glyph` 回到 6 个 int、加 `wpefont_glyph_box`）后重跑同一套对照，仍逐字段相同；
+新框只在 😀 一个字形上和位图框不同。在这之上 `text/` 的排版与图集和 WPE 抓帧逐坐标、逐字节相同（`text/layout.test.ts`）。
 
 ## 接口（C ABI）
 
@@ -68,7 +69,8 @@ HarfBuzz 用 15.0.0，与离线参考 `uharfbuzz` 同版本。
 | `wpefont_font_has(font, codepoint) -> 0/1` | Unicode 码点 | `FT_Get_Char_Index != 0`（回退链逐码点查） |
 | `wpefont_font_metrics(font, out)` | `out`：5 个 `int32` | 见下 |
 | `wpefont_shape(font, text, length, out, cap) -> n` | `text`：`length` 个 UTF-32 码点；`out`：`6 · cap` 个 `int32` | `hb_buffer_add_utf32` + `hb_buffer_guess_segment_properties` + `hb_shape`（不带 features）。最多写 `cap` 个字形，返回实际字形数；返回值大于 `cap` 时放大缓冲重排 |
-| `wpefont_glyph(font, gid, out) -> bitmap` | `out`：10 个 `int32` | `FT_Load_Glyph(gid, load_flags)`，再 `FT_Get_Glyph` → `FT_Glyph_Get_CBox(FT_GLYPH_BBOX_PIXELS)` → `FT_Done_Glyph`。返回字形槽里的位图缓冲（同一字体下次加载字形前有效；空字形可能为 0） |
+| `wpefont_glyph(font, gid, out) -> bitmap` | `out`：6 个 `int32` | `FT_Load_Glyph(gid, load_flags)`，再 `FT_Get_Glyph`（WPE 两步都要成功）→ `FT_Done_Glyph`。返回字形槽里的位图缓冲（同一字体下次加载字形前有效；空字形可能为 0） |
+| `wpefont_glyph_box(font, gid, out) -> 0/非 0` | `out`：4 个 `int32` | WPE 的取框（`FUN_1401addb0`）：`FT_Load_Glyph(gid, FT_LOAD_NO_BITMAP \| (load_flags & FT_LOAD_FORCE_AUTOHINT))` → `FT_Get_Glyph` → `FT_Glyph_Get_CBox(FT_GLYPH_BBOX_PIXELS)`。成功返回 0；失败返回非 0、`out` 不写。会覆盖字形槽，`wpefont_glyph` 返回的位图指针随之失效 |
 
 **输出布局：**
 
@@ -76,18 +78,19 @@ HarfBuzz 用 15.0.0，与离线参考 `uharfbuzz` 同版本。
   **26.6**（FreeType 已取整到整像素）；`load_flags` 见 hinting 规则。
 - `wpefont_shape`：每个字形 `[gid, cluster, x_advance, y_advance, x_offset, y_offset]`，后四个 **26.6**；`cluster` 是输入码点的
   下标。WPE 排版只用 `x_advance >> 6`。
-- `wpefont_glyph`：`[width, rows, pitch, bitmap_left, bitmap_top, pixel_mode, xMin, yMin, xMax, yMax]`，全是**整数像素**。
+- `wpefont_glyph`：`[width, rows, pitch, bitmap_left, bitmap_top, pixel_mode]`，全是**整数像素**。
   - `pixel_mode`：2 = 灰度（1 字节 / 像素），7 = BGRA（彩色字形，预乘 alpha，4 字节 / 像素）；字体内嵌点阵可能给
     1 = 单色（1 位 / 像素，高位在左）。`pitch` 是行跨度，为负时第一行在缓冲末尾。
   - `bitmap_left`：笔位置到位图左边；`bitmap_top`：基线到位图上边，向上为正。
-  - `xMin … yMax`：本次加载的字形经 `FT_Get_Glyph` → `FT_Glyph_Get_CBox(glyph, FT_GLYPH_BBOX_PIXELS)` 的像素框，y 向上。
-    因为加载时带了 `FT_LOAD_RENDER`，取到的是位图字形的框，等于 `(left, top − rows, left + width, top)`；1b 的对照在
-    342 个字形上逐个核对过，单测也钉住了这个关系。
-  - **这不是 WPE 定图集格子的框**：WPE 取框是另一次加载，标志 `8` = `FT_LOAD_NO_BITMAP`，取的是轮廓框
-    （rea-p6b-raster「加载标志」表，`FUN_1401addb0`）。普通灰度字形两者相同（smooth 渲染器的位图框同样是轮廓框向外取整）；
-    彩色字形（COLR 渲染的框和基础轮廓不同）、小字号下用到内嵌点阵的字体（`NO_BITMAP` 跳过点阵）、两次加载 hinting
-    不同时会不同。1c 写装箱器时照 WPE 补一个取轮廓框的导出，带不带强制自动 hinting 按 WPE 图集定。
+  - 位图宽高就是 WPE 图集的格子（它对这次加载的位图字形取 `FT_Glyph_Get_CBox(PIXELS)`，等于位图框）。
   - 失败（gid 越界、字形数据坏）时返回 0，`out` 除 `pixel_mode` 外全为 0，`pixel_mode` 为 −1。
+- `wpefont_glyph_box`：`[xMin, yMin, xMax, yMax]`，轮廓框向外取整的**整数像素**，y 向上。WPE 的字形四边形、断行的墨迹右沿、
+  行与文字框的包围盒都用它，图集格子用位图宽高（P6b 1c 实验，`ignore/p6/b1c/`）：
+  - 普通灰度字形两者相同（smooth 渲染器的位图框就是轮廓框向外取整）：`p6b-*` 的 499 个 WPE 四边形全部如此。
+  - 彩色字形不同：Segoe UI Emoji 的 😀（32 磅）框是 `21, −24, 162, 118`（141×142，WPE 的四边形），位图是 133×132
+    （WPE 的格子），位图被拉伸到四边形上；Twemoji 是 COLR 字体，基础字形没有轮廓，框为空，WPE 画成零尺寸四边形。
+  - 强制自动 hinting 的位照加（WPE 那份 FreeType 两次加载 hinting 一样；加不加在 `p6b-*` 上结果相同）。
+  - 只有内嵌点阵的字体（sbix / CBDT）`NO_BITMAP` 加载失败，WPE 沿用上一个字形的框（没测过）。
 
 ## 规则
 
@@ -113,8 +116,10 @@ EBADF；模块将来多导入了别的函数，`fd_*` / `path_*` 返回 EBADF、
 
 `apps/wpe-scene/src/wpefont/index.ts`：`loadWpefont()`（主线程 `fetch` → `compile` → 实例化，失败返回 null、原因见
 `wpefontLoadError()`）、`Wpefont.fromBytes()`（Node 测试用）、`Wpefont.face(bytes, pointsize)` 与 `WpefontFace` 的
-`has` / `metrics` / `shape` / `glyph` / `dispose`。位图拷出成按行紧排的 `Uint8Array`，不暴露 wasm 内存；wasm 内存会增长，
-每次访问都重新取 `memory.buffer`。
+`has` / `metrics` / `shape` / `glyph` / `box` / `dispose`。位图拷出成按行紧排的 `Uint8Array`，不暴露 wasm 内存；wasm 内存会
+增长，每次访问都重新取 `memory.buffer`。`box(gid)` 按 gid 缓存（WPE 也缓存），失败为 null。
+
+排版、回退链与图集在 `apps/wpe-scene/src/text/`（P6b 1c），见 `cocs/wpe/WPE_SCENE.md`「字体引擎 `wpefont`」。
 
 `index.test.ts`：wasm 不存在就整组跳过；`KABEGAME_WPE_ROOT` 指向 WPE 安装目录时，用 WPE 自带字体跑基础用例与
 `fixtures/baseline.json` 的逐项基线（由 `apps/wpe-scene/scripts/fixtures/make_wpefont_baseline.py` 从 1a 的结果生成）。

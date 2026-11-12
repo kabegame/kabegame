@@ -22,15 +22,13 @@ const FORCE_AUTOHINT = 1 << 5;
 const codepoints = (text: string) => Array.from(text, (ch) => ch.codePointAt(0)!);
 const sha1 = (bytes: Uint8Array) => createHash("sha1").update(bytes).digest("hex");
 
-/** cbox（`FT_GLYPH_BBOX_PIXELS`）就是位图框：字形已经栅格化，取到的是位图字形的框。 */
-function expectCboxIsBitmapBox(glyph: GlyphBitmap) {
-  expect(glyph.cbox).toEqual({
-    xMin: glyph.left,
-    yMin: glyph.top - glyph.rows,
-    xMax: glyph.left + glyph.width,
-    yMax: glyph.top,
-  });
-}
+/** 位图框 `(left, top − rows, left + width, top)`，和 `WpefontFace.box` 同一形状。 */
+const bitmapBox = (glyph: GlyphBitmap) => ({
+  xMin: glyph.left,
+  yMin: glyph.top - glyph.rows,
+  xMax: glyph.left + glyph.width,
+  yMax: glyph.top,
+});
 
 describe.skipIf(!existsSync(WASM))("wpefont wasm", () => {
   let module: Promise<WebAssembly.Module> | null = null;
@@ -73,14 +71,18 @@ describe.skipIf(!existsSync(WASM))("wpefont wasm", () => {
       expect(h.width).toBeGreaterThan(0);
       expect(h.pixels.length).toBe(h.width * h.rows);
       expect(Math.max(...h.pixels)).toBe(255);
-      expectCboxIsBitmapBox(h);
+      // 普通灰度字形：轮廓框向外取整就是位图框；取框会覆盖字形槽，先取位图再取框、反过来都一样
+      expect(face.box(shaped[0].gid)).toEqual(bitmapBox(h));
+      expect(face.box(shaped[0].gid)).toBe(face.box(shaped[0].gid)); // 按 gid 缓存
+      expect(face.glyph(shaped[0].gid)!.pixels).toEqual(h.pixels);
 
-      // 空格：零尺寸位图
+      // 空格：零尺寸位图，框为空
       const space = face.glyph(shaped[2].gid)!;
       expect([space.width, space.rows, space.pixels.length]).toEqual([0, 0, 0]);
-      expectCboxIsBitmapBox(space);
+      expect(face.box(shaped[2].gid)).toEqual({ xMin: 0, yMin: 0, xMax: 0, yMax: 0 });
 
       expect(face.glyph(0x7fffffff)).toBeNull(); // gid 越界
+      expect(face.box(0x7fffffff)).toBeNull();
 
       face.dispose();
       expect(face.disposed).toBe(true);
@@ -116,7 +118,10 @@ describe.skipIf(!existsSync(WASM))("wpefont wasm", () => {
       expect(glyph.mode).toBe(PIXEL_MODE_BGRA);
       expect(glyph.color).toBe(true);
       expect(glyph.pixels.length).toBe(4 * glyph.width * glyph.rows);
-      expectCboxIsBitmapBox(glyph);
+      // 框 ≠ 位图框：Twemoji 是 COLR 字体，基础字形没有轮廓，NO_BITMAP 加载的框为空，而位图是图层合成出来的。
+      // WPE 照框画四边形，所以回退到 Twemoji 的 emoji 在 WPE 里是零尺寸四边形（看不见）
+      expect(face.box(face.shape([0x1f600])[0].gid)).toEqual({ xMin: 0, yMin: 0, xMax: 0, yMax: 0 });
+      expect(bitmapBox(glyph)).toEqual({ xMin: 0, yMin: -17, xMax: 134, yMax: 117 });
       face.dispose();
     });
   });
@@ -137,7 +142,8 @@ describe.skipIf(!existsSync(WASM))("wpefont wasm", () => {
         });
         const actual = face.shape(codepoints(object.text)).map((g) => {
           const glyph = face.glyph(g.gid)!;
-          expectCboxIsBitmapBox(glyph);
+          // 这些字体都是普通灰度字形：框等于位图框（WPE 抓帧里四边形尺寸 = 图集格子尺寸）
+          expect(face.box(g.gid)).toEqual(bitmapBox(glyph));
           return [
             g.gid,
             g.cluster,
