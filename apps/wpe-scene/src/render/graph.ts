@@ -56,6 +56,9 @@
  * - **模型层**（P5c 步骤 2，`SceneLayer.model`，`planModelLayer`）：每个网格一个 `mesh` 步骤，顺序是编译期排好的 `model.order`（不透明在前，
  *   MSVC `std::sort`），全部直接画到场景目标，和图像步骤、粒子同样按 `objects` 顺序。没有合成路径：WPE 的模型对象不读 `effects`（编译期报
  *   `model:effects`），也没有 colorBlendMode 的上屏（rea-p5-mesh 2.6）。
+ * - **形状层**（P8 步骤 2，`SceneLayer.shape`，`planShapeLayer`，rea-p8-layer §1，p8-REPORT 结论 4、5）：WPE 的图像类子类，没有基础 pass、
+ *   没有合成 RT，只画最后一个 effect 的唯一绘制 pass、直接上屏（角色 `final`，几何 `shape`：effect 常量的四个点围成的四边形），混合强制
+ *   additive，不看 effect 的开关（前面的 effect 永远不画），所以不预备变体。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
@@ -86,8 +89,10 @@ export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough" | 
  * - `fill`：同一个四边形用正交投影画满目标、单位模型矩阵（基础 pass 画进合成 RT）；
  * - `fullscreen`：2×2 的 NDC 四边形（±1）。effect 中间 pass 的 MVP 为单位阵；fullscreen 模型的图层（P5b 步骤 3）直接上屏、上屏也用它，
  *   UV 取步骤的 `uv` / `inset`，矩阵见 `scene.ts`。
+ * - `shape`：形状对象的四边形（P8 步骤 2，`layout.ts` 的 `shapeQuad`，按 `SceneShape.points` 与图层 `size`），场景视图投影 × 图层世界矩阵；
+ *   效果矩阵取 WPE 给形状的那组值（`uniforms.ts` 的 `drawMatrices`）。`uv` / `inset` 不用（uv 就是点本身）。
  */
-export type Geometry = "layer" | "fill" | "fullscreen";
+export type Geometry = "layer" | "fill" | "fullscreen" | "shape";
 
 export interface DrawStep {
   kind: "draw";
@@ -404,6 +409,45 @@ export function planModelLayer(layer: Pick<SceneLayer, "model">): LayerPlan {
   return { composite: null, steps, reasons };
 }
 
+/**
+ * 形状层（P8 步骤 2，rea-p8-layer 1.4、1.5、1.8，p8-REPORT 结论 4、5）：没有基础 pass、没有合成 RT，只画最后一个 effect 的唯一绘制 pass，
+ * 不看 effect 的开关（前面的 effect 永远不画；`p8-shape2` 的 SB、SC 写死不可见的最后一个照画）。角色 `final`（画到场景、写 RGB；在组里由组
+ * 改写目标），几何 `shape`，混合强制 additive（形状虚表 +0x108 写 `blending := 2`，实测 SrcAlpha / One）。
+ * 槽 0 不填（WPE 没有当前合成 RT，`compIndex = −1`），bind 里不是本 effect fbo 的名字（如 `previous`）跳过、保留材质的纹理；结构检查
+ * 要求没有 fbo，所以这里的 bind 一律跳过（编译期也没给它们预留槽位，`compileEffect` 的 `options.shape`）。材质要快照时先拍（规则 3）。
+ * 结构不对（没有 effect、最后一个不是恰好一个绘制步骤、有 fbo）时编译期已报 `shape:*`，这里另给 `render:shape` 兜底、不画。
+ */
+export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan {
+  const steps: LayerStep[] = [];
+  const reasons: string[] = [];
+  const e = layer.effects.length - 1;
+  const effect = layer.effects[e];
+  const step = effect?.steps[0];
+  if (!effect || effect.steps.length !== 1 || step?.kind !== "draw" || effect.fbos.length > 0)
+    return { composite: null, steps, reasons: ["render:shape"] };
+  const { pass } = step;
+  const inputs: Record<number, TextureRef> = {};
+  for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+  for (const [slot, name] of Object.entries(pass.runtime)) {
+    if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+    else reasons.push(`render:texture-rt:${name}`);
+  }
+  if (pass.framebuffer) steps.push({ kind: "snapshot" });
+  steps.push({
+    kind: "draw",
+    role: "final",
+    pass,
+    effect: e,
+    target: { kind: "scene" },
+    inputs,
+    geometry: "shape",
+    uv: [1, 1],
+    inset: NO_INSET,
+    blending: "additive",
+  });
+  return { composite: null, steps, reasons };
+}
+
 export function planLayer(
   layer: SceneLayer,
   textures: readonly TextureSize[],
@@ -415,6 +459,8 @@ export function planLayer(
   if (layer.particle) return planParticleLayer(layer);
   // 模型对象（P5c 步骤 2）同样没有图像 pass、不编 effect
   if (layer.model) return planModelLayer(layer);
+  // 形状对象（P8 步骤 2）：只画最后一个 effect，不看开关
+  if (layer.shape) return planShapeLayer(layer);
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   // 文本层（P6b 1d）：基础 pass 是字形，effect 链与上屏照图像层，上屏借 `basefont` 的 translucent
@@ -726,6 +772,8 @@ export function planLayer(
 export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]): LayerPlan[] {
   // 文本层（P6b 1d）的 effect 开关会改 `padding` 与文字框，切换走整场重编译（`SceneState.fromBundle` 冻结了它），不预备变体
   if (layer.text) return [];
+  // 形状层（P8 步骤 2）：effect 开关对它中性（`planShapeLayer` 不看），没有变体
+  if (layer.shape) return [];
   // dev 强制渲染时开着的 effect 可以带不支持项，它能就地关掉（`SceneState.needsRecompile`），所以也算可变
   const variable = layer.effects.flatMap((effect, e) =>
     effect.visibleBound && (effect.enabled || !effect.unsupported.length) ? [e] : [],

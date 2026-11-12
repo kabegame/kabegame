@@ -96,6 +96,32 @@ export function layerQuad(
 }
 
 /**
+ * 形状对象的四边形（P8 步骤 2，rea-p8-layer 1.3 `FUN_140260190`，p8-REPORT 结论 4）：点 p 是 `size` 方块里的归一化坐标（x 向右、y 向下），
+ * 顶点 `(Sx·p.x − Sx/2, Sy·(1 − p.y) − Sy/2, 0)`、uv = p，float32 逐步算（`Sx`、`Sy` 不取整；`p8-shape` 的 S1 1080×1080、S10 300×200
+ * 两次绘制的 `vs_in` 逐位相同）。WPE 是 4 顶点 6 索引 (0, 2, 1)、(0, 3, 2)；这里排成三角形带 [p1, p0, p2, p3]：带的两个三角形
+ * (p1, p0, p2)、(p2, p0, p3) 与 WPE 的两个逐个相同（顶点循环轮换）、绕向相同、先后相同。
+ * `points` 为 null（四个点找不全）时退回以原点为中心的 `size` 方块、uv 0–1（`layerQuad(size, [1, 1])`，WPE `FUN_1401ede30` 不内缩）。
+ * 点超出 0–1 时照算（语料里很多，如 `3409595232` 的 (−0.80924, −0.18247)），四边形落在方块外面。
+ */
+export function shapeQuad(
+  size: readonly number[],
+  points: readonly (readonly [number, number])[] | null,
+): QuadVertex[] {
+  if (!points || points.length < 4) return layerQuad(size, [1, 1]);
+  const f = Math.fround;
+  const sx = f(size[0] ?? 0),
+    sy = f(size[1] ?? 0);
+  const halfX = f(sx / 2),
+    halfY = f(sy / 2);
+  const vertex = ([x, y]: readonly [number, number]): QuadVertex => {
+    const u = f(x),
+      v = f(y);
+    return { position: [f(f(sx * u) - halfX), f(f(sy * f(1 - v)) - halfY), 0], texCoord: [u, v] };
+  };
+  return [points[1], points[0], points[2], points[3]].map(vertex);
+}
+
+/**
  * 图层在父对象空间里的本地矩阵：`T(origin) · Rz(az) · Ry(ay) · Rx(ax) · S(scale)`，角度是弧度（2026-11-07 对 WPE 实测，
  * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。`angles` 的 x、y 为 0 时 Ry、Rx 是单位阵，结果与只转 z 轴的旧矩阵逐位相同。
  * `scale.z` 为 0 时按 1：WPE 在这种输入下的行为没有测过，保留 P1 的兜底。

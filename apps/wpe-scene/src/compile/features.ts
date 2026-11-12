@@ -203,7 +203,8 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  * - `parent`：层级已实现（P4a 步骤 1，`hierarchy.ts` 与 `render/layout.ts`）；灯对象例外，见 `checkObjectFeatures`。
  * - `config`：运行时只在托盘、播放列表代码里读，渲染路径不碰；P5a 步骤 0 实测带 `config.passthrough` 的层画面不变。
  * 另判的键（不在这张表里，`checkObjectFeatures` 单独检查，未知键循环跳过）：
- * - `alignment` 为 `center` 时中性，其余取值另报。
+ * - `alignment` 为 `center` 时中性，其余取值另报；文本、形状对象上中性（不在它们的属性查找链上）。
+ * - `shape`：形状对象（P8 步骤 2，`isShapeObject`）上已实现；同时带别的内容的对象照未知键报。
  * - `perspective`：图像层上的 JSON `true` 已实现（P5b 步骤 1，画到场景目标的绘制换透视视图投影，`render/scene.ts`）；false 等不为
  *   真的值中性；绑属性、挂脚本或别的真值，以及非图像对象上为真，报 `object:perspective`。
  * - `clampuvs`、`nointerpolation`：合成 RT 的采样（P8 步骤 1，p8-REPORT「合成 RT 与基础纹理的采样」、rea-p8-layer §3，
@@ -530,6 +531,21 @@ export function isTextObject(object: SceneObject): boolean {
 }
 
 /**
+ * 形状对象（P8 步骤 2，rea-p8-layer 1.1）：WPE 的工厂（`FUN_14018ff60` 的 `0x14019075e`）只看 `shape` 是不是字符串、不比较取值。同时带
+ * 图像、模型、粒子、声音、文本、灯的对象 WPE 按哪个类建没查（语料 0 个），不算形状，`shape` 照未知键报 `object:shape`。
+ * `compileScene` 与能力表共用。WPE 的形状是图像类的子类，我们照样当一种图层（`SceneLayer.shape`，渲染图见 `render/graph.ts` 的
+ * `planShapeLayer`）；它不参加光标命中测试（WPE 只认类型 1、4、5，形状是 10），P6 做命中测试时要排除它。
+ */
+export function isShapeObject(object: SceneObject): boolean {
+  return (
+    typeof object.shape === "string" &&
+    objectKind(object) === undefined &&
+    !isSoundObject(object) &&
+    !isTextObject(object)
+  );
+}
+
+/**
  * 文本对象自己的键（描述符表 `DAT_1404e88e0`，rea-p6b-layout 1.2）。排版类键、背景、`depthtest` 已实现或中性：
  * - `depthtest`：只在透视场景选 `_depth` 材质，正交场景恒用无深度材质（rea-p6b-raster 1，p6-REPORT 实测），透视场景整张另报
  *   `camera:perspective`；
@@ -643,6 +659,12 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * 没有内容的对象是分组节点：WPE 把它建成只有变换的基类对象（P4a 实测），不报；它的 `effects` 不读（`bundle.ts`
  * 在没有 image 时不编译图层内容），所以也不报。
  *
+ * 形状对象（P8 步骤 2，`isShapeObject`，rea-p8-layer 1.9、p8-REPORT 结论 4、5）：`shape` 键本身不报；`alignment` 不在形状的属性查找链上
+ * （rea-p8-layer 1.1 的虚表 +0x20），中性；`alpha`、`color`、`brightness`、`colorBlendMode`、`clampuvs`、`nointerpolation` 形状路径不读，
+ * 本来就在中性表或另判里放行；`perspective: true` 照报（只放行图像层与模型，语料 0 个）；`castshadow`、`disablepropagation`
+ * 形状绘制与重建都不读，但别处的语义没查清（rea-p8-layer 1.9），取值为真照旧报（语料都是 false）。effect 的用法由 `bundle.ts` 的
+ * `compileShape` 编完后按 `shapeIssues` 报。
+ *
  * 粒子对象自己的键（`origin`、`angles`、`scale`、`visible`、`parent` 等）照对象规则走；`instanceoverride` 要看粒子 JSON 的
  * `flags` 与场景 HDR，由 `checkParticleInstance` 在读到文件后检查；粒子 JSON 的用法由 `checkParticleFeatures` 检查。
  * 粒子不再有总括键（步骤 5 删掉了 `particle:pending`）：不支持的用法都要由这些细分键挡住。
@@ -678,9 +700,12 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   if (text) checkTextFeatures(object, unsupported);
   const textKey = (key: string) => text && TEXT_KEYS.has(key);
   const modelKey = (key: string) => kind === "model" && MODEL_NEUTRAL_FLAGS.includes(key);
+  // 形状对象（P8 步骤 2）：`shape` 键本身已实现，`alignment` 不在形状的查找链上（rea-p8-layer 1.1），中性
+  const shape = isShapeObject(object);
   for (const key of OBJECT_FLAGS)
     if (active(object[key]) && !lightKey(key) && !modelKey(key)) unsupported.add(`object:${key}`);
-  if (object.alignment !== undefined && object.alignment !== "center" && !text) unsupported.add("object:alignment");
+  if (object.alignment !== undefined && object.alignment !== "center" && !text && !shape)
+    unsupported.add("object:alignment");
   // 图像层（P5b 步骤 1）与模型（P5c 步骤 1）的 perspective：JSON true 已实现；绑属性、挂脚本或别的取值，以及别的对象上为真，照报
   if (active(object.perspective) && !((kind === "image" || kind === "model") && object.perspective === true))
     unsupported.add("object:perspective");
@@ -712,6 +737,7 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !soundKey(key) &&
       !textKey(key) &&
       !(kind === "particle" && key === "instanceoverride") &&
+      !(shape && key === "shape") &&
       active(value)
     )
       unsupported.add(`object:${key}`);
@@ -913,6 +939,8 @@ function someParticleSystem(system: SceneParticle, test: (system: SceneParticle)
  * - `model:passthrough:children:perspective`：图层 `perspective: true`，或粒子系统树里有透视系统（`flags & 4`）。组里的投影是局部正交，
  *   没有实测。
  * - `model:passthrough:children:model`：模型对象（P5c 步骤 1）。语料 0 个，组里的网格怎么画（深度、剔除、视锥剔除用哪个相机）没有实测。
+ * - `model:passthrough:children:shape`：形状对象（P8 步骤 2）。WPE 由组代画进它的合成 RT（rea-p8-layer 1.4，`FUN_1401ecb20`），没有实测；
+ *   语料 24 个形状的父对象都是分组节点。
  */
 export function groupChildIssues(
   layer: Pick<
@@ -926,6 +954,7 @@ export function groupChildIssues(
     | "particle"
     | "text"
     | "model"
+    | "shape"
   >,
 ): string[] {
   const keys: string[] = [];
@@ -946,7 +975,64 @@ export function groupChildIssues(
   )
     keys.push("model:passthrough:children:perspective");
   if (layer.model) keys.push("model:passthrough:children:model");
+  if (layer.shape) keys.push("model:passthrough:children:shape");
   return keys;
+}
+
+/**
+ * 形状层画的程序里 WPE 不写的引擎 uniform（P8 步骤 2，rea-p8-layer 1.5）：形状路径（`FUN_1401ebf60(…, −1, 1)`）不写 `ctx+0x120..+0x12c`，
+ * 着色器读到的是上一次写它们的绘制留下的值，取决于绘制顺序，复刻没有意义。只算引擎 uniform（没有 `meta.material`，带的是材质常量，WPE
+ * 照材质写）。
+ */
+export const SHAPE_UNWRITTEN_UNIFORMS = ["g_Color4", "g_Alpha", "g_Color"] as const;
+
+/**
+ * 程序是否读了某个槽的纹理（P8 步骤 2 的 `shape:texture0` 用）。翻译器的纹理反射不带 `unused`（只有 uniform 与属性有，见
+ * `src-tauri/wpesl2wgsl/README.md`「没被读的 uniform」），着色器声明了却在关掉的分支里才采样的槽照样列出（`lightshafts` 在
+ * `DIRECTDRAW = 1` 时的 `g_Texture0`，P8 步骤 2 实测），所以这里看输出的 WGSL：按反射给的绑定号找到这个槽的纹理变量
+ * （`@binding(N) var 名字:`），名字在某个阶段里出现不止声明那一处就算读了。naga 输出里没被引用的全局只剩声明。WPE 按 fxc 反射建槽表，
+ * 没读的槽不在表里、什么都不绑（rea-p8-layer 1.6）。没有 WGSL 文本（手写的测试数据）时按读了算（保守）。
+ */
+export function textureSlotRead(
+  program: Pick<TranslateResult, "textures" | "vertex" | "fragment">,
+  slot: number,
+): boolean {
+  const binding = program.textures?.find((texture) => texture.slot === slot);
+  if (!binding) return false;
+  const stages = [program.vertex?.wgsl, program.fragment?.wgsl].filter((wgsl): wgsl is string => !!wgsl);
+  if (!stages.length) return true;
+  return stages.some((wgsl) => {
+    const name = new RegExp(`@binding\\(${binding.binding}\\)\\s*var\\s+([A-Za-z_]\\w*)\\s*:`).exec(wgsl)?.[1];
+    return !!name && (wgsl.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0) > 1;
+  });
+}
+
+/**
+ * 形状层还不支持的用法（P8 步骤 2，rea-p8-layer 1.4–1.8，p8-REPORT 结论 5）。`compileScene` 在形状的 effect 全部编完后调；语料 24 个形状
+ * 都只挂一个单 pass 的 `lightshafts`，下面这些都是 0 个：
+ * - `shape:effects`：没有 effect（WPE 取 `effects.back()`，空列表是未定义行为）；
+ * - `shape:effect-passes`：最后一个 effect 不是恰好一个绘制步骤（多 pass、`copy` / `swap`），或有 fbo。WPE 的非末 pass 画一个没建的
+ *   四边形 `+0x2e0`，读码说会解引用空指针（1.5）；
+ * - `shape:uniform:<名字>`：画的程序读 `SHAPE_UNWRITTEN_UNIFORMS`（`unused` 为假、不是材质常量）；
+ * - `shape:texture0`：画的程序读槽 0（`textureSlotRead`）而 pass 没有静态纹理、也不在 `runtime` 里。WPE 没有当前合成 RT（`compIndex = −1`），
+ *   槽 0 只剩材质自己的纹理，没有就是没人赋值（1.5、1.6）。
+ * 前面的 effect 永远不画，只看最后一个；它们的不支持项已经并进整场（形状的 effect 一律当开着编）。
+ */
+export function shapeIssues(layer: Pick<SceneLayer, "effects">, programs: readonly TranslateResult[]): string[] {
+  const effect = layer.effects.at(-1);
+  if (!effect) return ["shape:effects"];
+  const keys = new Set<string>();
+  const draws = effect.steps.flatMap((step) => (step.kind === "draw" ? [step] : []));
+  if (effect.steps.length !== 1 || draws.length !== 1 || effect.fbos.length > 0) keys.add("shape:effect-passes");
+  for (const { pass } of draws) {
+    const program = pass.program === null ? undefined : programs[pass.program];
+    if (!program) continue;
+    for (const name of SHAPE_UNWRITTEN_UNIFORMS)
+      if (program.uniforms?.some((uniform) => uniform.name === name && !uniform.unused && !uniform.meta?.material))
+        keys.add(`shape:uniform:${name}`);
+    if (textureSlotRead(program, 0) && !(0 in pass.textures) && !(0 in pass.runtime)) keys.add("shape:texture0");
+  }
+  return [...keys];
 }
 
 /**

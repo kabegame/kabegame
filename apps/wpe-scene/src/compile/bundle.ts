@@ -37,11 +37,13 @@ import {
   effectNeedsFramebuffer,
   GROUP_CHILD_FRAMEBUFFER,
   groupChildIssues,
+  isShapeObject,
   isSoundObject,
   isTextObject,
   modelFlag,
   objectKind,
   PARTICLE_UNIFORMS,
+  shapeIssues,
   TEXT_UNIFORMS,
   usesLighting,
 } from "./features";
@@ -54,6 +56,7 @@ import {
   parseProject,
   parseScene,
   parseWpeJson,
+  resolveValue,
   textureName,
   type EffectFboJson,
   type JsonObject,
@@ -468,6 +471,20 @@ export interface SceneLayer {
    * `planModelLayer`）。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
    */
   model?: SceneModel | null;
+  /**
+   * 形状对象（P8 步骤 2，`compileShape`）：`passes` 为空、没有合成 RT，渲染图只画最后一个 effect（`render/graph.ts` 的
+   * `planShapeLayer`）。其它对象为 null。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
+   */
+  shape?: SceneShape | null;
+}
+/** 形状对象（P8 步骤 2，rea-p8-layer §1，p8-REPORT 结论 4、5）：图层的 `passes` 为空，没有合成 RT，渲染图只画最后一个 effect（`planShapeLayer`）。 */
+export interface SceneShape {
+  /**
+   * 第一个 effect 第一个绘制 pass 的材质常量 `point0`–`point3`（实例覆盖、注解缺省都算，按材质名从程序反射找，`size` 方块里的
+   * 归一化坐标，y 向下）；四个找不全时 null，几何退回以原点为中心的 `size` 方块（`render/layout.ts` 的 `shapeQuad`）。编译期取一次
+   * （WPE 改常量不重建四边形，rea-p8-layer 1.3，推断；我们的常量就地写也不碰顶点，语义相同）。
+   */
+  points: [number, number][] | null;
 }
 /** 模型的一个网格（P5c 步骤 1）：mdl 里的顶点 / 索引字节原样交给渲染器，不在 CPU 上重排。 */
 export interface SceneMesh {
@@ -641,6 +658,50 @@ export function imageLayerSize(
     const value = fromModel[axis];
     return objectSize[axis] ?? (typeof value === "number" ? value : 1);
   });
+}
+
+/**
+ * 形状对象的尺寸 `Sx × Sy`（P8 步骤 2，rea-p8-layer 1.3，p8-REPORT `p8-shape` 的 S1、S10）：加载时先写 `(正交高, 正交高)`（不是宽 × 高，
+ * 形状虚表 +0x40），对象 JSON 写了 `size` 再覆盖（基类的 setter `0x1401a3fc0`：字符串按空格拆两个 float、数字铺满两维、`null` 不写）。
+ * `value` 是解析后的值（`{user}` 已换成属性值）；字符串里缺的分量保持正交高（推断：setter 只写读到的分量，语料 0 个形状写 `size`），
+ * 别的类型不写。`orthographicHeight` 是 `SceneGeneral.height`（透视场景里 WPE 取 1，那种场景整张另报 `camera:perspective`）。
+ */
+export function shapeLayerSize(value: SceneScalar | undefined, orthographicHeight: number): number[] {
+  const h = orthographicHeight;
+  if (typeof value === "number") return Number.isFinite(value) ? [value, value] : [h, h];
+  const parsed = typeof value === "string" ? numbers(value) : [];
+  return [parsed[0] ?? h, parsed[1] ?? h];
+}
+
+/** 形状四边形的四个点的材质常量名（`lightshafts` 的 `g_Point0`–`g_Point3` 的注解），按 p0–p3 的顺序。 */
+export const SHAPE_POINT_CONSTANTS = ["point0", "point1", "point2", "point3"] as const;
+
+/**
+ * 形状四边形的点（P8 步骤 2，rea-p8-layer 1.3 `FUN_140260190`，p8-REPORT 结论 5 的 `p8-shape2`）：**第一个** effect 的第一个绘制 pass，
+ * 在它的程序反射里按 `meta.material` 找 `point0`–`point3`，值取 `pass.uniforms[uniform 名]` 的前两项（实例覆盖、注解缺省都已在里面）。
+ * 翻译器把两阶段同名的 uniform 拆成 `kb_vs_` / `kb_fs_` 两格时任取一个有值的（同一个键在 WPE 里只有一份存储）。四个找不全、第一个
+ * effect 没有绘制 pass 或程序时返回 null（WPE 退回以原点为中心的方块）。画的却是**最后一个** effect（`render/graph.ts` 的
+ * `planShapeLayer`），两者不是同一个时四边形和着色器里的 `g_Point*` 对不上，照 WPE。
+ */
+export function shapePoints(
+  layer: Pick<SceneLayer, "effects">,
+  programs: readonly Pick<TranslateResult, "uniforms">[],
+): [number, number][] | null {
+  const step = layer.effects[0]?.steps.find((item) => item.kind === "draw");
+  if (step?.kind !== "draw") return null;
+  const { pass } = step;
+  if (pass.program === null) return null;
+  const uniforms = programs[pass.program]?.uniforms ?? [];
+  const points: [number, number][] = [];
+  for (const material of SHAPE_POINT_CONSTANTS) {
+    const value = uniforms
+      .filter((uniform) => uniform.meta?.material === material)
+      .map((uniform) => pass.uniforms[uniform.name])
+      .find((values) => (values?.length ?? 0) >= 2);
+    if (!value) return null;
+    points.push([value[0], value[1]]);
+  }
+  return points;
 }
 
 /**
@@ -1347,12 +1408,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     };
   }
 
-  /** 编译一个 effect 的 fbo 与步骤；effect.json 缺失时返回 null。不支持项写进 `issues`，抛错交给调用方按开关处理。 */
+  /**
+   * 编译一个 effect 的 fbo 与步骤；effect.json 缺失时返回 null。不支持项写进 `issues`，抛错交给调用方按开关处理。
+   * `options.shape`：形状对象的 effect（P8 步骤 2，`compileShape`），两处不同：
+   * - 每个绘制 pass 的 `combos` 在实例覆盖之后写 `DIRECTDRAW = 1`（WPE 形状虚表 +0xc8 在建材质之前改 pass JSON，rea-p8-layer 1.7；
+   *   p8-REPORT `p8-shape` 的 S9 实例写 0 也被改成 1）；
+   * - 渲染图不填槽 0（形状没有当前合成 RT，`FUN_1401ebf60` 的 `compIndex = −1`，rea-p8-layer 1.5），bind 里只有本 effect 的 fbo 生效、
+   *   `previous` 等跳过，所以只给这些 bind 预留槽位，其余槽（含槽 0）照常按材质的纹理与注解缺省编（WPE 保留材质自己的纹理）。
+   */
   async function compileEffect(
     index: number,
     shell: SceneEffect,
     instance: SceneEffectInstance,
     issues: Set<string>,
+    options: { shape?: boolean } = {},
   ): Promise<SceneEffect | null> {
     const { file } = shell;
     const label = file.split("/").at(-2) ?? "unknown";
@@ -1419,12 +1488,17 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             .filter((bind) => holds(bind.conditions))
             .map((bind) => ({ name: String(bind.name), index: Number(bind.index) }))
         : null;
-      // 渲染图填的槽位：有 bind 时只按 bind；没有 bind 时槽 0 = 上一步输出（合成 RT）
-      const planned: ShaderTextureSlot[] = binds ? binds.map((bind) => ({ slot: bind.index })) : [{ slot: 0 }];
+      // 渲染图填的槽位：有 bind 时只按 bind；没有 bind 时槽 0 = 上一步输出（合成 RT）。形状（P8 步骤 2）只预留指向本 effect fbo 的 bind
+      const planned: ShaderTextureSlot[] = options.shape
+        ? (binds ?? []).filter((bind) => fbos.has(bind.name)).map((bind) => ({ slot: bind.index }))
+        : binds
+          ? binds.map((bind) => ({ slot: bind.index }))
+          : [{ slot: 0 }];
       for (const materialPass of parseMaterial(passMaterialText).passes) {
         const merged: MaterialPass = {
           ...materialPass,
-          combos: { ...materialPass.combos, ...override?.combos },
+          // 形状（P8 步骤 2，rea-p8-layer 1.7）：`DIRECTDRAW` 强制为 1，写在实例覆盖之后
+          combos: { ...materialPass.combos, ...override?.combos, ...(options.shape ? { DIRECTDRAW: 1 } : {}) },
           constantshadervalues: { ...materialPass.constantshadervalues, ...override?.constantshadervalues },
           textures: mergeTextures(materialPass.textures, override?.textures),
         };
@@ -1523,6 +1597,47 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
 
   /**
+   * 形状对象（P8 步骤 2，rea-p8-layer §1，p8-REPORT 结论 4、5）：没有模型和基础 pass（`passes` 留空、没有合成 RT），渲染图只画最后一个
+   * effect（`render/graph.ts` 的 `planShapeLayer`）。
+   * - 尺寸：`shapeLayerSize`（缺省正交高 × 正交高；对象 `size` 的绑定在建图层时已登记成重编译）；
+   * - effect：每个都编、不看 `visible`（WPE 加载时全部进列表，形状绘制不读可见位，1.8；`p8-shape2` 实测写死不可见的最后一个照画）：
+   *   `enabled` 恒真、`visibleBound` 为假，不登记 effect 开关的绑定（开关对形状中性；脚本写的开关照样落进状态，渲染图不看它、签名不变、
+   *   不重建），也不预备变体（`variantPlans`）。不支持项一律并进整场，不分画不画（语料 24 个形状都只有一个 `lightshafts`，保守不丢东西）。
+   *   编译时强制 `DIRECTDRAW = 1`、槽 0 不预留（`compileEffect` 的 `options.shape`）；
+   * - 编完按 `shapeIssues` 报结构与程序的不支持项（编译中途停下时不查，那时整场已确定退回），按 `shapePoints` 取四个点。
+   * `colorBlendMode`、`alpha`、`color`、`brightness` 对形状中性（1.9），不编 passthrough；`perspective` 只认图像层与模型，这里不取
+   * （能力表照报 `object:perspective`）。
+   */
+  async function compileShape(index: number, object: SceneObject, layer: SceneLayer): Promise<void> {
+    layer.size = shapeLayerSize(resolveValue(object.size, properties), bundle.general.height);
+    let complete = true;
+    for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
+      if (settled()) {
+        complete = false;
+        break;
+      }
+      const instance = (raw ?? {}) as SceneEffectInstance;
+      const issues = new EffectIssues(unsupported);
+      const shell: SceneEffect = {
+        source,
+        id: instance.id ?? layer.effects.length,
+        name: instance.name ?? "",
+        file: typeof instance.file === "string" ? instance.file : "",
+        fbos: [],
+        steps: [],
+        enabled: true,
+        visibleBound: false,
+        unsupported: [],
+      };
+      // 缺文件时同图像层启用的 effect：不进 `layer.effects`（已报 `effect:missing:*`）
+      const compiled = await compileEffect(index, shell, instance, issues, { shape: true });
+      if (compiled) layer.effects.push({ ...compiled, unsupported: [...issues].sort() });
+    }
+    layer.shape = { points: shapePoints(layer, bundle.programs) };
+    if (complete) for (const key of shapeIssues(layer, bundle.programs)) unsupported.add(key);
+  }
+
+  /**
    * 宿主指定材质的一个 pass（P6b 1d 的文本表用，`compile/texts.ts`）：读 WPE 自带的材质 JSON、取第一个 pass 编译；读不到时报
    * `material:missing:<路径>`、返回 null。`text`：字体着色器的 pass，程序检查放行 `TEXT_UNIFORMS`。
    */
@@ -1586,6 +1701,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       particle: null,
       text: null,
       model: null,
+      shape: null,
     };
     // 每个对象都进 `layers`（分组节点、灯、粒子是没有 pass 的图层），子孙算世界矩阵与可见性时父的状态都在
     bundle.layers.push(layer);
@@ -1601,6 +1717,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 声音对象（P6a 步骤 1）：图层上只有变换，播放字段进声音表；可见性不影响播放（p6-REPORT `p6a-misc`）
     if (isSoundObject(object)) {
       sounds.push(await compileSound(index, object, fs, properties, bindings));
+      continue;
+    }
+    // 形状对象（P8 步骤 2）：没有模型和基础 pass，effect 不看开关全编，渲染图只画最后一个（`planShapeLayer`）；colorBlendMode 中性，
+    // 不编 passthrough
+    if (isShapeObject(object)) {
+      await compileShape(index, object, layer);
       continue;
     }
     // 文本对象（P6b 1d）：没有模型，基础 pass 换成文本表里的宿主材质（排版在宿主主线程）；effect 与 colorBlendMode passthrough

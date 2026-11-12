@@ -289,6 +289,221 @@ export function compositeSampling(
 - 画面：`p8-clamp`、`p8-clamp2` 用 kabegame-dev 的 `render_scene` 渲染，和 WPE 抓帧（`kbp rdc frame --present`）逐像素比（`--kbp-layers` 屏蔽 FR / CLK）；`3668499717` 和受影响的 `3832772446` 各比一帧。
 - 变异检查：缺省改成 `clampuvs === true`、`nearest` 去掉对象或纹理的一边，单测要能检出。
 
+## 步骤 2 — 形状对象
+
+### 思路
+
+形状对象在 WPE 里是图像类的子类，我们照样把它当成一种图层，接进现有的图像层管线，不另写绘制。它和普通图像层只差三处：没有基础 pass 和合成 RT；几何是 effect 常量围成的四边形；只画最后一个 effect 的那一个绘制 pass，直接画到当前目标。所以 `SceneLayer` 多一个可选的 `shape` 字段（四个点），`passes` 留空；渲染图对形状层只排一步：最后一个 effect 的唯一绘制 pass，角色是 `final`（画到场景、写 RGB，和上屏同一套管线规则），几何是新的 `shape`，混合强制 additive，不看 effect 的开关。渲染器只在两处认它：建顶点时按四个点出四边形，算矩阵时效果矩阵取 WPE 给形状的那组值。
+
+规则全部来自步骤 0（p8-REPORT 结论 4、5，rea-p8-layer §1，实测与读码一致）：
+- **认法**：`shape` 是字符串（不比较取值），且没有图像、模型、粒子、声音、文本、灯的内容。同时带别的内容的对象 WPE 按哪个类建没查，照报 `object:shape`（语料 0 个）。
+- **几何**：第一个 effect 第一个绘制 pass 的材质常量 `point0`–`point3`（实例覆盖、注解缺省都算，按材质名从程序反射找），顶点 `(Sx·p.x − Sx/2, Sy·(1 − p.y) − Sy/2, 0)`、uv = p，三角形 (p0, p2, p1)、(p0, p3, p2)。`Sx×Sy` 是对象 `size`，缺省正交高 × 正交高（不是宽 × 高）。四个点找不全时退回以原点为中心的 `size` 方块、uv 0–1。点只在编译期取一次：WPE 改常量不重建四边形（读码推断），我们的常量就地写也不碰顶点，语义相同。
+- **绘制**：最后一个 effect，不看它的 `visible`（写死不可见、绑属性都照画），前面的 effect 永远不画；每个 effect pass 的 `DIRECTDRAW` 强制为 1；混合 SrcAlpha / One；槽 0 不填（WPE 没有当前合成 RT，`bind` 里的 `previous` 跳过）；矩阵 MVP = 场景视图投影 · 视差 · W（含父链，形状没有对齐偏移），效果矩阵是单位阵、纹理投影 `diag(Sx/2, Sy/2, 1, 1)`。
+- **对象键**：`visible`（含父链、绑属性）、变换、`parent`、`parallaxDepth`、`size` 起作用，走图层已有的路径；`alpha`、`color`、`brightness`、`colorBlendMode`、`clampuvs`、`nointerpolation`、`castshadow`、`disablepropagation`、`alignment` 对形状无作用。
+
+effect 的开关对形状中性，所以形状层的 effect 编译时一律当开着，不登记 `visible` 的绑定，也不预备变体计划；脚本写 effect 的 `visible` 照样落进状态，渲染图不看它，签名不变、不重建。effect 的不支持项一律算进整场（不分画不画）：语料 24 个形状都只有一个 `lightshafts`，保守不丢东西。
+
+照报（语料都是 0 个）：
+- `shape:effects`：没有 effect（WPE 取 `effects.back()`，空列表是未定义行为）；
+- `shape:effect-passes`：最后一个 effect 不是恰好一个绘制步骤（多 pass、`copy` / `swap`、fbo）：非末 pass 在 WPE 里画一个没建的四边形，读码说会解引用空指针；
+- `shape:uniform:<名字>`：画的程序读 `g_Color4`、`g_Alpha`、`g_Color`（WPE 形状路径不写，值是上一次绘制留下的）；
+- `shape:texture0`：画的程序用槽 0、材质又没给静态纹理（WPE 槽 0 没人赋值）；
+- `model:passthrough:children:shape`：形状挂在组（带子层的组合层）下，WPE 由组代画进它的合成 RT，没实测；
+- `object:perspective`：形状上的 `perspective: true` 照旧报（只放行图像层与模型）；透视场景整张另报 `camera:perspective`。
+
+另记：形状不参加光标命中测试（WPE 只认类型 1、4、5），P6 做命中测试时要排除它。
+
+### 现状锚点（HEAD `ff4ad0e3`）
+
+**a. 形状对象认不出，`shape` 从未知键循环报出**（`compile/features.ts:461`、`:676`、`:684`）
+```ts
+const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as const; // 现状：没有 shape，形状对象是分组节点
+// checkObjectFeatures
+  if (object.alignment !== undefined && object.alignment !== "center" && !text) unsupported.add("object:alignment"); // 现状：只放过文本
+  for (const [key, value] of Object.entries(object))
+    if (!SUPPORTED_OBJECT.has(key) && /* … */ active(value))
+      unsupported.add(`object:${key}`); // 现状：object:shape（18 张）从这里报
+```
+
+**b. 没有 image 的对象不编 effect**（`compile/bundle.ts:1605`）
+```ts
+    const textObject = isTextObject(object);
+    if (!textObject) {
+      // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
+      if (!object.image) continue;   // 现状：形状对象到这里为止
+      if (!(await compileImageModel(index, object, layer))) continue;
+    }
+```
+
+**c. effect 写死不可见整步跳过，开关登记成绑定**（`compile/bundle.ts:1617`）
+```ts
+      const enabled =
+        bindings.bind(instance.visible, properties, { kind: "effect", object: index, effect: source }) !== false;
+      // 写死关闭、没有绑定的整步跳过（B11），也不检查它的能力
+      if (!enabled && !visibleBound) continue;   // 现状：形状的最后一个 effect 写死不可见时 WPE 照画
+```
+
+**d. 渲染图要基础 pass**（`render/graph.ts:372`）
+```ts
+  const base = sceneText ? sceneText.glyphPass : layer.passes[0];
+  if (!base) return { composite: null, steps, reasons };   // 现状：没有基础 pass 的图层什么都不画
+```
+
+**e. 只给有 pass 的图层建资源**（`render/scene.ts:676`）
+```ts
+      (layer.passes.length > 0 || (layer.particle?.passes.length ?? 0) > 0 || !!layer.text) &&   // 现状：没有 shape
+```
+
+**f. 几何只有图层四边形和 NDC 四边形**（`render/scene.ts:1669`，`render/graph.ts:87`）
+```ts
+      const vertices =
+        step.geometry === "fullscreen"
+          ? layerQuad([2, 2], step.uv, step.inset)
+          : layerQuad(this.layerSize(layer, state), step.uv, step.inset);   // 现状：三角形带，左下、右下、左上、右上
+export type Geometry = "layer" | "fill" | "fullscreen";
+```
+
+**g. 上屏的效果矩阵按图层算**（`render/uniforms.ts:324`）
+```ts
+    case "final":
+    case "passthrough":
+      return {
+        modelViewProjection: layerMvp,
+        model,
+        viewProjection,
+        effectModel: model,                                // 现状：形状要单位阵
+        effectModelViewProjection: layerMvp,               // 现状：形状要单位阵
+        effectTextureProjection: multiply(layerMvp, half), // 现状：形状要 diag(Sx/2, Sy/2, 1, 1)
+        layerModel: step.role === "final" ? model : undefined, // 现状：形状要单位阵
+      };
+```
+
+**h. 组里子层的检查没有形状**（`compile/features.ts:905`）
+```ts
+  if (layer.model) keys.push("model:passthrough:children:model");   // 现状：形状挂在组下不报
+  return keys;
+```
+
+### 点 1 — 认出形状与能力表（`compile/features.ts`）
+- **新增**
+  - `isShapeObject(object)`：`typeof object.shape === "string"`，且 `objectKind` 为 undefined、不是声音或文本对象。`compileScene` 与能力表共用。
+```ts
+/**
+ * 形状对象（P8 步骤 2，rea-p8-layer 1.1）：WPE 的工厂只看 `shape` 是不是字符串、不比较取值。同时带图像、模型、粒子、声音、文本、灯的对象
+ * WPE 按哪个类建没查（语料 0 个），不算形状，`shape` 照未知键报。`compileScene` 与能力表共用。
+ */
+export function isShapeObject(object: SceneObject): boolean {
+  return typeof object.shape === "string" && objectKind(object) === undefined && !isSoundObject(object) && !isTextObject(object);
+}
+```
+- **修改**
+  - `checkObjectFeatures`：形状对象的 `shape` 键不进未知键循环；`alignment` 对形状中性（条件加 `&& !shape`）。`perspective` 不动（形状上为真照报）。
+  - `groupChildIssues`：`layer.shape` 非空时加 `model:passthrough:children:shape`（`Pick` 加 `shape`）。
+
+### 点 2 — 编译（`compile/bundle.ts`）
+- **新增**
+  - `SceneShape` 与 `SceneLayer.shape?: SceneShape | null`（可选同 `text`、`model`，不动各处手写的测试图层）：
+```ts
+/** 形状对象（P8 步骤 2，rea-p8-layer §1，p8-REPORT 结论 4、5）：图层的 `passes` 为空，没有合成 RT，渲染图只画最后一个 effect（`planShapeLayer`）。 */
+export interface SceneShape {
+  /**
+   * 第一个 effect 第一个绘制 pass 的材质常量 `point0`–`point3`（实例覆盖、注解缺省都算，按材质名从程序反射找，`size` 方块里的
+   * 归一化坐标，y 向下）；四个找不全时 null，几何退回以原点为中心的 `size` 方块。编译期取一次（WPE 改常量不重建四边形）。
+   */
+  points: [number, number][] | null;
+}
+```
+  - `compileShape(index, object, layer)`（`compileScene` 里的内部函数，和 `compileImageModel` 并排）：
+    - `size`：JSON 写了就按它（数字铺满两维，两个分量缺哪个取正交高），否则 `[正交高, 正交高]`（`bundle.general.height`）。
+    - 每个 effect 都编，不看 `visible`：`enabled: true`、`visibleBound: false`，不调 `bindings.bind` 登记开关，不支持项进整场 `unsupported`；编译时 `combos` 在实例覆盖之后再写 `DIRECTDRAW: 1`（`compileEffect` 加一个可选参数）。
+    - 编完：没有 effect 报 `shape:effects`；最后一个 effect 的步骤不是恰好一个 `draw`、或有 fbo，报 `shape:effect-passes`；画的程序读 `g_Color4` / `g_Alpha` / `g_Color`（`unused` 为假）报 `shape:uniform:<名字>`；程序用槽 0 而 pass 没有静态纹理、也不在 `runtime` 里，报 `shape:texture0`。
+    - `layer.shape = { points }`：取 `layer.effects[0]` 的第一个 `draw` 步骤的 pass，在 `bundle.programs[pass.program].result.uniforms` 里按 `meta.material` 找 `point0`–`point3`，值取 `pass.uniforms[名字]` 的前两项。
+  - `colorBlendMode` 不编 passthrough（对形状中性）。
+- **修改**
+  - 对象循环在文本判断之前分出形状：
+```ts
+    // 形状对象（P8 步骤 2）：没有模型和基础 pass，effect 不看开关全编，渲染图只画最后一个（`planShapeLayer`）
+    if (isShapeObject(object)) {
+      await compileShape(index, object, layer);
+      continue;
+    }
+    const textObject = isTextObject(object);
+```
+
+### 点 3 — 几何（`render/layout.ts`）
+- **新增**
+```ts
+/**
+ * 形状对象的四边形（P8 步骤 2，rea-p8-layer 1.3，p8-REPORT 结论 4）：点 p 是 `size` 方块里的归一化坐标（x 向右、y 向下），顶点
+ * `(Sx·p.x − Sx/2, Sy·(1 − p.y) − Sy/2, 0)`、uv = p，float32 逐步算（`Sx`、`Sy` 不取整）。WPE 是 4 顶点 6 索引 (0, 2, 1)、(0, 3, 2)；
+ * 这里排成三角形带 [p1, p0, p2, p3]：带的两个三角形 (p1, p0, p2)、(p2, p0, p3) 与 WPE 的两个逐个相同、绕向相同、先后相同。
+ * `points` 为 null 时退回以原点为中心的方块、uv 0–1（`layerQuad(size, [1, 1])`）。
+ */
+export function shapeQuad(size: readonly number[], points: readonly (readonly [number, number])[] | null): QuadVertex[];
+```
+
+### 点 4 — 渲染图（`render/graph.ts`）
+- **新增**
+  - `Geometry` 加 `"shape"`（注释：形状四边形，`shapeQuad`，场景视图投影 × 图层世界矩阵）。
+  - `planShapeLayer(layer)`：
+```ts
+/**
+ * 形状层（P8 步骤 2，rea-p8-layer 1.4、1.5、1.8，p8-REPORT 结论 4、5）：没有基础 pass、没有合成 RT，只画最后一个 effect 的唯一绘制 pass，
+ * 不看 effect 的开关（前面的 effect 永远不画）。角色 `final`（画到场景、写 RGB；在组里由组改写目标），几何 `shape`，混合强制 additive。
+ * 槽 0 不填（WPE 没有当前合成 RT），bind 里不是本 effect fbo 的名字（如 previous）跳过、保留材质的纹理；材质要快照时先拍（规则 3）。
+ * 结构不对（没有 effect、最后一个不是恰好一个绘制步骤）时编译期已报 `shape:*`，这里另给 `render:shape` 兜底、不画。
+ */
+export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan;
+```
+- **修改**
+  - `planLayer`：粒子判断之后 `if (layer.shape) return planShapeLayer(layer);`。
+  - `variantPlans`：`if (layer.shape) return [];`（effect 开关对形状中性）。
+
+### 点 5 — 渲染器与矩阵（`render/scene.ts`、`render/uniforms.ts`）
+- **修改**
+  - `buildableLayers`：条件加 `|| !!layer.shape`。
+  - 建 draw 的几何：`step.geometry === "shape"` 时 `shapeQuad(this.layerSize(layer, state), layer.shape?.points ?? null)`。
+  - `drawMatrices` 的 `step` 改收 `Pick<DrawStep, "role"> & { geometry?: Geometry }`（`DrawUniformInput.step` 同步），形状单列：
+```ts
+  // 形状（P8 步骤 2，rea-p8-layer 1.5）：MVP、g_ModelMatrix 同上屏；效果矩阵 WPE 取图层 +0x344 / +0x384（形状不写，是构造时的单位阵），
+  // 纹理投影是它的前两行乘 Sx/2、Sy/2；g_LayerModelMatrix 同样是单位阵
+  if (step.geometry === "shape")
+    return {
+      modelViewProjection: layerMvp,
+      model,
+      viewProjection,
+      effectModel: identity(),
+      effectModelViewProjection: identity(),
+      effectTextureProjection: half,
+      layerModel: identity(),
+    };
+```
+  - 管线不改：`final` 画到场景时写 RGB、topology 是三角形带，正好是形状要的。
+
+### 点 6 — 单测
+- **修改** `compile/p8.test.ts`（加 `describe`）：
+  - 认法：形状对象不再报 `object:shape`；`shape` 加 `image` 照报；`alignment`、`colorBlendMode`、`clampuvs`、`alpha` / `color` / `brightness` 中性；`perspective: true` 照报。
+  - `size`：缺省 `[正交高, 正交高]`（宽高不等的场景）、`"300 200"`、数字铺满。
+  - effect：写死不可见、绑属性的都编进来、`enabled` 为真、没有登记 effect 开关的绑定；`DIRECTDRAW` 实例写 0 也编成 1（看翻译请求或程序的 combo）。
+  - 点：两个 effect 时取第一个的点；点不全时 null。
+  - 照报的五个键各一例；`colorBlendMode` 非 0 不编 passthrough。
+- **修改** `render/p8.test.ts`（加 `describe`）：
+  - `shapeQuad`：`p8-shape` S1（1080×1080，p0 `0.24560 0.09457` → (−274.75, 437.86) 一带，四个点逐个对 RenderDoc 的 `vs_in`）、S10（300×200）；带的两个三角形和 WPE 索引 (0, 2, 1)、(0, 3, 2) 逐个相同；null 时等于 `layerQuad(size, [1, 1])`。
+  - `planShapeLayer`：一步 `final`、additive、场景目标、几何 `shape`、没有合成 RT；最后一个 effect 关着也画、第一个不画；要快照时先拍；结构不对时 `render:shape`；`variantPlans` 为空。
+  - `drawMatrices` 的形状分支：MVP = VP · W，三个效果矩阵与 `g_LayerModelMatrix` 是单位阵，纹理投影 `diag(Sx/2, Sy/2, 1, 1)`。
+  - `buildableLayers` 收形状层，写死不可见的祖先下面不收。
+
+### 实施方式
+
+同步骤 1：工作区的 `apps/wpe-scene` 现在干净，但 P4f、P5c、P9 等会话随时会改共享文件。实现代理只改 `ignore/p8/s2/ov/src`（`kbp snapshot export HEAD` 出的副本，基线 `ignore/p8/s2/head`），我验收后逐文件三方合并进工作区，不碰暂存区。
+
+### 验收
+- 快照里 tsc 0 error，vitest 全过（基线就失败的照记）。
+- `kbp regress --src ignore/p8/s2/head/src --src ignore/p8/s2/ov/src --corpus`：回放案例全部相同；语料去掉 `object:shape`（18 张），新出现的键逐张核对；干净场景 48 → 53（`3656079027`、`3811764016`、`3812887609`、`3819646765`、`3821678218`）。
+- 四角：`p8-shape`、`p8-shape2` 每个形状的四个顶点（我们的 `shapeQuad` × MVP）和 RenderDoc 的 `vs_out` 比，限值 0.01 像素。
+- 画面：`p8-shape`、`p8-shape2`、`p8-par` 用 `render_scene` 按日志回放，和 WPE 抓帧逐像素比（屏蔽 FR / CLK）；解锁的 5 张各解包加日志、抓一帧、按日志回放比。
+- 变异检查：带的顶点顺序、`1 − p.y` 写成 `p.y`、缺省边长取宽、几何取最后一个 effect、画第一个 effect、不强制 additive、看 effect 开关、不强制 `DIRECTDRAW`，单测或比图要能检出。
+
 ## 步骤 1–5 的验收
 
 - **每步**：确定性工程和 WPE 逐像素比（`kbp cmp frame --meta`，图层带 `bbox`）；几何类（形状、对齐）另比四角，限值 0.01 像素。
@@ -323,3 +538,26 @@ export function compositeSampling(
 - **变异**（`ignore/p8/s1/mutations.py`，快照模式）：缺省改成只认 true、过滤去掉纹理一边、去掉对象一边、寻址退回跟纹理、能力表仍报布尔值，5 处全部被新单测检出，按原字节还原。
 - **工作区验收**：tsc 0 error；vitest 2321 个用例 2 个失败，`pipeline.test.ts` 同上，`p5c.test.ts` 的 M3（P5c 会话的真翻译器用例）在干净的新 HEAD 快照上同样失败，和本步无关；Prettier 通过。
 - **画面**：dev 宿主按 `--mode development` 重建后渲染。`p8-clamp`、`p8-clamp2` 和 WPE 抓帧逐像素 0 差异（屏蔽 FR / CLK；改前 `p8-clamp` 差 106776 个像素，全在纹理不带 ClampUVs 的那 4 个图层）。`3668499717`（新解锁）和 `3832772446`（受影响的那个图层从重复变钳制）各解包加日志、抓一帧、按日志回放比：差 > 32 的像素分别占 0.11%、0.21%，都在随机粒子和缩放的轮廓上；`3832772446` 的主图层带 `shake` 位移，画面四边平均差 0.2–0.95。
+
+### 步骤 2 — 形状对象（2026-11-13）
+
+按提纲做，三处偏离：
+- **形状 effect 的槽位预留**：不只写 `DIRECTDRAW`，`compileEffect` 的 `options.shape` 还改了预留，不再给槽 0 预留（只给指向本 effect fbo 的 bind 预留），其余槽照材质的纹理与注解缺省编。不这样的话 `compilePass` 跳过材质的槽 0，点 4 说的「保留材质的纹理」做不到，`shape:texture0` 也判断不了。
+- **`shape:texture0` 看 WGSL**：翻译器的纹理反射不带 `unused`，`DIRECTDRAW = 1` 时 `g_Texture0` 照样列出、只剩声明（真翻译器实测），只看反射语料 24 个形状全会报。改成 `textureSlotRead`：按反射的绑定号在输出的 WGSL 里找到变量名，某个阶段里出现不止声明那一处才算读了；没有 WGSL 文本时按读了算。正经做法是翻译器给纹理反射加 `unused`，要改 `src-tauri/wpesl2wgsl`，留作以后。
+- **`shape:uniform:*` 只算引擎 uniform**：带 `meta.material` 的是材质常量，WPE 照材质写，不报。
+
+另：形状上的 `castshadow`、`disablepropagation` 为真时照旧报（别处语义没查清，语料都是 false）；编译中途停下（`settled()`）时不跑 `shapeIssues`。
+
+- **实现**：代理在 HEAD `ff4ad0e3` 的快照副本 `ignore/p8/s2/ov` 里做，8 个文件（`compile/bundle.ts`、`compile/features.ts`、`render/graph.ts`、`render/layout.ts`、`render/scene.ts`、`render/uniforms.ts` 与两个 `p8.test.ts`）。我验收后逐文件 `git merge-file` 合并到新 HEAD `e49e9f79`（期间 P5c 步骤 2、P9a 步骤 3 提交）：6 个干净合并；`render/graph.ts`、`render/scene.ts` 各 3 处冲突，都是和 P5c 的模型层在同一位置各加一段（文件头说明、`planModelLayer` / `planShapeLayer`、`planLayer` 的分流、`buildableLayers` 的条件与注释），两边都留。没有碰暂存区。
+- **快照验收**：tsc 0 error；vitest 2362 个用例 2 个失败，`pipeline.test.ts` 的请求次数上限（`3830255100` 219 次）与 `p5c.test.ts` 的 M3，基线快照上同样失败。
+- **回归**（`kbp regress --corpus`，`ignore/p8/s2/regress`）：回放案例 17 组两边逐字节相同、全部通过；语料只去掉 `object:shape`（18 张），没有新增的键（`lightshafts` 的 `DIRECTDRAW = 1` 变体在 24 个形状上都翻译通过），干净 48 → 53（`3656079027`、`3811764016`、`3812887609`、`3819646765`、`3821678218`）。
+- **四角**（`ignore/p8/s2/corners/`，产品代码的 `shapeQuad` × 形状分支的 MVP 对 RenderDoc 的 `vs_out`）：`p8-shape` 9 个、`p8-shape2` 3 个形状，各两帧，每次 6 个顶点，最大差 8.1e-5 像素（限值 0.01），uv 逐个相同，画的 pass 的 `g_Point0` / `g_Scale` 与 WPE 读到的相同（`p8-shape2` 的 SA 几何取第一个 effect、画第二个）。
+- **变异**（`ignore/p8/s2/mutations.py`，快照模式）：带的顶点顺序、`1 − p.y`、缺省边长取宽、几何取最后一个 effect、画第一个 effect、不强制 additive、看 effect 的 `visible`、不强制 `DIRECTDRAW`、`g_LayerModelMatrix` 取世界矩阵、`buildableLayers` 不收形状、仍报 `object:shape`，11 处全部被单测检出，按原字节还原。
+- **工作区验收**：tsc 0 error；vitest 2412 个用例 1 个失败，`pipeline.test.ts` 同上（`p5c` 的 M3 已被 P5c 步骤 2 修好）；Prettier 通过。
+- **画面**：dev 宿主按 `--mode development` 重建后渲染，和 WPE 抓帧比（屏蔽 FR / CLK）。
+  - `p8-shape` 最大差 6、> 2 的像素 0.081%；`p8-shape2` 最大差 2。两个工程的 `rayspeed` / `noiseamount` 为 0，画面不随时间变；日志每 50 帧才刷，回放到第 150 帧对 WPE 第 158 / 155 帧。
+  - `p8-par`：日志不带光标，光标按 WPE 抓帧里 L1 的 MVP 平移反推成 (1.0, 0.9806)，除了 A（`top` 对齐，步骤 3）那一块全部相同。形状 S 在 WPE 里被视差整个推出画面（`vs_out` 全在 x < 0），和我们一致。
+  - 解锁的 5 张各解包加日志（`ignore/p8/proj/<ID>-kbp`）、抓一帧（`A:\p8\<ID>-kbp-fps20-1920x1080`）、按日志回放比。共用的 log.txt 里混进了另一个会话 WPE 窗口的 `[kbp]` 行（3 列），按列数滤成 `ignore/p8/s2/<ID>-log.txt`。
+    - 差 > 32 的像素占 0.02%–0.65%，在随机粒子和 4K 场景缩放的轮廓上。
+    - 按 WPE 的形状 `vs_out` 分四边形里外算（`shape_region.py`）：里外的有符号平均差都在 ±0.2 以内，里面 > 8 的占比不比外面高，光束没有缺失或错位。
+    - `3821678218` 的舞台光束放大并排看一致。

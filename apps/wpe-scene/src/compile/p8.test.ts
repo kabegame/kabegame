@@ -6,14 +6,41 @@
  *   `+0x304` 置 bit15（clampuvs）、清 bit14（nointerpolation），之后只有对象 JSON（和脚本）写这两位，基础纹理 `.tex` 的标志不写
  *   （rea-p8-layer §3.1，p8-REPORT「合成 RT 与基础纹理的采样」）。
  * 合成 RT 按这两个字段怎么采样见 `render/p8.test.ts`。
+ *
+ * P8 步骤 2（同计划「步骤 2 — 形状对象」）：
+ * - 能力表：形状对象（`isShapeObject`：`shape` 是字符串、没有别的内容）不再报 `object:shape`，`shape` 加 `image` 照报；`alignment`、
+ *   `colorBlendMode`、`clampuvs`、`alpha` / `color` / `brightness` 中性，`perspective: true` 照报；组里的形状报
+ *   `model:passthrough:children:shape`（rea-p8-layer 1.1、1.9）；
+ * - 编译（`compileShape`）：`passes` 为空；`size` 缺省正交高 × 正交高（宽高不等的场景也是高）、`"300 200"`、数字铺满；effect 不看
+ *   `visible` 全编（`enabled` 真、不登记开关的绑定）；`DIRECTDRAW` 实例写 0 也编成 1（看翻译请求），槽 0 不预留；点取第一个 effect、
+ *   找不全为 null；`shape:*` 照报的四个键；`colorBlendMode` 非 0 不编 passthrough（rea-p8-layer 1.3–1.9，p8-REPORT 结论 4、5）；
+ * - 本机有 WPE 时用真翻译器编 WPE 自带的 `lightshafts`（`p8-shape` 的 S1、S4、S9、S10）：点、`DIRECTDRAW`、四边形与 RenderDoc 的
+ *   `vs_in` 逐位相同。
+ * 渲染图、四边形与矩阵见 `render/p8.test.ts`。
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { compileScene } from "./bundle";
-import { checkObjectFeatures, checkSceneFeatures } from "./features";
+import { compileScene, SHAPE_POINT_CONSTANTS, shapeLayerSize, shapePoints, type SceneLayer } from "./bundle";
+import {
+  checkObjectFeatures,
+  checkSceneFeatures,
+  groupChildIssues,
+  isShapeObject,
+  shapeIssues,
+  textureSlotRead,
+} from "./features";
 import type { SceneReader } from "./fs";
 import type { SceneObject } from "./model";
 import { TEX_FLAGS } from "./tex";
-import type { Wpesl2wgsl } from "../wpesl2wgsl";
+import { shapeQuad } from "../render/layout";
+import {
+  Wpesl2wgsl,
+  type TextureBinding,
+  type TranslateRequest,
+  type TranslateResult,
+  type UniformLayout,
+} from "../wpesl2wgsl";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -236,3 +263,689 @@ describe("compileScene：图层的 clampUVs / noInterpolation（P8 步骤 1）",
     ]);
   });
 });
+
+// ———— P8 步骤 2：形状对象 ————
+
+/** 形状对象（`ignore/p8/gen_p8.py` 的 `shape`）：`effects` 为 undefined 时不写这个键。 */
+const shapeObject = (id: number, effects: unknown[] | undefined, extra: Record<string, unknown> = {}): SceneObject => ({
+  id,
+  name: `S${id}`,
+  origin: "480 540 0",
+  shape: "quad",
+  ...(effects ? { effects } : {}),
+  ...extra,
+});
+
+describe("能力表：形状对象（P8 步骤 2）", () => {
+  const shape = (extra: Record<string, unknown> = {}) =>
+    shapeObject(11, [{ file: "effects/lightshafts/effect.json" }], extra);
+
+  it("认法：shape 是字符串（不比较取值）、没有图像 / 模型 / 粒子 / 声音 / 文本 / 灯的内容", () => {
+    expect(isShapeObject(shape())).toBe(true);
+    expect(isShapeObject(shape({ shape: "circle" }))).toBe(true);
+    expect(isShapeObject(shape({ shape: "" }))).toBe(true);
+    expect(isShapeObject(shape({ shape: 1 }))).toBe(false);
+    expect(isShapeObject(shape({ image: "models/a.json" }))).toBe(false);
+    expect(isShapeObject(shape({ particle: "particles/a.json" }))).toBe(false);
+    expect(isShapeObject(shape({ text: "a" }))).toBe(false);
+    expect(isShapeObject(shape({ sound: ["sounds/a.mp3"] }))).toBe(false);
+    expect(isShapeObject({ id: 1, name: "group", origin: "0 0 0" })).toBe(false);
+  });
+
+  it("形状对象不再报 object:shape；同时带图像等内容、shape 不是字符串时照未知键报", () => {
+    expect(objectKeys(shape())).toEqual([]);
+    expect(objectKeys(shape({ shape: "circle" }))).toEqual([]);
+    expect(objectKeys(shape({ image: "models/a.json" }))).toEqual(["object:shape"]);
+    expect(objectKeys(shape({ shape: 1 }))).toEqual(["object:shape"]);
+  });
+
+  it("中性（rea-p8-layer 1.9）：alignment、colorBlendMode、clampuvs / nointerpolation、alpha / color / brightness、visible 绑属性等", () => {
+    expect(
+      objectKeys(
+        shape({
+          alignment: "bottom",
+          colorBlendMode: 5,
+          clampuvs: true,
+          nointerpolation: true,
+          alpha: 0.5,
+          color: "1 0 0",
+          brightness: 2,
+          visible: { user: { name: "display", condition: "2" }, value: false },
+          parallaxDepth: "0 0",
+          angles: "0 0 -2.9",
+          scale: "2.9 2 1",
+          parent: 5,
+          size: "300 200",
+          disablepropagation: false,
+          castshadow: false,
+        }),
+      ),
+    ).toEqual([]);
+    // 对齐只对形状（与文本）中性，图像层照报（步骤 3）
+    expect(objectKeys(image({ alignment: "bottom" }))).toEqual(["object:alignment"]);
+  });
+
+  it("perspective: true 照报 object:perspective（只放行图像层与模型）", () => {
+    expect(objectKeys(shape({ perspective: true }))).toEqual(["object:perspective"]);
+  });
+
+  it("组里的形状：groupChildIssues 报 model:passthrough:children:shape", () => {
+    const layer = {
+      passthroughModel: false,
+      passes: [],
+      effects: [],
+      colorBlendMode: 0,
+      fullscreen: false,
+      perspective: false,
+      particle: null,
+    };
+    expect(groupChildIssues({ ...layer, shape: { points: null } })).toEqual(["model:passthrough:children:shape"]);
+    expect(groupChildIssues({ ...layer, shape: null })).toEqual([]);
+    expect(groupChildIssues(layer)).toEqual([]);
+  });
+});
+
+/** `p8-shape` 的点（`p_shape`，S1–S10 共用）与 `p8-shape2` 的 p2（`p_shape2`）；值是 JSON 字符串按 double 解析的结果。 */
+const P1 = {
+  point0: "0.24560 0.09457",
+  point1: "0.85704 0.06238",
+  point2: "0.94690 0.66185",
+  point3: "0.07415 0.95000",
+};
+const P1_VALUES = [
+  [0.2456, 0.09457],
+  [0.85704, 0.06238],
+  [0.9469, 0.66185],
+  [0.07415, 0.95],
+];
+const P2 = { point0: "0.3 0.2", point1: "0.7 0.3", point2: "0.6 0.8", point3: "0.2 0.7" };
+const P2_VALUES = [
+  [0.3, 0.2],
+  [0.7, 0.3],
+  [0.6, 0.8],
+  [0.2, 0.7],
+];
+
+/** 顶点着色器读的 `g_Point0`–`g_Point3`（lightshafts 的写法：`vec2`，注解 `material` 是 `point0`–`point3`）。 */
+const pointUniform = (i: number, extra: Partial<UniformLayout> = {}): UniformLayout => ({
+  name: `g_Point${i}`,
+  type: "vec2<f32>",
+  declared: "vec2",
+  offset: 64 + i * 16,
+  size: 8,
+  meta: { material: SHAPE_POINT_CONSTANTS[i] },
+  ...extra,
+});
+const POINTS = [0, 1, 2, 3].map((i) => pointUniform(i));
+const engineUniform = (name: string, declared: string, extra: Partial<UniformLayout> = {}): UniformLayout => ({
+  name,
+  type: declared === "float" ? "f32" : `${declared}<f32>`,
+  declared,
+  offset: 0,
+  size: 16,
+  ...extra,
+});
+/**
+ * 槽 0 的纹理：声明了（反射里总有，绑定号 1）。真翻译器在 `DIRECTDRAW = 1` 时给 lightshafts 的输出就是「只有声明」（P8 步骤 2 实测），
+ * `TEX0_SAMPLED` 是片元里真的采样的写法（照 `DIRECTDRAW = 0` 的输出）。
+ */
+const TEX0: TextureBinding = { slot: 0, name: "g_Texture0", kind: "2d", binding: 1, samplerBinding: 2 };
+const TEX0_DECLARED =
+  "@group(0) @binding(1) \nvar g_Texture0_: texture_2d<f32>;\n@group(0) @binding(2) \nvar kb_sampler_g_Texture0_: sampler;\n";
+const TEX0_SAMPLED = `${TEX0_DECLARED}@fragment\nfn main() -> @location(0) vec4<f32> {\n    let _e58 = textureSample(g_Texture0_, kb_sampler_g_Texture0_, vec2(0.5));\n    return _e58;\n}\n`;
+
+/** 假翻译器的程序，按着色器名（顶点源码 `// <名字>`）。`ls` 仿 `DIRECTDRAW = 1` 的 lightshafts：读四个点，槽 0 只有声明。 */
+const SHAPE_SHADERS: Record<string, Partial<TranslateResult>> = {
+  ls: { uniforms: POINTS, textures: [TEX0], fragment: { wgsl: TEX0_DECLARED } },
+  // 程序没声明 point3：四个点找不全
+  lsnop3: { uniforms: POINTS.slice(0, 3), textures: [TEX0], fragment: { wgsl: TEX0_DECLARED } },
+  // point3 只有注解缺省
+  lsdef: {
+    uniforms: [...POINTS.slice(0, 3), pointUniform(3, { meta: { material: "point3", default: "0.5 0.25" } })],
+    textures: [TEX0],
+    fragment: { wgsl: TEX0_DECLARED },
+  },
+  // 读引擎的 g_Color4；g_Alpha 没被读；g_Color 带 material（材质常量，WPE 照材质写）
+  lscolor: {
+    uniforms: [
+      ...POINTS,
+      engineUniform("g_Color4", "vec4"),
+      engineUniform("g_Alpha", "float", { unused: true }),
+      engineUniform("g_Color", "vec3", { meta: { material: "color" } }),
+    ],
+    textures: [TEX0],
+    fragment: { wgsl: TEX0_DECLARED },
+  },
+  // 片元真的采样槽 0
+  lstex0: { uniforms: POINTS, textures: [TEX0], fragment: { wgsl: TEX0_SAMPLED } },
+};
+
+/**
+ * 一个 lightshafts 那样的 effect 实例（`gen_p8.py` 的 `shafts`）。`effect` 选 effect.json：`SHAPE_SHADERS` 的名字各一个单 pass 的 effect，
+ * 另有 `ls2`（两个绘制 pass）、`lsfbo`（带一张 fbo）、`lsstatic`（材质给槽 0 静态纹理、程序采样槽 0）。`combos: null` 时不写 combos。
+ */
+function shafts(
+  id: number,
+  options: {
+    effect?: string;
+    points?: Record<string, string>;
+    combos?: Record<string, number> | null;
+    visible?: unknown;
+  } = {},
+) {
+  return {
+    file: `effects/${options.effect ?? "ls"}/effect.json`,
+    id,
+    name: "",
+    visible: options.visible ?? true,
+    passes: [
+      {
+        ...(options.combos === null
+          ? {}
+          : { combos: options.combos ?? { DIRECTDRAW: 1, RAYCORNER: 1, RAYMODE: 2, RENDERING: 1 } }),
+        constantshadervalues: { ...(options.points ?? P1), rayspeed: 0 },
+        id: id + 1,
+      },
+    ],
+  };
+}
+
+/** 编一组对象（内存工程 + 记录请求的假翻译器）。`models/a.json` 是普通图像层，`models/compose.json` 是组合层。 */
+async function compileShapes(
+  objects: Record<string, unknown>[],
+  general: Record<string, unknown> = { orthogonalprojection: { width: 1920, height: 1080 } },
+) {
+  const requests: TranslateRequest[] = [];
+  const fake = {
+    async translate(request: TranslateRequest): Promise<TranslateResult> {
+      requests.push(request);
+      const name = /^\/\/ (\S+)/.exec(request.vertex)?.[1] ?? "";
+      return { ok: true, uniforms: [], textures: [], combos: [], ...SHAPE_SHADERS[name] };
+    },
+  } as unknown as Wpesl2wgsl;
+  const files: Record<string, Uint8Array | string> = {
+    "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+    "P:/p/scene.json": JSON.stringify({ general, objects }),
+    "P:/p/models/a.json": JSON.stringify({ material: "materials/a.json" }),
+    "P:/p/models/compose.json": JSON.stringify({ material: "materials/a.json", passthrough: true }),
+    "P:/p/materials/a.json": JSON.stringify({ passes: [{ shader: "s", textures: ["a"] }] }),
+    "P:/p/materials/a.tex": tex(0),
+    "P:/p/materials/t0.tex": tex(0),
+    "P:/p/shaders/s.vert": "// s",
+    "P:/p/shaders/s.frag": "// s",
+  };
+  const effect = (name: string, json: Record<string, unknown>) => {
+    files[`P:/p/effects/${name}/effect.json`] = JSON.stringify(json);
+  };
+  const material = (name: string, pass: Record<string, unknown>) => {
+    files[`P:/p/materials/effects/${name}.json`] = JSON.stringify({
+      passes: [{ blending: "normal", depthtest: "disabled", depthwrite: "disabled", cullmode: "nocull", ...pass }],
+    });
+  };
+  for (const name of Object.keys(SHAPE_SHADERS)) {
+    effect(name, { passes: [{ material: `materials/effects/${name}.json` }] });
+    material(name, { shader: `effects/${name}` });
+    files[`P:/p/shaders/effects/${name}.vert`] = `// ${name}`;
+    files[`P:/p/shaders/effects/${name}.frag`] = `// ${name}`;
+  }
+  effect("ls2", { passes: [{ material: "materials/effects/ls.json" }, { material: "materials/effects/ls.json" }] });
+  effect("lsfbo", {
+    fbos: [{ name: "_rt_x", scale: 1, format: "rgba8888" }],
+    passes: [{ material: "materials/effects/ls.json" }],
+  });
+  effect("lsstatic", { passes: [{ material: "materials/effects/lsstatic.json" }] });
+  material("lsstatic", { shader: "effects/lstex0", textures: ["t0"] });
+  const bundle = await compileScene({
+    projectDir: "P:/p",
+    sceneAssets: ["A:/assets"],
+    reader: memoryReader(files),
+    translator: fake,
+    postprocess: "disabled",
+    exhaustive: true,
+  });
+  return { bundle, requests };
+}
+const byName = (layers: readonly SceneLayer[], name: string) => layers.find((layer) => layer.name === name)!;
+
+describe("compileScene：形状对象（P8 步骤 2）", () => {
+  it("编进图层：passes 为空、没有 passthrough，effect 当开着编，点取实例的常量，不报；别的对象 shape 为 null", async () => {
+    const { bundle } = await compileShapes([
+      shapeObject(11, [shafts(100)]),
+      { id: 20, name: "img", image: "models/a.json", origin: "960 540 0" },
+      { id: 30, name: "group", origin: "0 0 0" },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    const layer = byName(bundle.layers, "S11");
+    expect(layer.passes).toEqual([]);
+    expect(layer.passthrough).toBeNull();
+    expect(layer.shape).toEqual({ points: P1_VALUES });
+    expect(layer.effects.map(({ source, enabled, visibleBound }) => [source, enabled, visibleBound])).toEqual([
+      [0, true, false],
+    ]);
+    expect(layer.effects[0].steps.map((step) => step.kind)).toEqual(["draw"]);
+    expect(byName(bundle.layers, "img").shape).toBeNull();
+    expect(byName(bundle.layers, "group").shape).toBeNull();
+  });
+
+  it("size：缺省正交高 × 正交高（宽高不等的场景也取高，不是宽 × 高），字符串按它，数字铺满两维", async () => {
+    const objects = [
+      shapeObject(11, [shafts(100)]),
+      shapeObject(12, [shafts(110)], { size: "300 200" }),
+      shapeObject(13, [shafts(120)], { size: 250 }),
+    ];
+    const sizes = async (general?: Record<string, unknown>) =>
+      (await compileShapes(objects, general)).bundle.layers.map((layer) => layer.size);
+    expect(await sizes()).toEqual([
+      [1080, 1080],
+      [300, 200],
+      [250, 250],
+    ]);
+    expect(await sizes({ orthogonalprojection: { width: 2560, height: 1440 } })).toEqual([
+      [1440, 1440],
+      [300, 200],
+      [250, 250],
+    ]);
+  });
+
+  it("size 绑用户属性：取属性当前值，登记成重编译（同图像层）", async () => {
+    const { bundle } = await compileShapes([
+      shapeObject(11, [shafts(100)], { size: { user: "sz", value: "300 200" } }),
+    ]);
+    expect(bundle.layers[0].size).toEqual([300, 200]);
+    expect(bundle.bindings.filter((binding) => binding.property === "sz").map((binding) => binding.target)).toEqual([
+      { kind: "recompile", reason: "layer-structure", path: "objects/0/size" },
+    ]);
+  });
+
+  it("shapeLayerSize：字符串缺的分量保持正交高，别的类型不写（推断，语料 0 个）", () => {
+    expect(shapeLayerSize(undefined, 1080)).toEqual([1080, 1080]);
+    expect(shapeLayerSize("300", 1080)).toEqual([300, 1080]);
+    expect(shapeLayerSize("300 200 7", 1080)).toEqual([300, 200]);
+    expect(shapeLayerSize(true, 1080)).toEqual([1080, 1080]);
+    expect(shapeLayerSize(Number.NaN, 1080)).toEqual([1080, 1080]);
+  });
+
+  it("effect 不看 visible：写死不可见、绑属性的都编进来、enabled 为真，不登记 effect 开关的绑定（p8-shape2 的 SB、SC）", async () => {
+    const { bundle } = await compileShapes([
+      shapeObject(11, [shafts(100), shafts(102, { visible: false })]),
+      shapeObject(12, [shafts(110, { visible: false })]),
+      shapeObject(13, [shafts(120, { visible: { user: "fx", value: false } })]),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(
+      bundle.layers.map((layer) =>
+        layer.effects.map(({ source, enabled, visibleBound }) => [source, enabled, visibleBound]),
+      ),
+    ).toEqual([
+      [
+        [0, true, false],
+        [1, true, false],
+      ],
+      [[0, true, false]],
+      [[0, true, false]],
+    ]);
+    expect(bundle.bindings.filter((binding) => binding.target.kind === "effect")).toEqual([]);
+  });
+
+  it("DIRECTDRAW：实例写 0、没写 combos 都编成 1（写在实例覆盖之后，p8-shape 的 S9）；槽 0 不预留；普通图像层的 effect 不改", async () => {
+    const { bundle, requests } = await compileShapes([
+      shapeObject(11, [shafts(100, { combos: { DIRECTDRAW: 0, RAYMODE: 2 } })]),
+      shapeObject(12, [shafts(110, { combos: null })]),
+      {
+        id: 20,
+        image: "models/a.json",
+        origin: "960 540 0",
+        effects: [shafts(200, { combos: { DIRECTDRAW: 0, RAYMODE: 7 } })],
+      },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    const ls = requests.filter((request) => request.vertex === "// ls");
+    const image = ls.filter((request) => request.combos?.RAYMODE === 7);
+    const shapes = ls.filter((request) => request.combos?.RAYMODE !== 7);
+    // 普通图像层：照实例的 0，槽 0 预留给合成 RT
+    expect(image.map((request) => [request.combos?.DIRECTDRAW, request.textures?.some((t) => t.slot === 0)])).toEqual([
+      [0, true],
+    ]);
+    expect(shapes.map((request) => [request.combos?.DIRECTDRAW, request.textures?.some((t) => t.slot === 0)])).toEqual([
+      [1, false],
+      [1, false],
+    ]);
+  });
+
+  it("点：取第一个 effect 第一个绘制 pass 的常量（画的是最后一个，p8-shape2 的 SA）；注解缺省也算；找不全为 null", async () => {
+    const { bundle } = await compileShapes([
+      shapeObject(11, [shafts(100, { points: P2 }), shafts(102)]),
+      shapeObject(12, [shafts(110, { effect: "lsnop3" })]),
+      // 第一个找不全、最后一个全：仍是 null（几何只看第一个）
+      shapeObject(13, [shafts(120, { effect: "lsnop3" }), shafts(122)]),
+      shapeObject(14, [
+        shafts(130, { effect: "lsdef", points: { point0: P1.point0, point1: P1.point1, point2: P1.point2 } }),
+      ]),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers.map((layer) => layer.shape?.points)).toEqual([
+      P2_VALUES,
+      null,
+      null,
+      [...P1_VALUES.slice(0, 3), [0.5, 0.25]],
+    ]);
+  });
+
+  it("shapePoints：第一个 effect 没有绘制 pass 或程序时为 null；值不足两项的那格不算", () => {
+    const draw = (program: number | null, uniforms: Record<string, number[]>) => ({
+      kind: "draw" as const,
+      pass: {
+        key: "k",
+        program,
+        blending: "normal",
+        cullmode: "nocull",
+        depthtest: "disabled",
+        depthwrite: "disabled",
+        textures: {},
+        runtime: {},
+        uniforms,
+        framebuffer: false,
+      },
+      target: null,
+      compose: false,
+      binds: null,
+    });
+    const effect = (steps: SceneLayer["effects"][number]["steps"]) =>
+      ({
+        source: 0,
+        id: 0,
+        name: "",
+        file: "",
+        fbos: [],
+        steps,
+        enabled: true,
+        visibleBound: false,
+        unsupported: [],
+      }) as SceneLayer["effects"][number];
+    const values = { g_Point0: [0.1, 0.2], g_Point1: [0.3, 0.4], g_Point2: [0.5, 0.6], g_Point3: [0.7, 0.8] };
+    const programs = [{ uniforms: POINTS }];
+    expect(shapePoints({ effects: [effect([draw(0, values)])] }, programs)).toEqual([
+      [0.1, 0.2],
+      [0.3, 0.4],
+      [0.5, 0.6],
+      [0.7, 0.8],
+    ]);
+    expect(shapePoints({ effects: [] }, programs)).toBeNull();
+    expect(shapePoints({ effects: [effect([{ kind: "copy", source: "a", target: "b" }])] }, programs)).toBeNull();
+    expect(shapePoints({ effects: [effect([draw(null, values)])] }, programs)).toBeNull();
+    expect(shapePoints({ effects: [effect([draw(0, { ...values, g_Point3: [0.7] })])] }, programs)).toBeNull();
+    // 绘制步骤前面有命令：取第一个绘制步骤
+    expect(
+      shapePoints({ effects: [effect([{ kind: "copy", source: "a", target: "b" }, draw(0, values)])] }, programs)?.[3],
+    ).toEqual([0.7, 0.8]);
+  });
+
+  it("照报 shape:effects：没有 effect（空列表或没写）", async () => {
+    for (const effects of [[], undefined]) {
+      const { bundle } = await compileShapes([shapeObject(11, effects)]);
+      expect(bundle.unsupported).toEqual(["shape:effects"]);
+      expect(bundle.layers[0].shape).toEqual({ points: null });
+    }
+  });
+
+  it("照报 shape:effect-passes：最后一个 effect 有两个绘制 pass、或有 fbo；前面的 effect 不查（永远不画）", async () => {
+    const unsupported = async (effects: unknown[]) =>
+      (await compileShapes([shapeObject(11, effects)])).bundle.unsupported;
+    expect(await unsupported([shafts(100, { effect: "ls2" })])).toEqual(["shape:effect-passes"]);
+    expect(await unsupported([shafts(100, { effect: "lsfbo" })])).toEqual(["shape:effect-passes"]);
+    expect(await unsupported([shafts(100, { effect: "ls2" }), shafts(102)])).toEqual([]);
+  });
+
+  it("照报 shape:uniform:<名字>：画的程序读 WPE 不写的引擎 uniform（没被读的、带 material 的不算），只看最后一个 effect", async () => {
+    const unsupported = async (effects: unknown[]) =>
+      (await compileShapes([shapeObject(11, effects)])).bundle.unsupported;
+    expect(await unsupported([shafts(100, { effect: "lscolor" })])).toEqual(["shape:uniform:g_Color4"]);
+    expect(await unsupported([shafts(100, { effect: "lscolor" }), shafts(102)])).toEqual([]);
+  });
+
+  it("照报 shape:texture0：画的程序读槽 0 而材质没给纹理；只声明不读、材质给了静态纹理都不报（槽 0 照常编成静态纹理）", async () => {
+    const unsupported = async (effects: unknown[]) =>
+      (await compileShapes([shapeObject(11, effects)])).bundle.unsupported;
+    expect(await unsupported([shafts(100, { effect: "lstex0" })])).toEqual(["shape:texture0"]);
+    expect(await unsupported([shafts(100, { effect: "lstex0" }), shafts(102)])).toEqual([]);
+    const { bundle } = await compileShapes([
+      shapeObject(11, [shafts(100, { effect: "lsstatic" })]),
+      shapeObject(12, [shafts(110)]),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0].effects[0].steps[0]).toMatchObject({ kind: "draw", pass: { textures: { 0: 0 } } });
+    expect(bundle.textures[0].path).toBe("materials/t0.tex");
+  });
+
+  it("colorBlendMode 非 0 不编 passthrough；对齐、alpha、color、brightness、clampuvs 中性：不报", async () => {
+    const { bundle } = await compileShapes([
+      shapeObject(11, [shafts(100)], {
+        colorBlendMode: 5,
+        alignment: "bottom",
+        alpha: 0.5,
+        color: "1 0 0",
+        brightness: 2,
+        clampuvs: true,
+      }),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0].passthrough).toBeNull();
+  });
+
+  it("perspective: true 照报 object:perspective，图层不取它", async () => {
+    const { bundle } = await compileShapes([shapeObject(11, [shafts(100)], { perspective: true })]);
+    expect(bundle.unsupported).toEqual(["object:perspective"]);
+    expect(bundle.layers[0].perspective).toBe(false);
+  });
+
+  it("组里的形状照报 model:passthrough:children:shape", async () => {
+    const { bundle } = await compileShapes([
+      { id: 1, name: "group", image: "models/compose.json", origin: "960 540 0", size: "400 400" },
+      shapeObject(11, [shafts(100)], { parent: 1 }),
+    ]);
+    expect(byName(bundle.layers, "S11").group).toBe(0);
+    expect(bundle.unsupported).toContain("model:passthrough:children:shape");
+  });
+});
+
+describe("shapeIssues / textureSlotRead（P8 步骤 2）", () => {
+  it("textureSlotRead：没有这个槽为假；没有 WGSL（手写数据）按读了；只有声明为假；任一阶段引用为真", () => {
+    expect(textureSlotRead({ textures: [] }, 0)).toBe(false);
+    expect(textureSlotRead({ textures: [TEX0] }, 1)).toBe(false);
+    expect(textureSlotRead({ textures: [TEX0] }, 0)).toBe(true);
+    expect(textureSlotRead({ textures: [TEX0], fragment: { wgsl: TEX0_DECLARED } }, 0)).toBe(false);
+    expect(
+      textureSlotRead({ textures: [TEX0], vertex: { wgsl: TEX0_DECLARED }, fragment: { wgsl: TEX0_SAMPLED } }, 0),
+    ).toBe(true);
+    expect(
+      textureSlotRead({ textures: [TEX0], vertex: { wgsl: TEX0_SAMPLED }, fragment: { wgsl: TEX0_DECLARED } }, 0),
+    ).toBe(true);
+    // 名字是别的标识符的前缀（`g_Texture0_` 与 `g_Texture0_x`）不算引用
+    expect(
+      textureSlotRead({ textures: [TEX0], fragment: { wgsl: `${TEX0_DECLARED}var<private> g_Texture0_x: f32;\n` } }, 0),
+    ).toBe(false);
+  });
+
+  it("shapeIssues：只看最后一个 effect；程序缺失时只查结构", () => {
+    const pass = (program: number | null, textures: Record<number, number> = {}) => ({
+      key: "k",
+      program,
+      blending: "normal",
+      cullmode: "nocull",
+      depthtest: "disabled",
+      depthwrite: "disabled",
+      textures,
+      runtime: {},
+      uniforms: {},
+      framebuffer: false,
+    });
+    const effect = (program: number | null, extra: Partial<SceneLayer["effects"][number]> = {}) =>
+      ({
+        source: 0,
+        id: 0,
+        name: "",
+        file: "",
+        fbos: [],
+        steps: [{ kind: "draw", pass: pass(program), target: null, compose: false, binds: null }],
+        enabled: true,
+        visibleBound: false,
+        unsupported: [],
+        ...extra,
+      }) as SceneLayer["effects"][number];
+    const programs: TranslateResult[] = [
+      { ok: true, uniforms: POINTS, textures: [TEX0], fragment: { wgsl: TEX0_DECLARED } },
+      { ok: true, uniforms: [engineUniform("g_Alpha", "float")], textures: [TEX0], fragment: { wgsl: TEX0_SAMPLED } },
+    ];
+    expect(shapeIssues({ effects: [] }, programs)).toEqual(["shape:effects"]);
+    expect(shapeIssues({ effects: [effect(0)] }, programs)).toEqual([]);
+    expect(shapeIssues({ effects: [effect(1)] }, programs).sort()).toEqual(["shape:texture0", "shape:uniform:g_Alpha"]);
+    expect(shapeIssues({ effects: [effect(1), effect(0)] }, programs)).toEqual([]);
+    expect(shapeIssues({ effects: [effect(null)] }, programs)).toEqual([]);
+    expect(shapeIssues({ effects: [effect(0, { steps: [] })] }, programs)).toEqual(["shape:effect-passes"]);
+    expect(
+      shapeIssues({ effects: [effect(0, { steps: [{ kind: "copy", source: "a", target: "b" }] })] }, programs),
+    ).toEqual(["shape:effect-passes"]);
+  });
+});
+
+// ———— 真翻译器：WPE 自带的 lightshafts（本机有 WPE 时） ————
+
+const wasm = join(__dirname, "..", "wpesl2wgsl", "wpesl2wgsl.wasm");
+const root = process.env.KABEGAME_WPE_ROOT;
+const lightshafts = join(root ?? "", "assets", "effects", "lightshafts", "effect.json");
+
+/** 内存里的工程文件盖在磁盘之上（其余路径照常读 WPE 安装目录，同 `stageUniforms.test.ts`）。 */
+function overlayReader(files: Record<string, string>): SceneReader {
+  const own = (path: string) => {
+    const text = files[path.replace(/\\/g, "/")];
+    return text === undefined ? null : new TextEncoder().encode(text);
+  };
+  const disk = (path: string) => {
+    try {
+      return new Uint8Array(readFileSync(path));
+    } catch {
+      throw new TypeError("Failed to fetch");
+    }
+  };
+  return {
+    async readWhole(path) {
+      return own(path) ?? disk(path);
+    },
+    async readRange(path, start, end) {
+      const bytes = own(path) ?? disk(path);
+      if (start >= bytes.length) throw new TypeError("Failed to fetch");
+      return bytes.slice(start, end);
+    },
+  };
+}
+
+/** `p8-shape` 的 lightshafts 实例（`gen_p8.py` 的 `shafts`：`colorastart` 各不相同、`rayspeed` / `noiseamount` 为 0）。 */
+const wpeShafts = (
+  id: number,
+  colorastart: string,
+  combos: Record<string, number> = { DIRECTDRAW: 1, RAYCORNER: 1, RAYMODE: 2, RENDERING: 1 },
+) => ({
+  file: "effects/lightshafts/effect.json",
+  id,
+  name: "",
+  visible: true,
+  passes: [
+    {
+      combos,
+      constantshadervalues: {
+        colorastart,
+        colorend: "0.4 0.9 1",
+        colorwexponent: 1,
+        colorwintensity: 1,
+        noiseamount: 0,
+        noisescale: 0.85,
+        ...P1,
+        rayfeather: "0.22 0.1",
+        rayradius: 0.15,
+        rayscale: "0.4 1.01",
+        raysmoothness: 0.54,
+        rayspeed: 0,
+      },
+      id: id + 1,
+    },
+  ],
+});
+
+/**
+ * `p8-shape` S1、S10 两次绘制的 `vs_in`（`ignore/p8/out/dump.json`，`A:\p8\p8-shape-fps20\p8-shape-fps20-frame157.rdc` 事件 67、227；
+ * 索引 (0, 2, 1, 0, 3, 2) 展开前的四个顶点），按 p0–p3。
+ */
+const WPE_S1 = [
+  [-274.75201416015625, 437.86444091796875],
+  [385.60321044921875, 472.62957763671875],
+  [482.65203857421875, -174.7979736328125],
+  [-459.9179992675781, -486.0],
+];
+const WPE_S10 = [
+  [-76.31999969482422, 81.08599853515625],
+  [107.11199951171875, 87.52400207519531],
+  [134.07000732421875, -32.3699951171875],
+  [-127.75499725341797, -90.0],
+];
+
+describe.skipIf(!root || !existsSync(wasm) || !existsSync(lightshafts))(
+  "真翻译器：WPE 自带的 lightshafts（p8-shape）",
+  () => {
+    it("S1、S4、S9、S10：不报；点取实例常量、DIRECTDRAW 编成 1、最后一个 effect 的变体；四边形与 RenderDoc 的 vs_in 逐位相同", async () => {
+      const translator = await Wpesl2wgsl.fromBytes(readFileSync(wasm));
+      const objects = [
+        shapeObject(1, [wpeShafts(100, "1 0 0")]),
+        shapeObject(4, [
+          wpeShafts(130, "1 1 0"),
+          wpeShafts(132, "1 0 1", { DIRECTDRAW: 1, RAYCORNER: 1, RAYMODE: 1, RENDERING: 1 }),
+        ]),
+        shapeObject(9, [wpeShafts(180, "0 0 0.5", { DIRECTDRAW: 0, RAYCORNER: 1, RAYMODE: 2, RENDERING: 1 })]),
+        shapeObject(10, [wpeShafts(190, "0.75 0.25 0")], { size: "300 200" }),
+      ];
+      const bundle = await compileScene({
+        projectDir: "P:/p",
+        sceneAssets: [join(root!, "assets")],
+        reader: overlayReader({
+          "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+          "P:/p/scene.json": JSON.stringify({
+            general: { orthogonalprojection: { width: 1920, height: 1080 } },
+            objects,
+          }),
+        }),
+        translator,
+        postprocess: "disabled",
+        exhaustive: true,
+      });
+      expect(bundle.unsupported).toEqual([]);
+      const combo = (layer: SceneLayer, effect: number, name: string) => {
+        const step = layer.effects[effect].steps[0];
+        if (step.kind !== "draw" || step.pass.program === null) throw new Error("没有程序");
+        return bundle.programs[step.pass.program].combos?.find((item) => item.name === name)?.value;
+      };
+      for (const layer of bundle.layers) {
+        expect(layer.shape?.points, layer.name).toEqual(P1_VALUES);
+        expect(shapeIssues(layer, bundle.programs), layer.name).toEqual([]);
+        for (const e of layer.effects.keys()) expect(combo(layer, e, "DIRECTDRAW"), layer.name).toBe(1);
+        // DIRECTDRAW = 1 的 lightshafts 不读槽 0（反射里照样声明了）
+        const step = layer.effects.at(-1)!.steps[0];
+        if (step.kind === "draw")
+          expect(textureSlotRead(bundle.programs[step.pass.program!], 0), layer.name).toBe(false);
+      }
+      const [s1, s4, , s10] = bundle.layers;
+      expect([combo(s4, 0, "RAYMODE"), combo(s4, 1, "RAYMODE")]).toEqual([2, 1]);
+      expect([s1.size, s10.size]).toEqual([
+        [1080, 1080],
+        [300, 200],
+      ]);
+      // 带的顺序是 [p1, p0, p2, p3]
+      const corners = (layer: SceneLayer) => {
+        const [v1, v0, v2, v3] = shapeQuad(layer.size, layer.shape!.points).map((vertex) =>
+          vertex.position.slice(0, 2),
+        );
+        return [v0, v1, v2, v3];
+      };
+      expect(corners(s1)).toEqual(WPE_S1);
+      expect(corners(s10)).toEqual(WPE_S10);
+    });
+  },
+);

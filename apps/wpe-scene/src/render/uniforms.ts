@@ -15,7 +15,7 @@ import { orientationVectors, VIEW_FORWARD, VIEW_UP } from "../particles/orientat
 import { trailRenderVar0 } from "../particles/ropetrail";
 import { compositeTranslation, directTranslation, type TextLayout } from "../text/layout";
 import type { UniformLayout } from "../wpesl2wgsl";
-import { textCompositeSize, type DrawStep, type TextStep } from "./graph";
+import { textCompositeSize, type DrawStep, type Geometry, type TextStep } from "./graph";
 import { identity, invert, multiply, normalMatrix, orthographic, scaling, translation, type Mat4 } from "./math";
 import type { LayerState } from "./state";
 
@@ -143,7 +143,8 @@ export interface StaticBuiltinInput {
   effectModelViewProjection?: Mat4;
   effectTextureProjection?: Mat4;
   /**
-   * `g_LayerModelMatrix`（P7d 步骤 2）：只有 effect 的 pass 给（`drawMatrices` 的 `effect`、`final` 角色），是图层世界矩阵。
+   * `g_LayerModelMatrix`（P7d 步骤 2）：只有 effect 的 pass 给（`drawMatrices` 的 `effect`、`final` 角色），是图层世界矩阵；形状层
+   * （P8 步骤 2）是单位阵。
    * 缺省时不写这个名字：基础 pass 与直接上屏在 WPE 里是别的图层的残留值，编译期已照报（`compile/features.ts` 的 `EFFECT_UNIFORMS`）。
    */
   layerModel?: Mat4;
@@ -296,13 +297,33 @@ export const LIGHT_UNIFORMS = {
  * `g_LayerModelMatrix` 与 `g_ModelMatrix` 的平移仍是 `origin`（`A:\p7d\unipar\unipar-frame132.rdc` 事件 73）。基础 pass、直接上屏、
  * passthrough 上屏 WPE 不写（别的图层的残留值），这里不给，编译期照报（`compile/features.ts` 的 `EFFECT_UNIFORMS`）。
  * 没有 effect 的组的上屏（`groupUpload`）也是 `final` 角色、同样会拿到它，但那不是 effect 的 pass，读它的着色器编译期已照报。
+ *
+ * 形状层（P8 步骤 2，`geometry: "shape"`，角色是 `final`，rea-p8-layer 1.5）单列：MVP、`g_ModelMatrix` 同上屏（场景视图投影 · 视差 · W，
+ * 形状没有对齐偏移）；效果矩阵 WPE 取图层 `+0x344` / `+0x384`，形状不写它们（只在图像层的 `FUN_1401e8aa0` 里写），是基类构造时的单位阵，
+ * 所以 `g_EffectModelMatrix`、`g_EffectModelViewProjectionMatrix`、`g_LayerModelMatrix` 都是单位阵，纹理投影是单位阵的前两行乘 `Sx/2`、
+ * `Sy/2` 即 `diag(Sx/2, Sy/2, 1, 1)`。各逆矩阵由 `staticBuiltins` 从这几个矩阵现算（单位阵、`diag(2/Sx, 2/Sy, 1, 1)`），和读码一致。
  */
-export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: readonly number[], viewProjection: Mat4) {
+export function drawMatrices(
+  step: Pick<DrawStep, "role"> & { geometry?: Geometry },
+  world: Mat4,
+  size: readonly number[],
+  viewProjection: Mat4,
+) {
   const model = world;
   const layerMvp = multiply(viewProjection, model);
   const hw = (size[0] ?? 0) / 2,
     hh = (size[1] ?? 0) / 2;
   const half = scaling(hw, hh, 1);
+  if (step.geometry === "shape")
+    return {
+      modelViewProjection: layerMvp,
+      model,
+      viewProjection,
+      effectModel: identity(),
+      effectModelViewProjection: identity(),
+      effectTextureProjection: half,
+      layerModel: identity(),
+    };
   switch (step.role) {
     case "base": {
       const fill = orthographic(-(hw || 1), hw || 1, -(hh || 1), hh || 1, -FILL_DEPTH, FILL_DEPTH);
@@ -344,7 +365,8 @@ export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: re
 const FILL_DEPTH = 10000;
 
 export interface DrawUniformInput {
-  step: Pick<DrawStep, "role" | "inputs">;
+  /** `geometry` 只用来认形状层（P8 步骤 2，`drawMatrices`）；缺省按 `role`。 */
+  step: Pick<DrawStep, "role" | "inputs"> & { geometry?: Geometry };
   /** 图层的当前状态与尺寸（`size` 只在重编译时变）；颜色组取自身的值，不继承。 */
   layer: LayerState & { size: number[] };
   /** 图层的世界矩阵：按同一份状态沿父链算（`layout.ts` 的 `worldMatrixOf`）。 */

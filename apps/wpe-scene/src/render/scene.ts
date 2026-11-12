@@ -109,6 +109,9 @@
  *   `drawIndexed`、三角形列表。顶点布局按网格格式（`meshVertexLayout`），网格没有的属性接全场一份的全零占位缓冲（槽 1，`arrayStride` 0）。
  *   管线比图像层多两项：布局键、`cullmode: normal` 的背面剔除（`pipelineKey` 只在出现时加后缀）。uniform 同图像层直接上屏（视差、抖动、
  *   缩放，`perspective: true` 换透视那一份），颜色组固定为 1。
+ * - 形状（P8 步骤 2，`SceneLayer.shape`）：渲染图只有一步 `final`（`planShapeLayer`），这里只在两处认它：建 draw 时 `geometry: "shape"`
+ *   的顶点是 `shapeQuad`（effect 常量的四个点），矩阵走 `drawMatrices` 的形状分支（效果矩阵取 WPE 给形状的那组值）。`buildableLayers`
+ *   收形状层（它的 `passes` 为空）。管线照 `final`：画到场景时写 RGB、三角形带。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -163,6 +166,7 @@ import {
   rootObject,
   sceneTargetSize,
   sceneViewProjection,
+  shapeQuad,
   worldMatrixOf,
 } from "./layout";
 import { identity, multiply, orthographic, translation, type Mat4 } from "./math";
@@ -723,9 +727,10 @@ export function checkRenderable(
 }
 
 /**
- * 要建 GPU 资源的图层（有 pass 的，含粒子材质的 pass，P4a 步骤 4；模型有网格 pass 的，P5c 步骤 2）：自身和每个祖先都可能可见，即当前
- * 可见、`visible` 绑了用户属性，或场景带脚本。`visibleBound` 的图层当前可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组
- * 下面的子孙永远画不出来（`visible` 沿父链继承，P4a 步骤 1）：不建资源，它们的问题也不让整场退回（`p5c-ver` 的 HID 不画）。
+ * 要建 GPU 资源的图层（有 pass 的，含粒子材质的 pass，P4a 步骤 4；文本层；模型有网格 pass 的，P5c 步骤 2；形状层，P8 步骤 2，`passes`
+ * 为空、画的是 effect 的 pass）：自身和每个祖先都可能可见，即当前可见、`visible` 绑了用户属性，或场景带脚本。`visibleBound` 的图层当前
+ * 可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组下面的子孙永远画不出来（`visible` 沿父链继承，P4a 步骤 1）：不建资源，
+ * 它们的问题也不让整场退回（`p5c-ver` 的 HID 不画）。
  */
 export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">): SceneLayer[] {
   const scripted = bundle.scripts.list.length > 0;
@@ -735,7 +740,8 @@ export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">)
       (layer.passes.length > 0 ||
         (layer.particle?.passes.length ?? 0) > 0 ||
         !!layer.text ||
-        !!layer.model?.meshes.some((mesh) => mesh.passes.length > 0)) &&
+        !!layer.model?.meshes.some((mesh) => mesh.passes.length > 0) ||
+        !!layer.shape) &&
       everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted),
   );
 }
@@ -1832,11 +1838,14 @@ export class GpuScene {
       );
     } else {
       // 几何：图层四边形（模型空间、未缩放的 size），或 2×2 的 NDC 四边形。后者的 UV 取步骤的：effect 中间 pass 是 (1, 1)、不内缩
-      // （字节同以前），fullscreen 图层直接上屏取纹理上界（P5b 步骤 3）
+      // （字节同以前），fullscreen 图层直接上屏取纹理上界（P5b 步骤 3）。形状层（P8 步骤 2）是 effect 常量的四个点围成的四边形
+      // （`shapeQuad`，uv 就是点本身），点在编译期定好、不随常量就地写变（同 WPE）
       const vertices =
         step.geometry === "fullscreen"
           ? layerQuad([2, 2], step.uv, step.inset)
-          : layerQuad(this.layerSize(layer, state), step.uv, step.inset);
+          : step.geometry === "shape"
+            ? shapeQuad(this.layerSize(layer, state), layer.shape?.points ?? null)
+            : layerQuad(this.layerSize(layer, state), step.uv, step.inset);
       const vertexData = program.vertexPacking.pack(vertices);
       vertexBuffer = this.own(
         device.createBuffer({
