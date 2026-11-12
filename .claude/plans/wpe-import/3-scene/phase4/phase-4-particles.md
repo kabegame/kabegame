@@ -229,7 +229,7 @@ const OBJECT_FLAGS = [
 
 ## P4e — 子系统与音频
 
-子计划：[phase-4e-children.md](phase-4e-children.md)。步骤 0 已在 2026-11-12 做完（读码两份 [rea-p4e-children.md](rea-p4e-children.md)、[rea-p4e-audio.md](rea-p4e-audio.md)，确定性工程 8 个，结论见报告「P4e 语义的实测核对」）；准确覆盖（递归检查子系统，没有新键）：165 张口径 61 → 93、152 张口径 57 → 83，能解锁 3 张（`3778592720`、`3811798465`、`1514925620`）。步骤 1（static 子系统）已完成，覆盖 61 → 72（165 张口径），解锁 `3778592720`。步骤 2（事件实例池与 `eventfollow`）已完成，覆盖 72 → 82（165 张口径），解锁 `3811798465`。步骤 3（`eventspawn`、`eventdeath`）已完成，覆盖 82 → 87（165 张口径），解锁 `1514925620`。步骤 4（`audioprocessing*` 与场景频谱，Hub 的频谱换成 WPE 的原始频谱）已完成，覆盖 87 → 93（165 张口径）。
+子计划：[phase-4e-children.md](phase-4e-children.md)。步骤 0 已在 2026-11-12 做完（读码两份 [rea-p4e-children.md](rea-p4e-children.md)、[rea-p4e-audio.md](rea-p4e-audio.md)，确定性工程 8 个，结论见报告「P4e 语义的实测核对」）；准确覆盖（递归检查子系统，没有新键）：165 张口径 61 → 93、152 张口径 57 → 83，能解锁 3 张（`3778592720`、`3811798465`、`1514925620`）。步骤 1（static 子系统）已完成，覆盖 61 → 72（165 张口径），解锁 `3778592720`。步骤 2（事件实例池与 `eventfollow`）已完成，覆盖 72 → 82（165 张口径），解锁 `3811798465`。步骤 3（`eventspawn`、`eventdeath`）已完成，覆盖 82 → 87（165 张口径），解锁 `1514925620`。步骤 4（`audioprocessing*` 与场景频谱；Hub 另算 WPE 的原始频谱只给场景，网页壁纸仍用自定频谱，2026-11-13 用户改为方案 B）已完成，覆盖 87 → 93（165 张口径）。收尾 2026-11-13 做完。
 
 **步骤 0：**
 - `children` 的触发时机、`probability`、`maxcount`、`controlpointstartindex`，子系统和父系统的控制点、绘制顺序。
@@ -241,6 +241,19 @@ const OBJECT_FLAGS = [
 - `audioprocessing*` 接入宿主现有的音频数据，用在 emitter、`turbulentvelocityrandom`、`turbulence`、`vortex`、`vortex_v2` 上。音频只有 Windows，其它平台和没声明 `supportsaudioprocessing` 时按步骤 0 查到的行为处理。
 
 **验收：** 语料中粒子用法覆盖达到 60 张；三种事件的确定性工程和 WPE 一致；固定音频输入下的响应和 WPE 一致。
+
+**完成情况（2026-11-13）：** 步骤 0–4 都已提交（步骤 0–1 `3a22fd83`；2 `f0abb228`；3 `69214a05`；4 `1e929b3b`），收尾 A 走查按推断实现的几条，收尾 B 写进了 `cocs/wpe/WPE_SCENE.md`「粒子（P4e）」、changelog 与回归文档（子计划「P4e 收尾」）。
+- 解锁：`3778592720`（步骤 1）、`3811798465`（步骤 2）、`1514925620`（步骤 3），`1333579536` 与 P5b 一起；音频不解锁场景。三张都和 WPE 比过粒子统计量与整帧，用户看过预览与桌面。同期能渲染的场景 38 → 45，其余 3 张来自别的阶段。
+- 覆盖：165 张口径粒子用法完全覆盖 61 → 93（各步之后依次 72、82、87、93），152 张口径 57 → 83（67、75、80、83），正好是步骤 0 定的上限。本节验收写的 60 张是旧口径的估计，见上「范围与覆盖」的说明。
+- 去掉的键：`particle:children`（36 张，165 张口径）、`mode 0` 的音频字段 7 个键、各模块的 `audioprocessingmode` 与 `general:supportsaudioprocessing`（12 张）。没有新增的 `particle:*` 键。
+- 还挡住粒子覆盖的（165 张，括号里是只差它的）：`particle:binding:instance:rate` 8（2）、`colorn` 5（2）、`count`、`size` 各 3、`speed`、`alpha` 各 2（`alpha` 1）、`lifetime` 1，都是 `{script}`（P4f）；`particle:instance:brightness` 3（3）；`particle:renderers` 1（1）。
+- 确定性工程：static、三种事件、音频系数、运行中建实例的预热时间各有回放案例（`e1`–`e5`），见[子计划](phase-4e-children.md)各步实施记录。
+- 读码被实测更正或补上的：对象 `rate` 也乘子系统的 `timescale`（`p4e-rate`）；多个 eventdeath 条目时两个条目都失守（`ed-max2`，比读码预测的更彻底）；起音第一帧峰值重置后当帧再降一步（按汇编）；运行中建的实例预热用这一帧的场景时间（收尾 A 实测，原为【推】）。
+- 留给后面各节的：
+  - P4f：`instanceoverride` 的 `{script}`；
+  - P11：`g_AudioSpectrum*` uniform（频谱数据已就位）；
+  - 解锁烟花预设之前：spritetrail 写顶点的开销（见风险 8）；
+  - 没有排期：一个系统多个 renderer、`inherit*fromevent`（语料 0）、「音频录制」属性。
 
 ## P4f — 脚本与深度
 
@@ -280,3 +293,4 @@ const OBJECT_FLAGS = [
 5. **风、重力的语义只读到代码：** 粒子路径不碰这几个键，读码也没有找到别的消费点，P4a 步骤 2 用实验确认。`perspectiveoverridefov` 已实测，是透视粒子的 `fov`。`3811798465` 等 6 张的解锁取决于这一项。
 6. **层级动的是现有路径：** 它改所有图层的世界矩阵，现有能渲染的场景都要过基线。
 7. **内置粒子着色器的路径和 WPE 不同：** `genericparticle` 在 WPE 里是 `PointList` 加几何着色器，项目自定义 `particle` 走顶点展开。无旋转时两条路径的最终几何相同（[报告](p4-particles-REPORT.md)）；旋转的情形要在 P4a 对比。
+8. **烟花预设的写顶点开销**（P4e 步骤 3 新增）：`3560756264` 强制渲染时单个 eventdeath 实例最多 8500 个 spritetrail 粒子，帧时间均值 43 ms，其中 CPU 写顶点约 28 ms（每粒子约 1.1 µs）。带这套预设的 3 张场景（`3560756264`、`3570308528`、`3832133196`）都还有别的不支持项，暂时影响不到用户；解锁之前要把写顶点降下来（GPU 上展开拖尾，或只写可见的粒子）。

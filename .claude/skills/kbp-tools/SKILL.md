@@ -146,7 +146,7 @@ kbp.py replay <案例…> | --all [--src 产品源码] [--data 目录] [--out �
   报 `[src]`，退出码非 0。
 - 现有案例（`ignore/p4/cases/`）：`b3`（P4a 的 9 个标签、`p4b` 模块、`p4b-emit`）、`b4`（噪声）、`b6`（三组 `colorn`）、`c1`（`p4c-cp`）、
   `c2`（`p4c-ptr`）、`c3`（`p4c-attract`，`a-default` 的已知超限照原脚本记失败）、`c4`（`p4c-world`，`p4c-ptr` 加 `p-world`）、`d1`（绳）、`e1`（P4e static 子系统）、
-  `e2`（P4e 事件实例池与 `eventfollow`）、`e3`（P4e `eventspawn` 与 `eventdeath`，含多条目的上限失守与 rope 父系统预热里建的实例）、`e4`（P4e `audioprocessing*`：音频发射系统按「存在余数初值使每帧出生数对上」核对，静音工程逐粒子比）。
+  `e2`（P4e 事件实例池与 `eventfollow`）、`e3`（P4e `eventspawn` 与 `eventdeath`，含多条目的上限失守与 rope 父系统预热里建的实例）、`e4`（P4e `audioprocessing*`：音频发射系统按「存在余数初值使每帧出生数对上」核对，静音工程逐粒子比）、`e5`（P4e 收尾 A：运行中建的事件实例预热时场景时间取这一帧的 `g_Time`，钩子沿用 `e3`）。
   频谱（P4e 步骤 4 起）：轨迹帧带 `audio`（`kbp rdc track` 记下的 CLK 读数）时，回放每帧把 `g_AudioSpectrum16Left/Right` 原样写进粒子共用的频谱
   （`SimOptions.audio`，由 `audioTimeline` 从真值帧组出；没抓到的帧沿用前一帧，第一个有值的帧之前是 0），源码要有 `ParticleSystem.setAudio`。
   子系统（P4e 起）：产品的系统树由根系统带着步进，回放只步进根，**每帧**按 `forEachDrawn` 的先序与 `kbp-meta.json` 的 `children` 给子系统

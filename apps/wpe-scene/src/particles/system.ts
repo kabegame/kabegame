@@ -240,9 +240,10 @@ interface TreeFrame {
  * 预热用的那一份（预热循环里可能建 eventdeath 实例，4.8）。
  */
 interface PrewarmEnv {
-  /** 场景时间 `T`：加载时 0（rea-p4b-modules B2 末条）；运行中建实例时是这一帧的（`ctx+0x130` 是全场的场景时间，【推】）。 */
+  /** 场景时间 `T`：加载时 0（rea-p4b-modules B2 末条）；运行中建实例时是这一帧的（`ctx+0x130` 是全场的场景时间；P4e 收尾 A 实测
+   *  p4e-close：取 0 的变体超限 9514 倍，rea-p4e-children.md 4.7）。 */
   time: number;
-  /** 图层时间（remap 的 `layertime`，`obj+0x770`）：加载时 0，运行中是这一帧的。 */
+  /** 图层时间（remap 的 `layertime`，`obj+0x770`）：加载时 0，运行中是这一帧的（【推】，测试工程不读它）。 */
   layerTime: number;
   /** 对象世界矩阵 `W`（remap 的 `layerorigin`）。 */
   object: Mat4;
