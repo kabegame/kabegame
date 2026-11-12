@@ -1,6 +1,6 @@
 /**
  * P4e 步骤 1：子系统进 bundle（`compileScene` 的 `compileParticleSystem`，rea-p4e-children 第 1 节）。内存工程 + 假翻译器：
- * 条目递归编进 `SceneParticle.children`、稳定键、深度上限、能力表（事件类报 `particle:children:<type>`、读不到的子系统文件）、
+ * 条目递归编进 `SceneParticle.children`、稳定键、深度上限、能力表（事件类从 P4e 步骤 3 起都不报、读不到的子系统文件）、
  * 子系统不登记 `instanceoverride` 绑定，以及 mode 0 的音频字段不再挡场景。
  */
 import { describe, expect, it, vi } from "vitest";
@@ -68,7 +68,7 @@ const keys = (particle: SceneParticle): string[] => [
 ];
 
 describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
-  it("static 条目递归编进 children，稳定键按 JSON 下标（丢掉的条目不移位），事件类也编进来；eventfollow 不报（P4e 步骤 2），eventspawn / eventdeath 照报", async () => {
+  it("static 条目递归编进 children，稳定键按 JSON 下标（丢掉的条目不移位），事件类也编进来；三种事件类型都不报（P4e 步骤 2、3）", async () => {
     const bundle = await compile(
       memoryReader(
         files({
@@ -85,7 +85,7 @@ describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
         }),
       ),
     );
-    expect(bundle.unsupported).toEqual(["particle:children:eventdeath"]);
+    expect(bundle.unsupported).toEqual([]);
     const particle = bundle.layers[0].particle!;
     expect(particle.children.map((child) => [child.type, child.system.file])).toEqual([
       ["static", "particles/c.json"],

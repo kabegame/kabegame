@@ -550,7 +550,142 @@ forEachDrawn(object: Mat4, callback: (system: ParticleSystem, template: readonly
 
 **结论：** 每实例一次绘制（「决定」1）不用合并：实例最多的场景里粒子 CPU 开销不到 1 ms。
 
-**待用户：** `3811798465` 在图库预览与桌面上看一眼（萤火虫周围的火星跟着萤火虫走，数量和 WPE 一致，没有闪烁或缺失）。
+**待用户：** `3811798465` 在图库预览与桌面上看一眼（萤火虫周围的火星跟着萤火虫走，数量和 WPE 一致，没有闪烁或缺失）。2026-11-12 用户看过，没有问题，提交 `f0abb228`。
+
+## 步骤 3 — `eventspawn` 与 `eventdeath`
+
+### 思路
+
+实例池、实例矩阵、步进、回收、绘制在步骤 2 都已做好，三种事件类型共用；`eventspawn`、`eventdeath` 和 `eventfollow` 只差**什么时候取实例、`X` 用哪个位置、之后跟不跟**。所以本步只动模拟器里的两个挂点，渲染器、轨迹与回放的起名都不用改（事件条目下的模板本来就按实例化处理）。
+
+`eventspawn` 和 `eventfollow` 走同一个挂点（发射之后，4.3）：条目在外、新粒子在内，满了整条不抽，`X` 用新粒子 operator 之前的位置，只在建立时写一次，之后不重算、父粒子死了也不停。`eventdeath` 是新挂点，在判死之后、控制点之前，和停跟随同一个循环（4.2）：死粒子在外、条目在内，`X` 用死粒子上一帧末的位置（判死只把寿命清零，位置列还是上一帧的）。它的上限不是逐条目判的：本帧开头把各 eventdeath 条目的「`maxcount` − 活跃数」加起来得到 `cap`，循环里只看 `cap` 是不是恰好为 0，建了实例后某条目「活跃数 == `maxcount`」才跳到下一个死粒子。单条目时上限严格成立，多条目时会失守（「决定」4 照 WPE 复刻，实测 `ed-max2` 两个条目各 60、59 个实例）。
+
+预热的规则要细一点（4.8）：预热期间不记新粒子、不为事件收集死亡，所以 eventspawn 不建；但父系统带 rope 类 renderer 时判死照样收集死亡槽号（rope 表要用），建 eventdeath 实例的循环只看死亡表和 `cap`，于是预热里也会建，这些实例要到预热之后的第一个正常帧才步进（实测 `ed-rope` 比 `ed-sprite` 多 1 个实例）。所以 `advance` 的事件开关要拆成两个：「这一帧的环境」（建实例与实例预热用，预热时也有）和「是不是预热」（只关新粒子与事件的死亡收集）。
+
+几个关键决定：
+- **`followSlot` 三种类型都写**（4.2、4.3 的 `inst+0x478 = b / d`）：本步没有读者，留给 `inheritinitialvaluefromevent`（7.2，语料没用到）。停跟随与重算 `X` 只看 eventfollow 条目，不受它影响。
+- **不可见时**：对象不可见、子系统以 `emit = false` 步进时，判死照常，eventdeath 照常建实例（`emit` 只管发射器的调用，判死与事件处理不看它，【推】自代码结构，同步骤 2 的停跟随）。
+- **随机数**：同步骤 2，`probability` 抽本对象的随机源，不复刻 MT19937；`ed-order` 的抽取顺序只在单测里按读码核对。
+
+### 现状锚点
+
+**a. 发射之后只给 eventfollow 建实例**（`particles/system.ts` 的 `spawnInstances`）
+```ts
+for (const pool of this.events) {
+  if (pool.entry.type !== "eventfollow") continue; // 现状：eventspawn 的池建了但从不触发
+  const { maxcount, probability } = pool.entry;
+  if (pool.active.length === maxcount) continue;
+  // …逐新粒子抽 uA、takeInstance、followSlot = slot、满了 break
+}
+```
+
+**b. 判死之后只停跟随**（`advance`）
+```ts
+this.ageAndKill(dt, events !== null && this.watchesDeaths);
+this.sequenceFrames();
+if (events) this.stopFollowing(); // 现状：eventdeath 的池建了但从不触发；预热时 events 为 null，什么都不做
+```
+
+**c. 预热把事件整个关掉**（`prewarmLoop`）
+```ts
+for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs, true, env.object, null); // 现状：null = 不处理事件
+```
+
+**d. 能力表照报两种类型**（`compile/features.ts` 的 `checkParticleChildren`）
+```ts
+// eventfollow 已实现（P4e 步骤 2）；eventspawn、eventdeath 的触发在步骤 3
+if (entry.type === "eventspawn" || entry.type === "eventdeath") unsupported.add(`particle:children:${entry.type}`);
+```
+
+### 点 1 — 模拟：两个触发点（`particles/system.ts`）
+
+- **修改** `advance` 的事件参数拆成环境与预热位：
+```ts
+private advance(dt, frameDt, passes, inputs, emit = true, object = inputs.world,
+  env: PrewarmEnv | null = null,   // 修改：这一帧的环境（建实例、实例预热用）；null 只在没有子系统的调用里
+  prewarming = false,              // 新增：预热（`sys+0x41 = 0`，4.8）：不记新粒子、不为事件收集死亡
+): void {
+  this.ageAndKill(dt, !prewarming && this.watchesDeaths);   // rope 照旧总收集
+  this.sequenceFrames();
+  if (env) this.handleDeaths(inputs, env);                  // 修改：停跟随 + eventdeath（4.2），预热里也走（死亡表只有 rope 时非空）
+  // … 控制点
+  if (emit) {
+    this.emit(dt, env !== null && !prewarming && this.watchesBirths);
+    if (env && !prewarming && this.born.length) this.spawnInstances(inputs, env);  // eventfollow + eventspawn
+  }
+```
+- **修改** `prewarmLoop` 传 `env` 与 `prewarming = true`。
+- **修改** `watchesDeaths` 只认 eventfollow / eventdeath（现状如此），`watchesBirths` 只认 eventfollow / eventspawn（现状如此），不变。
+- **修改** `stopFollowing` → `handleDeaths`（4.2，`0x140237129`–`0x1402376f6`）：
+```ts
+// 本帧开头算一次，可以是负数（多条目时上限失守，「决定」4）
+let cap = Σ_{eventdeath 池} (entry.maxcount − active.length);
+for (const d of this.dead) {                       // 升序
+  // 停跟随（步骤 2 的 stopFollowing，逐死粒子同一个循环）
+  if (cap === 0) continue;
+  for (const pool of eventdeath 池（条目顺序）) {
+    if (this.random.a() > pool.entry.probability) continue;   // 每个（死粒子，条目）抽一次
+    const inst = this.takeInstance(pool, d, inputs.world, inputs.pointer, env);   // X 用死粒子当前列里的位置（上一帧末）
+    inst.followSlot = d;
+    pool.active.push(inst);
+    cap -= 1;
+    if (pool.active.length === pool.entry.maxcount) break;   // 跳到下一个死粒子
+  }
+}
+```
+- **修改** `spawnInstances`：条目类型放开到 `eventfollow` 与 `eventspawn`（4.3），其余不变；`followSlot = b` 两种都写。
+- **修改** 文件头与各处注释里「本步只有 eventfollow 会被触发」的说法。
+
+### 点 2 — 渲染（不改）
+
+事件条目下的模板已经是实例化的（`visitParticleTemplates` 对非 static 条目给 `instanced`），draw 池、现排、快照都不用动。验收时核对 rope 父系统（`ed-rope`）与 spritetrail 子系统（烟花预设）的实例能画。
+
+### 点 3 — 能力表（`compile/features.ts`）
+
+- **修改** `checkParticleChildren`：不再报 `particle:children:<type>`，只剩条目字段与 `controlpointstartindex` 的检查；注释改成「三种事件类型都已实现（P4e 步骤 2、3）」。
+
+### 点 4 — 回放工具与案例（Claude 做）
+
+- `p4e-event`、`p4e-event2` 的 fps 60 轨迹改用 points 认法重新提取（draws 版改名 `-draws.json` 留着，已做）。
+- 新案例 `e3`：两个工程 fps 60 逐粒子比；钩子同 `e2`（反方向核对「我们有粒子而 WPE 没画」）。rope 父系统 `ed-rope` 的父粒子不是按粒子认的绘制，跳过它本身、只比实例。两遍模式不另抓：事件每帧只建一次（4.8），`e2` 的 fps 20 已覆盖实例在两遍模式下的步进。
+
+### 验收
+
+- 子代理：tsc 0 error，vitest（带 `KABEGAME_WPE_ROOT`）全过（已知的 P5a 那一条除外），Prettier。新增单测：
+  - eventspawn：`X` 用 operator 之前的出生位置、之后不跟父粒子、父粒子死了不停；满了不抽不建；持续发射的实例永不回收（`es-max`）；
+  - eventdeath：`X` 用上一帧末的位置（判死帧父粒子不再前进）；单条目上限严格成立；两个条目时 `cap` 失守、每个死粒子各条目都建（`ed-max2` 的读码推演）；`cap` 为 0 时不抽；抽取顺序「死粒子在外、条目在内」（`ed-order`）；
+  - 预热：无 rope 时预热里不建、有 rope 时建，且预热里建的实例预热期间不步进；
+  - 不可见时 eventdeath 照常建（子系统以 `emit = false` 步进）；
+  - 复用实例时 mapsequence 序号归零（`es-recycle`）。
+- Claude 独立验收：
+  1. `git status` 查越界；tsc、vitest 自跑；变异检查（eventspawn 每帧重算 `X`、eventspawn 父死时停、eventdeath 用当前帧位置、`cap` 逐条目判满、`cap` 判 `≤ 0`、预热里有 rope 也不建、预热里不论 rope 都建、嵌套顺序反了）。
+  2. `kbp regress`（HEAD 快照 ↔ 步骤 3 快照，现有 14 个案例）逐字节相同；语料只去掉 `particle:children:eventspawn`、`eventdeath`，覆盖 82 → 87（165 张口径）、75 → 80（152 张口径），能渲染多 `1514925620`。
+  3. 回放 `e3` 在限内。
+  4. `1514925620` 对 WPE（统计量与整帧目视）；烟花预设（`3570308528`、`3832133196`，多 eventdeath 条目、容量 20000 的 spritetrail 子系统）强制渲染记帧时间、实例数与内存。
+- 过后请用户看 `1514925620` 的预览与桌面，再提交。
+
+### 步骤 3 实施记录（2026-11-12）
+
+子代理在 HEAD `f0abb228` 的快照 `ignore/p4/e3/ov` 里实现点 1、3，Claude 做点 4 和验收。之后 HEAD 进了 P5b 步骤 4（`920b5548`），工作区的 `features.ts` 另有别的会话未提交的改动，所以照步骤 2 逐文件三方合并：7 个文件都没有冲突，逐文件和合并前比的增删行数与补丁相同。合并前的文件在 `ignore/p4/e3/pre-merge/`，补丁 `ignore/p4/e3/step3.patch`（7 个文件，+379 / −72）。
+
+**和计划的差异：** 没有。子代理报告一处单测上的发现：只挂 eventspawn 的系统没有死亡表（`watchesDeaths` 为假，对应 WPE `sys+0x41 & 0x14`），单独一个 eventspawn 条目看不出「父死停不停」，所以 `es-pos` 用例另挂一个 eventfollow 作对照。渲染器没改，事件条目下的模板本来就按实例化画。
+
+**验收结果：**
+
+| 项 | 结果 |
+|---|---|
+| tsc / vitest | 快照：tsc 0 error，74 个文件 1925 个用例，只有已知的 `3830255100: 219 次请求`（P5a）失败（Claude 自跑同子代理）。合并后的工作区 tsc 0 error |
+| `kbp regress`（HEAD 快照 ↔ 步骤 3 快照，14 个旧案例 + `e3` + 语料） | 14 个旧案例逐字节相同（含 `e1`、`e2`：带 rope 的系统预热时也走死亡处理，没有 eventdeath 条目时不抽随机数、不建实例）。语料 173 张只在 8 张里去掉 `particle:children:eventspawn`（7）、`eventdeath`（3），没有新键；干净 46 → 47 |
+| 覆盖（`ignore/p4/e1/cov_e1.py ignore/p4/e3/out/regress`） | 165 张口径 82 → 87、152 张口径 75 → 80，和计划相同；能渲染多 `1514925620`，没有变少的 |
+| 回放 `e3`（`p4e-event`、`p4e-event2` fps 60，轨迹改用 points 认法重提） | 全过。`p4e-event` 38 个系统，位置最大 4.6e-5；`p4e-event2` 159 个系统，`ed-max2` 两个条目逐帧对上（这几帧到 62、61 个实例，复刻的上限失守）；`ed-rope` 比 `ed-sprite` 多出预热里建的那个实例。最大差是 `es-recycle-c`（mapsequence 环）0.0159，在近似三角函数的包络 0.022 内。尺寸、颜色、alpha 差 0；「我们有粒子而 WPE 没画」为无 |
+| 变异（`ignore/p4/e3/mutate_e3.py`，12 处） | 全部检出：eventspawn 不触发 / 每帧重算 `X` / 父死时停、eventdeath 在 operator 之后建、`cap` 逐条目判满、`cap` 判 `≤ 0`、`cap` 为 0 照样抽、嵌套反了、预热里有 rope 也不建、预热里都建、不可见不处理死亡、预热里建 eventspawn；还原后整树哈希相同。重算 `X` 与 operator 之后建只有单测看得出（本地实例的粒子存实例坐标，同步骤 2） |
+| `1514925620` 对 WPE | 原场景闪电平均 5 s 一道、光晕实例只活 0.1 s，抓帧碰不到。解包成测试副本 `ignore/p4/proj/real-1514925620-kbp`（`kbp content unpack --instrument`，不动工坊原件），把 Thunderbolt 的 `instanceoverride.count` 从 0.2 改成 5 再抓（`A:\p4e\real-1514925620-kbp-fps20-1920x1066`，导入 dev 库为图片 14372）。按 WPE 的帧时间日志回放第 250–254 帧：光晕实例「有、有、有、无、有」和 WPE 完全相同，都在实例坐标 (0, 250)、alpha 0.26；第 250 帧尺寸 14.2 对 14.1、alpha 0.027 对 0.027，第 254 帧 150.4 对 150.0（中间两帧是 `sizerandom` 的随机值不同）；两个雨系统逐帧粒子数和 WPE 完全相同。整帧目视一致，闪电形状相同、落点随机。原场景（图片 13530）不支持项为空 |
+| 雨丝亮度（顺带发现，和本步无关） | 天空区域雨丝的亮像素总数时多时少，但最亮的一档（局部残差 > 16）WPE 每帧 80–130 个像素，我们个位数。粒子数、尺寸、alpha、位置都一致，判断是渲染分辨率：WPE 按窗口 1920×1066 直接画，我们按场景 2400×1332 画再缩，2.1 宽的细线峰值被摊薄。是 P1 起「场景目标按场景分辨率」的既有做法 |
+| 烟花预设（多 eventdeath 条目、容量 20000 的 spritetrail 子系统） | `3560756264` 强制渲染 600 帧：两个烟花对象各同时 5 个实例，单个实例最多 8500 个粒子，实例粒子合计 25567；WPE 抓帧（`A:\p4e\real-3560756264-fps20`）同样有两个正好 8500 个粒子的实例、其余几百到两千多，每帧粒子总数 3.3–3.6 万，数量对得上。帧时间均值 43 ms、p95 60 ms，其中写顶点 28 ms（spritetrail 每粒子约 1.1 µs）、模拟 5.8 ms。`3570308528` 强制渲染报 `render:texture-missing:0`、`3832133196` 的烟花对象默认隐藏，都没测到 |
+
+**风险（新增）：** 烟花预设的粒子量下，CPU 写 spritetrail 顶点约 28 ms/帧。带这套预设的 3 张场景在本步之后都还有别的不支持项、不会渲染，暂时影响不到用户；它们解锁之前要把写顶点的开销降下来（如 GPU 上展开拖尾，或只写可见的粒子），记到收尾或 P4f。
+
+**待用户：** `1514925620` 在图库预览与桌面上看一眼（偶尔的闪电带一团光晕，雨与雾正常）。测试副本（图片 14372）闪电频繁，方便看光晕，看完由 Claude 用 `projects_remove` 移除。
 
 ## 决定
 

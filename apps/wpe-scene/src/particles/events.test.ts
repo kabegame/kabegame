@@ -2,6 +2,7 @@
  * P4e 步骤 2：事件实例池与 `eventfollow`（rea-p4e-children 第 4、5、6 节，3.4、3.6、7.3；实测见 p4-particles-REPORT.md
  * 「P4e 语义的实测核对」的事件子系统表）。纯 TS，不碰 GPU：实例矩阵四种组合、上限与 `probability` 的抽取、父粒子死亡时停跟随、回收与
  * 后进先出复用、预热期间不建、不可见时销毁、实例覆盖递归、绘制先序与轨迹的键。
+ * P4e 步骤 3（文件末尾）：`eventspawn`（4.3）与 `eventdeath`（4.2）的触发点、`X` 的取值、`cap` 的上限与失守、抽取顺序、预热（4.8）与不可见。
  */
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -454,5 +455,252 @@ describe("绘制先序与轨迹（第 6 节）", () => {
       passes: 1,
     });
     expect(Object.keys(track.frames[0].systems)).toEqual(["p", "p/0", "p/0#2", "p/0#3"]);
+  });
+});
+
+// ———— P4e 步骤 3：eventspawn 与 eventdeath ————
+
+/** 实例的平移（`X` 的第 4 列）。 */
+const at = (instance: ParticleSystem) => z(instance.instanceMatrix!.slice(12, 15));
+/** 各池活跃实例的父粒子槽号。 */
+const slots = (system: ParticleSystem) =>
+  system.events.map((pool) => pool.active.map((instance) => instance.followSlot));
+
+/** 先按队列给 `a()`，队列空了用 `SeededRandom(1)`（核对抽取顺序用）。 */
+class QueuedRandom implements ParticleRandom {
+  private readonly inner = new SeededRandom(1);
+  readonly queue: number[] = [];
+  a(): number {
+    return this.queue.length ? this.queue.shift()! : this.inner.a();
+  }
+  b(): number {
+    return this.inner.b();
+  }
+}
+
+describe("eventspawn（4.3，P4e 步骤 3）", () => {
+  it("X 用新粒子 operator 之前的出生位置，只写一次、不跟父粒子；父粒子死了不停，实例照常发射（实测 es-pos）", () => {
+    // 同一个父粒子另挂一个 eventfollow 作对照：有了它系统才收集死亡表（`sys+0x41 & 0x14`），只挂 eventspawn 时根本没有死亡表、
+    // 看不出「父死时停不停」
+    const root = parse(parentJson({ emitter: { rate: 0, instantaneous: 1 }, life: 0.25, velocity: "100 0 0" }));
+    attach(root, parse(childJson()), { type: "eventspawn" });
+    attach(root, parse(childJson()));
+    const system = make(root);
+    const [pool, followPool] = system.events;
+    run(system, 1);
+    const [instance, follower] = [pool.active[0], followPool.active[0]];
+    // 出生点 x = 0（operator 之前）；eventfollow 这一帧步进前改成 operator 之后的 10，eventspawn 不改
+    expect([instance.followSlot, at(instance), alive(instance)]).toEqual([0, [0, 0, 0], 1]);
+    expect(at(follower)).toEqual([10, 0, 0]);
+    run(system, 2, undefined, 1);
+    expect(system.columns.position[0][0]).toBe(30);
+    expect([at(instance), at(follower)]).toEqual([
+      [0, 0, 0],
+      [30, 0, 0],
+    ]);
+    // 第 4 帧父粒子死（age 0.3 > 0.25）：eventfollow 停跟随、停发射；eventspawn 的 followSlot 不改回 −1、发射器不停（4.2 只看类型 2）
+    run(system, 3, undefined, 3);
+    expect(system.alive).toBe(0);
+    expect(pool.active).toEqual([instance]);
+    expect([instance.followSlot, at(instance), alive(instance)]).toEqual([0, [0, 0, 0], 6]);
+    expect([follower.followSlot, alive(follower)]).toEqual([-1, 3]);
+  });
+
+  it("条目满了整条目不抽、不建；持续发射的实例永不回收，池满后这个条目再也没有事件（实测 es-max）", () => {
+    /** 父每帧 5 个新粒子，走 `frames` 帧；子系统容量 0（不发射、不抽随机数、永不结束）。返回 `a()` 的总次数与池。 */
+    function draws(frames: number, entry?: Partial<SceneParticleChild>) {
+      const root = parse(parentJson({ emitter: { rate: 50 } }));
+      if (entry) attach(root, parse(childJson({ extra: { maxcount: 0 } })), { type: "eventspawn", ...entry });
+      const random = new CountingRandom();
+      const system = make(root, random);
+      run(system, frames);
+      expect(system.alive).toBe(5 * frames);
+      return { count: random.count, pool: system.events[0] };
+    }
+    const base = draws(6).count;
+    // 第一帧抽 3 次就满了，之后 5 帧一次都不抽；实例永不结束，不回收
+    const three = draws(6, { maxcount: 3 });
+    expect(three.count).toBe(base + 3);
+    expect(three.pool.active.map((instance) => instance.followSlot)).toEqual([0, 1, 2]);
+    expect(three.pool.free).toHaveLength(0);
+    expect(draws(6, { maxcount: 0 }).count).toBe(base);
+    // 不满时每个新粒子抽一次（probability 1 也抽）；probability 0 照抽、不建
+    const all = draws(2, { maxcount: 100 });
+    expect([all.count, all.pool.active.length]).toEqual([draws(2).count + 10, 10]);
+    const never = draws(2, { maxcount: 100, probability: 0 });
+    expect([never.count, never.pool.active.length]).toEqual([draws(2).count + 10, 0]);
+  });
+
+  it("复用实例时 mapsequence 序号归零：第 3 批复用第 1 个实例，5 个粒子的角度和第 1 批相同（es-recycle）", () => {
+    // 父每 2 帧出生 1 个（rate 5）；子：一次 5 个、在控制点 0 外 100 处、寿命 0.15。第 2 帧建 A，第 4 帧建 B（A 这一帧步进后才回收），
+    // 第 6 帧从空闲表取 A
+    const root = parse(parentJson({ emitter: { rate: 5 } }));
+    const child = parse({
+      maxcount: 16,
+      emitter: [
+        { name: "sphererandom", distancemin: 100, distancemax: 100, directions: "1 0 0", rate: 0, instantaneous: 5 },
+      ],
+      initializer: [
+        { name: "lifetimerandom", min: 0.15, max: 0.15 },
+        { name: "mapsequencearoundcontrolpoint", count: 7 },
+      ],
+    });
+    attach(root, child, { type: "eventspawn" });
+    const system = make(root);
+    const pool = system.events[0];
+    /** 实例里存活粒子绕控制点 0 的角度（度，θ = 0 在 +y、往 +x 转），槽序。 */
+    const angles = (instance: ParticleSystem) => {
+      const { life, position } = instance.columns;
+      const out: number[] = [];
+      for (let i = 0; i < instance.highWater; i++)
+        if (life[i] !== 0) out.push(Math.round((Math.atan2(position[0][i], position[1][i]) * 180) / Math.PI) + 0);
+      return out;
+    };
+    run(system, 2);
+    const [a] = pool.active;
+    const first = angles(a);
+    expect(first).toEqual([0, 51, 103, 154, -154]);
+    run(system, 2, undefined, 2);
+    const [b] = pool.active;
+    expect(b).not.toBe(a);
+    expect(pool.free).toEqual([a]);
+    run(system, 2, undefined, 4);
+    // B 这一帧步进后回收；A 复用：序号从 0 起（不复位会从 5/7 接着排）
+    expect(pool.active).toEqual([a]);
+    expect(pool.free).toEqual([b]);
+    expect(angles(a)).toEqual(first);
+  });
+});
+
+describe("eventdeath（4.2，P4e 步骤 3）", () => {
+  it("判死那一帧建实例，X 用死粒子上一帧末的位置（判死帧父粒子不再前进，实测 ed-pos），之后不重算", () => {
+    const root = parse(parentJson({ emitter: { rate: 0, instantaneous: 1 }, life: 0.25, velocity: "100 0 0" }));
+    attach(root, parse(childJson({ emitter: { rate: 0, instantaneous: 5 } })), { type: "eventdeath" });
+    const system = make(root);
+    const pool = system.events[0];
+    run(system, 3);
+    expect(pool.active).toHaveLength(0);
+    // 第 4 帧判死（age 0.3 > 0.25）：位置列还是第 3 帧末的 x = 30；这一帧的 movement 照样把死槽推到 40，X 不受影响
+    run(system, 1, undefined, 3);
+    expect([system.alive, system.columns.position[0][0]]).toEqual([0, 40]);
+    const instance = pool.active[0];
+    expect([pool.active.length, instance.followSlot, at(instance), alive(instance)]).toEqual([1, 0, [30, 0, 0], 5]);
+    run(system, 1, undefined, 4);
+    expect(at(instance)).toEqual([30, 0, 0]);
+  });
+
+  /**
+   * 父每帧 1 个、寿命 0.25：第 4 帧起每帧死 1 个（槽 0、1、2、0、1…）。挂 `entries` 个 eventdeath 条目（`maxcount` 各 1，子系统容量 0：
+   * 不发射、不抽随机数、永不结束），走 8 帧。返回 `a()` 比没有条目时多的次数（就是 `probability` 的抽取次数）与各池的槽号。
+   */
+  function deaths(entries: number) {
+    const build = (n: number) => {
+      const root = parse(parentJson({ emitter: { rate: 10 }, life: 0.25 }));
+      for (let i = 0; i < n; i++)
+        attach(root, parse(childJson({ extra: { maxcount: 0 } })), { type: "eventdeath", maxcount: 1 });
+      const random = new CountingRandom();
+      const system = make(root, random);
+      run(system, 8);
+      return { count: random.count, system };
+    };
+    const { count, system } = build(entries);
+    return { draws: count - build(0).count, slots: slots(system) };
+  }
+
+  it("单条目：上限严格成立；cap 为 0 时整个死粒子不抽", () => {
+    // 第 4 帧抽 1 次、建 1 个就满了（cap 1 → 0），之后 4 个死粒子都不抽
+    expect(deaths(1)).toEqual({ draws: 1, slots: [[0]] });
+  });
+
+  it("两个条目时上限失守（「决定」4，照 WPE）：cap 是剩余量之和、循环里只判 cap == 0，满了的条目照样建，之后每个死粒子在两个条目各建一个（实测 ed-max2 60、59 个）", () => {
+    // 第 4 帧：cap 2，条目 1 建（满，break）→ 条目 2 不抽；第 5 帧：cap 1，条目 1 再建（2 ≠ 1 不 break，cap 0 也不再判）、条目 2 建（cap −1）；
+    // 之后 cap 一直为负、非零，每个死粒子两个条目各抽一次、各建一个
+    expect(deaths(2)).toEqual({
+      draws: 1 + 2 + 2 + 2 + 2,
+      slots: [
+        [0, 1, 2, 0, 1],
+        [1, 2, 0, 1],
+      ],
+    });
+  });
+
+  it("嵌套是死粒子在外、条目在内（和 4.3 相反），每个（死粒子，条目）抽一次：抽取顺序 A-1、A-2、B-1、B-2（ed-order）", () => {
+    const root = parse(parentJson({ emitter: { rate: 0, instantaneous: 2 }, life: 0.25 }));
+    attach(root, parse(childJson({ extra: { maxcount: 0 } })), { type: "eventdeath", probability: 0.5 });
+    attach(root, parse(childJson({ extra: { maxcount: 0 } })), { type: "eventdeath", probability: 0.5 });
+    const random = new QueuedRandom();
+    const system = make(root, random);
+    run(system, 3);
+    expect(slots(system)).toEqual([[], []]);
+    // 第 4 帧槽 0（A）、槽 1（B）同时死，判死之前这一帧没有别的抽取：依次给 (A,1) (A,2) 建、(B,1) (B,2) 不建。条目在外的话是
+    // (1,A) (1,B) 建、(2,A) (2,B) 不建，得 [[0, 1], []]
+    random.queue.push(0.1, 0.1, 0.9, 0.9);
+    run(system, 1, undefined, 3);
+    expect(random.queue).toHaveLength(0);
+    expect(slots(system)).toEqual([[0], [0]]);
+  });
+
+  it("不可见：子系统以 emit = false 步进时判死照常，eventdeath 照常建；新实例同样不发射，重新可见后才发", () => {
+    // 顶层不发射（存活数 0，不可见时不复位子孙）；static 子系统一次 2 个、寿命 0.15，挂 eventdeath（子系统持续发射）
+    const root = parse(parentJson({ emitter: { rate: 0 } }));
+    const holder = parse(parentJson({ emitter: { rate: 0, instantaneous: 2 }, life: 0.15 }));
+    attach(holder, parse(childJson()), { type: "eventdeath" });
+    attach(root, holder, { type: "static" });
+    const system = make(root);
+    run(system, 1);
+    const statik = system.statics[0].system;
+    const pool = statik.events[0];
+    expect([system.alive, statik.alive]).toEqual([0, 2]);
+    expect(system.suspend(undefined, 0.1, 0.2)).toBe(false);
+    expect(pool.active).toHaveLength(0);
+    // 第 3 帧（不可见）两个都死（age 0.2 > 0.15）：两个实例，父粒子槽号 0、1；发射器没结束，照样活跃
+    expect(system.suspend(undefined, 0.1, 0.3)).toBe(false);
+    expect(statik.alive).toBe(0);
+    expect(pool.active.map((instance) => [instance.followSlot, alive(instance), instance.isActive()])).toEqual([
+      [0, 0, true],
+      [1, 0, true],
+    ]);
+    run(system, 1, undefined, 3);
+    expect(pool.active.map(alive)).toEqual([1, 1]);
+  });
+});
+
+describe("预热（4.8，P4e 步骤 3）", () => {
+  /**
+   * 父 `starttime 1`（20 步 × 0.05）、每秒 10 个、寿命 0.25，预热里死很多个；挂 eventdeath 与 eventspawn 各一个（`maxcount 1`，子系统
+   * 持续发射、永不回收）。
+   */
+  function warmed(renderer: string) {
+    const root = parse(parentJson({ life: 0.25, extra: { starttime: 1, renderer: [{ name: renderer }] } }));
+    attach(root, parse(childJson()), { type: "eventdeath", maxcount: 1 });
+    attach(root, parse(childJson()), { type: "eventspawn", maxcount: 1 });
+    const system = make(root);
+    system.prewarm();
+    expect(system.alive).toBeGreaterThan(0);
+    return system;
+  }
+
+  it("父不带 rope：预热里不为事件收集死亡、不记新粒子，eventdeath / eventspawn 都不建；预热后的第一帧照常建", () => {
+    const system = warmed("sprite");
+    expect(system.ropeOrder).toBeNull();
+    expect(slots(system)).toEqual([[], []]);
+    run(system, 1);
+    expect(system.events.map((pool) => pool.active.length)).toEqual([1, 1]);
+  });
+
+  it("父带 rope：判死照样收集（rope 表要用），预热里建 eventdeath 实例（实测 ed-rope 比 ed-sprite 多 1 个），eventspawn 不建；预热里建的实例预热期间不步进", () => {
+    const system = warmed("rope");
+    expect(system.ropeOrder).not.toBeNull();
+    const [death, spawn] = system.events;
+    expect([death.active.length, spawn.active.length]).toEqual([1, 0]);
+    const instance = death.active[0];
+    // 建的时候初始化（子系统 starttime 0，不预热），之后父的预热循环不步进子系统
+    expect([instance.systemTime, alive(instance)]).toEqual([0, 0]);
+    run(system, 1);
+    // 预热之后的第一个正常帧才步进；条目已满（cap 0），不再建
+    expect(death.active).toEqual([instance]);
+    expect(instance.systemTime).toBeCloseTo(0.1, 5);
+    expect(alive(instance)).toBe(1);
+    expect(spawn.active).toHaveLength(1);
   });
 });

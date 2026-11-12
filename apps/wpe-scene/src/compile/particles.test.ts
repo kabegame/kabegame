@@ -945,7 +945,7 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ flags: 256 + 1024 + 5 })).toEqual(["particle:flags:1024", "particle:flags:256"]);
   });
 
-  it("children（P4e 步骤 1、2）：static、eventfollow 不报，eventspawn / eventdeath 报 particle:children:<type>，不认识的类型中性；条目形状问题", () => {
+  it("children（P4e 步骤 1–3）：static 与三种事件类型都不报，不认识的类型中性；条目形状问题", () => {
     expect(particleKeys({ children: null })).toEqual([]);
     expect(particleKeys({ children: [] })).toEqual([]);
     expect(particleKeys({ children: { name: "particles/c.json" } })).toEqual([]);
@@ -960,14 +960,12 @@ describe("能力表：粒子", () => {
         ],
       }),
     ).toEqual([]);
-    // eventfollow 已实现（P4e 步骤 2），eventspawn / eventdeath 在步骤 3
-    expect(
-      particleKeys({ children: [{ name: "particles/c.json", type: "eventfollow", maxcount: 2, probability: 0.5 }] }),
-    ).toEqual([]);
-    for (const type of ["eventspawn", "eventdeath"])
-      expect(particleKeys({ children: [{ name: "particles/c.json", type }] }), type).toEqual([
-        `particle:children:${type}`,
-      ]);
+    // eventfollow（P4e 步骤 2）、eventspawn / eventdeath（步骤 3）都已实现
+    for (const type of ["eventfollow", "eventspawn", "eventdeath"])
+      expect(
+        particleKeys({ children: [{ name: "particles/c.json", type, maxcount: 2, probability: 0.5 }] }),
+        type,
+      ).toEqual([]);
     expect(particleKeys({ children: [{ type: "static" }, 5, { name: "" }] })).toEqual(["particle:child:name"]);
     expect(particleKeys({ children: [{ name: "c.json", origin: 5, scale: { user: "s", value: "1 1 1" } }] })).toEqual([
       "particle:binding:child:scale",

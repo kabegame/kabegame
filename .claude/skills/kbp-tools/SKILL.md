@@ -146,7 +146,7 @@ kbp.py replay <案例…> | --all [--src 产品源码] [--data 目录] [--out �
   报 `[src]`，退出码非 0。
 - 现有案例（`ignore/p4/cases/`）：`b3`（P4a 的 9 个标签、`p4b` 模块、`p4b-emit`）、`b4`（噪声）、`b6`（三组 `colorn`）、`c1`（`p4c-cp`）、
   `c2`（`p4c-ptr`）、`c3`（`p4c-attract`，`a-default` 的已知超限照原脚本记失败）、`c4`（`p4c-world`，`p4c-ptr` 加 `p-world`）、`d1`（绳）、`e1`（P4e static 子系统）、
-  `e2`（P4e 事件实例池与 `eventfollow`）。
+  `e2`（P4e 事件实例池与 `eventfollow`）、`e3`（P4e `eventspawn` 与 `eventdeath`，含多条目的上限失守与 rope 父系统预热里建的实例）。
   子系统（P4e 起）：产品的系统树由根系统带着步进，回放只步进根，**每帧**按 `forEachDrawn` 的先序与 `kbp-meta.json` 的 `children` 给子系统
   起名（路径下标经 `SceneParticleChild.index` 换成 JSON 条目下标）：同名第 2 次起记 `名字#n`（自引用、事件实例），**只数有存活粒子的**
   （WPE 存活数为 0 的系统不画，抓帧里看不到它）。旧签名（`forEachDrawn(callback)` 只给系统与路径）照样能用。
