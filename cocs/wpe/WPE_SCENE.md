@@ -55,7 +55,7 @@
 | 输出 | 两段 WGSL；uniform 块（group 0 / binding 0，两阶段共用，std140 偏移）；纹理绑定（槽位 n → 纹理 `1 + 2n`、采样器 `2 + 2n`）；attribute / varying 的 location；最终 COMBO |
 | 本机语料 | 2026-11-13（P7d）：WPE 安装目录 167 对通过 161 对；全部场景实际发出的 853 个请求全部通过，语料里没有因着色器翻译退回的场景，输出 WGSL 回读与 Tint 都是 0 失败。**请求夹具**（P7a）：语料扫描录下编译管线真实发出的全部请求（`kbp corpus scan --extra requests:<目录>`），语料测试重放并和旧导出**逐字节**比较，改翻译器时据此判断哪些输出变了（README「测试」） |
 | 规则来源 | WPE 先把方言转成 HLSL 再交给 fxc，所以翻译器照 WPE 的文本处理（P7b：`#if` 只解析一个表达式、多余的 `#endif` 忽略、宏后者覆盖前者、声明名带分量只取名字、`main` 之前的 `float` 数组是打包形态）与 fxc 的隐式转换（P7c：naga GLSL 前端的 HLSL 模式，截断、铺满、混算截到窄的、非布尔条件 `!= 0`、片元 varying 按顶点的类型）。只在 GLSL 本来会报错的地方生效，原来能翻译的输出逐字节不变。规则表与 fxc 依据见 README「HLSL 隐式转换」与 `naga/KABEGAME.md` |
-| 没被读的 uniform | P7d：WPE 只认反射里被使用的 uniform（没被使用的不进常量缓冲、不分配材质常量槽位）。翻译器反射给入口可达代码没读的格标 `unused`（naga `compact` 之后看块成员的 `AccessIndex`），宿主据此算槽位、取两阶段同键的合并类型、跳过能力检查；只改反射，WGSL 不变。和 fxc 的差别是结果没被用到的读（乘 0 等）我们仍算被读，偏保守（README「没被读的 uniform」） |
+| 没被读的 uniform | P7d：WPE 只认反射里被使用的 uniform（没被使用的不进常量缓冲、不分配材质常量槽位）。翻译器反射给入口可达代码没读的格标 `unused`（naga `compact` 之后看块成员的 `AccessIndex`），宿主据此算槽位、取两阶段同键的合并类型、跳过能力检查；只改反射，WGSL 不变。和 fxc 的差别是结果没被用到的读（乘 0 等）我们仍算被读，偏保守（README「没被读的 uniform」）。P5c 起顶点属性同样标 `unused`（入口可达的代码没读到这个输入，跟着指针链找），宿主据此决定网格缺的属性报不报（README「没被读的属性」） |
 
 翻译结果里的几个约定会直接影响渲染器：
 - **平台宏**：照 WPE 的 Windows HLSL 路径，定义 `HLSL`（WebGPU 坐标约定与 D3D 相同）。
@@ -96,7 +96,7 @@ count × { sizedString name, u32 offset, u32 length }
 |---|---|
 | `general` | 正交尺寸、清屏色与开关、相机、`ambient` / `skylight`、`postprocess`（解析出的档位与场景实际的泛光 / HDR 状态）、`bloom`（泛光参数，缺键补 WPE 默认值、未换算） |
 | `bloom` | 泛光链（`compile/bloom.ts` 的 `SceneBloom`：`hdr` 与各 pass 编好的 WPE util 材质）；泛光实际关着时为 null |
-| `layers` | 按场景合成顺序的图层：`object`（scene.json 的 `objects` 下标，稳定键）、`parent`（父对象的 `objects` 下标，P4a）、变换、尺寸、颜色、可见性与 `visibleBound`（`visible` 绑了用户属性，运行时可变，**不可见也要建 GPU 资源**）、基础材质的 `passes`；`colorBlendMode`；启用的 `effects`（每个带 `source`、`fbos` 与按序的 `steps`：`draw` / `copy` / `swap`）；colorBlendMode ∉ {0, 31} 时的 `passthrough` pass；粒子对象的 `particle`（解析后的粒子系统与粒子材质的 pass，P4a，见「粒子（P4a）」）；图像模型标志 `solidLayer` / `instanced` / `noPadding` / `perspective` / `passthroughModel` / `copyBackground` / `fullscreen` / `fullscreenSize` 与组的 `group` / `subtree` / `groupUpload`（P5b，见「图像模型标志（P5b）」） |
+| `layers` | 按场景合成顺序的图层：`object`（scene.json 的 `objects` 下标，稳定键）、`parent`（父对象的 `objects` 下标，P4a）、变换、尺寸、颜色、可见性与 `visibleBound`（`visible` 绑了用户属性，运行时可变，**不可见也要建 GPU 资源**）、基础材质的 `passes`；`colorBlendMode`；启用的 `effects`（每个带 `source`、`fbos` 与按序的 `steps`：`draw` / `copy` / `swap`）；colorBlendMode ∉ {0, 31} 时的 `passthrough` pass；粒子对象的 `particle`（解析后的粒子系统与粒子材质的 pass，P4a，见「粒子（P4a）」）；图像模型标志 `solidLayer` / `instanced` / `noPadding` / `perspective` / `passthroughModel` / `copyBackground` / `fullscreen` / `fullscreenSize` 与组的 `group` / `subtree` / `groupUpload`（P5b，见「图像模型标志（P5b）」）；模型对象的 `model`（mdl 的网格、按 `skin` 选的材质 pass、绘制顺序、包围盒，P5c，见「静态网格（P5c）」） |
 | `programs` | `wpesl2wgsl` 成功结果，保留 WGSL、uniform 布局、纹理绑定与顶点属性 |
 | `textures` | 格式枚举、图像尺寸与纹理尺寸、采样 flags、mip 字节；视频只带 MP4 区间；FreeImage 形态只带 `encoded`（PNG / JPG 的磁盘区间，`mips` 由主线程解码后填）。`unsupported` 非空时，编译器可能只读头部，`mips` 因此可能为空 |
 | `bindings` | 属性绑定表（P3a）：编译期每处解析 `{user}` 的地方登记一条「属性名（可带 condition）→ 目标」，按登记顺序；同一属性可以有多条。宿主按它把属性增量分成就地写与重编译（见「场景宿主」的「属性与快速路径」） |
@@ -116,7 +116,8 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | general 的 `bloom` / `hdr` 与全部 `bloom*` 调节项 | 由后处理档位裁决，泛光 / HDR 已实现（P2b，见「泛光与 HDR」）；其中的脚本交给 P3b 运行时 |
 | general 的 `cameraparallax*`、`camerashake*`、`zoom` | 视差、抖动、正交缩放已实现（P5a，见「相机：视差、抖动与缩放（P5a）」）；透视场景开 `camerashake` 照报 `general:camerashake`（归 P5d），正交场景里解析出的常量 `zoom` ≤ 0 照报 `general:zoom` |
 | `camerafade`、`camerapreview`、`norecompile`；正交投影下的 `farz` / `fov` / `nearz`；`supportsvideo` | 加载淡入 / 编辑器选项 / 透视另报 `camera:perspective` / 只决定 D3D 设备标志 |
-| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及非图像对象、组合层上为真，照报 `object:perspective`。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
+| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及图像层与模型之外的对象、组合层上为真，照报 `object:perspective`。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
+| 模型对象；它的 `skin`、`castshadow`、`reflected`、`disablepropagation`、`perspective: true` | 静态网格已实现（P5c），见「静态网格（P5c）」。`skin` 选材质，`castshadow` / `reflected` 的消费者（阴影、反射）另外照报，`disablepropagation` 中性；不支持的用法细分成 `mdl:*` / `model:*`，见那一节的「能力表」 |
 | `solid`、`ledsource`、`locktransforms` | 渲染路径不读（推断与鼠标命中有关）/ Razer Chroma 灯效来源 / 编辑器锁定 |
 | `brightness` | 只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效 |
 | `parallaxDepth`；`alignment` 为 `center`；`perspective` 为 false | 视差已实现（P5a），绘制时只用根对象的值 / 居中是恒等 / 不为真时中性 |
@@ -170,12 +171,13 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 |---|---|
 | `device.ts` | `navigator.gpu` 适配器与设备；适配器有 `texture-compression-bc` 就开 |
 | `textures.ts` | 按 `compile/tex.ts` 的 `TEXTURE_FORMATS`（格式支持范围的唯一来源，P4b）连同全部 mip 上传：0 RGBA8888 → `rgba8unorm`、4 DXT5 → `bc3-rgba-unorm`、6 DXT3 → `bc2-rgba-unorm`、7 DXT1 → `bc1-rgba-unorm`、8 RG88 → `rg8unorm`、9 R8 → `r8unorm`，原样上传、不转通道；FreeImage 位图 `copyExternalImageToTexture` 到纹理尺寸的左上角；采样器 |
-| `programs.ts` | 着色器模块 + `getCompilationInfo()` 检查、bind group layout、顶点布局、混合状态、管线（目标格式与是否写 alpha 随目标） |
+| `programs.ts` | 着色器模块 + `getCompilationInfo()` 检查、bind group layout、顶点布局、混合状态、管线（目标格式与是否写 alpha 随目标；网格另传顶点布局与剔除，P5c） |
+| `mesh.ts` | 模型网格（P5c）：按 mdl 格式与着色器属性的语义建顶点布局（`meshVertexLayout`，含占位属性）、索引补齐、视锥剔除 `frustumCulled`（纯函数） |
 | `uniforms.ts` | 按翻译结果的 std140 布局打包 uniform 块；内置 uniform |
 | `layout.ts` | 图层四边形、世界矩阵与沿父链的可见性（P4a）、正交 / 透视粒子的视图投影（透视图层同用后者，P5b）、组的局部正交 `groupViewProjection`（P5b）、样式铺放与画布尺寸（纯函数） |
-| `math.ts` | 最小 mat4（列主序） |
-| `graph.ts` | 图层渲染图：把每个图层排成步骤（直接上屏 / 合成链 / passthrough / 快照 / copy / swap / 粒子；P5b 加组合层的 `compose` 与 `clear`、fullscreen 的拷贝、组的 `subtree`），fbo 尺寸，`swap` 的名字 → 实体对应（纯函数，见下） |
-| `scene.ts` | 一份 bundle 在某个设备上的全部 GPU 资源与每帧编码（`GpuScene`，照 `graph.ts` 的步骤执行，ops 按图层分组）；粒子层的模拟器与顶点缓冲；`checkRenderable` 自查；`buildableLayers` 与 `visibleObjects` 的可见性跳过 |
+| `math.ts` | 最小 mat4（列主序）；法线矩阵照 WPE 按快速倒数平方根归一化各轴（P5c） |
+| `graph.ts` | 图层渲染图：把每个图层排成步骤（直接上屏 / 合成链 / passthrough / 快照 / copy / swap / 粒子；P5b 加组合层的 `compose` 与 `clear`、fullscreen 的拷贝、组的 `subtree`；P5c 加模型的 `mesh`），fbo 尺寸，`swap` 的名字 → 实体对应（纯函数，见下） |
+| `scene.ts` | 一份 bundle 在某个设备上的全部 GPU 资源与每帧编码（`GpuScene`，照 `graph.ts` 的步骤执行，ops 按图层分组）；粒子层的模拟器与顶点缓冲；模型层的网格缓冲与每帧视锥剔除（P5c）；`checkRenderable` 自查；`buildableLayers` 与 `visibleObjects` 的可见性跳过 |
 | `state.ts` | CPU 侧场景状态 `SceneState`（`P3a`）：图层的可变字段、材质常量覆盖、泛光参数与脏集合；就地写落在它上面，`GpuScene.sync` 每帧取脏项。不依赖 GPU，单测在 Node 里核对「就地 = 重编译」 |
 | `renderer.ts` | `SceneRenderer`：设备、画布上下文、时钟、帧循环、cover 铺放，场景可无缝替换 |
 | `clock.ts` | 可暂停的时钟、帧时钟（帧时间钳到 `[0.0001, 0.25]`，P4a）、帧节流 |
@@ -206,7 +208,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - binding 0：两阶段共用的 uniform 块。
   - 纹理槽位 n：`textures[].binding`（1 + 2n）；采样器：`samplerBinding`（2 + 2n）。
   - 着色器声明了、材质没绑的槽位绑全 0 的占位纹理，同 D3D 空 SRV 的读数。
-- **顶点布局**：按 `attributes` 的 location 交错排列；`a_Position`、`a_TexCoord` 来自四边形，其它属性补默认值。
+- **顶点布局**：按 `attributes` 的 location 交错排列；`a_Position`、`a_TexCoord` 来自四边形，其它属性补默认值。模型网格不走这条，按 mdl 的格式与属性语义建布局（P5c，见「静态网格（P5c）」的「绘制」）。
 - **uniform 打包**：
   - 按 `offset` 写；标量 / 二三分量向量的数组按 `stride` 16 写前几个分量；`mat3` 列步长 16；整数写成 `i32` / `u32`。
   - 值来源：`drawUniformValues`（纯函数）先写内置值，再用材质常量覆盖。材质常量取自 `SceneState.constants`（编译期初值就是 `pass.uniforms`），就地改值时同一个函数重算，所以两条路逐字节一致（单测核对）。
@@ -214,9 +216,9 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 只有 `g_Time`、`g_Frametime`、`g_Daytime`、`g_PointerPosition(Last)`、`g_PointerState`、`g_ParallaxPosition`（P5a）每帧刷新；被就地改过的 draw 由 `update` 整块重写一次；视差或相机（抖动、缩放）变了的那一帧，全部 draw 的矩阵与眼位重写一遍（P5a）。
   - **就地刷新**（`GpuScene.refreshLayer` / `refreshPass`）：图层状态变化只重写由图层算出的那组名字（`LAYER_UNIFORMS`：矩阵、`g_Color*`、`g_Alpha` / `g_UserAlpha`、`g_CompositeColor`），`pass.uniforms` 里有的名字一律不动（材质值优先，如 passthrough 的 `g_Color4 = (1,1,1,1)`、材质自带的 `g_UserAlpha`）；材质常量变化重写本 pass 的全部常量。
 - **内置 uniform**：P2a 起按 WPE `FUN_1400d8300` 校正（PLAN P2a「内置 uniform」），名字表 `features.ts` 的 `ENGINE_UNIFORMS` 与 `uniforms.ts` 写的值一一对应。
-  - 变换：`g_ModelViewProjectionMatrix`（及 Inverse）、`g_ModelMatrix`（及 Inverse）、`g_ViewProjectionMatrix`、`g_NormalModelMatrix`。
+  - 变换：`g_ModelViewProjectionMatrix`（及 Inverse）、`g_ModelMatrix`（及 Inverse）、`g_ViewProjectionMatrix`、`g_NormalModelMatrix`（世界矩阵 3×3 的三个本地轴各自归一化，照 WPE 用快速倒数平方根；P5c 前是逆转置，见「静态网格（P5c）」的「绘制」）。
   - 效果矩阵（w、h 取图层 `size`）：效果 pass 的 `g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)、`g_EffectModelViewProjectionMatrix` = 图层 MVP × 同一缩放、`g_EffectTextureProjectionMatrix` 与后者相同；上屏 pass 前两者不缩放、纹理投影 = MVP × scale(w/2, h/2)；各 Inverse 由对应矩阵求逆。直接上屏与基础 pass 沿用 P1（模型 / MVP，纹理投影单位阵）。
-  - 对象：`g_Color4` = (color · k, alpha)、`g_Color` = color · k、`g_Alpha` / `g_UserAlpha` = alpha；k 在 LDR 下为 1（brightness 只在 HDR 下乘）。只在基础 pass 设一次：effect pass 沿用同一组值，passthrough 上屏置 (1, 1, 1, 1)。材质有 `Alpha` 时被覆盖。
+  - 对象：`g_Color4` = (color · k, alpha)、`g_Color` = color · k、`g_Alpha` / `g_UserAlpha` = alpha；k 在 LDR 下为 1（brightness 只在 HDR 下乘）。只在基础 pass 设一次：effect pass 沿用同一组值，passthrough 上屏置 (1, 1, 1, 1)。材质有 `Alpha` 时被覆盖。模型对象固定为 1，不读 `color` / `alpha` / `brightness`（P5c）。
   - 纹理：`g_Texture<n>Resolution` = (纹理宽, 纹理高, 图像宽, 图像高)，空槽 (2, 2, 2, 2)；`g_Texture<n>Texel` = (1/纹理宽, 1/纹理高, 纹理宽, 纹理高)，空槽 (0.5, 0.5, 2, 2)。合成 RT、fbo、快照按各自尺寸（纹理 = 图像）。`g_Texture<n>MipMapInfo` 还没实现（用到报 `uniform:`）。
   - 屏幕：`g_TexelSize` = 1 / 屏幕尺寸、`g_TexelSizeHalf` = 0.5 / 屏幕尺寸、`g_Screen` = (w, h, w/h)。WPE 取窗口（后备缓冲）尺寸，画合成 RT、fbo 时也不随目标变；我们取场景目标尺寸，与窗口同分辨率时等价。
   - 时间：`g_Frametime` = 本帧间隔，钳到 `[0.0001, 0.25]`；`g_Time` = 钳后帧时间的累加（P4a 起，`FrameClock`，见「粒子（P4a）」的「绘制」），超过 432000（5 天）归零；`g_Daytime` = h/24 + m/1440 + s/86400 + ms/8.64e7。
@@ -241,6 +243,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 上屏：只有最后一个启用 effect 的最后一个绘制 pass 用图层世界四边形、场景视图投影 × 图层模型矩阵画到场景，借用基础材质的 blend（colorBlendMode 31 强制 additive）；
   - colorBlendMode ∉ {0, 31}：effect 都留在合成链，最后用 passthrough 材质上屏（combos `BLENDMODE = cbm`、`FOG_COMPUTED = 1`，槽 0 = 最终合成 RT，`g_Texture4` 由注解默认绑到快照，颜色 (1,1,1,1)，blend 取基础材质的）。材质看 `scene.json` 顶层 `version`：> 2 用 `effectpassthrough_4.json`（genericimage4），否则 `effectpassthrough.json`（genericimage3），见 `bundle.ts` 的 `passthroughMaterial`。没有 effect 时也走「基础 pass → 合成 RT → passthrough」。
   - 组合层、fullscreen 与组（P5b）换掉的是基础 pass（`compose` / `clear` / 拷贝当前画面）与几何、矩阵，之后的 effect 链与上屏照上面走，见「图像模型标志（P5b）」。
+- **模型图层**（P5c）：每个网格一个 `mesh` 步骤，按编译期排好的顺序直接画到场景目标，没有合成路径；整层先做一次视锥剔除，见「静态网格（P5c）」。
 - **合成 RT 数** = min(2, 写进合成链的次数)：基础 pass、每个 effect 的最后一个绘制 pass 与每个 `compose` pass 各写一次，上屏那次不算，即 WPE 的 `min(2, passthrough + Σ(1 + compose))`；第 n 次写进 `n % 2`。尺寸（`compositeSize`）：fullscreen 取 `fullscreenSize`；否则取基础材质槽 0 纹理的图像尺寸，没有纹理、模型 `solidlayer` 且不是 `instanced`、组合层取 `round(size)`（P5b）；max(4, ·)；格式 LDR `rgba8unorm`、HDR `rgba16float`。合成 RT 按尺寸与采样方式跨图层共享（WPE `sc.<W>.<H>…`），采样跟随基础纹理的 clamp / nointerpolation；组里的图层按父链上组的层数另分一池（P5b）。
 - **fbo**（effect.json `fbos`）：格式 `rgba_backbuffer` / `rgb_backbuffer` 随 HDR，其它查格式表（`FBO_FORMATS`：rgba8888、rgb888、rg88、r8、rg1616f、r16f、rgba16161616f、rgb161616f），不认识的按 rgba8888；尺寸 W′ / H′ 取 `width` / `height`（≤4096）否则合成 RT，`fit`（≤4096）时 W′ < H′ 则 h = min(fit, H′)、w = W′/H′·h，否则 w = min(fit, W′)、h = H′/W′·w，截断后整除 `scale`，最小 2；`unique` 每层独占，否则按名字、尺寸、格式、寻址共享；`clear` 创建后清成该色，要写满 4 个分量才生效（P7d，WPE 解析出 4 个数才置清除位）；`uvs: "repeat"` 重复寻址，否则 clamp；被 `conditions` 去掉的不建。
 - **命令**：`copy` = `copyTextureToTexture` 把 source 整张拷到 target（格式必须一致）；`swap` 不做 GPU 工作，只交换后续 pass（含之后各帧）里这两个名字指向的实体（`FboBindings`），引用 fbo 的 bind group 按当前对应取并缓存。WPE 的做法是改写本 effect 全部非 swap pass 的下标、不交换纹理（rea-p7d-fluid 第 3 节），效果等价；一端被 `conditions` 去掉时什么都不做。
@@ -1640,6 +1643,95 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 - 读数：`b0/rdc_dump_b.py` 在 `qrenderdoc --python` 下导出每次绘制的 RT、混合、顶点、UV 与常量，`ana_b.py` / `b5/ana_b5.py` 摘要；单测的真值由 `b2/fixture_compose.py`、`b3/fixture_fs.py`、`b4/fixture_grp.py` 从导出里抄出；
 - 各步的快照、补丁、变异清单、语料比较与整帧比对在 `b1/`–`b5/`，收尾的语料统计是 `b5/walk_scan.py`；
 - WPE 参照在 `A:\p5b\`。
+
+## 静态网格（P5c）
+
+模型对象（`model` 指向 `.mdl`）是第三种有内容的图层，和粒子一样挂在图层上（`SceneLayer.model`），不另开一张表。所以 `objects` 顺序、父链的世界矩阵与可见性、视差、属性绑定这些现成的机制都直接适用：一个模型对象就是一个图层，只是「画什么」从图层四边形换成 mdl 里的若干个网格。P5c 只做正交场景里的静态网格；透视场景与深度附件归 P5d，骨骼、动画、变形归 W6。
+
+依据：
+- 读码：[rea-p5-mesh](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-mesh.md)（mdl 布局、顶点表序、皮肤、模型 uniform、绘制顺序、剔除状态，全部没有实测）。
+- 实测：[报告](../../.claude/plans/wpe-import/3-scene/phase5/p5-REPORT.md)「P5c 语义的实测核对」。12 个确定性工程加 retro，读码的结论全部成立，推翻一处：`skin` 为负数时取 0，不是最后一项。读码标了未知的几处（着色器声明了网格没有的属性、排序稳不稳定、正交场景里的视锥剔除）都测清了。
+- 逐步的验收数据：[子计划](../../.claude/plans/wpe-import/3-scene/phase5/phase-5c-mesh.md)「实施记录」「P5c 收尾」。
+
+验收：
+- 确定性工程按 WPE 抓帧的日志回放到同一帧，和 WPE 整帧逐像素比（`kbp cmp frame --kbp-layers`），10 个工程 0 差异；
+- retro 解包加日志，按 WPE 日志回放到第 199 帧（2520×1080），整帧最大差 1；
+- 10 张基线场景 × 三档后处理的画面哈希不变。
+
+### mdl（`compile/mdl.ts`）
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 加载 | 一个函数（`parseMdl`）、按版本门槛读：网格标志 v ≥ 4、网格自带顶点格式 v ≥ 15、包围盒 v ≥ 17、两个可选块 v ≥ 21、记录表 v ≥ 23、尾部段 v ≥ 13。不认识的尾部段按长度跳过；任何读越界报 `mdl:truncated` | 读码 1.2–1.7；实测 `p5c-ver`：v4、v14、v16、v17、v21、v23 的同一个四边形都画在原处，尾部带不认识的段照常显示。语料 139 个 mdl 按这套规则都恰好读到文件末尾 |
+| 顶点格式 | 26 位掩码（`MDL_ATTRIBUTES`），属性按表序交错，stride 是置位属性大小之和（`meshAttributes` / `mdlStride`）；除 `a_BlendIndices`（u32×4）外都是 float | 实测 `p5c-layout`：两个网格（stride 156、104）的输入布局逐项和表序算的相同 |
+| 索引 | 网格标志 bit0 置位是 u32，否则 u16；bit1 多读一个 u32；三角形列表 | 实测 `p5c-ver` |
+| 包围盒 | 全部网格包围盒的并集（`unionBounds`），给视锥剔除用；v < 17 没有包围盒，取 ±131072，等于不剔 | 读码 1.6；实测 `p5c-frustum` 的 v14 版本不剔 |
+| 解析一次 | 同一个 mdl 被多个对象引用时只读、只解析一次（`bundle.ts` 的 `readMdl`），顶点 / 索引是文件缓冲上的视图，整个文件缓冲随 bundle 转移、不拷贝 | 3354366708 的两个圆环共用一个 mdl |
+
+编码器 `ignore/p5/c0/mdl_enc.py` 照这套布局写 mdl，对语料 46 个静态 mdl 解析再编码逐字节一致；单测直接拿这些文件和编码器的输出当夹具。
+
+### 编译
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 皮肤 | 每个网格按对象 `skin` 选一个材质（`meshSkin`）：非负整数（含 `1.0`）取 min(skin, N − 1)，其余（负数、字符串、布尔、缺键）取 0 | 实测 `p5c-skin`，**推翻读码**（读码推断负数按无符号落到最后一项） |
+| 材质 | 走图像层同一条 `compilePass`，稳定键 `objects/<i>/meshes/<m>/passes/<k>`，材质按对象各编一份（`skin` 可能不同）；静态网格不追加引擎 COMBO，全局宏（`HDR`、`SCENE_ORTHO`）照常 | 读码 2.4 |
+| 深度与剔除的缺省 | 模型 pass 照 WPE：缺 `cullmode` 是 normal，缺 `depthtest` / `depthwrite` 是 enabled（`PassContext.model`）。会写深度的（normal / alphatocoverage，测试和写入都没关）照报 `depthwrite:enabled`，留给 P5d；只测不写的中性：场景里没有别人写过深度，GREATER 对清屏值 0 总能通过。图像层、粒子、文本的缺省不变，等 P5d 和深度一起统一 | 实测 `p5c-cull`；`p5c-depth`：正交场景里模型也测深度、写深度，translucent 只测不写 |
+| 绘制顺序 | 编译期排好 `model.order`（`meshDrawOrder`）：比较器是「a 不透明（normal / alphatocoverage）且 b 半透明（translucent / additive）」，照 MSVC STL 的 `std::sort` 移植，≤ 32 个网格时是插入排序，等于稳定排序 | 实测 `p5c-order`：40 个网格时同类内部不是原顺序，`sim_sort.py` 逐个复现 |
+| 缺属性 | 着色器声明了网格没有的语义：翻译器标了 `unused`（入口可达的代码没读到，`naga_stage::inputs_read`，跟着 `Access` / `AccessIndex` 指针链找）的照常画，渲染器接占位；读了的报 `mdl:missing-attribute:<名>` | 实测 `p5c-attr`：没读的被 fxc 从输入签名里去掉，正常画；读了的 WPE 建不出输入布局，画出未定义的值，日志不报错。语料里 fantasticcar、audiophile 的 `grid` 声明 `a_Normal` 但不读 |
+| 透视 | 模型 `perspective: true` 同 P5b 的透视图层（`layer.perspective`） | 实测 `p5c-matrix` 的透视一份 |
+
+### 绘制（`render/graph.ts`、`render/mesh.ts`、`render/scene.ts`）
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 步骤 | `planModelLayer` 按 `model.order` 每个网格排一个 `mesh` 步骤（取网格的第一个 pass，没有 pass 的跳过），直接画到场景目标，和图像层、粒子、文本在同一个场景 pass 里按 `objects` 顺序混排。模型没有合成路径：不读 `effects`，没有 colorBlendMode 的上屏。编码时整层一个 `model` op | 读码 2.6 |
+| 顶点布局 | 不由着色器推（`vertexPacking` 只给图层四边形）：`meshVertexLayout` 按网格格式算出每项的偏移；程序的每个属性按语义（`attributeSemantic`：TEXCOORDn 的三种宽度共用一个槽，POSITION 的两种也是）在网格里找同一语义的那一项，格式按数据宽度（`float32xN` / `uint32x4`），`shaderLocation` 照程序。分量少了由 WebGPU 截断，多了补 (0, 0, 0, 1)。类型对不上（`attributeTypeMatches`，编译期与渲染器共用）编译期报 `mdl:attribute-type:<名>` | 实测 `p5c-layout`；`p5c-attr`：vec4 数据给 vec2 读到 xy，vec2 数据给 vec4 读到 (u, v, 0, 1) |
+| 占位属性 | 网格没有的属性接到槽 1 的占位缓冲：全场一份 256 字节的全零缓冲，`arrayStride` 0，每项 16 字节，格式按着色器自己的类型。WGSL 入口可能仍带这个 location，WebGPU 建管线要有 | 实测 `p5c-attr-ok` 的 M3 |
+| 缓冲 | 顶点缓冲按「文件缓冲 + 用途 + 偏移 + 长度」去重共用，图层重建不释放、随场景销毁；索引按 4 字节补齐（`writeBuffer` 的要求），`drawIndexed` | — |
+| 剔除 | 模型 pass 的 `cullmode` 为 normal 时 `frontFace: "ccw"`、`cullMode: "back"`，只看屏幕上的绕序（镜像不补偿）；nocull 不剔。管线键只在出现时加 `\|mesh:<布局键>`、`\|cull:back`，现有管线的键逐字不变 | 实测 `p5c-cull`：`CullMode.Back`、`FrontCounterClockwise`；`scale −1` 的对象不翻转正面 |
+| 视锥剔除 | 每帧画模型前判一次（`mesh.ts` 的 `frustumCulled`）：包围盒并集的两个角经世界矩阵（不含视差）变换，中点为球心、半对角线为半径，和场景视图投影（带抖动、缩放，不带每个对象的视差，WPE 在场景绘制开头算一次平面）的六个平面比，球完全在某个平面外就整个模型不画。组里的模型不剔（照报，只有强制渲染才到这里） | 实测 `p5c-frustum`、`p5c-frustum3`：盒子在外、z 远在深度范围外的不画，跨边缘、外接球伸进来的画，十个包围盒逐个和 WPE 相同。retro 这类不乘矩阵的着色器也会被剔（看的是包围盒，不是画出来的位置） |
+| uniform | 和图像层直接上屏同一个函数，只换三处输入：颜色 (1, 1, 1)、alpha 1、颜色系数 1（WPE 不读模型的 `color` / `alpha` / `brightness`）；模型矩阵就是世界矩阵（没有 `size`）；视图投影同图像层（带视差、抖动、缩放，`perspective` 换透视那一份）。网格 pass 的材质常量进 `SceneState`（`fromBundle`），属性绑定与就地写照常 | 实测 `p5c-color`：`g_Color4` = (1, 1, 1, 1)、`g_Color` = (1, 1, 1)、`g_Alpha` = 1；`p5c-matrix`：MVP = VP · W，含视差与 `zoom 1.5` |
+| 法线矩阵 | `g_NormalModelMatrix` 全局改成 WPE 的算法（`math.ts` 的 `normalMatrix`，原来是逆转置）：世界矩阵 3×3 的三个本地轴各自归一化，长度平方按 float32 累加，用 `0x5f375a86` 快速倒数平方根加一次牛顿迭代（照 Quake 原式 `y·(1.5 − ((0.5x·y)·y))`）。WPE 的 uniform 写入函数所有对象共用，图像层 genericimage 的光照路径也读它 | 实测 `p5c-matrix`：三个模型 27 个值逐位相同；精确归一化差 1e-3 量级，逆转置差 0.4–0.67。语料里能渲染的场景没有打开 `LIGHTING` 的图像层，对现有画面中性 |
+
+### 能力表
+
+`object:model` 拆成细分键，没实现的照报、整张退回：
+- **对象**（`features.ts` 的 `checkObjectFeatures`）：`skin`、`castshadow`、`reflected`、`disablepropagation` 中性（`MODEL_NEUTRAL_FLAGS`）。`reflected` / `castshadow` 本身没有画面，它们的消费者都照报：读 `_rt_Reflection` 报 `texture:rendertarget:_rt_Reflection`，`REFLECTION` 非 0 报 `combo:REFLECTION`，投影灯报 `lightconfig:*`。`perspective: true` 已实现；`effects` 非空报 `model:effects`；`model` 不是字符串（脚本 `createModelData` 建的）报 `model:id`；`animationlayers`、`dependencies` 照未知键报。
+- **mdl**（`checkMdlFeatures`）：`mdl:missing:<路径>`、`mdl:truncated`；骨骼 / 动画层 / 变形 / 挂点段报 `mdl:skeleton` / `mdl:animation` / `mdl:morph` / `mdl:attachment`（W6）；网格带可选块或记录表（木偶数据）报 `mdl:puppet`；网格标志除 bit0、bit1 外还有位报 `mdl:flags:<多出来的位>`；格式有表外的位或同一语义出现两次报 `mdl:format:<格式>`。
+- **网格**（`compileMesh`、`checkMeshAttributes`）：属性名不在 26 个名字里报 `mdl:attribute:<名>`，读了缺的语义报 `mdl:missing-attribute:<名>`，类型不符报 `mdl:attribute-type:<名>`；材质多于一个 pass 报 `mdl:material-passes`；读 `_rt_FullFrameBuffer` 报 `mdl:framebuffer`（WPE 的模型绘制不拷快照，读到什么没测）。
+- **组里的模型**：`model:passthrough:children:model`（`groupChildIssues`）。
+
+### 已知差异与只记不补
+
+- **视差、抖动下的视锥平面**：照读码，用场景视图投影、世界矩阵不带每个对象的视差，没有实测。收尾统计：正交的模型场景只有 retro（mdl v14 没有包围盒，不剔；视差、抖动都没开）和 3354366708（视差、抖动都关，还差 11 项），没有受影响的场景。透视场景里开了抖动的模型场景（ricepod、3706286085）归 P5d 一起测。
+- **组里的模型**：照报，WPE 在组里怎么画（深度、剔除、视锥剔除用哪个相机）没测。语料 0 个。
+- **读了的缺属性**：WPE 画出未定义的值，我们报 `mdl:missing-attribute`；强制渲染时接占位，读到 0。
+- **`g_UserAlpha` / `g_Brightness`**：着色器读了不带 `"material"` 注解的这两个名字时，WPE 给 0，我们给 alpha 与 1（图像层也一样）。语料与 WPE 自带的着色器里这两个名字全部带注解，没有画面差别。
+- **语料 0 个、照报**：`mdl:framebuffer`、`mdl:attribute-type`、`mdl:truncated`（WPE 的读取原语越界返回空值、正常结束，我们保守报）、`mdl:material-passes`、`model:effects`、`model:id`。
+- **归 P5d**：透视场景、深度附件（会写深度的模型 pass 照报 `depthwrite:enabled`）、图像层与粒子的剔除 / 深度缺省、`transparentsorting`。
+
+### 语料与解锁
+
+| 步骤 | 去掉的键 | 新增的键 | 能渲染 | 新解锁 |
+|---|---|---|---|---|
+| 1 编译 | `object:model` 13 张、`object:reflected` 2、`object:skin` 1 | 过渡键 `model:pending` 13；`depthwrite:enabled` 9（P5d）；模型材质进编译后冒出的别的键：`texture:rendertarget:_rt_Reflection` 3、`_rt_MipMappedFrameBuffer` 2、音频频谱、遗留灯、ricepod 拼错的 `depthtesting` / `depthwriting`、arsenal 的光照贴图翻译失败；3706286085 的 `mdl:skeleton` / `animation` / `morph` / `flags:0x400` | 47 → 47 | — |
+| 2 绘制 | `model:pending` 13 | — | 47 → 48（合到 `ff4ad0e3` 上是 48 → 49） | retro |
+
+- 13 张模型场景里，只差 `camera:perspective` 的有 neon_sunset、techno，再加 `depthwrite:enabled` 的有 dna_fragment，都归 P5d；其余还差反射、音频频谱、相机对象、文本、木偶等 3–36 项。没有场景因 P5c 不再能渲染。
+- **和 WPE 比**：
+  - 确定性工程：`p5c-layout`、`p5c-attr-ok`、`p5c-ver`、`p5c-color`、`p5c-skin`、`p5c-matrix`、`-par`、`-zoom`、`p5c-order-ok`、`p5c-cull` 0 差异（`-ok` 两个是去掉了编译期会退回的对象的版本）；
+  - `p5c-frustum3`（1600×900 窗口）：画了的方块与 WPE 相同，剔掉的也相同，只有方块边缘因缩放有差；
+  - retro：整帧最大差 1（1171 个像素差 1）。
+- **基线**：10 张原本能渲染的场景 × 三档后处理的画面哈希不变。它们不含模型，所以这只能说明没改坏别的（法线矩阵的全局改动对它们中性），对不对靠上面的整帧比较。
+
+### 对比台
+
+在 `ignore/p5/` 下：
+- mdl 编码器 `c0/mdl_enc.py`（`enc_check.py` 对语料往返核对），确定性工程由 `c0/gen_c.py` 生成，放在 `proj/p5c-*`；
+- 读数：`c0/rdc_dump_c.py` 在 `qrenderdoc --python` 下导出每次绘制的输入布局、顶点 / 索引、深度与光栅状态、混合与常量，`ana_c.py` 逐个核对，`sim_sort.py` 复现排序，`ana_frustum3.py` 看视锥剔除；
+- 各步的快照、补丁、变异清单、语料比较与整帧比对在 `c1/`、`c2/`，收尾的语料统计是 `c3/walk_c.py`、`c3/model_keys.py`；
+- WPE 参照在 `A:\p5c\`。
 
 ## 声音（P6a）
 

@@ -1,5 +1,35 @@
 # v4.7.0 regression
 
+## 场景壁纸 P5c：静态网格（mdl 模型对象）
+
+2026-11-13 Windows dev。P5c 分 3 步加收尾：
+- 步骤 0：自写 mdl 编码器生成确定性工程，实测核对读码；
+- 1 编译：翻译器给顶点属性标 `unused`，mdl 解析器（v4–v23），模型图层 `layer.model`（按 `skin` 选材质、模型 pass 的深度 / 剔除照 WPE 缺省、网格排序），`object:model` 拆成细分键；
+- 2 绘制：按 mdl 格式与属性语义建顶点布局、占位属性、索引缓冲、模型 pass 的背面剔除、视锥剔除，模型的 `g_Color4` 等固定 1，`g_NormalModelMatrix` 全局改成 WPE 的算法；
+- 收尾：按语料统计走查「未实测清单」，写文档。
+
+解锁 retro（WPE 自带）。别的模型场景都是透视场景（归 P5d）或还缺反射、音频频谱、相机对象等。说明见 `cocs/wpe/WPE_SCENE.md`「静态网格（P5c）」；每步的验收数据见 `.claude/plans/wpe-import/3-scene/phase5/phase-5c-mesh.md`「实施记录」「P5c 收尾」，实测结论见同目录 `p5-REPORT.md`「P5c 语义的实测核对」。
+
+验收工具在 `ignore/p5/`：
+- mdl 编码器 `c0/mdl_enc.py`，确定性工程由 `c0/gen_c.py` 生成，放在 `proj/p5c-*`；
+- 各步的快照、补丁、变异清单、语料比较与整帧比对在 `c1/`、`c2/`，收尾的语料统计在 `c3/`；
+- WPE 参照在 `A:\p5c\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | C0 单测与检查 | Windows | 每步：子代理在 HEAD 快照里跑 tsc、vitest、Prettier（步骤 1 另跑 `cargo test -p wpesl2wgsl`）；Claude 在快照与合并后的树上复跑（带 `KABEGAME_WPE_ROOT`） | 0 error；全过 | 2026-11-13 Claude：步骤 1 翻译器 `--lib` 82 全过，提交树 tsc 0、vitest 2200 过 / 1 败；步骤 2 合并树 tsc 0、vitest 2319 过 / 1 败。失败的都是 `pipeline.test.ts` 的 `3830255100: 219 次请求`，HEAD 上同样失败，与本节无关；Prettier 过 |
+| [x] | C1 读码 · 实测核对 | WPE 抓帧（1920×1080 窗口，视锥剔除的补测 1600×900，retro 2520×1080） | 12 个确定性工程 `p5c-*` 加 retro；`rdc_dump_c.py` 导出每次绘制的输入布局、顶点 / 索引、深度与光栅状态、混合与常量 | 读码结论逐条成立，或写明推翻处 | 2026-11-13：读码结论全部成立，推翻一处：`skin` 为负数时取 0，不是最后一项。读码标了未知的几处测清了：着色器声明了网格没有的属性，只有读了才出问题；网格排序是 MSVC 的 `std::sort`，≤ 32 个时等于稳定；正交场景里视锥剔除生效；`g_NormalModelMatrix` 要照搬快速倒数平方根才逐位对上 |
+| [x] | C2 翻译器 · 属性的 `unused` | Node + cargo | `cargo test -p wpesl2wgsl --lib`；改动前后各导出一次语料的 WGSL / GLSL（`WPESL2WGSL_DUMP_DIR`）逐字节比较 | 输出不变，只多反射字段 | 2026-11-13：82 全过；3740 个文件逐字节相同。手工变异 2 处（去掉指针链回溯、把 `Store` 也算读）都检出，指针链那处是补了用例后才检出的 |
+| [x] | C3 确定性工程 · 和 WPE 比 | Windows dev 屏外宿主 + WPE 抓帧 | `p5c-layout`、`p5c-attr-ok`、`p5c-ver`、`p5c-color`、`p5c-skin`、`p5c-matrix`（及 `-par`、`-zoom`）、`p5c-order-ok`、`p5c-cull` 按 WPE 日志回放到抓到的那一帧，`kbp cmp frame --kbp-layers` 排除 FR / CLK 后整帧比 | 逐像素一致 | 2026-11-13：10 个全部 0 差异。`-ok` 两个是去掉了编译期会退回的对象（读了缺的属性、alphatocoverage）的版本，另抓了 WPE 帧 |
+| [x] | C4 视锥剔除 | 同 C3，WPE 窗口 1600×900 | `p5c-frustum3` 十个包围盒（场景外、z 超出深度范围、跨边缘、外接球伸进来、扁盒够不到等）整帧比 | 剔掉的与画了的和 WPE 相同 | 2026-11-13：画了 F2、F3、F4、F6、F8、F9，剔掉 F1、F5、F7、F10，和 WPE 相同；只有画了的方块边缘有差（我们按 1920×1080 画再缩到 1600×900） |
+| [x] | C5 retro | 同 C3，WPE 窗口 2520×1080 | `kbp content unpack --instrument` 解包加日志，WPE 抓帧，Kabegame 按日志的帧时间与逐帧光标回放到第 199 帧，整帧比 | 差 ≤ 2 | 2026-11-13：整帧最大差 1，1171 个像素差 1 |
+| [x] | C6 变异检查 | Node | `kbp mutate` 逐处改坏实现，跑相关单测 | 每处都有用例失败，源码原样还原 | 2026-11-13：步骤 1 18 处、步骤 2 14 处全部检出，还原后整树哈希一致 |
+| [x] | C7 语料变化 | Node | 每步前后重扫 `unsupported`（`kbp corpus diff`，两边用同一份翻译器 wasm） | 只有模型场景变化，原来能渲染的场景不掉出 | 2026-11-13：步骤 1 去掉 `object:model` 13 张、`object:reflected` 2、`object:skin` 1，换成过渡键 `model:pending` 13 与细分键（`depthwrite:enabled` 9 归 P5d，模型材质进编译后冒出的反射、音频频谱、遗留灯等）；步骤 2 去掉 `model:pending`，能渲染 47 → 48（合到 `ff4ad0e3` 上 48 → 49），新解锁 retro；没有场景掉出，不带模型的场景逐张相同 |
+| [x] | C8 原有场景画面不变 | Windows dev，屏外宿主 | 10 张原本能渲染的场景 × 三档后处理，读回画面哈希 | 和之前的基线相同 | 2026-11-13：步骤 2 合并前后 30 组都相同。步骤 1 没做（渲染器没改，当时 dev 没在跑）。法线矩阵是全局改的，另查过语料里能渲染的场景没有打开 `LIGHTING` 的图像层，所以对现有画面中性 |
+| [x] | C9 未实测清单走查 | Node 语料统计 | `ignore/p5/c3/walk_c.py` 统计各项在语料里出现几次 | 能渲染的场景不受影响，或写明差异 | 2026-11-13：视差、抖动下的视锥平面：正交的模型场景只有 retro（mdl 没有包围盒，不剔；视差、抖动都没开）和 3354366708（都关，还差 11 项），没有受影响的；组合层里的模型、`mdl:framebuffer` 等照报的键在语料里都是 0 个。记入文档的「已知差异与只记不补」 |
+| [x] | C10 预览 · retro | Windows，图库预览 | 打开 WPE 自带的 retro 的预览 | 实时渲染、不退回预览图；背景和各图层和 WPE 一致 | 2026-11-13 用户确认没有问题。屏外宿主的渲染和 WPE 比过（C5） |
+| [ ] | C11 桌面 · retro | Windows，窗口模式 | 把 retro 设为桌面壁纸 | 和预览一致 | 待用户确认 |
+
 ## 场景壁纸 P5b：图像模型标志（组合层、fullscreen、instanced、透视图层等）
 
 2026-11-12 Windows dev。P5b 分 6 步加收尾：

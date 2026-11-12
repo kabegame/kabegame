@@ -485,3 +485,34 @@ Claude 独立验收：
   - `p5c-attr-ok`、`p5c-order-ok` 是去掉了编译期会退回的对象（M2 / M5 读了缺的属性、alphatocoverage）的对照版，另抓了 WPE 帧（`A:\p5c\p5c-attr-ok`、`p5c-order-ok`）。`p5c-depth` 归 P5d，不比。
 - **wasm**：工作区里给宿主打包的翻译器 wasm（`d3ed5a82`，别的会话早先编的）不带属性的 `unused`，`p5c-attr-ok` 的 M3 因此误报 `mdl:missing-attribute:a_Normal`；按当前源码重编（`deno task build:wpesl2wgsl`，`ba25b097`，和快照测试用的同一份）拷进 `apps/wpe-scene/src/wpesl2wgsl/` 后不再报，画面不变。
 
+提交：`5c8ec0cb`。
+
+## P5c 收尾（2026-11-13）
+
+### 未实测清单走查
+
+同 P5b 的做法，先按语料统计各项出现几次（`ignore/p5/c3/walk_c.py`，对 `ff4ad0e3` 合并后的扫描 `ignore/p5/c2/corpus-merged.json`，和 HEAD `5c8ec0cb` 同一棵树），只对落在能渲染场景上的项补测。结果没有一项要补抓 WPE：
+
+| 项（出处） | 语料 | 结论 |
+|---|---|---|
+| 视差、抖动下视锥平面带不带这次绘制的偏移（步骤 0、2） | 正交的模型场景只有 2 张：retro 的 mdl 是 v14、没有包围盒（±131072，不剔），视差、抖动都没开；3354366708 视差、抖动都关，还差 11 项 | 没有受影响的场景，只记。透视场景里开了抖动的模型场景有 ricepod（v14，不剔）、3706286085（v23，带包围盒），抖动绑属性的有 3453730450，归 P5d 一起测 |
+| 模型在组合层里（步骤 1、2） | 54 个模型对象的父链上都没有组合层 | 照报 `model:passthrough:children:model`，只记 |
+| `mdl:framebuffer`、`mdl:attribute-type`、`mdl:truncated`、`mdl:missing-attribute`、`mdl:material-passes`、`model:effects`、`model:id`（步骤 1、2） | 0 | 照报，只记 |
+| 着色器读不带 `"material"` 注解的 `g_UserAlpha` / `g_Brightness`（步骤 0） | 0（全部带注解） | 只记，见 p5-REPORT「P5c 语义的实测核对」 |
+
+语料里还报 `mdl:*` 的只有 3706286085（`mdl:skeleton` / `animation` / `morph` / `flags:0x400`，W6）。13 张模型场景里，retro 能渲染；只差 `camera:perspective` 的有 neon_sunset、techno，再加 `depthwrite:enabled` 的有 dna_fragment，都归 P5d；其余还差反射、音频频谱、相机对象、文本、木偶等 3–36 项（`ignore/p5/c3/model_keys.py`）。
+
+### 和总计划的差别
+
+- **视锥剔除做了**：总计划写「不影响画面，先不做」，步骤 0 实测它在正交场景里生效，而且 retro 这类不乘矩阵的着色器也会被剔（看的是包围盒，不是画出来的位置），所以步骤 2 实现了。
+- **法线矩阵改成全局**：WPE 的 uniform 写入函数所有对象共用，图像层的光照路径也读 `g_NormalModelMatrix`，所以不是只给模型改。语料里能渲染的场景没有打开 `LIGHTING` 的图像层，画面不变。
+- **模型的剔除只在模型 pass 上照 WPE 缺省**：图像层、粒子、文本的剔除缺省保持现状，等 P5d 和深度一起统一，现有场景的基线不受影响。
+- **单位**：总计划要核对 3354366708 的模型用什么单位。`p5c-matrix` 实测模型和图像层同一个世界矩阵、MVP = VP · W，顶点单位就是场景像素乘对象的 `scale`；3354366708 本身还差 11 项，没有回放。
+
+### 文档
+
+- `cocs/wpe/WPE_SCENE.md`：新增「静态网格（P5c）」一节（mdl、编译、绘制、能力表、已知差异与只记不补、语料与解锁、对比台）；改正前面的过时说法：`layers` 字段、能力表放行表、模块表（新增 `mesh.ts`）、顶点布局、`g_NormalModelMatrix`、对象颜色、图层渲染图。
+- `cocs/README.md`：场景条目补 P5c 一条与排查场景。
+- 回归文档新增 P5c 一节 C0–C11（C10、C11 真机预览与桌面待用户确认）；changelog 一行。
+- `PLAN.md`、P5 总计划补 P5c 完成情况。
+
