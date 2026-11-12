@@ -692,6 +692,7 @@ describe("可渲染性自查", () => {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: false,

@@ -501,6 +501,7 @@ function layer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: false,

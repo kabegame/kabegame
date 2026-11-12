@@ -488,9 +488,10 @@ describe("模型 solidlayer", () => {
   it("没写时不带", async () => {
     expect((await compileModel({})).layers[0].solidLayer).toBe(false);
   });
-  it("`instanced` 另报不支持，这一位不算", async () => {
+  it("`instanced`（P5b 步骤 5 起）：不再报 model:instanced，两位分开都带上；对象没写 instance / size 报细分键", async () => {
     const bundle = await compileModel({ solidlayer: true, instanced: true });
-    expect(bundle.unsupported).toEqual(["model:instanced"]);
-    expect(bundle.layers[0].solidLayer).toBe(false);
+    // 这里的对象没有 `instance` 和 `size`（`checkInstanceFeatures`）
+    expect(bundle.unsupported).toEqual(["model:instanced:instance", "model:instanced:size"]);
+    expect(bundle.layers[0]).toMatchObject({ solidLayer: true, instanced: true });
   });
 });

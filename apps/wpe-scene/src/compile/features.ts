@@ -240,8 +240,14 @@ const OBJECT_FLAGS = [
  *   `p5b-autosize`）：带 `projectlayer` 时取正交投影宽高（步骤 2，`p5b-proj`），否则取槽 0 纹理的图像尺寸、没有纹理时不覆盖。
  *   精灵表的帧尺寸随图像层帧动画（`tex:animation`）另报。
  * - `nopadding`：直接上屏的四边形不内缩，带 effect 时末 pass 照旧内缩（P5b 步骤 1，`render/graph.ts`，p5-REPORT `p5b-nopad`）。
- * - `solidlayer`：合成 RT 按图层 `size`（`compositeSize`）；UV 不内缩（`uvInset`）。
- *   `instanced` 另报 `model:instanced`，它的合成 RT 仍按纹理尺寸。
+ * - `solidlayer`：管两件事，WPE 里分开判断（P5b 步骤 5，rea-p5-modelflags）：上屏（直接上屏与末 pass）不内缩只看这一位
+ *   （`+0x304 & 0x200`，`render/graph.ts` 的 `flat`），instanced 照样不内缩；合成 RT 按图层 `size`（`compositeSize`）还要求不是
+ *   `instanced`（`FUN_1402091e0`）。`SceneLayer.solidLayer` 只表示这一位。
+ * - `instanced`（P5b 步骤 5，`SceneLayer.instanced`，p5-REPORT `p5b-inst`、`p5b-inst2`）：编辑器的「纯色图层」，模型固定是
+ *   `{instanced, solidlayer, material: materials/util/solidlayer_instance*.json}`（translucent 的 genericimage2 / 4，槽 0 是
+ *   `util/white` 32×32）。对象的 `instance` 在加载时覆盖材质 pass 的同名键（rea-p5-modelflags §6.2）：`combos` 合并、`textures`
+ *   按槽合并，规则同 effect 实例覆盖（`bundle.ts`）；对象上的键由 `checkInstanceFeatures` 检查。合成 RT 仍按槽 0 纹理的图像尺寸
+ *   （`p5b-inst2` 的 J1 32×32、J2 48×40），上屏不内缩由 `solidlayer` 那一位管（J1、J2 末 pass、J3 直接上屏的 UV 都不内缩）。
  * - `passthrough`：组合层（P5b 步骤 2，`SceneLayer.passthroughModel`，p5-REPORT `p5b-cl`）：基础 pass 按 `copybackground` 从快照铺进
  *   合成 RT 或清成透明，之后照常跑 effect 链、借基础材质的 blend 上屏（`colorBlendMode` 混合时 passthrough 上屏）；合成 RT 按 `size`、
  *   上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31、没有子层时整层不画。带子层的是「组」（步骤 4，p5-REPORT `p5b-grp-*`、
@@ -268,6 +274,7 @@ const SUPPORTED_MODEL = new Set([
   "autosize",
   "nopadding",
   "solidlayer",
+  "instanced",
   "passthrough",
   "projectlayer",
   "fullscreen",
@@ -526,17 +533,55 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   // 图像层 perspective（P5b 步骤 1）：JSON true 已实现；绑属性、挂脚本或别的取值，以及非图像对象上为真，照报
   if (active(object.perspective) && !(kind === "image" && object.perspective === true))
     unsupported.add("object:perspective");
+  // `instance`（P5b 步骤 5）：WPE 只在模型是 instanced 时读它（rea-p5-modelflags §6.2），那时由 `bundle.ts` 调
+  // `checkInstanceFeatures` 查；非 instanced 对象上中性（语料 0 个）
   for (const [key, value] of Object.entries(object))
     if (
       !SUPPORTED_OBJECT.has(key) &&
       !OBJECT_FLAGS.includes(key) &&
-      !["alignment", "perspective", "model", "particle", "sound", "text", "light"].includes(key) &&
+      !["alignment", "perspective", "instance", "model", "particle", "sound", "text", "light"].includes(key) &&
       !lightKey(key) &&
       !soundKey(key) &&
       !(kind === "particle" && key === "instanceoverride") &&
       active(value)
     )
       unsupported.add(`object:${key}`);
+}
+
+/**
+ * instanced 模型的对象（P5b 步骤 5，rea-p5-modelflags §6.2，p5-REPORT `p5b-inst`、`p5b-inst2`）：`bundle.ts` 在模型是 instanced 时调。
+ * WPE 加载时用对象的 `instance` 覆盖材质 pass 的同名键，语料 167 个对象只用到 `textures`、`combos`、`usertextures`。
+ * 已实现的覆盖是 `combos` 合并、`textures` 按槽合并（`bundle.ts`，规则同 effect 实例覆盖）。值为 null 的键当缺键。
+ * - `instance` 缺失或不是对象：`model:instanced:instance`（编辑器总会写，语料 0 个，WPE 怎么处理没测）；
+ * - 对象 `size` 不是字符串（缺键也算）：`model:instanced:size`（WPE 按 `"w h"` 两次 `atof` 读，绑属性、写成数组等怎么处理没读，
+ *   语料全是字符串）；
+ * - `id`：编辑器键，中性；
+ * - `textures` 不是非空字符串组成的数组：`object:instance:textures`（语料都是一个非空字符串：94 个 `util/white`、73 个工程纹理；
+ *   null 槽在 instance 上什么意思没测）；
+ * - `combos` 不是对象：`object:instance:combos`（值绑属性由合并后 pass 的 `checkPassFeatures` 报 `combo:user-binding`；语料都是
+ *   `{"version": 2}`，和材质本身相同）；
+ * - `usertextures` 取值有效：`material:usertextures`（`$mediaThumbnail`、用户属性纹理、`usershortcut`，同材质 pass 上的这个键；WPE
+ *   绑了用户纹理时还强制 `g_Color4 = (1, 1, 1, 1)`，一起照报）；
+ * - 其它键取值有效：`object:instance:<键>`。
+ */
+export function checkInstanceFeatures(object: SceneObject, unsupported: Set<string>): void {
+  if (typeof object.size !== "string") unsupported.add("model:instanced:size");
+  const instance = object.instance;
+  if (!instance || typeof instance !== "object" || Array.isArray(instance)) {
+    unsupported.add("model:instanced:instance");
+    return;
+  }
+  for (const [key, value] of Object.entries(instance as Record<string, unknown>)) {
+    if (value === null || value === undefined || key === "id") continue;
+    if (key === "textures") {
+      if (!Array.isArray(value) || !value.every((name) => typeof name === "string" && name !== ""))
+        unsupported.add("object:instance:textures");
+    } else if (key === "combos") {
+      if (typeof value !== "object" || Array.isArray(value)) unsupported.add("object:instance:combos");
+    } else if (key === "usertextures") {
+      if (active(value)) unsupported.add("material:usertextures");
+    } else if (active(value)) unsupported.add(`object:instance:${key}`);
+  }
 }
 
 /**
@@ -595,9 +640,10 @@ export function usesLighting(result: TranslateResult): boolean {
 
 /**
  * 模型 JSON 的键：布尔键只认 `true`（`modelFlag`），其余（`puppet` 是路径字符串等）按 `active()`；键名报 `model:<键>`。
- * `passthrough`、`projectlayer`（P5b 步骤 2）与 `fullscreen`（步骤 3）已实现（见 `SUPPORTED_MODEL`），`instanced` 照报，所以
- * WPE 自带的四个组合层模型（含 fullscreenlayer）都不报。组合层带子层（组，步骤 4）要看场景的父子关系，组里还不支持的用法由
- * `bundle.ts` 按 `groupChildIssues` 报。
+ * `passthrough`、`projectlayer`（P5b 步骤 2）、`fullscreen`（步骤 3）与 `instanced`（步骤 5）已实现（见 `SUPPORTED_MODEL`），所以
+ * WPE 自带的四个组合层模型（含 fullscreenlayer）与纯色图层模型都不报，`MODEL_FLAGS` 里的布尔键现在全部放行。组合层带子层（组，步骤 4）
+ * 要看场景的父子关系，组里还不支持的用法由 `bundle.ts` 按 `groupChildIssues` 报；instanced 对象上的 `instance` 与 `size` 由
+ * `bundle.ts` 按 `checkInstanceFeatures` 报。
  */
 export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): void {
   for (const [key, value] of Object.entries(model)) {

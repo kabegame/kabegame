@@ -52,11 +52,11 @@ describe("模型 JSON", () => {
     expect(modelKeys({ material: "materials/a.json", fullscreen: 1 })).toEqual([]);
     expect(modelKeys({ material: "materials/a.json", nopadding: "true" })).toEqual([]);
     expect(modelKeys({ material: "materials/a.json", instanced: 1, passthrough: "1" })).toEqual([]);
-    // `fullscreen` 已实现（P5b 步骤 3），写成 true 也不再报；「只认 true」改由仍照报的 `instanced` 核对
+    // `fullscreen`（P5b 步骤 3）、`nopadding`（步骤 1）、`instanced`（步骤 5）都已实现，写成 true 也不再报；布尔键全部放行之后，
+    // 「只认 true」由下面的 `modelFlag` 用例与 compile/p5b.test.ts（`instanced: 1` 不是 instanced 图层）核对
     expect(modelKeys({ material: "materials/a.json", fullscreen: true })).toEqual([]);
-    expect(modelKeys({ material: "materials/a.json", instanced: true })).toEqual(["model:instanced"]);
-    // `nopadding` 已实现（P5b 步骤 1），写成 true 也不再报
-    expect(modelKeys({ material: "materials/a.json", nopadding: true, instanced: true })).toEqual(["model:instanced"]);
+    expect(modelKeys({ material: "materials/a.json", instanced: true })).toEqual([]);
+    expect(modelKeys({ material: "materials/a.json", nopadding: true, instanced: true })).toEqual([]);
   });
   it("非布尔键照旧按真值报：`puppet` 是路径字符串", () => {
     expect(modelKeys({ material: "materials/a.json", puppet: "models/a.mdl" })).toEqual(["model:puppet"]);

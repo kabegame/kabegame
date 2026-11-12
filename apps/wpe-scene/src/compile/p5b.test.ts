@@ -9,14 +9,22 @@
  * - 步骤 4：组（带子层的组合层）的归属 `group` 与子树 `subtree`（`assignGroups`）、上屏材质 `groupUpload`，不再报
  *   `model:passthrough:children`，组里还不支持的用法细分成 `model:passthrough:children:framebuffer` / `:fullscreen` / `:perspective`
  *   （`groupChildIssues`），fullscreenlayer 带子层报 `model:fullscreen:children`。
+ * - 步骤 5：`instanced` 模型不再报 `model:instanced`，图层上 `solidLayer` 与 `instanced` 分开记；对象的 `instance` 在编译材质前覆盖
+ *   pass 的 `textures`（按槽）与 `combos`，`checkInstanceFeatures` 的细分键；非 instanced 对象上的 `instance` 中性。
  * 依据是 p5-REPORT「P5b 语义的实测核对」：`p5b-autosize`（`autosize` 覆盖 `size`，三者都缺时 1×1）、`p5b-nopad`、`p5b-persp`、
- * `p5b-cl`、`p5b-proj`、`p5b-fs`、`p5b-fsmvp`。
+ * `p5b-cl`、`p5b-proj`、`p5b-fs`、`p5b-fsmvp`、`p5b-inst`、`p5b-inst2`。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { assignGroups, compileScene, imageLayerSize, type SceneLayer, type ScenePass } from "./bundle";
-import { checkModelFeatures, checkObjectFeatures, checkSceneFeatures, groupChildIssues } from "./features";
+import {
+  checkInstanceFeatures,
+  checkModelFeatures,
+  checkObjectFeatures,
+  checkSceneFeatures,
+  groupChildIssues,
+} from "./features";
 import type { SceneParticle } from "./particles";
 import type { SceneReader } from "./fs";
 import { parseModel, type ModelJson, type SceneObject } from "./model";
@@ -111,24 +119,24 @@ const u32 = (value: number) => {
   return out;
 };
 const magic = (text: string) => parts(new TextEncoder().encode(text), new Uint8Array([0]));
-/** RGBA8 单 mip 的 `.tex`（TEXB0002）：纹理尺寸 64×64、图像尺寸 48×40。 */
-function tex(): Uint8Array {
-  const data = new Uint8Array(64 * 64 * 4);
+/** RGBA8 单 mip 的 `.tex`（TEXB0002）：缺省纹理尺寸 64×64、图像尺寸 48×40；`size` / `image` 给别的尺寸（P5b 步骤 5 的 `util/white`）。 */
+function tex(size = 64, image: [number, number] = [48, 40]): Uint8Array {
+  const data = new Uint8Array(size * size * 4);
   return parts(
     magic("TEXV0005"),
     magic("TEXI0001"),
     u32(0),
     u32(0),
-    u32(64),
-    u32(64),
-    u32(48),
-    u32(40),
+    u32(size),
+    u32(size),
+    u32(image[0]),
+    u32(image[1]),
     u32(0),
     magic("TEXB0002"),
     u32(1),
     u32(1),
-    u32(64),
-    u32(64),
+    u32(size),
+    u32(size),
     u32(0),
     u32(data.length),
     u32(data.length),
@@ -298,12 +306,13 @@ const UTIL_MODELS: Record<string, ModelJson> = {
 
 /**
  * 场景里放一组对象；`models/util/*` 是组合层，`models/a.json` 是普通图像层（同 `compileImage`）。`extra` 是另加的文件
- * （键是工程内路径，同名覆盖上面的默认文件）。
+ * （键是工程内路径，同名覆盖上面的默认文件）；`tr` 缺省是上面的假翻译器（P5b 步骤 5 的 combos 用例换成记录请求的）。
  */
 async function compileObjects(
   objects: Record<string, unknown>[],
   general: Record<string, unknown> = {},
   extra: Record<string, Uint8Array | string> = {},
+  tr: Wpesl2wgsl = translator,
 ) {
   const files: Record<string, Uint8Array | string> = {
     "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
@@ -327,7 +336,7 @@ async function compileObjects(
     projectDir: "P:/p",
     sceneAssets: ["A:/assets"],
     reader: memoryReader(files),
-    translator,
+    translator: tr,
     postprocess: "disabled",
     exhaustive: true,
   });
@@ -468,9 +477,9 @@ describe("能力表：组合层与 projectlayer 模型（P5b 步骤 2）", () =>
     // 单独写 projectlayer（没有 autosize）只剩透明排序键，正交场景中性
     expect(modelKeys({ material: MATERIAL, projectlayer: true })).toEqual([]);
   });
-  it("fullscreenlayer 不报（P5b 步骤 3 起）；instanced 的组合层照报 model:instanced", () => {
+  it("fullscreenlayer 不报（P5b 步骤 3 起）；instanced 的组合层也不再报 model:instanced（步骤 5 起，对象另查，见下）", () => {
     expect(modelKeys(UTIL_MODELS.fullscreenlayer)).toEqual([]);
-    expect(modelKeys({ material: MATERIAL, passthrough: true, instanced: true })).toEqual(["model:instanced"]);
+    expect(modelKeys({ material: MATERIAL, passthrough: true, instanced: true })).toEqual([]);
   });
   it("对象上的 copybackground 不报（true / false 都是）", () => {
     expect(objectKeys({ id: 1, image: "models/util/composelayer.json", copybackground: false })).toEqual([]);
@@ -986,5 +995,225 @@ describe("compileScene：组（P5b 步骤 4）", () => {
       "model:fullscreen:children",
     ]);
     expect((await compileObjects([f1(10)], {}, files)).unsupported).toEqual([]);
+  });
+});
+
+// ———— P5b 步骤 5：instanced ————
+
+/**
+ * 编辑器的纯色图层（`ignore/p5/b5/gen_b5.py` 的 `p5b-inst2`）：模型固定是 `{instanced, solidlayer, material}`，材质是 translucent 的
+ * genericimage2、槽 0 是 `util/white`（32×32），`combos` 同语料写 `{"version": 2}`。着色器是空壳（假翻译器不读）。
+ */
+const INSTANCE_MATERIAL = "materials/util/solidlayer_instance.json";
+const INSTANCE_FILES: Record<string, Uint8Array | string> = {
+  "models/util/solidlayer_instance.json": JSON.stringify({
+    instanced: true,
+    solidlayer: true,
+    material: INSTANCE_MATERIAL,
+  }),
+  [INSTANCE_MATERIAL]: JSON.stringify({
+    passes: [
+      {
+        shader: "genericimage2",
+        blending: "translucent",
+        cullmode: "nocull",
+        depthtest: "disabled",
+        depthwrite: "disabled",
+        textures: ["util/white"],
+        combos: { version: 2 },
+      },
+    ],
+  }),
+  "materials/util/white.tex": tex(32, [32, 32]),
+  "shaders/genericimage2.vert": "void main() {}",
+  "shaders/genericimage2.frag": "void main() {}",
+};
+/** 编辑器写的 `instance`：`id`、槽 0 纹理、和材质相同的 `combos`（语料 167 个对象都是这个形状）。 */
+const EDITOR_INSTANCE = { id: 5, textures: ["util/white"], combos: { version: 2 } };
+/** `p5b-inst2` 的 J1 那样的对象（`size` 900×1000）；`extra` 里写 `undefined` 的键序列化后就是缺键。 */
+const solid = (id: number, extra: Record<string, unknown> = {}) => ({
+  id,
+  name: `J${id}`,
+  image: "models/util/solidlayer_instance.json",
+  origin: "960 540 0",
+  size: "900 1000",
+  instance: EDITOR_INSTANCE,
+  ...extra,
+});
+const compileInstanced = (objects: Record<string, unknown>[], extra: Record<string, Uint8Array | string> = {}) =>
+  compileObjects(objects, {}, { ...INSTANCE_FILES, ...extra });
+/** 图层基础 pass 槽 0 的纹理。 */
+const slot0 = (bundle: Awaited<ReturnType<typeof compileScene>>, layer = 0) =>
+  bundle.textures[bundle.layers[layer].passes[0].textures[0]];
+
+describe("compileScene：instanced（P5b 步骤 5）", () => {
+  it("纯色图层不再报 model:instanced：solidLayer 与 instanced 都为真，size 照对象 900×1000，槽 0 是 util/white（32×32）", async () => {
+    const bundle = await compileInstanced([solid(10)]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({
+      solidLayer: true,
+      instanced: true,
+      passthroughModel: false,
+      size: [900, 1000],
+    });
+    expect(slot0(bundle)).toMatchObject({
+      path: "materials/util/white.tex",
+      width: 32,
+      height: 32,
+      textureWidth: 32,
+      textureHeight: 32,
+    });
+  });
+
+  it("instance.textures 覆盖槽 0（p5b-inst2 的 J2：补边纹理，图像 48×40、纹理 64×64）；材质原来的 util/white 不再读", async () => {
+    const bundle = await compileInstanced([solid(10, { instance: { ...EDITOR_INSTANCE, textures: ["a"] } })]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(slot0(bundle)).toMatchObject({
+      path: "materials/a.tex",
+      width: 48,
+      height: 40,
+      textureWidth: 64,
+      textureHeight: 64,
+    });
+    expect(bundle.textures.map((texture) => texture.path)).toEqual(["materials/a.tex"]);
+  });
+
+  it("instance.combos 合进材质的 combos：新键加入、材质的保留，同名取 instance 的；值绑属性报 combo:user-binding", async () => {
+    const combosOf = async (combos: unknown) => {
+      const seen: unknown[] = [];
+      const recording = {
+        async translate(input: { combos?: unknown }) {
+          seen.push(input.combos);
+          return { ok: true, uniforms: [], textures: [], combos: [] };
+        },
+      } as unknown as Wpesl2wgsl;
+      const bundle = await compileObjects(
+        [solid(10, { instance: { ...EDITOR_INSTANCE, combos } })],
+        {},
+        INSTANCE_FILES,
+        recording,
+      );
+      expect(bundle.unsupported).toEqual([]);
+      return seen;
+    };
+    expect(await combosOf({ EXTRA: 1 })).toEqual([{ version: 2, EXTRA: 1 }]);
+    expect(await combosOf({ version: 3 })).toEqual([{ version: 3 }]);
+    expect(await combosOf({})).toEqual([{ version: 2 }]);
+    // 合并后由材质 pass 的检查报（WPE 按整数读 COMBO，I3）
+    const bound = await compileInstanced([solid(10, { instance: { combos: { EXTRA: { user: "p", value: 1 } } } })]);
+    expect(bound.unsupported).toEqual(["combo:user-binding"]);
+  });
+
+  it("没写 instance：报 model:instanced:instance；instance 不是对象、size 不是字符串：各报各的，instance 不合并", async () => {
+    const missing = await compileInstanced([solid(10, { instance: undefined })]);
+    expect(missing.unsupported).toEqual(["model:instanced:instance"]);
+    expect(missing.layers[0]).toMatchObject({ solidLayer: true, instanced: true });
+    const odd = await compileInstanced([solid(10, { instance: "a", size: 900 })]);
+    expect(odd.unsupported).toEqual(["model:instanced:instance", "model:instanced:size"]);
+    expect(slot0(odd).path).toBe("materials/util/white.tex");
+    // textures 不合规照报；合并时非字符串的槽保留材质的
+    const badTextures = await compileInstanced([solid(10, { instance: { textures: [null, "a"] } })]);
+    expect(badTextures.unsupported).toEqual(["object:instance:textures"]);
+    expect(slot0(badTextures).path).toBe("materials/util/white.tex");
+  });
+
+  it("instanced 的组合层（passthrough + instanced）：不报 model:instanced；没写 instance 报 model:instanced:instance", async () => {
+    const bundle = await compileObjects(
+      [compose(10, { image: "models/ci.json" })],
+      {},
+      {
+        "models/ci.json": JSON.stringify({
+          material: "materials/util/composelayer.json",
+          passthrough: true,
+          instanced: true,
+        }),
+      },
+    );
+    expect(bundle.unsupported).toEqual(["model:instanced:instance"]);
+    expect(bundle.layers[0]).toMatchObject({ passthroughModel: true, solidLayer: false, instanced: true });
+  });
+
+  it("`instanced: 1` 不算：不是 instanced 图层，instance 不合并、不检查", async () => {
+    const bundle = await compileInstanced([solid(10, { instance: { textures: ["a"], foo: 1 }, size: 900 })], {
+      "models/util/solidlayer_instance.json": JSON.stringify({
+        instanced: 1,
+        solidlayer: true,
+        material: INSTANCE_MATERIAL,
+      }),
+    });
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({ solidLayer: true, instanced: false });
+    expect(bundle.textures.map((texture) => texture.path)).toEqual(["materials/util/white.tex"]);
+  });
+
+  it("非 instanced 对象上的 instance 中性：不报、不合并", async () => {
+    const bundle = await compileInstanced([
+      { id: 10, image: "models/a.json", origin: "960 540 0", instance: { textures: ["util/white"], foo: 1 } },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({ solidLayer: false, instanced: false });
+    expect(bundle.textures.map((texture) => texture.path)).toEqual(["materials/a.tex"]);
+  });
+});
+
+describe("能力表：instanced（P5b 步骤 5）", () => {
+  const instanceKeys = (extra: Record<string, unknown>) => {
+    const keys = new Set<string>();
+    checkInstanceFeatures(solid(10, extra) as SceneObject, keys);
+    return [...keys].sort();
+  };
+
+  it("纯色图层模型（instanced + solidlayer）不报；编辑器写的对象不报（id 中性）", () => {
+    expect(modelKeys({ material: INSTANCE_MATERIAL, instanced: true, solidlayer: true })).toEqual([]);
+    expect(instanceKeys({})).toEqual([]);
+    expect(instanceKeys({ instance: { id: 5 } })).toEqual([]);
+    expect(instanceKeys({ instance: {} })).toEqual([]);
+  });
+
+  it("instance 缺失或不是对象：model:instanced:instance", () => {
+    for (const instance of [undefined, null, "util/white", ["util/white"], 1])
+      expect(instanceKeys({ instance }), JSON.stringify(instance)).toEqual(["model:instanced:instance"]);
+  });
+
+  it("对象 size 不是字符串（缺键也算）：model:instanced:size", () => {
+    for (const size of [undefined, 900, [900, 1000], { user: "s", value: "900 1000" }])
+      expect(instanceKeys({ size }), JSON.stringify(size)).toEqual(["model:instanced:size"]);
+  });
+
+  it("textures 不是非空字符串组成的数组：object:instance:textures；空数组、null 不报", () => {
+    for (const textures of ["util/white", [""], [null], ["a", 1], [{ name: "a" }], { 0: "a" }])
+      expect(instanceKeys({ instance: { textures } }), JSON.stringify(textures)).toEqual(["object:instance:textures"]);
+    for (const textures of [["a"], ["a", "b"], [], null])
+      expect(instanceKeys({ instance: { textures } }), JSON.stringify(textures)).toEqual([]);
+  });
+
+  it("combos 不是对象：object:instance:combos（值绑属性不在这里报）", () => {
+    for (const combos of ["x", [1], 2, true])
+      expect(instanceKeys({ instance: { combos } }), JSON.stringify(combos)).toEqual(["object:instance:combos"]);
+    for (const combos of [{}, { version: 2 }, { A: { user: "p", value: 1 } }, null])
+      expect(instanceKeys({ instance: { combos } }), JSON.stringify(combos)).toEqual([]);
+  });
+
+  it("usertextures 取值有效：material:usertextures", () => {
+    for (const usertextures of [["$mediaThumbnail"], "usershortcut", [null]])
+      expect(instanceKeys({ instance: { usertextures } }), JSON.stringify(usertextures)).toEqual([
+        "material:usertextures",
+      ]);
+    for (const usertextures of [null, false, ""])
+      expect(instanceKeys({ instance: { usertextures } }), JSON.stringify(usertextures)).toEqual([]);
+  });
+
+  it("其它键取值有效：object:instance:<键>", () => {
+    expect(
+      instanceKeys({
+        instance: { ...EDITOR_INSTANCE, constantshadervalues: { alpha: 0.5 }, blending: "additive", foo: 0, bar: "" },
+      }),
+    ).toEqual(["object:instance:blending", "object:instance:constantshadervalues"]);
+  });
+
+  it("对象上的 instance 不再按未知键报 object:instance（checkObjectFeatures 不看它，instanced 时另查）", () => {
+    expect(objectKeys(solid(10) as SceneObject)).toEqual([]);
+    expect(objectKeys({ id: 1, image: "models/a.json", instance: { textures: ["a"], foo: 1 } })).toEqual([]);
+    expect(objectKeys({ id: 1, image: "models/a.json", instance: "x" })).toEqual([]);
   });
 });

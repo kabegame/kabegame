@@ -166,6 +166,7 @@ function composeLayer(object: number, name: string, def: ComposeDef, extra: Part
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: true,
@@ -310,10 +311,16 @@ describe("planLayer：不带子层的组合层（p5b-cl、p5b-proj）", () => {
   it("合成 RT 按 size、不看纹理：基础材质槽 0 有静态纹理时也一样", () => {
     const texture = { width: 48, height: 40, textureWidth: 64, textureHeight: 64 };
     expect(
-      compositeSize({ size: [600, 300], solidLayer: false, passthroughModel: true, fullscreenSize: null }, texture),
+      compositeSize(
+        { size: [600, 300], solidLayer: false, instanced: false, passthroughModel: true, fullscreenSize: null },
+        texture,
+      ),
     ).toEqual([600, 300]);
     expect(
-      compositeSize({ size: [600, 300], solidLayer: false, passthroughModel: false, fullscreenSize: null }, texture),
+      compositeSize(
+        { size: [600, 300], solidLayer: false, instanced: false, passthroughModel: false, fullscreenSize: null },
+        texture,
+      ),
     ).toEqual([48, 40]);
     // 有静态纹理的自写组合层：compose 的 UV 仍是 0–1（着色器按它铺满合成 RT），上屏仍不内缩
     const layer = clLayer("CL1");

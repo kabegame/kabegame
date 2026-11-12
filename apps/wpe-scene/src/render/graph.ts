@@ -12,8 +12,11 @@
  *   colorBlendMode ∉ {0, 31} 时所有 effect 都留在合成 RT，最后由 passthrough 上屏（B8）。
  * - **合成 RT 数** = min(2, 写进合成链的次数)。每个 effect 的最后一个绘制 pass 与每个 `compose` pass 各写一次，基础 pass 写一次、
  *   上屏的那次不算，正好是 WPE 的 `min(2, passthrough + Σ(1 + compose))`（B5）：passthrough 的 +1 就是最后一个 effect 也留在合成链。
- *   第 n 次写进合成 RT `n % 2`。尺寸取基础材质槽 0 纹理的图像尺寸（没有纹理、`solidLayer` 或组合层取图层 size，fullscreen 取
- *   `fullscreenSize`），再取 max(4, ·)。
+ *   第 n 次写进合成 RT `n % 2`。尺寸取基础材质槽 0 纹理的图像尺寸（没有纹理、不是 instanced 的 `solidLayer` 或组合层取图层 size，
+ *   fullscreen 取 `fullscreenSize`），再取 max(4, ·)。
+ * - **instanced**（P5b 步骤 5，`SceneLayer.instanced`，p5-REPORT `p5b-inst2`）：模型同时是 solidlayer，但合成 RT 仍按槽 0 纹理的图像尺寸
+ *   （J1 `util/white` 32×32、J2 补边纹理 48×40，`size` 900×1000 不起作用），fbo 跟着它；上屏照 solidlayer 不内缩（J1、J2 末 pass
+ *   UV 0–1，J3 直接上屏 UV 正好是图像 / 纹理）。
  * - **`_rt_FullFrameBuffer`**（B8）：场景目标的整帧快照，每图层至多拷一次，时机是三处里最早满足的一处：
  *   图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前。
  *   合成链不画进场景，所以三处拷到的都是画到本图层之前的场景。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」
@@ -146,16 +149,17 @@ type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "tex
 
 /**
  * 合成 RT 尺寸（B5 `FUN_1402091e0`）：fullscreen 取 `fullscreenSize`（P5b 步骤 3：槽 0 静态纹理的图像尺寸，`_rt_FullFrameBuffer`
- * 或没有纹理时取场景尺寸），排在最前；否则基础材质槽 0 纹理的图像尺寸，没有纹理、`solidLayer` 或组合层（取 `round(size)`，
- * rea-p5-modelflags §2.3，`p5b-cl` 实测 600×300）取图层 size；最后取 max(4, ·)。精灵表取单帧留到 P6。
+ * 或没有纹理时取场景尺寸），排在最前；否则基础材质槽 0 纹理的图像尺寸，没有纹理、`solidLayer` 且不是 `instanced`（P5b 步骤 5，
+ * `p5b-inst2` 的 J1 32×32、J2 48×40，对照组 J0 900×1000）或组合层（取 `round(size)`，rea-p5-modelflags §2.3，`p5b-cl` 实测 600×300）
+ * 取图层 size；最后取 max(4, ·)。精灵表取单帧留到 P6。
  */
 export function compositeSize(
-  layer: Pick<SceneLayer, "size" | "solidLayer" | "passthroughModel" | "fullscreenSize">,
+  layer: Pick<SceneLayer, "size" | "solidLayer" | "instanced" | "passthroughModel" | "fullscreenSize">,
   texture: TextureSize | undefined,
 ): [number, number] {
   const [w, h] = layer.fullscreenSize
     ? layer.fullscreenSize
-    : texture && !layer.solidLayer && !layer.passthroughModel
+    : texture && !(layer.solidLayer && !layer.instanced) && !layer.passthroughModel
       ? [texture.width, texture.height]
       : [layer.size[0] ?? 0, layer.size[1] ?? 0];
   return [Math.max(4, Math.round(w)), Math.max(4, Math.round(h))];
@@ -303,7 +307,9 @@ export function planLayer(
   // UV 内缩分两种（P5b 步骤 1，p5-REPORT `p5b-nopad`）：直接上屏（WPE `+0x490`，flags & 0x226）在 fullscreen、nopadding、
   // passthrough、solidlayer 时不内缩；末 pass 与 passthrough 上屏（`+0x2e8`，flags & 0x222）不看 nopadding。
   // 组合层（步骤 2）两块都不内缩（rea-p5-modelflags §2.3，`p5b-cl` 上屏 UV 0–1）；它不会走直接上屏，加进去只为和 WPE 的条件一致。
-  // fullscreen（步骤 3）两块也都不内缩（`p5b-fs` 上屏、`p5b-fsmvp` 直接上屏的 UV 都是 0–1）
+  // fullscreen（步骤 3）两块也都不内缩（`p5b-fs` 上屏、`p5b-fsmvp` 直接上屏的 UV 都是 0–1）。
+  // `solidLayer` 只看模型 solidlayer 这一位（步骤 5）：instanced 也是 solidlayer，两种上屏同样不内缩（`p5b-inst2` 的 J1、J2 末 pass
+  // UV 0–1，J3 直接上屏 UV 正好 0–0.75 / 0–0.625）；instanced 只在合成 RT 尺寸上和普通 solidlayer 不同（`compositeSize`）
   const flat = layer.solidLayer || layer.passthroughModel || layer.fullscreen;
   // fullscreen 的直接上屏与上屏都画 2×2 的 NDC 四边形（P5b 步骤 3）
   const screenGeometry: Geometry = layer.fullscreen ? "fullscreen" : "layer";

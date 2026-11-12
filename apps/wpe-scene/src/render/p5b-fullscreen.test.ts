@@ -185,6 +185,7 @@ function layer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: false,
@@ -397,14 +398,20 @@ describe("compositeSize：fullscreenSize 排在最前", () => {
   const padded = { width: 48, height: 40, textureWidth: 64, textureHeight: 64 };
   it("非空时用它，不看纹理、solidLayer、组合层 size", () => {
     expect(
-      compositeSize({ size: [2, 2], solidLayer: false, passthroughModel: true, fullscreenSize: [W, H] }, undefined),
+      compositeSize(
+        { size: [2, 2], solidLayer: false, instanced: false, passthroughModel: true, fullscreenSize: [W, H] },
+        undefined,
+      ),
     ).toEqual([W, H]);
     expect(
-      compositeSize({ size: [2, 2], solidLayer: false, passthroughModel: false, fullscreenSize: [32, 32] }, padded),
+      compositeSize(
+        { size: [2, 2], solidLayer: false, instanced: false, passthroughModel: false, fullscreenSize: [32, 32] },
+        padded,
+      ),
     ).toEqual([32, 32]);
     expect(
       compositeSize(
-        { size: [600, 300], solidLayer: true, passthroughModel: false, fullscreenSize: [1280, 720] },
+        { size: [600, 300], solidLayer: true, instanced: false, passthroughModel: false, fullscreenSize: [1280, 720] },
         padded,
       ),
     ).toEqual([1280, 720]);
@@ -412,14 +419,17 @@ describe("compositeSize：fullscreenSize 排在最前", () => {
   it("同样取整、至少 4", () => {
     expect(
       compositeSize(
-        { size: [2, 2], solidLayer: false, passthroughModel: true, fullscreenSize: [1919.6, 2] },
+        { size: [2, 2], solidLayer: false, instanced: false, passthroughModel: true, fullscreenSize: [1919.6, 2] },
         undefined,
       ),
     ).toEqual([1920, 4]);
   });
   it("为 null 时照旧规则", () => {
     expect(
-      compositeSize({ size: [600, 300], solidLayer: false, passthroughModel: false, fullscreenSize: null }, padded),
+      compositeSize(
+        { size: [600, 300], solidLayer: false, instanced: false, passthroughModel: false, fullscreenSize: null },
+        padded,
+      ),
     ).toEqual([48, 40]);
   });
 });

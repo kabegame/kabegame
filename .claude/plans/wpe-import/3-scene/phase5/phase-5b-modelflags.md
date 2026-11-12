@@ -781,8 +781,165 @@ fullscreenlayer 是组合层：没有 effect、cbm 是 0 / 31 时整层不画，
 - 组里 effect 中间 pass 的效果矩阵按局部正交算；组里跟随指针的粒子控制点仍按场景坐标反投影。
 - 无 effect 组的 `groupUpload` 在 cbm 31 时取 additive；组的 effect pass 的 `g_Color4` 给的是组自己的颜色（WPE 是最后一个子层的颜色，语料不读）。
 
-## 步骤 5（提纲，步骤 0 之后补全）
-- **步骤 5 — `instanced`。** 编译材质前合并 `instance.textures` / `combos`；`usertextures` 照报；合成 RT 按纹理图像尺寸（`solidLayer` 已经排除了 instanced）。
+## 步骤 5 — `instanced`
+
+### 思路
+
+instanced 模型是编辑器的「纯色图层」：模型固定是 `{instanced, solidlayer, material: materials/util/solidlayer_instance*.json}`，材质是 translucent 的 `genericimage2` / `4`，槽 0 是 `util/white`（32×32）。对象上的 `instance` 在加载时覆盖材质 pass 的同名键，语料里只用到 `textures`、`combos`、`usertextures` 三个。要做的只有两件事，都在编译期：
+- **材质覆盖。** 编译材质 pass 之前，把 `instance.combos` 合进 pass 的 `combos`，`instance.textures` 按槽合进 `textures`，规则和 effect 实例覆盖相同（`mergeTextures`）。语料 167 个对象的 `textures` 都是一个非空字符串（94 个 `util/white`、73 个工程纹理），`combos` 都是 `{"version": 2}`，和材质本身相同，所以「按槽合并」和「整键替换」在语料上没有区别。`usertextures`（`$mediaThumbnail`、用户属性纹理、`usershortcut`）照报 `material:usertextures`。
+- **两个标志分开。** 现在 `solidLayer = solidlayer && !instanced`，一个字段管两件事：合成 RT 按不按 `size`，以及上屏内缩不内缩。WPE 里这是两回事：内缩只看 `solidlayer` 这一位（`+0x304 & 0x200`），instanced 照样不内缩；合成 RT 按 `size` 时才排除 instanced（`FUN_1402091e0`）。所以 `solidLayer` 改成只表示模型的 `solidlayer`，另加 `instanced`，`compositeSize` 用 `solidLayer && !instanced`。这一处是现有代码的错：instanced 图层现在会按 0.15 texel 内缩。
+
+颜色照常进基础 pass。WPE 强制 `g_Color4 = (1, 1, 1, 1)` 只发生在绑了用户纹理时，而用户纹理照报。
+
+语料 30 张场景里只有 `3810092560` 去掉这两个键后只差两个光标回调（P6），其余 29 张都还有文本对象，所以这一步不解锁场景，价值在于清掉 `model:instanced` 和 `object:instance`。
+
+### 实测（2026-11-12，`p5b-inst2`）
+
+步骤 0 的 `p5b-inst` 只有单 pass effect，32×32 看不出来。补了一个工程（`ignore/p5/b5/gen_b5.py`，抓帧 `A:\p5b\p5b-inst2\`，摘要 `ignore/p5/b5/ana_b5.py`）：
+
+| 图层 | 构造 | WPE |
+|---|---|---|
+| J1 | instanced（`util/white`）`size` 900×1000，挂两 pass 遮罩（pass 1 画进 scale 1 的 fbo，pass 2 上屏） | 合成 RT 与 fbo 都是 32×32（事件 64、82），上屏线性采样 32×32，遮罩变糊；末 pass UV 0–1 |
+| J0 | 对照组：普通 solidlayer，同一个 effect | 合成 RT 与 fbo 都是 900×1000 |
+| J2 | instanced，`instance.textures` 换成补边纹理（纹理 64×64、图像 48×40），挂 kbfx | 合成 RT 48×40（图像尺寸），基础 pass UV 0–0.75 / 0–0.625；末 pass UV 0–1 |
+| J3 | 同 J2 的纹理，没有 effect | 直接上屏，UV 正好 0–0.75 / 0–0.625，不内缩 |
+
+步骤 0 的 `p5b-inst` 事件 135（I2，instanced、无 effect）也是 UV 0–1。
+
+事件号是第一次抓帧 `p5b-inst2-frame192.rdc` 的。那一版的两 pass 遮罩，pass 1 的顶点着色器乘了 `g_ModelViewProjectionMatrix`。WPE 给这种 pass 的几何是 ±1、MVP 是图层的场景 MVP（effect-matrices-REPORT 情况 ②b），所以画成了不到一个像素，J1、J0 的 fbo 全透明，两层在 WPE 里都看不见。RT 尺寸和 UV 不受影响。改成不乘 MVP 的 `kbmaskfs`（同 WPE 自带 effect）后重抓 `A:\p5b\p5b-inst2-v2\`：J1 的 fbo 是 32×32（事件 79），J0 是 900×1000（事件 132），其余尺寸和 UV 与第一次相同，J1 的遮罩上屏后变糊。
+
+### 现状锚点
+
+**a. 能力表照报 `model:instanced`，对象上的 `instance` 当未知键报**（`compile/features.ts`）
+```ts
+const MODEL_FLAGS = new Set([/* … */ "instanced"]);   // 现状：不在 SUPPORTED_MODEL，为 true 时报 model:instanced
+    // checkObjectFeatures 的未知键循环：现状 `instance` 报 object:instance
+      !["alignment", "perspective", "model", "particle", "sound", "text", "light"].includes(key) &&
+```
+
+**b. 一个字段管两件事，材质不看 `instance`**（`compile/bundle.ts`）
+```ts
+    layer.solidLayer = modelFlag(model, "solidlayer") && !modelFlag(model, "instanced"); // 现状：instanced 时连内缩也打开了
+    // …
+    const material = parseMaterial(materialText);
+    for (const [k, pass] of material.passes.entries())
+      layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` })); // 现状：没合 instance
+```
+
+**c. 合成 RT 与内缩都看 `solidLayer`**（`render/graph.ts`）
+```ts
+    : texture && !layer.solidLayer && !layer.passthroughModel   // compositeSize
+  const flat = layer.solidLayer || layer.passthroughModel || layer.fullscreen;   // 内缩
+```
+
+### 点 1 — 能力表（`compile/features.ts`）
+- **修改** `SUPPORTED_MODEL` 加 `instanced`；注释里 `solidlayer` 一条改写成两位分开的说法，新增 `instanced` 一条。
+- **修改** `checkObjectFeatures`：`instance` 不再按未知键报（WPE 只在模型是 instanced 时读它，非 instanced 对象上中性，语料 0 个）。
+- **新增** `checkInstanceFeatures(object, unsupported)`，由 `bundle.ts` 在模型是 instanced 时调用：
+  - `instance` 缺失或不是对象：`model:instanced:instance`（编辑器总会写，语料 0 个，WPE 怎么处理没测）；
+  - 对象 `size` 不是字符串：`model:instanced:size`（WPE 按 `"w h"` 两次 `atof` 读，语料全是字符串）；
+  - `id`：编辑器键，中性；
+  - `textures` 不是非空字符串的数组：`object:instance:textures`；
+  - `combos` 不是对象：`object:instance:combos`（值绑属性由合并后的 `checkPassFeatures` 报 `combo:user-binding`）；
+  - `usertextures` 取值有效：`material:usertextures`；
+  - 其它键：`object:instance:<键>`。
+
+### 点 2 — 编译（`compile/bundle.ts`）
+- **修改** `SceneLayer.solidLayer` 的含义：模型 `solidlayer`（只认 JSON true），不再排除 instanced。
+- **新增** `SceneLayer.instanced: boolean`（模型 `instanced`，只认 JSON true）。
+- **修改** 编译材质：instanced 时每个 pass 先合并再编译：
+```ts
+    // instanced（P5b 步骤 5）：对象的 `instance` 覆盖材质 pass 的同名键（rea-p5-modelflags §6.2），规则同 effect 实例覆盖
+    const instance = layer.instanced ? instanceOverride(object.instance) : null;
+    for (const [k, raw] of material.passes.entries()) {
+      const pass = instance
+        ? { ...raw, combos: { ...raw.combos, ...instance.combos }, textures: mergeTextures(raw.textures, instance.textures) }
+        : raw;
+      layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
+    }
+```
+
+### 点 3 — 渲染图（`render/graph.ts`）
+- **修改** `compositeSize`：`Pick` 加 `instanced`，按 `size` 的条件改成 `solidLayer && !instanced`（`p5b-inst2` 的 J1 32×32、J2 48×40）。
+- `flat` 不改：`solidLayer` 现在对 instanced 也为真，两种上屏都不内缩（J1、J2 末 pass、J3 直接上屏）。注释写清。
+
+### 点 4 — 单测
+- **编译**（`compile/p5b.test.ts` 续写）：
+  - instanced 不报，`solidLayer`、`instanced` 都为真；
+  - `instance.textures` 覆盖槽 0、`combos` 合并；
+  - 照报的各类键；非 instanced 对象上的 `instance` 中性；
+  - `p3c.test.ts`「`instanced` 另报不支持」改成新的期望。
+- **渲染图**（`render/p5b.test.ts` 续写）：
+  - `compositeSize`：instanced + `util/white` 32×32、补边纹理取图像尺寸、普通 solidlayer 取 `size`；
+  - `planLayer`：instanced 的直接上屏与末 pass 都不内缩（真值 `p5b-inst2` 事件 214、102、197 的 UV）；fbo 尺寸跟合成 RT 是 32×32（事件 82）。
+- 其余手写 `SceneLayer` 的测试只补 `instanced: false`。
+
+### 实施方式
+
+同前几步：HEAD 快照 `ignore/p5/b5/head` 与 `ov`，子代理在 `ov` 里实现，补丁三方合并进工作区；提交时只暂存自己的文件，并核对暂存的内容和测过的逐字节相同。
+
+### 验收
+1. 子代理：快照里 tsc、vitest、Prettier。
+2. Claude：
+   - 变异检查：不合并 `instance`；instanced 的合成 RT 按 `size`；instanced 照旧内缩；`model:instanced` 照报；`usertextures` 不报；`checkInstanceFeatures` 不调；
+   - 临时索引上「HEAD + 补丁」的 tsc / vitest。
+3. 语料：30 张去掉 `model:instanced`、`object:instance`，新增的键逐张列出；干净场景数不变。
+4. 基线：10 张 × 三档画面哈希不变。
+5. 和 WPE 整帧比：
+   - 确定性工程：`p5b-inst`、`p5b-inst2`；
+   - 真实样本：`3810092560`（全屏 instanced 纯色背景 + 一批不可见的 instanced 点击区），强制渲染后整帧比。
+
+### 步骤 5 实施记录（2026-11-12）
+
+子代理在 `ignore/p5/b5/ov`（HEAD `920b5548` 快照）里实现，补丁 `ignore/p5/b5/step5.patch`。
+
+**改动：** 3 个产品文件，照点 1–3 落地。
+- `features.ts`：
+  - `instanced` 进支持表；
+  - `checkObjectFeatures` 不再把 `instance` 当未知键；
+  - 新增 `checkInstanceFeatures`，规则同点 1。另外三条：`instance` 里值为 null 的键当缺键（同 `checkParticleInstance`）；`textures` 是空数组不报（不覆盖任何槽）；`size` 缺键也算「不是字符串」。
+- `bundle.ts`：`solidLayer` 只表示模型 `solidlayer`，新增 `instanced`；instanced 时调 `checkInstanceFeatures`，并按 `instanceOverride` 合并。`combos` 不是对象、`textures` 不是数组时只报不合并，`textures` 里的 null 与非字符串槽保留材质原来的那张。
+- `graph.ts`：`compositeSize` 的条件改成 `solidLayer && !instanced`；`flat` 不变，注释写清 instanced 也不内缩。
+
+测试：
+- `compile/p5b.test.ts` 新增 15 个，`render/p5b.test.ts` 新增 4 个；
+- `p3c.test.ts`、`p5a.test.ts`、`p5b.test.ts` 共 3 处期望从「报 `model:instanced`」改成新规则；
+- 其余 13 个测试文件只补 `instanced: false`。
+
+**合并：** 快照之后 HEAD 又进了 P6b 1c、P7d 步骤 1、P4e 步骤 3 三个提交，改到了 `bundle.ts`、`features.ts`。
+- 这两个文件用 `git merge-file` 三方合并，没有冲突；其余 17 个文件工作区等于 HEAD，直接用快照的结果。
+- 新 HEAD 没有新增要补 `instanced` 的手写图层夹具。
+- 合并之后，P7d 步骤 2（`g_LayerModelMatrix`）在工作区改了 `bundle.ts`、`features.ts`，和本步骤的改动不重叠，并在提交前先提交了（`8dcd01aa`，只含它自己的块）。这两个文件在新 HEAD 上再做一次三方合并（`ignore/p5/b5/merge2/`），没有冲突，结果和工作区逐字节相同。测过的树记在 `ignore/p5/b5/tested_tree2.txt`（19 个文件的 blob）。
+
+**验收：**
+1. **检查：**
+   - 子代理快照：tsc 0，vitest 1760 过、0 败（不带语料）；
+   - Claude 在快照上带语料跑：1966 过、1 败（`3830255100: 219 次请求`，HEAD 上同样失败）；
+   - 合并后的工作区（当时只有本步骤的改动）：tsc 0，vitest 2020 过、1 败（同一条）；
+   - 「HEAD `69214a05` + 本步骤」用临时索引导出：tsc 0，vitest 1789 过、0 败；
+   - 「HEAD `8dcd01aa`（P7d 步骤 2）+ 本步骤」再导出一次：tsc 0，vitest 1799 过、0 败；语料差异和上面相同（干净 47 → 47）；
+   - Prettier 通过。
+2. **变异：** 8 处全部检出（`ignore/p5/b5/mutate_s5.py`）：
+   - 不合并 instance；不合并 combos；instanced 的合成 RT 按 size；instanced 照旧内缩；
+   - `model:instanced` 照报；`usertextures` 不报；不调 `checkInstanceFeatures`；`instance` 又当未知键报。
+3. **语料**（`ignore/p5/b5/out/corpus-diff.txt`）：
+   - 30 张都去掉了 `model:instanced`、`object:instance`；
+   - 9 张新增 `material:usertextures`（它们的 instance 带用户纹理）；
+   - 没有出现 `model:instanced:*`、`object:instance:*`；
+   - 干净场景 46 → 46。`3810092560` 剩两个光标回调（P6）。
+4. **画面哈希：** 10 张 × 3 档和改动前的基线全部相同（宿主 `index-DgKR6pv7.js` → `index-DbLm7Amp.js`）。改动前的基线和步骤 4 的也相同。
+5. **和 WPE 整帧比：**
+   - `p5b-inst`（步骤 0 的工程，帧 180）：0 差异；
+   - `p5b-inst2`（修正后的 v2，帧 194）：0 差异，J1 遮罩变糊的程度一致；
+   - `3810092560`：按 WPE 日志回放到帧 273，2560×1440 缩到 1920×1080 比。差异只在细线条的边缘（缩放与 waterwaves 采样，最大 101、平均 4.0），位置一致；instanced 白色背景露出的地方是 0。
+6. 测试工程（3 个）已移除。
+
+**未实测清单（续）：**
+- `instance.textures` 的合并规则：按槽合并还是整键替换，语料里两种结果相同（都是一个非空字符串，材质也只有一个槽）。null 槽、比材质短的数组在 WPE 里什么样没测。
+- `instance.combos` 同理：语料都是 `{"version": 2}`，和材质相同。
+- `instance` 缺失、对象 `size` 不是字符串：照报，WPE 怎么处理没测。
+- 用户纹理（`usertextures`、`usertexturereference`）和它带来的 `g_Color4` 强制为 1：照报 `material:usertextures`。
+- `p5b-inst2` 第一版暴露的 effect 中间 pass 矩阵（情况 ②b：几何 ±1、MVP = 图层 MVP）：我们给的是单位阵，所以那一版我们照画、WPE 看不见。这是 effect-matrices-REPORT 的结论，P7d 在做，不属于本步骤。
 
 每步的回归同 P5a：语料前后比（`kbp corpus diff`），原来能渲染的场景画面哈希不变（基线 10 张 × 三档后处理），确定性工程和 WPE 整帧比。
 

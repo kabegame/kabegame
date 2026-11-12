@@ -206,6 +206,7 @@ function layerOf(particle: SceneParticle): SceneLayer {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: false,

@@ -119,6 +119,7 @@ function synthetic(
     size: [64, 32],
     visibleBound: true,
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: false,

@@ -20,6 +20,7 @@ import { constantTargetFields, materialSlots } from "./materialValues";
 import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import {
   checkEffectFeatures,
+  checkInstanceFeatures,
   checkModelFeatures,
   checkParticleFeatures,
   checkParticleInstance,
@@ -350,8 +351,17 @@ export interface SceneLayer {
    * 移动）。绘制时只用根对象的值（`render/parallax.ts`），子对象自己的不参与；只在 `general.cameraparallax` 打开时起作用。
    */
   parallaxDepth: number[];
-  /** 模型 `solidlayer` 且不是 `instanced`：合成 RT 按 `size`，不看纹理（B5）。 */
+  /**
+   * 模型 `solidlayer`（只认 JSON true）：上屏（直接上屏与末 pass）不内缩（WPE `+0x304 & 0x200`）；不是 `instanced` 时合成 RT 还按
+   * `size`、不看纹理（B5 `FUN_1402091e0`）。P5b 步骤 5 起不再排除 instanced（rea-p5-modelflags，p5-REPORT `p5b-inst2`）。
+   */
   solidLayer: boolean;
+  /**
+   * 模型 `instanced`（只认 JSON true，P5b 步骤 5，p5-REPORT `p5b-inst`、`p5b-inst2`）：编辑器的「纯色图层」。对象的 `instance` 在编译材质
+   * 前覆盖 pass 的 `combos` 与 `textures`；合成 RT 按槽 0 纹理的图像尺寸，不按 `size`（`render/graph.ts` 的 `compositeSize`）。
+   * 没有图像模型的图层为 false。
+   */
+  instanced: boolean;
   /**
    * 模型 `nopadding`（只认 JSON true，P5b 步骤 1）：直接上屏的四边形不内缩，带 effect 时末 pass 照旧内缩（p5-REPORT `p5b-nopad`）。
    * 没有图像模型的图层为 false。
@@ -619,6 +629,21 @@ function mergeTextures(base: unknown[] | undefined, override: unknown[] | undefi
     if (name) slots[slot] = name;
   }
   return slots;
+}
+/**
+ * instanced 对象的 `instance`（P5b 步骤 5）里参与合并的两个键：`combos` 是对象才合并、`textures` 是数组才按槽合并；整个不是对象时
+ * 为 null（不合并）。取值不合规的由 `checkInstanceFeatures` 照报。
+ */
+function instanceOverride(raw: unknown): Pick<MaterialPass, "combos" | "textures"> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { combos, textures } = raw as Record<string, unknown>;
+  return {
+    combos:
+      combos && typeof combos === "object" && !Array.isArray(combos)
+        ? (combos as Record<string, number | boolean>)
+        : undefined,
+    textures: Array.isArray(textures) ? textures : undefined,
+  };
 }
 export { shaderUniforms };
 
@@ -1249,6 +1274,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       visibleBound: isUserBinding(object.visible),
       parallaxDepth: numbers(bindings.bind(object.parallaxDepth, properties, at("parallaxDepth")), [1, 1]),
       solidLayer: false,
+      instanced: false,
       noPadding: false,
       perspective: false,
       passthroughModel: false,
@@ -1293,7 +1319,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     const model = parseModel(modelText);
     checkModelFeatures(model, unsupported);
-    layer.solidLayer = modelFlag(model, "solidlayer") && !modelFlag(model, "instanced");
+    // 两个标志分开（P5b 步骤 5，p5-REPORT `p5b-inst2`）：内缩只看 solidlayer，合成 RT 按 size 才排除 instanced（`compositeSize`）
+    layer.solidLayer = modelFlag(model, "solidlayer");
+    layer.instanced = modelFlag(model, "instanced");
+    if (layer.instanced) checkInstanceFeatures(object, unsupported);
     layer.noPadding = modelFlag(model, "nopadding");
     // 只认 JSON true：绑属性、挂脚本等由能力表报 `object:perspective`
     layer.perspective = object.perspective === true;
@@ -1321,8 +1350,19 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       continue;
     }
     const material = parseMaterial(materialText);
-    for (const [k, pass] of material.passes.entries())
+    // instanced（P5b 步骤 5）：对象的 `instance` 覆盖材质 pass 的同名键（rea-p5-modelflags §6.2），规则同 effect 实例覆盖：`combos`
+    // 合并、`textures` 按槽合并（null 与非字符串的槽保留材质自己的）。`instance` 不是对象时不合并（能力表报 `model:instanced:instance`）
+    const instance = layer.instanced ? instanceOverride(object.instance) : null;
+    for (const [k, raw] of material.passes.entries()) {
+      const pass: MaterialPass = instance
+        ? {
+            ...raw,
+            combos: { ...raw.combos, ...instance.combos },
+            textures: mergeTextures(raw.textures, instance.textures),
+          }
+        : raw;
       layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
+    }
     // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸（`projectlayer` 取正交投影宽高，
     // 步骤 2）。deep_space 的 Background 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
     const base = layer.passes[0]?.textures[0];

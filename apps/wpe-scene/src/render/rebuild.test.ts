@@ -319,6 +319,7 @@ function layer(object: number, effects: SceneEffect[], extra: Partial<SceneLayer
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: false,

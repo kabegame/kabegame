@@ -1,7 +1,9 @@
 /**
- * P5b 步骤 1 的渲染侧单测（`.claude/plans/wpe-import/3-scene/phase5/phase-5b-modelflags.md`「步骤 1」）：
+ * P5b 步骤 1 与步骤 5 的渲染侧单测（`.claude/plans/wpe-import/3-scene/phase5/phase-5b-modelflags.md`「步骤 1」「步骤 5」）：
  * - UV 内缩分两种（`planLayer`）：`noPadding` 只关直接上屏，末 pass 与 passthrough 上屏照旧内缩（p5-REPORT `p5b-nopad`）；
- * - 透视图层（`GpuScene.uniformValues`）：画到场景目标的绘制换透视粒子那一份视图投影，视差平移在投影之前（`p5b-persp*`）。
+ * - 透视图层（`GpuScene.uniformValues`）：画到场景目标的绘制换透视粒子那一份视图投影，视差平移在投影之前（`p5b-persp*`）；
+ * - instanced（步骤 5，p5-REPORT `p5b-inst2`）：合成 RT 与 fbo 按槽 0 纹理的图像尺寸、不按 `size`（`compositeSize`），两种上屏都
+ *   不内缩（同 solidlayer）。
  *
  * 透视矩阵的期望值是 WPE 抓帧里各上屏绘制的裁剪坐标（`ignore/p5/b1/persp_fixture.json`，由 `fixture_persp.py` 从
  * `ignore/p5/b0/out/dump_b.json` 取出，float32 原值）。工程 `p5b-persp`（`ignore/p5/b0/gen_b.py` 的 `p_persp`）：正交 1920×1080；
@@ -17,7 +19,7 @@ import type { SceneBundle, SceneEffect, SceneEffectStep, SceneLayer, ScenePass, 
 import { particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { TranslateResult } from "../wpesl2wgsl";
-import { planLayer, type DrawStep, type LayerPlan, type LayerStep } from "./graph";
+import { compositeSize, fboSize, planLayer, type DrawStep, type LayerPlan, type LayerStep } from "./graph";
 import { particleViewProjection, sceneViewProjection, uvInset, worldMatrixOf } from "./layout";
 import { multiply, transformPoint, translation, type Mat4 } from "./math";
 import { parallaxOffset } from "./parallax";
@@ -78,6 +80,7 @@ function layer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer {
     visibleBound: false,
     parallaxDepth: [1, 1],
     solidLayer: false,
+    instanced: false,
     noPadding: false,
     perspective: false,
     passthroughModel: false,
@@ -164,6 +167,64 @@ describe("UV 内缩分两种（p5b-nopad）", () => {
   it("不带标志：两种都内缩", () => {
     expect(insets(planLayer(layer(0), textures))).toEqual({ direct: e });
     expect(insets(planLayer(layer(0, { effects: [effect(0)] }), textures))).toEqual({ base: [0, 0], final: e });
+  });
+});
+
+// ———— instanced：和普通 solidlayer 只差合成 RT 尺寸（p5b-inst2） ————
+
+describe("instanced 的合成 RT 与上屏（P5b 步骤 5，p5b-inst2）", () => {
+  /** `util/white`（32×32）与 J2 / J3 的补边纹理（纹理 64×64、图像 48×40）。 */
+  const white = texture(32, 32);
+  const padded = texture(48, 40, 64, 64);
+  /** J1 / J2 / J3：instanced 模型同时是 solidlayer，`size` 900×1000。 */
+  const instanced = (extra: Partial<SceneLayer> = {}) =>
+    layer(0, { size: [900, 1000], solidLayer: true, instanced: true, ...extra });
+  /** 两 pass 遮罩：pass 1 画进 scale 1 的 fbo，pass 2 上屏（`gen_b5.py` 的 effect）。 */
+  const mask = (): SceneEffect => ({
+    ...effect(0, 2),
+    fbos: [{ name: "_rt_Half", format: "rgba8888", scale: 1, unique: false, repeat: false }],
+  });
+
+  it("compositeSize：instanced 取槽 0 纹理的图像尺寸（J1 util/white 32×32、J2 48×40），普通 solidlayer（J0）取 size", () => {
+    expect(compositeSize(instanced(), white)).toEqual([32, 32]);
+    expect(compositeSize(instanced(), padded)).toEqual([48, 40]);
+    expect(compositeSize(instanced({ instanced: false }), white)).toEqual([900, 1000]);
+    expect(compositeSize(instanced({ instanced: false }), padded)).toEqual([900, 1000]);
+    // 没有纹理时照旧取 size
+    expect(compositeSize(instanced(), undefined)).toEqual([900, 1000]);
+  });
+
+  it("planLayer：J1 的合成 RT 与 scale 1 的 fbo 都是 32×32（事件 64、82）；对照组 J0 都是 900×1000", () => {
+    const j1 = planLayer(instanced({ effects: [mask()] }), [white]);
+    expect(j1.composite).toMatchObject({ width: 32, height: 32 });
+    expect(fboSize(mask().fbos[0], [j1.composite!.width, j1.composite!.height])).toEqual([32, 32]);
+    const j0 = planLayer(instanced({ instanced: false, effects: [mask()] }), [white]);
+    expect(j0.composite).toMatchObject({ width: 900, height: 1000 });
+    expect(fboSize(mask().fbos[0], [j0.composite!.width, j0.composite!.height])).toEqual([900, 1000]);
+  });
+
+  it("planLayer：带 effect 时末 pass 不内缩、UV 0–1（J1 事件 102、J2 事件 197），J2 的合成 RT 48×40", () => {
+    for (const [base, effects] of [
+      [white, [mask()]],
+      [padded, [effect(0)]],
+    ] as const) {
+      const plan = planLayer(instanced({ effects: [...effects] }), [base]);
+      const final = draws(plan.steps).find((step) => step.role === "final")!;
+      expect(final.inset).toEqual([0, 0]);
+      expect(final.uv).toEqual([1, 1]);
+    }
+    expect(planLayer(instanced({ effects: [effect(0)] }), [padded]).composite).toMatchObject({ width: 48, height: 40 });
+  });
+
+  it("planLayer：没有 effect 时直接上屏不内缩，UV 是图像 / 纹理（J3 事件 214：0–0.75、0–0.625；p5b-inst 事件 135：0–1）", () => {
+    const j3 = planLayer(instanced(), [padded]);
+    expect(j3.composite).toBeNull();
+    const [direct] = draws(j3.steps);
+    expect(direct).toMatchObject({ role: "direct", uv: [0.75, 0.625] });
+    expect(direct.inset).toEqual([0, 0]);
+    const i2 = draws(planLayer(instanced(), [white]).steps)[0];
+    expect(i2).toMatchObject({ role: "direct", uv: [1, 1] });
+    expect(i2.inset).toEqual([0, 0]);
   });
 });
 
