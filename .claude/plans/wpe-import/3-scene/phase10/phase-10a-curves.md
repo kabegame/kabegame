@@ -280,4 +280,24 @@ export function scanValue(value: unknown, unsupported: Set<string>): void {
 
 ## 实施记录
 
-（空）
+### 步骤 1 — 求值模块（2026-11-14）
+
+代理实现，主会话独立验收。新建 `apps/wpe-scene/src/animation/` 的 `curve.ts`、`clock.ts`、`types.ts` 与两个测试，不改任何已有文件。
+
+- **实现**：照读码第 14 节逐位写，float32 用 `Math.fround`，括号即汇编的运算顺序。
+  - `curve.ts`：`parseChannel`、`applyWraploop`、`Channel`（整数帧缓存）、`frameValues`；
+  - `clock.ts`：`AnimationClock` 的 `advance`（事件收集）与 `play` / `pause` / `stop` / `isPlaying` / `getFrame` / `setFrame`；
+  - `types.ts`：`SceneAnimation` 及时钟参数、事件的类型。
+- **单测**：50 个用例。期望值由读码模型算出，硬编码成 float32 数、逐位比。代理把 `fround` 换成恒等函数时 40 个失败。
+- **对照**：`ignore/p10/c1/`（`cases.json`、`kfbase.py`、`wpe.test.ts`）。46 条用例逐帧对 WPE 抓帧求值，每一行的预测值都和读码模型 `kfmodel.py` 逐位相同，残差也一样大（最大的是陡段的 `oneside` 0.021 像素、`three` 0.015 像素，来自拿 `g_Time` 近似 float32 时钟）。
+- **主会话验收**：
+  - tsc 退出码 0；vitest 50/50；Prettier 干净；换行符 LF；`git status` 只有新目录；
+  - 对照重跑通过；
+  - 逐行对读码第 2、3、14 节审了代码；
+  - 自做三处变异：反解容差 0.01 → 0.001 有 23 个失败，`wraploop` 清掉残留切线有 1 个失败，`mirror` 反射方向写反有 2 个失败；还原后逐字节相同。
+- **和读码不同的实现取舍**（代理报告，语义不变）：
+  - `advance` 入口先 `fround(d)`；
+  - `setFrame` 的参数先转 float32 再乘（由 `mulss` 推出，P10b 拿 `ctl` 日志核）；
+  - 缓存扩容按「至少到 i + 1、否则翻倍」；
+  - `AnimationEventRecord` 定为 `{ animation, json }`，`animation` 是时钟主人的下标。
+- **工具注意**：`ignore/p10/c1` 的 vitest 要在 `D:\` 开头的工作目录里跑（PowerShell，或 `cd D:/Codes/kabegame`）。Git Bash 的工作目录是小写 `d:`，vitest 会把 `vitest` 加载成两份，报 `Cannot read properties of undefined (reading 'config')`。
