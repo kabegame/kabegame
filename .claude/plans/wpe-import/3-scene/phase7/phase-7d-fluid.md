@@ -353,7 +353,11 @@ const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visi
 4. **流体的验收：** 三层。结构对照逐项相同；单步隔离只差半精度舍入；长程统计落在 WPE 自身两次运行之间。单步隔离要新做一个 dev 探针入口。
 5. **`g_LayerModelMatrix` 在基础 pass 里：** 照报（WPE 读到的是别的图层的残留值），只在 effect pass 支持。
 6. **fbo `clear` 写 3 个分量：** 照 WPE 不清（语料 0 处）。
-7. **风险 4 的效果矩阵：** 另派代理核对（读码、实测、语料影响），出报告，不随 P7d 改。
+7. **风险 4 的效果矩阵：** 另派代理核对（读码、实测、语料影响），出报告，不随 P7d 改。核对结果见 [effect-matrices-REPORT](../effect-matrices-REPORT.md)：语料 0 处受影响，记成 PLAN「按需」里的后续项（2026-11-12 用户）。
+
+**步骤 1 之后定的（2026-11-12 用户，按推荐）：**
+8. **「被读」的判据用 naga 的 `compact`：** wasm 多约 70 KB，不自己写追踪器。
+9. **共享 wasm 在 P7d 收尾时重建：** 在那之前前端的 wasm 不带 `unused`，宿主行为与现在相同。
 
 ## 风险
 
@@ -383,3 +387,45 @@ const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visi
 我的失误：
 - 第一版流体测试工程只留了 assets 里的材质，WPE 找不到，全部 effect pass 换成了缺省着色器（日志有 34 行材质报错）。第一轮条件抓帧作废，改成工程根下放现版材质后重抓。是从各 pass 着色器哈希全部相同发现的。
 - 读码代理两次卡死（10 分钟无进展被看门狗停掉）：第一次什么都没留下；第二次改成边查边写，报告在卡死前已写完四问。
+
+### 步骤 1 — 翻译器标出没被读到的 uniform（2026-11-12）
+
+实现交给代理，我独立验收。
+
+**改动：**
+- 翻译器：
+  - `naga_stage.rs` 每个阶段取完 WGSL 与布局后，对模块做 naga 的 `compact`（`KeepUnused::No`），再收集剩下的块成员 `AccessIndex`；
+  - `lib.rs` 合两个阶段写 `Uniform.unused`（拆开的两半只看自己的阶段，几何段算顶点）；
+  - README 新增「没被读的 uniform（`unused`）」一节。
+- 宿主：
+  - `wpesl2wgsl/index.ts` 的类型；
+  - `materialValues.ts`：`used`，合并类型取读到的那一半；
+  - `shader.ts`：槽位只数 `used`；
+  - `features.ts`：程序检查跳过 `unused`；
+  - 新增 10 个用例（`materialValues.test.ts`、`stageUniforms.test.ts`、`p2a.test.ts`）。
+- wasm `ignore/p7d/wasm/step1.wasm`，`bin/wasm` 与前端里的都没动。
+
+**和子计划不同的地方：** 子计划写的是「在可达函数的表达式表里找 `AccessIndex`」。但 GLSL 前端会在每个函数开头预先放好全部块成员的表达式，它们只出现在 `Emit` 里，直接扫会把每个成员都算成被读，变异检查也证实了这一点。所以改用 naga 公开的 `compact` 做活跃性分析，没有改 naga。代价是 wasm 多了约 70 KB（1,670,906 → 1,741,157 字节，+4.2%）。也可以自己写一个从语句追到表达式的追踪器，约 150 行。
+
+**验收（我自己重跑）：**
+- 翻译器：
+  - 单测 77 个全过（新增 6 个；代理另做了变异：去掉 `compact` 后 5 个新测试失败）；
+  - 请求夹具 798 / 798，ok 与夹具不一致 0；
+  - 逐字节基线 `p7c-8bddb0a1` 相同 4020、变了 0、新通过 0、新失败 0；
+  - WPE 安装目录 161/167，几何门槛 27/27；
+  - 按工作区源码重编的 wasm 与 `step1.wasm` 逐字节相同（`d3ed5a82…`）。
+- 宿主：HEAD `920b5548` 的产品源码快照两份，`snap-base2` 配现在的 wasm，`snap-step1` 换上我们的 7 个文件与 `step1.wasm`：
+  - tsc 都是 0 错误；
+  - vitest 1741 → 1751 个用例全过（74 个文件）；
+  - 变异检查：去掉 `features.ts` 的 `!uniform.unused`，新用例失败。代理另做了 3 个宿主变异：不跳过没被读的格、合并类型照旧取片元、槽位不看 `used`，分别有 4、6、2 个用例失败。
+- 语料（175 个样本，含 `p7d-fluid`、`p7d-uni`，`ignore/p7d/out/diff-step1.txt`）：
+  - 只去掉预期的 6 个键，没有新增的键，干净的场景 46 → 46：
+    - `constant:mixed-type:Reference resolution` 3 张；
+    - `constant:slots` 2 张，加上 `p7d-fluid`；
+    - `uniform:g_FrameTime` 1 张。
+  - `p7d-uni` 里真实的同键不同类型 `constant:mixed-type:k_m` 照报。
+- 取值（`ignore/p7d/record_diff.mjs`，新 wasm 重放 798 个请求，比较改动前后各键的 setter 形状）：只有 `frame_builder_by_gariam` 的 `Reference resolution` 变了（顶点一半改按 `vec2`、缺省 `"512 512"`）。它所在的两张场景都不能渲染，所以能渲染的场景取值不变。
+- 统计：7868 格里 2651 格标了 `unused`。比步骤 0 的语法判据多出 569 格，都是只在没被调用的函数里读的。
+- Prettier 通过。
+
+工具：盘符小写（`d:\`）时 `kbp snapshot export --vitest` 会加载两份 vitest，全部报 `reading 'config'`；在大写盘符下跑就正常。

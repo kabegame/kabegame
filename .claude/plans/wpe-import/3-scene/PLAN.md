@@ -783,6 +783,12 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 ## 按需
 
 - 本机语料现在每个能力都有归属。以后的新样本用到这些节都没有的能力，拿到样本再排，每类各自成节。
+- **effect pass 的 final 段矩阵**（2026-11-12 P7d 期间查明，用户定为后续项）：
+  - WPE 按 final 标志分矩阵。最后一个启用 effect 里，最后一个 `compose` 之后的 pass 都用上屏那套：MVP 是图层 MVP、模型矩阵是 `W`、效果矩阵不缩放。
+  - 我们（P2a）把其中非最后的 pass 当普通 effect pass：单位 MVP、缩放过的效果矩阵。
+  - 另有几处小差异：透视图层换相机的范围、非 final pass 的 `g_ViewProjectionMatrix`、`g_EffectModelMatrixInverse`（WPE 没有这个内置名）。
+  - 语料 0 处受影响：150 个这类 pass 都不读这些矩阵。等出现受影响的 effect 再做。
+  - 规则、证据与修法见 [effect-matrices-REPORT](effect-matrices-REPORT.md)；工程 `ignore/p7d/proj/p7d-mvp`，抓帧 `A:\p7d\mvp`。
 
 ## 旧名对照表（D15）
 

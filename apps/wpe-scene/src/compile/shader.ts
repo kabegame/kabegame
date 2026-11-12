@@ -25,7 +25,8 @@ export interface ShaderTextureSlot {
  *
  * `key` / `bindings` 给出时把每处用户绑定登记成 `constant` 目标（P3a，就地刷新 uniform 块）：目标带整组名字与各格的取值方式
  * （`members`），就地写用同一个 setter 整体重写（`render/state.ts`），单测核对与整场重编译一致。
- * 复刻不了的情况写进 `issues`（`constant:mixed-type:<键>`、单个 pass 超过 48 个 float 的 `constant:slots`）。
+ * 复刻不了的情况写进 `issues`（`constant:mixed-type:<键>`、单个 pass 被读的键超过 48 个 float 的 `constant:slots`；没被读的键
+ * 由翻译器反射标 `unused`，WPE 不给它分配槽位）。
  */
 export function shaderUniforms(
   result: TranslateResult | null,
@@ -57,8 +58,8 @@ export function shaderUniforms(
     }
     for (const member of slot.members)
       values[member.name] = memberValue(member, materialStorage(member, source, property, user, properties));
-    // WPE 每个键一份存储；拆开的两半共用片元那一半的
-    floats += slot.members[0]?.components ?? 0;
+    // WPE 每个键一份存储（拆开的两半共用主格那一半的），只给被使用的键分配槽位（p7-REPORT「P7d 的实测」`kbslot`）
+    if (slot.used) floats += slot.members[0]?.components ?? 0;
   }
   if (floats > MATERIAL_SLOT_FLOATS) issues?.add("constant:slots");
   return values;

@@ -174,6 +174,12 @@ pub struct Uniform {
     /// 拆分后改了名的那一格（`kb_vs_<名字>` / `kb_fs_<名字>`）：着色器里写的原名。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original: Option<String>,
+    /// 两个阶段入口可达的代码都没读这一格（naga IR 里没有语句用到对 uniform 块这个成员的 `AccessIndex`，见
+    /// `naga_stage::read_members`）；拆开的两半（带 `stage`）只看自己的阶段，几何段拼进顶点段后按顶点算。
+    /// WPE 只认反射里被使用的 uniform：没被使用的不进常量缓冲、不分配材质常量槽位，两阶段同键时合并类型取读到它的阶段
+    /// （vector-constant-REPORT 2.1，p7-REPORT「P7d 的实测」）。为假时不输出，字段缺失当被读。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unused: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -459,7 +465,14 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         .uniforms
         .iter()
         .filter_map(|uniform| {
-            let layout = block.get(&rewrite::block_member_name(uniform))?;
+            let member = rewrite::block_member_name(uniform);
+            let layout = block.get(&member)?;
+            // 拆开的两半只给自己的阶段用，只看自己的阶段；合并的与只在一个阶段声明的，两个阶段都没读才算没读
+            let read = match uniform.stage {
+                Some(Stage::Vertex | Stage::Geometry) => vs.read.contains(&member),
+                Some(Stage::Fragment) => fs.read.contains(&member),
+                None => vs.read.contains(&member) || fs.read.contains(&member),
+            };
             Some(Uniform {
                 name: uniform.name.clone(),
                 ty: layout.ty.clone(),
@@ -471,6 +484,7 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
                 meta: uniform.meta.clone(),
                 stage: uniform.stage,
                 original: uniform.original.clone(),
+                unused: !read,
             })
         })
         .collect();
@@ -1306,5 +1320,150 @@ void main() {
         let result = narrow("varying vec4 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord.zw, 0.0, 1.0); }");
         assert!(!result.ok);
         assert_eq!(result.phase, Some("parse"), "{result:#?}");
+    }
+
+    // ---- P7d 步骤 1：反射的 `unused` ----
+
+    /// 只有位置与纹理坐标的顶点段，不读任何 uniform。
+    const PLAIN_VERT: &str = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }";
+
+    fn translate_ok(vertex: &str, fragment: &str) -> TranslateResult {
+        let result = translate(&TranslateRequest {
+            vertex: vertex.into(),
+            fragment: fragment.into(),
+            ..TranslateRequest::default()
+        });
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        result
+    }
+
+    /// 按块里的顺序列出（名字, 拆开时的阶段, 没被读）。
+    fn unused_flags(result: &TranslateResult) -> Vec<(&str, Option<Stage>, bool)> {
+        result
+            .uniforms
+            .iter()
+            .map(|u| (u.name.as_str(), u.stage, u.unused))
+            .collect()
+    }
+
+    /// 被读（直接读、经两层调用读、补齐数组的下标读）的不标；只在关掉的 `#if` 里、只在没被调用的函数里、只在 `return`
+    /// 之后、只声明的都标。GLSL 前端给每个函数开头都放了全部块成员的表达式，这里的辅助函数都会带上它们，不能因此算被读。
+    #[test]
+    fn unused_marks_uniforms_no_reachable_code_reads() {
+        let fragment = "uniform float u_Read; // {\"material\":\"read\"}
+uniform float u_Chain; // {\"material\":\"chain\"}
+uniform float u_Off; // {\"material\":\"off\"}
+uniform float u_Dead; // {\"material\":\"dead\"}
+uniform float u_After; // {\"material\":\"after\"}
+uniform vec2 u_Never; // {\"material\":\"never\"}
+uniform float g_Bars[4];
+uniform float g_Weights[4];
+varying vec2 v_TexCoord;
+float inner() { return u_Chain; }
+float outer() { return inner() * 2.0; }
+float orphan() { return u_Dead; }
+float early() { return 1.0; return u_After; }
+void main() {
+	float x = u_Read + outer() + early() + g_Weights[2];
+#if 0
+	x += u_Off;
+#endif
+	gl_FragColor = vec4(x, v_TexCoord, 1.0);
+}
+";
+        let result = translate_ok(PLAIN_VERT, fragment);
+        assert_eq!(
+            unused_flags(&result),
+            [
+                ("u_Read", None, false),
+                ("u_Chain", None, false),
+                ("u_Off", None, true),
+                ("u_Dead", None, true),
+                ("u_After", None, true),
+                ("u_Never", None, true),
+                // 补齐数组的还原函数 kb_load_* 两阶段都生成，只有被调用的那个算读
+                ("g_Bars", None, true),
+                ("g_Weights", None, false),
+            ]
+        );
+        // 被读的不输出这个字段，没被读的是 true
+        let json = serde_json::to_value(&result.uniforms).unwrap();
+        assert!(json[0].get("unused").is_none(), "{json}");
+        assert_eq!(json[2]["unused"], true);
+        // 只改反射：WGSL 与不标 unused 时相同（块照旧是全部成员）
+        let wgsl = result.fragment.as_ref().unwrap().wgsl.as_deref().unwrap();
+        assert!(wgsl.contains("u_Never: vec2<f32>"), "{wgsl}");
+    }
+
+    /// 合并的（两阶段同名同来源）与只在一个阶段声明的：两个阶段都没读才标。
+    #[test]
+    fn unused_merged_needs_both_stages_unread() {
+        let vertex = "uniform float g_Time;\nuniform float u_Both; // {\"material\":\"both\"}\nuniform float u_Vs; // {\"material\":\"vs\"}\nattribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position * u_Vs, 1.0); }";
+        let fragment = "uniform float g_Time;\nuniform float u_Both; // {\"material\":\"both\"}\nuniform float u_Fs; // {\"material\":\"fs\"}\nvoid main() { gl_FragColor = vec4(g_Time); }";
+        let result = translate_ok(vertex, fragment);
+        assert_eq!(
+            unused_flags(&result),
+            [
+                ("g_Time", None, false),
+                ("u_Both", None, true),
+                ("u_Vs", None, false),
+                ("u_Fs", None, true),
+            ]
+        );
+    }
+
+    /// 拆开的两半只看自己的阶段：另一个阶段读的是另一格，不算这一格被读。
+    #[test]
+    fn unused_split_halves_follow_their_own_stage() {
+        let pair = |vs_reads: bool, fs_reads: bool| {
+            let vertex = format!(
+                "uniform float g_Speed; // {{\"material\":\"speed\"}}\nuniform vec2 u_Res; // {{\"material\":\"res\"}}\nattribute vec3 a_Position;\nvoid main() {{ gl_Position = vec4(a_Position{}, 1.0); }}",
+                if vs_reads { " * g_Speed * u_Res.y" } else { "" }
+            );
+            let fragment = format!(
+                "uniform float g_Speed; // {{\"material\":\"speeduv\"}}\nuniform float u_Res; // {{\"material\":\"res\"}}\nvoid main() {{ gl_FragColor = vec4({}); }}",
+                if fs_reads { "g_Speed + u_Res" } else { "1.0" }
+            );
+            translate_ok(&vertex, &fragment)
+        };
+        let vs = Some(Stage::Vertex);
+        let fs = Some(Stage::Fragment);
+        // 键不同（g_Speed）与同键不同类型（u_Res，frame_builder 的形状）都拆
+        assert_eq!(
+            unused_flags(&pair(true, false)),
+            [
+                ("g_Speed", vs, false),
+                ("u_Res", vs, false),
+                ("kb_fs_g_Speed", fs, true),
+                ("kb_fs_u_Res", fs, true),
+            ]
+        );
+        assert_eq!(
+            unused_flags(&pair(false, true)),
+            [
+                ("g_Speed", vs, true),
+                ("u_Res", vs, true),
+                ("kb_fs_g_Speed", fs, false),
+                ("kb_fs_u_Res", fs, false),
+            ]
+        );
+        assert!(unused_flags(&pair(false, false))
+            .iter()
+            .all(|(_, _, unused)| *unused));
+        assert!(unused_flags(&pair(true, true))
+            .iter()
+            .all(|(_, _, unused)| !unused));
+    }
+
+    /// 几何段拼进顶点段后按顶点算：MVP 只在几何段里读。
+    #[test]
+    fn unused_counts_geometry_reads_as_vertex() {
+        let result = translate(&gs_request());
+        assert!(result.ok, "{result:#?}");
+        assert_eq!(
+            unused_flags(&result),
+            [("g_ModelViewProjectionMatrix", None, false)]
+        );
     }
 }

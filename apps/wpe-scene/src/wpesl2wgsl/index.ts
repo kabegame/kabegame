@@ -62,6 +62,12 @@ export interface UniformLayout {
   stage?: ShaderStage;
   /** 拆分后改了名的那一格（`kb_vs_<名字>` / `kb_fs_<名字>`，总带 `meta.material`）：着色器里写的原名。 */
   original?: string;
+  /**
+   * 两个阶段入口可达的代码都没读这一格（翻译器按 naga IR 的语法引用判断；拆开的两半只看自己的阶段）。WPE 只认反射里
+   * 被使用的 uniform：没被使用的不进常量缓冲、不分配材质常量槽位，两阶段同键时合并类型取读到它的阶段（p7-REPORT
+   * 「P7d 的实测」）。缺失当被读，手写的测试数据不用写。
+   */
+  unused?: true;
 }
 
 export interface TextureBinding {

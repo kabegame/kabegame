@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { BindingCollector, generalDefaults, type SceneBinding } from "./bindings";
 import type { SceneBundle } from "./bundle";
-import { atof, materialDefault, materialSetter, materialSlots } from "./materialValues";
+import { atof, constantTargetFields, materialDefault, materialSetter, materialSlots } from "./materialValues";
 import type { MaterialPass, SceneScalar } from "./model";
 import { shaderUniforms } from "./shader";
 import { SceneState, scriptWriteValue } from "../render/state";
@@ -267,5 +267,107 @@ describe("脚本写回（报告 2.6）", () => {
     state.write({ property: "", target: v.target }, scriptWriteValue([0.1, -0.25, 1e-7]));
     expect(state.constants.get("p")).toEqual({ g_F: [0.6], g_V: [0.1, -0.25, 1e-7] });
     expect(scriptWriteValue(true)).toBe(true);
+  });
+});
+
+describe("没被读的材质常量（P7d 步骤 1，p7-REPORT「P7d 的实测」）：WPE 只给反射里被使用的键分配槽位", () => {
+  /** 翻译器反射里没被读的一格。 */
+  const unread = { unused: true } as const;
+
+  function issuesOf(result: TranslateResult): string[] {
+    const issues = new Set<string>();
+    shaderUniforms(result, {}, {}, undefined, undefined, issues);
+    return [...issues];
+  }
+
+  it("槽位只数被读的键：13 个 vec4 键是 52 个 float，其中一个没被读就是 48，不报 constant:slots", () => {
+    const keys = (unusedCount: number) =>
+      program(
+        ...Array.from({ length: 13 }, (_, i) =>
+          uniform(`g_V${i}`, "vec4", { material: `v${i}` }, i < unusedCount ? unread : {}),
+        ),
+      );
+    expect(issuesOf(keys(0))).toEqual(["constant:slots"]);
+    expect(issuesOf(keys(1))).toEqual([]);
+    expect(materialSlots(keys(1).uniforms ?? []).map((slot) => slot.used)).toEqual([false, ...Array(12).fill(true)]);
+    // 没被读的键取值照常填（没人读，填什么都一样）
+    expect(shaderUniforms(keys(1), { constantshadervalues: { v0: "1 2 3 4" } }, {}).g_V0).toEqual([1, 2, 3, 4]);
+  });
+
+  it("拆开的两半：有一半被读就占主格的分量数，两半都没读不占", () => {
+    const halves = (vertexRead: boolean, fragmentRead: boolean) =>
+      program(
+        ...Array.from({ length: 12 }, (_, i) => uniform(`g_V${i}`, "vec4", { material: `v${i}` })),
+        uniform("g_S", "vec2", { material: "s" }, { stage: "vertex", ...(vertexRead ? {} : unread) }),
+        uniform("kb_fs_g_S", "float", { material: "s" }, { stage: "fragment", ...(fragmentRead ? {} : unread) }),
+      );
+    expect(issuesOf(halves(false, false))).toEqual([]);
+    expect(issuesOf(halves(true, false))).toEqual(["constant:slots"]);
+    expect(issuesOf(halves(false, true))).toEqual(["constant:slots"]);
+    expect(materialSlots(halves(false, false).uniforms ?? []).at(-1)?.used).toBe(false);
+  });
+
+  it("合并类型取读到它的阶段：只有顶点读时按顶点的类型与缺省写（frame_builder_by_gariam）；两半都读时照旧取片元", () => {
+    const vertexOnly = program(
+      uniform("u_R", "vec2", { material: "r", default: "640 360" }, { stage: "vertex" }),
+      uniform("kb_fs_u_R", "float", { material: "r", default: 1 }, { stage: "fragment", original: "u_R", ...unread }),
+    );
+    expect(shaderUniforms(vertexOnly, {}, {})).toEqual({ u_R: [640, 360], kb_fs_u_R: [640] });
+    expect(issuesOf(vertexOnly)).toEqual([]);
+    const [slot] = materialSlots(vertexOnly.uniforms ?? []);
+    expect(slot.members.map((m) => [m.name, m.components])).toEqual([
+      ["u_R", 2],
+      ["kb_fs_u_R", 2],
+    ]);
+    expect(constantTargetFields(slot).type).toBe("vec2");
+    // 字符串进 vec2 setter 按空格切（float setter 不收字符串，会是 0）
+    expect(shaderUniforms(vertexOnly, { constantshadervalues: { r: "1920 1080" } }, {})).toEqual({
+      u_R: [1920, 1080],
+      kb_fs_u_R: [1920],
+    });
+
+    const both = program(
+      uniform("u_R", "vec2", { material: "r", default: "640 360" }, { stage: "vertex" }),
+      uniform("kb_fs_u_R", "float", { material: "r", default: 1 }, { stage: "fragment", original: "u_R" }),
+    );
+    expect(shaderUniforms(both, {}, {})).toEqual({ u_R: [1, 0], kb_fs_u_R: [1] });
+    expect(issuesOf(both)).toEqual(["constant:mixed-type:r"]);
+    expect(constantTargetFields(materialSlots(both.uniforms ?? [])[0]).type).toBe("float");
+  });
+
+  it("片元读、顶点没读：取片元；更宽的顶点一半没被读，WPE 不上传，不报 constant:mixed-type", () => {
+    const result = program(
+      uniform("u_R", "vec2", { material: "r" }, { stage: "vertex", ...unread }),
+      uniform("kb_fs_u_R", "float", { material: "r", default: 3 }, { stage: "fragment", original: "u_R" }),
+    );
+    expect(shaderUniforms(result, {}, {})).toEqual({ u_R: [3, 0], kb_fs_u_R: [3] });
+    expect(issuesOf(result)).toEqual([]);
+    expect(materialSlots(result.uniforms ?? [])[0].members[0].name).toBe("kb_fs_u_R");
+  });
+
+  it("两半都没读（frame_builder 的 REF_RES 0）：不报 constant:mixed-type，取法照旧（片元那一半）", () => {
+    const result = program(
+      uniform("u_R", "vec2", { material: "r" }, { stage: "vertex", ...unread }),
+      uniform("kb_fs_u_R", "float", { material: "r", default: 3 }, { stage: "fragment", original: "u_R", ...unread }),
+    );
+    expect(shaderUniforms(result, {}, {})).toEqual({ u_R: [3, 0], kb_fs_u_R: [3] });
+    expect(issuesOf(result)).toEqual([]);
+    expect(materialSlots(result.uniforms ?? [])[0].used).toBe(false);
+  });
+
+  it("就地写与整场重编译一致：只有顶点读时一次写入按顶点的 vec2 写", () => {
+    const result = program(
+      uniform("u_R", "vec2", { material: "r" }, { stage: "vertex" }),
+      uniform("kb_fs_u_R", "float", { material: "r" }, { stage: "fragment", original: "u_R", ...unread }),
+    );
+    const { inPlace, recompiled } = writeThenRecompile(
+      result,
+      { constantshadervalues: { r: { user: "p", value: "1 2" } } },
+      "p",
+      "1 2",
+      "0.3 0.4",
+    );
+    expect(inPlace).toEqual({ u_R: [0.3, 0.4], kb_fs_u_R: [0.3] });
+    expect(inPlace).toEqual(recompiled);
   });
 });

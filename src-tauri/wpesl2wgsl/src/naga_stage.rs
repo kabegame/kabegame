@@ -1,9 +1,10 @@
-//! 单个阶段的 naga 编译：GLSL 450 解析 → 按 WebGPU 基线校验 → 输出 WGSL，并读出 uniform 块的 std140 布局。
+//! 单个阶段的 naga 编译：GLSL 450 解析 → 按 WebGPU 基线校验 → 输出 WGSL，并读出 uniform 块的 std140 布局
+//! 与入口可达的代码读到了哪些块成员。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use naga::valid::{Capabilities, ValidationFlags, Validator};
-use naga::{AddressSpace, ArraySize, Handle, Module, ScalarKind, Type, TypeInner};
+use naga::{AddressSpace, ArraySize, Expression, Handle, Module, ScalarKind, Type, TypeInner};
 
 use crate::{Diagnostic, Stage};
 
@@ -13,6 +14,8 @@ pub struct Compiled {
     /// group 0 / binding 0 的 uniform 块成员：名字 → 布局。
     pub block: BTreeMap<String, MemberLayout>,
     pub block_size: Option<u32>,
+    /// 本阶段入口可达的代码读到的块成员名（见 [`read_members`]）。
+    pub read: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +58,7 @@ pub fn compile(
             .map(|(key, value)| (key.clone(), value.clone())),
     );
 
-    let module = naga::front::glsl::Frontend::default()
+    let mut module = naga::front::glsl::Frontend::default()
         .parse(&options, source)
         .map_err(|errors| Failure {
             phase: "parse",
@@ -93,12 +96,73 @@ pub fn compile(
         .map(|entry| entry.name.clone())
         .unwrap_or_else(|| "main".to_string());
     let (block, block_size) = uniform_block(&module);
+    // 布局与 WGSL 都取完了才做：compact 会删掉没用到的函数、表达式与全局变量
+    let read = read_members(&mut module);
     Ok(Compiled {
         wgsl,
         entry_point,
         block,
         block_size,
+        read,
     })
+}
+
+/// 本阶段入口可达的代码读到的 uniform 块成员（按成员名，即 `rewrite::block_member_name`），`module` 必须已通过校验。
+///
+/// 判据是 naga IR 里的语法引用：从入口函数出发、沿 `Statement::Call` 可达的函数里，有语句（或被语句用到的表达式）
+/// 用到 `AccessIndex { base: GlobalVariable(块), index }`。所以：
+/// - 只在关掉的 `#if` 里读：预处理已经删掉，不算；
+/// - 只在没被调用的函数里读（包括两阶段都会生成的补齐数组还原函数 `kb_load_*`，只在用到时才被调用）：不算；
+/// - `return` 之后的死代码：前端补丁不生成语句（naga/KABEGAME.md「行为补丁」），不算；
+/// - 结果没被用到的读（`float x = u_a;` 之后再不用 `x`、`u_a * 0.0`）：仍算。fxc 会删掉这些，WPE 的反射里就没有它们，
+///   这是两种判据的差别（p7-REPORT「P7d 的实测」，phase-7d-fluid 风险 2）；
+/// - `kb_pack_*`（`main` 之前的打包形态，pack.rs）越界读到的其它成员：函数被调用时算被读（保守）。
+///
+/// 不能直接扫各函数的表达式表：GLSL 前端在每个函数开头都预先放好全部全局变量与块成员的表达式（`Context::new` →
+/// `add_global`），它们只出现在 `Emit` 里。所以先做 naga 的 compact（`KeepUnused::No`）：入口点照留，被 `Call` 到的函数
+/// 才留（没被调用的删掉），每个函数里从语句出发反向标记用到的表达式（`Emit` 不算使用，前端不产生具名表达式），其余删掉；
+/// 之后剩下的块成员 `AccessIndex` 就是被读的。一个成员也没读时整个块变量会被删掉，结果为空。
+///
+/// 匿名块（`uniform KbUniforms { … };`）没有实例名，GLSL 里只能按成员名引用，前端一律生成 `AccessIndex`
+/// （`GlobalLookupKind::BlockSelect`）；整块 `Load` 或把块指针传给函数的写法不会出现。
+fn read_members(module: &mut Module) -> BTreeSet<String> {
+    naga::compact::compact(module, naga::compact::KeepUnused::No);
+    let mut read = BTreeSet::new();
+    let Some((block, members)) = module.global_variables.iter().find_map(|(handle, var)| {
+        let is_block = var.space == AddressSpace::Uniform
+            && var.binding.as_ref().is_some_and(|slot| {
+                slot.group == 0 && slot.binding == crate::rewrite::UNIFORM_BINDING
+            });
+        match &module.types[var.ty].inner {
+            TypeInner::Struct { members, .. } if is_block => Some((handle, members)),
+            _ => None,
+        }
+    }) else {
+        return read;
+    };
+    let functions = module
+        .functions
+        .iter()
+        .map(|(_, function)| function)
+        .chain(module.entry_points.iter().map(|entry| &entry.function));
+    for function in functions {
+        for (_, expression) in function.expressions.iter() {
+            let Expression::AccessIndex { base, index } = *expression else {
+                continue;
+            };
+            if !matches!(function.expressions[base], Expression::GlobalVariable(global) if global == block)
+            {
+                continue;
+            }
+            if let Some(name) = members
+                .get(index as usize)
+                .and_then(|member| member.name.clone())
+            {
+                read.insert(name);
+            }
+        }
+    }
+    read
 }
 
 /// 空 span（未定义位置）或越界时不给行列号。
@@ -242,6 +306,47 @@ void main() {
         let source = "#version 450\nlayout(location = 0) out vec4 o;\nvoid main() { float x = 1; o = vec4(x * 2, pow(x, 5), 1 - x, 0); o.a = 1; }\n";
         let result = compile(Stage::Fragment, source, &BTreeMap::new());
         assert!(result.is_ok(), "{:?}", result.err().map(|f| f.errors));
+    }
+
+    /// 每个函数开头都有前端预先放的全部块成员表达式；只有入口可达、被语句用到的才算读。
+    #[test]
+    fn read_members_follow_reachable_uses() {
+        let source = "#version 450
+layout(set = 0, binding = 0, std140) uniform KbUniforms {
+    float u_a;
+    float u_b;
+    float u_c;
+    vec4 u_d;
+};
+layout(location = 0) out vec4 o;
+float helper() { return u_b; }
+float orphan() { return u_c; }
+void main() { o = vec4(u_a + helper(), u_d.y, 0.0, 1.0); }
+";
+        let compiled = compile(Stage::Fragment, source, &BTreeMap::new())
+            .ok()
+            .expect("compiles");
+        assert_eq!(
+            compiled.read.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["u_a", "u_b", "u_d"]
+        );
+        // 没被调用的函数照样写进 WGSL：只改反射
+        assert!(compiled.wgsl.contains("fn orphan"), "{}", compiled.wgsl);
+        assert_eq!(compiled.block.len(), 4);
+    }
+
+    #[test]
+    fn nothing_read_gives_empty_set() {
+        let source = "#version 450
+layout(set = 0, binding = 0, std140) uniform KbUniforms { float u_a; };
+layout(location = 0) out vec4 o;
+void main() { o = vec4(1.0); }
+";
+        let compiled = compile(Stage::Fragment, source, &BTreeMap::new())
+            .ok()
+            .expect("compiles");
+        assert!(compiled.read.is_empty());
+        assert_eq!(compiled.block.len(), 1);
     }
 
     #[test]

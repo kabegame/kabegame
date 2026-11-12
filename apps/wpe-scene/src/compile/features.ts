@@ -698,7 +698,12 @@ export function checkProgramFeatures(
   extra: ReadonlySet<string> = new Set(),
 ): void {
   for (const uniform of result.uniforms ?? [])
-    if (typeof uniform.meta?.material !== "string" && !isEngineUniform(uniform.name) && !extra.has(uniform.name))
+    if (
+      !uniform.unused && // WPE 的反射里没有它，不进常量缓冲（p7-REPORT「P7d 的实测」）
+      typeof uniform.meta?.material !== "string" &&
+      !isEngineUniform(uniform.name) &&
+      !extra.has(uniform.name)
+    )
       unsupported.add(`uniform:${uniform.name}`);
   for (const combo of result.combos ?? [])
     if (combo.value !== 0 && ENGINE_COMBOS.has(combo.name.toUpperCase()))

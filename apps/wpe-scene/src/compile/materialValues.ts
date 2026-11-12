@@ -21,18 +21,26 @@ export interface MaterialMember {
   name: string;
   /** 块里这一格的分量数（声明类型；数组为元素分量 × 长度）：写回时补满，没写到的为 0。 */
   size: number;
-  /** setter 的分量数：自己的声明类型；拆开的两半都取片元那一半的（报告 2.1 合并表里片元覆盖顶点）。 */
+  /**
+   * setter 的分量数：自己的声明类型；拆开的两半都取「主格」那一半的（报告 2.1 合并表里片元覆盖顶点，没读到这个键的阶段
+   * 不进合并表，所以是读到它的片元一半，没有再取读到的顶点一半，见 `materialSlots`）。
+   */
   components: number;
   /** 从存储拷几个分量：自己的声明分量数；数组为 0（见 `materialSlots`）。 */
   count: number;
-  /** 注解 `default`：拆开的两半都取片元那一半的。 */
+  /** 注解 `default`：拆开的两半都取主格那一半的。 */
   default: unknown;
 }
 
-/** 一个材质键：读它的各个 uniform（主格排第一：拆开时是片元那一半，否则是第一个）与复刻不了的情况。 */
+/** 一个材质键：读它的各个 uniform（主格排第一：拆开时是定合并类型的那一半，否则是第一个）与复刻不了的情况。 */
 export interface MaterialSlot {
   material: string;
   members: MaterialMember[];
+  /**
+   * 有没有阶段读到这个键（任一格不带翻译器的 `unused`）：WPE 只给被使用的键分配槽位（p7-REPORT「P7d 的实测」`kbslot`），
+   * 没被读的键不占 48 个 float 的预算。取值照常填（这一格没人读，填什么都一样）。
+   */
+  used: boolean;
   issues: string[];
 }
 
@@ -124,10 +132,14 @@ export function componentsType(components: number): "float" | "vec2" | "vec3" | 
 
 /**
  * 按 `meta.material` 把 uniform 分组成材质键。
- * - 翻译器拆开的两半（带 `stage`，同一个键而类型不同）：WPE 只有一份按片元类型写的存储（报告 2.1），两半的 setter 类型与缺省值
- *   都取片元那一半；顶点那一半拷的分量比片元多时会读到下一个常量的存储（报告 2.2），复刻不了，报 `constant:mixed-type:<键>`。
+ * - 翻译器拆开的两半（带 `stage`，同一个键而类型不同）：WPE 只有一份存储（报告 2.1），按合并表里的类型写。合并表只收本阶段反射里
+ *   被使用的键、片元覆盖顶点（p7-REPORT「P7d 的实测」），所以两半的 setter 类型与缺省值取「主格」：读到它的片元一半，没有再取读到的
+ *   顶点一半（`frame_builder_by_gariam` 的 `u_refResolution` 只有顶点读，按顶点的 `vec2` 写），两半都没读时照旧取片元一半。
+ *   被读的一半拷的分量比主格多时会读到排序后下一个被使用的键的存储（报告 2.2、`kbslot`），复刻不了，报 `constant:mixed-type:<键>`；
+ *   没被读的那一半 WPE 不上传，不比宽度。
  * - 其余同键的 uniform（同一阶段两个名字共用一个键）：按用户决定各按自己的声明类型与缺省值照常填。
  * - 数组不收材质值：WPE 取名字时连 `[n]` 一起取，反射里查不到（报告 2.1，`FUN_1401636a0`，推断；语料里没有）。
+ * - `used`：有一格被读（翻译器反射里不带 `unused`）。没带 `unused` 的手写测试数据都当被读。
  */
 export function materialSlots(uniforms: readonly UniformLayout[]): MaterialSlot[] {
   const groups = new Map<string, UniformLayout[]>();
@@ -140,19 +152,24 @@ export function materialSlots(uniforms: readonly UniformLayout[]): MaterialSlot[
   }
   const slots: MaterialSlot[] = [];
   for (const [material, list] of groups) {
-    const fragmentHalf = list.find((u) => u.stage === "fragment");
+    const read = list.filter((u) => !u.unused);
+    // 主格：合并表里片元覆盖顶点，但没读到的阶段没有这个键，所以取读到它的片元一半，没有再取读到的顶点一半
+    const primary =
+      read.find((u) => u.stage === "fragment") ??
+      read.find((u) => u.stage === "vertex") ??
+      list.find((u) => u.stage === "fragment");
     const issues = new Set<string>();
     const members = list.map((u): MaterialMember => {
       const own = elementComponents(u);
-      const record = u.stage && fragmentHalf ? fragmentHalf : u;
+      const record = u.stage && primary ? primary : u;
       const components = elementComponents(record);
       const count = u.array ? 0 : own;
-      if (count > components) issues.add(`constant:mixed-type:${material}`);
+      // 没被读的那一格不比宽度（WPE 不上传它）
+      if (!u.unused && count > components) issues.add(`constant:mixed-type:${material}`);
       return { name: u.name, size: own * (u.array ?? 1), components, count, default: record.meta?.default };
     });
-    if (fragmentHalf)
-      members.sort((a, b) => Number(b.name === fragmentHalf.name) - Number(a.name === fragmentHalf.name));
-    slots.push({ material, members, issues: [...issues] });
+    if (primary) members.sort((a, b) => Number(b.name === primary.name) - Number(a.name === primary.name));
+    slots.push({ material, members, used: read.length > 0, issues: [...issues] });
   }
   return slots;
 }

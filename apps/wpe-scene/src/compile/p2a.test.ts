@@ -270,6 +270,27 @@ describe("能力表裁决", () => {
     checkProgramFeatures(result, keys);
     expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_AudioSpectrum16Left"]);
   });
+  it("着色器：翻译器标了 unused（没被读）的 uniform 不报，被读的照报（P7d 步骤 1，procedural_noise 的 g_FrameTime）", () => {
+    const unread = { unused: true } as const;
+    const keys = new Set<string>();
+    checkProgramFeatures(
+      {
+        ok: true,
+        uniforms: [
+          { name: "g_FrameTime", type: "f32", offset: 0, size: 4, ...unread },
+          { name: "g_AudioSpectrum16Left", type: "array<vec4<f32>, 16>", offset: 16, size: 256, ...unread },
+          { name: "g_Unknown", type: "f32", offset: 272, size: 4 },
+          { name: "g_Time", type: "f32", offset: 276, size: 4, ...unread },
+        ],
+      },
+      keys,
+    );
+    expect([...keys]).toEqual(["uniform:g_Unknown"]);
+    // 同一个 g_FrameTime 被读到时照报：WPE 里它进常量缓冲，但没人写，是垃圾值（p7-REPORT「P7d 的实测」）
+    const read = new Set<string>();
+    checkProgramFeatures({ ok: true, uniforms: [{ name: "g_FrameTime", type: "f32", offset: 0, size: 4 }] }, read);
+    expect([...read]).toEqual(["uniform:g_FrameTime"]);
+  });
   it("内置 uniform 表与渲染器写的值一一对应", () => {
     const written = new Set([
       ...Object.keys(

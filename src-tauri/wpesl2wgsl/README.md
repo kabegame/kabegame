@@ -68,7 +68,7 @@ interface TranslateRequest {
 | 字段 | 内容 |
 |---|---|
 | `vertex` / `fragment` | `{ wgsl, entryPoint, glsl? }` |
-| `uniforms` | uniform 块成员：`{ name, type, declared, offset, size, array?, stride?, meta?, stage?, original? }`（`stage` / `original` 见「两阶段同名 uniform」） |
+| `uniforms` | uniform 块成员：`{ name, type, declared, offset, size, array?, stride?, meta?, stage?, original?, unused? }`（`stage` / `original` 见「两阶段同名 uniform」，`unused` 见「没被读的 uniform」） |
 | `uniformBlockSize` | uniform 块总字节数（没有普通 uniform 时缺省） |
 | `textures` | `{ slot, name, kind: "2d" \| "2d-comparison" \| "3d" \| "cube", binding, samplerBinding, meta? }` |
 | `attributes` / `varyings` | `{ name, location, type, array? }` |
@@ -123,9 +123,12 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
   - 两侧都是材质常量：先声明的顶点阶段保留原名，片元阶段改名。
   - 两侧都是引擎值而类型不同：报 `phase: "rewrite"`。引擎值按名字写入，拆开后改了名的那一格没人写。
 - **同键不同类型**（工坊 `frame_builder` 的 `u_refResolution`：顶点 vec2、片元 float）：WGSL 里一格只能有一种类型，只能拆。
-  WPE 只有一份按片元类型（float）写的存储，各阶段按自己的类型从同一个槽拷分量，顶点多拷的那个分量是下一个材质常量的存储（报告 2.2）。
-  宿主按两半的 `stage` 复刻：setter 的类型与缺省值取片元那一半；顶点那一半分量数不超过片元的照常取前几个，超过的报 `constant:mixed-type:<材质键>`。
+  WPE 只有一份存储，按合并表里的类型写；合并表只收本阶段反射里被使用的键、片元覆盖顶点，各阶段按自己的类型从同一个槽拷分量，
+  多拷的分量是排序后下一个被使用的键的存储（报告 2.2，p7-REPORT「P7d 的实测」`kbslot`）。
+  宿主按两半的 `stage` 与 `unused` 复刻：setter 的类型与缺省值取读到它的片元一半，没有再取读到的顶点一半（两半都没读时取片元一半）；
+  被读的一半分量数不超过它的照常取前几个，超过的报 `constant:mixed-type:<材质键>`，没被读的一半不比。
 - **反射**：拆开的两格都带 `stage`（`"vertex"` / `"fragment"`，这一格只给哪个阶段用），改名的一格另带 `original`（着色器里写的原名）。合并的没有这两个字段。
+  两半各自的 `unused` 只看自己的阶段（见「没被读的 uniform」）。
 - **按用户决定不复刻的两条**（2026-11-08，报告第 5 / 6 节）：同一阶段两个 uniform 用同一个键时 WPE 只上传后声明的那个，我们两个都照常填；
   WPE 按声明行（含注释）的子串定类型（注释里写了 `vec3` 就按 vec3 写、溢到后面的变量），我们按真实的声明类型。
 
@@ -135,6 +138,35 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
   工坊 `frame_builder_by_gariam` 的 `u_refResolution`，同键不同类型，它另有 naga 校验错误、到不了宿主。
 - 被条件编译分开、不会同时出现的：assets 的 `effects/clouds` 的 `g_CloudSpeeds`（`PERSPECTIVE` 两支）；工坊 `auto_sway` 的 `g_Inertia` / `g_SigmentCount`（`AA_VERSION` 两支）。
 - 「一侧有注解、一侧没有」的 0 处。
+
+### 没被读的 uniform（`unused`）
+
+`unused: true`：两个阶段入口可达的代码都没读这一格。拆开的两半（带 `stage`）只看自己的阶段；几何段拼进顶点段后按顶点算。为假时不输出，
+字段缺失当被读（手写的测试数据不用写）。只改反射：uniform 块照旧列出全部成员，WGSL 与不加这个字段时逐字节相同。
+
+**依据**（p7-REPORT「P7d 的实测」、vector-constant-REPORT 2.1）：WPE 只认 fxc 反射里被使用的 uniform。
+- 没被使用的不进常量缓冲。`p7d-uni` 里只以 `* 0.0` 读、只在 `#if 0` 里读的两个材质常量在抓帧里是 `referenced: false`，值是垃圾值 / 0；
+  `g_FrameTime` 进了常量缓冲但没人写。
+- 材质常量的槽位按键名排序累加，只给被使用的键分配（`kbslot`：「按键名排序、只给被使用的键」预测 5，「语法上读到就算」预测 13，「插入顺序」预测 2，WPE 是 5）。
+- 两阶段同键时，合并表里片元覆盖顶点，但没读到这个键的阶段不进合并表，所以合并类型取读到它的那一半，片元优先。
+
+宿主据此（`apps/wpe-scene/src/compile/`）：
+- 材质常量的 48 个 float 只数被读的键（`materialValues.ts` 的 `MaterialSlot.used`、`shader.ts`）；
+- 拆开的两半的 setter 类型与缺省取读到它的那一半，没被读的一半不报 `constant:mixed-type`（见上一节）；
+- 能力表不报没被读的 `uniform:*`（`features.ts` 的 `checkProgramFeatures`）。
+
+**判据**是 naga IR 里的语法引用（`naga_stage::read_members`）：从入口函数出发、沿 `Statement::Call` 可达的函数里，有语句（或被语句用到的表达式）
+用到 `AccessIndex { base: GlobalVariable(块), index }`。
+- 只在关掉的 `#if` 里读（预处理已删）、只在没被调用的函数里读（包括两阶段都会生成的补齐数组还原函数 `kb_load_*`）、`return` 之后的死代码：不算；
+- 结果没被用到的读（读进局部变量后再不用、乘 0）：仍算；
+- `kb_pack_*` 越界读到的其它成员：函数被调用时算（保守）。
+
+实现上不能直接扫各函数的表达式表：GLSL 前端在每个函数开头都预先放好全部块成员的表达式（`Context::new` → `add_global`），它们只出现在 `Emit` 里。
+所以编译完（WGSL 与布局都取完之后）对模块做一次 naga 自带的 compact（`KeepUnused::No`）：入口点照留，被调用到的函数才留，每个函数里从语句出发
+反向标记用到的表达式（`Emit` 不算使用；GLSL 前端不产生具名表达式），其余删掉，之后剩下的块成员 `AccessIndex` 就是被读的。
+
+**与 fxc 的差别**：fxc 还会删掉结果没被用到的读、乘 0 之类，所以我们多算被读，只会让宿主多报（偏保守）：少一处读既不会多占槽位，也造不出同键不同类型。
+取值会不同的只有一种情况：两阶段同键、类型或缺省不同，片元的读被 fxc 删掉了。这时 WPE 取顶点那一半的类型与缺省，我们取片元的。语料里没有（phase-7d-fluid 风险 2）。
 
 ## 内部流程
 
@@ -214,7 +246,8 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
 6. **naga**（`naga_stage.rs`）：
    - GLSL 450 前端负责解析和隐式类型转换：打开了嵌入 naga 的 HLSL 模式（`Options::hlsl_implicit`），GLSL 会报错的地方按 fxc 的隐式规则转换，见「HLSL 隐式转换」；
    - 按 WebGPU 基线（`Capabilities::empty()`）校验后输出 WGSL；
-   - uniform 块的偏移与步长取自 naga 的 std140 布局。
+   - uniform 块的偏移与步长取自 naga 的 std140 布局；
+   - 最后对模块做一次 compact，读出入口可达的代码读到了哪些块成员，给反射的 `unused`（见「没被读的 uniform」）。
 
    naga 30.0.1 的源码嵌在 `naga/`（路径依赖），删掉了用不到的前后端，只开 `glsl-in` + `wgsl-out`；`wgsl-in` 只在 `[dev-dependencies]` 里开，给测试回读输出。
    上游版本、删掉的模块与每处改动见 [naga/KABEGAME.md](naga/KABEGAME.md)。

@@ -307,3 +307,76 @@ describe.skipIf(!root || !existsSync(wasm))("两阶段同名 uniform：本机 WP
     expect(only(constants, ["g_Phase"])).toEqual(only(freshStep.pass.uniforms, ["g_Phase"]));
   }, 60000);
 });
+
+describe("没被读的那一半（P7d 步骤 1，翻译器反射的 unused）：frame_builder 两个版本的形状", () => {
+  /** 翻译器反射里没被读的一格。 */
+  const unread = { unused: true } as const;
+  // 照上面合成着色器的声明手写反射：顶点 vec2（缺省 "512 512"）、片元 float（缺省 512），同一个材质键
+  const layout = (vertexRead: boolean, fragmentRead: boolean): TranslateResult => ({
+    ok: true,
+    uniforms: [
+      { name: "g_ModelViewProjectionMatrix", type: "mat4x4<f32>", declared: "mat4", offset: 0, size: 64 },
+      {
+        name: "u_refResolution",
+        type: "vec2<f32>",
+        declared: "vec2",
+        offset: 64,
+        size: 8,
+        meta: { default: "512 512", material: "Reference resolution" },
+        stage: "vertex",
+        ...(vertexRead ? {} : unread),
+      },
+      {
+        name: "kb_fs_u_refResolution",
+        type: "f32",
+        declared: "float",
+        offset: 72,
+        size: 4,
+        meta: { material: "Reference resolution", int: true, default: 512, range: [0, 2160] },
+        stage: "fragment",
+        original: "u_refResolution",
+        ...(fragmentRead ? {} : unread),
+      },
+    ],
+  });
+
+  it("by_gariam（REF_RES 1）：只有顶点读，两半按顶点的 vec2 与缺省写，不报 constant:mixed-type", () => {
+    const result = layout(true, false);
+    const issues = new Set<string>();
+    expect(shaderUniforms(result, {}, {}, undefined, undefined, issues)).toEqual({
+      u_refResolution: [512, 512],
+      kb_fs_u_refResolution: [512],
+    });
+    expect([...issues]).toEqual([]);
+    // vec2 setter：字符串按空格切、数字铺满（片元一半只拷第一个分量）
+    expect(shaderUniforms(result, { constantshadervalues: { "Reference resolution": "1920 1080" } }, {})).toEqual({
+      u_refResolution: [1920, 1080],
+      kb_fs_u_refResolution: [1920],
+    });
+    expect(shaderUniforms(result, { usershadervalues: { res: "Reference resolution" } }, { res: 800 })).toEqual({
+      u_refResolution: [800, 800],
+      kb_fs_u_refResolution: [800],
+    });
+    const program = new Set<string>();
+    checkProgramFeatures(result, program);
+    expect([...program]).toEqual([]);
+  });
+
+  it("frame_builder（REF_RES 0）：两半都没读，不报 constant:mixed-type", () => {
+    const issues = new Set<string>();
+    expect(shaderUniforms(layout(false, false), {}, {}, undefined, undefined, issues)).toEqual({
+      u_refResolution: [512, 0],
+      kb_fs_u_refResolution: [512],
+    });
+    expect([...issues]).toEqual([]);
+  });
+
+  it("对照：两半都读时照旧按片元的 float 写并报 constant:mixed-type（真实的同键不同类型照报）", () => {
+    const issues = new Set<string>();
+    expect(shaderUniforms(layout(true, true), {}, {}, undefined, undefined, issues)).toEqual({
+      u_refResolution: [512, 0],
+      kb_fs_u_refResolution: [512],
+    });
+    expect([...issues]).toEqual(["constant:mixed-type:Reference resolution"]);
+  });
+});
