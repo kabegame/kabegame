@@ -262,7 +262,7 @@ function targetOf(
 
 ## P10a — 曲线与自动播放（含联动）
 
-子计划动工前另写。下面是步骤 0 之后的范围，语义的依据见 [rea-p10-keyframes](rea-p10-keyframes.md) 第 2–5、7、10 节与 [p10-REPORT](p10-REPORT.md)。
+子计划见 [phase-10a-curves.md](phase-10a-curves.md)：求值模块 → 编译期 → 运行时 → 真机对照 → 收尾。下面是写子计划之前的范围，语义的依据见 [rea-p10-keyframes](rea-p10-keyframes.md) 第 2–5、7、10 节与 [p10-REPORT](p10-REPORT.md)。
 
 **实现：**
 - **编译期**（`compile/animations.ts`，按 `collectScripts` 的坐标遍历 `scene.json`）：
