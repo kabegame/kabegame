@@ -362,7 +362,195 @@ top(node)       = node.world ? (顶层 ? W : L) : drawModel(node)
 
 **工具：** `kbp rdc track` 的 points 认法在连续同系统绘制时另核颜色（`p4c-trail` 的现有轨迹重新提取逐字节相同）；回放库按 `kbp-meta.json` 的 `children` 给子系统起名，同名第 2 次起记 `名字#n`；`p4e-static`、`p4e-static2` 的轨迹改用 points 认法，draws 版存为 `rd-<标签>-draws.json`。
 
-**待用户：** `3778592720` 在图库预览与桌面上看一眼（光斑大小、数量和 WPE 一致，没有闪烁或缺失）。
+**待用户：** `3778592720` 在图库预览与桌面上看一眼（光斑大小、数量和 WPE 一致，没有闪烁或缺失）。2026-11-12 用户看过，没有问题，提交 `3a22fd83`。
+
+## 步骤 2 — 事件实例池与 `eventfollow`
+
+### 思路
+
+事件子系统和 static 子系统的区别只在「有几份、什么时候有」：static 一个条目恰好一份，建系统时就建好；事件条目是一个**实例池**，父粒子出生（`eventfollow` / `eventspawn`）或死亡（`eventdeath`）时从池里取一个实例，实例自己的发射器结束、粒子死光、子孙都不活跃时还回池里（rea-p4e-children 4.1–4.7）。实例本身就是一棵完整的 `ParticleSystem` 子树，和 static 子系统用同一个构造，只是多一个对象矩阵 `X = T(p)·L`（4.5），模拟时的 `M` 与绘制时的模型矩阵都由它推出。本步把池和 `eventfollow` 做完；`eventspawn`、`eventdeath` 只是触发点不同（出生一次写 `X`、判死时建），留给步骤 3，但池、回收、绘制这些共用部分都在本步建好。
+
+模拟侧在父系统的一帧里加两个挂点，位置照 WPE 的帧内顺序（7.3）：判死之后处理父粒子的死亡（本步只是让跟着它的 `eventfollow` 实例停跟随、停发射，4.6 末段），发射之后处理新粒子（`eventfollow` 按条目、逐新粒子抽 `probability`、取实例、写 `X`、按自己的 `starttime` 预热）。这一帧的 static 子系统步进完，再按条目顺序、按建立先后步进活跃实例：`eventfollow` 先用父粒子本帧 operator 之后的位置重算 `X`，再步进，步进后不活跃的还回池里。预热期间（`starttime`）不建实例（4.8）。
+
+渲染侧最大的变化是**粒子层的绘制顺序改成每帧现排**。步骤 1 的 static 树是固定的，建场景时按先序排一列 draw 就够了；事件实例个数每帧在变，语料里还有 3 处 `eventfollow` 子系统自己挂 static 子系统，WPE 画成「实例 1 → 它的子孙 → 实例 2 → 它的子孙」（第 6 节）。所以每个粒子层只留一个「画这棵树」的 op，编码时沿 `forEachDrawn` 的先序走一遍：每个被画的系统按它的**模板路径**（每层条目下标，实例不计序号）找到预备好的管线，再按「这个模板本帧第几次出现」从池里取一个 draw（第一次用到时才建顶点缓冲、uniform 与 bind group，之后复用）。模型矩阵每帧由 `forEachDrawn` 一起给出，事件实例的 draw 每帧重写 uniform 里随模型矩阵变的那几项。快照照旧每对象至多一次，插在本帧先序里第一个需要帧缓冲的系统之前。
+
+几个关键决定：
+- **每实例一次绘制**（「决定」1）。同条目的实例同材质、按先后画，合成一次画面相同，留到帧时间不够时再做。
+- **绘制资源按需建、不回收。** 事件子系统的 `maxcount` 语料最大 20000（7 处），条目 `maxcount` 最大 350，按上限预分配不可接受；池里的 draw 第一次用到时建，之后常驻到场景销毁（同 WPE 的池只增不减，4.1）。
+- **随机数：** 实例与父共用一个随机源，`probability` 用 `uA`（4.4）。我们不复刻 WPE 的流，确定性工程只用 `probability` 0 / 1 比位置，0.5 只做统计。
+- **步骤 3 的边界：** `eventspawn` 与 `eventdeath` 的触发、多个 eventdeath 条目的上限失守、带 rope 时预热里建 eventdeath 实例，都在步骤 3；本步能力表只去掉 `particle:children:eventfollow`。
+
+### 现状锚点
+
+**a. 事件条目整条报不支持**（`compile/features.ts:767`）
+```ts
+if (entry.type !== null && entry.type !== "static") unsupported.add(`particle:children:${entry.type}`); // 现状：三种事件类型都报
+```
+
+**b. 系统只建 static 子系统**（`particles/system.ts` 构造函数末尾）
+```ts
+if (this.depth < MAX_CHILD_DEPTH)
+  (def.children ?? []).forEach((entry, index) => {
+    if (entry.type !== "static") return; // 现状：事件条目不建（编译期已编好它的子系统）
+    this.statics.push({ index, entry, local: new Float32Array(entry.local), system: new ParticleSystem(…) });
+  });
+```
+
+**c. 判死只给 rope 收集死亡槽号，发射不记新粒子**（`particles/system.ts:792`、`:833`）
+```ts
+if (order) dead.push(i); // 现状：只有 rope 系统收集；事件条目不知道哪些父粒子死了
+// emit()：逐 emitter 逐个 spawn（现状：不记本帧新粒子的槽号）
+```
+
+**d. 一帧只步进 static 子系统**（`particles/system.ts:667`）
+```ts
+private stepNode(frame: TreeFrame, inputs: ControlPointInputs): void {
+  // … advance、拖尾采样
+  this.stepStatics(frame, inputs); // 现状：之后没有事件实例
+}
+```
+
+**e. `forEachDrawn` 只给系统与路径，模型矩阵由渲染器按定义现算**（`particles/system.ts:481`、`render/scene.ts:1247`）
+```ts
+forEachDrawn(callback: (system: ParticleSystem, node: readonly number[]) => void, node = []): void
+// scene.ts：particleDrawModel(W, layer.particle, step.node) —— 现状：只看定义里的 L，算不出实例的 X
+```
+
+**f. 粒子层的 draw 在建场景时按 static 先序排定**（`render/graph.ts` 的 `planParticleLayer`、`render/scene.ts:940` 的 `buildLayer`）
+```ts
+system.children.forEach((child, index) => {
+  if (child.type === "static") visit(child.system, [...node, index]); // 现状：每个 static 节点一个步骤、一个 Draw，编码按这个固定顺序
+});
+```
+
+### 点 1 — 模拟：实例池与 `eventfollow`（`particles/system.ts`）
+
+- **新增**
+```ts
+/** 一个事件条目的实例池（rea-p4e-children 4.1，条目 `+0x08` 活跃表 / `+0x20` 空闲表）。 */
+export interface ParticleEventPool {
+  index: number;                 // 条目在 `def.children` 里的下标（模板路径用）
+  entry: SceneParticleChild;
+  local: Mat4;                   // L
+  active: ParticleSystem[];      // 建立先后；绘制与步进都按它
+  free: ParticleSystem[];        // 后进先出复用（4.7）
+}
+// ParticleSystem 新增：
+readonly events: ParticleEventPool[] = [];   // 条目顺序；类型 2–4 都建池，本步只有 eventfollow 会被触发
+/** 实例的对象矩阵 X（4.5，`inst+0x360`）；static 子系统与顶层为 null。 */
+instanceMatrix: Mat4 | null = null;
+/** 跟随的父粒子槽号（`inst+0x478`），−1 表示没有或已停跟随。 */
+followSlot = -1;
+```
+- **修改** 判死：有 `eventfollow` 条目（步骤 3 起也含 eventdeath）时同样收集死亡槽号（升序）；判死之后、控制点更新之前，逐死亡槽号停掉跟着它的实例（4.2 第一段）：
+```ts
+// 4.6 末段（0x140237320–0x1402373bb）：停跟随、全部发射器标结束（含 static 子孙，FUN_14022f640），已有粒子照常活完
+inst.followSlot = -1;
+inst.endEmitters(); // 递归 static 子孙
+```
+- **修改** 发射：记本帧新粒子的槽号（出生先后）；全部发射器发完后，非预热时按条目顺序处理（4.3）：
+```ts
+for (const pool of this.events) {
+  if (pool.entry.type !== "eventfollow") continue;                 // 步骤 3 加 eventspawn
+  if (pool.active.length >= pool.entry.maxcount) continue;          // 满了：不抽、不建
+  for (const b of born) {
+    if (this.random.a() > pool.entry.probability) continue;         // 4.4：uA ≤ p 才建
+    const inst = this.takeInstance(pool, b, top);                   // 4.7：空闲表尾部复用或新建；写 X（新粒子 operator 之前的位置）；预热
+    inst.followSlot = b;
+    pool.active.push(inst);
+    if (pool.active.length === pool.entry.maxcount) break;
+  }
+}
+```
+  预热（`prewarm`）期间不建实例（`sys+0x41` 清零，4.8）。
+- **新增** `takeInstance`（4.7）：新建 = 同 static 子系统的构造（父与条目、实例覆盖按子系统自己的 flags），再 `prewarm(实例的模拟矩阵)`（建孙辈、控制点初值、按自己的 `starttime` 预热）；复用 = `resetTiming`（递归）、重开全部发射器（递归）、重算 `X`，`starttime > 0` 时只跑预热循环（不重新初始化控制点，不重新应用实例覆盖）。
+- **新增** 实例矩阵（4.5，`top` 是父的模拟矩阵，`p` 是父粒子位置）：
+```ts
+// 子本地 / 父本地：X = T(p)·L          模拟 M = top·X
+// 子本地 / 父世界：X = top⁻¹·T(p)·L    模拟 M = top·X（= T(p)·L）
+// 子世界 / 父本地：X = top·T(p)·L      模拟 M = X
+// 子世界 / 父世界：X = T(p)·L          模拟 M = X
+```
+- **修改** `stepNode`：static 子系统之后按条目顺序、按 `active` 顺序步进实例（4.6）：条目 bit0 写控制点（`writeParentPoints`）→ `eventfollow` 且 `followSlot ≥ 0` 时按父粒子本帧位置重算 `X` → 以实例的模拟矩阵 `stepNode` → 不活跃（`isActive`：有 static 子孙或事件实例活跃、有没结束的发射器、存活数 > 0，`FUN_14022c310`）就从 `active` 移到 `free`（其余保序）。本帧新建的实例当帧就步进一次完整的 `dt′`。
+- **修改** 不可见（3.6）：顶层存活数 > 0 时，顶层与 static 子孙的各池**销毁**活跃实例（丢掉，不进空闲表），空闲表不动；之后照旧整棵树以 `emit = false` 步进。
+- **修改** `setInstance`：递归到各池的活跃与空闲实例（4.7 末条、3.4：`p2 = 0`，不重开已结束的发射器）。
+- **修改** `forEachDrawn` 改成同时给出绘制模型矩阵与模板路径（第 6 节）：
+```ts
+forEachDrawn(object: Mat4, callback: (system: ParticleSystem, template: readonly number[], model: Mat4) => void): void;
+// 顶层：model = 世界 ? I : W，画完栈顶 W
+// static：model = 世界 ? I : top·L，栈顶 = 世界 ? L : model
+// 实例：  model = 世界 ? I : top·X，栈顶 = 世界 ? X : model
+// 顺序：自己 → static（条目顺序，各自递归）→ 事件池（条目顺序）→ 活跃实例（建立先后，各自递归）
+```
+  `particleDrawModel` 删除（只剩 static 时它和新函数等价，渲染器改用新函数）。
+
+### 点 2 — 渲染：粒子层每帧现排（`render/graph.ts`、`render/scene.ts`）
+
+- **修改** `planParticleLayer`：按**模板树**先序给每个有 pass 的系统一个步骤（事件条目的子系统也给，实例共用它），步骤的 `node` 是模板路径；快照步骤不再写进计划（改由编码时插）。模板步骤只用来预备管线与程序（`PreparedDraw`），不再直接对应一个 Draw。
+- **新增** 粒子层的运行时：一个 `particle-tree` op 代替原来的若干 draw op；每个模板一个 draw 池（`Draw[]`），第 k 次出现取第 k 个，没有就按模板的 `PreparedDraw` 现建（顶点缓冲按这个系统的容量与 renderer，uniform 缓冲与 bind group 同现在的 `createDraw`）。
+- **修改** 编码：`particle-tree` op 沿根系统的 `forEachDrawn` 走，逐个系统：取 draw、把 `particles.system` 指到这个系统、模型矩阵和上一次不同时重写 uniform 里随它变的项（`g_ModelMatrix`、MVP、`g_Orientation*`、拖尾眼位与 `hidden`，即现在 `refreshParticleGeometry` 与 `particleUniformValues` 管的那几项）、写顶点、画；本帧先序里第一个 pass 需要帧缓冲的系统之前拷快照（每对象至多一次，`obj+0x93d`）。存活数为 0 的系统跳过自己的绘制、照常递归（第 6 节）。
+- **修改** `stepParticles`：只步进根（同步骤 1）；有事件池的树每帧都标脏（实例个数与位置每帧在变）。
+- **修改** `particleStats`、`particleProbe`、`particleTrack`（`particles/track.ts`）：按 `forEachDrawn` 输出，键 `<名字>/<模板路径>`，同一模板第 k 次出现（k ≥ 2）加 `#k`。
+- **修改** 能力表检查的渲染部分（`planProblems` 等按步骤遍历处）对模板步骤照旧检查。
+
+### 点 3 — 能力表（`compile/features.ts`）
+
+- **修改** `checkParticleChildren`：`eventfollow` 不再报；`eventspawn`、`eventdeath` 照报（步骤 3）。
+
+### 点 4 — 回放工具（`.claude/skills/kbp-tools/ts/replayLib.ts`、`ignore/p4/cases/e2.*`，Claude 做）
+
+- 回放按新的 `forEachDrawn` 起名：模板路径经 `kbp-meta.json` 的 `children` 换成系统名，同一模板按出现先后记 `名字`、`名字#2`…，**只数有存活粒子的**（WPE 存活数为 0 的系统不画，draws 认法与 points 认法都看不到它）。
+- `p4e-follow`、`p4e-follow2` 的轨迹改用 points 认法重新提取（draws 版改名留着）。
+- 新案例 `e2`：`p4e-follow` fps 60、`p4e-follow2` fps 60 与 fps 20 的 `probability 1` 系统逐粒子比；`f-prob` 跳过（随机流不同，读码与统计已在步骤 0 核对）；fps 10 日志缺帧，照 `e1` 不进案例，两遍模式由 fps 20 覆盖。
+
+### 验收
+
+- 子代理：tsc 0 error，vitest（带 `KABEGAME_WPE_ROOT`）全过（已知的 P5a 那一条除外），Prettier。新增单测：实例矩阵四种组合、上限满了不抽不建、`probability` 0 / 1、父粒子死亡那帧停跟随停发射、持续发射的实例不回收、结束的实例回收并按后进先出复用（复用时序号与系统时间归零、不重新初始化控制点）、预热期间不建、不可见时销毁活跃实例保留空闲表、`setInstance` 递归到实例、绘制先序（实例 1 → 它的 static 子孙 → 实例 2）、池里的 draw 按需建与复用、快照每对象一次、存活数为 0 的实例不画。
+- Claude 独立验收：
+  1. `git status` 查越界；tsc、vitest 自跑；变异检查（不乘 `L` / 不加 `T(p)`、父世界时不乘 `top⁻¹`、不按父粒子本帧位置重算 `X`、父粒子死后照常发射、上限不检查、满了照样抽、回收不复位、预热期间建实例、绘制顺序按模板分组）。
+  2. `kbp regress`（HEAD 快照 ↔ 步骤 2 快照，现有案例含 `e1`）逐字节相同；语料只去掉 `particle:children:eventfollow`，覆盖 72 → 82（165 张口径），能渲染多 `3811798465`。
+  3. 回放 `e2` 在限内。
+  4. `3811798465` 对 WPE：统计量（每个实例一次绘制的个数、粒子数、尺寸）与整帧目视；带 `eventfollow` 的语料场景用 dev 强制渲染记帧时间（实例最多的那张，以及子系统 `maxcount 20000` 的那几张的显存）。
+- 过后请用户看 `3811798465` 的预览与桌面，再提交。
+
+### 步骤 2 实施记录（2026-11-12）
+
+子代理在 HEAD `182fbc94` 的快照 `ignore/p4/e2/ov` 里实现点 1–3，Claude 做点 4 和验收。之后 HEAD 又进了 P5b 步骤 3（`013499e0`）与 P6b 1b（`0926f756`），补丁在 `graph.ts`、`scene.ts` 打不上，改用逐文件三方合并（`git merge-file`，当前文件 / 快照基线 / 快照），12 个文件都没有冲突；合并后逐文件的增删行数和补丁相同。合并前的文件在 `ignore/p4/e2/pre-merge/`，补丁 `ignore/p4/e2/step2.patch`（14 个文件，+1949 / −293）。
+
+**和计划的差异（子代理报告，Claude 核对后接受）：**
+1. `forEachDrawn(callback, object = I)`：参数顺序和计划相反，这样旧调用（`track.ts`、回放库的 `forEachDrawn((system, node) => …)`）不用改。回调多给一个模型矩阵，返回 `false` 时跳过子树，渲染器用它跳过没有 pass 的子树。
+2. 新增 `drawTransform(object)`：自底向上算一个系统的模型矩阵，和 `forEachDrawn` 是同一串运算，逐位相同。就地刷新（对象变换、视差、相机）时按 draw 现算，不用遍历整棵树。
+3. 存活数为 0 的实例不占 draw，出现次数只数有存活粒子的，和 WPE 不画这类系统、回放的起名一致。非实例化的模板（顶层与 static）照旧每帧一个 draw，和步骤 1 相同。
+4. 实例化 draw 的顶点缓冲按存活数分配：最少 64 个粒子，不够时翻倍，最多到容量。计划写的是按容量，但容量 20000 的子系统每个实例要约 4 MB。
+5. 编码时才新建或换了实例的 draw 当场写 uniform（`update` 已经在这一帧之前跑过，补上这一帧的每帧量）。
+6. 只有 static 的粒子层也改成一个 `particle-tree` op，计划里不再有快照步骤，改了 `render/particles.test.ts`、`compile/refract.test.ts` 等几处已有断言。绘制、uniform、快照位置和步骤 1 相同（regress 逐字节相同）。
+7. 两处读码没写清、按推断做的【推】：运行中新建或复用实例时，实例预热用这一帧的场景时间 `T` 与图层时间；复用时只跑实例自己的预热循环，static 孙辈不再预热。语料里带 `starttime` 又用噪声 / remap 的事件子系统才看得出差别。
+8. `probability` 抽本对象的随机源（同计划，不复刻 WPE 的 MT19937）。
+
+**Claude 验收时补的：**
+- 单测：不可见时销毁**顶层**自己的活跃实例。子代理写的那条在隐藏时顶层池已经回收空了，变异检查（`hide-keeps-instances`）没检出。
+- `render/events.test.ts` 的图层字面量补 P5b 步骤 3 新加的 `fullscreen`、`fullscreenSize`（快照基线比那次提交早）。
+- 案例 `e1`：`p4e-static2` 不再报 `particle:children:eventfollow`，期望改为空；原来跳过的 `st-order-f` 放开一起比。
+- 案例 `e2` 用 `p4e-follow2` 的 fps 20（两遍模式），不用 fps 10：fps 10 的日志同 `e1` 一样缺帧。
+- 回放库：子系统每帧沿系统树现列、按出现先后起名，只数有存活粒子的，旧签名照样能用。
+- kbp mutate：单测检出方把盘符转成大写。小写 `d:` 时快照里的 vitest 被加载成两份、每个文件 0 个用例，第一轮变异的单测检出因此作废、重跑。
+
+**验收结果：**
+
+| 项 | 结果 |
+|---|---|
+| tsc / vitest | 快照：tsc 0 error，72 个文件 1864 个用例，只有已知的 `3830255100: 219 次请求`（P5a）失败。合并后的工作区：74 个文件 1915 个用例，同样只有这一条失败；本步文件 tsc 通过（工作区另有 P6b 会话改了一半的 `wpefont/index.test.ts` 报 `cbox`，不是本步的）；Prettier 通过 |
+| `kbp regress`（HEAD 快照 ↔ 步骤 2 快照，13 个案例 + 语料） | 12 个旧案例逐字节相同。`e1` 只差 `p4e-static2` 的期望不支持项那一行（改案例后 `e1` 全过，`st-order-f` 的 4 个实例和 WPE 对上）。语料 173 张只在 19 张里去掉 `particle:children:eventfollow`，没有新键 |
+| 覆盖（`ignore/p4/e1/cov_e1.py ignore/p4/e2/out/regress`） | 165 张口径 72 → 82、152 张口径 67 → 75，和计划相同；能渲染多 `3811798465`，没有变少的 |
+| 回放 `e2`（`p4e-follow` fps 60、`p4e-follow2` fps 60 与 fps 20） | 全过：每个实例逐帧的粒子数和 WPE 相同，位置最大 4.9e-4，尺寸、颜色、alpha 差 0；「我们有粒子而 WPE 没画」为无。`f-prob`（`probability 0.5`）跳过，随机流不同 |
+| 变异（`ignore/p4/e2/mutate_e2.py`，14 处） | 全部检出：`X` 不加 `T(p)`、不乘 `L`、父世界不乘 `top⁻¹`（后两处只有单测看得出：本地实例的粒子存实例坐标）、不按本帧位置重算 `X`、父死后照常发射、上限不检查、满了照样抽、复用不复位、不回收、预热期间建实例、不可见不销毁顶层实例（补单测后）、绘制按模板分组、存活数 0 的实例占 draw、换实例不重写 uniform；还原后整树哈希相同 |
+| `3811798465` 对 WPE（fps 20，抓帧 `A:\p4e\real-3811798465-fps20`，回放合成时间线 dt 0.05） | 绘制结构相同：樱花、尘埃、跟随光标的樱花，两个萤火虫父系统各自后面紧跟一串实例。父 A：WPE 8 个粒子、6–7 个实例；我们 10 个、8 个。父 B：WPE 10 个、9–10 个实例；我们 8–9 个、7–8 个。两边都是实例数 ≈ 父粒子数减 1–2。每个实例 5–10 个粒子，尺寸 0–22，alpha ≤ 0.39，世界坐标的范围两边相同（A 组 x 约 −200…850，B 组 x 约 2500…3820）。第 277 帧整帧目视一致，花丛附近的萤火虫与火星放大对照也一致（`ignore/p4/e2/out/real/`）；画面中心那团粉色是跟随光标的樱花，回放光标固定在中心 |
+| 帧时间（屏外宿主 `renderFrame` 连跑 600 帧，强制渲染） | `3811798465`：均值 3.9–4.3 ms、p95 5.9–6.6 ms，粒子模拟 0.22 ms、写顶点 0.06 ms。实例最多的 `2974757317`（86 个 eventfollow 条目，600 帧后 129 个实例 draw、432 个实例粒子）：均值 11.1–12.2 ms、p95 16.5 ms，粒子模拟 0.76 ms、写顶点 0.13 ms；它强制渲染时带 39 个不支持项、渲染目标 286 MB，帧时间主要不在粒子上。`3219908811` 12.4 ms，`3560756264` 21.2 ms（带 puppet、文本等，79 个子系统 draw）。`3243449890` 强制渲染报 `render:texture-missing:48`，和粒子无关 |
+| 容量 20000 的事件子系统 | 600 帧后画出的事件子系统容量最大 32，容量 20000 的没有建出实例，显存留到步骤 3 测。实例的顶点缓冲按存活数分配（见差异 4），模拟列照 WPE 按容量 |
+
+**结论：** 每实例一次绘制（「决定」1）不用合并：实例最多的场景里粒子 CPU 开销不到 1 ms。
+
+**待用户：** `3811798465` 在图库预览与桌面上看一眼（萤火虫周围的火星跟着萤火虫走，数量和 WPE 一致，没有闪烁或缺失）。
 
 ## 决定
 

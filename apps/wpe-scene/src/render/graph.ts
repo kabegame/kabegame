@@ -35,7 +35,7 @@
  *     compose / clear 之前：fullscreenlayer 有 effect 时走拷贝，不看 `copyBackground`（`p5b-fs` 的 F1：一次 Resolve、没有基础 draw）。
  *   - 合成 RT 取 `fullscreenSize`（槽 0 静态纹理的图像尺寸；`_rt_FullFrameBuffer` 或没有纹理时取场景尺寸）。
  * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：`particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序；有子系统时
- *   按系统树先序展开成若干次（P4e 步骤 1）。
+ *   按模板树先序给出每个模板的步骤（P4e 步骤 1、2），绘制顺序与快照由渲染器每帧现排。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
@@ -95,12 +95,17 @@ export interface ParticleStep {
   /** 系统 `flags & 4`：换透视粒子的视图投影（`layout.ts` 的 `particleViewProjection`）。 */
   perspective: boolean;
   /**
-   * 这次绘制的系统在树里的路径（P4e 步骤 1）：顶层 `[]`，static 子系统 `[n]`、`[n, m]`…，每层是 `SceneParticle.children` 的下标。
-   * 渲染器只为 `[]` 建模拟器（整棵树），子系统的绘制取树里对应的节点（`ParticleSystem.node`）。
+   * 这个系统在树里的模板路径（P4e 步骤 1、2）：顶层 `[]`，子系统 `[n]`、`[n, m]`…，每层是 `SceneParticle.children` 的下标；事件条目下的
+   * 系统同样一个模板（实例不计序号），每帧出现 0…n 次。渲染器只为 `[]` 建模拟器（整棵树），按 `ParticleSystem.forEachDrawn` 每帧现排。
    */
   node: number[];
-  /** 这个系统 `flags & 1`（世界空间）：绘制的模型矩阵是单位阵（`particles/system.ts` 的 `particleDrawModel`）。 */
+  /** 这个系统 `flags & 1`（世界空间）：绘制的模型矩阵是单位阵（`ParticleSystem.forEachDrawn`）。 */
   world: boolean;
+  /**
+   * 模板路径经过事件条目（P4e 步骤 2）：每个活跃实例各画一次（rea-p4e-children 第 6 节，「决定」1），绘制资源按需建、模型矩阵每帧在变。
+   * 否则（顶层与 static 子孙）每帧恰好一次。
+   */
+  instanced: boolean;
 }
 export type LayerStep =
   | DrawStep
@@ -179,37 +184,27 @@ export function isPassthroughBlend(colorBlendMode: number): boolean {
 }
 
 /**
- * 粒子层的计划（P4a 步骤 4）：一个 `particles` 步骤，直接画到场景目标。其余运行时纹理（fbo 名）粒子没有，报不支持。
+ * 粒子层的计划（P4a 步骤 4）：每个要画的模板一个 `particles` 步骤，直接画到场景目标。其余运行时纹理（fbo 名）粒子没有，报不支持。
  * 没有 pass（粒子 JSON 读不到、材质缺失）时为空计划。
  *
- * 快照（P4b 步骤 5，`genericparticle` 的 `REFRACT` 从 `g_Texture3` 读 `_rt_FullFrameBuffer`）：材质需要帧缓冲
- * （`pass.framebuffer`，判定同 WPE 基础材质 `+0x1fc` bit1）时，照图像层直接上屏的规则 1 在本层开始前拷一次。
- * - 时机和 WPE 相同：`FUN_1402366f0` 在本系统任何 renderer 画之前拷当前场景目标整张，每对象每帧至多一次（rea-p4b-render.md
- *   6.1）；所以快照含按 `objects` 顺序画在它前面的全部内容，不含自己。步骤 0 抓帧（`p4b-refract`）里每个 `REFRACT` 对象前
- *   各有一次拷贝，`CUTOUT` 对象前没有（它不读帧缓冲，`pass.framebuffer` 为假），和这里一致。
- * - WPE 在存活数为 0 时不拷也不画，我们照拷。画面不受影响：本层自己没有粒子可画，而之后读快照的每一层（图像层规则 1–3、
- *   passthrough、其它粒子层）都在本层内自己重拷，泛光也在全部图层之后再拷一次，没有哪一步读到的是这次多拷的内容。
- * - WPE 的场景目标开了 MSAA，快照是 `ResolveSubresource`，我们是 `copyTextureToTexture`；轴对齐、落在整像素上的四边形
- *   两者相同，差异只可能在边缘。逐像素比较见 P4b 计划步骤 5 的验收。
+ * 子系统（P4e 步骤 1、2，rea-p4e-children 第 6 节，`FUN_1402366f0` 的先序递归）：步骤按**模板树**的先序列出——父自己 → static 子系统
+ * （条目顺序、深度优先）→ 事件条目的子系统（条目顺序，P4e 步骤 2；实例共用它，`instanced`）。每个步骤用自己系统的 pass、混合、透视位，
+ * `node` 是模板路径。步骤只用来预备管线与程序、做渲染器自查：一帧里实际画几次、按什么顺序、快照拷在哪里，由渲染器沿
+ * `ParticleSystem.forEachDrawn` 每帧现排（`render/scene.ts` 的 `particle-tree` op），所以计划里不再有快照步骤。
+ * - 基础材质为空（没有 pass）的系统整棵子树都不画（`sys+0x358 == 0` 直接返回），也不列出它的子孙。
+ * - `renderer: []`（`renderers` 为空）的系统自己不画、不给步骤，照常列出子系统（语料里只靠子系统出图的发射器）。
  *
- * 子系统（P4e 步骤 1，rea-p4e-children 第 6 节，`FUN_1402366f0` 的先序递归）：一个粒子层按系统树的先序展开成若干次绘制——父自己 →
- * static 子系统（条目顺序、深度优先）；事件实例在 P4e 步骤 2 接在 static 之后。每次绘制用自己系统的 pass、混合、透视位，`node` 是它在
- * 树里的路径。
- * - 基础材质为空（没有 pass）的系统整棵子树都不画（`sys+0x358 == 0` 直接返回）。
- * - `renderer: []`（`renderers` 为空）的系统自己不画，照常递归子系统（语料里只靠子系统出图的发射器）；它的材质要帧缓冲时快照照拷
- *   （WPE 在存活数 > 0 时、逐 renderer 画之前拷）。
- * - 快照（折射位在对象上，父子共用）：先序里第一个需要帧缓冲的系统之前拷一次，同一个粒子层只拷一次。WPE 在存活数为 0 时不拷、由下一个
- *   需要的系统拷，两者之间这层没画任何东西（存活数 0 的系统不画），读到的内容相同。
+ * 快照（P4b 步骤 5，`genericparticle` 的 `REFRACT` 从 `g_Texture3` 读 `_rt_FullFrameBuffer`）的规则见 `particleTreeWantsFramebuffer` 与
+ * 渲染器：本帧先序里第一个需要帧缓冲的系统之前拷一次，每对象至多一次（折射位 `obj+0x93d` 父子共用）。
  */
 export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPlan {
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const particle = layer.particle;
   if (!particle) return { composite: null, steps, reasons };
-  let snapped = false;
-  const visit = (system: SceneParticle, node: number[]): void => {
+  visitParticleTemplates(particle, (system, node, instanced) => {
     const pass = system.passes[0];
-    if (!pass) return;
+    if (!pass) return false;
     // 编译期已报 `particle:material:passes`；渲染器只画第一个
     if (system.passes.length > 1) reasons.push("render:multi-pass");
     const inputs: Record<number, TextureRef> = {};
@@ -217,10 +212,6 @@ export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPla
     for (const [slot, name] of Object.entries(pass.runtime)) {
       if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
       else reasons.push(`render:texture-rt:${name}`);
-    }
-    if (pass.framebuffer && !snapped) {
-      snapped = true;
-      steps.push({ kind: "snapshot" });
     }
     if (system.renderers.length)
       steps.push({
@@ -232,15 +223,53 @@ export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPla
         perspective: (system.flags & 4) !== 0,
         node,
         world: (system.flags & 1) !== 0,
+        instanced,
       });
-    // 深度上限同模拟器（`MAX_CHILD_DEPTH`，编译期已按它截断；这里防手写的环）
-    if (node.length < MAX_CHILD_DEPTH)
-      system.children.forEach((child, index) => {
-        if (child.type === "static") visit(child.system, [...node, index]);
-      });
-  };
-  visit(particle, []);
+  });
   return { composite: null, steps, reasons };
+}
+
+/**
+ * 按模板树先序走一个粒子定义（P4e 步骤 2）：自己 → static 子系统（条目顺序）→ 事件条目的子系统（条目顺序），各自递归。`instanced` 是路径
+ * 经过事件条目。`visit` 返回 `false` 时不走这个系统的子孙。深度上限同模拟器（`MAX_CHILD_DEPTH`，编译期已按它截断；这里防手写的环）。
+ */
+export function visitParticleTemplates(
+  particle: SceneParticle,
+  visit: (system: SceneParticle, node: number[], instanced: boolean) => boolean | void,
+): void {
+  const walk = (system: SceneParticle, node: number[], instanced: boolean): void => {
+    if (visit(system, node, instanced) === false || node.length >= MAX_CHILD_DEPTH) return;
+    system.children.forEach((child, index) => {
+      if (child.type === "static") walk(child.system, [...node, index], instanced);
+    });
+    system.children.forEach((child, index) => {
+      if (child.type !== "static") walk(child.system, [...node, index], true);
+    });
+  };
+  walk(particle, [], false);
+}
+
+/**
+ * 粒子层可能要 `_rt_FullFrameBuffer`（P4b 步骤 5、P4e 步骤 1）：模板树里有材质需要帧缓冲（`pass.framebuffer`，判定同 WPE 基础材质
+ * `+0x1fc` bit1）的系统，`renderer: []` 的也算（WPE 在它逐 renderer 画之前照拷）。渲染器据此建快照纹理，每帧在先序里第一个这样的
+ * 系统之前拷一次：
+ * - 时机和 WPE 相同：`FUN_1402366f0` 在本系统任何 renderer 画之前拷当前场景目标整张，每对象每帧至多一次（rea-p4b-render.md
+ *   6.1）；所以快照含按 `objects` 顺序画在它前面的全部内容，不含自己。步骤 0 抓帧（`p4b-refract`）里每个 `REFRACT` 对象前
+ *   各有一次拷贝，`CUTOUT` 对象前没有（它不读帧缓冲，`pass.framebuffer` 为假），和这里一致。
+ * - WPE 在存活数为 0 时不拷也不画，我们照拷。画面不受影响：本层自己没有粒子可画，而之后读快照的每一层（图像层规则 1–3、
+ *   passthrough、其它粒子层）都在本层内自己重拷，泛光也在全部图层之后再拷一次，没有哪一步读到的是这次多拷的内容。同一层里 WPE 由下一个
+ *   需要的系统拷，两者之间这层没画任何东西（存活数 0 的系统不画），读到的内容相同。
+ * - WPE 的场景目标开了 MSAA，快照是 `ResolveSubresource`，我们是 `copyTextureToTexture`；轴对齐、落在整像素上的四边形
+ *   两者相同，差异只可能在边缘。逐像素比较见 P4b 计划步骤 5 的验收。
+ */
+export function particleTreeWantsFramebuffer(particle: SceneParticle): boolean {
+  let wanted = false;
+  visitParticleTemplates(particle, (system) => {
+    const pass = system.passes[0];
+    if (!pass) return false;
+    if (pass.framebuffer) wanted = true;
+  });
+  return wanted;
 }
 
 export function planLayer(

@@ -166,8 +166,15 @@ def _tail(text, n=300):
     return (lines[-1] if lines else "")[:n]
 
 
+def _upper_drive(path):
+    """Windows 盘符转大写：cwd 或 vitest.mjs 是小写盘符（`d:\\…`）时，快照里的测试经 `node_modules` 解析到大写盘符的 vitest，
+    同一个模块加载成两份，`describe` 读不到 config、整个文件 0 个用例（2026-11-12 P4e 步骤 2 的变异基线踩到）。"""
+    return path[0].upper() + path[1:] if len(path) > 1 and path[1] == ":" else path
+
+
 def run_tests(root, tests, timeout):
-    vitest = os.path.join(common.REPO_ROOT, "node_modules", "vitest", "vitest.mjs")
+    root = _upper_drive(root)
+    vitest = _upper_drive(os.path.join(common.REPO_ROOT, "node_modules", "vitest", "vitest.mjs"))
     env = dict(os.environ, KABEGAME_WPE_ROOT=common.wpe_dir())
     env.pop("KBP_TEST", None)
     started = time.time()

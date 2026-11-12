@@ -756,7 +756,8 @@ export function checkParticleProgram(
  * 键当缺键，不认识的键（含 `id`）没有读者、中性：
  * - 不是对象，或 `name` 不是非空字符串：`particle:child:name`（WPE 读到空文件名，加载失败，这棵子树不画）；
  * - 不认识的 `type`（含大小写不同的 `"Static"`）：中性，WPE 整条忽略（编号 0，实测 `st-type`）；
- * - 事件类：`particle:children:<type>`（eventfollow 步骤 2、eventspawn / eventdeath 步骤 3）；
+ * - `eventfollow`（P4e 步骤 2，rea-p4e-children 第 4 节，实例池与跟随见 `particles/system.ts`）：已实现，不报；
+ * - `eventspawn` / `eventdeath`：`particle:children:<type>`（步骤 3）；
  * - 条目键写成 `{user}` / `{script}`：`particle:binding:child:<键>`（WPE 按 `asString` / `asInt` 读，对象会抛异常）；
  * - `origin` / `angles` / `scale` 不是字符串：`particle:child:<键>`（WPE 把数值当指针读，语料都是字符串）；
  * - `flags` bit0 且 `controlpointstartindex` 为负：`particle:child:controlpointstartindex`（WPE 从负下标写控制点，越界，第 5 节【推】）。
@@ -775,7 +776,8 @@ export function checkParticleChildren(children: unknown, unsupported: Set<string
       unsupported.add("particle:child:name");
       continue;
     }
-    if (entry.type !== null && entry.type !== "static") unsupported.add(`particle:children:${entry.type}`);
+    // eventfollow 已实现（P4e 步骤 2）；eventspawn、eventdeath 的触发在步骤 3
+    if (entry.type === "eventspawn" || entry.type === "eventdeath") unsupported.add(`particle:children:${entry.type}`);
     if (entry.flags & 1 && entry.controlPointStartIndex < 0) unsupported.add("particle:child:controlpointstartindex");
   }
 }
@@ -790,8 +792,8 @@ export function checkParticleChildren(children: unknown, unsupported: Set<string
  *   bit1 唯一的读取点是关混帧
  *   （rea-p4b-render.md 2.3【确，有界】，P4b 步骤 2）。更高位逐位报 `particle:flags:<位值>`（WPE 解析时 `movzx` 只取低 8 位，
  *   `0x1401c56e9`，高位其实被丢掉；没有样本，保守报）。
- * - `children`（P4e 步骤 1，`checkParticleChildren`；WPE 只读数组，`0x1401d0899`）：`static` 条目已实现，子系统 JSON 由
- *   `compileScene` 读出后照顶层同样检查；事件类条目报 `particle:children:<type>`（步骤 2、3 实现一种删一种）。`options.children`
+ * - `children`（P4e 步骤 1，`checkParticleChildren`；WPE 只读数组，`0x1401d0899`）：`static`、`eventfollow`（步骤 2）条目已实现，子系统
+ *   JSON 由 `compileScene` 读出后照顶层同样检查；`eventspawn` / `eventdeath` 条目报 `particle:children:<type>`（步骤 3）。`options.children`
  *   为 false 时不看（深度已到 `MAX_CHILD_DEPTH` 的系统，WPE 不读它的 `children`）。
  * - 控制点：全部支持或中性（P4c 步骤 1、2，`particles/controlpoints.ts`：`offset`、`flags` bit0 指针、bit1 已实现，bit2 父控制点、
  *   bit3 父分支不换算与 `parentcontrolpoint` 在子系统里实现（P4e 步骤 1），在顶层系统上 bit2 只让实例覆盖不生效、bit3 没有读者；

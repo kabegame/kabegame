@@ -16,7 +16,7 @@ import { checkParticleProgram } from "./features";
 import type { SceneReader } from "./fs";
 import type { MaterialPass } from "./model";
 import { TEX_FLAGS } from "./tex";
-import { planParticleLayer } from "../render/graph";
+import { particleTreeWantsFramebuffer, planParticleLayer } from "../render/graph";
 import { GpuScene } from "../render/scene";
 import { SceneState } from "../render/state";
 import { Wpesl2wgsl, type TranslateRequest, type TranslateResult } from "../wpesl2wgsl";
@@ -521,7 +521,7 @@ describe.skipIf(!root || !existsSync(wasm))("真翻译器：折射、裁切工�
     expect(layerOf(bundle, "S").particle!.spriteSheet).toBe(true);
   }, 120000);
 
-  it("粒子层计划：折射层先 snapshot 再画、槽 3 读快照；裁切与没开折射的层没有 snapshot", async () => {
+  it("粒子层计划：折射层槽 3 读快照、模板树要帧缓冲；裁切与没开折射的层不要（快照由渲染器编码时插，P4e 步骤 2）", async () => {
     const { bundle } = await compileRefract();
     for (const name of REFRACTING) {
       const plan = planParticleLayer(layerOf(bundle, name));
@@ -529,15 +529,18 @@ describe.skipIf(!root || !existsSync(wasm))("真翻译器：折射、裁切工�
       expect(
         plan.steps.map((step) => step.kind),
         name,
-      ).toEqual(["snapshot", "particles"]);
-      const draw = plan.steps[1];
+      ).toEqual(["particles"]);
+      const draw = plan.steps[0];
       expect(draw.kind === "particles" && draw.inputs[3], name).toEqual({ kind: "framebuffer" });
+      expect(particleTreeWantsFramebuffer(layerOf(bundle, name).particle!), name).toBe(true);
     }
-    for (const name of NOT_REFRACTING)
+    for (const name of NOT_REFRACTING) {
       expect(
         planParticleLayer(layerOf(bundle, name)).steps.map((step) => step.kind),
         name,
       ).toEqual(["particles"]);
+      expect(particleTreeWantsFramebuffer(layerOf(bundle, name).particle!), name).toBe(false);
+    }
   }, 120000);
 
   it("每帧快照次数 = 折射对象数，存活数为 0 的折射层（开场、P0 的空档）照拷", async () => {

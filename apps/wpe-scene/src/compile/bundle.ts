@@ -879,8 +879,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    * - `instanceoverride`：只有顶层登记绑定（就地目标是对象的）；子系统按缺省值解析，实例值由模拟器从对象上传下去（`ParticleSystem`
    *   的 `link`，rea-p4e-children 3.4）。能力上子系统按自己的 `flags` 再查一遍对象的 `instanceoverride`（`brightness`、`colorn` 的照报项
    *   看各自的 bit3）。
-   * - `children`：深度 < `MAX_CHILD_DEPTH` 才读（1.6，自引用的文件到第 10 层停）。四种类型的子系统都编进来（事件类由能力表报
-   *   `particle:children:<type>`，编出来让 `exhaustive` 列全它们自己的问题，也给步骤 2、3 用），不认识的类型、读不到的文件不进。
+   * - `children`：深度 < `MAX_CHILD_DEPTH` 才读（1.6，自引用的文件到第 10 层停）。四种类型的子系统都编进来（事件实例共用它，P4e
+   *   步骤 2；`eventspawn` / `eventdeath` 由能力表报 `particle:children:<type>`，编出来让 `exhaustive` 列全它们自己的问题，也给步骤 3 用），
+   *   不认识的类型、读不到的文件不进。
    *   材质缺失时照样编子系统：WPE 这时整棵子树不画（`FUN_1402366f0` 基础材质为空直接返回），已由 `material:missing` 报。
    */
   async function compileParticleSystem(

@@ -68,7 +68,7 @@ const keys = (particle: SceneParticle): string[] => [
 ];
 
 describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
-  it("static 条目递归编进 children，稳定键按 JSON 下标（丢掉的条目不移位），事件类也编进来并报 particle:children:<type>", async () => {
+  it("static 条目递归编进 children，稳定键按 JSON 下标（丢掉的条目不移位），事件类也编进来；eventfollow 不报（P4e 步骤 2），eventspawn / eventdeath 照报", async () => {
     const bundle = await compile(
       memoryReader(
         files({
@@ -77,6 +77,7 @@ describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
               { name: "particles/c.json", type: "Static" },
               { name: "particles/c.json", origin: "60 0 0", angles: "0 0 -50", scale: "2" },
               { name: "particles/c.json", type: "eventfollow", maxcount: 3, probability: 0.5 },
+              { name: "particles/g.json", type: "eventdeath" },
             ],
           }),
           "particles/c.json": system({ flags: 1, children: [{ name: "particles/g.json" }] }),
@@ -84,11 +85,12 @@ describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
         }),
       ),
     );
-    expect(bundle.unsupported).toEqual(["particle:children:eventfollow"]);
+    expect(bundle.unsupported).toEqual(["particle:children:eventdeath"]);
     const particle = bundle.layers[0].particle!;
     expect(particle.children.map((child) => [child.type, child.system.file])).toEqual([
       ["static", "particles/c.json"],
       ["eventfollow", "particles/c.json"],
+      ["eventdeath", "particles/g.json"],
     ]);
     expect(particle.children[0].local.slice(12, 15)).toEqual([60, 0, 0]);
     // `scale "2"`：y、z 列缺分量补 0（`+ 0` 把 −0 换成 +0）
@@ -100,6 +102,7 @@ describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
       "objects/0/particle/children/1/children/0/passes/0",
       "objects/0/particle/children/2/passes/0",
       "objects/0/particle/children/2/children/0/passes/0",
+      "objects/0/particle/children/3/passes/0",
     ]);
   });
 

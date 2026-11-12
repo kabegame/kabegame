@@ -224,8 +224,9 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     );
     const world = worldMatrixOf(layer.object, transforms, worlds);
     system.prewarm({ world, pointer: loadPointer });
-    system.forEachDrawn((node, path) => {
-      if (node.skipped.length) skipped[path.length ? `${name}/${path.join("/")}` : name] = node.skipped;
+    // 加载时只有 static 子系统；事件实例的模板在输出时第一次出现再记（`drawnSystems`）
+    system.forEachDrawn((node, template) => {
+      if (node.skipped.length) skipped[systemKey(name, template)] = node.skipped;
     });
     systems.push({ name, system, world });
   }
@@ -248,14 +249,46 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     if (options.shake && size) previousShake = shakeOffset(options.shake, time, size[1]);
     if (!wanted.has(frame)) continue;
     const out: Record<string, ParticleTrackParticle[]> = {};
-    // 子系统（P4e 步骤 1）按绘制先序接在父后面，键 `<名字>/<树里的路径>`（`ParticleSystem.forEachDrawn`）；位置是子系统自己坐标里的
+    // 子系统（P4e 步骤 1、2）按绘制先序接在父后面（`ParticleSystem.forEachDrawn`），键见 `drawnSystems`；位置是子系统自己坐标里的
     // （同 WPE 的 `vs_in`，模型矩阵另算）。没有子系统时和以前逐字节相同
     for (const { name, system } of systems)
-      system.forEachDrawn((node, path) => {
-        const particles = particleSnapshot(node);
-        if (particles.length) out[path.length ? `${name}/${path.join("/")}` : name] = particles;
-      });
+      for (const { key, template, system: node, particles } of drawnSystems(name, system)) {
+        out[key] = particles;
+        if (node.skipped.length && !skipped[template]) skipped[template] = node.skipped;
+      }
     frames.push({ frame, dt, systems: out });
   }
   return { source: "sim", project: options.project ?? "", tag: options.tag ?? "", frames, skipped };
+}
+
+/** 一个系统在轨迹里的键：顶层是对象名，子系统 `<名字>/<模板路径>`（每层 `def.children` 下标，P4e 步骤 1）。 */
+function systemKey(name: string, template: readonly number[]): string {
+  return template.length ? `${name}/${template.join("/")}` : name;
+}
+
+/**
+ * 一棵系统树里有存活粒子的系统，按绘制先序（`ParticleSystem.forEachDrawn`）。键是 `systemKey`；同一模板出现多次（事件实例，P4e 步骤 2）
+ * 时第 k 次（k ≥ 2）加 `#k`。只数有存活粒子的：WPE 存活数为 0 的系统不画（rea-p4e-children 第 6 节），RenderDoc 的轨迹里看不到它，
+ * 这样第 k 次和抓帧里同一模板的第 k 次绘制对得上。
+ */
+export function drawnSystems(name: string, root: ParticleSystem): DrawnSystem[] {
+  const out: DrawnSystem[] = [];
+  const seen = new Map<string, number>();
+  root.forEachDrawn((system, path) => {
+    const particles = particleSnapshot(system);
+    if (!particles.length) return;
+    const template = systemKey(name, path);
+    const k = (seen.get(template) ?? 0) + 1;
+    seen.set(template, k);
+    out.push({ key: k > 1 ? `${template}#${k}` : template, template, system, particles });
+  });
+  return out;
+}
+
+/** `drawnSystems` 的一项：`key` 是轨迹里的键（带 `#k`），`template` 是不带序号的模板键。 */
+export interface DrawnSystem {
+  key: string;
+  template: string;
+  system: ParticleSystem;
+  particles: ParticleTrackParticle[];
 }

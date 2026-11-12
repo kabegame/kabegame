@@ -145,9 +145,12 @@ kbp.py replay <案例…> | --all [--src 产品源码] [--data 目录] [--out �
 - 摘要：`cases`（每个案例的 `ok`、`seconds`）、`all_passed`。案例「有失败」是结果，退出码仍是 0；案例跑不下去（钩子或产品接口出错）
   报 `[src]`，退出码非 0。
 - 现有案例（`ignore/p4/cases/`）：`b3`（P4a 的 9 个标签、`p4b` 模块、`p4b-emit`）、`b4`（噪声）、`b6`（三组 `colorn`）、`c1`（`p4c-cp`）、
-  `c2`（`p4c-ptr`）、`c3`（`p4c-attract`，`a-default` 的已知超限照原脚本记失败）、`c4`（`p4c-world`，`p4c-ptr` 加 `p-world`）、`d1`（绳）、`e1`（P4e static 子系统）。
-  子系统（P4e 起）：产品的系统树由根系统带着步进，回放只步进根，按 `forEachDrawn` 的先序与 `kbp-meta.json` 的 `children` 给子系统起名
-  （路径下标经 `SceneParticleChild.index` 换成 JSON 条目下标），同名第 2 次起记 `名字#n`（自引用）。
+  `c2`（`p4c-ptr`）、`c3`（`p4c-attract`，`a-default` 的已知超限照原脚本记失败）、`c4`（`p4c-world`，`p4c-ptr` 加 `p-world`）、`d1`（绳）、`e1`（P4e static 子系统）、
+  `e2`（P4e 事件实例池与 `eventfollow`）。
+  子系统（P4e 起）：产品的系统树由根系统带着步进，回放只步进根，**每帧**按 `forEachDrawn` 的先序与 `kbp-meta.json` 的 `children` 给子系统
+  起名（路径下标经 `SceneParticleChild.index` 换成 JSON 条目下标）：同名第 2 次起记 `名字#n`（自引用、事件实例），**只数有存活粒子的**
+  （WPE 存活数为 0 的系统不画，抓帧里看不到它）。旧签名（`forEachDrawn(callback)` 只给系统与路径）照样能用。
+  事件实例的粒子存在实例自己的坐标里，本地实例的实例矩阵 `X` 不改变回放比的坐标，只有世界实例看得出来；`X` 的组合靠单测守。
   2026-11-10 在同一份冻结快照上和原脚本（`c5/` 下的最新拷贝、`d1/replay.test.ts`）逐系统逐项比过，数值逐位相同。
 - 本机耗时（同一进程里，不含 vitest 启动约 1.5 s）：`b3` 约 16 s、`b4` 约 17 s、`c4` 约 5 s、`d1` 约 4 s、`c2` 约 3 s，其余 1 s 左右。
 
@@ -242,6 +245,8 @@ DEFAULTS = {"tests": […], "cases": […], "commands": […]}   # 变异没写�
   - 四角当检出方时加 `--strict`（有不符退出码非 0）。
 - **基线**：先在没改的源码上把用到的检出方各跑一遍（同样的只跑一次）；基线就失败的检出方，结论里标「基线就失败」，它的检出不算数。
   `--no-baseline` 跳过。
+- **单测的盘符**：单测在快照目录里以 vitest 直接跑，cwd 与 `vitest.mjs` 的盘符一律转成大写（2026-11-12 修）。小写 `d:\…` 时快照里的
+  测试经 `node_modules` 解析到大写盘符的 vitest，同一模块加载成两份，每个文件 `0 test`、基线就失败。
 - **两种模式**：
   - `snapshot`（缺省）：要求 `--src` 在 `kbp snapshot export` 的快照里（上一级有 `snapshot.json`），按原字节写回并核对哈希；整树哈希必须
     前后相同。

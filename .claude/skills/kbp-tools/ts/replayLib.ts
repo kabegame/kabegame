@@ -879,98 +879,139 @@ export class CaseContext {
       o.timeMode === "cur" ? o.times[f - 1] : o.timeMode === "prev" ? (f > 1 ? o.times[f - 2] : 0) : undefined;
     const inputs = (layer: any, f: number) =>
       o.controls ? { world: o.world?.(layer, f), pointer: o.follows?.[Math.max(0, f - 1)] ?? [0, 0] } : undefined;
-    const entries: {
-      name: string;
-      layer: any;
-      system: any;
-      births: Map<number, [number, number]>;
-      count: number;
-      /** 子系统（P4e 起）：由根系统的 step 带着走，这里只记录。 */
-      child?: boolean;
-    }[] = [];
-    // 子系统的名字（P4e 起）：kbp-meta.json 的 children 是「系统名 → 条目顺序的子系统名」，产品的路径下标就是条目下标
+    const entries: { name: string; layer: any; system: any; births: Map<number, [number, number]>; count: number }[] =
+      [];
+    // 子系统（P4e 起）：由根系统的 step 带着走，回放只步进根；每帧沿 forEachDrawn（系统、模板路径、模型矩阵）现列子孙。
+    // 名字：模板路径（每层 def.children 下标）经 children[i].index 换成 JSON 条目下标，再按 kbp-meta.json 的 children 换成系统名
+    // （基础名）；同一基础名按先序出现先后记 名字、名字#2…，只数有存活粒子的（WPE 存活数为 0 的系统不画，提取器看不到），根自己占第 1 个
+    // （自引用）；一个都没有时记一个空的基础名。出生序号按基础名全局编号（事件实例会换 #n），历史坐标先记在「基础名:序号」下，出记录时
+    // 抄到当帧的名字下。
     const metaChildren = this.metaChildren(sec.project);
-    const roots = new Set<unknown>();
+    const childState = new Map<unknown, Map<number, [number, number]>>();
+    const childCount = new Map<string, number>();
+    const childName = (layer: any, template: readonly number[]): string => {
+      let name: string | undefined = layer.name;
+      let def = layer.particle;
+      for (const index of template) {
+        const link = def?.children?.[index];
+        name = name === undefined ? undefined : metaChildren[name]?.[link?.index ?? index];
+        def = link?.system;
+      }
+      if (name === undefined)
+        throw new KbpReplayError(
+          "data",
+          `${sec.project}：kbp-meta.json 的 children 里找不到 ${layer.name} 的子系统 ${template}`,
+        );
+      return name;
+    };
+    /** 一个根下面本帧被画的子孙（先序）：[基础名, 系统]。 */
+    const descendants = (entry: (typeof entries)[number]): [string, any][] => {
+      const list: [string, any][] = [];
+      // 步骤 1 的旧签名 forEachDrawn(callback(系统, 路径)) 第二个参数同样是路径，两版都能用；P4e 之前的源码没有它
+      if (typeof entry.system.forEachDrawn !== "function") return list;
+      entry.system.forEachDrawn((system: any, template: readonly number[]) => {
+        if (template.length) list.push([childName(entry.layer, template), system]);
+      });
+      return list;
+    };
     for (const layer of o.layers ?? sec.layers) {
       if (!layer.particle) continue;
-      let random: RandomLike = new SeededRandom(1 + roots.size);
+      let random: RandomLike = new SeededRandom(1 + entries.length);
       if (o.random?.[layer.name]) random = o.random[layer.name](random);
       const injected = o.r?.[layer.name];
       const system = new ParticleSystem(layer.particle, random, o.passes, injected ? injectedR(injected) : undefined);
       o.patch?.(system, layer);
       system.prewarm(inputs(layer, 0) as never);
-      roots.add(system);
       entries.push({ name: layer.name, layer, system, births: new Map(), count: 0 });
-      system.forEachDrawn?.((child: any, node: readonly number[]) => {
-        if (!node.length) return;
-        // 产品的路径是 SceneParticle.children 的下标（跳过了不认识的类型），meta 按 JSON 条目下标：经 children[i].index 换算
-        let name: string | undefined = layer.name;
-        let def = layer.particle;
-        for (const index of node) {
-          const link = def?.children?.[index];
-          name = name === undefined ? undefined : metaChildren[name]?.[link?.index ?? index];
-          def = link?.system;
-        }
-        if (name === undefined)
-          throw new KbpReplayError(
-            "data",
-            `${sec.project}：kbp-meta.json 的 children 里找不到 ${layer.name} 的子系统 ${node}`,
-          );
-        // 同名的第 2 次起记 `名字#n`（自引用的子系统同色连画，提取器同样这样记）
-        const seen = entries.filter((e) => e.name === name || e.name.startsWith(`${name}#`)).length;
-        entries.push({
-          name: seen ? `${name}#${seen + 1}` : name,
-          layer,
-          system: child,
-          births: new Map(),
-          count: 0,
-          child: true,
-        });
-      });
     }
     const out: SimFrames = new Map();
     const history = new Map<string, number>();
+    const remember = (key: string, c: any, slot: number) => {
+      const coord = Math.max(
+        Math.abs(c.position[0][slot]),
+        Math.abs(c.position[1][slot]),
+        Math.abs(c.position[2][slot]),
+      );
+      if (coord > (history.get(key) ?? 0)) history.set(key, coord);
+    };
+    const snapshot = (system: any, births: Map<number, [number, number]>): SimParticle[] => {
+      const c = system.columns;
+      const alive: number[] = [];
+      for (let slot = 0; slot < system.highWater; slot++) if (c.life[slot] !== 0) alive.push(slot);
+      return particleSnapshot(system).map((p: Particle, i: number) => {
+        const slot = alive[i];
+        const row: SimParticle = {
+          ...p,
+          birth: births.get(slot)?.[0] ?? -1,
+          born: births.get(slot)?.[1] ?? -1,
+          age: c.age[slot],
+          life: c.life[slot],
+        };
+        if (o.vel) row.vel = [0, 1, 2].map((k) => c.velocity[k][slot]);
+        return row;
+      });
+    };
     for (let frame = 1; frame <= last; frame++) {
       for (const entry of entries) {
         const before = entry.system.alive;
-        if (!entry.child) entry.system.step(o.dts[frame - 1], timeArg(frame), inputs(entry.layer, frame) as never);
+        entry.system.step(o.dts[frame - 1], timeArg(frame), inputs(entry.layer, frame) as never);
         const c = entry.system.columns;
         for (let slot = 0; slot < entry.system.highWater; slot++) {
           if (c.life[slot] === 0) continue;
           if (c.age[slot] === 0) entry.births.set(slot, [entry.count++, frame]);
           const birth = entry.births.get(slot)?.[0];
-          const key = `${entry.name}:${pool ? (birth ?? -1) : birth}`;
-          const coord = Math.max(
-            Math.abs(c.position[0][slot]),
-            Math.abs(c.position[1][slot]),
-            Math.abs(c.position[2][slot]),
-          );
-          if (coord > (history.get(key) ?? 0)) history.set(key, coord);
+          remember(`${entry.name}:${pool ? (birth ?? -1) : birth}`, c, slot);
         }
         o.observe?.(entry.name, entry.system, frame, before, entry.births);
+        for (const [base, system] of descendants(entry)) {
+          let births = childState.get(system);
+          if (!births) childState.set(system, (births = new Map()));
+          const cc = system.columns;
+          for (let slot = 0; slot < system.highWater; slot++) {
+            if (cc.life[slot] === 0) continue;
+            if (cc.age[slot] === 0) {
+              const n = childCount.get(base) ?? 0;
+              births.set(slot, [n, frame]);
+              childCount.set(base, n + 1);
+            }
+            const birth = births.get(slot)?.[0];
+            remember(`${base}:${pool ? (birth ?? -1) : birth}`, cc, slot);
+          }
+        }
       }
       if (!wanted.has(frame)) continue;
       const record: Record<string, SimParticle[]> = {};
-      for (const { name, system, births } of entries) {
-        const c = system.columns;
-        const alive: number[] = [];
-        for (let slot = 0; slot < system.highWater; slot++) if (c.life[slot] !== 0) alive.push(slot);
-        record[name] = particleSnapshot(system).map((p: Particle, i: number) => {
-          const slot = alive[i];
-          const row: SimParticle = {
-            ...p,
-            birth: births.get(slot)?.[0] ?? -1,
-            born: births.get(slot)?.[1] ?? -1,
-            age: c.age[slot],
-            life: c.life[slot],
-          };
-          if (o.vel) row.vel = [0, 1, 2].map((k) => c.velocity[k][slot]);
-          return row;
-        });
+      for (const entry of entries) {
+        record[entry.name] = snapshot(entry.system, entry.births);
+        const seen = new Map<string, number>([[entry.name, 1]]);
+        const empty = new Set<string>();
+        for (const [base, system] of descendants(entry)) {
+          if (system.alive === 0) {
+            empty.add(base);
+            continue;
+          }
+          const k = (seen.get(base) ?? 0) + 1;
+          seen.set(base, k);
+          const name = k === 1 ? base : `${base}#${k}`;
+          const rows = snapshot(system, childState.get(system) ?? new Map());
+          record[name] = rows;
+          for (const row of rows) {
+            const value = history.get(`${base}:${row.birth}`);
+            if (value !== undefined && name !== base) history.set(`${name}:${row.birth}`, value);
+          }
+        }
+        for (const base of empty) if (!(base in record)) record[base] = [];
       }
       out.set(frame, record);
     }
-    return { out, history, births: Object.fromEntries(entries.map(({ name, count }) => [name, count])) };
+    return {
+      out,
+      history,
+      births: {
+        ...Object.fromEntries(entries.map(({ name, count }) => [name, count])),
+        ...Object.fromEntries(childCount),
+      },
+    };
   }
 
   /** 精确一遍，再按 rcp / rsqrt 的四种偏置组合各跑一遍（近似运算包络）。 */

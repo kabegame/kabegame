@@ -583,8 +583,9 @@ describe("渲染图：粒子层", () => {
       framebuffer: true,
     };
     const snapped = planParticleLayer(layer);
-    expect(snapped.steps.map((step) => step.kind)).toEqual(["snapshot", "particles"]);
-    expect(snapped.steps[1]).toMatchObject({ inputs: { 1: { kind: "framebuffer" } } });
+    // 快照由渲染器编码时插（P4e 步骤 2），计划里只有读快照的输入
+    expect(snapped.steps.map((step) => step.kind)).toEqual(["particles"]);
+    expect(snapped.steps[0]).toMatchObject({ inputs: { 1: { kind: "framebuffer" } } });
     expect(snapped.reasons).toEqual(["render:texture-rt:_rt_Other"]);
     // 没有 pass（粒子 JSON 读不到、材质缺失）时为空
     expect(planParticleLayer(baseLayer(1, { particle: { ...layer.particle!, passes: [] } })).steps).toEqual([]);
@@ -645,9 +646,9 @@ describe("GpuScene：粒子绘制（假设备）", () => {
       ]),
     ).toEqual([
       [0, ["draw"]],
-      [1, ["particles"]],
+      [1, ["particle-tree"]],
       [2, ["draw"]],
-      [3, ["particles"]],
+      [3, ["particle-tree"]],
     ]);
     stepFrame(scene, frame(0.5), state);
     const trace = gpu.encode(scene, state);

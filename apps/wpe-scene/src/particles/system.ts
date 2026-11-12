@@ -42,6 +42,17 @@
  * - 不可见（3.6）：顶层有存活粒子时，复位与清空递归到 static 子孙；之后整棵子树照常以 `emit = false` 步进（`suspend`）。
  * 子系统的 remap `layertime`、`layerorigin` 读对象的（和根共用 `obj`，3.1）。
  *
+ * 事件子系统（P4e 步骤 2，rea-p4e-children 第 4 节，实测见报告「P4e 语义的实测核对」的事件子系统表）：每个事件条目一个实例池
+ * （`events`，4.1），实例是一棵完整的系统子树（同 static 子系统的构造），多一个对象矩阵 `X`（`instanceMatrix`，4.5）。三种事件类型都建池，
+ * 本步只有 `eventfollow` 会被触发（`eventspawn` / `eventdeath` 的触发在步骤 3）。一帧里（7.3）：
+ * - 判死之后（4.2 第一段，`0x140237320`–`0x1402373bb`）：跟着死粒子的 eventfollow 实例停跟随（`followSlot = −1`，`X` 冻结），自己与 static
+ *   子孙的发射器全部标结束（`endEmitters`），已有粒子照常活完；
+ * - 发射之后（4.3，`0x14023ae9a`–`0x14023b28c`）：逐条目、逐本帧新粒子抽 `uA`（满了整条目不抽），`uA ≤ probability` 才从池里取实例
+ *   （`takeInstance`，4.7：空闲表尾部复用或新建），`X` 用新粒子 operator 之前的位置，按实例自己的 `starttime` 预热；
+ * - static 子系统之后（4.6）：按条目、按建立先后步进活跃实例（eventfollow 先用父粒子本帧 operator 之后的位置重算 `X`），步进后不活跃
+ *   （`isActive`，`FUN_14022c310`）的移进空闲表。本帧新建的实例当帧就步进一次完整的 `dt′`。
+ * 预热期间不建实例、不处理事件（`sys+0x41` 清零，4.8）。不可见时顶层与 static 子孙的活跃实例销毁、空闲表保留（3.6）。
+ *
  * `rope`（P4d 步骤 1，rea-p4d-rope.md 第 2 节）：renderer 是 rope 的系统另维护 rope 表（`ropeOrder`，存槽号、表序就是出生序）
  * 和累计死亡数（`deaths`，`sys+0x350`，只给 `uvscrolling` 用）：出生时追加，每帧判死后保序删除当帧的死亡槽、死亡数累加（删除在
  * 发射之前），`clear` 时一起清零。两遍模式只影响 operator，预热照常维护（2.4）。段顶点见 `rope.ts`。
@@ -66,7 +77,7 @@ import {
   type SceneParticle,
   type SceneParticleChild,
 } from "../compile/particles";
-import { identity, invert, multiply, type Mat4 } from "../render/math";
+import { identity, invert, multiply, translation, type Mat4 } from "../render/math";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { colornState, type Rgb } from "./colorn";
 import { ParticleColumns } from "./columns";
@@ -214,6 +225,32 @@ interface TreeFrame {
   emit: boolean;
 }
 
+/** 运行中新建事件实例时它预热要用的环境（P4e 步骤 2，4.7）：场景时间、图层时间与对象世界矩阵，取父系统这一帧的。 */
+interface PrewarmEnv {
+  /** 场景时间 `T`：加载时 0（rea-p4b-modules B2 末条）；运行中建实例时是这一帧的（`ctx+0x130` 是全场的场景时间，【推】）。 */
+  time: number;
+  /** 图层时间（remap 的 `layertime`，`obj+0x770`）：加载时 0，运行中是这一帧的。 */
+  layerTime: number;
+  /** 对象世界矩阵 `W`（remap 的 `layerorigin`）。 */
+  object: Mat4;
+}
+
+/**
+ * 一个事件条目的实例池（rea-p4e-children 4.1，条目表 `sys+0x498` 的一项：`+0x08` 活跃表、`+0x20` 空闲表）。池只增不减；不可见时活跃
+ * 实例被销毁、空闲表保留（3.6）。
+ */
+export interface ParticleEventPool {
+  /** 条目在父的 `def.children` 里的下标（模板路径按它走，实例不计序号）。 */
+  index: number;
+  entry: SceneParticleChild;
+  /** 条目的局部矩阵 `L`（`entry.local` 的 float32 形态）。 */
+  local: Mat4;
+  /** 活跃实例，建立先后（步进与绘制都按它，4.6、第 6 节）；条目 `maxcount` 是它的上限（4.1）。 */
+  readonly active: ParticleSystem[];
+  /** 空闲实例：回收时追加，取用时从尾部拿（后进先出，4.7）。 */
+  readonly free: ParticleSystem[];
+}
+
 /** 一个 static 子系统（rea-p4e-children 2 节的 `sys+0x480` 表项）。 */
 export interface ParticleChildSystem {
   /** 条目在父的 `def.children` 里的下标（`ParticleSystem.node` 的路径按它走）。 */
@@ -276,38 +313,30 @@ export function writeParentPoints(
   }
 }
 
-/** 系统树里一个节点的定义：`node` 是从根起每层的 `children` 下标（顶层 `[]`）。 */
+/**
+ * 系统树里一个模板的定义：`node` 是从根起每层的 `children` 下标（顶层 `[]`）。事件条目下的路径同样适用（实例不计序号，P4e 步骤 2 的
+ * 模板路径）。
+ */
 export function particleNode(root: SceneParticle, node: readonly number[]): SceneParticle {
   let current = root;
   for (const index of node) current = current.children[index].system;
   return current;
 }
 
-/**
- * 一次绘制的模型矩阵（`FUN_1402366f0` 的先序递归，rea-p4e-children 第 6 节、3.3【确】）。`object` 是对象世界矩阵 `W`：
- * ```
- * 顶层：     model = 世界 ? I : W；画完后栈顶是 W（世界系统画完恢复成 X = W，0x140236ae9）
- * 子系统：   model = 世界 ? I : top(父) · L
- *            top   = 世界 ? L : model                // 世界子系统画完把栈顶恢复成 X = L
- * ```
- * 所以世界 static 子系统的本地孙辈绘制时是 `L·L₂`，模拟时却是 `W·L·L₂`（3.3「两处不一致」，照复刻）。顶层返回的就是传入的 `object`
- * 或新的单位阵，和 P4c 的 `particleModel` 逐字节相同。
- */
-export function particleDrawModel(object: Mat4, root: SceneParticle, node: readonly number[]): Mat4 {
-  if (!node.length) return root.flags & 1 ? identity() : object;
-  let top = object;
-  let current = root;
-  let model = object;
-  for (const index of node) {
-    const child = current.children[index];
-    const local = new Float32Array(child.local);
-    const world = (child.system.flags & 1) !== 0;
-    model = world ? identity() : multiply(top, local);
-    top = world ? local : model;
-    current = child.system;
-  }
-  return model;
+/** NaN 的 4×4：`invert` 失败（`W` 奇异）时用，同 WPE 乘 `1/det = inf`，画不出来。 */
+function nanMatrix(): Mat4 {
+  return new Float32Array(16).fill(Number.NaN);
 }
+
+/**
+ * `forEachDrawn` 的回调：系统、模板路径（每层 `def.children` 下标，事件实例不计序号）、这次绘制的模型矩阵。返回 `false` 时不再递归
+ * 这个系统的子孙（渲染器用它跳过基础材质为空的子树，第 6 节）。
+ */
+export type ParticleDrawnCallback = (
+  system: ParticleSystem,
+  template: readonly number[],
+  model: Mat4,
+) => boolean | void;
 
 export class ParticleSystem {
   readonly def: SceneParticle;
@@ -325,8 +354,22 @@ export class ParticleSystem {
   readonly ropeOrder: RopeOrder | null;
   /** 累计死亡数（`sys+0x350`，rope `uvscrolling` 的 `TP0`）：rope 系统才累加，`clear` 时清零。 */
   deaths = 0;
-  /** 当帧判死的槽号（升序，`ageAndKill` 收集，rope 系统才用），复用同一个数组。 */
+  /**
+   * 当帧判死的槽号（升序，`ageAndKill` 收集，`sys+0x420`），复用同一个数组。rope 系统（删 rope 表）与有 eventfollow / eventdeath 条目
+   * 的系统（停跟随，P4e 步骤 2；`sys+0x41 & 0x14`，预热期间不收集）才收集（rea-p4e-children 4.2）。
+   */
   private readonly dead: number[] = [];
+  /**
+   * 本帧新粒子的槽号（`sys+0x408`，出生先后，P4e 步骤 2）：有 eventfollow / eventspawn 条目、不在预热时（`sys+0x41 & 0xc`）才记，建完实例
+   * 清空（4.3）。
+   */
+  private readonly born: number[] = [];
+  /** 有 eventfollow 或 eventdeath 条目（`sys+0x41 & 0x14`）：判死时收集死亡槽号（4.2）。 */
+  private readonly watchesDeaths: boolean;
+  /** 有 eventfollow 或 eventspawn 条目（`sys+0x41 & 0xc`）：发射时记新粒子（4.3）。 */
+  private readonly watchesBirths: boolean;
+  /** 这一次发射要不要记新粒子（`emit` 开头按「不在预热且 `watchesBirths`」定）。 */
+  private recordBirths = false;
   /**
    * ropetrail 的历史与计时器（P4d 步骤 2，`sys+0x230`…`0x24c`）：renderer 是 ropetrail 的系统才有，其余为 null。间隔取
    * `def.renderer.ropetrail.interval`。
@@ -349,8 +392,25 @@ export class ParticleSystem {
   readonly entry: SceneParticleChild | null;
   /** 嵌套深度（`sys+0x3f8`，顶层 0，1.6）：< `MAX_CHILD_DEPTH` 才建子系统。 */
   readonly depth: number;
-  /** static 子系统（3.1，`sys+0x480`），条目顺序；事件条目的实例池在 P4e 步骤 2 加。 */
+  /** static 子系统（3.1，`sys+0x480`），条目顺序。 */
   readonly statics: ParticleChildSystem[] = [];
+  /**
+   * 事件条目的实例池（P4e 步骤 2，4.1，`sys+0x498`），条目顺序；`eventfollow` / `eventspawn` / `eventdeath` 都建池（本步只有 eventfollow
+   * 会被触发）。深度到 `MAX_CHILD_DEPTH` 的系统和 static 子系统一样不建（1.6）。
+   */
+  readonly events: ParticleEventPool[] = [];
+  /** 本系统作为子系统时条目的局部矩阵 `L`（`sys+0x360`，`entry.local` 的 float32 形态）；顶层为 null。 */
+  readonly localMatrix: Mat4 | null;
+  /**
+   * 事件实例的对象矩阵 `X`（`sys+0x3a0`，4.5，`FUN_14022a360` 写）：建立与复用时写一次，eventfollow 跟随期间每帧重算。static 子系统与
+   * 顶层为 null（它们的 `X` 是 `L` / `W`）。
+   */
+  instanceMatrix: Mat4 | null = null;
+  /**
+   * 事件实例对应的父粒子槽号（`sys+0x478`，构造为 −1，`0x1402296f6`）：建实例时写；eventfollow 的父粒子死亡时改回 −1（停跟随，4.6 末段）。
+   * static 子系统与顶层恒为 −1。
+   */
+  followSlot = -1;
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -395,6 +455,11 @@ export class ParticleSystem {
     this.parent = link?.parent ?? null;
     this.entry = link?.entry ?? null;
     this.depth = link ? link.parent.depth + 1 : 0;
+    this.localMatrix = link ? new Float32Array(link.entry.local) : null;
+    // 事件类型位集（`def+0x29` → `sys+0x41`，1.1）：深度到上限的系统不读 `children`，也就没有事件条目
+    const kinds = new Set(this.depth < MAX_CHILD_DEPTH ? (def.children ?? []).map((child) => child.type) : []);
+    this.watchesDeaths = kinds.has("eventfollow") || kinds.has("eventdeath");
+    this.watchesBirths = kinds.has("eventfollow") || kinds.has("eventspawn");
     this.columns = new ParticleColumns(def.maxcount, particleColumnFlags(def));
     // WPE 在 rope 的段缓冲（`sys+0x208`）存在时才维护表（2.2、2.3），即 renderer 是 rope
     this.ropeOrder = def.renderer?.kind === "rope" ? new RopeOrder(this.columns.capacity) : null;
@@ -450,17 +515,27 @@ export class ParticleSystem {
       layerTime: 0,
       origin: new Float32Array(3),
     };
-    // static 子系统（3.1，`FUN_14022ebe0`）：深度 < 10 才建，条目顺序；类型 0（不认识的）编译期已丢掉，事件类本步不建（能力表报）
+    // 子系统（3.1，`FUN_14022ebe0`）：深度 < 10 才建，条目顺序；类型 0（不认识的）编译期已丢掉。static 当场建；事件类建空的实例池
+    // （P4e 步骤 2，`0x14022ef43` 起的 `E.type in (2, 3, 4)` 分支），实例在父粒子出生 / 死亡时才建
     if (this.depth < MAX_CHILD_DEPTH)
       (def.children ?? []).forEach((entry, index) => {
-        if (entry.type !== "static") return;
+        const local = new Float32Array(entry.local);
+        if (entry.type !== "static") {
+          this.events.push({ index, entry, local, active: [], free: [] });
+          return;
+        }
         this.statics.push({
           index,
           entry,
-          local: new Float32Array(entry.local),
+          local,
           system: new ParticleSystem(entry.system, random, passes, undefined, { parent: this, entry }),
         });
       });
+  }
+
+  /** 有子系统（static 或事件条目）：不可见时也要每帧步进子孙（3.6），渲染器据此每帧重写顶点。 */
+  get hasChildren(): boolean {
+    return this.statics.length > 0 || this.events.length > 0;
   }
 
   /** 系统树里的一个节点（`node` 是每层 `def.children` 的下标，顶层 `[]`）；路径不是 static 子系统时为 null。 */
@@ -475,15 +550,60 @@ export class ParticleSystem {
   }
 
   /**
-   * 按绘制先序（rea-p4e-children 第 6 节：父 → static 子系统按条目顺序、深度优先；事件实例在 P4e 步骤 2 接在 static 之后）列出本系统
-   * 与全部子孙，`node` 是相对本系统的路径。渲染器、轨迹与回放共用。
+   * 按绘制先序（`FUN_1402366f0`，rea-p4e-children 第 6 节【确】，实测 `f-*`、`st-order`）列出本系统与全部子孙，同时给出每个系统的模板
+   * 路径与绘制模型矩阵。渲染器、轨迹与回放共用。本系统当顶层看（`object` 是对象世界矩阵 `W`，缺省单位阵，只要路径的调用方不必给）：
+   * ```
+   * 顺序：自己 → static 子系统（条目顺序，各自递归）→ 事件条目（条目顺序）的活跃实例（建立先后，各自递归）
+   * 顶层：    model = 世界 ? I : W；画完栈顶是 W（世界系统画完恢复成 X = W，0x140236ae9）
+   * static：  model = 世界 ? I : top · L；栈顶 = 世界 ? L : model      // 世界子系统画完把栈顶恢复成 X = L
+   * 实例：    model = 世界 ? I : top · X；栈顶 = 世界 ? X : model      // X 见 4.5
+   * ```
+   * 所以世界 static 子系统的本地孙辈绘制时是 `L·L₂`，模拟时却是 `W·L·L₂`（3.3「两处不一致」，照复刻）。只有 static 时和 P4e 步骤 1 的
+   * `particleDrawModel` 逐字节相同（同一串 `multiply`）。模板路径是每层 `def.children` 下标（实例不计序号），同一模板可能出现多次。
+   * 回调返回 `false` 时不递归这个系统的子孙。
    */
-  forEachDrawn(
-    callback: (system: ParticleSystem, node: readonly number[]) => void,
-    node: readonly number[] = [],
-  ): void {
-    callback(this, node);
-    for (const child of this.statics) child.system.forEachDrawn(callback, [...node, child.index]);
+  forEachDrawn(callback: ParticleDrawnCallback, object: Mat4 = identity()): void {
+    this.visitDrawn(callback, this.def.flags & 1 ? identity() : object, object, []);
+  }
+
+  private visitDrawn(callback: ParticleDrawnCallback, model: Mat4, top: Mat4, template: readonly number[]): void {
+    if (callback(this, template, model) === false) return;
+    for (const child of this.statics) {
+      const world = (child.system.def.flags & 1) !== 0;
+      const childModel = world ? identity() : multiply(top, child.local);
+      child.system.visitDrawn(callback, childModel, world ? child.local : childModel, [...template, child.index]);
+    }
+    for (const pool of this.events)
+      for (const instance of pool.active) {
+        const x = instance.instanceMatrix!;
+        const world = (instance.def.flags & 1) !== 0;
+        const childModel = world ? identity() : multiply(top, x);
+        instance.visitDrawn(callback, childModel, world ? x : childModel, [...template, pool.index]);
+      }
+  }
+
+  /**
+   * 本系统这次绘制的模型矩阵与画完后的栈顶（第 6 节）：沿父链自底向上，和 `forEachDrawn` 自顶向下是同一串运算，结果逐字节相同。`object`
+   * 是对象世界矩阵 `W`。渲染器在就地刷新 uniform（对象变换、相机、视差变了）时用它，不必遍历整棵树。
+   */
+  drawTransform(object: Mat4): { model: Mat4; top: Mat4 } {
+    const world = (this.def.flags & 1) !== 0;
+    const parent = this.parent;
+    if (!parent) return { model: world ? identity() : object, top: object };
+    const x = this.instanceMatrix ?? this.localMatrix!;
+    const model = world ? identity() : multiply(parent.drawTransform(object).top, x);
+    return { model, top: world ? x : model };
+  }
+
+  /**
+   * 活跃判定（`FUN_14022c310`，rea-p4e-children 4.6【确】）：任一 static 子系统活跃、任一事件实例活跃、还有没结束的发射器（`sys+0x3f4 > 0`）、
+   * 存活数 > 0，有一条就活跃。只有连续 `rate`、没有 `duration` 的发射器永远不结束（周期发射器同样），这样的实例永不回收。
+   */
+  isActive(): boolean {
+    if (this.alive > 0) return true;
+    if (this.emitters.some((emitter) => !emitter.state.ended)) return true;
+    if (this.statics.some((child) => child.system.isActive())) return true;
+    return this.events.some((pool) => pool.active.some((instance) => instance.isActive()));
   }
 
   /** 当前的 `instanceoverride` 标量与 `colorn`（一份拷贝）。 */
@@ -511,8 +631,10 @@ export class ParticleSystem {
    * - 已结束、新 `rate > 0` 的 emitter 重新打开（`param_2 = 1` 的尾段，`0x14022c1f0` 起）；累积余数等计时保留。
    * - 有运行状态的模块（P4d 步骤 3）按登记的覆盖条目改状态（`instanceState`）：`mapsequencebetweencontrolpoints` 在 `flags & 0x10`
    *   时 `step` 重写成正的新值（条目 4），序号不动；`mapsequencearoundcontrolpoint` 不登记，不动。
+   * `reopen` 是 `FUN_14022bd40` 的 `p2`：顶层与 static 子系统为真；事件实例（活跃与空闲的都递归，P4e 步骤 2，3.4 `0x14022c1d0`–
+   * `0x14022c26d`）传 `p2 = 0`，已结束的发射器不重开，它的 static 子孙同样。
    */
-  setInstance(values: Partial<ParticleInstanceValues>): void {
+  setInstance(values: Partial<ParticleInstanceValues>, reopen = true): void {
     this.instance = { ...this.instance, ...values };
     const multipliers = instanceMultipliers(this.instance, this.def.flags);
     for (const module of [...this.emitters, ...this.initializers, ...this.operators])
@@ -521,11 +643,15 @@ export class ParticleSystem {
       if (module.state !== undefined) module.def.instanceState?.(module.state, module.fields, this.def.flags);
     this.applyScalars();
     this.applyColorn();
-    for (const emitter of this.emitters)
-      if (emitter.state.ended && (emitter.fields.rate as number) > 0) emitter.state.ended = false;
+    if (reopen)
+      for (const emitter of this.emitters)
+        if (emitter.state.ended && (emitter.fields.rate as number) > 0) emitter.state.ended = false;
     // 递归到 static 子系统（P4e 步骤 1，3.4：`FUN_14022bd40` 传原 `p2`，所以已结束的发射器同样重开）：子系统按自己的 `flags` 重乘；
     // `rate` 照样记下，但子系统步进用父的 `dt′`、不乘它（3.2）
-    for (const child of this.statics) child.system.setInstance(this.instance);
+    for (const child of this.statics) child.system.setInstance(this.instance, reopen);
+    // 事件实例（P4e 步骤 2）：活跃与空闲的都递归，`p2 = 0`
+    for (const pool of this.events)
+      for (const instance of [...pool.active, ...pool.free]) instance.setInstance(this.instance, false);
   }
 
   /**
@@ -580,7 +706,10 @@ export class ParticleSystem {
    * `FUN_14022f6c0` 递归 static 子孙）与清粒子（`clearTree`，`FUN_14022fd90`）都递归到 static 子孙；不清发射器结束位。之后整棵子树照常
    * 以 `emit = false` 步进（`stepStatics`，WPE 的 `FUN_1402308a0(sys, dt′, 0)`），顶层存活数为 0 时不复位，子系统里还活着的粒子照常
    * 模拟到死。顶层自己保持上面的现状（它这时没有存活粒子，模拟与否结果相同）。`time` 是这一帧的场景时间（子系统的噪声类模块用），
-   * 不给时用本系统收到的帧时间之和（同 `step`）。返回值仍只表示顶层清没清空；有子系统时子系统每帧都可能变，渲染器另看 `statics`。
+   * 不给时用本系统收到的帧时间之和（同 `step`）。返回值仍只表示顶层清没清空；有子系统时子系统每帧都可能变，渲染器另看 `hasChildren`。
+   *
+   * 事件实例（P4e 步骤 2，3.6 第 3、4 步）：顶层有存活粒子时，顶层与 static 子孙各池的活跃实例**销毁**（丢掉，不进空闲表），空闲表不动；
+   * 之后照常以 `emit = false` 步进剩下的子孙（`stepChildren`）。顶层存活数为 0 时不销毁，停了跟随的实例照常模拟到回收。
    */
   suspend(inputs: ControlPointInputs = IDENTITY_INPUTS, frameDt = 0, time?: number): boolean {
     this.controlPoints.update(inputs);
@@ -592,15 +721,17 @@ export class ParticleSystem {
       this.layerTime = 0;
       this.context.layerTime = 0;
       this.clear();
-      // 3.6 第 3 步：static 子孙清粒子（事件实例的销毁在 P4e 步骤 2）
+      // 3.6 第 3 步：static 子孙清粒子、销毁它们的活跃实例（`FUN_14022fd90`）
       for (const child of this.statics) child.system.clearTree();
+      // 3.6 第 4 步：销毁顶层自己的活跃实例
+      this.destroyInstances();
     }
     // 系统时间（`FUN_1402308a0` 开头 `sys+0x3f0 += dt′`，不可见时照样调）：复位之后累加本帧
     const dt = f32(f32(frameDt) * this.rate);
     this.systemTime = f32(this.systemTime + dt);
     this.context.systemTime = this.systemTime;
-    if (this.statics.length)
-      this.stepStatics(
+    if (this.hasChildren)
+      this.stepChildren(
         { dt, frameDt, time: f32(time ?? this.elapsed), layerTime: this.layerTime, object: inputs.world, emit: false },
         inputs,
       );
@@ -608,8 +739,8 @@ export class ParticleSystem {
   }
 
   /**
-   * 系统复位（`FUN_14022f6c0`，rea-p4e-children 3.6、3.7）：发射器计时从初值重抄（`resetEmitterTiming`，不清结束位）、有状态模块复位
-   * （`resetState`，mapsequence 序号归零）、系统时间清零，递归 static 子孙。不清粒子。
+   * 系统复位（`FUN_14022f6c0`，rea-p4e-children 3.6、3.7、4.7）：发射器计时从初值重抄（`resetEmitterTiming`，不清结束位）、有状态模块复位
+   * （`resetState`，mapsequence 序号归零）、系统时间清零，递归 static 子孙（不碰事件实例）。不清粒子。
    */
   private resetTiming(): void {
     for (const emitter of this.emitters) resetEmitterTiming(emitter.state, emitter.fields);
@@ -619,10 +750,25 @@ export class ParticleSystem {
     for (const child of this.statics) child.system.resetTiming();
   }
 
-  /** 清全部粒子，递归 static 子孙（`FUN_14022fd90`，3.6 第 3 步）。 */
+  /** 清全部粒子，递归 static 子孙，销毁各池的活跃实例（`FUN_14022fd90`，3.6 第 3 步）。 */
   private clearTree(): void {
     this.clear();
     for (const child of this.statics) child.system.clearTree();
+    this.destroyInstances();
+  }
+
+  /** 销毁本系统各事件池的活跃实例（3.6：析构 + 释放，不进空闲表）；空闲表不动。 */
+  private destroyInstances(): void {
+    for (const pool of this.events) pool.active.length = 0;
+  }
+
+  /**
+   * eventfollow 的父粒子死亡时停掉实例的发射（4.6 末段 `0x140237320`–`0x1402373bb`，`FUN_14022f640`）：`sys+0x3f4 = 0`、每个发射器标结束，
+   * 递归 static 子孙；实例自己的事件实例不停。
+   */
+  private endEmitters(): void {
+    for (const emitter of this.emitters) emitter.state.ended = true;
+    for (const child of this.statics) child.system.endEmitters();
   }
 
   /**
@@ -661,8 +807,9 @@ export class ParticleSystem {
   }
 
   /**
-   * 树里一个系统的一帧（`FUN_1402308a0`，rea-p4e-children 3.2）：系统时间 `+= dt′` → 模拟（`emit` 为假时不发射）→ 拖尾采样（写顶点的
-   * 位置）→ static 子系统（`stepStatics`）。`inputs.world` 是本系统的模拟矩阵 `M`（顶层是 `W`）。
+   * 树里一个系统的一帧（`FUN_1402308a0`，rea-p4e-children 3.2）：系统时间 `+= dt′` → 模拟（`emit` 为假时不发射；判死后停跟随、发射后建
+   * 事件实例，P4e 步骤 2）→ 拖尾采样（写顶点的位置）→ 子系统（`stepChildren`：static，再事件实例）。`inputs.world` 是本系统的模拟矩阵
+   * `M`（顶层是 `W`）。
    */
   private stepNode(frame: TreeFrame, inputs: ControlPointInputs): void {
     const context = this.context;
@@ -670,12 +817,22 @@ export class ParticleSystem {
     this.systemTime = f32(this.systemTime + frame.dt);
     context.layerTime = frame.layerTime;
     context.systemTime = this.systemTime;
-    this.advance(frame.dt, frame.frameDt, this.passes, inputs, frame.emit, frame.object);
+    this.advance(frame.dt, frame.frameDt, this.passes, inputs, frame.emit, frame.object, {
+      time: frame.time,
+      layerTime: frame.layerTime,
+      object: frame.object,
+    });
     // ropetrail 的历史采样（P4d 步骤 2）：WPE 的顶点函数先模拟、再在存活数非零时采样（`FUN_1402308a0`，rea-p4d-rope.md 1.1、5.2），
     // 用同一个 `dt'`；位置是本帧模拟后的
     const trail = this.trail;
     if (trail) trail.sample(frame.dt, this.def.renderer.ropetrail!.interval, this.columns, this.highWater, this.alive);
+    this.stepChildren(frame, inputs);
+  }
+
+  /** 子系统的一帧（3.2 `0x140236380` 起）：先全部 static 子系统（条目顺序），再各事件条目的活跃实例（4.6）。 */
+  private stepChildren(frame: TreeFrame, inputs: ControlPointInputs): void {
     this.stepStatics(frame, inputs);
+    this.stepEvents(frame, inputs);
   }
 
   /**
@@ -695,6 +852,102 @@ export class ParticleSystem {
   }
 
   /**
+   * 事件实例的一帧（4.6，`0x140236447`–`0x1402365c0`【确】），条目顺序、每条按建立先后（含本帧刚建的，它当帧就走一次完整的 `dt′`）：
+   * ```
+   * FUN_14022a580(sys, E, inst)                       // 条目 flags bit0：父的存活粒子写实例控制点（第 5 节，不补偿 T(p)·L）
+   * if E.type == eventfollow 且 inst.followSlot ≠ −1：X = FUN_14022a360(sys, followSlot)   // 父粒子本帧 operator 之后的位置
+   * push(inst)（本地 top·X、世界 X）；FUN_1402308a0(inst, dt′, emit)；pop
+   * if !FUN_14022c310(inst)：移进空闲表、从活跃表删除（其余保序）
+   * ```
+   * 本地 eventfollow 实例的已有粒子因此跟着父粒子一起平移（粒子存实例坐标，实测 `f-base`），世界实例的留在原地（`f-cw`、`ef-world`）。
+   * `Mprev`（实例控制点的父分支）是本系统的 `M`（7.1）。
+   */
+  private stepEvents(frame: TreeFrame, inputs: ControlPointInputs): void {
+    const top = inputs.world;
+    for (const pool of this.events) {
+      const { active } = pool;
+      if (!active.length) continue;
+      let kept = 0;
+      for (const instance of active) {
+        writeParentPoints(this, pool.entry, instance, top);
+        if (pool.entry.type === "eventfollow" && instance.followSlot >= 0)
+          instance.instanceMatrix = this.instanceMatrixFor(pool, instance.followSlot, top);
+        instance.stepNode(frame, { world: instance.simulationMatrix(top), pointer: inputs.pointer, parent: top });
+        if (instance.isActive()) active[kept++] = instance;
+        else pool.free.push(instance);
+      }
+      active.length = kept;
+    }
+  }
+
+  /**
+   * 实例的对象矩阵 `X`（`FUN_14022a360(parent, b, inst)`，rea-p4e-children 4.5【确】，实测 `f-base`、`f-xf`、`ef-rotl`、`ef-rotw`）。
+   * `p` 是本系统（父）槽 `slot` 的当前位置，`top` 是本系统的模拟矩阵（栈顶，顶层即 `W`）：
+   * ```
+   * 子本地 / 父本地：X = T(p)·L           模拟 M = top·X
+   * 子本地 / 父世界：X = top⁻¹·T(p)·L     模拟 M = top·X（= T(p)·L，p 是世界坐标）
+   * 子世界 / 父本地：X = top·T(p)·L       模拟 M = X
+   * 子世界 / 父世界：X = T(p)·L           模拟 M = X
+   * ```
+   * 结果是实例原点落在父粒子的世界位置；父本地时还带对象 `W` 的旋转缩放（`L` 被 `W` 转），父世界时不带。乘法与求逆用 `render/math.ts`
+   * （double 累加、末尾舍入），和 WPE 的 float32 逐步舍入可能差 1–2 ulp；`top` 奇异时写 NaN。
+   */
+  private instanceMatrixFor(pool: ParticleEventPool, slot: number, top: Mat4): Mat4 {
+    const [px, py, pz] = this.columns.position;
+    const placed = multiply(translation(px[slot], py[slot], pz[slot]), pool.local);
+    const parentWorld = (this.def.flags & 1) !== 0;
+    if (pool.entry.system.flags & 1) return parentWorld ? placed : multiply(top, placed);
+    if (!parentWorld) return placed;
+    const inverse = invert(top);
+    return inverse ? multiply(inverse, placed) : nanMatrix();
+  }
+
+  /**
+   * 事件实例的模拟矩阵 `M`（`FUN_140229760(inst)`，4.5「实例模拟时压栈」）：本地 `top·X`，世界 `X`。模拟与绘制两边一致（第 6 节）。
+   * `top` 是父的模拟矩阵。
+   */
+  private simulationMatrix(top: Mat4): Mat4 {
+    const x = this.instanceMatrix!;
+    return this.def.flags & 1 ? x : multiply(top, x);
+  }
+
+  /**
+   * 从池里取一个实例（4.7【确】）：空闲表非空时从尾部取（后进先出），否则新建。`slot` 是触发它的父粒子，`top` 是本系统的模拟矩阵，
+   * `pointer` 是这一帧的跟随点，`env` 是这一帧的场景时间、图层时间与对象矩阵（实例预热用）。
+   * - 新建（`0x14023744f` / `0x14023af69`）：同 static 子系统的构造（父、条目、实例覆盖按子系统自己的 flags），写 `X`，再
+   *   `FUN_14022ebe0(inst)`：建孙辈并各自预热、控制点初始化、按**自己的** `starttime` 预热（`prewarmNode`，实测 `ef-start`）；
+   * - 复用（`0x140237524` / `0x14023b04b`）：系统复位（`resetTiming`：系统时间 0、发射器计时、mapsequence 序号，递归 static 子孙）、重开
+   *   全部发射器（递归 static 子孙），写 `X`；不重新初始化控制点（`previous` 是上次用完时的值）、不重新应用实例覆盖（池里的实例在
+   *   `setInstance` 递归里照样被更新）、不清高水位与死亡数；`starttime > 0` 时只跑预热循环（`FUN_14022f430`）。复用时 static 孙辈是否
+   *   再预热没读到，按「只跑实例自己的预热循环」做【推】。
+   * 预热发生在父系统的模拟里（发射之后），从同一个随机源抽。
+   */
+  private takeInstance(
+    pool: ParticleEventPool,
+    slot: number,
+    top: Mat4,
+    pointer: ControlPointInputs["pointer"],
+    env: PrewarmEnv,
+  ): ParticleSystem {
+    const reused = pool.free.pop();
+    if (reused) {
+      reused.resetTiming();
+      reused.reopen();
+      reused.instanceMatrix = this.instanceMatrixFor(pool, slot, top);
+      if (reused.def.starttime > 0)
+        reused.prewarmLoop({ world: reused.simulationMatrix(top), pointer, parent: top }, env);
+      return reused;
+    }
+    const created = new ParticleSystem(pool.entry.system, this.random, this.passes, undefined, {
+      parent: this,
+      entry: pool.entry,
+    });
+    created.instanceMatrix = this.instanceMatrixFor(pool, slot, top);
+    created.prewarmNode({ world: created.simulationMatrix(top), pointer, parent: top }, env);
+    return created;
+  }
+
+  /**
    * 预热（C1）：加载时一次跑完 `while (t < starttime)`，步长按 `maxcount` 取 0.05 或 0.2，float32 累加，**固定一遍**
    * （加载时 `fps` 还是 0，实测推翻了读码的「受 fps 分支影响」），发射开启，`k0 = 步长`。步长不乘 `rate`（按读码直接传步长，
    * `rate ≠ 1` 的预热没有实测）。预热不走帧函数，场景时间 `T` 保持加载期的初值 0（`rea-p4b-modules.md` B2 末条；实测
@@ -711,11 +964,14 @@ export class ParticleSystem {
    * 初值（父还没更新，`current = base`），`Mprev` 是本系统预热的 `M`。
    */
   prewarm(inputs: ControlPointInputs = IDENTITY_INPUTS): void {
-    this.prewarmNode(inputs, inputs.world);
+    this.prewarmNode(inputs, { time: 0, layerTime: 0, object: inputs.world });
   }
 
-  /** `prewarm` 的一层：`object` 是对象世界矩阵（remap 的 `layerorigin`，整棵树共用）。 */
-  private prewarmNode(inputs: ControlPointInputs, object: Mat4): void {
+  /**
+   * `prewarm` 的一层（`FUN_14022ebe0`）：先建好的 static 子孙各自预热，再做本系统的控制点初始化与预热循环。`env.object` 是对象世界矩阵
+   * （remap 的 `layerorigin`，整棵树共用）；加载时 `env` 的两个时间是 0，运行中新建的事件实例（P4e 步骤 2）用这一帧的。
+   */
+  private prewarmNode(inputs: ControlPointInputs, env: PrewarmEnv): void {
     for (const child of this.statics)
       child.system.prewarmNode(
         {
@@ -723,14 +979,23 @@ export class ParticleSystem {
           pointer: inputs.pointer,
           parent: inputs.world,
         },
-        object,
+        env,
       );
     this.controlPoints.update(inputs);
     this.controlPoints.endFrame();
+    this.prewarmLoop(inputs, env);
+  }
+
+  /**
+   * 预热循环（C1，`FUN_14022ebe0` 尾部；复用事件实例时单独跑，`FUN_14022f430`）：`while (t < starttime)` 按步长模拟，事件处理关掉
+   * （`sys+0x41 = 0`，4.8：不记新粒子、不建实例、不为事件收集死亡），不步进子系统（3.5）。结束后 ropetrail 的历史塌缩。
+   */
+  private prewarmLoop(inputs: ControlPointInputs, env: PrewarmEnv): void {
     const step = prewarmStep(this.def.maxcount);
     const end = f32(this.def.starttime);
-    this.context.time = 0;
-    for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs, true, object);
+    this.context.time = env.time;
+    this.context.layerTime = env.layerTime;
+    for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs, true, env.object, null);
     // ropetrail（P4d 步骤 2）：预热的步进不调顶点函数、不采样，结束后历史塌缩到当前位置（rea-p4d-rope.md 5.1，`0x14022f2fc`）
     this.trail?.afterPrewarm(this.columns, this.highWater);
   }
@@ -752,6 +1017,8 @@ export class ParticleSystem {
   /**
    * 模拟一步（`FUN_140236cd0`）。`emit` 为假（对象不可见，子系统在 `suspend` 里步进，P4e 步骤 1）时不调发射，发射计时也不走；`object`
    * 是对象世界矩阵（`layerorigin`），顶层就是 `inputs.world`。
+   * `events` 是这一帧的环境（P4e 步骤 2，运行中新建的实例预热用）；预热时为 null，事件处理关掉（`sys+0x41 = 0`，4.8）。帧内顺序（7.3）：
+   * 判死 → 序列帧 → 逐死粒子停跟随（4.2）→ 控制点 → 发射（记新粒子）→ 逐条目、逐新粒子建实例（4.3）→ operator → `previous ← current`。
    */
   private advance(
     dt: number,
@@ -760,10 +1027,13 @@ export class ParticleSystem {
     inputs: ControlPointInputs,
     emit = true,
     object: Mat4 = inputs.world,
+    events: PrewarmEnv | null = null,
   ): void {
     if (!(dt > 0)) return;
-    this.ageAndKill(dt);
+    this.ageAndKill(dt, events !== null && this.watchesDeaths);
     this.sequenceFrames();
+    // 判死之后、控制点之前（4.2，`0x140237129`–`0x1402376f6`）：跟着死粒子的 eventfollow 实例停跟随、停发射（P4e 步骤 2）
+    if (events) this.stopFollowing();
     // O1 第 5 步（`0x1402376fe`）：序列帧（`0x140237022`）之后、发射之前，两遍模式也只一次
     this.controlPoints.update(inputs);
     const context = this.context;
@@ -772,7 +1042,11 @@ export class ParticleSystem {
     context.model.set([w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]]);
     // 对象原点 `W.t`（P4d 步骤 4a，remap 的 `layerorigin`：对象虚函数 +0x80 的第 3 列，子系统读的也是对象的）
     context.origin!.set([object[12], object[13], object[14]]);
-    if (emit) this.emit(dt);
+    if (emit) {
+      this.emit(dt, events !== null && this.watchesBirths);
+      // 全部发射器发完之后（4.3，`0x14023ae9a` 起）：逐条目、逐新粒子建实例（P4e 步骤 2）
+      if (events && this.born.length) this.spawnInstances(inputs, events);
+    }
     const { h, k } = operatorPass(dt, frameDt, passes);
     context.count = this.highWater;
     context.h = h;
@@ -788,10 +1062,12 @@ export class ParticleSystem {
   /**
    * 判死（O1 第 1 步）。rope 系统另收集当帧的死亡槽号（槽号升序，`FUN_140236cd0` 的死亡列表 `sys+0x420`），循环后从 rope 表里
    * 保序删除（`0x140237082`），死亡数累加进 `deaths`（`0x140237146`，rea-p4d-rope.md 2.3）。都在发射之前：同一帧先删死的、再追加新的。
+   * `events`：有 eventfollow / eventdeath 条目且不在预热（`sys+0x41 & 0x14`，P4e 步骤 2）时同样收集，供停跟随（4.2）。
    */
-  private ageAndKill(dt: number): void {
+  private ageAndKill(dt: number, events = false): void {
     const { age, life } = this.columns;
     const order = this.ropeOrder;
+    const collect = order !== null || events;
     const dead = this.dead;
     dead.length = 0;
     for (let i = 0; i < this.highWater; i++) {
@@ -800,13 +1076,62 @@ export class ParticleSystem {
         life[i] = 0;
         this.alive--;
         if (i < this.searchFrom) this.searchFrom = i;
-        if (order) dead.push(i);
+        if (collect) dead.push(i);
       }
     }
     if (order && dead.length) {
       order.removeDead(dead);
       this.deaths += dead.length;
     }
+  }
+
+  /**
+   * 逐死亡槽号（升序）停掉跟着它的 eventfollow 实例（4.2 第一段、4.6 末段【确】，实测 `f-death`、`ef-death`）：`followSlot = −1`（`X` 冻结在
+   * 最后一次的值）、自己与 static 子孙的发射器全部标结束（`endEmitters`），已有粒子照常活到寿命，之后在子系统更新里回收。死亡发生在
+   * 父模拟开头，所以父粒子死亡那一帧实例就不再发射。只看活跃实例（停过跟随的 `followSlot` 是 −1，不会再匹配）。
+   */
+  private stopFollowing(): void {
+    if (!this.dead.length) return;
+    for (const slot of this.dead)
+      for (const pool of this.events) {
+        if (pool.entry.type !== "eventfollow") continue;
+        for (const instance of pool.active)
+          if (instance.followSlot === slot) {
+            instance.followSlot = -1;
+            instance.endEmitters();
+          }
+      }
+  }
+
+  /**
+   * 本帧新粒子建事件实例（4.3【确】，`0x14023ae9a`–`0x14023b28c`），嵌套是「条目在外、新粒子在内」：
+   * ```
+   * for E in 事件条目（条目顺序）, E.type == eventfollow:        // eventspawn 在步骤 3
+   *   if 活跃数 == E.maxcount: continue                           // 满了：本帧不抽、不建（实测 f-max、ef-max）
+   *   for b in 新粒子（出生先后）:
+   *     if uA > E.probability: continue                           // 流 A，probability 1 也抽一次（4.4）
+   *     inst = 取空闲或新建（4.7），X 用新粒子当前位置（initializer 之后、operator 之前），followSlot = b
+   *     活跃表追加 inst
+   *     if 活跃数 == E.maxcount: break
+   * 清空新粒子表
+   * ```
+   * 上限照 WPE 用相等判断（单条目时活跃数不会超过 `maxcount`）。我们不复刻 WPE 的 MT19937，`uA` 取本对象的随机源（同其它模块，7.3）。
+   */
+  private spawnInstances(inputs: ControlPointInputs, env: PrewarmEnv): void {
+    const born = this.born;
+    for (const pool of this.events) {
+      if (pool.entry.type !== "eventfollow") continue;
+      const { maxcount, probability } = pool.entry;
+      if (pool.active.length === maxcount) continue;
+      for (const slot of born) {
+        if (this.random.a() > probability) continue;
+        const instance = this.takeInstance(pool, slot, inputs.world, inputs.pointer, env);
+        instance.followSlot = slot;
+        pool.active.push(instance);
+        if (pool.active.length === maxcount) break;
+      }
+    }
+    born.length = 0;
   }
 
   /**
@@ -830,8 +1155,11 @@ export class ParticleSystem {
    * 周期发射进入新周期时（`emissionCount` 置 `periodStarted`），先对全部有状态的 initializer 调 `newPeriod`（P4d 步骤 3，
    * `FUN_14022f790`，在 `FUN_1402378a0` 的新周期分支里 `0x140237ac1`，早于本 emitter 本帧的新粒子），再出生。
    */
-  private emit(dt: number): void {
+  private emit(dt: number, record = false): void {
     const capacity = this.columns.capacity;
+    // 发射开头（4.3，`dil = sys+0x41 & 0xc`）：有 eventfollow / eventspawn 条目且不在预热时，新粒子的槽号按出生先后记进 `born`（P4e 步骤 2）
+    this.born.length = 0;
+    this.recordBirths = record;
     for (const emitter of this.emitters) {
       const count = emissionCount(emitter.state, emitter.fields, dt, this.alive, capacity, this.random);
       if (emitter.state.periodStarted) {
@@ -886,5 +1214,7 @@ export class ParticleSystem {
     if (slot >= this.highWater) this.highWater = slot + 1;
     // 「存活数 + 1、高水位更新」之后追加到 rope 表尾（rea-p4d-rope.md 2.2）：同一帧按 emitter 顺序、逐个出生的顺序
     this.ropeOrder?.push(slot);
+    // 事件用的新粒子表（P4e 步骤 2，`0x140238bf8`：initializer、拖尾初值、存活数加一之后）
+    if (this.recordBirths) this.born.push(slot);
   }
 }

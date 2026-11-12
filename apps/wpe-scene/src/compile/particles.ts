@@ -333,8 +333,9 @@ export interface SceneParticle {
   passes: ScenePass[];
   /**
    * 子系统（P4e 步骤 1，rea-p4e-children 第 1 节）：`children` 里认得的条目，JSON 顺序，不认识的类型已丢掉；`parseParticle` 给
-   * 空数组，`compileScene` 读子系统 JSON 后填（深度 < `MAX_CHILD_DEPTH` 的系统才填）。模拟器只建 `static` 的（事件类由能力表报
-   * `particle:children:<type>`，步骤 2、3），绘制按先序展开（`render/graph.ts` 的 `planParticleLayer`）。
+   * 空数组，`compileScene` 读子系统 JSON 后填（深度 < `MAX_CHILD_DEPTH` 的系统才填）。模拟器当场建 `static` 的，事件类建实例池（P4e
+   * 步骤 2；`eventspawn` / `eventdeath` 由能力表报 `particle:children:<type>`，步骤 3），绘制按先序展开（`render/graph.ts` 的
+   * `planParticleLayer`、`ParticleSystem.forEachDrawn`）。
    */
   children: SceneParticleChild[];
 }

@@ -15,12 +15,12 @@ import {
 } from "../compile/particles";
 import type { JsonObject } from "../compile/model";
 import type { ScenePass } from "../compile/bundle";
-import { planParticleLayer } from "../render/graph";
+import { particleTreeWantsFramebuffer, planParticleLayer } from "../render/graph";
 import { identity, multiply, translation, type Mat4 } from "../render/math";
 import { ControlPointSet } from "./controlpoints";
 import { f32 } from "./f32";
 import { SeededRandom } from "./random";
-import { particleDrawModel, ParticleSystem, writeParentPoints } from "./system";
+import { ParticleSystem, writeParentPoints } from "./system";
 import { particleTrack } from "./track";
 
 /** 不散开、不动、寿命 100 秒的发射器（每秒 `rate` 个，从控制点 `cp` 发射）。 */
@@ -433,16 +433,31 @@ describe("static 子系统的模拟（3.1–3.7）", () => {
     expect(system.statics[0].system.alive).toBe(5 + 15);
   });
 
-  it("类型不是 static 的条目本步不建（事件类由能力表报）", () => {
+  it("事件类条目不当场建子系统，建空的实例池（P4e 步骤 2，三种事件类型都建）", () => {
     const root = parse(systemJson());
     attach(root, parse(systemJson()), { type: "eventfollow" });
     attach(root, parse(systemJson()));
+    attach(root, parse(systemJson()), { type: "eventdeath" });
     const system = make(root);
     expect(system.statics.map((item) => item.index)).toEqual([1]);
+    expect(system.events.map((pool) => [pool.index, pool.entry.type, pool.active.length, pool.free.length])).toEqual([
+      [0, "eventfollow", 0, 0],
+      [2, "eventdeath", 0, 0],
+    ]);
   });
 });
 
 describe("绘制：模型矩阵与计划（第 6 节）", () => {
+  /** `forEachDrawn` 给出的（模板路径 → 模型矩阵），同时核对 `drawTransform` 自底向上算出的逐位相同。 */
+  const drawnModels = (system: ParticleSystem, W: Mat4) => {
+    const out = new Map<string, Mat4>();
+    system.forEachDrawn((node, template, model) => {
+      expect(Array.from(node.drawTransform(W).model)).toEqual(Array.from(model));
+      out.set(template.join("/"), model);
+    }, W);
+    return out;
+  };
+
   it("模型矩阵：本地子系统 父绘制栈顶 · L，世界子系统单位阵，世界子系统下的本地孙辈 L·L₂（3.3 照复刻）", () => {
     const W = translation(960, 540, 0);
     const root = parse(systemJson());
@@ -450,16 +465,26 @@ describe("绘制：模型矩阵与计划（第 6 节）", () => {
     attach(local, parse(systemJson()), { origin: [0, 50, 0] });
     const world = attach(root, parse(systemJson({ flags: 1 })), { origin: [300, 0, 0] });
     attach(world, parse(systemJson()), { origin: [0, 70, 0] });
-    expect(particleDrawModel(W, root, [])).toBe(W);
-    expect(Array.from(particleDrawModel(W, root, [0]))).toEqual(Array.from(multiply(W, translation(200, 0, 0))));
-    expect(Array.from(particleDrawModel(W, root, [0, 0]))).toEqual(Array.from(translation(1160, 590, 0)));
-    expect(Array.from(particleDrawModel(W, root, [1]))).toEqual(Array.from(identity()));
-    expect(Array.from(particleDrawModel(W, root, [1, 0]))).toEqual(Array.from(translation(300, 70, 0)));
+    const models = drawnModels(make(root), W);
+    expect([...models.keys()]).toEqual(["", "0", "0/0", "1", "1/0"]);
+    expect(models.get("")).toBe(W);
+    expect(Array.from(models.get("0")!)).toEqual(Array.from(multiply(W, translation(200, 0, 0))));
+    expect(Array.from(models.get("0/0")!)).toEqual(Array.from(translation(1160, 590, 0)));
+    expect(Array.from(models.get("1")!)).toEqual(Array.from(identity()));
+    expect(Array.from(models.get("1/0")!)).toEqual(Array.from(translation(300, 70, 0)));
     // 世界顶层：绘制单位阵，子系统仍乘 W（画完把栈顶恢复成 W）
     const worldRoot = parse(systemJson({ flags: 1 }));
     attach(worldRoot, parse(systemJson()), { origin: [200, 0, 0] });
-    expect(Array.from(particleDrawModel(W, worldRoot, []))).toEqual(Array.from(identity()));
-    expect(Array.from(particleDrawModel(W, worldRoot, [0]))).toEqual(Array.from(translation(1160, 540, 0)));
+    const worldModels = drawnModels(make(worldRoot), W);
+    expect(Array.from(worldModels.get("")!)).toEqual(Array.from(identity()));
+    expect(Array.from(worldModels.get("0")!)).toEqual(Array.from(translation(1160, 540, 0)));
+    // 回调返回 false 时不递归子孙
+    const visited: string[] = [];
+    make(root).forEachDrawn((_, template) => {
+      visited.push(template.join("/"));
+      return template.length === 0 ? undefined : false;
+    });
+    expect(visited).toEqual(["", "0", "1"]);
   });
 
   const pass = (key: string, extra: Partial<ScenePass> = {}): ScenePass => ({
@@ -480,41 +505,46 @@ describe("绘制：模型矩阵与计划（第 6 节）", () => {
     return def;
   };
 
-  it("先序展开：父 → static 子系统（条目顺序、深度优先）；事件类不画；每次绘制各自的透视位、世界位与混合", () => {
+  it("模板先序：父 → static 子系统（条目顺序、深度优先）→ 事件条目的子系统（P4e 步骤 2，instanced）；各自的透视位、世界位与混合", () => {
     const root = withPass(parse(systemJson()), "r");
-    attach(root, withPass(parse(systemJson()), "e"), { type: "eventfollow" });
+    const e = attach(root, withPass(parse(systemJson()), "e"), { type: "eventfollow" });
+    attach(e, withPass(parse(systemJson()), "e0"));
     const a = attach(root, withPass(parse(systemJson({ flags: 4 })), "a", { blending: "additive" }));
     attach(a, withPass(parse(systemJson({ flags: 1 })), "a0"));
     attach(root, withPass(parse(systemJson()), "b"));
     const plan = planParticleLayer({ particle: root });
-    expect(plan.steps.map((step) => (step.kind === "particles" ? [step.pass.key, step.node] : step.kind))).toEqual([
-      ["r", []],
-      ["a", [1]],
-      ["a0", [1, 0]],
-      ["b", [2]],
+    expect(
+      plan.steps.map((step) => (step.kind === "particles" ? [step.pass.key, step.node, step.instanced] : step.kind)),
+    ).toEqual([
+      ["r", [], false],
+      ["a", [1], false],
+      ["a0", [1, 0], false],
+      ["b", [2], false],
+      ["e", [0], true],
+      ["e0", [0, 0], true],
     ]);
     expect(plan.steps[1]).toMatchObject({ perspective: true, world: false, blending: "additive" });
     expect(plan.steps[2]).toMatchObject({ perspective: false, world: true });
   });
 
-  it("快照：先序里第一个需要帧缓冲的系统之前拷一次，同一对象只拷一次（实测 dr-refract 的父子共用位）", () => {
+  it("快照不再写进计划（P4e 步骤 2 改由编码时插）；模板树里有要帧缓冲的系统才建快照（renderer: [] 的也算，没 pass 的子树不算）", () => {
     const refract = { framebuffer: true, runtime: { 3: "_rt_FullFrameBuffer" } };
     const childOnly = withPass(parse(systemJson()), "r");
     attach(childOnly, withPass(parse(systemJson()), "c", refract));
     attach(childOnly, withPass(parse(systemJson()), "d", refract));
-    expect(planParticleLayer({ particle: childOnly }).steps.map((step) => step.kind)).toEqual([
-      "particles",
-      "snapshot",
-      "particles",
-      "particles",
-    ]);
-    const both = withPass(parse(systemJson()), "r", refract);
-    attach(both, withPass(parse(systemJson()), "c", refract));
-    expect(planParticleLayer({ particle: both }).steps.map((step) => step.kind)).toEqual([
-      "snapshot",
-      "particles",
-      "particles",
-    ]);
+    const plan = planParticleLayer({ particle: childOnly });
+    expect(plan.steps.map((step) => step.kind)).toEqual(["particles", "particles", "particles"]);
+    expect(plan.steps[1]).toMatchObject({ inputs: { 3: { kind: "framebuffer" } } });
+    expect(particleTreeWantsFramebuffer(childOnly)).toBe(true);
+    const plain = withPass(parse(systemJson()), "r");
+    attach(plain, withPass(parse(systemJson()), "c"));
+    expect(particleTreeWantsFramebuffer(plain)).toBe(false);
+    const emitterOnly = withPass(parse(systemJson({ renderer: [] })), "r", refract);
+    expect(planParticleLayer({ particle: emitterOnly }).steps).toEqual([]);
+    expect(particleTreeWantsFramebuffer(emitterOnly)).toBe(true);
+    const hidden = withPass(parse(systemJson()), "r");
+    attach(attach(hidden, parse(systemJson())), withPass(parse(systemJson()), "under", refract));
+    expect(particleTreeWantsFramebuffer(hidden)).toBe(false);
   });
 
   it("没有 pass 的系统整棵子树不画；renderer: [] 的系统自己不画、照常画子系统", () => {

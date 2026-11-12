@@ -229,7 +229,7 @@ const OBJECT_FLAGS = [
 
 ## P4e — 子系统与音频
 
-子计划：[phase-4e-children.md](phase-4e-children.md)。步骤 0 已在 2026-11-12 做完（读码两份 [rea-p4e-children.md](rea-p4e-children.md)、[rea-p4e-audio.md](rea-p4e-audio.md)，确定性工程 8 个，结论见报告「P4e 语义的实测核对」）；准确覆盖（递归检查子系统，没有新键）：165 张口径 61 → 93、152 张口径 57 → 83，能解锁 3 张（`3778592720`、`3811798465`、`1514925620`）。步骤 1（static 子系统）已完成，覆盖 61 → 72（165 张口径），解锁 `3778592720`。
+子计划：[phase-4e-children.md](phase-4e-children.md)。步骤 0 已在 2026-11-12 做完（读码两份 [rea-p4e-children.md](rea-p4e-children.md)、[rea-p4e-audio.md](rea-p4e-audio.md)，确定性工程 8 个，结论见报告「P4e 语义的实测核对」）；准确覆盖（递归检查子系统，没有新键）：165 张口径 61 → 93、152 张口径 57 → 83，能解锁 3 张（`3778592720`、`3811798465`、`1514925620`）。步骤 1（static 子系统）已完成，覆盖 61 → 72（165 张口径），解锁 `3778592720`。步骤 2（事件实例池与 `eventfollow`）已完成，覆盖 72 → 82（165 张口径），解锁 `3811798465`。
 
 **步骤 0：**
 - `children` 的触发时机、`probability`、`maxcount`、`controlpointstartindex`，子系统和父系统的控制点、绘制顺序。
