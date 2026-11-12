@@ -381,6 +381,14 @@ export class SceneHost {
       if (value === undefined) return null;
       return typeof value === "number" ? [value] : typeof value === "object" ? [...value] : value;
     }
+    // 粒子 `instanceoverride` 的字段脚本（P4f 步骤 1）：`update` 收到实例覆盖里的当前值（WPE 的 `io`，rea-p4f-script.md 5.1），重算或
+    // 加载钳过的 `rate` 是钳过的值、单写的 `rate` 是原值；`colorn` 没设过时是 (−1, −1, −1)
+    if (target.kind === "particle-instance") {
+      const values = state.particleInstances.get(target.object);
+      if (!values) return null;
+      if (target.field === "colorn") return values.colorn ? [...values.colorn] : [-1, -1, -1];
+      return [values[target.field]];
+    }
     return null;
   }
 

@@ -164,6 +164,7 @@ if flags & 4: size0 *= (1 − srm) + srm·w
   - `FUN_140230650` 不可见且存活数 > 0 时（`0x1402306bc`），同时 `obj+0x770 = 0`；
   - 事件子系统实例创建（`0x14023754c`、`0x14023b07e`，P4e）；
   - `FUN_14024c680`（`0x14024c708`）：先给全部发射器置结束位再复位、清粒子，调用者没追【未知】。
+    - **已查清（P4f，rea-p4f-script 2.3）：** 它就是脚本 `stop()`。
 - **`FUN_14022f790`【确】：** 唯一调用点 `0x140237ac1`，即周期发射（发射器 `flags` bit2）进入新周期时。清零条件：
   - 类型 13：`rec+0x58 & 2`，读的是残留值；
   - 类型 14：`flags & 0x20`。
@@ -551,6 +552,7 @@ mask = flags bit0 ? 全 1 : 0
 - **`mapsequencearoundcontrolpoint` 的 `rec+0x58`：** 残留值【未知】，影响两处：`count` 是否乘 `instanceoverride.count`，周期发射的新周期是否清零 `seq`。建议实现按 0 处理；场景同时用到周期发射或 `instanceoverride.count` 时照报。
 - **`timeofday`（`ctx+0x140` = `R+0x150`）** 的写入点没找到【未知】。
 - **`FUN_14024c680`** 的调用者（什么事件触发系统复位）没追【未知】。
+  - **已查清（P4f）：** 脚本 `stop()`，见 rea-p4f-script.md 2.3。
 - **CRT `sinf` / `cosf` / `powf`**（`FUN_14041a9c0`、`FUN_14041a2e0`、`FUN_14041e350`）没读，和 JS 可能差 1 ulp。mapsequencearound 的角度、remapinitialvalue 的 sine 受影响。
 - **FastNoise2 SSE2 版**（`0x1400fb820`、`0x1400fb570`）没和 SSE4.1 版逐行对【推：结果相同】。
 - **remapinitialvalue 输入 16–18 写控制点、输入 0 读 `frame` 列：** 读码确定，像是 WPE 的 bug，需要实测确认（见实验 `ri-cpbug`）。

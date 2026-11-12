@@ -268,6 +268,8 @@ const OBJECT_FLAGS = [
 
 **验收：** 语料中粒子用法覆盖达到 70 张；`emitParticles` 和脚本写入的确定性工程和 WPE 一致；深度和剔除的工程和 WPE 逐像素一致；不用深度的场景基线逐张相同。
 
+**2026-11-13 定稿**（子计划 [phase-4f-script.md](phase-4f-script.md)，用户按推荐定）：粒子的深度与剔除移到 P5d（P5 已定 8）；并进 HDR 下的 `instanceoverride.brightness` 与一个系统多个 renderer（P4c 决定 3 改定）；`instance` 对象做全。分四步：实例覆盖挂 `{script}`（粒子覆盖 93 → 104，165 张口径）、`brightness`（→ 107）、`IParticleSystem` 的方法与 `instance`（不改覆盖，去掉 `script:api:particle.*` 的多报）、多 renderer（→ 108，全部）。不解锁场景。
+
 ## 决定
 
 **已定：**

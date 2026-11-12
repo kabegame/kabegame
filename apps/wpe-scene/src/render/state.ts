@@ -11,7 +11,9 @@
  * 视差（P5a 步骤 2）的平移看根对象的 `origin` 与 `parallaxDepth`，所以 `parallaxDepth` 同样整棵子树标脏。
  *
  * 粒子（P4a 步骤 5）：`instanceoverride` 的标量与 `colorn`（P4b 步骤 6）存在 `particleInstances`，写入用编译期同一条取值规则
- * （`instanceScalar` / `instanceColorn`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、重算颜色平移。
+ * （`instanceScalar` / `instanceColorn`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、重算颜色平移。`rate` 例外（P4f 步骤 1，
+ * rea-p4f-script.md 5.4）：WPE 的 `rate` 没有改值回调，写了不置脏，`sync` 只改步进率（不钳制、不重算）。用户属性、字段脚本的写回
+ * 都走这里，所以两条入口一起是这个语义。
  *
  * 声音（P6a 步骤 1）：`volume` 存在 `sounds`，写入用编译期同一条取值规则（`soundVolume`），不标脏，宿主的排期器每帧读。
  *
@@ -35,6 +37,7 @@ import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
 import {
+  INSTANCE_RATE_MIN,
   instanceColorn,
   instanceScalar,
   instanceValues,
@@ -90,6 +93,11 @@ export interface DirtyState {
   particles: Set<number>;
   /** 排版字段变了的文本层（`objects` 下标，P6b 1e）：渲染器按 `textFields` 重排。 */
   texts: Set<number>;
+  /**
+   * 写过 `instanceoverride.rate` 的粒子层（P4f 步骤 1，rea-p4f-script.md 5.4）：`rate` 没有改值回调，不进 `particles`，`GpuScene.sync`
+   * 只改模拟器的步进率（`ParticleSystem.setRate`），先于 `particles` 的重算。同一个对象可以两边都有。
+   */
+  rates: Set<number>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -215,8 +223,10 @@ export class SceneState {
   /** 起始值 = `bundle.general.fields`。清屏两项不标脏，`encode` 每帧读（L4）。 */
   general: GeneralValues;
   /**
-   * 粒子层的 `instanceoverride` 标量（`objects` 下标 → 值），起始值 = 编译期的 `particle.instance`（P4a 步骤 5）。
-   * 只是数据：`GpuScene.sync` 把脏的交给模拟器（`ParticleSystem.setInstance`）。
+   * 粒子层的 `instanceoverride` 标量（`objects` 下标 → 值），起始值 = 编译期的 `particle.instance`（P4a 步骤 5），`rate` 钳过
+   * （加载时 WPE 钳一次并写回，rea-p4f-script.md 6.1）。就是 WPE 的 `io`（脚本 `instance` 对象读写的那一份）：
+   * 只是数据，`GpuScene.sync` 把脏的交给模拟器（`ParticleSystem.setInstance`），重算里钳过的 `rate` 写回这里（5.2）；只写了 `rate`
+   * 的交给 `ParticleSystem.setRate`，这里保留原值（5.4）。
    */
   readonly particleInstances = new Map<number, ParticleInstanceValues>();
   /**
@@ -244,6 +254,7 @@ export class SceneState {
   private lightsDirty = false;
   private dirtyParticles = new Set<number>();
   private dirtyTexts = new Set<number>();
+  private rateParticles = new Set<number>();
   /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
   private readonly frozenLayers = new Set<number>();
 
@@ -322,7 +333,10 @@ export class SceneState {
       { ...fields },
       children,
     );
-    for (const [object, values] of instances) state.particleInstances.set(object, values);
+    // 加载时 `rate` 钳到 0.01 并写回（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，rea-p4f-script.md 6.1）：脚本 `init` 读到的就是钳过的
+    // 值，和建系统时（`ParticleSystem` 构造）的钳制一致
+    for (const [object, values] of instances)
+      state.particleInstances.set(object, { ...values, rate: Math.max(INSTANCE_RATE_MIN, values.rate) });
     // 手写的测试 bundle 可能没有声音表
     for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
     // 文本层的 effect 开关会改 `padding`、文字框与合成 RT（rea-p6b-layout 3.5），1d 没有就地重排：切换一律整场重编译（同冻结的图层）
@@ -453,7 +467,10 @@ export class SceneState {
       // 取值规则与编译期相同（`instanceColorn` / `instanceScalar`），条件先换成布尔
       if (target.field === "colorn") values.colorn = instanceColorn(conditioned(binding, raw));
       else values[target.field] = instanceScalar(conditioned(binding, raw));
-      this.dirtyParticles.add(target.object);
+      // `rate` 没有改值回调（rea-p4f-script.md 5.4，用户属性同样，P3 I3）：写了不置脏、不钳制，`sync` 只改步进率；其余键调
+      // `0x14022ab30` 置脏（5.1），下一帧开头从基值重算（5.2、5.3）
+      if (target.field === "rate") this.rateParticles.add(target.object);
+      else this.dirtyParticles.add(target.object);
       return "applied";
     }
     if (target.kind === "sound") {
@@ -510,6 +527,7 @@ export class SceneState {
       lights: this.lightsDirty,
       particles: this.dirtyParticles,
       texts: this.dirtyTexts,
+      rates: this.rateParticles,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
@@ -518,6 +536,7 @@ export class SceneState {
     this.lightsDirty = false;
     this.dirtyParticles = new Set();
     this.dirtyTexts = new Set();
+    this.rateParticles = new Set();
     return dirty;
   }
 }

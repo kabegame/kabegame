@@ -29,6 +29,26 @@ export type InstanceField = (typeof INSTANCE_FIELDS)[number];
  * 与实例颜色（`ParticleSystem.setInstance` → `colornState`）。
  */
 export type InstanceKey = InstanceField | "colorn";
+/**
+ * `instanceoverride` 上能挂字段脚本的键（P4f 步骤 1，rea-p4f-script.md 第 6 节）：写回目标是就地目标 `particle-instance`，和用户属性
+ * 改值、脚本赋值走 WPE 同一个 setter（6.2），下一帧生效（6.3）。`brightness`（HDR 下要先变成就地目标，P4f 步骤 2）与
+ * `controlpointN` / `controlpointangleN`（P4f 步骤 3）挂脚本仍由能力表报 `particle:binding:instance:<键>`。
+ */
+export const SCRIPT_INSTANCE_KEYS: readonly InstanceKey[] = [
+  "alpha",
+  "size",
+  "count",
+  "speed",
+  "lifetime",
+  "rate",
+  "colorn",
+];
+/**
+ * `instanceoverride.rate` 的下限（`rea-framework.md` Q2 第 7 步）：WPE 只在重算前（脏位，`FUN_140230650` `0x1402307c7`–`0x1402307f1`
+ * 的 `maxss`，rea-p4f-script.md 5.2）与加载时（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，6.1）钳一次，并**写回**实例覆盖；
+ * 单写 `rate` 没有改值回调，不钳（5.4）。
+ */
+export const INSTANCE_RATE_MIN = 0.01;
 /** `instanceoverride` 就地更新的部分（`SceneState` 存的就是这一份）：标量键加 `colorn`（未设为 null）。 */
 export type ParticleInstanceValues = Record<InstanceField, number> & { colorn: readonly number[] | null };
 
@@ -50,7 +70,8 @@ export function instanceScalar(value: unknown): number {
  * `instanceoverride` 的值（`rea-p4a.md` C5，基址 `obj+0x778`）。标量键与 `colorn` 经 `InstanceResolver` 取值（编译期登记绑定、
  * 读用户属性，`bundle.ts`）；`color` 与控制点只取静态值（`color` 绑了属性报不支持；控制点的 `{user}` 报
  * `particle:instance:controlpoint:user`，`checkParticleInstance`）。
- * `rate` 的下限 0.01 只在脏时钳（C5），这里存原值。
+ * `rate` 的下限 0.01（`INSTANCE_RATE_MIN`）在加载与重算时钳（rea-p4f-script.md 5.2、6.1，`SceneState.fromBundle` 与
+ * `ParticleSystem`），这里存原值。
  */
 export interface ParticleInstance {
   /** 新粒子的 `a0`。 */

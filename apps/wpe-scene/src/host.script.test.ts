@@ -1530,3 +1530,69 @@ describe("SceneHost 清空脚本存储", () => {
     host.dispose();
   });
 });
+
+describe("SceneHost：粒子 instanceoverride 的字段脚本（P4f 步骤 1）", () => {
+  const RATE = { kind: "particle-instance", object: 0, field: "rate" } as const;
+  /** 图层 0 是粒子层（实例覆盖 `rate 0.5`），脚本挂在 `instanceoverride.rate` 上，属性 `r` 也绑它。 */
+  function particleBundle(): SceneBundle {
+    const result = bundle();
+    // `SceneState.fromBundle` 只读实例值、pass 与子系统
+    result.layers[0].particle = {
+      instance: { alpha: 1, size: 1, count: 1, speed: 1, lifetime: 1, rate: 0.5, brightness: 1, colorn: null },
+      passes: [],
+      children: [],
+    } as unknown as SceneBundle["layers"][number]["particle"];
+    result.bindings = [{ property: "r", target: RATE }];
+    Object.assign(result.scripts.list[0], {
+      id: "objects/0/instanceoverride/rate",
+      target: RATE,
+      valueType: "float",
+      initial: 0.5,
+      scriptProperties: null,
+    });
+    return result;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    vi.stubGlobal("document", {});
+    events.length = 0;
+    imports = 0;
+    destroyed = 0;
+    onUpdate = null;
+    updateArguments = [];
+    onInit = null;
+    frozen = false;
+    realmGate = null;
+    moduleGate = null;
+    realmsCreated = 0;
+    compile.mockReset().mockImplementation(async () => particleBundle());
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("update 收到实例覆盖里的当前值；返回值写进状态，rate 只记 rates、不标脏；用户属性改 rate 同一条路", async () => {
+    onUpdate = () => 0;
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ r: { type: "slider", value: 0.5 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    const state = renderer.sceneState!;
+    state.takeDirty();
+    updateArguments = [];
+    onUpdate = () => 0.25;
+    renderer.tick();
+    // 读的是状态里的值（首帧的 update 写了 0），不是 JSON 里的初值
+    expect(updateArguments).toEqual([0]);
+    expect(state.particleInstances.get(0)!.rate).toBe(0.25);
+    expect(host.readTarget("objects/0/instanceoverride/rate")).toBe(0.25);
+    let dirty = state.takeDirty();
+    expect([[...dirty.rates], [...dirty.particles]]).toEqual([[0], []]);
+    host.applyUserProperties({ r: { type: "slider", value: 0.75 } });
+    expect(state.particleInstances.get(0)!.rate).toBe(0.75);
+    dirty = state.takeDirty();
+    expect([[...dirty.rates], [...dirty.particles]]).toEqual([[0], []]);
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(reporter.warn).not.toHaveBeenCalled();
+    host.dispose();
+  });
+});

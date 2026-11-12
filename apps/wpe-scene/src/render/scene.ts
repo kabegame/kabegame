@@ -95,7 +95,8 @@
  *   有新帧就 `copyExternalImageToTexture`（`copyVideo`），对应 WPE 绑定纹理时的 `TransferVideoFrame`。拷贝是队列操作，排在本帧
  *   提交之前，所以先于这一帧的绘制（同粒子顶点的 `writeBuffer`）。图像、effect、粒子的 draw 一视同仁；不可见图层整段跳过，
  *   不问 → 播放器 30 帧后暂停（rea 第 4 节）。没有 sink（dev 探针自己建的场景）时纹理保持全 0。
- * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
+ * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲；只写了 `rate` 时只改
+ *   步进率，P4f 步骤 1）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
  * - 文本（P6b 1d）：排版结果由宿主在加载前排好，经 `build` 的 `texts` 进 `SceneState.texts`（对齐偏移进图层的世界矩阵）。`text` 步骤
@@ -1680,6 +1681,9 @@ export class GpuScene {
       this.particlePasses,
       this.particleROverride?.(layer.object),
     );
+    // 建系统时钳过的 `rate`（加载，rea-p4f-script.md 6.1）写回状态：单图层重建时状态里可能是 `setRate` 单写的、没钳过的值（P4f 步骤 1）
+    const values = state.particleInstances.get(layer.object);
+    if (values) values.rate = system.instanceScalar("rate");
     // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
     system.setAudio(this.particleAudio);
     const world = worldMatrixOf(layer.object, state.layers, new Map());
@@ -2173,11 +2177,21 @@ export class GpuScene {
     for (const key of dirty.passes) for (const draw of this.drawsByPass.get(key) ?? []) this.refreshPass(draw, state);
     if (dirty.lights) for (const draw of this.draws) this.refreshLights(draw, state);
     // `instanceoverride` 改值：模拟器从基值重新乘，不重建缓冲、不清粒子（P4a 步骤 5，C5）。只交给根系统，由它递归到 static 子系统与
-    // 事件实例（P4e 步骤 1、2，rea-p4e-children 3.4）
+    // 事件实例（P4e 步骤 1、2，rea-p4e-children 3.4）。
+    // 单写的 `rate` 先走（P4f 步骤 1，rea-p4f-script.md 5.4：没有改值回调，只改步进率，不钳制、不重算），再做置脏的重算：同一帧两边都
+    // 写了时，WPE 下一帧开头先钳 `io.rate` 再重算（5.2），结果是钳过的值，`setInstance` 开头的钳制覆盖 `setRate`。重算里钳过的
+    // `rate` 写回状态（WPE 写回 `io.rate`，之后脚本与属性面板读到的是钳过的值）
+    for (const object of dirty.rates) {
+      const values = state.particleInstances.get(object);
+      const tree = this.trees.get(object);
+      if (values && tree) tree.system.setRate(values.rate);
+    }
     for (const object of dirty.particles) {
       const values = state.particleInstances.get(object);
       const tree = this.trees.get(object);
-      if (values && tree) tree.system.setInstance(values);
+      if (!values || !tree) continue;
+      tree.system.setInstance(values);
+      values.rate = tree.system.instanceScalar("rate");
     }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();

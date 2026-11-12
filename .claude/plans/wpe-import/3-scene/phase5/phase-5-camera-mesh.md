@@ -297,7 +297,7 @@ export function particleViewProjection(/* … */): Mat4 {
 
 ## 和 P4 的交界
 
-- **深度附件：** P4f 也计划给粒子新建深度附件。网格先用到，由 P5d 建，P4f 复用，只剩粒子自己的深度状态与剔除（已定 5）。
+- **深度附件：** P4f 也计划给粒子新建深度附件。网格先用到，由 P5d 建，P4f 复用，只剩粒子自己的深度状态与剔除（已定 5）。2026-11-13 改为粒子的深度与剔除整体移到 P5d（已定 8）。
 - **共享文件：** 两边都改 `compile/features.ts`、`compile/bundle.ts`、`render/scene.ts`、`render/uniforms.ts`。调研和计划可以并行；实施时同一时刻只让一边改这几个文件，每个实现步骤动工前看一次 P4 的工作区。
 - **粒子在透视场景里：** 见 P5d 步骤 0。粒子在视差下的位移（绘制时乘 V，模拟时不乘）也要和 P4 的指针跟随一起核对：rea-p5-camera 6.3 推断，跟随指针的控制点不含视差。
 
@@ -311,6 +311,7 @@ export function particleViewProjection(/* … */): Mat4 {
 5. 深度附件由 P5d 建，P4f 复用（2026-11-10 用户，按推荐）。
 6. 透视场景按画布尺寸渲染，壁纸样式不起作用，导入时没有分辨率的行按主屏比例显示预览；细节在 P5d 子计划里落实（2026-11-10 用户，按推荐）。
 7. P5a 现在开始，先做步骤 0（2026-11-10 用户）。前置的实现并进 P5a 子计划的第一个实现步骤，见 [phase-5a-parallax.md](phase-5a-parallax.md)。
+8. 粒子的 `depthtest` / `depthwrite` / `cullmode` 从 P4f 移到 P5d（2026-11-13 用户，按 P4f 子计划的推荐）：语料里的 `cull:normal` 12、`depthtest:enabled` 6、`depthwrite:enabled` 1 是所有非模型 pass 共用的检查，P5d 统一深度与剔除时一起做；kabegame-sample 的 `magic_vortex_orb`（`depthtest: enabled`）随之归 P5d。见 [phase-4f-script.md](../phase4/phase-4f-script.md)「已定」1。
 
 **待定：** 无。实施时和 P4 共用文件的协调见「和 P4 的交界」，每个实现步骤动工前看一次 P4 的工作区。
 

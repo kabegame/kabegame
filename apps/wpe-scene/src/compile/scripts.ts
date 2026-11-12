@@ -9,8 +9,9 @@ import {
   type TextRuntimeField,
   type ValueType,
 } from "./bindings";
-import { isSoundObject, isTextObject } from "./features";
+import { isSoundObject, isTextObject, objectKind } from "./features";
 import { resolveValue, type SceneJson, type SceneObject, type SceneScalar, type SceneValue } from "./model";
+import { SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
 import { BLOOM_FIELDS } from "./postprocess";
 
 export type ScriptOwner =
@@ -85,6 +86,12 @@ function valueType(initial: SceneScalar): ValueType | "string" {
  * 当场交给排期器（同 API 写 `thisLayer.volume`）。只认对象顶层的 `objects/<i>/volume`。
  * `text`：文本对象顶层的 `objects/<i>/<TEXT_RUNTIME_FIELDS 之一>`（P6b 1e）写回到文本目标，值变了才重排；`font`、
  * `opaquebackground` 等其余文本键仍是 `unsupported`（能力表另报 `text:script:<键>`）。
+ *
+ * `particle`：粒子对象的 `objects/<i>/instanceoverride/<键>`（P4f 步骤 1，rea-p4f-script.md 第 6 节）。`SCRIPT_INSTANCE_KEYS` 的 7 个键
+ * 写回到就地目标 `particle-instance`：WPE 的回调返回值走和脚本赋值、用户属性改值同一个 setter（6.2，每帧写、不比较），下一帧对象更新
+ * 开头才进模拟（6.3），和我们「脚本之后 `sync`、下一次 `stepParticles` 才用」的帧序等价；`rate` 在 `SceneState.write` 里另走一条路
+ * （没有改值回调，5.4）。其余键（`brightness`、控制点等）与非粒子对象上的 `instanceoverride` 没有目标（能力表照报），也不落到图层的
+ * 同名字段上（`alpha`、`brightness` 是图层字段，路径不同）。
  */
 function targetOf(
   path: string,
@@ -93,11 +100,16 @@ function targetOf(
   initial: SceneScalar,
   sound: boolean,
   text: boolean,
+  particle: boolean,
 ): SceneScript["target"] {
   if (owner.kind === "layer" && sound && path === `objects/${owner.object}/volume`)
     return { kind: "sound", object: owner.object, field: "volume" };
   if (owner.kind === "layer" && text && path === `objects/${owner.object}/${key}` && isTextRuntimeField(key))
     return { kind: "text", object: owner.object, field: key };
+  if (owner.kind === "layer" && path === `objects/${owner.object}/instanceoverride/${key}`)
+    return particle && (SCRIPT_INSTANCE_KEYS as readonly string[]).includes(key)
+      ? { kind: "particle-instance", object: owner.object, field: key as InstanceKey }
+      : { kind: "unsupported", path };
   if (owner.kind === "layer" && key in layerTypes)
     return { kind: "layer", object: owner.object, field: key as Extract<BindingTarget, { kind: "layer" }>["field"] };
   if (owner.kind === "effect" && key === "visible")
@@ -159,7 +171,10 @@ export async function collectScripts(
       const object = owner.kind === "layer" ? (scene.objects as SceneObject[])[owner.object] : undefined;
       const sound = !!object && typeof object === "object" && isSoundObject(object);
       const text = !!object && typeof object === "object" && isTextObject(object);
-      const target = targetOf(path, owner, key, initial, sound, text);
+      const particle = !!object && typeof object === "object" && objectKind(object) === "particle";
+      const target = targetOf(path, owner, key, initial, sound, text, particle);
+      // 粒子实例覆盖：`colorn` 是 vec3（WPE 的描述符，rea-p4f-script.md 5.1），其余系数是 float
+      const instanceType = target.kind === "particle-instance" && target.field === "colorn" ? "vec3" : "float";
       list.push({
         id: path,
         source: raw.script,
@@ -169,11 +184,13 @@ export async function collectScripts(
             ? "float"
             : target.kind === "text"
               ? textTypes[target.field]
-              : owner.kind === "layer" && key in layerTypes
-                ? layerTypes[key]
-                : owner.kind === "general" && key in GENERAL_FIELDS
-                  ? GENERAL_FIELDS[key as GeneralKey].type
-                  : valueType(initial),
+              : target.kind === "particle-instance"
+                ? instanceType
+                : owner.kind === "layer" && key in layerTypes
+                  ? layerTypes[key]
+                  : owner.kind === "general" && key in GENERAL_FIELDS
+                    ? GENERAL_FIELDS[key as GeneralKey].type
+                    : valueType(initial),
         initial,
         owner,
         layer,

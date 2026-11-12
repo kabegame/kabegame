@@ -30,6 +30,7 @@ import {
   parseParticleChildEntry,
   particleModuleEntries,
   readParticleSystem,
+  SCRIPT_INSTANCE_KEYS,
   type ParticleChildIssue,
   type ParticleInstance,
 } from "./particles";
@@ -796,7 +797,10 @@ export function checkInstanceFeatures(object: SceneObject, unsupported: Set<stri
  * - `controlpoint0..7`、`controlpointangle0..7`（P4c 步骤 1，`particles/controlpoints.ts`）：静态值已实现，不报（下标 ≥ 控制点
  *   个数、或点上带 `flags` 1 / 4 时 WPE 不用它，同样中性）；绑了用户属性报 `particle:instance:controlpoint:user`（运行时改值
  *   没做，语料 0 处）。
- * - 挂了 `{script}`：`particle:binding:instance:<键>`（脚本名 `instance`，P4f）。
+ * - 挂了 `{script}`（P4f 步骤 1，rea-p4f-script.md 第 6 节）：`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`colorn`
+ *   （`SCRIPT_INSTANCE_KEYS`）已实现，字段脚本写回到就地目标 `particle-instance`（`compile/scripts.ts`），不报；其余键报
+ *   `particle:binding:instance:<键>`：`brightness`（HDR 下要先变成就地目标，P4f 步骤 2）、`controlpointN` / `controlpointangleN`
+ *   （运行时写入归 P4f 步骤 3）、`color` 等。脚本里用到的 API 照常由 `scanScriptApi` 检查。
  * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `scanValue` 报。
  */
 export function checkParticleInstance(
@@ -814,7 +818,8 @@ export function checkParticleInstance(
   const colorOverride = (context.flags & 8) === 0;
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (value === null || value === undefined || key === "id") continue;
-    if (isScriptValue(value)) unsupported.add(`particle:binding:instance:${key}`);
+    if (isScriptValue(value) && !(SCRIPT_INSTANCE_KEYS as readonly string[]).includes(key))
+      unsupported.add(`particle:binding:instance:${key}`);
     if ((INSTANCE_FIELDS as readonly string[]).includes(key)) continue;
     if (key === "color") {
       if (colorOverride && isUserBinding(value)) unsupported.add("particle:instance:color:user");

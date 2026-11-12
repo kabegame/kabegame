@@ -125,6 +125,7 @@ if 存活 < 容量 且 !(flags & bit31) 且 sys+0x3f7 bit0 == 0 且 delay <= 0: 
 - **bit1 不限 `instantaneous`：** `n0` 不受 bit1 约束，`instantaneous 50` 仍一帧发 50 个。
 - **`burst` 只数连续发射：** `instantaneous` 不计入 `maxtoemitperperiod`。
 - `sys+0x3f7` bit0 由子系统更新写入（`0x14023641b`、`0x1402364bc`），顶层系统应为 0【推】。
+  - **更正（P4f，rea-p4f-script 2.1）：** bit0 是脚本 `pause()` 的暂停位，顶层系统也会置；置位时发射函数整段返回（不发、帧尾不跑、计时冻结），子系统每帧从父拷。
 
 ### A2 帧尾（`0x140238461`、`0x14023ae24`–`0x14023ae67`）【确】
 
@@ -609,6 +610,7 @@ return (((n3 + n2) + n1) + n0)·32
 - **`vortex` 解析期的两个寄存器常量**：`axis` 判零阈值 `xmm11 = 0.001`、`inner == outer` 时的倒数 `xmm15 = 1.0`，都是按 operator 段开头 `0x1401cb184` / `0x1401cb194` 的赋值推的，中间路径没有逐条排除【推】。
 - **控制点初值**：cp 0 的矩阵是不是单位阵、平移是不是 0 或 `offset`（影响 `boxrandom` 的 `base`、`vortex` 的中心、`turbulentvelocityrandom` 的 `M`）。rea-p4a 也列为未查完。
 - **`sys+0x3f7` bit0** 的完整含义（事件子系统相关），只确认顶层系统一般不置【推】。
+  - **已查清（P4f）：** 脚本暂停位，见 rea-p4f-script.md 2.1。
 - **音频取值函数 `FUN_14022a8a0`** 没读；`turbulentvelocityrandom` 用音频乘相位范围，语义上奇怪，但代码如此。
 - **预热期的场景时间**：`T` 在预热时是否为 0【推】，影响用了 `turbulence` / `turbulentvelocityrandom` / `positionoffsetrandom` 且 `starttime > 0` 的系统。
 - **非字符串向量键**的实际后果（崩溃还是读垃圾）没有验证。

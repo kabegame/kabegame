@@ -279,7 +279,7 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
       ]);
     });
 
-    it("控制点静态值不报、{user} 报 particle:instance:controlpoint:user（P4c 步骤 1）；{script} 报 particle:binding:instance:<键>；其它键报 particle:instance:<键>", () => {
+    it("控制点静态值不报、{user} 报 particle:instance:controlpoint:user（P4c 步骤 1）；控制点与 brightness 挂 {script} 报 particle:binding:instance:<键>（7 个系数不报，P4f 步骤 1）；其它键报 particle:instance:<键>", () => {
       expect(check({ controlpoint1: "10 20 0" })).toEqual([]);
       expect(check({ controlpointangle3: "0 0 0" })).toEqual([]);
       expect(check({ controlpoint7: "abc", controlpointangle0: "1 2 3" })).toEqual([]);
@@ -290,9 +290,10 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
       expect(check({ controlpoint1: { script: SCRIPT, value: "1 2 0" } })).toEqual([
         "particle:binding:instance:controlpoint1",
       ]);
-      expect(check({ count: { script: SCRIPT, value: 1 } })).toEqual(["particle:binding:instance:count"]);
-      // 挂了脚本的 colorn 照报（P4f），不再另报 particle:instance:colorn
-      expect(check({ colorn: { script: SCRIPT, value: "1 1 1" } })).toEqual(["particle:binding:instance:colorn"]);
+      // P4f 步骤 1：7 个系数挂脚本已实现（写回目标 particle-instance），不报；brightness 仍报（步骤 2）
+      expect(check({ count: { script: SCRIPT, value: 1 } })).toEqual([]);
+      expect(check({ colorn: { script: SCRIPT, value: "1 1 1" } })).toEqual([]);
+      expect(check({ brightness: { script: SCRIPT, value: 1 } })).toEqual(["particle:binding:instance:brightness"]);
       expect(check({ foo: 1 })).toEqual(["particle:instance:foo"]);
       expect(check({ controlpoint8: "1 0 0" })).toEqual(["particle:instance:controlpoint8"]);
       expect(check("1 2 3")).toEqual(["particle:instance"]);

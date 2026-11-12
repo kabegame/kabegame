@@ -17,7 +17,8 @@
  *
  * `instanceoverride.colorn`（P4b 步骤 6，`colorn.ts`）：重乘字段之后从基值重算颜色模块的平移与新粒子的颜色初值（`applyColorn`）。
  *
- * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动）；不可见的帧走
+ * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动；只写了 `rate` 时走 `setRate`，只改
+ * 步进率，P4f 步骤 1）；不可见的帧走
  * `suspend`（不发射，有存活粒子就清空并复位 emitter 计时，重新可见时不重新预热；控制点照常更新、拷 `previous`，P4d 步骤 5）；
  * 暂停时渲染器不步进。
  *
@@ -75,11 +76,16 @@
  * 累加（P4d 收尾 A 实测 st-hide、st-pre）。模拟时的
  * 对象原点 `W.t`（remap 的 `layerorigin`）和模型矩阵一起由 `advance` 按 `inputs.world` 写进执行上下文。
  *
+ * 冻结（P4f 步骤 1，rea-p4f-script.md 5.4）：`rate` 单写时不钳制（`setRate`），`rate ≤ 0` 时 `dt′ ≤ 0`，整棵树不模拟（不增龄、不判死、
+ * 不发射、不移动、控制点不更新），存活粒子照画。两个时间照样 `+= dt′`（0 不变，负数倒退），拖尾采样与子系统的遍历照常（只是子孙同样
+ * 冻结），读码见 `step` / `stepNode`。
+ *
  * 音频（P4e 步骤 4，rea-p4e-audio.md，`audio.ts`）：执行上下文的 `audio` 是这一帧的 16 段频谱，整棵树共用一个只读引用（`setAudio`，
  * 渲染器在步进之前写好值）；读音频的模块在 `audioprocessingmode ≠ 0` 时取系数。发射器与 initializer 一帧只走一次，operator 两遍模式下
  * 每遍各取一次（值相同）。
  */
 import {
+  INSTANCE_RATE_MIN,
   instanceValues,
   MAX_CHILD_DEPTH,
   type ParticleInstanceValues,
@@ -160,13 +166,11 @@ export function operatorPass(dt: number, frameDt: number, passes: 1 | 2): { h: n
   return passes === 2 ? { h: f32(dt * 0.5), k: f32(k0 * 0.5) } : { h: dt, k: k0 };
 }
 
-/** `instanceoverride.rate` 的下限（`rea-framework.md` Q2 第 7 步）。 */
-const MIN_RATE = 0.01;
-
 /**
- * 各项 `instanceoverride` 的乘数；系统 `flags` 的对应位禁用时为 1（C3）。`rate` 没有禁用位，取模拟用的同一个值（下限 0.01，
- * 见 `applyScalars`）：WPE 的钳制写回 `instanceoverride.rate` 本身（`obj+0x854` 即 `+0xdc`），和 `timescale` 的条目重写在
- * 同一次重算里，先后没读；`rate < 0.01` 没有实测【推】。
+ * 各项 `instanceoverride` 的乘数；系统 `flags` 的对应位禁用时为 1（C3）。`rate` 没有禁用位，取实例值原样（湍流类的 `timescale`
+ * 乘它）：钳制不在这里，WPE 在重算之前先把 `io.rate` 钳到 0.01 并写回（`FUN_140230650` `0x1402307c7`–`0x1402307f1`，再调
+ * `FUN_14022bd40`，rea-p4f-script.md 5.2），`FUN_1401d15a0` 读的是写回后的值，所以 `setInstance` 与加载（构造）先钳实例值、再算乘数。
+ * 新建子系统（事件实例，`FUN_14022f890`）读对象当时的 `io.rate`，可能是 `setRate` 单写的、没钳过的值（5.4），这里同样原样乘。
  */
 export function instanceMultipliers(
   instance: Pick<ParticleInstanceValues, InstanceScale>,
@@ -178,7 +182,7 @@ export function instanceMultipliers(
     speed: pick("speed"),
     count: pick("count"),
     lifetime: pick("lifetime"),
-    rate: Math.max(MIN_RATE, instance.rate),
+    rate: instance.rate,
   };
 }
 
@@ -442,7 +446,10 @@ export class ParticleSystem {
    * 整棵树都是顶层的值。子系统的 `colorn` 生效另要父的这一位（`applyColorn`）。
    */
   private colornGate = false;
-  /** `instanceoverride.rate`，下限 0.01。 */
+  /**
+   * 步进率（`dt′ = frameDt·rate`，float32，只有顶层的起作用：子孙共享根的 `dt′`）。重算（`setInstance`）与加载时是钳过的
+   * `instanceoverride.rate`（≥ 0.01）；`setRate` 单写时不钳制，可以是 0 或负数（整棵树冻结，rea-p4f-script.md 5.4）。
+   */
   private rate = 1;
   /** 下一次找空槽的起点：它之前没有空槽。 */
   private searchFrom = 0;
@@ -453,8 +460,11 @@ export class ParticleSystem {
   private readonly rOverride: ParticleROverride | undefined;
 
   /**
-   * `link` 只给子系统（父系统构造时自己建，P4e 步骤 1）：父与条目。子系统的 `instanceoverride` 取父当时的值（即对象的，3.4：
-   * `FUN_14022f890` 用同一个对象的 `obj+0x778`），不看子系统定义里的 `instance`（编译期给的是缺省值）；`rOverride` 只给顶层。
+   * `link` 只给子系统（父系统构造时自己建，P4e 步骤 1）：父与条目。子系统的 `instanceoverride` 取对象的当前值（3.4：`FUN_14022f890`
+   * 用同一个对象的 `obj+0x778`），即根系统上的那一份（`setRate` 只改根的，P4f 步骤 1），不看子系统定义里的 `instance`（编译期给的是
+   * 缺省值）；`rOverride` 只给顶层。
+   * 顶层（加载）先把 `rate` 钳到 0.01（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，rea-p4f-script.md 6.1）；子系统照搬对象的值、
+   * 不再钳（`FUN_14022f890` 直接读 `io`）。
    */
   constructor(
     def: SceneParticle,
@@ -481,7 +491,10 @@ export class ParticleSystem {
     // WPE 在 ropetrail 的 `sys+0x248`（segments）非零时分配历史（rea-p4d-rope.md 3.5），即 renderer 是 ropetrail
     const ropetrail = def.renderer?.ropetrail;
     this.trail = ropetrail ? new TrailHistory(this.columns.capacity, ropetrail.segments, ropetrail.scrolling) : null;
-    this.instance = instanceValues(link ? link.parent.instance : def.instance);
+    let root = link?.parent ?? null;
+    while (root?.parent) root = root.parent;
+    this.instance = instanceValues(root ? root.instance : def.instance);
+    if (!root) this.instance.rate = Math.max(INSTANCE_RATE_MIN, this.instance.rate);
     // 从基值乘，不累乘（C5）；颜色模块的字段乘完再按 `colorn` 平移（`applyColorn`）。`brightness` 不做（能力表按
     // `checkParticleInstance` 报）
     const multipliers = instanceMultipliers(this.instance, def.flags);
@@ -645,10 +658,11 @@ export class ParticleSystem {
   }
 
   /**
-   * 当前的一项 `instanceoverride` 标量原值（不看系统 flags 的禁用位、不钳制）：rope 的 `R`、`L` 乘 `count`、`lifetime`
-   * （rea-p4d-rope.md 1.2，`io+0xd0`、`io+0xd8`），每帧写段顶点时读，不拷贝。
+   * 当前的一项 `instanceoverride` 标量原值（不看系统 flags 的禁用位）：rope 的 `R`、`L` 乘 `count`、`lifetime`
+   * （rea-p4d-rope.md 1.2，`io+0xd0`、`io+0xd8`），每帧写段顶点时读，不拷贝。`rate` 是重算与加载时钳过的值（`setRate` 单写之后是
+   * 原值），`GpuScene.sync` 读它写回状态（P4f 步骤 1，rea-p4f-script.md 5.2）。
    */
-  instanceScalar(field: "count" | "lifetime"): number {
+  instanceScalar(field: "count" | "lifetime" | "rate"): number {
     return this.instance[field];
   }
 
@@ -658,6 +672,9 @@ export class ParticleSystem {
    * - 存活粒子保留出生时写进列的 life、颜色、尺寸、`a0`；`size`、`lifetime`、`alpha`、发射速度与 `velocityrandom` 等只影响之后出生的。
    * - 每帧现算的参数下一帧就用新值：`rate`（dt' = dt·rate，下限 0.01）、`count`（发射数量）、`speed` 乘的 operator 字段
    *   （重力、角力、振荡频率，存活粒子也用）。
+   * - `rate` 先钳到 0.01 并写回实例值（P4f 步骤 1，rea-p4f-script.md 5.2：WPE 置脏后 `0x1402307c7`–`0x1402307f1` 先
+   *   `io.rate = max(0.01, io.rate)`，再调 `FUN_14022bd40`），之后的乘数（湍流类 `timescale`）与步进率都用钳过的值；调用方读
+   *   `instanceScalar("rate")` 写回状态。子孙收到的已是钳过的值，再钳一次不变（WPE 只钳一次，`io` 是共用的）。
    * - 系统 `flags` bit4–7 禁用的项照旧不乘（C3）。`brightness` 不影响模拟。
    * - `colorn`（P4b 步骤 6）：颜色模块的平移与新粒子的颜色初值从基值重算（`applyColorn`）。`colorrandom` 是出生时的
    *   initializer，只影响之后出生的粒子；`colorchange` 每帧读字段，存活粒子下一帧就跟着变（rea-p4b-render.md 7.3【推】）。
@@ -669,6 +686,7 @@ export class ParticleSystem {
    */
   setInstance(values: Partial<ParticleInstanceValues>, reopen = true): void {
     this.instance = { ...this.instance, ...values };
+    this.instance.rate = Math.max(INSTANCE_RATE_MIN, this.instance.rate);
     const multipliers = instanceMultipliers(this.instance, this.def.flags);
     for (const module of [...this.emitters, ...this.initializers, ...this.operators])
       module.fields = resolveParticleFields(module.def, module.base, multipliers);
@@ -685,6 +703,22 @@ export class ParticleSystem {
     // 事件实例（P4e 步骤 2）：活跃与空闲的都递归，`p2 = 0`
     for (const pool of this.events)
       for (const instance of [...pool.active, ...pool.free]) instance.setInstance(this.instance, false);
+  }
+
+  /**
+   * 只改步进率（P4f 步骤 1，rea-p4f-script.md 5.4【确】：`rate` 没有改值回调，写了不置脏，不触发 `FUN_14022bd40`）：下一次 `step` 的
+   * `dt′ = frameDt·rate`（`0x1402307ff` 每帧读 `io.rate`，不看脏位）。
+   * - 不钳制：钳到 0.01 只发生在重算里（`setInstance`）。`rate ≤ 0` 时整棵树冻结，见 `step`（实测 `b-rate0`）。
+   * - 不重乘模块字段：湍流类（`turbulence`、`turbulentvelocityrandom`）的 `timescale` 仍是上一次重算时的值，要等别的系数被写、
+   *   `setInstance` 重算时才跟上【确：路径】【推：画面】。
+   * - 不递归：子系统与事件实例共享根的 `dt′`（rea-p4e-children 3.2）。实例值只改根上这一份（WPE 的 `io`），之后新建的子系统从根上取
+   *   （构造，`FUN_14022f890` 读 `io`）；static 子孙与已有实例的实例值等下一次 `setInstance` 递归时才跟上，它们的 `rate` 只在重算乘数时用。
+   * - 不重开已结束的发射器（重开在 `FUN_14022bd40` 尾部，单写 `rate` 不调它，5.3）。
+   * 只对顶层有意义（`GpuScene.sync` 只交给根）。
+   */
+  setRate(rate: number): void {
+    this.instance.rate = rate;
+    this.rate = f32(rate);
   }
 
   /**
@@ -716,10 +750,13 @@ export class ParticleSystem {
         };
   }
 
-  /** 不乘字段、由模拟器自己用的两项：新粒子的 `a0` 与时间缩放 `rate`（下限 0.01）。 */
+  /**
+   * 不乘字段、由模拟器自己用的两项：新粒子的 `a0` 与步进率 `rate`。`rate` 不在这里钳：调用方（构造的顶层、`setInstance`）已经钳过
+   * 实例值（rea-p4f-script.md 5.2、6.1），子系统照搬对象的值（它的步进率不用）。
+   */
   private applyScalars(): void {
     this.alpha0 = f32(this.instance.alpha);
-    this.rate = f32(Math.max(MIN_RATE, this.instance.rate));
+    this.rate = f32(this.instance.rate);
   }
 
   /**
@@ -744,10 +781,19 @@ export class ParticleSystem {
    * 事件实例（P4e 步骤 2，3.6 第 3、4 步）：顶层有存活粒子时，顶层与 static 子孙各池的活跃实例**销毁**（丢掉，不进空闲表），空闲表不动；
    * 之后照常以 `emit = false` 步进剩下的子孙（`stepChildren`）。顶层存活数为 0 时不销毁，停了跟随的实例照常模拟到回收。子孙以
    * `emit = false` 步进时判死与 eventdeath 照常（P4e 步骤 3，`advance`），新建的实例同样不发射。
+   *
+   * 冻结（P4f 步骤 1，`rate ≤ 0`，`setRate`）：复位照做（`0x14023068e` 只看可见与存活数，不看 `dt′`）；`dt′ ≤ 0` 时顶层的控制点不更新
+   * （WPE 的控制点更新在被跳过的模拟里），系统时间照样 `+= dt′`，子孙同样冻结（`stepNode`）。
    */
   suspend(inputs: ControlPointInputs = IDENTITY_INPUTS, frameDt = 0, time?: number): boolean {
-    this.controlPoints.update(inputs);
-    this.controlPoints.endFrame();
+    // 本帧的 `dt′`（`0x1402307ff`，不可见时同样乘 `rate`，不钳制，rea-p4f-script.md 5.4）
+    const dt = f32(f32(frameDt) * this.rate);
+    // 控制点在模拟函数里更新（`FUN_140236cd0`），`FUN_1402308a0` 在 `dt′ ≤ 0` 时整段跳过它（`0x1402308dc`–`0x1402308eb`，P4f 步骤 1）：
+    // 冻结的帧不更新、不拷 `previous`。`frameDt` 缺省 0 是单测的写法（不关心帧时间），这时只看 `rate`
+    if (frameDt > 0 ? dt > 0 : this.rate > 0) {
+      this.controlPoints.update(inputs);
+      this.controlPoints.endFrame();
+    }
     const cleared = this.alive !== 0;
     if (cleared) {
       // 计时复位递归到 static 子孙（3.6 第 1 步），系统时间一起清零
@@ -760,8 +806,7 @@ export class ParticleSystem {
       // 3.6 第 4 步：销毁顶层自己的活跃实例
       this.destroyInstances();
     }
-    // 系统时间（`FUN_1402308a0` 开头 `sys+0x3f0 += dt′`，不可见时照样调）：复位之后累加本帧
-    const dt = f32(f32(frameDt) * this.rate);
+    // 系统时间（`FUN_1402308a0` 开头 `sys+0x3f0 += dt′`，不可见时照样调，冻结时同样加）：复位之后累加本帧
     this.systemTime = f32(this.systemTime + dt);
     this.context.systemTime = this.systemTime;
     if (this.hasChildren)
@@ -830,9 +875,13 @@ export class ParticleSystem {
    */
   step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
+    // `dt′ = dt·io.rate`（`FUN_140230650` `0x1402307ff` 的 `mulss`）：每帧都读实例覆盖里的 `rate`，不看脏位、不钳制（P4f 步骤 1，
+    // rea-p4f-script.md 5.4），`setRate` 单写 0 或负数时 `dt′ ≤ 0`
     const dt = f32(f32(frameDt) * this.rate);
     // P4d 步骤 4a：图层时间（`obj+0x770`，`0x140230810`）与系统时间（`sys+0x3f0`，`0x1402308c2`，`stepNode` 里）都在模拟之前 `+= dt′`，
-    // float32。图层时间是对象的，整棵树共用这一份（P4e 步骤 1）
+    // float32。图层时间是对象的，整棵树共用这一份（P4e 步骤 1）。
+    // 冻结时（`dt′ ≤ 0`，P4f 步骤 1）照样加【确：读码】：`0x140230808` 只判可见（`r12b`），`0x140230810` 的 `addss` 不看 `dt′` 的正负，
+    // 所以 `rate = 0` 时不变、负数时倒退（负数没有实测）
     this.layerTime = f32(this.layerTime + dt);
     this.stepNode(
       { dt, frameDt, time: f32(time ?? this.elapsed), layerTime: this.layerTime, object: inputs.world, emit: true },
@@ -844,6 +893,18 @@ export class ParticleSystem {
    * 树里一个系统的一帧（`FUN_1402308a0`，rea-p4e-children 3.2）：系统时间 `+= dt′` → 模拟（`emit` 为假时不发射；判死后停跟随、建
    * eventdeath 实例，发射后建 eventfollow / eventspawn 实例，P4e 步骤 2、3）→ 拖尾采样（写顶点的位置）→ 子系统（`stepChildren`：static，
    * 再事件实例）。`inputs.world` 是本系统的模拟矩阵 `M`（顶层是 `W`）。
+   *
+   * 冻结（P4f 步骤 1，rea-p4f-script.md 5.4，`dt′ ≤ 0`）【确：读码】：
+   * ```
+   * 0x1402308bf  xmm0 = dt′;  0x1402308c2  xmm0 += St          // 系统时间先加，不看 dt′ 的正负
+   * 0x1402308dc  comiss dt′, 0;  0x1402308e3  St = xmm0        // 存回（在判断之前）
+   * 0x1402308eb  jbe 0x1402308f2                                 // dt′ ≤ 0（含 NaN）：跳过 FUN_140236cd0
+   * 0x1402308ed  call FUN_140236cd0                              // 模拟：增龄判死、控制点、发射、operator（`advance`）
+   * 0x1402308f2  …                                               // 写顶点、拖尾采样、子系统：不看 dt′
+   * ```
+   * 所以冻结时系统时间照样 `+= dt′`（0 不变、负数倒退），模拟整段跳过（`advance` 开头的 `!(dt > 0)`），拖尾照常按 `dt′` 走计时器
+   * （`0x140232cb6` 的 `subss`，0 时不动、不采样），子系统与事件实例拿到同一个 `dt′`、同样冻结；父粒子写子系统控制点、eventfollow 重算 `X`、不活跃的实例回收照常做
+   * （都在 `0x1402308f2` 之后）。实测 `b-rate0`（周期内没有出生）；冻结期间不移动由回放核对，负数没有实测。
    */
   private stepNode(frame: TreeFrame, inputs: ControlPointInputs): void {
     const context = this.context;
@@ -1073,6 +1134,7 @@ export class ParticleSystem {
     env: PrewarmEnv | null = null,
     prewarming = false,
   ): void {
+    // `FUN_1402308a0` 的 `comiss dt′, 0` + `jbe`（`0x1402308dc`–`0x1402308eb`）：`dt′ ≤ 0`（含 NaN）时不调模拟，整段冻结（P4f 步骤 1）
     if (!(dt > 0)) return;
     // rope 系统总收集（`ageAndKill` 自己判断）；事件只在不预热时收集（`sys+0x41 & 0x14`）
     this.ageAndKill(dt, !prewarming && this.watchesDeaths);

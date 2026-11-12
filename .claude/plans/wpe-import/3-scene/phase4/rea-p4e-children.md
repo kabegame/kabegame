@@ -464,6 +464,7 @@ FUN_140230650(obj):
 - **`controlpointstartindex` 为负**：按代码会写负下标【推】，没实测、语料没有。
 - **非字符串的 `origin` / `angles` / `scale`**：按代码会把数值当指针读【推】。
 - **`sys+0x3f7` bit0 的另一条路径**：发射函数第三参数 > 0 时（推测是脚本 `emitParticles`，P4f）不受 bit0 挡，没追调用者。
+  - **已查清（P4f，rea-p4f-script 4.2–4.3）：** 调用者就是 `emitParticles`；它还越过已结束位与 `delay`，不越过容量，门内的发射器记欠账。
 - **MT19937 的播种**：不在本节范围，流 A 是否每次加载同种子决定了跨次运行能否逐粒子复现，见 rea-p4b-modules。
 - `FUN_14024c680`（复位并清空，调用者未知，rea-p4d-modules）对子系统是否递归没看。
 

@@ -327,7 +327,8 @@ describe("turbulentvelocityrandom：读码（B2）", () => {
     expect([fields.timescale, fields.speedmin, fields.speedmax]).toEqual([1, 300, 600]);
     const instance = { size: 1, speed: 1, count: 1, lifetime: 1, rate: 0.25 };
     expect(instanceMultipliers(instance, 0xf0).rate).toBe(0.25);
-    expect(instanceMultipliers({ ...instance, rate: 0.001 }, 0).rate).toBe(0.01);
+    // P4f 步骤 1：钳到 0.01 在乘数之前（`setInstance` 与加载先钳实例值并写回，rea-p4f-script.md 5.2），乘数取实例值原样
+    expect(instanceMultipliers({ ...instance, rate: 0.001 }, 0).rate).toBe(0.001);
   });
 });
 

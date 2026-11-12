@@ -366,3 +366,32 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | 没声明 `supportsaudioprocessing` 时频谱全 0、系数为 0 | `p4e-audio-off`：CLK 读到的 4 个数组全 0，带音频的发射系统没有粒子 | 成立 |
 
 **留给步骤 4 的：** `vortex` 与 `turbulence` 的速度缩放、`turbulentvelocityrandom` 的相位范围；Kabegame 这边 16 段归一化频谱的来源（宿主现在拿到的是 `WpeMediaHub` 的原始值，归一化与 64 → 16 的归并要在宿主里照 rea-p4e-audio 第 6 节做）。
+
+## P4f 语义的实测核对（2026-11-13）
+
+读码在 [rea-p4f-script.md](rea-p4f-script.md)（`IParticleSystem`、`instance` 对象、字段脚本、HDR 下的 `brightness`、一个系统多个 renderer）。
+- **工程：** `ignore/p4/defs/p4f0.py`（`kbp gen p4f0`）。第一轮 `p4f-instance`（7 个系数挂字段脚本）、`p4f-api`（方法与 `instance` 的 API 写入）、`p4f-bright`（`brightness`，场景 `bloom`、`hdr` 都开）、`p4f-multi`（多 renderer，读四角）；读码回来后第二轮 `p4f-api2`、第三轮 `p4f-api3` 照读码的建议补测。
+- **读法：** 粒子匀速直线、寿命长，抓帧时每个粒子的 x 编码出生时刻；脚本按 `engine.runtime` 的 4 s 周期做事件，做的那一帧用 `console.error('[kbpx] …')` 记进 WPE 的 log.txt（日志在 `ignore/p4/f0/log/<标签>-errors.txt`）；`isPlaying()` 每 6 帧记一次。
+- **抓帧：** `A:\p4f\<标签>`，fps 20 全部、fps 60 第一轮三个；`p4f-bright` 抓「关闭」与「超高」两档（`capture_sweep` 改设置、跑完改回）。轨迹 `ignore/p4/tracks/rd-p4f-*.json`（points 认法；`p4f-api2`、`p4f-api3` 另有 `-draws.json` 读 MVP）。读数脚本在 scratchpad（`ana_f0.py`、`ana_raw.py`、`ana_bright.py`、`ana_multi.py`），结论如下。
+
+| 读码结论 | 实测 | 结果 |
+|---|---|---|
+| 字段脚本挂在 `instanceoverride` 上，7 个系数都生效；新值影响之后出生的粒子（`rate` 影响整个系统的步进） | `p4f-instance`：`count` 1 ↔ 3 出生间距 8 ↔ 2 px，切到 0 整段不发；`size`、`alpha`、`speed`、`lifetime`、`colorn` 按出生时刻分两档 | 成立 |
+| 每帧写同一个值和静态写死相同（写回不比较、每帧置脏，只重算） | `i-count-const` 与 `i-count-static` 逐粒子相同 | 成立 |
+| `stop`：清全部粒子、全部发射器标结束、计时复位，递归 static 子系统；`play` 在整棵树不活跃时重开 | `a-stop`：只剩 `play` 之后出生的粒子，第一个在约一个发射间隔后；`a-tree` 的 static 子系统同样清掉、复位后重新发 | 成立 |
+| `pause`：只停发，粒子照常，发射计时冻结 | `a-pause`：出生时刻在 [1.05, 2.0) 有空档，旧粒子都在；`play` 后 0.12 s 就出下一个（计时接着走）；`b-pause-dur`（`duration 2`，0.5 暂停、1.5 恢复）发射到 3.0 才停 | 成立 |
+| `stop` → `play` 时 `instantaneous` 再爆发一次 | `b-stop-inst`：每个周期 `play` 后 5 个 | 成立 |
+| `isPlaying` = 没暂停 且 活跃；暂停时即使有粒子也返回假 | `a-pause` 暂停后 `false`（粒子还在）；`a-done`（`duration 1`、寿命 2）粒子死光的 3.0 s 前一直 `true` | 成立 |
+| 自然结束后 `play()`：不再发射，但 `isPlaying()` 恒为真 | `b-end-play`：1.5 s 时 `false`，2.0 s `play()` 之后一直 `true`，没有新粒子 | 成立（和 `d.ts` 的说明相反）；**Kabegame 不复刻**，`play()` 复位计时后重新发射（子计划已定 5） |
+| `stop` 之后写任一实例系数（同值也算）发射重新开始 | `b-stop-write`：只写 `instance.count = 1`、不调 `play`，约 0.2 s 后 `isPlaying` 变真、重新出粒子 | 成立；**Kabegame 不复刻**，`stop` 的结束只由 `play()` 解除（已定 6） |
+| `instance.rate = 0` 不钳制，整棵树冻结 | `b-rate0`：周期内 [1, 2) 没有出生 | 成立；冻结期间不移动由回放核对 |
+| `emitParticles(n)` 各发射器各发 `n` 个，不乘 `count`，受容量限制；`n == 0` 当 1、`n < 0` 不发 | `a-emit` 3 / 1（缺参数）/ 1；`a-emit-count`（`count 2`）发 3；`a-emit-cap`（`maxcount 8`）`emitParticles(20)` 得 8；`b-args`：`()` 1、`(0)` 1、`(-3)` 0、`(2.7)` 1 | 成立；缺参数与非整数读码没定，实测都是 1 |
+| 暂停、停止时照发 | `a-emit-paused`、`a-emit-stopped` 都多 2 个 | 成立 |
+| 连续发射的系统上是欠账，总数不变 | `b-debt`（`rate 5`）：1.0 s 爆发 3 个，之后 0.75 s 没有出生（跳过 3 个间隔） | 成立 |
+| 同一段脚本里先写的 `instance` 系数对这批粒子不生效 | `b-emit-alpha`：写 `alpha 0.3` 再发的那批是 1.0，写回 1 再发的那批是 0.3 | 成立 |
+| 脚本时建 eventspawn 实例用的栈顶是单位阵：父或子是世界空间时偏一个 `W` | `p4f-api3`（对象旋转、缩放 2）：世界子系统常规发射在对象附近，脚本发射在世界原点；世界父系统脚本发射的实例 MVP 多乘一个 `W`（平移 (1283, 423)，算出的 `W·p` 正好是它）；父子都本地时（`b-spawn`）两种相同 | 成立；**Kabegame 不复刻**，用对象的 `W`（已定 7） |
+| `instance.controlpointN` 写的是实例覆盖值，没设时读回 x 为 FLT_MAX | `a-inst-cp` 读回 `3.4028234663852886e+38 0 0`；写 (0, ±40, 0) 后出生点在 y = ±40 切换 | 成立 |
+| HDR（「超高」且场景 `bloom`、`hdr` 都开）下 `brightness` 乘在颜色三通道、不乘 alpha，`flags 8` 不乘，在 `colorn` 之后、不钳制；LDR 不乘 | `p4f-bright`：超高档 0.5 / 2 得 0.235 / 0.941（基色 0.471），`colorn` 的 (0.25, 1, 0.25) 乘 2 得 (0.5, 2, 0.5)，`alpha 0.5` 不变，`flags 8` 不变；关闭档全部不变 | 成立 |
+| 一个系统多个 renderer：sprite 与 spritetrail 共用一份顶点、按数组顺序各画一次、各按自己的朝向；速度为 0 的粒子拖尾那次不画 | `p4f-multi`：`m-st-zero` 的拖尾绘制四角全是 NaN、sprite 照画；`m-ss` 第二个 sprite（`fixed`、`axis 1 0 0`）四角 x 恒定；子系统上同样两次；sprite 那次的顶点输入也带速度列 | 成立 |
+
+**留给实现步骤的：** 字段脚本当帧还是下一帧生效（读码：下一帧，与我们的帧序等价）、单写 `rate` 时湍流的 `timescale` 不跟（`rt-1` / `rt-2`）、脚本发出的粒子下一帧才画且年龄多一帧，都由回放逐粒子核对。
