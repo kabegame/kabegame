@@ -730,6 +730,8 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 ## P9 — 视频纹理
 
+总计划见 [phase-9-video.md](phase9/phase-9-video.md)（2026-11-12）。按 175 张重算：41 张用到、60 段视频（H.264 59、HEVC 1，其中 1 段装在 Matroska 里）；只做 P9 能渲染 45 → 48，P4–P8 先做完时 70 → 84。和下面的原始范围相比，帧改为拷进普通纹理（不用 `importExternalTexture`），退路从 MSE 改成 Rust 缓存文件或 WebCodecs，静不静音按步骤 0 定。下面是写总计划之前的原始范围。
+
 - `.tex` 的 flags 含 Video（32）时，唯一 mip 是完整 MP4，起点按容器版本解析（见「补充事实」）。语料 39 张。
 - **读取：** 按区间读出 MP4，做成 Blob，交给静音循环的 `<video>`，每帧 `importExternalTexture`；解码交给浏览器。
   - 单段最大 707 MB：Blob 的内存占用和 4K60 的解码开销要实测。不行再看 MSE 分段喂入，或由 Rust 把区间解到缓存文件。
