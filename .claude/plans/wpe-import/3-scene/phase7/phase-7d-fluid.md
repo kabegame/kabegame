@@ -1,54 +1,57 @@
 # P7d — 流体与渲染器缺口（子计划）
 
-> 上级：[P7 总计划](phase-7-effects-shaders.md)「P7d」。依据：[p2-REPORT](../p2-REPORT.md) B6（fbo、`swap`、`fit`）与 I4（uniform ID → 取值）、[vector-constant-REPORT](../vector-constant-REPORT.md) 2.1–2.3（材质常量的槽位与上传）、[rea-p7-shader](rea-p7-shader.md)（常量缓冲的划分）。
+> 上级：[P7 总计划](phase-7-effects-shaders.md)「P7d」。依据：[p2-REPORT](../p2-REPORT.md) B6（fbo、`swap`、`fit`）与 I4（uniform ID → 取值）、[vector-constant-REPORT](../vector-constant-REPORT.md) 2.1–2.3（材质常量的槽位与上传）、[rea-p7-shader](rea-p7-shader.md)（常量缓冲的划分）；步骤 0 的 [rea-p7d-fluid](rea-p7d-fluid.md)（读码）与 [p7-REPORT](p7-REPORT.md)「P7d 的实测」。
 > 语料基准：`ignore/p7/out/corpus-p7c.json`（P7c 收尾的扫描，能渲染 42 张；P4–P6 先做完的口径 62 张）。
+> 2026-11-12 步骤 0 之后改定：总体设计、步骤 1–3 与「决定」按步骤 0 的结论重写，原方案里被推翻的写在「实施记录 / 步骤 0」。
 
 ## 总体设计思路
 
-P7d 有两组互不相关的活，共同点是都要先查清 WPE 的行为，再照做：
-- **流体 effect**（`effects/fluidsimulation`）：它的着色器 P7a–P7c 已经能翻译。剩下的是 effect 结构上的四个键：
+P7d 有两组互不相关的活，都是先查清 WPE 的行为再照做：
+- **流体 effect**（`effects/fluidsimulation`）：着色器 P7a–P7c 已经能翻译，剩下 effect 结构上的三个键：
   - pass、fbo、bind 上的 `conditions`；
-  - effect 实例上的 `combos`；
-  - effect.json 的 `functions`；
-  - 模拟 RT 跨帧保留。
-- **P7c 之后露出来的四个渲染器缺口**：
-  - 两个引擎 uniform：`g_LayerModelMatrix`、`g_FrameTime`；
-  - 两个材质常量的存储问题：`constant:mixed-type`、`constant:slots`。
+  - effect 实例顶层的 `combos`；
+  - effect.json 的 `functions`。
+  
+  模拟 RT 跨帧保留和 `swap` 在 P2a / P3c 已经有了，步骤 0 核对过与 WPE 一致。
+- **P7c 之后露出来的四个渲染器缺口**：步骤 0 查明其中三个是误报，起因相同：我们不知道着色器读没读某个 uniform。只有 `g_LayerModelMatrix` 是真缺口。
 
-**条件在编译期求值。** `conditions` 写的是 COMBO 的取值（`{ "LIGHTING": 1 }`）。COMBO 在 WPE 里不能绑用户属性（我们照报 `combo:user-binding`），加载时就定了，所以条件也在加载时一次定下：
-- 编译 effect 时，被条件去掉的 pass、fbo、bind 不进 bundle；
-- 渲染图 `graph.ts` 和 `scene.ts` 看到的是一个普通 effect，不用改。
+**条件在编译期求值，规则照抄 WPE 的求值函数。** WPE 只在加载 effect 时求一次（`FUN_1401e63b0`），被去掉的 fbo、pass、bind 根本不进 effect 对象，运行期不再看条件。我们同样在 `compileEffect` 里求值，被去掉的不进 bundle，所以渲染图 `graph.ts` 与 `scene.ts` 都不用改。
 
-这样 P7d 不碰 P4–P6 正在改的渲染图和场景编码，只改 `compile/bundle.ts` 的 `compileEffect` 和能力表。
+规则都是步骤 0 实测加读码定的：
+- 求值的 COMBO 只来自 effect 实例**顶层**的 `combos`，实例 pass 覆盖里的 COMBO 不参与。顶层 `combos` 也不并进各 pass 的 COMBO，它只给条件用。
+- `conditions` 必须是数组。数组之间、对象里各键之间全是「与」，缺的 COMBO 当 0。右值是数就比相等，是 `{value, op}` 就认 `ge/gt/le/lt`，其它都按相等。
+- 被去掉的绘制 pass 仍占实例覆盖的位置。
+- `target` 指向被去掉的 fbo 等于没写（画回合成链）；bind 指向它等于 `previous`。
 
-**实例 `combos` 合进条件与 pass。** 工坊场景把编辑器里选的 COMBO 写在 effect 实例顶层（`3286859278`：`"combos": {"RENDERING": 1}`），同时也抄进了相关 pass 的覆盖里。它在条件求值里用哪份集合、和 pass 覆盖谁优先，步骤 0 读码定。
+**`functions` 只是声明。** 唯一的调用方是脚本 `executeMaterialFunction`：读码列全了调用点，加载、属性变化、可见性切换都不调它；语料 157 个工程里也没有一处脚本调用。所以：
+- `functions` 按中性放开；
+- 脚本调用照报 `script:api:effect.executeMaterialFunction`。
 
-**`functions` 只是声明。** 它定义一组具名动作（流体的 `clearVelocity` / `clearDye`：清两张 fbo），调用方是脚本 `IEffect.executeMaterialFunction`。语料 157 个工程里没有一处调用。
-- 声明本身对画面没有影响，按中性放开；
-- 脚本调用仍照报 `script:api:effect.executeMaterialFunction`；
-- 如果步骤 0 读码发现 WPE 在别处（属性变化、可见性切换）也会调用它，就改成实现。
+读码还发现 WPE 自己的实现有错位：它清的是 fbo 列表里的前 N 个，不是点名的那几个，流体的 `clearDye` 实际清的是速度场。以后要实现时得照这个错位做，记在 rea 报告里。
 
-**跨帧保留多半已有。** P2a / P3c 的 fbo 只在创建时、effect 开关时按 `clear` 清，`swap` 的对应跨帧保留。`fit`、`rg1616f` / `r16f` / `rgba_backbuffer`、`previous` 也都在。步骤 0 只核对 WPE 的清除时机，不预设要改。
+**翻译器标出没被读到的 uniform，宿主照 WPE 的反射规则用它。** WPE 只把反射里「被使用」的 uniform 当真：只有它们进常量缓冲，材质常量也只有它们分配槽位。实测证实，槽位按材质键名排序累加；两阶段同键时，合并类型取读到它的那个阶段（片元优先）。
 
-**两个引擎 uniform 按 WPE 的取值写。**
-- `g_LayerModelMatrix` 在 WPE 的名字表里（ID 0x18，取 ctx+0xa30），但 I4 没查谁写这个位置。工坊的 `rounded_mask`、`frame_builder_by_gariam` 拿它取图层缩放（`length(m[0].xy)`），推断是图层的世界矩阵。
-- `g_FrameTime`（大写 T）不在名字表里（表里是 `g_Frametime`），推断 WPE 把它当普通的常量缓冲成员、从不写，恒为 0。
+我们的翻译器现在不分有没有被读，造成三类误报，在语料里全部是假的：
+- 5 处 `constant:*`：流体的 `advection` 与 `procedural_noise` 只数被读的键，分别是 10 与 19 个 float，远低于 48。`frame_builder` 的 `u_refResolution` 两阶段都没读；`frame_builder_by_gariam` 只有顶点读，合并类型就是顶点的 `vec2`。
+- 1 处 `uniform:g_FrameTime`：只声明、没读。
 
-两条都由步骤 0 读码加读常量缓冲定。
+做法是翻译器反射加一个 `unused` 标记（只改反射 JSON，WGSL 逐字节不变），宿主在三处用它：
+- 槽位只数被读的键；
+- 合并类型取读到它的阶段；
+- 能力表跳过没被读的 uniform。
 
-**材质常量照 WPE 的存储。** WPE 给每个 pass 一份 48 个 float 的存储，只给本阶段反射里「被使用」的材质键分配槽位（vector-constant-REPORT 2.1），上传时每格按自己的类型从槽位起点拷（2.2）。我们的翻译器反射不分有没有被用到，宿主把没被引用的 uniform 也算进去，所以两类报错有一部分是假的：
-- `frame_builder` 的 `REF_RES` 缺省 0，`u_refResolution` 两个阶段都没读；
-- 流体的 `POINTEMITTER` 为 1 时，其余三个发射器、全部线发射器都不读。
+真实的同键不同类型（多读的分量来自排序后的下一个键）与超过 48 个 float，语料里都没有样本，照报。
 
-做法分两层：
-- 翻译器反射标出没被引用的 uniform，宿主只给被引用的键分配槽位。只改反射 JSON，WGSL 逐字节不变。
-- 剩下真实的同键不同类型（`frame_builder_by_gariam` 开 `REF_RES`：顶点 `vec2`、片元 `float`），照 WPE 读进下一个键的存储。这和 P7b「打包数组越界照 D3D11 读下一个成员」是同一个取舍。下一个键是谁，取决于合并表的遍历顺序，步骤 0 定。
+**`g_LayerModelMatrix` 只在 effect pass 里支持。** 实测它在 effect 的每个 pass 里是图层世界矩阵（含父链、不含 size）。基础 pass 与直接上屏的 pass 里，WPE 不写它，读到的是上一个带 effect 的图层留下的值，复刻没有意义。语料里读它的 7 个请求都是 effect 着色器。所以：
+- 只把它当作 effect pass 的引擎 uniform，同粒子 pass 的 `PARTICLE_UNIFORMS`；
+- 基础材质读到它照报；
+- 取值在 `render/uniforms.ts` 用已有的世界矩阵算，不碰 `scene.ts`。
 
 P7d 在两种口径下都解锁不了场景：
 - 流体那张（`3286859278`）还差 P4–P6、P8、P11 的 47 个键；
 - 四个缺口所在的另外 4 张场景，去掉这几个键后各自还剩 28–58 个别的键。
 
-这一节补的是正确性。验收全部用确定性测试工程和 WPE 自带的流体预览工程，和 WPE 抓帧比。
+这一节补的是正确性。验收用确定性测试工程和 WPE 自带的流体预览工程，和 WPE 抓帧比。
 
 ## 现状锚点
 
@@ -64,7 +67,7 @@ const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visi
 ```
 bind 数组里的 `conditions` 不经过任何检查，现在被静默忽略（流体的 combine pass 照样绑 `_rt_SmokeNormal` 与槽 4）。
 
-**b. 编译 effect：fbo、pass、bind 全收，pass 的 COMBO 只合材质与实例 pass 覆盖**（`apps/wpe-scene/src/compile/bundle.ts:953`–`:987`）
+**b. 编译 effect：fbo、pass、bind 全收**（`apps/wpe-scene/src/compile/bundle.ts:953`–`:987`）
 ```ts
     const fbos = new Map(
       (effect.fbos ?? [])
@@ -73,7 +76,7 @@ bind 数组里的 `conditions` 不经过任何检查，现在被静默忽略（�
         .map((item) => [item.name, item]),
     );
     // …
-      const override = instance.passes?.[overrideIndex++];   // 现状：每个绘制 pass 占一个实例覆盖
+      const override = instance.passes?.[overrideIndex++];   // 现状：每个绘制 pass 占一个实例覆盖（与 WPE 相同）
       // …
       const binds = Array.isArray(pass.bind)
         ? pass.bind
@@ -81,35 +84,43 @@ bind 数组里的 `conditions` 不经过任何检查，现在被静默忽略（�
             .map((bind) => ({ name: String(bind.name), index: Number(bind.index) }))
         : null;
       // …
-          combos: { ...materialPass.combos, ...override?.combos },   // 现状：实例顶层的 combos 不参与
+          combos: { ...materialPass.combos, ...override?.combos },   // 现状：顶层 combos 不参与（与 WPE 相同）
 ```
 
-**c. fbo 只在创建时清**（`apps/wpe-scene/src/render/scene.ts:1009`–`:1031`）
+**c. fbo 的 `clear` 写 3 个分量也清**（`apps/wpe-scene/src/compile/bundle.ts:515`、`:524`）
 ```ts
-              const key = fbo.unique
-                ? `unique|${layer.id}|${effect.id}|${fbo.name}`
-                : `${fbo.name}|${fw}x${fh}|${fboFormat}|${fbo.repeat}`;
-              // …
-                // 创建后清成 `clear` 色；没写时 WebGPU 纹理本来就是全 0
-                if (fbo.clear) this.clearTarget(setup, target, fbo.clear, `clear ${key}`);
+  const clear = typeof raw.clear === "string" ? numbers(raw.clear) : [];
+  // …
+    clear: clear.length >= 3 ? [clear[0], clear[1], clear[2], clear[3] ?? 1] : undefined,   // 现状：WPE 要 4 个分量才置清除位
 ```
-另有 effect 开关时清本图层全部带 `clear` 的 fbo（`clearLayerFbos`，P3c J6）。之后内容与 `swap` 的对应跨帧保留。
+清的时机：创建时、effect 开关时（`clearLayerFbos`，P3c J6），之后内容与 `swap` 的对应跨帧保留。和 WPE 一致（rea-p7d-fluid 第 3 节：WPE 在图层 effect 资源重建时清，可见 effect 数变化会触发重建）。
 
-**d. 引擎 uniform 表**（`apps/wpe-scene/src/compile/features.ts:53`–`:88`）：有 `g_Frametime`，没有 `g_LayerModelMatrix`、`g_FrameTime`，翻译结果里出现就报 `uniform:<名>`。取值在 `render/uniforms.ts` 的 `staticBuiltins` / `frameBuiltins`，两边由 `render.test.ts` 核对一致。
-
-**e. 槽位按全部材质 uniform 数**（`apps/wpe-scene/src/compile/shader.ts:63`、`compile/materialValues.ts:150`）
+**d. 程序检查不分有没有被读**（`apps/wpe-scene/src/compile/features.ts`、`compile/bundle.ts:900`）
 ```ts
-    // WPE 每个键一份存储；拆开的两半共用片元那一半的
-    floats += slot.members[0]?.components ?? 0;   // 现状：没被引用的键也算
+  for (const uniform of result.uniforms ?? [])
+    if (typeof uniform.meta?.material !== "string" && !isEngineUniform(uniform.name) && !extra.has(uniform.name))
+      unsupported.add(`uniform:${uniform.name}`);   // 现状：只声明没读的也报（g_FrameTime）
+```
+```ts
+      checkProgramFeatures(result, issues, context.particle ? PARTICLE_UNIFORMS : undefined);   // 现状：只有粒子 pass 带额外表
+```
+
+**e. 槽位与合并类型按全部材质 uniform 算**（`apps/wpe-scene/src/compile/shader.ts:63`、`compile/materialValues.ts:140`–`:150`）
+```ts
+    floats += slot.members[0]?.components ?? 0;   // 现状：没被读的键也算
   }
   if (floats > MATERIAL_SLOT_FLOATS) issues?.add("constant:slots");
 ```
 ```ts
+    const fragmentHalf = list.find((u) => u.stage === "fragment");   // 现状：片元那一半没被读也拿它当合并类型
+    // …
+      const record = u.stage && fragmentHalf ? fragmentHalf : u;
+      const components = elementComponents(record);
       const count = u.array ? 0 : own;
-      if (count > components) issues.add(`constant:mixed-type:${material}`);   // 现状：顶点那一半比片元宽就报，不看有没有被读
+      if (count > components) issues.add(`constant:mixed-type:${material}`);
 ```
 
-**f. 翻译器的 uniform 反射没有「被引用」**（`src-tauri/wpesl2wgsl/src/lib.rs:154`）
+**f. 翻译器的 uniform 反射没有「被读」**（`src-tauri/wpesl2wgsl/src/lib.rs:154`）
 ```rust
 pub struct Uniform {
     pub name: String,
@@ -122,155 +133,142 @@ pub struct Uniform {
 }
 ```
 
-**g. 语料里的键**（`corpus-p7c.json`）：
+**g. effect pass 的内置矩阵**（`apps/wpe-scene/src/render/uniforms.ts:283` 起的 `drawMatrices`、`:356` 的 `drawUniformValues`）：`drawUniformValues` 已经拿到图层世界矩阵 `world`（沿父链），`staticBuiltins` 没有 `g_LayerModelMatrix`。
 
-| 键 | 场景 | 来源 |
-|---|---|---|
-| `effect:fluidsimulation:{combos, functions, pass:conditions, fbo:conditions}` | `3286859278` | WPE 自带 `effects/fluidsimulation`（pkg 里的副本与 assets 逐字节相同）；`combos` 在场景的 effect 实例上 |
-| `constant:slots` | `3286859278`、`3643916956` | 流体的 `vorticity` / `advection` 片元（32 / 31 个材质 uniform）；`3643916956` 的待查 |
-| `constant:mixed-type:Reference resolution` | `3577990983`、`3643916956`、`3660962877` | 工坊 `frame_builder`（`REF_RES` 缺省 0）与 `frame_builder_by_gariam`（`REF_RES` 1） |
-| `uniform:g_LayerModelMatrix` | `3577990983`、`3643916956`、`3660962877`、`3837478759` | 工坊 `rounded_mask`、`frame_builder_by_gariam`：取图层缩放 |
-| `uniform:g_FrameTime` | `3643916956` | 工坊 `procedural_noise` |
+**h. 语料里的键**（`corpus-p7c.json`）与步骤 0 的结论：
+
+| 键 | 场景 | 来源 | 步骤 0 |
+|---|---|---|---|
+| `effect:fluidsimulation:{combos, functions, pass:conditions, fbo:conditions}` | `3286859278` | WPE 自带 `effects/fluidsimulation`；`combos` 在实例顶层 | 真，步骤 3 |
+| `constant:slots` | `3286859278`、`3643916956` | 流体 `advection`、工坊 `procedural_noise` | 误报：只数被读的键是 10、19 个 float |
+| `constant:mixed-type:Reference resolution` | `3577990983`、`3643916956`、`3660962877` | 工坊 `frame_builder`、`frame_builder_by_gariam` | 误报：没读或只有顶点读 |
+| `uniform:g_FrameTime` | `3643916956` | 工坊 `procedural_noise` | 误报：只声明没读 |
+| `uniform:g_LayerModelMatrix` | `3577990983`、`3643916956`、`3660962877`、`3837478759` | 工坊 `rounded_mask`、`frame_builder*` | 真，effect 着色器的顶点读，步骤 2 |
 
 ## 步骤
 
-### 步骤 0 — 调研
+### 步骤 0 — 调研（2026-11-12 完成）
 
-**读码**（交给代理，REA 看 `wallpaper64.exe` 2.8.42，产出 `rea-p7d-fluid.md`）：
-1. **`conditions`：**
-   - 在哪里解析，pass、fbo、bind 三处是否同一个函数；
-   - 比较规则：等于，还是也认 `gizmos` 里那种 `{op, value}`；
-   - 数组里多个对象、一个对象里多个键，各是与还是或；
-   - 拿哪份 COMBO 求值：实例顶层 `combos`、实例 pass 覆盖、材质 pass、着色器注解缺省；
-   - 被去掉的绘制 pass 还占不占实例 `passes` 的位置；
-   - fbo 被去掉、bind 还引用它时怎样。
-2. **实例顶层 `combos`：** 是否合进每个 pass 的 COMBO，和实例 pass 覆盖谁优先。
-3. **`functions`：**
-   - 解析点与全部调用方：只有脚本 `executeMaterialFunction`，还是属性变化、可见性切换、编辑器也会调；
-   - `clear` 清的是 `swap` 之后名字对应的实体，还是初始实体。
-4. **fbo 生命周期：** `clear` 在什么时候执行（创建、resize、effect 开关、每帧），和锚点 c 对一遍。
-5. **`g_LayerModelMatrix`：** 谁写 ctx+0xa30、写什么：
-   - 图层世界矩阵，还是含 `size` 缩放；
-   - 带不带父链、视差；
-   - 基础 pass、effect 中间 pass、上屏 pass 是否相同。
-6. **`g_FrameTime`：** 名字表认不出的、没有 `material` 注解的 uniform，进哪个常量缓冲、写不写。
-7. **材质常量槽位：**
-   - 合并表的容器与遍历顺序（按键排序的 `std::map`，还是插入顺序），这决定了越界读到哪个键；
-   - 「本阶段反射里有」的判据，`&2` 是不是「被使用」；
-   - 超过 48 个 float 时后面的键落在哪（报告 5 节推断是槽位 0）。
+原计划的读码 7 问与实测 4 项都做了，结论见「实施记录 / 步骤 0」。产出：[rea-p7d-fluid](rea-p7d-fluid.md)、[p7-REPORT](p7-REPORT.md)「P7d 的实测」、`ignore/p7d/`。
 
-**实测**（`wpe-renderdoc` MCP，测试工程 `ignore/p7d/proj/`，抓帧放 `A:\p7d\<用途>\`）：
-1. **流体预览工程：** WPE 自带的 `effects/fluidsimulation/preview` 复制到 `ignore/p7d/proj/fluid-preview`（不动安装目录）。
-   - 抓连续几帧，记 pass 序列、fbo 尺寸与格式、每帧 dt 与光标。
-   - 再造两个变体：开 `LIGHTING`、`RENDERING` 3，看条件去掉、加上的 pass 与 bind。
-   - 同一条光标轨迹跑两次，看 WPE 自己的逐帧差异有多大，用来定验收的容差（流体对 dt 与初值敏感）。
-2. **`g_LayerModelMatrix`：** 读常量缓冲。
-   - 图层带缩放、旋转、`size` 不等于纹理、有父对象、开视差；
-   - effect 两个 pass 以上。
-3. **`g_FrameTime`：** 读常量缓冲。
-4. **槽位：**
-   - 两阶段同键不同类型（顶点 `vec2`、片元 `float`），后面跟几个名字排序与声明顺序不同的键，读顶点的常量缓冲，定「下一个存储」是哪个键；
-   - 同一个 uniform 声明了、只在关掉的 `#if` 里读，看它占不占槽位；
-   - 读码说能出现时，再造超过 48 个 float 的工程。
+### 步骤 1 — 翻译器标出没被读到的 uniform，宿主照 WPE 用它
 
-**我们这边：**
-1. 用现在的 wasm 统计：语料里 `constant:slots`、`constant:mixed-type` 去掉没被引用的 uniform 之后还剩几处（引用判据先用改写后源码里的名字粗算，步骤 1 换成 IR 上的判据）。
-2. 流体预览工程在 Kabegame 里现在报哪些键；用 dev 的强制渲染看现在画成什么样。
-
-**产出：** `rea-p7d-fluid.md`、`p7-REPORT.md` 加「P7d」一节、本文件「实施记录 / 步骤 0」。下面步骤 1–3 的方案按结论改定。
-
-### 步骤 1 — 材质常量照 WPE 的存储
-
-**点 1 — 翻译器标出没被引用的 uniform**（`src-tauri/wpesl2wgsl/src/lib.rs`、`src/naga_stage.rs`）
-- **新增** `Uniform.unused`。
-  > 说明：只改反射 JSON，WGSL 不变，逐字节基线照常过。缺省（字段缺失）当被引用，手写的测试数据不用改。
+**点 1 — 反射加 `unused`**（`src-tauri/wpesl2wgsl/src/lib.rs`、`src/naga_stage.rs`）
+- **新增** `Uniform.unused`：两个阶段入口可达的代码都没读这一格。拆开的两半各看自己的阶段。
+  > 说明：只改反射 JSON，WGSL 不变，逐字节基线照常过。字段缺失当被读，手写的测试数据不用改。判据是 naga IR 里的语法引用；fxc 会多删掉一些（如乘 0），两者的差别见风险 2。
 ```rust
 pub struct Uniform {
     // …
     pub original: Option<String>,
-    /// 两个阶段入口可达的代码都没读这一格（naga IR 里没有对 uniform 块这个成员的 `AccessIndex`）。WPE 只给反射里被使用的
-    /// 材质常量分配槽位（vector-constant-REPORT 2.1），宿主据此算槽位。拆开的两半各看自己的阶段。
+    /// 两个阶段入口可达的代码都没读这一格（naga IR 里没有对 uniform 块这个成员的 `AccessIndex`）。WPE 只认反射里被使用的
+    /// uniform：没被使用的不进常量缓冲、不分配材质常量槽位（vector-constant-REPORT 2.1，p7-REPORT「P7d 的实测」）。
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unused: bool, // 新增
 }
 ```
-- **新增** `naga_stage.rs`：编译完一个阶段后，在入口可达的函数里收集对 uniform 块全局变量的 `AccessIndex` 成员下标，随 `Compiled` 返回；`lib.rs` 合两个阶段。
-- **修改** `apps/wpe-scene/src/wpesl2wgsl/index.ts` 的 `UniformLayout` 加 `unused?: true`。
-- **修改** README「反射」一节写这个字段与依据。
+- **新增** `naga_stage.rs`：编译完一个阶段，从入口函数出发沿 `Statement::Call` 收集可达函数，在其中找 `Expression::AccessIndex { base }` 且 `base` 是 uniform 块全局变量的成员下标，随 `Compiled` 返回；`lib.rs` 合两个阶段。
+- **修改** `apps/wpe-scene/src/wpesl2wgsl/index.ts` 的 `UniformLayout` 加 `unused?: true`；README「反射」一节写这个字段与依据。
 
-**点 2 — 宿主按被引用的键分配槽位**（`compile/materialValues.ts`、`compile/shader.ts`）
-- **修改** `materialSlots` 跳过两个阶段都 `unused` 的键（不进槽位、不报 `constant:*`；值照旧填，反正着色器不读）。
-- **新增** 槽位起点：照步骤 0 的遍历顺序累加被引用的键。
+**点 2 — 宿主的槽位与合并类型**（`compile/materialValues.ts`、`compile/shader.ts`）
 ```ts
 export interface MaterialSlot {
   material: string;
   members: MaterialMember[];
-  /** WPE 存储里的起始 float 下标（`+0x45`）：按合并表的遍历顺序累加被引用的键；没被引用的键为 null。 */
-  offset: number | null; // 新增
+  /** 有没有阶段读到这个键：WPE 只给被使用的键分配槽位（p7-REPORT「P7d 的实测」`kbslot`）。 */
+  used: boolean; // 新增
   issues: string[];
 }
-```
-- **修改** `shaderUniforms` 的 `floats` 只数被引用的键。
 
-**点 3 — 同键不同类型照 WPE 读下一个存储**（`compile/materialValues.ts`、`render/state.ts`）
-- **新增** `MaterialMember.spill`：本格多出来的分量从哪个键的哪个分量取（越过 48 或后面没有键时为 0）。
-```ts
-export interface MaterialMember {
+export function materialSlots(uniforms: readonly UniformLayout[]): MaterialSlot[] {
   // …
-  /** 本阶段类型比合并类型宽时多读的分量（vector-constant-REPORT 2.2）：第 i 个取 `material` 键存储的第 `component` 个 float，null 为 0。 */
-  spill?: ({ material: string; component: number } | null)[]; // 新增
+  for (const [material, list] of groups) {
+    const read = list.filter((u) => !u.unused); // 新增
+    // 修改：合并表里片元覆盖顶点，但没读到的阶段没有这个键，所以取「读到它的片元一半」，没有再取读到的顶点一半
+    const fragmentHalf = read.find((u) => u.stage === "fragment") ?? read.find((u) => u.stage === "vertex")
+      ?? list.find((u) => u.stage === "fragment");
+    // …
+      // 修改：没被读的那一格不比宽度（WPE 不上传它）
+      if (!u.unused && count > components) issues.add(`constant:mixed-type:${material}`);
+    // …
+    slots.push({ material, members, used: read.length > 0, issues: [...issues] });
+  }
 }
 ```
-- **修改** 加载时填值、就地写 `constant` 目标时，被溢读的键改值要连带重写读它的那一格（`state.ts` 的 `constantMembers` 一处）。
-- **删除** `constant:mixed-type` 的报错（溢读能复刻之后）。
-- 步骤 0 若发现超过 48 个 float 的真实样本，再按同一份存储处理；否则 `constant:slots` 照报。
+```ts
+    // 修改：只数被读的键（WPE 的槽位）
+    if (slot.used) floats += slot.members[0]?.components ?? 0;
+```
+- 取值的 setter 与缺省随合并类型走，`frame_builder_by_gariam` 的顶点一半从此按 `vec2` 写（WPE 的行为）。
+
+**点 3 — 程序检查跳过没被读的 uniform**（`compile/features.ts`）
+```ts
+  for (const uniform of result.uniforms ?? [])
+    if (
+      !uniform.unused && // 新增：WPE 的反射里没有它，不进常量缓冲
+      typeof uniform.meta?.material !== "string" &&
+      !isEngineUniform(uniform.name) &&
+      !extra.has(uniform.name)
+    )
+      unsupported.add(`uniform:${uniform.name}`);
+```
+> 说明：真读到的 `g_FrameTime` 照报，WPE 里是没人写的垃圾值。别的阶段的键（比如只声明没读的音频频谱）也会随之少报，扫描时逐张列出。
 
 **验收：**
-- 翻译器：Rust 单测（被引用、只在关掉的 `#if` 里、只在没调用的函数里、两半各自的阶段）；请求夹具全部通过，逐字节基线 0 差异（WGSL）；wasm 重建。
-- 宿主：单测核对槽位起点、溢读的分量、就地写与整场重编译一致。
-- 语料：`constant:*` 只剩真实情况，其余键与基线逐张相同。
-- WPE：步骤 0 的槽位工程在 Kabegame 里与 WPE 颜色相同。
+- 翻译器：Rust 单测覆盖四种情况：被读、只在关掉的 `#if` 里、只在没调用的函数里、两半各自的阶段。请求夹具全部通过，逐字节基线 0 差异（WGSL）；wasm 重建。
+- 宿主：单测覆盖槽位只数被读的键、合并类型取读到的阶段、就地写与整场重编译一致、程序检查跳过 `unused`。
+- 语料：5 处 `constant:*` 与 `uniform:g_FrameTime` 消失，其余键的变化逐张列出并说明。
+- WPE：`p7d-uni` 的 `kbslot` 在 Kabegame 里与 WPE 颜色相同（不含溢读的分量：那一项照报 `constant:mixed-type:k_m`，要另做一份不溢读的图层）。
 
-### 步骤 2 — 两个引擎 uniform
+### 步骤 2 — `g_LayerModelMatrix`
 
-**点 1 — `g_LayerModelMatrix`**（`compile/features.ts`、`render/uniforms.ts`、`render/scene.ts`）
-- **新增** `ENGINE_UNIFORMS` 加 `g_LayerModelMatrix`；`StaticBuiltinInput` 加 `layerModel`，`LAYER_UNIFORMS` 加它（图层或祖先变化时一起重写）。
+**点 1 — 只给 effect pass**（`compile/features.ts`、`compile/bundle.ts`）
 ```ts
-export interface StaticBuiltinInput {
-  // …
-  /** `g_LayerModelMatrix`（ID 0x18，ctx+0xa30）：步骤 0 定（推断：图层世界矩阵，基础、effect、上屏 pass 相同）。 */
-  layerModel: Mat4; // 新增
-}
+/**
+ * 只有 effect pass 才写的引擎 uniform（p7-REPORT「P7d 的实测」）：`g_LayerModelMatrix` 在 effect 的每个 pass 里是图层世界矩阵；
+ * 基础 pass 与直接上屏时 WPE 不写，读到的是上一个带 effect 的图层留下的值，所以基础材质里照报。
+ */
+export const EFFECT_UNIFORMS: ReadonlySet<string> = new Set(["g_LayerModelMatrix"]); // 新增
+```
+```ts
+      // 修改：effect pass（有 fbo 表的上下文）带 EFFECT_UNIFORMS
+      checkProgramFeatures(result, issues, context.particle ? PARTICLE_UNIFORMS : context.fbos ? EFFECT_UNIFORMS : undefined);
+```
+
+**点 2 — 取值**（`render/uniforms.ts`）
+- **修改** `drawMatrices` 的 `effect`、`final` 两种角色返回 `layerModel: world`；`staticBuiltins` 有它时写 `g_LayerModelMatrix`；`LAYER_UNIFORMS` 加它（图层或祖先变化时一起重写）。
+```ts
+    case "effect": {
+      // …
+      return { /* … */ layerModel: model }; // 新增：图层世界矩阵（含父链、不含 size）
+    }
 // staticBuiltins
-    g_LayerModelMatrix: Array.from(input.layerModel), // 新增
+  if (input.layerModel) values.g_LayerModelMatrix = Array.from(input.layerModel); // 新增
 ```
-- **修改** `scene.ts` 建绘制与刷新图层时传图层的世界矩阵（`worldMatrixOf`）。
-
-**点 2 — `g_FrameTime`**（`compile/features.ts`、`render/uniforms.ts`）
-- **新增**（步骤 0 证实 WPE 不写时）`ENGINE_UNIFORMS` 加 `g_FrameTime`，`staticBuiltins` 写 `[0]`，注释写依据。
-  > 说明：只认这一个名字，不把「认不出的引擎 uniform 一律给 0」做成通配，别的名字照报，免得漏掉真缺口。
+- `scene.ts` 不用改：`drawUniformValues` 已经拿到 `world`。
 
 **验收：**
-- `render.test.ts` 两张表一致；单测核对矩阵（缩放、旋转、父链、effect pass）。
-- 步骤 0 的测试工程在 Kabegame 里与 WPE 逐像素比；`rounded_mask` 的圆角在缩放过的图层上和 WPE 相同。
+- `render.test.ts` 的两张表核对加上 `EFFECT_UNIFORMS`；单测核对矩阵，覆盖缩放、旋转、父链、effect 中间 pass 与上屏 pass。
+- `p7d-uni` 的 `kbfx`、`kbchild` 在 Kabegame 里与 WPE 抓帧的常量逐值相同（经 dev 探针读 uniform）。`rounded_mask` 的圆角在缩放过的图层上和 WPE 同形：另做一个确定性工程，两边逐像素比。
 
 ### 步骤 3 — 流体 effect
 
 **点 1 — 条件求值**（新文件 `compile/conditions.ts`）
 ```ts
 /**
- * effect.json 的 `conditions`（pass、fbo、bind 三处），照 WPE（步骤 0）对 COMBO 集合求值。COMBO 不能绑用户属性
- * （`combo:user-binding`），所以条件在编译期一次定下，渲染图看到的是去掉之后的 effect。
- * 认不出的写法返回 null，调用方报 `effect:<名>:conditions-form`。
+ * effect.json 的 `conditions`（fbo、pass、bind 三处），照 WPE `FUN_1401e63b0`（rea-p7d-fluid 第 1 节）：
+ * - 不是数组 → 真；元素不是对象 → 跳过；
+ * - 数组之间、对象各键之间都是「与」；
+ * - 左值取实例顶层 `combos[名字]`，数取整（截断），缺失或其它类型当 0；名字区分大小写；
+ * - 右值是数 → 相等；是 `{value, op}` → `ge` / `gt` / `le` / `lt`，其它按相等；其它类型 → 这个键不参与。
  */
-export function conditionsHold(conditions: unknown, combos: Readonly<Record<string, number>>): boolean | null;
+export function conditionsHold(conditions: unknown, combos: unknown): boolean;
 ```
 
 **点 2 — 编译 effect**（`compile/bundle.ts` 的 `compileEffect`）
-- **修改** fbo、绘制 pass、bind 先过 `conditionsHold`；实例顶层 `combos` 按步骤 0 的优先级并进求值集合与 pass 的 COMBO。
 ```ts
-    // 新增：条件求值用的 COMBO（实例顶层 combos，来源与优先级照步骤 0）
-    const effectCombos = comboValues(instance.combos);
+    // 新增：条件只看实例顶层 combos，且只给条件用，不并进 pass 的 COMBO（`ltop` / `r3top` 实测）
+    const holds = (conditions: unknown) => conditionsHold(conditions, instance.combos);
+    const removed = new Set((effect.fbos ?? []).filter((item) => !holds(item.conditions)).map((item) => String(item.name)));
     const fbos = new Map(
       (effect.fbos ?? [])
         .filter((item) => holds(item.conditions)) // 新增
@@ -278,72 +276,110 @@ export function conditionsHold(conditions: unknown, combos: Readonly<Record<stri
         // …
     );
     // …
-      const override = instance.passes?.[overrideIndex++]; // 被去掉的 pass 是否占位：步骤 0 定，必要时挪到判断之后
+      const override = instance.passes?.[overrideIndex++]; // 不变：被去掉的 pass 照样占位（WPE 相同）
       if (!holds(pass.conditions)) continue; // 新增
       const binds = Array.isArray(pass.bind)
         ? pass.bind
             .filter((bind) => typeof bind?.name === "string" && Number.isInteger(bind?.index))
-            .filter((bind) => holds(bind.conditions)) // 新增
+            .filter((bind) => holds(bind.conditions)) // 新增：不满足的 bind 不绑，槽位保持材质原来的纹理
+            // bind 指向被条件去掉的 fbo：graph 按「不是本 effect 的 fbo」处理成当前合成 RT，与 WPE 的 −1 相同
       // …
-          combos: { ...materialPass.combos, ...effectCombos, ...override?.combos }, // 修改：优先级照步骤 0
+        target: typeof pass.target === "string" && !removed.has(pass.target) ? pass.target : null, // 修改：指向被去掉的 fbo 等于没写
 ```
+- `swap` 的一端被去掉：WPE 什么都不做，这里不收这条命令。`copy` 的一端被去掉：语料 0 处，报 `effect:<名>:command-operands`。
 
 **点 3 — 能力表**（`compile/features.ts`）
-- **修改** 四个白名单：
 ```ts
 const SUPPORTED_EFFECT = new Set([
   // …
-  // 新增：具名动作的声明，调用方只有脚本 `executeMaterialFunction`（照报 `script:api:effect.executeMaterialFunction`），
-  // 语料 0 处调用（步骤 0 读码证实没有别的调用方）
+  // 新增：具名动作的声明，唯一调用方是脚本 `executeMaterialFunction`（照报 `script:api:effect.executeMaterialFunction`），
+  // 加载、属性变化、可见性切换都不调（rea-p7d-fluid 第 2 节）；语料 0 处调用
   "functions",
 ]);
 const SUPPORTED_EFFECT_PASS = new Set(["material", "command", "source", "target", "compose", "bind", "conditions"]); // 修改
 const SUPPORTED_FBO = new Set([/* … */ "uvs", "conditions"]); // 修改
 const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visible", "combos"]); // 修改
 ```
-- **新增** bind 数组逐项查键（现在没人查）：`name`、`index`、`conditions` 之外的键报 `effect:<名>:bind:<键>`；实例顶层 `combos` 绑用户属性报 `combo:user-binding`（同实例 pass 的规则）。
+- **修改** `checkEffectFeatures` 收 `holds`：被条件去掉的 fbo、pass、bind 不检查；`target` 指向被去掉的 fbo 不报。
+- **新增** bind 数组逐项查键（现在没人查）：`name`、`index`、`conditions` 之外的键报 `effect:<名>:bind:<键>`。
+- 实例顶层 `combos` 写成对象（绑用户属性）：WPE 在条件里当 0，照做，不报。
 
-**点 4 — fbo 生命周期**：按步骤 0 的结论核对锚点 c；不同才改，改动只在 `scene.ts` 的 fbo 创建处，和 P4–P6 错开。
+**点 4 — fbo 的 `clear` 要 4 个分量**（`compile/bundle.ts` 的 `parseFbo`）
+```ts
+    clear: clear.length >= 4 ? [clear[0], clear[1], clear[2], clear[3]] : undefined, // 修改：WPE 解析出 4 个数才置清除位（rea-p7d-fluid 第 2 节第 5 条）
+```
+> 说明：语料里写 `clear` 的只有流体的 6 个 fbo，都是 4 个分量，画面不变。
 
-**验收：**
-- 单测：`conditionsHold` 的各种写法；流体 effect 在 `LIGHTING` 0 / 1、`RENDERING` 1 / 3 下的步骤序列、fbo 集合、bind 槽位。
-- 流体预览工程（及两个变体）：按 WPE 抓帧的 dt 与光标逐帧回放（kabegame-dev 的时间线），和 WPE 比整帧与模拟 RT（速度、染料）。容差按步骤 0 测出的 WPE 自身逐帧差异定。
-- 语料：`3286859278` 不再报四个 effect 键与 `constant:slots`，其余键不变；别的场景与基线逐张相同。
+**验收：**（容差待定，见「决定」4）
+- **单测：**
+  - `conditionsHold` 的各种写法；
+  - 流体 effect 在 `LIGHTING` 0 / 1、`RENDERING` 1 / 3 下的步骤序列、fbo 集合、bind 槽位；
+  - 实例覆盖的位置。
+- **结构对照：** `p7d-fluid`、`ltop`、`r3both` 三个变体的计划，和 WPE 抓帧逐项比：绘制数、各 pass 的目标尺寸与格式、各槽绑的纹理。
+- **单步隔离：** 从 WPE 一帧开始时的模拟 RT 与这一帧的 `g_Frametime` 出发，在 Kabegame 里跑一帧流体链，和 WPE 这一帧结束时的 RT（速度、压力、染料）逐像素比。
+  - 要给 dev 探针加一个「把指定 fbo 换成给定内容」的入口，做法同泛光的链路隔离；
+  - 差异应只有半精度舍入。
+- **长程：** 同一工程在 Kabegame 里跑到第 150 帧左右，与 WPE 三次运行比，差异落在 WPE 自身两次运行之间（平均差 9–12、差 > 16 的像素 22–38%）。
+- **语料：** `3286859278` 不再报四个 effect 键，其余键不变；别的场景与基线逐张相同。
 
 ### 步骤 4 — 收尾
 
-- 全语料扫描，与 P7c 基线逐张比；改了 wasm 的话请求夹具重录、Tint 再过一遍。
+- 全语料扫描，与 P7c 基线逐张比；请求夹具重录、Tint 再过一遍（wasm 改了反射）。
 - 文档：
   - 翻译器 README：`unused` 字段；
   - `cocs/wpe/WPE_SCENE.md`：能力表、材质常量、effect 图三处；
+  - p2-REPORT B6 的两处更正：fbo `clear` 要 4 个分量；`swap` 改写的是全部非 swap pass 的下标；
   - 回归与 changelog。
 - 本文件与总计划的实施记录。
 
 ## 和 P4–P6 的交界
 
-- **共享文件：** 步骤 2、3 改 `compile/features.ts`、`compile/bundle.ts`，步骤 2 还改 `render/scene.ts`。这三个文件现在都有别的会话没提交的改动。做法同 P7b、P7c：
+- **共享文件：** 步骤 2、3 改 `compile/features.ts`、`compile/bundle.ts`。这两个文件现在都有别的会话没提交的改动。做法同 P7b、P7c：
   - 在 HEAD 的产品源码快照里实现、验收（`kbp snapshot export`）；
   - 合进工作区时三方合并，提交时只暂存自己的块（`ignore/p7/stage_hunks.py`）。
-- **不碰：** `render/graph.ts`（条件在编译期求值）。`render/state.ts`、`render/uniforms.ts`、`compile/materialValues.ts`、`compile/shader.ts` 现在没有别的会话在改。
-- **翻译器 wasm：** 步骤 1 改反射、重建 wasm。WGSL 逐字节不变，别的会话只会看到少报的 `constant:*`。
+- **不碰：** `render/graph.ts`、`render/scene.ts`。`render/uniforms.ts`、`compile/materialValues.ts`、`compile/shader.ts` 现在没有别的会话在改。
+- **翻译器 wasm：** 步骤 1 改反射、重建 wasm。WGSL 逐字节不变，别的会话只会看到少报的键（步骤 1 验收里逐张列出）。
 
 ## 决定
 
 **已定（2026-11-12 用户，按推荐）：**
-1. **`executeMaterialFunction`：** 不在 P7d 实现。`functions` 声明按中性放开，脚本调用照报。语料 0 处调用，实现了也没有样本可以和 WPE 比。
-2. **同键不同类型：** 照 WPE 读进下一个键的存储（步骤 1 点 3），和 P7b 打包数组越界的取舍一致。只影响 `frame_builder_by_gariam` 开 `REF_RES` 的两张场景。
-3. **翻译器反射加 `unused`：** 加。这是 WPE 分配槽位的依据，也去掉了两类假报。只改反射 JSON，WGSL 不变。
+1. **`executeMaterialFunction`：** 不在 P7d 实现。`functions` 声明按中性放开，脚本调用照报。步骤 0 读码证实没有别的调用方。
+3. **翻译器反射加 `unused`：** 加。步骤 0 证实这是 WPE 的规则（槽位与常量缓冲都只认被使用的），去掉了全部 5 处 `constant:*` 与 `uniform:g_FrameTime`。
 
-**待定：**
-4. **流体的验收：** 流体模拟对 dt 与初值敏感，逐像素相同不现实。步骤 0 先测 WPE 自己两次运行的差异，再按它定容差，到时请用户定。
+**步骤 0 后改定（2026-11-12 用户，按推荐）：**
+2. **同键不同类型：** 改为照报，不实现溢读（原定照 WPE 读下一个键的存储）。步骤 0 查明语料里没有真实样本，`frame_builder_by_gariam` 也是误报。
+   - 实现要在宿主维护一份按键名排序的存储，`state.ts` 的就地写要连带重写溢读它的格子；
+   - 规则已经实测清楚（`kbslot`，记在报告里），以后遇到样本再做。
+4. **流体的验收：** 三层。结构对照逐项相同；单步隔离只差半精度舍入；长程统计落在 WPE 自身两次运行之间。单步隔离要新做一个 dev 探针入口。
+5. **`g_LayerModelMatrix` 在基础 pass 里：** 照报（WPE 读到的是别的图层的残留值），只在 effect pass 支持。
+6. **fbo `clear` 写 3 个分量：** 照 WPE 不清（语料 0 处）。
+7. **风险 4 的效果矩阵：** 另派代理核对（读码、实测、语料影响），出报告，不随 P7d 改。
 
 ## 风险
 
-1. **流体的逐帧对比：** 模拟 RT 是半精度浮点，多次迭代后误差放大，`g_Frametime` 每帧不同。回放 WPE 的 dt 与光标只能压住输入的差异，压不住浮点实现的差异（Tint 与 fxc 的指令选择不同）。验收可能只能比前几帧加统计量。
-2. **「被引用」的判据：** WPE 看的是 fxc 优化之后的反射，我们看 naga IR 里的语法引用。优化能删掉的读（乘 0、结果没被用）两边会不同，这时我们多分配一个槽位，后面的键的槽位和溢读来源就错开了。语料里先统计这种情况有没有。
-3. **合并表的遍历顺序：** 如果是按键排序，`Reference resolution` 的下一个键随作者给别的常量起的名字变化。步骤 0 只能用几个构造的名字验证排序规则，推广到语料靠读码。
-4. **四个缺口各只有 1–4 张样本，所在场景都还有很多别的键：** 在真实场景里看不到修好的效果，只能靠测试工程和 WPE 比。
+1. **流体的逐帧对比：** 模拟 RT 是半精度浮点，dt 每帧不同，混沌（WPE 自己两次运行就差很多）。单步隔离能压住输入差异，但 Tint 与 fxc 的指令选择不同，单步也可能有超出舍入的差，要在单步里先量。
+2. **「被读」的判据：** WPE 看的是 fxc 优化之后的反射，我们看 naga IR 的语法引用。fxc 删掉的读（乘 0、结果没被用）我们仍算被读。槽位数与「同键不同类型」不会因此出错，因为少一处读既不会多占槽位，也造不出同键不同类型。会出错的只有一种情况：两阶段同键、类型或缺省不同，片元的读被 fxc 删掉了。这时 WPE 取顶点那一半的类型与缺省，我们取片元的。语料里没有这种情况。
+3. **四个缺口各只有 1–4 张样本，所在场景都还有很多别的键：** 在真实场景里看不到修好的效果，只能靠测试工程和 WPE 比。
+4. **顺带发现，不在 P7d 范围：** 最后一个 effect 的中间 pass（画进 fbo）上，WPE 的 `g_ModelViewProjectionMatrix` 是图层 MVP、效果矩阵不缩放（`p7d-uni` 事件 73，顶点是 ±1 的全屏四边形）。我们按 P2a 的「effect」角色给单位 MVP、缩放过的效果矩阵。WPE 自带 effect 的中间 pass 顶点着色器都不乘 MVP（`gl_Position = vec4(a_Position, 1.0)`），所以没被发现；中间 pass 也乘 MVP 的工坊 effect，两边画面会不同。另开一项核对，不随 P7d 改。
 
 ## 实施记录
 
-（未开始）
+### 步骤 0 — 调研（2026-11-12）
+
+读码见 [rea-p7d-fluid](rea-p7d-fluid.md)，实测见 [p7-REPORT](p7-REPORT.md)「P7d 的实测」，工具与数据在 `ignore/p7d/`（抓帧 `A:\p7d\cond2`、`det`、`uni`）。
+
+推翻或改定的原方案：
+- **顶层 `combos`：** 原以为要并进 pass 的 COMBO。实测只给条件用，不并进去。
+- **`g_FrameTime`：** 原以为 WPE 恒写 0、要加进引擎表。实测它只是没人写的垃圾值；语料里的样本没读它，由 `unused` 消掉，真读到照报。
+- **`g_LayerModelMatrix`：** 原以为所有 pass 都写。实测只在 effect pass 里写，基础 pass 是残留值。
+- **同键不同类型：** 原定照 WPE 溢读。语料里没有真实样本，推荐改为照报，待用户定。
+- **fbo 生命周期：** 不用改。另查到 `clear` 要 4 个分量才生效，B6 的「`r g b [a]`」写错了。
+
+几条新信息：
+- WPE 找 effect 的材质与着色器只认工程根与 assets 根，不认 effect 目录。我们更宽，不影响结果。
+- `executeMaterialFunction` 的错位（清前 N 个 fbo）。
+- P2a 效果矩阵的顺带发现（风险 4）。
+
+我的失误：
+- 第一版流体测试工程只留了 assets 里的材质，WPE 找不到，全部 effect pass 换成了缺省着色器（日志有 34 行材质报错）。第一轮条件抓帧作废，改成工程根下放现版材质后重抓。是从各 pass 着色器哈希全部相同发现的。
+- 读码代理两次卡死（10 分钟无进展被看门狗停掉）：第一次什么都没留下；第二次改成边查边写，报告在卡死前已写完四问。

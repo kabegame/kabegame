@@ -316,3 +316,9 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 - 能渲染 39 → 42（`3822495444`、`3831518461`、新下载的 `3837598414`）；P4–P6 先做完的口径 56 → 62。两张解锁场景与 WPE 逐像素比，最大差 2。
 - `p7-sem` 的规则层在 Kabegame 里与 WPE 颜色相同。
 - 翻译通过后露出的产品侧缺口并进 P7d（2026-11-12 用户）：`uniform:g_LayerModelMatrix`（4 张）、`constant:mixed-type`（3）、`constant:slots`（2，含流体那张）、`uniform:g_FrameTime`（1）。音频 uniform 归 P11。
+
+### P7d — 步骤 0（2026-11-12）
+
+见 [phase-7d](phase-7d-fluid.md)「实施记录 / 步骤 0」，读码 [rea-p7d-fluid](rea-p7d-fluid.md)，实测 [p7-REPORT](p7-REPORT.md)「P7d 的实测」。
+- 条件只按 effect 实例顶层 `combos` 在加载时求值，顶层 `combos` 不并进 pass；`functions` 只有脚本调用，语料 0 处。
+- 四个渲染器缺口里，`constant:*` 与 `uniform:g_FrameTime` 是误报：WPE 只认反射里被使用的 uniform，我们的翻译器不分。只有 `g_LayerModelMatrix` 是真的，且只在 effect pass 里有值。
