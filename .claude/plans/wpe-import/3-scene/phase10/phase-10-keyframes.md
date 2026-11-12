@@ -89,7 +89,7 @@ P10 另有两条：
 |---|---|---|---|
 | P10a 曲线与自动播放 | 编译轨道、求值、三种模式与 `wraploop`、`relative`、`startpaused`、写进状态、确定性回放；去掉 `value:animation`，没有就地路径的照报细分键 | 47 → 47 | 82 → 84 |
 | P10b 脚本与事件 | `getAnimation`（本属性、按名字、`thisScene`）、`IAnimation` 全部成员、脚本和动画写同一属性、`events` 与 `animationEvent` | 47 | 84 |
-| P10c 联动 | `options.parent` / `children`；`smoothing` / `stiffness`（若运行时读） | 47 | 84 |
+| ~~P10c 联动~~ | 步骤 0 后并进 P10a：子动画借父的时钟；`children`、`smoothing`、`stiffness` 运行时不读 | — | — |
 
 口径：
 - **只做 P10**：40 张关键帧场景都还差别的节，0 张解锁。
@@ -260,41 +260,42 @@ function targetOf(
 
 **产出：** `rea-p10-keyframes.md`（读码）、`p10-REPORT.md`（实测）、本文件的步骤 0 实施记录；kbp-tools 的关键帧生成，以及按名字读每帧常量的提取（现有 `rdc track` / 四角不够时加）。
 
-## P10a — 曲线与自动播放
+## P10a — 曲线与自动播放（含联动）
 
-**实现**（按步骤 0 的结论细化）：
-- **编译期**：
-  - `compile/animations.ts` 按 `collectScripts` 的坐标遍历 `scene.json`，把关键帧值解析成 `SceneAnimation`；
+子计划动工前另写。下面是步骤 0 之后的范围，语义的依据见 [rea-p10-keyframes](rea-p10-keyframes.md) 第 2–5、7、10 节与 [p10-REPORT](p10-REPORT.md)。
+
+**实现：**
+- **编译期**（`compile/animations.ts`，按 `collectScripts` 的坐标遍历 `scene.json`）：
+  - 关键帧值解析成 `SceneAnimation`：通道照读码第 14 节的 `parseChannel`（`frame` 截断、不递增的丢掉、`enabled` 缺省按开、`step`），`wraploop` 在这里预处理；
+  - 丢弃条件照 WPE（`options` 不是对象、`fps` / `length` 不是数或不为正）；通道数不等于分量数、属性不是 float / vec2 / vec3 / vec4 时不写（保持 `value`），这些都不报不支持；
+  - `relative` 只对三段字符串的 `value` 生效；
+  - 联动：`options.parent.key` 按属性名在同一对象上找父，记下父的下标；`children` 不读；
   - 目标推导和脚本共用：把 `scripts.ts` 的 `targetOf` 提出来，补上 `instanceoverride` → `particle-instance`；
-  - `relative` 换算成绝对值；丢弃条件照 WPE，丢掉的动画按静态值处理；
-  - `resolveValue` 对关键帧值给出编译期初值（取 `value` 还是第 0 帧的值，按步骤 0）。
+  - `resolveValue` 对关键帧值仍取 `value`（WPE 也是加载时写 `value`、`init` 收到它，第一帧才被动画覆盖）。
 - **能力表**：去掉 `value:animation`；目标没有就地路径的报 `value:animation:<目标>`（灯、相机对象）；粒子、材质、模型 JSON 里的照报原键。
-- **主线程**：
-  - `animation/curve.ts` 是纯求值函数，`animation/player.ts` 管轨道时钟与每帧写入；
-  - 宿主建场景时建播放器；重编译时动画时间保留与否按步骤 0；
-  - 渲染器在步骤 0 定的位置调 `animations.frame(dt, state)`，补画帧不推进。
-- **确定性回放**：dev 探针的 `renderFrame` 与 kbp 回放按帧时间序列推进动画时钟。
+- **主线程**（`src/animation/`）：
+  - `curve.ts`：整数帧采样（三次贝塞尔、步进搜索反解，float32 逐位照抄）加按通道缓存，帧间线性插值；
+  - `player.ts`：每条动画一个 float32 时钟（有父的用父的），`advance` 照读码第 3 节（loop / mirror / single、事件收集），每帧对全部动画求值并 `SceneState.write`，暂停的、对象隐藏的也照写；
+  - 渲染器在声音之后、脚本之前调它（粒子、相机已在前面算过，`zoom` 与 `instanceoverride` 晚一帧自然对上），补画帧不推进；
+  - 重编译时保留时钟与缓存（WPE 属性改动不重载场景）。
+- **确定性回放**：dev 探针的 `renderFrame` 与 kbp 回放按帧时间序列推进动画时钟（时钟是 `rate × g_Frametime` 的 float32 累加）。
 
 **验收：**
-- 确定性工程逐帧和 WPE 比四角与常量值，误差写进实施记录；
-- 解锁的两张在 P8、P9（以及 `2251857160` 要的 P4f）合入后，和 WPE 同一时刻比整帧；
+- `p10-curves`、`p10-script`、`p10-edge`、`p10-zoom` 的无脚本用例逐帧和 WPE 抓帧比，残差到 0.001 像素级（读码模型 `ignore/p10/rea/kfmodel.py` 已经做到）；
+- 解锁的两张在 P8、P9（以及 `2251857160` 要的 P4f）合入后，和 WPE 同一时刻比整帧（真值 `A:\p10\corpus\`）；
 - 语料：去掉 `value:animation` 后只剩两个细分键各 1 张，其余场景逐张不变。
 
 ## P10b — 脚本与事件
 
-- **`getAnimation`**：无参取本属性的动画，按名字和 `thisScene.getAnimation` 照步骤 0 查找。`IAnimation` 的 11 个成员是包装对象直接调播放器，`getAnimation` 从 `scriptApi.ts` 的缺失表删掉。
-- **脚本与动画并存**：写同一个属性时的先后、`update(value)` 的参数，照步骤 0。
-- **事件**：`options.events` 由播放器在时间跨过时排给脚本运行时；`animationEvent` 从 `MISSING_SCRIPT_CALLBACKS` 移到 `RUNTIME_CALLBACKS`，返回值写回照 P3 报告（只有 init、update、animationEvent 的返回值写回）。
+- **`getAnimation`**：按 `options.name` 或属性名查找，登记顺序第一个；对象上的版本只在本对象内找，不带参数用调用脚本所挂属性的属性名，找不到返回 `undefined`；`thisScene` 版找全场景，找不到或不带参数返回 `null`。`IAnimation` 的 11 个成员是包装对象直接调播放器（读码第 11 节），`rate` 存在包装对象上；`getAnimation` 从 `scriptApi.ts` 的缺失表删掉。
+- **脚本与动画并存**：动画先写、脚本 `update(value)` 拿本帧动画值、返回值本帧生效、下一帧动画再覆盖——写入在脚本之前就自然如此；`setFrame` 的值下一帧才写。
+- **事件**：播放器把时钟本帧收到的事件交给脚本运行时，发给同一对象（或 `general`）上导出了 `animationEvent` 的全部脚本，调用 `animationEvent(event, value)`，`event` 是作者写的整个事件对象（数字 8 位有效数字、键按字母序），返回值写回接收脚本的属性；`animationEvent` 从 `MISSING_SCRIPT_CALLBACKS` 移到 `RUNTIME_CALLBACKS`。
 
-**验收：** 脚本工程的每一步和 WPE 的日志、抓帧一致；27 张用到 `getAnimation` 的场景在 dev 强制渲染（`kabegame-dev-scene-force-render`）下脚本不报错。很多场景在光标回调里调 `play`，要等 P6c 之后才能完整验收。
+**验收：** `p10-script`、`p10-edge` 的脚本用例每一步和 WPE 的日志、抓帧一致；27 张用到 `getAnimation` 的场景在 dev 强制渲染（`kabegame-dev-scene-force-render`）下脚本不报错。很多场景在光标回调里调 `play`，要等 P6c 之后才能完整验收。
 
-## P10c — 联动
+## ~~P10c — 联动~~
 
-- `options.parent` / `children`（8 张 35 条）照步骤 0 实现。
-- `smoothing` / `stiffness`：运行时不读就按中性放开；读的话在这里做。
-- 步骤 0 如果证明联动只是编辑器的分组、运行时各走各的，P10c 并进 P10a，本节取消。
-
-**验收：** 联动工程和 WPE 逐帧一致。
+步骤 0 后取消、并进 P10a：联动只是「子动画借父的时钟」（父按属性名在同一对象上找，只有一层），`children`、`smoothing`、`stiffness` 运行时都不读，按中性放开。
 
 ## 和其它节的交界
 
@@ -322,12 +323,31 @@ function targetOf(
 
 ## 风险
 
-1. **插值公式**：切线的单位或贝塞尔的反解对不上时，误差随曲线形状变化，只能靠测试工程覆盖各种切线组合。
-2. **时间基准**：如果 WPE 逐帧累加 dt（带 float32 累加误差），长时间后会和按场景时间求的值漂开。照 WPE 累加，确定性回放喂同一串 dt。
-3. **和脚本的先后**：76 条挂了脚本，先后错了画面会差一帧或被覆盖。步骤 0 的脚本工程定。
+1. ~~**插值公式**~~：步骤 0 读码给出逐位的公式（含反解的步进搜索与 0.01 帧容差），四个测试工程逐帧吻合到 0.001 像素级。
+2. ~~**时间基准**~~：每条动画一个 float32 时钟，每帧加 `rate × g_Frametime`，和 `g_Time` 只差 float 舍入；确定性回放喂同一串 dt。
+3. ~~**和脚本的先后**~~：动画在粒子、相机之后、脚本之前写，脚本返回值本帧生效、下一帧被动画覆盖（读码 + 实测）。
 4. **共享文件**：和 P4–P9 的会话同时改帧循环、能力表与脚本 API。按块暂存，必要时在 HEAD 快照里实现再三方合并。
 5. **验收样本**：只差 P10 的两张要等 P8 / P9 / P4f 合入才能整帧比，在那之前靠确定性工程。
 
 ## 实施记录
 
-（空）
+### 步骤 0 — 调研（2026-11-13）
+
+读码 [rea-p10-keyframes](rea-p10-keyframes.md)（代理用 REA 读 `wallpaper64.exe` 2.8.42，另读 `scenescript64.dll`），实测 [p10-REPORT](p10-REPORT.md)（WPE 测试窗口，fps 20）。工具与数据在 `ignore/p10/`：测试工程 `defs/p10.py`（`p10-curves`、`p10-script`、`p10-edge`、`p10-zoom`），读码模型 `rea/kfmodel.py`，分析脚本见报告「方法与工具」。kbp-tools 新增 `kbp rdc consts`（逐帧读每次绘制的常量）。
+
+结论（详见报告）：
+- **求值**：每段三次贝塞尔（横向手柄乘半个段长、纵向不缩放，关掉的一侧按 0），x 用步进搜索反解（0.01 帧容差），先算整数帧再线性插值；`loop` / `mirror` / `single` / `wraploop` / `step` / `startpaused` / `relative` 的细节都实测过。读码模型对全部无脚本用例逐帧吻合到 0.001 像素级。
+- **时间**：每条动画一个 float32 时钟，`rate × g_Frametime` 累加；对象隐藏照走、暂停的动画照写。
+- **帧里的位置**：粒子与相机之后、脚本之前；`general.zoom` 实测晚一帧。
+- **脚本**：`getAnimation` 按名字或属性名查找，`IAnimation` 的每个成员、`setFrame` 下一帧生效、负 `rate` 都对上；事件发给同一对象的全部脚本，回调带 `value`、返回值写回。
+- **联动**：子借父的时钟，`children` / `smoothing` / `stiffness` 不读。
+
+对后面各节的影响已改进上文：P10c 并进 P10a；P10a、P10b 的范围按结论细化；风险 1–3 划掉。读码有一处推断被实测推翻：`thisScene.getAnimation()` 不带参数返回 `null`，不是 `undefined`（已在读码文档里注明）。
+
+没测的：WPE 暂停淡变期间动画减速（要全局暂停用户桌面上的 WPE）、作用域为 0 的绑定、`ctx+0x118` 门、`instanceoverride` 晚一帧（与 `zoom` 同理，语料 2 张）。
+
+我的失误：
+- `p10-curves` 有两条把关键帧写成了通道，留作「格式错误整条丢掉」的用例；
+- 第一版 `p10-script` 的动作时间排晚了，没录到，重抓；
+- 一度把截断的输出当成「事件没触发」；
+- 报告初稿把纯二分模型的残差当成时间噪声，读码的反解换上后改正。

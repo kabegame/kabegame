@@ -97,6 +97,7 @@ kbp.py rdc track <抓帧目录> <标签> [工程] [--draws | --points] [--limit 
 kbp.py rdc frame <抓帧目录> <标签> [--event N | --present] [--out 目录] [--data 目录]
 kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
 kbp.py rdc shaders <抓帧目录> <标签> [--out 文件] [--data 目录]
+kbp.py rdc consts <抓帧目录> <标签> [--names 名字,…] [--out 文件] [--data 目录]
 # 公共：--overwrite（输出已存在时覆盖，缺省拒绝）、--timeout 秒（缺省 1800）、--quiet、--keep-work
 ```
 
@@ -106,6 +107,7 @@ kbp.py rdc shaders <抓帧目录> <标签> [--out 文件] [--data 目录]
 | `frame` | `<data>/out/wpe-<标签>-f<脚本帧>.png`，索引 `wpe-<标签>.json` | `step4/wpe_rt.py`；`--present` 为 `p3b/compare/wpe_export.py` |
 | `stats` | `<data>/out/wpe-<标签>-stats.json` | `b3/wpe_stats_b.py` |
 | `shaders` | `<data>/out/wpe-<标签>-shaders.json`，反汇编按哈希存 `wpe-<标签>-shaders/<哈希>.txt` | （P7 新增） |
+| `consts` | `<data>/out/wpe-<标签>-consts.json` | （P10 新增） |
 
 - 一次启动处理目录里全部 `.rdc`（按帧号排序）。
 - **`track` 的工程**：
@@ -121,6 +123,10 @@ kbp.py rdc shaders <抓帧目录> <标签> [--out 文件] [--data 目录]
   - `--present` 取 Present 时的后备缓冲，浮点格式存 DDS（原始数据），LDR 存 PNG。
   - 文件名一律按脚本帧号（= RenderDoc 帧号 + 1）。
 - **`stats`** 按顶点布局认粒子绘制，不依赖测试工程，创意工坊场景也能用。
+- **`consts`**（P10 起）：每张抓帧一行 `{frame, rdc_frame, time, dt, [pointer…], rdc, draws}`，时钟同 `track`（前两个绘制是 FR、CLK）；
+  `draws` 是其余每次绘制的 `{event, vs, ps}`，`vs` / `ps` 是该阶段被着色器读到的常量（名字 → 值，矩阵 16 个数，数组按元素展开），
+  `referenced` 为 false 的不收（垃圾值）。`--names` 只收这些名字。用来读 WPE 每帧写进字段的值：图层字段看 `g_ModelViewProjectionMatrix` /
+  `g_Color4`，effect 常量看材质常量。
 - **`shaders`**（P7 起）：每次绘制的顶点 / 像素着色器哈希、`g_bufStatic` 的变量名（按名字认是哪个 effect）、是否 WPE 的编译失败回退。
   - 片元回退只有一句 `mov o0.xyzw, l(0.500000, 0.000000, 0.000000, 1.000000)`；
   - 顶点回退和纯色图层的顶点着色器指令相同，所以只在配对的像素着色器还读插值输入时才算回退；

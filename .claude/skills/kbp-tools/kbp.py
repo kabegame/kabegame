@@ -4,7 +4,7 @@
 
 已实现：
 - gen <模块> [工程…]：按 <data>/defs/<模块>.py 的 PROJECTS 生成测试工程（第 2 批）；
-- rdc track|frame|stats|shaders <抓帧目录> <标签> …：在 `qrenderdoc --python rdc/main.py` 里无界面读抓帧，写轨迹 / 整帧图 / 统计量 / 着色器清单；
+- rdc track|frame|stats|shaders|consts <抓帧目录> <标签> …：在 `qrenderdoc --python rdc/main.py` 里无界面读抓帧，写轨迹 / 整帧图 / 统计量 / 着色器清单 / 逐帧常量；
 - replay <案例…>|--all、regress --src A --src B：回放案例（node + vitest）、两份源码的回归（第 2 批）；
 - snapshot export <rev|WORKTREE> <目录>、snapshot diff <基线> <副本>：产品源码快照与补丁（第 2 批）；
 - content projects|resolve|ls|cat|grep …：WPE 语料与 scene.pkg 读取；content unpack：真实场景解包成加日志的测试工程（第 5 批）；
@@ -89,6 +89,12 @@ def _parser():
                                                  "写 <data>/out/wpe-<标签>-shaders.json，反汇编存同名目录")
     rdc_common(shaders)
     shaders.add_argument("--out", help="输出文件，缺省 <data>/out/wpe-<标签>-shaders.json")
+
+    consts = rdc_sub.add_parser("consts", help="逐帧常量：每张抓帧的时钟与其余每次绘制被读到的常量；"
+                                               "写 <data>/out/wpe-<标签>-consts.json")
+    rdc_common(consts)
+    consts.add_argument("--out", help="输出文件，缺省 <data>/out/wpe-<标签>-consts.json")
+    consts.add_argument("--names", help="只收这些常量（逗号分隔），缺省全收")
 
     # ---------- replay / regress ----------
     def src_data(p):

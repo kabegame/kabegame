@@ -122,6 +122,10 @@ def plan(action, args):
     elif action == "shaders":
         out = os.path.abspath(args.out) if args.out else os.path.join(data, "out", "wpe-%s-shaders.json" % tag)
         outputs = [out]
+    elif action == "consts":
+        out = os.path.abspath(args.out) if args.out else os.path.join(data, "out", "wpe-%s-consts.json" % tag)
+        job["params"] = {"names": [n for n in (args.names or "").split(",") if n]}
+        outputs = [out]
     else:
         raise KbpError("kbp", "未知的动作 %s" % action)
     job["out"] = out
