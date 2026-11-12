@@ -17,6 +17,7 @@ import type { FontMetrics, Wpefont, WpefontFace } from "../wpefont";
 /**
  * 字体文件的位置（读取器的参数），两种：
  * - `system:<文件>`：`%WINDIR%\Fonts\<文件>`（`systemfont_*` 与回退链里的系统字体，WPE 用 `SHGetFolderPathW(CSIDL_FONTS)`）；
+ *   宿主按后端给的表换成本机文件（各平台不同，`text/host.ts`），这里的名字与顺序不随平台变；
  * - 其余：引擎文件系统里的相对路径（先工程目录、再 WPE 的 `assets/`），如 `fonts/RobotoMono-Regular.ttf`、
  *   回退链里的 `fonts/TwemojiMozilla.ttf`。
  */

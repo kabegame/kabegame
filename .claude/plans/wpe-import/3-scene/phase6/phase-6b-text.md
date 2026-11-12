@@ -789,6 +789,102 @@ export type LayerStep = DrawStep | ParticleStep | TextStep | ...
   3. `anchor: center` 在留白样式下的裁边；
   4. 背景色绑属性的就地写，以及预览 / 桌面的实时显示，还没在真机上测（回归 T10、T11）。
 
+### 1d2 — 系统字体按平台换成本机文件（2026-11-13 用户要求）
+
+**总体设计思路**
+
+文本的回退链与 `systemfont_*` 照 WPE 写死 Windows 文件名（`text/fonts.ts`），这一层不动：它决定的是「按什么顺序找字形」，和平台无关。平台差异只在「这个名字对应本机哪个文件」，交给后端：`wpe_scene_host.rs` 按平台把 13 个 Windows 字体名各解析成本机上第一个存在的文件，放行范围与交给宿主的表是同一次解析的结果，宿主读 `system:<名字>` 时查表，查不到就当读不到（同 WPE 的「文件不在就跳过」）。
+
+- Windows：`%WINDIR%\Fonts\<名字>`，顺带解决 `WINDIR` 不在 C 盘（原先的 `fonts_dir` 待办）。
+- macOS / Linux：每个名字一张候选表，先同一款字体（macOS `Supplemental/` 里自带的 Arial、Verdana 等，Linux 的 msttcorefonts），再字形度量兼容或外观接近的替代（Liberation、Carlito、Caladea、DejaVu、Noto CJK 等）。画面不会和 WPE 逐像素相同，只求「像」。候选路径没在真机上核对过，全部标 `TODO:[WPE_SCENC]`。
+- 彩色 emoji 不给替代：Apple Color Emoji（sbix）与 Noto Color Emoji（CBDT）是内嵌 PNG，wpefont 没编进 libpng，FreeType 读不了；这两个平台的 emoji 交给链里后面的 Twemoji（COLR）。`arialuni.ttf` 只有 macOS 有同款（`Arial Unicode.ttf`）。
+
+关键决策：表由后端给，而不是宿主按平台自己猜路径。放行范围必须和宿主要读的文件一致，两边各写一份迟早对不上；后端本来就要知道平台和文件是否存在。
+
+**现状锚点**
+
+a. 后端只在 Windows 放行，按 `%WINDIR%\Fonts`（`wallpaper/wpe_scene_host.rs`）
+```rust
+#[cfg(windows)]
+fn font_grants() -> Vec<FileGrant> {
+    let Some(windir) = std::env::var_os("WINDIR") else { return Vec::new(); };
+    font_grants_in(&PathBuf::from(windir).join("Fonts"))
+}
+#[cfg(not(windows))]
+fn font_grants() -> Vec<FileGrant> { Vec::new() } // 现状：其它平台一个系统字体都不放行
+```
+
+b. 宿主拿不到字体目录（`commands/wpe_scene.rs`、`apps/wpe-scene/src/text/host.ts`）
+```rust
+pub struct WpeSceneTarget { pub path: String, pub scene_assets: Vec<String> } // 现状：没有字体信息
+```
+```ts
+const dir = this.sources.fontsDir || DEFAULT_SYSTEM_FONTS_DIR; // 现状：fontsDir 后端不填，恒为 C:\Windows\Fonts
+return reader.readWhole(joinPath(dir, path.slice(SYSTEM_FONT_PREFIX.length)));
+```
+
+**点 1 — 后端按平台解析（`wallpaper/wpe_scene_host.rs`）**
+- 新增 候选表 `WINDOWS`（只有文件名，目录取 `%WINDIR%\Fonts`）、`MACOS_SYSTEM_FONTS`、`LINUX_SYSTEM_FONTS`：每个 Windows 名字一组绝对路径候选，按优先级排；两张非 Windows 表不加 `cfg`，Windows 上也编译、可单测。
+- 新增 `resolve_system_fonts(table, exists) -> BTreeMap<String, PathBuf>`：取第一个存在的候选；`exists` 注入，单测用假的文件集合。
+- 修改 `HostScope` 存解析结果 `system_fonts`，`font_grants` 由它生成；新增 `pub fn system_fonts() -> BTreeMap<String, String>` 读 `HOST_SCOPE`。
+```rust
+// TODO:[WPE_SCENC] 在 macOS 上测试：候选路径没在真机核对；Office for Mac 的字体在 app 包里
+const MACOS_SYSTEM_FONTS: &[(&str, &[&str])] = &[
+    ("arial.ttf", &["/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf"]),
+    // …
+];
+```
+
+**点 2 — 交给宿主（`commands/wpe_scene.rs`、`host.ts`、`text/host.ts`）**
+- 修改 `WpeSceneTarget` 加 `system_fonts: BTreeMap<String, String>`（JSON `systemFonts`）。
+- 修改 宿主 `SceneTarget` 的 `fontsDir` 换成 `systemFonts`；`TextFontSources` 加 `systemFonts`，`readFont` 有表就只查表（查不到返回 null），没有表（Node 单测、dev 探针）才按 `fontsDir ?? C:\Windows\Fonts` 拼。
+```ts
+if (path.startsWith(SYSTEM_FONT_PREFIX)) {
+  const name = path.slice(SYSTEM_FONT_PREFIX.length);
+  const table = this.sources.systemFonts;
+  if (table) return table[name] ? reader.readWhole(table[name]) : null; // 新增：后端解析好的本机文件
+  return reader.readWhole(joinPath(this.sources.fontsDir || DEFAULT_SYSTEM_FONTS_DIR, name));
+}
+```
+
+**点 3 — 文档**：WPE_SCENE.md 的「字体引擎」「文本对象」两节、`src-tauri/wpefont/README.md` 更正「sbix / CBDT 栅格化成 BGRA」（没有 libpng 读不了）、回归与 changelog。
+
+**验收**：Rust 单测（Windows 上跑：三张表都覆盖 13 个名字、取第一个存在的、放行与表一致、`%WINDIR%` 解析）；宿主单测（有表查表、表里没有返回 null 不回落、没表时按目录）；Windows dev 真机：`wpe_scene_target` 返回 13 项里本机存在的那些，重渲染 `p6b-fallback` 和 1d 结果逐像素相同。macOS / Linux 留给 `TODO:[WPE_SCENC]`。
+
+#### 1d2 实施记录（2026-11-13）
+
+**做了什么：**
+- `wallpaper/wpe_scene_host.rs`：`SYSTEM_FONT_FILES`（13 个名字）去掉 `cfg`，成为所有平台共用的键表；新增 `MACOS_SYSTEM_FONTS`、`LINUX_SYSTEM_FONTS`（候选照用户给的表，顺序即优先级，各带一段 `TODO:[WPE_SCENC] 在 macOS / Linux 上测试：…`）、`windows_system_fonts(<WINDIR>\Fonts)`、纯函数 `resolve_system_fonts(table, exists)`、`platform_system_fonts()`（`cfg!` 选表，`WINDIR` 取不到时为空表）、`font_grants(&表)`、`pub fn system_fonts()`。`HostScope` 加 `system_fonts`，`refresh_scene_host` 解析一次、放行项由它生成（只放文件），另记一条 debug 日志列出本机没有的名字。
+- `commands/wpe_scene.rs`：`WpeSceneTarget` 加 `system_fonts`（JSON `systemFonts`），读 `system_fonts()` 的内存表、不再解析：宿主能跑起来说明应用页已经取过宿主地址（`get_wpe_scene_host_url` 先 `refresh_scene_host`），启动时也解析过一次。
+- 宿主：`host.ts` 的 `SceneTarget.fontsDir` 换成 `systemFonts`（只改这个字段与注释）；`text/host.ts` 的 `TextFontSources` 加 `systemFonts`，`readFont` 有表只查表（`Object.hasOwn`，名字原样），查不到返回 null；没表才按 `fontsDir || C:\Windows\Fonts`；文件头注释改写。`text/fonts.ts` 的 `FontPath` 注释补一句「宿主按后端的表换成本机文件，名字与顺序不随平台变」。
+- 文档：`src-tauri/wpefont/README.md` 更正「COLR / sbix / CBDT 栅格化成 BGRA」（核对过：`FT_DEFS` 只有模块表，`third/freetype` 的 `ftoption.h` 里 `FT_CONFIG_OPTION_USE_PNG` 是注释掉的，`third-patches/freetype` 只有 README，`ttsbit.c` 遇到 PNG 字形报 `Unimplemented_Feature`）；`cocs/wpe/WPE_SCENE.md` 的「字体引擎」系统字体一行与「文本对象」两处；回归 T12–T15、changelog 一行。
+
+**和计划不同的地方：**
+1. 产品里的「存在」是「普通文件、本身不是符号链接」（`is_grantable_font` = `FileGrant::new(path, false).is_some()`），不是只看存在：`file:` 闸门不认符号链接（`check_file_request` 对链接报 `Symlink`），表里每一项都要能放行、宿主都读得到，才谈得上「放行与表一致」。Debian msttcorefonts 的小写文件名是链接时会落到首字母大写的那条（候选表本来两种写法都列）。
+2. 没有常量表 `WINDOWS`：Windows 的候选由 `windows_system_fonts(fonts)` 按键表现生成（每个名字一个），所以 `resolve_system_fonts` 的表参数是泛型（`IntoIterator<Item = (&str, C)>`，`C` 的元素 `AsRef<Path>`），静态表传 `.iter().copied()`。
+3. 平台选择用 `cfg!()` 而不是 `#[cfg]`：三张表在所有平台都被引用，不需要 `allow(dead_code)`。
+4. dev 探针（`dev/probeTexts.ts`）与 `scripts/kabegame-dev/scene.ts` 的 `SceneTarget` 没改：探针仍不传 `systemFonts`、按 `C:\Windows\Fonts` 读（计划本来就留了这条路），只在 Windows 上对。
+5. 两个 Rust 文件跑了 `rustfmt`（原文件有一处既有格式差异，正好在被替换掉的旧用例里，没有改到别的代码）。
+
+**测试：**
+
+| 项 | 结果 |
+|---|---|
+| Rust（`test-kabegame`，`CARGO_TARGET_DIR=target-check`，`kabegame --lib wpe_scene`） | 17 passed / 0 failed（`wpe_scene_host` 15 个，含新的 `every_platform_table_covers_every_name`、`unix_candidates_are_absolute_font_files`、`resolve_takes_the_first_existing_candidate`、`color_emoji_has_no_substitute_off_windows`、`font_grants_match_the_resolved_table`、`windows_names_ignore_case`、`windows_system_fonts_stay_in_the_windows_fonts_dir`；`commands::wpe_scene` 2 个）。`#[cfg(unix)]` 的 `symlinked_candidates_are_skipped` 在 Windows 上不编译、没跑 |
+| 宿主 tsc | 0 error |
+| vitest（`src/text src/render/text.test.ts src/compile/texts.test.ts`，带 `KABEGAME_WPE_ROOT`） | 6 个文件 77 passed（1d 的 74 + 新增 3：有表按表读、表里没有 / 空表返回 null 且不读目录、没表按目录） |
+| 格式 | 改动的 TS 文件 Prettier 通过，两个 Rust 文件 `rustfmt --check --edition 2021` 通过，LF |
+
+**没做：** Windows dev 真机（`wpe_scene_target` 的返回、重渲染 `p6b-fallback`）留给用户；macOS / Linux 真机（`TODO:[WPE_SCENC]`，回归 T14、T15）。`cocs/wpe/WPE_SCENE.md` 场景宿主一节（`file:` 闸门那段）还写着「Windows 上文本对象要读的 13 个系统字体文件」，那一节有别的会话在改，没动。
+
+#### 1d2 复核（Claude，2026-11-13）
+
+- 读过 Rust 与 TS 的全部改动：候选表与计划逐条相同；放行项与交给宿主的表出自同一次解析；宿主有表时只查表、查不到不回落。「存在」按 `FileGrant::new` 判（普通文件、不是符号链接）是对的：`file:` 闸门拒符号链接，表里的每一项才都读得到。
+- 复跑：`kabegame --lib wpe_scene`（`CARGO_TARGET_DIR=target-check`）17 passed；宿主 tsc 0 error；文本测试 6 个文件 77 passed。
+- Windows 真机（dev 后端在改动之后重编、重启，宿主产物重建）：`wpe_scene_target` 返回 12 项（本机没装 `arialuni.ttf`），应用日志「解析到 12 个，本机没有 ["arialuni.ttf"]」；`p6b-fallback` 按产品路径加载后渲染，整帧哈希与 1d 相同。
+- 顺手改了 WPE_SCENE.md 场景宿主一节里「Windows 上文本对象要读的 13 个系统字体文件」那句。dev 探针（`dev/probeTexts.ts`）仍按 `C:\Windows\Fonts` 读，只在 Windows dev 上用，没改。
+- macOS / Linux 的候选路径都没核对，见代码里的 `TODO:[WPE_SCENC]` 与回归 T14、T15。
+
 ### 1e — 动态文字
 
 **点 1 — 字符串目标（修改 `compile/bindings.ts`、`render/state.ts`）**

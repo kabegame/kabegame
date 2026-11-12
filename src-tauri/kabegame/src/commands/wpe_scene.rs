@@ -1,5 +1,7 @@
 //! 场景宿主（P3-0）的命令。
 
+use std::collections::BTreeMap;
+
 /// 场景宿主 `index.html` 的 `file:///` 地址（见 `wallpaper::wpe_scene_host`）：主窗口 / 壁纸窗口的应用页把它赋给
 /// iframe，sandbox 同网页壁纸。只给这两个窗口的应用页用（它们免 ACL），宿主自己的 capability 不含这条。
 /// 宿主还没构建时报错。
@@ -10,7 +12,7 @@ pub async fn get_wpe_scene_host_url() -> Result<String, String> {
         .map_err(|error| error.to_string())?
 }
 
-/// 宿主按图片 id 取得场景目录和 WPE 内置资源目录。
+/// 宿主按图片 id 取得场景目录、WPE 内置资源目录与系统字体表。
 #[tauri::command]
 pub async fn wpe_scene_target(image_id: String) -> Result<WpeSceneTarget, String> {
     use kabegame_core::media::image_type::wpe_kind;
@@ -26,6 +28,9 @@ pub async fn wpe_scene_target(image_id: String) -> Result<WpeSceneTarget, String
     Ok(WpeSceneTarget {
         path: target.path,
         scene_assets: target.scene_assets,
+        // 读内存表、不再解析：宿主能跑起来，说明应用页已经取过宿主地址（`get_wpe_scene_host_url` 先
+        // `refresh_scene_host`），启动时 `init_heavy_globals` 也解析过一次，这里拿到的就是闸门正在用的那份。
+        system_fonts: crate::wallpaper::wpe_scene_host::system_fonts(),
     })
 }
 
@@ -34,6 +39,9 @@ pub async fn wpe_scene_target(image_id: String) -> Result<WpeSceneTarget, String
 pub struct WpeSceneTarget {
     pub path: String,
     pub scene_assets: Vec<String>,
+    /// 文本对象的系统字体：名字（WPE 在 `%WINDIR%\Fonts` 下的文件名，宿主的 `system:<名字>`）→ 本机文件的路径。
+    /// 后端按平台解析（`wallpaper::wpe_scene_host::system_fonts`），本机没有的名字不在表里，宿主读它时当读不到。
+    pub system_fonts: BTreeMap<String, String>,
 }
 
 /// 「清空脚本存储」：存储在宿主的 `file:` 来源里，应用页碰不到，所以广播给宿主，同一张图的全部宿主收到后停脚本、

@@ -11,8 +11,10 @@
  * - **字体读取**（`fonts.ts` 的位置约定）：
  *   - 主字体的引擎路径：编译期按场景的资源查找顺序定好的位置（`SceneText.font.location`：散文件整读，`scene.pkg` 条目按区间读）；
  *     编译期哪里都没找到的读不到，排版换 arial（同 WPE）；
- *   - `system:<文件>`：`<系统字体目录>\<文件>`，即 `%WINDIR%\Fonts`（宿主的 `file:` 闸门只放行 `SYSTEM_FONT_FILES` 那 13 个文件，
- *     `wallpaper/wpe_scene_host.rs`）。宿主页面拿不到环境变量：取 `wpe_scene_target` 交来的 `fontsDir`，没有时按 `C:\Windows\Fonts`；
+ *   - `system:<名字>`（名字是 WPE 在 `%WINDIR%\Fonts` 下的文件名）：按 `wpe_scene_target` 交来的 `systemFonts` 表读本机文件。表由后端
+ *     按平台解析（`wallpaper/wpe_scene_host.rs`：Windows 是 `%WINDIR%\Fonts\<名字>`，macOS / Linux 换成同款或接近的本机字体），
+ *     和宿主 `file:` 闸门放行的是同一批文件；表里没有的名字读不到（同 WPE 的「文件不在就跳过」），不再去猜目录。
+ *     没有表时（Node 单测、dev 探针）才按 `fontsDir`，缺省 `C:\Windows\Fonts`，拼 `<目录>\<名字>`；
  *   - 其余引擎路径（回退链里的 `fonts/TwemojiMozilla.ttf`）：依次试 WPE 的 `assets` 目录（`sceneAssets`）。
  * - **失败**：wasm 不在或实例化失败、排版中 wasm 出错，抛 `SceneRenderError(["text:engine"])`，宿主照常退回预览图。
  */
@@ -26,16 +28,21 @@ import { TextAtlases } from "./atlas";
 import { SYSTEM_FONT_PREFIX, TextFonts, type FontPath } from "./fonts";
 import { layoutText, type TextLayout } from "./layout";
 
-/** 宿主页面拿不到 `%WINDIR%`：`wpe_scene_target` 没给系统字体目录时用它（Windows 的缺省安装位置）。 */
+/** 没有 `systemFonts` 表（Node 单测、dev 探针）也没给 `fontsDir` 时的系统字体目录（Windows 的缺省安装位置）。 */
 export const DEFAULT_SYSTEM_FONTS_DIR = "C:\\Windows\\Fonts";
 
 /** 一个对象「缺字体 → 读 → 重排」的轮数上限：每轮至少读进一个字体，主字体、arial 与回退链加起来不到 16 个。 */
 const MAX_FONT_ROUNDS = 16;
 
-/** 这次加载的字体来源：场景的 WPE `assets` 目录（回退链的引擎路径），系统字体目录。 */
+/** 这次加载的字体来源：场景的 WPE `assets` 目录（回退链的引擎路径），系统字体表或目录。 */
 export interface TextFontSources {
   sceneAssets: readonly string[];
-  /** `%WINDIR%\Fonts`；缺省 `DEFAULT_SYSTEM_FONTS_DIR`。 */
+  /**
+   * 系统字体表：名字（`system:` 后面那段，原样）→ 本机文件路径，`wpe_scene_target` 的 `systemFonts`（后端按平台解析）。
+   * 有表时 `system:` 只查表，查不到当读不到。
+   */
+  systemFonts?: Record<string, string> | null;
+  /** 没有 `systemFonts` 时的系统字体目录（Node 单测、dev 探针用）；缺省 `DEFAULT_SYSTEM_FONTS_DIR`。 */
   fontsDir?: string | null;
 }
 
@@ -121,8 +128,11 @@ export class SceneTexts {
   private async readFont(path: FontPath): Promise<Uint8Array | null> {
     const reader = this.options.reader;
     if (path.startsWith(SYSTEM_FONT_PREFIX)) {
-      const dir = this.sources.fontsDir || DEFAULT_SYSTEM_FONTS_DIR;
-      return reader.readWhole(joinPath(dir, path.slice(SYSTEM_FONT_PREFIX.length)));
+      const name = path.slice(SYSTEM_FONT_PREFIX.length);
+      const table = this.sources.systemFonts;
+      // 后端解析好的本机文件；表里没有就是本机没有，不回落到目录
+      if (table) return Object.hasOwn(table, name) ? reader.readWhole(table[name]) : null;
+      return reader.readWhole(joinPath(this.sources.fontsDir || DEFAULT_SYSTEM_FONTS_DIR, name));
     }
     const file = this.locations.get(path);
     if (file) {

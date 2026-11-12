@@ -99,8 +99,10 @@ HarfBuzz 用 15.0.0，与离线参考 `uharfbuzz` 同版本。
   1. TrueType（有 `glyf` 表）**没有 `fpgm`** 时强制自动 hinting（`FT_LOAD_FORCE_AUTOHINT`）。FreeType 自己判「没有 hinting」
      时还要看 `prep`，所以要在胶水里按 `fpgm` 补，不能交给 FreeType；
   2. CFF（OpenType 的 `otf`）不强制，走原生 CFF 引擎。
-- 加载标志是 `FT_LOAD_RENDER | FT_LOAD_COLOR`（加规则 1 的 `FT_LOAD_FORCE_AUTOHINT`）：COLR / sbix / CBDT 的彩色字形
-  栅格化成 BGRA。
+- 加载标志是 `FT_LOAD_RENDER | FT_LOAD_COLOR`（加规则 1 的 `FT_LOAD_FORCE_AUTOHINT`）：COLR 的彩色字形栅格化成 BGRA。
+  sbix 与 CBDT 读不了：它们的彩色字形是内嵌 PNG，构建没开 `FT_CONFIG_OPTION_USE_PNG`（`FT_DEFS` 只有模块表，FreeType 缺省的
+  `ftoption.h` 里这一项是注释掉的），也没有编进 libpng，FreeType 加载这类字形报 `Unimplemented_Feature`。所以 Apple Color
+  Emoji（sbix）、Noto Color Emoji（CBDT）不能当 emoji 字体用，文本的 emoji 在 Windows 以外交给回退链里的 Twemoji（COLR）。
 
 ## WASI 导入与宿主
 

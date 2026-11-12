@@ -37,10 +37,11 @@ interface SceneTarget {
   path: string;
   sceneAssets: string[];
   /**
-   * `%WINDIR%\Fonts`（文本对象的 `systemfont_*` 与回退链，P6b 1d）。宿主页面拿不到环境变量，要后端给；后端现在不给，按
-   * `C:\Windows\Fonts`（`text/host.ts` 的 `DEFAULT_SYSTEM_FONTS_DIR`）。
+   * 文本对象的系统字体表（`systemfont_*` 与回退链，P6b 1d2）：名字（WPE 在 `%WINDIR%\Fonts` 下的文件名）→ 本机文件路径。
+   * 后端按平台解析（`wallpaper/wpe_scene_host.rs`，和 `file:` 闸门放行的是同一批文件），本机没有的名字不在表里；
+   * `text/host.ts` 有表就只查表。
    */
-  fontsDir?: string | null;
+  systemFonts?: Record<string, string> | null;
 }
 
 export interface SceneProperty {

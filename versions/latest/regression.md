@@ -50,6 +50,11 @@
 | [x] | T9 字体引擎缺失 | Node，vitest | `text/host.test.ts`：引擎给 null | 抛 `text:engine`，宿主退回预览图 | 2026-11-12 Claude：单测通过；真机没挪走 wasm 测 |
 | [ ] | T10 改背景色属性 | Windows dev | `backgroundcolor` 绑属性的文本场景，在属性面板改颜色 | 就地生效、不重编译；HDR 且亮度不为 1 时重编译 | 未测：测试工程里没有绑属性的背景色 |
 | [ ] | T11 预览与桌面 | Windows，图库预览 / 窗口模式 | 把一张只有静态文字的场景打开预览、设为桌面 | 实时渲染，和 T5 一致 | 未测：语料里没有只差静态文字的场景（只剩 `text:script` 的 3 张要 1e） |
+| [x] | T12 1d2 系统字体按平台解析（Rust 单测） | Windows，`cargo test`（`CARGO_TARGET_DIR=target-check`） | `test-kabegame` 跑 `kabegame --lib wpe_scene`：三张表恰好 13 个名字、Unix 候选是绝对路径、取第一个存在的候选、彩色 emoji 不给替代、放行项与交给宿主的表一致、Windows 名字不分大小写、真实 `%WINDIR%\Fonts` 只出该目录下的文件 | 全过 | 2026-11-13 Claude：17 passed（`wpe_scene_host` 15 个、`commands::wpe_scene` 2 个）；`#[cfg(unix)]` 的符号链接用例在 Windows 上不编译、没跑 |
+| [x] | T13 1d2 宿主按表读系统字体（单测） | Node，vitest | `text/host.test.ts`：有表时按表读（键是 `system:` 后面的名字原样）；表里没有的名字、空表返回 null，不读 `C:\Windows\Fonts` 或 `fontsDir`；没表时按 `fontsDir`、缺省 `C:\Windows\Fonts` | 全过 | 2026-11-13 Claude：`src/text src/render/text.test.ts src/compile/texts.test.ts` 6 个文件 77 passed；宿主 `tsc --noEmit` 0 error |
+| [ ] | T14 1d2 macOS 系统字体 | macOS dev | `wpe_scene_target` 返回的 `systemFonts`；打开 `p6b-geom`、`p6b-fallback`（`systemfont_*`、CJK 与 emoji 回退）的预览 | 表里只有本机存在的文件、路径和 `MACOS_SYSTEM_FONTS` 的候选一致；文字画出来、没有 `deny file:`；emoji 走 Twemoji | 未测：`TODO:[WPE_SCENC]`，候选路径没在真机核对 |
+| [ ] | T15 1d2 Linux 系统字体 | Linux dev（Debian / Ubuntu、Fedora、Arch 至少一种） | 同 T14，对照 `LINUX_SYSTEM_FONTS` | 同 T14；msttcorefonts 的小写符号链接被跳过、取首字母大写的文件 | 未测：`TODO:[WPE_SCENC]`，Linux 没有窗口壁纸模式，只能看预览 |
+| [x] | T16 1d2 Windows 真机 | Windows dev（后端与宿主都重建过） | 导入 `p6b-fallback`，`invoke wpe_scene_target`；`host_open` 按产品路径加载后 `host.renderFrame(1.5)`，遮掉右下角的哈希与 1d 的渲染图比 | 表里是 `%WINDIR%\Fonts` 下本机有的字体；画面与 1d 相同 | 2026-11-13 Claude：返回 12 项（本机没装 `arialuni.ttf`，不在表里），应用日志「解析到 12 个，本机没有 ["arialuni.ttf"]」；遮罩哈希与整帧哈希都和 1d 相同；测完移除了测试行 |
 
 ## 场景壁纸 P6b 1c：文本的字体回退、排版与图集
 

@@ -1,7 +1,8 @@
 /**
  * 宿主的文本准备（P6b 1d，`text/host.ts` 的 `SceneTexts`）：
  * - 没有文本层时不碰 wasm；wasm 不在时抛 `text:engine`；
- * - 字体读取：主字体按编译期的位置（散文件整读、`scene.pkg` 条目按区间读），`system:` 读系统字体目录，回退链的引擎路径读 WPE assets；
+ * - 字体读取：主字体按编译期的位置（散文件整读、`scene.pkg` 条目按区间读），`system:` 有 `systemFonts` 表时只查表（查不到为 null、
+ *   不回落到目录），没有表时读系统字体目录，回退链的引擎路径读 WPE assets；
  * - 有 wasm 与 `KABEGAME_WPE_ROOT` 时：把 1c 的基线（`fixtures/p6b.json`）的六个工程当 bundle 交给它，排版结果（四边形、尺寸、偏移、
  *   图集）和直接调 `layoutText` 逐项相同；字体字节跨两次加载保留（第二次不读文件），图集每次新建；加载代数变了时返回 null。
  */
@@ -87,6 +88,65 @@ describe("SceneTexts：没有 wasm 也能跑的", () => {
 
   it("系统字体目录缺省是 C:\\Windows\\Fonts", () => {
     expect(DEFAULT_SYSTEM_FONTS_DIR).toBe("C:\\Windows\\Fonts");
+  });
+});
+
+describe("SceneTexts：系统字体的读取位置（不排版，直接调读取器）", () => {
+  /**
+   * `readFont` 与 `sources` 是私有的，平时只在 `prepare` 里排版缺字体时经 `TextFonts.load` 走到，要 wasm；这里不排版，
+   * 直接写入这次的来源、取出读取器调，看它读了哪些路径。
+   */
+  function readerOf(sources: Parameters<SceneTexts["prepare"]>[1]) {
+    const { reader, reads } = recordingReader({
+      "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf": new Uint8Array([1]),
+      "C:/Windows/Fonts/arial.ttf": new Uint8Array([2]),
+      "D:/Win/Fonts/Malgun.ttf": new Uint8Array([3]),
+    });
+    const texts = new SceneTexts({ reader });
+    (texts as unknown as { sources: typeof sources }).sources = sources;
+    const read = (path: string) =>
+      (texts as unknown as { readFont: (path: string) => Promise<Uint8Array | null> }).readFont(path);
+    return { read, reads };
+  }
+
+  it("有表：按表读后端解析好的本机文件，键是 system: 后面的名字原样", async () => {
+    const { read, reads } = readerOf({
+      sceneAssets: [],
+      systemFonts: {
+        "arial.ttf": "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "Malgun.ttf": "D:\\Win\\Fonts\\Malgun.ttf",
+      },
+      fontsDir: "E:\\不该用的目录",
+    });
+    expect(await read(`${SYSTEM_FONT_PREFIX}arial.ttf`)).toEqual(new Uint8Array([1]));
+    expect(await read(`${SYSTEM_FONT_PREFIX}Malgun.ttf`)).toEqual(new Uint8Array([3]));
+    expect(reads).toEqual([
+      "whole /usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "whole D:/Win/Fonts/Malgun.ttf",
+    ]);
+  });
+
+  it("有表：表里没有的名字返回 null，不去读 C:\\Windows\\Fonts 或 fontsDir", async () => {
+    const { read, reads } = readerOf({
+      sceneAssets: ["W:/assets"],
+      systemFonts: { "arial.ttf": "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf" },
+    });
+    expect(await read(`${SYSTEM_FONT_PREFIX}seguiemj.ttf`)).toBeNull();
+    // 名字按原样查，大小写不同算没有；原型链上的名字也不算
+    expect(await read(`${SYSTEM_FONT_PREFIX}Arial.ttf`)).toBeNull();
+    expect(await read(`${SYSTEM_FONT_PREFIX}toString`)).toBeNull();
+    // 空表同样只查表
+    const empty = readerOf({ sceneAssets: [], systemFonts: {} });
+    expect(await empty.read(`${SYSTEM_FONT_PREFIX}arial.ttf`)).toBeNull();
+    expect([...reads, ...empty.reads]).toEqual([]);
+  });
+
+  it("没有表：按 fontsDir 拼，缺省 C:\\Windows\\Fonts", async () => {
+    const { read, reads } = readerOf({ sceneAssets: [], systemFonts: null });
+    expect(await read(`${SYSTEM_FONT_PREFIX}arial.ttf`)).toEqual(new Uint8Array([2]));
+    const custom = readerOf({ sceneAssets: [], fontsDir: "D:\\Win\\Fonts" });
+    expect(await custom.read(`${SYSTEM_FONT_PREFIX}Malgun.ttf`)).toEqual(new Uint8Array([3]));
+    expect([...reads, ...custom.reads]).toEqual(["whole C:/Windows/Fonts/arial.ttf", "whole D:/Win/Fonts/Malgun.ttf"]);
   });
 });
 
