@@ -26,6 +26,7 @@
 - 场景壁纸支持静态 3D 模型（正交视角的场景）：模型文件的各个版本、模型的多套材质（皮肤）、多个网格的前后顺序、背面剔除与画面外的模型不画，都按实测 Wallpaper Engine 得出的规则实现，测试场景和 Wallpaper Engine 的输出逐像素一致。Wallpaper Engine 自带的 Retro 现在可实时渲染；其余带模型的场景大多是透视视角，或还缺反射、音频频谱等别的能力，暂时仍显示预览图。
 - 场景壁纸能编译创意工坊作者手写的全部着色器：Wallpaper Engine 能接受、以前被判为不支持的写法（向量宽度不一致的赋值与运算、数字当条件、多出来的 `#endif`、同名宏重复定义等）现在按 Wallpaper Engine 的规则编译，本机全部场景用到的着色器都能编译通过，画面与 Wallpaper Engine 逐像素一致（相差不超过 2/255）。创意工坊 3822495444、3831518461、3837598414 现在可实时渲染；其余用到这些效果的场景大多还缺视频、关键帧动画、音频频谱等别的能力。
 - 场景壁纸支持 Wallpaper Engine 自带的流体模拟效果，以及效果里按选项开关的步骤与贴图：按 Wallpaper Engine 的规则处理，流体逐帧对照过它的输出。按图层缩放修正形状的创意工坊效果（如圆角遮罩）现在能用，画面与 Wallpaper Engine 逐像素一致。着色器里声明了却没用到的参数，不再让场景被误判为不支持。用到这些效果的场景大多还缺文本、音频、视频等别的能力，暂时仍显示预览图。
+- 场景壁纸支持视频：作为图层画面的视频（包括创意工坊打包在场景里的 4K 视频与 HEVC 视频）会循环播放，被隐藏的视频图层自动暂停解码，暂停壁纸时一起停；和 Wallpaper Engine 一样不出声。画面与 Wallpaper Engine 对照过，只在颜色剧烈变化的边缘有细微差别。创意工坊 3822149301、3824550659、3828359750 现在可实时渲染；其余带视频的场景大多还缺文本、音频频谱、关键帧动画等别的能力。HEVC 视频需要显卡支持硬件解码，不支持时这个图层显示为透明。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - 场景壁纸现在跟随壁纸样式（填充、适应、拉伸、居中、平铺），适应和居中时空白处用壁纸的主题色填充，和 Wallpaper Engine 一样；图库预览里场景壁纸按自身比例完整显示，和单独的图片一样；详情面板显示场景分辨率，宽高比筛选与排序也包含场景壁纸。
@@ -120,6 +121,7 @@
 ## 开发侧
 
 ### Added
+- 场景壁纸 P9a：视频纹理。编译期 `compile/tex.ts` 按 Video 标志跳过 mip 字节、给出磁盘区间（`SceneTexture.video`），删 `tex:video`；场景宿主新增 `apps/wpe-scene/src/video/`（`VideoTexturePlayer`：区间 `fetch(file:)` → `Response.blob()` → 不挂 DOM 的静音 `<video>`；`SceneVideos` 实现 `VideoSink`：帧号、30 帧没画到就暂停、宿主暂停、跨重编译按区间复用）；`GpuScene` 把视频纹理建成初值全 0 的 `rgba8unorm`，画到绑定它的 draw 时有新帧就 `copyExternalImageToTexture`，渲染器每个实时帧 `beginFrame`；宿主第一次 ready 前等可见视频出第一帧（最多 2 s）。dev 探针 `host.videos()`，`renderFrame` 与 vite `/render`、MCP `render_scene` / `host_render` 新增 `videoTime`（`dev/videoProbe.ts`，seek 好再拷）。WPE 语义见 `.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md`。
 - 场景壁纸 P6b 1d：场景里的静态文本对象照 WPE 渲染，不再因文本退回预览图。编译期 `compile/texts.ts` 规整字段、定位主字体、编 WPE 自带的四个字体材质；宿主 `text/host.ts` 在建 GPU 资源前排好全部文本层（wasm 与字体跨重编译保留）；渲染图新增 `text` 步骤（直接上屏或画进合成 RT 后走 effect 链），字形图集是运行时纹理。能力表改报 `text:script`、`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>`；会随时间变的文字（时钟）要等 1e。六个测试工程和 WPE 整帧逐像素相同。
 - 场景壁纸 P6b 1d2：文本对象的系统字体改由后端按平台解析成本机文件，`wpe_scene_target` 新增 `systemFonts`（名字 → 路径），宿主按表读、表里没有的当读不到。Windows 取 `%WINDIR%\Fonts`（系统不装在 C 盘也能读到）；macOS / Linux 按候选表换成同款或接近的字体（路径待真机核对，`TODO:[WPE_SCENC]`），彩色 emoji 不给替代、交给 Twemoji。`file:` 闸门放行的就是这份表里的文件。另更正 `wpefont` README：没有 libpng，sbix / CBDT 彩色字形读不了，只有 COLR 能读。
 - 场景壁纸 P6b 1c：场景宿主新增 `apps/wpe-scene/src/text/`（纯 TS），照 WPE 反编译实现文本的字体回退链、排版（分行、断行、省略号、两端对齐、对齐、文字框与合成 RT 尺寸）与字形图集装箱器（R8 / RGBA8，按「字体 + 字号」共享），还没有调用方；`wpefont` 新增 `wpefont_glyph_box` / `WpefontFace.box`（`FT_LOAD_NO_BITMAP` 的轮廓框，WPE 的字形四边形用它），`glyph()` 去掉 `cbox`。基线 `text/fixtures/p6b.json` 由 `apps/wpe-scene/scripts/fixtures/make_text_fixture.py` 从 WPE 抓帧生成：44 个对象与 21 张图集和 WPE 逐坐标、逐字节相同。

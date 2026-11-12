@@ -2071,6 +2071,22 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | S6 解锁场景 · 人耳 | Windows dev | `1967162875`、`3827677885` 的图库预览与桌面，和 Wallpaper Engine 对照听 | 开始时机、循环、音量和 WPE 相近；单声道文件可能比 WPE 响约 4 dB（已知差异） | 待用户确认 |
 | [x] | S7 脚本控制声音（步骤 2） | Windows dev（宿主重建后），回环录音 | 导入 `p6a-single`、`p6a-play`（`supportsaudioprocessing` 要开 dev 强制渲染），图库预览里放，`[p6c]` 日志与录音段序列和 p6-REPORT 的 WPE 结果比；测后删行 | `play` 在放时从头、`pause` → `play` 续播、`stop` → `play` 从头、重复 `pause` 无害；`single` 放完后 `pause` 再 `play` 重放而 `isPlaying` 仍假 | 2026-11-11 Claude：日志逐条与 WPE 相同（`play 1 1`、`pause 1 0`、`play 0 1`、`stop 1 0`、`play 0 1`、`pause 0 0`；single 的 `pause 0 0`、`play 0 0`、`play 0 1`）；录音段序列成立。另见一次 40–60 ms 的整体输出中断（两个声音同时静音），像音频设备欠载，非排期问题。开关已删，测试行已删 |
 
+## 场景壁纸视频纹理（P9a）
+
+2026-11-13。头标志带 Video 的 `.tex`（mip 就是整段视频）编译期只给磁盘区间，主线程每段视频一个不挂 DOM 的静音 `<video>`，画到视频纹理时有新帧才 `copyExternalImageToTexture`；照 WPE 加载即播、缺省循环、30 个渲染帧没画到就暂停、宿主暂停时全部暂停、解码失败时图层透明。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md`，测试工程 `ignore/p9/proj/p9a-*`（`ignore/p9/gen_v.py`），对照数据在 `ignore/p9/out/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | V0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；`scripts/kabegame-dev` 与 `apps/kabegame-dev-mcp` 的 `deno test` | 0 error；除已知失败外全过 | 2026-11-13：tsc 0 error；vitest 2371 个用例 2370 过，挂的是原有的语料请求次数上限（`3830255100`）；deno 测试 25 + 21 过，各挂 1 个假代理的网络测试，不含本次改动的 HEAD 上同样挂 |
+| [x] | V1 语料 | Node，173 个工程 | 前后重扫 `unsupported` | 只去掉 `tex:video`，原来能渲染的不掉出 | 2026-11-13：能渲染 47 → 50（`3822149301`、`3824550659`、`3828359750`），41 张只去掉 `tex:video` |
+| [x] | V2 播放与循环 | Windows dev | 导入 `p9a-plain`，在图库预览里打开，读 `host.videos()` | 视频在动、帧号随渲染帧走、2.517 s 处绕回 | 2026-11-13 Claude：帧号每秒 60、`currentTime` 按真实速度前进并在 2.517 s 绕回，画面里色块帧号与色卡都正常 |
+| [x] | V3 隐藏的视频图层 | Windows dev | 导入 `p9a-vis`（10 s 显示、13 s 隐藏、15 s 再显示），预览里读 `host.videos()` | 不可见约 30 帧后暂停，再显示时从原处接着放、不追赶 | 2026-11-13 Claude：加载时不可见，播到 0.659 s 冻住；10 s 显示从 0.664 接着放；13 s 隐藏后空闲第 31 帧暂停（1.638）；15 s 从 1.641 接着放 |
+| [x] | V4 暂停 | Windows dev | 预览工具条「暂停」再「继续播放」 | 暂停时帧号、视频时间、解码帧数都不动；继续后从原处放 | 2026-11-13 Claude：成立 |
+| [x] | V5 解码失败 | Windows dev | 导入 `p9a-bad`（随机字节冒充 MP4） | 场景照常渲染、这个图层透明、日志一条 warn，不退回 | 2026-11-13 Claude：成立，只记一条「场景视频解码失败」 |
+| [x] | V6 解锁场景 · 对照 WPE | Windows dev + WPE 抓帧 | 三张解锁场景各抓一帧 WPE，找出显示的视频帧，Kabegame 按同一帧回放（`renderFrame` 的 `videoTime`），比视频纹理与整帧 | 视频纹理只在颜色边缘有差、无整体偏色 | 2026-11-13 Claude：视频纹理平均差 `3822149301`（HEVC）0.19、最大 5；`3824550659` 1.15、99 分位 10；`3828359750` 1.66、99 分位 9（WPE 与 ffmpeg 之间也是这个量级，色度上采样不同）。整帧对照里的大差异来自粒子与随时间变化的水面效果 |
+| [ ] | V7 桌面、预览与应用背景同时播 | Windows dev | 把 `3822149301` 设为桌面壁纸，同时开它的预览，并设为应用背景；再打开「暂停壁纸」 | 三处都在动、不卡；暂停时停 | 待用户确认（任务管理器看 CPU / GPU 占用） |
+| [ ] | V8 HEVC 不支持硬件解码的显卡 | 其它 Windows 机器 | 打开 `3822149301` | 视频图层透明、场景不退回、日志一条 warn | 本机（NVIDIA Ada）能解，待有条件时测 |
+
 ## 按颜色排序与代表色
 
 2026-11-11。每张图入库时算一份色盘（最多 5 个代表色 + 占比，`images.palette`），详情「基本信息」里画成色带；排序新增「颜色」维度。迁移 v052 加色盘列、色桶表 `color_buckets`（12 个基本色桶，黄 / 绿 / 青为 `e6c200` / `2e9e3f` / `1fb5b5`，不是纯色）与关系表 `image_color_distances`，给存量图 × 每个色桶铺一行 65536；回填作业 `image_palette` 在后台给 `palette IS NULL` 的图补算。排序有两个段：`sort/by-color_0x<rrggbb>`（色桶，预计算、沿索引读）与 `sort/by-any-color_0x<rrggbb>`（任意颜色，现算），前端按色桶列表（`color_buckets://`）选段并在列表变化时校正；用户可把颜色保存成色桶（`add_color_bucket`，最多 24 个）或删除（`delete_color_bucket`），提交后发 `color-buckets-change`。机制见 `cocs/gallery/COLOR_PALETTE.md`。

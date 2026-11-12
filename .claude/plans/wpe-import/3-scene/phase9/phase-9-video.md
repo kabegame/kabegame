@@ -305,3 +305,11 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 - 第一次读回拷贝结果全是 0：读回用的纹理没带 `COPY_SRC`，失败的是读回而不是拷贝。
 
 工具问题：`wpe-renderdoc` MCP 的日志游标里 `created` 大于 2^53，经工具参数的 JSON 传回会丢精度，`log_since` 误报「日志被重写」。本轮用 `logcut.py` 绕开，没改 MCP。
+
+### P9a — 播放与纹理（2026-11-12 – 11-13）
+
+见 [phase-9a](phase-9a-playback.md)「实施记录」：视频模块（`ffa0e061`）、接进编译渲染宿主（`ce8c22ca`）、解锁与确定性回放（`e49e9f79`）、收尾。
+- 能渲染 47 → 50（173 张口径）：`3822149301`（HEVC）、`3824550659`、`3828359750`；P4–P8 先做完的口径按总计划应解锁 14 张。
+- 三张解锁场景的视频纹理和 WPE 抓帧比：HEVC 那张平均差 0.19、最大 5；两段没标颜色的 H.264 平均差 1.2–1.7、99 分位 ≤ 10，是色度上采样的插值不同（[p9-REPORT](p9-REPORT.md)「P9a 的对照」）。
+- 对照中排除了一个误判：测试工程缩放后的边缘差异起初归因于 WPE 的 8 倍各向异性，不缩放的对照证明是缩放路径与色度上采样，采样器不用改。
+- 留给 P9b：`getVideoTexture` / `IVideoTexture`（播放器接口已备好）、`duration` 对齐容器时长、暂停期间 seek 后显示哪一帧。留给 P9c：多实例开销（回归 V7）、674 MiB 级视频每次加载整段落盘。
