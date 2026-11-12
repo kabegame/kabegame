@@ -56,7 +56,7 @@ P8 另有两条：
 - PLAN 的表是 165 张口径（用到 45、只差它 6、累计 72），没算图像层的 `clampuvs`；这里按 173 张重算。P9 总计划按 175 张算的「P8 做完 70 张」和这里的 69 张差在语料张数与 `clampuvs` 的归属。
 
 **P8 不做，继续报不支持：**
-- 文本对象的 `clampuvs`、对齐（`horizontalalign` 等）：P6b。脚本 `layer.alignment` 在 P6 的 API 名单里，步骤 0 查它在语料里写的是不是图像层，是就挪到步骤 3。
+- 文本对象的 `clampuvs`、对齐（`horizontalalign` 等）：P6b。脚本 `layer.alignment` 原在 P6 的 API 名单里，步骤 0 查到语料 3 张都写在图像层上，挪进步骤 3（见实施记录）。
 - 模型对象上的 `dependencies`：P5c / P13。
 - `cursorripple` 本身已经能画（effect fbo 跨帧保留、指针、效果矩阵都有），P8 只补 `alphawriting`；它的视觉对照放在步骤 5。
 
@@ -153,9 +153,9 @@ function alphaWritingUsed(value: unknown): boolean {
 
 ## 风险
 
-1. **合成 RT 的缺省寻址可能已经不对**：WPE 如果只按对象的 `clampuvs`（缺省 false = 重复）选合成 RT 的寻址，而我们按 `.tex` 的 ClampUVs 走，那么已经能渲染的场景里，基础纹理带 ClampUVs、effect 又采样越界的地方会和 WPE 不同。步骤 0 先定来源和缺省值，再离线扫一遍语料里「`.tex` 标志 × 对象 `clampuvs`」的组合，估出影响几张已渲染的场景；要改缺省时，步骤 1 用 `kbp regress --corpus` 和这些场景的整帧比较兜住。
-2. **alpha-to-coverage 在单采样下的结果**：D3D11 单采样时的覆盖由驱动决定（阈值或抖动图案）。阈值能在着色器里精确模拟；抖动图案就只能按误差包络验收。p2-REPORT 时读到用户 WPE 的设置是 `msaa: none`，步骤 0 用 `get_settings` 再确认；WPE 缺省的 `x2` 我们没有多重采样，本来就对不上，只记不补。
-3. **被依赖图层画在哪一帧**：被引用的图层排在引用方之后（6 处）时，WPE 如果按 `dependencies` 提前画，我们要改绘制顺序；如果读的是上一帧，就要保留上一帧的 RT。两种都影响渲染图的组织，步骤 0 先定。
+1. ~~**合成 RT 的缺省寻址可能已经不对**~~（步骤 0 已定：`clampuvs` 缺省为真、合成 RT 缺省钳制，方向和这里的假设相反；现在能渲染的场景里只有 `3832772446` 的一个图层受影响，见实施记录）：WPE 如果只按对象的 `clampuvs`（缺省 false = 重复）选合成 RT 的寻址，而我们按 `.tex` 的 ClampUVs 走，那么已经能渲染的场景里，基础纹理带 ClampUVs、effect 又采样越界的地方会和 WPE 不同。步骤 0 先定来源和缺省值，再离线扫一遍语料里「`.tex` 标志 × 对象 `clampuvs`」的组合，估出影响几张已渲染的场景；要改缺省时，步骤 1 用 `kbp regress --corpus` 和这些场景的整帧比较兜住。
+2. ~~**alpha-to-coverage 在单采样下的结果**~~（步骤 0 已定：着色器先锐化、单采样是 alpha > 0.5 的硬阈值，能精确模拟）：D3D11 单采样时的覆盖由驱动决定（阈值或抖动图案）。阈值能在着色器里精确模拟；抖动图案就只能按误差包络验收。p2-REPORT 时读到用户 WPE 的设置是 `msaa: none`，步骤 0 用 `get_settings` 再确认；WPE 缺省的 `x2` 我们没有多重采样，本来就对不上，只记不补。
+3. ~~**被依赖图层画在哪一帧**~~（步骤 0 已定：不改绘制顺序，在后面时读上一帧，独占 RT 跨帧保留）：被引用的图层排在引用方之后（6 处）时，WPE 如果按 `dependencies` 提前画，我们要改绘制顺序；如果读的是上一帧，就要保留上一帧的 RT。两种都影响渲染图的组织，步骤 0 先定。
 
 ## 步骤 0 — 调研（整节一次）
 
@@ -180,7 +180,7 @@ function alphaWritingUsed(value: unknown): boolean {
 
 **离线扫描**：语料里图像层基础纹理的 `.tex` 标志与对象 `clampuvs` / `nointerpolation` 的组合分布，按已渲染 / 未渲染分开，用来估风险 1。Kabegame 这边（dev app、kabegame-dev MCP）步骤 0 不用跑，各步验收时再用。
 
-**产出：** `rea-p8-layer.md`、`rea-p8-render.md`（读码），`p8-REPORT.md`（实测），本文件的步骤 0 实施记录（对各步的影响），`ignore/p8/defs/p8.py`。
+**产出：** `rea-p8-layer.md`、`rea-p8-render.md`（读码），`p8-REPORT.md`（实测），本文件的步骤 0 实施记录（对各步的影响），`ignore/p8/gen_p8.py`（实际没走 `kbp gen` 的实验定义，见实施记录）。
 
 ## 步骤 1–5 的验收
 
@@ -188,3 +188,20 @@ function alphaWritingUsed(value: unknown): boolean {
 - **语料**：`kbp regress --corpus` 只去掉本步的键；解锁的场景各比一帧 `--present` 真值（`content unpack --instrument` 的回放，按 WPE 实际帧时间）。
 - **变异检查**：每步的关键规则（对齐偏移的方向、形状的强制 additive、合成 RT 的寻址来源、被依赖图层的跳过上屏、写掩码）各改坏一处，单测或比图要能检出。
 - **单测**：规则都是纯函数，单测直接对读码与实测的数字。
+
+## 实施记录
+
+### 步骤 0 — 调研（2026-11-12）
+
+读码：[rea-p8-layer.md](rea-p8-layer.md)（形状、对齐、采样）、[rea-p8-render.md](rea-p8-render.md)（依赖、自引用、写入状态），两个代理并行。实测：[p8-REPORT.md](p8-REPORT.md)，11 个确定性工程（`ignore/p8/gen_p8.py`，没有用 `kbp gen` 的实验定义，照 P5b 的 `gen_b.py` 自写 `.tex` 与 effect）加只差 P8 的 6 张语料场景，WPE 设置 `fps` 20、`msaa` none，没改。读码与实测覆盖到的部分全部吻合，推翻了 sample-gaps §2.1（形状不是正方形）、rea-p4a（图像层读 `alignment`）、本计划风险 1 的前提（`clampuvs` 缺省为真）。
+
+对各步的影响（细节见报告「对各步的影响」）：
+- **步骤 1**：合成 RT 寻址 = 对象 `clampuvs !== false` 时钳制，过滤 = 对象 `nointerpolation: true` 或纹理 NoInterpolation 时最近邻；`clampuvs: true` 中性。改的是现状锚点 d 的两行。基础纹理的采样器不动。`3832772446` 的一个图层会从重复变成钳制，要回归。
+- **步骤 2**：形状的几何是第一个 effect 的四个点围成的四边形（不是正方形），画最后一个 effect、不看 effect 的 `visible`，吃视差。比总计划多出「取点」「effect 可见性中性」两条；多 pass 的 effect 与透视场景照报。
+- **步骤 3**：多两项——脚本 `layer.alignment`（读写字符串，不是字符串按 `center`，语料 3 张，从 P6 挪来）与四边形边长按 `trunc(size)`（语料 1 张）。绑属性的 `alignment` 按 `center`。
+- **步骤 4**：被依赖的图层要从 `buildableLayers` 的「写死不可见不建资源」里例外；独占 RT 跨帧保留；占位纹理是 6×6 黄黑棋盘格。模型对象写的 `dependencies` 也会给图像层置位，一起处理。
+- **步骤 5**：`alphawriting` 只在场景目标 `enabled`、合成路径 `disabled` 时和现在不同，上屏的最后一个 effect pass 不受它影响；`alphatocoverage` 着色器加 `ALPHATOCOVERAGE=1`、画到场景目标时丢弃锐化后 alpha ≤ 0.5 的片元。
+
+工具：`ignore/p8/rdc_dump_p8.py`（qrenderdoc 无界面导出每次绘制，含直接读 D3D11 输出合并状态的 `AlphaToCoverage`）、`show.py`、`ana_align.py`、`check_align.py`；语料 `scan_p8.py`、`sum_p8.py`、`ana_p8.py`（脚本 `layer.alignment` 已改算 P8，覆盖数不变）、`rtref.py`、`rtgap.py`、`scan_texflags.py`。
+
+失误：`p8-alpha` 里自写的 fbo pass 顶点乘了 MVP（中间 pass 应该直接用 NDC 四边形），fbo 里没有像素；写掩码从管线状态读，结论不受影响。`p8-shape` 的 S5 两个 effect 是同一个变体、同一组点，分辨不出画的是哪一个，初稿据此推错，`p8-shape2` 补测更正。
