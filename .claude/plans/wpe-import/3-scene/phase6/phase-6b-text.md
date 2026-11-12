@@ -521,39 +521,273 @@ export interface TextLayout {
 
 ### 1d — 静态文本的编译与渲染
 
-**点 1 — 编译期文本表（新增 `compile/texts.ts`；修改 `compile/bundle.ts`）**
-- **新增** `compileText(index, object, ctx): SceneText`：字段全表与缺省值（rea-p6b-layout 1.2），字体位置（工程 / pkg / `assets` / `systemfont_*`），文字初值（静态串、用户属性的值、字段脚本的 `value`），材质：照 passthrough 的写法用宿主指定的材质编 pass（`materials/fonts/basefont.json`、`basefontrgba.json`、开背景时 `fontbackground.json`，有 effect 时另编 `materials/util/composelayer_clearalpha.json`），槽 0 交给运行时（`planned: [{ slot: 0, format: 9 }]`，彩色为 0）。
-- **修改** `SceneLayer` 加 `text: SceneText | null`；对象循环在「没有 image」之前加文本分支（锚点 c）。
+> 2026-11-12 照 HEAD `def7408f` 与当时的工作区重写（P4e 事件、P5b 带子层的组合层、P7d 之后）。下面的行号是工作区的；`bundle.ts` 957 行之后比 HEAD 小 1。
+
+#### 思路
+
+1d 让文本层成为图像层的一种，画法照 WPE：基础 pass 不是一张贴图，而是两组逐字四边形（普通字形采样 R8 图集，彩色字形采样 RGBA8 图集，画在普通字形之后），开了 `opaquebackground` 时前面再画一个纯色背景。其余一切（变换、可见性、`color` / `alpha` / `brightness`、effect 链、`colorBlendMode`）走图像层现成的路。
+
+**谁在哪里算。** 编译 Worker 只产文本表：排版字段、字体在哪里、四个宿主指定材质编出的 pass。排版要 wasm、字体字节与图集，放在宿主主线程：`SceneHost` 持有一个 `SceneTexts`（照声音播放器的写法，跨重编译保留 wasm 实例与读过的字体字节），每次加载按场景对象顺序把全部文本层排一遍，缺回退字体就读完再排，直到不缺；结果（每层的 `TextLayout` 与这次加载的 `TextAtlases`）经 `SceneRenderer.load` → `GpuScene.build` 的新选项交给渲染器。图集每次加载重新建（WPE 每次加载也是新的），这样装箱顺序、那 1 个像素都和 WPE 一样；1d 的文字不变，加载之后不再排版。
+
+**尺寸来自排版，不来自 JSON。** WPE 运行时不用 JSON 的 `size`。文本层的「图层 size」（合成后上屏的四边形、`compose` 四边形、基础矩阵）用 `layout.size`，合成 RT 用 `layout.compositeSize`（WPE 截断取整、没有 `max(4, ·)`），对齐偏移 `layout.offset` 写进这一层的世界矩阵（局部平移，子对象跟着走，同 WPE 的 `+0x80`）。`GpuScene` 建层时对文本层用这几个值代替 `layer.size`。
+
+**渲染图加一种步骤。** 现在一个图层只画一次基础 pass，文本要画三次、而且几何是动态的逐字四边形、要三角形列表和自己的索引缓冲——和粒子步骤是同一类东西，所以照 `particles` 步骤加一个 `text` 步骤（带 `part: "background" | "glyphs" | "color"`），而不是去扩 `DrawStep` 的几何种类：
+- 直接上屏：`[text background] → text glyphs → [text color]`，三者的混合都是 `colorBlendMode == 31 ? additive : translucent`（rea-p6b-layout 4、5.1），画到场景目标，矩阵 = 本层 MVP（含对齐偏移）× 平移 `directTranslation`；
+- 合成：RT 初值二选一——开了 `opaquebackground` 就 `clear` 成 `(背景色 × f, 图层 alpha)`（`clear` 步骤加颜色来源），否则 `snapshot` + `compose` 角色画 `composelayer_clearalpha`（场景快照、alpha 清 0，几何是 `layout.size` 的图层四边形，即 P5b 组合层那条路）；再画 `text glyphs` / `text color`（材质自己的 translucent，矩阵 = RT 像素的正交 × 平移 `compositeTranslation`）；之后 effect 链、passthrough 上屏照旧。
+
+**图集是第一张运行时纹理。** 纹理引用加一种 `{ kind: "atlas"; color: boolean }`，按本层文本的字体键解析成 GPU 纹理（同一「字体 + 字号」的层共用一张）；建场景时整张上传，`sync` 按 `takeDirty()` 增量上传（1d 里加载后不会再脏，机制给 1e）。采样器照 WPE：线性过滤、repeat（rea-p6b-raster 3.2，装箱的「x 或 y 为 0 时清最后一列 / 一行」正是防 wrap 的写法）。
+
+**颜色。** 字形 pass 的 `g_Color4` 就是图层现成的 `(color × k, alpha)`（`k` 是 HDR 时的 `brightness`，LDR 为 1），两条路径都一样；背景 pass 的 `g_Color` = `backgroundcolor × (HDR ? backgroundbrightness : 1)`、`g_Alpha` = 图层 alpha。
+
+**1d 不做的：** 文字会变（脚本、绑属性的就地重排）是 1e；1d 里 `text` 挂脚本报 `text:script`，文字或排版键绑用户属性登记成重编译目标（改了整场重编译，结果仍对）。effect 的 `visible` 绑属性或挂脚本、又在文本层上的，切换会改 padding 与尺寸，1d 也登记成重编译。
+
+#### 现状锚点
+
+**a. 文本对象被拦两道**（`compile/bundle.ts:1270`；能力检查在对象循环之前，`:719`）
+```ts
+    // 声音对象（P6a 步骤 1）：图层上只有变换，播放字段进声音表；可见性不影响播放（p6-REPORT `p6a-misc`）
+    if (isSoundObject(object)) {
+      sounds.push(await compileSound(index, object, fs, properties, bindings));
+      continue;
+    }
+    // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
+    if (!object.image) continue;   // 现状：文本对象走到这里，图层没有 pass
+```
+`checkSceneFeatures` 先报 `object:text`，非 force 时 `settled()` 为真，循环第一轮就 `break`（`:1225`）。
+
+**b. 宿主指定材质编 pass 只有内联写法**（`compile/bundle.ts:1368`，passthrough；组的上屏 `:1382` 同样写法）
+```ts
+      const path = passthroughMaterial(scene.version);
+      const text = await fs.text(path);
+      const pass = text ? parseMaterial(text).passes[0] : undefined;
+      if (!pass) unsupported.add(`material:missing:${path}`);
+      else {
+        layer.passthrough = await compilePass(
+          { ...pass, combos: { ...pass.combos, ...passthroughCombos(cbm) } },
+          { key: `objects/${index}/passthrough`, planned: [{ slot: 0 }] },
+        );
+        layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];   // 材质值优先：就地刷新不覆盖
+```
+
+**c. 能力表里没有文本**（`compile/features.ts:494`）
+```ts
+  } else if (kind && kind !== "image" && kind !== "light" && kind !== "sound") unsupported.add(`object:${kind}`);
+  ...
+      !["alignment", "perspective", "model", "particle", "sound", "text", "light"].includes(key) &&
+      !lightKey(key) && !soundKey(key) && ...
+      unsupported.add(`object:${key}`);   // 现状：font、pointsize、horizontalalign、depthtest 等都报 object:<键>
+```
+`isSoundObject`（`:430`）、`SOUND_KEYS` / `soundKey` / `checkSoundFeatures`（`:447`–`:470`）是现成样板；`compilePass` 的程序检查只给粒子放行额外 uniform（`bundle.ts:1111`：`checkProgramFeatures(result, issues, context.particle ? PARTICLE_UNIFORMS : undefined)`）。
+
+**d. 每层只画一次基础 pass；`clear` 只能清成 0**（`render/graph.ts:119`、`:369`；`render/scene.ts:2485`）
+```ts
+export type LayerStep =
+  | DrawStep
+  | ParticleStep
+  | { kind: "snapshot" }
+  | { kind: "copy"; effect: number | null; source: TextureRef; target: TargetRef }
+  | { kind: "swap"; effect: number; source: string; target: string }
+  | { kind: "clear"; target: TargetRef }          // 现状：没有颜色
+  | { kind: "subtree"; target: TargetRef };
+```
+```ts
+        } else if (op.kind === "clear") {
+          end();
+          const target = this.resolveTarget(op.target, op.resources);
+          if (target) this.clearTarget(encoder, target, [0, 0, 0, 0], "clear composite");   // clearTarget 本身收颜色
+```
+直接上屏只有一个 `role: "direct"` 的 draw（`graph.ts:334`），合成路径的基础 pass 是 `fill` / `clear` / `compose` / `copy` 四选一（`:369`–`:408`），多 pass 报 `render:multi-pass`（`:300`）。
+
+**e. 动态几何只有粒子**（`render/scene.ts:1485`、`:2416`、`:532`）
+```ts
+      if (step.kind === "particles") {
+        vertexBuffer = this.own(device.createBuffer({ label, size: particles.vertices.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }));
+  ...
+        } else if (particles) {
+          pass.setIndexBuffer(this.particleIndices!.buffer, this.particleIndices!.format);
+          pass.drawIndexed(particles.count * 6);
+        } else pass.draw(4);
+  ...
+      topology: step.kind === "particles" && !geometry ? "triangle-list" : "triangle-strip",
+```
+图像层的顶点是 `layerQuad(layer.size, uv, inset)` 经 `program.vertexPacking.pack` 打包（`pack` 收任意个 `QuadVertex`）；索引缓冲只有全场一份粒子的。
+
+**f. 尺寸按编译期的 `layer.size`**（`render/graph.ts:152`；`render/uniforms.ts:282`；`render/scene.ts:1226`、`:1701`）
+```ts
+  const [w, h] = layer.fullscreenSize ? layer.fullscreenSize
+    : texture && !layer.solidLayer && !layer.passthroughModel ? [texture.width, texture.height]
+    : [layer.size[0] ?? 0, layer.size[1] ?? 0];
+  return [Math.max(4, Math.round(w)), Math.max(4, Math.round(h))];
+```
+`drawMatrices` 的 `base` 是按 `size` 居中铺满的正交，`direct` / `compose` 用图层 MVP；世界矩阵 `worldMatrixOf` 只读 `LayerState` 的 origin / angles / scale，没有局部偏移的入口。fbo 在加载时按 `compositeSize` 建。
+
+**g. 没有运行时纹理**（`render/scene.ts:1345`、`:1568`；`render/textures.ts:113`）
+```ts
+    if (ref.kind === "composite") return resources.composites[ref.index] ?? null;
+    if (ref.kind === "fbo") return this.targets[resources.fbos.resolve(ref.effect, ref.name)] ?? null;
+    if (ref.kind === "framebuffer") return this.snapshot;
+    return null;   // 现状：texture 种类在 createDraw 的 entries 里另走一支，没有图集
+```
+`writeTexture` 只在加载时的 `uploadTexture` 里出现；`g_Texture0Resolution` 在建 draw 时算一次（`scene.ts:1530`）。
+
+**h. 宿主的跨重编译对象与加载入口**（`host.ts:589`、`:780`；`render/renderer.ts:289`）
+```ts
+    if (!this.sceneSounds) {
+      this.soundPlayer = new ScenePlayer({ reader: this.reader }, this.options.report);
+      this.sceneSounds = new SceneSounds(this.soundPlayer, Math.random, ...);
+    }
+    this.sceneSounds.load(sounds);
+```
+```ts
+    const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, {
+      ignoreUnsupported: options.ignoreUnsupported,
+      particles: { passes: particlePasses(fps), fps, cursor: this.cursorOf(placement) },   // 现状：没有文本的入口
+    });
+```
+`reload` 里 unsupported 判定（`:778`）与 `ensureRenderer`（`:788`）之间是插异步准备的地方（每个 `await` 后照现有写法比 `generation`）。`SceneState.fromBundle`（`render/state.ts:244`）只给 `layer.passes`、粒子树、effect、passthrough、`groupUpload` 登记材质常量。
+
+#### 点 1 — 编译期文本表（新增 `compile/texts.ts`；修改 `compile/bundle.ts`）
+- **新增** `compileText(index, object, ctx): SceneText`：
+  - 字段全表与缺省值（rea-p6b-layout 1.2），规整成 `text/layout.ts` 的 `TextFields`；`text` 只收字符串或对象里的字符串 `value`，别的类型当空串（1.3）；枚举查不到取表里第一项。
+  - 字体：`systemfont_*` 照 `text/fonts.ts` 的表；其余按资源查找顺序（散文件 → `scene.pkg` → WPE `assets`）定位，产出 `{ path, location }`（同 `SceneSound.files[].location`，宿主经 reader 读，pkg 条目按区间读）。找不到时照 WPE 用 arial（`fonts.ts` 已处理），不报错。
+  - 材质：抽一个 `compileHostPass(path, combos, key, planned)` 小函数（照锚点 b），编 `materials/fonts/basefont.json`（`planned: [{ slot: 0, format: 9 }]`）、`basefontrgba.json`（`[{ slot: 0 }]`）、开 `opaquebackground` 且直接上屏时 `fontbackground.json`、要合成且没开 `opaquebackground` 时 `materials/util/composelayer_clearalpha.json`（槽 0 是快照）。正交场景一律用不带 `_depth` 的材质（5.4）。
+  - 背景色：`g_Color` 写进背景 pass 的 `uniforms`（材质值优先，就地刷新不覆盖）；`backgroundcolor` / `backgroundbrightness` 绑属性时登记成这个 pass 的常量目标（就地），开合成时清屏色读同一份值。
+- **修改** `SceneLayer` 加 `text: SceneText | null`；对象循环在声音分支后面加文本分支：
+```ts
+    // 文本对象（P6b 1d）：图层照常（变换、颜色、effect），基础 pass 换成文本表里的四个宿主材质；排版在宿主主线程
+    if (isTextObject(object)) {
+      layer.text = await compileText(index, object, textContext);
+      // 不 continue：下面的 effect、colorBlendMode passthrough 与图像层同一段
+    } else if (!object.image) continue;
+```
+  > 说明：文本层 `passes` 保持空，effect 与 passthrough 走图像层那段代码；凡是按「`passes.length > 0`」判断的地方（`buildableLayers` 等）都要认 `layer.text`。
+- **修改** `SceneState.fromBundle` 给文本的四个 pass 登记材质常量。
+
 ```ts
 export interface SceneText {
-  fields: TextFields;          // text、font、pointsize、padding、spacing、对齐、maxwidth / maxrows、limit*、blockalign、背景
-  font: SceneFontRef;          // 工程文件位置 | systemfont 名
-  glyphPass: ScenePass;        // basefont
-  colorPass: ScenePass;        // basefontrgba
-  backgroundPass: ScenePass | null;
-  clearAlphaPass: ScenePass | null;
+  fields: TextFields;
+  font: { path: string; location: FileLocation | null };   // location 为 null：systemfont 或引擎路径，宿主自己找
+  glyphPass: ScenePass;              // basefont
+  colorPass: ScenePass;              // basefontrgba
+  backgroundPass: ScenePass | null;  // fontbackground：直接上屏且 opaquebackground
+  clearAlphaPass: ScenePass | null;  // composelayer_clearalpha：合成且没开 opaquebackground
+  background: { color: [number, number, number]; brightness: number };
 }
 ```
 
-**点 2 — 能力表（修改 `compile/features.ts`）**
-- **修改** 仿 `isSoundObject` 加 `isTextObject`（`text: ""` 也算文本对象）；`TEXT_KEYS` 放开实现了的键；`msdf` / `outline` / `blur` / `dropshadow` 为真报 `text:msdf:<键>`；正交场景的 `depthtest` 中性（透视场景另由 `camera:perspective` 挡）；文本 pass 放行 `g_RenderVar0–3`（`TEXT_UNIFORMS`）。
-- **新增** 1d 还没有动态文字：`text` 挂脚本报 `text:script`，绑用户属性的文字登记成重编译目标（改了整场重编译，结果仍对）。1e 删掉这两条。
+#### 点 2 — 能力表（修改 `compile/features.ts`、`compile/bundle.ts`）
+- **新增** `isTextObject`（照 `isSoundObject`：`text` 成员在就算，`text: ""` 也算，rea-p6b-layout 1.1）、`TEXT_KEYS`、`textKey`、`checkTextFeatures`；`objectKind` 为 `text` 时不再报 `object:text`。
+- **新增** 文本自己的键：
+  - `msdf` / `outline` / `blur` / `dropshadow` 为真报 `text:msdf:<键>`；
+  - `anchor` 是 `none` / `center` 以外的值报 `text:anchor:<值>`（`center` 在居中裁切下中性，其余要按铺放算可见区域的边，语料 23 个）；
+  - `text` 挂脚本报 `text:script`，其它文本键挂脚本报 `text:script:<键>`（1e 删）；
+  - 中性：`depthtest`（正交场景不选 `_depth`；透视场景本来由 `camera:perspective` 挡）、`size`、`alignment`（不在文本的查找链上）、`copybackground`（文本不看它）、装饰参数（`outlinethickness` 等，只在 MSDF 路径用）。
+- **修改** `compilePass` 的程序检查给文本 pass 放行 `g_RenderVar0–3`、`g_Texture1`（`TEXT_UNIFORMS`，字体着色器声明了、普通路径不用）。
 
-**点 3 — 渲染（新增 `render/text.ts`；修改 `render/graph.ts`、`render/scene.ts`、`render/uniforms.ts`）**
-- **新增** `render/text.ts`：每个文本层的 GPU 资源：两组逐字四边形的顶点 / 索引缓冲（按容量建，`writeBuffer` 更新，三角形列表）、图集纹理（R8 / RGBA8，按脏区 `writeTexture`）、背景四边形。新的纹理引用 `{ kind: "atlas", key }`，按 `resolveTexture` 的形状解析（锚点 g）。
-- **修改** `graph.ts` 给文本层一个计划：
-  - 直接上屏：背景（开时）→ 普通字形 → 彩色字形，各用自己的 pass 与 blend；
-  - 有 effect 或 `colorBlendMode` 合成：合成 RT 先清成背景色或画 `composelayer_clearalpha`（初值是场景快照、alpha 清 0），再用 translucent 把两组字形画进去，然后接现有 effect 链；
-  - `compositeSize` 与基础矩阵对文本层取 `TextLayout.size`（锚点 e）；
-  - 字形绘制的平移：直接上屏 `(−w/2 − min(minX, 0), h/2 − maxY)` 加原点偏移，画进合成 RT `(pad.x − min(minX, 0), pad.y − minY)`（rea-p6b-layout 3.2–3.3）。
-- **修改** `scene.ts`：拓扑与索引给文本绘制开三角形列表；`buildableLayers`、`planProblems` 认识文本层与图集引用；`g_Texture0Resolution` 跟图集尺寸走。
+#### 点 3 — 渲染（新增 `render/text.ts`；修改 `render/graph.ts`、`render/scene.ts`、`render/uniforms.ts`、`render/state.ts`）
+- **修改** `graph.ts`：
+```ts
+export interface TextStep {
+  kind: "text";
+  part: "background" | "glyphs" | "color";
+  pass: ScenePass;
+  /** direct：画到场景目标（图层 MVP × directTranslation）；composite：画进合成 RT（RT 像素正交 × compositeTranslation） */
+  space: "direct" | "composite";
+  target: TargetRef;
+  blending: string;
+}
+export type LayerStep = DrawStep | ParticleStep | TextStep | ...
+  | { kind: "clear"; target: TargetRef; color?: "text-background" };   // 新增：清成 (背景色 × f, 图层 alpha)
+```
+  - 直接上屏：`needsComposite` 为假时，文本层的计划是 `[text background] → text glyphs → [text color]`（没有彩色字形时不画），混合按思路一节；
+  - 合成：基础 pass 位置换成「`clear`（`color: "text-background"`）」或「`snapshot` + `compose`（`clearAlphaPass`，`inputs[0]` 是快照）」，接着 `text glyphs` / `text color`（`space: "composite"`），然后 effect 链、passthrough 照旧；
+  - `compositeSize` 对文本层取 `layout.compositeSize`（不套 `max(4, ·)`，至少 1）。计划不依赖排版结果的内容，只依赖「有没有彩色字形 / 背景」：签名里带上这两项。
+- **新增** `render/text.ts`：每个文本层的 GPU 资源——普通字形、彩色字形、背景各一组顶点缓冲（`program.vertexPacking.pack`，位置 `(x, y, 0)` + UV）与索引缓冲（`text/mesh.ts` 的索引顺序，按字形数选 uint16 / uint32），三角形列表；图集纹理按字体键共享（R8 → `r8unorm`，RGBA8 → `rgba8unorm`，线性、repeat），建场景时整张上传，`sync` 按 `takeDirty()` 增量 `writeTexture`。
+- **修改** `scene.ts`：`stepPipeline` 给 `text` 步骤开三角形列表；`buildableLayers`、`planProblems` 认文本层与 `atlas` 引用；`resolveTexture` / `createDraw` 的纹理分支认 `atlas`；`clear` 带 `text-background` 时颜色从文本表与本层 alpha 现算；对文本层用 `layout.size` 代替 `layer.size`（图层四边形、矩阵、fbo）。
+- **修改** `uniforms.ts`：世界矩阵对文本层加局部平移 `layout.offset`；`text` 步骤的矩阵（直接上屏 = 图层 MVP × `directTranslation`，合成 = RT 像素正交 × `compositeTranslation`，两者都来自 `text/layout.ts`）。
+- **修改** `state.ts`：文本层的运行时数据（本层 `TextLayout`、所属图集）放 `SceneState.texts`，照 `particleInstances` / `dirtyParticles` 的挂法预留 `dirtyTexts`（1e 用）。
 
-**点 4 — 宿主（修改 `host.ts`、`render/renderer.ts`）**
-- **修改** `reload` 里在 `current.load` 之前：确保 `wpefont` 实例化、按 bundle 的文本表读主字体、预排一遍拿到要的回退字体并读好；`TextEngine` 经 `SceneRenderer.load` → `GpuScene.build` 传入（同粒子选项的传法），跨重编译保留。`wpefont` 缺失或实例化失败时，文本场景照报 `text:engine` 退回。
+#### 点 4 — 宿主（新增 `text/host.ts`；修改 `host.ts`、`render/renderer.ts`）
+- **新增** `SceneTexts`：持有 `Wpefont`（`loadWpefont`）与 `TextFonts`（字体字节跨重编译保留）；`prepare(bundle)` 新建这次加载的 `TextAtlases`，按对象顺序对全部文本层 `layoutText`，有 `missingFonts` 就读完再排（读取器：主字体按 `SceneText.font.location`，`system:<文件>` 读 `file:///<WINDIR>/Fonts/<文件>`，其余引擎路径读 WPE `assets`）。
+- **修改** `host.ts` `reload`：unsupported 判定之后、`ensureRenderer` 之前 `await this.texts.prepare(bundle)`，每个 `await` 后比 `generation`；wasm 不在或实例化失败时，有文本层的场景报 `text:engine` 退回（`fallbackAfterLoad`）。`SceneLoadOptions` 加 `texts`，`GpuScene.build` 的选项加 `texts`。
 
-**验收（1d）：**
-- `p6b-geom` / `-align` / `-wrap` / `-fx` / `-fallback` / `-extra`：用 `kabegame-dev` 渲染，和 WPE 抓帧比整帧（`kbp cmp frame`，按对象 bbox 归类），字形区域逐像素相同或只差混合的舍入（门槛按实测定，记进报告）。
-- 语料：没有动态文字、其余键都已支持的场景解锁（数字以扫描为准）；现有 38 张逐张相同；`object:text` 系列键按预期减少。
+#### 验收（1d）
+- **单测（Node）：** 文本层的计划（直接上屏有 / 没有背景与彩色字形、合成的两种初值、`colorBlendMode` 31 与合成）；假设备的编码轨迹（步骤、拓扑、索引数、矩阵）；用 1c 的 `p6b.json` 核对两条路径的平移与 RT 尺寸；能力表的键。
+- **真机：** `p6b-geom` / `-align` / `-wrap` / `-fx` / `-fallback` / `-extra` 导入 dev 库，`kabegame-dev` 渲染，和 WPE 抓帧（`A:\p6b\…` 的 rdc，`kbp rdc frame`）比整帧（`kbp cmp frame`，按对象 bbox 归类）；字形区域逐像素相同或只差混合的舍入（门槛按实测定，记进报告）。在 CEF 宿主里跑通 `wpefont` + `text/`（1b、1c 没做的那一项）。
+- **语料：** `kbp corpus scan` 比 HEAD 与改后：现有能渲染的逐张相同；`object:text` 系列消失、换成 `text:*`；数出解锁的场景。
+
+#### 实施方式
+子代理在 `kbp snapshot export HEAD ignore/p6/b1d/ov` 的副本里实现并跑单测（同时导出 `ignore/p6/b1d/head` 作基线；wpefont 的 wasm 不入库，要另拷进两份快照），做完 `kbp snapshot diff` 出补丁。我核对、复跑，`git apply --3way` 合进工作区，再重建 dev 的宿主产物（`KABEGAME_WPE_SCENE_OUT_DIR=target/debug/resources/wpe-scene`，`--mode development`）做真机与语料验收。
+
+#### 1d 实施记录（2026-11-12）
+
+照点 1–4 做完，子代理在 HEAD `a261a3b9` 的快照（`ignore/p6/b1d/ov`，基线 `ignore/p6/b1d/head`）里实现。补丁两份：
+- `ignore/p6/b1d/step.patch`：对 HEAD（`849a094f` 的 `apps/wpe-scene/src` 与 `a261a3b9` 相同），+3080 / −151，改 10 个文件、新增 7 个（`compile/texts.ts`、`render/text.ts`、`text/fields.ts`、`text/host.ts` 与三个测试）；`git apply --cached --check` 通过。
+- `ignore/p6/b1d/step-worktree.patch`：对导出时的工作区（别的会话没提交的 P4e 步骤 4 改了 `bundle.ts`、`host.ts`、`renderer.ts`，第一份补丁的上下文对不上）。三方合并（`diff3`，快照里做）只有 `renderer.ts` 一处冲突（`GpuScene.build` 的选项：取工作区的 `particles.audio`，再加 `texts`），合并结果 tsc 0 error、文本相关 8 个测试文件 144 个用例全过；生成时 `git apply --check` 通过。工作区还在变，合之前再查一次。
+
+**实现：**
+- **编译**（`compile/texts.ts`、`bundle.ts`）：`isTextObject` 的对象跳过模型，effect 与 colorBlendMode passthrough 照图像层编；`compileText` 排在它们之后（`padding` 看启用的 effect 个数）。字段照 WPE 的 setter 规整（`text` 只收字符串或对象的字符串 `value`、`font` 不是字符串保持缺省、枚举查不到取表里第一项、vec2 一个分量铺满、写成 `{value}` 的取 `value`）；主字体按资源查找顺序定位（`SceneFontFile`，`system:` 与找不到的位置为空）；四个宿主材质经 `compileHostPass` 编（字形槽 0 planned 格式 9，彩色字形槽 0 planned，程序检查放行 `TEXT_UNIFORMS`）；背景色 `g_Color` 写进背景 pass 的材质值，并登记成常量键 `objects/<i>/text/background`。
+- **能力表**（`features.ts`）：`isTextObject`、`TEXT_KEYS`、`checkTextFeatures`（文本键挂脚本：`text:script` / `text:script:<键>`）、`checkTextOptions`（MSDF 四个开关 `text:msdf:<键>`，`anchor` 除 none / center 报 `text:anchor:<值>`）；文本对象不再报 `object:text` 与各文本键，`alignment` 在文本上中性；`groupChildIssues` 把文本层的 clearalpha 算作读快照。
+- **渲染**：`graph.ts` 加 `TextStep`（`part`、`space`、`inputs`、`blending`）、`atlas` 纹理引用、`clear` 的 `color: "text-background"`、`TextPlanLayout` 与 `textCompositeSize`；`planLayer` 的文本分支（直接上屏 `[背景] → 字形 → [彩色字形]`；合成 `clear` 或 clearalpha 的 `compose` → 字形 → 照常的 effect 链 / passthrough / 上屏，上屏借 `basefont` 的 translucent、内缩分母是文字框整数部分）。`uniforms.ts` 的 `textMatrices` / `textUniformValues`（直接上屏 `VP · W · T(directTranslation)`，背景 `VP · W · T(−w/2 − pad.x, −h/2 − pad.y)`，合成 `ortho(0, W, 0, H, ±1000) · T(compositeTranslation)`）。`render/layout.ts` 的本地矩阵右乘 `T(offset)`（`LayerState.offset`，子对象跟着走）。`render/text.ts`：逐字四边形与背景四边形的顶点、uint16 索引（超过 16384 字形退 uint32）、`TextAtlasTextures`（每个 `GlyphAtlas` 一张 `r8unorm` / `rgba8unorm`，线性、repeat，建场景整张传，`sync` 传脏区）。`scene.ts`：文本 draw 带索引缓冲、三角形列表、`layerSize` 取排版尺寸（四边形、矩阵、fbo）、`clear` op 每帧按背景常量与图层 alpha 现算清屏色。`state.ts`：`texts`（`setTexts` 写排版与偏移）、文本 pass 与背景常量进常量表、文本层冻结。
+- **宿主**（`text/host.ts`、`host.ts`、`renderer.ts`）：`SceneTexts` 跨重编译保留 wasm 与 `TextFonts`，每次加载新建图集，按对象顺序排、缺字体就读完重排（每对象最多 16 轮）；`reload` 在 unsupported 判定之后、声音与 GPU 资源之前准备，每个 await 后比代数；wasm 不在或排版出错抛 `text:engine`。`SceneLoadOptions.texts` → `GpuScene.build` 的 `texts`。
+
+**和计划不同的地方：**
+1. `SceneLayer.text` 是可选的（`text?: SceneText | null`，`compileScene` 总给 null 或文本表）：必填的话各处手写测试图层都要改（P5b 步骤 5 加 `instanced` 改了十几个测试文件），同 `bundle.sounds?` 的做法。
+2. 图像层的模型部分搬进 `compileImageModel`（内容不变），循环里文本对象跳过它；`hasChildren` 移到外面。没把 passthrough / 组上屏改成用 `compileHostPass`（少动别的会话在改的行）。
+3. `TextFields` 与 `TEXT_DEFAULTS` 拆到 `text/fields.ts`（`layout.ts` 原样再导出）：编译 Worker 只要它们，不必连带图集与 wpefont 的包装进 Worker。
+4. 文本层 effect 的 `visible`：绑定目标仍是 `effect`，`SceneState.fromBundle` 把文本层当冻结的图层（切换 → `"recompile"`），属性与脚本两条路都整场重编译；`variantPlans` 对文本层返回空。计划写的是「登记成重编译目标」，效果相同，且覆盖了脚本 API 的写入。
+5. 背景 pass 只要开了 `opaquebackground` 就编、clearalpha 只要「可能合成」（有任何 effect，含绑了属性的关着的，或 cbm ∉ {0, 31}）且没开背景就编，用哪个由渲染图按当时的开关选。
+6. `backgroundcolor` 的就地写：LDR，或 HDR 下 `backgroundbrightness` 没绑属性且为 1 时，是背景常量的 `constant` 目标（类型 vec3，取值走材质 setter：数字铺满、字符串按空格切）；否则重编译。`backgroundbrightness` 只在 HDR 下读（绑了属性登记成重编译），LDR 下不读、不登记。合成路径的清屏色读同一份常量。
+7. MSDF 开关与 `anchor` 按生效值（含当前用户属性）在 `compileText` 里查，绑了属性登记成重编译；`checkTextFeatures` 只管挂脚本的键。
+8. 没预留 `dirtyTexts`：`DirtyState` 加字段会让 `render/p3a.test.ts` 的整体比较挂掉，1d 也没有写入者，留给 1e。
+9. `TextStep` 多一个 `inputs`（图集引用），建 draw 时和别的步骤走同一条绑定路径。普通字形为 0 个（全是彩色字形）时不出 `glyphs` 步骤，WPE 这时画不画空网格没查。
+10. 图集扩容后的纹理重建与网格重写留给 1e：`sync` 遇到尺寸变了只记一条警告。
+11. 系统字体目录：宿主页面拿不到 `%WINDIR%`，`wpe_scene_target` 也不给。宿主的 `SceneTarget` 加了可选的 `fontsDir`（后端现在不填），缺省按 `C:\Windows\Fonts`；`WINDIR` 不在 C 盘时系统字体读不到（`file:` 闸门放行的是真实的 `%WINDIR%\Fonts`），按读不到处理（主字体换 arial 也读不到时整层不画）。建议后端在 `WpeSceneTarget` 加 `fonts_dir`。
+12. 回退链里的引擎路径（Twemoji）只查 WPE `assets`，不查工程与 `scene.pkg`（WPE 先查工程；语料里没有工程自带 Twemoji 的）。
+13. 文本层上的 effect 以前不编（文本对象在「没有 image」处就结束了），现在照图像层编，它们自己的不支持项随之出现在语料里（见下）。
+
+**验证：**
+
+| 项 | 结果 |
+|---|---|
+| tsc（`ov`） | 0 error |
+| vitest（`ov`，带 `KABEGAME_WPE_ROOT`） | 82 个文件、2084 个用例：2083 过、1 失败（`compile/pipeline.test.ts` 的 `3830255100: 219 次请求`）；`head` 同样这一个失败（79 个文件、2031 个用例、2030 过），1b、1c 时就有 |
+| 新增用例 | `compile/texts.test.ts` 14、`render/text.test.ts` 29、`text/host.test.ts` 10，带 wasm 与 WPE 的都真跑了（真翻译器编 WPE 自带的 `font` / `flat` / `composelayer` 四个材质，程序检查不报） |
+| 矩阵对 WPE | `p6b-fx` 第 181 帧：f1 / f2 / f3 / f5 字形画进合成 RT、f4 背景与字形、f6 字形、f1 clearalpha 与上屏的 MVP，x、y、z 系数与平移相对误差 < 1e-6；`p6b.json` 六个工程 44 个对象经世界矩阵（含偏移）与 `textMatrices` 的排版原点、RT 里的原点、合成四边形中心、合成 RT、图层 size、上屏内缩、背景四边形全部相同 |
+| 变异检查（`ignore/p6/b1d/mutate.cjs`） | 10 处全部检出：RT 平移 x / y 对调、直接上屏不加 `directTranslation`、背景不减 padding、忽略对齐偏移、cbm 31 不改 additive、清屏色恒 0、UV 顶点顺序、`verticalalign` 回退项、合成 RT 套 max(4, ·)、系统字体目录 |
+| 格式 | 改动的文件 Prettier 通过，LF |
+
+**语料**（`ignore/p6/b1d/corpus-head.json` → `corpus-ov.json`，`corpus-diff.txt`）：173 个场景，干净 47 → 47，新增无、掉出无；变化的 92 张都是文本场景。`object:text`、`object:font`、`object:pointsize`、`object:horizontalalign`、`object:verticalalign`（92 张）等文本键全部消失；新增 `text:script` 87 张、`text:script:maxwidth` 6、`text:anchor:*` 5 张（left 2、right 2、topright 2、top、topleft、bottomleft、bottomright 各 1，3643916956 一张占了 6 种）、`text:msdf:dropshadow` 2、`text:msdf:outline` 1；文本层上的 effect 带出 `uniform:g_AudioSpectrum16Left/Right` 4 张、`model:passthrough:children:framebuffer` 2 张、`combo:REFLECTION` 与 `material:alphawriting` 1 张（3498150384），这些场景本来就不干净。**解锁 0 张**：只剩 `text:script` 的是 `2304304373`、`2391389126`、`3824424509`（1e）；没有 `text:script` 的 5 张（3146703458、3605722997、3828324728、3830665420、dino_run）另有别的项。
+
+**没做 / 要真机确认：**
+- 真机渲染与整帧对比（`p6b-*` 导入 dev 库、`kabegame-dev` 渲染、`kbp cmp frame`）没做；CEF 里跑 `wpefont` + `text/` + 新的绘制也没做。
+- 只在 Node 里对过矩阵与几何；要真机确认的是：字形与彩色字形的混合（translucent 逐字 over、cbm 31 的 additive）、彩色字形不反预乘的边缘、背景 `flat` 四边形与合成路径清屏色的实际颜色（清屏没有读过 WPE 的 Clear 值）、clearalpha 读到的快照与 alpha 清 0、合成 RT 采样（clamp，抓帧是 ClampEdge）、R8 图集按 `.r` 采样、线性 + repeat 在缩放旋转下的边缘。
+- `anchor: center` 当中性是按「居中盖满时裁边相等」推的，留白样式（`fit` / `center`）下没查。
+- 透视场景（`_depth` 材质）、MSDF、文字变化（1e）都不在 1d。
+
+#### 1d 复核（Claude，2026-11-12）
+
+- **越界**：工作区的 `apps/wpe-scene/src` 在合并前没有文本代码，子代理只写了 `ignore/p6/b1d/`。两份补丁的增删行完全相同，只差上下文；`step-worktree.patch` 合并前 `git apply --check` 通过，已应用到工作区。
+- **读码**：编译、渲染图、矩阵、状态、宿主逐段读过，和点 1–4 一致。`compileImageModel` 是原样搬移（`hasChildren` 换成 `parents.includes(index)`，外层本来就在 `passthroughModel` 分支里，等价）。`freezeLayer` 只影响 effect 开关，文本层的变换、颜色照常就地写。
+- **变异**：另做 12 处（`ignore/p6/b1d` 下的 `wtm` 快照，按原字节还原）。10 处检出，漏 2 处，已补用例：
+  - `textIndexData` 的 uint16 / uint32 边界；
+  - 背景四边形用 `compositeSize` 还是图层 `size`：测试夹具的文字框是整数，两者相等。把背景层的文字框改成带小数（149.5）后能区分。
+  补用例后 12 处全部检出。
+- **测试**：工作区 tsc 0 error；文本单测 6 个文件 74 passed；整个宿主 89 个文件 2191 passed、6 failed，都与本步无关（P7d 的 `conditions.test.ts` 4 个、P4e 的 `host.audio().raw` 1 个、已知的语料请求次数 1 个）。
+- **dev 探针**：`render_scene` 走 `renderFrame`，它直接调 `GpuScene.build`，没排文本，报 `render:text-layout`。新增 `dev/probeTexts.ts`，`renderFrame` 建场景前同样排好，用完释放字体。
+- **真机**（dev，CEF 149.0.7827.201，重建 dev 宿主产物；1d 之前宿主入口不引用 wpefont，产物里没有这份 wasm，现在有）：
+  - 六个 `p6b-*` 工程按 1920×1080 渲染，和 WPE 上屏整帧比（排除 FR / CLK）：五个逐像素相同，`p6b-fx` 1 个像素差 1；
+  - 宿主按产品路径加载 `p6b-fx` 后渲染，遮掉右下角的哈希和探针的结果相同；
+  - 测完 `projects_remove` 移除了测试行。
+- **语料排版**（`ignore/p6/b1d/layoutscan/`）：92 张文本场景在 Node 里用真 wasm 排版全部成功：981 层、8476 个字形，中位 5 ms、最慢 189 ms，46 层排版为空。
+  - 主字体找不到的 3 张：`3000562427`、`3643916956` 的工程里确实没有这个文件，WPE 同样会退回 arial。
+  - `2887099508` 要的是 `fonts/三极萌萌简体.ttf`，pkg 里有一个同样大小、名字乱码的条目（像是 GBK 编码的文件名），WPE 能不能按 UTF-8 路径找到没查。
+- **遗留**：
+  1. 后端在 `WpeSceneTarget` 加 `fonts_dir`（Windows 填 `%WINDIR%\Fonts`），宿主就不用写死 C 盘；
+  2. pkg 条目名的编码（上面的 `2887099508`）；
+  3. `anchor: center` 在留白样式下的裁边；
+  4. 背景色绑属性的就地写，以及预览 / 桌面的实时显示，还没在真机上测（回归 T10、T11）。
 
 ### 1e — 动态文字
 

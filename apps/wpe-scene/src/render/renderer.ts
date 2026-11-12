@@ -23,6 +23,7 @@ import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
+import type { TextLayout } from "../text/layout";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import {
   BLIT_SAMPLER,
@@ -84,6 +85,11 @@ export interface SceneLoadOptions {
   ignoreUnsupported?: boolean;
   /** 新状态建好后、首帧绘制前同步执行。 */
   beforeFirstFrame?: (state: SceneState) => void;
+  /**
+   * 文本层的排版结果（P6b 1d，`objects` 下标 → `TextLayout`）：宿主在加载前排好（`text/host.ts` 的 `SceneTexts.prepare`），原样交给
+   * `GpuScene.build`。bundle 里有文本层而没给时整场画不了（`render:text-layout`）。
+   */
+  texts?: ReadonlyMap<number, TextLayout>;
 }
 
 /** 一条就地写：绑定 + 新值（宿主按 `planApply` 挑出来）。 */
@@ -290,6 +296,7 @@ export class SceneRenderer {
     const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, {
       ignoreUnsupported: options.ignoreUnsupported,
       particles: { passes: particlePasses(fps), fps, cursor: this.cursorOf(placement) },
+      texts: options.texts,
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();

@@ -13,9 +13,10 @@ import type { SceneLayer, SceneSpriteSheet, SceneTexture } from "../compile/bund
 import { particleRenderer, type ParticleRenderer } from "../compile/particles";
 import { orientationVectors, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import { trailRenderVar0 } from "../particles/ropetrail";
+import { compositeTranslation, directTranslation, type TextLayout } from "../text/layout";
 import type { UniformLayout } from "../wpesl2wgsl";
-import type { DrawStep } from "./graph";
-import { identity, invert, multiply, normalMatrix, orthographic, scaling, type Mat4 } from "./math";
+import { textCompositeSize, type DrawStep, type TextStep } from "./graph";
+import { identity, invert, multiply, normalMatrix, orthographic, scaling, translation, type Mat4 } from "./math";
 import type { LayerState } from "./state";
 
 /** 翻译器反射的一格 uniform（`declared` 已并入胶水的 `UniformLayout`，这个名字留作别名）。 */
@@ -375,6 +376,80 @@ export function layerRefreshNames(passUniforms: Record<string, number[]>): strin
  */
 export function drawUniformValues(input: DrawUniformInput): Record<string, number[]> {
   const matrices = drawMatrices(input.step, input.world, input.layer.size, input.viewProjection);
+  const values = staticBuiltins({
+    ...matrices,
+    modelViewProjectionInverse: invert(matrices.modelViewProjection),
+    layer: input.layer,
+    colorScale: input.colorScale,
+    textures: input.textures,
+    screenSize: input.screenSize,
+    eye: input.eye,
+    ambient: input.ambient,
+    skylight: input.skylight,
+  });
+  for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
+  return values;
+}
+
+/** 文本画进合成 RT 时正交投影的深度范围：WPE 抓帧的 z 系数是 1/2000、平移 0.5（p6b-fx f1 事件 65），字形 z 为 0 落在 0.5。 */
+const TEXT_RT_DEPTH = 1000;
+
+/**
+ * 文本层一次绘制的变换（P6b 1d，rea-p6b-layout 3.2、4；p6b-fx 抓帧逐项对上，`render/text.test.ts`）。`world` 是图层的世界矩阵，已含对齐
+ * 偏移 `T(offset)`（`render/layout.ts` 的 `layerLocalMatrix`）；`viewProjection` 是这次画到场景的视图投影（带视差、抖动，组里是组的局部
+ * 正交），画进合成 RT 时不用。
+ * - 直接上屏的字形（`glyphs` / `color`）：模型 = `world · T(directTranslation)`（`FUN_140258050`），包围盒中心落在对象原点；
+ * - 直接上屏的背景：模型 = `world · T(−w/2 − pad.x, −h/2 − pad.y)`，四边形是整数文字框 `[0, W] × [0, H]`（f4 事件 203）；
+ * - 画进合成 RT（`FUN_140257d70`）：视图投影 = RT 像素的正交 `ortho(0, W, 0, H)`（y 向上，W、H 是合成 RT 尺寸），模型 =
+ *   `T(compositeTranslation)`，包围盒左下角落在 `(pad.x, pad.y)`（f1 事件 65、f5 事件 240）。
+ */
+export function textMatrices(
+  step: Pick<TextStep, "part" | "space">,
+  world: Mat4,
+  viewProjection: Mat4,
+  layout: Pick<TextLayout, "mesh" | "padding" | "compositeSize">,
+): { modelViewProjection: Mat4; model: Mat4; viewProjection: Mat4 } {
+  const f = Math.fround;
+  if (step.space === "composite") {
+    const [width, height] = textCompositeSize(layout);
+    const projection = orthographic(0, width, 0, height, TEXT_RT_DEPTH, -TEXT_RT_DEPTH);
+    const [x, y] = compositeTranslation(layout as TextLayout);
+    const model = translation(x, y, 0);
+    return { modelViewProjection: multiply(projection, model), model, viewProjection: projection };
+  }
+  let x = 0;
+  let y = 0;
+  const mesh = layout.mesh;
+  if (mesh && step.part === "background") {
+    const { minX, minY, maxX, maxY } = mesh.box;
+    x = f(f(f(maxX - minX) * -0.5) - layout.padding[0]);
+    y = f(f(f(maxY - minY) * -0.5) - layout.padding[1]);
+  } else if (mesh) [x, y] = directTranslation(mesh);
+  const model = x === 0 && y === 0 ? world : multiply(world, translation(x, y, 0));
+  return { modelViewProjection: multiply(viewProjection, model), model, viewProjection };
+}
+
+export interface TextUniformInput {
+  step: Pick<TextStep, "part" | "space">;
+  /** 文本图层的当前状态：`g_Color4 = (color · k, alpha)`、背景的 `g_Alpha = alpha`（rea-p6b-layout 5.1、4）。 */
+  layer: LayerState;
+  layout: Pick<TextLayout, "mesh" | "padding" | "compositeSize">;
+  world: Mat4;
+  viewProjection: Mat4;
+  /** 本 pass 的材质常量：背景 pass 的 `g_Color`（背景色）就在这里，优先于内置值。 */
+  constants: Record<string, number[]>;
+  colorScale: number;
+  screenSize: [number, number];
+  /** 按槽位：字形 pass 的槽 0 是图集尺寸（`g_Texture0Resolution`，只有 MSDF 路径读）。 */
+  textures: readonly (TextureSize | undefined)[];
+  eye: readonly number[];
+  ambient?: readonly number[];
+  skylight?: readonly number[];
+}
+
+/** 文本绘制的全部静态 uniform：变换见 `textMatrices`，颜色与其余内置值同图层（`staticBuiltins`），材质常量覆盖。 */
+export function textUniformValues(input: TextUniformInput): Record<string, number[]> {
+  const matrices = textMatrices(input.step, input.world, input.viewProjection, input.layout);
   const values = staticBuiltins({
     ...matrices,
     modelViewProjectionInverse: invert(matrices.modelViewProjection),

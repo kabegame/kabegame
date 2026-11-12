@@ -33,6 +33,24 @@
 | [ ] | B13 预览 · `1333579536` | Windows，图库预览 | 打开创意工坊 `1333579536` 的预览 | 实时渲染；整屏组合层的效果和 WPE 一致 | 待用户确认。需要 P4e 的粒子子系统一起 |
 | [ ] | B14 桌面 | Windows，窗口模式 | 把 B12、B13 的场景各设为桌面壁纸 | 和预览一致 | 待用户确认 |
 
+## 场景壁纸 P6b 1d：静态文本的编译与渲染
+
+2026-11-12 Windows dev。文本对象作为图层进场景：编译期 `compile/texts.ts` 规整字段、定位主字体、编 WPE 自带的四个字体材质；宿主 `text/host.ts` 的 `SceneTexts` 在建 GPU 资源前排好全部文本层；渲染图新增 `text` 步骤（直接上屏「背景 → 字形 → 彩色字形」，合成路径先清成背景色或 clearalpha 再画字形，之后 effect 链照图像层），矩阵 `textMatrices`，字形图集是运行时纹理（`render/text.ts`）。能力表不再报 `object:text` 与各文本键，改报 `text:script`、`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>`。文字随脚本或属性变化是 1e。dev 探针 `renderFrame` 也排文本（`dev/probeTexts.ts`）。验收文件在 `ignore/p6/b1d/`，WPE 真值在 `ignore/p6/b0/out/frames/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 类型与格式 | Windows | 宿主 `tsc --noEmit`；Prettier `--check` 本步涉及的 19 个文件 | 0 error、格式通过 | 2026-11-12 Claude：通过 |
+| [x] | T2 文本单测 | Node，vitest | `apps/wpe-scene` 下带 `KABEGAME_WPE_ROOT` 跑 `src/render/text.test.ts src/compile/texts.test.ts src/text/` | 全过 | 2026-11-12 Claude：6 个文件 74 passed（真 wasm、真翻译器编 WPE 的 `font` / `flat` / `composelayer` 材质） |
+| [x] | T3 整个宿主 vitest | Node，vitest | 工作区带 `KABEGAME_WPE_ROOT` 跑全部 | 本步的用例全过 | 2026-11-12 Claude：89 个文件 2191 passed、6 failed，都和本步无关：`compile/conditions.test.ts` 4 个（别的会话进行中的 P7d，不含本步的工作区同样失败）、`host.test.ts` 1 个（P4e 步骤 4 给 `host.audio()` 加的 `raw` 字段）、`compile/pipeline.test.ts` 的语料请求次数（1b 时就在） |
+| [x] | T4 变异检查 | Node，快照 | 子代理 10 处（`ignore/p6/b1d/mutate.cjs`）；Claude 另 12 处：直接上屏字形与彩色字形对调、彩色图集引用、偏移 x / y 对调、RT 正交上下翻、LDR 也乘背景亮度、开背景不清屏、空 `text` 不算文本对象、uint16 上限、枚举回退、`{value}` 取值、`maxrows` 取整、背景四边形用图层尺寸 | 每处都有用例失败 | 2026-11-12 Claude：22 处全部检出；Claude 那 12 处里原先漏 2 处（uint16 上限、背景四边形尺寸），补了用例（`textIndexData` 边界、背景层文字框带小数）后检出 |
+| [x] | T5 和 WPE 整帧比 | Windows dev，屏外宿主（`render_scene`，1920×1080） | 导入 `p6b-geom`、`p6b-align`、`p6b-wrap`、`p6b-fx`、`p6b-fallback`、`p6b-extra`，渲染后 `kbp cmp frame --meta` 对 WPE 上屏整帧 | 排除 FR / CLK 后逐像素相同 | 2026-11-12 Claude：五个最大差 0；`p6b-fx` 1 个像素差 1。不排除 FR / CLK 时差异只在右下角 9600 像素。覆盖直接上屏、合成（effect、清成背景色、clearalpha）、背景、CJK 回退、彩色 emoji |
+| [x] | T6 宿主实际加载 | Windows dev，`host_open` 屏外宿主 | 宿主按产品路径（`reload` → `renderer.load(texts)`）加载 `p6b-fx`，`host.renderFrame(1.5)`；遮掉右下角（x ≥ 1600、y ≥ 960）后的哈希与 T5 的探针渲染图同样处理后的哈希比 | 相同 | 2026-11-12 Claude：相同；应用日志只有工程里没有的资源的 `deny file: … NotFound`（查找顺序，图像层同样），没有 WebGPU 错误或 `text:engine` |
+| [x] | T7 语料编译 | Node，`kbp corpus scan` / `diff` | HEAD 快照与本步快照各扫一次 | 只在文本相关的键上变化，干净场景不掉 | 2026-11-12 子代理：173 张，干净 47 → 47，解锁 0；变化的 92 张都是文本场景，新增 `text:script` 87、`text:script:maxwidth` 6、`text:anchor:*` 5、`text:msdf:*` 3；文本层上的 effect 现在照编，带出 `uniform:g_AudioSpectrum16*` 4 张等（这些场景本来就不干净） |
+| [x] | T8 语料排版 | Node，真 wasm | `ignore/p6/b1d/layoutscan/`：92 张文本场景编译后跑 `SceneTexts.prepare`（同宿主，系统字体读 `C:\Windows\Fonts`） | 全部排版成功 | 2026-11-12 Claude：92 张全部成功、没有告警，981 层、8476 个字形，中位 5 ms、最慢 189 ms；46 层排版为空；3 张主字体找不到、退回 arial（2 张工程里确实没有；`2887099508` 的 pkg 条目名像是 GBK 编码，WPE 能否找到没查） |
+| [x] | T9 字体引擎缺失 | Node，vitest | `text/host.test.ts`：引擎给 null | 抛 `text:engine`，宿主退回预览图 | 2026-11-12 Claude：单测通过；真机没挪走 wasm 测 |
+| [ ] | T10 改背景色属性 | Windows dev | `backgroundcolor` 绑属性的文本场景，在属性面板改颜色 | 就地生效、不重编译；HDR 且亮度不为 1 时重编译 | 未测：测试工程里没有绑属性的背景色 |
+| [ ] | T11 预览与桌面 | Windows，图库预览 / 窗口模式 | 把一张只有静态文字的场景打开预览、设为桌面 | 实时渲染，和 T5 一致 | 未测：语料里没有只差静态文字的场景（只剩 `text:script` 的 3 张要 1e） |
+
 ## 场景壁纸 P6b 1c：文本的字体回退、排版与图集
 
 2026-11-12 Windows。场景宿主新增 `apps/wpe-scene/src/text/`（纯 TS、不碰 GPU，还没有调用方，文本对象照旧退回预览图）：`fonts.ts`（按「字体 + 字号」的 face 列表与 WPE 回退链、逐码点分段）、`layout.ts`（照 `FUN_1401b0410` 排版：分行、断行、省略号、两端对齐、行内对齐、文字框、对齐偏移、图层与合成 RT 尺寸）、`atlas.ts`（逐行移植 `FUN_1401ae080` 的装箱器）、`mesh.ts`。`wpefont` 加导出 `wpefont_glyph_box`（WPE 取框的 `FT_LOAD_NO_BITMAP` 轮廓框，TS `WpefontFace.box`），`wpefont_glyph` 回到 6 个 int。基线 `src/text/fixtures/p6b.json` 由 `apps/wpe-scene/scripts/fixtures/make_text_fixture.py` 从 WPE 抓帧生成。计划见 `.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「1c」。
@@ -48,7 +66,7 @@
 | [x] | T7 类型与格式 | Windows | 宿主 `tsc --noEmit`、Prettier `--check src/text src/wpefont`、`deno fmt --check scripts/build-wpefont.ts` | 本步的文件 0 error、格式通过 | 2026-11-12 Claude：本步 0 error；同轮另有 1 个错误在别的会话正改的 `src/render/events.test.ts`（`SceneLayer` 缺 `group` 等字段），与本步无关 |
 | [x] | T8 整个宿主 vitest | Node，vitest | `apps/wpe-scene` 下带 `KABEGAME_WPE_ROOT` 跑全部 | 本步的用例全过 | 2026-11-12 Claude：77 个文件 1933 passed、1 failed——`compile/pipeline.test.ts` 的语料请求次数（`3830255100: 219 次请求`），1b 时就在，`compile/` 正被别的会话修改 |
 | [x] | T9 耗时 | Node 26 | `ignore/p6/b1c/work/perf/` 的 vitest：字体就绪后同一对象反复排（热），新图集再排（冷，含栅格化） | 每帧都排也撑得住 | 2026-11-12 Claude：热 0.03 ms（9 字）– 0.13 ms（70 字、两行带省略号），冷 1–2.7 ms |
-| [ ] | T10 CEF 里跑 `text/` | Windows dev | 宿主里加载字体、排 `p6b-*`、比图集 | 和 Node 相同 | 未测：`text/` 还没有调用方，1d 接进宿主时做 |
+| [x] | T10 CEF 里跑 `text/` | Windows dev | 宿主里加载字体、排 `p6b-*`、比图集 | 和 Node 相同 | 2026-11-12 Claude（1d 时测）：宿主在 CEF 里排六个工程并渲染，整帧和 WPE 逐像素相同（见 1d 的 T5、T6） |
 
 ## 场景壁纸 P6b 1b：字体引擎 `wpefont` 进仓库
 

@@ -1497,7 +1497,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 
 ## 字体引擎 `wpefont`（P6b 1b 起）
 
-文本对象（P6b）照 WPE 的画法：FreeType 栅格化、HarfBuzz 排字，逐字四边形加图集。WPE 的字形位置和位图由这两个库的具体版本与加载参数决定，自己写栅格化器对不上像素，所以直接把同版本的库编成 wasm 放进场景宿主，排版规则（回退链、断行、对齐、图集装箱）另在 TS 里照读码写（1c 起）。**文本对象本身还没实现**，场景里有文本对象照旧退回预览图；1b 只把字体引擎接进仓库。完整接口契约见 [src-tauri/wpefont/README.md](../../src-tauri/wpefont/README.md)，计划与实测见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「步骤 1a」「1b」。
+文本对象（P6b）照 WPE 的画法：FreeType 栅格化、HarfBuzz 排字，逐字四边形加图集。WPE 的字形位置和位图由这两个库的具体版本与加载参数决定，自己写栅格化器对不上像素，所以直接把同版本的库编成 wasm 放进场景宿主，排版规则（回退链、断行、对齐、图集装箱）另在 TS 里照读码写（1c 起）。静态文本 1d 起照 WPE 画（见下一节「文本对象」），文字随脚本或属性变化是 1e。完整接口契约见 [src-tauri/wpefont/README.md](../../src-tauri/wpefont/README.md)，计划与实测见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「步骤 1a」「1b」。
 
 | 项 | 内容 |
 |---|---|
@@ -1517,3 +1517,24 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 **对照结论**（1c）：`p6b-*` 六个静态工程的 44 个对象，四边形、原点、文字框、合成 RT 尺寸和 WPE 全部相同；21 张图集（含 1 张彩色）解码后逐字节相同，包括 1a 剩下的 opensticks「2」那 1 个像素（空格的 1×1 格子按差一规则压在「2」的第一列上，清零下一行时清掉了它）。
 
 **CEF**（1b，dev，Chrome/149.0.7827.201）：宿主里编译、实例化成功（wasm 异常处理可用）；NotoSans 32 / 200 号、`arial.ttf`、`msyh.ttc` 的排字与位图哈希和 Node 逐项相同；没放行的 `times.ttf` 被 `file:` 闸门拒（`deny file: … OutsideRoot`）。
+
+## 文本对象（P6b 1d 起）
+
+文本对象在 WPE 里是一种图层：变换、可见性、`color` / `alpha` / `brightness`、effect 链和图像层一样，只是基础 pass 画的是逐字四边形，四边形来自排版（`text/layout.ts`，1c）。1d 做静态文字：排版在加载时做一次，文字随脚本或属性变化（时钟）是 1e，`ITextLayer` 脚本 API 是步骤 2。计划与读码依据见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「1d」。
+
+| 项 | 内容 |
+|---|---|
+| 认定 | `isTextObject`：`text` 键不为 null（`text: ""` 也算，整层不画）。能力表不再报 `object:text` 与各文本键；`alignment`、`depthtest`（正交场景）、MSDF 的装饰参数在文本上中性 |
+| 编译（`compile/texts.ts`） | 文本对象跳过模型，effect 与 colorBlendMode passthrough 照图像层编，文本表排在它们之后（`padding` 看启用的 effect 个数）。字段照 WPE 的 setter 规整：`text` 只收字符串（或对象的字符串 `value`），枚举查不到取表里第一项（`horizontalalign` → left、`verticalalign` → center、`anchor` → none），vec2 一个分量铺满。主字体按资源查找顺序定位（工程 → `scene.pkg` → WPE `assets`），`system:` 字体由宿主读。四个 WPE 自带材质经宿主 pass 编：`basefont`（R8 图集）、`basefontrgba`（彩色图集）、`fontbackground`（开 `opaquebackground` 时）、`composelayer_clearalpha`（没开背景、可能走合成时）。背景色 `backgroundcolor × (HDR ? backgroundbrightness : 1)` 是常量键 `objects/<i>/text/background` 的 `g_Color`，LDR（或 HDR 下亮度恒为 1）时就地可改，其余绑定登记成重编译 |
+| 排版（`text/host.ts`） | 宿主主线程的 `SceneTexts` 在声音、脚本与 GPU 资源之前排好全部文本层：wasm 实例与读过的字体跨重编译保留，每次加载新建图集（装箱顺序同 WPE），按对象顺序排、缺字体就读完重排（每对象最多 16 轮），每个 await 后比加载代数。wasm 不在或排版出错报 `text:engine`、退回预览图。系统字体目录由 `wpe_scene_target` 的可选 `fontsDir` 给，后端现在不填，缺省 `C:\Windows\Fonts` |
+| 渲染图（`render/graph.ts`） | `text` 步骤（`part`：`background` / `glyphs` / `color`；`space`：`direct` / `composite`）。直接上屏：`[背景] → 普通字形 → [彩色字形]`，colorBlendMode 31 时全部 additive，否则材质的 translucent。合成：RT 先「清成 (背景色, 图层 alpha)」（`clear` 的 `color: "text-background"`，每帧现算）或 clearalpha（`compose` 角色、读快照），再画字形（translucent），之后 effect 链、passthrough、上屏照图像层，上屏 UV 内缩的分母是文字框的整数部分。合成 RT 取排版的 `compositeSize`（`trunc(w + 2·padding)`，不套 max(4, ·)）。排版为空的层不画；文本层的 effect 开关会改 `padding` 与文字框，切换整场重编译 |
+| 矩阵（`render/uniforms.ts` 的 `textMatrices`） | 直接上屏的字形 `VP · W · T(directTranslation)`；背景 `VP · W · T(−w/2 − pad.x, −h/2 − pad.y)`，四边形是整数文字框；画进合成 RT `ortho(0, W, 0, H, ±1000) · T(compositeTranslation)`。对齐偏移是本地矩阵最后的 `T(offset)`（`LayerState.offset`），子对象跟着走 |
+| GPU（`render/text.ts`） | 每字形 4 个顶点、6 个索引的三角形列表，索引 uint16（超过 16384 个字形换 uint32）。图集是第一种运行时纹理：每个 `GlyphAtlas` 一张（`r8unorm` / `rgba8unorm`，线性、repeat，同一「字体 + 字号」的层共用），建场景时整张上传，`sync` 按脏区增量上传；扩容（尺寸与 UV 全变）1d 只记警告，留给 1e |
+| 不支持项 | `text:script`（`text` 挂脚本，1e）、`text:script:<键>`（其它文本键挂脚本）、`text:msdf:<msdf / outline / blur / dropshadow>`（MSDF 路径，不做）、`text:anchor:<值>`（none / center 以外，要按铺放算裁边）、`text:engine`、`render:text-layout`（没交排版结果） |
+| dev 探针 | `renderFrame` 建场景前同样排好文本层（`dev/probeTexts.ts`），`render_scene` 能直接渲染文本场景 |
+
+**对照结论**（1d，dev，Chrome/149.0.7827.201）：`p6b-geom`、`p6b-align`、`p6b-wrap`、`p6b-fx`、`p6b-fallback`、`p6b-extra` 六个工程按 1920×1080 渲染，和 WPE 的上屏整帧（排除 FR / CLK）比：五个逐像素相同，`p6b-fx` 只有 1 个像素差 1。覆盖直接上屏、合成路径（effect、清成背景色、clearalpha）、背景、CJK 回退与彩色 emoji。宿主实际加载的画面和探针的画面（遮掉 FR / CLK）哈希相同。
+
+**语料**（1d）：173 张场景干净 47 → 47，解锁 0 张。92 张文本场景里 87 张有 `text:script`（时钟类，1e）；只剩 `text:script` 的是 `2304304373`、`2391389126`、`3824424509`。文本层上的 effect 以前不编，现在照编，带出了它们自己的不支持项（`uniform:g_AudioSpectrum16*` 4 张、`model:passthrough:children:framebuffer` 2 张等），这些场景本来就不干净。92 张文本场景在 Node 里用真 wasm 排版全部成功（981 层、8476 个字形，中位 5 ms、最慢 189 ms）；3 张的主字体找不到、退回 arial，其中 2 张是工程里确实没有这个文件，`2887099508` 的 pkg 条目名像是 GBK 编码，WPE 能不能按 UTF-8 路径找到没查。
+
+**已知差异与后续**：`anchor: center` 当中性是按「居中盖满时裁边相等」推的，留白样式（`fit` / `center`）下没查；回退链里的 Twemoji 只查 WPE `assets`；普通字形为 0 个时不出 `glyphs` 步骤（WPE 画不画空网格没查）；`WINDIR` 不在 C 盘时系统字体读不到（后端给 `fontsDir` 后解决）。

@@ -478,6 +478,99 @@ const SOUND_KEYS = new Set([
   "spatialization",
 ]);
 
+/**
+ * 文本对象（P6b 1d）：`text` 键不为 null（rea-p6b-layout 1.1，工厂 `0x140190332` 只看有没有这个成员）。`text: ""` 也算（空文字，整层
+ * 不画）；`objectKind` 按 `active()` 认不出空串，所以没有别的内容时另按键判。`compileScene` 与能力表共用。
+ */
+export function isTextObject(object: SceneObject): boolean {
+  const kind = objectKind(object);
+  return kind === "text" || (kind === undefined && object.text !== undefined && object.text !== null);
+}
+
+/**
+ * 文本对象自己的键（描述符表 `DAT_1404e88e0`，rea-p6b-layout 1.2）。排版类键、背景、`depthtest` 已实现或中性：
+ * - `depthtest`：只在透视场景选 `_depth` 材质，正交场景恒用无深度材质（rea-p6b-raster 1，p6-REPORT 实测），透视场景整张另报
+ *   `camera:perspective`；
+ * - 描边、模糊、投影的参数（`outlinethickness` 等）只在 MSDF 路径用，开关另由 `checkTextOptions` 报；
+ * - `backgroundbrightness` 只在 HDR 下乘进背景色（`compile/texts.ts`）。
+ * 不在这张表、文本上同样中性的：`size`（运行时用排版结果覆盖，1.4）、`alignment`（不在文本的查找链上）、`copybackground`（文本的
+ * 合成 RT 初值不看它，5.5）。
+ */
+const TEXT_KEYS = new Set([
+  "text",
+  "font",
+  "pointsize",
+  "padding",
+  "spacing",
+  "maxwidth",
+  "maxrows",
+  "opaquebackground",
+  "limitwidth",
+  "limitrows",
+  "limituseellipsis",
+  "blockalign",
+  "horizontalalign",
+  "verticalalign",
+  "anchor",
+  "depthtest",
+  "backgroundcolor",
+  "backgroundbrightness",
+  "msdf",
+  "outline",
+  "blur",
+  "dropshadow",
+  "outlinethickness",
+  "outlinecolor",
+  "blursize",
+  "dropshadowsize",
+  "dropshadowopacity",
+  "dropshadowoffset",
+  "dropshadowcolor",
+]);
+
+/** 打开任意一个都改走 MSDF（rea-p6b-raster 1：`O+0x518 != 0`），P6b 不做（语料 2 张、5 个对象）。 */
+const TEXT_MSDF_KEYS = ["msdf", "outline", "blur", "dropshadow"] as const;
+
+/**
+ * `anchor` 里中性的取值：`none` 不平移；`center` 平移 `((E0 − E2)/2, (E3 − E1)/2)`，场景按居中盖满铺放时左右、上下的裁边相等，为 0
+ * （rea-p6b-layout 3.4）。其余取值贴着可见区域的边走，要按铺放算裁边（语料 23 个），报 `text:anchor:<值>`。
+ */
+const NEUTRAL_ANCHORS = new Set(["none", "center"]);
+
+/**
+ * 文本对象的静态检查（P6b 1d，`checkObjectFeatures` 调）：挂 `{script}` 的文本键。`text` 的字段脚本（时钟）是 1e，报 `text:script`；
+ * 其它文本键挂脚本报 `text:script:<键>`（WPE 写入时当场重排，1e 起才有字符串写回与就地重排）。
+ * 生效值相关的项（MSDF 的开关、`anchor`）要按当前用户属性判断，在编译时由 `checkTextOptions` 报（`compile/texts.ts`）。
+ */
+export function checkTextFeatures(object: SceneObject, unsupported: Set<string>): void {
+  for (const key of TEXT_KEYS)
+    if (isScriptValue(object[key])) unsupported.add(key === "text" ? "text:script" : `text:script:${key}`);
+}
+
+/**
+ * 文本对象按生效值（绑了属性的取当前值）查的能力（P6b 1d，`compile/texts.ts` 解析字段时调）：
+ * - `msdf` / `outline` / `blur` / `dropshadow` 打开：`text:msdf:<键>`；
+ * - `anchor` 不是 `none` / `center`：`text:anchor:<值>`（取值已按 WPE 的枚举规则规整，查不到的是 `none`）。
+ */
+export function checkTextOptions(
+  values: Record<(typeof TEXT_MSDF_KEYS)[number], boolean> & { anchor: string },
+  unsupported: Set<string>,
+): void {
+  for (const key of TEXT_MSDF_KEYS) if (values[key]) unsupported.add(`text:msdf:${key}`);
+  if (!NEUTRAL_ANCHORS.has(values.anchor)) unsupported.add(`text:anchor:${values.anchor}`);
+}
+
+/**
+ * 字体着色器（`font.frag`）声明的引擎 uniform：`g_RenderVar0–3` 是 MSDF 的描边、模糊、投影参数（rea-p6b-raster 6），普通路径不读
+ * （翻译器标 `unused`，本来就不报）。文本 pass 的程序检查放行它们，渲染器不写（MSDF 另报 `text:msdf:*`）。
+ */
+export const TEXT_UNIFORMS: ReadonlySet<string> = new Set([
+  "g_RenderVar0",
+  "g_RenderVar1",
+  "g_RenderVar2",
+  "g_RenderVar3",
+]);
+
 /** 声音对象上 WPE 没有回调、运行时改了不生效的键（rea 1.2）：绑了属性或挂了脚本报 `sound:binding:<键>`（语料 0 个）。 */
 const SOUND_UNBOUND_KEYS = ["playbackmode", "mintime", "maxtime", "startsilent", "spatialization"];
 
@@ -520,7 +613,8 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
     if (Array.isArray(effects) ? effects.length > 0 : active(effects)) unsupported.add("particle:effects");
     for (const [key, defaults] of Object.entries(PARTICLE_OBJECT_DEFAULTS))
       if (particleObjectValueUsed(object[key], defaults)) unsupported.add(`particle:object:${key}`);
-  } else if (kind && kind !== "image" && kind !== "light" && kind !== "sound") unsupported.add(`object:${kind}`);
+  } else if (kind && kind !== "image" && kind !== "light" && kind !== "sound" && kind !== "text")
+    unsupported.add(`object:${kind}`);
   // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
   if (kind === "light" && parent !== null) unsupported.add("object:parent");
   const lightKey = (key: string) => kind === "light" && LIGHT_KEYS.has(key);
@@ -528,8 +622,12 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   const sound = isSoundObject(object);
   if (sound) checkSoundFeatures(object, unsupported);
   const soundKey = (key: string) => sound && SOUND_KEYS.has(key);
+  // 文本对象（P6b 1d）：自己的键见 `TEXT_KEYS`，`alignment` 不在文本的查找链上（rea-p6b-layout 1.2），中性
+  const text = isTextObject(object);
+  if (text) checkTextFeatures(object, unsupported);
+  const textKey = (key: string) => text && TEXT_KEYS.has(key);
   for (const key of OBJECT_FLAGS) if (active(object[key]) && !lightKey(key)) unsupported.add(`object:${key}`);
-  if (object.alignment !== undefined && object.alignment !== "center") unsupported.add("object:alignment");
+  if (object.alignment !== undefined && object.alignment !== "center" && !text) unsupported.add("object:alignment");
   // 图像层 perspective（P5b 步骤 1）：JSON true 已实现；绑属性、挂脚本或别的取值，以及非图像对象上为真，照报
   if (active(object.perspective) && !(kind === "image" && object.perspective === true))
     unsupported.add("object:perspective");
@@ -542,6 +640,7 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !["alignment", "perspective", "instance", "model", "particle", "sound", "text", "light"].includes(key) &&
       !lightKey(key) &&
       !soundKey(key) &&
+      !textKey(key) &&
       !(kind === "particle" && key === "instanceoverride") &&
       active(value)
     )
@@ -672,7 +771,8 @@ function someParticleSystem(system: SceneParticle, test: (system: SceneParticle)
  * `compileScene` 在全部对象之后逐个调（`assignGroups` 之后）。WPE 在组里画子孙时换了相机与渲染目标（rea-p5-modelflags §2.5），
  * 下面这些用法读的东西和组的局部坐标对不上或没有实测，照报：
  * - `model:passthrough:children:framebuffer`：要拷快照。基础 pass 或任一启用 effect 的 pass 读 `_rt_FullFrameBuffer`、粒子系统树里
- *   任一 pass 读它（`REFRACT` 等），或 colorBlendMode ∉ {0, 31}（passthrough 混合上屏要读快照）。WPE 在组里不拍新的快照、读的是组开始
+ *   任一 pass 读它（`REFRACT` 等）、文本层的合成 RT 初值（`composelayer_clearalpha`，P6b 1d），或 colorBlendMode ∉ {0, 31}
+ *   （passthrough 混合上屏要读快照）。WPE 在组里不拍新的快照、读的是组开始
  *   时那份，着色器按屏幕坐标采样，而子孙画在组的局部坐标里。例外是嵌套组自己的基础 pass（composelayer 读快照）：`p5b-nest` 实测它用
  *   场景相机采组开始时那份，已实现（渲染器在组里拍的快照和组开始时那份内容相同：组里的绘制都不落在场景目标上）。关着、运行时可能
  *   打开的 effect 读快照时，`bundle.ts` 把这个键记进那个 effect 自己的不支持项。
@@ -683,13 +783,15 @@ function someParticleSystem(system: SceneParticle, test: (system: SceneParticle)
 export function groupChildIssues(
   layer: Pick<
     SceneLayer,
-    "passthroughModel" | "passes" | "effects" | "colorBlendMode" | "fullscreen" | "perspective" | "particle"
+    "passthroughModel" | "passes" | "effects" | "colorBlendMode" | "fullscreen" | "perspective" | "particle" | "text"
   >,
 ): string[] {
   const keys: string[] = [];
   const cbm = layer.colorBlendMode;
   const framebuffer =
     (!layer.passthroughModel && layer.passes.some((pass) => pass.framebuffer)) ||
+    // 文本层（P6b 1d）走合成、没开背景时，合成 RT 的初值是场景快照（`composelayer_clearalpha`）
+    !!layer.text?.clearAlphaPass?.framebuffer ||
     layer.effects.some((effect) => effect.enabled && effectNeedsFramebuffer(effect)) ||
     (cbm !== 0 && cbm !== 31) ||
     (!!layer.particle &&

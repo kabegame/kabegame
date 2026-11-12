@@ -93,6 +93,11 @@
  * - 粒子生命周期（P4a 步骤 5）：`instanceoverride` 就地写由 `sync` 交给模拟器（从基值重新乘，不重建缓冲）；不可见（含祖先）
  *   的粒子层不发射，有存活粒子就清空，重新可见不重新预热（C8）；暂停 / 补画帧时间为 0，不步进；粒子缓冲随场景 `destroy`
  *   释放，换场景或重编译时新场景重新预热。
+ * - 文本（P6b 1d）：排版结果由宿主在加载前排好，经 `build` 的 `texts` 进 `SceneState.texts`（对齐偏移进图层的世界矩阵）。`text` 步骤
+ *   的 draw 自带顶点（排版出的逐字四边形或背景四边形，按程序布局打包）与索引缓冲（uint16，三角形列表），uniform 走 `textUniformValues`
+ *   （`textMatrices`）。字形图集是第一种运行时纹理（`render/text.ts`）：每个 `GlyphAtlas` 对象一张，同一「字体 + 字号」的层共用，建场景
+ *   时整张上传，`sync` 按脏区增量上传；`atlas` 引用经图层资源解析。文本层的图层四边形、合成 RT 与 fbo 都按排版的尺寸；开了背景、走合成
+ *   时 `clear` op 每帧按背景常量与图层 alpha 现算清屏色。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -113,6 +118,7 @@ import {
   writeVertices,
   type ParticleVertexLayout,
 } from "../particles/vertices";
+import type { TextLayout } from "../text/layout";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { oneLine, SceneRenderError } from "./errors";
@@ -123,11 +129,13 @@ import {
   particleTreeWantsFramebuffer,
   planLayer,
   planSignature,
+  textCompositeSize,
   variantPlans,
   type DrawStep,
   type LayerPlan,
   type ParticleStep,
   type TargetRef,
+  type TextStep,
   type TextureRef,
 } from "./graph";
 import {
@@ -146,6 +154,7 @@ import { identity, multiply, orthographic, translation, type Mat4 } from "./math
 import { parallaxOffset, type SceneParallax } from "./parallax";
 import { createPipeline, createProgram, programVertexPacking, type GpuProgram } from "./programs";
 import type { LayerState, SceneState } from "./state";
+import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
 import {
   drawUniformValues,
@@ -154,6 +163,7 @@ import {
   LIGHT_UNIFORMS,
   PARTICLE_REFRESH_UNIFORMS,
   particleUniformValues,
+  textUniformValues,
   UniformBlock,
   type FrameInput,
   type UniformEntry,
@@ -223,6 +233,8 @@ interface RenderTarget {
 interface LayerResources {
   composites: RenderTarget[];
   fbos: FboBindings;
+  /** 文本层（P6b 1d）本层排版所在的图集纹理（`atlas` 引用解析到这里）；其它图层没有。 */
+  atlases?: { main: RenderTarget; color: RenderTarget | null };
 }
 
 /** 一个绘制步骤等齐的程序与管线（`prepareLayer`）。 */
@@ -231,8 +243,15 @@ interface PreparedDraw {
   pipeline: GPURenderPipeline;
 }
 
-/** 图层的绘制步骤，或粒子层的绘制（`graph.ts`）：都画一次，共用 draw 的 uniform / bind group / 管线路径。 */
-type DrawLike = DrawStep | ParticleStep;
+/** 图层的绘制步骤、粒子层的绘制，或文本层的绘制（`graph.ts`）：都画一次，共用 draw 的 uniform / bind group / 管线路径。 */
+type DrawLike = DrawStep | ParticleStep | TextStep;
+
+/** 文本层一次绘制的索引（P6b 1d）：三角形列表，每四边形 6 个。 */
+interface TextDraw {
+  indexBuffer: GPUBuffer;
+  indexFormat: GPUIndexFormat;
+  count: number;
+}
 
 /** 一次粒子绘制的系统与 CPU 侧顶点（P4a 步骤 4）。 */
 interface ParticleDraw {
@@ -424,6 +443,8 @@ interface Draw {
   step: DrawLike;
   /** 粒子层的模拟器与顶点；图像层为 null。 */
   particles: ParticleDraw | null;
+  /** 文本层的索引缓冲（P6b 1d）；其余为 null。 */
+  text: TextDraw | null;
   /** 本 draw 的程序（dev 探针改写顶点着色器用）。 */
   program: GpuProgram;
   /** 所属图层（`objects` 下标与 bundle 里的图层，就地刷新用）。 */
@@ -477,8 +498,11 @@ type Op =
   | { kind: "snapshot" }
   | { kind: "copy"; resources: LayerResources; effect: number | null; source: TextureRef; target: TargetRef }
   | { kind: "swap"; resources: LayerResources; effect: number; source: string; target: string }
-  /** 把合成 RT 清成 (0, 0, 0, 0)（组合层 `copybackground: false`，P5b 步骤 2）。 */
-  | { kind: "clear"; resources: LayerResources; target: TargetRef }
+  /**
+   * 把合成 RT 清成 (0, 0, 0, 0)（组合层 `copybackground: false`，P5b 步骤 2）；`color: "text-background"` 时清成文本层的
+   * (背景色, 图层 alpha)（P6b 1d，开了 `opaquebackground` 的文本层走合成）。
+   */
+  | { kind: "clear"; resources: LayerResources; target: TargetRef; layer: SceneLayer; color?: "text-background" }
   /** 组画子树（P5b 步骤 4）：`layer.subtree` 里可见的子孙依次画进 `target`（组当前的合成 RT）。 */
   | { kind: "subtree"; resources: LayerResources; target: TargetRef; layer: SceneLayer };
 
@@ -529,7 +553,7 @@ export function stepPipeline(
     blending,
     format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
     alpha: target.kind !== "scene" || alphaMax || (inGroup && !upload),
-    topology: step.kind === "particles" && !geometry ? "triangle-list" : "triangle-strip",
+    topology: step.kind === "text" || (step.kind === "particles" && !geometry) ? "triangle-list" : "triangle-strip",
     ...(alphaMax ? { alphaMax: true } : {}),
   };
 }
@@ -569,7 +593,7 @@ function writeSegments(system: ParticleSystem, layout: ParticleDraw["layout"], o
 function planProblems(plan: LayerPlan, bundle: SceneBundle, particle?: SceneParticle | null): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
-    if (step.kind !== "draw" && step.kind !== "particles") continue;
+    if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text") continue;
     const program = step.pass.program === null ? undefined : bundle.programs[step.pass.program];
     if (!program) problems.push("render:no-program");
     else if (step.kind === "particles")
@@ -589,7 +613,7 @@ function wantsSnapshot(plan: LayerPlan): boolean {
     (step) =>
       step.kind === "snapshot" ||
       (step.kind === "copy" && step.source.kind === "framebuffer") ||
-      ((step.kind === "draw" || step.kind === "particles") &&
+      ((step.kind === "draw" || step.kind === "particles" || step.kind === "text") &&
         Object.values(step.inputs).some((ref) => ref.kind === "framebuffer")),
   );
 }
@@ -598,7 +622,8 @@ function wantsSnapshot(plan: LayerPlan): boolean {
 export function checkRenderable(
   bundle: SceneBundle,
   features: ReadonlySet<string>,
-  options: { ignoreUnsupported?: boolean } = {},
+  /** `texts`：文本层的排版结果（P6b 1d，`GpuScene.build` 的同名选项）；文本层没有排版结果时报 `render:text-layout`。 */
+  options: { ignoreUnsupported?: boolean; texts?: ReadonlyMap<number, TextLayout> } = {},
 ): string[] {
   const reasons = new Set<string>(options.ignoreUnsupported ? [] : bundle.unsupported);
   for (const feature of requiredFeatures(bundle.textures))
@@ -610,7 +635,12 @@ export function checkRenderable(
       if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
     }
   for (const layer of buildableLayers(bundle))
-    for (const reason of planProblems(planLayer(layer, bundle.textures), bundle, layer.particle)) reasons.add(reason);
+    for (const reason of planProblems(
+      planLayer(layer, bundle.textures, undefined, options.texts?.get(layer.object) ?? null),
+      bundle,
+      layer.particle,
+    ))
+      reasons.add(reason);
   return [...reasons];
 }
 
@@ -624,7 +654,7 @@ export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">)
   const byObject = new Map(bundle.layers.map((layer) => [layer.object, layer]));
   return bundle.layers.filter(
     (layer) =>
-      (layer.passes.length > 0 || (layer.particle?.passes.length ?? 0) > 0) &&
+      (layer.passes.length > 0 || (layer.particle?.passes.length ?? 0) > 0 || !!layer.text) &&
       everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted),
   );
 }
@@ -649,6 +679,11 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
     if (layer.particle) addParticle(layer.particle);
     if (layer.passthrough) add(layer.passthrough);
     if (layer.groupUpload) add(layer.groupUpload);
+    // 文本的宿主材质（P6b 1d）都没有静态纹理，照样过一遍
+    const text = layer.text;
+    if (text)
+      for (const pass of [text.glyphPass, text.colorPass, text.backgroundPass, text.clearAlphaPass])
+        if (pass) add(pass);
     for (const effect of layer.effects) {
       if (!effect.enabled && effect.unsupported.length) continue;
       for (const step of effect.steps) if (step.kind === "draw") add(step.pass);
@@ -748,6 +783,8 @@ export class GpuScene {
   private readonly layerByObject = new Map<number, SceneLayer>();
   /** 建了资源的图层按 `objects` 下标：组的 `subtree` op 按它找子孙的 op（P5b 步骤 4）。 */
   private readonly runtimeByObject = new Map<number, LayerRuntime>();
+  /** 文本层的字形图集纹理（P6b 1d，`render/text.ts`），按图集对象共享；`populate` 里建。 */
+  private atlasTextures: TextAtlasTextures | null = null;
 
   private constructor(
     private readonly device: GPUDevice,
@@ -803,9 +840,18 @@ export class GpuScene {
     state: SceneState,
     features: ReadonlySet<string>,
     warnings: string[],
-    options: { ignoreUnsupported?: boolean; particles?: ParticleOptions } = {},
+    options: {
+      ignoreUnsupported?: boolean;
+      particles?: ParticleOptions;
+      /**
+       * 文本层的排版结果（P6b 1d）：宿主在加载前排好（`text/host.ts`），按 `objects` 下标。写进 `state`（`SceneState.setTexts`），
+       * 渲染图、对齐偏移与图集都从那里取。文本层没有排版结果时整场画不了（`render:text-layout`）。
+       */
+      texts?: ReadonlyMap<number, TextLayout>;
+    } = {},
   ): Promise<GpuScene> {
-    const reasons = checkRenderable(bundle, features, options);
+    if (options.texts) state.setTexts(options.texts);
+    const reasons = checkRenderable(bundle, features, { ...options, texts: state.texts });
     if (reasons.length) throw new SceneRenderError(reasons);
     const scene = new GpuScene(device, bundle, warnings, options.particles ?? {});
     device.pushErrorScope("out-of-memory");
@@ -986,7 +1032,12 @@ export class GpuScene {
 
   /** 这个图层在当前开关下的计划：`planLayer` 的回调给 `layer.effects` 下标，状态按 scene.json 坐标（`source`）存。 */
   private planOf(layer: SceneLayer, state: SceneState): LayerPlan {
-    return planLayer(layer, this.bundle.textures, (e) => state.effectEnabled(layer.object, layer.effects[e].source));
+    return planLayer(
+      layer,
+      this.bundle.textures,
+      (e) => state.effectEnabled(layer.object, layer.effects[e].source),
+      state.texts.get(layer.object) ?? null,
+    );
   }
 
   private pipelineOf(step: DrawLike, { layer, resources }: Pick<LayerRuntime, "layer" | "resources">): PipelineSpec {
@@ -1009,7 +1060,7 @@ export class GpuScene {
     const prepared = new Map<DrawLike, PreparedDraw>();
     await Promise.all(
       plan.steps.map(async (step) => {
-        if (step.kind !== "draw" && step.kind !== "particles") return;
+        if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text") return;
         const program = await this.ensureProgram(step.pass.program!);
         const { blending, format, alpha, topology, alphaMax } = this.pipelineOf(step, runtime);
         prepared.set(step, {
@@ -1025,7 +1076,7 @@ export class GpuScene {
   private preparedOf(plan: LayerPlan, runtime: Pick<LayerRuntime, "layer" | "resources">): Map<DrawLike, PreparedDraw> {
     const prepared = new Map<DrawLike, PreparedDraw>();
     for (const step of plan.steps) {
-      if (step.kind !== "draw" && step.kind !== "particles") continue;
+      if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text") continue;
       const spec = this.pipelineOf(step, runtime);
       const program = this.readyPrograms.get(spec.program);
       const pipeline = this.readyPipelines.get(pipelineKey(spec));
@@ -1132,7 +1183,14 @@ export class GpuScene {
         ops.push({ kind: "swap", resources, effect: step.effect, source: step.source, target: step.target });
       else if (step.kind === "copy")
         ops.push({ kind: "copy", resources, effect: step.effect, source: step.source, target: step.target });
-      else if (step.kind === "clear") ops.push({ kind: "clear", resources, target: step.target });
+      else if (step.kind === "clear")
+        ops.push({
+          kind: "clear",
+          resources,
+          target: step.target,
+          layer,
+          ...(step.color ? { color: step.color } : {}),
+        });
       else if (step.kind === "subtree") ops.push({ kind: "subtree", resources, target: step.target, layer });
       else {
         const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds);
@@ -1181,6 +1239,12 @@ export class GpuScene {
       uploadable.has(index) ? this.own(uploadTexture(device, texture)) : null,
     );
     this.dummies = this.createDummies();
+    this.atlasTextures = new TextAtlasTextures(
+      device,
+      this.sampler(ATLAS_SAMPLER),
+      (resource) => this.own(resource),
+      this.warnings,
+    );
 
     const built = buildableLayers(bundle);
     const plans = built.map((layer) => this.planOf(layer, state));
@@ -1189,7 +1253,7 @@ export class GpuScene {
     const used = new Set<number>();
     for (const plan of plans)
       for (const step of plan.steps)
-        if ((step.kind === "draw" || step.kind === "particles") && step.pass.program !== null)
+        if ((step.kind === "draw" || step.kind === "particles" || step.kind === "text") && step.pass.program !== null)
           used.add(step.pass.program);
     for (const pass of Object.values(bundle.bloom?.passes ?? {}))
       if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
@@ -1222,8 +1286,9 @@ export class GpuScene {
 
     const runtimes = plans.map((plan, index) => {
       const layer = built[index];
-      // fbo 一律按真实合成尺寸：全部 effect 关着时也是，打开时不用重建
-      const size = compositeSize(layer, this.baseTexture(layer));
+      // fbo 一律按真实合成尺寸：全部 effect 关着时也是，打开时不用重建。文本层取排版的合成 RT 尺寸（P6b 1d）
+      const textLayout = layer.text ? state.texts.get(layer.object) : undefined;
+      const size = textLayout ? textCompositeSize(textLayout) : compositeSize(layer, this.baseTexture(layer));
       const maps = layer.effects.map(
         (effect) =>
           new Map(
@@ -1263,7 +1328,7 @@ export class GpuScene {
         layer,
         ops: [],
         draws: [],
-        resources: { composites: [], fbos: new FboBindings(maps) },
+        resources: { composites: [], fbos: new FboBindings(maps), ...this.textAtlasesOf(textLayout) },
         signature: planSignature(plan),
         tree: null,
       };
@@ -1346,7 +1411,31 @@ export class GpuScene {
     if (ref.kind === "composite") return resources.composites[ref.index] ?? null;
     if (ref.kind === "fbo") return this.targets[resources.fbos.resolve(ref.effect, ref.name)] ?? null;
     if (ref.kind === "framebuffer") return this.snapshot;
+    if (ref.kind === "atlas") return (ref.color ? resources.atlases?.color : resources.atlases?.main) ?? null;
     return null;
+  }
+
+  /** 文本层的图集纹理（P6b 1d）：本层排版的主图集与彩色图集（没有彩色图集时为 null）；不是文本层、或排版为空时不给。 */
+  private textAtlasesOf(layout: TextLayout | undefined): Pick<LayerResources, "atlases"> {
+    const mesh = layout?.mesh;
+    const textures = this.atlasTextures;
+    if (!mesh || !textures) return {};
+    return {
+      atlases: { main: textures.get(mesh.atlas), color: mesh.colorAtlas ? textures.get(mesh.colorAtlas) : null },
+    };
+  }
+
+  /** 图层四边形与矩阵用的尺寸：文本层取排版的文字框（`TextLayout.size`，P6b 1d，WPE 不用 JSON 的 `size`），其余是 `layer.size`。 */
+  private layerSize(layer: SceneLayer, state: SceneState): number[] {
+    const layout = layer.text ? state.texts.get(layer.object) : undefined;
+    return layout ? [...layout.size] : layer.size;
+  }
+
+  /** 文本层开了背景、走合成时 RT 的清屏色（P6b 1d，rea-p6b-layout 4）：背景常量（就地写过的值）与图层当前的 alpha。 */
+  private textBackground(layer: SceneLayer, state: SceneState): number[] {
+    const text = layer.text;
+    const rgb = (text && state.constants.get(text.background.key)?.g_Color) ?? text?.background.color ?? [0, 0, 0];
+    return [rgb[0] ?? 0, rgb[1] ?? 0, rgb[2] ?? 0, state.layers.get(layer.object)?.alpha ?? layer.alpha];
   }
 
   private resolveTarget(ref: TargetRef, resources: LayerResources): RenderTarget | null {
@@ -1477,12 +1566,42 @@ export class GpuScene {
     const label =
       step.kind === "particles"
         ? `layer ${layer.id} ${layer.name} particles${step.node.length ? ` ${step.node.join("/")}` : ""}${occurrence ? `#${occurrence + 1}` : ""}`
-        : `layer ${layer.id} ${layer.name} ${step.role}`;
+        : step.kind === "text"
+          ? `layer ${layer.id} ${layer.name} text ${step.part}`
+          : `layer ${layer.id} ${layer.name} ${step.role}`;
 
     let vertexBuffer: GPUBuffer;
     let particles: ParticleDraw | null = null;
+    let text: TextDraw | null = null;
     let model: Mat4 | null = null;
-    if (step.kind === "particles") {
+    if (step.kind === "text") {
+      // 文本（P6b 1d）：排版出的逐字四边形或背景四边形，按程序布局打包；索引照 WPE 的顺序，三角形列表
+      const layout = state.texts.get(layer.object);
+      const mesh = layout?.mesh;
+      if (!layout || !mesh) throw new SceneRenderError([`render:text-layout:${layer.object}`]);
+      const quads = step.part === "background" ? null : step.part === "color" ? mesh.colorGlyphs : mesh.glyphs;
+      const vertices = quads ? textQuadVertices(quads) : backgroundQuadVertices(textCompositeSize(layout));
+      const count = quads ? quads.length : 1;
+      const vertexData = program.vertexPacking.pack(vertices);
+      vertexBuffer = this.own(
+        device.createBuffer({
+          label,
+          size: vertexData.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        }),
+      );
+      device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+      const indices = textIndexData(count);
+      const indexBuffer = this.own(
+        device.createBuffer({
+          label: `${label} indices`,
+          size: indices.byteLength,
+          usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+        }),
+      );
+      device.queue.writeBuffer(indexBuffer, 0, indices.buffer, indices.byteOffset, indices.byteLength);
+      text = { indexBuffer, indexFormat: indices instanceof Uint32Array ? "uint32" : "uint16", count: count * 6 };
+    } else if (step.kind === "particles") {
       // 粒子：每帧由 `encode` 写，按 `particleUnits` 分配
       if (!system) throw new SceneRenderError([`render:particle-node:${step.node.join("/")}`]);
       particles = this.createParticles(step, program, system);
@@ -1501,7 +1620,7 @@ export class GpuScene {
       const vertices =
         step.geometry === "fullscreen"
           ? layerQuad([2, 2], step.uv, step.inset)
-          : layerQuad(layer.size, step.uv, step.inset);
+          : layerQuad(this.layerSize(layer, state), step.uv, step.inset);
       const vertexData = program.vertexPacking.pack(vertices);
       vertexBuffer = this.own(
         device.createBuffer({
@@ -1590,6 +1709,7 @@ export class GpuScene {
       label,
       step,
       particles,
+      text,
       program,
       object: layer.object,
       layer,
@@ -1665,6 +1785,17 @@ export class GpuScene {
       group && !(step.kind === "draw" && step.role === "compose")
         ? groupViewProjection(group.size, worldMatrixOf(group.object, state.layers, worlds))
         : null;
+    if (step.kind === "text") {
+      // 文本（P6b 1d）：直接上屏用这次画到场景的视图投影（带视差、抖动；组里是组的局部正交），画进合成 RT 用 RT 像素的正交
+      // （`textMatrices`）。排版结果在建 draw 前已核对过
+      return textUniformValues({
+        ...common,
+        step,
+        layer: layerState,
+        layout: state.texts.get(layer.object)!,
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, this.viewProjection),
+      });
+    }
     if (step.kind === "particles") {
       // 帧表（P4b 步骤 2）：槽 0 的纹理带帧表时写 `g_RenderVar1`
       const base = step.inputs[0];
@@ -1692,13 +1823,13 @@ export class GpuScene {
         ...common,
         world: identity(),
         step,
-        layer: { ...layerState, size: layer.size },
+        layer: { ...layerState, size: this.layerSize(layer, state) },
         viewProjection: FULLSCREEN_VIEW_PROJECTION,
       });
     return drawUniformValues({
       ...common,
       step,
-      layer: { ...layerState, size: layer.size },
+      layer: { ...layerState, size: this.layerSize(layer, state) },
       // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
       // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
       // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
@@ -1799,6 +1930,8 @@ export class GpuScene {
     }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
+    // 文本图集的脏区（P6b 1d：加载之后不再排版，一般为空；1e 的重排在这之前写图集）
+    this.atlasTextures?.sync();
   }
 
   private createAlternateTarget(): SceneTarget {
@@ -1891,6 +2024,7 @@ export class GpuScene {
       this.drawsByPass.delete(draw.passKey);
       this.release(draw.vertexBuffer);
       if (draw.uniformBuffer) this.release(draw.uniformBuffer);
+      if (draw.text) this.release(draw.text.indexBuffer);
     }
     this.install(runtime, built);
     runtime.signature = signature;
@@ -2413,7 +2547,11 @@ export class GpuScene {
       pass.setPipeline(item.pipeline);
       pass.setBindGroup(0, this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
-      if (particles?.rope) {
+      if (item.text) {
+        // 文本（P6b 1d）：逐字四边形，带索引的三角形列表
+        pass.setIndexBuffer(item.text.indexBuffer, item.text.indexFormat);
+        pass.drawIndexed(item.text.count);
+      } else if (particles?.rope) {
         // rope 两类（P4d 步骤 1、2）：每段一个实例、`maxVertices` 个顶点的三角形带（几何着色器展开），不用索引；ropetrail 的
         // 段数是存活数 · n
         pass.draw(particles.rope.maxVertices, particles.count);
@@ -2486,7 +2624,9 @@ export class GpuScene {
           // 组合层 `copybackground: false`（P5b 步骤 2）：合成 RT 清成 (0, 0, 0, 0)，代替基础 pass。不碰场景目标，不算开过场景 pass
           end();
           const target = this.resolveTarget(op.target, op.resources);
-          if (target) this.clearTarget(encoder, target, [0, 0, 0, 0], "clear composite");
+          // 文本层开了背景（P6b 1d）：清成 (背景色, 图层 alpha)，每帧现算（背景色与 alpha 都可能就地改）
+          const color = op.color === "text-background" ? this.textBackground(op.layer, state) : [0, 0, 0, 0];
+          if (target) this.clearTarget(encoder, target, color, "clear composite");
         } else op.resources.fbos.swap(op.effect, op.source, op.target);
       }
     };
@@ -2520,5 +2660,6 @@ export class GpuScene {
     this.bloom = null;
     this.particleIndices = null;
     this.particleTimings = null;
+    this.atlasTextures = null;
   }
 }

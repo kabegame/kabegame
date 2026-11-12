@@ -1,0 +1,259 @@
+/**
+ * 文本对象 → bundle 的文本表（P6b 1d）。文本对象在 WPE 里是一种图层：变换、可见性、`color` / `alpha` / `brightness`、effect 链都和
+ * 图像层一样，只是基础 pass 画的不是一张贴图，而是逐字四边形（`render/graph.ts` 的 `text` 步骤）。这里只做 Worker 能做的部分：
+ * - 把对象的排版字段规整成 `text/layout.ts` 的 `TextFields`（取值规则照 WPE 的 JSON setter，rea-p6b-layout 1.2、1.3）；
+ * - 定位主字体（工程 → `scene.pkg` → WPE `assets`；`systemfont_*` 由宿主读 `%WINDIR%\Fonts`）；
+ * - 编四个宿主指定材质的 pass：`basefont`（普通字形）、`basefontrgba`（彩色字形）、`fontbackground`（直接上屏的背景）、
+ *   `composelayer_clearalpha`（合成路径没开背景时 RT 的初值）。正交场景一律用不带 `_depth` 的材质（rea-p6b-raster 1，5.4）；
+ * - 背景色（`g_Color` = `backgroundcolor` × (HDR ? `backgroundbrightness` : 1)）。
+ * 排版、栅格化要 wasm、字体字节与图集，在宿主主线程（`text/host.ts`），结果经 `GpuScene.build` 的 `texts` 交给渲染器。
+ *
+ * 绑定（P3a）：排版类字段绑用户属性登记成重编译目标（1d 不做就地重排，改了整场重编译，结果仍对；1e 改成就地重排）；
+ * `backgroundcolor` 在 LDR（或 HDR 下 `backgroundbrightness` 恒为 1）时登记成背景常量的就地目标（`background.key` 的 `g_Color`），
+ * 否则重编译；`backgroundbrightness` 只在 HDR 下读，绑了属性登记成重编译。
+ */
+import { isUserBinding, type BindingCollector, type BindingTarget, type TargetKey } from "./bindings";
+import type { ScenePass } from "./bundle";
+import { checkTextOptions } from "./features";
+import type { SceneFs } from "./fs";
+import { numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
+import { TEXT_DEFAULTS, type TextFields } from "../text/fields";
+import { fontPath, SYSTEM_FONT_PREFIX, type FontPath } from "../text/fonts";
+import type { ShaderTextureSlot } from "./shader";
+
+/** 宿主指定的四个材质（WPE 自带，`assets/materials/...`）。 */
+export const TEXT_MATERIALS = {
+  glyphs: "materials/fonts/basefont.json",
+  color: "materials/fonts/basefontrgba.json",
+  background: "materials/fonts/fontbackground.json",
+  clearAlpha: "materials/util/composelayer_clearalpha.json",
+} as const;
+
+/** R8 图集的 `.tex` 格式号（`__font_atlas_` 用格式 9，rea-p6b-raster 3.2）。 */
+const R8_FORMAT = 9;
+
+/** 主字体文件。 */
+export interface SceneFontFile {
+  /** `fontPath(font)`：`system:<文件>`，或引擎路径。 */
+  path: FontPath;
+  /**
+   * 引擎路径按场景的资源查找顺序（工程 → `scene.pkg` → WPE `assets`）定位到的真实文件与内容起点（同 `SceneSoundFile.location`）；
+   * `system:` 字体与哪里都找不到的为 null（宿主读 system 字体；找不到时排版换 arial，同 WPE）。
+   */
+  location: { path: string; offset: number } | null;
+  /** pkg 条目的长度；散文件为 null（整读）。 */
+  size: number | null;
+}
+
+/** 编译期的文本表（每个文本图层一份，挂在 `SceneLayer.text`）。 */
+export interface SceneText {
+  fields: TextFields;
+  font: SceneFontFile;
+  /** `basefont`：普通字形，槽 0 是 R8 图集（渲染图填）。 */
+  glyphPass: ScenePass;
+  /** `basefontrgba`：彩色字形，槽 0 是 RGBA8 图集。 */
+  colorPass: ScenePass;
+  /** `fontbackground`（`flat` 着色器）：开了 `opaquebackground` 时编；只在直接上屏时画（合成路径改成清屏）。 */
+  backgroundPass: ScenePass | null;
+  /**
+   * `composelayer_clearalpha`：没开 `opaquebackground`、图层可能走合成（有 effect 或 colorBlendMode ∉ {0, 31}）时编；合成 RT 的初值是
+   * 文字框背后的场景快照、alpha 清 0。
+   */
+  clearAlphaPass: ScenePass | null;
+  /**
+   * 背景色：`key` 是背景常量在 `SceneState.constants` 里的键（有背景 pass 时就是它的 pass 键），`color` 是 `g_Color` 的初值
+   * （`backgroundcolor` × (HDR ? `backgroundbrightness` : 1)）。直接上屏的背景 pass 与合成路径的清屏色读同一份值。
+   */
+  background: { key: TargetKey; color: [number, number, number] };
+}
+
+/** 编一个宿主指定材质的 pass：读不到材质时由它报 `material:missing:<路径>` 并返回 null。 */
+export type HostPassCompiler = (
+  path: string,
+  key: TargetKey,
+  planned: ShaderTextureSlot[],
+  options?: { text?: boolean },
+) => Promise<ScenePass | null>;
+
+export interface TextCompileContext {
+  fs: SceneFs;
+  properties: Record<string, SceneScalar>;
+  bindings: BindingCollector;
+  /** 场景实际的 HDR（`postprocess.hdr`）：`backgroundbrightness` 只在 HDR 下乘。 */
+  hdr: boolean;
+  /** 编译期启用的 effect 个数（WPE `+0x320`）与 `colorBlendMode`：决定加不加 `padding`。 */
+  visibleEffects: number;
+  colorBlendMode: number;
+  /** 图层可能走合成（有任何 effect，或 colorBlendMode ∉ {0, 31}）：要编 `composelayer_clearalpha`。 */
+  mayComposite: boolean;
+  hostPass: HostPassCompiler;
+  /** 场景级不支持项：`msdf` 等开关与 `anchor` 按生效值（绑了属性的取当前值）报（`features.ts` 的 `checkTextOptions`）。 */
+  unsupported: Set<string>;
+}
+
+/** 枚举的取值表：查不到取 WPE 表里的第一项（rea-p6b-layout 1.2：`horizontalalign` → left、`verticalalign` → center、`anchor` → none）。 */
+const HORIZONTAL = ["left", "center", "right"] as const;
+const VERTICAL = ["center", "bottom", "top"] as const;
+export const TEXT_ANCHORS = [
+  "none",
+  "center",
+  "top",
+  "topright",
+  "right",
+  "bottomright",
+  "bottom",
+  "bottomleft",
+  "left",
+  "topleft",
+] as const;
+
+/** JSON 里写成对象、没挂 `user` / `script` 的值：WPE 的 setter 读它的 `value`（rea-p6b-layout 1.3）。 */
+function plainValue(raw: unknown): unknown {
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && !("user" in raw) && !("script" in raw) && "value" in raw)
+    return (raw as { value: unknown }).value;
+  return undefined;
+}
+
+/** float 键：数字原样，数字串整串解析，布尔（条件绑定）按 1 / 0；不合法时取缺省（WPE 的 float 解析器不收时不写字段）。 */
+export function textFloat(value: unknown, fallback: number): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+/** vec2 键（`padding`、`spacing`）：`"x y"` 两个分量，单个数字（或只有一个分量的串）铺满（rea-p6b-layout 1.2、6.2）。 */
+export function textVec2(value: unknown, fallback: readonly [number, number]): [number, number] {
+  const parsed = numbers(value as SceneScalar | undefined, []);
+  if (parsed.length === 0) return [fallback[0], fallback[1]];
+  return parsed.length === 1 ? [parsed[0], parsed[0]] : [parsed[0], parsed[1]];
+}
+
+/** 枚举键：不是字符串时按空串处理，查不到取表里的第一项；缺键（undefined / null）取缺省。 */
+function textEnum<T extends string>(value: unknown, table: readonly T[], fallback: T): T {
+  if (value === undefined || value === null) return fallback;
+  const text = typeof value === "string" ? value : "";
+  return (table as readonly string[]).includes(text) ? (text as T) : table[0];
+}
+
+/**
+ * 解析一个文本对象（`isTextObject` 为真）。读不到 `basefont` / `basefontrgba` 时返回 null（已报 `material:missing`），图层照常存在、
+ * 没有文本表，渲染器不画它。
+ */
+export async function compileText(
+  index: number,
+  object: SceneObject,
+  ctx: TextCompileContext,
+): Promise<SceneText | null> {
+  const { properties, bindings } = ctx;
+  const recompile = (key: string): BindingTarget => ({
+    kind: "recompile",
+    reason: "layer-structure",
+    path: `objects/${index}/${key}`,
+  });
+  /** 读一个键：`{user}` 登记绑定并取当前值，`{script}` 取初值，写成对象的取 `value`。 */
+  const read = (key: string, target: BindingTarget = recompile(key)): unknown => {
+    const raw = object[key];
+    const resolved = bindings.bind(raw as SceneValue | undefined, properties, target);
+    return resolved === undefined ? plainValue(raw) : resolved;
+  };
+  const flag = (key: string) => read(key) === true;
+
+  const text = read("text");
+  const font = read("font");
+  const fields: TextFields = {
+    // `text` 只收字符串（或对象里的字符串 `value`），别的类型当空串、不可见（rea-p6b-layout 1.3）
+    text: typeof text === "string" ? text : "",
+    // `font` 同一个 setter：不是字符串时不写，保持缺省
+    font: typeof font === "string" ? font : TEXT_DEFAULTS.font,
+    pointsize: textFloat(read("pointsize"), TEXT_DEFAULTS.pointsize),
+    padding: textVec2(read("padding"), TEXT_DEFAULTS.padding),
+    spacing: textVec2(read("spacing"), TEXT_DEFAULTS.spacing),
+    maxwidth: textFloat(read("maxwidth"), TEXT_DEFAULTS.maxwidth),
+    maxrows: Math.trunc(textFloat(read("maxrows"), TEXT_DEFAULTS.maxrows)),
+    limitwidth: flag("limitwidth"),
+    limitrows: flag("limitrows"),
+    limituseellipsis: flag("limituseellipsis"),
+    blockalign: flag("blockalign"),
+    opaquebackground: flag("opaquebackground"),
+    horizontalalign: textEnum(read("horizontalalign"), HORIZONTAL, TEXT_DEFAULTS.horizontalalign),
+    verticalalign: textEnum(read("verticalalign"), VERTICAL, TEXT_DEFAULTS.verticalalign),
+    visibleEffects: ctx.visibleEffects,
+    colorBlendMode: ctx.colorBlendMode,
+  };
+  // 只影响能力判断的键：绑了属性同样登记成重编译（改了重编译后按新值重新判断）
+  checkTextOptions(
+    {
+      msdf: flag("msdf"),
+      outline: flag("outline"),
+      blur: flag("blur"),
+      dropshadow: flag("dropshadow"),
+      anchor: textEnum(read("anchor"), TEXT_ANCHORS, "none"),
+    },
+    ctx.unsupported,
+  );
+
+  // 主字体：`systemfont_*` 与引擎路径（rea-p6b-raster 2.1、2.2）；引擎路径按场景的资源查找顺序定位，宿主按位置读
+  const path = fontPath(fields.font);
+  let location: SceneFontFile["location"] = null;
+  let size: number | null = null;
+  if (path && !path.startsWith(SYSTEM_FONT_PREFIX)) {
+    try {
+      const file = await ctx.fs.resolve(path);
+      if (file) {
+        location = { ...file.location };
+        size = file.size;
+      }
+    } catch {
+      // 越界、绝对路径：WPE 也读不到，排版换 arial
+    }
+  }
+
+  // 背景色：`backgroundcolor` × (HDR ? `backgroundbrightness` : 1)（rea-p6b-layout 第 4 节；LDR 下 brightness 不读）
+  const backgroundKey = `objects/${index}/text/background`;
+  const brightness = ctx.hdr ? textFloat(read("backgroundbrightness"), 1) : 1;
+  // HDR 下 brightness 绑了属性或不为 1：就地写 `g_Color` 只写得了颜色，乘不了它，`backgroundcolor` 改走重编译
+  const inPlace = !ctx.hdr || (brightness === 1 && !isUserBinding(object.backgroundbrightness));
+  const colorTarget: BindingTarget = inPlace
+    ? { kind: "constant", pass: backgroundKey, material: "backgroundcolor", uniforms: ["g_Color"], type: "vec3" }
+    : recompile("backgroundcolor");
+  const rgb = numbers(read("backgroundcolor", colorTarget) as SceneScalar | undefined, [0, 0, 0]);
+  const color: [number, number, number] = [
+    (rgb[0] ?? 0) * brightness,
+    (rgb[1] ?? 0) * brightness,
+    (rgb[2] ?? 0) * brightness,
+  ];
+
+  // 四个宿主材质（WPE 自带，`textures` 都没有静态纹理）：字形的槽 0 是图集，由渲染图填
+  const glyphPass = await ctx.hostPass(
+    TEXT_MATERIALS.glyphs,
+    `objects/${index}/text/glyphs`,
+    [{ slot: 0, format: R8_FORMAT }],
+    { text: true },
+  );
+  const colorPass = await ctx.hostPass(TEXT_MATERIALS.color, `objects/${index}/text/color`, [{ slot: 0 }], {
+    text: true,
+  });
+  const backgroundPass = fields.opaquebackground
+    ? await ctx.hostPass(TEXT_MATERIALS.background, backgroundKey, [])
+    : null;
+  const clearAlphaPass =
+    !fields.opaquebackground && ctx.mayComposite
+      ? await ctx.hostPass(TEXT_MATERIALS.clearAlpha, `objects/${index}/text/clearalpha`, [])
+      : null;
+  // 背景 pass 的 `g_Color` 是材质值：图层就地刷新不覆盖，绑定的就地写经常量表改它
+  if (backgroundPass) backgroundPass.uniforms.g_Color = [...color];
+  if (!glyphPass || !colorPass) return null;
+  return {
+    fields,
+    font: { path, location, size },
+    glyphPass,
+    colorPass,
+    backgroundPass,
+    clearAlphaPass,
+    background: { key: backgroundKey, color },
+  };
+}

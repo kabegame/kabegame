@@ -48,6 +48,11 @@
  *   colorBlendMode 31 照普通上屏改 additive（读码，没有实测）。
  * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：`particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序；有子系统时
  *   按模板树先序给出每个模板的步骤（P4e 步骤 1、2），绘制顺序与快照由渲染器每帧现排。
+ * - **文本层**（P6b 1d，`SceneLayer.text`，rea-p6b-layout 3–5，p6b-fx 抓帧）：图像层的一种，基础 pass 换成 `text` 步骤（逐字四边形，
+ *   见 `TextStep`），尺寸来自排版（`TextLayout.size`、`compositeSize`），不来自 JSON 的 `size`；排版为空时整层不画。直接上屏是
+ *   `[背景] → 普通字形 → [彩色字形]`；合成路径的基础 pass 是「清成背景色」（开了 `opaquebackground`）或 `composelayer_clearalpha`
+ *   （`compose` 角色，读快照），之后字形画进同一张合成 RT，effect 链、passthrough 与上屏照图像层（上屏借 `basefont` 的 translucent，
+ *   UV 内缩的分母是文字框的整数部分）。文本层的 effect 开关会改 `padding` 与文字框，切换走整场重编译，不预备变体。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
@@ -57,7 +62,12 @@ export type TextureRef =
   | { kind: "texture"; index: number }
   | { kind: "composite"; index: number }
   | { kind: "fbo"; effect: number; name: string }
-  | { kind: "framebuffer" };
+  | { kind: "framebuffer" }
+  /**
+   * 文本层的字形图集（P6b 1d）：本层排版结果所在的 R8 主图集（`color: false`）或 RGBA8 彩色图集（`true`），按字体键共享，渲染器建场景时
+   * 整张上传。线性过滤、repeat、没有 mip（rea-p6b-raster 3.2，p6b 抓帧的采样器是 Wrap）。
+   */
+  | { kind: "atlas"; color: boolean };
 export type TargetRef =
   { kind: "scene" } | { kind: "composite"; index: number } | { kind: "fbo"; effect: number; name: string };
 
@@ -119,9 +129,39 @@ export interface ParticleStep {
    */
   instanced: boolean;
 }
+/**
+ * 文本层的一次绘制（P6b 1d，rea-p6b-layout 3.2、4、5）：几何不是图层四边形，是排版出的逐字四边形（`text/layout.ts` 的 `TextMesh`，
+ * 每字形 4 个顶点、6 个索引，三角形列表，`text/mesh.ts` 的顺序），或背景的一个四边形。一个文本层最多三次：
+ * - `background`：`fontbackground`（`flat` 着色器），只在直接上屏且开了 `opaquebackground` 时画，四边形是整数文字框
+ *   （`compositeSize`），平移 `(−w/2 − pad.x, −h/2 − pad.y)`；
+ * - `glyphs`：`basefont`，槽 0 是 R8 主图集；
+ * - `color`：`basefontrgba`，槽 0 是 RGBA8 彩色图集，有彩色字形时才画，在普通字形之后。
+ * `space`：`direct` 画到场景目标，矩阵是图层 MVP（世界矩阵含对齐偏移）× 平移 `directTranslation`；`composite` 画进合成 RT，矩阵是
+ * RT 像素的正交 × 平移 `compositeTranslation`（`render/uniforms.ts` 的 `textMatrices`）。
+ */
+export interface TextStep {
+  kind: "text";
+  part: "background" | "glyphs" | "color";
+  pass: ScenePass;
+  space: "direct" | "composite";
+  target: TargetRef;
+  /** 槽 0 的图集（背景没有纹理）。 */
+  inputs: Record<number, TextureRef>;
+  /** 直接上屏：colorBlendMode 31 时 additive，否则材质的 translucent；画进合成 RT：材质自己的 translucent。 */
+  blending: string;
+}
+
+/** 渲染图要的那部分排版结果（`text/layout.ts` 的 `TextLayout`）：有没有字形、文字框与合成 RT 尺寸。 */
+export interface TextPlanLayout {
+  mesh: { glyphs: readonly unknown[]; colorGlyphs: readonly unknown[] } | null;
+  size: readonly number[];
+  compositeSize: readonly number[];
+}
+
 export type LayerStep =
   | DrawStep
   | ParticleStep
+  | TextStep
   | { kind: "snapshot" }
   /**
    * 整张拷贝（B6，D3D CopyResource）。`effect` 同 `DrawStep.effect`：effect 的 `copy` 命令是它的下标；fullscreen 的基础 pass
@@ -129,8 +169,12 @@ export type LayerStep =
    */
   | { kind: "copy"; effect: number | null; source: TextureRef; target: TargetRef }
   | { kind: "swap"; effect: number; source: string; target: string }
-  /** 把目标清成 (0, 0, 0, 0)：组合层 `copyBackground` 为 false 时代替基础 pass（P5b 步骤 2，WPE 只清颜色、不清深度）。 */
-  | { kind: "clear"; target: TargetRef }
+  /**
+   * 把目标清成 (0, 0, 0, 0)：组合层 `copyBackground` 为 false 时代替基础 pass（P5b 步骤 2，WPE 只清颜色、不清深度）。
+   * `color: "text-background"`（P6b 1d）：文本层走合成且开了 `opaquebackground`，RT 清成 `(背景色, 图层 alpha)`（rea-p6b-layout 4），
+   * 颜色由渲染器按文本表的背景常量与图层当前的 alpha 现算。
+   */
+  | { kind: "clear"; target: TargetRef; color?: "text-background" }
   /**
    * 组画子树（P5b 步骤 4）：按 `layer.subtree` 依次画可见的子孙，它们「画到场景」的绘制改画进 `target`（组当前的合成 RT），视图投影
    * 换成组的局部正交（`scene.ts`）。不算合成链的写入。
@@ -163,6 +207,15 @@ export function compositeSize(
       ? [texture.width, texture.height]
       : [layer.size[0] ?? 0, layer.size[1] ?? 0];
   return [Math.max(4, Math.round(w)), Math.max(4, Math.round(h))];
+}
+
+/**
+ * 文本层的合成 RT 尺寸（P6b 1d）：排版的 `compositeSize`（`trunc(2·padding + 文字框)`，rea-p6b-layout 3.1 `FUN_140258ab0`），WPE 不套
+ * max(4, ·)；这里只保证至少 1（纹理尺寸不能为 0）。fbo 按它算（`fboSize`）。
+ */
+export function textCompositeSize(layout: Pick<TextPlanLayout, "compositeSize">): [number, number] {
+  const [w = 1, h = 1] = layout.compositeSize;
+  return [Math.max(1, w), Math.max(1, h)];
 }
 
 /**
@@ -294,15 +347,25 @@ export function planLayer(
   layer: SceneLayer,
   textures: readonly TextureSize[],
   enabled: (effect: number) => boolean = (e) => layer.effects[e].enabled, // 运行时的开关，3c 步骤 2 传入
+  /** 文本层（`layer.text` 非空）的排版结果（P6b 1d）；其它图层不看。 */
+  text: TextPlanLayout | null = null,
 ): LayerPlan {
   // 粒子对象没有图像 pass，也不编 effect（`compileScene`）
   if (layer.particle) return planParticleLayer(layer);
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
-  const base = layer.passes[0];
+  // 文本层（P6b 1d）：基础 pass 是字形，effect 链与上屏照图像层，上屏借 `basefont` 的 translucent
+  const sceneText = layer.text ?? null;
+  const base = sceneText ? sceneText.glyphPass : layer.passes[0];
   if (!base) return { composite: null, steps, reasons };
+  // 宿主没交排版结果：画不出来（渲染器自查）；排版为空（空文字、字体都不可用）时 WPE 整层不画（可见性要求有排版结果，rea-p6b-layout 5.5）
+  if (sceneText && !text) return { composite: null, steps, reasons: ["render:text-layout"] };
+  const mesh = text?.mesh ?? null;
+  if (sceneText && !mesh) return { composite: null, steps, reasons };
   if (layer.passes.length > 1) reasons.push("render:multi-pass");
-  const baseTexture = base.textures[0] === undefined ? undefined : textures[base.textures[0]];
+  const baseTexture = sceneText || base.textures[0] === undefined ? undefined : textures[base.textures[0]];
+  // 文本层的图层尺寸来自排版（`TextLayout.size`），不来自 JSON 的 `size`（rea-p6b-layout 1.4）
+  const size = sceneText ? text!.size : layer.size;
   const uv = textureUvExtent(baseTexture);
   // UV 内缩分两种（P5b 步骤 1，p5-REPORT `p5b-nopad`）：直接上屏（WPE `+0x490`，flags & 0x226）在 fullscreen、nopadding、
   // passthrough、solidlayer 时不内缩；末 pass 与 passthrough 上屏（`+0x2e8`，flags & 0x222）不看 nopadding。
@@ -313,8 +376,9 @@ export function planLayer(
   const flat = layer.solidLayer || layer.passthroughModel || layer.fullscreen;
   // fullscreen 的直接上屏与上屏都画 2×2 的 NDC 四边形（P5b 步骤 3）
   const screenGeometry: Geometry = layer.fullscreen ? "fullscreen" : "layer";
-  const directInset = flat || layer.noPadding ? NO_INSET : uvInset(layer.size, baseTexture);
-  const finalInset = flat ? NO_INSET : uvInset(layer.size, baseTexture);
+  // 文本层没有纹理：分母是文字框的整数部分（p6b-fx f1 末 pass 的 UV 内缩 0.15 / 149）
+  const directInset = flat || layer.noPadding ? NO_INSET : uvInset(size, baseTexture);
+  const finalInset = flat ? NO_INSET : uvInset(size, baseTexture);
   const additive = layer.colorBlendMode === 31;
   const passthrough = isPassthroughBlend(layer.colorBlendMode);
   let snapped = false;
@@ -334,6 +398,25 @@ export function planLayer(
     }
     return inputs;
   };
+  /** 文本层的一次绘制（P6b 1d）：字形的槽 0 是本层的图集。 */
+  const textStep = (
+    part: TextStep["part"],
+    pass: ScenePass,
+    space: TextStep["space"],
+    target: TargetRef,
+    blending: string,
+  ): TextStep => ({
+    kind: "text",
+    part,
+    pass,
+    space,
+    target,
+    inputs:
+      part === "background"
+        ? staticInputs(pass, null)
+        : { ...staticInputs(pass, null), 0: { kind: "atlas", color: part === "color" } },
+    blending,
+  });
 
   // 组（P5b 步骤 4）：带子层的组合层。没有 effect、colorBlendMode ∈ {0, 31} 时也要画：基础 pass → 子树 → `groupUpload` 上屏
   const group = layer.passthroughModel && layer.subtree.length > 0;
@@ -344,6 +427,23 @@ export function planLayer(
     if (layer.passthroughModel) return { composite: null, steps, reasons };
     // 规则 1：基础材质需要帧缓冲
     if (base.framebuffer) snapshot();
+    if (sceneText && mesh) {
+      // 文本层直接上屏（rea-p6b-layout 4、5.1，p6b-fx f4 / f6）：[背景] → 普通字形 → [彩色字形]，三者的混合都是 colorBlendMode 31 时
+      // additive、否则 translucent（WPE 每帧把材质的混合覆盖成它，材质本身就是 translucent）
+      const blend = (pass: ScenePass) => (additive ? "additive" : pass.blending);
+      const scene: TargetRef = { kind: "scene" };
+      if (sceneText.fields.opaquebackground) {
+        if (sceneText.backgroundPass)
+          steps.push(
+            textStep("background", sceneText.backgroundPass, "direct", scene, blend(sceneText.backgroundPass)),
+          );
+        else reasons.push("render:text-background");
+      }
+      if (mesh.glyphs.length) steps.push(textStep("glyphs", base, "direct", scene, blend(base)));
+      if (mesh.colorGlyphs.length)
+        steps.push(textStep("color", sceneText.colorPass, "direct", scene, blend(sceneText.colorPass)));
+      return { composite: null, steps, reasons };
+    }
     // fullscreen（P5b 步骤 3，`p5b-fsmvp` 的 FSBG、FSQ）：NDC 四边形、UV 照常取纹理上界、不内缩；MVP 照常，着色器乘不乘它决定
     // 铺不铺满全屏
     steps.push({
@@ -372,7 +472,33 @@ export function planLayer(
     current = index;
     return { kind: "composite", index };
   };
-  if (layer.fullscreen) {
+  if (sceneText && mesh) {
+    // 文本层画进合成 RT（rea-p6b-layout 4、5.2，p6b-fx f1–f3、f5）：RT 初值二选一，再画字形（材质自己的 translucent，矩阵对着 RT 像素），
+    // 两者共占合成链的第一次写入。开了 `opaquebackground`：清成 (背景色, 图层 alpha)，没有基础绘制（f5）；没开：`composelayer_clearalpha`
+    // 把文字框背后的场景快照铺进来、alpha 清 0（f1 事件 47：图层四边形、图层 MVP、关混合、写 RGBA），即组合层的 `compose` 那条路
+    const target = nextComposite();
+    if (sceneText.fields.opaquebackground) steps.push({ kind: "clear", target, color: "text-background" });
+    else if (!sceneText.clearAlphaPass) reasons.push("render:text-clear-alpha");
+    else {
+      const pass = sceneText.clearAlphaPass;
+      if (pass.framebuffer) snapshot();
+      steps.push({
+        kind: "draw",
+        role: "compose",
+        pass,
+        effect: null,
+        target,
+        inputs: staticInputs(pass, null),
+        geometry: "layer",
+        uv: [1, 1],
+        inset: NO_INSET,
+        blending: null,
+      });
+    }
+    if (mesh.glyphs.length) steps.push(textStep("glyphs", base, "composite", target, base.blending));
+    if (mesh.colorGlyphs.length)
+      steps.push(textStep("color", sceneText.colorPass, "composite", target, sceneText.colorPass.blending));
+  } else if (layer.fullscreen) {
     // fullscreen（P5b 步骤 3，`p5b-fs` 的 F1：一次 Resolve 拷进合成 RT、没有基础 draw）：不画基础材质，合成 RT 0 拷贝当前画面。
     // 先拍快照（每图层至多一次；fullscreenlayer 的槽 0 是 `_rt_FullFrameBuffer`，上面的规则 1 已经拍过），再把快照整张拷进
     // 合成 RT 0，占合成链的第一次写入。WPE 是直接拷当前目标，快照就是当前目标，内容相同，只多一次整屏拷贝。排在组合层的
@@ -525,7 +651,8 @@ export function planLayer(
     }
   } else if (finalEffect < 0) reasons.push("render:no-final-pass");
 
-  const [width, height] = compositeSize(layer, baseTexture);
+  // 文本层的合成 RT 取排版的 `compositeSize`（WPE 截断取整、不套 max(4, ·)，rea-p6b-layout 3.1）
+  const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(layer, baseTexture);
   return { composite: { count: Math.min(2, writes), width, height }, steps, reasons };
 }
 
@@ -534,6 +661,8 @@ export function planLayer(
  * 带不支持项的 effect 打开时整场重编译，不算可变。
  */
 export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]): LayerPlan[] {
+  // 文本层（P6b 1d）的 effect 开关会改 `padding` 与文字框，切换走整场重编译（`SceneState.fromBundle` 冻结了它），不预备变体
+  if (layer.text) return [];
   // dev 强制渲染时开着的 effect 可以带不支持项，它能就地关掉（`SceneState.needsRecompile`），所以也算可变
   const variable = layer.effects.flatMap((effect, e) =>
     effect.visibleBound && (effect.enabled || !effect.unsupported.length) ? [e] : [],
@@ -554,7 +683,7 @@ export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]
  */
 export function planSignature(plan: LayerPlan): string {
   const steps = plan.steps.map((step) =>
-    step.kind === "draw" || step.kind === "particles" ? { ...step, pass: step.pass.key } : step,
+    step.kind === "draw" || step.kind === "particles" || step.kind === "text" ? { ...step, pass: step.pass.key } : step,
   );
   return JSON.stringify({ composite: plan.composite, steps });
 }

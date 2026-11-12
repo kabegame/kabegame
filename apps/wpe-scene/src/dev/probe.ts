@@ -49,6 +49,7 @@ import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
 import { replayParticleOptions, replayReadback, type ParticleReplay } from "./particleCorners";
+import { prepareProbeTexts } from "./probeTexts";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 import { applyScriptValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
 
@@ -325,6 +326,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     reader,
   });
   const compileMs = performance.now() - started;
+  // 文本层（P6b 1d）：同宿主，建场景前排好；没有文本层时不碰 wasm
+  const texts = await prepareProbeTexts(bundle, reader, options.sceneAssets);
   const gpu = await acquireGpu();
   try {
     if (canvas) checkCanvas(canvas, gpu.device.limits.maxTextureDimension2D);
@@ -340,6 +343,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], {
       ignoreUnsupported: force,
       particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
+      texts: texts.texts,
     });
     // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
     const pointer = pointers.pointers[0];
@@ -471,6 +475,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   } finally {
     for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
     cache.clear();
+    texts.dispose();
     gpu.device.destroy();
   }
 }

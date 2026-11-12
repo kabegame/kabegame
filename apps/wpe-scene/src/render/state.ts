@@ -14,6 +14,9 @@
  * （`instanceScalar` / `instanceColorn`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、重算颜色平移。
  *
  * 声音（P6a 步骤 1）：`volume` 存在 `sounds`，写入用编译期同一条取值规则（`soundVolume`），不标脏，宿主的排期器每帧读。
+ *
+ * 文本（P6b 1d）：排版结果存在 `texts`（宿主排好、加载时交来），对齐偏移写进图层的 `offset`。背景色是一份材质常量（文本表的
+ * `background.key`），`backgroundcolor` 的就地写走 `constant` 目标；文本层的 effect 开关按冻结的图层处理（切换整场重编译）。
  */
 import {
   bindingValue,
@@ -36,6 +39,7 @@ import {
 } from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import { soundVolume } from "../compile/sounds";
+import type { TextLayout } from "../text/layout";
 
 export interface LayerState {
   /** angles 为弧度（同 scene.json）。都是本地值：世界矩阵与继承后的可见性按父链现算（`render/layout.ts`）。 */
@@ -52,6 +56,11 @@ export interface LayerState {
    * 子孙的平移跟着根变。
    */
   parallaxDepth: number[];
+  /**
+   * 文本层的对齐偏移（P6b 1d，`TextLayout.offset`）：世界矩阵在本地矩阵最后右乘 `T(offset)`（`render/layout.ts` 的
+   * `layerLocalMatrix`）。由 `setTexts` 填，其它图层没有。
+   */
+  offset?: [number, number];
   /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中不变。 */
   readonly parent: number | null;
 }
@@ -199,6 +208,14 @@ export class SceneState {
    * 每帧读（`audio/sceneSounds.ts`），值变了才走 WPE 的音量回调。
    */
   readonly sounds = new Map<number, { volume: number }>();
+  /**
+   * 文本层的排版结果（P6b 1d，`objects` 下标 → `TextLayout`，含字形网格与它所在的图集）：宿主在加载前排好（`text/host.ts`），经
+   * `GpuScene.build` 的 `texts` 交来（`setTexts`）。渲染图按它定文字框、合成 RT 与有没有彩色字形，世界矩阵带它的对齐偏移。
+   * 1d 的文字加载之后不变，没有就地重排（1e）。
+   */
+  readonly texts = new Map<number, TextLayout>();
+  /** bundle 里的文本图层（`SceneLayer.text` 非空，`objects` 下标）。 */
+  private readonly textObjects = new Set<number>();
   private dirtyLayers = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
@@ -259,6 +276,15 @@ export class SceneState {
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
       // 组的上屏（P5b 步骤 4）：同 passthrough，g_Color4 由材质值置 1
       if (layer.groupUpload) constants.set(layer.groupUpload.key, { ...layer.groupUpload.uniforms });
+      // 文本的四个宿主 pass（P6b 1d）。背景常量总要有一份：没有背景 pass（合成路径清屏）时清屏色同样从它读，`backgroundcolor` 的
+      // 就地写落在这里
+      const text = layer.text;
+      if (text) {
+        for (const pass of [text.glyphPass, text.colorPass, text.backgroundPass, text.clearAlphaPass])
+          if (pass) constants.set(pass.key, { ...pass.uniforms });
+        if (!constants.has(text.background.key))
+          constants.set(text.background.key, { g_Color: [...text.background.color] });
+      }
     }
     const { bloom, postprocess, fields } = bundle.general;
     const state = new SceneState(
@@ -274,7 +300,26 @@ export class SceneState {
     for (const [object, values] of instances) state.particleInstances.set(object, values);
     // 手写的测试 bundle 可能没有声音表
     for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
+    // 文本层的 effect 开关会改 `padding`、文字框与合成 RT（rea-p6b-layout 3.5），1d 没有就地重排：切换一律整场重编译（同冻结的图层）
+    for (const layer of bundle.layers)
+      if (layer.text) {
+        state.textObjects.add(layer.object);
+        state.freezeLayer(layer.object);
+      }
     return state;
+  }
+
+  /**
+   * 换上文本层的排版结果（P6b 1d，`GpuScene.build` 调）：记下每层的 `TextLayout`，图层的对齐偏移写进 `LayerState.offset`。只认
+   * bundle 里的文本图层，其余条目忽略。
+   */
+  setTexts(layouts: ReadonlyMap<number, TextLayout>): void {
+    for (const [object, layout] of layouts) {
+      const layer = this.layers.get(object);
+      if (!layer || !this.textObjects.has(object)) continue;
+      this.texts.set(object, layout);
+      layer.offset = [layout.offset[0], layout.offset[1]];
+    }
   }
 
   /** 自身与全部子孙（`objects` 下标，自身在前）。环在编译期已断开，这里按走过的节点兜底。 */

@@ -27,10 +27,17 @@ import { ScriptApi, createWpeLocalStorage } from "./script/api";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, type ScriptTarget } from "./script/runtime";
 import { browserStorage, clearSceneStorage } from "./script/storage";
+import { SceneTexts } from "./text/host";
+import type { TextLayout } from "./text/layout";
 
 interface SceneTarget {
   path: string;
   sceneAssets: string[];
+  /**
+   * `%WINDIR%\Fonts`（文本对象的 `systemfont_*` 与回退链，P6b 1d）。宿主页面拿不到环境变量，要后端给；后端现在不给，按
+   * `C:\Windows\Fonts`（`text/host.ts` 的 `DEFAULT_SYSTEM_FONTS_DIR`）。
+   */
+  fontsDir?: string | null;
 }
 
 export interface SceneProperty {
@@ -127,6 +134,10 @@ export class SceneHost {
   private soundPlayer: ScenePlayer | null = null;
   private hostVolume = 0;
   private hidden = false;
+  /**
+   * 文本对象的排版（P6b 1d，`text/host.ts`）：第一张带文本层的 bundle 到达时建，wasm 实例与读过的字体跨重编译保留，每次加载新建图集。
+   */
+  private sceneTexts: SceneTexts | null = null;
   /** dev 探针计数：就地应用次数与重编译记录。 */
   readonly stats: SceneHostStats = { applied: 0, recompiled: [] };
   private receivedProperties = false;
@@ -776,6 +787,15 @@ export class SceneHost {
         }
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
       }
+      // 文本（P6b 1d）：排版要 wasm 与字体字节，在声音、脚本与 GPU 资源之前排好（读字体是异步的，之后比代数）。wasm 不在或排版
+      // 出错时抛 `text:engine`，由下面的 catch 退回预览图
+      let texts: Map<number, TextLayout> | undefined;
+      if (bundle.layers.some((layer) => layer.text)) {
+        this.sceneTexts ??= new SceneTexts({ reader: this.reader, report: this.options.report });
+        const prepared = await this.sceneTexts.prepare(bundle, target, () => id !== this.generation);
+        if (id !== this.generation || !prepared) return;
+        texts = prepared;
+      }
       // 声音在对象加载时就开始（WPE 不等第一帧），在脚本与 GPU 资源之前
       this.loadSounds(bundle);
       // runtime 已赋值但脚本还在加载时也要等，否则会抢在 init 之前进入首帧
@@ -790,6 +810,7 @@ export class SceneHost {
       current.setPaused(this.paused);
       await current.load(bundle, {
         ignoreUnsupported: force,
+        texts,
         beforeFirstFrame: (state) => {
           this.scriptBundle = bundle;
           this.scriptState = state;
@@ -855,6 +876,8 @@ export class SceneHost {
     for (const unlisten of this.unlisteners.splice(0)) unlisten();
     this.dropRenderer();
     this.disposeSounds();
+    this.sceneTexts?.dispose();
+    this.sceneTexts = null;
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;

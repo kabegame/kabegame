@@ -34,9 +34,11 @@ import {
   GROUP_CHILD_FRAMEBUFFER,
   groupChildIssues,
   isSoundObject,
+  isTextObject,
   modelFlag,
   objectKind,
   PARTICLE_UNIFORMS,
+  TEXT_UNIFORMS,
   usesLighting,
 } from "./features";
 import {
@@ -86,6 +88,7 @@ import {
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
 import { collectScripts, type SceneScripts } from "./scripts";
 import { compileSound, type SceneSound } from "./sounds";
+import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 
@@ -429,6 +432,12 @@ export interface SceneLayer {
    * `particle.passes` 里，不在上面的 `passes`（步骤 4 才接绘制）。
    */
   particle: SceneParticle | null;
+  /**
+   * 文本对象的文本表（P6b 1d，`texts.ts`）：字段、主字体、四个宿主材质的 pass、背景色；排版在宿主主线程（`text/host.ts`）。文本图层的
+   * `passes` 为空，基础 pass 由渲染图按文本表排（`render/graph.ts` 的 `text` 步骤），effect 与 passthrough 照图像层。其它对象，或
+   * 读不到字体材质时为 null；可选只是为了不动各处手写的测试图层，读的地方按 null 处理。
+   */
+  text?: SceneText | null;
 }
 export interface SceneBundle {
   general: SceneGeneral;
@@ -665,6 +674,8 @@ interface PassContext {
    * 任何槽位的帧表纹理都不报 `tex:animation`（步骤 5，帧表语义只按槽 0）；程序检查带 `PARTICLE_UNIFORMS` 与 `checkParticleProgram`。
    */
   particle?: ParticleSheetSystem;
+  /** 字体着色器的 pass（P6b 1d）：程序检查放行 `TEXT_UNIFORMS`（MSDF 才读的 `g_RenderVar0–3`）。 */
+  text?: boolean;
 }
 
 /**
@@ -1140,7 +1151,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       checkProgramFeatures(
         result,
         issues,
-        context.particle ? PARTICLE_UNIFORMS : context.fbos ? EFFECT_UNIFORMS : undefined,
+        context.particle
+          ? PARTICLE_UNIFORMS
+          : context.text
+            ? TEXT_UNIFORMS
+            : context.fbos
+              ? EFFECT_UNIFORMS
+              : undefined,
       );
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
       for (const binding of result.textures ?? []) {
@@ -1254,6 +1271,91 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     return { ...shell, fbos: [...fbos.values()], steps };
   }
 
+  /**
+   * 图像层的模型与基础材质（`object.image` 指向的模型 JSON）：模型标志、基础材质的 pass、图层尺寸。读不到模型或材质时报不支持、
+   * 返回 false（图层到此为止，没有 effect）。文本对象没有模型，不走这里（P6b 1d）。
+   */
+  async function compileImageModel(index: number, object: SceneObject, layer: SceneLayer): Promise<boolean> {
+    const image = object.image!;
+    const modelText = await fs.text(image);
+    if (!modelText) {
+      unsupported.add(`model:missing:${image}`);
+      return false;
+    }
+    const model = parseModel(modelText);
+    checkModelFeatures(model, unsupported);
+    // 两个标志分开（P5b 步骤 5，p5-REPORT `p5b-inst2`）：内缩只看 solidlayer，合成 RT 按 size 才排除 instanced（`compositeSize`）
+    layer.solidLayer = modelFlag(model, "solidlayer");
+    layer.instanced = modelFlag(model, "instanced");
+    if (layer.instanced) checkInstanceFeatures(object, unsupported);
+    layer.noPadding = modelFlag(model, "nopadding");
+    // 只认 JSON true：绑属性、挂脚本等由能力表报 `object:perspective`
+    layer.perspective = object.perspective === true;
+    // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl`）：`copybackground` 缺省 true（基类构造 `FUN_1401e6980` 给 `+0x304` 置 0x40，
+    // rea-p5-modelflags 开头的标志表），只有 JSON false 才关
+    layer.passthroughModel = modelFlag(model, "passthrough");
+    layer.copyBackground = object.copybackground !== false;
+    // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs`）：只认 JSON true（P5a 步骤 0 实测 `fullscreen: 1` 不生效）
+    layer.fullscreen = modelFlag(model, "fullscreen");
+    if (layer.passthroughModel) {
+      // 组合层又 `perspective: true`：基础 pass 与上屏各用哪套相机没测过（语料 0 个），照报
+      if (layer.perspective) unsupported.add("object:perspective");
+      // fullscreenlayer 带子层：WPE 这时子层按场景相机画进全屏 RT（rea-p5-modelflags §2.5），没有实测，语料 0 个，照报
+      if (layer.fullscreen && parents.includes(index)) unsupported.add("model:fullscreen:children");
+    }
+    if (!model.material) {
+      unsupported.add("material:missing");
+      return false;
+    }
+    const materialText = await fs.text(model.material);
+    if (!materialText) {
+      unsupported.add(`material:missing:${model.material}`);
+      return false;
+    }
+    const material = parseMaterial(materialText);
+    // instanced（P5b 步骤 5）：对象的 `instance` 覆盖材质 pass 的同名键（rea-p5-modelflags §6.2），规则同 effect 实例覆盖：`combos`
+    // 合并、`textures` 按槽合并（null 与非字符串的槽保留材质自己的）。`instance` 不是对象时不合并（能力表报 `model:instanced:instance`）
+    const instance = layer.instanced ? instanceOverride(object.instance) : null;
+    for (const [k, raw] of material.passes.entries()) {
+      const pass: MaterialPass = instance
+        ? {
+            ...raw,
+            combos: { ...raw.combos, ...instance.combos },
+            textures: mergeTextures(raw.textures, instance.textures),
+          }
+        : raw;
+      layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
+    }
+    // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸（`projectlayer` 取正交投影宽高，
+    // 步骤 2）。deep_space 的 Background 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
+    const base = layer.passes[0]?.textures[0];
+    const baseTexture = base === undefined ? undefined : bundle.textures[base];
+    if (layer.fullscreen) {
+      // fullscreen（P5b 步骤 3）排在 autosize 之前（rea-p5-modelflags §7：纹理就绪时 fullscreen 先判，取纹理图像尺寸、几何 2×2）。
+      // 两份尺寸：几何是 2×2 的 NDC 四边形；合成 RT 取槽 0 静态纹理的图像尺寸，槽 0 是运行时 RT（fullscreenlayer 的
+      // `_rt_FullFrameBuffer`，在 pass 的 `runtime` 里）或没有纹理时取场景尺寸
+      layer.size = [2, 2];
+      layer.fullscreenSize = baseTexture
+        ? [baseTexture.width, baseTexture.height]
+        : [bundle.general.width, bundle.general.height];
+    } else layer.size = imageLayerSize(model, layer.size, baseTexture, [bundle.general.width, bundle.general.height]);
+    return true;
+  }
+
+  /**
+   * 宿主指定材质的一个 pass（P6b 1d 的文本表用，`compile/texts.ts`）：读 WPE 自带的材质 JSON、取第一个 pass 编译；读不到时报
+   * `material:missing:<路径>`、返回 null。`text`：字体着色器的 pass，程序检查放行 `TEXT_UNIFORMS`。
+   */
+  const compileHostPass: HostPassCompiler = async (path, key, planned, options = {}) => {
+    const text = await fs.text(path);
+    const pass = text ? parseMaterial(text).passes[0] : undefined;
+    if (!pass) {
+      unsupported.add(`material:missing:${path}`);
+      return null;
+    }
+    return compilePass(pass, { key, planned, text: options.text });
+  };
+
   for (const [index, object] of scene.objects.entries()) {
     if (settled()) break;
     /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
@@ -1298,6 +1400,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       effects: [],
       passthrough: null,
       particle: null,
+      text: null,
     };
     // 每个对象都进 `layers`（分组节点、灯、粒子是没有 pass 的图层），子孙算世界矩阵与可见性时父的状态都在
     bundle.layers.push(layer);
@@ -1310,72 +1413,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       sounds.push(await compileSound(index, object, fs, properties, bindings));
       continue;
     }
-    // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
-    if (!object.image) continue;
-    const modelText = await fs.text(object.image);
-    if (!modelText) {
-      unsupported.add(`model:missing:${object.image}`);
-      continue;
+    // 文本对象（P6b 1d）：没有模型，基础 pass 换成文本表里的宿主材质（排版在宿主主线程）；effect 与 colorBlendMode passthrough
+    // 走下面图像层那段，文本表在它们之后编（`padding` 看启用的 effect 个数）
+    const textObject = isTextObject(object);
+    if (!textObject) {
+      // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
+      if (!object.image) continue;
+      if (!(await compileImageModel(index, object, layer))) continue;
     }
-    const model = parseModel(modelText);
-    checkModelFeatures(model, unsupported);
-    // 两个标志分开（P5b 步骤 5，p5-REPORT `p5b-inst2`）：内缩只看 solidlayer，合成 RT 按 size 才排除 instanced（`compositeSize`）
-    layer.solidLayer = modelFlag(model, "solidlayer");
-    layer.instanced = modelFlag(model, "instanced");
-    if (layer.instanced) checkInstanceFeatures(object, unsupported);
-    layer.noPadding = modelFlag(model, "nopadding");
-    // 只认 JSON true：绑属性、挂脚本等由能力表报 `object:perspective`
-    layer.perspective = object.perspective === true;
-    // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl`）：`copybackground` 缺省 true（基类构造 `FUN_1401e6980` 给 `+0x304` 置 0x40，
-    // rea-p5-modelflags 开头的标志表），只有 JSON false 才关
-    layer.passthroughModel = modelFlag(model, "passthrough");
-    layer.copyBackground = object.copybackground !== false;
-    // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs`）：只认 JSON true（P5a 步骤 0 实测 `fullscreen: 1` 不生效）
-    layer.fullscreen = modelFlag(model, "fullscreen");
     // 组（P5b 步骤 4）：有对象的父指向这个组合层。子孙由它按局部正交画进合成 RT、不在顶层画（`assignGroups` 在全部对象之后定归属）
     const hasChildren = layer.passthroughModel && parents.includes(index);
-    if (layer.passthroughModel) {
-      // 组合层又 `perspective: true`：基础 pass 与上屏各用哪套相机没测过（语料 0 个），照报
-      if (layer.perspective) unsupported.add("object:perspective");
-      // fullscreenlayer 带子层：WPE 这时子层按场景相机画进全屏 RT（rea-p5-modelflags §2.5），没有实测，语料 0 个，照报
-      if (hasChildren && layer.fullscreen) unsupported.add("model:fullscreen:children");
-    }
-    if (!model.material) {
-      unsupported.add("material:missing");
-      continue;
-    }
-    const materialText = await fs.text(model.material);
-    if (!materialText) {
-      unsupported.add(`material:missing:${model.material}`);
-      continue;
-    }
-    const material = parseMaterial(materialText);
-    // instanced（P5b 步骤 5）：对象的 `instance` 覆盖材质 pass 的同名键（rea-p5-modelflags §6.2），规则同 effect 实例覆盖：`combos`
-    // 合并、`textures` 按槽合并（null 与非字符串的槽保留材质自己的）。`instance` 不是对象时不合并（能力表报 `model:instanced:instance`）
-    const instance = layer.instanced ? instanceOverride(object.instance) : null;
-    for (const [k, raw] of material.passes.entries()) {
-      const pass: MaterialPass = instance
-        ? {
-            ...raw,
-            combos: { ...raw.combos, ...instance.combos },
-            textures: mergeTextures(raw.textures, instance.textures),
-          }
-        : raw;
-      layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
-    }
-    // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸（`projectlayer` 取正交投影宽高，
-    // 步骤 2）。deep_space 的 Background 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
-    const base = layer.passes[0]?.textures[0];
-    const baseTexture = base === undefined ? undefined : bundle.textures[base];
-    if (layer.fullscreen) {
-      // fullscreen（P5b 步骤 3）排在 autosize 之前（rea-p5-modelflags §7：纹理就绪时 fullscreen 先判，取纹理图像尺寸、几何 2×2）。
-      // 两份尺寸：几何是 2×2 的 NDC 四边形；合成 RT 取槽 0 静态纹理的图像尺寸，槽 0 是运行时 RT（fullscreenlayer 的
-      // `_rt_FullFrameBuffer`，在 pass 的 `runtime` 里）或没有纹理时取场景尺寸
-      layer.size = [2, 2];
-      layer.fullscreenSize = baseTexture
-        ? [baseTexture.width, baseTexture.height]
-        : [bundle.general.width, bundle.general.height];
-    } else layer.size = imageLayerSize(model, layer.size, baseTexture, [bundle.general.width, bundle.general.height]);
 
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;
@@ -1443,6 +1490,18 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         layer.groupUpload.uniforms.g_Color4 = [1, 1, 1, 1];
       }
     }
+    if (textObject && !settled())
+      layer.text = await compileText(index, object, {
+        fs,
+        properties,
+        bindings,
+        hdr: postprocess.hdr,
+        visibleEffects: layer.effects.filter((effect) => effect.enabled).length,
+        colorBlendMode: cbm,
+        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31),
+        hostPass: compileHostPass,
+        unsupported,
+      });
   }
   // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
   assignGroups(bundle.layers);

@@ -100,12 +100,16 @@ export function layerQuad(
  * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。`angles` 的 x、y 为 0 时 Ry、Rx 是单位阵，结果与只转 z 轴的旧矩阵逐位相同。
  * `scale.z` 为 0 时按 1：WPE 在这种输入下的行为没有测过，保留 P1 的兜底。
  */
-export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale">): Mat4 {
+export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale" | "offset">): Mat4 {
   const [x = 0, y = 0, z = 0] = layer.origin;
   const [sx = 1, sy = 1, sz = 1] = layer.scale;
   const [ax = 0, ay = 0, az = 0] = layer.angles;
   const rotation = multiply(multiply(multiply(translation(x, y, z), rotationZ(az)), rotationY(ay)), rotationX(ax));
-  return multiply(rotation, scaling(sx, sy, sz === 0 ? 1 : sz));
+  const local = multiply(rotation, scaling(sx, sy, sz === 0 ? 1 : sz));
+  // 文本层的对齐偏移（P6b 1d）：WPE 的世界矩阵 `+0x80` 在基类矩阵上再右乘 `T(+0x2f8, +0x2fc, 0)`（rea-p6b-layout 3.3），没有它的图层
+  // 字节不变
+  const [ox = 0, oy = 0] = layer.offset ?? [];
+  return ox === 0 && oy === 0 ? local : multiply(local, translation(ox, oy, 0));
 }
 
 /** 层级里一个对象的变换与可见性：`SceneLayer` 与 `LayerState` 都满足。 */
@@ -113,6 +117,11 @@ export interface LayerTransform {
   origin: readonly number[];
   angles: readonly number[];
   scale: readonly number[];
+  /**
+   * 局部平移（P6b 1d，只有文本层有）：排版的对齐偏移 `TextLayout.offset`，右乘在本地矩阵最后（`T · R · S · T(offset)`），子对象跟着走
+   * （同 WPE 的世界矩阵 `+0x80`）。缺省为 0。
+   */
+  offset?: readonly number[];
   visible: boolean;
   /** 父对象的 `objects` 下标；根节点为 null。 */
   parent: number | null;
@@ -171,7 +180,7 @@ export function effectiveVisible(
  */
 export function worldMatrixOf(
   object: number,
-  layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "parent">>,
+  layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "offset" | "parent">>,
   cache: Map<number, Mat4>,
 ): Mat4 {
   const cached = cache.get(object);
