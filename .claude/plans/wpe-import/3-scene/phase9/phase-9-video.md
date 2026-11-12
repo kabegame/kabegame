@@ -7,7 +7,7 @@
 
 ## 总体设计思路
 
-WPE 的视频纹理是一张普通 `.tex`，头标志带 Video（32）。它只有一张图、一个 mip，mip 的数据就是一整段视频文件。语料里这类纹理全部挂在图像层材质的槽 0（albedo）上，没有用在 effect pass、粒子或别的槽位。WPE 每帧把解出来的画面写进这张纹理，着色器照常按普通纹理采样。脚本经 `thisLayer.getVideoTexture()` 拿到 `IVideoTexture`，成员是 `duration`、`rate`、`loop`、`play`、`pause`、`stop`、`isPlaying`、`getCurrentTime`、`setCurrentTime`、`addEndedCallback`。这一组成员和 Media Foundation 的 `IMFMediaEngine` 一一对应，我们推断 WPE 用的就是它。这样的话，视频有自己的时钟，不跟场景时间逐帧对齐。这一点步骤 0 要读码确认。
+WPE 的视频纹理是一张普通 `.tex`，头标志带 Video（32）。它只有一张图、一个 mip，mip 的数据就是一整段视频文件。语料里这类纹理全部挂在图像层材质的槽 0（albedo）上，没有用在 effect pass、粒子或别的槽位。WPE 每帧把解出来的画面写进这张纹理，着色器照常按普通纹理采样。脚本经 `thisLayer.getVideoTexture()` 拿到 `IVideoTexture`，成员是 `duration`、`rate`、`loop`、`play`、`pause`、`stop`、`isPlaying`、`getCurrentTime`、`setCurrentTime`、`addEndedCallback`。这一组成员和 Media Foundation 的 `IMFMediaEngine` 一一对应，我们推断 WPE 用的就是它。这样的话，视频有自己的时钟，不跟场景时间逐帧对齐。（步骤 0 已确认：`IMFMediaEngineEx` 帧服务器模式，见实施记录。）
 
 `IMFMediaEngine` 在浏览器里的对应物就是 `<video>`。所以解码交给浏览器，渲染器只负责把画面搬进纹理：
 - **字节**：主线程按区间 `fetch(file:)` 读出视频段，用 `Response.blob()` 直接生成 Blob，数据不进 JS 堆。散文件和 `scene.pkg` 里的条目一样处理，因为散的 `.tex` 也在视频前面带着头。
@@ -207,17 +207,18 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
   - 视频纹理用在图像层槽 0 以外的地方时照报 `tex:video:<用途>`（语料 0 处）。
 - **主线程**：`src/video/` 里每段视频一个播放器，管 Blob、`<video>`、`requestVideoFrameCallback` 和脏标记。
   - 场景加载时建，换场景、销毁宿主时撤销对象 URL；
-  - 第一帧出来之前不发 `ready`，和 P1-5「结果出来前不显示」一致。具体等不等，看 WPE 在第一帧之前画什么。
+  - 等不等第一帧再发 `ready`，子计划定：WPE 不等，第一帧之前纹理全 0、图层透明（步骤 0）；等的话最多几十毫秒，可以省掉一帧透明。
 - **渲染器**：
-  - 视频槽建 `rgba8unorm` 纹理，带 `COPY_DST | RENDER_ATTACHMENT`；
-  - 每帧在编码图层之前，对脏的、可见的视频拷一次；
+  - 视频槽建 `rgba8unorm` 纹理，带 `COPY_DST | RENDER_ATTACHMENT`，一级 mip，初值全 0；
+  - 编码到这个图层时，若报过新帧就拷一次（WPE 是绑定纹理时 `TransferVideoFrame`）；
   - 采样器照头标志（ClampUVs、NoInterpolation）。
-- **时钟与暂停**：按步骤 0。宿主暂停、隐藏图层（视 WPE 而定）时 `pause()`。
+- **时钟与暂停**（步骤 0 已查清）：
+  - `<video>` 自己的时钟，加载即播放，`loop` 缺省为真；
+  - 这张纹理最近一次被画到的帧号加 30 小于当前帧号时 `pause()`，再被画到时 `play()`、不追赶，`isPlaying` 照报真；
+  - 宿主暂停时全部 `pause()`，恢复时全部 `play()`，连脚本暂停过的也放（照 WPE）。
 - **确定性回放**：dev 探针的 `renderFrame` 与 kbp 回放按目标时刻设 `currentTime`，等 `seeked` 和那一帧到达再拷贝。
-- **声音**：
-  - WPE 放声：增益接宿主音量，复用 P6a 的通路；
-  - WPE 不放声：一律 `muted`。
-- **解不了的视频**：元素报 `error` 或探测不支持时退回预览图，原因记 `video:decode:<编码>`（运行时键，不进编译期能力表）。
+- **声音**：一律 `muted`。WPE 的场景视频纹理带 `FORCEMUTE` 创建，`videoaudiooutput` 不起作用（步骤 0 读码 + 实测）。
+- **解不了的视频**：不退回整张场景。照 WPE，纹理保持全 0、图层透明，宿主记一条 warn。
 
 **验收：**
 - 测试视频在 Kabegame 里显示的帧号、循环点、暂停后的行为和 WPE 一致；色卡逐像素比，误差写进实施记录。
@@ -226,8 +227,12 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 
 ## P9b — 脚本与多段视频
 
-- **`IVideoTexture`**：照步骤 0 实现全部 10 个成员，`getVideoTexture` 从 `scriptApi.ts` 的缺失表删掉。脚本 realm 和宿主同源，包装对象直接调主线程的播放器。
-- **隐藏图层**：照 WPE 的规则处理解码与计时。5 段 4K60 的场景一次只解码可见的一段。
+- **`IVideoTexture`**：照步骤 0 实现全部 10 个成员（[p9-REPORT](p9-REPORT.md)「脚本 API」与「读码与实测的对照」），`getVideoTexture` 从 `scriptApi.ts` 的缺失表删掉。脚本 realm 和宿主同源，包装对象直接调主线程的播放器。
+  - `rate`、`loop` 是包装对象上的字段，写入转给播放器；
+  - `setCurrentTime` 读回钳到 `[0, duration − 0.005]`；
+  - `duration` 是容器时长（WPE 2.517，Chromium 的 `video.duration` 按流算是 2.516667），取法子计划定；
+  - `rate` 为负时 WPE 的工作线程会卡住，不复刻。
+- **隐藏图层**：按 P9a 的「30 帧没画到就暂停」。5 段 4K60 的场景一次只解码可见的一段，其余 30 帧后就停了。
 - **多段切换**：3326873240、3470764447 的「按时段播一段、暂停其余」，3243449890、3276911872 的「先停、延时再放」，按步骤 0 测出的语义在测试工程里各复现一遍。
 
 **验收：** 测试工程脚本的每一步和 WPE 抓帧一致；6 张用到脚本的场景在 dev 下强制渲染（`kabegame-dev-scene-force-render`）时，脚本不报错、切换的时机和 WPE 一致。
@@ -240,7 +245,7 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
   - 宿主的 `file:` 范围加上缓存目录；
   - 删除场景行时一起清掉。
   - 不另起 HTTP 服务。
-- **HEVC 与 Matroska**：本机解不了时的提示与退回，按 P9a 的运行时键。
+- **HEVC 与 Matroska**：本机都能放（步骤 0）。用户显卡不支持 HEVC 时按 P9a 的规则，图层透明、记 warn。
 
 **验收：**
 - 674 MiB 那张在预览与桌面同时打开时，读入时间、内存和丢帧在实施记录里有数字，并和步骤 0 定的上限比。
@@ -267,14 +272,34 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 
 ## 风险
 
-1. **多实例的解码开销**：4K60 H.264 在预览、桌面、应用背景同时播放是三路硬件解码，可能碰上显卡的会话上限或发热。步骤 0 先量。
-2. **时钟对不上**：如果 WPE 按场景时间逐帧取帧，`<video>` 的帧时序不精确，要换 WebCodecs，P9a 的工作量翻倍。
-3. **颜色转换**：Chromium 把视频帧拷进 WebGPU 时做的色彩空间转换（limited → full、BT.709），和 WPE 的 Media Foundation 视频处理器可能差一两级。只能逐像素比，差在误差包络内就接受。
-4. **循环点**：`<video loop>` 回到开头时可能停一两帧；WPE 的媒体引擎可能也停。两边实测再比。
-5. **HEVC 与 Matroska**：HEVC 要看用户显卡；Matroska 要看 Chromium 认不认。这两张可能解锁了也播不出，按运行时键退回。
+1. **多实例的解码开销**：4K60 H.264 在预览、桌面、应用背景同时播放是三路硬件解码。步骤 0 在本机（NVIDIA Ada）同一页面里三路 4K60 没有问题；别的显卡、核显没量过。
+2. ~~**时钟对不上**~~：步骤 0 证实 WPE 用媒体引擎自己的时钟，不按场景时间取帧，`<video>` 对得上。
+3. ~~**颜色转换**~~：步骤 0 实测 Chromium 与 WPE 的色卡最大差 1。语料里 13 段没标颜色、2 段标 `bt470bg`，两边各按缺省处理，P9a 验收时用这几段核对。
+4. ~~**循环点**~~：步骤 0 实测 WPE 每轮停约 3 ms、Chromium 约 4 ms。
+5. **HEVC 与 Matroska**：本机都能放；HEVC 在别的显卡上可能解不了，那时图层透明。
 6. **验收的确定性**：实时播放时视频帧取决于解码器的节奏，同一场景时间不一定是同一帧，所以按「同一视频帧」比，不按「同一场景时间」比。
 7. **共享文件**：和 P4–P7 的会话同时改帧循环。按块暂存，必要时在 HEAD 快照里实现再三方合并。
 
 ## 实施记录
 
-（尚未开始）
+### 步骤 0 — 调研（2026-11-12）
+
+读码 [rea-p9-video](rea-p9-video.md)（代理用 REA 读 `wallpaper64.exe` 2.8.42），实测 [p9-REPORT](p9-REPORT.md)（WPE 测试窗口 + Kabegame dev app）。工具与数据在 `ignore/p9/`：测试视频与工程 `gen_v.py`，采样分析 `ana_sample.py`，日志按偏移读 `logcut.py`，音频会话峰值 `peak.ps1`。
+
+结论（详见报告）：
+- **解码**：场景视频纹理一律用 `IMFMediaEngineEx` 帧服务器模式，不走视频壁纸的 `videoframework` 回退链；总计划的推断成立。
+- **纹理**：`R8G8B8A8_UNORM`、一级 mip，采样器照头标志；颜色转换在 MF 视频处理器里，Chromium 的 `copyExternalImageToTexture` 和它最大差 1。决定 1（拷进普通纹理）有了依据。
+- **时钟**：媒体引擎自己的时钟，加载即播放、缺省循环，循环点停约 3 ms。决定 2（`<video>`）有了依据，不需要 WebCodecs。
+- **暂停**：不看 `visible`，纹理连续 30 个渲染帧没被画到就暂停，再画到时续放、不追赶；宿主暂停时全部暂停、恢复时全部放。
+- **声音**：不出声（`FORCEMUTE`），实测峰值 0、阳性对照 0.093。
+- **失败**：纹理保持全 0，图层透明，不写日志。
+- **Kabegame 侧**：语料的三种编码在本机都能放；674 MiB 读成 Blob 用 781 ms、不占内存但整段落盘；4K 单次拷贝摊到 GPU 约 1.3 ms；三路 4K60 同时播放没有问题。决定 3（`Response.blob()`）可以先用。
+
+对后面各节的影响已改进上文：P9a 的声音、失败、暂停规则；P9b 的 `IVideoTexture` 细节；P9c 的 HEVC / Matroska；风险 2–4 划掉。
+
+我的失误：
+- 报告初稿把「脚本 `setCurrentTime` 之后画面晚一帧」解释成 WPE 在脚本之前取帧。读码表明 WPE 在绑定纹理时取帧，晚一帧是因为 seek 异步；已改正。
+- 第一次在隐藏的场景宿主里量帧时序：屏外宿主的 rAF 是 0，`requestVideoFrameCallback` 不回调。改到主窗口页面里测（不挂 DOM、跑完释放）。
+- 第一次读回拷贝结果全是 0：读回用的纹理没带 `COPY_SRC`，失败的是读回而不是拷贝。
+
+工具问题：`wpe-renderdoc` MCP 的日志游标里 `created` 大于 2^53，经工具参数的 JSON 传回会丢精度，`log_since` 误报「日志被重写」。本轮用 `logcut.py` 绕开，没改 MCP。
