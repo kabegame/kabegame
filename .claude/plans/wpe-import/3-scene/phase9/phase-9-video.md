@@ -200,6 +200,8 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 
 ## P9a — 播放与纹理
 
+子计划见 [phase-9a-playback.md](phase-9a-playback.md)：视频模块 → 接进编译、渲染与宿主 → 解锁与确定性回放 → 收尾。下面是写子计划之前的范围。
+
 **实现**（按步骤 0 的结论细化）：
 - **编译期**：
   - `tex.ts` 去掉 `tex:video`；
@@ -263,7 +265,7 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 - **P11 的媒体**：`$mediaThumbnail` 是系统纹理，不是视频纹理，归 P11。
 - **工具**：kbp-tools 的视频纹理生成器、抓帧读帧号是 kbp-tools 的新子功能，按它的协议加（SKILL 里登记）。
 
-## 决定（待定，2026-11-12）
+## 决定（2026-11-12 用户：四条都按推荐；步骤 0 之后都有了实测依据）
 
 1. **帧进纹理：** 推荐拷进普通纹理（`copyExternalImageToTexture`），不用外部纹理。理由：着色器和绑定组都不用动，代价是视频每出一帧一次 GPU 复制。
 2. **解码：** 推荐 `<video>`。步骤 0 证实 WPE 按场景时间逐帧取帧时，再换 WebCodecs。
