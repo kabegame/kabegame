@@ -229,6 +229,8 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 
 ## P9b — 脚本与多段视频
 
+子计划见 [phase-9b-script.md](phase-9b-script.md)：容器时长 → `IVideoTexture` → 真机对照 → 收尾。步骤 0 的补测改了下面几条（时长取 `mvhd`、`loop` 是数字、暂停期间不换画面），以子计划为准。下面是写子计划之前的范围。
+
 - **`IVideoTexture`**：照步骤 0 实现全部 10 个成员（[p9-REPORT](p9-REPORT.md)「脚本 API」与「读码与实测的对照」），`getVideoTexture` 从 `scriptApi.ts` 的缺失表删掉。脚本 realm 和宿主同源，包装对象直接调主线程的播放器。
   - `rate`、`loop` 是包装对象上的字段，写入转给播放器；
   - `setCurrentTime` 读回钳到 `[0, duration − 0.005]`；
@@ -313,3 +315,11 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 - 三张解锁场景的视频纹理和 WPE 抓帧比：HEVC 那张平均差 0.19、最大 5；两段没标颜色的 H.264 平均差 1.2–1.7、99 分位 ≤ 10，是色度上采样的插值不同（[p9-REPORT](p9-REPORT.md)「P9a 的对照」）。
 - 对照中排除了一个误判：测试工程缩放后的边缘差异起初归因于 WPE 的 8 倍各向异性，不缩放的对照证明是缩放路径与色度上采样，采样器不用改。
 - 留给 P9b：`getVideoTexture` / `IVideoTexture`（播放器接口已备好）、`duration` 对齐容器时长、暂停期间 seek 后显示哪一帧。留给 P9c：多实例开销（回归 V7）、674 MiB 级视频每次加载整段落盘。
+
+### P9b 步骤 0 — 补测（2026-11-13）
+
+见 [p9-REPORT](p9-REPORT.md)「P9b 步骤 0 的补测」与 [phase-9b](phase-9b-script.md)「实施记录」。六个测试工程在 WPE 测试窗口里各跑一次（`ignore/p9/p9b/`），另在 Kabegame 主窗口页面里量 Chromium 的时长与结尾。
+- **时长**：WPE 的 `duration` 是 MP4 `mvhd`，时钟一直走到它；Chromium 按各轨编辑之后算，语料 21 / 59 段短 22–40 ms。
+- **暂停期间**：seek 读回立即变，画面到 `play()` 那一帧才换；`stop()` 后停在 stop 那一刻的帧。
+- **类型**：`isPlaying()` 布尔、`loop` 数字、`duration` 只读，另有 `getAnimation`。
+- **语料的写法**：两张是 WPE 自带的「Video texture controls」预设，两张按时段播一段、暂停其余，一张改速度，一张自写控制。

@@ -221,6 +221,100 @@ P9a 步骤 3 解锁后，在 Kabegame 里按 WPE 实际显示的那一帧回放�
 - 1:1 时采样器不起作用，差异仍在，所以不是各向异性；最大的点都在色卡色块边缘（如红块上方的灰底，WPE (104, 93, 93)、我们 (97, 95, 96)），是色度上采样。
 - 缩放后多出来的边缘差异来自缩放路径：WPE 按窗口分辨率直接画，我们先画场景分辨率再缩到画布。所有图层共有，不是视频的。
 
+## P9b 步骤 0 的补测（2026-11-13）
+
+步骤 0 留下的脚本问题，加上读 6 张用到 `getVideoTexture` 的场景脚本时发现的新问题，WPE 与 Kabegame 两侧各测一遍。工具在 `ignore/p9/p9b/`：
+- 工程生成：`gen_b.py`，工程在 `proj/`；
+- 语料：脚本原文 `dump_gvt.py` → `scripts/`，时长来源 `durations.py`、`tails.py`；
+- 分析：`rows.py`、`ana_switch.py`、`ana_preset.py`；
+- 日志与采样：`out/`。
+
+WPE 设置同上（`fps` 20），测试窗口 1280×720，五个窗口都已关闭、设置没改。
+
+### 语料里的用法
+
+6 张场景，脚本原文导出在 `ignore/p9/p9b/scripts/`：
+
+| 场景 | 写法 | 依赖的行为 |
+|---|---|---|
+| 3243449890、3276911872 | WPE 自带的「Video texture controls」预设（两张逐字相同）挂在视频图层的 `visible` 上 | `init` 里读 `duration`、`stop()`、`setCurrentTime`；`update` 里每帧 `play()`、写 `rate`，`getCurrentTime() ≥ duration − frametime` 时自己跳回起点、按属性数圈、按属性停下并隐藏 |
+| 3326873240、3470764447 | 5 段视频，每帧对选中的一段 `play()` + 显示，其余 `pause()` + 隐藏 | 暂停冻结、切回来接着放 |
+| 3361965869 | 属性改 `rate`（0.5–5） | `rate` |
+| 3605722997 | 两段脚本，自写的播放控制 | `isPlaying() === 1`、`duration`、`setCurrentTime`、`getCurrentTime() ≥ end − 0.1` |
+
+`loop` 与 `addEndedCallback` 都没有用到。
+
+### `IVideoTexture` 的类型与边界（`p9b-api`、`p9b-api2`）
+
+| 项 | WPE |
+|---|---|
+| `isPlaying()` | `boolean`（所以 3605722997 的 `=== 1` 在 WPE 里永远是假） |
+| `loop` | **`number`**，1 / 0，写 `true` / `false` 后也读出数字 |
+| `rate`、`duration`、`getCurrentTime()` | `number`；`duration` 是容器时长的 float32（2.5169999599456787） |
+| `duration = 1` | 严格模式下抛 `TypeError: Cannot assign to read only property 'duration'` |
+| `rate = '1'` / `loop = 1` | 读回 1 / 1 |
+| 自有属性（可枚举，按这个顺序） | `duration`、`loop`、`rate`、`addEndedCallback`、`play`、`setCurrentTime`、`isPlaying`、`stop`、`pause`、`getCurrentTime`、`getAnimation` |
+| 原型 | 普通对象，`String(v)` 是 `[object Object]`；`currentTime`、`getDuration` 没有 |
+| `getAnimation()` | 是函数，返回 `undefined` |
+| `play` / `pause` / `stop` / `setCurrentTime` 的返回值 | `undefined`；`play.length` 0 |
+| 同一图层再调 `getVideoTexture()` | 同一个对象 |
+| 结束回调的参数 | `arguments.length` 0 |
+| `init` 里第一次读 `duration` | 等了 28 ms（合成视频）、19 ms（`p9b-long`），元数据已就绪时 0 ms：读码说的等元数据成立 |
+| `init` 里 `setCurrentTime(1.0)` | 读回 1.0，第一帧 1.022：生效，不被工作线程第一轮的「回到 0」冲掉 |
+| `rate = 5` | 每帧前进 0.2458 / 0.0501 s，约 4.9 倍（帧时间抖动）；照常绕回 |
+| `loop = false` 放到结尾 | 时间停在 `duration`（读回 2.517000）、`isPlaying` 假、回调一次 |
+| 结尾之后 `play()` | 时间立即 0、从头放：读码「已结束先回 0」成立 |
+
+### 暂停期间的画面（`p9b-api2`，采样解视频帧号）
+
+| 动作 | 读回的时间 | 显示的视频帧 |
+|---|---|---|
+| 8.04 s `pause()` | 0.4625，停住 | 27，停住 |
+| 8.55 s `setCurrentTime(1.8)` | 立即 1.8 | **仍是 27** |
+| 9.50 s `play()` | 1.8 起接着走 | 这一帧就是 108（1.8 s），之后连续 |
+| 10.50 s `pause()`，11.03 s seek 0.3，11.31 s seek 2.0 | 0.286646（seek 0.3 没生效）→ 2.0 | 一直是 16 |
+| 12.01 s `play()` | 2.0 起 | 这一帧 120 |
+| 12.64 s `stop()` | 立即 0、`isPlaying` 假 | **停在 stop 那一刻的帧（6）**，直到 13.61 s `play()` 那一帧变成 0 |
+| 14.21 s 同一帧里 `setCurrentTime(1.0)` 再 `pause()` | 1.0 | 停在 seek 之前的帧（32），15.21 s `play()` 那一帧变成 60 |
+
+- 脚本暂停 / 停止之后不再取帧：读码「`pause()` 结束工作线程」成立。seek 读回立即变，画面等到 `play()` 那一帧才换。
+- **seek 目标离当前位置不到一帧时不生效**：暂停在 0.2867 时 seek 0.3，读回 0.286646；`p9b-api` 里暂停在 0.4923 时 seek 0.5，读回不变。离得远的（1.8、2.0）都生效。这是 MF 的行为。
+
+### 时长（`p9b-long`、`p9b-real`）
+
+| 视频 | `mvhd` | 视频轨 | 音轨（编辑之后） | WPE `duration` | WPE 绕回 / 结束 | Chromium `duration` |
+|---|---|---|---|---|---|---|
+| `v60-151`（无音轨） | 2.517 | 2.516667 | — | 2.517 | 2.517 | 2.516667 |
+| `v60-151-long`（音轨 2.55 s） | 2.55 | 2.516667 | 2.55 | 2.55 | 2.55 | 2.55 |
+| 3361965869 原片（Adobe 写的，音轨被编辑列表截到视频长） | 10.005333 | 9.983333 | 9.983333 | **10.005333** | 10.005333 | **9.983333** |
+
+- WPE 的 `duration` 是 `mvhd`（float32），不看编辑列表；时钟一直走到它，视频最后一帧之后停在最后一帧，再绕回或结束。`getCurrentTime()` 在结束时正好等于 `duration`。
+- Chromium 按各轨编辑之后的长度算，结束时 `currentTime` 等于它自己的 `duration`。在它的时长以内，结尾和循环点和 WPE 一样（`v60-151-long` 在 Chromium 里同样走到 2.55 才绕回）。
+- 语料 59 段 MP4 里，`mvhd` 比各轨最长的长 1 ms 以上的有 21 段，差 22–40 ms（`tails.py`）。其中 9 段在用脚本的 3326873240、3361965869、3470764447 里。
+- 不足 1 ms 的差来自 `mvhd` 的毫秒取整。
+
+Chromium 另测：元数据之前设 `currentTime = 1.2`，元数据之后仍是 1.2，从 1.2 开始放（初始播放位置）。
+
+### 两段视频轮换（`p9b-switch`，照 3326873240 的写法）
+
+- 每帧对一段 `play()`、另一段 `pause()`：被暂停那段的时间当帧冻结，`isPlaying` 假。
+- 切回来那一帧显示的是它冻结时的画面，之后接着放，不追赶。例：4.05 s 切回 A，A 停在 2.0986，显示帧 125。
+- 和已知规则的组合一致，没有新行为。
+
+### 预设脚本（`p9b-preset`）
+
+预设原文挂在视频图层的 `visible` 上，属性用 3243449890 的值，只把 `play` 从用户绑定换成 `true`。视频用 `v60-151-long`。另一个图层每帧记状态。
+- 缺省属性下 `alpha` 恒为 1、`visible` 恒为真：`fade` 只在数圈或延时时生效。
+- `init` 之后第一帧时间 0。之后每帧 `play()`，`isPlaying` 恒真。
+- 每次时间到 `duration − frametime`（2.50 左右）时，脚本自己 `setCurrentTime(0)`，周期约 2.5 s。
+- 这份逐帧记录（`out/log-preset.txt`）是 P9b 真机验收的真值。
+
+### 没有测的
+
+- 宿主暂停再恢复时连脚本暂停过的也放：只有读码（rea 第 3 节第 5 条，静态确认）。实测要暂停用户的桌面壁纸和别的会话的窗口，不做。
+- `rate` 为 0 或负数：读码推出工作线程会等很久或卡死，不造这种工况。
+- 空闲暂停（30 帧没画到）期间的 seek：读码是工作线程照常取帧，再画到时显示新位置。
+
 ## 工具问题
 
 - `wpe-renderdoc` MCP 的日志游标：`created` 是 Windows FILETIME（约 1.79e18），大于 2^53，经工具参数的 JSON 传回时丢精度，`log_since` 误报「日志被重写」。可以把 `created` 改成字符串，或游标只比较 `head`。本轮用 `ignore/p9/logcut.py` 按偏移读，没有改 MCP。
