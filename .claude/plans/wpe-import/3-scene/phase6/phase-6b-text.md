@@ -885,24 +885,211 @@ if (path.startsWith(SYSTEM_FONT_PREFIX)) {
 - 顺手改了 WPE_SCENE.md 场景宿主一节里「Windows 上文本对象要读的 13 个系统字体文件」那句。dev 探针（`dev/probeTexts.ts`）仍按 `C:\Windows\Fonts` 读，只在 Windows dev 上用，没改。
 - macOS / Linux 的候选路径都没核对，见代码里的 `TODO:[WPE_SCENC]` 与回归 T14、T15。
 
-### 1e — 动态文字
+### 1e — 动态文字（2026-11-13 按 HEAD `8ab0b58a` 重写，调研笔记 `ignore/p6/b1e/research.md`）
 
-**点 1 — 字符串目标（修改 `compile/bindings.ts`、`render/state.ts`）**
-- **新增** `BindingTarget` 加 `{ kind: "text"; object: number; field: TextField }`；`TextField` 是会触发重排的字段（`text`、`pointsize`、`padding`、`spacing`、对齐、`maxwidth`、`maxrows`、`limit*`、`blockalign`、`opaquebackground`），`backgroundcolor` 等只在绘制时读的走现有的就地路径。
-- **修改** `SceneState` 加 `texts`（每个文本层的当前字段）与 `dirtyTexts`，`takeDirty` 多返回一项；字符串只在 `text` 目标上流通，`bindingValue` 对文本目标返回 `string`，其余目标的类型不变（锚点 h）。
+**总体设计思路**
 
-**点 2 — 字段脚本（修改 `compile/scripts.ts`、`script/runtime.ts`、`host.ts`）**
-- **修改** `targetOf`：`objects/<i>/text`（文本对象）→ `{ kind: "text", object, field: "text" }`，值类型 `string`；`writeReturn` 对 `string` 类型：字符串原样、数字等经 `String()`、`null` / `undefined` 不写（0c 实测）；`host.ts` 的 `targetPath` / `readScript` / `writeScript` 认 `text` 目标。
+1d 的文本是「加载时排一次、之后不变」。1e 让文字在运行中变：字段脚本的返回值（时钟、计数）和用户属性（`textinput` 改文字、`slider` 改字号）写进一份「当前排版字段」，和上次排版用的值逐项比较，变了才重排，同 WPE（`FUN_140256f20` 开头的比较表，rea-p6b-layout §3.5）。脚本写回在帧内第二次 `sync` 里重排，当帧生效；属性写在两帧之间，下一帧生效，都不整场重编译。
 
-**点 3 — 重排（修改 `render/scene.ts`、`render/text.ts`）**
-- **新增** `GpuScene.sync` 对脏文本层：`layoutText` → 图集脏区上传 → 重写两组顶点 → 文字框变了就重建这一层的合成 RT、更新图层尺寸与基础矩阵。值没变不重排（WPE 先逐项比较，rea-p6b-layout 3.5）。缺回退字体时异步读、读完再标脏。
+数据流分三段。第一段是**字符串通道**：新增绑定目标 `{ kind: "text", object, field }`，字符串只在这种目标上流通。脚本侧按 WPE 的 `ToString` 规则（`null` / `undefined` 不写），属性侧按 JSON setter（`text` 只收字符串）；`text` 字段脚本的 `valueType` 定成 `"string"`，不再按初值猜。第二段是**状态**：`SceneState` 存每个文本层的当前 `TextFields`，写入时按字段规整、和现值比较，变了才标 `dirtyTexts`。第三段是**重排与重建**：宿主的 `SceneTexts` 在加载后不再丢掉图集，变成一个「重排器」交给 `GpuScene`；`sync` 先处理脏文本层（释放旧排版的字形引用 → 排新的 → 换进 `state.texts`、改对齐偏移），再把这一层按新排版强制重建（新 draw、新顶点索引；合成 RT 或 effect fbo 尺寸变了就换；图集扩容了就重建纹理、引用它的层一起重建）。
 
-**点 4 — 能力表**：删 `text:script` 与文字绑属性的重编译登记。
+关键决策：
+- **重排后整层重建 draw**，不另写「只改顶点」的路径。重建只是几个缓冲和 bind group，每秒一次的时钟可以忽略；每帧都变的只有 2 张场景（34 个对象），1e 量出耗时再说。这样合成 RT 尺寸变、步骤增减（空 ↔ 非空、第一次出现彩色字形）、图集换纹理都走同一条路。
+- **文本层的合成 RT 与 effect fbo 由本层独占**，不进共享池：尺寸会随文字变，共享池只增不减，按尺寸共享的话时钟每分钟换一个宽度就会一直攒新 RT。独占后尺寸变了就销毁重建，内存有界（WPE 也是每次重排重新分配，rea-p8-layer `+0xb8`）。
+- **加载时为文本层预备全部可能的步骤的管线**（普通字形、彩色字形、背景、clearalpha、上屏），`variantPlans` 对文本层按「两种字形都有」的假想排版给出计划。管线和尺寸、字数无关，这样运行中步骤增减不会碰到 `render:variant-missing`。
+- **缺字体异步读**：帧循环里不能等。重排发现缺字体时保留旧排版（把刚释放的引用加回去），宿主读完字体把这一层标脏，下一帧补上；WPE 是同步读，所以第一次出现新回退字时我们会晚一到几帧（见待定 4）。
 
-**验收（1e）：**
-- `p6b-script`：计数器每帧变，抓帧比当帧画的数字（同 0c 的 `script_frame.py`）。
-- `2391389126` 解锁，和 WPE 同一时刻的画面比（时钟取同一个字符串）；改用户属性不重编译。
-- 每帧都变的文字：量 `sync` 里重排加上传的耗时，记进报告。
+**现状锚点**
+
+a. 文本键的字段脚本落到 `unsupported`，`valueType` 按初值猜（`compile/scripts.ts:65-90`）
+```ts
+function valueType(initial: SceneScalar): ValueType | "string" {
+  if (typeof initial === "string") {
+    const parts = initial.trim().split(/\s+/);
+    if (parts.length === 2) return "vec2";   // 现状："Song Title" 被当成 vec2，update(value) 收到 Vec2(NaN, NaN)
+    // …
+  }
+  return "string";
+}
+function targetOf(path, owner, key, initial, sound): SceneScript["target"] {
+  if (owner.kind === "layer" && key in layerTypes) return { kind: "layer", /* … */ };
+  // …
+  return { kind: "unsupported", path };      // 现状：objects/<i>/text、/pointsize、/maxwidth 都到这里
+}
+```
+
+b. 脚本写回整条链只认 `number[] | boolean`（`script/runtime.ts:78`，另有 `ScriptApi.write`、宿主 `writeScript` / `readScript` / `scriptOverrides` 同型）
+```ts
+private writes = new Map<string, { target: ScriptTarget; value: number[] | boolean }>(); // 现状：没有 string
+```
+
+c. 文本排版字段绑属性登记成整场重编译（`compile/texts.ts`）
+```ts
+const recompile = (key: string): BindingTarget => ({ kind: "recompile", reason: "layer-structure", path: `objects/${index}/${key}` });
+const read = (key: string, target: BindingTarget = recompile(key)): unknown => { /* 现状：text、pointsize 等都走 recompile */ };
+```
+
+d. `SceneState.write` 的分支按目标种类排，最后一个兜底是泛光（研究笔记 A5）——新增目标种类不显式处理会写坏泛光参数。
+
+e. 运行中重建只有 effect 开关一套：签名相同就不动，管线只从加载时备好的表取，合成 RT 只增不换（`render/scene.ts:2075-2097`、`1125-1136`、`1053-1080`）
+```ts
+const signature = planSignature(plan);
+if (signature === runtime.signature) return;             // 现状：直接上屏的文本换了字，签名不变
+// preparedOf：缺管线抛 render:variant-missing
+composites.push(...pool.slice(composites.length, count)); // 现状：已有的 RT 不换成新尺寸的
+```
+
+f. effect fbo 只在 `populate` 里按加载时的尺寸建，池是局部变量（`render/scene.ts:1321-1387`）
+```ts
+const fboPool = new Map<string, number>();  // 现状：populate 返回后拿不到，运行中没法按新尺寸建
+```
+
+g. 图集纹理尺寸变了只记警告（`render/text.ts:115-126`）；`TextAtlases` 是 `SceneTexts.prepare` 的局部变量，`releaseTextLayout` 没有调用方（`text/host.ts:90`、`text/layout.ts`）
+```ts
+const atlases = new TextAtlases();       // 现状：prepare 返回后没人持有，运行中重排拿不到同一套图集
+```
+
+h. 文本层不预备变体（`render/graph.ts:663-665`）
+```ts
+if (layer.text) return [];               // 现状：运行中步骤增减时没有备好的管线
+```
+
+**点 1 — 文本目标与字符串通道（`compile/bindings.ts`、`compile/scripts.ts`、`compile/texts.ts`、`script/runtime.ts`、`script/api.ts`、`host.ts`）**
+- **新增** `BindingTarget` 加文本目标，`TEXT_RUNTIME_FIELDS` 是运行中可改的排版字段（比较表里除 `font`、`opaquebackground` 以外的，见待定 3）：
+```ts
+/** 运行中可改、改了要重排的文本字段（WPE 比较表 f_140256f20.c:55-80）。 */
+export const TEXT_RUNTIME_FIELDS = ["text", "pointsize", "padding", "spacing", "maxwidth", "maxrows",
+  "limitwidth", "limitrows", "limituseellipsis", "blockalign", "horizontalalign", "verticalalign"] as const;
+export type TextRuntimeField = (typeof TEXT_RUNTIME_FIELDS)[number];
+  | { kind: "text"; object: number; field: TextRuntimeField }   // 新增
+```
+- **新增** `text/fields.ts` 的两个规整函数，取值规则只写一份：`textFieldFromJson(field, raw)`（属性侧，同 `compileText` 的 setter：`text` 只收字符串，返回 `undefined` 表示不写）与 `textFieldFromScript(field, value)`（脚本侧：`text` 是 `null` / `undefined` 不写、字符串原样、其余 `String(value)`；数值、向量、布尔、枚举同属性侧）。`compileText` 改用 `textFieldFromJson`，结果不变。
+- **修改** `compileText`：`TEXT_RUNTIME_FIELDS` 里的键绑属性时登记文本目标，不再 `recompile`；`font`、`opaquebackground`、MSDF 开关、`anchor`、`backgroundbrightness` 照旧。
+- **修改** `targetOf`：文本对象的 `objects/<i>/<TEXT_RUNTIME_FIELDS 之一>` → 文本目标；`valueType`：`text` 定成 `"string"`，数值键 `"float"`，向量 `"vec2"`，布尔 `"bool"`，枚举 `"string"`。
+- **修改** 写回链的值类型加上 `string`：`ScriptRuntime` 的 `write` / `read` 回调与 `writes` 重放表、`ScriptApi.write`、宿主 `writeScript` / `readScript` / `scriptOverrides`、`targetKey` / `targetPath`（文本目标的键 `objects/<i>/<field>`，显式分支，不落到兜底）。`writeReturn` 对 `"string"` 不再 `return`，交给 `textFieldFromScript`。
+
+**点 2 — 状态：当前字段与逐项比较（`render/state.ts`）**
+- **新增** `textFields: Map<number, TextFields>`（`fromBundle` 取编译期的 `SceneText.fields`），`dirtyTexts: Set<number>`，`takeDirty` 多一项 `texts`。值在来源处规整好再写：属性走 `write` 的文本分支（`textFieldFromJson`），脚本走 `writeText`（宿主 `writeScript` 先 `textFieldFromScript`）；`needsRecompile` 对文本目标恒为假，`write` 的文本分支写在兜底之前：
+```ts
+/** 文本字段的写入：value 已按来源规整（undefined 表示不写）。值没变不标脏、不重排（同 WPE 的逐项比较）。 */
+writeText(object: number, field: TextRuntimeField, value: TextFields[TextRuntimeField] | undefined): void {
+  const fields = this.textFields.get(object);
+  if (!fields || value === undefined || sameTextField(fields[field], value)) return;
+  (fields as Record<TextRuntimeField, unknown>)[field] = value;
+  this.dirtyTexts.add(object);
+}
+// write(binding, raw) 里：
+if (target.kind === "text") {
+  this.writeText(target.object, target.field, textFieldFromJson(target.field, raw));
+  return "applied";
+}
+```
+- **修改** `render/p3a.test.ts` 里整体比较脏状态的用例补 `texts`。
+- **新增** `setText(object, layout)`：换排版结果、写对齐偏移，偏移变了把本层与子孙标进 `dirtyLayers`（矩阵要重写）。
+
+**点 3 — 重排器（`text/host.ts`、`text/layout.ts`、`text/atlas.ts`）**
+- **修改** `SceneTexts.prepare` 把这次加载的 `TextAtlases` 留在实例上（新加载换新的），并实现：
+```ts
+export interface TextRelayouter {
+  /** 按新字段重排一层：先放旧排版的字形引用再排（同 WPE「先放旧、再排新」）；缺字体时把引用加回去、返回 null，
+   *  后台读字体，读完调 onReady(object)（宿主把这一层标脏、暂停时补画一帧）。 */
+  relayout(object: number, fields: TextFields, previous: TextLayout): TextLayout | null;
+}
+```
+- **新增** `retainTextLayout`（`releaseTextLayout` 的反操作）；`GlyphAtlas` 加 `resets` 计数（到 4096 重置时加一），渲染器据此找出要连带重排的层（待定 5）。
+- 字体读完时比加载代数，场景已换就丢掉；`dispose` 时取消回调。
+
+**点 4 — 渲染器：文本层运行中重建（`render/scene.ts`、`render/graph.ts`、`render/text.ts`、`render/renderer.ts`）**
+- **修改** `GpuScene.build` 选项加 `relayout?: TextRelayouter`；`sync` 最先处理 `dirty.texts`：
+```ts
+const rebuild = new Set<number>();
+for (const object of dirty.texts) {
+  const layout = this.relayout?.relayout(object, state.textFields.get(object)!, state.texts.get(object)!);
+  if (!layout) continue;                         // 缺字体：旧排版照画，读完再来
+  state.setText(object, layout);
+  rebuild.add(object);
+}
+for (const atlas of this.atlasTextures.sync()) // 新：返回尺寸变了、重建了纹理的图集
+  for (const object of this.textLayersUsing(atlas)) rebuild.add(object);
+for (const object of rebuild) this.rebuildLayer(this.runtimeByObject.get(object)!, state, worlds, { force: true });
+```
+- **修改** `rebuildLayer` 加 `force`（签名相同也重建）；文本层重建前先 `ensureTextResources`：合成 RT 与 effect fbo 由本层独占（建场景时也一样），尺寸和新排版的 `compositeSize` 不同就销毁旧的、建新的；`resources.atlases` 按新排版重新取。fbo 的创建从 `populate` 抽成方法，非文本层仍用共享池，行为不变。
+- **修改** `variantPlans`：文本层按「普通字形与彩色字形都有」的假想排版给计划（尺寸取当前排版），`prepareVariants` 为它备好管线。
+- **修改** `TextAtlasTextures.sync`：尺寸变了就销毁旧纹理、按新尺寸建并整张上传，返回这些图集；`get` 按当前尺寸取。
+- **新增** dev 计数：每帧重排的层数与耗时（`GpuScene.textStats()`，探针 `host.texts()` 读），给验收量耗时。
+
+**点 5 — 能力表与 dev 探针（`compile/features.ts`、`compile/scriptApi.ts`、`dev/scriptValues.ts`、`dev/probeTexts.ts`）**
+- **修改** `checkTextFeatures`：`TEXT_RUNTIME_FIELDS` 里的键挂脚本不再报；`text:script:font`、`text:script:opaquebackground` 等照报。`text:script` 键整体去掉。
+- 脚本 API 检查不改（已定 1）。
+- **修改** 探针的 `scriptValues` 收文本目标（`objects/<i>/text` → 字符串），`renderFrame` 带上重排器，能按指定字符串渲染一帧和 WPE 比。
+
+**点 6 — 文档**：WPE_SCENE.md「文本对象」一节（运行中重排、独占合成 RT、异步字体、已知差异）、cocs/README.md 条目、回归、changelog。
+
+**验收**
+- 单测：
+  - 两套规整规则（`ToString`、`null` 不写、属性侧非字符串不写、枚举回退、向量铺满）；
+  - `text` 的 `valueType` 恒为 `"string"`（拿语料里 `"Song Title"` 这类初值测）；
+  - 值没变不标脏；重编译后字符串写入能重放；
+  - 假设备上：直接上屏换字（新 draw、索引数对）、合成路径换尺寸（RT 与 fbo 换成新尺寸、旧的销毁）、空 → 非空、第一次出现彩色字形（不报 `render:variant-missing`）、图集扩容（纹理重建、bind group 绑新纹理、同图集的另一层也重建）、缺字体（旧排版保留、引用数复原、读完后重排）。
+- 真机（Windows dev）：
+  - `p6b-script` 的 s1（`'F' + n`，每帧变）：探针按 `scriptValues` 渲染「F183」，只比 s1 所在区域，和 WPE 第 182 帧逐像素比（s2 / s3 是步骤 2 的 API）；在预览里实时跑，量每帧重排耗时；
+  - `2391389126`：WPE 抓一帧，按它画出的时间字符串渲染我们的一帧逐像素比；
+  - `2304304373`：属性面板改 `textinput` 与 `pointsize`，`stats.recompiled` 不增加、画面跟着变；带 `blurprecise` 的时钟换宽度时合成 RT 与 fbo 跟着换；
+  - 语料：`text:script` 消失，记下解锁数（预期 `2391389126`、`2304304373`，`3824424509` 看待定 1）；
+  - 待定 2 的 WPE 实验。
+
+**拆步**（每步在 HEAD 快照里交子代理，我核对、复跑、真机验收后再进下一步）
+- **1e-1**：点 1、点 2，只有单测（字符串通道与状态，不碰渲染器）。点 1 里 `compileText` 把属性绑定从 `recompile` 换成文本目标那一条留到 1e-2：渲染器还不会重排时就换，1e-1 单独提交后改文字属性会没有效果。
+- **1e-2**：点 3、点 4，加上 `compileText` 的登记切换，单测加假设备测试。
+- **1e-3**：点 5、点 6，真机验收与语料。待定 2 的 WPE 实验由我在 1e-1 期间并行做。
+
+**已定**（2026-11-13 用户）
+1. **`3824424509` 的日历：不为它单独加识别。** 用户的意见是只有能覆盖别的隐式 API 才做。语料统计（`ignore/p6/b1e/getlayer_root.mjs`）：经 `getLayer(…)` 访问「只认根对象」的图层成员的只有 3 张——`3824424509`（`.text`，日历）、`3000562427`（`.text`，同脚本另有 `thisLayer.text`，本来就报）、`3643916956`（`.font`，另用 `engine.registerAsset`，本来就退回）；`zoom`、`fov`、`alignment` 等 0 处。通用改法只改变日历这一张的判定，所以不做。1e 之后 `3824424509` 会被判成能渲染、日历停在初值，记为已知差异，步骤 2 实现 `ITextLayer` 时补。
+2. **合成 RT 的 `max(4, ·)`：按推荐**，Claude 在 1e-1 期间做测试工程在 WPE 里抓帧定下来，结果写进 1e-2。
+   - **实验结果（2026-11-13）：WPE 套了 `max(4, ·)`，1d 写「不套」是错的。** 工程 `ignore/p6/b1e/proj/p6b-tiny`、`p6b-tiny2`（`make_tiny.mjs` 生成：三个带 tint、`padding: 0` 的极小文字，放大 40 倍），抓帧 `A:\p6b\p6b-tiny\`、`A:\p6b\p6b-tiny2\`，上屏整帧导出在 `ignore/p6/b1e/out/frames/`。
+     - 第一组（2 号「.」「-」、4 号「.」）：WPE 合成 RT 4×11、7×22，我们排版算出的 `compositeSize` 相同，宽度正好 4，分不出来；
+     - 第二组（1 号「.」、0.6 号「.」、1 号「i」）：我们算出 2×6、2×6、3×6，**WPE 三个都是 4×6**。高度没有小于 4 的样本，按 rea-p8-layer 的读码两维都套。
+     - 1e-2 把 `textCompositeSize` 改成 `max(4, trunc(…))`，改完用这两组整帧逐像素比，确认 RT 变宽后字形与上屏的映射也对。
+3. **`font` 与 `opaquebackground` 运行中改：按推荐**，照旧整场重编译，1e 不做。
+4. **缺字体时的帧：按推荐**，接受「读完字体才补、中间照画旧文字」这一差异。
+5. **图集到 4096 还放不下时的重置：按推荐**，重置后把用这张图集的层全部重排。
+6. **文本层独占合成 RT 与 fbo：按推荐。**
+
+#### 1e-1 实施记录（2026-11-13）
+
+在快照 `ignore/p6/b1e/ov`（HEAD `ff4ad0e3`）里做，补丁 `ignore/p6/b1e/step1.patch`（19 个文件，+1307 / −81；对当前工作区 `git apply --check` 通过）。只做点 1（不含 `compileText` 的登记切换）与点 2，渲染器不消费 `dirty.texts`。
+
+**做了什么**
+- **点 1 — 字符串通道**
+  - **新增** `compile/bindings.ts`：`TEXT_RUNTIME_FIELDS` / `TextRuntimeField` / `isTextRuntimeField`，`BindingTarget` 加 `{ kind: "text"; object; field }`。
+  - **新增** `text/fields.ts`：`textFieldFromJson`、`textFieldFromScript`、`scriptToString`（WPE 类型 5 的 `ToString`）、`sameTextField`；`textFloat` / `textVec2` / `textEnum` 与两张对齐表从 `compile/texts.ts` 挪进来（`texts.ts` 再导出 `textFloat` / `textVec2`，原单测不动）。`text/fields.ts` 因此多依赖 `compile/model` 的 `numbers`（无别的依赖，Worker 里本来就有）。
+  - **修改** `compileText`：14 个排版字段一律 `textFieldFromJson(键, read(键)) ?? 缺省`（向量缺省给新数组），读取与登记顺序不变；登记仍是 `recompile`（1e-2 再换）。
+  - **修改** `compile/scripts.ts`：`targetOf` 对文本对象（`isTextObject`）顶层的 `objects/<i>/<TEXT_RUNTIME_FIELDS 之一>` 给文本目标（核对路径，嵌套同名键与非文本对象不算）；`valueType` 按字段表 `textTypes` 定（`text` 与两个对齐 `"string"`，数字键 `"float"`，向量 `"vec2"`，布尔位 `"bool"`），不再按初值猜。`font`、`opaquebackground` 仍是 `unsupported`。
+  - **修改** 写回链的值类型：`script/runtime.ts` 新增 `ScriptValue = number[] | boolean | string`，`write` / `read` 回调、`writes` 重放表、`rememberWrite`、`targetKey`（显式 `case "text"`，键 `objects/<i>/<字段>`，与宿主 `targetPath` 一致）；`writeReturn` 的 `"string"` 只对文本目标经 `scriptToString` 交出，别的目标照旧丢（见下「不同处」2）。`script/api.ts` 的 `ScriptApiState.write` / `read` 与私有 `write` 加 `"string"` 分支（同一规则，只给文本目标，步骤 2 用）。`host.ts`：`scriptOverrides`、`overrideAndReload` 用 `ScriptValue`；`targetPath`、`readScript`（返回当前字段：数字 → `[n]`、向量拷贝、字符串 / 布尔原样）、`writeScript`（`state.writeText(…, textFieldFromScript(字段, scriptWriteValue(值)))`，恒 `true`，不走重编译）都有显式文本分支。
+- **点 2 — 状态**（`render/state.ts`）
+  - **新增** `textFields`（`fromBundle` 拷贝编译期 `SceneText.fields`，向量不共用）、`dirtyTexts`、`DirtyState.texts`、`writeText`（undefined 不写、`sameTextField` 相同不标脏、向量存拷贝）、`setText`（换排版、写 `offset`，偏移变了本层与子孙进 `dirtyLayers`；加载时的 `setTexts` 不变、不标脏）。
+  - **修改** `write` 的文本分支在兜底之前（`textFieldFromJson(字段, conditioned(binding, raw))`）；`needsRecompile` 显式 `text → false`；`takeDirty` 多 `texts`；`scriptWriteValue` 收字符串。
+  - **修改** `render/p3a.test.ts` 两处整体比较补 `texts`。
+
+**和计划不同处**
+1. `TEXT_RUNTIME_FIELDS` 照计划放在 `compile/bindings.ts`；两个规整函数的字段参数是 `TextFieldKey`（14 个对象字段，含 `font`、`opaquebackground`），`compileText` 才能整份走同一个函数。
+2. `writeReturn` 的 `"string"` 只放行文本目标：别的目标初值猜成 `"string"` 的（材质常量没有 `value`、`bloom` 写成一个词的串等）以前丢掉，现在仍丢，不改行为。ToString 在运行时（`scriptToString`）做，宿主再 `textFieldFromScript`（对字符串幂等），规则只在 `text/fields.ts` 一份。
+3. 脚本侧枚举先 `ToString` 再查表（B 节第 4 条：枚举是类型 5）；对标量（数字、布尔、字符串）与属性侧结果逐一相同（单测对拍），只有数组 / 自带 `toString` 的对象不同（`["right"]` → right，同 WPE）。脚本侧布尔位只收布尔（类型 6）：运行时 `"bool"` 本来就丢非布尔，函数与链路一致；属性侧仍是编译期的 `=== true`。`ToString` 抛错（Symbol、无原型对象）时不写（WPE 会把异常抛给脚本，我们不禁用 `update`）。
+4. 属性侧文本分支先按 `condition` 换布尔再规整（计划代码直接传 `raw`）：编译期 `resolveValue` 就是这样，`pointsize` 绑 `bool` 条件时就地 = 重编译。
+5. 编译协议 `scriptOverrides`（`compile/bundle.ts`、`client.ts`、`protocol.ts`）的类型加 `string`：宿主覆盖表放宽后要传得过去；套用逻辑本来就收字符串，1e-1 没有字符串真的进覆盖表（文本目标不重编译），步骤 2 的 `font` 会用到。三个已有测试的替身类型同步放宽（`api.test.ts`、`runtime.test.ts`、`host.script.test.ts`）。
+6. `host.script.test.ts` 文件级加了 `vi.mock("./text/host")`（`SceneTexts.prepare` 返回空表），文本层的宿主用例才不去读字体；别的用例没有文本层，不受影响。
+
+**测试**
+- tsc（快照）0 错误；prettier `--check` 全部通过，文件均为 LF。
+- vitest：ov 98 个文件、2380 条，2378 过；head 94 个文件、2321 条，2319 过。两边失败的是同样两条（`pipeline.test.ts` 的 `3830255100: 219 次请求`、`p5c.test.ts` M3 的 `mdl:missing-attribute:a_Normal`），与本步无关。
+- 新增 59 条：`text/fields.test.ts` 24（含与 1d 原写法的逐字段对拍：14 个字段 × 32 种原始值）、`compile/textScripts.test.ts` 12（`"Song Title"` / `"<Time and Date>"` 等初值恒 `"string"`、`maxwidth` 走 float、`font` / `opaquebackground` / 嵌套键 / 图像对象不是文本目标）、`script/textWrites.test.ts` 9（ToString、`null` 不写、抛错不写不禁用、`update(value)` 收字符串、重放与 `forgetWrite` 的键、非文本目标照旧丢、API 的 `"string"` 分支、直接跑 `collectScripts` 的结果）、`render/textState.test.ts` 9（拷贝、规整、同值不标脏、`takeDirty`、不走兜底不碰泛光、`setText` 标子孙）、`host.script.test.ts` 5（字段脚本当帧进状态、ToString 与 `null`、`maxwidth`、重编译后重放、属性就地写盖掉脚本写入且重编译后不再重放）。
+- 编译结果不变：`compile/texts.test.ts`、`text/*.test.ts` 全过；另用 `ignore/p6/b1e/cmp/compileText.test.ts` 对语料 981 个文本对象，head / ov 的 `compileText` 各跑 4 种（属性取当前值 / 取 JSON 的 `value` × LDR / HDR），比文本表、登记的绑定与不支持项，3924 次 0 处不同（`cmp/sanity.mjs` 把 ov 的 `text` 改成转大写时该测试失败，确认能检出）。
+- 语料：`kbp corpus scan` head / ov 各 173 张、0 出错、48 张干净，两份 JSON 逐字节相同（`corpus diff` 无变化，`corpus-diff.txt`）。
+- 变异检查（`ignore/p6/b1e/mutate1.mjs`，结果 `mutate1.json`）：16 处全部检出，每处按原字节还原，前后整树哈希一致——脚本侧 `null` 写成 `"null"`、`valueType` 退回按初值猜、`writeText` 不比较、文本分支落到泛光兜底、`maxrows` 不截断、枚举回退取缺省、重放表丢字符串、`setText` 不标子孙、`targetOf` 不核对路径、`readScript` 读不到文本、字符串交给非文本目标、向量不铺满、`needsRecompile` 对文本为真、`fromBundle` 不拷贝、重放键与 `targetPath` 不一致、脚本侧布尔位收数字。
+
+**没做 / 留给 1e-2**
+- `compileText` 的属性绑定仍登记 `recompile`；能力表照报 `text:script`，所以产品里 1e-1 没有可见变化（语料不变即此）。`GpuScene.sync` 不读 `dirty.texts`。
+- `host.readTarget`（dev 读值）没有文本路径；探针 `scriptValues` 不收文本（点 5）。
 
 ### 实施方式
 

@@ -11,8 +11,9 @@ import { constantTargetFields, materialSlots, type MaterialMember } from "../com
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
+import { scriptToString } from "../text/fields";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
-import type { ScriptRealm, ScriptRuntime } from "./runtime";
+import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
 import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
 
 type ApiObject = Record<string, unknown>;
@@ -66,9 +67,9 @@ export interface ScriptApiState {
   frametime(): number;
   runtime(): number;
   timeOfDay(): number;
-  /** 普通目标由宿主写入 SceneState；重编译目标由宿主合并请求。 */
-  write(target: ApiTarget, value: number[] | boolean): boolean;
-  read?(target: ApiTarget): number[] | boolean | null;
+  /** 普通目标由宿主写入 SceneState；重编译目标由宿主合并请求。字符串只在文本目标上（P6b 1e）。 */
+  write(target: ApiTarget, value: ScriptValue): boolean;
+  read?(target: ApiTarget): ScriptValue | null;
   /** 脚本注册了音频缓冲：宿主据此订阅音频。语料与 `realmCheck` 不传，缓冲保持全零。 */
   audioRegistered?(): void;
   /**
@@ -306,11 +307,17 @@ export class ScriptApi {
   private findLayer(object: number): SceneLayer | undefined {
     return this.access.bundle().layers.find((layer) => layer.object === object);
   }
-  private write(target: ApiTarget, raw: unknown, type: ValueType): void {
-    let value: number[] | boolean;
+  private write(target: ApiTarget, raw: unknown, type: ValueType | "string"): void {
+    let value: ScriptValue;
     if (type === "bool") {
       if (typeof raw !== "boolean") return;
       value = raw;
+    } else if (type === "string") {
+      // 字符串只交给文本目标（P6b 1e，同运行时的 `writeReturn`）：WPE 类型 5 的 `ToString`，`null` / `undefined` 与抛错的不写
+      if (target.kind !== "text") return;
+      const text = scriptToString(raw);
+      if (text === undefined) return;
+      value = text;
     } else {
       const size = type === "float" ? 1 : type === "vec2" ? 2 : type === "vec4" ? 4 : 3;
       if (typeof raw === "number") value = Array(size).fill(raw);

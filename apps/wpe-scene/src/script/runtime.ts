@@ -1,4 +1,5 @@
 import { type TargetKey, type UserProperty } from "../compile/bindings";
+import { scriptToString } from "../text/fields";
 import { type SceneScript, type SceneScripts } from "../compile/scripts";
 import { type SceneReporter } from "../report";
 
@@ -14,6 +15,11 @@ export interface ScriptRealm {
 }
 
 export type ScriptTarget = SceneScript["target"];
+/**
+ * 脚本写回链上的值（运行时 / API 按目标形状换好、交给宿主的）：数字目标铺成分量数组、布尔目标是布尔，字符串只在文本目标上
+ * （P6b 1e，`scriptToString` 之后）。重放表、覆盖表与编译协议都存这个形状。
+ */
+export type ScriptValue = number[] | boolean | string;
 /**
  * 运行时会调用的导出回调。WPE 的其余回调（`compile/scriptApi.ts` 的 `MISSING_SCRIPT_CALLBACKS`）编译期报
  * `script:callback:*`；实现一个就加到这里、从那张表删掉（`api.test.ts` 核对两者）。
@@ -58,6 +64,9 @@ function targetKey(target: ScriptTarget): string {
       return `objects/${target.object}/instanceoverride/${target.field}`;
     case "sound":
       return `objects/${target.object}/${target.field}`;
+    // 文本字段（P6b 1e）：同宿主 `targetPath`，属性就地写时据此忘掉脚本的旧写入
+    case "text":
+      return `objects/${target.object}/${target.field}`;
     default:
       return target.path;
   }
@@ -75,7 +84,7 @@ export class ScriptRuntime {
   private records: ScriptRecord[] = [];
   private byId = new Map<string, ScriptRecord>();
   private timers: Timer[] = [];
-  private writes = new Map<string, { target: ScriptTarget; value: number[] | boolean }>();
+  private writes = new Map<string, { target: ScriptTarget; value: ScriptValue }>();
   private unsupported = new Set<string>();
   private halted = false;
   private active: ScriptRecord | null = null;
@@ -84,8 +93,8 @@ export class ScriptRuntime {
     private readonly realm: ScriptRealm,
     private readonly options: {
       report: SceneReporter;
-      write(target: ScriptTarget, values: number[] | boolean, source: string): boolean;
-      read(target: ScriptTarget): number[] | boolean | null;
+      write(target: ScriptTarget, values: ScriptValue, source: string): boolean;
+      read(target: ScriptTarget): ScriptValue | null;
       now?: () => number;
       /** API 层据此切换 thisLayer / thisObject。 */
       enterScript?(script: SceneScript | null): void;
@@ -192,12 +201,18 @@ export class ScriptRuntime {
       }
       return;
     }
-    let value: number[] | boolean;
+    let value: ScriptValue;
     if (type === "bool") {
       if (typeof result !== "boolean") return;
       value = result;
-    } else if (type === "string") return;
-    else {
+    } else if (type === "string") {
+      // 字符串只交给文本目标（P6b 1e）：WPE 类型 5 的 `ToString`（`12` → "12"，抛错的不写），枚举由宿主再查表。别的目标初值猜成
+      // "string" 的（没有 `value`、材质常量写成一个词）照旧丢掉
+      if (record.script.target.kind !== "text") return;
+      const text = scriptToString(result);
+      if (text === undefined) return;
+      value = text;
+    } else {
       const size = type === "float" ? 1 : type === "vec2" ? 2 : type === "vec4" ? 4 : 3;
       if (typeof result === "number") value = Array(size).fill(result);
       else if (typeof result === "object") {
@@ -357,7 +372,7 @@ export class ScriptRuntime {
   replayWrites(): void {
     for (const { target, value } of this.writes.values()) this.options.write(target, value, "script-replay");
   }
-  rememberWrite(target: ScriptTarget, value: number[] | boolean): void {
+  rememberWrite(target: ScriptTarget, value: ScriptValue): void {
     this.writes.set(targetKey(target), { target, value });
   }
   forgetWrite(target: TargetKey): void {

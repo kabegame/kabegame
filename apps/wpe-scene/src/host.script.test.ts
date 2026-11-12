@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "./compile/bindings";
-import type { SceneBundle } from "./compile/bundle";
+import type { SceneBundle, ScenePass } from "./compile/bundle";
 import { SceneState } from "./render/state";
 import { createMemoryStorage, SCENE_STORAGE_PREFIX } from "./script/storage";
+import { TEXT_DEFAULTS } from "./text/fields";
 
 const events: string[] = [];
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -10,7 +11,7 @@ const compile =
   vi.fn<
     (input: {
       userProperties: Record<string, unknown>;
-      scriptOverrides: Record<string, number[] | boolean>;
+      scriptOverrides: Record<string, number[] | boolean | string>;
     }) => Promise<SceneBundle>
   >();
 let renderer: FakeRenderer;
@@ -146,6 +147,15 @@ vi.mock("./audio/player", () => ({
     probe() {
       return null;
     }
+  },
+}));
+// 文本层（P6b 1e 的用例）：排版要 wasm 与字体，这里不排，渲染器替身不画
+vi.mock("./text/host", () => ({
+  SceneTexts: class {
+    async prepare() {
+      return new Map();
+    }
+    dispose() {}
   },
 }));
 vi.mock("./script/realm", () => ({
@@ -885,6 +895,143 @@ describe("SceneHost 脚本接线", () => {
       // 编译结果由替身给出（缺省值）：重放了脚本的写入就会是 1 0 0。没被用户改过的 fov 照常重放
       expect(renderer.sceneState?.general.clearcolor).toEqual([0, 0, 0]);
       expect(renderer.sceneState?.general.fov).toBe(33);
+      host.dispose();
+    });
+  });
+
+  describe("文本字段（P6b 1e）", () => {
+    /**
+     * 图层 0 是文本层（编译期文字 "Song Title"），脚本挂在它的 `text` 上；`t` 绑同一个文本字段（手写：1e-2 才由 `compileText` 登记），
+     * `h` 绑 hdr（重编译）。
+     */
+    function textBundle(script: Partial<SceneBundle["scripts"]["list"][number]> = {}): SceneBundle {
+      const result = bundle();
+      const pass = (key: string) => ({ key, program: null, uniforms: {} }) as unknown as ScenePass;
+      result.layers[0].text = {
+        fields: { ...TEXT_DEFAULTS, padding: [32, 32], spacing: [0, 0], text: "Song Title" },
+        font: { path: "fonts/a.ttf", location: null, size: null },
+        glyphPass: pass("objects/0/text/glyphs"),
+        colorPass: pass("objects/0/text/color"),
+        backgroundPass: null,
+        clearAlphaPass: null,
+        background: { key: "objects/0/text/background", color: [0, 0, 0] },
+      };
+      Object.assign(
+        result.scripts.list[0],
+        {
+          id: "objects/0/text",
+          target: { kind: "text", object: 0, field: "text" },
+          valueType: "string",
+          initial: "Song Title",
+          scriptProperties: null,
+        },
+        script,
+      );
+      result.bindings.push(
+        { property: "t", target: { kind: "text", object: 0, field: "text" } },
+        { property: "h", target: { kind: "recompile", reason: "postprocess-hdr", path: "general/hdr" } },
+      );
+      return result;
+    }
+    const fields = () => renderer.sceneState!.textFields.get(0)!;
+
+    async function start() {
+      onInit = () => undefined;
+      const reporter = report();
+      const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+      host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+      await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+      return host;
+    }
+    /** 改 `h` 触发一次整场重编译，等新状态换上。 */
+    async function recompile(host: InstanceType<typeof SceneHost>) {
+      const compiles = compile.mock.calls.length;
+      const renders = events.filter((event) => event === "render").length;
+      host.applyUserProperties({ h: { type: "bool", value: true } });
+      await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(compiles + 1));
+      await vi.waitFor(() => expect(events.filter((event) => event === "render")).toHaveLength(renders + 1));
+    }
+
+    it("字段脚本返回字符串：当帧进 textFields、标脏；update 收到当前文字（不是 Vec2）；不重编译", async () => {
+      compile.mockImplementation(async () => textBundle());
+      let n = 0;
+      onUpdate = () => `F${++n}`;
+      const host = await start();
+      expect(updateArguments).toEqual(["Song Title"]);
+      expect(fields().text).toBe("F1");
+      expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+      updateArguments = [];
+      renderer.tick();
+      expect(updateArguments).toEqual(["F1"]);
+      expect(fields().text).toBe("F2");
+      await settled();
+      expect(compile).toHaveBeenCalledTimes(1);
+      expect(host.stats.recompiled).toEqual([]);
+      host.dispose();
+    });
+
+    it("返回值按 ToString 写：数字转字符串，null 不写，同值不标脏", async () => {
+      compile.mockImplementation(async () => textBundle());
+      const results: unknown[] = [12, null, "12"];
+      onUpdate = () => results.shift();
+      const host = await start();
+      expect(fields().text).toBe("12");
+      renderer.sceneState!.takeDirty();
+      renderer.tick();
+      renderer.tick();
+      expect(fields().text).toBe("12");
+      expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set());
+      host.dispose();
+    });
+
+    it("数字键（maxwidth）：update 收到当前值，返回值写回", async () => {
+      compile.mockImplementation(async () =>
+        textBundle({
+          id: "objects/0/maxwidth",
+          target: { kind: "text", object: 0, field: "maxwidth" },
+          valueType: "float",
+          initial: 300,
+        }),
+      );
+      onUpdate = () => 250.5;
+      const host = await start();
+      expect(updateArguments).toEqual([TEXT_DEFAULTS.maxwidth]);
+      expect(fields().maxwidth).toBe(250.5);
+      host.dispose();
+    });
+
+    it("重编译后重放脚本写过的字符串", async () => {
+      compile.mockImplementation(async () => textBundle());
+      onUpdate = () => {
+        onUpdate = () => undefined;
+        return "Hello";
+      };
+      const host = await start();
+      expect(fields().text).toBe("Hello");
+      const before = renderer.sceneState;
+      await recompile(host);
+      expect(renderer.sceneState).not.toBe(before);
+      expect(fields().text).toBe("Hello");
+      expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+      host.dispose();
+    });
+
+    it("属性写文本目标：就地写、不重编译；用户值盖掉脚本的旧写入，重编译后不再重放（键一致）", async () => {
+      compile.mockImplementation(async () => textBundle());
+      onUpdate = () => {
+        onUpdate = () => undefined;
+        return "Script";
+      };
+      const host = await start();
+      const { applied } = host.stats;
+      host.applyUserProperties({ t: { type: "textinput", value: "User" } });
+      expect(fields().text).toBe("User");
+      expect(host.stats.applied).toBe(applied + 1);
+      await settled();
+      expect(compile).toHaveBeenCalledTimes(1);
+      await recompile(host);
+      // 编译结果由替身给出（"Song Title"）：重放了脚本的写入就会是 "Script"
+      expect(fields().text).toBe("Song Title");
       host.dispose();
     });
   });

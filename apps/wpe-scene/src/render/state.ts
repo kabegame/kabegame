@@ -17,6 +17,9 @@
  *
  * 文本（P6b 1d）：排版结果存在 `texts`（宿主排好、加载时交来），对齐偏移写进图层的 `offset`。背景色是一份材质常量（文本表的
  * `background.key`），`backgroundcolor` 的就地写走 `constant` 目标；文本层的 effect 开关按冻结的图层处理（切换整场重编译）。
+ * 1e：每层当前的排版字段存在 `textFields`（起始值 = 编译期的 `SceneText.fields`），文本目标的写入按来源规整好（属性走 `write` 的
+ * 文本分支、脚本走 `writeText`），和现值逐项比较，变了才标 `dirtyTexts`（WPE `FUN_140256f20` 开头的比较表）；渲染器重排后经
+ * `setText` 换上新排版。
  */
 import {
   bindingValue,
@@ -26,6 +29,7 @@ import {
   type LayerField,
   type SceneBinding,
   type TargetKey,
+  type TextRuntimeField,
 } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
@@ -39,6 +43,7 @@ import {
 } from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import { soundVolume } from "../compile/sounds";
+import { sameTextField, textFieldFromJson, type TextFields } from "../text/fields";
 import type { TextLayout } from "../text/layout";
 
 export interface LayerState {
@@ -58,7 +63,7 @@ export interface LayerState {
   parallaxDepth: number[];
   /**
    * 文本层的对齐偏移（P6b 1d，`TextLayout.offset`）：世界矩阵在本地矩阵最后右乘 `T(offset)`（`render/layout.ts` 的
-   * `layerLocalMatrix`）。由 `setTexts` 填，其它图层没有。
+   * `layerLocalMatrix`）。由 `setTexts`（加载）与 `setText`（1e 运行中重排）填，其它图层没有。
    */
   offset?: [number, number];
   /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中不变。 */
@@ -83,6 +88,8 @@ export interface DirtyState {
   lights: boolean;
   /** `instanceoverride` 改过的粒子层（`objects` 下标）：交给模拟器从基值重新乘（P4a 步骤 5）。 */
   particles: Set<number>;
+  /** 排版字段变了的文本层（`objects` 下标，P6b 1e）：渲染器按 `textFields` 重排。 */
+  texts: Set<number>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -102,8 +109,17 @@ function effectKey(object: number, effect: number): string {
  * 直接写 float（vector-constant-REPORT.md 2.6）：单分量传数字（材质的 float setter 不收字符串），多分量拼成空格分隔的字符串，
  * 向量 setter 再按空格切回同样的分量。
  */
-export function scriptWriteValue(value: number[] | boolean): SceneScalar {
+export function scriptWriteValue(value: number[] | boolean | string): SceneScalar {
   return Array.isArray(value) ? (value.length === 1 ? value[0] : value.join(" ")) : value;
+}
+
+/** 编译期文本字段的一份拷贝：向量不与 bundle 共用（运行中按字段改写）。 */
+function copyTextFields(fields: TextFields): TextFields {
+  return {
+    ...fields,
+    padding: [fields.padding[0], fields.padding[1]],
+    spacing: [fields.spacing[0], fields.spacing[1]],
+  };
 }
 
 /** `constant` 目标的各格取值方式；手写的目标没有 `members` 时每格按 `type` 取满。 */
@@ -211,9 +227,14 @@ export class SceneState {
   /**
    * 文本层的排版结果（P6b 1d，`objects` 下标 → `TextLayout`，含字形网格与它所在的图集）：宿主在加载前排好（`text/host.ts`），经
    * `GpuScene.build` 的 `texts` 交来（`setTexts`）。渲染图按它定文字框、合成 RT 与有没有彩色字形，世界矩阵带它的对齐偏移。
-   * 1d 的文字加载之后不变，没有就地重排（1e）。
+   * 1e 起运行中重排后由 `setText` 换上新的。
    */
   readonly texts = new Map<number, TextLayout>();
+  /**
+   * 文本层当前的排版字段（P6b 1e，`objects` 下标 → `TextFields`），起始值 = 编译期的 `SceneText.fields`（拷贝）。文本目标的写入改它，
+   * 和现值逐项比较，变了才标 `dirtyTexts`；渲染器按它重排，排完的结果经 `setText` 进 `texts`。
+   */
+  readonly textFields = new Map<number, TextFields>();
   /** bundle 里的文本图层（`SceneLayer.text` 非空，`objects` 下标）。 */
   private readonly textObjects = new Set<number>();
   private dirtyLayers = new Set<number>();
@@ -222,6 +243,7 @@ export class SceneState {
   private dirtyStructures = new Set<number>();
   private lightsDirty = false;
   private dirtyParticles = new Set<number>();
+  private dirtyTexts = new Set<number>();
   /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
   private readonly frozenLayers = new Set<number>();
 
@@ -307,9 +329,37 @@ export class SceneState {
     for (const layer of bundle.layers)
       if (layer.text) {
         state.textObjects.add(layer.object);
+        state.textFields.set(layer.object, copyTextFields(layer.text.fields));
         state.freezeLayer(layer.object);
       }
     return state;
+  }
+
+  /**
+   * 文本字段的写入（P6b 1e）：`value` 已按来源规整（属性 `textFieldFromJson`、脚本 `textFieldFromScript`），undefined 表示不写。
+   * 值没变不标脏、不重排（同 WPE 的逐项比较：脚本每帧返回同一串时不重排）。不是 bundle 里的文本层时不做事。
+   */
+  writeText<F extends TextRuntimeField>(object: number, field: F, value: TextFields[F] | undefined): void {
+    const fields = this.textFields.get(object);
+    if (!fields || value === undefined || sameTextField(fields[field], value)) return;
+    // 向量存一份拷贝，不与调用方共用
+    fields[field] = (Array.isArray(value) ? [...value] : value) as TextFields[F];
+    this.dirtyTexts.add(object);
+  }
+
+  /**
+   * 换上一层运行中重排的结果（P6b 1e，渲染器处理 `dirty.texts` 时调）：记下 `TextLayout`、写对齐偏移；偏移变了，本层与子孙的世界矩阵
+   * 跟着变，一起标进脏图层。不是 bundle 里的文本层时不做事。
+   */
+  setText(object: number, layout: TextLayout): void {
+    const layer = this.layers.get(object);
+    if (!layer || !this.textObjects.has(object)) return;
+    this.texts.set(object, layout);
+    const [x, y] = layout.offset;
+    const previous = layer.offset;
+    layer.offset = [x, y];
+    if (!previous || previous[0] !== x || previous[1] !== y)
+      for (const item of this.subtree(object)) this.dirtyLayers.add(item);
   }
 
   /**
@@ -352,6 +402,8 @@ export class SceneState {
   needsRecompile(binding: SceneBinding, raw: SceneScalar): boolean {
     const { target } = binding;
     if (target.kind === "recompile") return true;
+    // 文本字段就地写、渲染器重排（P6b 1e）：从不整场重编译
+    if (target.kind === "text") return false;
     if (target.kind === "bloom-enabled")
       return this.bloomMissing && !this.bloomEnabled && bloomFlagOf(binding, raw) === true;
     if (target.kind !== "effect") return false;
@@ -438,6 +490,11 @@ export class SceneState {
       if (changed) this.dirtyPasses.add(target.pass);
       return "applied";
     }
+    if (target.kind === "text") {
+      // 属性侧取值规则与编译期相同（`textFieldFromJson`：`text` 只收字符串），条件先换成布尔
+      this.writeText(target.object, target.field, textFieldFromJson(target.field, conditioned(binding, raw)));
+      return "applied";
+    }
     this.bloom = writeBloomParam(this.bloom, target.field, raw, binding.condition);
     this.bloomDirty = true;
     return "applied";
@@ -452,6 +509,7 @@ export class SceneState {
       structures: this.dirtyStructures,
       lights: this.lightsDirty,
       particles: this.dirtyParticles,
+      texts: this.dirtyTexts,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
@@ -459,6 +517,7 @@ export class SceneState {
     this.dirtyStructures = new Set();
     this.lightsDirty = false;
     this.dirtyParticles = new Set();
+    this.dirtyTexts = new Set();
     return dirty;
   }
 }

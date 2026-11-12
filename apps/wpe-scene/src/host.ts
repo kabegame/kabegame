@@ -26,8 +26,9 @@ import type { SceneReporter } from "./report";
 import { schemeColor } from "./sceneStyle";
 import { ScriptApi, createWpeLocalStorage } from "./script/api";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
-import { ScriptRuntime, type ScriptTarget } from "./script/runtime";
+import { ScriptRuntime, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { browserStorage, clearSceneStorage } from "./script/storage";
+import { textFieldFromScript } from "./text/fields";
 import { SceneTexts } from "./text/host";
 import type { TextLayout } from "./text/layout";
 import { videoSourceKey } from "./video/player";
@@ -131,7 +132,7 @@ export class SceneHost {
   private scriptState: SceneState | null = null;
   private runtime: ScriptRuntime | null = null;
   private scriptApi: ScriptApi | null = null;
-  private readonly scriptOverrides = new Map<string, number[] | boolean>();
+  private readonly scriptOverrides = new Map<string, ScriptValue>();
   private scriptReloadPending = false;
   private scriptReloadRunning = false;
   private reloading = false;
@@ -346,11 +347,13 @@ export class SceneHost {
     if (target.kind === "general") return `general/${target.key}`;
     if (target.kind === "particle-instance") return `objects/${target.object}/instanceoverride/${target.field}`;
     if (target.kind === "sound") return `objects/${target.object}/${target.field}`;
+    // 文本字段（P6b 1e）：同脚本运行时重放表的键
+    if (target.kind === "text") return `objects/${target.object}/${target.field}`;
     if (target.kind === "recompile") return target.path;
     return `${target.script}/scriptproperties/${target.key}`;
   }
 
-  private readScript(target: ScriptTarget): number[] | boolean | null {
+  private readScript(target: ScriptTarget): ScriptValue | null {
     const state = this.scriptState;
     if (!state) return null;
     if (target.kind === "layer") {
@@ -372,14 +375,25 @@ export class SceneHost {
       const value = state.sounds.get(target.object)?.volume;
       return value === undefined ? null : [value];
     }
+    // 文本字段（P6b 1e）：当前排版字段，`update(value)` 收到的是现在的文字（计数器不到刷新间隔时原样返回它）
+    if (target.kind === "text") {
+      const value = state.textFields.get(target.object)?.[target.field];
+      if (value === undefined) return null;
+      return typeof value === "number" ? [value] : typeof value === "object" ? [...value] : value;
+    }
     return null;
   }
 
-  private writeScript(target: ScriptTarget, value: number[] | boolean): boolean {
+  private writeScript(target: ScriptTarget, value: ScriptValue): boolean {
     if (target.kind === "unsupported" || target.kind === "script-property") return false;
     if (target.kind === "recompile") return this.overrideAndReload(target.path, value);
     const state = this.scriptState;
     if (!state) return false;
+    // 文本字段（P6b 1e）：按脚本侧规则规整（`ToString`、枚举查表、布尔位只收布尔），值变了才标脏重排；不走重编译
+    if (target.kind === "text") {
+      state.writeText(target.object, target.field, textFieldFromScript(target.field, scriptWriteValue(value)));
+      return true;
+    }
     const result = state.write({ property: "", target }, scriptWriteValue(value));
     // 声音的 `volume`（P6a 步骤 2：API 写入与字段脚本写回）当场交给排期器：WPE 的回调 `V` 在改值时调、没有渐变，暂停时也生效。
     // 读脚本看到的状态：首次加载 `init` 期间它还不是渲染器的状态（首帧前重放写入时再同步一次）
@@ -392,7 +406,7 @@ export class SceneHost {
   }
 
   /** 脚本写重编译类目标：值变了才记进覆盖表、请求重新编译（脚本可能每帧写同一个值）。 */
-  private overrideAndReload(path: string, value: number[] | boolean): boolean {
+  private overrideAndReload(path: string, value: ScriptValue): boolean {
     const old = this.scriptOverrides.get(path);
     if (JSON.stringify(old) === JSON.stringify(value)) return true;
     if (old === undefined && JSON.stringify(this.recompileValue(path)) === JSON.stringify(value)) return true;

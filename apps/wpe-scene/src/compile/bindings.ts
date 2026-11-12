@@ -97,6 +97,32 @@ export function generalValue(key: GeneralKey, value: SceneScalar | undefined): n
   return parts.length >= 3 ? parts.slice(0, 3) : undefined;
 }
 
+/**
+ * 文本对象运行中可改、改了要重排的排版字段（P6b 1e）：WPE 比较表（`f_140256f20.c:55-80`，rea-p6b-layout 3.5）里除 `font`、
+ * `opaquebackground` 以外的（这两个照旧整场重编译，1e 已定 3）。取值规则在 `text/fields.ts`（`textFieldFromJson` /
+ * `textFieldFromScript`）。
+ */
+export const TEXT_RUNTIME_FIELDS = [
+  "text",
+  "pointsize",
+  "padding",
+  "spacing",
+  "maxwidth",
+  "maxrows",
+  "limitwidth",
+  "limitrows",
+  "limituseellipsis",
+  "blockalign",
+  "horizontalalign",
+  "verticalalign",
+] as const;
+export type TextRuntimeField = (typeof TEXT_RUNTIME_FIELDS)[number];
+
+/** `key` 是不是 `TEXT_RUNTIME_FIELDS` 之一（按自有键判，不认原型链上的名字）。 */
+export function isTextRuntimeField(key: string): key is TextRuntimeField {
+  return (TEXT_RUNTIME_FIELDS as readonly string[]).includes(key);
+}
+
 export type BindingTarget =
   | { kind: "script-property"; script: string; key: string }
   | { kind: "layer"; object: number; field: LayerField }
@@ -130,6 +156,12 @@ export type BindingTarget =
    * `SceneState.sounds`，不标脏，宿主的排期器每帧读（`audio/scheduler.ts`）。`object` 是 `objects` 下标。
    */
   | { kind: "sound"; object: number; field: "volume" }
+  /**
+   * 文本对象的排版字段（P6b 1e，`TEXT_RUNTIME_FIELDS`）：就地写进 `SceneState.textFields`，值变了才标 `dirtyTexts`、由渲染器重排
+   * （WPE 逐项比较，变了才重排）。字符串只在这种目标上流通：属性侧按 JSON setter（`textFieldFromJson`），脚本侧按 `ToString`
+   * （`textFieldFromScript`）。`object` 是 `objects` 下标。
+   */
+  | { kind: "text"; object: number; field: TextRuntimeField }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 export interface SceneBinding {

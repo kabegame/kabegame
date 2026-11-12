@@ -84,7 +84,7 @@ const script = (id: string, overrides: Partial<SceneScript> = {}): SceneScript =
 
 function harness(realm = new FakeRealm()) {
   let clock = 0;
-  const values = new Map<string, number[] | boolean>();
+  const values = new Map<string, number[] | boolean | string>();
   const logs: string[] = [];
   const contexts: (string | null)[] = [];
   const report = {

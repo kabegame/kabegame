@@ -9,7 +9,7 @@ export interface WorkerCompileInput {
   projectDir: string;
   sceneAssets: string[];
   userProperties?: Record<string, unknown>;
-  scriptOverrides?: Record<string, number[] | boolean>;
+  scriptOverrides?: Record<string, number[] | boolean | string>;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
   /** dev 强制渲染（D4）：有不支持项也解码纹理。 */

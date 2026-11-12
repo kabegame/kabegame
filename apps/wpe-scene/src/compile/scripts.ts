@@ -1,13 +1,15 @@
 import { init, parse } from "es-module-lexer";
 import {
   GENERAL_FIELDS,
+  isTextRuntimeField,
   type BindingTarget,
   type GeneralKey,
   type SceneBinding,
   type TargetKey,
+  type TextRuntimeField,
   type ValueType,
 } from "./bindings";
-import { isSoundObject } from "./features";
+import { isSoundObject, isTextObject } from "./features";
 import { resolveValue, type SceneJson, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import { BLOOM_FIELDS } from "./postprocess";
 
@@ -46,6 +48,26 @@ const layerTypes: Record<string, ValueType> = {
   parallaxDepth: "vec2",
 };
 
+/**
+ * 文本对象运行中可改的字段 → 字段脚本收发的形状（P6b 1e）：按字段定，不按初值猜。`text` 恒为字符串——初值是两三个词时
+ * （`"Song Title"`、`"<Time and Date>"`）按初值猜会当成 vec2 / vec3，`update(value)` 收到 `Vec2(NaN, NaN)`；枚举同样是字符串
+ * （WPE 类型 5），数字键 float、向量键 vec2、布尔位 bool。
+ */
+const textTypes: Record<TextRuntimeField, ValueType | "string"> = {
+  text: "string",
+  pointsize: "float",
+  padding: "vec2",
+  spacing: "vec2",
+  maxwidth: "float",
+  maxrows: "float",
+  limitwidth: "bool",
+  limitrows: "bool",
+  limituseellipsis: "bool",
+  blockalign: "bool",
+  horizontalalign: "string",
+  verticalalign: "string",
+};
+
 function valueType(initial: SceneScalar): ValueType | "string" {
   if (typeof initial === "boolean") return "bool";
   if (typeof initial === "number") return "float";
@@ -61,6 +83,8 @@ function valueType(initial: SceneScalar): ValueType | "string" {
 /**
  * 字段脚本的写回目标。`sound`：声音对象自己的 `volume`（P6a 步骤 2）写回到就地目标 `{ kind: "sound" }`，返回值每帧写回、
  * 当场交给排期器（同 API 写 `thisLayer.volume`）。只认对象顶层的 `objects/<i>/volume`。
+ * `text`：文本对象顶层的 `objects/<i>/<TEXT_RUNTIME_FIELDS 之一>`（P6b 1e）写回到文本目标，值变了才重排；`font`、
+ * `opaquebackground` 等其余文本键仍是 `unsupported`（能力表另报 `text:script:<键>`）。
  */
 function targetOf(
   path: string,
@@ -68,9 +92,12 @@ function targetOf(
   key: string,
   initial: SceneScalar,
   sound: boolean,
+  text: boolean,
 ): SceneScript["target"] {
   if (owner.kind === "layer" && sound && path === `objects/${owner.object}/volume`)
     return { kind: "sound", object: owner.object, field: "volume" };
+  if (owner.kind === "layer" && text && path === `objects/${owner.object}/${key}` && isTextRuntimeField(key))
+    return { kind: "text", object: owner.object, field: key };
   if (owner.kind === "layer" && key in layerTypes)
     return { kind: "layer", object: owner.object, field: key as Extract<BindingTarget, { kind: "layer" }>["field"] };
   if (owner.kind === "effect" && key === "visible")
@@ -131,7 +158,8 @@ export async function collectScripts(
       }
       const object = owner.kind === "layer" ? (scene.objects as SceneObject[])[owner.object] : undefined;
       const sound = !!object && typeof object === "object" && isSoundObject(object);
-      const target = targetOf(path, owner, key, initial, sound);
+      const text = !!object && typeof object === "object" && isTextObject(object);
+      const target = targetOf(path, owner, key, initial, sound, text);
       list.push({
         id: path,
         source: raw.script,
@@ -139,11 +167,13 @@ export async function collectScripts(
         valueType:
           target.kind === "sound"
             ? "float"
-            : owner.kind === "layer" && key in layerTypes
-              ? layerTypes[key]
-              : owner.kind === "general" && key in GENERAL_FIELDS
-                ? GENERAL_FIELDS[key as GeneralKey].type
-                : valueType(initial),
+            : target.kind === "text"
+              ? textTypes[target.field]
+              : owner.kind === "layer" && key in layerTypes
+                ? layerTypes[key]
+                : owner.kind === "general" && key in GENERAL_FIELDS
+                  ? GENERAL_FIELDS[key as GeneralKey].type
+                  : valueType(initial),
         initial,
         owner,
         layer,

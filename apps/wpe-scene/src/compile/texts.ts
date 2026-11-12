@@ -17,7 +17,14 @@ import type { ScenePass } from "./bundle";
 import { checkTextOptions } from "./features";
 import type { SceneFs } from "./fs";
 import { numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
-import { TEXT_DEFAULTS, type TextFields } from "../text/fields";
+import {
+  TEXT_DEFAULTS,
+  textEnum,
+  textFieldFromJson,
+  textFloat,
+  type TextFieldKey,
+  type TextFields,
+} from "../text/fields";
 import { fontPath, SYSTEM_FONT_PREFIX, type FontPath } from "../text/fonts";
 import type { ShaderTextureSlot } from "./shader";
 
@@ -91,9 +98,7 @@ export interface TextCompileContext {
   unsupported: Set<string>;
 }
 
-/** 枚举的取值表：查不到取 WPE 表里的第一项（rea-p6b-layout 1.2：`horizontalalign` → left、`verticalalign` → center、`anchor` → none）。 */
-const HORIZONTAL = ["left", "center", "right"] as const;
-const VERTICAL = ["center", "bottom", "top"] as const;
+/** `anchor` 的取值表：查不到取 WPE 表里的第一项 none（rea-p6b-layout 1.2；对齐的两张表在 `text/fields.ts`）。 */
 export const TEXT_ANCHORS = [
   "none",
   "center",
@@ -114,30 +119,8 @@ function plainValue(raw: unknown): unknown {
   return undefined;
 }
 
-/** float 键：数字原样，数字串整串解析，布尔（条件绑定）按 1 / 0；不合法时取缺省（WPE 的 float 解析器不收时不写字段）。 */
-export function textFloat(value: unknown, fallback: number): number {
-  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
-  if (typeof value === "boolean") return value ? 1 : 0;
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-}
-
-/** vec2 键（`padding`、`spacing`）：`"x y"` 两个分量，单个数字（或只有一个分量的串）铺满（rea-p6b-layout 1.2、6.2）。 */
-export function textVec2(value: unknown, fallback: readonly [number, number]): [number, number] {
-  const parsed = numbers(value as SceneScalar | undefined, []);
-  if (parsed.length === 0) return [fallback[0], fallback[1]];
-  return parsed.length === 1 ? [parsed[0], parsed[0]] : [parsed[0], parsed[1]];
-}
-
-/** 枚举键：不是字符串时按空串处理，查不到取表里的第一项；缺键（undefined / null）取缺省。 */
-function textEnum<T extends string>(value: unknown, table: readonly T[], fallback: T): T {
-  if (value === undefined || value === null) return fallback;
-  const text = typeof value === "string" ? value : "";
-  return (table as readonly string[]).includes(text) ? (text as T) : table[0];
-}
+// 取值规则（float / vec2 / 枚举）在 `text/fields.ts`，属性就地写与脚本写回共用（P6b 1e）；这里再导出给原有的调用方与单测
+export { textFloat, textVec2 } from "../text/fields";
 
 /**
  * 解析一个文本对象（`isTextObject` 为真）。读不到 `basefont` / `basefontrgba` 时返回 null（已报 `material:missing`），图层照常存在、
@@ -161,26 +144,33 @@ export async function compileText(
     return resolved === undefined ? plainValue(raw) : resolved;
   };
   const flag = (key: string) => read(key) === true;
+  /**
+   * 排版字段：取值规则与属性就地写、脚本写回同一份（`textFieldFromJson`，P6b 1e），不写时取 WPE 缺省。`text` / `font` 只收字符串
+   * （或对象里的字符串 `value`），别的类型当缺省（`text` 为空串、不可见，rea-p6b-layout 1.3）。
+   */
+  const field = <F extends TextFieldKey>(key: F): TextFields[F] => {
+    const value = textFieldFromJson(key, read(key));
+    if (value !== undefined) return value;
+    // 向量的缺省给一份新数组，不与 `TEXT_DEFAULTS` 共用
+    const fallback = TEXT_DEFAULTS[key];
+    return (Array.isArray(fallback) ? [...fallback] : fallback) as TextFields[F];
+  };
 
-  const text = read("text");
-  const font = read("font");
   const fields: TextFields = {
-    // `text` 只收字符串（或对象里的字符串 `value`），别的类型当空串、不可见（rea-p6b-layout 1.3）
-    text: typeof text === "string" ? text : "",
-    // `font` 同一个 setter：不是字符串时不写，保持缺省
-    font: typeof font === "string" ? font : TEXT_DEFAULTS.font,
-    pointsize: textFloat(read("pointsize"), TEXT_DEFAULTS.pointsize),
-    padding: textVec2(read("padding"), TEXT_DEFAULTS.padding),
-    spacing: textVec2(read("spacing"), TEXT_DEFAULTS.spacing),
-    maxwidth: textFloat(read("maxwidth"), TEXT_DEFAULTS.maxwidth),
-    maxrows: Math.trunc(textFloat(read("maxrows"), TEXT_DEFAULTS.maxrows)),
-    limitwidth: flag("limitwidth"),
-    limitrows: flag("limitrows"),
-    limituseellipsis: flag("limituseellipsis"),
-    blockalign: flag("blockalign"),
-    opaquebackground: flag("opaquebackground"),
-    horizontalalign: textEnum(read("horizontalalign"), HORIZONTAL, TEXT_DEFAULTS.horizontalalign),
-    verticalalign: textEnum(read("verticalalign"), VERTICAL, TEXT_DEFAULTS.verticalalign),
+    text: field("text"),
+    font: field("font"),
+    pointsize: field("pointsize"),
+    padding: field("padding"),
+    spacing: field("spacing"),
+    maxwidth: field("maxwidth"),
+    maxrows: field("maxrows"),
+    limitwidth: field("limitwidth"),
+    limitrows: field("limitrows"),
+    limituseellipsis: field("limituseellipsis"),
+    blockalign: field("blockalign"),
+    opaquebackground: field("opaquebackground"),
+    horizontalalign: field("horizontalalign"),
+    verticalalign: field("verticalalign"),
     visibleEffects: ctx.visibleEffects,
     colorBlendMode: ctx.colorBlendMode,
   };

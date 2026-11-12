@@ -547,7 +547,7 @@ export interface CompileSceneInput {
   sceneAssets: string[];
   userProperties?: Record<string, unknown>;
   /** 脚本写入的重编译目标，按 scene.json 坐标覆盖编译输入。 */
-  scriptOverrides?: Record<string, number[] | boolean>;
+  scriptOverrides?: Record<string, number[] | boolean | string>;
   reader: SceneReader;
   translator: Wpesl2wgsl | null;
   /** 设置「场景后处理」；缺省跟随 WPE。 */

@@ -13,7 +13,7 @@ export type WorkerRequest =
       projectDir: string;
       sceneAssets: string[];
       userProperties: Record<string, unknown>;
-      scriptOverrides: Record<string, number[] | boolean>;
+      scriptOverrides: Record<string, number[] | boolean | string>;
       postprocess: ScenePostprocessSetting;
       force: boolean;
       exhaustive: boolean;
