@@ -14,6 +14,7 @@ import {
   type SceneBinding,
   type TargetKey,
 } from "./bindings";
+import { conditionsHold, removedFbos } from "./conditions";
 import { SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { constantTargetFields, materialSlots } from "./materialValues";
@@ -295,7 +296,9 @@ export interface SceneFbo {
   height?: number;
   fit?: number;
   unique: boolean;
-  /** 创建后清成该色（`"r g b [a]"`，缺 a 为 1）；缺省为全 0（WebGPU 纹理本来就是 0）。 */
+  /**
+   * 创建后清成该色（`"r g b a"`，要解析出 4 个数才生效，rea-p7d-fluid 第 2 节第 5 条）；缺省为全 0（WebGPU 纹理本来就是 0）。
+   */
   clear?: number[];
   repeat: boolean;
 }
@@ -615,7 +618,8 @@ function parseFbo(raw: EffectFboJson, hdr: boolean): SceneFbo {
     height: limit(raw.height),
     fit: limit(raw.fit),
     unique: raw.unique === true,
-    clear: clear.length >= 3 ? [clear[0], clear[1], clear[2], clear[3] ?? 1] : undefined,
+    // WPE 解析出 4 个数才置清除位；只写 3 个时颜色存了、标志位不置，创建与重建时都不清（rea-p7d-fluid 第 2 节第 5 条）
+    clear: clear.length >= 4 ? [clear[0], clear[1], clear[2], clear[3]] : undefined,
     repeat: raw.uvs === "repeat",
   };
 }
@@ -1206,38 +1210,60 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       return null;
     }
     const effect = parseEffect(effectText);
-    checkEffectFeatures(instance, effect, label, issues);
+    // `conditions`（fbo、pass、bind）在编译期求一次，照 WPE 加载时的求值（rea-p7d-fluid 第 1 节）：求值用的 COMBO 只来自实例
+    // **顶层** `combos`，它也只给条件用，不并进各 pass 的 COMBO（p7-REPORT「流体 effect 的条件」的 `ltop` / `r3top` 实测）。
+    // 被去掉的 fbo、pass、bind 不进 bundle，渲染图不再看条件
+    const holds = (conditions: unknown) => conditionsHold(conditions, instance.combos);
+    checkEffectFeatures(instance, effect, label, issues, holds);
     // effect 资源的查找范围：effect.json 所在目录；它来自 assets 时内置资源也在那里，先查它
     const scope: ResourceScope | null = file.includes("/")
       ? { dir: file.slice(0, file.lastIndexOf("/")), first: effectFile.source === "assets" }
       : null;
     const fbos = new Map(
       (effect.fbos ?? [])
+        .filter((item) => holds(item.conditions))
         .map((item) => parseFbo(item, postprocess.hdr))
         .filter((item) => item.name)
         .map((item) => [item.name, item]),
     );
+    /** 被条件去掉的 fbo 名（同名还有留下的不算）：WPE 按名字查不到下标，记 −1。 */
+    const removed = removedFbos(effect, holds);
     const steps: SceneEffectStep[] = [];
     let overrideIndex = 0;
     /** 本 effect 里已编译的绘制 pass 序号（本 effect 的 pass 稳定键用，材质多 pass 也各占一个）。 */
     let passIndex = 0;
     for (const pass of effect.passes ?? []) {
       if (pass.command === "copy" || pass.command === "swap") {
-        if (typeof pass.source === "string" && typeof pass.target === "string")
-          steps.push({ kind: pass.command, source: pass.source, target: pass.target });
+        // 命令 pass 同样先过条件（WPE 对每个 pass 都求）
+        if (!holds(pass.conditions)) continue;
+        if (typeof pass.source !== "string" || typeof pass.target !== "string") continue;
+        // `swap` 的一端被条件去掉：WPE 要求两端下标都 ≥ 0，否则什么都不做，这里不收这条命令。
+        // `copy` 的一端被去掉：语料 0 处，`checkEffectFeatures` 报 `command-operands`
+        if (pass.command === "swap" && (removed.has(pass.source) || removed.has(pass.target))) continue;
+        steps.push({ kind: pass.command, source: pass.source, target: pass.target });
         continue;
       }
       if (typeof pass.material !== "string") continue;
-      // 实例的 passes 按顺序对应 effect.json 里的绘制 pass（命令 pass 不占位，同 LWE `CImage::setup`）
+      // 实例的 passes 按顺序对应 effect.json 里的绘制 pass（命令 pass 不占位，同 LWE `CImage::setup`）。被条件去掉的
+      // 绘制 pass 仍占它的位置（WPE 覆盖数组下标照常 +1；p7-REPORT：流体 normal 被去掉后 combine 拿到第 18 项）
       const override = instance.passes?.[overrideIndex++];
+      if (!holds(pass.conditions)) {
+        // 稳定键同样留出它的序号：键是 scene.json 坐标（`bindings.ts`），脚本写回按实例 `passes/<k>` 找已编译的 pass，
+        // 不留的话后面 pass 的键整体前移，挂在被去掉的那项覆盖上的脚本会写到下一个 pass 上
+        passIndex++;
+        continue;
+      }
       const passMaterialText = await fs.text(pass.material, scope);
       if (!passMaterialText) {
         issues.add(`material:missing:${pass.material}`);
         continue;
       }
+      // bind 的条件不满足：整条不加，这个槽保持材质原来的纹理（rea-p7d-fluid 第 1 节第 8 条）。指向被条件去掉的 fbo 的
+      // bind 保留名字：渲染图把不是本 effect 的 fbo 的名字解析成当前合成 RT（`graph.ts` 的 `resolveRef`），同 WPE 的 −1
       const binds = Array.isArray(pass.bind)
         ? pass.bind
             .filter((bind) => typeof bind?.name === "string" && Number.isInteger(bind?.index))
+            .filter((bind) => holds(bind.conditions))
             .map((bind) => ({ name: String(bind.name), index: Number(bind.index) }))
         : null;
       // 渲染图填的槽位：有 bind 时只按 bind；没有 bind 时槽 0 = 上一步输出（合成 RT）
@@ -1262,7 +1288,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         steps.push({
           kind: "draw",
           pass: compiled,
-          target: typeof pass.target === "string" ? pass.target : null,
+          // 指向被条件去掉的 fbo 等于没写：WPE 查不到下标（−1），画回合成链
+          target: typeof pass.target === "string" && !removed.has(pass.target) ? pass.target : null,
           compose: pass.compose === true,
           binds,
         });

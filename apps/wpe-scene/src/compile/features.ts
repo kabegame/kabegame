@@ -22,6 +22,7 @@ import {
   type SceneValue,
 } from "./model";
 import { generalValue, isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
+import { conditionsHold, removedFbos } from "./conditions";
 import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
@@ -322,10 +323,28 @@ const SUPPORTED_EFFECT = new Set([
   "editable",
   "passes",
   "fbos",
+  // 具名动作（只有 `clear`）的声明（P7d 步骤 3）：唯一调用方是脚本 `executeMaterialFunction`，加载、属性变化、可见性切换都不调
+  // （rea-p7d-fluid 第 2 节，xrefs 列全）。声明本身不改画面，按中性放开；脚本调用照报 `script:api:effect.executeMaterialFunction`
+  "functions",
 ]);
-const SUPPORTED_EFFECT_PASS = new Set(["material", "command", "source", "target", "compose", "bind"]);
-const SUPPORTED_FBO = new Set(["name", "format", "scale", "width", "height", "fit", "unique", "clear", "uvs"]);
-const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visible"]);
+// `conditions`（P7d 步骤 3）：编译期按实例顶层 `combos` 求值（`conditions.ts`），被去掉的不进 bundle
+const SUPPORTED_EFFECT_PASS = new Set(["material", "command", "source", "target", "compose", "bind", "conditions"]);
+const SUPPORTED_FBO = new Set([
+  "name",
+  "format",
+  "scale",
+  "width",
+  "height",
+  "fit",
+  "unique",
+  "clear",
+  "uvs",
+  "conditions",
+]);
+const SUPPORTED_BIND = new Set(["name", "index", "conditions"]);
+// 顶层 `combos`（P7d 步骤 3）：只给 `conditions` 求值，不并进各 pass 的 COMBO（p7-REPORT「流体 effect 的条件」）；写成对象
+// （绑用户属性）时 WPE 在条件里当 0（`combos` 不是 effect 对象的属性，不经属性框架展开，rea-p7d-fluid 第 1 节「补」），照做、不报
+const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visible", "combos"]);
 const SUPPORTED_INSTANCE_PASS = new Set(["id", "combos", "constantshadervalues", "textures"]);
 
 /**
@@ -876,12 +895,16 @@ export function checkProgramFeatures(
 /**
  * 一个图层 effect 的结构（`label` 是 effect 目录名，如 `tint`）。effect 不再整条报 `effect:<名字>`，
  * 而是逐项检查 effect.json、实例覆盖、fbo 与命令；材质与着色器由 `checkPassFeatures` / `checkProgramFeatures` 核对。
+ *
+ * `holds` 是 `conditions` 的求值（缺省按实例顶层 `combos`，同 `compileEffect`）：被条件去掉的 fbo、pass、bind 不进 bundle，
+ * 也就不检查；`target` 指向被去掉的 fbo 等于没写，不报。
  */
 export function checkEffectFeatures(
   instance: SceneEffectInstance,
   effect: EffectJson,
   label: string,
   unsupported: Set<string>,
+  holds: (conditions: unknown) => boolean = (conditions) => conditionsHold(conditions, instance.combos),
 ): void {
   for (const [key, value] of Object.entries(instance))
     if (!SUPPORTED_EFFECT_INSTANCE.has(key) && active(value)) unsupported.add(`effect:${label}:${key}`);
@@ -899,25 +922,48 @@ export function checkEffectFeatures(
   scanValue(effect, unsupported);
   const fbos = new Set<string>();
   for (const fbo of effect.fbos ?? []) {
+    if (!holds(fbo.conditions)) continue;
     if (typeof fbo.name !== "string" || !fbo.name) unsupported.add(`effect:${label}:fbo-name`);
     else fbos.add(fbo.name);
     for (const [key, value] of Object.entries(fbo))
       if (!SUPPORTED_FBO.has(key) && active(value)) unsupported.add(`effect:${label}:fbo:${key}`);
   }
+  /** 被条件去掉的 fbo：WPE 按名字查不到下标（−1）。 */
+  const removed = removedFbos(effect, holds);
   for (const pass of effect.passes ?? []) {
+    if (!holds(pass.conditions)) continue;
     for (const [key, value] of Object.entries(pass))
       if (!SUPPORTED_EFFECT_PASS.has(key) && active(value)) unsupported.add(`effect:${label}:pass:${key}`);
+    // bind 逐项查键（P7d 步骤 3 之前没人查，`conditions` 曾被静默忽略）；条件不满足的 bind 不进 bundle，不查
+    if (Array.isArray(pass.bind))
+      for (const bind of pass.bind as unknown[]) {
+        if (!bind || typeof bind !== "object" || !holds((bind as JsonObject).conditions)) continue;
+        for (const [key, value] of Object.entries(bind))
+          if (!SUPPORTED_BIND.has(key) && active(value)) unsupported.add(`effect:${label}:bind:${key}`);
+      }
     if (pass.command !== undefined) {
       if (pass.command !== "copy" && pass.command !== "swap")
         unsupported.add(`effect:${label}:command:${pass.command}`);
       if (typeof pass.source !== "string" || typeof pass.target !== "string")
         unsupported.add(`effect:${label}:command-operands`);
-      // swap 只交换 fbo 的下标（B6），两端都必须是本 effect 的 fbo
-      else if (pass.command === "swap" && (!fbos.has(pass.source) || !fbos.has(pass.target)))
-        unsupported.add(`effect:${label}:swap-operands`);
+      else if (pass.command === "swap") {
+        // swap 的一端被条件去掉：WPE 要求两端下标都 ≥ 0，否则什么都不做（rea-p7d-fluid 第 3 节第 3 条），`compileEffect`
+        // 不收这条命令，不报
+        const dropped = removed.has(pass.source) || removed.has(pass.target);
+        // swap 只交换 fbo 的下标（B6），两端都必须是本 effect 的 fbo
+        if (!dropped && (!fbos.has(pass.source) || !fbos.has(pass.target)))
+          unsupported.add(`effect:${label}:swap-operands`);
+      } else if (pass.command === "copy" && (removed.has(pass.source) || removed.has(pass.target)))
+        // copy 的一端被条件去掉：WPE 拿 −1 做什么没读，语料 0 处，照报
+        unsupported.add(`effect:${label}:command-operands`);
     } else if (typeof pass.material !== "string") unsupported.add(`effect:${label}:pass-without-material`);
-    // 绘制目标只认本 effect 的 fbo；缺省为合成链
-    if (pass.command === undefined && pass.target !== undefined && !fbos.has(String(pass.target)))
+    // 绘制目标只认本 effect 的 fbo；缺省为合成链。指向被条件去掉的 fbo 等于没写（WPE 查不到下标），不报
+    if (
+      pass.command === undefined &&
+      pass.target !== undefined &&
+      !fbos.has(String(pass.target)) &&
+      !removed.has(String(pass.target))
+    )
       unsupported.add(`effect:${label}:target:${pass.target}`);
   }
 }

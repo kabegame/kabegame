@@ -72,7 +72,8 @@ export interface EffectPassJson extends JsonObject {
   source?: string;
   target?: string;
   compose?: boolean;
-  bind?: { name?: string; index?: number }[];
+  /** `conditions` 不满足的整条不绑（`conditions.ts`）。 */
+  bind?: { name?: string; index?: number; conditions?: unknown }[];
 }
 export interface EffectJson extends JsonObject {
   passes?: EffectPassJson[];
