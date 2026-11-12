@@ -130,6 +130,7 @@ import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { oneLine, SceneRenderError } from "./errors";
 import {
+  compositeSampling,
   compositeSize,
   FboBindings,
   fboSize,
@@ -1043,7 +1044,7 @@ export class GpuScene {
     };
   }
 
-  /** 基础材质槽 0 的纹理：合成 RT 的尺寸与采样都跟随它。粒子层没有基础材质，为 undefined。 */
+  /** 基础材质槽 0 的纹理：合成 RT 的尺寸跟随它，过滤看它的 NoInterpolation（`compositeSampling`）。粒子层没有基础材质，为 undefined。 */
   private baseTexture(layer: SceneLayer): SceneTexture | undefined {
     const base = layer.passes[0]?.textures[0];
     return base === undefined ? undefined : this.bundle.textures[base];
@@ -1053,10 +1054,9 @@ export class GpuScene {
   private ensureComposites(runtime: LayerRuntime, plan: LayerPlan): void {
     if (!plan.composite) return;
     const { width, height, count } = plan.composite;
-    const baseTexture = this.baseTexture(runtime.layer);
-    // 合成 RT 的采样跟随基础纹理（WPE 用图层的 nointerpolation / clampuvs，LWE 用基础纹理的 flags）
-    const clamp = baseTexture ? baseTexture.clampUVs : true;
-    const nearest = baseTexture?.noInterpolation ?? false;
+    // 合成 RT 的采样（P8 步骤 1，p8-REPORT、rea-p8-layer §3）：寻址只看对象 clampuvs（缺省钳制），过滤在对象 nointerpolation 或
+    // 基础纹理 NoInterpolation 时最近邻
+    const { clamp, nearest } = compositeSampling(runtime.layer, this.baseTexture(runtime.layer));
     // 组里的图层按父链上组的层数另开一个池（P5b 步骤 4，WPE B5 池化 RT 名里的 k）：组画子树期间它的合成 RT 一直在用，子孙的合成 RT
     // 不能和它是同一张。顶层（层数 0）的键不变
     const depth = this.groupDepth(runtime.layer);

@@ -210,6 +210,19 @@ export function compositeSize(
 }
 
 /**
+ * 合成 RT 的采样（P8 步骤 1，p8-REPORT「合成 RT 与基础纹理的采样」、rea-p8-layer §3 `FUN_1401ea500`）：寻址只看对象的 `clampuvs`
+ * （`SceneLayer.clampUVs`，缺省钳制），和基础纹理 `.tex` 的 ClampUVs 无关；过滤在对象 `nointerpolation` 或基础纹理 `.tex` 的
+ * NoInterpolation 时最近邻，否则线性。池化与被依赖图层独占的合成 RT 同一套。`texture` 是基础材质槽 0 的静态纹理；组合层、文本层等
+ * 没有的传 undefined，只看对象（文本、形状的虚表 +0x128 给 0；组合层实测 `clampuvs` 不写 / true 为 Clamp / Linear、false 为 Wrap）。
+ */
+export function compositeSampling(
+  layer: Pick<SceneLayer, "clampUVs" | "noInterpolation">,
+  texture: Pick<SceneTexture, "noInterpolation"> | undefined,
+): { clamp: boolean; nearest: boolean } {
+  return { clamp: layer.clampUVs, nearest: layer.noInterpolation || !!texture?.noInterpolation };
+}
+
+/**
  * 文本层的合成 RT 尺寸（P6b 1d）：排版的 `compositeSize`（`trunc(2·padding + 文字框)`，rea-p6b-layout 3.1 `FUN_140258ab0`），WPE 不套
  * max(4, ·)；这里只保证至少 1（纹理尺寸不能为 0）。fbo 按它算（`fboSize`）。
  */

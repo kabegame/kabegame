@@ -87,6 +87,8 @@ function scene(sound = false): SceneBundle {
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [],

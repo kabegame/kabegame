@@ -270,6 +270,8 @@ function textLayer(object: number, name: string, def: TextLayerDef = {}): SceneL
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [],

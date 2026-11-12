@@ -445,6 +445,8 @@ function baseLayer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer 
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [],

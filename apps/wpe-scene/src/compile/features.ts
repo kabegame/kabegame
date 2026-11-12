@@ -195,10 +195,14 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  *   `{script}` 的字段脚本写回到它；只在 `general.cameraparallax` 打开时起作用，透视场景不移动对象（读码，语料 0 张）。
  * - `parent`：层级已实现（P4a 步骤 1，`hierarchy.ts` 与 `render/layout.ts`）；灯对象例外，见 `checkObjectFeatures`。
  * - `config`：运行时只在托盘、播放列表代码里读，渲染路径不碰；P5a 步骤 0 实测带 `config.passthrough` 的层画面不变。
- * 另判的两个键（不在这张表里，`checkObjectFeatures` 单独检查，未知键循环跳过）：
+ * 另判的键（不在这张表里，`checkObjectFeatures` 单独检查，未知键循环跳过）：
  * - `alignment` 为 `center` 时中性，其余取值另报。
  * - `perspective`：图像层上的 JSON `true` 已实现（P5b 步骤 1，画到场景目标的绘制换透视视图投影，`render/scene.ts`）；false 等不为
  *   真的值中性；绑属性、挂脚本或别的真值，以及非图像对象上为真，报 `object:perspective`。
+ * - `clampuvs`、`nointerpolation`：合成 RT 的采样（P8 步骤 1，p8-REPORT「合成 RT 与基础纹理的采样」、rea-p8-layer §3，
+ *   `SceneLayer.clampUVs` / `noInterpolation`、`render/graph.ts` 的 `compositeSampling`）。JSON 布尔值已实现（null 同没写，取缺省）；
+ *   绑属性、挂脚本或别的取值报 `object:clampuvs` / `object:nointerpolation`：WPE 运行中改这两位不重建合成 RT（rea-p8-layer §3，
+ *   推断），和就地写的语义对不上，没有实测（语料 0 个）。
  */
 const SUPPORTED_OBJECT = new Set([
   "id",
@@ -673,13 +677,30 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   // 图像层（P5b 步骤 1）与模型（P5c 步骤 1）的 perspective：JSON true 已实现；绑属性、挂脚本或别的取值，以及别的对象上为真，照报
   if (active(object.perspective) && !((kind === "image" || kind === "model") && object.perspective === true))
     unsupported.add("object:perspective");
+  // 合成 RT 的采样（P8 步骤 1）：JSON 布尔值已实现（null 同没写）；绑属性、挂脚本时 WPE 不重建 RT（rea-p8-layer §3，推断），
+  // 没有实测，照报
+  for (const key of ["clampuvs", "nointerpolation"]) {
+    const value = object[key];
+    if (value !== undefined && value !== null && typeof value !== "boolean") unsupported.add(`object:${key}`);
+  }
   // `instance`（P5b 步骤 5）：WPE 只在模型是 instanced 时读它（rea-p5-modelflags §6.2），那时由 `bundle.ts` 调
   // `checkInstanceFeatures` 查；非 instanced 对象上中性（语料 0 个）
   for (const [key, value] of Object.entries(object))
     if (
       !SUPPORTED_OBJECT.has(key) &&
       !OBJECT_FLAGS.includes(key) &&
-      !["alignment", "perspective", "instance", "model", "particle", "sound", "text", "light"].includes(key) &&
+      ![
+        "alignment",
+        "perspective",
+        "clampuvs",
+        "nointerpolation",
+        "instance",
+        "model",
+        "particle",
+        "sound",
+        "text",
+        "light",
+      ].includes(key) &&
       !lightKey(key) &&
       !soundKey(key) &&
       !textKey(key) &&

@@ -174,6 +174,8 @@ function composeLayer(object: number, name: string, def: ComposeDef, extra: Part
     subtree: [],
     groupUpload: null,
     copyBackground: def.copyBackground ?? true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [

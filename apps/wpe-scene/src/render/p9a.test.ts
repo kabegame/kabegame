@@ -210,6 +210,8 @@ function layer(object: number, textures: Record<number, number>, extra: Partial<
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [pass(`objects/${object}/passes/0`, textures)],

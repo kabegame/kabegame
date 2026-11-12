@@ -211,6 +211,8 @@ function layerOf(particle: SceneParticle): SceneLayer {
     perspective: false,
     passthroughModel: false,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     group: null,

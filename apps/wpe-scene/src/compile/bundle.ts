@@ -433,6 +433,17 @@ export interface SceneLayer {
    * 背后的快照铺进合成 RT；关掉时不画基础材质、合成 RT 0 清成 (0, 0, 0, 0)（`p5b-cl` 的 CL2）。只对组合层起作用，别的图层上中性。
    */
   copyBackground: boolean;
+  /**
+   * 对象 `clampuvs`（缺省 true，只有 JSON false 才关，P8 步骤 1，p8-REPORT「合成 RT 与基础纹理的采样」、rea-p8-layer §3）：合成 RT 的
+   * 寻址，真时钳制、假时重复（`render/graph.ts` 的 `compositeSampling`）。WPE 图层 `+0x304` 的 bit15，基类构造缺省置位，只由对象 JSON
+   * （和脚本）写；基础纹理 `.tex` 的 ClampUVs 不参与，它只管基础纹理自己的采样器。全部对象种类都填，没有合成 RT 的图层用不到。
+   */
+  clampUVs: boolean;
+  /**
+   * 对象 `nointerpolation`（缺省 false，只认 JSON true，P8 步骤 1，出处同上）：WPE 图层 `+0x304` 的 bit14。为真时合成 RT 用最近邻；
+   * 基础纹理 `.tex` 的 NoInterpolation 同样让合成 RT 最近邻，两者取或（`compositeSampling`）。
+   */
+  noInterpolation: boolean;
   /** 基础材质的 pass。 */
   passes: ScenePass[];
   /** 0 普通；31 上屏改 additive；其它值走 passthrough（B7 / B8）。 */
@@ -1550,6 +1561,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       subtree: [],
       groupUpload: null,
       copyBackground: true,
+      // 合成 RT 的采样（P8 步骤 1，p8-REPORT、rea-p8-layer §3）：图层 +0x304 的两位只由对象 JSON 写，构造时缺省 clampuvs 真、
+      // nointerpolation 假；绑属性、挂脚本的由能力表照报，这里按缺省取
+      clampUVs: object.clampuvs !== false,
+      noInterpolation: object.nointerpolation === true,
       fullscreen: false,
       fullscreenSize: null,
       passes: [],

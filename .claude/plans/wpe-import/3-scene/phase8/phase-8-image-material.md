@@ -56,7 +56,7 @@ P8 另有两条：
 - PLAN 的表是 165 张口径（用到 45、只差它 6、累计 72），没算图像层的 `clampuvs`；这里按 173 张重算。P9 总计划按 175 张算的「P8 做完 70 张」和这里的 69 张差在语料张数与 `clampuvs` 的归属。
 
 **P8 不做，继续报不支持：**
-- 文本对象的 `clampuvs`、对齐（`horizontalalign` 等）：P6b。脚本 `layer.alignment` 原在 P6 的 API 名单里，步骤 0 查到语料 3 张都写在图像层上，挪进步骤 3（见实施记录）。
+- 文本对象的对齐（`horizontalalign` 等）：P6b。文本的 `clampuvs` 原写归 P6b，步骤 1 按同一规则一起放行了（见实施记录）。脚本 `layer.alignment` 原在 P6 的 API 名单里，步骤 0 查到语料 3 张都写在图像层上，挪进步骤 3（见实施记录）。
 - 模型对象上的 `dependencies`：P5c / P13。
 - `cursorripple` 本身已经能画（effect fbo 跨帧保留、指针、效果矩阵都有），P8 只补 `alphawriting`；它的视觉对照放在步骤 5。
 
@@ -182,6 +182,113 @@ function alphaWritingUsed(value: unknown): boolean {
 
 **产出：** `rea-p8-layer.md`、`rea-p8-render.md`（读码），`p8-REPORT.md`（实测），本文件的步骤 0 实施记录（对各步的影响），`ignore/p8/gen_p8.py`（实际没走 `kbp gen` 的实验定义，见实施记录）。
 
+## 步骤 1 — 合成 RT 的采样
+
+### 思路
+
+步骤 0 定下的规则（p8-REPORT「合成 RT 与基础纹理的采样」，rea-p8-layer §3）：图层 `+0x304` 的 bit14 / bit15 只由对象 JSON（和脚本）写，构造时缺省 `clampuvs` 真、`nointerpolation` 假；合成 RT（池化的和被依赖图层独占的同一套）的寻址只看 `clampuvs`，过滤在「对象 `nointerpolation` 或基础纹理 `.tex` 的 NoInterpolation」时最近邻。基础纹理的采样器只看 `.tex` 标志，不动。
+
+所以这一步只是把图层上的两个标志读进 `SceneLayer`，合成 RT 的采样改成按它们选，能力表放行这两个键的 JSON 布尔值。规则写成 `render/graph.ts` 里和 `compositeSize` 并排的纯函数，`ensureComposites` 只调它。文本对象走同一个 `ensureComposites`（P6b 1d），读码说文本同一条规则（rea-p6b-layout、rea-p8-layer §3），一起生效。
+
+绑用户属性或挂脚本的值（语料 0 个）照报：WPE 改了这两位不触发重建（rea-p8-layer §3，推断），和就地写的语义对不上，没有实测，不做。
+
+### 现状锚点（HEAD `7d430828`）
+
+**a. 合成 RT 的采样跟着基础纹理**（`render/scene.ts:1037`）
+```ts
+  private ensureComposites(runtime: LayerRuntime, plan: LayerPlan): void {
+    if (!plan.composite) return;
+    const { width, height, count } = plan.composite;
+    const baseTexture = this.baseTexture(runtime.layer);
+    // 合成 RT 的采样跟随基础纹理（WPE 用图层的 nointerpolation / clampuvs，LWE 用基础纹理的 flags）
+    const clamp = baseTexture ? baseTexture.clampUVs : true;   // 现状：纹理没有 ClampUVs 时 Wrap（WPE 恒为 Clamp）
+    const nearest = baseTexture?.noInterpolation ?? false;     // 现状：不看对象的 nointerpolation
+    // …
+    const key = `${width}x${height}|${clamp}|${nearest}${depth ? `|k${depth}` : ""}`;
+```
+
+**b. 两个键从未知键循环报出**（`compile/features.ts:656`）
+```ts
+  for (const [key, value] of Object.entries(object))
+    if (
+      !SUPPORTED_OBJECT.has(key) &&
+      !OBJECT_FLAGS.includes(key) &&
+      !["alignment", "perspective", "instance", "model", "particle", "sound", "text", "light"].includes(key) &&
+      // …
+      active(value)
+    )
+      unsupported.add(`object:${key}`); // 现状：object:clampuvs（15 张，值都是 true）、object:nointerpolation（3 张）
+```
+
+**c. 图层没有这两个字段**（`compile/bundle.ts:1420`，建 `SceneLayer` 的字面量）
+```ts
+    const layer: SceneLayer = {
+      // …
+      perspective: false,
+      passthroughModel: false,
+      // …
+      copyBackground: true,   // 现状：对象级的开关只有 copyBackground 等，没有 clampUVs / noInterpolation
+```
+
+**d. 合成 RT 尺寸的纯函数在 `render/graph.ts:200`**（`compositeSize`），采样规则放它旁边。
+
+### 点 1 — 图层字段（`compile/bundle.ts`）
+- **新增**
+  - `SceneLayer.clampUVs: boolean`：对象 `clampuvs` 不为 JSON `false` 时为真（缺省真）。
+  - `SceneLayer.noInterpolation: boolean`：对象 `nointerpolation` 为 JSON `true` 时为真（缺省假）。
+    > 说明：在建 `SceneLayer` 的字面量里按对象 JSON 直接取，全部对象种类都填（粒子、分组节点用不到，无害）。注释引 p8-REPORT 与 rea-p8-layer §3。
+```ts
+      copyBackground: true,
+      // 合成 RT 的采样（P8 步骤 1，p8-REPORT、rea-p8-layer §3）：图层 +0x304 的两位只由对象 JSON 写，构造时缺省 clampuvs 真
+      clampUVs: object.clampuvs !== false,           // 新增
+      noInterpolation: object.nointerpolation === true, // 新增
+```
+
+### 点 2 — 能力表（`compile/features.ts`）
+- **修改**
+  - `checkObjectFeatures`：`clampuvs`、`nointerpolation` 取 JSON 布尔值时放行；其余（绑属性、挂脚本、非布尔）报 `object:clampuvs` / `object:nointerpolation`。两个键加进未知键循环的跳过名单，`SUPPORTED_OBJECT` 上方的注释补一条。
+```ts
+  // 合成 RT 的采样（P8 步骤 1）：JSON 布尔值已实现；绑属性、挂脚本时 WPE 不重建 RT（rea-p8-layer §3，推断），没有实测，照报
+  for (const key of ["clampuvs", "nointerpolation"])
+    if (object[key] !== undefined && typeof object[key] !== "boolean") unsupported.add(`object:${key}`); // 新增
+```
+
+### 点 3 — 采样规则（`render/graph.ts`、`render/scene.ts`）
+- **新增**
+  - `render/graph.ts` 的 `compositeSampling(layer, texture)` → `{ clamp, nearest }`：`clamp = layer.clampUVs`，`nearest = layer.noInterpolation || !!texture?.noInterpolation`。
+```ts
+/**
+ * 合成 RT 的采样（P8 步骤 1，p8-REPORT「合成 RT 与基础纹理的采样」、rea-p8-layer §3）：寻址只看对象的 clampuvs（缺省钳制），
+ * 过滤在对象 nointerpolation 或基础纹理 NoInterpolation 时最近邻。池化与被依赖图层的独占 RT 同一套。
+ */
+export function compositeSampling(
+  layer: Pick<SceneLayer, "clampUVs" | "noInterpolation">,
+  texture: Pick<SceneTexture, "noInterpolation"> | undefined,
+): { clamp: boolean; nearest: boolean } {
+  return { clamp: layer.clampUVs, nearest: layer.noInterpolation || !!texture?.noInterpolation };
+}
+```
+- **修改**
+  - `ensureComposites`：`clamp` / `nearest` 改由 `compositeSampling(runtime.layer, baseTexture)` 给，池键格式不变，注释改成新规则。
+```ts
+    const { clamp, nearest } = compositeSampling(runtime.layer, this.baseTexture(runtime.layer)); // 修改
+```
+
+### 点 4 — 单测
+- **新增** `compile/p8.test.ts`：两个键的布尔值放行、绑属性照报；`SceneLayer` 两个字段的缺省与 JSON `false` / `true`。
+- **新增** `render/p8.test.ts`：`compositeSampling` 的 p8-REPORT 表（纹理标志 0 / 3 × 对象不写 / `true` / `false` × 两个键，组合层没有纹理）。
+- **修改** 现有测试里手写的 `SceneLayer` 字面量补两个字段（tsc 会指出）。
+
+### 实施方式
+
+工作区里 P5c、P6b、P9a 的会话正在改 `compile/bundle.ts`、`compile/features.ts`、`render/scene.ts`。照「在 HEAD 快照里实现再三方合并」：实现代理只改 `ignore/p8/s1/ov/src`（`kbp snapshot export HEAD` 出的副本，基线是 `ignore/p8/s1/head`），我验收后 `kbp snapshot diff` 出补丁，`git apply --3way` 进工作区。
+
+### 验收
+- 快照里 tsc 0 error，vitest 全过。
+- `kbp regress --src ignore/p8/s1/head/src --src ignore/p8/s1/ov/src --corpus`：回放案例全部相同；语料只去掉 `object:clampuvs`（15 张）与 `object:nointerpolation`（3 张），干净场景 47 → 48（`3668499717`）。
+- 画面：`p8-clamp`、`p8-clamp2` 用 kabegame-dev 的 `render_scene` 渲染，和 WPE 抓帧（`kbp rdc frame --present`）逐像素比（`--kbp-layers` 屏蔽 FR / CLK）；`3668499717` 和受影响的 `3832772446` 各比一帧。
+- 变异检查：缺省改成 `clampuvs === true`、`nearest` 去掉对象或纹理的一边，单测要能检出。
+
 ## 步骤 1–5 的验收
 
 - **每步**：确定性工程和 WPE 逐像素比（`kbp cmp frame --meta`，图层带 `bbox`）；几何类（形状、对齐）另比四角，限值 0.01 像素。
@@ -205,3 +312,14 @@ function alphaWritingUsed(value: unknown): boolean {
 工具：`ignore/p8/rdc_dump_p8.py`（qrenderdoc 无界面导出每次绘制，含直接读 D3D11 输出合并状态的 `AlphaToCoverage`）、`show.py`、`ana_align.py`、`check_align.py`；语料 `scan_p8.py`、`sum_p8.py`、`ana_p8.py`（脚本 `layer.alignment` 已改算 P8，覆盖数不变）、`rtref.py`、`rtgap.py`、`scan_texflags.py`。
 
 失误：`p8-alpha` 里自写的 fbo pass 顶点乘了 MVP（中间 pass 应该直接用 NDC 四边形），fbo 里没有像素；写掩码从管线状态读，结论不受影响。`p8-shape` 的 S5 两个 effect 是同一个变体、同一组点，分辨不出画的是哪一个，初稿据此推错，`p8-shape2` 补测更正。
+
+### 步骤 1 — 合成 RT 的采样（2026-11-13）
+
+按提纲做，两处偏离：`clampuvs: null` 当没写（rea-p8-layer §3.1：`null` 不动构造缺省；语料 0 个）；文本对象同一规则一起放行（总计划「P8 不做」原写文本归 P6b，读码说同一基类、同一个 `ensureComposites`，分开反而要加种类判断）。
+
+- **实现**：代理在 HEAD `7d430828` 的快照副本 `ignore/p8/s1/ov` 里做；我验收后逐文件 `git merge-file` 三方合并到新 HEAD `461310c4`（期间 P5c、P9a、P6b、P4e 收尾提交了 4 个），18 个文件全部干净合并，没有碰暂存区。新 HEAD 里 P9a 的 `render/p9a.test.ts` 也有手写的 `SceneLayer`，补了两个字段。
+- **快照验收**：tsc 0 error；vitest 2228 个用例 1 个失败（`pipeline.test.ts` 的请求次数上限，`3830255100` 219 次，基线快照同样失败）。
+- **回归**（`kbp regress --corpus`，`ignore/p8/s1/regress`）：回放案例两边全部相同、全部通过；语料只去掉 `object:clampuvs` 15 张、`object:nointerpolation` 3 张，没有新增的键，干净 47 → 48（`3668499717`）。
+- **变异**（`ignore/p8/s1/mutations.py`，快照模式）：缺省改成只认 true、过滤去掉纹理一边、去掉对象一边、寻址退回跟纹理、能力表仍报布尔值，5 处全部被新单测检出，按原字节还原。
+- **工作区验收**：tsc 0 error；vitest 2321 个用例 2 个失败，`pipeline.test.ts` 同上，`p5c.test.ts` 的 M3（P5c 会话的真翻译器用例）在干净的新 HEAD 快照上同样失败，和本步无关；Prettier 通过。
+- **画面**：dev 宿主按 `--mode development` 重建后渲染。`p8-clamp`、`p8-clamp2` 和 WPE 抓帧逐像素 0 差异（屏蔽 FR / CLK；改前 `p8-clamp` 差 106776 个像素，全在纹理不带 ClampUVs 的那 4 个图层）。`3668499717`（新解锁）和 `3832772446`（受影响的那个图层从重复变钳制）各解包加日志、抓一帧、按日志回放比：差 > 32 的像素分别占 0.11%、0.21%，都在随机粒子和缩放的轮廓上；`3832772446` 的主图层带 `shake` 位移，画面四边平均差 0.2–0.95。

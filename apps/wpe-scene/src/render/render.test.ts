@@ -700,6 +700,8 @@ describe("可渲染性自查", () => {
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [pass],

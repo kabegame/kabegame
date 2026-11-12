@@ -509,6 +509,8 @@ function layer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer {
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [pass(`objects/${object}/passes/0`, 0, { textures: { 0: 0 } })],

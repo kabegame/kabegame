@@ -77,6 +77,8 @@ function layer(partial: Partial<SceneLayer> = {}): SceneLayer {
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [pass({ blending: "translucent", textures: { 0: 0 } })],

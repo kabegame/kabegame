@@ -193,6 +193,8 @@ function layer(object: number, extra: Partial<SceneLayer> = {}): SceneLayer {
     subtree: [],
     groupUpload: null,
     copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
     fullscreen: false,
     fullscreenSize: null,
     passes: [pass(`objects/${object}/passes/0`, { program: PROGRAM.image, textures: { 0: TEXTURE.kbbg } })],
