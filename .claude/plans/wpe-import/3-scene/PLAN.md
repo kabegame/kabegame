@@ -721,6 +721,8 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 ## P8 — 图像层与材质补全
 
+总计划见 [phase-8-image-material.md](phase8/phase-8-image-material.md)（2026-11-12）。按 173 张重算：56 张用到；只做 P8 能渲染 47 → 53，P4–P7 先做完时 60 → 69。和下面的原始范围相比，多了图像层的 `clampuvs`（原先整个算进 P6 文本，15 张），引用自己的合成 RT 已经中性、不在范围里，`alphawriting` 只剩 `cursorripple`；分五步：合成 RT 的采样、形状对象、对齐、图层依赖、写入状态。下面是写总计划之前的原始范围。
+
 - **形状对象** `shape: "quad"`（原 W1，读码见 [sample-gaps](phase4/sample-gaps.md) §2.1）：图像类的子类，边长等于正交高度的正方形；只画最后一个 effect 的 pass，强制 `DIRECTDRAW=1`、强制 additive。语料 18 张，`3821678218` 在 P4b 之后只差这一项。
 - **图像层的散项：**
   - 对象 `alignment` 取非 `center`（21 张）、`dependencies`（9 张）、`nointerpolation`（3 张）；
