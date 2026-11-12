@@ -5,6 +5,7 @@
  * 能按原格式上传的格式见 `TEXTURE_FORMATS`（编译期与渲染器共用），其余报 `tex:format:<n>`；FreeImage 形态（PNG / JPG）
  * 由主线程解码，只收格式 0。
  */
+import { containerDuration } from "../video/container";
 import type { SceneVideoSource } from "../video/player";
 import type { SceneFile } from "./fs";
 
@@ -137,7 +138,8 @@ export interface TexResult {
   frames?: TexFrame[];
   /**
    * 视频纹理（头标志 `video`，P9a）：第 0 张图像第 0 级 mip（就是整段 MP4）在磁盘上的绝对区间，写法同 `encoded`（`SceneFile.location`
-   * 加 mip 偏移，散文件偏移 0、pkg 条目带条目偏移）。Worker 一个字节都不读，由主线程的播放器（`video/player.ts`）按区间读。
+   * 加 mip 偏移，散文件偏移 0、pkg 条目带条目偏移）。Worker 只读容器头里的时长（`duration`，几个盒子头加 `mvhd` 的前 32 字节，
+   * P9b；`decode` 为假即场景已确定退回时不读），视频字节仍由主线程的播放器（`video/player.ts`）按区间读。
    */
   video?: SceneVideoSource;
   /**
@@ -368,14 +370,24 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
     if (frameCount === 0) unsupported.push("tex:animation:empty");
   }
   const first = images[0]?.mips[0];
-  const video =
-    flags & TEX_FLAGS.video && first
-      ? {
-          path: file.location.path,
-          start: file.location.offset + first.offset,
-          end: file.location.offset + first.offset + first.length,
-        }
-      : undefined;
+  let video: SceneVideoSource | undefined;
+  if (flags & TEX_FLAGS.video && first) {
+    video = {
+      path: file.location.path,
+      start: file.location.offset + first.offset,
+      end: file.location.offset + first.offset + first.length,
+    };
+    // 容器时长（P9b 点 1）：脚本 `init` 里就读 `duration`，那时主线程的 Blob 多半还没读完，所以在这里从容器头读出来随 bundle 交过去。
+    // `decode` 为假时场景已确定退回、不渲染，脚本也不跑，没有人读时长，照快速路径不多读（moov 在 mdat 之后的还要多一两个 pkg 窗口）；
+    // dev 强制渲染时 `decode` 为真
+    if (decode) {
+      const duration = await containerDuration(
+        (start, end) => file.readRange(first.offset + start, first.offset + end),
+        first.length,
+      );
+      if (duration !== undefined) video.duration = duration;
+    }
+  }
   const encoded =
     freeImageMime && !(flags & TEX_FLAGS.video) && images[0]
       ? {

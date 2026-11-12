@@ -336,3 +336,40 @@ export type VideoScriptTarget = Pick<
 
 我的失误（步骤 0）：
 - 第一个工程 `p9b-api` 把暂停期间 seek 的目标设在 0.5，和暂停位置 0.4923 只差半帧，分不出生效没有；采样也是在开窗后几秒才开始，没采到那一段。`p9b-api2` 把动作推到 8 s 之后、目标离得远，开窗和采样在同一轮里发出，重测了一遍。
+
+### 步骤 1 — 容器时长（2026-11-13）
+
+在独立工作树里实现（`ignore/p9/p9b/wt`，基点 `3c4f723b`），子代理写、我复核。
+- **新增** `video/container.ts`：
+  - MP4：顶层盒子与 `moov` 的子盒子只读头，`mdat` 按大小跳过，找到 `mvhd` 读前 32 字节，v0 / v1 各取 timescale 与 duration。
+  - Matroska：读到 `Segment` 开头往后 64 KiB，在内存里找 `Info`。
+  - 上限：顶层盒子与 `moov` 子盒子各 64 个，EBML 头 4 KiB。
+  - 超出计划的一处：`duration` 为 0（分片 MP4）也当读不出，不给脚本一个 0。
+- **修改** `SceneVideoSource` 加 `duration?`；`parseTex` 在要解码时填它。
+- **单测**：`container.test.ts` 与 `tex.test.ts`，覆盖：
+  - 构造的 MP4 / Matroska 各种形态与畸形输入；
+  - 散文件与 pkg 条目的完整读序列；
+  - `decode` 为假不读；
+  - 编译后 bundle 里带 `duration`。
+- **复核**：
+  - 改动范围：工作树里 5 个文件（3 改 2 新增），没有越界；
+  - tsc 0 error；container / tex 两个测试文件 65 个全过；
+  - 全量 vitest 唯一失败是 `pipeline.test.ts` 的「3830255100：219 次请求」，HEAD 基线同样失败，这张场景没有视频；
+  - Prettier 通过。
+- **语料**：60 段视频（59 MP4 + 1 Matroska），TS 读出的时长和 `durations.py` 的 `mvhd` / Matroska 结果逐段相同，差值全是 0（`ignore/p9/p9b/step1/corpus.ts`，我重跑过）。
+  - 每段读 4 次的 38 段、6 次的 21 段（就是 `moov` 在 `mdat` 之后的那 21 段）、Matroska 2 次；
+  - MP4 每段 80 或 112 字节，Matroska 约 64 KiB。
+- **请求数**：`pipeline.test.ts` 的语料编译（173 张）在工作树与主工作区各跑一次，逐场景比 `calls` / `misses` / `bytes` 全部相同。
+  - 退回的场景不读时长；
+  - 能渲染的视频场景读的那几段头落在已经缓存的 pkg 窗口里。
+  - 主工作区里别的会话有未提交的粒子改动，所以有 11 张的不支持项不同，都是 `particle:binding:*`，与本步无关。
+- **变异检查**（`ignore/p9/p9b/step1/mutate.py`），8 个全被单测抓到：
+  - v0 / v1 的 timescale 偏移；
+  - 不按大小跳过盒子；
+  - TimecodeScale 缺省值；
+  - 4 字节 Duration；
+  - 未知长度的 Segment；
+  - `decode` 为假也读；
+  - 区间不加 mip 偏移。
+
+我改了子代理的一处：它让 `decode` 为假时也读时长，理由是「纹理描述和能渲染时一致」。可那时场景已确定退回、不渲染、脚本不跑，没有人用时长，和编译的快速路径相反，改成只在要解码时读。

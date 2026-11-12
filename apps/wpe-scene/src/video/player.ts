@@ -23,6 +23,8 @@ export interface SceneVideoSource {
   path: string;
   start: number;
   end: number;
+  /** 容器时长（秒，`containerDuration`，编译期读）；读不出时没有，播放器退回元素的时长（P9b）。 */
+  duration?: number;
 }
 
 export interface VideoReport {
