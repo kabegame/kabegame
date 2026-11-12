@@ -166,7 +166,8 @@ describe("场景编译基础", () => {
     ).toEqual(new Uint8Array([1, 2, 3, 4]));
     expect((await parseTex(memoryFile(tex(2, 4)))).format).toBe(4);
     const video = await parseTex(memoryFile(tex(4, 0, 32, 0, new Uint8Array([0, 0, 0, 0, 102, 116, 121, 112]))));
-    expect(video.unsupported).toContain("tex:video");
+    // P9a 步骤 3 解锁：视频纹理不报键，只给区间
+    expect(video.unsupported).toEqual([]);
     expect(video.video?.end).toBe(video.video!.start + 8);
     expect(video.images[0].mips[0].bytes).toBeUndefined();
     const extended = parts(

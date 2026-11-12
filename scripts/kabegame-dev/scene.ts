@@ -456,6 +456,8 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * 不认识这一项，静默读回了场景目标）报 409。
  * 脚本值 `scriptValues`（第 6 批）校验后原样转给探针；给了而结果没有逐项的 `meta.scriptValues` 时（宿主产物不认识这一项，静默没写）
  * 同样报 409。
+ * 视频时刻 `videoTime`（P9a 步骤 3）校验后原样转给探针（`0` 也转）；给了而结果没有 `meta.videos` 时（宿主产物不认识这一项，视频停在
+ * 透明的初值）同样报 409。
  */
 export async function renderFrame(
   s: DevSession,
@@ -489,6 +491,8 @@ export async function renderFrame(
     ...(request.canvas ? { canvas: request.canvas } : {}),
     // 脚本值（第 6 批）：checkRenderReplay 已校验（形状、项数）；对象与字段脚本由探针解析
     ...(request.scriptValues ? { scriptValues: request.scriptValues } : {}),
+    // 视频时刻（P9a 步骤 3）：checkRenderReplay 已校验（形状）；路径是不是视频纹理由探针判。0 也是有效值，不能按真假判
+    ...(request.videoTime !== undefined ? { videoTime: request.videoTime } : {}),
   };
   const task = await hostTask(s, handle, `__kabegameSceneProbe.renderFrame(${JSON.stringify(args)})`, {
     signal: options.signal,
@@ -515,6 +519,14 @@ export async function renderFrame(
       "host",
       `宿主产物没有回逐项的 scriptValues（请求 ${scriptValues.length} 项）：探针不认识 scriptValues、静默没写，重建宿主（--mode development）`,
       { imageId: request.imageId, scriptValues, meta: { scriptValues: meta.scriptValues ?? null } },
+    );
+  }
+  if (request.videoTime !== undefined && !Array.isArray(meta.videos)) {
+    throw new DevError(
+      409,
+      "host",
+      "宿主产物没有回 videos：探针不认识 videoTime、视频停在透明的初值，重建宿主（--mode development）",
+      { imageId: request.imageId, videoTime: request.videoTime, meta: { videos: meta.videos ?? null } },
     );
   }
   const png = await probeBytes(s, handle, `${key}.png`);

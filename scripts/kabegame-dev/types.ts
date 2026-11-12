@@ -388,6 +388,27 @@ export interface ScriptValueResult {
   reason?: string;
 }
 
+/**
+ * 视频纹理的时刻（P9a 步骤 3，`apps/wpe-scene/src/dev/videoProbe.ts` 的 `VideoTimeOption`）：秒，非负有限数。数字对全部视频纹理生效；
+ * `{ <bundle 纹理的 path>: 秒 }` 分别给，没给的取 0。
+ */
+export type VideoTime = number | Record<string, number>;
+
+/** 探针每段视频纹理实际取的时刻（`videoProbe.ts` 的 `ProbeVideoResult`），顺序同 bundle 纹理。 */
+export interface RenderVideo {
+  /** bundle 纹理的 path（`videoTime` 对象的键）。 */
+  path: string;
+  /** seek 完读回的 `currentTime`（秒）；失败时是请求的时刻。 */
+  time: number;
+  /** 时长（秒）；失败或未知时 null。 */
+  duration: number | null;
+  width: number;
+  height: number;
+  /** 读不到或解码出错：这段视频保持透明（同产品），原因在 `error`。 */
+  failed: boolean;
+  error?: string;
+}
+
 export interface RenderRequest {
   imageId: string;
   /** `g_Time`（秒），缺省 1.5（同画面哈希基线）。给了 `particles` 时不收（读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计）。 */
@@ -424,6 +445,12 @@ export interface RenderRequest {
    * 帧号块（MCP 按读回帧号算颜色，带 `optional: true`）。结果的 `meta.scriptValues` 逐项写明写没写。
    */
   scriptValues?: ScriptValue[];
+  /**
+   * 视频纹理的时刻（P9a 步骤 3，秒）：数字对全部视频纹理生效，`{ <纹理 path>: 秒 }` 分别给（没给的取 0，键不是视频纹理时探针报错、
+   * 回 422）；缺省 0。超过时长按循环取模。屏外宿主不跑帧循环、视频用自己的时钟，这是确定性回放视频的唯一办法。结果的 `meta.videos`
+   * 给出每段实际取的时刻。
+   */
+  videoTime?: VideoTime;
 }
 
 /** REST `POST /hosts/:h/particle-track` 的请求体：交给探针 `particleTrack`（场景目录按图片 id 取）。 */
@@ -541,6 +568,8 @@ export interface RenderMeta {
   frametime: number;
   /** 每一项脚本值写没写进状态（第 6 批；没给时空数组，之前的宿主产物没有这一项）。 */
   scriptValues?: ScriptValueResult[];
+  /** 每段视频纹理实际取的时刻（P9a 步骤 3；没有视频纹理时空数组，之前的宿主产物没有这一项）。 */
+  videos?: RenderVideo[];
   key: string;
   [key: string]: unknown;
 }

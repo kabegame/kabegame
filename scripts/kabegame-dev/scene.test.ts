@@ -424,6 +424,83 @@ describe("粒子接口的参数透传", () => {
     );
   });
 
+  test("视频时刻（P9a 步骤 3）：videoTime 原样交给探针（0 也转）；不给时不带；不合法回 400 不碰页面；结果没有 videos 回 409", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const videoTime = (args as { videoTime?: unknown }).videoTime;
+        // 新探针：回每段视频实际取的时刻；videoTime 是 99 时模拟不认识这一项的旧探针（结果里没有 videos）
+        if (videoTime === 99) return { width: 1, height: 1, sha256: "old", time: 1.5, frametime: 0 };
+        const time = typeof videoTime === "number" ? videoTime % 2.5 : 0;
+        return {
+          width: 1,
+          height: 1,
+          sha256: "x",
+          time: 1.5,
+          frametime: 0,
+          videos: [{ path: "materials/v.tex", time, duration: 2.5, width: 1280, height: 720, failed: false }],
+        };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? ${JSON.stringify(png)} : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const response = await renderFrame(f.s, "h-1", { imageId: "14501", videoTime: 3.5, userProperties: {} });
+    assert.equal(calls()[0].videoTime, 3.5);
+    assert.equal(calls()[0].time, 1.5, "videoTime 不影响 g_Time");
+    assert.deepEqual(response.meta.videos, [
+      { path: "materials/v.tex", time: 1, duration: 2.5, width: 1280, height: 720, failed: false },
+    ]);
+    // 0 是有效值，照转
+    await renderFrame(f.s, "h-1", { imageId: "14501", videoTime: 0, userProperties: {} });
+    assert.equal(calls()[1].videoTime, 0);
+    // 按纹理路径分别给；回放时也带上
+    const byPath = { "materials/v.tex": 2, "materials/w.tex": 0.25 };
+    await renderFrame(f.s, "h-1", {
+      imageId: "14501",
+      particles: { dts: [0.1] },
+      videoTime: byPath,
+      userProperties: {},
+    });
+    assert.deepEqual(calls()[2].videoTime, byPath);
+    await renderFrame(f.s, "h-1", { imageId: "14501", userProperties: {} });
+    assert.equal("videoTime" in calls()[3], false, "不给 videoTime 时请求和以前一样");
+
+    const before = f.conn.evaluated.length;
+    for (const [videoTime, field] of [
+      [-1, "videoTime"],
+      [Number.NaN, "videoTime"],
+      [Number.POSITIVE_INFINITY, "videoTime"],
+      ["1.5", "videoTime"],
+      [[1.5], "videoTime"],
+      [null, "videoTime"],
+      [{ "materials/v.tex": -0.5 }, "videoTime.materials/v.tex"],
+      [{ "materials/v.tex": "2" }, "videoTime.materials/v.tex"],
+      [{ "": 1 }, "videoTime"],
+      [Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`v${i}.tex`, 0])), "videoTime"],
+    ] as const) {
+      await assert.rejects(
+        renderFrame(f.s, "h-1", { imageId: "14501", videoTime: videoTime as never, userProperties: {} }),
+        (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === field,
+        JSON.stringify(videoTime),
+      );
+    }
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    // 旧探针不认识 videoTime：视频停在透明的初值，报 409 而不是把它交回去
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14501", videoTime: 99, userProperties: {} }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /探针不认识 videoTime/.test(error.message),
+    );
+  });
+
   test("逐帧光标：轨迹的 window、四角的 pointers / window 原样交给探针", async () => {
     const f = await fixture({ particleTrack: () => track, particleCorners: () => [] });
     const cursors: [number, number][] = [

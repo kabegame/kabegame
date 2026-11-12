@@ -389,8 +389,8 @@ describe("parseTex：视频纹理不读 mip，只给磁盘上的绝对区间（P
           reads,
         );
         const result = await parseTex(file, decode);
-        // 这一步照报（步骤 3 才删键）
-        expect(result.unsupported).toEqual(["tex:video"]);
+        // P9a 步骤 3 删了 `tex:video`：`unsupported` 为空，不再替 Video 标志挡解码；下面「不读字节」守的是 `shouldDecode` 按标志跳过那一道
+        expect(result.unsupported).toEqual([]);
         const mip = result.images[0].mips[0];
         expect([mip.offset, mip.length, mip.bytes]).toEqual([header, VIDEO_LENGTH, undefined]);
         expect(result.video).toEqual({ path: "P:/p/materials/v.tex", start: header, end: header + VIDEO_LENGTH });
@@ -455,7 +455,8 @@ describe("parseTex：视频纹理不读 mip，只给磁盘上的绝对区间（P
       postprocess: "disabled",
       exhaustive: true,
     });
-    expect(bundle.unsupported).toContain("tex:video");
+    // P9a 步骤 3 解锁：只有一个视频图层的场景能渲染（列全不支持项也为空，不依赖本机语料）
+    expect(bundle.unsupported).toEqual([]);
     expect(bundle.textures).toHaveLength(1);
     const [texture] = bundle.textures;
     expect(texture.mips).toEqual([]);

@@ -27,6 +27,10 @@
  * - 频谱（P4e 步骤 4）：`renderFrame` / `particleCorners` 的 `particles.audio` 与 `particleTrack` 的 `audio` 收逐帧 16 段左右
  *   （`{ left, right }`，抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`），每帧步进之前原样写进粒子读的频谱（不经归一化，null 沿用前一帧）；
  *   `host.audio()` 另报宿主场景频谱归一化后的 16 段（`spectrum16`）。不给时频谱全 0。
+ * - 视频时刻（P9a 步骤 3）：屏外宿主不跑帧循环、视频用自己的时钟，`renderFrame` 收 `videoTime`（秒，数字对全部视频纹理生效，
+ *   `{ <纹理 path>: 秒 }` 分别给，没给的取 0，缺省 0）。探针换上自己的 `VideoSink`（`videoProbe.ts`）：每段视频 seek 到这个时刻
+ *   （超过时长按循环取模）、等到当前帧可用，建好场景后、第一次编码之前交给 `GpuScene`，每个 draw 都拷；读不到或解码失败的视频照产品
+ *   规则保持透明。结果的 `videos` 给出每段实际取的时刻。没有视频纹理的场景逐字节同以前。`hostRenderFrame` 不动视频，保持当前帧。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -56,6 +60,7 @@ import { replayParticleOptions, replayReadback, type ParticleReplay } from "./pa
 import { prepareProbeTexts } from "./probeTexts";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 import { applyScriptValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
+import { checkVideoTime, ProbeVideos, type ProbeVideoResult, type VideoTimeOption } from "./videoProbe";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -224,6 +229,12 @@ export interface RenderFrameOptions {
    * 没挂字段脚本时 `optional` 的跳过，否则抛错。用途：kbp 测试工程的 FR 帧号块（颜色只取决于帧号），见 `scriptValues.ts`。
    */
   scriptValues?: ScriptValue[];
+  /**
+   * 视频纹理的时刻（P9a 步骤 3，秒，非负有限数）：数字对全部视频纹理生效；`{ <bundle 纹理的 path>: 秒 }` 分别给，没给的取 0，键不是
+   * 这个场景的视频纹理时抛错。缺省 0。超过时长时按循环取模（WPE 视频纹理缺省循环），再钳到 `[0, duration − 0.005]`。屏外宿主不跑帧
+   * 循环、视频用自己的时钟（不跟 `g_Time`），这是确定性回放视频的唯一办法。实际取的时刻见结果的 `videos`。
+   */
+  videoTime?: VideoTimeOption;
 }
 
 export interface RenderFrameResult {
@@ -261,6 +272,11 @@ export interface RenderFrameResult {
   particles: ReturnType<GpuScene["particleStats"]>;
   /** 每一项脚本值写没写进状态（`applied`；跳过时带 `reason`），顺序同请求；没给 `scriptValues` 时空数组。 */
   scriptValues: ScriptValueResult[];
+  /**
+   * 每段视频纹理实际取的时刻（P9a 步骤 3，顺序同 bundle 纹理）：`time` 是 seek 完读回的 `currentTime`、`duration` 是时长（未知时 null）、
+   * `width` / `height` 是视频尺寸；`failed` 的那段保持透明（同产品），原因在 `error`。没有视频纹理时空数组。
+   */
+  videos: ProbeVideoResult[];
   /** PNG 的存放键是 `<key>.png`，原始 RGBA 是 `<key>.rgba`，都用 `chunk` 取（base64 分块）。 */
   key: string;
 }
@@ -316,6 +332,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   // 先查读回画布与光标窗口（`window ?? canvas`，两个都给而不同时抛错），参数错时不编译；纹理上限要等取到设备再查
   const canvas = options.canvas === undefined ? undefined : checkCanvas(options.canvas);
   const cursorWindow = pointerWindow(options.window, canvas);
+  // 视频时刻（P9a 步骤 3）的形状同样先查；路径对不对要编译之后才知道（`ProbeVideos` 里查）
+  const videoTime = checkVideoTime(options.videoTime);
   const started = performance.now();
   const reader = new FetchSceneReader();
   const cache = new TextureDecodeCache(reader);
@@ -333,8 +351,15 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   // 文本层（P6b 1d）：同宿主，建场景前排好；没有文本层时不碰 wasm
   const texts = await prepareProbeTexts(bundle, reader, options.sceneAssets);
   const gpu = await acquireGpu();
+  let videos: ProbeVideos | undefined;
   try {
     if (canvas) checkCanvas(canvas, gpu.device.limits.maxTextureDimension2D);
+    // 视频时刻（P9a 步骤 3）：对象里不是视频纹理的路径在这里抛错；读、seek 与建场景并行，第一次编码之前等它。建场景出错时
+    // finally 里的 dispose 让它以「已释放」失败，先挂一个空的 catch，不留未处理的拒绝
+    const sink = new ProbeVideos(bundle.textures, videoTime);
+    videos = sink;
+    const videosReady = sink.prepare();
+    videosReady.catch(() => {});
     const state = SceneState.fromBundle(bundle);
     const { width: sceneWidth, height: sceneHeight } = bundle.general;
     // 每一帧的 g_PointerPosition 与 cursor（P5a 收尾）：只给 pointer（或都不给）时每帧相同，同加逐帧指针之前。
@@ -355,6 +380,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const parallaxFrame = { pointer, width: sceneWidth, height: sceneHeight };
     let parallax = initialParallaxState(sceneWidth, sceneHeight);
     try {
+      // 视频（P9a 步骤 3）：每段都 seek 好、当前帧可用之后才接上，profile 帧与读回那一帧的每个 draw 都拷同一帧；没有视频纹理时
+      // 没有 draw 会问它，逐字节同以前。读不到 / 解码失败的那段不交出元素（透明），超过总时限在这里抛错
+      await videosReady;
+      scene.setVideoSink(sink);
       // 脚本值（第 6 批）：建好场景之后、回放之前写进状态，同宿主的脚本写回；第一次 `sync` 把它刷进 uniform
       const scriptValues = applyScriptValues(state, bundle, options.scriptValues);
       const startTime = options.time ?? 0;
@@ -471,12 +500,15 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         frametime,
         particles: scene.particleStats(true),
         scriptValues,
+        videos: sink.results(),
         key,
       };
     } finally {
       scene.destroy();
     }
   } finally {
+    // 视频元素与对象地址（P9a 步骤 3）：读回之后释放，出错也释放
+    videos?.dispose();
     for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
     cache.clear();
     texts.dispose();

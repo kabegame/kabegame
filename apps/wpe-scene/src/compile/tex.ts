@@ -293,7 +293,8 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   if (containerVersion === 4) videoMp4 = await c.u32();
   const mipLayoutVersion = containerVersion === 4 && videoMp4 === 1 ? 4 : Math.min(containerVersion, 3);
   const unsupported: string[] = [];
-  if (flags & TEX_FLAGS.video) unsupported.push("tex:video");
+  // 视频纹理（Video 标志）不报键（P9a 步骤 3 解锁）：播放与纹理在 `video/` 与 `GpuScene.copyVideo`，槽 0 以外（effect pass、粒子）
+  // 同样工作，WPE 也是逐槽更新（rea-p9-video 第 2 节），不另报用途键
   // 帧表纹理：粒子材质的槽 0 是合法用法（P4b 步骤 2），`bundle.ts` 的 `getTexture` 按用途去掉这个键；图像层的帧动画属 P6，照报
   if (flags & TEX_FLAGS.animated) unsupported.push(ANIMATION_ISSUE);
   // 粒子路径只采第 0 张图像（rea-p4b-render.md 2.7【推】），帧落在别的图像上会采错
@@ -305,8 +306,8 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   if (flags & TEX_FLAGS.clampBorder) unsupported.push("tex:clamp-border");
   // FreeImage 的 mip 交给主线程解码，这里永远不读字节。`tex:animation` 不挡解码：帧表纹理在粒子槽 0 要上传；用在图像层时
   // 场景反正退回，多解一张纹理只在 `exhaustive` / `force` 下发生。`tex:animation:empty` 在 mip 之后才读到，同样不挡
-  // 视频的 mip 就是整段视频（语料最大 674 MiB）：显式按 Video 标志跳过，不靠 `tex:video` 挡（步骤 3 删掉这个键之后它就挡不住了），
-  // 否则 Worker 会经主线程代读整段视频。只给区间，由主线程的播放器读（P9a）
+  // 视频的 mip 就是整段视频（语料最大 674 MiB）：按 Video 标志跳过，这就是唯一的一道（视频纹理不报任何键，`unsupported` 挡不住），
+  // 去掉它 Worker 会经主线程代读整段视频。只给区间，由主线程的播放器读（P9a）
   const shouldDecode =
     decode && !(flags & TEX_FLAGS.video) && unsupported.every((key) => key === ANIMATION_ISSUE) && !freeImageMime;
   const images: TexImage[] = [];

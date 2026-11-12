@@ -8,6 +8,8 @@
  *   逐帧光标，工具只收文件路径与回放到的帧号。
  * - 读回画布（第 5 批）：`render_scene` / `host_render` 的 `canvas` 原样交给探针，探针按 `fill` 上屏到这么大的画布再读回；和时间线
  *   交给探针的窗口不同时在 MCP 里报 `[local]`，结果里写明读回的是什么。
+ * - 视频时刻（P9a 步骤 3）：`render_scene` / `host_render` 的 `videoTime` 原样交给探针（每段视频 seek 到这个时刻再渲染），结果里写一行
+ *   每段实际取的时刻（`meta.videos`）。
  *
  * 工具表是静态的：vite 不在时照常列出，调用时回 `isError` 并写明是哪一层不在（文本以 `[层]` 开头）。
  * 参数里的相对路径一律按仓库根解析。图片类工具的落盘与缩小见 `imageOutput.ts`。
@@ -376,6 +378,15 @@ const CANVAS = z
       "和 WPE 抓帧比时传抓帧窗口的尺寸，比较前不用再缩放。只改读回、不改渲染：g_Screen 等内置 uniform 仍按场景目标算（同产品）；" +
       "WPE 场景比窗口大时按窗口分辨率直接画，我们先按场景分辨率画再缩，细节会有差",
   );
+/** 视频时刻（P9a 步骤 3）：秒，非负有限数；对象的项数上限（64）由 vite 的 `checkVideoTime` 查。 */
+const VIDEO_SECONDS = z.number().finite().nonnegative();
+const VIDEO_TIME = z
+  .union([VIDEO_SECONDS, z.record(z.string().min(1), VIDEO_SECONDS)])
+  .describe(
+    "视频纹理的时刻（秒），缺省 0：数字对全部视频纹理生效；{ <纹理 path>: 秒 } 分别给（键是 bundle 纹理的 path，如 materials/xxx.tex，" +
+      "没给的取 0，不是这个场景的视频纹理时报错）。超过时长按循环取模（WPE 视频纹理缺省循环）。屏外宿主不跑帧循环、视频用自己的时钟" +
+      "（不跟 g_Time），这是确定性回放视频的唯一办法；实际取的时刻见结果里的「视频纹理」行与 meta.videos。读不到或解码失败的视频保持透明（同产品）",
+  );
 const RENDER_FIELDS = {
   time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）；给了 replay 时不收"),
   postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
@@ -386,6 +397,7 @@ const RENDER_FIELDS = {
   ),
   replay: RENDER_REPLAY.optional(),
   canvas: CANVAS.optional(),
+  videoTime: VIDEO_TIME.optional(),
 };
 const OUT = z.string().describe("结果写到这个文件（相对路径按仓库根）");
 const OVERWRITE = z.boolean().default(false).describe("out 已存在时是否覆盖，缺省拒绝");
@@ -620,6 +632,18 @@ export function frLine(fr: FrPlan, meta: Pick<RenderMeta, "scriptValues">): stri
   if (!item.applied) return `FR：场景里没有挂颜色脚本的 FR，没涂（${item.reason ?? "探针跳过"}）`;
   const n = fr.frame;
   return `FR 涂成第 ${n} 帧的颜色 (${n % 256}, ${Math.floor(n / 256) % 256}, 255) / 255（objects[${item.object}]）`;
+}
+
+/** 视频纹理（P9a 步骤 3）：每段实际取的时刻，失败的写原因。没有视频纹理（或宿主产物没回 `videos`）时不写。 */
+export function videoLine(meta: Pick<RenderMeta, "videos">): string | null {
+  const videos = meta.videos;
+  if (!Array.isArray(videos) || !videos.length) return null;
+  const parts = videos.map((video) =>
+    video.failed
+      ? `${video.path} 读 / 解码失败、保持透明（${video.error ?? "?"}）`
+      : `${video.path} 取 ${video.time} s（时长 ${video.duration ?? "?"} s，${video.width}×${video.height}）`,
+  );
+  return `视频纹理：${parts.join("；")}`;
 }
 
 /** 渲染元数据里的粒子数（探针 `particleStats`）。 */
@@ -964,6 +988,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         ...lead,
         ...readbackLines(response.meta, options.canvas, options.timelineWindow),
         frLine(options.fr ?? null, response.meta) ?? "",
+        videoLine(response.meta) ?? "",
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
         `读回那一帧 g_Time ${response.meta.time}，g_Frametime ${response.meta.frametime}`,
         particleStatsLine(response.meta) ?? "",
@@ -1051,8 +1076,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       title: "宿主里渲染一帧",
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
-        "replay、canvas 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
-        "给 canvas 时读回按 fill 上屏到这么大的画布。",
+        "replay、canvas、videoTime 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
+        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻。",
       inputSchema: {
         handle: z.string().min(1),
         imageId: IMAGE_ID,
@@ -1160,6 +1185,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "和 WPE 抓帧比时传抓帧窗口的尺寸（要和时间线交给探针的窗口相同），比较前不用再缩放；只改读回、不改渲染。" +
         "回放时探针不跑场景脚本，replay.fr（缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色，" +
         "同 WPE 里它的颜色脚本，比较时不用再屏蔽 FR；不是 kbp 工程（没有挂颜色脚本的 FR）时跳过，结果里写一行涂了没有。" +
+        "有视频纹理的场景用 videoTime 定视频的时刻（缺省 0，超过时长按循环取模），结果里写一行每段实际取的时刻。" +
         "工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,

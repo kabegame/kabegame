@@ -9,7 +9,7 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { createClient } from "./client.ts";
 import { createDevMcpServer } from "./main.ts";
-import { frLine, frScriptValue, readbackLines, summarizeCorners } from "./tools.ts";
+import { frLine, frScriptValue, readbackLines, summarizeCorners, videoLine } from "./tools.ts";
 import { frColor } from "./timeline.ts";
 import type { DevMcpDeps } from "./tools.ts";
 import { Client, InMemoryTransport } from "./testdata/sdkClient.ts";
@@ -57,10 +57,11 @@ const handler: Handler = (req, body, res) => {
   if (req.method === "DELETE") return sendJson(res, 200, { handle: "h-1", previewHostsLeft: 0 });
   if (url.endsWith("/render")) {
     // 读回画布（第 5 批）：给了 canvas 时像新探针那样按它回尺寸
-    const { canvas, scriptValues, imageId } = body as {
+    const { canvas, scriptValues, imageId, videoTime } = body as {
       canvas?: [number, number];
       scriptValues?: Array<Record<string, unknown>>;
       imageId?: string;
+      videoTime?: number | Record<string, number>;
     };
     let meta: Record<string, unknown> = canvas
       ? { ...META, width: canvas[0], height: canvas[1], canvas, sceneTarget: [3840, 2160] }
@@ -74,6 +75,34 @@ const handler: Handler = (req, body, res) => {
             ? { ...v, object: null, name: null, applied: false, reason: '没有叫 "FR" 的图层' }
             : { ...v, object: 0, name: "FR", applied: true },
         ),
+      };
+    }
+    // 视频时刻（P9a 步骤 3）：给了 videoTime 时像新探针那样回每段视频实际取的时刻（时长 2.5 s 循环）；图片 7 当作一段解码失败
+    if (videoTime !== undefined) {
+      const at = (path: string) => (typeof videoTime === "number" ? videoTime : (videoTime[path] ?? 0)) % 2.5;
+      meta = {
+        ...meta,
+        videos:
+          imageId === "7"
+            ? [
+                {
+                  path: "materials/v.tex",
+                  time: at("materials/v.tex"),
+                  duration: null,
+                  width: 0,
+                  height: 0,
+                  failed: true,
+                  error: "解码失败：MediaError 4",
+                },
+              ]
+            : ["materials/v.tex", "materials/w.tex"].map((path) => ({
+                path,
+                time: at(path),
+                duration: 2.5,
+                width: 1280,
+                height: 720,
+                failed: false,
+              })),
       };
     }
     return sendJson(res, 200, { meta, png: Buffer.from(PNG).toString("base64"), pngSha256: "file", pngBytes: 1 });
@@ -721,5 +750,69 @@ describe("轨迹与四角", () => {
     assert.equal(lines[0], "层 3 upright（正交）：写进顶点 2 个，取了 1 个；这一层渲染时不画（朝向是 NaN），四角照算");
     assert.equal(lines[1], "  #0 像素角 (NaN, NaN) (NaN, NaN) (NaN, NaN) (NaN, NaN)");
     assert.equal(lines[2], "层 4 screen（正交）：写进顶点 2 个，取了 1 个");
+  });
+});
+
+describe("视频时刻（P9a 步骤 3）", () => {
+  test("videoTime 原样转给 REST（0 也转）；结果写一行每段实际取的时刻；host_render 同样转、回放时也带", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const result = await call("render_scene", { imageId: "9", videoTime: 3.5 });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.deepEqual(bodiesOf(rest, "/render"), [{ imageId: "9", videoTime: 3.5 }]);
+      assert.match(
+        textOf(result),
+        /视频纹理：materials\/v\.tex 取 1 s（时长 2\.5 s，1280×720）；materials\/w\.tex 取 1 s（时长 2\.5 s，1280×720）/,
+      );
+
+      const zero = await call("render_scene", { imageId: "9", videoTime: 0 });
+      assert.notEqual(zero.isError, true, textOf(zero));
+      assert.deepEqual(bodiesOf(rest, "/render")[1], { imageId: "9", videoTime: 0 });
+
+      const plain = await call("render_scene", { imageId: "9" });
+      assert.deepEqual(bodiesOf(rest, "/render")[2], { imageId: "9" }, "不给 videoTime 时请求和以前一样");
+      assert.doesNotMatch(textOf(plain), /视频纹理/);
+
+      const byPath = { "materials/v.tex": 2, "materials/w.tex": 3 };
+      const host = await call("host_render", {
+        handle: "h-7",
+        imageId: "9",
+        videoTime: byPath,
+        replay: { particles: { dts: [0.1, 0.1] }, fr: false },
+      });
+      assert.notEqual(host.isError, true, textOf(host));
+      const [body] = bodiesOf(rest, "/hosts/h-7/render");
+      assert.deepEqual(body.videoTime, byPath);
+      assert.deepEqual(body.particles, { dts: [0.1, 0.1] });
+      assert.match(textOf(host), /materials\/v\.tex 取 2 s.*materials\/w\.tex 取 0\.5 s/);
+    });
+  });
+
+  test("解码失败的视频：结果写明保持透明与原因", async () => {
+    await withMcp(async (call) => {
+      const result = await call("render_scene", { imageId: "7", videoTime: 1 });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.match(textOf(result), /视频纹理：materials\/v\.tex 读 \/ 解码失败、保持透明（解码失败：MediaError 4）/);
+    });
+  });
+
+  test("videoTime 的形状由 SDK 参数校验拒绝：负数、字符串、数组、对象里的负数、空键", async () => {
+    await withMcp(async (call, _root, rest) => {
+      for (const videoTime of [-1, "1.5", [1.5], { "materials/v.tex": -0.5 }, { "materials/v.tex": "2" }, { "": 1 }]) {
+        const bad = await call("render_scene", { imageId: "9", videoTime });
+        assert.equal(bad.isError, true, JSON.stringify(videoTime));
+      }
+      assert.equal(bodiesOf(rest, "/render").length, 0, "参数错时不发请求");
+    });
+  });
+
+  test("videoLine：没有视频纹理或宿主产物没回 videos 时不写", () => {
+    assert.equal(videoLine({}), null);
+    assert.equal(videoLine({ videos: [] }), null);
+    assert.equal(
+      videoLine({
+        videos: [{ path: "materials/v.tex", time: 0.75, duration: null, width: 640, height: 360, failed: false }],
+      }),
+      "视频纹理：materials/v.tex 取 0.75 s（时长 ? s，640×360）",
+    );
   });
 });

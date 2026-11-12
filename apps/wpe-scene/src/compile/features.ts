@@ -152,8 +152,8 @@ const ENGINE_COMBOS = new Set([
  * - `camerafade`：加载时的淡入，不改变稳定画面。
  * - `bloom`、`hdr` 与全部 `bloom*` 调节项：由后处理档位裁决（`postprocess.ts`），泛光 / HDR 由 `bloom.ts` 与 `render/bloom.ts` 实现。
  * - `farz` / `fov` / `nearz`：正交投影不用；透视另报 `camera:perspective`。
- * - `supportsvideo`：只决定 D3D 设备的视频支持标志（G2 0x8000）。视频纹理的播放与纹理已接好（P9a 步骤 2，`video/`），
- *   `tex.ts` 暂时照报 `tex:video`，P9a 步骤 3 删键解锁。
+ * - `supportsvideo`：只决定 D3D 设备的视频支持标志（G2 0x8000）。视频纹理已实现（P9a：播放在 `video/`，纹理在
+ *   `GpuScene.copyVideo`），和这个键无关。
  * - `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength`：REA 没找到引擎读取点，
  *   实测见 P4a 实施记录（`rea-p4a.md` C7：只在场景属性表里，粒子路径不碰，`movement` 的重力只来自模块自己的 `gravity`）。
  * `cameraparallax*` 已实现（P5a 步骤 2，`render/parallax.ts`）：四个字段由 `GENERAL_FIELDS` 存值，渲染器每帧读，属性与脚本写入就地生效；

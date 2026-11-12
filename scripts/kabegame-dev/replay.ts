@@ -13,6 +13,8 @@
  *   两个都给而不相等时 400（`field` 为 `canvas`）。
  * - 脚本值（第 6 批）：渲染的 `scriptValues` 是数组、最多 `MAX_SCRIPT_VALUES` 项；每项 `object` 是非负整数或非空字符串，`field` 是
  *   图层字段之一，`value` 是 1–4 个有限数或布尔，`optional` 是布尔。
+ * - 视频时刻（P9a 步骤 3）：渲染的 `videoTime` 是非负有限数（秒），或「非空字符串 → 非负有限数」的对象、最多 `MAX_VIDEO_TIMES` 项；
+ *   键是不是这个场景的视频纹理要编译之后才知道，由探针判（不是时报错，回 422）。
  * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
  */
 import { badRequest } from "./errors.ts";
@@ -23,6 +25,7 @@ import type {
   SceneLayerField,
   ScenePostprocess,
   ScriptValue,
+  VideoTime,
 } from "./types.ts";
 
 export const POSTPROCESS_LEVELS: readonly ScenePostprocess[] = ["disabled", "enabled", "ultra", "follow"];
@@ -40,6 +43,8 @@ export const LAYER_FIELDS: readonly SceneLayerField[] = [
 export const SCRIPT_VALUE_FIELDS = ["object", "field", "value", "optional"] as const;
 /** 渲染一次最多给这么多项脚本值。 */
 export const MAX_SCRIPT_VALUES = 64;
+/** `videoTime` 对象最多这么多项（语料一张场景最多 5 段视频）。 */
+export const MAX_VIDEO_TIMES = 64;
 export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random"] as const;
 export const TRACK_FIELDS = [
   "imageId",
@@ -324,11 +329,32 @@ export function checkScriptValues(value: unknown, field = "scriptValues"): Scrip
 }
 
 /**
+ * 视频时刻（P9a 步骤 3）：非负有限数（秒），或「非空字符串（bundle 纹理的 path）→ 非负有限数」的对象、最多 `MAX_VIDEO_TIMES` 项。
+ * 键是不是这个场景的视频纹理由探针判（不是时报错，回 422）。
+ */
+export function checkVideoTime(value: unknown, field = "videoTime"): VideoTime {
+  const ok = (time: unknown) => typeof time === "number" && Number.isFinite(time) && time >= 0;
+  if (typeof value === "number") {
+    if (!ok(value)) fail(field, `要是非负有限数（秒），收到 ${shown(value)}`);
+    return value;
+  }
+  if (!isObject(value)) fail(field, `要是秒数，或 { <纹理路径>: 秒数 }，收到 ${shown(value)}`);
+  const entries = Object.entries(value);
+  if (entries.length > MAX_VIDEO_TIMES) fail(field, `有 ${entries.length} 项，最多 ${MAX_VIDEO_TIMES} 项`);
+  for (const [path, time] of entries) {
+    if (!path) fail(field, "的键（纹理路径）不能为空");
+    if (!ok(time)) fail(`${field}.${path}`, `要是非负有限数（秒），收到 ${shown(time)}`);
+  }
+  return value as Record<string, number>;
+}
+
+/**
  * 渲染请求里的回放：给了 `particles` 就校验它，并拒绝同时给 `time`（探针此时忽略 `time`，读回那一帧的 `g_Time` 取
  * `particles.times` 的末项或 dt 累计值）。没给时原样返回 undefined。
  * 光标一并校验（P5a 收尾）：`pointer` 是一个点；`pointers` 要有 `particles`、和 `particles.dts` 等长、不和 `pointer` 同给；`window` 是
  * `[宽, 高]`。读回画布 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。脚本值 `scriptValues`（第 6 批）
- * 见 `checkScriptValues`，不要求有 `particles`。校验过的值原样留在请求里转给探针。
+ * 见 `checkScriptValues`，不要求有 `particles`。视频时刻 `videoTime`（P9a 步骤 3）见 `checkVideoTime`，同样不要求有 `particles`。
+ * 校验过的值原样留在请求里转给探针。
  */
 export function checkRenderReplay(body: {
   particles?: unknown;
@@ -338,6 +364,7 @@ export function checkRenderReplay(body: {
   window?: unknown;
   canvas?: unknown;
   scriptValues?: unknown;
+  videoTime?: unknown;
 }): ParticleReplay | undefined {
   const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
   if (particles && body.time !== undefined) {
@@ -356,5 +383,6 @@ export function checkRenderReplay(body: {
   const window = body.window === undefined ? undefined : checkWindow(body.window);
   if (body.canvas !== undefined) checkCanvas(body.canvas, window);
   if (body.scriptValues !== undefined) checkScriptValues(body.scriptValues);
+  if (body.videoTime !== undefined) checkVideoTime(body.videoTime);
   return particles;
 }

@@ -99,7 +99,8 @@ const FILES: Record<string, Uint8Array | string> = {
   "P:/p/materials/good.json": JSON.stringify({ passes: [{ shader: "good" }] }),
   "P:/p/materials/bad-shader.json": JSON.stringify({ passes: [{ shader: "bad" }] }),
   "P:/p/materials/bad-tex.json": JSON.stringify({ passes: [{ shader: "good", textures: [null, "bad"] }] }),
-  "P:/p/materials/bad.tex": tex(TEX_FLAGS.video),
+  // 不支持的纹理：原来用 Video 标志（`tex:video`），P9a 步骤 3 解锁后改用 clamp-border
+  "P:/p/materials/bad.tex": tex(TEX_FLAGS.clampBorder),
   "P:/p/shaders/good.vert": "void main() {}",
   "P:/p/shaders/good.frag": "void main() {}",
   "P:/p/shaders/bad.vert": "void main() {}",
@@ -208,8 +209,8 @@ describe("不支持项的归属", () => {
       { file: "effects/bad-tex-b/effect.json" },
     ]);
     expect(bundle.textures).toHaveLength(1);
-    expect(bundle.unsupported).toEqual(["tex:video"]);
-    expect(effectsOf(bundle).map((effect) => effect.unsupported)).toEqual([["tex:video"], ["tex:video"]]);
+    expect(bundle.unsupported).toEqual(["tex:clamp-border"]);
+    expect(effectsOf(bundle).map((effect) => effect.unsupported)).toEqual([["tex:clamp-border"], ["tex:clamp-border"]]);
   });
 
   it("只有关着的 effect 用坏着色器 / 坏纹理时场景级为空", async () => {
