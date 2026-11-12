@@ -28,6 +28,7 @@ import {
   checkProgramFeatures,
   checkSceneFeatures,
   checkScriptFeatures,
+  EFFECT_UNIFORMS,
   effectNeedsFramebuffer,
   GROUP_CHILD_FRAMEBUFFER,
   groupChildIssues,
@@ -626,6 +627,7 @@ interface PassContext {
   /** 本 pass 的稳定键（绑定表的目标键），见 `bindings.ts`。 */
   key: TargetKey;
   scope?: ResourceScope | null;
+  /** 本 effect 的 fbo 表：只有 effect 的绘制 pass 带它（可能为空表），基础 pass、passthrough、组上屏、粒子都没有。 */
   fbos?: ReadonlyMap<string, SceneFbo>;
   /** 渲染图运行时填的槽位（effect 无 bind 时的槽 0、bind 的各槽、passthrough 的槽 0）：不带格式，WPE 不给 `previous` 与 `bind` 定义 `TEX<n>FORMAT`。 */
   planned?: ShaderTextureSlot[];
@@ -1108,7 +1110,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     if (context.particle) checkParticleProgram(pass, result?.ok ? result : null, issues);
     let program: number | null = null;
     if (result?.ok) {
-      checkProgramFeatures(result, issues, context.particle ? PARTICLE_UNIFORMS : undefined);
+      // 粒子 pass 带粒子路径写的 uniform；effect pass（有 fbo 表的上下文）带只在 effect pass 写的 `g_LayerModelMatrix`
+      // （P7d 步骤 2），基础材质读到它照报
+      checkProgramFeatures(
+        result,
+        issues,
+        context.particle ? PARTICLE_UNIFORMS : context.fbos ? EFFECT_UNIFORMS : undefined,
+      );
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
       for (const binding of result.textures ?? []) {
         const fallback = binding.meta?.default;

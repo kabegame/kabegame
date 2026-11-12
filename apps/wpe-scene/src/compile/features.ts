@@ -52,7 +52,8 @@ export const SUPPORTED = {
 
 /**
  * 渲染器会写入的引擎内置 uniform（翻译结果里没有 `meta.material` 的成员）。另有 `g_Texture<n>Resolution`。
- * 与 `render/uniforms.ts` 的 `staticBuiltins` / `frameBuiltins` 一一对应，`render.test.ts` 核对两边一致。
+ * 与 `render/uniforms.ts` 的 `staticBuiltins` / `frameBuiltins` 一一对应，`p2a.test.ts` 核对两边一致。
+ * 只在某类 pass 里才写的另列：effect pass 的 `EFFECT_UNIFORMS`、粒子的 `PARTICLE_UNIFORMS`。
  */
 export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_ModelViewProjectionMatrix",
@@ -101,6 +102,19 @@ export function isEngineUniform(name: string): boolean {
     /^g_L(?:Point|Spot|Tube|Directional)_/.test(name)
   );
 }
+
+/**
+ * 只有 effect pass 才写的引擎 uniform（P7d 步骤 2），程序检查只在 effect 的 pass 里把它们当引擎 uniform：
+ * - `g_LayerModelMatrix`：effect 的每个 pass（画进 fbo 的中间 pass 与上屏的末 pass）都是图层的世界矩阵 `W`，含父链、不含 `size`、
+ *   不带视差（视差在视图投影里）。实测见 p7-REPORT「P7d 的实测」（`p7d-uni` 的 `kbfx`、子图层 `kbchild`）与 effect-matrices-REPORT
+ *   S3（非 final 与 final 都是 `L = W`）；开着视差时 MVP 的平移变了，它和 `g_ModelMatrix` 的平移仍是 `origin`
+ *   （`A:\p7d\unipar\unipar-frame132.rdc` 事件 73）。
+ * - WPE 只在 effect pass 的着色器反射到效果矩阵或 `g_LayerModelMatrix` 时写（`FUN_1401ebf60`，pass 标志 bit0）。基础 pass、
+ *   直接上屏、passthrough 上屏不写，读到的是上一个写它的图层留下的值，取决于绘制顺序，复刻没有意义，所以基础材质读到它照报
+ *   `uniform:g_LayerModelMatrix`。
+ * 渲染器在 `render/uniforms.ts` 的 `drawMatrices`（`effect`、`final` 两种角色）给值，`p2a.test.ts` 核对两边一致。
+ */
+export const EFFECT_UNIFORMS: ReadonlySet<string> = new Set(["g_LayerModelMatrix"]);
 
 /**
  * 值非 0 时需要引擎提供数据、渲染器还没有的 COMBO。`LIGHTING` 不在这里：无 effect 的图层已实现（`lights.ts`），
@@ -687,7 +701,8 @@ export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>):
 
 /**
  * 翻译结果里依赖引擎、渲染器还不提供的部分：内置 uniform 与 COMBO。`extra` 是这类 pass 另外由渲染器写的引擎 uniform
- * （泛光链的 `g_RenderVar0`，见 `bloom.ts` 的 `POSTPROCESS_UNIFORMS`；图层材质里它没有意义，照报）。
+ * （泛光链的 `g_RenderVar0`，见 `bloom.ts` 的 `POSTPROCESS_UNIFORMS`；粒子的 `PARTICLE_UNIFORMS`；effect pass 的 `EFFECT_UNIFORMS`；
+ * 图层材质里它们没有意义，照报）。
  *
  * 两阶段同名、取值来源不同而被翻译器拆开的 uniform（`kb_vs_<名字>` / `kb_fs_<名字>`，带 `original`）总带 `meta.material`：
  * 翻译器让引擎值那一侧保留原名，改名的一侧一定是材质常量，所以这里按 `meta.material` 放行，不会被当成未知的引擎 uniform。

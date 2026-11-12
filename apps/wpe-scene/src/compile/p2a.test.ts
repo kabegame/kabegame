@@ -3,7 +3,15 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, fboFormat, needsFramebuffer, passthroughMaterial, type SceneBundle } from "./bundle";
 import { decodeEncodedTextures, TextureDecodeCache } from "./decode";
-import { checkEffectFeatures, checkProgramFeatures, checkSceneFeatures, ENGINE_UNIFORMS, scanValue } from "./features";
+import {
+  checkEffectFeatures,
+  checkProgramFeatures,
+  checkSceneFeatures,
+  EFFECT_UNIFORMS,
+  ENGINE_UNIFORMS,
+  isEngineUniform,
+  scanValue,
+} from "./features";
 import type { SceneReader } from "./fs";
 import {
   readWpePostprocessing,
@@ -15,8 +23,9 @@ import {
 } from "./postprocess";
 import { parseTex } from "./tex";
 import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
-import { frameBuiltins, staticBuiltins } from "../render/uniforms";
+import { drawUniformValues, frameBuiltins, LAYER_UNIFORMS, staticBuiltins } from "../render/uniforms";
 import { identity } from "../render/math";
+import type { DrawRole } from "../render/graph";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -312,6 +321,56 @@ describe("能力表裁决", () => {
       ),
     ]);
     expect([...written].sort()).toEqual([...ENGINE_UNIFORMS].sort());
+  });
+  it("只在 effect pass 写的 uniform 表与渲染器一一对应（P7d 步骤 2，EFFECT_UNIFORMS）", () => {
+    // 不是通用的引擎 uniform：基础材质读到照报
+    for (const name of EFFECT_UNIFORMS) {
+      expect(ENGINE_UNIFORMS.has(name), name).toBe(false);
+      expect(isEngineUniform(name), name).toBe(false);
+      // 图层或祖先的变换变了要跟着重写
+      expect(LAYER_UNIFORMS.has(name), name).toBe(true);
+    }
+    // 按角色组装：effect 的中间 pass 与上屏的末 pass 写满这张表，其余角色一个都不写
+    const written = (role: DrawRole) =>
+      new Set(
+        Object.keys(
+          drawUniformValues({
+            step: { role, inputs: {} },
+            layer: {
+              origin: [0, 0, 0],
+              angles: [0, 0, 0],
+              scale: [1, 1, 1],
+              alpha: 1,
+              color: [1, 1, 1],
+              brightness: 1,
+              visible: true,
+              parallaxDepth: [1, 1],
+              parent: null,
+              size: [4, 4],
+            },
+            world: identity(),
+            constants: {},
+            viewProjection: identity(),
+            colorScale: 1,
+            screenSize: [1, 1],
+            textures: [],
+            eye: [],
+            ambient: [0, 0, 0],
+            skylight: [0, 0, 0],
+          }),
+        ),
+      );
+    for (const role of ["effect", "final"] as const) {
+      const keys = written(role);
+      expect([...keys].filter((name) => !ENGINE_UNIFORMS.has(name)).sort(), role).toEqual([...EFFECT_UNIFORMS].sort());
+    }
+    for (const role of ["base", "direct", "compose", "passthrough"] as const) {
+      const keys = written(role);
+      expect(
+        [...keys].filter((name) => !ENGINE_UNIFORMS.has(name)),
+        role,
+      ).toEqual([]);
+    }
   });
   it("effect：逐项检查实例、effect.json、fbo 与命令", () => {
     const keys = new Set<string>();

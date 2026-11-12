@@ -141,6 +141,11 @@ export interface StaticBuiltinInput {
   effectModel?: Mat4;
   effectModelViewProjection?: Mat4;
   effectTextureProjection?: Mat4;
+  /**
+   * `g_LayerModelMatrix`（P7d 步骤 2）：只有 effect 的 pass 给（`drawMatrices` 的 `effect`、`final` 角色），是图层世界矩阵。
+   * 缺省时不写这个名字：基础 pass 与直接上屏在 WPE 里是别的图层的残留值，编译期已照报（`compile/features.ts` 的 `EFFECT_UNIFORMS`）。
+   */
+  layerModel?: Mat4;
   layer: Pick<SceneLayer, "alpha" | "color">;
   /** 颜色系数 k：HDR 下为图层 `brightness`，否则 1（p2-REPORT B10，J5 抓帧证实）。缺省 1。 */
   colorScale?: number;
@@ -225,6 +230,8 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
     g_Texture0Rotation: [1, 0, 0, 1],
     g_Texture0Translation: [0, 0],
   };
+  // 只在 effect pass 写（`EFFECT_UNIFORMS`），见 `StaticBuiltinInput.layerModel`
+  if (input.layerModel) values.g_LayerModelMatrix = Array.from(input.layerModel);
   if (input.ambient) values.g_LightAmbientColor = [...input.ambient];
   if (input.skylight) values.g_LightSkylightColor = [...input.skylight];
   Object.assign(values, textureBuiltins(input.textures));
@@ -235,12 +242,15 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
  * 由图层状态与相机算出的内置 uniform：就地刷新时只重写这一组，`pass.uniforms` 里有的名字（材质值，例如 passthrough 的
  * `g_Color4 = (1, 1, 1, 1)`、材质自带的 `g_UserAlpha`）一律不动。
  * `g_EyePosition`（P5a 步骤 3）：眼位带本帧的抖动，和矩阵一起在 `GpuScene.setParallax` 里随相机重写；不开抖动时值恒定，重写字节不变。
+ * `g_LayerModelMatrix`（P7d 步骤 2）：effect pass 的图层世界矩阵，图层或祖先的变换变了一起重写；没有它的 draw（基础 pass 等）
+ * 算出的值里没有这个名字，刷新时跳过。
  */
 export const LAYER_UNIFORMS: ReadonlySet<string> = new Set([
   "g_ModelViewProjectionMatrix",
   "g_ModelViewProjectionMatrixInverse",
   "g_ModelMatrix",
   "g_ModelMatrixInverse",
+  "g_LayerModelMatrix",
   "g_EffectModelMatrix",
   "g_EffectModelMatrixInverse",
   "g_NormalModelMatrix",
@@ -278,6 +288,13 @@ export const LIGHT_UNIFORMS = {
  *   `g_ViewProjectionMatrix` 照给（带视差与抖动）。WPE 这一下的模型是 `W`、视图投影是场景相机（rea-p5-modelflags §2.4），`p5b-cl`
  *   事件 62 / 132 与带视差的 `p5b-grp-par` 事件 62 的 MVP 逐元素对上（`render/p5b-compose.test.ts`）。composelayer 着色器只读 MVP；
  *   效果矩阵同直接上屏取缺省（同 MVP、纹理投影为单位阵），没有实测。
+ *
+ * `layerModel`（`g_LayerModelMatrix`，P7d 步骤 2）只在 `effect`、`final` 两种角色给，就是 `world`：含父链、不含 `size`、不带视差。
+ * WPE 在 effect 的每个 pass 里写它，中间 pass 与上屏 pass 相同（effect-matrices-REPORT S3 的 `L = W`；p7-REPORT「P7d 的实测」
+ * `p7d-uni` 的 `kbfx`、`kbchild` 逐值对上，`render/p7d-layermodel.test.ts`）。视差只在视图投影里：开着视差时 MVP 的平移变了，
+ * `g_LayerModelMatrix` 与 `g_ModelMatrix` 的平移仍是 `origin`（`A:\p7d\unipar\unipar-frame132.rdc` 事件 73）。基础 pass、直接上屏、
+ * passthrough 上屏 WPE 不写（别的图层的残留值），这里不给，编译期照报（`compile/features.ts` 的 `EFFECT_UNIFORMS`）。
+ * 没有 effect 的组的上屏（`groupUpload`）也是 `final` 角色、同样会拿到它，但那不是 effect 的 pass，读它的着色器编译期已照报。
  */
 export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: readonly number[], viewProjection: Mat4) {
   const model = world;
@@ -299,6 +316,8 @@ export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: re
         effectModel: multiply(model, half),
         effectModelViewProjection: effectMvp,
         effectTextureProjection: effectMvp,
+        // 图层世界矩阵，不缩放（effect-matrices-REPORT S3：非 final 的 pass 也是 `L = W`）
+        layerModel: model,
       };
     }
     case "final":
@@ -310,6 +329,8 @@ export function drawMatrices(step: Pick<DrawStep, "role">, world: Mat4, size: re
         effectModel: model,
         effectModelViewProjection: layerMvp,
         effectTextureProjection: multiply(layerMvp, half),
+        // 上屏的末 pass 是 effect 的 pass，给 `g_LayerModelMatrix`（同中间 pass）；passthrough 上屏不是（WPE 不写，残留值）
+        layerModel: step.role === "final" ? model : undefined,
       };
     case "compose":
     case "direct":

@@ -429,3 +429,39 @@ const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visi
 - Prettier 通过。
 
 工具：盘符小写（`d:\`）时 `kbp snapshot export --vitest` 会加载两份 vitest，全部报 `reading 'config'`；在大写盘符下跑就正常。
+
+提交 `049420f0`。
+
+### 步骤 2 — `g_LayerModelMatrix`（2026-11-12）
+
+动工前补测：`p7d-uni` 开视差的变体 `p7d-uni-par`（抓帧 `A:\p7d\unipar\unipar-frame132.rdc`，事件 73）。MVP 的平移随视差变了，`g_LayerModelMatrix`、`g_ModelMatrix` 的平移仍是 `(960, 600)`，所以世界矩阵不带视差，视差在视图投影里，和我们的做法一致。effect-matrices-REPORT 初稿写的「`W` 带视差」已更正。
+
+`bundle.ts`、`features.ts` 当时有别的会话没提交的改动，所以实现交给代理，在 HEAD 的产品源码快照里做（`ignore/p7d/snap-step2`，补丁 `ignore/p7d/step2.patch`）。我验收后打进工作区。
+
+**改动：**
+- `features.ts` 新增 `EFFECT_UNIFORMS`；
+- `bundle.ts`：effect pass（有 fbo 表的上下文）的程序检查带它；
+- `uniforms.ts`：
+  - `drawMatrices` 的 `effect`、`final` 两种角色给 `layerModel = world`；
+  - `staticBuiltins` 写 `g_LayerModelMatrix`；
+  - `LAYER_UNIFORMS` 加它。
+- 测试：`p2a.test.ts` 加两表核对；新文件 `render/p7d-layermodel.test.ts` 9 个用例，覆盖程序检查、和 WPE 抓帧逐值核对 `kbfx` / `kbchild`、视差、就地刷新。
+
+**和子计划不同的地方：**
+- 两表核对实际在 `p2a.test.ts`，不在 `render.test.ts`；
+- 没有 effect 的组上屏（`groupUpload`）也是 `final` 角色，也会拿到值。那不是 effect 的 pass，读它的着色器编译期照报，多给的值没人用。
+
+**验收：**
+- 代理的快照（HEAD `049420f0`）：
+  - tsc 0；
+  - vitest 1760 → 1770 全过；
+  - 8 个变异全部检出（不传或全传 `EFFECT_UNIFORMS`、不给或多给 `layerModel`、带 size 缩放、`LAYER_UNIFORMS` 不含它等）。
+- 我在新 HEAD `69214a05`（别的会话又提交了 P4e 步骤 3）上重做一遍：快照套补丁，tsc 0，vitest 1770 → 1780 全过。
+- 补丁打进工作区没有冲突。
+- 语料（176 个样本，`ignore/p7d/out/diff-step2b.txt`）：
+  - 只去掉 5 处 `uniform:g_LayerModelMatrix`：4 张工坊场景，加上 `p7d-rmask`；
+  - 没有新增的键，干净的场景 47 → 48，多的就是 `p7d-rmask`。
+- 画面：`p7d-rmask`（`ignore/p7d/gen_rmask.py`）把工坊 `rounded_mask`（3608337642，`AD` 2 用图层缩放修正圆角）挂在四个缩放、旋转各不相同的纯色图层上。
+  - 重建 dev 的场景宿主（`deno task --cwd apps/wpe-scene build --mode development`）后，在 Kabegame 里渲染，和 WPE 1920×1080 抓帧（`A:\p7d\rmask1080`）逐像素比：**最大差 0**。
+  - 测试行已用 `projects_remove` 移除。
+- Prettier：Prettier 会经 `.gitignore` 跳过 `ignore/` 下的文件，对快照 `--check` 等于什么都没查，要加 `--ignore-path .prettierignore`；工作区的文件照常查。

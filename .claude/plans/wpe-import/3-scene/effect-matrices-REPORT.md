@@ -187,7 +187,9 @@ P7d 步骤 0 的测试工程 `ignore/p7d/proj/p7d-uni`（生成器 `ignore/p7d/g
 | ⑤ 基础 pass（普通图像层画进合成 RT） | **(0…w, 0…h)** | `F` | `I` | `F` | 残留 | 残留 | 残留 | 实测（20、143、214、288、356） |
 
 - `E` = `ortho(−1,1,−1,1,−1000,1000)`：xy 是单位阵，z 乘 0.0005 再加 0.5；`F` = 把 `(0…w, 0…h)` 铺满合成 RT 的正交（z 同 `E`）；
-  `W` = 图层世界矩阵（含父链、带视差，p5a-fx）；`M0` = 图层开始时快照的 `W × VP`；`scale` 用图层 `size`。各 `Inverse` = 对应矩阵求逆。
+  `W` = 图层世界矩阵（含父链、**不带视差**）；`M0` = 图层开始时快照的 `W × VP`，视差在 `VP` 里（p5a-fx）；`scale` 用图层 `size`。各 `Inverse` = 对应矩阵求逆。
+  更正（2026-11-12 主会话实测 `A:\p7d\unipar\unipar-frame132.rdc` 事件 73，`p7d-uni` 开视差）：MVP 的平移随视差变了，
+  `g_LayerModelMatrix` 与 `g_ModelMatrix` 的平移仍是 `(960, 600)`。初稿写成「`W` 带视差」是错的。
 - **MVP / Model / VP 没有「只在某些条件下写」**：每次绑定都取当前变换栈。**效果矩阵与 `g_LayerModelMatrix` 只在 effect pass 的
   着色器声明（反射到）其中任一个时写**（ID 0x13–0x18 → 能力位 4 → pass 标志 bit0），所以 effect pass 自己读到的总是新值；
   基础 pass、直接上屏、passthrough 上屏读到的是上一次写入的残留（实测 288 读到 C 图层末 pass、440 读到 K 图层末 pass 的值）。
