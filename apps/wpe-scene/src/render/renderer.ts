@@ -10,6 +10,8 @@
  *   operator 的遍数由 `maxFps` 定（`particlePasses`：1–20 两遍，否则一遍，对应 WPE 的 `fps` 设置，P4a 步骤 4）。
  *   一帧的顺序（P4c 步骤 4）：`sync` → 步进粒子 → 脚本（`beforeFrame`）→ `sync` → 写每帧 uniform → 编码，粒子先于脚本，同 WPE。
  *   声音的排期器（P6a 步骤 1，`stepObjects`）在步进粒子之后、脚本之前，同一个帧时间。
+ * - **场景频谱**（P4e 步骤 4，`audio/spectrum.ts`）：帧开头、粒子步进之前按宿主给的原始频谱（`audioFrame`）推进一次，补画帧不推进；
+ *   粒子读它的 16 段，脚本的音频缓冲在 `beforeFrame` 里从它拷。重编译保留。
  * - **视差**（P5a 步骤 2，`parallax.ts`）：视差点 P 在帧开头、粒子与脚本之前推进一次，脚本之后按当时的开关与 amount 交给
  *   `GpuScene.setParallax`（属性与脚本写 `cameraparallax*` 同帧生效），`g_ParallaxPosition` 随每帧 uniform 写。P 归渲染器：
  *   整场重编译保留，新场景回到场景中心（见 `load`）。
@@ -19,6 +21,7 @@
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
+import { SceneSpectrum } from "../audio/spectrum";
 import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
@@ -71,8 +74,16 @@ export interface SceneRendererOptions {
   onError?: (reasons: string[]) => void;
   /** 设备丢失（非 `destroy()` 引起），渲染已停止；调用方可以重建渲染器。 */
   onLost?: (reasons: string[]) => void;
-  /** 每个实际渲染帧在粒子步进之后、第二次状态同步之前执行（P4c 步骤 4，见 `render`）；暂停时不执行。 */
-  beforeFrame?: (dt: number) => void;
+  /**
+   * 每个实际渲染帧在粒子步进之后、第二次状态同步之前执行（P4c 步骤 4，见 `render`）；暂停时不执行。`spectrum` 是这一帧已推进的场景
+   * 频谱（P4e 步骤 4，同 `SceneRenderer.spectrum`）：脚本的音频缓冲在这里从它拷。
+   */
+  beforeFrame?: (dt: number, spectrum: SceneSpectrum) => void;
+  /**
+   * 音频的原始频谱（P4e 步骤 4）：每帧开头取一次，交给场景频谱推进（`SceneSpectrum.advance`）。返回 Hub 最近一次推来的 128 个值（左 64 +
+   * 右 64），还没收到时 null。不给时当 null（频谱全 0）。
+   */
+  audioFrame?: () => ArrayLike<number> | null;
   /**
    * 不画东西的对象的每帧更新（P6a 步骤 1：声音的排期器）：每个实时帧在粒子步进之后、脚本（`beforeFrame`）之前，用同一个钳过的
    * 帧时间（WPE 在对象更新里走声音计时器，rea-p6a-sound.md 2.3）。补画帧（帧时间 0）与暂停时不执行，计时自然冻结。
@@ -137,6 +148,12 @@ export class SceneRenderer {
   private canvasPointer: [number, number] | null = null;
   /** `g_Time` / `g_Frametime`：钳过的帧时间与它的累加（T2）。换场景不重置。 */
   private readonly frameClock = new FrameClock();
+  /**
+   * 场景频谱（P4e 步骤 4，`audio/spectrum.ts`，rea-p4e-audio.md 3.3）：每个实时帧在粒子步进之前按 `audioFrame` 推进一次，补画帧（帧时间
+   * 0）不推进。粒子树读它的 `L16` / `R16`（建场景时交给 `GpuScene`），脚本的音频缓冲每帧从它拷（`beforeFrame`）。归渲染器所有：整场
+   * 重编译保留（同视差点；WPE 的状态在场景窗口上，改属性不重建），新场景是新页面、新渲染器，从全 0 开始。
+   */
+  readonly spectrum = new SceneSpectrum();
   /**
    * 视差点 P 与 `g_ParallaxPosition`（P5a 步骤 2）。整场重编译保留（同一渲染器上第二次起的 `load`），新场景回到场景中心
    * （渲染器的第一次 `load`：宿主一个页面只放一张场景，换壁纸是新页面、新渲染器；设备丢失或退回后重建渲染器，P 也随之回到中心）。
@@ -295,7 +312,13 @@ export class SceneRenderer {
     const fps = this.options.maxFps ?? 60;
     const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, {
       ignoreUnsupported: options.ignoreUnsupported,
-      particles: { passes: particlePasses(fps), fps, cursor: this.cursorOf(placement) },
+      particles: {
+        passes: particlePasses(fps),
+        fps,
+        cursor: this.cursorOf(placement),
+        // 粒子读场景频谱的 16 段（P4e 步骤 4）；预热在这里跑，首次加载时频谱是 0（rea-p4e-audio.md 3.5）
+        audio: { left: this.spectrum.L16, right: this.spectrum.R16 },
+      },
       texts: options.texts,
     });
     if (this.destroyed || serial !== this.loadSerial) {
@@ -329,6 +352,14 @@ export class SceneRenderer {
   setPaused(paused: boolean): void {
     this.paused = paused;
     this.sync();
+  }
+
+  /**
+   * 关掉场景频谱（P4e 步骤 4，`SceneSpectrum.disable`）：宿主的音频订阅被拒（没声明 `supportsaudioprocessing`、非 Windows）时调，频谱
+   * 清零并保持全 0。
+   */
+  disableAudio(): void {
+    this.spectrum.disable();
   }
 
   /**
@@ -525,6 +556,9 @@ export class SceneRenderer {
       this.parallax,
       parallaxInput(state.general, { pointer: this.pointer, frametime, width, height, eye: shake }),
     );
+    // 场景频谱（P4e 步骤 4）：帧开头、粒子步进之前推进一次（WPE 的音频段紧挨在帧函数之前，rea-p4e-audio.md 3.5），粒子与脚本这一帧
+    // 读同一份；补画帧帧时间为 0，不推进
+    this.spectrum.advance(this.options.audioFrame?.() ?? null, frametime);
     // 粒子先于脚本（P4c 步骤 4）：WPE 一帧里先模拟粒子、后跑脚本，模拟用的对象变换是本帧脚本运行之前的（依据见
     // `GpuScene.stepParticles`）。步进之前先 `sync`：两帧之间写进状态的属性改值（`instanceoverride` 等）这一帧就进模拟器。
     // 补画帧帧时间为 0，`stepParticles` 只记 cursor 就返回
@@ -545,7 +579,7 @@ export class SceneRenderer {
     // 声音（P6a 步骤 1）：粒子之后、脚本之前；同脚本在 try 外，声音的问题不让画面退回
     if (live) this.options.stepObjects?.(frametime);
     // 脚本在 try 外（同以前）：脚本自己的错误不走 `render:frame` 退回
-    if (live) this.options.beforeFrame?.(frametime);
+    if (live) this.options.beforeFrame?.(frametime, this.spectrum);
     const encoder = device.createCommandEncoder({ label: "scene frame" });
     try {
       // 绘制用的视差取脚本之后的开关与 amount（WPE 绘制时才读，rea-p5-camera.md 6.3）：脚本写 `cameraparallax*` 同帧生效

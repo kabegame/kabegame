@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SceneSpectrum } from "../audio/spectrum";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
@@ -765,10 +766,26 @@ describe("SceneScript API（FakeRealm）", () => {
     h.api.setModuleEvaluating(false);
   });
 
-  /** 左声道全 0.5、右声道全 0.25，任何分辨率合并出来都一样。 */
-  const flatFrame = () => [...Array<number>(64).fill(0.5), ...Array<number>(64).fill(0.25)];
+  /**
+   * 场景频谱（P4e 步骤 4）：每个分辨率的 left / right / average 填不同的常数（64 段 0.5 / 0.25 / 0.125，32 段 ×2，16 段 ×4），
+   * 拷错块或声道一眼能看出来；average 故意不等于 (left + right) / 2，核对取的是 A 段。
+   */
+  function filledSpectrum(): SceneSpectrum {
+    const spectrum = new SceneSpectrum();
+    for (const [resolution, scale] of [
+      [64, 1],
+      [32, 2],
+      [16, 4],
+    ] as const) {
+      const block = spectrum.block(resolution);
+      block.left.fill(0.5 * scale);
+      block.right.fill(0.25 * scale);
+      block.average.fill(0.125 * scale);
+    }
+    return spectrum;
+  }
 
-  it("applyAudioFrame 写进脚本持有的同一组数组，全部已注册分辨率都更新", () => {
+  it("applySpectrum 把场景频谱同分辨率的块拷进脚本持有的同一组数组（average 是 A 段），全部已注册分辨率都更新", () => {
     const h = setup();
     const register = h.api.engine.registerAudioBuffers as (resolution: number) => Record<string, Float32Array>;
     h.api.setModuleEvaluating(true);
@@ -777,21 +794,27 @@ describe("SceneScript API（FakeRealm）", () => {
     h.api.setModuleEvaluating(false);
     // 脚本持有的是数组本身：先取出来，写入之后看这些引用里的值
     const held = [low, high].map(({ left, right, average }) => ({ left, right, average }));
-    h.api.applyAudioFrame(flatFrame());
-    for (const { left, right, average } of held) {
-      expect([...left].every((value) => value === 0.5)).toBe(true);
-      expect([...right].every((value) => value === 0.25)).toBe(true);
-      expect([...average].every((value) => value === 0.375)).toBe(true);
+    const spectrum = filledSpectrum();
+    h.api.applySpectrum(spectrum);
+    for (const [index, scale] of [
+      [0, 4],
+      [1, 1],
+    ] as const) {
+      const { left, right, average } = held[index];
+      expect([...left].every((value) => value === 0.5 * scale)).toBe(true);
+      expect([...right].every((value) => value === 0.25 * scale)).toBe(true);
+      expect([...average].every((value) => value === 0.125 * scale)).toBe(true);
     }
     expect(h.api.audioResolutions).toEqual([16, 64]);
-    // 长度不对的帧不写入
-    h.api.applyAudioFrame([1, 2, 3]);
-    expect(held[0].left[0]).toBe(0.5);
+    // 拷的是值，不是引用：频谱之后变了，缓冲要等下一次拷
+    spectrum.L16.fill(0);
+    expect(held[0].left[0]).toBe(2);
+    expect(low.left).toBe(held[0].left);
   });
 
-  it("还没注册就来帧什么都不做；脚本改写缓冲对象的字段不影响写入", () => {
+  it("还没注册就拷什么都不做；脚本改写缓冲对象的字段不影响写入", () => {
     const h = setup();
-    h.api.applyAudioFrame(flatFrame());
+    h.api.applySpectrum(filledSpectrum());
     expect(h.api.audioResolutions).toEqual([]);
     const register = h.api.engine.registerAudioBuffers as (resolution: number) => Record<string, unknown>;
     h.api.setModuleEvaluating(true);
@@ -799,9 +822,9 @@ describe("SceneScript API（FakeRealm）", () => {
     h.api.setModuleEvaluating(false);
     const { left } = buffer;
     buffer.left = "脚本写的";
-    h.api.applyAudioFrame(flatFrame());
+    h.api.applySpectrum(filledSpectrum());
     expect(buffer.left).toBe("脚本写的");
-    expect((left as Float32Array)[0]).toBe(0.5);
+    expect((left as Float32Array)[0]).toBe(2);
   });
 
   it("registerAudioBuffers 成功才通知宿主，不成功的调用不通知", () => {

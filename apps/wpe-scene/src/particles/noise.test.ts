@@ -420,10 +420,8 @@ describe("turbulence：读码（B6）", () => {
 describe("能力表：三个噪声类模块的字段", () => {
   const issues = (category: ParticleCategory, module: JsonObject) => readParticleModule(category, module, true).issues;
 
-  it("audioprocessingmode 非 0 照报（P4e 步骤 4），mode 0 的音频字段中性（步骤 1）；向量字段写成数字报不支持；turbulentvelocityrandom 的 up WPE 不读，不报", () => {
-    expect(issues("operator", { name: "turbulence", audioprocessingmode: 3 })).toEqual([
-      { field: "audioprocessingmode", kind: "value" },
-    ]);
+  it("audioprocessingmode 任意值都支持（P4e 步骤 4）；向量字段写成数字报不支持；turbulentvelocityrandom 的 up WPE 不读，不报", () => {
+    expect(issues("operator", { name: "turbulence", audioprocessingmode: 3 })).toEqual([]);
     expect(issues("initializer", { name: "turbulentvelocityrandom", audioprocessingbounds: "0.8 1" })).toEqual([]);
     expect(issues("initializer", { name: "turbulentvelocityrandom", forward: 1, right: 0 })).toEqual([
       { field: "forward", kind: "value" },

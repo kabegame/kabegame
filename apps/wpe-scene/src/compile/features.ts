@@ -375,7 +375,8 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   // `camerashake` 只在透视场景报（P5a 步骤 3）：正交的抖动已实现（`render/shake.ts`）；透视下幅度是 `0.1·amplitude` 个世界单位、
   // 偏移是三维的，要和透视相机一起做，归 P5d（rea-p5-camera.md 第 5 节），透视场景整张另报 `camera:perspective`，这一条提醒 P5d 补上
   if (!g.orthogonalprojection && active(g.camerashake)) unsupported.add("general:camerashake");
-  if (active(g.supportsaudioprocessing)) unsupported.add("general:supportsaudioprocessing");
+  // `supportsaudioprocessing` 中性（P4e 步骤 4）：渲染器不读 `scene.json` 里的这个键，开关只看 `project.json` 的同名键（rea-p4e-audio.md
+  // 第 6 节、4.1，`SceneBundle.audio`）；语料只有默认工程 `audiophile` 在 `scene.json` 里写了它
   // `zoom` 已实现（P5a 步骤 4）：正交投影绕场景中心乘它（p5-REPORT 实测），绑属性、脚本写回都就地生效。只在解析出的值 ≤ 0 时报：
   // 投影退化、指针反投影是 NaN（语料最小 1.0）。常量与 `{script}` 的初值同 `bundle.ts` 的 `generalFields` 解析，不合法时取缺省 1；
   // 绑用户属性的不看值（运行中的值编译期定不了）；关键帧解析成 undefined，另报 `value:animation`。透视场景里 zoom 不起作用

@@ -250,6 +250,11 @@ export interface SimOptions {
   random?: Record<string, (base: RandomLike) => RandomLike>;
   /** 按系统名、出生序号注入 R（`injectedR`）。 */
   r?: Record<string, number[]>;
+  /**
+   * 逐帧的 16 段频谱（P4e 步骤 4，下标 = 帧号 − 1）：抓到的帧取 CLK 读到的 `g_AudioSpectrum16Left/Right`，其余为 null（沿用前一帧；第一个
+   * 有值的帧之前是 0，同加载时）。原样写进粒子共用的频谱（`particles/audio` 的 `writeParticleAudio`），不经归一化。轨迹没有 `audio` 时不给。
+   */
+  audio?: ({ left: number[]; right: number[] } | null)[];
   /** 建好系统后改模块（k 换 h、改字段…）。 */
   patch?: (system: any, layer: any) => void;
   /** 记录速度（b4）。 */
@@ -348,6 +353,23 @@ export const nodeReader = {
 export function readTrack(file: string): Track {
   if (!existsSync(file)) throw new KbpReplayError("data", `找不到轨迹 ${file}`);
   return JSON.parse(readFileSync(file, "utf8").replace(/([[,:]\s*)-?(?:NaN|Infinity)(?=\s*[,\]}])/g, "$1null"));
+}
+
+/**
+ * 逐帧频谱（P4e 步骤 4，`SimOptions.audio`）：轨迹帧带 `audio`（`kbp rdc track` 记下的 CLK 读数）时取 `g_AudioSpectrum16Left/Right`，
+ * 其余帧为 null。一帧都没有时返回 undefined（不给模拟器设频谱，旧源码照常能跑）。
+ */
+export function audioTimeline(sec: Pick<Section, "truth" | "dts">): SimOptions["audio"] {
+  const out: NonNullable<SimOptions["audio"]> = sec.dts.map(() => null);
+  let any = false;
+  for (const frame of sec.truth.frames as any[]) {
+    const left = frame.audio?.g_AudioSpectrum16Left;
+    const right = frame.audio?.g_AudioSpectrum16Right;
+    if (!Array.isArray(left) || !Array.isArray(right) || frame.frame < 1 || frame.frame > out.length) continue;
+    out[frame.frame - 1] = { left, right };
+    any = true;
+  }
+  return any ? out : undefined;
 }
 
 export class KbpReplayError extends Error {
@@ -860,6 +882,7 @@ export class CaseContext {
       controls,
       world: sec.world,
       follows: sec.follows,
+      audio: audioTimeline(sec),
     };
   }
 
@@ -914,6 +937,9 @@ export class CaseContext {
       });
       return list;
     };
+    // 频谱（P4e 步骤 4）：全场景一份，各根系统共用（子系统与实例由 setAudio 递归带上）；预热时是 0（同 WPE 加载期）
+    const audioMod = o.audio ? await this.mod("particles/audio") : null;
+    const sharedAudio = audioMod ? audioMod.silentParticleAudio() : null;
     for (const layer of o.layers ?? sec.layers) {
       if (!layer.particle) continue;
       let random: RandomLike = new SeededRandom(1 + entries.length);
@@ -921,6 +947,14 @@ export class CaseContext {
       const injected = o.r?.[layer.name];
       const system = new ParticleSystem(layer.particle, random, o.passes, injected ? injectedR(injected) : undefined);
       o.patch?.(system, layer);
+      if (sharedAudio) {
+        if (typeof system.setAudio !== "function")
+          throw new KbpReplayError(
+            "src",
+            `${sec.project}：轨迹带频谱，但这份源码的 ParticleSystem 没有 setAudio（P4e 步骤 4 之前）`,
+          );
+        system.setAudio(sharedAudio);
+      }
       system.prewarm(inputs(layer, 0) as never);
       entries.push({ name: layer.name, layer, system, births: new Map(), count: 0 });
     }
@@ -952,6 +986,9 @@ export class CaseContext {
       });
     };
     for (let frame = 1; frame <= last; frame++) {
+      // 这一帧的频谱：WPE 在帧函数之前算好，粒子一帧里读同一份（rea-p4e-audio 3.5）；没有值的帧沿用前一帧
+      const spectrum = o.audio?.[frame - 1];
+      if (spectrum && sharedAudio) audioMod.writeParticleAudio(sharedAudio, spectrum);
       for (const entry of entries) {
         const before = entry.system.alive;
         entry.system.step(o.dts[frame - 1], timeArg(frame), inputs(entry.layer, frame) as never);

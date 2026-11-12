@@ -18,6 +18,7 @@ import {
   type ParallaxState,
 } from "../render/parallax";
 import type { SceneState } from "../render/state";
+import { silentParticleAudio } from "../particles/audio";
 import { frameCamera, replayParticles, replayReadback, type ParticleReplay } from "./particleCorners";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors, windowPointer } from "./replayPointers";
 
@@ -300,5 +301,51 @@ describe("回放到读回帧（replayReadback）", () => {
     replayParticles(scene, {} as never, { dts: [0.1, 0.1, 0.1] }, 0, per);
     expect(cursors).toEqual(per.slice(0, 2));
     expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1] }, 0, per)).toThrow("应等长");
+  });
+});
+
+describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
+  const frame = (v: number) => ({ left: Array<number>(16).fill(v), right: Array<number>(16).fill(v / 2) });
+
+  it("每帧步进之前原样写进场景的粒子频谱（含读回那一帧），null 沿用前一帧；不给时不写", () => {
+    const { scene } = recorder();
+    const particleAudio = silentParticleAudio();
+    const seen: number[][] = [];
+    const audioScene = {
+      ...scene,
+      particleAudio,
+      stepParticles: (dt: number, time: number, s?: SceneState, cursor?: readonly [number, number]) => {
+        seen.push([particleAudio.left[0], particleAudio.right[15]]);
+        scene.stepParticles(dt, time, s, cursor);
+      },
+    };
+    const run = (particles: ParticleReplay) =>
+      replayReadback(audioScene, state(), {
+        particles,
+        time: 0,
+        pointers: replayPointers({}, SCENE, particles.dts.length),
+        parallax: initialParallaxState(...SCENE),
+        size: SCENE,
+      });
+    run({ dts: [0.1, 0.1, 0.1, 0.1], audio: [frame(0.5), null, frame(0.25), null] });
+    expect(seen).toEqual([
+      [0.5, 0.25],
+      [0.5, 0.25],
+      [0.25, 0.125],
+      [0.25, 0.125],
+    ]);
+    seen.length = 0;
+    run({ dts: [0.1, 0.1] });
+    expect(seen).toEqual([
+      [0.25, 0.125],
+      [0.25, 0.125],
+    ]);
+  });
+
+  it("和 dts 不等长、或场景没有粒子频谱（替身）却给了 audio 时抛错", () => {
+    const scene = { stepParticles: () => {} };
+    expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1], audio: [frame(1)] })).toThrow("应等长");
+    expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1], audio: [frame(1), null] })).toThrow("粒子频谱");
+    expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1], audio: [null, null] })).not.toThrow();
   });
 });

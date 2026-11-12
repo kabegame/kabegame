@@ -8,6 +8,7 @@
  * 每个函数对 `[0, count)` 的全部槽跑一遍（死槽照常处理，写顶点时跳过，同 WPE）。这一遍的步长 `h`、drag 系数 `k`
  * 由模拟器给（两遍模式时是 `dt/2`、`k0/2`）。每遍开头 `size`、`rgb`、`a` 已重置为初始值，所以乘性模块跑两遍结果不变。
  */
+import { moduleAudio } from "./audio";
 import { clamp01, f32, lerp, orBits, rcp, rsqrt, TWO_PI } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
 import { snoise3 } from "./noise";
@@ -317,8 +318,10 @@ const AXIS_EPSILON = f32(0.001);
  * - 世界空间系统（P4c 步骤 4，rea-p4c-sim.md 5.5）：中心是世界坐标的 `cp.t`（`W·base`），轴不变换，所以轴固定在世界；本地系统里
  *   轴随对象转（绘制时乘 `W`）。
  * - `rsqrtps` 按精确值算。`L2 = 0`（粒子正好在中心或轴上）时 WPE 得 NaN，这里跳过这个粒子。不用 `R`。
+ * - 音频（P4e 步骤 4，rea-p4e-audio.md 第 5 节【确】，`0x140243208`–`0x140243266`）：`audioprocessingmode ≠ 0` 时每条记录每遍取一次
+ *   系数（两遍模式取两次，帧内频谱不变、值相同），`SI = (f·speedinner)·k`、`DS = (f·(speedouter − speedinner))·k`。
  */
-export function vortex(fields: ParticleFields, { columns, count, k, controlPoints }: ParticleRunContext): void {
+export function vortex(fields: ParticleFields, { columns, count, k, controlPoints, audio }: ParticleRunContext): void {
   const raw = fields.axis as number[];
   const axisSquared = f32(f32(f32(raw[1] * raw[1]) + f32(raw[0] * raw[0])) + f32(raw[2] * raw[2]));
   const axisLength = f32(Math.sqrt(axisSquared));
@@ -328,8 +331,15 @@ export function vortex(fields: ParticleFields, { columns, count, k, controlPoint
   const inner = fields.distanceinner as number;
   const outer = fields.distanceouter as number;
   const rcpRange = outer === inner ? 1 : rcp(f32(outer - inner));
-  const speedInner = f32((fields.speedinner as number) * k);
-  const speedRange = f32(f32((fields.speedouter as number) - (fields.speedinner as number)) * k);
+  let inner0 = fields.speedinner as number;
+  let range0 = f32((fields.speedouter as number) - inner0);
+  const f = moduleAudio(fields, audio);
+  if (f !== null) {
+    inner0 = f32(f * inner0);
+    range0 = f32(f * range0);
+  }
+  const speedInner = f32(inner0 * k);
+  const speedRange = f32(range0 * k);
   const cylinder = ((fields.flags as number) & 1) !== 0;
   const { position, velocity } = columns;
   const d = [0, 0, 0];
@@ -482,17 +492,25 @@ function attractDelete(
  * - **乘的是 `k`**：`xmm8` 每条 operator 开头装成 `k`（`0x140240290`）。fps ≥ 40（`dt ≤ 0.025`）时 `k = dt'`，看不出差别；
  *   两遍模式时每遍是 `k/2`，两遍之间位置被 `movement` 改过，噪声输入不同，照常处理。
  * - `mask` 每轴非 0 才算这一轴（解析期置 p+0xc4 的位），三轴全 0 时整条跳过。三个轴照汇编都做加法（没算的轴 `N = 0`）。
- * - 用 `R` 两处（相位、速度）；不置列标志，不用控制点。`audioprocessing*`（乘速度）属 P4e，能力表照报。
+ * - 用 `R` 两处（相位、速度）；不置列标志，不用控制点。
+ * - 音频（P4e 步骤 4，rea-p4e-audio.md 第 5 节【确】，`0x14024296b`–`0x1402429bf`，blend `0x140242d7c`–`0x140242dcc`）：先看掩码，三轴
+ *   全 0 时连取值也不调；`audioprocessingmode ≠ 0` 时每条记录每遍取一次系数（两遍模式取两次，值相同），`spd = R·(f·range) + f·speedmin`，
+ *   其余照旧（再乘 blend 的 `b`、`k·mask`）。
  */
-export function turbulence(fields: ParticleFields, { columns, count, k, time }: ParticleRunContext): void {
+export function turbulence(fields: ParticleFields, { columns, count, k, time, audio }: ParticleRunContext): void {
   const mask = fields.mask as number[];
   const useX = mask[0] !== 0;
   const useY = mask[1] !== 0;
   const useZ = mask[2] !== 0;
   if (!useX && !useY && !useZ) return;
   const phaseTime = f32(time * (fields.timescale as number));
-  const speedMin = fields.speedmin as number;
-  const speedRange = f32((fields.speedmax as number) - speedMin);
+  let speedMin = fields.speedmin as number;
+  let speedRange = f32((fields.speedmax as number) - speedMin);
+  const f = moduleAudio(fields, audio);
+  if (f !== null) {
+    speedRange = f32(f * speedRange);
+    speedMin = f32(f * speedMin);
+  }
   const phaseRange = f32((fields.phasemax as number) - (fields.phasemin as number));
   const mkx = f32(k * mask[0]);
   const mky = f32(k * mask[1]);

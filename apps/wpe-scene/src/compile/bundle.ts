@@ -92,6 +92,7 @@ import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
+import { particleUsesAudio } from "../particles/audio";
 
 export interface SceneGeneral {
   width: number;
@@ -465,6 +466,12 @@ export interface SceneBundle {
    * 播放由宿主按它排期（`audio/`），渲染器不读。`compileScene` 总会给出；可选只是为了不动各处手写的测试 bundle，读的地方按空表处理。
    */
   sounds?: SceneSound[];
+  /**
+   * 场景用音频（P4e 步骤 4）：`project.json` 的 `general.supportsaudioprocessing` 是 JSON `true`（WPE 只认 bool 真，`FUN_14010d100`，
+   * rea-p4e-audio.md 4.1），且有粒子系统（含子系统）带 `audioprocessingmode ≠ 0` 的模块（`particleUsesAudio`）。为真时宿主加载就订阅
+   * `WpeMediaHub`（脚本注册音频缓冲时另外照旧订阅）。`compileScene` 总会给出；可选只是为了不动各处手写的测试 bundle，缺省按 false。
+   */
+  audio?: boolean;
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -1552,6 +1559,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
   bundle.unsupported = [...unsupported].sort();
+  // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里
+  // 有音频粒子就自动开启（4.3）
+  bundle.audio =
+    project.general?.supportsaudioprocessing === true &&
+    bundle.layers.some((layer) => layer.particle !== null && particleUsesAudio(layer.particle));
   return bundle;
 }
 

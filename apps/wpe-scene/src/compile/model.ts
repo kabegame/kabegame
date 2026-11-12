@@ -6,7 +6,8 @@ export type SceneValue =
 export type JsonObject = Record<string, unknown>;
 export interface ProjectJson extends JsonObject {
   file: string;
-  general?: { properties?: Record<string, { value: SceneScalar }> };
+  /** `supportsaudioprocessing`：音频开关，只认 JSON `true`（P4e 步骤 4，rea-p4e-audio.md 4.1）。 */
+  general?: { properties?: Record<string, { value: SceneScalar }>; supportsaudioprocessing?: unknown };
 }
 export interface SceneJson extends JsonObject {
   camera?: JsonObject;

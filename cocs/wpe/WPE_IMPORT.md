@@ -69,7 +69,7 @@ MediaFormat { key: "x-wpe/scene", .. } // 占位
 ## 三、发现与识别
 
 **WPE 由 cargo feature `wpe` 控制**：`kabegame-core` 的 `wpe`，`kabegame` 的 `wpe`（`standard` 依赖它，同时带上
-`realfft` 与 `windows` 的音频 / WinRT feature），`kabegame-cli` 的依赖声明。三个桌面平台开启，Android / Web 不开。
+`realfft`、`rustfft` 与 `windows` 的音频 / WinRT feature），`kabegame-cli` 的依赖声明。三个桌面平台开启，Android / Web 不开。
 
 | 随 `wpe` 编译 | 所有构建都编译 |
 | --- | --- |
@@ -716,6 +716,11 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   频谱算法自定（WPE 未公开）：Hann 窗 → 2048 点实数 FFT（`realfft`）→ 64 个对数频段（30 Hz – 16 kHz，不超过奈奎斯特的
   95%）取段内峰值 → dB + 高频补偿（相对 1 kHz 每倍频程 +3 dB）→ `(dB − (−70)) / 60` 映射、上限 1.2 → 上升即时、下降每帧
   保留 0.75。常数集中在 `SpectrumTuning`，真机按样本调。
+  同一批样本另喂给 WPE 采集线程的原始频谱（`wpe_spectrum.rs`，P4e 步骤 4，照 `.claude/plans/wpe-import/3-scene/phase4/rea-p4e-audio.md`
+  3.2 逐行复刻：每攒够约 29 ms 的样本做一次 1920 / 2089 点复数 FFT（`rustfft`），不加窗、样本写成 `127·s + 127`，乘频率倾斜后按四次方根
+  归入 64 段取最大，得到线性原值；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
+  （它再照 WPE 做每帧的自适应归一化，见 [WPE_SCENE.md](WPE_SCENE.md)）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
+  （rea 3.4），2026-11-13 用户比较两者后选择保留自定算法的观感。
 - **媒体**（`wpe_media/media.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话，WinRT 事件只发信号，读取与比较在
   线程里做，变化才推：`Properties`（标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`）、
   `Thumbnail`（封面字节哈希变了才解码，长边缩到 512 的 PNG data URL；五个颜色由 64×64 缩图的量化直方图取三个主色，文字色取
@@ -728,7 +733,7 @@ Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSess
 当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，
 Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网页壁纸收到的是 Kabegame 自己的会话（图片名 + 应用图标）。
 
-只有 Windows 有数据源（`realfft` 与 `windows` 的音频 / WinRT feature 只在 Windows 依赖段，并由 `wpe` feature 开启），macOS / Linux 的订阅命令直接返回错误，垫片忽略，页面收不到音频与媒体回调。
+只有 Windows 有数据源（`realfft`、`rustfft` 与 `windows` 的音频 / WinRT feature 只在 Windows 依赖段，并由 `wpe` feature 开启），macOS / Linux 的订阅命令直接返回错误，垫片忽略，页面收不到音频与媒体回调。
 
 ## 七、已知边界
 

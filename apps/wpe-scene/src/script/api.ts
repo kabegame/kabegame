@@ -5,12 +5,13 @@ import {
   type UserProperty,
   type ValueType,
 } from "../compile/bindings";
+import type { SceneSpectrum } from "../audio/spectrum";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { constantTargetFields, materialSlots, type MaterialMember } from "../compile/materialValues";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
-import { fillAudioBuffers, type AudioBuffers } from "./audio";
+import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
 import type { ScriptRealm, ScriptRuntime } from "./runtime";
 import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
 
@@ -103,8 +104,8 @@ export class ScriptApi {
   private readonly effects = new Map<string, ApiObject>();
   private readonly recompileValues = new Map<string, string>();
   /**
-   * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applyAudioFrame` 把宿主收到的
-   * 音频原地写进 `arrays`；没有音频时保持全零，相当于 WPE 里没有声音在放。`api` 是脚本拿到的对象，脚本可以改写
+   * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applySpectrum` 每帧把场景频谱（归一化后的）
+   * 原地写进 `arrays`（P4e 步骤 4）；没有音频时频谱全零，相当于 WPE 里没有声音在放。`api` 是脚本拿到的对象，脚本可以改写
    * 它的字段，所以写入只认 `arrays`。
    */
   private readonly audioBufferCache = new Map<number, { api: ApiObject; arrays: AudioBuffers }>();
@@ -157,9 +158,13 @@ export class ScriptApi {
   forgetRecompile(path: string): void {
     this.recompileValues.delete(path);
   }
-  /** 把 Hub 的一帧写进全部已注册分辨率的缓冲，脚本持有的数组不变。 */
-  applyAudioFrame(frame: ArrayLike<number>): void {
-    for (const { arrays } of this.audioBufferCache.values()) fillAudioBuffers(frame, arrays);
+  /**
+   * 把场景频谱拷进全部已注册分辨率的缓冲（P4e 步骤 4，「决定」5），脚本持有的数组不变。宿主每个实时帧在脚本之前调（渲染器推进频谱之后，
+   * `SceneRendererOptions.beforeFrame`），暂停时不调、缓冲保持最后的值（同 WPE 整帧跳过时频谱冻结）。
+   */
+  applySpectrum(spectrum: Pick<SceneSpectrum, "block">): void {
+    for (const [resolution, { arrays }] of this.audioBufferCache)
+      copySpectrumToBuffers(spectrum.block(resolution as 16 | 32 | 64), arrays);
   }
   /** 已注册的音频分辨率，从小到大（dev 探针 `host.audio()` 用）。 */
   get audioResolutions(): number[] {

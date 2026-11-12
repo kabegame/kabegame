@@ -74,6 +74,10 @@
  * 模拟之前各自 `+= dt′`（float32，乘过 `rate`），`suspend` 在有存活粒子时一起清零；系统时间在不可见的帧上（复位之后）照常累加，预热不
  * 累加（P4d 收尾 A 实测 st-hide、st-pre）。模拟时的
  * 对象原点 `W.t`（remap 的 `layerorigin`）和模型矩阵一起由 `advance` 按 `inputs.world` 写进执行上下文。
+ *
+ * 音频（P4e 步骤 4，rea-p4e-audio.md，`audio.ts`）：执行上下文的 `audio` 是这一帧的 16 段频谱，整棵树共用一个只读引用（`setAudio`，
+ * 渲染器在步进之前写好值）；读音频的模块在 `audioprocessingmode ≠ 0` 时取系数。发射器与 initializer 一帧只走一次，operator 两遍模式下
+ * 每遍各取一次（值相同）。
  */
 import {
   instanceValues,
@@ -84,6 +88,7 @@ import {
 } from "../compile/particles";
 import { identity, invert, multiply, translation, type Mat4 } from "../render/math";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
+import { SILENT_PARTICLE_AUDIO, type ParticleAudio } from "./audio";
 import { colornState, type Rgb } from "./colorn";
 import { ParticleColumns } from "./columns";
 import {
@@ -523,6 +528,8 @@ export class ParticleSystem {
       systemTime: 0,
       layerTime: 0,
       origin: new Float32Array(3),
+      // P4e 步骤 4：子系统与事件实例沿用父的频谱（整棵树一份），顶层缺省全 0，渲染器建树时换成场景的那份（`setAudio`）
+      audio: link ? link.parent.audio : SILENT_PARTICLE_AUDIO,
     };
     // 子系统（3.1，`FUN_14022ebe0`）：深度 < 10 才建，条目顺序；类型 0（不认识的）编译期已丢掉。static 当场建；事件类建空的实例池
     // （P4e 步骤 2，`0x14022ef43` 起的 `E.type in (2, 3, 4)` 分支），实例在父粒子出生 / 死亡时才建
@@ -540,6 +547,22 @@ export class ParticleSystem {
           system: new ParticleSystem(entry.system, random, passes, undefined, { parent: this, entry }),
         });
       });
+  }
+
+  /** 这棵树读的 16 段频谱（P4e 步骤 4，`audio.ts`）。 */
+  get audio(): ParticleAudio {
+    return this.context.audio!;
+  }
+
+  /**
+   * 换上这棵树读的频谱（P4e 步骤 4，rea-p4e-audio.md 3.5、第 5 节）：频谱是场景的一份状态，一帧里各系统、各遍读到的值相同，所以整棵树
+   * （static 子孙、各池的活跃与空闲实例）共用同一个只读引用，之后新建的实例从父上取（构造时）。渲染器建树时、预热之前调，回放与 dev
+   * 探针给自己的数组。只换引用，不拷值。
+   */
+  setAudio(audio: ParticleAudio): void {
+    this.context.audio = audio;
+    for (const child of this.statics) child.system.setAudio(audio);
+    for (const pool of this.events) for (const instance of [...pool.active, ...pool.free]) instance.setAudio(audio);
   }
 
   /** 有子系统（static 或事件条目）：不可见时也要每帧步进子孙（3.6），渲染器据此每帧重写顶点。 */
@@ -1225,7 +1248,16 @@ export class ParticleSystem {
     this.born.length = 0;
     this.recordBirths = record;
     for (const emitter of this.emitters) {
-      const count = emissionCount(emitter.state, emitter.fields, dt, this.alive, capacity, this.random);
+      // 音频系数（P4e 步骤 4）在 `emissionCount` 里按这一帧的频谱取，每帧每条 emitter 一次
+      const count = emissionCount(
+        emitter.state,
+        emitter.fields,
+        dt,
+        this.alive,
+        capacity,
+        this.random,
+        this.context.audio,
+      );
       if (emitter.state.periodStarted) {
         emitter.state.periodStarted = false;
         for (const module of this.initializers)

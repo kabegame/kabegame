@@ -17,6 +17,7 @@ import type { SceneLayer } from "../compile/bundle";
 import { sceneViewProjection, worldMatrixOf } from "../render/layout";
 import { multiply, translation, type Mat4 } from "../render/math";
 import { shakeOffset, type ShakeFields } from "../render/shake";
+import { silentParticleAudio, writeParticleAudio, type ParticleAudioFrame } from "./audio";
 import { pointerScenePoint } from "./controlpoints";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { injectedR, SeededRandom } from "./random";
@@ -98,6 +99,13 @@ export interface ParticleTrackOptions {
   seed?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`（`injectedR`，用完退回种子随机数），同 dev 探针 `renderFrame` 的 `particles.random`。 */
   random?: Record<number, readonly number[]>;
+  /**
+   * 每帧的 16 段频谱（P4e 步骤 4，`audio.ts`），和 `dts` 等长、一一对应：第 i 项在第 i + 1 帧步进之前原样写进全部系统共用的频谱数组（不经
+   * 归一化）；某项为 null / undefined 时沿用前一帧的值（日志补出的帧）。回放 WPE 时填抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`。
+   * 预热时频谱是 0（加载期，rea-p4e-audio.md 3.5）。不给时全程全 0：`mode ≠ 0` 的模块按 `f(0)` 算（语料参数下为 0），没有音频模块的
+   * 场景和以前逐字节相同。
+   */
+  audio?: readonly (ParticleAudioFrame | null | undefined)[];
   project?: string;
   tag?: string;
 }
@@ -184,6 +192,10 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   if (cursors && !size) throw new Error("给了 cursors 时要给 size（场景的投影尺寸）");
   if (cursors && cursors.length !== options.dts.length)
     throw new Error(`cursors 有 ${cursors.length} 项，dts 有 ${options.dts.length} 项，应等长`);
+  if (options.audio && options.audio.length !== options.dts.length)
+    throw new Error(`audio 有 ${options.audio.length} 项，dts 有 ${options.dts.length} 项，应等长`);
+  /** 全部系统共用的频谱（P4e 步骤 4）：预热时全 0，每帧步进之前按 `options.audio` 写。 */
+  const audio = silentParticleAudio();
   const viewProjection = size ? sceneViewProjection({ width: size[0], height: size[1] }, options.zoom) : null;
   /** 第 i 帧（从 0 起）的跟随点：每帧反投影一次，全部系统共用。`shake` 是模拟时相机的抖动（上一帧的 s），为 0 时用原矩阵。 */
   const pointerAt = (i: number, shake: readonly [number, number] = [0, 0]): readonly [number, number] => {
@@ -222,6 +234,7 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
       options.passes,
       injected ? injectedR(injected) : undefined,
     );
+    system.setAudio(audio);
     const world = worldMatrixOf(layer.object, transforms, worlds);
     system.prewarm({ world, pointer: loadPointer });
     // 加载时只有 static 子系统；事件实例的模板在输出时第一次出现再记（`drawnSystems`）
@@ -244,6 +257,9 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     elapsed = (elapsed + dt) % TIME_WRAP_SECONDS;
     const time = options.times ? options.times[frame - 1] : elapsed;
     const pointer = pointerAt(frame - 1, previousShake);
+    // 这一帧的频谱（P4e 步骤 4）：步进之前写，没给的帧沿用前一帧
+    const spectrum = options.audio?.[frame - 1];
+    if (spectrum) writeParticleAudio(audio, spectrum);
     for (const { system, world } of systems) system.step(dt, time, { world, pointer });
     // 步进之后才换上这一帧的 s：下一帧的模拟用它
     if (options.shake && size) previousShake = shakeOffset(options.shake, time, size[1]);

@@ -5,6 +5,7 @@
  * `t = pow(t, exponent)`（`powf` 是推断）。min / max 已乘 `instanceoverride`（`resolveParticleFields`）。
  * 噪声类（`turbulentvelocityrandom`、`positionoffsetrandom`）另读场景时间 `T`（`context.time`）。
  */
+import { moduleAudio } from "./audio";
 import { f32, lerp, mulBasis } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
 import { snoise1, snoise2 } from "./noise";
@@ -100,12 +101,17 @@ function addPerAxis(target: readonly Float32Array[], fields: ParticleFields, ran
  *   `z = (v.x·m02 + v.y·m12) + v.z·m22`，`mij` 是第 i 列第 j 个分量。
  * - `M` 是发射器的控制点 3×3（`context.basis`，无条件，`0x14023bec7` 起第二次 `FUN_140184440` 的 `rdx = r15`），乘法同上
  *   （`mulBasis`）；控制点 0 无旋转时是单位阵，乘上是精确的。
- * - 不用 `R`，不置列标志，没有 blend。`audioprocessing*`（乘相位范围）属 P4e，能力表照报。
+ * - 不用 `R`，不置列标志，没有 blend。
+ * - 音频（P4e 步骤 4，rea-p4e-audio.md 第 5 节【确】，`0x14023bdbc`–`0x14023bde5`）：`audioprocessingmode ≠ 0` 时每个新粒子取一次系数
+ *   （initializer 流每个新粒子跑一遍），乘在相位范围上：`t = ((u1·(f·(phasemax − phasemin)) + phasemin) + T)·timescale`。`f = 0` 时
+ *   同一帧出生的粒子方向完全相同。取值不抽随机数，`u1`、`u2` 的抽取不受影响。
  */
 export function turbulentVelocityRandom(fields: ParticleFields, context: ParticleRunContext): void {
   const { columns, random, slot, time } = context;
   const phaseMin = fields.phasemin as number;
-  const phaseRange = f32((fields.phasemax as number) - phaseMin);
+  let phaseRange = f32((fields.phasemax as number) - phaseMin);
+  const f = moduleAudio(fields, context.audio);
+  if (f !== null) phaseRange = f32(f * phaseRange);
   const u1 = random.a();
   const t = f32(f32(f32(f32(u1 * phaseRange) + phaseMin) + time) * (fields.timescale as number));
   const angle = f32(f32(f32(snoise1(t) * PI) * (fields.scale as number)) + (fields.offset as number));

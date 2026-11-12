@@ -4555,6 +4555,7 @@ dependencies = [
  "realfft",
  "reqwest 0.11.27",
  "rmcp",
+ "rustfft",
  "serde",
  "serde_json",
  "sha2 0.10.9",

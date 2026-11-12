@@ -14,6 +14,7 @@
  * - blend 变体（记录类型 0x21 / 0x22 / 0x23 / 0x25）：`b` 由 `FUN_14022a530` 按 `age·rcpps(life)` 与四个键算（`blendFactor`），
  *   乘的位置见各函数。
  */
+import { moduleAudio } from "./audio";
 import { clamp01, f32, rcp, rsqrt } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
 import { blendFactor, readBlend, saturatePs } from "./operators";
@@ -252,8 +253,10 @@ function orSign(m: number, e: number): number {
  *   vel_c = (T_c·spd + P′_c·c) + vel_c
  * ```
  * - **切向乘 `k`，不是 `h`**（实测：v2-sphere、v2-cyl 逐粒子差 ≤ 1.4e-3，换成 `h` 差 2.1–2.7）；方向是 `r̂ × a`。
- * - 轴乘控制点 current 的 3×3（含缩放、不重新归一化，实测 v2-axis）；`audioprocessingmode ≠ 0` 时乘两个速度的音频系数不做（P4e，
- *   能力表照报 `…:audioprocessingmode`）。
+ * - 轴乘控制点 current 的 3×3（含缩放、不重新归一化，实测 v2-axis）。
+ * - 音频（P4e 步骤 4，rea-p4e-audio.md 第 5 节【确】，`0x1402433f1`–`0x140243450`，blend `0x140243a1e`–`0x140243a84`）：
+ *   `audioprocessingmode ≠ 0` 时每条记录每遍取一次系数（两遍模式取两次，值相同），`SI = (speedinner·f)·k`、`DS = (Δspeed·f)·k`
+ *   （`0x140243449`、`0x140243450`；和 `vortex` 的 `f·speedinner` 写法顺序不同，float 乘法可交换，结果相同）。
  * - `n = 0`（粒子在轴上）时 `r̂`、`L` 是 NaN；`|P′| = 0` 时 `c₀` 是 inf / NaN（`centerforce` 关时 `inf·0 = NaN`），都照 WPE 写进速度，
  *   不跳过（和 `vortex` 不同）。
  */
@@ -288,8 +291,10 @@ export function vortexV2(fields: ParticleFields, context: ParticleRunContext): v
   const slot0 = ring ? (fields.ringwidth as number) : inner;
   const rcp1 = ring ? (pullDistance === 0 ? 1 : rcp(pullDistance)) : outer === inner ? 1 : rcp(f32(outer - inner));
   const speedInner = fields.speedinner as number;
-  const SI = f32(speedInner * k);
-  const DS = f32(f32((fields.speedouter as number) - speedInner) * k);
+  const delta = f32((fields.speedouter as number) - speedInner);
+  const f = moduleAudio(fields, context.audio);
+  const SI = f32((f === null ? speedInner : f32(speedInner * f)) * k);
+  const DS = f32((f === null ? delta : f32(delta * f)) * k);
   const centerforce = flags & 2 ? (fields.centerforce as number) : 0;
   const CF = f32(f32(1 / h) * centerforce);
   const radius = fields.ringradius as number;

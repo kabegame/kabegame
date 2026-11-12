@@ -104,6 +104,7 @@ import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import type { ParticleRenderer, SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
+import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
 import { pointerScenePoint } from "../particles/controlpoints";
 import { orientationBasis, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
@@ -428,6 +429,11 @@ export interface ParticleOptions {
    * 跟随点（WPE 加载时也读当时的指针，rea-p4c-sim.md 1.3、1.7）。缺省场景中心 `(0.5, 0.5)`。
    */
   cursor?: readonly [number, number];
+  /**
+   * 粒子读的 16 段频谱（P4e 步骤 4，`particles/audio.ts`）：渲染器给场景频谱的 `L16` / `R16`（`SceneSpectrum`，它每帧在步进之前推进）。
+   * 不给时建一份全 0 的（dev 探针回放时往 `GpuScene.particleAudio` 里直接写抓帧的值）。全部粒子层共用这一份。
+   */
+  audio?: ParticleAudio;
 }
 
 /** 一帧的相机（`GpuScene.setCamera`，P5a 步骤 3、4）：渲染器与探针在帧开头按脚本之前的 general 字段取。 */
@@ -751,6 +757,11 @@ export class GpuScene {
   private readonly particleSeed: number;
   private readonly particleROverride: ParticleOptions["rOverride"];
   /**
+   * 全部粒子层共用的 16 段频谱（P4e 步骤 4，`ParticleOptions.audio`）：建树时交给每个根系统（`ParticleSystem.setAudio`，子系统与实例沿用），
+   * 之后只读。渲染器给的是场景频谱的数组，dev 探针回放时直接往这里写抓帧读到的值（不经归一化）。
+   */
+  readonly particleAudio: ParticleAudio;
+  /**
    * 最近的光标下场景纹理坐标（P4c 步骤 2）：建场景时取 `ParticleOptions.cursor`，之后每次 `stepParticles` 更新。新建粒子系统
    * 预热时用它。现在只有加载时会新建：粒子层编译期没有 effect、`planParticleLayer` 也不看 effect，计划签名不变，不会单独重建；
    * 以后能单独重建时，新系统按最近的指针预热（`render/particles.test.ts` 用内部字段强制重建守着这一点）。
@@ -797,6 +808,7 @@ export class GpuScene {
     this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
     this.particleROverride = particles.rOverride;
     this.particleCursor = particles.cursor ?? [0.5, 0.5];
+    this.particleAudio = particles.audio ?? silentParticleAudio();
     let ordinal = 0;
     for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
     for (const layer of bundle.layers) this.layerByObject.set(layer.object, layer);
@@ -1496,6 +1508,8 @@ export class GpuScene {
       this.particlePasses,
       this.particleROverride?.(layer.object),
     );
+    // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
+    system.setAudio(this.particleAudio);
     const world = worldMatrixOf(layer.object, state.layers, new Map());
     system.prewarm({ world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) });
     return {

@@ -121,10 +121,14 @@ export class SceneHost {
   private scriptNeedsFullApply = true;
   private runtimeTask: Promise<void> | null = null;
   private readonly consoleErrors = new Map<string, { minute: number; count: number; skipped: number }>();
-  /** 音频只订一次（被拒也不重试）；后面三项只给 dev 探针读。 */
+  /** 音频只订一次（被拒也不重试）；`audioFrames` 只给 dev 探针读。 */
   private audioSubscribed = false;
   private audioError: string | null = null;
   private audioFrames = 0;
+  /**
+   * Hub 最近一次推来的原始频谱（128 个值，左 64 + 右 64，P4e 步骤 4）：宿主只存最近一份，渲染器每帧开头取它推进场景频谱
+   * （`SceneRendererOptions.audioFrame`）。还没收到时为 null。
+   */
   private lastAudioFrame: number[] | null = null;
   /**
    * 声音对象的播放（P6a 步骤 1）：第一张带声音的 bundle 到达时建，重编译保留（同一对象播放不中断），退回预览图与销毁时释放。
@@ -261,7 +265,7 @@ export class SceneHost {
 
   /**
    * 「清空脚本存储」：停脚本、删本场景的存储、重建脚本环境（`init` 重跑）。不重启的话，内存里的值很快又会被写回去。
-   * 音频订阅保留（`audioSubscribed` 不复位）：Channel 的消息总是写进当时的 `scriptApi`，新脚本注册的缓冲照样收到。
+   * 音频订阅保留（`audioSubscribed` 不复位）：每帧从场景频谱拷进当时的 `scriptApi`，新脚本注册的缓冲照样收到。
    */
   private restartScriptsWithClearedStorage(imageId: string): void {
     const hadRuntime = this.runtime !== null;
@@ -394,23 +398,27 @@ export class SceneHost {
   }
 
   /**
-   * 脚本第一次注册音频缓冲时向 `WpeMediaHub` 订阅，Hub 有订阅才开回环采集。订阅归属宿主 frame，frame 销毁时由
-   * Phase 8 的 `SubframeDestroyed` 释放，没有退订命令；重编译保留 realm 与缓冲，也不用重订。
+   * 向 `WpeMediaHub` 订阅音频，Hub 有订阅才开回环采集。两处触发（P4e 步骤 4）：加载的 bundle「场景用音频」（`SceneBundle.audio`：
+   * `project.json` 声明了开关、且有 `audioprocessingmode ≠ 0` 的粒子模块），或脚本第一次注册音频缓冲。订阅归属宿主 frame，frame 销毁时由
+   * Phase 8 的 `SubframeDestroyed` 释放，没有退订命令；重编译保留 realm、缓冲与渲染器的场景频谱，也不用重订。
+   * 收到的原始频谱只存最近一份（`lastAudioFrame`，消息的 `raw`：Hub 另算的 WPE 采集线程原值；`data` 是网页壁纸用的自定频谱，场景不读），
+   * 渲染器每帧取它推进场景频谱，粒子与脚本缓冲都读归一化后的频谱。
    */
   private subscribeAudio(): void {
     const imageId = this.options.imageId;
     if (this.audioSubscribed || !imageId) return;
     this.audioSubscribed = true;
-    const channel = new Channel<{ type: string; data?: number[] }>();
+    const channel = new Channel<{ type: string; data?: number[]; raw?: number[] }>();
     channel.onmessage = (message) => {
-      if (message.type !== "audio" || !message.data) return;
+      if (message.type !== "audio" || !message.raw) return;
       this.audioFrames++;
-      this.lastAudioFrame = message.data;
-      this.scriptApi?.applyAudioFrame(message.data);
+      this.lastAudioFrame = message.raw;
     };
-    // 没声明 supportsaudioprocessing 或非 Windows 时被拒：缓冲保持全零，不报错（同 Phase 8 垫片），只记 debug
+    // 没声明 supportsaudioprocessing 或非 Windows 时被拒：不报错（同 Phase 8 垫片），只记 debug；场景频谱关掉、保持全 0
+    // （`SceneSpectrum.disable`，渲染器之后才建好的在 `ensureRenderer` 里补关）
     invoke("wpe_web_media_subscribe", { kind: "audio", channel, imageId }).catch((error: unknown) => {
       this.audioError = String(error);
+      this.renderer?.disableAudio();
       this.options.report.debug(`场景壁纸 ${imageId} 音频订阅被拒：${this.audioError}`);
     });
   }
@@ -515,14 +523,29 @@ export class SceneHost {
     };
   }
 
-  /** dev 探针：音频是否已订阅（`error` 是被拒的原因）、收到的帧数、已注册的分辨率与最近一帧的峰值。 */
-  audio(): { subscribed: boolean; error: string | null; frames: number; resolutions: number[]; peak: number } {
+  /**
+   * dev 探针：音频是否已订阅（`error` 是被拒的原因）、收到的帧数、已注册的分辨率与最近一帧原值的峰值；`spectrum16` 是渲染器场景频谱
+   * 归一化后的 16 段（P4e 步骤 4，粒子读的就是它，和 WPE 抓帧的 `g_AudioSpectrum16Left/Right` 比），没有渲染器时为 null；`raw` 是最近一帧
+   * Hub 的原值（左 64 + 右 64，WPE 采集线程的输出，没收到时为 null），核对原始频谱的量级用。
+   */
+  audio(): {
+    subscribed: boolean;
+    error: string | null;
+    frames: number;
+    resolutions: number[];
+    peak: number;
+    raw: number[] | null;
+    spectrum16: { left: number[]; right: number[] } | null;
+  } {
+    const spectrum = this.renderer?.spectrum;
     return {
       subscribed: this.audioSubscribed && this.audioError === null,
       error: this.audioError,
       frames: this.audioFrames,
       resolutions: this.scriptApi?.audioResolutions ?? [],
       peak: this.lastAudioFrame ? Math.max(...this.lastAudioFrame) : 0,
+      raw: this.lastAudioFrame ? [...this.lastAudioFrame] : null,
+      spectrum16: spectrum ? { left: [...spectrum.L16], right: [...spectrum.R16] } : null,
     };
   }
 
@@ -664,8 +687,12 @@ export class SceneHost {
     const displayScale = this.displayScale;
     const task: Promise<SceneRenderer> = SceneRenderer.create(this.canvas, {
       displayScale,
+      // 场景频谱的输入（P4e 步骤 4）：Hub 最近一次的原值，渲染器每帧开头取一次
+      audioFrame: () => this.lastAudioFrame,
       stepObjects: (dt) => this.sceneSounds?.step(dt, this.soundVolumeOf),
-      beforeFrame: (dt) => {
+      beforeFrame: (dt, spectrum) => {
+        // 脚本的音频缓冲改读归一化频谱（P4e 步骤 4，「决定」5）：渲染器这一帧推进之后、脚本之前拷一次
+        this.scriptApi?.applySpectrum(spectrum);
         if (this.state !== "fallback" && this.scriptState) this.runtime?.frame(dt);
       },
       onError: (reasons) => {
@@ -695,6 +722,8 @@ export class SceneHost {
         created.setStyle(this.style);
         // 先于 load：加载时的预热与第一帧用它（渲染器按新场景的铺放换算，见 `SceneRenderer.load`）
         if (this.pointer) created.setPointer(...this.pointer);
+        // 音频订阅在渲染器建好之前就被拒了（P4e 步骤 4）：场景频谱同样关掉
+        if (this.audioError !== null) created.disableAudio();
         created.setBackground(schemeColor(this.properties));
         const info = created.adapterInfo;
         this.options.report.debug(
@@ -798,6 +827,8 @@ export class SceneHost {
       }
       // 声音在对象加载时就开始（WPE 不等第一帧），在脚本与 GPU 资源之前
       this.loadSounds(bundle);
+      // 场景用音频（P4e 步骤 4）：声明了开关且有带音频的粒子模块，加载就订阅（只订一次）
+      if (bundle.audio) this.subscribeAudio();
       // runtime 已赋值但脚本还在加载时也要等，否则会抢在 init 之前进入首帧
       if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;

@@ -4,8 +4,13 @@
 //! 页面照常收到逐帧衰减到 0 的数据，它的「空闲」判断才会生效。打不开设备（没有输出设备等）也照样推静音帧。
 //! 默认设备变化靠每秒比对设备 id 发现（不实现 `IMMNotificationClient`），设备失效（`AUDCLNT_E_DEVICE_INVALIDATED`）
 //! 立即重开。逐帧路径不打日志。
+//!
+//! 同一批样本另喂给 WPE 的原始频谱（`wpe_spectrum.rs`，P4e 步骤 4，只给场景用）：每攒够约 29 ms 的样本做一次 FFT，推的是最近
+//! 一次的结果；静音照 WPE，包带 `AUDCLNT_BUFFERFLAGS_SILENT` 或读取失败时立即清零，连续超过 1 s 没有包时清零，1 s 内保留。
+//! 两份每 33 ms 一起推（`on_frame(网页壁纸的, WPE 原始的)`）。
 
 use super::spectrum::{Spectrum, BANDS};
+use super::wpe_spectrum::Spectrum as WpeSpectrum;
 use super::ComGuard;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -39,7 +44,7 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
-    pub fn start(on_frame: impl Fn([f32; BANDS * 2]) + Send + 'static) -> Self {
+    pub fn start(on_frame: impl Fn([f32; BANDS * 2], [f32; BANDS * 2]) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread = std::thread::Builder::new()
             .name("kabegame-wpe-audio".to_string())
@@ -65,7 +70,7 @@ impl Drop for AudioCapture {
     }
 }
 
-fn run(stop: &AtomicBool, on_frame: &dyn Fn([f32; BANDS * 2])) {
+fn run(stop: &AtomicBool, on_frame: &dyn Fn([f32; BANDS * 2], [f32; BANDS * 2])) {
     let _com = ComGuard::init();
     let enumerator: Option<IMMDeviceEnumerator> =
         match unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) } {
@@ -78,6 +83,8 @@ fn run(stop: &AtomicBool, on_frame: &dyn Fn([f32; BANDS * 2])) {
     let mut stream: Option<LoopbackStream> = None;
     let mut sample_rate = 48_000;
     let mut spectrum = Spectrum::new(sample_rate);
+    let mut wpe = WpeSpectrum::new(sample_rate);
+    let mut last_poll = Instant::now();
     // 本帧周期内实际收到的样本帧数，不够的按静音补
     let mut received = 0usize;
     let mut open_failed = false;
@@ -106,6 +113,7 @@ fn run(stop: &AtomicBool, on_frame: &dyn Fn([f32; BANDS * 2])) {
                             if open.sample_rate != sample_rate {
                                 sample_rate = open.sample_rate;
                                 spectrum = Spectrum::new(sample_rate);
+                                wpe = WpeSpectrum::new(sample_rate);
                             }
                             open_failed = false;
                             stream = Some(open);
@@ -120,15 +128,27 @@ fn run(stop: &AtomicBool, on_frame: &dyn Fn([f32; BANDS * 2])) {
                 }
             }
         }
+        // WPE 原始频谱：这一轮读到的包数（静音包也算）；一个都没有时累计无包时长，连续超过 1 s 清零
+        let elapsed = now.duration_since(last_poll);
+        last_poll = now;
+        let mut packets = 0;
         if let Some(open) = &mut stream {
-            match open.read(&mut spectrum) {
-                Ok(frames) => received += frames,
+            match open.read(&mut spectrum, &mut wpe) {
+                Ok((frames, count)) => {
+                    received += frames;
+                    packets = count;
+                }
                 Err(error) => {
                     tracing::debug!("音频回环读取失败，稍后重开: {error}");
+                    // WPE 读取失败也立即清零
+                    wpe.silent();
                     stream = None;
                     next_device_check = now;
                 }
             }
+        }
+        if packets == 0 {
+            wpe.no_packet(elapsed);
         }
         if now >= next_frame {
             let expected = (sample_rate as f32 * FRAME_INTERVAL.as_secs_f32()) as usize;
@@ -136,7 +156,7 @@ fn run(stop: &AtomicBool, on_frame: &dyn Fn([f32; BANDS * 2])) {
                 spectrum.push_silence(expected - received);
             }
             received = 0;
-            on_frame(spectrum.frame());
+            on_frame(spectrum.frame(), wpe.frame());
             next_frame += FRAME_INTERVAL;
             // 落后太多（睡眠唤醒、线程被挂起）不补帧
             if next_frame < now {
@@ -218,9 +238,11 @@ impl LoopbackStream {
         }
     }
 
-    /// 读完当前所有包喂给频谱，返回读到的样本帧数（静音包也算）。
-    fn read(&mut self, spectrum: &mut Spectrum) -> windows::core::Result<usize> {
+    /// 读完当前所有包喂给两份频谱，返回读到的样本帧数与包数（静音包都算）。网页壁纸的频谱把静音包、空数据与不支持的格式按静音补零；
+    /// WPE 原始频谱让它们立即清零。
+    fn read(&mut self, spectrum: &mut Spectrum, wpe: &mut WpeSpectrum) -> windows::core::Result<(usize, usize)> {
         let mut total = 0;
+        let mut packets = 0;
         unsafe {
             while self.capture.GetNextPacketSize()? > 0 {
                 let mut data = std::ptr::null_mut();
@@ -232,12 +254,14 @@ impl LoopbackStream {
                 let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
                 if silent || data.is_null() || self.channels == 0 {
                     spectrum.push_silence(count);
+                    wpe.silent();
                 } else {
                     let len = count * self.channels;
                     match self.format {
                         SampleFormat::F32 => {
                             let samples = std::slice::from_raw_parts(data as *const f32, len);
                             spectrum.push(samples, self.channels);
+                            wpe.push(samples, self.channels);
                         }
                         SampleFormat::I16 => {
                             let samples = std::slice::from_raw_parts(data as *const i16, len);
@@ -245,15 +269,20 @@ impl LoopbackStream {
                             self.scratch
                                 .extend(samples.iter().map(|v| *v as f32 / 32_768.0));
                             spectrum.push(&self.scratch, self.channels);
+                            wpe.push(&self.scratch, self.channels);
                         }
-                        SampleFormat::Unsupported => spectrum.push_silence(count),
+                        SampleFormat::Unsupported => {
+                            spectrum.push_silence(count);
+                            wpe.silent();
+                        }
                     }
                 }
                 self.capture.ReleaseBuffer(frames)?;
                 total += count;
+                packets += 1;
             }
         }
-        Ok(total)
+        Ok((total, packets))
     }
 }
 

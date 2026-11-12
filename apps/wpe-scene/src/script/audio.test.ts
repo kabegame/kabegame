@@ -1,68 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { fillAudioBuffers, type AudioBuffers } from "./audio";
+import { SceneSpectrum } from "../audio/spectrum";
+import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
 
 function buffers(size: number): AudioBuffers {
   return { left: new Float32Array(size), right: new Float32Array(size), average: new Float32Array(size) };
 }
 
-/** 左声道 i / 64、右声道 (63 - i) / 64：两边走向相反，串了声道一眼能看出来；值都能被 f32 精确表示。 */
-function frame(): number[] {
-  return [...Array.from({ length: 64 }, (_, i) => i / 64), ...Array.from({ length: 64 }, (_, i) => (63 - i) / 64)];
+/** 左声道 (i + 1) / 64、右声道 (64 − i) / 64：两边走向相反，串了声道一眼能看出来；值都能被 f32 精确表示。 */
+function raw(): number[] {
+  return [
+    ...Array.from({ length: 64 }, (_, i) => (i + 1) / 64),
+    ...Array.from({ length: 64 }, (_, i) => (64 - i) / 64),
+  ];
 }
 
-describe("fillAudioBuffers", () => {
-  it("分辨率 64：逐段拷贝，左右声道不串，average 是两声道的均值", () => {
+describe("copySpectrumToBuffers（P4e 步骤 4：脚本缓冲改读归一化频谱）", () => {
+  it("三个分辨率各拷同分辨率的块：left / right / average 分别是 L / R / A 段，值是归一化之后的", () => {
+    const spectrum = new SceneSpectrum();
+    spectrum.advance(raw(), 0.05);
+    for (const size of [16, 32, 64] as const) {
+      const target = buffers(size);
+      copySpectrumToBuffers(spectrum.block(size), target);
+      const block = spectrum.block(size);
+      expect([...target.left]).toEqual([...block.left]);
+      expect([...target.right]).toEqual([...block.right]);
+      expect([...target.average]).toEqual([...block.average]);
+    }
+    // 归一化过：第一个有声帧峰值重置为 1、同帧再向目标靠（最响的组目标就是 1，读数 = 原值；其余组峰值降了 0.5·dt，读数比原值大），
+    // 不是 Hub 原值段内取最大的那种
     const target = buffers(64);
-    fillAudioBuffers(frame(), target);
-    expect([...target.left]).toEqual(frame().slice(0, 64));
-    expect([...target.right]).toEqual(frame().slice(64));
-    expect([...target.average]).toEqual(Array(64).fill(63 / 128));
-  });
-
-  it("分辨率 32 / 16：每段取对应原始段的最大值", () => {
-    const half = buffers(32);
-    fillAudioBuffers(frame(), half);
-    expect([...half.left]).toEqual(Array.from({ length: 32 }, (_, i) => (i * 2 + 1) / 64));
-    expect([...half.right]).toEqual(Array.from({ length: 32 }, (_, i) => (63 - i * 2) / 64));
-
+    copySpectrumToBuffers(spectrum.block(64), target);
+    expect(target.left[63]).toBe(1);
+    expect(target.right[0]).toBe(1);
+    const f32 = Math.fround;
+    const peak0 = f32(1 - f32(f32(0.05) * 0.5));
+    expect(target.left[0]).toBe(f32(f32(1 / 64) * f32(1 / peak0)));
+    // average 是 A 段：16 段的 average 先平均再逐级取最大，一般不等于 (left + right) / 2
     const quarter = buffers(16);
-    fillAudioBuffers(frame(), quarter);
-    expect([...quarter.left]).toEqual(Array.from({ length: 16 }, (_, i) => (i * 4 + 3) / 64));
-    expect([...quarter.right]).toEqual(Array.from({ length: 16 }, (_, i) => (63 - i * 4) / 64));
-    expect(quarter.average[0]).toBe((3 / 64 + 63 / 64) / 2);
-    expect(quarter.average[15]).toBe((63 / 64 + 3 / 64) / 2);
+    copySpectrumToBuffers(spectrum.block(16), quarter);
+    expect(quarter.average[0]).toBe(Math.max(...spectrum.A64.subarray(0, 4)));
+    expect(Math.fround((quarter.left[0] + quarter.right[0]) / 2)).not.toBe(quarter.average[0]);
   });
 
-  it("峰值不在段首或段尾时也取得到；不同声道的峰值互不影响", () => {
-    const values = Array<number>(128).fill(0);
-    values[1] = 0.5; // 左声道第 0 段（16 分辨率）的第二个原始段
-    values[64 + 6] = 0.25; // 右声道第 1 段的第三个原始段
+  it("后一帧覆盖前一帧，写的是同一组数组（脚本持有的引用不变）", () => {
+    const spectrum = new SceneSpectrum();
     const target = buffers(16);
-    fillAudioBuffers(values, target);
-    expect(target.left[0]).toBe(0.5);
-    expect(target.right[0]).toBe(0);
-    expect(target.left[1]).toBe(0);
-    expect(target.right[1]).toBe(0.25);
-    expect(target.average[0]).toBe(0.25);
-    expect(target.average[1]).toBe(0.125);
-  });
-
-  it("后一帧覆盖前一帧，写的是同一组数组", () => {
-    const target = buffers(16);
-    const { left } = target;
-    fillAudioBuffers(frame(), target);
-    fillAudioBuffers(Array<number>(128).fill(0), target);
+    const { left, right, average } = target;
+    spectrum.advance(raw(), 0.05);
+    copySpectrumToBuffers(spectrum.block(16), target);
+    expect(left.some((value) => value !== 0)).toBe(true);
+    // 静音：输出当帧清零
+    spectrum.advance(null, 0.05);
+    copySpectrumToBuffers(spectrum.block(16), target);
+    expect([target.left, target.right, target.average]).toEqual([left, right, average]);
     expect(target.left).toBe(left);
-    expect([...left].every((value) => value === 0)).toBe(true);
-  });
-
-  it("长度不是 128 的帧不写入", () => {
-    const target = buffers(16);
-    target.left.fill(0.5);
-    target.right.fill(0.5);
-    target.average.fill(0.5);
-    for (const length of [0, 64, 127, 129, 256]) fillAudioBuffers(Array<number>(length).fill(1), target);
-    for (const array of [target.left, target.right, target.average])
-      expect([...array].every((value) => value === 0.5)).toBe(true);
+    for (const array of [left, right, average]) expect(array.every((value) => value === 0)).toBe(true);
   });
 });

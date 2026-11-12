@@ -139,21 +139,46 @@ describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
     expect(bundle.layers[0].particle!.children).toEqual([]);
   });
 
-  it("子系统 JSON 照顶层同样检查；mode 0 的音频字段不报，非 0 照报", async () => {
-    const audio = (mode: number) =>
+  it("子系统 JSON 照顶层同样检查；音频字段任意 mode 都不报（P4e 步骤 4），bounds 形状不对照报", async () => {
+    const audio = (mode: number, bounds: unknown = "0 1") =>
       compile(
         memoryReader(
           files({
             "particles/p.json": system({ children: [{ name: "particles/c.json" }] }),
             "particles/c.json": system({
-              emitter: [{ name: "sphererandom", audioprocessingmode: mode, audioprocessingbounds: "0 1" }],
+              emitter: [{ name: "sphererandom", audioprocessingmode: mode, audioprocessingbounds: bounds }],
               operator: [{ name: "turbulence", audioprocessingmode: 0 }],
             }),
           }),
         ),
       );
     expect((await audio(0)).unsupported).toEqual([]);
-    expect((await audio(3)).unsupported).toEqual(["particle:emitter:sphererandom:audioprocessingmode"]);
+    expect((await audio(3)).unsupported).toEqual([]);
+    expect((await audio(3, true)).unsupported).toEqual(["particle:emitter:sphererandom:audioprocessingbounds"]);
+  });
+
+  it("「场景用音频」位（P4e 步骤 4）：project.json 的 supportsaudioprocessing 是 JSON true 且有 mode ≠ 0 的模块（含子系统）；scene.json 里的同名键中性", async () => {
+    const usesAudio = async (flag: unknown, mode: number, sceneFlag = false) => {
+      const project = files({
+        "particles/p.json": system({ children: [{ name: "particles/c.json" }] }),
+        "particles/c.json": system({ operator: [{ name: "vortex", audioprocessingmode: mode }] }),
+      });
+      const json = project["P:/p/project.json"] as { general: Record<string, unknown> };
+      if (flag !== undefined) json.general.supportsaudioprocessing = flag;
+      if (sceneFlag)
+        (project["P:/p/scene.json"] as { general: Record<string, unknown> }).general.supportsaudioprocessing = true;
+      const bundle = await compile(memoryReader(project));
+      expect(bundle.unsupported).toEqual([]);
+      return bundle.audio;
+    };
+    expect(await usesAudio(true, 3)).toBe(true);
+    expect(await usesAudio(true, 0)).toBe(false);
+    expect(await usesAudio(undefined, 3)).toBe(false);
+    // 只认 bool 真（rea-p4e-audio.md 4.1）
+    expect(await usesAudio("true", 3)).toBe(false);
+    expect(await usesAudio(1, 3)).toBe(false);
+    // scene.json 的同名键 WPE 不读（第 6 节）：不报、也不打开
+    expect(await usesAudio(undefined, 3, true)).toBe(false);
   });
 
   it("instanceoverride：只有顶层登记绑定，子系统按缺省值解析（实例值由模拟器从对象上传）", async () => {

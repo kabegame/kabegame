@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SceneSpectrum } from "./audio/spectrum";
 import type { SceneBundle } from "./compile/bundle";
 import type { ScriptRealm } from "./script/runtime";
 
@@ -40,6 +41,8 @@ const rendererPointer = vi.hoisted(() => ({
   setPointer: vi.fn((_x: number, _y: number) => {}),
   load: vi.fn(async (_bundle: unknown, _options?: unknown) => {}),
 }));
+/** 场景频谱的开关（P4e 步骤 4：订阅被拒时关掉）。 */
+const rendererAudio = vi.hoisted(() => ({ disableAudio: vi.fn() }));
 
 vi.mock("./render", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./render")>();
@@ -52,6 +55,7 @@ vi.mock("./render", async (importOriginal) => {
     setPaused: () => {},
     ...rendererStyle,
     applyBindings: (writes: unknown) => rendererWrites.applyBindings(writes),
+    disableAudio: () => rendererAudio.disableAudio(),
     redraw: () => {},
     destroy: () => {},
   };
@@ -215,10 +219,35 @@ function subscribedChannel(): { onmessage(message: unknown): void } {
   return subscribeAudio.mock.calls[0][0].channel as { onmessage(message: unknown): void };
 }
 
-/** 左声道全 0.5、右声道全 0.25，任何分辨率合并出来都一样。 */
+/** Hub 的原值：左声道全 0.5、右声道全 0.25。 */
 const audioFrame = [...Array<number>(64).fill(0.5), ...Array<number>(64).fill(0.25)];
 const allZero = (buffers: AudioBuffers) =>
   [buffers.left, buffers.right, buffers.average].every((array) => array.every((value) => value === 0));
+
+/** 宿主建渲染器时交的两个音频选项（P4e 步骤 4）。 */
+interface RendererAudioOptions {
+  audioFrame?: () => ArrayLike<number> | null;
+  beforeFrame?: (dt: number, spectrum: SceneSpectrum) => void;
+}
+
+/**
+ * 替身渲染器的一个实时帧（P4e 步骤 4）：按最近一次建渲染器的选项取宿主存的原值推进 `spectrum`，再走 `beforeFrame`（脚本缓冲在这里从
+ * 频谱拷）。替身不画，频谱由调用方建、跨帧传入以保持状态。
+ */
+function liveFrame(spectrum: SceneSpectrum, dt = 0.05): SceneSpectrum {
+  const options = rendererCreate.mock.calls.at(-1)![0] as RendererAudioOptions;
+  spectrum.advance(options.audioFrame?.() ?? null, dt);
+  options.beforeFrame?.(dt, spectrum);
+  return spectrum;
+}
+
+/** 缓冲是否正好是频谱同分辨率的块（拷过来的归一化值）。 */
+function copiedFrom(buffers: AudioBuffers, spectrum: SceneSpectrum): boolean {
+  const block = spectrum.block(buffers.left.length as 16 | 32 | 64);
+  return (["left", "right", "average"] as const).every((name) =>
+    buffers[name].every((value, i) => value === block[name][i]),
+  );
+}
 
 describe("SceneHost：壁纸样式与留白", () => {
   const scheme = (value: string) => ({ schemecolor: { type: "color", value } });
@@ -277,7 +306,7 @@ describe("SceneHost：壁纸样式与留白", () => {
   });
 });
 
-describe("SceneHost：脚本音频订阅", () => {
+describe("SceneHost：音频订阅与脚本音频缓冲", () => {
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);
     vi.stubGlobal("document", {});
@@ -285,13 +314,52 @@ describe("SceneHost：脚本音频订阅", () => {
     createRealm.mockReset();
     subscribeAudio.mockReset();
     subscribeAudio.mockResolvedValue(undefined);
+    rendererCreate.mockClear();
+    rendererAudio.disableAudio.mockClear();
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("脚本不注册音频缓冲就不订阅", async () => {
+  it("脚本不注册音频缓冲、场景也不用音频就不订阅", async () => {
     const { host } = await loadScene(() => {});
     expect(subscribeAudio).not.toHaveBeenCalled();
-    expect(host.audio()).toEqual({ subscribed: false, error: null, frames: 0, resolutions: [], peak: 0 });
+    // 替身渲染器没有场景频谱：spectrum16 为 null
+    expect(host.audio()).toEqual({
+      subscribed: false,
+      error: null,
+      frames: 0,
+      resolutions: [],
+      peak: 0,
+      raw: null,
+      spectrum16: null,
+    });
+    host.dispose();
+  });
+
+  it("场景用音频（bundle.audio，P4e 步骤 4）：没有脚本也在加载时订阅，只订一次；重编译不重订", async () => {
+    compile.mockImplementation(async ({ userProperties }) => ({
+      ...bundleFor(userProperties),
+      bindings: [{ property: "fx", target: { kind: "recompile", reason: "layer-structure", path: "objects/0/x" } }],
+      unsupported: [],
+      audio: true,
+    }));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "5", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(createRealm).not.toHaveBeenCalled();
+    expect(subscribeAudio).toHaveBeenCalledExactlyOnceWith({
+      kind: "audio",
+      channel: expect.any(Channel),
+      imageId: "5",
+    });
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(report.debug).toHaveBeenCalledWith(expect.stringContaining("重新加载")));
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(subscribeAudio).toHaveBeenCalledTimes(1);
+    // 原值只存最近一份，渲染器每帧开头经 audioFrame 取
+    subscribedChannel().onmessage({ type: "audio", data: [], raw: audioFrame });
+    const options = rendererCreate.mock.calls.at(-1)![0] as RendererAudioOptions;
+    expect(options.audioFrame?.()).toBe(audioFrame);
     host.dispose();
   });
 
@@ -311,35 +379,47 @@ describe("SceneHost：脚本音频订阅", () => {
     host.dispose();
   });
 
-  it("Channel 的 audio 消息写进缓冲，其它类型的消息忽略", async () => {
+  it("Channel 的 audio 消息只存原值，缓冲在渲染器推进频谱之后拷归一化值（P4e 步骤 4）；其它类型的消息忽略", async () => {
     const registered: AudioBuffers[] = [];
     const { host } = await loadScene((register) => registered.push(register(16), register(64)));
     const channel = subscribedChannel();
+    const spectrum = new SceneSpectrum();
 
     channel.onmessage({ type: "status", enabled: true });
     channel.onmessage({ type: "timeline", position: 1, duration: 2, data: audioFrame });
     channel.onmessage({ type: "audio" });
+    // 只有网页壁纸用的 data、没有 raw 的消息不算（场景只读 WPE 原始频谱）
+    channel.onmessage({ type: "audio", data: audioFrame });
+    liveFrame(spectrum);
     expect(registered.every(allZero)).toBe(true);
     expect(host.audio()).toMatchObject({ frames: 0, peak: 0 });
 
-    channel.onmessage({ type: "audio", data: audioFrame });
-    for (const buffers of registered) {
-      expect(buffers.left.every((value) => value === 0.5)).toBe(true);
-      expect(buffers.right.every((value) => value === 0.25)).toBe(true);
-      expect(buffers.average.every((value) => value === 0.375)).toBe(true);
-    }
+    channel.onmessage({ type: "audio", data: [], raw: audioFrame });
+    // 消息本身不写缓冲（以前段内取最大后直接写）
+    expect(registered.every(allZero)).toBe(true);
+    liveFrame(spectrum);
+    for (const buffers of registered) expect(copiedFrom(buffers, spectrum)).toBe(true);
+    // 归一化过：第一个有声帧峰值重置为 1、同帧降 0.5·dt，读数是原值 / 0.975，不是原值
+    expect(registered[0].left[0]).toBeGreaterThan(0.5);
+    expect(registered[0].left[0]).toBe(spectrum.L16[0]);
+    expect(registered[1].average[0]).toBe(spectrum.A64[0]);
     expect(host.audio()).toMatchObject({ frames: 1, peak: 0.5 });
     host.dispose();
   });
 
-  it("订阅被拒时不报错，缓冲保持全零", async () => {
+  it("订阅被拒时不报错，场景频谱关掉，缓冲保持全零", async () => {
     subscribeAudio.mockRejectedValue("this wallpaper does not process audio");
     const registered: AudioBuffers[] = [];
     const { host, report } = await loadScene((register) => registered.push(register(32)));
     await vi.waitFor(() => expect(report.debug).toHaveBeenCalledWith(expect.stringContaining("音频订阅被拒")));
+    // 渲染器建好之前或之后被拒都关一次
+    await vi.waitFor(() => expect(rendererAudio.disableAudio).toHaveBeenCalledTimes(1));
     expect(report.warn).not.toHaveBeenCalled();
     expect(report.error).not.toHaveBeenCalled();
     expect(report.fallback).not.toHaveBeenCalled();
+    const spectrum = new SceneSpectrum();
+    spectrum.disable();
+    liveFrame(spectrum);
     expect(allZero(registered[0])).toBe(true);
     expect(host.audio()).toMatchObject({
       subscribed: false,
@@ -363,7 +443,7 @@ describe("SceneHost：脚本音频订阅", () => {
     host.dispose();
   });
 
-  it("重编译保留 realm 与缓冲，不重订，新帧写进原来的数组", async () => {
+  it("重编译保留 realm 与缓冲，不重订，之后的帧写进原来的数组", async () => {
     const registered: AudioBuffers[] = [];
     const { host, report } = await loadScene((register) => registered.push(register(16)));
     host.applyUserProperties(fx(true));
@@ -371,9 +451,11 @@ describe("SceneHost：脚本音频订阅", () => {
     expect(compile).toHaveBeenCalledTimes(2);
     expect(createRealm).toHaveBeenCalledTimes(1);
     expect(subscribeAudio).toHaveBeenCalledTimes(1);
-    subscribedChannel().onmessage({ type: "audio", data: audioFrame });
+    subscribedChannel().onmessage({ type: "audio", data: [], raw: audioFrame });
+    const spectrum = liveFrame(new SceneSpectrum());
     expect(registered).toHaveLength(1);
-    expect(registered[0].left[0]).toBe(0.5);
+    expect(copiedFrom(registered[0], spectrum)).toBe(true);
+    expect(registered[0].left[0]).not.toBe(0);
     host.dispose();
   });
 
@@ -385,18 +467,21 @@ describe("SceneHost：脚本音频订阅", () => {
     await vi.waitFor(() => expect(registered).toHaveLength(2));
     expect(subscribeAudio).toHaveBeenCalledTimes(1);
     expect(host.audio()).toMatchObject({ subscribed: true, resolutions: [16] });
-    channel.onmessage({ type: "audio", data: audioFrame });
-    expect(registered[1].left[0]).toBe(0.5);
+    channel.onmessage({ type: "audio", data: [], raw: audioFrame });
+    const spectrum = liveFrame(new SceneSpectrum());
+    expect(copiedFrom(registered[1], spectrum)).toBe(true);
+    expect(registered[1].left[0]).not.toBe(0);
     // 旧脚本持有的缓冲不再更新
     expect(allZero(registered[0])).toBe(true);
     host.dispose();
   });
 
-  it("宿主销毁后到达的帧不再写缓冲", async () => {
+  it("宿主销毁后的帧不再写缓冲", async () => {
     const registered: AudioBuffers[] = [];
     const { host } = await loadScene((register) => registered.push(register(16)));
     host.dispose();
-    subscribedChannel().onmessage({ type: "audio", data: audioFrame });
+    subscribedChannel().onmessage({ type: "audio", data: [], raw: audioFrame });
+    liveFrame(new SceneSpectrum());
     expect(allZero(registered[0])).toBe(true);
   });
 });

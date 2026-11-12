@@ -118,11 +118,14 @@ describe("模块表", () => {
 
 describe("解析：档 1 模块的缺省值（rea-p4a.md B）", () => {
   const BLEND = { blendinstart: 0, blendinend: 0, blendoutstart: 1, blendoutend: 1 };
-  /** 音频的五个键（P4e 步骤 1 登记进读它的模块，rea-p4e-audio.md 第 2 节的缺省值）。 */
+  /**
+   * 音频的五个键（P4e 步骤 1 登记进读它的模块，rea-p4e-audio.md 第 2 节的缺省值）；P4e 步骤 4 起 `bounds` 解析成 `[lo, hi]`
+   * （缺省 `"0.8 1.0"`）。
+   */
   const AUDIO = {
     audioprocessingmode: 0,
     audioprocessingexponent: 2,
-    audioprocessingbounds: "0.8 1.0",
+    audioprocessingbounds: [0.8, 1],
     audioprocessingfrequencystart: 0,
     audioprocessingfrequencyend: 1,
   };
@@ -773,12 +776,12 @@ describe("能力表：粒子", () => {
   });
 
   it("表内模块的未知字段：particle:<类别>:<名字>:<字段>（不带 blend 的模块写 blend、不读音频的模块写 audioprocessing*）", () => {
-    // 音频的五个键只在读它的六个模块里登记（P4e 步骤 1）：mode 非 0 只报 mode，其余键形状对就不报
+    // 音频的五个键只在读它的六个模块里登记（P4e 步骤 1）：P4e 步骤 4 起任意 mode 都支持，键形状对就不报
     expect(
       particleKeys(
         withModule("emitter", { name: "sphererandom", audioprocessingmode: 3, audioprocessingbounds: "0 1" }),
       ),
-    ).toEqual(["particle:emitter:sphererandom:audioprocessingmode"]);
+    ).toEqual([]);
     expect(particleKeys(withModule("operator", { name: "movement", audioprocessingmode: 0 }))).toEqual([
       "particle:operator:movement:audioprocessingmode",
     ]);
@@ -836,7 +839,7 @@ describe("能力表：粒子", () => {
     }
   });
 
-  it("boxrandom：距离是向量、只接受字符串，写成数字报；没有 sign、cone；audioprocessing* 照报（P4e）", () => {
+  it("boxrandom：距离是向量、只接受字符串，写成数字报；没有 sign、cone；audioprocessing* 支持（P4e 步骤 4）", () => {
     const box = (fields: JsonObject) => particleKeys(withModule("emitter", { name: "boxrandom", ...fields }));
     expect(box({ distancemin: "50 50 0", distancemax: "100 100 0", directions: "1 1 0", speedmax: 5 })).toEqual([]);
     expect(box({ distancemin: 0, distancemax: 100 })).toEqual([
@@ -847,23 +850,24 @@ describe("能力表：粒子", () => {
       "particle:emitter:boxrandom:cone",
       "particle:emitter:boxrandom:sign",
     ]);
-    expect(box({ audioprocessingmode: 1 })).toEqual(["particle:emitter:boxrandom:audioprocessingmode"]);
+    expect(box({ audioprocessingmode: 1 })).toEqual([]);
+    expect(box({ audioprocessingmode: 1, audioprocessingbounds: 1 })).toEqual([
+      "particle:emitter:boxrandom:audioprocessingbounds",
+    ]);
     expect(readParticleModule("emitter", { name: "boxrandom", distancemax: "7 8" }, true).fields.distancemax).toEqual([
       7, 8, 0,
     ]);
   });
 
-  it("vortex：flags 只认 bit0，controlpoint 任意值都支持（P4c 步骤 1），audioprocessingmode 非 0 照报（P4e 步骤 4）", () => {
+  it("vortex：flags 只认 bit0，controlpoint 任意值都支持（P4c 步骤 1），audioprocessingmode 非 0 也支持（P4e 步骤 4）", () => {
     const vortex = (fields: JsonObject) => particleKeys(withModule("operator", { name: "vortex", ...fields }));
     expect(vortex({ flags: 1, offset: "100 0 0", axis: "0 1 0", controlpoint: 0 })).toEqual([]);
     expect(vortex({ flags: 2 })).toEqual(["particle:operator:vortex:flags"]);
     expect(vortex({ controlpoint: 2 })).toEqual([]);
-    expect(vortex({ audioprocessingmode: 1, audioprocessingbounds: "0 1" })).toEqual([
-      "particle:operator:vortex:audioprocessingmode",
-    ]);
+    expect(vortex({ audioprocessingmode: 1, audioprocessingbounds: "0 1" })).toEqual([]);
   });
 
-  it("mode 0 的音频字段中性（P4e 步骤 1）：读音频的六个模块都登记了五个键，mode 非 0 只报 mode", () => {
+  it("音频字段（P4e 步骤 4）：读音频的六个模块都登记了五个键，任意 mode 都支持；bounds 不是字符串（数字 0 除外）照报", () => {
     const audio = {
       audioprocessingmode: 0,
       audioprocessingexponent: 1.5,
@@ -880,17 +884,32 @@ describe("能力表：粒子", () => {
       ["operator", "vortex_v2"],
     ];
     for (const [category, name] of modules) {
-      expect(particleKeys(withModule(category, { name, ...audio })), name).toEqual([]);
-      expect(particleKeys(withModule(category, { name, ...audio, audioprocessingmode: 3 })), name).toEqual([
-        `particle:${category}:${name}:audioprocessingmode`,
-      ]);
-      // 缺省值（rea-p4e-audio.md 第 2 节）
+      for (const mode of [0, 1, 2, 3, 4, -1])
+        expect(particleKeys(withModule(category, { name, ...audio, audioprocessingmode: mode })), name).toEqual([]);
+      // 数字 0 得 (0, 0)（rea-p4e-audio.md 第 2 节），其它非字符串照报
+      expect(particleKeys(withModule(category, { name, audioprocessingbounds: 0 })), name).toEqual([]);
+      for (const bounds of [1, true, [0, 1]])
+        expect(particleKeys(withModule(category, { name, audioprocessingbounds: bounds })), name).toEqual([
+          `particle:${category}:${name}:audioprocessingbounds`,
+        ]);
+      // 缺省值（rea-p4e-audio.md 第 2 节），bounds 解析成 [lo, hi]
       expect(defaults(category, name, true), name).toMatchObject({
         audioprocessingmode: 0,
         audioprocessingexponent: 2,
-        audioprocessingbounds: "0.8 1.0",
+        audioprocessingbounds: [0.8, 1],
         audioprocessingfrequencystart: 0,
         audioprocessingfrequencyend: 1,
+      });
+      // 频段按无符号钳到 ≤ 15（语料的 16 是 15、负数也是 15），end < start 时交换
+      const fields = (extra: JsonObject) => readParticleModule(category, { name, ...audio, ...extra }, true).fields;
+      expect(fields({}), name).toMatchObject({ audioprocessingfrequencystart: 2, audioprocessingfrequencyend: 15 });
+      expect(fields({ audioprocessingfrequencystart: 9, audioprocessingfrequencyend: 3 }), name).toMatchObject({
+        audioprocessingfrequencystart: 3,
+        audioprocessingfrequencyend: 9,
+      });
+      expect(fields({ audioprocessingfrequencystart: -1, audioprocessingfrequencyend: 4 }), name).toMatchObject({
+        audioprocessingfrequencystart: 4,
+        audioprocessingfrequencyend: 15,
       });
     }
   });

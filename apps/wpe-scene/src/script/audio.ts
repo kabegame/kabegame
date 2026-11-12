@@ -1,6 +1,4 @@
-/** Hub 一帧的结构（`wpe_media/mod.rs`）：每声道 64 段，左声道在前，共 128 个值。 */
-const CHANNEL_BANDS = 64;
-const FRAME_VALUES = CHANNEL_BANDS * 2;
+import type { SpectrumBlock } from "../audio/spectrum";
 
 /** `engine.registerAudioBuffers` 给脚本的三个数组，长度等于分辨率（16 / 32 / 64）。 */
 export interface AudioBuffers {
@@ -10,26 +8,13 @@ export interface AudioBuffers {
 }
 
 /**
- * 把 Hub 的一帧合并进一组缓冲：原地写，脚本持有的数组不变。
- *
- * `frame`：128 个值（左声道 0–63、右声道 64–127，各自低频在前）。
- * 分辨率 n 的每一段取对应 64 / n 个原始段的最大值（`spectrum.rs` 的段内也取最大，含义是推断）；
- * `average[i] = (left[i] + right[i]) / 2`。长度不是 128 的帧忽略。
+ * 把场景频谱（`audio/spectrum.ts` 的 `SceneSpectrum`）同分辨率的一块拷进一组缓冲：原地写，脚本持有的数组不变（P4e 步骤 4，「决定」5）。
+ * `source` 是 `SceneSpectrum.block(缓冲长度)`：WPE 的接口按分辨率返回 `ctx+0x2c0` / `0x2c8` / `0x2d0` 块，块布局 `[L | R | A]` 正好对上
+ * left / right / average（rea-p4e-audio.md 3.4【推】）；`average` 是 `A` 段（先平均、再逐级取最大，3.3），不是 left、right 的平均。
+ * 以前从 Hub 的原值段内取最大、没有归一化，P4e 步骤 4 起改读归一化频谱，和 WPE 对齐（p6-REPORT 实测过 WPE 有自适应归一化）。
  */
-export function fillAudioBuffers(frame: ArrayLike<number>, buffers: AudioBuffers): void {
-  if (frame.length !== FRAME_VALUES) return;
-  const { left, right, average } = buffers;
-  const span = CHANNEL_BANDS / left.length;
-  for (let band = 0; band < left.length; band++) {
-    const start = band * span;
-    let leftPeak = frame[start];
-    let rightPeak = frame[CHANNEL_BANDS + start];
-    for (let offset = 1; offset < span; offset++) {
-      leftPeak = Math.max(leftPeak, frame[start + offset]);
-      rightPeak = Math.max(rightPeak, frame[CHANNEL_BANDS + start + offset]);
-    }
-    left[band] = leftPeak;
-    right[band] = rightPeak;
-    average[band] = (leftPeak + rightPeak) / 2;
-  }
+export function copySpectrumToBuffers(source: SpectrumBlock, buffers: AudioBuffers): void {
+  buffers.left.set(source.left);
+  buffers.right.set(source.right);
+  buffers.average.set(source.average);
 }

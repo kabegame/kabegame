@@ -22,6 +22,7 @@ import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
+import { writeParticleAudio, type ParticleAudioFrame } from "../particles/audio";
 import { injectedR } from "../particles/random";
 import type { ParticleSystem } from "../particles/system";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
@@ -240,6 +241,12 @@ export interface ParticleReplay {
    * 和 WPE 抓帧逐像素比时填从 WPE 轨迹读出的 frame（`rd-*.json` 的 `TEXCOORD1.w`）。只改 `R`，别的抽取照旧。
    */
   random?: Record<number, number[]>;
+  /**
+   * 每帧的 16 段频谱（P4e 步骤 4）：`{ left: [16 个], right: [16 个] }`，和 `dts` 等长，第 i 项在第 i + 1 帧步进之前原样写进场景的粒子频谱
+   * （`GpuScene.particleAudio`，不经归一化）；某项为 null 时沿用前一帧。回放 WPE 时填抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`。
+   * 预热时频谱是 0。不给时全程全 0。
+   */
+  audio?: (ParticleAudioFrame | null)[];
 }
 
 /** 建场景用的粒子选项：种子缺省 1、遍数缺省 1、`fps` 缺省 60，`random` 换成每个粒子层一个 `injectedR`。 */
@@ -268,7 +275,7 @@ const isPointList = (
  * 粒子先用上一帧的 s 步进，再换上这一帧的）。
  */
 export function replayParticles(
-  scene: Pick<GpuScene, "stepParticles">,
+  scene: Pick<GpuScene, "stepParticles"> & Partial<Pick<GpuScene, "particleAudio">>,
   state: SceneState,
   replay: ParticleReplay | undefined,
   time = 0,
@@ -282,14 +289,32 @@ export function replayParticles(
   const perFrame = isPointList(cursor) ? cursor : null;
   if (perFrame && perFrame.length !== dts.length)
     throw new Error(`逐帧 cursor 有 ${perFrame.length} 项，dts 有 ${dts.length} 项，应等长`);
+  if (replay.audio && replay.audio.length !== dts.length)
+    throw new Error(`audio 有 ${replay.audio.length} 项，dts 有 ${dts.length} 项，应等长`);
   let elapsed = 0;
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
   for (let i = 0; i < dts.length - 1; i++) {
     const at = timeAt(i);
+    replayAudio(scene, replay, i);
     scene.stepParticles(dts[i], at, state, perFrame ? perFrame[i] : (cursor as readonly [number, number]));
     afterStep?.(at);
   }
   return { time: timeAt(dts.length - 1), frametime: dts[dts.length - 1] };
+}
+
+/**
+ * 第 i 帧（从 0 起）步进之前写这一帧的频谱（P4e 步骤 4，`ParticleReplay.audio`）：原样写进场景的粒子频谱（`GpuScene.particleAudio`），
+ * 这一项为 null 时沿用前一帧。场景没有粒子频谱（单测的替身）却给了 `audio` 时抛错。
+ */
+export function replayAudio(
+  scene: Partial<Pick<GpuScene, "particleAudio">>,
+  replay: ParticleReplay | undefined,
+  i: number,
+): void {
+  const frame = replay?.audio?.[i];
+  if (!frame) return;
+  if (!scene.particleAudio) throw new Error("场景没有粒子频谱，不能回放 audio");
+  writeParticleAudio(scene.particleAudio, frame);
 }
 
 /**
@@ -336,7 +361,8 @@ export interface ReadbackReplayOptions {
  * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。返回读回帧的 `g_Time`、`g_Frametime` 与视差状态。
  */
 export function replayReadback(
-  scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update">,
+  scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
+    Partial<Pick<GpuScene, "particleAudio">>,
   state: SceneState,
   options: ReadbackReplayOptions,
 ): { time: number; frametime: number; parallax: ParallaxState } {
@@ -353,6 +379,8 @@ export function replayReadback(
     shake.apply,
   );
   scene.sync(state);
+  // 读回那一帧的频谱（P4e 步骤 4）：没有回放时不写
+  if (particles?.dts.length) replayAudio(scene, particles, particles.dts.length - 1);
   scene.stepParticles(frametime, time, state, pointers.cursors[last]);
   shake.apply(time);
   // 视差点和粒子互不影响：回放的前 n − 1 帧与读回帧按同一串帧时间与每帧的 s 推进（没有回放时读回帧的帧时间是 0）

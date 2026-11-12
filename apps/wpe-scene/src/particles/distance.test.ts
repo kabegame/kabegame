@@ -142,14 +142,15 @@ describe("字段表（rea 3.1–3.3、第 4 节）", () => {
     });
   });
 
-  it("控制点下标按无符号钳到 0–7；vortex_v2 的 flags 只存低 8 位；audioprocessingmode ≠ 0 照报（P4e）", () => {
+  it("控制点下标按无符号钳到 0–7；vortex_v2 的 flags 只存低 8 位；audioprocessingmode ≠ 0 支持（P4e 步骤 4）", () => {
     expect(fieldsOf("maintaindistancetocontrolpoint", { controlpoint: -1 }).controlpoint).toBe(7);
     expect(fieldsOf("reducemovementnearcontrolpoint", { controlpoint: 9 }).controlpoint).toBe(7);
     const between = fieldsOf("maintaindistancebetweencontrolpoints", { controlpointstart: 12, controlpointend: -3 });
     expect([between.controlpointstart, between.controlpointend]).toEqual([7, 7]);
     expect(fieldsOf("vortex_v2", { flags: 0x106, controlpoint: 3 })).toMatchObject({ flags: 6, controlpoint: 3 });
     expect(issuesOf("vortex_v2", { audioprocessingmode: 0, audioprocessingexponent: 3 })).toEqual([]);
-    expect(issuesOf("vortex_v2", { audioprocessingmode: 1 })).toEqual(["value:audioprocessingmode"]);
+    expect(issuesOf("vortex_v2", { audioprocessingmode: 1 })).toEqual([]);
+    expect(issuesOf("vortex_v2", { audioprocessingbounds: 2 })).toEqual(["value:audioprocessingbounds"]);
     expect(issuesOf("vortex_v2", { boids: 1 })).toEqual(["unknown:boids"]);
   });
 

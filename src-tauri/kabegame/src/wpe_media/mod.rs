@@ -18,6 +18,8 @@ mod colors;
 mod media;
 #[cfg(target_os = "windows")]
 mod spectrum;
+#[cfg(target_os = "windows")]
+mod wpe_spectrum;
 
 use kabegame_core::settings::Settings;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -28,8 +30,11 @@ use tauri::webview::SubframeId;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WpeMediaMessage {
     /// 128 个浮点：0–63 左声道、64–127 右声道，各自低频在前；已去掉 NaN / Infinity。
+    /// `data` 是网页壁纸用的自定频谱（`spectrum.rs`，大致 0–1）；`raw` 是 WPE 采集线程的原始频谱（`wpe_spectrum.rs`，线性原值，
+    /// P4e 步骤 4），只给场景宿主用，它再照 WPE 做每帧的自适应归一化。网页壁纸的垫片只读 `data`。
     Audio {
         data: Vec<f32>,
+        raw: Vec<f32>,
     },
     Status {
         enabled: bool,
@@ -339,11 +344,12 @@ struct SystemSources;
 #[cfg(target_os = "windows")]
 impl MediaSources for SystemSources {
     fn start_audio(&self) -> Box<dyn Send> {
-        Box::new(audio::AudioCapture::start(|frame| {
+        Box::new(audio::AudioCapture::start(|web, raw| {
             WpeMediaHub::global().broadcast(
                 WpeMediaKind::Audio,
                 &WpeMediaMessage::Audio {
-                    data: frame.to_vec(),
+                    data: web.to_vec(),
+                    raw: raw.to_vec(),
                 },
             )
         }))
@@ -470,6 +476,7 @@ mod tests {
     fn audio(value: f32) -> WpeMediaMessage {
         WpeMediaMessage::Audio {
             data: vec![value; 128],
+            raw: vec![value; 128],
         }
     }
 

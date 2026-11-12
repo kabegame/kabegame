@@ -685,7 +685,193 @@ for (const d of this.dead) {                       // 升序
 
 **风险（新增）：** 烟花预设的粒子量下，CPU 写 spritetrail 顶点约 28 ms/帧。带这套预设的 3 张场景在本步之后都还有别的不支持项、不会渲染，暂时影响不到用户；它们解锁之前要把写顶点的开销降下来（如 GPU 上展开拖尾，或只写可见的粒子），记到收尾或 P4f。
 
-**待用户：** `1514925620` 在图库预览与桌面上看一眼（偶尔的闪电带一团光晕，雨与雾正常）。测试副本（图片 14372）闪电频繁，方便看光晕，看完由 Claude 用 `projects_remove` 移除。
+**待用户：** `1514925620` 在图库预览与桌面上看一眼（偶尔的闪电带一团光晕，雨与雾正常）。测试副本（图片 14372）闪电频繁，方便看光晕，看完由 Claude 用 `projects_remove` 移除。2026-11-12 用户看过，没有问题，提交 `69214a05`（测试副本在提交前已不在库里）。
+
+## 步骤 4 — `audioprocessing*` 与场景频谱
+
+### 思路
+
+音频对粒子只是一个系数 `f ∈ [0, 1]`，乘在五类模块的某个量上（rea-p4e-audio 第 5 节）；`f` 由一个无状态函数从**这一帧的 16 段归一化频谱**算出（第 1 节）。所以这一步分两半：模拟器这边加取值函数与五个作用点，频谱从哪里来交给宿主；宿主这边把「原始频谱 → 归一化 → 64 / 32 / 16 段」做成场景的一份状态，每帧在粒子步进之前推进一次，粒子、脚本（「决定」5）与将来的 `g_AudioSpectrum*` uniform（P11）都读它。
+
+**频谱的形状照 WPE 分三层。** 最底层是采集线程的原始输出：左右各 64 段线性幅值（rea 3.2：每攒够约 29 ms 的样本做一次 FFT，按 bin 取最大、乘频率倾斜）。中间层是渲染线程每帧的自适应归一化（3.3）：64 段每 8 段一组、16 组各有一个慢慢跟随的峰值，每段除以本组峰值，再一阶低通与每帧限幅，静音时整块清零。最上层是逐级取最大得到 32 段、16 段与左右平均。中间层和上层是纯计算，放在场景宿主（TS）里，每个场景一份状态；最底层要读回环，只能在 Rust 的 `WpeMediaHub` 里。Hub 现在给网页壁纸的是我们自定的频谱（Hann 窗、换成 dB 再映射到 0–1），和 WPE 的线性幅值不同；归一化是按组相对的，dB 压缩会让非峰值段读数明显偏高（比峰值低 20 dB 的段，WPE 读 0.1，dB 映射后约 0.67），`bounds "0.8 1"` 这类设置下发射会多很多。所以 Hub 的频谱整体换成照 rea 3.2 的原始频谱（「已定」1）：网页壁纸本来拿到的就是 WPE 采集线程的原值（rea 3.4），之前的自定算法是疏漏，一起改；场景在宿主里再做归一化。
+
+**开关只有 `project.json` 的 `supportsaudioprocessing`**（rea 4.1）：没声明、非 Windows、订阅被拒或还没收到数据时，频谱全 0，`f(0) = 0`（语料的 `bounds` 下界 ≥ 0、`exponent` > 0），带音频的发射器不发、速度项为 0（「决定」3）。宿主在「声明了开关，且场景里有 `mode ≠ 0` 的音频字段或脚本注册了音频缓冲」时订阅 Hub。暂停与补画帧（帧时间 0）不推进频谱，同 WPE 整帧跳过时冻结（3.5）。预热在加载期、频谱还是 0，带音频的发射器预热里不发。
+
+几个关键决定：
+- **频谱是场景的一份状态，不是每个系统一份。** 取值函数只读数组，一帧里各系统、各遍读到的值相同（3.5、第 5 节），所以模拟器只需要一个所有系统共用的只读引用，由渲染器在 `stepParticles` 之前写好。回放与 dev 探针直接往这份数组里填抓帧读到的值。
+- **脚本改读归一化频谱**（「决定」5，2026-11-12 已定）：`registerAudioBuffers` 的 16 / 32 / 64 段 left / right / average 直接取这份状态（`average` 是 `A` 段：先平均再逐级取最大，3.3），不再自己从 Hub 的原值段内取最大。这会改变现有脚本音频场景的画面，要过脚本场景的回归。
+- **`g_AudioSpectrum*` uniform 不在本步**（P11），但数据已经就位，P11 只剩把数组写进 uniform。
+
+### 现状锚点
+
+**a. 音频字段只放行 `mode 0`**（`particles/modules.ts:363`，`sphererandom`、`boxrandom`、`turbulentvelocityrandom`、`vortex`、`vortex_v2`、`turbulence` 六个模块展开它）
+```ts
+const AUDIO_FIELDS: Record<string, ParticleFieldDef> = {
+  audioprocessingmode: int(0, (value) => value === 0),   // 现状：非 0 报 `…:audioprocessingmode`
+  audioprocessingexponent: num(2),
+  audioprocessingbounds: { type: "string", default: "0.8 1.0" },
+  audioprocessingfrequencystart: num(0),
+  audioprocessingfrequencyend: num(1),
+};
+```
+
+**b. 发射数不乘系数**（`particles/emitters.ts` 的 `emissionCount`）
+```ts
+let rate = fields.rate as number;            // 现状：直接用 rate
+if (alive < capacity && !state.ended && state.delay <= 0) {
+  if (flags & 4) { /* 周期发射 */ }
+  // …
+  const x = f32(f32(rate * dt) + state.acc);
+```
+
+**c. 脚本音频缓冲取 Hub 的原值、段内取最大**（`script/audio.ts` 的 `fillAudioBuffers`，`host.ts:389` 的 `subscribeAudio`）
+```ts
+// host.ts：只在脚本注册缓冲时订阅；收到的 128 个原值直接交给脚本
+if (message.type !== "audio" || !message.data) return;
+this.scriptApi?.applyAudioFrame(message.data);
+// script/audio.ts：left[band] = max(frame[段内])，average = (left + right) / 2   —— 现状：没有归一化
+```
+
+**d. Hub 的频谱是自定算法**（`src-tauri/kabegame/src/wpe_media/spectrum.rs`）
+```rust
+//! WPE 的具体算法没有公开资料，这里自定：Hann 窗 → 2048 点实数 FFT → 64 个对数间隔频段（30 Hz – 16 kHz，
+//! 不超过奈奎斯特）取段内最大幅值 → 换成 dB、加高频补偿后线性映射到 0–1（可略超 1）→ 上升即时、下降按帧衰减。
+```
+
+**e. 渲染器一帧的顺序**（`render/renderer.ts`）
+```ts
+scene.sync(state);
+scene.stepParticles(frametime, wrapped, state, cursor);   // 现状：之前没有频谱推进
+// … 声音、脚本（beforeFrame）、update、encode
+```
+
+**f. `scene.json` 的 `general.supportsaudioprocessing` 照报**（`compile/features.ts:338`）
+```ts
+if (active(g.supportsaudioprocessing)) unsupported.add("general:supportsaudioprocessing"); // 现状：WPE 不读这个键（rea 第 6 节）
+```
+
+### 点 1 — 取值函数与作用点（`particles/audio.ts` 新增、`particles/modules.ts`、`particles/emitters.ts`、`particles/system.ts`）
+
+- **新增** `particles/audio.ts`：
+```ts
+/** 一帧的 16 段归一化频谱（`ctx+0x2d0` 的 L16、R16），全场景各系统共用、只读；全 0 表示没有音频。 */
+export interface ParticleAudio { left: Float32Array /* 16 */; right: Float32Array /* 16 */ }
+/** 音频字段解析后的形态（rea 第 2 节：bounds 第二个数缺省 0、start / end 按无符号钳到 ≤ 15、end < start 时交换）。 */
+export interface AudioParams { mode: number; exponent: number; lo: number; hi: number; start: number; end: number }
+/** 取值函数（`FUN_14022a8a0`，rea 第 1 节）：mode 1 左、2 右、3 是 0.5·max(L + R)，其它 0；再 clamp01((v − lo)/(hi − lo))（NaN 当 1）、
+ *  smoothstep、powf(·, exponent)、clamp01（NaN 当 1）。全按 float32。 */
+export function audioCoefficient(audio: ParticleAudio, params: AudioParams): number;
+```
+- **修改** `AUDIO_FIELDS`：`mode` 放开（任意整数，非 0 才生效；4 及以上、负数 `v = 0`）；解析出 `AudioParams` 挂在模块字段上（`bounds` 只认字符串，数字 0 得 `(0, 0)`，其它非字符串照报 `…:audioprocessingbounds`）。
+- **修改** 五个作用点（rea 第 5 节，都是 `mode ≠ 0` 才取，`f` 在前）：
+  - 发射器（`emissionCount`）：进门（存活数 < 容量、没结束、`delay ≤ 0`）之后、周期发射之前 `rate = f32(f · rate)`；帧尾判结束仍用原 `rate`；`instantaneous` 不乘。
+  - `turbulentvelocityrandom`：每个新粒子取一次，乘相位范围（`f·(phasemax − phasemin)`）。
+  - `turbulence`：三轴掩码全 0 时整条跳过（连取值也不调，现状如此）；否则 `f·speedmin`、`f·range`，再乘 `k·mask`。
+  - `vortex`：`f·speedinner`、`f·range` 再乘 `k`。`vortex_v2`：`(speedinner·f)·k`、`(Δspeed·f)·k`（乘法顺序不同，照抄）。
+  - 两遍模式下 operator 每遍各取一次（值相同）。
+- **修改** `ParticleSystem` / 模块上下文多一个 `audio: ParticleAudio` 引用（构造时缺省全 0 的共用数组，渲染器建树时换成场景的那份），子系统与事件实例沿用父的。
+
+### 点 2 — 场景频谱（`audio/spectrum.ts` 新增）
+
+- **新增** `SceneSpectrum`：照 rea 3.3 逐行写，状态 `S1[128]`、`S2[128]`、`peak[16]`（加载时清零），输出 `L64/R64/A64`、`L32/R32/A32`、`L16/R16/A16`（`Float32Array`，就地更新、引用不变）：
+```ts
+/** 每帧一次（粒子步进之前）：`raw` 是 Hub 最近一次的 128 个原始值（左 64 + 右 64），没有时传 null（当全 0）；`dt` 是这一帧的帧时间。
+ *  dt = 0（暂停、补画）时什么都不做（同 WPE 整帧跳过，3.5）。 */
+advance(raw: ArrayLike<number> | null, dt: number): void;
+/** 关掉音频（没声明开关、订阅被拒）：三块清零，之后 `advance` 不再改它们。 */
+disable(): void;
+```
+  - 组峰值目标 `max(0.333·M, 组最大)`、升 `min(dt, |d|)`、降 `0.5·min(dt, |d|)`、差 ≤ 1e-4 直接到位；`peak[0] ≤ 1e-4` 且 `M ≥ 1e-4` 时 16 个峰值重置为 1。
+  - 倒数用精确的 `1 / max(peak, 0.001)`，不复刻 `rcpps`（相对误差 ≤ 3.7e-4，同「近似倒数不复刻」的一贯做法）。
+  - 低通 `α = min(20·dt, 1)`、限幅 `±min(40·dt, 1)`；`M < 1e-4` 时输出整块 0、`S1`、`S2` 不动。
+  - 之后 `A64 = (L + R)/2`，32 段、16 段相邻两段取最大逐级得到（两个分支都走）。
+  - 麦克风路径（不归一化）不做：Hub 只开回环。
+
+### 点 3 — 宿主接线（`host.ts`、`render/renderer.ts`、`render/scene.ts`、`script/api.ts`、`script/audio.ts`）
+
+- **修改** `host.ts`：
+  - 编译结果带一个「场景用音频」位：`project.json` 声明了开关，且 bundle 里有 `mode ≠ 0` 的音频字段（编译期统计，进 `SceneBundle`）。为真时加载就订阅 Hub；脚本注册缓冲时照旧订阅（开关没声明时 Hub 会拒，频谱保持 0）。
+  - Hub 的音频消息照旧是 `data`（128 个值，点 4 之后就是 WPE 的原值），宿主只存最近一份；`SceneSpectrum` 归渲染器所有。
+- **修改** `render/renderer.ts`：帧开头、`stepParticles` 之前 `spectrum.advance(latestRaw, frametime)`（补画帧 `frametime = 0` 不推进）。
+- **修改** `render/scene.ts`：建粒子树时把 `spectrum.L16 / R16` 交给根系统（子系统与实例沿用）。
+- **修改** `script/api.ts`、`script/audio.ts`：`registerAudioBuffers(n)` 返回的 left / right / average 每帧从 `SceneSpectrum` 的同分辨率块拷进去（时机同现在：Hub 来一帧拷一次 → 改为渲染器每帧推进后拷一次）；`fillAudioBuffers` 删除。
+- **修改** dev 探针：`renderFrame` / `particleTrack` 的回放参数收逐帧 `audio`（16 段左右），直接写进粒子用的数组（不经归一化）；`host.audio()` 另报归一化后的 16 段。
+
+### 点 4 — Rust：Hub 的频谱换成 WPE 的原始频谱（`src-tauri/kabegame/src/wpe_media/`，「已定」1）
+
+- **修改** `spectrum.rs` 的 `Spectrum` 整体换成照 rea 3.2 的算法（删掉 `SpectrumTuning`、Hann 窗、dB 映射与按帧衰减）：
+  - `r = max(sr/44100, 1)`、`fftSize = int(r·64·30)`、`ns = fftSize − fftSize/3`（截断照 WPE：44.1 kHz 为 1920 / 1280，48 kHz 为 2089 / 1392）、`N = 640`；每攒够 `ns` 个新样本做一次长度 `fftSize` 的复数 FFT（`rustfft`，任意长度），不加窗、不重叠，`[ns, fftSize)` 保持 `(127, 1/127)`；输入 `re = 127·s + 127`、`im = 1/re`。直流铺满整个缓冲，只落在不用的 bin 0（步骤 0 的抓帧里 L16[0] 有声时也约为 0，和这一点一致）。
+  - bin 1..639：`m2` 遇 inf / NaN 置 0；`b = int(powf((k−1)/639, 0.25)·64) % 64`、`idx = min(idx + 1, b)`；`w = 0.501 − cos(π(k−1)/639)·0.499`；`out[idx] = max(out[idx], sqrt(w·m2))`；最后乘 `0.001·(640/(fftSize·0.5))`（增益按缺省 `audioinputvolume 50` → 1.0，阈值 0）。
+  - 输出是最近一次 FFT 的结果（左 64 + 右 64），两次 FFT 之间不变；单声道时右 = 左。
+  - 静音照 WPE：数据包带 SILENT 时立即清零；连续 1 s 收不到数据包时清零（现在的「缺的样本按静音补」去掉，缺包期间保留上一次的结果）。
+- **修改** `audio.rs` 的采集循环跟着改：每 33 ms 照旧推一帧给订阅方（同 WPE 网页窗口线程每 33 ms 取一次，rea 3.4），推的是最近一次 FFT 的结果。
+- **修改** `Cargo.toml`：`realfft` 换成 `rustfft`（锁文件里已有 6.4.1，`realfft` 本来就依赖它，不新增 crate），仍在 `wpe` feature 下。
+- **单测**：P6a 实测的 7 个频率落段（64 段 4 / 10 / 21 / 32 / 38 / 46 / 54），44.1 / 48 kHz 两种采样率；满幅正弦落在 bin 中心时约 `54·A·√w`；攒不够 `ns` 个样本时输出不变；SILENT 立即清零、缺包 1 s 后清零。
+- **怎么做（避免打断 dev）：** 桌面 dev 是 `tauri dev`，改 `src-tauri` 的源码会自动重编、重启应用。所以先在 `ignore/p4/e4/spectrum-crate/`（独立小 crate，只依赖 `rustfft`）里写 `spectrum.rs` 并跑单测，`audio.rs` 的改动写成补丁；合并进 `src-tauri` 时会触发一次重编重启，Claude 先问用户再动，之后跑 `deno task check -c kabegame` 与 `wpe_media` 的测试。
+- **文档：** `cocs/wpe/WPE_IMPORT.md` 里「自定频谱算法常数在 `SpectrumTuning`」等描述改成 WPE 的原始频谱；网页壁纸的频谱观感会变，进收尾的回归与 changelog。
+
+### 点 5 — 能力表（`compile/features.ts`）
+
+- **修改** `mode ≠ 0` 不再报（由模块表生成，改 `AUDIO_FIELDS` 即可）。
+- **修改** `scene.json` 的 `general.supportsaudioprocessing` 改为中性（WPE 不读，rea 第 6 节；语料只有默认工程 `audiophile`）。
+
+### 点 6 — 回放工具与案例（Claude 做）
+
+- 回放库：轨迹帧带 `audio` 时（`kbp rdc track` 已记下 CLK 读到的 `g_AudioSpectrum16Left/Right`），每帧步进前写进系统共用的 `audio` 数组；帧之间（日志补出的帧）沿用前一帧的值。
+- 新案例 `e4`：`p4e-audio` fps 20（30 帧）与 fps 60（40 帧）逐粒子比；`p4e-audio-off` fps 20 比「全 0、带音频的发射器没有粒子」。
+
+### 验收
+
+- 子代理：tsc 0 error，vitest（带 `KABEGAME_WPE_ROOT`）全过（已知的 P5a 那一条除外），Prettier；Rust 部分 `deno task check -c kabegame` 与 `cargo test` 相关测试。新增单测：
+  - 取值函数：rea 第 1 节的系数表逐格（float32）、mode 1 / 2 / 3 / 4、`hi = lo` 三种、`exponent` 0 与负数、频段钳制与交换；
+  - 五个作用点各一条（`f = 0` 时发射为 0 且余数保留、恢复后接着累积；`turbulence` 掩码全 0 不取值；两遍模式取两次）；
+  - `SceneSpectrum`：稳态纯音收敛到 1、起音时第一帧等于原值后逐帧上升、静音当帧清零且 `S1`/`S2` 不动、`dt = 0` 不变、20 / 60 fps 的 `α` 与限幅、32 / 16 段逐级取最大、`A` 段先平均后取最大；
+  - 脚本缓冲读到归一化值、引用不变。
+- Claude 独立验收：
+  1. `git status` 查越界；tsc、vitest、cargo 测试自跑；变异检查（mode 3 取 A16、`f` 乘在加余数之后、帧尾判结束用乘过的 rate、`turbulentvelocityrandom` 乘错量、`vortex_v2` 乘法顺序、峰值升降速率互换、限幅去掉、静音时清 `S1`、逐级改成平均）。
+  2. `kbp regress`（HEAD 快照 ↔ 步骤 4 快照，现有 15 个案例）：不带音频的案例逐字节相同；语料只去掉各模块的 `audioprocessingmode` 与 `audiophile` 的 `general:supportsaudioprocessing`，覆盖 87 → 93（165 张口径）、80 → 83（152 张口径），不新增能渲染的场景。
+  3. 回放 `e4` 在限内。
+  4. Rust：独立 crate 的单测自跑；合并后 `deno task check -c kabegame`、`wpe_media` 的测试。
+  5. 真机：`p4e-audio` 在 Kabegame 预览里自己放声，`host.audio()` 读到的 16 段和 WPE 抓帧读到的同一工程的 16 段比（稳态时左 1 kHz 在 L16[8]、右 250 Hz 在 R16[2] 收敛到约 1，其余段的量级）；带脚本音频的已能渲染场景放音乐目视（「决定」5 的回归）；一张带音频可视化的网页壁纸放音乐目视（频谱换成原值之后条形的高度与动态）。
+  6. 音频响应的工坊场景（用户 2026-11-12 提议）：`3809965824`（图片 13616），音频粒子用到发射器（`boxrandom`、`sphererandom`）、`turbulentvelocityrandom`、`turbulence` 四个作用点；除音频外缺的是实例覆盖绑属性、两个光标回调与视频纹理，不碰音频部分，用 dev 强制渲染。Kabegame 与 WPE 放同一段音乐，比随节奏的发射量与扰动（同一时刻的 WPE 抓帧统计量对我们的 `host.particles` 统计量，加整段目视）；静音时两边带音频的发射器都不发。
+- 过后请用户在一张带脚本音频的场景上放音乐看一眼，再提交。
+
+### 步骤 4 实施记录（2026-11-12）
+
+两个子代理并行：TS（点 1、2、3、5）在 HEAD `a261a3b9` 的快照 `ignore/p4/e4/ov` 里做；Rust（点 4）在独立小 crate `ignore/p4/e4/spectrum-crate/` 里做（只依赖 `rustfft`，`--offline`），`audio.rs`、`Cargo.toml` 写成补丁，不碰 `src-tauri`，免得 `tauri dev` 中途重编。Claude 做点 6、验收与合并：TS 照前两步逐文件三方合并（29 个文件、没有冲突，工作区里另有别的会话未提交改动的 `bundle.ts`、`features.ts`、`model.ts`、`render/scene.ts` 保留了它们的改动，合并前的文件在 `ignore/p4/e4/pre-merge/`，补丁 `ignore/p4/e4/step4.patch` +1600 / −186）；Rust 经用户同意后放进 `src-tauri`（`spectrum.rs` 整体替换、`audio.rs` 与 `Cargo.toml` 打补丁，`Cargo.lock` 随之去掉 `realfft`），`tauri dev` 重编重启一次。
+
+**和计划的差异（子代理报告，Claude 核对后接受）：**
+1. 起音第一帧不等于原值：rea 3.3 的伪代码与汇编（`0x140111cd2` 写 1.0 之后，`0x140111daa` 起同一帧照常更新峰值）都是峰值重置后当帧再降一步，第一帧读数是 `raw/(1 − 0.5·min(dt, 1 − raw))`（20 fps 约 `raw/0.975`）；计划与 rea「起音」条的「等于 raw」是简写。按汇编做，单测照它写。
+2. 场景频谱归渲染器所有，跨重编译保留（同视差点），重编译时预热读到当时的值（rea 3.5【推】）；`disable()` 只在 Hub 订阅被拒时调，没订阅时原值一直为 null，输出本来就是 0。
+3. 脚本缓冲在 `beforeFrame` 里、只在实时帧从场景频谱拷，暂停时冻结；刚注册的缓冲到下一个实时帧才有值。
+4. Rust 自定的几处：FFT 前减掉常量 `(127, 1/127)`（只落在不用的 bin 0，全 0 输入得到精确的 0；和字面写法的差 ≤ 3.2e-7）；按包即时处理（WPE 一轮轮询末尾处理，差不超过一轮）；缺包计时用实际经过的时间（WPE 加名义间隔）；声道数变化时这一批从头攒；`−1.0` 的样本让该声道整批为 0（照 WPE，16 位格式削波时会遇到）。`ns` 的截断（48 kHz 为 1392）已对汇编核实。
+5. Claude 验收时补：`bounds` 的 `lo`、`hi` 与 `exponent` 转 float32（WPE 存成 float，`"0.8 1.0"` 不是 float32 精确数，阈值附近才和 `subss` 逐位相同）；`host.audio()` 加 `raw`（最近一帧 Hub 原值），核对原始频谱量级用。
+
+**验收结果：**
+
+| 项 | 结果 |
+|---|---|
+| tsc / vitest | 快照：tsc 0 error，81 个文件 2059 个用例，只有已知的 `3830255100: 219 次请求`（P5a）失败（Claude 自跑同子代理）。合并后的工作区 tsc 0 error、Prettier 通过；`compile/conditions.test.ts` 4 条失败属 P7d 会话未跟踪的新文件（`constant:slots`，本步没碰） |
+| Rust | 独立 crate 17 个单测自跑全过（7 个频率落段 44.1 / 48 kHz、满幅正弦量级、对 f64 直接 DFT、静音与缺包、单声道等）；合并后 `tauri dev` 重编通过、应用正常起来 |
+| `kbp regress`（HEAD 快照 ↔ 步骤 4 快照，15 个旧案例 + `e4` + 语料） | 15 个旧案例逐字节相同；`e4` 在 HEAD 上跑不下去（没有 `setAudio`），属预期。语料 173 张只在 12 张里去掉音频键（各模块的 `audioprocessingmode` 与 `audiophile` 的 `general:supportsaudioprocessing`），没有新键 |
+| 覆盖（`ignore/p4/e1/cov_e1.py ignore/p4/e4/out/regress`） | 165 张口径 87 → 93、152 张口径 80 → 83，和计划相同；能渲染不变（45） |
+| 回放 `e4`（新案例：`p4e-audio` fps 20 / 60、`p4e-audio-off` fps 20，轨迹改用 points 认法重提） | 全过。8 个音频发射系统用产品的 `emissionCount` 与取值函数、每帧喂 CLK 读到的频谱，两种 fps 下都存在能让窗口内每帧出生数和 WPE 相同的余数初值（可行 91–2894 / 4096；阶跃与缺省参数的两个两边都 0）；`p4e-audio-off` 的 `a-vortex` 逐粒子在包络内、音频发射系统没有粒子。测试工程的 CLK 读 `g_AudioSpectrum*` uniform（P11）照报，写进期望 |
+| 变异（`ignore/p4/e4/mutate_e4.py`，11 处） | 全部检出：mode 3 改两边各取最大、`f` 乘在加余数之后、帧尾判结束用乘过的 rate（这三处 `e4` 也抓到）、`turbulentvelocityrandom` 乘错量、`turbulence` 只乘速度差、`vortex_v2` 先乘 k、组峰值升降互换、去掉限幅、静音清 `S1`/`S2`、逐级改平均、`dt = 0` 也推进 |
+| 原始频谱对 WPE（系统里放 `p4e-audio` 的 WAV，读 Hub 原值） | 量级合理论式：左 1 kHz 振幅 0.2 的 L16[8] 原值 1.04（`54·A·√w` 加扇贝损失约 1.1），振幅 0.05 的一段 0.26，正好四分之一。频段形状和 WPE 起音帧（读数 ≈ 原值）在两位小数内一致：右 250 Hz 的 R16[0..3] 我们 0.017 / 0.031 / 0.272 / 0.062、WPE 0.02 / 0.03 / 0.28 / 0.06，左邻段比 L16[7]/L16[8] 0.135 对 0.13。绝对值 WPE 两声道都约是我们的 0.52 倍，判断是 WPE 播放这个声音对象时的音量（工程写 1.0，WPE 再乘自己的壁纸音量）【推】，不是算法差；归一化按组相对，对粒子与场景脚本没有影响 |
+| 音频响应场景 `3809965824`（用户提议） | 原场景主角立绘是视频纹理，强制渲染也报 `render:texture-missing:0`，所以解包成测试副本 `ignore/p4/proj/real-3809965824-kbp` 并删掉立绘对象（写死不可见的图层本身仍建资源）。系统里循环放合成测试音乐（底鼓、和弦、镲片），Kabegame 实时预览对 WPE 抓帧（原场景，粒子系统相同）：不带绑定的 `notes1_audio_responsive`（`boxrandom` 发射乘系数）我们 7–8 个、WPE 6–8 个；不带音频的 `Blinking Stars` 237–246 对 233–241；`鼠标音乐` 7–9 对 14–24，它的 `count` / `rate` / `size` / `speed` 都挂脚本（实例覆盖脚本是 P4f，强制渲染用静态值），和音频无关。停掉音乐后两边带音频的两个系统都不再发射（我们频谱当帧清零、粒子按寿命降到 0；WPE 静音时每帧少了这两次绘制）。测完删掉了 dev 的强制渲染开关、移除了测试副本 |
+
+**改为方案 B（2026-11-13）：** 用户在网页壁纸上比较后觉得之前的自定算法观感更好。WPE 原始频谱改名 `wpe_spectrum.rs`（内容不变，17 个单测随它），`spectrum.rs` 还原成原版；`audio.rs` 同一批样本喂两份（自定频谱照旧按静音补零，WPE 原始频谱照 WPE 立即清零 / 缺包 1 s 清零），`on_frame(网页壁纸的, WPE 原始的)`；`WpeMediaMessage::Audio` 多一个 `raw`；`Cargo.toml` 同时依赖 `realfft` 与 `rustfft`。场景宿主改读 `raw`（只有 `data` 的消息不算）。合并前在独立小 crate 里编译检查（windows 0.52）、两份频谱共 22 个单测通过。上面「原始频谱对 WPE」与音频响应场景的对照用的就是这份 WPE 原始频谱，结论不变；网页壁纸观感回到步骤 4 之前。
+
+**文档：** `cocs/wpe/WPE_IMPORT.md`（依赖、音频段落）与 `cocs/README.md` 的摘要补写场景用的 WPE 原始频谱（`raw`），网页壁纸的描述不变。
+
+**已知差异：** 「音频录制」属性没做（已定 2）；场景的 `g_AudioSpectrum*` uniform 是 P11；网页壁纸拿到的是自定频谱，不是 WPE 给网页壁纸的原值（已定 1，用户选的观感）。
+
+**待用户：** 2026-11-13 用户看过网页壁纸后改为方案 B（见上）。
+
+### 已定（步骤 4，2026-11-12 用户）
+
+1. **原始频谱：** 2026-11-12 先选 (c)（Hub 的频谱整体换成 WPE 的原始频谱，网页壁纸与场景共用）；2026-11-13 用户比较后觉得网页壁纸用之前的自定算法观感更好，改为 **B**：Hub 同时算两份，网页壁纸照旧拿自定频谱（`data`），WPE 原始频谱（`wpe_spectrum.rs`）随同一条消息的 `raw` 只给场景，场景在宿主里再做归一化。
+2. **「音频录制」属性先不做：** 缺省就是开，和现在的行为相同，记成已知差异（WPE 关掉时频谱立即清零，rea 4.2）。
 
 ## 决定
 

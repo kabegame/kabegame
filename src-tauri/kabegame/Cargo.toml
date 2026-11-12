@@ -71,8 +71,10 @@ windows = {version = "0.52", features = [
   "Win32_System_Com",
   "Win32_UI_Shell",
 ] }
-# 网页壁纸音频频谱的实数 FFT，由 wpe feature 开启
+# 网页壁纸音频频谱的实数 FFT（自定频谱 spectrum.rs），由 wpe feature 开启
 realfft = { version = "3.4", optional = true }
+# 场景用的 WPE 原始频谱的复数 FFT（任意长度，照 WPE 的 1920 / 2089 点，wpe_spectrum.rs），由 wpe feature 开启
+rustfft = { version = "6.4", optional = true }
 windows-sys = {workspace = true, features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
@@ -151,6 +153,7 @@ default = []
 wpe = [
     "kabegame-core/wpe",
     "dep:realfft",
+    "dep:rustfft",
     # 网页壁纸音频：WASAPI 回环采集（IMMDevice::Activate 需要 StructuredStorage / Variant）
     "windows/Win32_Media_Audio",
     "windows/Win32_System_Com_StructuredStorage",

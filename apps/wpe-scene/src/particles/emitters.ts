@@ -14,6 +14,7 @@
  * 世界空间系统（P4c 步骤 4，rea-p4c-sim.md 5.2）里控制点是 `W·base`，所以出生点是 `mat3(W·base)·q + (W·base.t + origin)`：
  * `origin` 是世界坐标里的直接偏移、不经 `W`（实测 `w-origin`），3×3 含 `W` 的旋转与缩放。
  */
+import { moduleAudio, type ParticleAudio } from "./audio";
 import { f32, lerp, mulBasis, PI, rcp, TWO_PI } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
 import type { ParticleRandom } from "./random";
@@ -79,6 +80,7 @@ export function resetEmitterTiming(state: EmitterState, fields: ParticleFields):
  *
  * ```
  * 只有 存活 < 容量 且 未结束 且 delay ≤ 0 才进（否则整段跳过：acc、周期计时、pending 都不动）：
+ *   audioprocessingmode ≠ 0：rate = f·rate        （P4e 步骤 4，`0x1402379f5`–`0x140237a12`，f 见 `audio.ts`）
  *   flags bit2（周期）：
  *     P > 0（周期内）：P −= dt；P < 0 时 P = −(uA·(maxdelay − mindelay) + mindelay)，进入间歇，本帧照常发
  *     否则（间歇，含初值 0）：P += dt；P < 0 时 rate ·= 0；
@@ -98,6 +100,10 @@ export function resetEmitterTiming(state: EmitterState, fields: ParticleFields):
  * - `duration < 0` 只在 JSON 写了负的 `duration` 时出现（用完时同时置结束）：之后只发 `instantaneous`，余数一直累积。
  * - 帧尾读的 `rate` 是记录里的值（已乘 `count`），不是间歇里乘了 0 的那个。
  * - `maxtoemitperperiod` 已乘 `count` 并截断成整数（条目类型 1，`resolveParticleFields`）；`instantaneous` 不乘 `count`（实测）。
+ * - 音频（P4e 步骤 4，rea-p4e-audio.md 第 5 节【确】，实测见 p4-particles-REPORT「音频」）：每帧每条 emitter 取一次系数，在进门之后、周期
+ *   发射之前乘到 `rate` 上（`mulss`，`f` 在前），所以乘在加累积余数之前：`f = 0` 时 `x = acc`，余数原样保留，有声后接着累积。
+ *   `instantaneous` 不乘；帧尾判结束读的是记录里的 `rate`（`0x14023ae48`），静音不会让发射器永久结束。`audio` 是这一帧的 16 段频谱，
+ *   缺省全 0（只有直接调它的单测不给）。
  * 脚本数量（`n0` 里的另一项）没实现。
  */
 export function emissionCount(
@@ -107,11 +113,14 @@ export function emissionCount(
   alive: number,
   capacity: number,
   random: ParticleRandom,
+  audio?: ParticleAudio,
 ): number {
   const flags = fields.flags as number;
   let rate = fields.rate as number;
   let emit = 0;
   if (alive < capacity && !state.ended && state.delay <= 0) {
+    const f = moduleAudio(fields, audio);
+    if (f !== null) rate = f32(f * rate);
     if (flags & 4) {
       if (state.period > 0) {
         state.period = f32(state.period - dt);

@@ -10,10 +10,11 @@
  * 依据：`.claude/plans/wpe-import/3-scene/phase4/rea-p4a.md` B 节、`rea-p4b-modules.md` A、B 节（WPE 2.8.42 读码【确】），
  * 列与标志见 `p4-particles-REPORT.md`「对 P4a 底座的要求」。公式不在这里重抄，见各执行函数。
  *
- * 不在表里的字段一律按未知报。`audioprocessing*`（`rea-p4b-modules.md` D）在读它的六个模块里登记（`AUDIO_FIELDS`，P4e 步骤 1）：
- * `mode` 为 0 时中性，非 0 报 `…:audioprocessingmode`（P4e 步骤 4）。
+ * 不在表里的字段一律按未知报。`audioprocessing*`（`rea-p4b-modules.md` D）在读它的六个模块里登记（`AUDIO_FIELDS`，P4e 步骤 1），
+ * P4e 步骤 4 起任意 `mode` 都支持：系数见 `audio.ts`，乘在哪见各执行函数（rea-p4e-audio.md 第 5 节）。
  */
 import { isKeyframedValue, isScriptValue, isUserBinding } from "../compile/bindings";
+import { parseAudioBounds, type ParticleAudio } from "./audio";
 import type { ParticleColumns } from "./columns";
 import type { ControlPointSet } from "./controlpoints";
 import {
@@ -95,8 +96,11 @@ export type ParticleFieldValue = number | number[] | string;
  * - `string`：字符串；
  * - `bool`：jsoncpp `asBool`（rope 的 `uvscrolling`、`uvsmoothing`，rea-p4d-rope.md 3.1）：布尔原样，数字按非 0 为真，解析成
  *   1 / 0；字符串、对象 WPE 会抛异常，这里按形状不对报。
+ * - `audiobounds`：`audioprocessingbounds`（P4e 步骤 4，rea-p4e-audio.md 第 2 节）：字符串按 WPE 的两次 `atof` 读成 `[lo, hi]`（第二个数
+ *   缺省 0，`audio.ts` 的 `parseAudioBounds`）；数字 0 得 `[0, 0]`，其它形状报。缺省值同样解析。
  */
-export type ParticleFieldType = "number" | "int" | "vec3" | "vec3z" | "vec3str" | "vec3splat" | "string" | "bool";
+export type ParticleFieldType =
+  "number" | "int" | "vec3" | "vec3z" | "vec3str" | "vec3splat" | "string" | "bool" | "audiobounds";
 
 /** JSON 单位的缺省值（未换算）。两套时按场景是否正交选（`rea-p4a.md`「基础」）。 */
 export type ParticleFieldDefault =
@@ -234,6 +238,12 @@ export interface ParticleRunContext {
   layerTime?: number;
   /** 对象原点 `W.t`（本帧控制点输入的世界矩阵的平移，P4d 步骤 4a）：remap 的输入 `layerorigin`，和系统空间无关。 */
   origin?: Float32Array;
+  /**
+   * 这一帧的 16 段归一化频谱（P4e 步骤 4，`audio.ts`，rea-p4e-audio.md 3.1）：全场景各系统共用的只读引用，渲染器在粒子步进之前写好，
+   * 一帧里各系统、各遍读到的值相同（3.5）。读音频的模块在 `audioprocessingmode ≠ 0` 时按它取系数。模拟器总会给（缺省全 0）；单测手写的
+   * 上下文可以不给，按全 0。
+   */
+  audio?: ParticleAudio;
 }
 
 /**
@@ -357,16 +367,31 @@ const EMITTER_FIELDS: Record<string, ParticleFieldDef> = {
 /**
  * 音频的五个键（`FUN_1401c1e20`，rea-p4b-modules.md D、rea-p4e-audio.md 第 2 节【确】），读它的六个模块共用同一个解析函数、同一套
  * 缺省：`sphererandom`、`boxrandom`（乘 `rate`）、`turbulentvelocityrandom`（乘相位范围）、`turbulence`、`vortex`、`vortex_v2`（乘速度）。
- * `mode ≠ 0` 时才乘系数，这里不做、照报（P4e 步骤 4）；`mode` 为 0 时其余四个键没有读者，中性（P4e 步骤 1 放开，语料 `3233141951`
- * 等写了字段、`mode` 为 0）。
+ * `mode ≠ 0` 时才取系数、乘上去（P4e 步骤 4，`audio.ts`，作用点见各执行函数），`mode` 为 0 时其余四个键没有读者（P4e 步骤 1 放开，语料
+ * `3233141951` 等写了字段、`mode` 为 0）。取值都支持：
+ * - `audioprocessingmode`：`asInt`，缺省 0；1 左、2 右、3 左右和，其它非 0 值（4 及以上、负数）取值为 0（`audio.ts` 第 1 节）；
+ * - `audioprocessingexponent`：`asFloat`，缺省 2；
+ * - `audioprocessingbounds`：字符串读两个数（`audiobounds`，缺省 `"0.8 1.0"`）；
+ * - `audioprocessingfrequencystart` / `end`：`asInt`，缺省 0 / 1；解析期按无符号钳到 ≤ 15、`end < start` 时交换（`normalizeAudio`）。
  */
 const AUDIO_FIELDS: Record<string, ParticleFieldDef> = {
-  audioprocessingmode: int(0, (value) => value === 0),
+  audioprocessingmode: int(0),
   audioprocessingexponent: num(2),
-  audioprocessingbounds: { type: "string", default: "0.8 1.0" },
-  audioprocessingfrequencystart: num(0),
-  audioprocessingfrequencyend: num(1),
+  audioprocessingbounds: { type: "audiobounds", default: "0.8 1.0" },
+  audioprocessingfrequencystart: int(0),
+  audioprocessingfrequencyend: int(1),
 };
+
+/**
+ * 音频频段的解析期修正（rea-p4e-audio.md 第 2 节【确】）：两者按无符号取 `min(·, 15)`（负数当很大的无符号数，得 15；语料的
+ * `frequencyend 16` 实际是 15），`end < start` 时交换。六个读音频的模块都在 `normalize` 里调。
+ */
+export function normalizeAudio(fields: Record<string, ParticleFieldValue>): void {
+  const start = Math.min(asUInt32(fields.audioprocessingfrequencystart as number), 15);
+  const end = Math.min(asUInt32(fields.audioprocessingfrequencyend as number), 15);
+  fields.audioprocessingfrequencystart = Math.min(start, end);
+  fields.audioprocessingfrequencyend = Math.max(start, end);
+}
 
 /** 解析期的周期字段修正（A0）：`min = min(min, max)`，时长、间歇各一对。 */
 function normalizeEmitter(fields: Record<string, ParticleFieldValue>): void {
@@ -562,6 +587,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     normalize(fields) {
       if ((fields.sign as number[]).some((value) => value !== 0)) fields.flags = Number(fields.flags) | 1;
       normalizeEmitter(fields);
+      normalizeAudio(fields);
       fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: sphereRandom,
@@ -588,6 +614,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columnFlags: 0,
     normalize(fields) {
       normalizeEmitter(fields);
+      normalizeAudio(fields);
       fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: boxRandom,
@@ -676,7 +703,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   },
   {
     // `rea-p4b-modules.md` B2（initializer 9，缺省值 `FUN_1401bb030`，执行 `0x14023bdbc`）：方向由出生时刻的一维噪声决定，
-    // 速度**加**上去。`audioprocessing*`（乘相位范围，D）见 `AUDIO_FIELDS`
+    // 速度**加**上去。`audioprocessing*`（乘相位范围，D、rea-p4e-audio.md 第 5 节）见 `AUDIO_FIELDS`
     category: "initializer",
     name: "turbulentvelocityrandom",
     fields: {
@@ -700,6 +727,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     },
     columns: ["velocity"],
     columnFlags: 0,
+    normalize: normalizeAudio,
     run: turbulentVelocityRandom,
   },
   {
@@ -939,6 +967,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columns: ["position", "velocity"],
     columnFlags: 0,
     normalize(fields) {
+      normalizeAudio(fields);
       fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: vortex,
@@ -1058,7 +1087,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       // 取无符号整数后只存低 8 位（`movzx eax, r14b`，`normalize`）：bit0 柱形，bit1 `centerforce`，bit2 环形；其余位没有读者
       flags: int(0),
       controlpoint: CONTROL_POINT_FIELD,
-      // 音频（`AUDIO_FIELDS`）：`mode ≠ 0` 时乘两个速度，这里不做、照报
+      // 音频（`AUDIO_FIELDS`）：`mode ≠ 0` 时乘两个速度（P4e 步骤 4，`distance.ts` 的 `vortexV2`）
       ...AUDIO_FIELDS,
       ...BLEND,
     },
@@ -1066,13 +1095,14 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columnFlags: 0,
     normalize(fields) {
       fields.flags = asUInt32(fields.flags as number) & 0xff;
+      normalizeAudio(fields);
       fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: vortexV2,
   },
   {
     // `rea-p4b-modules.md` B6（operator 14，blend 0x24，缺省值 `FUN_1401beb80`，执行 `0x14024295a` / `0x140242d6e`）：乘 `k`；
-    // 三维噪声场。`audioprocessing*`（乘速度，D）见 `AUDIO_FIELDS`
+    // 三维噪声场。`audioprocessing*`（乘速度，D、rea-p4e-audio.md 第 5 节）见 `AUDIO_FIELDS`
     category: "operator",
     name: "turbulence",
     fields: {
@@ -1092,6 +1122,7 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     },
     columns: ["age", "life", "random", "position", "velocity"],
     columnFlags: 0,
+    normalize: normalizeAudio,
     run: turbulence,
   },
   {
@@ -1264,9 +1295,11 @@ function defaultValue(def: ParticleFieldDef, orthographic: boolean): ParticleFie
   const parsed =
     def.type === "number" || def.type === "int" || def.type === "string" || def.type === "bool"
       ? raw
-      : def.type === "vec3splat" && typeof raw === "number"
-        ? [raw, raw, raw]
-        : vector(raw);
+      : def.type === "audiobounds"
+        ? parseAudioBounds(raw)
+        : def.type === "vec3splat" && typeof raw === "number"
+          ? [raw, raw, raw]
+          : vector(raw);
   return applyScale(def, parsed ?? raw);
 }
 
@@ -1319,6 +1352,9 @@ function parseField(def: ParticleFieldDef, raw: unknown, previous: ParticleField
       if (typeof raw === "number" && Number.isFinite(raw)) return [raw, raw, raw];
       return typeof raw === "string" ? vector(raw) : undefined;
     }
+    case "audiobounds":
+      // 字符串两次 `atof`、数字 0 得 [0, 0]，其它形状报（P4e 步骤 4，`audio.ts` 的 `parseAudioBounds`）
+      return parseAudioBounds(raw);
   }
 }
 

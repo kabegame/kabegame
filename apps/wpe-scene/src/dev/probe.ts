@@ -24,6 +24,9 @@
  *   只改读回、不改渲染（`g_Screen` 等仍按场景目标算）。不给 `canvas` 时读回场景目标，逐字节同以前。
  * - 脚本值（kabegame-chromium 第 6 批）：探针不跑场景脚本，`renderFrame` 收 `scriptValues`（某对象某字段的字段脚本在读回那一帧返回的
  *   值），建好场景之后、回放之前经字段脚本的绑定目标写进 `SceneState`（`scriptValues.ts`，同宿主的脚本写回）。不给时逐字节同以前。
+ * - 频谱（P4e 步骤 4）：`renderFrame` / `particleCorners` 的 `particles.audio` 与 `particleTrack` 的 `audio` 收逐帧 16 段左右
+ *   （`{ left, right }`，抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`），每帧步进之前原样写进粒子读的频谱（不经归一化，null 沿用前一帧）；
+ *   `host.audio()` 另报宿主场景频谱归一化后的 16 段（`spectrum16`）。不给时频谱全 0。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -32,6 +35,7 @@ import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
+import type { ParticleAudioFrame } from "../particles/audio";
 import { particleTrack, type ParticleTrack } from "../particles/track";
 import {
   BLIT_SAMPLER,
@@ -630,6 +634,11 @@ export interface ParticleTrackProbeOptions {
    * kbp replay）；缺省或同尺寸时原样。
    */
   window?: [number, number];
+  /**
+   * 每帧的 16 段频谱（P4e 步骤 4）：`{ left: [16 个], right: [16 个] }`，和 `dts` 等长，第 i 项在第 i + 1 帧步进之前原样写进全部系统共用的
+   * 频谱（不经归一化）；某项为 null 时沿用前一帧。回放 WPE 时填抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`。不给时全程全 0。
+   */
+  audio?: (ParticleAudioFrame | null)[];
   tag?: string;
 }
 
@@ -654,6 +663,7 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       passes: options.passes,
       seed: options.seed,
       random: options.random,
+      audio: options.audio,
       // 窗口归一化 → 光标下的场景纹理坐标（P5a 收尾，换算放在 dev 里，`particles/track.ts` 只收场景坐标）
       cursors: options.cursors && sceneCursors(options.cursors, size, options.window),
       size,
