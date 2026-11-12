@@ -385,6 +385,28 @@
 | [ ] | R11 弹出层锚点滚出列表 | 桌面 dev | 抽屉里打开某任务的重试记录，期间有新任务插入使该任务被挤出列表可视区 | 弹出层仍跟随锚点 | 已知问题：弹出层跟着锚点被推到窗口底部、只露出标题，点空白处可关；未修 |
 | [ ] | R10 Android 返回键 | Android dev | 打开重试记录弹出层后按返回键 | 关掉弹出层 | 可选 |
 
+## 场景壁纸 P7d：流体 effect 的条件结构、没被读的 uniform、`g_LayerModelMatrix`
+
+2026-11-13 Windows。四项改动：
+- 翻译器反射标出没被读到的 uniform（`unused`），宿主照 WPE 的反射规则用它算材质常量槽位、取两阶段同键的合并类型、跳过能力检查；
+- `g_LayerModelMatrix` 只在 effect pass 里支持（图层世界矩阵）；
+- effect 的 `conditions` 按实例顶层 `combos` 在编译期求值，`functions` 放开；
+- fbo `clear` 要 4 个分量。
+
+语料去掉 `constant:*` 5 处、`uniform:g_FrameTime` 1 处、`uniform:g_LayerModelMatrix` 4 张、流体的四个 effect 键，不解锁场景：这几张都还缺文本、音频、视频等。说明见 `cocs/wpe/WPE_SCENE.md` 与翻译器 README「没被读的 uniform」，数据见 `.claude/plans/wpe-import/3-scene/phase7/phase-7d-fluid.md`「实施记录」与 `p7-REPORT.md`「P7d」两节。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | D1 WPE 的规则 | Windows，REA + WPE 抓帧 | 条件与 `functions` 读码；`p7d-fluid` 六个变体、`p7d-uni`（含开视差）抓帧读常量缓冲 | 规则查清 | 2026-11-12 Claude：条件只按实例顶层 `combos`、不并进 pass；槽位按键名排序、只给被使用的键；`g_LayerModelMatrix` 是世界矩阵、只在 effect pass 写、不带视差；`g_FrameTime` 没人写 |
+| [x] | D2 翻译器 `unused` | Windows，cargo | `cargo test -p wpesl2wgsl`；重放夹具、对 P7c 基线比较 | 全过；WGSL 逐字节不变 | 2026-11-12：77 个单测；798 / 798；4020 个文件变了 0 |
+| [x] | D3 宿主 `unused` 与语料 | Node，HEAD 快照 | 新旧 wasm 各扫一次语料，比较 | 只去掉 6 个误报键 | 2026-11-12：`constant:mixed-type` 3、`constant:slots` 2、`uniform:g_FrameTime` 1；能渲染的场景取值不变（只有 `frame_builder_by_gariam` 的一个键改按 `vec2` 写，所在场景不能渲染） |
+| [x] | D4 `g_LayerModelMatrix` | Windows dev，屏外宿主 + WPE 抓帧 | 工坊 `rounded_mask` 挂在四个缩放、旋转各不相同的图层上（`ignore/p7d/gen_rmask.py`），1920×1080 和 WPE 逐像素比；测后 `projects_remove` | 一致 | 2026-11-12 Claude：最大差 0；单测和 `p7d-uni` 抓帧的矩阵逐值核对（含父链） |
+| [x] | D5 流体结构 | Node，HEAD 快照 | 六个流体变体的计划与 WPE 抓帧逐项比（绘制数、目标尺寸格式、各槽来源、实例覆盖） | 逐项相同 | 2026-11-12：80 / 80 |
+| [x] | D6 流体单步隔离 | Windows dev，探针 `__kabegameSceneProbe.fluid` | 把 WPE 某帧开始时的模拟 RT 灌进 fbo，跑一帧，逐个 RT 和 WPE 这一帧的输出比 | 只差半精度舍入 | 2026-11-12 Claude：旋度、染料、合成 RT 逐位相同；速度、压力、散度只有个别值差 1–4 ulp（第 122 帧经散度放大到 184 ulp 的单点）；我重跑第 121 帧数字一致 |
+| [x] | D7 流体长程统计 | Windows dev，探针 + WPE 三次运行 | 按 WPE 帧时长跑 167 帧，读回第 154–167 帧的画布，和 WPE 比 | 落在 WPE 自身两次运行之间 | 2026-11-12 Claude：平均差 8.34 / 10.50 / 15.45（WPE 之间 8.79 / 11.97 / 14.55）；帧间变化量、火焰覆盖与 WPE 几乎相同 |
+| [x] | D8 收尾 | Windows，cargo + dev | 换上新 wasm；HEAD 快照重录夹具并重放，对 P7c 基线比较；新增 WGSL 过 Tint | 全过；原有输出不变 | 2026-11-13：853 / 853；原有 4012 个文件变了 0，少的 8 个是流体 normal pass 与 combine 的旧请求（条件生效后不再发出或请求换了哈希，WGSL 相同）；新增 114 份 WGSL 0 error 0 warning；能渲染 47 张，P7d 相关键 0 处 |
+| [ ] | D9 预览里看流体 | Windows，窗口模式 | 导入 `ignore/p7d/proj/p7d-fluid`，在图库预览里看一会儿，和 WPE 打开同一工程对照 | 火焰形状、亮度与流动速度和 WPE 观感一致 | 可选，待用户确认；本机语料里用流体的场景还不能渲染 |
+
 ## 场景壁纸 P7c：HLSL 隐式转换
 
 2026-11-12 Windows。嵌入的 naga GLSL 前端加 HLSL 模式（翻译器打开），规则照 fxc 实测：截断、铺满、混算截到窄的、非布尔条件 `!= 0`、`float → int` 向零截断、浮点下标、`bool` 参与算术、用户函数重载唯一可行才选；改写阶段让片元 varying 按顶点的类型、全局 `const` 引用 uniform 时在 `main` 开头现算。只在 GLSL 本来会报错的地方生效。语料里不再有因着色器翻译退回的场景，能渲染 39 → 42。说明见 `src-tauri/wpesl2wgsl/README.md`「HLSL 隐式转换」与 `naga/KABEGAME.md`，数据见 `.claude/plans/wpe-import/3-scene/phase7/phase-7c-hlsl-implicit.md`「实施记录」。

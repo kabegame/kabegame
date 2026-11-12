@@ -322,3 +322,19 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 见 [phase-7d](phase-7d-fluid.md)「实施记录 / 步骤 0」，读码 [rea-p7d-fluid](rea-p7d-fluid.md)，实测 [p7-REPORT](p7-REPORT.md)「P7d 的实测」。
 - 条件只按 effect 实例顶层 `combos` 在加载时求值，顶层 `combos` 不并进 pass；`functions` 只有脚本调用，语料 0 处。
 - 四个渲染器缺口里，`constant:*` 与 `uniform:g_FrameTime` 是误报：WPE 只认反射里被使用的 uniform，我们的翻译器不分。只有 `g_LayerModelMatrix` 是真的，且只在 effect pass 里有值。
+
+### P7d — 实现与收尾（2026-11-12 – 13）
+
+见 [phase-7d](phase-7d-fluid.md)「实施记录」：
+- 步骤 1：翻译器反射的 `unused`，`049420f0`；
+- 步骤 2：`g_LayerModelMatrix`，`8dcd01aa`；
+- 步骤 3a：条件、实例 combos、functions、fbo clear，`e5370601`；
+- 步骤 3b：流体单步隔离与长程统计，`57e2053e`；
+- 步骤 4：收尾。
+
+结果：
+- 语料里 P7d 的 14 处键全部去掉，P7d 按预期不解锁场景（流体那张与四个缺口所在的场景都还缺文本、音频、视频等）；
+- 流体与 WPE 的结构对照逐项相同，单步只差半精度舍入，长程落在 WPE 自身两次运行之间；
+- `rounded_mask` 测试工程与 WPE 逐像素相同。
+
+共享 wasm 已换成新版。顺带查明的效果矩阵差异记成 PLAN「按需」里的后续项。**P7 至此全部完成**，剩用户的 C8（P7c）与可选的 D9（P7d）。

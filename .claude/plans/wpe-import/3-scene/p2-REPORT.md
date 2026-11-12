@@ -188,13 +188,14 @@ t=[rax+0x3c8]; k=t*[rax+0x3cc]; (t, t-k, k+k, 0.25/(k+1e-5)) → "blend", 4 分�
 ### B6. effect.json 的 `passes` / `fbos` / `bind` / `target` 与 `textures` 里的 `null`
 
 **结论**
-- **fbos[]**（每项 0x50 B）：`name`、`format`（`"rgba_backbuffer"` → HDR?RGBA16F:RGBA8；`"rgb_backbuffer"` → HDR?`rgb161616f`:`rgb888`（DXGI 均为 4 通道）；其他走格式名表；无法识别→`rgba8888`）、`scale`（整数除数，默认 1）、`width`/`height`（显式尺寸，≤4096 时覆盖）、`fit`（≤4096 时按最大边等比适配）、`unique`（bool）、`clear`（字符串颜色 `"r g b [a]"`，创建/resize 后立即清成该色）、`uvs`（`"repeat"` → 重复寻址，否则 clamp）、`conditions`（combo 条件）。尺寸基准 = 图层合成 RT 尺寸，再 `/scale`（RT 最小 2）。
+- **fbos[]**（每项 0x50 B）：`name`、`format`（`"rgba_backbuffer"` → HDR?RGBA16F:RGBA8；`"rgb_backbuffer"` → HDR?`rgb161616f`:`rgb888`（DXGI 均为 4 通道）；其他走格式名表；无法识别→`rgba8888`）、`scale`（整数除数，默认 1）、`width`/`height`（显式尺寸，≤4096 时覆盖）、`fit`（≤4096 时按最大边等比适配）、`unique`（bool）、`clear`（字符串颜色 `"r g b a"`，创建/resize 后立即清成该色）、`uvs`（`"repeat"` → 重复寻址，否则 clamp）、`conditions`（combo 条件）。
+  - **P7d 更正**（rea-p7d-fluid 第 1–3 节）：`clear` 要解析出 4 个数才置清除位，只写 3 个时存了颜色却不清；清的时机是每次图层 effect 资源重建（`FUN_1401ea500`：创建、resize、可见 effect 数变化、重载 effect），不只创建时。`conditions` 在加载时按 effect 实例顶层 `combos` 求一次，被去掉的 fbo / pass / bind 不进 effect 对象（规则见 rea-p7d-fluid 第 1 节）。尺寸基准 = 图层合成 RT 尺寸，再 `/scale`（RT 最小 2）。
   - 命名：`unique:true` → `<name>_<layerId>`（每图层独占）；否则非 fullscreen 图层用 `<name>_<W>_<H>_<scale>`（**同尺寸图层之间共享**），fullscreen 图层直接用 `<name>`。
 - **passes[]**（每项 0x30 B）：`material`、`command`（缺省=绘制；`"copy"`=1；`"swap"`=2）、`target`、`source`（fbo 名 → 下标；`target` 缺省 = 当前合成链）、`compose`（bool：该 pass 写入合成 ping-pong，并使计数 +1）、`bind[] {name, index}`（name 在 fbos 中找不到——例如 `"previous"`——就记为 −1 = 当前合成 RT）、`conditions`。
   - 解析后处理：每个绘制 pass 记录"下一个绘制 pass 是否以合成链为目标"（flag bit2，用于决定画完后是否弹出目标）；`effect+0x144` = **最后一个绘制 pass 的下标**；若任一 pass 材质含 "需要帧缓冲" 位（材质 +0x1fc bit1）则效果标志 |= 2。
 - **执行**（`FUN_1401ebf60`，每个 pass）：
   - `copy`：绑定 source fbo，然后 `target_fbo.CopyFrom(当前绑定)`（`CopyResource`），即 **source → target 整张拷贝**；
-  - `swap`：不做 GPU 工作，只把**后续所有 pass** 里引用 source/target 下标（target、source、bind）的地方互换；
+  - `swap`：不做 GPU 工作，只把**后续所有 pass** 里引用 source/target 下标（target、source、bind）的地方互换（P7d 更正：改写的是本 effect **全部**非 swap pass，含它之前的；两端有一个查不到 fbo 时什么都不做；fbo 条目本身从不交换，rea-p7d-fluid 第 3 节）；
   - 绘制：若 `target≥0` 先压入该 fbo；纹理：**没有 bind 时槽 0 = 当前合成 RT（上一步输出）**；有 bind 时只按 bind 逐槽赋值（−1 → 当前合成 RT），不自动填槽 0；画全屏合成四边形（`layer[0x5c]`）。
 - **`textures` 中的 `null`**：材质槽不由材质自己提供，留给上面的运行时赋值；对无 bind 的 pass 即"上一步输出"。像 `rz.json` 的 `[null, "wave"]` → 槽0=上一步、槽1=wave。
 

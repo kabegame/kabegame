@@ -544,3 +544,31 @@ const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visi
 - 新探针只能经 `host_eval` 调，REST / MCP 没有入口。
 
 **提交前发现：** `conditions.test.ts` 里用本机 WPE 流体与真翻译器的 4 个用例，在快照（配 `step1.wasm`）里全过，在工作区里失败：共享的 wasm 还是旧版，没有 `unused`，流体照旧误报 `constant:slots`。共享 wasm 换成新版后才会过。
+
+**共享 wasm 提前换新**（2026-11-12 用户，把「决定」9 的收尾重建提前）：
+- 工作区里有 P5c 会话没提交的翻译器改动（顶点属性的 `unused`），所以没有从工作区构建，而是用步骤 1 提交的源码编出的 `step1.wasm`（`d3ed5a82…`）拷进 `bin/wasm` 与场景宿主，再重建宿主。
+- 之后工作区全量测试里，那 4 个用例通过。剩下两个失败与 P7d 无关：请求次数上限，以及别的会话正在改的音频订阅 `host.test.ts`。
+
+**提交：** 3a `e5370601`，3b `57e2053e`。
+- 提交 3a 时暂存区里有别的会话暂存好的文件，我先叠了上去，发现后用 `git apply --cached -R` 撤回，等暂存区清空才提交。
+- 3b 的 `scene.ts` 用 `stage_hunks.py` 按块暂存时，纯插入块被插错了位置（插进了 `build()` 里），用临时提交做快照的 tsc 发现。改用新写的 `ignore/p7d/stage_insert.py` 按 HEAD 行号重新暂存。
+- 两次都先用 `git write-tree` + `git commit-tree` 造临时提交，在它的快照里跑 tsc 与 vitest，再真提交。
+
+### 步骤 4 — 收尾（2026-11-13）
+
+- **语料**（HEAD `57e2053e` 的快照配新 wasm，`ignore/p7d/out/corpus-final.json`，分析 `ignore/p7d/ana_final.py`）：
+  - 173 个工程，能渲染 47 张（P7c 收尾时 42；多的 5 张是别的会话的进展，P7d 本身按预期不解锁）；
+  - P7d 相关键 14 → 0 处，`shader:*` 0 处；
+  - 没有从能渲染掉出的场景。
+- **夹具与基线**（`ignore/p7d/requests-final`，853 个请求；新基线 `ignore/p7/baseline/p7d-57e2053e`，4240 个文件）：
+  - 重放 853 / 853；WPE 安装目录 161 / 167；几何 27 / 27；
+  - 对 P7c 基线：原有 4012 个文件变了 0。少的 8 个是流体的 normal pass 与 combine 旧请求：条件生效后 normal 不再发请求；combine 的槽 2 不再绑 normal，请求换了哈希（`206355d4` → `ed1e84fe`），GLSL / WGSL 逐字节相同。
+  - 跑的是工作区源码，含 P5c 的未提交改动；它只改属性的反射，GLSL / WGSL 不受影响。
+- **Tint**：新增的 114 份 WGSL（`ignore/p7d/tint_new.py` 列清单，`ignore/p7/tint.js` 在应用页里跑）0 error 0 warning。原有 WGSL 逐字节没变，不重跑。
+- **文档**：
+  - `cocs/wpe/WPE_SCENE.md`：语料、没被读的 uniform、着色器能力检查、effect 的条件 / 实例 combos / functions、材质常量、fbo、swap；
+  - p2-REPORT B6 两处更正；
+  - 回归「场景壁纸 P7d」；
+  - changelog 一行；
+  - 翻译器 README 的 `unused` 一节在步骤 1 已写。
+- **剩下要用户做的：** 回归 D9（预览里看流体测试工程，可选），以及 P7c 的 C8。
