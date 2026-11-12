@@ -465,3 +465,82 @@ const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visi
   - 重建 dev 的场景宿主（`deno task --cwd apps/wpe-scene build --mode development`）后，在 Kabegame 里渲染，和 WPE 1920×1080 抓帧（`A:\p7d\rmask1080`）逐像素比：**最大差 0**。
   - 测试行已用 `projects_remove` 移除。
 - Prettier：Prettier 会经 `.gitignore` 跳过 `ignore/` 下的文件，对快照 `--check` 等于什么都没查，要加 `--ignore-path .prettierignore`；工作区的文件照常查。
+
+提交 `8dcd01aa`。
+
+### 步骤 3a — 流体 effect 的编译侧（2026-11-12）
+
+同步骤 2：代理在 HEAD `8dcd01aa` 的快照里实现（`ignore/p7d/snap-step3`，补丁 `ignore/p7d/step3a.patch`），我验收后打进工作区。
+
+**改动：**
+- 新文件 `compile/conditions.ts`：
+  - `conditionsHold`：逐条照 `FUN_1401e63b0`；
+  - `removedFbos`：被条件去掉、且没有同名 fbo 留下的名字。
+- `compileEffect`：
+  - fbo、绘制 pass、命令 pass、bind 先过条件，只按实例顶层 `combos` 求值，不并进 pass 的 COMBO；
+  - 被去掉的绘制 pass 照样占实例覆盖下标与稳定键序号；
+  - `target` 指向被去掉的 fbo 置 null；
+  - `swap` 一端被去掉不收。
+- `parseFbo`：`clear` 要 4 个分量。
+- `features.ts`：
+  - 放开 `functions`、`conditions`、实例 `combos`；
+  - `checkEffectFeatures` 收求值函数，被去掉的不检查；
+  - bind 逐项查键（`SUPPORTED_BIND`）；
+  - `copy` 一端被去掉报 `command-operands`。
+- `model.ts`：bind 类型加 `conditions`。
+- 新增 27 个用例（`conditions.test.ts`）。
+
+**和子计划不同的地方：**
+- 被去掉的绘制 pass 也占一个稳定键序号。键是 scene.json 坐标，脚本写回按实例 `passes/<k>` 找 pass；不占位的话，流体去掉 normal 后 combine 的键会从 `passes/17` 变成 `passes/16`，挂在别的覆盖上的脚本会写错 pass。
+- 命令 pass（copy / swap）也先过条件：WPE 对每个 pass 都求值。
+- 没确认的边界：bind 全被条件去掉时，我们的 `binds` 是空数组，不自动填槽 0；WPE 在 bind 向量为空时怎么做没读码。语料 0 处。
+
+**验收：**
+- 快照：
+  - tsc 0；
+  - vitest 2012 → 2039（+27）。唯一的失败是 `pipeline.test.ts` 的 `3830255100: 219 次请求`，基线同样失败，与本步无关；
+  - 变异 25 处全部检出，含条件全当真、顶层 combos 并进 pass、覆盖下标不占位、bind 条件不看、`clear` 3 分量生效、`functions` 仍报等。
+- 结构对照（`ignore/p7d/fluid_plan/`，结果 `out/fluid-plan-step3.txt`）：6 个流体变体的计划与 WPE 抓帧逐项比，80 / 80 相符：
+  - 绘制数（18 / 19）；
+  - 各 pass 的目标尺寸与格式（`_rt_SmokeDye2` 128² RGBA8、速度 256² RG16F）；
+  - 各槽来源、combine 拿到第 18 项覆盖（`u_Feather` 0.68）；
+  - `r3both` 的槽 4 是速度场。
+  
+  基线快照上同一脚本 17 项不符。`r3pass` 的槽 4 在 WPE 里是一张 6×6 的纹理，我们绑占位纹理，没查那张是什么。这个变体本身不是编辑器会写出的组合。
+- 语料（181 个样本，`out/diff-step3.txt`）：
+  - 只去掉流体的四个 effect 键，没有新增的键（新的 `effect:*:bind:*` 语料 0 处）；
+  - 干净的场景 48 → 53，多出的是 5 个流体测试工程，`lpass` 照报 `lighting:effect`；
+  - `3286859278` 不再有 effect 结构的键，还剩 41 项（文本、脚本 API、`tex:animation`、音频等）。
+- 补丁打进工作区没有冲突；dev 的场景宿主已重建。
+
+### 步骤 3b — 流体与 WPE 的单步隔离、长程统计（2026-11-12）
+
+交给代理，结论见 [p7-REPORT](p7-REPORT.md)「P7d 流体的对照」。
+
+**改动**（只有 dev 工具，产品逻辑没动）：
+- 新文件 `dev/dds.ts`：DDS 读取，支持 RGBA16F / RG16F / R16F / RGBA8；
+- 新文件 `dev/fluidProbe.ts`：`__kabegameSceneProbe.fluid`，能把 fbo 换成给定内容、按逐帧 dt 每帧完整编码、按名字读回；
+- 两个文件各带单测；
+- `dev/install.ts` 接线 3 行；
+- `render/scene.ts` 加 dev 用的 `devLayerTargets`，生产路径不调用。
+
+**结果：**
+- **WPE 真值**：`A:\p7d\step\step-frame120–122.rdc`，各模拟 RT 存成 DDS（`ignore/p7d/proj/p7d-fluid/kbstep/`）。swap 的奇偶逐帧交替，与「只改下标」一致。
+- **单步隔离**：同一份输入跑一帧。
+  - 旋度、染料、合成 RT 三帧都逐位相同；
+  - 速度、压力、散度在第 120 / 121 帧只有 1–4 个值差 1–4 ulp；
+  - 第 122 帧（dt 0.11）有十几到二十几个值不同，都挤在一个点附近：源头是 vorticity 一个大幅值的 1 ulp 舍入，经散度的差分放大（184 ulp / 0.031）再传开；
+  - 对照：WPE 自己这一帧的输入对输出，98–99.5% 的值差超过 16 ulp。
+  - 结论：只差半精度舍入。我在 dev 里重跑第 121 帧，数字一致。
+- **长程统计**：按 WPE 实测的帧时长 0.050426 跑 167 帧，读回第 154–167 帧的 768² 画布：
+  - 我们对 WPE 的平均差 8.34 / 10.50 / 15.45（最小 / 中位 / 最大），WPE 自己两次运行之间是 8.79 / 11.97 / 14.55；
+  - 隔 1 帧、隔 3 帧的变化量和 WPE 几乎相同；
+  - 火焰覆盖 57.4–58.3%，WPE 是 57.5–59.0%。
+  - 结论：落在 WPE 自身两次运行之间。
+
+**遗留（不在 P7d 范围）：**
+- 最后一个 effect pass WPE 按窗口分辨率画，我们按场景分辨率画再放大，带 effect 的场景都有；
+- combine 在采样点上还有 0.37% 的值差 1–5，可能是渐变纹理的各向异性采样，没再往下查；
+- 新探针只能经 `host_eval` 调，REST / MCP 没有入口。
+
+**提交前发现：** `conditions.test.ts` 里用本机 WPE 流体与真翻译器的 4 个用例，在快照（配 `step1.wasm`）里全过，在工作区里失败：共享的 wasm 还是旧版，没有 `unused`，流体照旧误报 `constant:slots`。共享 wasm 换成新版后才会过。

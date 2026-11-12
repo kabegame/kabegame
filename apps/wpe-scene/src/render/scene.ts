@@ -829,6 +829,27 @@ export class GpuScene {
   }
 
   /**
+   * dev 探针专用（`dev/fluidProbe.ts` 的流体单步隔离，P7d 步骤 3；生产路径不调用）：图层 `object`（`objects` 下标）的合成 RT，以及
+   * 它第 `effect` 个 effect 的 fbo 按名字取**此刻**扮演它的实体（`swap` 之后的对应，`FboBindings.resolve`）。探针往里写输入、读回
+   * 输出；纹理都带 `COPY_SRC | COPY_DST`（`createTarget`）。没有这个图层（没建资源）或 effect 时为 null。
+   */
+  devLayerTargets(
+    object: number,
+    effect: number,
+  ): {
+    composites: readonly { texture: GPUTexture; width: number; height: number; format: GPUTextureFormat }[];
+    fbos: ReadonlyMap<string, { texture: GPUTexture; width: number; height: number; format: GPUTextureFormat }>;
+  } | null {
+    const runtime = this.runtimeByObject.get(object);
+    const fx = runtime?.layer.effects[effect];
+    if (!runtime || !fx) return null;
+    const fbos = new Map(
+      fx.fbos.map((fbo) => [fbo.name, this.targets[runtime.resources.fbos.resolve(effect, fbo.name)]] as const),
+    );
+    return { composites: [...runtime.resources.composites], fbos };
+  }
+
+  /**
    * 建全部资源。失败时已建的资源都会释放，抛 `SceneRenderError`；`warnings` 收集 Tint 的非错误消息。
    * `state` 是本次场景的 CPU 侧状态（`render/state.ts`），建 draw 时按它的初始值写 uniform；
    * `ignoreUnsupported`：dev 强制渲染（D4），不因 `bundle.unsupported` 拒绝，渲染器自查仍然生效。

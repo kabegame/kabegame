@@ -3,6 +3,7 @@
  */
 import type { SceneHost } from "../host";
 import { runBloomProbe } from "./bloomProbe";
+import { fluidProbe } from "./fluidProbe";
 import { particleCorners } from "./particleCorners";
 import {
   hostParticles,
@@ -28,6 +29,8 @@ export function installSceneDevProbe(host: SceneHost): void {
     particleTrack: particleTrackProbe,
     /** P4a 步骤 4（风险 7）：翻译出的粒子顶点着色器对当前粒子算出的四角裁剪坐标。 */
     particleCorners,
+    /** P7d 步骤 3：流体 effect 的单步隔离（换 fbo 内容、逐帧完整编码、读回 fbo）与长程回放（读回画布）。 */
+    fluid: fluidProbe,
     /** P3a：当前场景的状态、宿主计数与「按当前状态渲染一帧」的哈希。 */
     host: {
       state: () => hostState(host),
