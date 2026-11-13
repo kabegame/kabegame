@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "../audio/spectrum";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
-import type { SceneBundle, SceneEffect, SceneLayer } from "../compile/bundle";
+import type { SceneBundle, SceneEffect, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import {
   MISSING_SCRIPT_API,
@@ -12,7 +12,7 @@ import {
 } from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState, scriptWriteValue } from "../render/state";
-import { createWpeLocalStorage, ScriptApi, type SoundScriptTarget } from "./api";
+import { createWpeLocalStorage, ScriptApi, type SoundScriptTarget, type VideoScriptTarget } from "./api";
 import { alignScriptEnvironment } from "./environment";
 import { RUNTIME_CALLBACKS, ScriptRuntime, type ScriptRealm } from "./runtime";
 import { createMemoryStorage } from "./storage";
@@ -840,6 +840,347 @@ describe("SceneScript API（FakeRealm）", () => {
     register(16);
     expect(registered).toHaveBeenCalledTimes(1);
     h.api.setModuleEvaluating(false);
+  });
+});
+
+/** P9b 用例的视频：容器时长 2.55（float32 不是它本身）。 */
+const VIDEO = { path: "P:/p/scene.pkg", start: 100, end: 164, duration: 2.55 };
+
+/**
+ * 视频纹理的场景：图层 0（First）的基础材质槽 0 是视频纹理 0；图层 1（Second）槽 0 是普通纹理 1、槽 1 才是视频（不算视频图层），
+ * `secondIsVideo` 时图层 1 的槽 0 也是视频。`duration: false` 时视频没有容器时长。
+ */
+function videoScene(options: { duration?: boolean; secondIsVideo?: boolean } = {}): SceneBundle {
+  const bundle = scene();
+  const pass = (object: number, textures: Record<number, number>) =>
+    ({
+      key: `objects/${object}/passes/0`,
+      program: null,
+      blending: "normal",
+      cullmode: "nocull",
+      depthtest: "disabled",
+      depthwrite: "disabled",
+      textures,
+      runtime: {},
+      uniforms: {},
+      framebuffer: false,
+    }) as ScenePass;
+  bundle.layers[0].passes = [pass(0, { 0: 0 })];
+  bundle.layers[1].passes = [pass(1, options.secondIsVideo ? { 0: 0 } : { 0: 1, 1: 0 })];
+  const video = options.duration === false ? { path: VIDEO.path, start: VIDEO.start, end: VIDEO.end } : { ...VIDEO };
+  bundle.textures = [
+    { path: "materials/clip.tex", video } as SceneTexture,
+    { path: "materials/still.tex" } as SceneTexture,
+  ];
+  return bundle;
+}
+
+/** 记调用的落点：字段可读写，`end()` 照播放器的 `fireEnded` 依次调结束回调（不 catch：出错要由运行时吞掉）。 */
+class FakeVideoTarget implements VideoScriptTarget {
+  calls: string[] = [];
+  rate = 1;
+  loop = true;
+  currentTime = 0;
+  duration = 2.517;
+  playing = true;
+  callbacks: (() => void)[] = [];
+  play() {
+    this.calls.push("play");
+  }
+  pause() {
+    this.calls.push("pause");
+  }
+  stop() {
+    this.calls.push("stop");
+  }
+  isPlaying() {
+    return this.playing;
+  }
+  addEndedCallback(callback: () => void) {
+    this.callbacks.push(callback);
+  }
+  end() {
+    for (const callback of [...this.callbacks]) callback();
+  }
+}
+
+/** `target` 是宿主给图层 0 的落点（可换、可为 null）；`noVideo` 时不传 `video`，模拟语料诊断与 `realmProbe`。 */
+function videoSetup(options: { target?: FakeVideoTarget | null; noVideo?: boolean; bundle?: SceneBundle } = {}) {
+  const realm = new FakeRealm();
+  let bundle = options.bundle ?? videoScene();
+  const state = SceneState.fromBundle(scene());
+  const h = {
+    realm,
+    target: options.target ?? null,
+    /** 每次查落点的图层。 */
+    lookups: [] as number[],
+    setBundle(next: SceneBundle) {
+      bundle = next;
+    },
+    api: null as unknown as ScriptApi,
+  };
+  h.api = new ScriptApi(realm, {
+    bundle: () => bundle,
+    state: () => state,
+    screenResolution: () => [800, 600],
+    frametime: () => 0.016,
+    runtime: () => 0,
+    timeOfDay: () => 0,
+    write: () => true,
+    ...(options.noVideo
+      ? {}
+      : {
+          video: (object: number) => {
+            h.lookups.push(object);
+            return object === 0 ? h.target : null;
+          },
+        }),
+  });
+  return h;
+}
+
+type VideoApi = Record<string, unknown> & {
+  play(): unknown;
+  pause(): unknown;
+  stop(): unknown;
+  setCurrentTime(time: unknown): unknown;
+  isPlaying(): unknown;
+  getCurrentTime(): unknown;
+  getAnimation(): unknown;
+  addEndedCallback(callback: unknown): unknown;
+};
+const videoOf = (api: ScriptApi, object: number) => (api.layer(object)!.getVideoTexture as () => VideoApi | null)();
+
+describe("视频纹理（P9b，IVideoTexture）", () => {
+  it("所有图层都有 getVideoTexture：非视频图层返回 null（不缓存），视频图层每次返回同一个对象", () => {
+    const h = videoSetup({ target: new FakeVideoTarget() });
+    for (const object of [0, 1]) expect("getVideoTexture" in h.api.layer(object)!).toBe(true);
+    const video = videoOf(h.api, 0)!;
+    expect(video).not.toBeNull();
+    expect(videoOf(h.api, 0)).toBe(video);
+    const getLayer = h.api.thisScene.getLayer as (name: string) => Record<string, () => unknown>;
+    expect(getLayer("First").getVideoTexture()).toBe(video);
+    // 视频只在槽 1：不是视频图层
+    expect(videoOf(h.api, 1)).toBeNull();
+    // 不缓存 null：重编译后图层 1 的槽 0 成了视频，就拿到对象，之后同一个
+    h.setBundle(videoScene({ secondIsVideo: true }));
+    const second = videoOf(h.api, 1)!;
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(video);
+    expect(videoOf(h.api, 1)).toBe(second);
+    // 每次都按当前 bundle 判：图层 1 又不是视频了就是 null，再成为视频时还是原来那个对象
+    h.setBundle(videoScene());
+    expect(videoOf(h.api, 1)).toBeNull();
+    h.setBundle(videoScene({ secondIsVideo: true }));
+    expect(videoOf(h.api, 1)).toBe(second);
+    // 没有视频的场景
+    expect(videoOf(setup().api, 0)).toBeNull();
+  });
+
+  it("「是不是视频图层」只看 bundle：没有落点也建对象；落点每次调用现取", () => {
+    const h = videoSetup({ target: null });
+    const video = videoOf(h.api, 0)!;
+    expect(video).not.toBeNull();
+    expect(h.lookups).toEqual([]);
+    video.play();
+    video.isPlaying();
+    expect(h.lookups).toEqual([0, 0]);
+    // 落点换了（重编译、播放器重建）：下一次调用就落到新的上
+    const first = new FakeVideoTarget();
+    const second = new FakeVideoTarget();
+    h.target = first;
+    video.play();
+    h.target = second;
+    video.pause();
+    expect([first.calls, second.calls]).toEqual([["play"], ["pause"]]);
+  });
+
+  it("自有属性按 WPE 的 Object.keys 顺序、都可枚举；普通对象；没有 currentTime / getDuration", () => {
+    const video = videoOf(videoSetup({ target: new FakeVideoTarget() }).api, 0)!;
+    expect(Object.keys(video)).toEqual([
+      "duration",
+      "loop",
+      "rate",
+      "addEndedCallback",
+      "play",
+      "setCurrentTime",
+      "isPlaying",
+      "stop",
+      "pause",
+      "getCurrentTime",
+      "getAnimation",
+    ]);
+    expect(String(video)).toBe("[object Object]");
+    expect(Object.getPrototypeOf(video)).toBe(Object.prototype);
+    expect("currentTime" in video).toBe(false);
+    expect("getDuration" in video).toBe(false);
+    expect((video.play as () => void).length).toBe(0);
+  });
+
+  it("成员类型：isPlaying 是布尔，loop 是数字，rate / duration / getCurrentTime 是 float32；方法返回 undefined、转给落点", () => {
+    const target = new FakeVideoTarget();
+    target.currentTime = 1.8;
+    const video = videoOf(videoSetup({ target }).api, 0)!;
+    expect(typeof video.isPlaying()).toBe("boolean");
+    expect(video.isPlaying()).toBe(true);
+    target.playing = false;
+    expect(video.isPlaying()).toBe(false);
+    expect(video.loop).toBe(1);
+    expect(typeof video.loop).toBe("number");
+    expect(video.rate).toBe(1);
+    expect(video.duration).toBe(Math.fround(2.517));
+    expect(video.duration).not.toBe(2.517);
+    expect(video.getCurrentTime()).toBe(Math.fround(1.8));
+    expect(video.getCurrentTime()).not.toBe(1.8);
+    expect(video.play()).toBeUndefined();
+    expect(video.pause()).toBeUndefined();
+    expect(video.stop()).toBeUndefined();
+    expect(video.setCurrentTime("1.25")).toBeUndefined();
+    expect(target.currentTime).toBe(1.25);
+    expect(target.calls).toEqual(["play", "pause", "stop"]);
+    expect(video.getAnimation()).toBeUndefined();
+    // 元数据之前、读不出容器时长的播放器：NaN 照报（WPE 探测失败同样是 NaN）
+    target.duration = Number.NaN;
+    expect(video.duration).toBeNaN();
+  });
+
+  it("duration 只读：严格模式下写入抛 TypeError，值不变", () => {
+    const target = new FakeVideoTarget();
+    const video = videoOf(videoSetup({ target }).api, 0)!;
+    expect(() => {
+      video.duration = 1;
+    }).toThrow(TypeError);
+    expect(video.duration).toBe(Math.fround(2.517));
+    expect(target.duration).toBe(2.517);
+  });
+
+  it("rate / loop：写入转换后存字段并转给落点，读只返回字段", () => {
+    const target = new FakeVideoTarget();
+    const video = videoOf(videoSetup({ target }).api, 0)!;
+    video.rate = 2.5;
+    expect([video.rate, target.rate]).toEqual([2.5, 2.5]);
+    video.rate = "1";
+    expect([video.rate, target.rate]).toEqual([1, 1]);
+    video.rate = 0.1;
+    expect([video.rate, target.rate]).toEqual([Math.fround(0.1), Math.fround(0.1)]);
+    for (const bad of [Number.NaN, "abc", Number.POSITIVE_INFINITY, undefined]) video.rate = bad;
+    expect([video.rate, target.rate]).toEqual([Math.fround(0.1), Math.fround(0.1)]);
+    // 负数照存照转：钳制在播放器里（WPE 读只返回字段）
+    video.rate = -1;
+    expect([video.rate, target.rate]).toEqual([-1, -1]);
+    target.rate = 0;
+    expect(video.rate).toBe(-1);
+    video.loop = 0;
+    expect([video.loop, target.loop]).toEqual([0, false]);
+    video.loop = true;
+    expect([video.loop, target.loop]).toEqual([1, true]);
+    video.loop = "";
+    expect([video.loop, target.loop]).toEqual([0, false]);
+    video.loop = 1;
+    expect([video.loop, target.loop]).toEqual([1, true]);
+    target.loop = false;
+    expect(video.loop).toBe(1);
+  });
+
+  it("没有落点（宿主给 null、不传 video）：方法空操作，duration 取 bundle 的容器时长（float32），没有时 0；字段照存", () => {
+    for (const options of [{ target: null }, { noVideo: true }]) {
+      const h = videoSetup(options);
+      const video = videoOf(h.api, 0)!;
+      for (const name of ["play", "pause", "stop", "getAnimation"] as const) expect(video[name]()).toBeUndefined();
+      expect(video.setCurrentTime(1)).toBeUndefined();
+      expect(video.isPlaying()).toBe(false);
+      expect(video.getCurrentTime()).toBe(0);
+      expect(video.duration).toBe(Math.fround(2.55));
+      video.rate = 2;
+      video.loop = false;
+      expect([video.rate, video.loop]).toEqual([2, 0]);
+      expect(video.addEndedCallback(() => {})).toBeUndefined();
+      expect(() => video.addEndedCallback("no")).toThrow(TypeError);
+    }
+    const bare = videoSetup({ target: null, bundle: videoScene({ duration: false }) });
+    expect(videoOf(bare.api, 0)!.duration).toBe(0);
+  });
+
+  it("结束回调：在登记它的脚本上下文里调、不带参数、不去重；抛错不中断其他回调、不禁用；运行时停止后不调", async () => {
+    const target = new FakeVideoTarget();
+    const h = videoSetup({ target });
+    const warnings: string[] = [];
+    const report = {
+      ready() {},
+      fallback() {},
+      debug() {},
+      info() {},
+      warn: (message: string) => void warnings.push(message),
+      error() {},
+    };
+    const runtime = new ScriptRuntime(h.realm, {
+      report,
+      read: () => [1],
+      write: () => true,
+      enterScript: (script) => h.api.enterScript(script),
+      setModuleEvaluating: (value) => h.api.setModuleEvaluating(value),
+    });
+    h.api.attachRuntime(runtime);
+    const seen: unknown[] = [];
+    let updates = 0;
+    const thisLayer = () => h.realm.global.thisLayer;
+    // 脚本 one 挂在视频图层上；two 挂在图层 1 上、经 getLayer 拿图层 0 的视频
+    h.realm.modules.set("one", {
+      init() {
+        const video = (thisLayer() as Record<string, () => VideoApi>).getVideoTexture();
+        const named = function () {
+          // 不带参数调用（WPE 实测 arguments.length 0）
+          // eslint-disable-next-line prefer-rest-params
+          seen.push(["one", arguments.length, thisLayer()]);
+        };
+        video.addEndedCallback(named);
+        video.addEndedCallback(() => {
+          throw new Error("boom");
+        });
+        video.addEndedCallback(named);
+      },
+      update() {
+        updates++;
+      },
+    });
+    h.realm.modules.set("two", {
+      init() {
+        const getLayer = h.api.thisScene.getLayer as (name: number) => Record<string, () => VideoApi>;
+        getLayer(0)
+          .getVideoTexture()
+          .addEndedCallback(() => seen.push(["two", thisLayer()]));
+      },
+    });
+    await runtime.load({
+      list: [script("one", { kind: "layer", object: 0 }, 0), script("two", { kind: "layer", object: 1 }, 1)],
+    });
+    expect(target.callbacks).toHaveLength(4);
+    target.end();
+    const first = h.api.layer(0);
+    const second = h.api.layer(1);
+    expect(seen).toEqual([
+      ["one", 0, first],
+      ["one", 0, first],
+      ["two", second],
+    ]);
+    expect(thisLayer()).toBeNull();
+    expect(warnings).toEqual(["场景脚本 one ended 出错：boom"]);
+    // 不禁用：update 照跑，再结束一次全部照调
+    runtime.frame(0.016);
+    expect(updates).toBe(1);
+    target.end();
+    expect(seen).toHaveLength(6);
+    const diagnostics = runtime.diagnostics as {
+      id: string;
+      disabled: string[];
+      calls: Record<string, { count: number }>;
+    }[];
+    expect(diagnostics[0].disabled).toEqual([]);
+    expect(diagnostics[0].calls.ended.count).toBe(6);
+    expect(diagnostics[1].calls.ended.count).toBe(2);
+    runtime.destroy();
+    target.end();
+    expect(seen).toHaveLength(6);
   });
 });
 

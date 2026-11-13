@@ -32,7 +32,7 @@ import { textFieldFromScript } from "./text/fields";
 import { SceneTexts, type TextRelayouter } from "./text/host";
 import type { TextLayout } from "./text/layout";
 import { videoSourceKey } from "./video/player";
-import { SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
+import { layerVideoSource, SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
 
 interface SceneTarget {
   path: string;
@@ -320,6 +320,9 @@ export class SceneHost {
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;
+    // 视频的脚本状态一并复位（P9b）：新脚本的 IVideoTexture 是缺省值（loop 真、rate 1），播放器也要是；旧脚本登记的结束回调不会再调，
+    // 留着只会拖住旧的脚本环境
+    this.sceneVideos?.resetScriptState();
     // 脚本写过的重编译目标一并放弃；用户属性在重建后重新全量交给新脚本
     this.scriptOverrides.clear();
     this.scriptNeedsFullApply = true;
@@ -547,6 +550,12 @@ export class SceneHost {
         audioRegistered: () => this.subscribeAudio(),
         // 声音层的 play / pause / stop / isPlaying（P6a 步骤 2）：每次调用现取，重编译重建的排期器也接得上
         sound: (object) => this.sceneSounds?.scheduler(object) ?? null,
+        // 视频纹理的 IVideoTexture（P9b）：按脚本当前看到的 bundle 找图层槽 0 的视频，再按区间键取播放器。`loadVideos` 在新场景换上之前
+        // 就按新 bundle 重建了下标表，这期间脚本还在用旧 bundle，下标对不上、区间键照样对得上
+        video: (object) => {
+          const source = layerVideoSource(this.scriptBundle, object);
+          return source ? (this.sceneVideos?.playerFor(source) ?? null) : null;
+        },
       });
       const runtime = new ScriptRuntime(realm, {
         report: this.options.report,

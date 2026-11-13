@@ -395,3 +395,169 @@ describe("VideoTexturePlayer", () => {
     expect(player.probe()).toMatchObject({ totalFrames: 300, droppedFrames: 4 });
   });
 });
+
+/**
+ * P9b 点 2：脚本 `IVideoTexture` 落点上和 WPE 对齐的四处（p9-REPORT「P9b 步骤 0 的补测」）——容器时长、结束时的时间、
+ * 脚本暂停 / 停止期间不交帧、失败后的 isPlaying。
+ */
+describe("VideoTexturePlayer 的脚本语义（P9b）", () => {
+  async function readyWith(source: SceneVideoSource, options: Parameters<typeof videoEnv>[0] = {}) {
+    const env = videoEnv(options);
+    const player = new VideoTexturePlayer(source, 0, { ...env.factories, report: env.report });
+    const element = env.elements[0];
+    await flush();
+    player.apply(0, false);
+    return { ...env, player, element };
+  }
+
+  it("duration：容器时长优先（元数据之前就有，元素的时长不同也不管），读不出时退回元素的", async () => {
+    const env = await readyWith({ ...pkg, duration: 10.005333 });
+    expect(env.player.duration).toBe(10.005333);
+    env.element.loadData(9.983333);
+    expect(env.player.duration).toBe(10.005333);
+    const plain = await readyWith(pkg);
+    expect(plain.player.duration).toBeNaN();
+    plain.element.loadData(2.516667);
+    expect(plain.player.duration).toBe(2.516667);
+  });
+
+  it("currentTime：结束时报容器时长（WPE 读回正好等于 duration）；没结束、或没有容器时长时照元素", async () => {
+    const env = await readyWith({ ...pkg, duration: 2.55 });
+    const { element, player } = env;
+    element.loadData(2.516667);
+    player.loop = false;
+    element.currentTime = 2.516667;
+    expect(player.currentTime).toBe(2.516667);
+    element.ended = true;
+    expect(player.currentTime).toBe(2.55);
+    expect(player.currentTime).toBe(player.duration);
+    // 结束之后 play() 回到 0：不再 ended，照元素
+    player.play();
+    element.ended = false;
+    expect(player.currentTime).toBe(0);
+    const plain = await readyWith(pkg);
+    plain.element.loadData(2.516667);
+    plain.player.loop = false;
+    plain.element.currentTime = 2.516667;
+    plain.element.ended = true;
+    expect(plain.player.currentTime).toBe(2.516667);
+  });
+
+  it("currentTime 写入：上界按容器时长减 0.005（元数据之前也钳），不按元素的时长", async () => {
+    const env = await readyWith({ ...pkg, duration: 10.005333 });
+    const { element, player } = env;
+    player.currentTime = 99;
+    expect(element.currentTime).toBeCloseTo(10.000333, 9);
+    element.loadData(9.983333);
+    player.currentTime = 99;
+    expect(element.currentTime).toBeCloseTo(10.000333, 9);
+    player.currentTime = 9.99;
+    expect(element.currentTime).toBe(9.99);
+    player.currentTime = -1;
+    expect(element.currentTime).toBe(0);
+  });
+
+  it("脚本暂停 / 停止期间 seek 完不交帧（标志留着、仍记 lastDrawn），play() 之后第一次画到才交", async () => {
+    const env = await readyWith(pkg);
+    const { element, player } = env;
+    element.loadData();
+    expect(player.drawn(1, false)).toBe(element);
+    player.pause();
+    player.currentTime = 1.8;
+    element.fire("seeked");
+    expect(player.drawn(2, false)).toBeNull();
+    expect(player.drawn(3, false)).toBeNull();
+    expect(player.fresh).toBe(true);
+    expect(player.lastDrawn).toBe(3);
+    // 宿主暂停期间的补画也不交
+    expect(player.drawn(3, true)).toBeNull();
+    player.play();
+    expect(player.drawn(4, false)).toBe(element);
+    expect(player.drawn(4, false)).toBeNull();
+    // stop 同样：停在 stop 那一刻的帧，直到 play()
+    player.stop();
+    element.fire("seeked");
+    element.present();
+    expect(player.drawn(5, false)).toBeNull();
+    player.play();
+    expect(player.drawn(6, false)).toBe(element);
+    // loop 为假放到结尾：wantPlay 被清，结尾之后的帧同样等 play()。stop 在 loop 下清了判定位，先过一帧没结束的判定重新装上
+    player.loop = false;
+    player.detectEnd();
+    element.ended = true;
+    player.detectEnd();
+    expect(player.wantPlay).toBe(false);
+    element.present();
+    expect(player.drawn(7, false)).toBeNull();
+  });
+
+  it("空闲暂停（30 帧没画到）与宿主暂停期间 wantPlay 仍为真：照常交帧", async () => {
+    const env = await readyWith(pkg);
+    const { element, player } = env;
+    for (let frame = 1; frame <= IDLE_FRAMES + 1; frame++) player.apply(frame, false);
+    expect(element.paused).toBe(true);
+    expect(player.wantPlay).toBe(true);
+    // 空闲期间的 seek：再画到时显示新位置（读码：工作线程照常取帧）
+    element.fire("seeked");
+    expect(player.drawn(IDLE_FRAMES + 2, false)).toBe(element);
+    element.fire("seeked");
+    expect(player.drawn(IDLE_FRAMES + 3, true)).toBe(element);
+  });
+
+  it("resetScriptState：清结束回调、loop 真、rate 1、想放、判定重装，不 seek；失败的仍不想放", async () => {
+    const env = await readyWith(pkg);
+    const { element, player } = env;
+    element.loadData();
+    const ended = vi.fn();
+    player.addEndedCallback(ended);
+    player.loop = false;
+    player.rate = 2;
+    player.pause();
+    element.currentTime = 1.5;
+    player.resetScriptState();
+    expect([player.loop, element.loop, player.rate, element.playbackRate, element.defaultPlaybackRate]).toEqual([
+      true,
+      true,
+      1,
+      1,
+      1,
+    ]);
+    expect(player.wantPlay).toBe(true);
+    expect(element.paused).toBe(false);
+    expect(element.currentTime).toBe(1.5);
+    // 旧回调不再调：绕回也不触发
+    player.detectEnd();
+    element.currentTime = 0.1;
+    player.detectEnd();
+    expect(ended).not.toHaveBeenCalled();
+    element.fail();
+    player.resetScriptState();
+    expect(player.wantPlay).toBe(false);
+  });
+
+  it("失败：清 wantPlay，isPlaying 为假；脚本 play() 之后为真（WPE 探测失败同样），仍不碰元素、不交帧", async () => {
+    const env = await readyWith(pkg);
+    const { element, player } = env;
+    expect(player.isPlaying()).toBe(true);
+    element.fail();
+    expect(player.wantPlay).toBe(false);
+    expect(player.isPlaying()).toBe(false);
+    const calls = element.calls.length;
+    player.play();
+    expect(player.isPlaying()).toBe(true);
+    element.fire("seeked");
+    expect(player.drawn(1, false)).toBeNull();
+    expect(element.calls.length).toBe(calls);
+    player.pause();
+    expect(player.isPlaying()).toBe(false);
+    // 读不到（还没挂上 src 就失败）：一样
+    const reading = await readyWith(pkg, { read: () => Promise.reject(new TypeError("Failed to fetch")) });
+    expect(reading.player.failed).toBe(true);
+    expect(reading.player.isPlaying()).toBe(false);
+    // 失败时释放元素（pause + load），之后 play() 不再碰它
+    expect(reading.element.calls).toEqual(["pause", "load"]);
+    reading.player.play();
+    expect(reading.player.isPlaying()).toBe(true);
+    expect(reading.element.calls).toEqual(["pause", "load"]);
+  });
+});

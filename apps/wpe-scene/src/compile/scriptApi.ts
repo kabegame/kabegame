@@ -32,8 +32,9 @@
  * - `any`：任意接收者上的 `.成员` / `?.成员` / `["成员"]` 都算，只收名字足够独特的，每项写一句理由。
  * - 表外的例外（P6a 步骤 2）：场景里有粒子层时，`play` / `pause` / `stop` / `isPlaying` 不论接收者都报 `particle.<名>`
  *   （`PARTICLE_LAYER_METHODS`）。
- * 子对象（`ITextureAnimation`、`IVideoTexture`、`IAnimationLayer`、`IAnimation`、`IModelData`、`IAssetHandle`）只能经表里的入口方法拿到，
- * 入口已经会报，它们自己的成员（`setFrame`、`play`、`applyData` …）不收。
+ * 子对象（`ITextureAnimation`、`IVideoTexture`、`IAnimationLayer`、`IAnimation`、`IModelData`、`IAssetHandle`）只能经入口方法拿到，
+ * 它们自己的成员（`setFrame`、`play`、`applyData` …）不收：入口还在表里的已经会报；入口已实现的（`getVideoTexture`，P9b）子对象的
+ * 成员也一并实现了。
  *
  * **导出回调**（文件末段）：WPE 按固定的 19 个回调名（`WPE_SCRIPT_CALLBACKS`，报告 C 节）调用脚本导出的函数，运行时只调
  * `init` / `update` / `applyUserProperties` / `destroy`。脚本导出了其余回调（光标、媒体等，`MISSING_SCRIPT_CALLBACKS`）时报
@@ -112,7 +113,8 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
   console: [],
   /**
    * 已实现：`name`、`id`、`size`（只读）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`
-   * （P5a 步骤 2）；声音层（`ISoundLayer`）的 `play` / `pause` / `stop` / `isPlaying` 与 `volume`（P6a 步骤 2，只在声音层上）。
+   * （P5a 步骤 2）；声音层（`ISoundLayer`）的 `play` / `pause` / `stop` / `isPlaying` 与 `volume`（P6a 步骤 2，只在声音层上）；
+   * `getVideoTexture`（P9b，所有图层上都有，非视频图层返回 null；返回的 `IVideoTexture` 的成员见 `script/api.ts`）。
    * 粒子层（`IParticleSystem`）的同名方法另由 `PARTICLE_LAYER_METHODS` 报。
    */
   layer: [
@@ -126,12 +128,11 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ),
     // `Mat4.lookAt` 是 `baseclasses.js` 的静态方法（1112 行），只按名字会误报
     ...methods("root", ["lookAt"]),
-    // 纹理动画、视频、动画层、骨骼与混合形状（W5 / P6）
+    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b）
     ...methods(
       "any",
       [
         "getTextureAnimation",
-        "getVideoTexture",
         "getAnimationLayerCount",
         "getAnimationLayer",
         "createAnimationLayer",

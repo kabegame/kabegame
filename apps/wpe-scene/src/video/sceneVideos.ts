@@ -8,7 +8,10 @@
  * - **30 帧规则**：纹理连续 30 个渲染帧没被画到就暂停，再画到时立即 `play()`、不追赶（rea 第 4 节）。新建的播放器 `lastDrawn` 取当前帧号，
  *   所以一开始就不可见的图层也先播 30 帧（p9-REPORT「不可见的图层」）。
  * - **宿主暂停**：全部 `pause()`；恢复时照 WPE 把**所有**播放器的 `wantPlay` 置真再放，连脚本暂停、停止过的也放（rea 第 3 节第 5 条）。
+ * - **脚本**（P9b）：`IVideoTexture` 经 `layerVideoSource` 从脚本当前看到的 bundle 找图层槽 0 的视频，再经 `playerFor` 按区间键取播放器，
+ *   不经纹理下标：重编译期间脚本还在用旧 bundle、这里已按新 bundle 重建下标表，区间键照样对得上。
  */
+import type { SceneBundle } from "../compile/bundle";
 import {
   VideoTexturePlayer,
   videoSourceKey,
@@ -24,6 +27,20 @@ export interface VideoSink {
   beginFrame(): void;
   /** 画到绑定这张纹理（bundle 纹理下标）的 draw 时调：记帧号、空闲中的恢复播放；有新帧就交出元素（交出即清标志）。 */
   drawn(texture: number): HTMLVideoElement | null;
+}
+
+/**
+ * 图层基础材质槽 0 的视频（P9b，WPE `getVideoTexture` 的判定：基础材质 `+0xd0` 是纹理槽 0、纹理标志带视频位，rea-p9-video 第 6 节）：
+ * `passes[0].textures[0]` 指向的 bundle 纹理带 `video` 时返回它，否则（没有这个图层、槽 0 不是 bundle 纹理、不是视频）undefined。
+ * 只看 bundle、不看播放器在不在：语料诊断与 `realmProbe` 没有播放器，也照样认得出视频图层。
+ */
+export function layerVideoSource(
+  bundle: Pick<SceneBundle, "layers" | "textures"> | null | undefined,
+  object: number,
+): SceneVideoSource | undefined {
+  const texture = bundle?.layers.find((layer) => layer.object === object)?.passes[0]?.textures[0];
+  // 手写的测试 bundle 可能没有纹理表
+  return texture === undefined ? undefined : bundle?.textures?.[texture]?.video;
 }
 
 /** dev 探针：一段视频的状态。 */
@@ -86,15 +103,27 @@ export class SceneVideos implements VideoSink {
     return this.byTexture.get(texture)?.drawn(this.frame, this.hostPaused) ?? null;
   }
 
-  /** 这个纹理下标的播放器（P9b 的 `getVideoTexture` 经它拿 `IVideoTexture` 的底层），没有时 null。 */
+  /** 这个纹理下标的播放器，没有时 null。下标随重编译变，脚本侧改用 `playerFor`；它只剩单测在用。 */
   player(texture: number): VideoTexturePlayer | null {
     return this.disposed ? null : (this.byTexture.get(texture) ?? null);
+  }
+
+  /** 这段视频（按区间键 `videoSourceKey`）的播放器，没有时 null：脚本 `IVideoTexture` 的落点（P9b）。 */
+  playerFor(source: SceneVideoSource): VideoTexturePlayer | null {
+    return this.disposed ? null : (this.players.get(videoSourceKey(source)) ?? null);
+  }
+
+  /** 「清空脚本存储」重启脚本：每个播放器的脚本状态恢复缺省（`VideoTexturePlayer.resetScriptState`）。 */
+  resetScriptState(): void {
+    if (this.disposed) return;
+    for (const player of this.players.values()) player.resetScriptState();
   }
 
   /** 宿主暂停或文档隐藏。 */
   setPaused(paused: boolean): void {
     if (this.disposed || paused === this.hostPaused) return;
     this.hostPaused = paused;
+    // 恢复时连失败的播放器也置真（之后 isPlaying 为真、仍没有帧）：WPE 对每个有播放器的纹理调 play()，探测失败的播放器同样置 `P+0x90`
     if (!paused) for (const player of this.players.values()) player.wantPlay = true;
     for (const player of this.players.values()) player.apply(this.frame, paused);
   }

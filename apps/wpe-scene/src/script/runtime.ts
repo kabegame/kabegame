@@ -26,6 +26,11 @@ export type ScriptValue = number[] | boolean | string;
  */
 export const RUNTIME_CALLBACKS = ["init", "update", "applyUserProperties", "destroy"] as const;
 type Callback = (typeof RUNTIME_CALLBACKS)[number];
+/**
+ * 宿主代为调用的回调类别（不是导出回调）：`timer` 是 `engine.setTimeout` / `setInterval`，`ended` 是视频纹理的结束回调（P9b，
+ * `callFor`）。出错只记诊断、不禁用所属脚本的任何导出回调；统计照常记在 `calls[类别]` 下。
+ */
+type HostCallback = "timer" | "ended";
 interface ScriptRecord {
   script: SceneScript;
   exports: Record<string, unknown> | null;
@@ -137,7 +142,7 @@ export class ScriptRuntime {
       }));
   }
 
-  private invoke(record: ScriptRecord, callback: Callback | "timer", fn: () => unknown): unknown {
+  private invoke(record: ScriptRecord, callback: Callback | HostCallback, fn: () => unknown): unknown {
     if (this.halted) return undefined;
     const previous = this.active;
     this.active = record;
@@ -148,7 +153,7 @@ export class ScriptRuntime {
     try {
       result = fn();
     } catch (error) {
-      if (callback !== "timer") record.disabled.add(callback);
+      if (callback !== "timer" && callback !== "ended") record.disabled.add(callback);
       record.errors.push(`${callback}: ${messageOf(error)}`);
       this.options.report.warn(`场景脚本 ${record.script.id} ${callback} 出错：${messageOf(error)}`);
     } finally {
@@ -321,6 +326,17 @@ export class ScriptRuntime {
       if (typeof record.exports?.applyUserProperties === "function")
         this.call(record, "applyUserProperties", this.realm.internal.convertUserProperties(json));
     }
+  }
+
+  /**
+   * 以某段脚本的身份调用宿主登记的回调（P9b：视频纹理的结束回调，WPE `addEndedCallback`）：进入那段脚本的上下文（`thisLayer` /
+   * `thisObject` 是它的），计时、出错记进它的诊断（类别 `ended`），不禁用任何回调，同计时器。记录不在（脚本表已换、`owner` 不认识）
+   * 或运行时已停止时不调。
+   */
+  callFor(owner: string, fn: () => unknown): void {
+    const record = this.byId.get(owner);
+    if (!record || this.halted) return;
+    this.invoke(record, "ended", fn);
   }
 
   setTimeout(callback: () => void, ms: number, owner = this.active?.script.id): () => void {

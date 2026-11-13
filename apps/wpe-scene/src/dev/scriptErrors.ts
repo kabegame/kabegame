@@ -33,8 +33,8 @@ const API_ROOTS = new Set([
   "shared",
 ]);
 
-/** 回调前缀（`runtime` 记录错误时加上的）与尾部的 `(line L, col C)`。 */
-const CALLBACK_PREFIX = /^(?:eval|init|update|applyUserProperties|destroy|timer):\s*/;
+/** 回调前缀（`runtime` 记录错误时加上的，`ended` 是视频纹理的结束回调，P9b）与尾部的 `(line L, col C)`。 */
+const CALLBACK_PREFIX = /^(?:eval|init|update|applyUserProperties|destroy|timer|ended):\s*/;
 const SOURCE_POSITION = /\s*\(line \d+, col \d+\)\s*$/;
 
 /** 把一条脚本报错按根因归类。 */

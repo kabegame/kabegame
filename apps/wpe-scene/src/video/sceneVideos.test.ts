@@ -4,8 +4,9 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flush, videoEnv } from "./fakeVideo";
+import type { SceneBundle } from "../compile/bundle";
 import type { SceneVideoSource } from "./player";
-import { SceneVideos } from "./sceneVideos";
+import { layerVideoSource, SceneVideos } from "./sceneVideos";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => `file:///${path}` }));
 
@@ -292,5 +293,77 @@ describe("SceneVideos", () => {
     expect(env.videos.drawn(0)).toBeNull();
     expect(env.elements).toHaveLength(2);
     expect(env.videos.probe()).toEqual([]);
+  });
+});
+
+describe("脚本侧的查找（P9b）", () => {
+  it("playerFor：按区间键取播放器（新对象同值也认，duration 不进键），下标换了也是同一个；没有这段、释放后为 null", async () => {
+    const env = setup();
+    env.videos.load([{ video: a }, { video: b }]);
+    await flush();
+    const first = env.videos.player(0)!;
+    expect(env.videos.playerFor(a)).toBe(first);
+    expect(env.videos.playerFor({ ...a, duration: 2.517 })).toBe(first);
+    expect(env.videos.playerFor(b)).toBe(env.videos.player(1));
+    expect(env.videos.playerFor({ ...a, end: 165 })).toBeNull();
+    // 重编译换了下标：按区间照样取到同一个，按旧下标取到的已经是别的
+    env.videos.load([{ video: b }, { video: { ...a } }]);
+    expect(env.videos.playerFor(a)).toBe(first);
+    expect(env.videos.player(0)).not.toBe(first);
+    env.videos.load([{ video: b }]);
+    expect(env.videos.playerFor(a)).toBeNull();
+    env.videos.dispose();
+    expect(env.videos.playerFor(b)).toBeNull();
+  });
+
+  it("宿主恢复时连失败的播放器也置 wantPlay（isPlaying 为真、仍不交帧），同 WPE 对每个有播放器的纹理调 play()", async () => {
+    const env = setup();
+    env.videos.load([{ video: a }]);
+    await flush();
+    const player = env.videos.player(0)!;
+    env.elements[0].fail();
+    expect(player.isPlaying()).toBe(false);
+    env.videos.setPaused(true);
+    env.videos.setPaused(false);
+    expect(player.wantPlay).toBe(true);
+    expect(player.isPlaying()).toBe(true);
+    env.elements[0].fire("seeked");
+    env.videos.beginFrame();
+    expect(env.videos.drawn(0)).toBeNull();
+  });
+
+  it("resetScriptState：每个播放器恢复脚本缺省状态；释放后什么都不做", async () => {
+    const env = setup();
+    env.videos.load([{ video: a }, { video: b }]);
+    await flush();
+    const [first, second] = [env.videos.player(0)!, env.videos.player(1)!];
+    first.pause();
+    second.rate = 3;
+    second.loop = false;
+    env.videos.resetScriptState();
+    expect([first.wantPlay, second.rate, second.loop]).toEqual([true, 1, true]);
+    env.videos.dispose();
+    expect(() => env.videos.resetScriptState()).not.toThrow();
+  });
+
+  it("layerVideoSource：只认图层 passes[0] 槽 0 指向的视频纹理", () => {
+    const pass = (textures: Record<number, number>) => ({ textures });
+    const bundle = {
+      layers: [
+        { object: 0, passes: [pass({ 0: 1 })] },
+        { object: 1, passes: [pass({ 0: 0 })] },
+        { object: 2, passes: [pass({ 1: 1 })] },
+        { object: 3, passes: [pass({}), pass({ 0: 1 })] },
+        { object: 4, passes: [] },
+        { object: 5, passes: [pass({ 0: 9 })] },
+      ],
+      textures: [{ path: "materials/still.tex" }, { path: "materials/clip.tex", video: a }],
+    } as unknown as SceneBundle;
+    expect(layerVideoSource(bundle, 0)).toBe(a);
+    // 槽 0 是普通纹理、视频只在槽 1、只在第二个 pass、没有 pass、下标越界、没有这个图层
+    for (const object of [1, 2, 3, 4, 5, 7]) expect(layerVideoSource(bundle, object), String(object)).toBeUndefined();
+    expect(layerVideoSource(null, 0)).toBeUndefined();
+    // 手写的 bundle 没有纹理表
+    expect(layerVideoSource({ layers: bundle.layers } as unknown as SceneBundle, 0)).toBeUndefined();
   });
 });

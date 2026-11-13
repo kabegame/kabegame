@@ -11,10 +11,12 @@
  *   GpuScene 画到这张纹理时才拷，对应 WPE「绑定纹理时有新帧才 `TransferVideoFrame`」（rea 第 2 节）。
  * - **该不该在放**：`wantPlay && !宿主暂停 && !失败 && 帧号 ≤ lastDrawn + 30`，对应 WPE 工作线程的「应当在放」
  *   `P+0x90 && P+0x60 + 30 ≥ 帧号`（rea 第 4 节）；只在结论变化时调 `play()` / `pause()`，不追赶时间。
- * - **失败**：读不到、长度不符、元素 `error`：标为失败、不再交出元素（纹理保持全 0，图层透明，同 WPE，rea 第 7、8 节），记一条 warn。
- *   WPE 自己不写日志，我们多记一条便于排查。
- * - **留给 P9b**：`rate`、`loop`、`currentTime`、`duration`、`play` / `pause` / `stop`、`isPlaying`、结束回调，语义照 rea 第 6 节与
- *   p9-REPORT「脚本 API」实测；这一步不接脚本。
+ * - **失败**：读不到、长度不符、元素 `error`：标为失败、不再交出元素（纹理保持全 0，图层透明，同 WPE，rea 第 7、8 节），记一条 warn，
+ *   并清掉 `wantPlay`（WPE 探测失败不置「想放」、播放出错清掉它）。WPE 自己不写日志，我们多记一条便于排查。
+ * - **脚本接口**（P9b）：`rate`、`loop`、`currentTime`、`duration`、`play` / `pause` / `stop`、`isPlaying`、结束回调是脚本
+ *   `IVideoTexture`（`script/api.ts`）的落点，宿主按视频区间从 `SceneVideos.playerFor` 现取。分工：这里管语义（WPE 的 P，rea 第 6 节、
+ *   p9-REPORT「脚本 API」与「P9b 步骤 0 的补测」）——时长取容器时长、结束时报容器时长、脚本暂停 / 停止期间不交帧、失败后 `play()`
+ *   仍置「想放」；包装对象管 WPE 脚本层的取值（`rate` / `loop` 字段、float32、`loop` 读出数字、参数转换、结束回调进脚本上下文）。
  */
 import { fileToUrl } from "../fileUrl";
 
@@ -103,7 +105,7 @@ function isAbort(error: unknown): boolean {
 }
 
 export class VideoTexturePlayer {
-  /** 想放（WPE 的 `P+0x90`）：缺省为真；P9b 的 play / pause / stop、宿主恢复与 loop 为假时的结束改它。 */
+  /** 想放（WPE 的 `P+0x90`）：缺省为真；脚本的 play / pause / stop、宿主恢复、loop 为假时的结束与失败改它。 */
   wantPlay = true;
   /** 最近一次被画到的渲染帧号（WPE 的 `P+0x60`）。建好时取当前帧号：一开始就不可见的图层也先播 30 帧（WPE `SetTarget` 时写）。 */
   lastDrawn: number;
@@ -198,7 +200,9 @@ export class VideoTexturePlayer {
     if (this.disposed) return null;
     this.lastDrawn = frame;
     this.apply(frame, hostPaused);
-    if (!this.fresh || this.failed) return null;
+    // 脚本暂停 / 停止期间不取帧：seek 读回会变、画面不变，到 play() 之后第一次画到才换（P9b 步骤 0，WPE 的 pause 结束并 join 工作线程，
+    // 不再 `TransferVideoFrame`）；标志留着。空闲暂停与宿主暂停时 wantPlay 仍为真，照常交帧，同 WPE 工作线程照常取帧
+    if (!this.fresh || this.failed || !this.wantPlay) return null;
     this.fresh = false;
     return this.element;
   }
@@ -238,7 +242,7 @@ export class VideoTexturePlayer {
     return new Promise((resolve) => this.firstFrameWaiters.push(resolve));
   }
 
-  // —— 留给 P9b 的脚本接口（`IVideoTexture`，rea 第 6 节）——
+  // —— 脚本接口（`IVideoTexture` 的落点，P9b；rea 第 6 节）——
 
   /** 播放速率。写入同时转给 `defaultPlaybackRate` 与 `playbackRate`（WPE 同时调 `SetDefaultPlaybackRate` 与 `SetPlaybackRate`；
    *  设 src 时的加载算法会把 `playbackRate` 重置成 `defaultPlaybackRate`，只写一个会丢）。 */
@@ -276,23 +280,33 @@ export class VideoTexturePlayer {
   }
 
   get currentTime(): number {
-    return this.element.currentTime;
+    const element = this.element;
+    // 结束时 Chromium 停在它自己的时长（各轨编辑之后），WPE 停在容器时长，读回正好等于 `duration`（P9b 步骤 0）：脚本拿它和
+    // `duration` 比，所以报容器时长
+    if (element.ended && this.source.duration !== undefined) return this.source.duration;
+    return element.currentTime;
   }
 
-  /** 钳到 `[0, max(0, duration − 0.005)]`，duration 未知时只钳下界（p9-REPORT「脚本 API」实测）。 */
+  /**
+   * 钳到 `[0, max(0, duration − 0.005)]`，上界按容器时长（`this.duration`），元素自己再按它的时长钳；duration 不是有限数时只钳下界
+   * （p9-REPORT「脚本 API」实测）。
+   */
   set currentTime(value: number) {
     if (this.disposed) return;
     let time = value > 0 ? value : 0;
-    const duration = this.element.duration;
+    const duration = this.duration;
     if (Number.isFinite(duration)) time = Math.min(time, Math.max(0, duration - SEEK_END_MARGIN));
     // WPE 的 setCurrentTime：loop 下清 `V+0xf4`，自己造成的回退不当成绕回
     if (this.loopValue) this.armed = false;
     this.element.currentTime = time;
   }
 
-  /** 元数据之前为 NaN。注意 Chromium 按流算（2.516667），WPE 是容器时长（2.517），P9b 定取法。 */
+  /**
+   * 容器时长（WPE 的 `GetDuration`，编译期读的 `source.duration`，P9b 点 1），读不出时退回元素的（元数据之前 NaN）。Chromium 按各轨
+   * 编辑之后算（2.516667、9.983333），WPE 是容器时长（2.517、10.005333）。
+   */
   get duration(): number {
-    return this.element.duration;
+    return this.source.duration ?? this.element.duration;
   }
 
   /** WPE：`if (isEnded) setCurrentTime(0); play()`。只改意图，元素由 `apply` 的结论去放（同 WPE 由工作线程去 Play）。 */
@@ -317,9 +331,29 @@ export class VideoTexturePlayer {
     this.currentTime = 0;
   }
 
-  /** `wantPlay && !失败 && !已结束`：空闲暂停与宿主暂停期间仍为真，同 WPE（`P+0x90` 不变，rea 第 4 节）。 */
+  /**
+   * `wantPlay && !已结束`（WPE：`P+0x90 && !IsEnded`）：空闲暂停与宿主暂停期间仍为真，同 WPE（`P+0x90` 不变，rea 第 4 节）。
+   * 不看 `failed`：失败时 `fail` 清掉 wantPlay，之后脚本 `play()` 照常置真、isPlaying 为真但没有帧（WPE 探测失败同样如此，rea 第 7 节）。
+   */
   isPlaying(): boolean {
-    return !this.disposed && this.wantPlay && !this.failed && !this.element.ended;
+    return !this.disposed && this.wantPlay && !this.element.ended;
+  }
+
+  /**
+   * 「清空脚本存储」重启脚本时（宿主 `restartScriptsWithClearedStorage`，经 `SceneVideos.resetScriptState`）：脚本改过的状态恢复成
+   * 建好时的样子——结束回调清空（旧脚本已停止、回调不会再调，留着只会拖住旧的脚本环境，重启一次多一批）、`loop` 真、`rate` 1、想放
+   * （失败的除外，同 `fail`），结束判定重新装上。新脚本拿到的 `IVideoTexture` 字段是缺省值，这样两边一致。不 seek、不重读，
+   * 视频从当前位置接着放（同重编译不打断，P9a 决定 2）。WPE 没有这个操作，是我们自己的。
+   */
+  resetScriptState(): void {
+    if (this.disposed) return;
+    this.endedCallbacks.length = 0;
+    this.loop = true;
+    this.rate = 1;
+    this.lastTime = 0;
+    this.armed = true;
+    this.wantPlay = !this.failed;
+    this.sync();
   }
 
   /** WPE 的 `addEndedCallback`：不去重，没有删除接口；回调不带参数。 */
@@ -408,6 +442,9 @@ export class VideoTexturePlayer {
     if (this.failed || this.disposed) return;
     this.failed = true;
     this.fresh = false;
+    // WPE 探测失败不置「想放」（`Open` 里的 play() 在成功分支）、播放出错先清 `P+0x90`（rea 第 7 节）；之后脚本 play() 照常置真。
+    // 宿主恢复（`SceneVideos.setPaused(false)`）也会把它置真，同 WPE 对每个有播放器的纹理调 play()
+    this.wantPlay = false;
     this.report.warn(
       `${message}，图层保持透明：${this.source.path} [${this.source.start}, ${this.source.end})`,
       detail,

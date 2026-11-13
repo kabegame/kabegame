@@ -13,6 +13,8 @@ import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
+import type { VideoTexturePlayer } from "../video/player";
+import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
 import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
 import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
@@ -78,7 +80,18 @@ export interface ScriptApiState {
    * 不传或返回 null（没有播放器、场景已退回）时方法什么都不做，`isPlaying` 为假。
    */
   sound?(object: number): SoundScriptTarget | null;
+  /**
+   * 视频纹理的播放器（P9b，宿主按图层槽 0 视频的区间从 `SceneVideos` 现取）：`IVideoTexture` 的方法接到它上面。
+   * 不传或返回 null（语料诊断、播放器已释放）时方法空操作，`duration` 退回 bundle 里的容器时长。
+   */
+  video?(object: number): VideoScriptTarget | null;
 }
+
+/** `IVideoTexture` 的落点（P9b，`VideoTexturePlayer` 满足它）。 */
+export type VideoScriptTarget = Pick<
+  VideoTexturePlayer,
+  "rate" | "loop" | "currentTime" | "duration" | "play" | "pause" | "stop" | "isPlaying" | "addEndedCallback"
+>;
 
 /** 声音层脚本方法的落点（`audio/scheduler.ts` 的 `SoundScheduler` 满足它）：WPE `ISoundLayer` 的四个方法。 */
 export interface SoundScriptTarget {
@@ -100,8 +113,10 @@ export class ScriptApi {
   private evaluating = false;
   private properties: ReadonlyMap<string, UserProperty> = new Map();
   private convertedProperties: Record<string, unknown> | null = null;
-  private runtime: Pick<ScriptRuntime, "setTimeout" | "setInterval" | "clearTimeout"> | null = null;
+  private runtime: Pick<ScriptRuntime, "setTimeout" | "setInterval" | "clearTimeout" | "callFor"> | null = null;
   private readonly layers = new Map<number, ApiObject>();
+  /** 图层的 `IVideoTexture`（P9b）：每个图层建一次，之后 `getVideoTexture()` 返回同一个对象（WPE 的 `L+0x4c0`）。 */
+  private readonly videoTextures = new Map<number, ApiObject>();
   private readonly materials = new Map<string, ApiObject>();
   private readonly effects = new Map<string, ApiObject>();
   private readonly recompileValues = new Map<string, string>();
@@ -139,7 +154,7 @@ export class ScriptApi {
     this.define(this.realm.global, "thisObject", () => this.owner());
   }
 
-  attachRuntime(runtime: Pick<ScriptRuntime, "setTimeout" | "setInterval" | "clearTimeout">): void {
+  attachRuntime(runtime: Pick<ScriptRuntime, "setTimeout" | "setInterval" | "clearTimeout" | "callFor">): void {
     this.runtime = runtime;
   }
   enterScript(script: SceneScript | null): void {
@@ -221,6 +236,8 @@ export class ScriptApi {
     }
     if (this.isSoundLayer(index)) this.installSound(api, index);
     if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);
+    // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
+    this.method(api, "getVideoTexture", () => this.videoTexture(index));
     this.layers.set(object, api);
     return api;
   }
@@ -270,6 +287,84 @@ export class ScriptApi {
       () => this.access.state().sounds.get(object)?.volume,
       (value) => this.write({ kind: "sound", object, field: "volume" }, value, "float"),
     );
+  }
+
+  /**
+   * 图层的 `IVideoTexture`（P9b，rea-p9-video 第 6 节，类型与顺序照 p9-REPORT「P9b 步骤 0 的补测」）。基础材质槽 0 是视频纹理时
+   * 第一次调用建包装对象并缓存，之后返回同一个；不是视频图层时返回 null、不缓存（「是不是视频」只看 bundle，`layerVideoSource`）。
+   * 包装对象不持有播放器：每次调用经 `access.video` 按区间现取，没有落点（语料诊断、播放器已释放）时方法空操作。
+   * 自有属性按 WPE 的 `Object.keys` 顺序逐个定义，都可枚举：
+   * - `duration`：只读访问器（严格模式下写入抛 TypeError），落点时长的 float32；没有落点时取 bundle 里的容器时长，再没有 0。
+   * - `loop` / `rate`：包装对象自己的字段（WPE 的 `V+0xec` / `V+0xe8`），读只返回字段、不问播放器；写入转换后存字段并转给落点。
+   *   `loop` 读出数字 1 / 0（实测，和 WPE 自带的 `.d.ts` 不同），`rate` 是 float32、写入不是有限数时不写。
+   * - `addEndedCallback`：登记时记下当前脚本，触发时经运行时 `callFor` 进入那段脚本的上下文、不带参数调用。
+   * - `getAnimation`：返回 undefined（WPE 有这个成员）。
+   */
+  private videoTexture(object: number): ApiObject | null {
+    if (!layerVideoSource(this.access.bundle(), object)) return null;
+    let api = this.videoTextures.get(object);
+    if (api) return api;
+    api = this.object();
+    const target = () => this.access.video?.(object) ?? null;
+    let loop = true;
+    let rate = 1;
+    this.define(api, "duration", () => {
+      const player = target();
+      return Math.fround(player ? player.duration : (layerVideoSource(this.access.bundle(), object)?.duration ?? 0));
+    });
+    this.define(
+      api,
+      "loop",
+      () => (loop ? 1 : 0),
+      (value) => {
+        loop = Boolean(value);
+        const player = target();
+        if (player) player.loop = loop;
+      },
+    );
+    this.define(
+      api,
+      "rate",
+      () => rate,
+      (value) => {
+        const next = Math.fround(Number(value));
+        if (!Number.isFinite(next)) return;
+        rate = next;
+        // 负数、超出 Chromium 范围由播放器处理（钳到 0 / 保持原速率）；字段照存，同 WPE 读只返回字段
+        const player = target();
+        if (player) player.rate = next;
+      },
+    );
+    this.method(api, "addEndedCallback", (callback: unknown) => {
+      if (typeof callback !== "function") throw new TypeError("addEndedCallback 需要回调函数");
+      // 登记到当时取得的落点上（播放器跨重编译按区间复用，登记过的回调跟着它走）；没有落点时没有东西会结束，不登记。
+      // 回调经运行时调用：进入登记它的那段脚本的上下文、计时，出错只记诊断、不禁用，同计时器
+      const owner = this.current?.id;
+      const player = target();
+      if (!player || owner === undefined) return;
+      player.addEndedCallback(() => this.runtime?.callFor(owner, () => (callback as () => unknown)()));
+    });
+    this.method(api, "play", () => {
+      target()?.play();
+    });
+    this.method(api, "setCurrentTime", (time: unknown) => {
+      const player = target();
+      if (player) player.currentTime = Number(time);
+    });
+    this.method(api, "isPlaying", () => target()?.isPlaying() ?? false);
+    this.method(api, "stop", () => {
+      target()?.stop();
+    });
+    this.method(api, "pause", () => {
+      target()?.pause();
+    });
+    this.method(api, "getCurrentTime", () => {
+      const player = target();
+      return player ? Math.fround(player.currentTime) : 0;
+    });
+    this.method(api, "getAnimation", () => undefined);
+    this.videoTextures.set(object, api);
+    return api;
   }
 
   private object(): ApiObject {

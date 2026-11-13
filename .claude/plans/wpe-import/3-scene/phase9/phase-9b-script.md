@@ -373,3 +373,29 @@ export type VideoScriptTarget = Pick<
   - 区间不加 mip 偏移。
 
 我改了子代理的一处：它让 `decode` 为假时也读时长，理由是「纹理描述和能渲染时一致」。可那时场景已确定退回、不渲染、脚本不跑，没有人用时长，和编译的快速路径相反，改成只在要解码时读。
+
+### 步骤 2 — `IVideoTexture`（2026-11-13）
+
+工作树挪到 `3552dba5` 后，子代理实现点 2–4，我复核并补了两处。
+- **播放器**（`video/player.ts`）：
+  - 时长取容器时长、结束时报容器时长、写入上界按容器时长；
+  - 不想放时不交帧（标志留到 `play()` 之后）；
+  - `isPlaying` 不看 `failed`、`fail` 清 `wantPlay`。
+- **包装对象**（`script/api.ts`）：
+  - 每个图层都有 `getVideoTexture`，「是不是视频图层」用 `layerVideoSource` 只看 bundle；
+  - 成员按 WPE 的顺序，类型照实测；
+  - 结束回调登记在当时取到的播放器上，经 `ScriptRuntime.callFor`（新类别 `ended`，出错不禁用）进入登记它的脚本的上下文。没有播放器（语料诊断）或没有当前脚本时不登记。
+- **宿主**：
+  - `video` 落点：按 `this.scriptBundle` 找视频源，再经 `SceneVideos.playerFor` 按区间键取；
+  - `dev/scriptErrors.ts` 的回调前缀加上 `ended`，dev 语料按根因归类时不算成 other。
+- **我补的一处**：「清空脚本存储」重启脚本时，播放器原样保留，上一轮脚本设的 `loop`、`rate`、暂停和结束回调也都还在。新脚本拿到的包装对象却是缺省值，两边对不上，旧回调还拖住旧的脚本环境。
+  - 加了 `VideoTexturePlayer.resetScriptState` / `SceneVideos.resetScriptState`：清回调、`loop` 真、`rate` 1、想放、判定重装，不 seek；
+  - 宿主在 `restartScriptsWithClearedStorage` 里调。
+- **复核**：
+  - 13 个文件（12 改 1 新增），没有越界；tsc 0 error；Prettier 通过；
+  - 全量 vitest 2698 个只挂基线那一条（3830255100 的 219 次请求）。
+- **变异检查**：子代理 10 个全抓到。我另做 11 个（`ignore/p9/p9b/step2/mutate.py`）抓到 10 个，漏的是「宿主按新 bundle 而不是脚本在用的 bundle 找视频」。原因是宿主测试里那个图层在新旧 bundle 里指向同一段视频。补了一个「重编译让图层换了视频」的用例之后抓到。
+- **挪到 `ef452f49`**：P8 步骤 3 在 `layer()` 同一位置加了 `alignment`，两边都留；其余文件不重叠。挪完 tsc、全量 vitest 结果同上。
+  - 提交前又挪到 `905b4a78`（P6b 1e-2 改了 `host.ts`），没有冲突；tsc 0 error，全量 vitest 2767 个只挂基线那一条。再挪到 `2edac843`（P11 在
+    `host.ts` 加了两行注释），没有冲突；tsc 0 error，视频 / 脚本 / 宿主的测试 238 个全过。
+- **留给步骤 3 的提醒**：这 6 张场景已经不报 `script:api:layer.getVideoTexture`，但都还报 `script:api:particle.play` / `pause` / `stop`。原因是有粒子层的场景里，这几个名字不论接收者都按 `PARTICLE_LAYER_METHODS` 报，视频包装对象上的调用也算进去了。要等 P4f 实现粒子层的这几个方法后才消失；P9b 不改这张表。

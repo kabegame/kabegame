@@ -281,6 +281,50 @@ describe("脚本运行时（FakeRealm）", () => {
     expect(h.logs.some((line) => line.includes("boom (line 3, col 7)"))).toBe(true);
   });
 
+  it("callFor（P9b 视频结束回调）：进入那段脚本的上下文并恢复；出错只记诊断不禁用；不认识的脚本、停止之后不调", async () => {
+    const h = harness();
+    let updates = 0;
+    h.realm.modules.set("one", {
+      update: () => {
+        updates++;
+        // 嵌在别的脚本里调用时，结束后回到外层脚本
+        h.runtime.callFor("two", () => seen.push(`nested:${h.runtime.currentScript?.id}`));
+        seen.push(`after:${h.runtime.currentScript?.id}`);
+      },
+    });
+    const seen: string[] = [];
+    await h.runtime.load({ list: [script("one"), script("two")] });
+    h.contexts.length = 0;
+    h.runtime.callFor("two", () => seen.push(`call:${h.runtime.currentScript?.id}`));
+    expect(seen).toEqual(["call:two"]);
+    expect(h.contexts).toEqual(["two", null]);
+    expect(h.runtime.currentScript).toBeNull();
+    h.runtime.callFor("one", () => {
+      throw { message: "boom", stack: "at blob:file:///scene:4:2" };
+    });
+    h.runtime.callFor("one", () => seen.push("again"));
+    h.runtime.frame(0.1);
+    h.runtime.frame(0.1);
+    expect(updates).toBe(2);
+    expect(seen).toEqual(["call:two", "again", "nested:two", "after:one", "nested:two", "after:one"]);
+    const diagnostics = h.runtime.diagnostics as {
+      id: string;
+      disabled: string[];
+      errors: string[];
+      calls: Record<string, { count: number }>;
+    }[];
+    const one = diagnostics.find((item) => item.id === "one")!;
+    expect(one.disabled).toEqual([]);
+    expect(one.errors).toEqual(["ended: boom (line 4, col 2)"]);
+    expect(one.calls.ended.count).toBe(2);
+    expect(diagnostics.find((item) => item.id === "two")!.calls.ended.count).toBe(3);
+    expect(h.logs).toContain("warn:场景脚本 one ended 出错：boom (line 4, col 2)");
+    h.runtime.callFor("missing", () => seen.push("missing"));
+    h.runtime.destroy();
+    h.runtime.callFor("two", () => seen.push("halted"));
+    expect(seen).toHaveLength(6);
+  });
+
   it("15 秒边界只通过注入时钟测，超限回调返回值仍写回然后全停", async () => {
     const h = harness();
     let elapsed = 14_999;

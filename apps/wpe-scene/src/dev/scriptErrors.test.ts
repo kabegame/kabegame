@@ -36,6 +36,10 @@ describe("脚本报错归类（P3b 步骤 6 的报错文本）", () => {
       kind: "consequential",
       name: "x",
     });
+    expect(classifyScriptError("ended: thisLayer.getParent is not a function (line 3, col 1)")).toEqual({
+      kind: "api",
+      name: "thisLayer.getParent",
+    });
   });
 
   it("其它全局未定义不冒充缺失 API", () => {
