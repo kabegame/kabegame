@@ -14,15 +14,53 @@ export function identity(): Mat4 {
   return m;
 }
 
-/** `a * b`（先作用 b，再作用 a）。 */
+const f = Math.fround;
+
+/**
+ * `a * b`（先作用 b，再作用 a）。照 WPE 的 glm 乘法（`FUN_14005ecb0`，rea-matrix-order 1.1）：k 从 0 到 3 依次相加，
+ * 每个乘积、每次加法都舍入成 f32，没有 FMA、没有 double 中间值。
+ */
 export function multiply(a: Mat4, b: Mat4): Mat4 {
   const out = new Float32Array(16);
   for (let c = 0; c < 4; c++)
     for (let r = 0; r < 4; r++) {
-      let sum = 0;
-      for (let k = 0; k < 4; k++) sum += a[k * 4 + r] * b[c * 4 + k];
-      out[c * 4 + r] = sum;
+      let s = f(a[r] * b[c * 4]); // 第一项直接取乘积（保留 −0，同 WPE）
+      s = f(s + f(a[4 + r] * b[c * 4 + 1]));
+      s = f(s + f(a[8 + r] * b[c * 4 + 2]));
+      s = f(s + f(a[12 + r] * b[c * 4 + 3]));
+      out[c * 4 + r] = s;
     }
+  return out;
+}
+
+/**
+ * WPE 算 VP、MVP 的仿射乘法（`FUN_1400d4200`，`FUN_1401e8aa0` 内联同样写法；rea-matrix-order 2.1）：`a · b`，但 b 的第 3 行
+ * （内存 3、7、11、15）不读、当作 (0, 0, 0, 1)。每列 c < 3：k = 2 → 1 → 0；平移列：k = 2 → a 的平移列 → 1 → 0。逐步 f32。
+ * VP = `mulAffine(P, V)`，MVP = `mulAffine(VP, M)`。
+ */
+export function mulAffine(a: Mat4, b: Mat4): Mat4 {
+  const out = new Float32Array(16);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 3; c++)
+      out[c * 4 + r] = f(f(f(b[c * 4 + 2] * a[8 + r]) + f(b[c * 4 + 1] * a[4 + r])) + f(b[c * 4] * a[r]));
+    out[12 + r] = f(f(f(f(b[14] * a[8 + r]) + a[12 + r]) + f(b[13] * a[4 + r])) + f(b[12] * a[r]));
+  }
+  return out;
+}
+
+/** glm::translate 的内联（zoom、视差、字形平移、画进合成 RT 的平移；rea-matrix-order 1.3）：`m · T(t)`，只改平移列，`((m0·x + m4·y) + m8·z) + m12`。 */
+export function translateGlm(m: Mat4, t: readonly number[]): Mat4 {
+  const out = Float32Array.from(m);
+  const [x = 0, y = 0, z = 0] = t;
+  for (let r = 0; r < 4; r++) out[12 + r] = f(f(f(f(m[r] * x) + f(m[4 + r] * y)) + f(m[8 + r] * z)) + m[12 + r]);
+  return out;
+}
+
+/** 图像 / 文本层世界矩阵虚函数 +0x80 的对齐偏移（`FUN_1401fd3f0`、`FUN_140256e10`；rea-matrix-order 3.3）：`W · T(a)`，只改平移列的 x、y、z，`((a.x·W0 + W12) + a.y·W4) + a.z·W8`，W15 不动。 */
+export function alignOffset(w: Mat4, a: readonly number[]): Mat4 {
+  const out = Float32Array.from(w);
+  const [x = 0, y = 0, z = 0] = a;
+  for (let r = 0; r < 3; r++) out[12 + r] = f(f(f(f(x * w[r]) + w[12 + r]) + f(y * w[4 + r])) + f(z * w[8 + r]));
   return out;
 }
 
@@ -81,6 +119,9 @@ export function rotationZ(radians: number): Mat4 {
 /**
  * 正交投影（右手系、看向 −z，同 glm `orthoRH_ZO`）：x ∈ [left, right] → [−1, 1]，y ∈ [bottom, top] → [−1, 1]，
  * 视空间 z ∈ [−far, −near] → 深度 [0, 1]。
+ *
+ * 不逐步 `fround`：参数是整数或 f32 时，double 算完再舍入和 WPE 的 f32 `divss` 逐位相同（两个 f32 做除法，double 再 `fround` 是正确舍入，
+ * rea-matrix-order 0）。
  */
 export function orthographic(left: number, right: number, bottom: number, top: number, near: number, far: number) {
   const m = new Float32Array(16);

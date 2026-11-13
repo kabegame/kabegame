@@ -11,6 +11,7 @@ import { FrameThrottle, PausableClock } from "./clock";
 import { reasonsOf, SceneRenderError } from "./errors";
 import {
   canvasSize,
+  fullscreenTriangle,
   layerLocalMatrix,
   layerQuad,
   scenePlacement,
@@ -123,13 +124,44 @@ describe("场景几何", () => {
     ]);
     expect(textureUvExtent(undefined)).toEqual([1, 1]);
   });
-  it("四边形：三角形带顺序，顶边 v = 0", () => {
+  it("四边形：三角形带顺序（左上、左下、右上、右下），顶边 v = 0", () => {
     expect(layerQuad([200, 100], [0.75, 0.5])).toEqual([
-      { position: [-100, -50, 0], texCoord: [0, 0.5] },
-      { position: [100, -50, 0], texCoord: [0.75, 0.5] },
       { position: [-100, 50, 0], texCoord: [0, 0] },
+      { position: [-100, -50, 0], texCoord: [0, 0.5] },
       { position: [100, 50, 0], texCoord: [0.75, 0] },
+      { position: [100, -50, 0], texCoord: [0.75, 0.5] },
     ]);
+  });
+  it("fullscreenTriangle：泛光链的全屏三角形覆盖 NDC [−1, 1]²，UV 在角上是 (0, 0)、(1, 1)", () => {
+    const triangle = fullscreenTriangle();
+    expect(triangle.map((vertex) => vertex.position)).toEqual([
+      [-1, 1, 0],
+      [-1, -3, 0],
+      [3, 1, 0],
+    ]);
+    expect(triangle.map((vertex) => vertex.texCoord)).toEqual([
+      [0, 0],
+      [0, 2],
+      [2, 0],
+    ]);
+    // 三角形的边 (−1,−3)–(3,1) 是 x + (−y) = 2 的线，正方形右下角 (1, −1) 恰好在它上面，所以整个正方形都在三角形里
+    const [a, b, c] = triangle.map((vertex) => vertex.position);
+    const inside = (x: number, y: number): boolean => {
+      const edge = (p: number[], q: number[]) => (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0]);
+      return edge(a, b) >= 0 && edge(b, c) >= 0 && edge(c, a) >= 0;
+    };
+    for (const [x, y] of [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ])
+      expect(inside(x, y)).toBe(true);
+    // UV 是位置的线性函数：u = (x + 1) / 2，v = (1 − y) / 2，角上落在 (0, 0) 与 (1, 1)
+    const uv = (x: number, y: number) => [(x + 1) / 2, (1 - y) / 2];
+    expect(uv(-1, 1)).toEqual([0, 0]);
+    expect(uv(1, -1)).toEqual([1, 1]);
+    for (const vertex of triangle) expect(uv(vertex.position[0], vertex.position[1])).toEqual(vertex.texCoord);
   });
   it("eagleflag 的旗帜盖满 2200×1080 场景（相机 eye 不平移画面）", () => {
     const general = { width: 2200, height: 1080 };
@@ -138,12 +170,12 @@ describe("场景几何", () => {
     const e = Math.fround(0.15) / 128;
     const inset = layerQuad([200, 100], [0.75, 0.5], [e, e]).map((vertex) => vertex.texCoord);
     expect(inset).toEqual([
-      [e, Math.fround(0.5 - e)],
-      [Math.fround(0.75 - e), Math.fround(0.5 - e)],
       [e, e],
+      [e, Math.fround(0.5 - e)],
       [Math.fround(0.75 - e), e],
+      [Math.fround(0.75 - e), Math.fround(0.5 - e)],
     ]);
-    const [bl, , , tr] = layerQuad([2048, 1024], [1, 1]).map((v) => ndc(mvp, ...v.position));
+    const [, bl, tr] = layerQuad([2048, 1024], [1, 1]).map((v) => ndc(mvp, ...v.position));
     expect(bl[0]).toBeLessThan(-1);
     expect(bl[1]).toBeLessThan(-1);
     expect(tr[0]).toBeGreaterThan(1);
@@ -663,8 +695,8 @@ describe("程序", () => {
       [5, 68, "float32x4"],
     ]);
     const data = new Float32Array(packing.pack(layerQuad([2, 2], [0.5, 1])));
-    expect(Array.from(data.slice(0, 5))).toEqual([-1, -1, 0, 0, 1]);
-    expect(data[21 + 3]).toBe(0.5);
+    expect(Array.from(data.slice(0, 5))).toEqual([-1, 1, 0, 0, 0]);
+    expect(data[42 + 3]).toBe(0.5); // 第 3 个顶点（右上）的 u；顶点顺序改成左上、左下、右上、右下后原来的第 2 个顶点（右下）挪到了第 4 个
     expect(() => vertexPacking([{ name: "x", location: 0, type: "dvec2" }])).toThrow("render:attribute");
   });
   it("bind group layout 照翻译结果", () => {

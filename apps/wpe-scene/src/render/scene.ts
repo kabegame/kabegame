@@ -210,7 +210,7 @@ import {
   shapeQuad,
   worldMatrixOf,
 } from "./layout";
-import { identity, multiply, orthographic, translation, type Mat4 } from "./math";
+import { identity, mulAffine, multiply, orthographic, translateGlm, translation, type Mat4 } from "./math";
 import { alignedBytes, frustumCulled, MESH_PLACEHOLDER_BYTES, meshVertexLayout, type MeshVertexLayout } from "./mesh";
 import { parallaxOffset, type SceneParallax } from "./parallax";
 import {
@@ -1016,6 +1016,11 @@ export class GpuScene {
   private viewProjection: Float32Array = new Float32Array(16);
   /** 透视粒子（`flags & 4`）的视图投影：`basePerspectiveViewProjection · T(−s)`。 */
   private perspectiveViewProjection: Float32Array = new Float32Array(16);
+  /**
+   * 本帧场景相机的投影与视图（WPE 分开存：每次 draw 先在 V 上做视差平移，再 `P ⊗ V`；rea-matrix-order 2.1、2.3）。
+   * 正交、无相机对象时 V 是单位阵或抖动的 `T(−s)`（lookAt 在这种输入下正好是平移）。`viewProjection` 恒等于 `mulAffine(projection, view)`。
+   */
+  private sceneCamera: { projection: Mat4; view: Mat4 } = { projection: new Float32Array(16), view: identity() };
   /** 不带抖动的场景视图投影（`sceneViewProjection(general, zoom)`，建场景时算，zoom 变了重算）。 */
   private baseViewProjection: Float32Array = new Float32Array(16);
   /** 不带抖动的透视粒子视图投影（`particleViewProjection(general, zoom)`，建场景时算，zoom 变了重算）。 */
@@ -1957,7 +1962,9 @@ export class GpuScene {
     const setup = device.createCommandEncoder({ label: "scene setup" });
     // 建场景时 s 是 (0, 0)：两份相同，`setCamera` 换成带抖动的。缩放取编译期的值（P5a 步骤 4），预热的指针反投影就带上它
     this.zoom = general.fields.zoom;
-    this.viewProjection = this.baseViewProjection = sceneViewProjection(general, this.zoom);
+    const sceneProjection = sceneViewProjection(general, this.zoom);
+    this.viewProjection = this.baseViewProjection = sceneProjection;
+    this.sceneCamera = { projection: sceneProjection, view: identity() };
     this.perspectiveViewProjection = this.basePerspectiveViewProjection = particleViewProjection(general, this.zoom);
     // 透视场景（P5d 步骤 2）：建场景时取加载时的相机（路径从头、g_Time 0），渲染器第一帧就用 `setCamera` 换成当帧的；预热的指针
     // 反投影用它。透视粒子那一份（`perspectiveViewProjection`）照旧（透视场景里的透视粒子照报 `camera:perspective:particle`）
@@ -2641,7 +2648,13 @@ export class GpuScene {
     const root = state.layers.get(rootObject(layer.object, state.layers));
     if (!root) return base;
     const [x, y] = parallaxOffset(parallax.amount, root.parallaxDepth, root.origin, parallax.point);
-    return x === 0 && y === 0 ? base : multiply(base, translation(x, y, 0));
+    if (x === 0 && y === 0) return base;
+    // 场景视图投影：照 WPE 在 V 上平移再 P ⊗ V（rea-matrix-order 2.3）；透视粒子那一份没有分开的 V，照旧右乘
+    if (base === this.viewProjection) {
+      const { projection, view } = this.sceneCamera;
+      return mulAffine(projection, translateGlm(view, [x, y, 0]));
+    }
+    return multiply(base, translation(x, y, 0));
   }
 
   /**
@@ -2679,7 +2692,9 @@ export class GpuScene {
     }
     this.shake = [x, y];
     const still = x === 0 && y === 0;
-    this.viewProjection = still ? this.baseViewProjection : multiply(this.baseViewProjection, translation(-x, -y, 0));
+    const view = still ? identity() : translation(-x, -y, 0);
+    this.sceneCamera = { projection: this.baseViewProjection, view };
+    this.viewProjection = still ? this.baseViewProjection : mulAffine(this.baseViewProjection, view);
     this.perspectiveViewProjection = still
       ? this.basePerspectiveViewProjection
       : multiply(this.basePerspectiveViewProjection, translation(-x, -y, 0));
@@ -2693,6 +2708,8 @@ export class GpuScene {
    * 相机变了（draw 的重写同正交，留给随后的 `setParallax`）。透视粒子那一份不动（照报）。
    */
   private applyPerspective(frame: PerspectiveCameraFrame): void {
+    // P、V 分开记（视差在 V 上平移，`viewProjectionOf`）；放在「没变就返回」之前，保证它们始终和 `viewProjection` 对得上
+    this.sceneCamera = { projection: frame.projection, view: frame.view };
     const vectors = this.viewVectors;
     if (
       same(frame.viewProjection, this.viewProjection) &&
@@ -2714,6 +2731,7 @@ export class GpuScene {
    * `orthographicCameraObjectFrame` 里算好）。有变化才标记相机变了（draw 的重写同正交，留给随后的 `setParallax`）。
    */
   private applyCameraObject(frame: OrthographicCameraFrame): void {
+    this.sceneCamera = { projection: frame.projection, view: frame.view }; // 同 applyPerspective
     const vectors = this.viewVectors;
     if (
       this.objectCamera &&

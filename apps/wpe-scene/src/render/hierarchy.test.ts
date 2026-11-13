@@ -221,10 +221,20 @@ describe("本地矩阵与世界矩阵", () => {
       { origin: [], angles: [], scale: [] },
       { origin: [5], angles: [0, 0], scale: [3] },
     ];
-    for (const layer of cases)
-      expect(Buffer.from(layerLocalMatrix(layer).buffer).toString("hex"), JSON.stringify(layer)).toBe(
-        Buffer.from(legacy(layer).buffer).toString("hex"),
-      );
+    // 本地矩阵改成照 WPE 按元素填（rea-matrix-order 3.1）后：R[2] = −sin(ay) 在 ay = 0 时是 −0（WPE 同），所以不再区分 ±0
+    // （比较前统一 `+ 0`）；角度先取 f32 再算 sin / cos（WPE 的 sinf / cosf 参数是 f32），π/2 之类的角度和旧的 double 算法差 1e-7 量级。
+    // 改期望原因：期望是我们自己旧的连乘实现，不是 WPE 抓帧；z 轴角度不为 0 的用例改成容差比较，其余仍逐位
+    const plusZero = (m: Mat4) => Buffer.from(Float32Array.from(m, (v) => v + 0).buffer).toString("hex");
+    for (const layer of cases) {
+      const now = layerLocalMatrix(layer);
+      const old = legacy(layer);
+      if ((layer.angles[2] ?? 0) === 0) expect(plusZero(now), JSON.stringify(layer)).toBe(plusZero(old));
+      else
+        for (let i = 0; i < 16; i++)
+          expect(Math.abs(now[i] - old[i]), `${JSON.stringify(layer)}[${i}]`).toBeLessThanOrEqual(
+            1e-6 * Math.max(1, Math.abs(old[i])),
+          );
+    }
   });
 
   it("三轴旋转的顺序是 Rz·Ry·Rx（与显式公式一致）", () => {

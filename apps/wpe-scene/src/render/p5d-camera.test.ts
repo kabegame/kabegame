@@ -412,7 +412,8 @@ describe("GpuScene：透视相机（P5d 步骤 2 点 4、5）", () => {
     expect(floats(image, 128, 3)).toEqual([0, 0, 10]);
     expect(vec3s(image, 144, 3)).toEqual([0, 0, -1, 1, 0, 0, 0, 1, 0]);
     // 正对相机：朝向是单位基（p5d-ptc 的读数）
-    expect(vec3s(particle, 64, 2)).toEqual([0, 0, 1, 0, 1, 0]);
+    // 朝向向量里可能出现 −0（矩阵现在按 WPE 的 f32 顺序算，rea-matrix-order 1.1），数值相等即可：`+ 0` 把 −0 换成 +0
+    expect(vec3s(particle, 64, 2).map((v) => v + 0)).toEqual([0, 0, 1, 0, 1, 0]);
     expect(vec3s(particle, 96, 3)).toEqual([0, 0, -1, 1, 0, 0, 0, 1, 0]);
     // 同一帧：不标脏，不重写
     const writes = drawsOf(scene).map((item) => item.uniformBuffer?.writes ?? 0);
@@ -441,7 +442,8 @@ describe("GpuScene：透视相机（P5d 步骤 2 点 4、5）", () => {
     expect(floats(image, 128, 3)).toEqual([963, 544, 2000]);
     expect(vec3s(image, 144, 3)).toEqual([0, 0, -1, 1, 0, 0, 0, 1, 0]);
     expect(vec3s(particle, 96, 3)).toEqual([0, 0, -1, 1, 0, 0, 0, 1, 0]);
-    expect(vec3s(particle, 64, 2)).toEqual([0, 0, 1, 0, 1, 0]);
+    // 朝向向量里可能出现 −0（矩阵现在按 WPE 的 f32 顺序算，rea-matrix-order 1.1），数值相等即可：`+ 0` 把 −0 换成 +0
+    expect(vec3s(particle, 64, 2).map((v) => v + 0)).toEqual([0, 0, 1, 0, 1, 0]);
   });
 
   it('fullscreen 合成 RT 的 "scene" 取场景目标尺寸（编译期不再取 general 的宽高）', () => {

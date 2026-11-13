@@ -759,11 +759,12 @@ describe("四边形与效果矩阵（P8 步骤 3，p8-align2 的 F1–F3）", ()
     expect(screenQuadSize({ text: null }, [101.7, 50.5])).toEqual([101, 50]);
     expect(screenQuadSize({ text: {} as SceneLayer["text"] }, [213.5, 240])).toEqual([213.5, 240]);
     // F1、F3 的 vs_in：±50.5 / ±25（不是 ±50.85 / ±25.25）
+    // 顶点顺序：左上、左下、右上、右下（rea-matrix-order 5.1，改顺序前是左下、右下、左上、右上）
     expect(layerQuad(screenQuadSize({}, [101.7, 50.5]), [1, 1]).map((vertex) => vertex.position)).toEqual([
-      [-50.5, -25, 0],
-      [50.5, -25, 0],
       [-50.5, 25, 0],
+      [-50.5, -25, 0],
       [50.5, 25, 0],
+      [50.5, -25, 0],
     ]);
   });
 
@@ -1009,10 +1010,10 @@ const alignQuad = (item: AlignDraw) => {
   return [0, 1, 2, 3].map((v) => Array.from(floats.slice(v * 5, v * 5 + 3)));
 };
 const QUAD_101 = [
-  [-50.5, -25, 0],
-  [50.5, -25, 0],
   [-50.5, 25, 0],
+  [-50.5, -25, 0],
   [50.5, 25, 0],
+  [50.5, -25, 0],
 ];
 
 async function openAlign2() {
@@ -1097,15 +1098,16 @@ describe("GpuScene：对齐接到绘制上（P8 步骤 3，p8-align2）", () => 
     expectMatrix(alignMatrix(final, 1), WPE_ALIGN2.f2.textureProjection, "纹理投影");
     expectMatrix(alignMatrix(final, 2), WPE_ALIGN2.f2.model, "g_EffectModelMatrix");
     expectMatrix(alignMatrix(final, 3), WPE_ALIGN2.f2.model, "g_LayerModelMatrix");
-    // 画进合成 RT 的基础 pass（几何 fill）不截断：四边形按浮点 size，和它的整面正交一致
-    expect(alignQuad(alignDraw(scene, 1, "base"))[3]).toEqual([Math.fround(50.85), Math.fround(25.25), 0]);
+    // 画进合成 RT 的基础 pass（几何 fill）不截断：四边形按浮点 size，和它的整面正交一致。取右上角顶点：顶点顺序改成
+    // 左上、左下、右上、右下后是第 3 个（下标 2，原来是下标 3，rea-matrix-order 5.1）
+    expect(alignQuad(alignDraw(scene, 1, "base"))[2]).toEqual([Math.fround(50.85), Math.fround(25.25), 0]);
   });
 
   it("组 G：compose 与上屏的 MVP 对上事件 199 / 234、四边形 ±150 / ±100；子层 Gc 在组 RT 里的 MVP 对上事件 215", async () => {
     const { scene } = await openAlign2();
     expectMatrix(alignMatrix(alignDraw(scene, 3, "compose")), WPE_ALIGN2.g, "G compose");
     expectMatrix(alignMatrix(alignDraw(scene, 3, "final")), WPE_ALIGN2.g, "G 上屏");
-    expect(alignQuad(alignDraw(scene, 3, "compose"))[3]).toEqual([150, 100, 0]);
+    expect(alignQuad(alignDraw(scene, 3, "compose"))[2]).toEqual([150, 100, 0]);
     expectMatrix(alignMatrix(alignDraw(scene, 4, "direct")), WPE_ALIGN2.gc, "Gc");
   });
 

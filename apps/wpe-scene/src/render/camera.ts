@@ -33,7 +33,7 @@ import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { DEFAULT_CAMERA, type CameraPath, type SceneCameraJson, type Vec3 } from "../compile/camera";
 import { effectiveVisible, eyePosition, particleViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
 import type { Mat4 } from "./math";
-import { multiply } from "./math";
+import { mulAffine } from "./math";
 import type { SceneCamera } from "./scene";
 import { shakeOffset, shakeOffset3, type ShakeFields } from "./shake";
 import type { SceneState } from "./state";
@@ -290,7 +290,8 @@ export function perspectiveCamera(input: PerspectiveCameraInput): PerspectiveCam
   return {
     view,
     projection,
-    viewProjection: multiply(projection, view),
+    // VP = P ⊗ V：WPE 的仿射乘法（rea-matrix-order 2.1）
+    viewProjection: mulAffine(projection, view),
     eye,
     center,
     vectors: { forward: round(vectors.forward), right: round(vectors.right), up: round(vectors.up) },
@@ -369,7 +370,9 @@ export interface OrthographicCameraInput {
 export interface OrthographicCameraFrame {
   /** V = lookAtRH(eye + s, center + s, up)。 */
   view: Mat4;
-  /** `sceneViewProjection(general, zoom) · V`。 */
+  /** 场景投影 `sceneViewProjection(general, zoom)`（P）：`GpuScene` 分开存 P 与 V，每次 draw 现算视差后的 `P ⊗ V`（rea-matrix-order 2.3）。 */
+  projection: Mat4;
+  /** `mulAffine(projection, V)`（WPE 的 `FUN_1400d4200` 写法，rea-matrix-order 2.1）。 */
   viewProjection: Mat4;
   /** 透视覆盖（透视粒子、`perspective: true` 的图像层 / 模型）：`particleViewProjection(general, zoom, V)`。 */
   perspectiveViewProjection: Mat4;
@@ -400,9 +403,11 @@ export function orthographicCameraObjectFrame(input: OrthographicCameraInput): O
   const vectors = lookAtVectors(eye, center, pose.up);
   // `+ 0` 把 −0 换成 +0（同 `perspectiveCamera`）
   const round = (v: Vec3): Vec3 => [f(v[0]) + 0, f(v[1]) + 0, f(v[2]) + 0];
+  const projection = sceneViewProjection(general, zoom);
   return {
     view,
-    viewProjection: multiply(sceneViewProjection(general, zoom), view),
+    projection,
+    viewProjection: mulAffine(projection, view),
     perspectiveViewProjection: particleViewProjection(general, zoom, view),
     eye: eyePosition(general, [eye[0], eye[1]]),
     parallaxEye: [eye[0], eye[1]],

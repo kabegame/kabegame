@@ -17,18 +17,7 @@
  *   透视粒子（P4a 步骤 4）另用一套透视相机（`particleViewProjection`），z = 0 平面和正交画面重合。
  */
 import type { SceneGeneral, SceneLayer, SceneTexture } from "../compile/bundle";
-import {
-  identity,
-  invert,
-  multiply,
-  orthographic,
-  rotationX,
-  rotationY,
-  rotationZ,
-  scaling,
-  translation,
-  type Mat4,
-} from "./math";
+import { alignOffset, identity, invert, multiply, orthographic, translateGlm, translation, type Mat4 } from "./math";
 
 /**
  * 正交场景的深度范围 ±2000，照 WPE（2026-11-07 RenderDoc 读到的 MVP，图像层与正交粒子相同）：深度 = 0.00025·z + 0.5，
@@ -76,8 +65,13 @@ export function uvInset(
 }
 
 /**
- * 图层四边形，三角形带顺序：左下、右下、左上、右上。顶点在模型空间（中心为原点，未缩放的 `size`），
- * 图像顶边对应 v = 0（纹理第 0 行），与 LWE 的 `texcoordCopy` 相同。`inset` 见 {@link uvInset}。
+ * 图层四边形，三角形带顺序：左上、左下、右上、右下。带的两个三角形 (左上, 左下, 右上)、(右上, 左下, 右下) 就是 WPE `FUN_1401ede30`
+ * 的顶点（左上、右上、左下、右下）配索引 `0,2,1, 1,2,3` 画的两个，三角形内的顶点顺序也相同（D3D 带规则：奇数三角形是 (v2, v1, v3)），
+ * 对角线是右上–左下（rea-matrix-order 5.1；`2903412088` 走查：换成这个顺序后双线性采样的边缘像素和 WPE 逐位相同）。
+ * 顶点在模型空间（中心为原点，未缩放的 `size`），图像顶边对应 v = 0（纹理第 0 行），与 LWE 的 `texcoordCopy` 相同。`inset` 见 {@link uvInset}。
+ *
+ * TODO:[WPE_SCENE] 在 macOS、Linux 上测试：奇数三角形的顶点顺序在 Vulkan / Metal 后端上可能和 D3D 的带规则不同（同一个三角形、顶点轮换），
+ * 只可能影响双线性采样边缘像素的插值末位；用 `p6b-*` 的确定性工程和 WPE（或 Windows 上的结果）逐像素比一次。
  */
 export function layerQuad(
   size: readonly number[],
@@ -89,10 +83,22 @@ export function layerQuad(
   const right = Math.fround(Math.fround(uv[0]) - left);
   const bottom = Math.fround(Math.fround(uv[1]) - top);
   return [
-    { position: [-hw, -hh, 0], texCoord: [left, bottom] },
-    { position: [hw, -hh, 0], texCoord: [right, bottom] },
     { position: [-hw, hh, 0], texCoord: [left, top] },
+    { position: [-hw, -hh, 0], texCoord: [left, bottom] },
     { position: [hw, hh, 0], texCoord: [right, top] },
+    { position: [hw, -hh, 0], texCoord: [right, bottom] },
+  ];
+}
+
+/**
+ * 泛光链的全屏三角形（WPE 渲染器 `R+0x58`，rea-matrix-order 5.2）：(−1, 1)、(−1, −3)、(3, 1)，UV (0, 0)、(0, 2)、(2, 0)
+ * （纹理原点在左上，同我们 `layerQuad` 的 v = 0 在顶边）。画 3 个顶点、没有索引。
+ */
+export function fullscreenTriangle(): QuadVertex[] {
+  return [
+    { position: [-1, 1, 0], texCoord: [0, 0] },
+    { position: [-1, -3, 0], texCoord: [0, 2] },
+    { position: [3, 1, 0], texCoord: [2, 0] },
   ];
 }
 
@@ -160,7 +166,9 @@ export function shapeQuad(
 
 /**
  * 图层在父对象空间里的本地矩阵：`T(origin) · Rz(az) · Ry(ay) · Rx(ax) · S(scale)`，角度是弧度（2026-11-07 对 WPE 实测，
- * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。`angles` 的 x、y 为 0 时 Ry、Rx 是单位阵，结果与只转 z 轴的旧矩阵逐位相同。
+ * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。实现不做矩阵连乘，照 WPE 按元素填（`FUN_1401850a0` + 旋转 `FUN_1401dd630`，
+ * rea-matrix-order 3.1、3.2）：`L[c][r] = scale[c] · R[c][r]`，每个括号一次 f32 运算；`sinf` / `cosf` 用 `Math.sin` / `Math.cos` 再舍入，
+ * 角度为 0 时精确是 0、1（和 CRT 一致），非零角度个别参数可能差 1 ulp（读码 3.2 未确认）。
  * `scale.z` 为 0 时按 1：WPE 在这种输入下的行为没有测过，保留 P1 的兜底。
  * 不含图层的自身偏移（`LayerTransform.offset`，P8 步骤 3）：那段平移只在图层画自己时乘（`drawMatrixOf`），子孙的世界矩阵不带它。
  */
@@ -168,8 +176,33 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
   const [x = 0, y = 0, z = 0] = layer.origin;
   const [sx = 1, sy = 1, sz = 1] = layer.scale;
   const [ax = 0, ay = 0, az = 0] = layer.angles;
-  const rotation = multiply(multiply(multiply(translation(x, y, z), rotationZ(az)), rotationY(ay)), rotationX(ax));
-  return multiply(rotation, scaling(sx, sy, sz === 0 ? 1 : sz));
+  const f = Math.fround;
+  // 参数是 f32 的角度；R 的第 k 列是 R[3k..3k+2]（FUN_1401dd630，每个括号一次 f32 运算）
+  const cz = f(Math.cos(f(az))),
+    szn = f(Math.sin(f(az)));
+  const cy = f(Math.cos(f(ay))),
+    syn = f(Math.sin(f(ay)));
+  const cx = f(Math.cos(f(ax))),
+    sxn = f(Math.sin(f(ax)));
+  const R = [
+    f(cy * cz),
+    f(cy * szn),
+    f(-syn),
+    f(f(f(syn * cz) * sxn) - f(cx * szn)),
+    f(f(f(syn * szn) * sxn) + f(cx * cz)),
+    f(sxn * cy),
+    f(f(f(cx * cz) * syn) + f(sxn * szn)),
+    f(f(f(cx * szn) * syn) - f(sxn * cz)),
+    f(cx * cy),
+  ];
+  const scale = [sx, sy, sz === 0 ? 1 : sz]; // `sz === 0` 按 1 的兜底保留（P1，WPE 没测过）
+  const m = new Float32Array(16);
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) m[c * 4 + r] = f(f(scale[c]) * R[c * 3 + r]);
+  m[12] = x;
+  m[13] = y;
+  m[14] = z;
+  m[15] = 1;
+  return m;
 }
 
 /** 层级里一个对象的变换与可见性：`SceneLayer` 与 `LayerState` 都满足。 */
@@ -287,11 +320,12 @@ export function drawMatrixOf(
 ): Mat4 {
   const world = worldMatrixOf(object, layers, cache);
   const [ox = 0, oy = 0] = layers.get(object)?.offset ?? [];
-  return ox === 0 && oy === 0 ? world : multiply(world, translation(ox, oy, 0));
+  // 对齐偏移只改平移列，`((a.x·W0 + W12) + a.y·W4) + a.z·W8`（rea-matrix-order 3.3）；偏移为 0 时原样返回
+  return ox === 0 && oy === 0 ? world : alignOffset(world, [ox, oy, 0]);
 }
 
 /**
- * 正交场景的视图投影：场景 `[0, w] × [0, h]`（y 向上）铺满整个渲染目标，z ∈ [−2000, 2000] → 深度 [0, 1]（反向 Z，
+ * 正交场景的投影 P（单位视图下就是视图投影；`GpuScene` 另存视图 V，每次 draw 现算 `P ⊗ V`，rea-matrix-order 2.1）：场景 `[0, w] × [0, h]`（y 向上）铺满整个渲染目标，z ∈ [−2000, 2000] → 深度 [0, 1]（反向 Z，
  * 见 `ORTHO_DEPTH`）。1920×1080 时是 WPE 的 `[1/960, 0, 0, 0, 0, 1/540, 0, 0, 0, 0, 0.00025, 0, −1, −1, 0.5, 1]`。
  * `orthographic` 按 glm 的「视空间 z ∈ [−far, −near] → [0, 1]」，所以 near、far 反着传。
  *
@@ -301,9 +335,16 @@ export function drawMatrixOf(
  * （`VP · T(o − s)`，实测差 1e-7）。zoom 为 1 时原样返回，字节同以前。
  */
 export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">, zoom = 1): Mat4 {
-  const projection = orthographic(0, general.width, 0, general.height, ORTHO_DEPTH, -ORTHO_DEPTH);
-  // scaling 存成 float32，乘积在 double 里精确、写回时舍入一次，等于 float32 乘法
-  return zoom === 1 ? projection : multiply(scaling(zoom, zoom, 1), projection);
+  const f = Math.fround;
+  const { width: w, height: h } = general;
+  const projection = orthographic(0, w, 0, h, ORTHO_DEPTH, -ORTHO_DEPTH);
+  if (zoom === 1) return projection; // z = 1、l = 0 时三步逐位不变（rea-matrix-order 2.2 数值核对）
+  // 帧函数的三步 glm 内联（rea-matrix-order 2.2）：translate(W/2, H/2) → scale(z, z, 1) → translate(−W/2, −H/2)
+  const z = f(zoom);
+  const moved = translateGlm(projection, [f(w * 0.5), f(h * 0.5), 0]);
+  const scaled = Float32Array.from(moved);
+  for (let i = 0; i < 8; i++) scaled[i] = f(moved[i] * z); // glm::scale：第 0、1 列 ×z，第 2 列 ×1
+  return translateGlm(scaled, [f(w * -0.5), f(h * -0.5), -0]);
 }
 
 /**

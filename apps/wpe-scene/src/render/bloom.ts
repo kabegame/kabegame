@@ -23,7 +23,7 @@ import type { BloomPassName, SceneBloom } from "../compile/bloom";
 import type { ScenePass } from "../compile/bundle";
 import type { BloomParams } from "../compile/postprocess";
 import { SceneRenderError } from "./errors";
-import { layerQuad } from "./layout";
+import { fullscreenTriangle } from "./layout";
 import type { GpuProgram } from "./programs";
 import { traceUniforms } from "./trace";
 import { screenBuiltins, textureBuiltins, UniformBlock, type UniformEntry } from "./uniforms";
@@ -351,7 +351,8 @@ export class BloomChain {
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
     });
-    const quad = layerQuad([2, 2], [1, 1]);
+    // WPE 泛光链画的是一个盖满屏幕的大三角形（rea-matrix-order 5.2），不是 4 顶点的四边形；管线拓扑仍是带，3 个顶点的带就是一个三角形
+    const quad = fullscreenTriangle();
     const sizeOf = (source: BloomSource): BloomInputSize =>
       source.kind === "framebuffer"
         ? { width, height, textureWidth: width, textureHeight: height }
@@ -442,7 +443,7 @@ export class BloomChain {
       pass.setPipeline(draw.pipeline);
       pass.setBindGroup(0, draw.bindGroup);
       pass.setVertexBuffer(0, draw.vertexBuffer);
-      pass.draw(4);
+      pass.draw(3);
       pass.end();
       after?.(index, step, encoder);
     });

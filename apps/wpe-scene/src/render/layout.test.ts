@@ -2,7 +2,15 @@
 // WPE 把居中盖满裁切做进 `P·V`，跟随点是光标下的场景点（读数 `ignore/p4/out/ana_ptr2.txt`）。
 import { describe, expect, it } from "vitest";
 import { pointerScenePoint } from "../particles/controlpoints";
-import { scenePlacement, scenePointer, sceneCursor, sceneViewProjection, type SceneStyle } from "./layout";
+import {
+  layerLocalMatrix,
+  scenePlacement,
+  scenePointer,
+  sceneCursor,
+  sceneViewProjection,
+  type SceneStyle,
+} from "./layout";
+import { multiply, orthographic, rotationX, rotationY, rotationZ, scaling, translation } from "./math";
 
 const VP_1080 = sceneViewProjection({ width: 1920, height: 1080 });
 
@@ -135,5 +143,56 @@ describe("sceneCursor（P4c 步骤 2）", () => {
     const crop = scenePlacement("fill", 1920, 1080, 1920, 800);
     expect(scenePointer("fill", crop, 1920, 800, 0.5, 0.25)).toEqual([0.5, 0.25]);
     expect(sceneCursor("fill", crop, 1920, 800, 0.5, 0.25)[1]).not.toBeCloseTo(0.25, 3);
+  });
+});
+
+// 矩阵按 WPE 的 float32 顺序（phase-f32-matrix.md 点 2；读码 rea-matrix-order 2.2、3.1、3.2）
+describe("layerLocalMatrix：照 WPE 按元素填", () => {
+  const plusZero = (m: ArrayLike<number>) => Array.from(m, (v) => v + 0);
+  it("角度为 0 时等于 diag(scale) + origin（−0 视同 0）", () => {
+    const m = layerLocalMatrix({ origin: [12.5, -7, 3], angles: [0, 0, 0], scale: [2, 0.5, 4] });
+    expect(plusZero(m)).toEqual([2, 0, 0, 0, 0, 0.5, 0, 0, 0, 0, 4, 0, 12.5, -7, 3, 1]);
+  });
+  it("scale.z 为 0 时按 1（P1 兜底保留）", () => {
+    const m = layerLocalMatrix({ origin: [0, 0, 0], angles: [0, 0, 0], scale: [1, 1, 0] });
+    expect(m[10]).toBe(1);
+  });
+  it("三轴旋转时和旧的连乘结果差 ≤ 2 ulp（量级按 1 算）", () => {
+    const cases = [
+      { origin: [100, 50, 7], angles: [0.2, 0.3, 0.4], scale: [1, 1, 1] },
+      { origin: [-30, 800, 0], angles: [-1.1, 0.7, 2.5], scale: [2, 3, 0.5] },
+      { origin: [0, 0, 0], angles: [0.5, -0.9, 0.1], scale: [0.67623, 0.72657, 1] },
+    ];
+    for (const layer of cases) {
+      const [x, y, z] = layer.origin;
+      const [ax, ay, az] = layer.angles;
+      const [sx, sy, sz] = layer.scale;
+      const old = multiply(
+        multiply(multiply(multiply(translation(x, y, z), rotationZ(az)), rotationY(ay)), rotationX(ax)),
+        scaling(sx, sy, sz),
+      );
+      const now = layerLocalMatrix(layer);
+      for (let i = 0; i < 16; i++) {
+        const tolerance = 2 * 2 ** -23 * Math.max(1, Math.abs(old[i]), Math.abs(now[i]));
+        expect(Math.abs(now[i] - old[i]), `[${i}] ${now[i]} vs ${old[i]}`).toBeLessThanOrEqual(tolerance);
+      }
+    }
+  });
+});
+
+describe("sceneViewProjection：缩放照帧函数的三步 f32（rea-matrix-order 2.2）", () => {
+  it("zoom 1 逐位等于 orthographic", () => {
+    const p = sceneViewProjection({ width: 3840, height: 2130 });
+    const ortho = orthographic(0, 3840, 0, 2130, 2000, -2000);
+    expect(Array.from(p)).toEqual(Array.from(ortho));
+    expect(Array.from(sceneViewProjection({ width: 3840, height: 2130 }, 1))).toEqual(Array.from(ortho));
+  });
+  it("zoom 1.5 时线性项 = f32(z)·f32(2/W)（P5a 步骤 4 的 WPE 实测 0.0015625001396983862）", () => {
+    const f = Math.fround;
+    const p = sceneViewProjection({ width: 1920, height: 1080 }, 1.5);
+    expect(p[0]).toBe(f(f(1.5) * f(2 / 1920)));
+    expect(p[0]).toBe(0.0015625001396983862);
+    expect(p[5]).toBe(f(f(1.5) * f(2 / 1080)));
+    expect(p[5]).toBe(0.00277777761220932);
   });
 });

@@ -2483,3 +2483,22 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 安卓入库 | Android dev | 下载一张图片与一个视频（`content://` 路径） | 都有色盘 | 同上 |
 | [ ] | Web 版 | Web dev | 按基本色桶与任意颜色排序；普通模式与 super 模式下分别保存 / 删除色桶 | 两种排序都可用；`add_color_bucket` / `delete_color_bucket` 只在 super 模式放行 | |
 | [ ] | MCP | 桌面 dev，MCP 客户端 | 读 `color_buckets://`；按返回的 `hex` 读 `images://gallery/sort/by-color_0x<hex>/_kb_x100x/1`；关掉「色桶列表」能力后再读 | 每行有 `rgb` / `hex` / `key` / `position`；排序结果行里带 `palette`；能力关闭后 `color_buckets://` 被拒 | |
+
+## 矩阵按 WPE 的 float32 顺序、图层四边形对角线
+
+2026-11-14。`2903412088` 走查里 `e3clock-nofx2130` 只剩两处和 WPE 不同：MVP 平移差 1–3 个 ulp，图层四边形的对角线不同。这一步把矩阵运算换成 WPE 的写法：`multiply` 逐步 f32 舍入（glm 乘法）、MVP / VP 用仿射乘法 `mulAffine`、对齐偏移与字形平移只改平移列、本地矩阵按元素填、zoom 与视差按 WPE 的三步 f32；场景相机分开存投影与视图，每次 draw 在视图上做视差平移再相乘；图层四边形顶点顺序改成「左上、左下、右上、右下」，泛光链改画一个全屏大三角形。读码见 `.claude/plans/wpe-import/3-scene/rea-matrix-order.md`，计划与实施记录见 `phase-f32-matrix.md`。所有以前存下来的「我们自己的」画面哈希与粒子回放逐字节基线都会在末位变化，验收以 WPE 为准。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 走查工程 MVP | Windows dev，屏外宿主（`render_scene`） | `e3clock-nofx2130` 渲染，对 WPE 抓帧比 6 个 draw 的 MVP | 逐位相同 | 2026-11-14 Claude：逐 draw 轨迹读出两层 compose / passthrough 与画字形的 MVP 平移，全部逐位等于 WPE（179 (0.8629395961761475, 0.8874444961547852)、67 (0.8645793199539185, 0.8890844583511353)、字形 ty 0.2091503143310547） |
+| [x] | 走查工程整帧 | 同上 | 同上渲染后 `kbp cmp frame` 对 WPE 上屏整帧，两层合成 RT 也比 | 整帧 0 差异；两层合成 RT 0 差异 | 2026-11-14 Claude：对 WPE 第 240、241 帧整帧 RGBA 0 差异（改前 29 个像素、最大差 3）；黑字层合成 RT 对 WPE 事件 59、青字层对事件 117 都是 0 差异（改前青字层 196 个像素） |
+| [x] | 文本与对齐工程 | Windows dev，屏外宿主 | `p6b-geom` / `-align` / `-wrap` / `-fx` / `-fallback` / `-extra`、`p6b-tiny` / `-tiny2` / `-tiny3` 对 WPE 整帧 | 不比本文档里原来记的差（原来是 0 的仍为 0） | 2026-11-14 子代理重跑、Claude 复核（`ignore/f32-regress/RESULTS.md`）：9 个全部 0 差异；`p6b-fx` 原来 1 个像素差 1，现在 0 |
+| [x] | 图像层模型标志工程 | 同上 | `p5b-autosize`、`p5b-nopad-v2`、`p5b-cl`、`p5b-proj`、`p5b-fs` / `-fsnofx` / `-fsmvp`、`p5b-inst` / `-inst2` 对 WPE 整帧 | 不比原来记的差（最大差 2 以内） | 2026-11-14 同上：`p5b-nopad-v2` 1845 → 0、`p5b-cl` 32 → 0；`p5b-fs` 最大差仍是 1；其余 0 差异 |
+| [x] | 静态网格 | 同上 | `p5c-*` 10 个对 WPE 整帧 | 不比原来记的差（原来 0 差异的仍为 0） | 2026-11-14 同上：10 个全部 0 差异 |
+| [x] | 视差、抖动、缩放 | 同上 | P5a 视差、抖动、缩放各挑两个工程对 WPE | 不比原来记的差；缩放档的线性项仍是 `f32(z)·f32(2/W)` | 2026-11-14 同上：`p5a-static`、`ptr1`、`shake1`、`shaker2`、`zoom15`、`zoompar` 按时间线回放整帧 0 差异。另从 `A:\p5a\zoom15` 事件 18 核对缩放后投影的平移项逐位等于三步 f32（`zoom.test.ts`） |
+| [ ] | 相机对象与透视 | 同上 | P5d 的相机对象、透视各挑两个工程对 WPE | 不比原来记的差；末位可能仍和 WPE 有出入（透视覆盖与透视粒子的前面几步没改） | 已知差异，见计划风险 2 |
+| [ ] | 泛光 | 同上 | `ctl-ldr`、`ctl-hdr`、`q4-n8` 对 WPE | 不比原来记的差；泛光链每个 pass 画 3 个顶点，没有缝线或半像素偏移 | 泛光链改画全屏三角形 |
+| [x] | 对齐与形状 | 同上 | P8 的对齐（`p8-align` / `p8-align2`）与形状工程对 WPE | 不比原来记的差 | 2026-11-14 同上：`p8-align` 最大差 1 → 0；`p8-align2` 仍只差 F1 一行（已知）；`p8-shape` 最大差 6、`p8-shape2` 最大差 2，同以前；`p8-clamp` / `-clamp2` / `-misc` / `-a2c` 0；`p8-alpha` 仍只差 X 组（已知）。`p8-dep2` 子代理用外推时刻比出 B10、B11 两块差 3，Claude 按抓帧的 `g_Time` 7.935568809509277 重渲后 0 差异 |
+| [ ] | 粒子与编译期 | 同上 | 带粒子的确定性工程整帧对 WPE；`kbp regress --corpus` | 粒子位置、MVP 不比原来记的差；语料编译期结果没有变化 | 只改渲染，编译期不动 |
+| [ ] | 真实场景观感 | Windows dev，图库预览与桌面 | 开几张带旋转、视差、文字的场景壁纸 | 画面无缝线、无半像素偏移、不闪烁 | |
+| [ ] | macOS / Linux 三角形带 | macOS / Linux dev | 开一张图层边缘有双线性采样的场景壁纸，与 Windows 同帧对比 | 边缘像素一致；若有末位差别，确认是奇数三角形顶点轮换所致 | 代码里 `layerQuad` 带 `TODO:[WPE_SCENE]` |

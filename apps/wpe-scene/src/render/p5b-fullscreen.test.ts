@@ -646,12 +646,12 @@ function quadOf(draw: DrawView) {
     texCoord: [0, 1].map((k) => view.getFloat32(i * 20 + 12 + k * 4, true)),
   }));
 }
-/** ±1 的 NDC 四边形（`layerQuad` 的顺序：左下、右下、左上、右上），UV 上界 1、不内缩。 */
+/** ±1 的 NDC 四边形（`layerQuad` 的顺序：左上、左下、右上、右下，对角线右上–左下，rea-matrix-order 5.1），UV 上界 1、不内缩。 */
 const NDC_QUAD = [
-  { position: [-1, -1, 0], texCoord: [0, 1] },
-  { position: [1, -1, 0], texCoord: [1, 1] },
   { position: [-1, 1, 0], texCoord: [0, 0] },
+  { position: [-1, -1, 0], texCoord: [0, 1] },
   { position: [1, 1, 0], texCoord: [1, 0] },
+  { position: [1, -1, 0], texCoord: [1, 1] },
 ];
 
 const FRAME: FrameInput = {

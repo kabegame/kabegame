@@ -496,7 +496,10 @@ describe("textMatrices：和 p6b-fx 抓帧的 MVP 相同", () => {
       "f4 背景",
     );
     // 世界矩阵里的偏移就是 `T(offset)`：和直接把偏移加进原点相同
-    expect([...world]).toEqual([...multiply(translation(400, 400, 0), translation(0, -18, 0))]);
+    // 世界矩阵里 R[2] = −0（照 WPE 按元素填，rea-matrix-order 3.1），期望是我们自己的 multiply：统一 `+ 0` 再比
+    expect([...world].map((v) => v + 0)).toEqual(
+      [...multiply(translation(400, 400, 0), translation(0, -18, 0))].map((v) => v + 0),
+    );
     // f6：不加 padding（没有 effect、没有背景、cbm 31）
     const f6 = layoutOf({ glyphs, box: AG_BOX, padding: [0, 0], offset: [0, -18] });
     expectMvp(
@@ -1489,11 +1492,12 @@ describe("GpuScene：小文字的合成 RT 套 max(4, ·)（P6b 1e，p6b-tiny2 �
     // 上屏四边形：图层 size 2×6（±1、±3），UV 内缩按 2、6
     const final = vertexFloats(drawOf(scene, 0, "final"));
     const positions = [0, 1, 2, 3].map((v) => final.slice(v * 5, v * 5 + 2));
+    // 顶点顺序：左上、左下、右上、右下（rea-matrix-order 5.1）
     expect(positions).toEqual([
-      [-1, -3],
-      [1, -3],
       [-1, 3],
+      [-1, -3],
       [1, 3],
+      [1, -3],
     ]);
     // 直接上屏的背景（flat：a_Position + a_Color）：四边形按套过 max(4, ·) 的尺寸
     const background = vertexFloats(drawOf(scene, 1, "background"));

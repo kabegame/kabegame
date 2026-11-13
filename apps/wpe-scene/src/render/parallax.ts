@@ -135,7 +135,7 @@ export function parallaxUniform(point: readonly [number, number], width: number,
 }
 
 /**
- * 对象平移 `o = amount · depth ⊙ (origin.xy − P)`，`depth` 与 `origin` 取根对象的。`depth` 只有一个分量时铺满两个
+ * 对象平移 `o = ((origin.xy − P) · amount) · depth`，三步 f32 照绘制循环 `0x14018b00c`（rea-matrix-order 2.3），`depth` 与 `origin` 取根对象的。`depth` 只有一个分量时铺满两个
  * （属性滑块的数字绑到 `parallaxDepth` 上：WPE 的向量 setter 把数字铺满各分量，p3-script-REPORT 对 vec3 对象字段实测；`numbers`
  * 给图层字段存的是原样分量）。
  */
@@ -147,7 +147,8 @@ export function parallaxOffset(
 ): [number, number] {
   const dx = depth[0] ?? 1;
   const dy = depth[1] ?? dx;
-  return [amount * dx * ((origin[0] ?? 0) - point[0]), amount * dy * ((origin[1] ?? 0) - point[1])];
+  const f = Math.fround;
+  return [f(f(f((origin[0] ?? 0) - point[0]) * amount) * dx), f(f(f((origin[1] ?? 0) - point[1]) * amount) * dy)];
 }
 
 /** 由 `SceneState.general` 的四个字段与帧量组装输入。 */

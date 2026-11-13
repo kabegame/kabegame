@@ -17,7 +17,18 @@ import { compositeTranslation, directTranslation, type TextLayout } from "../tex
 import type { UniformLayout } from "../wpesl2wgsl";
 import { ORTHO_VIEW_VECTORS, type ViewVectors } from "./camera";
 import { textCompositeSize, type DrawStep, type Geometry, type TextStep } from "./graph";
-import { identity, invert, multiply, normalMatrix, orthographic, scaling, translation, type Mat4 } from "./math";
+import {
+  identity,
+  invert,
+  mulAffine,
+  multiply,
+  normalMatrix,
+  orthographic,
+  scaling,
+  translateGlm,
+  translation,
+  type Mat4,
+} from "./math";
 import type { LayerState } from "./state";
 
 /** 翻译器反射的一格 uniform（`declared` 已并入胶水的 `UniformLayout`，这个名字留作别名）。 */
@@ -298,7 +309,8 @@ export const LIGHT_UNIFORMS = {
  * `viewProjection` 是这次绘制的视图投影：开着视差时已是 `VP · T(o)`（`GpuScene.uniformValues`，P5a 步骤 2），开着抖动时再带
  * `T(−s)`，合起来是 `VP · T(o − s)`（步骤 3）。下文的「图层 MVP」与 `g_ViewProjectionMatrix` 都带视差与抖动，只有 `base` 用自己的
  * 整面矩阵、不读它（`p5a-fx` 实测：effect 的中间 pass 读到的效果矩阵也带视差）。
- * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层世界矩阵；
+ * - `direct`：P1 原样，`g_ModelViewProjectionMatrix` = 场景视图投影 × 图层世界矩阵；MVP 一律是 WPE 的仿射乘法 `mulAffine(VP, M)`
+ *   （`FUN_1400d4200`，rea-matrix-order 2.1），不是 glm 乘法，末位不同；
  * - `base`：正交投影把图层四边形画满合成 RT，单位模型矩阵（B7）；
  * - `effect`：NDC 全屏四边形、MVP 为单位阵；`g_EffectModelMatrix` = 图层世界矩阵 × scale(w/2, h/2)，
  *   `g_EffectModelViewProjectionMatrix` = 图层 MVP × 同一缩放，纹理投影与后者相同；
@@ -328,7 +340,9 @@ export function drawMatrices(
   viewProjection: Mat4,
 ) {
   const model = world;
-  const layerMvp = multiply(viewProjection, model);
+  // MVP = M ⊗ VP：WPE 的仿射乘法（`FUN_1400d4200`，rea-matrix-order 2.1）。下面 effect / final 的 `multiply(…, half)` 不改：每个元素只有
+  // 一个非零乘积，和 WPE 的逐元素缩放逐位相同（rea-matrix-order 4.2）
+  const layerMvp = mulAffine(viewProjection, model);
   const hw = (size[0] ?? 0) / 2,
     hh = (size[1] ?? 0) / 2;
   const half = scaling(hw, hh, 1);
@@ -461,7 +475,8 @@ export function textMatrices(
     const projection = orthographic(0, width, 0, height, TEXT_RT_DEPTH, -TEXT_RT_DEPTH);
     const [x, y] = compositeTranslation(layout as TextLayout);
     const model = translation(x, y, 0);
-    return { modelViewProjection: multiply(projection, model), model, viewProjection: projection };
+    // V 是单位阵，`mulAffine(P, I) = P`（rea-matrix-order 2.4）
+    return { modelViewProjection: mulAffine(projection, model), model, viewProjection: projection };
   }
   let x = 0;
   let y = 0;
@@ -471,8 +486,9 @@ export function textMatrices(
     x = f(f(f(maxX - minX) * -0.5) - layout.padding[0]);
     y = f(f(f(maxY - minY) * -0.5) - layout.padding[1]);
   } else if (mesh) [x, y] = directTranslation(mesh);
-  const model = x === 0 && y === 0 ? world : multiply(world, translation(x, y, 0));
-  return { modelViewProjection: multiply(viewProjection, model), model, viewProjection };
+  // 字形平移是 glm::translate 内联（`FUN_140258050`，rea-matrix-order 3.4）
+  const model = x === 0 && y === 0 ? world : translateGlm(world, [x, y, 0]);
+  return { modelViewProjection: mulAffine(viewProjection, model), model, viewProjection };
 }
 
 export interface TextUniformInput {
@@ -607,7 +623,8 @@ export interface ParticleUniformInput {
  * 建 draw 与就地刷新共用，同 `drawUniformValues`。
  */
 export function particleUniformValues(input: ParticleUniformInput): Record<string, number[]> {
-  const modelViewProjection = multiply(input.viewProjection, input.world);
+  // uniform 的 MVP 一律由 `FUN_1400d4200` 算（rea-matrix-order 2.1）
+  const modelViewProjection = mulAffine(input.viewProjection, input.world);
   const values = staticBuiltins({
     modelViewProjection,
     modelViewProjectionInverse: invert(modelViewProjection),

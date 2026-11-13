@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { particleFov } from "../compile/particles";
 import { particleViewProjection, sceneViewProjection } from "./layout";
-import { multiply, orthographic, translation, type Mat4 } from "./math";
+import { mulAffine, multiply, orthographic, translation, type Mat4 } from "./math";
 
 const W = 1920;
 const H = 1080;
@@ -88,8 +88,10 @@ describe("缩放的投影（P5a 步骤 4）", () => {
       expect(m[5]).toBe(m11);
       // 别的取整对不上：按 double 先乘再舍入、或 2/(W/zoom) 都差 1 ulp（所以要按 float32 乘）
       expect(Math.fround((zoom * 2) / W) === m00 && Math.fround((zoom * 2) / H) === m11).toBe(false);
-      expect(m[12]).toBe(-Math.fround(zoom));
-      expect(m[13]).toBe(-Math.fround(zoom));
+      // 平移项：WPE 的缩放是帧函数的三步 f32（translate → scale → translate，rea-matrix-order 2.2），和 −f32(zoom) 差 1 ulp 以内；
+      // 逐位的核对见下一个用例（`A:\p5a\zoom15` 的 FR 图层）
+      expect(Math.abs(m[12] + Math.fround(zoom))).toBeLessThan(1e-6);
+      expect(Math.abs(m[13] + Math.fround(zoom))).toBeLessThan(1e-6);
       expect([m[10], m[14], m[15]]).toEqual([plain[10], plain[14], plain[15]]);
       const center = ndc(m, W / 2, H / 2, 0);
       expect(Math.abs(center[0])).toBeLessThan(1e-6);
@@ -100,6 +102,15 @@ describe("缩放的投影（P5a 步骤 4）", () => {
       ]);
     },
   );
+
+  it("平移项照 WPE 的三步 f32 逐位：p5a-zoom15 的 FR 图层（origin 1820, 40）MVP 平移等于抓帧", () => {
+    // `A:\p5a\zoom15\zoom15-frame102.rdc` 事件 18（FR，1920×1080、zoom 1.5）：g_ModelViewProjectionMatrix 的平移 (1.3437501192092896,
+    // −1.3888888359069824)。三步得 P12 = −1.5000001、P13 = −1.4999999（两个方向舍入方向相反）；平移项按 −f32(zoom) 时 x 差 1 ulp
+    const p = sceneViewProjection(GENERAL, 1.5);
+    expect([p[12], p[13]]).toEqual([-1.5000001192092896, -1.4999998807907104]);
+    const mvp = mulAffine(p, translation(1820, 40, 0));
+    expect([mvp[12], mvp[13]]).toEqual([1.3437501192092896, -1.3888888359069824]);
+  });
 
   it.each(MEASURED)(
     "$tag：透视粒子的 d = (H/(2·zoom))/tan(fov/2)，和 WPE 对上；fov、宽高比、远平面（15000）不变；按不缩放的 d 差上百",
