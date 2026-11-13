@@ -3,8 +3,8 @@
  * - 模型对象进 `layer.model`（网格的顶点 / 索引视图、格式、stride、索引宽度、按 `skin` 选的材质 pass、绘制顺序、包围盒），不报
  *   `object:model`；步骤 2 接上绘制后过渡键 `model:pending` 去掉了，静态网格不报任何键；同一个 mdl 被两个对象引用时只读一次、缓冲共用，
  *   材质各编一份；`transferableBuffers` 带上 mdl；
- * - 模型 pass 的深度 / 剔除按 WPE 缺省推（缺 `cullmode` = normal、缺 `depthtest` / `depthwrite` = enabled），会写深度的报
- *   `depthwrite:enabled`，只测不写的中性；图像层的缺省和检查不变；
+ * - 模型 pass 的深度 / 剔除按 WPE 缺省推（缺 `cullmode` = normal、缺 `depthtest` / `depthwrite` = enabled）；P5d 步骤 1 起图像层
+ *   同一套规则（`normalizeDepthKeys`），三个键都不再报（会写深度的 `depthwrite:enabled`、`cull:*`、`depthtest:*` 都去掉了）；
  * - `mdl:missing-attribute` 只对读了的属性报（真翻译器，`p5c-attr` 的 M1–M5）；分量类型对不上报 `mdl:attribute-type`（步骤 2）；
  * - `mdl:*` 各键（步骤 2 加 `mdl:framebuffer`）、`model:id`、`model:effects`、模型在组里（`model:passthrough:children:model`）；
  *   `castshadow` 等在模型上中性、在图像层上照报；
@@ -251,7 +251,7 @@ describe("compileScene：模型对象进 layer.model（P5c 步骤 1 点 3）", (
   });
 });
 
-describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、缺 depthtest / depthwrite = enabled）", () => {
+describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、缺 depthtest / depthwrite = enabled；P5d 步骤 1 起不报）", () => {
   const passOf = async (pass: Partial<MaterialPass>) => {
     const bundle = await compileModels([modelObject(1)], { "materials/a.json": material(pass) });
     return { pass: bundle.layers[0].model!.meshes[0].passes[0], unsupported: bundle.unsupported };
@@ -264,14 +264,11 @@ describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、
     expect(unsupported).toEqual([]);
   });
 
-  it("会写深度（normal / alphatocoverage，没关测试、没关写入）报 depthwrite:enabled，留给 P5d", async () => {
-    expect((await passOf({ blending: "normal" })).unsupported).toEqual(["depthwrite:enabled"]);
-    expect((await passOf({})).unsupported).toEqual(["depthwrite:enabled"]);
-    expect((await passOf({ blending: "normal", depthwrite: "enabled" })).unsupported).toEqual(["depthwrite:enabled"]);
-    expect((await passOf({ blending: "alphatocoverage" })).unsupported).toEqual([
-      "blend:alphatocoverage",
-      "depthwrite:enabled",
-    ]);
+  it("会写深度（normal / alphatocoverage，没关测试、没关写入）：P5d 步骤 1 接上深度附件后不报", async () => {
+    expect((await passOf({ blending: "normal" })).unsupported).toEqual([]);
+    expect((await passOf({})).unsupported).toEqual([]);
+    expect((await passOf({ blending: "normal", depthwrite: "enabled" })).unsupported).toEqual([]);
+    expect((await passOf({ blending: "alphatocoverage" })).unsupported).toEqual(["blend:alphatocoverage"]);
   });
 
   it("只测不写、不测：中性", async () => {
@@ -284,15 +281,17 @@ describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、
     expect(retro.pass).toMatchObject({ cullmode: "nocull", depthtest: "enabled", depthwrite: "disabled" });
   });
 
-  it("cullmode 只认 normal / nocull，depthtest 只认 enabled / disabled，其余照报", async () => {
+  it("非法值不报、取表的第一项（P5d 步骤 1）：cullmode 落到 normal，depthtest 落到 disabled", async () => {
     const cull = await passOf({ blending: "translucent", cullmode: "normal" });
     expect(cull.unsupported).toEqual([]);
     expect(cull.pass.cullmode).toBe("normal");
-    expect((await passOf({ blending: "translucent", cullmode: "front" })).unsupported).toEqual(["cull:front"]);
+    const front = await passOf({ blending: "translucent", cullmode: "front" });
+    expect(front.unsupported).toEqual([]);
+    expect(front.pass.cullmode).toBe("normal");
     expect((await passOf({ blending: "translucent", depthtest: "enabled" })).unsupported).toEqual([]);
-    expect((await passOf({ blending: "translucent", depthtest: "greater" })).unsupported).toEqual([
-      "depthtest:greater",
-    ]);
+    const greater = await passOf({ blending: "translucent", depthtest: "greater" });
+    expect(greater.unsupported).toEqual([]);
+    expect(greater.pass.depthtest).toBe("disabled");
   });
 
   it("网格材质读 _rt_FullFrameBuffer：mdl:framebuffer（P5c 步骤 2，WPE 的模型绘制不拷快照）；图像层不报这个键", async () => {
@@ -310,29 +309,29 @@ describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、
     expect(image.unsupported).toEqual([]);
   });
 
-  it("图像层的缺省与检查不变：缺键按 nocull / disabled，normal 缺深度键不报", () => {
-    const keys = (pass: MaterialPass, model?: boolean) => {
+  it("图像层与模型一套检查（P5d 步骤 1）：三个键都不报", () => {
+    const keys = (pass: MaterialPass) => {
       const out = new Set<string>();
-      checkPassFeatures(pass, out, { model });
+      checkPassFeatures(pass, out);
       return [...out].sort();
     };
     expect(keys({ shader: "s" })).toEqual([]);
-    expect(keys({ shader: "s", cullmode: "normal" })).toEqual(["cull:normal"]);
-    expect(keys({ shader: "s", depthtest: "enabled", depthwrite: "disabled" })).toEqual(["depthtest:enabled"]);
-    expect(keys({ shader: "s" }, true)).toEqual(["depthwrite:enabled"]);
-    expect(keys({ shader: "s", cullmode: "normal", depthtest: "enabled", depthwrite: "disabled" }, true)).toEqual([]);
+    expect(keys({ shader: "s", cullmode: "normal" })).toEqual([]);
+    expect(keys({ shader: "s", depthtest: "enabled", depthwrite: "disabled" })).toEqual([]);
+    expect(keys({ shader: "s", blending: "normal", depthwrite: "enabled" })).toEqual([]);
+    expect(keys({ shader: "s", cullmode: "normal", depthtest: "enabled", depthwrite: "disabled" })).toEqual([]);
   });
 
-  it("图像层的 ScenePass 缺键仍是 nocull / disabled / disabled", async () => {
+  it("图像层的 ScenePass 缺键同模型（P5d 步骤 1）：normal / enabled / enabled", async () => {
     const bundle = await compileModels([{ id: 1, image: "models/i.json" }], {
       "models/i.json": JSON.stringify({ material: "materials/a.json" }),
       "materials/a.json": material({ blending: "normal" }),
     });
     expect(bundle.unsupported).toEqual([]);
     expect(bundle.layers[0].passes[0]).toMatchObject({
-      cullmode: "nocull",
-      depthtest: "disabled",
-      depthwrite: "disabled",
+      cullmode: "normal",
+      depthtest: "enabled",
+      depthwrite: "enabled",
     });
     expect(bundle.layers[0].model).toBeNull();
   });

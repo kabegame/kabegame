@@ -317,6 +317,8 @@ const finalStep = (layer: SceneLayer, effect: number, extra: Partial<DrawStep> =
     uv: [1, 1],
     inset: [0, 0],
     blending: "additive",
+    // 形状的 pass 是 nocull、深度 disabled（P5d 步骤 1：两项都取这个 pass 自己的）
+    raster: { test: false, write: false, cull: false },
     ...extra,
   };
 };

@@ -1,7 +1,7 @@
 /**
  * P5a 步骤 1 的编译侧单测：前置的能力表修正（`.claude/plans/wpe-import/3-scene/phase5/phase-5a-parallax.md`「步骤 1」）。
  * 依据是 p5-REPORT「P5a 语义的实测核对」最后五行：JSON 注释、`cropoffset` 与对象 `config` 中性、不写深度的 pass 上
- * `depthwrite` 中性、模型 JSON 的布尔键只认 `true`。
+ * `depthwrite` 中性（P5d 步骤 1 起会写深度的也不报）、模型 JSON 的布尔键只认 `true`。
  */
 import { describe, expect, it } from "vitest";
 import { checkModelFeatures, checkObjectFeatures, checkPassFeatures, modelFlag } from "./features";
@@ -77,18 +77,15 @@ describe("对象 `config`", () => {
   });
 });
 
-describe("`depthwrite: enabled` 只在 pass 会写深度时报", () => {
+describe("`depthwrite: enabled` 不报（P5a 起不写深度的中性，P5d 步骤 1 接上深度附件后一律不报）", () => {
   it("translucent、additive、`depthtest: disabled` 不写深度，不报", () => {
     expect(passKeys({ blending: "translucent", depthwrite: "enabled" })).toEqual([]);
     expect(passKeys({ blending: "additive", depthwrite: "enabled" })).toEqual([]);
     expect(passKeys({ blending: "normal", depthtest: "disabled", depthwrite: "enabled" })).toEqual([]);
   });
-  it("normal 加 `depthtest: enabled`、normal 缺 `depthtest`：报", () => {
-    expect(passKeys({ blending: "normal", depthtest: "enabled", depthwrite: "enabled" })).toEqual([
-      "depthtest:enabled",
-      "depthwrite:enabled",
-    ]);
-    expect(passKeys({ blending: "normal", depthwrite: "enabled" })).toEqual(["depthwrite:enabled"]);
-    expect(passKeys({ depthwrite: "enabled" })).toEqual(["depthwrite:enabled"]);
+  it("normal 加 `depthtest: enabled`、normal 缺 `depthtest`：会写深度，P5d 步骤 1 起同样不报", () => {
+    expect(passKeys({ blending: "normal", depthtest: "enabled", depthwrite: "enabled" })).toEqual([]);
+    expect(passKeys({ blending: "normal", depthwrite: "enabled" })).toEqual([]);
+    expect(passKeys({ depthwrite: "enabled" })).toEqual([]);
   });
 });

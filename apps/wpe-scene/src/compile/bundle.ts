@@ -41,6 +41,7 @@ import {
   isSoundObject,
   isTextObject,
   modelFlag,
+  normalizeDepthKeys,
   objectKind,
   PARTICLE_UNIFORMS,
   shapeIssues,
@@ -287,6 +288,10 @@ export interface ScenePass {
   key: TargetKey;
   program: number | null;
   blending: string;
+  /**
+   * 深度 / 剔除三个键：编译期已按 WPE 规整（`features.ts` 的 `normalizeDepthKeys`，P5d 步骤 1），只会是 normal / nocull、enabled /
+   * disabled；渲染器按它们给绘制步骤定光栅状态（`render/graph.ts` 的 `rasterState`）。
+   */
   cullmode: string;
   depthtest: string;
   depthwrite: string;
@@ -800,12 +805,6 @@ interface PassContext {
   particle?: ParticleSheetSystem;
   /** 字体着色器的 pass（P6b 1d）：程序检查放行 `TEXT_UNIFORMS`（MSDF 才读的 `g_RenderVar0–3`）。 */
   text?: boolean;
-  /**
-   * 模型网格的材质（P5c 步骤 1）：深度 / 剔除按 WPE 的缺省推（缺 `cullmode` 为 normal、缺 `depthtest` / `depthwrite` 为 enabled），
-   * 推出的值写进 `ScenePass`，能力检查走模型规则（`checkPassFeatures` 的 `model`）。静态网格不追加任何引擎 COMBO（rea-p5-mesh 2.4），
-   * 全局宏（`HDR`、`SCENE_ORTHO`）照常，所以着色器的编译和图像层同一条路。
-   */
-  model?: boolean;
 }
 
 /**
@@ -1234,8 +1233,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
 
   /**
    * 模型对象（P5c 步骤 1，rea-p5-mesh 第 1、2 节，p5-REPORT「P5c 语义的实测核对」）：读 mdl、查能力，每个网格按对象的 `skin` 选一个
-   * 材质（`meshSkin`），走图像层同一条 `compilePass`（`model: true`：深度 / 剔除按 WPE 缺省推，静态网格不追加引擎 COMBO）；稳定键
-   * `objects/<i>/meshes/<m>/passes/<k>`。网格的顶点 / 索引字节是文件缓冲的视图，材质按对象各编一份（`skin` 可能不同）。
+   * 材质（`meshSkin`），走图像层同一条 `compilePass`（深度 / 剔除和别的 pass 一样按 `normalizeDepthKeys` 规整；静态网格不追加
+   * 引擎 COMBO，rea-p5-mesh 2.4）；稳定键 `objects/<i>/meshes/<m>/passes/<k>`。网格的顶点 / 索引字节是文件缓冲的视图，材质按对象
+   * 各编一份（`skin` 可能不同）。
    * 绘制顺序在这里排好（`meshDrawOrder`，看每个网格第一个 pass 的 blending）。绘制在 P5c 步骤 2 接上（`render/graph.ts` 的
    * `planModelLayer`），步骤 1 的过渡键 `model:pending` 已去掉。
    */
@@ -1298,7 +1298,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 语料的模型材质都是一个 pass；多 pass 的网格 WPE 怎么画没测
     if (passes.length > 1) unsupported.add("mdl:material-passes");
     for (const [k, pass] of passes.entries()) {
-      const compiled = await compilePass(pass, { key: `objects/${index}/meshes/${m}/passes/${k}`, model: true });
+      const compiled = await compilePass(pass, { key: `objects/${index}/meshes/${m}/passes/${k}` });
       if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
       if (compiled.framebuffer) unsupported.add("mdl:framebuffer");
       out.passes.push(compiled);
@@ -1309,7 +1309,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
   async function compilePass(pass: MaterialPass, context: PassContext): Promise<ScenePass> {
     const issues = context.unsupported ?? unsupported;
-    checkPassFeatures(pass, issues, { model: context.model });
+    checkPassFeatures(pass, issues);
     const scope = context.scope ?? null;
     const names = (pass.textures ?? []).map(textureName);
     const slots: Record<number, number> = {};
@@ -1390,14 +1390,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
       program = addProgram(result);
     }
-    // 缺键：模型照 WPE 的缺省（材质 pass 字节缺省 0，rea-p5-mesh 3）；图像层、effect、粒子保持现状，P5d 和深度附件一起统一
+    // 深度 / 剔除三个键照 WPE 规整（P5d 步骤 1）：缺键为开、非法值取表的第一项，所有 pass 一套规则
     return {
       key: context.key,
       program,
       blending: pass.blending ?? "normal",
-      cullmode: pass.cullmode ?? (context.model ? "normal" : "nocull"),
-      depthtest: pass.depthtest ?? (context.model ? "enabled" : "disabled"),
-      depthwrite: pass.depthwrite ?? (context.model ? "enabled" : "disabled"),
+      ...normalizeDepthKeys(pass),
       textures: slots,
       runtime,
       uniforms: {

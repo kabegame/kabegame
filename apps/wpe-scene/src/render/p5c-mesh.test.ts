@@ -174,8 +174,18 @@ describe("planModelLayer：每个网格一个 mesh 步骤（P5c 步骤 2 点 1�
         target: { kind: "scene" },
         inputs: { 0: { kind: "texture", index: 3 }, 1: { kind: "framebuffer" } },
         blending: "normal",
+        // P5d 步骤 1：两项都取自己的 pass（depthtest enabled、depthwrite disabled、nocull）
+        raster: { test: true, write: false, cull: false },
       },
-      { kind: "mesh", mesh: 0, pass: a.mesh.passes[0], target: { kind: "scene" }, inputs: {}, blending: "translucent" },
+      {
+        kind: "mesh",
+        mesh: 0,
+        pass: a.mesh.passes[0],
+        target: { kind: "scene" },
+        inputs: {},
+        blending: "translucent",
+        raster: { test: true, write: false, cull: false },
+      },
     ]);
     // `planLayer` 对模型层走这里；签名带 pass 键
     expect(planLayer(layer, [])).toEqual(plan);
@@ -508,6 +518,7 @@ describe("pipelineKey / stepPipeline：网格多两项（P5c 步骤 2 点 2）",
       target: { kind: "scene" as const },
       inputs: {},
       blending: "translucent",
+      raster: { test: true, write: false, cull: cullmode !== "nocull" },
     });
     const normal = stepPipeline(step("normal"), "rgba8unorm", () => "rgba8unorm", false, null, "20:0@0:float32x3");
     expect(normal).toEqual({
@@ -795,17 +806,25 @@ describe("GpuScene：模型层（P5c 步骤 2 点 3）", () => {
     return { ...built, gpu, scene: gpuScene, state };
   }
 
-  it("每个模型层一个 model op，draw 按 model.order；管线是三角形列表、带布局与剔除、不写 alpha", async () => {
+  it("每个模型层一个 model op，draw 按 model.order；管线是三角形列表、带布局与剔除、不写 alpha；测深度（P5d 步骤 1）", async () => {
     const { scene, gpu } = await open();
     const runtime = internals(scene).layers.find((item) => item.object === 0)!;
     expect(runtime.ops.map((op) => op.kind)).toEqual(["model"]);
     expect(runtime.ops[0].draws!.map((draw) => draw.label)).toEqual(["layer 10 A mesh 1", "layer 10 A mesh 0"]);
-    expect(meshDraw(scene, 0, 0).pipeline.label).toBe("scene program 0 translucent rgba8unorm list mesh cull mask 7");
-    expect(meshDraw(scene, 0, 1).pipeline.label).toBe("scene program 0 normal rgba8unorm list mesh mask 7");
+    // 网格的 pass 都测深度（depthtest enabled）：场景有深度附件，管线带深度状态（P5d 步骤 1），标签多 ` depth:<t|-><w|->`
+    expect(meshDraw(scene, 0, 0).pipeline.label).toBe(
+      "scene program 0 translucent rgba8unorm list mesh cull depth:t- mask 7",
+    );
+    expect(meshDraw(scene, 0, 1).pipeline.label).toBe("scene program 0 normal rgba8unorm list mesh depth:t- mask 7");
     const descriptor = gpu.pipelines.find(
-      (item) => item.label === "scene program 0 translucent rgba8unorm list mesh cull",
+      (item) => item.label === "scene program 0 translucent rgba8unorm list mesh cull depth:t-",
     )!;
     expect(descriptor.primitive).toEqual({ topology: "triangle-list", cullMode: "back", frontFace: "ccw" });
+    expect(descriptor.depthStencil).toEqual({
+      format: "depth32float",
+      depthCompare: "greater",
+      depthWriteEnabled: false,
+    });
     expect([...descriptor.vertex.buffers!]).toEqual([
       {
         arrayStride: 20,

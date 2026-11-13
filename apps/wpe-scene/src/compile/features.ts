@@ -1049,47 +1049,41 @@ function alphaWritingUsed(value: unknown): boolean {
   return active(value) && value !== "default";
 }
 
+/** 材质 pass 的剔除（`cullmode` 规整后的值）：normal 剔背面、屏幕上逆时针为正面；nocull 不剔。 */
+export type PassCullMode = "normal" | "nocull";
+/** 材质 pass 的深度测试 / 深度写入（`depthtest` / `depthwrite` 规整后的值）。 */
+export type PassDepthMode = "enabled" | "disabled";
+
 /**
- * 这个 pass 会不会写深度（`FUN_140099f60`，rea-p5-mesh 3.4，P5a 步骤 0 实测）：translucent / additive 一律不写，
- * `depthtest: disabled` 也连带不写。缺 `depthtest` 时 WPE 按 enabled（P5d 再改缺省），这里照 WPE 当作会写。
+ * 材质 pass 的深度 / 剔除键照 WPE 规整（rea-p5-mesh 3.3，p5-REPORT「P5d 语义的实测核对」的深度、非法值、缺键三行）：
+ * - 缺键（`undefined`）为开：`cullmode` normal、`depthtest` / `depthwrite` enabled（材质 pass 字节缺省为 0，图像层、粒子、模型、
+ *   effect 一样，`p5d-depth` 缺全部深度键的图像层测、写、剔背面）；
+ * - 写了但不是表里的串（含非字符串、`null`）取表的第一项：`depthtest` / `depthwrite` 落到 disabled（`depthtest: "yes"` 不测），
+ *   `cullmode` 落到 normal（`cullmode: "back"` 剔背面）。
+ * 所有 pass 一套规则（`compilePass`、泛光材质），之后 `ScenePass` 上这三个字段只会是这里的值，渲染器不再兜底。
  */
-function writesDepth(pass: MaterialPass): boolean {
-  const blending = pass.blending ?? "normal";
-  return pass.depthtest !== "disabled" && (blending === "normal" || blending === "alphatocoverage");
+export function normalizeDepthKeys(pass: Pick<MaterialPass, "cullmode" | "depthtest" | "depthwrite">): {
+  cullmode: PassCullMode;
+  depthtest: PassDepthMode;
+  depthwrite: PassDepthMode;
+} {
+  const pick = <T extends string>(value: unknown, on: T, off: T, fallback: T): T =>
+    value === undefined ? on : value === on || value === off ? (value as T) : fallback;
+  return {
+    cullmode: pick<PassCullMode>(pass.cullmode, "normal", "nocull", "normal"),
+    depthtest: pick<PassDepthMode>(pass.depthtest, "enabled", "disabled", "disabled"),
+    depthwrite: pick<PassDepthMode>(pass.depthwrite, "enabled", "disabled", "disabled"),
+  };
 }
 
 /**
- * 材质 pass 的能力检查。图像层、effect、粒子的深度 / 剔除照旧：缺键当 disabled / nocull（P5d 再和深度附件一起统一），所以 `cullmode`
- * 只认 `nocull`、`depthtest` 只认 `disabled`，会写深度的 `depthwrite` 照报。
- *
- * 模型的 pass（`context.model`，P5c 步骤 1）照 WPE 的缺省推：材质 pass 字节缺省为 0，即 `depthtest` enabled、`depthwrite` enabled、
- * `cullmode` normal（rea-p5-mesh 3、p5-REPORT「P5c 语义的实测核对」的剔除与深度两行）。
- * - `cullmode`：缺键 / `normal`（剔背面，屏幕上逆时针是正面，`p5c-cull`）/ `nocull` 支持，其余照报；
- * - `depthtest`：缺键 / `enabled` / `disabled` 中性，其余照报。只测不写的中性：语料里会写深度的 pass 都照报，场景里没有别人写过深度，
- *   GREATER 对清屏值 0 总是通过（retro 的 `bgfade` 就是这样，深度 0.5）；
- * - `depthwrite`：会写深度（`writesDepth`）且没写成 `disabled`（缺键按 enabled）时报 `depthwrite:<值>`，缺键报 `depthwrite:enabled`，
- *   留给 P5d（`p5c-depth` 实测正交场景里模型照样测深度、写深度）。
+ * 材质 pass 的能力检查。深度与剔除三个键不报（P5d 步骤 1）：缺键、合法值、非法值都按 WPE 规整（`normalizeDepthKeys`），渲染器按规整后的值
+ * 给每个绘制步骤定光栅状态（`render/graph.ts` 的 `rasterState`），场景目标按需带深度附件（`render/scene.ts`）。依据是 p5-REPORT「P5d 语义的
+ * 实测核对」：深度、剔除、非法值、缺键、正交场景同样测深度几行全部实测成立。拼错的键（ricepod 的 `depthtesting`）不在 `SUPPORTED_PASS`
+ * 里，照旧报 `material:<键>`。
  */
-export function checkPassFeatures(
-  pass: MaterialPass,
-  unsupported: Set<string>,
-  context: { model?: boolean } = {},
-): void {
+export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>): void {
   if (pass.blending && !SUPPORTED.blending.includes(pass.blending as never)) unsupported.add(`blend:${pass.blending}`);
-  if (context.model) {
-    if (pass.cullmode && pass.cullmode !== "normal" && pass.cullmode !== "nocull")
-      unsupported.add(`cull:${pass.cullmode}`);
-    if (pass.depthtest && pass.depthtest !== "enabled" && pass.depthtest !== "disabled")
-      unsupported.add(`depthtest:${pass.depthtest}`);
-    if (pass.depthwrite !== "disabled" && writesDepth(pass))
-      unsupported.add(`depthwrite:${pass.depthwrite || "enabled"}`);
-  } else {
-    if (pass.cullmode && pass.cullmode !== "nocull") unsupported.add(`cull:${pass.cullmode}`);
-    if (pass.depthtest && pass.depthtest !== "disabled") unsupported.add(`depthtest:${pass.depthtest}`);
-    // 不写深度的 pass 上 `depthwrite: enabled` 不改变画面，不报；其余照报，留给 P5d
-    if (pass.depthwrite && pass.depthwrite !== "disabled" && writesDepth(pass))
-      unsupported.add(`depthwrite:${pass.depthwrite}`);
-  }
   // COMBO 只按整数读（I3）：写成 `{user, value}` 时 WPE 断言中止整个进程，这里按不支持退回预览图
   for (const value of Object.values(pass.combos ?? {}))
     if (value && typeof value === "object") unsupported.add("combo:user-binding");
@@ -1236,8 +1230,8 @@ export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
 const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND", "REFRACT", "CUTOUT", "NORMALMAP"]);
 
 /**
- * 粒子材质 pass 的 COMBO 与光照（混合、剔除、深度由 `checkPassFeatures` 照常检查，引擎 uniform / COMBO 由
- * `checkProgramFeatures` 带 `PARTICLE_UNIFORMS` 检查）。
+ * 粒子材质 pass 的 COMBO 与光照（混合由 `checkPassFeatures` 照常检查，剔除、深度按 `normalizeDepthKeys` 规整，引擎 uniform /
+ * COMBO 由 `checkProgramFeatures` 带 `PARTICLE_UNIFORMS` 检查）。
  * - 材质写的、以及纹理槽注解带出的 COMBO（翻译结果 `source` 为 `request` / `texture`），值非 0 的只允许
  *   `PARTICLE_COMBOS` 里的，其余报 `particle:combo:<名字>`。
  * - 着色器注解的缺省值（`source: "default"`）不算：WPE 同样按缺省值编，翻译器照办。`genericparticle` 的 `FOG` 缺省为 1，

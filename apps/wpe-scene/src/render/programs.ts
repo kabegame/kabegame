@@ -285,6 +285,17 @@ export async function createProgram(
 }
 
 /**
+ * 场景目标深度附件的格式（P5d 步骤 1）：WPE 后备缓冲的深度是 D32F（p5-REPORT「P5d 语义的实测核对」的深度一行）。管线的 `depthStencil` 与
+ * render pass 的深度附件都用它（WebGPU 要求两者一致）。
+ */
+export const SCENE_DEPTH_FORMAT: GPUTextureFormat = "depth32float";
+
+/** 深度状态的两位标记（管线键与标签共用）：测 `t` / 不测 `-`，写 `w` / 不写 `-`。 */
+export function depthFlags(depth: { test: boolean; write: boolean }): string {
+  return `${depth.test ? "t" : "-"}${depth.write ? "w" : "-"}`;
+}
+
+/**
  * `blending` 为 null 时关闭混合（基础 pass 画进合成 RT，B7）。`writeAlpha`：画到场景目标时为 false（见文件头），
  * 画进合成 RT / fbo 时为 true（合成链要带着 alpha 走到上屏那一步）。`topology`：图层四边形是三角形带，
  * 粒子是带索引的三角形列表（每粒子 `0 1 2 0 2 3`，P4a 步骤 4）；rope（几何着色器展开，P4d 步骤 1）是三角形带，每段一个实例，
@@ -292,6 +303,9 @@ export async function createProgram(
  * 模型网格（P5c 步骤 2）另给两项：`vertexBuffers` 是按网格格式建的顶点布局（`render/mesh.ts` 的 `meshVertexLayout`，代替程序自己的
  * `vertexPacking`）；`cull` 为 `"back"` 时剔背面、屏幕上逆时针为正面（D3D11 光栅状态 `CullMode BACK`、`FrontCounterClockwise 1`，
  * rea-p5-mesh 3.4，p5-REPORT `p5c-cull`），标签各多一个 ` mesh`、` cull`。都不给时管线与以前逐项相同。
+ * `cull` 自 P5d 步骤 1 起对所有步骤生效（图像层、粒子、文本、形状同一套，`p5d-cull`）。`depth`（P5d 步骤 1）：画进带深度附件的场景目标
+ * 时给，`depthStencil` 是 `SCENE_DEPTH_FORMAT`，测深度时 `greater`（反向 Z，清 0，WPE 的 GREATER），不测时 `always`，`write` 开写入；
+ * 标签多一个 ` depth:<t|-><w|->`。不给时没有 `depthStencil`，管线与以前逐项相同。
  */
 export async function createPipeline(
   device: GPUDevice,
@@ -304,11 +318,12 @@ export async function createPipeline(
   alphaMax = false,
   vertexBuffers?: GPUVertexBufferLayout[],
   cull?: "back",
+  depth?: { test: boolean; write: boolean },
 ): Promise<GPURenderPipeline> {
   const blend = alphaMax ? groupBlendState(blending) : blending ? blendState(blending) : undefined;
   try {
     return await device.createRenderPipelineAsync({
-      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}${alphaMax ? " max" : ""}${vertexBuffers ? " mesh" : ""}${cull ? " cull" : ""}`,
+      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}${alphaMax ? " max" : ""}${vertexBuffers ? " mesh" : ""}${cull ? " cull" : ""}${depth ? ` depth:${depthFlags(depth)}` : ""}`,
       layout: program.pipelineLayout,
       vertex: {
         module: program.vertex,
@@ -322,6 +337,15 @@ export async function createPipeline(
         targets: [{ format, blend, writeMask: writeAlpha ? 0xf : 0x7 }],
       },
       primitive: cull ? { topology, cullMode: cull, frontFace: "ccw" } : { topology, cullMode: "none" },
+      ...(depth
+        ? {
+            depthStencil: {
+              format: SCENE_DEPTH_FORMAT,
+              depthCompare: depth.test ? "greater" : "always",
+              depthWriteEnabled: depth.write,
+            },
+          }
+        : {}),
     });
   } catch (error) {
     throw new SceneRenderError([

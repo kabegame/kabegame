@@ -108,11 +108,17 @@
  *   `frustumCulled`，平面取场景级的视图投影），没被剔就按 `model.order` 画各网格，和图像步骤、粒子在同一个场景 pass 里按 `objects` 顺序。
  *   网格的顶点与索引是 mdl 的字节原样上传，按文件缓冲上的视图去重（同一个 mdl 的几个对象共用一份，`meshBuffer`），随场景销毁；
  *   `drawIndexed`、三角形列表。顶点布局按网格格式（`meshVertexLayout`），网格没有的属性接全场一份的全零占位缓冲（槽 1，`arrayStride` 0）。
- *   管线比图像层多两项：布局键、`cullmode: normal` 的背面剔除（`pipelineKey` 只在出现时加后缀）。uniform 同图像层直接上屏（视差、抖动、
- *   缩放，`perspective: true` 换透视那一份），颜色组固定为 1。
+ *   管线比图像层多一项布局键（`pipelineKey` 只在出现时加后缀；背面剔除 P5c 时只有网格有，P5d 步骤 1 起所有步骤一样，见下「深度与
+ *   剔除」）。uniform 同图像层直接上屏（视差、抖动、缩放，`perspective: true` 换透视那一份），颜色组固定为 1。
  * - 形状（P8 步骤 2，`SceneLayer.shape`）：渲染图只有一步 `final`（`planShapeLayer`），这里只在两处认它：建 draw 时 `geometry: "shape"`
  *   的顶点是 `shapeQuad`（effect 常量的四个点），矩阵走 `drawMatrices` 的形状分支（效果矩阵取 WPE 给形状的那组值）。`buildableLayers`
  *   收形状层（它的 `passes` 为空）。管线照 `final`：画到场景时写 RGB、三角形带。
+ * - 深度与剔除（P5d 步骤 1，p5-REPORT「P5d 语义的实测核对」）：每个绘制步骤的 `raster`（`graph.ts` 的 `rasterState`）定管线的剔除与深度
+ *   （`stepPipeline`）。剔除对所有步骤生效（`cullMode: "back"`、`frontFace: "ccw"`）。深度附件按需建（`wantsDepth`）：加载时的计划与
+ *   预建的变体里有一个「画进场景目标、不在组里、而且测深度」的步骤，才给场景目标配一张同尺寸的 `depth32float`（两张交替的场景目标共用）；
+ *   有它时画进场景目标、不在组里的管线都带 `depthStencil`（测 GREATER、不测 always），组里的与画进合成 RT / fbo 的不带，泛光链与
+ *   `linearizeBase` 各开自己的 pass、也不带。每帧第一个场景 pass 清颜色时深度一起清 0（反向 Z），其余 load，`clearenabled: false` 时
+ *   深度也不清。没有这种步骤的场景不建深度，管线与 render pass 和改前逐字相同。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -173,7 +179,14 @@ import {
 import { identity, multiply, orthographic, translation, type Mat4 } from "./math";
 import { alignedBytes, frustumCulled, MESH_PLACEHOLDER_BYTES, meshVertexLayout, type MeshVertexLayout } from "./mesh";
 import { parallaxOffset, type SceneParallax } from "./parallax";
-import { createPipeline, createProgram, programVertexPacking, type GpuProgram } from "./programs";
+import {
+  createPipeline,
+  createProgram,
+  depthFlags,
+  programVertexPacking,
+  SCENE_DEPTH_FORMAT,
+  type GpuProgram,
+} from "./programs";
 import type { LayerState, SceneState } from "./state";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
@@ -574,8 +587,16 @@ export interface PipelineSpec {
    * 网格上要各建一份。只有网格步骤有；有时管线键多一个后缀，其余键和加这一项之前逐字相同。
    */
   mesh?: string;
-  /** 剔背面（P5c 步骤 2：模型 pass 的 `cullmode` 为 normal，`p5c-cull`）；不剔时不写，管线键不变。 */
+  /**
+   * 剔背面（屏幕上逆时针为正面）：步骤的 `raster.cull`（P5c 步骤 2 起模型，P5d 步骤 1 推广到所有步骤，`p5d-cull`）；不剔时不写，管线键
+   * 不变。
+   */
   cull?: "back";
+  /**
+   * 深度状态（P5d 步骤 1）：只在「这一步画进场景目标、不在组里、而且场景有深度附件」时出现（格式 `depth32float`，WebGPU 要求管线与 render
+   * pass 的深度格式一致），`test` 为 GREATER（反向 Z，清 0）、否则 always，`write` 写深度。没有时管线键不变。
+   */
+  depth?: { test: boolean; write: boolean };
 }
 
 export function pipelineKey({
@@ -587,8 +608,9 @@ export function pipelineKey({
   alphaMax,
   mesh,
   cull,
+  depth,
 }: PipelineSpec): string {
-  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}${mesh !== undefined ? `|mesh:${mesh}` : ""}${cull ? `|cull:${cull}` : ""}`;
+  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}${mesh !== undefined ? `|mesh:${mesh}` : ""}${cull ? `|cull:${cull}` : ""}${depth ? `|depth:${depthFlags(depth)}` : ""}`;
 }
 
 /**
@@ -598,8 +620,10 @@ export function pipelineKey({
  * 上（格式同场景目标）：写 RGBA（`p5b-grp-cb1` 事件 78–106）；组 `copyBackground` 为 false 时 alpha 取 MAX、写 RGBA（`p5b-grp-cb0`
  * 事件 73–101，rea-p5-modelflags §2.5 的状态 `0x10`）；组 `copyBackground` 为 true 时上屏角色（`final` / `passthrough`）只写 RGB，
  * WPE 在每个合成渲染结束时关掉 alpha 写入（`p5b-grpptc` 事件 102、`p5b-nest` 事件 129 的写掩码 7）。
- * `mesh`：网格步骤（P5c 步骤 2）的顶点布局键（`meshVertexLayout`）。网格是三角形列表；`cullmode` 为 normal 时剔背面（缺键编译期已按 WPE
- * 缺省写成 normal），nocull 不剔。图像层、粒子、文本的剔除缺省照旧不剔，等 P5d 和深度附件一起统一。
+ * `mesh`：网格步骤（P5c 步骤 2）的顶点布局键（`meshVertexLayout`），网格是三角形列表。
+ * 剔除与深度（P5d 步骤 1）按步骤的 `raster`（`graph.ts` 的 `rasterState`）：`cull` 对所有步骤、所有目标都起作用；深度只在
+ * `sceneDepth`（场景目标带深度附件）时、这一步画进场景目标且不在组里才给（组里「画到场景」的落在组的合成 RT 上，WPE 的合成 RT 不挂
+ * 深度）。场景没有深度附件时，管线键与改前逐字相同（剔除照旧只看 `raster.cull`）。
  */
 export function stepPipeline(
   step: DrawLike,
@@ -608,8 +632,9 @@ export function stepPipeline(
   geometry = false,
   group: Pick<SceneLayer, "copyBackground"> | null = null,
   mesh?: string,
+  sceneDepth = false,
 ): PipelineSpec {
-  const { pass, blending, target } = step;
+  const { pass, blending, target, raster } = step;
   const inGroup = !!group && target.kind === "scene";
   const alphaMax = inGroup && !group.copyBackground;
   const upload = step.kind === "draw" && (step.role === "final" || step.role === "passthrough");
@@ -624,8 +649,32 @@ export function stepPipeline(
         : "triangle-strip",
     ...(alphaMax ? { alphaMax: true } : {}),
     ...(step.kind === "mesh" ? { mesh: mesh ?? "" } : {}),
-    ...(step.kind === "mesh" && pass.cullmode === "normal" ? { cull: "back" as const } : {}),
+    ...(raster.cull ? { cull: "back" as const } : {}),
+    ...(sceneDepth && target.kind === "scene" && !group ? { depth: { test: raster.test, write: raster.write } } : {}),
   };
+}
+
+/**
+ * 场景目标要不要深度附件（P5d 步骤 1）：有一个「画进场景目标、不在组里、而且测深度」的绘制步骤就要。`plans` 是一个图层可能用到的全部计划
+ * （加载时的计划与 `variantPlans` 的预建计划取并集），`layer.group` 非空的图层（组的子孙）画进组的合成 RT，不算。不测深度的 pass 也不写
+ * 深度（`depthtest: disabled` 连写入一起关），这时深度附件对画面没有任何作用，所以一个都没有的场景不建，管线与 render pass 和改前逐字
+ * 相同，也不白占显存。
+ */
+export function wantsDepth(
+  layers: readonly { layer: Pick<SceneLayer, "group">; plans: readonly LayerPlan[] }[],
+): boolean {
+  return layers.some(
+    ({ layer, plans }) =>
+      layer.group == null &&
+      plans.some((plan) =>
+        plan.steps.some(
+          (step) =>
+            (step.kind === "draw" || step.kind === "particles" || step.kind === "text" || step.kind === "mesh") &&
+            step.target.kind === "scene" &&
+            step.raster.test,
+        ),
+      ),
+  );
 }
 
 /**
@@ -806,6 +855,11 @@ export class GpuScene {
   /** `linearizeBase` 的管线，第一次用时才建。 */
   private linearBase: { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup } | null = null;
   private snapshot: RenderTarget | null = null;
+  /**
+   * 场景目标的深度附件（P5d 步骤 1，`depth32float`，`wantsDepth`）：有测深度的绘制画进场景目标才建，尺寸同场景目标；两张交替的场景目标
+   * 共用这一张（同 WPE 后备缓冲的深度不随交换链翻转）。没有时为 null，管线与 render pass 都不带深度。
+   */
+  private depthTarget: { texture: GPUTexture; view: GPUTextureView } | null = null;
   width = 0;
   height = 0;
   /** 场景目标、快照与合成 RT 的格式（HDR 为 `rgba16float`）。 */
@@ -1031,6 +1085,21 @@ export class GpuScene {
     return { texture, view: texture.createView() };
   }
 
+  /** 场景目标的深度附件（P5d 步骤 1）：场景目标尺寸、`depth32float`，只作附件；计进显存估算（每像素 4 字节）。 */
+  private createDepthTarget(): { texture: GPUTexture; view: GPUTextureView } {
+    const { width, height } = this;
+    const texture = this.own(
+      this.device.createTexture({
+        label: "scene depth",
+        size: { width, height },
+        format: SCENE_DEPTH_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      }),
+    );
+    this.targetBytes += width * height * 4;
+    return { texture, view: texture.createView() };
+  }
+
   private createTarget(
     label: string,
     width: number,
@@ -1065,7 +1134,10 @@ export class GpuScene {
     return this.sampler(samplerDescriptor(texture, texture.mips.length > 1));
   }
 
-  /** `mesh`、`cull`：网格步骤（P5c 步骤 2）的顶点布局与剔除，见 `createPipeline`；键里只在出现时加后缀（`pipelineKey`）。 */
+  /**
+   * `mesh`：网格步骤（P5c 步骤 2）的顶点布局；`cull`、`depth`：步骤的剔除与深度状态（P5d 步骤 1），见 `createPipeline`；键里只在出现时
+   * 加后缀（`pipelineKey`）。
+   */
   private pipelineFor(
     program: GpuProgram,
     blending: string | null,
@@ -1075,6 +1147,7 @@ export class GpuScene {
     alphaMax = false,
     mesh?: MeshVertexLayout,
     cull?: PipelineSpec["cull"],
+    depth?: PipelineSpec["depth"],
   ): Promise<GPURenderPipeline> {
     const key = pipelineKey({
       program: program.index,
@@ -1085,6 +1158,7 @@ export class GpuScene {
       alphaMax,
       mesh: mesh?.key,
       cull,
+      depth,
     });
     let pipeline = this.pipelines.get(key);
     if (!pipeline) {
@@ -1098,6 +1172,7 @@ export class GpuScene {
         alphaMax,
         mesh?.buffers,
         cull,
+        depth,
       ).then((ready) => {
         this.readyPipelines.set(key, ready);
         return ready;
@@ -1243,6 +1318,8 @@ export class GpuScene {
       this.groupOf(layer),
       // 网格（P5c 步骤 2）的顶点布局按网格格式
       step.kind === "mesh" ? this.meshLayoutOf(layer, step).key : undefined,
+      // 深度附件（P5d 步骤 1）：有时画进场景目标、不在组里的管线都带深度状态
+      this.depthTarget !== null,
     );
   }
 
@@ -1256,11 +1333,11 @@ export class GpuScene {
       plan.steps.map(async (step) => {
         if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text" && step.kind !== "mesh") return;
         const program = await this.ensureProgram(step.pass.program!);
-        const { blending, format, alpha, topology, alphaMax, cull } = this.pipelineOf(step, runtime);
+        const { blending, format, alpha, topology, alphaMax, cull, depth } = this.pipelineOf(step, runtime);
         const mesh = step.kind === "mesh" ? this.meshLayoutOf(runtime.layer, step) : undefined;
         prepared.set(step, {
           program,
-          pipeline: await this.pipelineFor(program, blending, format, alpha, topology, alphaMax, mesh, cull),
+          pipeline: await this.pipelineFor(program, blending, format, alpha, topology, alphaMax, mesh, cull, depth),
         });
       }),
     );
@@ -1451,6 +1528,13 @@ export class GpuScene {
 
     const built = buildableLayers(bundle);
     const plans = built.map((layer) => this.planOf(layer, state));
+    // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它
+    if (
+      wantsDepth(
+        built.map((layer, index) => ({ layer, plans: [plans[index], ...variantPlans(layer, bundle.textures)] })),
+      )
+    )
+      this.depthTarget = this.createDepthTarget();
 
     // 程序：全部建完再汇总失败，Tint 报告一次列全
     const used = new Set<number>();
@@ -2795,6 +2879,7 @@ export class GpuScene {
     if (!this.current) return;
     const { view: sceneView, texture: sceneTexture } = this.current;
     const { clearcolor, clearenabled } = state.general;
+    const depthView = this.depthTarget?.view ?? null;
     // 粒子层现排时的世界矩阵（P4e 步骤 2）：这一刻的状态下，一条父链只算一次
     const worlds = new Map<number, Mat4>();
     const [r, g, b] = clearcolor;
@@ -2818,19 +2903,27 @@ export class GpuScene {
       if (open && open.view === view) return open.pass;
       end();
       const scene = view === sceneView;
+      // 第一个 pass：开着清成 clearcolor，关着接着这张目标上次的成品画
+      const loadOp: GPULoadOp = started || !clearenabled ? "load" : "clear";
       const pass = encoder.beginRenderPass({
         label: scene ? "scene" : "group",
         colorAttachments: [
           scene
-            ? {
-                view,
-                clearValue: { r, g, b, a: 1 },
-                // 第一个 pass：开着清成 clearcolor，关着接着这张目标上次的成品画
-                loadOp: started || !clearenabled ? "load" : "clear",
-                storeOp: "store",
-              }
+            ? { view, clearValue: { r, g, b, a: 1 }, loadOp, storeOp: "store" }
             : { view, loadOp: "load", storeOp: "store" },
         ],
+        // 深度附件（P5d 步骤 1）只挂在真正的场景目标上（组的合成 RT 不挂）：和颜色一起清成 0（反向 Z），其余 load；`clearenabled` 为
+        // false 时颜色、深度都不清（`p5d-noclear`：静止的写深度物体从第二帧起被自己上一帧的深度挡掉）
+        ...(scene && depthView
+          ? {
+              depthStencilAttachment: {
+                view: depthView,
+                depthClearValue: 0,
+                depthLoadOp: loadOp,
+                depthStoreOp: "store",
+              },
+            }
+          : {}),
       });
       if (scene) started = true;
       open = { pass, view };
@@ -2989,6 +3082,7 @@ export class GpuScene {
     this.alternate = null;
     this.linearBase = null;
     this.snapshot = null;
+    this.depthTarget = null;
     this.bloom = null;
     this.particleIndices = null;
     this.particleTimings = null;

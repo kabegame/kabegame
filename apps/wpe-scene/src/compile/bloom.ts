@@ -14,7 +14,7 @@
  *   encode(saturate(lin(x))) = saturate(x)，两者在画布上逐值相等，还省掉一次 pow 往返与 cover 时的编码。
  */
 import type { ScenePass } from "./bundle";
-import { checkPassFeatures, checkProgramFeatures } from "./features";
+import { checkPassFeatures, checkProgramFeatures, normalizeDepthKeys } from "./features";
 import type { SceneFs } from "./fs";
 import { parseMaterial } from "./model";
 import { shaderUniforms, type ShaderCompiler } from "./shader";
@@ -98,9 +98,8 @@ async function compileBloomPass(
     key,
     program,
     blending: pass.blending ?? "normal",
-    cullmode: pass.cullmode ?? "nocull",
-    depthtest: pass.depthtest ?? "disabled",
-    depthwrite: pass.depthwrite ?? "disabled",
+    // 同图层材质照 WPE 规整（P5d 步骤 1）；WPE 的泛光材质都写了 nocull / disabled，泛光链不挂深度、不剔除，这三个值不进管线
+    ...normalizeDepthKeys(pass),
     textures: {},
     runtime: {},
     uniforms: shaderUniforms(result, pass, {}),

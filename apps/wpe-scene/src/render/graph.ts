@@ -59,6 +59,9 @@
  * - **形状层**（P8 步骤 2，`SceneLayer.shape`，`planShapeLayer`，rea-p8-layer §1，p8-REPORT 结论 4、5）：WPE 的图像类子类，没有基础 pass、
  *   没有合成 RT，只画最后一个 effect 的唯一绘制 pass、直接上屏（角色 `final`，几何 `shape`：effect 常量的四个点围成的四边形），混合强制
  *   additive，不看 effect 的开关（前面的 effect 永远不画），所以不预备变体。
+ * - **深度与剔除**（P5d 步骤 1，p5-REPORT「P5d 语义的实测核对」）：每个绘制步骤带 `raster`（`rasterState`），全部对象一套规则、不分投影。
+ *   上屏角色（`final` / `passthrough`，含无 effect 组的上屏）深度借图层基础 pass、剔除用自己；形状层两项都取自己；其余都取自己。
+ *   深度只在画进场景目标、不在组里时起作用（`render/scene.ts` 按需建深度附件），剔除对所有目标都起作用。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
@@ -94,6 +97,40 @@ export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough" | 
  */
 export type Geometry = "layer" | "fill" | "fullscreen" | "shape";
 
+/**
+ * 一个绘制步骤的光栅状态（P5d 步骤 1，p5-REPORT「P5d 语义的实测核对」）：`test` 对场景的深度做 GREATER 测试，`write` 写深度，`cull` 剔背面
+ * （屏幕上逆时针为正面）。深度只在画进场景目标、不在组里时起作用（合成 RT、fbo、组的合成 RT 都不挂深度），剔除对所有目标都起作用。
+ */
+export interface RasterState {
+  test: boolean;
+  write: boolean;
+  cull: boolean;
+}
+
+/**
+ * 光栅状态的规则（rea-p5-mesh 3.4 `FUN_140099f60`，`p5d-depth` 12 组、`p5d-depth2` 6 组逐个对上）：
+ * - `test` = `depthPass.depthtest` 不是 disabled（`depthtest: disabled` 不测也不写）；
+ * - `write` = 测，且 `depthPass.depthwrite` 不是 disabled，且混合是 normal / alphatocoverage（translucent、additive 只测不写）；
+ * - `cull` = `cullPass.cullmode` 不是 nocull。
+ * 三个键编译期已规整（`normalizeDepthKeys`）。`blending` 是步骤实际的混合（上屏借了基础材质的、colorBlendMode 31 改成 additive 的）；
+ * null 是关闭混合、四通道直写（画进合成 RT 的基础 pass，B7），按 normal 算——这种步骤不画进场景目标，深度两项本来就不起作用。
+ * 大多数步骤两个 pass 都是自己；上屏角色（`final` / `passthrough`，含无 effect 组的上屏）深度借图层的基础 pass、剔除用自己
+ * （`p5d-depth-o` 的末 pass 借基础材质的深度键，`p5d-cull` 的 tint 末 pass 是 nocull、镜像图层照样显示）。
+ */
+export function rasterState(
+  depthPass: Pick<ScenePass, "depthtest" | "depthwrite">,
+  cullPass: Pick<ScenePass, "cullmode">,
+  blending: string | null,
+): RasterState {
+  const test = depthPass.depthtest !== "disabled";
+  const mode = blending ?? "normal";
+  return {
+    test,
+    write: test && depthPass.depthwrite !== "disabled" && (mode === "normal" || mode === "alphatocoverage"),
+    cull: cullPass.cullmode !== "nocull",
+  };
+}
+
 export interface DrawStep {
   kind: "draw";
   role: DrawRole;
@@ -110,6 +147,8 @@ export interface DrawStep {
   inset: readonly [number, number];
   /** 混合模式（`programs.ts` 的 `blendState`）；null = 关闭混合、四通道直写。 */
   blending: string | null;
+  /** 光栅状态（`rasterState`）：上屏角色的深度借图层基础 pass、剔除用自己；形状层两项都取自己；其余都取自己。 */
+  raster: RasterState;
 }
 /**
  * 粒子层的绘制（P4a 步骤 4）：粒子材质的 pass 直接画到场景目标，和图像步骤一样按 `objects` 顺序执行。几何不是图层四边形，
@@ -122,6 +161,8 @@ export interface ParticleStep {
   /** 每个槽位的纹理来源（材质静态纹理，或 `_rt_FullFrameBuffer`）。 */
   inputs: Record<number, TextureRef>;
   blending: string;
+  /** 光栅状态（`rasterState`，两项都取自己的 pass）。 */
+  raster: RasterState;
   /** 系统 `flags & 4`：换透视粒子的视图投影（`layout.ts` 的 `particleViewProjection`）。 */
   perspective: boolean;
   /**
@@ -157,12 +198,14 @@ export interface TextStep {
   inputs: Record<number, TextureRef>;
   /** 直接上屏：colorBlendMode 31 时 additive，否则材质的 translucent；画进合成 RT：材质自己的 translucent。 */
   blending: string;
+  /** 光栅状态（`rasterState`，两项都取自己的 pass；WPE 的四个文本宿主材质都是 nocull、深度 disabled）。 */
+  raster: RasterState;
 }
 
 /**
  * 模型图层的一次网格绘制（P5c 步骤 2，rea-p5-mesh 2.6、4.3）：几何是 mdl 的顶点与索引（`SceneMesh`，原样上传），带索引的三角形列表，直接
  * 画到场景目标。矩阵同图像层直接上屏（`g_ModelMatrix` 是世界矩阵、不乘 `size`），颜色组固定为 1（`p5c-color`，`render/scene.ts`）。
- * 剔除按 `pass.cullmode`（normal 剔背面、屏幕上逆时针为正面，`p5c-cull`），顶点布局按网格格式（`render/mesh.ts`）。
+ * 剔除与深度按 `raster`（normal 剔背面、屏幕上逆时针为正面，`p5c-cull`），顶点布局按网格格式（`render/mesh.ts`）。
  */
 export interface MeshStep {
   kind: "mesh";
@@ -173,6 +216,8 @@ export interface MeshStep {
   /** 每个槽位的纹理来源（材质静态纹理，或 `_rt_FullFrameBuffer`）。 */
   inputs: Record<number, TextureRef>;
   blending: string;
+  /** 光栅状态（`rasterState`，两项都取自己的 pass）。 */
+  raster: RasterState;
 }
 
 /** 渲染图要的那部分排版结果（`text/layout.ts` 的 `TextLayout`）：有没有字形、文字框与合成 RT 尺寸。 */
@@ -329,6 +374,7 @@ export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPla
         target: { kind: "scene" },
         inputs,
         blending: pass.blending,
+        raster: rasterState(pass, pass, pass.blending),
         perspective: (system.flags & 4) !== 0,
         node,
         world: (system.flags & 1) !== 0,
@@ -404,7 +450,15 @@ export function planModelLayer(layer: Pick<SceneLayer, "model">): LayerPlan {
       if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
       else reasons.push(`render:texture-rt:${name}`);
     }
-    steps.push({ kind: "mesh", mesh: m, pass, target: { kind: "scene" }, inputs, blending: pass.blending });
+    steps.push({
+      kind: "mesh",
+      mesh: m,
+      pass,
+      target: { kind: "scene" },
+      inputs,
+      blending: pass.blending,
+      raster: rasterState(pass, pass, pass.blending),
+    });
   }
   return { composite: null, steps, reasons };
 }
@@ -444,6 +498,8 @@ export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan {
     uv: [1, 1],
     inset: NO_INSET,
     blending: "additive",
+    // 没有基础 pass：深度与剔除都取这个 pass 自己的（additive，所以只测不写）
+    raster: rasterState(pass, pass, "additive"),
   });
   return { composite: null, steps, reasons };
 }
@@ -525,6 +581,7 @@ export function planLayer(
         ? staticInputs(pass, null)
         : { ...staticInputs(pass, null), 0: { kind: "atlas", color: part === "color" } },
     blending,
+    raster: rasterState(pass, pass, blending),
   });
 
   // 组（P5b 步骤 4）：带子层的组合层。没有 effect、colorBlendMode ∈ {0, 31} 时也要画：基础 pass → 子树 → `groupUpload` 上屏
@@ -566,6 +623,7 @@ export function planLayer(
       uv,
       inset: directInset,
       blending: additive ? "additive" : base.blending,
+      raster: rasterState(base, base, additive ? "additive" : base.blending),
     });
     return { composite: null, steps, reasons };
   }
@@ -602,6 +660,7 @@ export function planLayer(
         uv: [1, 1],
         inset: NO_INSET,
         blending: null,
+        raster: rasterState(pass, pass, null),
       });
     }
     if (mesh.glyphs.length) steps.push(textStep("glyphs", base, "composite", target, base.blending));
@@ -633,6 +692,7 @@ export function planLayer(
       uv: [1, 1],
       inset: NO_INSET,
       blending: null,
+      raster: rasterState(base, base, null),
     });
   } else
     steps.push({
@@ -646,6 +706,7 @@ export function planLayer(
       uv,
       inset: NO_INSET,
       blending: null,
+      raster: rasterState(base, base, null),
     });
   // 组画子树（P5b 步骤 4，`p5b-grp-*`：子层画进基础 pass 写的那张合成 RT）：不占合成链的写入，之后的 effect 读的就是这张
   if (group) steps.push({ kind: "subtree", target: { kind: "composite", index: current } });
@@ -689,6 +750,8 @@ export function planLayer(
       if (step.binds) for (const bind of step.binds) inputs[bind.index] = resolveRef(e, bind.name);
       else inputs[0] = { kind: "composite", index: current };
       const final = e === finalEffect && s === finalStep;
+      // 上屏借用基础材质的 blend（B7 `FUN_140209160`），colorBlendMode 31 强制 additive
+      const blending = final ? (additive ? "additive" : base.blending) : step.pass.blending;
       let target: TargetRef;
       if (final) {
         // 规则 3：上屏 pass 之前
@@ -708,8 +771,9 @@ export function planLayer(
         geometry: final ? screenGeometry : "fullscreen",
         uv: [1, 1],
         inset: final ? finalInset : NO_INSET,
-        // 上屏借用基础材质的 blend（B7 `FUN_140209160`），colorBlendMode 31 强制 additive
-        blending: final ? (additive ? "additive" : base.blending) : step.pass.blending,
+        blending,
+        // 上屏 pass 的深度借基础材质的键（`p5d-depth-o`），剔除用 effect 材质自己的（`p5d-cull` C4）
+        raster: rasterState(final ? base : step.pass, step.pass, blending),
       });
     });
   });
@@ -733,6 +797,8 @@ export function planLayer(
         uv: [1, 1],
         inset: finalInset,
         blending: base.blending,
+        // 上屏：深度借基础 pass，剔除用 passthrough 材质自己的
+        raster: rasterState(base, pass, base.blending),
       });
     }
   } else if (finalEffect < 0 && group) {
@@ -745,6 +811,7 @@ export function planLayer(
       const inputs = staticInputs(pass, null);
       inputs[0] = { kind: "composite", index: current };
       if (pass.framebuffer) snapshot();
+      const upload = additive ? "additive" : layer.copyBackground ? pass.blending : "translucent";
       steps.push({
         kind: "draw",
         role: "final",
@@ -755,7 +822,9 @@ export function planLayer(
         geometry: screenGeometry,
         uv: [1, 1],
         inset: finalInset,
-        blending: additive ? "additive" : layer.copyBackground ? pass.blending : "translucent",
+        blending: upload,
+        // 上屏：深度借组的基础 pass，剔除用 `effectpassthrough` 自己的
+        raster: rasterState(base, pass, upload),
       });
     }
   } else if (finalEffect < 0) reasons.push("render:no-final-pass");
