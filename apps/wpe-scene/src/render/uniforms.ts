@@ -649,12 +649,40 @@ export interface FrameInput {
    * 缺省 (0.5, 0.5)：加载时的值，视差从没开过时着色器读到的就是它（rea-p5-camera.md 6.2）。
    */
   parallax?: [number, number];
+  /**
+   * 这一帧的音频频谱（P11a）：`g_AudioSpectrum{16,32,64}{Left,Right}` 的值，渲染器给自己的场景频谱（`SceneSpectrum`，帧开头已推进，
+   * 粒子与脚本这一帧读的是同一份）。不给时六个数组全 0，同 WPE 工程没声明 `supportsaudioprocessing` 时。
+   */
+  audio?: SpectrumUniforms;
 }
+
+/** 六个音频频谱 uniform 的值（P11a）：16 / 32 / 64 段的左右声道。`SceneSpectrum` 本身就是这个形状。 */
+export interface SpectrumUniforms {
+  readonly L16: ArrayLike<number>;
+  readonly R16: ArrayLike<number>;
+  readonly L32: ArrayLike<number>;
+  readonly R32: ArrayLike<number>;
+  readonly L64: ArrayLike<number>;
+  readonly R64: ArrayLike<number>;
+}
+
+/** 没有音频时的频谱：六个全 0 数组，全进程共用、只读。 */
+const SILENT_SPECTRUM: SpectrumUniforms = Object.freeze({
+  L16: new Float32Array(16),
+  R16: new Float32Array(16),
+  L32: new Float32Array(32),
+  R32: new Float32Array(32),
+  L64: new Float32Array(64),
+  R64: new Float32Array(64),
+});
 
 /**
  * 每帧变化的内置 uniform。`g_PointerState` = (按下, 按下, 本帧刚按下, 0)：渲染器还不跟踪按键（P6 接输入），恒为 0。
+ * 音频频谱（P11a）直接给数组引用，`UniformBlock.set` 按反射逐个写：翻译器把 `uniform float g_AudioSpectrum16Left[16]` 反射成
+ * `array<vec4<f32>, 16>`、`declared: "float"`，每个元素只写 `.x`。
  */
-export function frameBuiltins(frame: FrameInput): Record<string, number[]> {
+export function frameBuiltins(frame: FrameInput): Record<string, ArrayLike<number>> {
+  const audio = frame.audio ?? SILENT_SPECTRUM;
   return {
     g_Time: [frame.time],
     g_Frametime: [frame.frametime],
@@ -663,6 +691,12 @@ export function frameBuiltins(frame: FrameInput): Record<string, number[]> {
     g_PointerPositionLast: frame.pointerLast,
     g_PointerState: [0, 0, 0, 0],
     g_ParallaxPosition: frame.parallax ?? [0.5, 0.5],
+    g_AudioSpectrum16Left: audio.L16,
+    g_AudioSpectrum16Right: audio.R16,
+    g_AudioSpectrum32Left: audio.L32,
+    g_AudioSpectrum32Right: audio.R32,
+    g_AudioSpectrum64Left: audio.L64,
+    g_AudioSpectrum64Right: audio.R64,
   };
 }
 

@@ -461,8 +461,8 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     let tauri::ipc::CallerFrame::Sub(frame) = frame else {
         return Err("only web wallpaper frames can subscribe".to_string());
     };
-    // TODO:[WPE_SCENE] 非 Windows 的场景音频：macOS / Linux 还没有回环采集（WpeMediaHub 只在 Windows 上采），场景宿主订阅被拒后
-    // 频谱全 0（`g_AudioSpectrum*`、音频粒子、脚本音频缓冲都读 0）。要接各平台的系统音频回环，再在这里放开。
+    // TODO:[WPE_SCENE] 在 macOS / Linux 上测试：场景音频。这两个系统还没有回环采集（WpeMediaHub 只在 Windows 上采），场景宿主
+    // 订阅被拒后频谱全 0（`g_AudioSpectrum*`、音频粒子、脚本音频缓冲都读 0）；接上各平台的系统音频回环、在这里放开后，核对三者都随音乐变化。
     if !cfg!(target_os = "windows") {
         return Err("web wallpaper media is only available on Windows".to_string());
     }

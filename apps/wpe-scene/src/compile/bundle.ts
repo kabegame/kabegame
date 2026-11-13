@@ -53,6 +53,7 @@ import {
   normalizeDepthKeys,
   objectKind,
   PARTICLE_UNIFORMS,
+  readsAudioUniforms,
   shapeIssues,
   TEXT_UNIFORMS,
   usesLighting,
@@ -606,8 +607,9 @@ export interface SceneBundle {
   animations?: SceneAnimation[];
   /**
    * 场景用音频（P4e 步骤 4）：`project.json` 的 `general.supportsaudioprocessing` 是 JSON `true`（WPE 只认 bool 真，`FUN_14010d100`，
-   * rea-p4e-audio.md 4.1），且有粒子系统（含子系统）带 `audioprocessingmode ≠ 0` 的模块（`particleUsesAudio`）。为真时宿主加载就订阅
-   * `WpeMediaHub`（脚本注册音频缓冲时另外照旧订阅）。`compileScene` 总会给出；可选只是为了不动各处手写的测试 bundle，缺省按 false。
+   * rea-p4e-audio.md 4.1），且有粒子系统（含子系统）带 `audioprocessingmode ≠ 0` 的模块（`particleUsesAudio`），或有程序读音频频谱
+   * uniform（P11a，`readsAudioUniforms`）。为真时宿主加载就订阅 `WpeMediaHub`（脚本注册音频缓冲时另外照旧订阅）。`compileScene` 总会
+   * 给出；可选只是为了不动各处手写的测试 bundle，缺省按 false。
    */
   audio?: boolean;
 }
@@ -2066,10 +2068,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
   bundle.unsupported = [...unsupported].sort();
   // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里
-  // 有音频粒子就自动开启（4.3）
+  // 有音频粒子就自动开启（4.3）。读音频频谱 uniform 的程序同样要订阅才有数据（P11a）；读了却没声明开关时 uniform 全 0，同 WPE
   bundle.audio =
     project.general?.supportsaudioprocessing === true &&
-    bundle.layers.some((layer) => layer.particle !== null && particleUsesAudio(layer.particle));
+    (bundle.layers.some((layer) => layer.particle !== null && particleUsesAudio(layer.particle)) ||
+      bundle.programs.some(readsAudioUniforms));
   return bundle;
 }
 

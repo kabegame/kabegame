@@ -181,6 +181,49 @@ describe("compileScene：子系统进 bundle（P4e 步骤 1）", () => {
     expect(await usesAudio(undefined, 3, true)).toBe(false);
   });
 
+  it("「场景用音频」位（P11a）：程序读音频频谱 uniform 也算，标了 unused 的不算；没声明开关时照旧 false", async () => {
+    const usesAudio = async (flag: boolean, unused: boolean) => {
+      const project = files({ "particles/p.json": system() });
+      if (flag)
+        (project["P:/p/project.json"] as { general: Record<string, unknown> }).general.supportsaudioprocessing = true;
+      const audioTranslator = {
+        async translate(): Promise<TranslateResult> {
+          return {
+            ok: true,
+            uniforms: [
+              {
+                name: "g_AudioSpectrum64Left",
+                type: "array<vec4<f32>, 64>",
+                declared: "float",
+                offset: 0,
+                size: 1024,
+                array: 64,
+                stride: 16,
+                ...(unused ? { unused: true } : {}),
+              },
+            ],
+            textures: [],
+            combos: [],
+          } as TranslateResult;
+        },
+      } as unknown as Wpesl2wgsl;
+      const bundle = await compileScene({
+        projectDir: "P:/p",
+        sceneAssets: ["A:/assets"],
+        reader: memoryReader(project),
+        translator: audioTranslator,
+        postprocess: "disabled",
+        exhaustive: true,
+      });
+      // 音频 uniform 是引擎 uniform：不报
+      expect(bundle.unsupported).toEqual([]);
+      return bundle.audio;
+    };
+    expect(await usesAudio(true, false)).toBe(true);
+    expect(await usesAudio(true, true)).toBe(false);
+    expect(await usesAudio(false, false)).toBe(false);
+  });
+
   it("instanceoverride：只有顶层登记绑定，子系统按缺省值解析（实例值由模拟器从对象上传）", async () => {
     const bundle = await compile(
       memoryReader(

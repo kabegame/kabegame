@@ -1055,7 +1055,7 @@ export class GpuScene {
    * 最近一次 `update` 写的每帧内置量（`frameBuiltins`）：编码时才建的实例化 draw（P4e 步骤 2）错过了这一帧的 `update`，建好后补上；还没
    * `update` 过时为 null。
    */
-  private frameValues: Record<string, number[]> | null = null;
+  private frameValues: Record<string, ArrayLike<number>> | null = null;
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
   private hdr = false;
   private eye: readonly number[] = [];
@@ -3069,7 +3069,7 @@ export class GpuScene {
    * 把每帧量写进 draw 的 uniform 块（不上传）：`update` 每帧调；编码时才建、或换了实例的实例化 draw（P4e 步骤 2）也调，补上这一帧的值与
    * 新系统的 ropetrail 计时器。`values` 为 null（还没 `update` 过）时只写 ropetrail 的 `g_RenderVar0`。
    */
-  private applyFrame(draw: Draw, values: Record<string, number[]> | null): void {
+  private applyFrame(draw: Draw, values: Record<string, ArrayLike<number>> | null): void {
     if (!draw.block) return;
     if (values) for (const name of draw.frameNames) draw.block.set(name, values[name]);
     const system = draw.trailRenderVar ? draw.particles?.system : undefined;

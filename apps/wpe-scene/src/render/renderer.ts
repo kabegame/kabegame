@@ -716,6 +716,8 @@ export class SceneRenderer {
           pointerLast: this.pointerLast,
           cursor,
           parallax: this.parallax.position,
+          // 音频频谱 uniform（P11a）：帧开头已推进的同一份场景频谱，粒子、脚本、uniform 这一帧读的是同一份值（同 WPE，rea-p4e-audio 3.5）
+          audio: this.spectrum,
         },
         state,
       );

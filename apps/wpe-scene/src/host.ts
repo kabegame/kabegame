@@ -554,8 +554,8 @@ export class SceneHost {
     };
     // 没声明 supportsaudioprocessing 或非 Windows 时被拒：不报错（同 Phase 8 垫片），只记 debug；场景频谱关掉、保持全 0
     // （`SceneSpectrum.disable`，渲染器之后才建好的在 `ensureRenderer` 里补关）
-    // TODO:[WPE_SCENE] 非 Windows 的场景音频：后端还没有 macOS / Linux 的回环采集，这里总被拒、频谱全 0（P11a 的 `g_AudioSpectrum*`
-    // 也读 0）。后端放开后这里不用改。
+    // TODO:[WPE_SCENE] 在 macOS / Linux 上测试：场景音频。后端还没有这两个系统的回环采集，这里总被拒、频谱全 0（P11a 的
+    // `g_AudioSpectrum*` 也读 0）；后端接上后这里不用改，核对订阅成功、频谱随音乐变化。
     invoke("wpe_web_media_subscribe", { kind: "audio", channel, imageId }).catch((error: unknown) => {
       this.audioError = String(error);
       this.renderer?.disableAudio();

@@ -70,6 +70,20 @@ export const SUPPORTED = {
 } as const;
 
 /**
+ * 音频频谱（P11a，rea-p4e-audio.md 3.4、p11-REPORT「音频 uniform」）：WPE 每次绘制把渲染线程归一化好的三块频谱按 `4n` 字节拷进常量
+ * 缓冲，32 / 16 段由 64 段逐级取最大、左右声道各自算，没有平均声道的 uniform；工程没声明 `supportsaudioprocessing` 时全 0。渲染器每帧
+ * 从场景频谱（`audio/spectrum.ts` 的 `SceneSpectrum`）写（`render/uniforms.ts` 的 `frameBuiltins`）。
+ */
+export const AUDIO_UNIFORMS: readonly string[] = [
+  "g_AudioSpectrum16Left",
+  "g_AudioSpectrum16Right",
+  "g_AudioSpectrum32Left",
+  "g_AudioSpectrum32Right",
+  "g_AudioSpectrum64Left",
+  "g_AudioSpectrum64Right",
+];
+
+/**
  * 渲染器会写入的引擎内置 uniform（翻译结果里没有 `meta.material` 的成员）。另有 `g_Texture<n>Resolution`。
  * 与 `render/uniforms.ts` 的 `staticBuiltins` / `frameBuiltins` 一一对应，`p2a.test.ts` 核对两边一致。
  * 只在某类 pass 里才写的另列：effect pass 的 `EFFECT_UNIFORMS`、粒子的 `PARTICLE_UNIFORMS`。
@@ -113,6 +127,7 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_PointerPositionLast",
   "g_PointerState",
   "g_ParallaxPosition",
+  ...AUDIO_UNIFORMS,
 ]);
 /** 光照路径声明了、只有 PRELIGHTING 才读的 uniform（`genericimage4.vert`）：渲染器不写，PRELIGHTING 另报。 */
 const UNREAD_UNIFORMS = new Set(["g_AltModelMatrix", "g_AltNormalModelMatrix", "g_AltViewProjectionMatrix"]);
@@ -1216,6 +1231,16 @@ export function checkProgramFeatures(
   for (const combo of result.combos ?? [])
     if (combo.value !== 0 && ENGINE_COMBOS.has(combo.name.toUpperCase()))
       unsupported.add(`combo:${combo.name.toUpperCase()}`);
+}
+
+/**
+ * 程序读不读音频频谱 uniform（P11a）：`bundle.audio` 据此决定宿主是否订阅音频。翻译器标了 `unused` 的不算（同 `checkProgramFeatures`：
+ * WPE 的反射里没有它，不进常量缓冲）；材质常量同名的（带 `meta.material`）也不算，那是作者自己的常量。
+ */
+export function readsAudioUniforms(result: Pick<TranslateResult, "uniforms">): boolean {
+  return (result.uniforms ?? []).some(
+    (uniform) => !uniform.unused && typeof uniform.meta?.material !== "string" && AUDIO_UNIFORMS.includes(uniform.name),
+  );
 }
 
 /**

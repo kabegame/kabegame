@@ -10,6 +10,7 @@ import {
   EFFECT_UNIFORMS,
   ENGINE_UNIFORMS,
   isEngineUniform,
+  readsAudioUniforms,
   scanValue,
 } from "./features";
 import type { SceneReader } from "./fs";
@@ -268,7 +269,8 @@ describe("能力表裁决", () => {
         { name: "g_Time", type: "f32", offset: 0, size: 4 },
         { name: "g_Texture3Resolution", type: "vec4<f32>", offset: 16, size: 16 },
         { name: "g_Brightness", type: "f32", offset: 32, size: 4, meta: { material: "brightness" } },
-        { name: "g_AudioSpectrum16Left", type: "array<vec4<f32>, 16>", offset: 48, size: 256 },
+        // 遗留灯的数组（P13 才写）：没实现的引擎 uniform 照报
+        { name: "g_LightsPosition", type: "array<vec4<f32>, 4>", offset: 48, size: 64 },
       ],
       combos: [
         { name: "HUEMODE", value: 1, source: "request" },
@@ -278,7 +280,28 @@ describe("能力表裁决", () => {
       ],
     } as TranslateResult;
     checkProgramFeatures(result, keys);
-    expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_AudioSpectrum16Left"]);
+    expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_LightsPosition"]);
+  });
+  it("音频频谱 uniform（P11a）：六个都是引擎 uniform、不报；readsAudioUniforms 只认被读、不是材质常量的", () => {
+    const names = ["16", "32", "64"].flatMap((n) => [`g_AudioSpectrum${n}Left`, `g_AudioSpectrum${n}Right`]);
+    const keys = new Set<string>();
+    const uniforms = names.map((name, i) => ({
+      name,
+      type: "array<vec4<f32>, 16>",
+      declared: "float",
+      offset: i * 256,
+      size: 256,
+      array: 16,
+      stride: 16,
+    }));
+    checkProgramFeatures({ ok: true, uniforms }, keys);
+    expect([...keys]).toEqual([]);
+    expect(readsAudioUniforms({ uniforms })).toBe(true);
+    expect(readsAudioUniforms({ uniforms: [{ ...uniforms[3], unused: true }] })).toBe(false);
+    // 作者自己的同名材质常量（带 meta.material）不是频谱
+    expect(readsAudioUniforms({ uniforms: [{ ...uniforms[0], meta: { material: "bars" } }] })).toBe(false);
+    expect(readsAudioUniforms({ uniforms: [{ name: "g_Time", type: "f32", offset: 0, size: 4 }] })).toBe(false);
+    expect(readsAudioUniforms({})).toBe(false);
   });
   it("着色器：翻译器标了 unused（没被读）的 uniform 不报，被读的照报（P7d 步骤 1，procedural_noise 的 g_FrameTime）", () => {
     const unread = { unused: true } as const;
@@ -288,7 +311,7 @@ describe("能力表裁决", () => {
         ok: true,
         uniforms: [
           { name: "g_FrameTime", type: "f32", offset: 0, size: 4, ...unread },
-          { name: "g_AudioSpectrum16Left", type: "array<vec4<f32>, 16>", offset: 16, size: 256, ...unread },
+          { name: "g_LightsPosition", type: "array<vec4<f32>, 4>", offset: 16, size: 64, ...unread },
           { name: "g_Unknown", type: "f32", offset: 272, size: 4 },
           { name: "g_Time", type: "f32", offset: 276, size: 4, ...unread },
         ],

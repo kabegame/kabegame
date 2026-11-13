@@ -6,6 +6,7 @@ import type { SceneReader } from "../compile/fs";
 import { generalDefaults } from "../compile/bindings";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
+import { SceneSpectrum } from "../audio/spectrum";
 import { FrameThrottle, PausableClock } from "./clock";
 import { reasonsOf, SceneRenderError } from "./errors";
 import {
@@ -506,6 +507,61 @@ describe("uniform 打包", () => {
     const f = new Float32Array(block.data);
     expect([f[4], f[5], f[8], f[12], f[16]]).toEqual([1, 0, 2, 3, 4]);
   });
+  it("音频频谱 uniform（P11a）：frameBuiltins 给的就是场景频谱的六个数组，按真实反射每个元素写 .x", () => {
+    // 步骤 0 用真翻译器翻 p11-audio 的 CLK 着色器得到的反射（offset 照抄）
+    const layout = [
+      ["g_AudioSpectrum16Left", 16, 96],
+      ["g_AudioSpectrum16Right", 16, 352],
+      ["g_AudioSpectrum32Left", 32, 608],
+      ["g_AudioSpectrum32Right", 32, 1120],
+      ["g_AudioSpectrum64Left", 64, 1632],
+      ["g_AudioSpectrum64Right", 64, 2656],
+    ] as const;
+    const block = new UniformBlock(
+      layout.map(([name, n, offset]) => ({
+        name,
+        type: `array<vec4<f32>, ${n}>`,
+        declared: "float",
+        offset,
+        size: n * 16,
+        array: n,
+        stride: 16,
+      })),
+    );
+    const spectrum = new SceneSpectrum();
+    // 直接填三块（不经归一化），每个值不同，便于认出写错了位置
+    spectrum.spec64.forEach((_, i, a) => (a[i] = 1 + i));
+    spectrum.spec32.forEach((_, i, a) => (a[i] = 1000 + i));
+    spectrum.spec16.forEach((_, i, a) => (a[i] = 2000 + i));
+    const frame = frameBuiltins({
+      time: 0,
+      frametime: 0,
+      daytime: 0,
+      pointer: [0, 0],
+      pointerLast: [0, 0],
+      cursor: [0, 0],
+      audio: spectrum,
+    });
+    expect(frame.g_AudioSpectrum16Right).toBe(spectrum.R16);
+    expect(frame.g_AudioSpectrum64Left).toBe(spectrum.L64);
+    for (const [name] of layout) block.set(name, frame[name]);
+    const f = new Float32Array(block.data);
+    const expected: Record<string, ArrayLike<number>> = {
+      g_AudioSpectrum16Left: spectrum.L16,
+      g_AudioSpectrum16Right: spectrum.R16,
+      g_AudioSpectrum32Left: spectrum.L32,
+      g_AudioSpectrum32Right: spectrum.R32,
+      g_AudioSpectrum64Left: spectrum.L64,
+      g_AudioSpectrum64Right: spectrum.R64,
+    };
+    for (const [name, n, offset] of layout)
+      for (let i = 0; i < n; i++) {
+        const at = (offset + 16 * i) >> 2;
+        expect(f[at], `${name}[${i}]`).toBe(expected[name][i]);
+        // .yzw 保持 0
+        expect([f[at + 1], f[at + 2], f[at + 3]], `${name}[${i}].yzw`).toEqual([0, 0, 0]);
+      }
+  });
   it("mat3 列步长 16、整数写成 i32", () => {
     const block = new UniformBlock([
       { name: "m", type: "mat3x3<f32>", declared: "mat3", offset: 0, size: 48 },
@@ -557,6 +613,21 @@ describe("uniform 打包", () => {
     expect(frame.g_Time).toEqual([3]);
     expect(frame.g_Frametime).toEqual([0.016]);
     expect(frame.g_PointerState).toEqual([0, 0, 0, 0]);
+    // 音频频谱（P11a）：不给时六个全 0、长度 16 / 32 / 64
+    for (const [name, length] of [
+      ["g_AudioSpectrum16Left", 16],
+      ["g_AudioSpectrum16Right", 16],
+      ["g_AudioSpectrum32Left", 32],
+      ["g_AudioSpectrum32Right", 32],
+      ["g_AudioSpectrum64Left", 64],
+      ["g_AudioSpectrum64Right", 64],
+    ] as const) {
+      expect(frame[name].length, name).toBe(length);
+      expect(
+        Array.from(frame[name]).every((v) => v === 0),
+        name,
+      ).toBe(true);
+    }
     // h/24 + m/1440 + s/86400 + ms/8.64e7
     expect(daytimeOf(new Date(2026, 0, 1, 12, 30, 15, 500))).toBeCloseTo(
       0.5 + 30 / 1440 + 15 / 86400 + 500 / 8.64e7,
