@@ -31,7 +31,8 @@
  *   探针没有帧外补画），结果的 `textSyncs` 是结清时 `sync` 的次数；没有文本值时不结清。
  * - 频谱（P4e 步骤 4）：`renderFrame` / `particleCorners` 的 `particles.audio` 与 `particleTrack` 的 `audio` 收逐帧 16 段左右
  *   （`{ left, right }`，抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`），每帧步进之前原样写进粒子读的频谱（不经归一化，null 沿用前一帧）；
- *   `host.audio()` 另报宿主场景频谱归一化后的 16 段（`spectrum16`）。不给时频谱全 0。
+ *   `host.audio()` 另报宿主场景频谱归一化后的 16 段（`spectrum16`）。不给时频谱全 0。P11a 起每项还可带 32 / 64 段（`left32` …
+ *   `right64`），读回那一帧的六个 `g_AudioSpectrum*` uniform 取截至这一帧最后一个非 null 项，没给的段为 0（`replayReadback`）。
  * - 视频时刻（P9a 步骤 3）：屏外宿主不跑帧循环、视频用自己的时钟，`renderFrame` 收 `videoTime`（秒，数字对全部视频纹理生效，
  *   `{ <纹理 path>: 秒 }` 分别给，没给的取 0，缺省 0）。探针换上自己的 `VideoSink`（`videoProbe.ts`）：每段视频 seek 到这个时刻
  *   （超过时长按循环取模）、等到当前帧可用，建好场景后、第一次编码之前交给 `GpuScene`，每个 draw 都拷；读不到或解码失败的视频照产品

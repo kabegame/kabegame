@@ -61,6 +61,38 @@ describe("checkReplay", () => {
     rejects400(() => checkReplay({ dts: [0.1], random: { "3": 0.5 } }), "particles.random.3");
   });
 
+  test("audio（P11a）：和 dts 等长，每项 null 或一帧频谱，left / right 必给、32 / 64 段可选，段数与键都查", () => {
+    const fill = (n: number, v: number) => Array<number>(n).fill(v);
+    const frame = { left: fill(16, 0.5), right: fill(16, 0.25), left64: fill(64, 1.25), right64: fill(64, 0) };
+    const full = {
+      dts: [0.1, 0.1, 0.1],
+      audio: [null, frame, { left: fill(16, 0), right: fill(16, 0), left32: fill(32, 2), right32: fill(32, 0) }],
+    };
+    assert.deepEqual(checkReplay(full), full);
+    rejects400(() => checkReplay({ dts: [0.1, 0.1], audio: [frame] }), "particles.audio", /应和 dts 等长/);
+    rejects400(() => checkReplay({ dts: [0.1], audio: frame }), "particles.audio", /要是数组/);
+    rejects400(() => checkReplay({ dts: [0.1], audio: [1] }), "particles.audio[0]", /null 或/);
+    rejects400(() => checkReplay({ dts: [0.1], audio: [{ right: fill(16, 0) }] }), "particles.audio[0].left", /要给/);
+    rejects400(
+      () => checkReplay({ dts: [0.1], audio: [{ ...frame, left64: fill(32, 0) }] }),
+      "particles.audio[0].left64",
+      /64 个有限数，收到 32 项/,
+    );
+    rejects400(
+      () => checkReplay({ dts: [0.1], audio: [{ ...frame, right: [...fill(15, 0), Number.NaN] }] }),
+      "particles.audio[0].right[15]",
+      /有限数/,
+    );
+    rejects400(
+      () => checkReplay({ dts: [0.1], audio: [{ ...frame, left16: fill(16, 0) }] }),
+      "particles.audio[0].left16",
+      /不认识/,
+    );
+    // 轨迹请求体本身也收（探针的 particleTrack 一直有 audio）
+    const track = checkTrackRequest({ imageId: "7", dts: [0.1], frames: [1], passes: 1, audio: [frame] });
+    assert.deepEqual(track.audio, [frame]);
+  });
+
   test("不认识的字段拒绝（例如把逐帧光标放进 particles：逐帧光标是请求体的 pointers）", () => {
     rejects400(() => checkReplay({ dts: [0.1], cursors: [[0.5, 0.5]] }), "particles.cursors", /不认识/);
     rejects400(() => checkReplay([0.1]), "particles");
@@ -154,6 +186,41 @@ describe("checkReplay", () => {
     rejects400(() => checkScriptValues([{ ...fr, value: [0.5, Number.NaN] }]), "scriptValues[0].value[1]", /有限数/);
     rejects400(() => checkScriptValues([{ ...fr, value: [0.5, "1"] }]), "scriptValues[0].value[1]");
     rejects400(() => checkScriptValues([{ ...fr, optional: "true" }]), "scriptValues[0].optional", /布尔/);
+  });
+
+  test("渲染的脚本值（P11a）：材质常量 constant + 可选 effect，值同图层字段；和 field 同给、effect 不跟 constant、形状不对报 400", () => {
+    const ok = [
+      { object: "M", constant: "chromaticAberration", value: [0.69] },
+      { object: 0, constant: "amount", effect: 4, value: [1, 0], optional: true },
+      { object: 0, constant: "on", value: true },
+    ];
+    assert.deepEqual(checkScriptValues(ok), ok);
+    rejects400(
+      () => checkScriptValues([{ object: 0, field: "alpha", constant: "amount", value: [1] }]),
+      "scriptValues[0].field",
+      /和 constant 只能给一个/,
+    );
+    rejects400(
+      () => checkScriptValues([{ object: 0, constant: "", value: [1] }]),
+      "scriptValues[0].constant",
+      /非空字符串/,
+    );
+    rejects400(
+      () => checkScriptValues([{ object: 0, constant: "amount", effect: 1.5, value: [1] }]),
+      "scriptValues[0].effect",
+      /effects 下标/,
+    );
+    rejects400(
+      () => checkScriptValues([{ object: 0, field: "alpha", effect: 0, value: [1] }]),
+      "scriptValues[0].effect",
+      /只和 constant 一起给/,
+    );
+    rejects400(
+      () => checkScriptValues([{ object: 0, constant: "amount", value: "1 0" }]),
+      "scriptValues[0].value",
+      /材质常量 amount，字符串只给文本字段/,
+    );
+    rejects400(() => checkScriptValues([{ object: 0, value: [1] }]), "scriptValues[0].field", /只能是/);
   });
 
   test("渲染的脚本值（P6b 1e-3）：文本字段收字符串（最长 4096）、数与布尔；图层字段给字符串 400，错误指到 value", () => {

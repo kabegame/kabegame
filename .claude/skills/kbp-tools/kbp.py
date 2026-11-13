@@ -95,6 +95,9 @@ def _parser():
     rdc_common(consts)
     consts.add_argument("--out", help="输出文件，缺省 <data>/out/wpe-<标签>-consts.json")
     consts.add_argument("--names", help="只收这些常量（逗号分隔），缺省全收")
+    consts.add_argument("--no-clock", action="store_true",
+                        help="不读 FR / CLK 时钟（真实壁纸解包的工程只有末尾一个只写日志的 FR、没有 CLK）："
+                             "frame 取 RenderDoc 帧号 + 1，time / dt 从日志取，全部绘制都收常量")
 
     # ---------- replay / regress ----------
     def src_data(p):

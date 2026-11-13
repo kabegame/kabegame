@@ -6,10 +6,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   TimelineError,
+  alignSpectrum,
   buildTimeline,
   describeTimeline,
   frameRanges,
   parseKbpLog,
+  parseSpectrumRecording,
+  poolSpectrum,
   parseTrackJson,
   passesFromTag,
   pointerFromScreen,
@@ -520,6 +523,125 @@ describe("真实数据：p5a-cur3（用户在测试窗口上晃过鼠标）", ()
       assert.equal(t.cursors![24][1], Math.fround(-27.999998092651367 / 1080));
       // 光标逐帧在变
       assert.notDeepEqual(t.cursors![1], t.cursors![2]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("频谱录制（P11a，timeline.audio）", () => {
+  const ramp = (n: number, k: number) => Array.from({ length: n }, (_, i) => Math.fround(((i * 7 + k) % 11) / 10));
+  /** kbp rdc consts 的一行：draws 里放若干次绘制读到的常量。 */
+  const constsRow = (frame: number, draws: Record<string, number[]>[]) => ({
+    frame,
+    rdc_frame: frame - 1,
+    draws: draws.map((ps, i) => ({ event: 10 + i, ps: { g_Other: [1, 2], ...ps } })),
+  });
+
+  test("两两取大", () => {
+    assert.deepEqual(poolSpectrum([0.1, 0.5, 0.7, 0.2]), [0.5, 0.7]);
+  });
+
+  test("consts：只读了 64 段时往下推 32、16；只读了 32 段时推 16、64 段没有；同一帧多次绘制同值；没读频谱的帧不收", () => {
+    const L64 = ramp(64, 1);
+    const R64 = ramp(64, 4);
+    const L32 = ramp(32, 2);
+    const R32 = ramp(32, 3);
+    const recorded = parseSpectrumRecording(
+      JSON.stringify([
+        constsRow(5, [{ g_AudioSpectrum64Left: L64, g_AudioSpectrum64Right: R64 }, {}]),
+        constsRow(6, [
+          { g_AudioSpectrum32Left: L32, g_AudioSpectrum32Right: R32 },
+          { g_AudioSpectrum32Left: L32, g_AudioSpectrum32Right: R32 },
+        ]),
+        constsRow(7, [{}]),
+      ]),
+    );
+    assert.deepEqual([...recorded.keys()], [5, 6]);
+    assert.deepEqual(recorded.get(5)!.sources, { "64": "recorded", "32": "derived", "16": "derived" });
+    assert.deepEqual(recorded.get(5)!.arrays["32Left"], poolSpectrum(L64));
+    assert.deepEqual(recorded.get(5)!.arrays["16Right"], poolSpectrum(poolSpectrum(R64)));
+    assert.deepEqual(recorded.get(6)!.sources, { "64": "missing", "32": "recorded", "16": "derived" });
+
+    const audio = alignSpectrum(recorded, 6, "x.json");
+    assert.equal(audio.frames.length, 6);
+    assert.deepEqual(audio.frames.slice(0, 4), [null, null, null, null]);
+    assert.deepEqual(audio.frames[4], {
+      left: poolSpectrum(poolSpectrum(L64)),
+      right: poolSpectrum(poolSpectrum(R64)),
+      left32: poolSpectrum(L64),
+      right32: poolSpectrum(R64),
+      left64: L64,
+      right64: R64,
+    });
+    // 64 段没有：不给（探针写 0）
+    assert.deepEqual(Object.keys(audio.frames[5]!).sort(), ["left", "left32", "right", "right32"]);
+    assert.deepEqual(audio.recorded, [5, 6]);
+    assert.deepEqual(audio.readback, { "64": "missing", "32": "recorded", "16": "derived" });
+  });
+
+  test("轨迹（frames[].audio，生成工程的 CLK）也收", () => {
+    const L16 = ramp(16, 5);
+    const R16 = ramp(16, 6);
+    const recorded = parseSpectrumRecording(
+      JSON.stringify({
+        tag: "x",
+        frames: [{ frame: 3, dt: 0.05, audio: { g_AudioSpectrum16Left: L16, g_AudioSpectrum16Right: R16 } }],
+      }),
+    );
+    assert.deepEqual(recorded.get(3)!.sources, { "64": "missing", "32": "missing", "16": "recorded" });
+    assert.deepEqual(alignSpectrum(recorded, 3).frames[2], { left: L16, right: R16 });
+  });
+
+  test("报错：同一帧两次绘制不同、个数不对、只有一边、帧号重复、读回帧没录到、不是录制", () => {
+    const L = ramp(16, 1);
+    const R = ramp(16, 2);
+    const parse = (rows: unknown) => () => parseSpectrumRecording(JSON.stringify(rows));
+    throwsTimeline(
+      parse([constsRow(2, [{ g_AudioSpectrum16Left: L, g_AudioSpectrum16Right: R }, { g_AudioSpectrum16Left: R }])]),
+      /第 2 帧的 g_AudioSpectrum16Left 在两次绘制里不同/,
+    );
+    throwsTimeline(
+      parse([constsRow(2, [{ g_AudioSpectrum32Left: L, g_AudioSpectrum32Right: L }])]),
+      /要是 32 个有限数/,
+    );
+    throwsTimeline(parse([constsRow(2, [{ g_AudioSpectrum16Left: L }])]), /只读到 g_AudioSpectrum16 的一边/);
+    const row = constsRow(2, [{ g_AudioSpectrum16Left: L, g_AudioSpectrum16Right: R }]);
+    throwsTimeline(parse([row, row]), /第 2 帧出现两次/);
+    throwsTimeline(parse({ nothing: true }), /里面没有帧/);
+    const recorded = parseSpectrumRecording(JSON.stringify([row]));
+    throwsTimeline(() => alignSpectrum(recorded, 3), /读回的第 3 帧没录到频谱（录到的帧 2）/);
+  });
+
+  test("buildTimeline：audio 按帧号对齐到时间线，摘要写来源；读回帧没录到报错带文件名", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "kbp-audio-"));
+    try {
+      writeFileSync(path.join(root, "a-fps20-1920x1080-log.txt"), kbpLog([0.05, 0.1, 0.15, 0.2]));
+      const L64 = ramp(64, 3);
+      writeFileSync(
+        path.join(root, "consts.json"),
+        JSON.stringify([
+          constsRow(3, [{ g_AudioSpectrum64Left: L64, g_AudioSpectrum64Right: L64 }]),
+          constsRow(4, [{ g_AudioSpectrum64Left: L64, g_AudioSpectrum64Right: L64 }]),
+        ]),
+      );
+      const t = buildTimeline({ log: "a-fps20-1920x1080-log.txt", audio: "consts.json", frame: 4 }, { root });
+      assert.equal(t.frame, 4);
+      assert.deepEqual(t.audio!.recorded, [3, 4]);
+      assert.deepEqual(
+        t.audio!.frames.map((f) => (f ? f.left64!.length : null)),
+        [null, null, 64, 64],
+      );
+      assert.match(describeTimeline(t), /频谱：录到的帧 3–4，其余帧沿用前一帧；读回帧 16 段推出、32 段推出、64 段录到/);
+      assert.equal(buildTimeline({ log: "a-fps20-1920x1080-log.txt", frame: 4 }, { root }).audio, undefined);
+      throwsTimeline(
+        () => buildTimeline({ log: "a-fps20-1920x1080-log.txt", audio: "consts.json", frame: 2 }, { root }),
+        /consts\.json：读回的第 2 帧没录到频谱/,
+      );
+      throwsTimeline(
+        () => buildTimeline({ log: "a-fps20-1920x1080-log.txt", audio: "none.json", frame: 4 }, { root }),
+        /读不了频谱录制/,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

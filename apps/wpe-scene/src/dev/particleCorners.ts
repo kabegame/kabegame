@@ -43,6 +43,7 @@ import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
 import { GpuScene, type ParticleOptions, type SceneCamera } from "../render/scene";
 import { SceneState } from "../render/state";
+import type { SpectrumUniforms } from "../render/uniforms";
 import { replayPointers, type ReplayPointers } from "./replayPointers";
 
 /** 计算入口从顶点缓冲读一个输入：location、在顶点里的 float 偏移、分量数与标量类型。 */
@@ -254,6 +255,8 @@ export interface ParticleReplay {
    * 每帧的 16 段频谱（P4e 步骤 4）：`{ left: [16 个], right: [16 个] }`，和 `dts` 等长，第 i 项在第 i + 1 帧步进之前原样写进场景的粒子频谱
    * （`GpuScene.particleAudio`，不经归一化）；某项为 null 时沿用前一帧。回放 WPE 时填抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`。
    * 预热时频谱是 0。不给时全程全 0。
+   * P11a 起每项还可带 `left32` / `right32` / `left64` / `right64`：读回那一帧的六个音频 uniform 取截至这一帧最后一个非 null 项
+   * （`replaySpectrum`，没给的段为 0），全是 null 时和不给一样写全 0。
    */
   audio?: (ParticleAudioFrame | null)[];
 }
@@ -300,6 +303,8 @@ export function replayParticles(
     throw new Error(`逐帧 cursor 有 ${perFrame.length} 项，dts 有 ${dts.length} 项，应等长`);
   if (replay.audio && replay.audio.length !== dts.length)
     throw new Error(`audio 有 ${replay.audio.length} 项，dts 有 ${dts.length} 项，应等长`);
+  // 每一项的段数先查一遍（P11a）：不要回放到一半才在读回帧抛错
+  replay.audio?.forEach((frame, i) => frame && replaySpectrum(frame, i));
   let elapsed = 0;
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
   for (let i = 0; i < dts.length - 1; i++) {
@@ -324,6 +329,42 @@ export function replayAudio(
   if (!frame) return;
   if (!scene.particleAudio) throw new Error("场景没有粒子频谱，不能回放 audio");
   writeParticleAudio(scene.particleAudio, frame);
+}
+
+/**
+ * 一帧频谱 → 音频 uniform（P11a）：16 段取 `left` / `right`，32 / 64 段取 `left32` … `right64`，没给的段为 0，都舍入成 float32
+ * （同 WPE 的 cbuffer）。给了却不是 16 / 32 / 64 个时抛错，`index` 只用于报错。
+ */
+export function replaySpectrum(frame: ParticleAudioFrame, index = 0): SpectrumUniforms {
+  const take = (values: ArrayLike<number> | undefined, count: number, name: string): Float32Array => {
+    const out = new Float32Array(count);
+    if (values === undefined) return out;
+    if (values.length !== count) throw new Error(`audio[${index}].${name} 应 ${count} 个，收到 ${values.length} 个`);
+    for (let i = 0; i < count; i++) out[i] = values[i];
+    return out;
+  };
+  return {
+    L16: take(frame.left, 16, "left"),
+    R16: take(frame.right, 16, "right"),
+    L32: take(frame.left32, 32, "left32"),
+    R32: take(frame.right32, 32, "right32"),
+    L64: take(frame.left64, 64, "left64"),
+    R64: take(frame.right64, 64, "right64"),
+  };
+}
+
+/**
+ * 读回那一帧的音频 uniform（P11a）：截至读回帧（`audio` 末项）最后一个非 null 项，同粒子频谱的「null 沿用前一帧」。没给 `audio`、或全是
+ * null 时返回 undefined（`update` 写全 0，和 P11a 之前逐字节相同）。
+ */
+export function readbackSpectrum(replay: ParticleReplay | undefined): SpectrumUniforms | undefined {
+  const audio = replay?.audio;
+  if (!audio) return undefined;
+  for (let i = audio.length - 1; i >= 0; i--) {
+    const frame = audio[i];
+    if (frame) return replaySpectrum(frame, i);
+  }
+  return undefined;
 }
 
 /**
@@ -455,7 +496,8 @@ export interface ReadbackReplayOptions {
  * 读回帧 `sync` → `stepParticles` → 设相机；视差点按同一串帧时间与每帧的 s 从 `parallax` 推进，之后 `setParallax`、`update`。
  * 光标逐帧取 `pointers`：第 i 帧步进用 `cursors[i]`、视差点用 `pointers[i]`；读回帧的 `g_PointerPosition` 是最后一项、
  * `g_PointerPositionLast` 是倒数第二项（只有一帧时取自己，同渲染器每帧末尾 `pointerLast = pointer`）。
- * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。返回读回帧的 `g_Time`、`g_Frametime` 与视差状态。
+ * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。读回帧的音频 uniform 取 `readbackSpectrum`（P11a），没给频谱时写全 0。
+ * 返回读回帧的 `g_Time`、`g_Frametime` 与视差状态。
  */
 export function replayReadback(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
@@ -490,6 +532,8 @@ export function replayReadback(
     pointers.pointers,
   );
   scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
+  // 读回那一帧的音频 uniform（P11a）：同一帧的粒子频谱上面已经写过
+  const audio = readbackSpectrum(particles);
   scene.update(
     {
       time,
@@ -499,6 +543,7 @@ export function replayReadback(
       pointerLast: pointers.pointers[Math.max(0, last - 1)],
       cursor: pointers.cursors[last],
       parallax: parallax.position,
+      ...(audio ? { audio } : {}),
     },
     state,
   );

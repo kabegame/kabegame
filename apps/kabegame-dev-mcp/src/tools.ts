@@ -328,6 +328,15 @@ const TIMELINE = z
     window: WINDOW.optional().describe(
       '抓帧窗口尺寸 [宽, 高]（像素）：缺省从轨迹 tag、再从日志文件名末尾的 -<宽>x<高> 读；"log" 推不出就报错。和场景不同尺寸时探针按 fill 把光标换到场景上',
     ),
+    audio: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "频谱的录制（相对路径按仓库根）：kbp rdc consts 的输出（真实壁纸解包的工程用 --no-clock），或带 frames[].audio 的 kbp rdc track 轨迹。" +
+          "录到的帧取这一帧读到的 g_AudioSpectrum*（同一帧各绘制要相同），没读到的段按 WPE 的取法往下推（32 = 64 两两取大，16 = 32 两两取大），" +
+          "推不出的写 0；没录到的帧沿用前一帧。读回那一帧必须录到。粒子读 16 段，读回帧的六个音频 uniform 取这一帧的值",
+      ),
   })
   .strict()
   .describe(
@@ -520,6 +529,8 @@ export function resolveReplay(
     passes: passes.passes,
     ...(replay.seed !== undefined ? { seed: replay.seed } : {}),
     ...(replay.random ? { random: replay.random } : {}),
+    // 逐帧频谱（P11a）：录制按帧号对齐好的
+    ...(timeline.audio ? { audio: timeline.audio.frames } : {}),
   };
   const { cursors, window } = cursorsFor(timeline, source);
   return {
@@ -1327,7 +1338,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：按 WPE 的一次抓帧回放粒子模拟器（dev 探针 particleTrack：编译场景、不碰 GPU，种子固定），在 frames 输出和 RenderDoc 轨迹" +
         "（ignore/p4/tracks/rd-*.json）同格式的轨迹，写到 out（可直接交给 ignore/p4 的比较脚本，例如 cmp_track.py；工具不做比较）。" +
-        "时间线从 WPE 日志与轨迹组（timeline: { log, track, frame?, gap?, cursors?, cursor?, window? }）；逐帧光标（g_PointerPosition）连同窗口尺寸交给探针，" +
+        "时间线从 WPE 日志与轨迹组（timeline: { log, track, frame?, gap?, cursors?, cursor?, window?, audio? }）；逐帧光标（g_PointerPosition）连同窗口尺寸、逐帧频谱（audio，P11a）交给探针，" +
         "探针按 fill 换到场景上；frames 缺省为轨迹里抓到的帧；passes 缺省按标签里的 fps<N> 推。" +
         "自己开屏外宿主、跑、关掉（同 render_scene），给 host 时用已开的。回到会话的只有摘要：每帧每系统的粒子数、位置范围，以及时间线信息。" +
         "场景的用户属性取工程缺省值（探针不收 userProperties）。结果超过 32 MB 报 413，减少 frames。",
@@ -1370,6 +1381,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         passes: resolvedPasses.passes,
         ...(seed !== undefined ? { seed } : {}),
         ...(random ? { random } : {}),
+        // 逐帧频谱（P11a）：粒子读其中的 16 段
+        ...(timeline.audio ? { audio: timeline.audio.frames } : {}),
         // 逐帧光标与窗口尺寸（P5a 收尾）：探针按 fill 换到场景上
         ...cursorsFor(timeline, source),
         ...(timeline.tag ? { tag: timeline.tag } : {}),

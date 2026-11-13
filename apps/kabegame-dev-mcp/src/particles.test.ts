@@ -308,6 +308,54 @@ describe("粒子回放", () => {
     });
   });
 
+  test("timeline.audio（P11a）：录制按帧号对齐成 particles.audio 转给 REST（render_scene 与 particle_track），结果写一行来源；读回帧没录到报 [timeline]", async () => {
+    await withMcp(async (call, root, rest) => {
+      const L64 = Array.from({ length: 64 }, (_, i) => (i % 5) / 4);
+      writeFileSync(
+        path.join(root, "out", "consts.json"),
+        JSON.stringify([
+          {
+            frame: 5,
+            rdc_frame: 4,
+            draws: [{ event: 3, ps: { g_AudioSpectrum64Left: L64, g_AudioSpectrum64Right: L64 } }],
+          },
+        ]),
+      );
+      const result = await call("render_scene", {
+        imageId: 9,
+        replay: { timeline: { ...TIMELINE, audio: "out/consts.json" } },
+      });
+      assert.notEqual(result.isError, true, textOf(result));
+      const audio = (bodiesOf(rest, "/render")[0].particles as { audio: unknown[] }).audio;
+      assert.equal(audio.length, 5);
+      assert.deepEqual(audio.slice(0, 4), [null, null, null, null]);
+      const pool = (v: number[]) => v.filter((_, i) => i % 2 === 0).map((x, i) => Math.max(x, v[2 * i + 1]));
+      assert.deepEqual(audio[4], {
+        left: pool(pool(L64)),
+        right: pool(pool(L64)),
+        left32: pool(L64),
+        right32: pool(L64),
+        left64: L64,
+        right64: L64,
+      });
+      assert.match(textOf(result), /频谱：录到的帧 5，其余帧沿用前一帧；读回帧 16 段推出、32 段推出、64 段录到/);
+
+      await call("particle_track", {
+        imageId: 9,
+        timeline: { ...TIMELINE, audio: "out/consts.json" },
+        out: "out/track.json",
+      });
+      assert.deepEqual((bodiesOf(rest, "/particle-track")[0].audio as unknown[])[4], audio[4]);
+
+      const missing = await call("render_scene", {
+        imageId: 9,
+        replay: { timeline: { ...TIMELINE, frame: 4, audio: "out/consts.json" } },
+      });
+      assert.equal(missing.isError, true);
+      assert.match(textOf(missing), /\[timeline\][\s\S]*读回的第 4 帧没录到频谱（录到的帧 5）/);
+    });
+  });
+
   test("时间线出错报 [timeline]：缺帧（split 后可用）、frame 超出、文件不在", async () => {
     await withMcp(async (call, _root, rest) => {
       const missing = await call("render_scene", {

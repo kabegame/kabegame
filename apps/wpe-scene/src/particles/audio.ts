@@ -37,10 +37,17 @@ export function silentParticleAudio(): ParticleAudio {
  */
 export const SILENT_PARTICLE_AUDIO: ParticleAudio = silentParticleAudio();
 
-/** 回放 / dev 探针给的一帧频谱（抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`），各 16 个。 */
+/**
+ * 回放 / dev 探针给的一帧频谱（抓帧里读到的 `g_AudioSpectrum16Left/Right`），各 16 个。32 / 64 段可选（P11a），只进读回那一帧的
+ * 音频 uniform（`dev/particleCorners.ts` 的 `replaySpectrum`），粒子照旧只读 16 段。
+ */
 export interface ParticleAudioFrame {
   left: ArrayLike<number>;
   right: ArrayLike<number>;
+  left32?: ArrayLike<number>;
+  right32?: ArrayLike<number>;
+  left64?: ArrayLike<number>;
+  right64?: ArrayLike<number>;
 }
 
 /** 把一帧频谱原样（舍入成 float32）写进 `target`，不经归一化；数组引用不变。不是 16 个时抛错。 */

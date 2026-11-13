@@ -124,7 +124,7 @@ def plan(action, args):
         outputs = [out]
     elif action == "consts":
         out = os.path.abspath(args.out) if args.out else os.path.join(data, "out", "wpe-%s-consts.json" % tag)
-        job["params"] = {"names": [n for n in (args.names or "").split(",") if n]}
+        job["params"] = {"names": [n for n in (args.names or "").split(",") if n], "clock": not args.no_clock}
         outputs = [out]
     else:
         raise KbpError("kbp", "未知的动作 %s" % action)

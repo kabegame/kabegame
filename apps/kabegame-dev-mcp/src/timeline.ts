@@ -27,12 +27,19 @@
  * 帧号递增不重复（同一个文件里有两次运行就报错，截出一次的）。轨迹是 Python 写的 JSON，可能带 `NaN` / `Infinity`
  * （`rd-p4c-sprite-fps60.json` 的 corners），解析前换成 null。
  *
+ * 频谱（P11a，`audio`）：录制文件是 `kbp rdc consts` 的输出（每张抓帧一行，`draws[].vs / ps` 里是这次绘制读到的常量），或 `kbp rdc track`
+ * 的轨迹（`frames[].audio`，生成工程的 CLK 读到的数组）。每个录到的帧取 `g_AudioSpectrum{16,32,64}{Left,Right}`：同一帧各绘制的同名数组
+ * 要相同（WPE 每帧只写一份），没读到的段按 WPE 的取法往下推（32 段 = 64 段两两取大、16 段 = 32 段两两取大，P11 步骤 0 实测逐位成立），
+ * 推不出的（比如只读了 16 段时的 32、64 段）不给、探针写 0。对齐成和 `dts` 等长的逐帧频谱：录到的帧是这一帧的值，其余 null（探针沿用
+ * 前一帧）；读回那一帧必须录到，否则报错。
+ *
  * FR 帧号块的颜色（kabegame-chromium 第 6 批，`frColor`）：kbp 测试工程第一个对象 FR 的颜色由字段脚本每帧写，只取决于 WPE 脚本帧号，
  * 回放到第 N 帧时 MCP 按它把 FR 涂成那一帧的颜色交给探针（探针不跑脚本）。
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import type { SpectrumFrame } from "../../../scripts/kabegame-dev/types.ts";
 
 export type Point = [number, number];
 
@@ -63,6 +70,22 @@ export interface TimelineSource {
   cursor?: Point;
   /** 抓帧窗口尺寸 `[宽, 高]`（像素）；缺省从轨迹 tag、再从日志标签末尾的 `-<宽>x<高>` 读。 */
   window?: Point;
+  /** 频谱的录制文件（P11a）：`kbp rdc consts` 的输出，或带 `frames[].audio` 的 `kbp rdc track` 轨迹。 */
+  audio?: string;
+}
+
+/** 一段频谱从哪来：抓帧里读到的、按 WPE 的取法推出来的、没有（探针写 0）。 */
+export type SpectrumSource = "recorded" | "derived" | "missing";
+
+/** 时间线的频谱（P11a）。 */
+export interface TimelineAudio {
+  file: string | null;
+  /** 和 `dts` 等长：录到的帧是这一帧的频谱，其余 null（探针沿用前一帧）。 */
+  frames: (SpectrumFrame | null)[];
+  /** 录到频谱的帧号（不超过读回帧）。 */
+  recorded: number[];
+  /** 读回那一帧 16 / 32 / 64 段各自的来源（左右总是一起读）。 */
+  readback: Record<"16" | "32" | "64", SpectrumSource>;
 }
 
 /** 平分出来的一段。 */
@@ -110,6 +133,8 @@ export interface Timeline {
   /** 日志覆盖的帧号范围与轨迹的帧号。 */
   log: { file: string | null; first: number; last: number };
   track: { file: string | null; frames: number[] } | null;
+  /** 频谱（P11a）：给了 `audio` 才有。 */
+  audio?: TimelineAudio;
 }
 
 export class TimelineError extends Error {
@@ -503,6 +528,127 @@ export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource,
   };
 }
 
+const SPECTRUM_NAME = /^g_AudioSpectrum(16|32|64)(Left|Right)$/;
+type Bands = "16" | "32" | "64";
+/** 一帧录到的频谱：`<段数><Left|Right>` → 数组，以及各段的来源。 */
+interface RecordedSpectrum {
+  arrays: Partial<Record<`${Bands}${"Left" | "Right"}`, number[]>>;
+  sources: Record<Bands, SpectrumSource>;
+}
+
+/** 两两取大：WPE 的 32 段 = 64 段相邻两项的较大值，16 段同理（P11 步骤 0 实测逐位成立）。 */
+export function poolSpectrum(values: readonly number[]): number[] {
+  return Array.from({ length: values.length / 2 }, (_, i) => Math.max(values[2 * i], values[2 * i + 1]));
+}
+
+/**
+ * 解析频谱的录制文件（纯函数）：`kbp rdc consts` 的输出（数组，每项 `{ frame, draws: [{ event, vs?, ps? }] }`），或带 `frames[].audio`
+ * 的 `kbp rdc track` 轨迹。返回帧号 → 这一帧的频谱（没读到任何频谱的帧不收）。同一帧两次绘制的同名数组不同、或个数不对时报错。
+ */
+export function parseSpectrumRecording(text: string): Map<number, RecordedSpectrum> {
+  let data: unknown;
+  try {
+    // 轨迹是 Python 写的 JSON，可能带 NaN / Infinity（同 parseTrackJson）
+    data = JSON.parse(text.replace(/\bNaN\b|-?\bInfinity\b/g, "null"));
+  } catch (error) {
+    throw new TimelineError(`频谱录制不是 JSON：${(error as Error).message}`);
+  }
+  type Row = { frame?: unknown; draws?: unknown; audio?: unknown };
+  const rows: Row[] = Array.isArray(data)
+    ? data
+    : data && typeof data === "object" && Array.isArray((data as { frames?: unknown }).frames)
+      ? (data as { frames: Row[] }).frames
+      : [];
+  if (!rows.length) throw new TimelineError("频谱录制要是 kbp rdc consts 的输出（数组）或带 frames 的轨迹，里面没有帧");
+  const out = new Map<number, RecordedSpectrum>();
+  for (const row of rows) {
+    const frame = row?.frame;
+    if (typeof frame !== "number" || !Number.isInteger(frame) || frame < 1)
+      throw new TimelineError(`频谱录制里有一行的 frame 不是正整数：${JSON.stringify(frame)}`);
+    if (out.has(frame)) throw new TimelineError(`频谱录制里第 ${frame} 帧出现两次（同一个文件里有两次运行？）`);
+    // 这一帧读到的数组：consts 每次绘制的顶点 / 像素阶段，轨迹的 audio
+    const groups: Record<string, unknown>[] = [];
+    if (Array.isArray(row.draws)) {
+      for (const draw of row.draws as { vs?: Record<string, unknown>; ps?: Record<string, unknown> }[])
+        for (const stage of [draw?.vs, draw?.ps]) if (stage && typeof stage === "object") groups.push(stage);
+    }
+    if (row.audio && typeof row.audio === "object") groups.push(row.audio as Record<string, unknown>);
+    const arrays: RecordedSpectrum["arrays"] = {};
+    for (const group of groups) {
+      for (const [name, value] of Object.entries(group)) {
+        const match = SPECTRUM_NAME.exec(name);
+        if (!match) continue;
+        const count = Number(match[1]);
+        const ok =
+          Array.isArray(value) &&
+          value.length === count &&
+          value.every((x) => typeof x === "number" && Number.isFinite(x));
+        if (!ok)
+          throw new TimelineError(
+            `第 ${frame} 帧的 ${name} 要是 ${count} 个有限数，收到 ${JSON.stringify(value)?.slice(0, 80)}`,
+          );
+        const key = `${match[1]}${match[2]}` as keyof RecordedSpectrum["arrays"];
+        const seen = arrays[key];
+        if (seen && seen.some((x, i) => x !== (value as number[])[i]))
+          throw new TimelineError(`第 ${frame} 帧的 ${name} 在两次绘制里不同（WPE 每帧只写一份，录制有问题）`);
+        arrays[key] = value as number[];
+      }
+    }
+    if (!Object.keys(arrays).length) continue;
+    const sources = {} as Record<Bands, SpectrumSource>;
+    for (const [bands, from] of [
+      ["64", null],
+      ["32", "64"],
+      ["16", "32"],
+    ] as const) {
+      const left = arrays[`${bands}Left`];
+      const right = arrays[`${bands}Right`];
+      if (left && right) sources[bands] = "recorded";
+      else if (left || right)
+        throw new TimelineError(`第 ${frame} 帧只读到 g_AudioSpectrum${bands} 的一边（左右应一起读）`);
+      else if (from && sources[from] !== "missing") {
+        arrays[`${bands}Left`] = poolSpectrum(arrays[`${from}Left`]!);
+        arrays[`${bands}Right`] = poolSpectrum(arrays[`${from}Right`]!);
+        sources[bands] = "derived";
+      } else sources[bands] = "missing";
+    }
+    out.set(frame, { arrays, sources });
+  }
+  return out;
+}
+
+/** 录到的频谱对齐到第 1…`frame` 帧（纯函数）。读回那一帧（`frame`）没录到时报错。 */
+export function alignSpectrum(
+  recorded: Map<number, RecordedSpectrum>,
+  frame: number,
+  file: string | null = null,
+): TimelineAudio {
+  const last = recorded.get(frame);
+  if (!last) {
+    const have = [...recorded.keys()].sort((x, y) => x - y);
+    throw new TimelineError(
+      `读回的第 ${frame} 帧没录到频谱（录到的帧 ${have.length ? frameRanges(have) : "无"}）：回放到录到的帧，或换一份录制`,
+    );
+  }
+  const frames = Array.from({ length: frame }, (_, i): SpectrumFrame | null => {
+    const at = recorded.get(i + 1);
+    if (!at) return null;
+    const { arrays } = at;
+    return {
+      left: arrays["16Left"]!,
+      right: arrays["16Right"]!,
+      ...(arrays["32Left"] ? { left32: arrays["32Left"], right32: arrays["32Right"]! } : {}),
+      ...(arrays["64Left"] ? { left64: arrays["64Left"], right64: arrays["64Right"]! } : {}),
+    };
+  });
+  return {
+    file,
+    frames,
+    recorded: [...recorded.keys()].filter((f) => f <= frame).sort((x, y) => x - y),
+    readback: last.sources,
+  };
+}
+
 /** 读文件版：相对路径按 `root`（缺省当前目录）解析。 */
 export function buildTimeline(source: TimelineSource, options: { root?: string } = {}): Timeline {
   const root = options.root ?? process.cwd();
@@ -540,8 +686,22 @@ export function buildTimeline(source: TimelineSource, options: { root?: string }
     .basename(logFile)
     .replace(/-log\.txt$/i, "")
     .replace(/\.txt$/i, "");
-  const { log: _log, track: _track, ...rest } = source;
-  return timelineFrom({ log, track, logTag, logFile, trackFile }, rest);
+  const { log: _log, track: _track, audio: audioSource, ...rest } = source;
+  const timeline = timelineFrom({ log, track, logTag, logFile, trackFile }, rest);
+  if (audioSource === undefined) return timeline;
+  // 频谱（P11a）：录制文件按帧号对齐到这条时间线
+  const audioFile = path.resolve(root, audioSource);
+  let audioText: string;
+  try {
+    audioText = readFileSync(audioFile, "utf8");
+  } catch (error) {
+    throw new TimelineError(`读不了频谱录制 ${audioFile}：${(error as Error).message}`);
+  }
+  try {
+    return { ...timeline, audio: alignSpectrum(parseSpectrumRecording(audioText), timeline.frame, audioFile) };
+  } catch (error) {
+    throw new TimelineError(`${audioFile}：${(error as Error).message}`);
+  }
 }
 
 const WINDOW_FROM = { param: "参数给的", track: "轨迹标签", log: "日志标签" } as const;
@@ -596,6 +756,14 @@ export function describeTimeline(timeline: Timeline): string {
     if (window) parts.push(`${window}，探针按 fill 换到场景上`);
   } else if (timeline.logCursors) {
     parts.push('日志带光标列，要按每一帧的光标回放传 cursors: "log"');
+  }
+  if (timeline.audio) {
+    const { readback, recorded } = timeline.audio;
+    const name = { recorded: "录到", derived: "推出", missing: "没有（写 0）" } as const;
+    parts.push(
+      `频谱：录到的帧 ${frameRanges(recorded)}，其余帧沿用前一帧；读回帧 16 段${name[readback["16"]]}、32 段${name[readback["32"]]}、` +
+        `64 段${name[readback["64"]]}`,
+    );
   }
   return [`时间线：${parts.join("；")}`, ...warnings].join("\n");
 }

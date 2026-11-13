@@ -12,6 +12,11 @@
  *   `pointsize` 收数），再 `state.writeText`。写进去只是标脏，重排在 `sync` 里；缺字体时要等读完，由 `renderFrame` 回放前结清
  *   （`probeTexts.ts` 的 `settle`）。按宿主规则不会写的值（`pointsize` 给了不是数的串、布尔位给了数）直接抛错，不静默跳过。
  *
+ * 另一种写法是材质常量（P11a）：`{ object, constant: <材质键>, effect?: <effects 下标>, value }`，不给 `field`。找这个图层上挂在
+ * `constantshadervalues.<材质键>` 的字段脚本（`owner.kind === "material"`、`target.kind === "constant"`），值是 1–4 个数或布尔，
+ * 同图层字段经它的 `constant` 绑定目标 `state.write`（宿主同一条写回，材质 setter 照 WPE 的取法写进 uniform）。同一个图层几个 effect
+ * 都有这个键时要给 `effect`（`effects[]` 的 JSON 下标），不给是歧义、抛错。回放 WPE 时值从抓帧的材质常量读（`kbp rdc consts`）。
+ *
  * 对象按 `objects` 下标或名字找（名字在 `bundle.layers` 里找，重名抛错；文本层也在 `bundle.layers` 里）；找不到对象、或这个字段没有挂
  * 字段脚本时，`optional` 的跳过（结果里 `applied: false` 并写明原因），否则抛错。
  */
@@ -51,8 +56,12 @@ export type ScriptValueField = LayerField | TextRuntimeField;
 export interface ScriptValue {
   /** `objects` 下标，或对象名（在 `bundle.layers` 里找，重名抛错）。 */
   object: number | string;
-  /** 图层字段，或文本层的运行中字段（P6b 1e-3，`TEXT_RUNTIME_FIELDS`）。 */
-  field: ScriptValueField;
+  /** 图层字段，或文本层的运行中字段（P6b 1e-3，`TEXT_RUNTIME_FIELDS`）。和 `constant` 二选一。 */
+  field?: ScriptValueField;
+  /** 材质常量的键（`constantshadervalues` 里的名字，P11a）。和 `field` 二选一。 */
+  constant?: string;
+  /** 材质常量所在的 effect（`effects[]` 的 JSON 下标）：同一个图层几个 effect 都有这个键时必给。只和 `constant` 一起给。 */
+  effect?: number;
   /**
    * 脚本这一帧返回的值。图层字段：1–4 个数（同宿主脚本写回铺满后的分量），或布尔。文本字段：字段脚本这一帧的返回值——字符串（最长
    * `MAX_SCRIPT_TEXT` 个 UTF-16 单元）、1–4 个有限数或布尔，按宿主同一规则规整（`textFieldFromScript`，如 `pointsize` 收数，`text`
@@ -68,7 +77,12 @@ export interface ScriptValueResult {
   object: number | null;
   /** 解析出的对象名；按下标没找到时为 null。 */
   name: string | null;
-  field: ScriptValueField;
+  /** 请求的字段；材质常量（P11a）没有。 */
+  field?: ScriptValueField;
+  /** 请求的材质常量键（P11a）。 */
+  constant?: string;
+  /** 材质常量写进的 pass（`objects/<下标>/effects/<下标>/passes/<下标>`，P11a）。 */
+  pass?: string;
   value: number[] | boolean | string;
   /** 写进了状态；`optional` 跳过时为 false，`reason` 写明原因。 */
   applied: boolean;
@@ -77,9 +91,11 @@ export interface ScriptValueResult {
 
 type LayerTarget = Extract<BindingTarget, { kind: "layer" }>;
 type TextTarget = Extract<BindingTarget, { kind: "text" }>;
+type ConstantTarget = Extract<BindingTarget, { kind: "constant" }>;
 
 export type ResolvedScriptValue =
-  | { result: ScriptValueResult; target: LayerTarget }
+  /** 图层字段，或材质常量（P11a）：都经 `state.write`。 */
+  | { result: ScriptValueResult; target: LayerTarget | ConstantTarget }
   /** 文本目标（P6b 1e-3）：`text` 是按宿主脚本写回规整好的字段值，`applyScriptValues` 原样交给 `writeText`。 */
   | { result: ScriptValueResult; target: TextTarget; text: TextRuntimeValue }
   /** 跳过（`optional`）时没有目标。 */
@@ -97,8 +113,22 @@ const isTextField = (field: unknown): field is TextRuntimeField =>
  */
 function checkValue(item: ScriptValue, index: number): TextRuntimeValue | undefined {
   const at = `scriptValues[${index}]`;
-  const text = isTextField(item.field);
-  if (!text && !SCRIPT_VALUE_FIELDS.includes(item.field as LayerField)) {
+  // 材质常量（P11a）：键是非空字符串，不和 field 同给；effect 是非负整数、只跟着 constant
+  if (item.constant !== undefined || item.field === undefined) {
+    if (item.field !== undefined) throw new Error(`${at}：field 和 constant 只能给一个`);
+    if (typeof item.constant !== "string" || !item.constant)
+      throw new Error(
+        `${at}：要给 field（图层或文本字段）或 constant（材质常量的键），收到 constant ${shown(item.constant)}`,
+      );
+    if (
+      item.effect !== undefined &&
+      !(typeof item.effect === "number" && Number.isInteger(item.effect) && item.effect >= 0)
+    )
+      throw new Error(`${at}.effect 要是 effects 下标（非负整数），收到 ${shown(item.effect)}`);
+  } else if (item.effect !== undefined) throw new Error(`${at}.effect 只和 constant 一起给`);
+  const constant = item.constant !== undefined;
+  const text = !constant && isTextField(item.field);
+  if (!constant && !text && !SCRIPT_VALUE_FIELDS.includes(item.field as LayerField)) {
     throw new Error(
       `${at}.field 要是图层字段（${SCRIPT_VALUE_FIELDS.join(" / ")}）或文本字段（${TEXT_RUNTIME_FIELDS.join(" / ")}），` +
         `收到 ${shown(item.field)}`,
@@ -122,7 +152,8 @@ function checkValue(item: ScriptValue, index: number): TextRuntimeValue | undefi
       );
     }
   } else if (!shaped) {
-    const hint = typeof value === "string" ? `（${item.field} 是图层字段，字符串只给文本字段）` : "";
+    const what = constant ? `材质常量 ${item.constant}` : `${item.field} 是图层字段`;
+    const hint = typeof value === "string" ? `（${what}，字符串只给文本字段）` : "";
     throw new Error(`${at}.value 要是 1–4 个有限数或布尔${hint}，收到 ${shown(value)}`);
   }
   const object = item.object;
@@ -153,7 +184,7 @@ export function resolveScriptValues(
 ): ResolvedScriptValue[] {
   return values.map((item, index): ResolvedScriptValue => {
     const text = checkValue(item, index);
-    const kind = text === undefined ? "layer" : "text";
+    const kind = item.constant !== undefined ? "constant" : text === undefined ? "layer" : "text";
     let object: number | null = null;
     let name: string | null = null;
     let reason: string | undefined;
@@ -175,10 +206,37 @@ export function resolveScriptValues(
         name = matches[0].name;
       } else reason = `没有叫 ${shown(item.object)} 的图层`;
     }
-    let target: LayerTarget | TextTarget | null = null;
-    if (object !== null) {
+    let target: LayerTarget | TextTarget | ConstantTarget | null = null;
+    if (object !== null && kind === "constant") {
+      // 材质常量（P11a）：这个图层上挂在这个键的字段脚本，给了 effect 时只看这个 effect 的 pass
+      const prefix = item.effect === undefined ? null : `objects/${object}/effects/${item.effect}/`;
+      const scripts = bundle.scripts.list.filter(
+        (s) =>
+          s.owner.kind === "material" &&
+          s.owner.layer === object &&
+          s.target.kind === "constant" &&
+          s.target.material === item.constant &&
+          (prefix === null || s.target.pass.startsWith(prefix)),
+      );
+      if (scripts.length > 1) {
+        throw new Error(
+          `scriptValues[${index}]：objects[${object}]（${name}）有 ${scripts.length} 段字段脚本挂在材质常量 ${item.constant} 上` +
+            `（${scripts.map((s) => (s.target as ConstantTarget).pass).join("、")}），给 effect 指明是哪个`,
+        );
+      }
+      if (scripts.length) target = scripts[0].target as ConstantTarget;
+      else
+        reason =
+          `objects[${object}]（${name}）` +
+          (item.effect === undefined ? "" : `的 effects[${item.effect}]`) +
+          `没有字段脚本挂在材质常量 ${item.constant} 上`;
+    } else if (object !== null) {
       const script = bundle.scripts.list.find(
-        (s) => s.target.kind === kind && s.target.object === object && s.target.field === item.field,
+        (s) =>
+          (s.target.kind === "layer" || s.target.kind === "text") &&
+          s.target.kind === kind &&
+          s.target.object === object &&
+          s.target.field === item.field,
       );
       if (script) target = script.target as LayerTarget | TextTarget;
       else reason = `objects[${object}]（${name}）的 ${item.field} 没有挂字段脚本`;
@@ -187,7 +245,9 @@ export function resolveScriptValues(
     const result: ScriptValueResult = {
       object,
       name,
-      field: item.field,
+      ...(item.field !== undefined ? { field: item.field } : {}),
+      ...(item.constant !== undefined ? { constant: item.constant } : {}),
+      ...(target?.kind === "constant" ? { pass: target.pass } : {}),
       value: item.value,
       applied: !!target,
       ...(target ? {} : { reason }),
@@ -199,7 +259,7 @@ export function resolveScriptValues(
 }
 
 /**
- * 解析并写进状态，同宿主脚本写回（`host.ts` 的 `writeScript`）：图层目标 `state.write({ property: "", target },
+ * 解析并写进状态，同宿主脚本写回（`host.ts` 的 `writeScript`）：图层目标与材质常量目标（P11a）`state.write({ property: "", target },
  * scriptWriteValue(value))`；文本目标（P6b 1e-3）`state.writeText(对象, 字段, 规整后的值)`，不走 `write` 的属性侧规则（`text` 收数时
  * 属性侧不写、脚本侧 ToString）。先全部解析再写：有一项要抛错时状态不动。返回每一项的结果（没给时空数组）。
  */

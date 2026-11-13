@@ -355,6 +355,21 @@ export interface ParticleReplay {
   passes?: 1 | 2;
   /** `{ <objects 下标>: [R, …] }`，按出生顺序顶替该系统抽到的 `R`（[0, 1)），用完退回种子随机数。 */
   random?: Record<string, number[]>;
+  /**
+   * 逐帧频谱（P4e 步骤 4 的探针参数，P11a 起 REST 也收）：和 `dts` 等长，第 i 项在第 i + 1 帧步进之前写进粒子频谱，null 沿用前一帧；
+   * 读回那一帧的六个 `g_AudioSpectrum*` uniform 取截至这一帧最后一个非 null 项，没给的段为 0。不给时全程全 0。
+   */
+  audio?: (SpectrumFrame | null)[];
+}
+
+/** 一帧频谱（P11a，探针 `ParticleAudioFrame`）：WPE 抓帧里读到的 `g_AudioSpectrum16/32/64Left/Right`，原值。 */
+export interface SpectrumFrame {
+  left: number[];
+  right: number[];
+  left32?: number[];
+  right32?: number[];
+  left64?: number[];
+  right64?: number[];
 }
 
 /** 图层字段（`apps/wpe-scene/src/compile/bindings.ts` 的 `LayerField`）。 */
@@ -383,8 +398,15 @@ export type SceneTextField =
 export interface ScriptValue {
   /** `objects` 下标（非负整数），或对象名（非空，重名时探针报错）。 */
   object: number | string;
-  /** 图层字段，或文本层的运行中字段（P6b 1e-3）。 */
-  field: SceneLayerField | SceneTextField;
+  /** 图层字段，或文本层的运行中字段（P6b 1e-3）。和 `constant` 二选一。 */
+  field?: SceneLayerField | SceneTextField;
+  /**
+   * 材质常量的键（P11a，`constantshadervalues` 里的名字）：探针找这个图层上挂在它上面的字段脚本，经 `constant` 绑定目标写，同宿主的
+   * 脚本写回。和 `field` 二选一。
+   */
+  constant?: string;
+  /** 材质常量所在的 effect（`effects[]` 的 JSON 下标）：同一个图层几个 effect 都有这个键时必给，否则探针报歧义。只跟着 `constant`。 */
+  effect?: number;
   /**
    * 1–4 个有限数（同宿主脚本写回铺满后的分量），或布尔。文本字段（P6b 1e-3）另收字符串（最长 4096 个 UTF-16 单元，例如时钟画的
    * 「12:34」），探针按宿主同一条写回规整（`text` 收数时转字符串、`pointsize` 收数），回放前结清重排（缺字体时等读完）。
@@ -400,7 +422,12 @@ export interface ScriptValueResult {
   object: number | null;
   /** 解析出的对象名；按下标没找到时为 null。 */
   name: string | null;
-  field: SceneLayerField | SceneTextField;
+  /** 请求的字段；材质常量（P11a）没有。 */
+  field?: SceneLayerField | SceneTextField;
+  /** 请求的材质常量键（P11a）。 */
+  constant?: string;
+  /** 材质常量写进的 pass（`objects/<下标>/effects/<下标>/passes/<下标>`，P11a）。 */
+  pass?: string;
   value: number[] | boolean | string;
   /** 写进了状态；`optional` 跳过时为 false，`reason` 写明原因。 */
   applied: boolean;
@@ -539,6 +566,8 @@ export interface ParticleTrackRequest {
   passes: 1 | 2;
   seed?: number;
   random?: Record<string, number[]>;
+  /** 逐帧频谱（P11a 起 REST 也收，同 `ParticleReplay.audio`）：粒子读其中的 16 段。 */
+  audio?: (SpectrumFrame | null)[];
   /**
    * 每帧的 `g_PointerPosition`（抓帧窗口归一化，P5a 收尾起不再由调用方换到场景上），和 `dts` 等长；不给时跟随点是场景中心。
    */

@@ -397,3 +397,107 @@ describe("脚本值：文本字段（P6b 1e-3）", () => {
     expect(wroteTextValues([result("color", true), result("maxwidth", true)])).toBe(true);
   });
 });
+
+describe("脚本值：材质常量（P11a）", () => {
+  const SCRIPT = "export function update(value) { return value; }";
+  const effect = (constants: Record<string, unknown>) => ({
+    file: "effects/e/effect.json",
+    passes: [{ constantshadervalues: constants }],
+  });
+  /** objects：0 M（两个 effect 都有 amount 字段脚本，effects[1] 另有 other）、1 N（没挂脚本的 amount）。 */
+  function compileConstants(): Promise<SceneBundle> {
+    const objects: SceneObject[] = [
+      image({
+        id: 1,
+        name: "M",
+        origin: "300 100 0",
+        effects: [
+          effect({ amount: { script: SCRIPT, value: 0.5 } }),
+          effect({ amount: { script: SCRIPT, value: 0.25 }, other: { script: SCRIPT, value: "1 0" } }),
+        ],
+      }),
+      image({ id: 2, name: "N", origin: "400 100 0", effects: [effect({ amount: 0.5 })] }),
+    ];
+    return compileScene({
+      projectDir: "P:/p",
+      sceneAssets: ["A:/assets"],
+      reader: memory({
+        "P:/p/project.json": { file: "scene.json", general: { properties: {} } },
+        "P:/p/scene.json": { general: { orthogonalprojection: { width: 1920, height: 1080 } }, objects },
+        "P:/p/models/a.json": { material: "materials/a.json", width: 40, height: 60 },
+        "P:/p/materials/a.json": { passes: [{ shader: "simple" }] },
+        "P:/p/effects/e/effect.json": { passes: [{ material: "materials/e.json" }] },
+        "P:/p/materials/e.json": { passes: [{ shader: "e" }] },
+      }),
+      translator: null,
+      postprocess: "disabled",
+      exhaustive: true,
+    });
+  }
+
+  it("按图层与键找到 constant 目标；同键多个 effect 要给 effect，给了按 pass 前缀选；结果带 constant 与 pass", async () => {
+    const bundle = await compileConstants();
+    const [other] = resolveScriptValues(bundle, [{ object: "M", constant: "other", value: [1, 0] }]);
+    expect(other.target).toMatchObject({ kind: "constant", material: "other", pass: "objects/0/effects/1/passes/0" });
+    expect(other.result).toEqual({
+      object: 0,
+      name: "M",
+      constant: "other",
+      pass: "objects/0/effects/1/passes/0",
+      value: [1, 0],
+      applied: true,
+    });
+    const [first, second] = resolveScriptValues(bundle, [
+      { object: 0, constant: "amount", effect: 0, value: [0.75] },
+      { object: "M", constant: "amount", effect: 1, value: [0.125] },
+    ]);
+    expect(first.target).toMatchObject({ kind: "constant", pass: "objects/0/effects/0/passes/0" });
+    expect(second.target).toMatchObject({ kind: "constant", pass: "objects/0/effects/1/passes/0" });
+    expect(() => resolveScriptValues(bundle, [{ object: "M", constant: "amount", value: [1] }])).toThrow(
+      "有 2 段字段脚本挂在材质常量 amount 上",
+    );
+  });
+
+  it("没挂字段脚本：optional 跳过并写明原因，否则抛错；图层字段的脚本不认", async () => {
+    const bundle = await compileConstants();
+    const [skipped] = resolveScriptValues(bundle, [{ object: "N", constant: "amount", value: [1], optional: true }]);
+    expect(skipped.target).toBeNull();
+    expect(skipped.result.reason).toBe("objects[1]（N）没有字段脚本挂在材质常量 amount 上");
+    expect(() => resolveScriptValues(bundle, [{ object: "M", constant: "other", effect: 0, value: [1] }])).toThrow(
+      "objects[0]（M）的 effects[0]没有字段脚本挂在材质常量 other 上",
+    );
+  });
+
+  it("形状不对时抛错：field 与 constant 同给、都不给、constant 为空串、effect 不是下标或没有 constant、值是字符串", async () => {
+    const bundle = await compileConstants();
+    const bad = (item: Record<string, unknown>) => () => resolveScriptValues(bundle, [item as never]);
+    expect(bad({ object: 0, field: "alpha", constant: "amount", value: [1] })).toThrow("field 和 constant 只能给一个");
+    expect(bad({ object: 0, value: [1] })).toThrow("要给 field（图层或文本字段）或 constant");
+    expect(bad({ object: 0, constant: "", value: [1] })).toThrow("要给 field");
+    expect(bad({ object: 0, constant: "amount", effect: -1, value: [1] })).toThrow("effect 要是 effects 下标");
+    expect(bad({ object: 0, field: "alpha", effect: 0, value: [1] })).toThrow("effect 只和 constant 一起给");
+    expect(bad({ object: 0, constant: "other", value: "1 0" })).toThrow("材质常量 other，字符串只给文本字段");
+  });
+
+  it("写入经 state.write 到 constant 目标，值的换算同宿主的脚本写回", async () => {
+    const bundle = await compileConstants();
+    const writes: unknown[][] = [];
+    const state = { write: (...args: unknown[]) => (writes.push(args), "applied" as const), writeText: vi.fn() };
+    const results = applyScriptValues(state, bundle, [
+      { object: "M", constant: "amount", effect: 0, value: [0.75] },
+      { object: "M", constant: "other", value: [1, 0] },
+    ]);
+    expect(results.map((r) => r.applied)).toEqual([true, true]);
+    expect(
+      writes.map(([binding, value]) => [
+        (binding as { target: { pass: string; material: string } }).target.pass,
+        (binding as { target: { material: string } }).target.material,
+        value,
+      ]),
+    ).toEqual([
+      ["objects/0/effects/0/passes/0", "amount", 0.75],
+      ["objects/0/effects/1/passes/0", "other", "1 0"],
+    ]);
+    expect(wroteTextValues(results)).toBe(false);
+  });
+});

@@ -342,6 +342,55 @@ describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
     ]);
   });
 
+  it("读回帧的音频 uniform（P11a）：取截至读回帧最后一个非 null 项，32 / 64 段取新字段、没给的为 0，舍入成 float32；全是 null 或不给时 update 不带 audio", () => {
+    const updates = (particles: ParticleReplay) => {
+      const { calls, scene } = recorder();
+      replayReadback({ ...scene, particleAudio: silentParticleAudio() }, state(), {
+        particles,
+        time: 0,
+        pointers: replayPointers({}, SCENE, particles.dts.length),
+        parallax: initialParallaxState(...SCENE),
+        size: SCENE,
+      });
+      const update = calls.filter((c) => (c as unknown[])[0] === "update");
+      expect(update).toHaveLength(1);
+      return (update[0] as [string, { audio?: Record<string, ArrayLike<number>> }])[1].audio;
+    };
+    const ramp = (n: number, scale: number) => Array.from({ length: n }, (_, i) => (i + 0.1) * scale);
+    const full = {
+      ...frame(0.5),
+      left32: ramp(32, 0.01),
+      right32: ramp(32, 0.02),
+      left64: ramp(64, 0.003),
+      right64: ramp(64, 0.004),
+    };
+    const audio = updates({ dts: [0.1, 0.1, 0.1], audio: [frame(0.9), full, null] })!;
+    const f32 = (values: number[]) => [...Float32Array.from(values)];
+    expect(Array.from(audio.L16)).toEqual(f32(Array(16).fill(0.5)));
+    expect(Array.from(audio.R16)).toEqual(f32(Array(16).fill(0.25)));
+    expect(Array.from(audio.L32)).toEqual(f32(full.left32));
+    expect(Array.from(audio.R32)).toEqual(f32(full.right32));
+    expect(Array.from(audio.L64)).toEqual(f32(full.left64));
+    expect(Array.from(audio.R64)).toEqual(f32(full.right64));
+    // 只给 16 段：32 / 64 段为 0
+    const only16 = updates({ dts: [0.1, 0.1], audio: [full, frame(0.75)] })!;
+    expect(Array.from(only16.L16)).toEqual(Array(16).fill(0.75));
+    expect(Array.from(only16.L32)).toEqual(Array(32).fill(0));
+    expect(Array.from(only16.R64)).toEqual(Array(64).fill(0));
+    expect(updates({ dts: [0.1, 0.1], audio: [null, null] })).toBeUndefined();
+    expect(updates({ dts: [0.1, 0.1] })).toBeUndefined();
+  });
+
+  it("32 / 64 段的个数不对时回放之前就抛错（P11a）", () => {
+    const steps: number[] = [];
+    const scene = { stepParticles: (dt: number) => void steps.push(dt), particleAudio: silentParticleAudio() };
+    const bad = { ...frame(1), left64: Array<number>(32).fill(0) };
+    expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1, 0.1], audio: [frame(1), null, bad] })).toThrow(
+      "audio[2].left64 应 64 个，收到 32 个",
+    );
+    expect(steps).toEqual([]);
+  });
+
   it("和 dts 不等长、或场景没有粒子频谱（替身）却给了 audio 时抛错", () => {
     const scene = { stepParticles: () => {} };
     expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1], audio: [frame(1)] })).toThrow("应等长");

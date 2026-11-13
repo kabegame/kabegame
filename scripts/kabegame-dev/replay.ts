@@ -13,12 +13,15 @@
  *   两个都给而不相等时 400（`field` 为 `canvas`）。
  * - 脚本值（第 6 批）：渲染的 `scriptValues` 是数组、最多 `MAX_SCRIPT_VALUES` 项；每项 `object` 是非负整数或非空字符串，`field` 是
  *   图层字段之一，`value` 是 1–4 个有限数或布尔，`optional` 是布尔。P6b 1e-3 起 `field` 也可以是文本层的运行中字段（`TEXT_FIELDS`），
- *   这时 `value` 还可以是字符串（最长 `MAX_SCRIPT_TEXT` 个 UTF-16 单元）；图层字段给字符串仍是 400。
+ *   这时 `value` 还可以是字符串（最长 `MAX_SCRIPT_TEXT` 个 UTF-16 单元）；图层字段给字符串仍是 400。P11a 起可以不给 `field`、改给
+ *   `constant`（材质常量的键，非空字符串）与可选的 `effect`（effects 下标），值同图层字段；两者同给、`effect` 不跟着 `constant` 都是 400。
  * - 视频时刻（P9a 步骤 3）：渲染的 `videoTime` 是非负有限数（秒），或「非空字符串 → 非负有限数」的对象、最多 `MAX_VIDEO_TIMES` 项；
  *   键是不是这个场景的视频纹理要编译之后才知道，由探针判（不是时报错，回 422）。
  * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：渲染的 `trace` 是 `true`，或 `{ readback?, maxVertices? }`：`readback` 是
  *   pass 下标（非负整数）或 pass / 目标纹理标签的子串（非空字符串）组成的数组、最多 `MAX_TRACE_READBACKS` 项，`maxVertices` 是
  *   1–`MAX_TRACE_VERTICES` 的整数（探针 `apps/wpe-scene/src/dev/drawTrace.ts` 的 `traceOptionsOf` 同样查）。
+ * - 频谱（P11a）：回放的 `audio` 与 `dts` 等长，每项是 null（沿用前一帧）或 `{ left, right, left32?, right32?, left64?, right64? }`，
+ *   各 16 / 16 / 32 / 32 / 64 / 64 个有限数，不认识的键拒绝（同探针的 `ParticleAudioFrame`）。
  * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
  */
 import { badRequest } from "./errors.ts";
@@ -31,6 +34,7 @@ import type {
   ScenePostprocess,
   SceneTextField,
   ScriptValue,
+  SpectrumFrame,
   VideoTime,
 } from "./types.ts";
 
@@ -64,7 +68,7 @@ export const TEXT_FIELDS: readonly SceneTextField[] = [
   "horizontalalign",
   "verticalalign",
 ];
-export const SCRIPT_VALUE_FIELDS = ["object", "field", "value", "optional"] as const;
+export const SCRIPT_VALUE_FIELDS = ["object", "field", "constant", "effect", "value", "optional"] as const;
 /** 渲染一次最多给这么多项脚本值。 */
 export const MAX_SCRIPT_VALUES = 64;
 /** 文本字段的字符串值最长这么多个 UTF-16 单元（P6b 1e-3，探针 `dev/scriptValues.ts` 的 `MAX_SCRIPT_TEXT`，改了两边一起改）。 */
@@ -76,7 +80,9 @@ export const TRACE_FIELDS = ["readback", "maxVertices"] as const;
 export const MAX_TRACE_READBACKS = 64;
 /** 每个 draw 解码的顶点数上限（探针 `render/trace.ts` 的 `MAX_TRACE_VERTICES`，改了两边一起改）。 */
 export const MAX_TRACE_VERTICES = 4096;
-export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random"] as const;
+export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random", "audio"] as const;
+/** 一帧频谱的键与段数（P11a，探针 `ParticleAudioFrame`）。 */
+export const SPECTRUM_BANDS = { left: 16, right: 16, left32: 32, right32: 32, left64: 64, right64: 64 } as const;
 export const TRACK_FIELDS = [
   "imageId",
   "dts",
@@ -85,6 +91,7 @@ export const TRACK_FIELDS = [
   "passes",
   "seed",
   "random",
+  "audio",
   "cursors",
   "window",
   "tag",
@@ -239,6 +246,35 @@ function checkPointers(value: unknown, particles: ParticleReplay | undefined): [
   return checkCursors(value, "pointers", particles.dts.length, "particles.dts");
 }
 
+/**
+ * 逐帧频谱（P11a）：和 `dts` 等长，每项 null 或一帧频谱；`left` / `right` 必给（粒子读的 16 段），32 / 64 段可选。只查形状，不改值。
+ */
+export function checkAudio(value: unknown, field: string, length: number): (SpectrumFrame | null)[] {
+  if (!Array.isArray(value)) fail(field, `要是数组，收到 ${shown(value)}`);
+  if (value.length !== length) fail(field, `有 ${value.length} 项，应和 dts 等长（${length} 项）`);
+  value.forEach((frame, i) => {
+    const at = `${field}[${i}]`;
+    if (frame === null) return;
+    if (!isObject(frame))
+      fail(at, `要是 null 或 { left, right, left32?, right32?, left64?, right64? }，收到 ${shown(frame)}`);
+    rejectUnknown(frame, Object.keys(SPECTRUM_BANDS), at);
+    for (const [key, count] of Object.entries(SPECTRUM_BANDS)) {
+      const bands = frame[key];
+      if (bands === undefined) {
+        if (key === "left" || key === "right") fail(join(at, key), "要给（16 段左右是粒子读的）");
+        continue;
+      }
+      if (!Array.isArray(bands) || bands.length !== count)
+        fail(
+          join(at, key),
+          `要是 ${count} 个有限数，收到 ${Array.isArray(bands) ? `${bands.length} 项` : shown(bands)}`,
+        );
+      numberArray(bands, join(at, key), Number.isFinite, "有限数");
+    }
+  });
+  return value as (SpectrumFrame | null)[];
+}
+
 /** 回放的公共字段（`renderFrame` / `particleCorners` 的 `particles`，以及轨迹请求体本身）。 */
 function replayFields(body: Obj, prefix: string): ParticleReplay {
   const dts = checkDts(body.dts, join(prefix, "dts"));
@@ -247,12 +283,13 @@ function replayFields(body: Obj, prefix: string): ParticleReplay {
   if (body.seed !== undefined) replay.seed = checkSeed(body.seed, join(prefix, "seed"));
   if (body.passes !== undefined) replay.passes = checkPasses(body.passes, join(prefix, "passes"));
   if (body.random !== undefined) replay.random = checkRandom(body.random, join(prefix, "random"));
+  if (body.audio !== undefined) replay.audio = checkAudio(body.audio, join(prefix, "audio"), dts.length);
   return replay;
 }
 
-/** 确定性粒子回放 `{ dts, times?, seed?, passes?, random? }`。 */
+/** 确定性粒子回放 `{ dts, times?, seed?, passes?, random?, audio? }`。 */
 export function checkReplay(value: unknown, field = "particles"): ParticleReplay {
-  if (!isObject(value)) fail(field, `要是 { dts, times?, seed?, passes?, random? }，收到 ${shown(value)}`);
+  if (!isObject(value)) fail(field, `要是 { dts, times?, seed?, passes?, random?, audio? }，收到 ${shown(value)}`);
   rejectUnknown(value, REPLAY_FIELDS, field);
   return replayFields(value, field);
 }
@@ -343,8 +380,18 @@ export function checkScriptValues(value: unknown, field = "scriptValues"): Scrip
       (typeof object === "number" && Number.isInteger(object) && object >= 0) ||
       (typeof object === "string" && object.length > 0);
     if (!objectOk) fail(`${at}.object`, `要是 objects 下标（非负整数）或对象名（非空字符串），收到 ${shown(object)}`);
-    const text = TEXT_FIELDS.includes(item.field as SceneTextField);
-    if (!text && !LAYER_FIELDS.includes(item.field as SceneLayerField)) {
+    // 材质常量（P11a）：`constant` 是材质常量的键，和 `field` 二选一；`effect` 是 effects 下标，只跟着 `constant`
+    const constant = item.constant !== undefined;
+    if (constant) {
+      if (item.field !== undefined) fail(`${at}.field`, "和 constant 只能给一个");
+      if (typeof item.constant !== "string" || !item.constant)
+        fail(`${at}.constant`, `要是材质常量的键（非空字符串），收到 ${shown(item.constant)}`);
+      const effect = item.effect;
+      if (effect !== undefined && !(typeof effect === "number" && Number.isInteger(effect) && effect >= 0))
+        fail(`${at}.effect`, `要是 effects 下标（非负整数），收到 ${shown(effect)}`);
+    } else if (item.effect !== undefined) fail(`${at}.effect`, "只和 constant 一起给");
+    const text = !constant && TEXT_FIELDS.includes(item.field as SceneTextField);
+    if (!constant && !text && !LAYER_FIELDS.includes(item.field as SceneLayerField)) {
       fail(
         `${at}.field`,
         `只能是 ${LAYER_FIELDS.join(" / ")}（图层字段），或 ${TEXT_FIELDS.join(" / ")}（文本字段），收到 ${shown(item.field)}`,
@@ -354,7 +401,9 @@ export function checkScriptValues(value: unknown, field = "scriptValues"): Scrip
     if (typeof v === "string") {
       // 字符串只给文本字段（P6b 1e-3：字段脚本这一帧返回的文字）
       if (!text) {
-        const hint = `${item.field} 是图层字段，字符串只给文本字段`;
+        const hint = constant
+          ? `材质常量 ${item.constant}，字符串只给文本字段`
+          : `${item.field} 是图层字段，字符串只给文本字段`;
         fail(`${at}.value`, `要是 1–4 个有限数，或布尔（${hint}），收到 ${shown(v)}`);
       }
       if (v.length > MAX_SCRIPT_TEXT) {

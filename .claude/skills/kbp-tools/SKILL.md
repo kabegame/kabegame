@@ -97,7 +97,7 @@ kbp.py rdc track <抓帧目录> <标签> [工程] [--draws | --points] [--limit 
 kbp.py rdc frame <抓帧目录> <标签> [--event N | --present] [--out 目录] [--data 目录]
 kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
 kbp.py rdc shaders <抓帧目录> <标签> [--out 文件] [--data 目录]
-kbp.py rdc consts <抓帧目录> <标签> [--names 名字,…] [--out 文件] [--data 目录]
+kbp.py rdc consts <抓帧目录> <标签> [--names 名字,…] [--no-clock] [--out 文件] [--data 目录]
 # 公共：--overwrite（输出已存在时覆盖，缺省拒绝）、--timeout 秒（缺省 1800）、--quiet、--keep-work
 ```
 
@@ -127,6 +127,12 @@ kbp.py rdc consts <抓帧目录> <标签> [--names 名字,…] [--out 文件] [-
   `draws` 是其余每次绘制的 `{event, vs, ps}`，`vs` / `ps` 是该阶段被着色器读到的常量（名字 → 值，矩阵 16 个数，数组按元素展开），
   `referenced` 为 false 的不收（垃圾值）。`--names` 只收这些名字。用来读 WPE 每帧写进字段的值：图层字段看 `g_ModelViewProjectionMatrix` /
   `g_Color4`，effect 常量看材质常量。
+  - `--no-clock`（P11a）：真实壁纸解包的工程（`content unpack --instrument`）只有末尾一个只写日志的 FR、没有 CLK，不读时钟：`frame` 取
+    RenderDoc 帧号 + 1，时间与光标从 `[kbp]` 日志取，全部绘制都收常量。
+  - 动态下标的常量缓冲（P11a）：反汇编里 `dcl_constantbuffer … (名字), dynamicIndexed` 的缓冲，RenderDoc 认不出读了哪些成员、一律标 false
+    （如 `main` 之前的辅助函数在循环里读 `g_AudioSpectrum64Left[i]`），这时整个缓冲都收，靠这条收进来的名字记在这次绘制的
+    `dynamic: {vs|ps: [名字…]}`；没真被读的成员仍是垃圾值，用的人按着色器判断。
+  - 频谱录制：`render_scene` 的 `replay.timeline.audio` 直接收这个文件（kabegame-chromium SKILL.md「粒子回放」）。
 - **`shaders`**（P7 起）：每次绘制的顶点 / 像素着色器哈希、`g_bufStatic` 的变量名（按名字认是哪个 effect）、是否 WPE 的编译失败回退。
   - 片元回退只有一句 `mov o0.xyzw, l(0.500000, 0.000000, 0.000000, 1.000000)`；
   - 顶点回退和纯色图层的顶点着色器指令相同，所以只在配对的像素着色器还读插值输入时才算回退；
