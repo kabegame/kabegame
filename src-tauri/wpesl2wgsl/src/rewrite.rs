@@ -2,7 +2,7 @@
 //! - 全局声明：普通 uniform 并成一个 std140 uniform 块（顶点 / 片元两阶段同一份、同一顺序，共用一块缓冲）；
 //!   两阶段同名、取值来源不同的 uniform 拆成两格，一侧改名（[`merge_uniforms`]）；
 //!   `sampler*` 拆成纹理 + 采样器，按 `g_Texture<n>` 的 n 固定绑定号；`attribute` / `varying` 加 `layout(location)`，
-//!   varying 的 location 在两阶段之间统一分配。
+//!   varying 的 location 在两阶段之间统一分配，数组长度照 WPE（[`wpe_varying_array`]），超过 WebGPU 上限时装进 vec4（[`pack_varyings`]）。
 //! - 正文：`texSample2D` 系列改成 `texture(sampler2D(t, s), …)`；`gl_FragColor` 等内建换成 Vulkan GLSL 写法；
 //!   与 GLSL 450 保留字冲突的标识符改名；精度限定符去掉；其余 HLSL 风格内建由 [`MACRO_HEADER`] 的宏补上
 //!   （照 WPE 自己翻 HLSL 时的宏头一一对应）。
@@ -171,6 +171,8 @@ pub struct Program {
     pub uniforms: Vec<UniformDecl>,
     pub textures: Vec<TextureDecl>,
     pub attributes: Vec<InterfaceDecl>,
+    /// 两阶段之间实际的接口：不打包时是作者声明的 varying（数组长度照 WPE 换算），
+    /// 打包时是 `kb_varying_<i>`（vec4）加没打包的整数 varying（[`pack_varyings`]）。
     pub varyings: Vec<InterfaceDecl>,
     pub vertex_glsl: String,
     pub fragment_glsl: String,
@@ -297,32 +299,43 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
                     });
                     next_attribute += location_slots(&decl.ty, decl.array);
                 }
-                Storage::Varying => match varyings.iter().find(|v| v.name == decl.name) {
-                    // 片元自己的 varying 声明作废、用顶点那份：WPE 两阶段只有一份 `VS_OUTPUT`（rea-p7-shader §2.6），
-                    // p7-sem 的 `kbwidth` 实测片元声明 vec2 也能读顶点写的 `.zw`。所以类型不同时不论哪边宽，片元都按顶点的类型
-                    // 声明（`render` 用共享表里的类型），正文里的截断交给 naga 的 HLSL 模式；片元读了顶点没有的分量时 naga 照常
-                    // 报错，与 fxc 一致。类型相同时与原来一样，输出不变
-                    Some(_) if stage == Stage::Fragment && vertex_varyings.contains(&decl.name) => {}
-                    Some(existing) if existing.ty != decl.ty || existing.array != decl.array => {
-                        return Err(fail(format!("varying {} 在两个阶段的类型不同", decl.name)));
-                    }
-                    Some(_) => {}
-                    // 只在片元阶段声明的 varying（如 fade.frag 的 v_TexCoord）也分配 location：
-                    // 顶点阶段渲染全部 varying，没写的输出是零（WGSL 私有变量零初始化），对应 D3D 下的未定义值；
-                    // 否则 WebGPU 建管线会因片元输入没有对应的顶点输出而失败。
-                    None => {
-                        if stage == Stage::Vertex {
-                            vertex_varyings.insert(decl.name.clone());
+                // 片元自己的 varying 声明作废、用顶点那份：WPE 两阶段只有一份 `VS_OUTPUT`（rea-p7-shader §2.6），
+                // p7-sem 的 `kbwidth` 实测片元声明 vec2 也能读顶点写的 `.zw`。所以类型不同时不论哪边宽，片元都按顶点的类型
+                // 声明（`render` 用共享表里的类型），正文里的截断交给 naga 的 HLSL 模式；片元读了顶点没有的分量时 naga 照常
+                // 报错，与 fxc 一致。类型相同时与原来一样，输出不变。作废的声明连数组长度也不看（WPE 的片元列表被共享列表覆盖）
+                Storage::Varying
+                    if stage == Stage::Fragment && vertex_varyings.contains(&decl.name) => {}
+                Storage::Varying => {
+                    // 数组长度换成 WPE `VS_OUTPUT` 里的长度（见 [`wpe_varying_array`]），两阶段按换算后的比较
+                    let array = match decl.array {
+                        Some(n) => wpe_varying_array(&decl.name, &decl.ty, n).map_err(fail)?,
+                        None => None,
+                    };
+                    match varyings.iter().find(|v| v.name == decl.name) {
+                        Some(existing) if existing.ty != decl.ty || existing.array != array => {
+                            return Err(fail(format!(
+                                "varying {} 在两个阶段的类型不同",
+                                decl.name
+                            )));
                         }
-                        varyings.push(InterfaceDecl {
-                            name: decl.name.clone(),
-                            ty: decl.ty.clone(),
-                            array: decl.array,
-                            location: next_varying,
-                        });
-                        next_varying += location_slots(&decl.ty, decl.array);
+                        Some(_) => {}
+                        // 只在片元阶段声明的 varying（如 fade.frag 的 v_TexCoord）也分配 location：
+                        // 顶点阶段渲染全部 varying，没写的输出是零（WGSL 私有变量零初始化），对应 D3D 下的未定义值；
+                        // 否则 WebGPU 建管线会因片元输入没有对应的顶点输出而失败。
+                        None => {
+                            if stage == Stage::Vertex {
+                                vertex_varyings.insert(decl.name.clone());
+                            }
+                            varyings.push(InterfaceDecl {
+                                name: decl.name.clone(),
+                                ty: decl.ty.clone(),
+                                array,
+                                location: next_varying,
+                            });
+                            next_varying += location_slots(&decl.ty, array);
+                        }
                     }
-                },
+                }
             }
         }
     }
@@ -341,6 +354,24 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
         .collect();
     let [vertex_uniforms, fragment_uniforms] = stage_uniforms;
     let (uniforms, renames) = merge_uniforms(vertex_uniforms, fragment_uniforms, &mut taken)?;
+    // 超过 WebGPU 阶段间变量上限时把浮点 varying 装进 vec4（P7e 步骤 2）。几何展开拼成的顶点段不打包：它的 `main` 是生成的，
+    // 绳着色器的 varying 很少；真超过时同样在这里报错，不留到建管线
+    let interface_error = |message: String| RewriteError {
+        stage: Stage::Vertex,
+        message,
+        file: None,
+        line: None,
+    };
+    let packing = if vs.merged_geometry {
+        if next_varying > MAX_INTER_STAGE {
+            return Err(interface_error(format!(
+                "几何着色器展开的程序 varying 占 {next_varying} 个 location，超过 WebGPU 的 {MAX_INTER_STAGE} 个（这类程序不打包）"
+            )));
+        }
+        None
+    } else {
+        pack_varyings(&varyings).map_err(interface_error)?
+    };
     let vertex_glsl = render(
         Stage::Vertex,
         &vs,
@@ -349,6 +380,7 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
         &textures,
         &attributes,
         &varyings,
+        packing.as_ref(),
     )?;
     let fragment_glsl = render(
         Stage::Fragment,
@@ -358,7 +390,13 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
         &textures,
         &attributes,
         &varyings,
+        packing.as_ref(),
     )?;
+    // 反射给实际的 WGSL 接口：打包时是 `kb_varying_<i>` 加没打包的整数 varying
+    let varyings = match packing {
+        Some(packing) => packing.interface,
+        None => varyings,
+    };
     Ok(Program {
         uniforms,
         textures,
@@ -670,6 +708,263 @@ fn location_slots(ty: &str, array: Option<u32>) -> u32 {
     columns * array.unwrap_or(1)
 }
 
+/// varying 数组在 WPE 的 `VS_OUTPUT` 里的长度（rea-p7e-varying 第 1 条，`FUN_1400f52e0` `0x1400f53f0`–`0x1400f5434`）。
+///
+/// WPE 对每个成员只有一条公式：带 `[n]` 且 `n·(t+1) > 4`（`t` 是它类型表的下标，`t+1` 被当成分量数）时写 `[ceil(n/d)]`
+/// （vec2 的 `d` 是 2，其余是 4），否则不写方括号。accessArray 与否只换类型名，长度走同一段，所以：
+/// - `float` / `vec2`（accessArray）：WPE 声明成 `float4[ceil(n/4)]` / `float4[ceil(n/2)]`、容量刚好够，进出各有一段整体拷贝，
+///   值与 GLSL 数组相同。这里保持原长度；超过上限时由 [`pack_varyings`] 照 fxc 装进 vec4。
+/// - `vec3` / `vec4`：只剩 `ceil(n/4)` 个元素。这是 WPE 的 bug，但工坊示波器（`vec4 audioValue[32]`，只写、只读前 8 个）照着它写，
+///   确定性工程 `p-va` 的 10 种情况与签名一致。`n·分量数 ≤ 4`（`n = 1`）时没有方括号、退化成普通向量，正文的 `a[0]` 成了取分量，
+///   读写的截断交给 naga 的 HLSL 模式（fxc 的 X3206）。常量下标越过缩短后的长度时 naga 照常报越界（fxc 是 X3504、顶点回退）。
+/// - `ivec4` / `uvec4`：`t+1` 是 13 / 15，`n = 1` 也有方括号（`int4 X[1]`），其余同上。
+/// - `int` / `uint` 数组（WPE 当 `float4` 插值再数值转换回整数）与矩阵数组（WPE 每个元素只推进 1 个语义号，推断与下一个成员重叠）：
+///   语料 0 处，照报不支持（P7e 已定）。
+///
+/// 不在 WPE 类型表里的类型（`ivec2`、`bool` 等）WPE 解析不了这条声明，这里保持原长度。
+fn wpe_varying_array(name: &str, ty: &str, n: u32) -> Result<Option<u32>, String> {
+    let weight = match ty {
+        "vec3" => 3,
+        "vec4" => 4,
+        "ivec4" => 13,
+        "uvec4" => 15,
+        "int" | "uint" => {
+            return Err(format!(
+                "varying {name} 是 {ty} 数组：WPE 按 float4 插值传递，没有实现（语料 0 处）"
+            ))
+        }
+        _ if ty.starts_with("mat") => {
+            return Err(format!(
+                "varying {name} 是 {ty} 数组：WPE 的语义编号会重叠，没有实现（语料 0 处）"
+            ))
+        }
+        _ => return Ok(Some(n)),
+    };
+    Ok((n.saturating_mul(weight) > 4).then(|| n.div_ceil(4)))
+}
+
+/// WebGPU 缺省的 `maxInterStageShaderVariables`，每台设备都保证；设备不申请更高的上限（P7e 已定，结果不随显卡变）。
+/// 校验按 location 比（`location < 16`），所以是 location 的个数。
+pub const MAX_INTER_STAGE: u32 = 16;
+
+/// 一个 varying（数组的一个元素、矩阵的一列）装进第 `slot` 个 vec4 的 `offset` 起的 `components` 个分量。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackedPiece {
+    name: String,
+    element: Option<u32>,
+    column: Option<u32>,
+    components: u32,
+    slot: u32,
+    offset: u32,
+}
+
+/// [`pack_varyings`] 的结果。
+#[derive(Debug, Clone)]
+struct Packing {
+    /// 浮点 varying 的全部片段，按 (slot, offset) 排序。
+    pieces: Vec<PackedPiece>,
+    /// vec4 的个数，`kb_varying_0` … `kb_varying_<slots-1>` 占 location 0 … slots-1。
+    slots: u32,
+    /// 实际的 WGSL 接口：`kb_varying_<i>`（vec4）在前，没打包的整数 varying 在后、按声明顺序接着分配 location。
+    interface: Vec<InterfaceDecl>,
+}
+
+impl Packing {
+    fn pieces_in(&self, slot: u32) -> impl Iterator<Item = &PackedPiece> + '_ {
+        self.pieces.iter().filter(move |piece| piece.slot == slot)
+    }
+}
+
+/// 能装进 vec4 的浮点 varying 的形状（列数, 每列的分量数）；整数等别的类型返回 None、不打包。
+fn float_shape(ty: &str) -> Option<(u32, u32)> {
+    Some(match ty {
+        "float" => (1, 1),
+        "vec2" => (1, 2),
+        "vec3" => (1, 3),
+        "vec4" => (1, 4),
+        "mat2" | "mat2x2" => (2, 2),
+        "mat2x3" => (2, 3),
+        "mat2x4" => (2, 4),
+        "mat3x2" => (3, 2),
+        "mat3" | "mat3x3" => (3, 3),
+        "mat3x4" => (3, 4),
+        "mat4x2" => (4, 2),
+        "mat4x3" => (4, 3),
+        "mat4" | "mat4x4" => (4, 4),
+        _ => return None,
+    })
+}
+
+/// 换算长度（[`wpe_varying_array`]）之后 varying 仍超过 [`MAX_INTER_STAGE`] 个 location 时，把浮点 varying 装进 vec4。
+///
+/// 依据：fxc 编签名时把标量、`vec2` 等装进同一个寄存器（rea-p7e-varying「和 WebGPU 阶段间变量上限的关系」：`auto_sway`
+/// 的 31 个 varying 在 WPE 的编译缓存里是 11 个寄存器加位置）。打包只改两阶段之间的接口，插值逐分量进行，值不变。
+/// 规则：按分量数从大到小（同大小按声明顺序，数组按元素、矩阵按列）放进第一个放得下的 vec4，不拆开一个元素或一列；
+/// 整数 varying 不打包（要 `flat`），各占自己的 location。具体放在哪个分量与 fxc 不必相同，两个阶段都是我们生成的。
+///
+/// 不超过上限时返回 None，输出与原来逐字节相同（P7e 已定：不照 WPE 总把 `float` / `vec2` 数组打包，免得 36 张 `blur_gaussian`
+/// 等场景的输出都变）。打包后仍超过时报错，场景在编译期报不支持、退回预览图，而不是到运行时建管线才失败。
+fn pack_varyings(varyings: &[InterfaceDecl]) -> Result<Option<Packing>, String> {
+    let total: u64 = varyings
+        .iter()
+        .map(|v| u64::from(location_slots(&v.ty, v.array)))
+        .sum();
+    if total <= u64::from(MAX_INTER_STAGE) {
+        return Ok(None);
+    }
+    let too_many = |needed: u64| {
+        format!(
+            "varying 装进 vec4 之后仍要 {needed} 个 location（不打包是 {total} 个），超过 WebGPU 的 {MAX_INTER_STAGE} 个"
+        )
+    };
+    // 先按下界判断，免得给特别长的数组逐元素建片段
+    let float_components: u64 = varyings
+        .iter()
+        .filter_map(|v| {
+            let (columns, rows) = float_shape(&v.ty)?;
+            Some(u64::from(columns * rows) * u64::from(v.array.unwrap_or(1)))
+        })
+        .sum();
+    let integer_slots: u64 = varyings
+        .iter()
+        .filter(|v| float_shape(&v.ty).is_none())
+        .map(|v| u64::from(location_slots(&v.ty, v.array)))
+        .sum();
+    let lower_bound = float_components.div_ceil(4) + integer_slots;
+    if lower_bound > u64::from(MAX_INTER_STAGE) {
+        return Err(too_many(lower_bound));
+    }
+
+    let mut pieces = Vec::new();
+    for varying in varyings {
+        let Some((columns, rows)) = float_shape(&varying.ty) else {
+            continue;
+        };
+        let elements: Vec<Option<u32>> = match varying.array {
+            Some(n) => (0..n).map(Some).collect(),
+            None => vec![None],
+        };
+        for element in elements {
+            for column in 0..columns {
+                pieces.push(PackedPiece {
+                    name: varying.name.clone(),
+                    element,
+                    column: (columns > 1).then_some(column),
+                    components: rows,
+                    slot: 0,
+                    offset: 0,
+                });
+            }
+        }
+    }
+    // `sort_by` 是稳定排序：同样大小的保持声明顺序
+    pieces.sort_by(|a, b| b.components.cmp(&a.components));
+    let mut fill: Vec<u32> = Vec::new();
+    for piece in &mut pieces {
+        let slot = match fill.iter().position(|used| used + piece.components <= 4) {
+            Some(slot) => slot,
+            None => {
+                fill.push(0);
+                fill.len() - 1
+            }
+        };
+        piece.slot = slot as u32;
+        piece.offset = fill[slot];
+        fill[slot] += piece.components;
+    }
+    pieces.sort_by_key(|piece| (piece.slot, piece.offset));
+
+    let slots = fill.len() as u32;
+    let mut interface: Vec<InterfaceDecl> = (0..slots)
+        .map(|slot| InterfaceDecl {
+            name: packed_name(slot),
+            ty: "vec4".to_string(),
+            array: None,
+            location: slot,
+        })
+        .collect();
+    let mut next = slots;
+    for varying in varyings.iter().filter(|v| float_shape(&v.ty).is_none()) {
+        interface.push(InterfaceDecl {
+            location: next,
+            ..varying.clone()
+        });
+        next += location_slots(&varying.ty, varying.array);
+    }
+    if next > MAX_INTER_STAGE {
+        return Err(too_many(u64::from(next)));
+    }
+    Ok(Some(Packing {
+        pieces,
+        slots,
+        interface,
+    }))
+}
+
+/// 打包后第 `slot` 个 vec4 的名字。`kb_` 前缀是翻译器保留的，作者代码里出现 `kb_varying_*` 时打包报错（[`render`]）。
+fn packed_name(slot: u32) -> String {
+    format!("kb_varying_{slot}")
+}
+
+/// 片段在 GLSL 里的写法：`名[元素][列]`。
+fn piece_expr(piece: &PackedPiece) -> String {
+    let mut out = piece.name.clone();
+    if let Some(element) = piece.element {
+        out.push_str(&format!("[{element}]"));
+    }
+    if let Some(column) = piece.column {
+        out.push_str(&format!("[{column}]"));
+    }
+    out
+}
+
+/// 打包时生成的入口：作者的 `main` 已改名 `kb_main`。
+/// - 顶点：先调 `kb_main`，再把私有全局装进 vec4（作者在 `main` 里提前 `return` 也照样装箱）；没填满的分量补 0。
+/// - 片元：只拆本阶段声明的 varying，拆完再调 `kb_main`（作者可以照常改写它们）。
+fn packed_entry(stage: Stage, packing: &Packing, declared: &[&str]) -> String {
+    let mut out = String::from("void main() {\n");
+    if stage == Stage::Fragment {
+        for piece in packing
+            .pieces
+            .iter()
+            .filter(|piece| declared.contains(&piece.name.as_str()))
+        {
+            let source = packed_name(piece.slot);
+            let source = if piece.components == 4 {
+                source
+            } else {
+                let at = piece.offset as usize;
+                format!("{source}.{}", &"xyzw"[at..at + piece.components as usize])
+            };
+            out.push_str(&format!("    {} = {source};\n", piece_expr(piece)));
+        }
+        out.push_str("    kb_main();\n");
+    } else {
+        out.push_str("    kb_main();\n");
+        for slot in 0..packing.slots {
+            let mut parts: Vec<String> = packing.pieces_in(slot).map(piece_expr).collect();
+            let used: u32 = packing.pieces_in(slot).map(|piece| piece.components).sum();
+            parts.extend((used..4).map(|_| "0.0".to_string()));
+            out.push_str(&format!(
+                "    {} = vec4({});\n",
+                packed_name(slot),
+                parts.join(", ")
+            ));
+        }
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// 打包时把作者的 `void main() {` 改名为 `kb_main`。必须在 [`pack::rewrite_head`]、[`hoist_runtime_consts`] 之后做：
+/// 它们按原来的 `main` 签名切分正文。认不出签名（`main(void)` 等）时返回 None。
+fn rename_main(body: &str) -> Option<String> {
+    let start = pack::main_signature(body)?;
+    // 签名是 `void` 空白 `main`：`void` 之后的第一个 `main` 就是它
+    let at = start + 4 + body[start + 4..].find("main")?;
+    Some(format!("{}kb_main{}", &body[..at], &body[at + 4..]))
+}
+
 /// std140 的数组元素步长是 16，但 WGSL 的 `array<f32, N>` 步长固定是 4，而 uniform 地址空间要求步长为 16 的倍数：
 /// 标量 / 二三分量向量的数组写不成合法的 WGSL。这类数组在块里改成四分量向量数组（内存布局与 std140 完全相同），
 /// 返回（块里的类型, 还原用的分量）。
@@ -709,6 +1004,8 @@ fn array_suffix(array: Option<u32>) -> String {
 }
 
 /// `renames` 是本阶段的改名表（拆分后改名的 uniform，原名 → 新名），正文里的引用随之改写。
+/// `varyings` 是作者声明的 varying（长度已换算）；`packing` 不为空时按它把浮点 varying 装进 vec4（[`pack_varyings`]）。
+#[allow(clippy::too_many_arguments)]
 fn render(
     stage: Stage,
     parts: &StageParts,
@@ -717,6 +1014,7 @@ fn render(
     textures: &[TextureDecl],
     attributes: &[InterfaceDecl],
     varyings: &[InterfaceDecl],
+    packing: Option<&Packing>,
 ) -> Result<String, RewriteError> {
     let body = rewrite_identifiers(stage, &parts.body.join("\n"), renames);
     // main 之前对 float / int / uint 数组 uniform 的下标访问是 WPE 的打包形态（P7b 步骤 3，见 pack.rs）
@@ -743,6 +1041,8 @@ fn render(
         file: None,
         line: None,
     })?;
+    // 上界是字面量 0 的 smoothstep 照 fxc 的化简算（[`rewrite_zero_edge_smoothstep`]）
+    let body = rewrite_zero_edge_smoothstep(&body);
     // 全局 const 的初始值引用 uniform 等运行期值：改成私有全局、在 main 开头赋值（P7c 2h）
     let runtime: BTreeSet<&str> = parts
         .decls
@@ -750,6 +1050,29 @@ fn render(
         .map(|(decl, _)| renames.get(&decl.name).unwrap_or(&decl.name).as_str())
         .collect();
     let body = hoist_runtime_consts(&body, &runtime);
+    // 打包时作者的 `main` 改名 `kb_main`，入口由 `packed_entry` 生成。改名放在上面两步之后：它们按原来的 `main` 切分正文
+    let body = match packing {
+        None => body,
+        Some(_) => {
+            let fail = |message: String| RewriteError {
+                stage,
+                message,
+                file: None,
+                line: None,
+            };
+            if let Some(name) = identifiers(&body)
+                .into_iter()
+                .find(|name| name == "kb_main" || name.starts_with("kb_varying_"))
+            {
+                return Err(fail(format!(
+                    "varying 要打包，但正文里已有标识符 {name}（kb_ 前缀是翻译器保留的）"
+                )));
+            }
+            rename_main(&body).ok_or_else(|| {
+                fail("varying 要打包，但认不出 main 的签名（要写成 `void main() {`）".to_string())
+            })?
+        }
+    };
 
     let mut out = String::from("#version 450\n");
     out.push_str(MACRO_HEADER);
@@ -810,27 +1133,69 @@ fn render(
     }
     // 顶点阶段输出全部 varying（包括只在片元阶段声明的），片元阶段只声明自己用的
     let direction = if stage == Stage::Vertex { "out" } else { "in" };
-    for varying in varyings
-        .iter()
-        .filter(|v| stage == Stage::Vertex || declared.contains(&v.name.as_str()))
-    {
+    let interface_line = |varying: &InterfaceDecl| {
         let flat = if is_integer_type(&varying.ty) {
             "flat "
         } else {
             ""
         };
-        out.push_str(&format!(
+        format!(
             "layout(location = {}) {flat}{direction} {} {}{};\n",
             varying.location,
             varying.ty,
             varying.name,
             array_suffix(varying.array)
-        ));
+        )
+    };
+    let used = |name: &str| stage == Stage::Vertex || declared.contains(&name);
+    match packing {
+        None => {
+            for varying in varyings.iter().filter(|v| used(&v.name)) {
+                out.push_str(&interface_line(varying));
+            }
+        }
+        Some(packing) => {
+            // 接口：片元只声明装着自己的 varying 的 vec4，以及自己声明的整数 varying
+            let slots: BTreeSet<u32> = packing
+                .pieces
+                .iter()
+                .filter(|piece| used(&piece.name))
+                .map(|piece| piece.slot)
+                .collect();
+            for (index, decl) in packing.interface.iter().enumerate() {
+                let keep = if (index as u32) < packing.slots {
+                    slots.contains(&decl.location)
+                } else {
+                    used(&decl.name)
+                };
+                if keep {
+                    out.push_str(&interface_line(decl));
+                }
+            }
+            // 原来的浮点 varying 改成私有全局，正文照常读写（片元改写 varying、只在片元声明的都不受影响）
+            for varying in varyings
+                .iter()
+                .filter(|v| float_shape(&v.ty).is_some() && used(&v.name))
+            {
+                out.push_str(&format!(
+                    "{} {}{};\n",
+                    varying.ty,
+                    varying.name,
+                    array_suffix(varying.array)
+                ));
+            }
+        }
     }
 
+    if calls(&body, "kb_smoothstep0") {
+        out.push_str(SMOOTHSTEP0_HELPERS);
+    }
     out.push_str(&broadcast_helpers(&body));
     out.push_str(&body);
     out.push('\n');
+    if let Some(packing) = packing {
+        out.push_str(&packed_entry(stage, packing, &declared));
+    }
     Ok(out)
 }
 
@@ -1212,6 +1577,121 @@ fn rewrite_texture_calls(body: &str, textures: &[TextureDecl]) -> Result<String,
     Ok(out)
 }
 
+/// 上界是字面量 0 的 `smoothstep(lo, 0.0, x)` → `kb_smoothstep0(lo, x)`（[`SMOOTHSTEP0_HELPERS`]）；参数里嵌套的调用一并改写。
+///
+/// fxc 把内建 `smoothstep` 展开成 `saturate((x - lo) * (1 / (hi - lo)))`，上界是常量 0 时把 `0.0 - lo` 化简成 `-lo`：
+/// `lo` 为 +0 时分母是 -0、倒数 -inf，结果是 0；照 IEEE 算 `0.0 - (+0)` 是 +0、倒数 +inf，结果是 1。工坊示波器
+/// （`audio_responsive_oscilloscope`，`AUDIOTHICKNESS`）没有声音时线宽为 0，就是 `smoothstep(+0, 0.0, dist)`：WPE 什么都不画，
+/// 用内建函数整张提亮约 39%（WPE 像素着色器反汇编第 78–79 行，`ignore/p7e/iso-REPORT.md`）。
+/// 下界是数字字面量时分母不会是 ±0，结果和内建函数相同，不改写（输出逐字节不变）。上界经宏传进来的（`#define` 的形参）认不出，语料 0 处。
+fn rewrite_zero_edge_smoothstep(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while !rest.is_empty() {
+        let c = rest.chars().next().expect("non-empty");
+        if c.is_ascii_digit() {
+            // 数字字面量整体拷贝（同 `rewrite_identifiers`）
+            let end = rest
+                .char_indices()
+                .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '.'))
+                .map(|(at, _)| at)
+                .unwrap_or(rest.len());
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
+        }
+        if !(c.is_ascii_alphabetic() || c == '_') {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+            continue;
+        }
+        let (ident, after) = split_ident(rest);
+        let open = after.trim_start();
+        let parsed = (ident == "smoothstep" && open.starts_with('('))
+            .then(|| split_call_args(&open[1..]))
+            .flatten();
+        let Some((args, remaining)) = parsed else {
+            out.push_str(ident);
+            rest = after;
+            continue;
+        };
+        let args: Vec<String> = args
+            .iter()
+            .map(|arg| rewrite_zero_edge_smoothstep(arg))
+            .collect();
+        if args.len() == 3 && is_zero_literal(&args[1]) && !is_number_literal(&args[0]) {
+            out.push_str(&format!(
+                "kb_smoothstep0({}, {})",
+                args[0].trim(),
+                args[2].trim()
+            ));
+        } else {
+            // 不改写的原样拼回（函数名与括号之间的空白也留着），参数里嵌套的改写照常生效
+            let gap = &after[..after.len() - open.len()];
+            out.push_str(&format!("smoothstep{gap}({})", args.join(",")));
+        }
+        rest = remaining;
+    }
+    out
+}
+
+/// 去掉外层括号与空白后的数字字面量（可带正负号与 `f` 后缀）：`0`、`0.0`、`.5`、`(1e-3)`、`-2.0f`。
+fn is_number_literal(text: &str) -> bool {
+    number_literal(text).is_some()
+}
+
+/// 去掉外层括号与空白后是值为 +0 的字面量：`0`、`0.0`、`0.`、`.0`、`0.0f`、`(0)`。`-0.0` 不算：`-0.0 - lo` 照 IEEE 算本来就等于 `-lo`。
+fn is_zero_literal(text: &str) -> bool {
+    number_literal(text).is_some_and(|(negative, value)| !negative && value == 0.0)
+}
+
+/// 解析数字字面量，返回（是否带负号, 绝对值）。
+fn number_literal(text: &str) -> Option<(bool, f64)> {
+    let mut text = text.trim();
+    while let Some(inner) = text.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+        text = inner.trim();
+    }
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, text.strip_prefix('+').unwrap_or(text).trim_start()),
+    };
+    let digits = digits
+        .strip_suffix('f')
+        .or_else(|| digits.strip_suffix('F'))
+        .unwrap_or(digits);
+    let valid = !digits.is_empty()
+        && digits
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '.')
+        && digits
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'));
+    if !valid {
+        return None;
+    }
+    digits.parse::<f64>().ok().map(|value| (negative, value))
+}
+
+/// [`rewrite_zero_edge_smoothstep`] 换上的函数：照 fxc 的 `saturate((x - lo) * (1 / -lo))`，分母为 ±0 时不靠无穷大，按符号直接取值
+/// （lo 为 +0：倒数 -inf，x < lo 得 1、否则 0；lo 为 -0：倒数 +inf，x > lo 得 1、否则 0；x == lo 时 0 · inf 是 NaN，saturate 成 0）。
+/// 向量逐分量；重载由 naga 的 HLSL 内置规则选（`naga_stage::INTRINSIC_WRAPPERS`），标量与向量混用时铺满。
+const SMOOTHSTEP0_HELPERS: &str = "\
+float kb_smoothstep0(float lo, float x) {
+    float t;
+    if (lo == 0.0) {
+        float d = x - lo;
+        t = (floatBitsToUint(lo) >> 31) == 0u ? (d < 0.0 ? 1.0 : 0.0) : (d > 0.0 ? 1.0 : 0.0);
+    } else {
+        t = clamp((x - lo) * (1.0 / -lo), 0.0, 1.0);
+    }
+    return t * t * (3.0 - 2.0 * t);
+}
+vec2 kb_smoothstep0(vec2 lo, vec2 x) { return vec2(kb_smoothstep0(lo.x, x.x), kb_smoothstep0(lo.y, x.y)); }
+vec3 kb_smoothstep0(vec3 lo, vec3 x) { return vec3(kb_smoothstep0(lo.x, x.x), kb_smoothstep0(lo.y, x.y), kb_smoothstep0(lo.z, x.z)); }
+vec4 kb_smoothstep0(vec4 lo, vec4 x) { return vec4(kb_smoothstep0(lo.x, x.x), kb_smoothstep0(lo.y, x.y), kb_smoothstep0(lo.z, x.z), kb_smoothstep0(lo.w, x.w)); }
+";
+
 /// 从 `(` 之后切出顶层逗号分隔的参数，返回（参数列表, `)` 之后的剩余文本）。
 fn split_call_args(text: &str) -> Option<(Vec<String>, &str)> {
     let mut depth = 0usize;
@@ -1236,7 +1716,7 @@ fn split_call_args(text: &str) -> Option<(Vec<String>, &str)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn lines(source: &str) -> Vec<Line> {
@@ -1603,6 +2083,478 @@ mod tests {
             "const vec2 v = vec2(1.0).u_samples;\nvoid main() { gl_FragColor = vec4(v.x); }",
         ] {
             assert_eq!(hoist_runtime_consts(unchanged, &runtime), unchanged);
+        }
+    }
+
+    // ---- P7e：varying 的布局 ----
+
+    /// rea-p7e-varying 第 1 条的表：vec3 / vec4 只剩 ceil(n/4) 个、n = 1 退化成普通向量；ivec4 / uvec4 的 `t+1` 是 13 / 15，
+    /// n = 1 仍是数组；float / vec2 与 WPE 类型表之外的保持原长度；int / uint / 矩阵数组照报。
+    #[test]
+    fn varying_array_lengths_follow_wpe() {
+        let lengths = |ty: &str| -> Vec<Option<u32>> {
+            [1, 2, 4, 5, 32]
+                .iter()
+                .map(|n| wpe_varying_array("v", ty, *n).unwrap())
+                .collect()
+        };
+        let shortened = [Some(1), Some(1), Some(2), Some(8)];
+        for ty in ["vec3", "vec4"] {
+            let mut expected = vec![None];
+            expected.extend(shortened);
+            assert_eq!(lengths(ty), expected, "{ty}");
+        }
+        for ty in ["ivec4", "uvec4"] {
+            let mut expected = vec![Some(1)];
+            expected.extend(shortened);
+            assert_eq!(lengths(ty), expected, "{ty}");
+        }
+        for ty in ["float", "vec2", "ivec2", "uvec3"] {
+            assert_eq!(
+                lengths(ty),
+                [Some(1), Some(2), Some(4), Some(5), Some(32)],
+                "{ty}"
+            );
+        }
+        for ty in ["int", "uint", "mat3", "mat4", "mat4x3", "mat2"] {
+            let error = wpe_varying_array("v_M", ty, 2).unwrap_err();
+            assert!(
+                error.starts_with(&format!("varying v_M 是 {ty} 数组")),
+                "{error}"
+            );
+        }
+    }
+
+    /// 两阶段按换算后的长度比较；被顶点声明覆盖的片元声明连长度也不看（整数数组也不报）。
+    #[test]
+    fn varying_arrays_are_declared_with_wpe_lengths() {
+        let program = build(
+            &lines("varying vec4 a[32];\nvarying vec3 b[5];\nvarying vec4 c[1];\nvarying vec2 d[3];\nvarying vec2 e;\nvoid main() {}"),
+            &lines("varying vec4 a[30];\nvarying int b[5];\nvarying vec4 c[1];\nvarying vec2 e;\nvoid main() {}"),
+        )
+        .unwrap();
+        let layout: Vec<_> = program
+            .varyings
+            .iter()
+            .map(|v| (v.name.as_str(), v.ty.as_str(), v.array, v.location))
+            .collect();
+        assert_eq!(
+            layout,
+            [
+                ("a", "vec4", Some(8), 0),
+                ("b", "vec3", Some(2), 8),
+                ("c", "vec4", None, 10),
+                ("d", "vec2", Some(3), 11),
+                ("e", "vec2", None, 14),
+            ]
+        );
+        // 15 个不超过上限：没有打包，一个 varying 一行，与原来同形；片元也按顶点的长度声明
+        let declarations = "layout(location = 0) out vec4 a[8];\nlayout(location = 8) out vec3 b[2];\nlayout(location = 10) out vec4 c;\nlayout(location = 11) out vec2 d[3];\nlayout(location = 14) out vec2 e;\n";
+        assert!(
+            program.vertex_glsl.contains(declarations),
+            "{}",
+            program.vertex_glsl
+        );
+        assert!(program.fragment_glsl.contains(
+            "layout(location = 0) in vec4 a[8];\nlayout(location = 8) in vec3 b[2];\nlayout(location = 10) in vec4 c;\nlayout(location = 14) in vec2 e;\n"
+        ));
+        assert!(!program.vertex_glsl.contains("kb_main"));
+
+        // 片元自己的声明长度换算后与顶点相同才算同一个（只在片元声明、重复两次的那种）
+        let error = build(
+            &lines("void main() {}"),
+            &lines("varying vec4 f[4];\nvarying vec4 f[5];\nvoid main() {}"),
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "varying f 在两个阶段的类型不同");
+        assert!(build(
+            &lines("void main() {}"),
+            &lines("varying vec4 f[4];\nvarying vec4 f[3];\nvoid main() {}"),
+        )
+        .is_ok());
+        // 整数、矩阵数组照报
+        let error = build(
+            &lines("varying int v_I[4];\nvoid main() {}"),
+            &lines("void main() {}"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.stage, error.message.as_str()),
+            (
+                Stage::Vertex,
+                "varying v_I 是 int 数组：WPE 按 float4 插值传递，没有实现（语料 0 处）"
+            )
+        );
+    }
+
+    /// 工坊 `auto_sway`（`NODE_COUNT` 5，`AA_VERSION` 2）的 varying：一个 vec4、两个 float，再每个节点 7 个（5 个 float、2 个 vec2），
+    /// 4 个节点共 31 个、42 个分量（3243449890 等的程序，WPE 编译缓存里是 11 个寄存器加位置）。
+    pub(crate) fn sway_varyings() -> String {
+        let mut out = String::from(
+            "varying vec4 v_TexCoord;\nvarying float v_aspect;\nvarying float v_reciprocalAspect;\n",
+        );
+        for i in 1..=4 {
+            out.push_str(&format!(
+                "varying float v_Len{i};\nvarying vec2 v_Direction{i};\nvarying float v_EndpointLen{i};\nvarying vec2 v_EndpointDirection{i};\nvarying float v_PosX{i};\nvarying float v_EndpointPosX{i};\nvarying float v_MotionRadian{i};\n"
+            ));
+        }
+        out
+    }
+
+    /// 31 个超过 16：按分量数从大到小、同大小按声明顺序放进第一个放得下的 vec4，11 个；顶点先调 kb_main 再装箱，
+    /// 片元先拆包再调 kb_main。逐个 vec4 断言（打包不排序、拆包错位一个分量都会被检出）。
+    #[test]
+    fn auto_sway_varyings_pack_into_eleven_vec4() {
+        let vs = format!(
+            "{}attribute vec3 a_Position;\nvoid main() {{ gl_Position = vec4(a_Position, 1.0); if (a_Position.x > 0.0) {{ return; }} v_aspect = 2.0; }}",
+            sway_varyings()
+        );
+        let fs = format!(
+            "{}void main() {{ gl_FragColor = v_TexCoord * v_MotionRadian4; }}",
+            sway_varyings()
+        );
+        let program = build(&lines(&vs), &lines(&fs)).unwrap();
+        let vertex = &program.vertex_glsl;
+        let expected_slots = [
+            "v_TexCoord",
+            "v_Direction1, v_EndpointDirection1",
+            "v_Direction2, v_EndpointDirection2",
+            "v_Direction3, v_EndpointDirection3",
+            "v_Direction4, v_EndpointDirection4",
+            "v_aspect, v_reciprocalAspect, v_Len1, v_EndpointLen1",
+            "v_PosX1, v_EndpointPosX1, v_MotionRadian1, v_Len2",
+            "v_EndpointLen2, v_PosX2, v_EndpointPosX2, v_MotionRadian2",
+            "v_Len3, v_EndpointLen3, v_PosX3, v_EndpointPosX3",
+            "v_MotionRadian3, v_Len4, v_EndpointLen4, v_PosX4",
+            "v_EndpointPosX4, v_MotionRadian4, 0.0, 0.0",
+        ];
+        let mut entry = String::from("void main() {\n    kb_main();\n");
+        for (slot, parts) in expected_slots.iter().enumerate() {
+            assert!(
+                vertex.contains(&format!(
+                    "layout(location = {slot}) out vec4 kb_varying_{slot};\n"
+                )),
+                "{vertex}"
+            );
+            entry.push_str(&format!("    kb_varying_{slot} = vec4({parts});\n"));
+        }
+        entry.push_str("}\n");
+        assert!(vertex.ends_with(&entry), "{vertex}");
+        assert!(!vertex.contains("location = 11"), "{vertex}");
+        // 原来的 varying 改成私有全局、按声明顺序；作者的 main 改名，提前 return 照旧在 kb_main 里
+        assert!(vertex.contains("\nvec4 v_TexCoord;\nfloat v_aspect;\nfloat v_reciprocalAspect;\nfloat v_Len1;\nvec2 v_Direction1;\n"), "{vertex}");
+        assert!(vertex.contains("void kb_main() { gl_Position = vec4(a_Position, 1.0); if (a_Position.x > 0.0) { return; } v_aspect = 2.0; }"), "{vertex}");
+        assert!(
+            !vertex.contains(" out float") && !vertex.contains(" out vec2"),
+            "{vertex}"
+        );
+
+        // 片元：每个分量拆回原名，vec4 整体赋值
+        let fragment = &program.fragment_glsl;
+        for (name, source) in [
+            ("v_TexCoord", "kb_varying_0"),
+            ("v_Direction1", "kb_varying_1.xy"),
+            ("v_EndpointDirection1", "kb_varying_1.zw"),
+            ("v_EndpointDirection4", "kb_varying_4.zw"),
+            ("v_aspect", "kb_varying_5.x"),
+            ("v_EndpointLen1", "kb_varying_5.w"),
+            ("v_PosX1", "kb_varying_6.x"),
+            ("v_MotionRadian3", "kb_varying_9.x"),
+            ("v_EndpointPosX4", "kb_varying_10.x"),
+            ("v_MotionRadian4", "kb_varying_10.y"),
+        ] {
+            assert!(
+                fragment.contains(&format!("    {name} = {source};\n")),
+                "{name}: {fragment}"
+            );
+        }
+        assert!(
+            fragment.ends_with("    v_MotionRadian4 = kb_varying_10.y;\n    kb_main();\n}\n"),
+            "{fragment}"
+        );
+        assert_eq!(fragment.matches(" in vec4 kb_varying_").count(), 11);
+
+        // 反射是实际的接口
+        let interface: Vec<_> = program
+            .varyings
+            .iter()
+            .map(|v| (v.name.clone(), v.ty.as_str(), v.array, v.location))
+            .collect();
+        let expected: Vec<_> = (0..11)
+            .map(|i| (format!("kb_varying_{i}"), "vec4", None, i))
+            .collect();
+        assert_eq!(interface, expected);
+    }
+
+    /// 片元只声明装着自己 varying 的 vec4；只在片元声明的 varying 照样有一个片段（顶点那边是零）；片元可以改写 varying。
+    #[test]
+    fn packed_fragment_declares_only_its_own_slots() {
+        let vs = format!("{}void main() {{ v_aspect = 2.0; }}", sway_varyings());
+        let fs = "varying vec2 v_FragOnly;\nvarying float v_MotionRadian4;\nvoid main() { v_MotionRadian4 *= 2.0; gl_FragColor = vec4(v_FragOnly, v_MotionRadian4, 1.0); }";
+        let program = build(&lines(&vs), &lines(fs)).unwrap();
+        // 9 个 vec2：v_FragOnly 排在顶点的 8 个之后，进第 5 个 vec4 的 xy；之后的标量顺延
+        let fragment = &program.fragment_glsl;
+        // 私有全局按共享表的顺序：顶点声明的在前，只在片元声明的接在后面
+        assert!(fragment.contains("layout(location = 5) in vec4 kb_varying_5;\nlayout(location = 10) in vec4 kb_varying_10;\nfloat v_MotionRadian4;\nvec2 v_FragOnly;\n"), "{fragment}");
+        assert_eq!(fragment.matches(" in vec4 ").count(), 2, "{fragment}");
+        assert!(fragment.ends_with("void main() {\n    v_FragOnly = kb_varying_5.xy;\n    v_MotionRadian4 = kb_varying_10.w;\n    kb_main();\n}\n"), "{fragment}");
+        assert!(fragment.contains("void kb_main() { v_MotionRadian4 *= 2.0;"));
+        let vertex = &program.vertex_glsl;
+        assert!(
+            vertex.contains("    kb_varying_5 = vec4(v_FragOnly, v_aspect, v_reciprocalAspect);\n"),
+            "{vertex}"
+        );
+        assert!(vertex.contains("\nvec2 v_FragOnly;\n"), "{vertex}");
+        assert_eq!(program.varyings.len(), 11);
+    }
+
+    /// 阈值：16 个不打包、输出一个 varying 一行（与改前同形）；17 个打包。
+    #[test]
+    fn packing_starts_above_sixteen_locations() {
+        let shader = |count: usize| {
+            let decls: String = (0..count)
+                .map(|i| format!("varying float v_{i};\n"))
+                .collect();
+            build(
+                &lines(&format!("{decls}void main() {{ v_0 = 1.0; }}")),
+                &lines(&format!(
+                    "{decls}void main() {{ gl_FragColor = vec4(v_0); }}"
+                )),
+            )
+            .unwrap()
+        };
+        let program = shader(16);
+        for glsl in [&program.vertex_glsl, &program.fragment_glsl] {
+            assert!(
+                !glsl.contains("kb_varying") && !glsl.contains("kb_main"),
+                "{glsl}"
+            );
+            assert!(glsl.contains("void main() {"), "{glsl}");
+        }
+        assert!(program
+            .vertex_glsl
+            .contains("layout(location = 15) out float v_15;\n"));
+        assert_eq!(program.varyings.len(), 16);
+
+        let program = shader(17);
+        assert_eq!(
+            program
+                .varyings
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "kb_varying_0",
+                "kb_varying_1",
+                "kb_varying_2",
+                "kb_varying_3",
+                "kb_varying_4"
+            ]
+        );
+        assert!(program
+            .vertex_glsl
+            .contains("    kb_varying_4 = vec4(v_16, 0.0, 0.0, 0.0);\n"));
+        assert!(program
+            .fragment_glsl
+            .contains("void kb_main() { kb_FragColor = vec4(v_0); }"));
+    }
+
+    /// 整数 varying 不打包：接在 vec4 之后、各占自己的 location、带 flat；数组元素与矩阵列各是一个片段。
+    #[test]
+    fn integer_varyings_stay_unpacked() {
+        // 不打包是 1 + 8 + 3 + 1 + 2 + 1 + 1 = 17 个（v_Arr 照 WPE 缩成 8 个、v_B 缩成 2 个）
+        let decls = "varying uvec4 v_Bones;\nvarying vec4 v_Arr[32];\nvarying mat3 v_M;\nvarying float v_A;\nvarying vec3 v_B[5];\nvarying ivec2 v_I;\nvarying vec2 v_C;\n";
+        let program = build(
+            &lines(&format!("{decls}void main() {{}}")),
+            &lines(
+                "varying uvec4 v_Bones;\nvarying mat3 v_M;\nvarying vec3 v_B[5];\nvoid main() {}",
+            ),
+        )
+        .unwrap();
+        let interface: Vec<_> = program
+            .varyings
+            .iter()
+            .map(|v| (v.name.as_str(), v.ty.as_str(), v.location))
+            .collect();
+        // 8 个 vec4；mat3 三列与 v_B 两个元素是 5 个 vec3（各空一个分量）；v_C 放不进空位、另起一个，v_A 填进第一个空位：
+        // 共 14 个 vec4，整数 2 个
+        assert_eq!(interface.len(), 16, "{interface:?}");
+        assert_eq!(interface[14], ("v_Bones", "uvec4", 14));
+        assert_eq!(interface[15], ("v_I", "ivec2", 15));
+        let vertex = &program.vertex_glsl;
+        assert!(vertex.contains("layout(location = 14) flat out uvec4 v_Bones;\nlayout(location = 15) flat out ivec2 v_I;\n"), "{vertex}");
+        assert!(
+            vertex.contains("\nvec4 v_Arr[8];\nmat3 v_M;\nfloat v_A;\nvec3 v_B[2];\nvec2 v_C;\n"),
+            "{vertex}"
+        );
+        assert!(vertex.contains("    kb_varying_7 = vec4(v_Arr[7]);\n    kb_varying_8 = vec4(v_M[0], v_A);\n    kb_varying_9 = vec4(v_M[1], 0.0);\n"), "{vertex}");
+        assert!(vertex.contains("    kb_varying_12 = vec4(v_B[1], 0.0);\n    kb_varying_13 = vec4(v_C, 0.0, 0.0);\n"), "{vertex}");
+        let fragment = &program.fragment_glsl;
+        assert!(
+            fragment.contains("layout(location = 14) flat in uvec4 v_Bones;\n"),
+            "{fragment}"
+        );
+        assert!(!fragment.contains("v_I"), "{fragment}");
+        assert!(fragment.contains("    v_M[2] = kb_varying_10.xyz;\n    v_B[0] = kb_varying_11.xyz;\n    v_B[1] = kb_varying_12.xyz;\n"), "{fragment}");
+    }
+
+    /// 打包后仍超过 16 个、作者用了保留名、认不出 main、几何展开的程序超过上限：都在改写阶段报错。
+    #[test]
+    fn packing_failures_are_rewrite_errors() {
+        // 17 个 vec4：装不下
+        let decls: String = (0..17).map(|i| format!("varying vec4 v_{i};\n")).collect();
+        let error = build(
+            &lines(&format!("{decls}void main() {{}}")),
+            &lines("void main() {}"),
+        )
+        .unwrap_err();
+        assert_eq!(error.stage, Stage::Vertex);
+        assert_eq!(
+            error.message,
+            "varying 装进 vec4 之后仍要 17 个 location（不打包是 17 个），超过 WebGPU 的 16 个"
+        );
+        // 12 个 vec4 + 5 个 uint：整数不打包
+        let decls: String = (0..12)
+            .map(|i| format!("varying vec4 v_{i};\n"))
+            .chain((0..5).map(|i| format!("varying uint v_u{i};\n")))
+            .collect();
+        let error = build(
+            &lines(&format!("{decls}void main() {{}}")),
+            &lines("void main() {}"),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("仍要 17 个"), "{}", error.message);
+
+        let decls: String = (0..17).map(|i| format!("varying float v_{i};\n")).collect();
+        let error = build(
+            &lines(&format!(
+                "{decls}void kb_main() {{}}\nvoid main() {{ kb_main(); }}"
+            )),
+            &lines("void main() {}"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.message,
+            "varying 要打包，但正文里已有标识符 kb_main（kb_ 前缀是翻译器保留的）"
+        );
+        let error = build(
+            &lines(&format!("{decls}void main() {{}}")),
+            &lines("float kb_varying_3;\nvoid main() {}"),
+        )
+        .unwrap_err();
+        assert_eq!(error.stage, Stage::Fragment);
+        assert!(error.message.contains("kb_varying_3"), "{}", error.message);
+        let error = build(
+            &lines(&format!("{decls}void main(void) {{}}")),
+            &lines("void main() {}"),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("认不出 main"), "{}", error.message);
+
+        // 几何展开拼成的顶点段（行来自 `<geometry>`）：不打包，超过就报错
+        let mut vertex = lines(&format!("{decls}void main() {{}}"));
+        vertex.push(Line {
+            code: String::new(),
+            comment: None,
+            file: crate::geometry::GENERATED_FILE.into(),
+            line: 1,
+        });
+        let error = build(&vertex, &lines("void main() {}")).unwrap_err();
+        assert!(
+            error.message.starts_with("几何着色器展开的程序"),
+            "{}",
+            error.message
+        );
+    }
+
+    // ---- 上界是字面量 0 的 smoothstep（P7e 收尾，示波器静音时提亮） ----
+
+    /// 上界是字面量 0、下界不是数字字面量的换成 `kb_smoothstep0`；其余原样拼回（空白也不变），嵌套的照常改写。
+    #[test]
+    fn zero_edge_smoothstep_is_rewritten() {
+        for (source, expected) in [
+            (
+                "float s = smoothstep(thickness * 0.015, 0.0, dist);",
+                "float s = kb_smoothstep0(thickness * 0.015, dist);",
+            ),
+            ("smoothstep(feather, 0, d)", "kb_smoothstep0(feather, d)"),
+            (
+                "smoothstep( -feather , ( 0. ) , d )",
+                "kb_smoothstep0(-feather, d)",
+            ),
+            (
+                "smoothstep(size, .0f, length(delta))",
+                "kb_smoothstep0(size, length(delta))",
+            ),
+            (
+                "smoothstep(a, 0.0, smoothstep(b, 0, x))",
+                "kb_smoothstep0(a, kb_smoothstep0(b, x))",
+            ),
+            (
+                "smoothstep(0.2, 0.0, smoothstep(b, 0.0, x))",
+                "smoothstep(0.2, 0.0, kb_smoothstep0(b, x))",
+            ),
+            (
+                "f(smoothstep(a, 00.000, x)) + 1.5",
+                "f(kb_smoothstep0(a, x)) + 1.5",
+            ),
+        ] {
+            assert_eq!(rewrite_zero_edge_smoothstep(source), expected, "{source}");
+        }
+        for unchanged in [
+            // 下界是数字字面量：分母不会是 ±0，结果和内建相同
+            "smoothstep(0.2, 0.0, d)",
+            "smoothstep(1, 0, length(v_TexCoord - 0.5))",
+            "smoothstep(-0.3, 0.0, screenUV.x)",
+            // 上界不是 +0 的字面量
+            "smoothstep(a, -0.0, x)",
+            "smoothstep(a, 0.5, x)",
+            "smoothstep(a, 1e-3, x)",
+            "smoothstep (a,  b,x)",
+            "smoothstep(a, zero, x)",
+            // 不是这个函数
+            "mysmoothstep(a, 0.0, x)",
+            "kb_smoothstep(a, 0.0, x)",
+            "v_smoothstep2 = 0.0;",
+        ] {
+            assert_eq!(rewrite_zero_edge_smoothstep(unchanged), unchanged);
+        }
+    }
+
+    #[test]
+    fn number_literals_for_smoothstep_edges() {
+        for zero in [
+            "0",
+            "0.0",
+            "0.",
+            ".0",
+            "0.0f",
+            "(0)",
+            " ( 0.0 ) ",
+            "00.000",
+            "+0.0",
+            "0e5",
+        ] {
+            assert!(is_zero_literal(zero), "{zero}");
+        }
+        for not_zero in [
+            "-0.0",
+            "-0",
+            "0.5",
+            "a",
+            "0x0",
+            "",
+            ".",
+            "0.0 * a",
+            "(0.0) + b",
+        ] {
+            assert!(!is_zero_literal(not_zero), "{not_zero}");
+        }
+        for number in ["1e-3", "-2.0f", "(1.2)", ".5", "3"] {
+            assert!(is_number_literal(number), "{number}");
+        }
+        for other in ["a", "-feather", "thickness * 0.015", "2.0 * a", "1.0.0"] {
+            assert!(!is_number_literal(other), "{other}");
         }
     }
 }

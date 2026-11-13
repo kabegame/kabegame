@@ -71,7 +71,7 @@ interface TranslateRequest {
 | `uniforms` | uniform 块成员：`{ name, type, declared, offset, size, array?, stride?, meta?, stage?, original?, unused? }`（`stage` / `original` 见「两阶段同名 uniform」，`unused` 见「没被读的 uniform」） |
 | `uniformBlockSize` | uniform 块总字节数（没有普通 uniform 时缺省） |
 | `textures` | `{ slot, name, kind: "2d" \| "2d-comparison" \| "3d" \| "cube", binding, samplerBinding, meta? }` |
-| `attributes` / `varyings` | `{ name, location, type, array?, unused? }`（`unused` 只出现在属性上，见「没被读的属性」） |
+| `attributes` / `varyings` | `{ name, location, type, array?, unused? }`（`unused` 只出现在属性上，见「没被读的属性」）。`varyings` 是两阶段之间实际的 WGSL 接口：数组是照 WPE 换算后的长度；打包时是 `kb_varying_<i>`（`vec4`）加没打包的整数 varying，见「varying 超过 16 个时打包」 |
 | `combos` | 最终生效的 COMBO：`{ name, value, source: "default" \| "texture" \| "request" }` |
 | `geometry` | 只在请求带 `geometry` 时有：`{ maxVertices }`，见「几何着色器展开」 |
 
@@ -83,7 +83,7 @@ interface TranslateRequest {
 | `include` | 缺头文件，见 `missing`；只有几何段缺时 `stage` 为 `"geometry"` |
 | `require` | `#require` 展开不了，见 `requires`：未知的库名，或要阴影 / cookie 的 `LightingV1/shadow` |
 | `preprocess` | `#if` 没有闭合、`#if` 里宏展开过深、未知预处理指令（`file` / `line` 指向原文） |
-| `rewrite` | 不支持的全局声明、两阶段同名的引擎 uniform（都没有 `material`）类型不同、纹理函数参数不是已声明的纹理；几何着色器展开不支持的写法（`IN[1]`、`OUT.RestartStrip()` 等） |
+| `rewrite` | 不支持的全局声明、两阶段同名的引擎 uniform（都没有 `material`）类型不同、纹理函数参数不是已声明的纹理；几何着色器展开不支持的写法（`IN[1]`、`OUT.RestartStrip()` 等）；`int` / `uint` / 矩阵数组的 varying；varying 打包后仍超过 16 个 location、要打包却认不出 `main` 或正文里已有 `kb_main` / `kb_varying_*` |
 | `parse` / `validate` / `write` | naga 阶段的错误（行号指向生成的 GLSL） |
 | `trap` | wasm 实例 trap（仅前端胶水产生） |
 
@@ -94,7 +94,64 @@ interface TranslateRequest {
   两阶段同名而材质键（或类型）不同的 uniform 各占一格，见「两阶段同名 uniform」。
 - 纹理 `g_Texture<n>`：纹理在 binding `1 + 2n`，采样器在 binding `2 + 2n`。`2d-comparison` 的采样器是比较采样器。
 - 顶点属性按声明顺序分配 location：矩阵占列数个，数组再乘长度。渲染器按 `attributes` 的 name → location 建顶点缓冲布局。
-- varying 的 location 在两阶段间统一分配。整数类型的 varying 带 `flat`。
+- varying 的 location 在两阶段间统一分配，规则同属性。整数类型的 varying 带 `flat`。超过 16 个时装进 vec4，见「varying 超过 16 个时打包」。
+- **varying 数组照 WPE 的长度声明**（`rewrite::wpe_varying_array`，依据 `.claude/plans/wpe-import/3-scene/phase7/rea-p7e-varying.md`）。
+  WPE 生成 `VS_OUTPUT` 时每个成员只有一条公式：带 `[n]` 且 `n·(t+1) > 4`（`t` 是它类型表的下标，被当成分量数）时写 `[ceil(n/d)]`（`vec2` 的 `d` 是 2，其余 4），否则没有方括号。
+  accessArray 与否只换类型名，长度走同一段，所以：
+  - `float` / `vec2` 数组：WPE 打包成 `float4[ceil(n/4)]` / `float4[ceil(n/2)]`，容量刚好够、值与 GLSL 数组相同，这里**保持原长度**（每个元素一个 location）；
+  - `vec3` / `vec4` 数组：**只剩 `ceil(n/4)` 个元素**，`vec4 a[32]` 是 `vec4 a[8]`。这是 WPE 的 bug，但工坊示波器（`audio_responsive_oscilloscope`）照着它写（只写、只读前 8 个），
+    WPE 抓帧是 `TEXCOORD0`–`7`；确定性工程 `p-va` 的 10 种情况与公式一致。常量下标越过缩短后的长度时 naga 报越界（`Accessing index 2 is out of [1] bounds`），
+    WPE 是 fxc X3504、这一阶段走回退（整块黑），我们整张退回，照「回退不用复刻」；
+  - **`n = 1` 的 `vec3` / `vec4` 退化成普通向量**（没有方括号）：正文的 `a[0]` 成了取分量。顶点 `a[0] = vec4(…)` 只写 `.x`（HLSL 模式截断，fxc X3206）；
+    片元读 `a[0]`、`a[0].x` 得到标量 `.x`，参与向量运算时铺满。WPE 实测相同（确定性工程 `ignore/p7e/proj/p7e-va`，2026-11-14）：写只写 `.x`（DXBC `dcl_output o0.x`），
+    `a[0] * vec4(1, 1, 1, 0)` 铺满。WPE 编不过、片元回退（暗红）的写法我们不复刻：`a[0].xyz` 等多分量取法（fxc X3018）我们是 `phase: "parse"`（`Can't lookup field on this type "xyz"`）；
+    把 `a[0]` 当向量交给构造函数（fxc X3014）时，`vec4(a[0], 1.0)` 分量不够、naga 校验失败，`vec4(a[0])` 照 GLSL 铺满、能渲染。语料 0 处；
+  - `ivec4` / `uvec4` 数组：`t+1` 是 13 / 15，`n = 1` 也是 `[1]`，其余同 `vec4`；
+  - `int` / `uint` 数组（WPE 当 `float4` 插值、再数值转换回整数）与矩阵数组（WPE 每个元素只推进 1 个语义号，推断与下一个成员重叠）：语料 0 处，报 `phase: "rewrite"`；
+  - WPE 类型表之外的类型（`ivec2`、`bool` 等，WPE 解析不了这条声明）保持原长度。
+
+  两阶段按换算后的长度比较；片元被顶点覆盖的声明（见「HLSL 隐式转换」）连长度也不看。几何展开里几何段的 `out` 也经这里（WPE 几何分组用同一公式），
+  但展开生成的 `PS_INPUT` 结构仍按原长度，几何段 `out` 声明 `vec3` / `vec4` 数组时两边对不上、naga 报错。语料与 WPE 自带着色器 0 处，没有另做。
+  常量下标越界之外，循环写过缩短后的长度（`for (i < 8) a[i] = …`，`vec4 a[8]` 实际是 `[2]`）WPE 是 fxc 展开循环后报 X3504、顶点回退（整块黑）；
+  我们是动态下标，越界的写按 WGSL 的规则处理（Tint 钳制下标），照常渲染。语料 0 处。
+
+### varying 超过 16 个时打包
+
+WebGPU 缺省只保证 16 个阶段间变量（`maxInterStageShaderVariables`，按 `location < 16` 校验），设备不申请更高的上限，结果不随显卡变。
+数组按上一节换算长度之后，varying 仍占超过 16 个 location 时（工坊 `auto_sway`：31 个 `float` / `vec2` 散变量），把浮点 varying 装进 vec4（`rewrite::pack_varyings`）。
+依据：fxc 编签名时把标量、`vec2` 装进同一个寄存器，`auto_sway` 的 31 个 varying 在 WPE 编译缓存里是 11 个寄存器加位置（rea-p7e-varying「和 WebGPU 阶段间变量上限的关系」）。
+打包只改两阶段之间的接口，插值逐分量进行（都是透视插值），值不变。
+
+- **时机**：只在超过 16 个时打包，其余程序的输出逐字节不变（不照 WPE 总把 `float` / `vec2` 数组打包，那样 36 张 `blur_gaussian` 等场景的输出都会变，画面不变）。
+- **布局**：浮点 varying 拆成片段（数组每个元素、矩阵每一列一个），按分量数从大到小、同大小按声明顺序，放进第一个放得下的 vec4，不拆开一个片段。
+  第 i 个 vec4 叫 `kb_varying_<i>`、在 location i。整数 varying 不打包（要 `flat`），接在 vec4 之后按声明顺序各占自己的 location。
+  分量放在哪里与 fxc 不必相同，两个阶段都是我们生成的。
+- **入口**：原来的浮点 varying 改成同名私有全局，正文照常读写（片元改写 varying、只在片元声明的 varying 都不受影响）。作者的 `void main() {` 改名 `kb_main`，另生成 `main`：
+
+```glsl
+// 顶点：先跑作者的代码（提前 return 也照样装箱），再装进 vec4，没填满的补 0
+void main() {
+    kb_main();
+    kb_varying_0 = vec4(v_TexCoord);
+    kb_varying_1 = vec4(v_Direction1, v_EndpointDirection1);
+    // …
+    kb_varying_10 = vec4(v_EndpointPosX4, v_MotionRadian4, 0.0, 0.0);
+}
+// 片元：只声明装着自己 varying 的 vec4，先拆包再跑作者的代码
+void main() {
+    v_TexCoord = kb_varying_0;
+    v_Direction1 = kb_varying_1.xy;
+    // …
+    kb_main();
+}
+```
+
+- **改名的时机**：在「`main` 之前的打包数组」与「全局 `const` 现算」之后做，它们按原来的 `main` 签名切分正文。签名照 WPE 的正则认（`void main() {`），认不出、或正文里已有 `kb_main` / `kb_varying_*`（`kb_` 前缀是翻译器保留的）时报 `phase: "rewrite"`。
+- **打包后仍超过 16 个**：报 `phase: "rewrite"`（`varying 装进 vec4 之后仍要 N 个 location…`），场景在编译期报不支持、退回预览图，而不是到运行时建管线才失败。
+- **几何展开的程序不打包**：它的 `main` 是生成的，绳着色器的 varying 很少；真超过 16 个时同样报 `phase: "rewrite"`。
+- **顶点 `main` 里的 `return;`**：WPE 的顶点 `main` 返回 `VS_OUTPUT`，裸 `return;` 编不过（fxc X3080，顶点回退），所以 WPE 能用的着色器里没有这种写法；
+  我们照 GLSL 语义执行，包装入口保证提前返回时也装箱（确定性工程 `p7e-vpack` 的 `vpack_ret` 层，和 WPE 不同，语料 0 处）。
+- **反射**：`varyings` 给实际的接口（`kb_varying_<i>` 加整数 varying）。渲染器与宿主不读它；探针把顶点着色器改写成计算着色器时读的是 WGSL 输出结构，只有超过 16 个的程序会变。
 
 ### uniform 打包
 
@@ -227,6 +284,7 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
        `uniform` / `varying` 都只取名字；`attribute` 按整词找属性名，同样只认名字（rea「P7b 补查」第 3 条，p7-sem 的 `kbswz` 实测）。分量后还有别的内容的照旧报错。
        两阶段同名、取值来源不同的拆成两格，一侧改名为 `kb_vs_` / `kb_fs_<名字>`，见「两阶段同名 uniform」。
      - 采样器拆成纹理 + `kb_sampler_<名字>`；`attribute` / `varying` 加 `layout(location)`。
+     - varying 数组的长度照 WPE 换算（见「绑定布局」），超过 16 个 location 时装进 vec4（见「varying 超过 16 个时打包」）。
      - 只在片元阶段声明的 varying，也给顶点阶段补一个输出。顶点阶段不写入时值为零，对应 D3D 下的未定义值；不补的话，WebGPU 建管线会失败。
      - 两阶段都声明、类型不同的 varying（不论哪边宽），片元按顶点的类型声明，见「HLSL 隐式转换」。
      - 全局 `const` 的初始值引用运行期值时改成私有全局、在 `main` 开头赋值，见「HLSL 隐式转换」。
@@ -303,6 +361,16 @@ GLSL 不接受这些写法。翻译器打开嵌入 naga 的 **HLSL 模式**（`n
   只认一个声明符的 `const T 名[数组]? = 初始值;`、写在 `main` 签名之前、认得出 `main`（`void main() {`）的；常量初始值的 const 与局部 const 不动。
 
 每条规则只在 GLSL 本来会报错的地方生效：开关打开后，原来能翻译的着色器输出逐字节不变（P7c 对 `p7b-e2345b19` 基线验证，见「测试」）。
+
+**上界是字面量 0 的 `smoothstep`**（`rewrite::rewrite_zero_edge_smoothstep`，P7e 收尾）：这条不是隐式转换，是 fxc 的化简改了结果。
+- **fxc 的算法**：把内建 `smoothstep(lo, hi, x)` 展开成 `saturate((x - lo) * (1 / (hi - lo)))`，上界是常量 0 时把 `0.0 - lo` 化成 `-lo`。
+- **只在下界为 +0 时有差别**：分母是 -0、倒数 -inf，`x > lo` 得 0、`x < lo` 得 1；照 IEEE 算 `0.0 - (+0)` 是 +0，结果正好反过来。
+- **实例**：工坊示波器（`audio_responsive_oscilloscope`，`AUDIOTHICKNESS`）没有声音时线宽为 0，就是 `smoothstep(+0, 0.0, dist)`。WPE 什么都不画，用内建函数时整张提亮约 39%（WPE 像素着色器反汇编第 78–79 行）。
+- **做法**：上界是字面量 +0（`0`、`0.0`、`0.`、`.0`、带括号或 `f` 后缀）、下界不是数字字面量的调用改成 `kb_smoothstep0(lo, x)`。
+  - 函数照 `(x - lo) * (1 / -lo)` 算，分母为 ±0 时不靠无穷大、按符号直接取值；`x == lo` 时 `0 · inf` 是 NaN，saturate 成 0。
+  - 有 float、vec2–4 四个重载，逐分量；登记在 `INTRINSIC_WRAPPERS`，标量下界配向量 `x` 时铺满。
+- **不改写的情况**：下界是数字字面量的调用分母不会是 ±0，不改写；上界经宏形参传进来的认不出。这类着色器输出都逐字节不变。
+- **验证**：语料 18 种写法里会被改写的是示波器、vhs 的 `0.01 * g_DistortionWidth`、swing 的 `±feather`、流体 advection 的 `size`。确定性工程 `ignore/p7e/proj/p7e-ss0`（下界 +0、-0、整数 0、向量、非零、字面量对照）和 WPE 逐像素一致（最大差 1），示波器复制工程静音时示波器 pass 与 WPE 0 差。
 
 ## 几何着色器展开
 
@@ -463,6 +531,16 @@ CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapt
 新通过的 WGSL 另拷在 `p7c-new`）；请求夹具 779 个全部通过（P7b 之后是 689），新通过的 90 个请求清单在 `ignore/p7/out/p7c-steps.txt`；WPE 安装目录 158 → 161/167
 （`effects/shimmer`、`shaders/editorpaintbrush`、`effects/glitter_prepare`），剩下 6 对是 `gl_ViewportIndex` ×3、`fur4` 基线没绑槽 8、`puppettexturechannels` 数组长度 0、
 `volumetricsfront` 的 `sampler2DBackBuffer`，都与 HLSL 隐式转换无关；几何门槛 27/27；WGSL 回读失败 0。
+
+2026-11-14（P7e，varying 数组照 WPE 的长度、超过 16 个时打包）：在 `5889b490` 重录夹具 `ignore/p7/requests-p7e`（921 个请求）、导出基线 `ignore/p7/baseline/p7e-5889b490`（4484 个文件）；
+改后对它相同 4460、变了 24、新通过 0、新失败 0。变了的只有示波器的 1 个请求（`37f30569`，35 → 11 个 location，`vec4 audioValue[32]` 缩成 8 个元素，不打包）
+与 `auto_sway` 的 5 个请求（打包：`8da01f51` / `b9d63265` / `ff3ddb48` 31 → 11、`de42f0c0` 24 → 9、`b2a27594` 17 → 6），各 4 个文件，都在 ALLOW 里；
+夹具通过 914、失败 7（`generic` / `generic4` 的纹理参数，与本节无关），`ok` 与夹具全部一致；WPE 安装目录 161/167、几何门槛 27/27 不变；WGSL 回读失败 0。
+改后导出里没有超过 16 个 location 的程序，其余最多 13 个（`blur_gaussian` 的 `vec2 v_TexCoord[13]`）。
+
+2026-11-14（P7e 收尾，上界是字面量 0 的 `smoothstep`）：对上一条之后的导出（`ignore/p7e/out/dump-fmt`）相同 4460、变了 24、新通过 0、新失败 0。变了的是 12 个片元着色器：
+示波器 `37f30569`；`effects/swing` 及工坊 3451729699、3544136971 的两份拷贝；`effects/vhs` 的两个请求与工坊 2818296808 的拷贝；`effects/fluidsimulation_advection` 的两个请求；
+以及 WPE 安装目录部分的 swing、vhs、advection 原件。每个程序变 GLSL 与 WGSL 两个文件，`ok` 与夹具全部一致，12 份 WGSL 过 Tint 0 error 0 warning。
 
 2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0；2026-11-10 加几何着色器展开后不变，几何门槛 27/27。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
 

@@ -718,6 +718,7 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 - **effect JSON 的字段：**
   - `fluidsimulation`（WPE 自带的流体 effect，1 张）：pass、bind、fbo 上的 `conditions`（按 COMBO 选），`functions`（`clear` 动作，经脚本 `executeMaterialFunction` 触发），effect 级 `combos`。模拟 RT 跨帧保留，跟着光标动，所以要 P6c。
   - `editable`：`wallpaper64.exe` 里没有这个字符串，推断是编辑器键，按中性放开。
+- **varying 的布局（P7e，2026-11-14 加）**：WebGPU 缺省 16 个阶段间变量，语料 5 张超过（`auto_sway` 4 张、示波器 3585875739），运行时建管线失败。照 WPE 的数组长度（`vec3` / `vec4` 数组只剩 `ceil(n / 4)` 个元素）并在超过时打包进 vec4，见 [phase-7e-varyings.md](phase7/phase-7e-varyings.md)。2026-11-14 完成：改后最多 13 个 location，确定性工程与 WPE 逐格一致，3585875739 运行时能画了；不解锁别的场景。收尾另修上界是字面量 0 的 `smoothstep`（fxc 把 `0.0 - lo` 化成 `-lo`，示波器没有声音时整张提亮）。
 - **验收：** 翻译器的语料测试覆盖 pkg 里的工坊着色器；解锁的场景和 WPE 同一时刻的画面比。
 
 ## P8 — 图像层与材质补全

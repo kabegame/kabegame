@@ -255,6 +255,21 @@ naga = { version = "30", default-features = false, features = ["glsl-in", "wgsl-
 - `constant:mixed-type`（3 张，`frame_builder` 的 `u_refResolution`：顶点 `vec2`、片元 `float`）：翻译器 README「两阶段同名 uniform」里已知的情况，宿主按片元的类型写、顶点多出的分量现在照报；
 - `constant:slots`（2 张，含流体那张 `3286859278`）：材质常量的槽位超限，步骤 0 先查是哪一侧的限制。
 
+## P7e — varying 的布局
+
+子计划见 [phase-7e-varyings.md](phase-7e-varyings.md)（2026-11-14，起因是 P8 步骤 4 验收时 `3243449890` 建管线失败）。WebGPU 缺省只保证 16 个阶段间变量，我们每个 varying 一个 location、数组每个元素一个，语料里 5 张超过：`auto_sway` 4 张（17–31 个）、示波器 3585875739（35 个）。照 WPE 做两件事：
+- **数组照 WPE 的长度**：WPE 生成 `VS_OUTPUT` 时数组长度按「4 个标量一组」算，非 accessArray 的 `vec3` / `vec4` 数组只剩 `ceil(n / 4)` 个元素（WPE 的 bug，示波器照它写）；
+- **超过 16 个时打包进 vec4**：同 fxc 的签名打包。
+
+调研见 [rea-p7e-varying](rea-p7e-varying.md)。只做 P7e 解锁 0 张；它是 P11a 算作能渲染的 3585875739 在运行时真正能画的前提。
+
+**结果（2026-11-14，步骤 1–3 一次做完）**：
+- 改后语料里没有程序超过 16 个 location，示波器 35 → 11，`auto_sway` 31 / 24 / 17 → 11 / 9 / 6；其余输出逐字节不变，语料逐张不变。
+- 确定性工程和 WPE 逐格一致：数组长度、示波器形状、`auto_sway` 形状，以及 `n = 1` 退化的写只写 `.x`、读成标量铺满。
+- 3585875739 等 4 张强制渲染不再建管线失败。WPE 编不过的写法（`.xyz` 取标量、循环越界、顶点裸 `return;`）照「回退不用复刻」，语料 0 处。
+- 收尾时另修了走查发现的上界是字面量 0 的 `smoothstep`：fxc 把 `0.0 - lo` 化成 `-lo`，下界为 +0 时结果与 IEEE 相反，示波器没有声音时整张提亮。翻译器换成照 fxc 算的 `kb_smoothstep0`，确定性工程与示波器 pass 和 WPE 一致。
+- 详见子计划「实施记录」。
+
 ## 和 P4–P6 的交界
 
 - **翻译器 wasm 共用：** P7 改的是 `src-tauri/wpesl2wgsl`，别的会话不改它。但 dev 会把新 wasm 拷进前端，各会话都会用上。所以每步提交前必须过逐字节基线；重建 wasm 前先看一次另两边的状态。

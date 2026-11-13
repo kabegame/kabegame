@@ -1309,8 +1309,15 @@ void main() {
         assert!(result.ok, "{result:#?}");
         assert_wgsl_reparses(&result);
         let fs = result.fragment.as_ref().unwrap().glsl.clone().unwrap();
-        assert!(fs.contains("layout(location = 0) in vec4 v_TexCoord;"), "{fs}");
-        let varyings: Vec<_> = result.varyings.iter().map(|v| (v.name.as_str(), v.ty.as_str())).collect();
+        assert!(
+            fs.contains("layout(location = 0) in vec4 v_TexCoord;"),
+            "{fs}"
+        );
+        let varyings: Vec<_> = result
+            .varyings
+            .iter()
+            .map(|v| (v.name.as_str(), v.ty.as_str()))
+            .collect();
         assert_eq!(varyings, [("v_TexCoord", "vec4")]);
 
         // 片元更宽：按顶点的 vec2 声明，只读 `.xy` 能过，读 `.zw` 报错
@@ -1579,5 +1586,287 @@ void main() {
             "{:?}",
             attribute_flags(&result)
         );
+    }
+
+    // ---- P7e：varying 的布局 ----
+
+    fn varying_layout(result: &TranslateResult) -> Vec<(&str, &str, Option<u32>, u32)> {
+        result
+            .varyings
+            .iter()
+            .map(|v| (v.name.as_str(), v.ty.as_str(), v.array, v.location))
+            .collect()
+    }
+
+    /// 输出结构体里 `@location(n)` 的个数与最大的 n。
+    fn wgsl_locations(wgsl: &str) -> (usize, Option<u32>) {
+        let locations: Vec<u32> = wgsl
+            .match_indices("@location(")
+            .filter_map(|(at, _)| {
+                let rest = &wgsl[at + "@location(".len()..];
+                rest[..rest.find(')')?].parse().ok()
+            })
+            .collect();
+        (locations.len(), locations.iter().copied().max())
+    }
+
+    /// 工坊示波器（3585875739 的 `audio_responsive_oscilloscope`，`RESOLUTION` 32）的形状：`vec4 audioValue[32]` 只写、只读前 8 个，
+    /// 照 WPE 缩成 8 个元素，加 `vec2` 与两个 `vec3` 共 11 个 location（WPE 抓帧 `TEXCOORD0`–`10`），不打包。
+    #[test]
+    fn oscilloscope_varying_array_follows_wpe_length() {
+        let vertex = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec4 audioValue[32];\nvarying vec2 v_TexCoord;\nvarying vec3 v_PerspCoord;\nvarying vec3 v_ViewCoord;
+void main() {
+	gl_Position = vec4(a_Position, 1.0);
+	for (int i = 0; i < 32; i += 4) {
+		audioValue[uint(i) / uint(4)] = vec4(float(i), float(i + 1), float(i + 2), float(i + 3));
+	}
+	v_TexCoord = a_TexCoord;
+	v_PerspCoord = a_Position;
+	v_ViewCoord = a_Position.zyx;
+}";
+        let fragment = "varying vec4 audioValue[32];\nvarying vec2 v_TexCoord;\nvarying vec3 v_PerspCoord;\nvarying vec3 v_ViewCoord;
+void main() {
+	float amp = 0.0;
+	for (int i = 0; i < 32; i++) {
+		float f = float(i);
+		amp += audioValue[int(f * 0.25)][i % int(4)];
+	}
+	gl_FragColor = vec4(amp, v_TexCoord, v_PerspCoord.x + v_ViewCoord.y);
+}";
+        let result = translate_ok(vertex, fragment);
+        assert_eq!(
+            varying_layout(&result),
+            [
+                ("audioValue", "vec4", Some(8), 0),
+                ("v_TexCoord", "vec2", None, 8),
+                ("v_PerspCoord", "vec3", None, 9),
+                ("v_ViewCoord", "vec3", None, 10),
+            ]
+        );
+        for wgsl in
+            [&result.vertex, &result.fragment].map(|s| s.as_ref().unwrap().wgsl.as_deref().unwrap())
+        {
+            assert!(wgsl.contains("array<vec4<f32>, 8>"), "{wgsl}");
+            assert!(!wgsl.contains("array<vec4<f32>, 32>"), "{wgsl}");
+            assert!(!wgsl.contains("kb_varying"), "{wgsl}");
+        }
+        let vertex_wgsl = result.vertex.as_ref().unwrap().wgsl.as_deref().unwrap();
+        // 两个属性 + 11 个输出
+        assert_eq!(wgsl_locations(vertex_wgsl), (13, Some(10)), "{vertex_wgsl}");
+    }
+
+    /// `vec4 a[1]` / `vec3 a[1]` 在 WPE 里没有方括号、退化成普通向量（rea-p7e-varying 第 1 条，`p-va` 待补实测）：
+    /// 顶点 `a[0] = vec4(…)` 成了给 `.x` 赋值、HLSL 模式截断（fxc X3206）；片元 `a[0]`、`a[0].x` 读到标量 `.x`，
+    /// 当 vec4 用时铺满；`a[0].xyz` 对标量不合法，翻译失败（fxc 推断同样报错）。
+    #[test]
+    fn single_element_vector_array_degenerates() {
+        for (ty, value) in [
+            ("vec4", "vec4(0.1, 0.2, 0.3, 0.4)"),
+            ("vec3", "vec3(0.1, 0.2, 0.3)"),
+        ] {
+            let vertex = format!(
+                "attribute vec3 a_Position;\nvarying {ty} a[1];\nvoid main() {{ gl_Position = vec4(a_Position, 1.0); a[0] = {value}; }}"
+            );
+            let pair = |read: &str| {
+                translate(&TranslateRequest {
+                    vertex: vertex.clone(),
+                    fragment: format!(
+                        "varying {ty} a[1];\nvoid main() {{ vec4 c = {read}; gl_FragColor = c; }}"
+                    ),
+                    ..TranslateRequest::default()
+                })
+            };
+            for read in ["a[0]", "a[0].x"] {
+                let result = pair(read);
+                assert!(result.ok, "{ty} {read}: {result:#?}");
+                assert_wgsl_reparses(&result);
+                assert_eq!(varying_layout(&result), [("a", ty, None, 0)]);
+                let vs = result.vertex.as_ref().unwrap().wgsl.as_deref().unwrap();
+                let fs = result.fragment.as_ref().unwrap().wgsl.as_deref().unwrap();
+                // 顶点只写第 0 个分量，值是右边的 `.x`
+                assert!(
+                    vs.contains(&format!("var<private> a: {}<f32>;", wgsl_vector(ty))),
+                    "{vs}"
+                );
+                assert!(vs.contains("a[0i] = 0.1f;"), "{ty}: {vs}");
+                // 片元读标量 `.x` 再铺满
+                assert!(
+                    fs.contains("let _e4 = a_1.x;") && fs.contains("c = vec4(_e4);"),
+                    "{ty} {read}: {fs}"
+                );
+            }
+            let result = pair("a[0].xyz");
+            assert!(!result.ok);
+            assert_eq!(
+                (result.phase, result.stage),
+                (Some("parse"), Some(Stage::Fragment))
+            );
+            assert!(
+                result.errors[0].message.contains("\"xyz\""),
+                "{:?}",
+                result.errors
+            );
+        }
+    }
+
+    fn wgsl_vector(ty: &str) -> &'static str {
+        match ty {
+            "vec3" => "vec3",
+            _ => "vec4",
+        }
+    }
+
+    /// 常量下标越过缩短后的长度（`vec4 a[4]` 在 WPE 里是 `float4 a[1]`）：写 `a[2]` 或读 `a[2]` 都翻译失败、错误指向越界。
+    /// WPE 是 fxc X3504、这一阶段走回退（整块黑），我们整张退回，照 P7 的「回退不用复刻」。
+    #[test]
+    fn constant_index_past_the_wpe_length_fails() {
+        let write = translate(&TranslateRequest {
+            vertex: "attribute vec3 a_Position;\nvarying vec4 a[4];\nvoid main() { gl_Position = vec4(a_Position, 1.0); a[0] = vec4(1.0); a[2] = vec4(2.0); }".into(),
+            fragment: "varying vec4 a[4];\nvoid main() { gl_FragColor = a[0]; }".into(),
+            ..TranslateRequest::default()
+        });
+        let read = translate(&TranslateRequest {
+            vertex: "attribute vec3 a_Position;\nvarying vec4 a[4];\nvoid main() { gl_Position = vec4(a_Position, 1.0); a[0] = vec4(1.0); }".into(),
+            fragment: "varying vec4 a[4];\nvoid main() { gl_FragColor = a[2]; }".into(),
+            ..TranslateRequest::default()
+        });
+        for (result, stage) in [(write, Stage::Vertex), (read, Stage::Fragment)] {
+            assert!(!result.ok);
+            assert_eq!(
+                (result.phase, result.stage),
+                (Some("validate"), Some(stage))
+            );
+            assert!(
+                result.errors[0]
+                    .message
+                    .contains("Accessing index 2 is out of [1] bounds"),
+                "{:?}",
+                result.errors
+            );
+        }
+    }
+
+    /// `auto_sway` 的形状（31 个 varying）端到端：11 个 vec4、两段 WGSL 回读通过、顶点输出与片元输入都在 16 以内，
+    /// 提前 `return` 的顶点、改写 varying 的片元照常翻译。
+    #[test]
+    fn auto_sway_shape_packs_end_to_end() {
+        let decls = rewrite::tests::sway_varyings();
+        let mut writes = String::new();
+        for (k, name) in decls
+            .lines()
+            .filter_map(|line| line.strip_prefix("varying "))
+            .enumerate()
+        {
+            let (ty, name) = name.trim_end_matches(';').split_once(' ').unwrap();
+            writes.push_str(&format!(
+                "\t{name} = {ty}(a_TexCoord.x * {k}.0 + a_TexCoord.y);\n"
+            ));
+        }
+        let vertex = format!(
+            "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\n{decls}void main() {{\n\tgl_Position = vec4(a_Position, 1.0);\n\tif (a_Position.z > 0.5) {{ return; }}\n{writes}}}"
+        );
+        let fragment = format!(
+            "{decls}void main() {{\n\tv_aspect *= 2.0;\n\tgl_FragColor = v_TexCoord * (v_aspect + v_Direction3.y + v_MotionRadian4);\n}}"
+        );
+        let result = translate_ok(&vertex, &fragment);
+        let expected: Vec<String> = (0..11).map(|i| format!("kb_varying_{i}")).collect();
+        assert_eq!(
+            result
+                .varyings
+                .iter()
+                .map(|v| v.name.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(result
+            .varyings
+            .iter()
+            .enumerate()
+            .all(|(i, v)| v.ty == "vec4" && v.array.is_none() && v.location == i as u32));
+        let vs = result.vertex.as_ref().unwrap().wgsl.as_deref().unwrap();
+        let fs = result.fragment.as_ref().unwrap().wgsl.as_deref().unwrap();
+        // 顶点：两个属性 + 11 个输出；片元：11 个输入 + 颜色输出
+        assert_eq!(wgsl_locations(vs), (13, Some(10)), "{vs}");
+        assert_eq!(wgsl_locations(fs), (12, Some(10)), "{fs}");
+        // naga 给以数字结尾的名字补 `_`
+        assert!(
+            vs.contains("@location(10) kb_varying_10_: vec4<f32>"),
+            "{vs}"
+        );
+        assert!(vs.contains("fn kb_main()") && fs.contains("fn kb_main()"));
+        assert!(vs.contains("var<private> v_MotionRadian4_: f32;"), "{vs}");
+        // 片元先拆包再调 kb_main
+        let unpack = fs.find("v_MotionRadian4_ = ").expect(fs);
+        assert!(unpack < fs.rfind("kb_main();").unwrap(), "{fs}");
+    }
+
+    /// 打包后仍超过上限：改写阶段报错，场景在编译期报不支持。
+    #[test]
+    fn packing_overflow_is_a_rewrite_failure() {
+        let decls: String = (0..17).map(|i| format!("varying vec4 v_{i};\n")).collect();
+        let result = translate(&TranslateRequest {
+            vertex: format!("{decls}void main() {{}}"),
+            fragment: "void main() { gl_FragColor = vec4(1.0); }".into(),
+            ..TranslateRequest::default()
+        });
+        assert!(!result.ok);
+        assert_eq!(
+            (result.phase, result.stage),
+            (Some("rewrite"), Some(Stage::Vertex))
+        );
+        assert!(
+            result.errors[0].message.contains("超过 WebGPU 的 16 个"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// 上界是字面量 0 的 smoothstep 换成 `kb_smoothstep0`（照 fxc 把 `0.0 - lo` 化成 `-lo`）：能翻译、回读，
+    /// 标量与「标量下界 + 向量 x」都选到对的重载；下界是字面量的仍用内建函数，不补辅助函数。
+    #[test]
+    fn zero_edge_smoothstep_follows_fxc() {
+        let vertex = "attribute vec3 a_Position;\nvarying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_Position.xy; }";
+        let pair = |body: &str| {
+            translate(&TranslateRequest {
+                vertex: vertex.into(),
+                fragment: format!(
+                    "uniform float u_thickness; // {{\"material\":\"thickness\",\"default\":0}}\nvarying vec2 v_TexCoord;\nvoid main() {{ float dist = length(v_TexCoord - 0.5); {body} }}"
+                ),
+                debug: true,
+                ..TranslateRequest::default()
+            })
+        };
+        let result = pair(
+            "float s = smoothstep(u_thickness * 0.015, 0.0, dist); vec3 v = smoothstep(u_thickness, 0, vec3(dist, 0.0, 1.0)); gl_FragColor = vec4(v * s, 1.0);",
+        );
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        let fs = result.fragment.as_ref().unwrap();
+        let glsl = fs.glsl.as_deref().unwrap();
+        let wgsl = fs.wgsl.as_deref().unwrap();
+        assert!(
+            glsl.contains("float s = kb_smoothstep0(u_thickness * 0.015, dist);"),
+            "{glsl}"
+        );
+        assert!(
+            glsl.contains("vec3 v = kb_smoothstep0(u_thickness, vec3(dist, 0.0, 1.0));"),
+            "{glsl}"
+        );
+        assert!(!wgsl.contains("smoothstep("), "{wgsl}");
+        // 标量重载与 vec3 重载都被调用（vec3 那个由标量下界铺满选中）
+        let called = |ret: &str| {
+            wgsl.lines()
+                .filter(|line| line.starts_with("fn kb_smoothstep0") && line.contains(ret))
+                .filter_map(|line| line.split('(').next()?.strip_prefix("fn "))
+                .any(|name| wgsl.contains(&format!("= {name}(")))
+        };
+        assert!(called("-> f32"), "{wgsl}");
+        assert!(called("-> vec3<f32>"), "{wgsl}");
+
+        let result = pair("gl_FragColor = vec4(smoothstep(0.2, 0.0, dist));");
+        assert!(result.ok, "{result:#?}");
+        let fs = result.fragment.as_ref().unwrap();
+        assert!(!fs.glsl.as_deref().unwrap().contains("kb_smoothstep0"));
+        assert!(fs.wgsl.as_deref().unwrap().contains("smoothstep("));
     }
 }

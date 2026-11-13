@@ -535,7 +535,7 @@ PS_OUTPUT main(VS_OUTPUT IN)
 9. **上层对回退的反应**：材质 / 图层代码是否另外检查着色器是否用了回退（本层没有失败标志，推断没有）；回退的暗红实际是否画出来需要抓帧确认。
 10. **日志开关** `DAT_1404e52b8` 的默认值，即 `%s shader %s error` 默认是否写进 `log.txt`。
 11. **不带 `static` 的全局变量**进 `$Globals` 后 WPE 是否绑定；**`ENABLE_STRICTNESS`** 具体拒绝哪些写法；隐式截断、`float` 条件、标量取下标等 fxc 语义 —— 这些留给 p7 实测（本机 fxc 编译 + 反汇编）。
-12. **非 accessArray 的 `vec4` 等数组 varying** 的寄存器数公式看起来按分量数算（`vec4 v[2]` 会写成 `[1]`），没核实是不是 WPE 的 bug。
+12. ~~**非 accessArray 的 `vec4` 等数组 varying** 的寄存器数公式看起来按分量数算（`vec4 v[2]` 会写成 `[1]`），没核实是不是 WPE 的 bug。~~ 已查清（2026-11-14，[rea-p7e-varying](rea-p7e-varying.md)）：是 bug，长度对所有类型都按「4 个标量一组」算（`vec2` 按 2 个），`vec3` / `vec4` 数组只剩 `ceil(n / 4)` 个元素，确定性工程与 WPE 编译缓存实测一致。
 
 ---
 

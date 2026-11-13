@@ -54,8 +54,9 @@
 | 输入 | 一个材质 pass 的 `.vert` / `.frag` 原文、按需提供的头文件、COMBO、绑定的纹理槽位与格式 |
 | 输出 | 两段 WGSL；uniform 块（group 0 / binding 0，两阶段共用，std140 偏移）；纹理绑定（槽位 n → 纹理 `1 + 2n`、采样器 `2 + 2n`）；attribute / varying 的 location；最终 COMBO |
 | 本机语料 | 2026-11-13（P7d）：WPE 安装目录 167 对通过 161 对；全部场景实际发出的 853 个请求全部通过，语料里没有因着色器翻译退回的场景，输出 WGSL 回读与 Tint 都是 0 失败。**请求夹具**（P7a）：语料扫描录下编译管线真实发出的全部请求（`kbp corpus scan --extra requests:<目录>`），语料测试重放并和旧导出**逐字节**比较，改翻译器时据此判断哪些输出变了（README「测试」） |
-| 规则来源 | WPE 先把方言转成 HLSL 再交给 fxc，所以翻译器照 WPE 的文本处理（P7b：`#if` 只解析一个表达式、多余的 `#endif` 忽略、宏后者覆盖前者、声明名带分量只取名字、`main` 之前的 `float` 数组是打包形态）与 fxc 的隐式转换（P7c：naga GLSL 前端的 HLSL 模式，截断、铺满、混算截到窄的、非布尔条件 `!= 0`、片元 varying 按顶点的类型）。只在 GLSL 本来会报错的地方生效，原来能翻译的输出逐字节不变。规则表与 fxc 依据见 README「HLSL 隐式转换」与 `naga/KABEGAME.md` |
+| 规则来源 | WPE 先把方言转成 HLSL 再交给 fxc，所以翻译器照 WPE 的文本处理（P7b：`#if` 只解析一个表达式、多余的 `#endif` 忽略、宏后者覆盖前者、声明名带分量只取名字、`main` 之前的 `float` 数组是打包形态）与 fxc 的隐式转换（P7c：naga GLSL 前端的 HLSL 模式，截断、铺满、混算截到窄的、非布尔条件 `!= 0`、片元 varying 按顶点的类型）。只在 GLSL 本来会报错的地方生效，原来能翻译的输出逐字节不变。规则表与 fxc 依据见 README「HLSL 隐式转换」与 `naga/KABEGAME.md`。另有一条 fxc 化简改了结果的：上界是字面量 0 的 `smoothstep`，fxc 把 `0.0 - lo` 化成 `-lo`，下界为 +0 时结果与 IEEE 相反（示波器没有声音时整张提亮），翻译器换成照 fxc 算的 `kb_smoothstep0`（P7e 收尾，README 同节） |
 | 没被读的 uniform | P7d：WPE 只认反射里被使用的 uniform（没被使用的不进常量缓冲、不分配材质常量槽位）。翻译器反射给入口可达代码没读的格标 `unused`（naga `compact` 之后看块成员的 `AccessIndex`），宿主据此算槽位、取两阶段同键的合并类型、跳过能力检查；只改反射，WGSL 不变。和 fxc 的差别是结果没被用到的读（乘 0 等）我们仍算被读，偏保守（README「没被读的 uniform」）。P5c 起顶点属性同样标 `unused`（入口可达的代码没读到这个输入，跟着指针链找），宿主据此决定网格缺的属性报不报（README「没被读的属性」） |
+| varying 的布局 | P7e：WebGPU 缺省只保证 16 个阶段间变量，设备不申请更高的上限。varying 数组照 WPE 生成 `VS_OUTPUT` 的公式声明长度：`vec3` / `vec4` 数组只剩 `ceil(n/4)` 个元素（WPE 的 bug，工坊示波器照它写），`n = 1` 退化成普通向量（写只写 `.x`、读成标量铺满）。换算后仍超过 16 个 location 时，把浮点 varying 装进 vec4（作者 `main` 改名 `kb_main`，生成的入口装箱 / 拆包），打包后仍超过就翻译失败、编译期退回；不超过的程序输出逐字节不变。WPE 编不过的写法（`.xyz` 取退化的标量、循环写越界、顶点裸 `return;`）不复刻。反射的 `varyings` 是实际接口（README「绑定布局」「varying 超过 16 个时打包」） |
 
 翻译结果里的几个约定会直接影响渲染器：
 - **平台宏**：照 WPE 的 Windows HLSL 路径，定义 `HLSL`（WebGPU 坐标约定与 D3D 相同）。
