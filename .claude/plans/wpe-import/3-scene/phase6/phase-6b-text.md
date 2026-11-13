@@ -796,7 +796,7 @@ export type LayerStep = DrawStep | ParticleStep | TextStep | ...
 文本的回退链与 `systemfont_*` 照 WPE 写死 Windows 文件名（`text/fonts.ts`），这一层不动：它决定的是「按什么顺序找字形」，和平台无关。平台差异只在「这个名字对应本机哪个文件」，交给后端：`wpe_scene_host.rs` 按平台把 13 个 Windows 字体名各解析成本机上第一个存在的文件，放行范围与交给宿主的表是同一次解析的结果，宿主读 `system:<名字>` 时查表，查不到就当读不到（同 WPE 的「文件不在就跳过」）。
 
 - Windows：`%WINDIR%\Fonts\<名字>`，顺带解决 `WINDIR` 不在 C 盘（原先的 `fonts_dir` 待办）。
-- macOS / Linux：每个名字一张候选表，先同一款字体（macOS `Supplemental/` 里自带的 Arial、Verdana 等，Linux 的 msttcorefonts），再字形度量兼容或外观接近的替代（Liberation、Carlito、Caladea、DejaVu、Noto CJK 等）。画面不会和 WPE 逐像素相同，只求「像」。候选路径没在真机上核对过，全部标 `TODO:[WPE_SCENC]`。
+- macOS / Linux：每个名字一张候选表，先同一款字体（macOS `Supplemental/` 里自带的 Arial、Verdana 等，Linux 的 msttcorefonts），再字形度量兼容或外观接近的替代（Liberation、Carlito、Caladea、DejaVu、Noto CJK 等）。画面不会和 WPE 逐像素相同，只求「像」。候选路径没在真机上核对过，全部标 `TODO:[WPE_SCENE]`。
 - 彩色 emoji 不给替代：Apple Color Emoji（sbix）与 Noto Color Emoji（CBDT）是内嵌 PNG，wpefont 没编进 libpng，FreeType 读不了；这两个平台的 emoji 交给链里后面的 Twemoji（COLR）。`arialuni.ttf` 只有 macOS 有同款（`Arial Unicode.ttf`）。
 
 关键决策：表由后端给，而不是宿主按平台自己猜路径。放行范围必须和宿主要读的文件一致，两边各写一份迟早对不上；后端本来就要知道平台和文件是否存在。
@@ -828,7 +828,7 @@ return reader.readWhole(joinPath(dir, path.slice(SYSTEM_FONT_PREFIX.length)));
 - 新增 `resolve_system_fonts(table, exists) -> BTreeMap<String, PathBuf>`：取第一个存在的候选；`exists` 注入，单测用假的文件集合。
 - 修改 `HostScope` 存解析结果 `system_fonts`，`font_grants` 由它生成；新增 `pub fn system_fonts() -> BTreeMap<String, String>` 读 `HOST_SCOPE`。
 ```rust
-// TODO:[WPE_SCENC] 在 macOS 上测试：候选路径没在真机核对；Office for Mac 的字体在 app 包里
+// TODO:[WPE_SCENE] 在 macOS 上测试：候选路径没在真机核对；Office for Mac 的字体在 app 包里
 const MACOS_SYSTEM_FONTS: &[(&str, &[&str])] = &[
     ("arial.ttf", &["/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf"]),
     // …
@@ -849,12 +849,12 @@ if (path.startsWith(SYSTEM_FONT_PREFIX)) {
 
 **点 3 — 文档**：WPE_SCENE.md 的「字体引擎」「文本对象」两节、`src-tauri/wpefont/README.md` 更正「sbix / CBDT 栅格化成 BGRA」（没有 libpng 读不了）、回归与 changelog。
 
-**验收**：Rust 单测（Windows 上跑：三张表都覆盖 13 个名字、取第一个存在的、放行与表一致、`%WINDIR%` 解析）；宿主单测（有表查表、表里没有返回 null 不回落、没表时按目录）；Windows dev 真机：`wpe_scene_target` 返回 13 项里本机存在的那些，重渲染 `p6b-fallback` 和 1d 结果逐像素相同。macOS / Linux 留给 `TODO:[WPE_SCENC]`。
+**验收**：Rust 单测（Windows 上跑：三张表都覆盖 13 个名字、取第一个存在的、放行与表一致、`%WINDIR%` 解析）；宿主单测（有表查表、表里没有返回 null 不回落、没表时按目录）；Windows dev 真机：`wpe_scene_target` 返回 13 项里本机存在的那些，重渲染 `p6b-fallback` 和 1d 结果逐像素相同。macOS / Linux 留给 `TODO:[WPE_SCENE]`。
 
 #### 1d2 实施记录（2026-11-13）
 
 **做了什么：**
-- `wallpaper/wpe_scene_host.rs`：`SYSTEM_FONT_FILES`（13 个名字）去掉 `cfg`，成为所有平台共用的键表；新增 `MACOS_SYSTEM_FONTS`、`LINUX_SYSTEM_FONTS`（候选照用户给的表，顺序即优先级，各带一段 `TODO:[WPE_SCENC] 在 macOS / Linux 上测试：…`）、`windows_system_fonts(<WINDIR>\Fonts)`、纯函数 `resolve_system_fonts(table, exists)`、`platform_system_fonts()`（`cfg!` 选表，`WINDIR` 取不到时为空表）、`font_grants(&表)`、`pub fn system_fonts()`。`HostScope` 加 `system_fonts`，`refresh_scene_host` 解析一次、放行项由它生成（只放文件），另记一条 debug 日志列出本机没有的名字。
+- `wallpaper/wpe_scene_host.rs`：`SYSTEM_FONT_FILES`（13 个名字）去掉 `cfg`，成为所有平台共用的键表；新增 `MACOS_SYSTEM_FONTS`、`LINUX_SYSTEM_FONTS`（候选照用户给的表，顺序即优先级，各带一段 `TODO:[WPE_SCENE] 在 macOS / Linux 上测试：…`）、`windows_system_fonts(<WINDIR>\Fonts)`、纯函数 `resolve_system_fonts(table, exists)`、`platform_system_fonts()`（`cfg!` 选表，`WINDIR` 取不到时为空表）、`font_grants(&表)`、`pub fn system_fonts()`。`HostScope` 加 `system_fonts`，`refresh_scene_host` 解析一次、放行项由它生成（只放文件），另记一条 debug 日志列出本机没有的名字。
 - `commands/wpe_scene.rs`：`WpeSceneTarget` 加 `system_fonts`（JSON `systemFonts`），读 `system_fonts()` 的内存表、不再解析：宿主能跑起来说明应用页已经取过宿主地址（`get_wpe_scene_host_url` 先 `refresh_scene_host`），启动时也解析过一次。
 - 宿主：`host.ts` 的 `SceneTarget.fontsDir` 换成 `systemFonts`（只改这个字段与注释）；`text/host.ts` 的 `TextFontSources` 加 `systemFonts`，`readFont` 有表只查表（`Object.hasOwn`，名字原样），查不到返回 null；没表才按 `fontsDir || C:\Windows\Fonts`；文件头注释改写。`text/fonts.ts` 的 `FontPath` 注释补一句「宿主按后端的表换成本机文件，名字与顺序不随平台变」。
 - 文档：`src-tauri/wpefont/README.md` 更正「COLR / sbix / CBDT 栅格化成 BGRA」（核对过：`FT_DEFS` 只有模块表，`third/freetype` 的 `ftoption.h` 里 `FT_CONFIG_OPTION_USE_PNG` 是注释掉的，`third-patches/freetype` 只有 README，`ttsbit.c` 遇到 PNG 字形报 `Unimplemented_Feature`）；`cocs/wpe/WPE_SCENE.md` 的「字体引擎」系统字体一行与「文本对象」两处；回归 T12–T15、changelog 一行。
@@ -875,7 +875,7 @@ if (path.startsWith(SYSTEM_FONT_PREFIX)) {
 | vitest（`src/text src/render/text.test.ts src/compile/texts.test.ts`，带 `KABEGAME_WPE_ROOT`） | 6 个文件 77 passed（1d 的 74 + 新增 3：有表按表读、表里没有 / 空表返回 null 且不读目录、没表按目录） |
 | 格式 | 改动的 TS 文件 Prettier 通过，两个 Rust 文件 `rustfmt --check --edition 2021` 通过，LF |
 
-**没做：** Windows dev 真机（`wpe_scene_target` 的返回、重渲染 `p6b-fallback`）留给用户；macOS / Linux 真机（`TODO:[WPE_SCENC]`，回归 T14、T15）。`cocs/wpe/WPE_SCENE.md` 场景宿主一节（`file:` 闸门那段）还写着「Windows 上文本对象要读的 13 个系统字体文件」，那一节有别的会话在改，没动。
+**没做：** Windows dev 真机（`wpe_scene_target` 的返回、重渲染 `p6b-fallback`）留给用户；macOS / Linux 真机（`TODO:[WPE_SCENE]`，回归 T14、T15）。`cocs/wpe/WPE_SCENE.md` 场景宿主一节（`file:` 闸门那段）还写着「Windows 上文本对象要读的 13 个系统字体文件」，那一节有别的会话在改，没动。
 
 #### 1d2 复核（Claude，2026-11-13）
 
@@ -883,7 +883,7 @@ if (path.startsWith(SYSTEM_FONT_PREFIX)) {
 - 复跑：`kabegame --lib wpe_scene`（`CARGO_TARGET_DIR=target-check`）17 passed；宿主 tsc 0 error；文本测试 6 个文件 77 passed。
 - Windows 真机（dev 后端在改动之后重编、重启，宿主产物重建）：`wpe_scene_target` 返回 12 项（本机没装 `arialuni.ttf`），应用日志「解析到 12 个，本机没有 ["arialuni.ttf"]」；`p6b-fallback` 按产品路径加载后渲染，整帧哈希与 1d 相同。
 - 顺手改了 WPE_SCENE.md 场景宿主一节里「Windows 上文本对象要读的 13 个系统字体文件」那句。dev 探针（`dev/probeTexts.ts`）仍按 `C:\Windows\Fonts` 读，只在 Windows dev 上用，没改。
-- macOS / Linux 的候选路径都没核对，见代码里的 `TODO:[WPE_SCENC]` 与回归 T14、T15。
+- macOS / Linux 的候选路径都没核对，见代码里的 `TODO:[WPE_SCENE]` 与回归 T14、T15。
 
 ### 1e — 动态文字（2026-11-13 按 HEAD `8ab0b58a` 重写，调研笔记 `ignore/p6/b1e/research.md`）
 
@@ -1090,6 +1090,89 @@ for (const object of rebuild) this.rebuildLayer(this.runtimeByObject.get(object)
 **没做 / 留给 1e-2**
 - `compileText` 的属性绑定仍登记 `recompile`；能力表照报 `text:script`，所以产品里 1e-1 没有可见变化（语料不变即此）。`GpuScene.sync` 不读 `dirty.texts`。
 - `host.readTarget`（dev 读值）没有文本路径；探针 `scriptValues` 不收文本（点 5）。
+
+#### 1e-2 实施记录（2026-11-13）
+
+在快照 `ignore/p6/b1e/o2`（HEAD `3c4f723b`，基线 `ignore/p6/b1e/h2`）里做，补丁 `ignore/p6/b1e/step2.patch`（18 个文件，+1575 / −116，新增 `text/relayout.test.ts`）。做了点 3、点 4 与 `compileText` 的登记切换；点 5（能力表的 `text:script`、探针 `scriptValues`）、点 6（文档）没做，所以产品里只有「绑用户属性的文字 / 字号等改了就地重排」这一处可见变化，挂脚本的文本场景仍因 `text:script` 退回（语料不变即此）。
+
+**做了什么**
+- **点 3 — 重排器**
+  - **新增** `text/atlas.ts` 的 `GlyphAtlas.resets`：`resetForRelayout()` 时加一。
+  - **修改** `text/layout.ts`：`releaseTextLayout` 不再清空 `mesh.refs`，改记 `mesh.released`；**新增** `retainTextLayout(layout)`（反操作），两者都可重复调用。
+  - **修改** `text/host.ts`：`TextRelayouter` 接口；`SceneTexts` 有加载代数（`prepare` 开头、`dispose` 时加一）与最近一次排完的加载 `{ 代数, 图集 }`；`relayouter()` 返回绑定这次加载的重排器：过期（有更新的加载、已销毁）返回 null、不动图集；否则先 `releaseTextLayout(previous)` 再 `layoutText`，出错或缺字体时 `retainTextLayout(previous)`、返回 null，缺字体时后台 `fonts.load`，读完比代数与 `disposed`，仍有效才调选项里的 `onReady(object)`。
+  - **新增** `render/state.ts` 的 `touchText(object)`：不改字段、只标 `dirtyTexts`（不是文本层不做事）。
+  - **修改** `host.ts`：建 `SceneTexts` 时给 `onReady` → `onTextReady`（`touchText`，暂停时 `renderer.redraw()`，同属性就地写的补画）；`prepare` 之后取 `relayouter()` 经 `load` 的 `relayout` 交给渲染器。
+- **点 4 — 渲染器**
+  - **修改** `render/renderer.ts` / `GpuScene.build`：选项加 `relayout`；建场景时记下各图集的 `resets`（加载期间的重置不算）。dev 探针 `dev/probeTexts.ts` 返回 `relayout`，`dev/probe.ts` 的 `renderFrame` 传给 `build`。
+  - **修改** `GpuScene.sync`：最先 `syncTexts`——对 `dirty.texts` 逐层 `relayout(object, textFields, texts)`，排成的 `setText`；某层的旧 / 新排版用到的图集 `resets` 变了（已定 5），用这张图集的别的层（本次已排过的也算）进队列再排，每层一次 `sync` 至多 2 次（`TEXT_RELAYOUT_LIMIT`）；有重排时再 `takeDirty()` 一次把 `setText` 标的脏图层并进这次的 `dirty`（同一帧刷矩阵）；然后 `TextAtlasTextures.sync()`，返回的扩容图集的使用层也进待重建集合；最后对集合 `rebuildLayer(…, { force: true })`。之后才是 `rebuildStructures` 与原来的刷新。原来末尾的 `atlasTextures.sync()` 挪进 `syncTexts`（非文本场景是一次空遍历）。
+  - **修改** `rebuildLayer` 加 `force`：签名相同也重建；先 `preparedOf`（缺管线就抛，这时什么都没换）、文本层再 `ensureTextResources`（图集按新排版重新取；计划没有合成路径时释放本层合成 RT；fbo 按新的 `textCompositeSize` 换）、再 `buildLayer`。强制重建不计入 `rebuildStats`（那是 effect 开关的），记在 `textStats`。
+  - **独占资源**（已定 6）：`ensureComposites` 对文本层走 `ensureTextComposites`（本层一组，尺寸变了销毁旧的、按新尺寸建，采样、标签照共享池的写法）；`populate` 里文本层的 fbo 走 `createTextFbos`（每个 effect 的每个名字一张，记进 `textFbos`），`resizeTextFbos` 在同一个 `targets` 下标上换新尺寸的纹理并清成 `clear` 色（`FboBindings` 的对应与 swap 状态不变）。fbo 的创建从 `populate` 抽成 `createFbo`，非文本层的共享池调用顺序、标签、清屏与原来逐字节相同。新增 `releaseTarget`（释放并从 `targetBytes` 减掉）。
+  - **修改** `render/text.ts` 的 `TextAtlasTextures`：构造的第 4 个参数由 `warnings` 换成 `release`；`sync()` 遇到尺寸变了就释放旧纹理、按新尺寸建（标签不变）并整张上传，返回这些图集。
+  - **修改** `render/graph.ts`：`variantPlans(layer, textures, text?)` 对文本层返回一份「两种字形都有」的假想排版的计划（`textVariantLayout`，尺寸取当前排版，没有时取空排版的）；`GpuScene.prepareVariants` 对文本层只备程序与管线（不按假想尺寸建 RT、不建快照），备不好时记一条警告。
+  - **新增** `GpuScene.textStats()`（有重排或重建的 `sync` 次数、重排器调用次数、没排成的次数、重建层数，及每次的层数 / 重排用时 / 重建用时的均值、p95、最大值）；`dev/probe.ts` 的 `hostTexts` 与 `dev/install.ts` 的 `host.texts()` 读它，另列每个文本层当前的文字、字号、`size`、`compositeSize`、字形数。
+- **`max(4, ·)`**（已定 2 的实验结论）：`textCompositeSize` 改成两维 `max(4, ·)`（截断后不是有限数时同 `cvttss2si` 得 `INT_MIN`，取 4）。`TextLayout.compositeSize` 本身不变（仍是 `trunc(2·pad + 文字框)`，即 WPE `+0x128` 的查询结果）。
+- **`compileText` 的登记切换**：`TEXT_RUNTIME_FIELDS` 里的 12 个键绑属性登记 `{ kind: "text", object, field }`；`font`、`opaquebackground`、MSDF 四个开关、`anchor`、HDR 下的 `backgroundbrightness` 照旧重编译。
+
+**`max(4, ·)` 落在哪里、依据**（读码：`ignore/p8/rea/layer/dec/f_1401ea500.c` 与 `ignore/p4/rea/wp.asm`）
+- `FUN_1401ea500` 调 `+0x128` 取 `out3` 后，`0x1401ea5dc`–`0x1401ea628` 用 `cmovg` 把 `[rbp-0x60]` / `[rbp-0x5c]` **原地**改成 `max(4, ·)`；之后这个函数里读它们的地方拿到的都是改过的值：
+  1. **合成 RT 尺寸**（`FUN_1401ab570(…, local_e8, local_e4, …)`）→ `planLayer` 的 `composite`；
+  2. **effect fbo 的基准**（fbo 循环 `uVar8 = local_e8`、`uVar23 = local_e4`，再 `/scale`、`fit`）→ `populate` / `resizeTextFbos` 的 `fboSize(fbo, textCompositeSize(…))`；
+  3. **`+0x2d8` 四边形**（`0x1401eb1b2` / `0x1401eb1bf` 读 `[rbp-0x60]` / `[rbp-0x5c]`，`cvtdq2ps` 后作 `FUN_1401ede30` 的尺寸参数）→ 直接上屏的**背景四边形** `[0, W] × [0, H]` 也套 `max(4, ·)`。**这一条和交代的「背景四边形是整数文字框」不同**，按读码取：1d 对过的 f4（213×240）大于 4，分不出来；`p6b-tiny2` 没开背景，验不到，要另做一个开背景的小文字工程才能定。
+  4. **画进合成 RT 的正交**：`FUN_1401e8aa0` 压入合成 RT 后按 RT 对象设投影（返回地址 `0x1401e977c` 那次调用的高取 RT 对象 `+0x1a`，宽同样取 RT 对象是推断），即套过的纹理尺寸 → `textMatrices` 的 `ortho(0, W, 0, H)` 按 `textCompositeSize`。字形在 RT 里的平移不变（左下角在 `(pad.x, pad.y)`），RT 多出来的列在右、行在上。
+- **不套的**：图层尺寸 `TextLayout.size`（上屏的 `+0x2e8` 四边形、clearalpha 的 `+0x5b0` 四边形、矩阵里的 w、h），以及上屏的 UV 内缩（`FUN_140258900` 交给 `+0xb0` 的是没套过的 `(int)size`，`uvInset` 的分母照旧是 `trunc(size)`）。所以宽 2 的文字在 4 宽的 RT 里只占左半，上屏时整张 RT 铺到 2 宽的四边形上（字形横向被压一半）——这正是要用 `p6b-tiny2` 整帧逐像素验的地方。
+
+**和计划不同处**
+1. 重排器不是 `SceneTexts` 自己，而是 `relayouter()` 给出的、绑定一次加载的对象：重编译时旧场景在新场景建好之前还在画，`SceneTexts` 若直接作重排器，旧场景会把字形排进新加载的图集（新加载的装箱顺序就不再和 WPE 一样）。加载代数在 `prepare` **开头**加，所以重编译期间旧场景的文字停在原样（重排器返回 null），新场景换上后照常。
+2. `releaseTextLayout` 不清 `refs`、改记 `released`，`retainTextLayout(layout)` 只收排版一个参数（清了列表就没法加回去）。
+3. 只标脏的方法叫 `touchText`。
+4. 文本层的 fbo 连本层不同 effect 之间也不共用（每个 effect 的每个名字一张）：按尺寸变化原地换时，同名同尺寸、但 `scale` / `fit` 不同的两个 fbo 换完尺寸会不同，共用一张就换不了。1d 里它们经全局池按名字与尺寸共用，现在多建几张；只影响带同名 fbo 的多个 effect 的文本层。fbo 的标签是 `fbo text <图层 id>|<effect>|<名字>|<宽>x<高>|<格式>|<repeat>`；合成 RT 的标签沿用共享池的写法（`composite <宽>x<高>|<clamp>|<nearest> #i`），1d 的轨迹测试不用改。
+5. 文字变空（计划没有合成路径）时释放本层的合成 RT，再变非空时按新尺寸重建（计划没写，内存更省；WPE 空文字时照样按 4×4 分配，看不出来）。fbo 不释放，按空排版的 4×4 基准换小。
+6. 图集重置连带重排设了每层每次 `sync` 至多 2 次的上限（计划没写）：重排别的层可能又触发重置，不设上限会连环。到上限后剩下的层留到下一次标脏（实际上 WPE 这时也只是放弃放不下的字形）。
+7. 强制重建不计入 `rebuildStats`：P3a 的探针用它核对 effect 开关，时钟每分钟重建一次会搅进去。
+8. `setText` 标的脏图层在同一次 `sync` 里刷（第二次 `takeDirty` 并进来，文本项放回状态），计划没写这一步；不这样做，偏移变了的子对象要晚一帧才跟上。
+9. 计划里 `sync` 的伪代码是「重排 → 图集 → 重建」三段直接写在 `sync` 里，这里收进 `syncTexts` / `relayoutTexts` 两个方法，次序相同。
+10. 没有用到的图集的 GPU 纹理不释放（滑块拖着改字号会一直攒新的「字体 + 字号」图集，每张 512² 起），直到场景销毁；CPU 侧 `TextAtlases` 同样。WPE 的字体管理器也按字体键留着，没查它释放不释放；记为待定。
+
+**测试**（tsc 0 error；Prettier `--check` 全过，LF）
+- vitest：o2 101 个文件、2489 条，2488 过；h2 100 个文件、2471 条，2470 过。两边失败的是同一条 `pipeline.test.ts` 的 `3830255100: 219 次请求`（这次 `p5c.test.ts` 的 `a_Normal` 两边都过）。日志 `ignore/p6/b1e/vitest-o2.log`、`vitest-h2.log`。
+- 新增 18 条：
+  - `render/text.test.ts` 10 条（假设备）：直接上屏换字（签名不变也重建、新 draw、顶点 400 字节 / 索引 30、旧顶点与索引缓冲销毁、别的层不动、`textStats`、不计入 `rebuildStats`）；值没变不重排；合成路径换尺寸（本层 RT 149×176 → 300×176、旧的销毁，fbo 同下标换成 150×88 并清成 clear 色，图像层共享池里的 RT 与 fbo 不动，`targetBytes` 增减对，画进 RT 的正交按新宽度）；空 → 非空与第一次出现彩色字形（不报 `render:variant-missing`，再变空时 RT 释放）；图集扩容（纹理 512 → 1024 重建、同标签整张上传、旧的销毁，F 没重排但重建、顶点按减半的 UV、bind group 绑新纹理的视图，别的图集的层不动）；图集重置（同图集的层跟着重排、别的不排，连环重置时 4 次后停）；缺字体（旧排版照画、不重建，`touchText` 后再排）；对齐偏移变了时本层与子对象（图像层）的矩阵在同一次 `sync` 里刷；没有重排器时不重排；`max(4, ·)` 的场景（2×6 的文字：RT 4×6、画进 RT 的正交 x 系数 2/4、上屏四边形 ±1 × ±3、直接上屏背景 `[0, 4] × [0, 6]`）。
+  - `text/relayout.test.ts` 5 条：`release` / `retain` 互逆、可重复；`resets` 只在重置时加；真 wasm 下 `SceneTexts` 的重排器——排进同一套图集、先放旧引用（只被旧文字用的字形归 0）；缺字体时返回 null、旧引用复原、图集不动，按 `onReady` 一轮读一个回退字体（「A中」沿 seguiemj → arialuni → segoeui → Twemoji → seguisym → msyh 逐轮读，用例只断言 12 轮内排成）；更新的加载开始后与 `dispose` 后旧重排器返回 null、不动引用，读完字体的回调丢掉（读取用闸门卡住再放行）。
+  - `compile/texts.test.ts` 1 条：16 个键逐个绑属性，12 个运行中字段是文本目标，其余重编译。
+  - `host.script.test.ts` 2 条：真 `compileText` 登记的绑定换进宿主，属性改 `text`、`pointsize` 就地写、`applied` +2、不重编译，改 `font` 重编译一次；重排器原样交给渲染器，`onReady` 标脏、暂停时补画、非文本对象与销毁后不做事。
+- 因改动而改了期望的 1d / 1e-1 用例（逐条）：
+  - `render/text.test.ts`「合成 RT 取排版的尺寸，不套 max(4, ·)」→ 3×2 的文字合成 RT 由 3×2 改成 4×4，另加 2×6 → 4×6、内缩仍按 2、6，及 `textCompositeSize` 的边界；
+  - `render/text.test.ts`「文本层不预备 effect 变体」→ `variantPlans` 由空表改成一份「两种字形都有」的计划（直接上屏背景 + 字形 + 彩色字形；合成 clearalpha + 字形 + 彩色字形 + 上屏）；
+  - `compile/texts.test.ts` 的绑定用例 → `text`、`pointsize` 由 `recompile` 改成文本目标；
+  - `host.script.test.ts` 的 `SceneTexts` 替身补 `relayouter()` 与 `onReady`（宿主现在会调），原用例不变。
+  - 其余 1d 的文本用例（p6b-fx 的矩阵、六个工程的排版 → 图层矩阵、编码轨迹）原样通过：抓帧里的合成 RT 都大于 4。
+- 非文本场景：`createFbo` 抽出与 `atlasTextures.sync()` 挪位之后，`render/rebuild.test.ts`（fbo 按真实合成尺寸建、换开关清 fbo 的提交、泛光关着 / 没有链时编码轨迹逐项相同、清屏可变时每帧轨迹相同）、`render/p5b-*.test.ts`、`render/graph.test.ts` 等两边结果相同。
+- 语料：`kbp corpus scan` h2 / o2 各 173 张、0 出错、57 张干净，`corpus diff` 无变化（`ignore/p6/b1e/corpus2-*.json`、`corpus2-diff.txt`）。
+- 变异检查（`ignore/p6/b1e/mutate2.mjs`，结果 `mutate2.json` / `mutate2.log`）：22 处全部检出，每处按原字节还原，前后整树哈希一致——`force` 不生效、文本 RT 尺寸变了不换、旧 RT 不销毁、文本 RT 进共享池、fbo 不换尺寸、变体不备彩色字形、文本层不备变体、图集扩容不重建纹理、同图集的层不跟着重建、图集重置不连带重排、连带重排不设上限、`setText` 的脏图层不并进这次 `sync`、强制重建计入 `rebuildStats`、缺字体不复原引用、重排前不放旧引用、旧加载的重排器不过期、读完字体不比代数、去掉 `max(4, ·)`、`compileText` 退回 `recompile`、值没变也重排、暂停时读完字体不补画、宿主不把重排器交给渲染器。第一轮（`mutate2-run1.*`）漏了「脏图层不并进」（第二次 `takeDirty` 照样把状态取空，原用例只看本层，本层本来就重建）；给那条用例加了子对象（图像层），核对它的矩阵同一次 `sync` 就带上偏移，第二轮检出。
+
+**没做 / 要真机确认**
+- 点 5、点 6（能力表 `text:script`、探针 `scriptValues`、文档、回归、changelog）是 1e-3。
+- `p6b-tiny2` 两组整帧逐像素比（RT 变宽后字形与上屏的映射），以及开背景的小文字工程（背景四边形套不套 `max(4, ·)`，上面第 3 条）。
+- 预览里实时改 `textinput` / `pointsize`（`2304304373`）：`stats.recompiled` 不增加、带 `blurprecise` 的时钟换宽度时 RT 与 fbo 跟着换（`host.texts()` 看次数与用时）。
+- 补丁对当前工作区（HEAD `ef16dcf1`）`git apply --check` 不过：`render/graph.ts`、`render/scene.ts`、`render/state.ts`、`render/uniforms.ts` 被别的会话改过，要三方合并。
+
+#### 1e-2 复核（Claude，2026-11-13）
+
+- **合并**：补丁按 h2（3c4f723b）出，期间 HEAD 有别的会话的提交（P8 步骤 3 等）。先以 HEAD 为基础三方合并（`ignore/p6/b1e/m2/`），两处冲突：
+  - `render/scene.ts` 的导入：两边都要，合在一起；
+  - `render/state.ts` 的 `setText`：P8 步骤 3 改了对齐偏移的模型（自身偏移不再传给子层，`drawMatrixOf`），`setText` 只标本层。保留子代理新增的 `touchText`，`setText` 用 HEAD 的写法。
+  子代理的「偏移带子对象」用例按 1d 的旧模型写，改成新模型：文本层自己的矩阵用 `drawMatrixOf`、同一次 `sync` 里刷；子对象的世界矩阵不带偏移、不变。
+  合并后的 HEAD 快照（`ignore/p6/b1e/c3`）tsc 0 error、vitest 2693 / 2694（只有已知的语料请求次数）。再以同样的三方合并进工作区（只有 `host.ts` 有别的会话未提交的改动，合并干净），工作区 tsc 0 error、相关 404 个用例全过。
+- **背景四边形的 `max(4, ·)`**（子代理按读码套了，和我交代的不同）：做了第三组 `p6b-tiny3`（开背景、不带 effect，`make_tiny.mjs` 的 `VARIANT=3`），WPE 抓帧 `A:\p6b\p6b-tiny3\` 的背景四边形顶点是 `[0, 4] × [0, 6]`（文字框宽 2、3 的两层一样），**套 `max(4, ·)` 是对的**。
+- **真机（dev，重建宿主产物）**：
+  - `p6b-tiny`、`p6b-tiny2`、`p6b-tiny3` 和 WPE 整帧逐像素相同（最大差 0）：合成 RT 套 4、字形在上屏时被横向压缩、背景四边形套 4，三处映射都对；
+  - 1d 的六个 `p6b-*` 工程渲染的像素摘要和 1d 时逐个相同，没有回归；
+  - 运行中重排（`ignore/p6/b1e/proj/p6b-user`，`make_user.mjs`：`textinput` 属性 `msg`、`slider` 属性 `size`，直接上屏与合成各一层）：经 `set_wpe_web_user_properties` 依次改成「Hello world」→ 空 → 「Ab😀」（字号 32 → 64）→「你好 Ab」，`recompiled` 始终为空；合成 RT 随文字换尺寸（184 → 901 → 676 → 945 宽）；空排版、第一次出现彩色字形都正常；
+  - 每次改完，宿主的画面（遮掉右下角帧号 / 时钟的哈希）都和「用新属性整场编译」的画面相同；
+  - 异步读字体：可见预览里帧循环自己走完 5 轮回退链（不到 0.7 秒），单次重排最长 8.7 ms（64 号中文首次栅格化）、重建最长 1.6 ms；
+  - 屏外宿主的帧循环不跑（时钟停在 0.0001 s），那里的验证靠 `host.renderFrame` 手动推帧，是测试环境的特点；
+  - 测完移除了测试行。
+- **遗留**：不再用的图集的 GPU 纹理在场景销毁前不释放（拖字号滑块会攒新图集，每张至少 512²），WPE 释不释放没查。
 
 ### 实施方式
 

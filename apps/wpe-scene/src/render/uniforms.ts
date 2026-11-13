@@ -425,9 +425,12 @@ const TEXT_RT_DEPTH = 1000;
  * 排版的对齐偏移 `T(offset)`（`render/layout.ts` 的 `drawMatrixOf`，子层不带它，P8 步骤 3、`p8-align2` 的 Xc）；`viewProjection` 是这次画到场景的视图投影（带视差、抖动，组里是组的局部
  * 正交），画进合成 RT 时不用。
  * - 直接上屏的字形（`glyphs` / `color`）：模型 = `world · T(directTranslation)`（`FUN_140258050`），包围盒中心落在对象原点；
- * - 直接上屏的背景：模型 = `world · T(−w/2 − pad.x, −h/2 − pad.y)`，四边形是整数文字框 `[0, W] × [0, H]`（f4 事件 203）；
- * - 画进合成 RT（`FUN_140257d70`）：视图投影 = RT 像素的正交 `ortho(0, W, 0, H)`（y 向上，W、H 是合成 RT 尺寸），模型 =
- *   `T(compositeTranslation)`，包围盒左下角落在 `(pad.x, pad.y)`（f1 事件 65、f5 事件 240）。
+ * - 直接上屏的背景：模型 = `world · T(−w/2 − pad.x, −h/2 − pad.y)`（w、h 是浮点文字框），四边形是 `[0, W] × [0, H]`（f4 事件 203；W、H
+ *   是 `textCompositeSize`，整数文字框两维 `max(4, ·)`，P6b 1e）；
+ * - 画进合成 RT（`FUN_140257d70`）：视图投影 = RT 像素的正交 `ortho(0, W, 0, H)`（y 向上，W、H 是合成 RT 的实际尺寸
+ *   `textCompositeSize`：WPE 压入合成 RT 后按 RT 对象设投影，`FUN_1401e8aa0` 返回地址 `0x1401e977c` 那次调用的高取 RT 对象的
+ *   `+0x1a`，即套过 `max(4, ·)` 建出的纹理；宽同样取 RT 对象是推断），模型 = `T(compositeTranslation)`，包围盒左下角落在 `(pad.x, pad.y)`（f1 事件 65、f5 事件 240）；RT 比文字框宽出来的列在右边、
+ *   多出来的行在上边，上屏时整张 RT 铺到 `size` 四边形上（WPE 同样，1e 用 `p6b-tiny2` 抓帧逐像素验）。
  */
 export function textMatrices(
   step: Pick<TextStep, "part" | "space">,

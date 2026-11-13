@@ -56,8 +56,13 @@ export interface TextMesh {
   lineHeight: number;
   rows: number;
   pointsize: number;
-  /** 本次排版引用的图集字形（引用数各加了 1），{@link releaseTextLayout} 减回。 */
+  /**
+   * 本次排版引用的图集字形（引用数各加了 1），{@link releaseTextLayout} 减回、{@link retainTextLayout} 再加回（P6b 1e）。列表本身不清：
+   * 减没减过看 `released`。
+   */
   refs: AtlasGlyph[];
+  /** 引用已经减回（`releaseTextLayout`）；缺省（undefined）是还持有着。 */
+  released?: boolean;
 }
 
 export interface TextLayout {
@@ -187,12 +192,26 @@ function emptyLayout(fields: TextFields, missingFonts: FontPath[] = []): TextLay
   };
 }
 
-/** 释放排版结果对图集字形的引用（文字变了、对象销毁时）。重复调用无害。 */
+/**
+ * 释放排版结果对图集字形的引用（文字变了、对象销毁时）。重复调用无害。运行中重排（P6b 1e，`text/host.ts` 的重排器）先放旧的再排新的
+ * （同 WPE「先放旧、再排新」，只被旧文字用的字形在新排版里可以被回收）。
+ */
 export function releaseTextLayout(layout: TextLayout): void {
   const mesh = layout.mesh;
-  if (!mesh) return;
+  if (!mesh || mesh.released) return;
   for (const glyph of mesh.refs) glyph.refs--;
-  mesh.refs = [];
+  mesh.released = true;
+}
+
+/**
+ * {@link releaseTextLayout} 的反操作（P6b 1e）：把引用加回去。重排发现缺字体（没排成、图集没动）时旧排版照画，引用要复原，否则旧排版的
+ * 字形可能被别的层回收、覆盖。没释放过时不做事，重复调用无害。
+ */
+export function retainTextLayout(layout: TextLayout): void {
+  const mesh = layout.mesh;
+  if (!mesh || !mesh.released) return;
+  for (const glyph of mesh.refs) glyph.refs++;
+  mesh.released = false;
 }
 
 /**

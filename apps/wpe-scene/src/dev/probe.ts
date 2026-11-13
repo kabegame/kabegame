@@ -373,6 +373,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       ignoreUnsupported: force,
       particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
       texts: texts.texts,
+      relayout: texts.relayout,
     });
     // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
     const pointer = pointers.pointers[0];
@@ -640,6 +641,30 @@ export function hostParticles(
     profile: scene.particleProfile(),
     instances: Object.fromEntries(renderer?.sceneState?.particleInstances ?? []),
   };
+}
+
+/**
+ * 文本层运行中重排的统计（P6b 1e，`GpuScene.textStats`）与每个文本层的当前字段、排版尺寸：给验收量每帧重排的层数与耗时。没有场景时
+ * 统计为 null、层为空。
+ */
+export function hostTexts(host: SceneHost): {
+  stats: ReturnType<GpuScene["textStats"]> | null;
+  layers: Record<number, { text: string; pointsize: number; size: number[]; compositeSize: number[]; glyphs: number }>;
+} {
+  const renderer = host.devScene.renderer;
+  const state = renderer?.sceneState;
+  const layers: ReturnType<typeof hostTexts>["layers"] = {};
+  for (const [object, fields] of state?.textFields ?? []) {
+    const layout = state?.texts.get(object);
+    layers[object] = {
+      text: fields.text,
+      pointsize: fields.pointsize,
+      size: layout ? [...layout.size] : [],
+      compositeSize: layout ? [...layout.compositeSize] : [],
+      glyphs: (layout?.mesh?.glyphs.length ?? 0) + (layout?.mesh?.colorGlyphs.length ?? 0),
+    };
+  }
+  return { stats: renderer?.currentScene?.textStats() ?? null, layers };
 }
 
 export interface ParticleTrackProbeOptions {

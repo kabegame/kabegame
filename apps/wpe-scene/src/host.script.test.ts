@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generalDefaults } from "./compile/bindings";
+import { BindingCollector, generalDefaults } from "./compile/bindings";
 import type { SceneBundle, ScenePass } from "./compile/bundle";
+import type { SceneFs } from "./compile/fs";
+import { compileText } from "./compile/texts";
 import { SceneState } from "./render/state";
 import { createMemoryStorage, SCENE_STORAGE_PREFIX } from "./script/storage";
 import { TEXT_DEFAULTS } from "./text/fields";
@@ -86,8 +88,11 @@ class FakeRenderer {
   sceneStats = null;
   sceneState: SceneState | null = null;
   paused = false;
+  /** 最近一次 `load` 收到的重排器（P6b 1e：宿主交来的 `SceneTexts.relayouter()`）。 */
+  relayout: unknown = undefined;
   constructor(private readonly beforeFrame?: (dt: number) => void) {}
-  async load(bundle: SceneBundle, options: { beforeFirstFrame?: (state: SceneState) => void }) {
+  async load(bundle: SceneBundle, options: { beforeFirstFrame?: (state: SceneState) => void; relayout?: unknown }) {
+    this.relayout = options.relayout;
     this.sceneState = SceneState.fromBundle(bundle);
     if (frozen) this.sceneState.freezeLayer(0);
     options.beforeFirstFrame?.(this.sceneState);
@@ -149,11 +154,18 @@ vi.mock("./audio/player", () => ({
     }
   },
 }));
-// 文本层（P6b 1e 的用例）：排版要 wasm 与字体，这里不排，渲染器替身不画
+// 文本层（P6b 1e 的用例）：排版要 wasm 与字体，这里不排，渲染器替身不画。`textHost` 记下宿主交来的 `onReady` 与交给渲染器的重排器
+const textHost: { onReady: ((object: number) => void) | null; relayouter: object } = { onReady: null, relayouter: {} };
 vi.mock("./text/host", () => ({
   SceneTexts: class {
+    constructor(options: { onReady?: (object: number) => void }) {
+      textHost.onReady = options.onReady ?? null;
+    }
     async prepare() {
       return new Map();
+    }
+    relayouter() {
+      return textHost.relayouter;
     }
     dispose() {}
   },
@@ -1033,6 +1045,75 @@ describe("SceneHost 脚本接线", () => {
       // 编译结果由替身给出（"Song Title"）：重放了脚本的写入就会是 "Script"
       expect(fields().text).toBe("Song Title");
       host.dispose();
+    });
+
+    it("compileText 登记的绑定（P6b 1e-2）：属性改 text、pointsize 就地写、不重编译；改 font 照旧重编译", async () => {
+      // 绑定由真 `compileText` 登记（宿主材质与字体位置用替身），换进替身 bundle
+      const collector = new BindingCollector();
+      await compileText(
+        0,
+        {
+          text: { user: "t", value: "Song Title" },
+          pointsize: { user: "s", value: 20 },
+          font: { user: "f", value: "fonts/a.ttf" },
+        },
+        {
+          fs: { resolve: async () => null } as unknown as SceneFs,
+          properties: {},
+          bindings: collector,
+          hdr: false,
+          visibleEffects: 0,
+          colorBlendMode: 0,
+          mayComposite: false,
+          hostPass: async (_path, key) => ({ key, program: null, uniforms: {} }) as unknown as ScenePass,
+          unsupported: new Set(),
+        },
+      );
+      compile.mockImplementation(async () => {
+        const result = textBundle();
+        result.bindings = [...collector.list];
+        return result;
+      });
+      onUpdate = () => undefined;
+      const host = await start();
+      const { applied } = host.stats;
+      host.applyUserProperties({ t: { type: "textinput", value: "User" } });
+      host.applyUserProperties({ s: { type: "slider", value: 48 } });
+      expect([fields().text, fields().pointsize]).toEqual(["User", 48]);
+      expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+      expect(host.stats.applied).toBe(applied + 2);
+      await settled();
+      expect(compile).toHaveBeenCalledTimes(1);
+      expect(host.stats.recompiled).toEqual([]);
+      // font 照旧整场重编译（1e 已定 3）
+      host.applyUserProperties({ f: { type: "combo", value: "fonts/b.ttf" } });
+      await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+      expect(host.stats.recompiled).toHaveLength(1);
+      host.dispose();
+    });
+
+    it("运行中重排的接线（P6b 1e-2）：重排器交给渲染器；字体读完（onReady）把那一层标脏，暂停时补画一帧", async () => {
+      compile.mockImplementation(async () => textBundle());
+      onUpdate = () => undefined;
+      const host = await start();
+      expect(renderer.relayout === textHost.relayouter).toBe(true);
+      renderer.sceneState!.takeDirty();
+      events.length = 0;
+      textHost.onReady!(0);
+      expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+      expect(events).toEqual([]);
+      host.setPaused(true);
+      events.length = 0;
+      textHost.onReady!(0);
+      expect(events).toEqual(["redraw"]);
+      // 不是文本层的对象（场景已换）：不标脏
+      textHost.onReady!(7);
+      expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+      host.dispose();
+      // 销毁之后什么都不做
+      events.length = 0;
+      textHost.onReady!(0);
+      expect(events).toEqual([]);
     });
   });
 

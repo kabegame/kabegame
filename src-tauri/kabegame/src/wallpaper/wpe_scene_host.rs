@@ -62,7 +62,7 @@ const SYSTEM_FONT_FILES: &[&str] = &[
     "Malgun.ttf",
 ];
 
-// TODO:[WPE_SCENC] 在 macOS 上测试：下面的候选路径没在真机上核对过，是按 macOS 自带字体与 Office for Mac 的
+// TODO:[WPE_SCENE] 在 macOS 上测试：下面的候选路径没在真机上核对过，是按 macOS 自带字体与 Office for Mac 的
 // 常见位置写的。
 // - 要核对：各路径在当前系统版本上是否存在、`wpe_scene_target` 交给宿主的表、文本场景实际画出来的字形；
 // - 先同一款字体（`Supplemental/` 自带的 Arial、Comic Sans MS、Microsoft Sans Serif、Verdana、Arial Unicode）；
@@ -147,7 +147,7 @@ const MACOS_SYSTEM_FONTS: &[(&str, &[&str])] = &[
     ),
 ];
 
-// TODO:[WPE_SCENC] 在 Linux 上测试：下面的候选路径没在真机上核对过。
+// TODO:[WPE_SCENE] 在 Linux 上测试：下面的候选路径没在真机上核对过。
 // - 发行版之间字体包与路径不一（这里列了 Debian / Ubuntu、Fedora、Arch 三种布局），装了哪些字体包也因人而异；
 //   以后可以考虑改用 fontconfig（`fc-match <字体族>`）按族名查，代替写死的路径；要核对的同 macOS 一条；
 // - 先同一款字体（msttcorefonts 的 Arial、Comic Sans MS、Verdana），再度量兼容的（Liberation Sans ↔ Arial、

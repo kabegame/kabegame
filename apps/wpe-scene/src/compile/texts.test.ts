@@ -2,7 +2,8 @@
  * P6b 1d 的编译侧单测：文本对象进 `SceneLayer.text`（`compile/texts.ts`）与能力表（`features.ts` 的文本部分）。
  * - 字段规整（rea-p6b-layout 1.2、1.3：缺省值、`text` 只收字符串、枚举查不到取表里第一项、vec2 数字铺满）、主字体的位置；
  * - 四个宿主材质的 pass（键、渲染图填的槽 0、背景与 clearalpha 什么时候编）、背景色、`padding` 看启用的 effect；
- * - 绑定：排版类键登记成重编译，`backgroundcolor` 在 LDR 下是背景常量的就地目标；
+ * - 绑定：运行中可改的排版键（`TEXT_RUNTIME_FIELDS`）登记成文本目标（P6b 1e），`font` / `opaquebackground` 等照旧重编译，
+ *   `backgroundcolor` 在 LDR 下是背景常量的就地目标；
  * - 能力表：不再报 `object:text` / `object:font` 等，`text:script`、`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>` 照规则报；
  * - `SceneState`：文本 pass 的常量、背景常量、effect 开关走重编译；
  * - 有 WPE 时用真翻译器编 WPE 自带的四个材质（`font`、`flat`、`composelayer` 着色器），程序检查不报。
@@ -10,6 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { TEXT_RUNTIME_FIELDS } from "./bindings";
 import { compileScene, type SceneBundle } from "./bundle";
 import { checkObjectFeatures, checkTextOptions, isTextObject } from "./features";
 import type { SceneReader } from "./fs";
@@ -348,7 +350,7 @@ describe("compileScene：文本表", () => {
     expect(layer.text?.clearAlphaPass?.key).toBe("objects/0/text/clearalpha");
   });
 
-  it("绑定：排版类键绑属性登记成重编译；backgroundcolor 在 LDR 下是背景常量 g_Color 的就地目标", async () => {
+  it("绑定：运行中可改的排版键绑属性登记成文本目标（P6b 1e）；backgroundcolor 在 LDR 下是背景常量 g_Color 的就地目标", async () => {
     const { bundle } = await compile(
       [
         {
@@ -365,8 +367,9 @@ describe("compileScene：文本表", () => {
     expect(text.fields.pointsize).toBe(48);
     expect(text.background.color).toEqual([0, 1, 0]);
     expect(bundle.bindings.map((binding) => [binding.property, binding.target])).toEqual([
-      ["label", { kind: "recompile", reason: "layer-structure", path: "objects/0/text" }],
-      ["size", { kind: "recompile", reason: "layer-structure", path: "objects/0/pointsize" }],
+      // 1d 是 recompile（layer-structure）；1e-2 起就地重排
+      ["label", { kind: "text", object: 0, field: "text" }],
+      ["size", { kind: "text", object: 0, field: "pointsize" }],
       [
         "bg",
         {
@@ -378,6 +381,39 @@ describe("compileScene：文本表", () => {
         },
       ],
     ]);
+  });
+
+  it("绑定：14 个字段逐个绑属性——TEXT_RUNTIME_FIELDS 的 12 个是文本目标，font、opaquebackground 与 MSDF、anchor、HDR 背景亮度照旧重编译（P6b 1e）", async () => {
+    const keys = [
+      "text",
+      "font",
+      "pointsize",
+      "padding",
+      "spacing",
+      "maxwidth",
+      "maxrows",
+      "limitwidth",
+      "limitrows",
+      "limituseellipsis",
+      "blockalign",
+      "opaquebackground",
+      "horizontalalign",
+      "verticalalign",
+      "msdf",
+      "anchor",
+    ];
+    const object = Object.fromEntries(keys.map((key) => [key, { user: `p_${key}`, value: undefined }]));
+    const { bundle } = await compile([{ ...object, text: { user: "p_text", value: "x" } }], { properties: {} });
+    const targets = Object.fromEntries(bundle.bindings.map((binding) => [binding.property, binding.target]));
+    for (const key of keys) {
+      const runtime = (TEXT_RUNTIME_FIELDS as readonly string[]).includes(key);
+      expect(targets[`p_${key}`], key).toEqual(
+        runtime
+          ? { kind: "text", object: 0, field: key }
+          : { kind: "recompile", reason: "layer-structure", path: `objects/0/${key}` },
+      );
+    }
+    expect(TEXT_RUNTIME_FIELDS).toHaveLength(12);
   });
 
   it("能力：MSDF 开关与 anchor 按当前属性值报；text 挂脚本报 text:script", async () => {

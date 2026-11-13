@@ -4,13 +4,18 @@
  */
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
-import { SceneTexts } from "../text/host";
+import { SceneTexts, type TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
 
 export interface ProbeTexts {
   /** 交给 `GpuScene.build` 的 `texts`；没有文本层时为 undefined。 */
   texts: Map<number, TextLayout> | undefined;
-  /** 场景用完之后释放字体（图集像素在 JS 里，建场景时已整张上传）。 */
+  /**
+   * 交给 `GpuScene.build` 的 `relayout`（P6b 1e）：探针写进状态的文本字段（`scriptValues`，1e-3）在 `sync` 里按它重排。探针没有帧外的
+   * 补画，缺字体时这一帧照画旧排版。没有文本层时为 undefined。
+   */
+  relayout: TextRelayouter | undefined;
+  /** 场景用完之后释放字体（图集像素在 JS 里，建场景时已整张上传）；之后重排器不再工作。 */
   dispose: () => void;
 }
 
@@ -19,11 +24,11 @@ export async function prepareProbeTexts(
   reader: SceneReader,
   sceneAssets: readonly string[],
 ): Promise<ProbeTexts> {
-  if (!bundle.layers.some((layer) => layer.text)) return { texts: undefined, dispose: () => {} };
+  if (!bundle.layers.some((layer) => layer.text)) return { texts: undefined, relayout: undefined, dispose: () => {} };
   const owner = new SceneTexts({ reader });
   try {
     const texts = (await owner.prepare(bundle, { sceneAssets })) ?? undefined;
-    return { texts, dispose: () => owner.dispose() };
+    return { texts, relayout: owner.relayouter() ?? undefined, dispose: () => owner.dispose() };
   } catch (error) {
     owner.dispose();
     throw error;

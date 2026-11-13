@@ -28,6 +28,7 @@ import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
+import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import type { VideoSink } from "../video/sceneVideos";
@@ -109,6 +110,10 @@ export interface SceneLoadOptions {
    * `GpuScene.build`。bundle 里有文本层而没给时整场画不了（`render:text-layout`）。
    */
   texts?: ReadonlyMap<number, TextLayout>;
+  /**
+   * 运行中重排（P6b 1e）：宿主 `SceneTexts.relayouter()`，绑定排出 `texts` 的那次加载，原样交给 `GpuScene.build`。不给时文本字段变了也不重排。
+   */
+  relayout?: TextRelayouter;
 }
 
 /** 一条就地写：绑定 + 新值（宿主按 `planApply` 挑出来）。 */
@@ -328,6 +333,7 @@ export class SceneRenderer {
         audio: { left: this.spectrum.L16, right: this.spectrum.R16 },
       },
       texts: options.texts,
+      relayout: options.relayout,
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();

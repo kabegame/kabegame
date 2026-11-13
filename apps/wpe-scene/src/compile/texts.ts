@@ -8,11 +8,19 @@
  * - 背景色（`g_Color` = `backgroundcolor` × (HDR ? `backgroundbrightness` : 1)）。
  * 排版、栅格化要 wasm、字体字节与图集，在宿主主线程（`text/host.ts`），结果经 `GpuScene.build` 的 `texts` 交给渲染器。
  *
- * 绑定（P3a）：排版类字段绑用户属性登记成重编译目标（1d 不做就地重排，改了整场重编译，结果仍对；1e 改成就地重排）；
+ * 绑定（P3a）：`TEXT_RUNTIME_FIELDS` 里的排版字段（文字、字号、padding、对齐等）绑用户属性登记成文本目标
+ * `{ kind: "text", object, field }`（P6b 1e：就地写进 `SceneState.textFields`、值变了渲染器重排，不整场重编译）；`font`、
+ * `opaquebackground`、MSDF 开关、`anchor` 照旧登记成重编译（1e 已定 3）；
  * `backgroundcolor` 在 LDR（或 HDR 下 `backgroundbrightness` 恒为 1）时登记成背景常量的就地目标（`background.key` 的 `g_Color`），
  * 否则重编译；`backgroundbrightness` 只在 HDR 下读，绑了属性登记成重编译。
  */
-import { isUserBinding, type BindingCollector, type BindingTarget, type TargetKey } from "./bindings";
+import {
+  isTextRuntimeField,
+  isUserBinding,
+  type BindingCollector,
+  type BindingTarget,
+  type TargetKey,
+} from "./bindings";
 import type { ScenePass } from "./bundle";
 import { checkTextOptions } from "./features";
 import type { SceneFs } from "./fs";
@@ -147,9 +155,13 @@ export async function compileText(
   /**
    * 排版字段：取值规则与属性就地写、脚本写回同一份（`textFieldFromJson`，P6b 1e），不写时取 WPE 缺省。`text` / `font` 只收字符串
    * （或对象里的字符串 `value`），别的类型当缺省（`text` 为空串、不可见，rea-p6b-layout 1.3）。
+   * 绑了用户属性时：运行中可改的字段（`TEXT_RUNTIME_FIELDS`）登记文本目标、就地重排（P6b 1e），`font` / `opaquebackground` 照旧重编译。
    */
   const field = <F extends TextFieldKey>(key: F): TextFields[F] => {
-    const value = textFieldFromJson(key, read(key));
+    const target: BindingTarget = isTextRuntimeField(key)
+      ? { kind: "text", object: index, field: key }
+      : recompile(key);
+    const value = textFieldFromJson(key, read(key, target));
     if (value !== undefined) return value;
     // 向量的缺省给一份新数组，不与 `TEXT_DEFAULTS` 共用
     const fallback = TEXT_DEFAULTS[key];

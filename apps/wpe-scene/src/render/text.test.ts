@@ -25,10 +25,13 @@ import type { SceneText } from "../compile/texts";
 import { GlyphAtlas, TextAtlases, type AtlasGlyph } from "../text/atlas";
 import { SYSTEM_FONT_PREFIX, TextFonts, type FontPath } from "../text/fonts";
 import fixture from "../text/fixtures/p6b.json";
+import type { TextRelayouter } from "../text/host";
 import {
   compositeTranslation,
   directTranslation,
   layoutText,
+  releaseTextLayout,
+  retainTextLayout,
   TEXT_DEFAULTS,
   type TextFields,
   type TextLayout,
@@ -38,7 +41,7 @@ import { textVertices } from "../text/mesh";
 import { PIXEL_MODE_BGRA, PIXEL_MODE_GRAY, Wpefont } from "../wpefont";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { planLayer, planSignature, textCompositeSize, variantPlans, type LayerPlan, type LayerStep } from "./graph";
-import { drawMatrixOf, sceneViewProjection } from "./layout";
+import { drawMatrixOf, sceneViewProjection, worldMatrixOf } from "./layout";
 import { multiply, transformPoint, translation, type Mat4 } from "./math";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
@@ -395,7 +398,8 @@ describe("planLayer：文本层", () => {
     expect(planLayer(textLayer(0, "t"), []).reasons).toEqual(["render:text-layout"]);
   });
 
-  it("合成 RT 取排版的尺寸，不套 max(4, ·)（WPE `FUN_140258ab0` 只截断取整）", () => {
+  it("合成 RT 是排版尺寸两维 max(4, ·)（P6b 1e：WPE `FUN_1401ea500` 套了，p6b-tiny2 实测 4×6）；排版的 compositeSize 本身不变", () => {
+    // 1d 期望 3×2（不套）；1e-2 改成 4×4
     const tiny = layoutOf({
       glyphs: glyphsIn(atlas, 1, 30),
       box: { minX: 0, minY: 0, maxX: 3, maxY: 2 },
@@ -404,19 +408,44 @@ describe("planLayer：文本层", () => {
     expect(tiny.compositeSize).toEqual([3, 2]);
     expect(planLayer(textLayer(0, "t", { effect: true }), [], undefined, tiny).composite).toEqual({
       count: 1,
-      width: 3,
-      height: 2,
+      width: 4,
+      height: 4,
     });
+    // 一维小于 4、另一维不小于 4（p6b-tiny2 的 2×6 → 4×6）；上屏的 UV 内缩仍按图层 size 的整数部分（2、6），不按 RT
+    const narrow = layoutOf({
+      glyphs: glyphsIn(atlas, 1, 31),
+      box: { minX: 0, minY: 0, maxX: 2, maxY: 6 },
+      padding: [0, 0],
+    });
+    const plan = planLayer(textLayer(0, "t", { effect: true }), [], undefined, narrow);
+    expect(plan.composite).toEqual({ count: 1, width: 4, height: 6 });
+    expect(plan.steps.find((step) => step.kind === "draw" && step.role === "final")).toMatchObject({
+      inset: [f(f(0.15) / 2), f(f(0.15) / 6)],
+    });
+    expect(textCompositeSize({ compositeSize: [5, 4] })).toEqual([5, 4]);
+    expect(textCompositeSize({ compositeSize: [0, 1] })).toEqual([4, 4]);
+    // 截断后不是有限数：同 cvttss2si 得 INT_MIN，取 4
+    expect(textCompositeSize({ compositeSize: [Number.NaN, Number.POSITIVE_INFINITY] })).toEqual([4, 4]);
   });
 
-  it("签名带上有没有彩色字形；文本层不预备 effect 变体（开关走重编译）", () => {
+  it("签名带上有没有彩色字形；文本层的变体是「两种字形都有」的一份（P6b 1e：运行中步骤增减时管线已备好）", () => {
     const layer = textLayer(0, "t");
     expect(planSignature(planLayer(layer, [], undefined, plain))).not.toBe(
       planSignature(planLayer(layer, [], undefined, withColor)),
     );
+    // 1d 期望空表（不预备）；1e-2 起给一份计划：直接上屏是字形 + 彩色字形，开背景时前面有背景
+    const direct = variantPlans(textLayer(0, "t", { opaquebackground: true }), [], plain);
+    expect(direct.map((plan) => kinds(plan.steps))).toEqual([
+      ["text background direct→scene", "text glyphs direct→scene", "text color direct→scene"],
+    ]);
+    // 合成：clearalpha 与字形、彩色字形、上屏都在；当前排版为空时也给（尺寸取空排版的）
     const bound = textLayer(0, "t", { effect: true });
     bound.effects[0].visibleBound = true;
-    expect(variantPlans(bound, [])).toEqual([]);
+    const empty: TextLayout = { ...plain, mesh: null, compositeSize: [1, 1] };
+    expect(variantPlans(bound, [], empty).map((plan) => kinds(plan.steps))).toEqual([
+      ["snapshot", "compose→c0", "text glyphs composite→c0", "text color composite→c0", "final→scene"],
+    ]);
+    expect(variantPlans(bound, [])[0].composite).toEqual({ count: 1, width: 4, height: 4 });
   });
 });
 
@@ -488,7 +517,16 @@ describe("textMatrices：和 p6b-fx 抓帧的 MVP 相同", () => {
 interface FakeBuffer {
   label: string;
   bytes: Uint8Array;
+  /** 被 `destroy` 过（P6b 1e：换下的缓冲当场释放）。 */
+  destroyed: boolean;
   destroy(): void;
+}
+
+/** 假纹理（P6b 1e 的用例读尺寸与是否释放）；视图带回它的纹理。 */
+interface FakeTexture {
+  label: string;
+  size: number[];
+  destroyed: boolean;
 }
 
 /** 假设备：缓冲字节、纹理写入、bind group 绑的纹理，以及一帧的编码轨迹（目标、清屏值、管线、索引、绘制）。 */
@@ -496,6 +534,9 @@ class FakeGpu {
   readonly trace: string[] = [];
   readonly writes: { texture: string; origin: number[]; size: number[] }[] = [];
   readonly bindings = new Map<object, string[]>();
+  /** bind group → 绑的资源（视图、采样器、缓冲），按条目顺序（P6b 1e：核对绑的是不是新纹理）。 */
+  readonly bound = new Map<object, unknown[]>();
+  readonly textures: FakeTexture[] = [];
   readonly device: GPUDevice;
 
   constructor() {
@@ -527,18 +568,33 @@ class FakeGpu {
       limits: { maxTextureDimension2D: 8192 },
       lost: new Promise(() => {}),
       destroy() {},
-      createTexture: (descriptor: GPUTextureDescriptor) => ({
-        label: descriptor.label ?? "",
-        format: descriptor.format,
-        createView: () => ({ label: descriptor.label ?? "" }),
-        destroy() {},
-      }),
+      createTexture: (descriptor: GPUTextureDescriptor) => {
+        const size = descriptor.size as { width: number; height?: number } | number[];
+        const texture = {
+          label: descriptor.label ?? "",
+          format: descriptor.format,
+          size: Array.isArray(size) ? [...size] : [size.width, size.height ?? 1],
+          destroyed: false,
+          createView: () => ({ label: descriptor.label ?? "", texture }),
+          destroy() {
+            texture.destroyed = true;
+          },
+        };
+        this.textures.push(texture);
+        return texture;
+      },
       createSampler: () => ({}),
-      createBuffer: (descriptor: GPUBufferDescriptor) => ({
-        label: descriptor.label ?? "",
-        bytes: new Uint8Array(descriptor.size),
-        destroy() {},
-      }),
+      createBuffer: (descriptor: GPUBufferDescriptor) => {
+        const buffer = {
+          label: descriptor.label ?? "",
+          bytes: new Uint8Array(descriptor.size),
+          destroyed: false,
+          destroy() {
+            buffer.destroyed = true;
+          },
+        };
+        return buffer;
+      },
       createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
       createBindGroupLayout: () => ({}),
       createPipelineLayout: () => ({}),
@@ -552,6 +608,10 @@ class FakeGpu {
           .map((entry) => (entry.resource as { label?: string }).label)
           .filter((label): label is string => typeof label === "string" && label.length > 0);
         this.bindings.set(group, textures);
+        this.bound.set(
+          group,
+          [...descriptor.entries].map((entry) => entry.resource),
+        );
         return group;
       },
       createCommandEncoder: () => ({
@@ -957,6 +1017,495 @@ describe("GpuScene：文本层", () => {
   });
 });
 
+// ———— GpuScene：运行中重排与重建（P6b 1e-2）————
+
+/**
+ * 假重排器：`next(object, fields)` 给新排版（null = 缺字体没排成）；照真重排器（`text/host.ts`）先放旧排版的引用，没排成时加回去。
+ * 记下每次调用的「对象:文字」。
+ */
+function fakeRelayouter() {
+  const calls: string[] = [];
+  const handler = { next: (_object: number, _fields: TextFields): TextLayout | null => null };
+  const relayouter: TextRelayouter = {
+    relayout(object, fields, previous) {
+      calls.push(`${object}:${fields.text}`);
+      releaseTextLayout(previous);
+      const layout = handler.next(object, fields);
+      if (!layout) retainTextLayout(previous);
+      return layout;
+    },
+  };
+  return { relayouter, calls, handler };
+}
+
+interface TextDrawView extends DrawView {
+  text: { indexBuffer: FakeBuffer; count: number } | null;
+  bindGroup: object | null;
+}
+interface TargetView {
+  texture: FakeTexture;
+  view: object;
+  width: number;
+  height: number;
+}
+interface LayerView {
+  object: number;
+  resources: {
+    composites: TargetView[];
+    fbos: { resolve(effect: number, name: string): number };
+    atlases?: { main: TargetView; color: TargetView | null };
+  };
+}
+const layerView = (scene: GpuScene, object: number) =>
+  (internals(scene).layers as unknown as LayerView[]).find((item) => item.object === object)!;
+const textDraw = (scene: GpuScene, object: number, part: string) => drawOf(scene, object, part) as TextDrawView;
+const targetsOf = (scene: GpuScene) => (scene as unknown as { targets: TargetView[] }).targets;
+const vertexFloats = (draw: DrawView) => Array.from(new Float32Array(draw.vertexBuffer.bytes.buffer.slice(0)));
+
+/** 带一个 fbo 的 effect：pass 0 画进 `_rt_half`（合成 RT 的一半），pass 1 读它上屏；fbo 创建后清成 (0, 0, 0, 1)。 */
+function halfFx(object: number): SceneEffect {
+  const step = (index: number) =>
+    pass(`objects/${object}/effects/0/passes/${index}`, { program: PROGRAM.effect, blending: "normal" });
+  return {
+    ...kbfx(object),
+    fbos: [{ name: "_rt_half", format: "rgba8888", scale: 2, unique: false, repeat: false, clear: [0, 0, 0, 1] }],
+    steps: [
+      { kind: "draw", pass: step(0), target: "_rt_half", compose: false, binds: null },
+      { kind: "draw", pass: step(1), target: null, compose: false, binds: [{ name: "_rt_half", index: 0 }] },
+    ],
+  };
+}
+
+/** 一个图像层（不是文本）：纯色、按 size 149×176 走合成（和 F 起初的合成 RT 同尺寸、同采样），合成 RT 与 fbo 走共享池。 */
+function imageLayer(object: number): SceneLayer {
+  return {
+    ...textLayer(object, "I", { effect: true }),
+    text: null,
+    passes: [pass(`objects/${object}/passes/0`, { program: PROGRAM.effect, blending: "translucent" })],
+    solidLayer: true,
+    size: [149, 176],
+    effects: [halfFx(object)],
+  };
+}
+
+/** 空排版（空文字：没有网格，WPE 不画这一层）。 */
+const EMPTY_LAYOUT: TextLayout = {
+  missingFonts: [],
+  mesh: null,
+  padding: [0, 0],
+  size: [2, 2],
+  compositeSize: [1, 1],
+  offset: [0, 0],
+};
+
+describe("GpuScene：文本层运行中重排与重建（P6b 1e）", () => {
+  /**
+   * 五层：P（直接上屏，3 个普通字形 + 1 个彩色字形，主图集 shared）、Q（直接上屏，没有彩色字形，图集 other）、F（合成，effect 带 fbo，主图集
+   * shared，起初 RT 149×176）、E（合成，起初空文字）、I（图像层，合成 RT 149×176 与 fbo 走共享池）。
+   */
+  function relayoutScene() {
+    const shared = new GlyphAtlas(false);
+    const colorAtlas = new GlyphAtlas(true);
+    const other = new GlyphAtlas(false);
+    const layouts = new Map<number, TextLayout>([
+      [
+        0,
+        layoutOf({
+          glyphs: glyphsIn(shared, 3),
+          colorGlyphs: glyphsIn(colorAtlas, 1, 5),
+          box: AG_BOX,
+          padding: [0, 0],
+        }),
+      ],
+      [1, layoutOf({ glyphs: glyphsIn(other, 2), box: AG_BOX, padding: [0, 0] })],
+      [2, layoutOf({ glyphs: glyphsIn(shared, 2, 10), box: AG_BOX, padding: [0, 0], offset: [0, -18] })],
+      [3, { ...EMPTY_LAYOUT }],
+    ]);
+    const f = textLayer(2, "F", { effect: true, origin: [400, 850, 0] });
+    f.effects = [halfFx(2)];
+    const layers = [textLayer(0, "P"), textLayer(1, "Q"), f, textLayer(3, "E", { effect: true }), imageLayer(4)];
+    return { bundle: bundleOf(layers), layouts, atlases: { shared, colorAtlas, other } };
+  }
+
+  async function open() {
+    const { bundle, layouts, atlases } = relayoutScene();
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const fake = fakeRelayouter();
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], {
+      ignoreUnsupported: true,
+      particles: { seed: 1 },
+      texts: layouts,
+      relayout: fake.relayouter,
+    });
+    return { gpu, scene, state, layouts, atlases, ...fake };
+  }
+
+  /** 编码一帧，返回去掉 bind / pipeline 行的轨迹。 */
+  function frame(gpu: FakeGpu, scene: GpuScene, state: SceneState): string[] {
+    scene.update(FRAME, state);
+    gpu.trace.length = 0;
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    return gpu.trace.filter((line) => !line.startsWith("  bind") && !line.startsWith("  pipeline"));
+  }
+
+  it("直接上屏换字：签名没变也重建（force）——新 draw、顶点与索引按新字数、旧缓冲当场释放；别的层不动", async () => {
+    const { gpu, scene, state, atlases, calls, handler } = await open();
+    const before = textDraw(scene, 0, "glyphs");
+    const q = textDraw(scene, 1, "glyphs");
+    handler.next = (object) =>
+      object === 0
+        ? layoutOf({
+            glyphs: glyphsIn(atlases.shared, 5, 40),
+            colorGlyphs: glyphsIn(atlases.colorAtlas, 1, 46),
+            box: AG_BOX,
+            padding: [0, 0],
+          })
+        : null;
+    state.writeText(0, "text", "fives");
+    scene.sync(state);
+    expect(calls).toEqual(["0:fives"]);
+    const after = textDraw(scene, 0, "glyphs");
+    expect(after === before).toBe(false);
+    // 5 个字形 × 4 个顶点 × 20 字节；索引 5 × 6
+    expect(after.vertexBuffer.bytes.byteLength).toBe(400);
+    expect(after.text!.count).toBe(30);
+    expect(vertexFloats(after)).toEqual(Array.from(textVertices(state.texts.get(0)!.mesh!.glyphs)));
+    expect(before.vertexBuffer.destroyed && before.text!.indexBuffer.destroyed).toBe(true);
+    expect(textDraw(scene, 0, "color").vertexBuffer.destroyed).toBe(false);
+    expect(textDraw(scene, 1, "glyphs") === q).toBe(true);
+    expect(frame(gpu, scene, state)).toEqual(
+      expect.arrayContaining(["  vertices layer 10 P text glyphs 400", "  drawIndexed 30"]),
+    );
+    expect(scene.textStats()).toMatchObject({ syncs: 1, relayouts: 1, waiting: 0, rebuilds: 1 });
+    // 强制重建不计入 effect 开关的统计
+    expect(scene.rebuildStats.count).toBe(0);
+  });
+
+  it("值没变不重排：同值写入不标脏，sync 不调重排器、不重建", async () => {
+    const { scene, state, calls } = await open();
+    const before = textDraw(scene, 0, "glyphs");
+    state.writeText(0, "text", TEXT_DEFAULTS.text);
+    state.writeText(0, "pointsize", TEXT_DEFAULTS.pointsize);
+    state.writeText(0, "padding", [...TEXT_DEFAULTS.padding]);
+    scene.sync(state);
+    expect(calls).toEqual([]);
+    expect(textDraw(scene, 0, "glyphs") === before).toBe(true);
+    expect(scene.textStats()).toMatchObject({ syncs: 0, relayouts: 0, rebuilds: 0 });
+  });
+
+  it("合成路径换尺寸：本层的合成 RT 与 fbo 换成新尺寸、旧的销毁（fbo 同一个下标、清成 clear 色），图像层共享池里的不受影响", async () => {
+    const { gpu, scene, state, atlases, handler } = await open();
+    const f = layerView(scene, 2);
+    const image = layerView(scene, 4);
+    const fboId = f.resources.fbos.resolve(0, "_rt_half");
+    const imageFbo = targetsOf(scene)[image.resources.fbos.resolve(0, "_rt_half")];
+    const oldComposite = f.resources.composites[0];
+    const oldFbo = targetsOf(scene)[fboId];
+    const imageComposite = image.resources.composites[0];
+    // 建场景时就独占（已定 6）：同尺寸、同采样，也不和图像层共用
+    expect([oldComposite.width, oldComposite.height]).toEqual([149, 176]);
+    expect([imageComposite.width, imageComposite.height]).toEqual([149, 176]);
+    expect(oldComposite === imageComposite).toBe(false);
+    expect(oldFbo === imageFbo).toBe(false);
+    expect(oldFbo.texture.label).toBe("fbo text 12|0|_rt_half|74x88|rgba8unorm|false");
+    expect(imageFbo.texture.label).toBe("fbo _rt_half|74x88|rgba8unorm|false");
+    const bytes = scene.targetBytes;
+    const wide = layoutOf({
+      glyphs: glyphsIn(atlases.shared, 2, 50),
+      box: { ...AG_BOX, maxX: 300 },
+      padding: [0, 0],
+      offset: [0, -18],
+    });
+    handler.next = (object) => (object === 2 ? wide : null);
+    state.writeText(2, "text", "wide");
+    gpu.trace.length = 0;
+    scene.sync(state);
+    const composite = f.resources.composites[0];
+    expect([composite.width, composite.height, composite.texture.size]).toEqual([300, 176, [300, 176]]);
+    expect(oldComposite.texture.destroyed).toBe(true);
+    // fbo 在同一个下标上换：对应不变，新纹理按新的合成 RT 尺寸，清成 clear 色
+    expect(f.resources.fbos.resolve(0, "_rt_half")).toBe(fboId);
+    const fbo = targetsOf(scene)[fboId];
+    expect([fbo.width, fbo.height]).toEqual([150, 88]);
+    expect(oldFbo.texture.destroyed).toBe(true);
+    expect(gpu.trace).toContain('pass fbo text 12|0|_rt_half|150x88|rgba8unorm|false clear {"r":0,"g":0,"b":0,"a":1}');
+    // 图像层的合成 RT 与 fbo（共享池）都没动
+    expect(image.resources.composites[0] === imageComposite && !imageComposite.texture.destroyed).toBe(true);
+    expect(
+      targetsOf(scene)[image.resources.fbos.resolve(0, "_rt_half")] === imageFbo && !imageFbo.texture.destroyed,
+    ).toBe(true);
+    // 显存估算：换下的减掉、新建的加上
+    expect(scene.targetBytes).toBe(bytes + (300 - 149) * 176 * 4 + (150 - 74) * 88 * 4);
+    // 画进新 RT 的正交按新尺寸（300 宽）
+    scene.update(FRAME, state);
+    const expected = textMatrices(
+      { part: "glyphs", space: "composite" },
+      new Float32Array(16),
+      new Float32Array(16),
+      wide,
+    );
+    expect(floatsOf(textDraw(scene, 2, "glyphs"), 0, 16)).toEqual(Array.from(expected.modelViewProjection));
+    const lines = frame(gpu, scene, state);
+    expect(lines).toContain("pass composite 300x176|true|false #0 load");
+    expect(lines).toContain("pass fbo text 12|0|_rt_half|150x88|rgba8unorm|false load");
+  });
+
+  it("空 → 非空、第一次出现彩色字形：步骤增加，管线加载时已备好（不报 render:variant-missing）；再变空时合成 RT 释放", async () => {
+    const { gpu, scene, state, atlases, handler } = await open();
+    expect(opKinds(scene, 3)).toEqual([]);
+    expect(layerView(scene, 3).resources.composites).toHaveLength(0);
+    expect(opKinds(scene, 1)).toEqual(["draw text glyphs"]);
+    handler.next = (object) =>
+      object === 3 || object === 1
+        ? layoutOf({
+            glyphs: glyphsIn(atlases.other, 2, 60 + object * 2),
+            colorGlyphs: glyphsIn(atlases.colorAtlas, 1, 70 + object),
+            box: AG_BOX,
+            padding: [0, 0],
+          })
+        : null;
+    state.writeText(3, "text", "hi");
+    state.writeText(1, "text", "hi");
+    expect(() => scene.sync(state)).not.toThrow();
+    expect(opKinds(scene, 3)).toEqual([
+      "snapshot",
+      "draw compose",
+      "draw text glyphs",
+      "draw text color",
+      "draw final",
+    ]);
+    expect(opKinds(scene, 1)).toEqual(["draw text glyphs", "draw text color"]);
+    expect(layerView(scene, 3).resources.composites.map((target) => [target.width, target.height])).toEqual([
+      [149, 176],
+    ]);
+    const lines = frame(gpu, scene, state);
+    expect(lines).toContain("  vertices layer 13 E text color 80");
+    expect(lines).toContain("  vertices layer 11 Q text color 80");
+    // 再变空：整层不画，合成 RT 不留
+    const composite = layerView(scene, 3).resources.composites[0];
+    handler.next = (object) => (object === 3 ? { ...EMPTY_LAYOUT } : null);
+    state.writeText(3, "text", "");
+    scene.sync(state);
+    expect(opKinds(scene, 3)).toEqual([]);
+    expect(layerView(scene, 3).resources.composites).toHaveLength(0);
+    expect(composite.texture.destroyed).toBe(true);
+  });
+
+  it("图集扩容：纹理按新尺寸重建并整张上传，同图集的另一层（F）也重建——新 UV、bind group 绑新纹理；别的图集的层不动", async () => {
+    const { gpu, scene, state, layouts, atlases, calls, handler } = await open();
+    const fBefore = textDraw(scene, 2, "glyphs");
+    const fFloats = vertexFloats(fBefore);
+    const q = textDraw(scene, 1, "glyphs");
+    const oldTexture = layerView(scene, 2).resources.atlases!.main.texture;
+    handler.next = (object) => {
+      if (object !== 0) return null;
+      // 600 像素宽的字形：512 宽的图集放不下、没有能回收的格子 → 翻倍到 1024
+      const big = atlases.shared.insert(900, 900, {
+        width: 600,
+        rows: 8,
+        left: 0,
+        top: 8,
+        mode: PIXEL_MODE_GRAY,
+        color: false,
+        pixels: new Uint8Array(600 * 8).fill(9),
+      });
+      if ("full" in big) throw new Error("图集满");
+      return layoutOf({ glyphs: [big], box: AG_BOX, padding: [0, 0] });
+    };
+    state.writeText(0, "text", "big");
+    gpu.writes.length = 0;
+    scene.sync(state);
+    expect(calls).toEqual(["0:big"]);
+    expect([atlases.shared.width, atlases.shared.height]).toEqual([1024, 1024]);
+    // 旧纹理销毁；同一标签的新纹理按新尺寸整张上传
+    expect(oldTexture.destroyed).toBe(true);
+    const main = layerView(scene, 2).resources.atlases!.main;
+    expect([main.texture.size, main.texture.destroyed, main.texture.label]).toEqual([
+      [1024, 1024],
+      false,
+      "text atlas #0",
+    ]);
+    expect(gpu.writes).toContainEqual({ texture: "text atlas #0", origin: [0, 0], size: [1024, 1024] });
+    // F 没重排（字形对象的 UV 已减半），但重建了：顶点按新 UV，bind group 绑新纹理的视图
+    const fAfter = textDraw(scene, 2, "glyphs");
+    expect(fAfter === fBefore).toBe(false);
+    expect(vertexFloats(fAfter)).toEqual(Array.from(textVertices(layouts.get(2)!.mesh!.glyphs)));
+    expect(vertexFloats(fAfter)).not.toEqual(fFloats);
+    expect(gpu.bound.get(fAfter.bindGroup!)!.includes(main.view)).toBe(true);
+    expect(textDraw(scene, 1, "glyphs") === q).toBe(true);
+    expect(scene.textStats()).toMatchObject({ relayouts: 1, rebuilds: 2 });
+  });
+
+  it("图集重置（到 4096 清空重排）：用这张图集的别的层全部重排（已定 5），别的图集的不排；连环重置时每层一次 sync 至多两次", async () => {
+    const { scene, state, atlases, calls, handler } = await open();
+    handler.next = (object) => {
+      if (object === 0) atlases.shared.resetForRelayout();
+      return object === 0 || object === 2
+        ? layoutOf({ glyphs: glyphsIn(atlases.shared, 1, 100 + calls.length), box: AG_BOX, padding: [0, 0] })
+        : null;
+    };
+    const f = textDraw(scene, 2, "glyphs");
+    state.writeText(0, "text", "r");
+    scene.sync(state);
+    expect(calls).toEqual(["0:r", "2:"]);
+    expect(textDraw(scene, 2, "glyphs") === f).toBe(false);
+    // 每次都重置：P → F → P → F，第三次轮到 P 时到了上限
+    calls.length = 0;
+    handler.next = (object) => {
+      if (object === 0 || object === 2) {
+        atlases.shared.resetForRelayout();
+        return layoutOf({ glyphs: glyphsIn(atlases.shared, 1, 200 + calls.length), box: AG_BOX, padding: [0, 0] });
+      }
+      return null;
+    };
+    state.writeText(0, "text", "rr");
+    scene.sync(state);
+    expect(calls).toEqual(["0:rr", "2:", "0:rr", "2:"]);
+  });
+
+  it("缺字体：重排器返回 null 时旧排版照画、不重建；读完后 touchText 标脏，下一次 sync 重排", async () => {
+    const { scene, state, atlases, calls, handler } = await open();
+    const layout = state.texts.get(0)!;
+    const before = textDraw(scene, 0, "glyphs");
+    state.writeText(0, "text", "中");
+    scene.sync(state);
+    expect(calls).toEqual(["0:中"]);
+    expect(state.texts.get(0) === layout).toBe(true);
+    expect(textDraw(scene, 0, "glyphs") === before).toBe(true);
+    expect(scene.textStats()).toMatchObject({ relayouts: 1, waiting: 1, rebuilds: 0 });
+    // 没有再标脏：不再调
+    scene.sync(state);
+    expect(calls).toHaveLength(1);
+    // 字体读完（宿主收到 onReady）：只标脏、不改字段
+    handler.next = (object) =>
+      object === 0 ? layoutOf({ glyphs: glyphsIn(atlases.shared, 1, 300), box: AG_BOX, padding: [0, 0] }) : null;
+    state.touchText(0);
+    expect(state.textFields.get(0)!.text).toBe("中");
+    scene.sync(state);
+    expect(calls).toEqual(["0:中", "0:中"]);
+    expect(textDraw(scene, 0, "glyphs") === before).toBe(false);
+    // 不是文本层：不标脏
+    state.touchText(4);
+    expect(state.takeDirty().texts).toEqual(new Set());
+  });
+
+  it("对齐偏移变了：本层画自己的矩阵在同一次 sync 里刷；子对象的世界矩阵不带它（P8 步骤 3）", async () => {
+    // 文本层 P 带一个子对象 C（图像层、直接上屏）：P 画自己的矩阵（`drawMatrixOf`）右乘对齐偏移，C 的世界矩阵经父链只带 P 的世界矩阵，
+    // 不带偏移（P8 步骤 3，`p8-align2` 的 Xc），所以 P 重排换了偏移后 C 不动
+    const atlas = new GlyphAtlas(false);
+    const child: SceneLayer = {
+      ...textLayer(1, "C"),
+      text: null,
+      parent: 0,
+      origin: [5, 5, 0],
+      passes: [pass("objects/1/passes/0", { program: PROGRAM.effect, blending: "translucent" })],
+      solidLayer: true,
+      size: [10, 10],
+    };
+    const bundle = bundleOf([textLayer(0, "P"), child]);
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const fake = fakeRelayouter();
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], {
+      ignoreUnsupported: true,
+      particles: { seed: 1 },
+      texts: new Map([[0, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [0, 0] })]]),
+      relayout: fake.relayouter,
+    });
+    const vp = sceneViewProjection({ width: 1920, height: 1080 });
+    const childMvp = () => Array.from(multiply(vp, worldMatrixOf(1, state.layers, new Map())));
+    scene.update(FRAME, state);
+    expect(floatsOf(drawOf(scene, 1, "direct"), 0, 16)).toEqual(childMvp());
+    fake.handler.next = (object) =>
+      object === 0
+        ? layoutOf({ glyphs: glyphsIn(atlas, 1, 400), box: AG_BOX, padding: [0, 0], offset: [10, 20] })
+        : null;
+    state.writeText(0, "text", "move");
+    scene.sync(state);
+    expect(state.layers.get(0)!.offset).toEqual([10, 20]);
+    // 这次 sync 已经把偏移的脏图层处理了：再取是空的
+    expect(state.takeDirty().layers).toEqual(new Set());
+    scene.update(FRAME, state);
+    const expected = textMatrices(
+      { part: "glyphs", space: "direct" },
+      drawMatrixOf(0, state.layers, new Map()),
+      vp,
+      state.texts.get(0)!,
+    );
+    expect(floatsOf(textDraw(scene, 0, "glyphs"), 0, 16)).toEqual(Array.from(expected.modelViewProjection));
+    // 子对象不跟偏移：世界平移仍是 P 的原点加自己的 (5, 5)，绘制的 MVP 和换偏移之前相同
+    expect(floatsOf(drawOf(scene, 1, "direct"), 0, 16)).toEqual(childMvp());
+    expect(worldMatrixOf(1, state.layers, new Map())[12]).toBe(405);
+  });
+
+  it("没有重排器：字段照存，不重排、不重建", async () => {
+    const { bundle, layouts } = relayoutScene();
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], {
+      ignoreUnsupported: true,
+      particles: { seed: 1 },
+      texts: layouts,
+    });
+    const before = textDraw(scene, 0, "glyphs");
+    state.writeText(0, "text", "x");
+    scene.sync(state);
+    expect(textDraw(scene, 0, "glyphs") === before).toBe(true);
+    expect(state.textFields.get(0)!.text).toBe("x");
+  });
+});
+
+describe("GpuScene：小文字的合成 RT 套 max(4, ·)（P6b 1e，p6b-tiny2 的 2×6 → 4×6）", () => {
+  it("合成 RT 4×6、画进 RT 的正交对着 RT 像素；上屏四边形仍是文字框 2×6；直接上屏的背景四边形 [0, 4] × [0, 6]", async () => {
+    const atlas = new GlyphAtlas(false);
+    const tinyBox = { minX: 0, minY: 0, maxX: 2, maxY: 6 };
+    const layouts = new Map<number, TextLayout>([
+      [0, layoutOf({ glyphs: glyphsIn(atlas, 1), box: tinyBox, padding: [0, 0] })],
+      [1, layoutOf({ glyphs: glyphsIn(atlas, 1, 10), box: tinyBox, padding: [0, 0] })],
+    ]);
+    const bundle = bundleOf([textLayer(0, "T", { effect: true }), textLayer(1, "B", { opaquebackground: true })]);
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], {
+      ignoreUnsupported: true,
+      particles: { seed: 1 },
+      texts: layouts,
+    });
+    // 1d 时 RT 是 2×6
+    const composite = layerView(scene, 0).resources.composites[0];
+    expect([composite.width, composite.height, composite.texture.label]).toEqual([4, 6, "composite 4x6|true|false #0"]);
+    scene.update(FRAME, state);
+    // 字形画进 RT：x 系数 2 / 4（RT 宽），y 系数 2 / 6
+    const glyphs = floatsOf(textDraw(scene, 0, "glyphs"), 0, 16);
+    const expected = textMatrices(
+      { part: "glyphs", space: "composite" },
+      new Float32Array(16),
+      new Float32Array(16),
+      layouts.get(0)!,
+    );
+    expect(glyphs).toEqual(Array.from(expected.modelViewProjection));
+    expect([glyphs[0], glyphs[5]]).toEqual([0.5, f(2 / 6)]);
+    // 上屏四边形：图层 size 2×6（±1、±3），UV 内缩按 2、6
+    const final = vertexFloats(drawOf(scene, 0, "final"));
+    const positions = [0, 1, 2, 3].map((v) => final.slice(v * 5, v * 5 + 2));
+    expect(positions).toEqual([
+      [-1, -3],
+      [1, -3],
+      [-1, 3],
+      [1, 3],
+    ]);
+    // 直接上屏的背景（flat：a_Position + a_Color）：四边形按套过 max(4, ·) 的尺寸
+    const background = vertexFloats(drawOf(scene, 1, "background"));
+    expect([0, 1, 2, 3].map((v) => background.slice(v * 7, v * 7 + 3))).toEqual([
+      [0, 6, 0],
+      [4, 6, 0],
+      [0, 0, 0],
+      [4, 0, 0],
+    ]);
+  });
+});
+
 // ———— 有 wasm 与 WPE：p6b 六个工程的排版 → 图层矩阵 ————
 
 const WASM = fileURLToPath(new URL("../wpefont/wpefont.wasm", import.meta.url));
@@ -1064,7 +1613,7 @@ describe.skipIf(!existsSync(WASM) || !root)("p6b 排版 → 图层矩阵（fixtu
           expect([f(f(ox + layout.offset[0]) + tx), f(f(oy + layout.offset[1]) + ty)].map(round3)).toEqual(
             object.origin,
           );
-          // 直接上屏的背景四边形是整数文字框（f4 事件 203 的 213×240）
+          // 直接上屏的背景四边形是整数文字框两维 max(4, ·)（f4 事件 203 的 213×240，大于 4，1e 的 max 不改它）
           if (object.background) expect(textCompositeSize(layout), `${what} 背景`).toEqual(object.background);
         }
       });

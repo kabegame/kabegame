@@ -17,6 +17,12 @@
  *     没有表时（Node 单测、dev 探针）才按 `fontsDir`，缺省 `C:\Windows\Fonts`，拼 `<目录>\<名字>`；
  *   - 其余引擎路径（回退链里的 `fonts/TwemojiMozilla.ttf`）：依次试 WPE 的 `assets` 目录（`sceneAssets`）。
  * - **失败**：wasm 不在或实例化失败、排版中 wasm 出错，抛 `SceneRenderError(["text:engine"])`，宿主照常退回预览图。
+ * - **运行中重排**（P6b 1e）：每次加载的图集留在实例上，`relayouter()` 给出绑定这次加载的重排器，经 `SceneRenderer.load` → `GpuScene.build`
+ *   的 `relayout` 交给渲染器，渲染器在 `sync` 里对排版字段变了的层调它（帧循环里，同步）。先放旧排版的字形引用再排（同 WPE「先放旧、
+ *   再排新」）；缺字体时把引用加回去、返回 null（旧排版照画），后台读字体，读完调 `onReady(对象)`，宿主把这一层重新标脏（暂停时补画
+ *   一帧），下一帧补上（WPE 同步读，第一次出现新回退字时我们晚一到几帧，1e 已定 4）。
+ *   重排器绑定加载代数：更新的加载一开始（`prepare` 开头加代数）或宿主销毁之后，旧场景的重排器不再动图集（返回 null），读完字体的回调
+ *   也丢掉——旧场景在新场景建好之前还在画，不能把字形排进新加载的图集（装箱顺序要和 WPE 一样）。
  */
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
@@ -25,8 +31,18 @@ import { SceneRenderError } from "../render/errors";
 import type { SceneReporter } from "../report";
 import { loadWpefont, wpefontLoadError, type Wpefont } from "../wpefont";
 import { TextAtlases } from "./atlas";
+import type { TextFields } from "./fields";
 import { SYSTEM_FONT_PREFIX, TextFonts, type FontPath } from "./fonts";
-import { layoutText, type TextLayout } from "./layout";
+import { layoutText, releaseTextLayout, retainTextLayout, type TextLayout } from "./layout";
+
+/**
+ * 运行中重排一层（P6b 1e，`GpuScene.build` 的 `relayout`）：按新字段重排 `object`。先放旧排版的字形引用再排（同 WPE「先放旧、再排新」）；
+ * 缺字体时把引用加回去、返回 null（旧排版照画），后台读字体，读完由宿主把这一层重新标脏。重排器过期（有更新的加载、宿主已销毁）时同样
+ * 返回 null、不动图集。
+ */
+export interface TextRelayouter {
+  relayout(object: number, fields: TextFields, previous: TextLayout): TextLayout | null;
+}
 
 /** 没有 `systemFonts` 表（Node 单测、dev 探针）也没给 `fontsDir` 时的系统字体目录（Windows 的缺省安装位置）。 */
 export const DEFAULT_SYSTEM_FONTS_DIR = "C:\\Windows\\Fonts";
@@ -51,6 +67,17 @@ export interface SceneTextsOptions {
   report?: Pick<SceneReporter, "debug" | "warn">;
   /** 取 wasm 引擎；缺省 `loadWpefont`（单测注入 Node 里编好的实例）。 */
   engine?: () => Promise<Wpefont | null>;
+  /**
+   * 运行中重排缺的字体读完了（P6b 1e）：`object` 这一层可以再排一次。宿主把它重新标脏（`SceneState.touchText`），暂停时补画一帧。
+   * 只在发起重排的那次加载仍是最新、宿主没销毁时调。
+   */
+  onReady?: (object: number) => void;
+}
+
+/** 一次加载：代数与这次新建的图集（运行中重排排进同一套图集）。 */
+interface TextLoad {
+  generation: number;
+  atlases: TextAtlases;
 }
 
 /** 路径拼接：沿用 `compile/fs.ts` 的写法（根是 Windows 路径时用反斜杠）。 */
@@ -64,18 +91,26 @@ export class SceneTexts {
   /** 当前 bundle 里主字体的位置（编译期定的，`fontPath` → 文件）。 */
   private readonly locations = new Map<FontPath, SceneFontFile>();
   private sources: TextFontSources = { sceneAssets: [] };
+  /** 加载代数（P6b 1e）：每次 `prepare` 开头加一，`dispose` 也加；重排器与读字体的回调比它，过期就不做事。 */
+  private generation = 0;
+  /** 最近一次排完的加载（`prepare` 成功返回时记下），`relayouter()` 绑它；更新的加载开始时清掉。 */
+  private current: TextLoad | null = null;
+  private disposed = false;
 
   constructor(private readonly options: SceneTextsOptions) {}
 
   /**
    * 排好 bundle 里的全部文本层（按 `objects` 顺序），返回 `objects` 下标 → 排版结果；没有文本层时返回空表、不碰 wasm。
    * `cancelled` 在每个 await 之后问一次（宿主的加载代数变了），为真时返回 null。
+   * 开头加加载代数：之前加载的重排器从这一刻起过期（P6b 1e）。
    */
   async prepare(
     bundle: Pick<SceneBundle, "layers">,
     sources: TextFontSources,
     cancelled: () => boolean = () => false,
   ): Promise<Map<number, TextLayout> | null> {
+    const generation = ++this.generation;
+    this.current = null;
     const layouts = new Map<number, TextLayout>();
     const layers = bundle.layers.filter((layer) => layer.text);
     if (!layers.length) return layouts;
@@ -106,10 +141,51 @@ export class SceneTexts {
       this.options.report?.warn("场景文本排版失败：", error);
       throw new SceneRenderError(["text:engine"]);
     }
+    // 排完才记：读字体的 await 期间有更新的加载开始时，代数已经不是这一次的
+    if (generation === this.generation && !this.disposed) this.current = { generation, atlases };
     this.options.report?.debug(
       `场景文本：${layers.length} 层，图集 ${atlases.all().length} 组，用时 ${Math.round(performance.now() - started)} ms`,
     );
     return layouts;
+  }
+
+  /**
+   * 最近一次加载的重排器（P6b 1e，交给 `GpuScene.build` 的 `relayout`）：排进这次加载的图集。绑定加载代数，而不是让渲染器直接调
+   * `SceneTexts`：重编译时旧场景在新场景建好之前还在画，它的重排不能落进新加载的图集。没有排完的加载（没有文本层、被取代、出错）时为 null。
+   */
+  relayouter(): TextRelayouter | null {
+    const load = this.current;
+    if (!load) return null;
+    return { relayout: (object, fields, previous) => this.relayoutIn(load, object, fields, previous) };
+  }
+
+  /**
+   * 重排一层（`TextRelayouter.relayout`）：过期（有更新的加载、已销毁）返回 null、不动图集。否则先放旧排版的引用再排；排版出错、或缺字体
+   * （`layoutText` 不碰图集）时把引用加回去、返回 null。缺字体时后台读，读完（这次加载仍是最新、没销毁）调 `onReady(object)`。
+   */
+  private relayoutIn(load: TextLoad, object: number, fields: TextFields, previous: TextLayout): TextLayout | null {
+    const fonts = this.fonts;
+    if (this.disposed || !fonts || load.generation !== this.generation) return null;
+    releaseTextLayout(previous);
+    let layout: TextLayout;
+    try {
+      layout = layoutText(fields, fonts, load.atlases);
+    } catch (error) {
+      retainTextLayout(previous);
+      this.options.report?.warn(`场景文本重排失败（对象 ${object}）：`, error);
+      return null;
+    }
+    if (!layout.missingFonts.length) return layout;
+    retainTextLayout(previous);
+    // 读取器的抛错 `TextFonts.load` 已当读不到，这里的拒绝回调只兜底
+    fonts.load(layout.missingFonts).then(
+      () => {
+        if (this.disposed || load.generation !== this.generation) return;
+        this.options.onReady?.(object);
+      },
+      () => {},
+    );
+    return null;
   }
 
   /** wasm 引擎与字体缓存：第一次用时建，之后跨重编译保留。wasm 不在或实例化失败抛 `text:engine`。 */
@@ -153,8 +229,11 @@ export class SceneTexts {
     return null;
   }
 
-  /** 释放 face 与字体字节（宿主销毁时）；wasm 实例是全宿主共用的，不在这里丢。 */
+  /** 释放 face 与字体字节（宿主销毁时）；wasm 实例是全宿主共用的，不在这里丢。之后重排器不再工作、读完字体的回调不再调（P6b 1e）。 */
   dispose(): void {
+    this.disposed = true;
+    this.generation++;
+    this.current = null;
     this.fonts?.dispose();
     this.fonts = null;
     this.locations.clear();

@@ -52,7 +52,8 @@
  *   见 `TextStep`），尺寸来自排版（`TextLayout.size`、`compositeSize`），不来自 JSON 的 `size`；排版为空时整层不画。直接上屏是
  *   `[背景] → 普通字形 → [彩色字形]`；合成路径的基础 pass 是「清成背景色」（开了 `opaquebackground`）或 `composelayer_clearalpha`
  *   （`compose` 角色，读快照），之后字形画进同一张合成 RT，effect 链、passthrough 与上屏照图像层（上屏借 `basefont` 的 translucent，
- *   UV 内缩的分母是文字框的整数部分）。文本层的 effect 开关会改 `padding` 与文字框，切换走整场重编译，不预备变体。
+ *   UV 内缩的分母是文字框的整数部分）。合成 RT 是排版的 `compositeSize` 两维 `max(4, ·)`（P6b 1e，`textCompositeSize`）。文本层的
+ *   effect 开关会改 `padding` 与文字框，切换走整场重编译；运行中重排（1e）会增减步骤，`variantPlans` 按「两种字形都有」备好全部管线。
  * - **模型层**（P5c 步骤 2，`SceneLayer.model`，`planModelLayer`）：每个网格一个 `mesh` 步骤，顺序是编译期排好的 `model.order`（不透明在前，
  *   MSVC `std::sort`），全部直接画到场景目标，和图像步骤、粒子同样按 `objects` 顺序。没有合成路径：WPE 的模型对象不读 `effects`（编译期报
  *   `model:effects`），也没有 colorBlendMode 的上屏（rea-p5-mesh 2.6）。
@@ -182,8 +183,9 @@ export interface ParticleStep {
 /**
  * 文本层的一次绘制（P6b 1d，rea-p6b-layout 3.2、4、5）：几何不是图层四边形，是排版出的逐字四边形（`text/layout.ts` 的 `TextMesh`，
  * 每字形 4 个顶点、6 个索引，三角形列表，`text/mesh.ts` 的顺序），或背景的一个四边形。一个文本层最多三次：
- * - `background`：`fontbackground`（`flat` 着色器），只在直接上屏且开了 `opaquebackground` 时画，四边形是整数文字框
- *   （`compositeSize`），平移 `(−w/2 − pad.x, −h/2 − pad.y)`；
+ * - `background`：`fontbackground`（`flat` 着色器），只在直接上屏且开了 `opaquebackground` 时画，四边形是 `[0, W] × [0, H]`，W、H 是
+ *   `textCompositeSize`（整数文字框两维 `max(4, ·)`，WPE 的 `+0x2d8` 由 `FUN_1401ea500` 用改过的值建，P6b 1e），平移
+ *   `(−w/2 − pad.x, −h/2 − pad.y)`；
  * - `glyphs`：`basefont`，槽 0 是 R8 主图集；
  * - `color`：`basefontrgba`，槽 0 是 RGBA8 彩色图集，有彩色字形时才画，在普通字形之后。
  * `space`：`direct` 画到场景目标，矩阵是图层 MVP（画自己的矩阵含排版的对齐偏移，`drawMatrixOf`）× 平移 `directTranslation`；`composite` 画进合成 RT，矩阵是
@@ -294,12 +296,18 @@ export function compositeSampling(
 }
 
 /**
- * 文本层的合成 RT 尺寸（P6b 1d）：排版的 `compositeSize`（`trunc(2·padding + 文字框)`，rea-p6b-layout 3.1 `FUN_140258ab0`），WPE 不套
- * max(4, ·)；这里只保证至少 1（纹理尺寸不能为 0）。fbo 按它算（`fboSize`）。
+ * 文本层的合成 RT 尺寸（P6b 1d，1e 改）：排版的 `compositeSize`（`trunc(2·padding + 文字框)`，rea-p6b-layout 3.1 `FUN_140258ab0`，WPE 的
+ * `+0x128` 查询）再两维各取 `max(4, ·)`。`max(4, ·)` 在唯一的调用者 `FUN_1401ea500` 里（`0x1401ea5dc`–`0x1401ea628` 把查询结果原地改成
+ * `max(4, ·)`，rea-p8-layer 1.2），之后合成 RT、effect fbo 的基准尺寸与 `+0x2d8` 四边形（直接上屏的背景，`0x1401eb1b2` / `0x1401eb1bf`
+ * 读的是改过的值）都用它；1d 写「不套」是错的，1e 的 WPE 实验（`p6b-tiny2`：宽 2–3 像素的文字合成 RT 都是 4×6）印证。
+ * 用它的地方：合成 RT（`planLayer`）、fbo 的基准（`fboSize`）、画进合成 RT 的正交投影（`textMatrices`，对着 RT 像素）、直接上屏的背景
+ * 四边形。不用它的：图层尺寸 `TextLayout.size`（上屏四边形、clearalpha 四边形、矩阵）与上屏的 UV 内缩（分母是 `size` 的整数部分，
+ * `FUN_140258900` 交给 `+0xb0` 的是没套过的整数）。截断成整数以后不是有限数（NaN、无穷）时同 WPE 的 `cvttss2si`（得 `INT_MIN`）取 4。
  */
 export function textCompositeSize(layout: Pick<TextPlanLayout, "compositeSize">): [number, number] {
   const [w = 1, h = 1] = layout.compositeSize;
-  return [Math.max(1, w), Math.max(1, h)];
+  const atLeast4 = (value: number) => (Number.isFinite(value) ? Math.max(4, value) : 4);
+  return [atLeast4(w), atLeast4(h)];
 }
 
 /**
@@ -830,18 +838,36 @@ export function planLayer(
     }
   } else if (finalEffect < 0) reasons.push("render:no-final-pass");
 
-  // 文本层的合成 RT 取排版的 `compositeSize`（WPE 截断取整、不套 max(4, ·)，rea-p6b-layout 3.1）
+  // 文本层的合成 RT 取排版的 `compositeSize` 再两维 `max(4, ·)`（P6b 1e，`textCompositeSize`）
   const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(layer, baseTexture);
   return { composite: { count: Math.min(2, writes), width, height }, steps, reasons };
 }
 
 /**
+ * 文本层运行中可能出现的全部步骤（P6b 1e）：「普通字形与彩色字形都有」的假想排版，尺寸取 `text`（当前排版，没有时取空排版的尺寸）。
+ * 尺寸、字数只进 RT 尺寸与内缩，不进管线键，所以一份就够。
+ */
+function textVariantLayout(text: TextPlanLayout | null): TextPlanLayout {
+  return {
+    mesh: { glyphs: [0], colorGlyphs: [0] },
+    size: text?.size ?? [2, 2],
+    compositeSize: text?.compositeSize ?? [1, 1],
+  };
+}
+
+/**
  * 图层运行时可能用到的计划；没有可变 effect 时为空。管线键只取决于 pass 和角色，不用枚举全部组合（见函数内）。
  * 带不支持项的 effect 打开时整场重编译，不算可变。
+ * 文本层（P6b 1e）另给一份：effect 开关仍走整场重编译（会改 `padding` 与文字框，`SceneState.fromBundle` 冻结了它），运行中变的只有排版——
+ * 空 ↔ 非空、第一次出现彩色字形时步骤增减。按「两种字形都有」的假想排版给计划（`text` 是当前排版，只取尺寸），加载时备好背景 / clearalpha /
+ * 字形 / 彩色字形 / 上屏的全部管线，重建时不会缺（`render:variant-missing`）。
  */
-export function variantPlans(layer: SceneLayer, textures: readonly TextureSize[]): LayerPlan[] {
-  // 文本层（P6b 1d）的 effect 开关会改 `padding` 与文字框，切换走整场重编译（`SceneState.fromBundle` 冻结了它），不预备变体
-  if (layer.text) return [];
+export function variantPlans(
+  layer: SceneLayer,
+  textures: readonly TextureSize[],
+  text: TextPlanLayout | null = null,
+): LayerPlan[] {
+  if (layer.text) return [planLayer(layer, textures, undefined, textVariantLayout(text))];
   // 形状层（P8 步骤 2）：effect 开关对它中性（`planShapeLayer` 不看），没有变体
   if (layer.shape) return [];
   // dev 强制渲染时开着的 effect 可以带不支持项，它能就地关掉（`SceneState.needsRecompile`），所以也算可变

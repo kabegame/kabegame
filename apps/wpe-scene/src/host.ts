@@ -29,7 +29,7 @@ import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { browserStorage, clearSceneStorage } from "./script/storage";
 import { textFieldFromScript } from "./text/fields";
-import { SceneTexts } from "./text/host";
+import { SceneTexts, type TextRelayouter } from "./text/host";
 import type { TextLayout } from "./text/layout";
 import { videoSourceKey } from "./video/player";
 import { SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
@@ -159,6 +159,7 @@ export class SceneHost {
   private hidden = false;
   /**
    * 文本对象的排版（P6b 1d，`text/host.ts`）：第一张带文本层的 bundle 到达时建，wasm 实例与读过的字体跨重编译保留，每次加载新建图集。
+   * 运行中重排（1e）：每次加载的重排器（`relayouter()`）随 `load` 交给渲染器，缺字体读完经 `onTextReady` 标脏。
    */
   private sceneTexts: SceneTexts | null = null;
   /**
@@ -688,6 +689,19 @@ export class SceneHost {
   }
 
   /**
+   * 运行中重排缺的字体读完了（P6b 1e，`SceneTexts` 的 `onReady`，只在发起重排的那次加载仍是最新时到达）：把那一层重新标脏，下一次 `sync`
+   * 再排。暂停时循环不跑，补画一帧（同属性就地写）。场景已经换成没有这一层的时，`touchText` 不做事。
+   */
+  private onTextReady(object: number): void {
+    if (this.disposed) return;
+    const renderer = this.renderer;
+    const state = renderer?.sceneState;
+    if (!renderer || !state) return;
+    state.touchText(object);
+    if (this.paused) renderer.redraw();
+  }
+
+  /**
    * 换上 bundle 的声音表：没有声音的场景不建播放器。宿主收到 bundle 就开始，不等 GPU 资源（WPE 加载时就开始放，不等第一帧）。
    * 同一对象的排期器跨重编译保留（`SceneSounds.load`）。
    */
@@ -921,11 +935,18 @@ export class SceneHost {
       // 文本（P6b 1d）：排版要 wasm 与字体字节，在声音、脚本与 GPU 资源之前排好（读字体是异步的，之后比代数）。wasm 不在或排版
       // 出错时抛 `text:engine`，由下面的 catch 退回预览图
       let texts: Map<number, TextLayout> | undefined;
+      // 运行中重排（P6b 1e）：绑定这次加载的图集，交给渲染器；缺字体读完时 `onTextReady` 把那一层重新标脏
+      let relayout: TextRelayouter | undefined;
       if (bundle.layers.some((layer) => layer.text)) {
-        this.sceneTexts ??= new SceneTexts({ reader: this.reader, report: this.options.report });
+        this.sceneTexts ??= new SceneTexts({
+          reader: this.reader,
+          report: this.options.report,
+          onReady: (object) => this.onTextReady(object),
+        });
         const prepared = await this.sceneTexts.prepare(bundle, target, () => id !== this.generation);
         if (id !== this.generation || !prepared) return;
         texts = prepared;
+        relayout = this.sceneTexts.relayouter() ?? undefined;
       }
       // 声音在对象加载时就开始（WPE 不等第一帧），在脚本与 GPU 资源之前
       this.loadSounds(bundle);
@@ -946,6 +967,7 @@ export class SceneHost {
       await current.load(bundle, {
         ignoreUnsupported: force,
         texts,
+        relayout,
         beforeFirstFrame: (state) => {
           // 渲染器从这一帧起画这份 bundle：视频的下标按它换算（`videoSink`）
           this.drawingBundle = bundle;

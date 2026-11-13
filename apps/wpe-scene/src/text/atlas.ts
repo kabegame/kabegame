@@ -92,6 +92,11 @@ export class GlyphAtlas {
   private readonly rows: AtlasRow[] = [];
   /** 扩容次数：变了说明尺寸与全部 UV 都变了，纹理要重建、用到它的网格要重写 UV。 */
   generation = 0;
+  /**
+   * 到 4096 还放不下、清空重排的次数（{@link resetForRelayout}，P6b 1e）：变了说明别的层正在用的字形也被标成回收、像素可能被覆盖，
+   * 渲染器把用这张图集的层全部重排（1e 已定 5）。
+   */
+  resets = 0;
   /** 有改动没上传（WPE 的 `A + 0x20`，它每次整张上传）。 */
   dirty = false;
   private dirtyRects: AtlasRect[] = [];
@@ -336,6 +341,7 @@ export class GlyphAtlas {
   resetForRelayout(): void {
     for (const row of this.rows) row.cells = [];
     for (const glyph of this.glyphs.values()) glyph.recycled = true;
+    this.resets++;
   }
 }
 

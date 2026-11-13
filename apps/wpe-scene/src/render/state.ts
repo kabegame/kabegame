@@ -384,6 +384,14 @@ export class SceneState {
   }
 
   /**
+   * 不改字段、只把这一层标进 `dirtyTexts`（P6b 1e）：运行中重排缺的字体读完了（宿主收到 `SceneTexts` 的 `onReady`），下一次 `sync`
+   * 按当前字段再排一次。不是 bundle 里的文本层时不做事（回调到达时场景可能已经换了）。
+   */
+  touchText(object: number): void {
+    if (this.textFields.has(object)) this.dirtyTexts.add(object);
+  }
+
+  /**
    * 换上一层运行中重排的结果（P6b 1e，渲染器处理 `dirty.texts` 时调）：记下 `TextLayout`、写对齐偏移；偏移变了，本层画自己的矩阵跟着变，
    * 标进脏图层。子孙的世界矩阵不带它（P8 步骤 3，`p8-align2` 的 Xc），文本层也不会是组，所以只标本层。不是 bundle 里的文本层时不做事。
    */

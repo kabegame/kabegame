@@ -10,6 +10,7 @@ import {
   hostRenderFrame,
   hostState,
   hostStats,
+  hostTexts,
   particleTrackProbe,
   probeChunk,
   probeKeys,
@@ -47,6 +48,8 @@ export function installSceneDevProbe(host: SceneHost): void {
       read: (path: string) => host.readTarget(path),
       /** P4a 步骤 5：粒子数量与分布、开销记录（`{ profile: true }` 开始，`false` 停止）、当前 instanceoverride。 */
       particles: (options?: { profile?: boolean }) => hostParticles(host, options),
+      /** P6b 1e：文本层运行中重排的次数与用时（`GpuScene.textStats`），以及每个文本层当前的文字、字号与排版尺寸。 */
+      texts: () => hostTexts(host),
     },
   };
 }

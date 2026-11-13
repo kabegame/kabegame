@@ -105,6 +105,13 @@
  *   （`textMatrices`）。字形图集是第一种运行时纹理（`render/text.ts`）：每个 `GlyphAtlas` 对象一张，同一「字体 + 字号」的层共用，建场景
  *   时整张上传，`sync` 按脏区增量上传；`atlas` 引用经图层资源解析。文本层的图层四边形、合成 RT 与 fbo 都按排版的尺寸；开了背景、走合成
  *   时 `clear` op 每帧按背景常量与图层 alpha 现算清屏色。
+ *   运行中重排（P6b 1e）：`build` 的 `relayout`（宿主 `SceneTexts.relayouter()`）是重排器。`sync` 最先处理 `dirty.texts`：逐层按
+ *   `SceneState.textFields` 重排、`setText` 换进状态（偏移变了本层与子孙的矩阵跟着刷，同一次 `sync`）；某张图集因到 4096 清空重排过
+ *   （`GlyphAtlas.resets` 变了）时用它的别的层也重排（已定 5）；缺字体时重排器返回 null，旧排版照画，宿主读完字体再标脏。之后图集纹理
+ *   增量上传，扩容了的重建纹理、用它的层一起重建；最后对这些层 `rebuildLayer(…, { force: true })`：整层重建 draw（新顶点、新索引），
+ *   合成 RT 与 effect fbo 由本层独占、不进共享池（建场景时也一样，已定 6），尺寸和新排版不同就销毁旧的、按新尺寸建，图集按新排版重新取。
+ *   `prepareVariants` 对文本层按「两种字形都有」的假想排版备好全部步骤的管线，运行中步骤增减不会缺管线。合成 RT 是排版的 `compositeSize`
+ *   两维 `max(4, ·)`（`graph.ts` 的 `textCompositeSize`）。重排与重建的次数与用时由 `textStats()` 给 dev 探针。
  * - 模型（P5c 步骤 2，p5-REPORT「P5c 语义的实测核对」）：模型层是一个 `model` op，编码时先做视锥剔除（`render/mesh.ts` 的
  *   `frustumCulled`，平面取场景级的视图投影），没被剔就按 `model.order` 画各网格，和图像步骤、粒子在同一个场景 pass 里按 `objects` 顺序。
  *   网格的顶点与索引是 mdl 的字节原样上传，按文件缓冲上的视图去重（同一个 mdl 的几个对象共用一份，`meshBuffer`），随场景销毁；
@@ -123,7 +130,7 @@
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
-import type { SceneBundle, SceneLayer, SceneModel, ScenePass, SceneTexture } from "../compile/bundle";
+import type { SceneBundle, SceneFbo, SceneLayer, SceneModel, ScenePass, SceneTexture } from "../compile/bundle";
 import type { ParticleRenderer, SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
@@ -141,6 +148,8 @@ import {
   writeVertices,
   type ParticleVertexLayout,
 } from "../particles/vertices";
+import type { GlyphAtlas } from "../text/atlas";
+import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
 import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
@@ -190,7 +199,7 @@ import {
   SCENE_DEPTH_FORMAT,
   type GpuProgram,
 } from "./programs";
-import type { LayerState, SceneState } from "./state";
+import type { DirtyState, LayerState, SceneState } from "./state";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
 import {
@@ -265,7 +274,8 @@ interface RenderTarget {
 
 /**
  * 一个图层用到的合成 RT（可能来自共享池）与 fbo 名 → `targets` 下标的对应。
- * 跨单图层重建保留：合成 RT 只增不减，fbo 的 swap 状态不丢。
+ * 跨单图层重建保留：合成 RT 只增不减，fbo 的 swap 状态不丢。文本层（P6b 1e）的合成 RT 与 fbo 由本层独占，排版尺寸变了就换成新尺寸的
+ * （fbo 在同一个下标上换，对应与 swap 状态不丢），图集随排版重新取。
  */
 interface LayerResources {
   composites: RenderTarget[];
@@ -427,6 +437,51 @@ const PARTICLE_TIMING_FRAMES = 600;
 function recordSample(list: number[], value: number): void {
   list.push(value);
   if (list.length > PARTICLE_TIMING_FRAMES) list.splice(0, list.length - PARTICLE_TIMING_FRAMES);
+}
+
+/**
+ * 文本层独占的一个 effect fbo（P6b 1e，已定 6）：在 `GpuScene.targets` 里的下标、所属 effect（`layer.effects` 下标）与定义。排版的合成 RT
+ * 尺寸变了时按新尺寸在同一个下标上换一张（`FboBindings` 的对应与 swap 状态不变）。
+ */
+interface TextFbo {
+  id: number;
+  effect: number;
+  fbo: SceneFbo;
+}
+
+/** fbo 的纹理格式：`FBO_FORMATS` 的 GPU 格式，不认识的按 rgba8unorm。 */
+function fboFormatOf(fbo: SceneFbo): GPUTextureFormat {
+  return (FBO_FORMATS[fbo.format]?.gpu ?? "rgba8unorm") as GPUTextureFormat;
+}
+
+/**
+ * 一层在一次 `sync` 里最多重排几次（P6b 1e）：图集重置（已定 5）会让这次已经排过的层再排一次；再排还连环重置时停下，留到下一次脏。
+ */
+const TEXT_RELAYOUT_LIMIT = 2;
+
+/** 几份排版用到的图集（主图集与彩色图集，去重）；空排版、null 不算。 */
+function layoutAtlases(...layouts: (TextLayout | null | undefined)[]): GlyphAtlas[] {
+  const out = new Set<GlyphAtlas>();
+  for (const layout of layouts) {
+    const mesh = layout?.mesh;
+    if (!mesh) continue;
+    out.add(mesh.atlas);
+    if (mesh.colorAtlas) out.add(mesh.colorAtlas);
+  }
+  return [...out];
+}
+
+/**
+ * 把同一次 `sync` 里第二次取走的脏项并进第一次的（P6b 1e：`setText` 标的脏图层要在这一次 `sync` 里刷）。`texts` 不并：文本已经处理过，
+ * 调用方把它们重新标回状态（留给下一次 `sync`）。
+ */
+function mergeDirty(into: DirtyState, from: DirtyState): void {
+  for (const item of from.layers) into.layers.add(item);
+  for (const item of from.passes) into.passes.add(item);
+  for (const item of from.structures) into.structures.add(item);
+  for (const item of from.particles) into.particles.add(item);
+  into.bloom ||= from.bloom;
+  into.lights ||= from.lights;
 }
 
 /** 一组样本的均值、p95 与最大值（保留两位小数）；没有样本时都是 0。 */
@@ -937,6 +992,16 @@ export class GpuScene {
   private readonly runtimeByObject = new Map<number, LayerRuntime>();
   /** 文本层的字形图集纹理（P6b 1d，`render/text.ts`），按图集对象共享；`populate` 里建。 */
   private atlasTextures: TextAtlasTextures | null = null;
+  /** 运行中重排的重排器（P6b 1e，`build` 的 `relayout`）；没有时文本字段变了也不重排（dev 探针、单测）。 */
+  private relayouter: TextRelayouter | null = null;
+  /** 文本层独占的 effect fbo（P6b 1e），按 `objects` 下标：排版尺寸变了按新尺寸原地换（`resizeTextFbos`）。 */
+  private readonly textFbos = new Map<number, TextFbo[]>();
+  /** 上次看到的图集重置次数（`GlyphAtlas.resets`，P6b 1e 已定 5）：建场景时记下，变了就把用这张图集的层全部重排。 */
+  private readonly atlasResets = new Map<GlyphAtlas, number>();
+  /** 运行中重排的累计数（P6b 1e，`textStats`）：有重排或重建的 `sync` 次数、重排调用次数、缺字体没排成的次数、重建的层数。 */
+  private readonly textCounts = { syncs: 0, relayouts: 0, waiting: 0, rebuilds: 0 };
+  /** 每次有重排或重建的 `sync` 的样本（最近 600 次）：重排的层数、重排与重建的用时（毫秒）。 */
+  private readonly textTimings = { layers: [] as number[], relayoutMs: [] as number[], rebuildMs: [] as number[] };
   /** 视频纹理的帧来源（P9a，`setVideoSink`）；null 时视频纹理保持全 0。 */
   private videoSink: VideoSink | null = null;
   /** 已经记过 warning 的视频纹理（`size:<下标>` / `copy:<下标>`）：每张纹理每种只记一次。 */
@@ -1033,12 +1098,20 @@ export class GpuScene {
        * 渲染图、对齐偏移与图集都从那里取。文本层没有排版结果时整场画不了（`render:text-layout`）。
        */
       texts?: ReadonlyMap<number, TextLayout>;
+      /**
+       * 运行中重排（P6b 1e）：宿主的 `SceneTexts.relayouter()`，排进 `texts` 那次加载的图集。`sync` 对排版字段变了的文本层调它；不给时
+       * 字段变了也不重排。
+       */
+      relayout?: TextRelayouter;
     } = {},
   ): Promise<GpuScene> {
     if (options.texts) state.setTexts(options.texts);
     const reasons = checkRenderable(bundle, features, { ...options, texts: state.texts });
     if (reasons.length) throw new SceneRenderError(reasons);
     const scene = new GpuScene(device, bundle, warnings, options.particles ?? {});
+    scene.relayouter = options.relayout ?? null;
+    // 加载时（宿主排版期间）的图集重置不算：运行中重置了才连带重排
+    for (const atlas of layoutAtlases(...state.texts.values())) scene.atlasResets.set(atlas, atlas.resets);
     device.pushErrorScope("out-of-memory");
     device.pushErrorScope("validation");
     let failure: unknown = null;
@@ -1124,6 +1197,40 @@ export class GpuScene {
     );
     this.targetBytes += width * height * texelBytes(format);
     return { texture, view: texture.createView(), width, height, format, sampler };
+  }
+
+  /** 提前释放一张 `createTarget` 建的目标（P6b 1e：文本层独占的合成 RT 与 fbo 换尺寸时），显存估算一并减掉。 */
+  private releaseTarget(target: RenderTarget): void {
+    this.targetBytes -= target.width * target.height * texelBytes(target.format);
+    this.release(target.texture);
+  }
+
+  /**
+   * 建一个 effect fbo 的渲染目标（`populate` 的共享池与文本层的独占 fbo 共用，P6b 1e 从 `populate` 抽出）：尺寸已按合成 RT 算好
+   * （`fboSize`），寻址看 `repeat`、线性过滤，创建后清成 `clear` 色（没写时 WebGPU 纹理本来就是全 0）。
+   */
+  private createFbo(
+    fbo: SceneFbo,
+    [width, height]: readonly [number, number],
+    format: GPUTextureFormat,
+    key: string,
+    encoder: GPUCommandEncoder,
+  ): RenderTarget {
+    const address: GPUAddressMode = fbo.repeat ? "repeat" : "clamp-to-edge";
+    const target = this.createTarget(
+      `fbo ${key}`,
+      width,
+      height,
+      format,
+      this.sampler({
+        addressModeU: address,
+        addressModeV: address,
+        magFilter: "linear",
+        minFilter: "linear",
+      }),
+    );
+    if (fbo.clear) this.clearTarget(encoder, target, fbo.clear, `clear ${key}`);
+    return target;
   }
 
   private sampler(descriptor: GPUSamplerDescriptor): GPUSampler {
@@ -1271,9 +1378,13 @@ export class GpuScene {
     return base === undefined ? undefined : this.bundle.textures[base];
   }
 
-  /** 本图层的合成 RT 至少 `plan.composite.count` 张，不够就从共享池补。 */
+  /** 本图层的合成 RT 至少 `plan.composite.count` 张，不够就从共享池补。文本层的由本层独占（`ensureTextComposites`，P6b 1e）。 */
   private ensureComposites(runtime: LayerRuntime, plan: LayerPlan): void {
     if (!plan.composite) return;
+    if (runtime.layer.text) {
+      this.ensureTextComposites(runtime, plan.composite);
+      return;
+    }
     const { width, height, count } = plan.composite;
     // 合成 RT 的采样（P8 步骤 1，p8-REPORT、rea-p8-layer §3）：寻址只看对象 clampuvs（缺省钳制），过滤在对象 nointerpolation 或
     // 基础纹理 NoInterpolation 时最近邻
@@ -1298,6 +1409,114 @@ export class GpuScene {
       );
     const { composites } = runtime.resources;
     composites.push(...pool.slice(composites.length, count));
+  }
+
+  /**
+   * 文本层的合成 RT（P6b 1e，已定 6）：本层独占、不进共享池。尺寸会随文字变，共享池只增不减，按尺寸共享的话时钟每换一个宽度就多攒
+   * 一张；独占后尺寸变了就销毁旧的（已提交的帧不受影响）、按新尺寸建，内存有界（WPE 每次重排也重新分配，rea-p8-layer `+0xb8`）。
+   * 采样与标签照共享池的写法（组里另加层数），只是每层一组。
+   */
+  private ensureTextComposites(
+    runtime: LayerRuntime,
+    { width, height, count }: NonNullable<LayerPlan["composite"]>,
+  ): void {
+    const { composites } = runtime.resources;
+    if (composites.some((target) => target.width !== width || target.height !== height))
+      for (const target of composites.splice(0)) this.releaseTarget(target);
+    const { clamp, nearest } = compositeSampling(runtime.layer, this.baseTexture(runtime.layer));
+    const depth = this.groupDepth(runtime.layer);
+    const key = `${width}x${height}|${clamp}|${nearest}${depth ? `|k${depth}` : ""}`;
+    const address: GPUAddressMode = clamp ? "clamp-to-edge" : "repeat";
+    const filter: GPUFilterMode = nearest ? "nearest" : "linear";
+    while (composites.length < count)
+      composites.push(
+        this.createTarget(
+          `composite ${key} #${composites.length}`,
+          width,
+          height,
+          this.format,
+          this.sampler({ addressModeU: address, addressModeV: address, magFilter: filter, minFilter: filter }),
+        ),
+      );
+  }
+
+  /** 文本层的一个独占 fbo（P6b 1e）：按合成 RT 尺寸 `size` 算 fbo 尺寸（`fboSize`），标签带图层 id 与 effect 下标。 */
+  private createTextFbo(
+    layer: SceneLayer,
+    effect: number,
+    fbo: SceneFbo,
+    size: readonly [number, number],
+    encoder: GPUCommandEncoder,
+  ): RenderTarget {
+    const [fw, fh] = fboSize(fbo, size);
+    const format = fboFormatOf(fbo);
+    return this.createFbo(
+      fbo,
+      [fw, fh],
+      format,
+      `text ${layer.id}|${effect}|${fbo.name}|${fw}x${fh}|${format}|${fbo.repeat}`,
+      encoder,
+    );
+  }
+
+  /**
+   * 建场景时给文本层建独占的 effect fbo（P6b 1e，已定 6）：全部 effect（关着的也建，同共享池的规则），每个 effect 的每个名字一张，不和别的
+   * 图层、也不和本层别的 effect 共用；记进 `textFbos`，之后尺寸变了原地换。
+   */
+  private createTextFbos(
+    layer: SceneLayer,
+    size: readonly [number, number],
+    encoder: GPUCommandEncoder,
+  ): Map<string, number>[] {
+    const records: TextFbo[] = [];
+    const maps = layer.effects.map(
+      (effect, e) =>
+        new Map(
+          effect.fbos.map((fbo) => {
+            const id = this.targets.length;
+            this.targets.push(this.createTextFbo(layer, e, fbo, size, encoder));
+            records.push({ id, effect: e, fbo });
+            return [fbo.name, id] as const;
+          }),
+        ),
+    );
+    this.textFbos.set(layer.object, records);
+    return maps;
+  }
+
+  /**
+   * 文本层的 fbo 按新的合成 RT 尺寸换（P6b 1e）：尺寸没变的不动（内容与 swap 状态保留）；变了的销毁旧的、在同一个下标上建新的并清成 `clear`
+   * 色（`FboBindings` 的对应不变，新 draw 的 bind group 取到新纹理）。清屏提交在这一帧的绘制之前。
+   */
+  private resizeTextFbos(object: number, size: readonly [number, number]): void {
+    const records = this.textFbos.get(object);
+    const layer = this.layerByObject.get(object);
+    if (!records?.length || !layer) return;
+    let encoder: GPUCommandEncoder | null = null;
+    for (const record of records) {
+      const [fw, fh] = fboSize(record.fbo, size);
+      const current = this.targets[record.id];
+      if (current.width === fw && current.height === fh) continue;
+      this.releaseTarget(current);
+      encoder ??= this.device.createCommandEncoder({ label: "text fbo resize" });
+      this.targets[record.id] = this.createTextFbo(layer, record.effect, record.fbo, size, encoder);
+    }
+    if (encoder) this.device.queue.submit([encoder.finish()]);
+  }
+
+  /**
+   * 文本层按当前排版换资源（P6b 1e，`rebuildLayer` 在建 draw 之前调）：图集按新排版重新取（换字号是新图集、扩容后是新纹理，排版为空时没有）；
+   * 计划没有合成路径（空文字）时不留合成 RT（有合成时 `buildLayer` → `ensureTextComposites` 按新尺寸换）；fbo 按新的合成 RT 尺寸换（全部
+   * effect 关着时也按它，同 `populate`）。
+   */
+  private ensureTextResources(runtime: LayerRuntime, plan: LayerPlan, state: SceneState): void {
+    const layout = state.texts.get(runtime.object);
+    const { resources } = runtime;
+    const { atlases } = this.textAtlasesOf(layout);
+    if (atlases) resources.atlases = atlases;
+    else delete resources.atlases;
+    if (!plan.composite) for (const target of resources.composites.splice(0)) this.releaseTarget(target);
+    if (layout) this.resizeTextFbos(runtime.object, textCompositeSize(layout));
   }
 
   /** 这个图层在当前开关下的计划：`planLayer` 的回调给 `layer.effects` 下标，状态按 scene.json 坐标（`source`）存。 */
@@ -1361,10 +1580,15 @@ export class GpuScene {
     return prepared;
   }
 
-  /** 关着的 effect 也在加载时备好（WPE 同样）。逐图层进行，失败不影响当前画面，这一层之后走整场重编译。 */
+  /**
+   * 关着的 effect 也在加载时备好（WPE 同样）。逐图层进行，失败不影响当前画面，这一层之后走整场重编译。
+   * 文本层（P6b 1e）备的是运行中重排可能出现的全部步骤（`variantPlans` 的假想排版）：只备程序与管线，合成 RT 由本层按当时的排版尺寸建
+   * （`ensureTextComposites`），快照用到时 `buildLayer` 再建。备不好时运行中出现新步骤会报 `render:variant-missing`。
+   */
   private async prepareVariants(state: SceneState): Promise<void> {
     for (const runtime of this.layers) {
-      const plans = variantPlans(runtime.layer, this.bundle.textures);
+      const text = runtime.layer.text ? (state.texts.get(runtime.object) ?? null) : null;
+      const plans = variantPlans(runtime.layer, this.bundle.textures, text);
       if (!plans.length) continue;
       this.device.pushErrorScope("out-of-memory");
       this.device.pushErrorScope("validation");
@@ -1373,6 +1597,10 @@ export class GpuScene {
         for (const plan of plans) {
           const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model);
           if (problems.length) throw new SceneRenderError(problems);
+          if (runtime.layer.text) {
+            await this.prepareLayer(plan, runtime);
+            continue;
+          }
           this.ensureComposites(runtime, plan);
           if (wantsSnapshot(plan)) this.ensureSnapshot();
           this.checkPlanOps(plan, runtime);
@@ -1387,7 +1615,9 @@ export class GpuScene {
       if (failure || error) {
         state.freezeLayer(runtime.object);
         this.warnings.push(
-          `图层 ${runtime.object} 的可变 effect 备不好，切换时整场重新加载：${String(failure ?? error!.message)}`,
+          runtime.layer.text
+            ? `文本图层 ${runtime.object} 的步骤备不好，运行中重排出现新步骤时画不了：${String(failure ?? error!.message)}`
+            : `图层 ${runtime.object} 的可变 effect 备不好，切换时整场重新加载：${String(failure ?? error!.message)}`,
         );
       }
     }
@@ -1526,7 +1756,7 @@ export class GpuScene {
       device,
       this.sampler(ATLAS_SAMPLER),
       (resource) => this.own(resource),
-      this.warnings,
+      (resource) => this.release(resource),
     );
 
     const built = buildableLayers(bundle);
@@ -1579,43 +1809,32 @@ export class GpuScene {
 
     const runtimes = plans.map((plan, index) => {
       const layer = built[index];
-      // fbo 一律按真实合成尺寸：全部 effect 关着时也是，打开时不用重建。文本层取排版的合成 RT 尺寸（P6b 1d）
+      // fbo 一律按真实合成尺寸：全部 effect 关着时也是，打开时不用重建。文本层取排版的合成 RT 尺寸（P6b 1d），fbo 由本层独占（1e）
       const textLayout = layer.text ? state.texts.get(layer.object) : undefined;
       const size = textLayout ? textCompositeSize(textLayout) : compositeSize(layer, this.baseTexture(layer));
-      const maps = layer.effects.map(
-        (effect) =>
-          new Map(
-            effect.fbos.map((fbo) => {
-              const [fw, fh] = fboSize(fbo, size);
-              const fboFormat = (FBO_FORMATS[fbo.format]?.gpu ?? "rgba8unorm") as GPUTextureFormat;
-              const key = fbo.unique
-                ? `unique|${layer.id}|${effect.id}|${fbo.name}`
-                : `${fbo.name}|${fw}x${fh}|${fboFormat}|${fbo.repeat}`;
-              let id = fboPool.get(key);
-              if (id === undefined) {
-                const address: GPUAddressMode = fbo.repeat ? "repeat" : "clamp-to-edge";
-                const target = this.createTarget(
-                  `fbo ${key}`,
-                  fw,
-                  fh,
-                  fboFormat,
-                  this.sampler({
-                    addressModeU: address,
-                    addressModeV: address,
-                    magFilter: "linear",
-                    minFilter: "linear",
-                  }),
-                );
-                id = this.targets.length;
-                this.targets.push(target);
-                fboPool.set(key, id);
-                // 创建后清成 `clear` 色；没写时 WebGPU 纹理本来就是全 0
-                if (fbo.clear) this.clearTarget(setup, target, fbo.clear, `clear ${key}`);
-              }
-              return [fbo.name, id] as const;
-            }),
-          ),
-      );
+      const maps = layer.text
+        ? this.createTextFbos(layer, size, setup)
+        : layer.effects.map(
+            (effect) =>
+              new Map(
+                effect.fbos.map((fbo) => {
+                  const [fw, fh] = fboSize(fbo, size);
+                  const fboFormat = fboFormatOf(fbo);
+                  const key = fbo.unique
+                    ? `unique|${layer.id}|${effect.id}|${fbo.name}`
+                    : `${fbo.name}|${fw}x${fh}|${fboFormat}|${fbo.repeat}`;
+                  let id = fboPool.get(key);
+                  if (id === undefined) {
+                    // 创建后清成 `clear` 色（`createFbo`）
+                    const target = this.createFbo(fbo, [fw, fh], fboFormat, key, setup);
+                    id = this.targets.length;
+                    this.targets.push(target);
+                    fboPool.set(key, id);
+                  }
+                  return [fbo.name, id] as const;
+                }),
+              ),
+          );
       const runtime: LayerRuntime = {
         object: layer.object,
         layer,
@@ -2262,6 +2481,8 @@ export class GpuScene {
     const dirty = state.takeDirty();
     // 本次的状态快照下的世界矩阵：重建与刷新共用，一条父链只算一次。父的变换写过时子孙已在 `dirty.layers` 里（`SceneState.write`）
     const worlds = new Map<number, Mat4>();
+    // 文本最先（P6b 1e）：重排、换进状态、图集纹理、强制重建本层；偏移变了的本层与子孙并进这次的 `dirty.layers`，下面照常刷
+    this.syncTexts(dirty, state, worlds);
     // 结构先处理：新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上
     this.rebuildStructures(dirty.structures, state, worlds);
     for (const object of dirty.layers)
@@ -2287,8 +2508,118 @@ export class GpuScene {
     }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
-    // 文本图集的脏区（P6b 1d：加载之后不再排版，一般为空；1e 的重排在这之前写图集）
-    this.atlasTextures?.sync();
+  }
+
+  /**
+   * 文本层运行中重排与重建（P6b 1e，`sync` 最先调）：
+   * 1. `dirty.texts` 里的层按 `textFields` 重排（`relayoutTexts`），排成的经 `setText` 换进状态。偏移变了时 `setText` 把本层与子孙标进
+   *    状态的脏图层，这次 `sync` 已经取走过一次，再取一次并进 `dirty`（同一帧生效）；
+   * 2. 图集纹理：增量上传，扩容了的重建纹理（`TextAtlasTextures.sync`），用它们的层要重建（UV 从字形对象现读，不用重排）；
+   * 3. 对重排成的与用了重建纹理的层 `rebuildLayer(…, { force: true })`。
+   * 没有文本层时只有一次图集纹理的空遍历，非文本场景的行为不变。
+   */
+  private syncTexts(dirty: DirtyState, state: SceneState, worlds: Map<number, Mat4>): void {
+    const atlasTextures = this.atlasTextures;
+    if (!atlasTextures) return;
+    const rebuild = new Set<number>();
+    const started = performance.now();
+    const relayouts = dirty.texts.size ? this.relayoutTexts(dirty.texts, state, rebuild) : 0;
+    const relayoutMs = performance.now() - started;
+    if (relayouts) {
+      const again = state.takeDirty();
+      mergeDirty(dirty, again);
+      // 重排期间不会有文本标脏（读完字体的回调在帧外）；万一有，放回去留给下一次
+      for (const object of again.texts) state.touchText(object);
+    }
+    for (const atlas of atlasTextures.sync())
+      for (const object of this.textLayersUsing(atlas, state)) rebuild.add(object);
+    const rebuildStarted = performance.now();
+    for (const object of rebuild) {
+      const runtime = this.runtimeByObject.get(object);
+      if (runtime) this.rebuildLayer(runtime, state, worlds, { force: true });
+    }
+    if (!relayouts && !rebuild.size) return;
+    const counts = this.textCounts;
+    counts.syncs++;
+    counts.relayouts += relayouts;
+    counts.rebuilds += rebuild.size;
+    recordSample(this.textTimings.layers, relayouts);
+    recordSample(this.textTimings.relayoutMs, relayoutMs);
+    recordSample(this.textTimings.rebuildMs, performance.now() - rebuildStarted);
+  }
+
+  /**
+   * 按当前字段重排脏文本层（P6b 1e），返回调了几次重排器；排成的换进状态（`setText`）、记进 `rebuild`。没有重排器时什么都不做（字段照存，
+   * 画面不变）。重排器返回 null（缺字体、过期）时旧排版照画。某张图集在这次重排里清空重排过（`GlyphAtlas.resets` 变了，已定 5）：别的层
+   * 正在用的字形被标成回收、像素可能被覆盖，用这张图集的别的层（这次已经排过的也算）排进队列再排一次；每层一次 `sync` 最多排
+   * `TEXT_RELAYOUT_LIMIT` 次，连环重置时停下。
+   */
+  private relayoutTexts(objects: ReadonlySet<number>, state: SceneState, rebuild: Set<number>): number {
+    const relayouter = this.relayouter;
+    if (!relayouter) return 0;
+    const queue = [...objects];
+    const queued = new Set(queue);
+    const times = new Map<number, number>();
+    let calls = 0;
+    while (queue.length) {
+      const object = queue.shift()!;
+      queued.delete(object);
+      const previous = state.texts.get(object);
+      const fields = state.textFields.get(object);
+      // 没建资源的文本层（写死不可见的分组下面）不排
+      if (!this.runtimeByObject.get(object)?.layer.text || !previous || !fields) continue;
+      const count = times.get(object) ?? 0;
+      if (count >= TEXT_RELAYOUT_LIMIT) continue;
+      times.set(object, count + 1);
+      calls++;
+      const layout = relayouter.relayout(object, fields, previous);
+      for (const atlas of layoutAtlases(previous, layout)) {
+        if (atlas.resets === (this.atlasResets.get(atlas) ?? 0)) continue;
+        this.atlasResets.set(atlas, atlas.resets);
+        for (const other of this.textLayersUsing(atlas, state))
+          if (other !== object && !queued.has(other)) {
+            queue.push(other);
+            queued.add(other);
+          }
+      }
+      if (!layout) {
+        this.textCounts.waiting++;
+        continue;
+      }
+      state.setText(object, layout);
+      rebuild.add(object);
+    }
+    return calls;
+  }
+
+  /** 当前排版用到 `atlas`（主图集或彩色图集）的文本层（建了资源的，`objects` 下标）。 */
+  private textLayersUsing(atlas: GlyphAtlas, state: SceneState): number[] {
+    const out: number[] = [];
+    for (const [object, runtime] of this.runtimeByObject)
+      if (runtime.layer.text && layoutAtlases(state.texts.get(object)).includes(atlas)) out.push(object);
+    return out;
+  }
+
+  /**
+   * dev 探针（`host.texts()`）：运行中重排的统计（P6b 1e）。`syncs` 是有重排或重建的 `sync` 次数，`relayouts` 是重排器调用次数（含没排成的），
+   * `waiting` 是缺字体或过期没排成的次数，`rebuilds` 是强制重建的层数；`layers` / `relayoutMs` / `rebuildMs` 是这些 `sync` 每次的重排层数与
+   * 用时（最近 600 次的均值、p95、最大值，毫秒）。
+   */
+  textStats(): {
+    syncs: number;
+    relayouts: number;
+    waiting: number;
+    rebuilds: number;
+    layers: ReturnType<typeof timingStats>;
+    relayoutMs: ReturnType<typeof timingStats>;
+    rebuildMs: ReturnType<typeof timingStats>;
+  } {
+    return {
+      ...this.textCounts,
+      layers: timingStats(this.textTimings.layers),
+      relayoutMs: timingStats(this.textTimings.relayoutMs),
+      rebuildMs: timingStats(this.textTimings.rebuildMs),
+    };
   }
 
   private createAlternateTarget(): SceneTarget {
@@ -2367,15 +2698,27 @@ export class GpuScene {
    * 切换当场做完：程序与管线都是加载时备好的，这里不编译、不等待。copy / swap 与程序的检查已提前到 `prepareVariants`，n + 2 份之外的组合由 `planProblems` 当场查，
    * 万一还有校验错误，走 `onuncapturederror`。旧 draw 的缓冲换下时销毁：已提交的帧不受影响，之后的帧只用新 draw。
    */
-  private rebuildLayer(runtime: LayerRuntime, state: SceneState, worlds: Map<number, Mat4>): void {
+  private rebuildLayer(
+    runtime: LayerRuntime,
+    state: SceneState,
+    worlds: Map<number, Mat4>,
+    /**
+     * `force`（P6b 1e）：签名相同也重建。文本层换了排版时用：直接上屏的文本换了字签名不变，顶点、索引、合成 RT 尺寸与图集却都变了。
+     * 强制重建不计入 `rebuildStats`（那是 effect 开关的），记在 `textStats`。
+     */
+    options: { force?: boolean } = {},
+  ): void {
     const plan = this.planOf(runtime.layer, state);
     const signature = planSignature(plan);
-    if (signature === runtime.signature) return;
+    if (!options.force && signature === runtime.signature) return;
     const started = performance.now();
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
     const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model);
     if (problems.length) throw new SceneRenderError(problems);
-    const built = this.buildLayer(runtime, plan, this.preparedOf(plan, runtime), state, worlds);
+    // 先取管线（缺了就抛，这时什么都还没换）；文本层再按新排版换独占的合成 RT、fbo 与图集，新 draw 才绑得到
+    const prepared = this.preparedOf(plan, runtime);
+    if (runtime.layer.text) this.ensureTextResources(runtime, plan, state);
+    const built = this.buildLayer(runtime, plan, prepared, state, worlds);
     for (const draw of runtime.draws) {
       this.draws.delete(draw);
       this.drawsByPass.delete(draw.passKey);
@@ -2386,6 +2729,7 @@ export class GpuScene {
     }
     this.install(runtime, built);
     runtime.signature = signature;
+    if (options.force) return;
     const elapsed = performance.now() - started;
     this.rebuildStats.count++;
     this.rebuildStats.totalMs += elapsed;
@@ -3095,6 +3439,9 @@ export class GpuScene {
     this.particleIndices = null;
     this.particleTimings = null;
     this.atlasTextures = null;
+    this.relayouter = null;
+    this.textFbos.clear();
+    this.atlasResets.clear();
     this.meshBuffers.clear();
     this.meshPlaceholder = null;
   }
