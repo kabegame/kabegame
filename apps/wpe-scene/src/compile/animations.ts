@@ -1,7 +1,7 @@
 /**
  * 场景属性关键帧动画的编译期（P10a 步骤 2）：把 `scene.json` 里每处 `{animation: {…}, value}` 解析成一条 `SceneAnimation`（纯数据，
  * 随 bundle 交给主线程）。目标与字段脚本共用 `targetOf`；材质常量的 uniform 要等着色器编完才知道，由 `bundle.ts` 编译 pass 时调
- * `settleConstantAnimation` 补上。
+ * `settleConstantAnimation` 补上。会写的动画由宿主每帧求值、写进状态（P10a 步骤 3，`animation/player.ts`），不报能力键。
  *
  * 依据：`.claude/plans/wpe-import/3-scene/phase10/phase-10a-curves.md` 步骤 2；语义见 `rea-p10-keyframes.md` 第 5 节（丢弃、通道数、
  * `relative`）、第 7 节（联动）、第 8 节（事件）、第 10 节（通道到分量、只写四种类型），实测见 `p10-REPORT.md`。
@@ -15,12 +15,6 @@ import { isKeyframedValue, type SceneJson, type SceneObject, type SceneScalar } 
 import { targetOf, targetValueType, type ScriptOwner } from "./scripts";
 
 const f = Math.fround;
-
-/**
- * 过渡键：有任何一条会写字段的动画（`writes` 为真）时报，P10a 步骤 3 接上运行时后删掉（同 P5c 的 `model:pending`）。
- * `writes` 为假的（布尔、字符串、通道数不对、常量没有 uniform）WPE 也什么都不做，不报。
- */
-export const ANIMATION_PENDING = "value:animation:pending";
 
 export interface CollectedAnimations {
   /** 按遍历顺序（登记顺序，读码第 7 节）：`general` 先，再 `objects`。 */

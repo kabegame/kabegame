@@ -464,7 +464,7 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   scene.objects.forEach((object, index) => checkObjectFeatures(object, unsupported, parents[index]));
   if (!orthographic)
     for (const object of scene.objects) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
-  // 关键帧不在这里报：由 `collectAnimations`（`animations.ts`，P10a 步骤 2）按目标报细分键与过渡键
+  // 关键帧不在这里报：由 `collectAnimations`（`animations.ts`，P10a 步骤 2）按目标报细分键
 }
 
 /**

@@ -16,7 +16,10 @@
  * `(2, 2, 2, 1)`（裁剪体外，见翻译器 README），对应 WPE 的 NaN 顶点。
  * ropetrail（P4d 步骤 2）走同一条路：输入里有一个 vec3（`a_TexCoordVec3C2`，按布局的 float 偏移读 3 个分量），段按槽序、每个存活
  * 粒子恒 n 段（`writeTrailSegments`），结果同样按段给出整条带子。
+ * 关键帧动画（P10a 步骤 3）：和 `renderFrame` 一样交给 `replayReadback`，沿同一串 dt 推进（没有回放时按第 0 秒写一次），四角看到的
+ * `instanceoverride`、图层变换等是动画写过的值。
  */
+import { SceneAnimations } from "../animation/player";
 import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
@@ -283,8 +286,8 @@ const isPointList = (
  * 每帧的 `g_Time` 取 `times`，没给时是 dt 的累计值（double）；同一个值也作粒子的场景时间 `T`。没有回放时时间取 `time`、
  * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心：一个点时
  * 每帧都用它；逐帧的一串（和 `dts` 等长，P5a 收尾）时第 i 帧用第 i 项，最后一项留给调用方步进读回那一帧。
- * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 调一次（P5a 步骤 3、4：探针在这里设这一帧的相机，`frameCamera`；同渲染器，
- * 粒子先用上一帧的 s 步进，再换上这一帧的）。
+ * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 与帧时间调一次（P5a 步骤 3、4：探针在这里设这一帧的相机，`frameCamera`；
+ * 同渲染器，粒子先用上一帧的 s 步进，再换上这一帧的。P10a 步骤 3：关键帧动画也在这里按这一帧的帧时间推进，见 `replayReadback`）。
  */
 export function replayParticles(
   scene: Pick<GpuScene, "stepParticles"> & Partial<Pick<GpuScene, "particleAudio">>,
@@ -292,7 +295,7 @@ export function replayParticles(
   replay: ParticleReplay | undefined,
   time = 0,
   cursor: readonly [number, number] | readonly (readonly [number, number])[] = [0.5, 0.5],
-  afterStep?: (time: number) => void,
+  afterStep?: (time: number, frametime: number) => void,
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
@@ -311,7 +314,7 @@ export function replayParticles(
     const at = timeAt(i);
     replayAudio(scene, replay, i);
     scene.stepParticles(dts[i], at, state, perFrame ? perFrame[i] : (cursor as readonly [number, number]));
-    afterStep?.(at);
+    afterStep?.(at, dts[i]);
   }
   return { time: timeAt(dts.length - 1), frametime: dts[dts.length - 1] };
 }
@@ -484,6 +487,12 @@ export interface ReadbackReplayOptions {
   parallax: ParallaxState;
   /** 场景的正交尺寸 W、H（视差点的单位；抖动按 H 算）。透视场景是 (0, 0)。 */
   size: readonly [number, number];
+  /**
+   * 关键帧动画（P10a 步骤 3，`SceneAnimations`）：有回放（`particles.dts`）时，每一帧（前 n − 1 帧与读回帧）在步进粒子、设相机之后按这一帧的
+   * 帧时间 `frame`（推进并写进状态），接着 `sync`（同渲染器在脚本之后的第二次 `sync`：下一帧的粒子步进与读回帧的 `update` 才看得到写入）。
+   * 没有回放时不推进，由调用方先 `seek` 再 `write`（开头的 `sync` 刷进去）。不给时调用序列同以前。
+   */
+  animations?: Pick<SceneAnimations, "frame">;
   /** 透视场景的探针相机（P5d 步骤 2，`probePerspective`）：按 `particles.dts` 推路径状态，不移动对象。正交场景不给。 */
   perspective?: ProbePerspective;
   /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的。没有相机对象时不给。 */
@@ -496,7 +505,8 @@ export interface ReadbackReplayOptions {
  * 读回帧 `sync` → `stepParticles` → 设相机；视差点按同一串帧时间与每帧的 s 从 `parallax` 推进，之后 `setParallax`、`update`。
  * 光标逐帧取 `pointers`：第 i 帧步进用 `cursors[i]`、视差点用 `pointers[i]`；读回帧的 `g_PointerPosition` 是最后一项、
  * `g_PointerPositionLast` 是倒数第二项（只有一帧时取自己，同渲染器每帧末尾 `pointerLast = pointer`）。
- * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。读回帧的音频 uniform 取 `readbackSpectrum`（P11a），没给频谱时写全 0。
+ * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。关键帧动画（P10a 步骤 3，`animations`）在每一帧设完相机之后推进、写入、`sync`。
+ * 读回帧的音频 uniform 取 `readbackSpectrum`（P11a），没给频谱时写全 0。
  * 返回读回帧的 `g_Time`、`g_Frametime` 与视差状态。
  */
 export function replayReadback(
@@ -505,23 +515,33 @@ export function replayReadback(
   state: SceneState,
   options: ReadbackReplayOptions,
 ): { time: number; frametime: number; parallax: ParallaxState } {
-  const { particles, pointers } = options;
+  const { particles, pointers, animations } = options;
   const [width, height] = options.size;
   const last = pointers.pointers.length - 1;
   const shake = frameCamera(scene, state, height, options.perspective, particles?.dts, options.cameraObjects);
+  // 关键帧动画（P10a 步骤 3）：同渲染器，粒子与相机之后、（探针没有的）脚本之前写，再 `sync`
+  const animate = (frametime: number) => {
+    if (!animations) return;
+    animations.frame(frametime, state);
+    scene.sync(state);
+  };
   const { time, frametime } = replayParticles(
     scene,
     state,
     particles,
     options.time,
     particles?.dts.length ? pointers.cursors : pointers.cursors[0],
-    shake.apply,
+    (at, dt) => {
+      shake.apply(at);
+      animate(dt);
+    },
   );
   scene.sync(state);
   // 读回那一帧的频谱（P4e 步骤 4）：没有回放时不写
   if (particles?.dts.length) replayAudio(scene, particles, particles.dts.length - 1);
   scene.stepParticles(frametime, time, state, pointers.cursors[last]);
   shake.apply(time);
+  if (particles?.dts.length) animate(frametime);
   // 视差点和粒子互不影响：回放的前 n − 1 帧与读回帧按同一串帧时间与每帧的 s 推进（没有回放时读回帧的帧时间是 0）
   const parallax = replayParallax(
     options.parallax,
@@ -662,6 +682,13 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
       particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
       size: target,
     });
+    // 关键帧动画（P10a 步骤 3）：同 `renderFrame`，有回放时沿同一串 dt 推进，没有时按第 0 秒写一次（开头的 `sync` 刷进去）
+    const animations = bundle.animations?.length ? new SceneAnimations(bundle.animations) : null;
+    const replayed = !!options.particles?.dts.length;
+    if (animations && !replayed) {
+      animations.seek(0);
+      animations.write(state);
+    }
     try {
       // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同 `renderFrame` 与渲染器），四角带读回帧的相机。
       // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
@@ -673,6 +700,7 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
         pointers,
         parallax: initialParallaxState(width, height, !!target),
         size: [width, height],
+        animations: replayed ? (animations ?? undefined) : undefined,
         perspective: target && probePerspective(bundle, target),
         cameraObjects: probeCameraObjects(bundle),
       });

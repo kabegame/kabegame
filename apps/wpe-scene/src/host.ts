@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { EMPTY_ANIMATIONS_PROBE, SceneAnimations, type AnimationsProbe } from "./animation/player";
 import { ScenePlayer } from "./audio/player";
 import { SceneSounds, type SceneSoundProbe } from "./audio/sceneSounds";
 import {
@@ -170,6 +171,12 @@ export class SceneHost {
   private sceneVideos: SceneVideos | null = null;
   private videoBundle: SceneBundle | null = null;
   private drawingBundle: SceneBundle | null = null;
+  /**
+   * 属性关键帧动画的播放器（P10a 步骤 3，`animation/player.ts`）：每次场景换上（`load` 的 `beforeFirstFrame`）按那份 bundle 新建，
+   * 按 `id` 接回上一份的时钟与缓存（`carryOver`），所以重编译时动画接着走、不重新开始（WPE 改属性不重载）；换上之前旧场景还在画，
+   * 用的是旧的这份。退回预览图与销毁时丢掉，下次能渲染时从 0 开始（同 WPE 重开壁纸）。
+   */
+  private sceneAnimations: SceneAnimations | null = null;
   /**
    * 交给渲染器的 `VideoSink`：同一份转给当前的 `sceneVideos`，没有时空操作。重编译时 `loadVideos` 在新场景换上之前就按新 bundle 的
    * 下标重建了表（好早点读新出现的视频），这期间旧场景还在画、问的是旧下标：按视频区间换算成新下标，换算不到（新 bundle 里没有这段
@@ -764,6 +771,24 @@ export class SceneHost {
 
   private soundVolumeOf = (object: number): number | undefined => this.renderer?.sceneState?.sounds.get(object)?.volume;
 
+  /**
+   * 渲染器正在画的那份状态（没有渲染器时退回 `scriptState`）：关键帧动画写这里。平时它就是 `scriptState`；只在重建脚本环境（「清空脚本
+   * 存储」）的加载期间不同：那时 `scriptState` 是给新脚本 `init` 用的新状态，旧场景与旧动画还在画，写进新状态会让 `init(value)` 收到
+   * 动画值（WPE 收到的是 `value`，rea-p10-keyframes 第 4 节），旧场景的动画也会停住。
+   */
+  private get drawnState(): SceneState | null {
+    return this.renderer?.sceneState ?? this.scriptState;
+  }
+
+  /**
+   * 关键帧写了声音对象的 `volume`（P10a 步骤 3）：当场交给排期器，同 `writeScript`（WPE 的 setter 写值时当场调回调 `V`）。排期器的
+   * 每帧步进在 `beforeFrame` 之前，不推的话晚一帧。读的是动画写进的那份状态（`drawnState`，换场景时渲染器已先换好）。
+   */
+  private readonly pushSoundVolume = (object: number): void => {
+    const volume = this.drawnState?.sounds.get(object)?.volume;
+    if (volume !== undefined) this.sceneSounds?.scheduler(object)?.setVolume(volume);
+  };
+
   private syncSoundVolumes(): void {
     this.sceneSounds?.syncVolumes(this.soundVolumeOf);
   }
@@ -838,6 +863,14 @@ export class SceneHost {
     return this.sceneVideos?.probe() ?? [];
   }
 
+  /**
+   * dev 探针（P10a 步骤 3）：每条关键帧动画的 `id`、时钟主人、`t`、`getFrame()`、`isPlaying()`、标志、最后写入的值，以及最近 600 帧
+   * `frame()` 的耗时；没有场景（还没加载、退回预览图）时为空表。
+   */
+  animations(): AnimationsProbe {
+    return this.sceneAnimations?.probe() ?? EMPTY_ANIMATIONS_PROBE;
+  }
+
   /** dev 探针：每个声音对象的模式、当前文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的元素与 context。 */
   sounds(): {
     hostVolume: number;
@@ -888,7 +921,14 @@ export class SceneHost {
       beforeFrame: (dt, spectrum) => {
         // 脚本的音频缓冲改读归一化频谱（P4e 步骤 4，「决定」5）：渲染器这一帧推进之后、脚本之前拷一次
         this.scriptApi?.applySpectrum(spectrum);
-        if (this.state !== "fallback" && this.scriptState) this.runtime?.frame(dt);
+        if (this.state !== "fallback" && this.scriptState) {
+          // 关键帧动画（P10a 步骤 3）先于脚本写（rea-p10-keyframes 第 1、9 节）：脚本 `update(value)` 收到的是本帧的动画值，脚本写回
+          // 只活到下一帧动画覆盖。不受脚本运行时门控：没有脚本的场景也跑（`scriptState` 在换场景时总会设上）。
+          // 写进渲染器正在画的那份状态（`drawnState`），它和这份动画同时换（`beforeFirstFrame`）；平时就是 `scriptState`
+          const drawn = this.drawnState;
+          if (drawn) this.sceneAnimations?.frame(dt, drawn, this.pushSoundVolume);
+          this.runtime?.frame(dt);
+        }
       },
       onError: (reasons) => {
         if (this.rendererTask === task) this.fallback(reasons);
@@ -945,6 +985,8 @@ export class SceneHost {
     // 退回预览图：场景不显示，声音也停（下次能渲染时重新开始）
     this.disposeSounds();
     this.disposeVideos();
+    // 关键帧动画同样丢掉：下次能渲染时从 0 开始
+    this.sceneAnimations = null;
     this.bundle = null;
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
@@ -1059,6 +1101,13 @@ export class SceneHost {
           this.drawingBundle = bundle;
           this.scriptBundle = bundle;
           this.scriptState = state;
+          // 关键帧动画（P10a 步骤 3）在这里换，不在编译完就换：换上之前旧场景还在画，要接着用自己的动画；时钟也不能在建 GPU 资源期间
+          // 停住再接（`carryOver` 拷的是这一刻的时间）。换上就按当前时钟写一次：暂停中重编译时首帧不跑 `beforeFrame`，不写的话先闪一下
+          // 编译期的 `value`。在重放脚本写入之前：一帧里动画先写、脚本后写（rea-p10-keyframes 第 9 节）。手写的测试 bundle 可能没有动画表
+          const animations = new SceneAnimations(bundle.animations ?? []);
+          animations.carryOver(this.sceneAnimations);
+          this.sceneAnimations = animations;
+          animations.write(state, this.pushSoundVolume);
           this.runtime?.replayWrites();
           // 首次加载的 `init` 对粒子层调的方法（P4f 步骤 3）：新场景已经换上，补调
           this.flushPendingParticles(current);
@@ -1138,6 +1187,7 @@ export class SceneHost {
     this.sceneTexts?.dispose();
     this.sceneTexts = null;
     this.disposeVideos();
+    this.sceneAnimations = null;
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;

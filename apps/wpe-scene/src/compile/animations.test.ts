@@ -4,7 +4,7 @@
  * `rea-p10-keyframes.md` 第 5、7、8、10 节；关键帧的写法照 `ignore/p10/defs/p10.py` 生成的测试工程。
  */
 import { describe, expect, it, vi } from "vitest";
-import { ANIMATION_PENDING, collectAnimations, eventJson, settleConstantAnimation } from "./animations";
+import { collectAnimations, eventJson, settleConstantAnimation } from "./animations";
 import { compileScene } from "./bundle";
 import { checkPassFeatures } from "./features";
 import type { SceneReader } from "./fs";
@@ -511,7 +511,7 @@ function memoryReader(files: Record<string, unknown>): SceneReader {
   return reader;
 }
 
-describe("compileScene：bundle.animations 与过渡键", () => {
+describe("compileScene：bundle.animations 与能力键", () => {
   /** 假翻译器：effect 着色器 `fx` 有 float 常量 `multiply` → `g_Multiply`、vec2 常量 `point` → `g_Point`，基础着色器没有常量。 */
   const translator = {
     async translate(input: { fragment: string }) {
@@ -550,7 +550,7 @@ describe("compileScene：bundle.animations 与过渡键", () => {
     effects: [{ file: "effects/x/effect.json", passes: [{ constantshadervalues: constants }] }],
   });
 
-  it("会写的常量动画：补上 uniform，报过渡键；实例常量上的关键帧不再报 value:animation", async () => {
+  it("会写的常量动画：补上 uniform，不报能力键（过渡键 value:animation:pending 已在 P10a 步骤 3 删掉）；实例常量上的关键帧不再报 value:animation", async () => {
     const bundle = await compile(effect({ multiply: kf1({}, 1) }));
     expect(bundle.animations).toHaveLength(1);
     expect(bundle.animations![0]).toMatchObject({
@@ -558,10 +558,10 @@ describe("compileScene：bundle.animations 与过渡键", () => {
       valueType: "float",
       writes: true,
     });
-    expect(bundle.unsupported).toEqual([ANIMATION_PENDING]);
+    expect(bundle.unsupported).toEqual([]);
   });
 
-  it("常量动画都不写（通道数不对、uniform 不存在）：不报过渡键", async () => {
+  it("常量动画都不写（通道数不对、uniform 不存在）：同样不报能力键", async () => {
     const bundle = await compile(effect({ point: kf1({}, "0 0"), missing: kf1({}, 1) }));
     expect(bundle.animations!.map((item) => [item.id.split("/").at(-1), item.writes, item.target])).toEqual([
       ["point", false, expect.objectContaining({ uniforms: ["g_Point"], type: "vec2" })],
@@ -570,8 +570,10 @@ describe("compileScene：bundle.animations 与过渡键", () => {
     expect(bundle.unsupported).toEqual([]);
   });
 
-  it("图层字段的动画一开始就报过渡键；布尔的不报；材质 JSON 的关键帧照报 value:animation", async () => {
-    expect((await compile({ alpha: kf1({}, 1) })).unsupported).toEqual([ANIMATION_PENDING]);
+  it("图层字段的动画不报能力键、进 bundle 且会写；布尔的不写；材质 JSON 的关键帧照报 value:animation", async () => {
+    const alpha = await compile({ alpha: kf1({}, 1) });
+    expect(alpha.unsupported).toEqual([]);
+    expect(alpha.animations!.map((item) => item.writes)).toEqual([true]);
     const visible = await compile({ visible: kf1({}, true) });
     expect(visible.unsupported).toEqual([]);
     expect(visible.animations!.map((item) => item.writes)).toEqual([false]);

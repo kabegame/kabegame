@@ -37,6 +37,10 @@
  *   `{ <纹理 path>: 秒 }` 分别给，没给的取 0，缺省 0）。探针换上自己的 `VideoSink`（`videoProbe.ts`）：每段视频 seek 到这个时刻
  *   （超过时长按循环取模）、等到当前帧可用，建好场景后、第一次编码之前交给 `GpuScene`，每个 draw 都拷；读不到或解码失败的视频照产品
  *   规则保持透明。结果的 `videos` 给出每段实际取的时刻。没有视频纹理的场景逐字节同以前。`hostRenderFrame` 不动视频，保持当前帧。
+ * - 关键帧动画（P10a 步骤 3）：`renderFrame` 与 `particleCorners` 对有动画的 bundle 建 `SceneAnimations`（`animation/player.ts`）。有
+ *   `particles.dts` 时沿同一串 dt 逐帧推进、写入（`replayReadback`，每帧在粒子与相机之后、第二次 `sync` 之前，同渲染器）；没有时按
+ *   `time` 直接 `seek` 再写一次（近似，见 `SceneAnimations.seek`）。`profile` 帧另用一份按 1/60 推进，计时含动画开销，不影响读回那一帧。
+ *   结果的 `animations` 给出每条最后写入的值；`host.animations()` 报宿主正在播的那份。没有动画的场景逐字节同以前。
  * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`renderFrame` 收 `trace` 时，取到设备后建记录器
  *   （`render/trace.ts`），建场景、profile 帧、回放、读回帧（含读回画布）都用包过的设备；读回帧编码之前开始记，读回完成后取出
  *   轨迹与选中 pass 的读回图，存进存放区（`dev/drawTrace.ts`），结果的 `trace` 给键与摘要。不给 `trace` 时不建记录器、设备不包，
@@ -44,6 +48,7 @@
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
+import { SceneAnimations, type AnimationProbeEntry } from "../animation/player";
 import type { SceneBundle } from "../compile/bundle";
 import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
@@ -307,6 +312,11 @@ export interface RenderFrameResult {
   /** 每一项脚本值写没写进状态（`applied`；跳过时带 `reason`），顺序同请求；没给 `scriptValues` 时空数组。 */
   scriptValues: ScriptValueResult[];
   /**
+   * 关键帧动画（P10a 步骤 3）在读回那一帧的状态，顺序同 `bundle.animations`：`id`、时钟主人、`t`、`getFrame()`、`isPlaying()`、标志与最后
+   * 写入的值（`value`，不写的为 null）。有 `particles.dts` 时是沿同一串 dt 推进到读回帧的，没有时是 `seek(time)` 的。没有动画时空数组。
+   */
+  animations: AnimationProbeEntry[];
+  /**
    * 回放之前结清文本重排调了几次 `sync`（P6b 1e-3，`ProbeTexts.settle`）：1 是一次就排成，多出来的每次是等了一轮字体。只在有文本字段的
    * 脚本值写进了状态时给。
    */
@@ -448,9 +458,13 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
+      // 关键帧动画（P10a 步骤 3）：没有动画时是空表，下面不建播放器，调用序列同以前
+      const animationList = bundle.animations ?? [];
       if (options.profile) {
         // 只记 profile 帧：读回那一帧之前取走并关掉
         scene.profileParticles(true);
+        // profile 帧另用一份动画、按 1/60 推进（计时含动画开销）；读回那一帧的值由下面另一份决定，不受 profile 帧数影响
+        const profiled = animationList.length ? new SceneAnimations(animationList) : null;
         const samples: number[] = [];
         for (let i = 0; i < options.profile; i++) {
           const t0 = performance.now();
@@ -466,7 +480,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           scene.sync(state);
           scene.stepParticles(1 / 60, startTime + i / 60, state, cursor);
           scene.setCamera(camera);
+          // 关键帧动画在粒子、相机之后写（同渲染器的 `beforeFrame`），写过的由视差之后的 `sync` 刷进 uniform
+          profiled?.frame(1 / 60, state);
           scene.setParallax(drawParallax(parallax, state.general, !!perspective), state);
+          if (profiled) scene.sync(state);
           scene.update(
             {
               time: startTime + i / 60,
@@ -498,13 +515,22 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       }
       // 粒子回放：前 n−1 帧在 replayParticles 里步进，最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。
       // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同渲染器），读回的那一帧同样，之后才 setParallax。
-      // 视差点从 profile 帧推进后的状态接着走；逐帧指针（P5a 收尾）第 i 帧用第 i 项，读回帧的 g_PointerPositionLast 是上一帧的
+      // 视差点从 profile 帧推进后的状态接着走；逐帧指针（P5a 收尾）第 i 帧用第 i 项，读回帧的 g_PointerPositionLast 是上一帧的。
+      // 关键帧动画（P10a 步骤 3）：有回放时沿同一串 dt 推进（每帧在粒子与相机之后写、再 sync）；没有回放时按 `time` 定位、写一次，
+      // `replayReadback` 开头的 sync 刷进去
+      const animations = animationList.length ? new SceneAnimations(animationList) : null;
+      const replayed = !!options.particles?.dts.length;
+      if (animations && !replayed) {
+        animations.seek(startTime);
+        animations.write(state);
+      }
       const { time, frametime } = replayReadback(scene, state, {
         particles: options.particles,
         time: startTime,
         pointers,
         parallax,
         size: [sceneWidth, sceneHeight],
+        animations: replayed ? (animations ?? undefined) : undefined,
         perspective: perspective && { ...perspective, path: profileCamera.path },
         cameraObjects,
       });
@@ -577,6 +603,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         frametime,
         particles: scene.particleStats(true),
         scriptValues,
+        animations: animations?.probe().list ?? [],
         ...(textSyncs === undefined ? {} : { textSyncs }),
         videos: sink.results(),
         key,

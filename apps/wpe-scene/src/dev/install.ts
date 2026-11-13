@@ -45,6 +45,11 @@ export function installSceneDevProbe(host: SceneHost): void {
       sounds: () => host.sounds(),
       /** P9a 步骤 2：每段视频纹理的位置、`currentTime`、`paused`、`lastDrawn`、`fresh`、`failed`、尺寸与丢帧数、当前帧号。 */
       videos: () => host.videos(),
+      /**
+       * P10a 步骤 3：每条关键帧动画的 `id`、时钟主人、`t`、`getFrame()`、`isPlaying()`、标志、最后写入的值，以及最近 600 帧 `frame()`
+       * 的耗时（`frameMs`）。
+       */
+      animations: () => host.animations(),
       read: (path: string) => host.readTarget(path),
       /** P4a 步骤 5：粒子数量与分布、开销记录（`{ profile: true }` 开始，`false` 停止）、当前 instanceoverride。 */
       particles: (options?: { profile?: boolean }) => hostParticles(host, options),

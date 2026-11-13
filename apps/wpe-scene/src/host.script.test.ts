@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AnimationClock } from "./animation/clock";
+import { Channel, frameValues, type ParsedKey } from "./animation/curve";
+import type { AnimationClockParams, SceneAnimation } from "./animation/types";
 import { BindingCollector, generalDefaults } from "./compile/bindings";
 import type { SceneBundle, ScenePass } from "./compile/bundle";
 import type { SceneFs } from "./compile/fs";
@@ -298,6 +301,50 @@ function bundle(): SceneBundle {
 }
 
 const EFFECT_PATH = "objects/0/effects/0/visible";
+
+/** 关键帧（P10a 步骤 3）：两侧切线都关。 */
+const animKey = (frame: number, value: number): ParsedKey => ({ frame, value, flags: 0, bx: 0, by: 0, fx: 0, fy: 0 });
+/** 60 fps、length 60、loop：假渲染器每帧 1/60 s 正好一帧。 */
+const ANIM_CLOCK: AnimationClockParams = { fps: 60, length: 60, mode: 0, startpaused: false };
+
+function animation(id: string, target: SceneAnimation["target"], keys: ParsedKey[]): SceneAnimation {
+  return {
+    id,
+    target,
+    valueType: "float",
+    channels: [keys],
+    clock: ANIM_CLOCK,
+    parent: null,
+    events: [],
+    writes: true,
+  };
+}
+
+/** 照读码独立算：新时钟推进 `frames` 个 1/60 s 后的值（rate 1）。 */
+function animatedAt(keys: ParsedKey[], frames: number): number {
+  const clock = new AnimationClock(ANIM_CLOCK);
+  for (let i = 0; i < frames; i++) clock.advance(Math.fround(1 / 60), []);
+  const out = new Float32Array(1);
+  frameValues(clock, [new Channel(keys)], out);
+  return out[0];
+}
+
+/** 逐帧 float32 累加的时钟时间。 */
+function animatedTime(frames: number): number {
+  let t = 0;
+  for (let i = 0; i < frames; i++) t = Math.fround(Math.fround(1 / 60) + t);
+  return t;
+}
+
+const ALPHA_KEYS = [animKey(0, 0), animKey(60, 1)];
+
+/** 图层 0 的 `alpha` 带关键帧（与字段脚本同一个目标）；`script` 为假时没有脚本。 */
+function animationBundle(script = true): SceneBundle {
+  const result = bundle();
+  result.animations = [animation("objects/0/alpha", { kind: "layer", object: 0, field: "alpha" }, ALPHA_KEYS)];
+  if (!script) result.scripts.list = [];
+  return result;
+}
 
 /** 档位开启的场景：`chain` 是有没有编泛光链，`flag` 是场景位；脚本挂在 general 上，`q` 绑重编译目标。 */
 function bloomBundle(chain: boolean, flag: boolean): SceneBundle {
@@ -1459,6 +1506,32 @@ describe("SceneHost 脚本接线", () => {
       host.dispose();
     });
 
+    it("关键帧写 volume（P10a 步骤 3）：每帧写完当场交给排期器，不等对象步进", async () => {
+      const keys = [animKey(0, 1), animKey(60, 0)];
+      compile.mockImplementation(async () => {
+        const result = soundBundle();
+        result.scripts.list = [];
+        result.animations = [animation("objects/1/volume", { kind: "sound", object: 1, field: "volume" }, keys)];
+        return result;
+      });
+      soundCommands.length = 0;
+      const reporter = report();
+      const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+      host.setHostVolume(1);
+      host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+      await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+      const first = animatedAt(keys, 1);
+      expect(first).toBeLessThan(1);
+      expect(host.sounds().sounds[0].volume).toBe(first);
+      expect(soundCommands.at(-1)).toBe(`gain:1:${first * first}`);
+      // 假渲染器不跑对象步进：增益只能是动画写入当场推过去的
+      renderer.tick();
+      const second = animatedAt(keys, 2);
+      expect(host.readTarget("objects/1/volume")).toBe(second);
+      expect(soundCommands.at(-1)).toBe(`gain:1:${second * second}`);
+      host.dispose();
+    });
+
     it("API：play / pause / stop / isPlaying 接到排期器，volume 写入当场生效，暂停时也生效", async () => {
       let music: SoundLayer | null = null;
       onInit = () => {
@@ -1489,6 +1562,119 @@ describe("SceneHost 脚本接线", () => {
       host.setPaused(false);
       expect(soundCommands.slice(-3)).toEqual(["gain:1:0.25", "start:1:0", "gain:1:0.25"]);
       expect(layer.isPlaying()).toBe(true);
+      host.dispose();
+    });
+  });
+
+  describe("关键帧动画（P10a 步骤 3）", () => {
+    async function start(script = true) {
+      compile.mockImplementation(async () => animationBundle(script));
+      const reporter = report();
+      const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+      host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+      await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+      return { host, reporter };
+    }
+    const alpha = () => renderer.sceneState?.layers.get(0)?.alpha;
+
+    it("每帧写入、在脚本之前：update 收到本帧的动画值，返回值只活到下一帧动画覆盖", async () => {
+      const { host } = await start();
+      // 首帧：动画写第 1 帧的值，脚本 update 收到它、返回 0.6 写回
+      expect(updateArguments).toEqual([animatedAt(ALPHA_KEYS, 1)]);
+      expect(alpha()).toBe(0.6);
+      renderer.tick();
+      expect(updateArguments).toEqual([animatedAt(ALPHA_KEYS, 1), animatedAt(ALPHA_KEYS, 2)]);
+      expect(alpha()).toBe(0.6);
+      const [entry] = host.animations().list;
+      expect(entry).toMatchObject({ id: "objects/0/alpha", owner: 0, t: animatedTime(2), playing: true });
+      expect(entry.value).toEqual([animatedAt(ALPHA_KEYS, 2)]);
+      expect(host.animations().frameMs.count).toBe(2);
+      host.dispose();
+      expect(host.animations().list).toEqual([]);
+    });
+
+    it("没有脚本的场景也跑", async () => {
+      const { host } = await start(false);
+      expect(alpha()).toBe(animatedAt(ALPHA_KEYS, 1));
+      renderer.tick();
+      renderer.tick();
+      expect(alpha()).toBe(animatedAt(ALPHA_KEYS, 3));
+      host.dispose();
+    });
+
+    it("重编译后时钟接着走；暂停中重编译时新状态直接是动画值（不先闪 value）、时钟不动", async () => {
+      const { host } = await start(false);
+      renderer.tick();
+      renderer.tick();
+      expect(host.animations().list[0].t).toBe(animatedTime(3));
+      events.length = 0;
+      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      await vi.waitFor(() => expect(events).toContain("render"));
+      expect(compile).toHaveBeenCalledTimes(2);
+      // 新场景接着第 3 帧的时钟走，首帧再推进一帧
+      expect(host.animations().list[0].t).toBe(animatedTime(4));
+      expect(alpha()).toBe(animatedAt(ALPHA_KEYS, 4));
+      host.setPaused(true);
+      events.length = 0;
+      // 替身的 `get_wpe_scene_postprocess` 总回 "disabled"：再推一次 "enabled" 才算变化
+      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      await vi.waitFor(() => expect(events).toContain("render"));
+      expect(compile).toHaveBeenCalledTimes(3);
+      // bundle 里的 alpha 是 1：暂停时首帧不跑 beforeFrame，是换场景时那一次写入
+      expect(alpha()).toBe(animatedAt(ALPHA_KEYS, 4));
+      expect(host.animations().list[0].t).toBe(animatedTime(4));
+      host.dispose();
+    });
+
+    it("暂停中重编译：换场景时先写动画、再重放脚本写入，字段是脚本最后写的值（同 WPE 一帧里脚本后写）", async () => {
+      const { host } = await start();
+      renderer.tick();
+      expect(alpha()).toBe(0.6);
+      host.setPaused(true);
+      events.length = 0;
+      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      await vi.waitFor(() => expect(events).toContain("render"));
+      expect(compile).toHaveBeenCalledTimes(2);
+      // 暂停时首帧不跑 beforeFrame：换场景时动画按第 2 帧的时钟写了一次，之后脚本重放 0.6 盖过它
+      expect(host.animations().list[0].value).toEqual([animatedAt(ALPHA_KEYS, 2)]);
+      expect(alpha()).toBe(0.6);
+      host.dispose();
+    });
+
+    it("清空脚本存储重建脚本期间：动画写旧场景正在画的状态，不碰给新脚本 init 用的新状态", async () => {
+      const { host } = await start();
+      let open!: () => void;
+      realmGate = new Promise<void>((resolve) => (open = resolve));
+      listeners.get("wpe-scene-clear-storage")!({ payload: { imageId: "1" } });
+      await vi.waitFor(() => expect(realmsCreated).toBe(2));
+      const drawing = renderer.sceneState!;
+      const fresh = (host as unknown as { scriptState: SceneState }).scriptState;
+      expect(fresh).not.toBe(drawing);
+      renderer.tick();
+      renderer.tick();
+      // 旧场景接着动（脚本停了，没有 0.6 写回）；新状态保持 bundle 的 alpha，`init(value)` 收到的是它
+      expect(drawing.layers.get(0)!.alpha).toBe(animatedAt(ALPHA_KEYS, 3));
+      expect(fresh.layers.get(0)!.alpha).toBe(1);
+      open();
+      await vi.waitFor(() => expect(events.filter((event) => event === "init")).toHaveLength(2));
+      // 新场景换上（渲染器自建的状态成了 `scriptState`）
+      const scriptState = () => (host as unknown as { scriptState: SceneState }).scriptState;
+      await vi.waitFor(() => expect(scriptState()).not.toBe(fresh));
+      expect(scriptState()).toBe(renderer.sceneState);
+      // 换上之后时钟接着走（3 帧 + 新场景首帧）
+      expect(host.animations().list[0].t).toBe(animatedTime(4));
+      host.dispose();
+    });
+
+    it("退回预览图后丢掉；下次能渲染时从 0 开始", async () => {
+      const { host, reporter } = await start(false);
+      renderer.tick();
+      onError?.(["test:fallback"]);
+      expect(host.animations().list).toEqual([]);
+      host.applyUserProperties({ p: { type: "slider", value: 0.4 } });
+      await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledTimes(2));
+      expect(host.animations().list[0].t).toBe(animatedTime(1));
+      expect(alpha()).toBe(animatedAt(ALPHA_KEYS, 1));
       host.dispose();
     });
   });

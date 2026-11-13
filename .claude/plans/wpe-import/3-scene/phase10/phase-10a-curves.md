@@ -342,3 +342,55 @@ P4f 步骤 1 当时正在改 `scripts.ts`（未提交），所以在快照里做
 - 整数值的实数字面量在事件 JSON 里按整数写，语料 0 处。
 
 **工具注意**：Prettier 对 `ignore/` 下的文件要加 `--ignore-path .prettierignore` 才真的检查。缺省会读 `.gitignore`，跳过 `/ignore`，显示「全部通过」。
+
+### 步骤 3 — 运行时（2026-11-13）
+
+代理在快照里实现，主会话独立验收：
+- 快照：工作区冻结成 `ignore/p10/c3/base`（只读）与 `ov`（代理改），出补丁 `c3.patch`。
+- 合入：先合进 `62de2c03`（P9b 步骤 2、3，快照 `h3p`，无冲突），走查期间 HEAD 又到了 `5889b490`（`h4p`）与 `1e90d381`（P5d 步骤 3、P11a、P8 步骤 5，`h5p`）。后两次在 `bundle.ts`、`features.ts`、`particleCorners.ts`、`probe.ts` 上有冲突，都是两边各加了内容，按并集解决。提交的补丁是 `c3-h5.patch`。
+- 工作区：`bundle.ts`、`features.ts` 有 P8 会话未提交的改动，三方合并，两边都保留。
+- 合入新 HEAD 后 `2251857160` 剩下的不支持项只有过渡键，删掉后能整张渲染（语料干净 78 → 79），编完整张 553 次请求（252 次未命中）、读 82,208,839 字节；`pipeline.test.ts` 的请求上限 450 → 600，字节上限 80 MiB 不动（余量约 2%）。
+
+**改动：**
+- **新增 `animation/player.ts`（`SceneAnimations`）**：
+  - `frame(dt, state, onSound?)`：按列表顺序走，时钟主人本帧第一次用到时推进一次（子排在父前面也不晚一帧），推进量 `f(f(rate)·f(dt))`。会写的按主人的时钟求值，经 `SceneState.write` 写入，返回值不看。`recompile` / `unsupported` / `script-property` 目标不写。暂停的照写。事件每帧开头清空。
+  - `write`：不推进，写一次。
+  - `carryOver`：按 `id` 接回。时钟参数相同时接时钟（`t`、整个 `flags`、`rate`）；关键帧相同时复用 `Channel`。
+  - `seek`：dev 近似。
+  - `probe`：每条的时钟与最后写入的值，加最近 600 次 `frame()` 的耗时。
+- **`host.ts`**：
+  - 换场景的 `beforeFirstFrame` 里新建播放器、`carryOver`、写一次，都在 `replayWrites` 之前；
+  - `beforeFrame` 里动画在脚本之前，不受脚本运行时门控；
+  - 退回与销毁时丢掉；
+  - 声音目标当场推给排期器；
+  - 新增 `animations()`。
+- **删掉过渡键 `value:animation:pending`**（`animations.ts`、`bundle.ts`），注释同步。
+- **dev 探针**：
+  - `replayReadback` 收 `animations`：每帧在粒子、相机之后推进、写入、`sync`，读回帧同样；
+  - `renderFrame` 有 `dts` 时走它，没有时 `seek(time)` 再写；`profile` 帧另用一份；结果加 `animations`；
+  - `particleCorners` 同一串 dt；`install.ts` 加 `host.animations`。
+- **测试**：新增 `player.test.ts`（18 个）、`dev/replayAnimations.test.ts`（3 个），`host.script.test.ts` 加 7 个。最后一个由主会话补，见变异。
+
+**和子计划不同的地方：**
+- **动画写进渲染器正在画的状态**（`renderer.sceneState ?? scriptState`），不是 `scriptState`。平时两者是同一份。只在「清空脚本存储」重建脚本的加载期间不同：那时 `scriptState` 是给新脚本 `init` 用的新状态，写进去会让 `init(value)` 收到动画值（WPE 收到的是 `value`），旧场景的动画也会停住。
+- 换场景时先按当前时钟写一次：暂停中重编译时首帧不跑 `beforeFrame`，不写的话会先闪一下编译期的 `value`。
+- `carryOver` 连 `rate` 一起接（WPE 改属性时包装对象还在，P10b 用）。
+- `renderFrame` 的 `profile` 帧另用一份动画，读回值不受 `profile` 帧数影响。`particleCorners` 也接了动画。
+
+**验收：**
+- tsc 0。
+- vitest（带 WPE 根）：`62de2c03` 上 2779 → 2807（+28），两边各有同一个 HEAD 上本来就有的失败（`pipeline.test.ts`「`3830255100: 219 次请求`」）；最终在 `1e90d381` 上 3040 → 3068（+28），全部通过。Prettier 干净。
+- 语料（183 张）：`value:animation:pending` 从 40 张消失，别的键逐张不变，能渲染 66 → 66（这 40 张都还差别的节）。
+- 变异：
+  - 代理做了 23 处，全部检出；
+  - 主会话另做 5 处，漏了「换场景时先重放脚本、后写动画」。补了用例「暂停中重编译：先写动画、再重放脚本写入，字段是脚本最后写的值」后检出。
+- 真机（dev 宿主产物按工作区重建）：
+  - 屏外宿主首帧 21 条动画推进到 0.0001 s 并写入，`writes` 为假的 3 条（工程里故意做坏的通道）不写。
+  - `render_scene` 按 30 帧 × 1/60 回放 `p10-curves`：float32 时钟到 0.5000002 s，`startpaused` 那条停在第 0 帧照写，画面上方块位置、45° 旋转、颜色都对；不回放、`time` 0.5 时只差 float32 尾数。
+  - `p10-curves` 不再有不支持项。
+- 开销：在 Node 里编译 `3400241651`（23 条，全会写：15 条常量 float、3 条 angles、3 条图层 vec3、2 条图层 float），`frame()` 每帧均值 0.053 ms，p95 0.074 ms。不写入时 0.027 ms：写入一半的时间在向量拼字符串再解析，要压就让写入不经字符串。浏览器里没量：屏外宿主不跑帧循环，可见预览会占用画廊界面。
+
+**留给 P10b：**
+- 派发事件：WPE 在推进时钟的那一条写完之后、下一条写之前派发。现在 `events` 只按收集顺序记，P10b 要给 `frame` 加按条的派发钩子。
+- 探针的 `scriptValues` 仍在回放前写一次：同一目标上有动画时探针里动画赢，WPE 里脚本赢。kbp 的 FR 块不受影响。
+

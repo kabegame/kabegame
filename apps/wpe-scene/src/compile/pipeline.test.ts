@@ -472,9 +472,10 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
         check(tally.repeated === 0, `${sample}: ${tally.repeated} 次重复请求`);
         // 上限随场景编得更远而放宽：P4b 步骤 1 放开 R8 / RG88 后，3820104696 先编完 7 个 effect 和 15 张纹理（每级 mip 一次区间读）
         // 才到粒子，169 次；P8 步骤 4 起 2251857160 不再在图层依赖处退回，要编到 P10a 的临时键 `value:animation:pending` 才停，
-        // 404 次（161 次是逐级查找的未命中）、读 73,995,846 字节，都不重复
+        // 404 次（161 次是逐级查找的未命中）、读 73,995,846 字节，都不重复；P10a 步骤 3 删掉临时键后它整张编完、能渲染，553 次（252 次未命中）、
+        // 读 82,208,839 字节（离字节上限只差约 2%），仍都不重复
         check(tally.bytes < 80 * 1024 * 1024, `${sample}: 读取 ${tally.bytes} 字节`);
-        check(tally.calls <= 450, `${sample}: ${tally.calls} 次请求`);
+        check(tally.calls <= 600, `${sample}: ${tally.calls} 次请求`);
       }
     } finally {
       vi.unstubAllGlobals();

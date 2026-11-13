@@ -1,4 +1,4 @@
-import { ANIMATION_PENDING, collectAnimations, settleConstantAnimation } from "./animations";
+import { collectAnimations, settleConstantAnimation } from "./animations";
 import { alignmentIndex } from "./alignment";
 import { compileBloom, type SceneBloom } from "./bloom";
 import {
@@ -987,11 +987,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
-  // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键；有会写字段的动画时报过渡键（常量目标的在编译 pass 时再判一次），
-  // 和原来的 `value:animation` 一样一开始就定下退回，不白解码纹理
+  // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键（`value:animation:light` / `camera` / `other`）；其余进 bundle，
+  // 由宿主每帧写（P10a 步骤 3，`animation/player.ts`）
   const animations = collectAnimations(scene);
   for (const key of animations.unsupported) unsupported.add(key);
-  if (animations.list.some((animation) => animation.writes)) unsupported.add(ANIMATION_PENDING);
   checkScriptFeatures(scripts.list, unsupported);
   checkSceneFeatures(scene, unsupported);
   const general = scene.general ?? {};
@@ -1535,7 +1534,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         else script.target.uniforms = [];
         script.valueType = script.target.type;
       }
-      // 关键帧的常量目标（P10a 步骤 2）：同样补，补完按主格类型定写不写；会写的报过渡键（关着的 effect 的常量动画同样每帧写）
+      // 关键帧的常量目标（P10a 步骤 2）：同样补，补完按主格类型定写不写（关着的 effect 的常量动画同样每帧写）
       for (const animation of animations.list) {
         const target = animation.target;
         if (target.kind !== "constant" || target.pass !== context.key) continue;
@@ -1543,7 +1542,6 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           animation,
           slots.find((item) => item.material === target.material),
         );
-        if (animation.writes) unsupported.add(ANIMATION_PENDING);
       }
     }
     if (!shaderName) issues.add("shader:missing");
