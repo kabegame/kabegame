@@ -73,7 +73,12 @@ function vectorFromString(text: string, n: number): number[] {
   return out;
 }
 
-function writeValue(n: number, value: unknown): number[] | null {
+/**
+ * WPE 的 float / vec2 / vec3 / vec4 setter（`FUN_1401a4b00` / `FUN_1401a3fc0` / `FUN_1401a4230` / `FUN_1401a4580`，报告 2.4）收一个
+ * 已经取出来的 JSON 值：返回写入的 n 个分量，不写返回 null。材质常量（`materialSetter`）与图层的向量字段（`compile/bindings.ts` 的
+ * `layerVectorValue`，P6b 1e-3 复核）用的是同一组 setter，所以共用这一份。
+ */
+export function setterValue(n: number, value: unknown): number[] | null {
   // jsoncpp 的 int / uint / real：float 写一个分量，向量铺满（第 6 节 `num-*`）
   if (typeof value === "number") return new Array<number>(n).fill(value);
   // 字符串只有向量收（float 的 `FUN_1401a4b00` 只认数字，第 6 节 `s1-f` / `s2-f`）
@@ -88,8 +93,8 @@ function writeValue(n: number, value: unknown): number[] | null {
  */
 export function materialSetter(n: number, value: unknown): number[] | null {
   if (value && typeof value === "object" && !Array.isArray(value))
-    return "value" in value ? writeValue(n, (value as { value: unknown }).value) : null;
-  return writeValue(n, value);
+    return "value" in value ? setterValue(n, (value as { value: unknown }).value) : null;
+  return setterValue(n, value);
 }
 
 /**

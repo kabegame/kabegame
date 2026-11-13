@@ -361,6 +361,21 @@ export interface ParticleReplay {
 export type SceneLayerField =
   "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible" | "parallaxDepth";
 
+/** 文本层的运行中字段（P6b 1e-3，宿主 `compile/bindings.ts` 的 `TextRuntimeField`；`replay.ts` 的 `TEXT_FIELDS` 是取值表）。 */
+export type SceneTextField =
+  | "text"
+  | "pointsize"
+  | "padding"
+  | "spacing"
+  | "maxwidth"
+  | "maxrows"
+  | "limitwidth"
+  | "limitrows"
+  | "limituseellipsis"
+  | "blockalign"
+  | "horizontalalign"
+  | "verticalalign";
+
 /**
  * 脚本值（第 6 批，`apps/wpe-scene/src/dev/scriptValues.ts` 的 `ScriptValue`）：某个对象某个字段上的字段脚本在读回那一帧会返回的值。
  * 探针不跑场景脚本，按它找到 bundle 里挂在这个字段上的字段脚本，用绑定目标写进状态（同宿主的脚本写回）。
@@ -368,9 +383,13 @@ export type SceneLayerField =
 export interface ScriptValue {
   /** `objects` 下标（非负整数），或对象名（非空，重名时探针报错）。 */
   object: number | string;
-  field: SceneLayerField;
-  /** 1–4 个有限数（同宿主脚本写回铺满后的分量），或布尔。 */
-  value: number[] | boolean;
+  /** 图层字段，或文本层的运行中字段（P6b 1e-3）。 */
+  field: SceneLayerField | SceneTextField;
+  /**
+   * 1–4 个有限数（同宿主脚本写回铺满后的分量），或布尔。文本字段（P6b 1e-3）另收字符串（最长 4096 个 UTF-16 单元，例如时钟画的
+   * 「12:34」），探针按宿主同一条写回规整（`text` 收数时转字符串、`pointsize` 收数），回放前结清重排（缺字体时等读完）。
+   */
+  value: number[] | boolean | string;
   /** 找不到对象、或这个字段没挂字段脚本时跳过（结果里 `applied: false`），不报错。 */
   optional?: boolean;
 }
@@ -381,8 +400,8 @@ export interface ScriptValueResult {
   object: number | null;
   /** 解析出的对象名；按下标没找到时为 null。 */
   name: string | null;
-  field: SceneLayerField;
-  value: number[] | boolean;
+  field: SceneLayerField | SceneTextField;
+  value: number[] | boolean | string;
   /** 写进了状态；`optional` 跳过时为 false，`reason` 写明原因。 */
   applied: boolean;
   reason?: string;
@@ -442,7 +461,8 @@ export interface RenderRequest {
   canvas?: [number, number];
   /**
    * 脚本值（第 6 批，最多 64 项）：原样交给探针，探针在建好场景之后、回放之前经字段脚本的绑定目标写进状态。用途：kbp 测试工程的 FR
-   * 帧号块（MCP 按读回帧号算颜色，带 `optional: true`）。结果的 `meta.scriptValues` 逐项写明写没写。
+   * 帧号块（MCP 按读回帧号算颜色，带 `optional: true`）。结果的 `meta.scriptValues` 逐项写明写没写。P6b 1e-3 起也收文本层的运行中
+   * 字段与字符串值（按 WPE 抓帧里画的文字渲染一帧，`meta.textSyncs` 是结清重排的次数）；MCP 只发 FR，按字符串渲染走 REST。
    */
   scriptValues?: ScriptValue[];
   /**
@@ -568,6 +588,8 @@ export interface RenderMeta {
   frametime: number;
   /** 每一项脚本值写没写进状态（第 6 批；没给时空数组，之前的宿主产物没有这一项）。 */
   scriptValues?: ScriptValueResult[];
+  /** 回放前结清文本重排调了几次 `sync`（P6b 1e-3）：只在有文本字段的脚本值写进了状态时有，1 是一次排成、多出的每次是等了一轮字体。 */
+  textSyncs?: number;
   /** 每段视频纹理实际取的时刻（P9a 步骤 3；没有视频纹理时空数组，之前的宿主产物没有这一项）。 */
   videos?: RenderVideo[];
   key: string;

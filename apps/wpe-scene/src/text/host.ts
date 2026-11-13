@@ -20,7 +20,8 @@
  * - **运行中重排**（P6b 1e）：每次加载的图集留在实例上，`relayouter()` 给出绑定这次加载的重排器，经 `SceneRenderer.load` → `GpuScene.build`
  *   的 `relayout` 交给渲染器，渲染器在 `sync` 里对排版字段变了的层调它（帧循环里，同步）。先放旧排版的字形引用再排（同 WPE「先放旧、
  *   再排新」）；缺字体时把引用加回去、返回 null（旧排版照画），后台读字体，读完调 `onReady(对象)`，宿主把这一层重新标脏（暂停时补画
- *   一帧），下一帧补上（WPE 同步读，第一次出现新回退字时我们晚一到几帧，1e 已定 4）。
+ *   一帧），下一帧补上（WPE 同步读，第一次出现新回退字时我们晚一到几帧，1e 已定 4）。dev 探针没有帧循环，用 `idle()` 等这些读取结束
+ *   （P6b 1e-3）。
  *   重排器绑定加载代数：更新的加载一开始（`prepare` 开头加代数）或宿主销毁之后，旧场景的重排器不再动图集（返回 null），读完字体的回调
  *   也丢掉——旧场景在新场景建好之前还在画，不能把字形排进新加载的图集（装箱顺序要和 WPE 一样）。
  */
@@ -47,8 +48,11 @@ export interface TextRelayouter {
 /** 没有 `systemFonts` 表（Node 单测、dev 探针）也没给 `fontsDir` 时的系统字体目录（Windows 的缺省安装位置）。 */
 export const DEFAULT_SYSTEM_FONTS_DIR = "C:\\Windows\\Fonts";
 
-/** 一个对象「缺字体 → 读 → 重排」的轮数上限：每轮至少读进一个字体，主字体、arial 与回退链加起来不到 16 个。 */
-const MAX_FONT_ROUNDS = 16;
+/**
+ * 一个对象「缺字体 → 读 → 重排」的轮数上限：每轮至少读进一个字体，主字体、arial 与回退链加起来不到 16 个。dev 探针结清运行中重排
+ * （`dev/probeTexts.ts` 的 `settle`，P6b 1e-3）用同一个上限。
+ */
+export const MAX_FONT_ROUNDS = 16;
 
 /** 这次加载的字体来源：场景的 WPE `assets` 目录（回退链的引擎路径），系统字体表或目录。 */
 export interface TextFontSources {
@@ -96,6 +100,11 @@ export class SceneTexts {
   /** 最近一次排完的加载（`prepare` 成功返回时记下），`relayouter()` 绑它；更新的加载开始时清掉。 */
   private current: TextLoad | null = null;
   private disposed = false;
+  /**
+   * 运行中重排发起、还没结束的字体读取（P6b 1e-3，dev 探针结清用）：每项是「读完 → 比代数 → `onReady`」整条链，结束时（成功、失败或
+   * 回调丢掉）自己删掉。
+   */
+  private readonly reading = new Set<Promise<void>>();
 
   constructor(private readonly options: SceneTextsOptions) {}
 
@@ -177,15 +186,31 @@ export class SceneTexts {
     }
     if (!layout.missingFonts.length) return layout;
     retainTextLayout(previous);
-    // 读取器的抛错 `TextFonts.load` 已当读不到，这里的拒绝回调只兜底
-    fonts.load(layout.missingFonts).then(
-      () => {
-        if (this.disposed || load.generation !== this.generation) return;
-        this.options.onReady?.(object);
-      },
-      () => {},
-    );
+    // 读取器的抛错 `TextFonts.load` 已当读不到，这里的拒绝回调只兜底。整条链记进 `reading`（P6b 1e-3），结束时删掉：
+    // `idle()` 等的是「`onReady` 已调过」，不只是字节读完
+    const reading: Promise<void> = fonts
+      .load(layout.missingFonts)
+      .then(
+        () => {
+          if (this.disposed || load.generation !== this.generation) return;
+          this.options.onReady?.(object);
+        },
+        () => {},
+      )
+      .finally(() => this.reading.delete(reading));
+    this.reading.add(reading);
     return null;
+  }
+
+  /**
+   * 等运行中重排发起的字体读取全部结束（P6b 1e-3）：成功、失败或回调丢掉都算结束，结束时 `onReady` 已调过。返回有没有等到东西：没有在读的
+   * 时候立即返回 false。只等调用这一刻在读的那些（等的期间没人重排，不会有新的）。
+   * 宿主不用（帧循环里不能等，读完由 `onReady` 标脏、下一帧补上）；dev 探针没有帧循环，回放前靠它把文字排完（`dev/probeTexts.ts`）。
+   */
+  async idle(): Promise<boolean> {
+    if (!this.reading.size) return false;
+    await Promise.allSettled([...this.reading]);
+    return true;
   }
 
   /** wasm 引擎与字体缓存：第一次用时建，之后跨重编译保留。wasm 不在或实例化失败抛 `text:engine`。 */

@@ -21,7 +21,14 @@ import {
   type SceneObject,
   type SceneValue,
 } from "./model";
-import { generalValue, isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
+import {
+  generalValue,
+  isKeyframedValue,
+  isScriptValue,
+  isTextRuntimeField,
+  isUserBinding,
+  userBindingOf,
+} from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
 import { hasNonNumericDependency } from "./dependencies";
 import { resolveParents } from "./hierarchy";
@@ -637,13 +644,16 @@ const TEXT_MSDF_KEYS = ["msdf", "outline", "blur", "dropshadow"] as const;
 const NEUTRAL_ANCHORS = new Set(["none", "center"]);
 
 /**
- * 文本对象的静态检查（P6b 1d，`checkObjectFeatures` 调）：挂 `{script}` 的文本键。`text` 的字段脚本（时钟）是 1e，报 `text:script`；
- * 其它文本键挂脚本报 `text:script:<键>`（WPE 写入时当场重排，1e 起才有字符串写回与就地重排）。
+ * 文本对象的静态检查（P6b 1d，`checkObjectFeatures` 调）：挂 `{script}` 的文本键。
+ * - 运行中字段（`TEXT_RUNTIME_FIELDS`：`text`、`pointsize`、`maxwidth` 等 12 个）挂脚本不报（P6b 1e-3）：字段脚本的返回值经字符串
+ *   写回进 `SceneState.textFields`，值变了宿主当帧重排、重建这一层（1e-1、1e-2），同 WPE 写入时当场重排；
+ * - 其余文本键（`font`、`opaquebackground`、`backgroundcolor`、MSDF 的开关与参数等）挂脚本报 `text:script:<键>`：`font`、
+ *   `opaquebackground` 运行中改要整场重编译（1e 已定 3），别的没有脚本写回目标（`compile/scripts.ts` 落成 `unsupported`）。
  * 生效值相关的项（MSDF 的开关、`anchor`）要按当前用户属性判断，在编译时由 `checkTextOptions` 报（`compile/texts.ts`）。
  */
 export function checkTextFeatures(object: SceneObject, unsupported: Set<string>): void {
   for (const key of TEXT_KEYS)
-    if (isScriptValue(object[key])) unsupported.add(key === "text" ? "text:script" : `text:script:${key}`);
+    if (isScriptValue(object[key]) && !isTextRuntimeField(key)) unsupported.add(`text:script:${key}`);
 }
 
 /**

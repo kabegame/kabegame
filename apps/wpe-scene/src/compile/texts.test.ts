@@ -4,7 +4,8 @@
  * - 四个宿主材质的 pass（键、渲染图填的槽 0、背景与 clearalpha 什么时候编）、背景色、`padding` 看启用的 effect；
  * - 绑定：运行中可改的排版键（`TEXT_RUNTIME_FIELDS`）登记成文本目标（P6b 1e），`font` / `opaquebackground` 等照旧重编译，
  *   `backgroundcolor` 在 LDR 下是背景常量的就地目标；
- * - 能力表：不再报 `object:text` / `object:font` 等，`text:script`、`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>` 照规则报；
+ * - 能力表：不再报 `object:text` / `object:font` 等，`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>` 照规则报；运行中字段
+ *   （`TEXT_RUNTIME_FIELDS`）挂脚本不报，`text:script` 键去掉（P6b 1e-3）；
  * - `SceneState`：文本 pass 的常量、背景常量、effect 开关走重编译；
  * - 有 WPE 时用真翻译器编 WPE 自带的四个材质（`font`、`flat`、`composelayer` 着色器），程序检查不报。
  */
@@ -178,12 +179,34 @@ describe("能力表：文本对象", () => {
     ).toEqual([]);
   });
 
-  it("text 挂脚本报 text:script，其它文本键挂脚本报 text:script:<键>；图层字段的脚本照旧不报", () => {
-    expect(check({ text: { script: "export function update() { return 'a'; }", value: "x" } })).toEqual([
-      "text:script",
-    ]);
-    expect(check({ text: "a", pointsize: { script: "export function update() { return 3; }", value: 3 } })).toEqual([
-      "text:script:pointsize",
+  it("运行中字段挂脚本不报（P6b 1e-3：12 个逐个）；其余文本键挂脚本报 text:script:<键>；图层字段的脚本照旧不报", () => {
+    const script = (value: unknown) => ({ script: "export function update(value) { return value; }", value });
+    const values: Record<(typeof TEXT_RUNTIME_FIELDS)[number], unknown> = {
+      text: "x",
+      pointsize: 3,
+      padding: "1 1",
+      spacing: "0 0",
+      maxwidth: 300,
+      maxrows: 2,
+      limitwidth: true,
+      limitrows: true,
+      limituseellipsis: true,
+      blockalign: true,
+      horizontalalign: "left",
+      verticalalign: "top",
+    };
+    for (const key of TEXT_RUNTIME_FIELDS) {
+      expect(check({ text: "a", [key]: script(values[key]) }), key).toEqual([]);
+    }
+    // 全挂上也不报，不会冒出旧的 text:script
+    expect(check(Object.fromEntries(TEXT_RUNTIME_FIELDS.map((key) => [key, script(values[key])])))).toEqual([]);
+    // font / opaquebackground 运行中改要整场重编译（1e 已定 3），backgroundcolor 等没有脚本写回目标
+    expect(check({ text: "a", font: script("fonts/a.ttf") })).toEqual(["text:script:font"]);
+    expect(check({ text: "a", opaquebackground: script(true) })).toEqual(["text:script:opaquebackground"]);
+    expect(check({ text: "a", backgroundcolor: script("1 0 0") })).toEqual(["text:script:backgroundcolor"]);
+    expect(check({ text: script("a"), font: script("fonts/a.ttf"), outlinecolor: script("0 0 0") })).toEqual([
+      "text:script:font",
+      "text:script:outlinecolor",
     ]);
     expect(check({ text: "a", alpha: { script: "export function update() { return 1; }", value: 1 } })).toEqual([]);
   });
@@ -416,17 +439,23 @@ describe("compileScene：文本表", () => {
     expect(TEXT_RUNTIME_FIELDS).toHaveLength(12);
   });
 
-  it("能力：MSDF 开关与 anchor 按当前属性值报；text 挂脚本报 text:script", async () => {
+  it("能力：MSDF 开关与 anchor 按当前属性值报；text 挂脚本不报（P6b 1e-3），font 挂脚本报 text:script:font", async () => {
     const { bundle } = await compile(
       [
         { text: "a", outline: { user: "edge", value: false } },
         { text: "b", anchor: "topleft" },
         { text: "c", anchor: "nowhere", msdf: true },
         { text: { script: "export function update() { return 'x'; }", value: "x" } },
+        { text: "d", font: { script: "export function update() { return 'fonts/a.ttf'; }", value: "fonts/a.ttf" } },
       ],
       { properties: { edge: { value: true } } },
     );
-    expect(bundle.unsupported).toEqual(["text:anchor:topleft", "text:msdf:msdf", "text:msdf:outline", "text:script"]);
+    expect(bundle.unsupported).toEqual([
+      "text:anchor:topleft",
+      "text:msdf:msdf",
+      "text:msdf:outline",
+      "text:script:font",
+    ]);
     expect(bundle.bindings.map((binding) => binding.target)).toContainEqual({
       kind: "recompile",
       reason: "layer-structure",

@@ -8,10 +8,12 @@ import {
   generalValue,
   isScriptValue,
   isUserBinding,
+  layerVectorValue,
   type BindingTarget,
   type GeneralKey,
   type GeneralValues,
   type LayerField,
+  type LayerVectorField,
   type RecompileReason,
   type SceneBinding,
   type TargetKey,
@@ -21,7 +23,7 @@ import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeNa
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
-import { constantTargetFields, materialSlots } from "./materialValues";
+import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
 import {
   checkEffectFeatures,
@@ -1831,21 +1833,30 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     if (settled()) break;
     /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
     const at = (field: LayerField): BindingTarget => ({ kind: "layer", object: index, field });
+    // 图层的向量字段照 WPE 的向量 setter 取值（`layerVectorValue`：数字铺满、字符串少写的分量为 0，P6b 1e-3 复核）。绑定的属性值
+    // 写不进（布尔、条件换成的布尔）时 WPE 不改字段，留着加载 JSON 时写进的 `value`；那个也写不进就是构造时的缺省
+    const vector = (field: LayerVectorField, fallback: number[]): number[] => {
+      const raw = object[field] as SceneValue | undefined;
+      return (
+        layerVectorValue(field, bindings.bind(raw, properties, at(field))) ??
+        layerVectorValue(field, unwrapValue(raw)) ?? [...fallback]
+      );
+    };
     const layer: SceneLayer = {
       id: object.id ?? bundle.layers.length,
       object: index,
       parent: parents[index],
       name: object.name ?? "",
-      origin: numbers(bindings.bind(object.origin, properties, at("origin")), [0, 0, 0]),
-      scale: numbers(bindings.bind(object.scale, properties, at("scale")), [1, 1, 1]),
+      origin: vector("origin", [0, 0, 0]),
+      scale: vector("scale", [1, 1, 1]),
       angles: numbers(bindings.bind(object.angles, properties, at("angles")), [0, 0, 0]),
       size: numbers(bindings.bind(object.size, properties, recompile("layer-structure", `objects/${index}/size`))),
       alpha: asNumber(bindings.bind(object.alpha, properties, at("alpha")), 1),
-      color: numbers(bindings.bind(object.color, properties, at("color")), [1, 1, 1]),
+      color: vector("color", [1, 1, 1]),
       brightness: asNumber(bindings.bind(object.brightness as SceneValue, properties, at("brightness")), 1),
       visible: bindings.bind(object.visible, properties, at("visible")) !== false,
       visibleBound: isUserBinding(object.visible),
-      parallaxDepth: numbers(bindings.bind(object.parallaxDepth, properties, at("parallaxDepth")), [1, 1]),
+      parallaxDepth: vector("parallaxDepth", [1, 1]),
       solidLayer: false,
       instanced: false,
       noPadding: false,

@@ -10,7 +10,7 @@
  * （单测用 `Proxy` 记录编译期读过的属性名，断言都在绑定表里）。
  */
 import { numbers, resolveValue, type SceneScalar, type SceneValue } from "./model";
-import type { MaterialMember } from "./materialValues";
+import { setterValue, type MaterialMember } from "./materialValues";
 import type { InstanceKey } from "./particles";
 import type { BloomParams } from "./postprocess";
 
@@ -27,6 +27,28 @@ export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
  */
 export type LayerField =
   "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible" | "parallaxDepth" | "alignment";
+
+/**
+ * 图层的向量字段与分量数（P6b 1e-3 复核）：WPE 的对象描述符表（`ignore/p3-userprops/notes/descriptors-decomp.txt`，`FUN_1401e0530` /
+ * `FUN_1401ee520`）里 `origin`、`scale`、图像层 `color` 是 vec3（`FUN_1401a4230`），`parallaxDepth` 是 vec2（`FUN_1401a3fc0`），和材质
+ * 常量是同一组 setter（p3-script-REPORT「属性写入」表）。`angles` 走另一个 setter（`FUN_1401df2f0` → `FUN_1401dd630`，没读透），不在这里，
+ * 照旧按 `numbers` 取。
+ */
+export const LAYER_VECTOR_FIELDS = { origin: 3, scale: 3, color: 3, parallaxDepth: 2 } as const;
+export type LayerVectorField = keyof typeof LAYER_VECTOR_FIELDS;
+
+export function isLayerVectorField(field: string): field is LayerVectorField {
+  return Object.hasOwn(LAYER_VECTOR_FIELDS, field);
+}
+
+/**
+ * 图层向量字段的取值，编译期与就地写共用（「就地 = 重编译」）：照 WPE 的向量 setter（`materialValues.ts` 的 `setterValue`）——数字铺满
+ * 各分量（滑块属性绑 `scale` 时三个分量相同，`3836725625` 的「时钟大小」），字符串按空格读、少写的分量为 0，布尔 / null / 数组不写
+ * （返回 null：WPE 不改字段，留着原值）。P1 起这里用 `numbers`，数字只得一个分量、其余在建矩阵时按缺省补，和 WPE 不同。
+ */
+export function layerVectorValue(field: LayerVectorField, value: unknown): number[] | null {
+  return setterValue(LAYER_VECTOR_FIELDS[field], value);
+}
 
 export type RecompileReason =
   | "postprocess-hdr" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）

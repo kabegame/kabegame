@@ -3,6 +3,7 @@ import { BindingCollector, generalDefaults } from "./compile/bindings";
 import type { SceneBundle, ScenePass } from "./compile/bundle";
 import type { SceneFs } from "./compile/fs";
 import { compileText } from "./compile/texts";
+import { applyScriptValues } from "./dev/scriptValues";
 import { SceneState } from "./render/state";
 import { createMemoryStorage, SCENE_STORAGE_PREFIX } from "./script/storage";
 import { TEXT_DEFAULTS } from "./text/fields";
@@ -1062,6 +1063,37 @@ describe("SceneHost 脚本接线", () => {
       // 编译结果由替身给出（"Song Title"）：重放了脚本的写入就会是 "Script"
       expect(fields().text).toBe("Song Title");
       host.dispose();
+    });
+
+    it("dev 探针的脚本值（P6b 1e-3）：同一个返回值经探针写进的文本字段与字段脚本写回的相同", async () => {
+      const maxwidth = {
+        id: "objects/0/maxwidth",
+        target: { kind: "text", object: 0, field: "maxwidth" },
+        valueType: "float",
+        initial: 300,
+      } as const;
+      // [字段, 脚本返回值, 探针收的值]：字符串原样；`text` 收数时 ToString、收布尔转字符串（属性侧不写）；数字键原样
+      const cases: ["text" | "maxwidth", unknown, string | boolean | number[], Partial<typeof maxwidth>][] = [
+        ["text", "F183", "F183", {}],
+        ["text", 12, [12], {}],
+        ["text", true, true, {}],
+        ["maxwidth", 250.5, [250.5], maxwidth],
+      ];
+      for (const [field, returned, probeValue, script] of cases) {
+        compile.mockImplementation(async () => textBundle(script));
+        onUpdate = () => returned;
+        const host = await start();
+        const viaHost = { ...fields() };
+        host.dispose();
+        const bundle = textBundle(script);
+        const state = SceneState.fromBundle(bundle);
+        const [result] = applyScriptValues(state, bundle, [{ object: 0, field, value: probeValue }]);
+        expect(result.applied, `${field} ${JSON.stringify(returned)}`).toBe(true);
+        expect(state.textFields.get(0), `${field} ${JSON.stringify(returned)}`).toEqual(viaHost);
+        expect(viaHost[field], `${field} ${JSON.stringify(returned)}`).not.toEqual(
+          textBundle(script).layers[0].text!.fields[field],
+        );
+      }
     });
 
     it("compileText 登记的绑定（P6b 1e-2）：属性改 text、pointsize 就地写、不重编译；改 font 照旧重编译", async () => {

@@ -510,6 +510,38 @@ describe("粒子回放、轨迹与四角", () => {
     });
   });
 
+  test("render 的文本脚本值（P6b 1e-3）：文本字段的字符串原样转给后端；图层字段给字符串、超长、不认识的文本键回 400", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const scriptValues = [
+        { object: "S1", field: "text", value: "12:34" },
+        { object: 3, field: "pointsize", value: [48] },
+        { object: "FR", field: "color", value: [1, 0, 1], optional: true },
+      ];
+      const ok = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: 2391389126, scriptValues });
+      assert.equal(ok.status, 200);
+      await ok.body?.cancel();
+      assert.deepEqual(calls, [["hostRender", "h-1", { imageId: "2391389126", scriptValues }]]);
+      for (const [scriptValuesBad, field, message] of [
+        [[{ object: "FR", field: "color", value: "0 0 1" }], "scriptValues[0].value", /color 是图层字段/],
+        [[{ object: "S1", field: "text", value: "x".repeat(4097) }], "scriptValues[0].value", /最长 4096/],
+        [[{ object: "S1", field: "text", value: { text: "x" } }], "scriptValues[0].value", /字符串/],
+        [[{ object: "S1", field: "font", value: "fonts/a.ttf" }], "scriptValues[0].field", /或 text \/ pointsize/],
+      ] as const) {
+        const res = await post(`${base}/__kabegame_dev/hosts/h-1/render`, {
+          imageId: "1",
+          scriptValues: scriptValuesBad,
+        });
+        assert.equal(res.status, 400, JSON.stringify(scriptValuesBad));
+        const error = await res.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field, error.error);
+        assert.match(error.error, message);
+      }
+      assert.equal(calls.length, 1, "参数错时不调后端");
+    });
+  });
+
   test("particle-track：校验后转给后端（imageId 转字符串），400 的形状", async () => {
     const { backend, calls } = fakeBackend();
     await withServer(backend, async (base) => {

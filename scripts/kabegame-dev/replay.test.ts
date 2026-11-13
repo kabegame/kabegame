@@ -1,7 +1,15 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { DevError } from "./errors.ts";
-import { checkCornersRequest, checkRenderReplay, checkReplay, checkScriptValues, checkTrackRequest } from "./replay.ts";
+import {
+  checkCornersRequest,
+  checkRenderReplay,
+  checkReplay,
+  checkScriptValues,
+  checkTrackRequest,
+  MAX_SCRIPT_TEXT,
+  TEXT_FIELDS,
+} from "./replay.ts";
 
 /** 断言抛 400，`field` 与信息符合预期。 */
 function rejects400(fn: () => unknown, field: string, message?: RegExp) {
@@ -143,6 +151,77 @@ describe("checkReplay", () => {
     rejects400(() => checkScriptValues([{ ...fr, value: [0.5, Number.NaN] }]), "scriptValues[0].value[1]", /有限数/);
     rejects400(() => checkScriptValues([{ ...fr, value: [0.5, "1"] }]), "scriptValues[0].value[1]");
     rejects400(() => checkScriptValues([{ ...fr, optional: "true" }]), "scriptValues[0].optional", /布尔/);
+  });
+
+  test("渲染的脚本值（P6b 1e-3）：文本字段收字符串（最长 4096）、数与布尔；图层字段给字符串 400，错误指到 value", () => {
+    // 12 个运行中字段，同宿主 TEXT_RUNTIME_FIELDS
+    assert.deepEqual(TEXT_FIELDS, [
+      "text",
+      "pointsize",
+      "padding",
+      "spacing",
+      "maxwidth",
+      "maxrows",
+      "limitwidth",
+      "limitrows",
+      "limituseellipsis",
+      "blockalign",
+      "horizontalalign",
+      "verticalalign",
+    ]);
+    assert.equal(MAX_SCRIPT_TEXT, 4096);
+    const ok = [
+      { object: "S1", field: "text", value: "F183" },
+      { object: 0, field: "text", value: "" },
+      { object: 0, field: "text", value: "x".repeat(MAX_SCRIPT_TEXT) },
+      { object: 0, field: "pointsize", value: [48] },
+      { object: 0, field: "padding", value: [4, 8] },
+      { object: 0, field: "limitwidth", value: true },
+      { object: 0, field: "verticalalign", value: "top", optional: true },
+    ];
+    assert.deepEqual(checkScriptValues(ok), ok);
+    for (const field of TEXT_FIELDS) assert.equal(checkScriptValues([{ object: 0, field, value: "x" }]).length, 1);
+    // 和图层字段、FR 一起给，不要求有 particles
+    assert.equal(
+      checkRenderReplay({ scriptValues: [ok[0], { object: "FR", field: "color", value: [1, 0, 1] }] }),
+      undefined,
+    );
+
+    rejects400(
+      () => checkScriptValues([{ object: 0, field: "color", value: "0 0 1" }]),
+      "scriptValues[0].value",
+      /要是 1–4 个有限数，或布尔（color 是图层字段，字符串只给文本字段）/,
+    );
+    rejects400(
+      () => checkRenderReplay({ scriptValues: [ok[0], { object: 0, field: "visible", value: "true" }] }),
+      "scriptValues[1].value",
+      /visible 是图层字段/,
+    );
+    rejects400(
+      () => checkScriptValues([{ object: 0, field: "text", value: "x".repeat(MAX_SCRIPT_TEXT + 1) }]),
+      "scriptValues[0].value",
+      /长 4097 个 UTF-16 单元，最长 4096/,
+    );
+    for (const value of [[], [1, 2, 3, 4, 5], null, 1, { text: "x" }]) {
+      rejects400(
+        () => checkScriptValues([{ object: 0, field: "text", value }]),
+        "scriptValues[0].value",
+        /要是 字符串（最长 4096 个 UTF-16 单元）、1–4 个有限数，或布尔/,
+      );
+    }
+    rejects400(
+      () => checkScriptValues([{ object: 0, field: "maxwidth", value: [1, Number.NaN] }]),
+      "scriptValues[0].value[1]",
+      /有限数/,
+    );
+    // 运行中改要重编译（font、opaquebackground）或没有写回目标的文本键、大小写不同的都不收；错误文案列出两组
+    for (const field of ["font", "opaquebackground", "backgroundcolor", "Text"]) {
+      rejects400(
+        () => checkScriptValues([{ object: 0, field, value: "x" }]),
+        "scriptValues[0].field",
+        /只能是 origin \/ scale .*（图层字段），或 text \/ pointsize .* \/ verticalalign（文本字段）/,
+      );
+    }
   });
 });
 

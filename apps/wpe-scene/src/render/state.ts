@@ -31,6 +31,8 @@ import { ALIGNMENTS } from "../compile/alignment";
 import {
   bindingValue,
   generalValue,
+  isLayerVectorField,
+  layerVectorValue,
   type BindingTarget,
   type GeneralValues,
   type LayerField,
@@ -548,7 +550,13 @@ export class SceneState {
         return "applied";
       }
       if (layer && field !== "alignment") {
-        writeLayer(layer, field, bindingValue(raw, binding.condition, field));
+        // 向量字段（origin / scale / color / parallaxDepth）照 WPE 的向量 setter，同编译期（`layerVectorValue`，P6b 1e-3 复核）：
+        // 数字铺满、字符串少写的分量为 0；写不进（布尔）时 WPE 不改字段，这里也不写、不标脏
+        if (isLayerVectorField(field)) {
+          const vector = layerVectorValue(field, conditioned(binding, raw));
+          if (!vector) return "applied";
+          writeLayer(layer, field, vector);
+        } else writeLayer(layer, field, bindingValue(raw, binding.condition, field));
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的
         if (INHERITED_FIELDS.has(field)) for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
         else this.dirtyLayers.add(target.object);

@@ -224,6 +224,15 @@ kbp 测试工程的第一个对象 FR（`solidlayer`，场景 1780–1860 × 10�
   用它的绑定目标经 `SceneState.write` 写进状态（同宿主的脚本写回）；值不影响模拟，只有读回那一帧被画出来。按名字认对象时重名报错；不带
   `optional` 时找不到对象或没挂字段脚本报错（REST 回 422 `[host]`）。`meta.scriptValues` 逐项写明写没写（`applied`、跳过时的 `reason`）。
   宿主产物不认识这一项（改了探针没重建）时 vite 报 409 `[host]`。
+- **文本字段**（P6b 1e-3）：`field` 也可以是文本层的运行中字段（`text`、`pointsize`、`padding`、`spacing`、`maxwidth`、`maxrows`、
+  `limitwidth`、`limitrows`、`limituseellipsis`、`blockalign`、`horizontalalign`、`verticalalign`，`scripts/kabegame-dev/replay.ts` 的
+  `TEXT_FIELDS`），这时 `value` 还可以是字符串（最长 4096 个 UTF-16 单元），例如按 WPE 抓帧里时钟画的「12:34」、`p6b-script` 的「F183」
+  渲染一帧和 WPE 比：`{ object: "S1", field: "text", value: "F183" }`。探针按宿主的脚本写回规整（`text` 收数时转字符串、`pointsize`
+  收数或数字串、布尔位只收布尔），宿主不会写的值报错（422）；图层字段给字符串 400。写进去之后探针**结清**重排再回放：`sync` 一次，有字体
+  在读就等读完、把那一层重新标脏再 `sync`，直到没有在读的字体（最多读 16 轮），所以缺回退字体时画的也是新文字；`meta.textSyncs` 是
+  结清时 `sync` 的次数（1 是一次排成）。不给文本值时不结清、逐字节同以前。`font`、`opaquebackground` 不收（运行中改要整场重编译，
+  用 `userProperties`）。MCP 的 `render_scene` / `host_render` 只发 FR，要按字符串渲染走 REST，或 `host_eval` 直接调探针。
+  宿主里当前每个文本层的文字、字号、尺寸与运行中重排 / 重建的次数和用时，用 `host_eval` 看 `__kabegameSceneProbe.host.texts()`（P6b 1e）。
 
 2026-11-12 核对（记录见 `.claude/plans/tools/kabegame-chromium-lib.md` 第 6 批）：已有 WPE 抓帧里能看到 FR 块的 61 张（含第 345–941 帧）
 解出的颜色全部等于文件名帧号的公式值；P5a 的 5 组抖动、5 组缩放与 `p5a-shakepar2` 第 941 帧按时间线回放，和 WPE 上屏帧**整帧逐像素比、
@@ -253,7 +262,7 @@ kbp 测试工程的第一个对象 FR（`solidlayer`，场景 1780–1860 × 10�
 | `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, scriptValues?, videoTime?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」）；`scriptValues` 是 `[{ object, field, value, optional? }]`（最多 64 项，`object` 是非负整数或非空字符串、`field` 是图层字段、`value` 是 1–4 个有限数或布尔，不合法 400 带 `field`），探针写进状态，`meta.scriptValues` 逐项回 `applied`（见「FR 帧号块」）；`videoTime` 是非负秒数或 `{ <纹理 path>: 秒 }`（最多 64 项，不合法 400 带 `field`，键不是视频纹理时探针报错回 422），`meta.videos` 回每段实际取的时刻（`path`、`time`、`duration`、`width`、`height`、`failed`、`error?`），宿主产物不认识时 409 | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, scriptValues?, videoTime?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」）；`scriptValues` 是 `[{ object, field, value, optional? }]`（最多 64 项，`object` 是非负整数或非空字符串、`field` 是图层字段或文本字段、`value` 是 1–4 个有限数或布尔，文本字段另收最长 4096 的字符串、图层字段给字符串 400，不合法 400 带 `field`），探针写进状态，`meta.scriptValues` 逐项回 `applied`，有文本值时结清重排、`meta.textSyncs` 回 `sync` 次数（见「FR 帧号块」的文本字段）；`videoTime` 是非负秒数或 `{ <纹理 path>: 秒 }`（最多 64 项，不合法 400 带 `field`，键不是视频纹理时探针报错回 422），`meta.videos` 回每段实际取的时刻（`path`、`time`、`duration`、`width`、`height`、`failed`、`error?`），宿主产物不认识时 409 | 桌面 |
 | `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, window?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`）；`cursors` 是逐帧的 `g_PointerPosition`，`window` 要和它一起给 | 桌面 |
 | `POST /hosts/:h/particle-corners` | `{ imageId, particles?, pointers?, window?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果；`pointers` / `window` 同 render | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |

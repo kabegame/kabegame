@@ -12,7 +12,8 @@
  * - 读回画布（第 5 批）：渲染的 `canvas` 是 `[宽, 高]` 两个正整数、各不超过 `MAX_CANVAS`；探针的光标换算窗口是 `window ?? canvas`，
  *   两个都给而不相等时 400（`field` 为 `canvas`）。
  * - 脚本值（第 6 批）：渲染的 `scriptValues` 是数组、最多 `MAX_SCRIPT_VALUES` 项；每项 `object` 是非负整数或非空字符串，`field` 是
- *   图层字段之一，`value` 是 1–4 个有限数或布尔，`optional` 是布尔。
+ *   图层字段之一，`value` 是 1–4 个有限数或布尔，`optional` 是布尔。P6b 1e-3 起 `field` 也可以是文本层的运行中字段（`TEXT_FIELDS`），
+ *   这时 `value` 还可以是字符串（最长 `MAX_SCRIPT_TEXT` 个 UTF-16 单元）；图层字段给字符串仍是 400。
  * - 视频时刻（P9a 步骤 3）：渲染的 `videoTime` 是非负有限数（秒），或「非空字符串 → 非负有限数」的对象、最多 `MAX_VIDEO_TIMES` 项；
  *   键是不是这个场景的视频纹理要编译之后才知道，由探针判（不是时报错，回 422）。
  * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
@@ -24,6 +25,7 @@ import type {
   ParticleTrackRequest,
   SceneLayerField,
   ScenePostprocess,
+  SceneTextField,
   ScriptValue,
   VideoTime,
 } from "./types.ts";
@@ -40,9 +42,29 @@ export const LAYER_FIELDS: readonly SceneLayerField[] = [
   "visible",
   "parallaxDepth",
 ];
+/**
+ * 文本层的运行中字段（P6b 1e-3）：探针 `scriptValues` 也收它们，值可以是字符串。是宿主 `apps/wpe-scene/src/compile/bindings.ts` 的
+ * `TEXT_RUNTIME_FIELDS` 的抄本（vite 插件不引宿主源码），改了两边一起改。
+ */
+export const TEXT_FIELDS: readonly SceneTextField[] = [
+  "text",
+  "pointsize",
+  "padding",
+  "spacing",
+  "maxwidth",
+  "maxrows",
+  "limitwidth",
+  "limitrows",
+  "limituseellipsis",
+  "blockalign",
+  "horizontalalign",
+  "verticalalign",
+];
 export const SCRIPT_VALUE_FIELDS = ["object", "field", "value", "optional"] as const;
 /** 渲染一次最多给这么多项脚本值。 */
 export const MAX_SCRIPT_VALUES = 64;
+/** 文本字段的字符串值最长这么多个 UTF-16 单元（P6b 1e-3，探针 `dev/scriptValues.ts` 的 `MAX_SCRIPT_TEXT`，改了两边一起改）。 */
+export const MAX_SCRIPT_TEXT = 4096;
 /** `videoTime` 对象最多这么多项（语料一张场景最多 5 段视频）。 */
 export const MAX_VIDEO_TIMES = 64;
 export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random"] as const;
@@ -295,9 +317,10 @@ export function checkPostprocess(value: unknown, field = "postprocess"): ScenePo
 }
 
 /**
- * 脚本值（第 6 批）：数组、最多 `MAX_SCRIPT_VALUES` 项；每项只收 `object`（非负整数或非空字符串）、`field`（图层字段之一）、`value`
- * （1–4 个有限数或布尔）、`optional`（布尔）。对象找不找得到、字段有没有挂脚本要编译之后才知道，由探针判（重名、缺且不 `optional`
- * 时探针报错，回 422）。
+ * 脚本值（第 6 批）：数组、最多 `MAX_SCRIPT_VALUES` 项；每项只收 `object`（非负整数或非空字符串）、`field`（图层字段或文本字段之一）、
+ * `value`（1–4 个有限数或布尔；文本字段另收最长 `MAX_SCRIPT_TEXT` 个 UTF-16 单元的字符串，P6b 1e-3）、`optional`（布尔）。图层字段给
+ * 字符串时 400，`field` 指到 `value`。对象找不找得到、字段有没有挂脚本、值按宿主规则写不写得进（如 `pointsize` 给了不是数的串）要编译
+ * 之后才知道，由探针判（重名、缺且不 `optional`、写不进时探针报错，回 422）。
  */
 export function checkScriptValues(value: unknown, field = "scriptValues"): ScriptValue[] {
   if (!Array.isArray(value)) fail(field, `要是 [{ object, field, value, optional? }, …]，收到 ${shown(value)}`);
@@ -311,13 +334,29 @@ export function checkScriptValues(value: unknown, field = "scriptValues"): Scrip
       (typeof object === "number" && Number.isInteger(object) && object >= 0) ||
       (typeof object === "string" && object.length > 0);
     if (!objectOk) fail(`${at}.object`, `要是 objects 下标（非负整数）或对象名（非空字符串），收到 ${shown(object)}`);
-    if (!LAYER_FIELDS.includes(item.field as SceneLayerField)) {
-      fail(`${at}.field`, `只能是 ${LAYER_FIELDS.join(" / ")}，收到 ${shown(item.field)}`);
+    const text = TEXT_FIELDS.includes(item.field as SceneTextField);
+    if (!text && !LAYER_FIELDS.includes(item.field as SceneLayerField)) {
+      fail(
+        `${at}.field`,
+        `只能是 ${LAYER_FIELDS.join(" / ")}（图层字段），或 ${TEXT_FIELDS.join(" / ")}（文本字段），收到 ${shown(item.field)}`,
+      );
     }
     const v = item.value;
-    if (typeof v !== "boolean") {
+    if (typeof v === "string") {
+      // 字符串只给文本字段（P6b 1e-3：字段脚本这一帧返回的文字）
+      if (!text) {
+        const hint = `${item.field} 是图层字段，字符串只给文本字段`;
+        fail(`${at}.value`, `要是 1–4 个有限数，或布尔（${hint}），收到 ${shown(v)}`);
+      }
+      if (v.length > MAX_SCRIPT_TEXT) {
+        fail(`${at}.value`, `长 ${v.length} 个 UTF-16 单元，最长 ${MAX_SCRIPT_TEXT}`);
+      }
+    } else if (typeof v !== "boolean") {
       if (!Array.isArray(v) || v.length < 1 || v.length > 4) {
-        fail(`${at}.value`, `要是 1–4 个有限数，或布尔，收到 ${shown(v)}`);
+        const expected = text
+          ? `字符串（最长 ${MAX_SCRIPT_TEXT} 个 UTF-16 单元）、1–4 个有限数，或布尔`
+          : "1–4 个有限数，或布尔";
+        fail(`${at}.value`, `要是 ${expected}，收到 ${shown(v)}`);
       }
       numberArray(v, `${at}.value`, Number.isFinite, "有限数");
     }

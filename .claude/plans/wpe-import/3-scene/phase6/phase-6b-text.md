@@ -1174,6 +1174,419 @@ for (const object of rebuild) this.rebuildLayer(this.runtimeByObject.get(object)
   - 测完移除了测试行。
 - **遗留**：不再用的图集的 GPU 纹理在场景销毁前不释放（拖字号滑块会攒新图集，每张至少 512²），WPE 释不释放没查。
 
+### 1e-3 — 能力表、探针与文档（2026-11-13，按 HEAD `187f41c9`）
+
+**总体设计思路**
+
+1e-2 之后，挂脚本的文本字段在宿主里已经能当帧重排：字段脚本的返回值经 `writeScript` 进 `textFields`，`sync` 里重排、重建。现在挡住这类场景的只剩能力表的 `text:script`。1e-3 拆掉这道闸：`TEXT_RUNTIME_FIELDS` 里的 12 个键挂脚本不再报；`font`、`opaquebackground` 等其余文本键挂脚本照报 `text:script:<键>`，它们运行中改要整场重编译（已定 3）。按 1e-2 的语料结果（`ignore/p6/b1e/corpus2-o2.json`），只差 `text:script` 的有 9 张：`2304304373`、`2391389126`、`2903412088`、`3813887347`、`3819179413`、`3824424509`、`3825103811`、`3826727460`、`3836725625`。调研时只有前两张加 `3824424509`，后 6 张是语料扩到 173 张以后多出来的。它们的文本脚本都是 `new Date()` 的取值拼字符串，不用 `toLocale*` / `Intl`，所以不涉及本地化格式差异。`3824424509` 的日历格子要等步骤 2 的 `ITextLayer`，会停在初值（已定 1）。
+
+验收要拿带时钟的文字和 WPE 逐像素比，但探针为了确定性不跑脚本，文字一直是编译期的初值。所以 dev 探针的 `scriptValues` 扩到文本目标：调用方给出「这一帧字段脚本返回了什么」（例如 WPE 抓帧里画的是 `F183`、`12:34`），探针按宿主同一条写回（`textFieldFromScript` → `writeText`）写进状态。
+
+探针没有帧外补画。缺字体时重排器保留旧排版，读回帧就会画旧文字，所以回放前加一步「结清」：
+- `sync` 一次；
+- 有字体在读，就等读完。读完时 `onReady` 已把那一层重新标脏；
+- 再 `sync`，直到没有在读的字体。轮数上限同 `prepare`，超过就抛错。
+
+没给文本值时不多调 `sync`，逐字节同以前。REST 的校验（`scripts/kabegame-dev/replay.ts`）同步放宽：文本字段的值可以是字符串。MCP 的 `render_scene` 只发 FR 帧号块、不收通用 `scriptValues`，这次不改；要按字符串渲染时走 REST，或用 `host_eval` 直接调探针。
+
+文档把 1e 整体写进去：WPE_SCENE.md「文本对象」一节、cocs/README.md 的条目、回归一节、changelog 一行。回归行先留 `[ ]`，我真机验收后再勾。
+
+**现状锚点**
+
+a. 能力表：`text` 挂脚本报 `text:script`，别的文本键报 `text:script:<键>`（`compile/features.ts:604-611`）
+```ts
+export function checkTextFeatures(object: SceneObject, unsupported: Set<string>): void {
+  for (const key of TEXT_KEYS)
+    if (isScriptValue(object[key])) unsupported.add(key === "text" ? "text:script" : `text:script:${key}`); // 现状：12 个运行中字段也报
+}
+```
+
+b. 探针的脚本值只认图层字段（`dev/scriptValues.ts`）
+```ts
+export interface ScriptValue {
+  object: number | string;
+  field: LayerField;          // 现状：只有图层字段（SCRIPT_VALUE_FIELDS）
+  value: number[] | boolean;  // 现状：没有字符串
+  optional?: boolean;
+}
+// resolveScriptValues：只找 s.target.kind === "layer" 的字段脚本
+// applyScriptValues：state.write({ property: "", target }, scriptWriteValue(value))
+```
+
+c. 探针写完脚本值直接回放（`dev/probe.ts:388-389`）
+```ts
+// 脚本值（第 6 批）：建好场景之后、回放之前写进状态，同宿主的脚本写回；第一次 `sync` 把它刷进 uniform
+const scriptValues = applyScriptValues(state, bundle, options.scriptValues);
+// 现状：文本字段写进状态后，第一次 sync 才重排；缺字体时重排器返回 null，读回帧画旧文字
+```
+
+d. 探针的 `SceneTexts` 没有 `onReady`，运行中重排发起的字体读取外面等不到（`dev/probeTexts.ts`、`text/host.ts:181`）
+```ts
+const owner = new SceneTexts({ reader });          // 现状：读完字体没人通知
+// relayoutIn：
+fonts.load(layout.missingFonts).then(() => { /* … */ this.options.onReady?.(object); }, () => {}); // 现状：Promise 不留
+```
+
+e. REST 校验只认图层字段与数值 / 布尔（`scripts/kabegame-dev/replay.ts:302-332`）
+```ts
+if (!LAYER_FIELDS.includes(item.field as SceneLayerField)) fail(`${at}.field`, /* … */); // 现状
+const v = item.value;
+if (typeof v !== "boolean") { /* 现状：只收 1–4 个有限数 */ }
+```
+
+**点 1 — 能力表（`compile/features.ts`）**
+- **修改** `checkTextFeatures`：
+```ts
+export function checkTextFeatures(object: SceneObject, unsupported: Set<string>): void {
+  for (const key of TEXT_KEYS)
+    // 修改：运行中字段（TEXT_RUNTIME_FIELDS）挂脚本在宿主里就地重排（1e），不报；其余文本键照报，运行中改要重编译（已定 3）
+    if (isScriptValue(object[key]) && !isTextRuntimeField(key)) unsupported.add(`text:script:${key}`);
+}
+```
+- **删除** `text:script` 键，函数注释同步。`compile/scripts.ts` 的注释本来就只提 `text:script:<键>`，不动。
+- 脚本 API 检查不改（已定 1）。
+
+**点 2 — 探针的文本脚本值（`dev/scriptValues.ts`、`dev/probeTexts.ts`、`dev/probe.ts`、`text/host.ts`）**
+- **修改** `ScriptValue` / `ScriptValueResult`：
+```ts
+export interface ScriptValue {
+  object: number | string;
+  /** 图层字段，或文本层的运行中字段（P6b 1e-3，`TEXT_RUNTIME_FIELDS`）。 */
+  field: LayerField | TextRuntimeField;
+  /**
+   * 图层字段：1–4 个数或布尔（不变）。文本字段：字段脚本这一帧的返回值——字符串（最长 MAX_SCRIPT_TEXT 个 UTF-16 单元）、
+   * 1–4 个有限数或布尔，按宿主同一规则规整（`textFieldFromScript`，如 `pointsize` 收数，`text` 收数时 ToString）。
+   */
+  value: number[] | boolean | string;
+  optional?: boolean;
+}
+```
+- **修改** `checkValue`：字段在 `SCRIPT_VALUE_FIELDS` 或 `TEXT_RUNTIME_FIELDS` 里；字符串只给文本字段。
+- **修改** `resolveScriptValues`：文本字段找 `target.kind === "text"`、同 `object`、同 `field` 的字段脚本；找对象的方式不变（文本层也在 `bundle.layers` 里）。没挂脚本时的跳过 / 抛错规则同图层字段。
+- **修改** `applyScriptValues`：文本目标写 `state.writeText(target.object, target.field, textFieldFromScript(target.field, scriptWriteValue(value)))`，同 `host.ts` 的 `writeScript` 文本分支；图层目标照旧。仍是先全部解析、再写。
+- **新增** `SceneTexts.idle()`（`text/host.ts`）：
+```ts
+/** 运行中重排发起、还没结束的字体读取（P6b 1e-3，dev 探针结清用）。 */
+private readonly reading = new Set<Promise<void>>();
+/**
+ * 等运行中重排发起的字体读取全部结束（成功或失败、`onReady` 已调过）。返回有没有等到东西：没有在读的时候立即返回 false。
+ * 宿主不用（帧循环里不能等）。
+ */
+async idle(): Promise<boolean>;
+// relayoutIn：fonts.load(…).then(…) 的 Promise 进 reading，finally 时删掉
+```
+- **修改** `prepareProbeTexts`：给 `SceneTexts` 传 `onReady`，读完字体的对象记在 `ProbeTexts` 上；**新增** `ProbeTexts.settle`：
+```ts
+/**
+ * 回放之前把文本字段的重排做完（P6b 1e-3）。每轮先 `touchText` 上一轮读完字体的对象，再 `scene.sync(state)`；之后 `idle()` 返回 false
+ * （没有在读的字体）就结束；否则继续下一轮。超过 MAX_FONT_ROUNDS 轮仍有在读的时抛错。返回 `sync` 的次数。没有文本层时返回 0、不调 sync。
+ */
+settle(scene: Pick<GpuScene, "sync">, state: Pick<SceneState, "touchText">): Promise<number>;
+```
+- **修改** `renderFrame`：`applyScriptValues` 之后，有文本字段的值写进了状态（`applied` 且字段是文本字段）时 `await texts.settle(scene, state)`，结果 `RenderFrameResult` 多一项 `textSyncs?: number`（只在结清过时给）。没给文本值时不调 `settle`，逐字节同以前。
+
+**点 3 — REST 校验（`scripts/kabegame-dev/replay.ts`、`types.ts`、`replay.test.ts`、`rest.test.ts`；`.claude/skills/kabegame-chromium/SKILL.md`）**
+- **新增** `TEXT_FIELDS`：12 个运行中字段，是 `TEXT_RUNTIME_FIELDS` 的抄本。照 `LAYER_FIELDS` 的写法注明「改了两边一起改」。
+- **修改** `checkScriptValues`：
+  - `field` 可以是图层字段或文本字段，错误文案列出两组；
+  - 文本字段的 `value` 可以是字符串（长度上限同探针），也可以是 1–4 个有限数或布尔；
+  - 图层字段照旧，给字符串时 400，错误指到 `value`。
+- **修改** `types.ts` 的 `ScriptValue`。SKILL.md 两处说明（「探针的通用能力 `scriptValues`」与 REST 表的 `render` 行）补上文本字段、字符串值和结清。
+
+**点 4 — 文档**（共享文件，别的会话在改，在快照里写，我三方合并）
+- **修改** `cocs/wpe/WPE_SCENE.md`「文本对象（P6b 1d 起）」：
+  - 开头一段改成 1e 已做，动态文字的流向一段：字段比较、脚本当帧 / 属性下一帧、绑加载代数的重排器、先放旧再排新；
+  - 表里补这些行：运行中重排与重建（`syncTexts`、强制重建、`textStats`）、独占合成 RT 与 fbo（尺寸变了换、空文字释放）、`max(4, ·)`（套的三处、不套的两处，依据是 `p6b-tiny*` 的实测）、异步字体、图集扩容与重置连带、变体预备；
+  - 能力键一行去掉 `text:script`；
+  - dev 探针（`scriptValues` 的文本字段与结清、`host.texts()`）；
+  - 已知差异：缺字体时晚一到几帧；`3824424509` 的日历停在初值；不用的图集纹理不释放；`font` / `opaquebackground` 运行中改整场重编译。
+- **修改** `cocs/README.md` 的 WPE_SCENE 条目：「文本对象（P6b 1d 起，静态文字）」改成含 1e 的摘要；适用场景加「时钟不走 / 改文字属性没变化或整场重编译 / 文字换宽度后合成 RT、effect 不对 / 探针按字符串渲染文字」。
+- **新增** `versions/latest/regression.md`「## 场景壁纸 P6b 1e：动态文字」一节，格式照 1d 一节，行留 `[ ]`：
+  - 时钟走动；
+  - 属性改文字 / 字号不重编译；
+  - 空 ↔ 非空、第一次出现 emoji；
+  - 合成 RT 换尺寸；
+  - 缺字体补上；
+  - `max(4, ·)` 三个工程；
+  - 9 张解锁场景；
+  - 探针按字符串渲染；
+  - 每帧变的文字耗时。
+- **新增** `versions/latest/changelog.md` 一行：P6b 1e 整体，包括字符串写回、运行中重排与重建、独占合成 RT、`max(4, ·)` 更正、能力表去掉 `text:script` 后解锁的张数、探针。
+
+**验收**
+- 子代理：
+  - 宿主 tsc 0 error；
+  - vitest 带 `KABEGAME_WPE_ROOT` 全过（已知 `pipeline.test.ts` 那条请求次数除外）；
+  - 在 `ignore/p6/b1e/x3/` 里 `deno test -A --no-check scripts/kabegame-dev/` 全过（Node 不支持参数属性，要用 deno）；
+  - Prettier `--check`。
+- 单测：
+  - 能力表：12 个运行中字段挂脚本不报；`font`、`opaquebackground`、`backgroundcolor` 挂脚本报 `text:script:<键>`；
+  - 探针解析：文本字段按下标与名字都能找到；没挂脚本时 `optional` 跳过、否则抛错；字符串给图层字段时抛错；`pointsize` 收数；超长字符串抛错；
+  - 探针写入：经 `writeText`，结果同宿主 `writeScript`；
+  - 结清：用假重排器，缺字体一轮 → 等 → 再 `sync` 后排成；超过轮数抛错；没有文本值时不调 `sync`；
+  - `SceneTexts.idle()`：没在读时返回 false；在读时等到读完、`onReady` 已调；
+  - REST 校验的新分支（`replay.test.ts`、`rest.test.ts`）。
+- 语料：`kbp corpus scan` 和 1e-2 的 `corpus2-o2.json` 比，只有 `text:script` 与 `text:script:maxwidth` 消失，干净场景 57 → 66。
+- 变异检查：
+  - 运行中字段照报；
+  - `font` 不报；
+  - 探针文本值落到图层兜底；
+  - 结清不等字体；
+  - 结清不 `touchText`；
+  - `idle` 不删已结束的读取；
+  - REST 放过图层字段的字符串。
+
+**真机（我）**
+- 重建宿主产物：
+  - `p6b-script` 的 s1 由探针按 `scriptValues` 渲染「F183」，只比 s1 所在区域，对照 WPE 第 182 帧（`A:\p6b\p6b-script\`，`kbp rdc frame --present` 导出上屏图）逐像素比；
+  - 在预览里实时跑 s1（每帧变），用 `host.texts()` 量每帧的重排与重建用时。
+- `2391389126`：WPE 抓一帧，读出画的时间字符串，由探针按它渲染，比文字区域。
+- `2304304373`：在属性面板改 `textinput` 与 `pointsize`，`stats.recompiled` 不增加；带 `blurprecise` 的时钟换宽度时，合成 RT 与 fbo 跟着换（`host.texts()`）。
+- 后 6 张新解锁的：
+  - 每张都在预览里跑，时钟走、没有报错；
+  - 和 WPE 抓帧逐区域比的是 `2903412088`（带 effect）与 `3836725625`（带 effect、有父对象）；
+  - 其余 4 张和 WPE 的截图并排看。
+- `3824424509`：确认能渲染、时钟走、日历停在初值（记为已知差异）。
+- 测完删测试行，WPE 设置与 Kabegame 设置恢复原样，写进复核记录。
+
+#### 1e-3 实施记录（2026-11-13）
+
+在两份快照里做：
+- 宿主：`ignore/p6/b1e/o3`（HEAD `187f41c9` 的 `apps/wpe-scene/src`，基线 `h3`），补丁 `ignore/p6/b1e/step3.patch`（10 个文件，+847 / −80，新增 `dev/probeTexts.test.ts`、`text/idle.test.ts`；对当前工作区 `git apply --check` 通过）；
+- vite 插件、SKILL 与文档：`ignore/p6/b1e/x3`（基线 `xb3`），补丁 `ignore/p6/b1e/step3-x.patch`（9 个文件，+257 / −27；`git diff --no-index` 出的，路径是 `ignore/p6/b1e/xb3|x3/…`，要三方合并）。
+
+点 1–4 都做了。真机验收没做（回归 E6–E16）。做完时 HEAD 已到 `b42b9990`（P9b 步骤 3 与收尾、P11 步骤 0 收尾，改过 `WPE_SCENE.md`、`cocs/README.md`、回归与 changelog；没碰 `scripts/kabegame-dev/` 与 SKILL.md），x3 的文档要按 `187f41c9` 三方合并；`step3.patch` 对当时的工作区 `git apply --check` 通过。
+
+**做了什么**
+- **点 1 — 能力表**（`compile/features.ts`）
+  - **修改** `checkTextFeatures`：`TEXT_RUNTIME_FIELDS` 里的 12 个键挂脚本不报，其余文本键照报 `text:script:<键>`。
+  - **删除** `text:script` 键；函数注释改写：运行中字段为什么不报，`font`、`opaquebackground`、`backgroundcolor` 等为什么照报。
+  - `compile/scripts.ts` 与脚本 API 检查没动。
+- **点 2 — 探针的文本脚本值**
+  - **修改** `dev/scriptValues.ts`：
+    - `ScriptValue.field` 是 `LayerField | TextRuntimeField`（类型别名 `ScriptValueField`），`value` 加 `string`；`ScriptValueResult` 同步。
+    - **新增** `MAX_SCRIPT_TEXT = 4096`。
+    - `checkValue` 先认字段：字符串只给文本字段。图层字段给字符串时报错，文案带「字符串只给文本字段」。文本字段的值按宿主同一条写回规整，即 `textFieldFromScript(字段, scriptWriteValue(值))`，规整不出值（宿主不会写）时抛错。
+    - `resolveScriptValues`：文本字段找 `target.kind === "text"`、同对象、同字段的字段脚本，图层字段照旧找 `"layer"`。找对象、重名、`optional` 的规则不变。结果是三种形状的联合（图层目标、文本目标带规整好的 `text`、跳过）。
+    - `applyScriptValues`：文本目标 `state.writeText(对象, 字段, 规整后的值)`，图层目标照旧 `state.write`；仍是先全部解析、再写。
+    - **新增** `wroteTextValues(results)`：有文本字段的值写进了状态（`applied`）才为真。
+  - **修改** `text/host.ts`：
+    - **新增** `SceneTexts.reading`：运行中重排发起的「读字体 → 比代数 → `onReady`」整条链，结束时自己删掉。
+    - **新增** `idle()`：没有在读的时候返回 false；有就 `Promise.allSettled` 等这一刻在读的那些，返回 true。
+    - `MAX_FONT_ROUNDS` 改成导出。
+  - **修改** `dev/probeTexts.ts`：
+    - `prepareProbeTexts` 给 `SceneTexts` 传 `onReady`，读完字体的对象记进一个集合；
+    - **新增** `ProbeTexts.settle(scene, state)`，实现是导出函数 `settleTexts(owner, ready, scene, state)`。每轮先 `touchText` 上一轮读完字体的对象，再 `scene.sync(state)`，然后 `idle()`：返回 false 就结束；读满 `MAX_FONT_ROUNDS` 轮仍有在读的就抛错。返回 `sync` 的次数。
+    - 没有文本层时 `settle` 返回 0、不调 `sync`。
+  - **修改** `dev/probe.ts` 的 `renderFrame`：`applyScriptValues` 之后，`wroteTextValues` 为真时 `await texts.settle(scene, state)`。结果多一项 `textSyncs`，只在结清过时给。文件头与 `scriptValues` 选项的说明同步。
+- **点 3 — REST 校验**（`x3/scripts/kabegame-dev/`）
+  - **新增** `replay.ts` 的 `TEXT_FIELDS`（宿主 `TEXT_RUNTIME_FIELDS` 的抄本，注明两边一起改）与 `MAX_SCRIPT_TEXT = 4096`（同探针）。
+  - **修改** `checkScriptValues`：
+    - `field` 可以是图层字段或文本字段，错误文案列出两组；
+    - 文本字段的 `value` 收字符串（超长 400）、1–4 个有限数或布尔；
+    - 图层字段给字符串 400，`field` 指到 `value`。
+  - **修改** `types.ts`：
+    - 新增 `SceneTextField`；
+    - `ScriptValue` / `ScriptValueResult` 的 `field` 与 `value` 放宽；
+    - `RenderRequest.scriptValues` 的说明补一句；
+    - `RenderMeta` 加 `textSyncs?`。
+  - **修改** `.claude/skills/kabegame-chromium/SKILL.md` 两处：
+    - 「探针的通用能力 `scriptValues`」后面加「文本字段」一条：字段表、字符串值、规整规则、结清、`textSyncs`、MCP 只发 FR、`host.texts()`；
+    - REST 表的 `render` 行补文本字段、字符串、`textSyncs`。
+- **点 4 — 文档**（`x3/`）
+  - `cocs/wpe/WPE_SCENE.md`「文本对象（P6b 1d 起）」：
+    - 开头改成 1d、1e 两段，另起「动态文字的流向」：字段与通道、取值、状态、重排器、仍要重编译的；
+    - 表里改了编译、排版、渲染图、矩阵、GPU、不支持项、dev 探针七行；
+    - 新增「运行中重排与重建」「独占合成 RT 与 fbo」「`max(4, ·)`」「异步字体」「变体预备」五行；
+    - 新增 1e-2 的对照结论、1e-3 的语料段；
+    - 「已知差异与后续」补 1e 的四条。
+  - `cocs/README.md`：WPE_SCENE 条目的「文本对象」一项改成含 1e 的摘要；适用场景加时钟不走、改属性没变化或整场重编译、换宽度后合成 RT / effect 不对、回退字晚几帧、极小文字、探针按字符串渲染。
+  - `versions/latest/regression.md`：新增「## 场景壁纸 P6b 1e：动态文字」一节（E1–E16，全部 `[ ]`），放在「P6b 1d」一节之前。
+  - `versions/latest/changelog.md`：开发侧 Added 加一行 P6b 1e（放在 1d 那行之前）。
+
+**和计划不同处**
+1. **`MAX_SCRIPT_TEXT` 取 4096**：计划没给数。时钟、计数一类不过十几个字，上限只为挡住误传的大串；64 项都取满是 256 K 个 UTF-16 单元，远小于 vite 请求体的 8 MB 上限。
+2. **宿主不会写的值直接报错**：计划只写「按宿主同一规则规整」。按宿主规则，`pointsize` 给不是数的串、布尔位给数、`pointsize` 给两个分量时不写；探针这时抛错（REST 回 422），不是 `applied: true` 却什么都没变。规整放在解析阶段，所以有一项不对时状态不动。
+3. **`ResolvedScriptValue` 改成联合类型**：文本目标多带一项规整好的值。`applyScriptValues` 的状态类型从 `Pick<SceneState, "write">` 放宽到 `"write" | "writeText"`，`scriptValues.test.ts` 里两个旧用例的替身补了 `writeText: vi.fn()`，断言不变。
+4. **`settle` 的签名是泛型**：`settle<S extends Pick<SceneState, "touchText">>(scene: { sync(state: S): void }, state: S)`。计划写的是 `Pick<GpuScene, "sync">` 加 `Pick<SceneState, "touchText">`，但 `GpuScene.sync` 要整个 `SceneState`，这两个类型放不进同一个签名。实现抽成导出函数 `settleTexts`，单测用假的重排器、场景与状态直接调。
+5. **轮数上限的数法**：同 `prepare`（每个对象最多读 16 轮字体、排 17 次），结清最多读 `MAX_FONT_ROUNDS` 轮、`sync` 最多 `MAX_FONT_ROUNDS + 1` 次；第 17 次 `sync` 之后仍有在读的抛错。
+6. **新增 `wroteTextValues`**：`renderFrame` 要 GPU，单测测不到「没有文本值时不调 `sync`」。判断抽成纯函数，单测覆盖「只有图层字段」「文本值被跳过」两种情况；`renderFrame` 里的接线要真机验（见「没做」）。
+7. **`idle()` 不循环**：只用一次 `Promise.allSettled` 等调用这一刻在读的那些，不循环等到集合为空。等的期间没有人重排，不会冒出新的读取；而循环的写法遇到「不删已结束的读取」会变成微任务死循环，单测会卡死，不会失败。
+8. **REST 的字段错误文案**：沿用「只能是 origin / scale / …」开头，后面接「（图层字段），或 text / pointsize / …（文本字段）」。这样第 6 批的旧用例正则不用改。
+9. **文档里顺手改的**：
+   - `WPE_SCENE.md` 矩阵一行的对齐偏移：1d 写「子对象跟着走」，P8 步骤 3 起子对象的世界矩阵不带它（`drawMatrixOf`），按代码更正；
+   - 「已知差异」一段的 `TODO:[WPE_SCENC]` 写成 `TODO:[WPE_SCENE]`。工作区里别的会话也在做这个更正，合并时取哪边都一样；「字体引擎」一节那处不在本节，没动。
+10. **回归一节的位置**：放在「P6b 1d」一节之前，挨着 1d 的文本各节，没放到文件最上面。
+
+**测试**
+- tsc（o3）0 error（`tsc-o3.log`）。vite 插件 `deno check`（`replay.ts`、`replay.test.ts`、`rest.test.ts`、`scene.ts`、`types.ts`）通过。
+- Prettier `--check`：改动的 14 个 TS 文件全过（`prettier3.log`）。仓库的 Markdown 不按 Prettier 排（基线 `xb3` 的三份 md 本来就不过），没查。文件都是 LF、有结尾换行。
+- vitest（带 `KABEGAME_WPE_ROOT`；快照里没有 `wpefont.wasm`，同基线）：
+  - o3：115 个文件、2785 条，2742 过、1 失败、42 跳过（`vitest-o3.log`）；
+  - h3：113 个文件、2767 条，2725 过、1 失败、41 跳过（`vitest-h3.log`）；
+  - 多出的 18 条都是新增用例（17 过，1 条真 wasm 的跳过）；
+  - 失败的是同一条 `pipeline.test.ts`「全部场景编译、P1 / P2a 解锁、读取及请求次数有界」，**但失败项多了一个**：
+    - h3 只有 `3830255100: 219 次请求`，o3 另有 `3413921910: 335 次请求`；
+    - 原因：`3413921910` 的 `text:script` 以前在对象检查阶段就报，快速路径（确定退回就停）只发 4 次请求；去掉之后要编到着色器才遇到 `combo:REFLECTION` / `material:alphawriting`，发了 335 次请求、读 22.5 MB；
+    - 它仍然退回，结论不变；200 次的上限没改，留给你定（见「没做」）。
+- vitest（放进 `wpefont.wasm`，真 wasm 的文本用例也跑；`o3` 是临时放进去、跑完删了，基线用 `h3` 的临时拷贝，跑完删了）：
+  - o3：115 个文件、2795 条，2794 过、1 失败、0 跳过（`vitest-o3-wasm.log`）；
+  - 基线：113 个文件、2777 条，2776 过、1 失败、0 跳过（`vitest-h3w-wasm.log`）；
+  - 多出的 18 条全过；失败的同上（o3 多 `3413921910` 一项）。
+- deno（`deno test -A --no-check scripts/kabegame-dev/`）：x3 26 passed（119 steps），xb3 26 passed（117 steps），多出的 2 个 step 是新增用例。
+- 新增用例 18 条（宿主）+ 2 条（vite 插件）：
+  - `dev/scriptValues.test.ts` 8 条：
+    - 编译出的文本层与字段脚本（S1 的 `text`、`pointsize` 是文本目标，能力表不报）；
+    - 按名字、按下标都解析到文本目标，字符串原样、`pointsize` 收数，空串也是值；
+    - `text` 收数时 ToString、收布尔转字符串，`pointsize` 收数字串；
+    - 没挂字段脚本时 `optional` 跳过、否则抛错，图层与文本字段的脚本不互认；
+    - 字符串给图层字段、超长（4096 过、4097 抛）、形状不对、宿主不会写（`pointsize: "abc"`、`[1, 2]`，`limitwidth: [1]`）、不是运行中字段的文本键（`font`、`opaquebackground`、`backgroundcolor`、`Text`）都抛错；
+    - 真 `SceneState` 经 `writeText` 写、只标 `dirtyTexts`，图层字段照旧，`text: [7]` 写成 "7"（属性侧规则不写）；
+    - 替身上文本目标只调 `writeText(对象, 字段, 规整后的值)`、不调 `write`；
+    - `wroteTextValues`。
+  - `compile/texts.test.ts`：改了 2 条的期望（见下），没有新增。
+  - `text/idle.test.ts` 4 条（假排版 + 闸门读取器，不要 wasm）：
+    - 没在读时返回 false；
+    - 缺字体发起的读取：结束前不返回，结束时 `onReady` 已调过、返回 true，之后再问返回 false；
+    - 两个读取同时在读时等全部结束，读取器抛错也算结束；
+    - `dispose` 后回调丢掉，读取照样算结束。
+  - `dev/probeTexts.test.ts` 5 条：
+    - 假重排器：缺字体一轮 → 等 → 标脏再 `sync` 后排成，返回 2；字体都在时一次；
+    - 一直有在读的：`sync` 17 次后抛错；
+    - 没有文本层时 `settle` 返回 0、不调 `sync`、不读文件；
+    - 真 wasm（没有 wasm 时跳过）：`prepareProbeTexts` 排「A」，换成「A中」后 `settle` 沿回退链逐轮读字体，排出两个字形。
+  - `host.script.test.ts` 1 条：同一个返回值（"F183"、12、true；`maxwidth` 250.5）经字段脚本写回的 `textFields` 与经探针 `applyScriptValues` 写进的完全相同。
+  - vite 插件：
+    - `replay.test.ts` 1 条：`TEXT_FIELDS` 等于宿主的 12 个；文本字段收字符串、空串、4096 长、数与布尔；图层字段给字符串 400 指到 `value`；4097 长 400；形状不对 400；`NaN` 指到分量；`font` / `opaquebackground` / `backgroundcolor` / `Text` 400 指到 `field`；
+    - `rest.test.ts` 1 条：文本字段的字符串原样转给后端，四种不合法回 400、不调后端。
+- 改了期望的旧用例（逐条）：
+  - `compile/texts.test.ts`「text 挂脚本报 text:script…」：改成 12 个运行中字段逐个挂脚本不报、全挂也不报，`font`、`opaquebackground`、`backgroundcolor`、`outlinecolor` 挂脚本报 `text:script:<键>`；
+  - `compile/texts.test.ts`「能力：MSDF 开关与 anchor…」：编译结果的 `unsupported` 去掉 `text:script`，另加一个 `font` 挂脚本的对象、期望 `text:script:font`。
+- 语料（`kbp corpus scan` / `diff`）：
+  - 扫描期间本机语料在长：第一次 173 → 175，再扫是 179、183。所以最后用同一份清单（`corpus3-samples.txt`，183 张）`--only` 两边各扫一次（`corpus3-h3.json` / `corpus3-o3.json`、`corpus3-diff.txt`）。
+  - 结果：两边 183 张、0 出错；只有 `text:script`（88 张）与 `text:script:maxwidth`（6 张）消失，没有新增的键；干净 66 → 75。
+  - 1e-2 那份 173 张的子集是 57 → 66，同计划。
+  - 解锁 9 张：`2304304373`、`2391389126`、`2903412088`、`3813887347`、`3819179413`、`3824424509`、`3825103811`、`3826727460`、`3836725625`，同计划列的 9 张。
+  - 新出现的 10 张里 9 张两边都干净；`2861028294` 去掉 `text:script` 后还缺 `script:api:layer.text` 等，所以不算解锁。
+  - 第一次扫描的结果留在 `corpus3-*-first.json` / `corpus3-diff-first.txt`。
+- 变异检查：
+  - 宿主：`kbp mutate`，快照模式，清单 `mutate3.json`，结果 `mutate3.txt`。跑之前把 `wpefont.wasm` 临时放进 `o3/src/wpefont/`，让真 wasm 的用例也当检出方，跑完删掉。
+    - 15 处全部检出，每处按原字节还原，整树哈希前后一致；
+    - 计划的 6 条：运行中字段照报、`font` 不报、探针文本值落到 `state.write` 兜底、结清不等字体、结清不 `touchText`、`idle` 不删已结束的读取；
+    - 补的 9 条：只放行 `text`、探针不按宿主规则规整、探针图层字段收字符串、探针超长差一、探针文本字段只找图层目标、`wroteTextValues` 不看 `applied`、结清上限差一、`prepareProbeTexts` 的 `onReady` 不记对象（只有真 wasm 的用例能检出）、`idle` 不等读取。
+  - vite 插件：`mutate3x.py` 在 x3 里逐处按原文替换，跑 `replay.test.ts`、`rest.test.ts`，再按原字节写回、核对文件 SHA-256。没用 workspace 模式。
+    - 5 处全部检出，整树哈希前后一致（`mutate3x.log` / `.json`）；
+    - 5 处是：REST 放过图层字段的字符串（计划的那条）、超长差一、不认文本字段、抄本多一个 `font`、文本字段的值不查形状。
+    - Prettier 改写 `replay.ts` 之后重跑过一遍，结果相同。
+
+**没做 / 要你定或真机确认**
+- **`pipeline.test.ts` 的 200 次请求上限**：`3413921910` 现在 335 次（见测试）。三种处理：
+  - 把上限放宽；
+  - 给这张单独记一条；
+  - 让快速路径更早发现 `combo:REFLECTION` / `material:alphawriting`（产品改动，不在 1e-3）。
+  没改测试，等你定。
+- **真机全部没做**（回归 E6–E16）：
+  - `p6b-script` 的 s1 按「F183」渲染和 WPE 第 182 帧比；
+  - `2391389126` 按抓帧里的时间字符串渲染；
+  - `2304304373` 改 `textinput` / `pointsize` 不重编译、`blurprecise` 时钟换宽度时 RT 与 fbo 跟着换；
+  - 9 张解锁场景（`2903412088`、`3836725625` 逐区域比，其余 4 张并排看，`3824424509` 日历停在初值）；
+  - 每帧变的文字耗时；桌面。
+- **`renderFrame` 里结清的接线**：`wroteTextValues` → `texts.settle(scene, state)`，以及 `textSyncs` 进结果，要 GPU，只有真机能验。REST `/render` 的 409 检查（宿主产物不认识 `scriptValues`）没改：没重建的老产物收到文本字段时，探针会报「field 要是图层字段」，按现有的错误映射应当回 422，没实测。
+- **MCP** 的 `render_scene` / `host_render` 没改（计划如此），只发 FR；`apps/kabegame-dev-mcp` 自己的 `ScriptValue` 类型也没放宽。
+- **`WPE_SCENE.md`「字体引擎」一节**开头还写着「文字随脚本或属性变化是 1e」，不在本节范围，没动。
+- **changelog 用户侧**没加。建议照别的场景能力加一行，例如「场景壁纸里的时钟与文字会走动：…创意工坊 2304304373 等 9 张现在可实时渲染」，要不要加、怎么措辞由你定。
+- dev 探针仍按 `C:\Windows\Fonts` 读系统字体（1d2 的约定），所以结清只在 Windows dev 上对。
+
+#### 1e-3 复核（Claude，2026-11-13）
+
+- **越界**：真实工作区里子代理没动任何文件（`.claude/skills/kbp-tools/ts/replayLib.ts` 的改动是别的会话 P4f 步骤 3 的）。
+- **复跑**：
+  - o3 tsc 0 error；
+  - vitest（放进 `wpefont.wasm`）2795 条，2794 过，失败的就是 `pipeline.test.ts` 那一条（`3413921910: 335 次请求`、`3830255100: 219 次请求`）；
+  - x3 `deno test` 26 passed（119 steps）。都和子代理报的一样。
+  - 注意：快照里的 vitest 要在快照目录里用根目录的 `node_modules/vitest/vitest.mjs` 跑；从仓库根 `--config` 指过去会全部报 `Cannot read properties of undefined (reading 'config')`。
+- **我加的变异**（`ignore/p6/b1e/mutate3-claude.json` → `mutate3-claude.txt`）：4 处全部检出，还原一致：
+  - `wroteTextValues` 恒为假；
+  - 结清上限差一；
+  - 结清时先等字体、后 `sync`；
+  - 探针规整时跳过 `scriptWriteValue`。
+- **合并**：期间 HEAD 先到 `b42b9990`、又到 `1616bb2b`（P4f 步骤 3）。工作区里有别的会话没提交的改动（P4f、P10a 等），`features.ts`、`probe.ts`、`host.script.test.ts` 和本步重叠，所以逐个文件三方合并：
+  - 宿主 8 个文件：祖先取 h3（这些文件 HEAD 上和 `187f41c9` 相同）。只有 `probe.ts` 两处冲突，都是两边在同一处各加了一项（别的会话的 `animations`、本步的 `textSyncs`），两项都留；
+  - `scripts/kabegame-dev/` 4 个文件与 SKILL.md：工作区和 xb3 相同，直接拷；
+  - 文档 4 份三方合并：
+    - README：「适用场景」那一行 HEAD 的 P9b 在行尾加了一段、本步在文本那段后插了一段，按位置拼起来；
+    - WPE_SCENE.md：取本步（只多「1e 起：」）；
+    - changelog：两边都留（P9b 在前、1e 在后）；
+    - 回归没有冲突。
+  - 合并后导出工作区快照（`ignore/p6/b1e/w3`）：tsc 0 error，vitest 2910 条过 2909 条。失败的仍是 `pipeline.test.ts`，多出来的 `2251857160`（读 82 MB、553 次请求）来自别的会话没提交的改动。
+  - 顺手：WPE_SCENE.md「字体引擎」一节开头「文字随脚本或属性变化是 1e」改成 1e 起就地重排；回归 1e 一节按下面的真机结果勾选。
+- **真机**（dev，宿主产物用合并后的工作区重建；工坊场景用 `kbp content unpack` 解包到 `ignore/p6/b1e/real3/proj/` 再导入，WPE 抓帧在 `A:\p6b\e3-*`）：
+  - **`p6b-script`，探针按「F183」**：s1 区域和 WPE 第 182 帧 0 差异，`textSyncs` 1。对照组（不给文本值）同一区域 10628 个像素不同。给「你好😀F7」时 `textSyncs` 8，中文、彩色 emoji 都画出来了；给没挂字段脚本的 `pointsize` 回 422、写明原因。
+  - **`2391389126`**：WPE 窗口按 3840×2160 开，系统把客户区限成 3840×2130（fill 缩放仍是 1）。WPE 画「21:33」，探针按它渲染，文字区域 0 差异。1600×900 窗口下差 805 个像素：WPE 按窗口分辨率直接画字形，我们先按场景分辨率画再缩，这是已知的上屏差异，所以真实场景都按场景分辨率比。
+  - **`2903412088`**：从抓帧读 foliagesway 的 `g_Time`（12.798033714294434），按属性缺省（horizontal 86、vertical 95）与场景尺寸算两层的 `origin`：
+    - 字形内部和 WPE 相同，边缘最大差 19；
+    - 背景随时间在动，没有文字的区域也处处有差（最大 12），所以边缘差归背景；
+    - 宿主实时跑脚本算出的 `origin` 与我给探针的完全相同。
+  - **`3836725625`**：背景是视频，文字的 effect 是模糊（和时间无关），像素不比。我当时记成「三层文字的排版和 WPE 一致」，**这是错的**，见下面的「更正与修复」。WPE 的 Date 层画了 11 个字形（「13 NOV 2026」，带空格，虽然场景里 `addDelimiter` 覆盖成空串），我们宿主的脚本算出的也是这一串。
+  - **`2304304373` 实时预览**：
+    - 5 个时钟层是当前时间；
+    - 用属性面板的同一条命令改 `yourname`、`textsize`：`applied` +1，`recompiled` 为空，「Kabegame 你好」等 8 轮回退字体后补上，最长重排 16.3 ms；
+    - 跨整分时 5 层在同一次 `sync` 里重排、重建，合成 RT 宽度 632 → 636、`blurprecise` 的 734 → 738。
+  - **每帧变的文字**（`p6b-script` 实时）：10 秒 600 帧，重排平均 0.07 ms、重建 0.23 ms，整帧 0.56–0.63 ms。
+  - **9 张解锁场景**：都实时渲染、时钟是当前时间、没有重编译。唯一的脚本错误在 `3824424509` 的 `objects/8/visible`：
+    - 脚本先 `layers.push(thisScene.getLayer(i.toString()))`，再拿这些图层对象调 `thisScene.getLayer(layers[i])`；
+    - 我们的 `getLayer` 收到对象返回 null，`update` 抛错后被禁用，日历的文字与颜色停在初值；
+    - 归在已定 1 的「日历要等步骤 2」里，步骤 2 做 `getLayer` 时要认图层对象参数。
+  - 应用日志没有 WebGPU 错误、没有 `text:engine`。
+  - **收尾**：
+    - 移除 10 个测试行（`batch_remove_images`），关掉主窗口的预览（开始时原来的预览已经关了）；
+    - WPE 只开关了本会话的测试窗口，设置没改；Kabegame 设置没改；
+    - E16（设为桌面壁纸）没测。
+- **待定**：
+  1. `pipeline.test.ts` 的 200 次上限：`3413921910` 现在 335 次；
+  2. ~~changelog 用户侧要不要加一行~~：用户定不加（2026-11-13）。
+
+#### 1e-3 更正与修复：图层向量字段绑标量属性（Claude，2026-11-13，用户要求直接修）
+
+**发现。** 用户在真机上并排看 `3836725625`，我们的字被纵向拉长。上面复核里「排版一致」是看裁图下的结论：背景是视频、比不了像素，我就退回了肉眼。
+
+**定位**（复制工程，`ignore/p6/b1e/make_e3text.mjs`）：
+- 去掉视频图层，父对象「时钟」的 `origin` 脚本换成场景中心，`scale` 绑定照留，只留三层文字；做静态字符串（`e3text-s`）、脚本返回同一串（`e3text-r`）两版；
+- WPE 3840×2130 窗口抓帧（`A:\p6b\e3text-s\`、`A:\p6b\e3text-r\`），探针同尺寸整帧比：两版我们这边相同（不是运行中重排的问题），和 WPE 都差 15631 个像素；
+- x 方向一致，y 方向三层都拉长约 1.4 倍；排版 `size`、合成 RT 尺寸三层都和 WPE 相同（490×219、457×154、896×219）；
+- WPE 事件 146（Day 上屏）的顶点是 ±228.5 × ±77，上屏高 125.5 = 154 × 1.13179 × 0.72。我们父对象的 `scale` 是 `[0.72]`（实时宿主 `host.state()` 与临时诊断单测 `ignore/p6/b1e/w3/src/render/e3dump.test.ts` 都读到），y、z 在 `layerLocalMatrix` 里补成 1。
+
+**根因与来历。**
+- WPE 的 `origin` / `scale` / 图像层 `color`（vec3，`FUN_1401a4230`）与 `parallaxDepth`（vec2，`FUN_1401a3fc0`），和材质常量、general 字段是同一组 setter（`ignore/p3-userprops/notes/descriptors-decomp.txt`）：数字铺满各分量，字符串少写的分量为 0，布尔不写。
+- P1（`916f5cf5`、`3780ab82`，2026-11-01）用 `numbers()` 取图层字段，建矩阵时补缺省。
+- P3 读码（`phase3/p3-script-REPORT.md`「属性写入」表）记下了「数字会铺满三个分量」并实测过。
+- P3a（`8f5a44ac`）的绑定表与 `writeLayer` 原样继承了 P1 的写法。
+- P3c 的 `generalValue` 给 general 字段做了铺满；2026-11-08 的 `54ab0c08` 给材质常量做了铺满。图层字段都没改。
+
+**影响。** 本机语料 34 张场景、245 个字段是这种绑定（scale 119、parallaxDepth 120、origin 6），见 `ignore/p6/b1e/scalar_vec_scan.mjs` → `scalar_vec_scan.txt`。当时判成能渲染的有 3 张，都是 1e-3 刚解锁的：`3836725625`、`3825103811`（时钟 `scale` 1.5，这层缺省隐藏）、`2903412088`（`origin`，脚本每帧覆盖 x、y）。
+
+**修复。**
+- **修改** `compile/materialValues.ts`：原来的 `writeValue` 导出为 `setterValue`，`materialSetter` 照旧用它。
+- **新增** `compile/bindings.ts`：`LAYER_VECTOR_FIELDS`（origin / scale / color 3 个分量，parallaxDepth 2 个）、`isLayerVectorField`、`layerVectorValue`（= `setterValue`）。`angles` 是另一个 setter（`FUN_1401df2f0`，没读透、语料没有标量绑它），不动。
+- **修改** `compile/bundle.ts`：这四个字段改走 `layerVectorValue`。属性值写不进时退回 JSON 的 `value`，再写不进取缺省。
+- **修改** `render/state.ts`：`write` 的图层分支对这四个字段走 `layerVectorValue(conditioned(…))`，写不进时不写、不标脏，同 WPE 不改字段。
+- **新增** `compile/layerVector.test.ts` 7 条：
+  - 与 `materialSetter` 逐值相同；
+  - 四个字段绑数字铺满，写死的字符串照读；
+  - 布尔、条件、两者都写不进三种情况；
+  - 就地写 = 重编译（数字、字符串）；
+  - 写不进时不标脏。
+- 文档：WPE_SCENE.md 材质常量一条后补「图层的向量字段同这组 setter」；回归 E14 更正、新增 E17；changelog 按用户定不加。
+
+**验证。**
+- 工作区快照（`ignore/p6/b1e/w4`）：tsc 0 error，vitest 2917 条过 2916 条，失败的只有 `pipeline.test.ts` 那一条，失败明细和修复前相同。
+- 重建宿主产物后，`e3text-s`、`e3text-r` 和 WPE 整帧（3840×2130）都是 0 差异。
+
+**教训**，已写进 `.claude/plans/wpe-import/3-scene/FINAL_CHECK.md`：
+- 同一条 WPE 规则在代码里有好几份实现，阶段验收只证明自己那一份；
+- 真实场景比不了像素时，要做复制工程再比，不能退回肉眼；
+- 复制时被测对象的父链、绑定一样都不能动。
+
 ### 实施方式
 
 每小步在 HEAD 快照里实现（`kbp snapshot`），交子代理，我核对、独立复跑验证后按块合进工作区，提交前等你同意。1b 不碰 P4e 在改的文件，可以先做；1c 只新增 `text/`；1d、1e 动共享文件，动工前对一次工作区。

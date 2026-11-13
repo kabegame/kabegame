@@ -27,6 +27,8 @@
  *   W = H = 0、不移动对象（`particleCorners.ts` 的 `frameCamera` / `replayReadback`）。`hostRenderFrame` 按路径起点求相机。
  * - 脚本值（kabegame-chromium 第 6 批）：探针不跑场景脚本，`renderFrame` 收 `scriptValues`（某对象某字段的字段脚本在读回那一帧返回的
  *   值），建好场景之后、回放之前经字段脚本的绑定目标写进 `SceneState`（`scriptValues.ts`，同宿主的脚本写回）。不给时逐字节同以前。
+ *   P6b 1e-3 起也收文本层的运行中字段（`text` 给字符串等），写进之后回放之前结清重排（`probeTexts.ts` 的 `settle`：缺字体时等读完再排，
+ *   探针没有帧外补画），结果的 `textSyncs` 是结清时 `sync` 的次数；没有文本值时不结清。
  * - 频谱（P4e 步骤 4）：`renderFrame` / `particleCorners` 的 `particles.audio` 与 `particleTrack` 的 `audio` 收逐帧 16 段左右
  *   （`{ left, right }`，抓帧里 CLK 读到的 `g_AudioSpectrum16Left/Right`），每帧步进之前原样写进粒子读的频谱（不经归一化，null 沿用前一帧）；
  *   `host.audio()` 另报宿主场景频谱归一化后的 16 段（`spectrum16`）。不给时频谱全 0。
@@ -70,7 +72,7 @@ import {
 } from "./particleCorners";
 import { prepareProbeTexts } from "./probeTexts";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
-import { applyScriptValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
+import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
 import { checkVideoTime, ProbeVideos, type ProbeVideoResult, type VideoTimeOption } from "./videoProbe";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
@@ -238,6 +240,8 @@ export interface RenderFrameOptions {
    * 某个对象某个字段上的字段脚本在读回那一帧会返回的值。探针找到 bundle 里挂在这个字段上的字段脚本，建好场景之后、回放之前用它的
    * 绑定目标经 `SceneState.write` 写进状态（同宿主的脚本写回）；值不影响模拟，只有读回那一帧被画出来。名字重名抛错；找不到对象或
    * 没挂字段脚本时 `optional` 的跳过，否则抛错。用途：kbp 测试工程的 FR 帧号块（颜色只取决于帧号），见 `scriptValues.ts`。
+   * 文本层的运行中字段（P6b 1e-3，`TEXT_RUNTIME_FIELDS`）：`value` 还可以是字符串（例如 WPE 抓帧里时钟画的「12:34」），按宿主同一条
+   * 写回规整后经 `writeText` 写进状态，回放之前结清重排（缺字体时等读完），读回那一帧画的就是这串文字。
    */
   scriptValues?: ScriptValue[];
   /**
@@ -283,6 +287,11 @@ export interface RenderFrameResult {
   particles: ReturnType<GpuScene["particleStats"]>;
   /** 每一项脚本值写没写进状态（`applied`；跳过时带 `reason`），顺序同请求；没给 `scriptValues` 时空数组。 */
   scriptValues: ScriptValueResult[];
+  /**
+   * 回放之前结清文本重排调了几次 `sync`（P6b 1e-3，`ProbeTexts.settle`）：1 是一次就排成，多出来的每次是等了一轮字体。只在有文本字段的
+   * 脚本值写进了状态时给。
+   */
+  textSyncs?: number;
   /**
    * 每段视频纹理实际取的时刻（P9a 步骤 3，顺序同 bundle 纹理）：`time` 是 seek 完读回的 `currentTime`、`duration` 是时长（未知时 null）、
    * `width` / `height` 是视频尺寸；`failed` 的那段保持透明（同产品），原因在 `error`。没有视频纹理时空数组。
@@ -406,6 +415,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       scene.setVideoSink(sink);
       // 脚本值（第 6 批）：建好场景之后、回放之前写进状态，同宿主的脚本写回；第一次 `sync` 把它刷进 uniform
       const scriptValues = applyScriptValues(state, bundle, options.scriptValues);
+      // 文本字段（P6b 1e-3）：写进状态只是标脏，重排在 `sync` 里；缺字体时重排器照画旧排版、后台读字体，探针没有帧外的补画，
+      // 回放之前结清（`sync` → 等字体 → 标脏再 `sync`）。没有文本值时不调，逐字节同以前
+      const textSyncs = wroteTextValues(scriptValues) ? await texts.settle(scene, state) : undefined;
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
@@ -522,6 +534,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         frametime,
         particles: scene.particleStats(true),
         scriptValues,
+        ...(textSyncs === undefined ? {} : { textSyncs }),
         videos: sink.results(),
         key,
       };
