@@ -223,10 +223,9 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
   });
 
   describe("checkParticleInstance", () => {
-    const check = (raw: unknown, context = { flags: 0, hdr: false }, brightness?: number) => {
+    const check = (raw: unknown, context = { flags: 0 }) => {
       const keys = new Set<string>();
-      const resolved = parseParticleInstance(raw);
-      checkParticleInstance(raw, { brightness: brightness ?? resolved.brightness }, context, keys);
+      checkParticleInstance(raw, context, keys);
       return [...keys].sort();
     };
 
@@ -259,7 +258,7 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
         { colorn: "abc" },
       ])
         expect(check(raw), JSON.stringify(raw)).toEqual([]);
-      expect(check({ colorn: "1 0 0" }, { flags: 8, hdr: false })).toEqual([]);
+      expect(check({ colorn: "1 0 0" }, { flags: 8 })).toEqual([]);
     });
 
     it("WPE 没读到的两种写法照报：color 绑了属性报 color:user，colorn 带 condition 报 colorn:condition；bit3 时都不报", () => {
@@ -275,24 +274,19 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
         "particle:instance:colorn:condition",
       ]);
       expect(check({ colorn: { user: { name: "c" }, value: "1 0 0" } })).toEqual([]);
-      expect(check({ color: { user: "c", value: "255 0 0" } }, { flags: 8, hdr: false })).toEqual([]);
-      expect(
-        check({ colorn: { user: { name: "c", condition: "1" }, value: "1 0 0" } }, { flags: 8 | 4, hdr: true }),
-      ).toEqual([]);
+      expect(check({ color: { user: "c", value: "255 0 0" } }, { flags: 8 })).toEqual([]);
+      expect(check({ colorn: { user: { name: "c", condition: "1" }, value: "1 0 0" } }, { flags: 8 | 4 })).toEqual([]);
     });
 
-    it("brightness：HDR 且没有 bit3 时取非默认值报；LDR、bit3、默认值不报", () => {
-      expect(check({ brightness: 5 }, { flags: 0, hdr: true })).toEqual(["particle:instance:brightness"]);
-      expect(check({ brightness: 1 }, { flags: 0, hdr: true })).toEqual([]);
-      expect(check({ brightness: 5 }, { flags: 0, hdr: false })).toEqual([]);
-      expect(check({ brightness: 5 }, { flags: 8, hdr: true })).toEqual([]);
-      // 按解析后的值判断（含用户属性）
-      expect(check({ brightness: { user: "b", value: 1 } }, { flags: 0, hdr: true }, 10)).toEqual([
-        "particle:instance:brightness",
-      ]);
+    it("brightness（P4f 步骤 2 已实现，HDR 下乘实例颜色）：非默认的静态值、{user}、bit3 都不报", () => {
+      expect(check({ brightness: 5 })).toEqual([]);
+      expect(check({ brightness: 1 })).toEqual([]);
+      expect(check({ brightness: 5 }, { flags: 8 })).toEqual([]);
+      expect(check({ brightness: { user: "b", value: 10 } })).toEqual([]);
+      expect(check({ brightness: { user: { name: "b", condition: "1" }, value: 10 } })).toEqual([]);
     });
 
-    it("控制点静态值不报、{user} 报 particle:instance:controlpoint:user（P4c 步骤 1）；控制点与 brightness 挂 {script} 报 particle:binding:instance:<键>（7 个系数不报，P4f 步骤 1）；其它键报 particle:instance:<键>", () => {
+    it("控制点静态值不报、{user} 报 particle:instance:controlpoint:user（P4c 步骤 1）；控制点挂 {script} 报 particle:binding:instance:<键>（6 个系数、brightness 与 colorn 不报，P4f 步骤 1、2）；其它键报 particle:instance:<键>", () => {
       expect(check({ controlpoint1: "10 20 0" })).toEqual([]);
       expect(check({ controlpointangle3: "0 0 0" })).toEqual([]);
       expect(check({ controlpoint7: "abc", controlpointangle0: "1 2 3" })).toEqual([]);
@@ -303,10 +297,10 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
       expect(check({ controlpoint1: { script: SCRIPT, value: "1 2 0" } })).toEqual([
         "particle:binding:instance:controlpoint1",
       ]);
-      // P4f 步骤 1：7 个系数挂脚本已实现（写回目标 particle-instance），不报；brightness 仍报（步骤 2）
+      // P4f 步骤 1、2：6 个系数、brightness 与 colorn 挂脚本已实现（写回目标 particle-instance），不报
       expect(check({ count: { script: SCRIPT, value: 1 } })).toEqual([]);
       expect(check({ colorn: { script: SCRIPT, value: "1 1 1" } })).toEqual([]);
-      expect(check({ brightness: { script: SCRIPT, value: 1 } })).toEqual(["particle:binding:instance:brightness"]);
+      expect(check({ brightness: { script: SCRIPT, value: 1 } })).toEqual([]);
       expect(check({ foo: 1 })).toEqual(["particle:instance:foo"]);
       expect(check({ controlpoint8: "1 0 0" })).toEqual(["particle:instance:controlpoint8"]);
       expect(check("1 2 3")).toEqual(["particle:instance"]);
@@ -427,14 +421,14 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
     });
   });
 
-  it("HDR 且系统 flags 没有 bit3：brightness 登记成重编译目标；有 bit3 时仍是就地目标", async () => {
+  it("HDR 下 brightness 同样是就地目标（P4f 步骤 2，有无 bit3 都是）", async () => {
     const hdr = { ...ORTHO, bloom: true, hdr: true };
     const lit = await compile(hdr, 0, "ultra");
     expect(lit.general.postprocess.hdr).toBe(true);
     expect(lit.bindings.find((binding) => binding.property === "b")?.target).toEqual({
-      kind: "recompile",
-      reason: "layer-structure",
-      path: "objects/1/instanceoverride/brightness",
+      kind: "particle-instance",
+      object: 1,
+      field: "brightness",
     });
     const masked = await compile(hdr, 8, "ultra");
     expect(masked.bindings.find((binding) => binding.property === "b")?.target).toEqual({

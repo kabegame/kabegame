@@ -1146,8 +1146,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    * - 稳定键：顶层 `objects/<i>/particle/passes/<k>`（不变），子系统 `objects/<i>/particle/children/<n>/…/passes/<k>`，`<n>` 是条目在
    *   JSON `children` 里的下标（不认识的类型丢掉之后也不移位）。
    * - `instanceoverride`：只有顶层登记绑定（就地目标是对象的）；子系统按缺省值解析，实例值由模拟器从对象上传下去（`ParticleSystem`
-   *   的 `link`，rea-p4e-children 3.4）。能力上子系统按自己的 `flags` 再查一遍对象的 `instanceoverride`（`brightness`、`colorn` 的照报项
+   *   的 `link`，rea-p4e-children 3.4）。能力上子系统按自己的 `flags` 再查一遍对象的 `instanceoverride`（`color`、`colorn` 的照报项
    *   看各自的 bit3）。
+   * - 场景 HDR（`postprocess.hdr`）顶层与子系统都写进 `SceneParticle.hdr`（P4f 步骤 2）：`brightness` 是否乘颜色初值由模拟器按各自的
+   *   `flags & 8` 定（rea-p4f-script.md 第 7 节）。
    * - `children`：深度 < `MAX_CHILD_DEPTH` 才读（1.6，自引用的文件到第 10 层停）。四种类型的子系统都编进来（事件实例共用它，P4e
    *   步骤 2、3），不认识的类型、读不到的文件不进。
    *   材质缺失时照样编子系统：WPE 这时整棵子树不画（`FUN_1402366f0` 基础材质为空直接返回），已由 `material:missing` 报。
@@ -1163,14 +1165,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   ): Promise<SceneParticle> {
     const nested = depth < MAX_CHILD_DEPTH;
     checkParticleFeatures(system, orthographic, unsupported, { children: nested });
-    // `instanceoverride` 的标量键与 `colorn` 登记成就地目标（P4a 步骤 5、P4b 步骤 6）。`brightness` 只在 HDR 且系统 flags 没有
-    // bit3 时生效（C5），这时没实现：绑了属性就登记成重编译，改成非默认值后由能力表报，否则（LDR 或 bit3）是中性的就地目标
+    // `instanceoverride` 的标量键与 `colorn` 登记成就地目标（P4a 步骤 5、P4b 步骤 6）。`brightness` 也是（P4f 步骤 2）：HDR 只在
+    // 加载时判定，改值和别的系数一样置脏、下一帧重算颜色初值（rea-p4f-script.md 第 7 节）；LDR 或 bit3 时模拟器不乘，同样中性
     const { flags } = readParticleSystem(system);
-    const brightnessActive = postprocess.hdr && (flags & 8) === 0;
-    const instanceTarget = (field: InstanceKey): BindingTarget =>
-      field === "brightness" && brightnessActive
-        ? recompile("layer-structure", `objects/${index}/instanceoverride/brightness`)
-        : { kind: "particle-instance", object: index, field };
+    const instanceTarget = (field: InstanceKey): BindingTarget => ({ kind: "particle-instance", object: index, field });
     const particle = parseParticle(system, {
       file,
       orthographic,
@@ -1184,13 +1182,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           }),
       // `0x200000` 看场景 `version`（rea-p4b-render.md 7.4），和 passthrough 材质同一个取值函数
       sceneVersion: sceneVersionOf(scene.version),
+      // 场景加载时判定的 HDR（P4f 步骤 2）：顶层与子系统都写
+      hdr: postprocess.hdr,
     });
-    checkParticleInstance(
-      object.instanceoverride,
-      (root ?? particle).instance,
-      { flags, hdr: postprocess.hdr },
-      unsupported,
-    );
+    checkParticleInstance(object.instanceoverride, { flags }, unsupported);
     await compileParticleMaterial(system, particle, flags, key);
     if (!nested || !Array.isArray(system.children)) return particle;
     for (const [n, raw] of system.children.entries()) {

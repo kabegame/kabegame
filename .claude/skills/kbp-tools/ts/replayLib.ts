@@ -74,6 +74,8 @@ export interface RunSpec {
     informational?: string[];
   };
   mode?: Mode;
+  /** 编译用的场景后处理档位（P4f 步骤 2：超高档 HDR 下的 `brightness`），缺省 disabled。 */
+  postprocess?: "disabled" | "enabled" | "ultra";
   inputs?: {
     /** 控制点输入的对象世界矩阵：none（不传控制点输入，P4b 及以前）、static（编译期变换）、hook（钩子的 world）。 */
     world?: "none" | "static" | "hook";
@@ -627,8 +629,9 @@ export class CaseContext {
     return this.modules.get(rel);
   }
 
-  async compile(project: string): Promise<any> {
-    if (!this.bundles.has(project)) {
+  async compile(project: string, postprocess: "disabled" | "enabled" | "ultra" = "disabled"): Promise<any> {
+    const key = postprocess === "disabled" ? project : `${project}|${postprocess}`;
+    if (!this.bundles.has(key)) {
       const { compileScene } = await this.mod("compile/bundle");
       if (!this.translator) {
         const { Wpesl2wgsl } = await this.mod("wpesl2wgsl/index");
@@ -639,18 +642,18 @@ export class CaseContext {
       const projectDir = path.join(this.data, "proj", project);
       if (!existsSync(projectDir)) throw new KbpReplayError("data", `找不到工程 ${projectDir}`);
       this.bundles.set(
-        project,
+        key,
         await compileScene({
           projectDir,
           sceneAssets: [`${wpeRoot()}/assets`],
           reader: nodeReader,
           translator: this.translator,
-          postprocess: "disabled",
+          postprocess,
           exhaustive: true,
         }),
       );
     }
-    return this.bundles.get(project);
+    return this.bundles.get(key);
   }
 
   // ---------- 报告 ----------
@@ -724,7 +727,7 @@ export class CaseContext {
     const truth = readTrack(trackFile);
     const project = run.project ?? truth.project ?? /^(.+?)-fps\d+/.exec(tag)?.[1];
     if (!project) throw new KbpReplayError("data", `${tag}：推不出工程，案例里给 project`);
-    const bundle = await this.compile(project);
+    const bundle = await this.compile(project, run.postprocess ?? "disabled");
     const frames = truth.frames.map((f) => f.frame);
     const first = Math.min(...frames);
     const firstPointer = truth.frames.find((f) => f.frame === first)?.pointer;

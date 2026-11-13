@@ -262,6 +262,92 @@ setRate(rate: number): void;
 | 真机 `3809965824`（原场景，强制渲染；P9a 之后只差两个光标回调，不用测试副本） | 系统里循环放 P4e 的测试音乐：「鼠标音乐」（`count` / `rate` / `size` / `speed` 挂音频脚本）19–24 个、尺寸 18–36，WPE 同一段音乐 14–24 个、16–29（`ignore/p4/e4/out/wpe-3809965824-music-stats.json`），P4e 用静态值时只有 7–9 个；`notes1_audio_responsive` 6–8（WPE 6–8）、`Blinking Stars` 237–251（WPE 233–241）。场景频谱在动，视频立绘正常。音乐停后（中间 dev 应用被别的会话的 Rust 改动重启了一次，重开预览）频谱全 0，两个带音频的系统都是 0，`Blinking Stars` 照常，和 P4e 测到的 WPE 相同。测完删掉了强制渲染开关 |
 | `3706286085` | 还差透视相机、网格、雾等 30 多项，离能看很远，没测；它的 `alpha` 脚本之前落到图层 alpha 上（差异 5） |
 
+2026-11-13 用户同意提交，连同步骤 0 的文档一起提交 `ef16dcf1`（`host.ts` 里别的会话加的 2 行没带进来）。
+
+## 步骤 2 — HDR 下的 `instanceoverride.brightness`
+
+### 思路
+
+WPE 在重算实例覆盖时（`FUN_1401d15a0` 开头，rea-p4f-script 第 7 节）算 `k = (HDR && !(flags & 8)) ? brightness : 1`，再写出生时的实例颜色 `instColor = colorn·k`（`colorn` 生效时）或 `(k, k, k)`；新粒子出生先写 `instColor` 进 rgb 列，颜色 initializer 再乘上去。所以 `k` 只乘颜色三通道、不乘 alpha，有没有颜色模块都乘，在 `colorn` 之后，不钳制（实测 `p4f-bright`：`colorn` 的 (0.25, 1, 0.25) 乘 2 得 (0.5, 2, 0.5)）。我们这边出生颜色初值就是 `ParticleSystem.instanceColor`（`applyColorn` 写，P4b 步骤 6），结构相同，所以只要在算它时乘上 `k`。
+
+HDR 位在 WPE 里只在加载时判定（P3 K3），我们也是：场景 HDR 变了整场重编译。所以 HDR 由编译期写进每个系统的定义（顶层与子系统都写），模拟器按自己的 `flags & 8` 决定乘不乘，子系统、事件实例在递归重算里同样处理。`brightness` 从「HDR 时登记成重编译目标、非默认值报不支持」改成普通的就地目标：改值置脏、下一帧重算 `instanceColor`，只影响之后出生的粒子（读码 7）。
+
+### 现状锚点
+
+**a. 编译期：HDR 下登记成重编译**（`compile/bundle.ts` 的 `compileParticleSystem`）
+```ts
+const brightnessActive = postprocess.hdr && (flags & 8) === 0;
+const instanceTarget = (field: InstanceKey): BindingTarget =>
+  field === "brightness" && brightnessActive
+    ? recompile("layer-structure", `objects/${index}/instanceoverride/brightness`) // 现状：HDR 下改值整场重编译
+    : { kind: "particle-instance", object: index, field };
+```
+
+**b. 能力表：HDR 下非默认值照报**（`compile/features.ts` 的 `checkParticleInstance`）
+```ts
+if (context.hdr && colorOverride && resolved.brightness !== 1) unsupported.add("particle:instance:brightness");
+// 挂 `{script}` 也报 `particle:binding:instance:brightness`（`SCRIPT_INSTANCE_KEYS` 没有它）
+```
+
+**c. 模拟器：出生颜色初值不看 `brightness`**（`particles/system.ts` 的 `applyColorn`）
+```ts
+const state = colornState(this.def, this.instance.colorn, parent ? parent.colornGate : true);
+this.instanceColor = state.instanceColor; // 现状：colorn 或 (1, 1, 1)，没有 k
+```
+
+### 点 1 — 编译（`compile/particles.ts`、`compile/bundle.ts`、`compile/features.ts`、`compile/scripts.ts`）
+
+- **新增** `SceneParticle.hdr: boolean`：场景加载时判定的 HDR（`postprocess.hdr`），顶层与子系统都写（`compileParticleSystem` 传下去）。
+- **修改** `instanceTarget`：`brightness` 一律是 `{ kind: "particle-instance", object, field: "brightness" }`，删掉重编译分支。
+- **修改** `checkParticleInstance`：删掉 `particle:instance:brightness`；`SCRIPT_INSTANCE_KEYS` 加 `brightness`（挂脚本不再报）。注释同步。
+
+### 点 2 — 模拟（`particles/system.ts`、`particles/colorn.ts`）
+
+- **修改** `applyColorn`：
+```ts
+// rea-p4f-script 第 7 节：k 只在 HDR 且本系统没有 flags & 8 时取 brightness；乘在 colorn 之后、逐通道、不钳制
+const k = this.def.hdr && (this.def.flags & 8) === 0 ? f32(this.instance.brightness) : 1;
+this.instanceColor = state.instanceColor.map((c) => f32(c * k));
+```
+  - 子系统、事件实例沿用（它们的 `def.hdr` 由编译期写、`instance.brightness` 是对象的值，`flags & 8` 各看自己的）。
+  - `instanceColor` 只在出生时写进颜色列，已有粒子不变（不用另做）。
+
+### 点 3 — 回放工具与案例（Claude 做）
+
+- 新案例 `f2`：`p4f-bright` 的「超高」与「关闭」两档逐粒子比颜色与 alpha（`b-1`、`b-05`、`b-2`、`b-2-f8`、`b-2-cn`、`b-2-a`）；回放按编译出来的 `def.hdr`，不另传。
+
+### 验收
+
+- 子代理：tsc 0 error，vitest（带 `KABEGAME_WPE_ROOT`）全过（已知的失败另列），Prettier（`--ignore-path <空文件>`）。新增单测：HDR / LDR 两种下的 `instanceColor`（有无 `colorn`、`flags 8`）、alpha 不乘、改 `brightness` 只影响之后出生的粒子、子系统与事件实例各按自己的 `flags & 8`、编译期 `brightness` 是就地目标且不再报、挂脚本不报。
+- Claude 独立验收：
+  1. `git status` 查越界；tsc、vitest 自跑；变异检查（不看 HDR、不看 `flags & 8`、乘到 alpha 上、乘在 `colorn` 之前（结果相同，作对照）、钳到 1、改值时重写已有粒子的颜色）。
+  2. `kbp regress`（HEAD 快照 ↔ 步骤 2 快照，现有案例含 `f1`）逐字节相同；语料只去掉 `particle:instance:brightness`（3 张），粒子覆盖 104 → 107。
+  3. 回放 `f2` 在包络内。
+  4. 真机：只差 `brightness` 的三张（`2833017810`、`3286859278`、`3509243656`）都还有别的不支持项，在「超高」档下强制渲染其中一张，读 `host.particles` 的颜色确认乘了 `k`、画面没有异常。
+- 过后请用户提交。
+
+### 步骤 2 实施记录（2026-11-13）
+
+子代理在 HEAD `ef16dcf1` 的快照 `ignore/p4/f2/ov` 里实现点 1–2，Claude 做点 3 与验收。HEAD 没动；工作区里 `compile/bindings.ts`、`bundle.ts`、`features.ts` 有别的会话未提交的改动（图层 `alignment` 等），这 3 个文件 `git merge-file` 三方合并、没有冲突，合并引入的增删行数与补丁逐文件相同；其余 8 个直接覆盖。合并前的文件在 `ignore/p4/f2/pre-merge/`，补丁 `ignore/p4/f2/step2.patch`（11 个文件，+656 / −95）。
+
+**和计划的差异（子代理报告，Claude 核对后接受）：**
+1. `checkParticleInstance` 的签名去掉了 `resolved` 与 `hdr`（原来只给 `brightness` 那条检查用，删掉后是死参数），调用方与两个测试的 helper 跟着改。
+2. `k` 抽成 `particles/colorn.ts` 的 `instanceBrightness(def, brightness)`（复用 `DISABLE_COLORN`），乘法仍在 `applyColorn`。
+3. `hdr` 经 `parseParticle` 的选项传入、缺省 false，现有手写夹具不用改。
+4. 改了已有断言：`compile/p4a5.test.ts` 4 处（`brightness` 不再报、HDR 下也是就地目标、挂脚本不报）、`compile/p4f1.test.ts` 4 处（`SCRIPT_INSTANCE_KEYS` 变成 8 个键，`brightness` 挂脚本从照报改为写回目标）。
+
+**验收结果：**
+
+| 项 | 结果 |
+|---|---|
+| tsc / vitest / Prettier | 快照：tsc 0 error，108 个文件 2605 个用例，只有已知的 `pipeline.test.ts`「本机语料…请求次数有界」失败（Claude 自跑同子代理）；Prettier（`--ignore-path <空文件>`）11 个文件通过。合并后的工作区：宿主 tsc 0 error；全量 vitest 一次另有 `render/particles.test.ts`「切换壁纸 / 重编译…销毁渲染器全部释放」失败，单跑这个文件 65 个全过，不含本步的工作区快照与单含本步的快照副本里也都通过，按负载下的偶发记，没有再跑全量（用户定） |
+| 新增单测 | 24 个（`particles/p4f2.test.ts` 15、`compile/p4f2.test.ts` 9），覆盖计划清单全部各项；子代理另对模拟器单测做了 4 处变异自检 |
+| `kbp regress`（HEAD 快照 ↔ 步骤 2 快照，18 个旧案例含 `f1` + `f2` + 语料） | 18 个旧案例逐字节相同；`f2` 只在 HEAD 上失败。语料 173 张只在 3 张（`2833017810`、`3286859278`、`3509243656`）里去掉 `particle:instance:brightness`，没有新键，干净的数量不变 |
+| 覆盖 | 165 张口径粒子用法完全覆盖 104 → 107；还挡着的只剩 `particle:renderers` 1 张（步骤 4） |
+| 回放 `f2`（新案例：`p4f-bright` 超高档按 `ultra` 编译、关闭档按 `disabled` 编译，6 个系统） | 全过，两档颜色、alpha 差 0（HEAD 上超高档 `b-05`、`b-2`、`b-2-cn`、`b-2-a` 颜色超限、`b-1` 与 `b-2-f8` 通过）。为它给 kbp-tools 加了案例参数 `postprocess`（`replayLib.ts` 的编译按档位缓存，缺省 `disabled`，旧案例逐字节不变） |
+| 变异（`ignore/p4/f2/mutate_f2.py`，7 处） | 全部检出：不看 HDR、不看 `flags & 8`、`k` 钳到 1、不乘、alpha 也乘、编译期不传 HDR（这 6 处单测与 `f2` 都抓到）、`brightness` 不在脚本键表里（只有单测）；还原后树哈希相同 |
+| 真机 | 用户把「场景后处理」调成超高后做。工作区里别的会话未提交的 `compile/animations.ts`（P10）引用了 `scripts.ts` 里还没加的导出，宿主按工作区构建不了，所以拼一份宿主工程（`ignore/p4/f2/hostbuild`，`src` 是「HEAD + 本步」的快照副本、补上未入库的 `wpefont.wasm`），经 `KABEGAME_WPE_SCENE_OUT_DIR` 构建进 dev 的资源目录。导入 `p4f-bright`（本步之后没有不支持项、不用强制渲染）开预览截图，和 WPE 超高档抓帧的上屏画面（fp16 线性换 sRGB）在六组粒子带上逐点比：`b-05` (60, 66, 60)、`b-2` (235, 236, 235)、`b-2-cn` (173, 255, 173，泛光带光晕) 等全部相同或差 1–2 个色阶，`b-2-f8` 同基准，`b-2-a` 半透明虚线只在一个采样点上落到了空隙（时刻不同）。截图 `ignore/p4/f2/out/real-p4f-bright-ultra.png`，WPE 画面 `ignore/p4/f2/out/wpe-frames/`。测完 `projects_remove` 移除了测试行；没测还差别的项的真实场景 |
+
 ## 已定（2026-11-13 用户，都按推荐）
 
 1. **粒子的深度与剔除移到 P5d。** 总计划把它放在 P4f，P5 后来定了「深度附件由 P5d 建，P4f 复用」，P5d 还没做。这三类键是所有非模型 pass 共用的检查，P5d 要一起统一；在 P4f 里去掉它们也不让任何场景干净；kabegame-sample 的 `magic_vortex_orb`（`depthtest: enabled`）随之归 P5d。

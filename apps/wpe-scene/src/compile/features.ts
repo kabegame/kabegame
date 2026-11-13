@@ -32,7 +32,6 @@ import {
   readParticleSystem,
   SCRIPT_INSTANCE_KEYS,
   type ParticleChildIssue,
-  type ParticleInstance,
 } from "./particles";
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -672,7 +671,7 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * `compileShape` 编完后按 `shapeIssues` 报。
  *
  * 粒子对象自己的键（`origin`、`angles`、`scale`、`visible`、`parent` 等）照对象规则走；`instanceoverride` 要看粒子 JSON 的
- * `flags` 与场景 HDR，由 `checkParticleInstance` 在读到文件后检查；粒子 JSON 的用法由 `checkParticleFeatures` 检查。
+ * `flags`，由 `checkParticleInstance` 在读到文件后检查；粒子 JSON 的用法由 `checkParticleFeatures` 检查。
  * 粒子不再有总括键（步骤 5 删掉了 `particle:pending`）：不支持的用法都要由这些细分键挡住。
  *
  * 模型对象（P5c 步骤 1）不再整个报 `object:model`：mdl 与网格的用法由 `bundle.ts` 读到文件后按 `checkMdlFeatures`、
@@ -787,40 +786,35 @@ export function checkInstanceFeatures(object: SceneObject, unsupported: Set<stri
 }
 
 /**
- * 粒子对象的 `instanceoverride`（P4a 步骤 5，`rea-p4a.md` C3 / C5，`FUN_14022bd40`）。`flags` 是粒子 JSON 的系统 `flags`，
- * `hdr` 是场景实际的 HDR（`postprocess.hdr`），`resolved` 是编译期解析出的值（含用户属性）。
+ * 粒子对象的 `instanceoverride`（P4a 步骤 5，`rea-p4a.md` C3 / C5，`FUN_14022bd40`）。`flags` 是粒子 JSON 的系统 `flags`。
  * - `alpha`、`size`、`count`、`speed`、`lifetime`、`rate`：已实现（静态值与 `{user}`，就地更新），不报；`id` 是编辑器键。
- * - `brightness`：只在 HDR 且没有 bit3 时生效（乘实例颜色，没实现），这时取非默认值报 `particle:instance:brightness`；
- *   LDR 或有 bit3 时中性。绑了用户属性时 `bundle.ts` 把它登记成重编译目标，改成非默认值后由这里报。
+ * - `brightness`（P4f 步骤 2，rea-p4f-script.md 第 7 节）：已实现，不报。只在场景 HDR 且没有 bit3 时乘新粒子的颜色初值
+ *   （`particles/system.ts` 的 `applyColorn`，HDR 由编译期写进 `SceneParticle.hdr`）；LDR 或有 bit3 时中性。静态值与 `{user}` 都是
+ *   就地更新，HDR 不再改走重编译。
  * - `color`、`colorn`（P4b 步骤 6，rea-p4b-render.md 7.1、7.3、7.4）：已实现（`particles/colorn.ts`）。`color`（0–255）加载时
  *   ÷255 后 `%.5f` 转成 `colorn`；生效要已设（r ≥ 0）、不是三个分量都和系统色（从颜色模块推出）差 < 0.9/255、系统 flags
  *   没有 bit3；生效后颜色模块按 HSV 差平移，场景 `version` < 5 或没有颜色模块（`0x200000`）时新粒子再乘 `colorn`。静态值与
  *   `colorn` 的 `{user}` 都不报（就地更新）。没有 bit3 时下面两种 WPE 的处理没读到（语料 0 处），照报：
  *   - `color` 绑了用户属性：`particle:instance:color:user`（属性值怎么 ÷255 没读到）；
  *   - `colorn` 的 `{user: {name, condition}}`：`particle:instance:colorn:condition`（布尔值怎么转颜色没读到）。
- *   `brightness`（HDR 时乘实例颜色）见上条。子系统（P4e 步骤 1）用同一个对象的值，`compileScene` 按子系统自己的 `flags` 再调一次
- *   （`colorn` 另要父生效，`particles/colorn.ts` 的 `parentActive`）。
+ *   子系统（P4e 步骤 1）用同一个对象的值，`compileScene` 按子系统自己的 `flags` 再调一次（`colorn` 另要父生效，
+ *   `particles/colorn.ts` 的 `parentActive`）。
  * - `controlpoint0..7`、`controlpointangle0..7`（P4c 步骤 1，`particles/controlpoints.ts`）：静态值已实现，不报（下标 ≥ 控制点
  *   个数、或点上带 `flags` 1 / 4 时 WPE 不用它，同样中性）；绑了用户属性报 `particle:instance:controlpoint:user`（运行时改值
  *   没做，语料 0 处）。
- * - 挂了 `{script}`（P4f 步骤 1，rea-p4f-script.md 第 6 节）：`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`colorn`
- *   （`SCRIPT_INSTANCE_KEYS`）已实现，字段脚本写回到就地目标 `particle-instance`（`compile/scripts.ts`），不报；其余键报
- *   `particle:binding:instance:<键>`：`brightness`（HDR 下要先变成就地目标，P4f 步骤 2）、`controlpointN` / `controlpointangleN`
- *   （运行时写入归 P4f 步骤 3）、`color` 等。脚本里用到的 API 照常由 `scanScriptApi` 检查。
+ * - 挂了 `{script}`（P4f 步骤 1、2，rea-p4f-script.md 第 6 节）：`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`brightness`、
+ *   `colorn`（`SCRIPT_INSTANCE_KEYS`）已实现，字段脚本写回到就地目标 `particle-instance`（`compile/scripts.ts`），不报；其余键报
+ *   `particle:binding:instance:<键>`：`controlpointN` / `controlpointangleN`（运行时写入归 P4f 步骤 3）、`color` 等。脚本里用到的
+ *   API 照常由 `scanScriptApi` 检查。
  * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `collectAnimations` 处理（P10a）。
  */
-export function checkParticleInstance(
-  raw: unknown,
-  resolved: Pick<ParticleInstance, "brightness">,
-  context: { flags: number; hdr: boolean },
-  unsupported: Set<string>,
-): void {
+export function checkParticleInstance(raw: unknown, context: { flags: number }, unsupported: Set<string>): void {
   if (raw === null || raw === undefined) return;
   if (typeof raw !== "object" || Array.isArray(raw)) {
     if (active(raw)) unsupported.add("particle:instance");
     return;
   }
-  // bit3 禁用 colorn 与 brightness（C3）
+  // bit3 禁用 colorn 与 brightness（C3）：`color` / `colorn` 的照报项这时中性
   const colorOverride = (context.flags & 8) === 0;
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (value === null || value === undefined || key === "id") continue;
@@ -836,7 +830,6 @@ export function checkParticleInstance(
       if (isUserBinding(value)) unsupported.add("particle:instance:controlpoint:user");
     } else unsupported.add(`particle:instance:${key}`);
   }
-  if (context.hdr && colorOverride && resolved.brightness !== 1) unsupported.add("particle:instance:brightness");
 }
 
 /** 程序最终是否开了光照（COMBO 可能来自材质，也可能是着色器注解的默认值）。 */

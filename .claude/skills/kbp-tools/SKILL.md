@@ -152,7 +152,7 @@ kbp.py replay <案例…> | --all [--src 产品源码] [--data 目录] [--out �
   报 `[src]`，退出码非 0。
 - 现有案例（`ignore/p4/cases/`）：`b3`（P4a 的 9 个标签、`p4b` 模块、`p4b-emit`）、`b4`（噪声）、`b6`（三组 `colorn`）、`c1`（`p4c-cp`）、
   `c2`（`p4c-ptr`）、`c3`（`p4c-attract`，`a-default` 的已知超限照原脚本记失败）、`c4`（`p4c-world`，`p4c-ptr` 加 `p-world`）、`d1`（绳）、`e1`（P4e static 子系统）、
-  `e2`（P4e 事件实例池与 `eventfollow`）、`e3`（P4e `eventspawn` 与 `eventdeath`，含多条目的上限失守与 rope 父系统预热里建的实例）、`e4`（P4e `audioprocessing*`：音频发射系统按「存在余数初值使每帧出生数对上」核对，静音工程逐粒子比）、`e5`（P4e 收尾 A：运行中建的事件实例预热时场景时间取这一帧的 `g_Time`，钩子沿用 `e3`）。
+  `e2`（P4e 事件实例池与 `eventfollow`）、`e3`（P4e `eventspawn` 与 `eventdeath`，含多条目的上限失守与 rope 父系统预热里建的实例）、`e4`（P4e `audioprocessing*`：音频发射系统按「存在余数初值使每帧出生数对上」核对，静音工程逐粒子比）、`e5`（P4e 收尾 A：运行中建的事件实例预热时场景时间取这一帧的 `g_Time`，钩子沿用 `e3`）、`f1`（P4f 步骤 1：`instanceoverride` 的字段脚本，钩子按 FR 日志的 runtime 复算脚本返回值、第 f 帧步进完应用；`rate` 走 `setRate`）、`f2`（P4f 步骤 2：HDR 下的 `brightness`，`postprocess: "ultra"` 与 `disabled` 两段）。
   频谱（P4e 步骤 4 起）：轨迹帧带 `audio`（`kbp rdc track` 记下的 CLK 读数）时，回放每帧把 `g_AudioSpectrum16Left/Right` 原样写进粒子共用的频谱
   （`SimOptions.audio`，由 `audioTimeline` 从真值帧组出；没抓到的帧沿用前一帧，第一个有值的帧之前是 0），源码要有 `ParticleSystem.setAudio`。
   子系统（P4e 起）：产品的系统树由根系统带着步进，回放只步进根，**每帧**按 `forEachDrawn` 的先序与 `kbp-meta.json` 的 `children` 给子系统
@@ -607,6 +607,7 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 | `project` | `<data>/proj/<project>`；缺省取轨迹的 `project`，再缺省从 `<工程>-fps<N>` 推 |
 | `tags` | 抓帧标签：轨迹 `tracks/rd-<标签>.json`，日志 `out/<标签>-log.txt`；标签末尾 `-宽x高` 是抓帧窗口尺寸 |
 | `passes` / `fps` | operator 遍数（缺省按标签的 fps 推）；绳的 `writeRopeSegments` 读的 fps（缺省标签里的） |
+| `postprocess` | 编译用的场景后处理档位 `disabled` / `enabled` / `ultra`（缺省 `disabled`，P4f 步骤 2 起）；超高档且场景 `bloom`、`hdr` 都开时编译出 HDR（`SceneParticle.hdr`），`f2` 用它比 `brightness` |
 | `mode` | `position`（缺省，逐粒子 pos / size / color / alpha / rot）、`color`（b6：逐粒子 rgb，按线段拟合）、`rope`（d1：绳的段顶点，轨迹是 draws 认法） |
 | `systems` | `only`（只比这些，按这个顺序）、`skip`、`skipPattern`（正则）、`source`（`first` 轨迹第一帧 / `union` 全部帧，缺省）、`informational`（照比照报，不算进是否全部通过） |
 | `inputs.world` | 控制点输入的对象世界矩阵：`none`（缺省，不传控制点输入，P4b 及以前）、`static`（编译期变换）、`hook`（钩子的 `world`） |

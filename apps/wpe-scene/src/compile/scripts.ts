@@ -87,11 +87,11 @@ function valueType(initial: SceneScalar): ValueType | "string" {
  * `text`：文本对象顶层的 `objects/<i>/<TEXT_RUNTIME_FIELDS 之一>`（P6b 1e）写回到文本目标，值变了才重排；`font`、
  * `opaquebackground` 等其余文本键仍是 `unsupported`（能力表另报 `text:script:<键>`）。
  *
- * `particle`：粒子对象的 `objects/<i>/instanceoverride/<键>`（P4f 步骤 1，rea-p4f-script.md 第 6 节）。`SCRIPT_INSTANCE_KEYS` 的 7 个键
- * 写回到就地目标 `particle-instance`：WPE 的回调返回值走和脚本赋值、用户属性改值同一个 setter（6.2，每帧写、不比较），下一帧对象更新
- * 开头才进模拟（6.3），和我们「脚本之后 `sync`、下一次 `stepParticles` 才用」的帧序等价；`rate` 在 `SceneState.write` 里另走一条路
- * （没有改值回调，5.4）。其余键（`brightness`、控制点等）与非粒子对象上的 `instanceoverride` 没有目标（能力表照报），也不落到图层的
- * 同名字段上（`alpha`、`brightness` 是图层字段，路径不同）。
+ * `particle`：粒子对象的 `objects/<i>/instanceoverride/<键>`（P4f 步骤 1、2，rea-p4f-script.md 第 6、7 节）。`SCRIPT_INSTANCE_KEYS` 的
+ * 8 个键（6 个系数、`brightness` 与 `colorn`）写回到就地目标 `particle-instance`：WPE 的回调返回值走和脚本赋值、用户属性改值同一个
+ * setter（6.2，每帧写、不比较），下一帧对象更新开头才进模拟（6.3），和我们「脚本之后 `sync`、下一次 `stepParticles` 才用」的帧序等价；
+ * `rate` 在 `SceneState.write` 里另走一条路（没有改值回调，5.4）。其余键（控制点等）与非粒子对象上的 `instanceoverride` 没有目标
+ * （能力表照报），也不落到图层的同名字段上（`alpha`、`brightness` 是图层字段，路径不同）。
  *
  * 属性关键帧动画（P10a，`animations.ts`）用同一个函数推目标，参数照字段脚本的算法给。
  */

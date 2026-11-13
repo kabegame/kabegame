@@ -15,7 +15,8 @@
  * 6. 控制点 `previous ← current`（`0x140237798`）。
  * 噪声类模块（P4b 步骤 4）另读场景时间 `T`（`step` 的 `time`，一帧内不变，预热时为 0）。
  *
- * `instanceoverride.colorn`（P4b 步骤 6，`colorn.ts`）：重乘字段之后从基值重算颜色模块的平移与新粒子的颜色初值（`applyColorn`）。
+ * `instanceoverride.colorn`（P4b 步骤 6，`colorn.ts`）：重乘字段之后从基值重算颜色模块的平移与新粒子的颜色初值（`applyColorn`）；
+ * HDR 下的 `brightness`（P4f 步骤 2）在同一处乘到颜色初值上（`instanceBrightness`）。
  *
  * 生命周期（步骤 5）：`instanceoverride` 运行时改值走 `setInstance`（从基值重新乘，存活粒子不动；只写了 `rate` 时走 `setRate`，只改
  * 步进率，P4f 步骤 1）；不可见的帧走
@@ -95,7 +96,7 @@ import {
 import { identity, invert, multiply, translation, type Mat4 } from "../render/math";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { SILENT_PARTICLE_AUDIO, type ParticleAudio } from "./audio";
-import { colornState, type Rgb } from "./colorn";
+import { colornState, instanceBrightness, type Rgb } from "./colorn";
 import { ParticleColumns } from "./columns";
 import {
   controlPointCount,
@@ -437,9 +438,12 @@ export class ParticleSystem {
   private readonly operators: ResolvedModule[];
   /** 当前的 `instanceoverride` 标量与 `colorn`（起始值 = `def.instance`，`setInstance` 改）。 */
   private instance: ParticleInstanceValues;
-  /** 新粒子的 `a0`（`instanceoverride.alpha`）。 */
+  /** 新粒子的 `a0`（`instanceoverride.alpha`，WPE 的 `sys+0x3ec`，不乘 HDR 下的 `brightness`）。 */
   private alpha0 = 1;
-  /** 新粒子的 rgb 初值（WPE 的 `sys+0x3e0..0x3e8`，`colornState` 的 `instanceColor`），颜色 initializer 乘在它上面。 */
+  /**
+   * 新粒子的 rgb 初值（WPE 的 `sys+0x3e0..0x3e8`）：`colornState` 的 `instanceColor` 逐通道乘 HDR 下的 `brightness`
+   * （`instanceBrightness`，P4f 步骤 2），颜色 initializer 乘在它上面。
+   */
   private instanceColor: Rgb = [1, 1, 1];
   /**
    * `colorn` 生效位（`sys+0x3f7` bit1，rea-p4e-children 2 节、3.4）：顶层是自己的生效判断；子系统建立时从父拷、每帧被父的覆盖，所以
@@ -495,8 +499,8 @@ export class ParticleSystem {
     while (root?.parent) root = root.parent;
     this.instance = instanceValues(root ? root.instance : def.instance);
     if (!root) this.instance.rate = Math.max(INSTANCE_RATE_MIN, this.instance.rate);
-    // 从基值乘，不累乘（C5）；颜色模块的字段乘完再按 `colorn` 平移（`applyColorn`）。`brightness` 不做（能力表按
-    // `checkParticleInstance` 报）
+    // 从基值乘，不累乘（C5）；颜色模块的字段乘完再按 `colorn` 平移（`applyColorn`）。`brightness` 不乘模块字段，只在 HDR 下乘新粒子
+    // 的颜色初值（`applyColorn`，P4f 步骤 2）
     const multipliers = instanceMultipliers(this.instance, def.flags);
     const resolve = (category: ParticleCategory, modules: readonly ParticleModule[]): ResolvedModule[] =>
       modules.flatMap((module) => {
@@ -678,6 +682,8 @@ export class ParticleSystem {
    * - 系统 `flags` bit4–7 禁用的项照旧不乘（C3）。`brightness` 不影响模拟。
    * - `colorn`（P4b 步骤 6）：颜色模块的平移与新粒子的颜色初值从基值重算（`applyColorn`）。`colorrandom` 是出生时的
    *   initializer，只影响之后出生的粒子；`colorchange` 每帧读字段，存活粒子下一帧就跟着变（rea-p4b-render.md 7.3【推】）。
+   * - `brightness`（P4f 步骤 2，rea-p4f-script.md 第 7 节）：HDR 且本系统没有 bit3 时，颜色初值从基值重算后再乘它，只影响之后出生的
+   *   粒子（初值只在出生时写进颜色列），已有粒子的颜色不动。子孙在下面的递归里各按自己的 `flags & 8` 重算。
    * - 已结束、新 `rate > 0` 的 emitter 重新打开（`param_2 = 1` 的尾段，`0x14022c1f0` 起）；累积余数等计时保留。
    * - 有运行状态的模块（P4d 步骤 3）按登记的覆盖条目改状态（`instanceState`）：`mapsequencebetweencontrolpoints` 在 `flags & 0x10`
    *   时 `step` 重写成正的新值（条目 4），序号不动；`mapsequencearoundcontrolpoint` 不登记，不动。
@@ -724,6 +730,9 @@ export class ParticleSystem {
   /**
    * 从基值重算颜色模块的字段和新粒子颜色（rea-p4b-render.md 7.3、7.4）。重乘字段之后调，平移的输入是 `module.base`，
    * 所以不会在上一次的结果上累加；不生效时写回基值（float32）。
+   * - 新粒子颜色初值（`FUN_1401d15a0` 开头，rea-p4f-script.md 第 7 节）：`colornState` 的 `instanceColor`（`colorn` 或 1）逐通道乘
+   *   `k = instanceBrightness(def, brightness)`（HDR 且本系统没有 bit3 时是 `brightness`，否则 1），float32、不钳制；alpha 初值不乘
+   *   （`applyScalars`）。子系统、事件实例的 `def.hdr` 由编译期写、`brightness` 是对象上的值，`flags & 8` 各看自己的。
    * - 0xb `colorrandom`：`min' = shift(min)`、`max' = shift(max)`，两端各自平移后再插值（`colorRandom` 每次按 `max − min` 算区间）。
    * - 0xc `colorchange`：写回 start = `A'`、Δ = `B' − A'`；`colorChange` 每帧按 `f32(end − start)` 算 Δ，和 WPE 的 `subss`
    *   相同，所以换两端即可（7.4）。
@@ -733,7 +742,10 @@ export class ParticleSystem {
     const parent = this.parent;
     const state = colornState(this.def, this.instance.colorn, parent ? parent.colornGate : true);
     this.colornGate = parent ? parent.colornGate : state.active;
-    this.instanceColor = state.instanceColor;
+    // k 乘在 colorn 之后（`mulss`，colorn 在前），逐通道 float32；k = 1 时与不乘逐位相同
+    const k = instanceBrightness(this.def, this.instance.brightness);
+    const [r, g, b] = state.instanceColor;
+    this.instanceColor = [f32(r * k), f32(g * k), f32(b * k)];
     for (const module of this.initializers)
       if (module.name === "colorrandom")
         module.fields = {

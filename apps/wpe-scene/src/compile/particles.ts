@@ -19,8 +19,8 @@ import { readOrientation, type ParticleOrientation } from "../particles/orientat
 
 /**
  * `instanceoverride` 里就地更新的标量键（P4a 步骤 5，`rea-p4a.md` C5）：编译期每处 `{user}` 登记成 `particle-instance`
- * 绑定，运行时改值由 `ParticleSystem.setInstance` 从基值重新乘。`brightness` 只在场景 HDR 且系统 `flags` 没有 bit3 时生效，
- * 这时它改走重编译（`bundle.ts`），取非默认值由能力表报。
+ * 绑定，运行时改值由 `ParticleSystem.setInstance` 从基值重新乘。`brightness` 只在场景 HDR（`SceneParticle.hdr`）且系统 `flags`
+ * 没有 bit3 时生效，乘新粒子的颜色初值（P4f 步骤 2，rea-p4f-script.md 第 7 节，`ParticleSystem.applyColorn`），同样就地更新。
  */
 export const INSTANCE_FIELDS = ["alpha", "size", "count", "speed", "lifetime", "rate", "brightness"] as const;
 export type InstanceField = (typeof INSTANCE_FIELDS)[number];
@@ -31,7 +31,7 @@ export type InstanceField = (typeof INSTANCE_FIELDS)[number];
 export type InstanceKey = InstanceField | "colorn";
 /**
  * `instanceoverride` 上能挂字段脚本的键（P4f 步骤 1，rea-p4f-script.md 第 6 节）：写回目标是就地目标 `particle-instance`，和用户属性
- * 改值、脚本赋值走 WPE 同一个 setter（6.2），下一帧生效（6.3）。`brightness`（HDR 下要先变成就地目标，P4f 步骤 2）与
+ * 改值、脚本赋值走 WPE 同一个 setter（6.2），下一帧生效（6.3）。`brightness` 从 P4f 步骤 2 起也是（HDR 下同样就地，第 7 节）。
  * `controlpointN` / `controlpointangleN`（P4f 步骤 3）挂脚本仍由能力表报 `particle:binding:instance:<键>`。
  */
 export const SCRIPT_INSTANCE_KEYS: readonly InstanceKey[] = [
@@ -41,6 +41,7 @@ export const SCRIPT_INSTANCE_KEYS: readonly InstanceKey[] = [
   "speed",
   "lifetime",
   "rate",
+  "brightness",
   "colorn",
 ];
 /**
@@ -86,7 +87,10 @@ export interface ParticleInstance {
   lifetime: number;
   /** 整个模拟的时间缩放：`dt' = dt·rate`。 */
   rate: number;
-  /** 仅 HDR 且系统 `flags` 没有 bit3 时乘实例颜色。 */
+  /**
+   * 仅 HDR 且系统 `flags` 没有 bit3 时乘新粒子的颜色初值（三通道，乘在 `colorn` 之后、不钳制，alpha 不乘；P4f 步骤 2，
+   * rea-p4f-script.md 第 7 节）。
+   */
   brightness: number;
   /**
    * 未设为 null（WPE 的 −1 −1 −1）；分量 r < 0 也算未设（`colornState` 判断，这里存原值）。`color`（0–255）加载时按
@@ -347,6 +351,12 @@ export interface SceneParticle {
   instance: ParticleInstance;
   /** 系统色与 `0x200000`（`instanceoverride.colorn` 用，P4b 步骤 6，`particleColorSystem`）。 */
   colorSystem: ParticleColorSystem;
+  /**
+   * 场景加载时判定的 HDR（`postprocess.hdr`，P4f 步骤 2）：WPE 的 HDR 位（宿主 `+0x118 & 0x2000`）只在加载时判定（P3 K3），运行中不变，
+   * 我们场景 HDR 变了整场重编译。顶层与子系统都写（`compileParticleSystem`）。为真且系统 `flags` 没有 bit3 时，
+   * `instanceoverride.brightness` 乘新粒子的颜色初值（rea-p4f-script.md 第 7 节，`ParticleSystem.applyColorn`）。
+   */
+  hdr: boolean;
   /**
    * 粒子材质的 pass（稳定键 `objects/<i>/particle/passes/<n>`）。步骤 4 才画：不放进 `layer.passes`，图像层的渲染图、
    * `buildableLayers`、`checkRenderable` 都按 `passes` 判断。
@@ -729,6 +739,8 @@ export interface ParseParticleOptions {
   resolveInstance?: InstanceResolver;
   /** 场景 `version`（`sceneVersionOf` 取过的值）；缺省 0，同 WPE 缺键。决定 `0x200000`（`particleColorSystem`）。 */
   sceneVersion?: number;
+  /** 场景加载时判定的 HDR（`postprocess.hdr`，见 `SceneParticle.hdr`）；缺省 false。 */
+  hdr?: boolean;
 }
 
 /** 解析一个粒子 JSON（能力检查另由 `checkParticleFeatures` 做）。`passes` 由 `compileScene` 编材质后填。 */
@@ -754,6 +766,7 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     controlpoints: readControlPoints(json),
     instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),
     colorSystem: particleColorSystem(json, options.sceneVersion ?? 0),
+    hdr: options.hdr ?? false,
     passes: [],
     children: [],
   };

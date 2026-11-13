@@ -30,8 +30,8 @@ export type LayerField =
 
 export type RecompileReason =
   | "postprocess-hdr" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）
-  // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）、灯对象字段（`lights.ts` 的编译期常量）、
-  // HDR 下生效的粒子 `instanceoverride.brightness`（没实现，改成非默认值时重编译后由能力表报不支持）
+  // colorBlendMode（passthrough 有无）、size（已定 5：重编译生效）、灯对象字段（`lights.ts` 的编译期常量）。
+  // 粒子 `instanceoverride.brightness` 从 P4f 步骤 2 起 HDR 下也是就地目标 `particle-instance`，不再在这里
   | "layer-structure";
 
 type GeneralField =
@@ -152,7 +152,8 @@ export type BindingTarget =
   | { kind: "general"; key: GeneralKey }
   /**
    * 粒子对象 `instanceoverride` 的标量键与 `colorn`（P4a 步骤 5，`rea-p4a.md` C5；P4b 步骤 6）：就地写，`GpuScene.sync` 交给
-   * 模拟器从基值重新乘、重算颜色平移，存活粒子保留出生时的颜色（`colorchange` 每帧读字段，存活粒子下一帧就跟着变）。
+   * 模拟器从基值重新乘、重算颜色平移与新粒子的颜色初值（含 HDR 下的 `brightness`，P4f 步骤 2），存活粒子保留出生时的颜色
+   * （`colorchange` 每帧读字段，存活粒子下一帧就跟着变）。
    * `object` 是 `objects` 下标。
    */
   | { kind: "particle-instance"; object: number; field: InstanceKey }

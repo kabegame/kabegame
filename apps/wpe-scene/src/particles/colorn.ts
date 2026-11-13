@@ -7,8 +7,9 @@
  *   startvalue、endvalue，两端各自平移）。
  * - **实例颜色：** 系统标志 `0x200000`（场景 `version` < 5，或没有颜色模块）时，新粒子的颜色初值是 `colorn`，颜色模块再乘到它上面。
  *
- * 运行中改值时从基值重算（记录里保留基色与系统色的 HSV），不在上一次的结果上累加。`brightness`（HDR 时乘实例颜色）不做，
- * 由能力表照报；子系统另要父的生效位（`colornState` 的 `parentActive`，P4e 步骤 1）。
+ * 运行中改值时从基值重算（记录里保留基色与系统色的 HSV），不在上一次的结果上累加。子系统另要父的生效位（`colornState` 的
+ * `parentActive`，P4e 步骤 1）。HDR 下的 `brightness`（P4f 步骤 2，rea-p4f-script.md 第 7 节）再乘到实例颜色上：`k` 见
+ * `instanceBrightness`，乘法在 `ParticleSystem.applyColorn`（`colorn` 之后）。
  *
  * 全部按 float32 逐步舍入（WPE 是 `divss` / `mulss` / `subss`），只有 `hsv2rgb` 里两次 `fmod` 是双精度（`cvtss2sd` 后调 CRT
  * `fmod`，再转回 float）。JS 的 `%` 和 C 的 `fmod` 一样按被除数的符号取余、结果精确。
@@ -115,8 +116,9 @@ export interface ColornState {
   /** 三条都满足：已设（r ≥ 0）、不是三个分量都和系统色差 < 0.9/255、系统 flags 没有 bit3（7.3）。 */
   active: boolean;
   /**
-   * 新粒子 rgb 初值：`0x200000`（`version` < 5 或没有颜色模块）且生效时是 `colorn`，否则 (1, 1, 1)（7.3「实例颜色与亮度」，
-   * k = 1，`brightness` 不做）。颜色 initializer 乘在它上面，`colorchange` 每遍再乘到当前色上（7.4 第 4 小节）。
+   * 新粒子 rgb 初值里 `colorn` 的那一项：`0x200000`（`version` < 5 或没有颜色模块）且生效时是 `colorn`，否则 (1, 1, 1)（7.3「实例
+   * 颜色与亮度」）。这里不乘 `k`：HDR 下的 `brightness` 由 `ParticleSystem.applyColorn` 再逐通道乘上（`instanceBrightness`）。颜色
+   * initializer 乘在最终的初值上面，`colorchange` 每遍再乘到当前色上（7.4 第 4 小节）。
    */
   instanceColor: Rgb;
   /** 生效时平移一个颜色，不生效时原样返回（WPE 把基值写回）。结果都是 float32。 */
@@ -151,4 +153,20 @@ export function colornState(
     instanceColor: def.colorSystem.instanceColor ? value : [1, 1, 1],
     shift: (color) => shiftColor(color, target, origin),
   };
+}
+
+/**
+ * HDR 下 `instanceoverride.brightness` 的乘数 `k`（P4f 步骤 2，rea-p4f-script.md 第 7 节，`FUN_1401d15a0` 开头
+ * `0x1401d15ec`–`0x1401d1609`）：
+ * ```
+ * k = (HDR 位 && !(sys.flags & 8)) ? io.brightness : 1.0
+ * instColor = (colorn 生效 && 0x200000) ? colorn·k : (k, k, k)      // mulss，逐通道 float32，不钳制
+ * alpha 初值 = io.alpha                                              // 不乘 k
+ * ```
+ * HDR 位只在加载时判定（P3 K3），即编译期写进系统定义的 `def.hdr`；`flags & 8` 看本系统自己的（子系统、事件实例各看各的），值是对象上的
+ * `brightness`（子孙从根取）。实测 `p4f-bright`：超高档 0.5 / 2 得 0.235 / 0.941，`colorn` (0.25, 1, 0.25) 乘 2 得 (0.5, 2, 0.5)，
+ * `flags 8` 与关闭档不变。
+ */
+export function instanceBrightness(def: Pick<SceneParticle, "hdr" | "flags">, brightness: number): number {
+  return def.hdr && (def.flags & DISABLE_COLORN) === 0 ? f32(brightness) : 1;
 }
