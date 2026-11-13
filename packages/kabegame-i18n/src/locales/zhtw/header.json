@@ -1,6 +1,8 @@
 {
   "refresh": "重新整理",
   "tasks": "任務",
+  "back": "返回",
+  "more": "更多",
   "toolbox": "工具箱",
   "toolboxApp": "應用",
   "toolboxMaintenance": "維護",

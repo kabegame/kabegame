@@ -6,9 +6,7 @@
       :class="[`is-${type}`, `is-side-${side}`, { 'is-compact': compact }]"
       :style="bubbleStyle"
     >
-      <el-icon class="kame-bubble__icon">
-        <component :is="iconComponent" />
-      </el-icon>
+      <component :is="iconComponent" class="kame-bubble__icon" />
       <div class="kame-bubble__content">
         <div class="kame-bubble__text">{{ text }}</div>
         <div v-if="moreText" class="kame-bubble__more">{{ moreText }}</div>
@@ -19,7 +17,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { CircleCheck, InfoFilled, WarningFilled, CircleCloseFilled } from "@kabegame/element-plus-icons";
+import { CircleCheck, CircleX, Info, TriangleAlert } from "@lucide/vue";
 import type { KameMessageType } from "@/stores/kameMessage";
 
 const props = withDefaults(
@@ -45,11 +43,11 @@ const iconComponent = computed(() => {
     case "success":
       return CircleCheck;
     case "warning":
-      return WarningFilled;
+      return TriangleAlert;
     case "error":
-      return CircleCloseFilled;
+      return CircleX;
     default:
-      return InfoFilled;
+      return Info;
   }
 });
 
@@ -72,21 +70,19 @@ const bubbleStyle = computed(() => ({
   width: max-content;
   max-width: min(320px, var(--kame-bubble-max-width));
   padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.75);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.94);
-  color: var(--anime-text-primary);
-  box-shadow: 0 10px 28px rgba(24, 24, 40, 0.18);
-  backdrop-filter: blur(10px);
+  border-radius: var(--kb-radius-lg);
+  background: var(--kb-surface-raised);
+  color: var(--kb-fg);
+  box-shadow: var(--kb-shadow-pop);
   pointer-events: none;
 
   &::before {
     content: "";
     position: absolute;
     bottom: 24px;
-    width: 14px;
-    height: 14px;
-    background: rgba(255, 255, 255, 0.94);
+    width: 12px;
+    height: 12px;
+    background: var(--kb-surface-raised);
     transform: rotate(45deg);
   }
 }
@@ -100,8 +96,8 @@ const bubbleStyle = computed(() => ({
 
   &::before {
     left: -8px;
-    border-left: 1px solid rgba(255, 255, 255, 0.75);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.75);
+    border-left: 1px solid var(--kb-line);
+    border-bottom: 1px solid var(--kb-line);
   }
 }
 
@@ -110,15 +106,16 @@ const bubbleStyle = computed(() => ({
 
   &::before {
     right: -8px;
-    border-top: 1px solid rgba(255, 255, 255, 0.75);
-    border-right: 1px solid rgba(255, 255, 255, 0.75);
+    border-top: 1px solid var(--kb-line);
+    border-right: 1px solid var(--kb-line);
   }
 }
 
 .kame-bubble__icon {
   flex: 0 0 auto;
-  margin-top: 2px;
-  font-size: 18px;
+  width: 16px;
+  height: 16px;
+  margin-top: 1.5px;
 }
 
 .kame-bubble__content {
@@ -134,24 +131,24 @@ const bubbleStyle = computed(() => ({
 
 .kame-bubble__more {
   margin-top: 4px;
-  color: var(--anime-text-secondary);
+  color: var(--kb-fg-muted);
   font-size: 11px;
 }
 
 .kame-bubble.is-success .kame-bubble__icon {
-  color: var(--el-color-success);
+  color: var(--kb-success);
 }
 
 .kame-bubble.is-info .kame-bubble__icon {
-  color: var(--el-color-primary);
+  color: var(--kb-accent);
 }
 
 .kame-bubble.is-warning .kame-bubble__icon {
-  color: var(--el-color-warning);
+  color: var(--kb-warning);
 }
 
 .kame-bubble.is-error .kame-bubble__icon {
-  color: var(--el-color-danger);
+  color: var(--kb-danger);
 }
 
 .kame-bubble-enter-active,

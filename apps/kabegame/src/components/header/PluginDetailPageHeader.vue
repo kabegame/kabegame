@@ -6,10 +6,8 @@
     @back="emit('back')"
   >
     <template v-if="iconUrl || plugin" #icon>
-      <el-image v-if="iconUrl" :src="iconUrl" fit="contain" class="w-full h-full" />
-      <div v-else class="w-full h-full flex items-center justify-center kb-grad text-white">
-        <el-icon :size="26"><Grid /></el-icon>
-      </div>
+      <img v-if="iconUrl" :src="iconUrl" alt="" draggable="false" class="size-full object-contain" />
+      <Puzzle v-else class="size-5 text-kb-fg-muted" />
     </template>
 
     <template #subtitle>
@@ -18,38 +16,56 @@
     </template>
 
     <template #extra>
-      <div v-if="plugin" class="flex items-center gap-2">
+      <div v-if="plugin" class="flex items-center gap-1">
         <template v-if="actionState === 'installed'">
-          <span v-if="!uiStore.isCompact" class="kb-chip text-white kb-grad-success whitespace-nowrap">
+          <span
+            v-if="!uiStore.isCompact"
+            class="mr-1 inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-full bg-[color-mix(in_srgb,var(--kb-success)_12%,transparent)] px-2 text-[12px] font-500 text-kb-success"
+          >
+            <Check class="size-3.5" />
             {{ t("plugins.installed") }}
           </span>
-          <el-button circle :title="t('plugins.detailCopyId')" @click="emit('copy-id', plugin.id)">
-            <el-icon><DocumentCopy /></el-icon>
-          </el-button>
-          <el-button circle type="danger" :title="t('plugins.uninstall')" @click="emit('uninstall')">
-            <el-icon><Delete /></el-icon>
-          </el-button>
+          <Tooltip :content="t('plugins.detailCopyId')">
+            <Button
+              variant="ghost"
+              size="icon"
+              :aria-label="t('plugins.detailCopyId')"
+              @click="emit('copy-id', plugin.id)"
+            >
+              <Copy />
+            </Button>
+          </Tooltip>
+          <Tooltip :content="t('plugins.uninstall')">
+            <Button variant="ghost-danger" size="icon" :aria-label="t('plugins.uninstall')" @click="emit('uninstall')">
+              <Trash2 />
+            </Button>
+          </Tooltip>
         </template>
-        <el-button
+        <Tooltip
           v-else
-          type="primary"
-          :circle="uiStore.isCompact"
-          :round="!uiStore.isCompact"
-          :disabled="!!plugin.minAppIncompatible"
-          :aria-label="installButtonText"
-          :title="
+          :content="
             plugin.minAppIncompatible
               ? t('plugins.detail.appVersionBad', { app: appVersion ?? '?', min: plugin.minAppVersion })
-              : installButtonText
+              : uiStore.isCompact
+                ? installButtonText
+                : ''
           "
-          @click="emit('install')"
         >
-          <el-icon v-if="uiStore.isCompact">
-            <Refresh v-if="actionState === 'update' || actionState === 'reinstall'" />
-            <Download v-else />
-          </el-icon>
-          <template v-else>{{ installButtonText }}</template>
-        </el-button>
+          <!-- 禁用的按钮不接收指针事件，提示挂在外面这层 span 上才能在禁用时弹出 -->
+          <span class="inline-flex">
+            <Button
+              variant="primary"
+              :size="uiStore.isCompact ? 'icon' : 'md'"
+              :disabled="!!plugin.minAppIncompatible"
+              :aria-label="installButtonText"
+              @click="emit('install')"
+            >
+              <RefreshCw v-if="actionState === 'update' || actionState === 'reinstall'" />
+              <Download v-else />
+              <template v-if="!uiStore.isCompact">{{ installButtonText }}</template>
+            </Button>
+          </span>
+        </Tooltip>
       </div>
     </template>
   </PageHeader>
@@ -57,7 +73,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Delete, DocumentCopy, Download, Grid, Refresh } from "@kabegame/element-plus-icons";
+import { Check, Copy, Download, Puzzle, RefreshCw, Trash2 } from "@lucide/vue";
+import { Button, Tooltip } from "@/components/ui";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@/stores/header";
@@ -111,9 +128,3 @@ const installButtonText = computed(() => {
   }
 });
 </script>
-
-<style scoped>
-.kb-grad-success {
-  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-}
-</style>

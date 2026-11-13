@@ -9,7 +9,7 @@
     @update:model-value="modal.close"
   >
     <template v-if="releases.length">
-      <KbTab v-model="activeTab" :items="tabItems" class="update-tabs" />
+      <Tabs v-model="activeTab" :items="tabItems" class="update-tabs" />
       <div v-if="active" class="changelog" v-html="renderedBody(active)" @click="onBodyClick"></div>
     </template>
 
@@ -43,7 +43,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ElButton, ElDialog, KbTab, type KbTabItem } from "@kabegame/element-plus";
+import { ElButton, ElDialog } from "@kabegame/element-plus";
+import { Tabs, type TabItem } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import { IS_LINUX } from "@/env";
 import { useModal } from "@/composables/useModal";
@@ -78,7 +79,7 @@ watch(
 
 const active = computed(() => releases.value.find((r) => r.tag === activeTab.value) ?? releases.value[0] ?? null);
 
-const tabItems = computed<KbTabItem[]>(() => releases.value.map((r) => ({ name: r.tag, label: r.tag })));
+const tabItems = computed<TabItem[]>(() => releases.value.map((r) => ({ name: r.tag, label: r.tag })));
 
 // changelog 渲染缓存：按 tag 缓存，但 body 变化（如发布后编辑了 release notes）时失效重渲染
 const bodyCache = new Map<string, { body: string; html: string }>();

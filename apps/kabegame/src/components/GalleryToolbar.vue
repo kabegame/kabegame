@@ -1,24 +1,16 @@
 <template>
   <PageHeader :title="$t('gallery.gallery')" :show="showIds" :fold="foldIds" @action="handleAction" sticky>
     <template #subtitle>
-      <span class="inline-flex items-center gap-2">
+      <span class="inline-flex items-center gap-1.5">
         <span>{{ totalCountText }}</span>
         <!-- 清除过滤挪进副标题：过滤行里那个文字按钮太占位置，而这里本来就在说
              「筛出了多少 / 一共多少」，清除是同一件事的延伸。清除简单与高级条件，
              hide 这类全局开关不算过滤，不该被这个叉号一并清掉。 -->
-        <button
-          v-if="isFilterIndicatorActive"
-          type="button"
-          class="subtitle-clear-filter"
-          :title="t('gallery.clearAllFilters')"
-          :aria-label="t('gallery.clearAllFilters')"
-          @click="clearAllFilters"
-        >
-          <el-icon><Filter /></el-icon>
-          <span class="subtitle-clear-filter__badge">
-            <el-icon><Close /></el-icon>
-          </span>
-        </button>
+        <Tooltip v-if="isFilterIndicatorActive" :content="t('gallery.clearAllFilters')">
+          <Button variant="ghost" size="icon-xs" :aria-label="t('gallery.clearAllFilters')" @click="clearAllFilters">
+            <FunnelX />
+          </Button>
+        </Tooltip>
       </span>
     </template>
   </PageHeader>
@@ -48,7 +40,8 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Close, Filter } from "@kabegame/element-plus-icons";
+import { FunnelX } from "@lucide/vue";
+import { Button, Tooltip } from "@/components/ui";
 import { gridTotalKey } from "@/components/imageGrid/gridTotal";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
@@ -239,49 +232,3 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
   }
 };
 </script>
-
-<style scoped lang="scss">
-/* 副标题里的清除过滤按钮：过滤图标本体 + 右上角浮出的 ✕ 徽章，
-   形态沿用 chip 的清除徽章（KbFilterDropdown __clear），只是这里整颗都可点。 */
-.subtitle-clear-filter {
-  position: relative;
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 1px solid var(--anime-border);
-  border-radius: 7px;
-  color: var(--anime-primary);
-  background: var(--anime-bg-card);
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    border-color 0.18s ease,
-    background-color 0.18s ease;
-
-  &:hover {
-    border-color: var(--anime-primary);
-    background: color-mix(in srgb, var(--anime-primary) 8%, var(--anime-bg-card));
-  }
-}
-
-.subtitle-clear-filter__badge {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 13px;
-  height: 13px;
-  border: 2px solid var(--anime-bg-card);
-  border-radius: 50%;
-  color: #fff;
-  background: var(--anime-primary);
-  font-size: 7px;
-}
-</style>

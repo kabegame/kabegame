@@ -11,6 +11,10 @@
 
 各自的包内 README 记录了与上游的逐项结构差异，这里只写**跨包的约定与踩坑**。
 
+> **界面重构进行中**：新界面不再往这个包里加组件，而是用 `reka-ui`（无头原语）+ UnoCSS 写在
+> `apps/kabegame/src/components/ui/`，颜色取 `styles/tokens.css` 的 `--kb-*`。见文末
+> [新界面组件](#新界面组件reka-ui--设计-token)。这个包会逐步被取代，迁移期间仍按下面的约定维护。
+
 ## 为什么 vendor
 
 根因不是「EP 不好用」，而是**项目从没覆盖过 EP 的全局 token**：`--el-color-primary` 一个都没改，
@@ -200,3 +204,75 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
   「拖入过多文件时限制弹窗高度」的样式大概率从来没生效过。
 - 6 个 `--anime-*` 被引用但从未定义：`--anime-bg-secondary`（8 处引用，多数无 fallback）、
   `--anime-primary-rgb`、`--anime-surface`、`--anime-text`、`--anime-text-color`、`--anime-text-regular`。
+
+## 新界面组件（reka-ui + 设计 token）
+
+目标观感是「中性外框 + 一个强调色」的简约风（参照 ChatGPT / Claude 一类应用）。壁纸本身是彩色的，
+外框越中性，图越突出；强调色（`--anime-primary` 的粉）只留给选中、焦点、计数。
+
+**三层分工**
+
+| 层 | 位置 | 说明 |
+| --- | --- | --- |
+| 行为与无障碍 | npm `reka-ui`（Radix 的 Vue 版） | 焦点管理、键盘、点外部关闭、层栈、定位都由它负责，不 fork |
+| 样式与组件 | `apps/kabegame/src/components/ui/` | 自己写的薄封装（思路同 shadcn-vue：源码在仓库里），只用 UnoCSS；从 `@/components/ui` 导入 |
+| token | `apps/kabegame/src/styles/tokens.css` | `--kb-fg` / `--kb-surface` / `--kb-line` / `--kb-primary` / `--kb-accent` / 圆角 / 阴影 / 层级；UnoCSS 里是 `kb` 色板（`text-kb-fg`、`bg-kb-hover`、`border-kb-line`）与 `rounded-kb-*`、`shadow-kb-*`（`uno.config.pub.ts`） |
+
+图标用 `@lucide/vue`，`bootstrap/app.ts` 经 `LUCIDE_CONTEXT` 把默认线宽设为 1.75。
+
+**现有组件**：`Button`（`primary` 墨色实心 / `outline` / `ghost` / `ghost-danger`，尺寸 `sm` / `md` / `icon` /
+`icon-sm` / `icon-xs`，可做 Reka 触发器的 as-child 子元素）、`Tooltip`（`content` 为空不弹，自带 Provider）、
+`DropdownMenu` + `DropdownMenuContent` / `DropdownMenuItem` / `DropdownMenuSeparator` / `DropdownMenuTrigger`、
+`Popover` + `PopoverContent` / `PopoverTrigger` / `PopoverAnchor`（根组件都已接 `useModalBack`；`Popover` 默认非模态）、
+`Tabs`（分段式选项卡，`items: TabItem[]` 接口同原 `KbTab`：计数、行内角标、可删除、动作项；只管 tab 头，
+内容由调用方按 v-model 切换）、`Switch`（开是墨色）、`Progress`（`value` 为 null 是不定进度；`accent` / `danger` /
+`neutral`）、`Empty`（`#icon` / `#image` + 标题 + 说明 + `#actions`）、`CountBadge`（右上角计数，`accent` / `danger`）。
+
+**已迁移**：
+- P0：`PageHeader` 与所有顶栏功能按钮（注册表 `header/headerFeatures.ts` 的图标已换成 lucide）、`CollectAction`、
+  插件详情顶栏、画廊副标题与查询行行尾的清除过滤。查询行的 chip（`KbFilterDropdown`）还在这个包里，但 token map
+  已改取 `--kb-*`。
+- P1：`App.vue` 布局与侧栏导航（`el-config-provider` 留到 P9）、底部导航、工具箱（`GlobalToolsPopover` /
+  吉祥物气泡共用 `GlobalToolsList` + `ToolRow`；整理、清理隐藏、检查更新三个自带逻辑的条目也是 `ToolRow`，做完
+  emit `done` 让工具箱关闭）、后台任务入口与卡片（共用 `busy/BusyTaskCard`）、`UpdateButton`、`KbTab` 的四处调用、
+  `ScrollButtons`、`EmptyState` / `DetailPanelEmptyState`、`SuperModeToggle`、`FileDropOverlay`、启动页、吉祥物气泡。
+  同时做了 EP 全局换皮（下面「token 方向」），没迁的界面观感也已对齐。
+
+**写法约定**
+
+- 仓库没有 Tailwind 式 reset：`border` 要配 `border-solid`，`button` 要自己清边框、内边距与字体
+  （`Button` 的基础类已处理）。
+- 组件的变体类表写在 `.vue` 里：UnoCSS 默认不扫描 `.ts`，写在 `.ts` 里的类不会生成。
+- 颜色是 CSS 变量，`/50` 这类透明度修饰不生效；需要半透明就在 `tokens.css` 加 token，或写
+  `bg-[color-mix(in_srgb,var(--kb-danger)_10%,transparent)]`。
+- 没有 tailwind-merge：调用方再加一个同类工具类（如 `text-*`）覆盖不了变体，CSS 顺序说了算。要不同的
+  颜色就加变体（`ghost-danger` 即如此），不要在调用处叠类。
+- 禁用的按钮 `pointer-events: none`，`Tooltip` 要包在外面一层 `span` 上才能在禁用时弹出。
+- 弹层触发器外面可以直接套 `Tooltip`（`<Tooltip><PopoverTrigger as-child><button/>`）。Reka 的 Tooltip 自己也是
+  一个 Popper，触发器默认的锚点登记会被就近的 Tooltip 收走、浮层停在 (0,0)；我们的 `DropdownMenuContent` /
+  `PopoverContent` 因此显式把 `reference` 设成触发器元素。直接用 Reka 原语写新的弹层组件时也要这样做。
+- 工具箱这类「整行可点 + 右侧开关」的行，开关只做状态显示（`as="span"`、`pointer-events-none`、`aria-hidden`），
+  否则 `button` 套 `button`，且点在开关上会切两次。
+- IDE 的 Tailwind v4 插件会提示把 `z-[var(--x)]` 写成 `z-(--x)`，那是 v4 语法，presetWind3 不认，忽略。
+- 改 `uno.config.pub.ts` 后，跑着的 dev 不会自动重载（它是被 `apps/kabegame/uno.config.ts` 间接引入的），
+  `touch apps/kabegame/uno.config.ts` 即可；改 `bootstrap/app.ts`（如新增全局 css）要整页刷新。
+
+**token 方向**：本文前面的规则是 `--kb-el-* ← --anime-*`。界面重构后分三处：
+- **EP 全局换皮**（P1）：vendored 包的 `theme-chalk/src/kb-reskin.scss`（`index.scss` 最后引入）在 `:root` 把 `--el-*`
+  基础 token 指向 `--kb-*`：主色 = `--kb-primary`（墨色），light-1…9 / dark-2 用 `color-mix` 运行时重算（EP 在编译期
+  用 `color.mix` 算梯度，主色是 CSS 变量就算不了，所以不能改 `$colors`）；文字、边框、填充、底色、圆角、阴影、字体、
+  遮罩同理。组件级的圆角 / 阴影（对话框、消息框、气泡卡片、卡片）仍在 `common/var.scss` 的组件 map 里改。
+- **旧主题变量**：`anime-theme.css` 里中性的 `--anime-*`（文字、边框、底色、阴影）改指向 `--kb-*`，原来对 EP 的
+  全局外观覆盖全部删除，只留功能性的（输入框可选中文字、隐藏原生滚动条）。品牌色 `--anime-primary` /
+  `--anime-secondary` 不变。
+- **单个组件迁到新外观**时，它的 token map 改取 `--kb-*`（`KbFilterDropdown` 是第一个）；`--kb-accent` /
+  `--kb-danger` / `--kb-success` / `--kb-warning` / `--kb-ring` 挂在 `--anime-*` 上，插件详情运行时改写 `--anime-*`
+  换肤仍能波及。中性色（文字、底、线、填充）是新值，不来自 `--anime-*`。
+
+**层级**：element-plus 的弹出层从 3000 起递增（`App.vue` 的 `el-config-provider`），Reka 浮层用
+`--kb-z-popover`（3000）/ `--kb-z-tooltip`（3100），内容元素上的 `z-index` 会被 Reka 复制到定位外层。
+
+**混用期的已知问题**：Reka 菜单项打开 element-plus 对话框后，焦点会回到菜单触发器（菜单关闭动画期间
+对话框遮罩盖上来，触发菜单项的 `pointerleave`，Reka 把焦点移回菜单内容，关闭后还给触发器）。鼠标操作
+不受影响；对话框迁到 Reka 后自然消失。另外 Reka 的模态浮层打开期间给 `body` 设 `pointer-events: none`，
+这时打开的 element-plus 浮层（挂在 `body` 下）点不了，所以弹层类组件要成组迁移。

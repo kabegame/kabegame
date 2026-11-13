@@ -2,15 +2,16 @@
   <div class="empty-state">
     <img :src="imageSrc" alt="空状態" class="empty-image" />
     <p v-for="(line, index) in textLines" :key="index" class="empty-tip">{{ line }}</p>
-    <el-button v-if="showButton" type="primary" class="empty-action-btn" @click="emit('buttonClick')">
+    <Button v-if="showButton" variant="primary" class="mt-4" @click="emit('buttonClick')">
       {{ buttonText }}
-    </el-button>
+    </Button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
+import { Button } from "@/components/ui";
 import { useUiStore } from "@/stores/ui";
 import { albumEmptyImageUrl } from "@/assets/illustrations";
 
@@ -69,15 +70,10 @@ const textLines = computed(() => {
   }
 
   .empty-tip {
-    color: gray;
-    font-size: 14px;
+    color: var(--kb-fg-muted);
+    font-size: 13px;
     text-align: center;
     line-height: 1.6;
-    text-shadow: 0 1px 3px rgba(255, 255, 255, 0.3);
-  }
-
-  .empty-action-btn {
-    margin-top: 16px;
   }
 }
 </style>

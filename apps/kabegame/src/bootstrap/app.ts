@@ -5,10 +5,12 @@ import ElementPlus, { vCornerBadge } from "@kabegame/element-plus";
 /** vendored element-plus 无构建产物，直接吃 scss 源码（等价于原 element-plus/dist/index.css） */
 import "@kabegame/element-plus/theme-chalk/src/index.scss";
 import * as ElementPlusIconsVue from "@kabegame/element-plus-icons";
+import { LUCIDE_CONTEXT } from "@lucide/vue";
 import App from "../App.vue";
 import router from "../router";
 import "virtual:uno.css";
 import "@/styles/anime-theme.css";
+import "@/styles/tokens.css";
 import "../styles/dialogs.css";
 import "../styles/hscroll-fade.css";
 /** Vant：Toast 组件样式（按需引入时显式使用 showToast 必须带样式，见 Vant 文档） */
@@ -84,6 +86,8 @@ function mountMainApp() {
   for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
     app.component(key, component);
   }
+  // 新界面的线性图标（@lucide/vue）统一细一档：默认 2 在 16px 下偏粗。
+  app.provide(LUCIDE_CONTEXT, { strokeWidth: 1.75 });
 
   const pinia = createPinia();
   app.use(pinia);

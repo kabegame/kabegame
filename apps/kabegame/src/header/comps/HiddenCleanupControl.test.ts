@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { flushPromises, shallowMount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import HiddenCleanupControl from "./HiddenCleanupControl.vue";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
@@ -19,7 +19,6 @@ vi.mock("@/services/albums", () => ({ HIDDEN_ALBUM_ID: "hidden", FAVORITE_ALBUM_
 vi.mock("@/stores/hiddenCleanup", () => ({ useHiddenCleanupStore: () => ({ running: false }) }));
 vi.mock("@/services/hiddenCleanup", () => ({ start: vi.fn() }));
 vi.mock("@kabegame/element-plus", () => ({ ElMessageBox: {} }));
-vi.mock("@kabegame/element-plus-icons", () => ({ Delete: { render: () => null } }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -31,9 +30,8 @@ describe("隐藏图数 pathql 观察", () => {
   it("setup 只请求一次；只接受隐藏画册成员事件，卸载后释放", async () => {
     vi.useFakeTimers();
     pathqlAll.mockReset().mockResolvedValue([7]);
-    const wrapper = shallowMount(HiddenCleanupControl, {
-      global: { stubs: { "el-button": { template: "<button><slot /></button>" }, "el-icon": true } },
-    });
+    // 数量显示在 ToolRow 的右侧提示里，要真渲染它
+    const wrapper = mount(HiddenCleanupControl);
     cleanups.push(() => wrapper.unmount());
     expect(pathqlAll).toHaveBeenCalledExactlyOnceWith([
       { kind: "count", path: `images://gallery/album/${HIDDEN_ALBUM_ID}` },

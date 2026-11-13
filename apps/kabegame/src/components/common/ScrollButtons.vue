@@ -2,30 +2,22 @@
   <div class="scroll-btn-root">
     <Transition name="scroll-btn-fade">
       <div v-if="showTopButton" class="scroll-btn scroll-btn-top" :style="buttonStyle" @click="scrollToTop">
-        <el-icon :size="20">
-          <ArrowUp />
-        </el-icon>
+        <ArrowUp :size="18" />
       </div>
     </Transition>
     <Transition name="scroll-btn-fade">
       <div v-if="showBottomButton" class="scroll-btn scroll-btn-bottom" :style="buttonStyle" @click="scrollToBottom">
-        <el-icon :size="20">
-          <ArrowDown />
-        </el-icon>
+        <ArrowDown :size="18" />
       </div>
     </Transition>
     <Transition name="scroll-btn-fade">
       <div v-if="showLeftButton" class="scroll-btn scroll-btn-left" :style="buttonStyle" @click="scrollToLeft">
-        <el-icon :size="20">
-          <ArrowLeft />
-        </el-icon>
+        <ArrowLeft :size="18" />
       </div>
     </Transition>
     <Transition name="scroll-btn-fade">
       <div v-if="showRightButton" class="scroll-btn scroll-btn-right" :style="buttonStyle" @click="scrollToRight">
-        <el-icon :size="20">
-          <ArrowRight />
-        </el-icon>
+        <ArrowRight :size="18" />
       </div>
     </Transition>
   </div>
@@ -33,7 +25,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@kabegame/element-plus-icons";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@lucide/vue";
 
 interface Props {
   /** 获取滚动容器的函数 */
@@ -237,32 +229,29 @@ defineExpose({
 .scroll-btn {
   position: fixed;
   right: var(--scroll-btn-right, 24px);
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--anime-primary, #646cff);
+  background: var(--kb-surface-raised);
   border: none;
-  color: #fff;
+  color: var(--kb-fg);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   z-index: 20;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 12px rgba(100, 108, 255, 0.4);
-  backdrop-filter: blur(8px);
+  transition:
+    background-color 0.15s ease,
+    transform 0.15s ease;
+  box-shadow: var(--kb-shadow-pop);
   pointer-events: auto;
 
   &:hover {
-    background: var(--anime-primary, #646cff);
-    filter: brightness(1.15);
-    transform: scale(1.08);
-    box-shadow: 0 4px 20px rgba(100, 108, 255, 0.6);
+    background: var(--kb-fill-lighter);
   }
 
   &:active {
     transform: scale(0.95);
-    filter: brightness(0.95);
   }
 }
 

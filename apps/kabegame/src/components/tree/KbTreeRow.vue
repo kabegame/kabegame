@@ -94,7 +94,7 @@ function onRowDblclick() {
   font-size: var(--kb-tree-row-font-size, inherit);
   /* 折叠三角与行主体之间的间距（画廊树历来是紧贴，缺省 0） */
   gap: var(--kb-tree-row-gap, 0);
-  color: var(--anime-text-primary);
+  color: var(--kb-tree-row-color, var(--anime-text-primary));
 }
 
 .kb-tree-row--clickable {
@@ -113,7 +113,7 @@ function onRowDblclick() {
 }
 
 .kb-tree-row--muted {
-  color: var(--anime-text-muted);
+  color: var(--kb-tree-row-muted-color, var(--anime-text-muted));
 }
 
 /* active 排在 hover 之后：同特异度下后写者胜，悬停不夺走选中底色 */

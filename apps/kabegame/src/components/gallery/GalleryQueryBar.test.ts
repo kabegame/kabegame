@@ -76,6 +76,9 @@ function render(query: GalleryQuery = composeQueryFilters(simple, extra)) {
         // 使用真实 chip，覆盖主体/清除按钮事件隔离与未激活文案。
         KbFilterDropdown: false,
         ElTooltip: { template: "<div><slot /></div>" },
+        // 新界面组件：透传成原生元素，class / 事件落在 DOM 上供选择与点击。
+        Tooltip: { template: "<div><slot /></div>" },
+        Button: { template: "<button><slot /></button>" },
       },
     },
   });

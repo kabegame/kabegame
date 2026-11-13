@@ -269,7 +269,9 @@ const surfCounts = useSurfImageCounts();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 const appBackgroundCardClass = computed(() =>
-  settingsStore.values.appBackgroundEnabled ? "!bg-transparent [--el-card-bg-color:transparent]" : "",
+  settingsStore.values.appBackgroundEnabled
+    ? "!bg-kb-glass-strong backdrop-blur-md [--el-card-bg-color:transparent]"
+    : "",
 );
 const surfHeaderShowIds = computed(() => [HeaderFeatureId.TaskDrawer]);
 

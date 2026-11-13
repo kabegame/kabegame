@@ -1,7 +1,7 @@
 <template>
   <el-config-provider :locale="elementPlusLocale" :z-index="3000">
     <!-- 主窗口 -->
-    <el-container
+    <div
       class="app-container"
       :class="{
         'app-container-compact': uiStore.isCompact,
@@ -33,110 +33,82 @@
       <!-- 全局文件拖拽提示层（仅非安卓平台，按热区定位，不遮挡交互） -->
       <FileDropOverlay ref="fileDropOverlayRef" />
       <!-- 非紧凑布局：侧边栏 + 主内容 -->
-      <template v-if="!uiStore.isCompact">
-        <el-aside class="app-sidebar sidebar-collapsed" width="64px">
-          <div class="sidebar-header">
-            <span class="app-logo-wrap">
-              <img :src="appLogoUrl" alt="Logo" class="app-logo" title="Kabegame" draggable="false" />
-            </span>
-          </div>
-          <div class="sidebar-menu-wrapper">
-            <el-menu :default-active="activeRoute" router class="sidebar-menu" collapse>
-              <el-menu-item :index="galleryMenuRoute" :title="$t('route.gallery')" :aria-label="$t('route.gallery')">
-                <el-icon>
-                  <Picture />
-                </el-icon>
-                <span>{{ $t("route.gallery") }}</span>
-              </el-menu-item>
-              <el-menu-item index="/albums" :title="$t('route.albums')" :aria-label="$t('route.albums')">
-                <el-icon>
-                  <Collection />
-                </el-icon>
-                <span>{{ $t("route.albums") }}</span>
-              </el-menu-item>
-              <el-menu-item index="/plugins" :title="$t('route.pluginBrowser')" :aria-label="$t('route.pluginBrowser')">
-                <el-icon v-corner-badge="market.updatableCount">
-                  <FilterPlugin />
-                </el-icon>
-                <span>{{ $t("route.pluginBrowser") }}</span>
-              </el-menu-item>
-              <el-menu-item v-if="!IS_WEB" index="/surf" :title="$t('route.surf')" :aria-label="$t('route.surf')">
-                <el-icon>
-                  <Compass />
-                </el-icon>
-                <span>{{ $t("route.surf") }}</span>
-              </el-menu-item>
-              <el-menu-item
-                v-if="!uiStore.isCompact"
-                index="/auto-configs"
-                :title="$t('route.autoConfigs')"
-                :aria-label="$t('route.autoConfigs')"
-              >
-                <el-icon>
-                  <AlarmClock />
-                </el-icon>
-                <span>{{ $t("route.autoConfigs") }}</span>
-              </el-menu-item>
-            </el-menu>
-          </div>
-          <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
-          <template v-if="!kamechanEnabled">
-            <UpdateButton />
-            <div class="sidebar-bottom-dock is-collapsed">
-              <SidebarActivityBar v-if="busyEntryVisible" :collapsed="true" />
-              <div
-                class="dock-row"
-                :class="{ 'is-active': settingsUsesRoute ? route.path === '/settings' : settingsModal.isOpen.value }"
-                :title="$t('route.settings')"
+      <aside v-if="!uiStore.isCompact" class="app-sidebar">
+        <div class="flex h-16 flex-none items-center justify-center">
+          <img :src="appLogoUrl" alt="Logo" class="size-9 object-contain" title="Kabegame" draggable="false" />
+        </div>
+        <nav class="sidebar-nav flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1">
+          <Tooltip v-for="item in sideNavItems" :key="item.index" :content="item.label" side="right">
+            <router-link
+              :to="item.index"
+              :class="[SIDEBAR_ITEM, activeRoute === item.index ? SIDEBAR_ITEM_ACTIVE : '']"
+              :aria-label="item.label"
+              :aria-current="activeRoute === item.index ? 'page' : undefined"
+            >
+              <component :is="item.icon" />
+              <CountBadge :count="item.badge ?? 0" />
+            </router-link>
+          </Tooltip>
+        </nav>
+        <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
+        <template v-if="!kamechanEnabled">
+          <UpdateButton />
+          <div
+            class="flex flex-none flex-col items-center gap-1 border-t border-solid border-kb-line px-3 pb-3.5 pt-2.5 border-x-0 border-b-0"
+          >
+            <SidebarActivityBar v-if="busyEntryVisible" />
+            <Tooltip :content="$t('route.settings')" side="right">
+              <button
+                type="button"
+                :class="[SIDEBAR_ITEM, settingsActive ? SIDEBAR_ITEM_ACTIVE : '']"
                 :aria-label="$t('route.settings')"
                 @click="openSettingsEntry()"
               >
-                <el-icon class="dock-icon">
-                  <Setting />
-                </el-icon>
-              </div>
-              <GlobalToolsPopover variant="sidebar" :collapsed="true" @open-settings="openSettingsEntry()" />
-            </div>
-          </template>
-          <div v-else class="sidebar-kamechan-space" aria-hidden="true" />
-          <UpdateButton v-if="kamechanEnabled" corner />
-        </el-aside>
-      </template>
-      <el-main class="app-main">
+                <Settings />
+              </button>
+            </Tooltip>
+            <GlobalToolsPopover variant="sidebar" @open-settings="openSettingsEntry()" />
+          </div>
+        </template>
+        <div v-else class="h-[210px] flex-none pointer-events-none" aria-hidden="true" />
+        <UpdateButton v-if="kamechanEnabled" corner />
+      </aside>
+      <main class="app-main">
         <router-view v-slot="{ Component }" :key="routerViewKey">
           <!-- <keep-alive> -->
           <component :is="Component" />
           <!-- </keep-alive> -->
         </router-view>
-      </el-main>
+      </main>
       <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
       <nav
         v-if="uiStore.isCompact"
-        class="app-bottom-tabs flex-none flex flex-row relative w-full border-t-2 border-solid border-[var(--anime-border)] bg-[var(--anime-bg-card)] pb-[var(--sab,env(safe-area-inset-bottom,0px))] shadow-[0_-4px_20px_rgba(255,107,157,0.08)]"
+        class="app-bottom-tabs relative flex w-full flex-none flex-row border-x-0 border-b-0 border-t border-solid border-kb-line bg-kb-surface-raised pb-[var(--sab,env(safe-area-inset-bottom,0px))]"
         aria-label="主导航"
       >
         <router-link
           v-for="tab in bottomTabs"
           :key="tab.index"
           :to="tab.index"
-          class="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 min-w-0 no-underline text-[var(--anime-text-secondary)] transition-[color,background] duration-200 active:bg-[rgba(255,107,157,0.08)] [&.is-active]:text-[var(--anime-primary)] [&.is-active]:bg-linear-to-b [&.is-active]:from-[rgba(255,107,157,0.12)] [&.is-active]:to-[rgba(167,139,250,0.08)]"
+          class="flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-2 no-underline text-kb-fg-muted transition-colors duration-150 [&.is-active]:text-kb-fg"
           :class="{ 'is-active': activeRoute === tab.index }"
         >
-          <el-icon v-corner-badge="tab.badge" class="text-[22px] shrink-0">
-            <component :is="tab.icon" />
-          </el-icon>
-          <span class="text-[11px] leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap max-w-full">
+          <span class="relative flex [&_svg]:size-[22px]">
+            <component :is="tab.icon" :stroke-width="activeRoute === tab.index ? 2.1 : undefined" />
+            <CountBadge :count="tab.badge ?? 0" />
+          </span>
+          <span class="max-w-full truncate text-[11px] leading-[1.2]">
             {{ tab.label }}
           </span>
         </router-link>
         <!-- 同上：kamechan 开着时工具箱入口在它身上，底部 tab 不再重复一个 -->
-        <div v-if="!kamechanEnabled" class="flex-1 flex flex-col items-center justify-center min-w-0">
+        <div v-if="!kamechanEnabled" class="flex min-w-0 flex-1 flex-col items-center justify-center">
           <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面 / web 非紧凑挂载），走路由而非弹窗 -->
           <GlobalToolsPopover variant="compact" @open-settings="openSettingsEntry()" />
         </div>
       </nav>
       <KamechanMascot @open-settings="openSettingsEntry()" />
-    </el-container>
+    </div>
 
     <!-- 全局模态单例与页面布局同级，避免继承 app-container 的 flex、定位和裁剪规则 -->
     <PluginImportDialog
@@ -185,7 +157,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, provide, watch } from "vue";
 import { zhCn, en, zhTw, ja, ko } from "@kabegame/element-plus/locale";
-import { Picture, FilterPlugin, Setting, Collection, Compass, AlarmClock } from "@kabegame/element-plus-icons";
+import { AlarmClock, BookImage, Compass, Image, Puzzle, Settings } from "@lucide/vue";
+import { CountBadge, Tooltip } from "@/components/ui";
 import appLogoUrl from "@/assets/icon-small.png";
 import { setSettingsQueryAdapter, useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
@@ -289,17 +262,42 @@ const market = usePluginMarketStore();
 const bottomTabs = computed(() => {
   void locale.value;
   return [
-    { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery"), badge: undefined },
-    { index: "/albums", icon: Collection, label: i18n.global.t("route.albums"), badge: undefined },
-    { index: "/surf", icon: Compass, label: i18n.global.t("route.surf"), badge: undefined },
+    { index: galleryMenuRoute.value, icon: Image, label: i18n.global.t("route.gallery"), badge: 0 },
+    { index: "/albums", icon: BookImage, label: i18n.global.t("route.albums"), badge: 0 },
+    { index: "/surf", icon: Compass, label: i18n.global.t("route.surf"), badge: 0 },
     {
       index: "/plugins",
-      icon: FilterPlugin,
+      icon: Puzzle,
       label: i18n.global.t("route.pluginBrowser"),
       badge: market.updatableCount,
     },
   ];
 });
+
+// 桌面 / 宽屏侧栏导航：画廊、画册、源、畅游（非 web）、运行配置
+const sideNavItems = computed(() => {
+  void locale.value;
+  const items = [
+    { index: galleryMenuRoute.value, icon: Image, label: i18n.global.t("route.gallery"), badge: 0 },
+    { index: "/albums", icon: BookImage, label: i18n.global.t("route.albums"), badge: 0 },
+    {
+      index: "/plugins",
+      icon: Puzzle,
+      label: i18n.global.t("route.pluginBrowser"),
+      badge: market.updatableCount,
+    },
+  ];
+  if (!IS_WEB) items.push({ index: "/surf", icon: Compass, label: i18n.global.t("route.surf"), badge: 0 });
+  items.push({ index: "/auto-configs", icon: AlarmClock, label: i18n.global.t("route.autoConfigs"), badge: 0 });
+  return items;
+});
+
+// 侧栏图标项：40px 方块，悬停浅灰底，选中是白底小卡片 + 强调色图标（侧栏底是浅灰，白卡片自然浮起）
+const SIDEBAR_ITEM =
+  "relative box-border grid size-10 flex-none cursor-pointer place-items-center rounded-kb-md border-0 bg-transparent p-0 " +
+  "text-kb-fg-muted no-underline outline-none transition-[background-color,color,box-shadow] duration-150 " +
+  "hover:bg-kb-hover hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring [&_svg]:size-5";
+const SIDEBAR_ITEM_ACTIVE = "!bg-kb-surface-raised !text-kb-fg shadow-kb-md [&_svg]:text-kb-accent";
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
@@ -312,6 +310,9 @@ const busyEntryVisible = computed(() => busyCount.value > 0 || hasUnseenBusyFail
 
 // Android 一律走路由页：横屏手机等矮屏放不下弹窗，平板宽屏的路由页也有左侧分类导航。
 const settingsUsesRoute = computed(() => IS_ANDROID || uiStore.isCompact);
+const settingsActive = computed(() =>
+  settingsUsesRoute.value ? route.path === "/settings" : settingsModal.isOpen.value,
+);
 const openSettingsEntry = () => {
   if (settingsUsesRoute.value) void router.push("/settings");
   else settingsModal.open();
@@ -340,7 +341,7 @@ const router = useRouter();
 const route = useRoute();
 useWindowTitleSync(() => (typeof route.meta.title === "string" ? t(route.meta.title) : ""));
 // 桌面端设置是弹窗、不是路由目的地：打开时侧栏仍高亮当前页面，
-// 「设置」自身的按下态由底部常驻区 dock-row 的 is-active 表达。
+// 「设置」自身的按下态由侧栏底部的设置按钮表达（settingsActive）。
 const settingsModal = useModal();
 setSettingsQueryAdapter({
   query: computed(() => route.query as Record<string, unknown>),
@@ -753,9 +754,12 @@ body,
     flex-direction: column;
   }
 
+  // 应用背景（壁纸作底）开着时外框是毛玻璃：侧栏与底部 tab 稍实一点，内容区几乎全透
   &.has-app-background {
     .app-sidebar {
-      background: rgba(255, 255, 255, 0.2);
+      background: var(--kb-glass);
+      backdrop-filter: blur(24px) saturate(1.4);
+      border-right-color: rgba(255, 255, 255, 0.4);
     }
 
     .app-main {
@@ -763,7 +767,8 @@ body,
     }
 
     .app-bottom-tabs {
-      background: rgba(255, 255, 255, 0.2);
+      background: var(--kb-glass-strong);
+      backdrop-filter: blur(24px) saturate(1.4);
     }
   }
 
@@ -861,272 +866,23 @@ body,
 }
 
 .app-sidebar {
-  background: var(--anime-bg-sidebar);
-  border-right: 2px solid var(--anime-border);
+  position: relative;
   display: flex;
+  flex: none;
   flex-direction: column;
+  width: 64px;
   height: 100dvh;
-  box-shadow: 4px 0 20px rgba(255, 107, 157, 0.1);
+  background: var(--kb-bg-sidebar);
+  border-right: 1px solid var(--kb-line);
   // 菜单区域单独负责滚动，侧栏本体只负责裁剪溢出内容
   overflow: hidden;
+}
 
-  .sidebar-header {
-    padding: 16px 12px;
-    border-bottom: 2px solid var(--anime-border);
-    background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-    position: sticky;
-    top: 0;
-    min-height: 80px;
-    justify-content: flex-start;
-    transition: padding 0.3s ease;
+.sidebar-nav {
+  scrollbar-width: none;
 
-    .app-logo-wrap {
-      position: relative;
-      display: inline-flex;
-      flex-shrink: 0;
-    }
-
-    .app-logo {
-      width: 40px;
-      height: 40px;
-      object-fit: contain;
-      flex-shrink: 0;
-    }
-
-    .sidebar-title-section {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      flex: 1;
-    }
-
-    h1 {
-      font-size: 18px;
-      font-weight: 700;
-      background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin: 0;
-      letter-spacing: 1px;
-      transition: all 0.3s ease;
-    }
-
-    .offline-section {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      align-items: flex-start;
-    }
-
-    .offline-hint {
-      font-size: 14px;
-      color: var(--anime-text-secondary);
-      margin: 0;
-      line-height: 1.4;
-    }
-  }
-
-  &.sidebar-collapsed {
-    .sidebar-header {
-      padding: 16px;
-      min-height: 64px;
-      gap: 0;
-      justify-content: center;
-
-      .app-logo {
-        width: 40px;
-        height: 40px;
-      }
-
-      .sidebar-title-section {
-        display: none;
-      }
-    }
-
-    .sidebar-menu {
-      padding: 8px 0;
-      // 防止菜单溢出导致横向滚动
-      overflow-x: hidden;
-      width: 100%;
-
-      .el-menu-item {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        padding: 0;
-        height: 48px;
-        // 折叠状态下减少左右 margin，避免超出 64px 宽度
-        margin: 4px 4px;
-        border-radius: 8px;
-        text-align: center;
-        position: relative;
-        transition: all 0.3s ease;
-        // 确保菜单项不会超出容器
-        max-width: 100%;
-        box-sizing: border-box;
-
-        &.is-active {
-          background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-        }
-
-        &:not(.is-active) {
-          background: transparent;
-
-          &:hover {
-            background: rgba(255, 107, 157, 0.1);
-          }
-        }
-
-        span {
-          opacity: 0;
-          width: 0;
-          margin: 0;
-          padding: 0;
-          display: inline-block;
-        }
-
-        .el-icon {
-          margin: 0 !important;
-          padding: 0 !important;
-          font-size: 20px;
-          width: auto !important;
-          height: auto !important;
-        }
-      }
-    }
-  }
-
-  .sidebar-menu-wrapper {
-    flex: 1;
-    min-height: 0;
-    width: 100%;
-    overflow: hidden;
-  }
-
-  // kamechan 立绘的地盘：留空不放任何可点内容，避免被立绘压住
-  .sidebar-kamechan-space {
-    flex: none;
-    height: 210px;
-    pointer-events: none;
-  }
-
-  .sidebar-bottom-dock {
-    flex: none;
-    padding: 10px 8px 14px;
-    border-top: 2px solid var(--anime-border);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-
-    &.is-collapsed {
-      padding: 10px 4px 14px;
-      align-items: center;
-    }
-
-    .dock-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      height: 40px;
-      padding: 0 12px;
-      border-radius: 11px;
-      cursor: pointer;
-      color: var(--anime-text-primary);
-      transition: all 0.2s ease;
-
-      &:hover,
-      &.is-active {
-        background: rgba(255, 107, 157, 0.1);
-      }
-
-      .dock-icon {
-        font-size: 17px;
-        flex-shrink: 0;
-      }
-
-      .dock-label {
-        font-size: 13px;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .dock-shortcut {
-        margin-left: auto;
-        flex: none;
-        font-size: 11px;
-        color: var(--anime-text-muted);
-        font-family: ui-monospace, Menlo, monospace;
-      }
-    }
-
-    &.is-collapsed .dock-row {
-      width: 40px;
-      padding: 0;
-      justify-content: center;
-    }
-  }
-
-  .sidebar-menu {
-    height: 100%;
-    border-right: none;
-    padding: 10px 0;
-    transition: padding 0.3s ease;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-    // Element Plus 默认给 el-menu 一个不透明背景，会盖住侧栏自身背景
-    background: transparent;
-
-    &::-webkit-scrollbar {
-      display: none;
-    }
-
-    // 覆盖 Element Plus 菜单的背景色（展开/折叠都需要）
-    &.el-menu {
-      background-color: transparent;
-    }
-
-    .el-menu-item,
-    .el-sub-menu__title {
-      background-color: transparent;
-    }
-
-    // 展开状态下，菜单项保持左对齐
-    .el-menu-item {
-      transition: all 0.3s ease;
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
-      text-align: left;
-
-      span {
-        transition:
-          opacity 0.3s ease,
-          width 0.3s ease,
-          margin 0.3s ease;
-        overflow: hidden;
-        opacity: 1;
-        width: auto;
-        margin: 0;
-        padding: 0;
-      }
-
-      .el-icon {
-        transition: all 0.3s ease;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-right: 8px;
-      }
-    }
+  &::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -1134,8 +890,9 @@ body,
   padding: 0;
   overflow-y: auto;
   flex: 1;
+  min-width: 0;
   // 主内容保持不透明，避免整窗“穿透桌面”
-  background: var(--anime-bg-main);
+  background: var(--kb-bg);
   /* 隐藏滚动条 */
   scrollbar-width: none;
   /* Firefox */
@@ -1169,17 +926,6 @@ body,
 
   100% {
     transform: rotate(360deg);
-  }
-}
-</style>
-
-<style lang="scss">
-/* 安卓紧凑宽度（< COMPACT_BREAKPOINT）下全局 Dialog 宽度固定为 90vw；平板宽屏与桌面一致按各自 width。
-   el-dialog 挂载在 body，需非 scoped。 */
-@media (max-width: 767.98px) {
-  html.platform-android .el-dialog {
-    width: 90vw !important;
-    max-width: 90vw !important;
   }
 }
 </style>

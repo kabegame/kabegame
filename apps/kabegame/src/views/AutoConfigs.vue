@@ -18,7 +18,7 @@
     </PageHeader>
 
     <div class="flex min-h-0 flex-1 flex-col" :class="{ 'px-5 pb-5': uiStore.isCompact }">
-      <KbTab v-model="tab" :items="tabItems" class="mb-3 flex-none" />
+      <Tabs v-model="tab" :items="tabItems" class="mb-3 flex-none" />
       <div class="mb-4 flex flex-none flex-wrap items-center gap-2">
         <KbFilterDropdown
           :model-value="activeQuery.sort"
@@ -186,13 +186,8 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref, watch, type PropType } from "vue";
-import {
-  ElMessageBox,
-  KbFilterDropdown,
-  KbTab,
-  type KbFilterDropdownOption,
-  type KbTabItem,
-} from "@kabegame/element-plus";
+import { ElMessageBox, KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
+import { Tabs, type TabItem } from "@/components/ui";
 import { CircleCheck, Clock, Grid, Search, Sort, SortAsc, SortDesc, Timer } from "@kabegame/element-plus-icons";
 import { resolveConfigText, useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
@@ -332,7 +327,7 @@ onMounted(() => {
 const declaredRecommendedCount = computed(() =>
   pluginStore.visiblePlugins.reduce((sum, plugin) => sum + recommendedConfigPaths(plugin).length, 0),
 );
-const tabItems = computed<KbTabItem<"mine" | "recommended">[]>(() => [
+const tabItems = computed<TabItem<"mine" | "recommended">[]>(() => [
   { name: "mine", label: t("autoConfig.tabMine") },
   {
     name: "recommended",

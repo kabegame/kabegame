@@ -101,6 +101,8 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 ### 样式
 新样式应使用 **UnoCSS 工具类**（在 `uno.config.pub.ts` 和 `apps/kabegame/uno.config.ts` 中配置，使用 `presetWind3`——兼容 Tailwind 语法）。仅为复杂动画或第三方覆盖编写 `<style>` 块。将重复的类组合提取为 `uno.config.*.ts` 中的快捷方式。
 
+**界面重构进行中**：新写或重做的界面用 `apps/kabegame/src/components/ui/`（`reka-ui` 无头原语 + UnoCSS，从 `@/components/ui` 导入）与 `@lucide/vue` 图标，颜色取 `styles/tokens.css` 的 `--kb-*`（UnoCSS 里是 `kb` 色板与 `rounded-kb-*` / `shadow-kb-*`），不再往 vendored element-plus 里加组件；中性外框，强调色只用于选中、焦点、计数。element-plus 的外观已由 vendored 包的 `kb-reskin.scss` 全局指向 `--kb-*`（P1），业务样式不再写 `.el-*` 外观覆盖。写法约定与混用期的坑见 [组件库文档](cocs/ui/COMPONENT_LIBRARY.md)「新界面组件」。
+
 ### 平台特定说明
 - **Windows/macOS/Linux**：使用虚拟磁盘（Dokan / macFUSE / FUSE）挂载图库
 - **Windows/macOS/Linux 标准版**：使用 CEF runtime 后端。三个平台都会在构建时链接 CEF，并通过 exe 旁边的扁平 `kabegame-cef-helper` 启动子进程（macOS 开发模式运行裸可执行文件；release 包通过 `macOS.frameworks` 嵌入 framework，通过 `macOS.files` 嵌入 helper）。

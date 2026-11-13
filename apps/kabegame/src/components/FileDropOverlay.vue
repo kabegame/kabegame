@@ -5,9 +5,7 @@
       <div class="drop-frame" />
       <div class="drop-body">
         <div class="drop-icon">
-          <el-icon :size="48">
-            <Upload />
-          </el-icon>
+          <Upload :size="40" />
         </div>
         <div class="drop-text">
           {{ label }}
@@ -23,7 +21,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Upload } from "@kabegame/element-plus-icons";
+import { Upload } from "@lucide/vue";
 import { useModal } from "@/composables/useModal";
 
 const { t } = useI18n();
@@ -80,11 +78,11 @@ defineExpose({
 .drop-frame {
   position: absolute;
   inset: 6px;
-  border: 2px dashed var(--anime-primary);
-  border-radius: 14px;
+  border: 2px dashed var(--kb-accent);
+  border-radius: var(--kb-radius-lg);
   // 「背景更透明」：只留一层极淡的主题色，不加 backdrop-filter——
   // 模糊会让底下的图看不清，反而破坏「能看见拖进哪里」的意图
-  background: color-mix(in srgb, var(--anime-primary) 10%, transparent);
+  background: color-mix(in srgb, var(--kb-accent) 8%, transparent);
   opacity: 0.9;
 }
 
@@ -94,33 +92,30 @@ defineExpose({
   padding: 12px 20px;
   text-align: center;
   // 文字压在图片上也要读得清，给一层跟随主题的浅底
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--anime-bg-card) 82%, transparent);
-  backdrop-filter: blur(4px);
+  border-radius: var(--kb-radius-lg);
+  background: var(--kb-surface-raised);
+  box-shadow: var(--kb-shadow-pop);
 }
 
-// 注意：这里不能用 background-clip: text 做渐变——图标是 <el-icon> 里的 SVG，
-// 文字裁剪对它无效，会渲染成 currentColor（默认继承成黑色）。直接给 color。
 .drop-icon {
-  color: var(--anime-primary);
+  display: flex;
+  justify-content: center;
+  color: var(--kb-accent);
   margin-bottom: 12px;
   line-height: 1;
 }
 
 .drop-text {
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 600;
   line-height: 1.4;
-  background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: 6px;
+  color: var(--kb-fg);
+  margin-bottom: 4px;
 }
 
 .drop-hint {
-  font-size: 14px;
-  color: var(--anime-text-secondary);
+  font-size: 13px;
+  color: var(--kb-fg-muted);
 }
 
 // 热区很矮时（例如窄窗口下的画册头部）收敛排版，避免撑破
@@ -130,7 +125,7 @@ defineExpose({
   }
 
   .drop-text {
-    font-size: 17px;
+    font-size: 15px;
   }
 }
 

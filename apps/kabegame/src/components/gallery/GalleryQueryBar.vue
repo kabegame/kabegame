@@ -71,11 +71,11 @@
       <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整段横向滚动，不换行 -->
       <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
            清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
-           v-hscroll-fade 在两侧点亮「还有内容没滚到」的粉色渐隐。 -->
+           v-hscroll-fade 在两侧点亮「还有内容没滚到」的渐隐。 -->
       <el-scrollbar
         v-hscroll-fade
         class="filter-chip-row query-main"
-        view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
+        view-class="flex flex-nowrap items-center gap-2 pt-2 pb-2.5"
       >
         <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
                这里每次提交都会 navigate + 重查，所以要防抖 -->
@@ -152,19 +152,17 @@
 
       <!-- 清除全部过滤。画廊把它放在标题副标题里（那里本来就在说「筛出了多少」），
            详情页没有那个位置，就钉在工具条右端，不随 chip 一起滚走。 -->
-      <button
-        v-if="enableClearAll && isFilterIndicatorActive"
-        type="button"
-        class="query-clear-filter flex-none"
-        :title="t('gallery.clearAllFilters')"
-        :aria-label="t('gallery.clearAllFilters')"
-        @click="clearAllFilters"
-      >
-        <el-icon><Filter /></el-icon>
-        <span class="query-clear-filter__badge">
-          <el-icon><Close /></el-icon>
-        </span>
-      </button>
+      <Tooltip v-if="enableClearAll && isFilterIndicatorActive" :content="t('gallery.clearAllFilters')">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="query-clear-filter"
+          :aria-label="t('gallery.clearAllFilters')"
+          @click="clearAllFilters"
+        >
+          <FunnelX />
+        </Button>
+      </Tooltip>
 
       <!-- 视图菜单：用当前视图轮播 + 收藏的视图。借 chip 下拉的弹层与开合逻辑，trigger 用 icon 档
            收成方形；它自己不是过滤维度，所以恒 clearable=false + model-value=null。两样都没有时
@@ -180,7 +178,7 @@
         @open="viewMenuOpen = true"
         @close="viewMenuOpen = false"
       >
-        <template #icon><MoreFilled /></template>
+        <template #icon><Ellipsis /></template>
         <template #panel>
           <div class="view-menu">
             <!-- 「用当前视图轮播」把本视图（过滤 + 排序，不含分页）的 PathQL 路径设为壁纸轮播来源；
@@ -259,7 +257,9 @@
 import { computed, inject, markRaw, provide, ref, useSlots, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
-import { Close, Filter, LetterA, MoreFilled, Picture, Sort, SortAsc, SortDesc } from "@kabegame/element-plus-icons";
+import { LetterA, Picture, Sort, SortAsc, SortDesc } from "@kabegame/element-plus-icons";
+import { Ellipsis, FunnelX } from "@lucide/vue";
+import { Button, Tooltip } from "@/components/ui";
 import { withGalleryPrefix } from "@/utils/path";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import ColorBucketPanel from "@/components/gallery/ColorBucketPanel.vue";
@@ -806,9 +806,9 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
-/* chip 38px + 滚动区上下留白，查询改变时保持行高稳定。 */
+/* chip 32px + 滚动区上下留白（清除徽章浮在 chip 右上角，要留位置），查询改变时保持行高稳定。 */
 .query-row {
-  min-height: 56px;
+  min-height: 50px;
 }
 
 /* 中段 chip 滚动区。
@@ -838,8 +838,8 @@ defineExpose({
 .query-divider {
   flex: none;
   width: 1px;
-  height: 22px;
-  background: var(--anime-border);
+  height: 18px;
+  background: var(--kb-line-strong);
 }
 
 /* 排序维度 chip 的复合图标：通用排序双箭头打底 + 右下角的维度小徽章。
@@ -868,7 +868,7 @@ defineExpose({
   height: 9px;
   padding: 1px;
   border-radius: 50%;
-  background: var(--anime-bg-card);
+  background: var(--kb-surface-raised);
 }
 
 /* ⋯ 视图菜单：与 chip 下拉共用弹层外壳，这里只排版内容。
@@ -879,16 +879,16 @@ defineExpose({
   width: 300px;
   max-width: calc(100vw - 32px);
   flex-direction: column;
-  padding: 10px;
-  background: var(--anime-bg-card);
+  padding: 6px;
+  background: var(--kb-surface-raised);
 }
 
 .view-menu__icon {
   display: inline-flex;
   flex: none;
-  width: 15px;
-  height: 15px;
-  color: var(--anime-secondary);
+  width: 16px;
+  height: 16px;
+  color: var(--kb-fg-muted);
 
   :deep(svg) {
     display: block;
@@ -900,32 +900,34 @@ defineExpose({
 .view-menu__action {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 6px 8px;
+  gap: 10px;
+  min-height: 32px;
+  padding: 6px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--kb-radius-md);
   background: transparent;
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
 
   &:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--anime-primary) 8%, var(--anime-bg-card));
+    background: var(--kb-hover);
   }
 
   &:disabled {
-    color: var(--anime-text-secondary);
+    color: var(--kb-fg-muted);
     cursor: default;
   }
 }
 
 /* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */
 .filter-chip-row {
-  // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走。
-  --el-scrollbar-bg-color: var(--anime-primary);
-  --el-scrollbar-hover-bg-color: var(--anime-primary-dark, var(--anime-primary));
-  --el-scrollbar-opacity: 0.6;
-  --el-scrollbar-hover-opacity: 0.95;
+  // el-scrollbar 的滑块是浮层不占位，用中性灰，不抢 chip 的颜色。
+  --el-scrollbar-bg-color: var(--kb-fg-subtle);
+  --el-scrollbar-hover-bg-color: var(--kb-fg-muted);
+  --el-scrollbar-opacity: 0.5;
+  --el-scrollbar-hover-opacity: 0.8;
 
   :deep(.el-scrollbar__view) > * {
     flex: none;
@@ -937,49 +939,5 @@ defineExpose({
     left: 0;
     right: 0;
   }
-}
-
-/* 清除全部过滤：过滤图标本体 + 右上角浮出的 ✕ 徽章，形态沿用 chip 的清除徽章
-   （KbFilterDropdown __clear），只是这里整颗都可点。与画廊副标题里那颗同款。 */
-.query-clear-filter {
-  position: relative;
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 1px solid var(--anime-border);
-  border-radius: 7px;
-  color: var(--anime-primary);
-  background: var(--anime-bg-card);
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    border-color 0.18s ease,
-    background-color 0.18s ease;
-
-  &:hover {
-    border-color: var(--anime-primary);
-    background: color-mix(in srgb, var(--anime-primary) 8%, var(--anime-bg-card));
-  }
-}
-
-.query-clear-filter__badge {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 13px;
-  height: 13px;
-  border: 2px solid var(--anime-bg-card);
-  border-radius: 50%;
-  color: #fff;
-  background: var(--anime-primary);
-  font-size: 7px;
 }
 </style>

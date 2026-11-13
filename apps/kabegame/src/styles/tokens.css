@@ -1,0 +1,122 @@
+/*
+ * 新界面的设计 token（UI 重构，组件在 src/components/ui/）。
+ *
+ * 规则：中性外框 + 一个强调色。壁纸本身是彩色的，外框越中性，图越突出；
+ * 强调色只用在计数、选中、焦点这类需要被看见的地方。
+ *
+ * 与旧主题的关系（P1 起）：中性的 --anime-*（文字、边框、底色、阴影）在 anime-theme.css 里改指向这里，
+ * vendored element-plus 的 --el-* 由它自己的 kb-reskin.scss 指向这里——没迁的界面也跟着换皮。
+ * 品牌色 --anime-primary / --anime-secondary 不动：强调色与危险色挂在它们上，插件详情运行时
+ * 局部改写 --anime-* 换肤时也能波及新组件。
+ *
+ * UnoCSS 里以 `kb` 色板 / `kb-*` 圆角与阴影引用（uno.config.pub.ts）。颜色是 CSS 变量，
+ * `text-kb-fg/50` 这类透明度修饰不生效，需要半透明就在这里加一个 token。
+ */
+:root {
+  /* 文字 */
+  --kb-fg: #1d1b22;
+  --kb-fg-muted: #6b6873;
+  --kb-fg-subtle: #a19ea8;
+  /* 只给 EP 的 regular / disabled 文字档用（新组件用上面三档） */
+  --kb-fg-regular: #3d3b44;
+  --kb-fg-disabled: #c2c0c7;
+
+  /* 字体：系统 UI 字体优先（macOS 苹方、Windows Segoe + 雅黑） */
+  --kb-font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
+    "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+
+  /* 页面底与侧栏底：不透明的浅灰，内容面（卡片、顶栏、弹层）是白 */
+  --kb-bg: #f6f6f7;
+  --kb-bg-sidebar: #efeff1;
+  /* 开着应用背景（壁纸作底）时外框的毛玻璃面 */
+  --kb-glass: rgba(255, 255, 255, 0.28);
+  --kb-glass-strong: rgba(255, 255, 255, 0.6);
+
+  /* 表面：surface 是浮在壁纸 / 背景之上的毛玻璃面（顶栏），raised 是弹出层 */
+  --kb-surface: rgba(255, 255, 255, 0.74);
+  --kb-surface-raised: #ffffff;
+  --kb-hover: rgba(29, 27, 34, 0.06);
+  --kb-pressed: rgba(29, 27, 34, 0.1);
+  /* 不透明填充：输入框底、分段控件轨道、进度条轨道 */
+  --kb-fill: #ececee;
+  --kb-fill-light: #f3f3f5;
+  --kb-fill-lighter: #f8f8f9;
+  --kb-fill-dark: #e4e4e7;
+
+  /* 分隔线 */
+  --kb-line: rgba(29, 27, 34, 0.08);
+  --kb-line-strong: rgba(29, 27, 34, 0.14);
+
+  /* 主操作：墨色实心。想换回品牌粉只改这三行（primary 指向 --anime-primary） */
+  --kb-primary: #1d1b22;
+  --kb-primary-hover: #3a3741;
+  --kb-primary-fg: #ffffff;
+
+  /* 强调与状态 */
+  --kb-accent: var(--anime-primary);
+  --kb-danger: var(--anime-danger);
+  --kb-success: var(--anime-success);
+  --kb-warning: var(--anime-warning);
+  --kb-ring: color-mix(in srgb, var(--anime-primary) 45%, transparent);
+
+  /* 形状 */
+  --kb-radius-sm: 6px;
+  --kb-radius-md: 8px;
+  --kb-radius-lg: 12px;
+  --kb-shadow-sm: 0 1px 2px rgba(16, 14, 20, 0.04);
+  --kb-shadow-md: 0 1px 2px rgba(16, 14, 20, 0.04), 0 4px 12px -2px rgba(16, 14, 20, 0.08);
+  --kb-shadow-lg: 0 0 0 1px rgba(16, 14, 20, 0.05), 0 24px 56px -12px rgba(16, 14, 20, 0.28);
+  --kb-shadow-pop:
+    0 0 0 1px rgba(16, 14, 20, 0.06), 0 12px 32px -8px rgba(16, 14, 20, 0.2), 0 2px 6px -2px rgba(16, 14, 20, 0.08);
+
+  /* 模态遮罩 */
+  --kb-overlay: rgba(16, 14, 20, 0.32);
+
+  /* 动效 */
+  --kb-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 层级：element-plus 的弹出层从 3000 起递增（App.vue 的 el-config-provider），新浮层与它同档 */
+  --kb-z-popover: 3000;
+  --kb-z-tooltip: 3100;
+}
+
+/* 浮层进出场（Reka 的 Presence 会等 closed 态的动画播完再卸载） */
+@keyframes kb-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes kb-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* 不定进度条：一段 40% 宽的条从左流到右 */
+@keyframes kb-progress-flow {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+/* 系统要求减少动效时去掉浮层动画；工具类带 [data-state] 属性选择器、特异性更高，只能用 !important */
+@media (prefers-reduced-motion: reduce) {
+  [data-reka-popper-content-wrapper] > * {
+    animation: none !important;
+  }
+}

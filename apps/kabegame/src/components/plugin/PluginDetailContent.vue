@@ -28,7 +28,7 @@
     </div>
 
     <div class="flex items-center gap-3 px-4 pt-2.5 pb-2 flex-none">
-      <KbTab v-model="activeTab" :items="tabItems" />
+      <Tabs v-model="activeTab" :items="tabItems" />
       <div class="flex-1" />
       <a
         v-if="plugin.baseUrl"
@@ -156,7 +156,7 @@
     </a>
 
     <div>
-      <KbTab v-if="hasChangelog" v-model="compactTab" :items="compactTabItems" class="mb-3" />
+      <Tabs v-if="hasChangelog" v-model="compactTab" :items="compactTabItems" class="mb-3" />
       <PluginDocRenderer
         v-if="compactDocText || compactLoading"
         :markdown="compactDocText"
@@ -177,7 +177,7 @@ import { computed, ref, watch } from "vue";
 import { useLocalStorage, useThrottleFn } from "@vueuse/core";
 import { ArrowRight } from "@kabegame/element-plus-icons";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
-import { KbTab, type KbTabItem } from "@kabegame/element-plus";
+import { Tabs, type TabItem } from "@/components/ui";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginDocPanel from "./PluginDocPanel.vue";
 import PluginDocToc from "./PluginDocToc.vue";
@@ -272,8 +272,8 @@ const configVarsCount = computed(() => {
   return Array.isArray(vars) ? vars.length : null;
 });
 
-const tabItems = computed<KbTabItem<DesktopTab>[]>(() => {
-  const items: KbTabItem<DesktopTab>[] = [
+const tabItems = computed<TabItem<DesktopTab>[]>(() => {
+  const items: TabItem<DesktopTab>[] = [
     { name: "doc", label: t("plugins.detail.tabDoc") },
     { name: "config", label: t("plugins.detail.tabConfig"), count: configVarsCount.value },
     { name: "pathql", label: t("plugins.detail.tabPathql"), count: pathqlCount.value },
@@ -372,7 +372,7 @@ const hasChangelog = computed(
 );
 const compactLoading = computed(() => (compactTab.value === "changelog" ? changelogLoading.value : docLoading.value));
 
-const compactTabItems = computed<KbTabItem<CompactTab>[]>(() => [
+const compactTabItems = computed<TabItem<CompactTab>[]>(() => [
   { name: "doc", label: t("plugins.detail.tabDoc") },
   { name: "changelog", label: t("plugins.detail.tabChangelog") },
 ]);

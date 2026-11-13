@@ -16,19 +16,19 @@
     position: relative; // 清除徽章锚点(右上角浮出)
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     min-width: 0;
-    height: 38px;
-    padding: 0 6px;
+    height: getCssVar('kb-filter-dropdown', 'chip-height');
+    padding: 0 10px;
     border: 1px solid getCssVar('kb-filter-dropdown', 'chip-border-color');
-    border-radius: 11px;
+    border-radius: getCssVar('kb-filter-dropdown', 'chip-radius');
     color: getCssVar('kb-filter-dropdown', 'chip-text-color');
     // 与弹层同一套底：透明底的 chip 直接坐在画廊缩略图上，字会被花底吃掉。
     background: getCssVar('kb-filter-dropdown', 'chip-bg-color');
     backdrop-filter: blur(10px);
     cursor: pointer;
-    // 与同一行的 el-button 对齐:不写死就继承 root 的 16px，chip 行会明显比工具行大一号。
-    font-size: getCssVar('font-size', 'base');
+    // 与顶栏按钮同一档字号:不写死就继承 root 的 16px。
+    font-size: 13px;
     font-weight: normal;
     white-space: nowrap;
     transition:
@@ -42,6 +42,7 @@
         'kb-filter-dropdown',
         'chip-hover-border-color'
       );
+      background: getCssVar('kb-filter-dropdown', 'chip-hover-bg-color');
     }
 
     &:focus-visible {
@@ -53,7 +54,7 @@
     // 否则左右还留着给文字准备的 padding，一排下来全是空心方块。
     @include when(icon-only) {
       justify-content: center;
-      width: 38px;
+      width: getCssVar('kb-filter-dropdown', 'chip-height');
       padding: 0;
     }
   }
@@ -62,9 +63,9 @@
   @include e(chip-icon) {
     display: inline-flex;
     flex: none;
-    width: 15px;
-    height: 15px;
-    // 不跟着维度名一起变黑，维持原来那档紫。
+    width: 16px;
+    height: 16px;
+    // 图标比维度名弱一档，选中时才转强调色。
     color: getCssVar('kb-filter-dropdown', 'chip-icon-color');
 
     svg {
@@ -84,13 +85,13 @@
     display: inline-flex;
     align-items: center;
     flex: none;
-    height: 20px;
+    height: 18px;
     padding: 0 6px;
-    border-radius: 6px;
+    border-radius: var(--kb-radius-sm);
     color: getCssVar('kb-filter-dropdown', 'badge-text-color');
     background: getCssVar('kb-filter-dropdown', 'badge-bg-color');
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 11.5px;
+    font-weight: 500;
   }
 
   @include e(chip-value) {
@@ -152,9 +153,9 @@
       color: inherit;
     }
 
-    // 选中态整颗 chip 转粉，图标跟上（此时它不该还留在中性紫）。
+    // 选中态只有图标转强调色，文字仍是墨色。
     @include e(chip-icon) {
-      color: inherit;
+      color: getCssVar('kb-filter-dropdown', 'chip-active-icon-color');
     }
   }
 
@@ -162,9 +163,9 @@
     @include e(chip) {
       border-color: getCssVar(
         'kb-filter-dropdown',
-        'chip-active-border-color'
+        'chip-hover-border-color'
       );
-      box-shadow: getCssVar('kb-filter-dropdown', 'focus-ring');
+      box-shadow: getCssVar('kb-filter-dropdown', 'chip-open-shadow');
     }
   }
 
@@ -186,18 +187,23 @@
   @include e(popper) {
     @include set-component-css-var('kb-filter-dropdown', $kb-filter-dropdown);
 
+    // 弹层里的过滤树（app 侧 KbTreeRow / GalleryFacetTreeInner）读这组变量：
+    // 文字、计数、悬停、选中与内置列表同一套颜色。
+    --kb-tree-row-color: #{getCssVar('kb-filter-dropdown', 'option-text-color')};
+    --kb-tree-row-muted-color: #{getCssVar('kb-filter-dropdown', 'option-zero-color')};
+    --kb-tree-row-count-color: #{getCssVar('kb-filter-dropdown', 'option-muted-color')};
+    --kb-tree-row-hover-bg: #{getCssVar('kb-filter-dropdown', 'option-hover-bg-color')};
+    --kb-tree-row-hover-color: #{getCssVar('kb-filter-dropdown', 'option-text-color')};
+    --kb-tree-row-active-bg: #{getCssVar('kb-filter-dropdown', 'option-selected-bg-color')};
+    --kb-tree-row-active-color: #{getCssVar('kb-filter-dropdown', 'option-selected-text-color')};
+
     &.#{$namespace}-popper.is-light {
       padding: 0;
       overflow: hidden;
-      border: 1px solid getCssVar(
-        'kb-filter-dropdown',
-        'panel-border-color'
-      );
-      border-radius: 13px;
+      // 边框由阴影里那圈 1px 描边给（--kb-shadow-pop），底色不透明，压在缩略图上也看得清。
+      border: 0;
+      border-radius: getCssVar('kb-filter-dropdown', 'panel-radius');
       background: getCssVar('kb-filter-dropdown', 'panel-bg-color');
-      // 底色是 90% 白，弹层压在画廊缩略图上时字会被花底吃掉；
-      // 配方同过滤树的 sticky 行(ProviderChildrenNode)：半透明 + 背景模糊。
-      backdrop-filter: blur(10px);
       box-shadow: getCssVar('kb-filter-dropdown', 'panel-shadow');
     }
   }
@@ -243,7 +249,7 @@
     padding: 10px 10px 8px;
     border-bottom: 1px solid getCssVar(
       'kb-filter-dropdown',
-      'panel-border-color'
+      'panel-divider-color'
     );
   }
 
@@ -278,11 +284,11 @@
     min-height: 32px;
     padding: 0 10px;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--kb-radius-md);
     color: getCssVar('kb-filter-dropdown', 'option-text-color');
     background: transparent;
     font: inherit;
-    font-size: 14px;
+    font-size: 13px;
     text-align: left;
     cursor: pointer;
 

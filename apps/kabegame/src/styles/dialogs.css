@@ -25,7 +25,7 @@
   .el-dialog__header {
   flex-shrink: 0 !important;
   padding: 20px 20px 10px !important;
-  border-bottom: 1px solid var(--anime-border);
+  border-bottom: 1px solid var(--kb-line);
 }
 
 .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog):not(.is-workbench)
@@ -42,5 +42,14 @@
   .el-dialog__footer {
   flex-shrink: 0 !important;
   padding: 10px 20px 20px !important;
-  border-top: 1px solid var(--anime-border);
+  border-top: 1px solid var(--kb-line);
+}
+
+/* 安卓紧凑宽度（< COMPACT_BREAKPOINT）下全局 Dialog 宽度固定为 90vw；平板宽屏与桌面一致按各自 width。
+   el-dialog 挂载在 body，需非 scoped（原在 App.vue，界面重构 P1 挪到这里，P9 随 EP 一起删）。 */
+@media (max-width: 767.98px) {
+  html.platform-android .el-dialog {
+    width: 90vw !important;
+    max-width: 90vw !important;
+  }
 }

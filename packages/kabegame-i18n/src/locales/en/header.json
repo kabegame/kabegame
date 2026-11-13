@@ -1,6 +1,8 @@
 {
   "refresh": "Refresh",
   "tasks": "Tasks",
+  "back": "Back",
+  "more": "More",
   "toolbox": "Toolbox",
   "toolboxApp": "App",
   "toolboxMaintenance": "Maintenance",

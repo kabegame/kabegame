@@ -69,6 +69,16 @@ shortcuts: [
 
 细节与踩坑见 [cocs/ui/COMPONENT_LIBRARY.md](../../cocs/ui/COMPONENT_LIBRARY.md)。
 
+## 新界面组件（界面重构）
+
+- 新写或重做的界面用 `apps/kabegame/src/components/ui/`（`reka-ui` + UnoCSS），图标用 `@lucide/vue`。
+- 颜色、圆角、阴影取 `apps/kabegame/src/styles/tokens.css` 的 `--kb-*`：`text-kb-fg`、`bg-kb-hover`、
+  `border-kb-line`、`rounded-kb-md`、`shadow-kb-pop`……透明度修饰（`/50`）对它们不生效。
+- 没有 Tailwind reset：`border` 配 `border-solid`；没有 tailwind-merge：不要在调用处叠同类工具类去覆盖组件变体。
+- element-plus 的外观由 vendored 包的 `kb-reskin.scss`（`--el-*` ← `--kb-*`）统一给，不要再在业务样式里写 `.el-*` 外观覆盖；
+  `anime-theme.css` 只剩旧主题变量（中性的已指向 `--kb-*`）与功能性规则。
+- 详见 [cocs/ui/COMPONENT_LIBRARY.md](../../cocs/ui/COMPONENT_LIBRARY.md)「新界面组件」。
+
 ## 与现有样式共存
 
 - 旧代码中的 `<style scoped>` / SCSS 可保留，**不必一次性重写**。

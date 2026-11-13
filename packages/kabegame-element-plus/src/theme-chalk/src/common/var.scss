@@ -472,51 +472,54 @@ $select-dropdown: map.merge(
 );
 
 // KbFilterDropdown
+// 已迁到新界面的设计 token（apps/kabegame/src/styles/tokens.css 的 --kb-*）：中性外框，
+// 强调色只留给选中、焦点与计数。chip 与顶栏按钮同一档尺寸与圆角。
 $kb-filter-dropdown: () !default;
 $kb-filter-dropdown: map.merge(
   (
-    // 维度名走正文色：原来是 secondary(#7c3aed)，两整行 chip 铺开时紫得晃眼。
-    // 值与箭头留在弱化的紫(muted)，正好还兼作「名 vs 值」的层次；
-    // 图标继续用原来那档紫(secondary)，不跟着名字变黑。
-    'chip-text-color': var(--anime-text-primary),
-    'chip-icon-color': var(--anime-text-secondary),
-    'chip-muted-color': var(--anime-text-muted),
-    'chip-border-color': var(--anime-border),
-    'chip-hover-border-color': var(--anime-primary-light),
-    // chip 底色与弹层同源(90% 白 + 背景模糊):透明底会让 chip 直接坐在画廊缩略图上,
-    // 文字被花底吃掉。选中态的粉是混进这层白底，而不是再叠一层透明色。
-    'chip-bg-color': var(--anime-bg-card),
-    'chip-active-text-color': var(--anime-primary-dark),
-    'chip-active-border-color': var(--anime-primary),
+    'chip-text-color': var(--kb-fg),
+    'chip-icon-color': var(--kb-fg-muted),
+    'chip-muted-color': var(--kb-fg-muted),
+    'chip-border-color': var(--kb-line-strong),
+    'chip-hover-border-color': var(--kb-fg-subtle),
+    // chip 可能直接坐在画廊缩略图上：底色用顶栏同款毛玻璃，不用全透明。
+    'chip-bg-color': var(--kb-surface),
+    'chip-hover-bg-color':
+      color-mix(in srgb, var(--kb-fg) 4%, var(--kb-surface-raised)),
+    // 选中：正文仍是墨色，只把底与边框染一层很淡的强调色，图标用强调色点出来。
+    'chip-active-text-color': var(--kb-fg),
+    'chip-active-icon-color': var(--kb-accent),
+    'chip-active-border-color':
+      color-mix(in srgb, var(--kb-accent) 45%, transparent),
     'chip-active-bg-color':
-      color-mix(in srgb, var(--anime-primary) 6%, var(--anime-bg-card)),
-    'chip-disabled-bg-color':
-      color-mix(in srgb, var(--anime-border) 22%, transparent),
+      color-mix(in srgb, var(--kb-accent) 8%, var(--kb-surface-raised)),
+    'chip-open-shadow': 0 0 0 3px color-mix(in srgb, var(--kb-fg) 6%, transparent),
+    'chip-disabled-bg-color': var(--kb-hover),
+    'chip-height': 32px,
+    'chip-radius': var(--kb-radius-md),
     // chip 内的限定词胶囊(搜索模式等)。
-    'badge-bg-color': color-mix(in srgb, var(--anime-secondary) 16%, transparent),
-    'badge-text-color': var(--anime-secondary-dark),
-    'panel-bg-color': var(--anime-bg-card),
-    'panel-border-color': var(--anime-border),
-    'panel-shadow': var(--anime-shadow-hover),
-    'option-text-color': var(--anime-text-primary),
-    'option-muted-color': var(--anime-text-muted),
-    // hover / 选中的浓度对齐过滤树节点(ProviderChildrenNode 的 .07 / .14),
-    // 同一个弹层里内置列表与树面板混用时不能一深一浅。
-    'option-hover-bg-color':
-      color-mix(in srgb, var(--anime-primary) 7%, transparent),
+    'badge-bg-color': var(--kb-hover),
+    'badge-text-color': var(--kb-fg-muted),
+    'panel-bg-color': var(--kb-surface-raised),
+    'panel-shadow': var(--kb-shadow-pop),
+    'panel-radius': var(--kb-radius-lg),
+    'panel-divider-color': var(--kb-line),
+    'option-text-color': var(--kb-fg),
+    'option-muted-color': var(--kb-fg-muted),
+    // 弹层里内置列表与过滤树（KbTreeRow）混用：两者的悬停 / 选中由同一组值给（见 __popper）。
+    'option-hover-bg-color': var(--kb-hover),
     'option-selected-bg-color':
-      color-mix(in srgb, var(--anime-primary) 14%, transparent),
-    'option-selected-text-color': var(--anime-primary),
+      color-mix(in srgb, var(--kb-accent) 10%, transparent),
+    'option-selected-text-color': var(--kb-fg),
     // 计数为 0 的行整体灰化：0 仍可选（尤其排除语境下 −0 有意义），只做视觉弱化。
-    'option-zero-color': var(--anime-text-muted),
-    'focus-ring':
-      0 0 0 2px color-mix(in srgb, var(--anime-primary) 18%, transparent),
-    'error-color': getCssVar('color-error'),
+    'option-zero-color': var(--kb-fg-subtle),
+    'focus-ring': 0 0 0 2px var(--kb-ring),
+    'error-color': var(--kb-danger),
     // 选中态 chip 右上角的清除徽章（浮在 chip 边界外）。
-    'clear-bg-color': var(--anime-primary),
-    'clear-hover-bg-color': var(--anime-primary-dark),
+    'clear-bg-color': var(--kb-fg-muted),
+    'clear-hover-bg-color': var(--kb-fg),
     'clear-text-color': #fff,
-    'clear-ring-color': var(--anime-bg-card),
+    'clear-ring-color': var(--kb-surface-raised),
   ),
   $kb-filter-dropdown
 );
@@ -587,8 +590,8 @@ $messagebox: map.merge(
   (
     'title-color': getCssVar('text-color-primary'),
     'width': 420px,
-    'border-radius': 4px,
-    'box-shadow': getCssVar('box-shadow'),
+    'border-radius': var(--kb-radius-lg),
+    'box-shadow': var(--kb-shadow-lg),
     'font-size': getCssVar('font-size-large'),
     'content-font-size': getCssVar('font-size-base'),
     'content-color': getCssVar('text-color-regular'),
@@ -929,7 +932,7 @@ $dialog: map.merge(
     'content-font-size': 14px,
     'font-line-height': getCssVar('font-line-height-primary'),
     'padding-primary': 16px,
-    'border-radius': getCssVar('border-radius-base'),
+    'border-radius': var(--kb-radius-lg),
   ),
   $dialog
 );
@@ -1165,7 +1168,7 @@ $popover: map.merge(
     'padding-large': 18px 20px,
     'title-font-size': 16px,
     'title-text-color': getCssVar('text-color-primary'),
-    'border-radius': 4px,
+    'border-radius': var(--kb-radius-lg),
   ),
   $popover
 );
@@ -1318,7 +1321,7 @@ $card: () !default;
 $card: map.merge(
   (
     'border-color': getCssVar('border-color', 'light'),
-    'border-radius': 4px,
+    'border-radius': var(--kb-radius-lg),
     'padding': 20px,
     'bg-color': getCssVar('fill-color', 'blank'),
   ),

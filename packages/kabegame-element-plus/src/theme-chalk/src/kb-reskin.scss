@@ -1,0 +1,77 @@
+// 界面重构 P1：EP 全局换皮。
+//
+// 迁移跨好几期，没轮到的界面仍是 EP 组件；这里把 EP 的基础 token 改指向 app 的设计 token
+// （apps/kabegame/src/styles/tokens.css 的 --kb-*），让它们和新组件看起来是同一套。
+// 只改 :root 上的 --el-* 变量，组件 scss 一行不动；P9 随整个包一起删除。
+//
+// 为什么不改 common/var.scss 的 $colors：EP 在编译期用 color.mix 从主色算出 light-1…9 / dark-2，
+// 主色一旦是 CSS 变量就算不了。所以颜色梯度在这里用 color-mix 运行时重算，放在 index.scss 最后、
+// 同特异性后写者胜。组件级的圆角 / 阴影（对话框、消息框、气泡卡片）仍在 var.scss 的组件 map 里改。
+
+@mixin kb-color-scale($type, $base) {
+  --el-color-#{$type}: #{$base};
+  @for $i from 1 through 9 {
+    --el-color-#{$type}-light-#{$i}: color-mix(in srgb, #{$base}, #ffffff #{$i * 10%});
+  }
+  --el-color-#{$type}-dark-2: color-mix(in srgb, #{$base}, #000000 20%);
+}
+
+:root {
+  // 主色跟 --kb-primary（墨色）：开关、复选框、单选、主按钮、选中项都随它。
+  @include kb-color-scale('primary', var(--kb-primary));
+  // 悬停用 token 自己的悬停色，比 light-3 的灰更像「同一个按钮变亮一点」
+  --el-color-primary-light-3: var(--kb-primary-hover);
+  --el-color-primary-rgb: 29, 27, 34;
+
+  @include kb-color-scale('success', var(--kb-success));
+  @include kb-color-scale('warning', var(--kb-warning));
+  @include kb-color-scale('danger', var(--kb-danger));
+  @include kb-color-scale('error', var(--kb-danger));
+  @include kb-color-scale('info', var(--kb-fg-muted));
+  --el-color-success-rgb: 16, 185, 129;
+  --el-color-warning-rgb: 245, 158, 11;
+  --el-color-danger-rgb: 239, 68, 68;
+  --el-color-error-rgb: 239, 68, 68;
+  --el-color-info-rgb: 107, 104, 115;
+
+  // 文字
+  --el-text-color-primary: var(--kb-fg);
+  --el-text-color-regular: var(--kb-fg-regular);
+  --el-text-color-secondary: var(--kb-fg-muted);
+  --el-text-color-placeholder: var(--kb-fg-subtle);
+  --el-text-color-disabled: var(--kb-fg-disabled);
+
+  // 边框：EP 拿它画输入框、表格线、分隔线
+  --el-border-color: var(--kb-line-strong);
+  --el-border-color-light: var(--kb-line);
+  --el-border-color-lighter: var(--kb-line);
+  --el-border-color-extra-light: var(--kb-line);
+  --el-border-color-dark: var(--kb-line-strong);
+  --el-border-color-darker: var(--kb-fg-subtle);
+  --el-border-color-hover: var(--kb-fg-subtle);
+
+  // 填充与底色
+  --el-fill-color: var(--kb-fill);
+  --el-fill-color-light: var(--kb-fill-light);
+  --el-fill-color-lighter: var(--kb-fill-lighter);
+  --el-fill-color-extra-light: var(--kb-fill-lighter);
+  --el-fill-color-dark: var(--kb-fill-dark);
+  --el-fill-color-darker: var(--kb-fill-dark);
+  --el-fill-color-blank: var(--kb-surface-raised);
+  --el-bg-color: var(--kb-surface-raised);
+  --el-bg-color-page: var(--kb-bg);
+  --el-bg-color-overlay: var(--kb-surface-raised);
+
+  // 形状
+  --el-border-radius-base: var(--kb-radius-md);
+  --el-border-radius-small: var(--kb-radius-sm);
+  --el-box-shadow: var(--kb-shadow-lg);
+  --el-box-shadow-light: var(--kb-shadow-pop);
+  --el-box-shadow-lighter: var(--kb-shadow-pop);
+  --el-box-shadow-dark: var(--kb-shadow-lg);
+
+  // 字体与遮罩
+  --el-font-family: var(--kb-font-sans);
+  --el-overlay-color-lighter: var(--kb-overlay);
+  --el-mask-color: rgba(255, 255, 255, 0.86);
+}

@@ -25,7 +25,7 @@
 
       <!-- Tab 切换：分段式胶囊组，右侧搜索框与其同排 -->
       <div class="plugin-tabs-row">
-        <KbTab
+        <Tabs
           v-model="activeTab"
           :items="tabItems"
           :close-title="$t('plugins.delete')"
@@ -346,7 +346,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
-import { KbTab, type KbTabItem } from "@kabegame/element-plus";
+import { Tabs, type TabItem } from "@/components/ui";
 import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
 import PluginQuickPreviewPanel, { type QuickPreviewPluginLike } from "@/components/plugin/PluginQuickPreviewPanel.vue";
 import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
@@ -371,7 +371,9 @@ const { pluginName } = usePluginManifestI18n();
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
 const appBackgroundCardClass = computed(() =>
-  settingsStore.values.appBackgroundEnabled ? "!bg-transparent [--el-card-bg-color:transparent]" : "",
+  settingsStore.values.appBackgroundEnabled
+    ? "!bg-kb-glass-strong backdrop-blur-md [--el-card-bg-color:transparent]"
+    : "",
 );
 
 function currentUrl() {
@@ -482,7 +484,7 @@ const isStoreTab = (tabName: string) => tabName.startsWith("store:");
 /** 「添加源」伪 tab：点击只开弹窗，不作为可选中的内容页 */
 const ADD_SOURCE_TAB = "add-source";
 
-const tabItems = computed<KbTabItem[]>(() => [
+const tabItems = computed<TabItem[]>(() => [
   {
     name: "installed",
     label: t("plugins.installedTab"),

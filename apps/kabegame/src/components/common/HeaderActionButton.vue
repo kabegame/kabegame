@@ -1,16 +1,16 @@
 <template>
-  <el-button circle @click="handleClick" :title="label">
-    <el-icon>
+  <Tooltip :content="label">
+    <Button variant="ghost" size="icon" :aria-label="label" @click="handleClick">
       <component :is="icon" />
-    </el-icon>
-  </el-button>
+    </Button>
+  </Tooltip>
 </template>
 
 <script setup lang="ts">
-import { ElButton, ElIcon } from "@kabegame/element-plus";
 import type { Component } from "vue";
+import { Button, Tooltip } from "@/components/ui";
 
-const props = defineProps<{
+defineProps<{
   icon: Component;
   label: string;
   type?: string;
@@ -24,15 +24,3 @@ const handleClick = () => {
   emit("action", { type: "click" });
 };
 </script>
-
-<style scoped lang="scss">
-.el-button {
-  box-shadow: var(--anime-shadow);
-  transition: all 0.3s ease;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--anime-shadow-hover);
-  }
-}
-</style>
