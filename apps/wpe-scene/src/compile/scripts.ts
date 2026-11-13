@@ -9,7 +9,7 @@ import {
   type TextRuntimeField,
   type ValueType,
 } from "./bindings";
-import { isSoundObject, isTextObject, objectKind } from "./features";
+import { isCameraObject, isMixedCameraObject, isSoundObject, isTextObject, objectKind } from "./features";
 import { resolveValue, type SceneJson, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import { instanceControlPoint, SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
 import { BLOOM_FIELDS } from "./postprocess";
@@ -93,7 +93,11 @@ function valueType(initial: SceneScalar): ValueType | "string" {
  * 才用」的帧序等价；`rate` 在 `SceneState.write` 里另走一条路（没有改值回调，5.4）。其余键与非粒子对象上的 `instanceoverride` 没有
  * 目标（能力表照报），也不落到图层的同名字段上（`alpha`、`brightness` 是图层字段，路径不同）。
  *
- * 属性关键帧动画（P10a，`animations.ts`）用同一个函数推目标，参数照字段脚本的算法给。
+ * `camera`：相机对象（P5d 步骤 3，`isCameraObject` 且不带别的内容）顶层的 `objects/<i>/fov` / `zoom` 写回到就地目标
+ * `{ kind: "camera" }`（rea-p5-camera 4.1：两个 float 描述符可挂脚本），渲染器每帧选相机时读。
+ *
+ * 属性关键帧动画（P10a，`animations.ts`）用同一个函数推目标，参数照字段脚本的算法给（相机对象上的关键帧在那边先报
+ * `value:animation:camera`，不走到这里，所以 `camera` 缺省 false）。
  */
 export function targetOf(
   path: string,
@@ -103,7 +107,15 @@ export function targetOf(
   sound: boolean,
   text: boolean,
   particle: boolean,
+  camera = false,
 ): SceneScript["target"] {
+  if (
+    owner.kind === "layer" &&
+    camera &&
+    (key === "fov" || key === "zoom") &&
+    path === `objects/${owner.object}/${key}`
+  )
+    return { kind: "camera", object: owner.object, field: key };
   if (owner.kind === "layer" && sound && path === `objects/${owner.object}/volume`)
     return { kind: "sound", object: owner.object, field: "volume" };
   if (owner.kind === "layer" && text && path === `objects/${owner.object}/${key}` && isTextRuntimeField(key))
@@ -132,8 +144,8 @@ export function targetOf(
 }
 
 /**
- * 按目标定的值类型（不按初值猜），字段脚本与属性关键帧动画（P10a，`animations.ts`）共用：声音的 `volume` 是 float；文本按 `textTypes`；
- * 粒子实例覆盖的 `colorn` 与控制点键是 vec3（WPE 的描述符，rea-p4f-script.md 1.3、5.1），其余系数是 float；图层字段按 `layerTypes`；
+ * 按目标定的值类型（不按初值猜），字段脚本与属性关键帧动画（P10a，`animations.ts`）共用：声音的 `volume`、相机对象（P5d 步骤 3）的
+ * `fov` / `zoom` 是 float；文本按 `textTypes`；粒子实例覆盖的 `colorn` 与控制点键是 vec3（WPE 的描述符，rea-p4f-script.md 1.3、5.1），其余系数是 float；图层字段按 `layerTypes`；
  * `general` 字段按 `GENERAL_FIELDS`。其余（材质常量、泛光参数、没有目标的）返回 null，由调用方另定。
  */
 export function targetValueType(
@@ -141,7 +153,7 @@ export function targetValueType(
   owner: ScriptOwner,
   key: string,
 ): ValueType | "string" | null {
-  if (target.kind === "sound") return "float";
+  if (target.kind === "sound" || target.kind === "camera") return "float";
   if (target.kind === "text") return textTypes[target.field];
   if (target.kind === "particle-instance")
     return target.field === "colorn" || instanceControlPoint(target.field) ? "vec3" : "float";
@@ -193,7 +205,8 @@ export async function collectScripts(
       const sound = !!object && typeof object === "object" && isSoundObject(object);
       const text = !!object && typeof object === "object" && isTextObject(object);
       const particle = !!object && typeof object === "object" && objectKind(object) === "particle";
-      const target = targetOf(path, owner, key, initial, sound, text, particle);
+      const camera = !!object && typeof object === "object" && isCameraObject(object) && !isMixedCameraObject(object);
+      const target = targetOf(path, owner, key, initial, sound, text, particle, camera);
       list.push({
         id: path,
         source: raw.script,

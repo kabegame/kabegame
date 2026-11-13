@@ -362,6 +362,8 @@ export class SceneHost {
     if (target.kind === "sound") return `objects/${target.object}/${target.field}`;
     // 文本字段（P6b 1e）：同脚本运行时重放表的键
     if (target.kind === "text") return `objects/${target.object}/${target.field}`;
+    // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
+    if (target.kind === "camera") return `objects/${target.object}/${target.field}`;
     if (target.kind === "recompile") return target.path;
     return `${target.script}/scriptproperties/${target.key}`;
   }
@@ -386,6 +388,11 @@ export class SceneHost {
     }
     if (target.kind === "sound") {
       const value = state.sounds.get(target.object)?.volume;
+      return value === undefined ? null : [value];
+    }
+    // 相机对象的 `fov` / `zoom`（P5d 步骤 3）：`update(value)` 收到当前值
+    if (target.kind === "camera") {
+      const value = state.cameras.get(target.object)?.[target.field];
       return value === undefined ? null : [value];
     }
     // 文本字段（P6b 1e）：当前排版字段，`update(value)` 收到的是现在的文字（计数器不到刷新间隔时原样返回它）

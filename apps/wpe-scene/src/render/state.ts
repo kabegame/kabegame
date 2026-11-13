@@ -18,6 +18,9 @@
  *
  * 声音（P6a 步骤 1）：`volume` 存在 `sounds`，写入用编译期同一条取值规则（`soundVolume`），不标脏，宿主的排期器每帧读。
  *
+ * 相机对象（P5d 步骤 3）：`fov` / `zoom` 存在 `cameras`，写入用编译期同一条取值规则（`cameraValue`），不标脏，渲染器每帧选相机时读
+ * （`render/camera.ts` 的 `activeCameraObject`）。相机的变换与可见性就是图层的 `origin` / `angles` / `scale` / `visible`。
+ *
  * 对齐（P8 步骤 3）：图层的自身偏移 `offset` 只作用在它自己的绘制上（`render/layout.ts` 的 `drawMatrixOf`），子孙的世界矩阵不带它。
  * 图像层按 `alignment` 与 `trunc(size)` 算（`alignmentOffset`，加载时与脚本写 `alignment` 时），文本层由排版填（下段）。
  *
@@ -30,6 +33,7 @@
 import { ALIGNMENTS } from "../compile/alignment";
 import {
   bindingValue,
+  cameraValue,
   generalValue,
   isLayerVectorField,
   layerVectorValue,
@@ -259,6 +263,11 @@ export class SceneState {
    */
   readonly sounds = new Map<number, { volume: number }>();
   /**
+   * 相机对象的就地值（P5d 步骤 3，`objects` 下标 → 值），起始值 = 编译期的 `SceneLayer.camera`；只含 `camera` 非空的图层（纯相机对象）。
+   * 写入不标脏：渲染器每帧选相机时读。
+   */
+  readonly cameras = new Map<number, { fov: number; zoom: number }>();
+  /**
    * 文本层的排版结果（P6b 1d，`objects` 下标 → `TextLayout`，含字形网格与它所在的图集）：宿主在加载前排好（`text/host.ts`），经
    * `GpuScene.build` 的 `texts` 交来（`setTexts`）。渲染图按它定文字框、合成 RT 与有没有彩色字形，世界矩阵带它的对齐偏移。
    * 1e 起运行中重排后由 `setText` 换上新的。
@@ -367,6 +376,9 @@ export class SceneState {
       if (layer.alignment !== undefined) state.alignmentSizes.set(layer.object, [...layer.size]);
     // 手写的测试 bundle 可能没有声音表
     for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
+    // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
+    for (const layer of bundle.layers)
+      if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
     // 文本层的 effect 开关会改 `padding`、文字框与合成 RT（rea-p6b-layout 3.5），1d 没有就地重排：切换一律整场重编译（同冻结的图层）
     for (const layer of bundle.layers)
       if (layer.text) {
@@ -539,6 +551,13 @@ export class SceneState {
       // 取值规则与编译期相同（`soundVolume`），条件先换成布尔；不合法的值不改字段（WPE 的 float 解析器不收时不写）
       const value = soundVolume(conditioned(binding, raw));
       if (sound && value !== undefined) sound.volume = value;
+      return "applied";
+    }
+    if (target.kind === "camera") {
+      const camera = this.cameras.get(target.object);
+      // 取值规则与编译期相同（`cameraValue`），条件先换成布尔；不合法的值不改字段（同 general 的 float）
+      const value = cameraValue(conditioned(binding, raw));
+      if (camera && value !== undefined) camera[target.field] = value;
       return "applied";
     }
     if (target.kind === "layer") {

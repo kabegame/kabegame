@@ -3,6 +3,8 @@ import { alignmentIndex } from "./alignment";
 import { compileBloom, type SceneBloom } from "./bloom";
 import {
   BindingCollector,
+  CAMERA_DEFAULTS,
+  cameraValue,
   GENERAL_FIELDS,
   generalDefaults,
   generalValue,
@@ -42,6 +44,8 @@ import {
   effectNeedsFramebuffer,
   GROUP_CHILD_FRAMEBUFFER,
   groupChildIssues,
+  isCameraObject,
+  isMixedCameraObject,
   isShapeObject,
   isSoundObject,
   isTextObject,
@@ -101,7 +105,7 @@ import {
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
 import { collectScripts, type SceneScripts } from "./scripts";
-import { compileCamera, type SceneCameraJson } from "./camera";
+import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
@@ -528,6 +532,13 @@ export interface SceneLayer {
    * 只有图像层填；可选同 `alignment`：不动各处手写的测试图层。
    */
   dependedOn?: boolean;
+  /**
+   * 相机对象（P5d 步骤 3，`isCameraObject`，rea-p5-camera 4.1、4.2）：`fov` / `zoom` 的编译期值（缺省 50 / 1，取值规则 `cameraValue`），
+   * 绑属性或挂 `{script}` 时登记成就地目标 `{ kind: "camera" }`，运行中的值在 `SceneState.cameras`。图层本身没有 pass，变换、层级、可见性
+   * 照分组节点；渲染器每帧按 `objects` 倒序选第一个自身与父链都可见的相机（`render/camera.ts` 的 `activeCameraObject`）。同时带别的内容
+   * 的对象（`object:camera:mixed`）与其它图层为 null。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
+   */
+  camera?: { fov: number; zoom: number } | null;
 }
 /** 形状对象（P8 步骤 2，rea-p8-layer §1，p8-REPORT 结论 4、5）：图层的 `passes` 为空，没有合成 RT，渲染图只画最后一个 effect（`planShapeLayer`）。 */
 export interface SceneShape {
@@ -1886,9 +1897,27 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       text: null,
       model: null,
       shape: null,
+      camera: null,
     };
     // 每个对象都进 `layers`（分组节点、灯、粒子是没有 pass 的图层），子孙算世界矩阵与可见性时父的状态都在
     bundle.layers.push(layer);
+    // 相机对象（P5d 步骤 3）：`fov` / `zoom` 进图层并登记就地目标；`path` 的条目动画没做，读出非空 `paths` 或读不到报 `camera:path`。
+    // 同时带别的内容的照报 `object:camera:mixed`、不当相机，按内容往下编
+    if (isCameraObject(object)) {
+      await checkCameraObjectPath(object.path, fs, unsupported);
+      if (!isMixedCameraObject(object)) {
+        const field = (key: "fov" | "zoom") =>
+          cameraValue(
+            bindings.bind(object[key] as SceneValue | undefined, properties, {
+              kind: "camera",
+              object: index,
+              field: key,
+            }),
+          ) ?? CAMERA_DEFAULTS[key];
+        layer.camera = { fov: field("fov"), zoom: field("zoom") };
+        continue;
+      }
+    }
     if (objectKind(object) === "particle") {
       await compileParticle(index, object, layer);
       continue;

@@ -190,7 +190,27 @@ export type BindingTarget =
    * （`textFieldFromScript`）。`object` 是 `objects` 下标。
    */
   | { kind: "text"; object: number; field: TextRuntimeField }
+  /**
+   * 相机对象的 `fov` / `zoom`（P5d 步骤 3，rea-p5-camera 4.1：两个 float 描述符，可绑定、可挂脚本）：就地写进 `SceneState.cameras`，
+   * 不标脏，渲染器每帧选相机时读（`render/camera.ts` 的 `activeCameraObject`）。取值规则 `cameraValue`。`object` 是 `objects` 下标。
+   */
+  | { kind: "camera"; object: number; field: CameraField }
   | { kind: "recompile"; reason: RecompileReason; path: string };
+
+/** 相机对象的就地字段（P5d 步骤 3）。 */
+export type CameraField = "fov" | "zoom";
+
+/** 相机对象两个字段的缺省（rea-p5-camera 4.1 的描述符表：`fov` 50、`zoom` 1）。 */
+export const CAMERA_DEFAULTS: Readonly<Record<CameraField, number>> = { fov: 50, zoom: 1 };
+
+/**
+ * 相机对象 `fov` / `zoom` 的取值（P5d 步骤 3），编译与就地写共用：同 `generalValue` 的 float（只收一个有限数字，布尔、多分量、解析不出
+ * 时返回 undefined，WPE 不改字段）。
+ */
+export function cameraValue(value: SceneScalar | undefined): number | undefined {
+  const parsed = generalValue("fov", value);
+  return typeof parsed === "number" ? parsed : undefined;
+}
 
 export interface SceneBinding {
   /** 用户属性名。 */

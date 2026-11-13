@@ -186,4 +186,9 @@
 - 探针网格：`g_ViewForward` = normalize(center − eye) = (−0.48666, −0.32444, −0.81111)，`g_ViewRight` = normalize(f × up) = (0.85749, 0, −0.51450)，`g_ViewUp` = s × f = (−0.16692, 0.94591, −0.27821)，都是世界空间的向量，即行向量约定下 V 的第 2 列取负、第 0 列、第 1 列（读码 8 成立）；`g_EyePosition` = (6, 4, 10)；VP 的 m00 = s.x · cot 25°/(16/9) = 1.03438。
 - 粒子：screen 朝向 `Forward` = −视线、`Up` = `g_ViewUp`、`Right` = `g_ViewRight`（面向相机）；upright（axis 0 1 0）`Forward` = (0.51450, 0, 0.85749)、`Right` = (0.85749, 0, −0.51450)、`Up` = (0, 1, 0)，和 `orientationVectors` 用相机视线算的逐项相同。
 
+**步骤 3 补测：正交相机对象的相互作用（2026-11-13）：** `ignore/p5/d3/gen_d3.py` 生成 4 个正交工程，抓帧在 `A:\p5d\p5d-camo-{pp,ppr,par,shake}`，日志在 `ignore/p5/d3/out/logs/`，分析 `ana_par.py`。读码（rea-p5-camera 6.2、7.2、第 5 节）全部成立：
+- **透视覆盖用相机的 V**（`p5d-camo-pp` 相机 (960, 540, 500)、`-ppr` 相机 (200, 100, 0) + `angles 0 0 0.3` + `zoom 2`）：透视粒子的 MVP 是「相机 V 的旋转不变、平移换成 (t.x − W/2, t.y − H/2, −d)」再乘透视覆盖的 P。`-pp` 原点投到 NDC (−0.5, −0.5)、w = d = 494.82；`-ppr` 投到 (−0.932, −1.502)、w = d = 247.41（`zoom 2` 让 d 减半），m00 = 0.5154·cos 0.3、m01 = −0.9163·sin 0.3（保留了相机旋转）。按「覆盖不看相机」会落在 (+0.5, +0.5)。
+- **视差点用相机的 eye.xy**（`-par`：相机 (200, 100, 0)，amount 0.5、mouseinfluence 0、delay 0）：P = 相机 eye.xy + (W/2, H/2) = (1160, 640)，5 个色块的 MVP 与 `o = amount·depth·(origin − P)` 逐个相同（差 ≤ 1.2e-7），`g_ParallaxPosition` = (0.60417, 0.59259)；按「P 不带相机」差 0.05–0.1。
+- **抖动加在相机的 eye 上**（`-shake`：相机 (200, 100, 0)，speed 1、amplitude 1、roughness 1）：`g_EyePosition` = (eye.x + s.x + W/2, eye.y + s.y + H/2, 2000)，5 个色块的 MVP 都是视图平移 −(eye + s)，差 ≤ 1.3e-7。
+
 **对 P5d 各步的影响：** 读码的结论全部成立，推翻一处推断（透视开视差时 `g_ParallaxPosition` 是 NaN），正交相机对象的冲突解开（照读码实现），补了两条读码没写到的规则：带 effect 的上屏 pass 剔除取 effect 材质；`clearenabled: false` 时深度也不清。深度与剔除对全部对象同一套规则，正交场景同样生效，所以步骤 1 不分投影；透视场景里的透视粒子与文本对象语料 0 个 / 只在还差 20 项以上的场景里，照报。

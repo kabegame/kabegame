@@ -133,6 +133,11 @@ export async function scriptCorpus(
               const value = state.bloom[target.field];
               return Array.isArray(value) ? value : [value];
             }
+            // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
+            if (target.kind === "camera") {
+              const value = state.cameras.get(target.object)?.[target.field];
+              return value === undefined ? null : [value];
+            }
             return null;
           },
         }));
@@ -159,6 +164,11 @@ export async function scriptCorpus(
             if (target.kind === "bloom") {
               const value = state.bloom[target.field];
               return Array.isArray(value) ? value : [value];
+            }
+            // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
+            if (target.kind === "camera") {
+              const value = state.cameras.get(target.object)?.[target.field];
+              return value === undefined ? null : [value];
             }
             return null;
           },

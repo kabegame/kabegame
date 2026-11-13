@@ -530,3 +530,146 @@ Claude 独立验收：
   - 解包工程的光标日志脚本用到 `input.cursorScreenPosition`，所以 `*-kbp` 工程在预览里退回，回放探针强制渲染不受影响；
   - 共享宿主产物被别的会话中途重建过两次，哈希重测；
   - 收尾时：「场景后处理」改回超高，测试行全部移除，宿主产物按合并后的工作区重建。
+
+## 步骤 3 — 相机对象
+
+### 思路
+
+相机对象已经有了大半的骨架：它没有 `image` / `model` 等内容键，编译期本来就作为「分组节点」进 `layers`，层级、可见性（含绑属性）、`origin` 上的字段脚本都照常工作，现在只是 `camera`、`fov`、`zoom`、`path`、`queuemode` 被当未知键报。这一步让它真正驱动相机，规则全部来自步骤 0 与步骤 3 补测（p5-REPORT「P5d 语义的实测核对」与「步骤 3 补测」）。
+
+**编译期。** 相机对象照 WPE 的工厂判定：`camera` 是字符串。`SceneLayer` 新增 `camera: { fov, zoom } | null`（缺省 50 / 1，float 取值同 `GENERAL_FIELDS` 的规则）；`fov`、`zoom` 绑用户属性或挂字段脚本时登记成新的就地目标（`{ kind: "camera"; object; field }`），值落在 `SceneState.cameras`。`path` 指向的条目动画文件读出非空 `paths` 或读不到报 `camera:path`（语料 22 个都是空表），`queuemode` 中性。相机对象同时带别的内容键（图像、模型、粒子、声音、文本、灯、形状）时 WPE 按哪个类建没查，报 `object:camera:mixed`（语料 0）。`fov` / `zoom` 挂关键帧照旧由 P10a 的 `value:animation:camera` 报，这一步不碰动画。
+
+**每帧选相机。** 和步骤 2 的相机求值同一时刻（帧开头、粒子步进之后交给场景，用的是上一帧脚本写过的状态）：按 `objects` 倒序找第一个自身与父链都可见（`effectiveVisible`）的相机对象，取它的世界矩阵（`worldMatrixOf`）：eye = 平移列，center = eye − 第 2 列（看本地 −Z），up = 第 1 列。有活动相机时路径不推进（WPE 只在没有相机对象时走路径）。都不可见时回到步骤 2 的来源（路径 / 基准；正交场景是单位视图）。
+
+**正交场景。** 视图 V = `lookAtRH(eye + s, center + s, up)`（s 是正交抖动），VP = `sceneViewProjection(general, general.zoom × camera.zoom) · V`；`g_EyePosition` = (eye.x + s.x + W/2, eye.y + s.y + H/2, 2000)；视图向量取 V（步骤 0 `p5d-camo-r`）；视差点的 eye.xy 是相机的 eye.xy + s（补测 `-par`）。透视覆盖（透视粒子、`perspective: true` 的图像层 / 模型）改成在相机 V 上做：旋转不变，平移换成 (t.x − W/2, t.y − H/2, −d)，d 照旧按含缩放的可见高算（补测 `-pp`、`-ppr`）。没有可见相机对象时一行不变（`lookAtRH` 在 eye 为 (0, 0, 0) + s 时就是 `T(−s)`，但仍走原来的分支保证字节不变）。
+
+**透视场景。** 来源姿态换成相机的（步骤 2 的 `perspectiveCamera` 只换 pose），fov 取相机对象的 `fov`（钳制），zoom 不起作用（步骤 0 `p5d-camp-*`）。
+
+**不做、照报：** 相机条目动画（`camera:path`）；脚本的 `getCameraTransforms` / `setCameraTransforms` 与图层上的 `fov` / `zoom` 字段访问（仍在 `MISSING_SCRIPT_API`，语料 0 处）。语料 18 张带相机对象的场景都还差别的能力，这一步只去掉相机一组键，不解锁。
+
+### 现状锚点
+
+现状取自 HEAD `c92f5b5c`。
+
+**a. 相机对象的键被当未知键报**（`compile/features.ts` 的 `checkObjectFeatures`）
+```ts
+  for (const [key, value] of Object.entries(object))
+    if (
+      !SUPPORTED_OBJECT.has(key) &&
+      // … 已知的各类键 …
+      active(value)
+    )
+      unsupported.add(`object:${key}`);   // 现状：camera / fov / zoom / path / queuemode 都走到这里
+```
+相机对象 `objectKind` 为 undefined，`compileScene` 把它当分组节点放进 `layers`（`bundle.ts`：「每个对象都进 layers（分组节点、灯、粒子是没有 pass 的图层）」）。
+
+**b. 渲染器每帧的相机只有路径 / 基准与正交抖动**（`render/renderer.ts` 的 `render`）
+```ts
+    if (this.perspective) {
+      const { pose, next } = stepCameraSource(this.camera!, this.cameraPath, frametime);  // 现状：没有相机对象
+      this.cameraPath = next;
+      const frame = perspectiveCamera({ pose, fields: state.general, time: wrapped, width: scene.width, height: scene.height });
+      camera = { kind: "perspective", frame };
+      eye = [frame.eye[0], frame.eye[1]];
+    } else {
+      const shake = shakeOffset(state.general, wrapped, height);
+      camera = { shake, zoom: state.general.zoom };   // 现状：正交视图恒为 T(−s)
+      eye = shake;
+    }
+```
+
+**c. 正交的 `setCamera` 只认平移与缩放**（`render/scene.ts`）
+```ts
+    this.viewProjection = still ? this.baseViewProjection : multiply(this.baseViewProjection, translation(-x, -y, 0));
+    this.perspectiveViewProjection = still
+      ? this.basePerspectiveViewProjection
+      : multiply(this.basePerspectiveViewProjection, translation(-x, -y, 0));   // 现状：透视覆盖的视图是 T(−W/2 − s, −H/2 − s, −d)
+    this.eye = eyePosition(this.bundle.general, [x, y]);
+```
+
+**d. 透视覆盖从单位视图算**（`render/layout.ts`）
+```ts
+export function particleViewProjection(general, zoom = 1): Mat4 {
+  // …
+  return multiply(projection, translation(-width / 2, -height / 2, -d));   // 现状：不看相机（补测 `-pp` 推翻）
+}
+export function eyePosition(general, offset = [0, 0]): number[] {
+  return [general.width / 2 + offset[0], general.height / 2 + offset[1], 2000];   // 现状：不加相机 eye
+}
+```
+
+### 点 1 — 编译（`compile/bundle.ts`、`compile/features.ts`、`compile/bindings.ts`、`compile/scripts.ts`）
+- **新增** `isCameraObject(object)`（`typeof object.camera === "string"`，`features.ts`，编译与能力表共用）；`SceneLayer.camera: { fov: number; zoom: number } | null`。
+- **新增** 绑定目标 `{ kind: "camera"; object: number; field: "fov" | "zoom" }`：`fov` / `zoom` 绑用户属性、挂 `{script}` 时登记它；取值规则同 `generalValue` 的 float。
+- **修改** `checkObjectFeatures`：相机对象的 `camera`、`fov`、`zoom`、`path`、`queuemode` 不再报；**新增** `object:camera:mixed`（相机对象另带内容键）。`compileScene` 读 `path` 文件：非空 `paths` 或读不到报 `camera:path`。
+
+### 点 2 — 状态（`render/state.ts`）
+- **新增** `SceneState.cameras: Map<number, { fov: number; zoom: number }>`（`fromBundle` 填初值），`write` / `needsRecompile` 加 `camera` 目标，就地写、不标脏（渲染器每帧读）。
+
+### 点 3 — 选相机与求值（`render/camera.ts`）
+- **新增**
+```ts
+/** 本帧生效的相机对象（倒序找第一个自身与父链都可见的），取世界矩阵的平移、第 2 列取负、第 1 列；没有为 null。 */
+export function activeCameraObject(bundle: SceneBundle, state: SceneState, worlds: Map<number, Mat4>): { object: number; pose: CameraPose; fov: number; zoom: number } | null;
+/** 正交场景带相机对象的一帧：V = lookAtRH(eye + s, center + s, up)；VP、eye uniform、视图向量、透视覆盖的 V'。 */
+export function orthographicCameraObjectFrame(…): OrthographicCameraFrame;
+```
+- **修改** `stepCameraSource` 前先看相机对象：有就用它的 pose（透视场景另取 fov），路径不推进。
+
+### 点 4 — 场景与渲染器（`render/scene.ts`、`render/renderer.ts`、`render/layout.ts`）
+- **修改** `SceneCamera` 的正交那种可带相机对象的帧（`{ shake, zoom, view? }`）；`setCamera` 有 `view` 时 `viewProjection = sceneViewProjection(general, zoom) · V`，`eye` 加相机 eye.xy，视图向量取 V，透视覆盖用 `particleViewProjection(general, zoom, V)`。没有 `view` 时逐字不变。
+- **修改** `particleViewProjection` 收可选的视图 V：旋转不变，平移 (t.x − W/2, t.y − H/2, −d)；不给时同现在。
+- **修改** 渲染器帧开头先选相机对象：正交传 `view` 与 `zoom = general.zoom × camera.zoom`，视差点的 eye.xy 用相机的 eye.xy + s；透视用相机 pose 与 fov。
+- **修改** dev 探针（`dev/probe.ts`、`dev/particleCorners.ts`）的 `frameCamera` 同样选相机对象。
+
+### 点 5 — 单测
+- `compile`：`isCameraObject`；相机对象的五个键不再报、`object:camera:mixed`、`camera:path`（非空 / 读不到）；`fov` / `zoom` 的绑定与字段脚本目标。
+- `render/camera`：选相机（倒序、父链不可见、都不可见回退）；正交帧对上步骤 0 `p5d-camo-c`（VP 平移 (−2, −2)、深度 0.375，`g_EyePosition` (1920, 1080, 2000)）、`-o`（平移 (−1.208, −1.185)）、`-r`（`g_ViewRight` (cos 0.3, sin 0.3, 0)、线性项 ×2）；透视覆盖对上补测 `-pp`（NDC (−0.5, −0.5)、w 494.82）、`-ppr`（(−0.932, −1.502)、w 247.41、m00 0.5154·cos 0.3）；视差对上 `-par`（`g_ParallaxPosition` (0.60417, 0.59259)）；抖动对上 `-shake`；透视场景对上 `p5d-camp-1` / `-2`（eye、fov）。
+- `render/scene`（假设备）：没有相机对象的场景 uniform 字节与改前相同；绑属性切换可见的相机，下一帧换相机。
+
+### 实施方式
+
+子代理在 HEAD 快照（`ignore/p5/d3/head`，`c92f5b5c`）里实现，我独立验收后三方合并（P8 步骤 4、P10a、P6b 在工作区改 `compile/bundle.ts`、`compile/features.ts`、`render/scene.ts`、`dev/*`）。
+
+### 验收
+
+子代理：快照 tsc 0 错误；vitest 除已知的 `3830255100: 219 次请求` 外全过；Prettier。
+
+Claude 独立验收：
+1. 越界检查、自跑 tsc / vitest；变异：选相机改成正序、不看父链可见、center 取 +Z、up 取第 0 列、正交 VP 不乘 V、相机 zoom 不乘、`g_EyePosition` 不加相机 eye、视差 eye.xy 不用相机、透视覆盖不看 V / 改了旋转、透视场景 fov 仍取 general、有相机时路径仍推进、`camera:path` 不报、可见性绑定不触发换相机。
+2. 语料：只去掉 18 张的 `object:camera` / `fov` / `zoom` / `path` / `queuemode`，不新增键、不解锁、不掉出。
+3. 画面哈希：10 张基线 × 三档不变。
+4. 真机对 WPE（`render_scene` 按日志回放、`kbp cmp frame` 数值比，后处理关闭，1920×1080）：步骤 0 的 `p5d-camo-0` / `-c` / `-o` / `-r`、`p5d-camp-1` / `-2`，补测的 `p5d-camo-pp` / `-ppr` / `-par` / `-shake`，整帧逐像素。`p5d-camo-s`（原点挂脚本）回放探针不跑脚本，不比，由单测覆盖。
+5. 三方合并进工作区，合并后再跑 tsc、vitest。测试行用 `projects_remove` 删掉。
+
+### 步骤 3 实施记录（2026-11-14）
+
+先补测正交相机对象和透视覆盖、视差、抖动的相互作用（`ignore/p5/d3/gen_d3.py` 的 `p5d-camo-pp` / `-ppr` / `-par` / `-shake`，抓帧 `A:\p5d\p5d-camo-pp` 等，`ana_par.py` 逐色块核对 MVP，结论写进 p5-REPORT「步骤 3 补测」），确定透视覆盖在相机 V 上做、视差点与抖动都跟相机 eye。子代理在 HEAD 快照（`c92f5b5c`，`ignore/p5/d3/head`）里实现，我独立验收后变基到 `cb6e8cff`（`ignore/p5/d3/new`，2 处冲突：`SceneLayer` 上 P8 步骤 4 的 `dependedOn` 与 `camera` 相邻、`features.ts` 文档注释相邻，`resolve_new.py` 两边都留），再三方合并进工作区（`dev/particleCorners.ts` 2 处冲突：工作区 P10a 加的 `SceneAnimations` import 与 `animate` 块，`resolve_wt.py` 逐处断言原文后拼接）。
+
+**和计划不一致或计划没写到的：**
+- `SceneLayer.camera` 写成可选、编出来的图层一律填（非相机为 null），理由同 `text` / `model`。正交 `SceneCamera` 的新字段叫 `cameraObject`，是整份预先算好的帧（`OrthographicCameraFrame`），不是计划写的 `view?`。
+- `stepCameraSource` 没改：选相机放进新的共享函数 `sceneCameraFrame`（渲染器与 dev 探针都调，`cameraObjectLayers` 加载时取一次），两边不分叉。选相机按 `object` 下标取最大，与倒序遍历等价，不依赖 `layers` 顺序。
+- 相机对象另带内容（`object:camera:mixed`）时不当相机：不进 `cameras`、不登记 `fov` / `zoom` 目标，只读 `path`。
+- `camera:path` 的边界（语料 0）：空串、不是字符串、根不是对象都报，`paths` 不是数组按空表。
+- `scene.ts` 新增 `objectCamera` 标志：离开相机对象时不提前返回、视图向量复位；`same` 提成模块级函数。
+- `particleTrackProbe` 在带相机对象的场景给了 `cursors` 时抛错（跟随点反投影没接相机视图，同步骤 2 的透视场景）。
+
+**验收：**
+- 越界：快照对基点只改计划内的 18 个文件（新增 `compile/p5d3.test.ts` 24 条、`render/p5d3-camera.test.ts` 26 条）。tsc 0 错误；vitest 2908 通过，只有已知的 `3830255100: 219 次请求`；变基后 2944 全过（那一项在 `cb6e8cff` 上不再失败，原因没查）。
+- 变异（`ignore/p5/d3/mutate_d3.py`，快照模式）21 处全部检出、按原字节还原。子代理另有 31 处，全部检出（「离开相机对象时提前返回」补用例后检出）。
+- 语料（183 张）：只去掉 18 张的 `object:camera` / `fov` / `zoom` / `path` / `queuemode`，不新增键；能渲染 69 → 69，没有解锁也没有掉出（18 张都还差别的能力）。变基后在 `cb6e8cff` 上重扫，结果相同。
+- 画面哈希：10 张基线 × 三档，变基前与步骤 2 相同，变基后 `cb6e8cff` 对 `cb6e8cff` + 步骤 3 相同。变基前后步骤 3 的增删行按文件逐行相同（`same_patch.py`），所以下面的真机对比对变基后同样成立。
+- **真机对 WPE**（`render_scene` 按 WPE 日志回放、`kbp cmp frame` 数值比，两边后处理关闭，1920×1080）：
+  - 逐像素相同（差 0）：`p5d-camo-c`、`-o`、`-r`、`-pp`、`-ppr`、`-par`、`-shake`，`p5d-camp-2`（排除 FR / CLK）。
+  - `p5d-camo-0`：只有 CLK 块差 34（CLK 的 R 通道是 `frac(g_PointerPosition…)`，回放用缺省光标、抓帧时光标在别处），排除 FR / CLK 后差 0。
+  - `p5d-camp-1`：只有 FR / CLK 两块不同。它们在 (1820, 40, 0)，WPE 在透视场景对图像层做了视锥剔除（步骤 0「只记不补」的同一条），排除后差 0。
+- 合并：合并前工作区相对 HEAD 的新增行一行不少（`check_kept.py`），步骤 3 的新增行也一行不少。合并后工作区 tsc 0 错误；vitest 3068 通过、1 失败 `2251857160: 553 次请求`：工作区里 P10a 去掉了 `value:animation:pending`，这张能编完、请求变多（`cb6e8cff` 与 `cb6e8cff` + 步骤 3 的语料里它都还停在这个键上），与步骤 3 无关，上限归 P10a 调。
+- 提交基点：合并之后 HEAD 又前进到 `5889b490`（P6b 1e-3 与逐 draw 轨迹两笔，和步骤 3 重叠 6 个文件），提交的树是 `5889b490` + 步骤 3（`ignore/p5/d3/commit`，三方合并无冲突，增删行与变基前逐行相同）。在它上面 tsc 0 错误、vitest 2996 全过；语料对 `5889b490` 只去掉同样 18 张的相机五个键，能渲染 78 → 78。这一树没有重测画面哈希：共享宿主产物当时正被别的会话的临时插桩实验使用，没有重建。
+- **没做 / 留给后面**：`p5d-camo-s`（原点挂脚本）回放探针不跑脚本，只有单测；加载时的预热与视差点初值不看相机对象（WPE 这时的 eye 没测，`-par` 用的是 delay 0），带相机对象的模板场景开场可能不同；每个相机对象多读一次 `path` 文件，计进请求数。
+- **和真实写法之间的缺口（`FINAL_CHECK.md`，提交后补做）**：上面逐像素比的都是生成的工程，相机变换写死。语料 18 张的真实写法没有比过：
+  - 15 个相机对象的 `origin` 挂脚本，多数是同一个模板，按 `engine.canvasSize` 乘脚本属性定位，相机停在哪取决于运行时的 `canvasSize`；
+  - 14 个 `zoom` 绑用户属性；
+  - 另有按属性切换可见性轮换的多相机、`fov` 挂脚本、带父对象、`origin` / `zoom` 挂关键帧。
+
+  这 18 张都还缺别的能力，步骤 3 不解锁，画面上暂时看不出来。补做按原则 5：复制工程（只留相机对象及其脚本、绑定与几张图像层），在 WPE 里录帧，回放时让原点脚本照常跑，逐像素比。
+- 收尾：测试行全部移除；共享宿主产物按合并后的工作区重建。

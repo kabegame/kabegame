@@ -59,10 +59,10 @@ import {
   type SceneStyle,
 } from "./layout";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, type ParallaxState } from "./parallax";
-import { initialCameraPathState, perspectiveCamera, stepCameraSource, type CameraPathState } from "./camera";
+import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame, type CameraPathState } from "./camera";
 import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
-import { GpuScene, type SceneCamera } from "./scene";
-import { shakeOffset } from "./shake";
+import type { SceneGeneral, SceneLayer } from "../compile/bundle";
+import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
 
@@ -197,6 +197,10 @@ export class SceneRenderer {
    * 透视相机的路径状态（P5d 步骤 2，`camera.ts`）：每个实时帧求值后推进。整场重编译保留（同视差点：WPE 改属性不重建场景），新场景从头。
    */
   private cameraPath: CameraPathState = initialCameraPathState();
+  /** 场景里的相机对象图层（P5d 步骤 3，`cameraObjectLayers`），加载时取；每帧在里面选生效的。没有时为空，相机同步骤 2。 */
+  private cameraLayers: SceneLayer[] = [];
+  /** 当前场景的 general（相机对象的正交帧要 W、H 与透视覆盖的 fov），加载时取。 */
+  private sceneGeneral: SceneGeneral | null = null;
   /** 透视场景建场景时的画布分辨率（`GpuScene.build` 的 `size`）；正交场景为 null。 */
   private renderSize: [number, number] | null = null;
   /** 分辨率变化的去抖计时器（`RENDER_SIZE_SETTLE_MS`）与它在等的那个分辨率。 */
@@ -387,6 +391,8 @@ export class SceneRenderer {
     this.projection = [bundle.general.width, bundle.general.height];
     this.perspective = perspective;
     this.camera = perspective ? (bundle.general.camera ?? { ...DEFAULT_CAMERA, paths: [] }) : null;
+    this.cameraLayers = cameraObjectLayers(bundle);
+    this.sceneGeneral = bundle.general;
     this.renderSize = size ?? null;
     // 视差点：新场景回到场景中心（WPE 加载末尾写初值，rea-p5-camera.md 6.2；透视场景是 (0, 0)），重编译（换下的是同一张场景）保留。
     // 透视相机的路径状态同样（P5d 步骤 2）
@@ -652,25 +658,18 @@ export class SceneRenderer {
     // 视差点之前，脚本之后才跑，rea-p5-camera.md 第 5 节；脚本写 `camerashake*` 下一帧才生效）。交给场景要等粒子步进之后，见下。
     // 补画帧时间不变，s 也不变。缩放（P5a 步骤 4）同一时刻取：WPE 在相机更新时读 `zoom`，同在脚本之前（p3-script-REPORT L4）
     // 透视场景（P5d 步骤 2）：同一时刻按路径状态求来源姿态并推进（补画帧 dt 0，不推进），加三维抖动、算 V、P（宽高比取场景目标）
-    let camera: SceneCamera;
-    let eye: readonly [number, number];
-    if (this.perspective) {
-      const { pose, next } = stepCameraSource(this.camera!, this.cameraPath, frametime);
-      this.cameraPath = next;
-      const frame = perspectiveCamera({
-        pose,
-        fields: state.general,
-        time: wrapped,
-        width: scene.width,
-        height: scene.height,
-      });
-      camera = { kind: "perspective", frame };
-      eye = [frame.eye[0], frame.eye[1]];
-    } else {
-      const shake = shakeOffset(state.general, wrapped, height);
-      camera = { shake, zoom: state.general.zoom };
-      eye = shake;
-    }
+    // 相机对象（P5d 步骤 3）：同一时刻按状态里的可见性与变换选（`objects` 倒序第一个自身与父链都可见的，用的是上一帧脚本写过的状态）；
+    // 有它时透视场景用它的姿态与 fov、路径不推进，正交场景交它的视图（总缩放 `general.zoom × camera.zoom`），视差点的 eye.xy 加它的
+    const { camera, eye, path } = sceneCameraFrame({
+      cameraLayers: this.cameraLayers,
+      state,
+      general: this.sceneGeneral!,
+      time: wrapped,
+      perspective: this.perspective
+        ? { camera: this.camera!, path: this.cameraPath, dt: frametime, width: scene.width, height: scene.height }
+        : null,
+    });
+    if (path) this.cameraPath = path;
     // 视差点（P5a 步骤 2）：帧开头、粒子与脚本之前推进一次，用本帧的 `g_PointerPosition` 与帧时间（补画帧为 0，k 也是 0）；
     // 目标点的 eye.xy 就是 s（步骤 3），透视场景是透视相机的 eye.xy（W = H = 0）。开关关着时 P 与 `g_ParallaxPosition` 都不动
     this.parallax = advanceParallax(

@@ -17,7 +17,7 @@
  * ropetrail（P4d 步骤 2）走同一条路：输入里有一个 vec3（`a_TexCoordVec3C2`，按布局的 float 偏移读 3 个分量），段按槽序、每个存活
  * 粒子恒 n 段（`writeTrailSegments`），结果同样按段给出整条带子。
  */
-import type { SceneBundle } from "../compile/bundle";
+import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
@@ -29,7 +29,14 @@ import { particleSnapshot, type ParticleTrackParticle } from "../particles/track
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
 import { acquireGpu } from "../render/device";
 import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
-import { initialCameraPathState, perspectiveCamera, stepCameraSource, type CameraPathState } from "../render/camera";
+import {
+  cameraObjectLayers,
+  initialCameraPathState,
+  perspectiveCamera,
+  sceneCameraFrame,
+  stepCameraSource,
+  type CameraPathState,
+} from "../render/camera";
 import { drawParallax, initialParallaxState, replayParallax, type ParallaxState } from "../render/parallax";
 import { shakeOffset } from "../render/shake";
 import type { PackedVertexAttribute } from "../render/programs";
@@ -339,6 +346,21 @@ export function probePerspective(
 }
 
 /**
+ * 探针的相机对象（P5d 步骤 3）：场景里的相机对象图层与 general（正交帧要 W、H 与透视覆盖的 fov）。场景没有相机对象时为 undefined，
+ * `frameCamera` 照步骤 2 算（逐字不变）。
+ */
+export interface ProbeCameraObjects {
+  layers: readonly SceneLayer[];
+  general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">;
+}
+
+/** 探针的相机对象（`cameraObjectLayers`）；场景没有相机对象时为 undefined。 */
+export function probeCameraObjects(bundle: Pick<SceneBundle, "general" | "layers">): ProbeCameraObjects | undefined {
+  const layers = cameraObjectLayers(bundle);
+  return layers.length ? { layers, general: bundle.general } : undefined;
+}
+
+/**
  * 探针回放的相机（P5a 步骤 3、4）：每一帧按这一帧的 `g_Time` 算 s（`shakeOffset`，`height` 是场景的正交高），连同 `state.general.zoom`
  * 交给 `GpuScene.setCamera`，并记下 s；`eyes` 按帧序就是 `replayParallax` 的每帧 eye。回放的 n−1 帧经 `replayParticles` 的
  * `afterStep` 调，读回的那一帧由调用方在步进之后、`setParallax` 之前调。和渲染器一样，每一帧的粒子先用上一帧的相机步进（第一帧是
@@ -346,6 +368,8 @@ export function probePerspective(
  * 透视场景（P5d 步骤 2，给了 `perspective`）：同渲染器，每一帧按路径状态求来源姿态、再按这一帧的 dt 推进（第 k 次调用取 `dts[k]`，
  * 没给时 0），加三维抖动（`g_Time` 是 `time`），交给 `setCamera` 的是透视那一种；`eyes` 记透视相机的 eye.xy（视差点用它，W = H = 0）。
  * `compute` 只算不交（`renderFrame` 的 profile 帧要先步进粒子再交），`path` 是推进之后的路径状态。
+ * 相机对象（P5d 步骤 3，给了 `objects`）：同渲染器（`sceneCameraFrame`），每一帧按 `state` 里当时的可见性与变换选生效的相机对象；
+ * 有它时透视场景用它的姿态与 fov、路径不推进，正交场景交它的视图，`eyes` 记相机的 eye.xy（加 s）。
  */
 export function frameCamera(
   scene: Pick<GpuScene, "setCamera">,
@@ -353,6 +377,7 @@ export function frameCamera(
   height: number,
   perspective?: ProbePerspective,
   dts?: readonly number[],
+  objects?: ProbeCameraObjects,
 ): {
   apply: (time: number) => [number, number];
   compute: (time: number, dt?: number) => { camera: SceneCamera; eye: [number, number] };
@@ -365,6 +390,19 @@ export function frameCamera(
   const compute = (time: number, dt?: number): { camera: SceneCamera; eye: [number, number] } => {
     const step = dt ?? dts?.[index] ?? 0;
     index++;
+    if (objects) {
+      const result = sceneCameraFrame({
+        cameraLayers: objects.layers,
+        state,
+        general: objects.general,
+        time,
+        perspective: perspective
+          ? { camera: perspective.camera, path, dt: step, width: perspective.size[0], height: perspective.size[1] }
+          : null,
+      });
+      if (result.path) path = result.path;
+      return { camera: result.camera, eye: result.eye };
+    }
     if (!perspective) {
       const shake = shakeOffset(state.general, time, height);
       return { camera: { shake, zoom: state.general.zoom }, eye: shake };
@@ -407,6 +445,8 @@ export interface ReadbackReplayOptions {
   size: readonly [number, number];
   /** 透视场景的探针相机（P5d 步骤 2，`probePerspective`）：按 `particles.dts` 推路径状态，不移动对象。正交场景不给。 */
   perspective?: ProbePerspective;
+  /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的。没有相机对象时不给。 */
+  cameraObjects?: ProbeCameraObjects;
 }
 
 /**
@@ -426,7 +466,7 @@ export function replayReadback(
   const { particles, pointers } = options;
   const [width, height] = options.size;
   const last = pointers.pointers.length - 1;
-  const shake = frameCamera(scene, state, height, options.perspective, particles?.dts);
+  const shake = frameCamera(scene, state, height, options.perspective, particles?.dts, options.cameraObjects);
   const { time, frametime } = replayParticles(
     scene,
     state,
@@ -589,6 +629,7 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
         parallax: initialParallaxState(width, height, !!target),
         size: [width, height],
         perspective: target && probePerspective(bundle, target),
+        cameraObjects: probeCameraObjects(bundle),
       });
       const wanted = scene
         .particleStats()

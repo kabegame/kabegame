@@ -72,6 +72,9 @@ function targetKey(target: ScriptTarget): string {
     // 文本字段（P6b 1e）：同宿主 `targetPath`，属性就地写时据此忘掉脚本的旧写入
     case "text":
       return `objects/${target.object}/${target.field}`;
+    // 相机对象的 `fov` / `zoom`（P5d 步骤 3）：同宿主 `targetPath`
+    case "camera":
+      return `objects/${target.object}/${target.field}`;
     default:
       return target.path;
   }

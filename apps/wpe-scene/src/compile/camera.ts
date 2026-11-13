@@ -107,6 +107,24 @@ export function parseCameraPaths(json: unknown, out: CameraPath[]): void {
 export type CameraFs = Pick<SceneFs, "text">;
 
 /**
+ * 相机对象的 `path`（P5d 步骤 3，rea-p5-camera 4.4）：WPE 读它指向的文件、按 `paths` 数组建条目（关键帧在相邻帧间线性插值，结果写回相机
+ * 对象的 origin 与 angles）。条目动画没做：读出非空 `paths`、读不到、不是 JSON 或根不是对象时报 `camera:path`（语料 22 个都是
+ * `{"paths": []}`）。缺键（undefined / null）不读；不是字符串（绑属性等，`path` 不是描述符，WPE 怎么处理没读，语料 0）同样报。
+ * `paths` 不是数组时按空表（WPE 取不到数组就没有条目）。文件按项目散文件 → `scene.pkg` → assets 的现有查找读，计进请求数。
+ */
+export async function checkCameraObjectPath(path: unknown, fs: CameraFs, unsupported: Set<string>): Promise<void> {
+  if (path === undefined || path === null) return;
+  const text = typeof path === "string" && path ? await fs.text(path) : null;
+  let json: unknown = null;
+  try {
+    json = text === null ? null : parseWpeJson(text);
+  } catch {
+    json = null;
+  }
+  if (!isObject(json) || (Array.isArray(json.paths) && json.paths.length > 0)) unsupported.add("camera:path");
+}
+
+/**
  * 读 `scene.camera`：基准缺省 (2, 2, 2) / (0, 0, 0) / (0, 1, 0)；`paths` 里每个字符串按顺序读一个路径文件（不是字符串的项跳过），
  * 读不到或不是 JSON 报 `camera:paths:unreadable`、这个文件不加路径。只在透视场景调。
  * 第 0 条路径没有关键帧时 WPE 不走路径（rea 3.2 的条件只看第 0 条），整张表清空；别的没有关键帧的路径 WPE 求值时越界读（语料 0），

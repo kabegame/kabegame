@@ -61,15 +61,15 @@ import {
 } from "../render/blit";
 import { acquireGpu } from "../render/device";
 import { scenePlacement } from "../render/layout";
-import { initialCameraPathState, perspectiveCamera, stepCameraSource } from "../render/camera";
+import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame } from "../render/camera";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
-import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
 import { createDrawTracer, type TraceOptions } from "../render/trace";
 import type { SceneHost } from "../host";
 import {
   frameCamera,
+  probeCameraObjects,
   probePerspective,
   replayParticleOptions,
   replayReadback,
@@ -431,8 +431,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const cursor = pointers.cursors[0];
     const parallaxFrame = { pointer, width: sceneWidth, height: sceneHeight };
     let parallax = initialParallaxState(sceneWidth, sceneHeight, !!perspective);
-    // profile 帧的相机（透视场景的路径状态接着交给回放，同视差点）
-    const profileCamera = frameCamera(scene, state, sceneHeight, perspective);
+    // profile 帧的相机（透视场景的路径状态接着交给回放，同视差点）；相机对象（P5d 步骤 3）每帧按状态选，同渲染器
+    const cameraObjects = probeCameraObjects(bundle);
+    const profileCamera = frameCamera(scene, state, sceneHeight, perspective, undefined, cameraObjects);
     try {
       // 视频（P9a 步骤 3）：每段都 seek 好、当前帧可用之后才接上，profile 帧与读回那一帧的每个 draw 都拷同一帧；没有视频纹理时
       // 没有 draw 会问它，逐字节同以前。读不到 / 解码失败的那段不交出元素（透明），超过总时限在这里抛错
@@ -504,6 +505,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         parallax,
         size: [sceneWidth, sceneHeight],
         perspective: perspective && { ...perspective, path: profileCamera.path },
+        cameraObjects,
       });
       // 逐 draw 轨迹：从读回帧（含读回画布）的编码起记；这一帧的校验错误记进轨迹，不吞掉也不中断（轨迹正是查它用的）
       if (tracer) {
@@ -661,19 +663,25 @@ export async function hostRenderFrame(
   // 视差点的单位是场景的正交尺寸（`bundle.general`），没有 bundle 时退回场景目标尺寸
   const general = host.devScene.bundle?.general;
   const { width, height } = general ?? scene;
-  // 透视场景（P5d 步骤 2）：按路径起点求相机（同 `renderFrame` 不给 dts），抖动按 `time`；视差点 W = H = 0、不移动对象
+  // 透视场景（P5d 步骤 2）：按路径起点求相机（同 `renderFrame` 不给 dts），抖动按 `time`；视差点 W = H = 0、不移动对象。
+  // 相机对象（P5d 步骤 3）按当前状态选（同渲染器的 `sceneCameraFrame`）；没有 bundle 时没有相机对象
   const perspective = !!general?.perspective;
-  let eye: [number, number];
-  if (perspective) {
-    const { pose } = stepCameraSource(general!.camera ?? { ...DEFAULT_CAMERA, paths: [] }, initialCameraPathState(), 0);
-    const frame = perspectiveCamera({ pose, fields: state.general, time, width: scene.width, height: scene.height });
-    scene.setCamera({ kind: "perspective", frame });
-    eye = [frame.eye[0], frame.eye[1]];
-  } else {
-    const shake = shakeOffset(state.general, time, height);
-    scene.setCamera({ shake, zoom: state.general.zoom });
-    eye = shake;
-  }
+  const { camera, eye } = sceneCameraFrame({
+    cameraLayers: host.devScene.bundle ? cameraObjectLayers(host.devScene.bundle) : [],
+    state,
+    general: general ?? { width, height, perspectiveOverrideFov: 0 },
+    time,
+    perspective: perspective
+      ? {
+          camera: general!.camera ?? { ...DEFAULT_CAMERA, paths: [] },
+          path: initialCameraPathState(),
+          dt: 0,
+          width: scene.width,
+          height: scene.height,
+        }
+      : null,
+  });
+  scene.setCamera(camera);
   const parallax = advanceParallax(
     initialParallaxState(width, height, perspective),
     parallaxInput(state.general, { pointer: [0.5, 0.5], frametime: 0, width, height, eye }),
@@ -802,6 +810,9 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
     const perspective = !!bundle.general.perspective;
     if (perspective && options.cursors)
       throw new Error("透视场景的 particleTrack 还不支持 cursors（跟随点要按透视相机反投影）");
+    // 相机对象（P5d 步骤 3）：跟随点的反投影只认抖动与缩放（`particles/track.ts`），没接相机对象的视图
+    if (options.cursors && cameraObjectLayers(bundle).length)
+      throw new Error("带相机对象的场景的 particleTrack 还不支持 cursors（跟随点要按相机对象的视图反投影）");
     const size: [number, number] | undefined = perspective ? undefined : [bundle.general.width, bundle.general.height];
     return particleTrack({
       layers: bundle.layers,

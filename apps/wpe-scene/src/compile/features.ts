@@ -419,7 +419,7 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   const g = scene.general ?? {};
   // 投影类型同 `bundle.ts`（`SceneGeneral.perspective`）：`isOrthographic` 一处判定。透视相机已实现（P5d 步骤 2：透视投影、基准相机、
   // 路径、三维抖动，`render/camera.ts`），透视场景里没测过的用法照报 `camera:perspective:<用法>`（`perspectiveObjectIssues` 与
-  // `bundle.ts`）。相机对象归步骤 3，仍由未知键报 `object:camera`
+  // `bundle.ts`）。相机对象（步骤 3）在 `checkObjectFeatures` 里按 `CAMERA_KEYS` 放行，条目动画由 `compileScene` 报 `camera:path`
   const orthographic = isOrthographic(g);
   // 正交场景带路径：读码说那时不重置相机、视图会平移（rea-p5-camera 3.2），没测，语料 0
   if (orthographic && Array.isArray(scene.camera?.paths) && scene.camera.paths.length > 0)
@@ -594,6 +594,36 @@ export function isShapeObject(object: SceneObject): boolean {
 }
 
 /**
+ * 相机对象（P5d 步骤 3，rea-p5-camera 4.1）：WPE 的工厂（`FUN_14018ff60` 的 `0x140190654`）只看 `camera` 是不是字符串，取值没读（语料全是
+ * `"default"`）。它没有内容，编译期本来就作为分组节点进 `layers`（层级、可见性、`origin` 的字段脚本照常），`SceneLayer.camera` 记
+ * `fov` / `zoom`，渲染器每帧按 `objects` 倒序选第一个自身与父链都可见的（`render/camera.ts`）。`compileScene` 与能力表共用。
+ */
+export function isCameraObject(object: SceneObject): boolean {
+  return typeof object.camera === "string";
+}
+
+/**
+ * 相机对象同时带别的内容（图像、模型、粒子、声音、文本、灯、形状）：WPE 按哪个类建没查（语料 0 个），能力表报 `object:camera:mixed`，
+ * `compileScene` 不把它当相机。
+ */
+export function isMixedCameraObject(object: SceneObject): boolean {
+  return (
+    isCameraObject(object) &&
+    (objectKind(object) !== undefined ||
+      isSoundObject(object) ||
+      isTextObject(object) ||
+      typeof object.shape === "string")
+  );
+}
+
+/**
+ * 相机对象自己的键（类表 `0x1404e8460`，rea-p5-camera 4.1、4.4）：`camera` 是类型判断；`fov`、`zoom` 已实现（绑属性、挂 `{script}` 登记成
+ * 就地目标 `{ kind: "camera" }`，关键帧照旧由 `collectAnimations` 报 `value:animation:camera`）；`queuemode` 只在条目表非空时用，中性；
+ * `path` 的条目动画没做，读出非空 `paths` 或读不到时由 `compileScene` 报 `camera:path`（`compile/camera.ts` 的 `checkCameraObjectPath`）。
+ */
+const CAMERA_KEYS = new Set(["camera", "fov", "zoom", "path", "queuemode"]);
+
+/**
  * 文本对象自己的键（描述符表 `DAT_1404e88e0`，rea-p6b-layout 1.2）。排版类键、背景、`depthtest` 已实现或中性：
  * - `depthtest`：只在透视场景选 `_depth` 材质，正交场景恒用无深度材质（rea-p6b-raster 1，p6-REPORT 实测），透视场景里的文本对象
  *   另报 `camera:perspective:text`（P5d 步骤 2，`perspectiveObjectIssues`）；
@@ -725,6 +755,8 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * - `MODEL_NEUTRAL_FLAGS` 中性，`perspective: true` 中性（和 P5b 的透视图层同一套，`p5c-matrix` 实测）；
  * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers`（W6）等照未知键报；
  * - `dependencies` 中性（P8 步骤 4）：同别的对象只进并集，模型列的图像层照样被依赖、画进 RT（`3509243656` 的两个，模型材质没读这个名字）。
+ *
+ * 相机对象（P5d 步骤 3，`isCameraObject`）：`CAMERA_KEYS` 不报；同时带别的内容报 `object:camera:mixed`（`isMixedCameraObject`）。
  */
 export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>, parent: number | null = null): void {
   const kind = objectKind(object);
@@ -756,6 +788,10 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   const modelKey = (key: string) => kind === "model" && MODEL_NEUTRAL_FLAGS.includes(key);
   // 形状对象（P8 步骤 2）：`shape` 键本身已实现，`alignment` 不在形状的查找链上（rea-p8-layer 1.1），中性
   const shape = isShapeObject(object);
+  // 相机对象（P5d 步骤 3）：自己的键见 `CAMERA_KEYS`；同时带别的内容时 WPE 按哪个类建没查，照报
+  const camera = isCameraObject(object);
+  if (isMixedCameraObject(object)) unsupported.add("object:camera:mixed");
+  const cameraKey = (key: string) => camera && CAMERA_KEYS.has(key);
   for (const key of OBJECT_FLAGS)
     if (active(object[key]) && !lightKey(key) && !modelKey(key)) unsupported.add(`object:${key}`);
   // 对齐（P8 步骤 3）：图像层已实现，JSON 的任何写法都按 WPE 的 setter 取值（字符串查表，别的是 center），别的对象中性。图像层上挂
@@ -793,6 +829,7 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !lightKey(key) &&
       !soundKey(key) &&
       !textKey(key) &&
+      !cameraKey(key) &&
       !(kind === "particle" && key === "instanceoverride") &&
       !(shape && key === "shape") &&
       active(value)

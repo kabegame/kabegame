@@ -150,7 +150,13 @@ import { FBO_FORMATS } from "../compile/tex";
 import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
 import { pointerScenePoint, type ControlPointInputs } from "../particles/controlpoints";
 import { orientationBasis } from "../particles/orientation";
-import { initialPerspectiveFrame, ORTHO_VIEW_VECTORS, type PerspectiveCameraFrame, type ViewVectors } from "./camera";
+import {
+  initialPerspectiveFrame,
+  ORTHO_VIEW_VECTORS,
+  type OrthographicCameraFrame,
+  type PerspectiveCameraFrame,
+  type ViewVectors,
+} from "./camera";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
@@ -560,13 +566,26 @@ export interface ParticleOptions {
   audio?: ParticleAudio;
 }
 
+/** 两组数逐个相同（`Object.is`：区分 ±0 与 NaN）。 */
+function same(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+  return a.length === b.length && Array.prototype.every.call(a, (value: number, i: number) => Object.is(value, b[i]));
+}
+
 /** 正交场景一帧的相机（P5a 步骤 3、4）。`kind` 可省（P5d 步骤 2 之前的写法）。 */
 export interface OrthographicSceneCamera {
   kind?: "orthographic";
   /** 抖动偏移 s（`render/shake.ts` 的 `shakeOffset`），场景单位；关着时 (0, 0)。 */
   shake: readonly [number, number];
-  /** 正交缩放（`general.zoom`，缺键为 1），绕场景中心乘进投影（`sceneViewProjection`）。 */
+  /**
+   * 正交缩放（`general.zoom`，缺键为 1），绕场景中心乘进投影（`sceneViewProjection`）。有相机对象时是总缩放
+   * `general.zoom × camera.zoom`（已算进 `cameraObject`，这里只记着）。
+   */
   zoom: number;
+  /**
+   * 生效的相机对象的一帧（P5d 步骤 3，`render/camera.ts` 的 `orthographicCameraObjectFrame`，已含 s 与总缩放）：VP、透视覆盖、眼位与
+   * 视图向量都取它。没有可见相机对象时不给，走原来的「基准矩阵 × T(−s)」（字节不变）。
+   */
+  cameraObject?: OrthographicCameraFrame;
 }
 /** 透视场景一帧的相机（P5d 步骤 2，`render/camera.ts` 的 `perspectiveCamera`）：V、P、eye 与视图向量。 */
 export interface PerspectiveSceneCamera {
@@ -996,6 +1015,11 @@ export class GpuScene {
   private zoom = 1;
   /** `setCamera` 改了相机、draw 还没按新相机重写：下一次 `setParallax` 整体刷一遍（与视差的刷新合成一次）。 */
   private cameraDirty = false;
+  /**
+   * 正交场景当前的相机来自相机对象（P5d 步骤 3，`applyCameraObject`）：这时 VP、透视覆盖、眼位与视图向量都是相机对象的，`zoom` /
+   * `shake` / 两份基准矩阵还是上一次没有相机对象时的。回到没有相机对象时要整套重算（不能按 zoom 与 s 没变提前返回）。
+   */
+  private objectCamera = false;
   /**
    * 场景当前的视图向量（P5d 步骤 2）：`g_ViewForward` / `g_ViewRight` / `g_ViewUp` 与粒子朝向的视线、上方向。正交场景恒为常量；
    * 透视场景随 `setCamera` 换。
@@ -2599,16 +2623,27 @@ export class GpuScene {
    * 与眼位（`eyePosition(general, s)`，不随缩放变，步骤 4 补测），并标记相机变了。s 为 (0, 0) 时直接用基准矩阵，字节同没有抖动。
    * 只改场景级的值：下一次 `stepParticles`（即下一帧的模拟，同 WPE 用上一帧的相机）的指针反投影用它，draw 的 uniform 留给随后的
    * `setParallax` 一起重写（一帧至多一次）。
+   * 正交场景带 `cameraObject`（P5d 步骤 3，有可见的相机对象）时整套取它（`applyCameraObject`）；没有时逐字同以前，只是刚离开相机对象
+   * 的那一帧不提前返回、视图向量回到常量。
    */
   setCamera(camera: SceneCamera): void {
     if (camera.kind === "perspective") {
       this.applyPerspective(camera.frame);
       return;
     }
+    if (camera.cameraObject) {
+      this.applyCameraObject(camera.cameraObject);
+      return;
+    }
     const [x, y] = camera.shake;
     const { zoom } = camera;
     const zoomed = zoom !== this.zoom;
-    if (!zoomed && x === this.shake[0] && y === this.shake[1]) return;
+    if (!zoomed && x === this.shake[0] && y === this.shake[1] && !this.objectCamera) return;
+    // 刚离开相机对象（P5d 步骤 3，相机对象被隐藏）：视图向量回到正交常量，下面按 zoom 与 s 整套重算
+    if (this.objectCamera) {
+      this.objectCamera = false;
+      this.viewVectors = ORTHO_VIEW_VECTORS;
+    }
     if (zoomed) {
       this.zoom = zoom;
       this.baseViewProjection = sceneViewProjection(this.bundle.general, zoom);
@@ -2630,8 +2665,6 @@ export class GpuScene {
    * 相机变了（draw 的重写同正交，留给随后的 `setParallax`）。透视粒子那一份不动（照报）。
    */
   private applyPerspective(frame: PerspectiveCameraFrame): void {
-    const same = (a: ArrayLike<number>, b: ArrayLike<number>) =>
-      a.length === b.length && Array.prototype.every.call(a, (value: number, i: number) => Object.is(value, b[i]));
     const vectors = this.viewVectors;
     if (
       same(frame.viewProjection, this.viewProjection) &&
@@ -2642,6 +2675,31 @@ export class GpuScene {
     )
       return;
     this.viewProjection = this.baseViewProjection = frame.viewProjection;
+    this.eye = [...frame.eye];
+    this.viewVectors = frame.vectors;
+    this.cameraDirty = true;
+  }
+
+  /**
+   * 正交场景的相机对象（P5d 步骤 3）：场景级的视图投影换成 `sceneViewProjection(general, 总缩放) · V`，透视覆盖（透视粒子、
+   * `perspective: true` 的图像层 / 模型）换成在相机 V 上做的那一份，`g_EyePosition` 加相机的 eye.xy，视图向量取 V（都在
+   * `orthographicCameraObjectFrame` 里算好）。有变化才标记相机变了（draw 的重写同正交，留给随后的 `setParallax`）。
+   */
+  private applyCameraObject(frame: OrthographicCameraFrame): void {
+    const vectors = this.viewVectors;
+    if (
+      this.objectCamera &&
+      same(frame.viewProjection, this.viewProjection) &&
+      same(frame.perspectiveViewProjection, this.perspectiveViewProjection) &&
+      same(frame.eye, this.eye) &&
+      same(frame.vectors.forward, vectors.forward) &&
+      same(frame.vectors.right, vectors.right) &&
+      same(frame.vectors.up, vectors.up)
+    )
+      return;
+    this.objectCamera = true;
+    this.viewProjection = frame.viewProjection;
+    this.perspectiveViewProjection = frame.perspectiveViewProjection;
     this.eye = [...frame.eye];
     this.viewVectors = frame.vectors;
     this.cameraDirty = true;

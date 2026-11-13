@@ -1,8 +1,12 @@
 /**
  * 透视相机（P5d 步骤 2，`.claude/plans/wpe-import/3-scene/phase5/phase-5d-camera-depth.md`「步骤 2」点 3）：纯函数，不碰 GPU。
  *
- * - **来源**：「相机对象 > 路径 > 基准」三选一（rea-p5-camera 3.2、4.2），相机对象归步骤 3（透视场景有可见相机对象时整张照报
- *   `object:camera`），这里只有后两个。基准与路径表来自编译期（`compile/camera.ts` 的 `SceneCameraJson`）。
+ * - **来源**：「相机对象 > 路径 > 基准」三选一（rea-p5-camera 3.2、4.2）。基准与路径表来自编译期（`compile/camera.ts` 的
+ *   `SceneCameraJson`）；相机对象（P5d 步骤 3）每帧按 `objects` 倒序选第一个自身与父链都可见的（`activeCameraObject`），有它时路径
+ *   不推进，透视场景的 fov 取它的（`perspectiveCamera` 的 `fov`）。
+ * - **正交场景的相机对象**（P5d 步骤 3，`orthographicCameraObjectFrame`）：V = lookAtRH(eye + s, center + s, up)（s 是正交抖动），
+ *   VP = 正交投影（总缩放 `general.zoom × camera.zoom`）· V，`g_EyePosition` 加相机的 eye.xy，视图向量取 V，透视覆盖在相机 V 上做
+ *   （`particleViewProjection` 的 `view`）。没有可见相机对象时正交场景照旧是单位视图（P5a），不经过这里。
  * - **路径**（rea-p5-camera 3.2【确】，`p5d-path` 实测）：状态三元组（路径下标 `G+0xe4`、关键帧下标 `G+0xe8`、本路径内时间
  *   `G+0xec`）。每帧先求值、再 `t += dt`：
  *   1. `t < k[i].t`：取 k[i]，段末 e = k[i].t + (i + 1 < n ? k[i+1].t : 0)；
@@ -25,10 +29,14 @@
  * 模拟用上一帧的相机），补画帧 dt 为 0、路径不推进。路径状态归渲染器，整场重编译保留（同视差点，WPE 改属性不重建场景）。
  */
 import type { GeneralValues } from "../compile/bindings";
+import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { DEFAULT_CAMERA, type CameraPath, type SceneCameraJson, type Vec3 } from "../compile/camera";
+import { effectiveVisible, eyePosition, particleViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
 import type { Mat4 } from "./math";
 import { multiply } from "./math";
-import { shakeOffset3, type ShakeFields } from "./shake";
+import type { SceneCamera } from "./scene";
+import { shakeOffset, shakeOffset3, type ShakeFields } from "./shake";
+import type { SceneState } from "./state";
 
 const f = Math.fround;
 /** WPE 的度转弧度常量（`G+0x148 × 0.017453292`，rea-p5-camera 1.1）。 */
@@ -239,9 +247,11 @@ export function perspectiveFov(degrees: number): number {
 export type CameraFields = Pick<GeneralValues, "fov" | "nearz" | "farz"> & ShakeFields;
 
 export interface PerspectiveCameraInput {
-  /** 来源姿态（`stepCameraSource`）。 */
+  /** 来源姿态（`stepCameraSource`，或生效的相机对象 `activeCameraObject`）。 */
   pose: CameraPose;
   fields: CameraFields;
+  /** 竖直 fov（度）：生效的相机对象的 `fov`（P5d 步骤 3，rea-p5-camera 4.2）；不给时取 `fields.fov`。同样钳制。 */
+  fov?: number;
   /** 本帧的 `g_Time`（抖动用，同正交）。 */
   time: number;
   /** 场景目标尺寸（透视场景就是画布，宽高比取它）。 */
@@ -273,7 +283,7 @@ export function perspectiveCamera(input: PerspectiveCameraInput): PerspectiveCam
   const center: Vec3 = [f(pose.center[0] + sx), f(pose.center[1] + sy), f(pose.center[2] + sz)];
   const view = lookAtRH(eye, center, pose.up);
   const aspect = f(input.width / input.height);
-  const projection = perspectiveRH(perspectiveFov(fields.fov), aspect, f(fields.nearz), f(fields.farz));
+  const projection = perspectiveRH(perspectiveFov(input.fov ?? fields.fov), aspect, f(fields.nearz), f(fields.farz));
   const vectors = lookAtVectors(eye, center, pose.up);
   // `+ 0` 把 −0 换成 +0（正对相机时叉积里的 −0，写进缓冲没有分别，只为比较方便）
   const round = (v: Vec3): Vec3 => [f(v[0]) + 0, f(v[1]) + 0, f(v[2]) + 0];
@@ -300,4 +310,167 @@ export function initialPerspectiveFrame(
   const source = camera ?? { ...DEFAULT_CAMERA, paths: [] };
   const { pose } = stepCameraSource(source, initialCameraPathState(), 0);
   return perspectiveCamera({ pose, fields, time: 0, width, height });
+}
+
+/** 本帧生效的相机对象（P5d 步骤 3，`activeCameraObject`）。 */
+export interface ActiveCameraObject {
+  /** `objects` 下标。 */
+  object: number;
+  /** eye = 世界矩阵的平移、center = eye − 第 2 列（看本地 −Z）、up = 第 1 列（本地 +Y，带缩放，lookAt 里归一化），float32；`zoom` 同下。 */
+  pose: CameraPose;
+  /** 相机对象的 `fov`（度，`SceneState.cameras`）：只有透视场景用（正交场景 WPE 不改 `G+0x148`，rea-p5-camera 4.2）。 */
+  fov: number;
+  /** 相机对象的 `zoom`：正交场景乘进 `general.zoom`（`G.zoom × G+0x114`，rea-p5-camera 第 1 节第 4 步），透视场景不起作用。 */
+  zoom: number;
+}
+
+/**
+ * 本帧生效的相机对象（rea-p5-camera 4.2【确】，步骤 0 `p5d-camp-1` / `-2` 实测）：按 `objects` 下标从大到小找第一个自身与父链都可见
+ * （`effectiveVisible`）的相机图层（`SceneLayer.camera` 非空），取它的世界矩阵（`worldMatrixOf`，含父链）：eye = 平移（列主序缓冲的
+ * [12..14]）、center = eye − 第 2 列（[8..10]）、up = 第 1 列（[4..6]）。都不可见或没有相机对象时为 null（回到路径 / 基准，正交场景是
+ * 单位视图）。`fov` / `zoom` 读 `SceneState.cameras`（就地写之后的值），状态里没有时取编译期的。`worlds` 是 `worldMatrixOf` 的缓存，
+ * 跟随调用方的一次状态快照。
+ */
+export function activeCameraObject(
+  bundle: { readonly layers: readonly SceneLayer[] },
+  state: Pick<SceneState, "layers" | "cameras">,
+  worlds: Map<number, Mat4> = new Map(),
+): ActiveCameraObject | null {
+  let best: { object: number; fov: number; zoom: number } | null = null;
+  for (const layer of bundle.layers) {
+    if (!layer.camera || (best && layer.object < best.object) || !state.layers.has(layer.object)) continue;
+    if (!effectiveVisible(layer.object, state.layers)) continue;
+    best = { object: layer.object, ...(state.cameras.get(layer.object) ?? layer.camera) };
+  }
+  if (!best) return null;
+  const w = worldMatrixOf(best.object, state.layers, worlds);
+  const eye: Vec3 = [f(w[12]), f(w[13]), f(w[14])];
+  const pose: CameraPose = {
+    eye,
+    center: [f(eye[0] - w[8]), f(eye[1] - w[9]), f(eye[2] - w[10])],
+    up: [f(w[4]), f(w[5]), f(w[6])],
+    zoom: best.zoom,
+  };
+  return { object: best.object, pose, fov: best.fov, zoom: best.zoom };
+}
+
+/** 正交场景带相机对象的一帧（P5d 步骤 3）的输入。 */
+export interface OrthographicCameraInput {
+  /** 生效的相机对象的姿态（`activeCameraObject`）。 */
+  pose: CameraPose;
+  /** 本帧的正交抖动 s（`render/shake.ts` 的 `shakeOffset`），z 为 0。 */
+  shake: readonly [number, number];
+  /** 总缩放 `general.zoom × camera.zoom`（float32，`orthographicCameraZoom`）。 */
+  zoom: number;
+  general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">;
+}
+
+/** 正交场景带相机对象的一帧（交给 `GpuScene.setCamera` 的正交那种的 `cameraObject`）。 */
+export interface OrthographicCameraFrame {
+  /** V = lookAtRH(eye + s, center + s, up)。 */
+  view: Mat4;
+  /** `sceneViewProjection(general, zoom) · V`。 */
+  viewProjection: Mat4;
+  /** 透视覆盖（透视粒子、`perspective: true` 的图像层 / 模型）：`particleViewProjection(general, zoom, V)`。 */
+  perspectiveViewProjection: Mat4;
+  /** `g_EyePosition` = (eye.x + s.x + W/2, eye.y + s.y + H/2, 2000)。 */
+  eye: number[];
+  /** 视差点的 eye.xy（补测 `p5d-camo-par`）：相机的 eye.xy + s，float32。 */
+  parallaxEye: [number, number];
+  /** 视图向量（float32）：取 V（步骤 0 `p5d-camo-r`）。 */
+  vectors: ViewVectors;
+}
+
+/** 正交场景的总缩放（rea-p5-camera 第 1 节第 4 步：`G.zoom × G+0x114`），float32。 */
+export function orthographicCameraZoom(generalZoom: number, cameraZoom: number): number {
+  return f(f(generalZoom) * f(cameraZoom));
+}
+
+/**
+ * 正交场景带相机对象的一帧（rea-p5-camera 4.3、6.2、7.2，步骤 0 `p5d-camo-c` / `-o` / `-r` 与补测 `-pp` / `-ppr` / `-par` /
+ * `-shake` 实测）：抖动加在相机的 eye 与 center 上（z 不变）再 lookAt；正交投影仍是 0..W × 0..H（总缩放绕场景中心），所以世界点
+ * (x, y) 落在投影坐标 (x − eye.x − s.x, y − eye.y − s.y)（angles 为 0 时）；`g_EyePosition` 照正交公式加上 eye.xy + s。
+ */
+export function orthographicCameraObjectFrame(input: OrthographicCameraInput): OrthographicCameraFrame {
+  const { pose, general, zoom } = input;
+  const [sx, sy] = input.shake;
+  const eye: Vec3 = [f(pose.eye[0] + sx), f(pose.eye[1] + sy), pose.eye[2]];
+  const center: Vec3 = [f(pose.center[0] + sx), f(pose.center[1] + sy), pose.center[2]];
+  const view = lookAtRH(eye, center, pose.up);
+  const vectors = lookAtVectors(eye, center, pose.up);
+  // `+ 0` 把 −0 换成 +0（同 `perspectiveCamera`）
+  const round = (v: Vec3): Vec3 => [f(v[0]) + 0, f(v[1]) + 0, f(v[2]) + 0];
+  return {
+    view,
+    viewProjection: multiply(sceneViewProjection(general, zoom), view),
+    perspectiveViewProjection: particleViewProjection(general, zoom, view),
+    eye: eyePosition(general, [eye[0], eye[1]]),
+    parallaxEye: [eye[0], eye[1]],
+    vectors: { forward: round(vectors.forward), right: round(vectors.right), up: round(vectors.up) },
+  };
+}
+
+/** 场景里的相机对象图层（`SceneLayer.camera` 非空，P5d 步骤 3）：渲染器与探针建场景时取一次，每帧只在它们里面选。 */
+export function cameraObjectLayers(bundle: Pick<SceneBundle, "layers">): SceneLayer[] {
+  return bundle.layers.filter((layer) => !!layer.camera);
+}
+
+/** 一帧相机的输入（渲染器与 dev 探针共用，P5d 步骤 3）。 */
+export interface SceneCameraInput {
+  /** 场景的相机对象图层（`cameraObjectLayers`）；空时不选，正交与透视都同步骤 2。 */
+  cameraLayers: readonly SceneLayer[];
+  /** 场景状态：相机对象的可见性与变换（图层字段）、`fov` / `zoom`（`cameras`），脚本之前的 general 字段。 */
+  state: Pick<SceneState, "layers" | "cameras" | "general">;
+  /** 场景的 general：正交的 W、H（抖动按 H 算）与透视覆盖的 fov。 */
+  general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">;
+  /** 本帧的 `g_Time`（抖动用）。 */
+  time: number;
+  /** 透视场景：基准与路径、路径状态、本帧推进路径的 dt（补画帧 0）、场景目标尺寸；正交场景为 null。 */
+  perspective: {
+    camera: SceneCameraJson;
+    path: CameraPathState;
+    dt: number;
+    width: number;
+    height: number;
+  } | null;
+}
+
+export interface SceneCameraResult {
+  /** 交给 `GpuScene.setCamera` 的一帧。 */
+  camera: SceneCamera;
+  /** 视差点的 eye.xy（`parallaxInput` 的 `eye`）：正交是 s（有相机对象时加它的 eye.xy），透视是透视相机的 eye.xy。 */
+  eye: [number, number];
+  /** 推进之后的路径状态：透视场景有相机对象时原样（WPE 只在没有相机对象时走路径，rea-p5-camera 4.2）；正交场景为 null。 */
+  path: CameraPathState | null;
+}
+
+/**
+ * 一帧的相机（渲染器每帧、dev 探针每个回放帧调，帧开头、粒子步进之前按脚本之前的状态求，粒子步进之后交给 `setCamera`）：
+ * - 先选相机对象（`activeCameraObject`）；
+ * - 透视场景：有相机对象时用它的姿态与 fov、路径不推进，否则路径 / 基准（`stepCameraSource`，推进 `dt`）；再加三维抖动（`perspectiveCamera`）；
+ * - 正交场景：抖动 s（`shakeOffset`）；有相机对象时交 `orthographicCameraObjectFrame`（总缩放 `general.zoom × camera.zoom`），没有时同
+ *   P5a（`{ shake, zoom: general.zoom }`，场景里逐字不变）。
+ */
+export function sceneCameraFrame(input: SceneCameraInput): SceneCameraResult {
+  const { state, perspective } = input;
+  const active = input.cameraLayers.length ? activeCameraObject({ layers: input.cameraLayers }, state) : null;
+  if (perspective) {
+    const { pose, next } = active
+      ? { pose: active.pose, next: perspective.path }
+      : stepCameraSource(perspective.camera, perspective.path, perspective.dt);
+    const frame = perspectiveCamera({
+      pose,
+      ...(active ? { fov: active.fov } : {}),
+      fields: state.general,
+      time: input.time,
+      width: perspective.width,
+      height: perspective.height,
+    });
+    return { camera: { kind: "perspective", frame }, eye: [frame.eye[0], frame.eye[1]], path: next };
+  }
+  const shake = shakeOffset(state.general, input.time, input.general.height);
+  if (!active) return { camera: { shake, zoom: state.general.zoom }, eye: shake, path: null };
+  const zoom = orthographicCameraZoom(state.general.zoom, active.zoom);
+  const frame = orthographicCameraObjectFrame({ pose: active.pose, shake, zoom, general: input.general });
+  return { camera: { shake, zoom, cameraObject: frame }, eye: frame.parallaxEye, path: null };
 }

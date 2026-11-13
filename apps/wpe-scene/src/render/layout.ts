@@ -315,10 +315,15 @@ export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "heigh
  * `zoom` 是 `general.zoom`（P5a 步骤 4）：d 取已含正交缩放的投影的可见高，`d = (h/(2·zoom)) / tan(fov/2)`（rea-p5-camera.md 7.2 的
  * `(1/P11)/tan(fov/2)`），far 用新的 d；投影本身（fov、宽高比）与相机的 x、y 不变。步骤 4 补测 `p5a-zoomx15` / `zoomx08` 两档 3 帧和 WPE
  * 逐项差 < 1e-4，按不缩放的 d 差上百。zoom 为 1 时字节同以前。
+ *
+ * `view` 是正交场景里相机对象的视图 V（P5d 步骤 3，`render/camera.ts` 的 `orthographicCameraObjectFrame`；rea-p5-camera 7.2：WPE 改的是
+ * 当前 V 的拷贝）：旋转不变，平移换成 `(t.x − W/2, t.y − H/2, −d)`（补测 `p5d-camo-pp` / `-ppr`，旋转与 zoom 都保留）。不给时是单位视图，
+ * 同以前（字节不变）。
  */
 export function particleViewProjection(
   general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">,
   zoom = 1,
+  view?: Mat4,
 ): Mat4 {
   const { width, height } = general;
   const focal = 1 / Math.tan(general.perspectiveOverrideFov / 2);
@@ -331,7 +336,12 @@ export function particleViewProjection(
   projection[10] = near / (far - near);
   projection[11] = -1;
   projection[14] = (far * near) / (far - near);
-  return multiply(projection, translation(-width / 2, -height / 2, -d));
+  if (!view) return multiply(projection, translation(-width / 2, -height / 2, -d));
+  const moved = new Float32Array(view);
+  moved[12] = view[12] - width / 2;
+  moved[13] = view[13] - height / 2;
+  moved[14] = -d;
+  return multiply(projection, moved);
 }
 
 /** 组的局部正交的深度范围 ±1000（WPE `ortho(−w/2, w/2, −h/2, h/2, −1000, 1000)`，rea-p5-modelflags §2.5）。 */
