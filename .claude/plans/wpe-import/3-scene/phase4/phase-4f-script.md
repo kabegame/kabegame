@@ -346,7 +346,7 @@ this.instanceColor = state.instanceColor.map((c) => f32(c * k));
 | 覆盖 | 165 张口径粒子用法完全覆盖 104 → 107；还挡着的只剩 `particle:renderers` 1 张（步骤 4） |
 | 回放 `f2`（新案例：`p4f-bright` 超高档按 `ultra` 编译、关闭档按 `disabled` 编译，6 个系统） | 全过，两档颜色、alpha 差 0（HEAD 上超高档 `b-05`、`b-2`、`b-2-cn`、`b-2-a` 颜色超限、`b-1` 与 `b-2-f8` 通过）。为它给 kbp-tools 加了案例参数 `postprocess`（`replayLib.ts` 的编译按档位缓存，缺省 `disabled`，旧案例逐字节不变） |
 | 变异（`ignore/p4/f2/mutate_f2.py`，7 处） | 全部检出：不看 HDR、不看 `flags & 8`、`k` 钳到 1、不乘、alpha 也乘、编译期不传 HDR（这 6 处单测与 `f2` 都抓到）、`brightness` 不在脚本键表里（只有单测）；还原后树哈希相同 |
-| 真机 | 用户把「场景后处理」调成超高后做。工作区里别的会话未提交的 `compile/animations.ts`（P10）引用了 `scripts.ts` 里还没加的导出，宿主按工作区构建不了，所以拼一份宿主工程（`ignore/p4/f2/hostbuild`，`src` 是「HEAD + 本步」的快照副本、补上未入库的 `wpefont.wasm`），经 `KABEGAME_WPE_SCENE_OUT_DIR` 构建进 dev 的资源目录。导入 `p4f-bright`（本步之后没有不支持项、不用强制渲染）开预览截图，和 WPE 超高档抓帧的上屏画面（fp16 线性换 sRGB）在六组粒子带上逐点比：`b-05` (60, 66, 60)、`b-2` (235, 236, 235)、`b-2-cn` (173, 255, 173，泛光带光晕) 等全部相同或差 1–2 个色阶，`b-2-f8` 同基准，`b-2-a` 半透明虚线只在一个采样点上落到了空隙（时刻不同）。截图 `ignore/p4/f2/out/real-p4f-bright-ultra.png`，WPE 画面 `ignore/p4/f2/out/wpe-frames/`。测完 `projects_remove` 移除了测试行；没测还差别的项的真实场景 |
+| 真机（2026-11-13 提交 `a32a8071`） | 用户把「场景后处理」调成超高后做。工作区里别的会话未提交的 `compile/animations.ts`（P10）引用了 `scripts.ts` 里还没加的导出，宿主按工作区构建不了，所以拼一份宿主工程（`ignore/p4/f2/hostbuild`，`src` 是「HEAD + 本步」的快照副本、补上未入库的 `wpefont.wasm`），经 `KABEGAME_WPE_SCENE_OUT_DIR` 构建进 dev 的资源目录。导入 `p4f-bright`（本步之后没有不支持项、不用强制渲染）开预览截图，和 WPE 超高档抓帧的上屏画面（fp16 线性换 sRGB）在六组粒子带上逐点比：`b-05` (60, 66, 60)、`b-2` (235, 236, 235)、`b-2-cn` (173, 255, 173，泛光带光晕) 等全部相同或差 1–2 个色阶，`b-2-f8` 同基准，`b-2-a` 半透明虚线只在一个采样点上落到了空隙（时刻不同）。截图 `ignore/p4/f2/out/real-p4f-bright-ultra.png`，WPE 画面 `ignore/p4/f2/out/wpe-frames/`。测完 `projects_remove` 移除了测试行；没测还差别的项的真实场景 |
 
 ## 已定（2026-11-13 用户，都按推荐）
 
@@ -367,3 +367,156 @@ this.instanceColor = state.instanceColor.map((c) => f32(c * k));
 3. ~~**`emitParticles` 越过的门**~~：步骤 0 查清，不越过容量（满了丢弃，实测 `a-emit-cap`）。
 4. **脚本发出的粒子本帧不画**（步骤 3）：WPE 在写完顶点之后才跑脚本，我们是脚本跑完才写顶点；要在脚本之前记下各系统写顶点用的存活数，或把脚本发出的粒子挂到下一帧，否则会早画一帧、年龄差一帧。
 5. **和 WPE 有意不同的三处**（已定 5–7）：自然结束后 `play()` 重新发射、`stop()` 之后改系数不发射、脚本发射建事件实例用 `W`。用到这几处的场景画面会和 WPE 不同（我们是作者预期的样子）；挂了字段脚本的系统在 WPE 里 `stop` 会被下一帧的置脏撤销，我们这边保持停止。
+
+## 步骤 3 — `IParticleSystem` 的方法与 `instance` 对象
+
+### 思路
+
+粒子对象的图层代理照 P6a 给声音对象登记 `ISoundLayer` 的做法，另登记五个方法和只读字段 `instance`（rea-p4f-script 1.1–1.3）。方法落到根 `ParticleSystem` 上新开的几个入口；`instance` 是一个代理对象，24 个字段（7 个系数、`colorn`、`brightness`、`controlpoint0..7`、`controlpointangle0..7`）的读写全部经现有的 `particle-instance` 目标：写走 `SceneState.write`（和用户属性、字段脚本同一个 setter，`rate` 走步骤 1 的单独路径，下一帧生效），读取读状态里的覆盖值（没设过的控制点 x 是 FLT_MAX、`colorn` 是 (−1, −1, −1)，5.1）。控制点的运行时改值是新增的：`setInstance` 照 5.5 把覆盖写进 `cp[N]` 的 base（平移替换、角度 Z·Y·X 换 3×3，跳过 `0x10005`），递归到 static 子系统与事件实例；顺带字段脚本与用户属性也能挂在控制点覆盖上。
+
+方法的语义照读码第 2–4 节，三处照已定 5–7 不复刻：
+- `pause`：根上置「脚本暂停」位，整棵树共用（新建、复用的事件实例同样带上）。暂停时发射函数整段不跑：不发射，`delay`、`duration`、周期计时、余数都冻结，eventspawn / eventfollow 不建；模拟、判死、eventdeath 照常（2.1）。
+- `stop`：根与 static 子孙的发射器全部标结束、计时复位（同不可见复位的 `resetEmitterTiming`）、图层时间清零、清全部粒子、销毁各层的活跃事件实例（空闲池保留），不清暂停位（2.3）。另记「被 `stop` 停下」：这之后置脏重算不重开发射器，只有 `play()` 能解（已定 6）。
+- `play`：清暂停位；整棵树不活跃时复位发射计时、清结束位、重开（递归 static），不预热（已定 5：WPE 不复位计时，`duration` 型发射器停在 −1）。还活跃时只清暂停位（2.2）。
+- `isPlaying` = 没暂停 且 `isActive()`（第 3 节）。
+- `emitParticles(n)`：只认整数，0 与非整数（含缺参数）当 1、负数不发（4.1，实测 `()`、`(0)`、`(2.7)` 都是 1，`(-3)` 是 0）。在脚本阶段当场发：每个发射器各发 `n` 个，每条现算 `容量 − 存活数`，满了丢弃；没被挡的发射器（没结束、没暂停、`delay ≤ 0`）连同待发的 `instantaneous` 一起记欠账（`acc −= pending + n`），被挡的不动计时（4.3）；照常触发 eventspawn / eventfollow，建实例用对象的 `W`（已定 7）。新粒子与脚本阶段新建的事件实例**本帧不画**：WPE 在写完顶点之后才跑脚本，下一帧模拟开头它们先增龄 `dt′` 再画（4.4）。我们的帧序是脚本之后才写顶点，所以给这批粒子记「本帧脚本出生」，写顶点与 `particleSnapshot` 跳过它们，下一次 `step` 开头清掉标记。
+
+编译期去掉对应的不支持项：`scriptApi.ts` 的 `PARTICLE_LAYER_METHODS` 宁可多报规则整条删掉（粒子层与声音层的同名方法都有了），`MISSING_SCRIPT_API` 删 `emitParticles` 与 `instance`；`checkParticleInstance` 的控制点挂脚本、绑用户属性（`particle:instance:controlpoint:user`）不再报。
+
+不解锁场景：语料里带粒子层脚本方法键的 41 张，去掉这类键后最少还差 3 项（`ignore/p4/f2/out/regress` 的扫描）。粒子覆盖不变（107）。
+
+### 现状锚点
+
+**a. 编译期宁可多报**（`compile/scriptApi.ts`）
+```ts
+export const PARTICLE_LAYER_METHODS: readonly string[] = ["play", "pause", "stop", "isPlaying"];
+// scanScriptApi：场景里有粒子层时，任意接收者上的这四个名字都报 `particle.<名>`
+...methods("any", ["emitParticles"], UNIQUE),   // MISSING_SCRIPT_API 的 layer 组；字段表里还有 "instance"
+```
+
+**b. 图层代理只给声音对象登记播放方法**（`script/api.ts`）
+```ts
+if (this.isSoundLayer(index)) this.installSound(api, index); // 现状：粒子对象上没有 play / … / emitParticles / instance
+sound?(object: number): SoundScriptTarget | null;           // 访问接口只有声音
+```
+
+**c. 发射没有暂停门、没有脚本发射入口**（`particles/system.ts` 的 `emit`）
+```ts
+private emit(dt: number, record = false): void {
+  for (const emitter of this.emitters) {
+    const count = emissionCount(emitter.state, emitter.fields, dt, this.alive, capacity, this.random, this.context.audio);
+    // 现状：没有「脚本暂停」位；没有 n > 0 越过门的路径
+```
+
+**d. 控制点覆盖只在建系统时用一次**（`particles/controlpoints.ts`）
+```ts
+const angle = def.instance.controlpointAngles[i];   // 现状：静态值，运行中改不了
+const position = def.instance.controlpoints[i];
+// features.ts：控制点绑用户属性报 particle:instance:controlpoint:user，挂脚本报 particle:binding:instance:controlpoint<N>
+```
+
+### 点 1 — 模拟（`particles/system.ts`、`particles/emitters.ts`、`particles/vertices.ts`、`particles/track.ts`）
+
+- **新增** `ParticleSystem`（只在根上调用）：
+```ts
+/** 脚本 `pause()`（rea-p4f-script 2.1）：置暂停位，整棵树的发射整段不跑（计时冻结），模拟照常。 */
+scriptPause(): void;
+/** 脚本 `play()`（2.2，已定 5）：清暂停位；整棵树不活跃时复位发射计时、清结束位、重开（递归 static），不预热。 */
+scriptPlay(): void;
+/** 脚本 `stop()`（2.3，已定 6）：标结束、复位计时、图层时间清零、清粒子、销毁活跃事件实例（递归），记「被 stop 停下」。 */
+scriptStop(): void;
+/** 脚本 `isPlaying()`（第 3 节）。 */
+scriptIsPlaying(): boolean;
+/** 脚本 `emitParticles(n)`（第 4 节，已定 7）：当场发，`inputs` 是这一帧的控制点输入（对象 `W` 等），新粒子与新实例本帧不画。 */
+emitParticles(n: number, inputs: ControlPointInputs): void;
+```
+- **修改** `emit`：暂停位为真时整段跳过（含帧尾的结束判定与周期计时，以及之后的 eventspawn / eventfollow）；子系统与实例读根的暂停位。
+- **修改** `emissionCount`（或新增一个兄弟函数）：支持「额外发 `n` 个、`dt = 0`」的脚本路径，门内记欠账、门外不动计时，帧尾照 4.3。
+- **修改** `setInstance` 的重开：被 `stop` 停下时不重开；新增控制点覆盖的运行时写入（5.5）。
+- **新增** 「本帧脚本出生」标记：`writeVertices` 与 `particleSnapshot` 跳过，下一次 `step` 开头清掉；脚本阶段新建的事件实例同样本帧不画。
+
+### 点 2 — 脚本 API 与宿主（`script/api.ts`、`host.ts`、`render/state.ts`、`render/scene.ts`）
+
+- **新增** 访问接口 `particles?(object): ParticleScriptTarget | null`（宿主从渲染器的根系统取，`emitParticles` 带上这一帧的控制点输入）；`installParticle` 只登记在粒子对象的图层代理上，五个方法照上面接。
+- **新增** `instance` 只读字段：返回一个代理，24 个字段的 getter 读 `SceneState.particleInstances`，setter 经 `write({ kind: "particle-instance", object, field })`；`Vec3` / 数字 / `{x, y, z}` 的转换同现有图层字段。
+- **修改** `particle-instance` 的字段扩到控制点覆盖（`controlpoint<N>`、`controlpointangle<N>`，vec3），`SceneState` 存覆盖值，`sync` 照旧置脏重算。
+
+### 点 3 — 编译（`compile/scriptApi.ts`、`compile/features.ts`、`compile/scripts.ts`、`compile/particles.ts`）
+
+- **删除** `PARTICLE_LAYER_METHODS` 与 `ScriptApiScene.particleLayers` 的多报；`MISSING_SCRIPT_API` 删 `emitParticles`、`instance`（`script/api.test.ts` 双向核对跟着过）。
+- **修改** `SCRIPT_INSTANCE_KEYS` 加 16 个控制点键；`checkParticleInstance` 的控制点挂脚本、绑用户属性不再报。
+
+### 点 4 — 回放工具与案例（Claude 做）
+
+- 新案例 `f3`：`p4f-api` fps 20 / 60、`p4f-api2` fps 20，钩子按 `[kbpx]` 日志里的 runtime 在对应帧的脚本阶段（`observe`）调产品入口；`instance` 的 API 写入照步骤 1 在下一帧生效。按已定 5–7 和 WPE 不同的 `b-end-play`、`b-stop-write` 与 `p4f-api3` 的脚本发射对照不比（单测覆盖）。
+
+### 验收
+
+- 子代理：tsc 0 error，vitest（带 `KABEGAME_WPE_ROOT`）全过（已知的失败另列），Prettier（`--ignore-path <空文件>`）。新增单测：五个方法的语义各一组（暂停冻结 `duration` 与周期计时、暂停中 eventdeath 照建、`stop` 递归清空并销毁实例、`stop` 后改系数不重开、自然结束后 `play` 复位计时重新发射、活跃时 `play` 只清暂停位、`isPlaying` 的各种状态、`emitParticles` 的参数归一化 / 欠账 / 容量 / 越过的门 / 触发 eventspawn 且用 `W` / 本帧不画下一帧增龄）、`instance` 代理的 24 个字段读写（未设控制点读 FLT_MAX、`colorn` 读 (−1, −1, −1)、写 `rate` 走单独路径）、控制点覆盖运行时写入与递归、只在粒子对象上登记、编译期不再报这些键。
+- Claude 独立验收：
+  1. `git status` 查越界；tsc、vitest 自跑；变异检查（暂停时帧尾照跑、暂停不传给子孙、`stop` 不清实例、`stop` 后重开、`play` 不复位计时、`emitParticles` 不记欠账、越过容量、本帧就画、建实例用单位阵、`isPlaying` 不看暂停位）。
+  2. `kbp regress`（HEAD 快照 ↔ 步骤 3 快照，现有案例含 `f1`、`f2`）逐字节相同；语料只去掉 `script:api:particle.*`、`*.emitParticles`、`*.instance` 与控制点的两个键，粒子覆盖不变（107），能渲染不变。
+  3. 回放 `f3` 在包络内。
+  4. 真机：`p4f-api` 导入 dev 库开预览，看暂停、停止、补发的样子和 WPE 抓帧一致；语料里用 `emitParticles` 发闪电的 `3286859278` 强制渲染看一眼。
+- 过后请用户提交。
+
+### 步骤 3 实施记录（2026-11-13）
+
+子代理在 HEAD `2edac843` 的快照 `ignore/p4/f3/ov` 里实现点 1–3，Claude 做点 4 与验收。导出时 HEAD 在两次导出之间动过一次（基线先导成了 `905b4a78`），按开发副本的提交重导基线后两份一致。之后 HEAD 进了 P9b 等提交（`b42b9990`），工作区里 `compile/bundle.ts`、`features.ts`、`host.ts`、`host.script.test.ts`、`render/scene.ts` 另有别的会话未提交的改动；27 个文件里 15 个照旧直接覆盖，12 个 `git merge-file` 三方合并，冲突 8 处手工解决：
+- `compile/bundle.ts` 1 处：别的会话在工作区里去掉了 `ANIMATION_PENDING`（导入与两处使用），取它那边，再套上本步的 `checkScriptFeatures(scripts.list, unsupported)`；
+- `compile/scriptApi.ts` 2 处注释、`host.ts` 1 处（P9b 的 `video` 访问接口与本步的 `particles`）、`script/api.ts` 2 处（P9b 的 `IVideoTexture` 与本步的 `installParticle` / `particleInstance`）、`script/api.test.ts` 2 处导入：都是两边各加一样，全部保留。
+合并引入的增删行数与补丁逐文件一致（`scriptApi.ts` 少的一行是冲突处保留了 HEAD 的那句，`api.test.ts` 多的 6 行是导入被 Prettier 拆成多行）。合并前的文件在 `ignore/p4/f3/pre-merge/`，补丁 `ignore/p4/f3/step3.patch`（27 个文件，+2240 / −204）。
+
+**和计划的差异（子代理报告，Claude 核对后接受）：**
+1. 【推】参数归一化：int32 范围内的整数原样，非整数、非数字、越界一律当 0 再按「0 当 1」发 1 个（实测只有 `()`、`(0)`、`(2.7)`、`(-3)`）。
+2. 【推】`stop` → `play` 时又复位一次计时：WPE 停止期间 `delay` / `duration` 照样倒数、系统时间照样累加，这些量不为 0 或用到 `particlesystemtime` 时和 WPE 不同（实测工程都是 0）。
+3. 【推】「被 stop 停下」只在 `play()` 真的重开（整棵树不活跃）时解除；`stop` → `emitParticles` → 活跃时 `play` 仍算停下。
+4. 【推，计划之外】重编译与单图层重建沿用旧树的暂停 / 停止（`adoptScriptControl` / `adoptParticleScripts`），否则重建后的新树会自己重新发射。
+5. 【推，计划之外】首次加载时脚本 `init` 早于渲染器建场景：这期间粒子层的方法按顺序记下，`beforeFirstFrame` 补调；这期间的 `isPlaying` 按记下的暂停 / 停止回答，退回预览图时丢掉。
+6. rope / ropetrail 写段也跳过本帧脚本出生的粒子（计划只写了 `writeVertices` 与 `particleSnapshot`）。
+7. 控制点覆盖用的 M 照 WPE 的 `FUN_140229760`：世界 static 子系统在这里用 `L`、模拟时是 `W·L`，只有冻结帧（`rate ≤ 0`）看得出差别。
+8. 行为变化（照 rea-p4e-children 3.4）：置脏重算时对象的控制点覆盖也写进 static 子系统与池里的实例，以前子系统拿不到。`kbp regress` 18 个旧案例逐字节相同，没有受影响的。
+9. 【推】控制点的条件绑定得到布尔值时取 null（未设），不另报。
+10. `emitParticles` 用 `inputs.world` 作执行上下文的模型矩阵、原点与建实例的 `top`；场景时间与图层时间取根最近一次步进的；`instance` 整体赋值忽略。
+11. 改了已有断言：`compile/sounds.test.ts`（播放控制不论有没有粒子层都不报）、`script/api.test.ts`（夹具加粒子层，方法只在声音层与粒子层上有、`emitParticles` / `instance` 只在粒子层上有）、`compile/p4a5.test.ts`、`compile/p4f1.test.ts`（控制点挂脚本、绑用户属性不报，`SCRIPT_INSTANCE_KEYS` 24 个）、`particles/lifecycle.test.ts`（实例值多两张控制点表）。
+12. 过程问题：子代理又误跑了一次空 heredoc 的 `python -X utf8 -I -`（只起交互解释器、读到 EOF 退出，没执行代码）；用 Python 写的 5 个测试文件变成了 CRLF，已转回 LF（补丁里 0 个 CR）。
+
+**验收结果：**
+
+| 项 | 结果 |
+|---|---|
+| tsc / vitest / Prettier | 快照：tsc 0 error，116 个文件 2805 个用例，只有已知的 `pipeline.test.ts`「本机语料…请求次数有界」失败（Claude 自跑同子代理）；Prettier（`--ignore-path <空文件>`）27 个文件通过。合并后的工作区：宿主 tsc 0 error，本步相关的 15 个测试文件 268 个用例全过（没跑全量） |
+| 新增单测 | 50 个（`particles/p4f3.test.ts` 28、`script/p4f3.test.ts` 8、`compile/p4f3.test.ts` 5、`render/p4f3.test.ts` 7、`host.script.test.ts` 2）；子代理另做 25 处变异自检，全部检出 |
+| `kbp regress`（HEAD 快照 ↔ 步骤 3 快照，18 个旧案例 + `f1` + `f2` + `f3` + 语料） | 18 个旧案例逐字节相同；`f1` 只差一行不支持项列表（`p4f-api2` 不再报脚本方法键，两边都在放行规则内）；`f3` 在 HEAD 上跑不下去（没有这些入口）。语料 183 张里 41 张不同，只去掉 `script:api:particle.play` 39、`stop` 30、`pause` 16、`isPlaying` 8 与 `layer.emitParticles` 1，没有新增的键，干净的数量不变 |
+| 覆盖 | 粒子用法完全覆盖不变（107）；不解锁场景 |
+| 回放 `f3`（新案例：`p4f-api` fps 20 / 60、`p4f-api2` fps 20） | 全过：各系统逐粒子位置 ≤ 6.7e-4、其余差 0；`isPlaying` 和 WPE 日志逐条相同（两种 fps 共 724 条）；脚本发射建的 eventspawn 实例 `b-spawn-c` 对上。钩子读 `[kbpx]` 事件、窗口之后的事件跳过；为它给 kbp-tools 的 `observe` 加了第 6 个参数（这一帧的控制点输入），`f1`、`f2` 在 HEAD 上照样全过 |
+| 变异（`ignore/p4/f3/mutate_f3.py`，10 处） | 9 处检出：暂停时照跑、`isPlaying` 不看暂停、`stop` 不清粒子、`play` 不重开、参数四舍五入、不记欠账（这 6 处单测与 `f3` 都抓到）、`stop` 不记停下、本帧就进快照、建实例用单位阵（只有单测）。`no-capacity`（门外不钳容量）是等价变异：`spawn` 找不到空槽就返回、连随机数都不抽 |
+| 真机 | 宿主按工作区构建。`p4f-api` 导入 dev 库、强制渲染开预览（它的帧号脚本读光标、报 `input.cursorScreenPosition`），8 s 里各系统的存活数按 4 s 周期循环、和脚本时间表一致：`a-stop` 停止时清成 0、`play` 后从 1 涨到 14，`a-emit-stopped` 停止后补发 2 个、之后的 `play` 因为还有粒子活着只清暂停位（同 WPE），`a-tree` 连子系统一起清空再恢复，`a-emit-cap` 一直是容量 8。`3286859278` 的 `Thunderbolt` 脚本第一帧就因 `input is not defined`（光标输入 API，别的阶段）被禁用，`emitParticles` 不会被调到，测不到。打开预览替换了用户主窗口里原来开着的预览（13616）。测完删掉强制渲染开关、`projects_remove` 移除测试行 |
+
+### 没测到的（步骤 0–3，2026-11-13 记）
+
+下面这些只有单测或读码，没有 WPE 对照或真机，收尾时再走查一遍，语料用得到的要补实测：
+
+**步骤 1（实例覆盖挂脚本、`rate`）**
+- 负的 `rate`：照汇编两个时间倒退、模拟跳过，没有实测。
+- 真机只看了 `3809965824`；`3706286085`（`alpha`、`rate` 挂鼠标按下的脚本）还差三十多项，没测。
+- 合并后的工作区没跑全量 vitest（步骤 2、3 同样只跑了相关文件）。
+
+**步骤 2（HDR 下的 `brightness`）**
+- 真实场景（`2833017810`、`3286859278`、`3509243656`）都还差别的项，没在真机上看；只有确定性工程 `p4f-bright` 和 WPE 逐像素比过。
+- `brightness` 挂字段脚本、运行中改值只有单测（WPE 读码：只影响之后出生的粒子）。
+
+**步骤 3（`IParticleSystem` 与 `instance`）**
+- 语料里唯一用 `emitParticles` 的 `3286859278`：`Thunderbolt` 脚本第一帧因 `input is not defined` 被禁用，真机调不到；`3570560686`（`particles.emitParticles(4)`）没看。
+- 已定 5–7 有意和 WPE 不同，只有单测：自然结束后 `play` 复位计时重新发射（`b-end-play`）、`stop` 后改系数不重开（`b-stop-write`）、脚本发射建实例用 `W`（`p4f-api3` 只抓了 WPE 的单位阵行为，没有「用 `W`」的对照）。
+- 子代理按推断定的（都只有单测）：
+  - 参数归一化只实测了 `()`、`(0)`、`(2.7)`、`(-3)`；−2.5、2³¹ 这类没测；
+  - `stop` → `play` 时又复位一次计时，停止期间 `delay` / `duration` 不为 0 或用到 `particlesystemtime` 时和 WPE 不同；
+  - 「被 stop 停下」只在 `play` 真的重开时解除（`stop` → `emitParticles` → 活跃时 `play` 仍算停下）；
+  - 重编译、单图层重建沿用旧树的暂停 / 停止；
+  - 首次加载时 `init` 里调的方法先记下、`beforeFirstFrame` 补调；
+  - 控制点的条件绑定得到布尔值时取 null。
+- 控制点覆盖的运行时写入只实测了顶层系统（`a-inst-cp`）；写进 static 子系统与事件实例（置脏重算时递归，同 rea-p4e-children 3.4）、世界 static 子系统在冻结帧上用 `L` 的那处，只有单测。`controlpointangleN` 的读写没有实测。
+- rope / ropetrail 跳过本帧脚本出生的粒子只有单测。
+- 读码列了但没做、没测的：`stop` 后同一帧 `emitParticles` 会把旧顶点画一帧（rea 4.4【推】，不复刻）；图层图像发射器（类型 3）在脚本阶段的位置（4.4【推】）；脚本发出的粒子 `inheritcontrolpointvelocity` 读到 0（4.4【推】）；对象不可见时 `emitParticles` 发出的粒子下一帧被复位清掉（4.6）。
+- 暂停中 eventdeath 建出的实例带暂停位、`play` 后才发，只有单测。

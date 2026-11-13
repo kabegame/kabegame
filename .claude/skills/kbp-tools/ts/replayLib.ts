@@ -261,8 +261,18 @@ export interface SimOptions {
   patch?: (system: any, layer: any) => void;
   /** 记录速度（b4）。 */
   vel?: boolean;
-  /** 每个系统步进完调一次：(系统名, 系统, 帧号, 步进前的存活数, 出生表)。 */
-  observe?: (name: string, system: any, frame: number, before: number, births: Map<number, [number, number]>) => void;
+  /**
+   * 每个系统步进完调一次：(系统名, 系统, 帧号, 步进前的存活数, 出生表, 这一帧传给 step 的控制点输入)。最后一个参数 P4f 步骤 3 起：
+   * 钩子在「脚本阶段」调 `emitParticles(n, inputs)` 时用（对象 `W` 等和 step 的一致）。
+   */
+  observe?: (
+    name: string,
+    system: any,
+    frame: number,
+    before: number,
+    births: Map<number, [number, number]>,
+    inputs?: unknown,
+  ) => void;
   /** 只步进这些图层（缺省全部粒子层）。 */
   layers?: any[];
 }
@@ -994,7 +1004,8 @@ export class CaseContext {
       if (spectrum && sharedAudio) audioMod.writeParticleAudio(sharedAudio, spectrum);
       for (const entry of entries) {
         const before = entry.system.alive;
-        entry.system.step(o.dts[frame - 1], timeArg(frame), inputs(entry.layer, frame) as never);
+        const stepInputs = inputs(entry.layer, frame);
+        entry.system.step(o.dts[frame - 1], timeArg(frame), stepInputs as never);
         const c = entry.system.columns;
         for (let slot = 0; slot < entry.system.highWater; slot++) {
           if (c.life[slot] === 0) continue;
@@ -1002,7 +1013,7 @@ export class CaseContext {
           const birth = entry.births.get(slot)?.[0];
           remember(`${entry.name}:${pool ? (birth ?? -1) : birth}`, c, slot);
         }
-        o.observe?.(entry.name, entry.system, frame, before, entry.births);
+        o.observe?.(entry.name, entry.system, frame, before, entry.births, stepInputs);
         for (const [base, system] of descendants(entry)) {
           let births = childState.get(system);
           if (!births) childState.set(system, (births = new Map()));

@@ -84,9 +84,21 @@
  * 音频（P4e 步骤 4，rea-p4e-audio.md，`audio.ts`）：执行上下文的 `audio` 是这一帧的 16 段频谱，整棵树共用一个只读引用（`setAudio`，
  * 渲染器在步进之前写好值）；读音频的模块在 `audioprocessingmode ≠ 0` 时取系数。发射器与 initializer 一帧只走一次，operator 两遍模式下
  * 每遍各取一次（值相同）。
+ *
+ * 脚本接口（P4f 步骤 3，rea-p4f-script.md 第 2–5 节，实测见 p4-particles-REPORT「P4f 语义的实测核对」）：图层代理上的 `IParticleSystem`
+ * 落到根系统的 `scriptPause` / `scriptPlay` / `scriptStop` / `scriptIsPlaying` / `emitParticles`（只在根上调）。脚本在本帧粒子步进之后、
+ * 写顶点之前跑（P4c 步骤 4 的帧序），这几个方法都当场生效：
+ * - 暂停位（`sys+0x3f7` bit0）整棵树共用（子孙与新建、复用的事件实例读根的，`scriptPaused`）：模拟里的发射整段不跑（计时冻结、不建
+ *   eventfollow / eventspawn），模拟、判死、eventdeath 照常；
+ * - `stop` 另记「被 stop 停下」：之后置脏重算不重开发射器，只有 `play()` 能解（已定 6，不复刻 WPE）；自然结束后 `play()` 复位计时再重开
+ *   （已定 5，不复刻 WPE）；
+ * - 脚本发出的粒子（`scriptBorn`）与脚本阶段新建的事件实例（`createdByScript`）本帧不画（WPE 在写完顶点之后才跑脚本，4.4）：写顶点、
+ *   轨迹快照与绘制先序都跳过，下一次步进开头清掉标记，届时它们先增龄 `dt′` 再画；建实例用对象的 `W`（已定 7，不复刻 WPE 的单位阵）。
+ * 实例覆盖的控制点（`controlpointN` / `controlpointangleN`）的运行时写入在 `setInstance` 里（`ControlPointSet.applyOverrides`，5.5）。
  */
 import {
   INSTANCE_RATE_MIN,
+  instanceOverrideSet,
   instanceValues,
   MAX_CHILD_DEPTH,
   type ParticleInstanceValues,
@@ -105,7 +117,7 @@ import {
   NO_INSTANCE_OVERRIDE,
   type ControlPointInputs,
 } from "./controlpoints";
-import { emissionCount, emitterState, resetEmitterTiming, type EmitterState } from "./emitters";
+import { emissionCount, emitterState, resetEmitterTiming, scriptEmitCount, type EmitterState } from "./emitters";
 import { f32 } from "./f32";
 import {
   INSTANCE_DISABLE_FLAGS,
@@ -431,6 +443,19 @@ export class ParticleSystem {
    * static 子系统与顶层恒为 −1。
    */
   followSlot = -1;
+  /**
+   * 本帧脚本阶段出生的粒子（P4f 步骤 3，`emitParticles`，rea-p4f-script.md 4.4）：按槽号置 1，没有过时为 null。WPE 在写完顶点之后才跑
+   * 脚本，这些粒子下一帧才画，所以写顶点（`writeVertices`、rope / ropetrail 的段）与轨迹快照（`particleSnapshot`）跳过它们；下一次
+   * `step` / `suspend` 开头清掉，届时它们先增龄 `dt′` 再画。只有根会有（脚本只发顶层）。
+   */
+  scriptBorn: Uint8Array | null = null;
+  /** `scriptBorn` 里置位的个数（rope 表尾部就是这么多个，`writeRopeSegments` 按它截掉）。 */
+  scriptBornCount = 0;
+  /**
+   * 脚本阶段新建（或从池里复用）的事件实例（P4f 步骤 3，4.4、4.5）：本帧不画（`forEachDrawn` 连同子孙跳过），下一帧它第一次步进时
+   * （`stepNode` 开头）清掉。WPE 的实例要到下一帧子系统更新才第一次步进，我们同样（实例建在步进之后）。
+   */
+  createdByScript = false;
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -462,6 +487,23 @@ export class ParticleSystem {
   private readonly context: ParticleRunContext;
   /** 出生时 `R` 的替换（dev 探针按出生顺序注入 WPE 的值，`random.ts` 的 `injectedR`）；缺省照常用抽到的值。 */
   private readonly rOverride: ParticleROverride | undefined;
+  /**
+   * 脚本暂停位（P4f 步骤 3，`sys+0x3f7` bit0，rea-p4f-script.md 2.1）：只有根上的起作用，整棵树读根的（`scriptPaused`；WPE 的子孙每帧
+   * 从父拷、新建与复用的实例建立时拷，结果相同）。
+   */
+  private pausedByScript = false;
+  /**
+   * 被脚本 `stop()` 停下（P4f 步骤 3，已定 6）：这之后置脏重算（`setInstance`）不重开已结束的发射器，只有 `play()` 真正重开时才清掉。
+   * 只有根上的起作用。WPE 的重算会重开 `stop` 过的发射器（2.5、5.3，实测 `b-stop-write`），是 bug，不复刻。
+   */
+  private stoppedByScript = false;
+  /** 正在为脚本发射（`emitParticles`）：`spawn` 据此记 `scriptBorn`。 */
+  private spawningByScript = false;
+  /**
+   * 根上次步进（`step` / `suspend` / `prewarm`）用的对象世界矩阵（WPE 的 `sys+0x3a0`，每帧对象更新时写）：置脏重算写控制点覆盖时压栈的
+   * `M` 由它推出（`overrideMatrix`）。
+   */
+  private lastWorld: Mat4 = identity();
 
   /**
    * `link` 只给子系统（父系统构造时自己建，P4e 步骤 1）：父与条目。子系统的 `instanceoverride` 取对象的当前值（3.4：`FUN_14022f890`
@@ -610,7 +652,7 @@ export class ParticleSystem {
    * ```
    * 所以世界 static 子系统的本地孙辈绘制时是 `L·L₂`，模拟时却是 `W·L·L₂`（3.3「两处不一致」，照复刻）。只有 static 时和 P4e 步骤 1 的
    * `particleDrawModel` 逐字节相同（同一串 `multiply`）。模板路径是每层 `def.children` 下标（实例不计序号），同一模板可能出现多次。
-   * 回调返回 `false` 时不递归这个系统的子孙。
+   * 回调返回 `false` 时不递归这个系统的子孙。脚本阶段新建的事件实例（`createdByScript`，P4f 步骤 3）本帧不画，连同子孙跳过。
    */
   forEachDrawn(callback: ParticleDrawnCallback, object: Mat4 = identity()): void {
     this.visitDrawn(callback, this.def.flags & 1 ? identity() : object, object, []);
@@ -625,6 +667,7 @@ export class ParticleSystem {
     }
     for (const pool of this.events)
       for (const instance of pool.active) {
+        if (instance.createdByScript) continue;
         const x = instance.instanceMatrix!;
         const world = (instance.def.flags & 1) !== 0;
         const childModel = world ? identity() : multiply(top, x);
@@ -684,9 +727,13 @@ export class ParticleSystem {
    *   initializer，只影响之后出生的粒子；`colorchange` 每帧读字段，存活粒子下一帧就跟着变（rea-p4b-render.md 7.3【推】）。
    * - `brightness`（P4f 步骤 2，rea-p4f-script.md 第 7 节）：HDR 且本系统没有 bit3 时，颜色初值从基值重算后再乘它，只影响之后出生的
    *   粒子（初值只在出生时写进颜色列），已有粒子的颜色不动。子孙在下面的递归里各按自己的 `flags & 8` 重算。
-   * - 已结束、新 `rate > 0` 的 emitter 重新打开（`param_2 = 1` 的尾段，`0x14022c1f0` 起）；累积余数等计时保留。
+   * - 已结束、新 `rate > 0` 的 emitter 重新打开（`param_2 = 1` 的尾段，`0x14022c1f0` 起）；累积余数等计时保留。被脚本 `stop()` 停下的
+   *   树（`stoppedByScript`，P4f 步骤 3，已定 6）不重开：`stop` 的结束只由 `play()` 解除，WPE 这里会重开（rea-p4f-script.md 2.5），不复刻。
    * - 有运行状态的模块（P4d 步骤 3）按登记的覆盖条目改状态（`instanceState`）：`mapsequencebetweencontrolpoints` 在 `flags & 0x10`
    *   时 `step` 重写成正的新值（条目 4），序号不动；`mapsequencearoundcontrolpoint` 不登记，不动。
+   * - 控制点覆盖（P4f 步骤 3，rea-p4f-script.md 5.5）：对象当前的 `controlpointN` / `controlpointangleN` 每次重算都重写进本系统控制点的
+   *   `base`（`ControlPointSet.applyOverrides`，跳过 `0x10005` 的点），递归里同样写进 static 子孙与池里的事件实例（子系统加载时不带，
+   *   第一次重算才到，rea-p4e-children 3.4）。一项都没设时不碰控制点。
    * `reopen` 是 `FUN_14022bd40` 的 `p2`：顶层与 static 子系统为真；事件实例（活跃与空闲的都递归，P4e 步骤 2，3.4 `0x14022c1d0`–
    * `0x14022c26d`）传 `p2 = 0`，已结束的发射器不重开，它的 static 子孙同样。
    */
@@ -700,7 +747,10 @@ export class ParticleSystem {
       if (module.state !== undefined) module.def.instanceState?.(module.state, module.fields, this.def.flags);
     this.applyScalars();
     this.applyColorn();
-    if (reopen)
+    const { controlpoints, controlpointAngles } = this.instance;
+    if (controlpoints.some(instanceOverrideSet) || controlpointAngles.some(instanceOverrideSet))
+      this.controlPoints.applyOverrides(this.instance, this.overrideMatrix());
+    if (reopen && !this.root.stoppedByScript)
       for (const emitter of this.emitters)
         if (emitter.state.ended && (emitter.fields.rate as number) > 0) emitter.state.ended = false;
     // 递归到 static 子系统（P4e 步骤 1，3.4：`FUN_14022bd40` 传原 `p2`，所以已结束的发射器同样重开）：子系统按自己的 `flags` 重乘；
@@ -725,6 +775,138 @@ export class ParticleSystem {
   setRate(rate: number): void {
     this.instance.rate = rate;
     this.rate = f32(rate);
+  }
+
+  /** 树根（顶层系统）：暂停位、「被 stop 停下」与上次的对象世界矩阵都存在它上面。 */
+  private get root(): ParticleSystem {
+    let node: ParticleSystem = this;
+    while (node.parent) node = node.parent;
+    return node;
+  }
+
+  /** 这棵树的脚本暂停位（读根的，P4f 步骤 3）。 */
+  get scriptPaused(): boolean {
+    return this.root.pausedByScript;
+  }
+
+  /** 这棵树被脚本 `stop()` 停下、还没被 `play()` 重开（读根的，P4f 步骤 3）。 */
+  get scriptStopped(): boolean {
+    return this.root.stoppedByScript;
+  }
+
+  /**
+   * 置脏重算写控制点覆盖时压栈的 `M`（`FUN_14022bd40` 开头的 `FUN_140229760(sys)`，rea-p4c-sim.md 第 2 节）：根是上一次步进的对象世界
+   * 矩阵（`sys+0x3a0`，`lastWorld`）；static 子系统 `世界 ? L : 父 M · L`，事件实例 `世界 ? X : 父 M · X`（同 `simulationMatrix`）。
+   * 世界 static 子系统在这里是 `L`，模拟时却是 `W·L`（`FUN_140229810` 不看世界位，3.3），照 WPE 的两个函数各用各的；只有冻结的帧看得出。
+   */
+  private overrideMatrix(): Mat4 {
+    const parent = this.parent;
+    if (!parent) return this.lastWorld;
+    const x = this.instanceMatrix ?? this.localMatrix!;
+    return this.def.flags & 1 ? x : multiply(parent.overrideMatrix(), x);
+  }
+
+  /**
+   * 脚本 `pause()`（`0x14024c670`，rea-p4f-script.md 2.1【确】，实测 `a-pause`、`b-pause-dur`）：只置暂停位，整棵树的模拟里发射整段不跑
+   * （`emit`）：不发射，`delay` / `duration` / 周期计时 / 余数冻结，eventspawn / eventfollow 不建；模拟、判死、eventdeath 照常，已有粒子
+   * 继续运动、死亡。暂停期间建出的事件实例同样带着暂停位（预热也发不出粒子）。只在根上调。
+   */
+  scriptPause(): void {
+    this.pausedByScript = true;
+  }
+
+  /**
+   * 脚本 `play()`（`0x14024c5b0`，2.2【确】，已定 5）：清暂停位；整棵树还活跃（`isActive`）时只做这一件（同 WPE、同 `d.ts`「If the
+   * particle has stopped」）。整棵树都不活跃时复位发射计时（同 `stop` 用的 `FUN_14022f6c0`：`delay` / `duration` / `instantaneous` / 周期
+   * 计时与余数回初值、系统时间清零、mapsequence 序号归零，递归 static）、清全部结束位并重开（递归 static，`FUN_14022f5b0`），不预热，
+   * 并解除「被 stop 停下」。
+   * 和 WPE 不同（已定 5，读码 2.5、实测 `b-end-play`）：WPE 只清结束位、不复位计时，`duration` 型发射器停在 −1 不再发，`isPlaying()`
+   * 却恒真；我们复位后重新发射（`instantaneous` 再爆发一次）。`stop` → `play` 时两边都从头来，只是 WPE 的 `delay` / `duration` 在停止期间
+   * 照样倒数（发射器已结束，帧尾照走），系统时间也照样累加，我们在这里又复位了一次【推：停止期间不为 0 的 `delay` / `duration` 与
+   * `particlesystemtime` 和 WPE 不同，实测的工程都是 0】。只在根上调。
+   */
+  scriptPlay(): void {
+    this.pausedByScript = false;
+    if (this.isActive()) return;
+    this.restart();
+    this.stoppedByScript = false;
+  }
+
+  /**
+   * 脚本 `stop()`（`0x14024c680`，2.3【确】，实测 `a-stop`、`a-tree`）：全部发射器标结束（递归 static，`FUN_14022f640`）、图层时间清零、
+   * 系统复位（`FUN_14022f6c0`：计时回初值、系统时间清零、mapsequence 序号归零，递归 static）、清全部粒子（含 static 子孙，`FUN_14022fd90`
+   * 同时销毁子孙的活跃事件实例）、销毁本系统的活跃事件实例（空闲池保留）。不清暂停位。另记「被 stop 停下」（已定 6：之后的置脏重算不
+   * 重开发射器，只有 `play()` 能解）。只在根上调；存活数变成 0，本帧就不画了（同 WPE）。
+   */
+  scriptStop(): void {
+    this.stoppedByScript = true;
+    this.endEmitters();
+    this.layerTime = 0;
+    this.context.layerTime = 0;
+    this.resetTiming();
+    this.clear();
+    for (const child of this.statics) child.system.clearTree();
+    this.destroyInstances();
+  }
+
+  /**
+   * 脚本 `isPlaying()`（`0x14024ca10`，第 3 节【确】，实测 `a-pause`、`a-done`）：没暂停 且 整棵树活跃（`isActive`：有存活粒子、有没结束
+   * 的发射器、任一 static 子孙或活跃事件实例活跃）。所以暂停时即使还有粒子也是 false。
+   */
+  scriptIsPlaying(): boolean {
+    return !this.pausedByScript && this.isActive();
+  }
+
+  /**
+   * 脚本 `emitParticles(count)`（`0x14024cac0`，第 4 节【确】，实测见报告的 `a-emit*`、`b-args`、`b-debt`、`b-emit-alpha`）。只在根上调，
+   * 在脚本阶段当场发：
+   * - 数量：`scriptEmitCount`（int32 整数原样、0 当 1、负数不发；缺参数与非整数实测都是 1）；
+   * - 每条发射器（JSON 顺序）各发 n 个（不乘 `instanceoverride.count`、和 `rate` 无关），每条现算 `容量 − 存活`，满了丢弃；越过暂停位、
+   *   结束位（含 `stop` 之后）、`delay > 0` 与对象不可见；门内的发射器连同待发的 `instantaneous` 记欠账（`acc −= pending + n`），门外的
+   *   不动计时（`emissionCount` 的 `script`，4.3）。周期发射器在门内照常走（`P` 恰为 0 时开新周期，`newPeriod` 与 static 子系统复位同常规）；
+   * - 新粒子照常跑 initializer（出生 `age = 0`），控制点读本帧模拟算好的 `current`；同一段脚本里先写的 `instance` 系数对这批不生效
+   *   （脏位下一帧才消费，实测 `b-emit-alpha`）；
+   * - 照常触发 eventspawn / eventfollow（4.5），建实例的 `top` 用 `inputs.world`（对象的 `W`，已定 7：WPE 这里是单位阵，父或子是世界空间时
+   *   偏一个 `W`，不复刻）。实例在下一帧子系统更新时第一次步进；
+   * - 新粒子记进 `scriptBorn`、新实例置 `createdByScript`：本帧不画，下一帧先增龄 `dt′` 再画（4.4）。
+   * `inputs` 是这一帧给根系统的控制点输入（渲染器缓存 `stepParticles` 用的那份）：只取 `world` 作执行上下文的模型矩阵与原点、建实例的
+   * `top`，以及实例预热的指针，不重新更新控制点。场景时间、图层时间取本系统最近一次步进的。
+   */
+  emitParticles(count: unknown, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
+    const n = scriptEmitCount(count);
+    if (n <= 0) return;
+    const context = this.context;
+    const w = inputs.world;
+    context.model.set([w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]]);
+    context.origin!.set([w[12], w[13], w[14]]);
+    const before = this.events.map((pool) => pool.active.length);
+    this.spawningByScript = true;
+    try {
+      this.emit(0, this.watchesBirths, n);
+    } finally {
+      this.spawningByScript = false;
+    }
+    if (this.born.length) this.spawnInstances(inputs, { time: context.time, layerTime: this.layerTime, object: w });
+    // 这次新建（或复用）的实例追加在各池的活跃表尾部
+    this.events.forEach((pool, i) => {
+      for (let k = before[i]; k < pool.active.length; k++) pool.active[k].createdByScript = true;
+    });
+  }
+
+  /**
+   * 重编译、单图层重建换上新系统树时沿用旧树的脚本控制状态（P4f 步骤 3【推】：WPE 没有重建，状态一直在）：旧树被 `stop()` 停下的，新树
+   * 照样 `scriptStop()`（清掉预热出来的粒子、全部发射器标结束）；暂停位照抄。新树的粒子与计时本来就从头来（重建的既有语义）。只在根上调。
+   */
+  adoptScriptControl(previous: ParticleSystem): void {
+    if (previous.stoppedByScript) this.scriptStop();
+    this.pausedByScript = previous.pausedByScript;
+  }
+
+  /** 清掉 `scriptBorn`（下一次步进开头、清空粒子时）。 */
+  private clearScriptBorn(): void {
+    if (!this.scriptBornCount) return;
+    this.scriptBorn!.fill(0);
+    this.scriptBornCount = 0;
   }
 
   /**
@@ -798,6 +980,9 @@ export class ParticleSystem {
    * （WPE 的控制点更新在被跳过的模拟里），系统时间照样 `+= dt′`，子孙同样冻结（`stepNode`）。
    */
   suspend(inputs: ControlPointInputs = IDENTITY_INPUTS, frameDt = 0, time?: number): boolean {
+    // 上一帧脚本发出的粒子从这一帧起照常（P4f 步骤 3）；对象矩阵不看可见性每帧写（`sys+0x3a0`）
+    this.clearScriptBorn();
+    this.lastWorld = inputs.world;
     // 本帧的 `dt′`（`0x1402307ff`，不可见时同样乘 `rate`，不钳制，rea-p4f-script.md 5.4）
     const dt = f32(f32(frameDt) * this.rate);
     // 控制点在模拟函数里更新（`FUN_140236cd0`），`FUN_1402308a0` 在 `dt′ ≤ 0` 时整段跳过它（`0x1402308dc`–`0x1402308eb`，P4f 步骤 1）：
@@ -886,6 +1071,9 @@ export class ParticleSystem {
    * （P4c 步骤 2，场景坐标，渲染器每帧按本帧的光标反投影，用的是本帧的指针）；缺省（单位阵、(0, 0)）只给单测用。
    */
   step(frameDt: number, time?: number, inputs: ControlPointInputs = IDENTITY_INPUTS): void {
+    // 上一帧脚本发出的粒子（`scriptBorn`，P4f 步骤 3）从这一帧起照常增龄、照常画
+    this.clearScriptBorn();
+    this.lastWorld = inputs.world;
     this.elapsed = (this.elapsed + frameDt) % TIME_WRAP_SECONDS;
     // `dt′ = dt·io.rate`（`FUN_140230650` `0x1402307ff` 的 `mulss`）：每帧都读实例覆盖里的 `rate`，不看脏位、不钳制（P4f 步骤 1，
     // rea-p4f-script.md 5.4），`setRate` 单写 0 或负数时 `dt′ ≤ 0`
@@ -919,6 +1107,8 @@ export class ParticleSystem {
    * （都在 `0x1402308f2` 之后）。实测 `b-rate0`（周期内没有出生）；冻结期间不移动由回放核对，负数没有实测。
    */
   private stepNode(frame: TreeFrame, inputs: ControlPointInputs): void {
+    // 脚本阶段建的实例（P4f 步骤 3）第一次步进：从这一帧起照常画
+    this.createdByScript = false;
     const context = this.context;
     context.time = frame.time;
     this.systemTime = f32(this.systemTime + frame.dt);
@@ -1073,6 +1263,7 @@ export class ParticleSystem {
    * 初值（父还没更新，`current = base`），`Mprev` 是本系统预热的 `M`。
    */
   prewarm(inputs: ControlPointInputs = IDENTITY_INPUTS): void {
+    this.lastWorld = inputs.world;
     this.prewarmNode(inputs, { time: 0, layerTime: 0, object: inputs.world });
   }
 
@@ -1125,6 +1316,7 @@ export class ParticleSystem {
     this.searchFrom = 0;
     this.ropeOrder?.clear();
     this.deaths = 0;
+    this.clearScriptBorn();
   }
 
   /**
@@ -1316,12 +1508,18 @@ export class ParticleSystem {
    * 按 JSON 顺序逐个 emitter：先算数量（周期发射在这里抽时长，早于本 emitter 的新粒子，A3），再逐个出生。
    * 周期发射进入新周期时（`emissionCount` 置 `periodStarted`），先对全部有状态的 initializer 调 `newPeriod`（P4d 步骤 3，
    * `FUN_14022f790`，在 `FUN_1402378a0` 的新周期分支里 `0x140237ac1`，早于本 emitter 本帧的新粒子），再出生。
+   * 暂停位（P4f 步骤 3，rea-p4f-script.md 2.1，`0x1402378c8`–`0x1402378e4`：`(sys+0x3f7 & 1) && n ≤ 0` 时返回）：模拟里的发射整段不跑——
+   * 不发射、不走帧尾（`delay` / `duration` 不递减）、周期计时与余数不动，`born` 是空的所以之后也不建 eventfollow / eventspawn 实例。
+   * `scripted > 0` 是脚本 `emitParticles(n)`（`dt = 0`，`emitParticles` 调）：每条发射器交给 `emissionCount` 的 `script`。
    */
-  private emit(dt: number, record = false): void {
+  private emit(dt: number, record = false, scripted = 0): void {
     const capacity = this.columns.capacity;
     // 发射开头（4.3，`dil = sys+0x41 & 0xc`）：有 eventfollow / eventspawn 条目且不在预热时，新粒子的槽号按出生先后记进 `born`（P4e 步骤 2）
     this.born.length = 0;
+    const paused = this.scriptPaused;
+    if (paused && scripted <= 0) return;
     this.recordBirths = record;
+    const script = scripted > 0 ? { count: scripted, paused } : undefined;
     for (const emitter of this.emitters) {
       // 音频系数（P4e 步骤 4）在 `emissionCount` 里按这一帧的频谱取，每帧每条 emitter 一次
       const count = emissionCount(
@@ -1332,6 +1530,7 @@ export class ParticleSystem {
         capacity,
         this.random,
         this.context.audio,
+        script,
       );
       if (emitter.state.periodStarted) {
         emitter.state.periodStarted = false;
@@ -1387,5 +1586,10 @@ export class ParticleSystem {
     this.ropeOrder?.push(slot);
     // 事件用的新粒子表（P4e 步骤 2，`0x140238bf8`：initializer、拖尾初值、存活数加一之后）
     if (this.recordBirths) this.born.push(slot);
+    // 脚本发出的（P4f 步骤 3）：本帧不画
+    if (this.spawningByScript) {
+      (this.scriptBorn ??= new Uint8Array(c.capacity))[slot] = 1;
+      this.scriptBornCount++;
+    }
   }
 }

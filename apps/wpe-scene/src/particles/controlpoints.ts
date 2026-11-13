@@ -26,10 +26,18 @@
  *   没有父，bit2 走缺省更新、只让实例覆盖不生效。条目 `flags` bit0 时个数强制 8、`i ≥ startindex` 的点不做缺省更新（由父粒子写，
  *   `particles/system.ts` 的 `writeParentPoints`）。
  *
- * 不做：`instanceoverride` 控制点的运行时改值（语料全是静态值，能力表报 `{user}`）；子系统加载时不吃对象的控制点覆盖（3.4，实测
- * `st-iocp`），运行时改值才到，我们不支持运行时改值，所以子系统永远没有覆盖。
+ * - `instanceoverride` 控制点的运行时改值（P4f 步骤 3，rea-p4f-script.md 5.5、rea-p4c-sim.md 第 2 节，`applyOverrides`）：每次置脏重算
+ *   （`ParticleSystem.setInstance`，`FUN_14022bd40`）都把对象当前的覆盖重写进 `base`、按规则写 `current`，不碰 `previous`；递归到 static
+ *   子系统与池里的事件实例。子系统加载时不吃对象的控制点覆盖（rea-p4e-children 3.4，实测 `st-iocp`），第一次置脏重算时才到；之后新建的
+ *   事件实例同样不带，直到下一次重算。
  */
-import type { ParticleInstance, SceneControlPoint, SceneParticle } from "../compile/particles";
+import {
+  instanceOverrideSet,
+  type ParticleInstance,
+  type ParticleInstanceValues,
+  type SceneControlPoint,
+  type SceneParticle,
+} from "../compile/particles";
 import { invert, multiply, type Mat4 } from "../render/math";
 import { f32 } from "./f32";
 import { particleModuleDef, type ParticleCategory, type ParticleModule } from "./modules";
@@ -349,12 +357,12 @@ export class ControlPointSet {
       const base = newPoint();
       base.translation.set(source.offset);
       if (!(flags & NO_INSTANCE_OVERRIDE)) {
-        // 角度只比较 x 分量是否未设（FLT_MAX），这里未设是 null
+        // 只比较 x 分量是否未设（FLT_MAX，`instanceOverrideSet`），解析不出来的是 null
         const angle = def.instance.controlpointAngles[i];
-        if (angle) base.basis.set(eulerBasis(angle));
+        if (instanceOverrideSet(angle)) base.basis.set(eulerBasis(angle));
         // 替换平移，不加 offset
         const position = def.instance.controlpoints[i];
-        if (position) base.translation.set(position.slice(0, 3));
+        if (instanceOverrideSet(position)) base.translation.set(position.slice(0, 3));
       }
       const current = newPoint();
       const previous = newPoint();
@@ -417,6 +425,45 @@ export class ControlPointSet {
         // 世界系统里控制点 0 忽略 bit1（1.5「怪处」）
         if (!scene || i === 0) applyMatrix(point.current, matrix, point.base);
       } else if (scene) {
+        if (inverse === undefined) inverse = invert(matrix);
+        applyMatrix(point.current, inverse, point.base);
+      }
+    });
+  }
+
+  /**
+   * 运行时改实例覆盖的控制点（P4f 步骤 3，`FUN_14022bd40` `0x14022bf26`–`0x14022c17d`，rea-p4c-sim.md 第 2 节、rea-p4f-script.md 5.5
+   * 【确】），每次置脏重算都调（覆盖没变也重写）：
+   * ```
+   * for i in 0 .. n − 1:                                   // n 是本系统的控制点数：下标 ≥ n 的覆盖不起作用
+   *     if cp[i].flags & 0x10005: continue                  // 指针、父控制点、remap 输出的点不管（parentWrites 不看）
+   *     a = angle[i];  t = pos[i]                           // 只比较 x 是否 FLT_MAX（`instanceOverrideSet`）
+   *     if a 已设: base.3×3 = Rz·Ry·Rx(a)（`eulerBasis`，弧度）
+   *     if t 已设: base.t = t（替换，不加 offset）
+   *     elif a 未设: continue                               // 两个都没设：不碰 current
+   *     if (!(f & 2) 或 i == 0) 且 world: current = M·base
+   *     elif !(f & 2) 或 world:          current = base
+   *     else:                            current = inverse(M)·base
+   * ```
+   * `matrix` 是 WPE 当时压栈的 `M`（`FUN_140229760(sys)`，上一帧的对象矩阵，`ParticleSystem.overrideMatrix`）；用到它的两种情形在同一帧
+   * 的 `update` 里会按本帧的 `M` 重算，只有冻结的帧（`dt′ ≤ 0`，不更新）看得到这里的值。不碰 `previous`（`inheritcontrolpointvelocity`
+   * 会看到一次跳变）。写过的 `base` 不会因为之后写回 FLT_MAX 而恢复成 `offset`。
+   */
+  applyOverrides(overrides: Pick<ParticleInstanceValues, "controlpoints" | "controlpointAngles">, matrix: Mat4): void {
+    let inverse: Mat4 | null | undefined;
+    this.points.forEach((point, i) => {
+      const f = point.flags;
+      if (f & NO_INSTANCE_OVERRIDE) return;
+      const angle = overrides.controlpointAngles[i];
+      const position = overrides.controlpoints[i];
+      const angleSet = instanceOverrideSet(angle);
+      if (angleSet) point.base.basis.set(eulerBasis(angle));
+      if (instanceOverrideSet(position)) point.base.translation.set(position.slice(0, 3));
+      else if (!angleSet) return;
+      const scene = (f & CONTROL_POINT_FLAGS.scene) !== 0;
+      if ((!scene || i === 0) && this.world) applyMatrix(point.current, matrix, point.base);
+      else if (!scene || this.world) copyPoint(point.current, point.base);
+      else {
         if (inverse === undefined) inverse = invert(matrix);
         applyMatrix(point.current, inverse, point.base);
       }

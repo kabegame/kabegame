@@ -1,7 +1,7 @@
 /**
  * 声音表与能力表（P6a 步骤 1、2）：编译期把声音对象解析进 `bundle.sounds`、`volume` 登记成就地目标、各键的报与不报，
- * `volume` 挂 `{script}` 的写回目标（步骤 2），以及场景里有粒子层时脚本的播放控制按任意接收者报（`scriptApi.ts` 的
- * `PARTICLE_LAYER_METHODS`）。
+ * `volume` 挂 `{script}` 的写回目标（步骤 2），以及脚本的播放控制不报（P6a 步骤 2 起场景有粒子层时按任意接收者报
+ * `particle.<名>`，P4f 步骤 3 实现了粒子层的方法后删掉）。
  */
 import { describe, expect, it, vi } from "vitest";
 import { planApply } from "./bindings";
@@ -9,7 +9,7 @@ import { compileScene } from "./bundle";
 import { checkObjectFeatures, isSoundObject } from "./features";
 import type { SceneReader } from "./fs";
 import type { SceneObject } from "./model";
-import { MISSING_SCRIPT_API, PARTICLE_LAYER_METHODS, scanScriptApi } from "./scriptApi";
+import { MISSING_SCRIPT_API, scanScriptApi } from "./scriptApi";
 import { soundExtension, soundFlag, soundMode, soundVolume } from "./sounds";
 import { SceneState } from "../render/state";
 
@@ -237,37 +237,22 @@ describe("能力表：播放控制（步骤 2）", () => {
     "}",
   ].join("\n");
 
-  it("有粒子层时任意接收者上的 play / pause / stop / isPlaying 都报 particle.<名>；没有粒子层时不报，thisLayer 上也不报", () => {
+  it("任意接收者上的 play / pause / stop / isPlaying 都不报（P4f 步骤 3 删掉了有粒子层时的多报）；thisLayer 上也不报", () => {
     const script = { source, owner: { kind: "layer" as const }, layer: 0 };
-    expect(scanScriptApi(script, { particleLayers: true })).toEqual([
-      "particle.isPlaying",
-      "particle.pause",
-      "particle.play",
-      "particle.stop",
-    ]);
     expect(scanScriptApi(script)).toEqual([]);
-    // 根对象上同样：thisLayer / thisObject 不再按 layer 组报（声音层有了），有粒子层时照报 particle
     for (const root of ["thisLayer", "thisObject"]) {
       const rooted = { source: `${root}.play(); ${root}.isPlaying();`, owner: { kind: "layer" as const }, layer: 0 };
       expect(scanScriptApi(rooted)).toEqual([]);
-      expect(scanScriptApi(rooted, { particleLayers: true })).toEqual(["particle.isPlaying", "particle.play"]);
     }
-    expect(
-      scanScriptApi(
-        { source: "thisLayer['stop']?.();", owner: { kind: "general" }, layer: null },
-        { particleLayers: true },
-      ),
-    ).toEqual(["particle.stop"]);
+    expect(scanScriptApi({ source: "thisLayer['stop']?.();", owner: { kind: "general" }, layer: null })).toEqual([]);
   });
 
-  it("PARTICLE_LAYER_METHODS 不在 MISSING_SCRIPT_API 里；volume 与四个方法也从 layer 组删掉了", () => {
-    const layer = MISSING_SCRIPT_API.layer.map((entry) => entry.name);
-    for (const name of [...PARTICLE_LAYER_METHODS, "volume"]) expect(layer).not.toContain(name);
-    for (const entries of Object.values(MISSING_SCRIPT_API))
-      for (const { name } of entries) expect(PARTICLE_LAYER_METHODS).not.toContain(name);
+  it("四个方法与 volume 不在 MISSING_SCRIPT_API 里", () => {
+    const names = Object.values(MISSING_SCRIPT_API).flatMap((entries) => entries.map((entry) => entry.name));
+    for (const name of ["play", "pause", "stop", "isPlaying", "volume"]) expect(names).not.toContain(name);
   });
 
-  it("编译：场景有粒子层时报 particle.<名>，只有声音层时不报（不再报 layer.<名>）", async () => {
+  it("编译：有没有粒子层都不报 script:api:*（P4f 步骤 3 起粒子层的同名方法也实现了）", async () => {
     const scripted = { id: 9, name: "ctrl", visible: { script: source, value: true } };
     const apiKeys = (bundle: { unsupported: string[] }) =>
       bundle.unsupported.filter((key) => key.startsWith("script:api:"));
@@ -278,12 +263,7 @@ describe("能力表：播放控制（步骤 2）", () => {
       { name: "music", sound: "sounds/a.mp3" },
       { name: "fx", particle: "particles/a.json" },
     ]);
-    expect(apiKeys(withParticle)).toEqual([
-      "script:api:particle.isPlaying",
-      "script:api:particle.pause",
-      "script:api:particle.play",
-      "script:api:particle.stop",
-    ]);
+    expect(apiKeys(withParticle)).toEqual([]);
     const without = await compile([scripted]);
     expect(without.unsupported).toEqual([]);
   });

@@ -10,8 +10,9 @@
  * `origin`、`angles`、`scale`、`visible` 时，它和全部子孙一起标脏；`alpha`、`color`、`brightness` 不继承，只标自己。
  * 视差（P5a 步骤 2）的平移看根对象的 `origin` 与 `parallaxDepth`，所以 `parallaxDepth` 同样整棵子树标脏。
  *
- * 粒子（P4a 步骤 5）：`instanceoverride` 的标量与 `colorn`（P4b 步骤 6）存在 `particleInstances`，写入用编译期同一条取值规则
- * （`instanceScalar` / `instanceColorn`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、重算颜色平移。`rate` 例外（P4f 步骤 1，
+ * 粒子（P4a 步骤 5）：`instanceoverride` 的标量、`colorn`（P4b 步骤 6）与控制点覆盖（P4f 步骤 3）存在 `particleInstances`，写入用编译期
+ * 同一条取值规则（`instanceScalar` / `instanceColorn` / `instanceControlPointValue`）、标脏后由 `GpuScene.sync` 交给模拟器从基值重新乘、
+ * 重算颜色平移、把控制点覆盖写进控制点。脚本 `layer.instance.<键>` 的读写也是这一份（WPE 的 `io`）。`rate` 例外（P4f 步骤 1，
  * rea-p4f-script.md 5.4）：WPE 的 `rate` 没有改值回调，写了不置脏，`sync` 只改步进率（不钳制、不重算）。用户属性、字段脚本的写回
  * 都走这里，所以两条入口一起是这个语义。
  *
@@ -43,8 +44,11 @@ import type { SceneScalar } from "../compile/model";
 import {
   INSTANCE_RATE_MIN,
   instanceColorn,
+  instanceControlPoint,
+  instanceControlPointValue,
   instanceScalar,
   instanceValues,
+  type InstanceField,
   type ParticleInstanceValues,
   type SceneParticle,
 } from "../compile/particles";
@@ -512,9 +516,16 @@ export class SceneState {
     if (target.kind === "particle-instance") {
       const values = this.particleInstances.get(target.object);
       if (!values) return "applied";
-      // 取值规则与编译期相同（`instanceColorn` / `instanceScalar`），条件先换成布尔
-      if (target.field === "colorn") values.colorn = instanceColorn(conditioned(binding, raw));
-      else values[target.field] = instanceScalar(conditioned(binding, raw));
+      // 取值规则与编译期相同（`instanceColorn` / `instanceControlPointValue` / `instanceScalar`），条件先换成布尔。控制点覆盖
+      // （P4f 步骤 3，rea-p4f-script.md 5.5）换一份新数组，不改编译期那份
+      const point = instanceControlPoint(target.field);
+      if (point) {
+        const key = point.angle ? "controlpointAngles" : "controlpoints";
+        const list = [...values[key]];
+        list[point.index] = instanceControlPointValue(conditioned(binding, raw));
+        values[key] = list;
+      } else if (target.field === "colorn") values.colorn = instanceColorn(conditioned(binding, raw));
+      else values[target.field as InstanceField] = instanceScalar(conditioned(binding, raw));
       // `rate` 没有改值回调（rea-p4f-script.md 5.4，用户属性同样，P3 I3）：写了不置脏、不钳制，`sync` 只改步进率；其余键调
       // `0x14022ab30` 置脏（5.1），下一帧开头从基值重算（5.2、5.3）
       if (target.field === "rate") this.rateParticles.add(target.object);

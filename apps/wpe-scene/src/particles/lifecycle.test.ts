@@ -68,6 +68,9 @@ const ALL: ParticleInstanceValues = {
   rate: 0.25,
   brightness: 7,
   colorn: null,
+  // P4f 步骤 3：实例值带控制点覆盖（这里都没设）
+  controlpoints: Array(8).fill(null),
+  controlpointAngles: Array(8).fill(null),
 };
 
 describe("setInstance：从基值重新乘", () => {

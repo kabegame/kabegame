@@ -906,10 +906,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const animations = collectAnimations(scene);
   for (const key of animations.unsupported) unsupported.add(key);
   if (animations.list.some((animation) => animation.writes)) unsupported.add(ANIMATION_PENDING);
-  // 有粒子层时，任意接收者上的播放控制都可能是粒子层的方法（P6a 步骤 2，P4f 实现后删掉）
-  checkScriptFeatures(scripts.list, unsupported, {
-    particleLayers: scene.objects.some((object) => objectKind(object) === "particle"),
-  });
+  checkScriptFeatures(scripts.list, unsupported);
   checkSceneFeatures(scene, unsupported);
   const general = scene.general ?? {};
   // 后处理档位：每次加载都解析（设置变了由调用方重新编译）

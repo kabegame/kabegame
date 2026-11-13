@@ -112,14 +112,16 @@ export interface ParticleTrackOptions {
 
 /**
  * 一个系统当前的存活粒子，按槽序。`keep` 再按槽挑一遍（dev 四角探针只要写了顶点的粒子：拖尾跳过退化的，P4c 步骤 5）。
- * 厚格式的列（速度、frame）在帧表系统与拖尾里有。
+ * 厚格式的列（速度、frame）在帧表系统与拖尾里有。本帧脚本发出的粒子（`scriptBorn`，P4f 步骤 3）不在里面：同写顶点，下一帧才画。
  */
 export function particleSnapshot(system: ParticleSystem, keep?: (slot: number) => boolean): ParticleTrackParticle[] {
   const c = system.columns;
   const out: ParticleTrackParticle[] = [];
   const thick = system.def.spriteSheet || system.def.renderer?.kind === "spritetrail";
+  const born = system.scriptBorn;
   for (let i = 0; i < system.highWater; i++) {
     if (c.life[i] === 0) continue;
+    if (born && born[i]) continue;
     if (keep && !keep(i)) continue;
     const particle: ParticleTrackParticle = {
       pos: [c.position[0][i], c.position[1][i], c.position[2][i]],

@@ -11,7 +11,7 @@ import {
 } from "./bindings";
 import { isSoundObject, isTextObject, objectKind } from "./features";
 import { resolveValue, type SceneJson, type SceneObject, type SceneScalar, type SceneValue } from "./model";
-import { SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
+import { instanceControlPoint, SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
 import { BLOOM_FIELDS } from "./postprocess";
 
 export type ScriptOwner =
@@ -87,11 +87,11 @@ function valueType(initial: SceneScalar): ValueType | "string" {
  * `text`：文本对象顶层的 `objects/<i>/<TEXT_RUNTIME_FIELDS 之一>`（P6b 1e）写回到文本目标，值变了才重排；`font`、
  * `opaquebackground` 等其余文本键仍是 `unsupported`（能力表另报 `text:script:<键>`）。
  *
- * `particle`：粒子对象的 `objects/<i>/instanceoverride/<键>`（P4f 步骤 1、2，rea-p4f-script.md 第 6、7 节）。`SCRIPT_INSTANCE_KEYS` 的
- * 8 个键（6 个系数、`brightness` 与 `colorn`）写回到就地目标 `particle-instance`：WPE 的回调返回值走和脚本赋值、用户属性改值同一个
- * setter（6.2，每帧写、不比较），下一帧对象更新开头才进模拟（6.3），和我们「脚本之后 `sync`、下一次 `stepParticles` 才用」的帧序等价；
- * `rate` 在 `SceneState.write` 里另走一条路（没有改值回调，5.4）。其余键（控制点等）与非粒子对象上的 `instanceoverride` 没有目标
- * （能力表照报），也不落到图层的同名字段上（`alpha`、`brightness` 是图层字段，路径不同）。
+ * `particle`：粒子对象的 `objects/<i>/instanceoverride/<键>`（P4f 步骤 1–3，rea-p4f-script.md 第 5–7 节）。`SCRIPT_INSTANCE_KEYS` 的
+ * 24 个键（6 个系数、`brightness`、`colorn` 与 16 个控制点键）写回到就地目标 `particle-instance`：WPE 的回调返回值走和脚本赋值、用户
+ * 属性改值同一个 setter（6.2，每帧写、不比较），下一帧对象更新开头才进模拟（6.3），和我们「脚本之后 `sync`、下一次 `stepParticles`
+ * 才用」的帧序等价；`rate` 在 `SceneState.write` 里另走一条路（没有改值回调，5.4）。其余键与非粒子对象上的 `instanceoverride` 没有
+ * 目标（能力表照报），也不落到图层的同名字段上（`alpha`、`brightness` 是图层字段，路径不同）。
  *
  * 属性关键帧动画（P10a，`animations.ts`）用同一个函数推目标，参数照字段脚本的算法给。
  */
@@ -133,8 +133,8 @@ export function targetOf(
 
 /**
  * 按目标定的值类型（不按初值猜），字段脚本与属性关键帧动画（P10a，`animations.ts`）共用：声音的 `volume` 是 float；文本按 `textTypes`；
- * 粒子实例覆盖的 `colorn` 是 vec3（WPE 的描述符，rea-p4f-script.md 5.1），其余系数是 float；图层字段按 `layerTypes`；`general` 字段按
- * `GENERAL_FIELDS`。其余（材质常量、泛光参数、没有目标的）返回 null，由调用方另定。
+ * 粒子实例覆盖的 `colorn` 与控制点键是 vec3（WPE 的描述符，rea-p4f-script.md 1.3、5.1），其余系数是 float；图层字段按 `layerTypes`；
+ * `general` 字段按 `GENERAL_FIELDS`。其余（材质常量、泛光参数、没有目标的）返回 null，由调用方另定。
  */
 export function targetValueType(
   target: SceneScript["target"],
@@ -143,7 +143,8 @@ export function targetValueType(
 ): ValueType | "string" | null {
   if (target.kind === "sound") return "float";
   if (target.kind === "text") return textTypes[target.field];
-  if (target.kind === "particle-instance") return target.field === "colorn" ? "vec3" : "float";
+  if (target.kind === "particle-instance")
+    return target.field === "colorn" || instanceControlPoint(target.field) ? "vec3" : "float";
   if (owner.kind === "layer" && key in layerTypes) return layerTypes[key];
   if (owner.kind === "general" && key in GENERAL_FIELDS) return GENERAL_FIELDS[key as GeneralKey].type;
   return null;

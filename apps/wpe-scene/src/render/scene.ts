@@ -134,7 +134,7 @@ import type { SceneBundle, SceneFbo, SceneLayer, SceneModel, ScenePass, SceneTex
 import type { ParticleRenderer, SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
-import { pointerScenePoint } from "../particles/controlpoints";
+import { pointerScenePoint, type ControlPointInputs } from "../particles/controlpoints";
 import { orientationBasis, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
@@ -148,6 +148,7 @@ import {
   writeVertices,
   type ParticleVertexLayout,
 } from "../particles/vertices";
+import type { ParticleScriptTarget } from "../script/api";
 import type { GlyphAtlas } from "../text/atlas";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
@@ -385,6 +386,11 @@ interface ParticleTree {
    * 加载时对象的世界矩阵（`worldMatrixOf`，控制点的输入，P4c 步骤 1）：`stepParticles` 没给 `state`（dev 探针按 dt 回放）时每帧用它。
    */
   world: Mat4;
+  /**
+   * 最近一次交给根系统的控制点输入（建树时是预热用的那份，之后每次 `stepParticles` 换成这一帧的，可见与不可见都换）：脚本
+   * `emitParticles` 用它（P4f 步骤 3：和本帧模拟用的对象 `W` 一致，已定 7）。
+   */
+  inputs: ControlPointInputs;
   templates: Map<string, ParticleTemplate>;
   /** 模板树里有材质需要帧缓冲的系统（`particleTreeWantsFramebuffer`）：编码时在先序里第一个这样的系统之前拷快照。 */
   framebuffer: boolean;
@@ -1976,6 +1982,7 @@ export class GpuScene {
    * `instanceoverride` 取状态里的当前值（建场景时与编译期相同；万一单图层重建，用的也是就地写过的值），子系统从根上取。
    * 预热按状态里对象当前的世界矩阵更新控制点（P4c 步骤 1，rea-p4c-sim.md 1.3）；指针点的跟随点按最近的 cursor
    * （`particleCursor`，加载时是 `ParticleOptions.cursor`）反投影（P4c 步骤 2）。
+   * 单图层重建（这一层已经有树）时新树沿用旧树的脚本暂停 / 停止（`adoptScriptControl`，P4f 步骤 3【推】）。
    */
   private createParticleTree(layer: SceneLayer, resources: LayerResources, state: SceneState): ParticleTree {
     const compiled = layer.particle!;
@@ -1993,16 +2000,61 @@ export class GpuScene {
     // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
     system.setAudio(this.particleAudio);
     const world = worldMatrixOf(layer.object, state.layers, new Map());
-    system.prewarm({ world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) });
+    const inputs = { world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) };
+    system.prewarm(inputs);
+    // 单图层重建：旧树还在 `trees` 里（`install` 之后才换）
+    const previous = this.trees.get(layer.object);
+    if (previous) system.adoptScriptControl(previous.system);
     return {
       object: layer.object,
       layer,
       resources,
       system,
       world,
+      inputs,
       templates: new Map(),
       framebuffer: particleTreeWantsFramebuffer(compiled),
     };
+  }
+
+  /**
+   * 粒子层脚本方法的落点（P4f 步骤 3，`IParticleSystem`，`script/api.ts` 的 `installParticle`）：接到这一层的根系统（子系统与事件实例
+   * 脚本拿不到，rea-p4f-script.md 1.5）。`stop` 与 `emitParticles` 改了粒子，标 `stale`（暂停中补画的帧也重写顶点）；`emitParticles` 带
+   * 这一层最近一次交给根系统的控制点输入（`ParticleTree.inputs`）。没有这一层的树（不是粒子层、没有可画的模板）时为 null。
+   */
+  particleScript(object: number): ParticleScriptTarget | null {
+    const tree = this.trees.get(object);
+    if (!tree) return null;
+    return {
+      play: () => tree.system.scriptPlay(),
+      pause: () => tree.system.scriptPause(),
+      stop: () => {
+        tree.system.scriptStop();
+        this.markParticlesStale(object);
+      },
+      isPlaying: () => tree.system.scriptIsPlaying(),
+      emitParticles: (count) => {
+        tree.system.emitParticles(count, tree.inputs);
+        this.markParticlesStale(object);
+      },
+    };
+  }
+
+  /**
+   * 重编译换上新场景时，各粒子层沿用旧场景同一对象的脚本暂停 / 停止（P4f 步骤 3【推】，`ParticleSystem.adoptScriptControl`）：WPE 没有
+   * 重编译，脚本 `stop()` / `pause()` 过的系统一直保持；我们的新树重新预热，不沿用就会自己又发起来。`SceneRenderer.load` 在换上新场景、
+   * 画第一帧之前调。
+   */
+  adoptParticleScripts(previous: GpuScene): void {
+    for (const [object, tree] of this.trees) {
+      const old = previous.trees.get(object);
+      if (old) tree.system.adoptScriptControl(old.system);
+    }
+  }
+
+  /** 这一层的全部粒子绘制标 `stale`（下次编码重写顶点）：步进之后、脚本改了粒子之后。 */
+  private markParticlesStale(object: number): void {
+    for (const item of this.drawsByLayer.get(object) ?? []) if (item.particles) item.particles.stale = true;
   }
 
   /**
@@ -2857,10 +2909,8 @@ export class GpuScene {
     const worlds = new Map<number, Mat4>();
     let pointer: [number, number] | null = null;
     // 一个粒子层若干次绘制共用一棵系统树（P4e 步骤 1、2）：只步进根（子系统与事件实例由它递归），每棵树一次，图层顺序；步进后这一层的
-    // 全部粒子绘制都标 `stale`（实例化的 draw 每帧都可能换实例，一起标）
-    const markStale = (object: number) => {
-      for (const item of this.drawsByLayer.get(object) ?? []) if (item.particles) item.particles.stale = true;
-    };
+    // 全部粒子绘制都标 `stale`（实例化的 draw 每帧都可能换实例，一起标）。交给根的控制点输入记进 `tree.inputs`，本帧脚本
+    // `emitParticles` 用同一份（P4f 步骤 3）
     for (const tree of this.trees.values()) {
       const root = tree.system;
       const object = tree.object;
@@ -2868,9 +2918,10 @@ export class GpuScene {
         // 不可见时控制点照常更新（P4d 步骤 5，rea-p4d-modules.md 5.3）：`W` 与跟随点照可见时的算法算
         const world = worldMatrixOf(object, state.layers, worlds);
         pointer ??= pointerScenePoint(this.viewProjection, cursor);
+        tree.inputs = { world, pointer };
         // 系统时间在不可见的帧上照常累加（P4d 收尾 A），所以把帧时间也交给它；子系统与事件实例这时以 `emit = false` 照常步进
         // （rea-p4e-children 3.6），所以有子系统时每帧都要重写
-        if (root.suspend({ world, pointer }, frametime, time) || root.hasChildren) markStale(object);
+        if (root.suspend(tree.inputs, frametime, time) || root.hasChildren) this.markParticlesStale(object);
         continue;
       }
       // 开销记在这一层的第一个 draw 上（同 P4e 步骤 1 按 draw 找根时的那一个）
@@ -2879,12 +2930,13 @@ export class GpuScene {
       const started = timing ? performance.now() : 0;
       const world = state ? worldMatrixOf(object, state.layers, worlds) : tree.world;
       pointer ??= pointerScenePoint(this.viewProjection, cursor);
-      root.step(frametime, time, { world, pointer });
+      tree.inputs = { world, pointer };
+      root.step(frametime, time, tree.inputs);
       if (timing) {
         recordSample(timing.simulate, performance.now() - started);
         recordSample(timing.alive, root.alive);
       }
-      markStale(object);
+      this.markParticlesStale(object);
     }
   }
 

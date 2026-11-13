@@ -186,6 +186,8 @@ export interface TrailSource {
   /** ropetrail 的历史；不是 ropetrail 系统时为 null。 */
   trail: TrailHistory | null;
   def: { renderer: Pick<ParticleRenderer, "ropetrail"> };
+  /** 本帧脚本发出的粒子（P4f 步骤 3，`ParticleSystem.scriptBorn`）：本帧不写（WPE 写完段顶点才跑脚本）。单测手写时可省。 */
+  scriptBorn?: Uint8Array | null;
 }
 
 /**
@@ -234,8 +236,10 @@ export function writeTrailSegments(system: TrailSource, layout: TrailVertexLayou
     if (w !== null) out[at + 3] = w;
   };
   let written = 0;
+  const born = system.scriptBorn ?? null;
   for (let i = 0; i < system.highWater; i++) {
     if (life[i] === 0) continue;
+    if (born && born[i]) continue;
     if (written + n > capacity) break;
     const count = history.counts[i];
     const scrolls = history.scrolls ? history.scrolls[i] : 0;

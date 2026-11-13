@@ -286,17 +286,14 @@ describe("B：instanceoverride 的取值、绑定与能力表", () => {
       expect(check({ brightness: { user: { name: "b", condition: "1" }, value: 10 } })).toEqual([]);
     });
 
-    it("控制点静态值不报、{user} 报 particle:instance:controlpoint:user（P4c 步骤 1）；控制点挂 {script} 报 particle:binding:instance:<键>（6 个系数、brightness 与 colorn 不报，P4f 步骤 1、2）；其它键报 particle:instance:<键>", () => {
+    it("控制点静态值、{user}、挂 {script} 都不报（P4c 步骤 1、P4f 步骤 3）；6 个系数、brightness 与 colorn 挂脚本不报（P4f 步骤 1、2）；其它键报 particle:instance:<键>", () => {
       expect(check({ controlpoint1: "10 20 0" })).toEqual([]);
       expect(check({ controlpointangle3: "0 0 0" })).toEqual([]);
       expect(check({ controlpoint7: "abc", controlpointangle0: "1 2 3" })).toEqual([]);
-      expect(check({ controlpoint2: { user: "p", value: "1 2 0" } })).toEqual(["particle:instance:controlpoint:user"]);
-      expect(check({ controlpointangle5: { user: { name: "a", condition: "1" }, value: "0 0 1" } })).toEqual([
-        "particle:instance:controlpoint:user",
-      ]);
-      expect(check({ controlpoint1: { script: SCRIPT, value: "1 2 0" } })).toEqual([
-        "particle:binding:instance:controlpoint1",
-      ]);
+      // P4f 步骤 3：控制点的运行时写入实现了，绑用户属性与挂脚本不再报
+      expect(check({ controlpoint2: { user: "p", value: "1 2 0" } })).toEqual([]);
+      expect(check({ controlpointangle5: { user: { name: "a", condition: "1" }, value: "0 0 1" } })).toEqual([]);
+      expect(check({ controlpoint1: { script: SCRIPT, value: "1 2 0" } })).toEqual([]);
       // P4f 步骤 1、2：6 个系数、brightness 与 colorn 挂脚本已实现（写回目标 particle-instance），不报
       expect(check({ count: { script: SCRIPT, value: 1 } })).toEqual([]);
       expect(check({ colorn: { script: SCRIPT, value: "1 1 1" } })).toEqual([]);
@@ -408,7 +405,7 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
     });
     expect(bundle.unsupported.filter((key) => key.startsWith("particle:instance"))).toEqual([]);
     expect(bundle.unsupported).not.toContain("particle:instance:brightness");
-    // SceneState 的起始值就是编译期的值
+    // SceneState 的起始值就是编译期的值（P4f 步骤 3 起带控制点覆盖，这里都没设）
     expect(SceneState.fromBundle(bundle).particleInstances.get(1)).toEqual({
       alpha: 0.5,
       size: 2,
@@ -418,6 +415,8 @@ describe("B：compileScene 登记 instanceoverride 绑定", () => {
       rate: 0.25,
       brightness: 1,
       colorn: [0, 1, 0],
+      controlpoints: Array(8).fill(null),
+      controlpointAngles: Array(8).fill(null),
     });
   });
 

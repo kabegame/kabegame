@@ -154,14 +154,16 @@ export function trailDrawable(
  * `trail` 是拖尾系统（renderer 是 `spritetrail`）的眼位（`trailEye`）：给了时跳过退化的粒子（`trailDrawable`），返回实际写的
  * 粒子数；非拖尾系统传 null，速度为 0 的粒子照写。退化粒子在写顶点时跳过、不靠 GPU 丢 NaN 图元：一个系统只有一个 renderer，
  * 顶点只给这一次绘制用（以后支持多 renderer 时，拖尾那次绘制要改用自己的索引）。
+ * 本帧脚本发出的粒子（`scriptBorn`，P4f 步骤 3，rea-p4f-script.md 4.4）不写：WPE 写完顶点才跑脚本，它们下一帧才画。
  */
 export function writeVertices(
-  system: Pick<ParticleSystem, "columns" | "highWater">,
+  system: Pick<ParticleSystem, "columns" | "highWater"> & Partial<Pick<ParticleSystem, "scriptBorn">>,
   layout: ParticleVertexLayout,
   into: Float32Array,
   trail: readonly number[] | null = null,
 ): number {
   const c = system.columns;
+  const born = system.scriptBorn ?? null;
   const { stride, position: p, texCoord: t, rotation: r, color: k, thick: h } = layout;
   const [px, py, pz] = c.position;
   const [rx, ry, rz] = c.rotation;
@@ -172,6 +174,7 @@ export function writeVertices(
   let count = 0;
   for (let i = 0; i < system.highWater && count < capacity; i++) {
     if (life[i] === 0) continue;
+    if (born && born[i]) continue;
     if (trail && !trailDrawable(c, i, trail)) continue;
     let o = count * 4 * stride;
     for (let corner = 0; corner < 4; corner++, o += stride) {

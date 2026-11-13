@@ -38,23 +38,22 @@ describe("字段脚本的写回目标（collectScripts，targetOf）", () => {
     return Object.fromEntries(list.map((item) => [item.id, { target: item.target, valueType: item.valueType }]));
   }
 
-  it("粒子对象的 8 个键（6 个系数、colorn，P4f 步骤 2 起含 brightness）写回 particle-instance（colorn 为 vec3，其余 float）；控制点、color 没有目标", async () => {
+  it("粒子对象的 24 个键（6 个系数、colorn、P4f 步骤 2 起的 brightness、步骤 3 起的 16 个控制点键）写回 particle-instance（colorn 与控制点为 vec3，其余 float）；color 没有目标", async () => {
     const found = await targets({
       objects: [
         { id: 1, image: "models/a.json" },
         { id: 2, particle: "p.json", instanceoverride: OVERRIDE },
       ],
     });
-    for (const key of SCRIPT_INSTANCE_KEYS)
+    for (const key of SCRIPT_INSTANCE_KEYS.filter((item) => item in OVERRIDE))
       expect(found[`objects/1/instanceoverride/${key}`], key).toEqual({
         target: { kind: "particle-instance", object: 1, field: key },
-        valueType: key === "colorn" ? "vec3" : "float",
+        valueType: key === "colorn" || key.startsWith("controlpoint") ? "vec3" : "float",
       });
-    for (const key of ["controlpoint0", "controlpointangle2", "color"])
-      expect(found[`objects/1/instanceoverride/${key}`].target, key).toEqual({
-        kind: "unsupported",
-        path: `objects/1/instanceoverride/${key}`,
-      });
+    expect(found["objects/1/instanceoverride/color"].target).toEqual({
+      kind: "unsupported",
+      path: "objects/1/instanceoverride/color",
+    });
     expect(SCRIPT_INSTANCE_KEYS).toEqual([
       "alpha",
       "size",
@@ -64,6 +63,8 @@ describe("字段脚本的写回目标（collectScripts，targetOf）", () => {
       "rate",
       "brightness",
       "colorn",
+      ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => `controlpoint${i}`),
+      ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => `controlpointangle${i}`),
     ]);
   });
 
@@ -97,18 +98,12 @@ describe("能力表（checkParticleInstance）", () => {
     return [...keys].sort();
   };
 
-  it("8 个键（含 brightness，P4f 步骤 2）挂脚本不报；controlpointN、controlpointangleN、color 挂脚本照报", () => {
-    for (const key of SCRIPT_INSTANCE_KEYS) expect(check({ [key]: OVERRIDE[key] }), key).toEqual([]);
-    expect(check(OVERRIDE)).toEqual([
-      "particle:binding:instance:color",
-      "particle:binding:instance:controlpoint0",
-      "particle:binding:instance:controlpointangle2",
-    ]);
+  it("24 个键（含 brightness，P4f 步骤 2；含控制点，P4f 步骤 3）挂脚本不报；color 挂脚本照报", () => {
+    for (const key of SCRIPT_INSTANCE_KEYS) expect(check({ [key]: OVERRIDE[key] ?? script("1 0 0") }), key).toEqual([]);
+    expect(check(OVERRIDE)).toEqual(["particle:binding:instance:color"]);
     // bit3 不影响脚本这一条
     expect(check({ brightness: script(1) }, { flags: 8 })).toEqual([]);
-    expect(check({ controlpoint1: script("1 0 0") }, { flags: 8 })).toEqual([
-      "particle:binding:instance:controlpoint1",
-    ]);
+    expect(check({ controlpoint1: script("1 0 0") }, { flags: 8 })).toEqual([]);
   });
 });
 
@@ -158,8 +153,9 @@ describe("compileScene：字段脚本挂在 instanceoverride 上", () => {
       exhaustive: true,
     });
 
-  it("8 个键（6 个系数、brightness 与 colorn）：不报 particle:binding:instance:*，初值取 value，脚本写回 particle-instance", async () => {
-    const override = Object.fromEntries(SCRIPT_INSTANCE_KEYS.map((key) => [key, OVERRIDE[key]]));
+  it("OVERRIDE 里有目标的 10 个键（6 个系数、brightness、colorn 与两个控制点键）：不报 particle:binding:instance:*，初值取 value，脚本写回 particle-instance", async () => {
+    const keys = SCRIPT_INSTANCE_KEYS.filter((key) => key in OVERRIDE);
+    const override = Object.fromEntries(keys.map((key) => [key, OVERRIDE[key]]));
     const bundle = await compile(override);
     expect(bundle.unsupported.filter((key) => key.startsWith("particle:"))).toEqual([]);
     expect(bundle.layers[0].particle!.instance).toMatchObject({
@@ -172,17 +168,18 @@ describe("compileScene：字段脚本挂在 instanceoverride 上", () => {
       brightness: 2,
       colorn: [0, 1, 0],
     });
+    // 控制点（P4f 步骤 3）：初值同样取 value
+    expect(bundle.layers[0].particle!.instance.controlpoints[0]).toEqual([1, 2, 0]);
+    expect(bundle.layers[0].particle!.instance.controlpointAngles[2]).toEqual([0, 0, 1]);
     expect(bundle.scripts.list.map((item) => item.target)).toEqual(
-      SCRIPT_INSTANCE_KEYS.map((field) => ({ kind: "particle-instance", object: 0, field })),
+      keys.map((field) => ({ kind: "particle-instance", object: 0, field })),
     );
     // 字段脚本不是用户绑定：绑定表里没有它们
     expect(bundle.bindings.filter((binding) => binding.target.kind === "particle-instance")).toEqual([]);
   });
 
-  it("控制点挂脚本照报（brightness 从 P4f 步骤 2 起不报）", async () => {
+  it("控制点挂脚本不报（P4f 步骤 3；brightness 从 P4f 步骤 2 起不报）", async () => {
     const bundle = await compile({ brightness: script(2), controlpoint1: script("1 0 0") });
-    expect(bundle.unsupported.filter((key) => key.startsWith("particle:binding"))).toEqual([
-      "particle:binding:instance:controlpoint1",
-    ]);
+    expect(bundle.unsupported.filter((key) => key.startsWith("particle:binding"))).toEqual([]);
   });
 });

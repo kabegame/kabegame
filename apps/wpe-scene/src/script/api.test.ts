@@ -2,17 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "../audio/spectrum";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
+import { parseParticleInstance, type SceneParticle } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import {
   MISSING_SCRIPT_API,
   MISSING_SCRIPT_CALLBACKS,
-  PARTICLE_LAYER_METHODS,
   WPE_SCRIPT_CALLBACKS,
   type ScriptApiGroup,
 } from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState, scriptWriteValue } from "../render/state";
-import { createWpeLocalStorage, ScriptApi, type SoundScriptTarget, type VideoScriptTarget } from "./api";
+import {
+  createWpeLocalStorage,
+  ScriptApi,
+  type ParticleScriptTarget,
+  type SoundScriptTarget,
+  type VideoScriptTarget,
+} from "./api";
 import { alignScriptEnvironment } from "./environment";
 import { RUNTIME_CALLBACKS, ScriptRuntime, type ScriptRealm } from "./runtime";
 import { createMemoryStorage } from "./storage";
@@ -61,8 +67,11 @@ class FakeRealm implements ScriptRealm {
   dispose() {}
 }
 
-/** `sound`：多一个声音对象的图层（objects 下标 2，名字 Music，声音表里 volume 0.5）。 */
-function scene(sound = false): SceneBundle {
+/**
+ * `sound`：多一个声音对象的图层（objects 下标 2，名字 Music，声音表里 volume 0.5）。`particle`：多一个粒子对象的图层（objects 下标 3，
+ * 名字 Sparks，P4f 步骤 3），实例覆盖是缺省值（控制点都没设）。
+ */
+function scene(sound = false, particle = false): SceneBundle {
   const layer = (object: number, name: string): SceneLayer => ({
     id: object + 10,
     object,
@@ -116,7 +125,23 @@ function scene(sound = false): SceneBundle {
         hdrIterations: 4,
       },
     },
-    layers: [layer(0, "First"), layer(1, "Second"), ...(sound ? [layer(2, "Music")] : [])],
+    layers: [
+      layer(0, "First"),
+      layer(1, "Second"),
+      ...(sound ? [layer(2, "Music")] : []),
+      ...(particle
+        ? [
+            {
+              ...layer(3, "Sparks"),
+              particle: {
+                instance: parseParticleInstance(undefined),
+                passes: [],
+                children: [],
+              } as unknown as SceneParticle,
+            },
+          ]
+        : []),
+    ],
     programs: [],
     textures: [],
     bloom: null,
@@ -146,10 +171,17 @@ function script(id: string, owner: SceneScript["owner"], layer: number | null): 
   };
 }
 
-/** `sound`：场景带声音层（`scene(true)`），`target` 是宿主交给声音层方法的排期器（null = 没有播放器）。 */
-function setup(audioRegistered?: () => void, sound?: { target: SoundScriptTarget | null }) {
+/**
+ * `sound`：场景带声音层（`scene(true)`），`target` 是宿主交给声音层方法的排期器（null = 没有播放器）。`particle`：场景带粒子层
+ * （objects 下标 3，P4f 步骤 3），`target` 是宿主交给粒子层方法的根系统落点（null = 没有场景）。
+ */
+function setup(
+  audioRegistered?: () => void,
+  sound?: { target: SoundScriptTarget | null },
+  particle?: { target: ParticleScriptTarget | null },
+) {
   const realm = new FakeRealm();
-  let bundle = scene(!!sound);
+  let bundle = scene(!!sound, !!particle);
   let state = SceneState.fromBundle(bundle);
   let resolution: [number, number] = [800, 600];
   const recompiles: { path: string; value: number[] | boolean | string }[] = [];
@@ -171,6 +203,7 @@ function setup(audioRegistered?: () => void, sound?: { target: SoundScriptTarget
     },
     audioRegistered,
     ...(sound ? { sound: (object: number) => (object === 2 ? sound.target : null) } : {}),
+    ...(particle ? { particles: (object: number) => (object === 3 ? particle.target : null) } : {}),
   });
   return {
     realm,
@@ -183,7 +216,7 @@ function setup(audioRegistered?: () => void, sound?: { target: SoundScriptTarget
       return state;
     },
     recompile() {
-      bundle = scene(!!sound);
+      bundle = scene(!!sound, !!particle);
       state = SceneState.fromBundle(bundle);
     },
     resetState() {
@@ -1187,7 +1220,7 @@ describe("视频纹理（P9b，IVideoTexture）", () => {
 describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () => {
   /** 各分组在 realm 里对应的真实对象：表项必须不在上面，上面已有的成员必须不在表里。 */
   function objects(): Record<ScriptApiGroup, Record<string, unknown>[]> {
-    const h = setup(undefined, { target: null });
+    const h = setup(undefined, { target: null }, { target: null });
     h.api.enterScript(script("e", { kind: "effect", object: 0, effect: 0 }, 0));
     const effect = h.realm.global.thisObject as Record<string, unknown>;
     h.api.enterScript(script("m", { kind: "material", pass: "objects/0/passes/0", layer: 0 }, 0));
@@ -1204,6 +1237,8 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
     const layer = h.api.layer(0)!;
     // 声音层（P6a 步骤 2）多 play / pause / stop / isPlaying / volume：同样逐成员核对
     const sound = h.api.layer(2)!;
+    // 粒子层（P4f 步骤 3）多 play / pause / stop / isPlaying / emitParticles / instance：同样逐成员核对
+    const particle = h.api.layer(3)!;
     return {
       thisScene: [h.api.thisScene, h.api.general],
       engine: [h.api.engine],
@@ -1211,9 +1246,9 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
       input: [(h.realm.global.input as Record<string, unknown> | undefined) ?? {}],
       localStorage: [localStorage],
       console: [(frame as unknown as Record<string, Record<string, unknown>>).console],
-      layer: [layer, sound],
+      layer: [layer, sound, particle],
       effect: [effect],
-      object: [layer, sound, effect, material, h.api.general, h.api.thisScene],
+      object: [layer, sound, particle, effect, material, h.api.general, h.api.thisScene],
     };
   }
 
@@ -1235,13 +1270,19 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
     }
   });
 
-  it("粒子层的播放控制（PARTICLE_LAYER_METHODS）只在声音层上有，不在别的对象上（P6a 步骤 2）", () => {
+  it("play / pause / stop / isPlaying 只在声音层与粒子层上有，emitParticles 与 instance 只在粒子层上有（P6a 步骤 2、P4f 步骤 3）", () => {
     const groups = objects();
-    const [plain, sound] = groups.layer;
-    for (const name of PARTICLE_LAYER_METHODS) {
+    const [plain, sound, particle] = groups.layer;
+    for (const name of ["play", "pause", "stop", "isPlaying"]) {
       expect(name in sound, `声音层没有 ${name}`).toBe(true);
-      for (const object of [plain, ...groups.effect, ...groups.object.slice(2), ...groups.engine])
-        expect(name in object, `${name} 出现在声音层之外`).toBe(false);
+      expect(name in particle, `粒子层没有 ${name}`).toBe(true);
+      for (const object of [plain, ...groups.effect, ...groups.object.slice(3), ...groups.engine])
+        expect(name in object, `${name} 出现在声音层、粒子层之外`).toBe(false);
+    }
+    for (const name of ["emitParticles", "instance"]) {
+      expect(name in particle, `粒子层没有 ${name}`).toBe(true);
+      for (const object of [plain, sound, ...groups.effect, ...groups.object.slice(3), ...groups.engine])
+        expect(name in object, `${name} 出现在粒子层之外`).toBe(false);
     }
   });
 

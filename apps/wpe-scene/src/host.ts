@@ -24,7 +24,8 @@ import { SceneState, scriptWriteValue } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
 import { schemeColor } from "./sceneStyle";
-import { ScriptApi, createWpeLocalStorage } from "./script/api";
+import { FLT_MAX, instanceControlPoint, type InstanceField } from "./compile/particles";
+import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { browserStorage, clearSceneStorage } from "./script/storage";
@@ -189,6 +190,14 @@ export class SceneHost {
       return index < 0 ? null : videos.drawn(index);
     },
   };
+  /**
+   * 渲染器还没有场景时（首次加载：脚本的 `init` 先于渲染器建场景）脚本对粒子层调的方法（P4f 步骤 3）：按调用顺序记下，场景换上时
+   * （`beforeFirstFrame`，重放脚本写入之后）逐个补调到新场景上；`paused` / `stopped` 只用来回答这期间的 `isPlaying`【推】。退回与销毁时丢掉。
+   */
+  private readonly pendingParticles: {
+    calls: { object: number; call: (target: ParticleScriptTarget) => void }[];
+    states: Map<number, { paused: boolean; stopped: boolean }>;
+  } = { calls: [], states: new Map() };
   /** dev 探针计数：就地应用次数与重编译记录。 */
   readonly stats: SceneHostStats = { applied: 0, recompiled: [] };
   private receivedProperties = false;
@@ -386,12 +395,17 @@ export class SceneHost {
       return typeof value === "number" ? [value] : typeof value === "object" ? [...value] : value;
     }
     // 粒子 `instanceoverride` 的字段脚本（P4f 步骤 1）：`update` 收到实例覆盖里的当前值（WPE 的 `io`，rea-p4f-script.md 5.1），重算或
-    // 加载钳过的 `rate` 是钳过的值、单写的 `rate` 是原值；`colorn` 没设过时是 (−1, −1, −1)
+    // 加载钳过的 `rate` 是钳过的值、单写的 `rate` 是原值；`colorn` 没设过时是 (−1, −1, −1)，控制点（P4f 步骤 3）没设过时是 (FLT_MAX, 0, 0)
     if (target.kind === "particle-instance") {
       const values = state.particleInstances.get(target.object);
       if (!values) return null;
       if (target.field === "colorn") return values.colorn ? [...values.colorn] : [-1, -1, -1];
-      return [values[target.field]];
+      const point = instanceControlPoint(target.field);
+      if (point) {
+        const value = (point.angle ? values.controlpointAngles : values.controlpoints)[point.index];
+        return value ? [...value] : [FLT_MAX, 0, 0];
+      }
+      return [values[target.field as InstanceField]];
     }
     return null;
   }
@@ -415,6 +429,52 @@ export class SceneHost {
     }
     // 打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景：状态没变，结果由整场编译决定，编译要拿到脚本的值
     return result === "recompile" ? this.overrideAndReload(this.targetPath(target), value) : true;
+  }
+
+  /**
+   * 粒子层脚本方法的落点（P4f 步骤 3，`ScriptApiState.particles`）：渲染器有场景时接到它的根系统（`SceneRenderer.particleScript`；重编译
+   * 期间是还在画的旧场景，新场景换上时由渲染器沿用暂停 / 停止，`GpuScene.adoptParticleScripts`）。还没有场景时（首次加载的 `init`）先记下，
+   * 换上时补调（`flushPendingParticles`）【推：WPE 的 `init` 在粒子系统建好之后跑，这些调用当场生效；我们的场景晚建，补调保留调用顺序，
+   * `emitParticles` 发出的粒子在第一帧照常增龄后画】。脚本 bundle 里不是粒子层的对象返回 null。
+   */
+  private particleTarget(object: number): ParticleScriptTarget | null {
+    const renderer = this.renderer;
+    if (renderer?.sceneState) return renderer.particleScript(object);
+    if (!this.scriptBundle?.layers.some((layer) => layer.object === object && layer.particle)) return null;
+    const pending = this.pendingParticles;
+    const state = () => {
+      let item = pending.states.get(object);
+      if (!item) pending.states.set(object, (item = { paused: false, stopped: false }));
+      return item;
+    };
+    const record = (call: (target: ParticleScriptTarget) => void) => pending.calls.push({ object, call });
+    return {
+      play: () => {
+        record((target) => target.play());
+        Object.assign(state(), { paused: false, stopped: false });
+      },
+      pause: () => {
+        record((target) => target.pause());
+        state().paused = true;
+      },
+      stop: () => {
+        record((target) => target.stop());
+        state().stopped = true;
+      },
+      // 场景建好后系统一般是活跃的（预热过或有没结束的发射器），所以没暂停、没停下就算在放
+      isPlaying: () => !state().paused && !state().stopped,
+      emitParticles: (count) => record((target) => target.emitParticles(count)),
+    };
+  }
+
+  /** 场景换上时补调首次加载期间记下的粒子层方法（`particleTarget`），按调用顺序。 */
+  private flushPendingParticles(renderer: SceneRenderer): void {
+    const { calls, states } = this.pendingParticles;
+    states.clear();
+    for (const { object, call } of calls.splice(0)) {
+      const target = renderer.particleScript(object);
+      if (target) call(target);
+    }
   }
 
   /** 脚本写重编译类目标：值变了才记进覆盖表、请求重新编译（脚本可能每帧写同一个值）。 */
@@ -556,6 +616,8 @@ export class SceneHost {
           const source = layerVideoSource(this.scriptBundle, object);
           return source ? (this.sceneVideos?.playerFor(source) ?? null) : null;
         },
+        // 粒子层的 play / pause / stop / isPlaying / emitParticles（P4f 步骤 3）：同样每次现取
+        particles: (object) => this.particleTarget(object),
       });
       const runtime = new ScriptRuntime(realm, {
         report: this.options.report,
@@ -642,14 +704,14 @@ export class SceneHost {
     // 声音的 `volume`（P6a 步骤 1）：状态里的值，排期器下一帧（或改值时当场）读到的就是它
     const sound = /^objects\/(\d+)\/volume$/.exec(path);
     if (sound) return state.sounds.get(Number(sound[1]))?.volume ?? null;
-    // 粒子 `instanceoverride` 的就地值（P4a 步骤 5）：状态里的值，与模拟器正在用的相同
+    // 粒子 `instanceoverride` 的就地值（P4a 步骤 5）：状态里的值，与模拟器正在用的相同；控制点（P4f 步骤 3）按键取那一项，没设为 null
     const instance = /^objects\/(\d+)\/instanceoverride\/(\w+)$/.exec(path);
-    if (instance)
-      return (
-        state.particleInstances.get(Number(instance[1]))?.[
-          instance[2] as keyof import("./compile/particles").ParticleInstanceValues
-        ] ?? null
-      );
+    if (instance) {
+      const values = state.particleInstances.get(Number(instance[1]));
+      const point = instanceControlPoint(instance[2]);
+      if (point) return (point.angle ? values?.controlpointAngles : values?.controlpoints)?.[point.index] ?? null;
+      return values?.[instance[2] as InstanceField | "colorn"] ?? null;
+    }
     const constant = /^(objects\/\d+(?:\/effects\/\d+)?\/passes\/\d+)\/constantshadervalues\/(.+)$/.exec(path);
     if (constant) {
       const target = bundle.bindings.find(
@@ -875,6 +937,8 @@ export class SceneHost {
     this.bundle = null;
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
+    this.pendingParticles.calls.length = 0;
+    this.pendingParticles.states.clear();
     const key = reasons.join("\n");
     if (this.state === "fallback" && key === this.lastFallback) return;
     this.state = "fallback";
@@ -985,6 +1049,8 @@ export class SceneHost {
           this.scriptBundle = bundle;
           this.scriptState = state;
           this.runtime?.replayWrites();
+          // 首次加载的 `init` 对粒子层调的方法（P4f 步骤 3）：新场景已经换上，补调
+          this.flushPendingParticles(current);
           if (this.scriptNeedsFullApply && this.runtime) {
             this.runtime.applyUserProperties(Object.fromEntries(this.properties), this.properties, bundle.bindings);
             this.scriptNeedsFullApply = false;

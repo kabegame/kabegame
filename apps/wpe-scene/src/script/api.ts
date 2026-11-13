@@ -9,6 +9,7 @@ import type { SceneSpectrum } from "../audio/spectrum";
 import { alignmentIndex, alignmentName } from "../compile/alignment";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { constantTargetFields, materialSlots, type MaterialMember } from "../compile/materialValues";
+import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlPoint } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import type { SceneState } from "../render/state";
@@ -85,6 +86,11 @@ export interface ScriptApiState {
    * 不传或返回 null（语料诊断、播放器已释放）时方法空操作，`duration` 退回 bundle 里的容器时长。
    */
   video?(object: number): VideoScriptTarget | null;
+  /**
+   * 粒子对象的根系统（P4f 步骤 3，宿主从渲染器的场景取，`GpuScene.particleScript`）：粒子层的 `play` / `pause` / `stop` / `isPlaying` /
+   * `emitParticles` 接到它上面。不传或返回 null（没有场景）时方法什么都不做，`isPlaying` 为假。
+   */
+  particles?(object: number): ParticleScriptTarget | null;
 }
 
 /** `IVideoTexture` 的落点（P9b，`VideoTexturePlayer` 满足它）。 */
@@ -99,6 +105,19 @@ export interface SoundScriptTarget {
   pause(): void;
   stop(): void;
   isPlaying(): boolean;
+}
+
+/**
+ * 粒子层脚本方法的落点（P4f 步骤 3，`render/scene.ts` 的 `GpuScene.particleScript`）：WPE `IParticleSystem` 的五个方法，落到根
+ * `ParticleSystem` 的 `scriptPlay` / `scriptPause` / `scriptStop` / `scriptIsPlaying` / `emitParticles`。`emitParticles` 收脚本的原始
+ * 参数，归一化在模拟器里（`scriptEmitCount`）。
+ */
+export interface ParticleScriptTarget {
+  play(): void;
+  pause(): void;
+  stop(): void;
+  isPlaying(): boolean;
+  emitParticles(count?: unknown): void;
 }
 
 const DEGREE = 0.017453292;
@@ -235,6 +254,7 @@ export class ScriptApi {
       );
     }
     if (this.isSoundLayer(index)) this.installSound(api, index);
+    if (this.findLayer(index)?.particle) this.installParticle(api, index);
     if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
@@ -264,7 +284,7 @@ export class ScriptApi {
 
   /**
    * 声音层的 `ISoundLayer`（P6a 步骤 2，rea-p6a-sound.md 第 7 节）：只登记在声音对象的图层上（WPE 的方法表按对象类型登记），
-   * 其它图层上调用照旧是 `TypeError`；粒子层的同名方法是 P4f 的事（编译期另报 `script:api:particle.<名>`）。
+   * 其它图层上调用照旧是 `TypeError`；粒子层的同名方法另由 `installParticle` 登记在粒子对象上（P4f 步骤 3）。
    * 四个方法直接接到排期器（`play` = `P`、`stop` = `X`），
    * `volume` 读 `SceneState.sounds`、写落到就地目标 `{ kind: "sound" }`，不钳制（增益在乘积上钳，`audio/scheduler.ts`），
    * 宿主写完当场交给排期器（WPE 的回调 `V`，暂停时也生效）。
@@ -364,6 +384,84 @@ export class ScriptApi {
     });
     this.method(api, "getAnimation", () => undefined);
     this.videoTextures.set(object, api);
+    return api;
+  }
+
+  /**
+   * 粒子层的 `IParticleSystem`（P4f 步骤 3，rea-p4f-script.md 1.1–1.3）：只登记在粒子对象的图层上（WPE 的反射表 `FUN_14024cb00` 按对象
+   * 类型登记，同 `installSound`），其它图层上调用照旧是 `TypeError`。子系统与事件实例脚本拿不到（1.5）。
+   * - 五个方法接到宿主给的根系统（`ScriptApiState.particles`）：`play` / `pause` / `stop` / `isPlaying` / `emitParticles(count)`，都当场
+   *   生效（语义见 `ParticleSystem.scriptPlay` 等）；`emitParticles` 把脚本的原始参数交过去，归一化在模拟器里（缺参数、0、非整数都是 1，
+   *   负数不发）。没有落点时什么都不做，`isPlaying` 为假。
+   * - `instance`：只读字段（`+0x60 = 2`；整体赋值忽略，同 `size`），值是一个固定的子对象（`particleInstance`），每次读都是同一个。
+   */
+  private installParticle(api: ApiObject, object: number): void {
+    const target = () => this.access.particles?.(object) ?? null;
+    this.method(api, "play", () => {
+      target()?.play();
+    });
+    this.method(api, "pause", () => {
+      target()?.pause();
+    });
+    this.method(api, "stop", () => {
+      target()?.stop();
+    });
+    this.method(api, "isPlaying", () => target()?.isPlaying() ?? false);
+    this.method(api, "emitParticles", (count?: unknown) => {
+      target()?.emitParticles(count);
+    });
+    const instance = this.particleInstance(object);
+    this.define(
+      api,
+      "instance",
+      () => instance,
+      () => {},
+    );
+  }
+
+  /**
+   * 粒子层的 `instance` 子对象（P4f 步骤 3，rea-p4f-script.md 1.3、5.1，WPE `io` 的描述符 `0x1404e8860`，24 个字段、没有方法）：
+   * - 读：`SceneState.particleInstances` 里的覆盖值（WPE 的 `io`，写完当场就能读回）。系数是数字；`colorn` 没设过是 (−1, −1, −1)；控制点
+   *   `controlpointN` / `controlpointangleN` 没设过是 (FLT_MAX, 0, 0)（实测 `a-inst-cp`），读到的是覆盖值、不是控制点的实际位置。`rate`
+   *   读到的是状态里的值：单写的原值，或重算 / 加载时钳过的值（5.2、5.4）。
+   * - 写：经现有的就地目标 `particle-instance`（和用户属性、字段脚本同一个 setter）：系数按 float、`colorn` 与控制点按 vec3（数字铺满、
+   *   `Vec3` / `{x, y, z}`），`controlpointangleN` 是弧度、不换算（`+0x60` 没有角度位，1.3）。除 `rate` 外置脏，下一帧开头重算（5.2、5.3）；
+   *   `rate` 只改步进率（5.4，P4f 步骤 1 的单独路径）。同一段脚本里先写的系数对随后 `emitParticles` 的这批不生效（4.4）。
+   * 没有这一层的状态时读到 undefined。
+   */
+  private particleInstance(object: number): ApiObject {
+    const api = this.object();
+    const values = () => this.access.state().particleInstances.get(object);
+    for (const field of INSTANCE_FIELDS)
+      this.define(
+        api,
+        field,
+        () => values()?.[field],
+        (value) => this.write({ kind: "particle-instance", object, field }, value, "float"),
+      );
+    this.define(
+      api,
+      "colorn",
+      () => {
+        const current = values();
+        return current ? this.vector(current.colorn ?? [-1, -1, -1], 3) : undefined;
+      },
+      (value) => this.write({ kind: "particle-instance", object, field: "colorn" }, value, "vec3"),
+    );
+    for (const key of INSTANCE_CONTROL_POINT_KEYS) {
+      const point = instanceControlPoint(key)!;
+      this.define(
+        api,
+        key,
+        () => {
+          const current = values();
+          if (!current) return undefined;
+          const list = point.angle ? current.controlpointAngles : current.controlpoints;
+          return this.vector(list[point.index] ?? [FLT_MAX, 0, 0], 3);
+        },
+        (value) => this.write({ kind: "particle-instance", object, field: key }, value, "vec3"),
+      );
+    }
     return api;
   }
 

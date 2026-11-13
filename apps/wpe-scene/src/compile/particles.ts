@@ -24,15 +24,33 @@ import { readOrientation, type ParticleOrientation } from "../particles/orientat
  */
 export const INSTANCE_FIELDS = ["alpha", "size", "count", "speed", "lifetime", "rate", "brightness"] as const;
 export type InstanceField = (typeof INSTANCE_FIELDS)[number];
+/** 实例覆盖控制点的下标（`controlpoint0..7`、`controlpointangle0..7`）。 */
+type ControlPointIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 /**
- * 就地更新的全部键：标量键加 `colorn`（P4b 步骤 6）。`colorn` 也登记成 `particle-instance` 绑定，改值时模拟器从基值重算平移
- * 与实例颜色（`ParticleSystem.setInstance` → `colornState`）。
+ * 实例覆盖的控制点键（P4f 步骤 3，rea-p4f-script.md 1.3、5.5）：`controlpointN` 替换控制点 `base` 的平移，`controlpointangleN`（弧度）
+ * 替换 3×3，都是 vec3。
  */
-export type InstanceKey = InstanceField | "colorn";
+export type InstanceControlPointKey = `controlpoint${ControlPointIndex}` | `controlpointangle${ControlPointIndex}`;
+/** 16 个控制点键，先 `controlpoint0..7`、再 `controlpointangle0..7`。 */
+export const INSTANCE_CONTROL_POINT_KEYS: readonly InstanceControlPointKey[] = [
+  ...Array.from({ length: 8 }, (_, i) => `controlpoint${i}` as InstanceControlPointKey),
+  ...Array.from({ length: 8 }, (_, i) => `controlpointangle${i}` as InstanceControlPointKey),
+];
+/** 控制点键 → 哪一张表、第几项；不是控制点键时为 null。 */
+export function instanceControlPoint(key: string): { angle: boolean; index: number } | null {
+  const match = /^controlpoint(angle)?([0-7])$/.exec(key);
+  return match ? { angle: match[1] !== undefined, index: Number(match[2]) } : null;
+}
+/**
+ * 就地更新的全部键：标量键加 `colorn`（P4b 步骤 6）与 16 个控制点键（P4f 步骤 3）。`colorn` 也登记成 `particle-instance` 绑定，改值时
+ * 模拟器从基值重算平移与实例颜色（`ParticleSystem.setInstance` → `colornState`）；控制点改值时模拟器把覆盖写进控制点的 `base`
+ * （`ControlPointSet.applyOverrides`，rea-p4f-script.md 5.5）。
+ */
+export type InstanceKey = InstanceField | "colorn" | InstanceControlPointKey;
 /**
  * `instanceoverride` 上能挂字段脚本的键（P4f 步骤 1，rea-p4f-script.md 第 6 节）：写回目标是就地目标 `particle-instance`，和用户属性
- * 改值、脚本赋值走 WPE 同一个 setter（6.2），下一帧生效（6.3）。`brightness` 从 P4f 步骤 2 起也是（HDR 下同样就地，第 7 节）。
- * `controlpointN` / `controlpointangleN`（P4f 步骤 3）挂脚本仍由能力表报 `particle:binding:instance:<键>`。
+ * 改值、脚本赋值走 WPE 同一个 setter（6.2），下一帧生效（6.3）。`brightness` 从 P4f 步骤 2 起也是（HDR 下同样就地，第 7 节）；
+ * `controlpointN` / `controlpointangleN` 从 P4f 步骤 3 起也是（运行时写入控制点的 `base`，5.5）。
  */
 export const SCRIPT_INSTANCE_KEYS: readonly InstanceKey[] = [
   "alpha",
@@ -43,15 +61,35 @@ export const SCRIPT_INSTANCE_KEYS: readonly InstanceKey[] = [
   "rate",
   "brightness",
   "colorn",
+  ...INSTANCE_CONTROL_POINT_KEYS,
 ];
+/**
+ * float32 的最大值（3.4028234663852886e38）：WPE 实例覆盖控制点「未设」的标记（`io+0xf0` / `io+0x150` 的 x 分量，构造时写入，
+ * rea-p4f-script.md 1.3；脚本读回未设的控制点得 `(FLT_MAX, 0, 0)`，实测 `a-inst-cp`）。
+ */
+export const FLT_MAX = 3.4028234663852886e38;
+/**
+ * 实例覆盖的控制点有没有设（rea-p4c-sim.md 第 2 节、rea-p4f-script.md 5.5）：WPE 只比较 x 分量是否等于 FLT_MAX（`0x14022bf47`、
+ * `0x14022c07d`），所以写回 x = FLT_MAX 等于「不再覆盖」（之前写进 `base` 的值保持，不恢复成 `offset`）。我们的未设另有 null（解析不出来）。
+ */
+export function instanceOverrideSet(value: readonly number[] | null | undefined): value is readonly number[] {
+  return !!value && Math.fround(value[0]) !== FLT_MAX;
+}
 /**
  * `instanceoverride.rate` 的下限（`rea-framework.md` Q2 第 7 步）：WPE 只在重算前（脏位，`FUN_140230650` `0x1402307c7`–`0x1402307f1`
  * 的 `maxss`，rea-p4f-script.md 5.2）与加载时（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，6.1）钳一次，并**写回**实例覆盖；
  * 单写 `rate` 没有改值回调，不钳（5.4）。
  */
 export const INSTANCE_RATE_MIN = 0.01;
-/** `instanceoverride` 就地更新的部分（`SceneState` 存的就是这一份）：标量键加 `colorn`（未设为 null）。 */
-export type ParticleInstanceValues = Record<InstanceField, number> & { colorn: readonly number[] | null };
+/**
+ * `instanceoverride` 就地更新的部分（`SceneState` 存的就是这一份，即 WPE 的 `io`）：标量键、`colorn`（未设为 null）与控制点覆盖
+ * （P4f 步骤 3，各 8 项，未设为 null，见 `instanceOverrideSet`）。
+ */
+export type ParticleInstanceValues = Record<InstanceField, number> & {
+  colorn: readonly number[] | null;
+  controlpoints: readonly (readonly number[] | null)[];
+  controlpointAngles: readonly (readonly number[] | null)[];
+};
 
 /**
  * 一个标量键的取值，编译与就地写共用（「就地 = 重编译」靠它）：数字原样；非空字符串整串解析成有限数；布尔按 1 / 0
@@ -68,9 +106,8 @@ export function instanceScalar(value: unknown): number {
 }
 
 /**
- * `instanceoverride` 的值（`rea-p4a.md` C5，基址 `obj+0x778`）。标量键与 `colorn` 经 `InstanceResolver` 取值（编译期登记绑定、
- * 读用户属性，`bundle.ts`）；`color` 与控制点只取静态值（`color` 绑了属性报不支持；控制点的 `{user}` 报
- * `particle:instance:controlpoint:user`，`checkParticleInstance`）。
+ * `instanceoverride` 的值（`rea-p4a.md` C5，基址 `obj+0x778`）。标量键、`colorn` 与控制点（P4f 步骤 3）经 `InstanceResolver` 取值
+ * （编译期登记绑定、读用户属性，`bundle.ts`）；`color` 只取静态值（绑了属性报不支持，`checkParticleInstance`）。
  * `rate` 的下限 0.01（`INSTANCE_RATE_MIN`）在加载与重算时钳（rea-p4f-script.md 5.2、6.1，`SceneState.fromBundle` 与
  * `ParticleSystem`），这里存原值。
  */
@@ -99,11 +136,11 @@ export interface ParticleInstance {
   colorn: readonly number[] | null;
   /**
    * `controlpoint0..7`；未设为 null（WPE 的 FLT_MAX）。替换控制点 `base` 的平移（`particles/controlpoints.ts`，P4c 步骤 1）。
-   * 静态值（`{user}` 只取 JSON 里的 `value`，由能力表报）。
+   * `{user}` 登记成就地目标（P4f 步骤 3），运行时改值由 `ParticleSystem.setInstance` 写进控制点。
    */
-  controlpoints: (number[] | null)[];
-  /** `controlpointangle0..7`（弧度，`Rz·Ry·Rx`）；未设为 null。替换控制点 `base` 的 3×3。静态值，同上。 */
-  controlpointAngles: (number[] | null)[];
+  controlpoints: readonly (readonly number[] | null)[];
+  /** `controlpointangle0..7`（弧度，`Rz·Ry·Rx`）；未设为 null。替换控制点 `base` 的 3×3。同上。 */
+  controlpointAngles: readonly (readonly number[] | null)[];
 }
 
 /**
@@ -642,18 +679,47 @@ export function parseParticleInstance(raw: unknown, resolve: InstanceResolver = 
   return {
     ...scalars,
     colorn: hasColor ? colornFromColor(source.color) : instanceColorn(resolve("colorn", source.colorn)),
-    controlpoints: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpoint${i}`])),
-    controlpointAngles: Array.from({ length: 8 }, (_, i) => instanceVector(source[`controlpointangle${i}`])),
+    // 控制点（P4f 步骤 3）：`{user}` 同样登记成就地目标；取值规则同运行时写入（`instanceControlPointValue`）
+    controlpoints: Array.from({ length: 8 }, (_, i) =>
+      instanceControlPointValue(resolve(`controlpoint${i}` as InstanceControlPointKey, source[`controlpoint${i}`])),
+    ),
+    controlpointAngles: Array.from({ length: 8 }, (_, i) =>
+      instanceControlPointValue(
+        resolve(`controlpointangle${i}` as InstanceControlPointKey, source[`controlpointangle${i}`]),
+      ),
+    ),
   };
 }
 
-/** `ParticleInstance` 就地更新的部分（一份新对象，`colorn` 也拷一份）。 */
-export function instanceValues(instance: ParticleInstanceValues): ParticleInstanceValues {
+/**
+ * 控制点覆盖的取值（编译期与就地写共用，「就地 = 重编译」靠它，P4f 步骤 3）：同 `instanceVector`，`"x y z"` 的前三个分量，不是字符串
+ * 或解析不出来时为 null（未设）。脚本写入经 `scriptWriteValue` 拼成同样的字符串。条件绑定的值是布尔，也是 null【推：WPE 没读到，
+ * 语料 0 处】。
+ */
+export function instanceControlPointValue(value: unknown): number[] | null {
+  return instanceVector(value);
+}
+
+/** `ParticleInstance` 就地更新的部分（一份新对象，`colorn` 与控制点覆盖也拷一份）。 */
+export function instanceValues(
+  instance: Omit<ParticleInstanceValues, "controlpoints" | "controlpointAngles"> &
+    Partial<Pick<ParticleInstanceValues, "controlpoints" | "controlpointAngles">>,
+): ParticleInstanceValues {
   const scalars = Object.fromEntries(INSTANCE_FIELDS.map((field) => [field, instance[field]])) as Record<
     InstanceField,
     number
   >;
-  return { ...scalars, colorn: instance.colorn ? [...instance.colorn] : null };
+  const copy = (list: readonly (readonly number[] | null)[] | undefined) =>
+    Array.from({ length: 8 }, (_, i) => {
+      const value = list?.[i];
+      return value ? [...value] : null;
+    });
+  return {
+    ...scalars,
+    colorn: instance.colorn ? [...instance.colorn] : null,
+    controlpoints: copy(instance.controlpoints),
+    controlpointAngles: copy(instance.controlpointAngles),
+  };
 }
 
 /**

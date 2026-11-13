@@ -30,8 +30,8 @@
  * - `root`：只认根对象直接访问。全局对象的成员都用它；图层等类型里名字通用的（`text`、`zoom` 这类，
  *   会和普通 JS 或脚本自己的对象撞名）只认 `thisLayer.` / `thisObject.`。
  * - `any`：任意接收者上的 `.成员` / `?.成员` / `["成员"]` 都算，只收名字足够独特的，每项写一句理由。
- * - 表外的例外（P6a 步骤 2）：场景里有粒子层时，`play` / `pause` / `stop` / `isPlaying` 不论接收者都报 `particle.<名>`
- *   （`PARTICLE_LAYER_METHODS`）。
+ * - P6a 步骤 2 起有过一条表外的例外（场景里有粒子层时 `play` / `pause` / `stop` / `isPlaying` 不论接收者都报 `particle.<名>`），
+ *   P4f 步骤 3 实现了粒子层的这几个方法后删掉了：声音层与粒子层的同名方法都按对象类型登记（`script/api.ts`），接收者认不出类型也无所谓。
  * 子对象（`ITextureAnimation`、`IVideoTexture`、`IAnimationLayer`、`IAnimation`、`IModelData`、`IAssetHandle`）只能经入口方法拿到，
  * 它们自己的成员（`setFrame`、`play`、`applyData` …）不收：入口还在表里的已经会报；入口已实现的（`getVideoTexture`，P9b）子对象的
  * 成员也一并实现了。
@@ -115,7 +115,7 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
    * 已实现：`name`、`id`、`size`（只读）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`
    * （P5a 步骤 2）；声音层（`ISoundLayer`）的 `play` / `pause` / `stop` / `isPlaying` 与 `volume`（P6a 步骤 2，只在声音层上）；
    * `getVideoTexture`（P9b，所有图层上都有，非视频图层返回 null；返回的 `IVideoTexture` 的成员见 `script/api.ts`）。
-   * 粒子层（`IParticleSystem`）的同名方法另由 `PARTICLE_LAYER_METHODS` 报。
+   * 粒子层（`IParticleSystem`）的 `play` / `pause` / `stop` / `isPlaying` / `emitParticles` 与只读的 `instance`（P4f 步骤 3，只在粒子层上）。
    */
   layer: [
     // 层级与变换（W1 / W5）
@@ -165,17 +165,14 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ),
     // effect 访问（3c 待定 3）
     ...methods("any", ["getEffect", "getEffectCount", "transformAttachmentToTexture"], UNIQUE),
-    // 粒子（P4f）
-    ...methods("any", ["emitParticles"], UNIQUE),
     // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象。`alignment` 已在图像层上实现（P8 步骤 3，
-    // `script/api.ts`）；别的图层上 WPE 读回什么由脚本 dll 决定，没查，不再静态报
+    // `script/api.ts`）；别的图层上 WPE 读回什么由脚本 dll 决定，没查，不再静态报。粒子层的 `instance` 已实现（P4f 步骤 3）
     ...fields([
       "perspective",
       "solid",
       "rootmotion",
       "fov",
       "zoom",
-      "instance",
       "text",
       "opaquebackground",
       "backgroundcolor",
@@ -462,35 +459,14 @@ const ROOT_INDEX: Readonly<Record<ResolvedGroup, Map<string, string>>> = {
 const ANY_INDEX = index(Object.keys(MISSING_SCRIPT_API) as ScriptApiGroup[], (entry) => entry.match === "any");
 
 /**
- * 粒子层（`IParticleSystem`）的播放控制（P6a 步骤 2）：WPE 的粒子层也有 `play` / `pause` / `stop` / `isPlaying`（重新发射、
- * 停止发射、清空），我们还没实现（P4f）。声音层的同名方法已实现（`script/api.ts`，只在声音层上），而这些调用的接收者绝大多数
- * 静态认不出类型（语料 463 处认不出、能认出的 16 处都是声音层，`ignore/p6/a2/overlap.py`），不能按接收者区分。所以场景里有
- * 粒子层时（`ScriptApiScene.particleLayers`），任意接收者上的这几个名字都报 `particle.<名>`（宁可多报）。
- *
- * 不进 `MISSING_SCRIPT_API`：那张表由 `script/api.test.ts` 与 `ScriptApi` 双向核对，而这几个名字在声音层上已经有了。
- * P4f 实现粒子的这几个方法后删掉这条。
- */
-export const PARTICLE_LAYER_METHODS: readonly string[] = ["play", "pause", "stop", "isPlaying"];
-const PARTICLE_INDEX = new Map(PARTICLE_LAYER_METHODS.map((name) => [name, `particle.${name}`]));
-
-/** 扫描时用到的场景信息（编译期由 `compileScene` 给出）。 */
-export interface ScriptApiScene {
-  /** 场景里有粒子层（`features.ts` 的 `objectKind` 为 `particle` 的对象）。 */
-  particleLayers?: boolean;
-}
-
-/**
  * 一段脚本用到的未实现 API，返回 `<分组>.<成员>`（去重、排序）。根对象访问先查该分组（含 `root` 项），查不到再按名字查 `any` 项；
- * 其它接收者只查 `any` 项。场景里有粒子层时，粒子层的播放控制不论接收者都算（`PARTICLE_INDEX`）。
+ * 其它接收者只查 `any` 项。
  */
-export function scanScriptApi(script: ScriptApiContext, scene: ScriptApiScene = {}): string[] {
+export function scanScriptApi(script: ScriptApiContext): string[] {
   const hits = new Set<string>();
   for (const access of memberAccesses(script.source)) {
     const group = access.root === null ? null : rootGroup(access.root, script);
-    const key =
-      (group ? ROOT_INDEX[group].get(access.name) : undefined) ??
-      ANY_INDEX.get(access.name) ??
-      (scene.particleLayers ? PARTICLE_INDEX.get(access.name) : undefined);
+    const key = (group ? ROOT_INDEX[group].get(access.name) : undefined) ?? ANY_INDEX.get(access.name);
     if (key) hits.add(key);
   }
   return [...hits].sort();

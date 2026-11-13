@@ -28,6 +28,7 @@ import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
+import type { ParticleScriptTarget } from "../script/api";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
@@ -278,6 +279,11 @@ export class SceneRenderer {
     return this.scene;
   }
 
+  /** 粒子层脚本方法的落点（P4f 步骤 3，`GpuScene.particleScript`）；没有场景或不是粒子层时为 null。 */
+  particleScript(object: number): ParticleScriptTarget | null {
+    return this.scene?.particleScript(object) ?? null;
+  }
+
   /**
    * 就地应用一批绑定写入；需要重编译时返回 false（调用方整场重编译）。
    * 写之前先问状态能不能做：打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景不能（`needsRecompile`），
@@ -342,6 +348,8 @@ export class SceneRenderer {
     // 视频纹理（P9a）：画第一帧之前接上，第一帧就能问 `drawn`
     scene.setVideoSink(this.options.videos ?? null);
     const old = this.scene;
+    // 重编译：粒子层沿用旧场景的脚本暂停 / 停止（P4f 步骤 3），在重放脚本写入、画第一帧之前
+    if (old) scene.adoptParticleScripts(old);
     this.scene = scene;
     this.state = state;
     this.projection = [bundle.general.width, bundle.general.height];

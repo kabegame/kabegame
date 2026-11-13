@@ -157,6 +157,11 @@ export interface RopeSource {
   def: { renderer: Pick<ParticleRenderer, "rope"> };
   /** 当前的 `instanceoverride` 标量（原值，不看系统 flags 的禁用位）。 */
   instanceScalar(field: "count" | "lifetime"): number;
+  /**
+   * 本帧脚本发出的粒子个数（P4f 步骤 3，`ParticleSystem.scriptBornCount`）：它们在 rope 表尾部（出生时追加、脚本阶段没有判死），本帧
+   * 不画（WPE 写完段顶点才跑脚本），写段时从存活数里扣掉。单测手写时可省。
+   */
+  scriptBornCount?: number;
 }
 
 /**
@@ -222,7 +227,9 @@ export function writeRopeSegments(
 ): number {
   const order = system.ropeOrder;
   if (!order || !system.def.renderer.rope) return 0;
-  const n = Math.min(system.alive, order.length);
+  // 本帧脚本发出的在表尾，不画（P4f 步骤 3）
+  const scripted = system.scriptBornCount ?? 0;
+  const n = Math.min(system.alive, order.length) - scripted;
   if (n <= 1) return 0;
   const segments = Math.min(n - 1, ropeSegmentCapacity(layout, out));
   const { length, position } = n === 2 ? { length: 2, position: 0 } : ropeTexCoords(system, fps, n);

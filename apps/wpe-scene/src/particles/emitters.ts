@@ -55,6 +55,26 @@ export function emitterState(fields: ParticleFields): EmitterState {
   };
 }
 
+/** 脚本 `emitParticles(n)` 的一次调用交给 `emissionCount` 的量（P4f 步骤 3）。 */
+export interface ScriptEmission {
+  /** 归一化后的数量 n（> 0，`scriptEmitCount`）：每条发射器各发 n 个。 */
+  count: number;
+  /** 根系统的脚本暂停位（`sys+0x3f7` bit0，整棵树共用）：门外的一种。 */
+  paused: boolean;
+}
+
+/**
+ * `emitParticles(count)` 的参数归一化（rea-p4f-script.md 4.1，实测 `b-args`）：WPE 的参数类型是整数（掩码 8），`n = int(参数)`，`n == 0`
+ * 当 1、`n < 0` 不发。实测 `()`、`(0)`、`(2.7)` 都发 1 个、`(-3)` 不发：缺参数与非整数在 DLL 里转成 0，再按「0 当 1」发 1 个。所以
+ * int32 范围内的整数原样用（0 当 1），其余（缺参数、非整数、不是数字、超出 int32）一律当 0 → 1【推：负的非整数如 −2.5、超出 int32 的
+ * 整数没有实测，按「不是 int32 就转 0」推】。返回 0 表示不发。
+ */
+export function scriptEmitCount(value: unknown): number {
+  const n = typeof value === "number" && Number.isInteger(value) && value === (value | 0) ? value : 0;
+  if (n === 0) return 1;
+  return n < 0 ? 0 : n;
+}
+
 /**
  * 复位 emitter 计时（`FUN_14022f6c0`，`ignore/p4/rea/wp.asm` `0x14022f6c0` 起，每条 emitter 记录；`rea-p4b-modules.md` A3 末条）：
  * 当前延迟、当前时长、待发的 `instantaneous` 从各自的初值重抄（`+0x18 ← +0x20`、`+0x14 ← +0x1c`、`+0x44 ← +0x48`），累积余数
@@ -104,7 +124,16 @@ export function resetEmitterTiming(state: EmitterState, fields: ParticleFields):
  *   发射之前乘到 `rate` 上（`mulss`，`f` 在前），所以乘在加累积余数之前：`f = 0` 时 `x = acc`，余数原样保留，有声后接着累积。
  *   `instantaneous` 不乘；帧尾判结束读的是记录里的 `rate`（`0x14023ae48`），静音不会让发射器永久结束。`audio` 是这一帧的 16 段频谱，
  *   缺省全 0（只有直接调它的单测不给）。
- * 脚本数量（`n0` 里的另一项）没实现。
+ * - 脚本数量（P4f 步骤 3，rea-p4f-script.md 4.3【确】，实测见 p4-particles-REPORT「P4f 语义的实测核对」）：`script` 给出时是脚本
+ *   `emitParticles(n)` 的一次调用（`FUN_1402378a0(sys, dt = 0, n)`，`dt` 由调用方传 0），门变成：
+ *   ```
+ *   存活 ≥ 容量：这一条一个也不发（照常走帧尾）                        // 0x1402379c6，不越过容量
+ *   已结束 或 暂停位 或 delay > 0：发 n 个，acc、pending、周期计时都不动  // 0x1402379d9 / 0x1402379e1 / 0x1402379ea
+ *   否则（门内）：照常路径（dt = 0），n0 = pending + n               // 0x140237acd：x = acc，acc −= n0，即「欠账」
+ *   实际发射 = min(n0, 容量 − 存活)；帧尾照常（dt = 0：只有 rate ≤ 0 的那支可能标结束）
+ *   ```
+ *   门内的欠账按 `n0` 全额记，被容量砍掉的那部分也算在内（实测 `b-debt`、`a-emit-cap`）。周期发射在门内照常走（`P −= 0` / `P += 0`，
+ *   只有 `P` 恰为 0 时开新周期）。暂停位只挡模拟里的发射（调用方整段不调），这里只是脚本数量的一道门。
  */
 export function emissionCount(
   state: EmitterState,
@@ -114,11 +143,15 @@ export function emissionCount(
   capacity: number,
   random: ParticleRandom,
   audio?: ParticleAudio,
+  script?: ScriptEmission,
 ): number {
   const flags = fields.flags as number;
   let rate = fields.rate as number;
   let emit = 0;
-  if (alive < capacity && !state.ended && state.delay <= 0) {
+  // 门外的脚本数量：越过结束位、暂停位与 delay，直接发 n 个（不越过容量），计时不动
+  if (alive < capacity && script && (state.ended || script.paused || state.delay > 0))
+    emit = Math.max(0, Math.min(script.count, capacity - alive));
+  else if (alive < capacity && !state.ended && state.delay <= 0) {
     const f = moduleAudio(fields, audio);
     if (f !== null) rate = f32(f * rate);
     if (flags & 4) {
@@ -142,7 +175,8 @@ export function emissionCount(
         }
       }
     }
-    let n0 = state.pending;
+    // 脚本数量和待发的 `instantaneous` 一起进 `n0`（0x140237acd）：之后 `acc −= n0` 就是向连续发射借了 n 个
+    let n0 = state.pending + (script?.count ?? 0);
     state.pending = 0;
     const x = f32(f32(rate * dt) + state.acc);
     if (x < 1 || state.duration < 0) state.acc = f32(x - n0);

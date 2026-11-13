@@ -33,6 +33,8 @@ let moduleGate: Promise<void> | null = null;
 let realmsCreated = 0;
 /** 假播放器收到的命令（`<命令>:<对象>:<文件或增益>`），P6a 步骤 2 的声音层用例读。 */
 const soundCommands: string[] = [];
+/** 渲染器替身的粒子层落点收到的调用（`<方法>:<对象>[:<参数>]`），P4f 步骤 3 的用例读。 */
+const particleCalls: string[] = [];
 
 class Vec3 {
   constructor(
@@ -117,6 +119,21 @@ class FakeRenderer {
   }
   redraw() {
     events.push("redraw");
+  }
+  /** 粒子层脚本方法的落点（P4f 步骤 3，`SceneRenderer.particleScript`）：记下每次调用。 */
+  particleScript(object: number) {
+    const log = (name: string, ...args: unknown[]) =>
+      void particleCalls.push(args.length ? `${name}:${object}:${String(args[0])}` : `${name}:${object}`);
+    return {
+      play: () => log("play"),
+      pause: () => log("pause"),
+      stop: () => log("stop"),
+      isPlaying: () => {
+        log("isPlaying");
+        return true;
+      },
+      emitParticles: (count?: unknown) => log("emit", count),
+    };
   }
   destroy() {}
 }
@@ -1674,6 +1691,89 @@ describe("SceneHost：粒子 instanceoverride 的字段脚本（P4f 步骤 1）"
     expect([[...dirty.rates], [...dirty.particles]]).toEqual([[0], []]);
     expect(compile).toHaveBeenCalledTimes(1);
     expect(reporter.warn).not.toHaveBeenCalled();
+    host.dispose();
+  });
+});
+
+describe("SceneHost：粒子层的脚本方法与 instance（P4f 步骤 3）", () => {
+  /** 图层 0 是粒子层（实例覆盖缺省），脚本挂在它自己的 `alpha` 上（`thisLayer` 就是粒子层的代理）。 */
+  function particleBundle(): SceneBundle {
+    const result = bundle();
+    result.layers[0].particle = {
+      instance: { alpha: 1, size: 1, count: 1, speed: 1, lifetime: 1, rate: 1, brightness: 1, colorn: null },
+      passes: [],
+      children: [],
+    } as unknown as SceneBundle["layers"][number]["particle"];
+    return result;
+  }
+  type ParticleLayer = Record<string, (...args: unknown[]) => unknown> & { instance: Record<string, unknown> };
+
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    vi.stubGlobal("document", {});
+    events.length = 0;
+    particleCalls.length = 0;
+    imports = 0;
+    destroyed = 0;
+    onUpdate = null;
+    updateArguments = [];
+    onInit = null;
+    frozen = false;
+    realmGate = null;
+    moduleGate = null;
+    realmsCreated = 0;
+    compile.mockReset().mockImplementation(async () => particleBundle());
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("首次加载的 init 先于渲染器建场景：方法先记下，场景换上时按顺序补调；这期间 isPlaying 按记下的暂停 / 停止回答", async () => {
+    let layer: ParticleLayer | null = null;
+    const playing: unknown[] = [];
+    onInit = () => {
+      layer = activeGlobal.thisLayer as ParticleLayer;
+      layer.pause();
+      playing.push(layer.isPlaying());
+      layer.play();
+      playing.push(layer.isPlaying());
+      layer.emitParticles(3);
+      layer.stop();
+      playing.push(layer.isPlaying());
+      return 0.8;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(playing).toEqual([false, true, false]);
+    // 补调发生在首帧之前（beforeFirstFrame），渲染器替身的 isPlaying 没被问过
+    expect(particleCalls).toEqual(["pause:0", "play:0", "emit:0:3", "stop:0"]);
+    // 场景换上之后直接接到渲染器的场景
+    layer!.play();
+    expect(layer!.isPlaying()).toBe(true);
+    layer!.emitParticles();
+    expect(particleCalls.slice(4)).toEqual(["play:0", "isPlaying:0", "emit:0:undefined"]);
+    host.dispose();
+  });
+
+  it("instance 的控制点：写进状态、置脏，readTarget 读到覆盖值（没设为 null），脚本读回 (FLT_MAX, 0, 0)", async () => {
+    let layer: ParticleLayer | null = null;
+    onInit = () => {
+      layer = activeGlobal.thisLayer as ParticleLayer;
+      return 0.8;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    const state = renderer.sceneState!;
+    state.takeDirty();
+    expect(host.readTarget("objects/0/instanceoverride/controlpoint2")).toBeNull();
+    const unset = layer!.instance.controlpoint2 as { x: number; y: number; z: number };
+    expect([unset.x, unset.y, unset.z]).toEqual([3.4028234663852886e38, 0, 0]);
+    layer!.instance.controlpoint2 = 5;
+    expect(host.readTarget("objects/0/instanceoverride/controlpoint2")).toEqual([5, 5, 5]);
+    expect([...state.takeDirty().particles]).toEqual([0]);
+    expect(host.readTarget("objects/0/instanceoverride/alpha")).toBe(1);
     host.dispose();
   });
 });

@@ -26,6 +26,7 @@ import { conditionsHold, removedFbos } from "./conditions";
 import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
+  instanceControlPoint,
   PARTICLE_SYSTEM_KEYS,
   parseParticleChildEntry,
   particleModuleEntries,
@@ -38,7 +39,7 @@ import type { TranslateResult } from "../wpesl2wgsl";
 import type { SceneEffect, SceneLayer } from "./bundle";
 import type { SceneParticle } from "./particles";
 import type { SceneScript } from "./scripts";
-import { scanScriptApi, scanScriptCallbacks, type ScriptApiScene } from "./scriptApi";
+import { scanScriptApi, scanScriptCallbacks } from "./scriptApi";
 import { SOUND_MODES, soundFlag } from "./sounds";
 import { TEXTURE_FORMATS } from "./tex";
 import {
@@ -435,16 +436,12 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
  * 导出了 WPE 会调、运行时还没调的回调（光标、媒体等）：`script:callback:<名>`（P6 前置，否则场景静默缺交互）。
  * 只扫会执行的脚本：`collectScripts` 收集的 scene.json 脚本里，导入说明符无效的整段不求值（`ScriptRuntime.load`），不扫。
  * 脚本运行期的普通错误不在这里，仍只进脚本诊断（3b）。
- * `context.particleLayers`：场景里有粒子层，这时任意接收者上的粒子播放控制都报 `script:api:particle.<名>`（`scanScriptApi`，P6a 步骤 2）。
+ * 粒子层与声音层的 `play` / `pause` / `stop` / `isPlaying` 都实现了（P6a 步骤 2、P4f 步骤 3），不再按场景里有没有粒子层多报。
  */
-export function checkScriptFeatures(
-  scripts: readonly SceneScript[],
-  unsupported: Set<string>,
-  context: ScriptApiScene = {},
-): void {
+export function checkScriptFeatures(scripts: readonly SceneScript[], unsupported: Set<string>): void {
   for (const script of scripts) {
     if (script.errors.length) continue;
-    for (const key of scanScriptApi(script, context)) unsupported.add(`script:api:${key}`);
+    for (const key of scanScriptApi(script)) unsupported.add(`script:api:${key}`);
     for (const name of scanScriptCallbacks(script.source)) unsupported.add(`script:callback:${name}`);
   }
 }
@@ -800,12 +797,11 @@ export function checkInstanceFeatures(object: SceneObject, unsupported: Set<stri
  *   子系统（P4e 步骤 1）用同一个对象的值，`compileScene` 按子系统自己的 `flags` 再调一次（`colorn` 另要父生效，
  *   `particles/colorn.ts` 的 `parentActive`）。
  * - `controlpoint0..7`、`controlpointangle0..7`（P4c 步骤 1，`particles/controlpoints.ts`）：静态值已实现，不报（下标 ≥ 控制点
- *   个数、或点上带 `flags` 1 / 4 时 WPE 不用它，同样中性）；绑了用户属性报 `particle:instance:controlpoint:user`（运行时改值
- *   没做，语料 0 处）。
- * - 挂了 `{script}`（P4f 步骤 1、2，rea-p4f-script.md 第 6 节）：`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`brightness`、
- *   `colorn`（`SCRIPT_INSTANCE_KEYS`）已实现，字段脚本写回到就地目标 `particle-instance`（`compile/scripts.ts`），不报；其余键报
- *   `particle:binding:instance:<键>`：`controlpointN` / `controlpointangleN`（运行时写入归 P4f 步骤 3）、`color` 等。脚本里用到的
- *   API 照常由 `scanScriptApi` 检查。
+ *   个数、或点上带 `flags` 1 / 4 时 WPE 不用它，同样中性）；绑了用户属性也不报（P4f 步骤 3：运行时改值写进控制点的 `base`，
+ *   `ControlPointSet.applyOverrides`，rea-p4f-script.md 5.5）。
+ * - 挂了 `{script}`（P4f 步骤 1–3，rea-p4f-script.md 第 6 节）：`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`brightness`、
+ *   `colorn` 与 16 个控制点键（`SCRIPT_INSTANCE_KEYS`）已实现，字段脚本写回到就地目标 `particle-instance`（`compile/scripts.ts`），
+ *   不报；其余键（`color` 等）报 `particle:binding:instance:<键>`。脚本里用到的 API 照常由 `scanScriptApi` 检查。
  * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `collectAnimations` 处理（P10a）。
  */
 export function checkParticleInstance(raw: unknown, context: { flags: number }, unsupported: Set<string>): void {
@@ -826,9 +822,7 @@ export function checkParticleInstance(raw: unknown, context: { flags: number }, 
     } else if (key === "colorn") {
       if (colorOverride && userBindingOf(value as SceneValue)?.condition !== undefined)
         unsupported.add("particle:instance:colorn:condition");
-    } else if (/^controlpoint(?:angle)?[0-7]$/.test(key)) {
-      if (isUserBinding(value)) unsupported.add("particle:instance:controlpoint:user");
-    } else unsupported.add(`particle:instance:${key}`);
+    } else if (!instanceControlPoint(key)) unsupported.add(`particle:instance:${key}`);
   }
 }
 
