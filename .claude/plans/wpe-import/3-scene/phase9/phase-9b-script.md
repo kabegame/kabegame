@@ -464,3 +464,24 @@ export type VideoScriptTarget = Pick<
 - 生成 Kabegame 版时排除了整个 `shaders` 目录，本意是不拷 WPE 生成的缓存，结果测试工程自带的 `kbp_clk` 着色器也没了，场景退回（`shader:kbp_clk:missing`）。改成照拷。
 - `p9b-api2` 里对 `video.getAnimation` 的探测让编译期扫描报 `script:api:object.getAnimation`（它按名字认 `IObject.getAnimation`），整张退回。Kabegame 版去掉了这句，视频对象上的 `getAnimation` 由单测覆盖。这个名字只在视频对象上调用时是误报，语料里没有这样用的。
 - `p9b-switch` 的拷贝记录装得晚，前几次切换没录到，之后补录了 12 次。
+
+### 步骤 4 — 收尾（2026-11-13）
+
+- `cocs/wpe/WPE_SCENE.md` 视频纹理一节：
+  - 编译、播放器、脚本、宿主四行补上 P9b；
+  - 播放规则加暂停期间不取帧与容器时长；
+  - 新增「元素挂进宿主页面」一段与「脚本 `IVideoTexture`」小节（成员表、属性顺序、`null` 的情形）；
+  - 已知差异改写时长一条，并加入 seek、脚本细节、视频比场景时钟早三条；
+  - 语料一段补上 6 张的结果。
+- `cocs/README.md`：视频纹理条目补 P9b 的要点，适用场景接上脚本相关的排查。
+- `versions/latest/regression.md`：新增「场景壁纸脚本控制视频（P9b）」W0–W8。W7（桌面上的视频恢复）、W8（清空脚本存储）待测。
+- `versions/latest/changelog.md`：开发侧一条。用户侧不加：用到脚本控制视频的 6 张仍退回预览图；恢复不停顿属于还没发布的「场景壁纸支持视频」那一条。
+- 总计划与 `PLAN.md` 的 P9 一句。
+
+留给 P9c：
+- 多实例开销（回归 V7）；
+- 674 MiB 级视频每次加载整段落盘。
+
+其余未做：
+- 时钟跑到 `mvhd` 的那 22–40 ms（决定 1，不补）；
+- 视频比场景时钟早（P9a 的首帧等待）。

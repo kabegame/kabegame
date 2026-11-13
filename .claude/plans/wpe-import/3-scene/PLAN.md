@@ -734,7 +734,7 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 ## P9 — 视频纹理
 
-总计划见 [phase-9-video.md](phase9/phase-9-video.md)（2026-11-12）。**P9a 已完成**（2026-11-13，[子计划](phase9/phase-9a-playback.md)「实施记录」）：视频纹理照 WPE 播放（加载即播、缺省循环、不出声、30 帧没画到就暂停），能渲染 47 → 50（173 张口径）；脚本 `getVideoTexture` 是 P9b。按 175 张重算：41 张用到、60 段视频（H.264 59、HEVC 1，其中 1 段装在 Matroska 里）；只做 P9 能渲染 45 → 48，P4–P8 先做完时 70 → 84。和下面的原始范围相比，帧改为拷进普通纹理（不用 `importExternalTexture`），退路从 MSE 改成 Rust 缓存文件或 WebCodecs，静不静音按步骤 0 定。下面是写总计划之前的原始范围。
+总计划见 [phase-9-video.md](phase9/phase-9-video.md)（2026-11-12）。**P9a 已完成**（2026-11-13，[子计划](phase9/phase-9a-playback.md)「实施记录」）：视频纹理照 WPE 播放（加载即播、缺省循环、不出声、30 帧没画到就暂停），能渲染 47 → 50（173 张口径）。**P9b 已完成**（2026-11-13，[子计划](phase9/phase-9b-script.md)「实施记录」）：脚本 `getVideoTexture` / `IVideoTexture` 照 WPE 实测，时长取容器头，视频元素挂进宿主页面最上层（看不见的视频暂停后恢复要等约 255 ms）；用到它的 6 张还差别的节，能渲染数不变。按 175 张重算：41 张用到、60 段视频（H.264 59、HEVC 1，其中 1 段装在 Matroska 里）；只做 P9 能渲染 45 → 48，P4–P8 先做完时 70 → 84。和下面的原始范围相比，帧改为拷进普通纹理（不用 `importExternalTexture`），退路从 MSE 改成 Rust 缓存文件或 WebCodecs，静不静音按步骤 0 定。下面是写总计划之前的原始范围。
 
 - `.tex` 的 flags 含 Video（32）时，唯一 mip 是完整 MP4，起点按容器版本解析（见「补充事实」）。语料 39 张。
 - **读取：** 按区间读出 MP4，做成 Blob，交给静音循环的 `<video>`，每帧 `importExternalTexture`；解码交给浏览器。

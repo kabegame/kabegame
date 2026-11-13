@@ -2087,6 +2087,28 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | V7 桌面、预览与应用背景同时播 | Windows dev | 把 `3822149301` 设为桌面壁纸，同时开它的预览，并设为应用背景；再打开「暂停壁纸」 | 三处都在动、不卡；暂停时停 | 待用户确认（任务管理器看 CPU / GPU 占用） |
 | [ ] | V8 HEVC 不支持硬件解码的显卡 | 其它 Windows 机器 | 打开 `3822149301` | 视频图层透明、场景不退回、日志一条 warn | 本机（NVIDIA Ada）能解，待有条件时测 |
 
+## 场景壁纸脚本控制视频（P9b）
+
+2026-11-13。脚本 `thisLayer.getVideoTexture()` / `IVideoTexture` 照 WPE 实测实现：
+- 时长取容器头（编译期读 MP4 `mvhd`）；
+- 脚本暂停期间不换画面；
+- `loop` 读出数字、float32；
+- 结束回调在登记它的脚本里调。
+
+另把视频元素挂进场景宿主页面最上层（2 px、1% 不透明）：看不见的视频暂停后恢复要等约 255 ms。WPE 真值见 `.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md`「P9b 步骤 0 的补测」，测试工程 `ignore/p9/p9b/proj/`（`gen_b.py`，Kabegame 版 `proj-kb/` 由 `kbvariant.py` 生成），对照记录在 `phase-9b-script.md`「步骤 3」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | W0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error；除已知失败外全过 | 2026-11-13：tsc 0 error；vitest 2769 个只挂原有的语料请求次数上限（`3830255100`） |
+| [x] | W1 语料 | Node，173 个工程 | 步骤 2 前后各扫一次 | 只在 6 张里去掉 `script:api:layer.getVideoTexture`，没有新键 | 2026-11-13：同预期，干净的 57 张不变；编译请求数逐场景不变 |
+| [x] | W2 接口类型与边界 | Windows dev | 导入 `p9b-api-kb`、`p9b-api2-kb`，预览里跑完读脚本日志 | 类型、成员顺序、暂停 / stop / 5 倍速 / 结束 / 结束后 `play()` 和 WPE 一致；暂停期间 seek 画面不变，`play()` 那一帧换 | 2026-11-13 Claude：逐项一致；已知差异：离当前位置不到一帧的 seek 我们照跳 |
+| [x] | W3 时长 | Windows dev | `p9b-long-kb`（音轨长 33 ms）、`p9b-real-kb`（3361965869 的原片） | `duration` 2.55 / 10.005333，结束时读到的时间等于它 | 2026-11-13 Claude：成立；原片绕回比 WPE 早 22 ms（已知差异） |
+| [x] | W4 多段切换不卡 | Windows dev | `p9b-switch-kb`，页面里量每次恢复播放到下一帧的时间 | 冻结时的画面接着放，恢复后几毫秒内出下一帧 | 2026-11-13 Claude：修前 9 次里 4 次约 270 ms；挂到最上层后 15 次都是 5–12 ms |
+| [x] | W5 语料里的预设脚本 | Windows dev | `p9b-preset-kb`（3243449890 的「Video texture controls」原文） | 每帧 `play()`、到 `duration − frametime` 自己跳回 0、不报错 | 2026-11-13 Claude：和 WPE 同一条规则 |
+| [x] | W6 语料 6 张 | Windows dev，强制渲染 | 3326873240、3470764447、3361965869、3276911872、3605722997（3243449890 建管线失败，与视频无关） | 时段切换选对段、改速度属性跟着变；没有和视频有关的报错 | 2026-11-13 Claude：成立；3276911872 的预设挂在非视频图层上，`null` 报错和 WPE 的 `log.txt` 相同 |
+| [ ] | W7 桌面上的视频恢复 | Windows dev，窗口模式 | 把一张带视频、会隐藏视频图层的场景设为桌面壁纸，让图层隐藏 1 s 以上再显示 | 再显示时画面接着放，不停顿 | 只在预览里测过；用户当前的壁纸没有视频，没有替用户换 |
+| [ ] | W8 清空脚本存储 | Windows dev | 预览一张用脚本改过视频 `loop` / `rate` 的场景，右键「清空脚本存储」 | 视频回到缺省循环、速率 1，脚本重新 `init` 后照常控制 | 只有单测 |
+
 ## 按颜色排序与代表色
 
 2026-11-11。每张图入库时算一份色盘（最多 5 个代表色 + 占比，`images.palette`），详情「基本信息」里画成色带；排序新增「颜色」维度。迁移 v052 加色盘列、色桶表 `color_buckets`（12 个基本色桶，黄 / 绿 / 青为 `e6c200` / `2e9e3f` / `1fb5b5`，不是纯色）与关系表 `image_color_distances`，给存量图 × 每个色桶铺一行 65536；回填作业 `image_palette` 在后台给 `palette IS NULL` 的图补算。排序有两个段：`sort/by-color_0x<rrggbb>`（色桶，预计算、沿索引读）与 `sort/by-any-color_0x<rrggbb>`（任意颜色，现算），前端按色桶列表（`color_buckets://`）选段并在列表变化时校正；用户可把颜色保存成色桶（`add_color_bucket`，最多 24 个）或删除（`delete_color_bucket`），提交后发 `color-buckets-change`。机制见 `cocs/gallery/COLOR_PALETTE.md`。

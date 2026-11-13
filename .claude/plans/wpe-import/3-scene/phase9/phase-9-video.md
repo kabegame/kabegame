@@ -323,3 +323,19 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 - **暂停期间**：seek 读回立即变，画面到 `play()` 那一帧才换；`stop()` 后停在 stop 那一刻的帧。
 - **类型**：`isPlaying()` 布尔、`loop` 数字、`duration` 只读，另有 `getAnimation`。
 - **语料的写法**：两张是 WPE 自带的「Video texture controls」预设，两张按时段播一段、暂停其余，一张改速度，一张自写控制。
+
+### P9b — 脚本与多段视频（2026-11-13）
+
+见 [phase-9b](phase-9b-script.md)「实施记录」：
+- 步骤 0 文档（`2d7087d2`）；
+- 编译期读容器时长（`3552dba5`）；
+- `getVideoTexture` / `IVideoTexture`（`187f41c9`）；
+- 真机对照与视频元素挂进宿主页面（`62de2c03`）；
+- 收尾。
+
+结果：
+- 六个测试工程和 WPE 逐项一致。剩下的差别：离当前位置不到一帧的 seek、Adobe 导出视频的循环点早 22 ms，以及几处报错文字与读回精度。
+- 6 张语料场景只去掉 `script:api:layer.getVideoTexture`。它们还差人偶、相机、`input`、粒子层的 `play` 等，能渲染数不变；强制渲染下脚本的切换与改速度和脚本逻辑一致。
+- 真机对照里发现，看不见的 `<video>` 暂停后恢复要等后台渲染约 255 ms。把元素挂到宿主页面最上层（2 px、1% 不透明）后，P9a 的 30 帧空闲恢复与 P9b 的脚本切换都不再停顿。
+
+留给 P9c：多实例开销（回归 V7）、674 MiB 级视频每次加载整段落盘。

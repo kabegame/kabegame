@@ -122,6 +122,13 @@
 
 ### Added
 - 场景壁纸 P9a：视频纹理。编译期 `compile/tex.ts` 按 Video 标志跳过 mip 字节、给出磁盘区间（`SceneTexture.video`），删 `tex:video`；场景宿主新增 `apps/wpe-scene/src/video/`（`VideoTexturePlayer`：区间 `fetch(file:)` → `Response.blob()` → 不挂 DOM 的静音 `<video>`；`SceneVideos` 实现 `VideoSink`：帧号、30 帧没画到就暂停、宿主暂停、跨重编译按区间复用）；`GpuScene` 把视频纹理建成初值全 0 的 `rgba8unorm`，画到绑定它的 draw 时有新帧就 `copyExternalImageToTexture`，渲染器每个实时帧 `beginFrame`；宿主第一次 ready 前等可见视频出第一帧（最多 2 s）。dev 探针 `host.videos()`，`renderFrame` 与 vite `/render`、MCP `render_scene` / `host_render` 新增 `videoTime`（`dev/videoProbe.ts`，seek 好再拷）。WPE 语义见 `.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md`。
+- 场景壁纸 P9b：脚本控制视频。
+  - 新增 `video/container.ts`：编译期读 MP4 `mvhd` / Matroska `Info.Duration`，放进 `SceneVideoSource.duration`，场景确定退回时不读。
+  - 脚本 API 新增 `getVideoTexture()` / `IVideoTexture`（`script/api.ts`）：成员顺序与类型照 WPE 实测，`loop` 读出数字、float32、`duration` 只读。宿主经 `layerVideoSource(scriptBundle)` 与 `SceneVideos.playerFor` 按区间键取播放器；结束回调经新的 `ScriptRuntime.callFor`（类别 `ended`）在登记它的脚本上下文里调。
+  - 播放器：时长与结束时的时间取容器时长；脚本暂停 / 停止期间不交帧；失败后 `play()` 仍置想放；`resetScriptState` 供「清空脚本存储」复位。
+  - `attachToDocument` 把 `<video>` 挂在宿主页面最上层（2 px、1% 不透明）。看不见的视频暂停后恢复要等后台渲染约 255 ms，被画布盖住也算看不见。
+  - `compile/scriptApi.ts` 删 `getVideoTexture`，`dev/scriptErrors.ts` 认 `ended:` 前缀。
+  - 计划与对照见 `.claude/plans/wpe-import/3-scene/phase9/phase-9b-script.md`。
 - 场景壁纸 P6b 1d：场景里的静态文本对象照 WPE 渲染，不再因文本退回预览图。编译期 `compile/texts.ts` 规整字段、定位主字体、编 WPE 自带的四个字体材质；宿主 `text/host.ts` 在建 GPU 资源前排好全部文本层（wasm 与字体跨重编译保留）；渲染图新增 `text` 步骤（直接上屏或画进合成 RT 后走 effect 链），字形图集是运行时纹理。能力表改报 `text:script`、`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>`；会随时间变的文字（时钟）要等 1e。六个测试工程和 WPE 整帧逐像素相同。
 - 场景壁纸 P6b 1d2：文本对象的系统字体改由后端按平台解析成本机文件，`wpe_scene_target` 新增 `systemFonts`（名字 → 路径），宿主按表读、表里没有的当读不到。Windows 取 `%WINDIR%\Fonts`（系统不装在 C 盘也能读到）；macOS / Linux 按候选表换成同款或接近的字体（路径待真机核对，`TODO:[WPE_SCENC]`），彩色 emoji 不给替代、交给 Twemoji。`file:` 闸门放行的就是这份表里的文件。另更正 `wpefont` README：没有 libpng，sbix / CBDT 彩色字形读不了，只有 COLR 能读。
 - 场景壁纸 P6b 1c：场景宿主新增 `apps/wpe-scene/src/text/`（纯 TS），照 WPE 反编译实现文本的字体回退链、排版（分行、断行、省略号、两端对齐、对齐、文字框与合成 RT 尺寸）与字形图集装箱器（R8 / RGBA8，按「字体 + 字号」共享），还没有调用方；`wpefont` 新增 `wpefont_glyph_box` / `WpefontFace.box`（`FT_LOAD_NO_BITMAP` 的轮廓框，WPE 的字形四边形用它），`glyph()` 去掉 `cbox`。基线 `text/fixtures/p6b.json` 由 `apps/wpe-scene/scripts/fixtures/make_text_fixture.py` 从 WPE 抓帧生成：44 个对象与 21 张图集和 WPE 逐坐标、逐字节相同。
