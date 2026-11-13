@@ -92,8 +92,10 @@ function valueType(initial: SceneScalar): ValueType | "string" {
  * 开头才进模拟（6.3），和我们「脚本之后 `sync`、下一次 `stepParticles` 才用」的帧序等价；`rate` 在 `SceneState.write` 里另走一条路
  * （没有改值回调，5.4）。其余键（`brightness`、控制点等）与非粒子对象上的 `instanceoverride` 没有目标（能力表照报），也不落到图层的
  * 同名字段上（`alpha`、`brightness` 是图层字段，路径不同）。
+ *
+ * 属性关键帧动画（P10a，`animations.ts`）用同一个函数推目标，参数照字段脚本的算法给。
  */
-function targetOf(
+export function targetOf(
   path: string,
   owner: ScriptOwner,
   key: string,
@@ -127,6 +129,24 @@ function targetOf(
       type: valueType(initial) === "string" ? "float" : (valueType(initial) as ValueType),
     };
   return { kind: "unsupported", path };
+}
+
+/**
+ * 按目标定的值类型（不按初值猜），字段脚本与属性关键帧动画（P10a，`animations.ts`）共用：声音的 `volume` 是 float；文本按 `textTypes`；
+ * 粒子实例覆盖的 `colorn` 是 vec3（WPE 的描述符，rea-p4f-script.md 5.1），其余系数是 float；图层字段按 `layerTypes`；`general` 字段按
+ * `GENERAL_FIELDS`。其余（材质常量、泛光参数、没有目标的）返回 null，由调用方另定。
+ */
+export function targetValueType(
+  target: SceneScript["target"],
+  owner: ScriptOwner,
+  key: string,
+): ValueType | "string" | null {
+  if (target.kind === "sound") return "float";
+  if (target.kind === "text") return textTypes[target.field];
+  if (target.kind === "particle-instance") return target.field === "colorn" ? "vec3" : "float";
+  if (owner.kind === "layer" && key in layerTypes) return layerTypes[key];
+  if (owner.kind === "general" && key in GENERAL_FIELDS) return GENERAL_FIELDS[key as GeneralKey].type;
+  return null;
 }
 
 /** 原始 JSON 坐标扫描；不受可见性、effect 开关或编译快速回退影响。 */
@@ -173,24 +193,11 @@ export async function collectScripts(
       const text = !!object && typeof object === "object" && isTextObject(object);
       const particle = !!object && typeof object === "object" && objectKind(object) === "particle";
       const target = targetOf(path, owner, key, initial, sound, text, particle);
-      // 粒子实例覆盖：`colorn` 是 vec3（WPE 的描述符，rea-p4f-script.md 5.1），其余系数是 float
-      const instanceType = target.kind === "particle-instance" && target.field === "colorn" ? "vec3" : "float";
       list.push({
         id: path,
         source: raw.script,
         target,
-        valueType:
-          target.kind === "sound"
-            ? "float"
-            : target.kind === "text"
-              ? textTypes[target.field]
-              : target.kind === "particle-instance"
-                ? instanceType
-                : owner.kind === "layer" && key in layerTypes
-                  ? layerTypes[key]
-                  : owner.kind === "general" && key in GENERAL_FIELDS
-                    ? GENERAL_FIELDS[key as GeneralKey].type
-                    : valueType(initial),
+        valueType: targetValueType(target, owner, key) ?? valueType(initial),
         initial,
         owner,
         layer,

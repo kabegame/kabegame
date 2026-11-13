@@ -301,3 +301,44 @@ export function scanValue(value: unknown, unsupported: Set<string>): void {
   - 缓存扩容按「至少到 i + 1、否则翻倍」；
   - `AnimationEventRecord` 定为 `{ animation, json }`，`animation` 是时钟主人的下标。
 - **工具注意**：`ignore/p10/c1` 的 vitest 要在 `D:\` 开头的工作目录里跑（PowerShell，或 `cd D:/Codes/kabegame`）。Git Bash 的工作目录是小写 `d:`，vitest 会把 `vitest` 加载成两份，报 `Cannot read properties of undefined (reading 'config')`。
+
+### 步骤 2 — 编译期（2026-11-14）
+
+P4f 步骤 1 当时正在改 `scripts.ts`（未提交），所以在快照里做：
+- 把工作区（含 P4f 的改动）冻结成 `ignore/p10/c2/base` 与 `ov`，代理在 `ov` 里实现，`kbp snapshot diff` 出补丁 `ignore/p10/c2/c2.patch`；
+- P4f 提交（`ef16dcf1`）后，补丁对新 HEAD 干净打上；提交前 HEAD 又到了 `ef452f49`（P5d 步骤 0–1、P8 步骤 3），三方合并（`bundle.ts` 3 处、`features.ts` 1 处冲突，按 P5d 删掉 `PassContext.model` 与 `checkPassFeatures` 的 `model` 参数解决）后重跑 tsc、产品测试（2448 = HEAD 2421 + 27）与语料，结果同上；
+- P4f 步骤 2（工作区、未提交）把 `instanceoverride.brightness` 加进就地目标表，所以测试里「没有就地目标」的例子由 `brightness` 换成 `color`；工作区里 P4f 的改动与本步的改动三方合并，两边都保留。
+
+**改动：**
+- **新增 `compile/animations.ts`**：
+  - `collectAnimations`：丢弃、灯 / 相机 / 没有就地目标的细分键、`relative`（照汇编逐字扫：只认空格分隔、只看键在不在）、通道与 `wraploop`、值类型与 `writes`、事件 JSON（键按码点序递归排序、实数 8 位有效数字）、联动（同一属主 + 属性名）；
+  - `settleConstantAnimation`：编译 pass 后补常量目标；
+  - 过渡键 `value:animation:pending`。
+- **修改**：
+  - `scripts.ts`：`targetOf` 加 `export`；值类型推导原样提成 `targetValueType`，字段脚本调用不变；
+  - `bundle.ts`：`SceneBundle.animations`；常量目标与脚本一起补；`PassContext.sceneConstants`；
+  - `features.ts`：`scene.json` 不再 `scanValue`；`checkPassFeatures` 跳过从 `scene.json` 并进来的实例常量，材质 JSON 自己的关键帧照报 `value:animation`；
+  - `model.ts`：`isKeyframedValue` 搬来（`bindings.ts` 转导出），`resolveValue` 对关键帧取 `value`；
+  - `p4a5.test.ts`：两个断言改成新语义。
+- **新增 `compile/animations.test.ts`**：27 个用例。
+
+**验收（主会话在 `ef16dcf1` 的快照上重跑）：**
+- tsc 0；产品测试 2353 通过（HEAD 2326，多的 27 个是新测试）。
+- 语料 173 张：`value:animation` 40 张 → `value:animation:pending` 40 张，另 `value:animation:light`（`3465215190`）、`value:animation:camera`（`3554161528`）各 1 张；别的键逐张不变，能渲染 57 → 57。
+  - 40 张共 225 条动画，220 条会写。不写的 5 条：4 条常量在着色器里没有 uniform，1 条没有通道（`3837699827` 的 `R`）。
+  - 联动 17 处，事件 2 个。
+- 四个测试工程只剩 `value:animation:pending`。`p10-script`、`p10-edge` 另有 `getAnimation` / `animationEvent` 的键（P10b）。
+- 主会话逐段审了 `animations.ts` 与共享文件的改动。代理做的 9 处变异全部检出。
+
+**和子计划不同的地方：**
+- 过渡键改成一开始就报：非常量的在 `collectAnimations` 之后报，常量的在补齐时报，和原来一样早退回、不白解码纹理；
+- `maxrows`（整数）、`bloomhdriterations`（整数）不写，`bloomtint` 按 vec3；
+- `scene.json` 其余顶层键与 `scriptproperties` 里的关键帧报 `other`。
+
+**没确认的**（第二条在代码里标了 `TODO:[WPE_SCENE]`）：
+- 父被丢弃时子用自己的时钟（WPE 里子借一个永远不走的时钟），语料 0 处；
+- effect 常量联动的属主按 pass 算：`3577990983` 的三个 `Aperture` 和别的 pass 的 `Opacity` 参数相同，画面无差；
+- 登记顺序取 JSON 遍历顺序，只影响 P10b 按名字查找；
+- 整数值的实数字面量在事件 JSON 里按整数写，语料 0 处。
+
+**工具注意**：Prettier 对 `ignore/` 下的文件要加 `--ignore-path .prettierignore` 才真的检查。缺省会读 `.gitignore`，跳过 `/ignore`，显示「全部通过」。

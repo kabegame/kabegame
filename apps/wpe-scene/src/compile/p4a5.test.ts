@@ -3,6 +3,7 @@
  * `instanceoverride` 的绑定登记与能力表（`.claude/plans/wpe-import/3-scene/phase4/phase-4a-base.md`「步骤 5」）。
  */
 import { describe, expect, it, vi } from "vitest";
+import { collectAnimations } from "./animations";
 import { BindingCollector, isKeyframedValue, planApply, type SceneBinding } from "./bindings";
 import { compileScene } from "./bundle";
 import {
@@ -53,41 +54,53 @@ describe("A：属性关键帧报 value:animation", () => {
 
   const image = (extra: JsonObject = {}): JsonObject => ({ id: 1, image: "models/a.json", ...extra });
 
-  it("scene：general、图层字段、effect 实例常量、effect 可见性、instanceoverride 各自都报", () => {
+  // P10a 步骤 2：scene.json 里的关键帧不再由能力表报，改由 `collectAnimations` 编成动画（细分键见 `animations.test.ts`）
+  it("scene：general、图层字段、effect 实例常量、effect 可见性、instanceoverride 都由 collectAnimations 收集", () => {
     expect(sceneKeys({ general: ORTHO, objects: [image()] })).toEqual([]);
-    expect(sceneKeys({ general: { ...ORTHO, bloomstrength: keyframed(2) }, objects: [] })).toContain("value:animation");
-    expect(sceneKeys({ general: ORTHO, objects: [image({ alpha: keyframed(1) })] })).toEqual(["value:animation"]);
-    expect(sceneKeys({ general: ORTHO, objects: [image({ origin: keyframed("1 2 3") })] })).toEqual([
-      "value:animation",
-    ]);
     const effect = (instance: JsonObject) => ({
       general: ORTHO,
       objects: [image({ effects: [{ file: "effects/tint/effect.json", ...instance }] })],
     });
-    expect(sceneKeys(effect({ passes: [{ constantshadervalues: { multiply: keyframed(1) } }] }))).toEqual([
-      "value:animation",
-    ]);
-    expect(sceneKeys(effect({ visible: keyframed(true) }))).toEqual(["value:animation"]);
-    expect(
-      sceneKeys({
-        general: ORTHO,
-        objects: [{ id: 2, particle: "particles/p.json", instanceoverride: { count: keyframed(2) } }],
-      }),
-    ).toEqual(["value:animation"]);
+    const cases: [SceneJson, string][] = [
+      [{ general: { ...ORTHO, bloomstrength: keyframed(2) }, objects: [] }, "general/bloomstrength"],
+      [{ general: ORTHO, objects: [image({ alpha: keyframed(1) })] }, "objects/0/alpha"],
+      [{ general: ORTHO, objects: [image({ origin: keyframed("1 2 3") })] }, "objects/0/origin"],
+      [
+        effect({ passes: [{ constantshadervalues: { multiply: keyframed(1) } }] }),
+        "objects/0/effects/0/passes/0/constantshadervalues/multiply",
+      ],
+      [effect({ visible: keyframed(true) }), "objects/0/effects/0/visible"],
+      [
+        {
+          general: ORTHO,
+          objects: [{ id: 2, particle: "particles/p.json", instanceoverride: { count: keyframed(2) } }],
+        },
+        "objects/0/instanceoverride/count",
+      ],
+    ];
+    for (const [scene, id] of cases) {
+      expect(sceneKeys(scene), id).toEqual([]);
+      const { list, unsupported } = collectAnimations(scene);
+      expect(
+        list.map((item) => item.id),
+        id,
+      ).toEqual([id]);
+      expect(unsupported, id).toEqual([]);
+    }
   });
 
-  it("挂了 user / script 的关键帧照报；puppet 的 animationlayers（整数 id）不报", () => {
-    expect(sceneKeys({ general: ORTHO, objects: [image({ alpha: keyframed(1, { user: "a" }) })] })).toEqual([
-      "value:animation",
-    ]);
-    expect(sceneKeys({ general: ORTHO, objects: [image({ alpha: keyframed(1, { script: SCRIPT }) })] })).toEqual([
-      "value:animation",
-    ]);
-    const puppet = sceneKeys({
+  it("挂了 user / script 的关键帧同样收集；puppet 的 animationlayers（整数 id）不算", () => {
+    for (const extra of [{ user: "a" }, { script: SCRIPT }]) {
+      const scene = { general: ORTHO, objects: [image({ alpha: keyframed(1, extra) })] };
+      expect(sceneKeys(scene)).toEqual([]);
+      expect(collectAnimations(scene).list.map((item) => item.id)).toEqual(["objects/0/alpha"]);
+    }
+    const puppet = {
       general: ORTHO,
       objects: [image({ animationlayers: [{ animation: 1, blend: 1, rate: 1, visible: true }] })],
-    });
-    expect(puppet).not.toContain("value:animation");
+    };
+    expect(sceneKeys(puppet)).not.toContain("value:animation");
+    expect(collectAnimations(puppet)).toEqual({ list: [], unsupported: [] });
   });
 
   it("材质常量报；alphawriting 只有 default 中性，enabled / disabled / 其它取值照报", () => {

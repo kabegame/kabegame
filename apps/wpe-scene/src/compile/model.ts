@@ -185,6 +185,18 @@ export function currentProperties(
   });
 }
 
+/**
+ * `value` 是不是属性关键帧动画 `{animation: {c0…, options}, value}`（`sample-gaps.md` §3）：`animation` 必须是对象，
+ * puppet 的 `animationlayers[i].animation` 是整数 id，不算。同时挂了 `user` / `script` 也算：三种绑定在 WPE 里并存
+ * （§3.4，`FUN_1401a4db0`；一帧里谁最后写见 rea-p10-keyframes 第 9 节）。`scene.json` 里的由 `collectAnimations` 编成动画（P10a），
+ * 材质、模型、effect.json、粒子 JSON 里的能力表照报 `value:animation`（WPE 的这些 JSON 不经属性框架）。
+ */
+export function isKeyframedValue(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const animation = (value as { animation?: unknown }).animation;
+  return !!animation && typeof animation === "object" && !Array.isArray(animation);
+}
+
 export function resolveValue(
   value: SceneValue | undefined,
   properties: Record<string, SceneScalar>,
@@ -192,7 +204,10 @@ export function resolveValue(
   if (value && typeof value === "object") {
     // 脚本求值前的编译期初值；运行时写回会覆盖它。
     if ("script" in value) return value.value;
-    if (!("user" in value) || !value.user) return undefined;
+    // 关键帧动画（P10a）：WPE 加载时把 `value` 写进字段，第一帧起由动画每帧覆盖（rea-p10-keyframes 第 4 节）；动画不写
+    // （通道数不对、布尔等类型，第 5、10 节）时字段一直是它。同时绑了用户属性的走下面：属性在加载后套用（第 5 节第 3 条）
+    if (!("user" in value) || !value.user)
+      return isKeyframedValue(value) ? (value as { value?: SceneScalar }).value : undefined;
     const name = typeof value.user === "string" ? value.user : value.user.name;
     const current = properties[name] ?? value.value;
     // condition 按字符串比（WPE 的值换字符串再与 condition 比；condition 写成数字时同样成立），见 `bindings.ts`

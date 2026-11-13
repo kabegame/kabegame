@@ -198,17 +198,8 @@ export function isScriptValue(value: unknown): boolean {
   );
 }
 
-/**
- * `value` 是不是属性关键帧动画 `{animation: {c0…, options}, value}`（`sample-gaps.md` §3）：`animation` 必须是对象，
- * puppet 的 `animationlayers[i].animation` 是整数 id，不算。同时挂了 `user` / `script` 也算：三种绑定在 WPE 里并存
- * （§3.4，`FUN_1401a4db0`），每帧谁生效没查清。关键帧还没实现，`resolveValue` 把它解析成 `undefined`、属性静默退回缺省值，
- * 所以能力表一律报 `value:animation`。
- */
-export function isKeyframedValue(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const animation = (value as { animation?: unknown }).animation;
-  return !!animation && typeof animation === "object" && !Array.isArray(animation);
-}
+/** 判断写在 `model.ts`（`resolveValue` 要用，那边不能反过来引用这里），原来的引用处照旧从这里取。 */
+export { isKeyframedValue } from "./model";
 
 /** `{user}` 里的属性名与条件；不是用户绑定返回 null。 */
 export function userBindingOf(value: SceneValue | undefined): { property: string; condition?: string } | null {

@@ -1,3 +1,4 @@
+import { ANIMATION_PENDING, collectAnimations, settleConstantAnimation } from "./animations";
 import { alignmentIndex } from "./alignment";
 import { compileBloom, type SceneBloom } from "./bloom";
 import {
@@ -100,6 +101,7 @@ import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import type { SceneVideoSource } from "../video/player";
+import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
 
@@ -550,6 +552,12 @@ export interface SceneBundle {
    */
   sounds?: SceneSound[];
   /**
+   * 属性关键帧动画（P10a 步骤 2，`animations.ts`）：`scene.json` 里每处没被丢弃、有就地目标的关键帧值一条，按登记顺序。材质常量的
+   * 目标在编译 pass 时补 uniform（`settleConstantAnimation`）。`compileScene` 总会给出；可选只是为了不动各处手写的测试 bundle，
+   * 读的地方按空表处理。
+   */
+  animations?: SceneAnimation[];
+  /**
    * 场景用音频（P4e 步骤 4）：`project.json` 的 `general.supportsaudioprocessing` 是 JSON `true`（WPE 只认 bool 真，`FUN_14010d100`，
    * rea-p4e-audio.md 4.1），且有粒子系统（含子系统）带 `audioprocessingmode ≠ 0` 的模块（`particleUsesAudio`）。为真时宿主加载就订阅
    * `WpeMediaHub`（脚本注册音频缓冲时另外照旧订阅）。`compileScene` 总会给出；可选只是为了不动各处手写的测试 bundle，缺省按 false。
@@ -814,6 +822,11 @@ interface PassContext {
   particle?: ParticleSheetSystem;
   /** 字体着色器的 pass（P6b 1d）：程序检查放行 `TEXT_UNIFORMS`（MSDF 才读的 `g_RenderVar0–3`）。 */
   text?: boolean;
+  /**
+   * effect 实例从 `scene.json` 覆盖进来的常量（`passes[k].constantshadervalues`）：它们上面的关键帧由 `collectAnimations` 处理，
+   * 能力检查只扫材质 JSON 自己的（`checkPassFeatures` 的 `sceneConstants`，P10a 步骤 2）。
+   */
+  sceneConstants?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -888,6 +901,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
+  // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键；有会写字段的动画时报过渡键（常量目标的在编译 pass 时再判一次），
+  // 和原来的 `value:animation` 一样一开始就定下退回，不白解码纹理
+  const animations = collectAnimations(scene);
+  for (const key of animations.unsupported) unsupported.add(key);
+  if (animations.list.some((animation) => animation.writes)) unsupported.add(ANIMATION_PENDING);
   // 有粒子层时，任意接收者上的播放控制都可能是粒子层的方法（P6a 步骤 2，P4f 实现后删掉）
   checkScriptFeatures(scripts.list, unsupported, {
     particleLayers: scene.objects.some((object) => objectKind(object) === "particle"),
@@ -937,6 +955,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     bindings: bindings.list,
     scripts,
     sounds,
+    animations: animations.list,
   };
   const counts = lightCounts(general);
   for (const issue of lightConfigIssues(general)) unsupported.add(issue);
@@ -1318,7 +1337,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
   async function compilePass(pass: MaterialPass, context: PassContext): Promise<ScenePass> {
     const issues = context.unsupported ?? unsupported;
-    checkPassFeatures(pass, issues);
+    checkPassFeatures(pass, issues, { sceneConstants: context.sceneConstants });
     const scope = context.scope ?? null;
     const names = (pass.textures ?? []).map(textureName);
     const slots: Record<number, number> = {};
@@ -1357,15 +1376,26 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ? await shader.compile(shaderName, pass.combos ?? {}, formats, scope, issues, defines, rope)
       : null;
     if (result?.ok) {
+      const slots = materialSlots(result.uniforms ?? []);
       for (const script of scripts.list) {
         if (script.owner.kind !== "material" || script.owner.pass !== context.key || script.target.kind !== "constant")
           continue;
         // 脚本写回走 WPE 的类型化 setter，类型是这个键 setter 的类型（主格的，vector-constant-REPORT.md 2.6）
         const material = script.target.material;
-        const slot = materialSlots(result.uniforms ?? []).find((item) => item.material === material);
+        const slot = slots.find((item) => item.material === material);
         if (slot) Object.assign(script.target, constantTargetFields(slot));
         else script.target.uniforms = [];
         script.valueType = script.target.type;
+      }
+      // 关键帧的常量目标（P10a 步骤 2）：同样补，补完按主格类型定写不写；会写的报过渡键（关着的 effect 的常量动画同样每帧写）
+      for (const animation of animations.list) {
+        const target = animation.target;
+        if (target.kind !== "constant" || target.pass !== context.key) continue;
+        settleConstantAnimation(
+          animation,
+          slots.find((item) => item.material === target.material),
+        );
+        if (animation.writes) unsupported.add(ANIMATION_PENDING);
       }
     }
     if (!shaderName) issues.add("shader:missing");
@@ -1516,6 +1546,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           fbos,
           planned,
           unsupported: issues,
+          sceneConstants: override?.constantshadervalues,
         });
         // effect 自己开光照：WPE 里能跑，但世界坐标的取法没有和 WPE 对比过，不猜
         if (compiled.program !== null && usesLighting(bundle.programs[compiled.program])) issues.add("lighting:effect");

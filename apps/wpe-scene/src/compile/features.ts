@@ -378,9 +378,10 @@ const SUPPORTED_INSTANCE_PASS = new Set(["id", "combos", "constantshadervalues",
 /**
  * 递归扫描一个 JSON 值：属性关键帧 `{animation: {…}, value}` 报 `value:animation`（`isKeyframedValue`，P4a 步骤 5，
  * `sample-gaps.md` §3.3）。挂了 `user` / `script` 的同样报；puppet 的 `animationlayers[i].animation` 是整数 id，不报。
- * 覆盖：`checkSceneFeatures` 扫整个 scene（`general`、图层字段、effect 实例常量、`instanceoverride`），`checkPassFeatures`
- * 扫材质 pass（含常量），`checkModelFeatures` 扫模型 JSON，`checkEffectFeatures` 扫 effect.json；粒子 JSON 在
- * `checkParticleFeatures` 里按键检查（模块字段由 `readParticleModule` 报 `animation`）。
+ * 只给不经属性框架的 JSON 用（语料 0 处）：`checkPassFeatures` 扫材质 JSON 的常量，`checkModelFeatures` 扫模型 JSON，
+ * `checkEffectFeatures` 扫 effect.json；粒子 JSON 在 `checkParticleFeatures` 里按键检查（模块字段由 `readParticleModule` 报
+ * `animation`）。`scene.json` 里的（`general`、图层字段、effect 实例常量、`instanceoverride`）由 `collectAnimations` 编成动画，
+ * 没有就地目标的报 `value:animation:<light|camera|other>`（P10a 步骤 2，`animations.ts`）。
  */
 export function scanValue(value: unknown, unsupported: Set<string>): void {
   if (Array.isArray(value)) {
@@ -407,7 +408,7 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   // 第 6 节、4.1，`SceneBundle.audio`）；语料只有默认工程 `audiophile` 在 `scene.json` 里写了它
   // `zoom` 已实现（P5a 步骤 4）：正交投影绕场景中心乘它（p5-REPORT 实测），绑属性、脚本写回都就地生效。只在解析出的值 ≤ 0 时报：
   // 投影退化、指针反投影是 NaN（语料最小 1.0）。常量与 `{script}` 的初值同 `bundle.ts` 的 `generalFields` 解析，不合法时取缺省 1；
-  // 绑用户属性的不看值（运行中的值编译期定不了）；关键帧解析成 undefined，另报 `value:animation`。透视场景里 zoom 不起作用
+  // 绑用户属性的不看值（运行中的值编译期定不了）；关键帧取 `value`（WPE 加载时写它，P10a）。透视场景里 zoom 不起作用
   // （rea-p5-camera.md 1.4：读取点都在正交分支），不报，整张另报 `camera:perspective`
   if (g.orthogonalprojection && !isUserBinding(g.zoom)) {
     const zoom = generalValue("zoom", resolveValue(g.zoom as SceneValue | undefined, {}));
@@ -427,7 +428,7 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   const { parents, cycle } = resolveParents(scene.objects);
   if (cycle) unsupported.add("object:parent-cycle");
   scene.objects.forEach((object, index) => checkObjectFeatures(object, unsupported, parents[index]));
-  scanValue(scene, unsupported);
+  // 关键帧不在这里报：由 `collectAnimations`（`animations.ts`，P10a 步骤 2）按目标报细分键与过渡键
 }
 
 /**
@@ -806,7 +807,7 @@ export function checkInstanceFeatures(object: SceneObject, unsupported: Set<stri
  *   （`SCRIPT_INSTANCE_KEYS`）已实现，字段脚本写回到就地目标 `particle-instance`（`compile/scripts.ts`），不报；其余键报
  *   `particle:binding:instance:<键>`：`brightness`（HDR 下要先变成就地目标，P4f 步骤 2）、`controlpointN` / `controlpointangleN`
  *   （运行时写入归 P4f 步骤 3）、`color` 等。脚本里用到的 API 照常由 `scanScriptApi` 检查。
- * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `scanValue` 报。
+ * - 其它键：`particle:instance:<键>`；不是对象：`particle:instance`。值为 null 的键当缺键。关键帧由 `collectAnimations` 处理（P10a）。
  */
 export function checkParticleInstance(
   raw: unknown,
@@ -1086,8 +1087,15 @@ export function normalizeDepthKeys(pass: Pick<MaterialPass, "cullmode" | "deptht
  * 给每个绘制步骤定光栅状态（`render/graph.ts` 的 `rasterState`），场景目标按需带深度附件（`render/scene.ts`）。依据是 p5-REPORT「P5d 语义的
  * 实测核对」：深度、剔除、非法值、缺键、正交场景同样测深度几行全部实测成立。拼错的键（ricepod 的 `depthtesting`）不在 `SUPPORTED_PASS`
  * 里，照旧报 `material:<键>`。
+ *
+ * 常量上的关键帧报 `value:animation`（材质 JSON 不经属性框架）。`context.sceneConstants` 是 effect 实例从 `scene.json` 覆盖进来的常量
+ * （`bundle.ts` 已把它们并进 `pass.constantshadervalues`）：这些键上的关键帧由 `collectAnimations` 处理，这里跳过（P10a 步骤 2）。
  */
-export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>): void {
+export function checkPassFeatures(
+  pass: MaterialPass,
+  unsupported: Set<string>,
+  context: { sceneConstants?: Readonly<Record<string, unknown>> } = {},
+): void {
   if (pass.blending && !SUPPORTED.blending.includes(pass.blending as never)) unsupported.add(`blend:${pass.blending}`);
   // COMBO 只按整数读（I3）：写成 `{user, value}` 时 WPE 断言中止整个进程，这里按不支持退回预览图
   for (const value of Object.values(pass.combos ?? {}))
@@ -1102,7 +1110,8 @@ export function checkPassFeatures(pass: MaterialPass, unsupported: Set<string>):
       active(value)
     )
       unsupported.add(`material:${key}`);
-  scanValue(pass.constantshadervalues as Record<string, SceneValue> | undefined, unsupported);
+  for (const [key, value] of Object.entries(pass.constantshadervalues ?? {}))
+    if (!(context.sceneConstants && Object.hasOwn(context.sceneConstants, key))) scanValue(value, unsupported);
 }
 
 /**
@@ -1157,7 +1166,7 @@ export function checkEffectFeatures(
   }
   for (const [key, value] of Object.entries(effect))
     if (!SUPPORTED_EFFECT.has(key) && active(value)) unsupported.add(`effect:${label}:${key}`);
-  // effect.json 里的关键帧（语料 0 处，防御用）；实例上的已由 `checkSceneFeatures` 扫过
+  // effect.json 里的关键帧（语料 0 处，防御用）；实例上的由 `collectAnimations` 处理（P10a）
   scanValue(effect, unsupported);
   const fbos = new Set<string>();
   for (const fbo of effect.fbos ?? []) {
