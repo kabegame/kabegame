@@ -8,9 +8,10 @@
 - replay <案例…>|--all、regress --src A --src B：回放案例（node + vitest）、两份源码的回归（第 2 批）；
 - snapshot export <rev|WORKTREE> <目录>、snapshot diff <基线> <副本>：产品源码快照与补丁（第 2 批）；
 - content projects|resolve|ls|cat|grep …：WPE 语料与 scene.pkg 读取；content unpack：真实场景解包成加日志的测试工程（第 5 批）；
+  content isolate：复制工程，只留指定对象及其闭包（最终走查）；
 - corpus scan|diff：语料编译扫描与两次结果的比较，regress --corpus 用它（第 3 批）；
 - mutate --spec <清单>：变异检查（快照模式按原字节还原，工作区模式反向替换）（第 3 批）；
-- cmp track|frame|stats、corners offline：比真机结果与 WPE 真值、离线四角（第 3 批）；
+- cmp track|frame|stats、corners offline：比真机结果与 WPE 真值、离线四角（第 3 批）；cmp frames：按帧序列批量比、汇总（最终走查）；
 - sample grab|series|read：PrintWindow 采样 MCP 开的测试窗口（第 3 批）。
 
 输出约定：stdout 一行 JSON 摘要（ok、产物路径、要点），细节写文件；失败退出码非 0，错误开头标层（[data]、[wpe]、
@@ -147,7 +148,7 @@ def _parser():
     cdiff.add_argument("--overwrite", action="store_true")
 
     # ---------- cmp ----------
-    cmpp = top.add_parser("cmp", help="比真机结果和 WPE 真值：轨迹（track）、整帧（frame）、统计量（stats）")
+    cmpp = top.add_parser("cmp", help="比真机结果和 WPE 真值：轨迹（track）、整帧（frame，按帧序列批量用 frames）、统计量（stats）")
     cmp_sub = cmpp.add_subparsers(dest="action", required=True)
     ctrack = cmp_sub.add_parser("track", help="我们的轨迹（particle_track）对 WPE 轨迹：同帧同系统按顺序配对，报各字段最大差")
     ctrack.add_argument("ours")
@@ -170,6 +171,23 @@ def _parser():
     cframe.add_argument("--zoom-out", help="局部放大图 PNG（我们 | WPE 并排，放大 2 倍）")
     cframe.add_argument("--out", help="文字报告（另写 <out>.json）；不给就把行放进摘要")
     cframe.add_argument("--overwrite", action="store_true")
+    cframes = cmp_sub.add_parser("frames", help="按帧号配对两个目录里的图，逐帧调 cmp frame 的同一份实现，汇总；只给有差的帧写热图")
+    cframes.add_argument("ours", help="我们的目录（renderFrames.ts 的 --out）")
+    cframes.add_argument("wpe", help="WPE 的目录（kbp rdc frame 的输出目录）")
+    cframes.add_argument("--ours-pattern", default="ours-f{frame}.png", help="我们的文件名模式（{frame} 是帧号，* 是任意串），缺省 ours-f{frame}.png")
+    cframes.add_argument("--wpe-pattern", default="wpe-*-f{frame}.png",
+                         help="WPE 的文件名模式，缺省 wpe-*-f{frame}.png（kbp rdc frame --present 的命名；目录里有多个标签时写具体）")
+    cframes.add_argument("--frames", help="只比这些帧：241,242,250-255；缺省两边帧号的并集（缺的列出来）")
+    cframes.add_argument("--meta", help="同 cmp frame")
+    cframes.add_argument("--kbp-layers", action="store_true", help="同 cmp frame")
+    cframes.add_argument("--crop", help="同 cmp frame")
+    cframes.add_argument("--resize", action="store_true", help="同 cmp frame")
+    cframes.add_argument("--threshold", type=int, default=32, help="连通块的阈值（缺省 32）")
+    cframes.add_argument("--cell", type=int, default=32, help="连通块的格子边长（缺省 32 像素）")
+    cframes.add_argument("--heat-dir", help="有差的帧写热图 <目录>/heat-f<帧>.png")
+    cframes.add_argument("--heat-gain", type=int, default=8)
+    cframes.add_argument("--out", help="文字报告（另写 <out>.json，含每帧的连通块）；不给就把行放进摘要")
+    cframes.add_argument("--overwrite", action="store_true", help="报告与热图已存在时覆盖（缺省拒绝）")
     cstats = cmp_sub.add_parser("stats", help="我们的粒子统计（real.json 样本）对 WPE 统计量（kbp rdc stats）")
     cstats.add_argument("ours", help="real.json（samples.<名字>.particles[]）或单个样本")
     cstats.add_argument("wpe", help="wpe-<标签>-stats.json")
@@ -299,6 +317,21 @@ def _parser():
                         help="入口 scene.json 的 objects 末尾加 FR（kbp-FR，画面外，脚本 FR_CURSOR）")
     unpack.add_argument("--data", help="数据目录（缺省输出位置与 next 里的日志位置），缺省 KBP_DATA，再缺省 ignore/p4")
     unpack.add_argument("--overwrite", action="store_true", help="输出已存在时先删（只删带 kbp-unpack.json 的目录）")
+
+    isolate = content_sub.add_parser("isolate", help="复制工程：同 unpack 解包，再只留 --keep 的对象及其闭包（父链、依赖、合成 RT、"
+                                                     "脚本按名字找的对象、灯与相机），可选把字段换成固定值（最终走查）")
+    isolate.add_argument("project", help="工程（同 resolve 的写法，或任意目录）；只读")
+    isolate.add_argument("--keep", action="append", required=True,
+                         help="要留的对象：id 或名字（名字要唯一），逗号分隔、可重复；整数先按 id 找")
+    isolate.add_argument("--drop", action="append", help="显式去掉的对象（闭包要它时记警告），写法同 --keep；灯与相机缺省保留，用它去掉")
+    isolate.add_argument("--fix", action="append",
+                         help="<对象id|名字>:<JSON 指针>=<JSON 值>，把那个对象 JSON 里指针处的值换掉（路径必须存在），可重复；"
+                              "先套 fix 再算闭包")
+    isolate.add_argument("--name", help="名字（输出目录与标题用），缺省由 --keep 拼")
+    isolate.add_argument("--out", help="输出目录（要在仓库 ignore/ 下），缺省 <data>/proj/<工程目录名>-iso-<名>")
+    isolate.add_argument("--instrument", action="store_true", help="同 unpack：objects 末尾加只写 [kbp] 日志的 FR（kbp-FR，保留）")
+    isolate.add_argument("--data", help="数据目录，缺省 KBP_DATA，再缺省 ignore/p4")
+    isolate.add_argument("--overwrite", action="store_true", help="输出已存在时先删（只删带 kbp-unpack.json 的目录）")
     return parser
 
 

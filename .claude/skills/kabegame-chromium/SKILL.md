@@ -301,6 +301,45 @@ render_scene { imageId: <id>, replay: { timeline: { log: "…-log.txt", frame: 2
   → trace.json + pass-<下标>.png（黑字层的合成 RT），结果里一行摘要
 ```
 
+### 批量渲染（`apps/kabegame-dev-mcp/src/renderFrames.ts`，最终走查）
+
+一份 WPE 录制要逐帧比时，按帧批量渲染我们这边（`.claude/plans/wpe-import/3-scene/FINAL_CHECK.md`「工具」）。独立的 Deno CLI，不经会话、
+图片不回到任何会话：
+
+```bash
+deno run -A apps/kabegame-dev-mcp/src/renderFrames.ts --image <id> --frames 241,242,250-255 --out <目录> \
+  [--timeline-log <日志> [--timeline-track <轨迹>] [--cursors log|track] [--cursor x,y] [--window WxH] [--gap error|split] \
+   [--audio <录制>] [--seed N] [--passes 1|2] [--no-fr]] \
+  [--fps N | --time 秒] [--canvas WxH] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] \
+  [--video-time 秒|JSON] [--user-properties <JSON 文件或串>] \
+  [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]] [--reuse-host] [--timeout 秒] [--overwrite]
+```
+
+- **同一份实现**：进程内 `createDevMcpServer(defaultDeps())`（和 stdio MCP 同一个工厂与依赖）经 MCP SDK 的 `InMemoryTransport` 连一个客户端，
+  每帧 `callTool("render_scene", …)`。时间线、`canvas` 与窗口的校验、FR 涂色、逐 draw 轨迹落盘都在工具里，和会话里调 MCP 逐字相同；
+  CLI 只拼参数（`renderArgs`）、收结果，不另写时间线逻辑，也不改 `render_scene` 的语义。
+- **两种模式**：给 `--timeline-log` 时第 f 帧传 `replay: { timeline: { log, …, frame: f } }`（规则见「粒子回放」，`--no-fr` 即
+  `replay.fr: false`）；不给时第 f 帧传 `time: f / fps`（`--fps`，名义时间）或固定的 `--time`，粒子是预热后的状态（同不给 replay）。
+  两种模式的参数互斥，回放专用参数在时刻模式下报错。
+- **输出**：`<out>/ours-f<帧>.png`（`save`，原尺寸，`inline: false`）；`<out>/frames.json`：`options`、`notes`（第一个成功帧的说明行：宿主、
+  时间线、读回、FR、像素摘要……）、`frames[]`（`frame`、`png`、`pngSha256`（PNG 文件本身，同结果里的「原图 PNG 文件 sha256」）、`meta`
+  （探针元数据整份）、`lines`、`trace`、`ms`、`error`、`skipped`）、`failed`、`skipped`；`--trace-frames` 的帧另把轨迹写到
+  `<out>/trace-f<帧>/`（要在 `--frames` 里）。stdout 一行 JSON 摘要（`ok`、`rendered`、`failed`、`skipped`、`seconds`），进度写 stderr。
+  已有 `frames.json`、要写的 PNG 或轨迹目录时拒绝，`--overwrite` 覆盖。和 WPE 的图比用 kbp-tools 的 `kbp cmp frames <out> <WPE 目录>`
+  （缺省模式正好配 `ours-f<帧>.png` 与 `kbp rdc frame --present` 的 `wpe-<标签>-f<帧>.png`）。
+- **出错**：某帧工具报错（`[timeline]`、`[host]` …）记在那一帧、接着渲染别的帧；`[vite]` / `[cdp]` 时剩下的帧不再试（记 `skipped`）。
+  参数错退出码 2，有帧失败 1。路径按当前目录解析，交给工具的一律是绝对路径。
+- **`--reuse-host`**：经 `host_open` / `host_close` 工具开一个屏外宿主给全部帧用（`render_scene` 的 `host`），省掉每帧开关宿主（约 1 s）。
+  2026-11-14 `p10-curves` 时刻模式 3 帧：每帧开关与共用宿主的 PNG 逐字节相同。
+  - **走查一律不用它**（P10a 走查，2026-11-14）：有一批复用宿主的结果和单开宿主不同、单开宿主的与 WPE 一致，事后复用宿主再跑又和单开
+    逐字节相同；期间别的会话重建过 dev 场景宿主产物，单开时说明行里的「宿主产物」文件名变过，复用时当时不记产物，查不了。现在复用时把
+    `host_open` 回的 `entry` 记进日志与 `frames.json` 的 `hostEntry`；和 WPE 比的结果只用单开宿主（每帧说明行里有产物名）的。
+- **前提**：用户自己跑着 `deno task dev -c kabegame`，本工具不启动、不重启任何进程；工程先用 `projects_import` 导入，用完 `projects_remove`。
+- 单测 `renderFrames.test.ts`（进程内 MCP + 假 REST，不连真 app）。
+- 2026-11-14 真机：`projects_import` 导入 `ignore/p10/proj/p10-curves`，时刻模式（`--fps 20 --frames 20,40,60 --canvas 1920x1080
+  --trace-frames 40`）3 帧共 7.3 s、轨迹写出；回放模式（借 `p10-zoom-fps20` 的 `[kbp]` 日志当 dt 序列，`--frames 100,150-151 --reuse-host`）
+  3 帧共 3.1 s，时间线说明与 FR 涂色行进了 `notes`；之后 `projects_remove`。
+
 ## REST（`/__kabegame_dev/*`，vite 上）
 
 请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`，以及原图的 `X-Png-Original-Width` / `-Height`）。

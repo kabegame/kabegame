@@ -41,6 +41,9 @@
  *   `particles.dts` 时沿同一串 dt 逐帧推进、写入（`replayReadback`，每帧在粒子与相机之后、第二次 `sync` 之前，同渲染器）；没有时按
  *   `time` 直接 `seek` 再写一次（近似，见 `SceneAnimations.seek`）。`profile` 帧另用一份按 1/60 推进，计时含动画开销，不影响读回那一帧。
  *   结果的 `animations` 给出每条最后写入的值；`host.animations()` 报宿主正在播的那份。没有动画的场景逐字节同以前。
+ * - 回放的每一帧都画（P10a 走查，`ReadbackReplayOptions.encodeFrame`）：有 `particles.dts` 时前 n − 1 帧照读回帧的顺序写好 uniform、
+ *   在 GPU 上编码提交，读回帧之前的跨帧状态（被依赖图层的合成 RT、`clearenabled: false` 的场景目标）同渲染器。只画读回帧时，排在
+ *   前面的图层读到的被依赖 RT 是空的。没有回放（`time` 固定时刻）时仍只画一帧。
  * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`renderFrame` 收 `trace` 时，取到设备后建记录器
  *   （`render/trace.ts`），建场景、profile 帧、回放、读回帧（含读回画布）都用包过的设备；读回帧编码之前开始记，读回完成后取出
  *   轨迹与选中 pass 的读回图，存进存放区（`dev/drawTrace.ts`），结果的 `trace` 给键与摘要。不给 `trace` 时不建记录器、设备不包，
@@ -533,6 +536,13 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         animations: replayed ? (animations ?? undefined) : undefined,
         perspective: perspective && { ...perspective, path: profileCamera.path },
         cameraObjects,
+        // 回放时前 n − 1 帧每帧都在 GPU 上画（P10a 走查）：被依赖图层的合成 RT、`clearenabled: false` 的累加等跨帧状态同渲染器；
+        // 只画场景目标，读回画布与读回只在最后一帧。轨迹从读回帧起记，这些帧只进登记表
+        encodeFrame: () => {
+          const replayEncoder = device.createCommandEncoder({ label: "probe replay frame" });
+          scene.encode(replayEncoder, state);
+          device.queue.submit([replayEncoder.finish()]);
+        },
       });
       // 逐 draw 轨迹：从读回帧（含读回画布）的编码起记；这一帧的校验错误记进轨迹，不吞掉也不中断（轨迹正是查它用的）
       if (tracer) {

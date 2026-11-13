@@ -24,7 +24,10 @@
  *
  * 日志里只读 `[kbp]` 条目，三列 `帧号,帧时间,累计时间` 或五列 `帧号,帧时间,累计时间,屏幕x,屏幕y`（`write_project(…, cursor=True)`
  * 的 FR_CURSOR），同一个文件里不能混用；两列时间都要是 6 位小数（少了多半是行被截断），光标两列是有限数或 `nan`（脚本读光标失败）；
- * 帧号递增不重复（同一个文件里有两次运行就报错，截出一次的）。轨迹是 Python 写的 JSON，可能带 `NaN` / `Infinity`
+ * 帧号递增不重复（同一个文件里有两次运行就报错，截出一次的）。
+ * 精确日志（P10a 走查）：FR 脚本把两列时间按 `String()` 原样写、每行 `[kbp]` 之后带标记 `@f64`。这种日志的第 f 帧 dt 直接取帧时间列、
+ * `g_Time` 取累计时间列，不差分、不舍入：WPE 的动画时钟与视差平滑按 float32 帧时间逐帧累加，6 位小数差分回放几百帧后差 1 个尾数
+ * （`2251857160-iso-frost` 第 331、332 帧的 `mask` 缩放、`g_ParallaxPosition`）。一个文件里带标记与不带的行不能混用。轨迹是 Python 写的 JSON，可能带 `NaN` / `Infinity`
  * （`rd-p4c-sprite-fps60.json` 的 corners），解析前换成 null。
  *
  * 频谱（P11a，`audio`）：录制文件是 `kbp rdc consts` 的输出（每张抓帧一行，`draws[].vs / ps` 里是这次绘制读到的常量），或 `kbp rdc track`
@@ -122,6 +125,8 @@ export interface Timeline {
   cursorCheck: { frames: number[]; maxDiff: number; mismatched: number[] } | null;
   /** 日志条目带光标列（五列）。 */
   logCursors: boolean;
+  /** 精确日志（`@f64`）：dt 取日志的帧时间列；否则由累计时间差分、舍入到 6 位小数。 */
+  logExact: boolean;
   /** 抓帧窗口尺寸 `[宽, 高]`：参数给的，或从标签推出；推不出为 null。 */
   window: Point | null;
   /** 窗口尺寸从哪来：参数（"param"）、轨迹 tag（"track"）、日志标签（"log"）。 */
@@ -172,6 +177,8 @@ export interface KbpLog {
   cursors: Map<number, Point | null> | null;
   /** 条目的列数。 */
   columns: 3 | 5;
+  /** 精确日志（每行带 `@f64`）时：帧号 → 帧时间（秒，`String()` 原样）；老日志（6 位小数）为 null，dt 由累计时间差分。 */
+  frametime: Map<number, number> | null;
 }
 
 const TIME = String.raw`\d+\.\d{6}`;
@@ -179,32 +186,55 @@ const TIME = String.raw`\d+\.\d{6}`;
 const COORD = String.raw`-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[nN]a[nN]`;
 const THREE_COLUMNS = new RegExp(String.raw`^(\d+),(${TIME}),(${TIME})$`);
 const FIVE_COLUMNS = new RegExp(String.raw`^(\d+),(${TIME}),(${TIME}),(${COORD}),(${COORD})$`);
+// 精确日志（`@f64`）的两列时间：`String()` 写出的非负数（整数、小数、指数）
+const EXACT_TIME = String.raw`\d+(?:\.\d+)?(?:[eE][+-]?\d+)?`;
+const EXACT_THREE = new RegExp(String.raw`^(\d+),(${EXACT_TIME}),(${EXACT_TIME})$`);
+const EXACT_FIVE = new RegExp(String.raw`^(\d+),(${EXACT_TIME}),(${EXACT_TIME}),(${COORD}),(${COORD})$`);
+/** 精确日志每行 `[kbp]` 之后的标记。 */
+export const EXACT_LOG_MARK = "@f64";
 
 /** 光标列的一项：`nan` 为 null。 */
 const coord = (text: string): number | null => (/^nan$/i.test(text) ? null : Number(text));
 
 /**
  * WPE 日志里的 `[kbp]` 条目：三列（帧号,帧时间,累计时间）或五列（另加屏幕x,屏幕y），同一个文件里不能混用。
- * 回帧号 → 累计时间，五列时另回帧号 → 屏幕光标。
+ * 回帧号 → 累计时间，五列时另回帧号 → 屏幕光标；精确日志（每行 `[kbp] @f64`）另回帧号 → 帧时间，带标记与不带的行不能混用。
  */
 export function readKbpLog(text: string): KbpLog {
   const runtime = new Map<number, number>();
+  const frametime = new Map<number, number>();
   const cursors = new Map<number, Point | null>();
   let columns: 3 | 5 | null = null;
+  let exact: boolean | null = null;
   let previous = 0;
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     const at = line.indexOf("[kbp]");
     if (at < 0) continue;
-    for (const token of line
+    const tokens = line
       .slice(at + 5)
       .trim()
       .split(/\s+/)
-      .filter(Boolean)) {
-      const three = THREE_COLUMNS.exec(token);
-      const five = three ? null : FIVE_COLUMNS.exec(token);
+      .filter(Boolean);
+    const marked = tokens[0] === EXACT_LOG_MARK;
+    if (exact !== null && exact !== marked) {
+      throw new TimelineError(
+        `日志第 ${index + 1} 行${marked ? "带" : "不带"} ${EXACT_LOG_MARK}，前面的行${exact ? "带" : "不带"}：` +
+          "同一个文件里精确日志和 6 位小数的老日志不能混用（多半是两个工程的日志拼在一起），只截出一次的 [kbp] 行",
+      );
+    }
+    exact = marked;
+    for (const token of marked ? tokens.slice(1) : tokens) {
+      const three = (marked ? EXACT_THREE : THREE_COLUMNS).exec(token);
+      const five = three ? null : (marked ? EXACT_FIVE : FIVE_COLUMNS).exec(token);
       const match = three ?? five;
+      if (!match && marked) {
+        throw new TimelineError(
+          `日志第 ${index + 1} 行有读不懂的条目 ${JSON.stringify(token)}：精确日志（${EXACT_LOG_MARK}）应为「帧号,帧时间,累计时间」或另加「,屏幕x,屏幕y」，` +
+            "两列时间是 String() 写出的非负数、光标两列是有限数或 nan（少了多半是行被截断）",
+        );
+      }
       if (!match) {
         // 已经是五列的文件，或第一条就像五列（逗号分出 4 段以上）时按五列说；其余照三列的老文案
         const asFive = columns === 5 || (columns === null && token.split(",").length >= 4);
@@ -230,6 +260,7 @@ export function readKbpLog(text: string): KbpLog {
       }
       previous = frame;
       runtime.set(frame, Number(match[3]));
+      if (marked) frametime.set(frame, Number(match[2]));
       if (five) {
         const x = coord(five[4]);
         const y = coord(five[5]);
@@ -238,7 +269,12 @@ export function readKbpLog(text: string): KbpLog {
     }
   }
   if (!runtime.size) throw new TimelineError("日志里没有 [kbp] 条目");
-  return { runtime, cursors: columns === 5 ? cursors : null, columns: columns ?? 3 };
+  return {
+    runtime,
+    cursors: columns === 5 ? cursors : null,
+    columns: columns ?? 3,
+    frametime: exact ? frametime : null,
+  };
 }
 
 /** WPE 日志里的 `[kbp]` 条目：帧号 → 累计时间（秒）。三列、五列都收（光标列见 `readKbpLog`）。 */
@@ -334,9 +370,10 @@ export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource,
     typeof input.log === "string"
       ? readKbpLog(input.log)
       : input.log instanceof Map
-        ? { runtime: input.log, cursors: null, columns: 3 }
+        ? { runtime: input.log, cursors: null, columns: 3, frametime: null }
         : input.log;
   const log = read.runtime;
+  const exact = read.frametime;
   const track = input.track ?? null;
   const captured = new Map((track?.frames ?? []).map((f) => [f.frame, f]));
   const logFrames = [...log.keys()];
@@ -364,7 +401,11 @@ export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource,
       if (time === undefined) throw new TimelineError(`轨迹第 ${f} 帧没有 time，日志里也没有这一帧`);
       dts[f - 1] = shot.dt;
       times[f - 1] = time;
-    } else if (log.has(f) && (f === 1 || log.has(f - 1))) {
+    } else if (exact?.has(f)) {
+      // 精确日志：帧时间、累计时间都是 WPE 的原值，不差分、不舍入
+      dts[f - 1] = exact.get(f)!;
+      times[f - 1] = log.get(f)!;
+    } else if (!exact && log.has(f) && (f === 1 || log.has(f - 1))) {
       dts[f - 1] = round6(log.get(f)! - (f === 1 ? 0 : log.get(f - 1)!));
       times[f - 1] = log.get(f)!;
     }
@@ -519,6 +560,7 @@ export function timelineFrom(input: TimelineInput, options: Omit<TimelineSource,
     cursorsFilled,
     cursorCheck,
     logCursors: read.columns === 5,
+    logExact: !!exact,
     window,
     windowFrom,
     tag,
@@ -727,6 +769,8 @@ export function describeTimeline(timeline: Timeline): string {
       ? `平分的帧 ${timeline.gaps.map((g) => `${g.from === g.to ? g.from : `${g.from}–${g.to}`}（合计 ${g.total.toFixed(6)} s，每帧 ${g.dt}）`).join("、")}`
       : "没有平分的帧",
   );
+  // 精确日志（P10a 走查）才说一句；老日志的说明逐字不变
+  if (timeline.logExact) parts.push(`日志是精确的（${EXACT_LOG_MARK}）：dt 取帧时间列、g_Time 取累计时间列`);
   const warnings: string[] = [];
   const window = timeline.window
     ? `窗口 ${timeline.window[0]}×${timeline.window[1]}（${WINDOW_FROM[timeline.windowFrom ?? "param"]}）`

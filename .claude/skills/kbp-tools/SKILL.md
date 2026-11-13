@@ -1,6 +1,6 @@
 ---
 name: kbp-tools
-description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）；把真实工坊场景解包成带 [kbp] 日志的测试工程、按 WPE 实际帧时间回放（kbp content unpack --instrument，替代 unpack_proto.py 与手写 dt）；语料编译扫描与两次结果比较（kbp corpus scan|diff，附加字段插件，regress --corpus，替代各步的 corpus.test.ts、diff_corpus.py、corpus_diff.py）；变异检查（kbp mutate，快照模式按原字节还原、工作区模式反向替换，替代各步的 mutate.py）；比真机结果与 WPE 真值（kbp cmp track|frame|stats，按 kbp-meta.json 的 bbox 归类像素差、热图，替代 cmp-wpe.ts、cmp_scene.py、cmp_stats.py、heat.py）；离线四角（kbp corners offline，替代 corners-offline*）；PrintWindow 采样 MCP 开的测试窗口（kbp sample grab|series|read，替代 sampler_pw.py、run.py、w1080.py、wread.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
+description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）；把真实工坊场景解包成带 [kbp] 日志的测试工程、按 WPE 实际帧时间回放（kbp content unpack --instrument，替代 unpack_proto.py 与手写 dt）；最终走查的复制工程（kbp content isolate：只留指定对象及其父链、依赖、合成 RT、脚本按名字找的对象，删掉其余，可把字段换成固定值，WPE 与 Kabegame 两边用同一份）；语料编译扫描与两次结果比较（kbp corpus scan|diff，附加字段插件，regress --corpus，替代各步的 corpus.test.ts、diff_corpus.py、corpus_diff.py）；变异检查（kbp mutate，快照模式按原字节还原、工作区模式反向替换，替代各步的 mutate.py）；比真机结果与 WPE 真值（kbp cmp track|frame|frames|stats，frames 按帧号配对一段录制逐帧比并汇总，按 kbp-meta.json 的 bbox 归类像素差、热图，替代 cmp-wpe.ts、cmp_scene.py、cmp_stats.py、heat.py）；离线四角（kbp corners offline，替代 corners-offline*）；PrintWindow 采样 MCP 开的测试窗口（kbp sample grab|series|read，替代 sampler_pw.py、run.py、w1080.py、wread.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
 ---
 
 # kbp-tools
@@ -14,7 +14,9 @@ WPE 场景对比的中间一层：认识我们的测试工程约定、把 WPE �
 本 skill 不另做一份。
 
 > 已有：`gen`、`rdc`、`replay`、`regress`、`snapshot`、`content`（第 1、2 批）；`corpus`、`mutate`、`cmp`、`corners`、`sample`
-> （第 3 批）；`content unpack`（第 5 批，见「真实场景的回放」）。`ignore/` 里现有的生成器、回放、语料、变异、比较、采样脚本
+> （第 3 批）；`content unpack`（第 5 批，见「真实场景的回放」）；`content isolate`、`cmp frames`（第 6 批，最终走查的复制工程与
+> 按帧序列批量比，`.claude/plans/wpe-import/3-scene/FINAL_CHECK.md`「工具」；按帧批量渲染我们这边的是 kabegame-chromium 的
+> `renderFrames.ts`）。`ignore/` 里现有的生成器、回放、语料、变异、比较、采样脚本
 > 不迁、照旧能跑，新步骤用本工具。
 
 ## 用法与输出约定
@@ -278,6 +280,8 @@ DEFAULTS = {"tests": […], "cases": […], "commands": […]}   # 变异没写�
 kbp.py cmp track <我们.json> <rd-标签.json> [--skip 系统,…] [--out 文件]
 kbp.py cmp frame <我们.png> <wpe.png> [--meta kbp-meta.json | --kbp-layers] [--crop 上,下,左,右] [--resize] [--threshold 32] [--cell 32]
                  [--heat 热图.png [--heat-gain 8]] [--zoom x,y,w,h --zoom-out 放大.png] [--out 文件]
+kbp.py cmp frames <我们目录> <WPE 目录> [--ours-pattern 'ours-f{frame}.png'] [--wpe-pattern 'wpe-*-f{frame}.png'] [--frames 241,250-255]
+                  [--threshold 32] [--cell 32] [--heat-dir 目录 [--heat-gain 8]] [--meta … | --kbp-layers] [--crop …] [--resize] [--out 文件]
 kbp.py cmp stats <real.json> <wpe-标签-stats.json> [--label 样本] [--out 文件]
 # 公共：--overwrite；不给 --out 时报告行放在摘要的 text，给了另写 <out>.json
 ```
@@ -296,6 +300,17 @@ kbp.py cmp stats <real.json> <wpe-标签-stats.json> [--label 样本] [--out 文
   - 报 `> 0 / 2 / 8 / 32` 的像素数、最大差、平均差、256 档直方图；超过 `--threshold` 的像素按 `--cell` 格子聚 8 连通块，列包围盒；
   - `--meta` 的对象有 `bbox` 时按对象归类（按 `order` 取第一个包含它的对象，其余算 `other`），没有时只报整帧；
   - `--heat`：差异图转灰度（PIL 的 `L`）乘增益，和 `c5/cmp_scene.py` 的热图逐像素相同；`--zoom` 存我们 | WPE 并排放大 2 倍。
+- **frames**（最终走查：一段录制逐帧比）：两个目录里的图按帧号配对，逐帧调 `frame` 的同一份实现（`compare_files`：对齐、差值、直方图、
+  连通块，`--meta` / `--kbp-layers` / `--crop` / `--resize` 同 `frame`），不复制比较算法。
+  - **配对**：文件名模式里 `{frame}` 是帧号（十进制）、`*` 是任意串，只看文件名（Windows 上不分大小写）。我们的缺省 `ours-f{frame}.png`
+    （kabegame-chromium 的 `renderFrames.ts` 的输出），WPE 的缺省 `wpe-*-f{frame}.png`（`kbp rdc frame [--present]` 的输出，帧号是 RenderDoc
+    帧号 + 1，和回放的帧号同一个数）；`wpe-<标签>.json` 等不匹配的文件不管。同一帧有两个文件匹配（目录里有两个标签的 WPE 图）报 `[data]`，
+    把模式写具体。`--frames` 只比这些帧，缺省两边帧号的并集。
+  - **报告**：每帧一行（`> 0 / > 2 / > 8 / > 32` 的像素数、最大差、平均差、超阈值连通块数、对齐说明），汇总（逐像素相同的帧数与列表、
+    有差的帧、最大差最大的帧），两边各缺哪些帧列出来。`<out>.json` 里每帧另有连通块的包围盒、按对象归类（`--meta` 有 bbox 时）。
+  - **热图**：`--heat-dir` 只给有差的帧写 `heat-f<帧>.png`（同 `frame --heat`）。不加 `--overwrite` 时要比的帧里已有热图就先整批拒绝，
+    加了时这次逐像素相同的帧的旧热图删掉（只删本命令起的名字），目录和报告对得上。
+  - 摘要：`compared`、`same`（个数）、`differ`（帧列表）、`worst`、`missing: { ours, wpe }`、`heats`。
 - **stats**（`b3/cmp_stats.py`、`b4v/cmp_stats.py`）：我们是屏外宿主回放的 `real.json`（`samples.<名字>.particles[]` 每层 `alive`、`capacity`、
   `summary`），WPE 是 `kbp rdc stats` 的结果。层按绘制顺序一一对应，WPE 各帧合并取范围（先舍入到 3 位，同 b3），报粒子数、尺寸、x、y、
   alpha；WPE 多出的绘制（我们不支持的子系统）单列。粒子随机，只比统计量。
@@ -352,6 +367,8 @@ kbp.py content ls <工程> [前缀] [--from project,pkg] [--out 文件]
 kbp.py content cat <工程> <相对路径> [--from project,pkg,assets] [--out 文件 [--overwrite]]
 kbp.py content grep <正则> [工程…] [--source …] [--type …] [--pkg] [--glob '*.json']… [--from project,pkg] [-i] [--max N] [--out 文件]
 kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--overwrite]
+kbp.py content isolate <工程> --keep <id|名字>,… [--drop <id|名字>,…] [--fix <对象id|名字>:<JSON 指针>=<JSON 值>]… [--name 名]
+                       [--out 目录] [--instrument] [--data 目录] [--overwrite]
 ```
 
 - **工程的写法**同 wpe-renderdoc：
@@ -381,12 +398,64 @@ kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--
     时间。不写 `kbp-meta.json`。
   - **摘要**：`out`、`loose`（散文件数）、`extracted`（解出的条目数）、`skipped`（被散文件或包内前面的同名条目盖住的）、`fr_id`
     （没加为 null）、`bytes`（不含标记）、`next`（下一步怎么抓、怎么回放）。
+- **`isolate`**（最终走查的复制工程，`FINAL_CHECK.md` 原则第 5 条；实现 `py/isolate.py`）：先走 `unpack` 的同一套（`unpack_with`
+  加改写钩子：输出约束、临时目录换上、失败不留半成品、拒绝覆盖规则、`--instrument` 全部照旧，钩子在建临时目录之前跑，报错不留东西），
+  再改写入口场景（`project.json` 的 `file`，缺省 `scene.json`）的 `objects`。同一个目录 WPE（wpe-renderdoc 的 `capture_sweep`）与
+  Kabegame（kabegame-dev 的 `projects_import`）两边都用。
+  - **输出**：缺省 `<data>/proj/<源目录名>-iso-<名>`，`--name` 缺省把 `--keep` 拼成短串（去掉文件名不能有的字符，最长 40）。
+  - **对象的写法**（`--keep` / `--drop` / `--fix`）：整数先按 id 找、没有这个 id 再按名字；名字必须唯一（不唯一、找不到报 `[data]`，
+    报出全部同名对象的 id）。`--keep`、`--drop` 逗号分隔、可重复（名字里有逗号时改用 id）。
+  - **保留闭包**（每个保留的对象记原因，新加入的对象再展开，到不动点）：
+    1. `requested`：`--keep` 给的；
+    2. `parent`：整条父链；
+    3. `dependency`：`dependencies` 里的 id（数组或对象的值；元素是数字，或带整数 `id` 的对象，即粒子的发射图 / 碰撞模型）；
+    4. `rt-ref`：`_rt_imageLayerComposite_<id>_…`，在对象 JSON，以及从对象 JSON 的字符串能走到的工程内 `.json`（散文件 → scene.pkg；
+       先按工程根、再按引用它的 JSON 所在目录；模型 → 材质、`effect.json` → pass 材质 …）里递归找，不进 WPE `assets/`；
+    5. `script-name`：对象里（含 effect、pass、`instanceoverride` 等嵌套位置）每个 `script` 键的源码中的字符串字面量，以及同一层
+       `scriptproperties` 里的字符串值，恰好等于某个其它对象的 `name`；
+    6. `light`（`light` 不为 null）、`camera`（`camera` 是字符串，同 `features.ts` 的 `isCameraObject`）缺省保留，`--drop` 可去掉；
+    7. `kbp-FR`：`--instrument` 加的 FR（加在整个源场景上，id 和 `unpack --instrument` 的相同），或源里已有的 kbp-FR。
+  - **`--drop`**：显式去掉，即使闭包要它；它不进闭包、也不从它展开，警告里写「闭包要它，因为 …」。同时在 `--keep` 里报 `[kbp]`。
+  - **`--fix <对象>:<JSON 指针>=<JSON 值>`**：RFC 6901 指针（`~0`、`~1`），值是 JSON（字符串带引号，如
+    `--fix '12:/origin="960 540 0"'`）；按第一个「`:/`」切对象与指针、其后第一个 `=` 切值（名字可以带冒号，指针里不能有 `=`）。路径不存在、
+    数组下标越界报 `[data]`，不新建键；可多条。**先套 fix 再算闭包**：把一段脚本换成固定值后，它按名字拉进来的对象不再保留；fix 的对象
+    最后不在保留集合里报 `[data]`。
+  - **警告**（不报错，写进标记，摘要的 `warnings` 是文字）：
+    - `drop`：`--drop` 去掉了闭包要的对象；
+    - `script-index`：保留对象的脚本可能按下标或枚举用图层：`getLayer(` 的参数不是单个字符串字面量（参数是 `scriptProperties.<名>`
+      且这个脚本属性的值是字符串时按名字找，不算）、`getLayerIndex`、`enumerateLayers`、`getLayerCount`、`sortLayer`、`createLayer`、
+      `destroyLayer`；删了对象就报；
+    - `dependency-union`：被删的对象原来依赖某个保留对象（`dependencies` 并集变了，它不再「被依赖」，见 `dependencies.ts`）；
+    - `fullframebuffer`：保留对象经对象 JSON → 工程内 / WPE `assets/` 的 `.json` 读 `_rt_FullFrameBuffer`（如组合层的
+      `materials/util/composelayer.json`），且 `objects` 里它前面有被删的对象；
+    - `removed-script-name`（信息）：被删对象的脚本字面量引用了保留对象的名字；
+    - 另有 `parent-missing`、`rt-missing`（引用的 id 不在 `objects` 里）、`unreadable`（引用的 `.json` 严格解析与去注释、尾逗号后都不行，
+      只按原文找了 RT 名字）。
+  - **标记** `kbp-isolate.json`（和 `kbp-unpack.json` 并存，`--overwrite` 仍只认后者）：来源、入口、名字、标题、`keep` / `drop` 参数、
+    `instrument`、保留的每个对象 `{id, name, reasons[]}`（原因 `{reason, from?, literal?, via?, at?, rt?}`）、删掉的 `{id, name}`、`fixes`
+    （含旧值）、`warnings`（`{kind, object, message}`）、时间。`project.json` 标题在「 (kbp)」后再加「 (iso <名>)」。
+  - **摘要**：`unpack` 的字段加 `action: "isolate"`、`name`、`kept` / `removed`（个数）、`kept_objects`（`[id, 名字]`）、`fixes`（条数）、
+    `warnings`、`marker`、`next`（WPE 抓帧、Kabegame 导入与批量渲染、`cmp frames`）。
+  - 取舍：
+    - **`scriptproperties` 也算 `script-name`**（规格只说源码字面量）：真实场景常把对象名放在脚本属性里、源码里写
+      `thisScene.getLayer(scriptProperties.voice0)`（`3146703458` 的 6 个文字对象各按名字找 8 个声音对象），只看源码会漏掉。
+    - **JS 字面量扫描**认单 / 双引号（解转义）、模板串（没有 `${}` 的整段算一个，`${}` 里的照常扫）、行 / 块注释，不认正则字面量
+      （`/'/` 会让后面错位；只影响 `script-name` 与警告的精度）。
+    - 引用的 `.json` 带注释或尾逗号时宽松解析（同 P5a 的材质 JSON 修正），解不了记 `unreadable`；`fullframebuffer` 另查 WPE `assets/`
+      （组合层的材质在那里），`rt-ref` 不查（规格）。
+    - 灯、相机缺省保留：删了会改别的图层的光照与视图，要排除就显式 `--drop`（会记一条 `drop` 警告，这是预期的）。
+  - 实测：`3146703458 --keep text1` 保留 20 个、删 9 个、没有警告，约 3 s（工程 138 MB，大多是声音）；`--keep 16 --instrument` 的副本经
+    `projects_import` 导入、`renderFrames.ts` 渲染 1920×1080 一帧正常，用完 `projects_remove`。
 - **库**（`from kbp import content`）：
   - `projects(source, type, pkg)`、`resolve(名字)`、`project_dir(名字)`；
   - `read_pkg(路径)` → `Pkg`（`version`、`entries`、`base`、`by_name`、`read(名字)`）；
   - `files(工程)`、`locate(工程, 相对路径)`、`read(工程, 相对路径)` → `(字节, 位置)`；
   - `scene_files(工程)`（`scan_misc_lib` 的原样版本，迁移旧脚本用）、`grep(…)`；
-  - `unpack(工程, out=None, instrument=False, data=None, overwrite=False)` → 摘要 dict（同命令行）。
+  - `unpack(工程, out=None, instrument=False, data=None, overwrite=False)` → 摘要 dict（同命令行）；
+    `unpack_with(…, rewrite=钩子)`：钩子 `rewrite(src, info, entry, scene)` 就地改 project.json 与入口场景，回 `{files, summary}`；
+  - `from kbp import isolate`：`isolate(工程, keep, drop=(), fixes=(), name=None, out=None, instrument=False, data=None, overwrite=False)`
+    → 摘要；纯函数 `plan(scene, keep, drop, fixes, resolver)`（就地改 scene，回保留 / 删除 / fix / 警告）、`js_scan(源码)`、
+    `index_usages(代码, 字符串属性名)`、`parse_fix(文本)`、`apply_pointer(节点, 指针, 值)`。
 
 ## 协议
 
@@ -439,9 +508,13 @@ kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--
 ### `[kbp]` 日志
 
 - **写**：FR 的脚本每帧记一条 `帧号,帧时间,累计时间`（三列，`FR_COLOR`）。
-  - 帧时间是 `engine.frametime.toFixed(6)`，累计时间是 `engine.runtime.toFixed(6)`；
+  - 帧时间是 `String(engine.frametime)`，累计时间是 `String(engine.runtime)`，原样写、能精确还原；每行 `[kbp]` 之后带标记 `@f64`
+    （P10a 走查起）。之前生成的工程是 `toFixed(6)`、不带标记，时间线照旧认；
   - 每 50 条用 `console.error('[kbp] ' + 条目.join(' '))` 写进 WPE 的 `log.txt`（`console.log` 不写文件）。
-  - 日志行形如 `…: Error: [kbp] 1,0.000376,0.000376 2,0.031870,0.032246 …`。
+  - 日志行形如 `…: Error: [kbp] @f64 1,0.0003759999922476709,0.0003759999922476709 2,0.03187000006437302,0.032245999574661255 …`
+    （老日志 `…: Error: [kbp] 1,0.000376,0.000376 2,0.031870,0.032246 …`）。
+  - 为什么要精确（2026-11-14，`2251857160-iso-frost`）：WPE 的关键帧动画时钟与视差平滑都按 float32 帧时间逐帧累加，按 6 位小数差分
+    回放 300 多帧后 `mask` 的缩放与 `g_ParallaxPosition` 各差 1 个 float32 尾数。
 - **五列**（`FR_CURSOR`，`write_project(…, cursor=True)`，P5a 收尾）：`帧号,帧时间,累计时间,屏幕x,屏幕y`，每 10 条刷一次。
   - 屏幕x、屏幕y 是 `input.cursorScreenPosition` 的 x、y，`String()` 原样写；读光标包 `try`，失败（Kabegame 还没有 `input`）两列写
     `nan`，不让整个 `update` 被禁用。
@@ -457,7 +530,8 @@ kbp.py content unpack <工程> [--out 目录] [--instrument] [--data 目录] [--
 - **读**的规则：
   - 只认 `[kbp]` 之后的条目；
   - 三列或五列，同一个文件里不能混用（多半是两次运行或两个工程的日志拼在一起），混用报错；
-  - 两列时间必须都是 6 位小数（少了多半是行被截断）；五列的光标两列是有限数或 `nan`，`nan`（`NaN` 同）当这一帧缺光标；
+  - 老日志两列时间必须都是 6 位小数（少了多半是行被截断）；精确日志（`@f64`）是 `String()` 写出的非负数；同一个文件里带标记与不带的
+    行不能混用（多半是两个工程的日志拼在一起）。五列的光标两列是有限数或 `nan`，`nan`（`NaN` 同）当这一帧缺光标；
   - 帧号递增不重复（同一个文件里有两次运行就报错，截出一次的）。
 
 ### `kbp-meta.json`（P4b 起，生成库的 `write_project` 写，提取器读）
@@ -563,7 +637,9 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 
 回放要的逐帧 `dt`、`g_Time`、光标由日志加轨迹组出。规则摘要，细节和例外以源码注释为准：
 
-- 第 f 帧的 dt = 日志第 f 帧累计时间 − 第 f − 1 帧的（第 1 帧就是它自己的），舍入到 6 位小数；不用帧时间列。
+- 精确日志（`@f64`）：第 f 帧的 dt 就是日志第 f 帧的帧时间列，`g_Time` 是累计时间列，都不舍入（说明行里写「日志是精确的」）。
+- 老日志：第 f 帧的 dt = 日志第 f 帧累计时间 − 第 f − 1 帧的（第 1 帧就是它自己的），舍入到 6 位小数；不用帧时间列（6 位小数的帧时间
+  逐帧累加会累积舍入）。
 - 抓到的帧（轨迹里有的）：dt 与 `g_Time` 换成轨迹的 float32 原值。
 - 日志与轨迹都没有的帧：
   - 缺省报错；
@@ -745,6 +821,30 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 
 ## 验收自测
 
+### 第 6 批（`tests/accept6.py`）
+
+```bash
+python -X utf8 -I .claude/skills/kbp-tools/tests/accept6.py [--out ignore/kbp/accept6] [--only js,mini,guard,frames,real] [--real 3146703458]
+```
+
+- 全部输出在 `--out` 下（要在 `ignore/` 下）；公共件从 `accept5.py` import。WPE 安装目录、工坊目录只读（`real` 前后核对源目录哈希）。
+- `js`：`js_scan`（注释里的不算、转义、模板串与 `${}` 里的字面量）、`index_usages`（变量参数、非字符串的脚本属性、枚举接口；字面量与
+  字符串属性不算）、JSON 指针（`~0` `~1`、路径不存在报 `[data]`）、`--fix` 的切分。
+- `mini`：自己写一个小工程（一份材质在 `scene.pkg` 里、一份带注释），`--keep target,13 --drop cam --fix …×2 --instrument`：
+  - 每个保留对象的原因（requested、parent 含新加入对象的父链、dependency 的数字与 `{id}`、rt-ref 经 `effect.json` → 包内材质与带注释的材质、
+    script-name 的字面量 / 模板串 `${}` / `scriptproperties`、light、kbp-FR），注释里的名字不保留，`objects` 顺序不变；
+  - 五种警告各一条（drop、script-index、dependency-union、fullframebuffer、removed-script-name）；
+  - fix 按名字与 id 各一条、标记记旧值；标题、两个标记、包内材质解出；
+  - 把脚本 fix 成固定值后它拉进来的对象不再保留（先 fix 后闭包）、缺省输出位置、相机缺省保留；源工程不变。
+- `guard`：名字不唯一、找不到、fix 路径不存在、fix 的对象不保留、fix 不是 JSON、同时 keep 与 drop、`--drop` 找不到、输出已存在、
+  没有 `kbp-unpack.json` 的目录、`ignore/` 之外：都拒绝且不留输出与临时目录；`--overwrite` 整个换掉。
+- `frames`：自己造 PNG（相同、差 1 个像素、40×40 的大块、两边各缺一帧）：配对与汇总、只给有差的帧写热图且覆盖时删掉旧热图、不覆盖时
+  先拒绝、每帧结果和 `cmp frame` 的同一张逐项相同、`--frames` 过滤、同一帧两个文件报 `[data]`、`--wpe-pattern` 写具体。
+- `real`：`3146703458`（只读）：`--keep text1` 的保留集合按规则推出（父链、`scriptproperties` 的声音对象名、声音对象的父链，共 20 个、
+  删 9 个、没有警告）；产物除 `scene.json`、`project.json`、两个标记外和 `unpack` 逐字节相同，`objects` 是源的子序列、每个对象原样；
+  名字不唯一（`多边形 1` 有 6 个）报错；`--instrument` 的 FR 和 `unpack --instrument` 的逐项相同。
+- 结果写 `<out>/report.json`，约 15 秒。
+
 ### 第 5 批（`tests/accept5.py`）
 
 ```bash
@@ -765,6 +865,8 @@ python -X utf8 -I .claude/skills/kbp-tools/tests/accept5.py [--out ignore/kbp/ac
   - 只多 `kbp-unpack.json`；原型多出的只有 WPE 跑副本时写的 `shaders/blobsSM40`；
   - 其余逐字节相同，`scene.json` 把原型 FR 的 id 换成本命令的值后逐字节相同；工坊目录前后哈希不变。
 - 结果写 `<out>/report.json`，约 4 秒。
+- 2026-11-14 起 `real` 的逐文件比不过：工坊里的 3830255100 在 2026-11-12 03:55 更新过（`preview.jpg`、`project.json`、包内 `scene.json` 都变了），
+  原型产物（00:15）是旧版本的。不是工具的问题：同一份源上 HEAD 与改后的 `unpack` 产物除标记里的时间外逐字节相同（第 6 批改 `unpack_with` 时核对）。
 
 ### 第 3 批（`tests/accept3.py`）
 

@@ -647,3 +647,56 @@ describe("频谱录制（P11a，timeline.audio）", () => {
     }
   });
 });
+
+describe("精确日志（@f64，P10a 走查）", () => {
+  // String() 写出的 float32 帧时间与累计时间（WPE 的原值；6 位小数的差分会丢掉尾数）
+  const frametimes = [0.0003759999922476709, 0.03187000006437302, 0.05217400193214417, 0.25];
+  const runtimes = [0.0003759999922476709, 0.032245999574661255, 0.08441999554634094, 0.33441999554634094];
+  const exactLine = (from: number, to: number, cursor = false) =>
+    "2026-11-14T00:00:00Z, 1: Error: [kbp] @f64 " +
+    frametimes
+      .slice(from, to)
+      .map((dt, i) => `${from + i + 1},${dt},${runtimes[from + i]}${cursor ? `,${100 + i},2e+1` : ""}`)
+      .join(" ");
+
+  test("dt 取帧时间列、g_Time 取累计时间列，原值不舍入；跨行照读", () => {
+    const text = [exactLine(0, 2), "其它行", exactLine(2, 4)].join("\n");
+    const read = readKbpLog(text);
+    assert.equal(read.columns, 3);
+    assert.deepEqual([...read.frametime!.values()], frametimes);
+    const t = timelineFrom({ log: text }, { frame: 4 });
+    assert.deepEqual(t.dts, frametimes);
+    assert.deepEqual(t.times, runtimes);
+    assert.equal(t.logExact, true);
+    assert.match(describeTimeline(t), /精确/);
+  });
+
+  test("五列（光标）与指数写法照收", () => {
+    const read = readKbpLog(exactLine(0, 4, true));
+    assert.equal(read.columns, 5);
+    assert.deepEqual(read.cursors!.get(1), [100, 20]);
+  });
+
+  test("带标记与不带的行混用、精确日志里读不懂的条目报错", () => {
+    const legacy = "x: Error: [kbp] 5,0.050000,0.384420";
+    assert.throws(
+      () => readKbpLog([exactLine(0, 4), legacy].join("\n")),
+      (e) => e instanceof TimelineError && /混用/.test(e.message),
+    );
+    assert.throws(
+      () => readKbpLog([legacy, exactLine(0, 4)].join("\n")),
+      (e) => e instanceof TimelineError && /混用/.test(e.message),
+    );
+    assert.throws(
+      () => readKbpLog("x: Error: [kbp] @f64 1,0.05"),
+      (e) => e instanceof TimelineError && /精确日志/.test(e.message),
+    );
+  });
+
+  test("老日志（6 位小数）照旧差分，logExact 为 false", () => {
+    const t = timelineFrom({ log: "x: Error: [kbp] 1,0.000376,0.000376 2,0.031870,0.032246" }, { frame: 2 });
+    assert.deepEqual(t.dts, [0.000376, 0.03187]);
+    assert.equal(t.logExact, false);
+    assert.doesNotMatch(describeTimeline(t), /精确/);
+  });
+});

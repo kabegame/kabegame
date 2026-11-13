@@ -12,7 +12,8 @@ WPE 目录经 KABEGAME_WPE_ROOT（缺省 D:\\Applications\\Steam\\steamapps\\com
 - scene_files(工程)：scan_misc_lib.scene_files 的原样版本（迁移旧脚本用）；
 - grep(正则, 工程…)：在工程文件里搜文本；
 - unpack(工程, out, instrument, data, overwrite)：把真实场景解包成测试工程（散文件 + 包内条目），可选在末尾加只写日志的
-  FR 图层（第 5 批，kbp content unpack；原型 ignore/p5/inst/unpack_proto.py）。
+  FR 图层（第 5 批，kbp content unpack；原型 ignore/p5/inst/unpack_proto.py）；unpack_with 另收改写入口场景的钩子，
+  复制工程（kbp content isolate，py/isolate.py）用它。
 """
 
 import datetime
@@ -426,6 +427,18 @@ def unpack(project, out=None, instrument=False, data=None, overwrite=False):
     - project.json 标题加「 (kbp)」，其余原样（按生成库的 write_json 重新写出）。
     - instrument：入口文件（project.json 的 file，缺省 scene.json）末尾追加 FR，见 _add_fr；入口不是严格 JSON 报 [data]。
     - 写 kbp-unpack.json（标记与来源、计数），不写 kbp-meta.json。"""
+    return unpack_with(project, out, instrument, data, overwrite)
+
+
+def unpack_with(project, out=None, instrument=False, data=None, overwrite=False, rewrite=None):
+    """unpack 的实现，另收改写钩子（kbp content isolate 用）。
+
+    rewrite(src, info, entry, scene) 在全部读取、校验都过了之后、动手写之前调（这时还没建临时目录，钩子报错不留任何东西）：
+    - src：源工程目录；info：已加好「 (kbp)」标题的 project.json（可就地改）；entry：入口文件的相对路径；
+    - scene：入口文件的 JSON（instrument 时已追加 FR），钩子就地改；
+    - 返回 {"files": {相对路径: JSON 对象}, "summary": {…}}：files 在 kbp-unpack.json 之后写进临时目录（common.write_json，
+      indent 1；不算进标记的 bytes），summary 并进返回的摘要。
+    给了钩子时即使不 instrument 也按严格 JSON 读入口、按生成库的 write_json 写回。"""
     from . import gen
 
     src = project_dir(project)
@@ -443,10 +456,13 @@ def unpack(project, out=None, instrument=False, data=None, overwrite=False):
     entry = normalize(entry)
     title = info.get("title")
     info["title"] = (title if isinstance(title, str) and title else name) + " (kbp)"
-    scene = fr_id = None
-    if instrument:
+    scene = fr_id = extra = None
+    if instrument or rewrite:
         scene = _strict_json(read(src, entry, ("project", "pkg"))[0], entry)
+    if instrument:
         fr_id = _add_fr(scene, entry)
+    if rewrite:
+        extra = rewrite(src, info, entry, scene) or {}
     loose = [f for f in files(src, ("project",)) if f["path"] not in ("scene.pkg", UNPACK_MARKER)]
     pkg = _pkg_of(src)
     workshop = name if re.fullmatch(r"[0-9]+", name) else None
@@ -474,8 +490,9 @@ def unpack(project, out=None, instrument=False, data=None, overwrite=False):
                 have.add(key)
                 extracted += 1
         gen.write_json(os.path.join(tmp, "project.json"), info)
-        if instrument:
+        if instrument or rewrite:
             gen.write_json(os.path.join(tmp, *entry.split("/")), scene)
+        if instrument:
             gen.write_json(os.path.join(tmp, *FR_MODEL.split("/")), {"material": FR_MATERIAL})
         total = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(tmp) for f in fs)
         common.write_json(os.path.join(tmp, UNPACK_MARKER), {
@@ -483,6 +500,8 @@ def unpack(project, out=None, instrument=False, data=None, overwrite=False):
             "loose": len(loose), "extracted": extracted, "skipped": skipped, "pkg": pkg.version if pkg else None,
             "instrument": bool(instrument), "fr_id": fr_id, "fr_name": FR_NAME if instrument else None, "bytes": total,
             "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}, indent=1)
+        for rel, obj in ((extra or {}).get("files") or {}).items():
+            common.write_json(_entry_dest(tmp, normalize(rel))[0], obj, indent=1)
         if os.path.lexists(out):
             _check_unpack_out(src, out, overwrite)  # 写的这段时间里可能被动过，删之前再核一遍
             shutil.rmtree(out)
@@ -493,9 +512,11 @@ def unpack(project, out=None, instrument=False, data=None, overwrite=False):
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
-    return {"ok": True, "action": "unpack", "src": src, "out": out, "workshop": workshop, "entry": entry,
-            "loose": len(loose), "extracted": extracted, "skipped": skipped, "fr_id": fr_id, "bytes": total,
-            "next": _unpack_next(out, data, instrument)}
+    summary = {"ok": True, "action": "unpack", "src": src, "out": out, "workshop": workshop, "entry": entry,
+               "loose": len(loose), "extracted": extracted, "skipped": skipped, "fr_id": fr_id, "bytes": total,
+               "next": _unpack_next(out, data, instrument)}
+    summary.update((extra or {}).get("summary") or {})
+    return summary
 
 
 # ==================== 命令行（kbp content …） ====================
@@ -570,4 +591,8 @@ def cli(args):
         return _write_or_summary(args, summary, "matches", rows)
     if action == "unpack":
         return unpack(args.project, args.out, args.instrument, args.data, args.overwrite)
+    if action == "isolate":
+        from . import isolate
+
+        return isolate.cli(args)
     raise KbpError("kbp", "未知的动作 content %s" % action)

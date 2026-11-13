@@ -40,7 +40,14 @@ import {
   stepCameraSource,
   type CameraPathState,
 } from "../render/camera";
-import { drawParallax, initialParallaxState, replayParallax, type ParallaxState } from "../render/parallax";
+import {
+  advanceParallax,
+  drawParallax,
+  initialParallaxState,
+  parallaxInput,
+  replayParallax,
+  type ParallaxState,
+} from "../render/parallax";
 import { shakeOffset } from "../render/shake";
 import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
@@ -299,15 +306,7 @@ export function replayParticles(
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
-  if (times && times.length !== dts.length)
-    throw new Error(`times 有 ${times.length} 项，dts 有 ${dts.length} 项，应等长`);
-  const perFrame = isPointList(cursor) ? cursor : null;
-  if (perFrame && perFrame.length !== dts.length)
-    throw new Error(`逐帧 cursor 有 ${perFrame.length} 项，dts 有 ${dts.length} 项，应等长`);
-  if (replay.audio && replay.audio.length !== dts.length)
-    throw new Error(`audio 有 ${replay.audio.length} 项，dts 有 ${dts.length} 项，应等长`);
-  // 每一项的段数先查一遍（P11a）：不要回放到一半才在读回帧抛错
-  replay.audio?.forEach((frame, i) => frame && replaySpectrum(frame, i));
+  const perFrame = checkReplay(replay, cursor);
   let elapsed = 0;
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
   for (let i = 0; i < dts.length - 1; i++) {
@@ -317,6 +316,26 @@ export function replayParticles(
     afterStep?.(at, dts[i]);
   }
   return { time: timeAt(dts.length - 1), frametime: dts[dts.length - 1] };
+}
+
+/**
+ * 回放参数的形状（`replayParticles` 与逐帧都画的 `replayReadback` 共用）：`times`、逐帧 `cursor`、`audio` 要和 `dts` 等长，频谱每一项的
+ * 段数先查一遍（P11a：不要回放到一半才在读回帧抛错）。返回逐帧的 cursor（一个点时为 null）。
+ */
+function checkReplay(
+  replay: ParticleReplay,
+  cursor: readonly [number, number] | readonly (readonly [number, number])[],
+): readonly (readonly [number, number])[] | null {
+  const { dts, times } = replay;
+  if (times && times.length !== dts.length)
+    throw new Error(`times 有 ${times.length} 项，dts 有 ${dts.length} 项，应等长`);
+  const perFrame = isPointList(cursor) ? cursor : null;
+  if (perFrame && perFrame.length !== dts.length)
+    throw new Error(`逐帧 cursor 有 ${perFrame.length} 项，dts 有 ${dts.length} 项，应等长`);
+  if (replay.audio && replay.audio.length !== dts.length)
+    throw new Error(`audio 有 ${replay.audio.length} 项，dts 有 ${dts.length} 项，应等长`);
+  replay.audio?.forEach((frame, i) => frame && replaySpectrum(frame, i));
+  return perFrame;
 }
 
 /**
@@ -361,9 +380,14 @@ export function replaySpectrum(frame: ParticleAudioFrame, index = 0): SpectrumUn
  * null 时返回 undefined（`update` 写全 0，和 P11a 之前逐字节相同）。
  */
 export function readbackSpectrum(replay: ParticleReplay | undefined): SpectrumUniforms | undefined {
+  return spectrumAt(replay, (replay?.audio?.length ?? 0) - 1);
+}
+
+/** 第 `index` 帧（从 0 起）的音频 uniform：截至这一帧最后一个非 null 项，规则同 `readbackSpectrum`（逐帧都画的回放用）。 */
+export function spectrumAt(replay: ParticleReplay | undefined, index: number): SpectrumUniforms | undefined {
   const audio = replay?.audio;
   if (!audio) return undefined;
-  for (let i = audio.length - 1; i >= 0; i--) {
+  for (let i = Math.min(index, audio.length - 1); i >= 0; i--) {
     const frame = audio[i];
     if (frame) return replaySpectrum(frame, i);
   }
@@ -497,6 +521,14 @@ export interface ReadbackReplayOptions {
   perspective?: ProbePerspective;
   /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的。没有相机对象时不给。 */
   cameraObjects?: ProbeCameraObjects;
+  /**
+   * 前 n − 1 帧每一帧都在 GPU 上画（P10a 走查，FINAL_CHECK「确定性工程能还原全部状态」）：给了且有回放时，每一帧照读回帧的顺序走完
+   * （`sync` → 频谱 → 步进粒子 → 相机 → 动画 → 用这一帧的 general 推进视差点 → `setParallax` → `update`），再调它编码、提交这一帧；
+   * 读回帧走到 `update` 为止，由调用方编码。跨帧的 GPU 状态因此和渲染器一样：排在前面的图层读被依赖图层的合成 RT 时读到上一帧画的
+   * （`2251857160` 的折射读 `_rt_imageLayerComposite_356_a`，只画读回帧时是空的）、`clearenabled: false` 的场景目标照常交替累加。
+   * 不给时只画读回帧，调用序列同以前（`particleCorners` 只读 uniform，不给）。
+   */
+  encodeFrame?: (index: number) => void;
 }
 
 /**
@@ -516,6 +548,7 @@ export function replayReadback(
   options: ReadbackReplayOptions,
 ): { time: number; frametime: number; parallax: ParallaxState } {
   const { particles, pointers, animations } = options;
+  if (options.encodeFrame && particles?.dts.length) return replayEncoded(scene, state, options, options.encodeFrame);
   const [width, height] = options.size;
   const last = pointers.pointers.length - 1;
   const shake = frameCamera(scene, state, height, options.perspective, particles?.dts, options.cameraObjects);
@@ -567,6 +600,64 @@ export function replayReadback(
     },
     state,
   );
+  return { time, frametime, parallax };
+}
+
+/**
+ * 每一帧都画的回放（`ReadbackReplayOptions.encodeFrame`）：第 i 帧的步骤与读回帧相同，只是视差点逐帧推进、每帧用这一帧的 general
+ * （只画读回帧时 `replayParallax` 用读回时的 general，两者只在回放中 general 的视差字段变了时不同），频谱 uniform 取截至这一帧的
+ * （`spectrumAt`），`g_PointerPositionLast` 是上一帧的。前 n − 1 帧在 `update` 之后调 `encodeFrame(i)`；读回帧不调。
+ */
+function replayEncoded(
+  scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
+    Partial<Pick<GpuScene, "particleAudio">>,
+  state: SceneState,
+  options: ReadbackReplayOptions,
+  encodeFrame: (index: number) => void,
+): { time: number; frametime: number; parallax: ParallaxState } {
+  const { pointers, animations } = options;
+  const replay = options.particles!;
+  const { dts, times } = replay;
+  const [width, height] = options.size;
+  checkReplay(replay, pointers.cursors);
+  const shake = frameCamera(scene, state, height, options.perspective, dts, options.cameraObjects);
+  let parallax = options.parallax;
+  let elapsed = 0;
+  let time = 0;
+  let frametime = 0;
+  for (let i = 0; i < dts.length; i++) {
+    time = times ? times[i] : (elapsed += dts[i]);
+    frametime = dts[i];
+    // 顺序同渲染器与读回帧：两帧之间写进状态的改值先刷进去，粒子用上一帧的相机步进，再设这一帧的；动画在粒子与相机之后写、再 sync
+    scene.sync(state);
+    replayAudio(scene, replay, i);
+    scene.stepParticles(frametime, time, state, pointers.cursors[i]);
+    const eye = shake.apply(time);
+    if (animations) {
+      animations.frame(frametime, state);
+      scene.sync(state);
+    }
+    parallax = advanceParallax(
+      parallax,
+      parallaxInput(state.general, { pointer: pointers.pointers[i], width, height, frametime, eye }),
+    );
+    scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
+    const audio = spectrumAt(replay, i);
+    scene.update(
+      {
+        time,
+        frametime,
+        daytime: 0.5,
+        pointer: pointers.pointers[i],
+        pointerLast: pointers.pointers[Math.max(0, i - 1)],
+        cursor: pointers.cursors[i],
+        parallax: parallax.position,
+        ...(audio ? { audio } : {}),
+      },
+      state,
+    );
+    if (i < dts.length - 1) encodeFrame(i);
+  }
   return { time, frametime, parallax };
 }
 

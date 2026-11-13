@@ -93,7 +93,9 @@ def write_json(path, obj):
 # ==================== 固定图层（gen.py、gen_c.py） ====================
 
 # 帧号写进颜色（R 低 8 位，G 高 8 位），每 50 帧把帧号、engine.frametime、engine.runtime 写进 log.txt。
-# console.log 不写文件，要用 console.error（p3 实测）
+# console.log 不写文件，要用 console.error（p3 实测）。两列时间用 String() 原样写（能精确还原 WPE 的值），每行 [kbp] 之后带标记 @f64：
+# 时间线按它直接取帧时间作 dt（P10a 走查：只记 6 位小数时，WPE 按 float32 帧时间逐帧累加的动画时钟、视差平滑回放出来差 1 个尾数）。
+# 不带标记的老日志两列是 toFixed(6)，时间线照旧按累计时间差分
 FR_COLOR = r"""'use strict';
 let frame = 0;
 let buffer = [];
@@ -102,9 +104,9 @@ export function update(value) {
 	value.x = (frame % 256) / 255;
 	value.y = (Math.floor(frame / 256) % 256) / 255;
 	value.z = 1;
-	buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toFixed(6));
+	buffer.push(frame + ',' + String(engine.frametime) + ',' + String(engine.runtime));
 	if (buffer.length >= 50) {
-		console.error('[kbp] ' + buffer.join(' '));
+		console.error('[kbp] @f64 ' + buffer.join(' '));
 		buffer = [];
 	}
 	return value;
@@ -112,7 +114,7 @@ export function update(value) {
 """
 
 # 帧号写进颜色（同 FR_COLOR），每帧另记 input.cursorScreenPosition 的 x、y（String() 原样），每 10 帧刷一次 log.txt：
-#   [kbp] 帧号,帧时间,累计时间,屏幕x,屏幕y
+#   [kbp] @f64 帧号,帧时间,累计时间,屏幕x,屏幕y（两列时间同 FR_COLOR，String() 原样）
 # 屏幕光标是壁纸窗口内的像素（原点左上、y 朝下；窗口外为负或超出尺寸、不钳制）；g_PointerPosition 逐位等于
 # float32(屏幕光标 / 窗口尺寸)，脚本第 f 帧记下的就是粒子第 f 帧用的（ignore/p5/cur 实测，p5a-cur / p5a-cur3）。
 # 读光标包 try：Kabegame 还没有 input（P6），读不到时两列写 nan，不让整个 update 被禁用。每 10 帧刷一次，fps 低时尾巴丢得少
@@ -131,9 +133,9 @@ export function update(value) {
 	} catch (e) {
 		cursor = 'nan,nan';
 	}
-	buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toFixed(6) + ',' + cursor);
+	buffer.push(frame + ',' + String(engine.frametime) + ',' + String(engine.runtime) + ',' + cursor);
 	if (buffer.length >= 10) {
-		console.error('[kbp] ' + buffer.join(' '));
+		console.error('[kbp] @f64 ' + buffer.join(' '));
 		buffer = [];
 	}
 	return value;
