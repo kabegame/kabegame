@@ -147,7 +147,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **脚本 API**（2026-11-07 改定，`compile/scriptApi.ts`）：会执行的脚本里调用或访问了 WPE 有、我们没实现的 API，报 `script:api:<分组>.<成员>`、整张退回，例如 `script:api:thisScene.createLayer`、`script:api:layer.getParent`、`script:api:input.cursorWorldPosition`。改定前的约定是「不做静态扫描，调用时报错只禁用回调」，结果 3304642534 的音频条静默缺了一整组。导出了运行时还不调的回调（光标、媒体等）同样报 `script:callback:<名>`（P6 前置）。规则见「场景脚本（P3b）」的「脚本 API 检查」。
 - **层级**（P4a）：`object:parent` 只剩灯带父对象时报（`lights.ts` 用本地 `origin`，挂在父链下的位置没和 WPE 比过）；父链成环报 `object:parent-cycle`。
 - **粒子**（P4a）：不再整条报 `object:particle`，按模块表细分成 `particle:*`，键的形态见「粒子（P4a）」的「编译」。
-- **关键帧值**（P4a）：`{animation: {…}, value}` 报 `value:animation`。以前它被解析成 `undefined`，属性静默退回缺省值、能力表不报。`animation` 是对象才算（puppet 的整数 id 不算），同时挂了 `user` / `script` 也报；覆盖 scene（`general`、图层字段、effect 实例、`instanceoverride`）、材质常量、模型 JSON、`effect.json`、粒子系统级键与模块字段、控制点和子系统条目（`isKeyframedValue` / `scanValue`）。语料里挡住 32 张，都不是原来能渲染的。
+- **关键帧值**（P4a 报出，P10a 实现）：`{animation: {…}, value}`，`animation` 是对象才算（puppet 的整数 id 不算）。`scene.json` 里的（`general`、图层字段、effect 实例常量、`instanceoverride`、声音音量）由 P10a 求值写入（见「关键帧动画（P10a）」），初值取 `value`；没有就地目标的照报细分键：灯对象上的 `value:animation:light`（P13）、相机对象上的 `value:animation:camera`（P5d）、其余 `value:animation:other`。材质 JSON 自己的常量、模型 JSON、`effect.json`、粒子系统级键与模块字段、控制点和子系统条目里的关键帧不经 WPE 的属性框架，照报 `value:animation`（`isKeyframedValue` / `scanValue`；语料 0 处）。
 
 **FreeImage 形态 `.tex`**（`freeimage` 为 13 PNG / 2 JPEG，mip 数据是整份图片文件）：Worker 不读这些字节，只记 `encoded` 区间。纹理尺寸取头里的**图像**尺寸（WPE 解码前把头里的纹理尺寸强制改成图像尺寸，所以 UV 为 1；razer_vortex 头写 4096×4096、图像 3840×2160，两组都是 3840×2160，见 `tex.ts` 的 `freeImageTextureSize`）。主线程 `decode.ts` 的 `TextureDecodeCache` 按区间读、`createImageBitmap`（`colorSpaceConversion: "none"`、`premultiplyAlpha: "none"`）解码，缓存键是文件路径与字节区间；`WpeSceneView` 每个目标一份，改属性重新编译时直接命中，换目标或卸载时关闭全部位图，每次解码后只留本 bundle 用到的项。其它 FreeImage 格式报 `tex:freeimage:<n>`，LZ4 包着的报 `tex:freeimage-lz4`。
 
@@ -1970,6 +1970,42 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 | `getAnimation()` | 返回 `undefined`（WPE 有这个成员） |
 
 自有属性按 WPE 的 `Object.keys` 顺序：`duration`、`loop`、`rate`、`addEndedCallback`、`play`、`setCurrentTime`、`isPlaying`、`stop`、`pause`、`getCurrentTime`、`getAnimation`。宿主暂停恢复时把所有播放器置为想放（连脚本暂停、停止过的也放，同 WPE 读码）。
+
+## 关键帧动画（P10a）
+
+`scene.json` 里写成 `{animation: {…}, value}` 的属性在 WPE 里是第三种写入方（另两种是用户属性和脚本写回）：每帧在粒子与相机之后、脚本 `update` 之前，按每条动画自己的 float32 时钟求值，经属性的 setter 写进字段。我们走同一条路：P3a 的绑定目标 `BindingTarget` 加 `SceneState.write`，不加新的 uniform、管线或重编译原因。脚本控制动画（`getAnimation` / `IAnimation`）与事件派发（`animationEvent`）是 P10b。依据：读码 [rea-p10-keyframes](../../.claude/plans/wpe-import/3-scene/phase10/rea-p10-keyframes.md)，实测 [p10-REPORT](../../.claude/plans/wpe-import/3-scene/phase10/p10-REPORT.md)，计划、实施记录与走查见 [phase-10a-curves.md](../../.claude/plans/wpe-import/3-scene/phase10/phase-10a-curves.md)。
+
+| 层 | 位置 | 做什么 |
+|---|---|---|
+| 求值 | `animation/curve.ts`、`animation/clock.ts`、`animation/types.ts` | 纯 TS，照读码第 14 节逐位写、float32 用 `Math.fround`：关键帧解析与 `wraploop`、整数帧上的三次贝塞尔（步进搜索反解）带缓存、整数帧之间线性插值；时钟的 `loop` / `mirror` / `single` 推进与事件收集，`play` / `pause` / `stop` / `setFrame` 等控制留给 P10b |
+| 编译 | `compile/animations.ts` → `SceneBundle.animations` | 每个关键帧值一条纯数据：目标（和字段脚本共用 `targetOf`）、值类型与 `writes`、通道、时钟参数、父的下标、事件 JSON；effect 常量的 uniform 名等着色器编完再补（`settleConstantAnimation`，同字段脚本）；没有就地目标的报细分键（见「能力表」） |
+| 播放 | `animation/player.ts`（`SceneAnimations`） | `frame(dt, state)`：按登记顺序走，时钟主人本帧第一次用到时推进一次（子排在父前面也不晚一帧），推进量 `f(f(rate)·f(dt))`；会写的按主人的时钟求值，经 `SceneState.write` 写入（返回值不看，所以动画不触发重编译），`recompile` / `unsupported` / `script-property` 目标不写；暂停的照写；事件每帧收进队列。`write`（不推进写一次）、`carryOver`（重编译时按 `id` 接回时钟与通道）、`seek`（dev 近似）、`probe` |
+| 宿主 | `host.ts` | 换场景时新建播放器、`carryOver`、先写一次，再重放脚本写入（暂停中重编译首帧不跑 `beforeFrame`，不写会先闪编译期的 `value`）；每个实时帧在脚本之前 `frame`，写进渲染器正在画的状态（只在「清空脚本存储」重建脚本时和 `scriptState` 不同）；声音目标当场推给排期器；退回预览图与销毁时丢掉 |
+
+**规则**（WPE 读码与实测）：
+- **时钟**：每条动画（联动的子用父的）一个 float32 时间，每帧 `t += rate × dt`，`dt` 就是 `g_Frametime` 用的那个，`rate` 缺省 1，不读 `g_Time`；帧号 `t / (1/fps)`（float32）。
+- **插值**：先按整数帧求三次贝塞尔（切线 x 以半个段长为单位、y 是值的绝对偏移，关掉的一侧按 (0, 0)，`step` 看段的右端关键帧），x 用步进搜索反解（步长 0.999 先减半再走，`|x − f| < 0.01` 帧或 1000 次停），再在相邻整数帧之间线性插值；首帧之前取首帧值，末帧及之后取末帧值。
+- **模式**：`loop` 回绕取 `fmodf`、第 length 帧不画；`mirror` 周期 2·length；`single` 停在 length 处（部分 fps 如 14.5、1.2 因 float32 停在第 length − 1 帧的值）；`wraploop` 加载时在 length 处补首帧的值。
+- **写入**：通道数必须等于分量数，属性必须是 float、vec2、vec3、vec4 之一，否则整条不写、保持 `value`（不报不支持，WPE 也什么都不做）；`startpaused` 时钟不走、每帧照写第 0 帧的值；对象隐藏时照常推进与写入；`angles` 的关键帧是弧度；`relative` 只对三段字符串的 `value` 生效。
+- **一帧里的顺序**：粒子、相机 → 动画 → 脚本 `update` → 渲染。所以动画写的 `general.zoom` 晚一帧生效；脚本本帧写的值下一帧被动画覆盖；`init(value)` 收到的是静态 `value`。
+- **联动**：`options.parent.key` 是同一对象上另一个属性的名字，子完全用父的时钟（时间、模式、暂停、`rate`），`children` 不读。
+- **重编译**：改属性不重载场景，按 `id` 接回时钟（`t`、标志、`rate`），时钟参数变了才从 0 开始。
+
+**能力表**：`value:animation:light`（灯，P13）、`value:animation:camera`（相机对象，P5d）、`value:animation:other` 照报；`getAnimation` 报 `script:api:object.getAnimation` / `thisScene.getAnimation`，导出了 `animationEvent` 的报 `script:callback:animationEvent`（都是 P10b）。
+
+**走查**（FINAL_CHECK，2026-11-14）：
+- 四个生成测试工程（`ignore/p10/proj/`，窗口与场景同为 1920×1080）：不受脚本控制的动画整帧逐像素相同（`p10-curves`、`p10-zoom` 18 帧含 FR、CLK）；`p10-zoom` 的缩放和 WPE 一样晚一帧。
+- 真实壁纸的复制工程（`kbp content isolate`）7 张：`3577990983`（转场 effect）15 帧逐像素相同；其余动画写进的值（effect 常量、`alpha`、`color`、`angles`、`origin`、组缩放、文本层 alpha 与 `origin`）和 WPE 逐位相同，像素差都归「窗口与场景不同高」（WPE 按窗口分辨率画）。
+- 依据与逐 draw 对照见子计划「步骤 3 走查」「步骤 4」。
+
+**已知差异与只记不补**：
+- 事件只收不派发（P10b），用到的场景照报 `script:callback:animationEvent`。
+- 每帧照写的开销：语料最多的 `3400241651`（23 条）`frame()` 每帧均值 0.053 ms，一半在向量拼字符串再解析。
+- dev 探针 `scriptValues` 仍在回放前写一次：同一目标上有动画时探针里动画赢，WPE 里脚本赢（kbp 的 FR 块不受影响）。
+
+**语料**（183 张）：`scene.json` 里的关键帧在 40 张场景里报过 `value:animation`，全部去掉；`2251857160`（P8、P4f 之后只差这一项）能整张渲染。40 张共 225 条动画、220 条会写（不写的 5 条：4 条常量在着色器里没有 uniform，1 条没有通道），联动 17 处，事件 2 个；其余场景还差脚本的回调与 API、人偶、相机路径等别的节。
+
+**dev 探针**：`renderFrame` 有 `particles.dts` 时动画沿同一串 dt 逐帧推进（每帧在粒子与相机之后、第二次 `sync` 之前），没有时 `seek(time)` 再写一次；结果的 `animations` 给每条的 `id`、时钟主人、`t`、帧号、`playing`、标志与最后写入的值；`host.animations()` 报宿主正在播的那份与最近 600 次 `frame()` 的耗时。
 
 ## 字体引擎 `wpefont`（P6b 1b 起）
 

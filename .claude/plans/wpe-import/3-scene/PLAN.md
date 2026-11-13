@@ -748,6 +748,8 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 总计划见 [phase-10-keyframes.md](phase10/phase-10-keyframes.md)（2026-11-13）。按 173 张重算：40 张带关键帧、228 处，42 张用到 P10 的键；只做 P10 能渲染 47 → 47，P4–P9 先做完时 82 → 84。它主要是 P11 / P12 的前置：P4–P10 做完后，这 42 张里 17 张只差 P11、15 张差 P11 + P12。分三节：曲线与自动播放、脚本与事件、联动。灯和相机对象上的关键帧照报，分别随 P13、P5d 做。下面是写总计划之前的原始范围。
 
+**进度**（2026-11-14）：**P10a 完成**（[phase-10a-curves.md](phase10/phase-10a-curves.md)）：求值、编译、运行时（`907d0eb3`）与 FINAL_CHECK 走查的工具（`06a38383`）。`scene.json` 的关键帧从 40 张场景里去掉，`2251857160` 能整张渲染（183 张口径 78 → 79）。走查：生成工程整帧逐像素相同，真实壁纸复制工程 7 张里动画值逐位相同，像素差归「WPE 按窗口分辨率画」；组节点子层平移 1 ulp 的残留记给 `phase-f32-matrix.md`。待做：P10b（`getAnimation` / `IAnimation` / `animationEvent`，事件派发要给 `frame` 加按条的钩子），之后用同一批录制复核 P10b 对象与挂字段脚本的对象（探针跑脚本，kabegame-chromium 第 7 批）。
+
 - **是什么：** 属性值写成 `{animation: {c0, c1, …, options: {fps, length, mode, …}}, value}`，按时间轴插值，可以和 `user`、`script` 并存。2026-11-07 统计语料 32 张、169 处（不含 puppet 的 `animationlayers`）：图层 `alpha` / `origin` / `angles` / `scale` / `color`、材质常量、`general.zoom` / `bloomstrength`、`instanceoverride` 等。
 - **现状：** 能力表报 `value:animation`（2026-11-11 为 38 张），整张退回。
 - **脚本：** `thisObject.getAnimation`（26 张）、`thisScene.getAnimation`、导出回调 `animationEvent`。

@@ -2558,3 +2558,17 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | A4 真机冒烟 | Windows dev，放着音乐 | 预览 Liberty | 频谱条随音乐动 | 2026-11-14：订阅成功、频谱非 0、三张截图里条的高度不同 |
 | [ ] | A5 没声明音频处理的场景 | Windows dev | 打开一张读音频 uniform 但 `project.json` 没有 `supportsaudioprocessing` 的场景 | 不订阅音频、频谱条为 0、场景照常渲染 | 本机语料没有这样的场景（68 张都声明了），待用户确认 |
 | [ ] | A6 非 Windows | macOS / Linux | 预览 Liberty | 场景照常渲染、频谱条为 0、日志一条 debug（订阅被拒） | 本机不能测（`TODO:[WPE_SCENE]`） |
+
+## 场景壁纸关键帧动画（P10a）
+
+2026-11-14。`scene.json` 里的关键帧值（`{animation, value}`）每帧在粒子与相机之后、脚本之前按 float32 时钟求值、写进字段，照 WPE 的插值、`loop` / `mirror` / `single` / `wraploop`、联动与 `startpaused`。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase10/rea-p10-keyframes.md` 与 `p10-REPORT.md`，计划、实施记录与按 FINAL_CHECK 的走查见同目录 `phase-10a-curves.md`，测试工程 `ignore/p10/proj/p10-*`（`ignore/p10/defs/p10.py`），复制工程 `ignore/p10/walk/proj/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | K0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；`apps/kabegame-dev-mcp` 的 `deno test` | 0 error、全过 | 2026-11-14：提交后的树 tsc 0 error，vitest 3093 个全过；dev MCP 27 组全过 |
+| [x] | K1 语料 | Node，183 个工程 | 前后重扫 `unsupported` | `scene.json` 的关键帧键从 40 张去掉，别的键不变 | 2026-11-14：40 张去掉过渡键、别的键逐张不变；`2251857160` 能整张渲染（干净 78 → 79） |
+| [x] | K2 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080 | `p10-curves`、`p10-zoom` 各录 3 段、每段 3 帧，`renderFrames.ts` 按日志逐帧回放、`kbp cmp frames` 比 | 整帧逐像素相同；缩放和 WPE 一样晚一帧 | 2026-11-14：18 帧都 0 差异（含 FR、CLK） |
+| [x] | K3 脚本相关工程 | 同上 | `p10-script`、`p10-edge` 各录 4 段 | 不受脚本控制的对象逐像素相同 | 2026-11-14：只有 P10b 对象（`getAnimation` / `animationEvent`）与挂字段脚本的 `ovr` / `hid`（探针不跑脚本）不同，其余对象 0 差异 |
+| [x] | K4 真实壁纸复制工程 | Windows dev + WPE 抓帧，3840×2130 | 7 张复制工程（`kbp content isolate`）逐帧比、逐 draw 对常量 | 动画写进的值和 WPE 逐位相同，像素差逐处有解释 | 2026-11-14：`3577990983` 15 帧逐像素相同；其余动画值逐位相同，像素差都是「窗口与场景不同高」（WPE 按窗口分辨率画），另有组节点子层平移 1 ulp 的残留记给 f32 矩阵 |
+| [ ] | K5 实时预览 | Windows dev，图库预览与桌面 | 打开 `2251857160`（冬季，等 10 s 看霜冻漫上来）与 `3818053626`（片头文字淡入） | 动画流畅、改属性时不从头开始；暂停时停 | 只在探针回放里比过，实时播放待用户看 |
+| [ ] | K6 非 Windows | macOS / Linux | 预览 `2251857160` | 同 Windows | 本机不能测 |
