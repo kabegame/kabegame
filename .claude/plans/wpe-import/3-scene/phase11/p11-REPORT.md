@@ -65,3 +65,48 @@
 - 收的文件分三种：视频扩展名走视频纹理，`.gif` 是动图，其它交给 FreeImage。
 
 这几条实测没覆盖，以读码为准。
+
+## 媒体回调与封面（2026-11-13）
+
+**工具：**
+- **SMTC 夹具** `ignore/p11/smtc/fixture.ps1`：Windows PowerShell 5.1 + WinRT `MediaPlayer`，手动驱动 SMTC，不放声音。步骤表 `steps.json`（`make_steps.py` 生成），外面往 `go.txt` 写步号，它就依次应用、记 `fixture.log`；写 `quit` 退出。
+  - 坑一：脚本要带 UTF-8 BOM，否则 5.1 按 ANSI 读中文注释，会把 `param` 行吞掉。
+  - 坑二：变量名不分大小写，`$steps` 就是 `[string]` 参数 `$Steps`。
+  - 坑三：`Genres` 是 WinRT vector，要按 `ICollection<string>` 反射调用。
+- **只读探针** `probe.ps1`：列出系统的媒体会话和「当前会话」。
+- **测试工程** `p11c.py` 的 `p11-media`：`LOG` 图层的脚本导出五个媒体回调与 `applyUserProperties`，每次调用写一行 `[p11m] <update 计数> <runtime> <Date.now()> <事件> <内容>`；`TH-CUR` 画 `$mediaThumbnail`（缺省 `util/clouds_256`，1:1），`TH-PREV` 画 `$mediaPreviousThumbnail`（缺省 `particle/drop`，1:4）。
+- **期望值**：`ignore/p11/media_colors.py` 按读码复算五色。
+
+**做法：** 先启动夹具并应用第 1 步，再开 WPE 测试窗口，之后逐步推进。抓帧在 `A:\p11\media`；日志存在 `ignore/p11/out/p11-media-log.txt` 和 `p11-media-fixture.log`。这台机器 `windowupdaterate` 是 1000。中途重启了一次 WPE：用户关掉之前那个实例后，由 MCP 启动；那个实例从上午 10:48 起不再写日志，也不响应开测试窗口。
+
+| 结论 | 依据 | 结果 |
+|---|---|---|
+| 只有 `MediaPlaybackEvent` 是全局类，静态常量 0 / 1 / 2，其余四个事件类是 `undefined` | `init` 里的 `typeof` | 成立 |
+| 加载顺序：`init` → `status {enabled: true}`（init 后补发）→ 首次 `applyUserProperties`（全集）→ 约 80 ms 后又一个 `status {enabled: true}`（子进程新拉起时的全局补发）→ 约 0.75 s 后数据到达 | 日志前 9 行 | 成立，和读码对「子进程新拉起」的预测一致 |
+| 一次刷新里 播放 → 属性 → 时间轴，之后（下一条事件）`applyUserProperties({})` → `mediaThumbnailChanged` | 第 1 步的数据到达、第 7 步 | 成立 |
+| 从夹具改值到回调是 0.2–0.8 s | 夹具时间戳对 `Date.now()` | 符合 1 s 刷新 + winrtutil 的 100 ms 轮询 |
+| 同一个刷新间隔里改两次标题只收到最后一次 | 第 4、5 步相隔 2 ms → 只有 `P11 Delta` | 成立 |
+| `position` / `duration` 截断成整秒 | 37.8 / 200.5 → 37 / 200 | 成立 |
+| `state` 暂停 2、播放 1 | 第 6、7 步 | 成立 |
+| `genres` 用 `,` 连接、不加空格；`contentType` 为 `"music"`；`subTitle` 为空串 | 第 1 步 | 成立 |
+| 颜色是 `Vec3` 实例，值是 0–255 整数除以 255 | `instanceof Vec3`，乘 255 后都是整数 | 成立 |
+| 五色算法 | m1 / m2 / m3 / m4 / m6（PNG）的主、次、第三色和黑白值都与复算逐值相同（含 m1 的 (200, 39, 39) 截断、m4 全灰时主色为黑、m6 的 alpha 0 像素不计入） | 成立 |
+| 封面按槽的缺省纹理比例居中裁切 | m2（320×180）在 1:1 槽 180×180、第 122 列起变黄；m1 在 1:4 槽 45×180 | 成立 |
+| `$mediaPreviousThumbnail` 是上一条封面消息的那张 | 第 2 步后 previous 是 m1 | 成立 |
+
+**和读码不一致、以实测为准：**
+1. **`textColor` 与 `highContrastColor` 的对应反了。** m5 收到 `textColor` = (101, 35, 178)（等于次色）、`highContrastColor` = 黑。拿 WPE 给的主、次、第三色照算法算：黑白值是黑，「对比度够的颜色」是次色。所以：
+   - 脚本的 `highContrastColor` = 主色与黑的对比度 < 2.5 时为白、否则为黑；
+   - `textColor` = 次色（对比度 ≥ 2.5 且大于第三色的）/ 第三色（≥ 2.5）/ 否则同 `highContrastColor`。
+   这和 `lib.sceneScript.d.ts` 的说明一致（`textColor` 可能是次色或第三色，`highContrastColor` 只是黑或白）。读码把消息里两个值和字段名的对应标成了【推】，这里更正。
+2. **应用重新设置封面时，哪怕是同一张图也会发封面消息，previous 跟着轮换。** 第 3 步重设同一张 m2 并改标题：收到 `mediaThumbnailChanged`，previous 变成 m2（1:4 槽读到蓝色）。只改标题（第 4、5 步）不发封面。读码的「字节相同不发」至少在应用重设封面时不成立。
+
+**JPEG 封面的颜色只作参考：** m5 是平滑的色相渐变，各色相格的权重几乎相等。WPE 用 FreeImage 解码，复算用 PIL，像素差一点就选中了别的格（WPE 主色 (112, 179, 35)，复算 (36, 168, 185)）。实现时按浏览器的解码结果算，渐变类封面可能和 WPE 选的格不同。纯色块的 PNG 逐值相同。
+
+**被打断的部分：** 第 12 步（超长标题）时，系统的当前会话换成了 Kabegame 自己的预览（`usePreviewMediaSession`，用户当时在预览一张壁纸）。WPE 随即重发了它的属性、时间轴和封面，这说明当前会话一换，WPE 就跟着换。超长字段清空、停止（state 0）、清空显示信息（`hasThumbnail: false`）、会话消失这几项没测到，以读码为准。
+
+**对 P11c 的提示：** 场景在 Kabegame 里预览时，Kabegame 自己的媒体会话可能成为当前会话，场景会把这张壁纸的名字当成「正在播放的音乐」。2026-11-13 用户定不过滤（同 Phase 8）。
+
+## 快捷方式
+
+没有实测：门禁要在测试窗口里真的点鼠标，MCP 没有给 WPE 窗口发点击的工具，靠注入鼠标事件又会动用户的光标。以读码为准，P11d 动工时请用户手动点一次核对。
