@@ -16,7 +16,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useModalBack } from "@/composables/useModalBack";
 import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
 import ScheduleSpecEditor from "./ScheduleSpecEditor.vue";
@@ -47,10 +47,10 @@ async function save() {
     });
     emit("updated", config);
     visible.value = false;
-    ElMessage.success(t("common.save"));
+    kameMessage.success(t("common.save"));
   } catch (error) {
     console.error(error);
-    ElMessage.error(t("common.operationFailed"));
+    kameMessage.error(t("common.operationFailed"));
   } finally {
     saving.value = false;
   }

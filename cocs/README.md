@@ -103,7 +103,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     - **排序**：面板打开时读一次、打开期间冻结；点一行只应用，收起时才给最后应用的那条记最后使用。
     - **编辑**：改名，或用当前视图更新（先预览差异，确定才写），只读组合展示。
     - **移除**：popconfirm。
-    - **嵌套弹层**：靠组件库的 `clickOutsideIgnore` / popconfirm `popperClass` 不关面板；紧凑档改对话框。
+    - **嵌套弹层**：编辑浮层与移除确认都是 Reka 层，点它们不关 ⋯ 面板；紧凑档改对话框。
     - **画廊路径**：不再恢复上次浏览路径，`gallery-path` 全平台走 URL query；非画廊页点画廊过滤链接改为显式跳 `/gallery`。
   - 适用场景：
     - 改收藏视图的存储 / 排序 / 冲突规则；
@@ -342,8 +342,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：新增后台进度卡片；排查空闲仍轮询、finished 丢失后卡片不消失、旧快照复活、下载抽屉与失败重试进度不一致。
 
 - [ui/COMPONENT_LIBRARY.md](ui/COMPONENT_LIBRARY.md)
-  - 主题：**界面重构进行中**：新界面用 `components/ui/`（`reka-ui` + UnoCSS + `styles/tokens.css` 的 `--kb-*`，图标 `@lucide/vue`），写法约定、token 方向（P1 起 EP 由 vendored 包的 `kb-reskin.scss` 全局换皮、中性 `--anime-*` 指向 `--kb-*`）、弹层套 Tooltip 时的锚点问题、层级与混用期的焦点 / `pointer-events` 问题见文末「新界面组件」。**本仓不再依赖 npm element-plus**，组件与图标已 vendor 成自有组件库 `@kabegame/element-plus` / `@kabegame/element-plus-icons`（fork，不跟上游）。涵盖 vendor 动机（从没覆盖 EP 全局 token 导致的 1733 行覆盖 + 147 处 `!important`）、三处接线（vite alias / **两处** tsconfig `paths`，app 的是整体覆盖 / web `manualChunks` 必须判在 node_modules 闸门之前且 `-icons` 在前）、`vueJsx()` 插件的必要性、前缀现状（namespace 两个开关仍是 `el`，翻之前必须清零业务侧 `.el-*`，及字面量 transition 名等漏网处）、**加主题的正确姿势**（下沉到 `common/var.scss` 的 token map，`--kb-el-* ← --anime-*`，date-picker 是范例）、自有组件放哪（可直接进 vendored 包，`KbTab` 曾取代 `ElTabs`，P1 起调用方改用新 `Tabs`；theme-chalk vs SFC scoped 的分流）、图标 svg 真源 + 零依赖 Deno 生成器，以及 scss 自包含 / `process.env.NODE_ENV` / `.tsx` JSX 类型等踩坑。
-  - 适用场景：写任何前端组件或样式前先读；新写界面该用哪套组件、`kb` 色板怎么用、改了 `uno.config.pub.ts` 不生效、浮层停在左上角不定位、没迁的 EP 界面颜色不对；排查「从 element-plus 导入报错」；给组件加主题；新增/删除 vendored 组件；加图标；改 alias / tsconfig paths / chunk 划分；准备翻 `kb-el` 前缀。
+  - 主题：**界面重构进行中**：新界面用 `components/ui/`（`reka-ui` + UnoCSS + `styles/tokens.css` 的 `--kb-*`，图标 `@lucide/vue`），写法约定、token 方向（P1 起 EP 由 vendored 包的 `kb-reskin.scss` 全局换皮、中性 `--anime-*` 指向 `--kb-*`）、弹层套 Tooltip 时的锚点问题、反馈门面（`toast` / `messageBox` / `vLoading`）、过滤 chip 下拉 `KbFilterDropdown`（P3 从 vendored 包移出、用 reka-ui 重写，面板里的 Reka 子层算层内、不再需要豁免类）、动作菜单图标的 `iconBy` / `resolveActionIcon` 约定与设计稿 chip 图标 `components/icons/filterIcons.ts`、层级取号与混用期垫片（`compat.ts`：点外部、焦点陷阱与 Esc、挂进 EP 对话框，`TODO:[REF_UI]` 标记）见文末「新界面组件」。**本仓不再依赖 npm element-plus**，组件与图标已 vendor 成自有组件库 `@kabegame/element-plus` / `@kabegame/element-plus-icons`（fork，不跟上游）。涵盖 vendor 动机（从没覆盖 EP 全局 token 导致的 1733 行覆盖 + 147 处 `!important`）、三处接线（vite alias / **两处** tsconfig `paths`，app 的是整体覆盖 / web `manualChunks` 必须判在 node_modules 闸门之前且 `-icons` 在前）、`vueJsx()` 插件的必要性、前缀现状（namespace 两个开关仍是 `el`，翻之前必须清零业务侧 `.el-*`，及字面量 transition 名等漏网处）、**加主题的正确姿势**（下沉到 `common/var.scss` 的 token map，`--kb-el-* ← --anime-*`，date-picker 是范例）、自有组件放哪（可直接进 vendored 包，`KbTab` 曾取代 `ElTabs`，P1 起调用方改用新 `Tabs`；theme-chalk vs SFC scoped 的分流）、图标 svg 真源 + 零依赖 Deno 生成器，以及 scss 自包含 / `process.env.NODE_ENV` / `.tsx` JSX 类型等踩坑。
+  - 适用场景：写任何前端组件或样式前先读；新写界面该用哪套组件、`kb` 色板怎么用、改了 `uno.config.pub.ts` 不生效、浮层停在左上角不定位、没迁的 EP 界面颜色不对；新浮层被旧对话框盖住、在旧对话框里按 Esc 连旧对话框一起关、新对话框里点旧下拉就关闭、菜单打开旧对话框后焦点不对；提示消息 / 确认框该用哪个、测试里 mock 什么；过滤 chip 面板里点子层（确认、编辑浮层）把面板关掉、点 chip 关了又开；菜单或动作条图标渲染报错（lucide 图标被当成按上下文的解析器）；排查「从 element-plus 导入报错」；给组件加主题；新增/删除 vendored 组件；加图标；改 alias / tsconfig paths / chunk 划分；准备翻 `kb-el` 前缀。
   - 配套：[../packages/kabegame-element-plus/README.md](../packages/kabegame-element-plus/README.md) 与 [../packages/kabegame-element-plus-icons/README.md](../packages/kabegame-element-plus-icons/README.md) 记录各自与上游的逐项结构差异。
 
 - [ui/FILE_DROP_ZONES.md](ui/FILE_DROP_ZONES.md)

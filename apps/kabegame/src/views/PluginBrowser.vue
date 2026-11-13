@@ -326,8 +326,7 @@
 import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { Refresh, Upload, Plus, Search, Setting, QuestionFilled } from "@kabegame/element-plus-icons";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import {
@@ -358,6 +357,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { trackEvent } from "@/track/umami";
 import type { DragFileItem, DragFilePlan } from "@/utils/dragFileZones";
 import DragFileZone from "@/components/common/DragFileZone.vue";
+import { messageBox } from "@/components/ui/messageBox";
 
 /** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
 type PluginListItem = Plugin | StorePluginResolved;
@@ -634,12 +634,12 @@ const formatBytes = (bytes: number) => {
 const goToOfficialGitHubStoreTab = async () => {
   const r = await market.loadSources();
   if (!r.success) {
-    ElMessage.error(r.error ?? t("plugins.loadSourcesFailed"));
+    kameMessage.error(r.error ?? t("plugins.loadSourcesFailed"));
     return;
   }
   const hasOfficial = sources.value.some((s) => s.id === OFFICIAL_PLUGIN_SOURCE_ID);
   if (!hasOfficial) {
-    ElMessage.warning(t("plugins.officialSourceMissing"));
+    kameMessage.warning(t("plugins.officialSourceMissing"));
     return;
   }
   activeTab.value = storeTabName(OFFICIAL_PLUGIN_SOURCE_ID);
@@ -679,7 +679,7 @@ const editSource = (idx: number) => {
 const confirmEditSource = async () => {
   if (await guardDesktopOnly("addPluginSource")) return;
   if (!editSourceForm.name.trim() || !editSourceForm.indexUrl.trim()) {
-    ElMessage.warning(t("plugins.fillNameAndIndexUrl"));
+    kameMessage.warning(t("plugins.fillNameAndIndexUrl"));
     return;
   }
 
@@ -696,16 +696,12 @@ const confirmEditSource = async () => {
     const msg = errorMessageOf(e, "源验证失败");
 
     try {
-      await ElMessageBox.confirm(
-        t("plugins.sourceValidateFailedStillAdd", { msg }),
-        t("plugins.sourceValidateFailed"),
-        {
-          type: "warning",
-          confirmButtonText: t("plugins.stillAdd"),
-          cancelButtonText: t("plugins.backToEdit"),
-          distinguishCancelAndClose: true,
-        },
-      );
+      await messageBox.confirm(t("plugins.sourceValidateFailedStillAdd", { msg }), t("plugins.sourceValidateFailed"), {
+        type: "warning",
+        confirmButtonText: t("plugins.stillAdd"),
+        cancelButtonText: t("plugins.backToEdit"),
+        distinguishCancelAndClose: true,
+      });
       // 用户确认：继续添加
     } catch {
       // 用户取消：保持对话框打开，便于继续修改
@@ -740,11 +736,11 @@ const confirmEditSource = async () => {
 
     // 自身写操作直接刷新源列表（不依赖 plugin-sources-changed 回刷）
     await market.loadSources();
-    ElMessage.success(editingSourceIndex.value === null ? t("plugins.sourceAdded") : t("plugins.sourceUpdated"));
+    kameMessage.success(editingSourceIndex.value === null ? t("plugins.sourceAdded") : t("plugins.sourceUpdated"));
     editSourceDialog.close();
   } catch (e) {
     console.error("保存商店源失败:", e);
-    ElMessage.error(errorMessageOf(e, t("plugins.saveSourceFailed")));
+    kameMessage.error(errorMessageOf(e, t("plugins.saveSourceFailed")));
   }
 };
 
@@ -756,11 +752,11 @@ const removeSource = (idx: number) => {
 
 const handleDeleteSource = async (source: PluginSource) => {
   if (source.id === OFFICIAL_PLUGIN_SOURCE_ID) {
-    ElMessage.warning(t("plugins.cannotDeleteOfficialSource"));
+    kameMessage.warning(t("plugins.cannotDeleteOfficialSource"));
     return;
   }
   try {
-    await ElMessageBox.confirm(
+    await messageBox.confirm(
       t("plugins.confirmDeleteStoreSourceWithName", { name: pluginSourceDisplayName(source) }),
       t("plugins.deleteStoreSourceTitle"),
       { type: "warning" },
@@ -770,11 +766,11 @@ const handleDeleteSource = async (source: PluginSource) => {
     await invoke("delete_plugin_source", { id: source.id });
     await market.loadSources();
 
-    ElMessage.success(t("plugins.sourceDeleted"));
+    kameMessage.success(t("plugins.sourceDeleted"));
   } catch (e) {
     if (e !== "cancel") {
       console.error("删除商店源失败:", e);
-      ElMessage.error(t("plugins.deleteSourceFailed"));
+      kameMessage.error(t("plugins.deleteSourceFailed"));
     }
   }
 };
@@ -786,11 +782,11 @@ const loadStoreList = async (sourceId: string, options: { showMessage?: boolean;
     if (forceRefresh) await market.loadStorePlugins(sourceId, { forceRefresh: true });
     else await market.ensureStorePlugins(sourceId);
     if (showMessage) {
-      ElMessage.success(forceRefresh ? t("plugins.storeListRefreshed") : t("plugins.storeListLoaded"));
+      kameMessage.success(forceRefresh ? t("plugins.storeListRefreshed") : t("plugins.storeListLoaded"));
     }
   } catch (error) {
     console.error("加载商店失败:", error);
-    ElMessage.error(errorMessageOf(error, t("plugins.loadStoreFailed")));
+    kameMessage.error(errorMessageOf(error, t("plugins.loadStoreFailed")));
   }
 };
 
@@ -811,7 +807,7 @@ const selectPluginFile = async () => {
     }
   } catch (error) {
     console.error("选择文件失败:", error);
-    ElMessage.error(t("plugins.selectFileFailed"));
+    kameMessage.error(t("plugins.selectFileFailed"));
   }
 };
 
@@ -827,7 +823,7 @@ const triggerImportDirect = async () => {
     await handleImport();
   } catch (error) {
     console.error("选择文件失败:", error);
-    ElMessage.error(t("plugins.selectFileFailed"));
+    kameMessage.error(t("plugins.selectFileFailed"));
   }
 };
 
@@ -846,7 +842,7 @@ const handleImport = async () => {
       const existingVersion = existing?.version;
 
       if (alreadyExists && existingVersion && existingVersion === parsed.version) {
-        ElMessage.info(`插件已存在（v${parsed.version}），无需重复导入`);
+        kameMessage.info(`插件已存在（v${parsed.version}），无需重复导入`);
         return;
       }
 
@@ -855,7 +851,7 @@ const handleImport = async () => {
         ? `检测到同 ID 插件，版本将从 <b>v${existingVersion || "?"}</b> 变更为 <b>v${parsed.version}</b>，是否继续导入？`
         : `将导入插件：<b>${escapeHtml(displayName)}</b>（v${parsed.version}，${formatBytes(parsed.sizeBytes)}），是否继续？`;
 
-      await ElMessageBox.confirm(msg, t("plugins.confirmImport"), {
+      await messageBox.confirm(msg, t("plugins.confirmImport"), {
         type: "warning",
         dangerouslyUseHTMLString: true,
         confirmButtonText: t("plugins.importButton"),
@@ -864,17 +860,17 @@ const handleImport = async () => {
 
       await invoke("import_plugin_from_zip", { zipPath: filePath });
     } else {
-      ElMessage.error(t("plugins.invalidFormatSelectKgpg"));
+      kameMessage.error(t("plugins.invalidFormatSelectKgpg"));
       return;
     }
 
-    ElMessage.success(t("plugins.importSuccess"));
+    kameMessage.success(t("plugins.importSuccess"));
     importDialog.close();
     selectedFilePath.value = null;
     // plugin-added / plugin-changed 事件更新已安装列表；商店卡片的 installedVersion 由 market store 现算
   } catch (error) {
     console.error("导入源失败:", error);
-    ElMessage.error(error instanceof Error ? error.message : t("plugins.importFailed"));
+    kameMessage.error(error instanceof Error ? error.message : t("plugins.importFailed"));
   }
 };
 
@@ -898,11 +894,11 @@ const onDropFiles = async (plan: DragFilePlan) => {
       successCount++;
     } catch (error) {
       console.error("[PluginBrowser] 导入插件失败:", plugin.path, error);
-      ElMessage.error(t("import.importPluginFailed"));
+      kameMessage.error(t("import.importPluginFailed"));
     }
   }
   if (successCount > 0) {
-    ElMessage.success(t("import.importedPluginsCount", { count: successCount }));
+    kameMessage.success(t("import.importedPluginsCount", { count: successCount }));
     // plugin-added / plugin-changed 事件会自动更新已安装列表；商店卡片的 installedVersion 由 market store 现算
     await pluginStore.refreshPlugins();
   }
@@ -937,10 +933,10 @@ const handleRefresh = async () => {
       try {
         // 触发后端全量刷新缓存（避免 get_plugins 只返回内存缓存导致”刷新无效”）
         await pluginStore.refreshPlugins();
-        ElMessage.success(t("plugins.installedRefreshSuccess"));
+        kameMessage.success(t("plugins.installedRefreshSuccess"));
       } catch (error) {
         console.error("刷新已安装源失败:", error);
-        ElMessage.error(errorMessageOf(error, t("plugins.installedRefreshFailed")));
+        kameMessage.error(errorMessageOf(error, t("plugins.installedRefreshFailed")));
       } finally {
         installedRefreshing.value = false;
       }
@@ -952,10 +948,10 @@ const handleRefresh = async () => {
       // 刷新源列表（本地），若当前源不见了则切回已安装源
       const sourcesResult = await market.loadSources();
       if (!sourcesResult.success && sourcesResult.error) {
-        ElMessage.error(sourcesResult.error);
+        kameMessage.error(sourcesResult.error);
       }
       if (!sources.value.some((s) => s.id === sourceId)) {
-        ElMessage.warning(t("plugins.storeSourceGoneSwitchToInstalled"));
+        kameMessage.warning(t("plugins.storeSourceGoneSwitchToInstalled"));
         activeTab.value = "installed";
         return;
       }
@@ -1002,7 +998,7 @@ watch(
       loaded: !!loadedBySource.value[sourceId],
     });
     void market.revalidateInBackground(sourceId).then((changed) => {
-      if (changed) ElMessage.success(t("plugins.storeListAutoUpdated"));
+      if (changed) kameMessage.success(t("plugins.storeListAutoUpdated"));
     });
   },
   { immediate: true },

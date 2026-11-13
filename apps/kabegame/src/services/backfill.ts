@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from "@/api/rpc";
 import { busyPoller } from "@/services/busyTasks";
 import { useBackfillStore, type BackfillFinished } from "@/stores/backfill";
 import { backfillName } from "@/utils/backfillName";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 
 let unlistenFinished: UnlistenFn | null = null;
@@ -13,7 +13,7 @@ export async function init(): Promise<void> {
     busyPoller.invalidate();
     store.applyFinished(event.payload);
     if (!event.payload.error) return;
-    ElMessage.error(i18n.global.t("header.backfillFailed", { name: backfillName(event.payload.id) }));
+    kameMessage.error(i18n.global.t("header.backfillFailed", { name: backfillName(event.payload.id) }));
   });
 }
 

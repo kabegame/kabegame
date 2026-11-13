@@ -24,7 +24,7 @@
 <script setup lang="ts">
 import { computed, ref, toRef, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { IS_ANDROID } from "@/env";
@@ -75,7 +75,7 @@ watch(
 const handleChange = async (transition: string) => {
   if (saving.value) return;
   if (!rotationEnabled.value) {
-    ElMessage.info(t("settings.transitionRotationRequired"));
+    kameMessage.info(t("settings.transitionRotationRequired"));
   }
   saving.value = true;
   try {

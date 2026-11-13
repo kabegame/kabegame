@@ -22,11 +22,8 @@ vi.mock("@/api", () => ({
     });
   }),
 }));
-vi.mock("@kabegame/element-plus", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@kabegame/element-plus")>()),
-  ElMessage: { success: vi.fn(), error: vi.fn() },
-  ElMessageBox: { confirm },
-}));
+vi.mock("@/components/ui/toast", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/ui/messageBox", () => ({ messageBox: { confirm } }));
 vi.mock("@/services/pathql", () => ({ pathqlAll: vi.fn(), pathqlFetch: vi.fn() }));
 vi.mock("@kabegame/i18n", () => ({
   useI18n: () => ({ t: (key: string) => key }),
@@ -85,7 +82,13 @@ async function fixture(stubs: Record<string, unknown> = {}, props: Record<string
   const wrapper = shallowMount(ImagePreviewDialog, {
     props: { image: "current", ...props },
     global: {
-      stubs: { "el-dialog": { template: "<div><slot /></div>" }, "el-icon": true, ...stubs },
+      // 桌面预览是 Reka 对话框：根、Portal、内容三层透传插槽，内容才渲染得出来
+      stubs: {
+        DialogRoot: { template: "<div><slot /></div>" },
+        DialogPortal: { template: "<div><slot /></div>" },
+        DialogContent: { template: "<div><slot /></div>" },
+        ...stubs,
+      },
     },
   });
   wrappers.push(wrapper);

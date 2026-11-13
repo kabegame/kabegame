@@ -93,7 +93,6 @@ import { ElStep, ElSteps } from '@kabegame/element-plus/components/steps'
 import { ElSwitch } from '@kabegame/element-plus/components/switch'
 import { ElTable, ElTableColumn } from '@kabegame/element-plus/components/table'
 import { ElAutoResizer, ElTableV2 } from '@kabegame/element-plus/components/table-v2'
-import { KbFilterDropdown } from '@kabegame/element-plus/components/kb-filter-dropdown'
 import { KbTab } from '@kabegame/element-plus/components/kb-tab'
 import { ElTag } from '@kabegame/element-plus/components/tag'
 import { ElText } from '@kabegame/element-plus/components/text'
@@ -204,7 +203,6 @@ export default [
   ElTable,
   ElTableColumn,
   ElTableV2,
-  KbFilterDropdown,
   KbTab,
   ElTag,
   ElText,

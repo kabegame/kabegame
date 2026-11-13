@@ -104,8 +104,13 @@
           <el-button size="small" text @click="selected = null">{{ t("common.close") }}</el-button>
         </div>
         <div class="whitespace-pre-wrap break-all">{{ selected.message }}</div>
-        <div v-if="selected.fields && Object.keys(selected.fields).length > 0" class="mt-1 text-[var(--anime-text-secondary)]">
-          <div v-for="(value, key) in selected.fields" :key="key" class="break-all">{{ key }} = {{ formatValue(value) }}</div>
+        <div
+          v-if="selected.fields && Object.keys(selected.fields).length > 0"
+          class="mt-1 text-[var(--anime-text-secondary)]"
+        >
+          <div v-for="(value, key) in selected.fields" :key="key" class="break-all">
+            {{ key }} = {{ formatValue(value) }}
+          </div>
         </div>
       </div>
     </div>
@@ -124,7 +129,8 @@ import { useAppLogsStore } from "@/stores/appLogs";
 import { useUiStore } from "@/stores/ui";
 import { LOG_LEVELS, openLogsDir, type LogLevel, type LogRecord } from "@/services/appLogs";
 import { writeClipboardText } from "@/utils/imageLabels";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
+import { vLoading } from "@/components/ui/loading";
 
 const ROW_HEIGHT = 22;
 const FRONTEND_TARGET = "webview";
@@ -245,9 +251,9 @@ const formatLine = (record: LogRecord) => {
 const copyRecords = async (records: LogRecord[]) => {
   try {
     await writeClipboardText(records.map(formatLine).join("\n"));
-    ElMessage.success(t("header.logs.copied"));
+    kameMessage.success(t("header.logs.copied"));
   } catch {
-    ElMessage.error(t("header.logs.copyFailed"));
+    kameMessage.error(t("header.logs.copyFailed"));
   }
 };
 
@@ -257,7 +263,7 @@ const openDir = async () => {
   try {
     await openLogsDir();
   } catch (error) {
-    ElMessage.error(t("header.logs.openDirFailed", { detail: String(error) }));
+    kameMessage.error(t("header.logs.openDirFailed", { detail: String(error) }));
   }
 };
 </script>

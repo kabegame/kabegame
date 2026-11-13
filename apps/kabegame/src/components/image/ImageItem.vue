@@ -20,19 +20,11 @@
   >
     <!-- 文件异常标识：thumb/comp/local 三级失败标记（蓝/黄/红），最多三个全亮；不阻挡点击/选择/右键 -->
     <div v-if="failedSources.length" class="missing-file-badges">
-      <el-tooltip
-        v-for="tag in failedSources"
-        :key="tag"
-        :content="fileWarningText(tag)"
-        placement="top"
-        :show-after="300"
-      >
+      <Tooltip v-for="tag in failedSources" :key="tag" :content="fileWarningText(tag)" side="top" :delay="300">
         <div class="missing-file-badge" :class="`missing-file-badge-${tag}`">
-          <el-icon :size="14">
-            <WarningFilled />
-          </el-icon>
+          <TriangleAlert class="size-3.5" />
         </div>
-      </el-tooltip>
+      </Tooltip>
     </div>
     <!-- 视频标识：右上角播放/暂停切换按钮（可控视频） -->
     <div
@@ -44,24 +36,18 @@
       @dblclick.stop
       @contextmenu.stop.prevent
     >
-      <el-icon :size="14">
-        <VideoPause v-if="videoShouldPlay" />
-        <VideoPlay v-else />
-      </el-icon>
+      <Pause v-if="videoShouldPlay" class="size-3 fill-current" />
+      <Play v-else class="size-3 fill-current" />
     </div>
     <!-- WPE 壁纸：预览图即作者提供的动图 / 静图，网格不加载入口视频 / 页面 -->
     <div v-else-if="isWpe" class="wpe-video-badge" aria-hidden="true">
-      <el-icon :size="12">
-        <VideoPlay v-if="isWpeVideo" />
-        <Monitor v-else />
-      </el-icon>
+      <Play v-if="isWpeVideo" class="size-2.5 fill-current" />
+      <Monitor v-else class="size-3" />
       <span>{{ wpeBadgeText }}</span>
     </div>
     <!-- 视频标识：GIF 等不可控形态，仅作为静态指示 -->
     <div v-else-if="isVideo" class="video-play-badge" aria-hidden="true">
-      <el-icon :size="14">
-        <VideoPlay />
-      </el-icon>
+      <Play class="size-3 fill-current" />
     </div>
     <div
       class="image-wrapper"
@@ -89,7 +75,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
-import { WarningFilled, VideoPlay, VideoPause, Monitor } from "@kabegame/element-plus-icons";
+import { Monitor, Pause, Play, TriangleAlert } from "@lucide/vue";
+import { Tooltip } from "@/components/ui";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
 import { isVideoMediaType, isWpeMediaType, isWpeVideoType, wpeKind } from "../../utils/mediaMime";
@@ -461,32 +448,34 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
     &.image-item-selected {
       border: none;
-      box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.6);
+      box-shadow: none;
       outline: none;
     }
   }
 
-  html:not(.platform-android) &:hover {
-    outline: 3px solid var(--anime-primary-light);
-    outline-offset: -2px;
+  /* 悬停与选中的描边画在盖住整格的 ::after 上：描边若画在格子自身（outline / box-shadow inset），
+     会被里面带定位的图层盖掉；画到格子外又会被相邻格子与滚动容器裁掉。
+     悬停：一圈细的半透明强调色；选中：实心强调色（强调色只用于选中 / 焦点）。 */
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 var(--kb-item-ring-width, 0) var(--kb-item-ring-color, transparent);
+    transition: box-shadow 0.15s ease;
   }
 
-  &.image-item-selected {
-    box-shadow:
-      0 0 0 3px rgba(255, 107, 157, 0.4),
-      0 0 20px rgba(255, 107, 157, 0.5),
-      0 4px 12px rgba(255, 107, 157, 0.3);
-    outline: 4px solid #ff6b9d;
-    outline-offset: -2px;
+  html:not(.platform-android) &:hover {
+    --kb-item-ring-width: 2px;
+    --kb-item-ring-color: color-mix(in srgb, var(--kb-accent) 55%, transparent);
+  }
 
-    html:not(.platform-android) &:hover {
-      outline: 5px solid #ff4d8a;
-      outline-offset: -2px;
-      box-shadow:
-        0 0 0 3px rgba(255, 77, 138, 0.5),
-        0 0 30px rgba(255, 107, 157, 0.6),
-        0 6px 16px rgba(255, 107, 157, 0.4);
-    }
+  &.image-item-selected,
+  html:not(.platform-android) &.image-item-selected:hover {
+    --kb-item-ring-width: 3px;
+    --kb-item-ring-color: var(--kb-accent);
   }
 
   .image-wrapper {
@@ -541,33 +530,24 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   pointer-events: auto;
   cursor: help;
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-  transition: background 0.2s ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
+  transition: filter 0.15s ease;
+
+  &:hover {
+    filter: brightness(1.08);
+  }
 
   /* 三级失败标记：thumb 蓝 / comp 黄 / local 红 */
   &.missing-file-badge-thumb {
-    background: rgba(64, 158, 255, 0.92);
-
-    &:hover {
-      background: rgba(64, 158, 255, 1);
-    }
+    background: #3b82f6;
   }
 
   &.missing-file-badge-comp {
-    background: rgba(230, 162, 60, 0.92);
-
-    &:hover {
-      background: rgba(230, 162, 60, 1);
-    }
+    background: var(--kb-warning);
   }
 
   &.missing-file-badge-local {
-    background: rgba(245, 108, 108, 0.92);
-
-    &:hover {
-      background: rgba(245, 108, 108, 1);
-    }
+    background: var(--kb-danger);
   }
 }
 
@@ -584,9 +564,9 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   justify-content: center;
   pointer-events: none;
   color: #fff;
-  background: rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  background: rgba(16, 14, 20, 0.48);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
 /* WPE 视频角标：图标 + 短文字，与可控视频的圆形按钮区分 */
@@ -605,9 +585,9 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   font-size: 10px;
   line-height: 1.4;
   letter-spacing: 0.02em;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  background: rgba(16, 14, 20, 0.52);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
 /* 可控视频的播放/暂停按钮：让 badge 接收点击 */
@@ -619,7 +599,7 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     transform 0.15s ease;
 
   &:hover {
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(16, 14, 20, 0.7);
     transform: scale(1.08);
   }
 

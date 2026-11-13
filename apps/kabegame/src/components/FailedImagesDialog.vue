@@ -1,175 +1,201 @@
 <template>
-  <el-dialog
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
-    :width="dialogWidth"
-    :style="dialogStyle"
-    :append-to-body="true"
-    :close-on-click-modal="true"
-    class="failed-images-dialog"
-    @update:model-value="modal.close"
+  <Dialog
+    v-model:open="visible"
+    :width="isCompact ? '95vw' : 760"
+    body-class="flex min-h-0 flex-col gap-3 px-5 pb-4 pt-2"
   >
-    <template #header>
-      <div class="fid-header">
-        <div class="fid-header-left">
-          <span class="fid-title">{{ dialogTitle }}</span>
-          <el-tag size="small" type="info" class="fid-count-tag">{{ filteredFailed.length }}</el-tag>
-        </div>
-        <div class="fid-header-right">
-          <el-dropdown v-if="pluginGroups.length > 1" trigger="click" @command="onPluginFilterCommand">
-            <el-button size="small" plain>
-              {{ pluginFilterLabel }}
-              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="">{{ t("gallery.filterAll") }}</el-dropdown-item>
-                <el-dropdown-item v-for="g in pluginGroups" :key="g.pluginId" :command="g.pluginId">
-                  {{ getFailedPluginName(g.pluginId) }} ({{ g.count }})
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-button v-if="hasPendingInFilter" size="small" :icon="CircleClose" @click="handleCancelAll">
-            {{ t("header.failedImagesCancelWaiting") }}
-          </el-button>
-          <el-button
-            v-if="hasIdleInFilter"
-            size="small"
-            type="primary"
-            :icon="Refresh"
-            :loading="bulkRetryLoading"
-            @click="handleRetryAll"
-          >
-            {{ t("header.failedImagesRetryAll") }}
-          </el-button>
-          <el-button
-            v-if="hasIdleInFilter"
-            size="small"
-            type="danger"
-            plain
-            :icon="Delete"
-            :loading="bulkDeleteLoading"
-            @click="handleDeleteAll"
-          >
-            {{ t("header.failedImagesDeleteAll") }}
-          </el-button>
-        </div>
-      </div>
+    <template #title>
+      <span class="inline-flex items-center gap-2">
+        {{ dialogTitle }}
+        <Tag size="sm">{{ filteredFailed.length }}</Tag>
+      </span>
     </template>
 
-    <el-skeleton v-if="loading" :rows="5" animated />
-    <el-empty v-else-if="baseList.length === 0" :description="t('tasks.allFailedImagesEmpty')" />
-    <el-empty v-else-if="filteredFailed.length === 0" :description="t('tasks.failedFilterEmpty')" />
-    <div v-else v-bind="containerProps" class="fid-list">
-      <div v-bind="wrapperProps">
-        <div v-for="{ data: failed } in virtualList" :key="failed.id" class="fid-item-wrap">
-          <div class="fid-item">
-            <el-image :src="failed.url" fit="contain" class="fid-thumb" :preview-src-list="[failed.url]">
-              <template #placeholder>
-                <div class="fid-thumb-slot">
-                  <el-icon class="is-loading"><Loading /></el-icon>
-                </div>
-              </template>
-              <template #error>
-                <div class="fid-thumb-slot fid-thumb-err">
-                  <el-icon><Picture /></el-icon>
-                </div>
-              </template>
-            </el-image>
+    <!-- 工具条：来源过滤 + 批量操作 -->
+    <div v-if="baseList.length > 0" class="flex flex-wrap items-center gap-2">
+      <DropdownMenu v-if="pluginGroups.length > 1">
+        <DropdownMenuTrigger as-child>
+          <Button size="sm">
+            {{ pluginFilterLabel }}
+            <ChevronDown class="opacity-70" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <MenuItem @select="filterPluginId = null">{{ t("gallery.filterAll") }}</MenuItem>
+          <MenuItem v-for="g in pluginGroups" :key="g.pluginId" @select="filterPluginId = g.pluginId || null">
+            <span class="min-w-0 flex-1 truncate">{{ getFailedPluginName(g.pluginId) }}</span>
+            <span class="ml-3 text-[12px] tabular-nums text-kb-fg-subtle">{{ g.count }}</span>
+          </MenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <span class="flex-1" />
+      <Button v-if="hasPendingInFilter" size="sm" @click="handleCancelAll">
+        <CircleX />
+        {{ t("header.failedImagesCancelWaiting") }}
+      </Button>
+      <Button v-if="hasIdleInFilter" size="sm" variant="primary" :disabled="bulkRetryLoading" @click="handleRetryAll">
+        <Spinner v-if="bulkRetryLoading" :size="14" />
+        <RotateCw v-else />
+        {{ t("header.failedImagesRetryAll") }}
+      </Button>
+      <Button
+        v-if="hasIdleInFilter"
+        size="sm"
+        variant="ghost-danger"
+        :disabled="bulkDeleteLoading"
+        @click="handleDeleteAll"
+      >
+        <Spinner v-if="bulkDeleteLoading" :size="14" />
+        <Trash2 v-else />
+        {{ t("header.failedImagesDeleteAll") }}
+      </Button>
+    </div>
 
-            <div class="fid-info">
-              <div class="fid-info-head">
-                <div class="fid-tags">
-                  <el-tag size="small" type="warning">{{ getFailedPluginName(failed.pluginId) }}</el-tag>
-                  <el-tag v-if="itemStateTag(failed)" size="small" :type="itemStateTagType(failed)">
+    <div v-if="loading" class="flex flex-col gap-2.5">
+      <Skeleton v-for="i in 4" :key="i" class="h-[118px]" />
+    </div>
+    <Empty v-else-if="baseList.length === 0" :description="t('tasks.allFailedImagesEmpty')">
+      <template #icon><CircleCheck /></template>
+    </Empty>
+    <Empty v-else-if="filteredFailed.length === 0" :description="t('tasks.failedFilterEmpty')">
+      <template #icon><Funnel /></template>
+    </Empty>
+    <div v-else v-bind="containerProps" class="h-[min(480px,60vh)] overflow-y-auto">
+      <div v-bind="wrapperProps">
+        <div v-for="{ data: failed } in virtualList" :key="failed.id" class="box-border h-[140px] pb-2.5">
+          <div
+            class="relative box-border flex h-full gap-3 overflow-hidden rounded-kb-lg border border-solid border-kb-line bg-kb-surface-raised px-3 py-2.5"
+          >
+            <!-- 缩略图：点开放大看（失败图多半加载不出来，所以只是个占位 + 看图入口） -->
+            <button
+              type="button"
+              class="relative grid h-full w-20 shrink-0 cursor-zoom-in place-items-center overflow-hidden rounded-kb-md border-0 bg-kb-fill p-0 text-kb-fg-subtle"
+              :aria-label="t('gallery.zoomIn')"
+              @click="previewUrl = failed.url"
+            >
+              <ImageOff v-if="thumbState[failed.id] === 'error'" class="size-5" />
+              <Spinner v-else-if="thumbState[failed.id] !== 'loaded'" :size="16" class="absolute" />
+              <img
+                v-show="thumbState[failed.id] !== 'error'"
+                :src="failed.url"
+                alt=""
+                loading="lazy"
+                class="size-full object-contain"
+                @load="thumbState[failed.id] = 'loaded'"
+                @error="thumbState[failed.id] = 'error'"
+              />
+            </button>
+
+            <div class="flex min-w-0 flex-1 flex-col justify-between gap-1">
+              <div class="flex items-center justify-between gap-1.5">
+                <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <Tag size="sm">{{ getFailedPluginName(failed.pluginId) }}</Tag>
+                  <Tag v-if="itemStateTag(failed)" size="sm" :tone="itemStateTagTone(failed)">
                     {{ itemStateTag(failed) }}
-                  </el-tag>
-                  <span class="fid-time">{{ formatFailedTime(failed.createdAt) }}</span>
+                  </Tag>
+                  <span class="whitespace-nowrap text-[11.5px] text-kb-fg-subtle">
+                    {{ formatFailedTime(failed.createdAt) }}
+                  </span>
                 </div>
-                <el-button link size="small" type="primary" @click="openTaskDetail(failed.taskId)">
+                <Button size="sm" variant="ghost" class="shrink-0" @click="openTaskDetail(failed.taskId)">
                   {{ t("tasks.viewTask") }}
-                </el-button>
+                  <ArrowUpRight />
+                </Button>
               </div>
 
               <a
-                class="fid-url"
+                class="block truncate text-[11.5px] text-kb-fg-muted no-underline hover:text-kb-fg hover:underline"
                 :href="failed.url"
                 target="_blank"
                 rel="noopener"
+                :title="failed.url"
                 @click.prevent="openFailedUrl(failed.url)"
               >
                 {{ failed.url }}
               </a>
 
-              <div class="fid-error-row">
-                <el-icon class="fid-error-icon"><WarningFilled /></el-icon>
-                <span class="fid-error-text">{{ failed.lastError || "-" }}</span>
-                <el-button
-                  text
-                  size="small"
-                  class="fid-copy-btn"
-                  :title="t('tasks.copyErrorDetails')"
-                  @click="copyFailedError(failed)"
-                >
-                  <el-icon><CopyDocument /></el-icon>
-                </el-button>
+              <div class="flex min-w-0 items-start gap-1.5">
+                <TriangleAlert class="mt-px size-3.5 shrink-0 text-kb-danger" />
+                <span class="line-clamp-2 min-w-0 flex-1 text-[12px] leading-[1.4] text-kb-fg-muted">
+                  {{ failed.lastError || "-" }}
+                </span>
+                <Tooltip :content="t('tasks.copyErrorDetails')">
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    :aria-label="t('tasks.copyErrorDetails')"
+                    @click="copyFailedError(failed)"
+                  >
+                    <Copy />
+                  </Button>
+                </Tooltip>
               </div>
 
-              <div class="fid-actions">
+              <div class="flex flex-wrap gap-1.5">
                 <template v-if="getItemState(failed).isActive && getItemState(failed).state === 'preparing'">
-                  <el-button size="small" @click="handleCancelRetry(failed.id)">
+                  <Button size="sm" @click="handleCancelRetry(failed.id)">
                     {{ t("tasks.cancelRetry") }}
-                  </el-button>
+                  </Button>
                 </template>
                 <template v-else-if="!getItemState(failed).isActive">
-                  <el-button
-                    type="primary"
-                    size="small"
-                    :loading="getItemState(failed).isActive"
-                    @click="handleRetryFailedImage(failed)"
-                  >
+                  <Button size="sm" variant="primary" @click="handleRetryFailedImage(failed)">
                     {{ t("tasks.retryDownload") }}
-                  </el-button>
-                  <el-button type="danger" plain size="small" @click="handleDeleteFailedImage(failed.id)">
+                  </Button>
+                  <Button size="sm" variant="ghost-danger" @click="handleDeleteFailedImage(failed.id)">
                     {{ t("tasks.deleteFailedRecord") }}
-                  </el-button>
+                  </Button>
                 </template>
               </div>
             </div>
 
-            <!-- Download progress bar overlay -->
+            <!-- 下载进度：卡片底边一条 -->
             <div
               v-if="getItemState(failed).isActive && getItemState(failed).state !== 'waiting'"
-              class="fid-progress-bar"
-              :class="getItemState(failed).progress != null ? 'fid-progress-bar--det' : 'fid-progress-bar--indet'"
-              :style="
-                getItemState(failed).progress != null ? { width: getItemState(failed).progress + '%' } : undefined
-              "
-            />
+              class="pointer-events-none absolute inset-x-0 bottom-0"
+            >
+              <Progress
+                :value="getItemState(failed).progress ?? null"
+                :height="3"
+                class="!rounded-none !bg-transparent"
+              />
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </el-dialog>
+  </Dialog>
+
+  <!-- 放大看图 -->
+  <Dialog
+    :open="previewUrl !== null"
+    :width="'min(900px, 92vw)'"
+    body-class="grid place-items-center p-3"
+    @update:open="(v: boolean) => !v && (previewUrl = null)"
+  >
+    <template #title>
+      <span class="block truncate text-[13px] font-500 text-kb-fg-muted">{{ previewUrl }}</span>
+    </template>
+    <img v-if="previewUrl" :src="previewUrl" alt="" class="max-h-[72vh] max-w-full rounded-kb-md object-contain" />
+  </Dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useVirtualList } from "@vueuse/core";
 import { useRouter } from "vue-router";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import {
-  ArrowDown,
-  CircleClose,
-  CopyDocument,
-  Delete,
-  Loading,
-  Picture,
-  Refresh,
-  WarningFilled,
-} from "@kabegame/element-plus-icons";
+  ArrowUpRight,
+  ChevronDown,
+  CircleCheck,
+  CircleX,
+  Copy,
+  Funnel,
+  ImageOff,
+  RotateCw,
+  Trash2,
+  TriangleAlert,
+} from "@lucide/vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useI18n } from "@kabegame/i18n";
@@ -177,9 +203,23 @@ import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useDownloadStateStore } from "@/stores/downloadState";
 import type { TaskFailedImage } from "@/types/image";
-import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { openExternalLink } from "@/utils/openExternalLink";
+import { messageBox } from "@/components/ui/messageBox";
+import {
+  Button,
+  Dialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  Empty,
+  MenuItem,
+  Progress,
+  Skeleton,
+  Spinner,
+  Tag,
+  Tooltip,
+} from "@/components/ui";
 
 interface Props {
   modelValue?: boolean;
@@ -201,15 +241,23 @@ const downloadStore = useDownloadStateStore();
 const uiStore = useUiStore();
 
 const isCompact = computed(() => uiStore.isCompact);
-const dialogWidth = computed(() => (isCompact.value ? "95vw" : "min(760px, 92vw)"));
-const dialogStyle = computed(() => (isCompact.value ? { marginTop: "2vh" } : undefined));
 
-const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+// 开关：v-model 与 ref.open() 两种打开方式；关掉时回写 v-model。层级与 Android 返回键由 Dialog 接。
+const visible = ref(false);
 watch(
   () => props.modelValue,
-  (v) => (v ? modal.open() : modal.close()),
+  (v) => {
+    if (v !== undefined) visible.value = v;
+  },
   { immediate: true },
 );
+watch(visible, (v) => {
+  if (!v) emit("update:modelValue", false);
+});
+
+/** 缩略图加载状态（按失败记录 id）；放大看图的地址 */
+const thumbState = reactive<Record<number, "loaded" | "error">>({});
+const previewUrl = ref<string | null>(null);
 
 const activeTaskId = ref<string | undefined>(undefined);
 const effectiveTaskId = computed(() => activeTaskId.value ?? props.taskId);
@@ -221,7 +269,7 @@ const setTaskId = (taskId?: string) => {
 
 // Imperative API used by refs; scope is set separately via setTaskId().
 const open = () => {
-  modal.open();
+  visible.value = true;
 };
 
 defineExpose({ open, setTaskId });
@@ -284,23 +332,19 @@ const itemStateTag = (item: TaskFailedImage) => {
   return labels[s.state] ?? s.state;
 };
 
-const itemStateTagType = (item: TaskFailedImage): "info" | "warning" | "success" | "danger" => {
+const itemStateTagTone = (item: TaskFailedImage): "neutral" | "warning" | "success" | "danger" => {
   const s = getItemState(item);
-  if (!s.isActive) return "info";
+  if (!s.isActive) return "neutral";
   if (s.state === "failed") return "danger";
   if (s.state === "completed" || s.state === "processing") return "success";
   if (s.state === "downloading" || s.state === "preparing") return "warning";
-  return "info";
+  return "neutral";
 };
 
 const hasIdleInFilter = computed(() => filteredFailed.value.some((f) => !getItemState(f).isActive));
 const hasPendingInFilter = computed(() =>
   filteredFailed.value.some((f) => downloadStore.getByFailedImageId(f.id)?.state === "preparing"),
 );
-
-function onPluginFilterCommand(cmd: string) {
-  filterPluginId.value = cmd === "" ? null : cmd || null;
-}
 
 const FAILED_ITEM_HEIGHT = 140;
 const {
@@ -313,7 +357,7 @@ const {
 });
 
 const openTaskDetail = async (taskId: string) => {
-  modal.close();
+  visible.value = false;
   await router.push({ name: "TaskDetail", params: { id: taskId } });
 };
 
@@ -321,7 +365,7 @@ const openFailedUrl = async (url: string) => {
   try {
     await openExternalLink(url);
   } catch {
-    ElMessage.error(t("common.openUrlFailed"));
+    kameMessage.error(t("common.openUrlFailed"));
   }
 };
 
@@ -351,10 +395,10 @@ const copyFailedError = async (failed: TaskFailedImage) => {
     } else {
       await navigator.clipboard.writeText(text);
     }
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (error) {
     console.error("复制失败:", error);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 };
 
@@ -362,10 +406,10 @@ const handleRetryFailedImage = async (failed: TaskFailedImage) => {
   if (getItemState(failed).isActive) return;
   try {
     await failedImagesStore.retryFailed(failed.id);
-    ElMessage.success(t("tasks.retryDownloadSent"));
+    kameMessage.success(t("tasks.retryDownloadSent"));
   } catch (error) {
     console.error("重试下载失败:", error);
-    ElMessage.error(t("tasks.retryDownloadFailed"));
+    kameMessage.error(t("tasks.retryDownloadFailed"));
   }
 };
 
@@ -374,7 +418,7 @@ const handleCancelRetry = async (failedId: number) => {
     await failedImagesStore.cancelRetry(failedId);
   } catch (e) {
     console.error(e);
-    ElMessage.error(t("tasks.cancelRetryFailed"));
+    kameMessage.error(t("tasks.cancelRetryFailed"));
   }
 };
 
@@ -384,10 +428,10 @@ const handleRetryAll = async () => {
   bulkRetryLoading.value = true;
   try {
     await failedImagesStore.retryMany(idleItems.map((f) => f.id));
-    ElMessage.success(t("tasks.retryAllSent"));
+    kameMessage.success(t("tasks.retryAllSent"));
   } catch (error) {
     console.error(error);
-    ElMessage.error(t("tasks.retryDownloadFailed"));
+    kameMessage.error(t("tasks.retryDownloadFailed"));
   } finally {
     bulkRetryLoading.value = false;
   }
@@ -402,7 +446,7 @@ const handleCancelAll = async () => {
     await failedImagesStore.cancelRetryMany(preparingItems.map((f) => f.id));
   } catch (e) {
     console.error(e);
-    ElMessage.error(t("tasks.cancelRetryFailed"));
+    kameMessage.error(t("tasks.cancelRetryFailed"));
   }
 };
 
@@ -410,21 +454,19 @@ const handleDeleteAll = async () => {
   const idleItems = filteredFailed.value.filter((f) => !getItemState(f).isActive);
   if (!idleItems.length) return;
   try {
-    await ElMessageBox.confirm(
-      t("tasks.deleteAllConfirmMessage", { n: idleItems.length }),
-      t("tasks.deleteAllConfirm"),
-      { type: "warning" },
-    );
+    await messageBox.confirm(t("tasks.deleteAllConfirmMessage", { n: idleItems.length }), t("tasks.deleteAllConfirm"), {
+      type: "warning",
+    });
   } catch {
     return;
   }
   bulkDeleteLoading.value = true;
   try {
     await failedImagesStore.deleteMany(idleItems.map((f) => f.id));
-    ElMessage.success(t("tasks.deleteAllSuccess"));
+    kameMessage.success(t("tasks.deleteAllSuccess"));
   } catch (e) {
     console.error(e);
-    ElMessage.error(t("tasks.deleteFailedRecordFailed"));
+    kameMessage.error(t("tasks.deleteFailedRecordFailed"));
   } finally {
     bulkDeleteLoading.value = false;
   }
@@ -433,213 +475,10 @@ const handleDeleteAll = async () => {
 const handleDeleteFailedImage = async (failedId: number) => {
   try {
     await failedImagesStore.deleteFailed(failedId);
-    ElMessage.success(t("tasks.deleteFailedRecordSuccess"));
+    kameMessage.success(t("tasks.deleteFailedRecordSuccess"));
   } catch (error) {
     console.error("删除失败记录失败:", error);
-    ElMessage.error(t("tasks.deleteFailedRecordFailed"));
+    kameMessage.error(t("tasks.deleteFailedRecordFailed"));
   }
 };
 </script>
-
-<style scoped lang="scss">
-.fid-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.fid-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.fid-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.fid-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  white-space: nowrap;
-}
-
-.fid-count-tag {
-  font-size: 11px;
-}
-
-.fid-list {
-  /* 小屏（Android/矮窗口）随视口收缩，避免对话框超出屏幕 */
-  height: min(480px, 60vh);
-  overflow-y: auto;
-}
-
-.fid-item-wrap {
-  height: 140px;
-  padding-bottom: 10px;
-  box-sizing: border-box;
-}
-
-.fid-item {
-  position: relative;
-  display: flex;
-  gap: 10px;
-  height: 100%;
-  padding: 10px 12px;
-  box-sizing: border-box;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
-  background: var(--el-bg-color-overlay);
-  overflow: hidden;
-}
-
-/* thumbnail */
-.fid-thumb {
-  flex-shrink: 0;
-  width: 80px;
-  height: 100%;
-  border-radius: 6px;
-  overflow: hidden;
-  cursor: pointer;
-}
-
-.fid-thumb-slot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-secondary);
-  font-size: 20px;
-}
-
-.fid-thumb-err {
-  font-size: 22px;
-}
-
-/* info column */
-.fid-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  justify-content: space-between;
-}
-
-.fid-info-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.fid-tags {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.fid-time {
-  color: var(--el-text-color-secondary);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.fid-url {
-  display: block;
-  font-size: 11px;
-  color: var(--el-color-primary);
-  font-style: italic;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-decoration: none;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.fid-error-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.fid-error-icon {
-  flex-shrink: 0;
-  color: #ef4444;
-  font-size: 14px;
-  margin-top: 1px;
-}
-
-.fid-error-text {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--el-text-color-secondary);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.fid-copy-btn {
-  flex-shrink: 0;
-  color: var(--el-text-color-secondary);
-
-  &:hover {
-    color: var(--el-color-primary);
-  }
-}
-
-.fid-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-/* progress bar — absolute overlay at card bottom */
-.fid-progress-bar {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  height: 3px;
-  border-radius: 0 0 10px 10px;
-  background-color: var(--el-color-primary);
-  pointer-events: none;
-}
-
-.fid-progress-bar--det {
-  transition: width 0.3s ease;
-}
-
-.fid-progress-bar--indet {
-  width: 40%;
-  animation: fid-shimmer 1.4s infinite ease-in-out;
-}
-
-@keyframes fid-shimmer {
-  0% {
-    left: -40%;
-  }
-  100% {
-    left: 100%;
-  }
-}
-</style>

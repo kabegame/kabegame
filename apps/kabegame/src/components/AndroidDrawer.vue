@@ -22,11 +22,11 @@
                   v-if="showCloseButton"
                   type="button"
                   class="android-drawer-close"
-                  aria-label="关闭"
+                  :aria-label="$t('common.close')"
                   @click.stop.prevent="handleCloseClick"
                   @touchend.stop.prevent="handleCloseClick"
                 >
-                  <el-icon><Close /></el-icon>
+                  <X class="size-5" />
                 </button>
               </header>
               <div class="android-drawer-body">
@@ -42,7 +42,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
-import { Close } from "@kabegame/element-plus-icons";
+import { X } from "@lucide/vue";
 import { useModal } from "../composables/useModal";
 
 defineOptions({ inheritAttrs: false });
@@ -249,7 +249,7 @@ onUnmounted(() => {
 .android-drawer-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--kb-overlay);
   transition: opacity 0.15s ease-out;
   pointer-events: auto;
 }
@@ -261,8 +261,9 @@ onUnmounted(() => {
   width: 100%;
   max-width: 100%;
   height: 100%;
-  background: var(--anime-bg-card, #1e1e1e);
-  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.25);
+  background: var(--kb-surface-raised);
+  color: var(--kb-fg);
+  box-shadow: var(--kb-shadow-lg);
   will-change: transform;
   overflow: hidden;
   display: flex;
@@ -279,11 +280,11 @@ onUnmounted(() => {
 
 .android-drawer-header {
   flex-shrink: 0;
-  padding-top: calc(16px + var(--sat, env(safe-area-inset-top, 0px)));
-  padding-right: 12px;
-  padding-bottom: 16px;
+  padding-top: calc(12px + var(--sat, env(safe-area-inset-top, 0px)));
+  padding-right: 10px;
+  padding-bottom: 12px;
   padding-left: 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--kb-line);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -304,9 +305,9 @@ onUnmounted(() => {
   justify-content: center;
   padding: 0;
   border: none;
-  border-radius: 50%;
+  border-radius: var(--kb-radius-md);
   background: transparent;
-  color: var(--el-text-color-regular, rgba(255, 255, 255, 0.85));
+  color: var(--kb-fg-muted);
   cursor: pointer;
   transition:
     background 0.15s,
@@ -316,14 +317,11 @@ onUnmounted(() => {
   z-index: 1;
 }
 .android-drawer-close:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--el-text-color-primary, #fff);
+  background: var(--kb-hover);
+  color: var(--kb-fg);
 }
 .android-drawer-close:active {
-  background: rgba(255, 255, 255, 0.12);
-}
-.android-drawer-close .el-icon {
-  font-size: 20px;
+  background: var(--kb-pressed);
 }
 
 .android-drawer-body {

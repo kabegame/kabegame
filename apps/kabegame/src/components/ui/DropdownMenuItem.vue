@@ -1,15 +1,26 @@
 <template>
   <DropdownMenuItem
     :disabled="disabled"
-    class="relative box-border flex h-8 cursor-pointer select-none items-center gap-2.5 rounded-kb-md px-2.5 text-[13px] text-kb-fg outline-none transition-colors duration-100 data-[highlighted]:bg-kb-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-kb-fg-muted"
+    class="kb-menu-item"
+    :class="danger ? 'text-kb-danger [&_svg]:text-kb-danger' : ''"
   >
     <slot />
+    <span v-if="shortcut" class="ml-auto pl-4 text-[11.5px] tracking-wide text-kb-fg-subtle">{{ shortcut }}</span>
   </DropdownMenuItem>
 </template>
 
 <script setup lang="ts">
-/** 菜单项：图标放在文字前（自动定尺寸与次要色），选中用 @select。 */
+/**
+ * 菜单项：图标放在文字前（自动定尺寸与次要色），选中用 @select。
+ * 下拉菜单与右键菜单共用（Reka 的菜单项不依赖根组件类型），从 "@/components/ui" 也可以按 MenuItem 导入。
+ */
 import { DropdownMenuItem } from "reka-ui";
 
-defineProps<{ disabled?: boolean }>();
+defineProps<{
+  disabled?: boolean;
+  /** 危险操作（删除）：文字与图标用危险色 */
+  danger?: boolean;
+  /** 右侧的快捷键提示 */
+  shortcut?: string;
+}>();
 </script>

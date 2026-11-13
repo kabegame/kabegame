@@ -21,11 +21,9 @@ vi.mock("@kabegame/i18n", () => ({
   resolveManifestText: (value: unknown) => String(value ?? ""),
 }));
 
-// 面板外壳换成只渲染默认插槽的桩，其余全局组件用最小桩
+// 面板外壳换成只渲染默认插槽的桩
 const stubs = {
   CollapsibleDrawerPanel: { template: "<section><slot name='title' /><slot /></section>" },
-  ElIcon: { template: "<i><slot /></i>" },
-  ElButton: { template: "<button><slot /></button>" },
 };
 
 function mountPanel(palette: string | null | undefined) {

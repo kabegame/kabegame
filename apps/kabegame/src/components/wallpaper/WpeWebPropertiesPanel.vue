@@ -8,59 +8,53 @@
   >
     <template #title>{{ t("gallery.wpePropsTitle") }}</template>
     <template #trailing>
-      <el-button v-if="anyModified" text size="small" class="!px-2" @click="resetAll">
-        <el-icon class="mr-1"><RefreshLeft /></el-icon>
+      <Button v-if="anyModified" variant="ghost" size="sm" @click="resetAll">
+        <RotateCcw />
         <span>{{ t("gallery.wpePropsResetAll") }}</span>
-      </el-button>
+      </Button>
     </template>
 
     <!-- 外框 / 标题栏由 CollapsibleDrawerPanel 提供；视觉对齐 ImageNativeMetadataPanel：分组卡片 + 卡片内无边框条目 -->
-    <div class="kb-selectable flex min-h-0 flex-auto flex-col gap-3 overflow-y-auto px-4 py-3.5 [scrollbar-width:none]">
+    <div
+      class="kb-selectable flex min-h-0 flex-auto flex-col gap-3 overflow-y-auto px-3 pb-3 pt-0.5 [scrollbar-width:none]"
+    >
       <!-- 恢复默认封面：设过封面才出现，作者属性为空时也在（暂停、设为壁纸封面、清空脚本存储在预览的右键菜单与工具条里） -->
       <section v-if="canRestoreCover" :class="CARD_CLASS" data-testid="wpe-controls">
-        <div class="px-3 py-2.5">
-          <button
-            type="button"
+        <div class="p-2">
+          <Button
             data-testid="wpe-restore-cover"
-            :class="[ACTION_BTN, ACTION_GHOST, 'w-full', coverBusy && 'pointer-events-none opacity-50']"
+            class="w-full"
+            :class="coverBusy && 'pointer-events-none opacity-50'"
             :aria-busy="coverBusy"
             @click="restoreCover"
           >
-            <el-icon class="text-[14px]">
-              <Loading v-if="coverBusy" class="is-loading" />
-              <RefreshLeft v-else />
-            </el-icon>
+            <Spinner v-if="coverBusy" :size="16" />
+            <RotateCcw v-else />
             <span>{{ t("gallery.wpeRestoreCover") }}</span>
-          </button>
+          </Button>
         </div>
       </section>
 
-      <div
-        v-if="loading && !view"
-        class="flex items-center gap-2.5 px-0.5 py-1 text-[13px] text-[var(--anime-text-secondary)]"
-      >
-        <el-icon class="is-loading text-[var(--anime-primary)]"><Loading /></el-icon>
+      <div v-if="loading && !view" class="flex items-center gap-2.5 px-0.5 py-1 text-[13px] text-kb-fg-muted">
+        <Spinner :size="16" />
         <span>{{ t("gallery.nativeMetaLoading") }}</span>
       </div>
 
       <div
         v-else-if="error && !view"
-        class="flex flex-col items-center gap-3 px-4 py-8 text-center text-[12.5px] text-[var(--anime-text-secondary)]"
+        class="flex flex-col items-center gap-3 px-4 py-8 text-center text-[12.5px] text-kb-fg-muted"
         role="alert"
       >
         <span>{{ t("gallery.wpePropsLoadFailed") }}</span>
         <code
-          class="max-w-full break-all rounded-[7px] border border-solid border-[color-mix(in_srgb,var(--anime-danger)_25%,transparent)] bg-[color-mix(in_srgb,var(--anime-danger)_8%,transparent)] px-2.5 py-1.5 text-[11px] text-[var(--anime-danger)]"
+          class="max-w-full break-all rounded-kb-sm bg-kb-fill-light px-2.5 py-1.5 font-mono text-[11px] text-kb-danger"
         >
           {{ error }}
         </code>
-        <el-button type="primary" size="small" @click="reload">{{ t("common.refresh") }}</el-button>
+        <Button variant="primary" size="sm" @click="reload">{{ t("common.refresh") }}</Button>
       </div>
 
-      <div
-        v-else-if="view && !sections.length"
-        class="px-4 py-8 text-center text-[12.5px] text-[var(--anime-text-muted)]"
-      >
+      <div v-else-if="view && !sections.length" class="px-4 py-8 text-center text-[12.5px] text-kb-fg-subtle">
         {{ t("gallery.wpePropsEmpty") }}
       </div>
 
@@ -68,60 +62,56 @@
         <button
           v-if="section.group"
           type="button"
-          class="flex w-full cursor-pointer items-center gap-2 border-0 bg-[linear-gradient(135deg,color-mix(in_srgb,var(--anime-primary)_9%,transparent),color-mix(in_srgb,var(--anime-secondary)_9%,transparent))] px-3 py-2.5 text-left text-[var(--anime-text-primary)] hover:bg-[linear-gradient(135deg,color-mix(in_srgb,var(--anime-primary)_14%,transparent),color-mix(in_srgb,var(--anime-secondary)_14%,transparent))]"
+          class="flex w-full cursor-pointer items-center gap-2 border-0 bg-kb-fill-lighter px-3 py-2.5 text-left text-kb-fg [font:inherit] outline-none hover:bg-kb-fill-light focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-kb-ring"
+          :class="{ 'border-b border-solid border-kb-line': section.open }"
           :aria-expanded="section.open"
           @click="toggleGroup(section.key)"
         >
-          <el-icon
-            class="flex-none text-[var(--anime-text-secondary)] transition-transform duration-150"
+          <ChevronRight
+            class="size-4 flex-none text-kb-fg-subtle transition-transform duration-150"
             :class="{ 'rotate-90': section.open }"
-          >
-            <ArrowRight />
-          </el-icon>
-          <span class="min-w-0 flex-1 truncate text-[13.5px] font-semibold" :title="wpeLabelText(section.group.label)">
+          />
+          <span class="min-w-0 flex-1 truncate text-[13px] font-600" :title="wpeLabelText(section.group.label)">
             {{ wpeLabelText(section.group.label) }}
           </span>
           <span
             v-if="section.modifiedCount"
-            class="h-1.5 w-1.5 flex-none rounded-full bg-[var(--anime-primary)]"
+            class="size-1.5 flex-none rounded-full bg-kb-accent"
             :title="t('gallery.wpePropsModified')"
           />
-          <span
-            class="flex-none whitespace-nowrap rounded-[7px] bg-[color-mix(in_srgb,var(--anime-primary)_16%,transparent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--anime-primary-dark)]"
-          >
+          <span class="flex-none whitespace-nowrap text-[11.5px] text-kb-fg-subtle tabular-nums">
             {{ section.fieldCount }}
           </span>
         </button>
 
-        <div v-if="section.open" class="flex flex-col p-1.5">
+        <div v-if="section.open" class="flex flex-col p-1">
           <template v-for="item in section.items" :key="item.key">
             <div
               v-if="item.kind === 'text'"
-              class="wpe-props-html px-2.5 py-2 text-[12px] leading-[1.6] text-[var(--anime-text-secondary)]"
+              class="wpe-props-html px-2.5 py-2 text-[12px] leading-[1.6] text-kb-fg-muted"
               v-html="sanitizeWpeLabel(item.label)"
             />
             <div
               v-else
-              class="flex gap-2 rounded-lg px-2.5 py-2 hover:bg-[color-mix(in_srgb,var(--anime-secondary)_7%,transparent)]"
+              class="flex gap-2 rounded-kb-sm px-2.5 py-2 hover:bg-kb-hover"
               :class="isInline(item) ? 'items-center' : 'flex-col'"
             >
               <div class="flex min-w-0 flex-1 items-center gap-1">
                 <span
-                  class="wpe-props-html min-w-0 flex-1 text-[13px] leading-[1.5] text-[var(--anime-text-primary)]"
+                  class="wpe-props-html min-w-0 flex-1 text-[13px] leading-[1.5] text-kb-fg"
                   v-html="sanitizeWpeLabel(item.label)"
                 />
-                <el-button
-                  v-if="isModified(item)"
-                  text
-                  circle
-                  size="small"
-                  class="flex-none !text-[var(--anime-text-secondary)] hover:!text-[var(--anime-primary-dark)]"
-                  :title="t('gallery.wpePropsReset')"
-                  :aria-label="t('gallery.wpePropsReset')"
-                  @click="reset(item.key)"
-                >
-                  <el-icon><RefreshLeft /></el-icon>
-                </el-button>
+                <Tooltip v-if="isModified(item)" :content="t('gallery.wpePropsReset')">
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    class="flex-none"
+                    :aria-label="t('gallery.wpePropsReset')"
+                    @click="reset(item.key)"
+                  >
+                    <RotateCcw />
+                  </Button>
+                </Tooltip>
               </div>
               <div :class="isInline(item) ? 'flex flex-none items-center' : 'min-w-0'">
                 <WpePropertyField
@@ -141,14 +131,15 @@
 <script setup lang="ts">
 import { computed, reactive, ref, toRef, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage } from "@kabegame/element-plus";
-import { ArrowRight, Loading, RefreshLeft } from "@kabegame/element-plus-icons";
+import { ChevronRight, RotateCcw } from "@lucide/vue";
+import { Button, Spinner, Tooltip } from "@/components/ui";
 import { invoke } from "@/api";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { hasWpeUserProperties, isWpeSceneType } from "@/utils/mediaMime";
 import { evaluateWpeCondition, sanitizeWpeLabel, wpeLabelText } from "@/utils/wpeProperties";
 import WpePropertyField from "./WpePropertyField.vue";
+import { toast } from "@/components/ui/toast";
 
 /**
  * 网页与场景壁纸共用的属性面板（预览详情与设置页）。`imageType` 传图片的 `type`：场景壁纸（`x-wpe/scene`）不显示
@@ -198,16 +189,8 @@ type Section = {
   modifiedCount: number;
 };
 
-/** 分组卡片与控制卡片共用的外框 */
-const CARD_CLASS =
-  "flex-none overflow-hidden rounded-xl border border-solid border-[color-mix(in_srgb,var(--anime-primary)_28%,transparent)] bg-[color-mix(in_srgb,var(--anime-bg-card)_50%,transparent)]";
-
-/** 控制卡片内的操作按钮：图标 + 文案，整行宽；视觉与卡片同一套粉紫 token */
-const ACTION_BTN =
-  "inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-[12.5px] font-medium leading-none outline-none cursor-pointer select-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)]";
-/** 恢复默认封面：紫色描边幽灵按钮 */
-const ACTION_GHOST =
-  "border-solid border-[color-mix(in_srgb,var(--anime-secondary)_28%,transparent)] bg-transparent text-[var(--anime-secondary-dark)] hover:border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)] hover:bg-[color-mix(in_srgb,var(--anime-secondary)_12%,transparent)] active:bg-[color-mix(in_srgb,var(--anime-secondary)_18%,transparent)]";
+/** 分组卡片与控制卡片共用的外框：中性细线 */
+const CARD_CLASS = "flex-none overflow-hidden rounded-kb-md border border-solid border-kb-line";
 
 const isScene = computed(() => isWpeSceneType(props.imageType ?? undefined));
 
@@ -266,10 +249,10 @@ async function restoreCover() {
   coverBusy.value = true;
   try {
     await invoke<string>("restore_wallpaper_cover", { imageId: props.imageId });
-    ElMessage.success(t("gallery.wpeRestoreCoverDone"));
+    toast.success(t("gallery.wpeRestoreCoverDone"));
     reload();
   } catch (failure) {
-    ElMessage.error(`${t("gallery.wpeRestoreCoverFailed")}: ${String(failure)}`);
+    toast.error(`${t("gallery.wpeRestoreCoverFailed")}: ${String(failure)}`);
   } finally {
     coverBusy.value = false;
   }
@@ -290,7 +273,7 @@ async function restoreCover() {
 }
 
 .wpe-props-html :deep(small) {
-  color: var(--anime-text-muted);
+  color: var(--kb-fg-subtle);
   font-size: 11.5px;
 }
 </style>

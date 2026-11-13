@@ -94,8 +94,7 @@ import { ref, computed, onActivated, onDeactivated, onMounted, onUnmounted, watc
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
@@ -132,6 +131,7 @@ import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGithubIssueUrl, type GithubIssueField } from "@/composables/useGithubIssueUrl";
 import { useTaskRerun } from "@/composables/useTaskRerun";
 import { normalizeTaskEvent, normalizeTaskRow } from "@/services/tasks";
+import { messageBox } from "@/components/ui/messageBox";
 import { kbEvent$, on, pathqlRequest$, usePathqlLooker } from "@/services/kbEvents";
 import { encodeSeg } from "@kabegame/pathql-client";
 import type { CrawlTask } from "@/stores/crawler";
@@ -301,9 +301,9 @@ async function handleOpenTaskWebview() {
   if (!id) return;
   try {
     await invoke("show_crawler_window", { taskId: id });
-    ElMessage.success(t("tasks.openTaskWebviewSuccess"));
+    kameMessage.success(t("tasks.openTaskWebviewSuccess"));
   } catch (error) {
-    ElMessage.error(String(error));
+    kameMessage.error(String(error));
   }
 }
 
@@ -420,10 +420,10 @@ const handleRefresh = async () => {
     taskViewRef.value?.refresh();
     requestTask();
     await failedImagesStore.loadAll();
-    ElMessage.success(t("tasks.refreshSuccess"));
+    kameMessage.success(t("tasks.refreshSuccess"));
   } catch (error) {
     console.error("刷新失败:", error);
-    ElMessage.error(t("tasks.refreshFailed"));
+    kameMessage.error(t("tasks.refreshFailed"));
   } finally {
     isRefreshing.value = false;
   }
@@ -454,10 +454,10 @@ watch(
 const handleStopTask = async () => {
   if (!taskId.value) return;
   try {
-    await ElMessageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
+    await messageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
     await crawlerStore.stopTask(taskId.value);
     // 不写入本地“stopped”伪状态：任务最终状态由后端 tasks-change（TaskChanged）与 DB 同步驱动
-    ElMessage.info(t("tasks.taskStopRequested"));
+    kameMessage.info(t("tasks.taskStopRequested"));
   } catch (error) {
     if (error !== "cancel") {
       console.error("停止任务失败:", error);
@@ -470,24 +470,24 @@ const handleDeleteTask = async () => {
   try {
     const needStop = taskStatusFromStore.value === "running";
     const msg = needStop ? t("tasks.deleteTaskConfirmRunning") : t("tasks.deleteTaskConfirm");
-    await ElMessageBox.confirm(msg, t("tasks.confirmDelete"), { type: "warning" });
+    await messageBox.confirm(msg, t("tasks.confirmDelete"), { type: "warning" });
 
     if (needStop) {
       try {
         await crawlerStore.stopTask(taskId.value);
       } catch (err) {
         console.error("终止任务失败，已取消删除", err);
-        ElMessage.error(t("tasks.stopFailedCancel"));
+        kameMessage.error(t("tasks.stopFailedCancel"));
         return;
       }
     }
 
     await crawlerStore.deleteTask(taskId.value);
-    ElMessage.success(t("tasks.taskDeleted"));
+    kameMessage.success(t("tasks.taskDeleted"));
     router.back();
   } catch (error) {
     if (error !== "cancel") {
-      ElMessage.error(t("tasks.deleteFailed"));
+      kameMessage.error(t("tasks.deleteFailed"));
     }
   }
 };

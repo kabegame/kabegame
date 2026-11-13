@@ -1,21 +1,17 @@
 // @vitest-environment happy-dom
-import { mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it } from "vitest";
-import { h, type Slots } from "vue";
-import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
+import { DOMWrapper, mount } from "@vue/test-utils";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { h } from "vue";
+import KbFilterDropdown from "./FilterDropdown.vue";
+import { kbFilterDropdownContextKey, type KbFilterDropdownOption } from "./filterDropdown";
+
+vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+vi.mock("@/composables/useModalBack", () => ({ useModalBack: vi.fn() }));
 
 /**
- * 组件库的 KbFilterDropdown 没有自己的测试环境，可展开选项（`expandable` + `option-panel` 插槽）
- * 的行为在使用方这边测。弹层换成直接渲染内容的桩，开合经它的 `update:visible` 驱动。
+ * 过滤 chip 下拉的可展开选项（`expandable` + `option-panel` 插槽）与键盘导航。
+ * 面板经 Portal 挂到 body 上，在 document.body 里找；开合经点 chip 驱动。
  */
-const TooltipStub = {
-  name: "ElTooltip",
-  emits: ["update:visible", "show"],
-  setup(_: unknown, { slots }: { slots: Slots }) {
-    return () => h("div", [slots.default?.(), h("div", { class: "popper" }, slots.content?.())]);
-  },
-};
-
 const options: KbFilterDropdownOption[] = [
   { label: "时间", value: "by-time" },
   { label: "颜色", value: "by-color", expandable: true },
@@ -34,40 +30,41 @@ function render(modelValue = "by-time") {
           h("button", { class: "probe-close", type: "button", onClick: close }, "选好了"),
         ]),
     },
-    global: { stubs: { ElTooltip: TooltipStub, ElDialog: true, ElInput: true, ElIcon: true } },
     attachTo: document.body,
   });
   wrappers.push(wrapper);
   return wrapper;
 }
 async function setOpen(wrapper: ReturnType<typeof mount>, open: boolean) {
-  wrapper.findComponent({ name: "ElTooltip" }).vm.$emit("update:visible", open);
+  const chip = wrapper.get('[role="button"]');
+  if ((chip.attributes("aria-expanded") === "true") !== open) await chip.trigger("click");
   await wrapper.vm.$nextTick();
 }
-const optionButton = (wrapper: ReturnType<typeof mount>, index: number) =>
-  wrapper.get(`[data-kb-filter-index="${index}"]`);
+const body = () => new DOMWrapper(document.body);
+const optionButton = (_wrapper: ReturnType<typeof mount>, index: number) =>
+  body().get(`[data-kb-filter-index="${index}"]`);
 
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
 });
 
-describe("KbFilterDropdown 可展开选项", () => {
+describe("FilterDropdown 可展开选项", () => {
   it("点可展开的选项只切换展开：不 emit、不关闭，插槽拿到该选项", async () => {
     const wrapper = render();
     await setOpen(wrapper, true);
-    expect(wrapper.find(".probe").exists()).toBe(false);
+    expect(body().find(".probe").exists()).toBe(false);
     expect(optionButton(wrapper, 1).attributes("aria-expanded")).toBe("false");
     // 不可展开的选项不带 aria-expanded
     expect(optionButton(wrapper, 0).attributes("aria-expanded")).toBeUndefined();
 
     await optionButton(wrapper, 1).trigger("click");
-    expect(wrapper.get(".probe-value").text()).toBe("by-color");
+    expect(body().get(".probe-value").text()).toBe("by-color");
     expect(optionButton(wrapper, 1).attributes("aria-expanded")).toBe("true");
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
     expect(wrapper.emitted("close")).toBeUndefined();
 
     await optionButton(wrapper, 1).trigger("click");
-    expect(wrapper.find(".probe").exists()).toBe(false);
+    expect(body().find(".probe").exists()).toBe(false);
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
   });
 
@@ -75,7 +72,7 @@ describe("KbFilterDropdown 可展开选项", () => {
     const wrapper = render();
     await setOpen(wrapper, true);
     await optionButton(wrapper, 1).trigger("click");
-    const list = wrapper.get('[role="listbox"]').element;
+    const list = body().get('[role="listbox"]').element;
     const children = Array.from(list.children);
     const panelIndex = children.findIndex((el) => el.querySelector(".probe"));
     expect(children[panelIndex - 1]).toBe(optionButton(wrapper, 1).element);
@@ -94,12 +91,12 @@ describe("KbFilterDropdown 可展开选项", () => {
     const wrapper = render();
     await setOpen(wrapper, true);
     await optionButton(wrapper, 1).trigger("click");
-    await wrapper.get(".probe-close").trigger("click");
+    await body().get(".probe-close").trigger("click");
     expect(wrapper.emitted("close")).toHaveLength(1);
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
 
     await setOpen(wrapper, true);
-    expect(wrapper.find(".probe").exists()).toBe(false);
+    expect(body().find(".probe").exists()).toBe(false);
     expect(optionButton(wrapper, 1).attributes("aria-expanded")).toBe("false");
   });
 
@@ -113,16 +110,16 @@ describe("KbFilterDropdown 可展开选项", () => {
   it("键盘：回车与空格在高亮的可展开选项上切换展开", async () => {
     const wrapper = render();
     await setOpen(wrapper, true);
-    const panel = wrapper.get(".el-kb-filter-dropdown__panel");
+    const panel = body().get("[data-kb-filter-panel]");
     await panel.trigger("keydown", { key: "ArrowDown" });
     expect(optionButton(wrapper, 1).classes()).toContain("is-highlighted");
 
     await panel.trigger("keydown", { key: "Enter" });
-    expect(wrapper.find(".probe").exists()).toBe(true);
+    expect(body().find(".probe").exists()).toBe(true);
     await panel.trigger("keydown", { key: " " });
-    expect(wrapper.find(".probe").exists()).toBe(false);
+    expect(body().find(".probe").exists()).toBe(false);
     await panel.trigger("keydown", { key: " " });
-    expect(wrapper.find(".probe").exists()).toBe(true);
+    expect(body().find(".probe").exists()).toBe(true);
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
     expect(wrapper.emitted("close")).toBeUndefined();
 
@@ -139,16 +136,37 @@ describe("KbFilterDropdown 可展开选项", () => {
     await setOpen(wrapper, true);
     await optionButton(wrapper, 1).trigger("mouseenter");
     await optionButton(wrapper, 1).trigger("click");
-    const input = wrapper.get(".probe-input");
+    const input = body().get(".probe-input");
     await input.trigger("keydown", { key: "Enter" });
     await input.trigger("keydown", { key: "ArrowDown" });
     await input.trigger("keydown", { key: " " });
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
     expect(wrapper.emitted("close")).toBeUndefined();
-    expect(wrapper.find(".probe").exists()).toBe(true);
+    expect(body().find(".probe").exists()).toBe(true);
     expect(optionButton(wrapper, 1).classes()).toContain("is-highlighted");
 
     await input.trigger("keydown", { key: "Escape" });
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+});
+
+describe("FilterDropdown 对话框档（紧凑布局）", () => {
+  it("点 chip 打开对话框，面板在对话框里；选中后关闭", async () => {
+    const wrapper = mount(KbFilterDropdown, {
+      props: { modelValue: "by-time", options, chipLabel: "排序", clearable: false },
+      global: { provide: { [kbFilterDropdownContextKey as symbol]: { panelMode: "dialog" } } },
+      attachTo: document.body,
+    });
+    wrappers.push(wrapper);
+    expect(body().find("[data-kb-filter-panel]").exists()).toBe(false);
+    await wrapper.get('[role="button"]').trigger("click");
+    const dialog = body().get('[role="dialog"]');
+    expect(dialog.text()).toContain("排序");
+    expect(dialog.find("[data-kb-filter-panel]").exists()).toBe(true);
+    expect(wrapper.emitted("open")).toHaveLength(1);
+
+    await optionButton(wrapper, 2).trigger("click");
+    expect(wrapper.emitted("update:modelValue")).toEqual([["random"]]);
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
 });

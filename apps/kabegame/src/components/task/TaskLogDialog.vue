@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { invoke, listen } from "../../api";
 import { useModal } from "../../composables/useModal";
 
@@ -115,7 +115,7 @@ const openTaskLog = async (taskId: string) => {
   } catch (error) {
     console.error("加载任务日志失败:", error);
     currentTaskLogs.value = [];
-    ElMessage.error(t("tasks.drawerLoadLogFailed"));
+    kameMessage.error(t("tasks.drawerLoadLogFailed"));
   }
 };
 

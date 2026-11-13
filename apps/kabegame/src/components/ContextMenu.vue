@@ -1,94 +1,85 @@
 <template>
-  <div v-if="visible" class="context-menu-overlay" @click="$emit('close')" @contextmenu.prevent="$emit('close')">
-    <div ref="menuRef" class="context-menu" :style="menuStyle">
-      <!-- 如果提供了 items，渲染菜单项 -->
-      <template v-if="items">
-        <template v-for="(item, index) in items" :key="index">
-          <!-- 分隔符 -->
-          <div v-if="item.type === 'divider'" class="context-menu-divider"></div>
-          <!-- 菜单项 -->
-          <template v-else-if="getItemVisible(item)">
-            <!-- 有子菜单的项 -->
-            <div
-              v-if="item.children && item.children.length > 0"
-              class="context-menu-item submenu-trigger"
-              :class="[item.className, disabledClass(item)]"
-              :aria-disabled="item.disabled || undefined"
-              @mouseenter="handleSubmenuTriggerEnter(index, item)"
-              @mouseleave="handleSubmenuTriggerLeave"
-            >
-              <el-icon v-if="item.icon">
-                <component :is="getIcon(item)!" />
-              </el-icon>
-              <span style="margin-left: 8px">{{ item.label }}</span>
-              <span v-if="item.suffix" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px">
-                {{ item.suffix }}
-              </span>
-              <el-icon class="submenu-arrow">
-                <ArrowRight />
-              </el-icon>
-              <!-- 子菜单 -->
-              <div
-                v-if="activeSubmenuIndex === index && !item.disabled"
-                :ref="
-                  (el) => {
-                    if (el) setSubmenuRef(el as HTMLElement, index);
-                  }
-                "
-                class="submenu"
-                :style="getSubmenuStyle(index)"
-                @mouseenter="handleSubmenuEnter(index)"
-                @mouseleave="handleSubmenuLeave"
-              >
-                <template v-for="(child, childIndex) in item.children" :key="childIndex">
-                  <div
-                    v-if="child.type !== 'divider' && getItemVisible(child)"
-                    class="context-menu-item"
-                    :class="[child.className, disabledClass(child)]"
-                    :aria-disabled="child.disabled || undefined"
-                    @click.stop="handleItemClick(child)"
+  <DropdownMenuRoot :open="visible" :modal="true" @update:open="onOpenChange">
+    <DropdownMenuPortal :to="portalTo">
+      <DropdownMenuContent
+        :reference="anchor"
+        side="bottom"
+        align="start"
+        :side-offset="2"
+        :collision-padding="8"
+        class="context-menu kb-menu-panel"
+        :style="{ zIndex: layerZIndex }"
+        @focus-outside="keepOpenOnForeign"
+        @interact-outside="keepOpenOnForeign"
+        @close-auto-focus="onCloseAutoFocus"
+      >
+        <!-- 提供了 items 就按条目渲染，否则用插槽（插槽里放 MenuItem / MenuSeparator / MenuSub） -->
+        <template v-if="items">
+          <template v-for="(item, index) in items" :key="item.key ?? index">
+            <MenuSeparator v-if="item.type === 'divider'" />
+            <template v-else-if="getItemVisible(item)">
+              <MenuSub v-if="item.children && item.children.length > 0" :disabled="item.disabled">
+                <template #trigger>
+                  <component :is="getIcon(item)" v-if="item.icon" />
+                  <span class="min-w-0 truncate">{{ item.label }}</span>
+                  <span v-if="item.suffix" class="pl-2 text-[11.5px] text-kb-fg-subtle">{{ item.suffix }}</span>
+                </template>
+                <template v-for="(child, childIndex) in item.children" :key="child.key ?? childIndex">
+                  <MenuSeparator v-if="child.type === 'divider'" />
+                  <KbMenuItem
+                    v-else-if="getItemVisible(child)"
+                    :disabled="child.disabled"
+                    :danger="child.className === 'danger'"
+                    :class="toneClass(child)"
+                    @select="handleItemClick(child)"
                   >
-                    <el-icon v-if="child.icon">
-                      <component :is="getIcon(child)!" />
-                    </el-icon>
-                    <span style="margin-left: 8px">{{ child.label }}</span>
-                    <span v-if="child.suffix" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px">
+                    <component :is="getIcon(child)" v-if="child.icon" />
+                    <span class="min-w-0 truncate">{{ child.label }}</span>
+                    <span v-if="child.suffix" class="ml-auto pl-4 text-[11.5px] text-kb-fg-subtle">
                       {{ child.suffix }}
                     </span>
-                  </div>
-                  <div v-else-if="child.type === 'divider'" class="context-menu-divider"></div>
+                  </KbMenuItem>
                 </template>
-              </div>
-            </div>
-            <!-- 普通菜单项 -->
-            <div
-              v-else
-              class="context-menu-item"
-              :class="[item.className, disabledClass(item)]"
-              :aria-disabled="item.disabled || undefined"
-              @click.stop="handleItemClick(item)"
-            >
-              <el-icon v-if="item.icon">
-                <component :is="getIcon(item)!" />
-              </el-icon>
-              <span style="margin-left: 8px">{{ item.label }}</span>
-              <span v-if="item.suffix" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px">
-                {{ item.suffix }}
-              </span>
-            </div>
+              </MenuSub>
+              <KbMenuItem
+                v-else
+                :disabled="item.disabled"
+                :danger="item.className === 'danger'"
+                :class="toneClass(item)"
+                @select="handleItemClick(item)"
+              >
+                <component :is="getIcon(item)" v-if="item.icon" />
+                <span class="min-w-0 truncate">{{ item.label }}</span>
+                <span v-if="item.suffix" class="ml-auto pl-4 text-[11.5px] text-kb-fg-subtle">{{ item.suffix }}</span>
+              </KbMenuItem>
+            </template>
           </template>
         </template>
-      </template>
-      <!-- 否则使用 slot -->
-      <slot v-else />
-    </div>
-  </div>
+        <slot v-else />
+      </DropdownMenuContent>
+    </DropdownMenuPortal>
+  </DropdownMenuRoot>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, markRaw, toRaw, type CSSProperties } from "vue";
-import { ArrowRight } from "@kabegame/element-plus-icons";
-import type { Component } from "vue";
+/**
+ * 按坐标打开的菜单（画廊 / 画册 / 任务的右键菜单，预览弹窗的菜单，壁纸 iframe 转发的右键）。
+ * 调用方自己管开关与坐标（visible + position），菜单在 position 处按虚拟锚点定位、贴边时自动翻转；
+ * 点外部、Esc、选中某项都发 close。外观与键盘行为同 ui 的下拉 / 右键菜单（Reka DropdownMenu）。
+ *
+ * 和 ui/ContextMenu 的区别：那个包一个触发区、由浏览器的 contextmenu 事件打开；这里不包触发区，
+ * 适合「一个网格共用一个菜单、打开时才知道目标」的场合。
+ */
+import { computed, markRaw, ref, toRaw, watch, type Component } from "vue";
+import { DropdownMenuContent, DropdownMenuPortal, DropdownMenuRoot } from "reka-ui";
+import { MenuItem as KbMenuItem, MenuSeparator, MenuSub } from "@/components/ui";
+import {
+  foreignPortalTarget,
+  keepFocusForForeign,
+  keepOpenOnForeign,
+  useLayerZIndex,
+  usePauseForeignTraps,
+} from "@/components/ui/compat";
 
 export interface MenuItem {
   key?: string; // 菜单项的唯一标识，用于隐藏控制
@@ -98,6 +89,7 @@ export interface MenuItem {
   command?: string;
   visible?: boolean | (() => boolean);
   disabled?: boolean;
+  /** "danger"：危险色；"warning"：警示色 */
   className?: string;
   suffix?: string;
   children?: MenuItem[];
@@ -108,14 +100,51 @@ interface Props {
   visible: boolean;
   position: { x: number; y: number };
   items?: MenuItem[]; // 可选的菜单项列表，如果提供则渲染 items，否则使用 slot
-  /** z-index for overlay and menu. */
+  /** 调用方的弹层栈层级；与新浮层的层级号取大者 */
   zIndex?: number;
 }
 
 const props = defineProps<Props>();
 
-/** Exposed for style v-bind (overlay z-index). */
-const zIndex = computed(() => props.zIndex ?? 0);
+const emit = defineEmits<{
+  close: [];
+  command: [command: string];
+}>();
+
+const open = computed(() => props.visible);
+const counterZ = useLayerZIndex(open);
+const layerZIndex = computed(() => Math.max(props.zIndex ?? 0, counterZ.value));
+usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
+
+/** 虚拟锚点：一个落在 position 上的零尺寸矩形 */
+const anchor = computed(() => {
+  const { x, y } = props.position;
+  return {
+    getBoundingClientRect: () => ({ x, y, left: x, right: x, top: y, bottom: y, width: 0, height: 0 }) as DOMRect,
+  };
+});
+
+// TODO:[REF_UI] P9 删：右键点在 EP 对话框里时菜单挂进那个对话框（见 compat.ts）
+const portalTo = ref<HTMLElement | undefined>();
+watch(
+  () => props.visible,
+  (visible) => {
+    if (!visible || typeof document === "undefined") return;
+    const { x, y } = props.position;
+    portalTo.value = foreignPortalTarget(document.elementFromPoint?.(x, y));
+  },
+  { immediate: true },
+);
+
+function onOpenChange(value: boolean) {
+  if (!value && props.visible) emit("close");
+}
+
+function onCloseAutoFocus(e: Event) {
+  // 没有触发器可还焦点；菜单项打开了 EP 对话框时把焦点送进去（同 ui 菜单）
+  keepFocusForForeign(e, undefined);
+  e.preventDefault();
+}
 
 /** Resolve icon for <component :is>; avoid reactive proxy when items come from reactive props. */
 function getIcon(item: MenuItem): Component | undefined {
@@ -124,169 +153,9 @@ function getIcon(item: MenuItem): Component | undefined {
   return markRaw(toRaw(icon));
 }
 
-const emit = defineEmits<{
-  close: [];
-  command: [command: string];
-}>();
-
-const menuRef = ref<HTMLElement | null>(null);
-const adjustedPosition = ref({ x: props.position.x, y: props.position.y });
-
-// 子菜单相关状态
-const activeSubmenuIndex = ref<number | null>(null);
-const submenuRefs = new Map<number, HTMLElement>(); // 非响应式，避免触发重新渲染
-const submenuStyles = ref<Map<number, CSSProperties>>(new Map());
-// 记录已经调整过位置的子菜单索引，避免重复调整导致死循环
-const adjustedSubmenuIndexes = new Set<number>();
-// 子菜单关闭延迟定时器（解决从父菜单项移动到子菜单时的过渡区域问题）
-let submenuCloseTimer: ReturnType<typeof setTimeout> | null = null;
-const SUBMENU_CLOSE_DELAY = 150; // ms
-
-const menuStyle = computed<CSSProperties>(() => ({
-  position: "fixed",
-  left: `${adjustedPosition.value.x}px`,
-  top: `${adjustedPosition.value.y}px`,
-  zIndex: props.zIndex ?? 0,
-}));
-
-const calculateMenuPosition = (element: HTMLElement, position: { x: number; y: number }): { x: number; y: number } => {
-  const menuRect = element.getBoundingClientRect();
-  const windowWidth = window.innerWidth;
-  const windowHeight = window.innerHeight;
-  const margin = 10;
-
-  if (menuRect.width === 0 || menuRect.height === 0) {
-    return position;
-  }
-
-  let x = position.x;
-  let y = position.y;
-
-  if (x + menuRect.width > windowWidth) {
-    x = windowWidth - menuRect.width - margin;
-    if (x < margin) x = margin;
-  }
-
-  const spaceBelow = windowHeight - y;
-  const spaceAbove = y;
-  if (menuRect.height > spaceBelow) {
-    if (spaceAbove >= menuRect.height) {
-      y = position.y - menuRect.height;
-    } else {
-      y = Math.max(margin, windowHeight - menuRect.height - margin);
-    }
-  }
-
-  if (x < margin) x = margin;
-  if (y < margin) y = margin;
-
-  return { x, y };
-};
-
-const adjustPosition = () => {
-  nextTick(() => {
-    nextTick(() => {
-      nextTick(() => {
-        if (!menuRef.value) return;
-
-        const menuRect = menuRef.value.getBoundingClientRect();
-        if (menuRect.width === 0 || menuRect.height === 0) {
-          setTimeout(adjustPosition, 10);
-          return;
-        }
-
-        adjustedPosition.value = calculateMenuPosition(menuRef.value, props.position);
-      });
-    });
-  });
-};
-
-watch(
-  () => props.visible,
-  (newVal) => {
-    if (newVal) {
-      adjustedPosition.value = { x: props.position.x, y: props.position.y };
-      adjustPosition();
-    } else {
-      activeSubmenuIndex.value = null;
-      submenuRefs.clear();
-      submenuStyles.value.clear();
-      adjustedSubmenuIndexes.clear();
-      // 清理子菜单关闭定时器
-      if (submenuCloseTimer) {
-        clearTimeout(submenuCloseTimer);
-        submenuCloseTimer = null;
-      }
-    }
-  },
-);
-
-watch(
-  () => props.position,
-  () => {
-    if (props.visible) {
-      adjustedPosition.value = { x: props.position.x, y: props.position.y };
-      adjustPosition();
-    }
-  },
-  { deep: true },
-);
-
-watch(activeSubmenuIndex, (newIndex, oldIndex) => {
-  if (oldIndex !== null && oldIndex !== newIndex) {
-    submenuRefs.delete(oldIndex);
-    submenuStyles.value.delete(oldIndex);
-    adjustedSubmenuIndexes.delete(oldIndex);
-  }
-});
-
-// 子菜单 hover 处理（带延迟，解决从父菜单项移动到子菜单时的过渡问题）
-const disabledClass = (item: MenuItem): string =>
-  item.disabled ? "!cursor-not-allowed !opacity-45 hover:!bg-transparent" : "";
-
-const handleSubmenuTriggerEnter = (index: number, item: MenuItem) => {
-  if (item.disabled) {
-    activeSubmenuIndex.value = null;
-    return;
-  }
-  // 取消关闭定时器
-  if (submenuCloseTimer) {
-    clearTimeout(submenuCloseTimer);
-    submenuCloseTimer = null;
-  }
-  activeSubmenuIndex.value = index;
-};
-
-const handleSubmenuTriggerLeave = () => {
-  // 延迟关闭子菜单，给用户移动到子菜单的时间
-  if (submenuCloseTimer) {
-    clearTimeout(submenuCloseTimer);
-  }
-  submenuCloseTimer = setTimeout(() => {
-    activeSubmenuIndex.value = null;
-    submenuCloseTimer = null;
-  }, SUBMENU_CLOSE_DELAY);
-};
-
-const handleSubmenuEnter = (index: number) => {
-  // 进入子菜单区域，取消关闭定时器
-  if (submenuCloseTimer) {
-    clearTimeout(submenuCloseTimer);
-    submenuCloseTimer = null;
-  }
-  activeSubmenuIndex.value = index;
-};
-
-const handleSubmenuLeave = () => {
-  // 离开子菜单区域，延迟关闭
-  if (submenuCloseTimer) {
-    clearTimeout(submenuCloseTimer);
-  }
-  submenuCloseTimer = setTimeout(() => {
-    activeSubmenuIndex.value = null;
-    submenuCloseTimer = null;
-  }, SUBMENU_CLOSE_DELAY);
-};
+function toneClass(item: MenuItem): string {
+  return item.className === "warning" ? "text-kb-warning [&_svg]:!text-kb-warning" : "";
+}
 
 const getItemVisible = (item: MenuItem) => {
   // 当 item 声明了 children，但 children 为空时，不渲染该 item（例如“更多”菜单没有任何子项）
@@ -306,101 +175,4 @@ const handleItemClick = (item: MenuItem) => {
   if (item.command) emit("command", item.command);
   emit("close");
 };
-
-const setSubmenuRef = (el: HTMLElement, index: number) => {
-  submenuRefs.set(index, el);
-  if (!adjustedSubmenuIndexes.has(index)) {
-    adjustedSubmenuIndexes.add(index);
-    nextTick(() => {
-      const submenuEl = submenuRefs.get(index);
-      if (!submenuEl) return;
-      const rect = submenuEl.getBoundingClientRect();
-      const windowWidth = window.innerWidth;
-      const windowHeight = window.innerHeight;
-      const margin = 10;
-
-      let style: CSSProperties = {};
-      if (rect.right > windowWidth) {
-        style = { ...style, right: "100%", left: "auto" };
-      }
-      if (rect.bottom > windowHeight) {
-        style = { ...style, bottom: "0", top: "auto" };
-      }
-      if (rect.top < margin) {
-        style = { ...style, top: "0", bottom: "auto" };
-      }
-
-      submenuStyles.value.set(index, style);
-    });
-  }
-};
-
-const getSubmenuStyle = (index: number): CSSProperties => {
-  return submenuStyles.value.get(index) || {};
-};
 </script>
-
-<style scoped lang="scss">
-.context-menu-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: v-bind(zIndex);
-}
-
-.context-menu {
-  background: var(--anime-bg-card);
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
-  padding: 6px;
-  min-width: 180px;
-  box-shadow: var(--anime-shadow);
-  backdrop-filter: blur(10px);
-}
-
-.context-menu-item {
-  display: flex;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: 10px;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s ease;
-  color: var(--anime-text-primary);
-}
-
-.context-menu-item:hover {
-  background: rgba(255, 107, 157, 0.12);
-}
-
-.context-menu-divider {
-  height: 1px;
-  background: var(--anime-border);
-  margin: 6px 0;
-}
-
-.submenu-trigger {
-  position: relative;
-}
-
-.submenu {
-  position: absolute;
-  left: 100%;
-  top: 0;
-  margin-left: 8px;
-  background: var(--anime-bg-card);
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
-  padding: 6px;
-  min-width: 180px;
-  box-shadow: var(--anime-shadow);
-}
-
-.submenu-arrow {
-  margin-left: auto;
-  color: var(--anime-text-muted);
-  opacity: 0.9;
-}
-</style>

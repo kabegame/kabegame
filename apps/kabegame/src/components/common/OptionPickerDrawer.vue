@@ -1,44 +1,44 @@
 <template>
-  <el-drawer
-    append-to-body
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
+  <!-- 紧凑端从底部滑出（Android 底部弹层），桌面从右侧滑出 -->
+  <Sheet
+    :open="modelValue"
+    :side="uiStore.isCompact ? 'bottom' : 'right'"
+    :size="uiStore.isCompact ? undefined : 400"
     :title="resolvedTitle"
-    :size="uiStore.isCompact ? 'auto' : '400px'"
-    :direction="uiStore.isCompact ? 'btt' : 'rtl'"
-    :close-on-click-modal="true"
-    :with-header="!uiStore.isCompact"
-    class="option-picker-drawer"
-    @update:model-value="modal.close"
+    :hide-close="uiStore.isCompact"
+    @update:open="(v: boolean) => emit('update:modelValue', v)"
   >
-    <div class="option-picker-content">
-      <div class="picker-options">
-        <div v-for="opt in options" :key="opt.id" class="picker-option" @click="handleSelect(opt.id)">
-          <div class="option-icon">
-            <el-icon :size="32">
-              <component :is="opt.icon" />
-            </el-icon>
-          </div>
-          <div class="option-content">
-            <div class="option-title">{{ opt.title }}</div>
-            <div v-if="opt.desc" class="option-desc">{{ opt.desc }}</div>
-          </div>
-          <el-icon class="option-arrow">
-            <ArrowRight />
-          </el-icon>
-        </div>
-      </div>
+    <div class="flex flex-col gap-2">
+      <button
+        v-for="opt in options"
+        :key="opt.id"
+        type="button"
+        class="group box-border flex w-full cursor-pointer select-none items-center gap-3.5 rounded-kb-lg border border-solid border-kb-line-strong bg-transparent p-3.5 text-left [font:inherit] text-kb-fg outline-none transition-[background-color,border-color] duration-150 hover:border-kb-fg-subtle hover:bg-kb-hover active:bg-kb-pressed focus-visible:ring-2 focus-visible:ring-kb-ring"
+        @click="handleSelect(opt.id)"
+      >
+        <span
+          class="grid size-11 shrink-0 place-items-center rounded-kb-md bg-kb-fill text-kb-fg-muted [&_svg]:size-[22px]"
+        >
+          <component :is="opt.icon" />
+        </span>
+        <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span class="text-[14px] font-600 leading-5">{{ opt.title }}</span>
+          <span v-if="opt.desc" class="text-[12.5px] leading-[1.45] text-kb-fg-muted">{{ opt.desc }}</span>
+        </span>
+        <ChevronRight
+          class="size-4 shrink-0 text-kb-fg-subtle transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-kb-fg-muted"
+        />
+      </button>
     </div>
-  </el-drawer>
+  </Sheet>
 </template>
 
 <script setup lang="ts">
 import type { Component } from "vue";
-import { ArrowRight } from "@kabegame/element-plus-icons";
-import { ElDrawer, ElIcon } from "@kabegame/element-plus";
-import { computed, watch } from "vue";
+import { computed } from "vue";
+import { ChevronRight } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModal } from "../../composables/useModal";
+import { Sheet } from "@/components/ui";
 import { useUiStore } from "../../stores/ui";
 
 export interface OptionItem {
@@ -67,111 +67,7 @@ const emit = defineEmits<{
   (e: "select", id: string): void;
 }>();
 
-const modal = useModal({ onClose: () => emit("update:modelValue", false) });
-watch(
-  () => props.modelValue,
-  (v) => (v ? modal.open() : modal.close()),
-  { immediate: true },
-);
-
 const handleSelect = (id: string) => {
   emit("select", id);
 };
 </script>
-
-<style lang="scss" scoped>
-.option-picker-drawer {
-  :deep(.el-drawer__header) {
-    margin-bottom: 20px;
-    padding: 20px 20px 0;
-  }
-
-  :deep(.el-drawer__body) {
-    padding: 20px;
-  }
-
-  &:deep(.el-drawer.btt) {
-    .el-drawer__body {
-      padding-bottom: calc(20px + var(--sab, env(safe-area-inset-bottom, 0px)));
-    }
-  }
-}
-
-.option-picker-content {
-  width: 100%;
-}
-
-.picker-options {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.picker-option {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 20px;
-  background: var(--anime-bg-card);
-  border: 2px solid var(--anime-border);
-  border-radius: 16px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  user-select: none;
-
-  &:hover {
-    background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
-    border-color: var(--anime-primary);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(255, 107, 157, 0.15);
-  }
-
-  &:active {
-    transform: translateY(0);
-  }
-}
-
-.option-icon {
-  flex-shrink: 0;
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(255, 107, 157, 0.15) 0%, rgba(167, 139, 250, 0.15) 100%);
-  border-radius: 12px;
-  color: var(--anime-primary);
-}
-
-.option-content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.option-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--anime-text-primary);
-  line-height: 1.4;
-}
-
-.option-desc {
-  font-size: 13px;
-  color: var(--anime-text-secondary);
-  line-height: 1.4;
-}
-
-.option-arrow {
-  flex-shrink: 0;
-  color: var(--anime-text-secondary);
-  transition: transform 0.2s ease;
-}
-
-.picker-option:hover .option-arrow {
-  transform: translateX(4px);
-  color: var(--anime-primary);
-}
-</style>

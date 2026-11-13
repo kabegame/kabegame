@@ -1,43 +1,31 @@
 <template>
-  <div class="android-picker-number" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
-    <span class="android-picker-number__value" :class="{ 'is-placeholder': numberValue === undefined }">
+  <button
+    type="button"
+    class="android-picker-number kb-control h-8 cursor-pointer justify-between gap-2 px-2.5 text-left [font:inherit]"
+    :data-disabled="disabled || undefined"
+    :aria-disabled="disabled || undefined"
+    @click="onTriggerClick"
+  >
+    <span class="min-w-0 flex-1 truncate" :class="numberValue === undefined ? 'text-kb-fg-subtle' : ''">
       {{ numberValue !== undefined ? numberValue : resolvedPlaceholder }}
     </span>
-    <el-icon class="android-picker-number__arrow">
-      <ArrowDown />
-    </el-icon>
-  </div>
+    <ChevronDown class="size-4 shrink-0 text-kb-fg-subtle" />
+  </button>
 
-  <Teleport to="body">
-    <van-popup
-      :show="isOpen"
-      position="bottom"
-      round
-      :z-index="zIndex"
-      @update:show="
-        (v) => {
-          if (!v) close();
-        }
-      "
-    >
-      <van-picker
-        v-model="pickerSelectedValues"
-        :title="resolvedTitle"
-        :columns="pickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onPickerConfirm"
-        @cancel="close()"
-      />
-    </van-popup>
-  </Teleport>
+  <PickerSheet
+    v-model:open="isOpen"
+    v-model="pickerSelectedValues"
+    :title="resolvedTitle"
+    :columns="pickerColumns"
+    @confirm="onPickerConfirm"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ArrowDown } from "@kabegame/element-plus-icons";
-import { useModal } from "../composables/useModal";
+import { ChevronDown } from "@lucide/vue";
+import PickerSheet from "@/components/ui/PickerSheet.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -60,7 +48,7 @@ const emit = defineEmits<{
   "update:modelValue": [value: number | undefined];
 }>();
 
-const { isOpen, zIndex, open, close } = useModal();
+const isOpen = ref(false);
 
 const numberValue = computed(() => {
   const v = props.modelValue;
@@ -110,11 +98,10 @@ watch(
 
 function onTriggerClick() {
   if (props.disabled) return;
-  open();
+  isOpen.value = true;
 }
 
 function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
-  close();
   const raw = selectedValues[0];
   if (raw === undefined || raw === null) return;
   const value = Number(raw);
@@ -122,45 +109,3 @@ function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)
   emit("update:modelValue", value);
 }
 </script>
-
-<style scoped lang="scss">
-.android-picker-number {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  justify-content: space-between;
-  min-height: 32px;
-  padding: 6px 12px;
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-  background: var(--el-fill-color-blank);
-  cursor: pointer;
-  user-select: none;
-
-  &.is-disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-}
-
-.android-picker-number__value {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  color: var(--anime-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  &.is-placeholder {
-    color: var(--anime-text-muted);
-  }
-}
-
-.android-picker-number__arrow {
-  flex-shrink: 0;
-  margin-left: 8px;
-  font-size: 14px;
-  color: var(--anime-text-secondary);
-}
-</style>

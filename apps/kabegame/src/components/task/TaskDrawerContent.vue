@@ -98,7 +98,9 @@
                         size="small"
                         class="close-btn"
                         :disabled="isTaskRunning(item.data)"
-                        :title="isTaskRunning(item.data) ? t('tasks.drawerDeleteTaskRunning') : t('tasks.drawerDeleteTask')"
+                        :title="
+                          isTaskRunning(item.data) ? t('tasks.drawerDeleteTaskRunning') : t('tasks.drawerDeleteTask')
+                        "
                         @click="$emit('delete-task', item.data.id)"
                       >
                         <el-icon>
@@ -287,8 +289,9 @@ import { usePluginStore } from "../../stores/plugins";
 import type { PluginManifestText } from "../../stores/plugins";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
 import { trackEvent } from "../../track/umami";
-import { kameMessage as ElMessage } from "../../utils/kameMessage";
+import { kameMessage } from "../../utils/kameMessage";
 import { downloadPoller, useDownloadStateStore, type ActiveDownloadInfo } from "../../stores/downloadState";
+import { vLoading } from "@/components/ui/loading";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -430,10 +433,13 @@ const {
   containerProps,
   wrapperProps,
   scrollTo: scrollTasksTo,
-} = useVirtualList(computed(() => props.tasks), {
-  itemHeight: TASK_DRAWER_ITEM_HEIGHT,
-  overscan: 6,
-});
+} = useVirtualList(
+  computed(() => props.tasks),
+  {
+    itemHeight: TASK_DRAWER_ITEM_HEIGHT,
+    overscan: 6,
+  },
+);
 // 搜索词变化后回到顶部：否则沿用旧 scrollTop，结果比原列表短时可视区落在结果之外，整列空白
 watch(
   () => props.search,
@@ -578,9 +584,9 @@ async function openTaskWindow(taskId: string) {
   if (task) trackTaskDrawerAction("open_webview", task);
   try {
     await invoke("show_crawler_window", { taskId: id });
-    ElMessage.success(t("tasks.openTaskWebviewSuccess"));
+    kameMessage.success(t("tasks.openTaskWebviewSuccess"));
   } catch (error) {
-    ElMessage.error(String(error));
+    kameMessage.error(String(error));
   }
 }
 

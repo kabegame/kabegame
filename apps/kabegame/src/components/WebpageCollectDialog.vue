@@ -111,7 +111,7 @@ import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { visibleVarDefs as resolveVisibleVarDefs } from "@/utils/pluginVarWhen";
 import { expandVarsForBackend, normalizeVarsForUI, type PluginVarDef } from "@/utils/pluginVarForm";
 import { usePluginStore } from "@/stores/plugins";
@@ -235,7 +235,7 @@ async function resolveOutputAlbumId(): Promise<string | undefined | null> {
   if (selectedOutputAlbumId.value !== "__create_new__") return selectedOutputAlbumId.value || undefined;
   const name = newOutputAlbumName.value.trim();
   if (!name) {
-    ElMessage.warning(t("albums.enterAlbumNameFirst"));
+    kameMessage.warning(t("albums.enterAlbumNameFirst"));
     return null;
   }
   try {
@@ -244,7 +244,7 @@ async function resolveOutputAlbumId(): Promise<string | undefined | null> {
     return album.id;
   } catch (error) {
     console.error("创建画册失败:", error);
-    ElMessage.error(t("albums.createAlbumFailed"));
+    kameMessage.error(t("albums.createAlbumFailed"));
     return null;
   }
 }
@@ -280,7 +280,7 @@ async function handleSubmit() {
       triggerSource: "manual",
     });
     if (!added) {
-      ElMessage.error(t("gallery.webpageTaskFailed"));
+      kameMessage.error(t("gallery.webpageTaskFailed"));
       return;
     }
     if (IS_WEB) {
@@ -300,7 +300,7 @@ async function handleSubmit() {
         inject_cef_ua: userConfig.injectCefUserAgent === true,
       });
     }
-    ElMessage.success(t("gallery.webpageTaskAdded"));
+    kameMessage.success(t("gallery.webpageTaskAdded"));
     modal.close();
   } finally {
     submitting.value = false;

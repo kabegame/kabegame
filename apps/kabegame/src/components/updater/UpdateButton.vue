@@ -15,12 +15,13 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElMessage, ElMessageBox } from "@kabegame/element-plus";
 import { Download, RotateCw } from "@lucide/vue";
 import { Tooltip } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import { useUpdaterStore } from "@/stores/updater";
 import * as updaterService from "@/services/updater";
+import { messageBox } from "@/components/ui/messageBox";
+import { toast } from "@/components/ui/toast";
 
 defineProps<{ corner?: boolean }>();
 
@@ -34,7 +35,7 @@ const buttonLabel = computed(() => (store.canShowRestart ? t("updater.restartUpd
 async function onClick() {
   if (store.canShowRestart) {
     try {
-      await ElMessageBox.confirm(t("updater.restartConfirmMessage"), t("updater.restartConfirmTitle"), {
+      await messageBox.confirm(t("updater.restartConfirmMessage"), t("updater.restartConfirmTitle"), {
         type: "warning",
       });
     } catch {
@@ -43,7 +44,7 @@ async function onClick() {
     try {
       await updaterService.applyUpdateAndRestart();
     } catch (e) {
-      ElMessage.error(String(e));
+      toast.error(String(e));
     }
     return;
   }

@@ -1,4 +1,5 @@
 // 界面重构 P1：EP 全局换皮。
+// TODO:[REF_UI] P9 随整个包删除。
 //
 // 迁移跨好几期，没轮到的界面仍是 EP 组件；这里把 EP 的基础 token 改指向 app 的设计 token
 // （apps/kabegame/src/styles/tokens.css 的 --kb-*），让它们和新组件看起来是同一套。

@@ -77,6 +77,15 @@ shortcuts: [
 - 没有 Tailwind reset：`border` 配 `border-solid`；没有 tailwind-merge：不要在调用处叠同类工具类去覆盖组件变体。
 - element-plus 的外观由 vendored 包的 `kb-reskin.scss`（`--el-*` ← `--kb-*`）统一给，不要再在业务样式里写 `.el-*` 外观覆盖；
   `anime-theme.css` 只剩旧主题变量（中性的已指向 `--kb-*`）与功能性规则。
+- 提示用 `toast`（`@/components/ui/toast`，签名同 `ElMessage`）、确认框用 `messageBox`（`@/components/ui/messageBox`，签名同
+  `ElMessageBox`）、加载遮罩在 `<script setup>` 里导入 `vLoading`；不要再直接调 `ElMessage` / `ElMessageBox`。
+- 新浮层的 z-index 不写死：用 `components/ui/compat.ts` 的 `useLayerZIndex`（打开时向 element-plus 的计数器取号），
+  模态类再接 `usePauseForeignTraps` 与 `keepOpenOnForeign`；已有组件都接好了，直接用 Reka 原语写新弹层时照做。
+- 混用期才需要、某一期要删或换实现的代码，注释带 `TODO:[REF_UI]` 并写明哪一期。
+- 过滤 chip 下拉用 `@/components/ui` 的 `KbFilterDropdown`（P3 起不在 vendored 包里）；面板里的子层用 Reka 组件
+  （`Popconfirm`、`Popover`……）就算层内，不要再放 EP 浮层。
+- 动作菜单项要按上下文换图标时用 `iconBy(ctx => …)`，渲染处用 `resolveActionIcon`；lucide 图标本身是函数，
+  不能用 `typeof icon === "function"` 判断是不是解析器。
 - 详见 [cocs/ui/COMPONENT_LIBRARY.md](../../cocs/ui/COMPONENT_LIBRARY.md)「新界面组件」。
 
 ## 与现有样式共存

@@ -1,5 +1,4 @@
 import { invoke } from "@/api/rpc";
-import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@/env";
 import { useSettingsStore } from "@/stores/settings";
@@ -10,6 +9,7 @@ import {
   effectiveDisplayMode,
   emptyWallpaperTargetConfig,
 } from "@/utils/wallpaperTargets";
+import { messageBox } from "@/components/ui/messageBox";
 
 function isRequiresWindowModeError(error: unknown): boolean {
   const msg = typeof error === "string" ? error : (error as any)?.message || String(error);
@@ -22,7 +22,7 @@ function isRequiresPluginModeError(error: unknown): boolean {
 }
 
 async function ensureWindowModeByUserConfirm(): Promise<void> {
-  await ElMessageBox.confirm(
+  await messageBox.confirm(
     i18n.global.t("settings.wallpaperModeWindowConfirmMessage"),
     i18n.global.t("settings.wallpaperModeConfirmTitle"),
     {
@@ -36,7 +36,7 @@ async function ensureWindowModeByUserConfirm(): Promise<void> {
 }
 
 async function ensurePluginModeByUserConfirm(): Promise<void> {
-  await ElMessageBox.confirm(
+  await messageBox.confirm(
     i18n.global.t("settings.wallpaperModePluginConfirmMessage"),
     i18n.global.t("settings.wallpaperModeConfirmTitle"),
     {

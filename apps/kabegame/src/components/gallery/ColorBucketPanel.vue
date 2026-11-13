@@ -1,8 +1,8 @@
 <template>
   <!-- 排序下拉里「颜色」一行的展开区：色桶色块 + 末尾的「其它颜色」。
        只报「用户要按哪个颜色排序」，用色桶段还是现算段由外面的 colorSortFor 定。
-       宽度固定为取色面板的宽度：取色面板展开前后色块不跳动。 -->
-  <div class="flex w-[300px] max-w-full flex-col gap-2">
+       宽度固定：取色面板展开前后色块不跳动。 -->
+  <div class="flex w-[260px] max-w-full flex-col gap-2.5">
     <div class="grid grid-cols-6 gap-1.5">
       <div v-for="bucket in buckets" :key="bucket.hex" class="group relative">
         <button
@@ -15,44 +15,34 @@
           :data-color="bucket.hex"
           @click="emit('select', bucket.hex)"
         >
-          <el-icon v-if="selected === bucket.hex" :class="checkClass(bucket.hex)"><Check /></el-icon>
+          <Check v-if="selected === bucket.hex" :class="checkClass(bucket.hex)" :stroke-width="2.5" />
         </button>
-        <!-- 用户保存的色桶可以删：悬停出角标（触屏没有悬停，常显）。popper 挂 layer 类，点它不关排序下拉 -->
-        <el-popconfirm
+        <!-- 用户保存的色桶可以删：悬停出角标（触屏没有悬停，常显） -->
+        <Popconfirm
           v-if="!bucket.key"
-          placement="bottom"
+          :open="deleteConfirmHex === bucket.hex"
           :title="t('gallery.colorBucketDeleteConfirm')"
-          :confirm-button-text="t('common.confirm')"
-          :cancel-button-text="t('common.cancel')"
-          confirm-button-type="danger"
-          :popper-class="COLOR_BUCKET_LAYER_CLASS"
-          :visible="deleteConfirmHex === bucket.hex"
-          @update:visible="(v: boolean) => setDeleteConfirm(bucket.hex, v)"
+          @update:open="(v: boolean) => setDeleteConfirm(bucket.hex, v)"
           @confirm="removeBucket(bucket.hex)"
         >
-          <template #reference>
-            <button
-              type="button"
-              class="absolute -right-1.5 -top-1.5 h-4 w-4 flex cursor-pointer items-center justify-center border border-[var(--anime-border)] rounded-full border-solid bg-[var(--anime-bg-card)] p-0 text-[9px] text-[var(--anime-text-secondary)] transition-opacity focus-visible:opacity-100 group-hover:opacity-100 hover:text-[var(--anime-danger)]"
-              :class="uiStore.isCompact || deleteConfirmHex === bucket.hex ? 'opacity-100' : 'opacity-0'"
-              :title="t('gallery.colorBucketDelete')"
-              :aria-label="t('gallery.colorBucketDelete')"
-              :disabled="deletingHex === bucket.hex"
-              :data-delete-color="bucket.hex"
-            >
-              <el-icon><Close /></el-icon>
-            </button>
-          </template>
-        </el-popconfirm>
+          <button
+            type="button"
+            class="absolute -right-1.5 -top-1.5 box-border grid size-4 cursor-pointer place-items-center rounded-full border border-solid border-kb-line-strong bg-kb-surface-raised p-0 text-kb-fg-muted shadow-kb-sm transition-opacity hover:text-kb-danger focus-visible:opacity-100 group-hover:opacity-100"
+            :class="uiStore.isCompact || deleteConfirmHex === bucket.hex ? 'opacity-100' : 'opacity-0'"
+            :title="t('gallery.colorBucketDelete')"
+            :aria-label="t('gallery.colorBucketDelete')"
+            :disabled="deletingHex === bucket.hex"
+            :data-delete-color="bucket.hex"
+          >
+            <X class="size-2.5" :stroke-width="2.5" />
+          </button>
+        </Popconfirm>
       </div>
 
       <!-- 其它颜色：当前排序的颜色不在色桶里时显示成那个颜色并带选中描边，否则是带「＋」的空块 -->
       <button
         type="button"
-        :class="[
-          SWATCH_CLASS,
-          otherColor ? SWATCH_SELECTED_CLASS : 'border-dashed bg-transparent text-[var(--anime-text-secondary)]',
-        ]"
+        :class="[SWATCH_CLASS, otherColor ? SWATCH_SELECTED_CLASS : 'border-dashed bg-transparent text-kb-fg-muted']"
         :style="otherColor ? { backgroundColor: `#${otherColor}` } : undefined"
         :title="otherTitle"
         :aria-label="otherTitle"
@@ -60,38 +50,32 @@
         data-color-other
         @click="togglePicker"
       >
-        <el-icon v-if="otherColor" :class="checkClass(otherColor)"><Check /></el-icon>
-        <el-icon v-else><Plus /></el-icon>
+        <Check v-if="otherColor" :class="checkClass(otherColor)" :stroke-width="2.5" />
+        <Plus v-else />
       </button>
     </div>
 
     <div v-if="pickerOpen" class="flex flex-col gap-2">
-      <!-- 取色面板内部是定宽的；极窄的屏上让它自己横向滚动，不撑破对话框 -->
-      <div class="max-w-full overflow-x-auto">
-        <el-color-picker-panel
-          v-model="pickerColor"
-          :border="false"
-          :show-alpha="false"
-          :disabled="saving"
-          style="padding: 0"
-        />
-      </div>
-      <p class="m-0 text-[11px] text-[var(--anime-text-secondary)] leading-snug" data-color-hint>{{ hintText }}</p>
+      <ColorPickerPanel v-model="pickerColor" :disabled="saving" />
+      <p class="m-0 text-[11.5px] leading-snug text-kb-fg-muted" data-color-hint>{{ hintText }}</p>
       <div class="flex justify-end gap-2">
-        <el-button size="small" :disabled="!pickedHex || saving" data-color-sort @click="sortByPicked">
+        <Button size="sm" :disabled="!pickedHex || saving" data-color-sort @click="sortByPicked">
           {{ t("gallery.colorSortByThis") }}
-        </el-button>
-        <el-button
-          size="small"
-          type="primary"
-          :loading="saving"
-          :disabled="!pickedHex || saving || !!saveBlockedReason"
-          :title="saveBlockedReason ?? undefined"
-          data-color-save
-          @click="saveAsBucket"
-        >
-          {{ t("gallery.colorSaveAsBucket") }}
-        </el-button>
+        </Button>
+        <Tooltip :content="saveBlockedReason ?? ''">
+          <span class="inline-flex">
+            <Button
+              size="sm"
+              variant="primary"
+              :disabled="!pickedHex || saving || !!saveBlockedReason"
+              data-color-save
+              @click="saveAsBucket"
+            >
+              <Spinner v-if="saving" :size="12" />
+              {{ t("gallery.colorSaveAsBucket") }}
+            </Button>
+          </span>
+        </Tooltip>
       </div>
     </div>
   </div>
@@ -100,9 +84,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Check, Close, Plus } from "@kabegame/element-plus-icons";
-import { COLOR_BUCKET_LAYER_CLASS } from "@/components/gallery/colorBucketLayer";
-import { useModalBack } from "@/composables/useModalBack";
+import { Check, Plus, X } from "@lucide/vue";
+import { Button, ColorPickerPanel, Popconfirm, Spinner, Tooltip } from "@/components/ui";
 import {
   addColorBucket,
   ColorBucketError,
@@ -113,7 +96,7 @@ import {
 } from "@/services/colorBuckets";
 import { useUiStore } from "@/stores/ui";
 import { colorLabel } from "@/utils/galleryFilterLabels";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { logger } from "@/utils/logger";
 import { isLightColor } from "@/utils/palette";
 
@@ -134,8 +117,8 @@ const uiStore = useUiStore();
 
 // 色块始终带细边框：白色等浅色块不会融进面板背景。
 const SWATCH_CLASS =
-  "h-7 w-full flex cursor-pointer items-center justify-center border border-[var(--anime-border)] rounded-md border-solid p-0 text-xs";
-const SWATCH_SELECTED_CLASS = "outline outline-2 outline-offset-1 outline-[var(--anime-primary)]";
+  "box-border flex h-7 w-full cursor-pointer items-center justify-center rounded-kb-md border border-solid border-kb-line-strong p-0 [&_svg]:size-4";
+const SWATCH_SELECTED_CLASS = "outline outline-2 outline-offset-1 outline-kb-fg";
 /** 取色面板的初值：没有当前颜色可沿用时用它。 */
 const DEFAULT_PICKER_COLOR = "#4080ff";
 
@@ -201,27 +184,19 @@ async function saveAsBucket() {
       return;
     }
     logger.warn("保存色桶失败:", error);
-    ElMessage.error(errorText(error));
+    kameMessage.error(errorText(error));
   } finally {
     saving.value = false;
   }
 }
 
 // ---------- 删除用户保存的色桶 ----------
-// 确认框受控，同一时刻只开一个。
+// 确认框受控，同一时刻只开一个（Popconfirm 自己接返回栈）。
 const deleteConfirmHex = ref<string | null>(null);
 function setDeleteConfirm(hex: string, visible: boolean) {
   if (visible) deleteConfirmHex.value = hex;
   else if (deleteConfirmHex.value === hex) deleteConfirmHex.value = null;
 }
-useModalBack(
-  computed({
-    get: () => deleteConfirmHex.value !== null,
-    set: (open) => {
-      if (!open) deleteConfirmHex.value = null;
-    },
-  }),
-);
 
 const deletingHex = ref<string | null>(null);
 async function removeBucket(hex: string) {
@@ -233,7 +208,7 @@ async function removeBucket(hex: string) {
     await deleteColorBucket(hex);
   } catch (error) {
     logger.warn("删除色桶失败:", error);
-    ElMessage.error(errorText(error));
+    kameMessage.error(errorText(error));
   } finally {
     deletingHex.value = null;
   }

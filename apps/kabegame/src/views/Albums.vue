@@ -325,8 +325,7 @@ import {
 } from "@/composables/useWallpaperTarget";
 import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { ref, computed, watch } from "vue";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
@@ -395,6 +394,7 @@ import {
   type Album,
   type AlbumNode,
 } from "@/services/albums";
+import { messageBox } from "@/components/ui/messageBox";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
@@ -637,7 +637,7 @@ const openVirtualDrive = async () => {
     await invoke("open_path", { path: albumDriveMountPoint.value });
   } catch (e) {
     console.error("打开虚拟磁盘失败:", e);
-    ElMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
+    kameMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
   }
 };
 
@@ -694,18 +694,18 @@ const confirmMoveAlbum = async () => {
   if (!album) return;
   const pid = moveToRoot.value ? null : moveTargetParentId.value?.trim() || null;
   if (!moveToRoot.value && !pid) {
-    ElMessage.warning(t("albums.selectTargetAlbum"));
+    kameMessage.warning(t("albums.selectTargetAlbum"));
     return;
   }
   try {
     await moveAlbum(album.id, pid);
     moveDialog.close();
     moveDlgAlbum.value = null;
-    ElMessage.success(t("albums.moveSuccess"));
+    kameMessage.success(t("albums.moveSuccess"));
   } catch (e: unknown) {
     const msg =
       typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e);
-    ElMessage.error(msg || t("albums.moveFailed"));
+    kameMessage.error(msg || t("albums.moveFailed"));
   }
 };
 const newAlbumName = ref("");
@@ -779,15 +779,15 @@ const handleRefresh = async () => {
 
     const selected = selectedAlbum.value;
     if (IS_ANDROID || IS_WEB || selected?.type !== "local_folder") {
-      ElMessage.success(t("albums.refreshSuccess"));
+      kameMessage.success(t("albums.refreshSuccess"));
     } else {
       void syncLocalFolderAlbum(selected.id).catch((error) => {
-        ElMessage.error(error?.message || String(error));
+        kameMessage.error(error?.message || String(error));
       });
     }
   } catch (error) {
     console.error("刷新失败:", error);
-    ElMessage.error(t("albums.refreshFailed"));
+    kameMessage.error(t("albums.refreshFailed"));
   } finally {
     isRefreshing.value = false;
   }
@@ -812,7 +812,7 @@ const pickLocalFolder = async () => {
     }
   } catch (error) {
     console.warn("pick local folder failed", error);
-    ElMessage.error(t("albums.selectFolderFailed"));
+    kameMessage.error(t("albums.selectFolderFailed"));
   }
 };
 
@@ -847,13 +847,13 @@ const handleCreateAlbum = async () => {
       await createAlbum(newAlbumName.value.trim(), { parentId, reload: false });
     }
     createDialog.close();
-    ElMessage.success(t("albums.albumCreated"));
+    kameMessage.success(t("albums.albumCreated"));
   } catch (error: any) {
     console.error("创建画册失败:", error);
     // 提取友好的错误信息
     const errorMessage =
       typeof error === "string" ? error : error?.message || String(error) || t("albums.createAlbumFailed");
-    ElMessage.error(errorMessage);
+    kameMessage.error(errorMessage);
   } finally {
     creatingAlbum.value = false;
   }
@@ -948,7 +948,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       await invoke("open_path", { path: folder });
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -956,18 +956,18 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "convertToNormal") {
     const descendantCount = await fetchDescendantCount(id);
     try {
-      await ElMessageBox.confirm(
+      await messageBox.confirm(
         t("albums.localFolder.convertToNormalConfirm", { count: descendantCount }),
         t("albums.localFolder.convertToNormalTitle"),
         { type: "warning" },
       );
       await convertLocalFolderAlbumToNormal(id);
       await refreshSelectedAlbum();
-      ElMessage.success(t("albums.localFolder.convertToNormalSuccess"));
+      kameMessage.success(t("albums.localFolder.convertToNormalSuccess"));
     } catch (error) {
       if (error !== "cancel") {
         const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
-        ElMessage.error(t("albums.localFolder.convertToNormalFailed", { error: errorMessage }));
+        kameMessage.error(t("albums.localFolder.convertToNormalFailed", { error: errorMessage }));
       }
     }
     return;
@@ -985,18 +985,18 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "setLabelKey") {
     try {
-      const { value } = await ElMessageBox.prompt(t("albums.labelKeyPlaceholder"), t("contextMenu.setLabelKey"), {
+      const { value } = await messageBox.prompt(t("albums.labelKeyPlaceholder"), t("contextMenu.setLabelKey"), {
         inputValue: album.labelKey ?? "",
         inputValidator: (v) => isLabelKey(String(v || "").trim()) || t("albums.labelKeyInvalidHint"),
       });
       const newKey = String(value || "").trim();
       if (!newKey || newKey === album.labelKey) return;
       await setLabelKey(id, newKey);
-      ElMessage.success(t("albums.labelKeyUpdated"));
+      kameMessage.success(t("albums.labelKeyUpdated"));
     } catch (error) {
       if (error !== "cancel" && error !== "close") {
         const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
-        ElMessage.error(errorMessage);
+        kameMessage.error(errorMessage);
       }
     }
     return;
@@ -1007,7 +1007,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       await invoke("open_album_virtual_drive_folder", { albumId: id });
     } catch (e: any) {
       console.error("打开画册虚拟盘失败:", e);
-      ElMessage.error(`${e?.message || String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
+      kameMessage.error(`${e?.message || String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
     }
     return;
   }
@@ -1018,7 +1018,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     try {
       await setAlbumSyncMode(id, mode);
     } catch (e: any) {
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -1027,7 +1027,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     try {
       await syncLocalFolderAlbum(id, "none");
     } catch (e: any) {
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -1036,7 +1036,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     try {
       await syncLocalFolderAlbum(id, command === "syncNowRecursiveFull" ? "createMissing" : "existing");
     } catch (e: any) {
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -1051,12 +1051,12 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       if (!wallpaperRotationEnabled.value) await setWallpaperRotationEnabled(true);
       // 有多个壁纸目标时提示里带上是哪块屏
       const screen = pickedScreenName(target);
-      ElMessage.success(
+      kameMessage.success(
         screen ? t("albums.rotationStartedOn", { name, screen }) : t("albums.rotationStarted", { name }),
       );
     } catch (error) {
       console.error("设置轮播画册失败:", error);
-      ElMessage.error(t("albums.setFailed"));
+      kameMessage.error(t("albums.setFailed"));
     }
     return;
   }
@@ -1064,10 +1064,10 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "stopWallpaperRotation") {
     try {
       await setWallpaperRotationEnabled(false);
-      ElMessage.success(t("albums.detailStopRotation"));
+      kameMessage.success(t("albums.detailStopRotation"));
     } catch (error) {
       console.error("停止桌面轮播失败:", error);
-      ElMessage.error(t("albums.setFailed"));
+      kameMessage.error(t("albums.setFailed"));
     }
     return;
   }
@@ -1075,7 +1075,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "rename") {
     // 树上改名走 prompt
     try {
-      const { value } = await ElMessageBox.prompt(t("albums.placeholderName"), t("albums.title"), {
+      const { value } = await messageBox.prompt(t("albums.placeholderName"), t("albums.title"), {
         inputValue: name,
         inputValidator: (v) => {
           if (!String(v || "").trim()) return t("albums.albumNameCannotBeEmpty");
@@ -1085,11 +1085,11 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       const newName = String(value || "").trim();
       if (!newName || newName === name) return;
       await renameAlbum(id, newName);
-      ElMessage.success(t("albums.renameSuccess"));
+      kameMessage.success(t("albums.renameSuccess"));
     } catch (error) {
       if (error !== "cancel") {
         const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
-        ElMessage.error(errorMessage || t("albums.renameFailed"));
+        kameMessage.error(errorMessage || t("albums.renameFailed"));
       }
     }
     return;
@@ -1103,12 +1103,12 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   // 检查是否为"收藏"画册（使用固定ID）
   if (id === FAVORITE_ALBUM_ID) {
-    ElMessage.warning(t("albums.cannotDeleteFavorite"));
+    kameMessage.warning(t("albums.cannotDeleteFavorite"));
     return;
   }
 
   try {
-    await ElMessageBox.confirm(
+    await messageBox.confirm(
       album.type === "local_folder"
         ? t("albums.deleteLocalFolderAlbumConfirm", { name })
         : t("albums.deleteAlbumConfirm", { name }),
@@ -1117,11 +1117,11 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     );
     // 删的若是某个壁纸目标的轮播画册，后端把该目标的轮播路径退回默认并发 setting-change
     await deleteAlbum(id);
-    ElMessage.success(t("albums.albumDeleted"));
+    kameMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {
       console.error("删除画册失败:", error);
-      ElMessage.error(t("albums.deleteFailed"));
+      kameMessage.error(t("albums.deleteFailed"));
     }
   }
 };

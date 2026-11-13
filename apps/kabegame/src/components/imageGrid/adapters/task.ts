@@ -1,4 +1,4 @@
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
@@ -30,7 +30,7 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
     onLoadError: (error, path) => {
       console.error("加载任务图片失败:", path, error);
       // 兜底：避免“静默 0 张”让用户误判，提示可能是 provider-path 解析/缓存导致的问题
-      ElMessage.error(t("tasks.loadImagesFailed"));
+      kameMessage.error(t("tasks.loadImagesFailed"));
     },
     refreshOn: [
       addedTrigger(view, (image) => !!params.taskId() && image.taskId === params.taskId()),

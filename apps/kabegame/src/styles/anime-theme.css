@@ -54,6 +54,7 @@ body {
 input,
 textarea,
 [contenteditable="true"],
+/* TODO:[REF_UI] P9 删：下面几条 .el-* 是功能性规则（可选中文字、滚动条），随 element-plus 一起删 */
 .el-input__inner,
 .el-textarea__inner {
   user-select: text;

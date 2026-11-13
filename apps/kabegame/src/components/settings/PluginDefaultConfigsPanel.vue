@@ -37,8 +37,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { IS_ANDROID } from "@/env";
 import { useI18n } from "@kabegame/i18n";
@@ -52,6 +51,8 @@ import {
 } from "@/utils/pluginVarForm";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
+import { messageBox } from "@/components/ui/messageBox";
+import { vLoading } from "@/components/ui/loading";
 
 const { t } = useI18n();
 const pluginStore = usePluginStore();
@@ -91,7 +92,7 @@ async function handleSave() {
   try {
     await formRef.value?.validate();
   } catch {
-    ElMessage.warning(t("plugins.fillRequired"));
+    kameMessage.warning(t("plugins.fillRequired"));
     return;
   }
   saving.value = true;
@@ -106,10 +107,10 @@ async function handleSave() {
         outputDir: od === "" ? null : od,
       },
     });
-    ElMessage.success(t("settings.pluginDefaultsSaveSuccess"));
+    kameMessage.success(t("settings.pluginDefaultsSaveSuccess"));
   } catch (e) {
     console.error(e);
-    ElMessage.error(String(e));
+    kameMessage.error(String(e));
   } finally {
     saving.value = false;
   }
@@ -118,7 +119,7 @@ async function handleSave() {
 async function handleReset() {
   if (!selectedPluginId.value) return;
   try {
-    await ElMessageBox.confirm(t("settings.pluginDefaultsResetConfirm"), t("settings.pluginDefaultsReset"), {
+    await messageBox.confirm(t("settings.pluginDefaultsResetConfirm"), t("settings.pluginDefaultsReset"), {
       type: "warning",
     });
   } catch {
@@ -137,10 +138,10 @@ async function handleReset() {
     form.value.vars = normalizeVarsForUI(matched, pluginVars.value as PluginVarDef[]);
     keptHttpHeaders.value = { ...(json?.httpHeaders ?? {}) };
     keptOutputDir.value = typeof json?.outputDir === "string" ? json.outputDir : "";
-    ElMessage.success(t("common.save"));
+    kameMessage.success(t("common.save"));
   } catch (e) {
     console.error(e);
-    ElMessage.error(String(e));
+    kameMessage.error(String(e));
   } finally {
     resetting.value = false;
   }

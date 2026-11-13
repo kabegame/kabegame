@@ -242,8 +242,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { ElDialog } from "@kabegame/element-plus";
 import { QuestionFilled, Right, Clock, Grid } from "@kabegame/element-plus-icons";
 import PageHeader from "@/components/common/PageHeader.vue";
@@ -261,6 +260,7 @@ import PluginPickerField from "@/components/PluginPickerField.vue";
 import { formatAbsoluteTime, formatRelativeTime } from "@/utils/relativeTime";
 import { IS_ANDROID } from "@/env";
 import { swimImageUrl } from "@/assets/illustrations";
+import { messageBox } from "@/components/ui/messageBox";
 
 const { t } = useI18n();
 const router = useRouter();
@@ -417,14 +417,14 @@ const handleStart = async () => {
   try {
     const result = normalizeAndValidateUrl(inputUrl.value);
     if ("error" in result) {
-      ElMessage.warning(result.error);
+      kameMessage.warning(result.error);
       return;
     }
     const normalized = result.url;
     await surfStore.startSession(normalized);
-    ElMessage.success(t("surf.sessionStartSuccess"));
+    kameMessage.success(t("surf.sessionStartSuccess"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
+    kameMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
   }
 };
 
@@ -507,7 +507,7 @@ async function openDetailDialog(record: SurfRecord) {
     detailCopyDone.value = false;
     detailDialog.open();
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+    kameMessage.error(e?.message || String(e) || t("surf.operationFailed"));
   }
 }
 
@@ -526,9 +526,9 @@ async function saveDetailName() {
   try {
     await surfStore.updateName(record.host, nextName);
     detailRecord.value = { ...record, name: nextName };
-    ElMessage.success(t("surf.savedSuccess"));
+    kameMessage.success(t("surf.savedSuccess"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+    kameMessage.error(e?.message || String(e) || t("surf.operationFailed"));
   }
 }
 
@@ -540,9 +540,9 @@ async function saveDetailEntryPath() {
   try {
     await surfStore.updateRootUrl(record.host, nextRootUrl);
     detailRecord.value = { ...record, rootUrl: nextRootUrl };
-    ElMessage.success(t("surf.savedSuccess"));
+    kameMessage.success(t("surf.savedSuccess"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+    kameMessage.error(e?.message || String(e) || t("surf.operationFailed"));
   }
 }
 
@@ -552,20 +552,20 @@ async function copyDetailCookie() {
   try {
     await navigator.clipboard.writeText(cookie);
     detailCopyDone.value = true;
-    ElMessage.success(t("surf.copySuccess"));
+    kameMessage.success(t("surf.copySuccess"));
   } catch {
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 
 async function confirmAndDeleteRecord(record: SurfRecord) {
-  await ElMessageBox.confirm(t("surf.deleteRecordConfirm", { host: record.host }), t("surf.deleteRecordTitle"), {
+  await messageBox.confirm(t("surf.deleteRecordConfirm", { host: record.host }), t("surf.deleteRecordTitle"), {
     confirmButtonText: t("surf.deleteButton"),
     cancelButtonText: t("common.cancel"),
     type: "warning",
   });
   await surfStore.deleteRecord(record.host);
-  ElMessage.success(t("surf.deleteSuccess"));
+  kameMessage.success(t("surf.deleteSuccess"));
 }
 
 async function deleteRecordFromDetail() {
@@ -576,7 +576,7 @@ async function deleteRecordFromDetail() {
     detailDialog.close();
   } catch (e: any) {
     if (e !== "cancel") {
-      ElMessage.error(e?.message || String(e) || t("surf.deleteFailed"));
+      kameMessage.error(e?.message || String(e) || t("surf.deleteFailed"));
     }
   }
 }
@@ -585,9 +585,9 @@ const handleRecordClick = async (record: SurfRecord) => {
   try {
     inputUrl.value = record.rootUrl;
     await surfStore.startSession(record.rootUrl);
-    ElMessage.success(t("surf.sessionStartSuccess"));
+    kameMessage.success(t("surf.sessionStartSuccess"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
+    kameMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
   }
 };
 
@@ -596,9 +596,9 @@ const isActiveSurf = (record: SurfRecord) => surfStore.sessionActive && surfStor
 const handleCloseSurf = async (record: SurfRecord) => {
   try {
     await surfStore.closeSession(record.host);
-    ElMessage.success(t("surf.sessionClosed"));
+    kameMessage.success(t("surf.sessionClosed"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+    kameMessage.error(e?.message || String(e) || t("surf.operationFailed"));
   }
 };
 
@@ -629,7 +629,7 @@ const handleRecordMenuCommand = async (command: SurfRecordMenuCommand) => {
     try {
       await surfStore.pinShortcut(record.host);
     } catch (e: any) {
-      ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+      kameMessage.error(e?.message || String(e) || t("surf.operationFailed"));
     }
     return;
   }
@@ -638,7 +638,7 @@ const handleRecordMenuCommand = async (command: SurfRecordMenuCommand) => {
       await confirmAndDeleteRecord(record);
     } catch (e: any) {
       if (e !== "cancel") {
-        ElMessage.error(e?.message || String(e) || t("surf.deleteFailed"));
+        kameMessage.error(e?.message || String(e) || t("surf.deleteFailed"));
       }
     }
   }

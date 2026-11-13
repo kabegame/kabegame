@@ -87,7 +87,7 @@ import {
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import { useUiStore } from "@/stores/ui";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -172,9 +172,9 @@ const handleOpenSurf = async () => {
   if (!r) return;
   try {
     await surfStore.startSession(r.rootUrl);
-    ElMessage.success(t("surf.sessionStartSuccess"));
+    kameMessage.success(t("surf.sessionStartSuccess"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
+    kameMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
   }
 };
 

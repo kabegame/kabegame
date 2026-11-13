@@ -35,11 +35,12 @@
 
 <script setup lang="ts">
 import { computed, watch } from "vue";
-import { ElButton, ElDialog, ElMessageBox, ElProgress } from "@kabegame/element-plus";
+import { ElButton, ElDialog, ElProgress } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@/composables/useModal";
 import * as updaterService from "@/services/updater";
 import { useUpdaterStore } from "@/stores/updater";
+import { messageBox } from "@/components/ui/messageBox";
 
 const { t } = useI18n();
 const store = useUpdaterStore();
@@ -87,7 +88,7 @@ async function onCancel() {
 
 async function promptRestart() {
   try {
-    await ElMessageBox.confirm(t("updater.restartReadyMessage"), t("updater.restartReadyTitle"), {
+    await messageBox.confirm(t("updater.restartReadyMessage"), t("updater.restartReadyTitle"), {
       confirmButtonText: t("updater.restartNow"),
       cancelButtonText: t("updater.restartLater"),
       type: "success",

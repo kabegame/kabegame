@@ -2,7 +2,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ColorBucketPanel from "./ColorBucketPanel.vue";
-import { COLOR_BUCKET_LAYER_CLASS } from "./colorBucketLayer";
 import { MAX_CUSTOM_COLOR_BUCKETS, type ColorBucket } from "@/services/colorBuckets";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -38,22 +37,23 @@ const bucket = (rgb: number, key: string | null, position: number): ColorBucket 
 const builtin = BUILTIN.map(([key, rgb], index) => bucket(rgb, key, index));
 const custom = bucket(0x32fe98, null, 12);
 
-// 全局注册的组件库组件在这里换成最小的桩：只保留面板用到的 props 与事件。
+// 新组件换成最小的桩：只保留面板用到的 props 与事件（弹层不真的打开）。
 const stubs = {
-  ElIcon: { template: "<i><slot /></i>" },
-  ElButton: {
-    props: ["disabled", "loading"],
-    template: '<button type="button" :disabled="disabled" :data-loading="String(!!loading)"><slot /></button>',
+  Button: {
+    props: ["disabled", "variant", "size"],
+    template: '<button type="button" :disabled="disabled"><slot /></button>',
   },
-  ElPopconfirm: {
-    name: "ElPopconfirm",
-    props: ["visible", "popperClass", "title"],
-    emits: ["confirm", "update:visible"],
-    template: '<span><slot name="reference" /></span>',
+  Spinner: { template: '<i class="spinner" />' },
+  Tooltip: { template: "<span><slot /></span>" },
+  Popconfirm: {
+    name: "Popconfirm",
+    props: ["open", "title"],
+    emits: ["confirm", "update:open"],
+    template: "<span><slot /></span>",
   },
-  ElColorPickerPanel: {
-    name: "ElColorPickerPanel",
-    props: ["modelValue", "disabled", "showAlpha", "border"],
+  ColorPickerPanel: {
+    name: "ColorPickerPanel",
+    props: ["modelValue", "disabled"],
     emits: ["update:modelValue"],
     template: '<div class="picker" />',
   },
@@ -63,7 +63,7 @@ const wrappers: ReturnType<typeof mount>[] = [];
 function render(props: { selected?: string; buckets?: ColorBucket[] } = {}) {
   const wrapper = mount(ColorBucketPanel, {
     props: { buckets: [...builtin, custom], ...props },
-    global: { components: stubs },
+    global: { stubs },
   });
   wrappers.push(wrapper);
   return wrapper;
@@ -71,7 +71,7 @@ function render(props: { selected?: string; buckets?: ColorBucket[] } = {}) {
 type Wrapper = ReturnType<typeof render>;
 const swatch = (wrapper: Wrapper, hex: string) => wrapper.get(`[data-color="${hex}"]`);
 const other = (wrapper: Wrapper) => wrapper.get("[data-color-other]");
-const picker = (wrapper: Wrapper) => wrapper.findComponent({ name: "ElColorPickerPanel" });
+const picker = (wrapper: Wrapper) => wrapper.findComponent({ name: "ColorPickerPanel" });
 const sortButton = (wrapper: Wrapper) => wrapper.get("[data-color-sort]");
 const saveButton = (wrapper: Wrapper) => wrapper.get("[data-color-save]");
 const hint = (wrapper: Wrapper) => wrapper.get("[data-color-hint]").text();
@@ -117,7 +117,7 @@ describe("色块", () => {
     expect(swatch(wrapper, "ffffff").attributes("aria-pressed")).toBe("true");
     expect(swatch(wrapper, "ff0000").attributes("aria-pressed")).toBe("false");
     // 浅色块上的对勾用深色
-    expect(swatch(wrapper, "ffffff").find("i").classes()).toContain("text-black/70");
+    expect(swatch(wrapper, "ffffff").find("svg").classes()).toContain("text-black/70");
     expect(other(wrapper).attributes("style") ?? "").not.toContain("background-color");
     expect(other(wrapper).attributes("title")).toBe("gallery.colorOther");
   });
@@ -132,24 +132,23 @@ describe("色块", () => {
 });
 
 describe("删除用户保存的色桶", () => {
-  it("只有用户保存的色桶带删除角标，确认框挂着豁免类", () => {
+  it("只有用户保存的色桶带删除角标，确认框默认关着", () => {
     const wrapper = render();
     const badges = wrapper.findAll("[data-delete-color]");
     expect(badges.map((el) => el.attributes("data-delete-color"))).toEqual(["32fe98"]);
-    const confirm = wrapper.findComponent({ name: "ElPopconfirm" });
-    expect(confirm.props("popperClass")).toBe(COLOR_BUCKET_LAYER_CLASS);
-    expect(confirm.props("visible")).toBe(false);
+    const confirm = wrapper.findComponent({ name: "Popconfirm" });
+    expect(confirm.props("open")).toBe(false);
   });
 
   it("角标悬停才显示；触屏（紧凑）与确认框打开时常显", async () => {
     const wrapper = render();
     expect(wrapper.get("[data-delete-color]").classes()).toContain("opacity-0");
-    const confirm = wrapper.findComponent({ name: "ElPopconfirm" });
-    confirm.vm.$emit("update:visible", true);
+    const confirm = wrapper.findComponent({ name: "Popconfirm" });
+    confirm.vm.$emit("update:open", true);
     await wrapper.vm.$nextTick();
-    expect(confirm.props("visible")).toBe(true);
+    expect(confirm.props("open")).toBe(true);
     expect(wrapper.get("[data-delete-color]").classes()).toContain("opacity-100");
-    confirm.vm.$emit("update:visible", false);
+    confirm.vm.$emit("update:open", false);
     await wrapper.vm.$nextTick();
     expect(wrapper.get("[data-delete-color]").classes()).toContain("opacity-0");
 
@@ -160,13 +159,13 @@ describe("删除用户保存的色桶", () => {
   it("确认后调删除命令，不报选色；色桶已不在了不提示", async () => {
     invoke.mockResolvedValue(null);
     const wrapper = render({ selected: "32fe98" });
-    wrapper.findComponent({ name: "ElPopconfirm" }).vm.$emit("confirm");
+    wrapper.findComponent({ name: "Popconfirm" }).vm.$emit("confirm");
     await flushPromises();
     expect(invoke).toHaveBeenCalledExactlyOnceWith("delete_color_bucket", { rgb: 0x32fe98 });
     expect(wrapper.emitted("select")).toBeUndefined();
 
     invoke.mockReset().mockRejectedValue("color-bucket:not-found");
-    wrapper.findComponent({ name: "ElPopconfirm" }).vm.$emit("confirm");
+    wrapper.findComponent({ name: "Popconfirm" }).vm.$emit("confirm");
     await flushPromises();
     expect(message.error).not.toHaveBeenCalled();
   });
@@ -174,7 +173,7 @@ describe("删除用户保存的色桶", () => {
   it("删除失败给提示", async () => {
     invoke.mockRejectedValue("color-bucket:builtin");
     const wrapper = render();
-    wrapper.findComponent({ name: "ElPopconfirm" }).vm.$emit("confirm");
+    wrapper.findComponent({ name: "Popconfirm" }).vm.$emit("confirm");
     await flushPromises();
     expect(message.error).toHaveBeenCalledExactlyOnceWith("common.operationFailed");
   });
@@ -186,7 +185,6 @@ describe("其它颜色", () => {
     await other(wrapper).trigger("click");
     expect(other(wrapper).attributes("aria-expanded")).toBe("true");
     expect(picker(wrapper).props("modelValue")).toBe("#123456");
-    expect(picker(wrapper).props("showAlpha")).toBe(false);
     expect(hint(wrapper)).toBe("gallery.colorAnyHint");
     await other(wrapper).trigger("click");
     expect(picker(wrapper).exists()).toBe(false);
@@ -218,7 +216,7 @@ describe("其它颜色", () => {
     await saveButton(wrapper).trigger("click");
 
     expect(invoke).toHaveBeenCalledExactlyOnceWith("add_color_bucket", { rgb: 0xabcdef });
-    expect(saveButton(wrapper).attributes("data-loading")).toBe("true");
+    expect(saveButton(wrapper).find(".spinner").exists()).toBe(true);
     expect(isDisabled(saveButton(wrapper))).toBe(true);
     expect(isDisabled(sortButton(wrapper))).toBe(true);
     expect(picker(wrapper).props("disabled")).toBe(true);
@@ -227,7 +225,7 @@ describe("其它颜色", () => {
     resolve({ rgb: 0xabcdef, key: null, position: 13 });
     await flushPromises();
     expect(wrapper.emitted("select")).toEqual([["abcdef"]]);
-    expect(saveButton(wrapper).attributes("data-loading")).toBe("false");
+    expect(saveButton(wrapper).find(".spinner").exists()).toBe(false);
     expect(isDisabled(sortButton(wrapper))).toBe(false);
   });
 
@@ -236,7 +234,6 @@ describe("其它颜色", () => {
     await other(wrapper).trigger("click");
     await pick(wrapper, "#FF0000");
     expect(isDisabled(saveButton(wrapper))).toBe(true);
-    expect(saveButton(wrapper).attributes("title")).toBe("gallery.colorBucketExists");
     expect(hint(wrapper)).toBe("gallery.colorBucketExists");
     expect(isDisabled(sortButton(wrapper))).toBe(false);
     await saveButton(wrapper).trigger("click");

@@ -11,16 +11,13 @@
           :disabled="isDisabled(item)"
           @click.stop="handleClick(item)"
         >
-          <el-icon class="action-sheet-icon">
+          <span class="action-sheet-icon">
             <component :is="getIcon(item)" />
-          </el-icon>
+          </span>
           <span class="action-sheet-label">
             {{ getLabel(item) }}
           </span>
-          <span
-            v-if="getSuffix(item)"
-            class="max-w-full truncate text-[10px] leading-tight text-[var(--anime-text-muted)]"
-          >
+          <span v-if="getSuffix(item)" class="max-w-full truncate text-[10px] leading-tight text-kb-fg-subtle">
             {{ getSuffix(item) }}
           </span>
         </button>
@@ -31,9 +28,9 @@
           class="action-sheet-button action-sheet-select-all"
           @click.stop="handleSelectAllClick"
         >
-          <el-icon class="action-sheet-icon">
+          <span class="action-sheet-icon">
             <component :is="selectAllButtonIcon" />
-          </el-icon>
+          </span>
           <span class="action-sheet-label">
             {{ selectAllButtonLabel }}
           </span>
@@ -65,9 +62,9 @@
               :disabled="isDisabled(child)"
               @click.stop="handleChildClick(child)"
             >
-              <el-icon v-if="child.icon" class="submenu-icon">
+              <span v-if="child.icon" class="submenu-icon">
                 <component :is="getChildIcon(child)" />
-              </el-icon>
+              </span>
               <span class="submenu-label">
                 {{ getChildLabel(child) }}
               </span>
@@ -84,8 +81,9 @@
 
 <script setup lang="ts">
 import { computed, markRaw, ref, toRaw, watch, type Component, type CSSProperties } from "vue";
-import { CloseBold, Select } from "@kabegame/element-plus-icons";
-import type { ActionItem, ActionContext } from "../actions/types";
+import { CheckCheck, X } from "@lucide/vue";
+import { useI18n } from "@kabegame/i18n";
+import { resolveActionIcon, type ActionItem, type ActionContext } from "../actions/types";
 import { useModal } from "../composables/useModal";
 import { useUiStore } from "../stores/ui";
 
@@ -112,6 +110,8 @@ const emit = defineEmits<{
   command: [command: string];
   close: [];
 }>();
+
+const { t } = useI18n();
 
 // Track which item's submenu is expanded
 const expandedItem = ref<ActionItem | null>(null);
@@ -164,9 +164,9 @@ const isAllSelected = computed(
   () => props.context.totalCount != null && props.context.selectedCount >= props.context.totalCount,
 );
 
-const selectAllButtonLabel = computed(() => (isAllSelected.value ? "取消全选" : "全选"));
+const selectAllButtonLabel = computed(() => (isAllSelected.value ? t("common.deselectAll") : t("common.selectAll")));
 
-const selectAllButtonIcon = computed<Component>(() => (isAllSelected.value ? CloseBold : Select));
+const selectAllButtonIcon = computed<Component>(() => (isAllSelected.value ? X : CheckCheck));
 
 const handleSelectAllClick = () => {
   emit("command", isAllSelected.value ? "deselectAll" : "selectAll");
@@ -204,7 +204,8 @@ const getIcon = (item: ActionItem): Component => {
     // Return a placeholder component if no icon
     return {} as Component;
   }
-  const comp = typeof icon === "function" ? (icon as (ctx: ActionContext) => Component)(props.context) : icon;
+  // 不能按 typeof === "function" 判解析器：lucide 图标本身是函数式组件（见 actions/types.ts 的 iconBy）
+  const comp = resolveActionIcon(icon, props.context) ?? ({} as Component);
   // toRaw: item may come from reactive props.actions, so icon can be a reactive proxy
   return markRaw(toRaw(comp));
 };
@@ -223,7 +224,8 @@ const getChildIcon = (child: ActionItem): Component => {
     // Return a placeholder component if no icon
     return {} as Component;
   }
-  const comp = typeof icon === "function" ? (icon as (ctx: ActionContext) => Component)(props.context) : icon;
+  // 不能按 typeof === "function" 判解析器：lucide 图标本身是函数式组件（见 actions/types.ts 的 iconBy）
+  const comp = resolveActionIcon(icon, props.context) ?? ({} as Component);
   // toRaw: child may come from reactive props.actions, so icon can be a reactive proxy
   return markRaw(toRaw(comp));
 };
@@ -298,13 +300,13 @@ const closeSubmenu = () => {
   display: flex;
   align-items: center;
   justify-content: space-around;
-  padding: 12px 8px;
-  padding-bottom: calc(12px + var(--sab, env(safe-area-inset-bottom, 0px)));
-  background: var(--anime-bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-top: 1px solid var(--anime-border);
-  box-shadow: 0 -4px 20px rgba(255, 107, 157, 0.12);
+  padding: 10px 8px;
+  padding-bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px)));
+  background: var(--kb-surface);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  border-top: 1px solid var(--kb-line);
+  box-shadow: 0 -8px 24px -12px rgba(16, 14, 20, 0.18);
 }
 
 .action-sheet-button {
@@ -316,24 +318,29 @@ const closeSubmenu = () => {
   gap: 4px;
   padding: 8px 4px;
   border: none;
+  border-radius: var(--kb-radius-md);
   background: transparent;
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
+  font: inherit;
   cursor: pointer;
-  transition:
-    opacity 0.2s ease,
-    background 0.2s ease;
+  transition: background 0.15s ease;
   min-width: 0;
   -webkit-tap-highlight-color: transparent;
 }
 
 .action-sheet-button:active {
-  opacity: 0.85;
-  background: rgba(255, 107, 157, 0.12);
+  background: var(--kb-pressed);
 }
 
 .action-sheet-icon {
-  font-size: 24px;
+  display: inline-flex;
   margin-bottom: 2px;
+  color: var(--kb-fg-muted);
+
+  :deep(svg) {
+    width: 22px;
+    height: 22px;
+  }
 }
 
 .action-sheet-label {
@@ -349,7 +356,7 @@ const closeSubmenu = () => {
 .action-sheet-slide-enter-active,
 .action-sheet-slide-leave-active {
   transition:
-    transform 0.2s ease-out,
+    transform 0.22s var(--kb-ease-out),
     opacity 0.2s ease-out;
 }
 
@@ -366,7 +373,7 @@ const closeSubmenu = () => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(74, 21, 75, 0.25);
+  background: var(--kb-overlay);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -375,27 +382,26 @@ const closeSubmenu = () => {
 .submenu-panel {
   width: 100%;
   max-width: 100%;
-  background: var(--anime-bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-top-left-radius: 16px;
-  border-top-right-radius: 16px;
-  padding: 8px 0;
-  padding-bottom: calc(8px + var(--sab, env(safe-area-inset-bottom, 0px)));
+  background: var(--kb-surface-raised);
+  border-top-left-radius: var(--kb-radius-lg);
+  border-top-right-radius: var(--kb-radius-lg);
+  padding: 6px;
+  padding-bottom: calc(6px + var(--sab, env(safe-area-inset-bottom, 0px)));
   max-height: 60vh;
   overflow-y: auto;
-  border-top: 1px solid var(--anime-border);
-  box-shadow: var(--anime-shadow);
+  box-shadow: var(--kb-shadow-lg);
 }
 
 .submenu-item {
   width: 100%;
   display: flex;
   align-items: center;
-  padding: 14px 20px;
+  padding: 12px 14px;
   border: none;
+  border-radius: var(--kb-radius-md);
   background: transparent;
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
+  font: inherit;
   cursor: pointer;
   transition: background 0.15s ease;
   text-align: left;
@@ -404,13 +410,18 @@ const closeSubmenu = () => {
 }
 
 .submenu-item:active {
-  background: rgba(255, 107, 157, 0.12);
+  background: var(--kb-pressed);
 }
 
 .submenu-icon {
-  font-size: 20px;
+  display: inline-flex;
   flex-shrink: 0;
-  color: var(--anime-text-secondary);
+  color: var(--kb-fg-muted);
+
+  :deep(svg) {
+    width: 20px;
+    height: 20px;
+  }
 }
 
 .submenu-label {
@@ -421,14 +432,14 @@ const closeSubmenu = () => {
 
 .submenu-suffix {
   font-size: 13px;
-  color: var(--anime-text-muted);
+  color: var(--kb-fg-subtle);
   margin-left: auto;
 }
 
 .submenu-divider {
   height: 1px;
-  background: var(--anime-border);
-  margin: 6px 20px;
+  background: var(--kb-line);
+  margin: 4px 14px;
 }
 
 .submenu-slide-enter-active,
@@ -438,7 +449,7 @@ const closeSubmenu = () => {
 
 .submenu-slide-enter-active .submenu-panel,
 .submenu-slide-leave-active .submenu-panel {
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.26s var(--kb-ease-out);
 }
 
 .submenu-slide-enter-from {

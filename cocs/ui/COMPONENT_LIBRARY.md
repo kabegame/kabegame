@@ -112,37 +112,11 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
 失败图片按钮）共用一份实现。它用宿主 `::after` 绘制、不插入子节点，宿主不能再占用 `::after`；
 宿主带 `:class` 绑定时 Vue patch 会重写 `className`，所以指令每次 `updated` 都补回宿主类。
 
-另一个先例是 `kb-filter-dropdown` 的 `KbFilterDropdown`。名字来自第一个用例（画廊过滤
-维度），但它本质是**「chip 触发器 + 浮层」的通用单选器**，两种形态：
+另一个先例是 `KbFilterDropdown`（过滤 chip 下拉），**P3 起已移出本包**，在 app 里用 reka-ui 重写成
+`apps/kabegame/src/components/ui/FilterDropdown.vue`（组件名仍是 `KbFilterDropdown`），见文末「新界面组件」。
 
-- **内置列表**：给 `options`（可带 `count`），组件自己渲染选项行。行高 32 / 圆角 6 /
-  hover 与选中的粉色浓度都对齐 `ProviderChildrenNode`，因为同一层弹层里内置列表与
-  过滤树面板会混用，尺寸和配色不一致会很扎眼。
-- **`#panel` 插槽**：一旦用了插槽，内置列表整个不渲染，浮层内容完全由调用方决定
-  （过滤树、搜索模式 + 输入框都是这么接的）。此时面板宽度交给内容（`is-custom`），
-  不再走内置列表那条 `clamp(260px, 24vw, 340px)`。
-
-面板里再弹出、teleport 到 body 的子层（浮层、popconfirm）点了会被当成「外部」，连带关掉面板。
-`KbFilterDropdown` 的 `clickOutsideIgnore`（CSS 选择器，透传到 tooltip 内容的 `onClickOutside`
-`ignore`）用来豁免它们，子层自己挂上对应的类即可；popconfirm 为此补了可追加的 `popperClass`。
-用例见 [收藏视图](../gallery/SAVED_VIEWS.md)。dialog 档（紧凑模式）没有点外部关闭，不需要。
-
-内置列表的选项可以带 `expandable: true`（`KbFilterDropdownOption`）：点这一行**不选中、不关闭**，而是在它下方
-就地展开一块区域，内容由调用方的 `#option-panel="{ option, close }"` 插槽给；调用方在面板里完成选择后自己发
-导航 / 改值并调 `close()` 关掉整个下拉。组件只管展开收起：同一时间至多展开一个，面板重新打开时收起；行尾有一个
-随展开转向的箭头；键盘上 Enter（焦点在面板容器上时还有空格）切换展开；展开区落在滚动区之外时自动滚进视野。
-用了 `#panel` 插槽（整体自定义面板）时不渲染展开区。选它而不是侧向弹出二级浮层，是因为同一个下拉在窄屏上是
-居中对话框，侧向浮层放不下，就地展开在两种承载方式下都成立，也没有「点了子浮层把父面板关掉」的问题——
-展开区里再 teleport 出去的层（如 popconfirm）仍要靠 `clickOutsideIgnore` 豁免。用例是画廊排序下拉的「颜色」
-一行，展开区是色桶面板（[COLOR_PALETTE.md](../gallery/COLOR_PALETTE.md)「色桶面板」）；`modelValue` 仍可以等于这
-一行的 `value` 来点亮它，选中值的实际含义（哪个颜色）由调用方自己持有。
-
-`clearable`（默认 `true`）区分两种语义：过滤维度可清空——有「任意」行、选中后 chip
-右上角出清除徽章、chip 进粉色高亮态；排序 / 每页条数这类**恒有值**的必选场景传
-`false`，三者全部关掉——恒有值时高亮不构成对比，只会满行发亮。
-
-仍是 el-dropdown 的地方分两类：**值选择器**（画册页排序/每页、失败图按插件过滤等）
-该逐步换过来；**动作菜单**（编辑/复制/删除、header 折叠动作）没有 `modelValue` 语义，
+仍是 el-dropdown 的地方分两类：**值选择器**（画册页排序/每页等）
+随所在界面换成新的 `KbFilterDropdown` / `Select`；**动作菜单**（编辑/复制/删除、header 折叠动作）没有 `modelValue` 语义，
 不要硬套，将来需要的话另抽一个复用同一套 popper + 选项样式的 `KbActionMenu`。
 
 样式约定按组件性质分流：
@@ -220,23 +194,63 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 
 图标用 `@lucide/vue`，`bootstrap/app.ts` 经 `LUCIDE_CONTEXT` 把默认线宽设为 1.75。
 
-**现有组件**：`Button`（`primary` 墨色实心 / `outline` / `ghost` / `ghost-danger`，尺寸 `sm` / `md` / `icon` /
-`icon-sm` / `icon-xs`，可做 Reka 触发器的 as-child 子元素）、`Tooltip`（`content` 为空不弹，自带 Provider）、
-`DropdownMenu` + `DropdownMenuContent` / `DropdownMenuItem` / `DropdownMenuSeparator` / `DropdownMenuTrigger`、
-`Popover` + `PopoverContent` / `PopoverTrigger` / `PopoverAnchor`（根组件都已接 `useModalBack`；`Popover` 默认非模态）、
-`Tabs`（分段式选项卡，`items: TabItem[]` 接口同原 `KbTab`：计数、行内角标、可删除、动作项；只管 tab 头，
-内容由调用方按 v-model 切换）、`Switch`（开是墨色）、`Progress`（`value` 为 null 是不定进度；`accent` / `danger` /
-`neutral`）、`Empty`（`#icon` / `#image` + 标题 + 说明 + `#actions`）、`CountBadge`（右上角计数，`accent` / `danger`）。
+**现有组件**（dev 下打开 `/dev/ui` 是陈列页 `views/dev/UiShowcase.vue`，含混用场景，改组件后在那里对照）：
+
+| 类 | 组件 | 要点 |
+| --- | --- | --- |
+| 按钮与小件 | `Button`、`CountBadge`、`Spinner`、`Tag`、`Tooltip`、`HelpTip` | `HelpTip` 是「?」说明（桌面悬停提示、Android 点按气泡），取代 `el-tooltip` + `QuestionFilled`；`Button` 变体 `primary`（墨色实心）/ `danger`（危险色实心）/ `outline` / `ghost` / `ghost-danger`，尺寸 `sm` / `md` / `icon` / `icon-sm` / `icon-xs`，可做 Reka 触发器的 as-child 子元素；`Tag` 五种色调、可关闭；`Tooltip` 的 `content` 为空不弹，自带 Provider |
+| 弹层 | `Dialog`、`AlertDialog`、`Sheet`、`Popover` + `PopoverContent`、`Popconfirm`、`PickerSheet` | 都用 `v-model:open`，根组件已接 `useModalBack`（调用方不要再套 `useModal`）；`Dialog` 有 `title` / `description` / `width` / `#footer`，关闭按钮在 DOM 末尾（打开时焦点先落正文）；`AlertDialog` 点遮罩不关，`action` 返回 Promise 时按钮转圈、完成才关；`Sheet` 四个方向，底部即 Android 底部弹层（把手、安全区）；`Popover` 默认非模态，`PopoverContent` 的 `anchor` 可锚在任意元素上（没有触发器的浮层，如锚在列表某一行的编辑浮层）；`Popconfirm` 是就地的气泡确认（默认插槽是触发按钮，取代 `el-popconfirm`）；`PickerSheet` 是底部滚轮选择（Sheet 里放 `van-picker`，待定 6 定之前保留 Vant） |
+| 菜单 | `DropdownMenu` + `DropdownMenuContent`、`ContextMenu`；共用的 `MenuItem`（= `DropdownMenuItem`，`danger` / `shortcut`）、`MenuSeparator`、`MenuSub`、`MenuCheckboxItem`、`MenuRadioGroup`、`MenuLabel` | Reka 的菜单项不依赖根组件类型，下拉与右键共用一套项；`ContextMenu` 默认插槽是触发区域、`#menu` 是菜单，要在某个坐标打开时对触发区域派发带 `clientX` / `clientY` 的 `contextmenu` 事件 |
+| 表单 | `Field`、`Input`、`Textarea`、`NumberField`、`Checkbox`、`CheckboxGroup`、`RadioGroup`、`Select`、`Slider`、`RangeSlider`、`Switch`、`SegmentedControl`、`Combobox`、`ColorPickerPanel`、`KbFilterDropdown` | `KbFilterDropdown` 见下「过滤 chip 下拉」；`ColorPickerPanel` 是取色面板（v-model `#rrggbb`，饱和度 / 明度区 + 色相条 + 十六进制输入，内部持有 HSB，拖到灰色色相不丢），取代 `el-color-picker-panel`；`RangeSlider` 的 v-model 是 `[起, 止]`；`Field` 给标签 / 说明 / 错误（取代 `el-form-item` 的布局，`orientation="horizontal"` 标签在左），控件经 `field.ts` 自动拿 id 与出错状态；校验由调用方算好 `error` 传入。`Select` / `Combobox` / `RadioGroup` / `CheckboxGroup` 用 `options` / `items` 数组；`Slider` 拖动中更新 v-model、松手发 `commit`；`NumberField` 清空时是 `undefined` |
+| 展示 | `Alert`、`DescriptionList` + `DescriptionItem`、`Empty`、`Progress`、`ScrollArea`、`Separator`、`Skeleton`、`Tabs` | `DescriptionList` 取代 `el-descriptions`；`Tabs` 接口同原 `KbTab`（只管 tab 头）；`Progress` 的 `value` 为 null 是不定进度 |
+| 反馈 | `Toaster`（`App.vue` 挂一份）、`toast`、`messageBox`、`vLoading` | 见下「反馈门面」 |
+
+**反馈门面**（P2）：
+- `toast`（`components/ui/toast.ts`）：签名同 `ElMessage`——`toast.success(msg)`、`toast({ type, message, duration })`、`toast.closeAll()`，`duration: 0` 不自动关。顶部居中，同类型同文字只留最新一条，最多同时 4 条。业务里多数提示走 `kameMessage`（吉祥物气泡），气泡被遮住时降级到 `toast`；直接调 `toast` 的是不需要吉祥物的地方。
+- `messageBox`（`components/ui/messageBox.ts`）：签名同 `ElMessageBox`（`confirm` / `alert` / `prompt` / `close`），**内部仍是 `ElMessageBox`**，P9 换成 Reka AlertDialog，调用处不动。
+- `vLoading`（`components/ui/loading.ts`）：在 `<script setup>` 里导入即可，模板照旧写 `v-loading="busy"`（script setup 里的 `vLoading` 优先于 EP 的全局同名指令）。
+- service / composable / util 里直接从 `@/components/ui/toast`、`@/components/ui/messageBox` 导入，不经 `@/components/ui`（免得把全部组件拉进来）；测试里 mock 这两个模块，不要再 mock EP 的 `ElMessage` / `ElMessageBox`。
 
 **已迁移**：
 - P0：`PageHeader` 与所有顶栏功能按钮（注册表 `header/headerFeatures.ts` 的图标已换成 lucide）、`CollectAction`、
-  插件详情顶栏、画廊副标题与查询行行尾的清除过滤。查询行的 chip（`KbFilterDropdown`）还在这个包里，但 token map
-  已改取 `--kb-*`。
+  插件详情顶栏、画廊副标题与查询行行尾的清除过滤。
 - P1：`App.vue` 布局与侧栏导航（`el-config-provider` 留到 P9）、底部导航、工具箱（`GlobalToolsPopover` /
   吉祥物气泡共用 `GlobalToolsList` + `ToolRow`；整理、清理隐藏、检查更新三个自带逻辑的条目也是 `ToolRow`，做完
   emit `done` 让工具箱关闭）、后台任务入口与卡片（共用 `busy/BusyTaskCard`）、`UpdateButton`、`KbTab` 的四处调用、
   `ScrollButtons`、`EmptyState` / `DetailPanelEmptyState`、`SuperModeToggle`、`FileDropOverlay`、启动页、吉祥物气泡。
   同时做了 EP 全局换皮（下面「token 方向」），没迁的界面观感也已对齐。
+- P2：上表的弹层 / 菜单 / 表单 / 展示组件与反馈门面；`ElMessage` 的直接调用（6 个文件）换成 `toast`，`kameMessage as ElMessage`
+  的别名改成直呼 `kameMessage`；`ElMessageBox`（31 个文件）换成 `messageBox`；`v-loading`（10 个文件）换成 `vLoading`；
+  混用期垫片（下面「层级与混用期垫片」）。
+- P3：画廊整簇——查询行（`KbFilterDropdown` 重写并移出 vendored 包、搜索、路径栏、收藏视图、色桶面板、高级查询、排序控件）、
+  网格（`ImageItem` / `ImageContent` / `ImageGridCore`）、自写右键菜单 `ContextMenu.vue`（换成 Reka 下拉在点击处打开，
+  调用方不变）、`actions/*` 的图标、树（`KbTreePanel` / `KbTreeRow`）、画廊发起的对话框（加入画册与 `AlbumPicker`、移除确认、
+  失败图片、整理、设置选择、壁纸目标选择、`OptionPickerDrawer`）、分页器与每页条数、Android 底部弹层与三个 `AndroidPicker*`、
+  `views/Gallery.vue` 的空状态与收集方式选择。
+- P4：图片预览（桌面对话框直接用 Reka 原语写，见下）、Android 详情弹窗 `ImageDetailDialog`、两侧详情面板（折叠外壳
+  `CollapsibleDrawerPanel`、基本信息、原生元数据、插件描述、标签、`CodeBlock`、壁纸属性面板与属性对话框）、插件快捷预览
+  `HoverRevealPanel`（紧凑端换底部 `Sheet`）、显示器布局图；共用表单门面 `KbColor` 提前换成色块 + `Popover` + `ColorPickerPanel`。
+  预览不用 `ui/Dialog` 的原因：层级沿用 `useModal` 的栈位（吉祥物按栈位浮在预览上，取 EP 计数器的号会盖住它，预览里再弹的
+  新浮层照常取号在它之上）、点吉祥物不关预览、只做淡入淡出（缩放会让 Panzoom 量到的容器偏小，全屏的 `position: fixed`
+  也不能有 transform 祖先）。插件描述给模板 iframe 注入的 `--anime-*` 变量名是插件约定，名字不改、取值来自 `--kb-*`。
+
+**过滤 chip 下拉**（`KbFilterDropdown`，`components/ui/FilterDropdown.vue` + 类型与上下文 `filterDropdown.ts`）：
+
+- 本质是「chip 触发器 + 浮层」的通用单选器，画廊查询行、高级查询条件行、自动任务页的筛选共用。两种面板：给 `options`
+  （可带 `count`）由组件渲染内置列表（可搜索、键盘上下 / 回车），或用 `#panel` 插槽整体自定义（过滤树、搜索模式 + 输入框）。
+- 选项可带 `expandable: true`：点它不选中、不关闭，在它下方就地展开 `#option-panel="{ option, close }"`，调用方在里面完成
+  选择后调 `close()`（画廊排序「颜色」一行的色桶面板）。同一时间至多展开一个，重新打开时收起。
+- `clearable`（默认 `true`）：过滤维度有「任意」行、选中后 chip 进淡强调色态并在右上角出清除徽章；排序这类恒有值的传
+  `false`，三者都关掉。`chipAction="toggle"` 不开面板、点 chip 发 `toggle`（升序 / 降序）。
+- `chipDisplay` 控制 chip 信息密度（`full` / `value` / `icon`），收掉的维度名与取值由 `title` 在悬停提示里补回。
+- 承载方式由祖先 `provide(kbFilterDropdownContextKey, { panelMode })` 决定：`App.vue` 在紧凑布局下给 `dialog`（居中
+  `Dialog`），否则是 chip 下方的 `Popover`。Android 返回栈由组件自己接（`useModalBack`），上下文里不再有 `bindVisible`。
+- 弹层按 chip 元素定位（`reference`），chip 不是 Reka 的触发器，所以点 chip 本身由 `@pointer-down-outside` 判成「层内」、
+  交给 chip 的 click 切换，关闭时自己把焦点还给 chip。
+- 面板里再弹出的子层（`Popconfirm`、编辑浮层、`Select`）都是 Reka 层，Reka 按层在 DOM 里的先后把它们算作层内，点它们
+  **不会**关掉外层面板，所以新组件没有 EP 版的 `clickOutsideIgnore`（收藏视图、色桶面板里给子层挂豁免类的做法已删）。
+  面板里不要再放 EP 的浮层。
+- 面板给里面的过滤树设好 `--kb-tree-row-*` 变量（文字、计数、悬停、选中），内置列表与树同一套颜色。
 
 **写法约定**
 
@@ -254,6 +268,16 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 - 工具箱这类「整行可点 + 右侧开关」的行，开关只做状态显示（`as="span"`、`pointer-events-none`、`aria-hidden`），
   否则 `button` 套 `button`，且点在开关上会切两次。
 - IDE 的 Tailwind v4 插件会提示把 `z-[var(--x)]` 写成 `z-(--x)`，那是 v4 语法，presetWind3 不认，忽略。
+- 菜单面板、菜单项、输入类控件的外框是 Uno 快捷方式 `kb-menu-panel` / `kb-menu-item` / `kb-control`（`uno.config.pub.ts`），
+  新写这几类组件时直接用，保持一致。
+- 混用期才需要、某一期要删或换实现的代码，注释里带 `TODO:[REF_UI]` 并写明哪一期（P9 以 grep 为收尾清单）。
+- 动作菜单项（`actions/*Actions.ts` 的 `ActionItem.icon`）放图标组件本身；要按上下文换图标（收藏 / 已收藏）就用
+  `iconBy(ctx => …)` 包出解析器，渲染处一律经 `resolveActionIcon` 取图标。lucide 图标本身是函数，不能再用
+  `typeof icon === "function"` 判断是不是解析器。lucide 没有的实心变体放 `components/ui/icons.ts`（`StarFilled`）。
+- 查询 chip 的维度图标是设计稿画的那套（`components/icons/filterIcons.ts` 的 `Filter*`，P3 从 vendored 图标包搬进来），
+  其余图标一律 lucide。
+- 页面级的键盘 / 滚轮 / 点击处理要给浮层让路时，用 `compat.ts` 的 `isInAnyLayer(target)`（新旧浮层都认），不要在业务里写
+  `closest(".el-overlay")`。
 - 改 `uno.config.pub.ts` 后，跑着的 dev 不会自动重载（它是被 `apps/kabegame/uno.config.ts` 间接引入的），
   `touch apps/kabegame/uno.config.ts` 即可；改 `bootstrap/app.ts`（如新增全局 css）要整页刷新。
 
@@ -265,14 +289,23 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 - **旧主题变量**：`anime-theme.css` 里中性的 `--anime-*`（文字、边框、底色、阴影）改指向 `--kb-*`，原来对 EP 的
   全局外观覆盖全部删除，只留功能性的（输入框可选中文字、隐藏原生滚动条）。品牌色 `--anime-primary` /
   `--anime-secondary` 不变。
-- **单个组件迁到新外观**时，它的 token map 改取 `--kb-*`（`KbFilterDropdown` 是第一个）；`--kb-accent` /
+- **单个组件迁到新外观**时，它的 token map 改取 `--kb-*`（`KbFilterDropdown` 是第一个，P3 已移出 vendored 包、map 一并删除）；`--kb-accent` /
   `--kb-danger` / `--kb-success` / `--kb-warning` / `--kb-ring` 挂在 `--anime-*` 上，插件详情运行时改写 `--anime-*`
   换肤仍能波及。中性色（文字、底、线、填充）是新值，不来自 `--anime-*`。
 
-**层级**：element-plus 的弹出层从 3000 起递增（`App.vue` 的 `el-config-provider`），Reka 浮层用
-`--kb-z-popover`（3000）/ `--kb-z-tooltip`（3100），内容元素上的 `z-index` 会被 Reka 复制到定位外层。
+**层级与混用期垫片**（`components/ui/compat.ts` + `styles/kb-compat.css`，P2 建、P9 删，代码处都标了 `TODO:[REF_UI]`）：
 
-**混用期的已知问题**：Reka 菜单项打开 element-plus 对话框后，焦点会回到菜单触发器（菜单关闭动画期间
-对话框遮罩盖上来，触发菜单项的 `pointerleave`，Reka 把焦点移回菜单内容，关闭后还给触发器）。鼠标操作
-不受影响；对话框迁到 Reka 后自然消失。另外 Reka 的模态浮层打开期间给 `body` 设 `pointer-events: none`，
-这时打开的 element-plus 浮层（挂在 `body` 下）点不了，所以弹层类组件要成组迁移。
+- **层级**：新浮层不用固定 z-index。打开时 `useLayerZIndex(open)` 向 EP 的全局计数器取号（`el-config-provider` 的 3000
+  是基数，EP 每开一层加 1、只增不减），新旧两边后打开的总在上面。提示消息每推一条取一次。直接用 Reka 原语写新弹层时也要接它。
+- **点外部**：Reka 的模态层把 `body` 设成 `pointer-events: none`，并把「点到层外」当作关闭信号。`kb-compat.css` 让挂在
+  `body` 下的 EP / Vant 浮层仍可点（里面挂着新浮层的 EP 对话框除外——那时模态层就是新浮层）；新层的
+  `@pointer-down-outside` / `@focus-outside` / `@interact-outside` 接 `keepOpenOnForeign`，点到旧浮层或提示消息不关。
+- **焦点陷阱与 Esc**：两边各有焦点陷阱，互看对方都在层外会来回抢焦点；EP 的陷阱还在 document 上响应 Esc。
+  - 新浮层打开期间 `usePauseForeignTraps(open)` 往 EP 的焦点层栈压一个空层，EP 的陷阱暂停（不抢焦点、不响应 Esc）。
+    没有它时，旧对话框里的新对话框 / 选择框按 Esc 会把旧对话框一起关掉。
+  - 新浮层的触发器在 EP 对话框 / 抽屉里时，浮层挂进那个对话框（`foreignPortalTarget`，Portal 的 `to`）。
+  - 从新对话框里弹 EP 确认框：`messageBox` 用 `withForeignFocus` 在确认框存在期间暂停 Reka 的陷阱（只在有新模态层时）。
+  - 菜单项打开 EP 对话框：菜单关闭时不把焦点还给触发器，而是聚焦那个对话框（`keepFocusForForeign`，修掉了 P0 的焦点问题）。
+- 新组件按界面成组迁移仍是原则，垫片只兜界面之间的跳转处。实测过的组合：新对话框里的 `el-select`（可搜索）能打开、
+  能选、不误关；旧对话框里的新选择框、组合框、下拉菜单（含子菜单）、气泡、新对话框都能用，Esc 只关最上层。
+  其它 EP 表单控件没有逐一验证，新界面里不要再放 EP 控件。

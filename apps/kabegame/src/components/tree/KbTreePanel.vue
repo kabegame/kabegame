@@ -2,59 +2,66 @@
   <!-- 缩进量只有 indentPx 一个来源：行的 padding-left 与 DnD 命中/插入线共用，
        避免 CSS 里写死 16px 而 DnD 按另一个值算 -->
   <div class="kb-tree-panel relative flex min-h-0 flex-1 flex-col" :style="{ '--kb-tree-indent': `${indentPx}px` }">
-    <!-- el-scrollbar 美化滚动条（浮层滑块不占位）；滚动元素是内部 wrap，
-         scrollerRef 经 wrapRef 继续供 DnD / sticky 使用，坐标契约不变 -->
-    <el-scrollbar ref="scrollbarRef" class="min-h-0 flex-1" wrap-class="kb-tree-panel__scroller" view-class="relative">
-      <template v-for="row in rows" :key="row.key">
-        <div v-if="row.kind === 'separator'" class="flex items-center px-1.5" :style="{ height: `${rowHeight}px` }">
-          <div class="kb-tree-panel__separator h-px flex-1" />
-        </div>
-        <div v-else-if="row.kind === 'section-header'" class="flex items-center" :style="{ height: `${rowHeight}px` }">
-          <slot name="section-header" :section-id="row.sectionId" />
-        </div>
-        <button
-          v-else-if="row.kind === 'load-more'"
-          class="flex w-full items-center justify-center gap-1 border-0 bg-transparent text-xs text-[var(--anime-primary)] hover:opacity-75 disabled:opacity-50"
-          :style="{ height: `${rowHeight}px` }"
-          :disabled="row.loading"
-          type="button"
-          @click="model.loadMore(row.parentKey ?? { sectionId: row.sectionId })"
-        >
-          <el-icon v-if="row.loading" class="is-loading"><Loading /></el-icon>
-          {{ t("albums.loadMore") }}
-        </button>
-        <KbTreeRow
-          v-else
-          :depth="row.node.depth"
-          :expandable="row.node.hasChildren"
-          :expanded="row.node.expanded"
-          :active="stateOf(row.node).active"
-          :disabled="stateOf(row.node).disabled"
-          :clickable="stateOf(row.node).clickable"
-          :muted="stateOf(row.node).muted"
-          :busy="row.node.loading"
-          :drop-target="isDropTarget(row.key)"
-          :style="{ height: `${rowHeight}px` }"
-          @toggle="onToggle(row.node)"
-          @row-click="onRowClick(row.node)"
-          @row-dblclick="emit('row-dblclick', row.node.element)"
-          @row-contextmenu="(ev) => emit('row-contextmenu', row.node.element, ev)"
-          @pointerdown="dnd.onRowPointerDown(row.key, $event)"
-        >
-          <slot name="row" :node="row.node" :element="row.node.element" />
-        </KbTreeRow>
-      </template>
+    <!-- ScrollArea 细滚动条（浮层滑块不占位）；滚动元素是它的 viewport，
+         scrollerRef 经 viewport 供 DnD / sticky 使用，坐标契约不变 -->
+    <ScrollArea ref="scrollAreaRef" class="flex min-h-0 flex-1 flex-col" viewport-class="kb-tree-panel__scroller">
+      <!-- 插入线按内容坐标定位，需要一个随内容滚动的定位祖先 -->
+      <div class="relative">
+        <template v-for="row in rows" :key="row.key">
+          <div v-if="row.kind === 'separator'" class="flex items-center px-1.5" :style="{ height: `${rowHeight}px` }">
+            <div class="kb-tree-panel__separator h-px flex-1" />
+          </div>
+          <div
+            v-else-if="row.kind === 'section-header'"
+            class="flex items-center"
+            :style="{ height: `${rowHeight}px` }"
+          >
+            <slot name="section-header" :section-id="row.sectionId" />
+          </div>
+          <button
+            v-else-if="row.kind === 'load-more'"
+            class="flex w-full cursor-pointer items-center justify-center gap-1 border-0 bg-transparent text-xs text-kb-fg-muted hover:text-kb-fg disabled:cursor-default disabled:opacity-50"
+            :style="{ height: `${rowHeight}px` }"
+            :disabled="row.loading"
+            type="button"
+            @click="model.loadMore(row.parentKey ?? { sectionId: row.sectionId })"
+          >
+            <LoaderCircle v-if="row.loading" class="size-3.5 animate-spin" />
+            {{ t("albums.loadMore") }}
+          </button>
+          <KbTreeRow
+            v-else
+            :depth="row.node.depth"
+            :expandable="row.node.hasChildren"
+            :expanded="row.node.expanded"
+            :active="stateOf(row.node).active"
+            :disabled="stateOf(row.node).disabled"
+            :clickable="stateOf(row.node).clickable"
+            :muted="stateOf(row.node).muted"
+            :busy="row.node.loading"
+            :drop-target="isDropTarget(row.key)"
+            :style="{ height: `${rowHeight}px` }"
+            @toggle="onToggle(row.node)"
+            @row-click="onRowClick(row.node)"
+            @row-dblclick="emit('row-dblclick', row.node.element)"
+            @row-contextmenu="(ev) => emit('row-contextmenu', row.node.element, ev)"
+            @pointerdown="dnd.onRowPointerDown(row.key, $event)"
+          >
+            <slot name="row" :node="row.node" :element="row.node.element" />
+          </KbTreeRow>
+        </template>
 
-      <!-- DnD 插入线（before/after 落点反馈；content 坐标随内容滚动） -->
-      <div
-        v-if="dragState?.accept && dragState.insertLine"
-        class="pointer-events-none absolute right-1 z-[130] h-[2px] rounded bg-[var(--anime-primary)]"
-        :style="{
-          top: `${dragState.insertLine.top - 1}px`,
-          left: `${dragState.insertLine.indent}px`,
-        }"
-      />
-    </el-scrollbar>
+        <!-- DnD 插入线（before/after 落点反馈；content 坐标随内容滚动） -->
+        <div
+          v-if="dragState?.accept && dragState.insertLine"
+          class="pointer-events-none absolute right-1 z-[130] h-[2px] rounded bg-kb-accent"
+          :style="{
+            top: `${dragState.insertLine.top - 1}px`,
+            left: `${dragState.insertLine.indent}px`,
+          }"
+        />
+      </div>
+    </ScrollArea>
 
     <!-- sticky 表头 overlay：顶部行的展开祖先链复制渲染（同一 #row slot，可交互） -->
     <TransitionGroup
@@ -94,8 +101,8 @@
     <Teleport to="body">
       <div
         v-if="dragState"
-        class="pointer-events-none fixed z-[4000] max-w-[240px] truncate rounded-md border border-[rgba(120,140,180,0.28)] bg-[var(--el-bg-color-overlay,#fff)] px-2.5 py-1 text-xs shadow-lg"
-        :class="dragState.accept ? 'text-[var(--anime-primary)]' : 'text-[var(--anime-text-muted)]'"
+        class="pointer-events-none fixed z-[4000] max-w-[240px] truncate rounded-kb-md bg-kb-surface-raised px-2.5 py-1 text-xs shadow-kb-pop"
+        :class="dragState.accept ? 'text-kb-fg' : 'text-kb-fg-subtle'"
         :style="{ left: `${dragState.x + 12}px`, top: `${dragState.y + 14}px` }"
       >
         {{ dragState.label }}
@@ -106,8 +113,8 @@
 
 <script setup lang="ts" generic="T">
 import { computed, ref } from "vue";
-import { ElScrollbar } from "@kabegame/element-plus";
-import { Loading } from "@kabegame/element-plus-icons";
+import { LoaderCircle } from "@lucide/vue";
+import { ScrollArea } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import KbTreeRow from "./KbTreeRow.vue";
 import type { TreeModel } from "./useTreeModel";
@@ -154,10 +161,10 @@ defineSlots<{
   "section-header"(props: { sectionId: string }): unknown;
 }>();
 
-const scrollbarRef = ref<InstanceType<typeof ElScrollbar> | null>(null);
+const scrollAreaRef = ref<{ viewport: HTMLElement | null } | null>(null);
 const { t } = useI18n();
-/** 真正滚动的元素是 el-scrollbar 的 wrap；DnD / sticky 的滚动几何都从它读 */
-const scrollerRef = computed<HTMLElement | null>(() => scrollbarRef.value?.wrapRef ?? null);
+/** 真正滚动的元素是 ScrollArea 的 viewport；DnD / sticky 的滚动几何都从它读 */
+const scrollerRef = computed<HTMLElement | null>(() => scrollAreaRef.value?.viewport ?? null);
 const rows = computed(() => props.model.rows.value);
 
 const dnd = useTreeDnd<T>({
@@ -209,17 +216,12 @@ defineExpose({ scrollerRef });
 </script>
 
 <style scoped>
-/* wrap 在 el-scrollbar 内部，scoped 属性到不了，须走 :deep()。
+/* viewport 在 ScrollArea 内部，scoped 属性到不了，须走 :deep()。
  * 滑块是浮层不占位，原先的 scrollbar-gutter 不再需要；横向内容维持裁切。
  *
- * 高度必须走 flex 链而不是 el-scrollbar 自带的 height:100%：在「max-height 收缩」
+ * 高度必须走 flex 链而不是 viewport 自带的 height:100%：在「max-height 收缩」
  * 容器里（如过滤下拉弹层），祖先高度不是 definite，百分比解析不了会退化成内容
- * 高度——wrap 撑满全部内容、永远不滚。flex 尺寸不依赖百分比解析，收缩容器下照样生效。 */
-:deep(.el-scrollbar) {
-  display: flex;
-  flex-direction: column;
-}
-
+ * 高度——viewport 撑满全部内容、永远不滚。flex 尺寸不依赖百分比解析，收缩容器下照样生效。 */
 :deep(.kb-tree-panel__scroller) {
   flex: 1 1 auto;
   min-height: 0;
@@ -228,15 +230,15 @@ defineExpose({ scrollerRef });
 }
 
 .kb-tree-panel__separator {
-  background: var(--kb-tree-separator-color, rgba(120, 140, 180, 0.2));
+  background: var(--kb-tree-separator-color, var(--kb-line));
 }
 
 /* 背景由宿主注入面板同款 token（与普通行观感一致，仅用于遮住底下滑过的内容）。 */
 .kb-tree-panel__sticky-row {
-  background: var(--kb-tree-sticky-bg, var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96)));
+  background: var(--kb-tree-sticky-bg, var(--kb-surface-raised));
   backdrop-filter: var(--kb-tree-sticky-backdrop, blur(8px));
-  --kb-tree-row-hover-bg: var(--kb-tree-sticky-bg, var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96)));
-  --kb-tree-row-hover-color: var(--kb-tree-sticky-hover-color, var(--anime-primary));
+  --kb-tree-row-hover-bg: var(--kb-tree-sticky-bg, var(--kb-surface-raised));
+  --kb-tree-row-hover-color: var(--kb-tree-sticky-hover-color, var(--kb-fg));
 }
 
 /* sticky 行悬停不能套用普通行的半透明 hover 底——会透出底下滑过的内容。
@@ -247,11 +249,11 @@ defineExpose({ scrollerRef });
 .kb-tree-panel__sticky-row.kb-tree-row--active:hover {
   background:
     linear-gradient(
-      var(--kb-tree-row-active-bg, rgba(255, 107, 157, 0.14)),
-      var(--kb-tree-row-active-bg, rgba(255, 107, 157, 0.14))
+      var(--kb-tree-row-active-bg, color-mix(in srgb, var(--kb-accent) 10%, transparent)),
+      var(--kb-tree-row-active-bg, color-mix(in srgb, var(--kb-accent) 10%, transparent))
     ),
-    var(--kb-tree-sticky-bg, var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96)));
-  color: var(--kb-tree-row-active-color, var(--anime-primary));
+    var(--kb-tree-sticky-bg, var(--kb-surface-raised));
+  color: var(--kb-tree-row-active-color, var(--kb-fg));
 }
 
 /* sticky 行淡入出现（只做 enter：离开时原生行就在同一位置，瞬时移除反而无缝） */

@@ -1,20 +1,24 @@
 <template>
-  <el-input
-    v-model="local"
-    size="small"
-    clearable
-    :prefix-icon="Search"
-    :placeholder="placeholder"
-    class="search-input"
-    @keyup.enter="commit"
-    @blur="commit"
-    @clear="commitImmediate('')"
-  />
+  <!-- 宽度放在外层：Input 外框自带 w-full，同一元素上叠宽度类谁赢不确定 -->
+  <div class="search-input w-[220px]">
+    <Input
+      v-model="local"
+      size="sm"
+      clearable
+      :placeholder="placeholder"
+      @keyup.enter="commit"
+      @blur="commit"
+      @clear="commitImmediate('')"
+    >
+      <template #prefix><Search /></template>
+    </Input>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch, onBeforeUnmount } from "vue";
-import { Search } from "@kabegame/element-plus-icons";
+import { Search } from "@lucide/vue";
+import { Input } from "@/components/ui";
 import { IS_WEB } from "@/env";
 
 const props = defineProps<{
@@ -72,9 +76,3 @@ if (!IS_WEB) {
 
 onBeforeUnmount(clearDebounce);
 </script>
-
-<style scoped lang="scss">
-.search-input {
-  width: 220px;
-}
-</style>

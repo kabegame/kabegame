@@ -1,12 +1,10 @@
 <template>
   <div class="flex flex-col gap-2">
     <template v-for="(node, index) in sequence" :key="nodeKey(index)">
-      <!-- 序列内相邻节点是「且」:左对齐的竖线 + 胶囊(设计稿) -->
+      <!-- 序列内相邻节点是「且」：左对齐的竖线 + 小胶囊 -->
       <div v-if="index > 0" class="flex items-center gap-2 py-0.5 pl-5">
-        <span class="h-4 w-px flex-none bg-[color-mix(in_srgb,var(--anime-secondary)_35%,transparent)]" />
-        <span
-          class="rounded-md bg-[color-mix(in_srgb,var(--anime-secondary)_12%,transparent)] px-1.5 py-0.5 text-xs font-semibold text-[var(--anime-secondary-dark)]"
-        >
+        <span class="h-4 w-px flex-none bg-kb-line-strong" />
+        <span class="rounded-kb-sm bg-kb-fill px-1.5 py-0.5 text-[11.5px] font-600 text-kb-fg-muted">
           {{ t("gallery.advancedAnd") }}
         </span>
       </div>
@@ -22,45 +20,46 @@
         @update:tree="updateTree"
       />
 
+      <!-- 或组：浅灰底的容器，嵌套一层更深一档；取非时转危险色调 -->
       <section
         v-else-if="groupFor(node, index)"
-        class="rounded-2xl border border-solid p-3"
+        class="box-border rounded-kb-lg border border-solid p-3"
         :class="
           groupFor(node, index)!.wrapperPath
-            ? 'border-[color-mix(in_srgb,var(--el-color-error)_38%,transparent)] bg-[color-mix(in_srgb,var(--el-color-error)_5%,transparent)]'
+            ? 'border-[color-mix(in_srgb,var(--kb-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--kb-danger)_4%,transparent)]'
             : groupDepth === 0
-              ? 'border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)] bg-[color-mix(in_srgb,var(--anime-secondary)_6%,transparent)]'
-              : 'border-[color-mix(in_srgb,var(--anime-secondary)_55%,transparent)] bg-[color-mix(in_srgb,var(--anime-secondary)_12%,transparent)]'
+              ? 'border-kb-line bg-kb-fill'
+              : 'border-kb-line-strong bg-[color-mix(in_srgb,var(--kb-fg)_6%,transparent)]'
         "
       >
         <header class="mb-3 flex flex-wrap items-center gap-2">
-          <span
-            class="rounded-lg bg-[linear-gradient(135deg,var(--anime-secondary),var(--anime-secondary-dark))] px-2.5 py-1 text-sm font-bold text-white"
-          >
+          <span class="rounded-kb-sm bg-kb-fg px-2 py-0.5 text-[12px] font-600 text-white">
             {{ t("gallery.advancedOrGroup") }}
           </span>
-          <span class="text-xs text-[var(--anime-text-secondary)]">
+          <span class="text-[12px] text-kb-fg-muted">
             {{ t("gallery.advancedOrGroupHint") }}
           </span>
           <button
             type="button"
-            class="ml-auto rounded-lg border border-dashed border-[var(--anime-border)] bg-[var(--anime-bg-card)] px-2.5 py-1.5 text-xs text-[var(--anime-text-secondary)] cursor-pointer"
-            :class="{
-              '!border-solid !border-[color-mix(in_srgb,var(--el-color-error)_45%,transparent)] !bg-[color-mix(in_srgb,var(--el-color-error)_10%,transparent)] !font-bold !text-[var(--el-color-error)]':
-                !!groupFor(node, index)!.wrapperPath,
-            }"
+            class="ml-auto box-border h-7 cursor-pointer rounded-kb-md border border-solid px-2.5 text-[12px] [font-family:inherit] outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-kb-ring"
+            :class="
+              groupFor(node, index)!.wrapperPath
+                ? 'border-[color-mix(in_srgb,var(--kb-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--kb-danger)_10%,transparent)] font-600 text-kb-danger'
+                : 'border-dashed border-kb-line-strong bg-kb-surface-raised text-kb-fg-muted hover:border-kb-fg-subtle hover:text-kb-fg'
+            "
+            :aria-pressed="!!groupFor(node, index)!.wrapperPath"
             @click="toggleGroupNegation(groupFor(node, index)!)"
           >
             {{ t("gallery.advancedNegateGroup") }}
           </button>
-          <button
-            type="button"
-            class="inline-flex h-7 w-7 items-center justify-center rounded-lg border-0 bg-transparent text-[var(--anime-text-secondary)] hover:bg-[color-mix(in_srgb,var(--el-color-error)_10%,transparent)] hover:text-[var(--el-color-error)] cursor-pointer"
+          <Button
+            variant="ghost-danger"
+            size="icon-sm"
             :aria-label="t('common.delete')"
             @click="removeGroup(groupFor(node, index)!)"
           >
-            <el-icon><Close /></el-icon>
-          </button>
+            <X />
+          </Button>
         </header>
 
         <template
@@ -68,21 +67,16 @@
           :key="`${nodeKey(index)}-branch-${branchIndex}`"
         >
           <!-- 分支之间是「或」 -->
-          <div
-            v-if="branchIndex > 0"
-            class="my-2 flex items-center gap-2 text-xs font-bold text-[var(--anime-secondary-dark)]"
-          >
-            <span class="h-px w-3.5 flex-none bg-[color-mix(in_srgb,var(--anime-secondary)_40%,transparent)]" />
-            <span
-              class="rounded-md border border-solid border-[color-mix(in_srgb,var(--anime-secondary)_40%,transparent)] bg-[var(--anime-bg-card)] px-2 py-0.5"
-            >
+          <div v-if="branchIndex > 0" class="my-2 flex items-center gap-2 text-[11.5px] font-600 text-kb-fg-muted">
+            <span class="h-px w-3.5 flex-none bg-kb-line-strong" />
+            <span class="rounded-kb-sm border border-solid border-kb-line-strong bg-kb-surface-raised px-2 py-0.5">
               {{ t("gallery.advancedOr") }}
             </span>
-            <span class="h-px flex-1 bg-[color-mix(in_srgb,var(--anime-secondary)_22%,transparent)]" />
+            <span class="h-px flex-1 bg-kb-line" />
           </div>
 
           <div>
-            <div v-if="compact" class="mb-1 text-xs font-medium text-[var(--anime-secondary)]">
+            <div v-if="compact" class="mb-1 text-[12px] font-500 text-kb-fg-muted">
               {{ t("gallery.advancedBranchN", { n: branchIndex + 1 }) }}
             </div>
             <GalleryAdvancedQuerySequence
@@ -102,36 +96,34 @@
           </div>
         </template>
 
-        <!-- 组里只加「或」:分支之间是或,分支内部不再提供任何添加口 -->
+        <!-- 组里只加「或」：分支之间是或，分支内部不再提供任何添加口 -->
         <div class="mt-3">
-          <button
-            type="button"
-            class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-secondary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-secondary-dark)] cursor-pointer"
-            @click="addBranch(groupFor(node, index)!.groupPath, [{ is: {} }])"
-          >
-            ＋ {{ t("gallery.advancedAddBranch") }}
-          </button>
+          <Button size="sm" @click="addBranch(groupFor(node, index)!.groupPath, [{ is: {} }])">
+            <Plus />
+            {{ t("gallery.advancedAddBranch") }}
+          </Button>
         </div>
       </section>
 
       <section
         v-else-if="'not' in node"
-        class="rounded-2xl border border-solid border-[color-mix(in_srgb,var(--el-color-error)_38%,transparent)] bg-[color-mix(in_srgb,var(--el-color-error)_5%,transparent)] p-3"
+        class="box-border rounded-kb-lg border border-solid border-[color-mix(in_srgb,var(--kb-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--kb-danger)_4%,transparent)] p-3"
       >
         <header class="mb-3 flex items-center gap-2">
           <span
-            class="rounded-lg bg-[color-mix(in_srgb,var(--el-color-error)_12%,transparent)] px-2 py-1 text-sm font-bold text-[var(--el-color-error)]"
+            class="rounded-kb-sm bg-[color-mix(in_srgb,var(--kb-danger)_12%,transparent)] px-2 py-0.5 text-[12px] font-600 text-kb-danger"
           >
             {{ t("gallery.advancedNegateGroup") }}
           </span>
-          <button
-            type="button"
-            class="ml-auto inline-flex h-7 w-7 items-center justify-center border-0 bg-transparent text-[var(--anime-text-secondary)] cursor-pointer"
+          <Button
+            variant="ghost-danger"
+            size="icon-sm"
+            class="ml-auto"
             :aria-label="t('common.delete')"
             @click="updateTree(removeNode(tree, nodePath(index)))"
           >
-            <el-icon><Close /></el-icon>
-          </button>
+            <X />
+          </Button>
         </header>
         <GalleryAdvancedQuerySequence
           :tree="tree"
@@ -146,30 +138,24 @@
       </section>
     </template>
 
-    <!-- 添加口只在顶层:条件之间是「且」,或组作为一个整体参与这个「且」 -->
+    <!-- 添加口只在顶层：条件之间是「且」，或组作为一个整体参与这个「且」 -->
     <div v-if="target.kind === 'root'" class="mt-1 flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-primary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-primary)] cursor-pointer"
-        @click="appendNode({ is: {} })"
-      >
-        ＋ {{ t("gallery.advancedAddCondition") }}
-      </button>
-      <button
-        type="button"
-        class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-secondary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-secondary-dark)] cursor-pointer"
-        @click="appendNode(newGroup())"
-      >
-        ＋ {{ t("gallery.advancedAddOrGroup") }}
-      </button>
+      <Button @click="appendNode({ is: {} })">
+        <Plus />
+        {{ t("gallery.advancedAddCondition") }}
+      </Button>
+      <Button @click="appendNode(newGroup())">
+        <Plus />
+        {{ t("gallery.advancedAddOrGroup") }}
+      </Button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from "@kabegame/i18n";
-import { ElIcon } from "@kabegame/element-plus";
-import { Close } from "@kabegame/element-plus-icons";
+import { Plus, X } from "@lucide/vue";
+import { Button } from "@/components/ui";
 import GalleryAdvancedQueryConditionRow from "./GalleryAdvancedQueryConditionRow.vue";
 import { removeNode, updateNode, type GalleryQuery, type GalleryQueryNode, type NodePath } from "@/utils/galleryQuery";
 

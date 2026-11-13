@@ -186,11 +186,10 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref, watch, type PropType } from "vue";
-import { ElMessageBox, KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
-import { Tabs, type TabItem } from "@/components/ui";
+import { KbFilterDropdown, Tabs, type KbFilterDropdownOption, type TabItem } from "@/components/ui";
 import { CircleCheck, Clock, Grid, Search, Sort, SortAsc, SortDesc, Timer } from "@kabegame/element-plus-icons";
 import { resolveConfigText, useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import PageHeader from "@/components/common/PageHeader.vue";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
 import AutoConfigDetailContent from "@/components/scheduler/AutoConfigDetailContent.vue";
@@ -212,6 +211,8 @@ import {
   type RunConfigFacet,
   type RunConfigQuery,
 } from "@/services/runConfigs";
+import { messageBox } from "@/components/ui/messageBox";
+import { vLoading } from "@/components/ui/loading";
 import { on, pathqlRequest$, usePathqlLookAll } from "@/services/kbEvents";
 import { recommendedConfigPaths } from "@/services/pluginFiles";
 import {
@@ -287,7 +288,7 @@ const FilterChip = defineComponent({
 const list = usePagedRunConfigs({
   basePath: () => runConfigViewPath(mine),
   countPath: () => runConfigFilterPath(mine),
-  onError: () => ElMessage.error(t("common.refreshFailed")),
+  onError: () => kameMessage.error(t("common.refreshFailed")),
 });
 const { items: configs, total, loading, showLoading, hasMore, start, loadMore } = list;
 watch(
@@ -486,7 +487,7 @@ async function runNow(config: RunConfig) {
     config.isDryRun,
     config.retryCount,
   );
-  ElMessage[created ? "success" : "error"](t(created ? "autoConfig.runStarted" : "common.operationFailed"));
+  kameMessage[created ? "success" : "error"](t(created ? "autoConfig.runStarted" : "common.operationFailed"));
 }
 
 const presetPreview = useModal();
@@ -517,12 +518,12 @@ function openPresetPreview(preset: PluginRecommendedPreset) {
 async function importPreset(preset: PluginRecommendedPreset) {
   const compatibility = await checkRecommendedPresetCompatibility(preset.pluginId, preset.userConfig);
   if (!compatibility.versionCompatible) {
-    ElMessage.error(compatibility.versionReason ?? t("common.pluginNotExist"));
+    kameMessage.error(compatibility.versionReason ?? t("common.pluginNotExist"));
     return;
   }
   if (!compatibility.contentCompatible) {
     try {
-      await ElMessageBox.confirm(
+      await messageBox.confirm(
         [...compatibility.contentErrors, ...compatibility.warnings].join("\n"),
         t("autoConfig.importCompatibilityWarningTitle"),
         {
@@ -536,6 +537,6 @@ async function importPreset(preset: PluginRecommendedPreset) {
     }
   }
   await crawlerStore.importRecommendedPreset(preset);
-  ElMessage.success(t("autoConfig.importRecommendedSuccess"));
+  kameMessage.success(t("autoConfig.importRecommendedSuccess"));
 }
 </script>

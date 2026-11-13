@@ -1,5 +1,5 @@
 import { markRaw, type Component } from "vue";
-import { Search } from "@kabegame/element-plus-icons";
+import { Search } from "@lucide/vue";
 import { FILTER_DIMENSION_ICONS } from "@/components/gallery/galleryChipIcons";
 import {
   galleryDimensionChipValue,

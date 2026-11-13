@@ -167,7 +167,7 @@ import PluginConfigForm from "@/components/crawler/PluginConfigForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
 import RetryCountField from "@/components/crawler/RetryCountField.vue";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
 import { useModal } from "@/composables/useModal";
@@ -227,9 +227,9 @@ async function openSelectedPluginInSurf() {
   if (!url) return;
   try {
     await surfStore.startSession(url);
-    ElMessage.success(t("surf.sessionStartSuccess"));
+    kameMessage.success(t("surf.sessionStartSuccess"));
   } catch (error: any) {
-    ElMessage.error(error?.message || String(error) || t("surf.sessionStartFailed"));
+    kameMessage.error(error?.message || String(error) || t("surf.sessionStartFailed"));
   }
 }
 
@@ -342,7 +342,7 @@ watch(albumValue, (newValue) => {
 
 const createOutputAlbum = async (showSuccess = true) => {
   if (!newOutputAlbumName.value.trim()) {
-    ElMessage.warning(t("albums.enterAlbumNameFirst"));
+    kameMessage.warning(t("albums.enterAlbumNameFirst"));
     return null;
   }
   try {
@@ -350,12 +350,12 @@ const createOutputAlbum = async (showSuccess = true) => {
     const created = await createAlbum(newOutputAlbumName.value.trim(), { parentId });
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
-    if (showSuccess) ElMessage.success(t("albums.albumCreated"));
+    if (showSuccess) kameMessage.success(t("albums.albumCreated"));
     return created;
   } catch (error: any) {
     console.error("创建画册失败:", error);
     const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
-    ElMessage.error(errorMessage);
+    kameMessage.error(errorMessage);
     return null;
   }
 };
@@ -374,7 +374,7 @@ const saveConfigDescription = ref("");
 function openSaveConfigDialog() {
   const cfg = tc.value;
   if (!cfg?.pluginId) {
-    ElMessage.warning(t("plugins.selectSourceBeforeSave"));
+    kameMessage.warning(t("plugins.selectSourceBeforeSave"));
     return;
   }
   saveConfigName.value = pluginStore.pluginLabel(cfg.pluginId);
@@ -385,12 +385,12 @@ function openSaveConfigDialog() {
 async function confirmSaveConfig() {
   const cfg = tc.value;
   if (!cfg?.pluginId) {
-    ElMessage.warning(t("plugins.selectSourceBeforeSave"));
+    kameMessage.warning(t("plugins.selectSourceBeforeSave"));
     return;
   }
   const name = saveConfigName.value.trim();
   if (!name) {
-    ElMessage.warning(t("common.configNamePlaceholder"));
+    kameMessage.warning(t("common.configNamePlaceholder"));
     return;
   }
   try {
@@ -409,11 +409,11 @@ async function confirmSaveConfig() {
       // Dialog 恒为手动任务：保存出来的配置默认不定时
       scheduleEnabled: false,
     });
-    ElMessage.success(t("tasks.saveConfigSuccess"));
+    kameMessage.success(t("tasks.saveConfigSuccess"));
     saveConfigModal.close();
   } catch (error) {
     console.error("保存为配置失败:", error);
-    ElMessage.error(t("tasks.saveFailed"));
+    kameMessage.error(t("tasks.saveFailed"));
   }
 }
 
@@ -423,7 +423,7 @@ async function submit() {
   const cfg = tc.value;
   if (!(await guardPluginPlatform())) return;
   if (!cfg?.pluginId) {
-    ElMessage.warning(t("plugins.selectSourcePlaceholder"));
+    kameMessage.warning(t("plugins.selectSourcePlaceholder"));
     return;
   }
 
@@ -437,14 +437,14 @@ async function submit() {
     try {
       await formRef.value.validate();
     } catch {
-      ElMessage.warning(t("plugins.fillRequired"));
+      kameMessage.warning(t("plugins.fillRequired"));
       return;
     }
   }
 
   const invalid = pluginConfigFormRef.value?.firstInvalidVar();
   if (invalid) {
-    ElMessage.warning(t("plugins.fillRequiredField", { name: varDisplayName(invalid) }));
+    kameMessage.warning(t("plugins.fillRequiredField", { name: varDisplayName(invalid) }));
     return;
   }
 

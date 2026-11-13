@@ -1,6 +1,7 @@
 // 主窗口 bootstrap：原 main.ts 的全部内容原样搬入（main.ts 现在只按 ?window= 分发）。
 import { createApp } from "vue";
 import { createPinia } from "pinia";
+// TODO:[REF_UI] P9 删：element-plus 的安装、样式、全局图标与 vCornerBadge
 import ElementPlus, { vCornerBadge } from "@kabegame/element-plus";
 /** vendored element-plus 无构建产物，直接吃 scss 源码（等价于原 element-plus/dist/index.css） */
 import "@kabegame/element-plus/theme-chalk/src/index.scss";
@@ -11,6 +12,8 @@ import router from "../router";
 import "virtual:uno.css";
 import "@/styles/anime-theme.css";
 import "@/styles/tokens.css";
+// TODO:[REF_UI] P9 删：混用期垫片的样式（旧浮层在新模态层打开时仍可点）
+import "@/styles/kb-compat.css";
 import "../styles/dialogs.css";
 import "../styles/hscroll-fade.css";
 /** Vant：Toast 组件样式（按需引入时显式使用 showToast 必须带样式，见 Vant 文档） */

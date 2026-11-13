@@ -11,30 +11,24 @@
       {{ t("gallery.toggleDetailPanel") }}
     </template>
     <div v-if="pageSnapshot" class="description-iframe-wrap">
-      <div class="mb-2 flex min-w-0 items-center gap-2">
-        <span
-          class="min-w-0 flex-1 truncate text-[13px] text-[var(--anime-text-secondary)]"
-          :title="pageSnapshot.sourceUrl"
-        >
+      <div class="mb-2 flex min-w-0 items-center gap-1.5">
+        <span class="min-w-0 flex-1 truncate text-[13px] text-kb-fg-muted" :title="pageSnapshot.sourceUrl">
           {{ pageSnapshot.title || pageSnapshot.sourceUrl }}
         </span>
-        <button
-          type="button"
-          class="flex flex-none cursor-pointer items-center rounded-md border border-solid border-[var(--anime-border)] bg-transparent p-1 text-[var(--anime-text-secondary)] hover:bg-[var(--anime-bg-card)]"
-          :title="t('common.refresh')"
-          :aria-label="t('common.refresh')"
-          @click="snapshotFrameKey += 1"
-        >
-          <el-icon><Refresh /></el-icon>
-        </button>
-        <button
+        <Tooltip :content="t('common.refresh')">
+          <Button variant="ghost" size="icon-sm" :aria-label="t('common.refresh')" @click="snapshotFrameKey += 1">
+            <RefreshCw />
+          </Button>
+        </Tooltip>
+        <Button
           v-if="isAllowedOpenUrl(pageSnapshot.sourceUrl)"
-          type="button"
-          class="flex-none cursor-pointer rounded-md border border-solid border-[var(--anime-border)] bg-transparent px-2.5 py-1 text-xs text-[var(--anime-primary)] hover:bg-[var(--anime-bg-card)]"
+          variant="outline"
+          size="sm"
           @click="openExternalLink(pageSnapshot.sourceUrl)"
         >
+          <ExternalLink />
           {{ t("gallery.openOriginalPage") }}
-        </button>
+        </Button>
       </div>
       <!-- 捕获的是任意网站的 HTML：sandbox 为空（无脚本/表单/弹窗/导航），另加内层 CSP -->
       <iframe
@@ -89,7 +83,8 @@ import {
 } from "../../composables/useImageMetadataCache";
 import { usePluginStore, WEBPAGE_PLUGIN_ID } from "../../stores/plugins";
 import { openExternalLink } from "../../utils/openExternalLink";
-import { Refresh } from "@kabegame/element-plus-icons";
+import { ExternalLink, RefreshCw } from "@lucide/vue";
+import { Button, Tooltip } from "@/components/ui";
 
 const props = withDefaults(
   defineProps<{
@@ -342,8 +337,9 @@ const descriptionTemplate = computed(() => resolvedTemplate.value ?? pluginTempl
 const templateLoading = computed(() => !resolvedTemplate.value && pluginTemplateLoading.value);
 
 /**
- * iframe srcdoc 是独立文档，无法继承主应用 :root 上的 --anime-*。
- * 用探测节点解析当前主题下的计算色，写入子文档 :root，使插件模板里 var(--anime-*) 生效。
+ * iframe srcdoc 是独立文档，无法继承主应用 :root 上的变量。
+ * 用探测节点解析当前主题下的计算色，写入子文档 :root。插件模板写的是 var(--anime-*)，所以注入的变量名
+ * 保留 --anime-* 这五个（插件约定，不改名），取值换成新 token 里同语义的颜色（--kb-*）。
  */
 function buildDescriptionIframeThemeStyles(): string {
   if (typeof document === "undefined" || !document.body) return "";
@@ -360,13 +356,14 @@ function buildDescriptionIframeThemeStyles(): string {
     return getComputedStyle(probe)[prop];
   };
 
-  const textPrimary = snapColor("color", "var(--anime-text-primary)");
-  const textSecondary = snapColor("color", "var(--anime-text-secondary)");
-  const primaryAccent = snapColor("color", "var(--anime-primary)");
+  const textPrimary = snapColor("color", "var(--kb-fg)");
+  const textSecondary = snapColor("color", "var(--kb-fg-muted)");
+  // 强调色：插件模板用它画链接、标题等，--kb-accent 本身挂在品牌粉上
+  const primaryAccent = snapColor("color", "var(--kb-accent)");
   probe.style.border = "1px solid";
-  probe.style.borderColor = "var(--anime-border)";
+  probe.style.borderColor = "var(--kb-line-strong)";
   const borderColor = getComputedStyle(probe).borderTopColor;
-  const bgCard = snapColor("backgroundColor", "var(--anime-bg-card)");
+  const bgCard = snapColor("backgroundColor", "var(--kb-surface-raised)");
 
   document.body.removeChild(probe);
 
@@ -446,7 +443,7 @@ function formatMetadataValue(v: unknown): string {
 }
 </script>
 
-<style scoped lang="scss">
+<style scoped>
 /* 外框/标题栏 chrome 由 CollapsibleDrawerPanel 提供 */
 .image-plugin-description-panel {
   min-width: 0;
@@ -457,7 +454,7 @@ function formatMetadataValue(v: unknown): string {
   min-height: 160px;
   flex: 1 1 auto;
   flex-direction: column;
-  padding: 12px;
+  padding: 2px 12px 12px;
 }
 
 .description-iframe {
@@ -465,9 +462,9 @@ function formatMetadataValue(v: unknown): string {
   width: 100%;
   min-height: 160px;
   flex: 1 1 auto;
-  border: 1px solid var(--anime-border);
-  border-radius: 10px;
-  background: var(--anime-bg-card);
+  border: 1px solid var(--kb-line);
+  border-radius: var(--kb-radius-md);
+  background: var(--kb-surface-raised);
 }
 
 .detail-metadata {
@@ -475,30 +472,31 @@ function formatMetadataValue(v: unknown): string {
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   overflow: auto;
-  padding: 12px;
+  padding: 2px 12px 12px;
+  font-size: 13px;
 }
 
 .metadata-item {
   display: flex;
   gap: 8px;
-  padding: 8px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--anime-secondary) 7%, transparent);
+  padding: 6px 8px;
+  border-radius: var(--kb-radius-sm);
+  background: var(--kb-fill-lighter);
 }
 
 .metadata-key {
   min-width: 100px;
   flex-shrink: 0;
-  color: var(--anime-text-secondary);
+  color: var(--kb-fg-muted);
   font-weight: 500;
 }
 
 .metadata-value {
   min-width: 0;
   flex: 1;
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
   word-break: break-all;
 }
 </style>

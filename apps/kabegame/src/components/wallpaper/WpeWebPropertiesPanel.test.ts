@@ -12,9 +12,9 @@ const invoke = vi.hoisted(() => vi.fn());
 /** 后端的 `customCover`：面板挂载时与 `reload` 时读取 */
 const cover = vi.hoisted(() => ({ custom: false }));
 
-vi.mock("@kabegame/element-plus", () => ({
-  ElMessage: { success, error: failure },
-  ElMessageBox: { confirm },
+vi.mock("@/components/ui/toast", () => ({ toast: { success, error: failure } }));
+vi.mock("@/components/ui/messageBox", () => ({
+  messageBox: { confirm },
 }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("@/api", () => ({ invoke }));
@@ -48,8 +48,6 @@ const ElSwitchStub = {
 const global = {
   components: {
     ElSwitch: ElSwitchStub,
-    ElButton: { template: "<button @click=\"$emit('click')\"><slot /></button>", emits: ["click"] },
-    ElIcon: { template: "<i><slot /></i>" },
   },
   stubs: {
     CollapsibleDrawerPanel: { template: '<div><slot name="trailing" /><slot /></div>' },
@@ -160,7 +158,8 @@ describe("WpeWebPropertiesDialog 透传", () => {
       props: { modelValue: true, imageId: "7", imageType: "x-wpe/scene", ...props } as never,
       global: {
         ...global,
-        components: { ...global.components, ElDialog: { template: "<div><slot /></div>" } },
+        // 对话框换成就地渲染默认插槽的桩：真对话框挂到 body 上，wrapper.find 找不到里面的内容
+        stubs: { ...global.stubs, Dialog: { template: "<div><slot /></div>" } },
       },
     });
     wrappers.push(wrapper);

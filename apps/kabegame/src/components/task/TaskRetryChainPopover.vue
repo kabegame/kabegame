@@ -60,6 +60,7 @@ import { useModal } from "@/composables/useModal";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { useRetryChainTasks } from "@/composables/useRetryChainTasks";
 import type { CrawlTask } from "@/stores/crawler";
+import { vLoading } from "@/components/ui/loading";
 
 const props = defineProps<{
   /** 重试链的原始任务 id */

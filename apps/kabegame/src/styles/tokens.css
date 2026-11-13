@@ -76,9 +76,8 @@
   /* 动效 */
   --kb-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* 层级：element-plus 的弹出层从 3000 起递增（App.vue 的 el-config-provider），新浮层与它同档 */
-  --kb-z-popover: 3000;
-  --kb-z-tooltip: 3100;
+  /* 层级：新浮层（下拉、气泡、提示、对话框、提示消息）不用固定 z-index，打开时由 components/ui/compat.ts
+     的 useLayerZIndex 向 element-plus 的全局计数器（从 3000 起递增）取号，后打开的总在上面。 */
 }
 
 /* 浮层进出场（Reka 的 Presence 会等 closed 态的动画播完再卸载） */
@@ -104,6 +103,60 @@
   }
 }
 
+/* 遮罩淡入淡出（对话框、侧边面板的遮罩） */
+@keyframes kb-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes kb-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* 侧边面板（Sheet）滑入滑出：方向由元素上的 --kb-slide-x / --kb-slide-y 给（100%、-100%） */
+@keyframes kb-slide-in {
+  from {
+    transform: translate(var(--kb-slide-x, 0), var(--kb-slide-y, 0));
+  }
+}
+
+@keyframes kb-slide-out {
+  to {
+    transform: translate(var(--kb-slide-x, 0), var(--kb-slide-y, 0));
+  }
+}
+
+/* 提示消息：从上方落下；关闭时淡出上移 */
+@keyframes kb-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+@keyframes kb-toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+
+@keyframes kb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 骨架屏的呼吸 */
+@keyframes kb-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
 /* 不定进度条：一段 40% 宽的条从左流到右 */
 @keyframes kb-progress-flow {
   from {
@@ -116,7 +169,8 @@
 
 /* 系统要求减少动效时去掉浮层动画；工具类带 [data-state] 属性选择器、特异性更高，只能用 !important */
 @media (prefers-reduced-motion: reduce) {
-  [data-reka-popper-content-wrapper] > * {
+  [data-reka-popper-content-wrapper] > *,
+  [data-kb-motion] {
     animation: none !important;
   }
 }

@@ -12,6 +12,25 @@ export interface ActionContext<T = unknown> {
   totalCount?: number;
 }
 
+const ICON_RESOLVER = Symbol("kb-action-icon-resolver");
+
+/** 按上下文挑图标的解析器（收藏 / 已收藏、隐藏 / 取消隐藏这类两态项），用 iconBy 包出来。 */
+export type ActionIconResolver<T = unknown> = ((ctx: ActionContext<T>) => Component) & { [ICON_RESOLVER]: true };
+
+/**
+ * 包一个图标解析器。不能靠 `typeof icon === "function"` 区分「解析器」与「图标组件」：
+ * lucide 的图标是函数式组件，本身就是函数，会被当成解析器调用。
+ */
+export function iconBy<T>(resolve: (ctx: ActionContext<T>) => Component): ActionIconResolver<T> {
+  return Object.assign(resolve, { [ICON_RESOLVER]: true as const });
+}
+
+/** 取一个菜单项此刻要显示的图标：解析器按上下文解析，图标组件原样返回。 */
+export function resolveActionIcon<T>(icon: ActionItem<T>["icon"], ctx: ActionContext<T>): Component | undefined {
+  if (typeof icon === "function" && ICON_RESOLVER in icon) return (icon as ActionIconResolver<T>)(ctx);
+  return icon as Component | undefined;
+}
+
 /**
  * Single action item for context menu / action sheet.
  * Supports optional children (e.g. "更多" submenu on Android/Windows).
@@ -19,7 +38,8 @@ export interface ActionContext<T = unknown> {
 export interface ActionItem<T = unknown> {
   key: string;
   label: string | ((ctx: ActionContext<T>) => string);
-  icon?: Component | ((ctx: ActionContext<T>) => Component);
+  /** 图标组件，或 iconBy(...) 包出来的按上下文解析器 */
+  icon?: Component | ActionIconResolver<T>;
   command?: string;
   visible?: (ctx: ActionContext<T>) => boolean;
   disabled?: boolean | ((ctx: ActionContext<T>) => boolean);

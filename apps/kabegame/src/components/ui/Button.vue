@@ -18,13 +18,13 @@
  */
 import { Primitive, type PrimitiveProps } from "reka-ui";
 
-type Variant = "primary" | "outline" | "ghost" | "ghost-danger";
+type Variant = "primary" | "danger" | "outline" | "ghost" | "ghost-danger";
 type Size = "sm" | "md" | "icon" | "icon-sm" | "icon-xs";
 
 withDefaults(
   defineProps<
     PrimitiveProps & {
-      /** primary：墨色实心主操作；outline：细边框次操作；ghost：只有悬停底色（工具按钮）；
+      /** primary：墨色实心主操作；danger：危险色实心（确认删除）；outline：细边框次操作；ghost：只有悬停底色（工具按钮）；
        *  ghost-danger：同 ghost，悬停转危险色（删除、卸载） */
       variant?: Variant;
       size?: Size;
@@ -46,6 +46,7 @@ const BASE =
 const VARIANTS: Record<Variant, string> = {
   primary:
     "border-0 bg-kb-primary text-kb-primary-fg shadow-kb-sm hover:bg-kb-primary-hover data-[state=open]:bg-kb-primary-hover",
+  danger: "border-0 bg-kb-danger text-white shadow-kb-sm hover:bg-[color-mix(in_srgb,var(--kb-danger)_86%,black)]",
   outline:
     "bg-transparent text-kb-fg border border-solid border-kb-line-strong hover:bg-kb-hover data-[state=open]:bg-kb-hover",
   ghost:

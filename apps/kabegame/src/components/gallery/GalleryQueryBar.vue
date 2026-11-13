@@ -22,7 +22,6 @@
         chip-display="icon"
         :title="chipTitle(t('gallery.sort'), sortFieldChipValue)"
         :clearable="false"
-        :click-outside-ignore="sortFieldClickOutsideIgnore"
         @update:model-value="
           (value) => {
             if (value) onSortFieldCommand(value);
@@ -34,7 +33,7 @@
              它和右侧同名的过滤维度长得一模一样，认不出是排序入口。 -->
         <template #icon>
           <span class="sort-combo">
-            <Sort class="sort-combo__base" />
+            <ArrowUpDown class="sort-combo__base" />
             <component :is="sortFieldIcon" class="sort-combo__badge" />
           </span>
         </template>
@@ -61,92 +60,90 @@
         @toggle="onSortOrderToggle"
       >
         <template #icon>
-          <SortDesc v-if="sortOrder === 'desc'" />
-          <SortAsc v-else />
+          <ArrowDownWideNarrow v-if="sortOrder === 'desc'" />
+          <ArrowUpNarrowWide v-else />
         </template>
       </KbFilterDropdown>
 
       <span v-if="hasFixedSection" class="query-divider" />
 
       <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整段横向滚动，不换行 -->
-      <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
-           清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
+      <!-- ScrollArea：滚动条是浮层不占位；内容的上下 padding 给 chip 右上角浮出的
+           清除徽章留位置（overflow-x 会连带裁 y），下边距同时让滑块不压住 chip。
            v-hscroll-fade 在两侧点亮「还有内容没滚到」的渐隐。 -->
-      <el-scrollbar
-        v-hscroll-fade
-        class="filter-chip-row query-main"
-        view-class="flex flex-nowrap items-center gap-2 pt-2 pb-2.5"
-      >
-        <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
+      <ScrollArea v-hscroll-fade orientation="horizontal" class="filter-chip-row query-main">
+        <div class="flex w-max flex-nowrap items-center gap-2 pb-2.5 pl-px pr-2 pt-2 [&>*]:flex-none">
+          <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
                这里每次提交都会 navigate + 重查，所以要防抖 -->
-        <GallerySearchDropdown
-          v-if="showSearchChip"
-          :query="searchText"
-          :selected-modes="searchModesView"
-          :modes="searchFeatures"
-          :chip-display="searchText.trim() ? 'value' : 'icon'"
-          :debounce="300"
-          @update:query="onSearchInput"
-          @update:selected-modes="onSearchModesSelect"
-        />
+          <GallerySearchDropdown
+            v-if="showSearchChip"
+            :query="searchText"
+            :selected-modes="searchModesView"
+            :modes="searchFeatures"
+            :chip-display="searchText.trim() ? 'value' : 'icon'"
+            :debounce="300"
+            @update:query="onSearchInput"
+            @update:selected-modes="onSearchModesSelect"
+          />
 
-        <KbFilterDropdown
-          v-for="dimension in filterDimensions"
-          :key="dimension.key"
-          :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
-          :chip-label="dimension.chipLabel"
-          :selected-label="dimensionChipValue(dimension.key)"
-          :any-label="dimension.anyLabel"
-          :chip-display="isDimensionActive(dimension.key) ? 'value' : 'icon'"
-          :title="chipTitle(dimension.title, dimensionChipTitleValue(dimension))"
-          @open="setDimensionPopoverOpen(dimension.key, true)"
-          @close="setDimensionPopoverOpen(dimension.key, false)"
-          @update:model-value="
-            (value) => {
-              if (value === null) clearDimension(dimension.key);
-            }
-          "
-        >
-          <template #icon>
-            <component :is="dimension.icon" />
-          </template>
-          <template #panel="{ close }">
-            <!-- 面板顶层直接是本维度的子项：没有维度根，也没有「任意」行，清除本维度用 chip 右上角的叉号。
+          <KbFilterDropdown
+            v-for="dimension in filterDimensions"
+            :key="dimension.key"
+            :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
+            :chip-label="dimension.chipLabel"
+            :selected-label="dimensionChipValue(dimension.key)"
+            :any-label="dimension.anyLabel"
+            :chip-display="isDimensionActive(dimension.key) ? 'value' : 'icon'"
+            :title="chipTitle(dimension.title, dimensionChipTitleValue(dimension))"
+            @open="setDimensionPopoverOpen(dimension.key, true)"
+            @close="setDimensionPopoverOpen(dimension.key, false)"
+            @update:model-value="
+              (value) => {
+                if (value === null) clearDimension(dimension.key);
+              }
+            "
+          >
+            <template #icon>
+              <component :is="dimension.icon" />
+            </template>
+            <template #panel="{ close }">
+              <!-- 面板顶层直接是本维度的子项：没有维度根，也没有「任意」行，清除本维度用 chip 右上角的叉号。
                    子项计数由 pathForTreeSegment 按「去掉本维度后」的上下文算出。 -->
-            <div class="p-1.5">
-              <GalleryFilterTree
-                ref="providerTreeRef"
-                :context-prefix="simpleContextPrefix"
-                :filters="activeFilters"
-                :filter="filterForDimension(activeFilters, dimension.key)"
-                :dimension="dimension.key"
-                :visible="!!dimensionPopoverOpen[dimension.key]"
-                @update:filter="
-                  (f) => {
-                    onDimensionFilter(dimension.key, f);
-                    close();
-                  }
-                "
-              />
-            </div>
-          </template>
-        </KbFilterDropdown>
-        <KbFilterDropdown
-          v-if="enableAdvanced"
-          :model-value="isAdvancedActive ? 'advanced' : null"
-          :chip-label="t('gallery.advancedQuery')"
-          :selected-label="t('gallery.advancedQueryShort')"
-          :badge="advancedConditionCount > 0 ? String(advancedConditionCount) : undefined"
-          :any-label="t(isAdvancedActive ? 'gallery.advancedClear' : 'gallery.advancedQueryShort')"
-          :title="t('gallery.advancedQuery')"
-          chip-display="value"
-          chip-action="toggle"
-          @toggle="openAdvancedQuery"
-          @update:model-value="clearAdvancedQuery"
-        >
-          <template #icon><LetterA /></template>
-        </KbFilterDropdown>
-      </el-scrollbar>
+              <div class="p-1.5">
+                <GalleryFilterTree
+                  ref="providerTreeRef"
+                  :context-prefix="simpleContextPrefix"
+                  :filters="activeFilters"
+                  :filter="filterForDimension(activeFilters, dimension.key)"
+                  :dimension="dimension.key"
+                  :visible="!!dimensionPopoverOpen[dimension.key]"
+                  @update:filter="
+                    (f) => {
+                      onDimensionFilter(dimension.key, f);
+                      close();
+                    }
+                  "
+                />
+              </div>
+            </template>
+          </KbFilterDropdown>
+          <KbFilterDropdown
+            v-if="enableAdvanced"
+            :model-value="isAdvancedActive ? 'advanced' : null"
+            :chip-label="t('gallery.advancedQuery')"
+            :selected-label="t('gallery.advancedQueryShort')"
+            :badge="advancedConditionCount > 0 ? String(advancedConditionCount) : undefined"
+            :any-label="t(isAdvancedActive ? 'gallery.advancedClear' : 'gallery.advancedQueryShort')"
+            :title="t('gallery.advancedQuery')"
+            chip-display="value"
+            chip-action="toggle"
+            @toggle="openAdvancedQuery"
+            @update:model-value="clearAdvancedQuery"
+          >
+            <template #icon><SlidersHorizontal /></template>
+          </KbFilterDropdown>
+        </div>
+      </ScrollArea>
 
       <span class="query-divider" />
 
@@ -174,7 +171,6 @@
         :title="t('gallery.viewMenu')"
         chip-display="icon"
         :clearable="false"
-        :click-outside-ignore="viewMenuClickOutsideIgnore"
         @open="viewMenuOpen = true"
         @close="viewMenuOpen = false"
       >
@@ -190,7 +186,7 @@
               :disabled="isRotatingThisViewEverywhere || rotationBusy"
               @click="rotateWithCurrentView"
             >
-              <span class="view-menu__icon"><Picture /></span>
+              <span class="view-menu__icon"><GalleryHorizontalEnd /></span>
               <span class="flex min-w-0 flex-1 flex-col text-left">
                 <span>
                   {{ isRotatingThisViewEverywhere ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
@@ -198,7 +194,7 @@
                 <!-- 逐屏独立下只有部分屏在轮播本视图：仍可点（给另一块屏），写明已经是哪几块 -->
                 <span
                   v-if="rotatingThisViewScreens"
-                  class="truncate text-11px leading-[1.4] text-[var(--anime-text-muted)]"
+                  class="truncate text-11px leading-[1.4] text-kb-fg-subtle"
                   :title="rotatingThisViewScreens"
                 >
                   {{ rotatingThisViewScreens }}
@@ -220,27 +216,15 @@
       </KbFilterDropdown>
     </div>
 
-    <!-- Android：fold 中「每页条数」弹出的 van-picker（桌面工具条没有这颗 chip，改从设置页走） -->
-    <Teleport v-if="uiStore.isCompact" to="body">
-      <van-popup
-        v-if="enablePageSize"
-        :show="pageSizePicker.isOpen.value"
-        position="bottom"
-        round
-        :z-index="pageSizePicker.zIndex.value"
-        @update:show="pageSizePicker.close"
-      >
-        <van-picker
-          v-model="pageSizePickerSelected"
-          :title="$t('gallery.pageSize')"
-          :columns="pageSizePickerColumns"
-          :confirm-button-text="t('common.confirm')"
-          :cancel-button-text="t('common.cancel')"
-          @confirm="onPageSizePickerConfirm"
-          @cancel="pageSizePicker.close()"
-        />
-      </van-popup>
-    </Teleport>
+    <!-- Android：fold 中「每页条数」弹出的滚轮（桌面工具条没有这颗 chip，改从设置页走） -->
+    <PickerSheet
+      v-if="uiStore.isCompact && enablePageSize"
+      v-model:open="pageSizePickerOpen"
+      v-model="pageSizePickerSelected"
+      :title="t('gallery.pageSize')"
+      :columns="pageSizePickerColumns"
+      @confirm="onPageSizePickerConfirm"
+    />
 
     <GalleryAdvancedQueryDialog
       v-if="enableAdvanced"
@@ -256,22 +240,31 @@
 <script setup lang="ts">
 import { computed, inject, markRaw, provide, ref, useSlots, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
-import { LetterA, Picture, Sort, SortAsc, SortDesc } from "@kabegame/element-plus-icons";
+import {
+  ArrowDownWideNarrow,
+  ArrowUpDown,
+  ArrowUpNarrowWide,
+  GalleryHorizontalEnd,
+  SlidersHorizontal,
+} from "@lucide/vue";
 import { Ellipsis, FunnelX } from "@lucide/vue";
-import { Button, Tooltip } from "@/components/ui";
+import {
+  Button,
+  KbFilterDropdown,
+  PickerSheet,
+  ScrollArea,
+  Tooltip,
+  type KbFilterDropdownOption,
+} from "@/components/ui";
 import { withGalleryPrefix } from "@/utils/path";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import ColorBucketPanel from "@/components/gallery/ColorBucketPanel.vue";
-import { COLOR_BUCKET_LAYER_CLASS } from "@/components/gallery/colorBucketLayer";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
 import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
 import SavedViewsSection from "@/components/gallery/savedViews/SavedViewsSection.vue";
 import { FILTER_DIMENSION_ICONS, SORT_FIELD_ICONS } from "@/components/gallery/galleryChipIcons";
-import { SAVED_VIEW_LAYER_CLASS } from "@/components/gallery/savedViews/savedViewLayer";
 import { GallerySearchModesKey } from "@/components/gallery/searchModesContext";
 import { useColorBuckets } from "@/composables/useColorBuckets";
-import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
@@ -303,7 +296,7 @@ import {
 } from "@/composables/useWallpaperTarget";
 import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { gridViewKey } from "@/components/imageGrid/gridViewPath";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { IS_WEB } from "@/env";
 import { DEFAULT_GALLERY_PAGE_SIZE, GALLERY_PAGE_SIZE_OPTIONS, isGalleryPageSizeOption } from "@/utils/galleryPageSize";
 import {
@@ -453,14 +446,16 @@ async function rotateWithCurrentView() {
       !wallpaperModeSupportsVideo(settingsStore.values.wallpaperMode) &&
       filterMediaKind(activeFilters.value) !== "image";
     if (skipsVideo) {
-      ElMessage.warning(
+      kameMessage.warning(
         screen ? t("gallery.rotateThisViewSkipsVideoOn", { screen }) : t("gallery.rotateThisViewSkipsVideo"),
       );
     } else {
-      ElMessage.success(screen ? t("gallery.rotateThisViewSuccessOn", { screen }) : t("gallery.rotateThisViewSuccess"));
+      kameMessage.success(
+        screen ? t("gallery.rotateThisViewSuccessOn", { screen }) : t("gallery.rotateThisViewSuccess"),
+      );
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e));
+    kameMessage.error(e?.message || String(e));
   } finally {
     rotationBusy.value = false;
   }
@@ -473,8 +468,6 @@ function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
 // ---------- 收藏视图 ----------
 // ⋯ 视图菜单的开合态：收藏列表在打开时读一次库、收起时记最后使用（见 SavedViewsSection）。
 const viewMenuOpen = ref(false);
-// 编辑浮层与移除确认都 teleport 到 body，点它们不能算 ⋯ 菜单的「外部」。
-const viewMenuClickOutsideIgnore = [`.${SAVED_VIEW_LAYER_CLASS}`];
 
 /** 应用一条收藏视图：整体换掉查询与排序，各页 @navigate 照旧记搜索勾选。 */
 function applySavedView(view: { query: GalleryQuery; sort: GallerySort }) {
@@ -627,7 +620,7 @@ const showSortOrderChip = computed(() => props.sortFeatures.length > 0);
 /** 左端固定区是否有内容——空的话它后面那条分隔线就成了行首一根孤立竖线。 */
 const hasFixedSection = computed(() => !!slots.leading || showSortFieldChip.value || showSortOrderChip.value);
 
-const sortFieldIcon = computed<Component>(() => SORT_FIELD_ICONS[sortField.value] ?? markRaw(Sort));
+const sortFieldIcon = computed<Component>(() => SORT_FIELD_ICONS[sortField.value] ?? markRaw(ArrowUpDown));
 const sortFieldChipValue = computed(() => {
   const label = gallerySortFieldLabel(sortField.value, t);
   // 颜色排序把颜色也写进 tooltip：「颜色 · 红」/「颜色 · #32fe98」
@@ -710,8 +703,6 @@ const {
 const sortFieldModel = computed(() => (isColorSortField(sortField.value) ? "by-color" : sortField.value));
 /** 当前排序的颜色；不是颜色排序时为 undefined。 */
 const sortColor = computed(() => (isColorSortField(props.sort.field) ? props.sort.color : undefined));
-// 色桶面板的删除确认 teleport 到 body，点它不能算排序下拉的「外部」。
-const sortFieldClickOutsideIgnore = [`.${COLOR_BUCKET_LAYER_CLASS}`];
 
 function onSortColorSelect(hex: string, close: () => void) {
   // 方向：从别的排序切过来一律「最接近的在前」——别的维度的倒序（如时间倒序 = 最新在前）
@@ -771,16 +762,15 @@ watch(pluginSignature, () => {
 const providerTreeRef = ref<any>(null);
 
 // ---------- 安卓 picker（每页条数）----------
-const pageSizePicker = useModal();
+const pageSizePickerOpen = ref(false);
 const pageSizePickerColumns = computed(() => pageSizeOptions.map((n) => ({ text: String(n), value: String(n) })));
 
 const pageSizePickerSelected = ref<string[]>([String(DEFAULT_GALLERY_PAGE_SIZE)]);
-watch(pageSizePicker.isOpen, (open) => {
+watch(pageSizePickerOpen, (open) => {
   if (open) pageSizePickerSelected.value = [String(props.pageSize)];
 });
 
 function onPageSizePickerConfirm() {
-  pageSizePicker.close();
   const v = pageSizePickerSelected.value[0];
   const n = Number(v);
   if (!isGalleryPageSizeOption(n)) return;
@@ -795,7 +785,7 @@ async function refreshProviderFilterTree() {
 
 function openPageSizePicker() {
   pageSizePickerSelected.value = [String(props.pageSize)];
-  pageSizePicker.open();
+  pageSizePickerOpen.value = true;
 }
 
 defineExpose({
@@ -918,26 +908,6 @@ defineExpose({
   &:disabled {
     color: var(--kb-fg-muted);
     cursor: default;
-  }
-}
-
-/* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */
-.filter-chip-row {
-  // el-scrollbar 的滑块是浮层不占位，用中性灰，不抢 chip 的颜色。
-  --el-scrollbar-bg-color: var(--kb-fg-subtle);
-  --el-scrollbar-hover-bg-color: var(--kb-fg-muted);
-  --el-scrollbar-opacity: 0.5;
-  --el-scrollbar-hover-opacity: 0.8;
-
-  :deep(.el-scrollbar__view) > * {
-    flex: none;
-  }
-
-  :deep(.el-scrollbar__bar.is-horizontal) {
-    height: 4px;
-    bottom: 0;
-    left: 0;
-    right: 0;
   }
 }
 </style>

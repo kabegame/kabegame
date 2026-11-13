@@ -43,15 +43,16 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
-import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import type { Plugin } from "@/stores/plugins";
 import { usePluginActionState } from "@/composables/usePluginActionState";
 import { useUiStore } from "@/stores/ui";
 import { useModal } from "@/composables/useModal";
 import PluginDetailContent from "@/components/plugin/PluginDetailContent.vue";
+import { messageBox } from "@/components/ui/messageBox";
+import { vLoading } from "@/components/ui/loading";
 
 const props = defineProps<{
   kgpgPath: string | null;
@@ -147,7 +148,7 @@ const doInstall = async () => {
       : t("common.importSuccess");
 
   try {
-    await ElMessageBox.confirm(t("plugins.installLocalConfirm", { name: pluginName(preview.value) }), confirmTitle, {
+    await messageBox.confirm(t("plugins.installLocalConfirm", { name: pluginName(preview.value) }), confirmTitle, {
       type: "warning",
       confirmButtonText: t("plugins.installButton"),
       cancelButtonText: t("common.cancel"),
@@ -158,12 +159,12 @@ const doInstall = async () => {
 
   try {
     await invoke("import_plugin_from_zip", { zipPath: props.kgpgPath });
-    ElMessage.success(successMsg);
+    kameMessage.success(successMsg);
     // plugin-added / plugin-changed 事件自动更新插件 store
     emit("success");
     modal.close();
   } catch (e: any) {
-    ElMessage.error(typeof e === "string" ? e : String(e?.message || e));
+    kameMessage.error(typeof e === "string" ? e : String(e?.message || e));
   }
 };
 </script>

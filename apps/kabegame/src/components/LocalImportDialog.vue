@@ -93,7 +93,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Document, FolderOpened } from "@kabegame/element-plus-icons";
 import { ElDialog } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCrawlerStore } from "@/stores/crawler";
 import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
@@ -161,7 +161,7 @@ async function handleAddFiles() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件失败:", e);
-      ElMessage.error(t("albums.selectFileFailed"));
+      kameMessage.error(t("albums.selectFileFailed"));
     }
   }
 }
@@ -182,7 +182,7 @@ async function handleAddFolder() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件夹失败:", e);
-      ElMessage.error(t("albums.selectFolderFailed"));
+      kameMessage.error(t("albums.selectFolderFailed"));
     }
   }
 }
@@ -194,7 +194,7 @@ function removeItem(idx: number) {
 async function createOutputAlbum(showSuccess = true) {
   const name = newOutputAlbumName.value.trim();
   if (!name) {
-    ElMessage.warning(t("albums.enterAlbumNameFirst"));
+    kameMessage.warning(t("albums.enterAlbumNameFirst"));
     return null;
   }
   try {
@@ -203,12 +203,12 @@ async function createOutputAlbum(showSuccess = true) {
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
     if (showSuccess) {
-      ElMessage.success(t("albums.albumCreated"));
+      kameMessage.success(t("albums.albumCreated"));
     }
     return album;
   } catch (e) {
     console.error("创建画册失败:", e);
-    ElMessage.error(t("albums.createAlbumFailed"));
+    kameMessage.error(t("albums.createAlbumFailed"));
     return null;
   }
 }
@@ -222,7 +222,7 @@ async function handleCreateOutputAlbum() {
 
 async function handleSubmit() {
   if (displayItems.value.length === 0) {
-    ElMessage.warning(t("albums.addPathFirst"));
+    kameMessage.warning(t("albums.addPathFirst"));
     return;
   }
 
@@ -261,7 +261,7 @@ async function handleSubmit() {
 
   modal.close();
   paths.value = [];
-  ElMessage.success(t("gallery.localImportTaskAdded"));
+  kameMessage.success(t("gallery.localImportTaskAdded"));
 }
 
 function handleOpen() {

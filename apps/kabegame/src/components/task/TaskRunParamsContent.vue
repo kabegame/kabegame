@@ -161,7 +161,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { Clock, CopyDocument, Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import { buildVarMetaMapFromPluginConfig, usePluginStore } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
@@ -330,10 +330,10 @@ async function handleCopyError(task: TaskRunParamsTask) {
     } else {
       await navigator.clipboard.writeText(text);
     }
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (error) {
     console.error("复制失败:", error);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 </script>

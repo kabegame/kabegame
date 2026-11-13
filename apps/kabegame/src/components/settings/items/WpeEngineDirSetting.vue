@@ -19,7 +19,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { FolderOpened } from "@kabegame/element-plus-icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
@@ -34,7 +34,7 @@ const save = async (value: string | null) => {
     await set(value);
   } catch {
     // 后端只会因为选的文件夹不是 WPE 目录而拒绝
-    ElMessage.error(t("settings.wpeEngineDirInvalid"));
+    kameMessage.error(t("settings.wpeEngineDirInvalid"));
   }
 };
 

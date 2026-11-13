@@ -9,34 +9,37 @@
       {{ t("albums.imageLabelsTitle") }}
     </template>
     <template #trailing>
-      <button
-        type="button"
-        class="image-labels-icon-btn"
-        :title="labelKeysText(labels)"
-        :disabled="labels.length === 0"
-        @click.stop="copyLabels"
-      >
-        <el-icon><CopyDocument /></el-icon>
-      </button>
+      <Tooltip :content="labelKeysText(labels)">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          :aria-label="t('albums.imageLabelsCopy')"
+          :disabled="labels.length === 0"
+          @click.stop="copyLabels"
+        >
+          <Copy />
+        </Button>
+      </Tooltip>
     </template>
 
-    <div class="flex flex-col gap-2 px-3 pb-3">
-      <div v-if="labels.length > 0" class="image-labels-list flex flex-wrap content-start gap-1.5">
-        <el-tag
+    <div class="flex flex-col gap-2.5 px-3 pb-3">
+      <!-- 标签多时不撑高侧栏：最多占预览侧栏高度的 25%，内部滚动（cqh 基于 ImagePreviewDialog 左侧栏容器） -->
+      <div v-if="labels.length > 0" class="flex max-h-[25cqh] flex-wrap content-start gap-1.5 overflow-y-auto">
+        <!-- 同目录的标签共用一个淡色（presentImageLabels 给 --kb-label-* 变量），根级标签是中性灰 -->
+        <Tag
           v-for="{ label, style } in presentedLabels"
           :key="label.id"
           class="image-labels-tag"
           :style="style"
           closable
-          disable-transitions
           :title="label.labelPath ?? undefined"
           @click="openLabel(label)"
           @close="removeLabel(label)"
         >
           {{ label.name }}
-        </el-tag>
+        </Tag>
       </div>
-      <p v-else class="m-0 text-xs text-[var(--anime-text-muted)]">
+      <p v-else class="m-0 text-[12px] text-kb-fg-subtle">
         {{ t("albums.imageLabelsEmpty") }}
       </p>
 
@@ -50,63 +53,52 @@
         />
       </div>
 
-      <div class="flex gap-2">
-        <el-button size="small" :icon="picking ? Close : Plus" @click="togglePicking">
+      <div class="flex flex-wrap gap-2">
+        <Button size="sm" @click="togglePicking">
+          <X v-if="picking" />
+          <Plus v-else />
           {{ picking ? t("common.cancel") : t("albums.imageLabelsAdd") }}
-        </el-button>
-        <el-button size="small" :icon="PriceTag" @click="openCreateDialog">
+        </Button>
+        <Button size="sm" @click="openCreateDialog">
+          <TagIcon />
           {{ t("albums.imageLabelsCreate") }}
-        </el-button>
+        </Button>
       </div>
     </div>
   </CollapsibleDrawerPanel>
 
-  <el-dialog
-    :model-value="createDialog.isOpen.value"
-    :z-index="createDialog.zIndex.value"
-    :title="t('albums.imageLabelsCreate')"
-    width="380px"
-    append-to-body
-    @update:model-value="createDialog.close"
-    @closed="resetCreateForm"
-  >
-    <el-form label-width="0" @submit.prevent>
-      <el-input v-model="newKey" :placeholder="t('albums.labelKeyPlaceholder')" @keyup.enter="submitCreate" />
-      <p v-if="newKey && !newKeyValid" class="image-labels-error">
-        {{ t("albums.labelKeyInvalidHint") }}
-      </p>
-      <el-input
-        v-model="newName"
-        class="mt-3"
-        :placeholder="t('albums.labelNamePlaceholder')"
-        @keyup.enter="submitCreate"
-      />
+  <Dialog v-model:open="createOpen" :title="t('albums.imageLabelsCreate')" :width="380">
+    <div class="flex flex-col gap-3">
+      <Field :error="newKey && !newKeyValid ? t('albums.labelKeyInvalidHint') : undefined">
+        <Input v-model="newKey" :placeholder="t('albums.labelKeyPlaceholder')" @keyup.enter="submitCreate" />
+      </Field>
+      <Input v-model="newName" :placeholder="t('albums.labelNamePlaceholder')" @keyup.enter="submitCreate" />
       <AlbumPicker
         v-model="newParentId"
-        class="mt-3"
         :scope="{ sections: ['label'], kinds: ['label_dir'] }"
         :placeholder="t('albums.selectParentLabel')"
         :picker-title="t('albums.parentAlbum')"
       />
-    </el-form>
+    </div>
     <template #footer>
-      <el-button @click="createDialog.close()">{{ t("common.cancel") }}</el-button>
-      <el-button type="primary" :disabled="!newKeyValid" :loading="creating" @click="submitCreate">
+      <Button @click="createOpen = false">{{ t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="!newKeyValid || creating" @click="submitCreate">
+        <Spinner v-if="creating" :size="14" />
         {{ t("albums.create") }}
-      </el-button>
+      </Button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { onScopeDispose, computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@kabegame/i18n";
-import { Close, CopyDocument, Plus, PriceTag } from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { Copy, Plus, Tag as TagIcon, X } from "@lucide/vue";
+import { Button, Dialog, Field, Input, Spinner, Tag, Tooltip } from "@/components/ui";
+import { kameMessage } from "@/utils/kameMessage";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
-import { useModal } from "@/composables/useModal";
 import type { ImageInfo } from "@/types/image";
 import {
   FAVORITE_ALBUM_ID,
@@ -214,7 +206,7 @@ async function removeLabel(label: Album) {
     labels.value = labels.value.filter((item) => item.id !== label.id);
     requestLabels();
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    kameMessage.error(errorMessage(error));
   }
 }
 
@@ -225,7 +217,7 @@ async function addLabel(label: Album) {
     requestLabels();
     picking.value = false;
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    kameMessage.error(errorMessage(error));
   }
 }
 
@@ -234,10 +226,10 @@ async function copyLabels() {
   if (!text) return;
   try {
     await writeClipboardText(text);
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (error) {
     console.error("复制标签失败:", error);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 
@@ -268,15 +260,17 @@ async function togglePicking() {
 }
 
 // ---------- 当场新建 ----------
-const createDialog = useModal();
+const createOpen = ref(false);
 const newKey = ref("");
 const newName = ref("");
 const newParentId = ref<string | null>(null);
 const creating = ref(false);
 const newKeyValid = computed(() => isLabelKey(newKey.value.trim()));
 
+// 打开时清空上一次的输入（关闭时不清：免得关闭动画里内容先变空）
 function openCreateDialog() {
-  createDialog.open();
+  resetCreateForm();
+  createOpen.value = true;
 }
 
 function resetCreateForm() {
@@ -296,9 +290,9 @@ async function submitCreate() {
       parentId: newParentId.value,
     });
     await addLabel(created);
-    createDialog.close();
+    createOpen.value = false;
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    kameMessage.error(errorMessage(error));
   } finally {
     creating.value = false;
   }
@@ -306,67 +300,14 @@ async function submitCreate() {
 </script>
 
 <style scoped>
+/* 目录色板：presentImageLabels 给的 --kb-label-* 盖掉 Tag 中性色调；带 scoped 属性的选择器比 Uno 工具类更具体 */
 .image-labels-tag {
+  background-color: var(--kb-label-bg);
+  color: var(--kb-label-fg);
   cursor: pointer;
 }
 
-/* 标签多时不撑高侧栏：最多占预览侧栏高度的 25%，内部滚动（cqh 基于 ImagePreviewDialog 左侧栏容器） */
-.image-labels-list {
-  max-height: 25cqh;
-  overflow-y: auto;
-}
-
-.image-labels-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--anime-text-muted);
-  cursor: pointer;
-}
-
-.image-labels-icon-btn:hover:not(:disabled) {
-  color: var(--anime-text-secondary);
-  background: rgba(167, 139, 250, 0.16);
-}
-
-.image-labels-icon-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-.image-labels-candidates {
-  max-height: 180px;
-  overflow-y: auto;
-}
-
-.image-labels-candidate {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--anime-text-primary);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.image-labels-candidate:hover {
-  background: rgba(167, 139, 250, 0.16);
-}
-
-.image-labels-error {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--el-color-danger);
+.image-labels-tag:hover {
+  color: var(--kb-label-hover);
 }
 </style>

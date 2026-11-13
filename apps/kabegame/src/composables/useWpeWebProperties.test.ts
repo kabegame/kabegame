@@ -7,7 +7,7 @@ const invoke = vi.hoisted(() => vi.fn());
 const subjects = vi.hoisted(() => new Map<string, unknown>());
 
 vi.mock("@/api", () => ({ invoke }));
-vi.mock("@kabegame/element-plus", () => ({ ElMessage: { error: vi.fn() } }));
+vi.mock("@/components/ui/toast", () => ({ toast: { error: vi.fn() } }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("@/services/kbEvents/eventSource", async () => {
   const { Subject } = await import("rxjs");

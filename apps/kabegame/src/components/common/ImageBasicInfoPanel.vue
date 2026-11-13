@@ -1,7 +1,7 @@
 <template>
   <CollapsibleDrawerPanel
     v-if="image"
-    class="image-basic-info-panel"
+    class="image-basic-info-panel min-w-0"
     storage-key="kabegame-image-detail-fields-open"
     :fill-when-expanded="fillWhenExpanded"
     :collapsible="collapsible"
@@ -10,32 +10,44 @@
     <template #title>
       {{ t("gallery.imageDetailBasicSection") }}
     </template>
-    <div class="basic-info-body">
+    <!-- 面板被压矮时内部滚动；line-clamp 的 overflow:hidden 会让 flex 子项被压到 0 高，子项一律不收缩 -->
+    <div
+      class="flex min-h-0 flex-col gap-3 overflow-y-auto px-3 pb-3 text-[13px] leading-normal text-kb-fg [&>*]:shrink-0"
+    >
       <!-- 名称作标题；源、收藏时间、任务入口放在名称下 -->
-      <div v-if="image.displayName" class="basic-info-name line-clamp-2" :title="image.displayName">
+      <div
+        v-if="image.displayName"
+        class="line-clamp-2 break-all text-[15px] font-600 leading-snug"
+        :title="image.displayName"
+      >
         {{ image.displayName }}
       </div>
-      <div class="flex items-center gap-2 min-w-0">
-        <span class="basic-info-avatar">
+      <div class="flex min-w-0 items-center gap-2.5">
+        <span
+          class="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-kb-fill text-kb-fg-muted [&_svg]:size-4"
+        >
           <img v-if="sourceIconSrc" :src="sourceIconSrc" alt="" class="h-full w-full object-cover" />
-          <el-icon v-else><component :is="sourceKind === 'surf' ? Compass : Picture" /></el-icon>
+          <component :is="sourceKind === 'surf' ? Compass : ImageIcon" v-else />
         </span>
-        <div class="flex-1 min-w-0">
+        <div class="min-w-0 flex-1">
           <button
             v-if="sourceClickEnabled"
             type="button"
-            class="basic-info-link basic-info-source"
+            :class="[LINK_CLASS, SOURCE_CLASS]"
             :title="sourceTitle"
             @click="handleOpenSource"
           >
             {{ sourceLabel }}
           </button>
-          <span v-else class="basic-info-source">{{ sourceLabel }}</span>
-          <div class="basic-info-date" :title="t('gallery.imageDetailCrawledAt')">
+          <span v-else :class="SOURCE_CLASS">{{ sourceLabel }}</span>
+          <div
+            class="flex flex-wrap items-baseline text-[12px] text-kb-fg-muted tabular-nums"
+            :title="t('gallery.imageDetailCrawledAt')"
+          >
             <template v-if="dateParts">
               <button
                 type="button"
-                class="basic-info-link"
+                :class="LINK_CLASS"
                 :title="t('gallery.filterByTime')"
                 @click="emitGalleryFilter(dateYearFilterTarget)"
               >
@@ -44,7 +56,7 @@
               <span>-</span>
               <button
                 type="button"
-                class="basic-info-link"
+                :class="LINK_CLASS"
                 :title="t('gallery.filterByTime')"
                 @click="emitGalleryFilter(dateMonthFilterTarget)"
               >
@@ -53,7 +65,7 @@
               <span>-</span>
               <button
                 type="button"
-                class="basic-info-link"
+                :class="LINK_CLASS"
                 :title="t('gallery.filterByTime')"
                 @click="emitGalleryFilter(dateDayFilterTarget)"
               >
@@ -64,44 +76,35 @@
             <span v-else>{{ formatDate(image.crawledAt) }}</span>
           </div>
         </div>
-        <el-button
-          v-if="image.taskId"
-          text
-          circle
-          size="small"
-          type="primary"
-          class="shrink-0"
-          :title="t('gallery.imageDetailOpenTask')"
-          :aria-label="t('gallery.imageDetailOpenTask')"
-          @click="handleOpenTask"
-        >
-          <el-icon>
-            <List />
-          </el-icon>
-        </el-button>
+        <Tooltip v-if="image.taskId" :content="t('gallery.imageDetailOpenTask')">
+          <Button variant="ghost" size="icon-sm" :aria-label="t('gallery.imageDetailOpenTask')" @click="handleOpenTask">
+            <ListChecks />
+          </Button>
+        </Tooltip>
       </div>
 
       <!-- 媒体属性芯片：每个可点的片段都是一个画廊筛选 -->
       <div class="flex flex-wrap items-center gap-1.5">
         <!-- 媒体类型：主类与格式各是一个筛选；目录型 WPE 壁纸显示「Wallpaper Engine · 类型」 -->
-        <span class="basic-info-chip">
-          <el-icon v-if="!isWpeImage" class="mr-0.5">
-            <component :is="mediaTypeParts.kind === 'video' ? VideoCamera : Picture" />
-          </el-icon>
+        <span :class="CHIP_CLASS">
+          <component
+            :is="mediaTypeParts.kind === 'video' ? Video : ImageIcon"
+            v-if="!isWpeImage"
+            class="mr-1 size-3.5 text-kb-fg-subtle"
+          />
           <button
             type="button"
-            class="basic-info-link"
+            :class="LINK_CLASS"
             :title="t('gallery.filterByMediaType')"
             @click="emitGalleryFilter(mediaKindFilterTarget)"
           >
             {{ mediaKindLabel }}
           </button>
           <template v-if="mediaTypeParts.format">
-            <span class="mx-0.5 opacity-60">{{ isWpeImage ? "·" : "/" }}</span>
+            <span class="mx-0.5 text-kb-fg-subtle">{{ isWpeImage ? "·" : "/" }}</span>
             <button
               type="button"
-              class="basic-info-link"
-              :class="{ uppercase: !isWpeImage }"
+              :class="[LINK_CLASS, { uppercase: !isWpeImage }]"
               :title="t('gallery.filterByMediaType')"
               @click="emitGalleryFilter(mediaFormatFilterTarget)"
             >
@@ -112,22 +115,25 @@
         <button
           v-if="image.size != null"
           type="button"
-          class="basic-info-chip basic-info-link"
+          :class="[CHIP_CLASS, CHIP_BUTTON_CLASS]"
           :title="t('gallery.filterBySize')"
           @click="emitGalleryFilter(sizeFilterTarget)"
         >
           {{ imageFileSizeLabel }}
         </button>
-        <span v-if="imageDimensionsLabel" class="basic-info-chip">{{ imageDimensionsLabel }}</span>
+        <span v-if="imageDimensionsLabel" :class="CHIP_CLASS">{{ imageDimensionsLabel }}</span>
         <!-- 宽高比画成与图片同比例的矩形框，放得下就把比值写在框里 -->
         <button
           v-if="aspectFilterTarget && aspectFrame"
           type="button"
-          class="basic-info-aspect"
+          class="inline-flex cursor-pointer items-center gap-1.25 rounded-[3px] border-0 bg-transparent p-0 text-[11px] text-kb-fg-muted tabular-nums outline-none transition-colors duration-150 hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring"
           :title="`${t('gallery.filterByAspect')} · ${aspectFrame.label}`"
           @click="emitGalleryFilter(aspectFilterTarget)"
         >
-          <span class="basic-info-aspect-frame" :style="{ width: `${aspectFrame.width}px` }">
+          <span
+            class="box-border inline-flex h-[22px] items-center justify-center rounded-[3px] border-[1.5px] border-solid border-current leading-none"
+            :style="{ width: `${aspectFrame.width}px` }"
+          >
             <template v-if="aspectFrame.labelInside">{{ aspectFrame.label }}</template>
           </span>
           <span v-if="!aspectFrame.labelInside">{{ aspectFrame.label }}</span>
@@ -138,7 +144,7 @@
            没有色盘时整条不渲染、不占位。细边框与段间的 1px 间隔同色，白色、黑色段不会融进面板背景 -->
       <div
         v-if="paletteColors.length"
-        class="box-content flex h-2.5 gap-px overflow-hidden rounded-[5px] border border-solid border-[var(--anime-border)] bg-[var(--anime-border)]"
+        class="box-content flex h-2.5 gap-px overflow-hidden rounded-[5px] border border-solid border-kb-line-strong bg-[var(--kb-line-strong)]"
         role="group"
         :aria-label="t('gallery.imageDetailPalette')"
       >
@@ -154,42 +160,47 @@
         />
       </div>
 
-      <div v-if="showPostUrl || image.localPath" class="basic-info-links">
-        <div v-if="showPostUrl" class="basic-info-link-row">
-          <el-icon class="basic-info-row-icon"><Link /></el-icon>
-          <span class="basic-info-row-text" :title="image.postUrl" @click="handleOpenUrl(image.postUrl)">
+      <div
+        v-if="showPostUrl || image.localPath"
+        class="flex flex-col gap-1 border-0 border-t border-solid border-kb-line pt-2.5"
+      >
+        <div v-if="showPostUrl" :class="ROW_CLASS">
+          <Link :class="ROW_ICON_CLASS" />
+          <span :class="ROW_TEXT_CLASS" :title="image.postUrl" @click="handleOpenUrl(image.postUrl)">
             {{ image.postUrl }}
           </span>
-          <button
-            type="button"
-            class="basic-info-copy"
-            :title="t('gallery.imageDetailCopy')"
-            :aria-label="t('gallery.imageDetailCopy')"
-            @click="handleCopyText(image.postUrl)"
-          >
-            <el-icon><CopyDocument /></el-icon>
-          </button>
+          <Tooltip :content="t('gallery.imageDetailCopy')">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              :aria-label="t('gallery.imageDetailCopy')"
+              @click="handleCopyText(image.postUrl)"
+            >
+              <Copy />
+            </Button>
+          </Tooltip>
         </div>
-        <div v-if="image.localPath" class="basic-info-link-row">
-          <el-icon class="basic-info-row-icon"><Folder /></el-icon>
-          <!-- 路径从左侧省略、保留文件名；LRM 防止 rtl 方向把开头的 / 甩到末尾 -->
+        <div v-if="image.localPath" :class="ROW_CLASS">
+          <Folder :class="ROW_ICON_CLASS" />
+          <!-- 路径从左侧省略、保留文件名（rtl）；LRM 防止 rtl 方向把开头的 / 甩到末尾 -->
           <span
-            class="basic-info-row-text basic-info-row-text--tail"
+            :class="[ROW_TEXT_CLASS, '[direction:rtl]']"
             :title="image.localPath"
             @click="handleOpenPath(image.localPath)"
             @contextmenu.prevent.stop="handleCopyText(image.localPath)"
           >
             {{ `\u200E${image.localPath}\u200E` }}
           </span>
-          <button
-            type="button"
-            class="basic-info-copy"
-            :title="t('gallery.imageDetailCopy')"
-            :aria-label="t('gallery.imageDetailCopy')"
-            @click="handleCopyText(image.localPath)"
-          >
-            <el-icon><CopyDocument /></el-icon>
-          </button>
+          <Tooltip :content="t('gallery.imageDetailCopy')">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              :aria-label="t('gallery.imageDetailCopy')"
+              @click="handleCopyText(image.localPath)"
+            >
+              <Copy />
+            </Button>
+          </Tooltip>
         </div>
       </div>
     </div>
@@ -202,8 +213,9 @@ import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { invoke } from "../../api";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { Compass, CopyDocument, Folder, Link, List, Picture, VideoCamera } from "@kabegame/element-plus-icons";
+import { kameMessage } from "@/utils/kameMessage";
+import { Compass, Copy, Folder, ImageIcon, Link, ListChecks, Video } from "@lucide/vue";
+import { Button, Tooltip } from "@/components/ui";
 import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { usePluginStore, type Plugin } from "../../stores/plugins";
@@ -217,6 +229,25 @@ import { parsePalette } from "../../utils/palette";
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const surfStore = useSurfStore();
+
+/** 可点的筛选片段：外观随所在位置，悬停转强调色并出下划线 */
+const LINK_CLASS =
+  "min-w-0 cursor-pointer rounded-[3px] border-0 bg-transparent p-0 text-left text-inherit [font:inherit] outline-none " +
+  "transition-colors duration-150 hover:text-kb-accent hover:underline hover:decoration-1 hover:underline-offset-2 " +
+  "focus-visible:ring-2 focus-visible:ring-kb-ring";
+/** 来源名（插件名 / 畅游站点） */
+const SOURCE_CLASS = "block max-w-full truncate font-500 text-kb-fg";
+/** 媒体属性芯片：中性浅底 */
+const CHIP_CLASS =
+  "inline-flex h-[22px] items-center whitespace-nowrap rounded-full bg-kb-fill px-2.25 text-[12px] text-kb-fg-muted tabular-nums";
+/** 整个芯片可点（文件大小） */
+const CHIP_BUTTON_CLASS =
+  "cursor-pointer border-0 [font-family:inherit] outline-none transition-colors duration-150 hover:bg-kb-fill-dark hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring";
+const ROW_CLASS = "flex min-w-0 items-center gap-2";
+const ROW_ICON_CLASS = "size-4 shrink-0 text-kb-fg-subtle";
+/** 链接 / 路径：点开、悬停转强调色 */
+const ROW_TEXT_CLASS =
+  "min-w-0 flex-1 cursor-pointer truncate text-left text-kb-fg hover:text-kb-accent hover:underline hover:underline-offset-2";
 
 const toLocaleTag = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
@@ -544,7 +575,7 @@ const handleOpenUrl = async (url?: string) => {
     await openExternalLink(url);
   } catch (error) {
     console.error("打开 URL 失败:", error);
-    ElMessage.error(t("common.openUrlFailed"));
+    kameMessage.error(t("common.openUrlFailed"));
   }
 };
 
@@ -560,7 +591,7 @@ const handleOpenPath = async (path?: string) => {
     }
   } catch (error) {
     console.error("打开文件失败:", error);
-    ElMessage.error(t("common.openFileFailed"));
+    kameMessage.error(t("common.openFileFailed"));
   }
 };
 
@@ -572,215 +603,10 @@ const handleCopyText = async (text?: string) => {
     } else {
       await writeText(text);
     }
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (error) {
     console.error("复制失败:", error);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 };
 </script>
-
-<style scoped lang="scss">
-/* 外框/标题栏 chrome 由 CollapsibleDrawerPanel 提供（根即面板） */
-.image-basic-info-panel {
-  min-width: 0;
-
-  .basic-info-body {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    gap: 12px;
-    padding: 0 12px 12px;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--anime-text-primary);
-    /* 面板被压矮时内部滚动 */
-    overflow-y: auto;
-
-    /* line-clamp 的 overflow:hidden 会让 flex 子项被压到 0 高 */
-    > * {
-      flex-shrink: 0;
-    }
-  }
-
-  .basic-info-name {
-    font-size: 15px;
-    font-weight: 600;
-    word-break: break-all;
-  }
-
-  .basic-info-avatar {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    overflow: hidden;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--anime-primary) 12%, transparent);
-    color: var(--anime-primary);
-    font-size: 16px;
-  }
-
-  .basic-info-source {
-    display: block;
-    max-width: 100%;
-    overflow: hidden;
-    color: var(--anime-primary);
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .basic-info-date {
-    display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    color: var(--anime-text-secondary);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* 可点筛选片段：外观随所在位置，悬停才出主色下划线 */
-  .basic-info-link {
-    min-width: 0;
-    border: 0;
-    background: transparent;
-    padding: 0;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
-    transition: color 0.2s ease;
-
-    &:hover {
-      color: var(--anime-primary);
-      text-decoration-line: underline;
-      text-decoration-thickness: 1px;
-      text-underline-offset: 2px;
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--anime-primary);
-      outline-offset: 2px;
-      border-radius: 3px;
-    }
-  }
-
-  .basic-info-chip {
-    display: inline-flex;
-    align-items: center;
-    height: 22px;
-    padding: 0 9px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--anime-primary) 10%, transparent);
-    color: var(--anime-primary-dark);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  button.basic-info-chip:hover {
-    background: color-mix(in srgb, var(--anime-primary) 18%, transparent);
-    text-decoration-line: none;
-  }
-
-  .basic-info-aspect {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    border: 0;
-    background: transparent;
-    padding: 0;
-    color: var(--anime-primary-dark);
-    cursor: pointer;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-    transition: color 0.2s ease;
-
-    &:hover {
-      color: var(--anime-primary);
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--anime-primary);
-      outline-offset: 2px;
-      border-radius: 3px;
-    }
-  }
-
-  .basic-info-aspect-frame {
-    display: inline-flex;
-    box-sizing: border-box;
-    align-items: center;
-    justify-content: center;
-    height: 22px;
-    border: 1.5px solid currentColor;
-    border-radius: 3px;
-    line-height: 1;
-  }
-
-  .basic-info-links {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding-top: 10px;
-    border-top: 1px solid color-mix(in srgb, var(--anime-border) 70%, transparent);
-  }
-
-  .basic-info-link-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .basic-info-row-icon {
-    flex-shrink: 0;
-    color: var(--anime-text-secondary);
-    font-size: 15px;
-  }
-
-  .basic-info-row-text {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    color: var(--anime-primary);
-    cursor: pointer;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-
-    &:hover {
-      color: var(--anime-primary-dark);
-      text-decoration: underline;
-    }
-
-    /* 路径从左省略，保留末尾文件名 */
-    &--tail {
-      direction: rtl;
-      text-align: left;
-    }
-  }
-
-  .basic-info-copy {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--anime-text-secondary);
-    cursor: pointer;
-    font-size: 14px;
-
-    &:hover {
-      background: color-mix(in srgb, var(--anime-primary) 10%, transparent);
-      color: var(--anime-primary);
-    }
-  }
-}
-</style>

@@ -1,5 +1,6 @@
 <template>
   <el-config-provider :locale="elementPlusLocale" :z-index="3000">
+    <!-- TODO:[REF_UI] P9 删：el-config-provider（z-index 3000 是 compat.ts 取号的基数） -->
     <!-- 主窗口 -->
     <div
       class="app-container"
@@ -151,6 +152,8 @@
     <SettingChoiceHost />
     <WallpaperTargetPickerHost />
     <FrameMonitor />
+    <!-- 提示消息（toast / kameMessage 的降级）的渲染处 -->
+    <Toaster />
   </el-config-provider>
 </template>
 
@@ -158,7 +161,7 @@
 import { ref, computed, onMounted, onUnmounted, provide, watch } from "vue";
 import { zhCn, en, zhTw, ja, ko } from "@kabegame/element-plus/locale";
 import { AlarmClock, BookImage, Compass, Image, Puzzle, Settings } from "@lucide/vue";
-import { CountBadge, Tooltip } from "@/components/ui";
+import { CountBadge, Toaster, Tooltip } from "@/components/ui";
 import appLogoUrl from "@/assets/icon-small.png";
 import { setSettingsQueryAdapter, useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
@@ -201,8 +204,7 @@ import { useModalStackStore } from "@/stores/modalStack";
 import { useModal } from "@/composables/useModal";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
-import { ElMessageBox, kbFilterDropdownContextKey } from "@kabegame/element-plus";
-import { useModalBack } from "@/composables/useModalBack";
+import { kbFilterDropdownContextKey } from "@/components/ui/filterDropdown";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
 import { useMissedRunsWatch } from "./composables/useMissedRunsWatch";
@@ -224,6 +226,7 @@ import { useGlobalShortcuts } from "./composables/useGlobalShortcuts";
 import SidebarActivityBar from "./components/busy/SidebarActivityBar.vue";
 import { useBusyTasks } from "./composables/useBusyTasks";
 import { useOrganizeStore, type OrganizeOptions } from "./stores/organize";
+import { messageBox } from "@/components/ui/messageBox";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -390,7 +393,6 @@ const uiStore = useUiStore();
 // 紧凑模式（安卓 / 窄屏 web）下查询 chip 的面板改用对话框承载，并接入返回栈。
 provide(kbFilterDropdownContextKey, {
   panelMode: computed(() => (uiStore.isCompact ? "dialog" : "popover")),
-  bindVisible: useModalBack,
 });
 const settingsStore = useSettingsStore();
 type BgMediaType = "image" | "video";
@@ -539,7 +541,7 @@ onMounted(async () => {
       await onBackButtonPress(
         useThrottleFn(async () => {
           if (confirmingExit) {
-            ElMessageBox.close();
+            messageBox.close();
             confirmingExit = false;
             return;
           }
@@ -560,7 +562,7 @@ onMounted(async () => {
           // 3. Exit Confirm
           try {
             confirmingExit = true;
-            await ElMessageBox.confirm(i18n.global.t("common.exitConfirm"), i18n.global.t("common.exitTitle"), {
+            await messageBox.confirm(i18n.global.t("common.exitConfirm"), i18n.global.t("common.exitTitle"), {
               confirmButtonText: i18n.global.t("common.bye"),
               cancelButtonText: i18n.global.t("common.cancel"),
               type: "warning",

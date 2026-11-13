@@ -1,16 +1,7 @@
 <template>
-  <el-dialog
-    append-to-body
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
-    :title="title"
-    width="520px"
-    class="wallpaper-target-picker"
-    @update:model-value="onVisibleChange"
-    @opened="focusSelected"
-  >
+  <Dialog :open="visible" :title="title" :width="520" @update:open="onVisibleChange" @open-auto-focus="focusSelected">
     <div ref="bodyRef" class="flex flex-col gap-3">
-      <p class="m-0 text-13px leading-[1.6] text-[var(--anime-text-secondary)]">
+      <p class="m-0 text-[13px] leading-[1.6] text-kb-fg-muted">
         {{ t("settings.pickTargetHint") }}
       </p>
       <WallpaperScreenLayout
@@ -22,19 +13,18 @@
       />
     </div>
     <template #footer>
-      <el-button @click="modal.close()">{{ t("common.cancel") }}</el-button>
-      <el-button type="primary" :disabled="!selected" @click="confirm()">{{ t("common.confirm") }}</el-button>
+      <Button @click="onVisibleChange(false)">{{ t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="!selected" @click="confirm()">{{ t("common.confirm") }}</Button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useEventListener } from "@vueuse/core";
-import { ElButton, ElDialog } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
+import { Button, Dialog } from "@/components/ui";
 import WallpaperScreenLayout from "@/components/wallpaper/WallpaperScreenLayout.vue";
-import { useModal } from "@/composables/useModal";
 import { useActiveWallpaperTargets } from "@/composables/useWallpaperTarget";
 import { resolveWallpaperTargetPick, wallpaperTargetPickRequest } from "@/composables/useWallpaperTargetPicker";
 import { useSettingsStore } from "@/stores/settings";
@@ -55,9 +45,8 @@ const targets = useActiveWallpaperTargets();
 const selected = ref<string | null>(null);
 const bodyRef = ref<HTMLElement | null>(null);
 
-// 开关与层级走统一的模态栈（Android 返回键按栈顺序关闭；压在预览等已打开的弹层之上）。
-// 任何途径关掉（取消、右上角、Esc、点遮罩、返回键）都当作取消；已经返回过时这里什么都不会做。
-const modal = useModal({ onClose: () => resolveWallpaperTargetPick(null) });
+// 有待处理请求就开着。层级、Android 返回键由 Dialog 自己接（压在预览等已打开的弹层之上）。
+const visible = ref(false);
 
 const title = computed(() =>
   request.value?.action === "setRotation"
@@ -67,12 +56,12 @@ const title = computed(() =>
 
 watch(request, (pending) => {
   if (!pending) {
-    modal.close();
+    visible.value = false;
     return;
   }
   // 新请求（包括顶掉前一个的）：预选默认屏
   selected.value = targets.value[0] ?? null;
-  modal.open();
+  visible.value = true;
 });
 
 // 打开期间屏幕变化：只剩一个目标时没什么可选，直接以它返回；选中的屏断开了就预选回默认屏
@@ -85,8 +74,11 @@ watch(targets, (ids) => {
   if (!selected.value || !ids.includes(selected.value)) selected.value = ids[0];
 });
 
-function onVisibleChange(visible: boolean) {
-  if (!visible) modal.close();
+// 任何途径关掉（取消、右上角、Esc、点遮罩、返回键）都当作取消；已经返回过时这里什么都不会做
+function onVisibleChange(next: boolean) {
+  if (next || !visible.value) return;
+  visible.value = false;
+  resolveWallpaperTargetPick(null);
 }
 
 /** 以 `targetId`（缺省为当前选中的）返回；不在活跃目标里的不认。 */
@@ -97,8 +89,9 @@ function confirm(targetId?: string) {
 }
 
 /** 打开后把焦点放到预选的屏块上：回车即确定，Tab 可在屏块与按钮间移动。 */
-function focusSelected() {
-  bodyRef.value?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus();
+function focusSelected(event: Event) {
+  event.preventDefault();
+  nextTick(() => bodyRef.value?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus());
 }
 
 // 焦点不在任何按钮上时（点过弹窗空白处）回车也算确定；按钮自己的回车各管各的：

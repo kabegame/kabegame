@@ -67,6 +67,10 @@ const routes: RouteRecordRaw[] = [
     path: "/plugin-browser",
     redirect: "/plugins",
   },
+  // 新界面组件陈列（dev 专用，生产构建里整段被摇掉）
+  ...(import.meta.env.DEV
+    ? [{ path: "/dev/ui", name: "DevUiShowcase", component: () => import("@/views/dev/UiShowcase.vue") }]
+    : []),
 ];
 
 const router = createRouter({

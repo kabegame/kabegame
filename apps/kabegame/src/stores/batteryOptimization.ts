@@ -1,12 +1,12 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID } from "@/env";
 import {
   checkBatteryOptimizationStatus,
   requestBatteryOptimizationExemption,
 } from "tauri-plugin-android-battery-optimization-api";
+import { messageBox } from "@/components/ui/messageBox";
 
 export const useBatteryOptimizationStore = defineStore("batteryOptimization", () => {
   const { t } = useI18n();
@@ -31,7 +31,7 @@ export const useBatteryOptimizationStore = defineStore("batteryOptimization", ()
     if (!isOptimized.value) return;
     if (!options?.force && hasShownAutoPromptThisSession.value) return;
     try {
-      await ElMessageBox.confirm(t("common.batteryOptimizationDesc"), t("common.batteryOptimizationTitle"), {
+      await messageBox.confirm(t("common.batteryOptimizationDesc"), t("common.batteryOptimizationTitle"), {
         confirmButtonText: t("common.batteryOptimizationConfirm"),
         cancelButtonText: t("common.batteryOptimizationCancel"),
         type: "warning",

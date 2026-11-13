@@ -96,10 +96,11 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import CodeBlock from "@/components/common/CodeBlock.vue";
+import { vLoading } from "@/components/ui/loading";
 
 interface McpCapability {
   id: string;
@@ -174,7 +175,7 @@ async function loadCaps() {
     capabilities.value = await invoke<McpCapability[]>("get_mcp_capabilities");
   } catch (e) {
     console.warn("[mcp] load capabilities failed:", e);
-    ElMessage.error(t("settings.mcpCapabilitiesLoadFailed"));
+    kameMessage.error(t("settings.mcpCapabilitiesLoadFailed"));
   } finally {
     capsLoading.value = false;
   }
@@ -185,7 +186,7 @@ async function applyDisabled(list: string[]) {
     await setDisabledValue(list);
   } catch (e) {
     console.warn("[mcp] set disabled capabilities failed:", e);
-    ElMessage.error(t("settings.mcpCapabilitiesSaveFailed"));
+    kameMessage.error(t("settings.mcpCapabilitiesSaveFailed"));
   }
 }
 

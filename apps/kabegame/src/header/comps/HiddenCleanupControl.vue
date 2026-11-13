@@ -7,9 +7,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { Trash2 } from "@lucide/vue";
-import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
+import { messageBox } from "@/components/ui/messageBox";
 import { on, pathqlRequest$, usePathqlLookAll } from "@/services/kbEvents";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
@@ -54,7 +54,7 @@ async function handleClick() {
   const count = hiddenCount.value;
   emit("done");
   try {
-    await ElMessageBox.confirm(t("gallery.hiddenCleanupConfirm", { count }), t("gallery.hiddenCleanupConfirmTitle"), {
+    await messageBox.confirm(t("gallery.hiddenCleanupConfirm", { count }), t("gallery.hiddenCleanupConfirmTitle"), {
       type: "warning",
     });
   } catch {

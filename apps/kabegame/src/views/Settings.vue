@@ -53,12 +53,7 @@
           </button>
         </div>
 
-        <main
-          v-if="!isCompact || mobileDetailOpen"
-          v-loading="showLoading"
-          element-loading-text=""
-          class="settings-panel"
-        >
+        <main v-if="!isCompact || mobileDetailOpen" v-loading="showLoading" class="settings-panel">
           <div class="settings-panel-inner" v-if="!loading">
             <SettingsSection
               v-show="activeTab === 'general'"
@@ -458,7 +453,7 @@ import {
 } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
@@ -501,6 +496,7 @@ import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
 import SettingsSection from "@/components/settings/SettingsSection.vue";
 import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
+import { vLoading } from "@/components/ui/loading";
 
 const props = withDefaults(
   defineProps<{
@@ -712,7 +708,7 @@ async function setSelectedScreenAsDefault() {
   try {
     await setDefaultScreen(selectedScreenId.value);
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e));
+    kameMessage.error(e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -761,7 +757,7 @@ async function openCurrentWallpaperPath() {
   try {
     await invoke("open_path", { path: currentWallpaperPath.value });
   } catch (e) {
-    ElMessage.error(t("settings.messageOpenFailed"));
+    kameMessage.error(t("settings.messageOpenFailed"));
   }
 }
 // 当前壁纸换了、或换了要看的目标，都重新取路径
@@ -776,7 +772,7 @@ const wallpaperDisabled = computed(() => settingsStore.values.wallpaperEnabled =
 // native 模式下关掉「打开壁纸」时提示用户系统壁纸保持现状、无法自动还原
 watch(wallpaperDisabled, (disabled, prev) => {
   if (disabled && !prev && wallpaperMode.value === "native") {
-    ElMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
+    kameMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
   }
 });
 const isLightMode = IS_LIGHT_MODE;

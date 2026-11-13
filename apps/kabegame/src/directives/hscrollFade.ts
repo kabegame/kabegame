@@ -3,8 +3,8 @@ import type { Directive } from "vue";
 /**
  * v-hscroll-fade：横向滚动容器的「两侧渐隐」提示 + 竖向滚轮转横向滚动。
  *
- * 放在滚动容器的**不滚动外框**上（el-scrollbar 根即是；实际滚动的
- * `.el-scrollbar__wrap` 由指令自行发现，宿主自身可滚时退化为宿主）。
+ * 放在滚动容器的**不滚动外框**上（ui 的 ScrollArea 根即是；实际滚动的
+ * Reka 视口 `[data-reka-scroll-area-viewport]` 由指令自行发现，宿主自身可滚时退化为宿主）。
  * 渐隐层是宿主的 ::before/::after（见 styles/hscroll-fade.css），宿主不滚动
  * 才能钉在两缘——左侧渐隐 = 已向右滚过（回头还有内容），右侧渐隐 = 右边还有内容。
  */
@@ -20,7 +20,7 @@ const states = new WeakMap<HTMLElement, FadeState>();
 
 export const vHscrollFade: Directive<HTMLElement> = {
   mounted(host) {
-    const scroller = host.querySelector<HTMLElement>(".el-scrollbar__wrap") ?? host;
+    const scroller = host.querySelector<HTMLElement>("[data-reka-scroll-area-viewport]") ?? host;
     host.classList.add("kb-hscroll-fade");
 
     const update = () => {
@@ -46,7 +46,7 @@ export const vHscrollFade: Directive<HTMLElement> = {
     scroller.addEventListener("scroll", update, { passive: true });
     host.addEventListener("wheel", onWheel, { passive: false });
 
-    // 容器与内容（el-scrollbar 的 view 是稳定元素，children 变化会改变其尺寸）都要观察
+    // 容器与内容（视口里包内容的那层是稳定元素，children 变化会改变其尺寸）都要观察
     const ro = new ResizeObserver(update);
     ro.observe(scroller);
     if (scroller.firstElementChild) ro.observe(scroller.firstElementChild);

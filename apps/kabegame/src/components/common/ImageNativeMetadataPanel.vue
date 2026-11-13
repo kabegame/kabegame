@@ -10,16 +10,16 @@
       {{ t("gallery.nativeMetaTitle") }}
     </template>
     <template #trailing>
-      <span class="native-meta-chip native-meta-chip-primary">{{ mimeLabel }}</span>
+      <Tag size="sm" class="font-mono">{{ mimeLabel }}</Tag>
     </template>
     <div class="native-meta-body kb-selectable">
       <template v-if="state === 'loading'">
         <template v-if="showLoading">
-          <div class="native-meta-loading">
-            <el-icon class="is-loading"><Loading /></el-icon>
+          <div class="flex items-center gap-2.5 px-0.5 pb-1.5 pt-0.5 text-[13px] text-kb-fg-muted">
+            <Spinner :size="16" />
             <span>{{ t("gallery.nativeMetaLoading") }}</span>
           </div>
-          <div v-for="index in 6" :key="index" class="native-meta-skeleton" aria-hidden="true" />
+          <Skeleton v-for="index in 6" :key="index" class="h-[38px] flex-none" />
         </template>
       </template>
 
@@ -29,27 +29,33 @@
         :description="t(emptyDescKey)"
       />
 
-      <div v-else-if="state === 'error'" class="native-meta-state" role="alert">
-        <div class="native-meta-state-icon native-meta-state-icon-error">
-          <el-icon><WarningFilled /></el-icon>
+      <div v-else-if="state === 'error'" class="flex flex-col items-center gap-3 px-6 py-10 text-center" role="alert">
+        <div
+          class="flex size-12 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--kb-danger)_10%,transparent)] text-kb-danger"
+        >
+          <TriangleAlert class="size-6" />
         </div>
-        <div class="native-meta-state-title">
+        <div class="text-[14px] font-600 text-kb-fg">
           {{ t("gallery.nativeMetaErrorTitle") }}
         </div>
-        <div class="native-meta-state-desc">
+        <div class="max-w-[380px] text-[12.5px] leading-[1.65] text-kb-fg-muted">
           {{ t("gallery.nativeMetaErrorDesc") }}
         </div>
-        <code class="native-meta-error-detail">{{ errorDetail }}</code>
-        <el-button type="primary" :icon="Refresh" @click="load">
+        <code
+          class="max-w-[420px] break-all rounded-kb-sm bg-kb-fill-light px-2.5 py-1.5 font-mono text-[11px] text-kb-danger"
+        >
+          {{ errorDetail }}
+        </code>
+        <Button variant="primary" size="sm" @click="load">
+          <RefreshCw />
           {{ t("gallery.nativeMetaRetry") }}
-        </el-button>
+        </Button>
       </div>
 
       <template v-else>
-        <div v-if="payload?.partial" class="native-meta-warning" role="status">
-          <el-icon><WarningFilled /></el-icon>
-          <span>{{ t("gallery.nativeMetaPartialWarning") }}</span>
-        </div>
+        <Alert v-if="payload?.partial" tone="warning" class="flex-none">
+          {{ t("gallery.nativeMetaPartialWarning") }}
+        </Alert>
 
         <section
           v-for="group in displayGroups"
@@ -58,60 +64,61 @@
           :class="{ 'native-meta-group--stacked': group.id === 'text' }"
         >
           <header class="native-meta-group-header">
-            <div class="min-w-0 flex flex-1 flex-col">
-              <span class="native-meta-group-title">{{ groupTitle(group.id) }}</span>
+            <div class="flex min-w-0 flex-1 flex-col">
+              <span class="text-[13px] font-600 leading-5 text-kb-fg">{{ groupTitle(group.id) }}</span>
               <span class="native-meta-group-subtitle">{{ group.subtitle }}</span>
             </div>
-            <span class="native-meta-count">
+            <span class="shrink-0 whitespace-nowrap text-[11.5px] text-kb-fg-subtle tabular-nums">
               {{ t("gallery.nativeMetaEntryCount", { count: group.entries.length }) }}
             </span>
-            <el-button
-              text
-              circle
-              size="small"
-              class="native-meta-copy-group"
-              :title="t('gallery.nativeMetaCopyGroup')"
-              :aria-label="t('gallery.nativeMetaCopyGroup')"
-              @click="copyText(groupText(group))"
-            >
-              <el-icon><CopyDocument /></el-icon>
-            </el-button>
+            <Tooltip :content="t('gallery.nativeMetaCopyGroup')">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                :aria-label="t('gallery.nativeMetaCopyGroup')"
+                @click="copyText(groupText(group))"
+              >
+                <Copy />
+              </Button>
+            </Tooltip>
           </header>
 
-          <div v-if="group.id === 'gps'" class="native-meta-warning native-meta-gps-warning">
-            <el-icon><WarningFilled /></el-icon>
-            <span>{{ t("gallery.nativeMetaGpsPrivacy") }}</span>
-          </div>
+          <Alert v-if="group.id === 'gps'" tone="warning" class="mx-2.5 mt-2 text-[12px]">
+            {{ t("gallery.nativeMetaGpsPrivacy") }}
+          </Alert>
 
-          <div class="native-meta-entries">
-            <div v-for="(entry, index) in group.entries" :key="`${entry.tag}-${index}`" class="native-meta-entry">
+          <div class="flex flex-col p-1">
+            <div v-for="(entry, index) in group.entries" :key="`${entry.tag}-${index}`" class="native-meta-entry group">
               <div class="native-meta-tag">{{ entry.tag }}</div>
               <div class="native-meta-value-wrap min-w-0 flex-1">
                 <div v-if="entry.long" class="native-meta-long-value">{{ entry.value }}</div>
-                <div v-else class="native-meta-short-value">
+                <div v-else class="flex flex-wrap items-baseline gap-1.5">
                   <span class="native-meta-value">{{ entry.value }}</span>
-                  <span v-if="entry.note" class="native-meta-note">{{ entry.note }}</span>
-                  <span v-if="entry.byteLen != null" class="native-meta-note native-meta-byte-len">
+                  <span v-if="entry.note" :class="NOTE_CLASS">{{ entry.note }}</span>
+                  <span v-if="entry.byteLen != null" :class="[NOTE_CLASS, 'whitespace-nowrap']">
                     {{ byteLengthLabel(entry.byteLen) }}
                   </span>
                 </div>
-                <div v-if="entry.long && (entry.note || entry.byteLen != null)" class="native-meta-note mt-1">
+                <div v-if="entry.long && (entry.note || entry.byteLen != null)" :class="[NOTE_CLASS, 'mt-1']">
                   <span v-if="entry.note">{{ entry.note }}</span>
                   <span v-if="entry.note && entry.byteLen != null">·</span>
                   <span v-if="entry.byteLen != null">{{ byteLengthLabel(entry.byteLen) }}</span>
                 </div>
               </div>
-              <el-button
-                text
-                circle
-                size="small"
-                class="native-meta-copy-entry"
-                :title="t('gallery.nativeMetaCopyEntry')"
-                :aria-label="t('gallery.nativeMetaCopyEntry')"
-                @click="copyText(entryText(entry))"
-              >
-                <el-icon><CopyDocument /></el-icon>
-              </el-button>
+              <!-- 外层 span 承载窄栏 / 堆叠排布时的绝对定位（scoped 类不挂在组件上） -->
+              <span class="native-meta-copy-entry flex shrink-0">
+                <Tooltip :content="t('gallery.nativeMetaCopyEntry')">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    class="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                    :aria-label="t('gallery.nativeMetaCopyEntry')"
+                    @click="copyText(entryText(entry))"
+                  >
+                    <Copy />
+                  </Button>
+                </Tooltip>
+              </span>
             </div>
           </div>
         </section>
@@ -125,9 +132,10 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
 import DetailPanelEmptyState from "./DetailPanelEmptyState.vue";
-import { CopyDocument, Loading, Refresh, WarningFilled } from "@kabegame/element-plus-icons";
+import { Copy, RefreshCw, TriangleAlert } from "@lucide/vue";
+import { Alert, Button, Skeleton, Spinner, Tag, Tooltip } from "@/components/ui";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { kameMessage as ElMessage } from "../../utils/kameMessage";
+import { kameMessage } from "../../utils/kameMessage";
 import { useNativeMetadataState } from "../../composables/useNativeMetadataState";
 import { IS_WEB } from "../../env";
 import type { NativeEntry, NativeGroup, NativeMetadataFormat } from "../../types/nativeMetadata";
@@ -160,6 +168,9 @@ const { state, showLoading, payload, errorDetail, displayGroups, load } = useNat
   imageId,
   imageMetadataId,
 );
+
+/** 条目的附注（单位换算、字节数） */
+const NOTE_CLASS = "text-[11.5px] leading-normal text-kb-fg-subtle";
 
 const mimeLabel = computed(() => displayImageMimeType(props.image?.type));
 
@@ -228,34 +239,19 @@ async function copyText(text: string): Promise<void> {
     } else {
       await writeText(text);
     }
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (error) {
     console.error("复制图片原生元数据失败:", error);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 </script>
 
-<style scoped lang="scss">
-/* 外框/标题栏 chrome 由 CollapsibleDrawerPanel 提供；这里只保留容器查询上下文 */
+<style scoped>
+/* 外框/标题栏由 CollapsibleDrawerPanel 提供；这里是容器查询上下文与条目的两种排布（窄栏、文本块改成上下堆叠） */
 .image-native-metadata-panel {
   container-type: inline-size;
   min-width: 0;
-}
-
-.native-meta-chip {
-  border-radius: 7px;
-  padding: 3px 9px;
-  color: var(--anime-text-secondary);
-  background: color-mix(in srgb, var(--anime-secondary) 14%, transparent);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.native-meta-chip-primary {
-  color: var(--anime-primary-dark);
-  background: color-mix(in srgb, var(--anime-primary) 14%, transparent);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 .native-meta-body {
@@ -265,132 +261,28 @@ async function copyText(text: string): Promise<void> {
   flex-direction: column;
   gap: 12px;
   overflow: auto;
-  padding: 14px 16px;
-}
-
-.native-meta-loading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 2px 2px 6px;
-  color: var(--anime-text-secondary);
-  font-size: 13px;
-
-  .el-icon {
-    color: var(--anime-primary);
-  }
-}
-
-.native-meta-skeleton {
-  height: 38px;
-  flex: 0 0 38px;
-  border-radius: 8px;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--anime-secondary) 10%, transparent) 25%,
-    color-mix(in srgb, var(--anime-primary) 14%, transparent) 37%,
-    color-mix(in srgb, var(--anime-secondary) 10%, transparent) 63%
-  );
-  background-size: 800px 100%;
-  animation: native-meta-shimmer 1.4s linear infinite;
-}
-
-.native-meta-state {
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  gap: 12px;
-  padding: 42px 24px;
-  text-align: center;
-}
-
-.native-meta-state-icon {
-  display: flex;
-  width: 60px;
-  height: 60px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-size: 28px;
-}
-
-.native-meta-state-icon-error {
-  color: var(--anime-danger);
-  background: color-mix(in srgb, var(--anime-danger) 12%, transparent);
-}
-
-.native-meta-state-title {
-  color: var(--anime-text-primary);
-  font-size: 14.5px;
-  font-weight: 600;
-}
-
-.native-meta-state-desc {
-  max-width: 380px;
-  color: var(--anime-text-secondary);
-  font-size: 12.5px;
-  line-height: 1.65;
-}
-
-.native-meta-error-detail {
-  max-width: 420px;
-  border: 1px solid color-mix(in srgb, var(--anime-danger) 25%, transparent);
-  border-radius: 7px;
-  padding: 6px 10px;
-  color: var(--anime-danger);
-  background: color-mix(in srgb, var(--anime-danger) 8%, transparent);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: 11px;
-  word-break: break-all;
-}
-
-.native-meta-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  border: 1px solid color-mix(in srgb, var(--anime-warning) 35%, transparent);
-  border-radius: 9px;
-  padding: 9px 11px;
-  color: var(--anime-warning);
-  background: color-mix(in srgb, var(--anime-warning) 10%, transparent);
-  font-size: 12px;
-  line-height: 1.55;
-
-  .el-icon {
-    flex-shrink: 0;
-    margin-top: 1px;
-  }
+  padding: 2px 12px 12px;
 }
 
 .native-meta-group {
   flex: 0 0 auto;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--anime-primary) 28%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--anime-bg-card) 50%, transparent);
+  border: 1px solid var(--kb-line);
+  border-radius: var(--kb-radius-md);
 }
 
 .native-meta-group-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--anime-primary) 9%, transparent),
-    color-mix(in srgb, var(--anime-secondary) 9%, transparent)
-  );
-}
-
-.native-meta-group-title {
-  color: var(--anime-text-primary);
-  font-size: 13.5px;
-  font-weight: 600;
+  gap: 8px;
+  padding: 8px 6px 8px 12px;
+  border-bottom: 1px solid var(--kb-line);
+  background: var(--kb-fill-lighter);
 }
 
 .native-meta-group-subtitle {
   overflow: hidden;
-  color: var(--anime-text-muted);
+  color: var(--kb-fg-subtle);
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 10px;
   letter-spacing: 0.04em;
@@ -399,76 +291,31 @@ async function copyText(text: string): Promise<void> {
   white-space: nowrap;
 }
 
-.native-meta-count {
-  flex-shrink: 0;
-  border-radius: 7px;
-  padding: 2px 9px;
-  color: var(--anime-primary-dark);
-  background: color-mix(in srgb, var(--anime-primary) 16%, transparent);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.native-meta-copy-group {
-  flex-shrink: 0;
-  color: var(--anime-text-secondary);
-
-  &:hover {
-    color: var(--anime-primary-dark);
-    background: color-mix(in srgb, var(--anime-primary) 16%, transparent);
-  }
-}
-
-.native-meta-gps-warning {
-  margin: 8px 10px 2px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 11.5px;
-}
-
-.native-meta-entries {
-  display: flex;
-  flex-direction: column;
-  padding: 5px;
-}
-
 .native-meta-entry {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  border-radius: 8px;
-  padding: 8px 9px;
+  border-radius: var(--kb-radius-sm);
+  padding: 6px 4px 6px 8px;
+}
 
-  &:hover {
-    background: color-mix(in srgb, var(--anime-secondary) 7%, transparent);
-
-    .native-meta-copy-entry {
-      opacity: 1;
-    }
-  }
+.native-meta-entry:hover {
+  background: var(--kb-hover);
 }
 
 .native-meta-tag {
   flex: 0 0 clamp(96px, 28%, 168px);
   padding-top: 1px;
-  color: var(--anime-text-secondary);
+  color: var(--kb-fg-muted);
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 11.5px;
   line-height: 1.5;
   word-break: break-word;
 }
 
-.native-meta-short-value {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-}
-
 .native-meta-value,
 .native-meta-long-value {
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 12px;
   word-break: break-all;
@@ -477,68 +324,41 @@ async function copyText(text: string): Promise<void> {
 .native-meta-long-value {
   max-height: 128px;
   overflow: auto;
-  border: 1px solid color-mix(in srgb, var(--anime-primary) 20%, transparent);
-  border-radius: 6px;
+  border: 1px solid var(--kb-line);
+  border-radius: var(--kb-radius-sm);
   padding: 8px 10px;
-  background: color-mix(in srgb, var(--anime-secondary) 8%, transparent);
+  background: var(--kb-fill-lighter);
   font-size: 11.5px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.native-meta-note {
-  color: var(--anime-text-muted);
-  font-size: 11.5px;
-  line-height: 1.5;
+.native-meta-group--stacked .native-meta-entry {
+  position: relative;
+  flex-direction: column;
+  gap: 5px;
+  padding-right: 34px;
 }
 
-.native-meta-byte-len {
-  white-space: nowrap;
+.native-meta-group--stacked .native-meta-tag {
+  width: 100%;
+  flex-basis: auto;
 }
 
-.native-meta-copy-entry {
-  flex-shrink: 0;
-  color: var(--anime-secondary-light);
-  opacity: 0;
-
-  &:hover {
-    color: var(--anime-primary);
-    background: color-mix(in srgb, var(--anime-primary) 12%, transparent);
-  }
-
-  &:focus-visible {
-    opacity: 1;
-  }
+.native-meta-group--stacked .native-meta-value-wrap {
+  box-sizing: border-box;
+  width: 100%;
 }
 
-.native-meta-group--stacked {
-  .native-meta-entry {
-    position: relative;
-    flex-direction: column;
-    gap: 5px;
-    padding-right: 34px;
-  }
+.native-meta-group--stacked .native-meta-long-value {
+  max-height: 200px;
+}
 
-  .native-meta-tag {
-    width: 100%;
-    flex-basis: auto;
-  }
-
-  .native-meta-value-wrap {
-    box-sizing: border-box;
-    width: 100%;
-  }
-
-  .native-meta-long-value {
-    max-height: 200px;
-  }
-
-  .native-meta-copy-entry {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-  }
+.native-meta-group--stacked .native-meta-copy-entry {
+  position: absolute;
+  top: 2px;
+  right: 2px;
 }
 
 @container (max-width: 300px) {
@@ -561,18 +381,8 @@ async function copyText(text: string): Promise<void> {
 
   .native-meta-copy-entry {
     position: absolute;
-    top: 4px;
-    right: 4px;
-  }
-}
-
-@keyframes native-meta-shimmer {
-  from {
-    background-position: -400px 0;
-  }
-
-  to {
-    background-position: 400px 0;
+    top: 2px;
+    right: 2px;
   }
 }
 </style>

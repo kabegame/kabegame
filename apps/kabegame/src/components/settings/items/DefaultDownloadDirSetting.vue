@@ -42,7 +42,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { FolderOpened } from "@kabegame/element-plus-icons";
 import { invoke } from "../../../api";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -95,7 +95,7 @@ const handleChoose = async () => {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error(e);
-    ElMessage.error("选择失败");
+    kameMessage.error("选择失败");
   }
 };
 
@@ -111,7 +111,7 @@ const handleOpenEffective = async () => {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("打开目录失败:", e);
-    ElMessage.error("打开目录失败");
+    kameMessage.error("打开目录失败");
   }
 };
 </script>

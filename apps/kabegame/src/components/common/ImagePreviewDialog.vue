@@ -62,21 +62,7 @@
           :style="{ zIndex: previewOverlayZIndex + 10 }"
         >
           <div class="swipe-delete-zone-content">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              <line x1="10" y1="11" x2="10" y2="17" />
-              <line x1="14" y1="11" x2="14" y2="17" />
-            </svg>
+            <Trash2 :size="24" :stroke-width="2" />
             <span>{{ swipeDeleteReady ? "释放删除" : "上划删除" }}</span>
           </div>
         </div>
@@ -86,328 +72,317 @@
 
   <!-- 桌面端 Dialog 预览 -->
   <template v-else>
-    <el-dialog
-      :model-value="previewModal.isOpen.value"
-      :title="previewDialogTitle"
-      width="90%"
-      :close-on-click-modal="true"
-      class="image-preview-dialog"
-      :show-close="true"
-      :lock-scroll="true"
-      :z-index="previewFullscreenZIndex"
-      @update:model-value="previewModal.close"
-      @close="closePreview"
-    >
-      <div
-        v-if="previewModal.isOpen.value"
-        class="preview-desktop-body"
-        :class="{ 'is-app-fullscreen': isAppFullscreen }"
-      >
-        <KbResizable
-          v-model="detailDrawerLeftWidth"
-          tag="aside"
-          side="right"
-          class="kb-side-pane preview-detail-drawer preview-detail-drawer-left"
-          :class="{ 'is-open': detailDrawerLeftOpen }"
-          :default-size="PREVIEW_DRAWER_DEFAULT_WIDTH"
-          :handle-title="t('gallery.toggleImageInfoPanel')"
-          @resize-start="handleDrawerResizeStart('left')"
-          @resize-end="handleDrawerResizeEnd"
-          @click.stop
-          @wheel.stop
+    <!-- 层级用 previewModal 的栈位（2000 起），吉祥物按栈位浮在预览之上；预览里再弹出的新浮层向 EP 计数器取号（3000 起），在它之上 -->
+    <DialogRoot :open="previewModal.isOpen.value" @update:open="handleDialogOpenChange">
+      <DialogPortal>
+        <DialogOverlay
+          data-kb-motion
+          class="fixed inset-0 bg-[var(--kb-overlay)] data-[state=open]:animate-[kb-fade-in_160ms_ease-out] data-[state=closed]:animate-[kb-fade-out_120ms_ease-in]"
+          :style="{ zIndex: previewFullscreenZIndex }"
+        />
+        <!-- 只做透明度动画：缩放会让打开瞬间量到的容器尺寸偏小，Panzoom 按它适配就错位了；
+             也不能有 transform，全屏时预览区是 position: fixed，要相对视口 -->
+        <DialogContent
+          data-kb-trap
+          data-kb-motion
+          aria-describedby=""
+          class="image-preview-dialog fixed inset-0 m-auto box-border flex h-[90vh] w-[90vw] flex-col overflow-hidden rounded-kb-lg bg-kb-surface-raised text-kb-fg shadow-kb-lg outline-none data-[state=open]:animate-[kb-fade-in_160ms_ease-out] data-[state=closed]:animate-[kb-fade-out_120ms_ease-in]"
+          :style="{ zIndex: previewFullscreenZIndex }"
+          @open-auto-focus="handleDialogOpenAutoFocus"
+          @pointer-down-outside="handleDialogPointerDownOutside"
+          @focus-outside="keepOpenOnForeign"
+          @interact-outside="handleDialogPointerDownOutside"
         >
-          <!-- 面板自带折叠外壳：展开的 flex:1 争夺侧栏空间，收拢的只占标题行；基本信息内容紧凑，按自然高度 -->
-          <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-left">
-            <ImageBasicInfoPanel
-              :image="previewImage"
-              :plugins="plugins"
-              @open-task="emit('open-task', $event)"
-              @open-gallery-filter="handleOpenGalleryFilter"
-              @open-color-sort="emit('open-color-sort', $event)"
-              @open-surf-record="emit('open-surf-record', $event)"
-            />
-            <!-- 标签面板：点标签跳画册页后要顺手关掉预览，故把本地 closePreview 接到 navigate 上 -->
-            <ImageLabelsPanel v-if="previewImage" :image="previewImage" @navigate="closePreview" />
-            <ImageNativeMetadataPanel
-              v-if="isNativeMetadataEligible(previewImage?.type)"
-              :image="previewImage"
-              fill-when-expanded
-            />
-          </div>
-        </KbResizable>
-        <div
-          ref="previewContainerRef"
-          class="preview-container"
-          :class="{ 'is-app-fullscreen': isAppFullscreen }"
-          :style="isAppFullscreen ? { zIndex: previewFullscreenZIndex } : undefined"
-          @contextmenu.prevent.stop="handlePreviewDialogContextMenu"
-          @mousemove="handlePreviewMouseMove"
-          @mouseleave="handlePreviewMouseLeave"
-          @wheel.prevent="handlePreviewWheel"
-        >
-          <button
-            v-if="!isAppFullscreen"
-            type="button"
-            class="preview-detail-toggle preview-detail-toggle-left"
-            :class="{ visible: previewHoverSide === 'left' || detailDrawerLeftOpen }"
-            :title="t('gallery.toggleImageInfoPanel')"
-            :aria-expanded="detailDrawerLeftOpen"
-            :aria-label="t('gallery.toggleImageInfoPanel')"
-            @click.stop="toggleDetailDrawerLeft"
-          >
-            <svg
-              class="preview-detail-drawer-icon"
-              viewBox="0 0 1024 1024"
-              xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true"
-            >
-              <path
-                fill="currentColor"
-                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z"
-              />
-            </svg>
-          </button>
-          <button
-            v-if="!isAppFullscreen"
-            type="button"
-            class="preview-detail-toggle"
-            :class="{ visible: previewHoverSide === 'right' || detailDrawerOpen }"
-            :title="t('gallery.toggleDetailPanel')"
-            :aria-expanded="detailDrawerOpen"
-            :aria-label="t('gallery.toggleDetailPanel')"
-            @click.stop="toggleDetailDrawer"
-          >
-            <svg
-              class="preview-detail-drawer-icon"
-              viewBox="0 0 1024 1024"
-              xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true"
-            >
-              <path
-                fill="currentColor"
-                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z"
-              />
-            </svg>
-          </button>
-          <button
-            v-if="isAppFullscreen"
-            type="button"
-            class="preview-fullscreen-close"
-            :aria-label="t('gallery.exitFullscreen')"
-            @click.stop="toggleAppFullscreen"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.3 19.7 2.89 18.29 9.17 12 2.89 5.71 4.3 4.3l6.29 6.29 6.3-6.29z"
-              />
-            </svg>
-          </button>
-          <!-- 网页壁纸是跨源 iframe，指针在它上面时容器收不到 mousemove；照底部工具条的常驻热区，
-               在箭头所在的竖向中段各放一条常驻热区唤出箭头 -->
-          <template v-if="isPreviewWallpaper">
-            <div v-if="props.canPrev" class="preview-nav-hotzone left" @mouseenter="previewHoverSide = 'left'" />
-            <div v-if="props.canNext" class="preview-nav-hotzone right" @mouseenter="previewHoverSide = 'right'" />
-          </template>
-          <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态 -->
+          <header class="flex h-12 shrink-0 items-center gap-3 border-0 border-b border-solid border-kb-line pl-5 pr-3">
+            <DialogTitle class="m-0 min-w-0 flex-1 truncate text-[15px] font-600 leading-6 text-kb-fg">
+              {{ previewDialogTitle }}
+            </DialogTitle>
+            <Tooltip :content="t('common.close')">
+              <DialogClose as-child>
+                <Button variant="ghost" size="icon-sm" :aria-label="t('common.close')">
+                  <X />
+                </Button>
+              </DialogClose>
+            </Tooltip>
+          </header>
           <div
-            v-if="props.canPrev"
-            class="preview-nav-zone left"
-            :class="{ visible: previewHoverSide === 'left' }"
-            @click.stop="goPrev"
-            @mouseleave="handleNavZoneLeave"
+            v-if="previewModal.isOpen.value"
+            class="preview-desktop-body"
+            :class="{ 'is-app-fullscreen': isAppFullscreen }"
           >
-            <div class="preview-nav-stack">
-              <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
-                <el-icon>
-                  <ArrowLeftBold />
-                </el-icon>
-              </button>
-              <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
-              <button
-                class="preview-slideshow-btn"
-                type="button"
-                :class="{ playing: slideshowDirection === 'prev' }"
-                :aria-label="
-                  slideshowDirection === 'prev' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayPrev')
-                "
-                :title="slideshowDirection === 'prev' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayPrev')"
-                @click.stop="toggleSlideshow('prev')"
-              >
-                <span class="preview-slideshow-track">
-                  <el-icon><DArrowLeft /></el-icon>
-                  <el-icon><DArrowLeft /></el-icon>
-                </span>
-              </button>
-            </div>
-          </div>
-          <div
-            v-if="props.canNext"
-            class="preview-nav-zone right"
-            :class="{ visible: previewHoverSide === 'right' }"
-            @click.stop="goNext"
-            @mouseleave="handleNavZoneLeave"
-          >
-            <div class="preview-nav-stack">
-              <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
-                <el-icon>
-                  <ArrowRightBold />
-                </el-icon>
-              </button>
-              <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
-              <button
-                class="preview-slideshow-btn"
-                type="button"
-                :class="{ playing: slideshowDirection === 'next' }"
-                :aria-label="
-                  slideshowDirection === 'next' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayNext')
-                "
-                :title="slideshowDirection === 'next' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayNext')"
-                @click.stop="toggleSlideshow('next')"
-              >
-                <span class="preview-slideshow-track">
-                  <el-icon><DArrowRight /></el-icon>
-                  <el-icon><DArrowRight /></el-icon>
-                </span>
-              </button>
-            </div>
-          </div>
-          <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示，可交互；页面接收指针事件，
-               不走 Panzoom，也不挂 VideoControls -->
-          <div v-if="previewImage && isPreviewWallpaper" class="preview-wallpaper-wrapper absolute inset-0">
-            <WallpaperPreviewCanvas ref="wallpaperCanvasRef" :content-size="previewWallpaperSize">
-              <ImageContent
-                ref="previewContentRef"
-                :image="previewImage"
-                prefer="original"
-                :video-playing="!wallpaperPaused"
-                interactive
-                @ready="handlePreviewReady"
-                @scene-live="previewSceneLive = $event"
-                @wallpaper-contextmenu="openPreviewContextMenuAt"
-              />
-            </WallpaperPreviewCanvas>
-          </div>
-          <div v-if="previewImage && isPreviewStatic" ref="panzoomWrapperRef" class="panzoom-wrapper">
-            <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
-            <ImageContent
-              ref="previewContentRef"
-              :image="previewImage"
-              prefer="original"
-              :native-drag="!panzoomCanPan"
-              @ready="handlePreviewReady"
-            />
-          </div>
-          <PreviewControlBar
-            ref="imageControlBarRef"
-            v-if="previewImage && !isPreviewVideo"
-            :is-fullscreen="isAppFullscreen"
-            :keep-visible="zoomSliderDragging"
-          >
-            <!-- 缩放只对 Panzoom 图片有意义；壁纸画布只保留全屏 -->
-            <template v-if="isPreviewStatic">
-              <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M5 11h14v2H5z" />
-                </svg>
-              </button>
-              <button class="control-btn" type="button" :aria-label="t('gallery.zoomIn')" @click="panzoomZoomIn">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z" />
-                </svg>
-              </button>
-              <div class="zoom-progress-wrap">
-                <PreviewRangeSlider
-                  :model-value="zoomSliderValue"
-                  :min="100"
-                  :max="1000"
-                  :step="1"
-                  :aria-label="t('gallery.zoomRatio')"
-                  @drag-start="handleZoomSliderDragStart"
-                  @update:model-value="handleZoomSliderInput"
-                  @change="handleZoomSliderCommit"
+            <KbResizable
+              v-model="detailDrawerLeftWidth"
+              tag="aside"
+              side="right"
+              class="kb-side-pane preview-detail-drawer preview-detail-drawer-left"
+              :class="{ 'is-open': detailDrawerLeftOpen }"
+              :default-size="PREVIEW_DRAWER_DEFAULT_WIDTH"
+              :handle-title="t('gallery.toggleImageInfoPanel')"
+              @resize-start="handleDrawerResizeStart('left')"
+              @resize-end="handleDrawerResizeEnd"
+              @click.stop
+              @wheel.stop
+            >
+              <!-- 面板自带折叠外壳：展开的 flex:1 争夺侧栏空间，收拢的只占标题行；基本信息内容紧凑，按自然高度 -->
+              <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-left">
+                <ImageBasicInfoPanel
+                  :image="previewImage"
+                  :plugins="plugins"
+                  @open-task="emit('open-task', $event)"
+                  @open-gallery-filter="handleOpenGalleryFilter"
+                  @open-color-sort="emit('open-color-sort', $event)"
+                  @open-surf-record="emit('open-surf-record', $event)"
                 />
-                <span class="zoom-progress-text">{{ zoomPercentText }}</span>
+                <!-- 标签面板：点标签跳画册页后要顺手关掉预览，故把本地 closePreview 接到 navigate 上 -->
+                <ImageLabelsPanel v-if="previewImage" :image="previewImage" @navigate="closePreview" />
+                <ImageNativeMetadataPanel
+                  v-if="isNativeMetadataEligible(previewImage?.type)"
+                  :image="previewImage"
+                  fill-when-expanded
+                />
               </div>
-            </template>
-            <!-- 壁纸的右键菜单项按原顺序平铺成图标按钮（壁纸里的右键由垫片转发，见 wpeContextMenu.ts） -->
-            <template v-if="isPreviewWallpaper && wallpaperBarActions.length > 0">
-              <template v-for="action in wallpaperBarActions" :key="action.key">
-                <span v-if="action.divider" class="control-bar-divider" />
-                <button
-                  class="control-btn"
-                  type="button"
-                  :title="action.label"
-                  :aria-label="action.label"
-                  :disabled="action.disabled"
-                  @click="handlePreviewActionCommand(action.command)"
-                >
-                  <el-icon><component :is="action.icon" /></el-icon>
-                </button>
-              </template>
-            </template>
-            <!-- 控制条定宽左对齐：普通图片靠缩放滑块撑开，壁纸没有弹性项，靠 ml-auto 贴到最右 -->
-            <button
-              class="control-btn ml-auto"
-              type="button"
-              :aria-label="isAppFullscreen ? t('gallery.exitFullscreen') : t('gallery.fullscreen')"
-              @click="toggleAppFullscreen"
+            </KbResizable>
+            <div
+              ref="previewContainerRef"
+              class="preview-container"
+              :class="{ 'is-app-fullscreen': isAppFullscreen }"
+              :style="isAppFullscreen ? { zIndex: previewFullscreenZIndex } : undefined"
+              @contextmenu.prevent.stop="handlePreviewDialogContextMenu"
+              @mousemove="handlePreviewMouseMove"
+              @mouseleave="handlePreviewMouseLeave"
+              @wheel.prevent="handlePreviewWheel"
             >
-              <svg v-if="!isAppFullscreen" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M7 14H5v5h5v-2H7v-3zm0-4h2V7h3V5H5v5zm10 7h-3v2h5v-5h-2v3zm0-12v3h2V5h-5v2h3z" />
-              </svg>
-              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm8 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" />
-              </svg>
-            </button>
-          </PreviewControlBar>
-          <div v-if="previewImage && isPreviewVideo" class="preview-video-wrapper">
-            <ImageContent
-              ref="previewContentRef"
-              :image="previewImage"
-              prefer="original"
-              video-playing
-              video-loop
-              @ready="handlePreviewReady"
-            />
-            <VideoControls
-              :video="previewVideoEl"
-              :show-play-pause="true"
-              :is-fullscreen="isAppFullscreen"
-              @toggle-fullscreen="toggleAppFullscreen"
-            />
-          </div>
-        </div>
-        <!-- 抽屉开关只由用户控制，不随内容有无自动收起（避免切图时闪出/闪收）；
+              <button
+                v-if="!isAppFullscreen"
+                type="button"
+                class="preview-detail-toggle preview-detail-toggle-left"
+                :class="{ visible: previewHoverSide === 'left' || detailDrawerLeftOpen }"
+                :title="t('gallery.toggleImageInfoPanel')"
+                :aria-expanded="detailDrawerLeftOpen"
+                :aria-label="t('gallery.toggleImageInfoPanel')"
+                @click.stop="toggleDetailDrawerLeft"
+              >
+                <PanelLeftClose v-if="detailDrawerLeftOpen" />
+                <PanelLeftOpen v-else />
+              </button>
+              <button
+                v-if="!isAppFullscreen"
+                type="button"
+                class="preview-detail-toggle"
+                :class="{ visible: previewHoverSide === 'right' || detailDrawerOpen }"
+                :title="t('gallery.toggleDetailPanel')"
+                :aria-expanded="detailDrawerOpen"
+                :aria-label="t('gallery.toggleDetailPanel')"
+                @click.stop="toggleDetailDrawer"
+              >
+                <PanelRightClose v-if="detailDrawerOpen" />
+                <PanelRightOpen v-else />
+              </button>
+              <button
+                v-if="isAppFullscreen"
+                type="button"
+                class="preview-fullscreen-close"
+                :aria-label="t('gallery.exitFullscreen')"
+                @click.stop="toggleAppFullscreen"
+              >
+                <X />
+              </button>
+              <!-- 网页壁纸是跨源 iframe，指针在它上面时容器收不到 mousemove；照底部工具条的常驻热区，
+               在箭头所在的竖向中段各放一条常驻热区唤出箭头 -->
+              <template v-if="isPreviewWallpaper">
+                <div v-if="props.canPrev" class="preview-nav-hotzone left" @mouseenter="previewHoverSide = 'left'" />
+                <div v-if="props.canNext" class="preview-nav-hotzone right" @mouseenter="previewHoverSide = 'right'" />
+              </template>
+              <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态 -->
+              <div
+                v-if="props.canPrev"
+                class="preview-nav-zone left"
+                :class="{ visible: previewHoverSide === 'left' }"
+                @click.stop="goPrev"
+                @mouseleave="handleNavZoneLeave"
+              >
+                <div class="preview-nav-stack">
+                  <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
+                    <ChevronLeft />
+                  </button>
+                  <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+                  <button
+                    class="preview-slideshow-btn"
+                    type="button"
+                    :class="{ playing: slideshowDirection === 'prev' }"
+                    :aria-label="
+                      slideshowDirection === 'prev' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayPrev')
+                    "
+                    :title="slideshowDirection === 'prev' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayPrev')"
+                    @click.stop="toggleSlideshow('prev')"
+                  >
+                    <span class="preview-slideshow-track">
+                      <ChevronsLeft />
+                      <ChevronsLeft />
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <div
+                v-if="props.canNext"
+                class="preview-nav-zone right"
+                :class="{ visible: previewHoverSide === 'right' }"
+                @click.stop="goNext"
+                @mouseleave="handleNavZoneLeave"
+              >
+                <div class="preview-nav-stack">
+                  <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
+                    <ChevronRight />
+                  </button>
+                  <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+                  <button
+                    class="preview-slideshow-btn"
+                    type="button"
+                    :class="{ playing: slideshowDirection === 'next' }"
+                    :aria-label="
+                      slideshowDirection === 'next' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayNext')
+                    "
+                    :title="slideshowDirection === 'next' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayNext')"
+                    @click.stop="toggleSlideshow('next')"
+                  >
+                    <span class="preview-slideshow-track">
+                      <ChevronsRight />
+                      <ChevronsRight />
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示，可交互；页面接收指针事件，
+               不走 Panzoom，也不挂 VideoControls -->
+              <div v-if="previewImage && isPreviewWallpaper" class="preview-wallpaper-wrapper absolute inset-0">
+                <WallpaperPreviewCanvas ref="wallpaperCanvasRef" :content-size="previewWallpaperSize">
+                  <ImageContent
+                    ref="previewContentRef"
+                    :image="previewImage"
+                    prefer="original"
+                    :video-playing="!wallpaperPaused"
+                    interactive
+                    @ready="handlePreviewReady"
+                    @scene-live="previewSceneLive = $event"
+                    @wallpaper-contextmenu="openPreviewContextMenuAt"
+                  />
+                </WallpaperPreviewCanvas>
+              </div>
+              <div v-if="previewImage && isPreviewStatic" ref="panzoomWrapperRef" class="panzoom-wrapper">
+                <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
+                <ImageContent
+                  ref="previewContentRef"
+                  :image="previewImage"
+                  prefer="original"
+                  :native-drag="!panzoomCanPan"
+                  @ready="handlePreviewReady"
+                />
+              </div>
+              <PreviewControlBar
+                ref="imageControlBarRef"
+                v-if="previewImage && !isPreviewVideo"
+                :is-fullscreen="isAppFullscreen"
+                :keep-visible="zoomSliderDragging"
+              >
+                <!-- 缩放只对 Panzoom 图片有意义；壁纸画布只保留全屏 -->
+                <template v-if="isPreviewStatic">
+                  <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
+                    <ZoomOut />
+                  </button>
+                  <button class="control-btn" type="button" :aria-label="t('gallery.zoomIn')" @click="panzoomZoomIn">
+                    <ZoomIn />
+                  </button>
+                  <div class="zoom-progress-wrap">
+                    <PreviewRangeSlider
+                      :model-value="zoomSliderValue"
+                      :min="100"
+                      :max="1000"
+                      :step="1"
+                      :aria-label="t('gallery.zoomRatio')"
+                      @drag-start="handleZoomSliderDragStart"
+                      @update:model-value="handleZoomSliderInput"
+                      @change="handleZoomSliderCommit"
+                    />
+                    <span class="zoom-progress-text">{{ zoomPercentText }}</span>
+                  </div>
+                </template>
+                <!-- 壁纸的右键菜单项按原顺序平铺成图标按钮（壁纸里的右键由垫片转发，见 wpeContextMenu.ts） -->
+                <template v-if="isPreviewWallpaper && wallpaperBarActions.length > 0">
+                  <template v-for="action in wallpaperBarActions" :key="action.key">
+                    <span v-if="action.divider" class="control-bar-divider" />
+                    <button
+                      class="control-btn"
+                      type="button"
+                      :title="action.label"
+                      :aria-label="action.label"
+                      :disabled="action.disabled"
+                      @click="handlePreviewActionCommand(action.command)"
+                    >
+                      <component :is="action.icon" />
+                    </button>
+                  </template>
+                </template>
+                <!-- 控制条定宽左对齐：普通图片靠缩放滑块撑开，壁纸没有弹性项，靠 ml-auto 贴到最右 -->
+                <button
+                  class="control-btn ml-auto"
+                  type="button"
+                  :aria-label="isAppFullscreen ? t('gallery.exitFullscreen') : t('gallery.fullscreen')"
+                  @click="toggleAppFullscreen"
+                >
+                  <Maximize v-if="!isAppFullscreen" />
+                  <Minimize v-else />
+                </button>
+              </PreviewControlBar>
+              <div v-if="previewImage && isPreviewVideo" class="preview-video-wrapper">
+                <ImageContent
+                  ref="previewContentRef"
+                  :image="previewImage"
+                  prefer="original"
+                  video-playing
+                  video-loop
+                  @ready="handlePreviewReady"
+                />
+                <VideoControls
+                  :video="previewVideoEl"
+                  :show-play-pause="true"
+                  :is-fullscreen="isAppFullscreen"
+                  @toggle-fullscreen="toggleAppFullscreen"
+                />
+              </div>
+            </div>
+            <!-- 抽屉开关只由用户控制，不随内容有无自动收起（避免切图时闪出/闪收）；
              无插件内容时面板自身渲染为空 -->
-        <KbResizable
-          v-model="detailDrawerRightWidth"
-          tag="aside"
-          side="left"
-          class="kb-side-pane preview-detail-drawer"
-          :class="{ 'is-open': detailDrawerOpen }"
-          :default-size="PREVIEW_DRAWER_DEFAULT_WIDTH"
-          :handle-title="t('gallery.toggleDetailPanel')"
-          @resize-start="handleDrawerResizeStart('right')"
-          @resize-end="handleDrawerResizeEnd"
-          @click.stop
-          @wheel.stop
-        >
-          <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
-            <!-- 网页与场景壁纸：作者属性面板（改动经 metadataId 补丁让页面 / 场景重读）。暂停、设为封面、
+            <KbResizable
+              v-model="detailDrawerRightWidth"
+              tag="aside"
+              side="left"
+              class="kb-side-pane preview-detail-drawer"
+              :class="{ 'is-open': detailDrawerOpen }"
+              :default-size="PREVIEW_DRAWER_DEFAULT_WIDTH"
+              :handle-title="t('gallery.toggleDetailPanel')"
+              @resize-start="handleDrawerResizeStart('right')"
+              @resize-end="handleDrawerResizeEnd"
+              @click.stop
+              @wheel.stop
+            >
+              <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
+                <!-- 网页与场景壁纸：作者属性面板（改动经 metadataId 补丁让页面 / 场景重读）。暂停、设为封面、
                  清空脚本存储在右键菜单与工具条里，面板只留恢复默认封面 -->
-            <WpeWebPropertiesPanel
-              v-if="previewImage && hasWpeUserProperties(previewImage.type)"
-              :image-id="previewImage.id"
-              :image-type="previewImage.type"
-              fill-when-expanded
-              :restorable-cover="previewWallpaperLive"
-            />
-            <ImagePluginDescriptionPanel v-else :image="previewImage" fill-when-expanded />
+                <WpeWebPropertiesPanel
+                  v-if="previewImage && hasWpeUserProperties(previewImage.type)"
+                  :image-id="previewImage.id"
+                  :image-type="previewImage.type"
+                  fill-when-expanded
+                  :restorable-cover="previewWallpaperLive"
+                />
+                <ImagePluginDescriptionPanel v-else :image="previewImage" fill-when-expanded />
+              </div>
+            </KbResizable>
           </div>
-        </KbResizable>
-      </div>
-    </el-dialog>
-    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
+    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（Reka 下拉，打开时向 EP 计数器取号，压在预览之上） -->
     <ActionRenderer
       v-if="actions.length > 0"
       :visible="previewContextMenu.isOpen.value"
@@ -428,7 +403,25 @@ import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import type { Component, Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { Subscription } from "rxjs";
-import { ArrowLeftBold, ArrowRightBold, DArrowLeft, DArrowRight } from "@kabegame/element-plus-icons";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Maximize,
+  Minimize,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Trash2,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from "@lucide/vue";
+import { DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from "reka-ui";
+import { Button, Tooltip } from "@/components/ui";
+import { isInAnyLayer, keepOpenOnForeign } from "@/components/ui/compat";
 import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
@@ -450,7 +443,7 @@ import VideoControls from "./VideoControls.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useKameMessageStore } from "../../stores/kameMessage";
 import ActionRenderer from "../ActionRenderer.vue";
-import type { ActionItem, ActionContext } from "../../actions/types";
+import { resolveActionIcon, type ActionItem, type ActionContext } from "../../actions/types";
 import type { ImageActionContext } from "../../actions/imageActions";
 import { captureWpeCover, clearWpeSceneStorage } from "../../utils/wpeWallpaperCommands";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -1147,6 +1140,29 @@ const closePreviewContextMenu = () => {
   previewContextMenu.close();
 };
 
+/** 桌面对话框：Esc、点遮罩、右上角 × 都经这里关闭（开只由 props.image 驱动） */
+const handleDialogOpenChange = (open: boolean) => {
+  if (!open) closePreview();
+};
+/** 打开时焦点落在对话框本身，而不是第一个按钮（侧栏开关平时是透明的） */
+const handleDialogOpenAutoFocus = (event: Event) => {
+  event.preventDefault();
+  // Reka 把这个事件派发在对话框内容元素上
+  (event.target as HTMLElement | null)?.focus?.({ preventScroll: true });
+};
+/**
+ * 点到吉祥物不关预览：它按栈位浮在预览之上，原来的 EP 对话框只在点遮罩本身时才关。
+ * 点到旧浮层（属性面板里共用表单控件的 EP 下拉、取色器）也不关。
+ */
+const handleDialogPointerDownOutside = (event: Event & { detail?: { originalEvent?: Event } }) => {
+  const target = event.detail?.originalEvent?.target ?? event.target;
+  if (target instanceof Element && target.closest(".kamechan-host")) {
+    event.preventDefault();
+    return;
+  }
+  keepOpenOnForeign(event);
+};
+
 /** 设为封面进行中：菜单项与工具条按钮置灰，也挡住重复触发 */
 const coverBusy = ref(false);
 
@@ -1204,11 +1220,8 @@ const wallpaperBarActions = computed(() => {
         key: action.key,
         command: action.command!,
         label: suffix ? `${label} ${suffix}` : label,
-        // 同 ActionRenderer：函数即按上下文解析（图标组件都是对象，不会被误调用）
-        icon:
-          typeof action.icon === "function"
-            ? (action.icon as (c: ActionContext<ImageInfo>) => Component)(ctx)
-            : action.icon,
+        // 同 ActionRenderer：iconBy 包出来的解析器按上下文解析，图标组件原样用
+        icon: resolveActionIcon(action.icon, ctx),
         disabled: typeof action.disabled === "function" ? action.disabled(ctx) : !!action.disabled,
         divider: index > 0 && !!divider,
       };
@@ -1309,12 +1322,26 @@ const seekPreviewVideoBy = (seconds: number) => {
   video.currentTime = Math.min(maxTime, Math.max(0, currentTime + seconds));
 };
 
+/** 事件目标在预览之上的另一层浮层里（预览自己也是 Reka 对话框，所以要排除它本身） */
+const isInPreviewSubLayer = (target: EventTarget | null) => {
+  if (!(target instanceof Element) || !isInAnyLayer(target)) return false;
+  return !target.closest(".image-preview-dialog");
+};
+
 const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (!previewVisible.value) return;
+  // 预览里再弹出的浮层（右键菜单、属性面板的选择框 / 气泡）自己处理方向键与回车，预览不翻页
+  if (isInPreviewSubLayer(event.target)) return;
   const target = event.target as HTMLInputElement | null;
   const isRangeArrow =
     target?.tagName === "INPUT" && target.type === "range" && (event.key === "ArrowLeft" || event.key === "ArrowRight");
   if (isTextInputLike(event.target) && !isRangeArrow) return;
+  // 侧栏里自带方向键语义的控件（滑块、分段 / 单选、标签页）：方向键交给控件，不翻页
+  if (
+    (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+    (event.target as Element | null)?.closest?.("[role=slider],[role=radio],[role=tab],[role=spinbutton]")
+  )
+    return;
   if ((event.ctrlKey || event.metaKey) && (event.key === "c" || event.key === "C")) {
     if (!previewImage.value) return;
     event.preventDefault();
@@ -1674,42 +1701,7 @@ defineExpose({
 </script>
 
 <style lang="scss">
-.image-preview-dialog.el-dialog {
-  width: 90vw !important;
-  height: 90vh !important;
-  margin: 5vh auto !important;
-  display: flex !important;
-  flex-direction: column !important;
-  overflow: hidden !important;
-
-  .el-dialog__header {
-    flex-shrink: 0 !important;
-    padding: 15px 20px !important;
-    height: 50px !important;
-    box-sizing: border-box !important;
-    overflow: hidden !important;
-
-    .el-dialog__title {
-      overflow: hidden !important;
-      text-overflow: ellipsis !important;
-      white-space: nowrap !important;
-      max-width: calc(90vw - 100px) !important;
-      display: block !important;
-    }
-  }
-
-  .el-dialog__body {
-    flex: 1 1 auto !important;
-    padding: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: stretch !important;
-    align-items: stretch !important;
-    overflow: hidden !important;
-    min-height: 0 !important;
-    height: calc(90vh - 50px) !important;
-  }
-
+.image-preview-dialog {
   .preview-desktop-body {
     display: flex;
     flex-direction: row;
@@ -1717,7 +1709,6 @@ defineExpose({
     min-height: 0;
     min-width: 0;
     width: 100%;
-    height: 100%;
     align-items: stretch;
   }
 
@@ -1755,73 +1746,83 @@ defineExpose({
     display: none;
   }
 
+  /* 叠在画面上的圆形按钮（侧栏开关、全屏退出、翻页箭头、幻灯片）：深色半透明 + 白色图标，在任何壁纸上都看得清 */
+  .preview-detail-toggle,
+  .preview-fullscreen-close,
+  .preview-nav-btn,
+  .preview-slideshow-btn {
+    box-sizing: border-box;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(16, 14, 20, 0.42);
+    color: #fff;
+    font: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    backdrop-filter: blur(8px);
+    transition:
+      opacity 0.12s ease,
+      background-color 0.15s ease,
+      transform 0.12s ease;
+
+    &:hover {
+      background: rgba(16, 14, 20, 0.62);
+    }
+
+    &:active {
+      transform: scale(0.96);
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--kb-ring);
+    }
+  }
+
   .preview-detail-toggle,
   .preview-fullscreen-close {
     position: absolute;
     top: 12px;
     right: 12px;
     z-index: 4;
-    width: 40px;
-    height: 40px;
-    border-radius: 999px;
-    border: none;
-    background: rgba(0, 0, 0, 0.38);
-    color: #fff;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    width: 36px;
+    height: 36px;
+
+    svg {
+      width: 18px;
+      height: 18px;
+    }
+  }
+
+  .preview-detail-toggle {
     opacity: 0;
     pointer-events: none;
-    transition:
-      opacity 0.12s ease,
-      background 0.15s ease,
-      transform 0.12s ease;
 
     &.visible {
-      opacity: 0.5;
+      opacity: 0.72;
       pointer-events: auto;
     }
 
     &.visible:hover {
       opacity: 1;
-      background: rgba(0, 0, 0, 0.52);
-      transform: scale(1.04);
-    }
-
-    .preview-detail-drawer-icon {
-      width: 18px;
-      height: 18px;
-      flex-shrink: 0;
-      display: block;
-    }
-
-    svg {
-      width: 18px;
-      height: 18px;
-      fill: currentColor;
     }
   }
 
   .preview-fullscreen-close {
     opacity: 0.72;
-    pointer-events: auto;
 
     &:hover {
       opacity: 1;
-      background: rgba(0, 0, 0, 0.52);
-      transform: scale(1.04);
     }
   }
 
   .preview-detail-toggle-left {
     right: auto;
     left: 12px;
-
-    .preview-detail-drawer-icon {
-      transform: scaleX(-1);
-    }
   }
 
   /* 宽度上下限来自 KbResizable 的 kb-side-pane 预设（与插件详情两侧同一套），这里只管开合形态 */
@@ -1833,7 +1834,7 @@ defineExpose({
     box-sizing: border-box;
     position: relative;
     border-left: 1px solid transparent;
-    background: var(--anime-bg-card, rgba(255, 255, 255, 0.96));
+    background: var(--kb-surface-raised);
     opacity: 0;
     transition:
       flex-basis 0.22s ease,
@@ -1846,7 +1847,7 @@ defineExpose({
       flex: 0 0 var(--kb-resizable-clamped);
       width: var(--kb-resizable-clamped);
       opacity: 1;
-      border-left-color: var(--anime-border, rgba(0, 0, 0, 0.12));
+      border-left-color: var(--kb-line);
     }
 
     &.is-resizing {
@@ -1859,7 +1860,7 @@ defineExpose({
     border-left: 0;
 
     &.is-open {
-      border-right-color: var(--anime-border, rgba(0, 0, 0, 0.12));
+      border-right-color: var(--kb-line);
       border-left-color: transparent;
     }
   }
@@ -1868,7 +1869,7 @@ defineExpose({
     height: 100%;
     overflow-x: hidden;
     overflow-y: auto;
-    padding: 12px 14px 16px;
+    padding: 12px;
     box-sizing: border-box;
   }
 
@@ -1885,29 +1886,6 @@ defineExpose({
   /* 高度由侧栏给定；声明为 size 容器，供标签面板用 cqh 按侧栏高度限高 */
   .preview-detail-drawer-scroll-left {
     container-type: size;
-  }
-
-  .preview-loading {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.18);
-    backdrop-filter: blur(3px);
-    z-index: 3;
-    pointer-events: none;
-  }
-
-  .preview-loading-inner {
-    padding: 10px 14px;
-    border-radius: 10px;
-    background: rgba(0, 0, 0, 0.45);
-    color: #ffffff;
-    font-size: 14px;
-    line-height: 1;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
-    user-select: none;
   }
 
   .panzoom-wrapper {
@@ -1928,15 +1906,6 @@ defineExpose({
     overflow: hidden;
   }
 
-  .preview-video {
-    width: 100%;
-    height: 100%;
-    max-width: 100% !important;
-    max-height: 100% !important;
-    object-fit: contain;
-    display: block;
-  }
-
   .zoom-progress-wrap {
     flex: 1;
     min-width: 120px;
@@ -1954,30 +1923,6 @@ defineExpose({
     color: rgba(255, 255, 255, 0.92);
     font-variant-numeric: tabular-nums;
     pointer-events: none;
-  }
-
-  .preview-image {
-    max-width: 100% !important;
-    max-height: 100% !important;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    display: block;
-    cursor: pointer;
-  }
-
-  .preview-not-found {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 14px;
-    box-sizing: border-box;
-    color: rgba(255, 255, 255, 0.78);
-    text-align: center;
-    user-select: none;
-    z-index: 1;
   }
 
   .preview-nav-zone {
@@ -2013,33 +1958,14 @@ defineExpose({
   .preview-nav-btn {
     width: 44px;
     height: 44px;
-    border-radius: 999px;
-    border: none;
-    background: #ff5fb8;
-    color: #ffffff;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
-    transition:
-      transform 0.12s ease,
-      background-color 0.12s ease,
-      box-shadow 0.12s ease;
-    user-select: none;
 
-    &:hover {
-      transform: scale(1.04);
-      box-shadow: 0 12px 28px rgba(255, 95, 184, 0.34);
+    svg {
+      width: 22px;
+      height: 22px;
     }
 
     &.disabled {
-      background: #c9c9c9;
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
-    }
-
-    .el-icon {
-      font-size: 18px;
+      opacity: 0.45;
     }
   }
 
@@ -2072,36 +1998,24 @@ defineExpose({
     left: 50%;
     width: 28px;
     height: 28px;
-    padding: 0;
-    border-radius: 999px;
-    border: none;
-    background: rgba(255, 95, 184, 0.72);
-    color: #ffffff;
-    display: flex;
-    align-items: center;
+    justify-content: flex-start;
     overflow: hidden;
-    cursor: pointer;
-    box-shadow: 0 6px 16px rgba(255, 95, 184, 0.24);
     transform: translateX(-50%);
-    transition:
-      transform 0.12s ease,
-      background-color 0.12s ease,
-      box-shadow 0.12s ease;
-    user-select: none;
 
-    &:hover {
-      transform: translateX(-50%) scale(1.06);
-      box-shadow: 0 8px 20px rgba(255, 95, 184, 0.32);
+    &:active {
+      transform: translateX(-50%) scale(0.96);
     }
 
-    &.playing {
-      background: #ff5fb8;
+    /* 播放中用强调色，和「选中」同一语义 */
+    &.playing,
+    &.playing:hover {
+      background: var(--kb-accent);
     }
 
-    .el-icon {
+    svg {
       flex: none;
       width: 28px;
-      font-size: 14px;
+      height: 14px;
     }
   }
 
@@ -2201,143 +2115,8 @@ defineExpose({
   transform: translateY(-20px);
 }
 
-// Android 全屏预览样式（旧 pager 用，保留给桌面端或兼容）
-.image-preview-fullscreen:not(.image-preview-pswp-root) {
-  position: fixed;
-  inset: 0;
-  z-index: v-bind(previewFullscreenZIndex);
-  background: rgba(0, 0, 0, 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  touch-action: none;
-
-  .preview-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    overflow: hidden;
-    box-sizing: border-box;
-    position: relative;
-    touch-action: none;
-  }
-
-  .preview-image-android {
-    max-width: 100vw !important;
-    max-height: 100vh !important;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    display: block;
-    user-select: none;
-    -webkit-user-drag: none;
-  }
-
-  .preview-image-adjacent {
-    transform: none !important;
-    transition: none !important;
-  }
-
-  .preview-loading {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.18);
-    backdrop-filter: blur(3px);
-    z-index: 3;
-    pointer-events: none;
-  }
-
-  .preview-loading-inner {
-    padding: 10px 14px;
-    border-radius: 10px;
-    background: rgba(0, 0, 0, 0.45);
-    color: #ffffff;
-    font-size: 14px;
-    line-height: 1;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
-    user-select: none;
-  }
-
-  .preview-not-found {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 14px;
-    box-sizing: border-box;
-    color: rgba(255, 255, 255, 0.78);
-    text-align: center;
-    user-select: none;
-    z-index: 1;
-  }
-
-  .preview-nav-zone {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 20%;
-    display: flex;
-    align-items: center;
-    z-index: 2;
-    transition: opacity 0.12s ease;
-
-    &.left {
-      left: 0;
-      justify-content: flex-start;
-      padding-left: 18px;
-    }
-
-    &.right {
-      right: 0;
-      justify-content: flex-end;
-      padding-right: 18px;
-    }
-  }
-
-  .preview-nav-btn {
-    width: 44px;
-    height: 44px;
-    border-radius: 999px;
-    border: none;
-    background: rgba(255, 95, 184, 0.9);
-    color: #ffffff;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
-    transition:
-      transform 0.12s ease,
-      background-color 0.12s ease,
-      box-shadow 0.12s ease;
-    user-select: none;
-    backdrop-filter: blur(8px);
-
-    &:active {
-      transform: scale(0.95);
-      box-shadow: 0 8px 20px rgba(255, 95, 184, 0.24);
-    }
-
-    &.disabled {
-      background: rgba(201, 201, 201, 0.9);
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
-    }
-
-    .el-icon {
-      font-size: 18px;
-    }
-  }
-}
-
 .pswp-image-title-container {
-  color: var(--anime-secondary-light);
+  color: #fff;
   width: 100%;
   align-items: center;
   justify-content: center;

@@ -1,8 +1,7 @@
 import type { KameMessageType } from "../stores/kameMessage";
 import { useKameMessageStore } from "../stores/kameMessage";
 import { useSettingsStore } from "../stores/settings";
-import { useModalStackStore } from "../stores/modalStack";
-import { ElMessage } from "@kabegame/element-plus";
+import { toast } from "@/components/ui/toast";
 
 type KameMessageOptions = {
   type?: KameMessageType;
@@ -36,20 +35,15 @@ const push = (type: KameMessageType, message: unknown, duration?: number) => {
   const settingsStore = useSettingsStore();
   const store = useKameMessageStore();
 
-  // kamechan 被遮住（如全屏图片预览隐藏了它）时气泡看不见，降级到 ElMessage
+  // kamechan 被遮住（如全屏图片预览隐藏了它）时气泡看不见，降级到提示消息
   if (settingsStore.values.kamechanEnabled !== false && !store.kamechanHidden) {
     store.push(type, text, duration);
     return;
   }
 
   store.pushToHistory(type, text);
-  ElMessage({
-    type,
-    message: text,
-    duration,
-    // 压在所有已占栈位（预览、弹窗）之上；没有弹层时用组件库自增层级
-    zIndex: useModalStackStore().topZIndex() ?? undefined,
-  });
+  // 提示消息的层级在推送时向全局计数器取号，自然压在预览、弹窗之上
+  toast({ type, message: text, duration });
 };
 
 export const kameMessage = ((opts: MessageInput) => {
@@ -66,5 +60,5 @@ kameMessage.warning = (message: unknown) => push("warning", message);
 kameMessage.error = (message: unknown) => push("error", message);
 kameMessage.closeAll = () => {
   useKameMessageStore().closeAll();
-  ElMessage.closeAll();
+  toast.closeAll();
 };

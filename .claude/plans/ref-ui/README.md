@@ -31,7 +31,8 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 | 强调色 | `--kb-accent` 挂在 `--anime-primary` 上 | 插件详情运行时改写 `--anime-*` 换肤仍能波及新组件 |
 | 中性色 | 新值，不来自 `--anime-*` | `--anime-*` 的文字、边框都是紫 / 粉色系，本身就是要换掉的东西 |
 | 图标 | lucide；chip 上那套设计稿线性图标（`FilterPlugin` 等）保留 | 过滤维度图标是专门画的，和 lucide 观感接近 |
-| 层级 | Reka 浮层 `--kb-z-popover` 3000 / `--kb-z-tooltip` 3100，与 EP 的 3000 起递增同档 | 混用期两边都能互相盖住 |
+| 层级 | 新浮层打开时向 EP 的全局 z-index 计数器取号（`compat.ts` 的 `useLayerZIndex`），P2 起不再用固定的 `--kb-z-*` | EP 的计数器只增不减，固定值迟早被压在旧层底下；同一个计数器才有统一的先后 |
+| 混用期代码标记 | 一律带 `TODO:[REF_UI]` 注释，写明哪一期删 / 换 | P9 收尾时 grep 一遍就是待办清单 |
 | 范围 | 浅色主题 | 现在就没有深色主题；token 结构允许以后加（待定 2） |
 
 ## 待定事项
@@ -40,11 +41,11 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 2. **深色主题**是否纳入这次重构。
 3. ~~**全局外框**~~（P1 按默认做了）：页面底 `#f6f6f7`、侧栏 `#efeff1`，中性的 `--anime-*` 全部指向 `--kb-*`；开应用背景时侧栏 / 底部导航毛玻璃（`--kb-glass*`）。看了不满意再调 token。
 4. **品牌元素**留多少：吉祥物、后台任务卡片的粉→紫渐变、插件卡片的 `kb-grad`。
-5. **Toast**：用 `vue-sonner`（shadcn 的选择）还是在 Reka Toast 上自己写。
-6. **Android 的 Vant**：`van-popup` 换成 Sheet 基本确定；`van-picker`（滚轮选择，7 个文件）没有无头对应物，保留还是自己写。
+5. ~~**Toast**~~（P2 定了）：在 Reka Toast 上自己写（`toast.ts` + `Toaster.vue`），不加依赖。
+6. **Android 的 Vant**：`van-popup` 已在 P3 换成 Sheet；`van-picker`（滚轮选择）没有无头对应物，P3 先收拢到一处——`components/ui/PickerSheet.vue`（底部 Sheet 里放 `van-picker`，颜色走 Vant 的 CSS 变量取 `--kb-*`），P9 前再定保留还是自己写。
 7. **字号阶梯**：是否定一套字号 / 行高 token（标题 17、正文 13、说明 12.5 是 P0 的取值）。
-8. **组件陈列页**：P2 在 dev 下加一个，方便对照与回归截图。
-9. **P0 的焦点问题**（Reka 菜单打开 EP 对话框后焦点回到触发器）：收集菜单打开的四个对话框在 P5 迁完后消失，之前是否临时修。
+8. ~~**组件陈列页**~~（P2 做了）：dev 下的 `/dev/ui`（`views/dev/UiShowcase.vue`），含混用场景。
+9. ~~**P0 的焦点问题**~~（P2 修了）：菜单关闭时若刚打开了不包含触发器的 EP 对话框，焦点送进那个对话框（`compat.ts` 的 `keepFocusForForeign`）。
 10. **插件文档里的看图**（`el-image-viewer`）：复用预览的 photoswipe 还是自写灯箱（P7）。
 
 ## 分期总览
@@ -53,9 +54,9 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 | --- | --- | --- | --- |
 | **P0 ✅** | 画廊顶栏、chip 换皮 | — | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构第一步」 |
 | **P1 ✅** | 外框与 EP 全局换皮 | 19 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P1」与下方「P1 实施记录」 |
-| P2 | 底座与反馈 | 门面 + 新组件 | `ElMessage` 390、`ElMessageBox` 65、`v-loading` 13；弹层 / 表单 / 展示组件、混用期垫片 |
-| P3 | 画廊 | 38 | 查询行簇（chip 下拉重写、收藏视图、颜色、高级查询）、网格与右键菜单、画廊发起的对话框、Android 底部弹层 |
-| P4 | 图片预览与详情 | 11 | `ImagePreviewDialog`（2363 行）与详情面板、壁纸属性 |
+| **P2 ✅** | 底座与反馈 | 门面 + 新组件 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P2」与下方「P2 实施记录」 |
+| **P3 ✅** | 画廊 | 47 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P3」与下方「P3 实施记录」 |
+| **P4 ✅** | 图片预览与详情 | 15 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P4」与下方「P4 实施记录」 |
 | P5 | 收集与任务 | 29 | 四种收集对话框、共用表单控件换芯、任务抽屉；form-item 31 |
 | P6 | 画册与畅游 | 6 | `Albums.vue`、`Surf.vue`（各 1000+ 行）、画册树 |
 | P7 | 插件 | 13 | 插件浏览 / 详情 / 文档 / 导入；骨架 16、空状态 9 |
@@ -104,6 +105,18 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 - **陈列页**（待定 8）。界面上可见的变化只有提示消息。
 - **验收**：组件单测（键盘、Esc、Android 返回栈）；门面替换后 vitest 全过；混用场景各测一例（新浮层在旧对话框里、旧确认框从新对话框里弹出）。
 
+#### P2 实施记录
+
+- 规模与计划不同：「`ElMessage` 390 处」里绝大多数是 `import { kameMessage as ElMessage }`（吉祥物气泡），真正直接调 EP 的只有 6 个文件。别名一并改成直呼 `kameMessage`（58 个文件），直接调用换成 `toast`；`kameMessage` 被遮住时的降级也换成 `toast`。`ElMessageBox` 31 个文件换成 `messageBox`。`v-loading` 10 个文件在 `<script setup>` 里导入 `vLoading`（局部指令优先于 EP 的全局同名指令，模板不动）。
+- service / composable 里直接从 `@/components/ui/toast`、`@/components/ui/messageBox` 导入，不经 `index.ts`；测试改为 mock 这两个模块。
+- 新组件：Dialog、AlertDialog、Sheet、ContextMenu；菜单项改成下拉与右键共用（`MenuItem` / `MenuSeparator` / `MenuSub` / `MenuCheckboxItem` / `MenuRadioGroup` / `MenuLabel`）；Field、Input、Textarea、NumberField、Checkbox、CheckboxGroup、RadioGroup、Select、Slider、Combobox；Tag、Skeleton、Separator、ScrollArea、DescriptionList、Alert、Spinner；Button 加 `danger` 变体。Uno 快捷方式 `kb-menu-panel` / `kb-menu-item` / `kb-control`。
+- 混用期垫片比计划多三条（都在 `compat.ts`，标 `TODO:[REF_UI]`）：
+  - 层级不再固定：所有新浮层（含 P0 / P1 的下拉、气泡、提示）打开时向 EP 的计数器取号。
+  - 新浮层打开期间往 EP 的焦点层栈压一个空层（`usePauseForeignTraps`）：EP 的陷阱暂停，不抢焦点、不响应 Esc。没有这条时，旧对话框里的新对话框 / 选择框按 Esc 会把旧对话框一起关掉（EP 的陷阱在 document 上听 Esc）。
+  - `kb-compat.css` 的 `.el-overlay` 放开规则排除了「里面挂着新浮层」的 EP 对话框，否则旧对话框里开着新的模态菜单时，对话框其余部分仍可点。
+- 顺带修了 P0 的焦点问题（待定 9）。
+- 没做的：Combobox 的「可以不选、直接用输入文字」（地址栏补全）留到 P6；日期、时间、颜色控件按计划在用到的期建。
+
 ### P3 画廊
 
 - **查询行**
@@ -118,15 +131,45 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 - **树**：`KbTreePanel` / `KbTreeRow`（滚动条换 ScrollArea；画册树也用，外观在 P6 再对）。
 - **验收**：画廊所有入口逐个过（过滤、排序、搜索、收藏视图、高级查询、右键各项、加入画册、删除、整理、失败图片）；Android 长按菜单与返回键。
 
+#### P3 实施记录
+
+- 分工：查询行簇（chip 下拉、搜索、路径栏、收藏视图、颜色、高级查询、排序控件）主线程做，网格与右键、画廊发起的对话框、分页与 Android 弹层三簇各交给一个并行代理，最后统一 grep、类型检查、全量单测与实测。本期文件 47 个（计划里 38 个，多出的是高级查询的条件行 / 或组、`galleryChipIcons.ts`、`views/Gallery.vue` 等）。
+- `KbFilterDropdown` 移出 vendored 包（组件、theme-chalk 样式、token map 一并删），在 app 里重写成 `components/ui/FilterDropdown.vue`：
+  - 弹层按 chip 元素定位（`reference`），chip 不是 Reka 的触发器——chip 外面要套 Tooltip，Reka 触发器的锚点会被 Tooltip 收走；点 chip 本身在 `pointer-down-outside` 里判成层内，交给 chip 的 click 切换。
+  - 面板写一份，弹层档与对话框档各用一次（vueuse 复用模板，起名 `KbFilterPanel` 方便测试放行）。
+  - 面板里的子层改成 Reka 组件后，Reka 按层的先后把它们算作层内，EP 时代的 `clickOutsideIgnore` + 豁免类整套删除。
+  - 上下文去掉 `bindVisible`：组件自己接返回栈（对话框档由 `Dialog` 接，不重复接）。
+- 新组件：`HelpTip`（「?」说明，Android 点按气泡）、`Popconfirm`、`ColorPickerPanel`（Reka 的 ColorArea / ColorSlider / ColorField，内部持 HSB）、`PickerSheet`、`SegmentedControl`、`RangeSlider`；`PopoverContent` 加 `anchor`。
+- 比计划多出来的修正：
+  - lucide 图标本身是函数，原来 `ActionRenderer` / `ActionSheet` / 预览工具条按 `typeof icon === "function"` 判断「按上下文选图标」，换图标后会把图标当解析器调用；改成 `iconBy` 显式标记、`resolveActionIcon` 读取。
+  - chip 的设计稿图标从 vendored 图标包搬进 `components/icons/filterIcons.ts`（原样转写 SVG）。
+  - `compat.ts` 加 `isInAnyLayer`，网格「点在浮层里就让路」的判断不再在业务里写 `.el-` 选择器。
+- 留在后续期的：`ImageDetailDialog` 的 `z-index`、预览里的菜单与 iframe 转发右键（P4）；`AlbumContextMenu`（P6）、`TaskContextMenu`（P5）、`utils/albumSyncMode.ts`（P6）仍传 EP 图标，新菜单里照常显示；`MediaPicker` 传给选项抽屉的 EP 图标（P5）；`LanguageSetting.vue` 自带一份 `.android-picker-select` 样式（P8）。`GalleryPageSizeControl`、`SearchInput`、`EdgeArrows` 全仓没有调用方，照样迁了，P9 可删。
+- 未实测：Android 全部（chip 对话框档有单测）、分页输入跳转、失败图片有数据时、用户色桶的删除确认、自动任务页筛选的操作。
+
 ### P4 图片预览与详情
 
 - **迁移**：`ImagePreviewDialog`（photoswipe、键盘、壁纸 iframe 的右键转发改用 ContextMenu 虚拟锚点）、`ImageDetailDialog`、详情面板（`ImageBasicInfoPanel` / `ImageNativeMetadataPanel` / `ImagePluginDescriptionPanel`）、`ImageLabelsPanel`、`CodeBlock`、`HoverRevealPanel`（`el-drawer` 换成 Sheet）、`WpeWebPropertiesDialog` / `WpeWebPropertiesPanel`、`WallpaperScreenLayout`。
 - **单独一期的原因**：风险最高。每个网格都会打开它，键盘与焦点要求高，又和壁纸 iframe、场景宿主有交互。
 - **验收**：图片、视频、网页壁纸、场景壁纸各开一次预览；键盘翻页、Esc、右键菜单位置、属性面板、封面、深链接跳页、Android 返回键。
 
+#### P4 实施记录
+
+- 分工：预览本体、Android 详情弹窗、快捷预览、显示器布局图、`KbColor` 主线程做；详情面板一簇（折叠外壳、基本信息、原生元数据、插件描述、标签、`CodeBlock`、壁纸属性面板与对话框）交给一个并行代理，保证几块面板一个风格。实际 15 个文件（多出折叠外壳 `CollapsibleDrawerPanel`、`KbColor`、工具条 `PreviewControlBar` / `PreviewRangeSlider` 的颜色与图标规则）。
+- 预览没用 `ui/Dialog`，直接写 Reka 原语：
+  - 层级沿用 `previewModal`（`useModal` 的栈位，2000 起）而不是 `useLayerZIndex`。吉祥物按栈位浮在预览之上，改成 EP 计数器取号就会被盖住；预览里再弹出的新浮层向 EP 计数器取号（3000 起），照样在它之上。
+  - 点吉祥物不关预览（`.kamechan-host` 在 `pointer-down-outside` 里判成层内），与原来 EP 对话框「只在点遮罩本身时关」一致。
+  - 只做淡入淡出：缩放动画会让打开瞬间量到的容器偏小、Panzoom 适配错位；内容也不能有 transform，全屏的预览区是 `position: fixed`。
+  - 键盘：目标在预览之上的浮层里（`isInAnyLayer` 且不在 `.image-preview-dialog` 内）时不处理；目标是滑块 / 单选 / 标签页时方向键交给控件。
+- `KbColor` 从 P5 提前：EP 取色器的气泡里有输入框，挂在 body 下，在 Reka 模态对话框里会被焦点陷阱抢焦点。改成色块 + `Popover` + `ColorPickerPanel`，只在气泡关闭时提交（同 el-color-picker 的 change）。它只有壁纸属性在用。其余 `Kb*` 门面（`KbSelect`、`KbNumber` 等）仍在 EP 上，在预览里能用，按计划 P5 换芯。
+- `ImagePluginDescriptionPanel` 给插件模板 iframe 注入的 `--anime-*` 五个变量是插件约定，名字不改，取值改取 `--kb-*`。
+- 标签面板的目录淡色改由 `utils/imageLabelPresentation.ts` 输出 `--kb-label-*`。
+- 已知：`Dialog` 打开时若正文是异步加载的，焦点会落在 ×（设置页「壁纸属性」），只是焦点环观感；`dialogs.css` 里排除预览的 `:not(.image-preview-dialog)` 已删。
+- 未实测：Android 全部、封面 / 暂停 / 幻灯片、插件快捷预览、iframe 转发的右键。
+
 ### P5 收集与任务
 
-- **共用表单控件换芯**：`common/form` 下的 `KbBoolean`、`KbSelect`、`KbMultiSelect`、`KbNumber`、`KbText`、`KbDate`、`KbColor`、`KbPath`、`KbSegmentedControl` 内部换成新控件。插件变量表单、设置页、运行配置都用它们，这一步同时影响 P7 / P8 的界面（靠 P2 的垫片在旧对话框里也能用）。
+- **共用表单控件换芯**：`common/form` 下的 `KbBoolean`、`KbSelect`、`KbMultiSelect`、`KbNumber`、`KbText`、`KbDate`、`KbPath`、`KbSegmentedControl` 内部换成新控件（`KbColor` 已在 P4 提前换）。插件变量表单、设置页、运行配置都用它们，这一步同时影响 P7 / P8 的界面（靠 P2 的垫片在旧对话框里也能用）。
 - **收集**：`CrawlerDialog` + `CrawlerTaskForm`、`PluginVarsForm`、`HttpHeadersEditor`、`OutputDirSelect`、`MaxDownloadsField`、`RetryCountField`、`PluginPickerField`、`MediaPicker`、`LocalImportDialog`、`WallpaperImportDialog`、`WebpageCollectDialog`。
 - **任务**：`TaskDrawer`、`TaskDrawerContent`、`TaskSummaryRow`、`TaskCountsInline`、`TaskLogDialog`、`TaskParamsDialog`、`TaskRunParamsContent`（descriptions 换成 DescriptionList）、`TaskRetryChainPopover`、`TaskContextMenu`、任务详情页副标题的统计。
 - **新建组件**：DatePicker。
@@ -154,7 +197,7 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 ### P9 收尾
 
 - **删除与替换**
-  - `confirm` 门面换成 AlertDialog，删掉混用期垫片。
+  - `confirm` 门面换成 AlertDialog，删掉混用期垫片（`components/ui/compat.ts`、`styles/kb-compat.css`）；`grep -rn "TODO:\[REF_UI\]"` 清零。
   - 删 `packages/kabegame-element-plus*`、theme-chalk 引入、`app.use(ElementPlus)`、全局图标注册、`el-config-provider`、`vCornerBadge`。
   - 接线：vite alias、两处 tsconfig `paths`、web 的 `manualChunks`。
   - `anime-theme.css`、`dialogs.css` 里剩下的 EP 相关样式；Vant 按待定 6 处理。
@@ -167,3 +210,4 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 - 文件里的 `el-button`、`el-icon` 与 EP 图标随文件一起换。
 - 硬指标：本期文件里没有 `<el-*>`、`@kabegame/element-plus(-icons)` 导入、`.el-*` 选择器（grep 可查）。
 - 写回归条目与 changelog；约定有变化时同步文档与规则。
+- 混用期才需要、到某一期要删或换实现的代码，注释里带 `TODO:[REF_UI]` 并写明哪一期处理；P9 以 `grep -rn "TODO:\[REF_UI\]"` 为收尾清单。

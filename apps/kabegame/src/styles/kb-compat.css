@@ -1,0 +1,22 @@
+/*
+ * 混用期垫片（样式部分），逻辑见 components/ui/compat.ts。
+ * TODO:[REF_UI] P9 随 element-plus / Vant 一起删除本文件与 bootstrap/app.ts 里的引入。
+ *
+ * Reka 的模态层打开期间 body 是 pointer-events: none（层内恢复 auto）。挂在 body 下的旧浮层
+ * （EP 下拉 / 确认框 / 抽屉、Vant 弹层）会继承 none 而点不动，这里显式恢复。正常状态下它们本来就是 auto，
+ * 这几条没有副作用。
+ *
+ * EP 对话框里正挂着新浮层（新浮层的触发器在对话框里时会挂进去，见 compat.ts 的 foreignPortalTarget）时
+ * 不放开：那时模态层就是这个新浮层，对话框其余部分照 Reka 的语义不可点（第一下点外部只关浮层），
+ * 新浮层自己带 pointer-events: auto。
+ */
+.el-popper,
+.el-overlay:not(:has([data-reka-popper-content-wrapper], [data-kb-trap])),
+.el-message,
+.el-message-box__wrapper,
+.el-image-viewer__wrapper,
+.van-popup,
+.van-overlay,
+.van-toast {
+  pointer-events: auto;
+}

@@ -21,7 +21,7 @@ vi.mock("@/env", () => ({
     return env.web;
   },
 }));
-vi.mock("@kabegame/element-plus", () => ({ ElMessageBox: { confirm } }));
+vi.mock("@/components/ui/messageBox", () => ({ messageBox: { confirm } }));
 vi.mock("@kabegame/i18n", () => ({ i18n: { global: { t: (key: string) => key } } }));
 
 const screen = (id: string, primary: boolean) => ({

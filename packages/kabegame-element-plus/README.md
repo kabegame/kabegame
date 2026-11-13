@@ -71,14 +71,11 @@ workspace**，故已平铺成单包：
   上游默认下，选项文案一长（如 anihonet「作品」391 项日文标题）下拉会撑到输入框近两倍宽；
   需要按内容宽度的调用方显式传 `:fit-input-width="false"`。
   注意 `autocomplete` / `cascader` 的 `fitInputWidth` **没动**（前者业务侧已显式开启，后者未使用）。
-- **新增 `kb-filter-dropdown`**：画廊 facet 等场景共用的 chip + 双列计数面板，复用
-  `ElTooltip`/Popper 基建；支持本地搜索、loading/empty、排除计数、键盘选择及整体面板插槽，
-  样式和 `--anime-*` 映射统一位于 theme-chalk。
-  内置列表的选项可带 `expandable: true`：点它不选中、不关闭，而是在该行下方就地展开
-  `#option-panel="{ option, close }"` 插槽（同一时间至多一个，面板重开时收起），由调用方在面板里完成选择
-  后调 `close()`。用例是画廊排序下拉「颜色」一行的色桶面板（`cocs/gallery/COLOR_PALETTE.md`）。
+- **`kb-filter-dropdown` 已移出**（界面重构 P3）：过滤 chip 下拉改在 app 里用 reka-ui 重写
+  （`apps/kabegame/src/components/ui/FilterDropdown.vue`，组件名仍是 `KbFilterDropdown`），
+  这里的组件、theme-chalk 样式与 `$kb-filter-dropdown` token 一并删除。
 - **点外部关闭可忽略子层**：tooltip 内容新增 `clickOutsideIgnore?: string[]`（CSS 选择器），原样
-  传给 vueuse `onClickOutside` 的 `ignore`；`ElTooltip` 与 `KbFilterDropdown` 透传同名 prop。上游
+  传给 vueuse `onClickOutside` 的 `ignore`；`ElTooltip` 透传同名 prop。上游
   点外部一律关闭，面板里再弹出、teleport 到 body 的子层（编辑浮层、popconfirm）一被点到就会连带
   关掉外层面板。用法见画廊查询行 ⋯ 面板的收藏视图（`cocs/gallery/SAVED_VIEWS.md`）。
 - **popconfirm 可追加 popper 类**：新增 `popperClass`，追加在固定的 `el-popover` 类之后（上游

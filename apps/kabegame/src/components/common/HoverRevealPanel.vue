@@ -26,29 +26,27 @@
       </div>
     </Teleport>
 
-    <!-- 紧凑端长按：同一张面板以底部抽屉形态展现。首次触发后才挂载，避免长列表里
-         每个触发器都常驻一个 drawer 实例 -->
-    <el-drawer
+    <!-- 紧凑端长按：同一张面板以底部弹层形态展现。首次触发后才挂载，避免长列表里
+         每个触发器都常驻一个弹层实例 -->
+    <Sheet
       v-if="drawerMounted"
-      :model-value="visible && compact"
-      direction="btt"
-      size="auto"
-      :with-header="false"
-      append-to-body
-      :class="drawerClass"
-      @update:model-value="(v: boolean) => (v ? null : close())"
-      @click="handlePanelClick"
+      :open="visible && compact"
+      side="bottom"
+      hide-close
+      body-class="p-0"
+      @update:open="(v: boolean) => (v ? null : close())"
     >
-      <div class="hover-reveal-drawer-body">
+      <div class="hover-reveal-drawer-body" @click="handlePanelClick">
         <slot name="panel" />
       </div>
-    </el-drawer>
+    </Sheet>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
-import { ElDrawer, useZIndex } from "@kabegame/element-plus";
+import { Sheet } from "@/components/ui";
+import { nextLayerZIndex } from "@/components/ui/compat";
 import { useUiStore } from "../../stores/ui";
 
 const LONG_PRESS_MS = 500;
@@ -77,8 +75,6 @@ const props = withDefaults(
     panelWidth?: number;
     /** 紧凑端是否支持长按弹出底部抽屉 */
     longPress?: boolean;
-    /** 透传给紧凑端抽屉的 class（抽屉 append-to-body，样式需由非 scoped 规则命中） */
-    drawerClass?: string;
   }>(),
   {
     disabled: false,
@@ -87,7 +83,6 @@ const props = withDefaults(
     closeDelay: 200,
     panelWidth: 320,
     longPress: true,
-    drawerClass: undefined,
   },
 );
 
@@ -97,7 +92,6 @@ const emit = defineEmits<{
 }>();
 
 const uiStore = useUiStore();
-const { nextZIndex } = useZIndex();
 const compact = computed(() => uiStore.isCompact);
 
 const visible = ref(false);
@@ -122,8 +116,8 @@ const clearCloseTimer = () => {
   }
 };
 
-// 面板可能弹在 dialog 内的 select 下拉之上，固定 z-index 会被压住；打开时向 EP 的
-// 全局计数要一个当前最高层级。
+// 面板可能弹在对话框里的下拉之上，固定 z-index 会被压住；打开时向层级计数器要一个当前最高层级
+// （TODO:[REF_UI] P9 随 compat.ts 换成自己的计数器）。
 const panelZIndex = ref(2000);
 
 const positionPanel = () => {
@@ -162,7 +156,7 @@ const show = async (el: HTMLElement) => {
     visible.value = true;
     return;
   }
-  panelZIndex.value = nextZIndex();
+  panelZIndex.value = nextLayerZIndex();
   visible.value = true;
   await nextTick();
   positionPanel();
@@ -324,12 +318,8 @@ defineExpose({ close });
 </script>
 
 <style scoped lang="scss">
-/* 紧凑端抽屉：面板铺满宽度、贴底圆角。面板本体的宽度/圆角/阴影是它作为悬浮卡片的
-   样式，权重与这里相同且注入顺序不定，只能用 !important 明确覆盖。 */
-:deep(.el-drawer__body) {
-  padding: 0;
-}
-
+/* 紧凑端弹层：面板铺满宽度。面板本体的宽度 / 圆角 / 阴影是它作为悬浮卡片的样式，
+   权重与这里相同且注入顺序不定，只能用 !important 明确覆盖；圆角由弹层自己给。 */
 .hover-reveal-drawer-body {
   display: flex;
   justify-content: center;
@@ -338,7 +328,7 @@ defineExpose({ close });
 .hover-reveal-drawer-body :deep(> *) {
   width: 100% !important;
   max-width: 420px;
-  border-radius: 18px 18px 0 0 !important;
+  border-radius: 0 !important;
   box-shadow: none !important;
   border: none !important;
 }

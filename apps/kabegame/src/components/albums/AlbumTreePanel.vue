@@ -51,7 +51,7 @@
 import { ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Folder, MoreFilled, Plus, PriceTag, Search } from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { isLabelForestKind } from "@/types/album";
 import AlbumTreeView from "./AlbumTreeView.vue";
 import type { TreeDndController } from "@/components/tree/types";
@@ -115,9 +115,9 @@ const dnd: TreeDndController<AlbumNode> = {
   drop: async (source, target) => {
     try {
       await moveAlbum(source.id, target?.id ?? null);
-      ElMessage.success(t("albums.moveSuccess"));
+      kameMessage.success(t("albums.moveSuccess"));
     } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : t("albums.moveFailed"));
+      kameMessage.error(error instanceof Error ? error.message : t("albums.moveFailed"));
     }
   },
 };

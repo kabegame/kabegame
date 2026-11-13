@@ -20,15 +20,14 @@ function directoryPalette(directory: string) {
   hash = (hash ^ (hash >>> 16)) >>> 0;
 
   // 将哈希的三段投射到 OKLCH：L∈[0.94,0.96]、C∈[0.025,0.035]、H∈[0,360)。
-  // 同色相配套深色文字与边框；根级无目录时取中性色。
+  // 同色相配套深色文字（悬停再深一点）；根级无目录时取中性色。变量由 ImageLabelsPanel 的标签读取。
   const hue = ((hash & 0xffff) / 0x10000) * 360;
   const lightness = 0.94 + (((hash >>> 16) & 0xff) / 255) * 0.02;
   const chroma = directory ? 0.025 + ((hash >>> 24) / 255) * 0.01 : 0;
   return {
-    "--anime-tag-bg-color": `oklch(${lightness} ${chroma} ${hue})`,
-    "--anime-tag-border-color": `oklch(0.82 ${chroma} ${hue})`,
-    "--anime-tag-text-color": `oklch(0.38 ${chroma} ${hue})`,
-    "--anime-tag-hover-color": `oklch(0.46 ${chroma} ${hue})`,
+    "--kb-label-bg": `oklch(${lightness} ${chroma} ${hue})`,
+    "--kb-label-fg": `oklch(0.38 ${chroma} ${hue})`,
+    "--kb-label-hover": `oklch(0.24 ${chroma} ${hue})`,
   };
 }
 

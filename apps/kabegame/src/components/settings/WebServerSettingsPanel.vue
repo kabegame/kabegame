@@ -91,7 +91,7 @@ import { DocumentCopy } from "@kabegame/element-plus-icons";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import KbNumber from "@/components/common/form/KbNumber.vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 
 const { t } = useI18n();
 const { settingValue: enabledValue, set: setEnabledValue } = useSettingKeyState("webServerEnabled");
@@ -141,7 +141,7 @@ async function onBeforeToggle(): Promise<boolean> {
   try {
     return await setEnabledValue(!enabled.value);
   } catch {
-    ElMessage.error(t("settings.webServerPortInUse"));
+    kameMessage.error(t("settings.webServerPortInUse"));
     return false;
   } finally {
     toggling.value = false;
@@ -174,7 +174,7 @@ async function onPortChange(value: number | undefined) {
   try {
     await setPortValue(next);
   } catch {
-    ElMessage.error(t("settings.webServerPortInUse"));
+    kameMessage.error(t("settings.webServerPortInUse"));
     localPort.value = port.value;
   } finally {
     portSaving.value = false;
@@ -188,7 +188,7 @@ async function onBeforeLanToggle(): Promise<boolean> {
   try {
     return await setLanValue(!lanAccess.value);
   } catch {
-    ElMessage.error(t("common.operationFailed"));
+    kameMessage.error(t("common.operationFailed"));
     return false;
   } finally {
     lanToggling.value = false;
@@ -198,9 +198,9 @@ async function onBeforeLanToggle(): Promise<boolean> {
 async function copyText(text: string) {
   try {
     await writeText(text);
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch {
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 </script>

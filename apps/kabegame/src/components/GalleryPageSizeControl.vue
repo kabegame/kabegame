@@ -1,61 +1,44 @@
 <template>
   <div class="gallery-page-size-control">
-    <el-dropdown v-if="!uiStore.isCompact" trigger="click" @command="onDesktopCommand">
-      <el-button :class="btnClass">
-        <el-icon :class="iconClass">
-          <Histogram />
-        </el-icon>
-        <span>{{ pageSizeLabel }}</span>
-        <el-icon class="el-icon--right">
-          <ArrowDown />
-        </el-icon>
-      </el-button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item v-for="n in options" :key="n" :command="String(n)" :class="{ 'is-active': pageSize === n }">
-            {{ n }}
-          </el-dropdown-item>
-        </el-dropdown-menu>
-      </template>
-    </el-dropdown>
-    <el-button v-else-if="androidUi === 'inline'" :class="btnClass" @click="openPicker">
-      <el-icon :class="iconClass">
-        <Histogram />
-      </el-icon>
+    <DropdownMenu v-if="!uiStore.isCompact">
+      <DropdownMenuTrigger as-child>
+        <Button :class="btnClass">
+          <ChartColumn />
+          <span>{{ pageSizeLabel }}</span>
+          <ChevronDown class="opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <MenuRadioGroup :model-value="pageSize" :items="menuItems" @update:model-value="onDesktopSelect" />
+      </DropdownMenuContent>
+    </DropdownMenu>
+    <Button v-else-if="androidUi === 'inline'" :class="btnClass" @click="openPicker">
+      <ChartColumn />
       <span>{{ pageSizeLabel }}</span>
-    </el-button>
+    </Button>
 
-    <Teleport v-if="uiStore.isCompact" to="body">
-      <van-popup
-        :show="isOpen"
-        position="bottom"
-        round
-        :z-index="zIndex"
-        @update:show="
-          (v) => {
-            if (!v) close();
-          }
-        "
-      >
-        <van-picker
-          v-model="pickerSelected"
-          :title="$t('gallery.pageSize')"
-          :columns="pickerColumns"
-          :confirm-button-text="t('common.confirm')"
-          :cancel-button-text="t('common.cancel')"
-          @confirm="onPickerConfirm"
-          @cancel="close()"
-        />
-      </van-popup>
-    </Teleport>
+    <PickerSheet
+      v-if="uiStore.isCompact"
+      v-model:open="isOpen"
+      v-model="pickerSelected"
+      :title="$t('gallery.pageSize')"
+      :columns="pickerColumns"
+      @confirm="onPickerConfirm"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useI18n } from "@kabegame/i18n";
-import { ArrowDown, Histogram } from "@kabegame/element-plus-icons";
-import { useModal } from "@/composables/useModal";
+import { ChartColumn, ChevronDown } from "@lucide/vue";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  MenuRadioGroup,
+  PickerSheet,
+} from "@/components/ui";
 import { useUiStore } from "@/stores/ui";
 import { DEFAULT_GALLERY_PAGE_SIZE, GALLERY_PAGE_SIZE_OPTIONS, isGalleryPageSizeOption } from "@/utils/galleryPageSize";
 
@@ -82,19 +65,17 @@ const emit = defineEmits<{
 
 const uiStore = useUiStore();
 
-const { t } = useI18n();
 const options = GALLERY_PAGE_SIZE_OPTIONS;
 const pageSizeLabel = computed(() => String(props.pageSize));
 const btnClass = computed(() => (props.variant === "album" ? "album-browse-btn" : "gallery-browse-btn"));
-const iconClass = computed(() => (props.variant === "album" ? "album-browse-icon" : "gallery-browse-icon"));
+const menuItems = options.map((n) => ({ label: String(n), value: n }));
 
-async function onDesktopCommand(cmd: string) {
-  const n = Number(cmd);
-  if (!isGalleryPageSizeOption(n)) return;
+function onDesktopSelect(n: number | undefined) {
+  if (n === undefined || !isGalleryPageSizeOption(n)) return;
   emit("update:pageSize", n);
 }
 
-const { isOpen, zIndex, open, close } = useModal();
+const isOpen = ref(false);
 
 const pickerColumns = computed(() => options.map((n) => ({ text: String(n), value: String(n) })));
 const pickerSelected = ref<string[]>([String(DEFAULT_GALLERY_PAGE_SIZE)]);
@@ -102,9 +83,8 @@ watch(isOpen, (v) => {
   if (v) pickerSelected.value = [String(props.pageSize)];
 });
 
-async function onPickerConfirm() {
-  close();
-  const v = pickerSelected.value[0];
+function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
+  const v = selectedValues[0];
   const n = Number(v);
   if (!isGalleryPageSizeOption(n)) return;
   emit("update:pageSize", n);
@@ -112,24 +92,8 @@ async function onPickerConfirm() {
 
 function openPicker() {
   pickerSelected.value = [String(props.pageSize)];
-  open();
+  isOpen.value = true;
 }
 
 defineExpose({ openPicker });
 </script>
-
-<style scoped lang="scss">
-.gallery-browse-btn {
-  .gallery-browse-icon {
-    margin-right: 6px;
-    font-size: 14px;
-  }
-}
-
-.album-browse-btn {
-  .album-browse-icon {
-    margin-right: 6px;
-    font-size: 14px;
-  }
-}
-</style>

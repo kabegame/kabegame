@@ -414,12 +414,13 @@ MCP 读它时每行多一个派生字段 `hex`（六位小写十六进制，`mcp
 
 - 色块依次是基本色桶、用户保存的色桶（`color_buckets://` 的顺序）、末尾一个「其它颜色」。当前排序的颜色不在色桶里
   时，「其它颜色」显示成那个颜色并带选中描边，否则是带「＋」的空块。
-- 点「其它颜色」打开内嵌的 `ElColorPickerPanel`（不带透明度，初值为当前排序的颜色）。「按这个颜色排序」直接选中；
+- 点「其它颜色」打开内嵌的取色面板 `ColorPickerPanel`（`@/components/ui`，饱和度 / 明度区 + 色相条 + 十六进制输入，
+  不带透明度，初值为当前排序的颜色）。「按这个颜色排序」直接选中；
   「保存为色桶」调 `addColorBucket` 后选中，期间按钮转圈、两个按钮都禁用。取到的颜色已经是色桶、或用户色桶到上限
   时保存按钮置灰并换提示文案；后端返回 `exists`（别处刚存了）时照常选中。
-- 用户保存的色块右上角有删除角标（悬停出现；紧凑布局没有悬停，常显），`ElPopconfirm` 确认后调
-  `deleteColorBucket`（`not-found` 当作成功）。确认框 teleport 到 body，挂 `COLOR_BUCKET_LAYER_CLASS`，排序下拉的
-  `clickOutsideIgnore` 认它，点确认框不会关掉下拉；它另接了 `useModalBack`。
+- 用户保存的色块右上角有删除角标（悬停出现；紧凑布局没有悬停，常显），气泡确认 `Popconfirm` 确认后调
+  `deleteColorBucket`（`not-found` 当作成功）。确认框是 Reka 层，算排序下拉面板的「层内」，点它不会关掉下拉；
+  返回栈由它自己接。
 - 写完不主动刷新任何 key，等 `color-buckets-change`（`services/colorBuckets.ts`）。
 
 chip 的 tooltip 在颜色排序时是「颜色 · 红」或「颜色 · #32fe98」（`colorLabel`：基本色桶用名字，其它用 `#rrggbb`）。
@@ -647,9 +648,9 @@ R4 + A3 相比，88.2% 的图色盘完全相同；用上鲜艳色名额的图从
 | 前端 | `apps/kabegame/src/utils/galleryPath.ts` | 排序字段、路径构造与解析、`isColorSortField`、`colorSortFor` |
 | 前端 | `apps/kabegame/src/utils/palette.ts` | `parsePalette`、`rgbToHex`、`isLightColor` |
 | 前端 | `apps/kabegame/src/services/colorBuckets.ts`、`composables/useColorBuckets.ts` | 色桶行规范化、写命令与错误码、列表观察方 |
-| 前端 | `apps/kabegame/src/components/gallery/ColorBucketPanel.vue`、`colorBucketLayer.ts`、`GalleryQueryBar.vue` | 色桶面板、排序下拉接线与排序段校正 |
+| 前端 | `apps/kabegame/src/components/gallery/ColorBucketPanel.vue`、`GalleryQueryBar.vue`、`components/ui/ColorPickerPanel.vue` | 色桶面板、排序下拉接线与排序段校正 |
 | 前端 | `apps/kabegame/src/components/common/ImageBasicInfoPanel.vue` | 色带 |
 | 前端 | `apps/kabegame/src/services/kbEvents/imageViewRelevance.ts` | 字段依赖表的 `palette` |
 | 前端 | `apps/kabegame/src/components/OrganizeDialog.vue`、`stores/organize.ts`、`services/organize.ts`、`components/busy/BusyOrganizeCard.vue` | 整理开关 `recomputePalette`、计数 `palettesUpdated` 的显示 |
-| 组件库 | `packages/kabegame-element-plus/src/components/kb-filter-dropdown/` | 选项的 `expandable` 与 `option-panel` 插槽 |
+| 组件库 | `apps/kabegame/src/components/ui/FilterDropdown.vue` | 选项的 `expandable` 与 `option-panel` 插槽 |
 | 生成 | `packages/kabegame-pathql-client/index.ts` | `pql.color_buckets`；生成物、不入库，改 DSL 后跑 `deno task pathql:generate` |

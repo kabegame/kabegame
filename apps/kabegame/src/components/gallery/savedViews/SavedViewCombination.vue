@@ -20,7 +20,7 @@
           :variant="newKeys?.has(pill.key) ? 'new' : 'normal'"
         />
       </div>
-      <p v-if="anyDimsText" class="m-0 text-[11px] text-[var(--anime-text-secondary)] opacity-80">{{ anyDimsText }}</p>
+      <p v-if="anyDimsText" class="m-0 text-[11.5px] text-kb-fg-subtle">{{ anyDimsText }}</p>
     </section>
 
     <section v-if="advanced.length > 0">
@@ -40,18 +40,20 @@
     <section>
       <div class="flex items-center justify-between">
         <p class="saved-view-combination__title">{{ t("gallery.savedViewPathTitle") }}</p>
-        <button
-          type="button"
-          class="saved-view-combination__copy"
-          :title="t('gallery.savedViewCopyPath')"
-          :aria-label="t('gallery.savedViewCopyPath')"
-          @click="copyPath"
-        >
-          <el-icon><CopyDocument /></el-icon>
-        </button>
+        <Tooltip :content="t('gallery.savedViewCopyPath')">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            class="mb-1.5 !size-[22px]"
+            :aria-label="t('gallery.savedViewCopyPath')"
+            @click="copyPath"
+          >
+            <Copy />
+          </Button>
+        </Tooltip>
       </div>
       <div
-        class="select-text break-all rounded-md bg-[color-mix(in_srgb,var(--anime-primary)_6%,transparent)] px-2 py-1.5 font-mono text-[11px] leading-relaxed text-[var(--anime-text-secondary)]"
+        class="select-text break-all rounded-kb-md bg-kb-fill px-2 py-1.5 font-mono text-[11px] leading-relaxed text-kb-fg-muted"
       >
         {{ path }}
       </div>
@@ -62,14 +64,15 @@
 <script setup lang="ts">
 import { computed, markRaw } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { CopyDocument, SortAsc, SortDesc } from "@kabegame/element-plus-icons";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Copy } from "@lucide/vue";
+import { Button, Tooltip } from "@/components/ui";
 import { SORT_FIELD_ICONS } from "@/components/gallery/galleryChipIcons";
 import { useColorBuckets } from "@/composables/useColorBuckets";
 import { usePluginStore } from "@/stores/plugins";
 import { isColorSortField, type GallerySort } from "@/utils/galleryPath";
 import { colorLabel, gallerySortFieldLabel, type GalleryLabelContext } from "@/utils/galleryFilterLabels";
 import { conditionCount, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import SavedViewPill from "./SavedViewPill.vue";
 import SavedViewQueryTree from "./SavedViewQueryTree.vue";
 import { filterSetPills, queryPills, type SavedViewPill as Pill } from "./savedViewPills";
@@ -130,7 +133,12 @@ const sortFieldPill = computed<Pill>(() => {
 const sortOrderPill = computed<Pill | null>(() => {
   if (props.sort.field === "random") return null;
   const label = props.sort.desc ? t("gallery.sortDescending") : t("gallery.sortAscending");
-  return { key: `order:${props.sort.desc}`, icon: markRaw(props.sort.desc ? SortDesc : SortAsc), label, title: label };
+  return {
+    key: `order:${props.sort.desc}`,
+    icon: markRaw(props.sort.desc ? ArrowDownWideNarrow : ArrowUpNarrowWide),
+    label,
+    title: label,
+  };
 });
 /** 排序维度的身份：两个颜色字段是同一个维度，换了颜色才算变。 */
 function sortIdentity(sort: GallerySort): string {
@@ -160,37 +168,17 @@ const removedPills = computed(() => {
 async function copyPath() {
   try {
     await navigator.clipboard.writeText(props.path);
-    ElMessage.success(t("common.copied"));
+    kameMessage.success(t("common.copied"));
   } catch {
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 </script>
 
-<style scoped lang="scss">
+<style scoped>
 .saved-view-combination__title {
   margin: 0 0 6px;
-  color: var(--anime-text-secondary);
+  color: var(--kb-fg-muted);
   font-size: 12px;
-}
-
-.saved-view-combination__copy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin-bottom: 6px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  color: var(--anime-text-secondary);
-  background: transparent;
-  cursor: pointer;
-
-  &:hover {
-    color: var(--anime-primary);
-    background: color-mix(in srgb, var(--anime-primary) 8%, transparent);
-  }
 }
 </style>

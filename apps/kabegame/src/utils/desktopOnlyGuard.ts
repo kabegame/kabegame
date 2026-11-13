@@ -1,9 +1,9 @@
-import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "../env";
 import { getIsSuper } from "../state/superState";
 import { trackEvent } from "../track/umami";
 import { openExternalLink } from "./openExternalLink";
+import { messageBox } from "@/components/ui/messageBox";
 
 const HOMEPAGE = "https://github.com/kabegame/kabegame";
 
@@ -24,7 +24,7 @@ export async function guardDesktopOnly(featureKey: string, options: GuardDesktop
   if (options.needSuper && getIsSuper()) return false;
   const t = i18n.global.t;
   try {
-    await ElMessageBox.confirm(
+    await messageBox.confirm(
       t("web.desktopOnlyDesc", { feature: t(`web.feature.${featureKey}`) }),
       t("web.desktopOnlyTitle"),
       {

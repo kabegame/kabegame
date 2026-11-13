@@ -162,7 +162,7 @@ import { computed, reactive, ref, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Box, Check, Close, Folder, FolderAdd, Refresh, Shop, User, Warning } from "@kabegame/element-plus-icons";
 import { ElDialog } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -309,7 +309,7 @@ async function refreshScan() {
     if (seq !== scanSeq) return;
     console.error("[WPE] 扫描壁纸来源失败:", error);
     sources.value = [];
-    ElMessage.error(error instanceof Error ? error.message : String(error));
+    kameMessage.error(error instanceof Error ? error.message : String(error));
   } finally {
     if (seq === scanSeq) scanning.value = false;
   }
@@ -329,7 +329,7 @@ async function handleAddFolder() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message !== "cancel" && message !== "close") {
-      ElMessage.error(message.includes("未识别") ? t("gallery.wpeUnsupported") : message);
+      kameMessage.error(message.includes("未识别") ? t("gallery.wpeUnsupported") : message);
     }
   } finally {
     adding.value = false;
@@ -348,7 +348,7 @@ function handleClosed() {
 
 async function handleSubmit() {
   if (!canSubmit.value) {
-    ElMessage.warning(t("gallery.wpeNoSelection"));
+    kameMessage.warning(t("gallery.wpeNoSelection"));
     return;
   }
   if (await guardDesktopOnly("localImport", { needSuper: true })) return;
@@ -379,11 +379,11 @@ async function handleSubmit() {
       isDryRun.value,
     );
     if (!added) {
-      ElMessage.error(t("gallery.wpeTaskFailed"));
+      kameMessage.error(t("gallery.wpeTaskFailed"));
       return;
     }
     modal.close();
-    ElMessage.success(t("gallery.wpeTaskAdded"));
+    kameMessage.success(t("gallery.wpeTaskAdded"));
   } finally {
     submitting.value = false;
   }

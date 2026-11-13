@@ -14,11 +14,9 @@
             v-if="showUp && onMove"
             class="arrow-btn arrow-up"
             @click.stop="handleArrowClick('up')"
-            title="向上移动"
+            :title="$t('common.moveUp')"
           >
-            <el-icon>
-              <ArrowUp />
-            </el-icon>
+            <ChevronUp />
           </button>
         </transition>
         <transition name="fade">
@@ -26,11 +24,9 @@
             v-if="showDown && onMove"
             class="arrow-btn arrow-down"
             @click.stop="handleArrowClick('down')"
-            title="向下移动"
+            :title="$t('common.moveDown')"
           >
-            <el-icon>
-              <ArrowDown />
-            </el-icon>
+            <ChevronDown />
           </button>
         </transition>
         <transition name="fade">
@@ -38,11 +34,9 @@
             v-if="showLeft && onMove"
             class="arrow-btn arrow-left"
             @click.stop="handleArrowClick('left')"
-            title="向左移动"
+            :title="$t('common.moveLeft')"
           >
-            <el-icon>
-              <ArrowLeft />
-            </el-icon>
+            <ChevronLeft />
           </button>
         </transition>
         <transition name="fade">
@@ -50,11 +44,9 @@
             v-if="showRight && onMove"
             class="arrow-btn arrow-right"
             @click.stop="handleArrowClick('right')"
-            title="向右移动"
+            :title="$t('common.moveRight')"
           >
-            <el-icon>
-              <ArrowRight />
-            </el-icon>
+            <ChevronRight />
           </button>
         </transition>
       </div>
@@ -64,7 +56,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@kabegame/element-plus-icons";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "@lucide/vue";
 
 interface Props {
   showUp?: boolean;
@@ -171,9 +163,9 @@ function handleArrowClick(direction: "up" | "down" | "left" | "right") {
   position: absolute;
   width: 32px;
   height: 32px;
-  background: rgba(255, 107, 157, 0.85);
+  background: color-mix(in srgb, var(--kb-fg) 72%, transparent);
   border: none;
-  color: white;
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -185,12 +177,12 @@ function handleArrowClick(direction: "up" | "down" | "left" | "right") {
   box-shadow: none;
 
   &:hover {
-    opacity: 0.9;
-    background: rgba(255, 77, 138, 0.95);
+    background: color-mix(in srgb, var(--kb-fg) 88%, transparent);
   }
 
-  .el-icon {
-    font-size: 16px;
+  svg {
+    width: 16px;
+    height: 16px;
   }
 }
 

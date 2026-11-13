@@ -1,18 +1,11 @@
 <template>
-  <el-dialog
-    :model-value="open"
-    :z-index="zIndex"
+  <!-- 只在 Android 用（桌面的详情在预览两侧栏里）。宽度按布局给；正文区自己滚动 -->
+  <Dialog
+    :open="open"
     :title="t('gallery.imageDetailTitle')"
-    width="min(1180px, 96vw)"
-    class="image-detail-dialog"
-    :class="{ 'is-stacked': stacked }"
-    align-center
-    append-to-body
-    @update:model-value="
-      (v: boolean) => {
-        if (!v) emit('close');
-      }
-    "
+    :width="stacked ? '95vw' : 'min(1180px, 96vw)'"
+    body-class="image-detail-body"
+    @update:open="(v: boolean) => !v && emit('close')"
   >
     <div class="image-detail-columns" :class="`is-${layout}`">
       <div class="detail-col-basic">
@@ -38,13 +31,14 @@
         <ImageNativeMetadataPanel :image="image" :collapsible="stacked" :fill-when-expanded="!stacked" />
       </div>
     </div>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useWindowSize } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
+import { Dialog } from "@/components/ui";
 import ImageBasicInfoPanel, {
   type ImageDetailGalleryFilterTarget,
   type ImageDetailSurfRecordTarget,
@@ -81,7 +75,6 @@ const stacked = computed(() => layout.value === "stack");
 
 interface Props {
   open: boolean;
-  zIndex: number;
   image: ImageInfo | null;
   plugins?: Array<Plugin>;
 }
@@ -99,40 +92,12 @@ const emit = defineEmits<Emits>();
 </script>
 
 <style lang="scss">
-/* 与 apps/kabegame CrawlerDialog 一致：限制整窗高度，仅 body 内滚动（teleport 到 body，需非 scoped）。
-   上下边距让开状态栏 / 导航栏安全区，横屏手机上状态栏不再压住弹窗顶部。 */
-.image-detail-dialog.el-dialog {
-  --image-detail-gap: 2.5vh;
-  --image-detail-max-height: calc(
-    100vh - var(--sat, env(safe-area-inset-top, 0px)) - var(--sab, env(safe-area-inset-bottom, 0px)) -
-      2 * var(--image-detail-gap)
-  );
-  width: min(1180px, 96vw) !important;
-  height: auto !important;
-  max-height: var(--image-detail-max-height) !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin: calc(var(--sat, env(safe-area-inset-top, 0px)) + var(--image-detail-gap)) auto
-    calc(var(--sab, env(safe-area-inset-bottom, 0px)) + var(--image-detail-gap)) !important;
-  overflow: hidden !important;
-}
-
-.image-detail-dialog.el-dialog.is-stacked {
-  width: 95vw !important;
-}
-
-.image-detail-dialog .el-dialog__header {
-  flex-shrink: 0 !important;
-  padding: 16px 20px 10px !important;
-}
-
-.image-detail-dialog .el-dialog__body {
-  flex: 1 1 auto !important;
-  min-height: 0 !important;
-  max-height: none !important;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
-  padding: 8px 20px 20px !important;
+/* 对话框本身由 ui/Dialog 限高（视口减去上下边距），这里只排列四个面板；teleport 到 body，需非 scoped。
+   堆叠时插件详情展开后要有一屏的阅读高度，用的就是对话框的最大高度。 */
+.image-detail-body {
+  --image-detail-max-height: min(85vh, calc(100vh - 32px));
+  padding-top: 8px;
+  padding-bottom: 20px;
 }
 
 .image-detail-columns {

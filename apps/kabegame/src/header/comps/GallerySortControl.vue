@@ -1,32 +1,28 @@
 <template>
-  <el-dropdown trigger="click" @command="handleCommand">
-    <el-button class="gallery-sort-btn">
-      <el-icon class="gallery-sort-icon">
-        <Sort />
-      </el-icon>
-      <span class="gallery-sort-label">{{ sortLabel }}</span>
-      <el-icon class="el-icon--right">
-        <ArrowDown />
-      </el-icon>
-    </el-button>
-    <template #dropdown>
-      <el-dropdown-menu>
-        <el-dropdown-item command="asc" :class="{ 'is-active': !galleryRouteStore.sort.desc }">
-          {{ sortAscLabel }}
-        </el-dropdown-item>
-        <el-dropdown-item command="desc" :class="{ 'is-active': galleryRouteStore.sort.desc }">
-          {{ sortDescLabel }}
-        </el-dropdown-item>
-      </el-dropdown-menu>
-    </template>
-  </el-dropdown>
+  <DropdownMenu>
+    <DropdownMenuTrigger as-child>
+      <Button>
+        <ArrowUpDown />
+        <span>{{ sortLabel }}</span>
+        <ChevronDown class="opacity-60" />
+      </Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="start">
+      <MenuRadioGroup
+        :model-value="galleryRouteStore.sort.desc ? 'desc' : 'asc'"
+        :items="items"
+        @update:model-value="handleCommand"
+      />
+    </DropdownMenuContent>
+  </DropdownMenu>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
-import { ArrowDown, Sort } from "@kabegame/element-plus-icons";
+import { ArrowUpDown, ChevronDown } from "@lucide/vue";
+import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, MenuRadioGroup } from "@/components/ui";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { isColorSortField, queryUsesDimension } from "@/utils/galleryPath";
 
@@ -71,20 +67,13 @@ const sortLabel = computed(() => {
   return sortAscLabel.value;
 });
 
-function handleCommand(command: string) {
+const items = computed(() => [
+  { value: "asc", label: sortAscLabel.value },
+  { value: "desc", label: sortDescLabel.value },
+]);
+
+function handleCommand(command: string | undefined) {
   const sort = { ...galleryRouteStore.sort, desc: command === "desc" };
   void galleryRouteStore.navigate({ sort }, { push: route.path !== "/gallery" });
 }
 </script>
-
-<style scoped lang="scss">
-.gallery-sort-btn {
-  .gallery-sort-icon {
-    margin-right: 6px;
-    font-size: 14px;
-  }
-  .gallery-sort-label {
-    margin-right: 4px;
-  }
-}
-</style>

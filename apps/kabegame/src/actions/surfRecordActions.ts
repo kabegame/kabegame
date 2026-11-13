@@ -1,4 +1,4 @@
-import { Picture, Delete, InfoFilled, House } from "@kabegame/element-plus-icons";
+import { House, Image as ImageIcon, Info, Trash2 } from "@lucide/vue";
 import { IS_ANDROID } from "@/env";
 import type { ActionItem, ActionContext } from "@/actions/types";
 import type { SurfRecord } from "@/stores/surf";
@@ -18,14 +18,14 @@ export function createSurfRecordActions(): ActionItem<SurfRecord>[] {
     {
       key: "viewImages",
       label: t("surf.viewDownloadedImages"),
-      icon: Picture,
+      icon: ImageIcon,
       command: "viewImages",
       visible: () => true,
     },
     {
       key: "details",
       label: t("surf.recordDetails"),
-      icon: InfoFilled,
+      icon: Info,
       command: "details",
       visible: () => true,
     },
@@ -40,7 +40,7 @@ export function createSurfRecordActions(): ActionItem<SurfRecord>[] {
     {
       key: "delete",
       label: t("common.delete"),
-      icon: Delete,
+      icon: Trash2,
       command: "delete",
       dividerBefore: true,
       visible: () => true,

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { Monitor, VideoPause, VideoPlay } from "@kabegame/element-plus-icons";
+import { Monitor, Pause, Play } from "@lucide/vue";
 import type { ImageInfo } from "@/types/image";
 import { createImageActions, type ImageActionContext } from "./imageActions";
+import { resolveActionIcon } from "./types";
 
 vi.mock("@/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
 vi.mock("@kabegame/i18n", () => ({ i18n: { global: { t: (key: string) => key } } }));
@@ -74,9 +75,9 @@ describe("预览壁纸专属的菜单项", () => {
     const playing = context("x-wpe/scene", live);
     const paused = context("x-wpe/scene", { ...live, paused: true });
     expect(resolve(pause.label, playing)).toBe("gallery.wpePause");
-    expect(resolve(pause.icon, playing)).toBe(VideoPause);
+    expect(resolveActionIcon(pause.icon, playing)).toBe(Pause);
     expect(resolve(pause.label, paused)).toBe("gallery.wpeResume");
-    expect(resolve(pause.icon, paused)).toBe(VideoPlay);
+    expect(resolveActionIcon(pause.icon, paused)).toBe(Play);
   });
 
   it("hide 可以隐藏", () => {
@@ -90,5 +91,12 @@ describe("预览壁纸专属的菜单项", () => {
 describe("设为壁纸", () => {
   it("桌面用显示器图标", () => {
     expect(action("wallpaper").icon).toBe(Monitor);
+  });
+});
+
+describe("图标解析", () => {
+  it("lucide 图标是函数式组件，不能被当成解析器调用", () => {
+    expect(typeof Monitor).toBe("function");
+    expect(resolveActionIcon(action("wallpaper").icon, context("image/png"))).toBe(Monitor);
   });
 });

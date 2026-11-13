@@ -135,7 +135,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import AutoConfigDetailContent from "@/components/scheduler/AutoConfigDetailContent.vue";
@@ -406,7 +406,7 @@ const enterEdit = async () => {
   const id = dialogStore.configId;
   const cfg = id ? config.value : null;
   if (!cfg) {
-    ElMessage.error(t("autoConfig.configDeleted"));
+    kameMessage.error(t("autoConfig.configDeleted"));
     return;
   }
   panelMode.value = "edit";
@@ -429,22 +429,22 @@ const handleEditCancel = () => {
 const handleSave = async () => {
   if (await guardDesktopOnly("saveRunConfig", { needSuper: true })) return;
   if (!name.value.trim()) {
-    ElMessage.warning(t("common.configNamePlaceholder"));
+    kameMessage.warning(t("common.configNamePlaceholder"));
     return;
   }
   if (!form.value.pluginId) {
-    ElMessage.warning(t("plugins.selectSourcePlaceholder"));
+    kameMessage.warning(t("plugins.selectSourcePlaceholder"));
     return;
   }
   if (scheduleEnabled.value && !scheduleSpec.value) {
-    ElMessage.warning(t("autoConfig.needScheduleMode"));
+    kameMessage.warning(t("autoConfig.needScheduleMode"));
     return;
   }
   if (formRef.value) {
     try {
       await formRef.value.validate();
     } catch {
-      ElMessage.warning(t("plugins.fillRequired"));
+      kameMessage.warning(t("plugins.fillRequired"));
       return;
     }
   }
@@ -473,9 +473,9 @@ const handleSave = async () => {
   if (dialogStore.isCreate) {
     config.value = await crawlerStore.addRunConfig(payload);
     if (scheduleEnabled.value) {
-      ElMessage.success(t("autoConfig.keepRunningHint"));
+      kameMessage.success(t("autoConfig.keepRunningHint"));
     } else {
-      ElMessage.success(t("common.save"));
+      kameMessage.success(t("common.save"));
     }
     dialogStore.close();
     return;
@@ -484,7 +484,7 @@ const handleSave = async () => {
   const id = String(dialogStore.configId || "");
   const current = config.value?.id === id ? config.value : null;
   if (!current) {
-    ElMessage.error(t("autoConfig.configDeleted"));
+    kameMessage.error(t("autoConfig.configDeleted"));
     dialogStore.close();
     return;
   }
@@ -494,9 +494,9 @@ const handleSave = async () => {
   });
 
   if (scheduleEnabled.value) {
-    ElMessage.success(t("autoConfig.keepRunningHint"));
+    kameMessage.success(t("autoConfig.keepRunningHint"));
   } else {
-    ElMessage.success(t("common.save"));
+    kameMessage.success(t("common.save"));
   }
   panelMode.value = "view";
 };
@@ -511,10 +511,10 @@ async function copyFullJson() {
     } else {
       await navigator.clipboard.writeText(text);
     }
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (e) {
     console.error(e);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 

@@ -471,58 +471,6 @@ $select-dropdown: map.merge(
   $select-dropdown
 );
 
-// KbFilterDropdown
-// 已迁到新界面的设计 token（apps/kabegame/src/styles/tokens.css 的 --kb-*）：中性外框，
-// 强调色只留给选中、焦点与计数。chip 与顶栏按钮同一档尺寸与圆角。
-$kb-filter-dropdown: () !default;
-$kb-filter-dropdown: map.merge(
-  (
-    'chip-text-color': var(--kb-fg),
-    'chip-icon-color': var(--kb-fg-muted),
-    'chip-muted-color': var(--kb-fg-muted),
-    'chip-border-color': var(--kb-line-strong),
-    'chip-hover-border-color': var(--kb-fg-subtle),
-    // chip 可能直接坐在画廊缩略图上：底色用顶栏同款毛玻璃，不用全透明。
-    'chip-bg-color': var(--kb-surface),
-    'chip-hover-bg-color':
-      color-mix(in srgb, var(--kb-fg) 4%, var(--kb-surface-raised)),
-    // 选中：正文仍是墨色，只把底与边框染一层很淡的强调色，图标用强调色点出来。
-    'chip-active-text-color': var(--kb-fg),
-    'chip-active-icon-color': var(--kb-accent),
-    'chip-active-border-color':
-      color-mix(in srgb, var(--kb-accent) 45%, transparent),
-    'chip-active-bg-color':
-      color-mix(in srgb, var(--kb-accent) 8%, var(--kb-surface-raised)),
-    'chip-open-shadow': 0 0 0 3px color-mix(in srgb, var(--kb-fg) 6%, transparent),
-    'chip-disabled-bg-color': var(--kb-hover),
-    'chip-height': 32px,
-    'chip-radius': var(--kb-radius-md),
-    // chip 内的限定词胶囊(搜索模式等)。
-    'badge-bg-color': var(--kb-hover),
-    'badge-text-color': var(--kb-fg-muted),
-    'panel-bg-color': var(--kb-surface-raised),
-    'panel-shadow': var(--kb-shadow-pop),
-    'panel-radius': var(--kb-radius-lg),
-    'panel-divider-color': var(--kb-line),
-    'option-text-color': var(--kb-fg),
-    'option-muted-color': var(--kb-fg-muted),
-    // 弹层里内置列表与过滤树（KbTreeRow）混用：两者的悬停 / 选中由同一组值给（见 __popper）。
-    'option-hover-bg-color': var(--kb-hover),
-    'option-selected-bg-color':
-      color-mix(in srgb, var(--kb-accent) 10%, transparent),
-    'option-selected-text-color': var(--kb-fg),
-    // 计数为 0 的行整体灰化：0 仍可选（尤其排除语境下 −0 有意义），只做视觉弱化。
-    'option-zero-color': var(--kb-fg-subtle),
-    'focus-ring': 0 0 0 2px var(--kb-ring),
-    'error-color': var(--kb-danger),
-    // 选中态 chip 右上角的清除徽章（浮在 chip 边界外）。
-    'clear-bg-color': var(--kb-fg-muted),
-    'clear-hover-bg-color': var(--kb-fg),
-    'clear-text-color': #fff,
-    'clear-ring-color': var(--kb-surface-raised),
-  ),
-  $kb-filter-dropdown
-);
 
 $select-wrapper-padding: () !default;
 $select-wrapper-padding: map.merge(

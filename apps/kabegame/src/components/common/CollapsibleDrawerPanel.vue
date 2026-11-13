@@ -1,43 +1,48 @@
 <template>
+  <!-- 中性外框：细线 + 圆角，不铺底色（宿主侧栏 / 抽屉自己是白底）；kb-collapsible-panel* 是标记类，
+       宿主样式（ImageDetailDialog 的堆叠布局）按它判断展开 / 收拢 -->
   <section
-    class="kb-collapsible-panel"
-    :class="{
-      'kb-collapsible-panel--collapsed': !panelOpen,
-      'kb-collapsible-panel--fill': fillWhenExpanded,
-    }"
+    class="kb-collapsible-panel box-border flex min-h-11 min-w-0 flex-col overflow-hidden rounded-kb-lg border border-solid border-kb-line text-kb-fg"
+    :class="[
+      panelOpen ? '' : 'kb-collapsible-panel--collapsed flex-none',
+      fillWhenExpanded ? 'kb-collapsible-panel--fill' : '',
+      panelOpen && fillWhenExpanded ? 'min-h-0 flex-1' : '',
+    ]"
   >
-    <div class="kb-collapsible-panel__header">
+    <div class="box-border flex w-full shrink-0 items-center justify-between gap-2 py-2 pl-3 pr-2 text-left">
       <button
         v-if="collapsible"
         type="button"
-        class="kb-collapsible-panel__toggle"
+        class="flex min-h-7 min-w-0 flex-1 cursor-pointer items-center border-0 bg-transparent p-0 text-left text-inherit [font:inherit] outline-none focus-visible:rounded-kb-sm focus-visible:ring-2 focus-visible:ring-kb-ring"
         :aria-expanded="panelOpen"
         :aria-label="toggleAriaLabel"
         @click="panelOpen = !panelOpen"
       >
-        <span class="kb-collapsible-panel__title">
+        <span :class="TITLE_CLASS">
           <slot name="title" />
         </span>
       </button>
-      <span v-else class="kb-collapsible-panel__title">
-        <slot name="title" />
+      <span v-else class="flex min-h-7 min-w-0 flex-1 items-center">
+        <span :class="TITLE_CLASS">
+          <slot name="title" />
+        </span>
       </span>
-      <div class="kb-collapsible-panel__header-right">
+      <div class="inline-flex shrink-0 items-center gap-1">
         <slot name="trailing" />
-        <button
+        <Button
           v-if="collapsible"
-          type="button"
-          class="kb-collapsible-panel__caret-button"
+          variant="ghost"
+          size="icon-sm"
           :aria-expanded="panelOpen"
           :aria-label="toggleAriaLabel"
           @click="panelOpen = !panelOpen"
         >
-          <span class="kb-collapsible-panel__caret" :class="{ 'is-open': panelOpen }">▾</span>
-        </button>
+          <ChevronDown class="transition-transform duration-200" :class="{ 'rotate-180': panelOpen }" />
+        </Button>
       </div>
     </div>
     <!-- 收拢时不渲染内容（v-if 而非 v-show）：插件简介 iframe 等重内容需要真正销毁 -->
-    <div v-if="panelOpen" class="kb-collapsible-panel__body">
+    <div v-if="panelOpen" class="flex min-h-0 flex-1 flex-col overflow-hidden">
       <slot />
     </div>
   </section>
@@ -46,6 +51,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useLocalStorage } from "@vueuse/core";
+import { ChevronDown } from "@lucide/vue";
+import { Button } from "@/components/ui";
 
 const props = withDefaults(
   defineProps<{
@@ -68,6 +75,8 @@ const props = withDefaults(
   },
 );
 
+const TITLE_CLASS = "min-w-0 flex-1 truncate text-[13.5px] font-600 leading-5 text-kb-fg";
+
 const storedOpen = useLocalStorage(props.storageKey, props.defaultOpen, {
   mergeDefaults: true,
 });
@@ -80,92 +89,3 @@ const panelOpen = computed({
   },
 });
 </script>
-
-<style scoped lang="scss">
-.kb-collapsible-panel {
-  border: 1px solid var(--anime-border);
-  border-radius: 10px;
-  background: var(--anime-bg-secondary);
-  display: flex;
-  flex-direction: column;
-  min-height: 44px;
-  overflow: hidden;
-
-  &--fill:not(.kb-collapsible-panel--collapsed) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  &--collapsed {
-    flex: 0 0 auto;
-  }
-}
-
-.kb-collapsible-panel__header {
-  box-sizing: border-box;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  background: transparent;
-  color: var(--anime-text-primary);
-  text-align: left;
-}
-
-.kb-collapsible-panel__toggle,
-.kb-collapsible-panel__caret-button {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.kb-collapsible-panel__toggle {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  text-align: left;
-}
-
-.kb-collapsible-panel__title {
-  font-size: 14px;
-  font-weight: 600;
-  min-width: 0;
-  flex: 1;
-}
-
-.kb-collapsible-panel__header-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.kb-collapsible-panel__caret-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.kb-collapsible-panel__caret {
-  display: inline-block;
-  font-size: 13px;
-  color: var(--anime-text-secondary);
-  transition: transform 0.2s ease;
-
-  &.is-open {
-    transform: rotate(180deg);
-  }
-}
-
-.kb-collapsible-panel__body {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-</style>

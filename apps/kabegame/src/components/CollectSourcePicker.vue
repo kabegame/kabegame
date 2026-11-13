@@ -11,7 +11,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { FolderOpened, Connection, Link, Picture } from "@kabegame/element-plus-icons";
+import { FolderOpen, Globe, Link2, Monitor } from "@lucide/vue";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
@@ -41,7 +41,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
           id: "local",
           title: t("gallery.local"),
           desc: t("gallery.localDesc"),
-          icon: FolderOpened,
+          icon: FolderOpen,
         },
       ]
     : []),
@@ -49,7 +49,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
     id: "remote",
     title: t("gallery.network"),
     desc: t("gallery.remoteDesc"),
-    icon: Connection,
+    icon: Globe,
   },
   ...(!IS_WEB
     ? [
@@ -57,7 +57,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
           id: "webpage",
           title: t("gallery.webpage"),
           desc: t("gallery.webpageDesc"),
-          icon: Link,
+          icon: Link2,
         },
       ]
     : []),
@@ -67,7 +67,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
           id: "wallpaper",
           title: t("gallery.wallpaper"),
           desc: t("gallery.wallpaperDesc"),
-          icon: Picture,
+          icon: Monitor,
         },
       ]
     : []),

@@ -1,17 +1,17 @@
 import {
-  Connection,
-  FolderOpened,
   Folder,
-  FolderAdd,
-  FolderChecked,
-  Picture,
-  Edit,
-  Rank,
-  Delete,
-  Refresh,
-  VideoPause,
-  PriceTag,
-} from "@kabegame/element-plus-icons";
+  FolderCheck,
+  FolderInput,
+  FolderOpen,
+  FolderPlus,
+  Image as ImageIcon,
+  Network,
+  Pause,
+  Pencil,
+  RefreshCw,
+  Tag,
+  Trash2,
+} from "@lucide/vue";
 import type { ActionItem, ActionContext } from "@/actions/types";
 import { HIDDEN_ALBUM_ID, type Album } from "@/services/albums";
 import { i18n } from "@kabegame/i18n";
@@ -55,14 +55,14 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "browse",
       label: t("contextMenu.browse"),
-      icon: FolderOpened,
+      icon: FolderOpen,
       command: "browse",
       visible: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
     },
     {
       key: "createSubAlbum",
       label: t("contextMenu.createSubAlbum"),
-      icon: FolderAdd,
+      icon: FolderPlus,
       command: "createSubAlbum",
       visible: (ctx) => {
         const ext = ctx as AlbumActionContext;
@@ -79,13 +79,13 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "createLabelChild",
       label: t("contextMenu.createSubAlbum"),
-      icon: FolderAdd,
+      icon: FolderPlus,
       visible: (ctx) => (ctx as AlbumActionContext).isLabelDir,
       children: [
         {
           key: "createSubLabel",
           label: t("albums.treeAddLabel"),
-          icon: PriceTag,
+          icon: Tag,
           command: "createSubLabel",
         },
         {
@@ -99,7 +99,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "openVirtualDrive",
       label: t("contextMenu.openVirtualDrive"),
-      icon: FolderOpened,
+      icon: FolderOpen,
       command: "openVirtualDrive",
       visible: (ctx) => {
         const ext = ctx as AlbumActionContext;
@@ -109,26 +109,26 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "syncNow",
       label: t("contextMenu.syncNow"),
-      icon: Refresh,
+      icon: RefreshCw,
       visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
       dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
       children: [
         {
           key: "syncFolderOnly",
           label: t("contextMenu.syncFolderOnly"),
-          icon: Refresh,
+          icon: RefreshCw,
           command: "syncNow",
         },
         {
           key: "syncNowRecursiveExisting",
           label: t("contextMenu.syncNowRecursiveExisting"),
-          icon: Refresh,
+          icon: RefreshCw,
           command: "syncNowRecursiveExisting",
         },
         {
           key: "syncNowRecursiveFull",
           label: t("contextMenu.syncNowRecursiveFull"),
-          icon: Refresh,
+          icon: RefreshCw,
           command: "syncNowRecursiveFull",
         },
       ],
@@ -136,7 +136,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "setSyncMode",
       label: t("contextMenu.setSyncMode"),
-      icon: Connection,
+      icon: Network,
       visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
       disabled: (ctx) => ctx.target?.syncMode === "delegated",
       suffix: (ctx) => (ctx.target?.syncMode === "delegated" ? t("contextMenu.syncModeDelegatedReason") : ""),
@@ -184,7 +184,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "convertToNormal",
       label: t("contextMenu.convertToNormalAlbum"),
-      icon: FolderChecked,
+      icon: FolderCheck,
       command: "convertToNormal",
       dividerBefore: true,
       visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
@@ -194,7 +194,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "setWallpaperRotation",
       label: t("contextMenu.setWallpaperRotation"),
-      icon: Picture,
+      icon: ImageIcon,
       command: "setWallpaperRotation",
       // 多块屏逐屏独立时，只要还有屏没在轮播这个画册就仍可设（给另一块屏）；每块屏都在轮播它才收起
       visible: (ctx) => {
@@ -207,7 +207,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "stopWallpaperRotation",
       label: t("contextMenu.stopWallpaperRotation"),
-      icon: VideoPause,
+      icon: Pause,
       command: "stopWallpaperRotation",
       // 任一块屏在轮播这个画册就给出；关的是全局的轮播开关
       visible: (ctx) => {
@@ -218,7 +218,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "rename",
       label: t("contextMenu.rename"),
-      icon: Edit,
+      icon: Pencil,
       command: "rename",
       visible: () => true,
       dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
@@ -226,7 +226,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "setLabelKey",
       label: t("contextMenu.setLabelKey"),
-      icon: PriceTag,
+      icon: Tag,
       command: "setLabelKey",
       visible: (ctx) => {
         const ext = ctx as AlbumActionContext;
@@ -236,7 +236,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "moveTo",
       label: t("contextMenu.moveTo"),
-      icon: Rank,
+      icon: FolderInput,
       command: "moveTo",
       visible: (ctx) => {
         const ext = ctx as AlbumActionContext;
@@ -247,7 +247,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
     {
       key: "delete",
       label: t("common.delete"),
-      icon: Delete,
+      icon: Trash2,
       command: "delete",
       dividerBefore: true,
       visible: (ctx) => {

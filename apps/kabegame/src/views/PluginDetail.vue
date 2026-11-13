@@ -83,7 +83,7 @@ import { useWindowTitlePart } from "@/composables/useWindowTitle";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { WarningFilled } from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
 import { IS_WEB } from "@/env";
@@ -181,10 +181,10 @@ const confirmInstall = async () => {
   try {
     await invoke("install_from_store", { sourceId, pluginId: targetPluginId });
     installConfirmDialog.close();
-    ElMessage.success(successMsg);
+    kameMessage.success(successMsg);
     // plugin-added / plugin-changed 事件会自动刷新 pluginStore；保留当前商店详情与滚动位置。
   } catch {
-    ElMessage.error(t("plugins.installUpdateFailed"));
+    kameMessage.error(t("plugins.installUpdateFailed"));
   } finally {
     installing.value = false;
   }
@@ -214,12 +214,12 @@ const confirmUninstall = async () => {
   try {
     await pluginStore.deletePlugin(installed.id);
     uninstallConfirmDialog.close();
-    ElMessage.success(t("plugins.pluginDeleted"));
+    kameMessage.success(t("plugins.pluginDeleted"));
     pluginStore.clearPluginDetailCache();
     // 当前本地详情已失效：直接替换为插件列表，避免叠加历史回退或返回到已删除详情。
     void router.replace({ name: "PluginBrowser" });
   } catch {
-    ElMessage.error(t("plugins.uninstallFailed"));
+    kameMessage.error(t("plugins.uninstallFailed"));
   } finally {
     uninstalling.value = false;
   }
@@ -237,9 +237,9 @@ const handleCopyPluginId = async (id?: string) => {
     } else {
       await navigator.clipboard.writeText(pluginId);
     }
-    ElMessage.success(t("plugins.pluginIdCopied"));
+    kameMessage.success(t("plugins.pluginIdCopied"));
   } catch {
-    ElMessage.error(t("plugins.copyFailed"));
+    kameMessage.error(t("plugins.copyFailed"));
   }
 };
 
@@ -289,7 +289,7 @@ const handleStartTask = async (payload: {
     triggerSource: "manual",
   });
   if (added) {
-    ElMessage.success(t("plugins.detail.taskStarted"));
+    kameMessage.success(t("plugins.detail.taskStarted"));
   }
 };
 
@@ -310,9 +310,9 @@ const handleImportAllPresets = async (presets: PluginRecommendedPreset[]) => {
     }
   }
   if (failed > 0) {
-    ElMessage.warning(t("plugins.detail.importAllPresetsPartial", { success, failed }));
+    kameMessage.warning(t("plugins.detail.importAllPresetsPartial", { success, failed }));
   } else if (success > 0) {
-    ElMessage.success(t("plugins.detail.importAllPresetsSuccess", { success }));
+    kameMessage.success(t("plugins.detail.importAllPresetsSuccess", { success }));
   }
 };
 

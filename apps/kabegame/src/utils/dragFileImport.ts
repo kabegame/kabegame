@@ -1,4 +1,4 @@
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { IS_WINDOWS } from "@/env";
 import { i18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -84,8 +84,8 @@ export async function importDroppedFiles(plan: DragFilePlan, target: Album | nul
   const t = i18n.global.t;
   if (ok) {
     useTaskDrawerStore().open();
-    ElMessage.success(t("import.addedLocalImport"));
+    kameMessage.success(t("import.addedLocalImport"));
   } else {
-    ElMessage.error(t("import.fileDropFailed"));
+    kameMessage.error(t("import.fileDropFailed"));
   }
 }

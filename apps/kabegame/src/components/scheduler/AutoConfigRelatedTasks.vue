@@ -42,6 +42,7 @@ import TaskParamsDialog from "@/components/task/TaskParamsDialog.vue";
 import type { CrawlTask } from "@/stores/crawler";
 import { usePagedTaskList } from "@/composables/usePagedTaskList";
 import { encodeSeg } from "@kabegame/pathql-client";
+import { vLoading } from "@/components/ui/loading";
 
 const props = defineProps<{ configId: string }>();
 

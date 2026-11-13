@@ -38,7 +38,7 @@ import { useI18n } from "@kabegame/i18n";
 import { Minus, Plus } from "@kabegame/element-plus-icons";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { decreasedTaskConcurrency, effectiveTaskConcurrency, increasedTaskConcurrency } from "./taskConcurrency";
 import type { CrawlTask } from "@/stores/crawler";
 
@@ -70,7 +70,7 @@ async function update(value: number | null) {
     emit("updated", task);
   } catch (error) {
     console.error("更新任务并发失败:", error);
-    ElMessage.error(t("tasks.concurrencyUpdateFailed"));
+    kameMessage.error(t("tasks.concurrencyUpdateFailed"));
   } finally {
     busy.value = false;
   }

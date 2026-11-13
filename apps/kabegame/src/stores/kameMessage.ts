@@ -29,7 +29,7 @@ export const useKameMessageStore = defineStore("kameMessage", () => {
   const queue = ref<KameMessage[]>([]);
   const history = ref<KameMessage[]>([]);
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  /** 当前把 kamechan 遮住 / 隐藏的来源（如全屏图片预览）；非空时气泡不可见，消息改走 ElMessage */
+  /** 当前把 kamechan 遮住 / 隐藏的来源（如全屏图片预览）；非空时气泡不可见，消息改走提示消息（toast） */
   const hiddenOwners = ref<string[]>([]);
   const kamechanHidden = computed(() => hiddenOwners.value.length > 0);
 

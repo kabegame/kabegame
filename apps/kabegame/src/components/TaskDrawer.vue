@@ -122,8 +122,7 @@ import { canOpenTaskWebview } from "@/utils/webpageCollect";
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { Lightning } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { useRoute, useRouter } from "vue-router";
@@ -143,6 +142,7 @@ import { useTaskRerun } from "@/composables/useTaskRerun";
 import { usePagedTaskList } from "@/composables/usePagedTaskList";
 import { taskSearchPath } from "@/services/tasks";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
+import { messageBox } from "@/components/ui/messageBox";
 
 interface Props {
   modelValue: boolean;
@@ -305,7 +305,7 @@ const confirmSaveTaskAsConfig = async () => {
   if (!task) return;
   const name = saveConfigName.value.trim();
   if (!name) {
-    ElMessage.warning(t("tasks.enterConfigName"));
+    kameMessage.warning(t("tasks.enterConfigName"));
     return;
   }
   savingConfig.value = true;
@@ -324,12 +324,12 @@ const confirmSaveTaskAsConfig = async () => {
       retryCount: task.retryCount,
       scheduleEnabled: false,
     });
-    ElMessage.success(t("tasks.saveConfigSuccess"));
+    kameMessage.success(t("tasks.saveConfigSuccess"));
     saveConfigModal.close();
     resetSaveConfigForm();
   } catch (error) {
     console.error("保存为配置失败:", error);
-    ElMessage.error(t("tasks.saveFailed"));
+    kameMessage.error(t("tasks.saveFailed"));
   } finally {
     savingConfig.value = false;
   }
@@ -370,7 +370,7 @@ const handleStopTaskById = async (taskId: string) => {
   if (!task) return;
   try {
     await crawlerStore.stopTask(task.id);
-    ElMessage.info(t("tasks.taskStopRequested"));
+    kameMessage.info(t("tasks.taskStopRequested"));
   } catch (error) {
     // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
     console.error("停止任务失败:", error);
@@ -380,7 +380,7 @@ const handleStopTaskById = async (taskId: string) => {
 /** 右键菜单「停止」没有可挂靠的叉号，仍用确认弹窗 */
 const handleCancelTaskById = async (taskId: string) => {
   try {
-    await ElMessageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
+    await messageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
   } catch {
     return;
   }
@@ -392,20 +392,20 @@ const handleDeleteTaskById = async (taskId: string) => {
   if (!task) return;
   // 运行中的任务须先停止，抽屉不再提供「停止并删除」
   if (task.status === "running" || task.status === "waiting_downloads") {
-    ElMessage.warning(t("tasks.drawerDeleteTaskRunning"));
+    kameMessage.warning(t("tasks.drawerDeleteTaskRunning"));
     return;
   }
   trackTaskDrawerAction("delete_task", task);
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
-    await ElMessageBox.confirm(t("tasks.deleteTaskConfirm"), t("tasks.confirmDelete"), { type: "warning" });
+    await messageBox.confirm(t("tasks.deleteTaskConfirm"), t("tasks.confirmDelete"), { type: "warning" });
     await crawlerStore.deleteTask(task.id);
     refresh();
     taskDrawerStore.refreshCounts();
-    ElMessage.success(t("tasks.taskDeleted"));
+    kameMessage.success(t("tasks.taskDeleted"));
   } catch (error) {
     if (error !== "cancel") {
-      ElMessage.error(t("tasks.deleteFailed"));
+      kameMessage.error(t("tasks.deleteFailed"));
     }
   }
 };
@@ -433,11 +433,11 @@ const handleOpenTaskImagesById = (taskId: string) => {
 const handleOpenTaskScheduleConfig = (task: any) => {
   const runConfigId = String(task?.runConfigId ?? "").trim();
   if (!runConfigId) {
-    ElMessage.warning(t("autoConfig.configDeleted"));
+    kameMessage.warning(t("autoConfig.configDeleted"));
     return;
   }
   if (task.runConfigName == null) {
-    ElMessage.warning(t("autoConfig.configDeleted"));
+    kameMessage.warning(t("autoConfig.configDeleted"));
     return;
   }
   autoConfigDialog.openExisting(runConfigId, "view", { scrollSchedule: true });
@@ -445,7 +445,7 @@ const handleOpenTaskScheduleConfig = (task: any) => {
 
 const handleDeleteAllTasks = async () => {
   if (nonRunningTasksCount.value === 0) {
-    ElMessage.warning(t("tasks.noTasksToClear"));
+    kameMessage.warning(t("tasks.noTasksToClear"));
     return;
   }
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
@@ -463,17 +463,17 @@ const handleDeleteAllTasks = async () => {
             running: runningCount,
           })
         : t("tasks.clearAllTasksConfirm", { count: deletableCount });
-    await ElMessageBox.confirm(msg, t("tasks.clearAllTasksTitle"), { type: "warning" });
+    await messageBox.confirm(msg, t("tasks.clearAllTasksTitle"), { type: "warning" });
 
     // 调用后端命令批量清除
     const result = await invoke<{ taskIds: string[]; count: number }>("clear_finished_tasks");
     refresh();
     taskDrawerStore.refreshCounts();
-    ElMessage.success(t("tasks.tasksCleared", { count: result.count }));
+    kameMessage.success(t("tasks.tasksCleared", { count: result.count }));
   } catch (error) {
     if (error !== "cancel") {
       console.error("清除任务失败:", error);
-      ElMessage.error(t("tasks.clearFailed"));
+      kameMessage.error(t("tasks.clearFailed"));
     }
   }
 };

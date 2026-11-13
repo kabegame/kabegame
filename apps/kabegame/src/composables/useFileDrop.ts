@@ -1,5 +1,5 @@
 import { Ref, onUnmounted } from "vue";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@/api/rpc";
 import { DragFileItem, DragFilePlan, DragFileZone, hitTestDragZone } from "@/utils/dragFileZones";
@@ -193,7 +193,7 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
               { sessionId: "drag-internal" },
             );
             // #endregion debug-drag
-            ElMessage.info(i18n.global.t("import.dropUnsupportedHere"));
+            kameMessage.info(i18n.global.t("import.dropUnsupportedHere"));
             return;
           }
 
@@ -201,7 +201,7 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
             await zone.options.onDrop(plan);
           } catch (error) {
             console.error("[FileDrop] 处理文件拖入失败:", error);
-            ElMessage.error(
+            kameMessage.error(
               `${i18n.global.t("import.fileDropFailed")}: ${error instanceof Error ? error.message : String(error)}`,
             );
           }

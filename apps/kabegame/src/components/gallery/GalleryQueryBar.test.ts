@@ -4,7 +4,6 @@ import { createPinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computed, ref, shallowRef } from "vue";
 import GalleryQueryBar from "./GalleryQueryBar.vue";
-import { COLOR_BUCKET_LAYER_CLASS } from "./colorBucketLayer";
 import type { ColorBucket } from "@/services/colorBuckets";
 import type { GallerySort, GallerySortField } from "@/utils/galleryPath";
 import { composeQueryFilters, GALLERY_SEARCH_MODES, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
@@ -58,6 +57,11 @@ beforeEach(() => {
     loading: ref(false),
   };
 });
+/**
+ * chip 的面板是 vueuse 复用模板（定义一次、弹层 / 对话框各用一次），shallowMount 会把它当子组件打桩，
+ * 这里放行；弹层的 Reka 组件桩只渲染默认插槽，所以面板常驻在 DOM 里（不经 Portal），选项够得着。
+ */
+const PANEL_TEMPLATE = { "KbFilterPanel.define": false, "KbFilterPanel.reuse": false };
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 function render(query: GalleryQuery = composeQueryFilters(simple, extra)) {
   const wrapper = shallowMount(GalleryQueryBar, {
@@ -68,14 +72,11 @@ function render(query: GalleryQuery = composeQueryFilters(simple, extra)) {
       directives: { "hscroll-fade": {} },
       renderStubDefaultSlot: true,
       stubs: {
-        ElScrollbar: { template: "<div><slot /></div>" },
-        ElIcon: true,
-        ElSwitch: true,
-        VanPicker: true,
-        VanPopup: true,
-        // 使用真实 chip，覆盖主体/清除按钮事件隔离与未激活文案。
+        ScrollArea: { template: "<div><slot /></div>" },
+        PickerSheet: true,
+        // 使用真实 chip，覆盖主体/清除按钮事件隔离与未激活文案；面板的复用模板也放行。
         KbFilterDropdown: false,
-        ElTooltip: { template: "<div><slot /></div>" },
+        ...PANEL_TEMPLATE,
         // 新界面组件：透传成原生元素，class / 事件落在 DOM 上供选择与点击。
         Tooltip: { template: "<div><slot /></div>" },
         Button: { template: "<button><slot /></button>" },
@@ -196,22 +197,19 @@ describe("按颜色排序", () => {
         directives: { "hscroll-fade": {} },
         renderStubDefaultSlot: true,
         stubs: {
-          ElScrollbar: { template: "<div><slot /></div>" },
-          ElIcon: true,
-          VanPicker: true,
-          VanPopup: true,
+          ScrollArea: { template: "<div><slot /></div>" },
+          PickerSheet: true,
           KbFilterDropdown: false,
-          ElTooltip: {
-            name: "ElTooltip",
-            emits: ["update:visible"],
-            template: '<div><slot /><div class="popper"><slot name="content" /></div></div>',
-          },
+          ...PANEL_TEMPLATE,
+          Tooltip: { template: "<div><slot /></div>" },
         },
       },
     });
     wrappers.push(wrapper);
     return wrapper;
   }
+  /** 可展开的选项行（「颜色」）：只有它带 aria-expanded */
+  const EXPANDABLE = '[role="option"][aria-expanded]';
   const sortDropdown = (wrapper: ReturnType<typeof renderSort>) => wrapper.findComponent({ name: "KbFilterDropdown" });
   const navigations = (wrapper: ReturnType<typeof renderSort>) => wrapper.emitted("navigate") ?? [];
 
@@ -301,7 +299,6 @@ describe("按颜色排序", () => {
       ]);
       expect(byBucket.props("modelValue")).toBe("by-color");
       expect(byBucket.props("title")).toBe("gallery.sort · gallery.sortByColor · gallery.colorBucket.red");
-      expect(byBucket.props("clickOutsideIgnore")).toEqual([`.${COLOR_BUCKET_LAYER_CLASS}`]);
 
       const computedSort = sortDropdown(renderSort({ field: "by-any-color", desc: false, color: "123456" }));
       expect(computedSort.props("modelValue")).toBe("by-color");
@@ -326,9 +323,8 @@ describe("按颜色排序", () => {
       const wrapper = renderSort({ field: "by-time", desc: true });
       const dropdown = sortDropdown(wrapper);
       expect(wrapper.findComponent({ name: "ColorBucketPanel" }).exists()).toBe(false);
-      dropdown.findComponent({ name: "ElTooltip" }).vm.$emit("update:visible", true);
-      await wrapper.vm.$nextTick();
-      await dropdown.get(".is-expandable").trigger("click");
+      await dropdown.get('[role="button"]').trigger("click");
+      await dropdown.get(EXPANDABLE).trigger("click");
       expect(navigations(wrapper)).toEqual([]);
       expect(dropdown.emitted("close")).toBeUndefined();
 
@@ -348,7 +344,7 @@ describe("按颜色排序", () => {
 
     it("已经在按颜色排序时换颜色保留方向", async () => {
       const wrapper = renderSort({ field: "by-color", desc: true, color: "ff0000" });
-      await sortDropdown(wrapper).get(".is-expandable").trigger("click");
+      await sortDropdown(wrapper).get(EXPANDABLE).trigger("click");
       wrapper.findComponent({ name: "ColorBucketPanel" }).vm.$emit("select", "123456");
       expect(navigations(wrapper)).toEqual([
         [{ sort: { field: "by-any-color", desc: true, color: "123456" } }, undefined],
@@ -357,7 +353,7 @@ describe("按颜色排序", () => {
 
     it("面板拿到当前排序的颜色", async () => {
       const wrapper = renderSort({ field: "by-any-color", desc: false, color: "123456" });
-      await sortDropdown(wrapper).get(".is-expandable").trigger("click");
+      await sortDropdown(wrapper).get(EXPANDABLE).trigger("click");
       expect(wrapper.findComponent({ name: "ColorBucketPanel" }).props("selected")).toBe("123456");
     });
 

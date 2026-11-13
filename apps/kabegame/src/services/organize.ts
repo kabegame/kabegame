@@ -5,7 +5,7 @@
 
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { i18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useOrganizeStore, type OrganizeFinished, type OrganizeOptions } from "@/stores/organize";
 import { busyPoller } from "@/services/busyTasks";
 
@@ -45,12 +45,12 @@ export async function init(): Promise<void> {
     busyPoller.invalidate();
     store.applyFinished(payload);
     if (payload.error) {
-      ElMessage.error(i18n.global.t("gallery.organizeFailed"));
+      kameMessage.error(i18n.global.t("gallery.organizeFailed"));
     } else if (payload.canceled) {
-      ElMessage.info(i18n.global.t("gallery.organizeCanceled"));
+      kameMessage.info(i18n.global.t("gallery.organizeCanceled"));
     } else {
       const { key, params } = organizeDoneMessage(payload, recomputePalette);
-      ElMessage.success(i18n.global.t(key, params));
+      kameMessage.success(i18n.global.t(key, params));
     }
   });
 }
@@ -91,7 +91,7 @@ export async function start(options: OrganizeOptions): Promise<void> {
       canceled: false,
       error: errorMessage(error),
     });
-    ElMessage.error(i18n.global.t("gallery.startOrganizeFailed"));
+    kameMessage.error(i18n.global.t("gallery.startOrganizeFailed"));
   } finally {
     store.endStarting();
     busyPoller.invalidate();
@@ -105,6 +105,6 @@ export async function cancel(): Promise<void> {
     await invoke<boolean>("cancel_organize");
   } catch (error) {
     console.error("[organize] cancel_organize failed:", error);
-    ElMessage.error(i18n.global.t("gallery.cancelOrganizeFailed"));
+    kameMessage.error(i18n.global.t("gallery.cancelOrganizeFailed"));
   }
 }
