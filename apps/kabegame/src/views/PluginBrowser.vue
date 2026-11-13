@@ -12,16 +12,13 @@
         @manage-sources="openManageSources"
       />
 
-      <div v-if="sourcesLoaded && sources.length === 0" class="plugin-sources-empty-hint">
-        <el-alert type="info" :closable="false" show-icon>
-          <template #title>
-            {{ $t("plugins.noStoreSourcesHint") }}
-          </template>
-          <el-button type="primary" size="small" style="margin-top: 8px" @click="goToOfficialGitHubStoreTab">
+      <Alert v-if="sourcesLoaded && sources.length === 0" class="mb-2" :description="$t('plugins.noStoreSourcesHint')">
+        <template #actions>
+          <Button size="sm" variant="primary" class="self-center" @click="goToOfficialGitHubStoreTab">
             {{ $t("plugins.goToOfficialGitHubStore") }}
-          </el-button>
-        </el-alert>
-      </div>
+          </Button>
+        </template>
+      </Alert>
 
       <!-- Tab 切换：分段式胶囊组，右侧搜索框与其同排 -->
       <div class="plugin-tabs-row">
@@ -33,34 +30,35 @@
           @select="handleTabSelect"
         />
 
-        <div class="plugin-search">
-          <el-input v-model="searchKeyword" :placeholder="$t('plugins.quickPreview.searchPlaceholder')" clearable>
-            <template #prefix>
-              <el-icon>
-                <Search />
-              </el-icon>
-            </template>
-          </el-input>
-        </div>
+        <Input
+          v-model="searchKeyword"
+          class="plugin-search"
+          :placeholder="$t('plugins.quickPreview.searchPlaceholder')"
+          clearable
+        >
+          <template #prefix><Search /></template>
+        </Input>
       </div>
 
       <div class="plugin-tab-panes">
         <div v-show="activeTab === 'installed'">
-          <!-- 已安装插件配置表格 -->
-          <div v-if="showSkeletonBySource['installed'] && activeTab === 'installed'" class="loading-skeleton">
-            <el-skeleton :rows="8" animated />
-          </div>
-          <div v-else-if="installedPlugins.length === 0" class="empty">
-            <el-empty :description="$t('plugins.noInstalled')">
-              <el-button type="primary" @click="goToOfficialGitHubStoreTab">
+          <PluginGridSkeleton
+            v-if="showSkeletonBySource['installed'] && activeTab === 'installed'"
+            :compact="uiStore.isCompact"
+            :count="uiStore.isCompact ? 8 : 12"
+          />
+          <Empty v-else-if="installedPlugins.length === 0" :title="$t('plugins.noInstalled')">
+            <template #icon><Puzzle /></template>
+            <template #actions>
+              <Button variant="primary" @click="goToOfficialGitHubStoreTab">
                 {{ $t("plugins.goToOfficialGitHubStore") }}
-              </el-button>
-            </el-empty>
-          </div>
+              </Button>
+            </template>
+          </Empty>
 
-          <div v-else-if="filteredInstalledPlugins.length === 0" class="empty">
-            <el-empty :description="$t('plugins.quickPreview.noSearchResult')" :image-size="100" />
-          </div>
+          <Empty v-else-if="filteredInstalledPlugins.length === 0" :title="$t('plugins.quickPreview.noSearchResult')">
+            <template #icon><SearchX /></template>
+          </Empty>
 
           <!-- 已安装：布局与商店一致 -->
           <div v-else>
@@ -95,94 +93,25 @@
         <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
         <div v-for="s in storeSourcesToRender" :key="s.id" v-show="activeTab === storeTabName(s.id)">
           <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
-          <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
-            <div v-if="uiStore.isCompact" class="skeleton-grid skeleton-grid-android">
-              <div v-for="i in 8" :key="i" class="skeleton-card">
-                <el-skeleton :rows="0" animated>
-                  <template #template>
-                    <div
-                      style="
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                        width: 100%;
-                        height: 100%;
-                        min-height: 0;
-                        gap: 0;
-                        box-sizing: border-box;
-                      "
-                    >
-                      <div
-                        style="
-                          flex: 0 0 40%;
-                          min-height: 0;
-                          width: 100%;
-                          display: flex;
-                          align-items: center;
-                          justify-content: center;
-                        "
-                      >
-                        <el-skeleton-item
-                          variant="image"
-                          style="width: 48px; height: 48px; border-radius: 8px; flex-shrink: 0"
-                        />
-                      </div>
-                      <el-skeleton-item
-                        variant="h3"
-                        style="width: 92%; height: 15px; margin: 2px 0 0; flex-shrink: 0"
-                      />
-                      <div
-                        style="
-                          flex: 0 0 auto;
-                          width: 100%;
-                          height: 14px;
-                          display: flex;
-                          flex-flow: row nowrap;
-                          gap: 3px;
-                          align-items: center;
-                          overflow: hidden;
-                        "
-                      >
-                        <el-skeleton-item variant="text" style="width: 28%; height: 12px; margin: 0; flex-shrink: 0" />
-                        <el-skeleton-item variant="text" style="width: 32%; height: 12px; margin: 0; flex-shrink: 0" />
-                        <el-skeleton-item variant="text" style="width: 24%; height: 12px; margin: 0; flex-shrink: 0" />
-                      </div>
-                      <div style="flex: 1 1 auto; min-height: 0; width: 100%" />
-                      <el-skeleton-item variant="button" style="width: 100%; height: 26px; margin: 0; flex-shrink: 0" />
-                    </div>
-                  </template>
-                </el-skeleton>
-              </div>
-            </div>
-            <div v-else class="skeleton-grid">
-              <div v-for="i in 12" :key="i" class="skeleton-card">
-                <el-skeleton :rows="0" animated>
-                  <template #template>
-                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px">
-                      <el-skeleton-item variant="image" style="width: 48px; height: 48px; border-radius: 8px" />
-                      <div style="flex: 1">
-                        <el-skeleton-item variant="h3" style="width: 60%; margin-bottom: 8px" />
-                        <el-skeleton-item variant="text" style="width: 80%" />
-                      </div>
-                    </div>
-                    <el-skeleton-item variant="text" style="width: 40%; margin-bottom: 12px" />
-                    <el-skeleton-item variant="button" style="width: 100%" />
-                  </template>
-                </el-skeleton>
-              </div>
-            </div>
-          </div>
+          <PluginGridSkeleton
+            v-if="showSkeletonBySource[s.id]"
+            :compact="uiStore.isCompact"
+            :count="uiStore.isCompact ? 8 : 12"
+          />
 
           <!-- 尚未拉取过该源：保持空白，等加载态/骨架屏接管，避免先闪「源为空」 -->
           <div v-else-if="!settledBySource[s.id]" />
 
-          <div v-else-if="getStorePlugins(s.id).length === 0" class="empty">
-            <el-empty :description="$t('plugins.noPluginsInSource', { name: pluginSourceDisplayName(s) })" />
-          </div>
+          <Empty
+            v-else-if="getStorePlugins(s.id).length === 0"
+            :title="$t('plugins.noPluginsInSource', { name: pluginSourceDisplayName(s) })"
+          >
+            <template #icon><Store /></template>
+          </Empty>
 
-          <div v-else-if="filteredStorePlugins(s.id).length === 0" class="empty">
-            <el-empty :description="$t('plugins.quickPreview.noSearchResult')" :image-size="100" />
-          </div>
+          <Empty v-else-if="filteredStorePlugins(s.id).length === 0" :title="$t('plugins.quickPreview.noSearchResult')">
+            <template #icon><SearchX /></template>
+          </Empty>
 
           <transition-group
             v-else
@@ -216,109 +145,110 @@
     </div>
 
     <!-- 商店源管理 -->
-    <el-dialog
+    <Dialog
       v-if="!IS_LIGHT_MODE"
-      :model-value="sourcesDialog.isOpen.value"
-      :z-index="sourcesDialog.zIndex.value"
+      v-model:open="sourcesOpen"
       :title="$t('plugins.sourcesDialogTitle')"
-      width="720px"
-      @update:model-value="sourcesDialog.close"
+      :description="$t('plugins.sourcesIntro')"
+      :width="720"
     >
-      <div class="sources-hint">
-        {{ $t("plugins.sourcesIntro") }}
-      </div>
-      <el-table :data="sources" style="width: 100%" :empty-text="$t('plugins.noSources')">
-        <!-- @vue-generic {PluginSource} -->
-        <el-table-column :label="$t('plugins.name')" width="180">
-          <template #default="{ row }">
-            {{ pluginSourceDisplayName(row) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="indexUrl" :label="$t('plugins.indexUrl')" show-overflow-tooltip />
-        <!-- @vue-generic {PluginSource} -->
-        <el-table-column :label="$t('plugins.action')" width="140">
-          <template #default="{ row, $index }">
-            <el-button size="small" @click="editSource($index)">{{ $t("plugins.edit") }}</el-button>
-            <el-button
+      <div class="overflow-hidden rounded-kb-md border border-solid border-kb-line">
+        <div
+          class="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 border-b border-b-solid border-kb-line bg-kb-fill-lighter px-3 py-2 text-[12px] font-500 text-kb-fg-muted"
+        >
+          <span>{{ $t("plugins.name") }}</span>
+          <span>{{ $t("plugins.indexUrl") }}</span>
+          <span class="w-[132px] text-right">{{ $t("plugins.action") }}</span>
+        </div>
+        <div v-if="sources.length === 0" class="px-3 py-6 text-center text-[13px] text-kb-fg-subtle">
+          {{ $t("plugins.noSources") }}
+        </div>
+        <div
+          v-for="(row, index) in sources"
+          :key="row.id"
+          class="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-[13px] [&:not(:last-child)]:border-b [&:not(:last-child)]:border-b-solid [&:not(:last-child)]:border-kb-line"
+        >
+          <span class="truncate font-500 text-kb-fg">{{ pluginSourceDisplayName(row) }}</span>
+          <Tooltip :content="row.indexUrl">
+            <span class="truncate font-mono text-[12px] text-kb-fg-muted">{{ row.indexUrl }}</span>
+          </Tooltip>
+          <div class="flex w-[132px] justify-end gap-1">
+            <Button size="sm" variant="ghost" @click="editSource(index)">
+              <Pencil />
+              {{ $t("plugins.edit") }}
+            </Button>
+            <Button
               v-if="row.id !== OFFICIAL_PLUGIN_SOURCE_ID"
-              size="small"
-              type="danger"
-              @click="removeSource($index)"
+              size="sm"
+              variant="ghost-danger"
+              @click="removeSource(index)"
             >
+              <Trash2 />
               {{ $t("plugins.delete") }}
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+            </Button>
+          </div>
+        </div>
+      </div>
 
       <template #footer>
-        <el-button @click="sourcesDialog.close()">{{ $t("common.close") }}</el-button>
-        <el-button @click="addSource">{{ $t("plugins.newSource") }}</el-button>
+        <Button @click="sourcesOpen = false">{{ $t("common.close") }}</Button>
+        <Button variant="primary" @click="addSource">
+          <Plus />
+          {{ $t("plugins.newSource") }}
+        </Button>
       </template>
-    </el-dialog>
+    </Dialog>
 
     <!-- 新增/编辑源 -->
-    <el-dialog
+    <Dialog
       v-if="!IS_LIGHT_MODE"
-      :model-value="editSourceDialog.isOpen.value"
-      :z-index="editSourceDialog.zIndex.value"
+      v-model:open="editSourceOpen"
       :title="editingSourceIndex === null ? $t('plugins.newSource') : $t('plugins.editSource')"
-      width="620px"
-      @update:model-value="editSourceDialog.close"
+      :width="560"
+      body-class="flex flex-col gap-4"
     >
-      <el-form label-width="110px">
-        <el-form-item label="ID">
-          <el-input v-model="editSourceForm.id" :placeholder="$t('plugins.idPlaceholder')" />
-        </el-form-item>
-        <el-form-item :label="$t('plugins.name')">
-          <el-input v-model="editSourceForm.name" :placeholder="$t('plugins.namePlaceholder')" />
-        </el-form-item>
-        <el-form-item label="index.json">
-          <el-input
-            v-model="editSourceForm.indexUrl"
-            placeholder="https://.../index.json"
-            :disabled="editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID"
-          />
-        </el-form-item>
-      </el-form>
+      <Field label="ID">
+        <Input v-model="editSourceForm.id" :placeholder="$t('plugins.idPlaceholder')" />
+      </Field>
+      <Field :label="$t('plugins.name')" required>
+        <Input v-model="editSourceForm.name" :placeholder="$t('plugins.namePlaceholder')" />
+      </Field>
+      <Field label="index.json" required>
+        <Input
+          v-model="editSourceForm.indexUrl"
+          placeholder="https://.../index.json"
+          :disabled="editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID"
+          @keydown.enter="confirmEditSource"
+        />
+      </Field>
       <template #footer>
-        <el-button @click="editSourceDialog.close()">{{ $t("common.cancel") }}</el-button>
-        <el-button
-          type="primary"
-          :loading="isValidatingSource"
-          :disabled="isValidatingSource"
-          @click="confirmEditSource"
-        >
+        <Button @click="editSourceOpen = false">{{ $t("common.cancel") }}</Button>
+        <Button variant="primary" :disabled="isValidatingSource" @click="confirmEditSource">
+          <Spinner v-if="isValidatingSource" :size="14" />
           {{ $t("common.confirm") }}
-        </el-button>
+        </Button>
       </template>
-    </el-dialog>
+    </Dialog>
 
     <!-- 导入源对话框 -->
-    <el-dialog
-      :model-value="importDialog.isOpen.value"
-      :z-index="importDialog.zIndex.value"
-      :title="$t('plugins.importDialogTitle')"
-      width="500px"
-      @update:model-value="importDialog.close"
-    >
-      <div class="import-instructions">
-        <p>{{ $t("plugins.selectFileHint") }}</p>
-        <el-button type="primary" @click="selectPluginFile">
-          <el-icon>
-            <Upload />
-          </el-icon>
+    <Dialog v-model:open="importOpen" :title="$t('plugins.importDialogTitle')" :width="480">
+      <div class="flex flex-col items-center gap-3 py-4 text-center">
+        <p class="m-0 text-[13px] text-kb-fg-muted">{{ $t("plugins.selectFileHint") }}</p>
+        <Button @click="selectPluginFile">
+          <FolderOpen />
           {{ $t("plugins.selectFile") }}
-        </el-button>
-        <p v-if="selectedFilePath" class="selected-file">{{ $t("plugins.selected") }} {{ selectedFilePath }}</p>
+        </Button>
+        <p v-if="selectedFilePath" class="m-0 break-all font-mono text-[12px] text-kb-fg-regular">
+          {{ $t("plugins.selected") }} {{ selectedFilePath }}
+        </p>
       </div>
       <template #footer>
-        <el-button @click="importDialog.close()">{{ $t("common.cancel") }}</el-button>
-        <el-button type="primary" @click="handleImport" :disabled="!selectedFilePath">
+        <Button @click="importOpen = false">{{ $t("common.cancel") }}</Button>
+        <Button variant="primary" :disabled="!selectedFilePath" @click="handleImport">
           {{ $t("plugins.importButton") }}
-        </el-button>
+        </Button>
       </template>
-    </el-dialog>
+    </Dialog>
   </DragFileZone>
 </template>
 
@@ -327,7 +257,7 @@ import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { kameMessage } from "@/utils/kameMessage";
-import { Refresh, Upload, Plus, Search, Setting, QuestionFilled } from "@kabegame/element-plus-icons";
+import { FolderOpen, Pencil, Plus, Puzzle, Search, SearchX, Store, Trash2 } from "@lucide/vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import {
   usePluginMarketStore,
@@ -345,13 +275,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
-import { Tabs, type TabItem } from "@/components/ui";
+import { Alert, Button, Dialog, Empty, Field, Input, Spinner, Tabs, Tooltip, type TabItem } from "@/components/ui";
 import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
+import PluginGridSkeleton from "@/components/plugin/PluginGridSkeleton.vue";
 import PluginQuickPreviewPanel, { type QuickPreviewPluginLike } from "@/components/plugin/PluginQuickPreviewPanel.vue";
 import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
 import { bannerPreviewImages } from "@/utils/assetPath";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
-import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { trackEvent } from "@/track/umami";
@@ -371,9 +301,7 @@ const { pluginName } = usePluginManifestI18n();
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
 const appBackgroundCardClass = computed(() =>
-  settingsStore.values.appBackgroundEnabled
-    ? "!bg-kb-glass-strong backdrop-blur-md [--el-card-bg-color:transparent]"
-    : "",
+  settingsStore.values.appBackgroundEnabled ? "!bg-kb-glass-strong backdrop-blur-md" : "",
 );
 
 function currentUrl() {
@@ -404,17 +332,17 @@ const handleImportSource = () => {
   if (uiStore.isCompact) {
     triggerImportDirect();
   } else {
-    importDialog.open();
+    importOpen.value = true;
   }
 };
 
 const openManageSources = () => {
-  sourcesDialog.open();
+  sourcesOpen.value = true;
 };
 
 const route = useRoute();
 const router = useRouter();
-const importDialog = useModal();
+const importOpen = ref(false);
 const selectedFilePath = ref<string | null>(null);
 const isRefreshing = ref(false);
 /** 「已安装」tab 手动刷新中（商店源的加载态由 market store 持有） */
@@ -466,8 +394,8 @@ watch(
 );
 
 const storeSourcesToRender = computed(() => sources.value);
-const sourcesDialog = useModal();
-const editSourceDialog = useModal();
+const sourcesOpen = ref(false);
+const editSourceOpen = ref(false);
 const isValidatingSource = ref(false);
 const editingSourceIndex = ref<number | null>(null);
 const editSourceForm = reactive<{ id: string; name: string; indexUrl: string }>({
@@ -651,10 +579,10 @@ const addSource = () => {
   editSourceForm.id = `src_${Date.now()}`;
   editSourceForm.name = "";
   editSourceForm.indexUrl = "";
-  editSourceDialog.open();
+  editSourceOpen.value = true;
 };
 
-/** 「添加源」是 action 项：KbTab 不会把它设为选中，只回调这里开弹窗 */
+/** 「添加源」是 action 项：Tabs 不会把它设为选中，只回调这里开弹窗 */
 const handleTabSelect = (name: string) => {
   if (name === ADD_SOURCE_TAB) addSource();
 };
@@ -673,7 +601,7 @@ const editSource = (idx: number) => {
   editSourceForm.id = s.id;
   editSourceForm.name = pluginSourceDisplayName(s);
   editSourceForm.indexUrl = s.indexUrl;
-  editSourceDialog.open();
+  editSourceOpen.value = true;
 };
 
 const confirmEditSource = async () => {
@@ -737,7 +665,7 @@ const confirmEditSource = async () => {
     // 自身写操作直接刷新源列表（不依赖 plugin-sources-changed 回刷）
     await market.loadSources();
     kameMessage.success(editingSourceIndex.value === null ? t("plugins.sourceAdded") : t("plugins.sourceUpdated"));
-    editSourceDialog.close();
+    editSourceOpen.value = false;
   } catch (e) {
     console.error("保存商店源失败:", e);
     kameMessage.error(errorMessageOf(e, t("plugins.saveSourceFailed")));
@@ -865,7 +793,7 @@ const handleImport = async () => {
     }
 
     kameMessage.success(t("plugins.importSuccess"));
-    importDialog.close();
+    importOpen.value = false;
     selectedFilePath.value = null;
     // plugin-added / plugin-changed 事件更新已安装列表；商店卡片的 installedVersion 由 market store 现算
   } catch (error) {
@@ -1051,13 +979,6 @@ onUnmounted(() => {
     /* Chrome, Safari, Opera */
   }
 
-  .filter-bar {
-    display: flex;
-    align-items: center;
-    margin-bottom: 20px;
-    gap: 10px;
-  }
-
   /* 卡片本身（图标+名称+版本）的样式在 PluginGridCard.vue 里；这里只管网格布局 */
   .plugin-grid {
     display: grid;
@@ -1106,7 +1027,7 @@ onUnmounted(() => {
 
 /* 卡片自身样式（图标/名称/版本/更新角标）在 PluginGridCard.vue 的 scoped style 里 */
 
-/* 胶囊 tab 组（KbTab，样式自带）与搜索框同排 */
+/* 胶囊 tab 组（Tabs，样式自带）与搜索框同排 */
 .plugin-tabs-row {
   display: flex;
   align-items: center;
@@ -1117,12 +1038,8 @@ onUnmounted(() => {
 
 .plugin-search {
   margin-left: auto;
-  width: 230px;
+  width: 230px !important;
   flex: none;
-
-  .el-input__wrapper {
-    border-radius: 10px;
-  }
 }
 
 /* 窄屏没有横向余量：搜索框换到 tab 组下方独占一行 */
@@ -1133,89 +1050,7 @@ onUnmounted(() => {
 
   .plugin-search {
     margin-left: 0;
-    width: 100%;
+    width: 100% !important;
   }
-}
-
-.loading-skeleton {
-  padding: 20px;
-}
-
-.skeleton-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 20px;
-}
-
-.skeleton-grid-android {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-
-  .skeleton-card {
-    height: auto;
-    aspect-ratio: 1;
-    padding: 10px;
-    overflow: hidden;
-    display: flex;
-    align-items: flex-start;
-    box-sizing: border-box;
-  }
-}
-
-.skeleton-card {
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
-  padding: 20px;
-  background: var(--anime-bg-card);
-  box-shadow: var(--anime-shadow);
-}
-
-.empty {
-  padding: 40px;
-  text-align: center;
-}
-
-/* 表格淡入动画 */
-.fade-in-table {
-  animation: fadeInTable 0.4s ease-in;
-}
-
-@keyframes fadeInTable {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes icon-spin {
-  0% {
-    transform: rotate(0deg);
-  }
-
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-.import-instructions {
-  text-align: center;
-  padding: 20px;
-}
-
-.import-instructions p {
-  margin: 10px 0;
-  color: var(--el-text-color-secondary);
-}
-
-.selected-file {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--el-text-color-regular);
-  word-break: break-all;
 }
 </style>

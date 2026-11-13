@@ -12,7 +12,7 @@
         data-kb-motion
         v-bind="description ? {} : NO_DESCRIPTION"
         class="fixed inset-0 m-auto box-border flex h-fit max-h-[min(85vh,calc(100vh-32px))] w-[calc(100vw-32px)] flex-col rounded-kb-lg bg-kb-surface-raised text-kb-fg shadow-kb-lg outline-none data-[state=open]:animate-[kb-pop-in_180ms_var(--kb-ease-out)] data-[state=closed]:animate-[kb-pop-out_120ms_ease-in]"
-        :style="{ zIndex, maxWidth: typeof width === 'number' ? `${width}px` : width }"
+        :style="contentStyle"
         @pointer-down-outside="onPointerDownOutside"
         @focus-outside="keepOpenOnForeign"
         @interact-outside="keepOpenOnForeign"
@@ -63,7 +63,7 @@
  *
  * 需要一个触发器时放进 #trigger：<template #trigger><DialogTrigger as-child><Button/></DialogTrigger></template>。
  */
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   DialogClose,
   DialogContent,
@@ -91,6 +91,10 @@ const props = withDefaults(
     closeOnEsc?: boolean;
     /** 正文区额外的类（如去掉内边距） */
     bodyClass?: string;
+    /** 固定高度（默认随内容、最高 85vh）：正文自己管内部滚动的工作台类对话框用 */
+    height?: number | string;
+    /** 铺满窗口、去掉圆角（紧凑档的大对话框） */
+    fullscreen?: boolean;
   }>(),
   { width: 480, closeOnOverlay: true, closeOnEsc: true },
 );
@@ -99,6 +103,26 @@ const props = withDefaults(
 const NO_DESCRIPTION = { "aria-describedby": undefined };
 
 const emit = defineEmits<{ openAutoFocus: [Event]; closeAutoFocus: [Event] }>();
+
+const toLength = (v: number | string) => (typeof v === "number" ? `${v}px` : v);
+// 尺寸走内联样式：没有 tailwind-merge，调用方叠的 h-* / max-w-* 盖不过内容区的默认类
+const contentStyle = computed(() => {
+  if (props.fullscreen) {
+    return {
+      zIndex: zIndex.value,
+      width: "100vw",
+      maxWidth: "none",
+      height: "100vh",
+      maxHeight: "none",
+      borderRadius: 0,
+    };
+  }
+  return {
+    zIndex: zIndex.value,
+    maxWidth: toLength(props.width),
+    ...(props.height != null ? { height: toLength(props.height) } : {}),
+  };
+});
 const { t } = useI18n();
 
 const open = defineModel<boolean>("open", { default: false });

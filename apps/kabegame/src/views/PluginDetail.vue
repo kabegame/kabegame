@@ -24,57 +24,23 @@
       />
     </div>
 
-    <el-dialog
-      :model-value="installConfirmDialog.isOpen.value"
-      :z-index="installConfirmDialog.zIndex.value"
+    <!-- action 返回的 Promise 期间按钮转圈、Esc 不关；失败抛错留在对话框里 -->
+    <AlertDialog
+      v-model:open="installConfirmOpen"
       :title="installConfirmTitle"
-      width="min(420px, 92vw)"
-      append-to-body
-      :close-on-click-modal="false"
-      :close-on-press-escape="!installing"
-      :show-close="!installing"
-      @update:model-value="(value) => !value && !installing && installConfirmDialog.close()"
-    >
-      <div class="flex items-start gap-3 leading-6 text-[var(--anime-text-secondary)]">
-        <el-icon :size="24" class="mt-0.5 flex-none text-[var(--el-color-warning)]">
-          <WarningFilled />
-        </el-icon>
-        <span>{{ installConfirmMessage }}</span>
-      </div>
-      <template #footer>
-        <el-button :disabled="installing" @click="installConfirmDialog.close()">{{ t("common.cancel") }}</el-button>
-        <el-button type="primary" :loading="installing" @click="confirmInstall">
-          {{ t("plugins.installButton") }}
-        </el-button>
-      </template>
-    </el-dialog>
+      :description="installConfirmMessage"
+      :confirm-text="t('plugins.installButton')"
+      :action="confirmInstall"
+    />
 
-    <el-dialog
-      :model-value="uninstallConfirmDialog.isOpen.value"
-      :z-index="uninstallConfirmDialog.zIndex.value"
+    <AlertDialog
+      v-model:open="uninstallConfirmOpen"
+      tone="danger"
       :title="t('plugins.confirmDelete')"
-      width="min(420px, 92vw)"
-      append-to-body
-      :close-on-click-modal="false"
-      :close-on-press-escape="!uninstalling"
-      :show-close="!uninstalling"
-      @update:model-value="(value) => !value && !uninstalling && uninstallConfirmDialog.close()"
-    >
-      <div class="flex items-start gap-3 leading-6 text-[var(--anime-text-secondary)]">
-        <el-icon :size="24" class="mt-0.5 flex-none text-[var(--el-color-warning)]">
-          <WarningFilled />
-        </el-icon>
-        <span>{{ uninstallConfirmMessage }}</span>
-      </div>
-      <template #footer>
-        <el-button :disabled="uninstalling" @click="uninstallConfirmDialog.close()">
-          {{ t("common.cancel") }}
-        </el-button>
-        <el-button type="danger" :loading="uninstalling" @click="confirmUninstall">
-          {{ t("plugins.uninstall") }}
-        </el-button>
-      </template>
-    </el-dialog>
+      :description="uninstallConfirmMessage"
+      :confirm-text="t('plugins.uninstall')"
+      :action="confirmUninstall"
+    />
   </div>
 </template>
 
@@ -82,7 +48,6 @@
 import { useWindowTitlePart } from "@/composables/useWindowTitle";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { WarningFilled } from "@kabegame/element-plus-icons";
 import { kameMessage } from "@/utils/kameMessage";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
@@ -98,7 +63,7 @@ import { formatBytes } from "@/utils/formatBytes";
 import PluginDetailContent from "@/components/plugin/PluginDetailContent.vue";
 import PluginDetailPageHeader from "@/components/header/PluginDetailPageHeader.vue";
 import { usePluginDetailLoader } from "@/composables/usePluginDetailLoader";
-import { useModal } from "@/composables/useModal";
+import { AlertDialog } from "@/components/ui";
 
 const { t } = useI18n();
 const { pluginName } = usePluginManifestI18n();
@@ -143,8 +108,7 @@ const isUpdateFlow = computed(
 );
 const isReinstallFlow = computed(() => !!installedMatch.value && !isUpdateFlow.value);
 
-const installConfirmDialog = useModal();
-const installing = ref(false);
+const installConfirmOpen = ref(false);
 const installConfirmTitle = computed(() =>
   isReinstallFlow.value
     ? t("plugins.confirmReinstall")
@@ -163,13 +127,13 @@ const installConfirmMessage = computed(() =>
 
 const handleInstall = () => {
   if (!plugin.value || !isRemote.value || !sourceIdRef.value) return;
-  installConfirmDialog.open();
+  installConfirmOpen.value = true;
 };
 
 const confirmInstall = async () => {
   const sourceId = sourceIdRef.value;
   const targetPluginId = pluginIdRef.value;
-  if (!plugin.value || !isRemote.value || !sourceId || !targetPluginId || installing.value) return;
+  if (!plugin.value || !isRemote.value || !sourceId || !targetPluginId) return;
 
   const successMsg = isReinstallFlow.value
     ? t("plugins.reinstallSuccess")
@@ -177,51 +141,41 @@ const confirmInstall = async () => {
       ? t("plugins.updateSuccess")
       : t("plugins.installSuccess");
 
-  installing.value = true;
   try {
     await invoke("install_from_store", { sourceId, pluginId: targetPluginId });
-    installConfirmDialog.close();
     kameMessage.success(successMsg);
     // plugin-added / plugin-changed 事件会自动刷新 pluginStore；保留当前商店详情与滚动位置。
-  } catch {
+  } catch (e) {
     kameMessage.error(t("plugins.installUpdateFailed"));
-  } finally {
-    installing.value = false;
+    throw e; // 留在确认框里
   }
 };
 
-const uninstallConfirmDialog = useModal();
-const uninstalling = ref(false);
+const uninstallConfirmOpen = ref(false);
 const uninstallConfirmMessage = computed(() =>
   plugin.value ? t("plugins.confirmUninstall", { name: pluginName(plugin.value) }) : "",
 );
 
 const handleUninstall = () => {
   if (!plugin.value) return;
-  uninstallConfirmDialog.open();
+  uninstallConfirmOpen.value = true;
 };
 
 const confirmUninstall = async () => {
   const targetPluginId = plugin.value?.id;
-  if (!targetPluginId || uninstalling.value) return;
+  if (!targetPluginId) return;
   const installed = pluginStore.plugins.find((p) => p.id === targetPluginId);
-  if (!installed) {
-    uninstallConfirmDialog.close();
-    return;
-  }
+  if (!installed) return;
 
-  uninstalling.value = true;
   try {
     await pluginStore.deletePlugin(installed.id);
-    uninstallConfirmDialog.close();
     kameMessage.success(t("plugins.pluginDeleted"));
     pluginStore.clearPluginDetailCache();
     // 当前本地详情已失效：直接替换为插件列表，避免叠加历史回退或返回到已删除详情。
     void router.replace({ name: "PluginBrowser" });
-  } catch {
+  } catch (e) {
     kameMessage.error(t("plugins.uninstallFailed"));
-  } finally {
-    uninstalling.value = false;
+    throw e; // 留在确认框里
   }
 };
 
@@ -358,9 +312,9 @@ watch(
 }
 
 .detail-body {
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid var(--anime-border);
+  border-radius: var(--kb-radius-lg);
+  background: var(--kb-surface-raised);
+  border: 1px solid var(--kb-line);
   overflow: hidden;
 }
 </style>

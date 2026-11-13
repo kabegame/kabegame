@@ -82,10 +82,17 @@ shortcuts: [
 - 新浮层的 z-index 不写死：用 `components/ui/compat.ts` 的 `useLayerZIndex`（打开时向 element-plus 的计数器取号），
   模态类再接 `usePauseForeignTraps` 与 `keepOpenOnForeign`；已有组件都接好了，直接用 Reka 原语写新弹层时照做。
 - 混用期才需要、某一期要删或换实现的代码，注释带 `TODO:[REF_UI]` 并写明哪一期。
+- 表单校验用 `components/ui/form.ts` 的 `useForm()` 与 `Field` 的 `validator`（返回错误文字），不要再写 `el-form` 的 rules；
+  Reka 的 `Select` / `Combobox` 选项值不能是空字符串（需要时编码，见 `KbSelect`）。
+- 「从选项里选一个值」用 `Combobox`；值就是输入的文字、候选只是捷径（地址栏）用 `Autocomplete`（回车提交原文，方向键选中才选候选）。
 - 过滤 chip 下拉用 `@/components/ui` 的 `KbFilterDropdown`（P3 起不在 vendored 包里）；面板里的子层用 Reka 组件
   （`Popconfirm`、`Popover`……）就算层内，不要再放 EP 浮层。
 - 动作菜单项要按上下文换图标时用 `iconBy(ctx => …)`，渲染处用 `resolveActionIcon`；lucide 图标本身是函数，
   不能用 `typeof icon === "function"` 判断是不是解析器。
+- 桌面看图用 `Lightbox`（不要再用 `el-image-viewer`）；触屏的 photoswipe 在新对话框里打开时 `append-to` 那个对话框
+  （Reka 模态打开时 body 不可点、焦点被锁）。
+- 时刻输入用 `TimeField`（v-model `HH:mm`，固定 24 小时制）；原生 `type=time` 在 CEF 下按系统 locale 显示成 12 小时制。
+- `Switch` 没有 `before-change` / `loading`：需要先校验或等后端时传受控的 `:model-value`，在 `@update:model-value` 里写入，进行中用 `disabled`。
 - 详见 [cocs/ui/COMPONENT_LIBRARY.md](../../cocs/ui/COMPONENT_LIBRARY.md)「新界面组件」。
 
 ## 与现有样式共存

@@ -199,9 +199,9 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 | 类 | 组件 | 要点 |
 | --- | --- | --- |
 | 按钮与小件 | `Button`、`CountBadge`、`Spinner`、`Tag`、`Tooltip`、`HelpTip` | `HelpTip` 是「?」说明（桌面悬停提示、Android 点按气泡），取代 `el-tooltip` + `QuestionFilled`；`Button` 变体 `primary`（墨色实心）/ `danger`（危险色实心）/ `outline` / `ghost` / `ghost-danger`，尺寸 `sm` / `md` / `icon` / `icon-sm` / `icon-xs`，可做 Reka 触发器的 as-child 子元素；`Tag` 五种色调、可关闭；`Tooltip` 的 `content` 为空不弹，自带 Provider |
-| 弹层 | `Dialog`、`AlertDialog`、`Sheet`、`Popover` + `PopoverContent`、`Popconfirm`、`PickerSheet` | 都用 `v-model:open`，根组件已接 `useModalBack`（调用方不要再套 `useModal`）；`Dialog` 有 `title` / `description` / `width` / `#footer`，关闭按钮在 DOM 末尾（打开时焦点先落正文）；`AlertDialog` 点遮罩不关，`action` 返回 Promise 时按钮转圈、完成才关；`Sheet` 四个方向，底部即 Android 底部弹层（把手、安全区）；`Popover` 默认非模态，`PopoverContent` 的 `anchor` 可锚在任意元素上（没有触发器的浮层，如锚在列表某一行的编辑浮层）；`Popconfirm` 是就地的气泡确认（默认插槽是触发按钮，取代 `el-popconfirm`）；`PickerSheet` 是底部滚轮选择（Sheet 里放 `van-picker`，待定 6 定之前保留 Vant） |
+| 弹层 | `Dialog`、`AlertDialog`、`Lightbox`、`Sheet`、`Popover` + `PopoverContent`、`Popconfirm`、`PickerSheet` | 都用 `v-model:open`，根组件已接 `useModalBack`（调用方不要再套 `useModal`）；`Dialog` 有 `title` / `description` / `width` / `#footer`，`height`（固定高度，正文自己管滚动的工作台）与 `fullscreen`（紧凑档铺满）走内联样式，去正文内边距用 `body-class="!p-0"`；关闭按钮在 DOM 末尾（打开时焦点先落正文）；`AlertDialog` 点遮罩不关，`action` 返回 Promise 时按钮转圈、Esc 不关，完成才关、抛错留在框里；`Lightbox` 是桌面看图（v-model `open` / `index` + `images` URL 数组，方向键翻页、`loop` 关时到头停住，滚轮以光标为中心缩放、放大后拖动、双击切 2 倍，取代 `el-image-viewer`；触屏看图仍用 photoswipe，在对话框里打开时 `append-to` 那个对话框，否则 Reka 模态下 body 不可点）；`Sheet` 四个方向，底部即 Android 底部弹层（把手、安全区）；`Popover` 默认非模态，`PopoverContent` 的 `anchor` 可锚在任意元素上（没有触发器的浮层，如锚在列表某一行的编辑浮层）；`Popconfirm` 是就地的气泡确认（默认插槽是触发按钮，取代 `el-popconfirm`）；`PickerSheet` 是底部滚轮选择（Sheet 里放 `van-picker`，待定 6 定之前保留 Vant） |
 | 菜单 | `DropdownMenu` + `DropdownMenuContent`、`ContextMenu`；共用的 `MenuItem`（= `DropdownMenuItem`，`danger` / `shortcut`）、`MenuSeparator`、`MenuSub`、`MenuCheckboxItem`、`MenuRadioGroup`、`MenuLabel` | Reka 的菜单项不依赖根组件类型，下拉与右键共用一套项；`ContextMenu` 默认插槽是触发区域、`#menu` 是菜单，要在某个坐标打开时对触发区域派发带 `clientX` / `clientY` 的 `contextmenu` 事件 |
-| 表单 | `Field`、`Input`、`Textarea`、`NumberField`、`Checkbox`、`CheckboxGroup`、`RadioGroup`、`Select`、`Slider`、`RangeSlider`、`Switch`、`SegmentedControl`、`Combobox`、`ColorPickerPanel`、`KbFilterDropdown` | `KbFilterDropdown` 见下「过滤 chip 下拉」；`ColorPickerPanel` 是取色面板（v-model `#rrggbb`，饱和度 / 明度区 + 色相条 + 十六进制输入，内部持有 HSB，拖到灰色色相不丢），取代 `el-color-picker-panel`；`RangeSlider` 的 v-model 是 `[起, 止]`；`Field` 给标签 / 说明 / 错误（取代 `el-form-item` 的布局，`orientation="horizontal"` 标签在左），控件经 `field.ts` 自动拿 id 与出错状态；校验由调用方算好 `error` 传入。`Select` / `Combobox` / `RadioGroup` / `CheckboxGroup` 用 `options` / `items` 数组；`Slider` 拖动中更新 v-model、松手发 `commit`；`NumberField` 清空时是 `undefined` |
+| 表单 | `Field` + `useForm`、`Input`、`Autocomplete`、`Textarea`、`NumberField`、`Checkbox`、`CheckboxGroup`、`RadioGroup`、`Select`、`Slider`、`RangeSlider`、`Switch`、`SegmentedControl`、`Combobox`、`DatePicker`、`TimeField`、`ColorPickerPanel`、`KbFilterDropdown`；分节标题 `SectionTitle` | `KbFilterDropdown` 见下「过滤 chip 下拉」；`ColorPickerPanel` 是取色面板（v-model `#rrggbb`，饱和度 / 明度区 + 色相条 + 十六进制输入，内部持有 HSB，拖到灰色色相不丢），取代 `el-color-picker-panel`；`RangeSlider` 的 v-model 是 `[起, 止]`；`Field` 给标签 / 说明 / 错误（取代 `el-form-item`，`orientation="horizontal"` 标签在左，`#label-end` 放标签行右侧的附加操作），控件经 `field.ts` 自动拿 id 与出错状态，校验见下「表单校验」。`Select` / `Combobox` / `RadioGroup` / `CheckboxGroup` 用 `options` / `items` 数组；`Select` / `Combobox` 的 `clearable` 清空后 v-model 为 `undefined`，**选项值不能是空字符串**（Reka 的限制，空串表示未选，需要时由调用方编码，见 `KbSelect`）；`Combobox` 给了 `filter` 时只按用户键入的文字过滤（展开时清空，不拿输入框回显的已选文字去匹配）；`DatePicker` 的 v-model 是 `YYYY-MM-DD`，日历气泡 «/» 跳年、‹/› 跳月，`isDateDisabled` 收 `YYYY-MM-DD`；`TimeField` 的 v-model 是 `HH:mm`（Reka TimeField，固定 24 小时制，时 / 分两段可键入或方向键步进，清空某段不更新 v-model；原生 `type=time` 在 CEF 下会显示成 12 小时制）；`Autocomplete` 是自由输入的补全（地址栏）：v-model 是文字本身、`items` 由调用方按文字算好，打字不自动高亮，回车 emit `submit`（原文），只有方向键选中后回车或点击才 emit `select`，焦点始终在输入框、失焦收起；要整体换造型就给 `anchorClass` / `contentClass` / `itemClass` / `inputClass`（整体替换默认类，外框带 `data-open` 供 `data-[open]:` 写展开态）——要「从选项里选一个值」用 `Combobox`；`Input` 的 `inputClass` 加在内层 input 上；`Slider` 拖动中更新 v-model、松手发 `commit`；`NumberField` 清空时是 `undefined`；`SectionTitle` 是长表单的分节标题（取代 `el-divider content-position="left"`） |
 | 展示 | `Alert`、`DescriptionList` + `DescriptionItem`、`Empty`、`Progress`、`ScrollArea`、`Separator`、`Skeleton`、`Tabs` | `DescriptionList` 取代 `el-descriptions`；`Tabs` 接口同原 `KbTab`（只管 tab 头）；`Progress` 的 `value` 为 null 是不定进度 |
 | 反馈 | `Toaster`（`App.vue` 挂一份）、`toast`、`messageBox`、`vLoading` | 见下「反馈门面」 |
 
@@ -233,6 +233,42 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
   预览不用 `ui/Dialog` 的原因：层级沿用 `useModal` 的栈位（吉祥物按栈位浮在预览上，取 EP 计数器的号会盖住它，预览里再弹的
   新浮层照常取号在它之上）、点吉祥物不关预览、只做淡入淡出（缩放会让 Panzoom 量到的容器偏小，全屏的 `position: fixed`
   也不能有 transform 祖先）。插件描述给模板 iframe 注入的 `--anime-*` 变量名是插件约定，名字不改、取值来自 `--kb-*`。
+- P5：共用表单门面 `common/form/Kb*` 换芯（接口不变，插件参数、壁纸属性、设置页跟着变；`KbColor` 已在 P4）；收集对话框、
+  收集表单与其小件（`OutputDirSelect`、`HttpHeadersEditor`、并发 / 重试字段）、`PluginPickerField`（桌面 Combobox 自定义行）、
+  三个导入对话框、`MediaPicker`；任务抽屉（`Sheet`）、卡片、计数、右键菜单、运行参数、日志、重试记录。这些文件不再用
+  `useModal`：开关直接给 `Dialog` / `Sheet` / `Popover`，紧凑档的 `AndroidDrawer` 不传 `z-index`、自己占栈位，免得 Android
+  返回栈登记两次。表单校验见下「表单校验」。
+
+- P6：画册页（`views/Albums.vue` 的紧凑档左右 `Sheet`、新建 / 移动画册 `Dialog`、自写面包屑）、画册树面板与树（`AlbumTreePanel`
+  的「+」新建菜单、`AlbumTreeView` 的图标与状态标记）、右栏 `AlbumDetailPanel`、`utils/albumSyncMode.ts` 的图标；畅游页
+  （`views/Surf.vue` 的地址栏换 `Autocomplete`、站点卡片、记录详情与帮助对话框）。树里类型只靠图标形状区分、统一中性灰，
+  强调色只给收藏的星与「轮播中」。画册的无调用方旧组件 `contextMenu/AlbumContextMenu.vue` 已删。
+- P7：插件页（`views/PluginBrowser.vue` 的列表、搜索、与卡片同尺寸的骨架 `plugin/PluginGridSkeleton.vue`、空状态、源管理三列列表、
+  新增 / 编辑源与导入源 `Dialog`）、插件详情（`views/PluginDetail.vue` 的安装 / 卸载确认换 `AlertDialog` 的 `action`；`plugin/` 下
+  详情主体、配置面板、文档渲染器与目录、PathQL 面板、右侧信息栏、卡片、快捷预览与走马灯、`KbLabel`）、外部导入 `.kgpg` 的
+  `import/PluginImportDialog.vue`（开关改 `v-model:open`）。插件文档看图换成新组件 `Lightbox`。
+
+- P8：运行配置页（`views/AutoConfigs.vue` 与 `components/scheduler/` 全部：卡片与插件卡片同一套外框，定时编辑气泡 `Popover` +
+  `ScheduleSpecEditor`（`SegmentedControl`、快捷取值胶囊、`NumberField` / `Select`、新组件 `TimeField`），详情的分节 `DescriptionList`
+  与 `TaskRunParamsContent` 一致，进度条 `Progress` + 自算倒计时，编辑去掉 `el-form`、来源改用 `PluginPickerField`；漏跑提醒点遮罩不关、
+  关闭即「稍后再说」）、设置页与设置对话框（`views/Settings.vue`、`components/settings/` 全部，左导航与 `KbMenuList` 的选中项改中性浅灰块、
+  强调色只在图标上；开关不再有 `before-change`，受控的 `Switch` 在 `@update:model-value` 里写入、失败时显示值不变；滑块拖动只改本地值、
+  `commit` 才保存；`LanguageSetting` 紧凑档用 `AndroidPickerSelect`）、检查更新与下载进度、应用日志（级别多选用 Reka `ToggleGroup`，
+  模块前缀是 `Autocomplete` 的草稿值、回车 / 选中 / 失焦才生效）、吉祥物历史对话框；吉祥物、工具箱注册表、外链选择的图标换 lucide。
+  这些文件都不再借 `useModal`。`CodeBlock` 的复制按钮改为单独一列（pre 的右内边距会随横向滚动一起滚走，长单行会钻到按钮底下）。
+  至此业务界面不再有 EP 组件，剩下的是 P9 的收尾项。
+
+**表单校验**（P5，`components/ui/form.ts` + `Field`，取代 `el-form` 的 `validate` / `rules` 与 async-validator）：
+
+- 表单根组件里 `const form = useForm()`（向子孙 provide 上下文），字段写 `<Field :validator="() => 错误文字或 undefined">`，
+  提交时 `if (!form.validate()) return;`。`validate()` 让所有已挂载的 Field 显示错误、把第一个出错的滚进视野；`reset()` 回到不显示。
+- 显示时机：某个 Field 的校验结果变过一次（用户改过值）之后实时显示；没改过也没提交过的空必填项不提前标红。
+  调用方自己算好的 `error` 优先于 `validator`。
+- 被 `v-if` 隐藏的 Field 卸载即注销，不参与校验（插件变量的 `when` 就靠这一条）。
+- 插件变量的校验是纯函数 `utils/pluginVarForm.ts` 的 `varFieldError(varDef, value, 显示名, { ignoreRequired })`，
+  `PluginVarsForm` 每个字段一个 `Field`，注册进最近的 `useForm()`（P8 起已没有 `el-form`：`AutoConfigDialog`、
+  `PluginDefaultConfigsPanel`、`PluginConfigPanel` 都是一个表单一个 `useForm()`，名称、来源等字段与插件变量一起校验）。
+- `KbIntegerInput` 不再调 `useFormItem`：整数文本的实时校验由 Field 的 validator 随值跟随。
 
 **过滤 chip 下拉**（`KbFilterDropdown`，`components/ui/FilterDropdown.vue` + 类型与上下文 `filterDropdown.ts`）：
 

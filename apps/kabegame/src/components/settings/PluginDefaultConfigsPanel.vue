@@ -1,37 +1,34 @@
 <template>
-  <div class="plugin-defaults-panel">
-    <p class="plugin-defaults-desc">{{ $t("settings.pluginDefaultsDesc") }}</p>
+  <div class="mt-2">
+    <p class="m-0 mb-4 text-[13px] leading-[1.5] text-kb-fg-muted">{{ $t("settings.pluginDefaultsDesc") }}</p>
     <PluginPickerField
       :model-value="selectedPluginId || null"
-      class="plugin-defaults-select"
+      class="mb-4 w-full max-w-[420px]"
       clearable
       :placeholder="$t('settings.pluginDefaultsSelectPlugin')"
       :select-trigger="IS_ANDROID"
       @update:model-value="(value) => (selectedPluginId = value ?? '')"
     />
 
-    <div v-if="selectedPluginId" v-loading="loading" class="plugin-defaults-editor">
-      <el-form ref="formRef" :model="form" label-position="top" class="plugin-defaults-form">
-        <template v-if="pluginVars.length > 0">
-          <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-          <PluginVarsForm v-model="form.vars" :plugin-vars="pluginVars" ignore-required ignore-when />
-        </template>
+    <div v-if="selectedPluginId" v-loading="loading" class="flex max-w-[640px] flex-col gap-3">
+      <template v-if="pluginVars.length > 0">
+        <SectionTitle>{{ $t("plugins.pluginConfig") }}</SectionTitle>
+        <PluginVarsForm v-model="form.vars" :plugin-vars="pluginVars" ignore-required ignore-when />
+      </template>
 
-        <div class="plugin-defaults-actions">
-          <el-button type="primary" :loading="saving" @click="handleSave">
-            {{ $t("settings.pluginDefaultsSave") }}
-          </el-button>
-          <el-button :loading="resetting" @click="handleReset">
-            {{ $t("settings.pluginDefaultsReset") }}
-          </el-button>
-        </div>
-      </el-form>
+      <div class="mt-2 flex gap-3">
+        <Button variant="primary" :disabled="saving || resetting" @click="handleSave">
+          <Spinner v-if="saving" :size="14" />
+          {{ $t("settings.pluginDefaultsSave") }}
+        </Button>
+        <Button :disabled="saving || resetting" @click="handleReset">
+          <Spinner v-if="resetting" :size="14" />
+          {{ $t("settings.pluginDefaultsReset") }}
+        </Button>
+      </div>
     </div>
 
-    <el-empty
-      v-else-if="!loadingPlugins && plugins.length === 0"
-      :description="$t('settings.pluginDefaultsNoPlugins')"
-    />
+    <Empty v-else-if="!loadingPlugins && plugins.length === 0" :description="$t('settings.pluginDefaultsNoPlugins')" />
   </div>
 </template>
 
@@ -50,14 +47,21 @@ import {
   type PluginVarDef,
 } from "@/utils/pluginVarForm";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
+import { useForm } from "@/components/ui/form";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { messageBox } from "@/components/ui/messageBox";
 import { vLoading } from "@/components/ui/loading";
+import Button from "@/components/ui/Button.vue";
+import Empty from "@/components/ui/Empty.vue";
+import SectionTitle from "@/components/ui/SectionTitle.vue";
+import Spinner from "@/components/ui/Spinner.vue";
 
 const { t } = useI18n();
 const pluginStore = usePluginStore();
 
-const { form, formRef, pluginVars, loadPluginVars, loadPluginVarDefs } = usePluginConfig();
+const { form, pluginVars, loadPluginVars, loadPluginVarDefs } = usePluginConfig();
+/** 整个面板的校验：PluginVarsForm 的每个 Field 注册在这里 */
+const validation = useForm();
 
 const selectedPluginId = ref("");
 /** 面板不显示的两个字段：保存/重置时原样回写，不能用面板输入清掉用户已有的默认值 */
@@ -89,9 +93,7 @@ async function loadEditorForPlugin(pluginId: string) {
 
 async function handleSave() {
   if (!selectedPluginId.value) return;
-  try {
-    await formRef.value?.validate();
-  } catch {
+  if (!validation.validate()) {
     kameMessage.warning(t("plugins.fillRequired"));
     return;
   }
@@ -175,32 +177,3 @@ onMounted(async () => {
   }
 });
 </script>
-
-<style scoped lang="scss">
-.plugin-defaults-panel {
-  margin-top: 8px;
-}
-
-.plugin-defaults-desc {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin-bottom: 16px;
-  line-height: 1.5;
-}
-
-.plugin-defaults-select {
-  width: 100%;
-  max-width: 420px;
-  margin-bottom: 16px;
-}
-
-.plugin-defaults-form {
-  max-width: 640px;
-}
-
-.plugin-defaults-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 8px;
-}
-</style>

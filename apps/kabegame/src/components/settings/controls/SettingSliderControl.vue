@@ -9,18 +9,18 @@
     :disabled="props.disabled || disabled"
     @update:model-value="onChange"
   />
-  <div v-else class="setting-slider-wrap">
-    <el-slider
+  <!-- 拖动中只改本地值（右侧数值跟手），松手（commit）才保存 -->
+  <div v-else class="flex w-[min(280px,100%)] min-w-0 items-center gap-3">
+    <Slider
       v-model="localValue"
+      class="min-w-[80px] flex-1"
       :min="effectiveMin"
       :max="effectiveMax"
       :step="effectiveStep"
       :disabled="props.disabled || disabled"
-      :show-tooltip="true"
-      :format-tooltip="formatTooltip"
-      @change="onChange"
+      @commit="onChange"
     />
-    <span class="setting-slider-value">{{ displayValue }}</span>
+    <span class="min-w-[2.5em] shrink-0 text-[12px] tabular-nums text-kb-fg-muted">{{ displayValue }}</span>
   </div>
 </template>
 
@@ -30,7 +30,7 @@ import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
 import { useUiStore } from "../../../stores/ui";
 import KbStepper from "../../common/form/KbStepper.vue";
-import { Arrayable } from "@kabegame/element-plus/utils/typescript.ts";
+import Slider from "@/components/ui/Slider.vue";
 
 const props = defineProps<{
   settingKey: AppSettingKey;
@@ -38,7 +38,7 @@ const props = defineProps<{
   max?: number;
   step?: number;
   disabled?: boolean;
-  /** 滑块提示与右侧显示的小数位数，默认 2 */
+  /** 右侧显示的小数位数，默认 2 */
   precision?: number;
 }>();
 
@@ -57,11 +57,6 @@ const displayValue = computed(() => {
   return Number.isFinite(v) ? (p > 0 ? v.toFixed(p) : String(Math.round(v))) : "0";
 });
 
-function formatTooltip(val: number) {
-  const p = precision.value;
-  return Number.isFinite(val) ? (p > 0 ? val.toFixed(p) : String(Math.round(val))) : "0";
-}
-
 watch(
   () => settingValue.value,
   (v) => {
@@ -71,7 +66,7 @@ watch(
   { immediate: true },
 );
 
-const onChange = async (v: Arrayable<number>) => {
+const onChange = async (v: number | undefined) => {
   if (typeof v !== "number" || !Number.isFinite(v)) return;
   const ok = await set(v);
   if (!ok) {
@@ -80,23 +75,3 @@ const onChange = async (v: Arrayable<number>) => {
   }
 };
 </script>
-
-<style scoped>
-.setting-slider-wrap {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-.setting-slider-wrap :deep(.el-slider) {
-  flex: 1;
-  min-width: 80px;
-}
-.setting-slider-value {
-  flex-shrink: 0;
-  min-width: 2.5em;
-  font-variant-numeric: tabular-nums;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-</style>

@@ -1,21 +1,32 @@
 <template>
-  <div class="headers-editor">
-    <div v-for="(row, idx) in rows" :key="idx" class="header-row">
-      <el-input v-model="row.key" :placeholder="$t('plugins.headerNamePlaceholder')" @input="emitValue" />
-      <el-input v-model="row.value" :placeholder="$t('plugins.headerValuePlaceholder')" @input="emitValue" />
-      <el-button type="danger" link @click="removeRow(idx)">{{ $t("plugins.delete") }}</el-button>
+  <div class="flex w-full flex-col gap-2">
+    <div v-for="(row, idx) in rows" :key="idx" class="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
+      <Input v-model="row.key" :placeholder="$t('plugins.headerNamePlaceholder')" @input="emitValue" />
+      <Input v-model="row.value" :placeholder="$t('plugins.headerValuePlaceholder')" @input="emitValue" />
+      <Tooltip :content="$t('plugins.delete')">
+        <Button variant="ghost-danger" size="icon" :aria-label="$t('plugins.delete')" @click="removeRow(idx)">
+          <Trash2 />
+        </Button>
+      </Tooltip>
     </div>
-    <div class="header-actions">
-      <el-button size="small" @click="addRow">{{ $t("plugins.addHeader") }}</el-button>
+    <div>
+      <Button variant="outline" size="sm" @click="addRow">
+        <Plus />
+        {{ $t("plugins.addHeader") }}
+      </Button>
     </div>
-    <div v-if="showHint" class="config-hint">
+    <p v-if="showHint" class="m-0 text-[12px] leading-[1.55] text-kb-fg-muted">
       {{ $t("plugins.httpHeadersHint") }}
-    </div>
+    </p>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
+import { Plus, Trash2 } from "@lucide/vue";
+import Button from "@/components/ui/Button.vue";
+import Input from "@/components/ui/Input.vue";
+import Tooltip from "@/components/ui/Tooltip.vue";
 
 type HeaderRow = { key: string; value: string };
 
@@ -67,31 +78,3 @@ watch(
   { immediate: true, deep: true },
 );
 </script>
-
-<style scoped lang="scss">
-.headers-editor {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.header-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.header-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.config-hint {
-  font-size: 12px;
-  color: var(--anime-text-secondary);
-  margin-top: 4px;
-}
-</style>

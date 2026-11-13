@@ -6,14 +6,17 @@
         <button
           v-if="failedTotal > 0"
           type="button"
-          class="ml-2 border-0 bg-transparent p-0 text-[var(--el-color-danger)] hover:underline"
+          class="ml-2 cursor-pointer border-0 bg-transparent p-0 text-[length:inherit] text-kb-danger [font-family:inherit] hover:underline"
           @click="showFailed"
         >
           {{ t("autoConfig.failedCount", { n: failedTotal }) }}
         </button>
       </template>
       <template #extra>
-        <el-button type="primary" @click="autoConfigDialog.openCreate()">{{ t("autoConfig.create") }}</el-button>
+        <Button variant="primary" @click="autoConfigDialog.openCreate()">
+          <Plus />
+          {{ t("autoConfig.create") }}
+        </Button>
       </template>
     </PageHeader>
 
@@ -29,7 +32,7 @@
           :clearable="false"
           @update:model-value="setSort"
         >
-          <template #icon><Sort /></template>
+          <template #icon><ArrowUpDown /></template>
         </KbFilterDropdown>
         <KbFilterDropdown
           :model-value="activeQuery.dir"
@@ -41,11 +44,11 @@
           @toggle="toggleDirection"
         >
           <template #icon>
-            <SortDesc v-if="activeQuery.dir === 'desc'" />
-            <SortAsc v-else />
+            <ArrowDownWideNarrow v-if="activeQuery.dir === 'desc'" />
+            <ArrowUpNarrowWide v-else />
           </template>
         </KbFilterDropdown>
-        <span class="h-6 w-px bg-[var(--anime-border)]" />
+        <span class="h-[18px] w-px bg-kb-line-strong" />
         <KbFilterDropdown
           :model-value="activeQuery.search || null"
           :chip-label="t('gallery.advancedChipSearch')"
@@ -56,11 +59,11 @@
           <template #icon><Search /></template>
           <template #panel>
             <div class="w-64 p-2">
-              <el-input
+              <Input
                 v-model="searchDraft"
                 clearable
                 :placeholder="t('autoConfig.searchPlaceholder')"
-                @input="scheduleSearch"
+                @update:model-value="scheduleSearch"
               />
             </div>
           </template>
@@ -89,7 +92,7 @@
             :options="minePluginOptions"
             @open="loadFacet('plugin')"
           >
-            <Grid />
+            <LayoutGrid />
           </FilterChip>
           <FilterChip
             v-model="mine.mode"
@@ -106,7 +109,7 @@
             :label="t('autoConfig.filterPlugin')"
             :options="recommendedPluginOptions"
           >
-            <Grid />
+            <LayoutGrid />
           </FilterChip>
           <FilterChip v-model="recommended.mode" :label="t('autoConfig.mode')" :options="recommendedModeOptions">
             <Clock />
@@ -130,21 +133,35 @@
           />
         </div>
         <div v-else-if="loading" v-loading="showLoading" class="min-h-64" />
-        <el-empty v-else :description="t('autoConfig.noMatchingConfigs')">
-          <el-button type="primary" @click="autoConfigDialog.openCreate()">{{ t("autoConfig.create") }}</el-button>
-        </el-empty>
+        <Empty v-else :title="t('autoConfig.noMatchingConfigs')">
+          <template #icon><AlarmClock /></template>
+          <template #actions>
+            <Button variant="primary" @click="autoConfigDialog.openCreate()">
+              <Plus />
+              {{ t("autoConfig.create") }}
+            </Button>
+          </template>
+        </Empty>
         <LoadMoreButton v-if="configs.length" :has-more="hasMore" :loading="loading" @load-more="loadMore" />
       </div>
 
       <div v-else class="min-h-0 flex-1 overflow-auto">
         <div v-if="recommendedDisplayEntries.length" class="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
           <template v-for="entry in recommendedDisplayEntries" :key="entry.key">
-            <el-skeleton
+            <div
               v-if="!entry.preset"
-              animated
-              :rows="4"
-              class="rounded-lg border border-solid border-[var(--anime-border)] p-4"
-            />
+              class="flex flex-col gap-2.5 rounded-kb-lg border border-solid border-kb-line bg-kb-surface-raised p-3"
+            >
+              <div class="flex items-center gap-2.5">
+                <Skeleton class="size-8 rounded-kb-md" />
+                <div class="flex flex-1 flex-col gap-1.5">
+                  <Skeleton class="h-3.5 w-2/3" />
+                  <Skeleton class="h-3 w-1/3" />
+                </div>
+              </div>
+              <Skeleton class="h-3 w-full" />
+              <Skeleton class="h-3 w-4/5" />
+            </div>
             <RecommendedPresetGridCard
               v-else
               :preset="entry.preset"
@@ -156,38 +173,53 @@
             />
           </template>
         </div>
-        <el-empty v-else :description="t('autoConfig.noRecommendedConfigs')" />
+        <Empty v-else :title="t('autoConfig.noRecommendedConfigs')">
+          <template #icon><AlarmClock /></template>
+        </Empty>
       </div>
     </div>
 
-    <el-dialog
-      :model-value="presetPreview.isOpen.value"
-      :z-index="presetPreview.zIndex.value"
-      :title="t('autoConfig.recommendedPreviewTitle')"
-      width="min(600px, 92vw)"
-      append-to-body
-      destroy-on-close
-      @update:model-value="presetPreview.close"
-    >
+    <Dialog v-model:open="presetPreviewOpen" :title="t('autoConfig.recommendedPreviewTitle')" width="min(600px, 92vw)">
       <AutoConfigDetailContent
         v-if="presetPreviewConfig"
         :config="presetPreviewConfig"
         :show-schedule-last-run="false"
       />
       <template #footer>
-        <el-button @click="presetPreview.close()">{{ t("common.cancel") }}</el-button>
-        <el-button v-if="previewTarget" type="primary" @click="importPreset(previewTarget)">
+        <Button variant="outline" @click="presetPreviewOpen = false">{{ t("common.cancel") }}</Button>
+        <Button v-if="previewTarget" variant="primary" @click="importPreset(previewTarget)">
           {{ t("autoConfig.importRecommended") }}
-        </el-button>
+        </Button>
       </template>
-    </el-dialog>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref, watch, type PropType } from "vue";
-import { KbFilterDropdown, Tabs, type KbFilterDropdownOption, type TabItem } from "@/components/ui";
-import { CircleCheck, Clock, Grid, Search, Sort, SortAsc, SortDesc, Timer } from "@kabegame/element-plus-icons";
+import {
+  Button,
+  Dialog,
+  Empty,
+  Input,
+  KbFilterDropdown,
+  Skeleton,
+  Tabs,
+  type KbFilterDropdownOption,
+  type TabItem,
+} from "@/components/ui";
+import {
+  AlarmClock,
+  ArrowDownWideNarrow,
+  ArrowUpDown,
+  ArrowUpNarrowWide,
+  CircleCheck,
+  Clock,
+  LayoutGrid,
+  Plus,
+  Search,
+  Timer,
+} from "@lucide/vue";
 import { resolveConfigText, useI18n } from "@kabegame/i18n";
 import { kameMessage } from "@/utils/kameMessage";
 import PageHeader from "@/components/common/PageHeader.vue";
@@ -195,7 +227,6 @@ import LoadMoreButton from "@/components/LoadMoreButton.vue";
 import AutoConfigDetailContent from "@/components/scheduler/AutoConfigDetailContent.vue";
 import RecommendedPresetGridCard from "@/components/scheduler/RecommendedPresetGridCard.vue";
 import RunConfigGridCard from "@/components/scheduler/RunConfigGridCard.vue";
-import { useModal } from "@/composables/useModal";
 import { usePagedRunConfigs } from "@/composables/usePagedRunConfigs";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore, type PluginRecommendedPreset, type RunConfig } from "@/stores/crawler";
@@ -490,7 +521,7 @@ async function runNow(config: RunConfig) {
   kameMessage[created ? "success" : "error"](t(created ? "autoConfig.runStarted" : "common.operationFailed"));
 }
 
-const presetPreview = useModal();
+const presetPreviewOpen = ref(false);
 const previewTarget = ref<PluginRecommendedPreset | null>(null);
 const presetPreviewConfig = computed<RunConfig | null>(() =>
   previewTarget.value
@@ -513,7 +544,7 @@ const presetPreviewConfig = computed<RunConfig | null>(() =>
 );
 function openPresetPreview(preset: PluginRecommendedPreset) {
   previewTarget.value = preset;
-  presetPreview.open();
+  presetPreviewOpen.value = true;
 }
 async function importPreset(preset: PluginRecommendedPreset) {
   const compatibility = await checkRecommendedPresetCompatibility(preset.pluginId, preset.userConfig);

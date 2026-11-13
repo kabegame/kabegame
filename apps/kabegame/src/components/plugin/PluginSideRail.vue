@@ -2,39 +2,30 @@
   <KbResizable
     v-model="width"
     side="left"
-    class="flex min-h-0 bg-[color-mix(in_srgb,white_35%,transparent)] border-l border-l-solid border-[var(--anime-border)]"
+    class="flex min-h-0 border-l border-l-solid border-kb-line bg-kb-fill-lighter"
     :default-size="defaultWidth"
     :handle-title="t('plugins.detail.prerequisites')"
   >
     <!-- 滚动放在内层：把手是相对本组件根定位的，根一起滚会让它跟着内容跑掉 -->
     <div class="flex-1 min-w-0 flex flex-col gap-3.5 py-3 px-3 overflow-y-auto [scrollbar-width:none]">
       <div v-if="tagChips.length">
-        <div class="text-12px font-700 tracking-[0.08em] text-[var(--anime-text-muted)] mb-1.5">
-          {{ t("plugins.detail.tags") }}
-        </div>
-        <div class="flex flex-wrap gap-1">
-          <span v-for="chip in tagChips" :key="chip.key" class="kb-chip text-white" :style="{ background: chip.bg }">
-            {{ chip.text }}
-          </span>
+        <div :class="SECTION_TITLE">{{ t("plugins.detail.tags") }}</div>
+        <div class="flex flex-wrap items-center gap-1">
+          <Tag v-for="chip in tagChips" :key="chip.key" size="sm" :tone="chip.tone">{{ chip.text }}</Tag>
           <PluginLabelTags v-if="plugin?.labels?.length" :labels="plugin.labels" />
         </div>
       </div>
 
       <div v-if="prereqItems.length">
-        <div class="text-12px font-700 tracking-[0.08em] text-[var(--anime-text-muted)] mb-1.5">
-          {{ t("plugins.detail.prerequisites") }}
-        </div>
-        <div class="flex flex-col gap-1.5 text-13.5px">
-          <div v-for="item in prereqItems" :key="item.key" class="flex items-center gap-2">
-            <span
-              class="w-4 h-4 rounded-6px flex items-center justify-center flex-none text-white"
-              :style="{ background: item.color }"
-            >
-              <el-icon :size="11"><component :is="item.icon" /></el-icon>
-            </span>
+        <div :class="SECTION_TITLE">{{ t("plugins.detail.prerequisites") }}</div>
+        <div class="flex flex-col gap-2 text-[13px] leading-[1.5] text-kb-fg-regular">
+          <div v-for="item in prereqItems" :key="item.key" class="flex items-start gap-2">
+            <component :is="TONE_ICON[item.tone]" class="mt-[2px] size-4 flex-none" :class="TONE_COLOR[item.tone]" />
             <span>
               {{ item.text }}
-              <a v-if="item.action" href="#" class="underline" @click.prevent="item.action">{{ item.actionText }}</a>
+              <a v-if="item.action" href="#" class="text-kb-fg underline" @click.prevent="item.action">
+                {{ item.actionText }}
+              </a>
             </span>
           </div>
         </div>
@@ -45,8 +36,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
-import { ElIcon } from "@kabegame/element-plus";
-import { CircleCheckFilled, WarningFilled } from "@kabegame/element-plus-icons";
+import { CircleCheck, CircleX, TriangleAlert } from "@lucide/vue";
+import { Tag } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import type { Plugin } from "../../stores/plugins";
 import { useSurfStore } from "../../stores/surf";
@@ -72,20 +63,31 @@ onMounted(() => {
 
 const SURF_COOKIE_FRESH_DAYS = 30;
 
+const SECTION_TITLE = "mb-2 text-[11.5px] font-600 uppercase tracking-[0.06em] text-kb-fg-subtle";
+
+/** 前置条件三档：满足 / 需要留意 / 不满足（中性外框，颜色只在图标上） */
+type Tone = "success" | "warning" | "danger";
+const TONE_ICON = { success: CircleCheck, warning: TriangleAlert, danger: CircleX } as const;
+const TONE_COLOR: Record<Tone, string> = {
+  success: "text-kb-success",
+  warning: "text-kb-warning",
+  danger: "text-kb-danger",
+};
+
 const tagChips = computed(() => {
-  const chips: Array<{ key: string; text: string; bg: string }> = [];
+  const chips: Array<{ key: string; text: string; tone: "neutral" | "success" | "danger" }> = [];
   const scriptType = props.plugin?.scriptType;
   if (scriptType === "v8") {
     chips.push({
       key: "script-v8",
       text: t("plugins.detail.scriptTypeV8"),
-      bg: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)",
+      tone: "neutral",
     });
   } else if (scriptType === "js") {
     chips.push({
       key: "script-js",
       text: t("plugins.detail.scriptTypeJs"),
-      bg: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)",
+      tone: "neutral",
     });
   }
   const minAppVersion = (props.plugin?.minAppVersion ?? "").trim();
@@ -94,9 +96,7 @@ const tagChips = computed(() => {
     chips.push({
       key: "min-app-version",
       text: t("plugins.detail.requireAppVersion", { version: minAppVersion }),
-      bg: incompatible
-        ? "linear-gradient(135deg, #ef4444 0%, #f87171 100%)"
-        : "linear-gradient(135deg, #10b981 0%, #34d399 100%)",
+      tone: incompatible ? "danger" : "success",
     });
   }
   return chips;
@@ -122,8 +122,7 @@ const prereqItems = computed(() => {
   const items: Array<{
     key: string;
     text: string;
-    color: string;
-    icon: typeof CircleCheckFilled;
+    tone: Tone;
     action?: () => void;
     actionText?: string;
   }> = [];
@@ -133,10 +132,7 @@ const prereqItems = computed(() => {
     const incompatible = !!props.plugin?.minAppIncompatible;
     items.push({
       key: "app-version",
-      color: incompatible
-        ? "linear-gradient(135deg, #ef4444 0%, #f87171 100%)"
-        : "linear-gradient(135deg, #10b981 0%, #34d399 100%)",
-      icon: incompatible ? WarningFilled : CircleCheckFilled,
+      tone: incompatible ? "danger" : "success",
       text: incompatible
         ? t("plugins.detail.appVersionBad", { app: props.appVersion ?? "?", min: minAppVersion })
         : t("plugins.detail.appVersionOk", { app: props.appVersion ?? "?", min: minAppVersion }),
@@ -149,8 +145,7 @@ const prereqItems = computed(() => {
     if (!record || !record.cookie.trim()) {
       items.push({
         key: "surf-cookie",
-        color: "linear-gradient(135deg, #ef4444 0%, #f87171 100%)",
-        icon: WarningFilled,
+        tone: "danger",
         text: t("plugins.detail.surfNoCookie"),
         actionText: t("plugins.detail.goSurfLogin"),
         action: () => void openExternalLink(`https://${hostOf(props.plugin?.baseUrl)}`),
@@ -160,15 +155,13 @@ const prereqItems = computed(() => {
       if (days > SURF_COOKIE_FRESH_DAYS) {
         items.push({
           key: "surf-cookie",
-          color: "linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)",
-          icon: WarningFilled,
+          tone: "warning",
           text: t("plugins.detail.surfCookieStale", { days }),
         });
       } else {
         items.push({
           key: "surf-cookie",
-          color: "linear-gradient(135deg, #10b981 0%, #34d399 100%)",
-          icon: CircleCheckFilled,
+          tone: "success",
           text: t("plugins.detail.surfCookieFresh"),
         });
       }
@@ -178,8 +171,7 @@ const prereqItems = computed(() => {
   if (hasLabel("auth.needProxy")) {
     items.push({
       key: "proxy",
-      color: "linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)",
-      icon: WarningFilled,
+      tone: "warning",
       text: t("plugins.detail.needProxyHint"),
     });
   }

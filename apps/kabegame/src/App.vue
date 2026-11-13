@@ -112,17 +112,11 @@
     </div>
 
     <!-- 全局模态单例与页面布局同级，避免继承 app-container 的 flex、定位和裁剪规则 -->
-    <PluginImportDialog
-      :visible="importDialog.isOpen.value"
-      :kgpg-path="importKgpgPath"
-      @update:visible="importDialog.close"
-    />
+    <PluginImportDialog v-model:open="importDialogOpen" :kgpg-path="importKgpgPath" />
     <!-- 桌面 / web 非紧凑用设置弹窗；Android（含平板宽屏、横屏手机）与紧凑布局用全屏设置页 -->
     <SettingsDialog
       v-if="!settingsUsesRoute"
-      :open="settingsModal.isOpen.value"
-      :z-index="settingsModal.zIndex.value"
-      @close="settingsModal.close()"
+      v-model:open="settingsOpen"
     />
     <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
     <template v-if="!uiStore.isCompact && !IS_WEB">
@@ -142,7 +136,6 @@
     />
     <MissedRunsDialog
       :open="missedRunsModal.isOpen.value"
-      :z-index="missedRunsModal.zIndex.value"
       :items="missedRunItems"
       :system-sleep="wasSystemSleep"
       @close="missedRunsModal.close()"
@@ -201,7 +194,6 @@ import { useFailedImagesStore } from "./stores/failedImages";
 import { useDownloadStateStore } from "./stores/downloadState";
 import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@/stores/modalStack";
-import { useModal } from "@/composables/useModal";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
 import { kbFilterDropdownContextKey } from "@/components/ui/filterDropdown";
@@ -314,11 +306,11 @@ const busyEntryVisible = computed(() => busyCount.value > 0 || hasUnseenBusyFail
 // Android 一律走路由页：横屏手机等矮屏放不下弹窗，平板宽屏的路由页也有左侧分类导航。
 const settingsUsesRoute = computed(() => IS_ANDROID || uiStore.isCompact);
 const settingsActive = computed(() =>
-  settingsUsesRoute.value ? route.path === "/settings" : settingsModal.isOpen.value,
+  settingsUsesRoute.value ? route.path === "/settings" : settingsOpen.value,
 );
 const openSettingsEntry = () => {
   if (settingsUsesRoute.value) void router.push("/settings");
-  else settingsModal.open();
+  else settingsOpen.value = true;
 };
 // 全局快捷键：⌘,(设置) / ⇧⌘R(刷新页面)，全应用唯一一处注册
 useGlobalShortcuts({ openSettings: openSettingsEntry });
@@ -345,7 +337,8 @@ const route = useRoute();
 useWindowTitleSync(() => (typeof route.meta.title === "string" ? t(route.meta.title) : ""));
 // 桌面端设置是弹窗、不是路由目的地：打开时侧栏仍高亮当前页面，
 // 「设置」自身的按下态由侧栏底部的设置按钮表达（settingsActive）。
-const settingsModal = useModal();
+// Dialog 自己接返回栈与层级（不再借 useModal）
+const settingsOpen = ref(false);
 setSettingsQueryAdapter({
   query: computed(() => route.query as Record<string, unknown>),
   async write(param, value, history) {
@@ -361,7 +354,7 @@ const modalStack = useModalStackStore();
 const fileDropOverlayRef = ref<any>(null);
 
 // 外部导入插件对话框
-const importDialog = useModal();
+const importDialogOpen = ref(false);
 const importKgpgPath = ref<string | null>(null);
 
 // 路由视图 key，用于强制刷新组件
@@ -676,7 +669,7 @@ onMounted(async () => {
     }
 
     importKgpgPath.value = event.payload.kgpgPath;
-    importDialog.open();
+    importDialogOpen.value = true;
   });
 
   // Android 适配：供原生代码调用的全局方法
@@ -685,7 +678,7 @@ onMounted(async () => {
       console.log("[Android] Received import request:", path);
       // 触发相同的逻辑
       importKgpgPath.value = path;
-      importDialog.open();
+      importDialogOpen.value = true;
     };
   }
 

@@ -5,6 +5,12 @@
   "decrease": "減らす",
   "increase": "増やす",
   "close": "閉じる",
+  "imagePreview": "画像ビューア",
+  "previousImage": "前の画像",
+  "nextImage": "次の画像",
+  "zoomIn": "拡大",
+  "zoomOut": "縮小",
+  "resetZoom": "ズームをリセット",
   "clear": "クリア",
   "selectAll": "すべて選択",
   "deselectAll": "選択を解除",
@@ -121,5 +127,11 @@
     "analyze": "データベースを最適化中…",
     "services": "サービスを起動中…",
     "failed": "起動に失敗しました"
-  }
+  },
+  "prevYear": "前年",
+  "prevMonth": "前月",
+  "nextMonth": "翌月",
+  "nextYear": "翌年",
+  "today": "今日",
+  "addCustom": "「{value}」を追加"
 }

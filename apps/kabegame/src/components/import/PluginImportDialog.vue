@@ -1,44 +1,34 @@
 <template>
-  <el-dialog
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
+  <!-- 桌面是工作台尺寸的大对话框（详情主体自己管内部滚动）；紧凑档铺满屏幕 -->
+  <Dialog
+    v-model:open="open"
     :title="pageTitle"
-    :width="isCompact ? '100%' : 'min(1120px, 92vw)'"
-    :top="isCompact ? '0' : '5vh'"
+    :width="isCompact ? '100vw' : 'min(1120px, 92vw)'"
+    :height="isCompact ? undefined : preview ? 'min(720px, 82vh)' : undefined"
     :fullscreen="isCompact"
-    :close-on-click-modal="false"
-    append-to-body
-    class="plugin-import-dialog"
-    :class="{ 'mobile-fullscreen': isCompact, 'is-workbench': !isCompact }"
-    @update:model-value="modal.close"
-    @close="handleClose"
+    :close-on-overlay="false"
+    :body-class="preview ? '!p-0 !overflow-hidden flex flex-col' : ''"
   >
     <PluginDetailContent v-if="preview" :loading="false" :show-skeleton="false" :plugin="preview" :is-remote="true" />
-    <el-alert
-      v-else-if="errorMsg"
-      type="error"
-      :closable="false"
-      show-icon
-      :title="t('common.parseFailed')"
-      :description="errorMsg"
-    />
-    <div v-else v-loading="loading" class="loading-container">
+    <Alert v-else-if="errorMsg" tone="danger" :title="t('common.parseFailed')" :description="errorMsg" />
+    <div v-else class="flex h-[200px] items-center justify-center gap-2 text-[13px] text-kb-fg-muted">
+      <Spinner :size="16" />
       {{ t("common.loading") }}
     </div>
 
     <!-- 详情组件不再自带标题栏/操作区（已下沉到页面 PageHeader），导入这条路径由本弹窗提供 -->
     <template v-if="preview" #footer>
-      <div class="flex items-center gap-2">
-        <span class="kb-chip bg-[#ecf5ff] text-[#409eff] font-mono">{{ preview.id }}</span>
-        <span class="kb-chip bg-[#f4f4f5] text-[#909399]">v{{ preview.version }}</span>
+      <div class="flex w-full items-center gap-2 border-t border-t-solid border-kb-line pt-3">
+        <Tag size="sm" class="font-mono">{{ preview.id }}</Tag>
+        <Tag size="sm" class="font-mono">v{{ preview.version }}</Tag>
         <div class="flex-1" />
-        <el-button @click="handleClose">{{ t("common.cancel") }}</el-button>
-        <el-button type="primary" :disabled="!!preview.minAppIncompatible" @click="doInstall">
+        <Button @click="open = false">{{ t("common.cancel") }}</Button>
+        <Button variant="primary" :disabled="!!preview.minAppIncompatible" @click="doInstall">
           {{ installButtonText }}
-        </el-button>
+        </Button>
       </div>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -49,34 +39,23 @@ import { kameMessage } from "@/utils/kameMessage";
 import type { Plugin } from "@/stores/plugins";
 import { usePluginActionState } from "@/composables/usePluginActionState";
 import { useUiStore } from "@/stores/ui";
-import { useModal } from "@/composables/useModal";
 import PluginDetailContent from "@/components/plugin/PluginDetailContent.vue";
+import { Alert, Button, Dialog, Spinner, Tag } from "@/components/ui";
 import { messageBox } from "@/components/ui/messageBox";
-import { vLoading } from "@/components/ui/loading";
 
 const props = defineProps<{
   kgpgPath: string | null;
-  visible: boolean;
 }>();
 
 const emit = defineEmits<{
-  (e: "update:visible", val: boolean): void;
   (e: "success"): void;
 }>();
 
+/** 开关（Dialog 自己接 Android 返回栈与层级） */
+const open = defineModel<boolean>("open", { default: false });
+
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
-
-const handleClose = () => {
-  emit("update:visible", false);
-};
-
-const modal = useModal({ onClose: () => emit("update:visible", false) });
-watch(
-  () => props.visible,
-  (v) => (v ? modal.open() : modal.close()),
-  { immediate: true },
-);
 
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
@@ -100,13 +79,13 @@ const installButtonText = computed(() => {
 watch(
   () => props.kgpgPath,
   async (newPath) => {
-    if (newPath && modal.isOpen) {
+    if (newPath && open.value) {
       await loadPreview(newPath);
     }
   },
 );
 
-watch(modal.isOpen, async (val) => {
+watch(open, async (val) => {
   if (val && props.kgpgPath) {
     await loadPreview(props.kgpgPath);
   } else if (!val) {
@@ -162,73 +141,9 @@ const doInstall = async () => {
     kameMessage.success(successMsg);
     // plugin-added / plugin-changed 事件自动更新插件 store
     emit("success");
-    modal.close();
+    open.value = false;
   } catch (e: any) {
     kameMessage.error(typeof e === "string" ? e : String(e?.message || e));
   }
 };
 </script>
-
-<style scoped>
-.loading-container {
-  height: 200px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-</style>
-
-<style>
-.plugin-import-dialog {
-  display: flex;
-  flex-direction: column;
-}
-
-.plugin-import-dialog.mobile-fullscreen {
-  margin: 0 !important;
-}
-
-.plugin-import-dialog.mobile-fullscreen .el-dialog {
-  margin: 0 !important;
-  max-height: 100vh !important;
-  height: 100vh !important;
-  border-radius: 0 !important;
-}
-
-.plugin-import-dialog.mobile-fullscreen .el-dialog__body {
-  padding: 0 !important;
-  height: calc(100vh - 60px) !important;
-}
-
-.plugin-import-dialog .el-dialog {
-  display: flex;
-  flex-direction: column;
-  max-height: 90vh;
-  margin: 5vh auto;
-}
-
-.plugin-import-dialog .el-dialog__body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
-}
-
-/* 桌面工作台尺寸：详情主体自己控制内部滚动，body 不再加 padding。
-   选择器必须落在 .el-dialog 自身——class prop 加在该元素上，写成后代选择器匹配不到。 */
-.el-dialog.plugin-import-dialog.is-workbench {
-  display: flex;
-  flex-direction: column;
-  height: min(720px, 82vh);
-  max-height: 82vh;
-  margin: 5vh auto;
-  overflow: hidden;
-  background: #fff;
-}
-
-.el-dialog.plugin-import-dialog.is-workbench .el-dialog__body {
-  flex: 1;
-  min-height: 0;
-  padding: 0;
-  overflow: hidden;
-}
-</style>

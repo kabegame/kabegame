@@ -1,23 +1,16 @@
 <template>
-  <div v-if="progress.active" class="schedule-progress-wrap" :aria-label="ariaLabel">
-    <el-progress
-      :percentage="displayPercentClamped"
-      :stroke-width="8"
-      :show-text="false"
-      :duration="lineDuration"
-      class="schedule-progress"
-    />
-    <el-countdown class="schedule-countdown" format="HH:mm:ss" :value="countdownDeadlineMs">
-      <template #prefix>
-        <span class="countdown-prefix">{{ t("autoConfig.progress.countdownPrefix") }}</span>
-      </template>
-    </el-countdown>
+  <div v-if="progress.active" class="mt-2 flex items-center gap-2.5" :aria-label="ariaLabel">
+    <Progress :value="displayPercentClamped" :height="6" class="min-w-[120px] flex-1" />
+    <span class="flex-none whitespace-pre text-[12px] font-500 tabular-nums text-kb-fg-muted">
+      {{ t("autoConfig.progress.countdownPrefix") }}{{ countdownText }}
+    </span>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref, toRef, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
+import { Progress } from "@/components/ui";
 import type { RunConfig } from "../../stores/crawler";
 import { useScheduleProgress } from "../../composables/useScheduleProgress";
 
@@ -28,19 +21,17 @@ const props = defineProps<{
 const { t } = useI18n();
 const progress = useScheduleProgress(toRef(props, "config"));
 
-/** 与 `remaining`（秒）对应的绝对时刻，供 el-countdown 使用 */
-const countdownDeadlineMs = computed(() => {
-  const p = progress.value;
-  if (!p.active) return Date.now();
-  return Date.now() + Math.max(0, p.remaining) * 1000;
+/** 剩余时间 `HH:mm:ss`（小时不按天折叠，与原 el-countdown 的 HH 一致）；remaining 每秒更新 */
+const countdownText = computed(() => {
+  const total = Math.max(0, Math.floor(progress.value.remaining));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
 });
 
 const ariaLabel = computed(() => t("autoConfig.progress.ariaLabel"));
 
 /** 展示用百分比；定时刚开启时从 0 动画到真实值 */
 const displayPercent = ref(0);
-/** el-progress 宽度过渡时长（秒）。平时为 0 以便每秒 tick 不拖尾；开启瞬间用短动画 */
-const lineDuration = ref(0);
 
 const targetPercentInt = computed(() =>
   progress.value.active ? Math.min(100, Math.max(0, Math.round(progress.value.percent * 100))) : 0,
@@ -59,7 +50,6 @@ watch(
   }),
   (cur, prev) => {
     if (!cur.on || !cur.active) {
-      lineDuration.value = 0;
       displayPercent.value = 0;
       enableAnimating = false;
       return;
@@ -68,7 +58,6 @@ watch(
     const turnedOn = prev != null && prev.on === false && cur.on === true;
     if (turnedOn) {
       enableAnimating = true;
-      lineDuration.value = 0.45;
       displayPercent.value = 0;
       nextTick(() => {
         requestAnimationFrame(() => {
@@ -76,7 +65,6 @@ watch(
         });
       });
       window.setTimeout(() => {
-        lineDuration.value = 0;
         displayPercent.value = cur.target;
         enableAnimating = false;
       }, 500);
@@ -89,55 +77,3 @@ watch(
   { flush: "post" },
 );
 </script>
-
-<style scoped lang="scss">
-.schedule-progress-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-.schedule-progress {
-  flex: 1;
-  min-width: 120px;
-}
-
-.schedule-countdown {
-  flex-shrink: 0;
-  line-height: 1.2;
-
-  :deep(.el-statistic) {
-    display: inline-flex;
-    flex-direction: row;
-    align-items: baseline;
-    flex-wrap: nowrap;
-    gap: 4px;
-  }
-
-  :deep(.el-statistic__head) {
-    display: none;
-  }
-
-  :deep(.el-statistic__content) {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--anime-text-secondary);
-  }
-
-  :deep(.el-statistic__number) {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--anime-text-secondary);
-  }
-}
-
-.countdown-prefix {
-  font-size: 12px;
-  color: var(--anime-text-secondary);
-  white-space: pre;
-}
-</style>

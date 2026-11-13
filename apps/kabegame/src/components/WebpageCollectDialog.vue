@@ -1,37 +1,29 @@
 <template>
-  <!-- 桌面 ElDialog / 紧凑布局全宽 AndroidDrawer，共用同一份表单 -->
-  <component :is="uiStore.isCompact ? AndroidDrawer : ElDialog" v-bind="shellProps" @update:model-value="modal.close">
+  <!-- 桌面 Dialog / 紧凑布局全宽 AndroidDrawer，共用同一份表单；层级与 Android 返回栈由外壳自己接 -->
+  <component :is="uiStore.isCompact ? AndroidDrawer : Dialog" v-bind="shellProps">
     <template v-if="uiStore.isCompact" #header>
-      <h3 class="m-0 text-base">{{ $t("gallery.webpageCollectTitle") }}</h3>
+      <h3 class="m-0 text-[17px] font-600 text-kb-fg">{{ $t("gallery.webpageCollectTitle") }}</h3>
     </template>
 
-    <el-form :model="form" label-position="top" class="px-1" @submit.prevent>
-      <el-divider content-position="left">{{ $t("gallery.webpageSectionPage") }}</el-divider>
-      <el-form-item v-if="urlVarDef" :label="varDisplayName(urlVarDef)" required :error="urlErrorText">
-        <el-input
+    <form class="flex flex-col gap-4" :class="uiStore.isCompact ? 'py-4' : ''" @submit.prevent>
+      <SectionTitle>{{ $t("gallery.webpageSectionPage") }}</SectionTitle>
+      <Field v-if="urlVarDef" :label="varDisplayName(urlVarDef)" required :error="urlErrorText">
+        <Input
+          ref="urlInputRef"
           v-model="form.url"
           :placeholder="varDescripts(urlVarDef) || 'https://'"
           clearable
-          @input="urlError = null"
+          @update:model-value="urlError = null"
           @keyup.enter="handleSubmit"
         />
-      </el-form-item>
+      </Field>
       <PluginVarsForm v-model="form.vars" :plugin-vars="visibleVarDefs" />
 
-      <el-divider content-position="left">{{ $t("gallery.webpageSectionSaveTo") }}</el-divider>
-      <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
-        <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
-          <template #append>
-            <el-button @click="selectOutputDir">
-              <el-icon>
-                <FolderOpened />
-              </el-icon>
-              {{ $t("common.chooseFolder") }}
-            </el-button>
-          </template>
-        </el-input>
-      </el-form-item>
-      <el-form-item :label="$t('albums.outputAlbum')">
+      <SectionTitle class="mt-1">{{ $t("gallery.webpageSectionSaveTo") }}</SectionTitle>
+      <Field v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
+        <OutputDirSelect v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" />
+      </Field>
+      <Field :label="$t('albums.outputAlbum')">
         <AlbumPicker
           v-model="selectedOutputAlbumId"
           :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
@@ -41,73 +33,77 @@
           :picker-title="$t('albums.outputAlbum')"
           clearable
         />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
-          v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')"
-          maxlength="50"
-          show-word-limit
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+      </Field>
+      <Field v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
+        <Input v-model="newOutputAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50">
+          <template #suffix>
+            <span class="text-[11.5px] tabular-nums">{{ newOutputAlbumName.length }}/50</span>
+          </template>
+        </Input>
+      </Field>
+      <Field v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
         <AlbumPicker
           v-model="newOutputAlbumParentId"
           :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')"
         />
-      </el-form-item>
-      <el-form-item :label="$t('plugins.dryRun')">
-        <div class="flex items-center gap-2">
-          <el-switch v-model="isDryRun" />
-          <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
-        </div>
-      </el-form-item>
-      <el-form-item :label="$t('plugins.retryOnFail')">
-        <RetryCountField v-model="retryCount" />
-      </el-form-item>
+      </Field>
+      <div class="flex flex-wrap gap-x-6 gap-y-4">
+        <Field class="min-w-56 flex-1" :label="$t('plugins.dryRun')">
+          <label class="flex min-h-8 cursor-pointer items-center gap-2.5">
+            <Switch v-model="isDryRun" />
+            <span class="text-[12.5px] text-kb-fg-muted">{{ $t("plugins.dryRunDesc") }}</span>
+          </label>
+        </Field>
+        <Field class="min-w-56 flex-1" :label="$t('plugins.retryOnFail')">
+          <div class="flex min-h-8 items-center">
+            <RetryCountField v-model="retryCount" />
+          </div>
+        </Field>
+      </div>
 
       <!-- Header 只对 V8 后端生效；WebView 的身份只来自浏览器会话 -->
       <template v-if="isV8">
-        <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
-        <el-form-item :label="$t('plugins.httpHeaders')">
+        <SectionTitle class="mt-1">{{ $t("plugins.advancedSettings") }}</SectionTitle>
+        <Field :label="$t('plugins.httpHeaders')" :description="$t('gallery.webpageHeadersHint')">
           <HttpHeadersEditor v-model="headers" :show-hint="false" />
-          <div class="mt-1 text-xs leading-normal text-[var(--anime-text-secondary)]">
-            {{ $t("gallery.webpageHeadersHint") }}
-          </div>
-        </el-form-item>
+        </Field>
       </template>
 
-      <div v-if="uiStore.isCompact" class="flex justify-end gap-3 pt-2">
-        <el-button type="primary" class="w-full" :loading="submitting" @click="handleSubmit">
-          {{ $t("gallery.startCollect") }}
-        </el-button>
-      </div>
-    </el-form>
+      <Button
+        v-if="uiStore.isCompact"
+        variant="primary"
+        class="mt-2 w-full"
+        :disabled="submitting"
+        @click="handleSubmit"
+      >
+        <Spinner v-if="submitting" :size="14" />
+        {{ $t("gallery.startCollect") }}
+      </Button>
+    </form>
 
     <template v-if="!uiStore.isCompact" #footer>
-      <div class="flex justify-end gap-3">
-        <el-button @click="modal.close()">{{ $t("common.cancel") }}</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
-          {{ $t("gallery.startCollect") }}
-        </el-button>
-      </div>
+      <Button @click="open = false">{{ $t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="submitting" @click="handleSubmit">
+        <Spinner v-if="submitting" :size="14" />
+        {{ $t("gallery.startCollect") }}
+      </Button>
     </template>
   </component>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
-import { ElDialog } from "@kabegame/element-plus";
-import { FolderOpened } from "@kabegame/element-plus-icons";
 import AndroidDrawer from "@/components/AndroidDrawer.vue";
+import { Button, Dialog, Field, Input, Spinner, Switch, useForm } from "@/components/ui";
+import OutputDirSelect from "@/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import RetryCountField from "@/components/crawler/RetryCountField.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
-import { useModal } from "@/composables/useModal";
+import SectionTitle from "@/components/ui/SectionTitle.vue";
 import { useUiStore } from "@/stores/ui";
 import { IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
@@ -118,9 +114,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { WEBPAGE_PLUGIN_ID } from "@/stores/plugins";
 import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
 import { enqueueTask } from "@/composables/useCrawlTaskLauncher";
-import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { validateWebpageUrl, type WebpageUrlError } from "@/utils/webpageCollect";
-import { open } from "@tauri-apps/plugin-dialog";
 import type { WebpageCollectInitialConfig } from "@/stores/collectDialogs";
 
 const props = defineProps<{
@@ -134,18 +128,27 @@ const { varDisplayName, varDescripts } = usePluginConfigI18n();
 const uiStore = useUiStore();
 const pluginStore = usePluginStore();
 
-const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+const open = computed({
+  get: () => props.modelValue,
+  set: (v: boolean) => emit("update:modelValue", v),
+});
 
+/** 插件变量（PluginVarsForm 里的 Field）注册进这个表单，提交时一起校验必填等 */
+const formApi = useForm();
+
+// AndroidDrawer 不传 z-index：由它自己占栈位（层级与 Android 返回键）；Dialog 自己取号、接返回栈
 const shellProps = computed(() =>
   uiStore.isCompact
-    ? { modelValue: modal.isOpen.value, zIndex: modal.zIndex.value, showCloseButton: true }
+    ? {
+        modelValue: open.value,
+        showCloseButton: true,
+        "onUpdate:modelValue": (v: boolean) => (open.value = v),
+      }
     : {
-        modelValue: modal.isOpen.value,
-        zIndex: modal.zIndex.value,
+        open: open.value,
         title: t("gallery.webpageCollectTitle"),
-        width: "600px",
-        alignCenter: true,
-        showClose: true,
+        width: 600,
+        "onUpdate:open": (v: boolean) => (open.value = v),
       },
 );
 
@@ -163,6 +166,7 @@ const form = ref({ url: "", outputDir: "", vars: {} as Record<string, any> });
 /** Host Header 草稿：本次打开期间切到 WebView 再切回仍保留，但 WebView 提交时强制为空 */
 const headers = ref<Record<string, string>>({});
 const urlError = ref<WebpageUrlError | null>(null);
+const urlInputRef = ref<InstanceType<typeof Input> | null>(null);
 const submitting = ref(false);
 const isDryRun = ref(false);
 const retryCount = ref(0);
@@ -212,23 +216,12 @@ watch(
         isDryRun.value = props.initialConfig.isDryRun ?? false;
         retryCount.value = props.initialConfig.retryCount ?? 0;
       }
-      modal.open();
-    } else {
-      modal.close();
+      // 重置草稿会让各字段的校验结果变化、被记成「改过」；等这一轮 watcher 跑完再清，免得一打开就标红
+      void nextTick(() => formApi.reset());
     }
   },
   { immediate: true },
 );
-
-async function selectOutputDir() {
-  if (await guardDesktopOnly("openLocal")) return;
-  try {
-    const selected = await open({ directory: true, multiple: false });
-    if (selected && typeof selected === "string") form.value.outputDir = selected;
-  } catch (error) {
-    console.error("选择目录失败:", error);
-  }
-}
 
 /** 现场创建画册；失败返回 null（不创建任务） */
 async function resolveOutputAlbumId(): Promise<string | undefined | null> {
@@ -252,10 +245,15 @@ async function resolveOutputAlbumId(): Promise<string | undefined | null> {
 async function handleSubmit() {
   if (submitting.value) return;
   const checked = validateWebpageUrl(form.value.url);
+  urlError.value = checked.ok ? null : checked.error;
+  // 地址与插件变量一起检查，两边的错误同时显示
+  const varsOk = formApi.validate();
+  // 地址错了就把焦点送回地址框并滚回去：它在最上面，从底部按钮提交时可能不在视野里（已聚焦时 focus 不滚动）
   if (!checked.ok) {
-    urlError.value = checked.error;
-    return;
+    urlInputRef.value?.focus?.();
+    (urlInputRef.value?.$el as HTMLElement | undefined)?.scrollIntoView?.({ block: "center" });
   }
+  if (!checked.ok || !varsOk) return;
   submitting.value = true;
   try {
     const outputAlbumId = await resolveOutputAlbumId();
@@ -301,7 +299,7 @@ async function handleSubmit() {
       });
     }
     kameMessage.success(t("gallery.webpageTaskAdded"));
-    modal.close();
+    open.value = false;
   } finally {
     submitting.value = false;
   }

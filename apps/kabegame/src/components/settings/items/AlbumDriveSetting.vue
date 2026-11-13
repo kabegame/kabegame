@@ -1,19 +1,17 @@
 <template>
   <SettingRow :label="$t('settings.albumDrive')" :description="$t('settings.albumDriveDesc')">
-    <el-switch
+    <Switch
       v-model="enabled"
-      :loading="showEnabledLoading"
-      :disabled="enabledDisabled"
-      @change="(v) => handleToggle(v === true)"
+      :disabled="enabledDisabled || showEnabledLoading"
+      @update:model-value="(v) => handleToggle(v === true)"
     />
   </SettingRow>
 
   <!-- 挂载点是独立一项：盘已挂载时不能改，必须先关掉画册盘 -->
   <SettingRow :label="$t('settings.albumDriveMountPoint')" :description="$t('settings.albumDriveMountPointDesc')">
-    <el-input
+    <Input
       v-model="mountPoint"
-      class="mount-point-input"
-      size="default"
+      class="!w-[220px]"
       :disabled="enabled || showEnabledLoading || showMountPointLoading"
       :placeholder="$t('settings.albumDriveMountPointPlaceholder')"
       @blur="handleMountPointBlur"
@@ -31,6 +29,8 @@ import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@/env";
 import { useSettingsStore } from "@/stores/settings";
 import SettingRow from "@/components/settings/SettingRow.vue";
 import { messageBox } from "@/components/ui/messageBox";
+import Input from "@/components/ui/Input.vue";
+import Switch from "@/components/ui/Switch.vue";
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
@@ -170,9 +170,3 @@ const handleToggle = async (val: boolean) => {
   }
 };
 </script>
-
-<style scoped>
-.mount-point-input {
-  width: 220px;
-}
-</style>

@@ -1,23 +1,39 @@
 <template>
-  <DragFileZone class="var-path" :plan="planDrop" :on-drop="onDropPath">
+  <DragFileZone class="flex w-full flex-col gap-2" :plan="planDrop" :on-drop="onDropPath">
     <KbSegmentedControl
       v-if="type === 'file_or_folder' || type === 'path'"
-      class="var-path__mode"
+      class="self-start"
       :model-value="pickMode"
       :options="modeOptions"
       @update:model-value="(v) => (pickMode = v as 'file' | 'folder')"
     />
 
-    <div v-if="valueForInput" class="var-path__row">
-      <div class="var-path__box">
-        <span class="var-path__text" :title="valueForInput">{{ valueForInput }}</span>
-        <span v-if="allowUnset" class="var-path__clear" @click="emitUpdate('')">×</span>
+    <div v-if="valueForInput" class="flex min-w-0 items-center gap-2">
+      <div class="kb-control h-8 min-w-0 flex-1 gap-1.5 px-2.5">
+        <!-- rtl：路径太长时截掉开头、保留文件名 -->
+        <span class="min-w-0 flex-1 truncate text-left font-mono text-[12.5px] [direction:rtl]" :title="valueForInput">
+          {{ valueForInput }}
+        </span>
+        <button
+          v-if="allowUnset"
+          type="button"
+          class="grid size-5 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent p-0 text-kb-fg-subtle hover:bg-kb-hover hover:text-kb-fg-muted"
+          :aria-label="t('common.clear')"
+          @click="emitUpdate('')"
+        >
+          <X class="size-3.5" />
+        </button>
       </div>
-      <button type="button" class="var-path__btn" @click="pick">{{ t("import.pathChange") }}</button>
+      <Button variant="outline" size="md" @click="pick">{{ t("import.pathChange") }}</Button>
     </div>
 
-    <button v-else type="button" class="var-path__drop" @click="pick">
-      <el-icon><FolderOpened /></el-icon>
+    <button
+      v-else
+      type="button"
+      class="box-border flex h-15 w-full cursor-pointer items-center justify-center gap-1.5 rounded-kb-md border border-dashed border-kb-line-strong bg-transparent text-[12.5px] text-kb-fg-muted [font:inherit] outline-none transition-colors duration-150 hover:border-kb-fg-subtle hover:bg-kb-hover hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring"
+      @click="pick"
+    >
+      <FolderOpen class="size-4" />
       <span>{{ dropText }}</span>
     </button>
   </DragFileZone>
@@ -25,10 +41,11 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { FolderOpened } from "@kabegame/element-plus-icons";
+import { FolderOpen, X } from "@lucide/vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "@kabegame/i18n";
 import DragFileZone from "@/components/common/DragFileZone.vue";
+import Button from "@/components/ui/Button.vue";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import type { DragFileItem, DragFilePlan } from "@/utils/dragFileZones";
 import KbSegmentedControl from "./KbSegmentedControl.vue";
@@ -154,107 +171,3 @@ async function pick() {
   return await pickFile();
 }
 </script>
-
-<style scoped>
-.var-path {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-}
-
-.var-path__mode {
-  align-self: flex-start;
-}
-
-.var-path__row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.var-path__box {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  min-width: 0;
-  padding: 0 11px;
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.var-path__text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
-  font:
-    500 12.5px/1 ui-monospace,
-    "SFMono-Regular",
-    Menlo,
-    Consolas,
-    monospace;
-  color: var(--anime-text-primary);
-}
-
-.var-path__clear {
-  flex: none;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background: rgba(255, 107, 157, 0.12);
-  color: var(--anime-primary-dark);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 17px;
-  text-align: center;
-  cursor: pointer;
-}
-
-.var-path__btn {
-  appearance: none;
-  flex: none;
-  height: 24px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 9px;
-  margin: 0;
-  background: rgba(255, 107, 157, 0.08);
-  color: var(--anime-text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-}
-.var-path__btn:hover {
-  background: rgba(255, 107, 157, 0.16);
-}
-
-.var-path__drop {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 62px;
-  border: 1px dashed var(--anime-secondary);
-  border-radius: 13px;
-  margin: 0;
-  background: rgba(255, 107, 157, 0.04);
-  color: var(--anime-text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12.5px;
-}
-.var-path__drop:hover {
-  border-color: var(--anime-primary);
-  color: var(--anime-primary-dark);
-}
-</style>

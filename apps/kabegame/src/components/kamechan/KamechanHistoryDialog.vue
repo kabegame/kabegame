@@ -1,43 +1,43 @@
 <template>
-  <el-dialog
-    :model-value="open"
-    :z-index="zIndex"
-    :title="t('kamechan.historyTitle')"
-    width="640px"
-    :append-to-body="true"
-    class="kamechan-history-dialog"
-    @update:model-value="$event || emit('close')"
-  >
-    <div class="kamechan-history-list kb-selectable">
-      <div v-if="messages.length === 0" class="kamechan-history-empty">
+  <Dialog v-model:open="open" :title="t('kamechan.historyTitle')" :width="640">
+    <div class="kb-selectable flex max-h-[420px] flex-col gap-2 overflow-y-auto">
+      <div v-if="messages.length === 0" class="py-6 text-center text-[13px] text-kb-fg-muted">
         {{ t("kamechan.historyEmpty") }}
       </div>
-      <div v-for="message in messages" :key="message.id" class="kamechan-history-entry" :class="`is-${message.type}`">
-        <div class="kamechan-history-main">
-          <el-tag :type="tagType(message.type)" size="small">{{ message.type }}</el-tag>
-          <span class="kamechan-history-text">{{ message.text }}</span>
+      <div
+        v-for="message in messages"
+        :key="message.id"
+        class="box-border flex flex-col gap-1 rounded-kb-md border border-solid border-kb-line px-2.5 py-2 text-[12px]"
+        :class="entryClass(message.type)"
+      >
+        <div class="flex min-w-0 items-baseline gap-2">
+          <Tag :tone="tagTone(message.type)" size="sm">{{ message.type }}</Tag>
+          <!-- 用 v-text：pre-wrap 下模板里换行缩进会变成首尾空格 -->
+          <span class="min-w-0 flex-1 whitespace-pre-wrap break-words leading-[1.5] text-kb-fg" v-text="message.text" />
         </div>
-        <div class="kamechan-history-time-row">
-          <span class="kamechan-history-time">{{ formatLogTime(message.time) }}</span>
+        <div class="flex justify-end">
+          <span class="text-[11px] text-kb-fg-subtle">{{ formatLogTime(message.time) }}</span>
         </div>
       </div>
     </div>
     <template #footer>
-      <el-button :disabled="messages.length === 0" @click="store.clearHistory()">
+      <Button :disabled="messages.length === 0" @click="store.clearHistory()">
         {{ t("kamechan.historyClear") }}
-      </el-button>
+      </Button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
+import Button from "@/components/ui/Button.vue";
+import Dialog from "@/components/ui/Dialog.vue";
+import Tag from "@/components/ui/Tag.vue";
 import { useKameMessageStore, type KameMessageType } from "@/stores/kameMessage";
 
-defineProps<{ open: boolean; zIndex: number }>();
-const emit = defineEmits<{ close: [] }>();
+const open = defineModel<boolean>("open", { default: false });
 
 const { t, locale } = useI18n();
 const store = useKameMessageStore();
@@ -55,67 +55,16 @@ const formatLogTime = (timestamp: number) => {
   return new Date(Number(timestamp || 0)).toLocaleString(toLocaleTag(loc));
 };
 
-const tagType = (type: KameMessageType): "info" | "warning" | "danger" | "success" => {
+const tagTone = (type: KameMessageType): "neutral" | "warning" | "danger" | "success" => {
   if (type === "error") return "danger";
+  if (type === "info") return "neutral";
   return type;
 };
+
+/** 警告 / 错误条目铺一层淡底（同任务日志） */
+const entryClass = (type: KameMessageType) => {
+  if (type === "error") return "bg-[color-mix(in_srgb,var(--kb-danger)_6%,transparent)]";
+  if (type === "warning") return "bg-[color-mix(in_srgb,var(--kb-warning)_8%,transparent)]";
+  return "";
+};
 </script>
-
-<style scoped lang="scss">
-.kamechan-history-list {
-  max-height: 420px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.kamechan-history-empty {
-  text-align: center;
-  color: var(--anime-text-secondary);
-  padding: 24px 0;
-}
-
-.kamechan-history-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border: 1px solid var(--anime-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 12px;
-}
-
-.kamechan-history-main {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.kamechan-history-text {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-  line-height: 1.5;
-  white-space: pre-wrap;
-}
-
-.kamechan-history-time-row {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.kamechan-history-time {
-  color: var(--anime-text-secondary);
-  font-size: 11px;
-}
-
-.kamechan-history-entry.is-warning {
-  background: rgba(245, 158, 11, 0.08);
-}
-
-.kamechan-history-entry.is-error {
-  background: rgba(239, 68, 68, 0.08);
-}
-</style>

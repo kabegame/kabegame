@@ -5,7 +5,7 @@ const pathqlFetch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlEntry: vi.fn() }));
 vi.mock("@/api/rpc", () => ({ invoke: vi.fn() }));
 vi.mock("@/stores/settings", () => ({ useSettingsStore: vi.fn() }));
-vi.mock("@kabegame/element-plus", () => ({ ElMessageBox: {} }));
+vi.mock("@/components/ui/messageBox", () => ({ messageBox: {} }));
 vi.mock("@kabegame/i18n", () => ({ i18n: {} }));
 
 describe("画册页查询描述", () => {

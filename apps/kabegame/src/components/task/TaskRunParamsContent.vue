@@ -1,160 +1,141 @@
 <template>
-  <div class="task-run-params">
-    <el-descriptions
-      :title="t('tasks.taskRunParamsSectionPlugin')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item :label="t('tasks.taskRunParamsColSource')" :span="2">
-        <div class="plugin-source-cell">
-          <div class="plugin-icon-box" aria-hidden="true">
-            <el-image v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" fit="contain" class="plugin-icon-img" />
-            <el-icon v-else class="plugin-icon-fallback">
-              <Grid />
-            </el-icon>
-          </div>
-          <span class="plugin-name-text">{{ getPluginName(task.pluginId) }}</span>
+  <div class="flex flex-col gap-4 pb-1">
+    <section>
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionPlugin") }}</h4>
+      <!-- 来源只有一行，不套键值列表：标签与图标基线对不齐 -->
+      <div :class="SECTION_BOX" class="flex min-w-0 items-center gap-3">
+        <div
+          class="grid size-11 shrink-0 place-items-center overflow-hidden rounded-kb-md border border-solid border-kb-line bg-kb-fill-light text-kb-fg-subtle [&_svg]:size-5"
+          aria-hidden="true"
+        >
+          <img v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" alt="" class="size-full object-contain" />
+          <LayoutGrid v-else />
         </div>
-      </el-descriptions-item>
-    </el-descriptions>
+        <span class="min-w-0 break-words text-[14px] font-600 text-kb-fg">{{ getPluginName(task.pluginId) }}</span>
+      </div>
+    </section>
 
-    <el-descriptions
-      v-if="showTimeSection"
-      :title="t('tasks.taskRunParamsSectionTime')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item v-if="hasStartTime" :label="t('tasks.taskRunParamsColStartTime')">
-        <span class="cell-with-icon">
-          <el-icon class="cell-icon">
-            <Clock />
-          </el-icon>
-          {{ formatDate(task.startTime!) }}
-        </span>
-      </el-descriptions-item>
-      <el-descriptions-item :label="t('tasks.taskRunParamsColEndTime')">
-        <span v-if="task.endTime" class="cell-with-icon">
-          <el-icon class="cell-icon">
-            <Clock />
-          </el-icon>
-          {{ formatDate(task.endTime) }}
-        </span>
-        <span v-else-if="hasStartTime">{{ t("tasks.drawerParamInProgress") }}</span>
-        <span v-else class="text-muted">—</span>
-      </el-descriptions-item>
-      <el-descriptions-item v-if="hasStartTime" :label="t('tasks.taskRunParamsColDuration')" :span="2">
-        {{ formatDuration(task.startTime!, task.endTime != null ? task.endTime : undefined) }}
-      </el-descriptions-item>
-    </el-descriptions>
+    <section v-if="showTimeSection">
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionTime") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList>
+          <DescriptionItem v-if="hasStartTime" :label="t('tasks.taskRunParamsColStartTime')">
+            <span :class="WITH_ICON">
+              <Clock />
+              {{ formatDate(task.startTime!) }}
+            </span>
+          </DescriptionItem>
+          <DescriptionItem :label="t('tasks.taskRunParamsColEndTime')">
+            <span v-if="task.endTime" :class="WITH_ICON">
+              <Clock />
+              {{ formatDate(task.endTime) }}
+            </span>
+            <span v-else-if="hasStartTime">{{ t("tasks.drawerParamInProgress") }}</span>
+            <span v-else class="text-kb-fg-subtle">—</span>
+          </DescriptionItem>
+          <DescriptionItem v-if="hasStartTime" :label="t('tasks.taskRunParamsColDuration')">
+            {{ formatDuration(task.startTime!, task.endTime != null ? task.endTime : undefined) }}
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
 
-    <el-descriptions
-      v-if="showStatsSection"
-      :title="t('tasks.taskRunParamsSectionStats')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item v-if="(task.deletedCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDeleted')">
-        {{ t("tasks.drawerDeletedCount", { n: task.deletedCount ?? 0 }) }}
-      </el-descriptions-item>
-      <el-descriptions-item v-if="task.isDryRun" :label="t('tasks.taskRunParamsColDryRunSkipped')">
-        {{ t("tasks.drawerDryRunSkippedCount", { n: task.dedupCount ?? 0 }) }}
-      </el-descriptions-item>
-      <el-descriptions-item v-else-if="(task.dedupCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDedup')">
-        {{ t("tasks.drawerDedupCount", { n: task.dedupCount ?? 0 }) }}
-      </el-descriptions-item>
-    </el-descriptions>
+    <section v-if="showStatsSection">
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionStats") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList :columns="2" label-width="88px">
+          <DescriptionItem v-if="(task.deletedCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDeleted')">
+            {{ t("tasks.drawerDeletedCount", { n: task.deletedCount ?? 0 }) }}
+          </DescriptionItem>
+          <DescriptionItem v-if="task.isDryRun" :label="t('tasks.taskRunParamsColDryRunSkipped')">
+            {{ t("tasks.drawerDryRunSkippedCount", { n: task.dedupCount ?? 0 }) }}
+          </DescriptionItem>
+          <DescriptionItem v-else-if="(task.dedupCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDedup')">
+            {{ t("tasks.drawerDedupCount", { n: task.dedupCount ?? 0 }) }}
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
 
-    <el-descriptions
-      v-if="task.outputDir || task.maxConcurrentDownloads !== undefined || task.isDryRun !== undefined"
-      :title="t('tasks.taskRunParamsSectionOutput')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item v-if="task.outputDir" :label="t('tasks.taskRunParamsColOutputDir')" :span="2">
-        <span class="break-all">{{ task.outputDir }}</span>
-      </el-descriptions-item>
-      <el-descriptions-item :label="t('tasks.taskRunParamsColMaxConcurrentDownloads')" :span="2">
-        {{ task.maxConcurrentDownloads == null ? t("tasks.taskRunParamsFollowGlobal") : task.maxConcurrentDownloads }}
-      </el-descriptions-item>
-      <el-descriptions-item :label="t('tasks.taskRunParamsColDryRun')" :span="2">
-        {{ task.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
-      </el-descriptions-item>
-      <el-descriptions-item :label="t('tasks.taskRunParamsColRetry')" :span="2">
-        {{ retryCountN > 0 ? t("tasks.taskRunParamsRetryTimes", { n: retryCountN }) : t("autoConfig.disabled") }}
-        <template v-if="retryAttemptN > 0">
-          · {{ t("tasks.taskRunParamsRetryAttempt", { k: retryAttemptN, n: retryCountN }) }}
-        </template>
-      </el-descriptions-item>
-      <el-descriptions-item
-        v-if="retryAttemptN > 0 && task.retryRootId"
-        :label="t('tasks.taskRunParamsColRetryRoot')"
-        :span="2"
-      >
-        <el-button link type="primary" size="small" class="!h-auto" @click="emit('open-task', task.retryRootId)">
-          <span class="break-all text-left">{{ task.retryRootId }}</span>
-        </el-button>
-      </el-descriptions-item>
-    </el-descriptions>
-
-    <el-descriptions
-      v-if="visibleConfigEntries.length > 0"
-      :title="t('tasks.taskRunParamsSectionConfig')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item
-        v-for="[key, value] in visibleConfigEntries"
-        :key="key"
-        :label="getVarDisplayName(task.pluginId, String(key))"
-        :span="2"
-      >
-        <span class="break-all">{{ formatConfigValue(task.pluginId, String(key), value) }}</span>
-      </el-descriptions-item>
-    </el-descriptions>
-
-    <el-descriptions
-      v-if="task.status === 'failed'"
-      :title="t('tasks.taskRunParamsSectionError')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block params-desc-block--error"
-    >
-      <el-descriptions-item :label="t('tasks.taskRunParamsColErrorDetail')" :span="2">
-        <div class="error-detail-cell">
-          <div v-if="(task.progress ?? 0) > 0" class="error-progress">
-            <el-progress :percentage="Math.round(Number(task.progress ?? 0))" status="exception" />
-          </div>
-          <div class="error-message-row">
-            <el-icon class="error-icon">
-              <WarningFilled />
-            </el-icon>
-            <span class="error-text">{{ task.error || t("tasks.drawerExecFailed") }}</span>
-            <el-button
-              text
-              size="small"
-              class="copy-error-btn"
-              :title="t('tasks.drawerCopyErrorTooltip')"
-              @click="handleCopyError(task)"
+    <section v-if="task.outputDir || task.maxConcurrentDownloads !== undefined || task.isDryRun !== undefined">
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionOutput") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList>
+          <DescriptionItem v-if="task.outputDir" :label="t('tasks.taskRunParamsColOutputDir')">
+            <span class="kb-selectable whitespace-pre-wrap break-words">{{ task.outputDir }}</span>
+          </DescriptionItem>
+          <DescriptionItem :label="t('tasks.taskRunParamsColMaxConcurrentDownloads')">
+            {{
+              task.maxConcurrentDownloads == null ? t("tasks.taskRunParamsFollowGlobal") : task.maxConcurrentDownloads
+            }}
+          </DescriptionItem>
+          <DescriptionItem :label="t('tasks.taskRunParamsColDryRun')">
+            {{ task.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
+          </DescriptionItem>
+          <DescriptionItem :label="t('tasks.taskRunParamsColRetry')">
+            {{ retryCountN > 0 ? t("tasks.taskRunParamsRetryTimes", { n: retryCountN }) : t("autoConfig.disabled") }}
+            <template v-if="retryAttemptN > 0">
+              · {{ t("tasks.taskRunParamsRetryAttempt", { k: retryAttemptN, n: retryCountN }) }}
+            </template>
+          </DescriptionItem>
+          <DescriptionItem v-if="retryAttemptN > 0 && task.retryRootId" :label="t('tasks.taskRunParamsColRetryRoot')">
+            <button
+              type="button"
+              class="cursor-pointer break-all rounded-kb-sm border-0 bg-transparent p-0 text-left text-kb-accent outline-none [font:inherit] hover:underline focus-visible:ring-2 focus-visible:ring-kb-ring"
+              @click="emit('open-task', task.retryRootId)"
             >
-              <el-icon>
-                <CopyDocument />
-              </el-icon>
-            </el-button>
-          </div>
+              {{ task.retryRootId }}
+            </button>
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
+
+    <section v-if="visibleConfigEntries.length > 0">
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionConfig") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList>
+          <DescriptionItem
+            v-for="[key, value] in visibleConfigEntries"
+            :key="key"
+            :label="getVarDisplayName(task.pluginId, String(key))"
+          >
+            <span class="kb-selectable whitespace-pre-wrap break-words">
+              {{ formatConfigValue(task.pluginId, String(key), value) }}
+            </span>
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
+
+    <section v-if="task.status === 'failed'">
+      <h4 :class="ERROR_TITLE">{{ t("tasks.taskRunParamsSectionError") }}</h4>
+      <div
+        class="box-border rounded-kb-md border border-solid border-[color-mix(in_srgb,var(--kb-danger)_24%,transparent)] bg-[color-mix(in_srgb,var(--kb-danger)_5%,transparent)] px-3 py-2.5"
+      >
+        <div v-if="(task.progress ?? 0) > 0" class="mb-2.5 flex items-center gap-2">
+          <Progress :value="Math.round(Number(task.progress ?? 0))" tone="danger" :height="6" />
+          <span class="shrink-0 text-[12px] tabular-nums text-kb-fg-muted">
+            {{ Math.round(Number(task.progress ?? 0)) }}%
+          </span>
         </div>
-      </el-descriptions-item>
-    </el-descriptions>
+        <div class="flex items-start gap-2 text-kb-fg">
+          <CircleAlert class="mt-0.5 size-4 shrink-0 text-kb-danger" />
+          <span class="kb-selectable min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-[1.5]">
+            {{ task.error || t("tasks.drawerExecFailed") }}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            :title="t('tasks.drawerCopyErrorTooltip')"
+            :aria-label="t('tasks.drawerCopyErrorTooltip')"
+            @click="handleCopyError(task)"
+          >
+            <Copy />
+          </Button>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -162,7 +143,11 @@
 import { computed } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { kameMessage } from "@/utils/kameMessage";
-import { Clock, CopyDocument, Grid, WarningFilled } from "@kabegame/element-plus-icons";
+import { CircleAlert, Clock, Copy, LayoutGrid } from "@lucide/vue";
+import Button from "@/components/ui/Button.vue";
+import DescriptionItem from "@/components/ui/DescriptionItem.vue";
+import DescriptionList from "@/components/ui/DescriptionList.vue";
+import Progress from "@/components/ui/Progress.vue";
 import { buildVarMetaMapFromPluginConfig, usePluginStore } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
 import type { PluginVarDef } from "../../utils/pluginVarForm";
@@ -202,6 +187,11 @@ const emit = defineEmits<{
 }>();
 
 const { t, locale } = useI18n();
+
+const SECTION_TITLE = "m-0 mb-1.5 text-[12.5px] font-600 text-kb-fg-muted";
+const ERROR_TITLE = "m-0 mb-1.5 text-[12.5px] font-600 text-kb-danger";
+const SECTION_BOX = "box-border rounded-kb-md border border-solid border-kb-line px-3 py-2.5";
+const WITH_ICON = "inline-flex items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-kb-fg-subtle";
 
 const retryCountN = computed(() => Number(props.task.retryCount ?? 0));
 const retryAttemptN = computed(() => Number(props.task.retryAttempt ?? 0));
@@ -337,137 +327,3 @@ async function handleCopyError(task: TaskRunParamsTask) {
   }
 }
 </script>
-
-<style scoped lang="scss">
-.task-run-params {
-  max-height: min(72vh, 600px);
-  overflow-y: auto;
-  padding: 2px 0 4px;
-}
-
-.params-desc-block {
-  margin-bottom: 14px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
-}
-
-.plugin-source-cell {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.plugin-icon-box {
-  flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--el-fill-color-light, var(--anime-bg-secondary, #f5f7fa));
-  border: 1px solid var(--el-border-color-lighter, var(--anime-border));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.plugin-icon-img {
-  width: 100%;
-  height: 100%;
-}
-
-.plugin-icon-fallback {
-  font-size: 22px;
-  color: var(--el-text-color-secondary, var(--anime-text-muted));
-}
-
-.plugin-name-text {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--anime-text-primary, var(--el-text-color-primary));
-  word-break: break-word;
-  min-width: 0;
-}
-
-.cell-with-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.cell-icon {
-  flex-shrink: 0;
-  color: var(--el-text-color-secondary);
-}
-
-.text-muted {
-  color: var(--el-text-color-placeholder);
-}
-
-.break-all {
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-.params-desc-block--error {
-  :deep(.el-descriptions__header) {
-    margin-bottom: 10px;
-  }
-
-  :deep(.el-descriptions__title) {
-    color: var(--el-color-danger);
-    font-weight: 600;
-  }
-}
-
-.error-detail-cell {
-  min-width: 0;
-}
-
-.error-progress {
-  margin-bottom: 10px;
-}
-
-.error-message-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--anime-text-primary, var(--el-text-color-primary));
-}
-
-.error-icon {
-  color: var(--el-color-danger);
-  font-size: 18px;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.error-text {
-  flex: 1;
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-.copy-error-btn {
-  flex-shrink: 0;
-  color: var(--el-text-color-secondary);
-
-  &:hover {
-    color: var(--anime-primary, var(--el-color-primary));
-  }
-}
-
-:deep(.params-desc-block .el-descriptions__label) {
-  width: 112px;
-  font-weight: 500;
-  color: var(--anime-text-secondary, var(--el-text-color-secondary));
-}
-
-:deep(.params-desc-block .el-descriptions__content) {
-  color: var(--anime-text-primary, var(--el-text-color-primary));
-}
-</style>

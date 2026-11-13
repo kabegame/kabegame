@@ -14,7 +14,7 @@
         </template>
         <!-- 选中 provider 的 note 摘要卡（设计稿左栏底部） -->
         <template v-if="selectedSummaryNote" #footer>
-          <div class="kb-card mt-2.5 py-2.5 px-3 text-13px leading-[1.7] text-[var(--anime-text-muted)]">
+          <div class="kb-card mt-2.5 py-2.5 px-3 text-13px leading-[1.7] text-kb-fg-muted">
             {{ selectedSummaryNote }}
           </div>
         </template>
@@ -22,69 +22,47 @@
     </KbResizable>
 
     <div class="flex-1 min-w-0 min-h-0 overflow-y-auto [scrollbar-width:none]">
-      <el-empty
-        v-if="!loading && !summaries.length"
-        :description="t('plugins.detail.noProviders')"
-        :image-size="80"
-        class="mt-10"
-      />
+      <Empty v-if="!loading && !summaries.length" class="mt-6" :title="t('plugins.detail.noProviders')">
+        <template #icon><Route /></template>
+      </Empty>
       <div v-else-if="detail" class="flex flex-col h-full min-h-0">
         <div class="flex items-center gap-2.5 py-3 px-5.5">
-          <div class="font-800 text-15px">{{ detail.name }}</div>
-          <span class="kb-chip bg-[#ecf5ff] text-[#409eff]">json5</span>
+          <div class="text-[15px] font-600 text-kb-fg">{{ detail.name }}</div>
+          <Tag size="sm" class="font-mono">json5</Tag>
           <div class="flex-1" />
-          <div class="inline-flex items-center gap-0.5 p-0.75 rounded-14px bg-[var(--anime-bg-sidebar)]">
-            <button
-              type="button"
-              class="w-7.5 h-6.5 border-none rounded-11px flex items-center justify-center cursor-pointer"
-              :class="viewMode === 'pretty' ? 'kb-grad text-white' : 'bg-transparent text-[var(--anime-text-primary)]'"
-              :title="t('plugins.detail.viewPretty')"
-              @click="viewMode = 'pretty'"
-            >
-              <el-icon :size="14"><Tickets /></el-icon>
-            </button>
-            <button
-              type="button"
-              class="w-7.5 h-6.5 border-none rounded-11px flex items-center justify-center cursor-pointer"
-              :class="viewMode === 'source' ? 'kb-grad text-white' : 'bg-transparent text-[var(--anime-text-primary)]'"
-              :title="t('plugins.detail.viewSource')"
-              @click="viewMode = 'source'"
-            >
-              <el-icon :size="14"><Document /></el-icon>
-            </button>
-          </div>
+          <SegmentedControl v-model="viewMode" size="sm" :options="viewModeOptions" />
         </div>
 
         <div class="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] py-4 px-5.5 flex flex-col gap-2.5">
           <template v-if="viewMode === 'pretty'">
             <!-- 概览卡：设计稿是「固定标签列 + 值列」的两列对齐，不是标签值混排 -->
             <div class="kb-card py-3.5 px-4 flex flex-col gap-2.5">
-              <div class="text-13px font-600 text-[var(--anime-text-muted)]">
+              <div class="text-13px font-600 text-kb-fg-muted">
                 {{ t("plugins.detail.providerOverview") }}
               </div>
               <div class="grid gap-x-3 gap-y-2 items-baseline" style="grid-template-columns: 104px minmax(0, 1fr)">
                 <template v-if="noteTitle">
-                  <div class="text-14px text-[var(--anime-text-muted)]">note</div>
+                  <div class="text-14px text-kb-fg-muted">note</div>
                   <div class="text-14px leading-[1.6]">
                     <span class="font-700">{{ noteTitle }}</span>
                     <span v-if="noteContent">· {{ noteContent }}</span>
                   </div>
                 </template>
                 <template v-if="fields.length">
-                  <div class="text-14px text-[var(--anime-text-muted)]">query.fields</div>
+                  <div class="text-14px text-kb-fg-muted">query.fields</div>
                   <div class="flex flex-col gap-1.5 min-w-0">
                     <div v-for="(f, i) in fields" :key="i" class="text-13px font-mono leading-[1.6] break-all">
                       <span class="font-700">{{ f.alias ?? "?" }}</span>
-                      <span class="text-[var(--anime-text-muted)]">←</span>
-                      <span class="text-[var(--anime-text-secondary)]">{{ f.sql }}</span>
-                      <span v-if="f.inNeed" class="text-[var(--anime-text-muted)]">· in_need</span>
+                      <span class="text-kb-fg-muted">←</span>
+                      <span class="text-kb-fg-regular">{{ f.sql }}</span>
+                      <span v-if="f.inNeed" class="text-kb-fg-muted">· in_need</span>
                     </div>
                   </div>
                 </template>
-                <div class="text-14px text-[var(--anime-text-muted)]">{{ t("plugins.detail.providerListLabel") }}</div>
+                <div class="text-14px text-kb-fg-muted">{{ t("plugins.detail.providerListLabel") }}</div>
                 <div class="text-13.5px">{{ t("plugins.detail.providerListBranches", { n: listEntries.length }) }}</div>
               </div>
-              <div v-if="!detail.source" class="text-13px text-[var(--anime-text-muted)] italic">
+              <div v-if="!detail.source" class="text-13px text-kb-fg-muted italic">
                 {{ t("plugins.detail.providerDefaultInjected") }}
               </div>
             </div>
@@ -94,32 +72,32 @@
               <div class="font-700 text-15px font-mono break-all">{{ entry.key }}</div>
               <div class="grid gap-x-3 gap-y-2 items-baseline" style="grid-template-columns: 104px minmax(0, 1fr)">
                 <template v-if="entry.dataVar">
-                  <div class="text-14px text-[var(--anime-text-muted)]">data_var</div>
+                  <div class="text-14px text-kb-fg-muted">data_var</div>
                   <div class="text-14.5px font-mono font-700 break-all">{{ entry.dataVar }}</div>
                 </template>
                 <template v-if="entry.provider">
-                  <div class="text-14px text-[var(--anime-text-muted)]">provider</div>
+                  <div class="text-14px text-kb-fg-muted">provider</div>
                   <div class="text-14.5px font-mono font-700 break-all">{{ entry.provider }}</div>
                 </template>
                 <template v-if="entry.childVar">
-                  <div class="text-14px text-[var(--anime-text-muted)]">child_var</div>
+                  <div class="text-14px text-kb-fg-muted">child_var</div>
                   <div class="text-14.5px font-mono font-700 break-all">{{ entry.childVar }}</div>
                 </template>
                 <template v-if="entry.sql">
-                  <div class="text-14px text-[var(--anime-text-muted)]">sql</div>
+                  <div class="text-14px text-kb-fg-muted">sql</div>
                   <pre
-                    class="m-0 py-2 px-2.5 min-w-0 rounded-8px bg-[color-mix(in_srgb,white_55%,transparent)] border border-solid border-[var(--anime-border)] overflow-x-auto text-12.5px font-mono leading-[1.6] max-h-28"
+                    class="m-0 py-2 px-2.5 min-w-0 rounded-8px bg-kb-fill-lighter border border-solid border-kb-line overflow-x-auto text-12.5px font-mono leading-[1.6] max-h-28"
                     >{{ entry.sql }}</pre>
                 </template>
                 <template v-if="entry.properties">
-                  <div class="text-14px text-[var(--anime-text-muted)]">properties</div>
-                  <div class="text-12.5px font-mono text-[var(--anime-text-secondary)] leading-[1.6] break-all">
+                  <div class="text-14px text-kb-fg-muted">properties</div>
+                  <div class="text-12.5px font-mono text-kb-fg-regular leading-[1.6] break-all">
                     {{ entry.properties }}
                   </div>
                 </template>
                 <template v-if="entry.meta">
-                  <div class="text-14px text-[var(--anime-text-muted)]">meta</div>
-                  <div class="text-12.5px font-mono text-[var(--anime-text-secondary)] leading-[1.6] break-all">
+                  <div class="text-14px text-kb-fg-muted">meta</div>
+                  <div class="text-12.5px font-mono text-kb-fg-regular leading-[1.6] break-all">
                     {{ entry.meta }}
                   </div>
                 </template>
@@ -128,7 +106,7 @@
           </template>
           <pre
             v-else
-            class="m-0 py-2.5 px-3 rounded-10px bg-[color-mix(in_srgb,white_55%,transparent)] border border-solid border-[var(--anime-border)] overflow-auto text-13px font-mono leading-[1.6]"
+            class="m-0 py-2.5 px-3 rounded-10px bg-kb-fill-lighter border border-solid border-kb-line overflow-auto text-13px font-mono leading-[1.6]"
             >{{ sourceText }}</pre>
         </div>
       </div>
@@ -138,7 +116,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Document, Tickets } from "@kabegame/element-plus-icons";
+import { Route } from "@lucide/vue";
+import { Empty, SegmentedControl, Tag } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";
@@ -182,6 +161,10 @@ const detailByName = ref<Record<string, ProviderDetail>>({});
 const selectedName = ref<string | null>(null);
 const loading = ref(false);
 const viewMode = ref<"pretty" | "source">("pretty");
+const viewModeOptions = computed(() => [
+  { label: t("plugins.detail.viewPretty"), value: "pretty" as const },
+  { label: t("plugins.detail.viewSource"), value: "source" as const },
+]);
 
 const resourceBase = computed(() => (props.plugin ? pluginResourceBase(props.plugin) : null));
 let generation = 0;

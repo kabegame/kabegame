@@ -10,6 +10,7 @@
           :side-offset="6"
           :collision-padding="8"
           :style="{ zIndex }"
+          :class="multiline ? 'whitespace-pre-line' : ''"
           class="max-w-[280px] rounded-kb-sm bg-kb-fg px-2 py-1 text-[12px] leading-4 text-white shadow-kb-sm select-none origin-[var(--reka-popper-transform-origin)] data-[state=delayed-open]:animate-[kb-pop-in_120ms_var(--kb-ease-out)] data-[state=closed]:animate-[kb-pop-out_80ms_ease-in]"
         >
           {{ content }}
@@ -34,6 +35,8 @@ withDefaults(
     side?: "top" | "right" | "bottom" | "left";
     /** 悬停多久后弹出（毫秒） */
     delay?: number;
+    /** content 里的换行照常换行（多行说明） */
+    multiline?: boolean;
   }>(),
   { content: "", side: "bottom", delay: 400 },
 );

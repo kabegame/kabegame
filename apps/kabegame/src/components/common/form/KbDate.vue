@@ -1,14 +1,10 @@
 <template>
-  <el-date-picker
+  <DatePicker
     :key="pickerKey"
     :model-value="modelValueForPicker"
-    type="date"
     :placeholder="placeholder"
     :clearable="allowUnset"
-    :value-format="PLUGIN_DATE_PICKER_FORMAT"
-    :disabled-date="disabledDate"
-    style="width: 100%"
-    :title="placeholder"
+    :is-date-disabled="disabledDate"
     @update:model-value="onUpdate"
   />
 </template>
@@ -17,6 +13,7 @@
 import { computed } from "vue";
 import { useNow } from "@vueuse/core";
 import dayjs from "dayjs";
+import DatePicker from "@/components/ui/DatePicker.vue";
 import { PLUGIN_DATE_PICKER_FORMAT, parsePluginDateBound, parsePluginDateStored } from "../../../utils/pluginDateVar";
 
 const props = withDefaults(
@@ -65,8 +62,8 @@ const modelValueForPicker = computed(() => {
   return d.format(PLUGIN_DATE_PICKER_FORMAT);
 });
 
-function disabledDate(d: Date) {
-  const day = dayjs(d).startOf("day");
+function disabledDate(d: string) {
+  const day = dayjs(d, PLUGIN_DATE_PICKER_FORMAT).startOf("day");
   const refNow = usesRelativeBounds.value ? clock.value : undefined;
   if (props.dateMin && props.dateMin.trim() !== "") {
     const min =

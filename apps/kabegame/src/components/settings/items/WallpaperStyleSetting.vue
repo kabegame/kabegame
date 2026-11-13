@@ -8,24 +8,18 @@
     :disabled="props.disabled || busy || wallpaperModeSwitching"
     @update:model-value="onPickerChange"
   />
-  <el-select
+  <!-- 下拉里每项显示描述（含名称与说明），选中后触发器只显示名称 -->
+  <Select
     v-else
-    v-model="localValue"
+    :model-value="localValue"
+    :options="pickerOptions"
     :placeholder="t('settings.stylePlaceholder')"
-    style="min-width: 180px"
+    class="!w-[200px]"
     :disabled="props.disabled || busy || wallpaperModeSwitching"
-    @change="handleChange"
+    @update:model-value="onSelect"
   >
-    <el-option
-      v-for="opt in options"
-      :key="opt.value"
-      :label="opt.label"
-      :value="opt.value"
-      :title="opt.desc || opt.label"
-    >
-      <span>{{ opt.desc }}</span>
-    </el-option>
-  </el-select>
+    <template #option="{ option }">{{ descOf(option.value) }}</template>
+  </Select>
 </template>
 
 <script setup lang="ts">
@@ -36,6 +30,7 @@ import { useUiStore } from "@/stores/ui";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
 import { logger } from "@/utils/logger";
 import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
+import Select from "@/components/ui/Select.vue";
 
 const props = defineProps<{
   disabled?: boolean;
@@ -65,6 +60,10 @@ const options = computed(() =>
 );
 
 const pickerOptions = computed(() => options.value.map((o) => ({ label: o.label, value: o.value })));
+const descOf = (value: string) => {
+  const opt = options.value.find((o) => o.value === value);
+  return opt?.desc || opt?.label || value;
+};
 
 const localValue = ref<string>("fill");
 watch(
@@ -93,4 +92,11 @@ const handleChange = async (style: string) => {
 const onPickerChange = async (v: string | null) => {
   await handleChange(v ?? "fill");
 };
+
+/** 桌面下拉：先把选中框挪过去（同原 el-select 的 v-model），失败由 handleChange 回滚 */
+function onSelect(v: string | undefined) {
+  if (!v || v === localValue.value) return;
+  localValue.value = v;
+  void handleChange(v);
+}
 </script>

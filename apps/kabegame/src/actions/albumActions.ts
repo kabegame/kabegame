@@ -45,7 +45,7 @@ export interface AlbumActionContext extends ActionContext<Album> {
 
 /**
  * Creates album actions for ActionRenderer (desktop ContextMenu / Android ActionSheet).
- * Replaces the legacy AlbumContextMenu.vue menu items.
+ * 画册右键菜单与右栏「⋯」共用的动作表。
  */
 export function createAlbumActions(): ActionItem<Album>[] {
   const t = (key: string) => i18n.global.t(key);

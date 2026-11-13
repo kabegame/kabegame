@@ -13,45 +13,34 @@
       @row-contextmenu="(node: AlbumNode, event: MouseEvent) => emit('contextmenu', node, event)"
     >
       <template #section-header="{ sectionId }">
-        <span class="album-tree-dim pl-3 text-[11px] tracking-[0.06em] text-[var(--anime-text-muted)]">
+        <span class="pl-3 text-[11px] tracking-[0.06em] text-kb-fg-subtle">
           {{ sectionLabel(sectionId) }}
         </span>
       </template>
       <template #row="{ element }">
         <div class="flex min-w-0 flex-1 items-center gap-2">
-          <el-icon class="flex-none text-[14px]" :class="iconClass(element)">
-            <component :is="iconOf(element)" />
-          </el-icon>
+          <component :is="iconOf(element)" class="size-4 flex-none" :class="iconClass(element)" />
           <span class="min-w-0 truncate" :title="element.labelPath ?? undefined">{{ displayName(element) }}</span>
           <span class="flex-1" />
-          <el-icon
-            v-if="showStatus && isRotatingAlbum(element)"
-            class="flex-none text-[12px] text-[var(--anime-primary)]"
-            :title="t('albums.treeRotationTooltip')"
-          >
-            <Monitor />
-          </el-icon>
-          <el-tooltip
-            v-if="showStatus && syncModeIcon(element.syncMode)"
-            :content="syncModeTooltip(element.syncMode)"
-            placement="top"
-          >
-            <el-icon class="flex-none text-[12px]" :class="syncModeIconClass(element.syncMode)">
-              <component :is="syncModeIcon(element.syncMode)!" />
-            </el-icon>
-          </el-tooltip>
-          <el-tooltip
+          <Tooltip v-if="showStatus && isRotatingAlbum(element)" :content="t('albums.treeRotationTooltip')">
+            <Monitor class="size-3.5 flex-none text-kb-accent" />
+          </Tooltip>
+          <Tooltip v-if="showStatus && syncModeIcon(element.syncMode)" :content="syncModeTooltip(element.syncMode)">
+            <!-- 类名字面量与 syncModeIconClass 的返回值一致，供 UnoCSS 扫描（.ts 默认不扫）：
+                 text-kb-fg-muted text-kb-fg-subtle opacity-70 -->
+            <component
+              :is="syncModeIcon(element.syncMode)!"
+              class="size-3.5 flex-none"
+              :class="syncModeIconClass(element.syncMode)"
+            />
+          </Tooltip>
+          <Tooltip
             v-if="showStatus && folderStatusBad(element)"
-            :content="
-              t('albums.treeFolderStatusTooltip', {
-                state: element.folderStatus?.state ?? '',
-              })
-            "
-            placement="top"
+            :content="t('albums.treeFolderStatusTooltip', { state: element.folderStatus?.state ?? '' })"
           >
-            <span class="album-tree-status-dot flex-none" />
-          </el-tooltip>
-          <span class="album-tree-dim flex-none text-[11px] text-[var(--anime-text-muted)]">{{ element.count }}</span>
+            <span class="size-1.5 flex-none rounded-full bg-kb-danger" />
+          </Tooltip>
+          <span class="flex-none text-[11px] tabular-nums text-kb-fg-subtle">{{ element.count }}</span>
         </div>
       </template>
     </KbTreePanel>
@@ -63,7 +52,9 @@ import { rotationAlbumIdsFromPaths } from "@/utils/wallpaperRotationPath";
 import { useActiveWallpaperRotationPaths } from "@/composables/useWallpaperTarget";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Delete, Folder, Monitor, Picture, PriceTag, StarFilled } from "@kabegame/element-plus-icons";
+import { EyeOff, Folder, Image as ImageIcon, Monitor, Tag } from "@lucide/vue";
+import { Tooltip } from "@/components/ui";
+import { StarFilled } from "@/components/ui/icons";
 import { useSettingsStore } from "@/stores/settings";
 import { syncModeIcon, syncModeIconClass, syncModeTooltip } from "@/utils/albumSyncMode";
 import KbTreePanel from "@/components/tree/KbTreePanel.vue";
@@ -345,17 +336,14 @@ function rowState(node: AlbumNode): TreeRowState {
 }
 function iconOf(node: Album) {
   if (node.id === FAVORITE_ALBUM_ID) return StarFilled;
-  if (node.id === HIDDEN_ALBUM_ID) return Delete;
+  if (node.id === HIDDEN_ALBUM_ID) return EyeOff;
   if (node.type === "local_folder" || node.type === "label_dir") return Folder;
-  if (node.type === "label") return PriceTag;
-  return Picture;
+  if (node.type === "label") return Tag;
+  return ImageIcon;
 }
+// 中性外框：类型靠图标形状区分，只有收藏的星用强调色
 function iconClass(node: Album) {
-  if (node.type === "local_folder") return "text-[#7c3aed]";
-  if (node.type === "label_dir") return "text-[#0891b2]";
-  if (node.type === "label") return "text-[#0d9488]";
-  if (node.id === FAVORITE_ALBUM_ID) return "text-[#e11d48]";
-  return "album-tree-dim text-[var(--anime-text-muted)]";
+  return node.id === FAVORITE_ALBUM_ID ? "text-kb-accent" : "text-kb-fg-subtle";
 }
 function displayName(node: Album) {
   return node.id === HIDDEN_ALBUM_ID ? t("albums.hiddenAlbumName") : node.name;

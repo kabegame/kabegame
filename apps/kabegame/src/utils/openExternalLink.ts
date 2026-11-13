@@ -1,4 +1,4 @@
-import { Compass, Link } from "@kabegame/element-plus-icons";
+import { Compass, Link } from "@lucide/vue";
 import { i18n } from "@kabegame/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { markRaw } from "vue";

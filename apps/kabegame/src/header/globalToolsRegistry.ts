@@ -1,6 +1,6 @@
 import { computed } from "vue";
 import type { Component } from "vue";
-import { Document, FolderOpened, Hide, Key } from "@kabegame/element-plus-icons";
+import { EyeOff, FileText, FolderOpen, KeyRound } from "@lucide/vue";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@/env";
 import { usePageBridgeStore } from "@/stores/pageBridge";
@@ -79,7 +79,7 @@ export function useGlobalTools() {
         id: "viewLogs",
         group: "maintenance",
         label: t("header.viewLogs"),
-        icon: Document,
+        icon: FileText,
         kind: "action",
         action: () => appLogs.open(),
       });
@@ -90,7 +90,7 @@ export function useGlobalTools() {
         id: "superMode",
         group: "maintenance",
         label: t("settings.superMode"),
-        icon: Key,
+        icon: KeyRound,
         kind: "toggle",
         toggleGet: () => app.isSuper,
         toggleSet: (v) => {
@@ -115,7 +115,7 @@ export function useGlobalTools() {
       // 文案恒为「不显示…」（开关打开即该状态生效），跟着状态在显示/隐藏之间翻转
       // 会让人分不清这行到底是在描述当前状态还是点下去的效果
       label: t("header.hideAlbumImages"),
-      icon: FolderOpened,
+      icon: FolderOpen,
       kind: "toggle",
       toggleGet: noAlbumBridge.get,
       toggleSet: noAlbumBridge.set,
@@ -130,7 +130,7 @@ export function useGlobalTools() {
       id: "toggleShowHidden",
       group: "display",
       label: t("header.hideHidden"),
-      icon: Hide,
+      icon: EyeOff,
       kind: "toggle",
       toggleGet: hiddenBridge.get,
       toggleSet: hiddenBridge.set,

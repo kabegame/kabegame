@@ -18,7 +18,7 @@ vi.mock("@/services/pathql", () => ({ pathqlAll, pathqlFetch: vi.fn() }));
 vi.mock("@/services/albums", () => ({ HIDDEN_ALBUM_ID: "hidden", FAVORITE_ALBUM_ID: "favorite" }));
 vi.mock("@/stores/hiddenCleanup", () => ({ useHiddenCleanupStore: () => ({ running: false }) }));
 vi.mock("@/services/hiddenCleanup", () => ({ start: vi.fn() }));
-vi.mock("@kabegame/element-plus", () => ({ ElMessageBox: {} }));
+vi.mock("@/components/ui/messageBox", () => ({ messageBox: { confirm: vi.fn() } }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 const cleanups: (() => void)[] = [];
 afterEach(() => {

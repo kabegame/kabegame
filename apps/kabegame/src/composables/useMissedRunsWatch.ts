@@ -1,5 +1,4 @@
 import { onUnmounted, ref } from "vue";
-import { useModal } from "@/composables/useModal";
 import { useI18n } from "@kabegame/i18n";
 import { IS_WEB, IS_ANDROID } from "@/env";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
@@ -34,7 +33,13 @@ export function useMissedRunsWatch() {
   const { t } = useI18n();
 
   const missedRunItems = ref<MissedRunItem[]>([]);
-  const missedRunsModal = useModal();
+  // 对话框（ui/Dialog）自己接返回栈与层级，这里只记开关
+  const missedRunsOpen = ref(false);
+  const missedRunsModal = {
+    isOpen: missedRunsOpen,
+    open: () => void (missedRunsOpen.value = true),
+    close: () => void (missedRunsOpen.value = false),
+  };
   // 本次漏跑是否在系统休眠期间发生（用于切换弹窗文案）。
   const wasSystemSleep = ref(false);
 

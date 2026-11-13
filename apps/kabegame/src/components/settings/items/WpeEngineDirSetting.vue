@@ -1,18 +1,22 @@
 <template>
   <div class="w-full">
-    <el-input :model-value="dir" :placeholder="$t('settings.wpeEngineDirPlaceholder')" readonly :disabled="disabled">
-      <template #append>
-        <el-button :disabled="disabled" :loading="showDisabled" @click="handleChoose">
-          <el-icon>
-            <FolderOpened />
-          </el-icon>
-          {{ $t("settings.defaultDownloadDirChoose") }}
-        </el-button>
-      </template>
-    </el-input>
-    <el-button v-if="dir" class="mt-2" link type="warning" :disabled="disabled" @click="save(null)">
+    <div class="flex min-w-0 items-center gap-2">
+      <Input
+        :model-value="dir"
+        class="min-w-0 flex-1"
+        :placeholder="$t('settings.wpeEngineDirPlaceholder')"
+        :title="dir || undefined"
+        readonly
+        :disabled="disabled"
+      />
+      <Button :disabled="disabled || showDisabled" @click="handleChoose">
+        <FolderOpen />
+        {{ $t("settings.defaultDownloadDirChoose") }}
+      </Button>
+    </div>
+    <Button v-if="dir" class="mt-2" variant="ghost" size="sm" :disabled="disabled" @click="save(null)">
       {{ $t("settings.defaultDownloadDirRestore") }}
-    </el-button>
+    </Button>
   </div>
 </template>
 
@@ -20,7 +24,9 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage } from "@/utils/kameMessage";
-import { FolderOpened } from "@kabegame/element-plus-icons";
+import { FolderOpen } from "@lucide/vue";
+import Button from "@/components/ui/Button.vue";
+import Input from "@/components/ui/Input.vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 

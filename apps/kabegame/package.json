@@ -15,6 +15,7 @@
     "@kabegame/element-plus-icons": "workspace:*",
     "@kabegame/i18n": "workspace:*",
     "@kabegame/pathql-client": "workspace:*",
+    "@internationalized/date": "3.12.4",
     "@lucide/vue": "1.65.0",
     "@panzoom/panzoom": "^4.6.1",
     "@tauri-apps/api": "^2.11",

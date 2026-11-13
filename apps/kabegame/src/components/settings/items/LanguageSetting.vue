@@ -1,57 +1,31 @@
 <template>
-  <template v-if="uiStore.isCompact">
-    <div
-      class="android-picker-select language-setting-android"
-      :class="{ 'is-disabled': props.disabled || disabled }"
-      @click="onAndroidTriggerClick"
-    >
-      <span class="android-picker-select__value">{{ displayLanguageLabel }}</span>
-      <el-icon class="android-picker-select__arrow">
-        <ArrowDown />
-      </el-icon>
-    </div>
-    <Teleport to="body">
-      <van-popup
-        :show="isOpen"
-        position="bottom"
-        round
-        :z-index="zIndex"
-        @update:show="
-          (v) => {
-            if (!v) close();
-          }
-        "
-      >
-        <van-picker
-          v-model="languagePickerSelected"
-          :title="$t('settings.language')"
-          :columns="languagePickerColumns"
-          :confirm-button-text="$t('common.confirm')"
-          :cancel-button-text="$t('common.cancel')"
-          @confirm="onLanguagePickerConfirm"
-          @cancel="close()"
-        />
-      </van-popup>
-    </Teleport>
-  </template>
-  <el-select
+  <!-- 紧凑档：底部滚轮选择（与其它设置项的 AndroidPickerSelect 同一个触发条与弹层） -->
+  <AndroidPickerSelect
+    v-if="uiStore.isCompact"
+    :model-value="effectiveLocale"
+    :options="options"
+    :title="$t('settings.language')"
+    :placeholder="$t('settings.language')"
+    :disabled="props.disabled || disabled"
+    @update:model-value="(v) => v && handleChange(v)"
+  />
+  <Select
     v-else
     :model-value="effectiveLocale"
+    :options="options"
     :placeholder="$t('settings.language')"
-    style="min-width: 180px"
+    class="!w-[180px]"
     :disabled="props.disabled || disabled"
-    @change="handleChange"
-  >
-    <el-option v-for="opt in options" :key="String(opt.value ?? '')" :label="opt.label" :value="opt.value" />
-  </el-select>
+    @update:model-value="(v) => v && handleChange(v)"
+  />
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { ArrowDown } from "@kabegame/element-plus-icons";
-import { useSettingKeyState } from "@/composables/useSettingKeyState";
-import { useModal } from "@/composables/useModal";
+import { computed } from "vue";
 import { SUPPORTED_LANGUAGES, resolveLanguage } from "@kabegame/i18n";
+import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
+import Select from "@/components/ui/Select.vue";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useUiStore } from "@/stores/ui";
 
 const props = defineProps<{
@@ -60,90 +34,15 @@ const props = defineProps<{
 
 const { settingValue, disabled, set } = useSettingKeyState("language");
 
-const options = computed(() => SUPPORTED_LANGUAGES.map((l) => ({ label: l.label, value: l.value })));
+const options = computed(() => SUPPORTED_LANGUAGES.map((l) => ({ label: l.label, value: l.value as string })));
 
 const uiStore = useUiStore();
 
 /** 与解析链一致，保证选项中始终有合法选中值 */
-const effectiveLocale = computed(() => resolveLanguage(settingValue.value as string | null | undefined));
-
-const displayLanguageLabel = computed(() => {
-  const v = effectiveLocale.value;
-  const opt = options.value.find((o) => o.value === v);
-  return opt?.label ?? v;
-});
-
-const languagePickerColumns = computed(() => options.value.map((o) => ({ text: o.label, value: o.value })));
-
-const { isOpen, zIndex, open, close } = useModal();
-
-const languagePickerSelected = ref<string[]>([effectiveLocale.value]);
-
-watch(isOpen, (v) => {
-  if (v) languagePickerSelected.value = [effectiveLocale.value];
-});
-
-watch(
-  () => [effectiveLocale.value, isOpen.value] as const,
-  () => {
-    if (isOpen.value) {
-      languagePickerSelected.value = [effectiveLocale.value];
-    }
-  },
-);
-
-function onAndroidTriggerClick() {
-  if (props.disabled || disabled.value) return;
-  open();
-}
-
-function onLanguagePickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
-  close();
-  const raw = selectedValues[0];
-  if (raw === null || raw === undefined) return;
-  void set(String(raw));
-}
+const effectiveLocale = computed<string>(() => resolveLanguage(settingValue.value as string | null | undefined));
 
 function handleChange(v: string) {
+  if (v === effectiveLocale.value) return;
   void set(v);
 }
 </script>
-
-<style scoped lang="scss">
-/* 与 AndroidPickerSelect 触发条一致 */
-.language-setting-android.android-picker-select {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 32px;
-  padding: 6px 12px;
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-  background: var(--el-fill-color-blank);
-  cursor: pointer;
-  user-select: none;
-
-  &.is-disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-}
-
-.android-picker-select__value {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  color: var(--anime-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.android-picker-select__arrow {
-  flex-shrink: 0;
-  margin-left: 8px;
-  font-size: 14px;
-  color: var(--anime-text-secondary);
-}
-</style>

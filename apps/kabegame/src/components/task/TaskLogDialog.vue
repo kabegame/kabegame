@@ -1,30 +1,25 @@
 <template>
-  <el-dialog
-    :model-value="isOpen"
-    :z-index="zIndex"
-    :title="t('tasks.drawerTaskLogTitle')"
-    width="640px"
-    :append-to-body="true"
-    class="task-log-dialog"
-    @update:model-value="
-      (v: boolean) => {
-        if (!v) close();
-      }
-    "
-  >
-    <div class="task-log-list kb-selectable">
-      <div v-if="currentTaskLogs.length === 0" class="task-log-empty">{{ t("tasks.drawerNoLogs") }}</div>
-      <div v-for="log in currentTaskLogs" :key="log.id" class="task-log-entry" :class="`log-level-${log.level}`">
-        <div class="task-log-main">
-          <el-tag :type="logLevelTagType(log.level)" size="small">{{ log.level }}</el-tag>
-          <span class="log-content">{{ formatTaskLogLine(log.content) }}</span>
+  <Dialog v-model:open="isOpen" :title="t('tasks.drawerTaskLogTitle')" :width="640">
+    <div class="kb-selectable flex max-h-[420px] flex-col gap-2 overflow-y-auto">
+      <div v-if="currentTaskLogs.length === 0" class="py-6 text-center text-[13px] text-kb-fg-muted">
+        {{ t("tasks.drawerNoLogs") }}
+      </div>
+      <div
+        v-for="log in currentTaskLogs"
+        :key="log.id"
+        class="box-border flex flex-col gap-1 rounded-kb-md border border-solid border-kb-line px-2.5 py-2 text-[12px]"
+        :class="logEntryClass(log.level)"
+      >
+        <div class="flex min-w-0 items-baseline gap-2">
+          <Tag :tone="logLevelTone(log.level)" size="sm">{{ log.level }}</Tag>
+          <span class="min-w-0 flex-1 break-words leading-[1.5] text-kb-fg">{{ formatTaskLogLine(log.content) }}</span>
         </div>
-        <div class="task-log-time-row">
-          <span class="log-time">{{ formatLogTime(log.time) }}</span>
+        <div class="flex justify-end">
+          <span class="text-[11px] text-kb-fg-subtle">{{ formatLogTime(log.time) }}</span>
         </div>
       </div>
     </div>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -32,7 +27,8 @@ import { onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage } from "@/utils/kameMessage";
 import { invoke, listen } from "../../api";
-import { useModal } from "../../composables/useModal";
+import Dialog from "@/components/ui/Dialog.vue";
+import Tag from "@/components/ui/Tag.vue";
 
 type TaskLogEntry = {
   id: number;
@@ -50,7 +46,7 @@ type TaskLogEventPayload = {
 
 const { t, locale } = useI18n();
 
-const { isOpen, zIndex, open, close } = useModal();
+const isOpen = ref(false);
 const currentTaskId = ref("");
 const currentTaskLogs = ref<TaskLogEntry[]>([]);
 const taskLogSeed = ref(0);
@@ -90,19 +86,28 @@ const formatTaskLogLine = (raw: string) => {
   }
 };
 
-const logLevelTagType = (level: string): "info" | "warning" | "danger" | "success" => {
-  const val = String(level || "").toLowerCase();
+const normalizedLevel = (level: string) => String(level || "").toLowerCase();
+
+const logLevelTone = (level: string): "neutral" | "warning" | "danger" => {
+  const val = normalizedLevel(level);
   if (val === "error") return "danger";
   if (val === "warn" || val === "warning") return "warning";
-  if (val === "debug" || val === "trace") return "info";
-  return "success";
+  return "neutral";
+};
+
+/** 警告 / 错误条目铺一层淡底 */
+const logEntryClass = (level: string) => {
+  const tone = logLevelTone(level);
+  if (tone === "danger") return "bg-[color-mix(in_srgb,var(--kb-danger)_6%,transparent)]";
+  if (tone === "warning") return "bg-[color-mix(in_srgb,var(--kb-warning)_8%,transparent)]";
+  return "";
 };
 
 const openTaskLog = async (taskId: string) => {
   const id = String(taskId || "").trim();
   if (!id) return;
   currentTaskId.value = id;
-  open();
+  isOpen.value = true;
   try {
     const logs = await invoke<any[]>("get_task_logs", { taskId: id });
     currentTaskLogs.value = (Array.isArray(logs) ? logs : []).map((log, idx) => ({
@@ -154,62 +159,3 @@ onUnmounted(() => {
 
 defineExpose({ openTaskLog });
 </script>
-
-<style scoped lang="scss">
-.task-log-list {
-  max-height: 420px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.task-log-empty {
-  text-align: center;
-  color: var(--anime-text-secondary);
-  padding: 24px 0;
-}
-
-.task-log-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border: 1px solid var(--anime-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 12px;
-}
-
-.task-log-main {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.log-content {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-  line-height: 1.5;
-}
-
-.task-log-time-row {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.log-time {
-  color: var(--anime-text-secondary);
-  font-size: 11px;
-}
-
-.log-level-warn,
-.log-level-warning {
-  background: rgba(245, 158, 11, 0.08);
-}
-
-.log-level-error {
-  background: rgba(239, 68, 68, 0.08);
-}
-</style>

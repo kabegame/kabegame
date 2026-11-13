@@ -84,7 +84,6 @@ export function usePluginConfig() {
   const saveAsConfig = ref(false);
   const configName = ref("");
   const configDescription = ref("");
-  const formRef = ref<any>();
   const pluginVars = ref<PluginVarDef[]>([]);
 
   /** 取选项展示名（按当前 locale 解析 i18n 对象） */
@@ -221,7 +220,6 @@ export function usePluginConfig() {
     saveAsConfig,
     configName,
     configDescription,
-    formRef,
     pluginVars,
     optionLabel,
     loadPluginVars,

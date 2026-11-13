@@ -1,12 +1,11 @@
 <template>
-  <div class="gallery-grid-columns-setting">
-    <div class="controls-row">
-      <span class="label">{{ $t("settings.fixedColumns") }}</span>
-      <el-switch
+  <div class="w-full">
+    <div class="flex items-center gap-2.5">
+      <span class="text-[13px] text-kb-fg">{{ $t("settings.fixedColumns") }}</span>
+      <Switch
         :model-value="fixedModeEnabled"
-        :disabled="disabled"
-        :loading="showDisabled"
-        @change="onToggleFixedMode"
+        :disabled="disabled || showDisabled"
+        @update:model-value="onToggleFixedMode"
       />
       <KbNumber
         v-if="fixedModeEnabled"
@@ -19,7 +18,7 @@
         @change="onFixedColumnsChange"
       />
     </div>
-    <div class="hint">
+    <div class="mt-2 text-[12px] text-kb-fg-muted">
       {{ $t("settings.fixedColumnsHint") }}
     </div>
   </div>
@@ -30,6 +29,7 @@ import { computed, ref, watch } from "vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useUiStore } from "@/stores/ui";
 import KbNumber from "@/components/common/form/KbNumber.vue";
+import Switch from "@/components/ui/Switch.vue";
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("galleryGridColumns");
 const uiStore = useUiStore();
@@ -61,8 +61,7 @@ watch(
   { immediate: true },
 );
 
-const onToggleFixedMode = async (enabled: boolean | string | number) => {
-  if (typeof enabled !== "boolean") return;
+const onToggleFixedMode = async (enabled: boolean) => {
   if (!enabled) {
     await set(0);
     return;
@@ -86,26 +85,3 @@ const onFixedColumnsChange = async (value: number | undefined) => {
   uiStore.imageGridColumns = next;
 };
 </script>
-
-<style scoped lang="scss">
-.gallery-grid-columns-setting {
-  width: 100%;
-}
-
-.controls-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.label {
-  color: var(--anime-text-color);
-  font-size: 13px;
-}
-
-.hint {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--anime-text-muted);
-}
-</style>

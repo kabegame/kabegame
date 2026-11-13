@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
-import AsyncValidator from "async-validator";
 import {
   canonicalizeUserConfig,
   expandVarsForBackend,
-  getValidationRules,
   isEmptyVarValue,
   normalizeVarsForUI,
   type PluginVarDef,
+  varFieldError,
 } from "./pluginVarForm";
 
-function validateInt(value: unknown, overrides: Partial<PluginVarDef> = {}): Promise<void> {
+function intError(value: unknown, overrides: Partial<PluginVarDef> = {}, ignoreRequired = false): string | undefined {
   const definition: PluginVarDef = {
     key: "page",
     type: "int",
@@ -19,63 +18,35 @@ function validateInt(value: unknown, overrides: Partial<PluginVarDef> = {}): Pro
     max: 10,
     ...overrides,
   };
-  const [rule] = getValidationRules(definition, "页数");
-  return new Promise((resolve, reject) => {
-    rule.validator({}, value, (error?: Error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-}
-
-async function validateIntThroughForm(value: unknown, overrides: Partial<PluginVarDef> = {}): Promise<string | null> {
-  const definition: PluginVarDef = {
-    key: "page",
-    type: "int",
-    name: "页数",
-    required: true,
-    min: 1,
-    max: 10,
-    ...overrides,
-  };
-  const [rule] = getValidationRules(definition, "页数");
-  const { trigger: _trigger, ...schemaRule } = rule;
-  try {
-    await new AsyncValidator({ page: [schemaRule] }).validate({ page: value });
-    return null;
-  } catch (error: any) {
-    return error?.errors?.[0]?.message ?? String(error);
-  }
+  return varFieldError(definition, value, "页数", { ignoreRequired });
 }
 
 describe("插件整数配置校验", () => {
-  it("拒绝原始非法文本和非整数数字", async () => {
-    await expect(validateInt("1.5")).rejects.toThrow("页数必须是整数");
-    await expect(validateInt(1.5)).rejects.toThrow("页数必须是整数");
+  it("拒绝原始非法文本和非整数数字", () => {
+    expect(intError("1.5")).toBe("页数必须是整数");
+    expect(intError(1.5)).toBe("页数必须是整数");
   });
 
-  it("拒绝超出上下限的整数", async () => {
-    await expect(validateInt(0)).rejects.toThrow("页数不能小于 1");
-    await expect(validateInt(11)).rejects.toThrow("页数不能大于 10");
+  it("拒绝超出上下限的整数", () => {
+    expect(intError(0)).toBe("页数不能小于 1");
+    expect(intError(11)).toBe("页数不能大于 10");
   });
 
-  it("可选整数允许留空，但填写后仍校验", async () => {
+  it("可选整数允许留空，但填写后仍校验", () => {
     const optional = { default: 1, required: false };
-    await expect(validateInt("", optional)).resolves.toBeUndefined();
-    await expect(validateInt("bad", optional)).rejects.toThrow("页数必须是整数");
+    expect(intError("", optional)).toBeUndefined();
+    expect(intError("bad", optional)).toBe("页数必须是整数");
   });
 
-  it("忽略插件 JSON 中显式为 null 的边界", async () => {
-    const nullableMax = { default: 2, max: null };
-    await expect(validateInt(4, nullableMax)).resolves.toBeUndefined();
-    await expect(validateIntThroughForm(4, nullableMax)).resolves.toBeNull();
+  it("忽略插件 JSON 中显式为 null 的边界", () => {
+    expect(intError(4, { default: 2, max: null })).toBeUndefined();
   });
 
-  it("经表单校验时保留具体错误，不被必填提示覆盖", async () => {
-    await expect(validateIntThroughForm(undefined)).resolves.toBe("请输入页数");
-    await expect(validateIntThroughForm("bad")).resolves.toBe("页数必须是整数");
-    await expect(validateIntThroughForm(0)).resolves.toBe("页数不能小于 1");
-    await expect(validateIntThroughForm(11)).resolves.toBe("页数不能大于 10");
+  it("保留具体错误，不被必填提示覆盖", () => {
+    expect(intError(undefined)).toBe("请输入页数");
+    expect(intError("bad")).toBe("页数必须是整数");
+    expect(intError(0)).toBe("页数不能小于 1");
+    expect(intError(11)).toBe("页数不能大于 10");
   });
 });
 
@@ -86,30 +57,43 @@ describe("ignoreRequired", () => {
     { key: "page", type: "int", name: "页数", required: true, min: 1 },
   ];
 
-  async function emptyError(def: PluginVarDef, ignoreRequired: boolean): Promise<string | null> {
-    const rules = getValidationRules(def, def.key, { ignoreRequired });
-    if (rules.length === 0) return null;
-    const schema = rules.map(({ trigger: _trigger, ...rule }) => rule);
-    try {
-      await new AsyncValidator({ [def.key]: schema }).validate({ [def.key]: null });
-      return null;
-    } catch (error: any) {
-      return error?.errors?.[0]?.message ?? String(error);
-    }
-  }
-
-  it("提交任务时必填字段为空会报错", async () => {
-    for (const def of defs) expect(await emptyError(def, false)).not.toBeNull();
+  it("提交任务时必填字段为空会报错", () => {
+    for (const def of defs) expect(varFieldError(def, null, def.key)).toBeTruthy();
   });
 
-  it("编辑默认配置时必填字段允许为空", async () => {
-    for (const def of defs) expect(await emptyError(def, true)).toBeNull();
+  it("编辑默认配置时必填字段允许为空", () => {
+    for (const def of defs) expect(varFieldError(def, null, def.key, { ignoreRequired: true })).toBeUndefined();
   });
 
-  it("忽略必填时整数仍校验范围", async () => {
-    const [rule] = getValidationRules(defs[2], "页数", { ignoreRequired: true });
-    const { trigger: _trigger, ...schema } = rule;
-    await expect(new AsyncValidator({ page: [schema] }).validate({ page: 0 })).rejects.toBeTruthy();
+  it("忽略必填时整数仍校验范围", () => {
+    expect(varFieldError(defs[2], 0, "页数", { ignoreRequired: true })).toBe("页数不能小于 1");
+  });
+});
+
+describe("其它类型", () => {
+  it("float 填了值就校验范围（不论是否必填）", () => {
+    const def: PluginVarDef = { key: "r", type: "float", name: "R", min: 0, max: 1 };
+    expect(varFieldError(def, 1.5, "R")).toBe("R不能大于 1");
+    expect(varFieldError(def, 0.5, "R")).toBeUndefined();
+  });
+
+  it("list / checkbox 必填为空时提示选择；options 声明过的空字符串合法", () => {
+    expect(varFieldError({ key: "l", type: "list", name: "L", required: true }, [], "L")).toBe("请选择L");
+    const opt: PluginVarDef = {
+      key: "o",
+      type: "options",
+      name: "O",
+      required: true,
+      options: [{ name: "全部", variable: "" }],
+    };
+    expect(varFieldError(opt, "", "O")).toBeUndefined();
+  });
+
+  it("date 按 format 解析并校验上下界", () => {
+    const def: PluginVarDef = { key: "d", type: "date", name: "D", format: "YYYYMMDD", dateMax: "2020-01-01" };
+    expect(varFieldError(def, "20200102", "D")).toBe("D不能晚于 2020-01-01");
+    expect(varFieldError(def, "2020-13", "D")).toBe("请输入有效的D");
+    expect(varFieldError(def, "20191231", "D")).toBeUndefined();
   });
 });
 
@@ -129,9 +113,13 @@ describe("插件变量空值转换", () => {
   ];
 
   it("把控件空表示转换为 null，同时保留合法空字符串 option", () => {
-    expect(
-      expandVarsForBackend({ text: "", items: [], checks: [], option: "", flag: false }, defs),
-    ).toEqual({ text: null, items: null, checks: null, option: "", flag: false });
+    expect(expandVarsForBackend({ text: "", items: [], checks: [], option: "", flag: false }, defs)).toEqual({
+      text: null,
+      items: null,
+      checks: null,
+      option: "",
+      flag: false,
+    });
     expect(isEmptyVarValue(defs[3], "")).toBe(false);
   });
 
@@ -152,17 +140,22 @@ describe("canonicalizeUserConfig", () => {
     { key: "date", type: "date", name: "D" },
     { key: "tags", type: "list", name: "L" },
     { key: "kinds", type: "checkbox", name: "C", options: ["a", "b"] },
-    { key: "any", type: "options", name: "O", options: [{ name: "全部", variable: "" }, { name: "X", variable: "x" }] },
+    {
+      key: "any",
+      type: "options",
+      name: "O",
+      options: [
+        { name: "全部", variable: "" },
+        { name: "X", variable: "x" },
+      ],
+    },
     { key: "mode", type: "options", name: "M", options: ["p", "q"] },
     { key: "untouched", type: "string", name: "U", default: "keep" },
   ];
 
   it("只规范出现的键：旧式空值转 null，checkbox 数组展开，声明的空选项保留，不补默认值", () => {
     expect(
-      canonicalizeUserConfig(
-        { text: "", date: "", tags: [], kinds: ["b"], any: "", mode: "", extra: 1 },
-        defs,
-      ),
+      canonicalizeUserConfig({ text: "", date: "", tags: [], kinds: ["b"], any: "", mode: "", extra: 1 }, defs),
     ).toEqual({ text: null, date: null, tags: null, kinds: { a: false, b: true }, any: "", mode: null, extra: 1 });
   });
 });

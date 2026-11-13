@@ -1,6 +1,6 @@
 <template>
   <div class="flex flex-wrap items-center gap-3">
-    <el-switch v-model="enabled" />
+    <Switch v-model="enabled" :aria-label="$t('plugins.retryOnFail')" />
     <KbNumber
       v-if="enabled"
       v-model="inputValue"
@@ -10,13 +10,14 @@
       :max="MAX_TASK_RETRY_COUNT"
       @change="onCommit"
     />
-    <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.retryOnFailDesc") }}</span>
+    <span class="text-[12.5px] text-kb-fg-muted">{{ $t("plugins.retryOnFailDesc") }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import KbNumber from "@/components/common/form/KbNumber.vue";
+import Switch from "@/components/ui/Switch.vue";
 
 /** 与后端 `retry::MAX_TASK_RETRY_COUNT` 一致 */
 const MAX_TASK_RETRY_COUNT = 10;

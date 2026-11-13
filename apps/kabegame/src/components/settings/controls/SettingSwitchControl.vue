@@ -1,13 +1,14 @@
 <template>
-  <el-switch
+  <!-- 读取 / 保存中（showDisabled）同样禁用：原 el-switch 的 loading 态本身就不可切换 -->
+  <Switch
     :model-value="!!settingValue"
-    :disabled="props.disabled || disabled"
-    :loading="showDisabled"
+    :disabled="props.disabled || disabled || showDisabled"
     @update:model-value="onChange"
   />
 </template>
 
 <script setup lang="ts">
+import Switch from "@/components/ui/Switch.vue";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
 
@@ -18,7 +19,7 @@ const props = defineProps<{
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState(props.settingKey);
 
-const onChange = async (v: string | number | boolean) => {
-  await set(v === true); // el-switch 只抛 activeValue / inactiveValue，本控件用默认值，运行时恒为 boolean
+const onChange = async (v: boolean) => {
+  await set(v);
 };
 </script>

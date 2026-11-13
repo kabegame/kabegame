@@ -1,42 +1,27 @@
 <template>
-  <ElDialog
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
-    :title="$t('gallery.wallpaperImportTitle')"
-    width="640px"
-    align-center
-    :show-close="true"
-    @update:model-value="modal.close"
-    @closed="handleClosed"
-  >
+  <Dialog v-model:open="open" :title="$t('gallery.wallpaperImportTitle')" :width="640">
     <div class="flex flex-col gap-3">
       <div class="flex items-start justify-between gap-3">
-        <p class="m-0 text-xs leading-relaxed text-[var(--anime-text-secondary)]">
+        <p class="m-0 text-[12.5px] leading-[1.6] text-kb-fg-muted">
           {{ $t("gallery.wpeScanHint") }}
         </p>
-        <el-button link type="primary" size="small" class="shrink-0" :disabled="scanning" @click="refreshScan">
-          <el-icon :class="{ 'is-loading': scanning }"><Refresh /></el-icon>
-          <span class="ml-1">{{ $t("gallery.wpeRescan") }}</span>
-        </el-button>
+        <Button variant="ghost" size="sm" :disabled="scanning" @click="refreshScan">
+          <RefreshCw :class="{ 'animate-spin': scanning }" />
+          {{ $t("gallery.wpeRescan") }}
+        </Button>
       </div>
 
-      <div class="wpe-section">{{ $t("gallery.wpeSectionSources") }}</div>
+      <SectionTitle>{{ $t("gallery.wpeSectionSources") }}</SectionTitle>
 
-      <div class="flex flex-col gap-2 max-h-[46vh] overflow-y-auto pr-1">
+      <div class="flex max-h-[46vh] flex-col gap-2 overflow-y-auto pr-1">
         <!-- 扫描中：骨架卡片，避免整块 loading 遮罩 -->
         <template v-if="scanning && !sources.length">
-          <div v-for="n in 3" :key="`sk-${n}`" class="wpe-card pointer-events-none">
-            <el-skeleton animated class="w-full">
-              <template #template>
-                <div class="flex items-center gap-3">
-                  <el-skeleton-item variant="circle" class="!w-9 !h-9 shrink-0" />
-                  <div class="flex-1 flex flex-col gap-2">
-                    <el-skeleton-item variant="text" class="!w-1/3" />
-                    <el-skeleton-item variant="text" class="!w-2/3" />
-                  </div>
-                </div>
-              </template>
-            </el-skeleton>
+          <div v-for="n in 3" :key="`sk-${n}`" :class="CARD_CLASS" class="pointer-events-none border-kb-line">
+            <Skeleton class="size-9 shrink-0" />
+            <div class="flex flex-1 flex-col gap-2 py-0.5">
+              <Skeleton class="h-3.5 w-1/3" />
+              <Skeleton class="h-3 w-2/3" />
+            </div>
           </div>
         </template>
 
@@ -44,8 +29,8 @@
         <div
           v-for="source in sources"
           :key="source.kind"
-          class="wpe-card cursor-pointer"
-          :class="{ 'is-selected': isSelected(source) }"
+          :class="[CARD_CLASS, isSelected(source) ? CARD_SELECTED_CLASS : CARD_IDLE_CLASS]"
+          class="cursor-pointer"
           role="checkbox"
           :aria-checked="isSelected(source)"
           tabindex="0"
@@ -53,123 +38,120 @@
           @keydown.space.prevent="toggle(source)"
           @keydown.enter.prevent="toggle(source)"
         >
-          <div class="wpe-icon">
-            <el-icon :size="18"><component :is="iconForKind(source.kind)" /></el-icon>
-          </div>
-          <div class="flex-1 min-w-0 flex flex-col gap-1">
-            <div class="flex items-center gap-2">
-              <span class="font-semibold text-sm text-[var(--anime-text-primary)]">{{ sourceLabel(source) }}</span>
-            </div>
-            <span class="text-xs truncate text-[var(--el-text-color-secondary)]" :title="source.paths.join('\n')">
+          <span :class="ICON_CLASS">
+            <component :is="iconForKind(source.kind)" />
+          </span>
+          <div class="flex min-w-0 flex-1 flex-col gap-1">
+            <span class="text-[13.5px] font-600 leading-5 text-kb-fg">{{ sourceLabel(source) }}</span>
+            <span class="truncate text-[12px] text-kb-fg-muted" :title="source.paths.join('\n')">
               {{ pathText(source) }}
             </span>
-            <div class="flex flex-wrap gap-1.5 mt-0.5">
-              <span v-for="chip in statChips(source)" :key="chip.tone" class="wpe-chip" :class="`is-${chip.tone}`">
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span v-for="chip in statChips(source)" :key="chip.tone" :class="[CHIP_CLASS, CHIP_TONES[chip.tone]]">
                 {{ chip.text }}
               </span>
             </div>
           </div>
-          <div class="wpe-check">
-            <el-icon v-if="isSelected(source)" :size="12"><Check /></el-icon>
-          </div>
+          <span
+            class="mt-0.5 box-border grid size-[18px] shrink-0 place-items-center rounded-full border-[1.5px] border-solid transition-colors duration-150"
+            :class="isSelected(source) ? 'border-kb-accent bg-kb-accent text-white' : 'border-kb-line-strong'"
+            aria-hidden="true"
+          >
+            <Check v-if="isSelected(source)" class="size-3" :stroke-width="3" />
+          </span>
         </div>
 
         <!-- 没扫到时的说明（仍可手动添加文件夹） -->
-        <div
-          v-if="!scanning && !sources.length"
-          class="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs leading-relaxed bg-[var(--el-fill-color-light)] text-[var(--el-text-color-secondary)]"
-        >
-          <el-icon class="mt-0.5 shrink-0" :size="14"><Warning /></el-icon>
-          <span>{{ $t("gallery.wpeNoSources") }}</span>
-        </div>
+        <Alert v-if="!scanning && !sources.length" tone="warning">
+          {{ $t("gallery.wpeNoSources") }}
+        </Alert>
 
         <!-- 手动添加的文件夹 -->
-        <div v-for="(source, idx) in extraDirs" :key="source.paths[0]" class="wpe-card is-selected">
-          <div class="wpe-icon">
-            <el-icon :size="18"><Folder /></el-icon>
-          </div>
-          <div class="flex-1 min-w-0 flex flex-col gap-1">
-            <span class="font-semibold text-sm text-[var(--anime-text-primary)]">
-              {{ $t("gallery.wpeSourceCustom") }}
-            </span>
-            <span class="text-xs truncate text-[var(--el-text-color-secondary)]" :title="source.paths[0]">
+        <div v-for="(source, idx) in extraDirs" :key="source.paths[0]" :class="[CARD_CLASS, CARD_SELECTED_CLASS]">
+          <span :class="ICON_CLASS">
+            <Folder />
+          </span>
+          <div class="flex min-w-0 flex-1 flex-col gap-1">
+            <span class="text-[13.5px] font-600 leading-5 text-kb-fg">{{ $t("gallery.wpeSourceCustom") }}</span>
+            <span class="truncate text-[12px] text-kb-fg-muted" :title="source.paths[0]">
               {{ source.paths[0] }}
             </span>
-            <div class="flex flex-wrap gap-1.5 mt-0.5">
-              <span v-for="chip in statChips(source)" :key="chip.tone" class="wpe-chip" :class="`is-${chip.tone}`">
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span v-for="chip in statChips(source)" :key="chip.tone" :class="[CHIP_CLASS, CHIP_TONES[chip.tone]]">
                 {{ chip.text }}
               </span>
             </div>
           </div>
-          <el-button
-            link
-            class="self-start"
-            :aria-label="$t('common.remove')"
-            :title="$t('common.remove')"
-            @click="extraDirs.splice(idx, 1)"
-          >
-            <el-icon :size="16"><Close /></el-icon>
-          </el-button>
+          <Tooltip :content="$t('common.remove')">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              class="-mr-1 -mt-0.5"
+              :aria-label="$t('common.remove')"
+              @click="extraDirs.splice(idx, 1)"
+            >
+              <X />
+            </Button>
+          </Tooltip>
         </div>
 
-        <button type="button" class="wpe-add" :disabled="adding" @click="handleAddFolder">
-          <el-icon :size="16" :class="{ 'is-loading': adding }"><FolderAdd /></el-icon>
+        <button
+          type="button"
+          class="box-border flex w-full shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-kb-lg border border-dashed border-kb-line-strong bg-transparent p-2.5 [font:inherit] text-[13px] text-kb-fg-muted outline-none transition-colors duration-150 hover:border-kb-fg-subtle hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring disabled:cursor-progress [&_svg]:size-4"
+          :disabled="adding"
+          @click="handleAddFolder"
+        >
+          <Spinner v-if="adding" :size="16" />
+          <FolderPlus v-else />
           <span>{{ $t("gallery.wpeAddFolder") }}</span>
         </button>
       </div>
 
-      <div class="wpe-section mt-1">{{ $t("gallery.webpageSectionSaveTo") }}</div>
+      <SectionTitle class="mt-1">{{ $t("gallery.webpageSectionSaveTo") }}</SectionTitle>
 
-      <el-form label-position="top" class="px-1" @submit.prevent>
-        <el-form-item :label="$t('albums.outputAlbum')">
-          <AlbumPicker
-            v-model="outputAlbumId"
-            :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
-            expand-label-dirs
-            allow-create
-            :placeholder="$t('albums.notSpecifiedAddToGallery')"
-            :picker-title="$t('albums.outputAlbum')"
-            clearable
-          />
-        </el-form-item>
-        <el-form-item :label="$t('plugins.dryRun')" class="!mb-0">
-          <div class="flex items-center gap-2">
-            <el-switch v-model="isDryRun" />
-            <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
-          </div>
-        </el-form-item>
-      </el-form>
+      <Field :label="$t('albums.outputAlbum')">
+        <AlbumPicker
+          v-model="outputAlbumId"
+          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
+          expand-label-dirs
+          allow-create
+          :placeholder="$t('albums.notSpecifiedAddToGallery')"
+          :picker-title="$t('albums.outputAlbum')"
+          clearable
+        />
+      </Field>
+      <Field :label="$t('plugins.dryRun')">
+        <label class="flex min-h-8 cursor-pointer items-center gap-2.5">
+          <Switch v-model="isDryRun" />
+          <span class="text-[12.5px] text-kb-fg-muted">{{ $t("plugins.dryRunDesc") }}</span>
+        </label>
+      </Field>
     </div>
 
     <template #footer>
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-xs text-left text-[var(--el-text-color-secondary)]">
-          {{ footerText }}
-        </span>
-        <div class="flex gap-3 shrink-0">
-          <el-button @click="modal.close()">{{ $t("common.cancel") }}</el-button>
-          <el-button type="primary" :disabled="!canSubmit || scanning" :loading="submitting" @click="handleSubmit">
-            {{ $t("albums.startImport") }}
-          </el-button>
-        </div>
-      </div>
+      <span class="mr-auto text-[12px] text-kb-fg-muted">{{ footerText }}</span>
+      <Button @click="open = false">{{ $t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="!canSubmit || scanning || submitting" @click="handleSubmit">
+        <Spinner v-if="submitting" :size="14" />
+        {{ $t("albums.startImport") }}
+      </Button>
     </template>
-  </ElDialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Box, Check, Close, Folder, FolderAdd, Refresh, Shop, User, Warning } from "@kabegame/element-plus-icons";
-import { ElDialog } from "@kabegame/element-plus";
+import { Box, Check, Folder, FolderPlus, RefreshCw, Store, User, X } from "@lucide/vue";
+import { Alert, Button, Dialog, Field, Skeleton, Spinner, Switch, Tooltip } from "@/components/ui";
 import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useCrawlerStore } from "@/stores/crawler";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
-import { useModal } from "@/composables/useModal";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
+import SectionTitle from "@/components/ui/SectionTitle.vue";
 
 /** 与后端 `WpeSourceInfo` 对应。 */
 interface WpeSourceInfo {
@@ -200,7 +182,25 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+/** 开关只跟随 v-model；层级与 Android 返回栈由 Dialog 自己接 */
+const open = computed({
+  get: () => props.modelValue,
+  set: (v: boolean) => emit("update:modelValue", v),
+});
+
+// 卡片与计数标签的类：中性外框，强调色只用于选中与「待导入」计数
+const CARD_CLASS =
+  "box-border flex items-start gap-3 rounded-kb-lg border border-solid px-3 py-2.5 outline-none transition-[border-color,background-color] duration-150 focus-visible:ring-2 focus-visible:ring-kb-ring";
+const CARD_IDLE_CLASS = "border-kb-line-strong bg-kb-surface-raised hover:border-kb-fg-subtle hover:bg-kb-hover";
+const CARD_SELECTED_CLASS = "border-kb-accent bg-[color-mix(in_srgb,var(--kb-accent)_5%,var(--kb-surface-raised))]";
+const ICON_CLASS =
+  "grid size-9 shrink-0 place-items-center rounded-kb-md bg-kb-fill text-kb-fg-muted [&_svg]:size-[18px]";
+const CHIP_CLASS = "rounded-full px-2 text-[11px] leading-[18px]";
+const CHIP_TONES: Record<"plain" | "primary" | "muted", string> = {
+  plain: "bg-kb-fill text-kb-fg-muted",
+  primary: "bg-[color-mix(in_srgb,var(--kb-accent)_12%,transparent)] text-kb-accent font-500",
+  muted: "bg-kb-fill-light text-kb-fg-subtle",
+};
 
 const crawlerStore = useCrawlerStore();
 const scanning = ref(false);
@@ -212,20 +212,6 @@ const extraDirs = ref<WpeSourceInfo[]>([]);
 const outputAlbumId = ref<string | null>(null);
 const isDryRun = ref(false);
 
-// 打开即扫描：跟随 modelValue 而不是 ElDialog 的 open 事件，保证每次打开都触发。
-watch(
-  () => props.modelValue,
-  (visible) => {
-    if (visible) {
-      modal.open();
-      void refreshScan();
-    } else {
-      modal.close();
-    }
-  },
-  { immediate: true },
-);
-
 const labelForKind: Record<string, string> = {
   workshop: "gallery.wpeSourceWorkshop",
   defaultprojects: "gallery.wpeSourceDefaultProjects",
@@ -233,7 +219,7 @@ const labelForKind: Record<string, string> = {
 };
 
 const iconByKind: Record<string, Component> = {
-  workshop: Shop,
+  workshop: Store,
   defaultprojects: Box,
   myprojects: User,
 };
@@ -318,7 +304,7 @@ async function refreshScan() {
 async function handleAddFolder() {
   if (await guardDesktopOnly("localImport")) return;
   try {
-    const picked = await open({ directory: true, multiple: false });
+    const picked = await openFileDialog({ directory: true, multiple: false });
     if (!picked) return;
     const path = typeof picked === "string" ? picked : picked[0];
     if (!path) return;
@@ -336,9 +322,7 @@ async function handleAddFolder() {
   }
 }
 
-function handleClosed() {
-  scanSeq++;
-  scanning.value = false;
+function resetState() {
   sources.value = [];
   extraDirs.value = [];
   outputAlbumId.value = null;
@@ -382,124 +366,25 @@ async function handleSubmit() {
       kameMessage.error(t("gallery.wpeTaskFailed"));
       return;
     }
-    modal.close();
+    open.value = false;
     kameMessage.success(t("gallery.wpeTaskAdded"));
   } finally {
     submitting.value = false;
   }
 }
+
+// 打开即扫描（每次打开先清掉上次的结果与选择）；关闭时作废还在路上的扫描。
+watch(
+  () => props.modelValue,
+  (visible) => {
+    if (visible) {
+      resetState();
+      void refreshScan();
+    } else {
+      scanSeq++;
+      scanning.value = false;
+    }
+  },
+  { immediate: true },
+);
 </script>
-
-<style scoped lang="scss">
-// 卡片选中态与计数标签依赖主题色混合，工具类表达过长，集中写在这里。
-.wpe-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
-  background: var(--el-bg-color);
-  transition:
-    border-color 0.15s,
-    background-color 0.15s,
-    box-shadow 0.15s;
-  outline: none;
-
-  &:hover,
-  &:focus-visible {
-    border-color: var(--anime-primary-light);
-  }
-
-  &.is-selected {
-    border-color: var(--anime-primary);
-    background: color-mix(in srgb, var(--anime-primary) 6%, var(--el-bg-color));
-    box-shadow: 0 2px 10px color-mix(in srgb, var(--anime-primary) 12%, transparent);
-  }
-}
-
-.wpe-icon {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  color: var(--anime-primary);
-  background: color-mix(in srgb, var(--anime-primary) 12%, transparent);
-}
-
-.wpe-check {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin-top: 2px;
-  border: 1.5px solid var(--el-border-color);
-  border-radius: 50%;
-  color: #fff;
-  transition: all 0.15s;
-
-  .is-selected & {
-    border-color: var(--anime-primary);
-    background: var(--anime-primary);
-  }
-}
-
-.wpe-section {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--anime-text-primary);
-}
-
-.wpe-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px;
-  border: 1px dashed var(--el-border-color);
-  border-radius: 12px;
-  background: var(--el-bg-color);
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  transition:
-    border-color 0.15s,
-    color 0.15s;
-
-  &:hover:not(:disabled) {
-    border-color: var(--anime-primary);
-    color: var(--anime-primary);
-  }
-
-  &:disabled {
-    cursor: progress;
-  }
-}
-
-.wpe-chip {
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  line-height: 18px;
-
-  &.is-plain {
-    color: var(--el-text-color-regular);
-    background: var(--el-fill-color);
-  }
-
-  &.is-primary {
-    color: var(--anime-primary-dark);
-    background: color-mix(in srgb, var(--anime-primary) 14%, transparent);
-  }
-
-  &.is-muted {
-    color: var(--el-text-color-secondary);
-    background: var(--el-fill-color-lighter);
-  }
-}
-</style>

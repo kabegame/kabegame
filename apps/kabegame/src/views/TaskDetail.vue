@@ -77,12 +77,7 @@
     </ImageGrid>
 
     <TaskLogDialog ref="taskLogDialogRef" />
-    <TaskParamsDialog
-      :open="taskParamsDialog.isOpen.value"
-      :z-index="taskParamsDialog.zIndex.value"
-      :task="taskParamsTask"
-      @close="taskParamsDialog.close()"
-    />
+    <TaskParamsDialog :open="taskParamsOpen" :task="taskParamsTask" @close="taskParamsOpen = false" />
     <!-- 紧凑模式下 FailedImages 在 fold 菜单里，FailedImagesHeaderButton comp 不渲染，对话框由本视图托管 -->
     <FailedImagesDialog v-if="isCompact" ref="failedImagesDialogRef" />
   </div>
@@ -91,7 +86,6 @@
 <script setup lang="ts">
 import { useWindowTitlePart } from "@/composables/useWindowTitle";
 import { ref, computed, onActivated, onDeactivated, onMounted, onUnmounted, watch } from "vue";
-import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
 import { kameMessage } from "@/utils/kameMessage";
@@ -202,11 +196,12 @@ const openReportIssueLink = () => {
   });
 };
 
-const taskParamsDialog = useModal();
+// 对话框自己接 Android 返回键与层级，这里只管开关
+const taskParamsOpen = ref(false);
 const taskParamsTask = computed<TaskRunParamsTask | null>(() => task.value ?? null);
 const handleViewTaskParams = () => {
   if (!taskId.value) return;
-  taskParamsDialog.open();
+  taskParamsOpen.value = true;
 };
 
 // 数据加载 / 菜单命令 / 事件刷新均由 ImageGrid connected 模式接管

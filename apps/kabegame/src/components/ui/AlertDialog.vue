@@ -14,6 +14,7 @@
         :style="{ zIndex }"
         @focus-outside="keepOpenOnForeign"
         @interact-outside="keepOpenOnForeign"
+        @escape-key-down="(e: KeyboardEvent) => busy && e.preventDefault()"
       >
         <AlertDialogTitle class="m-0 text-[15px] font-600 leading-6">
           <slot name="title">{{ title }}</slot>

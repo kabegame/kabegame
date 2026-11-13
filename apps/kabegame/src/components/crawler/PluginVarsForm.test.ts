@@ -35,6 +35,7 @@ function renderedOptions(ignoreWhen = false) {
       modelValue: { backend: "webview", quality: "always" },
       ignoreWhen,
     },
+    global: { renderStubDefaultSlot: true },
   });
   const options = wrapper.getComponent({ name: "PluginVar" }).props("options");
   wrapper.unmount();
@@ -60,6 +61,7 @@ describe("PluginVarsForm when 处理", () => {
         modelValue: { backend: "webview", quality: "always" },
         ignoreWhen: true,
       },
+      global: { renderStubDefaultSlot: true },
     });
 
     const ignoredItem = wrapper.get(".opacity-40");

@@ -5,6 +5,12 @@
   "decrease": "減少",
   "increase": "增加",
   "close": "關閉",
+  "imagePreview": "看圖",
+  "previousImage": "上一張",
+  "nextImage": "下一張",
+  "zoomIn": "放大",
+  "zoomOut": "縮小",
+  "resetZoom": "重設縮放",
   "clear": "清除",
   "selectAll": "全選",
   "deselectAll": "取消全選",
@@ -121,5 +127,11 @@
     "analyze": "正在最佳化資料庫…",
     "services": "正在啟動服務…",
     "failed": "啟動失敗"
-  }
+  },
+  "prevYear": "上一年",
+  "prevMonth": "上個月",
+  "nextMonth": "下個月",
+  "nextYear": "下一年",
+  "today": "今天",
+  "addCustom": "新增「{value}」"
 }

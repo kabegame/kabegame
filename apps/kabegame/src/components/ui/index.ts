@@ -35,13 +35,16 @@ export { default as MenuRadioGroup } from "./MenuRadioGroup.vue";
 export { default as MenuSub } from "./MenuSub.vue";
 
 // 表单
+export { default as Autocomplete } from "./Autocomplete.vue";
 export { default as Checkbox } from "./Checkbox.vue";
 export { default as CheckboxGroup } from "./CheckboxGroup.vue";
 export { default as ColorPickerPanel } from "./ColorPickerPanel.vue";
 export { default as Combobox } from "./Combobox.vue";
+export { default as DatePicker } from "./DatePicker.vue";
 export { default as FilterDropdown, default as KbFilterDropdown } from "./FilterDropdown.vue";
 export * from "./filterDropdown";
 export { default as Field } from "./Field.vue";
+export { useForm, type FormApi } from "./form";
 export { default as Input } from "./Input.vue";
 export { default as NumberField } from "./NumberField.vue";
 export { default as RadioGroup } from "./RadioGroup.vue";
@@ -51,14 +54,17 @@ export { default as Select } from "./Select.vue";
 export { default as Slider } from "./Slider.vue";
 export { default as Switch } from "./Switch.vue";
 export { default as Textarea } from "./Textarea.vue";
+export { default as TimeField } from "./TimeField.vue";
 
 // 展示
 export { default as Alert } from "./Alert.vue";
 export { default as DescriptionItem } from "./DescriptionItem.vue";
 export { default as DescriptionList } from "./DescriptionList.vue";
 export { default as Empty } from "./Empty.vue";
+export { default as Lightbox } from "./Lightbox.vue";
 export { default as Progress } from "./Progress.vue";
 export { default as ScrollArea } from "./ScrollArea.vue";
+export { default as SectionTitle } from "./SectionTitle.vue";
 export { default as Separator } from "./Separator.vue";
 export { default as Skeleton } from "./Skeleton.vue";
 export { default as Tabs } from "./Tabs.vue";

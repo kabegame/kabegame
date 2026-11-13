@@ -1,33 +1,28 @@
 <template>
-  <div
-    class="flex h-16px min-w-0 items-center gap-1 text-11px leading-16px text-[var(--anime-text-secondary)]"
-    :title="tooltip"
-  >
+  <div class="flex h-16px min-w-0 items-center gap-1 text-11px leading-16px text-kb-fg-muted" :title="tooltip">
     <button
       v-if="editable"
       type="button"
-      class="h-16px w-16px flex flex-none items-center justify-center border-0 rounded-3px bg-transparent p-0 text-[var(--anime-text-muted)] hover:bg-[var(--anime-bg-hover)] hover:text-[var(--anime-primary)] disabled:cursor-not-allowed disabled:opacity-35"
+      :class="STEP_BUTTON"
       :aria-label="t('common.decrease')"
       :disabled="busy || effective <= 1"
       @click.stop="update(decreasedTaskConcurrency(effective))"
     >
-      <Minus class="h-10px w-10px" />
+      <Minus class="size-2.5" />
     </button>
     <span class="whitespace-nowrap tabular-nums">
       {{ t("tasks.drawerConcurrency", { active: inFlight, limit: effective }) }}
     </span>
-    <span v-if="limit == null" class="text-[var(--anime-text-muted)]">
-      · {{ t("tasks.taskRunParamsFollowGlobal") }}
-    </span>
+    <span v-if="limit == null" class="text-kb-fg-subtle">· {{ t("tasks.taskRunParamsFollowGlobal") }}</span>
     <button
       v-if="editable"
       type="button"
-      class="h-16px w-16px flex flex-none items-center justify-center border-0 rounded-3px bg-transparent p-0 text-[var(--anime-text-muted)] hover:bg-[var(--anime-bg-hover)] hover:text-[var(--anime-primary)] disabled:cursor-not-allowed disabled:opacity-35"
+      :class="STEP_BUTTON"
       :aria-label="t('common.increase')"
       :disabled="busy || limit == null"
       @click.stop="update(increasedTaskConcurrency(effective, globalMax))"
     >
-      <Plus class="h-10px w-10px" />
+      <Plus class="size-2.5" />
     </button>
   </div>
 </template>
@@ -35,7 +30,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Minus, Plus } from "@kabegame/element-plus-icons";
+import { Minus, Plus } from "@lucide/vue";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 import { kameMessage } from "@/utils/kameMessage";
@@ -54,6 +49,9 @@ const { t } = useI18n();
 const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
 const busy = ref(false);
+
+const STEP_BUTTON =
+  "box-border flex size-4 flex-none cursor-pointer items-center justify-center rounded-[3px] border-0 bg-transparent p-0 text-kb-fg-subtle hover:bg-kb-hover hover:text-kb-fg disabled:cursor-not-allowed disabled:opacity-35";
 const globalMax = computed(() => Math.max(1, Number(settingsStore.values.maxConcurrentDownloads) || 1));
 const effective = computed(() => effectiveTaskConcurrency(props.limit, globalMax.value));
 const tooltip = computed(() =>

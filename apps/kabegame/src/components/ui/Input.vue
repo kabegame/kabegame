@@ -20,7 +20,10 @@
       :readonly="readonly"
       :aria-invalid="field.invalid.value || undefined"
       :aria-describedby="field.describedBy.value"
-      class="h-full min-w-0 flex-1 border-0 bg-transparent px-2.5 py-0 text-inherit outline-none [font:inherit] placeholder:text-kb-fg-subtle"
+      :class="[
+        'h-full min-w-0 flex-1 border-0 bg-transparent px-2.5 py-0 text-inherit outline-none [font:inherit] placeholder:text-kb-fg-subtle',
+        inputClass,
+      ]"
     />
     <button
       v-if="clearable && model && !disabled && !readonly"
@@ -60,6 +63,8 @@ const props = withDefaults(
     invalid?: boolean;
     id?: string;
     size?: "sm" | "md";
+    /** 加在内层 input 上的类（如数字居中 `text-center tabular-nums`） */
+    inputClass?: string;
   }>(),
   { type: "text", size: "md" },
 );

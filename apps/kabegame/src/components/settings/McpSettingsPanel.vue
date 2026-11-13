@@ -1,69 +1,61 @@
 <template>
-  <div class="mcp-panel">
-    <div
-      v-if="!enabled"
-      class="rounded-xl border border-[color-mix(in_srgb,var(--anime-warning,#e6a23c)_35%,transparent)] bg-[color-mix(in_srgb,var(--anime-warning,#e6a23c)_8%,transparent)] px-4 py-3 text-[12px] text-[var(--anime-text-muted)]"
-    >
-      {{ $t("settings.mcpRequiresWebServer") }}
-    </div>
+  <div class="flex w-full flex-col gap-5">
+    <Alert v-if="!enabled" tone="warning" :description="$t('settings.mcpRequiresWebServer')" />
 
     <!-- ── 能力矩阵 ── -->
-    <section class="mcp-block">
-      <header class="mcp-block__head">
-        <div class="mcp-block__titles">
-          <h3 class="mcp-block__title">{{ $t("settings.mcpCapabilities") }}</h3>
-          <p class="mcp-block__desc">{{ $t("settings.mcpCapabilitiesDesc") }}</p>
+    <section :class="BLOCK">
+      <header class="mb-4 flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h3 class="m-0 text-[15px] font-600 text-kb-fg">{{ $t("settings.mcpCapabilities") }}</h3>
+          <p class="m-0 mt-1 text-[12px] text-kb-fg-muted">{{ $t("settings.mcpCapabilitiesDesc") }}</p>
         </div>
-        <div class="mcp-block__actions">
-          <button type="button" class="mcp-ghost-btn" @click="setAll(true)">
-            {{ $t("settings.mcpSelectAll") }}
-          </button>
-          <button type="button" class="mcp-ghost-btn" @click="setAll(false)">
-            {{ $t("settings.mcpClearAll") }}
-          </button>
+        <div class="flex shrink-0 gap-2">
+          <Button size="sm" @click="setAll(true)">{{ $t("settings.mcpSelectAll") }}</Button>
+          <Button size="sm" @click="setAll(false)">{{ $t("settings.mcpClearAll") }}</Button>
         </div>
       </header>
 
-      <div v-loading="capsLoading" class="mcp-matrix">
-        <article v-for="cat in groupedCapabilities" :key="cat.category" class="mcp-cat">
-          <div class="mcp-cat__head">
-            <el-checkbox
-              class="mcp-cat__check"
-              :model-value="cat.checked"
-              :indeterminate="cat.indeterminate"
-              @change="(v) => setCaps(cat.allIds, v === true)"
-            >
-              <span class="mcp-cat__name">{{ t(`mcp.category.${cat.category}`) }}</span>
-            </el-checkbox>
-            <span class="mcp-cat__count">{{ cat.enabledCount }}/{{ cat.total }}</span>
+      <div v-loading="capsLoading" class="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3.5">
+        <article
+          v-for="cat in groupedCapabilities"
+          :key="cat.category"
+          class="rounded-kb-md border border-solid border-kb-line px-3.5 py-3 transition-colors duration-150 hover:border-kb-line-strong"
+        >
+          <div class="mb-2 flex items-center justify-between border-0 border-b border-dashed border-kb-line pb-2">
+            <Checkbox :model-value="tristate(cat)" @update:model-value="(v) => setCaps(cat.allIds, v === true)">
+              <span class="text-[14px] font-600 text-kb-fg">{{ t(`mcp.category.${cat.category}`) }}</span>
+            </Checkbox>
+            <span class="font-mono text-[11px] text-kb-fg-muted">{{ cat.enabledCount }}/{{ cat.total }}</span>
           </div>
-          <div v-for="grp in cat.kinds" :key="grp.kind" class="mcp-kind">
-            <el-checkbox
-              class="mcp-kind__check"
-              :model-value="grp.checked"
-              :indeterminate="grp.indeterminate"
-              @change="(v) => setCaps(grp.ids, v === true)"
+          <div v-for="grp in cat.kinds" :key="grp.kind" class="mt-1.5">
+            <Checkbox
+              class="my-1"
+              :model-value="tristate(grp)"
+              @update:model-value="(v) => setCaps(grp.ids, v === true)"
             >
-              <span class="mcp-kind__tag" :class="`is-${grp.kind}`">
+              <!-- 读 / 写只用色调区分：写入类用警告色提醒它会改数据 -->
+              <Tag size="sm" :tone="grp.kind === 'write' ? 'warning' : 'neutral'" class="uppercase tracking-[0.06em]">
                 {{ t(`mcp.kind.${grp.kind}`) }}
-              </span>
-            </el-checkbox>
-            <ul class="mcp-caplist">
+              </Tag>
+            </Checkbox>
+            <ul class="m-0 list-none p-0">
+              <!-- 整行可点；复选框自己的点击不再冒泡到行，免得切两次 -->
               <li
                 v-for="cap in grp.caps"
                 :key="cap.id"
-                class="mcp-cap"
-                :class="{ 'is-on': !disabledSet.has(cap.id) }"
+                class="flex cursor-pointer items-start gap-2.5 rounded-kb-sm px-2 py-1.5 transition-colors duration-100 hover:bg-kb-hover"
                 @click="setCaps([cap.id], disabledSet.has(cap.id))"
               >
-                <el-checkbox
+                <Checkbox
                   :model-value="!disabledSet.has(cap.id)"
                   @click.stop
-                  @change="(v) => setCaps([cap.id], v === true)"
+                  @update:model-value="(v) => setCaps([cap.id], v === true)"
                 />
-                <div class="mcp-cap__text">
-                  <span class="mcp-cap__name">{{ t(`mcp.cap.${cap.id}.name`) }}</span>
-                  <span class="mcp-cap__desc">{{ t(`mcp.cap.${cap.id}.desc`) }}</span>
+                <div class="flex min-w-0 flex-col gap-px">
+                  <span class="text-[13px] leading-[1.4] text-kb-fg">{{ t(`mcp.cap.${cap.id}.name`) }}</span>
+                  <span class="break-words text-[11px] leading-[1.4] text-kb-fg-muted">
+                    {{ t(`mcp.cap.${cap.id}.desc`) }}
+                  </span>
                 </div>
               </li>
             </ul>
@@ -73,18 +65,20 @@
     </section>
 
     <!-- ── 连接命令 ── -->
-    <section class="mcp-block">
-      <header class="mcp-block__head">
-        <div class="mcp-block__titles">
-          <h3 class="mcp-block__title">{{ $t("settings.mcpConnectTitle") }}</h3>
-          <p class="mcp-block__desc">{{ $t("settings.mcpConnectDesc") }}</p>
-        </div>
+    <section :class="BLOCK">
+      <header class="mb-4">
+        <h3 class="m-0 text-[15px] font-600 text-kb-fg">{{ $t("settings.mcpConnectTitle") }}</h3>
+        <p class="m-0 mt-1 text-[12px] text-kb-fg-muted">{{ $t("settings.mcpConnectDesc") }}</p>
       </header>
-      <div class="mcp-connect">
-        <div v-for="cmd in connectCommands" :key="cmd.key" class="mcp-connect__card">
-          <div class="mcp-connect__head">
-            <span class="mcp-connect__name">{{ cmd.title }}</span>
-            <span class="mcp-connect__hint">{{ cmd.desc }}</span>
+      <div class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-3.5">
+        <div
+          v-for="cmd in connectCommands"
+          :key="cmd.key"
+          class="rounded-kb-md border border-solid border-kb-line px-3.5 py-3 transition-colors duration-150 hover:border-kb-line-strong"
+        >
+          <div class="mb-2.5 flex flex-col gap-0.5">
+            <span class="text-[13px] font-600 text-kb-fg">{{ cmd.title }}</span>
+            <span class="text-[11px] text-kb-fg-muted">{{ cmd.desc }}</span>
           </div>
           <CodeBlock :code="cmd.code" />
         </div>
@@ -101,6 +95,10 @@ import { invoke } from "@/api/rpc";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import CodeBlock from "@/components/common/CodeBlock.vue";
 import { vLoading } from "@/components/ui/loading";
+import Alert from "@/components/ui/Alert.vue";
+import Button from "@/components/ui/Button.vue";
+import Checkbox from "@/components/ui/Checkbox.vue";
+import Tag from "@/components/ui/Tag.vue";
 
 interface McpCapability {
   id: string;
@@ -112,6 +110,13 @@ interface McpCapability {
 }
 
 const { t } = useI18n();
+
+/** 区块外框（能力矩阵、连接命令） */
+const BLOCK = "box-border rounded-kb-lg border border-solid border-kb-line bg-kb-surface-raised px-5 py-[18px]";
+
+/** 全选 / 部分 / 全不选 → 复选框的三态 */
+const tristate = (g: { checked: boolean; indeterminate: boolean }) =>
+  g.checked ? true : g.indeterminate ? ("indeterminate" as const) : false;
 
 const { settingValue: enabledValue } = useSettingKeyState("webServerEnabled");
 const { settingValue: portValue } = useSettingKeyState("webServerPort");
@@ -228,206 +233,3 @@ const connectCommands = computed(() => [
 
 void loadCaps();
 </script>
-
-<style scoped lang="scss">
-.mcp-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  width: 100%;
-}
-
-/* ── 区块通用 ── */
-.mcp-block {
-  border-radius: 16px;
-  padding: 18px 20px;
-  border: 1px solid var(--anime-border, rgba(255, 255, 255, 0.08));
-  background: color-mix(in srgb, var(--anime-bg-card, #1c1c28) 70%, transparent);
-}
-.mcp-block__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.mcp-block__title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--anime-text-primary);
-}
-.mcp-block__desc {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--anime-text-muted);
-}
-.mcp-block__actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.mcp-ghost-btn {
-  padding: 5px 12px;
-  font-size: 12px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--anime-primary) 26%, transparent);
-  background: transparent;
-  color: var(--anime-primary);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.mcp-ghost-btn:hover {
-  background: color-mix(in srgb, var(--anime-primary) 12%, transparent);
-}
-
-/* ── 能力矩阵 ── */
-.mcp-matrix {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
-}
-.mcp-cat {
-  border-radius: 12px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--anime-primary) 16%, transparent);
-  background:
-    radial-gradient(130% 100% at 0% 0%, color-mix(in srgb, var(--anime-primary) 10%, transparent) 0%, transparent 60%),
-    color-mix(in srgb, var(--anime-bg-card, #1c1c28) 50%, transparent);
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s;
-}
-.mcp-cat:hover {
-  border-color: color-mix(in srgb, var(--anime-primary) 32%, transparent);
-  box-shadow: 0 0 18px -10px color-mix(in srgb, var(--anime-primary) 45%, transparent);
-}
-.mcp-cat__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
-  border-bottom: 1px dashed var(--anime-border, rgba(255, 255, 255, 0.1));
-}
-.mcp-cat__name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--anime-text-primary);
-}
-.mcp-cat__count {
-  font-family: var(--el-font-family-mono, ui-monospace, monospace);
-  font-size: 11px;
-  color: var(--anime-text-muted);
-}
-.mcp-kind {
-  margin-top: 6px;
-}
-.mcp-cat__check,
-.mcp-kind__check {
-  margin-right: 0;
-  height: auto;
-}
-.mcp-cat__check :deep(.el-checkbox__label),
-.mcp-kind__check :deep(.el-checkbox__label) {
-  padding-left: 8px;
-}
-.mcp-kind__check {
-  margin: 4px 0;
-}
-.mcp-kind__tag {
-  display: inline-block;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 1px 7px;
-  border-radius: 6px;
-  margin: 0;
-}
-.mcp-kind__tag.is-read {
-  color: #22d3ee;
-  background: color-mix(in srgb, #22d3ee 14%, transparent);
-}
-.mcp-kind__tag.is-write {
-  color: #f0abfc;
-  background: color-mix(in srgb, #d946ef 16%, transparent);
-}
-.mcp-caplist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.mcp-cap {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 7px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.mcp-cap:hover {
-  background: color-mix(in srgb, var(--anime-primary) 8%, transparent);
-}
-.mcp-cap.is-on {
-  background: color-mix(in srgb, var(--anime-primary) 6%, transparent);
-}
-.mcp-cap :deep(.el-checkbox) {
-  height: auto;
-  margin-top: 2px;
-}
-.mcp-cap__text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.mcp-cap__name {
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--anime-text-primary);
-}
-.mcp-cap__desc {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--anime-text-muted);
-  word-break: break-word;
-}
-
-/* ── 连接命令 ── */
-.mcp-connect {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 14px;
-}
-.mcp-connect__card {
-  border-radius: 12px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--anime-primary) 16%, transparent);
-  background:
-    radial-gradient(130% 100% at 0% 0%, color-mix(in srgb, var(--anime-primary) 10%, transparent) 0%, transparent 60%),
-    color-mix(in srgb, var(--anime-bg-card, #1c1c28) 50%, transparent);
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s;
-}
-.mcp-connect__card:hover {
-  border-color: color-mix(in srgb, var(--anime-primary) 32%, transparent);
-  box-shadow: 0 0 18px -10px color-mix(in srgb, var(--anime-primary) 45%, transparent);
-}
-.mcp-connect__head {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-bottom: 10px;
-}
-.mcp-connect__name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--anime-text-primary);
-}
-.mcp-connect__hint {
-  font-size: 11px;
-  color: var(--anime-text-muted);
-}
-</style>

@@ -11,6 +11,7 @@
     "npm:@ctrl/tinycolor@^4.2.0": "4.2.0",
     "npm:@floating-ui/dom@^1.7.4": "1.8.0",
     "npm:@fltsci/tauri-plugin-tracing@~0.3.4": "0.3.4",
+    "npm:@internationalized/date@3.12.4": "3.12.4",
     "npm:@lucide/vue@1.65.0": "1.65.0_vue@3.5.40__typescript@5.9.3",
     "npm:@modelcontextprotocol/sdk@^1.32.2": "1.32.2_zod@3.25.76",
     "npm:@panzoom/panzoom@^4.6.1": "4.6.1",
@@ -7518,6 +7519,7 @@
         "packageJson": {
           "dependencies": [
             "npm:@fltsci/tauri-plugin-tracing@~0.3.4",
+            "npm:@internationalized/date@3.12.4",
             "npm:@lucide/vue@1.65.0",
             "npm:@panzoom/panzoom@^4.6.1",
             "npm:@tauri-apps/api@^2.11.0",

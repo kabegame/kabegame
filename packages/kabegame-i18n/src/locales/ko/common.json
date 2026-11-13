@@ -5,6 +5,12 @@
   "decrease": "감소",
   "increase": "증가",
   "close": "닫기",
+  "imagePreview": "이미지 보기",
+  "previousImage": "이전 이미지",
+  "nextImage": "다음 이미지",
+  "zoomIn": "확대",
+  "zoomOut": "축소",
+  "resetZoom": "확대/축소 초기화",
   "clear": "지우기",
   "selectAll": "모두 선택",
   "deselectAll": "선택 해제",
@@ -121,5 +127,11 @@
     "analyze": "데이터베이스 최적화 중…",
     "services": "서비스를 시작하는 중…",
     "failed": "시작하지 못했습니다"
-  }
+  },
+  "prevYear": "이전 해",
+  "prevMonth": "이전 달",
+  "nextMonth": "다음 달",
+  "nextYear": "다음 해",
+  "today": "오늘",
+  "addCustom": "\"{value}\" 추가"
 }

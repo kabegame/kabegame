@@ -46,7 +46,7 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 7. **字号阶梯**：是否定一套字号 / 行高 token（标题 17、正文 13、说明 12.5 是 P0 的取值）。
 8. ~~**组件陈列页**~~（P2 做了）：dev 下的 `/dev/ui`（`views/dev/UiShowcase.vue`），含混用场景。
 9. ~~**P0 的焦点问题**~~（P2 修了）：菜单关闭时若刚打开了不包含触发器的 EP 对话框，焦点送进那个对话框（`compat.ts` 的 `keepFocusForForeign`）。
-10. **插件文档里的看图**（`el-image-viewer`）：复用预览的 photoswipe 还是自写灯箱（P7）。
+10. ~~**插件文档里的看图**~~（P7 定了）：桌面自写灯箱 `components/ui/Lightbox.vue`（仓库里的 photoswipe-vue 是为触屏写的，没有键盘、箭头与滚轮）；紧凑端照旧用 photoswipe（捏合手势）。
 
 ## 分期总览
 
@@ -57,10 +57,10 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 | **P2 ✅** | 底座与反馈 | 门面 + 新组件 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P2」与下方「P2 实施记录」 |
 | **P3 ✅** | 画廊 | 47 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P3」与下方「P3 实施记录」 |
 | **P4 ✅** | 图片预览与详情 | 15 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P4」与下方「P4 实施记录」 |
-| P5 | 收集与任务 | 29 | 四种收集对话框、共用表单控件换芯、任务抽屉；form-item 31 |
-| P6 | 画册与畅游 | 6 | `Albums.vue`、`Surf.vue`（各 1000+ 行）、画册树 |
-| P7 | 插件 | 13 | 插件浏览 / 详情 / 文档 / 导入；骨架 16、空状态 9 |
-| P8 | 自动任务、设置与其它 | 33 | 运行配置、设置页全部条目、更新、日志；descriptions 27、switch 11 |
+| **P5 ✅** | 收集与任务 | 39 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P5」与下方「P5 实施记录」 |
+| **P6 ✅** | 画册与畅游 | 8 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P6」与下方「P6 实施记录」 |
+| **P7 ✅** | 插件 | 15 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P7」与下方「P7 实施记录」 |
+| **P8 ✅** | 自动任务、设置与其它 | 42 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P8」与下方「P8 实施记录」 |
 | P9 | 收尾 | — | confirm 换实现、删垫片、删 EP 包与接线、清 `.el-*`、文档 |
 
 顺序的理由：P1 先换观感，后面每期看得出是同一套；P2 把各期都要的组件与门面一次建好；P3 是主界面，接着 P0；P4 从每个网格都能打开，放在画廊之后、其它界面之前；P5 换共用表单控件，P7 / P8 的表单界面因此更轻；设置页（P8）最后，它的条目最多、但逻辑最简单。
@@ -175,16 +175,54 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 - **新建组件**：DatePicker。
 - **验收**：四种收集各走一遍（必填拦截、默认值、`when` 联动、路径变量、失败重试设置）；任务抽屉右键、重试记录、日志与参数；P0 的焦点问题应随之消失。
 
+#### P5 实施记录
+
+- 分工：表单底座（校验、Kb* 换芯、`DatePicker`）、收集对话框与收集表单、`PluginPickerField` 主线程做；任务簇、三个导入对话框 + `MediaPicker` 各交给一个并行代理（导入簇在底座完成后才派，它要用新的校验）。实际 39 个文件（计划 29 个，多出 `KbStepper` / `KbIntegerInput` / `KbCheckboxGroup`、`TaskConcurrencyControl`、`views/TaskDetail.vue`、几个测试与 P7 / P8 的三处桥接）。
+- 表单校验是本期的核心设计：`el-form` 的 rules + async-validator 换成 `useForm()`（`components/ui/form.ts`）+ `Field` 的 `validator`。
+  - 不做规则对象：每个 Field 一个返回错误文字的函数，表单只负责「提交时一起检查、一起显示」。插件变量的规则改成纯函数 `varFieldError`（原 `getValidationRules`），测试直接测它。
+  - 显示时机：校验结果变过一次才实时显示，没改过的空必填项只在提交时标红。被 `when` 隐藏的字段卸载即注销，比 EP 时代更准（EP 靠 `prop` 路径，隐藏字段的规则要手动清）。
+  - `PluginVarsForm` 有 5 个调用方，P7 / P8 的三个仍在 `el-form` 里：各自另调一个 `useForm()` 校验插件变量（`TODO:[REF_UI]`），迁移那两期时并入整体表单。
+- 比计划多出来的修正（都在 `components/ui/`）：
+  - Reka 的 `Select` / `Combobox` 选项值不能是 `""`（运行时抛错），而插件 options 可以声明 `""`（「全部」）：`KbSelect` 进出时编码。
+  - `Select` 的触发器本身是 `kb-control`，`[font:inherit]` 把 13px 盖成了父级的 16px（陈列页父级恰好 13px 没暴露）；`SelectValue` 给了默认插槽就不回退占位文字，清空后选择框是空的。
+  - `Combobox` 带自定义 `filter` 时拿输入框回显的已选文字去匹配，一展开只剩一项；改为只认键入的文字、收起时清空（展开时清会丢掉「关着时直接打字」的第一次输入）。
+  - `form.validate()` 滚到第一个出错字段不用 smooth：这个 CEF 里平滑滚动不动。
+- `KbMultiSelect` 没用 Reka 的 TagsInput：TagsInput 与 Combobox 嵌套时两边都处理回车，会重复添加；改成 Combobox 多选 + 自己画标签，打不在选项里的字时第一项是「添加「…」」。
+- 弹层开关不再借 `useModal`：本簇的 `Dialog` / `Sheet` / `Popover` 自己接返回栈与层级，紧凑档的 `AndroidDrawer` 不传 `z-index`、自己占栈位。原来 `useModal` + 新组件会在 Android 返回栈里登记两次。
+- `Surf.vue`（P6）地址栏左端用的是 `PluginPickerField`，原来靠 `.el-select` 的覆盖去掉边框，补了一条 `.kb-control` 的过渡样式（`TODO:[REF_UI]`）。
+- 留在后续期的：`TaskParamsDialog` 的 `zIndex` prop 与 `AutoConfigRelatedTasks` 的 `useModal`（P8）；定时任务的闹钟图标从警告黄改成了中性灰（待看）；任务抽屉打开时焦点落在第一个折叠头上、显示焦点环；任务卡片计数行与按钮行之间的空白是固定行高留下的（改前就有）。
+- 未实测：Android 全部、旧对话框（运行配置）里的新浮层与插件参数校验、停止确认、真实扫到 Wallpaper Engine 来源。
+
 ### P6 画册与畅游
 
 - **迁移**：`Albums.vue`（2 个抽屉、2 个对话框、表单、面包屑）、`AlbumTreePanel` / `AlbumTreeView` / `AlbumDetailPanel`、`AlbumContextMenu`；`Surf.vue`（`el-autocomplete` 换成 Combobox，17 条 `.el-*` 覆盖）、`SurfImages`。
 - **规模**：6 个文件，但 `Albums.vue` 与 `Surf.vue` 各 1000+ 行。
 - **验收**：画册树拖拽、新建 / 移动 / 改名 / 删除、紧凑档抽屉、画册信息面板；畅游地址栏补全、站点记录、一键下载。
 
+#### P6 实施记录
+
+- 实际 8 个文件：计划里的 6 个，加 `utils/albumSyncMode.ts`（同步模式图标，P3 留下）与新组件 `ui/Autocomplete.vue`；`SurfImages.vue` 本来就没有 EP，没动。无调用方的 `contextMenu/AlbumContextMenu.vue` 直接删了（画册右键早已是 `actions/albumActions.ts`）。两个画册测试里 mock 的 `@kabegame/element-plus` 改成 mock `@/components/ui/messageBox`。
+- 地址栏没有用 `Combobox` 扩一个「自由输入」开关，而是另写 `Autocomplete`：Reka 的 Combobox 打字时自动高亮第一条、回车选它，值是选项；地址栏要的是值就是文字、回车提交原文，两者的键盘语义相反，硬套要在捕获阶段拦回车（EP 时代就是这么拦的）。`Autocomplete` 用 Popover 原语 + 自己的 listbox：焦点始终在输入框（`aria-activedescendant`），打字不高亮，方向键选中后回车才选候选——比 EP 时代多了「键盘选候选」。地址栏的胶囊造型靠 `anchorClass` / `contentClass` 整体替换默认类（没有 tailwind-merge），外框的 `data-open` 让胶囊在面板展开时下缘变直角。实测补了一条：输入框失焦即收起（面板上按下不夺焦点），否则非指针方式移走焦点时面板留在原处。
+- 左端插件选择器（P5 的 Combobox）嵌在胶囊里，去外框的过渡样式（P5 的 `TODO:[REF_UI]`）改成常规的 scoped `:deep(.kb-control)`，不再是混用期代码。
+- 画册树按「中性外框」把类型的颜色都去掉了（文件夹紫、标签目录青、标签绿、收藏红），只靠图标形状区分，收藏的星与「轮播中」用强调色；隐藏画册的图标从垃圾桶换成 `EyeOff`。右栏「轮播中」的粉紫渐变胶囊换成淡强调色 `Tag`。标题右侧的「⋯」改成「+」：菜单里只有新建三项。
+- 新建画册对话框打开时焦点落在第一个输入框（`Dialog` 的 `open-auto-focus` 里改焦点），否则会落在最上面的类型切换上。`albums.createdAtPrefix` 原文开头多一个「· 」（只有右栏用），顺手去掉。
+- 未实测：紧凑档的两个侧边面板（桌面没有紧凑档，只有 Web / Android）、地址栏真正打开畅游、右栏的轮播 / 同步操作、树拖拽。
+
 ### P7 插件
 
 - **迁移**：`PluginBrowser`（3 个对话框、表格、骨架、空状态）、`PluginDetail`（2 个对话框）、`plugin/` 下的卡片、详情、文档（`el-image-viewer` 按待定 10）、快捷预览、侧栏，`KbLabel`、`PluginImportDialog`。
 - **验收**：商店与已安装列表、安装 / 更新 / 卸载、导入 `.kgpg`、文档与更新日志的图片、快捷预览走马灯。
+
+#### P7 实施记录
+
+- 规模比前几期小，主线程一次做完：计划里的 13 个文件，加新组件 `ui/Lightbox.vue`、`plugin/PluginGridSkeleton.vue`，以及 `App.vue`（导入对话框改 `v-model:open`）、`Dialog` / `AlertDialog` 两处小改与 `KbLabel.test.ts`。
+- 看图（待定 10）：仓库里的 photoswipe-vue 是 P4 前为 Android 预览改写的，只有手势，没有键盘、翻页按钮与滚轮，桌面用不顺；所以桌面自写 `Lightbox`（Reka Dialog，层级与混用期接线同 `Dialog`），紧凑端留 photoswipe。photoswipe 默认挂 body，而 Reka 模态对话框打开时 body 不可点、焦点被锁，在导入对话框里看图会点不动——改为打开时 `append-to` 最近的 `[role=dialog]`。
+- `Dialog` 加 `height` / `fullscreen`：导入对话框要固定的工作台高度（详情主体自己管内部滚动）与紧凑档全屏。没有 tailwind-merge，调用方叠 `h-*` 盖不过默认的 `h-fit`，所以走内联样式；去正文内边距仍是 `body-class` 里写 `!p-0`。
+- 安装 / 卸载确认用 `AlertDialog` 的 `action`：原来 EP 对话框靠 `installing` 手动禁 Esc、禁 ×、按钮 loading，现在由组件负责；顺手给 `AlertDialog` 加了「处理中 Esc 不关」。`confirmInstall` / `confirmUninstall` 失败时提示后重新抛出，确认框留着（同原行为）。
+- 插件卡片的 `el-card` 换成普通的可聚焦 div（Enter 等同点击）；P1 留下的开应用背景时的毛玻璃类去掉了 `--el-card-bg-color`。骨架原来是 300px 宽的大卡片，和真实的 148px 卡片对不上，改成与卡片同尺寸的 `PluginGridSkeleton`。
+- 颜色：标签、前置条件、版本要求原来是蓝 / 绿 / 红 / 橙渐变色块，改成中性 `Tag`（版本要求按是否满足用成功 / 危险色调）与线性状态图标；插件卡片右上角的「可更新」小圆点从红色改成强调色（与 tab 上的更新计数同色）。
+- 留在后续期的：详情左栏 `KbMenuList` 的选中项仍是粉底（共用组件，设置页也用，P8 一起看）；`kb-card` / `kb-chip` / `kb-grad` 三个 Uno 快捷方式还有别处在用（`kb-card` 仍指 `--anime-border`），P9 清。
+- 未实测：真安装 / 更新 / 失败路径、导入源与拖入 `.kgpg`、Android 全部（photoswipe 挂进全屏对话框、返回键）、不兼容版本的提示条。
 
 ### P8 自动任务、设置与其它
 
@@ -193,6 +231,27 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 - **其它**：`UpdateDialog`、`DownloadProgressDialog`、`UpdateButton`、`AppLogDialog`、`KamechanHistoryDialog`。
 - **新建组件**：TimeField。
 - **验收**：设置页每个分区改一次值并确认保存；运行配置新建 / 编辑 / 定时；检查更新流程；日志筛选。
+
+#### P8 实施记录
+
+- 分工同前几期：运行配置簇（`AutoConfigs`、`scheduler/` 全部、新组件 `TimeField`）主线程做；设置簇（`Settings`、`settings/` 全部、`KbMenuList`）与「更新、日志与零碎」簇（两个更新对话框、应用日志、吉祥物历史与图标、工具箱注册表与外链选择的图标、一个测试的 mock）各交给一个并行代理，代理不驱动 app、实测由主线程统一做。实际约 42 个文件（计划 33 个，多出 `KbMenuList`、`CodeBlock`、`useMissedRunsWatch`、`usePluginConfig`、`TaskParamsDialog`、`App.vue` 的两处开关与几个测试）。
+- 做完以后，业务界面里没有 EP 组件了。`grep` 剩下的都是 P9 的事：`App.vue` 的 `el-config-provider`、`bootstrap/app.ts` 的注册、`anime-theme.css` / `dialogs.css` / `kb-compat.css`、`compat.ts` 与 `messageBox.ts`（门面内部）、陈列页的混用场景、两处注释。
+- 运行配置：
+  - 卡片外框与插件卡片同一套（细线、悬停加深与阴影），最近失败的是淡红边；结果是 `Tag` 色调；开关没有 `loading`，切换中禁用。
+  - 定时编辑：`ScheduleSpecEditor` 的模式切换是 `SegmentedControl`，快捷取值改成小胶囊、当前值显示为选中；`el-time-picker` 换成新组件 `TimeField`（Reka TimeField，`en-GB` + `hourCycle 24` 固定 `HH:mm`）。`ScheduleProgressBar` 的 `el-countdown` 换成按 `remaining` 自算的 `HH:mm:ss`（小时不折天，同原来）。
+  - 详情的 `el-descriptions` 换成与 `TaskRunParamsContent` 一模一样的分节外框 + `DescriptionList`，两处看起来是一套。
+  - 编辑去掉 `el-form`，一个 `useForm()` 管名称、来源与插件变量（P5 的 `TODO:[REF_UI]` 清掉，`usePluginConfig` 的 `formRef` 没人用了、删掉）；来源从 `el-select` 换成收集对话框同款的 `PluginPickerField`。
+  - 实测发现查看 / 编辑共用对话框的滚动容器，从详情底部点「编辑」会停在编辑表单中间：切换面板时滚回顶部（要滚到定时一节时除外）。
+  - 漏跑提醒：点遮罩不关；× / Esc / 返回键都等同「稍后再说」（原 `before-close` 就是先 dismiss 再关）。`useMissedRunsWatch` 的 `useModal` 换成同接口的普通开关，`App.vue` 不再传 `z-index`；`TaskParamsDialog` 删掉 P5 留下的 `zIndex`。
+- 设置（代理）：
+  - 左导航与 `KbMenuList` 的选中项从粉紫渐变 / 粉底改成浅灰块（`bg-kb-pressed`），强调色只在选中项的图标上，同 App 侧栏；分区标题从粉色小字改成正文字号的深色标题。
+  - `Switch` 没有 `before-change`：Web 服务器两个开关改成受控，在 `@update:model-value` 里写入，失败时显示值自然不变；原来的 loading 并进 `disabled`。滑块拖动只改本地值，`commit` 才保存。
+  - `PluginDefaultConfigsPanel` 去掉 `el-form`，整面板一个 `useForm()`；保存与重置互斥禁用。
+  - `LanguageSetting` 紧凑档改用 P3 的 `AndroidPickerSelect`，自带的 Vant 与 `.android-picker-select` 样式删除；默认下载目录里写死的 8 处中文换成已有的 i18n key。
+  - MCP 面板 300 行 scoped 样式删除，三态勾选用 `Checkbox` 的 `"indeterminate"`。
+- 更新、日志与零碎（代理）：日志的级别多选用 Reka `ToggleGroup` 就地写（没有多选分段组件，只此一处、不新建）；模块前缀是 `Autocomplete` 的草稿值，回车 / 选中 / 失焦才生效（直接绑筛选值时打字途中半截前缀会把列表筛空）。下载进度在总大小未知时显示不定进度。吉祥物历史改为普通开关（外面再留 `useModal` 会在 Android 返回栈登记两次），层级改向 EP 计数器取号，仍在立绘之上。
+- 实测顺带修的共用组件：`CodeBlock` 的复制按钮原来绝对定位在可横向滚动的 `pre` 上，`pr-10` 会随内容滚走，MCP 连接命令这种长单行就钻到按钮底下；改成按钮单独一列。
+- 未实测：设置逐项保存（会改用户设置）、插件默认配置的校验与重置、Web 服务器 / MCP / 画册盘的开关、定时真保存、漏跑提醒、有新版本时的更新与下载、吉祥物历史、设置对话框（本机是路由页）、Android 全部。
 
 ### P9 收尾
 

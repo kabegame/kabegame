@@ -1,9 +1,10 @@
 <template>
   <section class="settings-section">
-    <h2 class="settings-section-title">
+    <!-- 分区标题：中性正文色的小标题（不再用强调色） -->
+    <h2 class="m-0 mb-2 p-0 text-[15px] font-600 leading-6 text-kb-fg">
       {{ title }}
     </h2>
-    <div class="settings-section-rows">
+    <div>
       <slot />
     </div>
   </section>
@@ -25,14 +26,5 @@ withDefaults(
 <style scoped>
 .settings-section + .settings-section {
   margin-top: 24px;
-}
-
-.settings-section-title {
-  margin: 0 0 12px;
-  padding: 0;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  color: color-mix(in srgb, var(--anime-primary) 55%, var(--anime-secondary) 30%);
 }
 </style>

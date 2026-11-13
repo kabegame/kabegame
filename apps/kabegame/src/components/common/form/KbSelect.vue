@@ -6,34 +6,32 @@
     :options="normalizedOptions"
     @update:model-value="$emit('update:modelValue', $event)"
   />
-  <el-select
-    v-else
-    :model-value="valueForSelect"
+  <!-- 选项多时可搜索 -->
+  <Combobox
+    v-else-if="normalizedOptions.length >= 9"
+    :model-value="encodedValue"
+    :options="encodedOptions"
     :placeholder="placeholder"
     :clearable="allowUnset"
-    :empty-values="[undefined, null]"
-    :filterable="normalizedOptions.length >= 9"
-    :focus-on-open="!IS_ANDROID"
-    style="width: 100%"
     :title="selectedLabel || placeholder"
-    @update:model-value="$emit('update:modelValue', $event)"
-  >
-    <!-- 插件 options 声明的 variable "" 是合法取值（如「全部」）；empty-values 去掉 ""，否则会被当成未选显示占位 -->
-    <!-- 下拉宽度已统一为输入框宽度，长文案会被 ellipsis 截断；补原生 title 让鼠标能看全 -->
-    <el-option
-      v-for="opt in normalizedOptions"
-      :key="opt.value"
-      :label="opt.label"
-      :value="opt.value"
-      :title="opt.label"
-    />
-  </el-select>
+    @update:model-value="onPick"
+  />
+  <Select
+    v-else
+    :model-value="encodedValue"
+    :options="encodedOptions"
+    :placeholder="placeholder"
+    :clearable="allowUnset"
+    :title="selectedLabel || placeholder"
+    @update:model-value="onPick"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useUiStore } from "../../../stores/ui";
-import { IS_ANDROID } from "../../../env";
+import Combobox from "@/components/ui/Combobox.vue";
+import Select from "@/components/ui/Select.vue";
 import KbSegmentedControl from "./KbSegmentedControl.vue";
 
 const isCompact = computed(() => useUiStore().isCompact);
@@ -62,9 +60,17 @@ const props = withDefaults(
   { allowUnset: false, segmented: true },
 );
 
-defineEmits<{
+const emit = defineEmits<{
   "update:modelValue": [value: string | undefined];
 }>();
+
+/**
+ * 插件 options 声明的 variable "" 是合法取值（如「全部」），但 Reka 的选项值不能是空串（空串表示未选）：
+ * 进出下拉时把 "" 换成这个占位。
+ */
+const EMPTY_OPTION = "\u0000kb-empty-option";
+const encode = (v: string) => (v === "" ? EMPTY_OPTION : v);
+const decode = (v: string) => (v === EMPTY_OPTION ? "" : v);
 
 const normalizedOptions = computed(() => {
   const opts = props.options || [];
@@ -82,6 +88,13 @@ const normalizedOptions = computed(() => {
 const valueForSelect = computed<string | undefined>(() => {
   return typeof props.modelValue === "string" ? props.modelValue : undefined;
 });
+
+const encodedValue = computed(() => (valueForSelect.value === undefined ? undefined : encode(valueForSelect.value)));
+const encodedOptions = computed(() => normalizedOptions.value.map((o) => ({ label: o.label, value: encode(o.value) })));
+
+function onPick(v: string | undefined) {
+  emit("update:modelValue", v === undefined ? undefined : decode(v));
+}
 
 /** 触发器里显示的选项文案（窄栅格里会被截断，靠 title 看全） */
 const selectedLabel = computed(

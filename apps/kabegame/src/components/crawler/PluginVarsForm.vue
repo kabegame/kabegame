@@ -1,33 +1,36 @@
 <template>
   <template v-if="pluginVars.length > 0">
-    <div class="plugin-vars-grid" :class="{ 'plugin-vars-grid--compact': isCompact }">
-      <el-form-item
+    <!-- 非 dense 自动流：按声明顺序贪心填充，放不下就整体换行，不回填前面的空档 -->
+    <div class="grid items-start gap-x-3 gap-y-4" :class="isCompact ? 'grid-cols-2' : 'grid-cols-4'">
+      <Field
         v-for="varDef in pluginVars"
         :key="varDef.key"
         :label="varDisplayName(varDef)"
-        :prop="`vars.${varDef.key}`"
         :required="!ignoreRequired && isRequired(varDef)"
-        :rules="getValidationRules(varDef, varDisplayName(varDef), { ignoreRequired })"
+        :validator="
+          () => varFieldError(varDef, (modelValue || {})[varDef.key], varDisplayName(varDef), { ignoreRequired })
+        "
         :style="{ gridColumn: `span ${spanOf(varDef)}` }"
-        class="transition-opacity duration-200 ease-out"
-        :class="{
-          'plugin-vars-item--checkbox': varDef.type === 'checkbox',
-          'opacity-40': isIgnoredByWhen(varDef),
-        }"
+        class="min-w-0 transition-opacity duration-200 ease-out"
+        :class="{ 'opacity-40': isIgnoredByWhen(varDef) }"
       >
-        <!-- checkbox 型：全选与计数挤占字段高度，收进 label 行右侧 -->
-        <template v-if="varDef.type === 'checkbox'" #label>
-          <span>{{ varDisplayName(varDef) }}</span>
+        <!-- checkbox 型：全选与计数挤占字段高度，收进标签行右侧 -->
+        <template v-if="varDef.type === 'checkbox'" #label-end>
           <button
             v-if="checkboxOptionValues(varDef).length > 1"
             type="button"
-            class="plugin-vars-grid__select-all"
-            :class="{ 'is-indeterminate': checkboxIndeterminate(varDef) }"
-            @click.prevent.stop="toggleAllCheckbox(varDef)"
+            class="ml-auto box-border inline-flex h-5 shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-kb-sm border border-solid border-kb-line-strong bg-transparent px-1.5 text-[11.5px] font-500 leading-none text-kb-fg-muted [font-family:inherit] hover:border-kb-fg-subtle hover:text-kb-fg"
+            @click="toggleAllCheckbox(varDef)"
           >
-            {{ checkboxAllSelected(varDef) ? "✓" : "–" }} {{ t("plugins.pluginVarSelectAll") }}
+            <Check v-if="checkboxAllSelected(varDef)" class="size-3" />
+            <Minus v-else-if="checkboxIndeterminate(varDef)" class="size-3" />
+            {{ t("plugins.pluginVarSelectAll") }}
           </button>
-          <span v-if="checkboxOptionValues(varDef).length > 0" class="plugin-vars-grid__count">
+          <span
+            v-if="checkboxOptionValues(varDef).length > 0"
+            class="shrink-0 text-[11px] tabular-nums text-kb-fg-subtle"
+            :class="checkboxOptionValues(varDef).length > 1 ? '' : 'ml-auto'"
+          >
             {{ checkboxSelectedCount(varDef) }}/{{ checkboxOptionValues(varDef).length }}
           </span>
         </template>
@@ -49,14 +52,18 @@
           "
           @update:model-value="(val) => updateVar(varDef, val)"
         />
-      </el-form-item>
+      </Field>
     </div>
 
     <!-- 字段说明统一收到表单底部：逐字段渲染会把栅格行撑得参差不齐、纵向拉得很长 -->
-    <div v-if="describedVars.length > 0" class="plugin-vars-notes">
-      <div v-for="varDef in describedVars" :key="varDef.key" class="plugin-vars-notes__item">
-        <span class="plugin-vars-notes__name">{{ varDisplayName(varDef) }}</span>
-        <span class="plugin-vars-notes__text">{{ varDescripts(varDef) }}</span>
+    <div
+      v-if="describedVars.length > 0"
+      class="mt-4 flex flex-col gap-2 rounded-kb-md bg-kb-fill px-3 py-2.5 text-[12px] leading-[1.6]"
+    >
+      <!-- 走自然文本流而不是 flex：描述折行时回到左边缘，不会缩在右半边排成窄窄一条 -->
+      <div v-for="varDef in describedVars" :key="varDef.key" class="min-w-0">
+        <span class="mr-2 font-600 text-kb-fg">{{ varDisplayName(varDef) }}</span>
+        <span class="text-kb-fg-muted">{{ varDescripts(varDef) }}</span>
       </div>
     </div>
   </template>
@@ -67,7 +74,9 @@ import { computed } from "vue";
 import PluginVar from "../plugin/var-fields/PluginVar.vue";
 import { usePluginConfigI18n, useI18n } from "@kabegame/i18n";
 import { filterVarOptionsByWhen, visibleVarDefs } from "../../utils/pluginVarWhen";
-import { isRequired, getValidationRules, type PluginVarDef } from "../../utils/pluginVarForm";
+import { isRequired, varFieldError, type PluginVarDef } from "../../utils/pluginVarForm";
+import { Check, Minus } from "@lucide/vue";
+import Field from "@/components/ui/Field.vue";
 import { useUiStore } from "../../stores/ui";
 
 const props = withDefaults(
@@ -151,9 +160,7 @@ function toggleAllCheckbox(varDef: PluginVarDef) {
 }
 
 const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] => {
-  const filtered = props.ignoreWhen
-    ? (varDef.options ?? [])
-    : filterVarOptionsByWhen(varDef.options, whenValues.value);
+  const filtered = props.ignoreWhen ? (varDef.options ?? []) : filterVarOptionsByWhen(varDef.options, whenValues.value);
   return filtered.map((opt) =>
     typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
   );
@@ -177,94 +184,3 @@ const updateVar = (varDef: PluginVarDef, value: any) => {
   emit("var-change", varDef, value);
 };
 </script>
-
-<style scoped lang="scss">
-// 非 dense 自动流：按声明顺序贪心填充，放不下就整体换行，不回填前面的空档
-.plugin-vars-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  column-gap: 12px;
-  align-items: start;
-
-  &--compact {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  // 行距沿用 el-form-item 自带的 margin-bottom，容器只负责列间距
-  :deep(.el-form-item) {
-    min-width: 0;
-  }
-
-  // checkbox 型的 label 行要在右侧放全选/计数：整行铺满并 flex 排布。
-  // display: flex 下必填星号（label 的 ::before）仍是首个 flex item，不会换行。
-  :deep(.plugin-vars-item--checkbox .el-form-item__label) {
-    display: flex;
-    align-items: center;
-    width: 100%;
-  }
-}
-
-.plugin-vars-grid__select-all {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  border: 1px dashed color-mix(in srgb, var(--anime-secondary) 60%, transparent);
-  border-radius: 6px;
-  margin: 0 0 0 auto; /* 推到 label 行最右 */
-  background: transparent;
-  color: var(--anime-text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-.plugin-vars-grid__select-all:hover {
-  color: var(--anime-primary);
-  border-color: color-mix(in srgb, var(--anime-primary) 60%, transparent);
-}
-.plugin-vars-grid__select-all.is-indeterminate {
-  border-style: solid;
-}
-
-.plugin-vars-grid__count {
-  margin-left: 6px;
-  font-size: 11px;
-  color: var(--anime-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.plugin-vars-notes {
-  display: flex;
-  flex-direction: column;
-  /* 项内可能折成多行，项间距要明显大于行距才分得开 */
-  gap: 8px;
-  padding: 10px 12px;
-  border-left: 3px solid var(--anime-secondary);
-  border-radius: 12px;
-  margin-bottom: 18px;
-  background: color-mix(in srgb, var(--anime-secondary) 8%, transparent);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-/* 走自然文本流而不是 flex：名称和描述首行仍并排，
-   但描述折行时回到容器左边缘，不会缩在右半边排成窄窄一条 */
-.plugin-vars-notes__item {
-  min-width: 0;
-}
-
-.plugin-vars-notes__name {
-  margin-right: 8px;
-  color: var(--anime-text-secondary);
-  font-weight: 600;
-}
-
-.plugin-vars-notes__text {
-  min-width: 0;
-  color: var(--anime-text-muted);
-}
-</style>

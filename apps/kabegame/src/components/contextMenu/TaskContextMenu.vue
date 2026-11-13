@@ -12,15 +12,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import {
-  Collection,
-  Delete,
-  Document,
-  InfoFilled,
-  Picture,
-  RefreshRight,
-  VideoPause,
-} from "@kabegame/element-plus-icons";
+import { BookmarkPlus, CirclePause, FileText, Image as ImageIcon, Info, RotateCw, Trash2 } from "@lucide/vue";
 import ContextMenu, { type MenuItem } from "@/components/ContextMenu.vue";
 
 interface Props {
@@ -44,7 +36,7 @@ const menuItems = computed<MenuItem[]>(() => {
       key: "stop",
       type: "item",
       label: t("contextMenu.stopTask"),
-      icon: VideoPause,
+      icon: CirclePause,
       command: "stop",
       className: "warning",
     });
@@ -55,7 +47,7 @@ const menuItems = computed<MenuItem[]>(() => {
     key: "detail",
     type: "item",
     label: t("contextMenu.taskDetail"),
-    icon: InfoFilled,
+    icon: Info,
     command: "detail",
   });
 
@@ -64,7 +56,7 @@ const menuItems = computed<MenuItem[]>(() => {
     key: "images",
     type: "item",
     label: t("contextMenu.taskImages"),
-    icon: Picture,
+    icon: ImageIcon,
     command: "images",
   });
 
@@ -73,7 +65,7 @@ const menuItems = computed<MenuItem[]>(() => {
     key: "log",
     type: "item",
     label: t("contextMenu.taskLog"),
-    icon: Document,
+    icon: FileText,
     command: "log",
   });
 
@@ -83,7 +75,7 @@ const menuItems = computed<MenuItem[]>(() => {
       key: "rerun",
       type: "item",
       label: t("contextMenu.rerunTask"),
-      icon: RefreshRight,
+      icon: RotateCw,
       command: "rerun",
     });
   }
@@ -93,7 +85,7 @@ const menuItems = computed<MenuItem[]>(() => {
     key: "save-config",
     type: "item",
     label: t("contextMenu.saveAsConfig"),
-    icon: Collection,
+    icon: BookmarkPlus,
     command: "save-config",
   });
 
@@ -105,7 +97,7 @@ const menuItems = computed<MenuItem[]>(() => {
     key: "delete",
     type: "item",
     label: t("contextMenu.deleteTask"),
-    icon: Delete,
+    icon: Trash2,
     command: "delete",
     className: "danger",
     disabled: isRunning,
@@ -119,9 +111,3 @@ defineEmits<{
   command: [command: string];
 }>();
 </script>
-
-<style scoped lang="scss">
-:deep(.context-menu-item.danger) {
-  color: #e74c3c;
-}
-</style>

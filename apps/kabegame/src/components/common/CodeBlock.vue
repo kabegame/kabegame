@@ -1,12 +1,16 @@
 <template>
-  <div class="relative" :class="singleLine ? 'm-0' : 'my-2'">
+  <!-- 复制按钮单独占一列，不压在可横向滚动的代码上（pre 的右内边距会随内容一起滚走，长单行会钻到按钮底下） -->
+  <div
+    class="flex rounded-kb-md border border-solid border-kb-line bg-kb-fill-lighter"
+    :class="singleLine ? 'm-0 items-center' : 'my-2 items-start'"
+  >
     <!-- kb-selectable：全局 body 是 user-select:none，代码/路径要能划词部分复制 -->
     <pre
-      class="code-block kb-selectable m-0 box-border overflow-x-auto rounded-kb-md border border-solid border-kb-line bg-kb-fill-lighter pl-3 pr-10"
+      class="code-block kb-selectable m-0 box-border min-w-0 flex-1 overflow-x-auto pl-3 pr-1"
       :class="singleLine ? 'py-1.75' : 'py-3'"
     ><code>{{ code }}</code></pre>
     <!-- 单行时垂直居中，多行时贴右上角 -->
-    <div class="absolute right-1.5" :class="singleLine ? 'top-1/2 -translate-y-1/2' : 'top-1.5'">
+    <div class="shrink-0 pr-1.5" :class="singleLine ? '' : 'pt-1.5'">
       <Tooltip :content="copied ? t('common.copied') : t('gallery.imageDetailCopy')">
         <Button variant="ghost" size="icon-sm" :aria-label="t('gallery.imageDetailCopy')" @click="handleCopy">
           <Check v-if="copied" />

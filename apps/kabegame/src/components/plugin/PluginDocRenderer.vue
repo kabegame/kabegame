@@ -1,15 +1,20 @@
 <template>
   <div ref="docRootRef" class="doc-root">
-    <el-skeleton v-if="loading" animated :rows="6" />
-    <div v-else-if="!markdown" class="empty">
-      <el-empty :description="effectiveEmptyDescription" :image-size="100" />
+    <div v-if="loading" class="flex flex-col gap-3 py-2">
+      <Skeleton class="h-5 w-2/5" />
+      <Skeleton v-for="i in 5" :key="i" class="h-3.5" :class="i === 5 ? 'w-3/5' : 'w-full'" />
     </div>
+    <Empty v-else-if="!markdown" :title="effectiveEmptyDescription">
+      <template #icon><FileText /></template>
+    </Empty>
     <div v-else class="doc" v-html="html"></div>
 
-    <!-- Android：photoswipe-vue 底层组件，不循环 -->
+    <!-- 紧凑端：photoswipe-vue（捏合缩放），不循环。挂进所在的对话框（如导入插件）而不是 body：
+         Reka 的模态对话框打开时 body 不可点、焦点被锁在对话框里 -->
     <PhotoSwipe
       v-if="uiStore.isCompact"
       :open="pswpModal.isOpen.value"
+      :append-to="pswpAppendTo"
       v-model:index="docPswpIndex"
       :data-source="docPswpDataSource"
       :loop="false"
@@ -18,21 +23,20 @@
       @close="handleDocPreviewClose"
     />
 
-    <!-- 桌面：Element Plus 图片查看器，不循环 -->
-    <ElImageViewer
-      v-if="!uiStore.isCompact && desktopViewerModal.isOpen.value"
-      :url-list="docDesktopUrlList"
-      :initial-index="docDesktopInitialIndex"
-      :infinite="false"
-      teleported
-      @close="handleDocPreviewClose"
+    <!-- 桌面：灯箱（方向键翻页、滚轮缩放），不循环 -->
+    <Lightbox
+      v-if="!uiStore.isCompact"
+      v-model:open="desktopViewerOpen"
+      v-model:index="docDesktopIndex"
+      :images="docDesktopUrlList"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
-import { ElImageViewer } from "@kabegame/element-plus";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from "vue";
+import { FileText } from "@lucide/vue";
+import { Empty, Lightbox, Skeleton } from "@/components/ui";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -98,10 +102,16 @@ const docPswpDataSource = ref<Array<{ src: string; width: number; height: number
 
 const uiStore = useUiStore();
 
-/** 桌面 ElImageViewer */
-const desktopViewerModal = useModal();
+/** 桌面灯箱（自己接返回栈与层级，不再借 useModal） */
+const desktopViewerOpen = ref(false);
 const docDesktopUrlList = ref<string[]>([]);
-const docDesktopInitialIndex = ref(0);
+const docDesktopIndex = ref(0);
+watch(desktopViewerOpen, (open) => {
+  if (!open) handleDocPreviewClose();
+});
+
+/** photoswipe 的挂载点：在对话框里时挂进对话框，否则 body */
+const pswpAppendTo = ref<HTMLElement | string>("body");
 const currentDocPreview = ref<DocImagePreviewPayload | null>(null);
 
 const PSWP_FALLBACK_W = 1920;
@@ -162,12 +172,13 @@ const handleDocClick = (e: MouseEvent) => {
       if (uiStore.isCompact) {
         docPswpDataSource.value = items;
         docPswpIndex.value = index;
+        pswpAppendTo.value = docRootRef.value?.closest<HTMLElement>('[role="dialog"]') ?? "body";
         await nextTick();
         pswpModal.open();
       } else {
         docDesktopUrlList.value = urls;
-        docDesktopInitialIndex.value = index;
-        desktopViewerModal.open();
+        docDesktopIndex.value = index;
+        desktopViewerOpen.value = true;
       }
     })();
     return;
@@ -182,9 +193,6 @@ const handleDocClick = (e: MouseEvent) => {
 };
 
 const handleDocPreviewClose = () => {
-  if (!uiStore.isCompact) {
-    desktopViewerModal.close();
-  }
   if (currentDocPreview.value) {
     emit("image-preview-close", currentDocPreview.value);
     currentDocPreview.value = null;
@@ -365,35 +373,64 @@ watchEffect((onCleanup) => {
   width: 100%;
 }
 
-.empty {
-  padding: 12px 0;
-}
-
 .doc {
-  color: var(--anime-text-primary);
-  line-height: 1.7;
+  color: var(--kb-fg-regular);
+  font-size: 13.5px;
+  line-height: 1.75;
   word-break: break-word;
 }
 
 .doc :deep(pre) {
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
+  background: var(--kb-fill-lighter);
+  border: 1px solid var(--kb-line);
+  border-radius: var(--kb-radius-md);
   padding: 10px 12px;
   overflow: auto;
+  font-size: 12.5px;
 }
 
 .doc :deep(code) {
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid var(--anime-border);
-  border-radius: 8px;
-  padding: 2px 6px;
+  background: var(--kb-fill-light);
+  border-radius: var(--kb-radius-sm);
+  padding: 1px 5px;
+  font-size: 0.92em;
+}
+
+.doc :deep(pre code) {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.doc :deep(a) {
+  color: var(--kb-fg);
+  text-underline-offset: 2px;
 }
 
 .doc :deep(h1),
 .doc :deep(h2),
 .doc :deep(h3) {
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+}
+
+.doc :deep(h1) {
+  font-size: 20px;
+}
+
+.doc :deep(h2) {
+  font-size: 16.5px;
+}
+
+.doc :deep(h3) {
+  font-size: 14.5px;
+}
+
+.doc :deep(hr) {
+  border: 0;
+  border-top: 1px solid var(--kb-line);
 }
 
 .doc :deep(table) {
@@ -404,17 +441,24 @@ watchEffect((onCleanup) => {
 
 .doc :deep(th),
 .doc :deep(td) {
-  border: 1px solid var(--anime-border);
-  padding: 8px 10px;
+  border: 1px solid var(--kb-line);
+  padding: 7px 10px;
   text-align: left;
+}
+
+.doc :deep(th) {
+  background: var(--kb-fill-lighter);
+  color: var(--kb-fg);
+  font-weight: 600;
 }
 
 .doc :deep(blockquote) {
   margin: 12px 0;
   padding: 8px 12px;
-  border-left: 4px solid var(--anime-border);
-  background: rgba(255, 255, 255, 0.45);
-  border-radius: 8px;
+  border-left: 3px solid var(--kb-line-strong);
+  background: var(--kb-fill-lighter);
+  border-radius: 0 var(--kb-radius-md) var(--kb-radius-md) 0;
+  color: var(--kb-fg-muted);
 }
 
 .doc :deep(ul),
@@ -427,6 +471,8 @@ watchEffect((onCleanup) => {
 }
 
 .doc :deep(img) {
+  max-width: 100%;
+  border-radius: var(--kb-radius-md);
   cursor: zoom-in;
 }
 </style>
