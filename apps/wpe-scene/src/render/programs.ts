@@ -228,11 +228,158 @@ export interface GpuProgram {
   textures: readonly TextureBinding[];
   /** uniform 块大小（16 对齐）；没有普通 uniform 时为 0。 */
   uniformSize: number;
+  /**
+   * A2C 管线用的片元模块与入口（P8 步骤 5，`alphaToCoverageEntry`）：按程序缓存，第一次建 A2C 管线时才建（改写、建模块、检查 Tint 的
+   * 编译消息），之后返回同一个 Promise；从不建 A2C 管线的程序一次都不调，着色器模块与改前相同。改写失败报
+   * `render:program:<下标>:a2c`，Tint 报 error 时报 `webgpu:shader:<下标>:fragment-a2c:…`。
+   */
+  alphaToCoverage(): Promise<ShaderEntry>;
+}
+
+/** 一个着色器模块里的一个入口。 */
+export interface ShaderEntry {
+  module: GPUShaderModule;
+  entryPoint: string;
 }
 
 /** 关掉导数一致性检查（见文件头），与 HLSL 的语义一致。 */
 export const WGSL_PRELUDE = "diagnostic(off, derivative_uniformity);\n";
 const PRELUDE_LINES = 1;
+
+/** A2C 入口的名字前缀：翻译器自己的名字以 `kb_` 开头（`kb_FragColor`、`kb_sampler_*`），再加一段避开。 */
+const A2C_PREFIX = "kb_a2c_";
+
+/** 从 `open` 处的开括号（`(` 或 `{`）找到匹配的闭括号。 */
+function matchBracket(source: string, open: number): number {
+  const opening = source[open];
+  const closing = opening === "(" ? ")" : "}";
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === opening) depth++;
+    else if (source[i] === closing && --depth === 0) return i;
+  }
+  throw new Error(`片元入口的 ${opening} 不匹配`);
+}
+
+/** 按顶层逗号切开（跳过 `<…>` 与 `(…)` 里的逗号），去掉空项。 */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "<" || c === "(") depth++;
+    else if (c === ">" || c === ")") depth--;
+    else if (c === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+/** 一段声明前面的属性（`@location(0)`、`@builtin(frag_depth)`……）与去掉属性后的正文。 */
+function takeAttributes(text: string): { attributes: Map<string, string>; rest: string } {
+  const attributes = new Map<string, string>();
+  const rest = text.replace(/@(\w+)\s*(?:\(([^)]*)\))?\s*/g, (_, name: string, value: string | undefined) => {
+    attributes.set(name, (value ?? "").trim());
+    return "";
+  });
+  return { attributes, rest: rest.trim() };
+}
+
+/** 位置 0 的输出：带 `@location(0)`、不带 `@builtin`，类型是 vec4<f32>（要取 `.a`）。 */
+function isColorOutput(attributes: Map<string, string>, type: string): boolean {
+  const compact = type.replace(/\s+/g, "");
+  return (
+    attributes.get("location") === "0" && !attributes.has("builtin") && (compact === "vec4<f32>" || compact === "vec4f")
+  );
+}
+
+/**
+ * 给翻译出的片元 WGSL 追加 A2C 入口 `kb_a2c_<入口>`（rea-p8-render 第 5 节，p8-REPORT 结论 11）：原入口的逐字副本，每个 `return X;`
+ * 换成「X 的位置 0 输出的 alpha 不大于 0.5（含 NaN）就 discard，否则返回 X」。原入口与主体不动。
+ *
+ * - 返回只认两种（翻译器 naga GLSL 前端的输出，`ignore/p8/s5/dump-entry.txt`）：结构（取带 `@location(0)` 的成员，跳过 `@builtin`），
+ *   或直接 `-> @location(0) vec4<f32>`；位置 0 的类型要是 vec4<f32>。
+ * - 丢弃条件写成 `!(a > 0.5)`：`p8-a2c` 实测 alpha 0.4995 不画、0.5005 画，对象 alpha 0.5（锐化后最大正好 0.5）一列都没画；NaN 也丢。
+ * - 丢弃在入口里、主体（`main_1()`）之后，导数不受影响；WebGPU 的 alpha-to-coverage 只能用在多重采样目标上，WPE 的 `msaa: none`
+ *   单采样下 A2C 实测就是这个硬阈值。
+ * - 每处 `return` 换成一个块（`{ let kb_a2c_out = X; if … { discard; } return kb_a2c_out; }`），多个 `return` 互不冲突。
+ * 返回的 `code` 是原 WGSL 加新入口（不含 `WGSL_PRELUDE`）。结构认不出时抛错（找不到入口、没有位置 0 的 vec4 输出、已经有 `kb_a2c_`
+ * 开头的名字、`return` 没带值），说明翻译器输出变了，要重看改写规则。
+ */
+export function alphaToCoverageEntry(wgsl: string, entryPoint: string): { code: string; entryPoint: string } {
+  if (wgsl.includes(A2C_PREFIX)) throw new Error(`片元着色器里已经有 ${A2C_PREFIX} 开头的名字`);
+  const escaped = entryPoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const heads = [
+    ...wgsl.matchAll(new RegExp(String.raw`@fragment\b(?:\s*@\w+\s*(?:\([^)]*\))?)*\s*fn\s+${escaped}\s*\(`, "g")),
+  ];
+  if (heads.length !== 1) throw new Error(`找不到片元入口 ${entryPoint}（${heads.length} 处）`);
+  const head = heads[0];
+  const open = head.index + head[0].length - 1;
+  const close = matchBracket(wgsl, open);
+  const brace = wgsl.indexOf("{", close);
+  if (brace < 0) throw new Error("片元入口没有函数体");
+  const between = wgsl.slice(close + 1, brace).trim();
+  if (!between.startsWith("->")) throw new Error("片元入口没有返回类型");
+  const returns = takeAttributes(between.slice(2));
+
+  // 位置 0 的输出：返回值本身，或返回结构里带 `@location(0)` 的成员
+  let alpha: string;
+  if (returns.attributes.size) {
+    if (!isColorOutput(returns.attributes, returns.rest))
+      throw new Error(`片元入口的返回 ${between} 不是位置 0 的 vec4`);
+    alpha = `${A2C_PREFIX}out.a`;
+  } else {
+    if (!/^\w+$/.test(returns.rest)) throw new Error(`读不懂片元入口的返回类型 ${returns.rest}`);
+    const struct = new RegExp(String.raw`struct\s+${returns.rest}\s*\{([^}]*)\}`).exec(wgsl);
+    if (!struct) throw new Error(`找不到返回结构 ${returns.rest}`);
+    const member = splitTopLevel(struct[1])
+      .map(takeAttributes)
+      .find(({ attributes, rest }) => isColorOutput(attributes, rest.slice(rest.indexOf(":") + 1)));
+    if (!member) throw new Error(`返回结构 ${returns.rest} 里没有位置 0 的 vec4 成员`);
+    alpha = `${A2C_PREFIX}out.${member.rest.slice(0, member.rest.indexOf(":")).trim()}.a`;
+  }
+
+  // 函数体：逐个 `return X;` 换成先判断再返回（`X` 到顶层的 `;` 为止）
+  const end = matchBracket(wgsl, brace);
+  const body = wgsl.slice(brace, end + 1);
+  let rewritten = "";
+  let at = 0;
+  for (const found of body.matchAll(/\breturn\b/g)) {
+    const start = found.index;
+    if (start < at) continue;
+    let depth = 0;
+    let semicolon = -1;
+    for (let i = start; i < body.length; i++) {
+      const c = body[i];
+      if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") depth--;
+      else if (c === ";" && depth === 0) {
+        semicolon = i;
+        break;
+      }
+    }
+    if (semicolon < 0) throw new Error("片元入口的 return 没有结束");
+    const value = body.slice(start + "return".length, semicolon).trim();
+    if (!value) throw new Error("片元入口的 return 没有值");
+    rewritten +=
+      body.slice(at, start) +
+      `{ let ${A2C_PREFIX}out = ${value}; if !(${alpha} > 0.5) { discard; } return ${A2C_PREFIX}out; }`;
+    at = semicolon + 1;
+  }
+  if (!at) throw new Error("片元入口里没有 return");
+  rewritten += body.slice(at);
+
+  // 入口头逐字照抄（属性、参数与 IO 属性、返回类型），只换名字
+  const name = `${A2C_PREFIX}${entryPoint}`;
+  const header = wgsl
+    .slice(head.index, brace)
+    .replace(new RegExp(String.raw`(\bfn\s+)${escaped}(\s*\()`), `$1${name}$2`);
+  return { code: `${wgsl}\n${header}${rewritten}\n`, entryPoint: name };
+}
 
 /** 检查 Tint 的编译消息；error 级的整理成原因键抛出，warning 交给调用方记日志。行号扣掉前言。 */
 async function checkModule(module: GPUShaderModule, index: number, stage: string, warnings: string[]): Promise<void> {
@@ -271,6 +418,8 @@ export async function createProgram(
     label: `scene program ${index}`,
     entries: bindGroupLayoutEntries(result),
   });
+  const fragmentWgsl = result.fragment.wgsl;
+  let a2c: Promise<ShaderEntry> | null = null;
   return {
     index,
     result,
@@ -281,7 +430,31 @@ export async function createProgram(
     vertexPacking: programVertexPacking(result),
     textures: result.textures ?? [],
     uniformSize: result.uniforms?.length ? Math.max(16, Math.ceil((result.uniformBlockSize ?? 0) / 16) * 16) : 0,
+    alphaToCoverage: () => (a2c ??= alphaToCoverageModule(device, fragmentWgsl, result, index, warnings)),
   };
+}
+
+/** A2C 片元模块（`GpuProgram.alphaToCoverage`）：`WGSL_PRELUDE + 原片元 WGSL + 新入口`，编译消息同原模块检查。 */
+async function alphaToCoverageModule(
+  device: GPUDevice,
+  wgsl: string,
+  result: TranslateResult,
+  index: number,
+  warnings: string[],
+): Promise<ShaderEntry> {
+  let entry: { code: string; entryPoint: string };
+  try {
+    entry = alphaToCoverageEntry(wgsl, result.fragment?.entryPoint ?? "main");
+  } catch (error) {
+    warnings.push(`程序 ${index} 的 A2C 入口改写失败：${error instanceof Error ? error.message : String(error)}`);
+    throw new SceneRenderError([`render:program:${index}:a2c`]);
+  }
+  const module = device.createShaderModule({
+    label: `scene program ${index} fragment a2c`,
+    code: WGSL_PRELUDE + entry.code,
+  });
+  await checkModule(module, index, "fragment-a2c", warnings);
+  return { module, entryPoint: entry.entryPoint };
 }
 
 /**
@@ -306,6 +479,8 @@ export function depthFlags(depth: { test: boolean; write: boolean }): string {
  * `cull` 自 P5d 步骤 1 起对所有步骤生效（图像层、粒子、文本、形状同一套，`p5d-cull`）。`depth`（P5d 步骤 1）：画进带深度附件的场景目标
  * 时给，`depthStencil` 是 `SCENE_DEPTH_FORMAT`，测深度时 `greater`（反向 Z，清 0，WPE 的 GREATER），不测时 `always`，`write` 开写入；
  * 标签多一个 ` depth:<t|-><w|->`。不给时没有 `depthStencil`，管线与以前逐项相同。
+ * `alphaToCoverage`（P8 步骤 5）：为真时片元用程序的 A2C 模块与入口（`GpuProgram.alphaToCoverage`，第一次用到时才建），标签多一个
+ * ` a2c`；混合照 `blending`（`alphatocoverage` 在 `blendState` 里是不混合）。为假时与改前逐项相同。
  */
 export async function createPipeline(
   device: GPUDevice,
@@ -319,11 +494,16 @@ export async function createPipeline(
   vertexBuffers?: GPUVertexBufferLayout[],
   cull?: "back",
   depth?: { test: boolean; write: boolean },
+  alphaToCoverage = false,
 ): Promise<GPURenderPipeline> {
   const blend = alphaMax ? groupBlendState(blending) : blending ? blendState(blending) : undefined;
+  // A2C 模块的改写或 Tint 检查失败时抛的是自己的原因键，不包成 `webgpu:pipeline`
+  const fragment: ShaderEntry = alphaToCoverage
+    ? await program.alphaToCoverage()
+    : { module: program.fragment, entryPoint: program.result.fragment?.entryPoint ?? "main" };
   try {
     return await device.createRenderPipelineAsync({
-      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}${alphaMax ? " max" : ""}${vertexBuffers ? " mesh" : ""}${cull ? " cull" : ""}${depth ? ` depth:${depthFlags(depth)}` : ""}`,
+      label: `scene program ${program.index} ${blending ?? "opaque"} ${format}${topology === "triangle-list" ? " list" : ""}${alphaMax ? " max" : ""}${vertexBuffers ? " mesh" : ""}${cull ? " cull" : ""}${depth ? ` depth:${depthFlags(depth)}` : ""}${alphaToCoverage ? " a2c" : ""}`,
       layout: program.pipelineLayout,
       vertex: {
         module: program.vertex,
@@ -331,8 +511,8 @@ export async function createPipeline(
         buffers: vertexBuffers ?? [program.vertexPacking.layout],
       },
       fragment: {
-        module: program.fragment,
-        entryPoint: program.result.fragment?.entryPoint ?? "main",
+        module: fragment.module,
+        entryPoint: fragment.entryPoint,
         // 0x7 = RED | GREEN | BLUE，0xf 再加 ALPHA
         targets: [{ format, blend, writeMask: writeAlpha ? 0xf : 0x7 }],
       },

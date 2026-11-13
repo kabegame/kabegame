@@ -62,7 +62,11 @@ import {
 
 export const SUPPORTED = {
   objects: ["image"],
-  blending: ["normal", "translucent", "additive"],
+  /**
+   * `alphatocoverage`（P8 步骤 5，rea-p8-render 第 5 节）：混合关、写掩码与深度同 normal，着色器加 `ALPHATOCOVERAGE = 1`
+   * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 不大于 0.5 的片元（`render/programs.ts`）。
+   */
+  blending: ["normal", "translucent", "additive", "alphatocoverage"],
   /** 按原格式上传的 `.tex` 格式（0、4、6–9），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
   textureFormats: Object.keys(TEXTURE_FORMATS).map(Number),
   /** FreeImage 形态 `.tex`（mip 是整份图片文件）：2 JPEG、13 PNG，主线程 `createImageBitmap` 解码。 */
@@ -159,18 +163,11 @@ export const EFFECT_UNIFORMS: ReadonlySet<string> = new Set(["g_LayerModelMatrix
  * 其余路径由 `compileScene` 报 `lighting:*`。其余 COMBO（材质 / effect 自己的选项，如 `VERSION`、`BLENDMODE`、
  * rz 的 `HUEMODE`）只是着色器内部分支，交给翻译器即可。
  * - `SPRITESHEET`：要逐帧的 `g_Texture0Rotation` / `Translation`（P6），现在只给恒等帧；
- * - `ALPHATOCOVERAGE`：混合模式 3（B7），没有 MSAA 时结果不同；
  * - 反射、蒙皮、变形、预光照：对应的 uniform 也会被 `uniform:*` 报出，这里一并列上，防止只改 COMBO 漏报。
+ * `ALPHATOCOVERAGE` 自 P8 步骤 5 起不在这里：混合 `alphatocoverage` 的 pass 编译时加它（`writeState.ts` 的 `materialCombos`），着色器
+ * 只做 alpha 锐化，丢弃由渲染器的 A2C 入口做；材质自己写它而混合不是 A2C 时只锐化、不丢弃，和 WPE（D3D11 下 `GLSL` 为 0）相同。
  */
-const ENGINE_COMBOS = new Set([
-  "SPRITESHEET",
-  "ALPHATOCOVERAGE",
-  "REFLECTION",
-  "SKINNING",
-  "SKINNING_ALPHA",
-  "MORPHING",
-  "PRELIGHTING",
-]);
+const ENGINE_COMBOS = new Set(["SPRITESHEET", "REFLECTION", "SKINNING", "SKINNING_ALPHA", "MORPHING", "PRELIGHTING"]);
 
 /**
  * 不影响画面、或由别处裁决的 general 键。
@@ -1142,10 +1139,11 @@ export function shapeIssues(layer: Pick<SceneLayer, "effects">, programs: readon
 /**
  * 材质 pass 的 `alphawriting` 取值（`sample-gaps.md` §2.10，读码可定论）：映射 `"default"` 0、`"enabled"` 1、`"disabled"` 2
  * （`0x140157eb0`–`0x140157f40`）；绘制时 0 什么都不做，1 / 2 才保存设备状态、开关 alpha 写入（`0x140157201`）。
- * 所以 `"default"` 等于没写；其余取值照报。
+ * 所以 `"default"` 等于没写；`enabled` / `disabled` 自 P8 步骤 5 起实现（`ScenePass.alphaWriting`，写掩码见 `render/writeState.ts`）。
+ * 只报这三个以外的取值（WPE 映射表只有这三个，别的值没查，语料 0 个）。
  */
 function alphaWritingUsed(value: unknown): boolean {
-  return active(value) && value !== "default";
+  return active(value) && value !== "default" && value !== "enabled" && value !== "disabled";
 }
 
 /** 材质 pass 的剔除（`cullmode` 规整后的值）：normal 剔背面、屏幕上逆时针为正面；nocull 不剔。 */
@@ -1342,8 +1340,10 @@ export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
  * - `NORMALMAP`：采样器 COMBO，槽 1 按名字绑了纹理就定义，WPE 运行时不读注解里的 `require` / `requireany`
  *   （rea-p4b-render.md 6.2）。`g_Texture1` 的声明在 `#if REFRACT || LIGHTING` 里，没开折射时定义了也不起作用
  *   （语料 `2903412088`）；法线按 `TEX1FORMAT` 解码，翻译器按 `formatcombo` 写这个宏。
+ * - `ALPHATOCOVERAGE`：P8 步骤 5，混合 `alphatocoverage` 时编译期加的（`writeState.ts` 的 `materialCombos`），`genericparticle` 只做
+ *   alpha 锐化，丢弃由渲染器的 A2C 入口做（同图像层，`ENGINE_COMBOS` 的说明）。
  */
-const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND", "REFRACT", "CUTOUT", "NORMALMAP"]);
+const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND", "REFRACT", "CUTOUT", "NORMALMAP", "ALPHATOCOVERAGE"]);
 
 /**
  * 粒子材质 pass 的 COMBO 与光照（混合由 `checkPassFeatures` 照常检查，剔除、深度按 `normalizeDepthKeys` 规整，引擎 uniform /

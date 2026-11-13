@@ -32,6 +32,14 @@
  *   同样）、`TEX<n>FORMAT`（LDR 0；HDR 下经依赖置位 0、自带 `0x10` 且在前 14、在后 0）、照报的四键、被依赖时编 `passthrough`
  *   （`BLENDMODE` 0 / cbm）、`lighting:prelighting`、`dependedOn`。
  * 渲染图、独占 RT 与编码见 `render/p8.test.ts`。
+ *
+ * P8 步骤 5（同计划「步骤 5 — 写入状态」，rea-p8-render 第 4、5 节，p8-REPORT 结论 10、11）：
+ * - 能力表：`alphawriting` 三个合法值不报、别的照报；`alphatocoverage` 不报；程序上编译期加的 `ALPHATOCOVERAGE = 1` 不报
+ *   `combo:` / `particle:combo:`（别的引擎 COMBO 照报）；
+ * - `passAlphaWriting`、`materialCombos`；编译：A2C pass（图层与 effect）的翻译请求带 `ALPHATOCOVERAGE = 1`、小写同名键被换掉，别的混合
+ *   组合键原样；`ScenePass.alphaWriting` 只在 `enabled` / `disabled` 时有；
+ * - 本机有 WPE 时用真翻译器编 `genericimage4`：组合键来自请求、A2C 变体有锐化、`alphaToCoverageEntry` 改写成功。
+ * 写掩码、A2C 管线与入口改写见 `render/p8.test.ts`。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,6 +49,9 @@ import { compileScene, SHAPE_POINT_CONSTANTS, shapeLayerSize, shapePoints, type 
 import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
 import {
   checkObjectFeatures,
+  checkParticleProgram,
+  checkPassFeatures,
+  checkProgramFeatures,
   checkSceneFeatures,
   groupChildIssues,
   isShapeObject,
@@ -48,10 +59,12 @@ import {
   textureSlotRead,
 } from "./features";
 import type { SceneReader } from "./fs";
-import type { SceneObject } from "./model";
+import type { MaterialPass, SceneObject } from "./model";
 import { MISSING_SCRIPT_API, scanScriptApi } from "./scriptApi";
 import { TEX_FLAGS } from "./tex";
+import { ALPHA_TO_COVERAGE_COMBO, materialCombos, passAlphaWriting } from "./writeState";
 import { shapeQuad } from "../render/layout";
+import { alphaToCoverageEntry } from "../render/programs";
 import {
   Wpesl2wgsl,
   type TextureBinding,
@@ -1551,3 +1564,244 @@ describe("compileScene：被依赖图层的编译与照报（P8 步骤 4）", ()
     expect(bundle.layers[0].passthrough).not.toBeNull();
   });
 });
+
+// ———— P8 步骤 5：写入状态 ————
+
+describe("能力表：alphawriting 与 alphatocoverage（P8 步骤 5）", () => {
+  const passKeys = (extra: Record<string, unknown>) => {
+    const keys = new Set<string>();
+    checkPassFeatures({ shader: "genericimage4", ...extra }, keys);
+    return [...keys].sort();
+  };
+
+  it("alphawriting：default / enabled / disabled 都不报（WPE 映射表只有这三个）；别的取值照报，只报一次", () => {
+    for (const value of ["default", "enabled", "disabled"])
+      expect(passKeys({ alphawriting: value }), value).toEqual([]);
+    for (const value of [true, 1, "Enabled", "on", { user: "p", value: "enabled" }])
+      expect(passKeys({ alphawriting: value }), JSON.stringify(value)).toEqual(["material:alphawriting"]);
+    // `active` 为假的值同没写
+    expect(passKeys({ alphawriting: null })).toEqual([]);
+    expect(passKeys({ alphawriting: "" })).toEqual([]);
+  });
+
+  it("alphatocoverage 不再报 blend:alphatocoverage；名字大小写不对、不认识的混合照报", () => {
+    expect(passKeys({ blending: "alphatocoverage" })).toEqual([]);
+    expect(passKeys({ blending: "alphatocoverage", alphawriting: "enabled" })).toEqual([]);
+    expect(passKeys({ blending: "AlphaToCoverage" })).toEqual(["blend:AlphaToCoverage"]);
+    expect(passKeys({ blending: "multiply" })).toEqual(["blend:multiply"]);
+  });
+
+  it("程序上的 ALPHATOCOVERAGE = 1（编译期加的，source request）不报 combo / particle:combo；别的引擎 COMBO 照报", () => {
+    const result = (combos: { name: string; value: number }[]) =>
+      ({ ok: true, uniforms: [], combos: combos.map((combo) => ({ ...combo, source: "request" })) }) as TranslateResult;
+    const programKeys = (combos: { name: string; value: number }[]) => {
+      const keys = new Set<string>();
+      checkProgramFeatures(result(combos), keys);
+      return [...keys].sort();
+    };
+    expect(programKeys([{ name: "ALPHATOCOVERAGE", value: 1 }])).toEqual([]);
+    expect(programKeys([{ name: "alphatocoverage", value: 1 }])).toEqual([]);
+    expect(programKeys([{ name: "SPRITESHEET", value: 1 }])).toEqual(["combo:SPRITESHEET"]);
+    const particleKeys = (pass: MaterialPass, combos: { name: string; value: number }[]) => {
+      const keys = new Set<string>();
+      checkParticleProgram(pass, result(combos), keys);
+      return [...keys].sort();
+    };
+    const a2cPass = { shader: "genericparticle", blending: "alphatocoverage" };
+    expect(particleKeys(a2cPass, [{ name: "ALPHATOCOVERAGE", value: 1 }])).toEqual([]);
+    expect(
+      particleKeys({ ...a2cPass, combos: { alphatocoverage: 0 } }, [{ name: "ALPHATOCOVERAGE", value: 1 }]),
+    ).toEqual([]);
+    expect(particleKeys(a2cPass, [{ name: "SPECULARMAP", value: 1 }])).toEqual(["particle:combo:SPECULARMAP"]);
+  });
+});
+
+describe("passAlphaWriting / materialCombos（P8 步骤 5，rea-p8-render 4.3、5.4）", () => {
+  it("passAlphaWriting：只有 enabled / disabled 带上，其余（缺键、default、照报的取值）不写这个键", () => {
+    expect(passAlphaWriting({ alphawriting: "enabled" })).toEqual({ alphaWriting: "enabled" });
+    expect(passAlphaWriting({ alphawriting: "disabled" })).toEqual({ alphaWriting: "disabled" });
+    const neutral: MaterialPass[] = [
+      {},
+      { alphawriting: "default" },
+      { alphawriting: true },
+      { alphawriting: "Enabled" },
+    ];
+    for (const pass of neutral) expect(passAlphaWriting(pass), JSON.stringify(pass)).toEqual({});
+  });
+
+  it("materialCombos：别的混合原样返回材质的 combos（同一个对象，翻译请求与缓存键不变），缺省时空对象", () => {
+    const combos = { LIGHTING: 1 };
+    for (const blending of [undefined, "normal", "translucent", "additive", "AlphaToCoverage"])
+      expect(materialCombos({ blending, combos }), String(blending)).toBe(combos);
+    expect(materialCombos({ blending: "normal" })).toEqual({});
+  });
+
+  it("materialCombos：alphatocoverage 加 ALPHATOCOVERAGE = 1，先去掉大小写不同的同名键，别的键不动，不改材质", () => {
+    expect(ALPHA_TO_COVERAGE_COMBO).toBe("ALPHATOCOVERAGE");
+    const combos = { LIGHTING: 1, alphatocoverage: 0, AlphaToCoverage: false, ALPHATOCOVERAGE: 0 };
+    const out = materialCombos({ blending: "alphatocoverage", combos });
+    expect(out).toEqual({ LIGHTING: 1, ALPHATOCOVERAGE: 1 });
+    expect(Object.keys(out)).toEqual(["LIGHTING", "ALPHATOCOVERAGE"]);
+    expect(combos).toEqual({ LIGHTING: 1, alphatocoverage: 0, AlphaToCoverage: false, ALPHATOCOVERAGE: 0 });
+    expect(materialCombos({ blending: "alphatocoverage" })).toEqual({ ALPHATOCOVERAGE: 1 });
+  });
+});
+
+/**
+ * 写入状态的编译（内存工程 + 记录请求的假翻译器）：对象 i 用 `models/m<i>.json` → `materials/m<i>.json`（`passes[0]` 上叠 `passes[i]`），
+ * 着色器 `w<i>`，请求按顶点源码 `// w<i>` 认；`fx` 是挂在最后一个对象上的 effect，材质叠 `fx`。
+ */
+async function compileWrites(passes: Record<string, unknown>[], fx: Record<string, unknown>) {
+  const requests: TranslateRequest[] = [];
+  const fake = {
+    async translate(request: TranslateRequest): Promise<TranslateResult> {
+      requests.push(request);
+      return { ok: true, uniforms: [], textures: [], combos: [] };
+    },
+  } as unknown as Wpesl2wgsl;
+  const files: Record<string, Uint8Array | string> = {
+    "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+    "P:/p/materials/a.tex": tex(0),
+    "P:/p/effects/fx/effect.json": JSON.stringify({ passes: [{ material: "materials/effects/fx.json" }] }),
+    "P:/p/materials/effects/fx.json": JSON.stringify({
+      passes: [{ shader: "effects/fx", depthtest: "disabled", depthwrite: "disabled", cullmode: "nocull", ...fx }],
+    }),
+    "P:/p/shaders/effects/fx.vert": "// fx",
+    "P:/p/shaders/effects/fx.frag": "// fx",
+  };
+  const objects = passes.map((pass, i) => {
+    files[`P:/p/models/m${i}.json`] = JSON.stringify({ material: `materials/m${i}.json` });
+    files[`P:/p/materials/m${i}.json`] = JSON.stringify({ passes: [{ shader: `w${i}`, textures: ["a"], ...pass }] });
+    files[`P:/p/shaders/w${i}.vert`] = `// w${i}`;
+    files[`P:/p/shaders/w${i}.frag`] = `// w${i}`;
+    return {
+      id: 10 + i,
+      name: `L${i}`,
+      image: `models/m${i}.json`,
+      origin: "960 540 0",
+      ...(i === passes.length - 1
+        ? { effects: [{ file: "effects/fx/effect.json", id: 90, name: "", visible: true, passes: [{ id: 91 }] }] }
+        : {}),
+    };
+  });
+  files["P:/p/scene.json"] = JSON.stringify({
+    general: { orthogonalprojection: { width: 1920, height: 1080 } },
+    objects,
+  });
+  const bundle = await compileScene({
+    projectDir: "P:/p",
+    sceneAssets: ["A:/assets"],
+    reader: memoryReader(files),
+    translator: fake,
+    postprocess: "disabled",
+    exhaustive: true,
+  });
+  const combosOf = (name: string) =>
+    requests.filter((request) => request.vertex === `// ${name}`).map((request) => request.combos);
+  return { bundle, combosOf };
+}
+
+describe("compileScene：写入状态（P8 步骤 5）", () => {
+  const PASSES = [
+    { blending: "alphatocoverage", combos: { alphatocoverage: 0, LIGHTING: 1 } },
+    { blending: "translucent", combos: { LIGHTING: 1 } },
+    { alphawriting: "enabled" },
+    { alphawriting: "disabled" },
+    { alphawriting: "default" },
+    { blending: "normal" },
+  ];
+  const FX = { blending: "alphatocoverage", alphawriting: "disabled" };
+
+  it("A2C pass 的翻译请求带 ALPHATOCOVERAGE = 1（材质写的小写同名键被换掉），别的混合不带、组合键原样；effect pass 同一规则", async () => {
+    const { bundle, combosOf } = await compileWrites(PASSES, FX);
+    expect(bundle.unsupported).toEqual([]);
+    expect(combosOf("w0")).toEqual([{ LIGHTING: 1, ALPHATOCOVERAGE: 1 }]);
+    expect(combosOf("w1")).toEqual([{ LIGHTING: 1 }]);
+    for (const name of ["w2", "w3", "w4", "w5"]) expect(combosOf(name), name).toEqual([{}]);
+    expect(combosOf("fx")).toEqual([{ ALPHATOCOVERAGE: 1 }]);
+  });
+
+  it("ScenePass.alphaWriting 只在 enabled / disabled 时有，别的 pass 没有这个键（和改前逐字相同）；blending 照材质", async () => {
+    const { bundle } = await compileWrites(PASSES, FX);
+    const base = bundle.layers.map((layer) => layer.passes[0]);
+    expect(base.map((pass) => pass.alphaWriting)).toEqual([
+      undefined,
+      undefined,
+      "enabled",
+      "disabled",
+      undefined,
+      undefined,
+    ]);
+    for (const k of [0, 1, 4, 5]) expect("alphaWriting" in base[k], String(k)).toBe(false);
+    expect(base.map((pass) => pass.blending)).toEqual([
+      "alphatocoverage",
+      "translucent",
+      "normal",
+      "normal",
+      "normal",
+      "normal",
+    ]);
+    const step = bundle.layers.at(-1)!.effects[0].steps[0];
+    if (step.kind !== "draw") throw new Error("effect 没有绘制 pass");
+    expect(step.pass).toMatchObject({ blending: "alphatocoverage", alphaWriting: "disabled" });
+  });
+});
+
+// ———— 真翻译器：genericimage4 的 A2C 变体（本机有 WPE 时） ————
+
+const genericImage4 = join(root ?? "", "assets", "shaders", "genericimage4.frag");
+
+describe.skipIf(!root || !existsSync(wasm) || !existsSync(genericImage4))(
+  "真翻译器：genericimage4 的 A2C 变体（P8 步骤 5，rea-p8-render 5.4）",
+  () => {
+    it("ALPHATOCOVERAGE = 1 来自请求；A2C 变体有锐化（fwidth、saturate 展开成的 clamp），translucent 的没有；A2C 入口改写成功", async () => {
+      const translator = await Wpesl2wgsl.fromBytes(readFileSync(wasm));
+      const material = (blending: string) =>
+        JSON.stringify({ passes: [{ shader: "genericimage4", blending, textures: ["util/white"] }] });
+      const bundle = await compileScene({
+        projectDir: "P:/p",
+        sceneAssets: [join(root!, "assets")],
+        reader: overlayReader({
+          "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+          "P:/p/scene.json": JSON.stringify({
+            general: { orthogonalprojection: { width: 1920, height: 1080 } },
+            objects: [
+              { id: 1, name: "a2c", image: "models/a2c.json", origin: "480 540 0" },
+              { id: 2, name: "trans", image: "models/trans.json", origin: "1440 540 0" },
+            ],
+          }),
+          "P:/p/models/a2c.json": JSON.stringify({ material: "materials/a2c.json" }),
+          "P:/p/models/trans.json": JSON.stringify({ material: "materials/trans.json" }),
+          "P:/p/materials/a2c.json": material("alphatocoverage"),
+          "P:/p/materials/trans.json": material("translucent"),
+        }),
+        translator,
+        postprocess: "disabled",
+        exhaustive: true,
+      });
+      expect(bundle.unsupported).toEqual([]);
+      const programOf = (name: string) => bundle.programs[byName(bundle.layers, name).passes[0].program!];
+      const a2c = programOf("a2c");
+      const trans = programOf("trans");
+      expect(a2c).not.toBe(trans);
+      expect(a2c.combos?.find((combo) => combo.name === ALPHA_TO_COVERAGE_COMBO)).toEqual({
+        name: ALPHA_TO_COVERAGE_COMBO,
+        value: 1,
+        source: "request",
+      });
+      expect(trans.combos?.find((combo) => combo.name === ALPHA_TO_COVERAGE_COMBO)?.value ?? 0).toBe(0);
+      const a2cWgsl = a2c.fragment!.wgsl!;
+      // `saturate((a − 0.5) / max(fwidth(a), 0.0001) + 0.5)`：翻译器把 saturate 展开成 clamp(…, 0, 1)、max 换成 kb_max
+      expect(a2cWgsl).toMatch(/\bfwidth\(\w+\.w\)/);
+      expect(a2cWgsl).toMatch(/\bkb_max\(\w+, 0\.0001f\)/);
+      expect(a2cWgsl).toMatch(/\.w = clamp\(\(\(\(\w+\.w - 0\.5f\) \/ \w+\) \+ 0\.5f\), 0f, 1f\);/);
+      expect(trans.fragment!.wgsl!).not.toMatch(/\bfwidth\(/);
+      const entry = alphaToCoverageEntry(a2cWgsl, a2c.fragment!.entryPoint!);
+      expect(entry.entryPoint).toBe(`kb_a2c_${a2c.fragment!.entryPoint}`);
+      expect(entry.code.startsWith(a2cWgsl)).toBe(true);
+      const added = entry.code.slice(a2cWgsl.length);
+      expect(added).toContain(`fn ${entry.entryPoint}(`);
+      expect(added).toMatch(/if !\(kb_a2c_out\.\w+\.a > 0\.5\) \{ discard; \} return kb_a2c_out;/);
+    });
+  },
+);

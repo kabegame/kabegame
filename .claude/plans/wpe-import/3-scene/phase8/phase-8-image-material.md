@@ -901,6 +901,202 @@ export function checkerTexture(): SceneTexture;
 
   单测或比图要能检出。
 
+## 步骤 5 — 写入状态
+
+### 思路
+
+两件事都只改「一次绘制写哪些通道」，不碰渲染图的结构。
+
+**`alphawriting`**：WPE 的设备有一个「写不写 alpha」的状态。稳态是不写，图层进合成路径时打开，上屏前关掉。材质 pass 的 `alphawriting` 在绑定时改它：`enabled` 打开，`disabled` 关掉，`default` 不动。有两处例外：
+- 最后一个 effect 的上屏 pass 绑定之后被强制改回（只看是不是在 `copybackground: false` 的组里），所以这个 pass 上写什么都不起作用；
+- `copybackground: false` 的组里 alpha 取 MAX，写掩码被强制成 0xF。
+
+我们现在的 `stepPipeline` 已经按目标、组和上屏角色算出缺省的 `alpha`，这一步只在它上面叠材质的取值。规则做成纯函数：
+1. 上屏角色（`final` / `passthrough`）不看材质；
+2. 组的 alpha MAX 强制写；
+3. 其余 `enabled` 写、`disabled` 不写，缺省照旧。
+
+`alphawriting` 随 `ScenePass` 带到渲染器，只在 `enabled` / `disabled` 时写这个字段。语料里的 `enabled` 全在 `cursorripple` 画进 fbo 的 pass 上，本来就写 alpha，画面不变。
+
+**`alphatocoverage`**（混合模式 3）：WPE 的混合状态是混合关、`AlphaToCoverageEnable` 开，写掩码与深度照 `normal`。另外，绑定时给着色器组合键加 `ALPHATOCOVERAGE = 1`，`genericimage4` 等读它，把 alpha 锐化成以 0.5 为中心的阶跃。WPE 用户设置是 `msaa: none`，场景目标单采样，实测 A2C 等于「alpha > 0.5 才写入」的硬阈值。
+
+WebGPU 的 alpha-to-coverage 只能用在多重采样目标上，所以在片元着色器里丢弃：
+- **丢弃的位置**：在翻译出的片元模块里另加一个入口 `kb_a2c_<入口>`。它是原入口的逐字副本，只把每个 `return X;` 换成「X 的位置 0 输出的 alpha 不大于 0.5 就 `discard`，否则返回 X」。主体 `main_1()` 一字不动，丢弃发生在它之后，导数不受影响。
+- **只有 A2C 管线用新入口**：同一个程序既可能画进合成 RT（A2C 关），也可能上屏（A2C 开）。上屏的是哪个 effect pass 要到运行时按 effect 开关才定，所以丢弃必须按管线开关，不能在编译期按程序定。
+- **按需建**：新入口所在的模块按程序在第一次需要 A2C 管线时才建，其余程序和管线的着色器、管线键逐字节不变。
+
+哪一步开 A2C：
+- 步骤的实际混合是 `alphatocoverage` 就开，包括借了基础材质混合的上屏 pass 与 passthrough，以及粒子、网格；
+- 画进合成 RT 的基础 pass 混合是 null，不开，写的是锐化后的 RGBA（`p8-misc` 的 W2）。
+
+组合键只加在混合是 `alphatocoverage` 的材质 pass 上。WPE 在上屏时把基础材质的混合拷给最后一个 effect pass，组合键可能也带上，但 WPE 自带 effect 与语料 167 个工程的着色器里没有一处读 `ALPHATOCOVERAGE`，加不加结果相同。
+
+### 核对（`p8-alpha`、`p8-a2c`、`p8-misc` 的已有抓帧与 rea-p8-render 第 4、5 节，语料 `ignore/p8/s5/`）
+
+| 项 | 读码 / 实测 / 语料 | 结论 |
+|---|---|---|
+| 写掩码表 | rea-p8-render 4.4，`p8-alpha`、`p8-misc` W1 | 见下面点 3 的规则，表的每一行都覆盖 |
+| A2C 的混合与深度 | 4.1、5.2–5.3：混合关、`AlphaToCoverageEnable` 开，不进「强制关深度写」那一档 | `blendState` 对不认识的模式已返回「不混合」，`rasterState` 已按 `normal` 算深度写，都不用改 |
+| A2C 的阈值 | `p8-a2c`：alpha 0.4995 不画、0.5005 画，对象 alpha 0.5（锐化后最大正好 0.5）一列都没画 | 丢弃条件是 `!(a > 0.5)`（NaN 也丢） |
+| 读 `ALPHATOCOVERAGE` 的着色器 | WPE `assets/shaders`：`genericimage3/4`、`clippingmaskimage4`、`generic3/4`、`genericparticle`、`genericropeparticle`、`shadowcaster*`、`base/model_fragment_v1.h`；`effects/` 下 0 个；语料 167 个工程 0 处 | 组合键按材质 pass 自己的混合加，图层、粒子、模型一样 |
+| 语料的 A2C | 2 张：`3611425904` 的「提示模板2」没有 effect（直接上屏）；`3783690410` 的「水梓_裸足」挂 `xray`（基础 pass 进合成 RT、`xray` 的末 pass 上屏开 A2C），它另差 `effect:xray:pass:usertextures` | 两条路径语料里都有，都解锁不了 |
+| 语料的 `alphawriting` | 6 张，全是 `cursorripple` 力场 pass 上的 `enabled`，画进 fbo | 画面不变 |
+| 翻译器输出的片元入口 | `p8-a2c` 的导出（`ignore/p8/s5/out/dump.txt`）：`@fragment fn main(@location(0) …) -> FragmentOutput { …; main_1(); let _e25 = kb_FragColor; return FragmentOutput(_e25); }`，`struct FragmentOutput { @location(0) kb_FragColor: vec4<f32>, }` | 改写只认这两种返回（结构里 `@location(0)` 的成员，或直接 `-> @location(0) vec4<f32>`），认不出就报 `render:program:<下标>:a2c`、整张退回 |
+
+### 现状锚点（HEAD `82653a66`）
+
+**a. 能力表报这两项**（`compile/features.ts:65`、`:1147`、`:1196`）
+```ts
+  blending: ["normal", "translucent", "additive"], // 现状：alphatocoverage 报 blend:alphatocoverage
+// …
+function alphaWritingUsed(value: unknown): boolean {
+  return active(value) && value !== "default"; // 现状：enabled / disabled 也报 material:alphawriting
+}
+// …
+  if (alphaWritingUsed(pass.alphawriting)) unsupported.add("material:alphawriting");
+```
+
+**b. 编译不带组合键，`ScenePass` 不带 `alphawriting`**（`compile/bundle.ts:1518`、`:1581`）
+```ts
+    const result = shaderName
+      ? await shader.compile(shaderName, pass.combos ?? {}, formats, scope, issues, defines, rope) // 现状：A2C 不加 ALPHATOCOVERAGE
+      : null;
+// …
+    return {
+      key: context.key,
+      program,
+      blending: pass.blending ?? "normal", // 现状：没有 alphawriting
+      ...normalizeDepthKeys(pass),
+```
+
+**c. 写不写 alpha 只看目标、组与上屏角色**（`render/scene.ts:735`、`:752`）
+```ts
+export function stepPipeline(step: DrawLike, format, fboFormat, geometry = false, group = null, mesh?, sceneDepth = false): PipelineSpec {
+  const { pass, blending, target, raster } = step;
+  const inGroup = !!group && target.kind === "scene";
+  const alphaMax = inGroup && !group.copyBackground;
+  const upload = step.kind === "draw" && (step.role === "final" || step.role === "passthrough");
+  return {
+    program: pass.program!,
+    blending,
+    // …
+    alpha: target.kind !== "scene" || alphaMax || (inGroup && !upload), // 现状：不看材质的 alphawriting
+```
+
+**d. 管线键与建管线没有 A2C**（`render/scene.ts:709`；`render/programs.ts:310`、`:337`）
+```ts
+  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}…`; // 现状：没有 a2c
+// programs.ts
+      fragment: {
+        module: program.fragment,
+        entryPoint: program.result.fragment?.entryPoint ?? "main", // 现状：只有原入口
+        targets: [{ format, blend, writeMask: writeAlpha ? 0xf : 0x7 }],
+      },
+```
+
+### 点 1 — 规则（新文件 `render/writeState.ts`）
+
+- **新增**
+```ts
+/** 材质 pass 的 `alphawriting`（rea-p8-render 4.3）：只有这两个取值改设备状态；`default` 与没写一样，编译期不写进 `ScenePass`。 */
+export type AlphaWriting = "enabled" | "disabled";
+
+/**
+ * 一次绘制写不写 alpha（rea-p8-render 4.4 的表，p8-REPORT 结论 10、`p8-misc` W1）。`base` 是 `stepPipeline` 按目标、组与上屏角色算的
+ * 缺省值；上屏角色不看材质（绑定后被强制改回）；组的 alpha MAX 强制写（状态 0x10 → 0xF）；其余 enabled 写、disabled 不写。
+ */
+export function writesAlpha(
+  base: boolean,
+  options: { upload: boolean; alphaMax: boolean; alphaWriting?: AlphaWriting },
+): boolean;
+
+/** 这一步开不开 alpha-to-coverage（rea-p8-render 第 5 节）：步骤的实际混合是 `alphatocoverage`。画进合成 RT 的基础 pass 混合是 null。 */
+export function alphaToCoverage(blending: string | null): boolean;
+```
+
+### 点 2 — 编译（`compile/features.ts`、`compile/bundle.ts`）
+
+- **修改** `SUPPORTED.blending` 加 `"alphatocoverage"`。
+- **修改** `alphaWritingUsed`：只报 `default` / `enabled` / `disabled` 以外的取值（WPE 映射表只有这三个，别的值没查，语料 0 个）。
+```ts
+function alphaWritingUsed(value: unknown): boolean {
+  return active(value) && value !== "default" && value !== "enabled" && value !== "disabled"; // 修改
+}
+```
+- **修改** `ScenePass` **新增** `alphaWriting?: AlphaWriting`，`compilePass` 只在 `enabled` / `disabled` 时写。
+- **修改** `compilePass` 编译着色器的组合键：混合是 `alphatocoverage` 时加 `ALPHATOCOVERAGE = 1`（先去掉大小写不同的同名键，翻译器按大写处理）。规则放 `compile/` 下的小函数，`bundle.ts` 只改调用。
+```ts
+    const result = shaderName
+      ? await shader.compile(shaderName, materialCombos(pass), formats, scope, issues, defines, rope) // 修改
+      : null;
+```
+
+### 点 3 — 管线（`render/scene.ts`）
+
+- **修改** `PipelineSpec` **新增** `alphaToCoverage?: true`；`pipelineKey` 只在它为真时加 `|a2c`，其余键逐字不变。
+- **修改** `stepPipeline`：
+```ts
+  const base = target.kind !== "scene" || alphaMax || (inGroup && !upload);
+  return {
+    // …
+    alpha: writesAlpha(base, { upload, alphaMax, alphaWriting: pass.alphaWriting }), // 修改
+    ...(alphaToCoverage(blending) ? { alphaToCoverage: true as const } : {}),      // 新增
+```
+- **修改** `pipelineFor` 把 `alphaToCoverage` 传给 `createPipeline`。
+
+### 点 4 — A2C 入口（`render/programs.ts`）
+
+- **新增** 纯函数，字符串层面改写，结构认不出时抛错：
+```ts
+/**
+ * 给翻译出的片元 WGSL 追加 A2C 入口 `kb_a2c_<入口>`（rea-p8-render 第 5 节，p8-REPORT 结论 11）：原入口的逐字副本，每个 `return X;`
+ * 换成「X 的位置 0 输出的 alpha 不大于 0.5（含 NaN）就 discard，否则返回 X」。原入口与主体不动。
+ */
+export function alphaToCoverageEntry(wgsl: string, entryPoint: string): { code: string; entryPoint: string };
+```
+- **新增** 按程序缓存的 A2C 片元模块（第一次建 A2C 管线时建，编译消息照 `checkModule` 检查，error 报 `webgpu:shader:<下标>:fragment-a2c:…`；改写抛错报 `render:program:<下标>:a2c`）。
+- **修改** `createPipeline` 收 `alphaToCoverage`：为真时片元用 A2C 模块与入口，标签多一个 ` a2c`；为假时与改前逐项相同。
+
+### 点 5 — 单测
+
+- `compile/p8.test.ts`（步骤 5 的 describe，接在后面）：
+  - 能力表：`alphawriting` 三个合法值都不报、`true` 等照报；A2C 不报；
+  - `ScenePass.alphaWriting` 只在 `enabled` / `disabled` 时有；
+  - A2C pass 的翻译请求带 `ALPHATOCOVERAGE = 1`（`source: "request"`），别的混合不带，材质里写了小写同名键时被换掉；
+  - 真翻译器（带 `KABEGAME_WPE_ROOT`）：`genericimage4` 的 A2C 变体输出里有锐化（`fwidth`、`saturate`），A2C 入口改写成功。
+- `render/p8.test.ts`：
+  - `writesAlpha` 逐行对 4.4 的表（直接上屏、末 pass 上屏、passthrough、合成 RT 的基础 pass、fbo、`copybackground` 为 false / true 的组里）；
+  - `stepPipeline` 在各角色与粒子、网格、文本上的 `alpha` 与 `alphaToCoverage`，没有这两项的步骤管线键逐字不变；
+  - `alphaToCoverageEntry`：对导出的真实入口、直接返回 `@location(0)` 的入口、多个 `return` 的改写结果；找不到入口、结构里没有位置 0、已有 `kb_a2c_` 名字时抛错。
+- **改的现有断言**（随设计）：`compile/p4a5.test.ts` 的 `enabled` / `disabled` 不再报；`compile/p5c.test.ts:271` 的 A2C 不再报。
+
+### 实施方式
+
+同前几步：子代理在 HEAD `82653a66` 的快照副本 `ignore/p8/s5/ov` 里做（`ignore/p8/s5/head` 是基线），我验收后按 HEAD 当时的版本逐文件三方合并到工作区，不碰暂存区。
+
+### 验收
+
+- 快照里 tsc 0 error，vitest 全过（基线就失败的照记），Prettier。
+- `kbp regress --corpus`：回放案例全部相同；语料只去掉 `blend:alphatocoverage`（2 张）与 `material:alphawriting`，新出现的键逐张核对（预期没有）。
+- 改写的覆盖面：语料与 WPE `assets/` 里全部片元程序都跑一遍 `alphaToCoverageEntry`，认不出的为 0。
+- 画面（dev 宿主，和 WPE 抓帧逐像素比，屏蔽 FR / CLK）：
+  - `p8-a2c`：三条渐变（A2C、translucent 对照、A2C + 对象 alpha 0.5）；
+  - `p8-misc`：W2 那一条（步骤 4 时差在左半条）应该对上，其余照旧相同；
+  - `p8-alpha`：写掩码按逐 draw 轨迹的管线 `writeMask` 对实测的表；画面上能看出差别的只有「合成 RT 的基础 pass `disabled`」那块（RT 里留着之前的 alpha），池化 RT 的分配和 WPE 不同时如实记下。
+- 语料强制渲染 `3611425904`、`3783690410`：没有 WebGPU 校验错误，A2C 管线建成。
+- 变异检查：
+  - 不丢弃；
+  - 阈值写成 `>=`；
+  - 组合键不加；
+  - 上屏角色看材质的 `alphawriting`；
+  - `disabled` 在合成 RT 上不生效；
+  - `enabled` 在场景目标上不生效；
+  - 组的 alpha MAX 不强制；
+  - 合成 RT 的基础 pass 也开 A2C；
+  - 能力表仍报。
+
+  单测或比图要能检出。
+
 ## 步骤 1–5 的验收
 
 - **每步**：确定性工程和 WPE 逐像素比（`kbp cmp frame --meta`，图层带 `bbox`）；几何类（形状、对齐）另比四角，限值 0.01 像素。
@@ -1065,3 +1261,58 @@ export function checkerTexture(): SceneTexture;
       - 开不开这 4 个属性，最终画面逐字节相同：引用方的 `clipping_mask` 另有一个 `usertextures` pass 没实现（照报 `effect:clipping_mask:pass:usertextures`，那一槽绑白图占位），画出来是透明的，和依赖无关。
   - 引用方绑没绑上，改在快照里静态核对（`ignore/p8/s4/s4corpus.test.ts` → `ignore/p8/s4/out/corpus-bind.json`）：9 张有依赖的场景，被依赖者 23 个，读独占 RT 的 pass 45 个（46 个槽，同核对表的 44 + 2），没有一个绑棋盘格，没有 `dependency:*` 键。
 - **没和 WPE 比的**：`3509243656` 的模型网格读 `_a`，这张场景还差别的节；语料场景都没逐像素比。
+
+### 步骤 5 — 写入状态（2026-11-14）
+
+按提纲做，偏离与补充：
+- **`ENGINE_COMBOS` 去掉 `ALPHATOCOVERAGE`**（计划漏了）：不去掉的话，每个 A2C 程序都会因为编译期加的组合键报 `combo:ALPHATOCOVERAGE`，语料那 2 张会换个键继续退回。去掉后，材质自己写这个组合键、而混合不是 A2C 时也不再报：这时着色器只锐化、不丢弃，和 WPE 在 D3D11 下（`GLSL` 为 0）相同。语料回归核对过，没有场景因此少报这个键。
+- **`PARTICLE_COMBOS` 加上 `ALPHATOCOVERAGE`**：否则粒子 A2C 会改报 `particle:combo:ALPHATOCOVERAGE`，「粒子同一规则」落空。语料粒子 A2C 0 处。
+- **A2C 模块的缓存挂在 `GpuProgram` 上**：`createProgram` 给程序挂一个 `alphaToCoverage()`，第一次调用时改写、建模块、检查 Tint 消息，之后返回同一个 Promise（失败的也缓存）；没有另做缓存表。改写失败报 `render:program:<下标>:a2c`，原因另写进 warnings。
+- **`AlphaWriting` 类型定义在 `compile/writeState.ts`**（`passAlphaWriting`、`materialCombos` 也在这里），`render/writeState.ts` 只转出类型，compile 目录仍然不依赖 render。
+- **改写的写法**：每个 `return X;` 换成 `{ let kb_a2c_out = X; if !(… > 0.5) { discard; } return kb_a2c_out; }`；`@fragment` 与 `fn` 之间允许夹别的属性；位置 0 的输出要是 `vec4<f32>` 或 `vec4f`。
+- **真翻译器用例的断言**：翻译器把 `saturate` 展开成 `clamp(…, 0f, 1f)`，用例断言 `fwidth` 加这条 clamp 锐化表达式。
+- **没改的两处**：泛光材质的编译路径（WPE `assets/materials` 里没有材质用这两个键）；`particleDefines` 里只读注解的探测编译仍用材质原来的组合键（只读槽 0 的注解，和组合键无关）。
+
+- **实现**：
+  - 代理在 HEAD `82653a66` 的快照副本 `ignore/p8/s5/ov` 里做：
+    - 新增 `compile/writeState.ts`、`render/writeState.ts`；
+    - 改 `compile/features.ts`、`compile/bundle.ts`（只有导入、`ScenePass` 字段与两处调用）、`render/programs.ts`、`render/scene.ts`；
+    - 单测加在两个 `p8.test.ts` 末尾；
+    - 现有断言只改了计划列出的两处（`p4a5`、`p5c:271`）。
+  - 我验收后逐文件 `git merge-file` 三方合并到工作区（HEAD 仍是 `82653a66`），8 个文件全部干净合并，没有碰暂存区。工作区里 `bundle.ts`、`features.ts`、`scene.ts`、`render/p8.test.ts` 混着别的会话没提交的改动。
+- **快照验收**（Claude 自跑）：tsc 0 error；vitest 127 个文件、3082 个用例全过；Prettier 通过。
+- **工作区验收**：tsc 0 error；本步相关的 4 个测试文件 225 个用例全过。
+- **回归**（`kbp regress --corpus`，`ignore/p8/s5/regress`）：
+  - 回放案例两边逐字节相同（`e4` 两边同样失败、报告相同，基线就有）；
+  - 语料只去掉 `material:alphawriting`（7 张，比计划多 `3498150384`：它挂在文本对象的 effect 上，文本 effect 现在会编译了）与 `blend:alphatocoverage`（2 张），没有新增的键；
+  - 干净 87 → 87。
+- **改写的覆盖面**：
+  - 我的扫描（`ignore/p8/s5/sweep.test.ts` → `out/sweep.json`）：语料与 WPE 默认工程 179 张场景编出的 522 个不同的片元程序，全部改写成功，返回都是结构形态。
+  - 代理的扫描（`out/a2c-coverage.json`）：WPE `assets/` 下 127 对着色器，在缺省组合键与 `ALPHATOCOVERAGE=1` 下翻译成功的 236 份同样全部成功。
+- **变异**（`ignore/p8/s5/mutations.py`，快照模式，Claude 写的 11 处）：
+  - 不丢弃；
+  - 阈值 `>=`；
+  - 不加组合键；
+  - 上屏角色看材质；
+  - 组的 alpha MAX 不强制；
+  - 混合为 null 也开 A2C；
+  - 所有管线都用 A2C 入口；
+  - 能力表仍报 A2C；
+  - `ScenePass` 不带字段；
+  - 管线键不区分 A2C；
+  - `enabled` 不生效。
+
+  全部被单测检出，按原字节还原。代理另做的 10 处同样全部检出。
+- **画面**：
+  - **宿主**：盘上的 dev 宿主是别的会话用工作区新编的翻译器 wasm 建的。为了不把它换回旧翻译器，我导出工作区现状（`ignore/p8/s5/wt`），三方合并本步后 tsc 0 error，从这里按 `--mode development` 构建。测试工程导入 dev 库，测完用 `projects_remove` 移除。
+  - **比图**（按日志回放，和 WPE 抓帧逐像素比）：
+    - `p8-a2c` 第 162 帧：三条渐变逐像素相同，只有右下角 CLK 时钟图层有 4800 个像素差 1（测试工程约定屏蔽）；
+    - `p8-misc` 第 155 帧：整帧 0 差异（步骤 4 时差在 W2 左半条）；
+    - `p8-alpha` 第 158 帧：Y（直接上屏）与 Z（合成 RT 的基础 pass，含 `disabled`）六块逐像素相同；X 三块（两 pass 的 effect 画进 fbo）我们是 (64, 64, 64)、WPE 是黑。原因是测试工程自写的 fbo pass 顶点乘了 MVP（步骤 0 的失误），我们的中间 pass 按 P2a 的做法用 NDC 四边形、MVP 单位阵，照样铺满 fbo、写进 alpha 0.25；WPE 那边落到 fbo 外、一个像素都没画。三种取值结果相同，和写掩码无关。WPE 自带的 effect 中间 pass 都不读这个矩阵。
+  - **写掩码**：用探针的逐 draw 轨迹读每次绘制的管线状态，`p8-alpha` 的 X / Y / Z 三组九种、`p8-misc` 的 W1 / W2、`p8-a2c` 的三条全部对上 p8-REPORT 的实测表（fbo 15 / 15 / 7，直接上屏 7 / 15 / 7，合成 RT 基础 pass 15 / 15 / 7，上屏 pass 一律 7；A2C 上屏混合关、7、走 A2C 入口，画进合成 RT 的基础 pass 混合关、15、不走），整帧没有校验错误。
+  - **语料强制渲染**（屏外宿主，`requestDevice` 临时挂 `uncapturederror` 监听，用完还原）：
+    - `3611425904`：图层基础材质直接上屏；
+    - `3783690410`：`xray` effect 的末 pass 借基础材质的混合上屏，A2C 入口对 effect 程序同样成立。
+
+    两张都渲染完成、A2C 管线建成，没有校验错误。
+- **没覆盖的**：组的 alpha MAX 与 A2C 并存、粒子 A2C（语料都是 0 张）只有单测；`msaa: x2` 的 A2C 不做（WPE 缺省 `x2`，我们没有多重采样，本来就对不上）。

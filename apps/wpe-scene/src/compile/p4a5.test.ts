@@ -103,7 +103,7 @@ describe("A：属性关键帧报 value:animation", () => {
     expect(collectAnimations(puppet)).toEqual({ list: [], unsupported: [] });
   });
 
-  it("材质常量报；alphawriting 只有 default 中性，enabled / disabled / 其它取值照报", () => {
+  it("材质常量报；alphawriting 的 default 中性，enabled / disabled 自 P8 步骤 5 起实现、不报，其它取值照报", () => {
     const pass = (extra: JsonObject) => {
       const keys = new Set<string>();
       checkPassFeatures({ shader: "genericimage2", ...extra }, keys);
@@ -113,8 +113,8 @@ describe("A：属性关键帧报 value:animation", () => {
     expect(pass({ constantshadervalues: { alpha: 0.5 } })).toEqual([]);
     expect(pass({ alphawriting: "default" })).toEqual([]);
     expect(pass({})).toEqual([]);
-    expect(pass({ alphawriting: "enabled" })).toEqual(["material:alphawriting"]);
-    expect(pass({ alphawriting: "disabled" })).toEqual(["material:alphawriting"]);
+    expect(pass({ alphawriting: "enabled" })).toEqual([]);
+    expect(pass({ alphawriting: "disabled" })).toEqual([]);
     expect(pass({ alphawriting: true })).toEqual(["material:alphawriting"]);
   });
 

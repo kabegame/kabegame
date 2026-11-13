@@ -237,6 +237,7 @@ import {
   type FrameInput,
   type UniformEntry,
 } from "./uniforms";
+import { alphaToCoverage, writesAlpha } from "./writeState";
 
 export { drawMatrices } from "./uniforms";
 
@@ -704,6 +705,11 @@ export interface PipelineSpec {
    * pass 的深度格式一致），`test` 为 GREATER（反向 Z，清 0）、否则 always，`write` 写深度。没有时管线键不变。
    */
   depth?: { test: boolean; write: boolean };
+  /**
+   * 片元用程序的 A2C 入口（P8 步骤 5，`writeState.ts` 的 `alphaToCoverage`、`programs.ts` 的 `alphaToCoverageEntry`）：步骤的实际混合是
+   * `alphatocoverage` 时出现，管线键多一个后缀，其余键和加这一项之前逐字相同。
+   */
+  alphaToCoverage?: true;
 }
 
 export function pipelineKey({
@@ -716,8 +722,9 @@ export function pipelineKey({
   mesh,
   cull,
   depth,
+  alphaToCoverage,
 }: PipelineSpec): string {
-  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}${mesh !== undefined ? `|mesh:${mesh}` : ""}${cull ? `|cull:${cull}` : ""}${depth ? `|depth:${depthFlags(depth)}` : ""}`;
+  return `${program}|${blending}|${format}|${alpha}${topology === "triangle-list" ? "|list" : ""}${alphaMax ? "|max" : ""}${mesh !== undefined ? `|mesh:${mesh}` : ""}${cull ? `|cull:${cull}` : ""}${depth ? `|depth:${depthFlags(depth)}` : ""}${alphaToCoverage ? "|a2c" : ""}`;
 }
 
 /**
@@ -731,6 +738,8 @@ export function pipelineKey({
  * 剔除与深度（P5d 步骤 1）按步骤的 `raster`（`graph.ts` 的 `rasterState`）：`cull` 对所有步骤、所有目标都起作用；深度只在
  * `sceneDepth`（场景目标带深度附件）时、这一步画进场景目标且不在组里才给（组里「画到场景」的落在组的合成 RT 上，WPE 的合成 RT 不挂
  * 深度）。场景没有深度附件时，管线键与改前逐字相同（剔除照旧只看 `raster.cull`）。
+ * 写入状态（P8 步骤 5，`writeState.ts`）：写不写 alpha 在上面的缺省值上叠材质的 `alphawriting`（`writesAlpha`），步骤的实际混合是
+ * `alphatocoverage` 时开 A2C（`alphaToCoverage`）；两者都没用到的步骤，管线键与改前逐字相同。
  */
 export function stepPipeline(
   step: DrawLike,
@@ -745,11 +754,12 @@ export function stepPipeline(
   const inGroup = !!group && target.kind === "scene";
   const alphaMax = inGroup && !group.copyBackground;
   const upload = step.kind === "draw" && (step.role === "final" || step.role === "passthrough");
+  const base = target.kind !== "scene" || alphaMax || (inGroup && !upload);
   return {
     program: pass.program!,
     blending,
     format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
-    alpha: target.kind !== "scene" || alphaMax || (inGroup && !upload),
+    alpha: writesAlpha(base, { upload, alphaMax, alphaWriting: pass.alphaWriting }),
     topology:
       step.kind === "text" || step.kind === "mesh" || (step.kind === "particles" && !geometry)
         ? "triangle-list"
@@ -758,6 +768,7 @@ export function stepPipeline(
     ...(step.kind === "mesh" ? { mesh: mesh ?? "" } : {}),
     ...(raster.cull ? { cull: "back" as const } : {}),
     ...(sceneDepth && target.kind === "scene" && !group ? { depth: { test: raster.test, write: raster.write } } : {}),
+    ...(alphaToCoverage(blending) ? { alphaToCoverage: true as const } : {}),
   };
 }
 
@@ -1340,7 +1351,7 @@ export class GpuScene {
 
   /**
    * `mesh`：网格步骤（P5c 步骤 2）的顶点布局；`cull`、`depth`：步骤的剔除与深度状态（P5d 步骤 1），见 `createPipeline`；键里只在出现时
-   * 加后缀（`pipelineKey`）。
+   * 加后缀（`pipelineKey`）。`alphaToCoverage`：片元用程序的 A2C 入口（P8 步骤 5）。
    */
   private pipelineFor(
     program: GpuProgram,
@@ -1352,6 +1363,7 @@ export class GpuScene {
     mesh?: MeshVertexLayout,
     cull?: PipelineSpec["cull"],
     depth?: PipelineSpec["depth"],
+    alphaToCoverage?: PipelineSpec["alphaToCoverage"],
   ): Promise<GPURenderPipeline> {
     const key = pipelineKey({
       program: program.index,
@@ -1363,6 +1375,7 @@ export class GpuScene {
       mesh: mesh?.key,
       cull,
       depth,
+      alphaToCoverage,
     });
     let pipeline = this.pipelines.get(key);
     if (!pipeline) {
@@ -1377,6 +1390,7 @@ export class GpuScene {
         mesh?.buffers,
         cull,
         depth,
+        alphaToCoverage,
       ).then((ready) => {
         this.readyPipelines.set(key, ready);
         return ready;
@@ -1682,11 +1696,25 @@ export class GpuScene {
       plan.steps.map(async (step) => {
         if (step.kind !== "draw" && step.kind !== "particles" && step.kind !== "text" && step.kind !== "mesh") return;
         const program = await this.ensureProgram(step.pass.program!);
-        const { blending, format, alpha, topology, alphaMax, cull, depth } = this.pipelineOf(step, runtime);
+        const { blending, format, alpha, topology, alphaMax, cull, depth, alphaToCoverage } = this.pipelineOf(
+          step,
+          runtime,
+        );
         const mesh = step.kind === "mesh" ? this.meshLayoutOf(runtime.layer, step) : undefined;
         prepared.set(step, {
           program,
-          pipeline: await this.pipelineFor(program, blending, format, alpha, topology, alphaMax, mesh, cull, depth),
+          pipeline: await this.pipelineFor(
+            program,
+            blending,
+            format,
+            alpha,
+            topology,
+            alphaMax,
+            mesh,
+            cull,
+            depth,
+            alphaToCoverage,
+          ),
         });
       }),
     );

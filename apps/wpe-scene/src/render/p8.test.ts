@@ -30,6 +30,13 @@
  * - 渲染器：`buildableLayers` 收写死隐藏、祖先隐藏的被依赖图层；`layerOpsToRun` 只跳过画到场景的绘制；GpuScene 假设备：独占 RT 建一张、
  *   是被依赖图层的合成 RT 0，两个引用方绑同一张（`g_Texture1Resolution` 是它的尺寸），不可见时画进 RT 不上屏、可见时多一次上屏，effect
  *   开关重建后还是同一张，组里的被依赖者按同一规则。
+ *
+ * P8 步骤 5（同计划「步骤 5 — 写入状态」，rea-p8-render 第 4、5 节，p8-REPORT 结论 10、11）：
+ * - `writesAlpha` 逐行对 4.4 的表，`alphaToCoverage` 只认 `alphatocoverage`；
+ * - `stepPipeline`：直接上屏、基础 pass、fbo pass、末 pass、passthrough、组里的 `alpha` 与 A2C（`p8-alpha` 13–16、`p8-misc` W1 / W2），
+ *   粒子、网格、文本同一套；没有这两项的步骤管线键与改前逐字相同；
+ * - `alphaToCoverageEntry`：导出的真实入口逐字比对、直接返回 `@location(0)`、多个 `return`、认不出时抛错；
+ * - GpuScene 假设备：A2C 管线键、A2C 模块按程序建一次、入口与写掩码，没有 A2C 的场景不建模块，改写或 Tint 失败时的原因键。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ALIGNMENTS, alignmentIndex, type AlignmentName } from "../compile/alignment";
@@ -50,18 +57,21 @@ import { ScriptApi } from "../script/api";
 import { ScriptRuntime, type ScriptRealm, type ScriptTarget, type ScriptValue } from "../script/runtime";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { layerCompositeName } from "../compile/dependencies";
+import { SceneRenderError } from "./errors";
 import {
   compositeSampling,
   planLayer,
   planModelLayer,
   planParticleLayer,
   planShapeLayer,
+  rasterState,
   swapCompositeIndices,
   variantPlans,
   type DrawStep,
   type LayerPlan,
   type LayerStep,
   type TargetRef,
+  type TextStep,
   type TextureRef,
 } from "./graph";
 import {
@@ -78,9 +88,11 @@ import {
   type LayerTransform,
 } from "./layout";
 import { identity, multiply, scaling, transformPoint, translation, type Mat4 } from "./math";
-import { buildableLayers, GpuScene, layerOpsToRun } from "./scene";
+import { alphaToCoverageEntry, WGSL_PRELUDE } from "./programs";
+import { buildableLayers, GpuScene, layerOpsToRun, pipelineKey, stepPipeline } from "./scene";
 import { SceneState, scriptWriteValue } from "./state";
 import { drawMatrices, drawUniformValues, type FrameInput } from "./uniforms";
+import { alphaToCoverage, writesAlpha, type AlphaWriting } from "./writeState";
 
 vi.mock("./device", () => ({ acquireGpu: vi.fn() }));
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -1763,5 +1775,520 @@ describe("GpuScene：被依赖图层的独占 RT 与编码（P8 步骤 4，p8-de
       `pass ${group} load`,
       "  draw layer 11 C passthrough",
     ]);
+  });
+});
+
+// ———— P8 步骤 5：写入状态 ————
+
+describe("writesAlpha：rea-p8-render 4.4 的表（p8-alpha、p8-misc W1）", () => {
+  // 每行：绘制、base（stepPipeline 按目标 / 组 / 上屏角色算的缺省）、upload、alphaMax、期望（缺省、enabled、disabled）
+  it.each<[string, boolean, boolean, boolean, [boolean, boolean, boolean]]>([
+    ["场景目标直接上屏（7 / 0xF / 7）", false, false, false, [false, true, false]],
+    ["最后一个 effect 的上屏 pass（7，绑定后被强制改回）", false, true, false, [false, false, false]],
+    ["passthrough 上屏（7，材质不起作用）", false, true, false, [false, false, false]],
+    ["合成 RT 的基础 pass（0xF / 0xF / 7）", true, false, false, [true, true, false]],
+    ["effect fbo / 合成 RT 的中间 pass（0xF / 0xF / 7）", true, false, false, [true, true, false]],
+    ["copybackground: false 的组里画子层（0x10 强制 0xF）", true, false, true, [true, true, true]],
+    ["copybackground: false 的组里上屏（0x10 强制 0xF）", true, true, true, [true, true, true]],
+    ["copybackground: true 的组里画子层（同合成路径）", true, false, false, [true, true, false]],
+    ["copybackground: true 的组里上屏（WPE 关掉 alpha 写入）", false, true, false, [false, false, false]],
+  ])("%s", (_name, base, upload, alphaMax, expected) => {
+    const values: (AlphaWriting | undefined)[] = [undefined, "enabled", "disabled"];
+    expect(values.map((alphaWriting) => writesAlpha(base, { upload, alphaMax, alphaWriting }))).toEqual(expected);
+  });
+
+  it("alphaToCoverage：只认 alphatocoverage（大小写不同不算）；null（画进合成 RT 的基础 pass）不开", () => {
+    expect(alphaToCoverage("alphatocoverage")).toBe(true);
+    for (const blending of [null, "normal", "translucent", "additive", "AlphaToCoverage", ""])
+      expect(alphaToCoverage(blending), String(blending)).toBe(false);
+  });
+});
+
+/** 写入状态用的 pass：槽 0 是 kbmark（程序 0 图像、1 effect、2 passthrough，同 `DEP_PROGRAMS` 的下标）。 */
+const writePass = (key: string, program: number, extra: Partial<ScenePass> = {}) =>
+  alignPass(key, program, { textures: { 0: 0 }, ...extra });
+/** 两个 pass 的 effect（`p8-alpha` 的 14）：第 1 个画进 fbo `_rt_half`，第 2 个上屏读它；两个 pass 都是程序 1、normal。 */
+function fboEffect(object: number, first: Partial<ScenePass> = {}, last: Partial<ScenePass> = {}): SceneEffect {
+  return {
+    source: 0,
+    id: 700,
+    name: "kbfbo",
+    file: "effects/kbfbo/effect.json",
+    fbos: [{ name: "_rt_half", format: "rgba8888", scale: 1, unique: false, repeat: false }],
+    steps: [
+      {
+        kind: "draw",
+        pass: alignPass(`objects/${object}/effects/0/passes/0`, 1, { blending: "normal", ...first }),
+        target: "_rt_half",
+        compose: false,
+        binds: null,
+      },
+      draw(alignPass(`objects/${object}/effects/0/passes/1`, 1, { blending: "normal", ...last }), [
+        { name: "_rt_half", index: 0 },
+      ]),
+    ],
+    enabled: true,
+    visibleBound: false,
+    unsupported: [],
+  };
+}
+type StepLike = Parameters<typeof stepPipeline>[0];
+const specOf = (step: LayerStep, group: Pick<SceneLayer, "copyBackground"> | null = null, mesh?: string) =>
+  stepPipeline(step as StepLike, "rgba8unorm", () => "rgba8unorm", false, group, mesh);
+/** 一个图层计划里每个绘制步骤的 `角色 目标 alpha [a2c]` 与管线键。 */
+const writeRows = (layer: SceneLayer, group: Pick<SceneLayer, "copyBackground"> | null = null) =>
+  planLayer(layer, DEP_TEXTURES)
+    .steps.filter((step): step is DrawStep => step.kind === "draw")
+    .map((step) => {
+      const spec = specOf(step, group);
+      return [`${step.role} ${step.target.kind} ${spec.alpha}${spec.alphaToCoverage ? " a2c" : ""}`, pipelineKey(spec)];
+    });
+
+describe("stepPipeline：alpha 叠材质的 alphawriting（P8 步骤 5 点 3）", () => {
+  it("直接上屏（p8-alpha 的 13）：缺省 / disabled 不写，enabled 写；管线键只差 alpha 一项", () => {
+    const rows = (alphaWriting?: AlphaWriting) =>
+      writeRows(
+        alignLayer(0, "D", { passes: [writePass("objects/0/passes/0", 0, alphaWriting ? { alphaWriting } : {})] }),
+      );
+    expect(rows()).toEqual([["direct scene false", "0|translucent|rgba8unorm|false"]]);
+    expect(rows("enabled")).toEqual([["direct scene true", "0|translucent|rgba8unorm|true"]]);
+    expect(rows("disabled")).toEqual([["direct scene false", "0|translucent|rgba8unorm|false"]]);
+  });
+
+  it("基础 pass、fbo pass、末 pass（p8-alpha 的 14–16、p8-misc W1）：disabled 在合成 RT 与 fbo 上不写，上屏的末 pass 不看材质", () => {
+    const layer = (base: Partial<ScenePass>, first: Partial<ScenePass>, last: Partial<ScenePass>) =>
+      alignLayer(0, "F", {
+        passes: [writePass("objects/0/passes/0", 0, base)],
+        effects: [fboEffect(0, first, last)],
+      });
+    // 缺省：改前的键
+    expect(writeRows(layer({}, {}, {}))).toEqual([
+      ["base composite true", "0|null|rgba8unorm|true"],
+      ["effect fbo true", "1|normal|rgba8unorm|true"],
+      ["final scene false", "1|translucent|rgba8unorm|false"],
+    ]);
+    const enabled = { alphaWriting: "enabled" as const };
+    const disabled = { alphaWriting: "disabled" as const };
+    expect(writeRows(layer(disabled, disabled, enabled)).map(([row]) => row)).toEqual([
+      "base composite false",
+      "effect fbo false",
+      "final scene false",
+    ]);
+    expect(writeRows(layer(enabled, enabled, disabled)).map(([row]) => row)).toEqual([
+      "base composite true",
+      "effect fbo true",
+      "final scene false",
+    ]);
+  });
+
+  it("passthrough 上屏（被依赖的图层）：材质写 enabled 也不写 alpha", () => {
+    const rows = writeRows(
+      depLayer(0, "A", {
+        passthrough: alignPass("objects/0/passthrough", 2, { blending: "normal", alphaWriting: "enabled" }),
+      }),
+    );
+    expect(rows).toEqual([
+      ["base composite true", "0|null|rgba8unorm|true"],
+      ["passthrough scene false", "2|translucent|rgba8unorm|false"],
+    ]);
+  });
+
+  it("组里（copybackground false 强制写、true 照规则）：disabled 在 alpha MAX 的组里照写", () => {
+    const child = (alphaWriting?: AlphaWriting) =>
+      alignLayer(1, "C", {
+        parent: 0,
+        group: 0,
+        passes: [writePass("objects/1/passes/0", 0, alphaWriting ? { alphaWriting } : {})],
+      });
+    expect(writeRows(child("disabled"), { copyBackground: false })).toEqual([
+      ["direct scene true", "0|translucent|rgba8unorm|true|max"],
+    ]);
+    expect(writeRows(child("disabled"), { copyBackground: true })).toEqual([
+      ["direct scene false", "0|translucent|rgba8unorm|false"],
+    ]);
+    expect(writeRows(child(), { copyBackground: true })).toEqual([
+      ["direct scene true", "0|translucent|rgba8unorm|true"],
+    ]);
+  });
+});
+
+describe("stepPipeline：A2C 按步骤的实际混合开（P8 步骤 5 点 3，rea-p8-render 第 5 节）", () => {
+  const a2c = { blending: "alphatocoverage" };
+
+  it("直接上屏：开 A2C、写掩码同 normal（RGB），键多 |a2c；对象 alpha 不参与", () => {
+    expect(writeRows(alignLayer(0, "A", { passes: [writePass("objects/0/passes/0", 0, a2c)] }))).toEqual([
+      ["direct scene false a2c", "0|alphatocoverage|rgba8unorm|false|a2c"],
+    ]);
+  });
+
+  it("带 effect（p8-misc W2）：基础 pass 画进合成 RT（混合 null）不开、写 RGBA；借了基础材质混合的上屏 pass 开", () => {
+    const layer = alignLayer(0, "W2", {
+      passes: [writePass("objects/0/passes/0", 0, a2c)],
+      effects: [depEffect(0, 0, "kbcopy")],
+    });
+    expect(writeRows(layer)).toEqual([
+      ["base composite true", "0|null|rgba8unorm|true"],
+      ["final scene false a2c", "1|alphatocoverage|rgba8unorm|false|a2c"],
+    ]);
+    // effect 自己的中间 pass 是 alphatocoverage 时同样开（画进 fbo，写 RGBA）
+    const fx = alignLayer(0, "F", { passes: [writePass("objects/0/passes/0", 0)], effects: [fboEffect(0, a2c)] });
+    expect(writeRows(fx).map(([row]) => row)).toEqual([
+      "base composite true",
+      "effect fbo true a2c",
+      "final scene false",
+    ]);
+  });
+
+  it("passthrough 上屏借基础材质的混合：开；组的 alpha MAX 与 A2C 并存", () => {
+    expect(writeRows(depLayer(0, "A", { passes: [writePass("objects/0/passes/0", 0, a2c)] }))).toEqual([
+      ["base composite true", "0|null|rgba8unorm|true"],
+      ["passthrough scene false a2c", "2|alphatocoverage|rgba8unorm|false|a2c"],
+    ]);
+    const child = alignLayer(1, "C", { parent: 0, group: 0, passes: [writePass("objects/1/passes/0", 0, a2c)] });
+    expect(writeRows(child, { copyBackground: false })).toEqual([
+      ["direct scene true a2c", "0|alphatocoverage|rgba8unorm|true|max|a2c"],
+    ]);
+  });
+
+  it("粒子、网格、文本同一套：A2C 看步骤的混合，alpha 看材质的 alphawriting；都没有时键与改前相同", () => {
+    const particleStep = (pass: ScenePass) => {
+      const particle = { passes: [pass], renderers: [{ kind: "sprite" }], flags: 0, children: [] };
+      return planParticleLayer({ particle: particle as unknown as SceneLayer["particle"] }).steps[0];
+    };
+    const meshStep = (pass: ScenePass) => {
+      const model = { path: "m.mdl", version: 23, meshes: [{ passes: [pass] }], order: [0], bounds: [] };
+      return planModelLayer({ model: model as unknown as SceneLayer["model"] }).steps[0];
+    };
+    const key = "objects/0/passes/0";
+    const particle = (extra: Partial<ScenePass>) => pipelineKey(specOf(particleStep(alignPass(key, 0, extra))));
+    expect(particle({})).toBe("0|translucent|rgba8unorm|false|list");
+    expect(particle(a2c)).toBe("0|alphatocoverage|rgba8unorm|false|list|a2c");
+    expect(particle({ alphaWriting: "enabled" })).toBe("0|translucent|rgba8unorm|true|list");
+    const mesh = (extra: Partial<ScenePass>) => pipelineKey(specOf(meshStep(alignPass(key, 0, extra)), null, "20:0@0"));
+    expect(mesh({})).toBe("0|translucent|rgba8unorm|false|list|mesh:20:0@0");
+    expect(mesh(a2c)).toBe("0|alphatocoverage|rgba8unorm|false|list|mesh:20:0@0|a2c");
+    expect(mesh({ alphaWriting: "enabled" })).toBe("0|translucent|rgba8unorm|true|list|mesh:20:0@0");
+    // 文本：WPE 的文本材质没有 alphawriting，规则照样适用（直接上屏不写、画进合成 RT 写）
+    const text = (space: TextStep["space"], extra: Partial<ScenePass> = {}): TextStep => {
+      const pass = alignPass(key, 0, extra);
+      return {
+        kind: "text",
+        part: "glyphs",
+        pass,
+        space,
+        target: space === "direct" ? { kind: "scene" } : { kind: "composite", index: 0 },
+        inputs: {},
+        blending: "translucent",
+        raster: rasterState(pass, pass, "translucent"),
+      };
+    };
+    expect(pipelineKey(specOf(text("direct")))).toBe("0|translucent|rgba8unorm|false|list");
+    expect(pipelineKey(specOf(text("composite")))).toBe("0|translucent|rgba8unorm|true|list");
+    expect(pipelineKey(specOf(text("direct", { alphaWriting: "enabled" })))).toBe("0|translucent|rgba8unorm|true|list");
+    expect(pipelineKey(specOf(text("composite", { alphaWriting: "disabled" })))).toBe(
+      "0|translucent|rgba8unorm|false|list",
+    );
+    // 没有这两项的步骤：规格里没有 alphaToCoverage 这个键
+    expect("alphaToCoverage" in specOf(particleStep(alignPass(key, 0)))).toBe(false);
+    expect("alphaToCoverage" in specOf(text("direct"))).toBe(false);
+  });
+});
+
+/**
+ * 翻译器的片元 WGSL（`ignore/p8/s5/dump-entry.txt`：`p8-a2c` 的 genericimage4，naga GLSL 前端生成的入口与返回结构）。主体 `main_1` 里的
+ * `return;` 不是入口的，不改。按行写出，naga 在属性行末留的空格（`@fragment `）照原样保留。
+ */
+const A2C_FRAGMENT = [
+  "struct FragmentOutput {",
+  "    @location(0) kb_FragColor: vec4<f32>,",
+  "}",
+  "",
+  "@group(0) @binding(1) ",
+  "var g_Texture0_: texture_2d<f32>;",
+  "@group(0) @binding(2) ",
+  "var kb_sampler_g_Texture0_: sampler;",
+  "var<private> v_TexCoord_1: vec2<f32>;",
+  "var<private> kb_FragColor: vec4<f32>;",
+  "",
+  "fn main_1() {",
+  "    var color_10: vec4<f32>;",
+  "",
+  "    let _e18 = v_TexCoord_1;",
+  "    let _e20 = textureSample(g_Texture0_, kb_sampler_g_Texture0_, _e18.xy);",
+  "    color_10 = _e20;",
+  "    let _e24 = color_10;",
+  "    kb_FragColor = _e24;",
+  "    return;",
+  "}",
+  "",
+  "@fragment ",
+  "fn main(@location(0) v_TexCoord: vec2<f32>) -> FragmentOutput {",
+  "    v_TexCoord_1 = v_TexCoord;",
+  "    main_1();",
+  "    let _e25 = kb_FragColor;",
+  "    return FragmentOutput(_e25);",
+  "}",
+  "",
+].join("\n");
+
+describe("alphaToCoverageEntry（P8 步骤 5 点 4，p8-REPORT 结论 11）", () => {
+  it("导出的真实入口：原文不动，追加逐字副本 kb_a2c_main，return 换成「alpha 不大于 0.5 就 discard」", () => {
+    const { code, entryPoint } = alphaToCoverageEntry(A2C_FRAGMENT, "main");
+    expect(entryPoint).toBe("kb_a2c_main");
+    expect(code.slice(0, A2C_FRAGMENT.length)).toBe(A2C_FRAGMENT);
+    expect(code.slice(A2C_FRAGMENT.length)).toBe(
+      [
+        "",
+        "@fragment ",
+        "fn kb_a2c_main(@location(0) v_TexCoord: vec2<f32>) -> FragmentOutput {",
+        "    v_TexCoord_1 = v_TexCoord;",
+        "    main_1();",
+        "    let _e25 = kb_FragColor;",
+        "    { let kb_a2c_out = FragmentOutput(_e25); if !(kb_a2c_out.kb_FragColor.a > 0.5) { discard; } return kb_a2c_out; }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("直接返回 @location(0) vec4<f32>：判断返回值自己的 .a", () => {
+    const wgsl =
+      "@fragment\nfn fs(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {\n    return vec4<f32>(uv, 0.0, 0.25);\n}\n";
+    const { code, entryPoint } = alphaToCoverageEntry(wgsl, "fs");
+    expect(entryPoint).toBe("kb_a2c_fs");
+    expect(code).toBe(
+      `${wgsl}\n@fragment\nfn kb_a2c_fs(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {\n` +
+        "    { let kb_a2c_out = vec4<f32>(uv, 0.0, 0.25); if !(kb_a2c_out.a > 0.5) { discard; } return kb_a2c_out; }\n}\n",
+    );
+  });
+
+  it("多个 return 各自改写；结构里跳过 @builtin、取 @location(0) 的成员；参数的 IO 属性照抄", () => {
+    const wgsl = [
+      "struct Out {",
+      "    @builtin(frag_depth) depth: f32,",
+      "    @location(0) color: vec4<f32>,",
+      "}",
+      "@fragment @early_depth_test(force)",
+      "fn main(@builtin(position) p: vec4<f32>, @location(1) @interpolate(flat) id: u32) -> Out {",
+      "    if (id == 0u) {",
+      "        return Out(0.5, vec4<f32>(1.0, 0.0, 0.0, 1.0));",
+      "    }",
+      "    return Out(p.z, vec4<f32>(p.xy, 0.0, f(p, id)));",
+      "}",
+      "",
+    ].join("\n");
+    const { code } = alphaToCoverageEntry(wgsl, "main");
+    const added = code.slice(wgsl.length);
+    expect(added).toBe(
+      [
+        "",
+        "@fragment @early_depth_test(force)",
+        "fn kb_a2c_main(@builtin(position) p: vec4<f32>, @location(1) @interpolate(flat) id: u32) -> Out {",
+        "    if (id == 0u) {",
+        "        { let kb_a2c_out = Out(0.5, vec4<f32>(1.0, 0.0, 0.0, 1.0)); if !(kb_a2c_out.color.a > 0.5) { discard; } return kb_a2c_out; }",
+        "    }",
+        "    { let kb_a2c_out = Out(p.z, vec4<f32>(p.xy, 0.0, f(p, id))); if !(kb_a2c_out.color.a > 0.5) { discard; } return kb_a2c_out; }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("认不出就抛错：找不到入口、只有顶点入口、结构里没有位置 0、位置 0 不是 vec4、已有 kb_a2c_ 名字、return 不带值", () => {
+    expect(() => alphaToCoverageEntry(A2C_FRAGMENT, "other")).toThrow(/找不到片元入口/);
+    expect(() => alphaToCoverageEntry(A2C_FRAGMENT.replace("@fragment", "@vertex"), "main")).toThrow(/找不到片元入口/);
+    expect(() =>
+      alphaToCoverageEntry(A2C_FRAGMENT.replace("@location(0) kb_FragColor", "@location(1) kb_FragColor"), "main"),
+    ).toThrow(/没有位置 0/);
+    expect(() =>
+      alphaToCoverageEntry(
+        A2C_FRAGMENT.replace("@location(0) kb_FragColor", "@builtin(frag_depth) kb_FragColor"),
+        "main",
+      ),
+    ).toThrow(/没有位置 0/);
+    expect(() =>
+      alphaToCoverageEntry("@fragment\nfn main() -> @location(0) vec3<f32> {\n    return vec3<f32>(1.0);\n}\n", "main"),
+    ).toThrow(/不是位置 0 的 vec4/);
+    expect(() => alphaToCoverageEntry(`${A2C_FRAGMENT}var<private> kb_a2c_x: f32;\n`, "main")).toThrow(/kb_a2c_/);
+    // 改写两次（第二次源码里已经有 kb_a2c_main）
+    expect(() => alphaToCoverageEntry(alphaToCoverageEntry(A2C_FRAGMENT, "main").code, "main")).toThrow(/kb_a2c_/);
+    expect(() =>
+      alphaToCoverageEntry("@fragment\nfn main() -> @location(0) vec4<f32> {\n    return;\n}\n", "main"),
+    ).toThrow(/没有值/);
+  });
+});
+
+/** A2C 用的程序：绑定同 `depProgram`（槽 0），片元换成翻译器的真实形状（`A2C_FRAGMENT`）。 */
+function a2cProgram(name: string): TranslateResult {
+  return { ...depProgram(name, [0]), fragment: { wgsl: A2C_FRAGMENT, entryPoint: "main" } };
+}
+/** 在 `DepGpu` 上换两个方法：记下着色器模块（标签、源码）与管线描述；源码含 `errorIn` 时 Tint 报一条 error（第 3 行）。 */
+function a2cGpu(errorIn?: string) {
+  const gpu = new DepGpu();
+  const modules: { label: string; code: string }[] = [];
+  const pipelines: GPURenderPipelineDescriptor[] = [];
+  Object.assign(gpu.device, {
+    createShaderModule: (descriptor: GPUShaderModuleDescriptor) => {
+      const failed = errorIn !== undefined && descriptor.code.includes(errorIn);
+      const module = {
+        label: descriptor.label ?? "",
+        code: descriptor.code,
+        getCompilationInfo: async () => ({
+          messages: failed ? [{ type: "error", lineNum: 3, linePos: 1, message: "bad a2c" }] : [],
+        }),
+      };
+      modules.push(module);
+      return module;
+    },
+    createRenderPipelineAsync: async (descriptor: GPURenderPipelineDescriptor) => {
+      pipelines.push(descriptor);
+      return { label: descriptor.label };
+    },
+  });
+  return { gpu, modules, pipelines };
+}
+/** 0 D（A2C 直接上屏）、1 E（A2C 带 kbcopy，程序 1 上屏）、2 W（translucent + enabled）、3 DW（A2C + enabled）、4 N（什么都没有）。 */
+function a2cLayers(): SceneLayer[] {
+  const pass = (object: number, extra: Partial<ScenePass> = {}) => writePass(`objects/${object}/passes/0`, 0, extra);
+  const a2c = { blending: "alphatocoverage" };
+  return [
+    alignLayer(0, "D", { passes: [pass(0, a2c)] }),
+    alignLayer(1, "E", { passes: [pass(1, a2c)], effects: [depEffect(1, 0, "kbcopy")] }),
+    alignLayer(2, "W", { passes: [pass(2, { alphaWriting: "enabled" })] }),
+    alignLayer(3, "DW", { passes: [pass(3, { ...a2c, alphaWriting: "enabled" })] }),
+    alignLayer(4, "N", { passes: [pass(4)] }),
+  ];
+}
+function a2cBundle(layers: SceneLayer[], programs: TranslateResult[] = [a2cProgram("image"), a2cProgram("effect")]) {
+  return { ...align2Bundle(), layers, programs, textures: DEP_TEXTURES };
+}
+async function openA2c(bundle: SceneBundle, errorIn?: string, warnings: string[] = []) {
+  const { gpu, modules, pipelines } = a2cGpu(errorIn);
+  const state = SceneState.fromBundle(bundle);
+  const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), warnings, { particles: { seed: 1 } });
+  scene.update(ALIGN_FRAME, state);
+  return { gpu, scene, state, modules, pipelines };
+}
+const moduleLabel = (module: GPUShaderModule) => (module as unknown as { label: string }).label;
+
+describe("GpuScene：A2C 管线与写掩码（P8 步骤 5 点 3、点 4）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("GPUTextureUsage", { RENDER_ATTACHMENT: 1, TEXTURE_BINDING: 2, COPY_SRC: 4, COPY_DST: 8 });
+    vi.stubGlobal("GPUBufferUsage", { VERTEX: 1, UNIFORM: 2, COPY_DST: 4, MAP_READ: 8, INDEX: 16 });
+    vi.stubGlobal("GPUMapMode", { READ: 1 });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("管线键：A2C 的步骤多 |a2c，基础 pass 画进合成 RT 不带；enabled 的直接上屏写 alpha；其余键与改前相同", async () => {
+    const { scene } = await openA2c(a2cBundle(a2cLayers()));
+    expect([...(scene as unknown as { pipelines: Map<string, unknown> }).pipelines.keys()].sort()).toEqual(
+      [
+        "0|alphatocoverage|rgba8unorm|false|a2c",
+        "0|null|rgba8unorm|true",
+        "1|alphatocoverage|rgba8unorm|false|a2c",
+        "0|translucent|rgba8unorm|true",
+        "0|alphatocoverage|rgba8unorm|true|a2c",
+        "0|translucent|rgba8unorm|false",
+      ].sort(),
+    );
+  });
+
+  it("A2C 模块按程序建一次（两条 A2C 管线共用），代码是前言 + 原片元 + 新入口；A2C 管线用它与 kb_a2c_main，别的管线照旧", async () => {
+    const { modules, pipelines, gpu, scene, state } = await openA2c(a2cBundle(a2cLayers()));
+    expect(modules.map((module) => module.label).sort()).toEqual(
+      [
+        "scene program 0 vertex",
+        "scene program 0 fragment",
+        "scene program 0 fragment a2c",
+        "scene program 1 vertex",
+        "scene program 1 fragment",
+        "scene program 1 fragment a2c",
+      ].sort(),
+    );
+    const a2cCode = WGSL_PRELUDE + alphaToCoverageEntry(A2C_FRAGMENT, "main").code;
+    for (const module of modules.filter((item) => item.label.endsWith(" a2c"))) expect(module.code).toBe(a2cCode);
+    expect(modules.find((module) => module.label === "scene program 0 fragment")!.code).toBe(
+      WGSL_PRELUDE + A2C_FRAGMENT,
+    );
+    const byLabel = (label: string) => {
+      const found = pipelines.filter((descriptor) => descriptor.label === label);
+      expect(found, label).toHaveLength(1);
+      const { fragment } = found[0];
+      return {
+        module: moduleLabel(fragment!.module),
+        entryPoint: fragment!.entryPoint,
+        target: [...fragment!.targets][0],
+      };
+    };
+    // 程序 0 的两条 A2C 管线（D 写 RGB、DW 写 RGBA；标签不含写掩码）：A2C 模块与入口、关混合，用同一个模块对象
+    const dw = pipelines.filter((descriptor) => descriptor.label === "scene program 0 alphatocoverage rgba8unorm a2c");
+    expect(
+      dw
+        .map((descriptor) => ({
+          module: moduleLabel(descriptor.fragment!.module),
+          entryPoint: descriptor.fragment!.entryPoint,
+          target: [...descriptor.fragment!.targets][0],
+        }))
+        .sort((a, b) => a.target!.writeMask! - b.target!.writeMask!),
+    ).toEqual(
+      [0x7, 0xf].map((writeMask) => ({
+        module: "scene program 0 fragment a2c",
+        entryPoint: "kb_a2c_main",
+        target: { format: "rgba8unorm", blend: undefined, writeMask },
+      })),
+    );
+    expect(dw[0].fragment!.module).toBe(dw[1].fragment!.module);
+    expect(byLabel("scene program 1 alphatocoverage rgba8unorm a2c")).toMatchObject({
+      module: "scene program 1 fragment a2c",
+      entryPoint: "kb_a2c_main",
+    });
+    // 基础 pass 画进合成 RT：原模块、原入口、关混合、写 RGBA
+    expect(byLabel("scene program 0 opaque rgba8unorm")).toEqual({
+      module: "scene program 0 fragment",
+      entryPoint: "main",
+      target: { format: "rgba8unorm", blend: undefined, writeMask: 0xf },
+    });
+    const translucent = pipelines.filter((descriptor) => descriptor.label === "scene program 0 translucent rgba8unorm");
+    expect(
+      translucent.map((descriptor) => [
+        moduleLabel(descriptor.fragment!.module),
+        descriptor.fragment!.entryPoint,
+        [...descriptor.fragment!.targets][0]!.writeMask,
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["scene program 0 fragment", "main", 0x7],
+        ["scene program 0 fragment", "main", 0xf],
+      ]),
+    );
+    // 编码一帧：A2C 的绘制照常画
+    gpu.trace.length = 0;
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    expect(gpu.trace).toEqual(expect.arrayContaining(["  draw layer 10 D direct", "  draw layer 11 E final"]));
+  });
+
+  it("没有 A2C 的场景一次都不建 A2C 模块，管线描述与标签没有 a2c", async () => {
+    const [, , w, , n] = a2cLayers();
+    const { modules, pipelines } = await openA2c(a2cBundle([w, n]));
+    expect(modules.some((module) => module.label.includes("a2c"))).toBe(false);
+    for (const descriptor of pipelines) {
+      expect(descriptor.label).not.toContain("a2c");
+      expect(descriptor.fragment!.entryPoint).toBe("main");
+    }
+  });
+
+  it("改写认不出：整张退回 render:program:<下标>:a2c，原因细节进 warnings；Tint 报 error：webgpu:shader:<下标>:fragment-a2c:…", async () => {
+    const [d] = a2cLayers();
+    const bad = { ...a2cProgram("image"), fragment: { wgsl: "// image f", entryPoint: "main" } };
+    const warnings: string[] = [];
+    await expect(openA2c(a2cBundle([d], [bad, a2cProgram("effect")]), undefined, warnings)).rejects.toMatchObject({
+      reasons: ["render:program:0:a2c"],
+    });
+    expect(warnings.some((warning) => warning.includes("A2C 入口改写失败"))).toBe(true);
+    const error = await openA2c(a2cBundle([d]), "kb_a2c_").catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(SceneRenderError);
+    expect((error as SceneRenderError).reasons).toEqual(["webgpu:shader:0:fragment-a2c:2:bad a2c"]);
   });
 });

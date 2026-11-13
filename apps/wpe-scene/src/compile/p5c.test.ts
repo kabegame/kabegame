@@ -268,7 +268,8 @@ describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、
     expect((await passOf({ blending: "normal" })).unsupported).toEqual([]);
     expect((await passOf({})).unsupported).toEqual([]);
     expect((await passOf({ blending: "normal", depthwrite: "enabled" })).unsupported).toEqual([]);
-    expect((await passOf({ blending: "alphatocoverage" })).unsupported).toEqual(["blend:alphatocoverage"]);
+    // alphatocoverage 自 P8 步骤 5 起实现（混合关、深度同 normal、着色器里丢弃）
+    expect((await passOf({ blending: "alphatocoverage" })).unsupported).toEqual([]);
   });
 
   it("只测不写、不测：中性", async () => {

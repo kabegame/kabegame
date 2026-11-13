@@ -110,6 +110,7 @@ import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./ca
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
+import { materialCombos, passAlphaWriting, type AlphaWriting } from "./writeState";
 import type { SceneVideoSource } from "../video/player";
 import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
@@ -313,6 +314,11 @@ export interface ScenePass {
   key: TargetKey;
   program: number | null;
   blending: string;
+  /**
+   * 材质的 `alphawriting`（P8 步骤 5，`writeState.ts` 的 `passAlphaWriting`）：只在 `enabled` / `disabled` 时有；渲染器在按目标、组与上屏
+   * 角色算出的缺省写掩码上叠它（`render/writeState.ts` 的 `writesAlpha`）。
+   */
+  alphaWriting?: AlphaWriting;
   /**
    * 深度 / 剔除三个键：编译期已按 WPE 规整（`features.ts` 的 `normalizeDepthKeys`，P5d 步骤 1），只会是 normal / nocull、enabled /
    * disabled；渲染器按它们给绘制步骤定光栅状态（`render/graph.ts` 的 `rasterState`）。
@@ -1515,7 +1521,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         ? await particleDefines(pass, shaderName, formats, slots, scope, context.particle)
         : {};
     const result = shaderName
-      ? await shader.compile(shaderName, pass.combos ?? {}, formats, scope, issues, defines, rope)
+      ? await shader.compile(shaderName, materialCombos(pass), formats, scope, issues, defines, rope)
       : null;
     if (result?.ok) {
       const slots = materialSlots(result.uniforms ?? []);
@@ -1579,6 +1585,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       key: context.key,
       program,
       blending: pass.blending ?? "normal",
+      ...passAlphaWriting(pass),
       ...normalizeDepthKeys(pass),
       textures: slots,
       runtime,
