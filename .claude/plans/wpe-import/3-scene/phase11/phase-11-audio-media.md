@@ -353,4 +353,36 @@ fn host_scope_for(
 
 ## 实施记录
 
-（空）
+### 步骤 0 — 调研（2026-11-13，进行中：读码与音频、属性纹理的实测已完成，媒体与快捷方式的实测待用户同意）
+
+**产出：**
+- 读码：[rea-p11-textures.md](rea-p11-textures.md)（`usertextures`、封面纹理与配色、快捷方式图标、音频 uniform 复核）、[rea-p11-media.md](rea-p11-media.md)（SMTC 子进程、媒体回调的派发与补发、事件对象、`usershortcut` 的值与 `openUserShortcut`）。两个代理都没用上 REA（共用的会话被互相切走、Ghidra 首次分析 330 s 超时），纹理侧改用本机 Ghidra 无界面工程，脚本侧用 `wp.asm` 与 `llvm-objdump`；纹理侧中途卡过一次，续跑后写完。我抽查了裁切函数 `FUN_1401702f0` 的汇编（比例为 0 整张拷贝、截断取整、`>>1` 居中）和 `baseclasses.js` 里只有 `MediaPlaybackEvent`，都对得上。
+- 实测：[p11-REPORT.md](p11-REPORT.md)「音频 uniform」「属性纹理」两节，读码与实测没有冲突。测试工程 `ignore/p11/defs/p11a.py`（音频）、`p11b.py`（属性纹理，三个槽、加载时的值、裁切比例与大图），抓帧 `A:\p11\`。
+
+**对各节的影响：**
+- **P11a**：实测确认 32 / 16 段由 64 段逐级取最大、左右声道各自算、没声明开关时全 0，就是 `SceneSpectrum` 的三块；WPE 每次绑定程序绘制都填（读码）。实现照计划，不用改。
+- **P11b**：
+  - 纹理 = 源图正中裁出的最大矩形，宽高比取缺省纹理的**图像尺寸**（精灵表取帧尺寸），`usertexturereference` 两个都非 0 时优先，`keepaspect` 时不裁；只裁不缩放、`(int)` 截断、`>>1` 居中。图层 `size` 不参与。
+  - 只有 `textures[i]` 是非空字符串的槽才会换，只看前 10 个槽。
+  - `R8G8B8A8_UNORM`、直通 alpha、1 级 mip、`g_Texture<n>Resolution = (w, h, w, h)`；采样器线性、无各向异性，寻址跟缺省纹理的夹取位。
+  - 值为空、文件不存在、读不出来都回缺省纹理，不保留上一张。
+  - 收的文件分三种：视频扩展名（`.mp4 .wmv .avi .m4v .mov .mkv .webm`）走视频纹理，`.gif` 是逐帧更新的动图，其它交给 FreeImage 按内容识别、只取单帧。视频接 P9a 已合入的视频纹理；GIF 要逐帧解码（浏览器 `ImageDecoder`），子计划里定。
+  - 换纹理在下一帧开头（帧函数开头消费待刷新集合），同帧画出。
+  - UI 改 `scenetexture` 的增量带 `type`，会进 `applyUserProperties`；封面的增量不带。
+- **P11c**：
+  - 封面纹理走同一个裁切函数（按槽的缺省纹理比例）；`$mediaPreviousThumbnail` 是上一条封面消息的那张，第一条之前、没有封面、关掉媒体集成时都是缺省纹理；每条封面消息名字加 1。
+  - 配色算法读到能复刻（360 格色相直方图，主 / 次 / 第三色按格距加权，文字色与高对比色按 WCAG 对比度 2.5）。和 `colors.rs` 的量化直方图不同，按决定 2 照 WPE 改 `colors.rs`，网页壁纸一起换。
+  - 数据流：WPE 主线程按 `windowupdaterate`（钳到 50–5000 ms，本机 1000）节流，每次刷新给场景至多两条事件（属性 / 播放 / 时间轴 / 状态合一条，封面一条）；场景每帧在脚本函数最开头逐条派发（先于动画、`engine.Tick`、`update`），一条事件里先把封面当属性增量（`applyUserProperties({})`），再按 状态 → 播放 → 属性 → 封面 → 时间轴 调回调。init 之后按当前值补发一次。
+  - 字段：`position` / `duration` 截断成整秒、不插值；`state` Playing 1 / Paused 2 / 其余 0；`contentType` 是 `music` / `video` / `image` / 空串；`genres` 用逗号连接；超长字段整段清空。网页壁纸那边 `WpeMediaHub` 在播放状态切换时外推时间轴（Phase 8 的 B2），场景照 WPE 不外推，子计划里定怎么分。
+  - 事件对象是普通对象，颜色是 `Vec3`；只有 `MediaPlaybackEvent` 是全局类（三个静态常量），其余四个事件类运行时不存在。
+- **P11d**：
+  - `usershortcut` 的值是 `<类型>:<6 位机器哈希>:<路径>[|<参数>]`，类型 `file` / `directory` / `web` / `cmd`。机器哈希是 WPE 防止别人配好的值在本机运行的手段；我们的值只来自本机面板，存我们自己的格式（类型 + 路径 + 参数），不复刻哈希。
+  - 门禁：只在 `cursorClick` / `cursorDown` / `cursorUp` 里调，否则抛 `Cannot execute user command outside of cursor callbacks.`；令牌在左键按下时发、松开时收，同一次点击第二次调用抛 `Cannot execute more than one user command per cursor click.`。WPE 不查属性的 `type`，我们多查一道（计划已定）。
+  - 启动：`ShellExecuteW(NULL, NULL, 路径, 参数, NULL, SW_SHOWNORMAL)`，缺省动词，不按类型分。
+  - 图标：`.url` / `.lnk` / 其它三种取法，256×256 正方形，按槽比例补透明边居中（不裁），寻址一律夹取；还在取时是缺省纹理。
+- **更正 P3 报告**：应用对象真正的虚表是 `0x140485fe0`（P3 写的 `0x140485fa8` 槽号整体差 7）；媒体回调是 14–18 五个，队列里每条都派发，不是「有变化时」。
+
+**待做（步骤 0 剩下的部分）：**
+- **媒体实测**（要用户同意，决定 4）：SMTC 夹具发布测试会话，测试工程把媒体事件打进 `[kbp]` 日志并画出两个封面槽。核对：节流间隔与 `position` 是否整秒；一次刷新里的回调顺序与 `applyUserProperties({})`；加载时的补发（子进程新拉起 / 已在跑 / 媒体集成关）；几张已知封面的五种颜色逐字节对读码的复算；previous 槽的轮换；封面按槽比例裁切。
+- **快捷方式实测**（要用户同意）：门禁的几个用例，目标选打开一个文件夹；图标尺寸与补边。
+- 读码留下的【未知】：运行中关掉媒体集成场景能否收到 `enabled: false`；暂停期间积压的事件恢复后是否一次派发；GIF / 视频那几个虚函数的函数体。
