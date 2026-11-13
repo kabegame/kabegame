@@ -204,7 +204,11 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  * - `parent`：层级已实现（P4a 步骤 1，`hierarchy.ts` 与 `render/layout.ts`）；灯对象例外，见 `checkObjectFeatures`。
  * - `config`：运行时只在托盘、播放列表代码里读，渲染路径不碰；P5a 步骤 0 实测带 `config.passthrough` 的层画面不变。
  * 另判的键（不在这张表里，`checkObjectFeatures` 单独检查，未知键循环跳过）：
- * - `alignment` 为 `center` 时中性，其余取值另报；文本、形状对象上中性（不在它们的属性查找链上）。
+ * - `alignment`：图像层已实现（P8 步骤 3，rea-p8-layer 2.1–2.4，p8-REPORT 结论 6，`SceneLayer.alignment`）。WPE 的 JSON setter 只认
+ *   字符串、查不到或不是字符串（含绑属性、写数字）都是 `center`，所以 JSON 的任何写法都不报；文本、形状、粒子、模型、声音、灯、分组
+ *   节点不在它的属性查找链上，中性。照报的两处：`fullscreen` 图层带非 `center` 的对齐报 `object:alignment:fullscreen`（`bundle.ts` 的
+ *   `compileImageModel`，末 pass 是单位矩阵、偏移落在哪里没测）；图像层上挂 `{script}` 报 `object:alignment:script`（字段脚本写回
+ *   枚举没有实现，WPE 怎么处理也没测；语料 0 个）。
  * - `shape`：形状对象（P8 步骤 2，`isShapeObject`）上已实现；同时带别的内容的对象照未知键报。
  * - `perspective`：图像层上的 JSON `true` 已实现（P5b 步骤 1，画到场景目标的绘制换透视视图投影，`render/scene.ts`）；false 等不为
  *   真的值中性；绑属性、挂脚本或别的真值，以及非图像对象上为真，报 `object:perspective`。
@@ -705,8 +709,9 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   const shape = isShapeObject(object);
   for (const key of OBJECT_FLAGS)
     if (active(object[key]) && !lightKey(key) && !modelKey(key)) unsupported.add(`object:${key}`);
-  if (object.alignment !== undefined && object.alignment !== "center" && !text && !shape)
-    unsupported.add("object:alignment");
+  // 对齐（P8 步骤 3）：图像层已实现，JSON 的任何写法都按 WPE 的 setter 取值（字符串查表，别的是 center），别的对象中性。图像层上挂
+  // `{script}` 的字段脚本：写回目标是枚举，运行时没有实现（`compile/scripts.ts` 落成 unsupported），照报
+  if (kind === "image" && isScriptValue(object.alignment)) unsupported.add("object:alignment:script");
   // 图像层（P5b 步骤 1）与模型（P5c 步骤 1）的 perspective：JSON true 已实现；绑属性、挂脚本或别的取值，以及别的对象上为真，照报
   if (active(object.perspective) && !((kind === "image" || kind === "model") && object.perspective === true))
     unsupported.add("object:perspective");

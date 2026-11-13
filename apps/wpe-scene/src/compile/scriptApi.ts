@@ -166,9 +166,9 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ...methods("any", ["getEffect", "getEffectCount", "transformAttachmentToTexture"], UNIQUE),
     // 粒子（P4f）
     ...methods("any", ["emitParticles"], UNIQUE),
-    // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象
+    // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象。`alignment` 已在图像层上实现（P8 步骤 3，
+    // `script/api.ts`）；别的图层上 WPE 读回什么由脚本 dll 决定，没查，不再静态报
     ...fields([
-      "alignment",
       "perspective",
       "solid",
       "rootmotion",

@@ -277,7 +277,10 @@ export const LIGHT_UNIFORMS = {
 
 /**
  * 各角色的变换（PLAN P2a「内置 uniform」，w、h 取图层 `size`）：作用于 P1 的 `direct` 与合成链的三种角色。
- * `world` 是图层的世界矩阵（`layout.ts` 的 `worldMatrixOf`，沿父链累乘，P4a 步骤 1），下文的「模型矩阵」都是它。
+ * `world` 是图层画自己的矩阵（`layout.ts` 的 `drawMatrixOf`：沿父链累乘的世界矩阵 `worldMatrixOf`，P4a 步骤 1，再右乘这一层的自身偏移，
+ * P8 步骤 3：图像层的对齐、文本层的排版；子层的世界矩阵不带父层的偏移），下文的「模型矩阵」都是它。`p8-align2` 的 F2 实测
+ * `g_EffectModelMatrix`、`g_LayerModelMatrix` 与各 MVP 的平移都是 origin + 对齐偏移；效果矩阵的缩放 `scale(w/2, h/2)` 仍按浮点 `size`
+ * （101.7 × 50.5 读到 50.85，不是上屏四边形的 `trunc(size)`）。
  * `viewProjection` 是这次绘制的视图投影：开着视差时已是 `VP · T(o)`（`GpuScene.uniformValues`，P5a 步骤 2），开着抖动时再带
  * `T(−s)`，合起来是 `VP · T(o − s)`（步骤 3）。下文的「图层 MVP」与 `g_ViewProjectionMatrix` 都带视差与抖动，只有 `base` 用自己的
  * 整面矩阵、不读它（`p5a-fx` 实测：effect 的中间 pass 读到的效果矩阵也带视差）。
@@ -294,7 +297,8 @@ export const LIGHT_UNIFORMS = {
  * `layerModel`（`g_LayerModelMatrix`，P7d 步骤 2）只在 `effect`、`final` 两种角色给，就是 `world`：含父链、不含 `size`、不带视差。
  * WPE 在 effect 的每个 pass 里写它，中间 pass 与上屏 pass 相同（effect-matrices-REPORT S3 的 `L = W`；p7-REPORT「P7d 的实测」
  * `p7d-uni` 的 `kbfx`、`kbchild` 逐值对上，`render/p7d-layermodel.test.ts`）。视差只在视图投影里：开着视差时 MVP 的平移变了，
- * `g_LayerModelMatrix` 与 `g_ModelMatrix` 的平移仍是 `origin`（`A:\p7d\unipar\unipar-frame132.rdc` 事件 73）。基础 pass、直接上屏、
+ * `g_LayerModelMatrix` 与 `g_ModelMatrix` 的平移仍是 `origin`（`A:\p7d\unipar\unipar-frame132.rdc` 事件 73；带对齐时是 origin + 偏移，
+ * `p8-align2` 的 F2）。基础 pass、直接上屏、
  * passthrough 上屏 WPE 不写（别的图层的残留值），这里不给，编译期照报（`compile/features.ts` 的 `EFFECT_UNIFORMS`）。
  * 没有 effect 的组的上屏（`groupUpload`）也是 `final` 角色、同样会拿到它，但那不是 effect 的 pass，读它的着色器编译期已照报。
  *
@@ -369,7 +373,7 @@ export interface DrawUniformInput {
   step: Pick<DrawStep, "role" | "inputs"> & { geometry?: Geometry };
   /** 图层的当前状态与尺寸（`size` 只在重编译时变）；颜色组取自身的值，不继承。 */
   layer: LayerState & { size: number[] };
-  /** 图层的世界矩阵：按同一份状态沿父链算（`layout.ts` 的 `worldMatrixOf`）。 */
+  /** 图层画自己的矩阵：按同一份状态沿父链算、再乘自身偏移（`layout.ts` 的 `drawMatrixOf`，P8 步骤 3）。 */
   world: Mat4;
   /** 本 pass 的材质常量（`SceneState.constants.get(pass.key)`）。 */
   constants: Record<string, number[]>;
@@ -417,8 +421,8 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
 const TEXT_RT_DEPTH = 1000;
 
 /**
- * 文本层一次绘制的变换（P6b 1d，rea-p6b-layout 3.2、4；p6b-fx 抓帧逐项对上，`render/text.test.ts`）。`world` 是图层的世界矩阵，已含对齐
- * 偏移 `T(offset)`（`render/layout.ts` 的 `layerLocalMatrix`）；`viewProjection` 是这次画到场景的视图投影（带视差、抖动，组里是组的局部
+ * 文本层一次绘制的变换（P6b 1d，rea-p6b-layout 3.2、4；p6b-fx 抓帧逐项对上，`render/text.test.ts`）。`world` 是图层画自己的矩阵，已含
+ * 排版的对齐偏移 `T(offset)`（`render/layout.ts` 的 `drawMatrixOf`，子层不带它，P8 步骤 3、`p8-align2` 的 Xc）；`viewProjection` 是这次画到场景的视图投影（带视差、抖动，组里是组的局部
  * 正交），画进合成 RT 时不用。
  * - 直接上屏的字形（`glyphs` / `color`）：模型 = `world · T(directTranslation)`（`FUN_140258050`），包围盒中心落在对象原点；
  * - 直接上屏的背景：模型 = `world · T(−w/2 − pad.x, −h/2 − pad.y)`，四边形是整数文字框 `[0, W] × [0, H]`（f4 事件 203）；

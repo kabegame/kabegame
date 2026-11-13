@@ -38,7 +38,7 @@ import { textVertices } from "../text/mesh";
 import { PIXEL_MODE_BGRA, PIXEL_MODE_GRAY, Wpefont } from "../wpefont";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { planLayer, planSignature, textCompositeSize, variantPlans, type LayerPlan, type LayerStep } from "./graph";
-import { sceneViewProjection, worldMatrixOf } from "./layout";
+import { drawMatrixOf, sceneViewProjection } from "./layout";
 import { multiply, transformPoint, translation, type Mat4 } from "./math";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
@@ -426,9 +426,9 @@ describe("textMatrices：和 p6b-fx 抓帧的 MVP 相同", () => {
   const atlas = new GlyphAtlas(false);
   const glyphs = glyphsIn(atlas, 2);
   const vp = sceneViewProjection({ width: 1920, height: 1080 });
-  /** 图层世界矩阵（含对齐偏移，`layerLocalMatrix`）。 */
+  /** 图层画自己的矩阵（含对齐偏移，`drawMatrixOf`，P8 步骤 3 起世界矩阵不带它）。 */
   const worldOf = (origin: number[], offset: [number, number]) =>
-    worldMatrixOf(0, new Map([[0, { origin, angles: [0, 0, 0], scale: [1, 1, 1], offset, parent: null }]]), new Map());
+    drawMatrixOf(0, new Map([[0, { origin, angles: [0, 0, 0], scale: [1, 1, 1], offset, parent: null }]]), new Map());
 
   it("画进合成 RT：RT 像素的正交 × compositeTranslation（f1、f2、f3、f5）", () => {
     const cases: [string, LayoutDef, readonly number[]][] = [
@@ -874,7 +874,8 @@ describe("GpuScene：文本层", () => {
       [2, "glyphs", "composite"],
       [3, "glyphs", "composite"],
     ] as const) {
-      const world = worldMatrixOf(object, state.layers, worlds);
+      // 文本层画自己的矩阵带排版偏移（`drawMatrixOf`，P8 步骤 3）
+      const world = drawMatrixOf(object, state.layers, worlds);
       const expected = textMatrices({ part, space }, world, vp, layouts.get(object)!).modelViewProjection;
       expect(floatsOf(drawOf(scene, object, part), 0, 16), `${object} ${part}`).toEqual(Array.from(expected));
     }
@@ -1023,11 +1024,11 @@ describe.skipIf(!existsSync(WASM) || !root)("p6b 排版 → 图层矩阵（fixtu
         const layout = layouts[i];
         const what = `${name}/${object.name}`;
         const [ox, oy] = object.fields.origin;
-        // 对齐偏移经 `setTexts` 写进图层状态，世界矩阵按 `layerLocalMatrix` 右乘它
+        // 对齐偏移经 `setTexts` 写进图层状态，图层画自己的矩阵（`drawMatrixOf`）在世界矩阵后右乘它
         const state = new Map([
           [0, { origin: [ox, oy, 0], angles: [0, 0, 0], scale: [1, 1, 1], offset: layout.offset, parent: null }],
         ]);
-        const world = worldMatrixOf(0, state, new Map());
+        const world = drawMatrixOf(0, state, new Map());
         if (object.rt) {
           const composite = textMatrices({ part: "glyphs", space: "composite" }, world, vp, layout);
           // RT 里的原点 = 模型矩阵把排版原点送到的 RT 像素

@@ -3,7 +3,7 @@
  * - `textFields` 起始值是编译期 `SceneText.fields` 的拷贝；
  * - 文本目标的写入按来源规整（属性侧 `textFieldFromJson`、带条件先换布尔），和现值逐项比较，变了才标 `dirtyTexts`；
  * - `takeDirty` 取走 `texts`；`needsRecompile` 对文本目标为假，文本分支不落到兜底的泛光写入；
- * - `setText` 换排版、写对齐偏移，偏移变了本层与子孙一起标脏。
+ * - `setText` 换排版、写对齐偏移，偏移变了只标本层（P8 步骤 3：偏移只作用在本层自己的绘制上，子孙的世界矩阵不带它，`p8-align2` 的 Xc）。
  */
 import { describe, expect, it } from "vitest";
 import { generalDefaults, type BindingTarget, type SceneBinding } from "../compile/bindings";
@@ -210,7 +210,7 @@ describe("SceneState：文本字段（P6b 1e）", () => {
     expect(state.takeDirty().bloom).toBe(false);
   });
 
-  it("setText：换排版、写偏移，偏移变了本层与子孙标脏；偏移不变不标；不是文本层不做事", () => {
+  it("setText：换排版、写偏移，偏移变了只标本层（子孙不带它，P8 步骤 3）；偏移不变不标；不是文本层不做事", () => {
     const state = SceneState.fromBundle(bundle());
     state.setTexts(new Map([[0, layoutAt([5, 6])]]));
     expect(state.takeDirty().layers).toEqual(new Set());
@@ -218,7 +218,7 @@ describe("SceneState：文本字段（P6b 1e）", () => {
     state.setText(0, next);
     expect(state.texts.get(0)).toBe(next);
     expect(state.layers.get(0)!.offset).toEqual([7, 6]);
-    expect(state.takeDirty().layers).toEqual(new Set([0, 1, 2]));
+    expect(state.takeDirty().layers).toEqual(new Set([0]));
     const same = layoutAt([7, 6]);
     state.setText(0, same);
     expect(state.texts.get(0)).toBe(same);

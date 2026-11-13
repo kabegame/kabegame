@@ -22,7 +22,8 @@
  *   泛光的 combine 写当前这张，底图含泛光（L20）。第二张只在清屏可能关掉时建（`SceneGeneral.clearVariable`），别的场景资源不变。
  *   HDR 下 WPE 的后备缓冲存 `lin(x)`，累加因此收敛（L21），我们的目标存 `x`，所以开画之前把底图过一次 `lin`（`linearizeBase`）。
  * - 层级（P4a 步骤 1）：模型矩阵是沿父链累乘的世界矩阵（`worldMatrixOf`），`visible` 沿父链继承（`visibleObjects`），
- *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。
+ *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。图层画自己（含组的局部正交）另乘自身偏移
+ *   （`drawMatrixOf`：文本排版、图像层对齐，P8 步骤 3），子层、粒子、控制点、模型的剔除不带它。
  * - 粒子（P4a 步骤 4）：粒子层是一个 `particle-tree` op，和图像步骤按 `objects` 顺序混排、画在同一个场景 pass 里。
  *   有子系统时一个粒子层是若干次绘制（P4e 步骤 1、2）：整棵树一个模拟器（根 `ParticleSystem`，子系统与事件实例挂在它下面），只步进根；
  *   编码时沿 `ParticleSystem.forEachDrawn` 的先序每帧现排（`arrangeParticles`）：每个被画的系统按模板路径找到计划里那个步骤预备好的管线，
@@ -164,6 +165,7 @@ import {
   type TextureRef,
 } from "./graph";
 import {
+  drawMatrixOf,
   effectiveVisible,
   everyAncestor,
   eyePosition,
@@ -173,6 +175,7 @@ import {
   rootObject,
   sceneTargetSize,
   sceneViewProjection,
+  screenQuadSize,
   shapeQuad,
   worldMatrixOf,
 } from "./layout";
@@ -1927,13 +1930,16 @@ export class GpuScene {
     } else {
       // 几何：图层四边形（模型空间、未缩放的 size），或 2×2 的 NDC 四边形。后者的 UV 取步骤的：effect 中间 pass 是 (1, 1)、不内缩
       // （字节同以前），fullscreen 图层直接上屏取纹理上界（P5b 步骤 3）。形状层（P8 步骤 2）是 effect 常量的四个点围成的四边形
-      // （`shapeQuad`，uv 就是点本身），点在编译期定好、不随常量就地写变（同 WPE）
+      // （`shapeQuad`，uv 就是点本身），点在编译期定好、不随常量就地写变（同 WPE）。几何 `layer` 的边长图像层按 `trunc(size)`
+      // （P8 步骤 3，`screenQuadSize`，`p8-align2` 的 F1、F3），文本层按排版；`fill` 仍按浮点 size，和它的整面正交一致
       const vertices =
         step.geometry === "fullscreen"
           ? layerQuad([2, 2], step.uv, step.inset)
           : step.geometry === "shape"
             ? shapeQuad(this.layerSize(layer, state), layer.shape?.points ?? null)
-            : layerQuad(this.layerSize(layer, state), step.uv, step.inset);
+            : step.geometry === "layer"
+              ? layerQuad(screenQuadSize(layer, this.layerSize(layer, state)), step.uv, step.inset)
+              : layerQuad(this.layerSize(layer, state), step.uv, step.inset);
       const vertexData = program.vertexPacking.pack(vertices);
       vertexBuffer = this.own(
         device.createBuffer({
@@ -2090,7 +2096,9 @@ export class GpuScene {
     model: Mat4 | null = null,
   ): Record<string, number[]> {
     const common = {
-      world: worldMatrixOf(layer.object, state.layers, worlds),
+      // 图层画自己的矩阵（P8 步骤 3）：世界矩阵再乘自身偏移（文本排版、图像层对齐），直接上屏、合成链各角色、效果矩阵、
+      // `g_LayerModelMatrix` 与文本都用它；粒子下面换成 `model`，模型网格没有偏移（字节同 `worldMatrixOf`）
+      world: drawMatrixOf(layer.object, state.layers, worlds),
       constants: state.constants.get(step.pass.key) ?? {},
       // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
       colorScale: this.hdr ? layerState.brightness : 1,
@@ -2104,11 +2112,11 @@ export class GpuScene {
     // 组里的图层（P5b 步骤 4，p5-REPORT `p5b-grp-*`、`p5b-grpptc`）：视图投影换成组的局部正交 `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，
     // 不经 `viewProjectionOf`（组里没有视差、抖动、缩放、透视，它们只作用在组本身，`p5b-grp-par`）。嵌套组自己的 compose 基础 pass
     // 例外，照旧用场景视图投影按屏幕位置采快照（`p5b-nest` 事件 94）；effect 中间 pass 的效果矩阵也按组的局部正交算（WPE 画子树时
-    // 投影栈就是它，没有实测）
+    // 投影栈就是它，没有实测）。组的矩阵取它画自己的那个（P8 步骤 3，带组的对齐偏移：`p8-align2` 的 Gc 落在组 RT 的左上角）
     const group = this.groupOf(layer);
     const groupVp =
       group && !(step.kind === "draw" && step.role === "compose")
-        ? groupViewProjection(group.size, worldMatrixOf(group.object, state.layers, worlds))
+        ? groupViewProjection(group.size, drawMatrixOf(group.object, state.layers, worlds))
         : null;
     if (step.kind === "text") {
       // 文本（P6b 1d）：直接上屏用这次画到场景的视图投影（带视差、抖动；组里是组的局部正交），画进合成 RT 用 RT 像素的正交

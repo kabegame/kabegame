@@ -181,8 +181,8 @@ describe("能力表裁决", () => {
       },
       keys,
     );
-    // 图像层 `perspective: true` 已实现（P5b 步骤 1）；绑属性的照报
-    expect([...keys].sort()).toEqual(["general:zoom", "object:alignment", "object:perspective"]);
+    // 图像层 `perspective: true` 已实现（P5b 步骤 1）；绑属性的照报。对齐已实现（P8 步骤 3），不再报
+    expect([...keys].sort()).toEqual(["general:zoom", "object:perspective"]);
   });
   it("缩放（P5a 步骤 4）：正交场景 zoom > 0、绑属性、脚本初值 > 0 都不报，解析出 ≤ 0 才报；透视场景不报（zoom 不起作用）", () => {
     const keysOf = (general: Record<string, unknown>) => {

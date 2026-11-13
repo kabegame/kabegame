@@ -1,3 +1,4 @@
+import { alignmentIndex } from "./alignment";
 import { compileBloom, type SceneBloom } from "./bloom";
 import {
   BindingCollector,
@@ -481,6 +482,14 @@ export interface SceneLayer {
    * `planShapeLayer`）。其它对象为 null。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
    */
   shape?: SceneShape | null;
+  /**
+   * 对象 `alignment`（P8 步骤 3，rea-p8-layer 2.1、2.2，p8-REPORT 结论 6）：`compile/alignment.ts` 的 `ALIGNMENTS` 下标，0 是 `center`。
+   * 只有图像层（`compileImageModel`）填：对象 JSON 的值是字符串时查表，查不到或不是字符串（含 `{user, value}`）为 0，不登记绑定（WPE
+   * 的 JSON setter 没有绑定分支）。它让图层画自己时多一段平移 `alignmentOffset(alignment, size)`（`render/state.ts` 写进
+   * `LayerState.offset`，`render/layout.ts` 的 `drawMatrixOf`），子层不带。有值也是「图像层」的标记：脚本的 `alignment` 访问器只装在
+   * 有值的图层上（`script/api.ts`）。其它对象不填；可选同 `text`：不动各处手写的测试图层。
+   */
+  alignment?: number;
 }
 /** 形状对象（P8 步骤 2，rea-p8-layer §1，p8-REPORT 结论 4、5）：图层的 `passes` 为空，没有合成 RT，渲染图只画最后一个 effect（`planShapeLayer`）。 */
 export interface SceneShape {
@@ -1549,6 +1558,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     layer.copyBackground = object.copybackground !== false;
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs`）：只认 JSON true（P5a 步骤 0 实测 `fullscreen: 1` 不生效）
     layer.fullscreen = modelFlag(model, "fullscreen");
+    // 对齐（P8 步骤 3，rea-p8-layer 2.1）：字符串查表，别的写法（绑属性、数字）都是 center，不登记绑定。fullscreen 图层的末 pass 是
+    // 单位矩阵，偏移落在哪里没有实测（语料 0 个），带非 center 的对齐照报
+    layer.alignment = alignmentIndex(object.alignment);
+    if (layer.fullscreen && layer.alignment !== 0) unsupported.add("object:alignment:fullscreen");
     if (layer.passthroughModel) {
       // 组合层又 `perspective: true`：基础 pass 与上屏各用哪套相机没测过（语料 0 个），照报
       if (layer.perspective) unsupported.add("object:perspective");

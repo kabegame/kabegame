@@ -20,8 +20,13 @@ export type TargetKey = string;
 /** 目标值的形状：决定字符串 / 数字 / 布尔怎么换成 uniform 分量（3b 的脚本取值、写回也按它换算）。 */
 export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
 
-/** 图层的就地字段。`parallaxDepth`（P5a 步骤 2）只改字段、没有回调（p3-script-REPORT I3），视差每次绘制都重读。 */
-export type LayerField = "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible" | "parallaxDepth";
+/**
+ * 图层的就地字段。`parallaxDepth`（P5a 步骤 2）只改字段、没有回调（p3-script-REPORT I3），视差每次绘制都重读。
+ * `alignment`（P8 步骤 3）只给脚本写（图像层的 `thisLayer.alignment`，`script/api.ts`）：值是 `compile/alignment.ts` 的下标（脚本侧已按
+ * `alignmentIndex` 换好），`SceneState` 据此重算图层的自身偏移；没有属性绑定（WPE 的 JSON setter 不认 `{user}`）。
+ */
+export type LayerField =
+  "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible" | "parallaxDepth" | "alignment";
 
 export type RecompileReason =
   | "postprocess-hdr" // general.hdr：目标格式（已定：保留重编译，WPE 运行中改不生效）

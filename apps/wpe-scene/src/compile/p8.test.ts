@@ -17,10 +17,18 @@
  * - 本机有 WPE 时用真翻译器编 WPE 自带的 `lightshafts`（`p8-shape` 的 S1、S4、S9、S10）：点、`DIRECTDRAW`、四边形与 RenderDoc 的
  *   `vs_in` 逐位相同。
  * 渲染图、四边形与矩阵见 `render/p8.test.ts`。
+ *
+ * P8 步骤 3（同计划「步骤 3 — 对齐」，rea-p8-layer 2.1、2.4，p8-REPORT 结论 6，补测 `p8-align2`）：
+ * - `alignmentIndex`：9 个名字按 WPE 枚举表取下标；大小写不对、数字、`{user, value}`、null 等一律 0（`center`）；
+ * - 能力表：图像层 8 种取值都不报（不再有 `object:alignment`），别的对象中性；图像层上挂 `{script}` 报 `object:alignment:script`；
+ *   fullscreen 图层带非 center 的对齐报 `object:alignment:fullscreen`；脚本 API 表不再有 `layer.alignment`；
+ * - 编译：图像层填 `SceneLayer.alignment`（绑属性、数字为 0，不登记绑定），别的对象不填。
+ * 偏移、矩阵、四边形与脚本读写见 `render/p8.test.ts`。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { ALIGNMENTS, alignmentIndex, alignmentName } from "./alignment";
 import { compileScene, SHAPE_POINT_CONSTANTS, shapeLayerSize, shapePoints, type SceneLayer } from "./bundle";
 import {
   checkObjectFeatures,
@@ -32,6 +40,7 @@ import {
 } from "./features";
 import type { SceneReader } from "./fs";
 import type { SceneObject } from "./model";
+import { MISSING_SCRIPT_API, scanScriptApi } from "./scriptApi";
 import { TEX_FLAGS } from "./tex";
 import { shapeQuad } from "../render/layout";
 import {
@@ -321,8 +330,8 @@ describe("能力表：形状对象（P8 步骤 2）", () => {
         }),
       ),
     ).toEqual([]);
-    // 对齐只对形状（与文本）中性，图像层照报（步骤 3）
-    expect(objectKeys(image({ alignment: "bottom" }))).toEqual(["object:alignment"]);
+    // 对齐在形状（与文本）上不在属性查找链上；图像层步骤 3 起已实现，也不报
+    expect(objectKeys(image({ alignment: "bottom" }))).toEqual([]);
   });
 
   it("perspective: true 照报 object:perspective（只放行图像层与模型）", () => {
@@ -949,3 +958,147 @@ describe.skipIf(!root || !existsSync(wasm) || !existsSync(lightshafts))(
     });
   },
 );
+
+// ———— P8 步骤 3：对齐 ————
+
+describe("alignmentIndex / alignmentName（P8 步骤 3，rea-p8-layer 2.1）", () => {
+  it("9 个名字按 WPE 枚举表 0x1404e97f0 的顺序取下标，名字读回同一个", () => {
+    expect(ALIGNMENTS).toEqual([
+      "center",
+      "top",
+      "topright",
+      "right",
+      "bottomright",
+      "bottom",
+      "bottomleft",
+      "left",
+      "topleft",
+    ]);
+    ALIGNMENTS.forEach((name, index) => {
+      expect(alignmentIndex(name), name).toBe(index);
+      expect(alignmentName(index)).toBe(name);
+    });
+  });
+
+  it("查不到或不是字符串一律 center：大小写不对、空串、数字（p8-align2 的 N）、{user, value}（U）、null / undefined", () => {
+    for (const value of ["TopLeft", "TOP", " top", "", "middle", 3, 0, 8, true, null, undefined, ["top"]])
+      expect(alignmentIndex(value), JSON.stringify(value)).toBe(0);
+    expect(alignmentIndex({ user: "alignprop", value: "topleft" })).toBe(0);
+    expect(alignmentIndex({ script: "export function update(v) { return v; }", value: "topleft" })).toBe(0);
+  });
+
+  it("alignmentName：表外的下标（含 undefined、小数、负数）按 center", () => {
+    for (const index of [undefined, -1, 9, 1.5]) expect(alignmentName(index)).toBe("center");
+  });
+});
+
+describe("能力表：对齐（P8 步骤 3）", () => {
+  it("图像层：8 种取值都不报（语料 24 张、158 个对象都是字符串）；绑属性、写数字、查不到的名字按 center，也不报", () => {
+    for (const name of ALIGNMENTS) expect(objectKeys(image({ alignment: name })), name).toEqual([]);
+    expect(objectKeys(image({ alignment: { user: "alignprop", value: "topleft" } }))).toEqual([]);
+    expect(objectKeys(image({ alignment: 3 }))).toEqual([]);
+    expect(objectKeys(image({ alignment: "TopLeft" }))).toEqual([]);
+  });
+
+  it("别的对象不在对齐的查找链上，中性：分组节点、文本、形状、粒子（只看对齐这一键）", () => {
+    expect(objectKeys({ id: 1, name: "group", origin: "0 0 0", alignment: "topleft" })).toEqual([]);
+    expect(objectKeys({ id: 1, text: "a", alignment: "topleft" })).toEqual([]);
+    expect(
+      objectKeys(shapeObject(11, [{ file: "effects/lightshafts/effect.json" }], { alignment: "topleft" })),
+    ).toEqual([]);
+    const particle = (extra: Record<string, unknown>) => objectKeys({ id: 1, particle: "particles/p.json", ...extra });
+    expect(particle({ alignment: "topleft" })).toEqual(particle({}));
+  });
+
+  it("图像层上挂 {script}：照报 object:alignment:script（字段脚本写回枚举没有实现）；别的对象上不报", () => {
+    const script = { script: "export function update(v) { return v; }", value: "topleft" };
+    expect(objectKeys(image({ alignment: script }))).toEqual(["object:alignment:script"]);
+    expect(objectKeys({ id: 1, text: "a", alignment: script })).toEqual([]);
+  });
+
+  it("整场检查：带对齐的图像层不再报", () => {
+    const keys = new Set<string>();
+    checkSceneFeatures(
+      {
+        general: { orthogonalprojection: { width: 1920, height: 1080 } },
+        objects: ALIGNMENTS.map((alignment, id) => ({ id, image: "models/a.json", origin: "960 540 0", alignment })),
+      },
+      keys,
+    );
+    expect([...keys]).toEqual([]);
+  });
+
+  it("脚本 API 表不再有 layer.alignment（图像层上已实现，script/api.ts）：thisLayer.alignment 读写不报", () => {
+    expect(MISSING_SCRIPT_API.layer.some((entry) => entry.name === "alignment")).toBe(false);
+    const source = "export function update(v) { thisLayer.alignment = 'topleft'; return thisLayer.alignment; }";
+    expect(scanScriptApi({ source, owner: { kind: "layer" }, layer: 0 })).toEqual([]);
+  });
+});
+
+/** `models/a.json` 普通图像层，`models/fs.json` 是 fullscreen（P5b 步骤 3），`models/auto.json` 是 autosize（槽 0 的 64×64）。 */
+async function compileAligned(objects: Record<string, unknown>[], userProperties: Record<string, unknown> = {}) {
+  return compileScene({
+    projectDir: "P:/p",
+    sceneAssets: ["A:/assets"],
+    reader: memoryReader({
+      "P:/p/project.json": JSON.stringify({
+        file: "scene.json",
+        general: { properties: { alignprop: { order: 1, text: "alignprop", type: "textinput", value: "topleft" } } },
+      }),
+      "P:/p/scene.json": JSON.stringify({ general: { orthogonalprojection: { width: 1920, height: 1080 } }, objects }),
+      "P:/p/models/a.json": JSON.stringify({ material: "materials/a.json" }),
+      "P:/p/models/fs.json": JSON.stringify({ material: "materials/a.json", fullscreen: true }),
+      "P:/p/models/auto.json": JSON.stringify({ material: "materials/a.json", autosize: true }),
+      "P:/p/materials/a.json": JSON.stringify({ passes: [{ shader: "s", textures: ["a"] }] }),
+      "P:/p/materials/a.tex": tex(0),
+      "P:/p/shaders/s.vert": "void main() {}",
+      "P:/p/shaders/s.frag": "void main() {}",
+    }),
+    translator,
+    postprocess: "disabled",
+    exhaustive: true,
+    userProperties,
+  });
+}
+
+describe("compileScene：图层的 alignment（P8 步骤 3）", () => {
+  it("图像层填下标（9 种）；绑属性（U）与数字（N）为 0，不登记绑定；分组节点不填", async () => {
+    const bundle = await compileAligned([
+      ...ALIGNMENTS.map((alignment, i) => object(i + 1, { alignment })),
+      object(20, { name: "U", alignment: { user: "alignprop", value: "topleft" } }),
+      object(21, { name: "N", alignment: 3 }),
+      object(22, { name: "plain" }),
+      { id: 23, name: "group", origin: "0 0 0", alignment: "topleft" },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers.map((layer) => layer.alignment)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, undefined]);
+    expect(bundle.bindings.some((binding) => binding.property === "alignprop")).toBe(false);
+    // 属性当前值换成别的字符串也一样（setter 没有绑定分支，不按属性值求）
+    const changed = await compileAligned([object(1, { alignment: { user: "alignprop", value: "topleft" } })], {
+      alignprop: { type: "textinput", value: "bottom" },
+    });
+    expect(changed.layers[0].alignment).toBe(0);
+  });
+
+  it("形状层不填（不在它的查找链上）", async () => {
+    const { bundle } = await compileShapes([shapeObject(11, [shafts(100)], { alignment: "bottom" })]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0].alignment).toBeUndefined();
+  });
+
+  it("fullscreen 图层带非 center 的对齐照报 object:alignment:fullscreen；center、绑属性、数字（都按 center）不报", async () => {
+    const fs = (id: number, alignment: unknown) => ({ id, image: "models/fs.json", origin: "960 540 0", alignment });
+    expect((await compileAligned([fs(1, "topleft")])).unsupported).toEqual(["object:alignment:fullscreen"]);
+    expect((await compileAligned([fs(1, "bottom")])).unsupported).toEqual(["object:alignment:fullscreen"]);
+    for (const alignment of ["center", { user: "alignprop", value: "topleft" }, 3])
+      expect((await compileAligned([fs(1, alignment)])).unsupported, JSON.stringify(alignment)).toEqual([]);
+  });
+
+  it("尺寸是 autosize 之后的（偏移按它算，render/state.ts）：autosize 取槽 0 的 64×64，对象 size 不算", async () => {
+    const bundle = await compileAligned([
+      { id: 1, image: "models/auto.json", origin: "960 540 0", size: "300 200", alignment: "topleft" },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.layers[0]).toMatchObject({ alignment: 8, size: [64, 64] });
+  });
+});

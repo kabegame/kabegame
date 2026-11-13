@@ -17,12 +17,16 @@
  *
  * 声音（P6a 步骤 1）：`volume` 存在 `sounds`，写入用编译期同一条取值规则（`soundVolume`），不标脏，宿主的排期器每帧读。
  *
+ * 对齐（P8 步骤 3）：图层的自身偏移 `offset` 只作用在它自己的绘制上（`render/layout.ts` 的 `drawMatrixOf`），子孙的世界矩阵不带它。
+ * 图像层按 `alignment` 与 `trunc(size)` 算（`alignmentOffset`，加载时与脚本写 `alignment` 时），文本层由排版填（下段）。
+ *
  * 文本（P6b 1d）：排版结果存在 `texts`（宿主排好、加载时交来），对齐偏移写进图层的 `offset`。背景色是一份材质常量（文本表的
  * `background.key`），`backgroundcolor` 的就地写走 `constant` 目标；文本层的 effect 开关按冻结的图层处理（切换整场重编译）。
  * 1e：每层当前的排版字段存在 `textFields`（起始值 = 编译期的 `SceneText.fields`），文本目标的写入按来源规整好（属性走 `write` 的
  * 文本分支、脚本走 `writeText`），和现值逐项比较，变了才标 `dirtyTexts`（WPE `FUN_140256f20` 开头的比较表）；渲染器重排后经
  * `setText` 换上新排版。
  */
+import { ALIGNMENTS } from "../compile/alignment";
 import {
   bindingValue,
   generalValue,
@@ -48,6 +52,7 @@ import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import { soundVolume } from "../compile/sounds";
 import { sameTextField, textFieldFromJson, type TextFields } from "../text/fields";
 import type { TextLayout } from "../text/layout";
+import { alignmentOffset } from "./layout";
 
 export interface LayerState {
   /** angles 为弧度（同 scene.json）。都是本地值：世界矩阵与继承后的可见性按父链现算（`render/layout.ts`）。 */
@@ -65,10 +70,16 @@ export interface LayerState {
    */
   parallaxDepth: number[];
   /**
-   * 文本层的对齐偏移（P6b 1d，`TextLayout.offset`）：世界矩阵在本地矩阵最后右乘 `T(offset)`（`render/layout.ts` 的
-   * `layerLocalMatrix`）。由 `setTexts`（加载）与 `setText`（1e 运行中重排）填，其它图层没有。
+   * 自身偏移（P8 步骤 3）：图层画自己时在世界矩阵后右乘 `T(offset)`（`render/layout.ts` 的 `drawMatrixOf`），子孙不带。文本层是排版
+   * 的对齐偏移（P6b 1d，`TextLayout.offset`，由 `setTexts`（加载）与 `setText`（1e 运行中重排）填）；图像层是对齐
+   * （`alignmentOffset(alignment, trunc(size))`，`fromBundle` 与脚本写 `alignment` 时算，为 (0, 0) 时不写）。其它图层没有。
    */
   offset?: [number, number];
+  /**
+   * 对齐（P8 步骤 3，`SceneLayer.alignment`，`compile/alignment.ts` 的下标）：只有图像层有。脚本写 `thisLayer.alignment` 时改它并重算
+   * `offset`（`SceneState.write`）。
+   */
+  alignment?: number;
   /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中不变。 */
   readonly parent: number | null;
 }
@@ -148,7 +159,7 @@ function bloomFlagOf(binding: SceneBinding, raw: SceneScalar): boolean | undefin
 }
 
 function layerStateOf(layer: SceneLayer): LayerState {
-  return {
+  const state: LayerState = {
     origin: [...layer.origin],
     scale: [...layer.scale],
     angles: [...layer.angles],
@@ -159,6 +170,13 @@ function layerStateOf(layer: SceneLayer): LayerState {
     parallaxDepth: [...layer.parallaxDepth],
     parent: layer.parent,
   };
+  // 图像层的对齐（P8 步骤 3）：`layer.size` 已是 autosize / fullscreen 之后的尺寸；偏移为 0 时不写，没有对齐的图层字节不变
+  if (layer.alignment !== undefined) {
+    state.alignment = layer.alignment;
+    const offset = alignmentOffset(layer.alignment, layer.size);
+    if (offset[0] !== 0 || offset[1] !== 0) state.offset = offset;
+  }
+  return state;
 }
 
 /** 就地写一条泛光绑定；值与编译期 `bloomParams` 同一规则（取不到合法数字时回默认值，级数截断小数）。 */
@@ -186,8 +204,8 @@ export function writeBloomParam(
   return next;
 }
 
-/** 图层字段的缺省值（与编译期 `numbers(resolveValue(…), 缺省)` 同一套：解析不出分量时退回）。 */
-const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible">, number[]> = {
+/** 图层字段的缺省值（与编译期 `numbers(resolveValue(…), 缺省)` 同一套：解析不出分量时退回）。`alignment` 另写（`writeAlignment`）。 */
+const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment">, number[]> = {
   origin: [0, 0, 0],
   scale: [1, 1, 1],
   angles: [0, 0, 0],
@@ -198,7 +216,7 @@ const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible">, number[]> = {
   parallaxDepth: [1, 1],
 };
 
-function writeLayer(layer: LayerState, field: LayerField, value: number[] | boolean): void {
+function writeLayer(layer: LayerState, field: Exclude<LayerField, "alignment">, value: number[] | boolean): void {
   if (field === "visible") {
     layer.visible = value !== false;
     return;
@@ -247,6 +265,8 @@ export class SceneState {
   readonly textFields = new Map<number, TextFields>();
   /** bundle 里的文本图层（`SceneLayer.text` 非空，`objects` 下标）。 */
   private readonly textObjects = new Set<number>();
+  /** 图像层（`SceneLayer.alignment` 有值）的 `size`（P8 步骤 3）：脚本写 `alignment` 时按它重算偏移；尺寸只在重编译时变。 */
+  private readonly alignmentSizes = new Map<number, readonly number[]>();
   private dirtyLayers = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
@@ -337,6 +357,8 @@ export class SceneState {
     // 值，和建系统时（`ParticleSystem` 构造）的钳制一致
     for (const [object, values] of instances)
       state.particleInstances.set(object, { ...values, rate: Math.max(INSTANCE_RATE_MIN, values.rate) });
+    for (const layer of bundle.layers)
+      if (layer.alignment !== undefined) state.alignmentSizes.set(layer.object, [...layer.size]);
     // 手写的测试 bundle 可能没有声音表
     for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
     // 文本层的 effect 开关会改 `padding`、文字框与合成 RT（rea-p6b-layout 3.5），1d 没有就地重排：切换一律整场重编译（同冻结的图层）
@@ -362,8 +384,8 @@ export class SceneState {
   }
 
   /**
-   * 换上一层运行中重排的结果（P6b 1e，渲染器处理 `dirty.texts` 时调）：记下 `TextLayout`、写对齐偏移；偏移变了，本层与子孙的世界矩阵
-   * 跟着变，一起标进脏图层。不是 bundle 里的文本层时不做事。
+   * 换上一层运行中重排的结果（P6b 1e，渲染器处理 `dirty.texts` 时调）：记下 `TextLayout`、写对齐偏移；偏移变了，本层画自己的矩阵跟着变，
+   * 标进脏图层。子孙的世界矩阵不带它（P8 步骤 3，`p8-align2` 的 Xc），文本层也不会是组，所以只标本层。不是 bundle 里的文本层时不做事。
    */
   setText(object: number, layout: TextLayout): void {
     const layer = this.layers.get(object);
@@ -372,8 +394,7 @@ export class SceneState {
     const [x, y] = layout.offset;
     const previous = layer.offset;
     layer.offset = [x, y];
-    if (!previous || previous[0] !== x || previous[1] !== y)
-      for (const item of this.subtree(object)) this.dirtyLayers.add(item);
+    if (!previous || previous[0] !== x || previous[1] !== y) this.dirtyLayers.add(object);
   }
 
   /**
@@ -387,6 +408,25 @@ export class SceneState {
       this.texts.set(object, layout);
       layer.offset = [layout.offset[0], layout.offset[1]];
     }
+  }
+
+  /**
+   * 脚本写图像层的 `alignment`（P8 步骤 3，rea-p8-layer 2.4，`p8-par` 的 T）：`value` 的第一个分量是 `ALIGNMENTS` 的下标（脚本侧已按
+   * `alignmentIndex` 换好，字符串查不到、非字符串都是 0），不是合法下标时按 `center`。改下标、按 `trunc(size)` 重算偏移（为 0 时去掉），
+   * 偏移变了才标脏。WPE 写完回调重建四边形与偏移、下一次绘制生效；我们就地改、`sync` 当帧刷，同帧生效。标整棵子树：子孙的世界矩阵不
+   * 带它，但图层是组时子孙画进组的局部正交，那是按组画自己的矩阵算的（`groupViewProjection`）。不是图像层（没有 `alignment`）时不做事。
+   */
+  private writeAlignment(object: number, layer: LayerState, value: number[] | boolean): void {
+    const size = this.alignmentSizes.get(object);
+    if (layer.alignment === undefined || !size) return;
+    const first = Array.isArray(value) ? value[0] : undefined;
+    const index = first !== undefined && Number.isInteger(first) && first >= 0 && first < ALIGNMENTS.length ? first : 0;
+    layer.alignment = index;
+    const [x, y] = alignmentOffset(index, size);
+    const [px = 0, py = 0] = layer.offset ?? [];
+    if (x === 0 && y === 0) delete layer.offset;
+    else layer.offset = [x, y];
+    if (px !== x || py !== y) for (const item of this.subtree(object)) this.dirtyLayers.add(item);
   }
 
   /** 自身与全部子孙（`objects` 下标，自身在前）。环在编译期已断开，这里按走过的节点兜底。 */
@@ -482,11 +522,16 @@ export class SceneState {
     }
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
-      if (layer) {
-        writeLayer(layer, target.field, bindingValue(raw, binding.condition, target.field));
+      const { field } = target;
+      // 对齐（P8 步骤 3）只给脚本写：换下标、重算自身偏移（`writeAlignment`）
+      if (layer && field === "alignment") {
+        this.writeAlignment(target.object, layer, bindingValue(raw, binding.condition, field));
+        return "applied";
+      }
+      if (layer && field !== "alignment") {
+        writeLayer(layer, field, bindingValue(raw, binding.condition, field));
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的
-        if (INHERITED_FIELDS.has(target.field))
-          for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
+        if (INHERITED_FIELDS.has(field)) for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
         else this.dirtyLayers.add(target.object);
       }
       return "applied";

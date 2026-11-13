@@ -504,6 +504,149 @@ export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan;
 - 画面：`p8-shape`、`p8-shape2`、`p8-par` 用 `render_scene` 按日志回放，和 WPE 抓帧逐像素比（屏蔽 FR / CLK）；解锁的 5 张各解包加日志、抓一帧、按日志回放比。
 - 变异检查：带的顶点顺序、`1 − p.y` 写成 `p.y`、缺省边长取宽、几何取最后一个 effect、画第一个 effect、不强制 additive、看 effect 开关、不强制 `DIRECTDRAW`，单测或比图要能检出。
 
+## 步骤 3 — 对齐
+
+### 思路
+
+对齐是图层**自己绘制时**多出的一段平移：WPE 的世界矩阵虚函数（图像层 +0x80）在基类矩阵后面右乘 `T(a)`，`a` 按对齐取值是 `(±w/2, ±h/2)`，`w`、`h` 是 `trunc(size)`。子层的世界矩阵走另一条非虚的基类函数，不带父层的这段平移。所以对齐不是「本地矩阵的一部分」，而是「这一层画自己时用的矩阵」比层级里的矩阵多一个 `T(a)`。
+
+我们现在把文本层的排版偏移（P6b 1d）写成本地矩阵的一部分（`layerLocalMatrix` 右乘 `T(offset)`），子层跟着走。读码说文本的 +0x80 结构相同、子层同样不带它，步骤 3 的补测也实测到了（下文 `p8-align2` 的 Xc）。所以这一步把偏移从层级里拿出来：
+- `worldMatrixOf` 只沿父链乘不带偏移的本地矩阵，子层、粒子、控制点、模型都用它；
+- 新增 `drawMatrixOf`，等于 `worldMatrixOf · T(offset)`，图层自己的每一次绘制（直接上屏、末 pass、passthrough、compose 基础 pass、effect 的效果矩阵与 `g_LayerModelMatrix`、文本）和组的局部正交（裁剪窗口）都用它。
+
+`LayerState.offset` 成为唯一的「自身偏移」：文本层照旧由排版填，图像层由 `SceneState` 按对齐取值和 `trunc(size)` 算，脚本写 `alignment` 时就地重算。
+
+对齐只在图像层上有（WPE 图像层自己的属性表）：文本、形状、粒子、模型、声音、灯、分组节点都不认它，中性。取值只认字符串，查不到或不是字符串（含绑用户属性、写数字）一律 `center`，所以 JSON 里的任何写法都不用报。唯一照报的是 `fullscreen` 图层带非 `center` 的对齐：它的末 pass 是单位矩阵，偏移落在哪里没测，语料 0 个。
+
+顺带两条（读码加 `p8-align2` 实测）：
+- 图像层上屏的四边形（几何 `layer`：直接上屏、末 pass、passthrough、compose）边长按 `trunc(size)`，没有对齐时也是；
+- 效果矩阵里的缩放仍按浮点 `size / 2`。
+
+画进合成 RT 的基础 pass（几何 `fill`）不变。文本层的四边形不动（尺寸来自排版）。
+
+脚本 `thisLayer.alignment`（图像层）读回名字字符串，写入时查表、查不到写 `center`，偏移就地重算、同帧生效（WPE 写完回调重建，下一次绘制生效）。其它图层上照旧是普通属性（WPE 读回什么由脚本 dll 决定，没查）。
+
+另记：WPE 的光标命中测试用带对齐的矩阵（rea-p8-layer 2.3）；P6 做命中测试时用 `drawMatrixOf` 和截断后的尺寸。
+
+### 补测（`p8-align2`，2026-11-13）
+
+步骤 0 的 `p8-align` / `p8-par` 已经实测了 9 种取值、旋转缩放、effect、子层、视差和脚本写入（270 个顶点 1.4e-4 像素）。动工前补测四处没覆盖的：
+- 工程：`ignore/p8/s2/gen_align2.py` → `ignore/p8/proj/p8-align2`；
+- 抓帧：`A:\p8\p8-align2-fps20`，导出 `ignore/p8/s2/dump-align2.json`，`show_align2.py` 读。
+
+| 对象 | 实测 | 结论 |
+|---|---|---|
+| F1：101.7×50.5、`topleft` | `vs_in` 是 ±50.5 / ±25，MVP 平移 = origin + (50.5, −25) | 四边形与偏移都按 `trunc(size)` |
+| F2：同上、带读效果矩阵的 effect | `g_EffectTextureProjectionMatrix` 的 x 缩放 0.052969 = 50.85 / 960，平移同 MVP；`g_EffectModelMatrix`、`g_LayerModelMatrix` 的平移是 origin + 偏移 | 效果矩阵按浮点 `size / 2`；原料是带偏移的 `W` |
+| F3：同尺寸、不对齐、带 effect | 末 pass 屏幕边 1049.5–1150.5 | 没对齐也按 `trunc(size)` |
+| X / Xc：文本（左上对齐）下挂 20×20 子层 | Xc 的 MVP 平移 = 文本的 origin (500, 500)。我们现在画在 (574, 668) 一带（子层跟了排版偏移） | 文本的子层也不带偏移，P6b 的「子层跟着走」要改 |
+| U：`{user, value: "topleft"}`；N：数字 3 | 都居中 | 不是字符串一律 `center` |
+| G / Gc：带子层的组 `topleft` | 组的 compose 基础 pass 与上屏的平移 = origin + (150, −100)；Gc 在组 RT 里落在左上角（局部正交按带偏移的矩阵） | 组的裁剪窗口跟着偏，子层留在原来的世界位置 |
+
+### 现状锚点（HEAD `3c4f723b`）
+
+**a. 对齐照报**（`compile/features.ts:707`）
+```ts
+  if (object.alignment !== undefined && object.alignment !== "center" && !text && !shape)
+    unsupported.add("object:alignment"); // 现状：图像层上 8 种取值整张退回（24 张、158 个对象，全是字符串）
+```
+
+**b. 偏移在本地矩阵里，子层跟着走**（`render/layout.ts:129`、`:150`）
+```ts
+export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale" | "offset">): Mat4 {
+  // …
+  const [ox = 0, oy = 0] = layer.offset ?? [];
+  return ox === 0 && oy === 0 ? local : multiply(local, translation(ox, oy, 0)); // 现状：worldMatrixOf 沿父链乘它，子孙都带
+}
+  /** 局部平移（P6b 1d，只有文本层有）……右乘在本地矩阵最后（`T · R · S · T(offset)`），子对象跟着走 */
+  offset?: readonly number[];
+```
+
+**c. 绘制与组的局部正交用层级矩阵**（`render/scene.ts:2005`、`:2023`）
+```ts
+      world: worldMatrixOf(layer.object, state.layers, worlds),   // 现状：自身绘制与子层同一个矩阵
+        ? groupViewProjection(group.size, worldMatrixOf(group.object, state.layers, worlds))
+```
+
+**d. 上屏四边形用浮点尺寸**（`render/scene.ts:1848`）
+```ts
+          : layerQuad(this.layerSize(layer, state), step.uv, step.inset);   // 现状：101.7 × 50.5 画成 ±50.85 / ±25.25
+```
+
+**e. 脚本 `layer.alignment` 照报**（`compile/scriptApi.ts:171`，「字段：写入在我们这边落成普通属性」那张表）
+```ts
+    ...fields([
+      "alignment",   // 现状：脚本读写 alignment 报 script:api:layer.alignment
+```
+
+### 点 1 — 编译（`compile/features.ts`、`compile/bundle.ts`、`compile/scriptApi.ts`）
+- **新增**
+  - `ALIGNMENTS`（`center` 0 … `topleft` 8，rea-p8-layer 2.1 的表）与 `alignmentIndex(value)`：字符串查表，查不到或不是字符串为 0。放 `compile/features.ts` 或新的小模块，编译、状态、脚本共用。
+  - `SceneLayer.alignment?: number`：图像层（`compileImageModel`）填 `alignmentIndex(object.alignment)`，其它对象不填（可选同 `text`、`model`，不动手写的测试图层）。绑用户属性的照样按 JSON 值求（`{user, value}` 不是字符串 → 0），不登记绑定。
+- **修改**
+  - `checkObjectFeatures`：删掉 `object:alignment`；未知键循环的跳过名单保留 `alignment`。
+  - `compileImageModel`：`fullscreen` 图层的对齐不为 0 时报 `object:alignment:fullscreen`。
+- **删除**
+  - `scriptApi.ts` 字段表里的 `alignment`（图像层上实现了；别的图层上 WPE 读回什么没查，不再静态报）。
+
+### 点 2 — 偏移与矩阵（`render/layout.ts`）
+- **新增**
+```ts
+/**
+ * 对齐偏移（P8 步骤 3，rea-p8-layer 2.2，p8-REPORT 结论 6，`p8-align2` 的 F1）：`w`、`h` 是 `trunc(size)`，
+ * `a = (±w/2, ±h/2)`（left +、right −、top −、bottom +，场景 y 向上），float32 的 `(float)int × 0.5`。center 为 (0, 0)。
+ */
+export function alignmentOffset(alignment: number, size: readonly number[]): [number, number];
+/**
+ * 图层画自己时的矩阵（P8 步骤 3，rea-p8-layer 2.3）：`worldMatrixOf · T(offset)`。WPE 的世界矩阵虚函数（+0x80）在基类矩阵后
+ * 右乘对齐（图像层）或排版（文本层）的平移；子层的世界矩阵走非虚的基类函数，不带它（`p8-align` 的 d 行、`p8-align2` 的 Xc、Gc）。
+ */
+export function drawMatrixOf(object: number, layers: …, cache: Map<number, Mat4>): Mat4;
+```
+- **修改**
+  - `layerLocalMatrix` 不再读 `offset`；`LayerTransform.offset` 的注释改成「只作用在这一层自己的绘制上，子孙不带」。
+  - `worldMatrixOf` 的注释写明不含偏移。
+
+### 点 3 — 状态（`render/state.ts`、`compile/bindings.ts`）
+- **新增**
+  - `LayerState.alignment?: number`（图像层，取 `SceneLayer.alignment`）。
+  - `LayerField` 加 `"alignment"`：只给脚本写，写入值按 `alignmentIndex` 换成下标。
+- **修改**
+  - `SceneState.fromBundle`：图像层的 `offset` = `alignmentOffset(alignment, layer.size)`（`layer.size` 已是 autosize / fullscreen 之后的尺寸；不为 0 才写，没有对齐的图层字节不变）。
+  - 写 `alignment`：改下标、重算 `offset`、标脏。组的子孙要跟着刷新局部正交，按会传给子孙的字段处理。
+  - `offset` 的注释改成「自身偏移：文本层排版、图像层对齐」。
+
+### 点 4 — 渲染器（`render/scene.ts`）
+- **修改**
+  - `uniformValues` 的 `world` 与组的局部正交改用 `drawMatrixOf`。粒子、控制点、模型的视锥剔除和预热仍用 `worldMatrixOf`：这些对象没有偏移，也不会是带偏移的层的「自身」。逐处核对 `worldMatrixOf` 的调用，各写一句用哪个的理由。
+  - 建 draw 的几何 `layer`：图像层（不是文本层）的尺寸按 `trunc`。规则放进 `layout.ts` 的纯函数（如 `screenQuadSize(layer, size)`），`fill` 与 `fullscreen` 不变。
+  - 效果矩阵（`drawMatrices` 的 `half`）不改，仍按浮点 `size`（F2 实测）。
+
+### 点 5 — 脚本（`script/api.ts`）
+- **新增** 图像层（`SceneLayer.alignment !== undefined`）的 `alignment` 访问器：读返回 `ALIGNMENTS` 里的名字，写经 `this.write({ kind: "layer", object, field: "alignment" }, value, …)`，字符串查表、别的值写成 `center`。其它图层不装（照旧是普通属性）。
+
+### 点 6 — 单测
+- **新增** `compile/p8.test.ts`、`render/p8.test.ts` 的步骤 3 `describe`：
+  - `alignmentIndex`（9 个名字、大小写不对、数字、`{user, value}`、null）。
+  - `alignmentOffset` 对 `p8-align` 的 ana_align 表（9 种 × 160×100）和 F1（101.7×50.5 → (50.5, −25)）。
+  - `drawMatrixOf` 与 `worldMatrixOf`：子层不带父层偏移（`p8-align` d 行）；对旋转缩放的偏移（b 行的数字）；文本层的子层（Xc）。
+  - 组的局部正交用带偏移的矩阵（Gc 的 MVP 平移 (0, 1080)、缩放 6.4 / 5.4）。
+  - 四边形：图像层 101.7 × 50.5 → ±50.5 / ±25，文本层不截断；效果矩阵仍是 50.85。
+  - 能力表：8 种取值不报，`fullscreen` 报 `object:alignment:fullscreen`；脚本表不再有 `alignment`。
+  - 脚本读写：读名字、写字符串、写数字读回 `center`、写后 MVP 同帧变、非图像层没有访问器。
+- **修改** 现有断言「子层跟着文本偏移」的测试（如果有）改成新语义，报告里列出来。
+
+### 实施方式
+
+同前两步：工作区里文本脚本的会话正在改 `script/api.ts`、`render/state.ts`、`host.ts` 等。实现代理只改 `ignore/p8/s3/ov/src`（HEAD 快照），我验收后逐文件三方合并，不碰暂存区。
+
+### 验收
+- 快照里 tsc 0 error，vitest 全过（基线就失败的照记）。
+- `kbp regress --corpus`：回放案例全部相同。语料去掉 `object:alignment`（24 张）和 `script:api:layer.alignment`，新出现的键逐张核对。干净场景不变（53）：`3812487163` 还差 `thisScene.createLayer` / `sortLayer`（P6），这一步解锁不了。
+- 四角：`p8-align` 的 45 个图层、`p8-align2` 的 F1–F3、U、N、G、Gc 和 Xc（产品代码的四边形 × MVP）对 RenderDoc 的 `vs_out`，限值 0.01 像素。
+- 画面：`p8-align`、`p8-align2`、`p8-par` 用 `render_scene` 渲染，和 WPE 抓帧逐像素比（屏蔽 FR / CLK；`p8-par` 的 T 是脚本改的对齐，探针不跑脚本，这一块另算）。
+- 变异检查：偏移的正负号（left / right、top / bottom）、偏移不截断、四边形不截断、效果矩阵截断、子层带父层偏移、组的局部正交不带偏移、绑属性的值当字符串求、脚本写数字不落 `center`，单测或比图要能检出。
+
 ## 步骤 1–5 的验收
 
 - **每步**：确定性工程和 WPE 逐像素比（`kbp cmp frame --meta`，图层带 `bbox`）；几何类（形状、对齐）另比四角，限值 0.01 像素。
@@ -561,3 +704,42 @@ export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan;
     - 差 > 32 的像素占 0.02%–0.65%，在随机粒子和 4K 场景缩放的轮廓上。
     - 按 WPE 的形状 `vs_out` 分四边形里外算（`shape_region.py`）：里外的有符号平均差都在 ±0.2 以内，里面 > 8 的占比不比外面高，光束没有缺失或错位。
     - `3821678218` 的舞台光束放大并排看一致。
+
+### 步骤 3 — 对齐（2026-11-13）
+
+动工前补测了 `p8-align2`（见步骤 3 的补测表），定下三件读码没覆盖的事：效果矩阵按浮点 `size / 2`；文本的子层不带排版偏移；组的裁剪窗口跟着对齐偏。然后按提纲做，偏离四处：
+- **对齐表放进新的小模块 `compile/alignment.ts`**（`ALIGNMENTS`、`alignmentIndex`、`alignmentName`），编译、状态、脚本共用，少碰 `features.ts`。
+- **多报一个键 `object:alignment:script`**：图像层的 `alignment` 挂 `{script}`（字段脚本写回枚举）没有实现，WPE 怎么处理也没测，语料 0 个。
+- **`setText` 只标本层**：原来标整棵子树（子孙跟着排版偏移）；新语义下子孙不带它，文本层也不会是组。
+- **脚本值的形状**：没加新的值类型，API 层把字符串换成下标、写 `[下标]`，状态侧再校验一次（非法下标按 `center`）；重放表存同样的形状。
+
+- **实现**：
+  - 代理在 HEAD `3c4f723b` 的快照副本 `ignore/p8/s3/ov` 里做，16 个文件（新增 `compile/alignment.ts`）。
+  - 我拷 `3c4f723b` 作基线 `ignore/p8/s3/head3`。`ignore/p8/s3/head` 是我前一次导出时 HEAD 的 `0633b0d8`，两次导出之间 HEAD 动过，不用它。
+  - 验收后逐文件 `git merge-file` 合并到新 HEAD `ef16dcf1`（期间 P9b 步骤 0–1、P4f 步骤 0–1 提交）：15 个干净合并。`render/state.ts` 1 处冲突，P4f 改了粒子实例的写回（钳 `rate`），我在它后面加了对齐尺寸表，两边都留。没有碰暂存区。
+  - 合并后 `worldMatrixOf` / `drawMatrixOf` 的调用点和快照里逐个相同，新提交没有新增调用点。
+- **世界矩阵的调用点**：
+  - 用 `drawMatrixOf`（图层画自己的矩阵）：`uniformValues` 的 `world`（直接上屏、基础 pass、effect、末 pass、passthrough、compose、文本）、组的局部正交。
+  - 仍用 `worldMatrixOf`：粒子的预热、模型矩阵、控制点、编排，模型的视锥剔除，`particles/track.ts`。这些对象自己没有偏移，父层的偏移也不传下来。
+- **改了的现有断言**：
+  - `render/textState.test.ts` 的 `setText` 标脏从本层加子孙改成只有本层；
+  - `render/text.test.ts` 三处期望矩阵改用 `drawMatrixOf`（都是根节点，期望值不变）；
+  - `compile/p2a.test.ts` 的照报名单去掉 `object:alignment`；
+  - `compile/p8.test.ts` 步骤 2 的「中性」用例里图像层 `alignment: "bottom"` 不再报。
+- **快照验收**：tsc 0 error；vitest 2501 个用例 1 个失败（`pipeline.test.ts` 的请求次数上限，`3830255100` 219 次，基线同样失败）。
+- **回归**（`kbp regress --corpus`，`ignore/p8/s3/regress`）：
+  - 回放案例两边逐字节相同。新案例 `f1`（别的会话加的）两边同样有失败、逐字节相同，与本步无关。
+  - 语料只去掉 `object:alignment`（24 张）和 `script:api:layer.alignment`（3 张：`3577990983`、`3643916956`、`3660962877`），没有新增的键。
+  - 干净 57 → 57（这期间别的步骤已把干净场景推到 57）。`3812487163` 还差 P6 的 `thisScene.createLayer` / `sortLayer`，这一步解锁不了；总计划「解锁 `3812487163`」是按 P4–P7 先做完的口径算的。
+- **四角**（`ignore/p8/s3/corners/`，产品代码按执行顺序算每次图像绘制，组展开子树，对 RenderDoc 的 `vs_out` 与 MVP）：
+  - `p8-align` 两帧各 56 次、`p8-align2` 13 次，四角最大差 1.9e-4 像素（限值 0.01）。
+  - 组 G 的 compose 基础 pass 只比 MVP：composelayer 着色器按纹理坐标铺满合成 RT，不用 MVP 摆顶点。MVP 与 WPE 相同，差 < 1e-4。
+  - 画进合成 RT 的 `fill` 基础 pass 的 MVP 写法和 WPE 不同（WPE 用 0–64 的四边形配自己的正交），四角相同，是 P2a 起就有的写法。
+- **变异**（`ignore/p8/s3/mutations.py`，快照模式）：left / top 的正负号、偏移不截断、四边形不截断、效果矩阵截断、子层带父层偏移、自身绘制不带偏移、组的局部正交不带偏移、`{user, value}` 按字符串求、脚本写数字不落 `center`、能力表仍报字符串取值，11 处全部被单测检出，按原字节还原。
+- **工作区验收**：tsc 0 error；vitest 2611 个用例 1 个失败（`pipeline.test.ts` 同上）；Prettier 通过。
+- **画面**（dev 宿主按 `--mode development` 重建后渲染，屏蔽 FR / CLK，和 WPE 抓帧比）：
+  - `p8-align` 最大差 1。日志里交错着另一个窗口的 `[kbp]` 行，按线程号取一份。
+  - `p8-align2` 只有 F1 内部一行差 > 8（最大 11），在 kbmark 上下两色的交界：F1 直接上屏、竖直方向从 64 缩到 50，基础纹理 WPE 用 8 倍各向异性、我们用线性（p8-REPORT 记过的差异），四角相同。
+    - 文本子层 Xc 落在文本原点 (490–510, 570–590)，和 WPE 相同（改前在 (564–584, 658–678)）。
+    - 组 G 的子层只露出右上四分之一，和 WPE 相同。
+  - `p8-par` 的 D（深度 0、`top`）对上了；唯一不同的是 T：WPE 里脚本在第 8 帧把它改成 `center`，探针不跑脚本，停在 JSON 的 `top`。脚本另在应用的预览里实测（用户同意占用预览；屏外宿主不跑帧循环）：脚本跑满 495 帧后 T 的对齐是 `center`、偏移清空，D 仍是 `top`；脚本日志 `align before top string`、`align after bottomright`、`align number center string` 和 WPE 逐字相同。单测另覆盖同帧生效、重编译后重放。

@@ -10,12 +10,13 @@
  * - **模型空间**：顶点放在以图层中心为原点的模型空间（未缩放的 `size`），平移 / 旋转 / 缩放进 `g_ModelMatrix`，
  *   而不是像 LWE 那样把场景坐标烘进顶点；对 P1 着色器结果相同，`g_ModelMatrix` 也有了真实含义。
  *   P4a 起 `g_ModelMatrix` 是沿父链累乘的世界矩阵（`worldMatrixOf`），本地矩阵带完整的三轴旋转（`layerLocalMatrix`）。
+ *   P8 步骤 3 起图层画自己时另乘自身偏移（`drawMatrixOf`：文本层的排版偏移、图像层的对齐），子层的世界矩阵不带它。
  * - **相机**：WPE 在正交且没有 `paths` 时，加载末尾把 `eye` / `center` / `up` 重置成默认值，视图矩阵是单位阵，JSON 的值被丢弃
  *   （L2）；投影是 `ortho(0…w, 0…h)`，这里就用它，`general.zoom` 再绕场景中心缩放（P5a 步骤 4）。eagleflag 的 eye 是编辑器残留的
  *   偏移，画面不平移。
  *   透视粒子（P4a 步骤 4）另用一套透视相机（`particleViewProjection`），z = 0 平面和正交画面重合。
  */
-import type { SceneGeneral, SceneTexture } from "../compile/bundle";
+import type { SceneGeneral, SceneLayer, SceneTexture } from "../compile/bundle";
 import {
   identity,
   invert,
@@ -96,6 +97,42 @@ export function layerQuad(
 }
 
 /**
+ * 几何 `layer` 的四边形边长（P8 步骤 3，rea-p8-layer 2.2，`p8-align2` 的 F1、F3）：图像层按 `trunc(size)`。WPE 建四边形（图像层虚表
+ * +0xb0 `FUN_1402066a0`）收的是调用方 `cvttss2si` 截断后的整数，没有对齐时也是（F3：101.7 × 50.5 上屏是 ±50.5 / ±25）。文本层的尺寸
+ * 来自排版（`TextLayout.size`），原样。只管几何 `layer`（直接上屏、末 pass、passthrough、compose）：画进合成 RT 的 `fill`、fullscreen
+ * 的 NDC 四边形、形状的四边形不经这里；效果矩阵的缩放仍按浮点 `size / 2`（F2 实测 50.85，`uniforms.ts` 的 `drawMatrices`）。
+ */
+export function screenQuadSize(layer: Pick<SceneLayer, "text">, size: readonly number[]): number[] {
+  if (layer.text) return [...size];
+  return [Math.trunc(size[0] ?? 0), Math.trunc(size[1] ?? 0)];
+}
+
+/**
+ * 对齐偏移（P8 步骤 3，rea-p8-layer 2.2，p8-REPORT 结论 6，`p8-align2` 的 F1）：`alignment` 是 `compile/alignment.ts` 的下标，`w`、`h` 是
+ * `trunc(size)`，`a = (±w/2, ±h/2)`（left +、right −、top −、bottom +，场景 y 向上；角向取值两个分量都有），float32 的 `(float)int × 0.5`
+ * （整数的一半在 float32 里是精确的）。center 与表外的下标为 (0, 0)。`size` 是 autosize / fullscreen 之后的尺寸（`SceneLayer.size`）。
+ * 偏移在模型空间、缩放与旋转之前（`drawMatrixOf` 右乘 `T(a)`），所以 `scale` 放大它、旋转带着它转（`p8-align` 的 b 行）。
+ */
+export function alignmentOffset(alignment: number, size: readonly number[]): [number, number] {
+  // [x 方向, y 方向]：下标同 WPE 的跳转表 `0x140206ab4`（1 top … 8 topleft）
+  const direction: readonly (readonly [number, number])[] = [
+    [0, 0],
+    [0, -1],
+    [-1, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, 1],
+    [1, 1],
+    [1, 0],
+    [1, -1],
+  ];
+  const [dx, dy] = direction[alignment] ?? [0, 0];
+  const halfW = Math.fround(Math.trunc(size[0] ?? 0) * 0.5);
+  const halfH = Math.fround(Math.trunc(size[1] ?? 0) * 0.5);
+  return [dx === 0 ? 0 : dx * halfW, dy === 0 ? 0 : dy * halfH];
+}
+
+/**
  * 形状对象的四边形（P8 步骤 2，rea-p8-layer 1.3 `FUN_140260190`，p8-REPORT 结论 4）：点 p 是 `size` 方块里的归一化坐标（x 向右、y 向下），
  * 顶点 `(Sx·p.x − Sx/2, Sy·(1 − p.y) − Sy/2, 0)`、uv = p，float32 逐步算（`Sx`、`Sy` 不取整；`p8-shape` 的 S1 1080×1080、S10 300×200
  * 两次绘制的 `vs_in` 逐位相同）。WPE 是 4 顶点 6 索引 (0, 2, 1)、(0, 3, 2)；这里排成三角形带 [p1, p0, p2, p3]：带的两个三角形
@@ -125,17 +162,14 @@ export function shapeQuad(
  * 图层在父对象空间里的本地矩阵：`T(origin) · Rz(az) · Ry(ay) · Rx(ax) · S(scale)`，角度是弧度（2026-11-07 对 WPE 实测，
  * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。`angles` 的 x、y 为 0 时 Ry、Rx 是单位阵，结果与只转 z 轴的旧矩阵逐位相同。
  * `scale.z` 为 0 时按 1：WPE 在这种输入下的行为没有测过，保留 P1 的兜底。
+ * 不含图层的自身偏移（`LayerTransform.offset`，P8 步骤 3）：那段平移只在图层画自己时乘（`drawMatrixOf`），子孙的世界矩阵不带它。
  */
-export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale" | "offset">): Mat4 {
+export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale">): Mat4 {
   const [x = 0, y = 0, z = 0] = layer.origin;
   const [sx = 1, sy = 1, sz = 1] = layer.scale;
   const [ax = 0, ay = 0, az = 0] = layer.angles;
   const rotation = multiply(multiply(multiply(translation(x, y, z), rotationZ(az)), rotationY(ay)), rotationX(ax));
-  const local = multiply(rotation, scaling(sx, sy, sz === 0 ? 1 : sz));
-  // 文本层的对齐偏移（P6b 1d）：WPE 的世界矩阵 `+0x80` 在基类矩阵上再右乘 `T(+0x2f8, +0x2fc, 0)`（rea-p6b-layout 3.3），没有它的图层
-  // 字节不变
-  const [ox = 0, oy = 0] = layer.offset ?? [];
-  return ox === 0 && oy === 0 ? local : multiply(local, translation(ox, oy, 0));
+  return multiply(rotation, scaling(sx, sy, sz === 0 ? 1 : sz));
 }
 
 /** 层级里一个对象的变换与可见性：`SceneLayer` 与 `LayerState` 都满足。 */
@@ -144,8 +178,9 @@ export interface LayerTransform {
   angles: readonly number[];
   scale: readonly number[];
   /**
-   * 局部平移（P6b 1d，只有文本层有）：排版的对齐偏移 `TextLayout.offset`，右乘在本地矩阵最后（`T · R · S · T(offset)`），子对象跟着走
-   * （同 WPE 的世界矩阵 `+0x80`）。缺省为 0。
+   * 自身偏移（P8 步骤 3）：文本层是排版的对齐偏移 `TextLayout.offset`（P6b 1d），图像层是对齐 `alignmentOffset`。只作用在这一层自己的
+   * 绘制上（`drawMatrixOf` 右乘 `T(offset)`，同 WPE 的世界矩阵虚函数 `+0x80`），子孙不带（WPE 子层走非虚的基类函数，rea-p8-layer 2.3；
+   * `p8-align` 的 d 行、`p8-align2` 的 Xc）。缺省为 0。
    */
   offset?: readonly number[];
   visible: boolean;
@@ -203,10 +238,11 @@ export function effectiveVisible(
  * 世界矩阵 `W = W_parent · L`（L 见 {@link layerLocalMatrix}），惰性按父链算，结果记进 `cache`：子在父前也成立，
  * 一条链上的祖先只算一次。`cache` 跟随调用方的一次状态快照（一次建场景、一次 `sync`），状态变了要换新的。
  * 根节点直接是本地矩阵，不乘单位阵；父对象不在表里时当根节点；对象自己不在表里时为单位阵。
+ * 不含任何一层的自身偏移（`offset`，P8 步骤 3）：子层、粒子、控制点、模型的视锥剔除都用它；图层画自己用 {@link drawMatrixOf}。
  */
 export function worldMatrixOf(
   object: number,
-  layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "offset" | "parent">>,
+  layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "parent">>,
   cache: Map<number, Mat4>,
 ): Mat4 {
   const cached = cache.get(object);
@@ -235,6 +271,23 @@ export function worldMatrixOf(
     cache.set(chain[i], base);
   }
   return base!;
+}
+
+/**
+ * 图层画自己时的矩阵（P8 步骤 3，rea-p8-layer 2.3）：`worldMatrixOf · T(offset)`。WPE 的世界矩阵虚函数（+0x80）在基类矩阵后右乘
+ * 对齐（图像层）或排版（文本层）的平移；子层的世界矩阵走非虚的基类函数，不带它（`p8-align` 的 d 行、`p8-align2` 的 Xc、Gc）。
+ * 这一层自己的每一次绘制（直接上屏、末 pass、passthrough、compose 基础 pass、effect 的效果矩阵与 `g_LayerModelMatrix`、文本）与组的
+ * 局部正交（裁剪窗口，`groupViewProjection`）都用它。`cache` 是 {@link worldMatrixOf} 的缓存（只存世界矩阵，这里不写）；偏移为 0 或
+ * 没有时原样返回世界矩阵，字节同以前。
+ */
+export function drawMatrixOf(
+  object: number,
+  layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "offset" | "parent">>,
+  cache: Map<number, Mat4>,
+): Mat4 {
+  const world = worldMatrixOf(object, layers, cache);
+  const [ox = 0, oy = 0] = layers.get(object)?.offset ?? [];
+  return ox === 0 && oy === 0 ? world : multiply(world, translation(ox, oy, 0));
 }
 
 /**
@@ -285,8 +338,9 @@ export function particleViewProjection(
 export const GROUP_DEPTH = 1000;
 
 /**
- * 组（P5b 步骤 4，带子层的组合层）里子孙的视图投影：`ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，w、h 是组的 `size`，`world` 是组当前的
- * 世界矩阵。WPE 画子树时模型栈换成 `inverse(W)`、视图单位阵、投影换成层的局部正交（rea-p5-modelflags §2.5），子孙再乘自己的世界矩阵，
+ * 组（P5b 步骤 4，带子层的组合层）里子孙的视图投影：`ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，w、h 是组的 `size`，`world` 是组当前
+ * 画自己的矩阵（{@link drawMatrixOf}，带组的对齐偏移：WPE 取的是虚函数 +0x80，rea-p8-layer 2.3；`p8-align2` 的 Gc 落在组 RT 的左上角，
+ * 子层自己的世界矩阵不带组的偏移，所以组的裁剪窗口跟着偏、子层留在原来的世界位置）。WPE 画子树时模型栈换成 `inverse(W)`、视图单位阵、投影换成层的局部正交（rea-p5-modelflags §2.5），子孙再乘自己的世界矩阵，
  * 所以落在组的本地坐标系里，组矩形外的部分裁掉；世界空间粒子的模型矩阵是单位阵，乘上它正好回到本地（`p5b-grpptc`）。
  * 深度和场景正交同一约定（反向 Z，z = 0 落在 0.5）：`p5b-grp-cb1` 事件 78 的 MVP 是 `[2/w, 0, 0, 0, 0, 2/h, 0, 0, 0, 0, 1/2000, 0, x, y, 0.5, 1]`，
  * `orthographic` 的 near、far 照 `sceneViewProjection` 反着传。没有视差、抖动、缩放、透视：这些只作用在组本身的绘制上（`p5b-grp-par`）。

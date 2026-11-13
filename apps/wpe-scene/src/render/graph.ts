@@ -88,7 +88,8 @@ export type TargetRef =
  */
 export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough" | "compose";
 /**
- * - `layer`：图层世界四边形（模型空间、未缩放的 size），场景视图投影 × 图层模型矩阵；
+ * - `layer`：图层世界四边形（模型空间、未缩放的 size；图像层按 `trunc(size)`，P8 步骤 3，`layout.ts` 的 `screenQuadSize`），场景视图投影 ×
+ *   图层模型矩阵（画自己的矩阵，带自身偏移，`drawMatrixOf`）；
  * - `fill`：同一个四边形用正交投影画满目标、单位模型矩阵（基础 pass 画进合成 RT）；
  * - `fullscreen`：2×2 的 NDC 四边形（±1）。effect 中间 pass 的 MVP 为单位阵；fullscreen 模型的图层（P5b 步骤 3）直接上屏、上屏也用它，
  *   UV 取步骤的 `uv` / `inset`，矩阵见 `scene.ts`。
@@ -185,7 +186,7 @@ export interface ParticleStep {
  *   （`compositeSize`），平移 `(−w/2 − pad.x, −h/2 − pad.y)`；
  * - `glyphs`：`basefont`，槽 0 是 R8 主图集；
  * - `color`：`basefontrgba`，槽 0 是 RGBA8 彩色图集，有彩色字形时才画，在普通字形之后。
- * `space`：`direct` 画到场景目标，矩阵是图层 MVP（世界矩阵含对齐偏移）× 平移 `directTranslation`；`composite` 画进合成 RT，矩阵是
+ * `space`：`direct` 画到场景目标，矩阵是图层 MVP（画自己的矩阵含排版的对齐偏移，`drawMatrixOf`）× 平移 `directTranslation`；`composite` 画进合成 RT，矩阵是
  * RT 像素的正交 × 平移 `compositeTranslation`（`render/uniforms.ts` 的 `textMatrices`）。
  */
 export interface TextStep {

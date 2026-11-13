@@ -6,6 +6,7 @@ import {
   type ValueType,
 } from "../compile/bindings";
 import type { SceneSpectrum } from "../audio/spectrum";
+import { alignmentIndex, alignmentName } from "../compile/alignment";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { constantTargetFields, materialSlots, type MaterialMember } from "../compile/materialValues";
 import { BLOOM_FIELDS } from "../compile/postprocess";
@@ -219,8 +220,24 @@ export class ScriptApi {
       );
     }
     if (this.isSoundLayer(index)) this.installSound(api, index);
+    if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);
     this.layers.set(object, api);
     return api;
+  }
+
+  /**
+   * 图像层的 `alignment`（P8 步骤 3，rea-p8-layer 2.4，p8-REPORT `p8-par` 的 T）：只装在图像层上（`SceneLayer.alignment` 有值；WPE 的描述符
+   * 只在图像层的属性表里，`IImageLayer.alignment: String`），别的图层上照旧是普通属性。读返回名字（WPE `0x140212610`）；写字符串查表、
+   * 查不到或不是字符串写 `center`（`0x140212530`，`p8-par` 写数字 2 读回 `"center"`），以下标交给宿主（`[下标]`，重放表也存这个形状），
+   * `SceneState` 就地重算偏移、标脏，同帧生效。
+   */
+  private installAlignment(api: ApiObject, object: number): void {
+    this.define(
+      api,
+      "alignment",
+      () => alignmentName(this.access.state().layers.get(object)?.alignment),
+      (value) => this.write({ kind: "layer", object, field: "alignment" }, alignmentIndex(value), "float"),
+    );
   }
 
   /** 是不是声音对象的图层：声音表里有它（对象类别跨重编译不变，图层代理建一次就定）。 */
