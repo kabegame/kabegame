@@ -49,7 +49,8 @@ interface Timer {
   cancelled: boolean;
 }
 
-function targetKey(target: ScriptTarget): string {
+/** 写回目标的路径（重放表的键，同宿主的 `targetPath`）；dev 探针跑脚本时用它记重编译类写入（`dev/probeScripts.ts`）。 */
+export function targetKey(target: ScriptTarget): string {
   switch (target.kind) {
     case "layer":
       return `objects/${target.object}/${target.field}`;
@@ -78,6 +79,20 @@ function targetKey(target: ScriptTarget): string {
     default:
       return target.path;
   }
+}
+
+/**
+ * 每段脚本的诊断（宿主 `scriptDiagnostics` 与 dev 探针跑脚本共用）：运行时的记录，`recompileWrites` 合并回调返回值与 API 直接写入
+ * （`ScriptApi.recompileWrites`）两路。没有运行时时为空。
+ */
+export function scriptDiagnostics(
+  runtime: Pick<ScriptRuntime, "diagnostics"> | null,
+  direct: ReadonlyMap<string, number> | undefined,
+): unknown[] {
+  return (runtime?.diagnostics ?? []).map((item) => {
+    const record = item as { id: string; recompileWrites?: number };
+    return { ...record, recompileWrites: (record.recompileWrites ?? 0) + (direct?.get(record.id) ?? 0) };
+  });
 }
 
 export function messageOf(error: unknown): string {

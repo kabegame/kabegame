@@ -7,7 +7,7 @@
  *    [--audio <录制>] [--seed N] [--passes 1|2] [--no-fr]]
  *   [--fps N | --time 秒]                           不给日志时：每帧 g_Time = 帧号 / fps（名义时间），或每帧同一个时刻
  *   [--canvas WxH] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON]
- *   [--user-properties <JSON 文件或 JSON 串>]
+ *   [--user-properties <JSON 文件或 JSON 串>] [--scripts [--clock 毫秒] [--script-seed N]]
  *   [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]]
  *   [--reuse-host] [--timeout 秒] [--overwrite]
  * ```
@@ -17,6 +17,8 @@
  * 工具里，行为和会话里调 MCP 逐字相同；这里不另写时间线逻辑，只拼参数、收结果。
  * - 回放模式（给 `--timeline-log`）：第 f 帧传 `replay: { timeline: { log, track?, frame: f, … } }`，其余参数原样；
  * - 时刻模式（不给日志）：第 f 帧传 `time: f / fps`（或 `--time` 的固定值），粒子是预热后的状态（同 render_scene 不给 replay）。
+ * - 跑场景脚本（kabegame-chromium 第 7 批，`--scripts`）：每一帧的 `render_scene` 都带 `scripts`（`true`，或给了 `--clock` / `--script-seed`
+ *   时 `{ clock?, seed? }`），探针照宿主跑场景脚本、外部值来自请求；回放时 FR 由脚本自己画（工具不再涂色，不能和 FR 涂色同时要）。两种模式都收。
  * - 输出：`<out>/ours-f<帧>.png`（`save`，原尺寸，`inline: false`：图片不回到任何会话）、`<out>/frames.json`（每帧的元数据、
  *   PNG 文件 sha256、工具结果里的说明行、错误）；`--trace-frames` 的帧另把逐 draw 轨迹写到 `<out>/trace-f<帧>/`。stdout 一行 JSON 摘要。
  * - 前提：用户自己跑着 `deno task dev -c kabegame`；本工具不启动、不重启任何进程。vite / CDP 不在（`[vite]` / `[cdp]`）时剩下的帧不再试。
@@ -66,6 +68,8 @@ export interface RenderFramesOptions {
   pointer?: Point;
   videoTime?: number | Record<string, number>;
   userProperties?: Record<string, unknown>;
+  /** 跑场景脚本（第 7 批）：原样作每一帧 `render_scene` 的 `scripts`；不给时不传。 */
+  scripts?: true | { clock?: number; seed?: number };
   trace?: { frames: number[]; readback?: Array<number | string>; maxVertices?: number };
   /** 开一个屏外宿主给全部帧用（`host_open` / `host_close` 工具），缺省每帧由 render_scene 自己开关。 */
   reuseHost?: boolean;
@@ -165,6 +169,9 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
         pointer: { type: "string" },
         "video-time": { type: "string" },
         "user-properties": { type: "string" },
+        scripts: { type: "boolean" },
+        clock: { type: "string" },
+        "script-seed": { type: "string" },
         "trace-frames": { type: "string" },
         "trace-readback": { type: "string" },
         "trace-max-vertices": { type: "string" },
@@ -248,6 +255,20 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
       throw new ArgError("--user-properties 要是 JSON 对象");
     options.userProperties = props as Record<string, unknown>;
   }
+  // 跑场景脚本（第 7 批）：`--clock` / `--script-seed` 只跟着 `--scripts`；范围同 render_scene 的 `scripts`（时间戳在 Date 能表示的范围、
+  // 种子是 32 位无符号整数），这里先查，参数错不开宿主
+  const clock = str("clock");
+  const scriptSeed = str("script-seed");
+  if (v.scripts) {
+    const scripts: { clock?: number; seed?: number } = {};
+    if (clock !== undefined)
+      scripts.clock = parseNumber(clock, "--clock", (x) => Number.isFinite(x) && Math.abs(x) <= 8.64e15);
+    if (scriptSeed !== undefined)
+      scripts.seed = parseNumber(scriptSeed, "--script-seed", (x) => Number.isInteger(x) && x >= 0 && x <= 0xffffffff);
+    options.scripts = Object.keys(scripts).length ? scripts : true;
+  } else if (clock !== undefined || scriptSeed !== undefined) {
+    throw new ArgError("--clock / --script-seed 要和 --scripts 一起给");
+  }
   const traceFrames = str("trace-frames");
   if (traceFrames !== undefined) {
     const frames = parseFrames(traceFrames);
@@ -293,6 +314,7 @@ export function renderArgs(options: RenderFramesOptions, frame: number, host?: s
   if (options.pointer) args.pointer = options.pointer;
   if (options.videoTime !== undefined) args.videoTime = options.videoTime;
   if (options.userProperties) args.userProperties = options.userProperties;
+  if (options.scripts !== undefined) args.scripts = options.scripts;
   if (options.trace?.frames.includes(frame)) {
     args.trace = {
       save: path.join(options.out, traceDirName(frame)),

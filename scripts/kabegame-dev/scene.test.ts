@@ -424,6 +424,60 @@ describe("粒子接口的参数透传", () => {
     );
   });
 
+  test("跑场景脚本（第 7 批）：scripts 原样交给探针；不给时不带；不合法或和 scriptValues 同给回 400 不碰页面；结果没有 scripts 回 409", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const scripts = (args as { scripts?: unknown }).scripts;
+        const base = { width: 1, height: 1, sha256: "x", time: 0.3, frametime: 0.2 };
+        // 新探针回 meta.scripts；seed 是 99 时模拟不认识这一项的旧探针（结果里没有 scripts）
+        if ((scripts as { seed?: number } | undefined)?.seed === 99) return base;
+        return scripts === undefined ? base : { ...base, scripts: { frames: 2, diagnostics: [] } };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? ${JSON.stringify(png)} : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const particles = { dts: [0.1, 0.2] };
+    const response = await renderFrame(f.s, "h-1", { imageId: "14108", particles, scripts: true, userProperties: {} });
+    assert.equal(calls()[0].scripts, true);
+    assert.deepEqual(calls()[0].particles, particles);
+    assert.equal(response.meta.scripts?.frames, 2);
+    // 不要求有 particles；对象原样转
+    await renderFrame(f.s, "h-1", { imageId: "14108", scripts: { clock: 5, seed: 3 }, userProperties: {} });
+    assert.deepEqual(calls()[1].scripts, { clock: 5, seed: 3 });
+    assert.equal(calls()[1].time, 1.5);
+    await renderFrame(f.s, "h-1", { imageId: "14108", particles, userProperties: {} });
+    assert.equal("scripts" in calls()[2], false, "不给 scripts 时请求和以前一样");
+
+    const before = f.conn.evaluated.length;
+    const fr = [{ object: "FR", field: "color" as const, value: [1, 0, 1], optional: true }];
+    for (const [request, field] of [
+      [{ imageId: "14108", scripts: true, scriptValues: fr }, "scripts"],
+      [{ imageId: "14108", scripts: { seed: -1 } }, "scripts.seed"],
+      [{ imageId: "14108", scripts: "yes" }, "scripts"],
+    ] as const) {
+      await assert.rejects(
+        renderFrame(f.s, "h-1", request as never),
+        (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === field,
+      );
+    }
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    // 旧探针不认识 scripts：脚本没跑，报 409 而不是把没跑脚本的画面交回去
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14108", scripts: { seed: 99 }, userProperties: {} }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /探针不认识 scripts/.test(error.message),
+    );
+  });
+
   test("视频时刻（P9a 步骤 3）：videoTime 原样交给探针（0 也转）；不给时不带；不合法回 400 不碰页面；结果没有 videos 回 409", async () => {
     const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
     const f = await fixture({

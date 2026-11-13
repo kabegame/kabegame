@@ -38,7 +38,13 @@ const handler: Handler = (req, body, res) => {
   }
   if (req.method === "DELETE") return sendJson(res, 200, { handle: "h-1", previewHostsLeft: 0 });
   if (url.endsWith("/render")) {
-    const b = body as { time?: number; particles?: { dts: number[] }; canvas?: [number, number]; trace?: unknown };
+    const b = body as {
+      time?: number;
+      particles?: { dts: number[] };
+      canvas?: [number, number];
+      trace?: unknown;
+      scripts?: unknown;
+    };
     const meta = {
       width: b.canvas?.[0] ?? 1,
       height: b.canvas?.[1] ?? 1,
@@ -47,6 +53,25 @@ const handler: Handler = (req, body, res) => {
       sha256: `pix-${b.particles?.dts.length ?? b.time}`,
       time: b.time ?? 0,
       frametime: 0.05,
+      // 跑场景脚本（第 7 批）：给了 scripts 时像新探针那样回 meta.scripts（没有脚本的场景）
+      ...(b.scripts !== undefined
+        ? {
+            scripts: {
+              clock: 0,
+              clockDefault: b.scripts === true,
+              seed: 1,
+              seedDefault: true,
+              screenResolution: [1920, 1080],
+              frames: b.particles?.dts.length ?? 1,
+              diagnostics: [],
+              recompile: [],
+              unconnected: { sound: 0, video: 0, particles: 0 },
+              audioResolutions: [],
+              messages: [],
+              console: { count: 0, tail: [] },
+            },
+          }
+        : {}),
     };
     const extra =
       b.trace !== undefined
@@ -158,6 +183,25 @@ describe("参数", () => {
     bad(["--frames", "1", "--out", "o", "--fps", "20"], /--image/);
   });
 
+  test("跑场景脚本（第 7 批）：--scripts 两种模式都收；--clock / --script-seed 只跟着 --scripts、范围不对报错", () => {
+    const cwd = path.resolve("/repo");
+    const head = ["--image", "13", "--frames", "1", "--out", "o"];
+    assert.equal(parseCli([...head, "--fps", "20", "--scripts"], cwd).scripts, true);
+    assert.deepEqual(
+      parseCli([...head, "--timeline-log", "l.txt", "--scripts", "--clock", "1767268800000", "--script-seed", "7"], cwd)
+        .scripts,
+      { clock: 1767268800000, seed: 7 },
+    );
+    assert.deepEqual(parseCli([...head, "--fps", "20", "--scripts", "--script-seed", "0"], cwd).scripts, { seed: 0 });
+    assert.equal(parseCli([...head, "--fps", "20"], cwd).scripts, undefined);
+    const bad = (args: string[], re: RegExp) =>
+      assert.throws(() => parseCli([...head, "--fps", "20", ...args], cwd), re);
+    bad(["--clock", "5"], /要和 --scripts 一起给/);
+    bad(["--script-seed", "5"], /要和 --scripts 一起给/);
+    for (const seed of ["-1", "1.5", "4294967296", "x"]) bad(["--scripts", "--script-seed", seed], /--script-seed/);
+    for (const clock of ["x", "9e15", ""]) bad(["--scripts", "--clock", clock], /--clock/);
+  });
+
   test("每帧参数：回放模式填 timeline.frame、时刻模式 time = 帧号 / fps；save 到 ours-f<帧>.png、inline false；trace 只给指定帧", () => {
     const out = path.resolve("/o");
     const replay: RenderFramesOptions = {
@@ -179,6 +223,10 @@ describe("参数", () => {
     assert.equal(renderArgs(replay, 3, "h-7").host, "h-7");
     assert.equal(renderArgs(base(out), 3).time, 3 / 20);
     assert.equal(renderArgs(base(out, { fps: undefined, time: 1.5 }), 3).time, 1.5);
+    // 跑场景脚本（第 7 批）：原样交给每一帧；不给时没有这一项
+    assert.equal("scripts" in renderArgs(base(out), 2), false);
+    assert.equal(renderArgs(base(out, { scripts: true }), 2).scripts, true);
+    assert.deepEqual(renderArgs({ ...replay, scripts: { clock: 5, seed: 3 } }, 2).scripts, { clock: 5, seed: 3 });
   });
 
   test("render_scene 的结果文本：元数据从独占一行的 { 起", () => {
@@ -268,6 +316,48 @@ describe("整条链路（进程内 MCP + 假 REST）", () => {
         const record = JSON.parse(readFileSync(summary.framesJson, "utf8"));
         assert.equal(record.frames[1].trace, path.join(out, "trace-f6"));
         assert.match(record.host, /已关宿主 h-1/);
+      });
+    } finally {
+      await rest.close();
+    }
+  });
+
+  test("跑场景脚本（第 7 批）：每一帧的请求都带 scripts、回放时不发 FR 的 scriptValues，结果说明里有脚本行", async () => {
+    const rest = await fakeRest(handler);
+    try {
+      await withSession(rest.port, async (session, root) => {
+        const log = path.join(root, "iso-fps20-1920x1080-log.txt");
+        writeFileSync(log, kbpLog(6));
+        const out = path.join(root, "out");
+        const summary = await renderFrames(
+          { ...base(out, { frames: [4, 6], fps: undefined, scripts: { clock: 5, seed: 3 } }), timeline: { log } },
+          session,
+        );
+        assert.equal(summary.ok, true, JSON.stringify(summary));
+        const bodies = rest.seen
+          .filter((r) => r.path.endsWith("/render"))
+          .map((r) => r.body as { scripts?: unknown; scriptValues?: unknown });
+        assert.deepEqual(
+          bodies.map((b) => b.scripts),
+          [
+            { clock: 5, seed: 3 },
+            { clock: 5, seed: 3 },
+          ],
+        );
+        assert.ok(
+          bodies.every((b) => b.scriptValues === undefined),
+          "跑脚本时 FR 由脚本自己画，不塞值",
+        );
+        const record = JSON.parse(readFileSync(summary.framesJson, "utf8"));
+        assert.ok(record.notes.some((l: string) => /FR 由脚本自己画（scripts，回放到第 4 帧）/.test(l)));
+        assert.ok(record.notes.some((l: string) => /^场景脚本：/.test(l)));
+
+        // 时刻模式同样转
+        const timed = await renderFrames(base(path.join(root, "out2"), { frames: [2], scripts: true }), session);
+        assert.equal(timed.ok, true, JSON.stringify(timed));
+        const last = rest.seen.filter((r) => r.path.endsWith("/render")).at(-1)!.body as Record<string, unknown>;
+        assert.equal(last.scripts, true);
+        assert.equal(last.time, 0.1);
       });
     } finally {
       await rest.close();

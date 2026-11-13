@@ -461,6 +461,8 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * 不认识这一项，静默读回了场景目标）报 409。
  * 脚本值 `scriptValues`（第 6 批）校验后原样转给探针；给了而结果没有逐项的 `meta.scriptValues` 时（宿主产物不认识这一项，静默没写）
  * 同样报 409。
+ * 跑场景脚本 `scripts`（第 7 批）校验后原样转给探针（不和 `scriptValues` 同给）；给了而结果没有 `meta.scripts` 时（宿主产物不认识这一项，
+ * 脚本没跑）同样报 409。
  * 视频时刻 `videoTime`（P9a 步骤 3）校验后原样转给探针（`0` 也转）；给了而结果没有 `meta.videos` 时（宿主产物不认识这一项，视频停在
  * 透明的初值）同样报 409。
  * 逐 draw 轨迹 `trace`（`.claude/plans/tools/scene-draw-trace.md`）校验后原样转给探针；给了而结果没有 `meta.trace` 时（宿主产物不认识
@@ -499,6 +501,8 @@ export async function renderFrame(
     ...(request.canvas ? { canvas: request.canvas } : {}),
     // 脚本值（第 6 批）：checkRenderReplay 已校验（形状、项数）；对象与字段脚本由探针解析
     ...(request.scriptValues ? { scriptValues: request.scriptValues } : {}),
+    // 跑场景脚本（第 7 批）：checkRenderReplay 已校验（true 或 { clock?, seed? }、不和 scriptValues 同给）
+    ...(request.scripts !== undefined ? { scripts: request.scripts } : {}),
     // 视频时刻（P9a 步骤 3）：checkRenderReplay 已校验（形状）；路径是不是视频纹理由探针判。0 也是有效值，不能按真假判
     ...(request.videoTime !== undefined ? { videoTime: request.videoTime } : {}),
     // 逐 draw 轨迹：checkRenderReplay 已校验（true 或 { readback?, maxVertices? }）
@@ -529,6 +533,14 @@ export async function renderFrame(
       "host",
       `宿主产物没有回逐项的 scriptValues（请求 ${scriptValues.length} 项）：探针不认识 scriptValues、静默没写，重建宿主（--mode development）`,
       { imageId: request.imageId, scriptValues, meta: { scriptValues: meta.scriptValues ?? null } },
+    );
+  }
+  if (request.scripts !== undefined && !(meta.scripts && typeof meta.scripts === "object")) {
+    throw new DevError(
+      409,
+      "host",
+      "宿主产物没有回 scripts：探针不认识 scripts、场景脚本没跑，重建宿主（--mode development）",
+      { imageId: request.imageId, scripts: request.scripts, meta: { scripts: meta.scripts ?? null } },
     );
   }
   if (request.videoTime !== undefined && !Array.isArray(meta.videos)) {

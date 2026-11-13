@@ -4,10 +4,12 @@
  * - 读回帧的 `update`、视差与返回值和只画读回帧时逐项相同（general 不变时两种视差推进等价）；
  * - 前置帧的 `update` 用这一帧的时间、帧时间、光标、上一帧的光标与截至这一帧的频谱（`spectrumAt`，null 沿用前一帧）；
  * - 没有回放（没有 `dts`）时给了 `encodeFrame` 也不调，调用序列同不给。
+ * - 跑场景脚本（kabegame-chromium 第 7 批）：每一帧照渲染器 `render` 的完整顺序（动画在脚本之前、动画之后不另 `sync`、脚本之后
+ *   `setParallax` → `sync` → `update`），视差点按这一帧开头的 general 推进，`g_Daytime` 每帧按这一帧的 g_Time；不给脚本时序列不变。
  */
 import { describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "../compile/bindings";
-import { initialParallaxState } from "../render/parallax";
+import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import type { SceneState } from "../render/state";
 import { replayReadback, spectrumAt, type ParticleReplay } from "./particleCorners";
 import { replayPointers } from "./replayPointers";
@@ -116,11 +118,134 @@ describe("回放的每一帧都画（encodeFrame）", () => {
     expect(kinds(run(undefined, true).calls)).not.toContain("encode");
   });
 
+  it("不给 scripts：每一帧的 g_Daytime 都是 0.5（同以前）", () => {
+    const { calls } = run(PARTICLES, true);
+    const updates = calls.filter((call) => call[0] === "update").map((call) => call[1]) as { daytime: number }[];
+    expect(updates.map((frame) => frame.daytime)).toEqual([0.5, 0.5, 0.5, 0.5]);
+  });
+
   it("spectrumAt：截至这一帧最后一个非 null 项，开头是 null 时没有", () => {
     const replay: ParticleReplay = { dts: [1, 1, 1], audio: [null, { left: left(0.5), right: left(0) }, null] };
     expect(spectrumAt(replay, 0)).toBeUndefined();
     expect(spectrumAt(replay, 1)?.L16[0]).toBe(0.5);
     expect(spectrumAt(replay, 2)?.L16[0]).toBe(0.5);
     expect(spectrumAt({ dts: [1] }, 0)).toBeUndefined();
+  });
+});
+
+describe("每一帧都画时跑场景脚本（kabegame-chromium 第 7 批）", () => {
+  /**
+   * 记录调用的假场景 + 动画 + 脚本：每一帧照渲染器 `render` 的完整顺序。`onScript` 让脚本这一帧改状态（第 k 帧，从 1 起）。
+   * `daytime` 按 g_Time 算（替身：g_Time × 10），核对每帧都用这一帧的。
+   */
+  function runScripts(
+    options: { animate?: boolean; encode?: boolean; onScript?: (state: SceneState, k: number) => void } = {},
+  ) {
+    const { animate = true, encode = true, onScript } = options;
+    const calls: unknown[][] = [];
+    const state = fakeState();
+    let frames = 0;
+    const scene = {
+      stepParticles: (dt: number, at: number) => void calls.push(["step", dt, at]),
+      setCamera: ({ shake }: { shake: readonly [number, number] }) => void calls.push(["camera", [...shake]]),
+      sync: () => void calls.push(["sync"]),
+      setParallax: (next: unknown) => void calls.push(["parallax", structuredClone(next)]),
+      update: (frame: unknown) => void calls.push(["update", structuredClone(frame)]),
+      particleAudio: { left: new Float32Array(16), right: new Float32Array(16) },
+    };
+    const result = replayReadback(scene as never, state, {
+      particles: PARTICLES,
+      time: 0,
+      pointers: replayPointers({ pointers: POINTERS }, SCENE, PARTICLES.dts.length),
+      parallax: initialParallaxState(...SCENE),
+      size: SCENE,
+      animations: animate ? { frame: (dt: number) => void calls.push(["animate", dt]) } : undefined,
+      encodeFrame: encode ? (index) => void calls.push(["encode", index]) : undefined,
+      scripts: {
+        frame: (dt, at) => {
+          calls.push(["script", dt, at]);
+          onScript?.(state, ++frames);
+        },
+      },
+      daytime: (at) => at * 10,
+    });
+    return { calls, result, state };
+  }
+
+  it("每一帧（含前 n − 1 帧）照渲染器：sync → 步进 → 相机 → 动画 → 脚本 → 视差 → sync → update，再编码；动画之后不另 sync", () => {
+    const { calls } = runScripts();
+    const frame = ["sync", "step", "camera", "animate", "script", "parallax", "sync", "update"];
+    expect(kinds(calls)).toEqual([...frame, "encode", ...frame, "encode", ...frame, "encode", ...frame]);
+    // 脚本收到的是这一帧的帧时间与 g_Time；动画同一帧的帧时间
+    expect(calls.filter((call) => call[0] === "script")).toEqual(
+      PARTICLES.dts.map((dt, i) => ["script", dt, PARTICLES.times![i]]),
+    );
+    expect(calls.filter((call) => call[0] === "animate")).toEqual(PARTICLES.dts.map((dt) => ["animate", dt]));
+    // 没有动画时：相机之后直接脚本
+    const plain = runScripts({ animate: false });
+    const bare = ["sync", "step", "camera", "script", "parallax", "sync", "update"];
+    expect(kinds(plain.calls)).toEqual([...bare, "encode", ...bare, "encode", ...bare, "encode", ...bare]);
+  });
+
+  it("每一帧的 g_Daytime 按这一帧的 g_Time 算；返回的 frame 就是读回帧交给 update 的帧输入", () => {
+    const { calls, result } = runScripts();
+    const updates = calls.filter((call) => call[0] === "update").map((call) => call[1]) as Record<string, unknown>[];
+    expect(updates.map((frame) => frame.daytime)).toEqual(PARTICLES.times!.map((at) => at * 10));
+    expect(updates.at(-1)).toEqual(structuredClone(result.frame));
+  });
+
+  it("脚本改了视差的 general：视差点按这一帧开头（动画、脚本之前）的 general 推进，绘制用脚本之后的", () => {
+    // 第 k 帧的脚本把 cameraparallaxmouseinfluence 改成 1 − 0.2k：第 k + 1 帧开头才用它推进
+    const { calls, result, state } = runScripts({
+      onScript: (s, k) => {
+        s.general = { ...s.general, cameraparallaxmouseinfluence: 1 - 0.2 * k };
+      },
+    });
+    const eyes = calls.filter((call) => call[0] === "camera").map((call) => call[1] as [number, number]);
+    const generalAt = (k: number) => ({ ...fakeState().general, cameraparallaxmouseinfluence: 1 - 0.2 * k });
+    let manual = initialParallaxState(...SCENE);
+    const drawn: unknown[] = [];
+    PARTICLES.dts.forEach((frametime, i) => {
+      manual = advanceParallax(
+        manual,
+        parallaxInput(generalAt(i), {
+          pointer: POINTERS[i],
+          frametime,
+          width: SCENE[0],
+          height: SCENE[1],
+          eye: eyes[i],
+        }),
+      );
+      // 绘制用这一帧脚本之后的 general（第 i + 1 帧的脚本写过）
+      drawn.push(structuredClone(drawParallax(manual, generalAt(i + 1))));
+    });
+    expect(result.parallax).toEqual(manual);
+    expect(calls.filter((call) => call[0] === "parallax").map((call) => call[1])).toEqual(drawn);
+    // 对照：按脚本之后的 general 推进（不跑脚本时的写法），结果不同，说明比较分得出
+    let after = initialParallaxState(...SCENE);
+    PARTICLES.dts.forEach((frametime, i) => {
+      after = advanceParallax(
+        after,
+        parallaxInput(generalAt(i + 1), {
+          pointer: POINTERS[i],
+          frametime,
+          width: SCENE[0],
+          height: SCENE[1],
+          eye: eyes[i],
+        }),
+      );
+    });
+    expect(after).not.toEqual(manual);
+    expect(state.general.cameraparallaxmouseinfluence).toBeCloseTo(0.2, 12);
+  });
+
+  it("读回帧与只画读回帧时一致：步进、相机、动画、脚本的逐帧参数相同，读回帧的 update 相同", () => {
+    const encoded = runScripts();
+    const plain = runScripts({ encode: false });
+    const core = (calls: unknown[][]) =>
+      calls.filter((call) => ["step", "camera", "animate", "script"].includes(call[0] as string));
+    expect(core(encoded.calls)).toEqual(core(plain.calls));
+    expect(lastOf(encoded.calls, "update")).toEqual(lastOf(plain.calls, "update"));
+    expect(encoded.result).toEqual(plain.result);
   });
 });

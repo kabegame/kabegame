@@ -510,6 +510,37 @@ describe("粒子回放、轨迹与四角", () => {
     });
   });
 
+  test("render 跑场景脚本（第 7 批）：scripts 原样转给后端；和 scriptValues 同给、形状不对回 400，field 指到那一项", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const particles = { dts: [0.1, 0.1] };
+      for (const scripts of [true, { clock: 1767225600000, seed: 7 }]) {
+        const ok = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: 14108, particles, scripts });
+        assert.equal(ok.status, 200);
+        await ok.body?.cancel();
+      }
+      assert.deepEqual(calls, [
+        ["hostRender", "h-1", { imageId: "14108", particles, scripts: true }],
+        ["hostRender", "h-1", { imageId: "14108", particles, scripts: { clock: 1767225600000, seed: 7 } }],
+      ]);
+      const fr = [{ object: "FR", field: "color", value: [1, 0, 1], optional: true }];
+      for (const [body, field] of [
+        [{ scripts: true, scriptValues: fr }, "scripts"],
+        [{ scripts: false }, "scripts"],
+        [{ scripts: { seed: 1.5 } }, "scripts.seed"],
+        [{ scripts: { clock: "now" } }, "scripts.clock"],
+        [{ scripts: { tz: 8 } }, "scripts.tz"],
+      ] as const) {
+        const res = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: "1", ...body });
+        assert.equal(res.status, 400, JSON.stringify(body));
+        const error = await res.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field, error.error);
+      }
+      assert.equal(calls.length, 2, "参数错时不调后端");
+    });
+  });
+
   test("render 的文本脚本值（P6b 1e-3）：文本字段的字符串原样转给后端；图层字段给字符串、超长、不认识的文本键回 400", async () => {
     const { backend, calls } = fakeBackend();
     await withServer(backend, async (base) => {

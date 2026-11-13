@@ -493,6 +493,14 @@ export interface RenderRequest {
    */
   scriptValues?: ScriptValue[];
   /**
+   * 跑场景脚本（第 7 批，`apps/wpe-scene/src/dev/probeScripts.ts`）：`true`，或 `{ clock?: 起点时刻（毫秒时间戳）, seed?: Math.random 的种子 }`，
+   * 原样交给探针。探针照宿主搭脚本环境，建好场景之后跑 `init`，回放的每一帧（含读回帧）设好相机之后跑一帧；`Date` / `timeOfDay` 是
+   * `clock` 加回放时间（读回帧的 `g_Daytime` 跟着它），`Math.random` 按 `seed`，`screenResolution` 是 `canvas ?? window ?? [1920, 1080]`，
+   * `localStorage` 只在内存。不和 `scriptValues` 同给（400）。结果的 `meta.scripts` 给各段诊断、做不了的重编译写入、没接的 API；宿主产物
+   * 不认识这一项（没回 `meta.scripts`）时 409。
+   */
+  scripts?: RenderScriptsRequest;
+  /**
    * 视频纹理的时刻（P9a 步骤 3，秒）：数字对全部视频纹理生效，`{ <纹理 path>: 秒 }` 分别给（没给的取 0，键不是视频纹理时探针报错、
    * 回 422）；缺省 0。超过时长按循环取模。屏外宿主不跑帧循环、视频用自己的时钟，这是确定性回放视频的唯一办法。结果的 `meta.videos`
    * 给出每段实际取的时刻。
@@ -508,6 +516,50 @@ export interface RenderRequest {
 
 /** 逐 draw 轨迹的请求：`readback` 是 pass 下标或 pass / 目标纹理标签的子串（最多 64 项），`maxVertices` 是 1–4096 的整数。 */
 export type RenderTraceRequest = true | { readback?: (number | string)[]; maxVertices?: number };
+
+/**
+ * 跑场景脚本的请求（第 7 批）：`clock` 是起点时刻（毫秒时间戳，有限数、绝对值不超过 8.64e15，缺省 2026-01-01T00:00:00Z），`seed` 是
+ * `Math.random` 的种子（0–2³²−1 的整数，缺省 1）。
+ */
+export type RenderScriptsRequest = true | { clock?: number; seed?: number };
+
+/** 探针跑场景脚本的结果（`apps/wpe-scene/src/dev/probeScripts.ts` 的 `ProbeScriptsResult`）。 */
+export interface RenderScripts {
+  /** 实际用的起点时刻（毫秒时间戳）；`clockDefault` 为真时是缺省值。 */
+  clock: number;
+  clockDefault: boolean;
+  /** 实际用的 `Math.random` 种子；`seedDefault` 为真时是缺省值。 */
+  seed: number;
+  seedDefault: boolean;
+  /** 脚本看到的 `engine.screenResolution`。 */
+  screenResolution: [number, number];
+  /** `init` 之后跑了几帧（回放帧加读回帧）。 */
+  frames: number;
+  /**
+   * 每段脚本的诊断（同宿主 `host.scripts()`）：`id`、`state`（`inited` / `failed` …）、`exports`、`disabled`（出错停用的回调）、
+   * `errors`、`calls`（各回调的次数与最长用时）、`targetKind`、`recompileWrites`。
+   */
+  diagnostics: {
+    id: string;
+    state: string;
+    exports?: string[];
+    disabled?: string[];
+    errors?: string[];
+    calls?: Record<string, { count: number; maxMs: number }>;
+    targetKind?: string;
+    recompileWrites?: number;
+  }[];
+  /** 要整场重编译、探针做不了的写入（值真的变了的）：有就说明读回那一帧和宿主不同，不可信。`firstFrame` 0 是 `init`。 */
+  recompile: { path: string; count: number; firstFrame: number; value: number[] | boolean | string }[];
+  /** 没接的脚本 API 被问到的次数：声音层、视频纹理、粒子层的方法（空操作）。 */
+  unconnected: { sound: number; video: number; particles: number };
+  /** 脚本注册过的音频缓冲分辨率（缓冲一直全 0）。 */
+  audioResolutions: number[];
+  /** 运行时的告警与错误，最多 100 条。 */
+  messages: string[];
+  /** 脚本 `console` 输出的条数与最后 50 条。 */
+  console: { count: number; tail: string[] };
+}
 
 /** 探针结果里的轨迹摘要（`apps/wpe-scene/src/dev/drawTrace.ts` 的 `RenderFrameTrace`）：存放区的键与大小，vite 按它取回。 */
 export interface RenderTraceMeta {
@@ -671,8 +723,13 @@ export interface RenderMeta {
   frametime: number;
   /** 每一项脚本值写没写进状态（第 6 批；没给时空数组，之前的宿主产物没有这一项）。 */
   scriptValues?: ScriptValueResult[];
-  /** 回放前结清文本重排调了几次 `sync`（P6b 1e-3）：只在有文本字段的脚本值写进了状态时有，1 是一次排成、多出的每次是等了一轮字体。 */
+  /**
+   * 回放前结清文本重排调了几次 `sync`（P6b 1e-3）：只在有文本字段的脚本值写进了状态时有，1 是一次排成、多出的每次是等了一轮字体。跑脚本时
+   * （第 7 批）是读回帧之后结清的次数，只在场景有文本层时有。
+   */
   textSyncs?: number;
+  /** 跑场景脚本的结果（第 7 批）：只在请求带 `scripts` 时有（之前的宿主产物没有这一项）。 */
+  scripts?: RenderScripts;
   /** 每段视频纹理实际取的时刻（P9a 步骤 3；没有视频纹理时空数组，之前的宿主产物没有这一项）。 */
   videos?: RenderVideo[];
   /** 逐 draw 轨迹的摘要：只在请求带 `trace` 时有（之前的宿主产物没有这一项）。 */

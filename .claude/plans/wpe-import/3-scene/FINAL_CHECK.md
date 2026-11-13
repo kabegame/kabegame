@@ -84,7 +84,7 @@
 | 能力 | 现在有的 | 缺的 |
 |---|---|---|
 | 录制 WPE 的播放过程 | `wpe-renderdoc` 连续抓帧；kbp 测试工程的 FR / CLK 与 `[kbp]` 日志；真实场景用 `kbp content unpack --instrument` 插 FR 记帧时间 | 每帧脚本看到的外部值（`Date`、`engine.*`、音频、媒体）；视频时刻；把这些和帧号对齐成一份录制 |
-| 确定性回放 | dev 探针 `renderFrame`：`time`、粒子时间线、逐帧光标、`scriptValues`（图层字段与文本字段）、`videoTime`、`canvas` | 探针不跑脚本，只能逐字段塞值；要能注入 `Date` 等外部值后照常跑脚本；音频频谱逐帧回放；一份录制直接驱动整段回放 |
+| 确定性回放 | dev 探针 `renderFrame`：`time`、粒子时间线、逐帧光标、`scriptValues`（图层字段与文本字段）、`videoTime`、`canvas`；`scripts`（2026-11-14，`.claude/plans/tools/kabegame-chromium-lib.md` 第 7 批）：照宿主跑场景脚本，每回放帧设好相机之后跑一帧，`Date` / `timeOfDay` 是请求给的起点加回放时间、`Math.random` 按种子、`screenResolution` 是 `canvas ?? window`、`localStorage` 只在内存，两次同样的请求同一张图 | 逐帧的 `Date`（只能给起点、按回放时间推，不能照录制逐帧给）；脚本的音频缓冲全 0（粒子与音频 uniform 的频谱已能逐帧回放）；媒体录制（声音、视频、粒子层的脚本方法空操作，媒体回调不调）；要整场重编译的脚本写入探针做不了（结果里列出）；一份录制直接驱动整段回放 |
 | 逐帧比较 | `kbp cmp frame`（整帧、按 bbox 归类、热图） | 按帧序列批量比、汇总报告 |
 | 差异解释 | WPE 侧 RenderDoc 逐 draw（顶点、常量、RT）；我们这边的逐 draw 轨迹：`render_scene` / `host_render` 的 `trace`（2026-11-13，`.claude/plans/tools/scene-draw-trace.md`），读回那一帧每个 pass、每个 draw 的目标、视口、管线、绑定、uniform（按名字解码）、索引与顶点，可选读回指定 pass 的 RT，写成 `trace.json` 与 `pass-<下标>.png`；另有 `host.texts()` / `host.state()` 汇总 | `kbp cmp draws`（和 WPE 的 draw 对齐，报第一处不同）；实时宿主的「下一帧记一次」 |
 | 复制工程（排除别的阶段的干扰） | 每次手写生成脚本（`ignore/p6/b1e/make_e3text.mjs`） | 通用工具：给真实壁纸和要留的对象，自动带上它们的整条父链与引用到的属性、脚本、effect、材质、字体，删掉其余对象，可选把指定字段换成固定值；同时给出 WPE 与 Kabegame 两边用的同一份工程 |

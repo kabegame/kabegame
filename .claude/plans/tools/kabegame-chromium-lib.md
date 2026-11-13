@@ -1081,3 +1081,134 @@ Claude 独立验收（2026-11-12；不采信自报，脚本与输出在 `ignore/
 | 不留痕迹 | 11 个测试工程（14342–14352）`projects_remove` 后 `imagesGone` / `tasksGone` 为真；`app_state` 与宿主列表前后逐字相同（只剩应用背景 13635） |
 
 宿主产物里带着 P5b 会话在 `apps/wpe-scene` 未提交的改动（子代理重建时就在），不影响上面的结论：比较对象是 WPE 抓帧，结果为 0 差异。本会话的 kabegame-dev MCP 要 `/mcp` 重连才有 `replay.fr`。
+
+## 第 7 批 — 回放跑场景脚本（2026-11-14 用户）
+
+**来源：** `.claude/plans/wpe-import/3-scene/FINAL_CHECK.md` 的工具表：「探针不跑脚本，只能逐字段塞值；要能注入 `Date` 等外部值后照常跑脚本」。直接起因是 P5d 步骤 3 的补充走查：语料里 15 个相机对象的 `origin` 挂脚本（多数是按 `engine.canvasSize` 定位的同一个模板），回放不跑脚本就只能把 WPE 的结果塞回去，测不到脚本本身。用户定「如果不能跑就加跑」。
+
+### 总体设计思路
+
+探针的 `renderFrame` 加一个 `scripts` 选项。给了它，探针在自己的 `SceneState` 上照宿主搭一套脚本环境：同一个 `createIframeRealm`、`ScriptApi`、`ScriptRuntime`，不另写运行时。`init` 在建好场景之后、回放之前跑；每一回放帧（包括读回那一帧）在渲染器的同一位置调一次 `runtime.frame(dt)`：设好这一帧的相机之后、`setParallax` 与第二次 `sync` 之前。这个位置和宿主的 `beforeFrame` 相同。profile 帧不跑脚本，它只用来计时。
+
+脚本看得到的外部值全部来自请求，两次同样的请求得到同一张图：
+- `engine.runtime` / `frametime`：回放时间线的这一帧（不回放时是 `time` 与 0）；
+- `engine.screenResolution`：`canvas ?? window ?? [1920, 1080]`。WPE 是窗口尺寸（`p5d-camo-s4k` 实测：场景 3840×2160、窗口 1920×1080 时 `screen 1920 1080`）；
+- `engine.canvasSize`：照旧是场景尺寸，同一次实测 WPE 是 `canvasSize 3840 2160`；
+- `Date` / `engine.timeOfDay`：请求给一个起点时刻（毫秒时间戳），随回放时间前进；不给时用固定缺省值，结果里写明。`g_Daytime` 跟着同一个时钟；
+- `Math.random`：按请求的种子换成确定序列。它本来就和 WPE 对不上，只保证我们两次相同；
+- `localStorage`：只在内存，不碰持久存储；
+- 音频缓冲全 0，媒体回调不调；
+- 声音、视频、粒子层的脚本方法返回 null，调用次数记进结果。
+
+脚本写回与读取不再写第二份。宿主 `writeScript` / `readScript` 里只依赖状态的那部分提成共用函数，宿主和探针都调（FINAL_CHECK 的例子正是同一条规则写了四份、对了三份）。要整场重编译的写入（`recompile` 目标、打开没有链的泛光等）探针做不了：记进结果，读回帧照常画，调用方据此判断这一帧不可信。
+
+`scripts` 与 `scriptValues` 不能同时给（400）：一个是让脚本自己算，一个是把脚本的结果塞进去，混用分不清是谁写的。给了 `scripts` 时 MCP 不再给 FR 涂色：FR 的字段脚本自己跑，回放从加载后第 1 帧开始，帧号自然和 WPE 对上。
+
+### 现状锚点
+
+**a. 探针不跑脚本**（`apps/wpe-scene/src/dev/probe.ts`，`renderFrame`）
+```ts
+const state = SceneState.fromBundle(bundle);   // 现状：字段脚本只有编译期的 initial
+// …建场景
+const scriptValues = applyScriptValues(state, bundle, options.scriptValues);   // 现状：只能塞值（第 6 批）
+// …profile 帧、replayReadback：每帧 sync → stepParticles → setCamera → setParallax → update，中间没有脚本
+```
+
+**b. 宿主每帧调脚本的位置**（`apps/wpe-scene/src/render/renderer.ts` 的 `render`、`host.ts` 的 `beforeFrame`）
+```ts
+scene.setCamera(camera);
+if (live) this.options.stepObjects?.(frametime);
+if (live) this.options.beforeFrame?.(frametime, this.spectrum);   // 宿主：applySpectrum，然后 runtime.frame(dt)
+scene.setParallax(drawParallax(this.parallax, state.general, this.perspective), state);
+scene.sync(state);
+```
+
+**c. 宿主搭脚本环境**（`host.ts` 的 `startRuntime`；写回 `writeScript` 是宿主私有方法）
+```ts
+const realm = await createIframeRealm({ document, scripts: bundle.scripts, sceneAssets, modules: getJsModuleIndex(sceneAssets), /* … */ });
+const api = new ScriptApi(realm, { bundle, state, screenResolution, frametime, runtime, timeOfDay: () => daytimeOf(new Date()), write, read, /* … */ });
+const runtime = new ScriptRuntime(realm, { report, write: (target, value) => this.writeScript(target, value), read: (target) => this.readScript(target), /* … */ });
+await runtime.load(bundle.scripts);   // 现状：只有宿主会搭
+```
+
+**d. `engine.canvasSize` 取场景尺寸**（`script/api.ts` 的 `installEngine`）
+```ts
+scoped("canvasSize", () => this.vector([this.access.bundle().general.width, this.access.bundle().general.height], 2));
+```
+
+### 点 1 — 共用写回（新增 `apps/wpe-scene/src/script/stateWrite.ts`，修改 `host.ts`）
+- **新增** `writeScriptState(state, target, value)` → `"applied" | "recompile" | "unsupported"`：文本字段走 `writeText`、其余走 `state.write`，同宿主现在的分支；`readScriptState(state, bundle, target)` 同宿主的 `readScript`。
+- **修改** 宿主的 `writeScript` / `readScript` 改调它们；声音音量交给排期器、`recompile` 走 `overrideAndReload` 留在宿主。宿主行为逐字不变，由现有单测锁住。
+
+### 点 2 — 探针的脚本环境（新增 `apps/wpe-scene/src/dev/probeScripts.ts`）
+- **新增** `ProbeScriptsOptions { clock?: number; seed?: number }` 与 `createProbeScripts({ bundle, state, sceneAssets, screen, pointers, options })`，返回 `{ load(), frame(dt, time, i), result(), dispose() }`：
+  - realm 同宿主（`createIframeRealm`、内存 `localStorage`）；建好后把 realm 的 `Date`（无参构造与 `Date.now`）换成「起点 + 当前回放时间」，`Math.random` 换成按种子的序列；
+  - `ScriptApi` 的读写接点 1 的共用函数；`recompile` 结果记进 `result().recompile`（目标路径与次数）；`sound` / `video` / `particles` 返回 null，被调到时计数；
+  - `result()`：每段脚本的诊断（同宿主 `scriptDiagnostics`）、`recompile`、未接的 API、实际用的 `clock` 与 `seed`、`screenResolution`。
+
+### 点 3 — 探针接线（`dev/probe.ts`、`dev/particleCorners.ts`）
+- **新增** `RenderFrameOptions.scripts?: true | ProbeScriptsOptions`；与 `scriptValues` 同给时抛错。
+- **修改** `renderFrame`：建好场景、视频就绪之后 `load()`（`init`）；回放的每一帧（`replayParticles` 的 `afterStep` 与读回帧）在设好相机之后调 `frame`；读回之后 `dispose()`。`RenderFrameResult.scripts`（不给时没有这个键）。
+- 不给 `scripts` 时逐字节同以前。
+
+### 点 4 — vite（`scripts/kabegame-dev/replay.ts`、`scene.ts`、`types.ts`）
+- **新增** `RenderRequest.scripts`：`true` 或 `{ clock?: 有限数, seed?: 非负整数 }`，与 `scriptValues` 同给回 400；原样转给探针。`RenderMeta.scripts`；宿主产物不认识（给了却没回 `meta.scripts`）时 409 `[host]`，同第 6 批。
+
+### 点 5 — MCP（`apps/kabegame-dev-mcp/src/tools.ts`、`renderFrames.ts`）
+- **新增** `render_scene` / `host_render` 的 `scripts` 参数；给了时不发 FR 的 `scriptValues`，结果说明写「FR 由脚本自己画」，另列每段脚本的状态与出错、`recompile`、未接的 API。
+- **新增** `renderFrames.ts` 的 `--scripts [--clock 毫秒] [--script-seed N]`。
+
+### 点 6 — 文档
+- `.claude/skills/kabegame-chromium/SKILL.md`：`scripts` 一节（外部值的来源与限制）；改掉「探针不跑脚本」的几处。
+- `FINAL_CHECK.md` 工具表「确定性回放」一行：脚本能跑了，剩下的缺口（逐帧的 `Date`、音频、媒体录制）照实写。
+- `cocs/wpe/WPE_SCENE.md`：dev 探针一行加 `scripts`。
+
+### 验收
+- **单测**：共用写回（宿主原有单测全过）；探针脚本环境（`Date` / `timeOfDay` / `Math.random` / `screenResolution` / `canvasSize` 的注入、`init` 与每帧 `update` 的次数与顺序、`recompile` 记录、未接 API 计数、与 `scriptValues` 互斥）；vite 的校验与 409；MCP 的参数与说明。宿主 tsc、`deno check`、vitest、Prettier 通过。
+- **不给 `scripts` 时不变**：画面哈希 10 张 × 三档相同；第 6 批的 FR 涂色结果相同。
+- **确定性**：同一请求连跑两次，sha256 相同。
+- **对 WPE**（kbp 工程的 FR / CLK 都由脚本画，整帧不屏蔽）：`p5d-camo-s`、`p5d-camo-s4k`（窗口 1920×1080）按时间线回放、开 `scripts`，和 WPE 整帧逐像素相同；FR 块在第 N 帧的颜色由脚本算出，和 WPE 相同。
+- 测试行 `projects_remove`，宿主产物按合并后的工作区重建。
+
+### 实施记录 / 第 7 批（2026-11-14，子代理实现）
+
+子代理在 HEAD `82653a66` 的独立工作树 `ignore/p5/d3/wt` 里实现点 1–6（`renderFrames.ts` 当时是别的会话没提交的文件，先跳过）。之后 P10a 走查的工具（`replayEncoded`、关键帧动画、`renderFrames.ts`）提交了，我把主工作区的现状三方合并进工作树（`ignore/p5/d3/sync_wt.py`），由同一个子代理把脚本接进 `replayEncoded`、补上 `renderFrames.ts` 的 `--scripts`，验收后拷回主工作区（`copy_back.py`，拷之前核对主工作区没变）。
+
+**和计划不一致或计划没写到的：**
+- 共用的除了写回 / 读取，还有重编译写入的去重（`recordRecompileWrite`）和诊断（`scriptDiagnostics`）：探针要和宿主用同一条「值变了才算」的规则，否则每帧写同一个值都会被记成不可信。
+- `init` 之后整份交一次 `applyUserProperties`，同宿主首帧之前。
+- 跑脚本时补全帧内的 `sync`：每帧步进之前一次，读回帧 `setParallax` 之后一次。视差点逐帧按这一帧开头的 general 推进。
+- 读回后结清文本重排，重排过就把这一帧的帧输入再写一次。
+- 缺省 `clock` 是 2026-01-01T00:00:00Z，缺省 `seed` 是 1。结果另带运行时告警（最多 100 条）和脚本 console 的最后 50 条。
+
+**Claude 验收（工作树上）：**
+- 越界只有计划内的文件。
+- 宿主 tsc 0 错误；vitest 130 个文件、3085 条全过。
+- `deno test`：vite 插件 26 组 127 步、MCP 25 组 93 步全过；`deno check` 退出码 0。
+- 变异：子代理 16 处全部检出。我另做 10 处（`ignore/p5/d3/mutate_d7.py`），第一轮漏了 3 处：
+  - 读相机目标总返回 null：步骤 3 就没有这条读路径的单测，补了 `readScriptState` 每种目标的断言；
+  - 结清重排后不再写帧输入：补了用例；
+  - 宿主写 `script-property` 目标返回 true：这类目标只出现在绑定表里，分支走不到，是等价变异。
+
+  补测后复验两处都检出。
+- 宿主 `writeScript` / `readScript` 改调共用函数，逐分支核对行为不变。
+- `SceneState` 写 general 是换新对象，所以按帧存引用没问题。
+
+**接进 `replayEncoded`（第二轮）：**
+- 帧内顺序照渲染器 `render`：每一帧（含前 n − 1 帧）`sync` → 频谱 → 步进 → 相机 → 关键帧动画 → 脚本 → 视差点（用这一帧开头的 general）→ `setParallax` → `sync` → `update` → 编码（读回帧由探针编码）。宿主的 `beforeFrame` 里也是先动画、后脚本。
+- 不给 `scripts` 时两条路径的调用序列与合并前逐项相同（子代理在 16 种组合下拿合并前的文件对照过）。
+- 已知的不一致，没动：不跑脚本的路径用动画之后的 general 推进视差点，渲染器用帧开头的；只有关键帧动画写 `cameraparallax*` 时看得出来。
+- 每帧一次 `render_scene` 时脚本状态各自从加载跑起，不跨帧延续（写进 SKILL.md）。
+
+**Claude 验收（第二轮，工作树 = 主工作区现状 + 第 7 批）：**
+- 宿主 tsc 0 错误；vitest 134 个文件、3179 条全过。
+- `deno test`：vite 插件 26 组 127 步、MCP 28 组 108 步全过；`deno check` 退出码 0。
+- 变异：子代理 10 处全部检出；我另做 3 处（`mutate_d7c.py`：脚本调用的帧时间与时间对调、`g_Daytime` 不跟回放时间、探针有回放时不把脚本交给回放），全部检出。
+- 拷回主工作区之后：拷之前主工作区相对 HEAD 新增的行一行不少。除 `cocs/wpe/WPE_SCENE.md`（同步之后被别人改过，以同步时为基点三方合并，无冲突）外，23 个文件的 HEAD 版本就是同步时的版本，所以它们相对 HEAD 的差别正好是第 7 批。主工作区宿主 tsc、vitest 3179 条、两包 `deno test` 全过。
+- **画面哈希**：HEAD `d58a7048` 原样（index-DYUzdWDT.js）对 HEAD + 第 7 批（index-v8Gk0vik.js），10 张 × 三档全部相同。不给 `scripts` 时画面不变。（第一轮两次被别的会话重建共享产物打断，这次没有。）
+- **端到端（REST `scripts: true`，宿主 index-v8Gk0vik.js）**：
+  - `p5d-camo-s`（原点挂模板脚本）第 184 帧、`p5d-camo-s4k`（场景 3840×2160、窗口 1920×1080）第 131 帧，和 WPE 整帧不排除任何区域逐像素相同；FR 由它自己的脚本画。我们的脚本日志 `canvasSize 3840 2160 screen 1920 1080 origin 1920 1080` 与 WPE 日志相同。
+  - 同一请求连跑两次 sha256 相同。
+  - 走查的五组复制工程，「脚本自己跑」与「塞值」逐字节相同。
+  - 透视样本 `3453730450`（原点脚本用 `Date.now()` 缓入，另有透明度缓入、按帧时间累加的旋转、`init` 定缩放）关掉 `transparentsorting` 后和 WPE 逐像素相同。
+- **发现、没修**：WPE 交给字段脚本的向量分量是 float32（日志里 z 是 `500.0000305175781`），我们是 double（`500.00003`）。这次只影响深度，没有看得出的差别。归 P3b 的脚本运行时。

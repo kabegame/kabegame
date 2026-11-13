@@ -5,9 +5,12 @@ import {
   checkCornersRequest,
   checkRenderReplay,
   checkReplay,
+  checkScripts,
   checkScriptValues,
   checkTrace,
   checkTrackRequest,
+  MAX_SCRIPT_CLOCK,
+  MAX_SCRIPT_SEED,
   MAX_SCRIPT_TEXT,
   MAX_TRACE_READBACKS,
   MAX_TRACE_VERTICES,
@@ -291,6 +294,32 @@ describe("checkReplay", () => {
         "scriptValues[0].field",
         /只能是 origin \/ scale .*（图层字段），或 text \/ pointsize .* \/ verticalalign（文本字段）/,
       );
+    }
+  });
+
+  test("渲染跑场景脚本（第 7 批）：scripts 是 true 或 { clock?, seed? }；不和 scriptValues 同给；错在哪项报哪项", () => {
+    assert.equal(checkScripts(true), true);
+    assert.deepEqual(checkScripts({}), {});
+    const full = { clock: -MAX_SCRIPT_CLOCK, seed: MAX_SCRIPT_SEED };
+    assert.deepEqual(checkScripts(full), full);
+    // 不要求有 particles；和回放、画布一起给
+    assert.equal(checkRenderReplay({ scripts: true }), undefined);
+    assert.deepEqual(checkRenderReplay({ particles: { dts: [0.1] }, canvas: [1920, 1080], scripts: { seed: 2 } }), {
+      dts: [0.1],
+    });
+    const fr = { object: "FR", field: "color", value: [1, 0, 1], optional: true };
+    for (const scriptValues of [[fr], []]) {
+      rejects400(() => checkRenderReplay({ scripts: true, scriptValues }), "scripts", /和 scriptValues 不能同时给/);
+    }
+    for (const bad of [false, null, 1, "true", [true]]) {
+      rejects400(() => checkRenderReplay({ scripts: bad }), "scripts", /要是 true，或 \{ clock\?, seed\? \}/);
+    }
+    rejects400(() => checkScripts({ seed: 1, time: 2 }), "scripts.time", /不认识（scripts只收 clock \/ seed）/);
+    for (const clock of [Number.NaN, Infinity, MAX_SCRIPT_CLOCK * 2, "0"]) {
+      rejects400(() => checkScripts({ clock }), "scripts.clock", /毫秒时间戳/);
+    }
+    for (const seed of [-1, 0.5, MAX_SCRIPT_SEED + 1, "1", null]) {
+      rejects400(() => checkScripts({ seed }), "scripts.seed", /0–4294967295 的整数/);
     }
   });
 

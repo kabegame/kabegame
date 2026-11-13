@@ -22,6 +22,9 @@
  *   1–`MAX_TRACE_VERTICES` 的整数（探针 `apps/wpe-scene/src/dev/drawTrace.ts` 的 `traceOptionsOf` 同样查）。
  * - 频谱（P11a）：回放的 `audio` 与 `dts` 等长，每项是 null（沿用前一帧）或 `{ left, right, left32?, right32?, left64?, right64? }`，
  *   各 16 / 16 / 32 / 32 / 64 / 64 个有限数，不认识的键拒绝（同探针的 `ParticleAudioFrame`）。
+ * - 跑场景脚本（第 7 批）：渲染的 `scripts` 是 `true`，或 `{ clock?, seed? }`：`clock` 是有限数、绝对值不超过 `MAX_SCRIPT_CLOCK`，`seed` 是
+ *   0–`MAX_SCRIPT_SEED` 的整数（探针 `apps/wpe-scene/src/dev/probeScripts.ts` 的 `probeScriptsOptionsOf` 同样查）。不和 `scriptValues` 同给
+ *   （`field` 为 `scripts`）。不要求有 `particles`。
  * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
  */
 import { badRequest } from "./errors.ts";
@@ -29,6 +32,7 @@ import type {
   ParticleCornersRequest,
   ParticleReplay,
   ParticleTrackRequest,
+  RenderScriptsRequest,
   RenderTraceRequest,
   SceneLayerField,
   ScenePostprocess,
@@ -80,6 +84,11 @@ export const TRACE_FIELDS = ["readback", "maxVertices"] as const;
 export const MAX_TRACE_READBACKS = 64;
 /** 每个 draw 解码的顶点数上限（探针 `render/trace.ts` 的 `MAX_TRACE_VERTICES`，改了两边一起改）。 */
 export const MAX_TRACE_VERTICES = 4096;
+export const SCRIPTS_FIELDS = ["clock", "seed"] as const;
+/** `scripts.clock` 的绝对值上限：`Date` 能表示的范围（毫秒，探针 `MAX_PROBE_CLOCK` 的抄本）。 */
+export const MAX_SCRIPT_CLOCK = 8.64e15;
+/** `scripts.seed` 的上限：mulberry32 的状态是 32 位（探针 `MAX_PROBE_SEED` 的抄本）。 */
+export const MAX_SCRIPT_SEED = 0xffffffff;
 export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random", "audio"] as const;
 /** 一帧频谱的键与段数（P11a，探针 `ParticleAudioFrame`）。 */
 export const SPECTRUM_BANDS = { left: 16, right: 16, left32: 32, right32: 32, left64: 64, right64: 64 } as const;
@@ -480,12 +489,37 @@ export function checkTrace(value: unknown, field = "trace"): RenderTraceRequest 
 }
 
 /**
+ * 跑场景脚本（第 7 批）：`true`，或 `{ clock?, seed? }`。`clock` 是起点时刻（毫秒时间戳，有限数、绝对值不超过 `MAX_SCRIPT_CLOCK`），`seed`
+ * 是 `Math.random` 的种子（0–`MAX_SCRIPT_SEED` 的整数）。不认识的字段、不合法 400。
+ */
+export function checkScripts(value: unknown, field = "scripts"): RenderScriptsRequest {
+  if (value === true) return true;
+  if (!isObject(value)) fail(field, `要是 true，或 { clock?, seed? }，收到 ${shown(value)}`);
+  rejectUnknown(value, SCRIPTS_FIELDS, field);
+  const { clock, seed } = value;
+  if (
+    clock !== undefined &&
+    !(typeof clock === "number" && Number.isFinite(clock) && Math.abs(clock) <= MAX_SCRIPT_CLOCK)
+  ) {
+    fail(`${field}.clock`, `要是毫秒时间戳（有限数，绝对值不超过 ${MAX_SCRIPT_CLOCK}），收到 ${shown(clock)}`);
+  }
+  if (
+    seed !== undefined &&
+    !(typeof seed === "number" && Number.isInteger(seed) && seed >= 0 && seed <= MAX_SCRIPT_SEED)
+  ) {
+    fail(`${field}.seed`, `要是 0–${MAX_SCRIPT_SEED} 的整数，收到 ${shown(seed)}`);
+  }
+  return value as RenderScriptsRequest;
+}
+
+/**
  * 渲染请求里的回放：给了 `particles` 就校验它，并拒绝同时给 `time`（探针此时忽略 `time`，读回那一帧的 `g_Time` 取
  * `particles.times` 的末项或 dt 累计值）。没给时原样返回 undefined。
  * 光标一并校验（P5a 收尾）：`pointer` 是一个点；`pointers` 要有 `particles`、和 `particles.dts` 等长、不和 `pointer` 同给；`window` 是
  * `[宽, 高]`。读回画布 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。脚本值 `scriptValues`（第 6 批）
  * 见 `checkScriptValues`，不要求有 `particles`。视频时刻 `videoTime`（P9a 步骤 3）见 `checkVideoTime`，同样不要求有 `particles`。
- * 逐 draw 轨迹 `trace` 见 `checkTrace`。
+ * 逐 draw 轨迹 `trace` 见 `checkTrace`。跑场景脚本 `scripts`（第 7 批）见 `checkScripts`，不和 `scriptValues` 同给（一个让脚本自己算，
+ * 一个把脚本的结果塞进去）。
  * 校验过的值原样留在请求里转给探针。
  */
 export function checkRenderReplay(body: {
@@ -496,6 +530,7 @@ export function checkRenderReplay(body: {
   window?: unknown;
   canvas?: unknown;
   scriptValues?: unknown;
+  scripts?: unknown;
   videoTime?: unknown;
   trace?: unknown;
 }): ParticleReplay | undefined {
@@ -516,6 +551,15 @@ export function checkRenderReplay(body: {
   const window = body.window === undefined ? undefined : checkWindow(body.window);
   if (body.canvas !== undefined) checkCanvas(body.canvas, window);
   if (body.scriptValues !== undefined) checkScriptValues(body.scriptValues);
+  if (body.scripts !== undefined) {
+    checkScripts(body.scripts);
+    if (body.scriptValues !== undefined) {
+      fail(
+        "scripts",
+        "和 scriptValues 不能同时给：scripts 让场景脚本自己算，scriptValues 把脚本的结果塞进去，混用分不清是谁写的",
+      );
+    }
+  }
   if (body.videoTime !== undefined) checkVideoTime(body.videoTime);
   if (body.trace !== undefined) checkTrace(body.trace);
   return particles;

@@ -25,7 +25,7 @@
  * - 透视相机（P5d 步骤 2）：透视场景按画布尺寸渲染，场景目标取 `canvas ?? window ?? [1920, 1080]`；回放按 `particles.dts` 推路径
  *   状态（同渲染器，没给 dts 时 t = 0），读回的那一帧按推到那时的状态求相机，抖动按它的 `g_Time`（`times` 的最后一项）；视差点
  *   W = H = 0、不移动对象（`particleCorners.ts` 的 `frameCamera` / `replayReadback`）。`hostRenderFrame` 按路径起点求相机。
- * - 脚本值（kabegame-chromium 第 6 批）：探针不跑场景脚本，`renderFrame` 收 `scriptValues`（某对象某字段的字段脚本在读回那一帧返回的
+ * - 脚本值（kabegame-chromium 第 6 批）：不跑场景脚本时，`renderFrame` 收 `scriptValues`（某对象某字段的字段脚本在读回那一帧返回的
  *   值），建好场景之后、回放之前经字段脚本的绑定目标写进 `SceneState`（`scriptValues.ts`，同宿主的脚本写回）。不给时逐字节同以前。
  *   P6b 1e-3 起也收文本层的运行中字段（`text` 给字符串等），写进之后回放之前结清重排（`probeTexts.ts` 的 `settle`：缺字体时等读完再排，
  *   探针没有帧外补画），结果的 `textSyncs` 是结清时 `sync` 的次数；没有文本值时不结清。
@@ -44,6 +44,13 @@
  * - 回放的每一帧都画（P10a 走查，`ReadbackReplayOptions.encodeFrame`）：有 `particles.dts` 时前 n − 1 帧照读回帧的顺序写好 uniform、
  *   在 GPU 上编码提交，读回帧之前的跨帧状态（被依赖图层的合成 RT、`clearenabled: false` 的场景目标）同渲染器。只画读回帧时，排在
  *   前面的图层读到的被依赖 RT 是空的。没有回放（`time` 固定时刻）时仍只画一帧。
+ * - 跑场景脚本（kabegame-chromium 第 7 批）：`renderFrame` 收 `scripts: true | { clock?, seed? }` 时，在探针自己的 `SceneState` 上照宿主
+ *   搭脚本环境（`probeScripts.ts`：同一个 realm、`ScriptApi`、`ScriptRuntime`，写回同宿主），建好场景、视频就绪之后跑 `init` 并整份交一次
+ *   用户属性；回放的每一帧（含读回帧，每帧都画时前 n − 1 帧也一样）在设好相机、推进完关键帧动画之后跑一帧脚本（`replayReadback` 的
+ *   `scripts`，同渲染器 `beforeFrame` 里动画之后的位置），profile 帧不跑；每帧都画时每一帧的 `g_Daytime` 跟着脚本的时钟（只画读回帧时是
+ *   读回帧）。`Date`、`Math.random`、`screenResolution`、`localStorage` 都来自请求或只在内存，两次同样的请求得到同一张图。读回之后结清
+ *   文本重排（缺字体时等读完，重排过就再写一次这一帧的 uniform），再释放脚本环境。不和 `scriptValues` 同给。结果的 `scripts` 给出各段
+ *   诊断、做不了的重编译写入、没接的 API 与实际用的时钟、种子。不给时逐字节同以前。
  * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`renderFrame` 收 `trace` 时，取到设备后建记录器
  *   （`render/trace.ts`），建场景、profile 帧、回放、读回帧（含读回画布）都用包过的设备；读回帧编码之前开始记，读回完成后取出
  *   轨迹与选中 pass 的读回图，存进存放区（`dev/drawTrace.ts`），结果的 `trace` 给键与摘要。不给 `trace` 时不建记录器、设备不包，
@@ -85,6 +92,15 @@ import {
   type ParticleReplay,
 } from "./particleCorners";
 import { isTraceKey, traceArtifacts, traceOptionsOf, type RenderFrameTrace } from "./drawTrace";
+import {
+  createProbeScripts,
+  probeDaytime,
+  probeScriptsOptionsOf,
+  readProbeUserProperties,
+  type ProbeScripts,
+  type ProbeScriptsOptions,
+  type ProbeScriptsResult,
+} from "./probeScripts";
 import { prepareProbeTexts } from "./probeTexts";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
@@ -265,6 +281,15 @@ export interface RenderFrameOptions {
    */
   scriptValues?: ScriptValue[];
   /**
+   * 跑场景脚本（kabegame-chromium 第 7 批，`probeScripts.ts`）：`true`，或 `{ clock?: 起点时刻（毫秒时间戳）, seed?: Math.random 的种子 }`。
+   * 建好场景、视频就绪之后跑 `init`，回放的每一帧（含读回帧）在设好相机、推进完关键帧动画之后跑一帧脚本，profile 帧不跑。脚本看到的
+   * `engine.runtime` / `frametime` 是回放的这一帧（不回放时是 `time` 与 0），`screenResolution` 是 `canvas ?? window ?? [1920, 1080]`，`Date` 与
+   * `engine.timeOfDay` 是 `clock`（缺省 `DEFAULT_PROBE_CLOCK`）加回放时间、`g_Daytime` 跟着它（每帧都画时每一帧，否则读回帧），`Math.random` 按 `seed`（缺省 1），
+   * `localStorage` 只在内存，音频缓冲全 0，声音 / 视频 / 粒子层的方法空操作并计数。要整场重编译的写入做不了，记进结果。
+   * 不和 `scriptValues` 同给（一个让脚本自己算，一个把脚本的结果塞进去）。不给时不跑脚本，逐字节同以前。
+   */
+  scripts?: true | ProbeScriptsOptions;
+  /**
    * 视频纹理的时刻（P9a 步骤 3，秒，非负有限数）：数字对全部视频纹理生效；`{ <bundle 纹理的 path>: 秒 }` 分别给，没给的取 0，键不是
    * 这个场景的视频纹理时抛错。缺省 0。超过时长时按循环取模（WPE 视频纹理缺省循环），再钳到 `[0, duration − 0.005]`。屏外宿主不跑帧
    * 循环、视频用自己的时钟（不跟 `g_Time`），这是确定性回放视频的唯一办法。实际取的时刻见结果的 `videos`。
@@ -321,9 +346,11 @@ export interface RenderFrameResult {
   animations: AnimationProbeEntry[];
   /**
    * 回放之前结清文本重排调了几次 `sync`（P6b 1e-3，`ProbeTexts.settle`）：1 是一次就排成，多出来的每次是等了一轮字体。只在有文本字段的
-   * 脚本值写进了状态时给。
+   * 脚本值写进了状态时给。跑脚本时（第 7 批）是读回帧之后结清的次数，只在场景有文本层时给。
    */
   textSyncs?: number;
+  /** 跑场景脚本的结果（第 7 批，`ProbeScriptsResult`）：只在给了 `scripts` 时有。 */
+  scripts?: ProbeScriptsResult;
   /**
    * 每段视频纹理实际取的时刻（P9a 步骤 3，顺序同 bundle 纹理）：`time` 是 seek 完读回的 `currentTime`、`duration` 是时长（未知时 null）、
    * `width` / `height` 是视频尺寸；`failed` 的那段保持透明（同产品），原因在 `error`。没有视频纹理时空数组。
@@ -390,6 +417,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const videoTime = checkVideoTime(options.videoTime);
   // 逐 draw 轨迹：形状同样先查；没要时为 null，下面不建记录器、设备不包
   const traceOptions = traceOptionsOf(options.trace);
+  // 跑场景脚本（第 7 批）：形状与互斥同样先查；没要时为 null，下面不建脚本环境
+  const scriptsOptions = probeScriptsOptionsOf(options.scripts);
+  if (scriptsOptions && options.scriptValues !== undefined)
+    throw new Error("scripts 与 scriptValues 不能同时给：一个让脚本自己算，一个把脚本的结果塞进去，混用分不清是谁写的");
   const started = performance.now();
   const reader = new FetchSceneReader();
   const cache = new TextureDecodeCache(reader);
@@ -448,6 +479,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     // profile 帧的相机（透视场景的路径状态接着交给回放，同视差点）；相机对象（P5d 步骤 3）每帧按状态选，同渲染器
     const cameraObjects = probeCameraObjects(bundle);
     const profileCamera = frameCamera(scene, state, sceneHeight, perspective, undefined, cameraObjects);
+    // 场景脚本（第 7 批）：建好之后读回之前一直在，出错也在 finally 里释放
+    let probeScripts: ProbeScripts | null = null;
     try {
       // 视频（P9a 步骤 3）：每段都 seek 好、当前帧可用之后才接上，profile 帧与读回那一帧的每个 draw 都拷同一帧；没有视频纹理时
       // 没有 draw 会问它，逐字节同以前。读不到 / 解码失败的那段不交出元素（透明），超过总时限在这里抛错
@@ -457,7 +490,23 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       const scriptValues = applyScriptValues(state, bundle, options.scriptValues);
       // 文本字段（P6b 1e-3）：写进状态只是标脏，重排在 `sync` 里；缺字体时重排器照画旧排版、后台读字体，探针没有帧外的补画，
       // 回放之前结清（`sync` → 等字体 → 标脏再 `sync`）。没有文本值时不调，逐字节同以前
-      const textSyncs = wroteTextValues(scriptValues) ? await texts.settle(scene, state) : undefined;
+      let textSyncs = wroteTextValues(scriptValues) ? await texts.settle(scene, state) : undefined;
+      // 场景脚本（第 7 批）：建好场景、视频就绪之后搭环境、跑 init，再整份交一次用户属性（同宿主首帧之前）；init 的写入进状态、标脏，
+      // 回放第一帧开头的 `sync` 刷进去。脚本的 screenResolution 同透视场景的画布：`canvas ?? window ?? [1920, 1080]`
+      if (scriptsOptions) {
+        const properties = bundle.scripts.list.length
+          ? await readProbeUserProperties(reader, options.projectDir, options.sceneAssets, options.userProperties)
+          : new Map();
+        probeScripts = createProbeScripts({
+          bundle,
+          state,
+          sceneAssets: options.sceneAssets,
+          properties,
+          screen: [...(canvas ?? cursorWindow ?? [1920, 1080])],
+          options: scriptsOptions,
+        });
+        await probeScripts.load();
+      }
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
@@ -527,7 +576,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         animations.seek(startTime);
         animations.write(state);
       }
-      const { time, frametime } = replayReadback(scene, state, {
+      // 场景脚本（第 7 批）：每一帧设好相机、推进完动画之后跑一帧，`g_Daytime` 跟着脚本的时钟；不跑脚本时这两项不给，逐字节同以前
+      const scriptsClock = scriptsOptions?.clock;
+      const { time, frametime, frame } = replayReadback(scene, state, {
         particles: options.particles,
         time: startTime,
         pointers,
@@ -543,7 +594,17 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           scene.encode(replayEncoder, state);
           device.queue.submit([replayEncoder.finish()]);
         },
+        ...(probeScripts && scriptsClock !== undefined
+          ? { scripts: probeScripts, daytime: (at: number) => probeDaytime(scriptsClock, at) }
+          : {}),
       });
+      // 跑脚本时：读回帧脚本写的文字在上面的 `sync` 里重排，缺字体时画的是旧排版（宿主靠之后的帧补上，探针没有）。结清：等字体读完再排，
+      // 排过（`sync` 不止一次）就把这一帧的帧输入再写一次（重建的文本 draw 要这一帧的内置 uniform）。没有文本层时不调 `sync`
+      if (probeScripts) {
+        const syncs = await texts.settle(scene, state);
+        if (syncs > 1) scene.update(frame, state);
+        if (syncs) textSyncs = syncs;
+      }
       // 逐 draw 轨迹：从读回帧（含读回画布）的编码起记；这一帧的校验错误记进轨迹，不吞掉也不中断（轨迹正是查它用的）
       if (tracer) {
         tracer.startFrame();
@@ -615,11 +676,14 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         scriptValues,
         animations: animations?.probe().list ?? [],
         ...(textSyncs === undefined ? {} : { textSyncs }),
+        ...(probeScripts ? { scripts: probeScripts.result() } : {}),
         videos: sink.results(),
         key,
         ...(traced ? { trace: traced.summary } : {}),
       };
     } finally {
+      // 脚本环境（第 7 批）：读回之后释放（各段的 destroy、隐藏 iframe），出错也释放
+      probeScripts?.dispose();
       scene.destroy();
     }
   } finally {

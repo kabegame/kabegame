@@ -53,7 +53,7 @@ import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
 import { GpuScene, type ParticleOptions, type SceneCamera } from "../render/scene";
 import { SceneState } from "../render/state";
-import type { SpectrumUniforms } from "../render/uniforms";
+import type { FrameInput, SpectrumUniforms } from "../render/uniforms";
 import { replayPointers, type ReplayPointers } from "./replayPointers";
 
 /** 计算入口从顶点缓冲读一个输入：location、在顶点里的 float 偏移、分量数与标量类型。 */
@@ -294,7 +294,9 @@ const isPointList = (
  * 帧时间 0（不步进，就是预热后的状态）。`cursor` 是光标下的场景纹理坐标（控制点跟随指针用，P4c 步骤 2），缺省场景中心：一个点时
  * 每帧都用它；逐帧的一串（和 `dts` 等长，P5a 收尾）时第 i 帧用第 i 项，最后一项留给调用方步进读回那一帧。
  * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 与帧时间调一次（P5a 步骤 3、4：探针在这里设这一帧的相机，`frameCamera`；
- * 同渲染器，粒子先用上一帧的 s 步进，再换上这一帧的。P10a 步骤 3：关键帧动画也在这里按这一帧的帧时间推进，见 `replayReadback`）。
+ * 同渲染器，粒子先用上一帧的 s 步进，再换上这一帧的。P10a 步骤 3：关键帧动画也在这里按这一帧的帧时间推进；kabegame-chromium 第 7 批：
+ * 跑脚本时接着跑这一帧的脚本，见 `replayReadback`）。`beforeStep` 在每一帧步进之前调（第 7 批：跑脚本时在这里 `sync`，上一帧脚本写的
+ * 进模拟器，同渲染器每帧开头的 `sync`）；不给时不调。
  */
 export function replayParticles(
   scene: Pick<GpuScene, "stepParticles"> & Partial<Pick<GpuScene, "particleAudio">>,
@@ -303,6 +305,7 @@ export function replayParticles(
   time = 0,
   cursor: readonly [number, number] | readonly (readonly [number, number])[] = [0.5, 0.5],
   afterStep?: (time: number, frametime: number) => void,
+  beforeStep?: () => void,
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
@@ -311,6 +314,7 @@ export function replayParticles(
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
   for (let i = 0; i < dts.length - 1; i++) {
     const at = timeAt(i);
+    beforeStep?.();
     replayAudio(scene, replay, i);
     scene.stepParticles(dts[i], at, state, perFrame ? perFrame[i] : (cursor as readonly [number, number]));
     afterStep?.(at, dts[i]);
@@ -526,9 +530,22 @@ export interface ReadbackReplayOptions {
    * （`sync` → 频谱 → 步进粒子 → 相机 → 动画 → 用这一帧的 general 推进视差点 → `setParallax` → `update`），再调它编码、提交这一帧；
    * 读回帧走到 `update` 为止，由调用方编码。跨帧的 GPU 状态因此和渲染器一样：排在前面的图层读被依赖图层的合成 RT 时读到上一帧画的
    * （`2251857160` 的折射读 `_rt_imageLayerComposite_356_a`，只画读回帧时是空的）、`clearenabled: false` 的场景目标照常交替累加。
-   * 不给时只画读回帧，调用序列同以前（`particleCorners` 只读 uniform，不给）。
+   * 不给时只画读回帧，调用序列同以前（`particleCorners` 只读 uniform，不给）。跑脚本时每一帧的顺序见 `scripts`。
    */
   encodeFrame?: (index: number) => void;
+  /**
+   * 场景脚本（kabegame-chromium 第 7 批，`probeScripts.ts`）：每一帧（前 n − 1 帧与读回帧）设好这一帧的相机、推进完关键帧动画之后调一次
+   * `frame(g_Frametime, g_Time)`，同渲染器 `beforeFrame` 里的位置（`host.ts`：先 `SceneAnimations.frame`，再 `runtime.frame`）。给了时每一帧
+   * 照渲染器 `render` 的完整顺序：`sync` → 频谱 → 步进粒子 → 相机 → 动画 → 脚本 → `setParallax` → `sync` → `update`（动画之后不另
+   * `sync`，脚本之后那次一起刷），视差点按这一帧开头（动画、脚本之前）的 general 推进，`g_Daytime` 每帧按 `daytime`。只画读回帧时前 n − 1 帧
+   * 没有 `setParallax` / `update`，第二次 `sync` 并进下一帧开头的那次。不给时调用序列逐项同以前。
+   */
+  scripts?: { frame(dt: number, time: number): void };
+  /**
+   * 每一帧的 `g_Daytime`（按这一帧的 `g_Time` 算；第 7 批：跑脚本时跟着脚本的时钟）；缺省 0.5。只画读回帧时只有读回帧用它，每帧都画时
+   * 每一帧都用。
+   */
+  daytime?: (time: number) => number;
 }
 
 /**
@@ -537,26 +554,38 @@ export interface ReadbackReplayOptions {
  * 读回帧 `sync` → `stepParticles` → 设相机；视差点按同一串帧时间与每帧的 s 从 `parallax` 推进，之后 `setParallax`、`update`。
  * 光标逐帧取 `pointers`：第 i 帧步进用 `cursors[i]`、视差点用 `pointers[i]`；读回帧的 `g_PointerPosition` 是最后一项、
  * `g_PointerPositionLast` 是倒数第二项（只有一帧时取自己，同渲染器每帧末尾 `pointerLast = pointer`）。
- * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。关键帧动画（P10a 步骤 3，`animations`）在每一帧设完相机之后推进、写入、`sync`。
- * 读回帧的音频 uniform 取 `readbackSpectrum`（P11a），没给频谱时写全 0。
- * 返回读回帧的 `g_Time`、`g_Frametime` 与视差状态。
+ * 每一帧都是同一个点时，与加逐帧指针之前逐字节相同。关键帧动画（P10a 步骤 3，`animations`）在每一帧设完相机之后推进、写入、`sync`
+ * （跑脚本时不另 `sync`，见下）。读回帧的音频 uniform 取 `readbackSpectrum`（P11a），没给频谱时写全 0。
+ * 场景脚本（第 7 批，`options.scripts`）：每一帧设好相机、推进完动画之后跑一帧脚本，顺序见 `ReadbackReplayOptions.scripts`。
+ * 给了 `encodeFrame` 且有回放时走 `replayEncoded`（每一帧都画）。
+ * 返回读回帧的 `g_Time`、`g_Frametime`、视差状态，以及交给 `update` 的帧输入（`frame`：探针结清文本重排之后要再写一次时用）。
  */
 export function replayReadback(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
     Partial<Pick<GpuScene, "particleAudio">>,
   state: SceneState,
   options: ReadbackReplayOptions,
-): { time: number; frametime: number; parallax: ParallaxState } {
-  const { particles, pointers, animations } = options;
+): { time: number; frametime: number; parallax: ParallaxState; frame: FrameInput } {
+  const { particles, pointers, animations, scripts } = options;
   if (options.encodeFrame && particles?.dts.length) return replayEncoded(scene, state, options, options.encodeFrame);
   const [width, height] = options.size;
   const last = pointers.pointers.length - 1;
   const shake = frameCamera(scene, state, height, options.perspective, particles?.dts, options.cameraObjects);
-  // 关键帧动画（P10a 步骤 3）：同渲染器，粒子与相机之后、（探针没有的）脚本之前写，再 `sync`
+  // 关键帧动画（P10a 步骤 3）：同渲染器，粒子与相机之后、脚本之前写。不跑脚本时接着 `sync`（同以前）；跑脚本时不另 `sync`，脚本之后
+  // 那次（读回帧）或下一帧开头那次一起刷（同渲染器：`beforeFrame` 里动画、脚本连着跑，之后才 `sync`）
   const animate = (frametime: number) => {
     if (!animations) return;
     animations.frame(frametime, state);
-    scene.sync(state);
+    if (!scripts) scene.sync(state);
+  };
+  // 跑脚本时：每一帧开头（这一帧动画、脚本之前）的 general，视差点逐帧按它推进（同渲染器帧开头推进视差点）；不改 general 时每一项都相同
+  const generals: SceneState["general"][] = [];
+  // 一帧里步进粒子之后的部分（同渲染器）：设这一帧的相机 → 动画 → 脚本（`beforeFrame`）
+  const afterStep = (at: number, dt: number, animated: boolean) => {
+    if (scripts) generals.push(state.general);
+    shake.apply(at);
+    if (animated) animate(dt);
+    scripts?.frame(dt, at);
   };
   const { time, frametime } = replayParticles(
     scene,
@@ -564,49 +593,54 @@ export function replayReadback(
     particles,
     options.time,
     particles?.dts.length ? pointers.cursors : pointers.cursors[0],
-    (at, dt) => {
-      shake.apply(at);
-      animate(dt);
-    },
+    (at, dt) => afterStep(at, dt, true),
+    // 跑脚本时每帧步进之前 `sync`：上一帧动画与脚本写的（`instanceoverride`、变换、可见性……）这一帧就进模拟器
+    scripts ? () => scene.sync(state) : undefined,
   );
   scene.sync(state);
   // 读回那一帧的频谱（P4e 步骤 4）：没有回放时不写
   if (particles?.dts.length) replayAudio(scene, particles, particles.dts.length - 1);
   scene.stepParticles(frametime, time, state, pointers.cursors[last]);
-  shake.apply(time);
-  if (particles?.dts.length) animate(frametime);
+  // 读回帧：没有回放时动画不推进（调用方已 seek、写过），脚本照常跑一帧
+  afterStep(time, frametime, !!particles?.dts.length);
   // 视差点和粒子互不影响：回放的前 n − 1 帧与读回帧按同一串帧时间与每帧的 s 推进（没有回放时读回帧的帧时间是 0）
-  const parallax = replayParallax(
-    options.parallax,
-    state.general,
-    { pointer: pointers.pointers[0], width, height },
-    [...(particles?.dts ?? []).slice(0, -1), frametime],
-    shake.eyes,
-    pointers.pointers,
-  );
+  const frametimes = [...(particles?.dts ?? []).slice(0, -1), frametime];
+  const parallaxFrame = { pointer: pointers.pointers[0], width, height };
+  const parallax = scripts
+    ? // 每一帧用这一帧开头的 general 推进一次（同一个推进函数，逐帧调）
+      frametimes.reduce(
+        (current, dt, i) =>
+          replayParallax(current, generals[i], parallaxFrame, [dt], [shake.eyes[i]], [pointers.pointers[i]]),
+        options.parallax,
+      )
+    : replayParallax(options.parallax, state.general, parallaxFrame, frametimes, shake.eyes, pointers.pointers);
   scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
+  // 跑脚本时：这一帧脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）。没有脚本时两次 `sync`
+  // 之间没有改动，省掉
+  if (scripts) scene.sync(state);
   // 读回那一帧的音频 uniform（P11a）：同一帧的粒子频谱上面已经写过
   const audio = readbackSpectrum(particles);
-  scene.update(
-    {
-      time,
-      frametime,
-      daytime: 0.5,
-      pointer: pointers.pointers[last],
-      pointerLast: pointers.pointers[Math.max(0, last - 1)],
-      cursor: pointers.cursors[last],
-      parallax: parallax.position,
-      ...(audio ? { audio } : {}),
-    },
-    state,
-  );
-  return { time, frametime, parallax };
+  const frame: FrameInput = {
+    time,
+    frametime,
+    daytime: options.daytime ? options.daytime(time) : 0.5,
+    pointer: pointers.pointers[last],
+    pointerLast: pointers.pointers[Math.max(0, last - 1)],
+    cursor: pointers.cursors[last],
+    parallax: parallax.position,
+    ...(audio ? { audio } : {}),
+  };
+  scene.update(frame, state);
+  return { time, frametime, parallax, frame };
 }
 
 /**
  * 每一帧都画的回放（`ReadbackReplayOptions.encodeFrame`）：第 i 帧的步骤与读回帧相同，只是视差点逐帧推进、每帧用这一帧的 general
  * （只画读回帧时 `replayParallax` 用读回时的 general，两者只在回放中 general 的视差字段变了时不同），频谱 uniform 取截至这一帧的
  * （`spectrumAt`），`g_PointerPositionLast` 是上一帧的。前 n − 1 帧在 `update` 之后调 `encodeFrame(i)`；读回帧不调。
+ * 跑脚本时（第 7 批，`options.scripts`）每一帧照渲染器 `render` 的完整顺序：`sync` → 频谱 → 步进粒子 → 相机 → 动画 → 脚本 →
+ * `setParallax` → `sync` → `update`（动画之后不另 `sync`），视差点按这一帧开头（动画、脚本之前）的 general 推进，`g_Daytime` 按
+ * `options.daytime`。不跑脚本时调用序列同以前。
  */
 function replayEncoded(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
@@ -614,8 +648,8 @@ function replayEncoded(
   state: SceneState,
   options: ReadbackReplayOptions,
   encodeFrame: (index: number) => void,
-): { time: number; frametime: number; parallax: ParallaxState } {
-  const { pointers, animations } = options;
+): { time: number; frametime: number; parallax: ParallaxState; frame: FrameInput } {
+  const { pointers, animations, scripts } = options;
   const replay = options.particles!;
   const { dts, times } = replay;
   const [width, height] = options.size;
@@ -625,9 +659,13 @@ function replayEncoded(
   let elapsed = 0;
   let time = 0;
   let frametime = 0;
+  let frame: FrameInput | null = null;
   for (let i = 0; i < dts.length; i++) {
     time = times ? times[i] : (elapsed += dts[i]);
     frametime = dts[i];
+    // 这一帧开头的 general：渲染器在帧开头推进视差点（`render` 的 `advanceParallax`，在步进粒子与 `beforeFrame` 之前），跑脚本时按它推进；
+    // 不跑脚本时照以前，用动画之后的
+    const general = state.general;
     // 顺序同渲染器与读回帧：两帧之间写进状态的改值先刷进去，粒子用上一帧的相机步进，再设这一帧的；动画在粒子与相机之后写、再 sync
     scene.sync(state);
     replayAudio(scene, replay, i);
@@ -635,30 +673,39 @@ function replayEncoded(
     const eye = shake.apply(time);
     if (animations) {
       animations.frame(frametime, state);
-      scene.sync(state);
+      // 跑脚本时不另 sync：同渲染器 `beforeFrame` 里动画、脚本连着跑，脚本之后的 `sync` 一起刷
+      if (!scripts) scene.sync(state);
     }
+    // 脚本（第 7 批）：动画之后、`setParallax` 之前（同渲染器 `beforeFrame`）
+    scripts?.frame(frametime, time);
     parallax = advanceParallax(
       parallax,
-      parallaxInput(state.general, { pointer: pointers.pointers[i], width, height, frametime, eye }),
+      parallaxInput(scripts ? general : state.general, {
+        pointer: pointers.pointers[i],
+        width,
+        height,
+        frametime,
+        eye,
+      }),
     );
     scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
+    // 跑脚本时：动画与脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）
+    if (scripts) scene.sync(state);
     const audio = spectrumAt(replay, i);
-    scene.update(
-      {
-        time,
-        frametime,
-        daytime: 0.5,
-        pointer: pointers.pointers[i],
-        pointerLast: pointers.pointers[Math.max(0, i - 1)],
-        cursor: pointers.cursors[i],
-        parallax: parallax.position,
-        ...(audio ? { audio } : {}),
-      },
-      state,
-    );
+    frame = {
+      time,
+      frametime,
+      daytime: options.daytime ? options.daytime(time) : 0.5,
+      pointer: pointers.pointers[i],
+      pointerLast: pointers.pointers[Math.max(0, i - 1)],
+      cursor: pointers.cursors[i],
+      parallax: parallax.position,
+      ...(audio ? { audio } : {}),
+    };
+    scene.update(frame, state);
     if (i < dts.length - 1) encodeFrame(i);
   }
-  return { time, frametime, parallax };
+  return { time, frametime, parallax, frame: frame! };
 }
 
 export interface ParticleCornersOptions {

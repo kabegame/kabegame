@@ -9,7 +9,15 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { createClient } from "./client.ts";
 import { createDevMcpServer } from "./main.ts";
-import { frLine, frScriptValue, readbackLines, summarizeCorners, traceRequestOf, videoLine } from "./tools.ts";
+import {
+  frLine,
+  frScriptValue,
+  readbackLines,
+  scriptsLines,
+  summarizeCorners,
+  traceRequestOf,
+  videoLine,
+} from "./tools.ts";
 import { frColor } from "./timeline.ts";
 import type { DevMcpDeps } from "./tools.ts";
 import { Client, InMemoryTransport } from "./testdata/sdkClient.ts";
@@ -47,6 +55,43 @@ const trackJson = (tag: string, frames: number[]) =>
   }).replace(/null/g, "NaN");
 
 const META = { width: 1, height: 1, sha256: "pix", time: 0.4, frametime: 0.25, particles: [{ name: "P", alive: 3 }] };
+
+/** 新探针跑场景脚本的结果（第 7 批）：两段脚本，第二段 update 出错停用；写过 general/hdr；问过声音层 4 次；注册了 16 段音频缓冲。 */
+const SCRIPTS_META = {
+  clock: 1767225600000,
+  clockDefault: true,
+  seed: 1,
+  seedDefault: true,
+  screenResolution: [1920, 1080],
+  frames: 5,
+  diagnostics: [
+    {
+      id: "objects/0/color",
+      state: "inited",
+      exports: ["update"],
+      disabled: [],
+      errors: [],
+      calls: { update: { count: 5, maxMs: 0.1 } },
+      targetKind: "layer",
+      recompileWrites: 0,
+    },
+    {
+      id: "objects/3/origin",
+      state: "inited",
+      exports: ["init", "update"],
+      disabled: ["update"],
+      errors: ["update: x is not defined (line 3, col 5)"],
+      calls: { init: { count: 1, maxMs: 0.1 }, update: { count: 1, maxMs: 0.1 } },
+      targetKind: "layer",
+      recompileWrites: 1,
+    },
+  ],
+  recompile: [{ path: "general/hdr", count: 1, firstFrame: 0, value: true }],
+  unconnected: { sound: 4, video: 0, particles: 0 },
+  audioResolutions: [16],
+  messages: ["场景脚本 objects/3/origin update 出错：x is not defined (line 3, col 5)"],
+  console: { count: 0, tail: [] },
+};
 
 /** 假 REST：开宿主、渲染、轨迹、四角、关宿主。 */
 const handler: Handler = (req, body, res) => {
@@ -105,6 +150,8 @@ const handler: Handler = (req, body, res) => {
               })),
       };
     }
+    // 跑场景脚本（第 7 批）：给了 scripts 时像新探针那样回 meta.scripts（两段脚本，一段出错停用、写过一个重编译目标、问过声音层）
+    if ((body as { scripts?: unknown }).scripts !== undefined) meta = { ...meta, scripts: SCRIPTS_META };
     // 逐 draw 轨迹：给了 trace 时像新 vite 那样回轨迹与读回图；图片 6 当作旧 vite（不认识 trace，什么都不回）
     const trace = (body as { trace?: unknown }).trace;
     if (trace !== undefined && imageId !== "6") {
@@ -607,6 +654,136 @@ describe("FR 帧号块（第 6 批）", () => {
       ),
       "FR 涂成第 941 帧的颜色 (173, 3, 255) / 255（objects[0]）",
     );
+  });
+});
+
+describe("跑场景脚本（第 7 批）", () => {
+  test("scripts 原样转给 REST、回放时不发 FR 的 scriptValues；结果写 FR 由脚本自己画、脚本的状态与出错、重编译写入、没接的 API", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const timeline = await call("render_scene", { imageId: "9", replay: { timeline: TIMELINE }, scripts: true });
+      assert.notEqual(timeline.isError, true, textOf(timeline));
+      const body = bodiesOf(rest, "/render")[0];
+      assert.equal(body.scripts, true);
+      assert.equal("scriptValues" in body, false, "跑脚本时 FR 由脚本自己画，不塞值");
+      const text = textOf(timeline);
+      assert.match(text, /FR 由脚本自己画（scripts，回放到第 5 帧），没塞值/);
+      assert.doesNotMatch(text, /FR 涂成/);
+      assert.match(text, /场景脚本：2 段（init 跑过 2 段、求值失败 0 段），init 之后跑了 5 帧/);
+      assert.match(
+        text,
+        /脚本的外部值：Date 起点 2026-01-01T00:00:00\.000Z（缺省），Math\.random 种子 1（缺省），screenResolution 1920×1080/,
+      );
+      assert.match(text, /objects\/0\/color：inited；update ×5/);
+      assert.match(
+        text,
+        /objects\/3\/origin：inited，停用 update，出错 update: x is not defined \(line 3, col 5\)；init ×1、update ×1/,
+      );
+      assert.match(
+        text,
+        /要整场重编译的写入（探针做不了，读回的这一帧和宿主不同、不可信）：general\/hdr 变了 1 次（第一次在 init）/,
+      );
+      assert.match(text, /没接的脚本 API（方法空操作）：声音层 ×4/);
+      assert.match(text, /脚本注册了音频缓冲 16（一直全 0）/);
+      assert.match(text, /脚本运行时告警 1 条，第一条：场景脚本 objects\/3\/origin update 出错/);
+
+      const scripts = { clock: 1700000000000, seed: 7 };
+      const direct = await call("host_render", {
+        handle: "h-7",
+        imageId: "9",
+        replay: { particles: { dts: [0.1, 0.1] } },
+        scripts,
+      });
+      assert.notEqual(direct.isError, true, textOf(direct));
+      const hostBody = bodiesOf(rest, "/hosts/h-7/render")[0];
+      assert.deepEqual(hostBody.scripts, scripts);
+      assert.equal("scriptValues" in hostBody, false);
+      assert.match(textOf(direct), /FR 由脚本自己画（scripts，回放到第 2 帧）/);
+    });
+  });
+
+  test("不回放时也转 scripts、不写 FR 行；不给 scripts 时请求体没有 scripts、不写脚本行", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const fixed = await call("render_scene", { imageId: "9", time: 2, scripts: true });
+      assert.notEqual(fixed.isError, true, textOf(fixed));
+      assert.deepEqual(bodiesOf(rest, "/render").at(-1), { imageId: "9", time: 2, scripts: true });
+      assert.doesNotMatch(textOf(fixed), /FR/);
+      assert.match(textOf(fixed), /场景脚本：2 段/);
+
+      const plain = await call("render_scene", { imageId: "9", replay: { timeline: TIMELINE } });
+      const body = bodiesOf(rest, "/render").at(-1)!;
+      assert.equal("scripts" in body, false);
+      assert.deepEqual(body.scriptValues, [{ object: "FR", field: "color", value: frColor(5), optional: true }]);
+      assert.doesNotMatch(textOf(plain), /场景脚本|脚本的外部值/);
+    });
+  });
+
+  test("scripts 与 replay.fr: true 同给报 [local]、不开宿主；fr: false 照常（不涂、FR 由脚本画）", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const clash = await call("render_scene", {
+        imageId: "9",
+        replay: { timeline: TIMELINE, fr: true },
+        scripts: true,
+      });
+      assert.equal(clash.isError, true);
+      assert.match(textOf(clash), /^\[local\][\s\S]*scripts 与 replay\.fr: true 不能同时给/);
+      assert.deepEqual(rest.seen, [], "参数错时不发请求");
+      const off = await call("render_scene", {
+        imageId: "9",
+        replay: { timeline: TIMELINE, fr: false },
+        scripts: { seed: 3 },
+      });
+      assert.notEqual(off.isError, true, textOf(off));
+      assert.equal("scriptValues" in bodiesOf(rest, "/render")[0], false);
+      assert.match(textOf(off), /FR 由脚本自己画/);
+    });
+  });
+
+  test("scripts 的形状由 SDK 参数校验拒绝：false、负种子、非整数种子、字符串时刻、不认识的键", async () => {
+    await withMcp(async (call, _root, rest) => {
+      for (const scripts of [false, { seed: -1 }, { seed: 1.5 }, { seed: 2 ** 32 }, { clock: "now" }, { tz: 8 }]) {
+        const result = await call("render_scene", { imageId: "9", scripts });
+        assert.equal(result.isError, true, JSON.stringify(scripts));
+      }
+      assert.deepEqual(rest.seen, []);
+    });
+  });
+
+  test("scriptsLines：没请求不写；请求了而宿主没回时说明；场景里没有脚本时说明", () => {
+    assert.deepEqual(scriptsLines({ scripts: SCRIPTS_META as never }, false), []);
+    assert.deepEqual(scriptsLines({}, true), ["场景脚本：宿主没回 scripts，跑没跑不知道（宿主产物要重建）"]);
+    const empty = scriptsLines(
+      {
+        scripts: {
+          ...SCRIPTS_META,
+          diagnostics: [],
+          recompile: [],
+          unconnected: { sound: 0, video: 0, particles: 0 },
+          audioResolutions: [],
+          messages: [],
+          clock: 0,
+          clockDefault: false,
+          seed: 9,
+          seedDefault: false,
+        } as never,
+      },
+      true,
+    );
+    assert.deepEqual(empty, [
+      "场景脚本：场景里没有脚本（只有读回帧的 g_Daytime 跟着脚本时钟）",
+      "脚本的外部值：Date 起点 1970-01-01T00:00:00.000Z，Math.random 种子 9，screenResolution 1920×1080",
+    ]);
+    // 段数多时只列前 20 段
+    const many = scriptsLines(
+      {
+        scripts: {
+          ...SCRIPTS_META,
+          diagnostics: Array.from({ length: 23 }, (_, i) => ({ id: `objects/${i}/origin`, state: "inited" })),
+        } as never,
+      },
+      true,
+    );
+    assert.equal(many.filter((line) => line.startsWith("  objects/")).length, 20);
+    assert.ok(many.includes("  …另 3 段见 meta.scripts.diagnostics"));
   });
 });
 

@@ -12,6 +12,8 @@
  *   每段实际取的时刻（`meta.videos`）。
  * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`render_scene` / `host_render` 的 `trace: { save, readback?, maxVertices? }`，
  *   `readback` / `maxVertices` 交给 REST，轨迹 JSON 与读回图写进 `save` 目录（`writeTrace`），结果里只写一行摘要。
+ * - 跑场景脚本（kabegame-chromium 第 7 批）：`render_scene` / `host_render` 的 `scripts: true | { clock?, seed? }` 原样交给 REST，探针照宿主
+ *   跑场景脚本；给了时不发 FR 的 `scriptValues`（FR 由脚本自己画），结果里写脚本的状态、出错、做不了的重编译写入与没接的 API（`scriptsLines`）。
  *
  * 工具表是静态的：vite 不在时照常列出，调用时回 `isError` 并写明是哪一层不在（文本以 `[层]` 开头）。
  * 参数里的相对路径一律按仓库根解析。图片类工具的落盘与缩小见 `imageOutput.ts`。
@@ -44,6 +46,7 @@ import type {
   ProjectManifest,
   RenderMeta,
   RenderResponse,
+  RenderScriptsRequest,
   RenderTraceRequest,
   ScriptValue,
   ShowWindowResult,
@@ -370,7 +373,8 @@ const FR = z
   .optional()
   .describe(
     "把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色 ((N % 256) / 255, (⌊N / 256⌋ % 256) / 255, 1)，" +
-      "同 WPE 里它的颜色脚本（探针不跑脚本，否则 FR 停在初值 0 0 1）；缺省 true。场景里没有挂颜色脚本的 FR 时跳过、不报错，结果里写一行涂了没有",
+      "同 WPE 里它的颜色脚本（不给 scripts 时探针不跑脚本，否则 FR 停在初值 0 0 1）；缺省 true。场景里没有挂颜色脚本的 FR 时跳过、不报错，" +
+      "结果里写一行涂了没有。给了 scripts 时 FR 由脚本自己画、不涂（不能再给 fr: true）",
   );
 /** `render_scene` / `host_render` 的回放：另收 `fr`。 */
 const RENDER_REPLAY = z
@@ -429,6 +433,32 @@ const TRACE = z
       "管线（混合、顶点布局、深度、着色器）、视口、裁剪、绑定（缓冲偏移、纹理 mip / 层、采样器）、uniform（按反射解码成名字 → 值，" +
       "取提交那一刻的值）、索引与顶点，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。轨迹不进会话，写到 save 目录，结果里写一行摘要",
   );
+/** 跑场景脚本（第 7 批）：`clock` / `seed` 的范围同 vite 的 `checkScripts`（`MAX_SCRIPT_CLOCK`、`MAX_SCRIPT_SEED`）。 */
+const SCRIPTS = z
+  .union([
+    z.literal(true),
+    z
+      .object({
+        clock: z
+          .number()
+          .finite()
+          .min(-8.64e15)
+          .max(8.64e15)
+          .optional()
+          .describe("脚本时钟的起点（毫秒时间戳），缺省 2026-01-01T00:00:00Z"),
+        seed: z.number().int().min(0).max(0xffffffff).optional().describe("Math.random 的种子（0–2³²−1），缺省 1"),
+      })
+      .strict(),
+  ])
+  .describe(
+    "跑场景脚本：true，或 { clock?, seed? }。探针照宿主搭脚本环境（同一套 realm / API / 运行时，写回同宿主），建好场景之后跑 init，" +
+      "回放的每一帧（含读回帧）设好相机之后跑一帧脚本。外部值都来自请求、两次同样的请求得到同一张图：engine.runtime / frametime 是回放的这一帧" +
+      "（不回放时是 time 与 0），screenResolution 是 canvas ?? 交给探针的窗口（时间线带逐帧光标时）?? 1920×1080（WPE 是窗口尺寸，" +
+      "和 WPE 比时传 canvas），canvasSize 是场景尺寸；" +
+      "Date 与 engine.timeOfDay 是 clock 加回放时间（读回帧的 g_Daytime 跟着它），Math.random 按 seed；localStorage 只在内存；" +
+      "音频缓冲全 0、媒体回调不调；声音层、视频纹理、粒子层的脚本方法空操作并计数。要整场重编译的写入探针做不了，结果里列出（这一帧不可信）。" +
+      "给了时 FR 帧号块由脚本自己画，不再涂色。结果里写各段脚本的状态与出错",
+  );
 const RENDER_FIELDS = {
   time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）；给了 replay 时不收"),
   postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
@@ -441,6 +471,7 @@ const RENDER_FIELDS = {
   canvas: CANVAS.optional(),
   videoTime: VIDEO_TIME.optional(),
   trace: TRACE.optional(),
+  scripts: SCRIPTS.optional(),
 };
 const OUT = z.string().describe("结果写到这个文件（相对路径按仓库根）");
 const OVERWRITE = z.boolean().default(false).describe("out 已存在时是否覆盖，缺省拒绝");
@@ -656,8 +687,11 @@ export function readbackLines(
   return lines;
 }
 
-/** FR 帧号块的处理（第 6 批）：回放到第 `frame` 帧时涂成那一帧的颜色；`false` 是 `replay.fr: false`；没有回放时为 null（不发、不写行）。 */
-export type FrPlan = { frame: number } | false | null;
+/**
+ * FR 帧号块的处理（第 6 批）：回放到第 `frame` 帧时涂成那一帧的颜色；`scripts` 为真（第 7 批）时不涂、由脚本自己画；`false` 是
+ * `replay.fr: false`；没有回放时为 null（不发、不写行）。
+ */
+export type FrPlan = { frame: number; scripts?: true } | false | null;
 
 /**
  * 交给探针的 FR 脚本值（第 6 批）：回放到第 N 帧（N = `dts.length`）时 `{ object: "FR", field: "color", value: frColor(N), optional: true }`。
@@ -672,11 +706,66 @@ export function frScriptValue(fr: boolean | undefined, frame: number): ScriptVal
 export function frLine(fr: FrPlan, meta: Pick<RenderMeta, "scriptValues">): string | null {
   if (fr === null) return null;
   if (fr === false) return "FR：没涂（replay.fr: false）";
+  if (fr.scripts) return `FR 由脚本自己画（scripts，回放到第 ${fr.frame} 帧），没塞值`;
   const item = meta.scriptValues?.[0];
   if (!item) return "FR：宿主没回 scriptValues，涂没涂不知道（宿主产物要重建）";
   if (!item.applied) return `FR：场景里没有挂颜色脚本的 FR，没涂（${item.reason ?? "探针跳过"}）`;
   const n = fr.frame;
   return `FR 涂成第 ${n} 帧的颜色 (${n % 256}, ${Math.floor(n / 256) % 256}, 255) / 255（objects[${item.object}]）`;
+}
+
+/** 结果里逐段列出的脚本最多这么多段，其余看 `meta.scripts.diagnostics`。 */
+const MAX_SCRIPT_LINES = 20;
+
+/**
+ * 跑场景脚本（第 7 批）的结果说明：段数与帧数、外部值（时钟起点、种子、screenResolution）、每段的状态与出错（最多 `MAX_SCRIPT_LINES` 段）、
+ * 做不了的重编译写入、没接的 API、运行时告警。没请求 `scripts` 时不写；请求了而宿主没回时写一行说明（vite 正常会先报 409）。
+ */
+export function scriptsLines(meta: Pick<RenderMeta, "scripts">, requested: boolean): string[] {
+  if (!requested) return [];
+  const result = meta.scripts;
+  if (!result) return ["场景脚本：宿主没回 scripts，跑没跑不知道（宿主产物要重建）"];
+  const list = result.diagnostics ?? [];
+  const inited = list.filter((item) => item.state === "inited").length;
+  const failed = list.filter((item) => item.state === "failed").length;
+  const lines = [
+    list.length
+      ? `场景脚本：${list.length} 段（init 跑过 ${inited} 段、求值失败 ${failed} 段），init 之后跑了 ${result.frames} 帧`
+      : `场景脚本：场景里没有脚本（只有读回帧的 g_Daytime 跟着脚本时钟）`,
+    `脚本的外部值：Date 起点 ${new Date(result.clock).toISOString()}${result.clockDefault ? "（缺省）" : ""}，` +
+      `Math.random 种子 ${result.seed}${result.seedDefault ? "（缺省）" : ""}，` +
+      `screenResolution ${sizeText(result.screenResolution)}`,
+  ];
+  for (const item of list.slice(0, MAX_SCRIPT_LINES)) {
+    const parts = [item.state];
+    if (item.disabled?.length) parts.push(`停用 ${item.disabled.join("、")}`);
+    if (item.errors?.length)
+      parts.push(`出错 ${item.errors[0]}${item.errors.length > 1 ? `（共 ${item.errors.length} 条）` : ""}`);
+    const calls = Object.entries(item.calls ?? {})
+      .map(([name, stats]) => `${name} ×${stats.count}`)
+      .join("、");
+    lines.push(`  ${item.id}：${parts.join("，")}${calls ? `；${calls}` : ""}`);
+  }
+  if (list.length > MAX_SCRIPT_LINES)
+    lines.push(`  …另 ${list.length - MAX_SCRIPT_LINES} 段见 meta.scripts.diagnostics`);
+  if (result.recompile.length) {
+    const writes = result.recompile.map(
+      (item) =>
+        `${item.path} 变了 ${item.count} 次（第一次在${item.firstFrame ? `第 ${item.firstFrame} 帧` : " init"}）`,
+    );
+    lines.push(`要整场重编译的写入（探针做不了，读回的这一帧和宿主不同、不可信）：${writes.join("；")}`);
+  }
+  const { sound, video, particles } = result.unconnected;
+  const unconnected = [
+    ...(sound ? [`声音层 ×${sound}`] : []),
+    ...(video ? [`视频纹理 ×${video}`] : []),
+    ...(particles ? [`粒子层 ×${particles}`] : []),
+  ];
+  if (unconnected.length) lines.push(`没接的脚本 API（方法空操作）：${unconnected.join("、")}`);
+  if (result.audioResolutions.length)
+    lines.push(`脚本注册了音频缓冲 ${result.audioResolutions.join(" / ")}（一直全 0）`);
+  if (result.messages.length) lines.push(`脚本运行时告警 ${result.messages.length} 条，第一条：${result.messages[0]}`);
+  return lines;
 }
 
 /** 视频纹理（P9a 步骤 3）：每段实际取的时刻，失败的写原因。没有视频纹理（或宿主产物没回 `videos`）时不写。 */
@@ -1069,6 +1158,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       fr?: FrPlan;
       /** 逐 draw 轨迹：给了就把轨迹与读回图写进这个目录，结果里写一行摘要。 */
       trace?: TraceArg;
+      /** 请求了跑场景脚本（第 7 批）：结果里写脚本的状态与出错（`scriptsLines`）。 */
+      scripts?: boolean;
     },
     lead: string[] = [],
   ) =>
@@ -1085,6 +1176,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         ...readbackLines(response.meta, options.canvas, options.timelineWindow),
         options.trace ? writeTrace(root, options.trace.save, response) : "",
         frLine(options.fr ?? null, response.meta) ?? "",
+        ...scriptsLines(response.meta, !!options.scripts),
         videoLine(response.meta) ?? "",
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
         `读回那一帧 g_Time ${response.meta.time}，g_Frametime ${response.meta.frametime}`,
@@ -1100,10 +1192,16 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
    * FR 帧号块（第 6 批）：回放时缺省（`replay.fr` 不是 false）按读回帧号 N = `dts.length` 发一项 `scriptValues`（`frScriptValue`），
    * 两种回放写法都发；`fr` 是返回给结果说明用的。
    * 逐 draw 轨迹：`trace` 换成 REST 的写法（`traceRequestOf`，`save` 不发），回放与否都带。
+   * 跑场景脚本（第 7 批）：`scripts` 原样转，回放与否都带；给了时不发 FR 的 `scriptValues`（FR 的颜色脚本自己跑，回放从加载后第 1 帧起，
+   * 帧号自然和 WPE 对上），和 `replay.fr: true` 同给报 `[local]`。
    */
   const renderBody = (imageId: string, render: Args<typeof RENDER_FIELDS>) => {
-    const { replay, trace, ...base } = render;
-    const rest = { ...base, ...(trace ? { trace: traceRequestOf(trace) } : {}) };
+    const { replay, trace, scripts, ...base } = render;
+    const rest = {
+      ...base,
+      ...(trace ? { trace: traceRequestOf(trace) } : {}),
+      ...(scripts !== undefined ? { scripts: scripts as RenderScriptsRequest } : {}),
+    };
     if (!replay) {
       return { body: { imageId, ...rest }, lines: [] as string[], timelineWindow: null, fr: null as FrPlan };
     }
@@ -1121,10 +1219,18 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "pointer 与时间线的逐帧光标（replay.timeline 的 cursors / cursor）不能同时给：要固定光标就只给 pointer",
       );
     }
+    const frOption = (replay as RenderReplayArg).fr;
+    if (scripts !== undefined && frOption === true) {
+      throw new ToolError(
+        "local",
+        "scripts 与 replay.fr: true 不能同时给：跑脚本时 FR 帧号块由它的颜色脚本自己画，不再按帧号涂色",
+      );
+    }
     const resolved = resolveReplay(root, replay);
     checkCanvasWindow(rest.canvas, resolved.window);
     const frame = resolved.particles.dts.length;
-    const fr = frScriptValue((replay as RenderReplayArg).fr, frame);
+    // 跑脚本时不涂 FR：探针的 `scripts` 与 `scriptValues` 不能同给
+    const fr = scripts !== undefined ? null : frScriptValue(frOption, frame);
     return {
       body: {
         imageId,
@@ -1136,7 +1242,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       },
       lines: resolved.lines,
       timelineWindow: resolved.timeline?.window ?? null,
-      fr: (fr ? { frame } : false) as FrPlan,
+      fr: (scripts !== undefined ? { frame, scripts: true } : fr ? { frame } : false) as FrPlan,
     };
   };
 
@@ -1176,7 +1282,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
         "replay、canvas、videoTime 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
-        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录。",
+        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录；" +
+        "scripts 同 render_scene：探针照宿主跑场景脚本（外部值来自请求、可重复），FR 由脚本自己画、不再涂色。",
       inputSchema: {
         handle: z.string().min(1),
         imageId: IMAGE_ID,
@@ -1202,6 +1309,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
           timelineWindow,
           fr,
           trace: render.trace,
+          scripts: render.scripts !== undefined,
         },
         lines,
       );
@@ -1292,8 +1400,11 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "探针第 i 帧用第 i 帧的光标、读回帧的 g_PointerPositionLast 是上一帧的，窗口和场景不同尺寸时按 fill 换到场景上；不给时光标固定为 pointer（不能同给）。" +
         "不给 canvas 时读回场景目标（场景分辨率）；给 canvas: [宽, 高] 时用产品上屏的同一份着色器按 fill 铺进这么大的画布再读回，" +
         "和 WPE 抓帧比时传抓帧窗口的尺寸（要和时间线交给探针的窗口相同），比较前不用再缩放；只改读回、不改渲染。" +
-        "回放时探针不跑场景脚本，replay.fr（缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色，" +
+        "不给 scripts 时探针不跑场景脚本，回放时 replay.fr（缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色，" +
         "同 WPE 里它的颜色脚本，比较时不用再屏蔽 FR；不是 kbp 工程（没有挂颜色脚本的 FR）时跳过，结果里写一行涂了没有。" +
+        "给 scripts: true | { clock?, seed? } 时探针照宿主跑场景脚本：建好场景之后跑 init，回放的每一帧设好相机之后跑一帧；Date、Math.random、" +
+        "screenResolution（canvas ?? 窗口 ?? 1920×1080）都来自请求、两次同样的请求得到同一张图；FR 由脚本自己画、不涂；结果里写各段脚本的状态与出错、" +
+        "要整场重编译而探针做不了的写入（有就说明这一帧不可信）、没接的 API（声音 / 视频 / 粒子层的脚本方法）。" +
         "有视频纹理的场景用 videoTime 定视频的时刻（缺省 0，超过时长按循环取模），结果里写一行每段实际取的时刻。" +
         "给 trace: { save, readback?, maxVertices? } 时探针记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform（按名字解码）、顶点，" +
         "写到 save 目录的 trace.json，readback 选中的 pass 的目标另存 pass-<下标>.png / .f32，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照；轨迹不进会话，结果里只有一行摘要。" +
@@ -1325,6 +1436,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
           timelineWindow,
           fr,
           trace: render.trace,
+          scripts: render.scripts !== undefined,
         },
         [hostLine, ...lines],
       );

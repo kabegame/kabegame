@@ -21,16 +21,16 @@ import { SCENE_POSTPROCESS_SETTINGS, type ScenePostprocessSetting } from "./comp
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import type { SceneStyle } from "./render/layout";
 import { uploadableTextures, visibleObjects } from "./render/scene";
-import { SceneState, scriptWriteValue } from "./render/state";
+import { SceneState } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
 import { schemeColor } from "./sceneStyle";
-import { FLT_MAX, instanceControlPoint, type InstanceField } from "./compile/particles";
+import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
-import { ScriptRuntime, type ScriptTarget, type ScriptValue } from "./script/runtime";
+import { ScriptRuntime, scriptDiagnostics, type ScriptTarget, type ScriptValue } from "./script/runtime";
+import { readScriptState, recordRecompileWrite, writeScriptState } from "./script/stateWrite";
 import { browserStorage, clearSceneStorage } from "./script/storage";
-import { textFieldFromScript } from "./text/fields";
 import { SceneTexts, type TextRelayouter } from "./text/host";
 import type { TextLayout } from "./text/layout";
 import { videoSourceKey } from "./video/player";
@@ -375,66 +375,23 @@ export class SceneHost {
     return `${target.script}/scriptproperties/${target.key}`;
   }
 
+  /** 读法与 dev 探针共用（`script/stateWrite.ts`）。 */
   private readScript(target: ScriptTarget): ScriptValue | null {
     const state = this.scriptState;
     if (!state) return null;
-    if (target.kind === "layer") {
-      const value = state.layers.get(target.object)?.[target.field];
-      return value === undefined ? null : typeof value === "number" ? [value] : value;
-    }
-    if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
-    if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
-    if (target.kind === "bloom") {
-      const value = state.bloom[target.field];
-      return Array.isArray(value) ? value : [value];
-    }
-    if (target.kind === "bloom-enabled") return state.bloomEnabled;
-    if (target.kind === "general") {
-      const value = state.general[target.key];
-      return typeof value === "number" ? [value] : value;
-    }
-    if (target.kind === "sound") {
-      const value = state.sounds.get(target.object)?.volume;
-      return value === undefined ? null : [value];
-    }
-    // 相机对象的 `fov` / `zoom`（P5d 步骤 3）：`update(value)` 收到当前值
-    if (target.kind === "camera") {
-      const value = state.cameras.get(target.object)?.[target.field];
-      return value === undefined ? null : [value];
-    }
-    // 文本字段（P6b 1e）：当前排版字段，`update(value)` 收到的是现在的文字（计数器不到刷新间隔时原样返回它）
-    if (target.kind === "text") {
-      const value = state.textFields.get(target.object)?.[target.field];
-      if (value === undefined) return null;
-      return typeof value === "number" ? [value] : typeof value === "object" ? [...value] : value;
-    }
-    // 粒子 `instanceoverride` 的字段脚本（P4f 步骤 1）：`update` 收到实例覆盖里的当前值（WPE 的 `io`，rea-p4f-script.md 5.1），重算或
-    // 加载钳过的 `rate` 是钳过的值、单写的 `rate` 是原值；`colorn` 没设过时是 (−1, −1, −1)，控制点（P4f 步骤 3）没设过时是 (FLT_MAX, 0, 0)
-    if (target.kind === "particle-instance") {
-      const values = state.particleInstances.get(target.object);
-      if (!values) return null;
-      if (target.field === "colorn") return values.colorn ? [...values.colorn] : [-1, -1, -1];
-      const point = instanceControlPoint(target.field);
-      if (point) {
-        const value = (point.angle ? values.controlpointAngles : values.controlpoints)[point.index];
-        return value ? [...value] : [FLT_MAX, 0, 0];
-      }
-      return [values[target.field as InstanceField]];
-    }
-    return null;
+    return readScriptState(state, target);
   }
 
   private writeScript(target: ScriptTarget, value: ScriptValue): boolean {
-    if (target.kind === "unsupported" || target.kind === "script-property") return false;
+    // 重编译类目标不看状态：值记进覆盖表、请求整场重编译
     if (target.kind === "recompile") return this.overrideAndReload(target.path, value);
     const state = this.scriptState;
     if (!state) return false;
-    // 文本字段（P6b 1e）：按脚本侧规则规整（`ToString`、枚举查表、布尔位只收布尔），值变了才标脏重排；不走重编译
-    if (target.kind === "text") {
-      state.writeText(target.object, target.field, textFieldFromScript(target.field, scriptWriteValue(value)));
-      return true;
-    }
-    const result = state.write({ property: "", target }, scriptWriteValue(value));
+    // 写进状态的规则与 dev 探针共用（`script/stateWrite.ts`）：文本字段按脚本侧规则规整、值变了才标脏重排，其余经 `SceneState.write`；
+    // 写不进的目标（`unsupported`、`script-property`）返回 false
+    const result = writeScriptState(state, target, value);
+    // `unsupported` 目标总是写不进（这里另判一次只为收窄类型）
+    if (result === "unsupported" || target.kind === "unsupported") return false;
     // 声音的 `volume`（P6a 步骤 2：API 写入与字段脚本写回）当场交给排期器：WPE 的回调 `V` 在改值时调、没有渐变，暂停时也生效。
     // 读脚本看到的状态：首次加载 `init` 期间它还不是渲染器的状态（首帧前重放写入时再同步一次）
     if (target.kind === "sound") {
@@ -491,20 +448,16 @@ export class SceneHost {
     }
   }
 
-  /** 脚本写重编译类目标：值变了才记进覆盖表、请求重新编译（脚本可能每帧写同一个值）。 */
+  /**
+   * 脚本写重编译类目标：值变了才记进覆盖表、请求重新编译（脚本可能每帧写同一个值）。「变没变」与 dev 探针共用
+   * （`script/stateWrite.ts` 的 `recordRecompileWrite`）。
+   */
   private overrideAndReload(path: string, value: ScriptValue): boolean {
-    const old = this.scriptOverrides.get(path);
-    if (JSON.stringify(old) === JSON.stringify(value)) return true;
-    if (old === undefined && JSON.stringify(this.recompileValue(path)) === JSON.stringify(value)) return true;
-    this.scriptOverrides.set(path, value);
+    if (!recordRecompileWrite(this.scriptOverrides, this.scriptBundle?.general, path, value)) return true;
     this.stats.recompiled.push({ reason: `script（${path}）`, keys: [] });
     this.options.report.debug(`场景脚本重编译目标变化：${path}`);
     this.requestScriptReload();
     return true;
-  }
-
-  private recompileValue(path: string): number[] | boolean | undefined {
-    return path === "general/hdr" ? this.scriptBundle?.general.postprocess.hdrFlag : undefined;
   }
 
   private requestScriptReload(): void {
@@ -658,11 +611,7 @@ export class SceneHost {
 
   /** dev 探针：每段脚本的诊断；`recompileWrites` 合并回调返回值与 API 直接写入两路。 */
   get scriptDiagnostics(): unknown[] {
-    const direct = this.scriptApi?.recompileWrites;
-    return (this.runtime?.diagnostics ?? []).map((item) => {
-      const record = item as { id: string; recompileWrites?: number };
-      return { ...record, recompileWrites: (record.recompileWrites ?? 0) + (direct?.get(record.id) ?? 0) };
-    });
+    return scriptDiagnostics(this.runtime, this.scriptApi?.recompileWrites);
   }
 
   /** dev 探针：运行秒数、本帧 dt 与脚本计时器（所属段、剩余秒数、周期）。 */
