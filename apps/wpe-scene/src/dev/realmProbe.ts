@@ -54,7 +54,9 @@ export async function realmCheck(host: SceneHost, extraSources: readonly string[
     const current = (api = new ScriptApi(realm, {
       bundle: () => bundle,
       state: () => state,
-      screenResolution: () => [bundle.general.width, bundle.general.height],
+      // 透视场景（P5d 步骤 2）的场景尺寸是 0，脚本的 screenResolution 取画布：探针没有画布，按 1920×1080
+      screenResolution: () =>
+        bundle.general.perspective ? [1920, 1080] : [bundle.general.width, bundle.general.height],
       frametime: () => 0.016,
       runtime: () => 1,
       timeOfDay: () => 0.5,

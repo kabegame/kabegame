@@ -11,10 +11,11 @@
  */
 import type { SceneLayer, SceneSpriteSheet, SceneTexture } from "../compile/bundle";
 import { particleRenderer, type ParticleRenderer } from "../compile/particles";
-import { orientationVectors, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
+import { orientationVectors } from "../particles/orientation";
 import { trailRenderVar0 } from "../particles/ropetrail";
 import { compositeTranslation, directTranslation, type TextLayout } from "../text/layout";
 import type { UniformLayout } from "../wpesl2wgsl";
+import { ORTHO_VIEW_VECTORS, type ViewVectors } from "./camera";
 import { textCompositeSize, type DrawStep, type Geometry, type TextStep } from "./graph";
 import { identity, invert, multiply, normalMatrix, orthographic, scaling, translation, type Mat4 } from "./math";
 import type { LayerState } from "./state";
@@ -159,6 +160,11 @@ export interface StaticBuiltinInput {
    */
   screenSize: [number, number];
   eye: readonly number[];
+  /**
+   * 视图向量（P5d 步骤 2，rea-p5-camera 8，`p5d-tilt` 实测）：`g_ViewForward` / `g_ViewRight` / `g_ViewUp`，透视场景是相机的
+   * f、s、u（`render/camera.ts` 的 `lookAtVectors`），全部 pass 都写；缺省是正交场景的 (0, 0, −1) / (1, 0, 0) / (0, 1, 0)。
+   */
+  view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
 }
@@ -201,6 +207,7 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
   const inverse = (m: Mat4) => Array.from(invert(m) ?? identity);
   const effectModel = input.effectModel ?? input.model;
   const effectMvp = input.effectModelViewProjection ?? input.modelViewProjection;
+  const view = input.view ?? ORTHO_VIEW_VECTORS;
   const values: Record<string, number[]> = {
     g_ModelViewProjectionMatrix: Array.from(input.modelViewProjection),
     g_ModelViewProjectionMatrixInverse: Array.from(input.modelViewProjectionInverse ?? identity),
@@ -219,6 +226,9 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
       ? inverse(input.effectTextureProjection)
       : identity,
     g_EyePosition: [input.eye[0] ?? 0, input.eye[1] ?? 0, input.eye[2] ?? 0],
+    g_ViewForward: [...view.forward],
+    g_ViewRight: [...view.right],
+    g_ViewUp: [...view.up],
     g_Brightness: [1],
     g_UserAlpha: [input.layer.alpha],
     g_Alpha: [input.layer.alpha],
@@ -244,6 +254,7 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
  * 由图层状态与相机算出的内置 uniform：就地刷新时只重写这一组，`pass.uniforms` 里有的名字（材质值，例如 passthrough 的
  * `g_Color4 = (1, 1, 1, 1)`、材质自带的 `g_UserAlpha`）一律不动。
  * `g_EyePosition`（P5a 步骤 3）：眼位带本帧的抖动，和矩阵一起在 `GpuScene.setParallax` 里随相机重写；不开抖动时值恒定，重写字节不变。
+ * `g_ViewForward` / `g_ViewRight` / `g_ViewUp`（P5d 步骤 2）：透视相机的视图向量，随相机（路径、抖动）重写；正交场景恒为常量。
  * `g_LayerModelMatrix`（P7d 步骤 2）：effect pass 的图层世界矩阵，图层或祖先的变换变了一起重写；没有它的 draw（基础 pass 等）
  * 算出的值里没有这个名字，刷新时跳过。
  */
@@ -262,6 +273,9 @@ export const LAYER_UNIFORMS: ReadonlySet<string> = new Set([
   "g_EffectTextureProjectionMatrix",
   "g_EffectTextureProjectionMatrixInverse",
   "g_EyePosition",
+  "g_ViewForward",
+  "g_ViewRight",
+  "g_ViewUp",
   "g_UserAlpha",
   "g_Alpha",
   "g_Color",
@@ -384,6 +398,8 @@ export interface DrawUniformInput {
   /** 按槽位：该 pass 绑定的纹理尺寸；未绑定为 undefined。 */
   textures: readonly (TextureSize | undefined)[];
   eye: readonly number[];
+  /** 视图向量（`StaticBuiltinInput.view`）；缺省为正交的常量。 */
+  view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
 }
@@ -410,6 +426,7 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
     textures: input.textures,
     screenSize: input.screenSize,
     eye: input.eye,
+    view: input.view,
     ambient: input.ambient,
     skylight: input.skylight,
   });
@@ -472,6 +489,8 @@ export interface TextUniformInput {
   /** 按槽位：字形 pass 的槽 0 是图集尺寸（`g_Texture0Resolution`，只有 MSDF 路径读）。 */
   textures: readonly (TextureSize | undefined)[];
   eye: readonly number[];
+  /** 视图向量（`StaticBuiltinInput.view`）；缺省为正交的常量。 */
+  view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
 }
@@ -487,6 +506,7 @@ export function textUniformValues(input: TextUniformInput): Record<string, numbe
     textures: input.textures,
     screenSize: input.screenSize,
     eye: input.eye,
+    view: input.view,
     ambient: input.ambient,
     skylight: input.skylight,
   });
@@ -511,14 +531,14 @@ const DEFAULT_RENDERER: ParticleRenderer = particleRenderer([]);
  * 粒子路径才写的引擎 uniform（`common_particles.h`，P4a 步骤 4），2026-11-07 RenderDoc 实测，正交与透视场景相同：
  * - 朝向（P4c 步骤 5）：`g_OrientationForward / Right / Up` 按 renderer 的朝向、这次绘制的模型矩阵 `model`（本地系统是对象世界矩阵，
  *   世界空间系统是单位阵）和相机的视线、上方向算（`particles/orientation.ts` 的 `orientationVectors`，rea-p4c-render.md 7.2，
- *   `FUN_1402298b0` 是唯一的写入者，每个 renderer 每次绘制前算一次）。视线、上方向是正交场景的常量 `VIEW_FORWARD (0,0,−1)`、
- *   `VIEW_UP (0,1,0)`：透视场景照报，透视粒子的覆盖只改视图平移和投影。缺省的 screen 朝向、对象没有 x / y 旋转时就是单位基
+ *   `FUN_1402298b0` 是唯一的写入者，每个 renderer 每次绘制前算一次）。视线、上方向取场景当前相机的（`view`，P5d 步骤 2：正交场景是常量
+ *   `(0,0,−1)`、`(0,1,0)`，透视场景是相机的 f、u；dna_fragment 抓帧的 `g_OrientationForward` 正是 eye − center 的单位向量，`p5d-tilt`
+ *   的 screen / upright 逐项对上），透视粒子的覆盖只改视图平移和投影。缺省的 screen 朝向、对象没有 x / y 旋转时就是单位基
  *   `Up (0,1,0)`、`Right (1,0,0)`、`Forward (0,0,1)`（P4a 实测）。算出 NaN（`upright` 的轴平行于视线）时照写 NaN，这次绘制由
  *   `GpuScene` 跳过（`orientationBasis` 为 null）。`M` 只在对象变换变化时变，变化会标脏、重写 uniform，所以算在静态 uniform 里；
- * - `g_ViewUp`、`g_ViewRight`：档 1 的两个着色器没读，`REFRACT`（`ComputeScreenRefractionTangents`，P4b 步骤 5）才读。
- *   步骤 0 抓帧里折射着色器真的读到了，正交与透视粒子都是 `g_ViewUp (0,1,0)`、`g_ViewRight (1,0,0)`，和这里写的相同
- *   （`p4b-refract` 第 907 帧，p4-particles-REPORT.md「P4b 语义的实测核对」）。WPE 每帧从视图矩阵抽一次，透视覆盖不重算
- *   （rea-p4b-render.md 6.3）。
+ * - `g_ViewUp`、`g_ViewRight`：P5d 步骤 2 起和 `g_ViewForward` 一起由 `staticBuiltins` 给全部 pass 写（`view`），这里不再写。
+ *   `REFRACT`（`ComputeScreenRefractionTangents`，P4b 步骤 5）读它们；正交场景是 `(0,1,0)`、`(1,0,0)`（`p4b-refract` 第 907 帧）。
+ *   WPE 每帧从视图矩阵抽一次，透视覆盖不重算（rea-p4b-render.md 6.3）。
  * - `g_RenderVar0`（P4c 步骤 5）：拖尾绘制前写 `(length, maxlength, minlength)`（`FUN_1402366f0` `0x140236a3b`，`ctx+0xa8`…`0xb0`，
  *   rea-p4c-render.md 6.3），`w` WPE 不写、保留上一次绘制的值，`genericparticle` 不读，我们写 0。sprite 不写，我们写 0（档 1 的
  *   着色器没读，`referenced: false`，抓帧里是垃圾值）。ropetrail（P4d 步骤 2）按计时器写（`particles/ropetrail.ts` 的
@@ -535,14 +555,14 @@ export function particleBuiltins(
   renderer: ParticleRenderer = DEFAULT_RENDERER,
   model: Mat4 = identity(),
   trailTimer = 0,
+  /** 场景当前的视图向量（P5d 步骤 2）：朝向用它的视线 `forward` 与上方向 `up`；缺省为正交的常量。 */
+  view: ViewVectors = ORTHO_VIEW_VECTORS,
 ): Record<string, number[]> {
-  const { forward, right, up } = orientationVectors(renderer.orientation, model, VIEW_FORWARD, VIEW_UP);
+  const { forward, right, up } = orientationVectors(renderer.orientation, model, view.forward, view.up);
   return {
     g_OrientationUp: up,
     g_OrientationRight: right,
     g_OrientationForward: forward,
-    g_ViewUp: [0, 1, 0],
-    g_ViewRight: [1, 0, 0],
     g_RenderVar0: renderer.ropetrail
       ? trailRenderVar0(renderer.ropetrail, trailTimer)
       : renderer.trail
@@ -568,6 +588,8 @@ export interface ParticleUniformInput {
   screenSize: [number, number];
   textures: readonly (TextureSize | undefined)[];
   eye: readonly number[];
+  /** 视图向量（`StaticBuiltinInput.view`）；朝向也用它的视线与上方向（`particleBuiltins`）。缺省为正交的常量。 */
+  view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
   /** 粒子 pass 槽 0 纹理的帧表（`SceneTexture.sheet`）；没有时 `g_RenderVar1` 为 0。 */
@@ -596,11 +618,12 @@ export function particleUniformValues(input: ParticleUniformInput): Record<strin
     textures: input.textures,
     screenSize: input.screenSize,
     eye: input.eye,
+    view: input.view,
     ambient: input.ambient,
     skylight: input.skylight,
   });
   // 朝向用这次绘制的模型矩阵（同 `g_ModelMatrix`，rea-p4c-render.md 7.2：两者都取 `*(ctx+0x30)`）
-  Object.assign(values, particleBuiltins(input.sheet, input.renderer, input.world, input.trailTimer));
+  Object.assign(values, particleBuiltins(input.sheet, input.renderer, input.world, input.trailTimer, input.view));
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
   return values;
 }

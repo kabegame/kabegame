@@ -173,7 +173,7 @@
 | 正交场景同样测深度；带 effect 的图像层只在上屏时对主深度测（末 pass 借基础材质的深度键）（3.6） | `p5d-depth-o`：z = 100 的模型写深度，之后 z = 0 的图像层、带 tint 的图像层（末 pass 测、不写）、缺 `depthtest` 的粒子在重叠处都被挡；基础 pass 画进合成 RT 时没有深度 | 成立 |
 | 剔除只看屏幕绕序、正面逆时针（3.4、3.5） | `p5d-cull`：图像层四边形是逆时针（正面）；自身 `scale −1`、挂在镜像父层下、绕 y 转 180° 的都被剔；粒子（几何着色器把点展开成三角形带）也是逆时针，镜像的粒子系统被剔；`p5d-depth2`：透视场景里也一样 | 成立。**补充**：带 effect 的图像层，基础 pass 用基础材质的剔除（画进合成 RT 的四边形不镜像，照常画），上屏 pass 用 effect 材质自己的 `cullmode`（tint 是 nocull，所以镜像的图层照样显示） |
 | `clearenabled: false` 时颜色和深度都不清（3.7【推】） | `p5d-noclear`：整帧没有清屏调用；静止的写深度模型在画之前，深度缓冲里已经是它自己上一帧写的 0.5，GREATER 严格不通过，所以第二帧起不再画；不写深度的那块照常画 | 成立 |
-| 透视场景里的普通粒子：用场景 VP；sprite 按对象朝向展开，不面向相机（rea-p5-camera 2、rea-p4c） | `p5d-ptc`：MVP = VP · W；几何着色器读 `g_OrientationRight` / `Up` / `Forward`（单位轴），不是视图向量 | 成立 |
+| 透视场景里的普通粒子：用场景 VP；sprite 按对象朝向展开，不面向相机（rea-p5-camera 2、rea-p4c） | `p5d-ptc`：MVP = VP · W；几何着色器读 `g_OrientationRight` / `Up` / `Forward`（单位轴），不是视图向量 | MVP 成立。**朝向一句不成立（2026-11-13 步骤 2 更正）**：`p5d-ptc` 的相机正对 −Z，面不面向相机读数都是单位轴。dna_fragment 的抓帧（`A:\p5d\dna_fragment-kbp` frame180 事件 56，相机是斜的）里 `g_OrientationForward` = (0.691, 0.494, 0.528)，正是 eye − center 的单位向量，`Up` = (−0.392, 0.870, −0.299) 是 (0, 1, 0) 减去在它上面的分量：screen 朝向 `F = −视线`（rea-p4c-render 7.2），sprite 面向相机 |
 | 透视场景里的透视粒子（`flags & 4`）：fov = 2·atan(1/(P11·2000))，视图 z 平移强制 −2000（7.2、7.3） | `p5d-ptc`：m11 = 4289 = cot(fov/2)、原点处 w = 2000、near 5 / far 15000 | 成立。语料 0 个（`scan_persp_ptc.py`），照报 |
 | 透视场景里的合成链与 fullscreenlayer | `p5d-2d`：基础 pass 画进合成 RT 用 RT 自己的正交（z 系数 1/2000），末 pass 用场景 VP · W；fullscreenlayer 的末 pass 用 NDC 正交 | 成立，和正交场景同一套 |
 
@@ -181,5 +181,9 @@
 - **图像层的视锥剔除**（读码只说了模型）：正交场景不剔，场景外、z 超出深度范围的图像层照样发绘制（`p5d-imgcull`）；透视场景剔掉相机背后与视野两侧外的，远过 farz 的照样画（`p5d-imgcull-p`）。着色器乘 MVP 时这些图层本来就不在画面里，没有画面差别，只记。
 - **fullscreen 模型的几何**：槽 0 没有纹理时不经过纹理就绪回调，几何不改成 2×2，用的是对象 `size`（`p5d-2d` 的探针层，±960 × ±540）。语料里 fullscreen 模型的槽 0 全是 `_rt_FullFrameBuffer`，只记。
 - **插桩 FR 在透视场景里**：`kbp content unpack --instrument` 把 FR 放在 (−100000, −100000, 0)。neon_sunset 的相机在原点看 −Z，FR 落在相机平面上被剔掉；dna_fragment 的照样发绘制（远过 farz、被深度裁掉）。透视样本的帧号改按抓帧的帧号对日志：`p5d-path` 实测脚本帧号 = 抓帧的帧号 + 1。
+
+**步骤 2 补测 `p5d-tilt`（2026-11-13）：** 斜相机（eye (6, 4, 10) 看原点、up (0, 1, 0)），`ignore/p5/d2/gen_d2.py`，抓帧 `A:\p5d\p5d-tilt`（frame196），日志 `ignore/p5/d2/out/logs/p5d-tilt.log`。
+- 探针网格：`g_ViewForward` = normalize(center − eye) = (−0.48666, −0.32444, −0.81111)，`g_ViewRight` = normalize(f × up) = (0.85749, 0, −0.51450)，`g_ViewUp` = s × f = (−0.16692, 0.94591, −0.27821)，都是世界空间的向量，即行向量约定下 V 的第 2 列取负、第 0 列、第 1 列（读码 8 成立）；`g_EyePosition` = (6, 4, 10)；VP 的 m00 = s.x · cot 25°/(16/9) = 1.03438。
+- 粒子：screen 朝向 `Forward` = −视线、`Up` = `g_ViewUp`、`Right` = `g_ViewRight`（面向相机）；upright（axis 0 1 0）`Forward` = (0.51450, 0, 0.85749)、`Right` = (0.85749, 0, −0.51450)、`Up` = (0, 1, 0)，和 `orientationVectors` 用相机视线算的逐项相同。
 
 **对 P5d 各步的影响：** 读码的结论全部成立，推翻一处推断（透视开视差时 `g_ParallaxPosition` 是 NaN），正交相机对象的冲突解开（照读码实现），补了两条读码没写到的规则：带 effect 的上屏 pass 剔除取 effect 材质；`clearenabled: false` 时深度也不清。深度与剔除对全部对象同一套规则，正交场景同样生效，所以步骤 1 不分投影；透视场景里的透视粒子与文本对象语料 0 个 / 只在还差 20 项以上的场景里，照报。

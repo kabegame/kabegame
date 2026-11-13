@@ -27,6 +27,7 @@ import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
   instanceControlPoint,
+  isOrthographic,
   PARTICLE_SYSTEM_KEYS,
   parseParticleChildEntry,
   particleModuleEntries,
@@ -79,6 +80,10 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_EffectTextureProjectionMatrix",
   "g_EffectTextureProjectionMatrixInverse",
   "g_EyePosition",
+  // 视图向量（P5d 步骤 2，rea-p5-camera 8）：全部 pass 都写，正交场景是常量，透视场景是相机的 f、s、u
+  "g_ViewForward",
+  "g_ViewRight",
+  "g_ViewUp",
   "g_Brightness",
   "g_UserAlpha",
   "g_Alpha",
@@ -152,15 +157,16 @@ const ENGINE_COMBOS = new Set([
  * - `norecompile`、`camerapreview`：编辑器选项。
  * - `camerafade`：加载时的淡入，不改变稳定画面。
  * - `bloom`、`hdr` 与全部 `bloom*` 调节项：由后处理档位裁决（`postprocess.ts`），泛光 / HDR 由 `bloom.ts` 与 `render/bloom.ts` 实现。
- * - `farz` / `fov` / `nearz`：正交投影不用；透视另报 `camera:perspective`。
+ * - `farz` / `fov` / `nearz`：正交投影不用；透视场景每帧读（P5d 步骤 2，`render/camera.ts`，由 `GENERAL_FIELDS` 存值，属性与脚本
+ *   写入就地生效）。
  * - `supportsvideo`：只决定 D3D 设备的视频支持标志（G2 0x8000）。视频纹理已实现（P9a：播放在 `video/`，纹理在
  *   `GpuScene.copyVideo`），和这个键无关。
  * - `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength`：REA 没找到引擎读取点，
  *   实测见 P4a 实施记录（`rea-p4a.md` C7：只在场景属性表里，粒子路径不碰，`movement` 的重力只来自模块自己的 `gravity`）。
  * `cameraparallax*` 已实现（P5a 步骤 2，`render/parallax.ts`）：四个字段由 `GENERAL_FIELDS` 存值，渲染器每帧读，属性与脚本写入就地生效；
- * 透视场景开视差 WPE 不移动对象（rea-p5-camera.md 6.1，语料 0 张），透视整张另报 `camera:perspective`。
- * `camerashake*` 已实现正交（P5a 步骤 3，`render/shake.ts`）：四个字段同样由 `GENERAL_FIELDS` 存值、渲染器每帧读；透视场景开抖动
- * 另报 `general:camerashake`（归 P5d）。`zoom` 已实现（P5a 步骤 4，`render/layout.ts` 的 `sceneViewProjection`）：同样由 `GENERAL_FIELDS`
+ * 透视场景开视差 WPE 不移动对象（rea-p5-camera.md 6.1），`g_ParallaxPosition` 照算（P5d 步骤 2，W = H = 0 时是 NaN）。
+ * `camerashake*` 已实现（正交 P5a 步骤 3、透视 P5d 步骤 2，`render/shake.ts`）：四个字段同样由 `GENERAL_FIELDS` 存值、渲染器每帧读。
+ * `zoom` 已实现（P5a 步骤 4，`render/layout.ts` 的 `sceneViewProjection`）：同样由 `GENERAL_FIELDS`
  * 存值、渲染器每帧读，只在解析出的值 ≤ 0 时报（见 `checkSceneFeatures`）。
  * `perspectiveoverridefov` 不是中性：它是透视粒子的 fov（C4，实测核对过），解析进 `SceneGeneral.perspectiveOverrideFov`，
  * 见 `PARSED_GENERAL`。
@@ -399,18 +405,22 @@ function active(value: unknown): boolean {
 
 export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): void {
   const g = scene.general ?? {};
-  if (!g.orthogonalprojection) unsupported.add("camera:perspective");
+  // 投影类型同 `bundle.ts`（`SceneGeneral.perspective`）：`isOrthographic` 一处判定。透视相机已实现（P5d 步骤 2：透视投影、基准相机、
+  // 路径、三维抖动，`render/camera.ts`），透视场景里没测过的用法照报 `camera:perspective:<用法>`（`perspectiveObjectIssues` 与
+  // `bundle.ts`）。相机对象归步骤 3，仍由未知键报 `object:camera`
+  const orthographic = isOrthographic(g);
+  // 正交场景带路径：读码说那时不重置相机、视图会平移（rea-p5-camera 3.2），没测，语料 0
+  if (orthographic && Array.isArray(scene.camera?.paths) && scene.camera.paths.length > 0)
+    unsupported.add("camera:paths:orthographic");
   // `cameraparallax` 不再报（P5a 步骤 2）：视差点、`g_ParallaxPosition` 与对象平移已实现
-  // `camerashake` 只在透视场景报（P5a 步骤 3）：正交的抖动已实现（`render/shake.ts`）；透视下幅度是 `0.1·amplitude` 个世界单位、
-  // 偏移是三维的，要和透视相机一起做，归 P5d（rea-p5-camera.md 第 5 节），透视场景整张另报 `camera:perspective`，这一条提醒 P5d 补上
-  if (!g.orthogonalprojection && active(g.camerashake)) unsupported.add("general:camerashake");
+  // `camerashake` 不再报：正交（P5a 步骤 3）与透视（P5d 步骤 2，`0.1·amplitude` 个世界单位、三维偏移）都已实现（`render/shake.ts`）
   // `supportsaudioprocessing` 中性（P4e 步骤 4）：渲染器不读 `scene.json` 里的这个键，开关只看 `project.json` 的同名键（rea-p4e-audio.md
   // 第 6 节、4.1，`SceneBundle.audio`）；语料只有默认工程 `audiophile` 在 `scene.json` 里写了它
   // `zoom` 已实现（P5a 步骤 4）：正交投影绕场景中心乘它（p5-REPORT 实测），绑属性、脚本写回都就地生效。只在解析出的值 ≤ 0 时报：
   // 投影退化、指针反投影是 NaN（语料最小 1.0）。常量与 `{script}` 的初值同 `bundle.ts` 的 `generalFields` 解析，不合法时取缺省 1；
   // 绑用户属性的不看值（运行中的值编译期定不了）；关键帧取 `value`（WPE 加载时写它，P10a）。透视场景里 zoom 不起作用
-  // （rea-p5-camera.md 1.4：读取点都在正交分支），不报，整张另报 `camera:perspective`
-  if (g.orthogonalprojection && !isUserBinding(g.zoom)) {
+  // （rea-p5-camera.md 1.4：读取点都在正交分支，`p5d-persp-b` 实测），中性
+  if (orthographic && !isUserBinding(g.zoom)) {
     const zoom = generalValue("zoom", resolveValue(g.zoom as SceneValue | undefined, {}));
     if (typeof zoom === "number" && zoom <= 0) unsupported.add("general:zoom");
   }
@@ -428,7 +438,31 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
   const { parents, cycle } = resolveParents(scene.objects);
   if (cycle) unsupported.add("object:parent-cycle");
   scene.objects.forEach((object, index) => checkObjectFeatures(object, unsupported, parents[index]));
+  if (!orthographic)
+    for (const object of scene.objects) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
   // 关键帧不在这里报：由 `collectAnimations`（`animations.ts`，P10a 步骤 2）按目标报细分键与过渡键
+}
+
+/**
+ * 透视场景里没测过、只看对象 JSON 就能判的用法（P5d 步骤 2，计划点 7）：
+ * - `camera:perspective:text`：文本对象。P6b 只测了正交，透视场景里文本选 `_depth` 材质（rea-p6b-raster 1）；
+ * - `camera:perspective:shape`：形状对象。缺省尺寸是正交高（透视场景里 WPE 取 1），语料 0；
+ * - `camera:perspective:image`：图像层 / 模型 `perspective: true`（rea-p5-camera 7.3【推】，语料 0）。
+ * 要编完模型 / 粒子才能判的三个在 `bundle.ts`：`camera:perspective:projectlayer`（`autosize` + `projectlayer`）、
+ * `camera:perspective:group`（带子层的组合层）、`camera:perspective:particle`（粒子系统树里有 `flags & 4`）。
+ */
+export function perspectiveObjectIssues(object: SceneObject): string[] {
+  const keys: string[] = [];
+  const kind = objectKind(object);
+  if (isTextObject(object)) keys.push("camera:perspective:text");
+  if (isShapeObject(object)) keys.push("camera:perspective:shape");
+  if ((kind === "image" || kind === "model") && object.perspective === true) keys.push("camera:perspective:image");
+  return keys;
+}
+
+/** 粒子系统树里有透视系统（`flags & 4`，P4a 步骤 4）。 */
+export function usesPerspectiveParticles(system: SceneParticle): boolean {
+  return someParticleSystem(system, (node) => (node.flags & 4) !== 0);
 }
 
 /**
@@ -549,8 +583,8 @@ export function isShapeObject(object: SceneObject): boolean {
 
 /**
  * 文本对象自己的键（描述符表 `DAT_1404e88e0`，rea-p6b-layout 1.2）。排版类键、背景、`depthtest` 已实现或中性：
- * - `depthtest`：只在透视场景选 `_depth` 材质，正交场景恒用无深度材质（rea-p6b-raster 1，p6-REPORT 实测），透视场景整张另报
- *   `camera:perspective`；
+ * - `depthtest`：只在透视场景选 `_depth` 材质，正交场景恒用无深度材质（rea-p6b-raster 1，p6-REPORT 实测），透视场景里的文本对象
+ *   另报 `camera:perspective:text`（P5d 步骤 2，`perspectiveObjectIssues`）；
  * - 描边、模糊、投影的参数（`outlinethickness` 等）只在 MSDF 路径用，开关另由 `checkTextOptions` 报；
  * - `backgroundbrightness` 只在 HDR 下乘进背景色（`compile/texts.ts`）。
  * 不在这张表、文本上同样中性的：`size`（运行时用排版结果覆盖，1.4）、`alignment`（不在文本的查找链上）、`copybackground`（文本的
@@ -1204,16 +1238,15 @@ export function checkEffectFeatures(
 }
 
 /**
- * 粒子着色器（`common_particles.h`）要、只有粒子路径才写的引擎 uniform：朝向、视图轴与 `g_RenderVar0/1`。渲染器在粒子
+ * 粒子着色器（`common_particles.h`）要、只有粒子路径才写的引擎 uniform：朝向与 `g_RenderVar0/1`。渲染器在粒子
  * draw 里写它们（`render/uniforms.ts` 的 `particleBuiltins`，P4a 步骤 4，单测核对两边一致），所以粒子 pass 的程序检查
- * 把它们当引擎 uniform，图层材质里照报。`g_EyePosition`、`g_Texture0Resolution` 已在 `ENGINE_UNIFORMS` / 通配里。
+ * 把它们当引擎 uniform，图层材质里照报。`g_EyePosition`、`g_Texture0Resolution` 已在 `ENGINE_UNIFORMS` / 通配里；视图轴
+ * `g_ViewUp` / `g_ViewRight` P5d 步骤 2 起挪进 `ENGINE_UNIFORMS`（全部 pass 都写）。
  */
 export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_OrientationUp",
   "g_OrientationRight",
   "g_OrientationForward",
-  "g_ViewUp",
-  "g_ViewRight",
   "g_RenderVar0",
   "g_RenderVar1",
 ]);

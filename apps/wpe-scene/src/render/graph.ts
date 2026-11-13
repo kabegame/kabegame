@@ -38,7 +38,7 @@
  *   - 合成路径：不画基础材质。先 `snapshot`，再 `copy`（快照 → 合成 RT 0，占合成链的第一次写入），之后照常跑 effect 链；上屏
  *     （`final`、`passthrough`）也是 NDC 四边形，矩阵是单位阵加 NDC 正交（`scene.ts`），所以正好铺满全屏。这个判断排在组合层的
  *     compose / clear 之前：fullscreenlayer 有 effect 时走拷贝，不看 `copyBackground`（`p5b-fs` 的 F1：一次 Resolve、没有基础 draw）。
- *   - 合成 RT 取 `fullscreenSize`（槽 0 静态纹理的图像尺寸；`_rt_FullFrameBuffer` 或没有纹理时取场景尺寸）。
+ *   - 合成 RT 取 `fullscreenSize`（槽 0 静态纹理的图像尺寸；`_rt_FullFrameBuffer` 或没有纹理时取场景目标尺寸）。
  * - **组**（P5b 步骤 4，带子层的组合层，`SceneLayer.subtree` 非空，p5-REPORT `p5b-grp-*`、`p5b-nest`、`p5b-grpptc`）：基础 pass
  *   （compose / clear；fullscreenlayer 带子层照报，这里照拷贝）之后紧跟 `subtree` 步骤，把 `layer.subtree` 画进当前的合成 RT（组的
  *   子孙在顶层不画，`scene.ts`）。它不算合成链的一次写入（子孙画在基础 pass 写的那张上）。之后有 effect 或 colorBlendMode 混合时
@@ -266,16 +266,21 @@ type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "tex
 
 /**
  * 合成 RT 尺寸（B5 `FUN_1402091e0`）：fullscreen 取 `fullscreenSize`（P5b 步骤 3：槽 0 静态纹理的图像尺寸，`_rt_FullFrameBuffer`
- * 或没有纹理时取场景尺寸），排在最前；否则基础材质槽 0 纹理的图像尺寸，没有纹理、`solidLayer` 且不是 `instanced`（P5b 步骤 5，
- * `p5b-inst2` 的 J1 32×32、J2 48×40，对照组 J0 900×1000）或组合层（取 `round(size)`，rea-p5-modelflags §2.3，`p5b-cl` 实测 600×300）
+ * 或没有纹理时是 `"scene"`，取 `sceneSize` 即场景目标尺寸，P5d 步骤 2），排在最前；否则基础材质槽 0 纹理的图像尺寸，没有纹理、
+ * `solidLayer` 且不是 `instanced`（P5b 步骤 5，`p5b-inst2` 的 J1 32×32、J2 48×40，对照组 J0 900×1000）或组合层（取 `round(size)`，
+ * rea-p5-modelflags §2.3，`p5b-cl` 实测 600×300）
  * 取图层 size；最后取 max(4, ·)。精灵表取单帧留到 P6。
  */
 export function compositeSize(
   layer: Pick<SceneLayer, "size" | "solidLayer" | "instanced" | "passthroughModel" | "fullscreenSize">,
   texture: TextureSize | undefined,
+  /** 场景目标尺寸（`GpuScene` 的宽高）；只有 `fullscreenSize` 为 `"scene"` 时用，不给时按 0（只看 `reasons` 的调用方）。 */
+  sceneSize: readonly [number, number] = [0, 0],
 ): [number, number] {
   const [w, h] = layer.fullscreenSize
-    ? layer.fullscreenSize
+    ? layer.fullscreenSize === "scene"
+      ? sceneSize
+      : layer.fullscreenSize
     : texture && !(layer.solidLayer && !layer.instanced) && !layer.passthroughModel
       ? [texture.width, texture.height]
       : [layer.size[0] ?? 0, layer.size[1] ?? 0];
@@ -519,6 +524,8 @@ export function planLayer(
   enabled: (effect: number) => boolean = (e) => layer.effects[e].enabled, // 运行时的开关，3c 步骤 2 传入
   /** 文本层（`layer.text` 非空）的排版结果（P6b 1d）；其它图层不看。 */
   text: TextPlanLayout | null = null,
+  /** 场景目标尺寸：fullscreen 合成 RT 的 `"scene"` 取它（`compositeSize`）。只看 `reasons` 的调用方可以不给。 */
+  sceneSize?: readonly [number, number],
 ): LayerPlan {
   // 粒子对象没有图像 pass，也不编 effect（`compileScene`）
   if (layer.particle) return planParticleLayer(layer);
@@ -839,7 +846,7 @@ export function planLayer(
   } else if (finalEffect < 0) reasons.push("render:no-final-pass");
 
   // 文本层的合成 RT 取排版的 `compositeSize` 再两维 `max(4, ·)`（P6b 1e，`textCompositeSize`）
-  const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(layer, baseTexture);
+  const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(layer, baseTexture, sceneSize);
   return { composite: { count: Math.min(2, writes), width, height }, steps, reasons };
 }
 
@@ -866,8 +873,10 @@ export function variantPlans(
   layer: SceneLayer,
   textures: readonly TextureSize[],
   text: TextPlanLayout | null = null,
+  /** 同 `planLayer` 的 `sceneSize`。 */
+  sceneSize?: readonly [number, number],
 ): LayerPlan[] {
-  if (layer.text) return [planLayer(layer, textures, undefined, textVariantLayout(text))];
+  if (layer.text) return [planLayer(layer, textures, undefined, textVariantLayout(text), sceneSize)];
   // 形状层（P8 步骤 2）：effect 开关对它中性（`planShapeLayer` 不看），没有变体
   if (layer.shape) return [];
   // dev 强制渲染时开着的 effect 可以带不支持项，它能就地关掉（`SceneState.needsRecompile`），所以也算可变
@@ -876,7 +885,7 @@ export function variantPlans(
   );
   if (!variable.length) return [];
   const plan = (open: (e: number) => boolean) =>
-    planLayer(layer, textures, (e) => (variable.includes(e) ? open(e) : layer.effects[e].enabled));
+    planLayer(layer, textures, (e) => (variable.includes(e) ? open(e) : layer.effects[e].enabled), null, sceneSize);
   return [
     plan(() => true), // 每个 pass 的普通角色
     plan(() => false), // 基础 pass 直接上屏；组合层（cbm 0 / 31）是空计划，整层不画；组是基础 pass → 子树 → `groupUpload` 上屏

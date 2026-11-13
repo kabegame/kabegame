@@ -147,8 +147,9 @@ describe("场景编译基础", () => {
       keys,
     );
     // general.bloom 交给后处理档位裁决（postprocess:*），不再按键报；层级已实现，parent 指向不存在的 id 时当根节点（P4a）。
-    // 粒子不再整条报 object:particle，用法在读到粒子 JSON 后逐模块检查（P4a 步骤 2）；临时键 particle:pending 已删（步骤 5）
-    expect(keys).toEqual(new Set(["camera:perspective"]));
+    // 粒子不再整条报 object:particle，用法在读到粒子 JSON 后逐模块检查（P4a 步骤 2）；临时键 particle:pending 已删（步骤 5）。
+    // 透视场景不再整张报 camera:perspective（P5d 步骤 2）
+    expect(keys).toEqual(new Set());
   });
   it("LZ4 已知向量及损坏输入", () => {
     expect(decodeLz4Block(new Uint8Array([0x40, 65, 66, 67, 68]), 4)).toEqual(new Uint8Array([65, 66, 67, 68]));
@@ -384,6 +385,10 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
       "razer_bedroom",
       "shimmering_particles",
       "retro",
+      // 透视相机（P5d 步骤 2）：透视场景不再整张退回
+      "dna_fragment",
+      "neon_sunset",
+      "techno",
     ];
     // 工坊样本：用户真机确认过（2026-11-07）。不是每台机器都订阅，所以不要求存在
     const workshopUnlocked = ["2077883354", "2077888249", "2418800402", "2833452727", "2961807954"];

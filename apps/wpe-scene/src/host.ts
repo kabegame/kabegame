@@ -898,6 +898,10 @@ export class SceneHost {
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 设备丢失，重建渲染器：`, reasons);
         void this.reload();
       },
+      // 透视场景按画布尺寸渲染（P5d 步骤 2，已定 6）：分辨率变了（去抖之后）整场重新加载，bundle 与尺寸无关、编译结果相同，脚本写入照常重放
+      onRenderSizeChange: () => {
+        if (this.rendererTask === task) void this.reload();
+      },
     }).then(
       (created) => {
         if (this.rendererTask !== task || this.disposed) {

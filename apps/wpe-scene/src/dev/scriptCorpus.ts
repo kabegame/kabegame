@@ -105,7 +105,9 @@ export async function scriptCorpus(
         const current = (api = new ScriptApi(realm, {
           bundle: () => compiled,
           state: () => state,
-          screenResolution: () => [compiled.general.width, compiled.general.height],
+          // 透视场景（P5d 步骤 2）的场景尺寸是 0，脚本的 screenResolution 取画布：语料扫描没有画布，按 1920×1080
+          screenResolution: () =>
+            compiled.general.perspective ? [1920, 1080] : [compiled.general.width, compiled.general.height],
           frametime: () => 1 / 60,
           runtime: () => elapsed,
           timeOfDay: () => 0.5,

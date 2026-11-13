@@ -436,8 +436,18 @@ describe("general 字段表", () => {
       );
       expect(bindings).toEqual([]);
       expect(read).toEqual(new Set());
-      expect("camera" in general).toBe(false);
+      // 正交场景不解析相机（P5d 步骤 2，视图恒为单位阵）
+      expect(general.camera).toBeNull();
       expect(unsupported).toEqual([]);
+      // 透视场景：写成对象（不是字符串）时保留构造值，同样不登记、不读属性
+      const perspective = await compileGeneral(
+        { orthogonalprojection: null },
+        { e: "1 2 3", c: "4 5 6", u: "7 8 9" },
+        { camera: { eye: { user: "e", value: "0 0 1" }, center: { user: "c" }, up: { user: "u" } } },
+      );
+      expect(perspective.bindings).toEqual([]);
+      expect(read).toEqual(new Set());
+      expect(perspective.general.camera).toEqual({ eye: [2, 2, 2], center: [0, 0, 0], up: [0, 1, 0], paths: [] });
     } finally {
       observePropertyReads(null);
     }

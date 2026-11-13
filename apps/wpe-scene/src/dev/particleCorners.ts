@@ -28,11 +28,13 @@ import type { ParticleSystem } from "../particles/system";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
 import { acquireGpu } from "../render/device";
+import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
+import { initialCameraPathState, perspectiveCamera, stepCameraSource, type CameraPathState } from "../render/camera";
 import { drawParallax, initialParallaxState, replayParallax, type ParallaxState } from "../render/parallax";
 import { shakeOffset } from "../render/shake";
 import type { PackedVertexAttribute } from "../render/programs";
 import { bindGroupLayoutEntries, WGSL_PRELUDE } from "../render/programs";
-import { GpuScene, type ParticleOptions } from "../render/scene";
+import { GpuScene, type ParticleOptions, type SceneCamera } from "../render/scene";
 import { SceneState } from "../render/state";
 import { replayPointers, type ReplayPointers } from "./replayPointers";
 
@@ -318,24 +320,77 @@ export function replayAudio(
 }
 
 /**
+ * 透视场景的探针相机（P5d 步骤 2）：基准相机与路径、场景目标尺寸（宽高比，同渲染器按画布尺寸渲染）、起始的路径状态（缺省加载时的）。
+ * 正交场景不给（`probePerspective` 返回 undefined）。
+ */
+export interface ProbePerspective {
+  camera: SceneCameraJson;
+  size: readonly [number, number];
+  path?: CameraPathState;
+}
+
+/** 透视场景的探针相机；正交场景为 undefined。`size` 是建场景时交给 `GpuScene.build` 的场景目标尺寸。 */
+export function probePerspective(
+  bundle: Pick<SceneBundle, "general">,
+  size: readonly [number, number],
+): ProbePerspective | undefined {
+  if (!bundle.general.perspective) return undefined;
+  return { camera: bundle.general.camera ?? { ...DEFAULT_CAMERA, paths: [] }, size };
+}
+
+/**
  * 探针回放的相机（P5a 步骤 3、4）：每一帧按这一帧的 `g_Time` 算 s（`shakeOffset`，`height` 是场景的正交高），连同 `state.general.zoom`
  * 交给 `GpuScene.setCamera`，并记下 s；`eyes` 按帧序就是 `replayParallax` 的每帧 eye。回放的 n−1 帧经 `replayParticles` 的
  * `afterStep` 调，读回的那一帧由调用方在步进之后、`setParallax` 之前调。和渲染器一样，每一帧的粒子先用上一帧的相机步进（第一帧是
  * 加载时的：s 为 0、编译期的 zoom），再换上这一帧的。
+ * 透视场景（P5d 步骤 2，给了 `perspective`）：同渲染器，每一帧按路径状态求来源姿态、再按这一帧的 dt 推进（第 k 次调用取 `dts[k]`，
+ * 没给时 0），加三维抖动（`g_Time` 是 `time`），交给 `setCamera` 的是透视那一种；`eyes` 记透视相机的 eye.xy（视差点用它，W = H = 0）。
+ * `compute` 只算不交（`renderFrame` 的 profile 帧要先步进粒子再交），`path` 是推进之后的路径状态。
  */
 export function frameCamera(
   scene: Pick<GpuScene, "setCamera">,
   state: SceneState,
   height: number,
-): { apply: (time: number) => [number, number]; eyes: [number, number][] } {
+  perspective?: ProbePerspective,
+  dts?: readonly number[],
+): {
+  apply: (time: number) => [number, number];
+  compute: (time: number, dt?: number) => { camera: SceneCamera; eye: [number, number] };
+  eyes: [number, number][];
+  readonly path: CameraPathState;
+} {
   const eyes: [number, number][] = [];
+  let path = perspective?.path ?? initialCameraPathState();
+  let index = 0;
+  const compute = (time: number, dt?: number): { camera: SceneCamera; eye: [number, number] } => {
+    const step = dt ?? dts?.[index] ?? 0;
+    index++;
+    if (!perspective) {
+      const shake = shakeOffset(state.general, time, height);
+      return { camera: { shake, zoom: state.general.zoom }, eye: shake };
+    }
+    const { pose, next } = stepCameraSource(perspective.camera, path, step);
+    path = next;
+    const frame = perspectiveCamera({
+      pose,
+      fields: state.general,
+      time,
+      width: perspective.size[0],
+      height: perspective.size[1],
+    });
+    return { camera: { kind: "perspective", frame }, eye: [frame.eye[0], frame.eye[1]] };
+  };
   return {
     eyes,
+    get path() {
+      return path;
+    },
+    compute,
     apply(time) {
-      const shake = shakeOffset(state.general, time, height);
-      scene.setCamera({ shake, zoom: state.general.zoom });
-      eyes.push(shake);
-      return shake;
+      const { camera, eye } = compute(time);
+      scene.setCamera(camera);
+      eyes.push(eye);
+      return eye;
     },
   };
 }
@@ -348,8 +403,10 @@ export interface ReadbackReplayOptions {
   pointers: ReplayPointers;
   /** 视差点的起点：加载时的状态（`renderFrame` 的 `profile` 帧推进过的接着用）。 */
   parallax: ParallaxState;
-  /** 场景的正交尺寸 W、H（视差点的单位；抖动按 H 算）。 */
+  /** 场景的正交尺寸 W、H（视差点的单位；抖动按 H 算）。透视场景是 (0, 0)。 */
   size: readonly [number, number];
+  /** 透视场景的探针相机（P5d 步骤 2，`probePerspective`）：按 `particles.dts` 推路径状态，不移动对象。正交场景不给。 */
+  perspective?: ProbePerspective;
 }
 
 /**
@@ -369,7 +426,7 @@ export function replayReadback(
   const { particles, pointers } = options;
   const [width, height] = options.size;
   const last = pointers.pointers.length - 1;
-  const shake = frameCamera(scene, state, height);
+  const shake = frameCamera(scene, state, height, options.perspective, particles?.dts);
   const { time, frametime } = replayParticles(
     scene,
     state,
@@ -392,7 +449,7 @@ export function replayReadback(
     shake.eyes,
     pointers.pointers,
   );
-  scene.setParallax(drawParallax(parallax, state.general), state);
+  scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
   scene.update(
     {
       time,
@@ -503,10 +560,14 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
   const device = gpu.device;
   try {
     const { width, height } = bundle.general;
+    // 透视场景（P5d 步骤 2）按窗口尺寸渲染（同渲染器按画布），没给窗口时 1920×1080
+    const target: [number, number] | undefined = bundle.general.perspective
+      ? [...(options.window ?? [1920, 1080])]
+      : undefined;
     // 光标（P5a 收尾）：不给 pointers 时固定在场景中心；给了时逐帧取，窗口和场景不同尺寸时按 fill 换算，同 `renderFrame`
     const pointers = replayPointers(
       { pointers: options.pointers, window: options.window },
-      [width, height],
+      target ?? [width, height],
       options.particles?.dts.length,
     );
     const state = SceneState.fromBundle(bundle);
@@ -514,6 +575,7 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
       ignoreUnsupported: true,
       // 预热用第 0 帧的 cursor（不给 pointers 时是场景中心，同 `GpuScene` 的缺省）
       particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
+      size: target,
     });
     try {
       // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同 `renderFrame` 与渲染器），四角带读回帧的相机。
@@ -524,8 +586,9 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
         particles: options.particles,
         time: 0,
         pointers,
-        parallax: initialParallaxState(width, height),
+        parallax: initialParallaxState(width, height, !!target),
         size: [width, height],
+        perspective: target && probePerspective(bundle, target),
       });
       const wanted = scene
         .particleStats()

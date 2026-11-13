@@ -22,6 +22,9 @@
  * - 读回画布（kabegame-chromium 第 5 批）：`renderFrame` 收 `canvas: [宽, 高]` 时，读回那一帧编码完场景之后，用产品上屏的同一份
  *   着色器与采样器（`render/blit.ts`）按 `fill` 把场景目标铺进这么大的 `rgba8unorm` 纹理、读回它；光标的换算窗口是 `window ?? canvas`。
  *   只改读回、不改渲染（`g_Screen` 等仍按场景目标算）。不给 `canvas` 时读回场景目标，逐字节同以前。
+ * - 透视相机（P5d 步骤 2）：透视场景按画布尺寸渲染，场景目标取 `canvas ?? window ?? [1920, 1080]`；回放按 `particles.dts` 推路径
+ *   状态（同渲染器，没给 dts 时 t = 0），读回的那一帧按推到那时的状态求相机，抖动按它的 `g_Time`（`times` 的最后一项）；视差点
+ *   W = H = 0、不移动对象（`particleCorners.ts` 的 `frameCamera` / `replayReadback`）。`hostRenderFrame` 按路径起点求相机。
  * - 脚本值（kabegame-chromium 第 6 批）：探针不跑场景脚本，`renderFrame` 收 `scriptValues`（某对象某字段的字段脚本在读回那一帧返回的
  *   值），建好场景之后、回放之前经字段脚本的绑定目标写进 `SceneState`（`scriptValues.ts`，同宿主的脚本写回）。不给时逐字节同以前。
  * - 频谱（P4e 步骤 4）：`renderFrame` / `particleCorners` 的 `particles.audio` 与 `particleTrack` 的 `audio` 收逐帧 16 段左右
@@ -35,6 +38,7 @@
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
 import type { SceneBundle } from "../compile/bundle";
+import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
@@ -51,12 +55,19 @@ import {
 } from "../render/blit";
 import { acquireGpu } from "../render/device";
 import { scenePlacement } from "../render/layout";
+import { initialCameraPathState, perspectiveCamera, stepCameraSource } from "../render/camera";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
 import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
 import type { SceneHost } from "../host";
-import { replayParticleOptions, replayReadback, type ParticleReplay } from "./particleCorners";
+import {
+  frameCamera,
+  probePerspective,
+  replayParticleOptions,
+  replayReadback,
+  type ParticleReplay,
+} from "./particleCorners";
 import { prepareProbeTexts } from "./probeTexts";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 import { applyScriptValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
@@ -362,11 +373,16 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     videosReady.catch(() => {});
     const state = SceneState.fromBundle(bundle);
     const { width: sceneWidth, height: sceneHeight } = bundle.general;
+    // 透视场景（P5d 步骤 2）按画布尺寸渲染：场景目标取 `canvas ?? window ?? [1920, 1080]`（同渲染器的 `fullResolution`）
+    const target: [number, number] | undefined = bundle.general.perspective
+      ? [...(canvas ?? cursorWindow ?? [1920, 1080])]
+      : undefined;
+    const perspective = target && probePerspective(bundle, target);
     // 每一帧的 g_PointerPosition 与 cursor（P5a 收尾）：只给 pointer（或都不给）时每帧相同，同加逐帧指针之前。
     // 换算窗口是 `window ?? canvas`（第 5 批）：读回画布就是模拟的壁纸窗口
     const pointers = replayPointers(
       { pointer: options.pointer, pointers: options.pointers, window: cursorWindow },
-      [sceneWidth, sceneHeight],
+      target ?? [sceneWidth, sceneHeight],
       options.particles?.dts.length,
     );
     const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], {
@@ -374,12 +390,15 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
       texts: texts.texts,
       relayout: texts.relayout,
+      size: target,
     });
     // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
     const pointer = pointers.pointers[0];
     const cursor = pointers.cursors[0];
     const parallaxFrame = { pointer, width: sceneWidth, height: sceneHeight };
-    let parallax = initialParallaxState(sceneWidth, sceneHeight);
+    let parallax = initialParallaxState(sceneWidth, sceneHeight, !!perspective);
+    // profile 帧的相机（透视场景的路径状态接着交给回放，同视差点）
+    const profileCamera = frameCamera(scene, state, sceneHeight, perspective);
     try {
       // 视频（P9a 步骤 3）：每段都 seek 好、当前帧可用之后才接上，profile 帧与读回那一帧的每个 draw 都拷同一帧；没有视频纹理时
       // 没有 draw 会问它，逐字节同以前。读不到 / 解码失败的那段不交出元素（透明），超过总时限在这里抛错
@@ -399,15 +418,16 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           // 顺序同渲染器（P4c 步骤 4）：先步进粒子再写 uniform；探针没有脚本，两次 sync 之间没有改动，省掉第二次。
           // 没有脚本，视差在步进之后、update 之前交给场景，结果同渲染器。抖动（P5a 步骤 3）：视差点带这一帧的 s，粒子先用上一帧的
           // s 步进，之后才设这一帧的（同渲染器）；缩放随同一个相机（步骤 4）
-          const shake = shakeOffset(state.general, startTime + i / 60, sceneHeight);
+          // 透视场景（P5d 步骤 2）：同一时刻按路径状态求相机并推进，eye 是透视相机的 eye.xy
+          const { camera, eye } = profileCamera.compute(startTime + i / 60, 1 / 60);
           parallax = advanceParallax(
             parallax,
-            parallaxInput(state.general, { ...parallaxFrame, frametime: 1 / 60, eye: shake }),
+            parallaxInput(state.general, { ...parallaxFrame, frametime: 1 / 60, eye }),
           );
           scene.sync(state);
           scene.stepParticles(1 / 60, startTime + i / 60, state, cursor);
-          scene.setCamera({ shake, zoom: state.general.zoom });
-          scene.setParallax(drawParallax(parallax, state.general), state);
+          scene.setCamera(camera);
+          scene.setParallax(drawParallax(parallax, state.general, !!perspective), state);
           scene.update(
             {
               time: startTime + i / 60,
@@ -446,6 +466,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         pointers,
         parallax,
         size: [sceneWidth, sceneHeight],
+        perspective: perspective && { ...perspective, path: profileCamera.path },
       });
       const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
@@ -584,14 +605,26 @@ export async function hostRenderFrame(
   const device = renderer.device;
   const encoder = device.createCommandEncoder({ label: "probe host frame" });
   // 视差点的单位是场景的正交尺寸（`bundle.general`），没有 bundle 时退回场景目标尺寸
-  const { width, height } = host.devScene.bundle?.general ?? scene;
-  const shake = shakeOffset(state.general, time, height);
-  scene.setCamera({ shake, zoom: state.general.zoom });
+  const general = host.devScene.bundle?.general;
+  const { width, height } = general ?? scene;
+  // 透视场景（P5d 步骤 2）：按路径起点求相机（同 `renderFrame` 不给 dts），抖动按 `time`；视差点 W = H = 0、不移动对象
+  const perspective = !!general?.perspective;
+  let eye: [number, number];
+  if (perspective) {
+    const { pose } = stepCameraSource(general!.camera ?? { ...DEFAULT_CAMERA, paths: [] }, initialCameraPathState(), 0);
+    const frame = perspectiveCamera({ pose, fields: state.general, time, width: scene.width, height: scene.height });
+    scene.setCamera({ kind: "perspective", frame });
+    eye = [frame.eye[0], frame.eye[1]];
+  } else {
+    const shake = shakeOffset(state.general, time, height);
+    scene.setCamera({ shake, zoom: state.general.zoom });
+    eye = shake;
+  }
   const parallax = advanceParallax(
-    initialParallaxState(width, height),
-    parallaxInput(state.general, { pointer: [0.5, 0.5], frametime: 0, width, height, eye: shake }),
+    initialParallaxState(width, height, perspective),
+    parallaxInput(state.general, { pointer: [0.5, 0.5], frametime: 0, width, height, eye }),
   );
-  scene.setParallax(drawParallax(parallax, state.general), state);
+  scene.setParallax(drawParallax(parallax, state.general, perspective), state);
   scene.sync(state);
   // 帧时间 0：粒子不步进，读回的是当前状态（`stepParticles` 只记下 cursor，同以前 `update` 里的那一步）
   scene.stepParticles(0, time, state, [0.5, 0.5]);
@@ -711,7 +744,11 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
     force: true,
   });
   try {
-    const size: [number, number] = [bundle.general.width, bundle.general.height];
+    // 透视场景（P5d 步骤 2）：跟随点的反投影还没接透视相机（没给 `size` 时跟随点恒为 (0, 0)，不算出 NaN），给了 cursors 时报错
+    const perspective = !!bundle.general.perspective;
+    if (perspective && options.cursors)
+      throw new Error("透视场景的 particleTrack 还不支持 cursors（跟随点要按透视相机反投影）");
+    const size: [number, number] | undefined = perspective ? undefined : [bundle.general.width, bundle.general.height];
     return particleTrack({
       layers: bundle.layers,
       dts: options.dts,
@@ -722,7 +759,7 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       random: options.random,
       audio: options.audio,
       // 窗口归一化 → 光标下的场景纹理坐标（P5a 收尾，换算放在 dev 里，`particles/track.ts` 只收场景坐标）
-      cursors: options.cursors && sceneCursors(options.cursors, size, options.window),
+      cursors: options.cursors && size && sceneCursors(options.cursors, size, options.window),
       size,
       // 跟随点按上一帧的抖动反投影（P5a 步骤 3），投影带缩放（步骤 4），同渲染器
       shake: bundle.general.fields,

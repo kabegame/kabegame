@@ -33,8 +33,8 @@ import { acquireGpu } from "../render/device";
 import { scenePlacement } from "../render/layout";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene } from "../render/scene";
-import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
+import { frameCamera, probePerspective } from "./particleCorners";
 import { halfBitsToFloat, parseDds } from "./dds";
 import { storeProbeBytes } from "./probe";
 import { checkCanvas, windowPointer, type Point } from "./replayPointers";
@@ -323,9 +323,13 @@ export async function fluidProbe(options: FluidProbeOptions): Promise<FluidProbe
   try {
     if (canvas) checkCanvas(canvas, device.limits.maxTextureDimension2D);
     const { width: sceneWidth, height: sceneHeight } = bundle.general;
+    // 透视场景（P5d 步骤 2）按窗口尺寸渲染（同渲染器按画布），没给时 1920×1080
+    const target: [number, number] | undefined = bundle.general.perspective
+      ? [...(options.window ?? canvas ?? [1920, 1080])]
+      : undefined;
     const { frames, readAt } = planFluidFrames(
       options.frames,
-      [sceneWidth, sceneHeight],
+      target ?? [sceneWidth, sceneHeight],
       options.window ?? canvas,
       options.readAt,
     );
@@ -335,6 +339,7 @@ export async function fluidProbe(options: FluidProbeOptions): Promise<FluidProbe
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
       ignoreUnsupported: force,
       particles: { seed: 1, passes: 1, cursor: frames[0].cursor },
+      size: target,
     });
     try {
       const targetsNow = () => {
@@ -373,13 +378,15 @@ export async function fluidProbe(options: FluidProbeOptions): Promise<FluidProbe
       const wantedFbos = options.fbos ?? [...initial.fbos.keys()];
       for (const name of wantedFbos) if (!initial.fbos.has(name)) throw new Error(`effect 里没有 fbo ${name}`);
 
-      let parallax = initialParallaxState(sceneWidth, sceneHeight);
+      let parallax = initialParallaxState(sceneWidth, sceneHeight, !!target);
+      // 相机（P5a 步骤 3、4；透视场景 P5d 步骤 2：路径按每帧的帧时间推进）
+      const cameras = frameCamera(scene, state, sceneHeight, target && probePerspective(bundle, target));
       const reads: FluidProbeResult["reads"] = [];
       for (let i = 0; i < frames.length; i++) {
         const frame = frames[i];
         const number = i + 1;
         // 顺序同渲染器与 renderFrame 的 profile 帧：视差点带本帧抖动推进 → sync → 粒子用上一帧的相机步进 → 设本帧相机 → 视差 → uniform
-        const shake = shakeOffset(state.general, frame.time, sceneHeight);
+        const { camera, eye } = cameras.compute(frame.time, frame.frametime);
         parallax = advanceParallax(
           parallax,
           parallaxInput(state.general, {
@@ -387,13 +394,13 @@ export async function fluidProbe(options: FluidProbeOptions): Promise<FluidProbe
             frametime: frame.frametime,
             width: sceneWidth,
             height: sceneHeight,
-            eye: shake,
+            eye,
           }),
         );
         scene.sync(state);
         scene.stepParticles(frame.frametime, frame.time, state, frame.cursor);
-        scene.setCamera({ shake, zoom: state.general.zoom });
-        scene.setParallax(drawParallax(parallax, state.general), state);
+        scene.setCamera(camera);
+        scene.setParallax(drawParallax(parallax, state.general, !!target), state);
         scene.update(
           {
             time: frame.time,

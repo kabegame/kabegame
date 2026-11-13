@@ -49,6 +49,7 @@ import {
   shapeIssues,
   TEXT_UNIFORMS,
   usesLighting,
+  usesPerspectiveParticles,
 } from "./features";
 import {
   currentProperties,
@@ -97,6 +98,7 @@ import {
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
 import { collectScripts, type SceneScripts } from "./scripts";
+import { compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
@@ -106,8 +108,20 @@ import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
 
 export interface SceneGeneral {
+  /**
+   * 正交投影的宽高 W、H（`orthogonalprojection` 的 `width` / `height`；`auto: true` 没写宽高时是占位 1920×1080）。透视场景是 WPE 的
+   * 值 0（rea-p5-camera 2.1【确】：W、H 只由 `orthogonalprojection` 写），场景目标改按画布尺寸（P5d 步骤 2，`GpuScene.build` 的
+   * `size`）。
+   */
   width: number;
   height: number;
+  /**
+   * 透视场景（P5d 步骤 2）：`isOrthographic` 不成立（rea-p4a「基础」【确】：`orthogonalprojection` 是对象，且 `auto: true` 或宽高都
+   * 非 0 才是正交）。能力表、`SCENE_ORTHO` 宏、粒子缺省值、渲染器都读这一处。缺省（手写的 bundle）为正交。
+   */
+  perspective?: boolean;
+  /** 透视场景的基准相机与路径（`compile/camera.ts`）；正交场景为 null 或缺省（视图恒为单位阵，L2）。 */
+  camera?: SceneCameraJson | null;
   /** `GENERAL_FIELDS` 的生效值，`SceneState.general` 的起始值。 */
   fields: GeneralValues;
   /** 清屏当前关着，或绑了属性、挂了脚本：加载就建第二张场景目标（L11）。 */
@@ -434,11 +448,12 @@ export interface SceneLayer {
   fullscreen: boolean;
   /**
    * fullscreen 图层的合成 RT 尺寸（P5b 步骤 3）：槽 0 是静态纹理时取它的图像尺寸；槽 0 是运行时 RT（fullscreenlayer 的
-   * `_rt_FullFrameBuffer`）或没有纹理时取场景尺寸 `[general.width, general.height]`（WPE 取窗口尺寸，我们离屏按场景分辨率渲染，
-   * 对应的就是场景目标；p5-REPORT「`_rt_FullFrameBuffer` 的尺寸」）。不除纹理降级系数。非 fullscreen 为 null，合成 RT 照
+   * `_rt_FullFrameBuffer`）或没有纹理时记 `"scene"`，渲染器建合成 RT 时取场景目标尺寸（WPE 取窗口尺寸，我们离屏渲染，对应的就是
+   * 场景目标；p5-REPORT「`_rt_FullFrameBuffer` 的尺寸」）。P5d 步骤 2 起不在编译期取 `[general.width, general.height]`：透视场景的
+   * 场景尺寸是 0、场景目标按画布定；正交场景两者相同（没超设备上限时字节不变）。不除纹理降级系数。非 fullscreen 为 null，合成 RT 照
    * `compositeSize` 的旧规则。
    */
-  fullscreenSize: [number, number] | null;
+  fullscreenSize: [number, number] | "scene" | null;
   /**
    * 对象 `copybackground`（缺省 true，只有 JSON false 才关，P5b 步骤 2）：组合层的基础 pass 用基础材质（composelayer 着色器）把层
    * 背后的快照铺进合成 RT；关掉时不画基础材质、合成 RT 0 清成 (0, 0, 0, 0)（`p5b-cl` 的 CL2）。只对组合层起作用，别的图层上中性。
@@ -660,8 +675,8 @@ export function assignGroups(
  *   WPE 取整（`0x1401875eb`）。排在纹理之前，组合层的槽 0 是 `_rt_FullFrameBuffer`、本来就没有纹理；
  * - 否则槽 0 纹理的图像尺寸；没有纹理时不覆盖。
  * WPE 的 `autosize` 在纹理就绪时覆盖对象 `size`，我们没有异步的纹理就绪，编译期按同一顺序一次算完。精灵表的帧尺寸、用户纹理的参考
- * 尺寸不在这里：前者随图像层帧动画（`tex:animation`），后者照报（`material:usertextures`）。透视场景（正交投影为空）里 `projectlayer`
- * 的尺寸来源读码未知，那种场景整张报 `camera:perspective`，这里按渲染器的场景尺寸取。
+ * 尺寸不在这里：前者随图像层帧动画（`tex:animation`），后者照报（`material:usertextures`）。透视场景里正交投影宽高是 0，
+ * `projectlayer` 没测过（语料 0），`compileImageModel` 报 `camera:perspective:projectlayer`，这里照算（0）。
  * `fullscreen` 模型也不在这里：WPE 在纹理就绪时先判它（几何 2×2，排在 `autosize` 之前），`compileScene` 在调本函数之前就定了
  * （`SceneLayer.fullscreen`，P5b 步骤 3）。
  */
@@ -686,7 +701,8 @@ export function imageLayerSize(
  * 形状对象的尺寸 `Sx × Sy`（P8 步骤 2，rea-p8-layer 1.3，p8-REPORT `p8-shape` 的 S1、S10）：加载时先写 `(正交高, 正交高)`（不是宽 × 高，
  * 形状虚表 +0x40），对象 JSON 写了 `size` 再覆盖（基类的 setter `0x1401a3fc0`：字符串按空格拆两个 float、数字铺满两维、`null` 不写）。
  * `value` 是解析后的值（`{user}` 已换成属性值）；字符串里缺的分量保持正交高（推断：setter 只写读到的分量，语料 0 个形状写 `size`），
- * 别的类型不写。`orthographicHeight` 是 `SceneGeneral.height`（透视场景里 WPE 取 1，那种场景整张另报 `camera:perspective`）。
+ * 别的类型不写。`orthographicHeight` 是 `SceneGeneral.height`（透视场景里 WPE 取 1，没测过、语料 0，能力表报
+ * `camera:perspective:shape`，这里照算）。
  */
 export function shapeLayerSize(value: SceneScalar | undefined, orthographicHeight: number): number[] {
   const h = orthographicHeight;
@@ -926,10 +942,15 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const fields = generalFields(general, properties, bindings);
   /** 声音表（P6a 步骤 1）：对象循环里按 `objects` 顺序填。 */
   const sounds: SceneSound[] = [];
+  /** 投影类型只在这里判一次（P5d 步骤 2）：能力表、`SCENE_ORTHO`、粒子缺省值、渲染器都读 `general.perspective`。 */
+  const orthographic = isOrthographic(general);
   const bundle: SceneBundle = {
     general: {
-      width: projection.width ?? 1920,
-      height: projection.height ?? 1080,
+      // 透视场景是 WPE 的 0（rea-p5-camera 2.1）；`auto: true` 的正交场景没写宽高时仍是占位 1920×1080（`q4-eye-auto`，本机 0 张）
+      width: orthographic ? (projection.width ?? 1920) : 0,
+      height: orthographic ? (projection.height ?? 1080) : 0,
+      perspective: !orthographic,
+      camera: orthographic ? null : await compileCamera(scene, fs, unsupported),
       fields,
       clearVariable: !fields.clearenabled || isUserBinding(general.clearenabled) || isScriptValue(general.clearenabled),
       postprocess,
@@ -961,7 +982,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     input.translator,
     unsupported,
     litDefines(counts),
-    engineDefines(postprocess.hdr, !!general.orthogonalprojection),
+    engineDefines(postprocess.hdr, orthographic),
   );
   /** 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定。 */
   let lights: Record<string, number[]> | null = null;
@@ -973,8 +994,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     ));
   // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
   const { parents } = resolveParents(scene.objects);
-  /** 粒子字段的缺省值按正交 / 透视选两套（`rea-p4a.md`「基础」）；透视场景另报 `camera:perspective`。 */
-  const orthographic = isOrthographic(general);
+  // 粒子字段的缺省值按正交 / 透视选两套（`rea-p4a.md`「基础」），读上面的 `orthographic`
   const textureIndex = new Map<string, number>();
   /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
   const textureIssues = new Map<number, string[]>();
@@ -1115,6 +1135,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const system = await readParticleJson(object.particle);
     if (!system) return;
     layer.particle = await compileParticleSystem(index, object, system, object.particle as string, null, 0);
+    // 透视场景里的透视粒子（`flags & 4`）：读码说 W = H = 0 时覆盖的 fov 退化（rea-p5-camera 7.2），步骤 0 只测了 MVP，照报
+    if (bundle.general.perspective && usesPerspectiveParticles(layer.particle))
+      unsupported.add("camera:perspective:particle");
   }
 
   /** 读一个粒子 JSON；读不到报 `particle:missing:<文件>`，不是对象报 `particle:parse:<文件>`，都返回 null。 */
@@ -1621,12 +1644,15 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     if (layer.fullscreen) {
       // fullscreen（P5b 步骤 3）排在 autosize 之前（rea-p5-modelflags §7：纹理就绪时 fullscreen 先判，取纹理图像尺寸、几何 2×2）。
       // 两份尺寸：几何是 2×2 的 NDC 四边形；合成 RT 取槽 0 静态纹理的图像尺寸，槽 0 是运行时 RT（fullscreenlayer 的
-      // `_rt_FullFrameBuffer`，在 pass 的 `runtime` 里）或没有纹理时取场景尺寸
+      // `_rt_FullFrameBuffer`，在 pass 的 `runtime` 里）或没有纹理时取场景目标尺寸（渲染时定，P5d 步骤 2）
       layer.size = [2, 2];
-      layer.fullscreenSize = baseTexture
-        ? [baseTexture.width, baseTexture.height]
-        : [bundle.general.width, bundle.general.height];
-    } else layer.size = imageLayerSize(model, layer.size, baseTexture, [bundle.general.width, bundle.general.height]);
+      layer.fullscreenSize = baseTexture ? [baseTexture.width, baseTexture.height] : "scene";
+    } else {
+      // 透视场景的正交投影宽高是 0，`projectlayer` 的 autosize 没测过（P5d 步骤 2，语料 0），照报
+      if (bundle.general.perspective && modelFlag(model, "autosize") && modelFlag(model, "projectlayer"))
+        unsupported.add("camera:perspective:projectlayer");
+      layer.size = imageLayerSize(model, layer.size, baseTexture, [bundle.general.width, bundle.general.height]);
+    }
     return true;
   }
 
@@ -1769,6 +1795,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     // 组（P5b 步骤 4）：有对象的父指向这个组合层。子孙由它按局部正交画进合成 RT、不在顶层画（`assignGroups` 在全部对象之后定归属）
     const hasChildren = layer.passthroughModel && parents.includes(index);
+    // 组的局部正交在透视场景里没测过（P5d 步骤 2），照报
+    if (hasChildren && bundle.general.perspective) unsupported.add("camera:perspective:group");
 
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;

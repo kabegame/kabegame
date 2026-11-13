@@ -539,27 +539,27 @@ const f1 = (id: number, extra: Record<string, unknown> = {}) => ({
 });
 
 describe("compileScene：fullscreen 的两份尺寸（P5b 步骤 3）", () => {
-  it("fullscreenlayer（槽 0 是 _rt_FullFrameBuffer）：size 固定 2×2，fullscreenSize 取场景尺寸，不报", async () => {
+  it('fullscreenlayer（槽 0 是 _rt_FullFrameBuffer）：size 固定 2×2，fullscreenSize 记 "scene"（渲染时取场景目标尺寸），不报', async () => {
     const bundle = await compileObjects([f1(11)], {}, FULLSCREEN_FILES);
     expect(bundle.unsupported).toEqual([]);
     expect(bundle.layers[0]).toMatchObject({
       fullscreen: true,
       passthroughModel: true,
       size: [2, 2],
-      fullscreenSize: [1920, 1080],
+      fullscreenSize: "scene",
     });
     // 槽 0 没有静态纹理，在运行时表里
     expect(bundle.layers[0].passes[0]).toMatchObject({ runtime: { 0: "_rt_FullFrameBuffer" }, framebuffer: true });
     expect(bundle.layers[0].passes[0].textures[0]).toBeUndefined();
   });
 
-  it("fullscreenlayer 在 1280×720 的场景里：fullscreenSize 跟着场景尺寸", async () => {
+  it('fullscreenlayer 在 1280×720 的场景里：fullscreenSize 同样记 "scene"（P5d 步骤 2 起渲染时取场景目标尺寸）', async () => {
     const bundle = await compileObjects(
       [f1(11)],
       { orthogonalprojection: { width: 1280, height: 720 } },
       FULLSCREEN_FILES,
     );
-    expect(bundle.layers[0]).toMatchObject({ size: [2, 2], fullscreenSize: [1280, 720] });
+    expect(bundle.layers[0]).toMatchObject({ size: [2, 2], fullscreenSize: "scene" });
   });
 
   it("非组合层的 fullscreen 模型、槽 0 是静态纹理：fullscreenSize 取图像尺寸（48×40，不是纹理尺寸 64×64），size 2×2", async () => {
@@ -585,7 +585,7 @@ describe("compileScene：fullscreen 的两份尺寸（P5b 步骤 3）", () => {
     }
   });
 
-  it("槽 0 没有纹理（材质不写 textures）：fullscreenSize 取场景尺寸", async () => {
+  it('槽 0 没有纹理（材质不写 textures）：fullscreenSize 记 "scene"', async () => {
     const bundle = await compileObjects(
       [{ id: 10, image: "models/notex.json", origin: "960 540 0" }],
       {},
@@ -595,7 +595,7 @@ describe("compileScene：fullscreen 的两份尺寸（P5b 步骤 3）", () => {
       },
     );
     expect(bundle.unsupported).toEqual([]);
-    expect(bundle.layers[0]).toMatchObject({ fullscreen: true, size: [2, 2], fullscreenSize: [1920, 1080] });
+    expect(bundle.layers[0]).toMatchObject({ fullscreen: true, size: [2, 2], fullscreenSize: "scene" });
   });
 
   it("`fullscreen: 1` 不算：普通图像层，尺寸照 imageLayerSize，fullscreenSize 为 null", async () => {
@@ -636,7 +636,7 @@ const utilMaterial = join(root ?? "", "assets", "materials", "util", "fullscreen
 describe.skipIf(!root || !existsSync(utilModel("fullscreenlayer")) || !existsSync(utilMaterial))(
   "WPE 自带的 fullscreenlayer（assets/models/util、assets/materials/util）",
   () => {
-    it("原样的模型与材质：不报，size 2×2，fullscreenSize 取场景尺寸", async () => {
+    it('原样的模型与材质：不报，size 2×2，fullscreenSize 记 "scene"', async () => {
       const bundle = await compileObjects(
         [f1(11)],
         {},
@@ -651,7 +651,7 @@ describe.skipIf(!root || !existsSync(utilModel("fullscreenlayer")) || !existsSyn
         fullscreen: true,
         passthroughModel: true,
         size: [2, 2],
-        fullscreenSize: [1920, 1080],
+        fullscreenSize: "scene",
       });
     });
   },

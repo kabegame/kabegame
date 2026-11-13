@@ -347,6 +347,49 @@ describe("SceneHost：壁纸样式与留白", () => {
   });
 });
 
+describe("SceneHost：透视场景的分辨率变化（P5d 步骤 2）", () => {
+  /** `SceneRenderer.create` 收到的回调（第 i 次建渲染器）。 */
+  const optionsAt = (i: number) =>
+    rendererCreate.mock.calls[i][0] as { onRenderSizeChange?: () => void; onLost?: (reasons: string[]) => void };
+
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    rendererCreate.mockReset();
+    rendererPointer.load.mockClear();
+    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("onRenderSizeChange：整场重新编译、再加载一次（同一个渲染器）；渲染器换掉之后旧回调不触发重载", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(rendererPointer.load).toHaveBeenCalledOnce());
+    expect(compile).toHaveBeenCalledOnce();
+    const first = optionsAt(0);
+    first.onRenderSizeChange!();
+    await vi.waitFor(() => expect(rendererPointer.load).toHaveBeenCalledTimes(2));
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(rendererCreate).toHaveBeenCalledOnce();
+    // 设备丢失：宿主丢掉这个渲染器、建新的并重新加载
+    first.onLost!(["webgpu:device-lost:test"]);
+    await vi.waitFor(() => expect(rendererPointer.load).toHaveBeenCalledTimes(3));
+    expect(rendererCreate).toHaveBeenCalledTimes(2);
+    expect(compile).toHaveBeenCalledTimes(3);
+    // 旧渲染器的回调：rendererTask 已不是它，不重载
+    first.onRenderSizeChange!();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(3);
+    expect(rendererPointer.load).toHaveBeenCalledTimes(3);
+    // 新渲染器的回调照常重载
+    optionsAt(1).onRenderSizeChange!();
+    await vi.waitFor(() => expect(rendererPointer.load).toHaveBeenCalledTimes(4));
+    expect(compile).toHaveBeenCalledTimes(4);
+    host.dispose();
+  });
+});
+
 describe("SceneHost：音频订阅与脚本音频缓冲", () => {
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);

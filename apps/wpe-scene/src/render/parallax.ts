@@ -15,7 +15,7 @@
  * - **初值**：加载时 P = (W/2 + 2, H/2 + 2)，开场有一段从这里滑向指针的过渡（`p5a-delay29` 开窗 4 s 后还在途中）。多出的 2 是相机的
  *   缺省 eye：WPE 加载末尾按 `[G+0xf0]` + (W, H)·0.5 写初值（`0x14018870c`），那时场景的 `camera.eye` 还没套进去，`G+0xf0` 是
  *   函数开头写的缺省 (2, 2, 2)（`0x140186db3`）；之后每帧的目标点用真实的 eye，这 2 像素按 k 衰减（P5a 收尾 `p5a-wk-prop` 实测，
- *   开场残差折回第 0 帧四次都是 (2.00, 2.00)，p5-REPORT「收尾走查」）。透视场景 WPE 的初值是 0，这里只有正交。
+ *   开场残差折回第 0 帧四次都是 (2.00, 2.00)，p5-REPORT「收尾走查」）。透视场景 WPE 的初值是 (0, 0)（6.2，P5d 步骤 2）。
  *
  * W、H 是场景的正交尺寸（`SceneGeneral.width/height`，不是可能被缩小的渲染目标），偏移是场景单位（`2381978484`：8192×5479 的场景
  * 放进 16:9 窗口，偏移仍按场景单位）。eye 是正交相机的 eye.xy，就是本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`），没有抖动时为 0；
@@ -26,7 +26,12 @@
  *
  * 渲染器与 dev 探针共用：渲染器每帧在粒子与脚本之前 `advanceParallax`，脚本之后按当时的开关与 amount 取 `drawParallax` 交给
  * `GpuScene.setParallax`（WPE 绘制时才读 amount 与开关，rea-p5-camera.md 6.3）；探针按 dt 序列从加载起逐帧推进同一个状态
- * （`replayParallax`）。透视场景 WPE 不移动对象（6.1），透视整张另报 `camera:perspective`，这里只有正交。
+ * （`replayParallax`）。
+ *
+ * **透视场景**（P5d 步骤 2）：不移动对象（6.1，`p5d-persp-b` 实测，`drawParallax` 返回 null），视差点与 `g_ParallaxPosition` 照常
+ * 每帧算：W = H = 0（`SceneGeneral` 的值），目标点就是 eye.xy（透视相机的 eye，含路径与抖动），P 初值 (0, 0)；`g_ParallaxPosition`
+ * 是 P / 0，WPE 不钳成 0（步骤 0 推翻了【推】：开视差时读到 NaN），所以 P 恰为 0 的分量是 NaN、否则钳成 0 或 1。正交场景 W、H 恒大于
+ * 0，不会产生 NaN，行为不变。
  */
 import type { GeneralValues } from "../compile/bindings";
 
@@ -42,9 +47,9 @@ export interface ParallaxInput {
   mouseInfluence: number;
   /** `g_PointerPosition`（左上原点、y 向下，可能超出 0…1）。 */
   pointer: readonly [number, number];
-  /** 正交相机的 eye.xy：本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`），没有抖动时为 0。 */
+  /** 正交相机的 eye.xy：本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`），没有抖动时为 0。透视场景是透视相机的 eye.xy（P5d 步骤 2）。 */
   eye: readonly [number, number];
-  /** 场景的正交尺寸 W、H。 */
+  /** 场景的正交尺寸 W、H（透视场景是 0）。 */
   width: number;
   height: number;
   /** 本帧的帧时间（补画帧为 0）。 */
@@ -81,17 +86,20 @@ export interface SceneParallax {
   amount: number;
 }
 
-/** 钳到 0…1；NaN 当 0（透视场景 W = 0 时 WPE 除出 NaN，钳制分支把它变成 0，rea-p5-camera.md 6.2【推】）。 */
+/**
+ * 钳到 0…1；NaN 原样保留（透视场景 W = 0 时 WPE 除出 NaN，`g_ParallaxPosition` 读到的就是 NaN：P5d 步骤 0 实测推翻了
+ * rea-p5-camera.md 6.2 的【推】「钳成 0」）。±∞ 照常钳成 1 / 0。
+ */
 function clamp01(value: number): number {
-  return value > 0 ? Math.min(1, value) : 0;
+  return Number.isNaN(value) ? value : value > 0 ? Math.min(1, value) : 0;
 }
 
 /** WPE 加载时相机 eye 的缺省 xy（`0x140186db3` 写的 (2, 2, 2)），视差点初值按它算、不看场景的 `camera.eye`。 */
 const LOAD_EYE = 2;
 
-/** 加载时的 P：场景中心加相机缺省 eye 的 (2, 2)（见文件头「初值」）。 */
-export function initialParallaxPoint(width: number, height: number): [number, number] {
-  return [LOAD_EYE + width / 2, LOAD_EYE + height / 2];
+/** 加载时的 P：正交场景是场景中心加相机缺省 eye 的 (2, 2)（见文件头「初值」）；透视场景是 (0, 0)（rea-p5-camera 6.2，P5d 步骤 2）。 */
+export function initialParallaxPoint(width: number, height: number, perspective = false): [number, number] {
+  return perspective ? [0, 0] : [LOAD_EYE + width / 2, LOAD_EYE + height / 2];
 }
 
 /** 目标点：指针钳到 0…1、y 翻成向上，再在场景中心与指针之间按 `mouseInfluence` 插值，加 eye.xy。 */
@@ -157,9 +165,12 @@ export function parallaxInput(fields: ParallaxFields, frame: ParallaxFrame): Par
   };
 }
 
-/** 加载新场景时的状态：P 在场景中心加 (2, 2)，`g_ParallaxPosition` 为 (0.5, 0.5)（WPE 加载时写的 0.5，`0x1401886ea`）。 */
-export function initialParallaxState(width: number, height: number): ParallaxState {
-  return { point: initialParallaxPoint(width, height), position: [0.5, 0.5] };
+/**
+ * 加载新场景时的状态：P 见 `initialParallaxPoint`（透视场景 (0, 0)），`g_ParallaxPosition` 为 (0.5, 0.5)（WPE 加载时写的 0.5，
+ * `0x1401886ea`，两种投影相同：`p5d-persp` 不开视差时读到 (0.5, 0.5)）。
+ */
+export function initialParallaxState(width: number, height: number, perspective = false): ParallaxState {
+  return { point: initialParallaxPoint(width, height, perspective), position: [0.5, 0.5] };
 }
 
 /**
@@ -172,9 +183,12 @@ export function advanceParallax(state: ParallaxState, input: ParallaxInput): Par
   return { point, position: parallaxUniform(point, input.width, input.height) };
 }
 
-/** 本帧绘制用的视差（`GpuScene.setParallax`）：开关与 amount 取当时的值，关着时为 null（不加平移）。 */
-export function drawParallax(state: ParallaxState, fields: ParallaxFields): SceneParallax | null {
-  return fields.cameraparallax ? { point: state.point, amount: fields.cameraparallaxamount } : null;
+/**
+ * 本帧绘制用的视差（`GpuScene.setParallax`）：开关与 amount 取当时的值，关着时为 null（不加平移）。透视场景恒为 null：WPE 只在
+ * 「正交 + 视差」时移动对象（rea-p5-camera 6.1，`p5d-persp-b` 实测各对象的 MVP 没有平移）。
+ */
+export function drawParallax(state: ParallaxState, fields: ParallaxFields, perspective = false): SceneParallax | null {
+  return fields.cameraparallax && !perspective ? { point: state.point, amount: fields.cameraparallaxamount } : null;
 }
 
 /**

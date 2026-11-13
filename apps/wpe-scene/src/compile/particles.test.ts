@@ -1761,7 +1761,10 @@ describe("compileScene：粒子对象", () => {
     );
     expect(perspective.layers[0].particle!.orthographic).toBe(false);
     expect(perspective.layers[0].particle!.emitters[0].fields.distancemax).toBe(1);
-    expect(perspective.unsupported).toContain("camera:perspective");
+    // P5d 步骤 2 起透视场景不再整张退回；这个系统不是透视粒子（flags 不含 4），不报 `camera:perspective:particle`
+    expect(perspective.unsupported).not.toContain("camera:perspective");
+    expect(perspective.unsupported).not.toContain("camera:perspective:particle");
+    expect(perspective.general).toMatchObject({ perspective: true, width: 0, height: 0 });
   });
 });
 

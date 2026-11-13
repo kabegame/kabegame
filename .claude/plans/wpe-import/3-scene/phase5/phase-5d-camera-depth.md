@@ -148,7 +148,7 @@ export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "heigh
 |---|---|
 | 0 调研 | 已完成（上面的实施记录） |
 | 1 深度与剔除 | 场景目标加 `depth32float`（清 0，跟 `clearenabled`）；管线按「目标有没有深度」各建一份；全部画进场景目标的 pass 按 WPE 推深度状态与剔除，缺键改成开，非法值取表的第一项，带 effect 的上屏 pass 深度借基础材质、剔除用 effect 材质；去掉 `cull:*`、`depthtest:*`、`depthwrite:*`（ricepod 拼错的 `material:depthtesting` / `depthwriting` 没测，照报）。不直接解锁，基线逐张不变 |
-| 2 透视相机 | 透视投影与基准相机、路径、透视抖动、视图向量（`g_ViewForward` / `Right` / `Up`，正交下也补）；透视场景按画布尺寸渲染（已定 6）；透视场景里的图像层、合成链、fullscreen、粒子；新增照报键 `text:perspective`、透视场景里的透视粒子；去掉 `camera:perspective`、`general:camerashake`。解锁 dna_fragment、techno、neon_sunset |
+| 2 透视相机 | 透视投影与基准相机、路径、透视抖动、视图向量（`g_ViewForward` / `Right` / `Up`，正交下也补）；透视场景按画布尺寸渲染（已定 6）；透视场景里的图像层、合成链、fullscreen、粒子；没测过的用法照报 `camera:perspective:<用法>`（文本、透视粒子等，见步骤 2 点 7）；去掉 `camera:perspective`、`general:camerashake`。解锁 dna_fragment、techno、neon_sunset |
 | 3 相机对象 | 正交与透视的相机对象，去掉 `object:camera` 一组，条目动画照报 `camera:path` |
 | 收尾 | 未实测清单走查、文档（`cocs/wpe/WPE_SCENE.md`、回归、changelog） |
 
@@ -283,3 +283,250 @@ Claude 独立验收：
 - 画面哈希（宿主分别从 `ef16dcf1` 与合并树干净构建，`ignore/p5/d1/app`）：10 张基线场景 × 三档全部相同；retro、shimmering_particles × 三档相同，`targetBytes` 正好多一张深度。
 - **真机对 WPE**（dev 应用渲染、按 WPE 日志回放、`kbp cmp frame --kbp-layers`）：`p5d-depth-o`、`p5d-cull`、`p5c-depth` 整帧逐像素相同（差 0）。`p5d-noclear` 没比：WPE 不清屏的后备缓冲在 RenderDoc 回放里是未定义的内容，「不清深度、第二帧起不再画」由单测锁住。
 - `p5d-depth-o` 的抓帧日志里混进了别的会话窗口的行（另一个进程号），回放前按本窗口的进程号过滤（`ignore/p5/d1/out/p5d-depth-o-log.txt`）。
+
+## 步骤 2 — 透视相机
+
+### 思路
+
+这一步把「透视场景整张退回」拆开：透视投影、基准相机、路径、三维抖动做出来，透视场景改按画布尺寸渲染；透视场景里没测过的用法换成细分键照报。正交场景的相机一行不改，基线逐字节不变。
+
+**投影类型一处判定，透视场景没有场景尺寸。** 现在有两套判定：能力表看 `general.orthogonalprojection` 真不真，粒子缺省值看 `isOrthographic`（rea-p4a「基础」【确】：是对象，且 `auto: true` 或宽高都非 0）。统一成后者，结果放进 `SceneGeneral.perspective`，能力表、`SCENE_ORTHO` 宏、粒子缺省值、渲染器都读它。透视场景的 `SceneGeneral.width/height` 改成 WPE 的值 0（rea-p5-camera 2.1【确】：W、H 只由 `orthogonalprojection` 写），不再占位 1920×1080。编译期用到场景尺寸的有三处：fullscreenlayer 的合成 RT（槽 0 是 `_rt_FullFrameBuffer`）改成渲染时取场景目标尺寸；`projectlayer` 的 `autosize` 与形状对象的缺省尺寸在透视场景里没测过、语料 0 个，照报。脚本的 `engine.canvasSize` 照读码在透视场景读到 (0, 0)（没测，语料 0 处）。
+
+**相机每帧求值，三个来源只做两个。** 编译期解析 `scene.json` 顶层的 `camera`：基准 `eye` / `center` / `up`（字符串按空格 `atof` 三次、缺分量为 0；不是字符串时保留构造值 (2, 2, 2) / (0, 0, 0) / (0, 1, 0)，p3-script-REPORT L2）和 `paths` 指向的文件（格式与容错照 rea-p5-camera 3.1：不是对象或 `transforms` 空就 `break`，`disabled` 跳过，缺 `timestamp` 按 i/(n−1)·duration 铺开，缺向量为 0、缺 `zoom` 为 1）。新模块 `render/camera.ts` 是纯函数：路径状态三元组（路径、关键帧、本路径内时间）的求值与推进照 3.2（段内 `p0 + (p1 − p0)·(−s³ + 1.5s² + 0.5s)`，先求值后 `t += dt`，切换时 t 归零、余量丢掉，按顺序循环），三维抖动（`0.1·amplitude` 个世界单位，长度指数作用在三维长度上），`lookAtRH`，反向深度的 `perspectiveRH`（m22 = n/(f − n)、m32 = n·f/(f − n)），视图向量取 V 的列。来源优先级是「相机对象 > 路径 > 基准」，相机对象归步骤 3，这一步透视场景有可见相机对象时仍整张退回（`object:camera` 照报），所以只实现后两个。fov 取 `general.fov` 钳到 [0.1, 179.9]，`nearz` / `farz` 每帧读，三者已经在 `GENERAL_FIELDS` 里、属性与脚本写入就地生效；宽高比取场景目标（就是画布）。求值时刻同 P5a 的抖动：帧开头算、粒子步进之后交给场景（WPE 先更新对象再更新相机，粒子模拟用上一帧的相机），补画帧 dt 为 0、路径不推进。路径状态归渲染器，整场重编译保留（同视差点，WPE 改属性不重建场景）。正交场景照旧是单位视图（P5a），正交场景带非空 `paths` 照报（读码说那时不重置相机、视图会平移，语料 0 张，没测）。
+
+**透视场景按画布尺寸渲染（已定 6）。** 场景目标取渲染器的 `fullResolution`（显示缩放为 1 的画布尺寸，同 `engine.screenResolution`；预览里画布按主屏逻辑尺寸排版，所以和桌面同分辨率），超设备上限时等比缩。上屏整张铺满、壁纸样式不起作用，指针按窗口坐标原样用（同 `fill`）。`g_Screen` / `g_TexelSize` 本来就按场景目标算，透视场景里等于画布，和 WPE 取窗口一致。画布分辨率变了（桌面换分辨率、应用背景随主窗口变）时，渲染器等尺寸稳定 300 ms 后请宿主整场重新加载（走现有的 `reload`：bundle 和尺寸无关、编译结果相同，脚本写入照常重放）。这比给 `GpuScene` 写 resize 简单得多：场景目标、深度、快照、泛光、fullscreen 合成 RT 和引用它们的绑定组都跟尺寸有关。代价是粒子重新预热，WPE 只重建 RT、粒子接着跑，记为已知差异。
+
+**透视场景的绘制只换场景级的视图投影。** 图像层、粒子、模型、合成链的末 pass、模型的视锥剔除、粒子的指针反投影都已经从 `GpuScene.viewProjection` 取，透视场景把它换成 `P·V` 就够了（步骤 0 的 `p5d-persp`、`p5d-2d`、`p5d-ptc` 实测：普通图像层 MVP = VP·W，合成链基础 pass 用合成 RT 自己的正交、末 pass 用场景 VP·W，fullscreen 与相机无关）。`g_EyePosition` 是 eye（含路径与抖动），视图向量 `g_ViewForward` / `Right` / `Up` 加进引擎 uniform，所有 pass 都写（正交下是 (0, 0, −1) / (1, 0, 0) / (0, 1, 0)）。粒子的 `g_ViewUp` / `g_ViewRight` 和朝向用的视线、上方向改成相机的：**步骤 0 的「sprite 按对象朝向、不面向相机」不成立**，`p5d-ptc` 的相机正对 −Z，两种说法读数一样；dna_fragment 的抓帧（相机是斜的）里 `g_OrientationForward` = (0.691, 0.494, 0.528) 正是 eye − center 的单位向量，和 `orientationVectors` 的 screen 分支 `F = −vf` 逐位对上，所以现有朝向代码拿到相机的视线就对。视差在透视场景里不移动对象（读码 6.1），`g_ParallaxPosition` 照 WPE 的算式：W = H = 0、P 初值 0，除出的 NaN 不钳成 0（步骤 0 推翻了【推】，开视差时读到 NaN）。
+
+**照报的细分。** 透视场景里没测过的用法换成 `camera:perspective:<用法>`：文本对象 `text`（P6b 只测了正交）、透视粒子（`flags & 4`，读码说宽高是 0 时 fov 退化）`particle`、图像层 `perspective: true` `image`、组（带子层的组合层）`group`、`projectlayer`、形状 `shape`；路径文件读不到或解析不出 `camera:paths:unreadable`，正交场景的路径 `camera:paths:orthographic`。语料里这些只出现在还差 20 项以上的 3 张里（文本 2 张、组 1 张）。
+
+### 现状锚点
+
+现状取自 HEAD `4a96da29`，快照基点 `a32a8071`（P4f 步骤 2 只改粒子 instanceoverride，不碰这些锚点）。
+
+**a. 透视场景整张退回，透视抖动另报**（`compile/features.ts` 的 `checkSceneFeatures`）
+```ts
+  if (!g.orthogonalprojection) unsupported.add("camera:perspective");                       // 现状：按真假判透视，与粒子的 isOrthographic 不同
+  if (!g.orthogonalprojection && active(g.camerashake)) unsupported.add("general:camerashake");
+```
+
+**b. 透视场景的尺寸是占位，编译期按它定 fullscreen 合成 RT**（`compile/bundle.ts` 的 `compileScene`、图像层尺寸）
+```ts
+      width: projection.width ?? 1920,    // 现状：没有 orthogonalprojection 时 1920×1080
+      height: projection.height ?? 1080,
+      layer.fullscreenSize = baseTexture
+        ? [baseTexture.width, baseTexture.height]
+        : [bundle.general.width, bundle.general.height];   // 现状：运行时 RT 槽取编译期的场景尺寸
+```
+`engineDefines(postprocess.hdr, !!general.orthogonalprojection)`、`const orthographic = isOrthographic(general)` 是另外两处判定。
+
+**c. 视图投影与眼位只有正交**（`render/layout.ts`）
+```ts
+export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">, zoom = 1): Mat4 {
+  const projection = orthographic(0, general.width, 0, general.height, ORTHO_DEPTH, -ORTHO_DEPTH); // 现状：没有透视分支
+  return zoom === 1 ? projection : multiply(scaling(zoom, zoom, 1), projection);
+}
+export function eyePosition(general, offset = [0, 0]): number[] {
+  return [general.width / 2 + offset[0], general.height / 2 + offset[1], 2000];  // 现状：只有正交公式
+}
+```
+
+**d. 渲染器每帧只算二维抖动与缩放**（`render/renderer.ts` 的 `render`）
+```ts
+    const [width, height] = this.projection;                      // 现状：正交尺寸，透视场景是占位 1920×1080
+    const shake = shakeOffset(state.general, wrapped, height);    // 现状：二维，只有正交
+    const camera = { shake, zoom: state.general.zoom };
+    // … 粒子步进之后
+    scene.setCamera(camera);
+```
+
+**e. 场景只认「基准矩阵 × T(−s)」**（`render/scene.ts` 的 `setCamera`）
+```ts
+  setCamera(camera: SceneCamera): void {
+    const [x, y] = camera.shake;
+    // …
+    this.viewProjection = still ? this.baseViewProjection : multiply(this.baseViewProjection, translation(-x, -y, 0));
+    this.eye = eyePosition(this.bundle.general, [x, y]);     // 现状：没有透视相机
+    this.cameraDirty = true;
+  }
+```
+
+**f. 场景目标按编译期的场景尺寸建，上屏按壁纸样式铺**（`render/scene.ts` 的 `populate`；`render/renderer.ts` 的 `load`、`syncPlacement`）
+```ts
+    const [width, height] = sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D); // 现状：不看画布
+    this.placement = scenePlacement(this.style, scene.width, scene.height, this.canvas.width, this.canvas.height, ratio); // 现状：样式恒生效
+```
+画布尺寸变了只重算铺放（`resize` → `syncPlacement`），场景目标不变。
+
+**g. 粒子的视线与视图向量是正交常量**（`render/uniforms.ts` 的 `particleBuiltins`；`render/scene.ts` 的 `refreshParticleGeometry`）
+```ts
+  const { forward, right, up } = orientationVectors(renderer.orientation, model, VIEW_FORWARD, VIEW_UP); // 现状：(0,0,−1)、(0,1,0)
+    g_ViewUp: [0, 1, 0],          // 现状：常量
+    g_ViewRight: [1, 0, 0],
+        : orientationBasis(renderer.orientation, model, VIEW_FORWARD, VIEW_UP) === null;
+```
+`g_ViewForward` / `Right` / `Up` 不在 `ENGINE_UNIFORMS` 里，后两个只在 `PARTICLE_UNIFORMS`。
+
+**h. 视差的钳制把 NaN 变成 0，初值按正交算**（`render/parallax.ts`）
+```ts
+/** 钳到 0…1；NaN 当 0（透视场景 W = 0 时 WPE 除出 NaN，钳制分支把它变成 0，rea-p5-camera.md 6.2【推】）。 */
+function clamp01(value: number): number {
+  return value > 0 ? Math.min(1, value) : 0;     // 现状：步骤 0 实测推翻，WPE 保留 NaN
+}
+export function initialParallaxPoint(width: number, height: number): [number, number] {
+  return [LOAD_EYE + width / 2, LOAD_EYE + height / 2];   // 现状：透视场景 WPE 的初值是 0
+}
+```
+
+**i. 脚本的 `canvasSize` 读编译期尺寸**（`script/api.ts`）
+```ts
+    scoped("canvasSize", () =>
+      this.vector([this.access.bundle().general.width, this.access.bundle().general.height], 2),  // 现状：透视场景读到占位 1920×1080
+    );
+```
+
+### 点 1 — 投影类型与透视场景的尺寸（`compile/bundle.ts`、`compile/particles.ts`、`compile/features.ts`）
+- **新增** `SceneGeneral.perspective: boolean`，由 `isOrthographic(general)` 一处定；`checkSceneFeatures`、`engineDefines` 的 `SCENE_ORTHO`、粒子缺省值都读它（`isOrthographic` 挪到 `features.ts` 或单独导出，两边 import 同一个）。
+```ts
+  general: {
+    perspective: !orthographic,                        // 新增
+    width: orthographic ? projection.width : 0,         // 修改：透视场景是 WPE 的 0（rea-p5-camera 2.1），不再占位
+    height: orthographic ? projection.height : 0,
+```
+  > `auto: true` 的正交场景没有宽高（p3-script-REPORT 的 `q4-eye-auto` 整窗白，本机 0 张），现状是占位 1920×1080，这一步不动：写成 `projection.width ?? 1920`，只改透视分支。
+- **修改** fullscreen 图层的合成 RT：槽 0 是运行时 RT 或没有纹理时，`fullscreenSize` 记成 `"scene"`，渲染器建合成 RT 时取场景目标尺寸（正交场景两者相同，没超上限时字节不变）。
+- **修改** `imageLayerSize` 的 `projectlayer` 分支与 `shapeLayerSize`：透视场景报 `camera:perspective:projectlayer` / `camera:perspective:shape`（见点 7），尺寸照算（0），不会被画。
+
+### 点 2 — 相机的编译期数据（新 `compile/camera.ts`）
+- **新增**
+```ts
+/** 路径的一个关键帧（rea-p5-camera 3.1：t、eye、center、up、zoom）。 */
+export interface CameraKey { t: number; eye: Vec3; center: Vec3; up: Vec3; zoom: number }
+export interface CameraPath { duration: number; keys: CameraKey[] }
+/** 透视场景的基准相机与路径；正交场景为 null（视图恒为单位阵，L2）。 */
+export interface SceneCameraJson { eye: Vec3; center: Vec3; up: Vec3; paths: CameraPath[] }
+/** `"x y z"` → atof 三次，缺分量 0；不是字符串返回 null（调用方保留缺省）。 */
+export function cameraVector(value: unknown): Vec3 | null;
+/** 解析一个路径文件，照 3.1 的容错；追加到 `out`。 */
+export function parseCameraPaths(json: unknown, out: CameraPath[]): void;
+/** 读 `scene.camera`：基准缺省 (2,2,2) / (0,0,0) / (0,1,0)；`paths` 按文件顺序读，读不到或不是 JSON 报 `camera:paths:unreadable`。 */
+export async function compileCamera(scene: SceneJson, fs: SceneFs, unsupported: Set<string>): Promise<SceneCameraJson>;
+```
+- **修改** `SceneGeneral` **新增** `camera: SceneCameraJson | null`（透视场景才有）。路径文件按项目散文件 → `scene.pkg` → assets 的现有查找读，计进请求数。
+  > `camera` 不在 `objects` 里，绑定与脚本都碰不到（L2：不是描述符）；`getCameraTransforms` / `setCameraTransforms` 仍在 `MISSING_SCRIPT_API`。
+
+### 点 3 — 相机求值（新 `render/camera.ts`、`render/shake.ts`）
+- **新增**
+```ts
+/** 路径状态（WPE G+0xe4 / +0xe8 / +0xec）：路径下标、关键帧下标、本路径内时间。 */
+export interface CameraPathState { path: number; key: number; t: number }
+/** 求本帧的 eye / center / up / zoom 并推进（rea-p5-camera 3.2：先求值后 t += dt；t > 段末时换关键帧或下一条路径，换路径时 t = 0）。 */
+export function stepCameraPath(paths: readonly CameraPath[], state: CameraPathState, dt: number): { pose: CameraPose; next: CameraPathState };
+/** 透视的一帧相机：来源（路径 > 基准）、加三维抖动、fov 钳制，返回 V、P、eye 与视图向量。 */
+export function perspectiveCamera(input: PerspectiveCameraInput): PerspectiveCameraFrame;
+export function lookAtRH(eye: Vec3, center: Vec3, up: Vec3): Mat4;
+/** 反向深度（rea-p5-camera 1.1、步骤 0 `p5d-persp` / `persp-b` 实测）：m00 = cot(fov/2)/aspect、m11 = cot(fov/2)、m22 = n/(f − n)、m23 = −1、m32 = n·f/(f − n)。 */
+export function perspectiveRH(fovRadians: number, aspect: number, near: number, far: number): Mat4;
+```
+- **修改** `shake.ts` **新增** `shakeOffset3(fields, time)`：`amp = 0.1·amplitude`，v 三维，长度指数作用在三维长度上，float32 逐步同 `shakeOffset`（`p5d-shakep` / `-r` 实测）。正交的 `shakeOffset` 不动。
+- **新增** dev 回放用的 `replayCameraPath(paths, dts)`：从加载起按逐帧 dt 推状态机，同 `replayParallax`。
+
+### 点 4 — 场景目标尺寸、上屏与重新加载（`render/renderer.ts`、`render/scene.ts`、`host.ts`）
+- **修改** `GpuScene.build` 的选项 **新增** `size?: [number, number]`：透视场景必给，`populate` 用它（经 `sceneTargetSize` 钳上限）建场景目标；正交场景不给，照旧按 `general.width/height`。
+- **修改** `SceneRenderer.load`：透视场景传 `size: this.fullResolution`，记下这次的尺寸；铺放与指针按 `stretch` 算（样式不起作用，铺满）。
+- **修改** `resize`：透视场景的 `fullResolution` 和建场景时不同，尺寸稳定 300 ms 后调 `options.onRenderSizeChange?.()`；宿主收到后 `void this.reload()`。
+```ts
+  /** 透视场景按画布尺寸渲染（已定 6）：分辨率变了要整场重建，宿主走重新加载。 */
+  onRenderSizeChange?: () => void;
+```
+- **修改** 渲染器的 `projection` 在透视场景是 (0, 0)（`SceneGeneral` 的值），视差与正交抖动照旧读它。
+
+### 点 5 — 视图投影、眼位与视图向量（`render/scene.ts`、`render/uniforms.ts`、`render/renderer.ts`、`compile/features.ts`）
+- **修改** `SceneCamera` 成两种：
+```ts
+export type SceneCamera =
+  | { kind: "orthographic"; shake: [number, number]; zoom: number }          // 现状的那一份
+  | { kind: "perspective"; frame: PerspectiveCameraFrame };                 // 新增：V、P、eye、视图向量
+```
+  渲染器帧开头按场景类型算（透视：`stepCameraPath` + `perspectiveCamera`，实时帧推进路径状态，补画帧 dt 0），粒子步进之后交给 `setCamera`。
+- **修改** `setCamera` 透视分支：`viewProjection = P·V`、`eye = frame.eye`、`viewVectors = frame.vectors`，有变化才标 `cameraDirty`；透视粒子那一份不算（照报）。正交分支逐字不变。
+- **新增** `ENGINE_UNIFORMS` 加 `g_ViewForward` / `g_ViewRight` / `g_ViewUp`（`PARTICLE_UNIFORMS` 去掉后两个），`staticBuiltins` 收 `viewVectors` 写入，进 `LAYER_UNIFORMS`（随相机重写）。正交下是常量，字节不变。
+- **修改** `particleBuiltins`、`refreshParticleGeometry` 的 `VIEW_FORWARD` / `VIEW_UP` 换成场景当前的视线与上方向（正交下同值）；相机变了时粒子 draw 的朝向一起重算。
+
+### 点 6 — 视差在透视场景（`render/parallax.ts`、`render/renderer.ts`）
+- **修改** `clamp01` 保留 NaN（`Number.isNaN(v) ? v : …`）；**修改** `initialParallaxPoint` 收 `perspective`，透视场景为 (0, 0)（读码 6.2）。透视场景 `drawParallax` 返回 null：不移动对象（6.1），`g_ParallaxPosition` 照常每帧算（W = H = 0，结果是 NaN 或 0 / 1）。eye.xy 用透视相机的 eye。
+  > 正交场景 W、H 恒大于 0，不会产生 NaN，行为不变。
+
+### 点 7 — 能力表（`compile/features.ts`、`compile/bundle.ts`）
+- **删除** `camera:perspective`、透视的 `general:camerashake`；`NEUTRAL_GENERAL` 里 `fov` / `nearz` / `farz` 的注释改成「透视每帧读」。
+- **新增** 透视场景的细分（只在 `general.perspective` 时报）：
+
+| 键 | 条件 | 依据 |
+|---|---|---|
+| `camera:perspective:text` | 文本对象 | P6b 只测了正交（文本在透视场景选 `_depth` 材质，rea-p6b-raster 1） |
+| `camera:perspective:particle` | 粒子系统树里有 `flags & 4` | 读码：W = H = 0 时覆盖的 fov 退化（7.2），步骤 0 只测了 MVP |
+| `camera:perspective:image` | 图像层 / 模型 `perspective: true` | 7.3【推】，语料 0 |
+| `camera:perspective:group` | 带子层的组合层 | 组的局部正交在透视场景没测 |
+| `camera:perspective:projectlayer` | `autosize` + `projectlayer` | W = H = 0，语料 0 |
+| `camera:perspective:shape` | 形状对象 | 缺省尺寸是正交高，语料 0 |
+| `camera:paths:orthographic` | 正交场景 `camera.paths` 非空 | 读码说不重置相机，没测，语料 0 |
+| `camera:paths:unreadable` | 路径文件读不到或不是 JSON | 没测，语料 0 |
+
+### 点 8 — dev 探针（`dev/probe.ts`、`dev/particleCorners.ts`、`dev/fluidProbe.ts`、`dev/realmProbe.ts`、`dev/scriptCorpus.ts`）
+- **修改** `renderFrame`：透视场景的场景目标取 `canvas ?? window ?? [1920, 1080]`；回放时按 `particles.dts` 推路径状态（`replayCameraPath`），没给 dts 时 t = 0；读回的那一帧按最后的状态算相机，抖动按 `times` 的最后一项。
+- **修改** 其余探针里按 `general.width/height` 算正交抖动 / 视差的地方，透视场景走 `perspectiveCamera`（只在要用时）。
+
+### 点 9 — 单测
+- `render/camera`：`perspectiveRH` 对上 `p5d-persp`（m00 1.206285、m11 2.144507、m22 1.00001e-5）、`p5d-persp-1280x1024`（m00 1.715605）、`p5d-persp-b`（m11 3.732051、m22 1/99）；`lookAtRH` 的列与平移；视图向量；路径：`p5d-path` 的 8 个时刻（第一圈按 t = g_Time − dt 闭式、第二圈按日志 dt 推，差 ≤ 3.6e-6）、硬切、循环、单关键帧保持、3.3 的两个怪癖；`shakeOffset3` 对上 `p5d-shakep` / `-r`。
+- `compile/camera`：3.1 的容错（`break`、`disabled`、缺 `timestamp`、缺向量、缺 `zoom`、非字符串的基准保留缺省）；读不到报键。
+- `compile`：`perspective` 的判定（`{auto: true}`、`{width: 0}`、`null`）；透视场景 width/height 为 0、fullscreenSize 为 `"scene"`；细分键逐个；正交场景的 bundle 与改前逐字段相同。
+- `render/scene`（假设备）：透视场景的场景目标取 `size`、VP = P·V、`g_EyePosition` = eye、视图向量进全部 draw、粒子朝向用相机视线（dna_fragment 抓帧的 `g_OrientationForward` / `Up`）；正交场景 uniform 字节与改前相同。
+- `render/parallax`：透视场景 P 初值 0、eye (0, 0) 时 `g_ParallaxPosition` 是 NaN、eye.x ≠ 0 时钳成 0 或 1、不移动对象。
+- `render/renderer`：透视场景铺满不看样式；分辨率变化去抖后回调一次；正交场景不回调。
+
+### 实施方式
+
+先补测（Claude，见验收 4 的 `p5d-tilt`），确认视图向量与粒子朝向，再派子代理。子代理在 HEAD 快照（`ignore/p5/d2/head`，`a32a8071`）里实现，我独立验收后三方合并（P6b 1e 正在改 `render/scene.ts`、`render/renderer.ts`、`render/uniforms.ts`、`host.ts`，P4f、P10a 改 `compile/bundle.ts`、`compile/features.ts`）。
+
+### 验收
+
+子代理：快照 tsc 0 错误；vitest 除已知的 `3830255100: 219 次请求` 外全过；Prettier。
+
+Claude 独立验收：
+1. 越界检查、自跑 tsc / vitest；变异：m22 / m32 取 DirectX 原式（不反向）、宽高比取场景尺寸、fov 不钳、路径切换不清 t、切线乘段长、先推进后求值、抖动只二维 / 幅度按正交、视图向量取行、粒子朝向仍用常量、视差在透视场景移动对象、NaN 钳成 0、透视场景按样式铺放、尺寸变化不回调、`perspective` 改回按真假判。
+2. 语料：去掉 `camera:perspective` 11 张、透视的 `general:camerashake` 3 张，新增的只有点 7 的细分键；能渲染 57 → 60（dna_fragment、techno、neon_sunset），原来能渲染的不掉出。
+3. 画面哈希：10 张基线场景 × 三档不变（全是正交）。
+4. **补测 `p5d-tilt`**（动工前，`gen_d.py` 新增）：透视、斜相机（eye (6, 4, 10) 看原点），探针网格读 `g_ViewForward` / `Right` / `Up`、`g_EyePosition`、VP；sprite 粒子缺省朝向与 `upright`、带 `REFRACT` 读 `g_ViewUp` / `Right`。抓帧核对读码（视图向量取 V 的列）与 dna_fragment 的结论。
+5. **真机对 WPE**（dev 应用渲染、按 WPE 日志回放、`kbp cmp frame --kbp-layers`，窗口 1920×1080）：确定性工程 `p5d-persp`（另 1280×1024）、`p5d-persp-b`、`p5d-path`（9 个等待时间）、`p5d-shakep` / `-r`、`p5d-2d`、`p5d-depth2`、`p5d-imgcull-p`、`p5d-tilt` 整帧逐像素；三张样本：去掉粒子层的变体整帧逐像素（新抓），粒子层另比每次绘制的 MVP 与 `g_Orientation*`（抓帧常量对 dev 探针的 uniform）。
+6. 画布尺寸：预览、桌面窗口模式各看一次透视样本（铺满、不拉伸、样式切换不影响），改宿主画布尺寸后只重新加载一次、场景目标跟着变。
+7. 三方合并进工作区，合并后再跑 tsc、vitest。测试行用 `projects_remove` 删掉。
+
+### 步骤 2 实施记录（2026-11-13）
+
+先补测 `p5d-tilt`（`ignore/p5/d2/gen_d2.py`，抓帧 `A:\p5d\p5d-tilt`，结论写进 p5-REPORT）：视图向量是世界空间的 V 列，粒子朝向用相机的视线与上方向，步骤 0「sprite 不面向相机」更正。子代理在 HEAD 快照（`a32a8071`，`ignore/p5/d2/head`）里实现（第一个代理读了 9 小时代码没有落盘，停掉重派），我独立验收后变基到 `1616bb2b`（`ignore/p5/d2/new`，9 处冲突：P6b 1e 的文本重排参数、`variantPlans` 的文本排版参数、fbo 建法重构，都是两边各加），再三方合并进工作区（另 8 处冲突，来自工作区里 P8 步骤 4 的图层依赖与 P10a 的关键帧回放，`ignore/p5/d2/resolve_wt.py` 逐处断言原文后拼接；合并前工作区相对 HEAD 的新增行一行不少，`check_kept.py`）。
+
+**和计划不一致或计划没写到的：**
+- `SceneGeneral.perspective` / `camera` 写成可选（缺省按正交），`SceneCamera` 正交那种的 `kind` 可省：不动约 20 个手写 `SceneGeneral` 的测试，少一些合并冲突。
+- 路径表的边界（语料 0）：第 0 条没有关键帧时整表清空、别的空路径去掉、两个关键帧同一时刻 s 取 1、状态越界从头开始。
+- 建场景时先按加载时的相机（路径起点、`g_Time` 0）算一份，给预热与第一批 uniform；第一帧就换成当帧的。
+- `camera:perspective:image` 在 `checkSceneFeatures` 按对象 JSON 判；`particleTrackProbe` 在透视场景给了 `cursors` 时直接抛错（跟随点的反投影没接透视相机，语料 0）。
+- 宿主「分辨率变化 → 重新加载」由补的 `host.test.ts` 用例锁住（变异时发现原来没有测试）。
+
+**验收：**
+- 越界：快照对基点只改计划内的文件。tsc 0 错误；vitest 2768 通过（变基后 2858），只有已知的 `3830255100: 219 次请求`；Prettier 通过。
+- 变异（`ignore/p5/d2/mutate_d2.py`，快照模式）32 处：31 处检出，「宿主不重新加载」补单测后检出；还原后整树哈希一致。子代理另有 28 处，全部检出。
+- 路径状态机按 `p5d-path` 的 WPE 日志逐帧推，能核对的 6 帧（w1 第 41–43 帧、w6 第 142–144 帧，两次切换之后）`g_EyePosition` 差 ≤ 3.7e-6；其余几组日志不全（步骤 0 同样跳过）。
+- 语料（同一份 wasm、183 张）：只去掉 `camera:perspective` 11 张与透视的 `general:camerashake` 3 张，新增 `camera:perspective:text` 2 张、`:group` 1 张；能渲染 66 → 69（dna_fragment、techno、neon_sunset），没有掉出。变基后在 `1616bb2b` 上重扫，结果相同。
+- 画面哈希：10 张基线 × 三档，变基前（`a32a8071`）与变基后（`1616bb2b`）各对一次，全部相同。
+- **真机对 WPE**（`render_scene` 按 WPE 日志回放、`kbp cmp frame` 数值比，两边后处理关闭，窗口 1920×1080）：
+  - 逐像素相同（差 0）：`p5d-persp`、`p5d-persp`（1280×1024）、`p5d-persp-b`、`p5d-depth2`、`p5d-path` w1 / w6、`p5d-shakep-r`、`p5d-tilt`、`p5d-2d-nofs`（去掉 FS 探针，合成链与 fullscreenlayer）。
+  - techno 最大差 4；dna_fragment 去粒子最大差 8（1 个像素超过 2）。
+  - neon_sunset 去粒子：超过 2 的像素 0.13%、超过 32 的 20 个。逐层与组合拆开（`ignore/p5/d2/mk_layers.py`，12 个变体）：太阳单层 0 差，残差只在带 neongrid（顶点着色器 `frac(sin(...)·43758.5453)` 哈希）或 filmgrain 时出现，没有继续查。
+  - 和步骤 0「只记不补」两条对上的差别：`p5d-2d` 原版（槽 0 没有纹理的 fullscreen 几何，WPE 用对象 `size`）、`p5d-imgcull-p`（不乘 MVP 的着色器下看得出的图像层视锥剔除，正好是 I1 / I2 两块）。
+  - 合并后的构建对 5 个工程（`p5d-tilt`、`p5d-path` w6、techno、dna / neon 去粒子）回放，像素摘要和合并前逐字节相同。
+- **没做 / 和计划不同**：`p5d-shakep`（日志到第 150 帧、抓帧在 180，没比；`p5d-shakep-r` 与单测已覆盖三维抖动）；样本里粒子层的 MVP 与朝向没逐绘制比（斜相机的朝向由 `p5d-tilt` 锁住）；桌面壁纸窗口没看，「改画布尺寸只重载一次」只有单测、没在真机上拖窗口。预览里原版 techno / dna_fragment / neon_sunset 都实时渲染，场景目标 3840×2160（主屏全分辨率），铺满。
+- 过程中的事：
+  - 头两次去粒子抓帧带着 WPE 的泛光（多出画到 240×135、480×270 的 4 次绘制，当时 WPE 设置界面开着、内存里的档位是开的），重抓后才是上面的结果；
+  - 解包工程的光标日志脚本用到 `input.cursorScreenPosition`，所以 `*-kbp` 工程在预览里退回，回放探针强制渲染不受影响；
+  - 共享宿主产物被别的会话中途重建过两次，哈希重测；
+  - 收尾时：「场景后处理」改回超高，测试行全部移除，宿主产物按合并后的工作区重建。

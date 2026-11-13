@@ -205,11 +205,12 @@ describe("能力表裁决", () => {
     for (const zoom of ["x", "1 2", true, null]) expect(keysOf({ ...vortexGeneral, zoom }), String(zoom)).toEqual([]);
     for (const zoom of [0, -1, "-0.5", { script: "s", value: 0 }])
       expect(keysOf({ ...vortexGeneral, zoom }), JSON.stringify(zoom)).toEqual(["general:zoom"]);
+    // 透视场景里 zoom 不起作用（rea-p5-camera 1.4，`p5d-persp-b` 实测），P5d 步骤 2 起透视场景不再整张退回：中性
     const { orthogonalprojection: _, ...perspectiveGeneral } = vortexGeneral;
-    expect(keysOf({ ...perspectiveGeneral, zoom: 0 })).toEqual(["camera:perspective"]);
-    expect(keysOf({ ...perspectiveGeneral, zoom: 2 })).toEqual(["camera:perspective"]);
+    expect(keysOf({ ...perspectiveGeneral, zoom: 0 })).toEqual([]);
+    expect(keysOf({ ...perspectiveGeneral, zoom: 2 })).toEqual([]);
   });
-  it("抖动（P5a 步骤 3）：正交场景开 camerashake、绑属性都不报；透视场景照报（透视抖动归 P5d）", () => {
+  it("抖动（P5a 步骤 3、P5d 步骤 2）：正交、透视场景开 camerashake、绑属性都不报", () => {
     const ortho = new Set<string>();
     checkSceneFeatures(
       {
@@ -231,10 +232,10 @@ describe("能力表裁决", () => {
     const { orthogonalprojection: _, ...perspectiveGeneral } = vortexGeneral;
     const perspective = new Set<string>();
     checkSceneFeatures({ general: { ...perspectiveGeneral, camerashake: true }, objects: [] }, perspective);
-    expect([...perspective].sort()).toEqual(["camera:perspective", "general:camerashake"]);
+    expect([...perspective]).toEqual([]);
     const still = new Set<string>();
     checkSceneFeatures({ general: perspectiveGeneral, objects: [] }, still);
-    expect([...still]).toEqual(["camera:perspective"]);
+    expect([...still]).toEqual([]);
   });
   it("视差已实现（P5a 步骤 2）：打开 cameraparallax、绑属性都不报，对象的 parallaxDepth 照旧放行", () => {
     const keys = new Set<string>();

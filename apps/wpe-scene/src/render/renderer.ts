@@ -20,6 +20,10 @@
  * - **抖动**（P5a 步骤 3，`shake.ts`）：帧开头、推进视差点之前，按本帧的 `g_Time` 算 eye 偏移 s，同一个 s 作视差点的 eye；粒子步进
  *   之后、脚本之前才交给 `GpuScene.setCamera`，所以粒子模拟用的是上一帧的 s（同 WPE，见 `render`）。渲染器不存 s。
  * - **缩放**（P5a 步骤 4）：`general.zoom` 和 s 同一时刻取（脚本之前），随 s 一起交给 `setCamera`，脚本写 `zoom` 下一帧生效。
+ * - **透视相机**（P5d 步骤 2，`camera.ts`）：透视场景按画布尺寸渲染（场景目标取 `fullResolution`，已定 6），上屏铺满、壁纸样式
+ *   不起作用（铺放与指针按 `stretch`）。帧开头按路径状态求来源姿态并推进（补画帧 dt 0，不推进），加三维抖动、算 V、P，粒子步进之后
+ *   交给 `setCamera`（同抖动的时机）；视差点的 eye 是透视相机的 eye.xy，W = H = 0，不移动对象。路径状态归渲染器，整场重编译保留
+ *   （同视差点）。画布分辨率变了（和建场景时不同）且稳定 300 ms 后调 `onRenderSizeChange`，宿主整场重新加载。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
@@ -55,7 +59,9 @@ import {
   type SceneStyle,
 } from "./layout";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, type ParallaxState } from "./parallax";
-import { GpuScene } from "./scene";
+import { initialCameraPathState, perspectiveCamera, stepCameraSource, type CameraPathState } from "./camera";
+import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
+import { GpuScene, type SceneCamera } from "./scene";
 import { shakeOffset } from "./shake";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
@@ -65,6 +71,9 @@ import { daytimeOf } from "./uniforms";
  * 父页面的 CSS transform 跨不进 iframe，这里量不到，由父页面量好经 `setDisplayScale` 交来。
  */
 const SIZE_CHECK_INTERVAL_MS = 250;
+
+/** 透视场景的画布分辨率变了之后，稳定这么久才请宿主重新加载（P5d 步骤 2）：拖动窗口边框时不反复重建。 */
+export const RENDER_SIZE_SETTLE_MS = 300;
 
 function validDisplayScale(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -99,6 +108,11 @@ export interface SceneRendererOptions {
    * 换上的每个场景都交给 `GpuScene.setVideoSink`，编码时画到视频纹理才问 `drawn`。缺省时视频纹理保持全 0。
    */
   videos?: VideoSink;
+  /**
+   * 透视场景按画布尺寸渲染（P5d 步骤 2，已定 6）：画布分辨率（`fullResolution`）和建场景时不同、稳定 `RENDER_SIZE_SETTLE_MS` 之后调一次，
+   * 宿主走整场重新加载（场景目标、深度、快照、泛光、fullscreen 合成 RT 都跟尺寸有关，不写 resize）。正交场景不调。
+   */
+  onRenderSizeChange?: () => void;
 }
 
 export interface SceneLoadOptions {
@@ -173,8 +187,21 @@ export class SceneRenderer {
    * （渲染器的第一次 `load`：宿主一个页面只放一张场景，换壁纸是新页面、新渲染器；设备丢失或退回后重建渲染器，P 也随之回到中心）。
    */
   private parallax: ParallaxState = initialParallaxState(1, 1);
-  /** 当前场景的正交尺寸 W、H（`SceneGeneral.width/height`，不是可能被缩小的渲染目标）：视差点的单位，加载时取。 */
+  /** 当前场景的正交尺寸 W、H（`SceneGeneral.width/height`，不是可能被缩小的渲染目标）：视差点的单位，加载时取。透视场景是 (0, 0)。 */
   private projection: [number, number] = [1, 1];
+  /** 当前场景是透视场景（P5d 步骤 2，`SceneGeneral.perspective`），加载时取。 */
+  private perspective = false;
+  /** 透视场景的基准相机与路径（`SceneGeneral.camera`），加载时取；正交场景为 null。 */
+  private camera: SceneCameraJson | null = null;
+  /**
+   * 透视相机的路径状态（P5d 步骤 2，`camera.ts`）：每个实时帧求值后推进。整场重编译保留（同视差点：WPE 改属性不重建场景），新场景从头。
+   */
+  private cameraPath: CameraPathState = initialCameraPathState();
+  /** 透视场景建场景时的画布分辨率（`GpuScene.build` 的 `size`）；正交场景为 null。 */
+  private renderSize: [number, number] | null = null;
+  /** 分辨率变化的去抖计时器（`RENDER_SIZE_SETTLE_MS`）与它在等的那个分辨率。 */
+  private renderSizeTimer: ReturnType<typeof setTimeout> | null = null;
+  private renderSizeKey = "";
   private paused = false;
   private failed = false;
   private lost = false;
@@ -312,15 +339,19 @@ export class SceneRenderer {
     if (this.lost) throw new SceneRenderError(["webgpu:device-lost"]);
     const serial = ++this.loadSerial;
     const state = SceneState.fromBundle(bundle);
+    // 透视场景按画布尺寸渲染（P5d 步骤 2，已定 6）：场景目标取显示缩放为 1 的画布尺寸，铺放与指针按 `stretch`
+    const perspective = !!bundle.general.perspective;
+    const size: [number, number] | undefined = perspective ? [...this.fullResolution] : undefined;
     // 加载时的控制点更新和预热用加载时刻的 cursor（WPE 加载时也读当时的指针，rea-p4c-sim.md 1.3、1.7）：按新场景的尺寸现算
     // 一次铺放，尺寸取法同 `GpuScene.width/height`，和之后 `syncPlacement` 算的一致
     const [sceneWidth, sceneHeight] = sceneTargetSize(
-      bundle.general.width,
-      bundle.general.height,
+      size?.[0] ?? bundle.general.width,
+      size?.[1] ?? bundle.general.height,
       this.gpu.device.limits.maxTextureDimension2D,
     );
+    const placementStyle: SceneStyle = perspective ? "stretch" : this.style;
     const placement = scenePlacement(
-      this.style,
+      placementStyle,
       sceneWidth,
       sceneHeight,
       this.canvas.width,
@@ -334,12 +365,13 @@ export class SceneRenderer {
       particles: {
         passes: particlePasses(fps),
         fps,
-        cursor: this.cursorOf(placement),
+        cursor: this.cursorOf(placement, placementStyle),
         // 粒子读场景频谱的 16 段（P4e 步骤 4）；预热在这里跑，首次加载时频谱是 0（rea-p4e-audio.md 3.5）
         audio: { left: this.spectrum.L16, right: this.spectrum.R16 },
       },
       texts: options.texts,
       relayout: options.relayout,
+      size,
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
@@ -353,8 +385,15 @@ export class SceneRenderer {
     this.scene = scene;
     this.state = state;
     this.projection = [bundle.general.width, bundle.general.height];
-    // 视差点：新场景回到场景中心（WPE 加载末尾写初值，rea-p5-camera.md 6.2），重编译（换下的是同一张场景）保留
-    if (!old) this.parallax = initialParallaxState(bundle.general.width, bundle.general.height);
+    this.perspective = perspective;
+    this.camera = perspective ? (bundle.general.camera ?? { ...DEFAULT_CAMERA, paths: [] }) : null;
+    this.renderSize = size ?? null;
+    // 视差点：新场景回到场景中心（WPE 加载末尾写初值，rea-p5-camera.md 6.2；透视场景是 (0, 0)），重编译（换下的是同一张场景）保留。
+    // 透视相机的路径状态同样（P5d 步骤 2）
+    if (!old) {
+      this.parallax = initialParallaxState(bundle.general.width, bundle.general.height, perspective);
+      this.cameraPath = initialCameraPathState();
+    }
     this.blitBindGroups.clear();
     this.placementKey = "";
     // 场景换上之前收到的指针（开场初值早于第一次加载，P5a 收尾）：没有场景时 `setPointer` 只能原样记下，这里按新场景的铺放
@@ -362,7 +401,13 @@ export class SceneRenderer {
     const canvasPointer = this.canvasPointer;
     if (canvasPointer) {
       this.syncPlacement(scene);
-      this.pointer = scenePointer(this.style, this.placement, this.canvas.width, this.canvas.height, ...canvasPointer);
+      this.pointer = scenePointer(
+        this.placementStyle,
+        this.placement,
+        this.canvas.width,
+        this.canvas.height,
+        ...canvasPointer,
+      );
     }
     options.beforeFirstFrame?.(state);
     old?.destroy();
@@ -399,7 +444,7 @@ export class SceneRenderer {
       return;
     }
     this.syncPlacement(this.scene);
-    this.pointer = scenePointer(this.style, this.placement, this.canvas.width, this.canvas.height, x, y);
+    this.pointer = scenePointer(this.placementStyle, this.placement, this.canvas.width, this.canvas.height, x, y);
   }
 
   /** 壁纸样式：只影响上屏，场景本身不重画。 */
@@ -429,6 +474,8 @@ export class SceneRenderer {
     if (this.destroyed) return;
     this.destroyed = true;
     this.stop();
+    if (this.renderSizeTimer !== null) clearTimeout(this.renderSizeTimer);
+    this.renderSizeTimer = null;
     this.observer?.disconnect();
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.scene?.destroy();
@@ -444,6 +491,11 @@ export class SceneRenderer {
   }
 
   private readonly onVisibility = () => this.sync();
+
+  /** 铺放与指针用的样式：透视场景铺满（`stretch`，壁纸样式不起作用，P5d 步骤 2），正交场景按壁纸样式。 */
+  private get placementStyle(): SceneStyle {
+    return this.perspective ? "stretch" : this.style;
+  }
 
   private get shouldRun(): boolean {
     return !this.destroyed && !this.lost && !this.failed && !this.paused && !document.hidden && this.scene !== null;
@@ -498,6 +550,7 @@ export class SceneRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const full = canvasSize(rect.width, rect.height, dpr, 1, max);
     this.fullResolution = [full.width, full.height];
+    this.checkRenderSize();
     const { width, height, pixelRatio } =
       this.displayScale === 1 ? full : canvasSize(rect.width, rect.height, dpr, this.displayScale, max);
     const sized = this.canvas.width === width && this.canvas.height === height;
@@ -511,6 +564,34 @@ export class SceneRenderer {
     if (this.scene && !this.shouldRun) this.render();
   }
 
+  /**
+   * 透视场景的场景目标按画布尺寸建（P5d 步骤 2）：`fullResolution` 和建场景时不同就（重新）开始 `RENDER_SIZE_SETTLE_MS` 的去抖，到点时
+   * 仍不同才调一次 `onRenderSizeChange`；回到原尺寸时取消。正交场景、没有场景时不做。WPE 只重建 RT、粒子接着跑，我们整场重新加载、
+   * 粒子重新预热，记为已知差异。
+   */
+  private checkRenderSize(): void {
+    const differs = () => {
+      const size = this.renderSize;
+      return (
+        this.perspective && size !== null && (size[0] !== this.fullResolution[0] || size[1] !== this.fullResolution[1])
+      );
+    };
+    if (this.destroyed || !differs()) {
+      if (this.renderSizeTimer !== null) clearTimeout(this.renderSizeTimer);
+      this.renderSizeTimer = null;
+      return;
+    }
+    // 尺寸还在变：从最后一次变化起重新计时
+    const key = this.fullResolution.join("x");
+    if (this.renderSizeTimer !== null && key === this.renderSizeKey) return;
+    if (this.renderSizeTimer !== null) clearTimeout(this.renderSizeTimer);
+    this.renderSizeKey = key;
+    this.renderSizeTimer = setTimeout(() => {
+      this.renderSizeTimer = null;
+      if (!this.destroyed && differs()) this.options.onRenderSizeChange?.();
+    }, RENDER_SIZE_SETTLE_MS);
+  }
+
   private blitBindGroup(view: GPUTextureView): GPUBindGroup {
     let group = this.blitBindGroups.get(view);
     if (!group) {
@@ -519,7 +600,7 @@ export class SceneRenderer {
         this.blitPipeline,
         this.placementBuffer,
         view,
-        this.style === "tile" ? this.tileSampler : this.blitSampler,
+        this.placementStyle === "tile" ? this.tileSampler : this.blitSampler,
       );
       this.blitBindGroups.set(view, group);
     }
@@ -532,25 +613,19 @@ export class SceneRenderer {
    */
   private syncPlacement(scene: GpuScene): void {
     const ratio = this.pixelRatio;
-    const key = `${this.style}:${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}@${ratio}`;
+    const style = this.placementStyle;
+    const key = `${style}:${scene.width}x${scene.height}@${this.canvas.width}x${this.canvas.height}@${ratio}`;
     if (key === this.placementKey) return;
     this.placementKey = key;
-    this.placement = scenePlacement(
-      this.style,
-      scene.width,
-      scene.height,
-      this.canvas.width,
-      this.canvas.height,
-      ratio,
-    );
+    this.placement = scenePlacement(style, scene.width, scene.height, this.canvas.width, this.canvas.height, ratio);
     this.gpu.device.queue.writeBuffer(this.placementBuffer, 0, placementUniform(this.placement));
   }
 
   /** 光标下的场景纹理坐标（`sceneCursor`，P4c 步骤 2）：按当前样式与给定铺放从 `canvasPointer` 现算；没收到过指针时取场景中心。 */
-  private cursorOf(placement: ScenePlacement): [number, number] {
+  private cursorOf(placement: ScenePlacement, style: SceneStyle = this.placementStyle): [number, number] {
     const pointer = this.canvasPointer;
     if (!pointer) return [0.5, 0.5];
-    return sceneCursor(this.style, placement, this.canvas.width, this.canvas.height, pointer[0], pointer[1]);
+    return sceneCursor(style, placement, this.canvas.width, this.canvas.height, pointer[0], pointer[1]);
   }
 
   private render(runScripts = false): void {
@@ -576,13 +651,31 @@ export class SceneRenderer {
     // 抖动（P5a 步骤 3）：帧开头、视差点之前，用本帧的 `g_Time` 与脚本之前的字段算 eye 偏移 s（WPE 更新相机时算，在 lookAt 与
     // 视差点之前，脚本之后才跑，rea-p5-camera.md 第 5 节；脚本写 `camerashake*` 下一帧才生效）。交给场景要等粒子步进之后，见下。
     // 补画帧时间不变，s 也不变。缩放（P5a 步骤 4）同一时刻取：WPE 在相机更新时读 `zoom`，同在脚本之前（p3-script-REPORT L4）
-    const shake = shakeOffset(state.general, wrapped, height);
-    const camera = { shake, zoom: state.general.zoom };
+    // 透视场景（P5d 步骤 2）：同一时刻按路径状态求来源姿态并推进（补画帧 dt 0，不推进），加三维抖动、算 V、P（宽高比取场景目标）
+    let camera: SceneCamera;
+    let eye: readonly [number, number];
+    if (this.perspective) {
+      const { pose, next } = stepCameraSource(this.camera!, this.cameraPath, frametime);
+      this.cameraPath = next;
+      const frame = perspectiveCamera({
+        pose,
+        fields: state.general,
+        time: wrapped,
+        width: scene.width,
+        height: scene.height,
+      });
+      camera = { kind: "perspective", frame };
+      eye = [frame.eye[0], frame.eye[1]];
+    } else {
+      const shake = shakeOffset(state.general, wrapped, height);
+      camera = { shake, zoom: state.general.zoom };
+      eye = shake;
+    }
     // 视差点（P5a 步骤 2）：帧开头、粒子与脚本之前推进一次，用本帧的 `g_PointerPosition` 与帧时间（补画帧为 0，k 也是 0）；
-    // 目标点的 eye.xy 就是 s（步骤 3）。开关关着时 P 与 `g_ParallaxPosition` 都不动
+    // 目标点的 eye.xy 就是 s（步骤 3），透视场景是透视相机的 eye.xy（W = H = 0）。开关关着时 P 与 `g_ParallaxPosition` 都不动
     this.parallax = advanceParallax(
       this.parallax,
-      parallaxInput(state.general, { pointer: this.pointer, frametime, width, height, eye: shake }),
+      parallaxInput(state.general, { pointer: this.pointer, frametime, width, height, eye }),
     );
     // 场景频谱（P4e 步骤 4）：帧开头、粒子步进之前推进一次（WPE 的音频段紧挨在帧函数之前，rea-p4e-audio.md 3.5），粒子与脚本这一帧
     // 读同一份；补画帧帧时间为 0，不推进
@@ -611,7 +704,8 @@ export class SceneRenderer {
     const encoder = device.createCommandEncoder({ label: "scene frame" });
     try {
       // 绘制用的视差取脚本之后的开关与 amount（WPE 绘制时才读，rea-p5-camera.md 6.3）：脚本写 `cameraparallax*` 同帧生效
-      scene.setParallax(drawParallax(this.parallax, state.general), state);
+      // 透视场景不移动对象（rea-p5-camera 6.1，P5d 步骤 2）
+      scene.setParallax(drawParallax(this.parallax, state.general, this.perspective), state);
       // 脚本写回的状态再刷进 uniform 块 / 可见性 / 泛光链，再写每帧内置量（P3a、P4a）
       scene.sync(state);
       scene.update(

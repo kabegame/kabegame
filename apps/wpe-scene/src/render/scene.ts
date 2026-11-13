@@ -56,6 +56,10 @@
  *   （`sceneViewProjection`），透视粒子的相机距离按缩放后的可见高算（`particleViewProjection`，rea-p5-camera.md 7.2）；zoom 变了只重算
  *   这两份基准矩阵，平移照旧右乘，所以每次绘制是 `VP(zoom) · T(o − s)`（视差、抖动是场景单位，在缩放之前加，步骤 4 补测）。眼位与视差点
  *   不随缩放变。建场景时取编译期的值，zoom 为 1 时逐字节同以前。
+ * - 透视相机（P5d 步骤 2，`render/camera.ts`）：透视场景（`SceneGeneral.perspective`）的场景目标按 `build` 的 `size`（画布尺寸）建，
+ *   场景级的视图投影换成 `P·V`（`setCamera` 的透视那一种，渲染器每帧交，时机同抖动），`g_EyePosition` 是相机的 eye，视图向量
+ *   `g_ViewForward` / `Right` / `Up` 与粒子朝向用的视线、上方向换成相机的（正交场景是常量，字节不变）。视差不移动对象、zoom 不起作用；
+ *   透视粒子那一份（`perspectiveViewProjection`）不算（照报）。建场景时先按加载时的相机（`initialPerspectiveFrame`）。
  * - 透视图层（P5b 步骤 1，p5-REPORT `p5b-persp`）：对象 `perspective: true` 的图像层只在画到场景目标的绘制（直接上屏、带 effect 的
  *   末 pass、passthrough 上屏）把视图投影换成透视粒子那一份（`perspectiveViewProjection`），所以和透视粒子同一份矩阵：相机距离随
  *   `perspectiveoverridefov` 与 `zoom` 变，带抖动的 `T(−s)`。视差平移照旧右乘，在投影之前，每次绘制是 `P_persp · T(o − s) · W`
@@ -135,7 +139,8 @@ import type { ParticleRenderer, SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
 import { pointerScenePoint, type ControlPointInputs } from "../particles/controlpoints";
-import { orientationBasis, VIEW_FORWARD, VIEW_UP } from "../particles/orientation";
+import { orientationBasis } from "../particles/orientation";
+import { initialPerspectiveFrame, ORTHO_VIEW_VECTORS, type PerspectiveCameraFrame, type ViewVectors } from "./camera";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
@@ -544,13 +549,21 @@ export interface ParticleOptions {
   audio?: ParticleAudio;
 }
 
-/** 一帧的相机（`GpuScene.setCamera`，P5a 步骤 3、4）：渲染器与探针在帧开头按脚本之前的 general 字段取。 */
-export interface SceneCamera {
+/** 正交场景一帧的相机（P5a 步骤 3、4）。`kind` 可省（P5d 步骤 2 之前的写法）。 */
+export interface OrthographicSceneCamera {
+  kind?: "orthographic";
   /** 抖动偏移 s（`render/shake.ts` 的 `shakeOffset`），场景单位；关着时 (0, 0)。 */
   shake: readonly [number, number];
   /** 正交缩放（`general.zoom`，缺键为 1），绕场景中心乘进投影（`sceneViewProjection`）。 */
   zoom: number;
 }
+/** 透视场景一帧的相机（P5d 步骤 2，`render/camera.ts` 的 `perspectiveCamera`）：V、P、eye 与视图向量。 */
+export interface PerspectiveSceneCamera {
+  kind: "perspective";
+  frame: PerspectiveCameraFrame;
+}
+/** 一帧的相机（`GpuScene.setCamera`）：渲染器与探针在帧开头按脚本之前的 general 字段取，按场景的投影类型选一种。 */
+export type SceneCamera = OrthographicSceneCamera | PerspectiveSceneCamera;
 
 interface Draw {
   label: string;
@@ -947,6 +960,11 @@ export class GpuScene {
   private zoom = 1;
   /** `setCamera` 改了相机、draw 还没按新相机重写：下一次 `setParallax` 整体刷一遍（与视差的刷新合成一次）。 */
   private cameraDirty = false;
+  /**
+   * 场景当前的视图向量（P5d 步骤 2）：`g_ViewForward` / `g_ViewRight` / `g_ViewUp` 与粒子朝向的视线、上方向。正交场景恒为常量；
+   * 透视场景随 `setCamera` 换。
+   */
+  private viewVectors: ViewVectors = ORTHO_VIEW_VECTORS;
   /** 本帧的视差（P5a 步骤 2，`setParallax`）：null 为关着，绘制不加平移。 */
   private parallax: SceneParallax | null = null;
   /** 粒子层全场共用的索引缓冲（`quadIndices`），按最大的 `maxcount` 建一次；没有粒子层时为 null。 */
@@ -1109,6 +1127,11 @@ export class GpuScene {
        * 字段变了也不重排。
        */
       relayout?: TextRelayouter;
+      /**
+       * 场景目标尺寸（P5d 步骤 2）：透视场景必给（按画布尺寸渲染，已定 6；渲染器传 `fullResolution`），经 `sceneTargetSize` 钳设备上限；
+       * 正交场景不给，照旧按 `general.width/height`。透视场景没给时按 1920×1080。
+       */
+      size?: readonly [number, number];
     } = {},
   ): Promise<GpuScene> {
     if (options.texts) state.setTexts(options.texts);
@@ -1122,7 +1145,7 @@ export class GpuScene {
     device.pushErrorScope("validation");
     let failure: unknown = null;
     try {
-      await scene.populate(state);
+      await scene.populate(state, options.size);
     } catch (error) {
       failure = error;
     }
@@ -1532,6 +1555,7 @@ export class GpuScene {
       this.bundle.textures,
       (e) => state.effectEnabled(layer.object, layer.effects[e].source),
       state.texts.get(layer.object) ?? null,
+      [this.width, this.height],
     );
   }
 
@@ -1594,7 +1618,7 @@ export class GpuScene {
   private async prepareVariants(state: SceneState): Promise<void> {
     for (const runtime of this.layers) {
       const text = runtime.layer.text ? (state.texts.get(runtime.object) ?? null) : null;
-      const plans = variantPlans(runtime.layer, this.bundle.textures, text);
+      const plans = variantPlans(runtime.layer, this.bundle.textures, text, [this.width, this.height]);
       if (!plans.length) continue;
       this.device.pushErrorScope("out-of-memory");
       this.device.pushErrorScope("validation");
@@ -1740,10 +1764,13 @@ export class GpuScene {
     else this.drawsByPass.set(draw.passKey, [draw]);
   }
 
-  private async populate(state: SceneState): Promise<void> {
+  private async populate(state: SceneState, size?: readonly [number, number]): Promise<void> {
     const { device, bundle } = this;
     const { general } = bundle;
-    const [width, height] = sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D);
+    // 透视场景按画布尺寸（P5d 步骤 2，已定 6）；正交场景按场景尺寸
+    const [width, height] = general.perspective
+      ? sceneTargetSize(size?.[0] ?? 1920, size?.[1] ?? 1080, device.limits.maxTextureDimension2D)
+      : sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D);
     const hdr = (this.hdr = general.postprocess.hdr);
     const format = (this.format = sceneTargetFormat(hdr));
     this.width = width;
@@ -1770,7 +1797,10 @@ export class GpuScene {
     // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它
     if (
       wantsDepth(
-        built.map((layer, index) => ({ layer, plans: [plans[index], ...variantPlans(layer, bundle.textures)] })),
+        built.map((layer, index) => ({
+          layer,
+          plans: [plans[index], ...variantPlans(layer, bundle.textures, null, [width, height])],
+        })),
       )
     )
       this.depthTarget = this.createDepthTarget();
@@ -1804,6 +1834,10 @@ export class GpuScene {
     this.zoom = general.fields.zoom;
     this.viewProjection = this.baseViewProjection = sceneViewProjection(general, this.zoom);
     this.perspectiveViewProjection = this.basePerspectiveViewProjection = particleViewProjection(general, this.zoom);
+    // 透视场景（P5d 步骤 2）：建场景时取加载时的相机（路径从头、g_Time 0），渲染器第一帧就用 `setCamera` 换成当帧的；预热的指针
+    // 反投影用它。透视粒子那一份（`perspectiveViewProjection`）照旧（透视场景里的透视粒子照报 `camera:perspective:particle`）
+    if (general.perspective)
+      this.applyPerspective(initialPerspectiveFrame(general.camera, state.general, width, height));
     // 粒子的索引缓冲：全场一份，按最大的 maxcount 建（含子系统的，每个粒子步骤按它画的那个系统，P4e 步骤 1）
     const particleCapacity = plans.reduce((max, plan, index) => {
       const particle = built[index].particle;
@@ -1817,7 +1851,9 @@ export class GpuScene {
       const layer = built[index];
       // fbo 一律按真实合成尺寸：全部 effect 关着时也是，打开时不用重建。文本层取排版的合成 RT 尺寸（P6b 1d），fbo 由本层独占（1e）
       const textLayout = layer.text ? state.texts.get(layer.object) : undefined;
-      const size = textLayout ? textCompositeSize(textLayout) : compositeSize(layer, this.baseTexture(layer));
+      const size = textLayout
+        ? textCompositeSize(textLayout)
+        : compositeSize(layer, this.baseTexture(layer), [width, height]);
       const maps = layer.text
         ? this.createTextFbos(layer, size, setup)
         : layer.effects.map(
@@ -2108,7 +2144,7 @@ export class GpuScene {
     particles.hidden =
       particles.rope && renderer.orientation.mode === 0
         ? false
-        : orientationBasis(renderer.orientation, model, VIEW_FORWARD, VIEW_UP) === null;
+        : orientationBasis(renderer.orientation, model, this.viewVectors.forward, this.viewVectors.up) === null;
     const eye = renderer.kind === "spritetrail" ? trailEye(this.eye, model) : null;
     const previous = particles.trailEye;
     if (eye && (!previous || eye.some((value, i) => !Object.is(value, previous[i])))) particles.stale = true;
@@ -2376,6 +2412,8 @@ export class GpuScene {
       screenSize: [this.width, this.height] as [number, number],
       textures,
       eye: this.eye,
+      // 视图向量（P5d 步骤 2）：全部 pass 都写，正交场景是常量
+      view: this.viewVectors,
       // 读状态，不读编译结果：单图层重建新建的 draw 要拿到当前值
       ambient: state.general.ambientcolor,
       skylight: state.general.skylightcolor,
@@ -2485,6 +2523,10 @@ export class GpuScene {
    * `setParallax` 一起重写（一帧至多一次）。
    */
   setCamera(camera: SceneCamera): void {
+    if (camera.kind === "perspective") {
+      this.applyPerspective(camera.frame);
+      return;
+    }
     const [x, y] = camera.shake;
     const { zoom } = camera;
     const zoomed = zoom !== this.zoom;
@@ -2501,6 +2543,29 @@ export class GpuScene {
       ? this.basePerspectiveViewProjection
       : multiply(this.basePerspectiveViewProjection, translation(-x, -y, 0));
     this.eye = eyePosition(this.bundle.general, [x, y]);
+    this.cameraDirty = true;
+  }
+
+  /**
+   * 透视场景的相机（P5d 步骤 2）：场景级的视图投影换成 `P·V`（普通图像层、粒子、模型、合成链末 pass、视锥剔除、指针反投影都从这里
+   * 取，`p5d-persp` / `p5d-2d` / `p5d-ptc` 实测），`g_EyePosition` 是 eye（含路径与抖动），视图向量换成相机的。有变化才标记
+   * 相机变了（draw 的重写同正交，留给随后的 `setParallax`）。透视粒子那一份不动（照报）。
+   */
+  private applyPerspective(frame: PerspectiveCameraFrame): void {
+    const same = (a: ArrayLike<number>, b: ArrayLike<number>) =>
+      a.length === b.length && Array.prototype.every.call(a, (value: number, i: number) => Object.is(value, b[i]));
+    const vectors = this.viewVectors;
+    if (
+      same(frame.viewProjection, this.viewProjection) &&
+      same(frame.eye, this.eye) &&
+      same(frame.vectors.forward, vectors.forward) &&
+      same(frame.vectors.right, vectors.right) &&
+      same(frame.vectors.up, vectors.up)
+    )
+      return;
+    this.viewProjection = this.baseViewProjection = frame.viewProjection;
+    this.eye = [...frame.eye];
+    this.viewVectors = frame.vectors;
     this.cameraDirty = true;
   }
 

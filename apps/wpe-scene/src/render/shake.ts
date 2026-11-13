@@ -14,8 +14,8 @@
  * 和 double 的 0.001 比，`0.001f` 大于它，同样会改长度、对不上实测。其余几步照 WPE 的 float 取整，差别只在 `g_Time` 很大时才
  * 显出来。乘法的先后照读码的写法，没有逐条核对汇编，差别在 float 舍入以内。
  *
- * 只有正交：透视下幅度是 `0.1·amplitude` 个世界单位、偏移是三维的，要和透视相机一起做（P5d），能力表在透视场景照报
- * `general:camerashake`。
+ * 透视场景用 `shakeOffset3`（P5d 步骤 2，`p5d-shakep` / `p5d-shakep-r` 实测）：幅度是 `0.1·amplitude` 个世界单位、v 是三维的，
+ * 长度指数作用在三维长度上；由 `render/camera.ts` 的 `perspectiveCamera` 加到 eye 与 center 上。
  *
  * 渲染器在帧开头（视差点、粒子与脚本之前）用本帧的 `g_Time` 和脚本之前的字段算 s，同一个 s 作视差点的 eye（`parallax.ts`），脚本写
  * `camerashake*` 下一帧才生效，同 WPE（rea-p5-camera.md 第 5 节：WPE 更新相机在脚本之前）。s 在粒子步进之后才交给
@@ -60,4 +60,30 @@ export function shakeOffset(fields: ShakeFields, time: number, height: number): 
     }
   }
   return [f(x * amp), f(y * amp)];
+}
+
+/**
+ * 透视场景一帧的抖动偏移（世界单位，加到 eye 与 center 上；P5d 步骤 2，rea-p5-camera.md 第 5 节）；关着时 (0, 0, 0)。和
+ * `shakeOffset` 同一套 float 逐步取整，区别只在两处：amp = 0.1·amplitude（不乘场景高），v = (cos T, sin(1.333·T), sin T) 保留 z，
+ * 长度指数作用在三维长度上（`p5d-shakep` 偏移与公式相同，`p5d-shakep-r` 的 `roughness 0.1` 同样不改长度）。
+ */
+export function shakeOffset3(fields: ShakeFields, time: number): [number, number, number] {
+  if (!fields.camerashake) return [0, 0, 0];
+  const e = f(Math.pow(f(fields.camerashakeroughness), 3));
+  const amp = f(f(fields.camerashakeamplitude) * F_TENTH);
+  const speed = f(fields.camerashakespeed);
+  const t = f(f(speed * speed) * f(time));
+  let x = f(Math.cos(t));
+  let y = f(Math.sin(f(F_Y_RATE * t)));
+  let z = f(Math.sin(t));
+  if (e > F_THRESHOLD && e !== 1) {
+    const length = f(Math.sqrt(f(f(f(x * x) + f(y * y)) + f(z * z))));
+    if (length > 0) {
+      const scale = f(Math.pow(length, e));
+      x = f(f(x / length) * scale);
+      y = f(f(y / length) * scale);
+      z = f(f(z / length) * scale);
+    }
+  }
+  return [f(x * amp), f(y * amp), f(z * amp)];
 }

@@ -257,9 +257,9 @@ describe("视差公式（p5-REPORT 实测）", () => {
     expect(drawParallax(held, fields({ cameraparallaxamount: 0.3 }))).toEqual({ point: [1920, 1080], amount: 0.3 });
   });
 
-  it("parallaxDepth 只有一个分量时铺满两个；uniform 遇到 NaN（W = 0）取 0", () => {
+  it("parallaxDepth 只有一个分量时铺满两个；uniform 遇到 NaN（W = 0）保留 NaN（P5d 步骤 0 实测推翻了「取 0」）", () => {
     expect(parallaxOffset(0.5, [0.01], [1460, 840], [960, 540])).toEqual([0.5 * 0.01 * 500, 0.5 * 0.01 * 300]);
-    expect(parallaxUniform([0, 10], 0, 0)).toEqual([0, 1]);
+    expect(parallaxUniform([0, 10], 0, 0)).toEqual([Number.NaN, 1]);
   });
 
   it("replayParallax：从加载时的状态起逐帧推进，和逐帧调 advanceParallax 相同", () => {
@@ -1627,13 +1627,13 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     script = (r) => r.sceneState!.write({ property: "", target: { kind: "general", key: "zoom" } }, 2);
     now += 50;
     frames.at(-1)!(now);
-    expect(setCamera.mock.lastCall![0].zoom).toBe(1.5);
+    expect((setCamera.mock.lastCall![0] as { zoom: number }).zoom).toBe(1.5);
     script = null;
     for (let i = 0; i < 2; i++) {
       now += 50;
       frames.at(-1)!(now);
     }
-    expect(setCamera.mock.calls.map(([camera]) => camera.zoom)).toEqual([1.5, 2, 2]);
+    expect(setCamera.mock.calls.map(([camera]) => (camera as { zoom: number }).zoom)).toEqual([1.5, 2, 2]);
     // 绘制：加载帧、第 1 帧 1.5，第 2 帧起 2；粒子模拟用上一帧的相机，第 3 帧才是 2
     expect(draws).toEqual([1.5, 1.5, 2, 2]);
     expect(steps).toEqual([1.5, 1.5, 1.5, 2]);

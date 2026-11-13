@@ -173,8 +173,8 @@ export function orientationBasis(
 
 /**
  * 正交场景的视线与上方向（视图是单位阵，p3-script-REPORT L2）：`g_ViewForward = −V 第 2 列 = (0, 0, −1)`、
- * `g_ViewUp = V 第 1 列 = (0, 1, 0)`（rea-p4c-render.md 7.2）。透视场景照报（`object:perspective`）；透视粒子（系统 `flags` bit2）
- * 的覆盖只改视图平移和投影（`FUN_1401e5b60`，6.4），不改这两个。
+ * `g_ViewUp = V 第 1 列 = (0, 1, 0)`（rea-p4c-render.md 7.2）。透视场景（P5d 步骤 2）用相机的视线与上方向（`render/camera.ts` 的
+ * `ViewVectors`，`GpuScene` 交给朝向计算）；透视粒子（系统 `flags` bit2）的覆盖只改视图平移和投影（`FUN_1401e5b60`，6.4），不改这两个。
  */
 export const VIEW_FORWARD: Vec3 = [0, 0, -1];
 export const VIEW_UP: Vec3 = [0, 1, 0];
