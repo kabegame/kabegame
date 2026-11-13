@@ -1,5 +1,26 @@
 # v4.7.0 regression
 
+## 界面重构 P9：收尾（删除 element-plus 与 Vant）
+
+2026-11-13 macOS dev。确认框门面 `messageBox` 改为自己实现（`MessageBoxHost`，Reka AlertDialog），`PickerSheet` 的 `van-picker` 换成自写滚轮 `WheelColumn`，删掉混用期垫片（层级改由 `components/ui/layer.ts` 自己的计数器给），删除 vendored element-plus / icons、Vant、`@vitejs/plugin-vue-jsx` 与全部接线。全仓不再有 `<el-*>`、`.el-*`、`@kabegame/element-plus` 导入与 `TODO:[REF_UI]`。
+
+- 确认框结果约定照旧：确定 resolve `"confirm"`，取消 `"cancel"`，Esc / 返回键 `"close"`（没开 `distinguishCancelAndClose` 时报 `"cancel"`）；`alert` 怎么关都 resolve；`prompt` 的 `inputValidator` 不通过时提示在输入框下方、框不关。
+- `kb-control` 出错时聚焦也保持红边框（原来聚焦的深色边框盖过了出错的红色，所有表单都有这个问题）。
+- web 构建：JS 3.90 → 2.81 MB（gzip 1.24 → 0.91 MB），CSS 592 → 151 KB（gzip 113 → 27 KB）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | P0 单测与检查 | macOS | `check-kabegame --skip cargo`；前端 vitest 全量；web 构建；grep `<el-` / `.el-` / `@kabegame/element-plus` / `vant` / `TODO:[REF_UI]` | 0 error；全过；构建成功；grep 只剩历史注释 | 2026-11-13 Claude：vue-tsc 0 error；vitest 91 个文件 956 个用例全过（新增确认框 4 例、滚轮 2 例、层级工具 2 例）；`vite build --mode web` 成功 |
+| [x] | P1 启动与主页面 | macOS dev | 整页刷新；画廊、画册、插件、设置各看一遍 | 无报错、外观与 P8 一致 | 2026-11-13 Claude：CDP 截图；控制台无 error / warning（只有既有的 ejs `fs` 外部化提示） |
+| [x] | P2 确认框 | macOS 画册页 | 弹一个带 HTML 正文的危险确认；Esc | 层级在页面之上（3001）、焦点在「删除」、加粗正文；Esc 报 `close`（`distinguishCancelAndClose`） | 2026-11-13 Claude：CDP 从页面里调门面 |
+| [x] | P3 输入框 | macOS | `messageBox.prompt` 带初值与校验；清空回车；再填回车 | 打开时选中原文；清空后提示「名称不能为空」、红边框、框不关；填好后 resolve `{ value }` | 2026-11-13 Claude：CDP；发现并修了聚焦时红边框被盖住 |
+| [x] | P4 对话框里的确认框 | macOS `/dev/ui`「对话框 ⊃ 各种浮层」→「确认框」；Esc | 确认框层级高于对话框；Esc 只关确认框、焦点回到对话框 | 2026-11-13 Claude：CDP；层级 3003 / 3004 |
+| [x] | P5 滚轮（级联） | macOS `/dev/ui` 对话框里点「滚轮」 | 初值 12；十位滚到 3；个位按 ↓；确定 | 两列对齐 1 / 2；十位 3 时个位只剩 0–5；确定得 33、底部面板关闭 | 2026-11-13 Claude：CDP；截图看过（桌面宽度下两列各占一半） |
+| [ ] | P6 真实删除 / 重命名流程 | macOS 画册树右键 | 重命名、设置标签 key（校验不过）、删除正在轮播的画册（取消） | 输入框初值、出错提示、取消不删 | 未走真实入口（门面同一份，已在 P2–P3 用门面直接测） |
+| [ ] | P7 Android 滚轮 | Android | 画廊翻页（级联）、每页条数、设置里的数字 / 时长 / 语言滚轮；快速甩动后立刻点确定 | 停在选项上；确定取到停住的值；返回键关闭 | 未测（需真机，惯性滚动只能在触屏上看） |
+| [ ] | P8 Android 退出确认 | Android 主页返回键 | 返回键弹退出确认；再按返回键 | 第二次返回键关掉确认框、不退出 | 未测 |
+| [ ] | P9 Web 版 | `deno task build:web` | 打开 demo、确认框 / 输入框 / super 模式提示 | 与桌面一致 | 未测（只跑了前端构建） |
+
 ## 界面重构 P8：自动任务、设置与其它
 
 2026-11-13 macOS dev。运行配置页（卡片、定时编辑气泡、配置详情 / 编辑 / 推荐配置预览、漏跑提醒）、设置页与设置对话框（全部分区的条目与控件、插件默认配置、Web 服务器、MCP）、插件详情左栏菜单、检查更新与下载进度、应用日志、吉祥物历史对话框换成 `@/components/ui` 与 lucide 图标。至此业务界面里不再有 `<el-*>`、element-plus（含图标包）导入与 `.el-*` 选择器，只剩 P9 的收尾项（`el-config-provider`、全局样式、混用期垫片、陈列页的混用场景）：

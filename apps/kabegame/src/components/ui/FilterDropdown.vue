@@ -148,7 +148,7 @@
     </Tooltip>
 
     <PopoverRoot v-if="!isDialog" v-model:open="popoverOpen">
-      <PopoverPortal :to="portalTo">
+      <PopoverPortal>
         <PopoverContent
           side="bottom"
           align="start"
@@ -160,7 +160,7 @@
           @open-auto-focus="onOpenAutoFocus"
           @close-auto-focus="onCloseAutoFocus"
           @pointer-down-outside="onOutside"
-          @focus-outside="keepOpenOnForeign"
+          @focus-outside="keepOpenOnToast"
           @interact-outside="onOutside"
         >
           <ReusePanel />
@@ -187,7 +187,7 @@
  * chip 本身是触发器；面板是内置的选项列表（可搜索、带计数、可展开选项）或 #panel 自定义内容。
  * 紧凑布局下（kbFilterDropdownContextKey 的 panelMode 为 dialog）面板放进居中对话框。
  *
- * 原在 vendored element-plus 里（KbFilterDropdown），P3 移到这里用 reka-ui 重写：props / 事件 / 插槽照旧，
+ * 原在 vendored element-plus 里（KbFilterDropdown，P9 已删包），P3 移到这里用 reka-ui 重写：props / 事件 / 插槽照旧，
  * 去掉了没有调用方的 clickOutsideIgnore（面板里的子层现在都是 Reka 层，本来就算层内）与 #trigger；
  * 组件名仍是 KbFilterDropdown（测试按名字找）。
  */
@@ -200,7 +200,7 @@ import Dialog from "./Dialog.vue";
 import Input from "./Input.vue";
 import Spinner from "./Spinner.vue";
 import Tooltip from "./Tooltip.vue";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 import {
   kbFilterDropdownContextKey,
   type KbFilterDropdownOption,
@@ -297,10 +297,6 @@ const popoverOpen = computed({
 });
 useModalBack(popoverOpen);
 const zIndex = useLayerZIndex(popoverOpen);
-usePauseForeignTraps(popoverOpen); // TODO:[REF_UI] P9 删
-
-// TODO:[REF_UI] P9 删：chip 在 EP 对话框里时弹层挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
 
 /**
  * 开合的副作用统一挂在 visible 上：Android 返回键、对话框的 Esc / 遮罩都直接改它，同样要发 close。
@@ -313,7 +309,6 @@ watch(
       query.value = "";
       expandedValue.value = null; // 重新打开时收起
       syncHighlightToSelection();
-      portalTo.value = foreignPortalTarget(chipRef.value);
       emit("open");
     } else {
       emit("close");
@@ -443,12 +438,12 @@ type OutsideEvent = Event & { detail?: { originalEvent?: Event } };
 
 /**
  * 面板里再弹出的子层（气泡确认、编辑浮层、选择框）都是 Reka 层，Reka 按层的先后算作层内，不会触发这里。
- * 点在 chip 上不关（交给 chip 的 click 切换）；点在旧组件的浮层上不关（混用期）。
+ * 点在 chip 上不关（交给 chip 的 click 切换）；点在提示消息上不关。
  */
 function onOutside(event: OutsideEvent) {
   const target = event.detail?.originalEvent?.target ?? event.target;
   if (isOwnChip(target)) event.preventDefault();
-  else keepOpenOnForeign(event);
+  else keepOpenOnToast(event);
 }
 
 /**

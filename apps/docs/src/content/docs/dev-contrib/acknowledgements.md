@@ -14,7 +14,9 @@ Kabegame 建立在众多开源项目之上。感谢这些项目的开发者与�
 
 ## UI 与工具库
 
-- [**Element Plus**](https://github.com/element-plus/element-plus) — 基于 Vue 3 的组件库。
+- [**Reka UI**](https://github.com/unovue/reka-ui) — Vue 的无头组件原语，Kabegame 的弹层、菜单、表单控件都建在它上面。
+- [**Lucide**](https://github.com/lucide-icons/lucide) — 线性图标库。
+- [**Element Plus**](https://github.com/element-plus/element-plus) — 基于 Vue 3 的组件库，Kabegame 早期版本的界面基于它。
 - [**Pinia**](https://github.com/vuejs/pinia) — Vue 状态管理库。
 - [**Vue Router**](https://github.com/vuejs/router) — Vue 官方路由管理器。
 - [**Axios**](https://github.com/axios/axios) — 基于 Promise 的 HTTP 客户端。

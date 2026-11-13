@@ -1,6 +1,6 @@
 /**
  * 新界面组件（UI 重构）：行为与无障碍来自 reka-ui（无头原语），样式用 UnoCSS + tokens.css。
- * 逐步取代 @kabegame/element-plus；新写的界面优先从这里取。
+ * 界面重构（P0–P9）后的唯一组件库，element-plus / Vant 已删除。
  *
  * service / composable / util 这类 .ts 里只要提示或确认框时，直接从 "@/components/ui/toast"、
  * "@/components/ui/messageBox" 导入，不经过本文件（免得把全部组件拉进来）。
@@ -71,6 +71,7 @@ export { default as Tabs } from "./Tabs.vue";
 export type { TabItem } from "./tabs";
 
 // 反馈
+export { default as MessageBoxHost } from "./MessageBoxHost.vue";
 export { default as Toaster } from "./Toaster.vue";
 export { toast, type ToastOptions, type ToastType } from "./toast";
 export { messageBox } from "./messageBox";

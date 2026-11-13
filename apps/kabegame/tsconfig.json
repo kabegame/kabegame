@@ -4,10 +4,6 @@
     "noFallthroughCasesInSwitch": false,
     "paths": {
       "@/*": ["./src/*"],
-      "@kabegame/element-plus": ["../../packages/kabegame-element-plus/src/index.ts"],
-      "@kabegame/element-plus/*": ["../../packages/kabegame-element-plus/src/*"],
-      "@kabegame/element-plus-icons": ["../../packages/kabegame-element-plus-icons/src/index.ts"],
-      "@kabegame/element-plus-icons/*": ["../../packages/kabegame-element-plus-icons/src/*"],
       "@kabegame/pathql-client": ["../../packages/kabegame-pathql-client/index.ts"]
     }
   },

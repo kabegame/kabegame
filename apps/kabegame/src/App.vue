@@ -1,160 +1,154 @@
 <template>
-  <el-config-provider :locale="elementPlusLocale" :z-index="3000">
-    <!-- TODO:[REF_UI] P9 删：el-config-provider（z-index 3000 是 compat.ts 取号的基数） -->
-    <!-- 主窗口 -->
+  <!-- 主窗口 -->
+  <div
+    class="app-container"
+    :class="{
+      'app-container-compact': uiStore.isCompact,
+      'has-app-background': bgVisible,
+    }"
+  >
     <div
-      class="app-container"
-      :class="{
-        'app-container-compact': uiStore.isCompact,
-        'has-app-background': bgVisible,
-      }"
+      v-if="bgVisible && bgImage"
+      class="app-background-layer fixed inset-0 z-0 pointer-events-none overflow-hidden"
+      aria-hidden="true"
     >
-      <div
-        v-if="bgVisible && bgImage"
-        class="app-background-layer fixed inset-0 z-0 pointer-events-none overflow-hidden"
-        aria-hidden="true"
-      >
-        <ImageContent
-          ref="bgContentRef"
-          :native-drag="false"
-          :key="`bg-${bgImageToken}`"
-          :image="bgImage"
-          prefer="original"
-          fit="cover"
-          class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
-          :style="bgImageStyle"
-          :video-playing="bgVisible"
-          video-muted
-          video-loop
-          reset-video-on-pause
-          @ready="handleBgMediaReady"
-          @error="handleBgMediaError"
-        />
-      </div>
-      <!-- 全局文件拖拽提示层（仅非安卓平台，按热区定位，不遮挡交互） -->
-      <FileDropOverlay ref="fileDropOverlayRef" />
-      <!-- 非紧凑布局：侧边栏 + 主内容 -->
-      <aside v-if="!uiStore.isCompact" class="app-sidebar">
-        <div class="flex h-16 flex-none items-center justify-center">
-          <img :src="appLogoUrl" alt="Logo" class="size-9 object-contain" title="Kabegame" draggable="false" />
-        </div>
-        <nav class="sidebar-nav flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1">
-          <Tooltip v-for="item in sideNavItems" :key="item.index" :content="item.label" side="right">
-            <router-link
-              :to="item.index"
-              :class="[SIDEBAR_ITEM, activeRoute === item.index ? SIDEBAR_ITEM_ACTIVE : '']"
-              :aria-label="item.label"
-              :aria-current="activeRoute === item.index ? 'page' : undefined"
-            >
-              <component :is="item.icon" />
-              <CountBadge :count="item.badge ?? 0" />
-            </router-link>
-          </Tooltip>
-        </nav>
-        <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
-        <template v-if="!kamechanEnabled">
-          <UpdateButton />
-          <div
-            class="flex flex-none flex-col items-center gap-1 border-t border-solid border-kb-line px-3 pb-3.5 pt-2.5 border-x-0 border-b-0"
-          >
-            <SidebarActivityBar v-if="busyEntryVisible" />
-            <Tooltip :content="$t('route.settings')" side="right">
-              <button
-                type="button"
-                :class="[SIDEBAR_ITEM, settingsActive ? SIDEBAR_ITEM_ACTIVE : '']"
-                :aria-label="$t('route.settings')"
-                @click="openSettingsEntry()"
-              >
-                <Settings />
-              </button>
-            </Tooltip>
-            <GlobalToolsPopover variant="sidebar" @open-settings="openSettingsEntry()" />
-          </div>
-        </template>
-        <div v-else class="h-[210px] flex-none pointer-events-none" aria-hidden="true" />
-        <UpdateButton v-if="kamechanEnabled" corner />
-      </aside>
-      <main class="app-main">
-        <router-view v-slot="{ Component }" :key="routerViewKey">
-          <!-- <keep-alive> -->
-          <component :is="Component" />
-          <!-- </keep-alive> -->
-        </router-view>
-      </main>
-      <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
-      <nav
-        v-if="uiStore.isCompact"
-        class="app-bottom-tabs relative flex w-full flex-none flex-row border-x-0 border-b-0 border-t border-solid border-kb-line bg-kb-surface-raised pb-[var(--sab,env(safe-area-inset-bottom,0px))]"
-        aria-label="主导航"
-      >
-        <router-link
-          v-for="tab in bottomTabs"
-          :key="tab.index"
-          :to="tab.index"
-          class="flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-2 no-underline text-kb-fg-muted transition-colors duration-150 [&.is-active]:text-kb-fg"
-          :class="{ 'is-active': activeRoute === tab.index }"
-        >
-          <span class="relative flex [&_svg]:size-[22px]">
-            <component :is="tab.icon" :stroke-width="activeRoute === tab.index ? 2.1 : undefined" />
-            <CountBadge :count="tab.badge ?? 0" />
-          </span>
-          <span class="max-w-full truncate text-[11px] leading-[1.2]">
-            {{ tab.label }}
-          </span>
-        </router-link>
-        <!-- 同上：kamechan 开着时工具箱入口在它身上，底部 tab 不再重复一个 -->
-        <div v-if="!kamechanEnabled" class="flex min-w-0 flex-1 flex-col items-center justify-center">
-          <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面 / web 非紧凑挂载），走路由而非弹窗 -->
-          <GlobalToolsPopover variant="compact" @open-settings="openSettingsEntry()" />
-        </div>
-      </nav>
-      <KamechanMascot @open-settings="openSettingsEntry()" />
+      <ImageContent
+        ref="bgContentRef"
+        :native-drag="false"
+        :key="`bg-${bgImageToken}`"
+        :image="bgImage"
+        prefer="original"
+        fit="cover"
+        class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
+        :style="bgImageStyle"
+        :video-playing="bgVisible"
+        video-muted
+        video-loop
+        reset-video-on-pause
+        @ready="handleBgMediaReady"
+        @error="handleBgMediaError"
+      />
     </div>
+    <!-- 全局文件拖拽提示层（仅非安卓平台，按热区定位，不遮挡交互） -->
+    <FileDropOverlay ref="fileDropOverlayRef" />
+    <!-- 非紧凑布局：侧边栏 + 主内容 -->
+    <aside v-if="!uiStore.isCompact" class="app-sidebar">
+      <div class="flex h-16 flex-none items-center justify-center">
+        <img :src="appLogoUrl" alt="Logo" class="size-9 object-contain" title="Kabegame" draggable="false" />
+      </div>
+      <nav class="sidebar-nav flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1">
+        <Tooltip v-for="item in sideNavItems" :key="item.index" :content="item.label" side="right">
+          <router-link
+            :to="item.index"
+            :class="[SIDEBAR_ITEM, activeRoute === item.index ? SIDEBAR_ITEM_ACTIVE : '']"
+            :aria-label="item.label"
+            :aria-current="activeRoute === item.index ? 'page' : undefined"
+          >
+            <component :is="item.icon" />
+            <CountBadge :count="item.badge ?? 0" />
+          </router-link>
+        </Tooltip>
+      </nav>
+      <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
+      <template v-if="!kamechanEnabled">
+        <UpdateButton />
+        <div
+          class="flex flex-none flex-col items-center gap-1 border-t border-solid border-kb-line px-3 pb-3.5 pt-2.5 border-x-0 border-b-0"
+        >
+          <SidebarActivityBar v-if="busyEntryVisible" />
+          <Tooltip :content="$t('route.settings')" side="right">
+            <button
+              type="button"
+              :class="[SIDEBAR_ITEM, settingsActive ? SIDEBAR_ITEM_ACTIVE : '']"
+              :aria-label="$t('route.settings')"
+              @click="openSettingsEntry()"
+            >
+              <Settings />
+            </button>
+          </Tooltip>
+          <GlobalToolsPopover variant="sidebar" @open-settings="openSettingsEntry()" />
+        </div>
+      </template>
+      <div v-else class="h-[210px] flex-none pointer-events-none" aria-hidden="true" />
+      <UpdateButton v-if="kamechanEnabled" corner />
+    </aside>
+    <main class="app-main">
+      <router-view v-slot="{ Component }" :key="routerViewKey">
+        <!-- <keep-alive> -->
+        <component :is="Component" />
+        <!-- </keep-alive> -->
+      </router-view>
+    </main>
+    <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
+    <nav
+      v-if="uiStore.isCompact"
+      class="app-bottom-tabs relative flex w-full flex-none flex-row border-x-0 border-b-0 border-t border-solid border-kb-line bg-kb-surface-raised pb-[var(--sab,env(safe-area-inset-bottom,0px))]"
+      aria-label="主导航"
+    >
+      <router-link
+        v-for="tab in bottomTabs"
+        :key="tab.index"
+        :to="tab.index"
+        class="flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-2 no-underline text-kb-fg-muted transition-colors duration-150 [&.is-active]:text-kb-fg"
+        :class="{ 'is-active': activeRoute === tab.index }"
+      >
+        <span class="relative flex [&_svg]:size-[22px]">
+          <component :is="tab.icon" :stroke-width="activeRoute === tab.index ? 2.1 : undefined" />
+          <CountBadge :count="tab.badge ?? 0" />
+        </span>
+        <span class="max-w-full truncate text-[11px] leading-[1.2]">
+          {{ tab.label }}
+        </span>
+      </router-link>
+      <!-- 同上：kamechan 开着时工具箱入口在它身上，底部 tab 不再重复一个 -->
+      <div v-if="!kamechanEnabled" class="flex min-w-0 flex-1 flex-col items-center justify-center">
+        <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面 / web 非紧凑挂载），走路由而非弹窗 -->
+        <GlobalToolsPopover variant="compact" @open-settings="openSettingsEntry()" />
+      </div>
+    </nav>
+    <KamechanMascot @open-settings="openSettingsEntry()" />
+  </div>
 
-    <!-- 全局模态单例与页面布局同级，避免继承 app-container 的 flex、定位和裁剪规则 -->
-    <PluginImportDialog v-model:open="importDialogOpen" :kgpg-path="importKgpgPath" />
-    <!-- 桌面 / web 非紧凑用设置弹窗；Android（含平板宽屏、横屏手机）与紧凑布局用全屏设置页 -->
-    <SettingsDialog
-      v-if="!settingsUsesRoute"
-      v-model:open="settingsOpen"
-    />
-    <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
-    <template v-if="!uiStore.isCompact && !IS_WEB">
-      <UpdateDialog />
-      <DownloadProgressDialog />
-    </template>
-    <TaskDrawer v-model="taskDrawerVisible" />
-    <AutoConfigDialog />
-    <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
-    <AppLogDialog />
-    <CrawlerDialog v-model="crawlerDrawerVisible" />
-    <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
-    <LocalImportDialog
-      v-if="!IS_WEB && !uiStore.isCompact"
-      v-model="localImportVisible"
-      :initial-config="localImportInitial"
-    />
-    <MissedRunsDialog
-      :open="missedRunsModal.isOpen.value"
-      :items="missedRunItems"
-      :system-sleep="wasSystemSleep"
-      @close="missedRunsModal.close()"
-      @run-now="handleRunMissedNow"
-      @dismiss="handleDismissMissed"
-    />
-    <SettingChoiceHost />
-    <WallpaperTargetPickerHost />
-    <FrameMonitor />
-    <!-- 提示消息（toast / kameMessage 的降级）的渲染处 -->
-    <Toaster />
-  </el-config-provider>
+  <!-- 全局模态单例与页面布局同级，避免继承 app-container 的 flex、定位和裁剪规则 -->
+  <PluginImportDialog v-model:open="importDialogOpen" :kgpg-path="importKgpgPath" />
+  <!-- 桌面 / web 非紧凑用设置弹窗；Android（含平板宽屏、横屏手机）与紧凑布局用全屏设置页 -->
+  <SettingsDialog v-if="!settingsUsesRoute" v-model:open="settingsOpen" />
+  <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
+  <template v-if="!uiStore.isCompact && !IS_WEB">
+    <UpdateDialog />
+    <DownloadProgressDialog />
+  </template>
+  <TaskDrawer v-model="taskDrawerVisible" />
+  <AutoConfigDialog />
+  <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
+  <AppLogDialog />
+  <CrawlerDialog v-model="crawlerDrawerVisible" />
+  <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
+  <LocalImportDialog
+    v-if="!IS_WEB && !uiStore.isCompact"
+    v-model="localImportVisible"
+    :initial-config="localImportInitial"
+  />
+  <MissedRunsDialog
+    :open="missedRunsModal.isOpen.value"
+    :items="missedRunItems"
+    :system-sleep="wasSystemSleep"
+    @close="missedRunsModal.close()"
+    @run-now="handleRunMissedNow"
+    @dismiss="handleDismissMissed"
+  />
+  <SettingChoiceHost />
+  <WallpaperTargetPickerHost />
+  <FrameMonitor />
+  <!-- 确认框（messageBox）与提示消息（toast / kameMessage 的降级）的渲染处 -->
+  <MessageBoxHost />
+  <Toaster />
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, provide, watch } from "vue";
-import { zhCn, en, zhTw, ja, ko } from "@kabegame/element-plus/locale";
 import { AlarmClock, BookImage, Compass, Image, Puzzle, Settings } from "@lucide/vue";
-import { CountBadge, Toaster, Tooltip } from "@/components/ui";
+import { CountBadge, MessageBoxHost, Toaster, Tooltip } from "@/components/ui";
 import appLogoUrl from "@/assets/icon-small.png";
 import { setSettingsQueryAdapter, useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
@@ -224,22 +218,6 @@ import { messageBox } from "@/components/ui/messageBox";
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
 const { locale, t } = useI18n();
 
-/** Element Plus 组件（含 DatePicker 面板文案）与 vue-i18n 语言对齐 */
-const elementPlusLocale = computed(() => {
-  switch (locale.value) {
-    case "zh":
-      return zhCn;
-    case "zhtw":
-      return zhTw;
-    case "ja":
-      return ja;
-    case "ko":
-      return ko;
-    default:
-      return en;
-  }
-});
-
 function applyLanguageSetting(raw: string | null | undefined) {
   const locale = tryResolveStoredLanguage(raw) ?? "en";
   setLocale(locale);
@@ -305,9 +283,7 @@ const busyEntryVisible = computed(() => busyCount.value > 0 || hasUnseenBusyFail
 
 // Android 一律走路由页：横屏手机等矮屏放不下弹窗，平板宽屏的路由页也有左侧分类导航。
 const settingsUsesRoute = computed(() => IS_ANDROID || uiStore.isCompact);
-const settingsActive = computed(() =>
-  settingsUsesRoute.value ? route.path === "/settings" : settingsOpen.value,
-);
+const settingsActive = computed(() => (settingsUsesRoute.value ? route.path === "/settings" : settingsOpen.value));
 const openSettingsEntry = () => {
   if (settingsUsesRoute.value) void router.push("/settings");
   else settingsOpen.value = true;

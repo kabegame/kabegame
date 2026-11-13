@@ -72,7 +72,7 @@
 
   <!-- 桌面端 Dialog 预览 -->
   <template v-else>
-    <!-- 层级用 previewModal 的栈位（2000 起），吉祥物按栈位浮在预览之上；预览里再弹出的新浮层向 EP 计数器取号（3000 起），在它之上 -->
+    <!-- 层级用 previewModal 的栈位（2000 起），吉祥物按栈位浮在预览之上；预览里再弹出的浮层向层级计数器取号（3000 起），在它之上 -->
     <DialogRoot :open="previewModal.isOpen.value" @update:open="handleDialogOpenChange">
       <DialogPortal>
         <DialogOverlay
@@ -90,7 +90,7 @@
           :style="{ zIndex: previewFullscreenZIndex }"
           @open-auto-focus="handleDialogOpenAutoFocus"
           @pointer-down-outside="handleDialogPointerDownOutside"
-          @focus-outside="keepOpenOnForeign"
+          @focus-outside="keepOpenOnToast"
           @interact-outside="handleDialogPointerDownOutside"
         >
           <header class="flex h-12 shrink-0 items-center gap-3 border-0 border-b border-solid border-kb-line pl-5 pr-3">
@@ -382,7 +382,7 @@
         </DialogContent>
       </DialogPortal>
     </DialogRoot>
-    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（Reka 下拉，打开时向 EP 计数器取号，压在预览之上） -->
+    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（Reka 下拉，打开时向层级计数器取号，压在预览之上） -->
     <ActionRenderer
       v-if="actions.length > 0"
       :visible="previewContextMenu.isOpen.value"
@@ -421,7 +421,7 @@ import {
 } from "@lucide/vue";
 import { DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from "reka-ui";
 import { Button, Tooltip } from "@/components/ui";
-import { isInAnyLayer, keepOpenOnForeign } from "@/components/ui/compat";
+import { isInAnyLayer, keepOpenOnToast } from "@/components/ui/layer";
 import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
@@ -1151,7 +1151,7 @@ const handleDialogOpenAutoFocus = (event: Event) => {
   (event.target as HTMLElement | null)?.focus?.({ preventScroll: true });
 };
 /**
- * 点到吉祥物不关预览：它按栈位浮在预览之上，原来的 EP 对话框只在点遮罩本身时才关。
+ * 点到吉祥物不关预览：它按栈位浮在预览之上（与 P4 之前的 EP 对话框「只在点遮罩本身时才关」一致）。
  * 点到旧浮层（属性面板里共用表单控件的 EP 下拉、取色器）也不关。
  */
 const handleDialogPointerDownOutside = (event: Event & { detail?: { originalEvent?: Event } }) => {
@@ -1160,7 +1160,7 @@ const handleDialogPointerDownOutside = (event: Event & { detail?: { originalEven
     event.preventDefault();
     return;
   }
-  keepOpenOnForeign(event);
+  keepOpenOnToast(event);
 };
 
 /** 设为封面进行中：菜单项与工具条按钮置灰，也挡住重复触发 */

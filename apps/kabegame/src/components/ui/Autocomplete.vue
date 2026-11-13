@@ -45,7 +45,7 @@
         <slot name="suffix" />
       </div>
     </PopoverAnchor>
-    <PopoverPortal :to="portalTo">
+    <PopoverPortal>
       <PopoverContent
         side="bottom"
         align="start"
@@ -99,7 +99,7 @@ import { PopoverAnchor, PopoverContent, PopoverPortal, PopoverRoot, useId } from
 import { X } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 
 defineOptions({ inheritAttrs: false });
 
@@ -144,12 +144,8 @@ const optionId = (index: number) => `${listId}-${index}`;
 
 useModalBack(shown);
 const zIndex = useLayerZIndex(shown);
-usePauseForeignTraps(shown); // TODO:[REF_UI] P9 删
-// TODO:[REF_UI] P9 删：输入框在 EP 对话框里时挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
 watch(shown, (value) => {
-  if (value) portalTo.value = foreignPortalTarget(anchorRef.value);
-  else active.value = -1;
+  if (!value) active.value = -1;
 });
 // 候选换了一批，旧的高亮下标不再对应同一条
 watch(
@@ -201,10 +197,10 @@ function clear() {
 }
 
 // 点在输入框 / 外框上不算「层外」（否则按下即关、聚焦又开）
-function onInteractOutside(e: Parameters<typeof keepOpenOnForeign>[0]) {
+function onInteractOutside(e: Parameters<typeof keepOpenOnToast>[0]) {
   const target = e.detail?.originalEvent?.target;
   if (target instanceof Node && anchorRef.value?.contains(target)) e.preventDefault();
-  else keepOpenOnForeign(e);
+  else keepOpenOnToast(e);
 }
 
 // 点外框空白处（前后缀之间）也聚焦输入框；前后缀里的按钮照常

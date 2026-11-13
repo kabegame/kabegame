@@ -1,8 +1,7 @@
 /**
  * 查询 chip 的维度图标（设计稿那套 16px 线性图标）。
- * 原在 vendored 图标包（@kabegame/element-plus-icons 的 Filter*），P3 搬进 app：图标包随 element-plus
- * 在 P9 删除，这一套是专门画的、和 lucide 观感接近，保留。
- * 由 packages/kabegame-element-plus-icons/svg/filter-*.svg 原样转写（根属性 + 内部标记）。
+ * 原在 vendored 图标包的 Filter*（filter-*.svg），界面重构 P3 原样转写进 app（根属性 + 内部标记）；
+ * 图标包已随 element-plus 在 P9 删除。这一套是专门画的、和 lucide 观感接近，保留。
  */
 import { defineComponent, h } from "vue";
 

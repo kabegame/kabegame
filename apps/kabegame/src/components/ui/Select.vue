@@ -36,15 +36,15 @@
       >
         <X class="size-3.5" />
       </button>
-      <SelectPortal :to="portalTo">
+      <SelectPortal>
         <SelectContent
           position="popper"
           :side-offset="4"
           :collision-padding="8"
           class="kb-menu-panel max-h-[min(var(--reka-select-content-available-height),320px)] min-w-[var(--reka-select-trigger-width)]"
           :style="{ zIndex }"
-          @focus-outside="keepOpenOnForeign"
-          @interact-outside="keepOpenOnForeign"
+          @focus-outside="keepOpenOnToast"
+          @interact-outside="keepOpenOnToast"
         >
           <SelectViewport>
             <SelectItem
@@ -76,7 +76,7 @@
  * 选项值不能是空字符串（Reka 的限制：空串表示「未选」）；需要时由调用方编码（见 KbSelect）。
  * class / style 落在外层容器上。
  */
-import { computed, ref, watch, type StyleValue } from "vue";
+import { computed, ref, type StyleValue } from "vue";
 import {
   SelectContent,
   SelectItem,
@@ -91,7 +91,7 @@ import {
 import { Check, ChevronDown, X } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 import { useFieldControl } from "./field";
 
 export interface SelectOption<V> {
@@ -125,13 +125,6 @@ const showClear = computed(
 const open = ref(false);
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
 const field = useFieldControl(props);
 const selected = computed(() => props.options.find((o) => o.value === model.value));
-
-// TODO:[REF_UI] P9 删：触发器在 EP 对话框里时挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
-watch(open, (value) => {
-  if (value) portalTo.value = foreignPortalTarget(document.activeElement);
-});
 </script>

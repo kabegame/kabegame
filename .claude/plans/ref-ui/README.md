@@ -42,7 +42,7 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 3. ~~**全局外框**~~（P1 按默认做了）：页面底 `#f6f6f7`、侧栏 `#efeff1`，中性的 `--anime-*` 全部指向 `--kb-*`；开应用背景时侧栏 / 底部导航毛玻璃（`--kb-glass*`）。看了不满意再调 token。
 4. **品牌元素**留多少：吉祥物、后台任务卡片的粉→紫渐变、插件卡片的 `kb-grad`。
 5. ~~**Toast**~~（P2 定了）：在 Reka Toast 上自己写（`toast.ts` + `Toaster.vue`），不加依赖。
-6. **Android 的 Vant**：`van-popup` 已在 P3 换成 Sheet；`van-picker`（滚轮选择）没有无头对应物，P3 先收拢到一处——`components/ui/PickerSheet.vue`（底部 Sheet 里放 `van-picker`，颜色走 Vant 的 CSS 变量取 `--kb-*`），P9 前再定保留还是自己写。
+6. ~~**Android 的 Vant**~~（P9 定了）：`van-popup` 在 P3 换成 Sheet；`van-picker` 在 P9 换成自写的滚轮 `WheelColumn`（原生滚动 + scroll-snap，惯性交给浏览器），`PickerSheet` 接口不变，Vant 整个删掉。
 7. **字号阶梯**：是否定一套字号 / 行高 token（标题 17、正文 13、说明 12.5 是 P0 的取值）。
 8. ~~**组件陈列页**~~（P2 做了）：dev 下的 `/dev/ui`（`views/dev/UiShowcase.vue`），含混用场景。
 9. ~~**P0 的焦点问题**~~（P2 修了）：菜单关闭时若刚打开了不包含触发器的 EP 对话框，焦点送进那个对话框（`compat.ts` 的 `keepFocusForForeign`）。
@@ -61,7 +61,7 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
 | **P6 ✅** | 画册与畅游 | 8 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P6」与下方「P6 实施记录」 |
 | **P7 ✅** | 插件 | 15 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P7」与下方「P7 实施记录」 |
 | **P8 ✅** | 自动任务、设置与其它 | 42 | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P8」与下方「P8 实施记录」 |
-| P9 | 收尾 | — | confirm 换实现、删垫片、删 EP 包与接线、清 `.el-*`、文档 |
+| **P9 ✅** | 收尾 | — | 2026-11-13 完成，见 `versions/latest/regression.md`「界面重构 P9」与下方「P9 实施记录」 |
 
 顺序的理由：P1 先换观感，后面每期看得出是同一套；P2 把各期都要的组件与门面一次建好；P3 是主界面，接着 P0；P4 从每个网格都能打开，放在画廊之后、其它界面之前；P5 换共用表单控件，P7 / P8 的表单界面因此更轻；设置页（P8）最后，它的条目最多、但逻辑最简单。
 
@@ -262,6 +262,16 @@ vendored element-plus（`packages/kabegame-element-plus`）进入只出不进的
   - `anime-theme.css`、`dialogs.css` 里剩下的 EP 相关样式；Vant 按待定 6 处理。
 - **文档**：`cocs/ui/COMPONENT_LIBRARY.md` 改写成新组件库的文档，`AGENTS.md`、`packages/AGENTS.md`、Cursor 规则同步。
 - **验收**：grep 无 `@kabegame/element-plus`、无 `<el-`、无 `.el-`；`deno task check`、vitest、web 构建通过；包体积前后对比。
+
+#### P9 实施记录
+
+- 确认框门面（`messageBox`）没有直接套 `AlertDialog` 组件，而是「排队的请求表 + App 里挂一个 `MessageBoxHost`」，同 `toast` + `Toaster`：命令式调用拿不到组件实例，宿主读队首渲染，关闭动画播完再接下一个。结果约定照 `ElMessageBox`（`"confirm"` / `"cancel"` / `"close"`、`distinguishCancelAndClose`、`prompt` 的 `{ value, action }` 与 `inputValidator`），只有一处有意不同：`alert` 怎么关都 resolve（原来点 × 会 reject，`AlbumDriveSetting` 没接 catch）。`type` / `center` / `customClass` 照收但不影响外观；新增 `danger`。HTML 正文多过一道 DOMPurify。
+- Vant 只剩 `van-picker`（6 处调用，翻页器是级联），自己写了滚轮 `WheelColumn`：原生滚动 + `scroll-snap`，滚动停 120 ms 才发值，点「确定」时按此刻位置取值（`settle()`）。`PickerSheet` 的 `columns` 三种写法与 `confirm` 参数同 van-picker，调用方一行没改。
+- 垫片删除后需要保留的两样移到 `components/ui/layer.ts`：层级计数器（从 3000 起，预览的 `useModal` 栈位 2000 不变）与 `isInAnyLayer`；「点到旧浮层不关」只剩「点到提示消息不关」（`keepOpenOnToast`）。20 个组件里的 `portalTo` / `usePauseForeignTraps` / `keepFocusForForeign` 用脚本统一删，剩下的 8 处手改。
+- EP 的 `base.scss` 在 `:root` 定义 `--el-*`，删包前查过业务里的引用：只有 `GalleryFacetTreeInner` 的增减计数颜色还在用 `--el-color-error/success`，改成 `--kb-*`；全局图标注册删除前按模板标签逐文件核对过，没有靠全局注册的 EP 图标；`vCornerBadge` 没有调用方。
+- 顺带：`kb-control` 出错时聚焦也保持红边框（实测输入框校验时发现，聚焦的深色边框盖过了红色，所有表单都有）；Uno 快捷方式 `kb-chip` / `kb-grad` 没有调用方、删除，`kb-card` 改取 token；P3 留下的三个无调用方组件删除；`--kb-fg-disabled`（只给 EP 用）删除。
+- 包体积（`vite build --mode web`）：JS 3.90 → 2.81 MB（gzip 1.24 → 0.91 MB），CSS 592 → 151 KB（gzip 113 → 27 KB）。
+- 未实测：Android 全部（滚轮的惯性只能在触屏上看、退出确认）、Web 版整包、真实入口的删除 / 重命名流程（门面同一份，已直接测）。
 
 ## 每期通用做法
 

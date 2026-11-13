@@ -18,11 +18,11 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 ## 架构
 
 ### 单体仓库布局
-- `apps/kabegame/` — Vue 3 前端（Vite、Pinia、UnoCSS、自有组件库）
+- `apps/kabegame/` — Vue 3 前端（Vite、Pinia、UnoCSS、`components/ui/` 下基于 reka-ui 的组件库）
 - `apps/wpe-scene/` — 场景壁纸宿主（纯 TS + Vite，P3 进行中）：构建进应用 `resources/wpe-scene`，主窗口 / 壁纸窗口以 `file:` iframe 加载；见 [场景壁纸文档](cocs/wpe/WPE_SCENE.md)「场景宿主」
 - `apps/kabegame-dev-mcp/` — dev 工具的 stdio MCP（`kabegame-dev`，Deno 直接跑 TS、不构建，`.mcp.json` 拉起）：探活、截图 / 求值 / 调应用命令、场景渲染与画面哈希、测试工程导入移除、读应用日志；只经 `src/client.ts` 调 vite 上 `kabegame-dev` 插件（`scripts/kabegame-dev/`）的 `/__kabegame_dev/*` REST，见 `.claude/skills/kabegame-chromium/SKILL.md`
 - `.claude/mcps/` — 仓库自带的 Python MCP（uv 管依赖，`.mcp.json` 拉起）。现有 `wpe-renderdoc`：常驻共享的 Wallpaper Engine（`ensure_running`、不关不杀）、本会话的测试窗口、抓 RenderDoc 帧（`capture_wallpaper` / `capture_sweep`，机器级抓帧锁、不抢占）与无界面回放分析；见 `.claude/mcps/wpe-renderdoc/README.md`
-- `packages/` — 共享前端包、自有组件库、插件开发子仓库与生成型包；详见 [packages/AGENTS.md](packages/AGENTS.md)
+- `packages/` — 共享前端包、插件开发子仓库与生成型包；详见 [packages/AGENTS.md](packages/AGENTS.md)
 - `src-tauri/kabegame-core/` — `kabegame-core`：共享 Rust 库（爬虫引擎、插件系统、存储）
 - `src-tauri/kabegame/` — Tauri GUI 应用（桌面端 + Android）
 - `src-tauri/kabegame-cli/` — 无界面 CLI
@@ -52,7 +52,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 **第三方补丁序列**——工作流与目录级约束见 [third-patches/AGENTS.md](third-patches/AGENTS.md)。一般预期third是脏的，third-patches才是我们工作的地方，除非bump跟上游。
 
-**组件库与 packages 子仓库**——维护边界和目录级约束见 [packages/AGENTS.md](packages/AGENTS.md)。
+**packages 子仓库**——维护边界和目录级约束见 [packages/AGENTS.md](packages/AGENTS.md)。
 
 **文件类型的唯一事实来源：**
 - `images.type` 一定非空、小写、去掉首尾空白且形如「主类/子类」（两段非空），所有生产写入必须经 Rust `normalize_stored_media_type`（当前由 `Storage::add_image` 调用），不能依赖遗留数据库默认值。查询直接读列，不再包 `LOWER` / `COALESCE`；媒体分类按主类分三类互补（`video/*` 视频、`x-wpe/*` WPE、其余图片），用绑定模式串的 `images.type GLOB ? AND images.type NOT GLOB ? AND images.type NOT GLOB ?`（视频与 WPE 走 `idx_images_type`，图片沿排序索引取满即停），格式保持 `SUBSTR`，避免占比不低的类型走索引再整体排序，详见 `cocs/provider-dsl/RULES.md`。
@@ -101,7 +101,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 ### 样式
 新样式应使用 **UnoCSS 工具类**（在 `uno.config.pub.ts` 和 `apps/kabegame/uno.config.ts` 中配置，使用 `presetWind3`——兼容 Tailwind 语法）。仅为复杂动画或第三方覆盖编写 `<style>` 块。将重复的类组合提取为 `uno.config.*.ts` 中的快捷方式。
 
-**界面重构进行中**：新写或重做的界面用 `apps/kabegame/src/components/ui/`（`reka-ui` 无头原语 + UnoCSS，从 `@/components/ui` 导入）与 `@lucide/vue` 图标，颜色取 `styles/tokens.css` 的 `--kb-*`（UnoCSS 里是 `kb` 色板与 `rounded-kb-*` / `shadow-kb-*`），不再往 vendored element-plus 里加组件；中性外框，强调色只用于选中、焦点、计数。element-plus 的外观已由 vendored 包的 `kb-reskin.scss` 全局指向 `--kb-*`（P1），业务样式不再写 `.el-*` 外观覆盖。提示与确认框用门面（P2）：`toast`（签名同 `ElMessage`，`@/components/ui/toast`）、`messageBox`（签名同 `ElMessageBox`，`@/components/ui/messageBox`）、`vLoading`，不要再直接调 `ElMessage` / `ElMessageBox`；新浮层的层级、点外部、焦点陷阱由混用期垫片 `components/ui/compat.ts` 兜住，直接用 Reka 原语写弹层时要接它。混用期才需要、某一期要删或换的代码注释带 `TODO:[REF_UI]`。过滤 chip 下拉已移出 vendored 包（P3），用 `@/components/ui` 的 `KbFilterDropdown`；动作菜单项（`actions/*Actions.ts`）按上下文换图标时用 `iconBy(...)` 包出解析器、渲染处用 `resolveActionIcon` 取，不要用 `typeof icon === "function"` 判断（lucide 图标本身就是函数）。表单校验用 `useForm()` + `Field` 的 `validator`（P5，`components/ui/form.ts`），不要再用 `el-form` 的 rules；时刻输入用 `TimeField`（P8，固定 24 小时制，不用原生 `type=time`）；插件变量的校验是 `utils/pluginVarForm.ts` 的 `varFieldError`。桌面看图用 `Lightbox`（P7，取代 `el-image-viewer`），触屏的 photoswipe 在新对话框里打开时要 `append-to` 那个对话框。写法约定与混用期的坑见 [组件库文档](cocs/ui/COMPONENT_LIBRARY.md)「新界面组件」。
+**组件库**：界面一律用 `apps/kabegame/src/components/ui/`（`reka-ui` 无头原语 + UnoCSS，从 `@/components/ui` 导入）与 `@lucide/vue` 图标，颜色取 `styles/tokens.css` 的 `--kb-*`（UnoCSS 里是 `kb` 色板与 `rounded-kb-*` / `shadow-kb-*`）；中性外框，强调色只用于选中、焦点、计数。element-plus 与 Vant 已在界面重构 P9 删除，不要再引入组件库，缺组件就在 `components/ui/` 里用 Reka 原语写。提示用 `toast`（`@/components/ui/toast`）、确认 / 输入框用 `messageBox`（`@/components/ui/messageBox`，调用方式同 `ElMessageBox`，自己实现、渲染在 `MessageBoxHost`）、加载遮罩用 `vLoading`；浮层层级用 `components/ui/layer.ts` 的 `useLayerZIndex`（全局计数器取号），直接用 Reka 原语写弹层时要接它。过滤 chip 下拉用 `KbFilterDropdown`，底部滚轮用 `PickerSheet`；动作菜单项（`actions/*Actions.ts`）按上下文换图标时用 `iconBy(...)` 包出解析器、渲染处用 `resolveActionIcon` 取，不要用 `typeof icon === "function"` 判断（lucide 图标本身就是函数）。表单校验用 `useForm()` + `Field` 的 `validator`（`components/ui/form.ts`），插件变量的校验是 `utils/pluginVarForm.ts` 的 `varFieldError`；时刻输入用 `TimeField`（固定 24 小时制，不用原生 `type=time`）。桌面看图用 `Lightbox`，触屏的 photoswipe 在对话框里打开时要 `append-to` 那个对话框。写法约定见 [组件库文档](cocs/ui/COMPONENT_LIBRARY.md)。
 
 ### 平台特定说明
 - **Windows/macOS/Linux**：使用虚拟磁盘（Dokan / macFUSE / FUSE）挂载图库

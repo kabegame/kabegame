@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 新界面组件的行为测试：对话框的 Esc / Android 返回栈、提示消息门面、确认框门面、加载指令与混用期垫片。
+ * 组件的行为测试：对话框的 Esc / Android 返回栈、提示消息门面、确认框门面、加载指令、层级工具与滚轮选择。
  * 外观在 dev 的 /dev/ui 陈列页里人工对照，这里只测行为。
  */
 import { flushPromises, mount } from "@vue/test-utils";
@@ -8,11 +8,6 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick, ref, withDirectives } from "vue";
 
-const epConfirm = vi.hoisted(() => vi.fn());
-vi.mock("@kabegame/element-plus", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@kabegame/element-plus")>()),
-  ElMessageBox: { confirm: epConfirm },
-}));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 // Android：useModalBack 只在 Android 上接返回栈
 vi.mock("@/env", async (importOriginal) => ({
@@ -21,11 +16,13 @@ vi.mock("@/env", async (importOriginal) => ({
 }));
 
 import Dialog from "./Dialog.vue";
+import MessageBoxHost from "./MessageBoxHost.vue";
+import PickerSheet, { type PickerOption } from "./PickerSheet.vue";
 import { useModalStackStore } from "@/stores/modalStack";
 import { closeToast, toast, toastEntries } from "./toast";
-import { messageBox } from "./messageBox";
+import { messageBox, messageBoxQueue } from "./messageBox";
 import { vLoading } from "./loading";
-import { foreignPortalTarget, keepOpenOnForeign, nextLayerZIndex } from "./compat";
+import { isInAnyLayer, keepOpenOnToast, nextLayerZIndex } from "./layer";
 
 const wrappers: { unmount: () => void }[] = [];
 
@@ -37,6 +34,7 @@ afterEach(() => {
   wrappers.splice(0).forEach((w) => w.unmount());
   for (const e of [...toastEntries]) closeToast(e.id);
   toastEntries.splice(0);
+  messageBox.close();
   document.body.innerHTML = "";
   vi.useRealTimers();
 });
@@ -129,26 +127,82 @@ describe("toast", () => {
 });
 
 describe("messageBox", () => {
-  it("参数原样转给 ElMessageBox，结果原样返回", async () => {
-    epConfirm.mockReset().mockResolvedValue("confirm");
-    await expect(messageBox.confirm("正文", "标题", { type: "warning" })).resolves.toBe("confirm");
-    expect(epConfirm).toHaveBeenCalledExactlyOnceWith("正文", "标题", { type: "warning" });
-    epConfirm.mockRejectedValue("cancel");
-    await expect(messageBox.confirm("正文")).rejects.toBe("cancel");
+  function mountHost() {
+    const wrapper = mount(MessageBoxHost, { attachTo: document.body });
+    wrappers.push(wrapper);
+  }
+  const buttons = () => [...document.querySelectorAll<HTMLButtonElement>("[role=alertdialog] button")];
+
+  it('confirm：确定 resolve "confirm"，取消 reject "cancel"', async () => {
+    mountHost();
+    const ok = messageBox.confirm("正文", "标题", { confirmButtonText: "好", cancelButtonText: "不" });
+    await flushPromises();
+    expect(document.querySelector("[role=alertdialog]")!.textContent).toContain("正文");
+    buttons()
+      .find((b) => b.textContent!.includes("好"))!
+      .click();
+    await expect(ok).resolves.toBe("confirm");
+
+    await new Promise((r) => setTimeout(r, 200));
+    const cancelled = messageBox.confirm("再来");
+    await flushPromises();
+    buttons()
+      .find((b) => b.textContent!.includes("common.cancel"))!
+      .click();
+    await expect(cancelled).rejects.toBe("cancel");
   });
 
-  it("有新模态层时，确认框存在期间暂停 Reka 的焦点陷阱，结束后撤掉", async () => {
-    const marker = document.createElement("div");
-    marker.setAttribute("data-kb-trap", "");
-    document.body.appendChild(marker);
-    let pausedDuringCall = false;
-    epConfirm.mockReset().mockImplementation(async () => {
-      pausedDuringCall = !!document.querySelector("[data-kb-focus-pause]");
-      return "confirm";
+  it("Esc：默认报 cancel，distinguishCancelAndClose 时报 close", async () => {
+    mountHost();
+    const plain = messageBox.confirm("正文");
+    await flushPromises();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await expect(plain).rejects.toBe("cancel");
+
+    await new Promise((r) => setTimeout(r, 200));
+    const distinct = messageBox.confirm("正文", "", { distinguishCancelAndClose: true });
+    await flushPromises();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await expect(distinct).rejects.toBe("close");
+  });
+
+  it("prompt：校验不过显示错误、留在框里；通过后 resolve { value }", async () => {
+    mountHost();
+    const result = messageBox.prompt("名称", "改名", {
+      inputValue: "旧",
+      inputValidator: (v) => (v.trim() ? true : "不能为空"),
     });
-    await messageBox.confirm("正文");
-    expect(pausedDuringCall).toBe(true);
-    expect(document.querySelector("[data-kb-focus-pause]")).toBeNull();
+    await flushPromises();
+    const input = document.querySelector<HTMLInputElement>("[role=alertdialog] input")!;
+    expect(input.value).toBe("旧");
+    input.value = " ";
+    input.dispatchEvent(new Event("input"));
+    await flushPromises();
+    buttons().at(-1)!.click();
+    await flushPromises();
+    expect(document.querySelector("[role=alertdialog]")!.textContent).toContain("不能为空");
+    input.value = "新";
+    input.dispatchEvent(new Event("input"));
+    await flushPromises();
+    buttons().at(-1)!.click();
+    await expect(result).resolves.toEqual({ value: "新", action: "confirm" });
+  });
+
+  it("alert 怎么关都 resolve；排队的请求依次显示；close() 全部结束", async () => {
+    mountHost();
+    const first = messageBox.alert("一");
+    const second = messageBox.confirm("二");
+    await flushPromises();
+    expect(messageBoxQueue).toHaveLength(2);
+    expect(document.querySelector("[role=alertdialog]")!.textContent).toContain("一");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await expect(first).resolves.toBe("confirm");
+    await new Promise((r) => setTimeout(r, 200));
+    await flushPromises();
+    expect(document.querySelector("[role=alertdialog]")!.textContent).toContain("二");
+    messageBox.close();
+    await expect(second).rejects.toBe("cancel");
+    expect(messageBoxQueue).toHaveLength(0);
   });
 });
 
@@ -173,28 +227,94 @@ describe("v-loading", () => {
   });
 });
 
-describe("混用期垫片", () => {
-  it("点到 EP 浮层或提示消息时不关新层；点到别处照常", () => {
-    const popper = document.createElement("div");
-    popper.className = "el-popper";
+describe("层级工具", () => {
+  it("点到提示消息时不关当前层；点到别处照常", () => {
+    const toastEl = document.createElement("li");
+    toastEl.setAttribute("data-kb-toast", "");
     const inner = document.createElement("span");
-    popper.appendChild(inner);
-    document.body.appendChild(popper);
-    const fromPopper = new CustomEvent("x", { cancelable: true, detail: { originalEvent: { target: inner } } });
-    keepOpenOnForeign(fromPopper as unknown as Event);
-    expect(fromPopper.defaultPrevented).toBe(true);
+    toastEl.appendChild(inner);
+    document.body.appendChild(toastEl);
+    const fromToast = new CustomEvent("x", { cancelable: true, detail: { originalEvent: { target: inner } } });
+    keepOpenOnToast(fromToast as unknown as Event);
+    expect(fromToast.defaultPrevented).toBe(true);
     const elsewhere = new CustomEvent("x", { cancelable: true, detail: { originalEvent: { target: document.body } } });
-    keepOpenOnForeign(elsewhere as unknown as Event);
+    keepOpenOnToast(elsewhere as unknown as Event);
     expect(elsewhere.defaultPrevented).toBe(false);
   });
 
-  it("触发器在 EP 对话框里时浮层挂进那个对话框", () => {
+  it("isInAnyLayer：对话框、菜单、提示里算层内，页面上不算", () => {
     const dialog = document.createElement("div");
-    dialog.className = "el-dialog";
+    dialog.setAttribute("role", "dialog");
     const button = document.createElement("button");
     dialog.appendChild(button);
     document.body.appendChild(dialog);
-    expect(foreignPortalTarget(button)).toBe(dialog);
-    expect(foreignPortalTarget(document.body)).toBeUndefined();
+    expect(isInAnyLayer(button)).toBe(true);
+    expect(isInAnyLayer(document.body)).toBe(false);
+  });
+});
+
+describe("PickerSheet", () => {
+  const cascade = [
+    {
+      text: "0",
+      value: 0,
+      children: [
+        { text: "1", value: 1 },
+        { text: "2", value: 2 },
+      ],
+    },
+    { text: "1", value: 1, children: [{ text: "0", value: 0 }] },
+  ];
+
+  function mountPicker(columns: PickerOption[] | PickerOption[][], values: (string | number)[]) {
+    const open = ref(true);
+    const model = ref(values);
+    const confirmed = vi.fn();
+    const Host = defineComponent({
+      setup: () => () =>
+        h(PickerSheet, {
+          open: open.value,
+          "onUpdate:open": (v: boolean) => (open.value = v),
+          modelValue: model.value,
+          "onUpdate:modelValue": (v: (string | number)[]) => (model.value = v),
+          columns,
+          title: "选",
+          onConfirm: confirmed,
+        }),
+    });
+    const wrapper = mount(Host, { attachTo: document.body });
+    wrappers.push(wrapper);
+    return { open, model, confirmed };
+  }
+
+  it("级联：按选中值解出各列；确定发各列的值并关闭", async () => {
+    const { open, confirmed } = mountPicker(cascade, [0, 2]);
+    await flushPromises();
+    const lists = document.querySelectorAll("[role=listbox]");
+    expect(lists).toHaveLength(2);
+    expect(lists[1].querySelectorAll("[role=option]")).toHaveLength(2);
+    [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")]
+      .find((b) => b.textContent!.includes("common.confirm"))!
+      .click();
+    await flushPromises();
+    expect(open.value).toBe(false);
+    expect(confirmed).toHaveBeenCalledOnce();
+    expect(confirmed.mock.calls[0][0].selectedValues).toEqual([0, 2]);
+  });
+
+  it("值不在选项里时落到第一项", async () => {
+    const { confirmed } = mountPicker(
+      [
+        { text: "a", value: "a" },
+        { text: "b", value: "b" },
+      ],
+      ["zzz"],
+    );
+    await flushPromises();
+    [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")]
+      .find((b) => b.textContent!.includes("common.confirm"))!
+      .click();
+    await flushPromises();
+    expect(confirmed.mock.calls[0][0].selectedValues).toEqual(["a"]);
   });
 });

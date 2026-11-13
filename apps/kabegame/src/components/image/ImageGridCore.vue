@@ -176,7 +176,7 @@
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { FolderOpen, ZoomIn } from "@lucide/vue";
-import { isInAnyLayer } from "@/components/ui/compat";
+import { isInAnyLayer } from "@/components/ui/layer";
 import { useI18n } from "@kabegame/i18n";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";

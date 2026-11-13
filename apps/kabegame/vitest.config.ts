@@ -1,11 +1,10 @@
 import vue from "@vitejs/plugin-vue";
-import vueJsx from "@vitejs/plugin-vue-jsx";
 import { defineConfig } from "vite";
 import pubConfig from "../../vite.config.pub";
 
 // 与应用共用平台常量、源码 alias 和样式环境；DOM 测试按文件开启 happy-dom。
 const config = {
-  plugins: [vue(), vueJsx()],
+  plugins: [vue()],
   define: pubConfig.define,
   resolve: pubConfig.resolve,
   css: pubConfig.css,

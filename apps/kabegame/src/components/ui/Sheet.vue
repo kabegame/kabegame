@@ -1,7 +1,7 @@
 <template>
   <DialogRoot v-model:open="open">
     <slot name="trigger" />
-    <DialogPortal :to="portalTo">
+    <DialogPortal>
       <DialogOverlay
         data-kb-motion
         class="fixed inset-0 bg-[var(--kb-overlay)] data-[state=open]:animate-[kb-fade-in_200ms_ease-out] data-[state=closed]:animate-[kb-fade-out_160ms_ease-in]"
@@ -17,9 +17,9 @@
           SIDES[side],
         ]"
         :style="sizeStyle"
-        @pointer-down-outside="keepOpenOnForeign"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @pointer-down-outside="keepOpenOnToast"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
       >
         <div v-if="side === 'bottom'" class="mx-auto mb-1 mt-2 h-1 w-9 shrink-0 rounded-full bg-kb-fill-dark" />
         <header
@@ -74,7 +74,7 @@
  * 左右面板是宽度（默认 min(420px, 100vw)），上下面板是最大高度（默认 85vh）。
  * Esc、点遮罩、Android 返回键关闭。
  */
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import {
   DialogClose,
   DialogContent,
@@ -88,7 +88,7 @@ import { X } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
 import Button from "./Button.vue";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 
 type Side = "right" | "left" | "top" | "bottom";
 
@@ -120,7 +120,6 @@ const { t } = useI18n();
 const open = defineModel<boolean>("open", { default: false });
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
 
 const sizeStyle = computed(() => {
   const size = typeof props.size === "number" ? `${props.size}px` : props.size;
@@ -129,14 +128,4 @@ const sizeStyle = computed(() => {
     ? { zIndex: zIndex.value, width: size ?? "min(420px, 100vw)", maxWidth: "100vw" }
     : { zIndex: zIndex.value, maxHeight: size ?? "85vh" };
 });
-
-// TODO:[REF_UI] P9 删：从 EP 对话框里打开时挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
-watch(
-  open,
-  (value) => {
-    if (value) portalTo.value = foreignPortalTarget(document.activeElement);
-  },
-  { immediate: true },
-);
 </script>

@@ -11,8 +11,6 @@
   },
   "dependencies": {
     "@fltsci/tauri-plugin-tracing": "^0.3.4",
-    "@kabegame/element-plus": "workspace:*",
-    "@kabegame/element-plus-icons": "workspace:*",
     "@kabegame/i18n": "workspace:*",
     "@kabegame/pathql-client": "workspace:*",
     "@internationalized/date": "3.12.4",
@@ -34,14 +32,12 @@
     "rxjs": "^7.8.2",
     "tauri-plugin-android-battery-optimization-api": "^0.1.0",
     "tauri-plugin-picker-api": "workspace:*",
-    "vant": "^4.9.22",
     "vue": "^3.4.21",
     "vue-router": "^4.3.0"
   },
   "devDependencies": {
     "@types/ejs": "^3.1.5",
     "@vitejs/plugin-vue": "^5.0.4",
-    "@vitejs/plugin-vue-jsx": "^4.2.0",
     "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.5.1",
     "happy-dom": "^20.7.0",

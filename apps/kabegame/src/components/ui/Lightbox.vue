@@ -1,6 +1,6 @@
 <template>
   <DialogRoot v-model:open="open">
-    <DialogPortal :to="portalTo">
+    <DialogPortal>
       <DialogOverlay
         data-kb-motion
         class="fixed inset-0 bg-[rgba(10,9,12,0.88)] data-[state=open]:animate-[kb-fade-in_160ms_ease-out] data-[state=closed]:animate-[kb-fade-out_120ms_ease-in]"
@@ -12,9 +12,9 @@
         v-bind="NO_DESCRIPTION"
         class="fixed inset-0 box-border select-none text-white outline-none data-[state=open]:animate-[kb-fade-in_160ms_ease-out] data-[state=closed]:animate-[kb-fade-out_120ms_ease-in]"
         :style="{ zIndex }"
-        @pointer-down-outside="keepOpenOnForeign"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @pointer-down-outside="keepOpenOnToast"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
         @keydown="onKeydown"
       >
         <DialogTitle class="sr-only">{{ title || t("common.imagePreview") }}</DialogTitle>
@@ -115,7 +115,7 @@ import { DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, Di
 import { ChevronLeft, ChevronRight, X, ZoomIn, ZoomOut } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 
 const props = withDefaults(defineProps<{ images: string[]; loop?: boolean; title?: string }>(), { loop: false });
 
@@ -127,17 +127,6 @@ const NO_DESCRIPTION = { "aria-describedby": undefined };
 
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
-
-// TODO:[REF_UI] P9 删：从 EP 对话框里打开时挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
-watch(
-  open,
-  (value) => {
-    if (value) portalTo.value = foreignPortalTarget(document.activeElement);
-  },
-  { immediate: true },
-);
 
 const ROUND_BUTTON =
   "grid size-10 cursor-pointer place-items-center rounded-full border-0 bg-[rgba(255,255,255,0.1)] p-0 text-white outline-none " +

@@ -1,5 +1,5 @@
 // 壁纸窗口 bootstrap：只装 pinia、i18n、UnoCSS 与主题变量，根组件为 WallpaperWindow。
-// 刻意不装 router / ElementPlus / vant / header features / crawler guard，
+// 刻意不装 router / header features / crawler guard，
 // 也不调用 settingsStore.loadAll()——壁纸窗口只经 IPC 读它需要的几个设置。
 import { createApp } from "vue";
 import { createPinia } from "pinia";

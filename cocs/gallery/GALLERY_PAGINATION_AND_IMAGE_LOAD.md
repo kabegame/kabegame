@@ -206,9 +206,8 @@ URL 入口只设置目标 id，不负责取图或定位；列表更新、
 
 - **设置**：[`GalleryPageSizeSetting.vue`](/apps/kabegame/src/components/settings/items/GalleryPageSizeSetting.vue)，[`Settings.vue`](/apps/kabegame/src/views/Settings.vue) 应用设置区。
 - **Android 四类图片页**：共用 [`GalleryQueryBar.vue`](/apps/kabegame/src/components/gallery/GalleryQueryBar.vue)
-  的 header fold + `van-picker`；确认后直接保存 `settings.galleryPageSize`。
-- [`GalleryPageSizeControl.vue`](/apps/kabegame/src/components/GalleryPageSizeControl.vue) 若被页面消费，
-  `update:pageSize` 的消费方也只能保存设置，不得导航 route store。
+  的 header fold + 底部滚轮（`components/ui/PickerSheet.vue`）；确认后直接保存 `settings.galleryPageSize`。
+  新增每页条数入口时，消费方同样只能保存设置，不得导航 route store。
 
 Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一次性读取全部记录，之后通过 `surf-records-change` / `surf-session-changed` 维护缓存；`Surf.vue` 和 `SurfImages.vue` 都以该 store 为读取源头，不再各自全量刷新。
 

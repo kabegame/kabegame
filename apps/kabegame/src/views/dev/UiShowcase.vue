@@ -2,7 +2,7 @@
   <div class="box-border h-full overflow-y-auto bg-kb-bg px-6 pb-16 pt-5 text-kb-fg">
     <h1 class="m-0 text-[20px] font-600 tracking-[-0.01em]">新界面组件陈列</h1>
     <p class="m-0 mt-1 text-[12.5px] text-kb-fg-muted">
-      dev 专用（/dev/ui）。改组件后在这里对照外观与键盘行为；「混用」一节验证混用期垫片。
+      dev 专用（/dev/ui）。改组件后在这里对照外观与键盘行为；「嵌套」一节验证层叠、焦点与 Esc。
     </p>
 
     <section :class="SECTION">
@@ -190,13 +190,14 @@
     </section>
 
     <section :class="SECTION">
-      <h2 :class="H2">混用（P2 垫片）</h2>
+      <h2 :class="H2">嵌套</h2>
       <p class="m-0 mb-2 text-[12.5px] text-kb-fg-muted">
-        新对话框里放旧下拉、从新对话框弹旧确认框；旧对话框里放新选择框、新下拉菜单、新气泡。都应能点、能用键盘、不误关。
+        对话框里放选择框、组合框、下拉菜单、气泡，再从里面弹确认框、输入框、滚轮与第二个对话框。都应能点、能用键盘，Esc
+        只关最上面一层。
       </p>
       <div class="flex gap-2">
-        <Button @click="mixNewOpen = true">新对话框 ⊃ 旧组件</Button>
-        <Button @click="mixOldOpen = true">旧对话框 ⊃ 新组件</Button>
+        <Button @click="nestOpen = true">对话框 ⊃ 各种浮层</Button>
+        <Button @click="pickerOpen = true">滚轮（级联）</Button>
       </div>
     </section>
 
@@ -231,39 +232,39 @@
       :action="fakeDelete"
     />
 
-    <Dialog v-model:open="mixNewOpen" title="新对话框 ⊃ 旧组件">
+    <Dialog v-model:open="nestOpen" title="对话框 ⊃ 各种浮层" width="480px">
       <div class="grid gap-3">
-        <Field label="旧下拉（el-select）">
-          <el-select v-model="resolution" placeholder="选择" filterable>
-            <el-option v-for="o in RESOLUTIONS" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
-        </Field>
-        <Button @click="confirmDemo">弹旧确认框（messageBox.confirm）</Button>
-      </div>
-    </Dialog>
-
-    <el-dialog v-model="mixOldOpen" title="旧对话框 ⊃ 新组件" width="480px">
-      <div class="grid gap-3">
-        <Field label="新选择框"><Select v-model="resolution" :options="RESOLUTIONS" /></Field>
-        <Field label="新组合框"><Combobox v-model="plugin" :options="PLUGINS" /></Field>
-        <div class="flex gap-2">
+        <Field label="选择框"><Select v-model="resolution" :options="RESOLUTIONS" /></Field>
+        <Field label="组合框"><Combobox v-model="plugin" :options="PLUGINS" /></Field>
+        <div class="flex flex-wrap gap-2">
           <DropdownMenu>
-            <DropdownMenuTrigger as-child><Button>新下拉菜单</Button></DropdownMenuTrigger>
+            <DropdownMenuTrigger as-child><Button>下拉菜单</Button></DropdownMenuTrigger>
             <DropdownMenuContent align="start">
               <MenuItem @select="toast.success('选中了')">选项一</MenuItem>
               <MenuSub label="子菜单"><MenuItem>子项</MenuItem></MenuSub>
             </DropdownMenuContent>
           </DropdownMenu>
           <Popover>
-            <PopoverTrigger as-child><Button>新气泡</Button></PopoverTrigger>
+            <PopoverTrigger as-child><Button>气泡</Button></PopoverTrigger>
             <PopoverContent :width="240">
               <div class="p-1"><Input v-model="text" placeholder="气泡里的输入框" /></div>
             </PopoverContent>
           </Popover>
-          <Button @click="dialogOpen = true">再开一个新对话框</Button>
+          <Button @click="confirmDemo">确认框</Button>
+          <Button @click="promptDemo">输入框</Button>
+          <Button @click="pickerOpen = true">滚轮</Button>
+          <Button @click="dialogOpen = true">再开一个对话框</Button>
         </div>
       </div>
-    </el-dialog>
+    </Dialog>
+
+    <PickerSheet
+      v-model:open="pickerOpen"
+      v-model="pickerValues"
+      title="跳到第几页"
+      :columns="PICKER_COLUMNS"
+      @confirm="(p) => toast.info(`选了 ${p.selectedValues.join('')}`)"
+    />
   </div>
 </template>
 
@@ -293,6 +294,7 @@ import {
   MenuSeparator,
   MenuSub,
   NumberField,
+  PickerSheet,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -364,15 +366,38 @@ const mode = ref("window");
 const dialogOpen = ref(false);
 const sheetSide = ref<"right" | "bottom" | null>(null);
 const alertOpen = ref(false);
-const mixNewOpen = ref(false);
-const mixOldOpen = ref(false);
+const nestOpen = ref(false);
+const pickerOpen = ref(false);
+const pickerValues = ref<number[]>([1, 2]);
+/** 两位页码 1–35 的级联：十位 0–3，个位按十位裁剪 */
+const PICKER_COLUMNS = [0, 1, 2, 3].map((tens) => ({
+  text: String(tens),
+  value: tens,
+  children: Array.from({ length: tens === 3 ? 6 : 10 }, (_, d) => d)
+    .filter((d) => tens * 10 + d >= 1)
+    .map((d) => ({ text: String(d), value: d })),
+}));
 
 async function confirmDemo() {
   try {
-    await messageBox.confirm("确认框门面（内部仍是 ElMessageBox）。", "确认", { type: "warning" });
+    await messageBox.confirm("确认框门面：在 Reka AlertDialog 上实现，签名同 ElMessageBox。", "确认", {
+      distinguishCancelAndClose: true,
+    });
     toast.success("确认");
-  } catch {
-    toast.info("取消");
+  } catch (action) {
+    toast.info(String(action));
+  }
+}
+
+async function promptDemo() {
+  try {
+    const { value } = await messageBox.prompt("新名称", "改名", {
+      inputValue: "旧名称",
+      inputValidator: (v) => (v.trim() ? true : "不能为空"),
+    });
+    toast.success(value);
+  } catch (action) {
+    toast.info(String(action));
   }
 }
 

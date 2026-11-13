@@ -9,7 +9,7 @@
  * - duration 0 表示不自动关（与 ElMessage 相同），默认 3000ms。
  */
 import { ref, shallowReactive } from "vue";
-import { nextLayerZIndex } from "./compat";
+import { nextLayerZIndex } from "./layer";
 
 export type ToastType = "success" | "info" | "warning" | "error";
 

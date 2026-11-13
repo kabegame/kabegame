@@ -47,15 +47,15 @@
         @keydown.backspace="onBackspace"
       />
     </ComboboxAnchor>
-    <ComboboxPortal :to="portalTo">
+    <ComboboxPortal>
       <ComboboxContent
         position="popper"
         :side-offset="4"
         :collision-padding="8"
         class="kb-menu-panel max-h-[min(var(--reka-combobox-content-available-height),320px)] min-w-[var(--reka-combobox-trigger-width)] overflow-y-auto"
         :style="{ zIndex }"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
       >
         <ComboboxViewport>
           <!-- 打的字不在选项里：第一项是「添加」，回车即加（同 el-select 的 allow-create + default-first-option） -->
@@ -89,7 +89,7 @@
  * 多值列表（插件变量 list 型）：已选项排成标签，输入框里打字筛选预设选项；
  * 打的字不在选项里时可直接回车添加。再点一次已选的选项即取消（Combobox 多选的语义）。
  */
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import {
   ComboboxAnchor,
   ComboboxContent,
@@ -103,7 +103,7 @@ import {
 import { Check, Plus, X } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "@/components/ui/compat";
+import { useLayerZIndex, keepOpenOnToast } from "@/components/ui/layer";
 import { useFieldControl } from "@/components/ui/field";
 
 type VarOption = string | { name: string | Record<string, string>; variable: string };
@@ -129,13 +129,6 @@ const searchTerm = ref("");
 const inputRef = ref<{ $el?: HTMLInputElement } | null>(null);
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
-
-// TODO:[REF_UI] P9 删：输入框在 EP 对话框里时挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
-watch(open, (value) => {
-  if (value) portalTo.value = foreignPortalTarget(document.activeElement);
-});
 
 function optionLabel(o: VarOption): string {
   if (typeof o === "string") return o;

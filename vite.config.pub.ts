@@ -1,8 +1,5 @@
 import { UserConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-/** vendored element-plus 有 31 个 .tsx（form-label-wrap / date-picker / table-v2 等），
- *  没有这个插件 esbuild 会按 React 语义编译 JSX，运行时报 `React is not defined` */
-import vueJsx from "@vitejs/plugin-vue-jsx";
 import path from "path";
 import UnoCSS from "unocss/vite";
 import { getDevServerHost } from "./scripts/utils";
@@ -27,7 +24,6 @@ export const isDebugIngestEnabled = process.env.KABEGAME_DEBUG_INGEST !== "false
 export default {
   plugins: [
     vue(),
-    vueJsx(),
     UnoCSS(),
     kabegameDebugServer({
       workspaceRoot: root,
@@ -95,20 +91,6 @@ export default {
   resolve: {
     alias: {
       "@": path.resolve(process.cwd(), "src"),
-      // vendored element-plus：单包平铺（deno 不认嵌套子 workspace），源码直接消费，
-      // alias 指向 src/，无构建产物。
-      "@kabegame/element-plus-icons": path.resolve(
-        root,
-        "packages",
-        "kabegame-element-plus-icons",
-        "src"
-      ),
-      "@kabegame/element-plus": path.resolve(
-        root,
-        "packages",
-        "kabegame-element-plus",
-        "src"
-      ),
       // pathql 生成客户端:index.ts 为生成物不入库(外壳 package.json 入库,包为
       // workspace 成员),由 `deno task pathql:generate` 生成;缺文件时前端构建/
       // 类型检查会明确报错,先跑 generate。

@@ -1,7 +1,7 @@
 <template>
   <AlertDialogRoot v-model:open="open">
     <slot name="trigger" />
-    <AlertDialogPortal :to="portalTo">
+    <AlertDialogPortal>
       <AlertDialogOverlay
         data-kb-motion
         class="fixed inset-0 bg-[var(--kb-overlay)] data-[state=open]:animate-[kb-fade-in_160ms_ease-out] data-[state=closed]:animate-[kb-fade-out_120ms_ease-in]"
@@ -12,8 +12,8 @@
         data-kb-motion
         class="fixed inset-0 m-auto box-border flex h-fit w-[calc(100vw-32px)] max-w-[420px] flex-col gap-1 rounded-kb-lg bg-kb-surface-raised px-5 pb-4 pt-4.5 text-kb-fg shadow-kb-lg outline-none data-[state=open]:animate-[kb-pop-in_180ms_var(--kb-ease-out)] data-[state=closed]:animate-[kb-pop-out_120ms_ease-in]"
         :style="{ zIndex }"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
         @escape-key-down="(e: KeyboardEvent) => busy && e.preventDefault()"
       >
         <AlertDialogTitle class="m-0 text-[15px] font-600 leading-6">
@@ -43,7 +43,7 @@
  * 没有 action 时点确定发 confirm 并关闭。
  * 命令式的确认（await 一个结果）用 messageBox.confirm，不用这个组件。
  */
-import { ref, watch } from "vue";
+import { ref } from "vue";
 import {
   AlertDialogCancel,
   AlertDialogContent,
@@ -57,7 +57,7 @@ import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
 import Button from "./Button.vue";
 import Spinner from "./Spinner.vue";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 
 const props = defineProps<{
   title?: string;
@@ -76,18 +76,7 @@ const { t } = useI18n();
 const open = defineModel<boolean>("open", { default: false });
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
 const busy = ref(false);
-
-// TODO:[REF_UI] P9 删：从 EP 对话框里打开时挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
-watch(
-  open,
-  (value) => {
-    if (value) portalTo.value = foreignPortalTarget(document.activeElement);
-  },
-  { immediate: true },
-);
 
 async function onConfirm() {
   if (!props.action) {

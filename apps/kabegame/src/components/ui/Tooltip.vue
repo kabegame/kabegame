@@ -27,7 +27,7 @@
  */
 import { ref } from "vue";
 import { TooltipContent, TooltipPortal, TooltipProvider, TooltipRoot, TooltipTrigger } from "reka-ui";
-import { useLayerZIndex } from "./compat";
+import { useLayerZIndex } from "./layer";
 
 withDefaults(
   defineProps<{

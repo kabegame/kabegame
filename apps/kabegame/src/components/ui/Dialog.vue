@@ -1,7 +1,7 @@
 <template>
   <DialogRoot v-model:open="open">
     <slot name="trigger" />
-    <DialogPortal :to="portalTo">
+    <DialogPortal>
       <DialogOverlay
         data-kb-motion
         class="fixed inset-0 bg-[var(--kb-overlay)] data-[state=open]:animate-[kb-fade-in_160ms_ease-out] data-[state=closed]:animate-[kb-fade-out_120ms_ease-in]"
@@ -14,8 +14,8 @@
         class="fixed inset-0 m-auto box-border flex h-fit max-h-[min(85vh,calc(100vh-32px))] w-[calc(100vw-32px)] flex-col rounded-kb-lg bg-kb-surface-raised text-kb-fg shadow-kb-lg outline-none data-[state=open]:animate-[kb-pop-in_180ms_var(--kb-ease-out)] data-[state=closed]:animate-[kb-pop-out_120ms_ease-in]"
         :style="contentStyle"
         @pointer-down-outside="onPointerDownOutside"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
         @escape-key-down="(e: KeyboardEvent) => !closeOnEsc && e.preventDefault()"
         @open-auto-focus="(e: Event) => emit('openAutoFocus', e)"
         @close-auto-focus="onCloseAutoFocus"
@@ -63,7 +63,7 @@
  *
  * 需要一个触发器时放进 #trigger：<template #trigger><DialogTrigger as-child><Button/></DialogTrigger></template>。
  */
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import {
   DialogClose,
   DialogContent,
@@ -77,7 +77,7 @@ import { X } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
 import Button from "./Button.vue";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 
 const props = withDefaults(
   defineProps<{
@@ -128,21 +128,10 @@ const { t } = useI18n();
 const open = defineModel<boolean>("open", { default: false });
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
-
-// TODO:[REF_UI] P9 删：从 EP 对话框里打开时挂进那个对话框，免得 EP 的焦点陷阱把焦点抢回去。
-const portalTo = ref<HTMLElement | undefined>();
-watch(
-  open,
-  (value) => {
-    if (value) portalTo.value = foreignPortalTarget(document.activeElement);
-  },
-  { immediate: true },
-);
 
 function onPointerDownOutside(e: Event) {
   if (!props.closeOnOverlay) e.preventDefault();
-  else keepOpenOnForeign(e);
+  else keepOpenOnToast(e);
 }
 
 function onCloseAutoFocus(e: Event) {

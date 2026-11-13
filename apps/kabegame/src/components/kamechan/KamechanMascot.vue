@@ -108,7 +108,7 @@ const minimized = ref(false);
 const KAMECHAN_MODAL_OWNER = "kamechan";
 /** 没有任何其它弹层时的常驻层级（与原样式一致） */
 const KAMECHAN_BASE_Z_INDEX = 1600;
-/** 历史对话框：新 Dialog 自己接 Android 返回栈、向 EP 计数器取层级（总在立绘之上），不再占 kamechan 的栈位 */
+/** 历史对话框：新 Dialog 自己接 Android 返回栈、向层级计数器取号（总在立绘之上），不再占 kamechan 的栈位 */
 const historyOpen = ref(false);
 /** kamechan 开着时它就是全局工具箱的入口（方案 2a），点击 toggle 气泡 */
 const toolboxModal = useModal({ owner: KAMECHAN_MODAL_OWNER });

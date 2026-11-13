@@ -1,185 +1,26 @@
-# 组件库：kabegame 自有 element-plus（vendored fork）
+# 组件库：reka-ui + 设计 token（`components/ui/`）
 
-**结论先行：本仓不再依赖 npm 的 `element-plus` / `@element-plus/icons-vue`。**
-两者都已 vendor 进仓，作为**自有组件库**维护，不跟上游。写代码时不要再从 `"element-plus"`
-导入任何东西，也不要按「第三方库覆盖」的思路给它加 hack CSS。
+**结论先行：前端只有一套组件库——`apps/kabegame/src/components/ui/`。** 行为与无障碍来自 npm 的 `reka-ui`
+（无头原语，不 fork），外观是仓库里自己写的薄封装（UnoCSS），颜色、圆角、阴影只来自 `styles/tokens.css` 的 `--kb-*`，
+图标是 `@lucide/vue`。从 `@/components/ui` 导入。
 
-| | 包名 | 路径 | vendor base |
-| --- | --- | --- | --- |
-| 组件 | `@kabegame/element-plus` | `packages/kabegame-element-plus/` | element-plus tag `2.13.0`（commit `21ff9b1`） |
-| 图标 | `@kabegame/element-plus-icons` | `packages/kabegame-element-plus-icons/` | element-plus-icons tag `v2.3.2` |
+**element-plus 与 Vant 已删除**（界面重构 P9，2026-11-13）：vendored 的 `@kabegame/element-plus` /
+`@kabegame/element-plus-icons`（`packages/kabegame-element-plus*`）、Vant、`@vitejs/plugin-vue-jsx`（只给 EP 的 `.tsx` 用）
+都已移除，接线（vite alias、两处 tsconfig `paths`、web 的 `manualChunks`）一并删掉。不要再引入任何组件库；缺什么组件就在
+`components/ui/` 里用 Reka 原语写一个。web 构建的 JS 从 3.90 MB 降到 2.81 MB（gzip 1.24 → 0.91 MB），CSS 从 592 KB 降到
+151 KB（gzip 113 → 27 KB）。
 
-各自的包内 README 记录了与上游的逐项结构差异，这里只写**跨包的约定与踩坑**。
+<details>
+<summary>历史：vendored element-plus（2026 年上半年 → P9）</summary>
 
-> **界面重构进行中**：新界面不再往这个包里加组件，而是用 `reka-ui`（无头原语）+ UnoCSS 写在
-> `apps/kabegame/src/components/ui/`，颜色取 `styles/tokens.css` 的 `--kb-*`。见文末
-> [新界面组件](#新界面组件reka-ui--设计-token)。这个包会逐步被取代，迁移期间仍按下面的约定维护。
+本仓曾把 element-plus 2.13.0 与 element-plus-icons 2.3.2 vendor 进 `packages/`、作为自有组件库 fork 维护：根因是项目从没
+覆盖过 EP 的全局 token，而是逐个重写具体类，vendor 前有 49 个文件、约 1733 行覆盖、147 处 `!important`。vendor 之后主题
+下沉进包内的 token map，覆盖层逐步消失；界面重构（P0–P9）又把整个组件层换成 reka-ui，最终整包删除。旧约定（`--kb-el-*`
+token map、`el-` 前缀、`KbTab` / `KbFilterDropdown` 放进 vendored 包等）都已失效，git 历史里仍可查。
 
-## 为什么 vendor
+</details>
 
-根因不是「EP 不好用」，而是**项目从没覆盖过 EP 的全局 token**：`--el-color-primary` 一个都没改，
-却逐个重写具体类的 `background` / `border-radius`。于是每加一个组件就要重来一遍，特异性军备
-竞赛越打越高——vendor 前是 49 个文件、约 1733 行覆盖、147 处 `!important`。
-
-而且这些覆盖与 EP 内部 DOM 强绑定（例如日历皮肤依赖「EP 2.13 起复用日表的
-`.el-date-table-cell` 结构」），升级 EP 就会碎。
-
-vendor 之后主题写进组件自身，覆盖层逐步消失。**升级路径已明确放弃**：不再跟上游，拿不到
-上游 bugfix 与未来 Vue 版本适配，换来可以放手改内部实现。
-
-## 接线（三处，改动时要一起改）
-
-1. **vite alias** —— `vite.config.pub.ts` `resolve.alias`，`@kabegame/element-plus{,-icons}` 指向各自
-   `src/`。约定是纯源码消费，无构建产物。
-2. **tsconfig `paths`** —— 根 `tsconfig.json` **和** `apps/kabegame/tsconfig.json` **两处都要写**。
-   app 的 `paths` 是**整体覆盖**而非与父级合并，只改根的不生效。
-3. **web 的 `manualChunks`** —— `apps/kabegame/vite.config.ts`。vendored 源码在 `packages/` 下
-   **不在 node_modules**，两条路径判断必须放在 `if (!id.includes("node_modules")) return undefined`
-   这道闸门**之前**，否则整包并进主 bundle。且 `-icons` 要判在 `element-plus` 之前，否则被前缀吞掉。
-
-另外根 `package.json` 需要 `@vitejs/plugin-vue-jsx`，`vite.config.pub.ts` 的 plugins 里要有
-`vueJsx()`：vendored 包有 31 个 `.tsx`（form-label-wrap / date-picker / table-v2 等），没有它
-esbuild 会按 React 语义编译 JSX，运行时报 `React is not defined`。
-
-## 前缀现状：**还是 `el-`**
-
-类名与 CSS 变量全部由两个开关派生，目前都还是 `'el'`：
-
-- `packages/kabegame-element-plus/src/theme-chalk/src/mixins/config.scss` → `$namespace: 'el' !default`
-- `packages/kabegame-element-plus/src/hooks/use-namespace/index.ts` → `defaultNamespace = 'el'`
-
-组件里一律 `useNamespace('button')` 再 `ns.b()/ns.e()/ns.m()/ns.is()`，没有硬编码类名；
-CSS 变量走同一个 `$namespace`（`--#{$namespace}-color-primary`）。所以把这两个值改成 `kb-el`，
-DOM 就变 `.kb-el-button`、变量就变 `--kb-el-color-primary`，源码其余部分一行不用动。
-
-**翻开关前必须先清掉业务侧所有 `.el-*` 选择器**，否则那些覆盖会全部失效。目前业务侧还剩
-44 个文件、208 行 `.el-*`（大头：`apps/kabegame/src/styles/anime-theme.css` 46 行、
-`apps/kabegame/src/views/Surf.vue` 16 行、`apps/kabegame/src/styles/dialogs.css`）。
-
-翻开关时另需逐项 grep 的漏网处：模板/JS 里字面量的 transition 名（`<transition name="el-zoom-in-top">`，
-scss 侧会自动跟着 `$namespace` 变，字面量不会）、`popper-class` / `overlay-class` 之类 prop 默认值、
-命令式 API（`ElMessage` / `ElMessageBox` / `ElLoading`）运行时拼 class 的地方。
-
-## 加主题的正确姿势：下沉到 token，不要覆盖具体类
-
-**坏**（vendor 前的做法，不要再写）：在业务 CSS 里写 `.el-button--primary { background: ... }`。
-
-**好**：改 `theme-chalk/src/common/var.scss` 里对应的 token map，让 `--anime-*` 成为唯一色彩真源。
-`--anime-*` 已被大量非 EP 的业务样式消费，且插件详情面板会在运行时用 JS 局部覆写它做动态换肤——
-EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 `--kb-el-* ← --anime-*`，不要反过来。
-
-已落地的范例是 **date-picker**：`$datepicker` token map 直接取 `--anime-*`，并按需追加了
-`active-bg` / `hover-bg-color` / `today-ring-color` / `disabled-text-color` / `cell-radius(-large)`；
-日/月/年表与 popper 的选择器改在组件自身的 scss 里。业务侧
-`apps/kabegame/src/components/common/form/KbDate.vue` 由此从 194 行日历皮肤降到 **0 行 `.el-*`**。
-
-> 踩坑：`.el-picker__popper` 的 border 必须写成 `&.el-popper.is-light`——`popper.scss` 里的
-> `.el-popper.is-light` 特异性相同且排在后面，不加会被盖掉。
-
-第二个范例是 **select**（含单选 / 多选 / 下拉面板 / 选项 / 分组标题）：`$select`、`$select-option`、
-`$select-group`、`$select-dropdown` 四张 token map 全部取 `--anime-*`，追加了
-`border-radius` / `focus-ring` / `hover-ring` / `error-ring` / `disabled-bg-color`（触发器）与
-`selected-background` / `border-radius` / `font-size` / `padding`（选项）。多选 tag 的配色只写在
-`.el-select__selection .el-tag` 下，不动全局 `el-tag`。
-
-> 踩坑三则：
-> 1. `.el-select__popper` 同样要写 `&.el-popper.is-light` 才拿得回 border（同上）。
-> 2. EP 用 **inset box-shadow** 当边框，所以「描边 + 外扩光晕」必须写在同一条 `box-shadow` 里，
->    分两条写后者会整条覆盖前者。
-> 3. 清除按钮 `.el-select__clear` 的元素上**同时挂着 `.el-select__caret`**，给 caret 写
->    focus 变色时要 `:not(.el-select__clear)` 排除，否则它的粉底徽章会被一起染色。
-> 4. `--el-select-*` 由 `set-component-css-var` 挂在 `.el-select` 上，而下拉面板 teleport 到
->    body **不在其内**——面板侧一律用 `map.get($select-dropdown, ...)` 编译期取值，不能用 `getCssVar`。
-> 5. **下拉宽度是 fork 改过的默认值**：`select/src/select.ts` 的 `fitInputWidth` 默认 `true`
->    （上游 `false`，与 `select-v2` 对齐），下拉恒等于输入框宽度，不再按选项文案自撑。
->    选项放不下时由 `.el-select-dropdown__item` 的 `ellipsis` 截断，所以**不要在窄触发器里塞长选项**
->    （畅游的插件快速选择就是这种场景，需要内容宽度时显式传 `:fit-input-width="false"`）。
-
-## 自有组件放哪
-
-**tag 的局部色板**：`$tag` 中的 `palette-*` token 将 `--anime-tag-{bg,border,text,hover}-color`
-桥接到组件内部；未提供时回退到既有 type / effect 色彩。预览标签按目录注入这些主题变量，
-正文与关闭按钮（含 hover）共用色板，业务侧不覆盖 `.el-*` 选择器。
-
-既然是自有组件库，**新写的通用组件可以直接进 vendored 包**，不必挤在 `apps/kabegame/src/components` 里。
-已有先例：`ElTabs` / `ElTabPane` 整个删掉，换成
-`@kabegame/element-plus/components/kb-tab` 的 `KbTab`（只管 tab 头本身，内容由调用方按
-`v-model` 自行切换）。
-
-指令同理：右上角数字 / 圆点角标 `vCornerBadge`（`directives/corner-badge`，样式
-`theme-chalk/src/kb-corner-badge.scss`，尺寸与定位照搬 `el-badge` 的 `is-fixed`）放在包里，
-`KbTab` 的 `badge` 字段和业务侧（`main.ts` 全局注册为 `v-corner-badge`：导航「插件」图标、
-失败图片按钮）共用一份实现。它用宿主 `::after` 绘制、不插入子节点，宿主不能再占用 `::after`；
-宿主带 `:class` 绑定时 Vue patch 会重写 `className`，所以指令每次 `updated` 都补回宿主类。
-
-另一个先例是 `KbFilterDropdown`（过滤 chip 下拉），**P3 起已移出本包**，在 app 里用 reka-ui 重写成
-`apps/kabegame/src/components/ui/FilterDropdown.vue`（组件名仍是 `KbFilterDropdown`），见文末「新界面组件」。
-
-仍是 el-dropdown 的地方分两类：**值选择器**（画册页排序/每页等）
-随所在界面换成新的 `KbFilterDropdown` / `Select`；**动作菜单**（编辑/复制/删除、header 折叠动作）没有 `modelValue` 语义，
-不要硬套，将来需要的话另抽一个复用同一套 popper + 选项样式的 `KbActionMenu`。
-
-样式约定按组件性质分流：
-
-- **改 EP 原有组件的主题** → 进 `theme-chalk/src/*.scss`（它是全局 CSS，参与 `index.scss` 汇总）
-- **自己新写的组件** → SFC `<style scoped>`，**不要**进 theme-chalk
-
-目前 `src/components/` 下 122 个组件。用不到的可以直接删（`tabs` 就是这么删的），删完记得
-同步 `src/component.ts` 的注册清单。
-
-## 图标
-
-`packages/kabegame-element-plus-icons/svg/` 的 293 个 `.svg` 是**真源**；
-`src/components/*.vue` 是**生成物但入库**（本仓无构建步骤）。增删图标后重跑：
-
-```bash
-deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
-```
-
-组件名由文件名 PascalCase 得到（`d-arrow-left.svg` → `DArrowLeft`），与 npm 包 `2.3.2` 的
-293 个导出逐个核对一致。
-
-`apps/kabegame/src/main.ts` 目前仍全量注册 293 个，实际只用到 57 个，待收敛。
-
-## 其它踩坑
-
-- **scss 树自包含**：`theme-chalk/src/index.scss` 内部 `@use` 全是相对路径，可被 sass 独立编译
-  （`node_modules/.bin/sass` 直接跑得通，出约 16.8k 行 CSS）。所以不用担心 vite 的 sass importer
-  能不能解析包名。
-- **`process.env.NODE_ENV`**：vendored 源码里有 11 处。vite 客户端构建会 define 替换，但这是
-  运行时行为，vue-tsc 验不出来。
-- **`.tsx` 的 JSX 类型**：靠 `src/env.d.ts` 里的 `/// <reference types="vue/jsx" />` 提供全局
-  `JSX.IntrinsicElements`（根 tsconfig 只设了 `"jsx": "preserve"`）。`src/index.ts` 另有
-  `/// <reference path="./env.d.ts" />` 把 `App[INSTALLED_KEY]` 的模块增强带进编译程序。
-- **模板里 `<el-xxx>` 的类型**：靠 `src/global.d.ts` 声明 `GlobalComponents`（由 `env.d.ts` reference 带入）。
-  增删 `src/component.ts` 里的组件时同步它；缺了不会报「找不到」，而是整个组件静默退化成 any。
-- **`src/version.ts`** 是手写常量，上游由构建脚本从 package.json 生成。
-- **验证方式**：类型走 `.claude/skills/check-kabegame/driver.sh --skip cargo`；但 vite 的 alias 与
-  SFC 解析 lint 验不出来，改接线后要跑一次 `deno task b -c kabegame --skip cargo` 确认真的能打包
-  （检查产物里没有残留的 `@kabegame/element-plus` 裸 specifier，有就是被 externalize 了）。
-
-## 剩余工作
-
-按依赖顺序，**不能跳步**：
-
-1. 继续把业务侧 208 行 `.el-*` 下沉进 vendored 组件。其中一项是
-   `apps/kabegame/src/styles/dialogs.css` 的黑名单链——
-   `html:not(.platform-android) .el-dialog:not(.a):not(.b):not(.c):not(.d)` 全 `!important`，
-   每加一个特殊 dialog 就要回来补一个 `:not()`。改法是把 flex 列布局写成 `dialog.scss` 的默认值，
-   给那 4 个例外加一个正向的 `is-freeform` modifier 反向退出。
-2. 业务侧 `.el-*` 清零后，才能翻 namespace 两个开关到 `kb-el`（连带处理字面量 transition 名等漏网处）。
-3. 组件改名 `KbEl*`、标签改 `<kb-el-*>`、导入改 `@kabegame/element-plus`（约 1500 处标签、118 个文件的导入）。
-4. `main.ts` 的图标注册从全量 293 收敛到实际用到的 57 个。
-
-顺带记两个 vendor 期间发现、**尚未修**的既有 bug：
-
-- `apps/kabegame/src/App.vue` 里 `::deep(.file-drop-confirm-dialog)` 是非法语法（Vue 3 是 `:deep()`，
-  且该 `<style>` 块本就非 scoped 不需要 deep），整条规则连同内部约 40 行被浏览器丢弃——那段
-  「拖入过多文件时限制弹窗高度」的样式大概率从来没生效过。
-- 6 个 `--anime-*` 被引用但从未定义：`--anime-bg-secondary`（8 处引用，多数无 fallback）、
-  `--anime-primary-rgb`、`--anime-surface`、`--anime-text`、`--anime-text-color`、`--anime-text-regular`。
-
-## 新界面组件（reka-ui + 设计 token）
+## 组件与约定
 
 目标观感是「中性外框 + 一个强调色」的简约风（参照 ChatGPT / Claude 一类应用）。壁纸本身是彩色的，
 外框越中性，图越突出；强调色（`--anime-primary` 的粉）只留给选中、焦点、计数。
@@ -194,34 +35,44 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 
 图标用 `@lucide/vue`，`bootstrap/app.ts` 经 `LUCIDE_CONTEXT` 把默认线宽设为 1.75。
 
-**现有组件**（dev 下打开 `/dev/ui` 是陈列页 `views/dev/UiShowcase.vue`，含混用场景，改组件后在那里对照）：
+**现有组件**（dev 下打开 `/dev/ui` 是陈列页 `views/dev/UiShowcase.vue`，含「嵌套」场景，改组件后在那里对照）：
 
 | 类 | 组件 | 要点 |
 | --- | --- | --- |
 | 按钮与小件 | `Button`、`CountBadge`、`Spinner`、`Tag`、`Tooltip`、`HelpTip` | `HelpTip` 是「?」说明（桌面悬停提示、Android 点按气泡），取代 `el-tooltip` + `QuestionFilled`；`Button` 变体 `primary`（墨色实心）/ `danger`（危险色实心）/ `outline` / `ghost` / `ghost-danger`，尺寸 `sm` / `md` / `icon` / `icon-sm` / `icon-xs`，可做 Reka 触发器的 as-child 子元素；`Tag` 五种色调、可关闭；`Tooltip` 的 `content` 为空不弹，自带 Provider |
-| 弹层 | `Dialog`、`AlertDialog`、`Lightbox`、`Sheet`、`Popover` + `PopoverContent`、`Popconfirm`、`PickerSheet` | 都用 `v-model:open`，根组件已接 `useModalBack`（调用方不要再套 `useModal`）；`Dialog` 有 `title` / `description` / `width` / `#footer`，`height`（固定高度，正文自己管滚动的工作台）与 `fullscreen`（紧凑档铺满）走内联样式，去正文内边距用 `body-class="!p-0"`；关闭按钮在 DOM 末尾（打开时焦点先落正文）；`AlertDialog` 点遮罩不关，`action` 返回 Promise 时按钮转圈、Esc 不关，完成才关、抛错留在框里；`Lightbox` 是桌面看图（v-model `open` / `index` + `images` URL 数组，方向键翻页、`loop` 关时到头停住，滚轮以光标为中心缩放、放大后拖动、双击切 2 倍，取代 `el-image-viewer`；触屏看图仍用 photoswipe，在对话框里打开时 `append-to` 那个对话框，否则 Reka 模态下 body 不可点）；`Sheet` 四个方向，底部即 Android 底部弹层（把手、安全区）；`Popover` 默认非模态，`PopoverContent` 的 `anchor` 可锚在任意元素上（没有触发器的浮层，如锚在列表某一行的编辑浮层）；`Popconfirm` 是就地的气泡确认（默认插槽是触发按钮，取代 `el-popconfirm`）；`PickerSheet` 是底部滚轮选择（Sheet 里放 `van-picker`，待定 6 定之前保留 Vant） |
+| 弹层 | `Dialog`、`AlertDialog`、`Lightbox`、`Sheet`、`Popover` + `PopoverContent`、`Popconfirm`、`PickerSheet` | 都用 `v-model:open`，根组件已接 `useModalBack`（调用方不要再套 `useModal`）；`Dialog` 有 `title` / `description` / `width` / `#footer`，`height`（固定高度，正文自己管滚动的工作台）与 `fullscreen`（紧凑档铺满）走内联样式，去正文内边距用 `body-class="!p-0"`；关闭按钮在 DOM 末尾（打开时焦点先落正文）；`AlertDialog` 点遮罩不关，`action` 返回 Promise 时按钮转圈、Esc 不关，完成才关、抛错留在框里；`Lightbox` 是桌面看图（v-model `open` / `index` + `images` URL 数组，方向键翻页、`loop` 关时到头停住，滚轮以光标为中心缩放、放大后拖动、双击切 2 倍，取代 `el-image-viewer`；触屏看图仍用 photoswipe，在对话框里打开时 `append-to` 那个对话框，否则 Reka 模态下 body 不可点）；`Sheet` 四个方向，底部即 Android 底部弹层（把手、安全区）；`Popover` 默认非模态，`PopoverContent` 的 `anchor` 可锚在任意元素上（没有触发器的浮层，如锚在列表某一行的编辑浮层）；`Popconfirm` 是就地的气泡确认（默认插槽是触发按钮，取代 `el-popconfirm`）；`PickerSheet` 是底部滚轮选择（P9 起自写，见下「滚轮选择」） |
 | 菜单 | `DropdownMenu` + `DropdownMenuContent`、`ContextMenu`；共用的 `MenuItem`（= `DropdownMenuItem`，`danger` / `shortcut`）、`MenuSeparator`、`MenuSub`、`MenuCheckboxItem`、`MenuRadioGroup`、`MenuLabel` | Reka 的菜单项不依赖根组件类型，下拉与右键共用一套项；`ContextMenu` 默认插槽是触发区域、`#menu` 是菜单，要在某个坐标打开时对触发区域派发带 `clientX` / `clientY` 的 `contextmenu` 事件 |
 | 表单 | `Field` + `useForm`、`Input`、`Autocomplete`、`Textarea`、`NumberField`、`Checkbox`、`CheckboxGroup`、`RadioGroup`、`Select`、`Slider`、`RangeSlider`、`Switch`、`SegmentedControl`、`Combobox`、`DatePicker`、`TimeField`、`ColorPickerPanel`、`KbFilterDropdown`；分节标题 `SectionTitle` | `KbFilterDropdown` 见下「过滤 chip 下拉」；`ColorPickerPanel` 是取色面板（v-model `#rrggbb`，饱和度 / 明度区 + 色相条 + 十六进制输入，内部持有 HSB，拖到灰色色相不丢），取代 `el-color-picker-panel`；`RangeSlider` 的 v-model 是 `[起, 止]`；`Field` 给标签 / 说明 / 错误（取代 `el-form-item`，`orientation="horizontal"` 标签在左，`#label-end` 放标签行右侧的附加操作），控件经 `field.ts` 自动拿 id 与出错状态，校验见下「表单校验」。`Select` / `Combobox` / `RadioGroup` / `CheckboxGroup` 用 `options` / `items` 数组；`Select` / `Combobox` 的 `clearable` 清空后 v-model 为 `undefined`，**选项值不能是空字符串**（Reka 的限制，空串表示未选，需要时由调用方编码，见 `KbSelect`）；`Combobox` 给了 `filter` 时只按用户键入的文字过滤（展开时清空，不拿输入框回显的已选文字去匹配）；`DatePicker` 的 v-model 是 `YYYY-MM-DD`，日历气泡 «/» 跳年、‹/› 跳月，`isDateDisabled` 收 `YYYY-MM-DD`；`TimeField` 的 v-model 是 `HH:mm`（Reka TimeField，固定 24 小时制，时 / 分两段可键入或方向键步进，清空某段不更新 v-model；原生 `type=time` 在 CEF 下会显示成 12 小时制）；`Autocomplete` 是自由输入的补全（地址栏）：v-model 是文字本身、`items` 由调用方按文字算好，打字不自动高亮，回车 emit `submit`（原文），只有方向键选中后回车或点击才 emit `select`，焦点始终在输入框、失焦收起；要整体换造型就给 `anchorClass` / `contentClass` / `itemClass` / `inputClass`（整体替换默认类，外框带 `data-open` 供 `data-[open]:` 写展开态）——要「从选项里选一个值」用 `Combobox`；`Input` 的 `inputClass` 加在内层 input 上；`Slider` 拖动中更新 v-model、松手发 `commit`；`NumberField` 清空时是 `undefined`；`SectionTitle` 是长表单的分节标题（取代 `el-divider content-position="left"`） |
 | 展示 | `Alert`、`DescriptionList` + `DescriptionItem`、`Empty`、`Progress`、`ScrollArea`、`Separator`、`Skeleton`、`Tabs` | `DescriptionList` 取代 `el-descriptions`；`Tabs` 接口同原 `KbTab`（只管 tab 头）；`Progress` 的 `value` 为 null 是不定进度 |
-| 反馈 | `Toaster`（`App.vue` 挂一份）、`toast`、`messageBox`、`vLoading` | 见下「反馈门面」 |
+| 反馈 | `Toaster` 与 `MessageBoxHost`（`App.vue` 各挂一份）、`toast`、`messageBox`、`vLoading` | 见下「反馈门面」 |
 
 **反馈门面**（P2）：
 - `toast`（`components/ui/toast.ts`）：签名同 `ElMessage`——`toast.success(msg)`、`toast({ type, message, duration })`、`toast.closeAll()`，`duration: 0` 不自动关。顶部居中，同类型同文字只留最新一条，最多同时 4 条。业务里多数提示走 `kameMessage`（吉祥物气泡），气泡被遮住时降级到 `toast`；直接调 `toast` 的是不需要吉祥物的地方。
-- `messageBox`（`components/ui/messageBox.ts`）：签名同 `ElMessageBox`（`confirm` / `alert` / `prompt` / `close`），**内部仍是 `ElMessageBox`**，P9 换成 Reka AlertDialog，调用处不动。
-- `vLoading`（`components/ui/loading.ts`）：在 `<script setup>` 里导入即可，模板照旧写 `v-loading="busy"`（script setup 里的 `vLoading` 优先于 EP 的全局同名指令）。
-- service / composable / util 里直接从 `@/components/ui/toast`、`@/components/ui/messageBox` 导入，不经 `@/components/ui`（免得把全部组件拉进来）；测试里 mock 这两个模块，不要再 mock EP 的 `ElMessage` / `ElMessageBox`。
+- `messageBox`（`components/ui/messageBox.ts`，P9 起自己实现，渲染在 `MessageBoxHost.vue`）：调用方式沿用 `ElMessageBox`
+  （`confirm` / `alert` / `prompt` / `close`），请求排队、同时只显示一个，外观同 `AlertDialog`（点遮罩不关，焦点落在主按钮，
+  `prompt` 落在输入框并选中原文）。结果约定：
+  - `confirm`：确定 resolve `"confirm"`；取消 reject `"cancel"`；Esc / 返回键 / `close()` reject `"close"`，没开
+    `distinguishCancelAndClose` 时也报 `"cancel"`。
+  - `prompt`：确定 resolve `{ value, action: "confirm" }`；`inputValidator(value)` 返回 `true` 才放行，返回字符串就显示成错误、
+    留在框里（回车等同确定）。其余同 `confirm`。
+  - `alert`：只有一个按钮，怎么关都 resolve，不会抛。
+  - `dangerouslyUseHTMLString` 的正文经 DOMPurify 清洗，插进去的用户数据仍要调用方自己转义；`danger: true` 让确定按钮用危险色。
+    `type` / `center` / `customClass` 照收但不改变外观（中性风格不按类型配图标）。
+  - 有触发按钮、要转圈等异步操作完成的确认，用 `AlertDialog` 的 `action`，不用 `messageBox`。
+- `vLoading`（`components/ui/loading.ts`）：在 `<script setup>` 里导入即可，模板写 `v-loading="busy"`（没有全局注册）。
+- service / composable / util 里直接从 `@/components/ui/toast`、`@/components/ui/messageBox` 导入，不经 `@/components/ui`（免得把全部组件拉进来）；测试里 mock 这两个模块。
 
-**已迁移**：
+**迁移记录**（P0–P9，留作排查时对照「这块界面是哪一期换的」）：
 - P0：`PageHeader` 与所有顶栏功能按钮（注册表 `header/headerFeatures.ts` 的图标已换成 lucide）、`CollectAction`、
   插件详情顶栏、画廊副标题与查询行行尾的清除过滤。
-- P1：`App.vue` 布局与侧栏导航（`el-config-provider` 留到 P9）、底部导航、工具箱（`GlobalToolsPopover` /
+- P1：`App.vue` 布局与侧栏导航、底部导航、工具箱（`GlobalToolsPopover` /
   吉祥物气泡共用 `GlobalToolsList` + `ToolRow`；整理、清理隐藏、检查更新三个自带逻辑的条目也是 `ToolRow`，做完
   emit `done` 让工具箱关闭）、后台任务入口与卡片（共用 `busy/BusyTaskCard`）、`UpdateButton`、`KbTab` 的四处调用、
   `ScrollButtons`、`EmptyState` / `DetailPanelEmptyState`、`SuperModeToggle`、`FileDropOverlay`、启动页、吉祥物气泡。
-  同时做了 EP 全局换皮（下面「token 方向」），没迁的界面观感也已对齐。
+  同时做了 EP 全局换皮（vendored 包里的 `kb-reskin.scss`，P9 随包删除），没迁的界面观感先行对齐。
 - P2：上表的弹层 / 菜单 / 表单 / 展示组件与反馈门面；`ElMessage` 的直接调用（6 个文件）换成 `toast`，`kameMessage as ElMessage`
   的别名改成直呼 `kameMessage`；`ElMessageBox`（31 个文件）换成 `messageBox`；`v-loading`（10 个文件）换成 `vLoading`；
-  混用期垫片（下面「层级与混用期垫片」）。
+  混用期垫片 `compat.ts`（层级向 EP 计数器取号、暂停 EP 焦点陷阱、新浮层挂进 EP 对话框，P9 删除）。
 - P3：画廊整簇——查询行（`KbFilterDropdown` 重写并移出 vendored 包、搜索、路径栏、收藏视图、色桶面板、高级查询、排序控件）、
   网格（`ImageItem` / `ImageContent` / `ImageGridCore`）、自写右键菜单 `ContextMenu.vue`（换成 Reka 下拉在点击处打开，
   调用方不变）、`actions/*` 的图标、树（`KbTreePanel` / `KbTreeRow`）、画廊发起的对话框（加入画册与 `AlbumPicker`、移除确认、
@@ -230,7 +81,7 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 - P4：图片预览（桌面对话框直接用 Reka 原语写，见下）、Android 详情弹窗 `ImageDetailDialog`、两侧详情面板（折叠外壳
   `CollapsibleDrawerPanel`、基本信息、原生元数据、插件描述、标签、`CodeBlock`、壁纸属性面板与属性对话框）、插件快捷预览
   `HoverRevealPanel`（紧凑端换底部 `Sheet`）、显示器布局图；共用表单门面 `KbColor` 提前换成色块 + `Popover` + `ColorPickerPanel`。
-  预览不用 `ui/Dialog` 的原因：层级沿用 `useModal` 的栈位（吉祥物按栈位浮在预览上，取 EP 计数器的号会盖住它，预览里再弹的
+  预览不用 `ui/Dialog` 的原因：层级沿用 `useModal` 的栈位（吉祥物按栈位浮在预览上，向层级计数器取号会盖住它，预览里再弹的
   新浮层照常取号在它之上）、点吉祥物不关预览、只做淡入淡出（缩放会让 Panzoom 量到的容器偏小，全屏的 `position: fixed`
   也不能有 transform 祖先）。插件描述给模板 iframe 注入的 `--anime-*` 变量名是插件约定，名字不改、取值来自 `--kb-*`。
 - P5：共用表单门面 `common/form/Kb*` 换芯（接口不变，插件参数、壁纸属性、设置页跟着变；`KbColor` 已在 P4）；收集对话框、
@@ -256,7 +107,11 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
   `commit` 才保存；`LanguageSetting` 紧凑档用 `AndroidPickerSelect`）、检查更新与下载进度、应用日志（级别多选用 Reka `ToggleGroup`，
   模块前缀是 `Autocomplete` 的草稿值、回车 / 选中 / 失焦才生效）、吉祥物历史对话框；吉祥物、工具箱注册表、外链选择的图标换 lucide。
   这些文件都不再借 `useModal`。`CodeBlock` 的复制按钮改为单独一列（pre 的右内边距会随横向滚动一起滚走，长单行会钻到按钮底下）。
-  至此业务界面不再有 EP 组件，剩下的是 P9 的收尾项。
+  至此业务界面不再有 EP 组件。
+- P9：确认框门面换成自己的实现（`MessageBoxHost`）；`PickerSheet` 的 `van-picker` 换成自写的滚轮 `WheelColumn`；删掉混用期垫片
+  （`compat.ts`、`kb-compat.css`）与全部 `TODO:[REF_UI]` 代码，层级改由 `layer.ts` 自己的计数器给；删掉 vendored element-plus /
+  icons、Vant、`el-config-provider`、全局图标注册、`vCornerBadge`、`dialogs.css`、`vant-theme.css` 与接线；无调用方的
+  `GalleryPageSizeControl` / `SearchInput` / `EdgeArrows` 删除；Uno 快捷方式 `kb-chip` / `kb-grad` 删除，`kb-card` 改取 token。
 
 **表单校验**（P5，`components/ui/form.ts` + `Field`，取代 `el-form` 的 `validate` / `rules` 与 async-validator）：
 
@@ -284,8 +139,7 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 - 弹层按 chip 元素定位（`reference`），chip 不是 Reka 的触发器，所以点 chip 本身由 `@pointer-down-outside` 判成「层内」、
   交给 chip 的 click 切换，关闭时自己把焦点还给 chip。
 - 面板里再弹出的子层（`Popconfirm`、编辑浮层、`Select`）都是 Reka 层，Reka 按层在 DOM 里的先后把它们算作层内，点它们
-  **不会**关掉外层面板，所以新组件没有 EP 版的 `clickOutsideIgnore`（收藏视图、色桶面板里给子层挂豁免类的做法已删）。
-  面板里不要再放 EP 的浮层。
+  **不会**关掉外层面板，所以没有 EP 版的 `clickOutsideIgnore`（收藏视图、色桶面板里给子层挂豁免类的做法已删）。
 - 面板给里面的过滤树设好 `--kb-tree-row-*` 变量（文字、计数、悬停、选中），内置列表与树同一套颜色。
 
 **写法约定**
@@ -306,42 +160,37 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 - IDE 的 Tailwind v4 插件会提示把 `z-[var(--x)]` 写成 `z-(--x)`，那是 v4 语法，presetWind3 不认，忽略。
 - 菜单面板、菜单项、输入类控件的外框是 Uno 快捷方式 `kb-menu-panel` / `kb-menu-item` / `kb-control`（`uno.config.pub.ts`），
   新写这几类组件时直接用，保持一致。
-- 混用期才需要、某一期要删或换实现的代码，注释里带 `TODO:[REF_UI]` 并写明哪一期（P9 以 grep 为收尾清单）。
 - 动作菜单项（`actions/*Actions.ts` 的 `ActionItem.icon`）放图标组件本身；要按上下文换图标（收藏 / 已收藏）就用
   `iconBy(ctx => …)` 包出解析器，渲染处一律经 `resolveActionIcon` 取图标。lucide 图标本身是函数，不能再用
   `typeof icon === "function"` 判断是不是解析器。lucide 没有的实心变体放 `components/ui/icons.ts`（`StarFilled`）。
 - 查询 chip 的维度图标是设计稿画的那套（`components/icons/filterIcons.ts` 的 `Filter*`，P3 从 vendored 图标包搬进来），
   其余图标一律 lucide。
-- 页面级的键盘 / 滚轮 / 点击处理要给浮层让路时，用 `compat.ts` 的 `isInAnyLayer(target)`（新旧浮层都认），不要在业务里写
-  `closest(".el-overlay")`。
+- 页面级的键盘 / 滚轮 / 点击处理要给浮层让路时，用 `layer.ts` 的 `isInAnyLayer(target)`（对话框、菜单、Reka 定位容器、
+  提示消息都算层内），不要在业务里各写一份 `closest(...)`。
 - 改 `uno.config.pub.ts` 后，跑着的 dev 不会自动重载（它是被 `apps/kabegame/uno.config.ts` 间接引入的），
   `touch apps/kabegame/uno.config.ts` 即可；改 `bootstrap/app.ts`（如新增全局 css）要整页刷新。
 
-**token 方向**：本文前面的规则是 `--kb-el-* ← --anime-*`。界面重构后分三处：
-- **EP 全局换皮**（P1）：vendored 包的 `theme-chalk/src/kb-reskin.scss`（`index.scss` 最后引入）在 `:root` 把 `--el-*`
-  基础 token 指向 `--kb-*`：主色 = `--kb-primary`（墨色），light-1…9 / dark-2 用 `color-mix` 运行时重算（EP 在编译期
-  用 `color.mix` 算梯度，主色是 CSS 变量就算不了，所以不能改 `$colors`）；文字、边框、填充、底色、圆角、阴影、字体、
-  遮罩同理。组件级的圆角 / 阴影（对话框、消息框、气泡卡片、卡片）仍在 `common/var.scss` 的组件 map 里改。
-- **旧主题变量**：`anime-theme.css` 里中性的 `--anime-*`（文字、边框、底色、阴影）改指向 `--kb-*`，原来对 EP 的
-  全局外观覆盖全部删除，只留功能性的（输入框可选中文字、隐藏原生滚动条）。品牌色 `--anime-primary` /
-  `--anime-secondary` 不变。
-- **单个组件迁到新外观**时，它的 token map 改取 `--kb-*`（`KbFilterDropdown` 是第一个，P3 已移出 vendored 包、map 一并删除）；`--kb-accent` /
-  `--kb-danger` / `--kb-success` / `--kb-warning` / `--kb-ring` 挂在 `--anime-*` 上，插件详情运行时改写 `--anime-*`
-  换肤仍能波及。中性色（文字、底、线、填充）是新值，不来自 `--anime-*`。
+**token 方向**：
+- **`tokens.css`** 是唯一来源：中性色（文字 `--kb-fg` / `-muted` / `-subtle` / `-regular`、底、线、填充）是新值；
+  `--kb-accent` / `--kb-danger` / `--kb-success` / `--kb-warning` / `--kb-ring` 挂在 `--anime-*` 品牌色上，插件详情运行时
+  局部改写 `--anime-*` 换肤仍能波及。主操作是墨色 `--kb-primary`。
+- **旧主题变量**：`anime-theme.css` 里中性的 `--anime-*`（文字、边框、底色、阴影）指向 `--kb-*`，业务 scoped 样式里残留的
+  `--anime-*` 因此也是中性外观；品牌色 `--anime-primary` / `--anime-secondary` 不变。新代码直接用 `--kb-*` / `kb` 色板。
+- 插件描述给模板 iframe 注入的 `--anime-*` 五个变量是插件约定，名字不改、取值来自 `--kb-*`。
 
-**层级与混用期垫片**（`components/ui/compat.ts` + `styles/kb-compat.css`，P2 建、P9 删，代码处都标了 `TODO:[REF_UI]`）：
+**层级**（`components/ui/layer.ts`）：
 
-- **层级**：新浮层不用固定 z-index。打开时 `useLayerZIndex(open)` 向 EP 的全局计数器取号（`el-config-provider` 的 3000
-  是基数，EP 每开一层加 1、只增不减），新旧两边后打开的总在上面。提示消息每推一条取一次。直接用 Reka 原语写新弹层时也要接它。
-- **点外部**：Reka 的模态层把 `body` 设成 `pointer-events: none`，并把「点到层外」当作关闭信号。`kb-compat.css` 让挂在
-  `body` 下的 EP / Vant 浮层仍可点（里面挂着新浮层的 EP 对话框除外——那时模态层就是新浮层）；新层的
-  `@pointer-down-outside` / `@focus-outside` / `@interact-outside` 接 `keepOpenOnForeign`，点到旧浮层或提示消息不关。
-- **焦点陷阱与 Esc**：两边各有焦点陷阱，互看对方都在层外会来回抢焦点；EP 的陷阱还在 document 上响应 Esc。
-  - 新浮层打开期间 `usePauseForeignTraps(open)` 往 EP 的焦点层栈压一个空层，EP 的陷阱暂停（不抢焦点、不响应 Esc）。
-    没有它时，旧对话框里的新对话框 / 选择框按 Esc 会把旧对话框一起关掉。
-  - 新浮层的触发器在 EP 对话框 / 抽屉里时，浮层挂进那个对话框（`foreignPortalTarget`，Portal 的 `to`）。
-  - 从新对话框里弹 EP 确认框：`messageBox` 用 `withForeignFocus` 在确认框存在期间暂停 Reka 的陷阱（只在有新模态层时）。
-  - 菜单项打开 EP 对话框：菜单关闭时不把焦点还给触发器，而是聚焦那个对话框（`keepFocusForForeign`，修掉了 P0 的焦点问题）。
-- 新组件按界面成组迁移仍是原则，垫片只兜界面之间的跳转处。实测过的组合：新对话框里的 `el-select`（可搜索）能打开、
-  能选、不误关；旧对话框里的新选择框、组合框、下拉菜单（含子菜单）、气泡、新对话框都能用，Esc 只关最上层。
-  其它 EP 表单控件没有逐一验证，新界面里不要再放 EP 控件。
+- 浮层不用固定 z-index。打开时 `useLayerZIndex(open)` 向全局计数器取号（3000 起、只增不减），后打开的总在上面；提示消息每推
+  一条取一次（`nextLayerZIndex()`）。直接用 Reka 原语写新弹层时也要接它。
+- 例外是桌面图片预览：沿用 `useModal` 的栈位（2000 起），吉祥物按栈位浮在预览之上；预览里再弹出的浮层照常取号（3000 起）在它之上。
+- 层的 `@pointer-down-outside` / `@focus-outside` / `@interact-outside` 接 `keepOpenOnToast`：点提示消息（关闭按钮、滑动关闭）
+  不关当前层——提示挂在 body 下、不属于任何层。层与层之间的「层内」由 Reka 按层栈自己判断，不需要额外处理。
+
+**滚轮选择**（`PickerSheet` + `WheelColumn`，P9 起取代 `van-picker`）：
+
+- `PickerSheet` 是底部 `Sheet` 里一到多列滚轮，`v-model:open` 开合、`v-model` 是各列的值（滚动停稳即更新），「确定」发
+  `confirm({ selectedValues, selectedOptions, selectedIndexes })` 并关闭；取消就是关闭（遮罩、Esc、返回键）。
+- `columns` 三种写法同原 van-picker：单列选项数组、多列的列数组、带 `children` 的级联（后一列取前一列选中项的 children，前一列
+  变了后面的列落到仍存在的值或第一项）。值不在选项里时按第一项算。
+- `WheelColumn` 是原生滚动 + `scroll-snap`，惯性与回弹交给浏览器；停稳（`scroll` 之后 120 ms 无新事件）才发值，点某一项滚到它，
+  方向键 / Home / End 逐项移动；点「确定」时惯性还没停，按此刻位置取值（`settle()`）。

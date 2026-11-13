@@ -46,7 +46,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
 import { Sheet } from "@/components/ui";
-import { nextLayerZIndex } from "@/components/ui/compat";
+import { nextLayerZIndex } from "@/components/ui/layer";
 import { useUiStore } from "../../stores/ui";
 
 const LONG_PRESS_MS = 500;
@@ -117,7 +117,6 @@ const clearCloseTimer = () => {
 };
 
 // 面板可能弹在对话框里的下拉之上，固定 z-index 会被压住；打开时向层级计数器要一个当前最高层级
-// （TODO:[REF_UI] P9 随 compat.ts 换成自己的计数器）。
 const panelZIndex = ref(2000);
 
 const positionPanel = () => {

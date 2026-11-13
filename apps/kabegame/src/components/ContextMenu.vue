@@ -1,6 +1,6 @@
 <template>
   <DropdownMenuRoot :open="visible" :modal="true" @update:open="onOpenChange">
-    <DropdownMenuPortal :to="portalTo">
+    <DropdownMenuPortal>
       <DropdownMenuContent
         :reference="anchor"
         side="bottom"
@@ -9,8 +9,8 @@
         :collision-padding="8"
         class="context-menu kb-menu-panel"
         :style="{ zIndex: layerZIndex }"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
         @close-auto-focus="onCloseAutoFocus"
       >
         <!-- 提供了 items 就按条目渲染，否则用插槽（插槽里放 MenuItem / MenuSeparator / MenuSub） -->
@@ -70,16 +70,10 @@
  * 和 ui/ContextMenu 的区别：那个包一个触发区、由浏览器的 contextmenu 事件打开；这里不包触发区，
  * 适合「一个网格共用一个菜单、打开时才知道目标」的场合。
  */
-import { computed, markRaw, ref, toRaw, watch, type Component } from "vue";
+import { computed, markRaw, toRaw, type Component } from "vue";
 import { DropdownMenuContent, DropdownMenuPortal, DropdownMenuRoot } from "reka-ui";
 import { MenuItem as KbMenuItem, MenuSeparator, MenuSub } from "@/components/ui";
-import {
-  foreignPortalTarget,
-  keepFocusForForeign,
-  keepOpenOnForeign,
-  useLayerZIndex,
-  usePauseForeignTraps,
-} from "@/components/ui/compat";
+import { useLayerZIndex, keepOpenOnToast } from "@/components/ui/layer";
 
 export interface MenuItem {
   key?: string; // 菜单项的唯一标识，用于隐藏控制
@@ -114,7 +108,6 @@ const emit = defineEmits<{
 const open = computed(() => props.visible);
 const counterZ = useLayerZIndex(open);
 const layerZIndex = computed(() => Math.max(props.zIndex ?? 0, counterZ.value));
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
 
 /** 虚拟锚点：一个落在 position 上的零尺寸矩形 */
 const anchor = computed(() => {
@@ -124,25 +117,12 @@ const anchor = computed(() => {
   };
 });
 
-// TODO:[REF_UI] P9 删：右键点在 EP 对话框里时菜单挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
-watch(
-  () => props.visible,
-  (visible) => {
-    if (!visible || typeof document === "undefined") return;
-    const { x, y } = props.position;
-    portalTo.value = foreignPortalTarget(document.elementFromPoint?.(x, y));
-  },
-  { immediate: true },
-);
-
 function onOpenChange(value: boolean) {
   if (!value && props.visible) emit("close");
 }
 
 function onCloseAutoFocus(e: Event) {
-  // 没有触发器可还焦点；菜单项打开了 EP 对话框时把焦点送进去（同 ui 菜单）
-  keepFocusForForeign(e, undefined);
+  // 没有触发器可还焦点；菜单项打开的对话框自己处理焦点
   e.preventDefault();
 }
 

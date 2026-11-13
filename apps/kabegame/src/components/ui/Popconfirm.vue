@@ -3,7 +3,7 @@
     <PopoverTrigger ref="triggerRef" as-child>
       <slot />
     </PopoverTrigger>
-    <PopoverPortal :to="portalTo">
+    <PopoverPortal>
       <PopoverContent
         :side="side"
         :align="align"
@@ -12,8 +12,8 @@
         :reference="reference"
         class="box-border w-max max-w-[min(280px,calc(100vw-32px))] rounded-kb-lg bg-kb-surface-raised p-3 text-kb-fg shadow-kb-pop outline-none origin-[var(--reka-popover-content-transform-origin)] data-[state=open]:animate-[kb-pop-in_140ms_var(--kb-ease-out)] data-[state=closed]:animate-[kb-pop-out_100ms_ease-in]"
         :style="{ zIndex }"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
       >
         <p class="m-0 text-[13px] leading-[1.6]">
           <slot name="title">{{ title }}</slot>
@@ -37,13 +37,13 @@
  * action 返回 Promise 时确定按钮转圈、完成后关闭；没有 action 时发 confirm 并关闭。
  * 它是 Reka 层：放在别的 Reka 弹层（如过滤 chip 的面板）里时，点它不会让外层弹层关闭。
  */
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from "reka-ui";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
 import Button from "./Button.vue";
 import Spinner from "./Spinner.vue";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 
 const props = withDefaults(
   defineProps<{
@@ -64,7 +64,6 @@ const { t } = useI18n();
 const open = defineModel<boolean>("open", { default: false });
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
 const busy = ref(false);
 
 // 显式按触发器定位：触发器外面常套一层 Tooltip（见 PopoverContent.vue 的说明）
@@ -72,10 +71,6 @@ const triggerRef = ref<{ $el?: Element } | null>(null);
 const reference = computed(() => {
   const el = triggerRef.value?.$el;
   return el instanceof HTMLElement ? el : undefined;
-});
-const portalTo = ref<HTMLElement | undefined>(); // TODO:[REF_UI] P9 删（见 compat.ts）
-watch(open, (value) => {
-  if (value) portalTo.value = foreignPortalTarget(reference.value);
 });
 
 async function onConfirm() {

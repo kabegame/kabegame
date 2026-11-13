@@ -47,7 +47,6 @@
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^22.20.1",
     "@vitejs/plugin-vue": "^5.2.4",
-    "@vitejs/plugin-vue-jsx": "^4.2.0",
     "@vue/tsconfig": "^0.5.1",
     "agent-browser": "^0.33.2",
     "chalk": "^5.6.2",

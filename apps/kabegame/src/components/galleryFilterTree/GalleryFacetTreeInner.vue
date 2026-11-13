@@ -22,8 +22,8 @@
           v-if="counts.hasCountOf(keyOf(element))"
           class="flex-none text-[var(--kb-tree-row-count-color,var(--anime-text-secondary))] text-xs"
           :class="{
-            '!text-[var(--el-color-error)]': counts.deltaSignOf(keyOf(element)) < 0,
-            '!text-[var(--el-color-success)]': counts.deltaSignOf(keyOf(element)) > 0,
+            '!text-[var(--kb-danger)]': counts.deltaSignOf(keyOf(element)) < 0,
+            '!text-[var(--kb-success)]': counts.deltaSignOf(keyOf(element)) > 0,
             '!text-[var(--kb-tree-row-muted-color,var(--anime-text-muted))]': counts.isEmptyOf(keyOf(element)),
           }"
         >

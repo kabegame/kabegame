@@ -32,15 +32,15 @@
         <ChevronDown class="size-4 transition-transform duration-150" :class="open ? 'rotate-180' : ''" />
       </ComboboxTrigger>
     </ComboboxAnchor>
-    <ComboboxPortal :to="portalTo">
+    <ComboboxPortal>
       <ComboboxContent
         position="popper"
         :side-offset="4"
         :collision-padding="8"
         class="kb-menu-panel max-h-[min(var(--reka-combobox-content-available-height),320px)] min-w-[var(--reka-combobox-trigger-width)] overflow-y-auto"
         :style="{ zIndex }"
-        @focus-outside="keepOpenOnForeign"
-        @interact-outside="keepOpenOnForeign"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
       >
         <ComboboxViewport>
           <ComboboxEmpty class="px-2.5 py-2 text-[12.5px] text-kb-fg-subtle">
@@ -90,7 +90,7 @@ import {
 import { Check, ChevronDown, Search, X } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
-import { foreignPortalTarget, keepOpenOnForeign, useLayerZIndex, usePauseForeignTraps } from "./compat";
+import { useLayerZIndex, keepOpenOnToast } from "./layer";
 import { useFieldControl } from "./field";
 
 interface ComboboxOption<V> {
@@ -123,7 +123,6 @@ const { t } = useI18n();
 const open = ref(false);
 useModalBack(open);
 const zIndex = useLayerZIndex(open);
-usePauseForeignTraps(open); // TODO:[REF_UI] P9 删
 const field = useFieldControl(props);
 
 /**
@@ -144,10 +143,4 @@ function clear() {
   typed.value = "";
 }
 const displayValue = (value: unknown) => props.options.find((o) => o.value === value)?.label ?? "";
-
-// TODO:[REF_UI] P9 删：输入框在 EP 对话框里时挂进那个对话框（见 compat.ts）
-const portalTo = ref<HTMLElement | undefined>();
-watch(open, (value) => {
-  if (value) portalTo.value = foreignPortalTarget(document.activeElement);
-});
 </script>
