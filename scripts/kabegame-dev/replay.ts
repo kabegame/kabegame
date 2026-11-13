@@ -16,6 +16,9 @@
  *   这时 `value` 还可以是字符串（最长 `MAX_SCRIPT_TEXT` 个 UTF-16 单元）；图层字段给字符串仍是 400。
  * - 视频时刻（P9a 步骤 3）：渲染的 `videoTime` 是非负有限数（秒），或「非空字符串 → 非负有限数」的对象、最多 `MAX_VIDEO_TIMES` 项；
  *   键是不是这个场景的视频纹理要编译之后才知道，由探针判（不是时报错，回 422）。
+ * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：渲染的 `trace` 是 `true`，或 `{ readback?, maxVertices? }`：`readback` 是
+ *   pass 下标（非负整数）或 pass / 目标纹理标签的子串（非空字符串）组成的数组、最多 `MAX_TRACE_READBACKS` 项，`maxVertices` 是
+ *   1–`MAX_TRACE_VERTICES` 的整数（探针 `apps/wpe-scene/src/dev/drawTrace.ts` 的 `traceOptionsOf` 同样查）。
  * 不认识的字段一律拒绝：探针会静默忽略它们（例如把逐帧光标放进 `particles`），宁可当场报错。
  */
 import { badRequest } from "./errors.ts";
@@ -23,6 +26,7 @@ import type {
   ParticleCornersRequest,
   ParticleReplay,
   ParticleTrackRequest,
+  RenderTraceRequest,
   SceneLayerField,
   ScenePostprocess,
   SceneTextField,
@@ -67,6 +71,11 @@ export const MAX_SCRIPT_VALUES = 64;
 export const MAX_SCRIPT_TEXT = 4096;
 /** `videoTime` 对象最多这么多项（语料一张场景最多 5 段视频）。 */
 export const MAX_VIDEO_TIMES = 64;
+export const TRACE_FIELDS = ["readback", "maxVertices"] as const;
+/** 轨迹的 `readback` 最多这么多项。 */
+export const MAX_TRACE_READBACKS = 64;
+/** 每个 draw 解码的顶点数上限（探针 `render/trace.ts` 的 `MAX_TRACE_VERTICES`，改了两边一起改）。 */
+export const MAX_TRACE_VERTICES = 4096;
 export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random"] as const;
 export const TRACK_FIELDS = [
   "imageId",
@@ -388,11 +397,46 @@ export function checkVideoTime(value: unknown, field = "videoTime"): VideoTime {
 }
 
 /**
+ * 逐 draw 轨迹：`true`，或 `{ readback?, maxVertices? }`。`readback` 选哪些 pass 在结束后读回颜色附件（pass 下标，或 pass / 目标纹理标签的
+ * 子串）；`maxVertices` 是每个 draw 解码的顶点数（缺省 64）。不认识的字段 400。选中的 pass 读不了（格式、没提交）由探针在轨迹里写明。
+ */
+export function checkTrace(value: unknown, field = "trace"): RenderTraceRequest {
+  if (value === true) return true;
+  if (!isObject(value)) fail(field, `要是 true，或 { readback?, maxVertices? }，收到 ${shown(value)}`);
+  rejectUnknown(value, TRACE_FIELDS, field);
+  if (value.readback !== undefined) {
+    const list = value.readback;
+    if (!Array.isArray(list)) fail(`${field}.readback`, `要是数组（pass 下标或标签子串），收到 ${shown(list)}`);
+    if (list.length > MAX_TRACE_READBACKS) {
+      fail(`${field}.readback`, `有 ${list.length} 项，最多 ${MAX_TRACE_READBACKS} 项`);
+    }
+    list.forEach((item, i) => {
+      const ok =
+        (typeof item === "number" && Number.isInteger(item) && item >= 0) || (typeof item === "string" && item !== "");
+      if (!ok) {
+        fail(
+          `${field}.readback[${i}]`,
+          `要是 pass 下标（非负整数）或 pass / 目标纹理标签的子串（非空字符串），收到 ${shown(item)}`,
+        );
+      }
+    });
+  }
+  if (value.maxVertices !== undefined) {
+    const n = value.maxVertices;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_TRACE_VERTICES) {
+      fail(`${field}.maxVertices`, `要是 1–${MAX_TRACE_VERTICES} 的整数，收到 ${shown(n)}`);
+    }
+  }
+  return value as RenderTraceRequest;
+}
+
+/**
  * 渲染请求里的回放：给了 `particles` 就校验它，并拒绝同时给 `time`（探针此时忽略 `time`，读回那一帧的 `g_Time` 取
  * `particles.times` 的末项或 dt 累计值）。没给时原样返回 undefined。
  * 光标一并校验（P5a 收尾）：`pointer` 是一个点；`pointers` 要有 `particles`、和 `particles.dts` 等长、不和 `pointer` 同给；`window` 是
  * `[宽, 高]`。读回画布 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。脚本值 `scriptValues`（第 6 批）
  * 见 `checkScriptValues`，不要求有 `particles`。视频时刻 `videoTime`（P9a 步骤 3）见 `checkVideoTime`，同样不要求有 `particles`。
+ * 逐 draw 轨迹 `trace` 见 `checkTrace`。
  * 校验过的值原样留在请求里转给探针。
  */
 export function checkRenderReplay(body: {
@@ -404,6 +448,7 @@ export function checkRenderReplay(body: {
   canvas?: unknown;
   scriptValues?: unknown;
   videoTime?: unknown;
+  trace?: unknown;
 }): ParticleReplay | undefined {
   const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
   if (particles && body.time !== undefined) {
@@ -423,5 +468,6 @@ export function checkRenderReplay(body: {
   if (body.canvas !== undefined) checkCanvas(body.canvas, window);
   if (body.scriptValues !== undefined) checkScriptValues(body.scriptValues);
   if (body.videoTime !== undefined) checkVideoTime(body.videoTime);
+  if (body.trace !== undefined) checkTrace(body.trace);
   return particles;
 }

@@ -471,6 +471,60 @@ export interface RenderRequest {
    * 给出每段实际取的时刻。
    */
   videoTime?: VideoTime;
+  /**
+   * 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`true`，或 `{ readback?, maxVertices? }`，原样交给探针。探针把设备换成
+   * 记录器包过的那个，读回那一帧记下每个 pass、每个 draw 的管线、绑定、uniform、顶点；`readback` 选中的 pass 结束后读回它的颜色
+   * 附件。响应多 `trace`（轨迹 JSON）与 `traceImages`（读回图）；合计超过 64 MB 回 413，宿主产物不认识 `trace` 时回 409。
+   */
+  trace?: RenderTraceRequest;
+}
+
+/** 逐 draw 轨迹的请求：`readback` 是 pass 下标或 pass / 目标纹理标签的子串（最多 64 项），`maxVertices` 是 1–4096 的整数。 */
+export type RenderTraceRequest = true | { readback?: (number | string)[]; maxVertices?: number };
+
+/** 探针结果里的轨迹摘要（`apps/wpe-scene/src/dev/drawTrace.ts` 的 `RenderFrameTrace`）：存放区的键与大小，vite 按它取回。 */
+export interface RenderTraceMeta {
+  /** 轨迹 JSON 的存放键（`<key>.trace.json`）。 */
+  key: string;
+  bytes: number;
+  passes: number;
+  draws: number;
+  /** 记录器自己出的错与读回帧的 WebGPU 校验错误条数（详见轨迹的 `errors`）。 */
+  errors: number;
+  readbacks: { pass: number; key: string; width: number; height: number; format: string; bytes: number }[];
+  /** 选中了却没读回的 pass 与原因。 */
+  readbackErrors: { pass: number; error: string }[];
+}
+
+/**
+ * 逐 draw 轨迹（探针 `render/trace.ts` 的 `DrawTrace`，这里只写 vite / MCP 用到的字段）。ID 在一次渲染里按创建顺序编号，NaN 成了 null。
+ */
+export interface RenderDrawTrace {
+  version: number;
+  resources: Record<string, Record<string, unknown>>;
+  passes: Array<{
+    index: number;
+    label: string;
+    draws: unknown[];
+    readback?: string;
+    readbackError?: string;
+    [key: string]: unknown;
+  }>;
+  copies: unknown[];
+  errors?: string[];
+}
+
+/** 一张读回图：8 位目标是 PNG（RGBA 原值），浮点目标是 RGBA 单精度小端（`f32`）。 */
+export interface RenderTraceImage {
+  pass: number;
+  /** 目标纹理的格式（`rgba8unorm`、`rgba16float` ……）。 */
+  format: string;
+  kind: "png" | "f32";
+  width: number;
+  height: number;
+  bytes: number;
+  /** base64。 */
+  data: string;
 }
 
 /** REST `POST /hosts/:h/particle-track` 的请求体：交给探针 `particleTrack`（场景目录按图片 id 取）。 */
@@ -592,6 +646,8 @@ export interface RenderMeta {
   textSyncs?: number;
   /** 每段视频纹理实际取的时刻（P9a 步骤 3；没有视频纹理时空数组，之前的宿主产物没有这一项）。 */
   videos?: RenderVideo[];
+  /** 逐 draw 轨迹的摘要：只在请求带 `trace` 时有（之前的宿主产物没有这一项）。 */
+  trace?: RenderTraceMeta;
   key: string;
   [key: string]: unknown;
 }
@@ -606,6 +662,10 @@ export interface RenderResponse {
   pngBytes: number;
   /** 原图与 `png` 的尺寸（REST 填）。 */
   size?: ImageSizeInfo;
+  /** 逐 draw 轨迹（解析后的 JSON）：只在请求带 `trace` 时有。 */
+  trace?: RenderDrawTrace;
+  /** 读回图，顺序同 `meta.trace.readbacks`：只在请求带 `trace` 时有。 */
+  traceImages?: RenderTraceImage[];
 }
 
 /** REST `POST /hosts/:h/render` 的请求体：渲染参数加可选的 `resize`。 */

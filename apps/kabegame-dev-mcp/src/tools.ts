@@ -10,6 +10,8 @@
  *   交给探针的窗口不同时在 MCP 里报 `[local]`，结果里写明读回的是什么。
  * - 视频时刻（P9a 步骤 3）：`render_scene` / `host_render` 的 `videoTime` 原样交给探针（每段视频 seek 到这个时刻再渲染），结果里写一行
  *   每段实际取的时刻（`meta.videos`）。
+ * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`render_scene` / `host_render` 的 `trace: { save, readback?, maxVertices? }`，
+ *   `readback` / `maxVertices` 交给 REST，轨迹 JSON 与读回图写进 `save` 目录（`writeTrace`），结果里只写一行摘要。
  *
  * 工具表是静态的：vite 不在时照常列出，调用时回 `isError` 并写明是哪一层不在（文本以 `[层]` 开头）。
  * 参数里的相对路径一律按仓库根解析。图片类工具的落盘与缩小见 `imageOutput.ts`。
@@ -42,6 +44,7 @@ import type {
   ProjectManifest,
   RenderMeta,
   RenderResponse,
+  RenderTraceRequest,
   ScriptValue,
   ShowWindowResult,
   WindowFrontState,
@@ -387,6 +390,36 @@ const VIDEO_TIME = z
       "没给的取 0，不是这个场景的视频纹理时报错）。超过时长按循环取模（WPE 视频纹理缺省循环）。屏外宿主不跑帧循环、视频用自己的时钟" +
       "（不跟 g_Time），这是确定性回放视频的唯一办法；实际取的时刻见结果里的「视频纹理」行与 meta.videos。读不到或解码失败的视频保持透明（同产品）",
   );
+/** 逐 draw 轨迹：`readback` 的项数上限同 vite 的 `MAX_TRACE_READBACKS`，`maxVertices` 同 `MAX_TRACE_VERTICES`。 */
+const TRACE = z
+  .object({
+    save: z
+      .string()
+      .min(1)
+      .describe("轨迹写到这个目录（相对路径按仓库根）：trace.json 与读回图 pass-<下标>.png / .f32，同名文件覆盖"),
+    readback: z
+      .array(z.union([z.number().int().nonnegative(), z.string().min(1)]))
+      .max(64)
+      .optional()
+      .describe(
+        "选哪些 pass 在结束后读回颜色附件：pass 下标（轨迹里的 index，编码顺序），或 pass 标签 / 目标纹理标签的子串" +
+          '（如 "layer 179 VHS Time and Date text glyphs"、"_rt_FullFrameBuffer"）；8 位目标存 PNG（RGBA 原值，alpha 不改），' +
+          "浮点目标存 .f32（RGBA 单精度小端）。缺省不读回",
+      ),
+    maxVertices: z
+      .number()
+      .int()
+      .min(1)
+      .max(4096)
+      .optional()
+      .describe("每个 draw 解码多少个被引用的顶点（同 RenderDoc vs_in 按行列，带索引时按索引顺序），缺省 64"),
+  })
+  .strict()
+  .describe(
+    "逐 draw 轨迹：探针把设备包一层记录用的代理，读回那一帧记下每个 render pass（目标、load / store、清屏值）与每个 draw 的" +
+      "管线（混合、顶点布局、深度、着色器）、视口、裁剪、绑定（缓冲偏移、纹理 mip / 层、采样器）、uniform（按反射解码成名字 → 值，" +
+      "取提交那一刻的值）、索引与顶点，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。轨迹不进会话，写到 save 目录，结果里写一行摘要",
+  );
 const RENDER_FIELDS = {
   time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）；给了 replay 时不收"),
   postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
@@ -398,6 +431,7 @@ const RENDER_FIELDS = {
   replay: RENDER_REPLAY.optional(),
   canvas: CANVAS.optional(),
   videoTime: VIDEO_TIME.optional(),
+  trace: TRACE.optional(),
 };
 const OUT = z.string().describe("结果写到这个文件（相对路径按仓库根）");
 const OVERWRITE = z.boolean().default(false).describe("out 已存在时是否覆盖，缺省拒绝");
@@ -644,6 +678,55 @@ export function videoLine(meta: Pick<RenderMeta, "videos">): string | null {
       : `${video.path} 取 ${video.time} s（时长 ${video.duration ?? "?"} s，${video.width}×${video.height}）`,
   );
   return `视频纹理：${parts.join("；")}`;
+}
+
+type TraceArg = z.infer<typeof TRACE>;
+
+/** MCP 的 `trace` → REST 的 `trace`：只给了 `save` 时是 `true`，否则带上 `readback` / `maxVertices`（`save` 不发给 REST）。 */
+export function traceRequestOf(trace: TraceArg): RenderTraceRequest {
+  const { save: _save, ...rest } = trace;
+  return Object.keys(rest).length ? rest : true;
+}
+
+/**
+ * 逐 draw 轨迹落盘：`save` 目录下写 `trace.json`（紧凑 JSON）与读回图 `pass-<下标>.png` / `.f32`（同名覆盖），轨迹内容不进会话，
+ * 返回结果里的一行摘要（pass 数、draw 数、读回了哪些、没读回的原因、目录与文件）。REST 没回轨迹（vite 插件是旧的）报 `[local]`。
+ */
+export function writeTrace(root: string, save: string, response: RenderResponse): string {
+  const { trace, traceImages } = response;
+  if (!trace || !Array.isArray(trace.passes) || !Array.isArray(traceImages)) {
+    throw new ToolError(
+      "local",
+      "REST 没回 trace / traceImages：vite 的 kabegame-dev 插件是旧的，重启 dev（vite）后再试；画面已渲染，没写轨迹",
+    );
+  }
+  const dir = resolvePath(root, save);
+  const files = ["trace.json"];
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "trace.json"), JSON.stringify(trace));
+    for (const image of traceImages) {
+      const name = `pass-${image.pass}.${image.kind}`;
+      writeFileSync(path.join(dir, name), Buffer.from(image.data, "base64"));
+      files.push(name);
+    }
+  } catch (error) {
+    throw new ToolError("local", `轨迹写不进 ${dir}：${(error as Error).message}`);
+  }
+  const draws = trace.passes.reduce((n, pass) => n + (Array.isArray(pass.draws) ? pass.draws.length : 0), 0);
+  const read = traceImages.length
+    ? `读回 ${traceImages.map((image) => `pass ${image.pass}（${image.width}×${image.height} ${image.format}）`).join("、")}`
+    : "没读回";
+  const failed = trace.passes.filter((pass) => pass.readbackError);
+  const parts = [
+    `逐 draw 轨迹：${trace.passes.length} 个 pass、${draws} 个 draw，${read}`,
+    ...(failed.length
+      ? [`选中了没读回：${failed.map((pass) => `pass ${pass.index}（${pass.readbackError}）`).join("；")}`]
+      : []),
+    ...(trace.errors?.length ? [`记录器 / 校验出错 ${trace.errors.length} 条（见 trace.json 的 errors）`] : []),
+    `写到 ${dir}（${files.join("、")}）`,
+  ];
+  return parts.join("；");
 }
 
 /** 渲染元数据里的粒子数（探针 `particleStats`）。 */
@@ -973,6 +1056,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       timelineWindow?: readonly [number, number] | null;
       /** FR 帧号块（第 6 批）：结果里写一行涂了没有。 */
       fr?: FrPlan;
+      /** 逐 draw 轨迹：给了就把轨迹与读回图写进这个目录，结果里写一行摘要。 */
+      trace?: TraceArg;
     },
     lead: string[] = [],
   ) =>
@@ -987,6 +1072,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       lead: [
         ...lead,
         ...readbackLines(response.meta, options.canvas, options.timelineWindow),
+        options.trace ? writeTrace(root, options.trace.save, response) : "",
         frLine(options.fr ?? null, response.meta) ?? "",
         videoLine(response.meta) ?? "",
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
@@ -1002,9 +1088,11 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
    * `timelineWindow` 是时间线推出的窗口（不论交没交给探针），结果里按它提示 `canvas`。
    * FR 帧号块（第 6 批）：回放时缺省（`replay.fr` 不是 false）按读回帧号 N = `dts.length` 发一项 `scriptValues`（`frScriptValue`），
    * 两种回放写法都发；`fr` 是返回给结果说明用的。
+   * 逐 draw 轨迹：`trace` 换成 REST 的写法（`traceRequestOf`，`save` 不发），回放与否都带。
    */
   const renderBody = (imageId: string, render: Args<typeof RENDER_FIELDS>) => {
-    const { replay, ...rest } = render;
+    const { replay, trace, ...base } = render;
+    const rest = { ...base, ...(trace ? { trace: traceRequestOf(trace) } : {}) };
     if (!replay) {
       return { body: { imageId, ...rest }, lines: [] as string[], timelineWindow: null, fr: null as FrPlan };
     }
@@ -1077,7 +1165,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
         "replay、canvas、videoTime 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
-        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻。",
+        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录。",
       inputSchema: {
         handle: z.string().min(1),
         imageId: IMAGE_ID,
@@ -1093,7 +1181,17 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       const response = await client.hostRender(handle, body);
       return renderResult(
         response,
-        { tool: "host_render", imageId, save, size, inline, canvas: render.canvas, timelineWindow, fr },
+        {
+          tool: "host_render",
+          imageId,
+          save,
+          size,
+          inline,
+          canvas: render.canvas,
+          timelineWindow,
+          fr,
+          trace: render.trace,
+        },
         lines,
       );
     },
@@ -1186,6 +1284,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "回放时探针不跑场景脚本，replay.fr（缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色，" +
         "同 WPE 里它的颜色脚本，比较时不用再屏蔽 FR；不是 kbp 工程（没有挂颜色脚本的 FR）时跳过，结果里写一行涂了没有。" +
         "有视频纹理的场景用 videoTime 定视频的时刻（缺省 0，超过时长按循环取模），结果里写一行每段实际取的时刻。" +
+        "给 trace: { save, readback?, maxVertices? } 时探针记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform（按名字解码）、顶点，" +
+        "写到 save 目录的 trace.json，readback 选中的 pass 的目标另存 pass-<下标>.png / .f32，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照；轨迹不进会话，结果里只有一行摘要。" +
         "工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,
@@ -1204,7 +1304,17 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       );
       return renderResult(
         response,
-        { tool: "render_scene", imageId, save, size, inline, canvas: render.canvas, timelineWindow, fr },
+        {
+          tool: "render_scene",
+          imageId,
+          save,
+          size,
+          inline,
+          canvas: render.canvas,
+          timelineWindow,
+          fr,
+          trace: render.trace,
+        },
         [hostLine, ...lines],
       );
     },

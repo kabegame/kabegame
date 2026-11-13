@@ -218,6 +218,7 @@ import {
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
+import { traceUniforms } from "./trace";
 import {
   drawUniformValues,
   frameBuiltins,
@@ -2370,6 +2371,7 @@ export class GpuScene {
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         }),
       );
+      traceUniforms(uniformBuffer, (program.result.uniforms ?? []) as UniformEntry[]);
       device.queue.writeBuffer(uniformBuffer, 0, block.data);
     }
 

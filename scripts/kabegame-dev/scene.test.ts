@@ -9,7 +9,7 @@ import { Buffer } from "node:buffer";
 import { DevError } from "./errors.ts";
 import { devPaths } from "./paths.ts";
 import { DevSession } from "./session.ts";
-import { hostTaskJson, particleCorners, particleTrack, renderFrame } from "./scene.ts";
+import { hostTaskJson, MAX_TRACE_BYTES, particleCorners, particleTrack, renderFrame } from "./scene.ts";
 import type { CdpConnection, CdpEvent, TargetInfo } from "./cdp.ts";
 
 const TARGETS: TargetInfo[] = [
@@ -499,6 +499,118 @@ describe("粒子接口的参数透传", () => {
         error.layer === "host" &&
         /探针不认识 videoTime/.test(error.message),
     );
+  });
+
+  test("逐 draw 轨迹：trace 原样交给探针；取回轨迹 JSON 与读回图；没给不带；不合法 400；旧宿主 409；超过 64 MB 回 413 不取", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const trace = {
+      version: 1,
+      resources: {},
+      passes: [{ index: 0, label: "scene", draws: [{}, {}], readback: "k.pass0.png" }],
+      copies: [],
+    };
+    const json = Buffer.from(JSON.stringify(trace));
+    const pass0 = Buffer.from([1, 2, 3]);
+    const pass2 = Buffer.from(new Float32Array([1, 0.5, -2, 1]).buffer);
+    // 存放区：键 → base64；读回图都很小，`huge` 时报的大小超过上限
+    const stored: Record<string, string> = {
+      "kbdev-h-1.png": png,
+      "kbdev-h-1.trace.json": json.toString("base64"),
+      "kbdev-h-1.pass0.png": pass0.toString("base64"),
+      "kbdev-h-1.pass2.f32": pass2.toString("base64"),
+    };
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const request = args as { trace?: unknown; time?: number };
+        const meta = { width: 1, height: 1, sha256: "x", time: 1.5, frametime: 0, key: "kbdev-h-1" };
+        // 旧探针：不认识 trace，结果里没有这一项（time 给 7 时模拟）
+        if (!request.trace || request.time === 7) return meta;
+        const huge = request.time === 9;
+        return {
+          ...meta,
+          trace: {
+            key: "kbdev-h-1.trace.json",
+            bytes: json.length,
+            passes: 3,
+            draws: 2,
+            errors: 0,
+            readbacks: [
+              { pass: 0, key: "kbdev-h-1.pass0.png", width: 1, height: 1, format: "rgba8unorm", bytes: 3 },
+              {
+                pass: 2,
+                key: "kbdev-h-1.pass2.f32",
+                width: 1,
+                height: 1,
+                format: "rgba16float",
+                bytes: huge ? 64 * 1024 * 1024 : 16,
+              },
+            ],
+            readbackErrors: [],
+          },
+        };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? (${JSON.stringify(stored)})[key] ?? null : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const chunkKeys = () =>
+      f.conn.evaluated.filter((line) => line.includes(".chunk(")).map((line) => /chunk\("([^"]+)"/.exec(line)![1]);
+
+    const request = { readback: [0, "bloom"], maxVertices: 16 };
+    const response = await renderFrame(f.s, "h-1", { imageId: "14313", trace: request, userProperties: {} });
+    assert.deepEqual(calls()[0].trace, request);
+    assert.deepEqual(response.trace, trace);
+    assert.deepEqual(response.traceImages, [
+      { pass: 0, format: "rgba8unorm", kind: "png", width: 1, height: 1, bytes: 3, data: pass0.toString("base64") },
+      { pass: 2, format: "rgba16float", kind: "f32", width: 1, height: 1, bytes: 16, data: pass2.toString("base64") },
+    ]);
+    assert.equal(response.meta.trace?.draws, 2);
+    // true 也转；不给时请求与响应都没有这一项
+    await renderFrame(f.s, "h-1", { imageId: "14313", trace: true, userProperties: {} });
+    assert.equal(calls()[1].trace, true);
+    const plain = await renderFrame(f.s, "h-1", { imageId: "14313", userProperties: {} });
+    assert.equal("trace" in calls()[2], false, "不给 trace 时请求和以前一样");
+    assert.equal("trace" in plain, false);
+    assert.equal("traceImages" in plain, false);
+
+    const before = f.conn.evaluated.length;
+    for (const [bad, field] of [
+      [false, "trace"],
+      [{ readback: [-1] }, "trace.readback[0]"],
+      [{ maxVertices: 0 }, "trace.maxVertices"],
+      [{ save: "out" }, "trace.save"],
+    ] as const) {
+      await assert.rejects(
+        renderFrame(f.s, "h-1", { imageId: "14313", trace: bad as never, userProperties: {} }),
+        (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === field,
+        JSON.stringify(bad),
+      );
+    }
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    // 旧探针不认识 trace：设备没包、什么都没记，报 409 而不是只回画面
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14313", time: 7, trace: true, userProperties: {} }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /探针不认识 trace/.test(error.message),
+    );
+    // 报的大小合计超过 64 MB：413，不取轨迹与读回图
+    const fetched = chunkKeys().length;
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14313", time: 9, trace: true, userProperties: {} }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 413 &&
+        /超过上限 67108864/.test(error.message) &&
+        error.extra.maxBytes === MAX_TRACE_BYTES,
+    );
+    assert.deepEqual([...new Set(chunkKeys().slice(fetched))], ["kbdev-h-1.png"], "超限时只取了画面 PNG");
   });
 
   test("逐帧光标：轨迹的 window、四角的 pointers / window 原样交给探针", async () => {

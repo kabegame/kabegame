@@ -25,6 +25,7 @@ import type { BloomParams } from "../compile/postprocess";
 import { SceneRenderError } from "./errors";
 import { layerQuad } from "./layout";
 import type { GpuProgram } from "./programs";
+import { traceUniforms } from "./trace";
 import { screenBuiltins, textureBuiltins, UniformBlock, type UniformEntry } from "./uniforms";
 
 /** 金字塔最多级数（WPE resize 时预建 8 级）。 */
@@ -392,6 +393,7 @@ export class BloomChain {
               usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
             }),
           );
+          traceUniforms(uniformBuffer, (program.result.uniforms ?? []) as UniformEntry[]);
           entries.push({ binding: 0, resource: { buffer: uniformBuffer } });
         }
         for (const binding of program.textures) {

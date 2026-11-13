@@ -36,6 +36,10 @@
  *   `{ <纹理 path>: 秒 }` 分别给，没给的取 0，缺省 0）。探针换上自己的 `VideoSink`（`videoProbe.ts`）：每段视频 seek 到这个时刻
  *   （超过时长按循环取模）、等到当前帧可用，建好场景后、第一次编码之前交给 `GpuScene`，每个 draw 都拷；读不到或解码失败的视频照产品
  *   规则保持透明。结果的 `videos` 给出每段实际取的时刻。没有视频纹理的场景逐字节同以前。`hostRenderFrame` 不动视频，保持当前帧。
+ * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`renderFrame` 收 `trace` 时，取到设备后建记录器
+ *   （`render/trace.ts`），建场景、profile 帧、回放、读回帧（含读回画布）都用包过的设备；读回帧编码之前开始记，读回完成后取出
+ *   轨迹与选中 pass 的读回图，存进存放区（`dev/drawTrace.ts`），结果的 `trace` 给键与摘要。不给 `trace` 时不建记录器、设备不包，
+ *   逐字节同以前。
  *
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
@@ -62,6 +66,7 @@ import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } fr
 import { GpuScene, type ParticleProfile } from "../render/scene";
 import { shakeOffset } from "../render/shake";
 import { SceneState } from "../render/state";
+import { createDrawTracer, type TraceOptions } from "../render/trace";
 import type { SceneHost } from "../host";
 import {
   frameCamera,
@@ -70,6 +75,7 @@ import {
   replayReadback,
   type ParticleReplay,
 } from "./particleCorners";
+import { isTraceKey, traceArtifacts, traceOptionsOf, type RenderFrameTrace } from "./drawTrace";
 import { prepareProbeTexts } from "./probeTexts";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
@@ -80,6 +86,11 @@ const stored = new Map<string, Uint8Array>();
 
 export function storeProbeBytes(key: string, bytes: Uint8Array): void {
   stored.set(key, bytes);
+}
+
+/** 清掉结果键 `key` 名下旧的轨迹与读回图（`drawTrace.ts` 的 `isTraceKey`）：同键再渲染时不越积越多。 */
+function dropTraceBytes(key: string): void {
+  for (const stale of [...stored.keys()]) if (isTraceKey(key, stale)) stored.delete(stale);
 }
 
 /** base64 分块（CDP 单次求值返回的字符串不宜过大）；越界返回 null。 */
@@ -250,6 +261,13 @@ export interface RenderFrameOptions {
    * 循环、视频用自己的时钟（不跟 `g_Time`），这是确定性回放视频的唯一办法。实际取的时刻见结果的 `videos`。
    */
   videoTime?: VideoTimeOption;
+  /**
+   * 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`true`，或 `{ readback?: (pass 下标 | 标签子串)[], maxVertices?: 1–4096 }`。
+   * 给了就把设备换成记录器包过的那个（`render/trace.ts`），读回那一帧记下每个 pass、每个 draw 的管线、绑定、uniform（按反射解码）、
+   * 顶点与索引（每个 draw 前 `maxVertices` 个，缺省 64），轨迹存成 `<key>.trace.json`；`readback` 选中的 pass 结束后读回它的颜色附件 0，
+   * 8 位目标存 `<key>.pass<下标>.png`（RGBA 原值），浮点目标存 `<key>.pass<下标>.f32`。不给时设备不包、逐字节同以前。
+   */
+  trace?: boolean | TraceOptions;
 }
 
 export interface RenderFrameResult {
@@ -299,6 +317,8 @@ export interface RenderFrameResult {
   videos: ProbeVideoResult[];
   /** PNG 的存放键是 `<key>.png`，原始 RGBA 是 `<key>.rgba`，都用 `chunk` 取（base64 分块）。 */
   key: string;
+  /** 逐 draw 轨迹的键与摘要（`drawTrace.ts` 的 `RenderFrameTrace`）：只在给了 `trace` 时有。 */
+  trace?: RenderFrameTrace;
 }
 
 /**
@@ -354,6 +374,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const cursorWindow = pointerWindow(options.window, canvas);
   // 视频时刻（P9a 步骤 3）的形状同样先查；路径对不对要编译之后才知道（`ProbeVideos` 里查）
   const videoTime = checkVideoTime(options.videoTime);
+  // 逐 draw 轨迹：形状同样先查；没要时为 null，下面不建记录器、设备不包
+  const traceOptions = traceOptionsOf(options.trace);
   const started = performance.now();
   const reader = new FetchSceneReader();
   const cache = new TextureDecodeCache(reader);
@@ -371,6 +393,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   // 文本层（P6b 1d）：同宿主，建场景前排好；没有文本层时不碰 wasm
   const texts = await prepareProbeTexts(bundle, reader, options.sceneAssets);
   const gpu = await acquireGpu();
+  // 逐 draw 轨迹：建场景、编码都用包过的设备（返回的仍是真对象）；没要轨迹时就是 `gpu.device` 本身
+  const tracer = traceOptions ? createDrawTracer(gpu.device, traceOptions) : null;
+  const device = tracer?.device ?? gpu.device;
   let videos: ProbeVideos | undefined;
   try {
     if (canvas) checkCanvas(canvas, gpu.device.limits.maxTextureDimension2D);
@@ -394,7 +419,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       target ?? [sceneWidth, sceneHeight],
       options.particles?.dts.length,
     );
-    const scene = await GpuScene.build(gpu.device, bundle, state, gpu.features, [], {
+    const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
       ignoreUnsupported: force,
       particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
       texts: texts.texts,
@@ -452,10 +477,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
             },
             state,
           );
-          const encoder = gpu.device.createCommandEncoder({ label: "probe profile" });
+          const encoder = device.createCommandEncoder({ label: "probe profile" });
           scene.encode(encoder, state);
-          gpu.device.queue.submit([encoder.finish()]);
-          await gpu.device.queue.onSubmittedWorkDone();
+          device.queue.submit([encoder.finish()]);
+          await device.queue.onSubmittedWorkDone();
           samples.push(performance.now() - t0);
         }
         samples.sort((a, b) => a - b);
@@ -480,34 +505,49 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         size: [sceneWidth, sceneHeight],
         perspective: perspective && { ...perspective, path: profileCamera.path },
       });
-      const encoder = gpu.device.createCommandEncoder({ label: "probe frame" });
+      // 逐 draw 轨迹：从读回帧（含读回画布）的编码起记；这一帧的校验错误记进轨迹，不吞掉也不中断（轨迹正是查它用的）
+      if (tracer) {
+        tracer.startFrame();
+        device.pushErrorScope("validation");
+      }
+      const encoder = device.createCommandEncoder({ label: "probe frame" });
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
       let raw: Uint8Array | Float32Array;
       if (canvas) {
         // 读回画布（第 5 批）：场景之后在同一个编码器里按 fill 上屏到画布纹理再读回。校验错误（比如管线建不出来）不静默读回空图
-        gpu.device.pushErrorScope("validation");
-        const blit = encodeCanvasBlit(gpu.device, encoder, scene, canvas);
+        device.pushErrorScope("validation");
+        const blit = encodeCanvasBlit(device, encoder, scene, canvas);
         try {
-          const read = scheduleReadback(gpu.device, encoder, blit.texture, canvas[0], canvas[1], "rgba8unorm");
-          gpu.device.queue.submit([encoder.finish()]);
-          const error = await gpu.device.popErrorScope();
+          const read = scheduleReadback(device, encoder, blit.texture, canvas[0], canvas[1], "rgba8unorm");
+          device.queue.submit([encoder.finish()]);
+          const error = await device.popErrorScope();
           if (error) throw new Error(`读回画布时 WebGPU 校验出错：${error.message}`);
           raw = await read();
         } finally {
           blit.release();
         }
       } else {
-        const read = scheduleReadback(gpu.device, encoder, scene.targetTexture!, scene.width, scene.height, format);
-        gpu.device.queue.submit([encoder.finish()]);
+        const read = scheduleReadback(device, encoder, scene.targetTexture!, scene.width, scene.height, format);
+        device.queue.submit([encoder.finish()]);
         raw = await read();
+      }
+      const key = options.key ?? `frame-${Date.now()}`;
+      let traced: Awaited<ReturnType<typeof traceArtifacts>> | null = null;
+      if (tracer) {
+        const error = await device.popErrorScope();
+        const frame = await tracer.finish();
+        if (error) (frame.trace.errors ??= []).push(`读回帧 WebGPU 校验出错：${error.message}`);
+        traced = await traceArtifacts(key, frame);
       }
       const [width, height] = canvas ?? [scene.width, scene.height];
       const rgba = raw instanceof Uint8Array ? raw : quantize8(raw);
       for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
-      const key = options.key ?? `frame-${Date.now()}`;
       storeProbeBytes(`${key}.png`, await encodePng(rgba, width, height));
       storeProbeBytes(`${key}.rgba`, rgba);
+      // 同键上次的轨迹与读回图先清掉；这次要了轨迹才存新的
+      dropTraceBytes(key);
+      for (const file of traced?.files ?? []) storeProbeBytes(file.key, file.bytes);
       const sums = [0, 0, 0];
       for (let i = 0; i < rgba.length; i += 4) {
         sums[0] += rgba[i];
@@ -537,6 +577,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         ...(textSyncs === undefined ? {} : { textSyncs }),
         videos: sink.results(),
         key,
+        ...(traced ? { trace: traced.summary } : {}),
       };
     } finally {
       scene.destroy();

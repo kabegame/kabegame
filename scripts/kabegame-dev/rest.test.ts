@@ -542,6 +542,65 @@ describe("粒子回放、轨迹与四角", () => {
     });
   });
 
+  test("render 的逐 draw 轨迹：trace 原样转给后端，trace / traceImages 原样回；不合法回 400 不调后端；409、413 原样带出", async () => {
+    const png = bigPng();
+    const trace = { version: 1, resources: {}, passes: [{ index: 0, label: "scene", draws: [] }], copies: [] };
+    const traceImages = [{ pass: 0, format: "rgba8unorm", kind: "png", width: 1, height: 1, bytes: 3, data: "AQID" }];
+    const { backend, calls } = fakeBackend({
+      hostRender: async (handle, request) => {
+        calls.push(["hostRender", handle, request]);
+        if (handle === "h-old") throw new DevError(409, "host", "宿主产物没有回 trace：探针不认识 trace", {});
+        if (handle === "h-big") throw new DevError(413, "host", "逐 draw 轨迹与读回图共 70000000 字节", { bytes: 7e7 });
+        const meta = { width: 40, height: 20, trace: { key: "k.trace.json", passes: 1, draws: 0, readbacks: [] } };
+        return {
+          meta,
+          png: Buffer.from(png).toString("base64"),
+          pngSha256: "o",
+          pngBytes: 1,
+          trace,
+          traceImages,
+        } as never;
+      },
+    });
+    await withServer(backend, async (base) => {
+      const request = { readback: [0, "glyphs"], maxVertices: 128 };
+      const ok = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: 14313, trace: request });
+      assert.equal(ok.status, 200);
+      const body = await ok.json();
+      assert.deepEqual(body.trace, trace);
+      assert.deepEqual(body.traceImages, traceImages);
+      // 带 resize 时只缩画面 PNG，轨迹照回
+      const resized = await (
+        await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: 14313, trace: true, resize: { scale: 0.5 } })
+      ).json();
+      assert.deepEqual(resized.traceImages, traceImages);
+      assert.equal(resized.size.resized, true);
+      assert.deepEqual(calls, [
+        ["hostRender", "h-1", { imageId: "14313", trace: request }],
+        ["hostRender", "h-1", { imageId: "14313", trace: true }],
+      ]);
+      for (const [bad, field] of [
+        [false, "trace"],
+        [{ readback: [0], extra: 1 }, "trace.extra"],
+        [{ readback: [""] }, "trace.readback[0]"],
+        [{ maxVertices: 5000 }, "trace.maxVertices"],
+      ] as const) {
+        const res = await post(`${base}/__kabegame_dev/hosts/h-1/render`, { imageId: "1", trace: bad });
+        assert.equal(res.status, 400, JSON.stringify(bad));
+        const error = await res.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field, error.error);
+      }
+      assert.equal(calls.length, 2, "参数错时不调后端");
+      const old = await post(`${base}/__kabegame_dev/hosts/h-old/render`, { imageId: "1", trace: true });
+      assert.equal(old.status, 409);
+      assert.match((await old.json()).error, /探针不认识 trace/);
+      const big = await post(`${base}/__kabegame_dev/hosts/h-big/render`, { imageId: "1", trace: true });
+      assert.equal(big.status, 413);
+      assert.deepEqual(await big.json(), { error: "逐 draw 轨迹与读回图共 70000000 字节", layer: "host", bytes: 7e7 });
+    });
+  });
+
   test("particle-track：校验后转给后端（imageId 转字符串），400 的形状", async () => {
     const { backend, calls } = fakeBackend();
     await withServer(backend, async (base) => {

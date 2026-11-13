@@ -9,7 +9,7 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { createClient } from "./client.ts";
 import { createDevMcpServer } from "./main.ts";
-import { frLine, frScriptValue, readbackLines, summarizeCorners, videoLine } from "./tools.ts";
+import { frLine, frScriptValue, readbackLines, summarizeCorners, traceRequestOf, videoLine } from "./tools.ts";
 import { frColor } from "./timeline.ts";
 import type { DevMcpDeps } from "./tools.ts";
 import { Client, InMemoryTransport } from "./testdata/sdkClient.ts";
@@ -104,6 +104,29 @@ const handler: Handler = (req, body, res) => {
                 failed: false,
               })),
       };
+    }
+    // 逐 draw 轨迹：给了 trace 时像新 vite 那样回轨迹与读回图；图片 6 当作旧 vite（不认识 trace，什么都不回）
+    const trace = (body as { trace?: unknown }).trace;
+    if (trace !== undefined && imageId !== "6") {
+      const passes = [
+        { index: 0, label: "scene", draws: [{ index: 0 }, { index: 1 }], readback: "k.pass0.png" },
+        { index: 1, label: "layer 179 text glyphs", draws: [{ index: 2 }], readback: "k.pass1.f32" },
+        { index: 2, label: "bloom 0", draws: [{ index: 3 }], readbackError: "格式 r8unorm 不读回" },
+      ];
+      return sendJson(res, 200, {
+        meta: {
+          ...meta,
+          trace: { key: "k.trace.json", passes: 3, draws: 4, errors: 1, readbacks: [], readbackErrors: [] },
+        },
+        png: Buffer.from(PNG).toString("base64"),
+        pngSha256: "file",
+        pngBytes: 1,
+        trace: { version: 1, resources: {}, passes, copies: [], errors: ["读回帧 WebGPU 校验出错：x"] },
+        traceImages: [
+          { pass: 0, format: "rgba8unorm", kind: "png", width: 2, height: 1, bytes: 3, data: "AQID" },
+          { pass: 1, format: "rgba16float", kind: "f32", width: 1, height: 1, bytes: 4, data: "AACAPw==" },
+        ],
+      });
     }
     return sendJson(res, 200, { meta, png: Buffer.from(PNG).toString("base64"), pngSha256: "file", pngBytes: 1 });
   }
@@ -814,5 +837,77 @@ describe("视频时刻（P9a 步骤 3）", () => {
       }),
       "视频纹理：materials/v.tex 取 0.75 s（时长 ? s，640×360）",
     );
+  });
+});
+
+describe("逐 draw 轨迹", () => {
+  test("trace 的 readback / maxVertices 交给 REST（save 不发）；轨迹与读回图写进 save 目录，结果只有一行摘要", async () => {
+    await withMcp(async (call, root, rest) => {
+      const result = await call("render_scene", {
+        imageId: "9",
+        trace: { save: "out/trace-9", readback: [0, "glyphs"], maxVertices: 16 },
+      });
+      assert.notEqual(result.isError, true, textOf(result));
+      const [body] = bodiesOf(rest, "/render");
+      assert.deepEqual(body.trace, { readback: [0, "glyphs"], maxVertices: 16 });
+      const dir = path.join(root, "out", "trace-9");
+      const trace = JSON.parse(readFileSync(path.join(dir, "trace.json"), "utf8"));
+      assert.equal(trace.passes.length, 3);
+      assert.deepEqual([...readFileSync(path.join(dir, "pass-0.png"))], [1, 2, 3]);
+      assert.deepEqual([...readFileSync(path.join(dir, "pass-1.f32"))], [0, 0, 0x80, 0x3f]);
+      const text = textOf(result);
+      assert.match(
+        text,
+        /逐 draw 轨迹：3 个 pass、4 个 draw，读回 pass 0（2×1 rgba8unorm）、pass 1（1×1 rgba16float）；选中了没读回：pass 2（格式 r8unorm 不读回）；记录器 \/ 校验出错 1 条（见 trace\.json 的 errors）；写到 .*trace-9（trace\.json、pass-0\.png、pass-1\.f32）/,
+      );
+      // 轨迹内容不进会话：pass 的细节、读回图的 base64 都不在结果里（元数据里只有 meta.trace 的计数）
+      assert.doesNotMatch(text, /AQID|AACAPw|layer 179 text glyphs|WebGPU 校验出错/);
+    });
+  });
+
+  test("只给 save 时 REST 收 trace: true；回放时也带；host_render 同样写；不给时请求体没有 trace", async () => {
+    await withMcp(async (call, root, rest) => {
+      await call("render_scene", { imageId: "9", trace: { save: "a" }, replay: { particles: { dts: [0.1] } } });
+      const host = await call("host_render", { handle: "h-1", imageId: "9", trace: { save: "b" } });
+      assert.notEqual(host.isError, true, textOf(host));
+      await call("render_scene", { imageId: "9" });
+      const bodies = bodiesOf(rest, "/render");
+      assert.equal(bodies[0].trace, true);
+      assert.ok(bodies[0].particles);
+      assert.equal(bodies[1].trace, true);
+      assert.equal("trace" in bodies[2], false);
+      assert.match(textOf(host), /逐 draw 轨迹：3 个 pass/);
+      assert.ok(readFileSync(path.join(root, "a", "trace.json")).length > 0);
+      assert.ok(readFileSync(path.join(root, "b", "pass-0.png")).length > 0);
+    });
+  });
+
+  test("旧 vite 没回轨迹报 [local]；trace 的形状由 SDK 参数校验拒绝", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const old = await call("render_scene", { imageId: "6", trace: { save: "c" } });
+      assert.equal(old.isError, true);
+      assert.match(textOf(old), /^\[local\][\s\S]*REST 没回 trace \/ traceImages：vite 的 kabegame-dev 插件是旧的/);
+      const before = bodiesOf(rest, "/render").length;
+      for (const trace of [
+        {},
+        { save: "" },
+        { save: "d", readback: [-1] },
+        { save: "d", readback: [""] },
+        { save: "d", maxVertices: 0 },
+        { save: "d", maxVertices: 4097 },
+        { save: "d", extra: 1 },
+        true,
+      ]) {
+        const bad = await call("render_scene", { imageId: "9", trace });
+        assert.equal(bad.isError, true, JSON.stringify(trace));
+      }
+      assert.equal(bodiesOf(rest, "/render").length, before, "参数错时不发请求");
+    });
+  });
+
+  test("traceRequestOf：只给 save 时是 true，save 不发", () => {
+    assert.equal(traceRequestOf({ save: "x" }), true);
+    assert.deepEqual(traceRequestOf({ save: "x", readback: [1] }), { readback: [1] });
+    assert.deepEqual(traceRequestOf({ save: "x", maxVertices: 8 }), { maxVertices: 8 });
   });
 });

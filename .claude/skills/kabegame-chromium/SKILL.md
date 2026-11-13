@@ -71,10 +71,10 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `show_window` | 把主窗口带到前台：最小化时 unminimize、不可见时 show，再 set_focus；没到前台（Windows 前台限制）时临时置顶再取消。回走了哪条路径、前后的 `visibilityState` / `hasFocus` | 要 | 桌面 |
 | `open_image_preview` | 主窗口打开某张图的预览，再 `show_window`。导航到 `/gallery`（保留 query，加 `pvwimgid`）并整页重载；图在当前视图里就跳到它所在的页，不在就降级成单图预览，不改筛选条件。回最终路由、预览开没开、是哪张、在不在视图里 | 要 | 桌面（安卓未验，不显示窗口） |
 | `android_screen` | adb 整屏截图（含系统栏、原生对话框）；`save` / `size` 同 `screenshot` | 要 | 安卓 |
-| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay`、`canvas`、`videoTime` 同 `render_scene`） | 要 | 桌面 |
+| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay`、`canvas`、`videoTime`、`trace` 同 `render_scene`） | 要 | 桌面 |
 | `projects_remove` | 按清单移除测试工程（只 `batch_remove_images`） | 要 | 桌面 |
 | `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
-| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」），kbp 测试工程的 FR 帧号块缺省涂成读回那一帧的颜色（`replay.fr`，见下方「FR 帧号块」）。不给 `canvas` 时读回场景目标（场景分辨率）；给 `canvas: [宽, 高]` 时按 `fill` 上屏到这么大的画布再读回（见下方「读回画布」）。有视频纹理的场景用 `videoTime`（秒，缺省 0；数字对全部视频纹理生效，`{ <纹理 path>: 秒 }` 分别给；超过时长按循环取模）定视频的时刻：屏外宿主不跑帧循环，这是确定性回放视频的唯一办法，每段实际取的时刻在结果的「视频纹理」行与 `meta.videos` | 要 | 桌面 |
+| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」），kbp 测试工程的 FR 帧号块缺省涂成读回那一帧的颜色（`replay.fr`，见下方「FR 帧号块」）。不给 `canvas` 时读回场景目标（场景分辨率）；给 `canvas: [宽, 高]` 时按 `fill` 上屏到这么大的画布再读回（见下方「读回画布」）。有视频纹理的场景用 `videoTime`（秒，缺省 0；数字对全部视频纹理生效，`{ <纹理 path>: 秒 }` 分别给；超过时长按循环取模）定视频的时刻：屏外宿主不跑帧循环，这是确定性回放视频的唯一办法，每段实际取的时刻在结果的「视频纹理」行与 `meta.videos`。给 `trace: { save, readback?, maxVertices? }` 时把读回那一帧的逐 draw 轨迹（pass、draw、管线、绑定、uniform、顶点，可选读回 pass 的目标）写进 `save` 目录，和 WPE 的 RenderDoc 抓帧逐 draw 对照（见下方「逐 draw 轨迹」） | 要 | 桌面 |
 | `particle_track` | 按 WPE 的一次抓帧回放粒子模拟器，在 `frames`（缺省为抓到的帧）输出和 `rd-*.json` 同格式的轨迹，写 `out`；回摘要（每帧每系统的粒子数、位置范围、时间线信息） | 要 | 桌面 |
 | `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层画不画、写进顶点的粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene`（没有 `fr`：不渲染） | 要 | 桌面 |
 | `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
@@ -238,6 +238,59 @@ kbp 测试工程的第一个对象 FR（`solidlayer`，场景 1780–1860 × 10�
 解出的颜色全部等于文件名帧号的公式值；P5a 的 5 组抖动、5 组缩放与 `p5a-shakepar2` 第 941 帧按时间线回放，和 WPE 上屏帧**整帧逐像素比、
 不挖任何区域，11 组都是 0 差异**；`replay.fr: false` 时差异正好是 FR 块，经 REST 给 N − 1 帧的颜色时 FR 块差 1。
 
+### 逐 draw 轨迹（`render_scene` / `host_render` 的 `trace`）
+
+给 `trace: { save: "<目录>", readback?: [...], maxVertices? }` 时，探针把这次渲染用的设备包一层记录用的代理
+（`apps/wpe-scene/src/render/trace.ts`），记下读回那一帧（含读回画布的上屏 pass）的每个 render pass、每个 draw，用来和 WPE 的
+RenderDoc 抓帧（`wpe-renderdoc` MCP）逐 draw 对照：哪一处像素差落在哪个 draw、哪个值上。代理只把调用原样转给真对象、返回真对象，
+渲染路径、着色器、资源一个都不变；不给 `trace` 时设备不包，读回逐字节同以前。轨迹不进会话：MCP 把它写进 `save` 目录（相对路径按仓库根，
+同名文件覆盖），结果里一行摘要（pass 数、draw 数、读回了哪些、选中了没读回的原因、记录器 / 校验错误条数、目录与文件）。
+
+- **文件**：`trace.json`（紧凑 JSON，NaN 写成 null），读回图 `pass-<下标>.png`（8 位目标，RGBA 原值，alpha 不改、不预乘，bgra 换成 rgba）
+  或 `pass-<下标>.f32`（`rgba16float` / `rgba32float` 目标，RGBA 单精度小端，同 `meta` 读回的浮点规则）。
+- **`trace.json` 的形状**（ID 在一次渲染里按创建顺序编号，前缀 `t` 纹理、`b` 缓冲、`s` 采样器、`p` 管线；标签照抄渲染器的）：
+  - `resources`：这一帧引用到的 `textures`（`label`、`size`、`format`、`mipLevelCount`、`usage`：渲染器要的用途，读回补的 COPY_SRC 不算）、
+    `buffers`、`samplers`（描述）、`pipelines`（`label`、`topology`、`cullMode`、`frontFace`、`vertex`：顶点缓冲布局、`targets`：格式、
+    补齐缺省值的 `blend`、`writeMask`，`depth`，`shaders`：模块标签与入口）；
+  - `passes[]`：`index`（编码顺序，`beginRenderPass` 的先后）、`label`（场景的 pass 标签带图层与步骤，如 `layer 179 VHS Time and Date text glyphs`、
+    `scene`、`bloom 3 …`、`clear composite`）、`encoder`（命令编码器标签，读回帧是 `probe frame`）、`submit`（帧内第几次提交）、
+    `colorAttachments[]`（`texture`、`label`、`mip`、`layer`、`loadOp`、`storeOp`、清屏时的 `clearValue`）、`depthAttachment`、`draws[]`、
+    `readback`（读回图的键）/ `readbackError`；
+  - `draws[]`：`index`（帧内全局序号）、`pipeline`、生效的 `viewport` `[x, y, w, h, minDepth, maxDepth]` 与 `scissor`（没设时是附件整张）、
+    `call`（`kind` draw / drawIndexed、`count`、`instances`、`first`、`baseVertex`、`firstInstance`）、`bindings[]`（`group`、`binding`、
+    `kind` buffer / texture / sampler、`id`、`label`，缓冲带 `offset` / `size`（含动态偏移），纹理带视图的 `mip` / `layer`）、`vertexBuffers`、
+    `indexBuffer`、`uniforms` / `rawUniforms`、`indices`、`vertices`；
+  - `copies[]`：帧内的拷贝（`copyTextureToTexture`，快照 `_rt_FullFrameBuffer` 就在这里，`copyTextureToBuffer` 等；队列上的
+    `queue.writeTexture` / `queue.copyExternalImageToTexture` 是视频帧、图集），`order` 是它之前已开始了几个 pass；
+  - `errors`：记录器自己出的错（建场景时出的带「（记录之外）」前缀）与读回帧的 WebGPU 校验错误（后者说明这一帧本身可能没画成）。
+- **取值时刻**：draw 引用的缓冲内容在 `queue.submit` 那一刻从影子字节里取（`writeBuffer`、`mappedAtCreation` 都同步进影子），同 WebGPU：
+  提交前的写入对这次提交的全部 draw 可见，编码之后、提交之前写的也算。
+- **uniform**：渲染器建 uniform 缓冲时登记翻译器的反射（`render/scene.ts`、`render/bloom.ts` 的 `traceUniforms`，非 dev 构建是空操作），
+  `uniforms` 按名字解码（规则同 `UniformBlock`：标量是数，向量、数组按声明分量展平，矩阵按列主序展平；两阶段拆开的同名 uniform 叫
+  `kb_vs_<名字>` / `kb_fs_<名字>`）。没登记的（比如读回画布的铺放缓冲）在 `rawUniforms` 里按 float32 原样给。和 RenderDoc 的常量比时，
+  名字就是 WPE 着色器里的 `g_*`，矩阵先确认两边的排列再比。
+- **顶点**：按管线的顶点缓冲布局解码，每个 draw 取前 `maxVertices` 个（缺省 64，1–4096）被引用的顶点，同 RenderDoc `vs_in` 按行列：
+  带索引时 `indices` 是前 `maxVertices` 个索引（原值，从 `firstIndex` 起），第 i 行是顶点 `indices[i] + baseVertex`，重复的索引照样重复；
+  不带索引时是 `first` 起的连续顶点。键是 `loc<location>:<格式>`，按实例步进的属性（rope 的段）另加 `@instance`、按实例号取。
+- **读回**：`readback` 选中的 pass（下标，或 pass 标签 / 颜色附件纹理标签的子串）结束后，在同一个编码器里把颜色附件 0 当时那一级 mip、
+  那一层拷出来，读回的是这个 pass 刚画完的内容（之后的 pass 再改它不影响）。要读回时，带 RENDER_ATTACHMENT 的颜色纹理在建的时候补上
+  COPY_SRC（场景目标、合成 RT、fbo、泛光 RT 本来都有）。格式不认识、附件纹理不是经记录器建的、命令缓冲到最后没提交时不拷，pass 里写
+  `readbackError`。
+- **和 RenderDoc 对照**：WPE 抓帧里 `get_draw_calls` 的绘制事件按顺序大致对应 `passes[].draws`，但两边的 pass 划分不一定一一对应
+  （我们有只清屏的 pass、快照走拷贝、同一目标上连着的绘制合进一个 pass），按目标纹理与图层标签对齐。`get_pipeline_state` 的
+  `render_targets` / `viewports` / `color_blends` 对应 pass 的 `colorAttachments`、draw 的 `viewport` 与管线的 `targets[].blend`，常量的
+  名字与值对应 `uniforms`，`get_mesh_data` 的 `vs_in` 逐属性列对应 `vertices`（行对应 `indices`）；RT 用 `save_texture` 存出来和
+  `pass-<下标>.png` 逐像素比。自动对齐、报第一处不同（`kbp cmp draws`）还没有。
+- **护栏**：轨迹与读回图合计超过 64 MB 时 vite 回 413（先按探针报的大小判、不取；少读回几个 pass 或调小 `maxVertices`）；宿主产物不认识
+  `trace`（改了探针没重建）时 vite 报 409 `[host]`；vite 插件是旧的、没回轨迹时 MCP 报 `[local]`。
+- 实时宿主的「下一帧记一次」没做：只有探针 `renderFrame` 的读回帧能记。
+
+```text
+render_scene { imageId: <id>, replay: { timeline: { log: "…-log.txt", frame: 240 } }, canvas: [1920, 1080],
+               trace: { save: "ignore/p6/b1e/trace-e3clock", readback: ["text glyphs"], maxVertices: 8 } }
+  → trace.json + pass-<下标>.png（黑字层的合成 RT），结果里一行摘要
+```
+
 ## REST（`/__kabegame_dev/*`，vite 上）
 
 请求和响应都是 JSON，截图回 `image/png`（带 `X-Png-Width` / `X-Png-Height`，以及原图的 `X-Png-Original-Width` / `-Height`）。
@@ -262,7 +315,7 @@ kbp 测试工程的第一个对象 FR（`solidlayer`，场景 1780–1860 × 10�
 | `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, scriptValues?, videoTime?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」）；`scriptValues` 是 `[{ object, field, value, optional? }]`（最多 64 项，`object` 是非负整数或非空字符串、`field` 是图层字段或文本字段、`value` 是 1–4 个有限数或布尔，文本字段另收最长 4096 的字符串、图层字段给字符串 400，不合法 400 带 `field`），探针写进状态，`meta.scriptValues` 逐项回 `applied`，有文本值时结清重排、`meta.textSyncs` 回 `sync` 次数（见「FR 帧号块」的文本字段）；`videoTime` 是非负秒数或 `{ <纹理 path>: 秒 }`（最多 64 项，不合法 400 带 `field`，键不是视频纹理时探针报错回 422），`meta.videos` 回每段实际取的时刻（`path`、`time`、`duration`、`width`、`height`、`failed`、`error?`），宿主产物不认识时 409 | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, scriptValues?, videoTime?, trace?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size, trace?, traceImages? }`；`particles: { dts, times?, seed?, passes?, random? }` 原样交给探针回放，和 `time` 互斥；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」）；`scriptValues` 是 `[{ object, field, value, optional? }]`（最多 64 项，`object` 是非负整数或非空字符串、`field` 是图层字段或文本字段、`value` 是 1–4 个有限数或布尔，文本字段另收最长 4096 的字符串、图层字段给字符串 400，不合法 400 带 `field`），探针写进状态，`meta.scriptValues` 逐项回 `applied`，有文本值时结清重排、`meta.textSyncs` 回 `sync` 次数（见「FR 帧号块」的文本字段）；`videoTime` 是非负秒数或 `{ <纹理 path>: 秒 }`（最多 64 项，不合法 400 带 `field`，键不是视频纹理时探针报错回 422），`meta.videos` 回每段实际取的时刻（`path`、`time`、`duration`、`width`、`height`、`failed`、`error?`），宿主产物不认识时 409；`trace` 是 `true` 或 `{ readback?: (非负整数 \| 非空字符串)[]（最多 64 项）, maxVertices?: 1–4096 }`（不认识的字段、不合法 400 带 `field`），响应多 `trace`（解析后的轨迹 JSON）与 `traceImages: [{ pass, format, kind: "png" \| "f32", width, height, bytes, data(base64) }]`，`meta.trace` 是探针的摘要（键、大小、计数、`readbackErrors`），合计超过 64 MB 回 413、宿主产物不认识时 409（见「逐 draw 轨迹」） | 桌面 |
 | `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, window?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`）；`cursors` 是逐帧的 `g_PointerPosition`，`window` 要和它一起给 | 桌面 |
 | `POST /hosts/:h/particle-corners` | `{ imageId, particles?, pointers?, window?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果；`pointers` / `window` 同 render | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |

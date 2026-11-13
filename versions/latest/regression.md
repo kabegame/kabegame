@@ -245,6 +245,20 @@
 | [ ] | U8 插件版本不兼容提示 | macOS 插件详情 | 打开一个要求更高应用版本的未安装插件，悬停安装按钮 | 按钮置灰，悬停提示所需版本 | 未测 |
 | [ ] | U9 Web 版 | Web | 打开画廊 | 收集菜单只有「网络」，其余同 U1 | 未测 |
 
+## 场景渲染器的逐 draw 轨迹（dev 工具）
+
+2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Node + Deno | 宿主 tsc、vitest（`render/trace.test.ts`、`dev/drawTrace.test.ts`）；`deno test -A --no-check scripts/kabegame-dev/ apps/kabegame-dev-mcp/src/`；Prettier | 0 error；只有已知的 `pipeline.test.ts` 一条失败 | 2026-11-14 Claude：合进工作区后宿主 tsc 0 error；`render/trace.test.ts`、`dev/drawTrace.test.ts`、`render/text.test.ts`、`render/bloom.test.ts` 104 条全过（快照）；工作区 `deno test -A --no-check scripts/kabegame-dev/ apps/kabegame-dev-mcp/src/` 49 组 204 步全过 |
+| [x] | T2 不要轨迹时逐字节不变 | Windows dev，屏外宿主 | 宿主重建前后各渲染同一帧（不带 `trace`），比 `meta.sha256` | 相同 | 2026-11-14 Claude：`e3clock-nofx`（图片 14504）同一帧，旧产物不带轨迹与新产物带轨迹的 PNG SHA-256 都是 `5c3077…`（见 T3） |
+| [x] | T3 要了轨迹画面也不变 | 同 T2 | 同一帧带 `trace: { save, readback: [...] }` 渲染，比 `meta.sha256` 与 T2 | 相同（代理只转发；补 COPY_SRC 不改画面） | 2026-11-14 Claude：带 `trace: { readback: ["layer 179"] }` 渲染，画面 SHA-256 同不带轨迹（`5c3077…`）；8 个 pass、7 个 draw、`errors` 为空 |
+| [ ] | T4 代理不被 WebGPU 拒 | 同 T2 | 带 `trace` 渲染一张有粒子 / 文本 / 视频 / 泛光的场景 | 不报品牌检查错误；`trace.json` 的 `errors` 没有校验错误 | 2026-11-14 Claude：只测了文本场景（`e3clock-nofx`：合成 RT、快照拷贝、画布 blit 都记下、没有校验错误）；粒子、视频、泛光场景未测 |
+| [x] | T5 `e3clock-nofx` 黑字层上屏 draw 对 WPE 事件 59 | 同 T2 + `A:\p6b\e3clock-nofx\e3clock-nofx-frame240.rdc` | 回放到第 240 帧带 `trace`，找黑字层上屏的 draw，比 MVP（`uniforms`）、顶点与 UV（`vertices`） | 能逐项对上，或差异落到具体的值 | 2026-11-14 Claude：顶点（±407 × ±153）与 UV 和 WPE 逐位相同、混合相同；MVP 的 x 平移差 1 个 float32 ulp（0.8617067933 对 0.8617067337），y 按各自视口（我们 3840×2160 再 blit 裁 15 行，WPE 直接 3840×2130）；我们是 4 顶点三角形带（对角线右下–左上），WPE 是 6 索引列表（对角线左下–右上） |
+| [x] | T6 黑字层合成 RT 对 WPE RT 7128 | 同 T5 | `trace.readback` 选黑字层的合成 pass，`pass-<下标>.png` 和 WPE 的 RT 逐像素比 | 能比；差异落到具体的 draw | 2026-11-14 Claude：pass 2（黑字层画字形）读回和 WPE RT 7128（事件 59）RGBA 逐像素 0 差异，差异因此只在上屏的 draw |
+| [ ] | T7 护栏 | 同 T2 | 读回很多个 4K 浮点 pass（超过 64 MB）；旧宿主产物带 `trace` | 413 不取；409 `[host]` | |
+
 ## 场景壁纸 P5c：静态网格（mdl 模型对象）
 
 2026-11-13 Windows dev。P5c 分 3 步加收尾：

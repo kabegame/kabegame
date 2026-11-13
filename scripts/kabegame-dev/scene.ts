@@ -24,13 +24,18 @@ import type {
   ParticleCornersRequest,
   ParticleTrackRequest,
   ParticleTrackResult,
+  RenderDrawTrace,
   RenderMeta,
   RenderRequest,
   RenderResponse,
+  RenderTraceImage,
+  RenderTraceMeta,
 } from "./types.ts";
 
 /** 轨迹、四角这类 JSON 结果的上限（UTF-8 字节）：超过回 413，建议减少 `frames` / `limit`。 */
 export const MAX_RESULT_BYTES = 32 * 1024 * 1024;
+/** 渲染的逐 draw 轨迹：轨迹 JSON 与读回图合计的上限（字节）。超过回 413，建议少读回几个 pass 或调小 `maxVertices`。 */
+export const MAX_TRACE_BYTES = 64 * 1024 * 1024;
 /** JSON 结果按这么多字符一块经 `Runtime.evaluate` 取回（单次 CDP 消息不宜过大，同探针 `chunk` 的 4 MB）。 */
 const RESULT_CHUNK_CHARS = 4 * 1024 * 1024;
 
@@ -458,6 +463,9 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * 同样报 409。
  * 视频时刻 `videoTime`（P9a 步骤 3）校验后原样转给探针（`0` 也转）；给了而结果没有 `meta.videos` 时（宿主产物不认识这一项，视频停在
  * 透明的初值）同样报 409。
+ * 逐 draw 轨迹 `trace`（`.claude/plans/tools/scene-draw-trace.md`）校验后原样转给探针；给了而结果没有 `meta.trace` 时（宿主产物不认识
+ * 这一项，设备没包）报 409。按 `meta.trace` 取回 `<key>.trace.json` 与各读回图，响应加 `trace`（解析后的 JSON）与 `traceImages`；
+ * 合计超过 `MAX_TRACE_BYTES` 回 413（先按探针报的大小判，不取）。
  */
 export async function renderFrame(
   s: DevSession,
@@ -493,6 +501,8 @@ export async function renderFrame(
     ...(request.scriptValues ? { scriptValues: request.scriptValues } : {}),
     // 视频时刻（P9a 步骤 3）：checkRenderReplay 已校验（形状）；路径是不是视频纹理由探针判。0 也是有效值，不能按真假判
     ...(request.videoTime !== undefined ? { videoTime: request.videoTime } : {}),
+    // 逐 draw 轨迹：checkRenderReplay 已校验（true 或 { readback?, maxVertices? }）
+    ...(request.trace !== undefined ? { trace: request.trace } : {}),
   };
   const task = await hostTask(s, handle, `__kabegameSceneProbe.renderFrame(${JSON.stringify(args)})`, {
     signal: options.signal,
@@ -529,13 +539,80 @@ export async function renderFrame(
       { imageId: request.imageId, videoTime: request.videoTime, meta: { videos: meta.videos ?? null } },
     );
   }
+  const summary = request.trace === undefined ? null : traceMeta(meta, request.imageId);
   const png = await probeBytes(s, handle, `${key}.png`);
+  const traced = summary ? await fetchTrace(s, handle, summary) : null;
   return {
     meta,
     png: Buffer.from(png).toString("base64"),
     pngSha256: createHash("sha256").update(png).digest("hex"),
     pngBytes: png.length,
+    ...(traced ?? {}),
   };
+}
+
+/** 请求了轨迹：结果里要有逐项的 `meta.trace`，否则是不认识 `trace` 的旧宿主产物（设备没包、什么都没记），报 409。 */
+function traceMeta(meta: RenderMeta, imageId: string): RenderTraceMeta {
+  const summary = meta.trace;
+  if (
+    !summary ||
+    typeof summary !== "object" ||
+    typeof summary.key !== "string" ||
+    typeof summary.bytes !== "number" ||
+    !Array.isArray(summary.readbacks)
+  ) {
+    throw new DevError(
+      409,
+      "host",
+      "宿主产物没有回 trace：探针不认识 trace、没有记录，重建宿主（--mode development）",
+      { imageId, meta: { trace: summary ?? null } },
+    );
+  }
+  return summary;
+}
+
+/** 413：轨迹与读回图合计太大。 */
+function traceTooLarge(bytes: number): DevError {
+  return new DevError(
+    413,
+    "host",
+    `逐 draw 轨迹与读回图共 ${bytes} 字节，超过上限 ${MAX_TRACE_BYTES}：少读回几个 pass（trace.readback）或调小 trace.maxVertices`,
+    { bytes, maxBytes: MAX_TRACE_BYTES },
+  );
+}
+
+/** 按探针的摘要取回轨迹 JSON 与读回图：先按报的大小判上限、超了不取，取回之后按实际大小再判一次。 */
+async function fetchTrace(
+  s: DevSession,
+  handle: string,
+  summary: RenderTraceMeta,
+): Promise<{ trace: RenderDrawTrace; traceImages: RenderTraceImage[] }> {
+  const declared = summary.bytes + summary.readbacks.reduce((n, item) => n + (item.bytes ?? 0), 0);
+  if (declared > MAX_TRACE_BYTES) throw traceTooLarge(declared);
+  const json = await probeBytes(s, handle, summary.key);
+  let total = json.length;
+  const traceImages: RenderTraceImage[] = [];
+  for (const item of summary.readbacks) {
+    const bytes = await probeBytes(s, handle, item.key);
+    total += bytes.length;
+    if (total > MAX_TRACE_BYTES) throw traceTooLarge(total);
+    traceImages.push({
+      pass: item.pass,
+      format: item.format,
+      kind: item.key.endsWith(".png") ? "png" : "f32",
+      width: item.width,
+      height: item.height,
+      bytes: bytes.length,
+      data: Buffer.from(bytes).toString("base64"),
+    });
+  }
+  let trace: RenderDrawTrace;
+  try {
+    trace = JSON.parse(new TextDecoder().decode(json)) as RenderDrawTrace;
+  } catch (error) {
+    throw new DevError(422, "host", `轨迹 ${summary.key} 不是 JSON：${(error as Error).message}`);
+  }
+  return { trace, traceImages };
 }
 
 /**

@@ -6,8 +6,11 @@ import {
   checkRenderReplay,
   checkReplay,
   checkScriptValues,
+  checkTrace,
   checkTrackRequest,
   MAX_SCRIPT_TEXT,
+  MAX_TRACE_READBACKS,
+  MAX_TRACE_VERTICES,
   TEXT_FIELDS,
 } from "./replay.ts";
 
@@ -221,6 +224,45 @@ describe("checkReplay", () => {
         "scriptValues[0].field",
         /只能是 origin \/ scale .*（图层字段），或 text \/ pointsize .* \/ verticalalign（文本字段）/,
       );
+    }
+  });
+
+  test("渲染的逐 draw 轨迹：trace 是 true 或 { readback?, maxVertices? }；错在哪项报哪项，不认识的字段 400", () => {
+    assert.equal(checkTrace(true), true);
+    const full = { readback: [0, 12, "glyphs", "layer 179"], maxVertices: 4096 };
+    assert.deepEqual(checkTrace(full), full);
+    assert.deepEqual(checkTrace({}), {});
+    assert.deepEqual(checkTrace({ maxVertices: 1 }), { maxVertices: 1 });
+    const most = checkTrace({ readback: Array.from({ length: MAX_TRACE_READBACKS }, (_, i) => i) });
+    assert.equal(most !== true && most.readback?.length, 64);
+    assert.equal(MAX_TRACE_VERTICES, 4096);
+    // 和回放、画布等一起给；不要求有 particles
+    assert.deepEqual(checkRenderReplay({ particles: { dts: [0.1] }, trace: { readback: [3] } }), { dts: [0.1] });
+    assert.equal(checkRenderReplay({ canvas: [1920, 1080], trace: true }), undefined);
+
+    for (const bad of [false, 1, "all", null, [0]]) {
+      rejects400(() => checkRenderReplay({ trace: bad }), "trace", /要是 true，或 \{ readback\?, maxVertices\? \}/);
+    }
+    rejects400(
+      () => checkTrace({ readback: [0], save: "out" }),
+      "trace.save",
+      /不认识（trace只收 readback \/ maxVertices）/,
+    );
+    rejects400(() => checkTrace({ readback: 3 }), "trace.readback", /要是数组/);
+    rejects400(
+      () => checkTrace({ readback: Array.from({ length: MAX_TRACE_READBACKS + 1 }, () => 0) }),
+      "trace.readback",
+      /65 项，最多 64 项/,
+    );
+    for (const item of [-1, 1.5, "", null, true]) {
+      rejects400(
+        () => checkTrace({ readback: [0, item] }),
+        "trace.readback[1]",
+        /pass 下标（非负整数）或 pass \/ 目标纹理标签的子串（非空字符串）/,
+      );
+    }
+    for (const maxVertices of [0, 4097, 2.5, "64", null]) {
+      rejects400(() => checkTrace({ maxVertices }), "trace.maxVertices", /1–4096 的整数/);
     }
   });
 });
