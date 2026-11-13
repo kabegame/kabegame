@@ -110,7 +110,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 
 ### 能力表（`features.ts`）
 
-能力键以 `类别:具体能力` 命名，例如 `camera:perspective`、`tex:format:<n>`、`tex:video`、`uniform:g_AudioSpectrum16Left`、`combo:SPRITESHEET`、`effect:<目录>:<字段>`、`particle:<类别>:<模块>`、`script:api:<分组>.<成员>`、`script:callback:<名>`、`value:animation`、`shader:flag:parse:…`、`render:bloom:<pass>`、`assets:missing`。原则是**只报真正改变画面的特性**，中性字段逐项写明依据后放行（依据多来自 WPE 2.8.42 的只读逆向，`.claude/plans/wpe-import/3-scene/p2-REPORT.md`；P4a 的在 `phase4/p4-particles-REPORT.md`）。脚本由 P3b 运行时执行，运行期的脚本错误只进脚本诊断、不加入 `unsupported`；但脚本里静态看得出的未实现 API 报 `script:api:*`、整张退回（2026-11-07 改定，见下）。其它渲染能力键照常决定是否退回预览图：
+能力键以 `类别:具体能力` 命名，例如 `camera:perspective`、`tex:format:<n>`、`tex:video`、`uniform:g_LightsPosition`、`combo:SPRITESHEET`、`effect:<目录>:<字段>`、`particle:<类别>:<模块>`、`script:api:<分组>.<成员>`、`script:callback:<名>`、`value:animation`、`shader:flag:parse:…`、`render:bloom:<pass>`、`assets:missing`。原则是**只报真正改变画面的特性**，中性字段逐项写明依据后放行（依据多来自 WPE 2.8.42 的只读逆向，`.claude/plans/wpe-import/3-scene/p2-REPORT.md`；P4a 的在 `phase4/p4-particles-REPORT.md`）。脚本由 P3b 运行时执行，运行期的脚本错误只进脚本诊断、不加入 `unsupported`；但脚本里静态看得出的未实现 API 报 `script:api:*`、整张退回（2026-11-07 改定，见下）。其它渲染能力键照常决定是否退回预览图：
 
 | 放行 | 依据 |
 |---|---|
@@ -489,7 +489,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 - **错误与保留**：模块导入或求值失败，整段不调用；回调抛错只禁用该段的这个回调，计时器抛错只取消该计时器，其余继续。单个回调超过 15 秒时，等它返回后停掉本场景全部脚本并保留已写画面；死循环仍可能卡住宿主，由既有 ping / 看门狗处理。`console.error` 每段每分钟最多向应用日志报 10 条，超出的数量随下一条可上报日志附带。跨重编译保留 realm 与脚本状态，新 `SceneState` 首帧前由 `replayWrites()` 重放脚本最后一次写入。有脚本时，所有**带材质 pass** 的图层即使初始隐藏也预建 GPU 资源，编码时仍按当前可见性跳过。
 
 - **持久存储**：WPE `localStorage` 存在宿主 `file:` 来源的浏览器 `Storage` 里，键前缀 `kabegame:wpe-scene:ls:<图片 id>:<g|s>:`，所以场景之间、场景与网页壁纸互相看不到，但共用这个来源的配额。值按 JSON 存取，超配额抛错，由回调包装禁用那一段。`LOCATION_*` 的数值是推断的 0 / 1，脚本拿到的是不透明的值。「清空脚本存储」（只在预览的右键菜单与工具条）只清当前场景，清完重建 realm，`init` 重跑；没有宿主存活时广播没人收、不生效，所以画廊的右键菜单里没有这一项。
-- **音频缓冲**：`engine.registerAudioBuffers(16 | 32 | 64)` 只能在模块顶层调，返回 `{ left, right, average }`。宿主第一次收到注册时订阅 `WpeMediaHub`，订阅方式同网页壁纸，只 Windows 有数据源；每帧原地写，脚本持有的数组不变。分辨率 n 的每段取对应 64 / n 个原始段的最大值，含义是推断。着色器的 `g_AudioSpectrum*` 随 W2 做。
+- **音频缓冲**：`engine.registerAudioBuffers(16 | 32 | 64)` 只能在模块顶层调，返回 `{ left, right, average }`。宿主第一次收到注册时订阅 `WpeMediaHub`，订阅方式同网页壁纸，只 Windows 有数据源；每帧原地写，脚本持有的数组不变。分辨率 n 的每段取对应 64 / n 个原始段的最大值，含义是推断。着色器的 `g_AudioSpectrum*` 读同一份场景频谱（P11a，见「音频频谱 uniform（P11a）」）。
 
 **已提供的脚本 API**（以 `script/api.ts` 为准）：
 
@@ -1331,7 +1331,7 @@ f = clamp01(powf(smoothstep(clamp01((v − lo)/(hi − lo))), exponent))   // Na
 - `A64 = (L + R)/2`；32 段、16 段由相邻两段取最大逐级得到。
 - 暂停与补画帧（`frametime = 0`）不推进，同 WPE 整帧跳过时冻结；Hub 拒绝订阅时 `disable()`，之后保持 0。加载时的预热频谱是 0，重编译时的预热读到当时的值（rea 3.5【推】）。
 
-**读者**：粒子读 `L16` / `R16`（所有系统共用一个只读引用）；脚本 `registerAudioBuffers(n)` 返回的 left / right / average 在 `beforeFrame` 里、只在实时帧从同分辨率的块拷入（`average` 是 `A` 段），暂停时冻结，不再自己从 Hub 原值段内取最大。`g_AudioSpectrum*` uniform 是 P11，数据已就位。
+**读者**：粒子读 `L16` / `R16`（所有系统共用一个只读引用）；脚本 `registerAudioBuffers(n)` 返回的 left / right / average 在 `beforeFrame` 里、只在实时帧从同分辨率的块拷入（`average` 是 `A` 段），暂停时冻结，不再自己从 Hub 原值段内取最大。六个 `g_AudioSpectrum*` uniform 也读这三块（P11a，见「音频频谱 uniform（P11a）」）。
 
 ### 已知差异
 
@@ -1376,6 +1376,31 @@ f = clamp01(powf(smoothstep(clamp01((v − lo)/(hi − lo))), exponent))   // Na
 - 回放案例 `cases/e1.json`–`e5.json`（`kbp replay`）：`e1` static、`e2` eventfollow（含 fps 20 的两遍模式）、`e3` eventspawn / eventdeath、`e4` 音频（轨迹帧带 `audio` 时每帧步进前写进系统共用的数组）、`e5` 运行中建实例的预热时间。各步的快照、补丁与变异清单在 `e0/`–`e5/`。
 - WPE 参照在 `A:\p4e\`（wpe-renderdoc MCP 的 `capture_sweep` / `capture_wallpaper`）；`kbp rdc track --points` 读轨迹，同时记下 CLK 读到的 `g_AudioSpectrum*`（WPE 把 `float[n]` 打包成 `float4[n/4]`，从 `members` 展开）；`kbp rdc track` 的 points 认法在连续同系统绘制时另核颜色。步骤 0 的 draws 认法轨迹改名为 `rd-<标签>-draws.json`。
 - 真实场景的测试副本用 `kbp content unpack --instrument` 解包到 `ignore/p4/proj/real-<id>-kbp`（不动工坊原件），导入 dev 库对照，看完用 `projects_remove` 移除。
+
+## 音频频谱 uniform（P11a）
+
+六个 `g_AudioSpectrum{16,32,64}{Left,Right}` 就是场景频谱（上一节的 `SceneSpectrum`）的三块左右声道。WPE 每次绘制把渲染线程归一化好的数组按 `4n`
+字节拷进常量缓冲（rea-p4e-audio 3.4、rea-p11-textures 第 6 节），实测 32 段、16 段由 64 段两两取最大、左右声道各自算，工程没声明
+`supportsaudioprocessing` 时全 0，没有平均声道的 uniform（`.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md`「音频 uniform」）。
+
+- **能力表**：六个名字在 `compile/features.ts` 的 `AUDIO_UNIFORMS`，并进 `ENGINE_UNIFORMS`，不再报 `uniform:g_AudioSpectrum*`。
+- **写入**：`render/uniforms.ts` 的 `frameBuiltins` 收 `FrameInput.audio`（`SpectrumUniforms`，`SceneSpectrum` 本身就是这个形状），直接给数组引用；
+  翻译器把 `uniform float g_AudioSpectrum16Left[16]` 反射成 `array<vec4<f32>, 16>`、`declared: "float"`，`UniformBlock.set` 每个元素只写 `.x`。
+  没给频谱时写全 0。渲染器把自己的 `spectrum` 交给 `GpuScene.update`：频谱在帧开头推进，粒子、脚本、uniform 这一帧读的是同一份值，同 WPE。
+- **订阅**：`bundle.audio` 也认读这六个 uniform 的程序（`readsAudioUniforms`：翻译器标了 `unused` 的、带 `meta.material` 的同名作者常量都不算），
+  开关仍只看 `project.json` 的 `supportsaudioprocessing`。非 Windows 后端没有回环采集，订阅被拒、频谱全 0（代码里标了 `TODO:[WPE_SCENE]`）。
+- **确定性回放**：dev 探针的 `ParticleAudioFrame` 另带 32 / 64 段，读回那一帧把截至这一帧的频谱交给 `update`；kabegame-dev 的
+  `replay.timeline.audio` 读录制（`kbp rdc consts --no-clock` 的输出或带 `frames[].audio` 的轨迹），按帧号对齐、缺的段按两两取大往下推。
+- **验收**：生成工程 `p11-bars`（六个数组各画一排色块，`ignore/p11/defs/p11a.py`）4 帧和 WPE 整帧逐像素相同。真实壁纸的复制工程走查
+  （Liberty `3502090109`、少女 `3825170583`、Miku `3585875739`）见 `phase11/phase-11a-audio.md`「实施记录」。
+
+**已知差异：**
+- **fxc 重新结合连乘**：fxc 把 `g_Time * a * a`（a 是 uniform）算成 `g_Time * (a * a)`，我们照 WGSL 源码顺序算 `(g_Time * a) * a`。两种结合在一部分帧上
+  舍入不同，坐标差约一个 ulp；按扰动坐标采样的 effect（少女的 `waterripple`）在 alpha 边缘差 1–2 级、几十到一百多个像素。复制工程里把源码改成
+  fxc 的结合后这些帧归零（`ignore/p11/a/walk/ripple/`）。fxc 的优化规则没有逐条复刻。
+- **片元的零星舍入差**：和顶点无关，最大 1 级、每帧 0 到几十个像素，出在落在舍入中点附近的像素上（Liberty 的音频条 pass 用 numpy 复算过，
+  两边离精确值的偏差分布相同）。
+- **场景比窗口大时的上屏**：WPE 按窗口分辨率直接画，我们先画场景分辨率再缩（Liberty 3840×2160 场景在 1920×1080 窗口）。
 
 ## 相机：视差、抖动与缩放（P5a）
 

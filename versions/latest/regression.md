@@ -2522,3 +2522,19 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 粒子与编译期 | 同上 | 带粒子的确定性工程整帧对 WPE；`kbp regress --corpus` | 粒子位置、MVP 不比原来记的差；语料编译期结果没有变化 | 只改渲染，编译期不动 |
 | [ ] | 真实场景观感 | Windows dev，图库预览与桌面 | 开几张带旋转、视差、文字的场景壁纸 | 画面无缝线、无半像素偏移、不闪烁 | |
 | [ ] | macOS / Linux 三角形带 | macOS / Linux dev | 开一张图层边缘有双线性采样的场景壁纸，与 Windows 同帧对比 | 边缘像素一致；若有末位差别，确认是奇数三角形顶点轮换所致 | 代码里 `layerQuad` 带 `TODO:[WPE_SCENE]` |
+
+## 场景壁纸音频频谱 uniform（P11a）
+
+2026-11-14。六个 `g_AudioSpectrum*` 读场景频谱（P4e 的 `SceneSpectrum`），读它们的程序也让宿主订阅音频。WPE 的语义见
+`.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md`「音频 uniform」，走查记录见同目录 `phase-11a-audio.md`「实施记录」，测试工程
+`ignore/p11/proj/p11-bars`（`ignore/p11/defs/p11a.py`），复制工程与实验在 `ignore/p11/a/walk/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | A0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error、全过 | 2026-11-13：步骤 1 的快照上 tsc 0 error，vitest 2739 个用例全过 |
+| [x] | A1 语料 | Node，183 个工程 | 前后重扫 `unsupported` | 只去掉六个音频键，原来能渲染的不掉出 | 2026-11-13：能渲染 66 → 69，去掉的只有 `uniform:g_AudioSpectrum*`（32 段 40 张、64 段 34 张、16 段 21 张）；Miku `3585875739` 还要 P7e 的变量打包才建得出管线 |
+| [x] | A2 生成工程对照 WPE | Windows dev + WPE 抓帧 | `p11-bars` 自带连续测试音，WPE 20 fps、1920×1080 抓 4 帧，`render_scene` 按日志、轨迹与录制的频谱回放 | 整帧逐像素相同 | 2026-11-14 Claude：4 帧都 0 差异，每帧 128 个频谱值都非 0 |
+| [x] | A3 真实壁纸走查 | Windows dev + WPE 抓帧 | Liberty、少女、Miku 的复制工程各抓 4 帧，按录制的频谱逐帧回放、逐 draw 对照 | 读音频的 pass 一致，差异逐处有解释 | 2026-11-14：音频条 pass 0 到个位数的 1 级差（舍入中点）；少女的 waterripple 差异定位到 fxc 重新结合 `g_Time * a * a`（源码改成 fxc 的结合后这些帧整帧 0 差）；Liberty 整帧的大差是 4K 场景缩到窗口的上屏；Miku 第 192 帧缺视频时刻没走完 |
+| [x] | A4 真机冒烟 | Windows dev，放着音乐 | 预览 Liberty | 频谱条随音乐动 | 2026-11-14：订阅成功、频谱非 0、三张截图里条的高度不同 |
+| [ ] | A5 没声明音频处理的场景 | Windows dev | 打开一张读音频 uniform 但 `project.json` 没有 `supportsaudioprocessing` 的场景 | 不订阅音频、频谱条为 0、场景照常渲染 | 本机语料没有这样的场景（68 张都声明了），待用户确认 |
+| [ ] | A6 非 Windows | macOS / Linux | 预览 Liberty | 场景照常渲染、频谱条为 0、日志一条 debug（订阅被拒） | 本机不能测（`TODO:[WPE_SCENE]`） |
