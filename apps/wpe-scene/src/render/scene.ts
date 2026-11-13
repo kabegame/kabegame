@@ -131,10 +131,20 @@
  *   有它时画进场景目标、不在组里的管线都带 `depthStencil`（测 GREATER、不测 always），组里的与画进合成 RT / fbo 的不带，泛光链与
  *   `linearizeBase` 各开自己的 pass、也不带。每帧第一个场景 pass 清颜色时深度一起清 0（反向 Z），其余 load，`clearenabled: false` 时
  *   深度也不清。没有这种步骤的场景不建深度，管线与 render pass 和改前逐字相同。
+ * - 被依赖（P8 步骤 4，`SceneLayer.dependedOn`，rea-p8-render 第 1、2 节，p8-REPORT 结论 7–9）：渲染图已排成合成路径（`graph.ts`），这里
+ *   多认三样东西。
+ *   - 独占 RT：`populate` 在建完全部 runtime 之后、任何 `buildLayer` 之前给每个被依赖的图层建一张（`layerTargets`，尺寸 `compositeSize`、
+ *     场景格式、采样 `compositeSampling`，同它的合成 RT），随场景销毁；它就是本层的合成 RT 0（`ensureComposites`），其余从池里借。跨帧、
+ *     跨 effect 开关的重建都保留、不清（WPE 帧之间不清；被依赖者排在引用方后面时引用方读到上一帧，结论 9）。引用方的
+ *     `{ kind: "layer" }` 解析到它（`resolveTexture`），几个引用方共用同一张，采样器与 `g_Texture<n>Resolution` 随它。
+ *   - 建资源：`buildableLayers` 不看被依赖图层自身与祖先的可见性（WPE `0x1000`）。
+ *   - 编码：不可见（自身或祖先）时照跑它的 op，只跳过画到「场景」的那一步上屏（`layerOpsToRun`），顶层与组画子树两处同一个判断。
+ *     语料里的被依赖者都不是组（是组的照报 `dependency:group`），组隐藏时整棵子树照旧不画。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneFbo, SceneLayer, SceneModel, ScenePass, SceneTexture } from "../compile/bundle";
+import { layerCompositeName } from "../compile/dependencies";
 import type { ParticleRenderer, SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
@@ -858,6 +868,8 @@ export function checkRenderable(
  * 为空、画的是 effect 的 pass）：自身和每个祖先都可能可见，即当前可见、`visible` 绑了用户属性，或场景带脚本。`visibleBound` 的图层当前
  * 可能不可见，但随时可能显示，同样要能画（P3a）。写死不可见的分组下面的子孙永远画不出来（`visible` 沿父链继承，P4a 步骤 1）：不建资源，
  * 它们的问题也不让整场退回（`p5c-ver` 的 HID 不画）。
+ * 被依赖的图层（P8 步骤 4，`SceneLayer.dependedOn`）例外：不看自身与祖先的可见性（WPE `0x1000`，rea-p8-render 1.3、2.4），写死不可见也照画
+ * 进它的独占 RT（`p8-dep` 的 1、3、8，`p8-misc` 的 A13）。
  */
 export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">): SceneLayer[] {
   const scripted = bundle.scripts.list.length > 0;
@@ -869,8 +881,31 @@ export function buildableLayers(bundle: Pick<SceneBundle, "layers" | "scripts">)
         !!layer.text ||
         !!layer.model?.meshes.some((mesh) => mesh.passes.length > 0) ||
         !!layer.shape) &&
-      everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted),
+      (!!layer.dependedOn ||
+        everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted)),
   );
+}
+
+/**
+ * 一个图层本帧要跑的 op（P8 步骤 4，rea-p8-render 2.4，p8-REPORT 结论 7）：可见时全部；不可见（自身或祖先）时一般整段跳过（含快照、copy 与
+ * swap），被依赖的图层照跑，只去掉画到「场景」的绘制——它画到场景的只有 passthrough 上屏那一步（WPE `FUN_1401e8aa0` 的上屏块
+ * `if (真可见)`，层首快照、基础 pass、effect 链都不看可见性）。组画子树时「场景」是组的合成 RT，规则相同。粒子树与模型 op 只画到场景，
+ * 一并去掉（被依赖的只有图像层，碰不到）。纯函数，单测核对跳过规则。
+ */
+export function layerOpsToRun<O extends { kind: string }>(
+  ops: readonly O[],
+  layer: Pick<SceneLayer, "dependedOn">,
+  visible: boolean,
+): readonly O[] {
+  if (visible) return ops;
+  if (!layer.dependedOn) return [];
+  return ops.filter((op) => !drawsToScene(op));
+}
+
+/** op 画到「场景」（顶层是场景目标，组里是组的合成 RT）：目标是 `scene` 的绘制、粒子树、模型。 */
+function drawsToScene(op: { kind: string }): boolean {
+  if (op.kind === "particle-tree" || op.kind === "model") return true;
+  return op.kind === "draw" && (op as { draw?: { step: { target: TargetRef } } }).draw?.step.target.kind === "scene";
 }
 
 /**
@@ -1010,6 +1045,11 @@ export class GpuScene {
   private readonly readyPipelines = new Map<string, GPURenderPipeline>();
   /** 合成 RT 的共享池，键是尺寸与采样方式（组里的图层另加组的层数，P5b 步骤 4）；重建时不够也从这里补。 */
   private readonly compositePool = new Map<string, RenderTarget[]>();
+  /**
+   * 被依赖图层的独占 RT（P8 步骤 4，`createLayerTarget`）：`objects` 下标 → 那张 RT。是那一层的合成 RT 0，引用方的 `{ kind: "layer" }`
+   * 解析到这里；跨帧、跨重建保留，随场景销毁。
+   */
+  private readonly layerTargets = new Map<number, RenderTarget>();
   /** bundle 的全部图层（含没有资源的分组节点），按 `objects` 下标：组的尺寸、`copyBackground` 与父链上组的层数从这里查。 */
   private readonly layerByObject = new Map<number, SceneLayer>();
   /** 建了资源的图层按 `objects` 下标：组的 `subtree` op 按它找子孙的 op（P5b 步骤 4）。 */
@@ -1407,7 +1447,33 @@ export class GpuScene {
     return base === undefined ? undefined : this.bundle.textures[base];
   }
 
-  /** 本图层的合成 RT 至少 `plan.composite.count` 张，不够就从共享池补。文本层的由本层独占（`ensureTextComposites`，P6b 1e）。 */
+  /**
+   * 被依赖图层的独占 RT（P8 步骤 4，rea-p8-render 2.2）：尺寸同它的合成 RT（`compositeSize`），格式是场景格式（HDR 为 RGBA16F），采样同它
+   * 自己采样合成 RT 的规则（`compositeSampling`），不进共享池。WPE 的名字 `_rt_imageLayerComposite_<id>_a` 作标签。计进显存估算、随场景销毁。
+   */
+  private createLayerTarget(layer: SceneLayer): void {
+    const baseTexture = this.baseTexture(layer);
+    const [width, height] = compositeSize(layer, baseTexture);
+    const { clamp, nearest } = compositeSampling(layer, baseTexture);
+    const address: GPUAddressMode = clamp ? "clamp-to-edge" : "repeat";
+    const filter: GPUFilterMode = nearest ? "nearest" : "linear";
+    this.layerTargets.set(
+      layer.object,
+      this.createTarget(
+        layerCompositeName(layer.id),
+        width,
+        height,
+        this.format,
+        this.sampler({ addressModeU: address, addressModeV: address, magFilter: filter, minFilter: filter }),
+      ),
+    );
+  }
+
+  /**
+   * 本图层的合成 RT 至少 `plan.composite.count` 张，不够就从共享池补。文本层的由本层独占（`ensureTextComposites`，P6b 1e）。
+   * 被依赖的图层（P8 步骤 4）第 0 张是它的独占 RT（`layerTargets`），其余照旧从同键的池里借；之后的重建（effect 开关、`prepareVariants`）只往后补，
+   * 第 0 张一直是它。
+   */
   private ensureComposites(runtime: LayerRuntime, plan: LayerPlan): void {
     if (!plan.composite) return;
     if (runtime.layer.text) {
@@ -1415,6 +1481,9 @@ export class GpuScene {
       return;
     }
     const { width, height, count } = plan.composite;
+    const own = this.layerTargets.get(runtime.object);
+    /** 从池里借的张数：独占的那张占了第 0 张。 */
+    const pooled = own ? count - 1 : count;
     // 合成 RT 的采样（P8 步骤 1，p8-REPORT、rea-p8-layer §3）：寻址只看对象 clampuvs（缺省钳制），过滤在对象 nointerpolation 或
     // 基础纹理 NoInterpolation 时最近邻
     const { clamp, nearest } = compositeSampling(runtime.layer, this.baseTexture(runtime.layer));
@@ -1426,7 +1495,7 @@ export class GpuScene {
     this.compositePool.set(key, pool);
     const address: GPUAddressMode = clamp ? "clamp-to-edge" : "repeat";
     const filter: GPUFilterMode = nearest ? "nearest" : "linear";
-    while (pool.length < count)
+    while (pool.length < pooled)
       pool.push(
         this.createTarget(
           `composite ${key} #${pool.length}`,
@@ -1437,7 +1506,10 @@ export class GpuScene {
         ),
       );
     const { composites } = runtime.resources;
-    composites.push(...pool.slice(composites.length, count));
+    // 被依赖：独占的那张放在第 0 张。`populate` 先建它、后建 draw，正常走不到替换；万一先借过池化 RT，整组换成它再按下标重借
+    if (own && composites[0] !== own) composites.splice(0, composites.length, own);
+    const offset = own ? 1 : 0;
+    composites.push(...pool.slice(composites.length - offset, pooled));
   }
 
   /**
@@ -1890,6 +1962,8 @@ export class GpuScene {
       this.runtimeByObject.set(layer.object, runtime);
       return runtime;
     });
+    // 被依赖图层的独占 RT（P8 步骤 4）：在任何 `buildLayer` 之前建好，引用方排在被依赖者前面时建 draw 也解析得到（`resolveTexture`）
+    for (const runtime of runtimes) if (runtime.layer.dependedOn) this.createLayerTarget(runtime.layer);
     const prepared = await Promise.all(plans.map((plan, index) => this.prepareLayer(plan, runtimes[index])));
     // 泛光：全部图层之后（A1 / A3）
     if (bundle.bloom) {
@@ -1966,6 +2040,8 @@ export class GpuScene {
     if (ref.kind === "fbo") return this.targets[resources.fbos.resolve(ref.effect, ref.name)] ?? null;
     if (ref.kind === "framebuffer") return this.snapshot;
     if (ref.kind === "atlas") return (ref.color ? resources.atlases?.color : resources.atlases?.main) ?? null;
+    // 别的图层的独占 RT（P8 步骤 4）；那一层没建资源时为 null，建 draw 时报 `render:texture-rt:layer`
+    if (ref.kind === "layer") return this.layerTargets.get(ref.object) ?? null;
     return null;
   }
 
@@ -3499,9 +3575,10 @@ export class GpuScene {
           end();
           const target = this.resolveTarget(op.target, op.resources);
           if (!target) continue;
+          // 不可见的子孙跳过，被依赖的照画进自己的 RT、不上屏（P8 步骤 4，同顶层）
           for (const object of op.layer.subtree) {
-            const child = visible.has(object) ? this.runtimeByObject.get(object) : undefined;
-            if (child) runOps(child.ops, target.view);
+            const child = this.runtimeByObject.get(object);
+            if (child) runLayer(child, target.view);
           }
           end();
         } else if (op.kind === "copy") {
@@ -3524,9 +3601,17 @@ export class GpuScene {
         } else op.resources.fbos.swap(op.effect, op.source, op.target);
       }
     };
+    /**
+     * 一个图层（P8 步骤 4，`layerOpsToRun`）：可见时全部 op；不可见时一般整段跳过，被依赖的照跑、只去掉画到「场景」（`sceneTarget`）的上屏。
+     * 顶层与组画子树共用。
+     */
+    function runLayer(runtime: LayerRuntime, sceneTarget?: GPUTextureView): void {
+      const ops = layerOpsToRun(runtime.ops, runtime.layer, visible.has(runtime.object));
+      if (ops.length) runOps(ops, sceneTarget);
+    }
     // 组的子孙（`group` 非空）在顶层不画，由组的 `subtree` op 画（P5b 步骤 4）
     // `group == null`：缺这个字段（手写的图层）也当顶层
-    for (const layer of this.layers) if (layer.layer.group == null && visible.has(layer.object)) runOps(layer.ops);
+    for (const layer of this.layers) if (layer.layer.group == null) runLayer(layer);
     if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!started) begin();
@@ -3558,6 +3643,7 @@ export class GpuScene {
     this.atlasTextures = null;
     this.relayouter = null;
     this.textFbos.clear();
+    this.layerTargets.clear();
     this.atlasResets.clear();
     this.meshBuffers.clear();
     this.meshPlaceholder = null;

@@ -21,6 +21,15 @@
  * - 四边形：图像层的几何 `layer` 按 `trunc(size)`（F1、F3 的 ±50.5 / ±25），文本层不截断、`fill` 不截断；效果矩阵仍按浮点 size（F2）；
  * - GpuScene 假设备：F1、F2、F3、G、Gc 的 uniform 与顶点对上 WPE；脚本 `thisLayer.alignment` 读名字、写字符串同帧改 MVP、写数字读回
  *   `center`、非图像层没有访问器、组改对齐时子层跟着重写；写回经运行时的重放表在新状态里恢复。
+ *
+ * P8 步骤 4（同计划「步骤 4 — 图层依赖」，rea-p8-render 第 1、2 节，p8-REPORT「图层依赖」与结论 7–9）：
+ * - `planLayer`：0 / 1 / 2 个 effect 的写入顺序（`p8-dep` 的 A9 / A2 / A11，最后一次写入落在合成 RT 0）、最后一个 effect 不上屏、
+ *   passthrough 上屏（内缩 0.15 / 64、混合 translucent / cbm 31 additive / cbm 7 基础材质的）、组合层没有 effect 也画、colorBlendMode 7
+ *   + 被依赖（`2251857160` 的 356）、对调覆盖 copy 与 subtree；`swapCompositeIndices` 逐种步骤；引用方的 `{ kind: "layer" }` 在图像层、
+ *   形状、粒子、模型的计划里都给出；
+ * - 渲染器：`buildableLayers` 收写死隐藏、祖先隐藏的被依赖图层；`layerOpsToRun` 只跳过画到场景的绘制；GpuScene 假设备：独占 RT 建一张、
+ *   是被依赖图层的合成 RT 0，两个引用方绑同一张（`g_Texture1Resolution` 是它的尺寸），不可见时画进 RT 不上屏、可见时多一次上屏，effect
+ *   开关重建后还是同一张，组里的被依赖者按同一规则。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ALIGNMENTS, alignmentIndex, type AlignmentName } from "../compile/alignment";
@@ -40,7 +49,21 @@ import { TEX_FLAGS } from "../compile/tex";
 import { ScriptApi } from "../script/api";
 import { ScriptRuntime, type ScriptRealm, type ScriptTarget, type ScriptValue } from "../script/runtime";
 import type { TranslateResult } from "../wpesl2wgsl";
-import { compositeSampling, planLayer, planShapeLayer, variantPlans, type DrawStep } from "./graph";
+import { layerCompositeName } from "../compile/dependencies";
+import {
+  compositeSampling,
+  planLayer,
+  planModelLayer,
+  planParticleLayer,
+  planShapeLayer,
+  swapCompositeIndices,
+  variantPlans,
+  type DrawStep,
+  type LayerPlan,
+  type LayerStep,
+  type TargetRef,
+  type TextureRef,
+} from "./graph";
 import {
   alignmentOffset,
   drawMatrixOf,
@@ -50,11 +73,12 @@ import {
   sceneViewProjection,
   screenQuadSize,
   shapeQuad,
+  uvInset,
   worldMatrixOf,
   type LayerTransform,
 } from "./layout";
 import { identity, multiply, scaling, transformPoint, translation, type Mat4 } from "./math";
-import { buildableLayers, GpuScene } from "./scene";
+import { buildableLayers, GpuScene, layerOpsToRun } from "./scene";
 import { SceneState, scriptWriteValue } from "./state";
 import { drawMatrices, drawUniformValues, type FrameInput } from "./uniforms";
 
@@ -1152,5 +1176,592 @@ describe("GpuScene：对齐接到绘制上（P8 步骤 3，p8-align2）", () => 
     for (const { target, value } of writes) runtime.rememberWrite(target, value);
     runtime.replayWrites();
     expect(fresh.layers.get(0)).toMatchObject({ alignment: 5, offset: [0, 25], origin: [310, 860, 0] });
+  });
+});
+
+// ———— P8 步骤 4：图层依赖 ————
+
+/** `p8-dep` 的 kbmark：64×64 RGBA8、标志 0。被依赖图层 200×200、基础纹理 64×64，A2 的上屏内缩是 0.15 / 64。 */
+const KBMARK: SceneTexture = {
+  path: "materials/kbmark.tex",
+  source: "project",
+  format: 0,
+  width: 64,
+  height: 64,
+  textureWidth: 64,
+  textureHeight: 64,
+  flags: 0,
+  clampUVs: false,
+  noInterpolation: false,
+  mips: [{ width: 64, height: 64, bytes: new Uint8Array(64 * 64 * 4) }],
+};
+const DEP_TEXTURES = [KBMARK];
+
+/** 一个单绘制 pass 的 effect（`p8-dep` 的 kbtime / kbinv / kbref），程序 1。 */
+function depEffect(object: number, source: number, name: string, extra: Partial<SceneEffect> = {}): SceneEffect {
+  return {
+    source,
+    id: 600 + source,
+    name,
+    file: `effects/${name}/effect.json`,
+    fbos: [],
+    steps: [draw(alignPass(`objects/${object}/effects/${source}/passes/0`, 1, { blending: "normal" }))],
+    enabled: true,
+    visibleBound: false,
+    unsupported: [],
+    ...extra,
+  };
+}
+/**
+ * 被依赖的图像层（`p8-dep` 的 A）：200×200、基础材质 translucent（程序 0，槽 0 是 kbmark）、`dependedOn`；passthrough 是编译期按
+ * `BLENDMODE` 0 编好的 `effectpassthrough`（程序 2，normal、`g_Color4` = 1）。
+ */
+function depLayer(object: number, name: string, extra: Partial<SceneLayer> = {}): SceneLayer {
+  return alignLayer(object, name, {
+    origin: [480, 540, 0],
+    size: [200, 200],
+    passes: [alignPass(`objects/${object}/passes/0`, 0, { textures: { 0: 0 } })],
+    passthrough: alignPass(`objects/${object}/passthrough`, 2, {
+      blending: "normal",
+      uniforms: { g_Color4: [1, 1, 1, 1] },
+    }),
+    dependedOn: true,
+    ...extra,
+  });
+}
+/** 组合层的基础 pass（composelayer：槽 0 是快照）。 */
+const composePass = (object: number) =>
+  alignPass(`objects/${object}/passes/0`, 0, { runtime: { 0: FRAMEBUFFER_RT }, framebuffer: true });
+
+const refLabel = (ref: TextureRef | TargetRef): string =>
+  ref.kind === "composite"
+    ? `c${ref.index}`
+    : ref.kind === "fbo"
+      ? `fbo:${ref.name}`
+      : ref.kind === "layer"
+        ? `layer:${ref.object}`
+        : ref.kind;
+/** 计划的骨架：绘制写成 `角色 槽0的来源 → 目标`，copy 带两端，其余只写种类。 */
+const skeleton = (plan: LayerPlan): string[] =>
+  plan.steps.map((step) => {
+    if (step.kind === "draw")
+      return `${step.role}${step.inputs[0] ? ` ${refLabel(step.inputs[0])}` : ""} → ${refLabel(step.target)}`;
+    if (step.kind === "copy") return `copy ${refLabel(step.source)} → ${refLabel(step.target)}`;
+    if (step.kind === "subtree" || step.kind === "clear") return `${step.kind} → ${refLabel(step.target)}`;
+    return step.kind;
+  });
+const lastDraw = (plan: LayerPlan) => plan.steps.at(-1) as DrawStep;
+
+describe("planLayer：被依赖的图层（P8 步骤 4，rea-p8-render 2.3、2.4，p8-REPORT「图层依赖」）", () => {
+  it("0 / 1 / 2 个 effect 的写入顺序（A9 / A2 / A11）：最后一次写入落在合成 RT 0；最后一个 effect 不上屏，passthrough 读 0 上屏", () => {
+    const a9 = planLayer(depLayer(0, "A9"), DEP_TEXTURES);
+    expect(skeleton(a9)).toEqual(["base texture → c0", "passthrough c0 → scene"]);
+    expect(a9.composite).toEqual({ count: 1, width: 64, height: 64 });
+    const a2 = planLayer(depLayer(0, "A2", { effects: [depEffect(0, 0, "kbtime")] }), DEP_TEXTURES);
+    expect(skeleton(a2)).toEqual(["base texture → c1", "effect c1 → c0", "passthrough c0 → scene"]);
+    expect(a2.composite).toEqual({ count: 2, width: 64, height: 64 });
+    const a11 = planLayer(
+      depLayer(0, "A11", { effects: [depEffect(0, 0, "kbinv"), depEffect(0, 1, "kbtime")] }),
+      DEP_TEXTURES,
+    );
+    expect(skeleton(a11)).toEqual(["base texture → c0", "effect c0 → c1", "effect c1 → c0", "passthrough c0 → scene"]);
+    // 关着的 effect 不算写入（A2 的 kbtime 关掉 = A9）
+    const off = depLayer(0, "A2", { effects: [depEffect(0, 0, "kbtime", { enabled: false })] });
+    expect(skeleton(planLayer(off, DEP_TEXTURES))).toEqual(skeleton(a9));
+    // 不被依赖时照旧：最后一个 effect 上屏，没有 passthrough
+    const plain = depLayer(0, "plain", { dependedOn: false, effects: [depEffect(0, 0, "kbtime")] });
+    expect(skeleton(planLayer(plain, DEP_TEXTURES))).toEqual(["base texture → c0", "final c0 → scene"]);
+    expect(skeleton(planLayer(depLayer(0, "plain", { dependedOn: false }), DEP_TEXTURES))).toEqual([
+      "direct texture → scene",
+    ]);
+  });
+
+  it("上屏（A2、A9）：passthrough 材质、图层四边形、UV 0–1 内缩 0.15 / 64（同末 pass）、混合取基础材质的 translucent，深度借基础 pass", () => {
+    const layer = depLayer(0, "A9");
+    expect(lastDraw(planLayer(layer, DEP_TEXTURES))).toEqual({
+      kind: "draw",
+      role: "passthrough",
+      pass: layer.passthrough,
+      effect: null,
+      target: { kind: "scene" },
+      inputs: { 0: { kind: "composite", index: 0 } },
+      geometry: "layer",
+      uv: [1, 1],
+      inset: uvInset([200, 200], KBMARK),
+      blending: "translucent",
+      raster: { test: false, write: false, cull: false },
+    });
+    expect(uvInset([200, 200], KBMARK)[0]).toBeCloseTo(0.00234375, 9);
+  });
+
+  it("混合：colorBlendMode 31 时 additive（快照规则 1 不看 0x10，不拍）；colorBlendMode 7 + 被依赖（2251857160 的 356）时基础材质的、先拍快照", () => {
+    const additive = planLayer(depLayer(0, "A", { colorBlendMode: 31 }), DEP_TEXTURES);
+    expect(skeleton(additive)).toEqual(["base texture → c0", "passthrough c0 → scene"]);
+    expect(lastDraw(additive).blending).toBe("additive");
+    expect(lastDraw(additive).raster).toEqual({ test: false, write: false, cull: false });
+    const frost = depEffect(0, 0, "frost");
+    const blended = planLayer(depLayer(0, "356", { colorBlendMode: 7, effects: [frost] }), DEP_TEXTURES);
+    expect(skeleton(blended)).toEqual(["snapshot", "base texture → c1", "effect c1 → c0", "passthrough c0 → scene"]);
+    expect(lastDraw(blended).blending).toBe("translucent");
+    // 只是 colorBlendMode 混合（没被依赖）：步骤相同、不对调（没有独占 RT，写在哪张都一样）
+    const unlisted = depLayer(0, "356", { colorBlendMode: 7, dependedOn: false, effects: [frost] });
+    expect(skeleton(planLayer(unlisted, DEP_TEXTURES))).toEqual([
+      "snapshot",
+      "base texture → c0",
+      "effect c0 → c1",
+      "passthrough c1 → scene",
+    ]);
+  });
+
+  it("组合层没有 effect 也画（p8-dep 的 7、p8-misc 的 A13）：compose → 0 → 上屏，UV 0–1 不内缩，合成 RT 按 size；没被依赖时整层不画", () => {
+    const cl = (dependedOn: boolean) =>
+      depLayer(0, "A7", { passthroughModel: true, dependedOn, passes: [composePass(0)] });
+    const plan = planLayer(cl(true), DEP_TEXTURES);
+    expect(skeleton(plan)).toEqual(["snapshot", "compose framebuffer → c0", "passthrough c0 → scene"]);
+    expect(lastDraw(plan).inset).toEqual([0, 0]);
+    expect(plan.composite).toEqual({ count: 1, width: 200, height: 200 });
+    expect(planLayer(cl(false), DEP_TEXTURES)).toEqual({ composite: null, steps: [], reasons: [] });
+  });
+
+  it("对调覆盖 copy 与 subtree：effect 的 copy 读的当前合成 RT、组画子树的目标都跟着换", () => {
+    const kbcopy = depEffect(0, 0, "kbcopy", {
+      fbos: [{ name: "_rt_x", format: "rgba8888", scale: 1, unique: false, repeat: false }],
+      steps: [
+        { kind: "copy", source: "previous", target: "_rt_x" },
+        draw(alignPass("objects/0/effects/0/passes/0", 1, { blending: "normal" })),
+      ],
+    });
+    expect(skeleton(planLayer(depLayer(0, "A", { effects: [kbcopy] }), DEP_TEXTURES))).toEqual([
+      "base texture → c1",
+      "copy c1 → fbo:_rt_x",
+      "effect c1 → c0",
+      "passthrough c0 → scene",
+    ]);
+    // 组（编译期照报 dependency:group，渲染图照规则排）：compose → 子树 → effect → 上屏
+    const group = depLayer(0, "G", {
+      passthroughModel: true,
+      subtree: [1],
+      passes: [composePass(0)],
+      effects: [depEffect(0, 0, "kbtime")],
+    });
+    expect(skeleton(planLayer(group, DEP_TEXTURES))).toEqual([
+      "snapshot",
+      "compose framebuffer → c1",
+      "subtree → c1",
+      "effect c1 → c0",
+      "passthrough c0 → scene",
+    ]);
+  });
+
+  it("swapCompositeIndices：只换合成 RT 的 0 ↔ 1（绘制的目标与输入、copy 两端、clear、subtree、文本），别的引用与步骤不动、原计划不改", () => {
+    const pass = alignPass("objects/0/passes/0", 0);
+    const raster = { test: false, write: false, cull: false };
+    const composite = (index: number) => ({ kind: "composite", index }) as const;
+    const others = {
+      1: { kind: "fbo", effect: 0, name: "_rt_x" },
+      2: { kind: "framebuffer" },
+      3: { kind: "layer", object: 4 },
+      4: { kind: "texture", index: 0 },
+    } as const;
+    const drawStep = (target: TargetRef, input: TextureRef): DrawStep => ({
+      kind: "draw",
+      role: "effect",
+      pass,
+      effect: 0,
+      target,
+      inputs: { 0: input, ...others },
+      geometry: "fullscreen",
+      uv: [1, 1],
+      inset: [0, 0],
+      blending: null,
+      raster,
+    });
+    const steps: LayerStep[] = [
+      { kind: "snapshot" },
+      drawStep(composite(0), composite(1)),
+      drawStep({ kind: "scene" }, composite(0)),
+      drawStep({ kind: "fbo", effect: 0, name: "_rt_x" }, composite(1)),
+      { kind: "copy", effect: 0, source: composite(0), target: { kind: "fbo", effect: 0, name: "_rt_x" } },
+      { kind: "copy", effect: null, source: { kind: "framebuffer" }, target: composite(1) },
+      { kind: "clear", target: composite(1) },
+      { kind: "subtree", target: composite(0) },
+      {
+        kind: "text",
+        part: "glyphs",
+        pass,
+        space: "composite",
+        target: composite(1),
+        inputs: { 0: { kind: "atlas", color: false } },
+        blending: "translucent",
+        raster,
+      },
+      { kind: "swap", effect: 0, source: "_rt_x", target: "_rt_y" },
+    ];
+    const before = JSON.stringify(steps);
+    expect(swapCompositeIndices(steps)).toEqual([
+      { kind: "snapshot" },
+      drawStep(composite(1), composite(0)),
+      drawStep({ kind: "scene" }, composite(1)),
+      drawStep({ kind: "fbo", effect: 0, name: "_rt_x" }, composite(0)),
+      { kind: "copy", effect: 0, source: composite(1), target: { kind: "fbo", effect: 0, name: "_rt_x" } },
+      { kind: "copy", effect: null, source: { kind: "framebuffer" }, target: composite(0) },
+      { kind: "clear", target: composite(0) },
+      { kind: "subtree", target: composite(1) },
+      {
+        kind: "text",
+        part: "glyphs",
+        pass,
+        space: "composite",
+        target: composite(0),
+        inputs: { 0: { kind: "atlas", color: false } },
+        blending: "translucent",
+        raster,
+      },
+      { kind: "swap", effect: 0, source: "_rt_x", target: "_rt_y" },
+    ]);
+    expect(JSON.stringify(steps)).toBe(before);
+  });
+
+  it('引用方：pass.layerComposites 在各种计划里都给出 { kind: "layer" }（图像层直接上屏与 effect、形状、粒子、模型）', () => {
+    const LAYER_5 = { kind: "layer", object: 5 } as const;
+    const inputsOf = (plan: LayerPlan, index = 0) =>
+      (plan.steps[index] as { inputs: Record<number, TextureRef> }).inputs;
+    const ref = (key: string, program: number, extra: Partial<ScenePass> = {}) =>
+      alignPass(key, program, { textures: { 0: 0 }, layerComposites: { 1: 5 }, ...extra });
+    const direct = depLayer(0, "B", { dependedOn: false, passes: [ref("objects/0/passes/0", 0)] });
+    expect(inputsOf(planLayer(direct, DEP_TEXTURES))).toEqual({ 0: { kind: "texture", index: 0 }, 1: LAYER_5 });
+    const kbref = depEffect(0, 0, "kbref", {
+      steps: [draw(ref("objects/0/effects/0/passes/0", 1, { textures: {} }))],
+    });
+    const effect = planLayer(depLayer(0, "B", { dependedOn: false, effects: [kbref] }), DEP_TEXTURES);
+    expect(inputsOf(effect, 1)).toEqual({ 0: { kind: "composite", index: 0 }, 1: LAYER_5 });
+    const shape = shapeLayer(3, {
+      effects: [
+        shafts(3, 0, { steps: [draw(shapePass("objects/3/effects/0/passes/0", { layerComposites: { 2: 5 } }))] }),
+      ],
+    });
+    expect(inputsOf(planShapeLayer(shape))).toEqual({ 1: { kind: "texture", index: 0 }, 2: LAYER_5 });
+    const particlePass = ref("objects/0/particle/passes/0", 0);
+    const particle = { passes: [particlePass], children: [], renderers: [{ kind: "sprite" }], flags: 0 };
+    expect(
+      inputsOf(planParticleLayer({ particle: particle as unknown as NonNullable<SceneLayer["particle"]> })),
+    ).toEqual({ 0: { kind: "texture", index: 0 }, 1: LAYER_5 });
+    const model = { meshes: [{ passes: [particlePass] }], order: [0] };
+    expect(inputsOf(planModelLayer({ model: model as unknown as NonNullable<SceneLayer["model"]> }))).toEqual({
+      0: { kind: "texture", index: 0 },
+      1: LAYER_5,
+    });
+  });
+});
+
+describe("buildableLayers 与 layerOpsToRun：被依赖的图层不可见也画（P8 步骤 4，WPE 0x1000）", () => {
+  it("buildableLayers：被依赖的不看自身与祖先的可见性（写死隐藏、祖先写死隐藏都建）；没被依赖的照旧不建", () => {
+    const layers = [
+      depLayer(0, "hiddenGroup", { passes: [], passthrough: null, dependedOn: undefined, visible: false }),
+      depLayer(1, "A", { visible: false }),
+      depLayer(2, "B", { parent: 0 }),
+      depLayer(3, "C", { visible: false, dependedOn: false }),
+      depLayer(4, "D", { parent: 0, dependedOn: false }),
+      depLayer(5, "E", { dependedOn: false }),
+    ];
+    expect(buildableLayers({ layers, scripts: { list: [] } }).map((layer) => layer.object)).toEqual([1, 2, 5]);
+  });
+
+  it("layerOpsToRun：可见时全部；不可见时一般整段跳过；被依赖的照跑，只去掉画到「场景」的绘制（粒子树、模型同样算画到场景）", () => {
+    const opDraw = (kind: string) => ({ kind: "draw", draw: { step: { target: { kind } } } });
+    const ops = [
+      { kind: "snapshot" },
+      opDraw("composite"),
+      opDraw("fbo"),
+      { kind: "copy" },
+      { kind: "clear" },
+      { kind: "subtree" },
+      { kind: "swap" },
+      opDraw("scene"),
+      { kind: "particle-tree" },
+      { kind: "model" },
+    ];
+    expect(layerOpsToRun(ops, { dependedOn: true }, true)).toBe(ops);
+    expect(layerOpsToRun(ops, { dependedOn: false }, true)).toBe(ops);
+    expect(layerOpsToRun(ops, {}, false)).toEqual([]);
+    expect(layerOpsToRun(ops, { dependedOn: false }, false)).toEqual([]);
+    expect(layerOpsToRun(ops, { dependedOn: true }, false)).toEqual(ops.slice(0, 7));
+  });
+});
+
+interface DepBuffer {
+  label: string;
+  bytes: Uint8Array;
+  destroy(): void;
+}
+/** 假设备：记纹理（标签、尺寸）、bind group 的条目、缓冲字节，以及一帧的编码轨迹（目标与 loadOp、绘制、拷贝）。 */
+class DepGpu {
+  readonly trace: string[] = [];
+  readonly textures: { label: string; width: number; height: number; format: string }[] = [];
+  readonly bindGroups: { label: string; entries: GPUBindGroupEntry[] }[] = [];
+  readonly device: GPUDevice;
+
+  constructor() {
+    const { trace, textures, bindGroups } = this;
+    const renderPass = () => ({
+      setViewport() {},
+      setPipeline() {},
+      setBindGroup() {},
+      setVertexBuffer(_slot: number, buffer: DepBuffer) {
+        trace.push(`  draw ${buffer.label}`);
+      },
+      setIndexBuffer() {},
+      draw() {},
+      drawIndexed() {},
+      end() {},
+    });
+    this.device = {
+      limits: { maxTextureDimension2D: 8192 },
+      lost: new Promise(() => {}),
+      destroy() {},
+      createTexture: (descriptor: GPUTextureDescriptor) => {
+        const size = descriptor.size as { width: number; height?: number } | number[];
+        const [width, height] = Array.isArray(size) ? size : [size.width, size.height ?? 1];
+        const record = { label: descriptor.label ?? "", width, height, format: descriptor.format };
+        textures.push(record);
+        const view = { label: record.label };
+        return { ...record, createView: () => view, destroy() {} };
+      },
+      createSampler: (descriptor: GPUSamplerDescriptor = {}) => ({ descriptor }),
+      createBuffer: (descriptor: GPUBufferDescriptor): DepBuffer => ({
+        label: descriptor.label ?? "",
+        bytes: new Uint8Array(descriptor.size),
+        destroy() {},
+      }),
+      createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
+      createBindGroupLayout: () => ({}),
+      createPipelineLayout: () => ({}),
+      createRenderPipeline: () => ({ getBindGroupLayout: () => ({}) }),
+      createRenderPipelineAsync: async (descriptor: GPURenderPipelineDescriptor) => ({ label: descriptor.label }),
+      createBindGroup: (descriptor: GPUBindGroupDescriptor) => {
+        bindGroups.push({ label: descriptor.label ?? "", entries: [...descriptor.entries] });
+        return {};
+      },
+      createCommandEncoder: () => ({
+        beginRenderPass: (descriptor: GPURenderPassDescriptor) => {
+          const attachment = [...descriptor.colorAttachments][0]!;
+          const { label } = attachment.view as unknown as { label: string };
+          trace.push(`pass ${label} ${attachment.loadOp}`);
+          return renderPass();
+        },
+        copyTextureToTexture: (source: { texture: { label: string } }, target: { texture: { label: string } }) => {
+          trace.push(`copy ${source.texture.label} -> ${target.texture.label}`);
+        },
+        copyTextureToBuffer() {},
+        finish: () => ({}),
+      }),
+      queue: {
+        writeBuffer: (buffer: DepBuffer, offset: number, data: ArrayBuffer, dataOffset = 0, size?: number) => {
+          buffer.bytes.set(new Uint8Array(data, dataOffset, size ?? data.byteLength - dataOffset), offset);
+        },
+        writeTexture() {},
+        submit() {},
+        onSubmittedWorkDone: async () => {},
+      },
+      pushErrorScope() {},
+      popErrorScope: async () => null,
+    } as unknown as GPUDevice;
+  }
+}
+
+/** 程序：MVP（偏移 0），`resolution` 时另有 `g_Texture1Resolution`（偏移 64），声明 `slots` 这些纹理槽（绑定号 `1 + 2n`）。 */
+function depProgram(name: string, slots: number[], resolution = false): TranslateResult {
+  return {
+    ok: true,
+    vertex: { wgsl: `// ${name} v`, entryPoint: "main" },
+    fragment: { wgsl: `// ${name} f`, entryPoint: "main" },
+    attributes: [
+      { name: "a_Position", type: "vec3", location: 0 },
+      { name: "a_TexCoord", type: "vec2", location: 1 },
+    ],
+    uniforms: [
+      { name: "g_ModelViewProjectionMatrix", type: "mat4x4<f32>", declared: "mat4", offset: 0, size: 64 },
+      ...(resolution
+        ? [{ name: "g_Texture1Resolution", type: "vec4<f32>", declared: "vec4", offset: 64, size: 16 }]
+        : []),
+    ],
+    uniformBlockSize: resolution ? 80 : 64,
+    textures: slots.map((slot) => ({ slot, binding: 1 + 2 * slot, samplerBinding: 2 + 2 * slot, kind: "2d" })),
+  } as unknown as TranslateResult;
+}
+/** 程序下标：0 图像（槽 0、1）、1 effect（槽 0、1）、2 passthrough（槽 0）。 */
+const DEP_PROGRAMS = [
+  depProgram("image", [0, 1], true),
+  depProgram("effect", [0, 1], true),
+  depProgram("passthrough", [0]),
+];
+
+function depBundleOf(layers: SceneLayer[]): SceneBundle {
+  return { ...align2Bundle(), layers, programs: DEP_PROGRAMS, textures: DEP_TEXTURES };
+}
+/**
+ * `p8-dep` 的结构：0 B1（引用方，直接上屏，槽 1 读 A，排在 A 前面）、1 B2（引用方，kbref 的槽 1 读 A）、2 A（被依赖、写死隐藏，带一个
+ * visible 绑属性的 kbtime）、3 N（没被依赖的写死隐藏图层，不建资源）。
+ */
+function depBundle(): SceneBundle {
+  const ref = (key: string, program: number, extra: Partial<ScenePass> = {}) =>
+    alignPass(key, program, { textures: { 0: 0 }, layerComposites: { 1: 2 }, ...extra });
+  return depBundleOf([
+    depLayer(0, "B1", { dependedOn: false, passes: [ref("objects/0/passes/0", 0)] }),
+    depLayer(1, "B2", {
+      dependedOn: false,
+      origin: [1440, 540, 0],
+      effects: [depEffect(1, 0, "kbref", { steps: [draw(ref("objects/1/effects/0/passes/0", 1, { textures: {} }))] })],
+    }),
+    depLayer(2, "A", { visible: false, effects: [depEffect(2, 0, "kbtime", { visibleBound: true })] }),
+    depLayer(3, "N", { visible: false, dependedOn: false }),
+  ]);
+}
+
+interface DepRuntime {
+  object: number;
+  resources: { composites: { view: unknown; width: number; height: number; texture: { label: string } }[] };
+}
+const depRuntime = (scene: GpuScene, object: number) =>
+  (scene as unknown as { layers: DepRuntime[] }).layers.find((runtime) => runtime.object === object);
+/** 一个 draw 的 bind group 在槽位 `slot` 上绑的视图（绑定号 `1 + 2·slot`）。 */
+const boundView = (gpu: DepGpu, label: string, slot: number) =>
+  gpu.bindGroups.find((group) => group.label === label)?.entries.find((entry) => entry.binding === 1 + 2 * slot)
+    ?.resource;
+
+async function openDep(bundle: SceneBundle) {
+  const gpu = new DepGpu();
+  const state = SceneState.fromBundle(bundle);
+  const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], { particles: { seed: 1 } });
+  scene.update(ALIGN_FRAME, state);
+  return { gpu, state, scene };
+}
+/** 编码一帧，返回轨迹（第一行是清场景目标）。 */
+function encodeDep(gpu: DepGpu, scene: GpuScene, state: SceneState): string[] {
+  gpu.trace.length = 0;
+  scene.encode(gpu.device.createCommandEncoder(), state);
+  return [...gpu.trace];
+}
+
+describe("GpuScene：被依赖图层的独占 RT 与编码（P8 步骤 4，p8-dep）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("GPUTextureUsage", { RENDER_ATTACHMENT: 1, TEXTURE_BINDING: 2, COPY_SRC: 4, COPY_DST: 8 });
+    vi.stubGlobal("GPUBufferUsage", { VERTEX: 1, UNIFORM: 2, COPY_DST: 4, MAP_READ: 8, INDEX: 16 });
+    vi.stubGlobal("GPUMapMode", { READ: 1 });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const NAME = layerCompositeName(12);
+
+  it("独占 RT：建场景时建一张（标签 _rt_imageLayerComposite_12_a、64×64 同合成 RT、场景格式），是 A 的合成 RT 0；隐藏的 N 不建资源", async () => {
+    const { gpu, scene } = await openDep(depBundle());
+    expect(gpu.textures.filter((texture) => texture.label === NAME)).toEqual([
+      { label: NAME, width: 64, height: 64, format: "rgba8unorm" },
+    ]);
+    const composites = depRuntime(scene, 2)!.resources.composites;
+    expect(composites.map((target) => target.texture.label)).toEqual([NAME, "composite 64x64|true|false #0"]);
+    expect(depRuntime(scene, 3)).toBeUndefined();
+  });
+
+  it("引用：两个引用方的槽 1 绑同一张独占 RT（A 排在 B1 后面，B1 读到的是上一帧）；g_Texture1Resolution 是它的尺寸", async () => {
+    const { gpu, scene } = await openDep(depBundle());
+    const own = depRuntime(scene, 2)!.resources.composites[0];
+    expect(boundView(gpu, "layer 10 B1 direct", 1)).toBe(own.view);
+    expect(boundView(gpu, "layer 11 B2 final", 1)).toBe(own.view);
+    // 槽 0 照常：B1 是 kbmark，B2 是自己的合成 RT
+    expect(boundView(gpu, "layer 10 B1 direct", 0)).not.toBe(own.view);
+    const draws = (scene as unknown as { draws: Set<{ label: string; uniformBuffer: DepBuffer | null }> }).draws;
+    const b1 = [...draws].find((item) => item.label === "layer 10 B1 direct")!;
+    expect(Array.from(new Float32Array(b1.uniformBuffer!.bytes.buffer.slice(64, 80)))).toEqual([64, 64, 64, 64]);
+  });
+
+  it("编码：A 写死隐藏——基础 pass 画进池化 RT、kbtime 画进独占 RT，没有上屏；可见时多一次 passthrough 上屏", async () => {
+    const { gpu, scene, state } = await openDep(depBundle());
+    const hidden = encodeDep(gpu, scene, state);
+    expect(hidden[0]).toMatch(/^pass scene target clear/);
+    expect(hidden.slice(1)).toEqual([
+      "  draw layer 10 B1 direct",
+      "pass composite 64x64|true|false #0 load",
+      "  draw layer 11 B2 base",
+      "pass scene target load",
+      "  draw layer 11 B2 final",
+      "pass composite 64x64|true|false #0 load",
+      "  draw layer 12 A base",
+      `pass ${NAME} load`,
+      "  draw layer 12 A effect",
+    ]);
+    state.write({ property: "p", target: { kind: "layer", object: 2, field: "visible" } }, true);
+    scene.sync(state);
+    scene.update(ALIGN_FRAME, state);
+    expect(encodeDep(gpu, scene, state).slice(-6)).toEqual([
+      "pass composite 64x64|true|false #0 load",
+      "  draw layer 12 A base",
+      `pass ${NAME} load`,
+      "  draw layer 12 A effect",
+      "pass scene target load",
+      "  draw layer 12 A passthrough",
+    ]);
+  });
+
+  it("effect 开关重建后还是同一张：kbtime 关掉时基础 pass 直接画进独占 RT，再打开回到池化 → 独占；引用方的绑定不变", async () => {
+    const { gpu, scene, state } = await openDep(depBundle());
+    const own = depRuntime(scene, 2)!.resources.composites[0];
+    const toggle = (value: boolean) => {
+      state.write({ property: "p", target: { kind: "effect", object: 2, effect: 0 } }, value);
+      scene.sync(state);
+      scene.update(ALIGN_FRAME, state);
+    };
+    toggle(false);
+    expect(depRuntime(scene, 2)!.resources.composites[0]).toBe(own);
+    expect(encodeDep(gpu, scene, state).slice(-2)).toEqual([`pass ${NAME} load`, "  draw layer 12 A base"]);
+    toggle(true);
+    expect(depRuntime(scene, 2)!.resources.composites[0]).toBe(own);
+    expect(encodeDep(gpu, scene, state).slice(-4)).toEqual([
+      "pass composite 64x64|true|false #0 load",
+      "  draw layer 12 A base",
+      `pass ${NAME} load`,
+      "  draw layer 12 A effect",
+    ]);
+    expect(gpu.textures.filter((texture) => texture.label === NAME)).toHaveLength(1);
+  });
+
+  it("组里的被依赖者（3554161528 的 411）：组画子树时按同一规则——不可见时画进自己的 RT、不画进组的 RT，可见时上屏画进组的 RT", async () => {
+    const bundle = depBundleOf([
+      depLayer(0, "G", {
+        dependedOn: false,
+        passthroughModel: true,
+        subtree: [1],
+        passes: [composePass(0)],
+        passthrough: null,
+        groupUpload: alignPass("objects/0/groupupload", 2, {
+          blending: "normal",
+          uniforms: { g_Color4: [1, 1, 1, 1] },
+        }),
+      }),
+      depLayer(1, "C", { parent: 0, group: 0, visible: false }),
+    ]);
+    const { gpu, scene, state } = await openDep(bundle);
+    const own = layerCompositeName(11);
+    const group = "composite 200x200|true|false #0";
+    const hidden = encodeDep(gpu, scene, state);
+    expect(hidden.slice(1)).toEqual([
+      "copy scene target -> _rt_FullFrameBuffer",
+      `pass ${group} load`,
+      "  draw layer 10 G compose",
+      `pass ${own} load`,
+      "  draw layer 11 C base",
+      "pass scene target load",
+      "  draw layer 10 G final",
+    ]);
+    state.write({ property: "p", target: { kind: "layer", object: 1, field: "visible" } }, true);
+    scene.sync(state);
+    scene.update(ALIGN_FRAME, state);
+    expect(encodeDep(gpu, scene, state).slice(4, 8)).toEqual([
+      `pass ${own} load`,
+      "  draw layer 11 C base",
+      `pass ${group} load`,
+      "  draw layer 11 C passthrough",
+    ]);
   });
 });

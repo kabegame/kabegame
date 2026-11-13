@@ -24,12 +24,21 @@
  *   fullscreen 图层带非 center 的对齐报 `object:alignment:fullscreen`；脚本 API 表不再有 `layer.alignment`；
  * - 编译：图像层填 `SceneLayer.alignment`（绑属性、数字为 0，不登记绑定），别的对象不填。
  * 偏移、矩阵、四边形与脚本读写见 `render/p8.test.ts`。
+ *
+ * P8 步骤 4（同计划「步骤 4 — 图层依赖」，rea-p8-render 第 1、2 节，p8-REPORT「图层依赖」与结论 7–9、12）：
+ * - `dependencyIds`：数组、对象取值、重复、负数 / 小数 / 字符串 / null 跳过、模型对象列的也算；`layerCompositeName`；棋盘格逐像素、标志与采样；
+ * - 能力表：`dependencies` 不再报 `object:dependencies`，粒子对象有不是数字的元素报 `particle:dependencies`；
+ * - 编译：名字解析（被依赖 → `layerComposites`；没被依赖、不存在、`_b`、不是图像层 → 棋盘格，整场一张；`bind` 的槽不动；注解 `default`
+ *   同样）、`TEX<n>FORMAT`（LDR 0；HDR 下经依赖置位 0、自带 `0x10` 且在前 14、在后 0）、照报的四键、被依赖时编 `passthrough`
+ *   （`BLENDMODE` 0 / cbm）、`lighting:prelighting`、`dependedOn`。
+ * 渲染图、独占 RT 与编码见 `render/p8.test.ts`。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ALIGNMENTS, alignmentIndex, alignmentName } from "./alignment";
 import { compileScene, SHAPE_POINT_CONSTANTS, shapeLayerSize, shapePoints, type SceneLayer } from "./bundle";
+import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
 import {
   checkObjectFeatures,
   checkSceneFeatures,
@@ -1100,5 +1109,445 @@ describe("compileScene：图层的 alignment（P8 步骤 3）", () => {
     ]);
     expect(bundle.unsupported).toEqual([]);
     expect(bundle.layers[0]).toMatchObject({ alignment: 8, size: [64, 64] });
+  });
+});
+
+// ———— P8 步骤 4：图层依赖 ————
+
+const composite = (id: number, suffix = "a") => `${LAYER_COMPOSITE_PREFIX}${id}_${suffix}`;
+const YELLOW = [255, 255, 0, 255];
+const BLACK = [0, 0, 0, 255];
+
+describe("dependencyIds / layerCompositeName / checkerTexture（P8 步骤 4，rea-p8-render 1.1、2.1、2.6）", () => {
+  it("并集：数组、对象取值都收，重复只算一次；负数、小数、字符串、null、布尔、对象元素跳过；不是数组 / 对象的值等于没写；模型、粒子对象列的数字也算", () => {
+    const ids = dependencyIds([
+      { id: 1, image: "models/a.json", dependencies: [10, 11, 10] },
+      { id: 2, image: "models/a.json", dependencies: { a: 12, b: 11 } },
+      { id: 3, image: "models/a.json", dependencies: [-1, 1.5, "13", null, true, { id: 14 }, 15] },
+      { id: 4, model: "models/m.mdl", dependencies: [16] },
+      { id: 5, particle: "particles/p.json", dependencies: [{ id: 17, type: "emitterimage", index: 0 }, 18] },
+      { id: 6, image: "models/a.json", dependencies: 19 },
+      { id: 7, image: "models/a.json", dependencies: "20" },
+      { id: 8, image: "models/a.json" },
+    ]);
+    expect([...ids].sort((a, b) => a - b)).toEqual([10, 11, 12, 15, 16, 18]);
+  });
+
+  it("名字：前缀 + 十进制 id + `_a`（后缀写死，没有 `_b`）", () => {
+    expect(LAYER_COMPOSITE_PREFIX).toBe("_rt_imageLayerComposite_");
+    expect(layerCompositeName(16613)).toBe("_rt_imageLayerComposite_16613_a");
+    expect(layerCompositeName(0)).toBe("_rt_imageLayerComposite_0_a");
+  });
+
+  it("棋盘格：6×6 RGBA8 一级 mip，(0, 0) 黑、(1, 0) 黄、(0, 1) 黄，逐行黑黄交替（p8-dep 的 4–6）；标志 9、重复、点采样", () => {
+    const texture = checkerTexture();
+    expect(texture).toMatchObject({
+      format: 0,
+      width: 6,
+      height: 6,
+      textureWidth: 6,
+      textureHeight: 6,
+      flags: 9,
+      clampUVs: false,
+      noInterpolation: true,
+    });
+    expect(texture.mips.map((mip) => [mip.width, mip.height, mip.bytes?.length])).toEqual([[6, 6, 144]]);
+    expect(texture.encoded).toBeUndefined();
+    expect(texture.video).toBeUndefined();
+    const bytes = texture.mips[0].bytes!;
+    const pixel = (x: number, y: number) => Array.from(bytes.slice((y * 6 + x) * 4, (y * 6 + x) * 4 + 4));
+    expect(pixel(0, 0)).toEqual(BLACK);
+    expect(pixel(1, 0)).toEqual(YELLOW);
+    expect(pixel(0, 1)).toEqual(YELLOW);
+    expect(pixel(1, 1)).toEqual(BLACK);
+    // 整张：K 黑、Y 黄，只有这两种颜色
+    const rows = [0, 1, 2, 3, 4, 5].map((y) =>
+      [0, 1, 2, 3, 4, 5]
+        .map((x) => {
+          const value = pixel(x, y);
+          return JSON.stringify(value) === JSON.stringify(YELLOW)
+            ? "Y"
+            : JSON.stringify(value) === JSON.stringify(BLACK)
+              ? "K"
+              : "?";
+        })
+        .join(""),
+    );
+    expect(rows).toEqual(["KYKYKY", "YKYKYK", "KYKYKY", "YKYKYK", "KYKYKY", "YKYKYK"]);
+  });
+
+  it("棋盘格每次新建像素缓冲（bundle 交给主线程时会转移 mip 的缓冲）", () => {
+    expect(checkerTexture().mips[0].bytes!.buffer).not.toBe(checkerTexture().mips[0].bytes!.buffer);
+  });
+});
+
+describe("能力表：dependencies（P8 步骤 4）", () => {
+  it("各种对象上都中性（只进并集）：图像层、分组节点、文本、模型、粒子的数字元素都不报；不再有 object:dependencies", () => {
+    expect(objectKeys(image({ dependencies: [2, 3] }))).toEqual([]);
+    // 图像层上写成对象元素：WPE 的基类跳过，中性
+    expect(objectKeys(image({ dependencies: [{ id: 2 }] }))).toEqual([]);
+    expect(objectKeys({ id: 1, name: "group", origin: "0 0 0", dependencies: [2] })).toEqual([]);
+    expect(objectKeys({ id: 1, text: "a", dependencies: [2] })).toEqual([]);
+    const model = (extra: Record<string, unknown>) => objectKeys({ id: 1, model: "models/m.mdl", ...extra });
+    expect(model({ dependencies: [2] })).toEqual(model({}));
+    const particle = (extra: Record<string, unknown>) => objectKeys({ id: 1, particle: "particles/p.json", ...extra });
+    expect(particle({ dependencies: [2, 3] })).toEqual(particle({}));
+    const keys = new Set<string>();
+    checkSceneFeatures(
+      {
+        general: { orthogonalprojection: { width: 1920, height: 1080 } },
+        objects: [
+          { id: 1, image: "models/a.json", origin: "960 540 0", visible: false },
+          { id: 2, image: "models/a.json", origin: "960 540 0", dependencies: [1] },
+          { id: 3, name: "group", origin: "0 0 0", dependencies: [1, 2] },
+        ],
+      },
+      keys,
+    );
+    expect([...keys]).toEqual([]);
+  });
+
+  it("粒子对象的 dependencies 有不是数字的元素：particle:dependencies（发射图 / 碰撞模型依赖没做）", () => {
+    const particle = (extra: Record<string, unknown>) => objectKeys({ id: 1, particle: "particles/p.json", ...extra });
+    const base = particle({});
+    const reported = [...base, "particle:dependencies"].sort();
+    expect(particle({ dependencies: [{ id: 2, type: "emitterimage", index: 0, mask: "" }] })).toEqual(reported);
+    expect(particle({ dependencies: [2, "3"] })).toEqual(reported);
+    expect(particle({ dependencies: { a: { id: 2, type: "collisionmodel" } } })).toEqual(reported);
+    expect(particle({ dependencies: [] })).toEqual(base);
+  });
+});
+
+/** 纹理槽的反射（翻译器 `textures` 的一项），绑定号按 `1 + 2n`。 */
+const textureSlot = (slot: number, meta?: Record<string, unknown>): TextureBinding => ({
+  slot,
+  name: `g_Texture${slot}`,
+  kind: "2d",
+  binding: 1 + 2 * slot,
+  samplerBinding: 2 + 2 * slot,
+  ...(meta ? { meta } : {}),
+});
+
+/** 步骤 4 的假翻译器程序（按着色器名，顶点源码 `// <名字>`）。 */
+const DEP_SHADERS: Record<string, Partial<TranslateResult>> = {
+  s: { textures: [textureSlot(0)] },
+  // 开了光照的基础材质（`usesLighting`）
+  lit: { textures: [textureSlot(0)], combos: [{ name: "LIGHTING", value: 1, source: "request" }] },
+  // effect：槽 0–3 由实例 `textures` 给
+  ref: { textures: [0, 1, 2, 3].map((slot) => textureSlot(slot)) },
+  // effect：槽 1、2 只有注解缺省
+  refdef: {
+    textures: [textureSlot(0), textureSlot(1, { default: composite(10) }), textureSlot(2, { default: composite(99) })],
+  },
+  // passthrough 上屏（WPE 的 `effectpassthrough.json`）
+  genericimage3: { textures: [textureSlot(0)] },
+};
+const EFFECT_SHADERS = ["ref", "refdef"];
+
+/**
+ * 一组对象（内存工程 + 记录请求的假翻译器）。`models/a.json` 普通图像层（translucent，槽 0 是 64×64 的 `a`），`models/lit.json` 开光照，
+ * `models/compose.json` 组合层；effect `ref`（槽 0–3 由实例 `textures` 给）、`refbind`（同一个材质，槽 1 是 `bind` 的 `previous`）、
+ * `refdef`（槽 1、2 只有注解缺省）；passthrough 材质是 `effectpassthrough.json`（`genericimage3`）。
+ */
+async function compileDeps(
+  objects: Record<string, unknown>[],
+  options: { general?: Record<string, unknown>; postprocess?: "disabled" | "ultra" } = {},
+) {
+  const requests: TranslateRequest[] = [];
+  const fake = {
+    async translate(request: TranslateRequest): Promise<TranslateResult> {
+      requests.push(request);
+      const name = /^\/\/ (\S+)/.exec(request.vertex)?.[1] ?? "";
+      return { ok: true, uniforms: [], textures: [], combos: [], ...DEP_SHADERS[name] };
+    },
+  } as unknown as Wpesl2wgsl;
+  const files: Record<string, Uint8Array | string> = {
+    "P:/p/project.json": JSON.stringify({ file: "scene.json" }),
+    "P:/p/scene.json": JSON.stringify({
+      general: { orthogonalprojection: { width: 1920, height: 1080 }, ...options.general },
+      objects,
+    }),
+    "P:/p/models/a.json": JSON.stringify({ material: "materials/a.json" }),
+    "P:/p/models/lit.json": JSON.stringify({ material: "materials/lit.json" }),
+    "P:/p/models/compose.json": JSON.stringify({ material: "materials/a.json", passthrough: true }),
+    "P:/p/materials/a.json": JSON.stringify({ passes: [{ shader: "s", blending: "translucent", textures: ["a"] }] }),
+    "P:/p/materials/lit.json": JSON.stringify({
+      passes: [{ shader: "lit", blending: "translucent", textures: ["a"] }],
+    }),
+    "P:/p/materials/a.tex": tex(0),
+    "P:/p/materials/util/effectpassthrough.json": JSON.stringify({
+      passes: [{ shader: "genericimage3", blending: "normal", depthtest: "disabled", depthwrite: "disabled" }],
+    }),
+  };
+  for (const name of Object.keys(DEP_SHADERS)) {
+    const path = EFFECT_SHADERS.includes(name) ? `effects/${name}` : name;
+    files[`P:/p/shaders/${path}.vert`] = `// ${name}`;
+    files[`P:/p/shaders/${path}.frag`] = `// ${name}`;
+  }
+  const effectMaterial = (shader: string) =>
+    JSON.stringify({
+      passes: [{ shader, blending: "normal", depthtest: "disabled", depthwrite: "disabled", cullmode: "nocull" }],
+    });
+  files["P:/p/materials/effects/ref.json"] = effectMaterial("effects/ref");
+  files["P:/p/materials/effects/refdef.json"] = effectMaterial("effects/refdef");
+  files["P:/p/effects/ref/effect.json"] = JSON.stringify({ passes: [{ material: "materials/effects/ref.json" }] });
+  files["P:/p/effects/refbind/effect.json"] = JSON.stringify({
+    passes: [{ material: "materials/effects/ref.json", bind: [{ name: "previous", index: 1 }] }],
+  });
+  files["P:/p/effects/refdef/effect.json"] = JSON.stringify({
+    passes: [{ material: "materials/effects/refdef.json" }],
+  });
+  const bundle = await compileScene({
+    projectDir: "P:/p",
+    sceneAssets: ["A:/assets"],
+    reader: memoryReader(files),
+    translator: fake,
+    postprocess: options.postprocess ?? "disabled",
+    exhaustive: true,
+  });
+  return { bundle, requests };
+}
+/** 普通图像层（`models/a.json`）。 */
+const imageObject = (id: number, name: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  name,
+  image: "models/a.json",
+  origin: "960 540 0",
+  ...extra,
+});
+/** 一个 effect 实例：`textures` 覆盖材质的槽位（null 保留材质自己的）。 */
+const refEffect = (textures: (string | null)[], file = "ref") => ({
+  file: `effects/${file}/effect.json`,
+  id: 500,
+  name: file,
+  visible: true,
+  passes: [{ textures }],
+});
+/** 图层第 `e` 个 effect 的第一个绘制 pass。 */
+function effectPass(layer: SceneLayer, e = 0) {
+  const step = layer.effects[e]?.steps[0];
+  if (step?.kind !== "draw") throw new Error(`${layer.name} 的 effect ${e} 没有绘制 pass`);
+  return step.pass;
+}
+const checkerOf = (bundle: { textures: readonly { path: string }[] }) =>
+  bundle.textures.flatMap((texture, index) => (texture.path === "<checker>" ? [index] : []));
+
+describe("compileScene：图层依赖的名字解析（P8 步骤 4，rea-p8-render 2.1、2.6）", () => {
+  it("被依赖的图像层 → layerComposites（不进 runtime / textures）；没被依赖、id 不存在、_b、不是图像层 → 棋盘格，整场一张；不报 texture:rendertarget", async () => {
+    const { bundle } = await compileDeps([
+      imageObject(10, "A", { visible: false }),
+      // 70 是分组节点：列进 dependencies 也不是图像层
+      imageObject(20, "B", { dependencies: [10, 70], effects: [refEffect([null, composite(10)])] }),
+      imageObject(30, "C", {
+        effects: [refEffect([null, composite(40), composite(99), composite(10, "b")])],
+      }),
+      imageObject(40, "D"),
+      { id: 70, name: "G", origin: "0 0 0" },
+      imageObject(80, "H", { effects: [refEffect([null, composite(70)])] }),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    // 图像层填 dependedOn，分组节点不填
+    expect(bundle.layers.map((layer) => layer.dependedOn)).toEqual([true, false, false, false, undefined, false]);
+    const b = effectPass(byName(bundle.layers, "B"));
+    expect(b.layerComposites).toEqual({ 1: 0 });
+    expect(b.textures[1]).toBeUndefined();
+    expect(b.runtime).toEqual({});
+    const [checker, ...more] = checkerOf(bundle);
+    expect(more).toEqual([]);
+    expect(bundle.textures[checker]).toEqual(checkerTexture());
+    const c = effectPass(byName(bundle.layers, "C"));
+    expect(c.textures).toEqual({ 1: checker, 2: checker, 3: checker });
+    expect(c.layerComposites).toBeUndefined();
+    expect(effectPass(byName(bundle.layers, "H")).textures).toEqual({ 1: checker });
+    // 别的 pass 不带这个键
+    expect("layerComposites" in byName(bundle.layers, "A").passes[0]).toBe(false);
+  });
+
+  it("没有引用不到的名字时不加棋盘格", async () => {
+    const { bundle } = await compileDeps([
+      imageObject(10, "A", { visible: false }),
+      imageObject(20, "B", { dependencies: [10], effects: [refEffect([null, composite(10)])] }),
+    ]);
+    expect(checkerOf(bundle)).toEqual([]);
+  });
+
+  it("bind 占了的槽不动（bind 胜出，rea-p8-render 第 3 节）：自己读自己的 _a 写在 bind 槽上也不报 dependency:self", async () => {
+    const { bundle } = await compileDeps([
+      imageObject(10, "A", { dependencies: [10], effects: [refEffect([null, composite(10)], "refbind")] }),
+      imageObject(20, "B", { effects: [refEffect([null, composite(99)], "refbind")] }),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    for (const layer of bundle.layers) {
+      const pass = effectPass(layer);
+      expect(pass.layerComposites, layer.name).toBeUndefined();
+      expect(pass.textures[1], layer.name).toBeUndefined();
+    }
+    expect(checkerOf(bundle)).toEqual([]);
+  });
+
+  it("注解 default 写的名字同一规则：被依赖 → layerComposites，解析不到 → 棋盘格；材质写了的槽不看注解", async () => {
+    const { bundle } = await compileDeps([
+      imageObject(10, "A", { visible: false }),
+      imageObject(20, "B", { dependencies: [10], effects: [refEffect([], "refdef")] }),
+      imageObject(30, "C", { effects: [refEffect([null, "a", composite(10)], "refdef")] }),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    const [checker] = checkerOf(bundle);
+    const b = effectPass(byName(bundle.layers, "B"));
+    expect(b.layerComposites).toEqual({ 1: 0 });
+    expect(b.textures).toEqual({ 2: checker });
+    const c = effectPass(byName(bundle.layers, "C"));
+    // 槽 1 是材质写的静态纹理 a，槽 2 是材质写的 A 的 _a（注解的 99 不看）
+    expect(c.textures).toEqual({ 1: 0 });
+    expect(c.layerComposites).toEqual({ 2: 0 });
+  });
+});
+
+describe("compileScene：TEX<n>FORMAT（P8 步骤 4 核对表最后一行）", () => {
+  // P 自带 0x10（cbm 7）排在引用方 R 前面，Q 没有 0x10，S 自带 0x10 排在后面；都经 R 的 dependencies 被依赖
+  const objects = [
+    imageObject(10, "P", { colorBlendMode: 7 }),
+    imageObject(11, "Q"),
+    imageObject(20, "R", {
+      dependencies: [10, 11, 12],
+      effects: [refEffect([null, composite(10), composite(11), composite(12)])],
+    }),
+    imageObject(12, "S", { colorBlendMode: 7 }),
+  ];
+  const formatsOf = (requests: TranslateRequest[]) =>
+    requests.filter((request) => request.vertex === "// ref").map((request) => request.textures);
+  const HDR = { general: { bloom: true, hdr: true }, postprocess: "ultra" } as const;
+
+  it("LDR 一律 0", async () => {
+    const { requests } = await compileDeps(objects);
+    expect(formatsOf(requests)).toEqual([
+      [{ slot: 0 }, { slot: 1, format: 0 }, { slot: 2, format: 0 }, { slot: 3, format: 0 }],
+    ]);
+  });
+
+  it("HDR：自带 0x10 且排在前面的 14（RT 已建好），经依赖置位的 0（全部材质之后才建），自带 0x10 排在后面的 0", async () => {
+    const { bundle, requests } = await compileDeps(objects, HDR);
+    expect(bundle.general.postprocess.hdr).toBe(true);
+    expect(formatsOf(requests)).toEqual([
+      [{ slot: 0 }, { slot: 1, format: 14 }, { slot: 2, format: 0 }, { slot: 3, format: 0 }],
+    ]);
+  });
+
+  it("HDR：棋盘格 0（没被依赖、自带 0x10 的也是，同时报 dependency:passthrough-undeclared）", async () => {
+    const { bundle, requests } = await compileDeps(
+      [
+        imageObject(10, "T", { colorBlendMode: 7 }),
+        imageObject(20, "R", { effects: [refEffect([null, composite(10)])] }),
+      ],
+      HDR,
+    );
+    expect(bundle.unsupported).toContain("dependency:passthrough-undeclared");
+    expect(formatsOf(requests)).toEqual([[{ slot: 0 }, { slot: 1, format: 0 }]]);
+  });
+});
+
+describe("compileScene：被依赖图层的编译与照报（P8 步骤 4）", () => {
+  it("被依赖时编 passthrough：cbm 0 / 31 时 BLENDMODE 0、cbm 7 时 7，g_Color4 = 1、槽 0 由渲染图填；没被依赖、cbm 0 不编", async () => {
+    const { bundle, requests } = await compileDeps([
+      imageObject(10, "A0", { visible: false }),
+      imageObject(11, "A31", { colorBlendMode: 31 }),
+      imageObject(12, "A7", { colorBlendMode: 7 }),
+      imageObject(13, "N"),
+      imageObject(20, "B", { dependencies: [10, 11, 12] }),
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    const combos = requests
+      .filter((request) => request.vertex === "// genericimage3")
+      .map((request) => request.combos)
+      .sort((a, b) => Number(a?.BLENDMODE) - Number(b?.BLENDMODE));
+    // A0 与 A31 同一个变体（翻译缓存只请求一次）
+    expect(combos).toEqual([
+      { BLENDMODE: 0, FOG_COMPUTED: 1 },
+      { BLENDMODE: 7, FOG_COMPUTED: 1 },
+    ]);
+    for (const [index, name] of ["A0", "A31", "A7"].entries()) {
+      const pass = byName(bundle.layers, name).passthrough;
+      expect(pass, name).toMatchObject({ key: `objects/${index}/passthrough`, uniforms: { g_Color4: [1, 1, 1, 1] } });
+      expect(pass!.textures[0], name).toBeUndefined();
+    }
+    expect(byName(bundle.layers, "N").passthrough).toBeNull();
+    expect(byName(bundle.layers, "B").passthrough).toBeNull();
+  });
+
+  it("照报 dependency:self：被依赖的图层在自己的 pass 里读自己的 _a（不在 bind 槽上）", async () => {
+    const { bundle } = await compileDeps([
+      imageObject(10, "A", { dependencies: [10], effects: [refEffect([null, composite(10)])] }),
+    ]);
+    expect(bundle.unsupported).toEqual(["dependency:self"]);
+    expect(effectPass(bundle.layers[0]).layerComposites).toEqual({ 1: 0 });
+  });
+
+  it("照报 dependency:passthrough-undeclared：名字指向没被依赖、自带 0x10 的图层（绑棋盘格）；cbm 31 的不报", async () => {
+    const reported = await compileDeps([
+      imageObject(10, "T", { colorBlendMode: 7 }),
+      imageObject(20, "R", { effects: [refEffect([null, composite(10)])] }),
+    ]);
+    expect(reported.bundle.unsupported).toEqual(["dependency:passthrough-undeclared"]);
+    const [checker] = checkerOf(reported.bundle);
+    expect(effectPass(byName(reported.bundle.layers, "R")).textures).toEqual({ 1: checker });
+    const plain = await compileDeps([
+      imageObject(10, "T", { colorBlendMode: 31 }),
+      imageObject(20, "R", { effects: [refEffect([null, composite(10)])] }),
+    ]);
+    expect(plain.bundle.unsupported).toEqual([]);
+  });
+
+  it("colorBlendMode 绑属性：名字表按属性当前值判 0x10", async () => {
+    const bound = await compileDeps([
+      imageObject(10, "T", { colorBlendMode: { user: "cbm", value: 7 } }),
+      imageObject(20, "R", { effects: [refEffect([null, composite(10)])] }),
+    ]);
+    expect(bound.bundle.unsupported).toEqual(["dependency:passthrough-undeclared"]);
+  });
+
+  it("照报 dependency:group：被依赖的是组（有子层的组合层）；没有子层的组合层不报、照编 passthrough", async () => {
+    const compose = (id: number, name: string) => ({
+      id,
+      name,
+      image: "models/compose.json",
+      origin: "500 300 0",
+      size: "600 300",
+    });
+    const group = await compileDeps([
+      compose(10, "G"),
+      imageObject(11, "child", { parent: 10 }),
+      imageObject(20, "B", { dependencies: [10] }),
+    ]);
+    expect(group.bundle.unsupported).toEqual(["dependency:group"]);
+    const single = await compileDeps([compose(10, "CL"), imageObject(20, "B", { dependencies: [10] })]);
+    expect(single.bundle.unsupported).toEqual([]);
+    expect(single.bundle.layers[0]).toMatchObject({ dependedOn: true, passthroughModel: true });
+    expect(single.bundle.layers[0].passthrough).not.toBeNull();
+  });
+
+  it("照报 dependency:text：文本对象的 id 在并集里；文本层不填 dependedOn", async () => {
+    const text = { id: 10, name: "T", text: "abc", origin: "960 540 0" };
+    const depended = await compileDeps([text, imageObject(20, "B", { dependencies: [10] })]);
+    expect(depended.bundle.unsupported).toContain("dependency:text");
+    expect(depended.bundle.layers[0].dependedOn).toBeUndefined();
+    const plain = await compileDeps([text, imageObject(20, "B")]);
+    expect(plain.bundle.unsupported).not.toContain("dependency:text");
+  });
+
+  it("lighting:prelighting：被依赖、基础材质开光照（WPE 的 0x10 同样把光照挪到基础 pass）；没被依赖、没有 effect 不报", async () => {
+    const lit = (id: number, name: string) => ({ ...imageObject(id, name), image: "models/lit.json" });
+    const depended = await compileDeps([lit(10, "L"), imageObject(20, "B", { dependencies: [10] })]);
+    expect(depended.bundle.unsupported).toContain("lighting:prelighting");
+    const plain = await compileDeps([lit(10, "L"), imageObject(20, "B")]);
+    expect(plain.bundle.unsupported).not.toContain("lighting:prelighting");
+  });
+
+  it("模型对象列的 dependencies 同样给图像层置位（3509243656 的两个模型对象）", async () => {
+    const { bundle } = await compileDeps([
+      imageObject(10, "A", { visible: false }),
+      { id: 20, name: "M", model: "models/missing.mdl", origin: "0 0 0", dependencies: [10] },
+    ]);
+    expect(bundle.layers[0].dependedOn).toBe(true);
+    expect(bundle.layers[0].passthrough).not.toBeNull();
   });
 });

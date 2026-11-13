@@ -647,6 +647,260 @@ export function drawMatrixOf(object: number, layers: …, cache: Map<number, Mat
 - 画面：`p8-align`、`p8-align2`、`p8-par` 用 `render_scene` 渲染，和 WPE 抓帧逐像素比（屏蔽 FR / CLK；`p8-par` 的 T 是脚本改的对齐，探针不跑脚本，这一块另算）。
 - 变异检查：偏移的正负号（left / right、top / bottom）、偏移不截断、四边形不截断、效果矩阵截断、子层带父层偏移、组的局部正交不带偏移、绑属性的值当字符串求、脚本写数字不落 `center`，单测或比图要能检出。
 
+## 步骤 4 — 图层依赖
+
+### 思路
+
+WPE 的图层依赖是两件事，各自独立：
+- 一个图层「被依赖」，它的合成链第 0 张就换成按图层独占、跨帧保留的 RT；
+- 材质槽里写的 `_rt_imageLayerComposite_<id>_a` 按名字绑到这张 RT 上。
+
+**被依赖。** 场景加载完，WPE 把全部对象（含模型对象）的 `dependencies` 取并集，命中的图像层置 `0x1010`：
+- `0x10` 让它像 colorBlendMode 混合的图层一样走合成路径。全部 effect 都留在合成链里，最后用 passthrough 材质把结果铺上屏；
+- 起点按写入次数的奇偶安排，让最后一次写入落在第 0 张，也就是独占的 `_a`；
+- `0x1000` 让它不可见（自身或祖先）时也照画，只是不上屏；
+- 不改绘制顺序。被依赖者排在引用方后面时，引用方读到的是上一帧。
+
+我们这边把「被依赖」做成图层的一个静态标志 `SceneLayer.dependedOn`，编译期按并集定下来，渲染图与渲染器各认它一处：
+- **渲染图**（`planLayer`）：
+  - 被依赖的图层一律走合成路径，组合层没有 effect 时也画；
+  - 最后一个 effect 不上屏；
+  - 有 `layer.passthrough` 时多一步 `passthrough` 上屏（被依赖时也编这个材质，`BLENDMODE` 取 colorBlendMode ∉ {0, 31} 时的值，否则 0）；
+  - 排完后若最后一次写入落在 1，就把整份计划里合成 RT 的 0、1 对调。
+- **渲染器**：
+  - 每个被依赖的图层在建场景时建一张独占 RT，尺寸、格式、采样同它的合成 RT，跨帧、跨 effect 开关的重建都保留；
+  - 它的合成 RT 0 就是这张，其余张照旧从池里借；
+  - 不可见时照跑它的 op，只跳过画到「场景」的那一步上屏，在组里也一样。
+
+**引用。** WPE 在材质创建时按名字查纹理表。依赖段在加载末尾才给被依赖图层建 RT，建 RT 时接管同名的占位对象，所以只要被依赖，引用方的槽最终就是那张 RT；查不到的名字一直是占位纹理，即 6×6 的黄黑棋盘格。我们在编译期一次定下：
+- **名字是某个被依赖图像层的 `_rt_imageLayerComposite_<id>_a`**：pass 里记下「槽 → 图层」（`ScenePass.layerComposites`），渲染图给出新的纹理来源 `{ kind: "layer", object }`，渲染器解析到那张独占 RT。采样器随那张 RT，`g_Texture<n>Resolution` 是 RT 的尺寸。
+- **别的 `_rt_imageLayerComposite_*` 名字**（没被依赖、id 不存在、不是图像层、`_b`）：绑 bundle 里的一张棋盘格纹理。它是普通的静态纹理（RGBA8、点采样、重复），和材质纹理走同一条路。
+- **`TEX<n>FORMAT`**（refraction 的法线槽声明了 `formatcombo`）：取材质创建那一刻纹理表里那个对象的格式：
+  - 经 `dependencies` 置位的 RT 在全部材质之后才建，所以是占位的 0；
+  - 被依赖者自己就有 `0x10`（colorBlendMode 混合）且排在引用方前面时，HDR 下是 RT 的 14；
+  - LDR 一律 0。
+
+**中性与照报。**
+- `dependencies` 在各种对象上都中性：只影响并集。粒子对象另有一套同名键，元素是对象，WPE 拿来做发射图与碰撞模型，没做，照报。
+- 被依赖的图层不做视锥剔除：我们的图像层本来就不剔除，这一条不用做。
+- 语料 0 处、照报的四种：
+  - 被依赖的是文本层：文本层的合成 RT 随重排换尺寸，引用方的绑定要跟着换；
+  - 被依赖的是组：组隐藏时子层怎么画没查；
+  - 被依赖的图层在自己的 pass 里读自己的 `_a`：读写同一张；
+  - 名字指向一个没被依赖、但自己有 `0x10` 的图层：WPE 能绑上，我们只能给棋盘格。
+
+### 核对（`p8-dep`、`p8-dep2`、`p8-misc` 的已有导出，语料 `ignore/p8/s4/scan_deps.py` → `ignore/p8/s4/deps.txt`）
+
+步骤 0 的抓帧已经覆盖了 14 种组合，动工前只补核对三处没写进报告的细节和语料分布，不再开 WPE：
+
+| 项 | 实测 / 语料 | 结论 |
+|---|---|---|
+| 上屏的内缩 | `p8-dep` A2（64×64 纹理、200×200 图层）上屏那次 `vs_in` 的 UV 是 0.00234375–0.99765625 = 0.15 / 64；A7（组合层）0–1 | 同普通的末 pass（`finalInset`），rea-p8-render 2.4 写的「不内缩」不对 |
+| 上屏的混合与颜色 | A2、A9 上屏：基础材质的 translucent、写掩码 7、`g_Color4` = 1；槽 0 是独占 RT | 同 colorBlendMode 混合的 passthrough 上屏 |
+| 写入顺序 | A2（1 个 effect）：基础 pass → 池化、`kbtime` → 独占；A11（2 个）：基础 → 独占、`kbinv` → 池化、`kbtime` → 独占；A9 / A12（没有 effect）：基础 → 独占 | 最后一次写入落在 0 |
+| 语料的被依赖者 | 9 张场景、23 个，全是图像层（`autosize` 13、组合层 9、`solidlayer` 1）；没有组、没有文本层；1 个在组里（`3554161528` 的 411，组 1111 自己读它）；5 个有父对象，其中几个祖先的 `visible` 绑了属性或脚本 | 照规则做，不可见的祖先不影响画进 RT |
+| 语料的引用 | 52 处：44 处都解析得到；8 处自引用都在 `bind` 占的槽上 | 棋盘格在语料里用不到，只在测试工程里出现 |
+| 模型对象的依赖 | `3509243656` 的两个模型对象列了两个隐藏的图像层；它们的材质（`materials/models/自制天空盒02/材质.json`、`materials/models/Hollow Cylinder/diffuse_0.json`）槽 0 就读这两个 `_a`（核对脚本只看了模型 JSON，漏了，语料回归时才发现） | 网格 pass 同样按名字解析（四种计划都认 `layerComposites`）；这张场景还差别的节，模型这条路没和 WPE 比 |
+| `formatcombo` | WPE 自带 effect 里只有 `refraction` 的槽 1（法线）声明；`2251857160` 的 foggy_glass 在这个槽上引用 1755（排在后面、经依赖置位） | 格式按上面的规则，语料里都是 0 |
+
+### 现状锚点（HEAD `187f41c9`）
+
+**a. 依赖与引用都照报**（`compile/features.ts:726`、`compile/bundle.ts:1350`、`:1418`）
+```ts
+  for (const [key, value] of Object.entries(object))
+    if (!SUPPORTED_OBJECT.has(key) && !OBJECT_FLAGS.includes(key) && ![/* … */].includes(key) && /* … */ active(value))
+      unsupported.add(`object:${key}`); // 现状：`dependencies` 从这里报 object:dependencies（9 张）
+// compilePass
+      if (name.startsWith("_rt_")) {
+        if (bindRuntime(slot, name)) formats.push(/* … */);
+        else issues.add(`texture:rendertarget:${name}`); // 现状：_rt_imageLayerComposite_<id>_a 报这里（8 张）
+        continue;
+      }
+// 注解 default 的同一条路
+        if (fallback.startsWith("_rt_")) {
+          if (!bindRuntime(binding.slot, fallback)) issues.add(`texture:rendertarget:${fallback}`);
+```
+
+**b. passthrough 材质只给 colorBlendMode 混合编**（`compile/bundle.ts:1812`）
+```ts
+    if (cbm !== 0 && cbm !== 31) {   // 现状：被依赖的图层没有上屏材质
+      // …
+        layer.passthrough = await compilePass(
+          { ...pass, combos: { ...pass.combos, ...passthroughCombos(cbm) } },
+```
+
+**c. 渲染图：组合层不画、最后一个 effect 上屏、写入从 0 起**（`render/graph.ts:598`、`:726`、`:790`、`:646`）
+```ts
+  if (!needsComposite(layer, enabled) && !group) {
+    if (layer.passthroughModel) return { composite: null, steps, reasons }; // 现状：被依赖的组合层也不画
+  // …
+  if (!passthrough)   // 现状：只有 colorBlendMode 混合才让最后一个 effect 留在合成链
+    for (let e = layer.effects.length - 1; e >= 0 && finalEffect < 0; e--) { /* … */ }
+  // …
+  if (passthrough) { const pass = layer.passthrough; /* … */ blending: base.blending, /* … */ }
+  const nextComposite = (): TargetRef => {
+    const index = writes % 2;   // 现状：第一次写入总在 0，最后一次落在 (写入数 − 1) % 2
+```
+
+**d. 运行时纹理只认快照与 fbo**（`render/graph.ts:568`）
+```ts
+    for (const [slot, name] of Object.entries(pass.runtime)) {
+      if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+      else if (effect !== null && fboNames[effect].has(name)) inputs[Number(slot)] = { kind: "fbo", effect, name };
+      else reasons.push(`render:texture-rt:${name}`);
+    }
+```
+
+**e. 写死不可见的不建资源，合成 RT 全从池里借，不可见的整段跳过**（`render/scene.ts:853`、`:1411`、`:3328`、`:3386`、`:3412`）
+```ts
+      everyAncestor(layer.object, byObject, (item) => item.visible || item.visibleBound || scripted), // 现状：隐藏的被依赖图层不建
+  // ensureComposites
+    const { composites } = runtime.resources;
+    composites.push(...pool.slice(composites.length, count));   // 现状：没有独占的
+  // encode
+    const visible = new Set(visibleObjects(this.layers, state));
+            const child = visible.has(object) ? this.runtimeByObject.get(object) : undefined; // 组里：不可见的不画
+    for (const layer of this.layers) if (layer.layer.group == null && visible.has(layer.object)) runOps(layer.ops);
+```
+
+### 点 1 — 依赖表与棋盘格（新文件 `compile/dependencies.ts`）
+- **新增**
+```ts
+/** 合成 RT 的名字前缀（rea-p8-render 2.1）。 */
+export const LAYER_COMPOSITE_PREFIX = "_rt_imageLayerComposite_";
+/** 被依赖图层独占 RT 的名字：id 按十进制，后缀写死 `a`（`_b` 不存在，rea-p8-render 2.2）。 */
+export function layerCompositeName(id: number): string;
+/**
+ * 全部对象 `dependencies` 的并集（rea-p8-render 第 1 节，`FUN_1401ddbb0` + 场景构造的依赖段）：值是数组或对象（取值）才遍历，
+ * 元素是非负整数才收；别的元素跳过。不分是谁列的（模型对象列的也算）。
+ */
+export function dependencyIds(objects: readonly SceneObject[]): Set<number>;
+/**
+ * 引用不到时的占位纹理（rea-p8-render 2.6，p8-REPORT 结论 12）：6×6 RGBA8，第 i 个像素行 = i / 6，(行 & 1) ≠ (i & 1) 时
+ * (255, 255, 0, 255)，否则 (0, 0, 0, 255)；标志 9，点采样、重复（`clampUVs` 假、`noInterpolation` 真），一级 mip。
+ */
+export function checkerTexture(): SceneTexture;
+```
+
+### 点 2 — 编译（`compile/bundle.ts`、`compile/features.ts`）
+- **新增**
+  - `SceneLayer.dependedOn?: boolean`：图像层（走到 `compileImageModel` 的对象）的 JSON `id` 在并集里。可选同 `alignment`，不动手写的测试图层。
+  - `ScenePass.layerComposites?: Record<number, number>`：槽 → 被依赖图层的 `objects` 下标。这些槽不进 `runtime`。
+  - `compileScene` 开头：
+    - 并集；
+    - 名字表：每个图像层（判定同编译循环：不是粒子、模型、声音、形状、文本，有 `image`）的 `layerCompositeName(id)` → `{ object, depended, ownComposite }`；
+    - `ownComposite` 是 colorBlendMode ∉ {0, 31}，按属性当前值求，同 `colorBlendMode` 字段，不登记绑定。
+  - 棋盘格纹理按需加进 `bundle.textures` 一次，各处共用同一个下标。
+- **修改**
+  - `compilePass`：材质 `textures` 与注解 `default` 里以 `LAYER_COMPOSITE_PREFIX` 开头的名字（`planned` 的槽照旧跳过，`bind` 胜出）：
+    - 名字表里有、`depended`：
+      - 记进 `layerComposites`；
+      - 格式按思路里的规则：HDR、`ownComposite`、被依赖者下标 < 本 pass 所属对象的下标时 14，否则 0；
+      - 被依赖者就是本对象时报 `dependency:self`。
+    - 其余：
+      - 槽绑棋盘格，格式 0；
+      - 名字表里有、没被依赖、`ownComposite` 时报 `dependency:passthrough-undeclared`。
+    - 不再报 `texture:rendertarget:_rt_imageLayerComposite_*`。
+  - 编译循环：
+    - 图像层填 `dependedOn`；
+    - 被依赖时：
+      - 也编 `layer.passthrough`，`BLENDMODE` = cbm ∉ {0, 31} ? cbm : 0，`g_Color4` 照旧置 1；
+      - 光照照报的条件加上它（`lighting:prelighting`，WPE 在 `0x10` 时同样挪光照）；
+      - 是组（有子层的组合层）时报 `dependency:group`。
+    - 文本对象的 id 在并集里：报 `dependency:text`。
+  - `checkObjectFeatures`：
+    - `dependencies` 不再从未知键报；
+    - 粒子对象的 `dependencies` 有不是数字的元素时报 `particle:dependencies`；
+    - 模型对象那段注释同步改。
+
+### 点 3 — 渲染图（`render/graph.ts`）
+- **新增**
+  - `TextureRef` 加 `{ kind: "layer"; object: number }`：别的图层的独占 RT。
+  - 各处输入（`planLayer` 的 `staticInputs`、`planShapeLayer`、`planParticleLayer`、`planModelLayer`）把 `pass.layerComposites` 映射成它。
+- **修改** `planLayer`，`const depended = !!layer.dependedOn`：
+```ts
+  // 被依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：强制合成；组合层没有 effect 也画（`p8-dep` A7、`p8-misc` A13）
+  if (!needsComposite(layer, enabled) && !group && !depended) { /* 原样 */ }
+  // …
+  if (!passthrough && !depended) /* 找最后一个 effect 的最后一个绘制 pass，原样 */;
+  // …
+  if (passthrough || depended) {
+    // 上屏：passthrough 材质，混合 = colorBlendMode 31 ? additive : 基础材质的（rea-p8-render 2.3）；内缩同末 pass（核对表第 1 行）
+    blending: additive ? "additive" : base.blending,
+  }
+  // 最后一次写入落在 0（`_a`）：排完后若落在 1，计划里全部合成 RT 引用 0 ↔ 1 对调（draw 的目标与输入、copy、clear、subtree）
+  if (depended && current === 1) swapCompositeIndices(steps);
+```
+  - 快照规则 1 不变（看 colorBlendMode 与基础材质，不看 `0x10`，rea-p8-render 2.4）。合成 RT 张数仍是 min(2, 写入次数)。
+- 文件头注释加一条「被依赖」。
+
+### 点 4 — 渲染器（`render/scene.ts`）
+- **新增**
+  - `layerTargets: Map<number, RenderTarget>`：`objects` 下标 → 独占 RT。
+  - `build` 里建完全部 runtime 之后、任何 `buildLayer` 之前，给每个被依赖的图层建一张：
+    - 尺寸 = `compositeSize(layer, baseTexture)`；
+    - 格式 = 场景格式；
+    - 采样 = `compositeSampling`；
+    - 计进 `targetBytes`、随场景销毁。
+- **修改**
+  - `buildableLayers`：`layer.dependedOn` 时不看自身与祖先的可见性（`0x1000`）。
+  - `ensureComposites`：被依赖的图层 `composites[0]` 是独占 RT，其余照旧从同键的池里借；effect 开关重建时保留。
+  - `resolveTexture`：`layer` → `layerTargets.get(object)`，取不到返回 null（建 draw 时照旧报 `render:texture-rt:layer`）。
+  - `encode`：顶层与组里的子树都走同一个判断：
+```ts
+    // 被依赖的图层不可见（自身或祖先）时照画进 RT，只跳过上屏（WPE `0x1000`，rea-p8-render 2.4）：它画到「场景」的只有上屏那一步
+    const runLayer = (runtime: LayerRuntime, sceneTarget?: GPUTextureView) => {
+      if (visible.has(runtime.object)) runOps(runtime.ops, sceneTarget);
+      else if (runtime.layer.dependedOn)
+        runOps(runtime.ops.filter((op) => !(op.kind === "draw" && op.draw.step.target.kind === "scene")), sceneTarget);
+    };
+```
+  - 文件头注释加一条「被依赖」。
+
+### 点 5 — 单测
+- **新增** `compile/p8.test.ts`、`render/p8.test.ts` 的步骤 4 `describe`：
+  - `dependencyIds`：数组、对象取值、重复、负数 / 小数 / 字符串 / null 跳过、模型对象列的也算。
+  - 棋盘格逐像素（(0, 0) 黑、(1, 0) 黄、(0, 1) 黄）、标志与采样。
+  - 名字解析：被依赖 → `layerComposites`；没被依赖、不存在、`_b`、不是图像层 → 棋盘格；`bind` 的槽不动；注解 `default` 同样。
+  - 格式：LDR 0；HDR 下经依赖置位 0、自带 `0x10` 且在前 14、在后 0。
+  - 照报四键与 `particle:dependencies`；`object:dependencies` 不再报。
+  - 被依赖时编 `passthrough`（`BLENDMODE` 0 / cbm）。
+  - 计划，照 `p8-dep` / `p8-dep2` / `p8-misc` 的组合：
+    - 0 / 1 / 2 个 effect 的写入顺序（核对表第 3 行）；
+    - 组合层没有 effect 也画（compose → 0 → 上屏）；
+    - 上屏的混合（translucent / cbm 31 additive / cbm 7 基础材质）与内缩；
+    - colorBlendMode 7 + 被依赖（`2251857160` 的 356）。
+  - 渲染器：
+    - `buildableLayers` 收写死隐藏、祖先隐藏的被依赖图层；
+    - 不可见时只跳过画到场景的 draw（纯函数抽出来测，或假设备测 op 序列）；
+    - 引用解析到同一张独占 RT，两个引用方共用；
+    - effect 开关重建后还是同一张。
+
+### 实施方式
+
+同前几步：子代理在 HEAD 快照副本 `ignore/p8/s4/ov` 里实现，`ignore/p8/s4/head` 作基线；我验收后逐文件三方合并到工作区，不碰暂存区。
+
+### 验收
+- 快照里 tsc 0 error，vitest 全过（基线就失败的照记）。
+- `kbp regress --corpus`：回放案例全部相同。语料只去掉 `object:dependencies`（9 张）与 `texture:rendertarget:_rt_imageLayerComposite_*`（8 张），新出现的键逐张核对（预期没有）。干净场景不变：这 9 张都还差别的节。
+- 画面：`p8-dep`、`p8-dep2`、`p8-misc` 用 `render_scene` 按日志回放，和 WPE 抓帧逐像素比，屏蔽 FR / CLK。
+  - `p8-misc` 的 W1、W2 是步骤 5 的，另算。
+  - A3 / B3 要读到上一帧：回放要连续画到目标帧。
+  - 棋盘格的 B4–B6 逐格对上。
+- 语料：强制渲染 `3243449890`（4 个引用方读一个组合层）、`3554161528`（组里的被依赖者）、`2251857160`（依赖链与 cbm 7），没有 WebGPU 校验错误，引用方那块不是棋盘格。只看这些，不逐像素验收，这几张还差别的节。
+- 变异检查：
+  - 不对调奇偶；
+  - 不可见时连上屏一起画，或整层跳过；
+  - `buildableLayers` 不收；
+  - 最后一个 effect 仍上屏；
+  - 上屏不看 cbm 31；
+  - 并集漏掉模型对象列的；
+  - `_b` 也解析；
+  - 棋盘格换成透明；
+  - 格式恒取 14。
+
+  单测或比图要能检出。
+
 ## 步骤 1–5 的验收
 
 - **每步**：确定性工程和 WPE 逐像素比（`kbp cmp frame --meta`，图层带 `bbox`）；几何类（形状、对齐）另比四角，限值 0.01 像素。
@@ -743,3 +997,65 @@ export function drawMatrixOf(object: number, layers: …, cache: Map<number, Mat
     - 文本子层 Xc 落在文本原点 (490–510, 570–590)，和 WPE 相同（改前在 (564–584, 658–678)）。
     - 组 G 的子层只露出右上四分之一，和 WPE 相同。
   - `p8-par` 的 D（深度 0、`top`）对上了；唯一不同的是 T：WPE 里脚本在第 8 帧把它改成 `center`，探针不跑脚本，停在 JSON 的 `top`。脚本另在应用的预览里实测（用户同意占用预览；屏外宿主不跑帧循环）：脚本跑满 495 帧后 T 的对齐是 `center`、偏移清空，D 仍是 `top`；脚本日志 `align before top string`、`align after bottomright`、`align number center string` 和 WPE 逐字相同。单测另覆盖同帧生效、重编译后重放。
+
+### 步骤 4 — 图层依赖（2026-11-13）
+
+按提纲做，偏离与补充：
+- **粒子对象的 `dependencies`**：只在有不是数字的元素时报 `particle:dependencies`（`hasNonNumericDependency`）。纯数字的照样进并集、和别的对象一样中性，粒子那套 `{id, type, …}` 元素是发射图与碰撞模型，没做。
+- **id 只认非负整数**（`jsonId`）：WPE 的 id 与 `dependencies` 元素都按 64 位无符号整数取，别的写法不进名字表、不算被依赖。id 重复时名字表里后面的胜出（WPE 后建的 RT 再次接管同名对象）。
+- **名字表只收走 `compileImageModel` 的对象**（`isImageLayerObject`，判定与对象循环逐条一致）：形状、文本、模型、粒子、声音的 `_a` 名字都绑棋盘格；文本被依赖另报 `dependency:text`。
+- **引用方所属的对象从 pass 的稳定键里取**（`passObject`），`dependency:self` 与 HDR 格式规则用它；泛光等不属于对象的 pass 为 null。
+- **注解 `default` 写的名字**同材质 `textures` 的解析规则，但不加 `TEX<n>FORMAT`：着色器那时已经编好，同注解缺省的静态纹理。
+- **奇偶对调只对被依赖的图层做**：只有 colorBlendMode 混合、没被依赖的图层照旧（它的合成 RT 没人按名字读，起点不影响画面）。
+- **`host.ts` 的 `visibleVideoTextures` 不改**：隐藏的被依赖图层上的视频纹理不进「等第一帧」的名单，语料没有这种。
+
+- **实现**：
+  - 代理在 HEAD `187f41c9` 的快照副本 `ignore/p8/s4/ov` 里做，7 个文件（新增 `compile/dependencies.ts`；`compile/bundle.ts`、`compile/features.ts`、`render/graph.ts`、`render/scene.ts` 与两个 `p8.test.ts`），没有改现有断言。
+  - 我验收后逐文件 `git merge-file` 三方合并到工作区，没有碰暂存区。工作区里 `bundle.ts`、`features.ts`、`scene.ts` 混着别的会话没提交的改动（P10a 关键帧、P4f）。
+  - 画面验收时 HEAD 已到 `1616bb2b`（P9b 步骤 2–3、P4f 步骤 3），工作区又有别的会话没解决的合并冲突（`dev/particleCorners.ts`），不能从工作区构建宿主。改在 `ignore/p8/s4/build` 里导出 `1616bb2b`、同样三方合并这 7 个文件（全部干净），tsc 0 error，从这里按 `--mode development` 构建 dev 宿主。
+  - 之后 HEAD 到 `c92f5b5c`（P5d 步骤 2，改了 `render/graph.ts`、`render/scene.ts`），提交用的版本在 `ignore/p8/s4/build2` 重新合并：5 个干净，2 处冲突都是相邻改动、两边都留（`ignore/p8/s4/resolve2.py`）：
+    - `bundle.ts`：P5d 把 `orthographic` 的声明挪到前面、原处只留一行注释，依赖表与棋盘格放在这行注释之前，不再重复声明；
+    - `graph.ts`：奇偶对调照留，`compositeSize` 用 P5d 新加的 `sceneSize`。
+
+    合并后 `graph.ts`、`scene.ts` 和工作区逐字节相同，`bundle.ts`、`features.ts` 只差别的会话没提交的改动（P10a 步骤 3、P6b 1e-3）。
+- **快照验收**：
+  - `187f41c9` + 本步：tsc 0 error；vitest 2812 个用例 1 个失败（`pipeline.test.ts` 的请求次数上限，`3830255100` 219 次，基线同样失败）。
+  - `c92f5b5c` + 本步（`build2`）：tsc 0 error；vitest 2935 个用例，同一个用例失败，失败项多了 `2251857160` 的两条：快速路径 404 次请求（上限 200）、读取 73,995,846 字节（上限 64 MiB）。
+    - 逐条记了请求（`ignore/p8/s4/reqdiag.test.ts` → `out/reqdiag-*.json`）。基线 `c92f5b5c` 4 次就停在 `object:dependencies`；本步去掉这个键之后，要一路编到 P10a 的临时键 `value:animation:pending` 才停。
+    - 404 次请求（161 次是「散文件 → pkg → assets」逐级查找的未命中）路径与区间全不重复，多出来的是资源本身。
+    - 照 P4b（同样的原因 150 → 200）放宽，用户定（2026-11-14）：请求上限 200 → 450、读取上限 64 → 80 MiB，另加「同一路径、同一区间不请求第二次」的断言（`FetchTally.repeated`），这才是上限原本要守的东西。P11a 的计划要把同一行改成 240，后提交的一方合并。改后语料用例 16 个全过（`3830255100` 的 219 次也在上限内了）。
+- **回归**（`kbp regress --corpus`，`ignore/p8/s4/regress`）：
+  - 回放案例两边逐字节相同。新案例 `f3`（别的会话加的）两边都跑不下去，与本步无关。
+  - 语料只去掉 `object:dependencies`（9 张）与 21 个 `texture:rendertarget:_rt_imageLayerComposite_<id>_a`（9 张，比计划多 `3509243656`：它的两个模型材质读 `_a`，见核对表），没有新增的键。干净 66 → 66，这 9 张都还差别的节。
+- **变异**（`ignore/p8/s4/mutations.py`，快照模式）：
+  - 我的 15 处：
+    - 不对调奇偶；
+    - 不可见时连上屏一起画 / 整层跳过；
+    - `buildableLayers` 不收；
+    - 最后一个 effect 仍上屏；
+    - 上屏不看 cbm 31；
+    - 组合层没有 effect 时整层不画；
+    - 并集漏掉模型对象列的；
+    - `_b` 也解析；
+    - 棋盘格换成透明；
+    - HDR 格式恒取 14；
+    - `BLENDMODE` 恒取 cbm；
+    - 组画子树时按可见性跳过；
+    - 独占 RT 不当合成 RT 0；
+    - 能力表仍报 `dependencies`。
+
+    全部被单测检出，按原字节还原。代理自己的 19 处同样全部检出。
+- **工作区验收**：tsc 0 error；vitest 2814 个用例 1 个失败（`pipeline.test.ts` 同上）；Prettier 通过。
+- **画面**（dev 宿主按上面的快照构建，测试工程导入 dev 库，测完用 `projects_remove` 移除）：
+  - `p8-dep`：`render_scene` 按日志回放到第 160 帧，除 B3 外和 WPE 逐像素相同（屏蔽 FR / CLK）。
+    - B3 排在被依赖者前面，WPE 画的是上一帧：第 159 帧的值 (246, 8, 127)，第 161 帧是 (17, 8, 127)，正好等于第 160 帧 A2 的颜色。
+    - 回放只编码读回那一帧，独占 RT 还是空的，B3 是黑的（差 40000 像素，正好是 B3 那块 200×200）。这是探针的限制，产品每帧都画。
+    - 改用探针的 `profile: 1` 在第 159 帧的时刻先编码一帧，再按第 160 帧的 dt 与时刻读回：B3 整块 (246, 8, 127)，和 WPE 相同；和不先编码那一帧的读回相比，差异只在 B3 那块。
+  - `p8-dep2`：回放到第 158 帧，和 WPE 整帧 0 差异（A9 无 effect、A10 可见性绑属性、A11 隐藏带两个 effect、两个引用方读同一个 A12）。
+  - `p8-misc`：回放到第 155 帧，差异只在 (588, 180)–(1100, 280)，正好是 W2（alphatocoverage）的左半条，归步骤 5；A13（隐藏的组合层）、A14（隐藏、在画面外）的引用方和 W1 逐像素相同。
+  - 语料强制渲染（屏外宿主，`profile: 2` 让排在前面的引用方读到内容，`requestDevice` 临时挂 `uncapturederror` 监听，用完还原）：
+    - `2251857160`、`3554161528` 渲染完成，没有校验错误。
+    - `3243449890` 建管线失败：工坊 effect `auto_sway`（不在被依赖的图层上）的顶点输出超过 WebGPU 的 16 个阶段间变量。我们没有处理这个上限，和本步无关；它的被依赖者 16613 没有 effect，步骤 4 不会让它多建这个管线。
+    - 结构相同的 `3276911872`、`3351072238` 卡在屏外宿主等视频第一帧（10 s 超时），也没跑成。
+  - 引用方绑没绑上，改在快照里静态核对（`ignore/p8/s4/s4corpus.test.ts` → `ignore/p8/s4/out/corpus-bind.json`）：9 张有依赖的场景，被依赖者 23 个，读独占 RT 的 pass 45 个（46 个槽，同核对表的 44 + 2），没有一个绑棋盘格，没有 `dependency:*` 键。
+- **没和 WPE 比的**：`3509243656` 的模型网格读 `_a`，这张场景还差别的节；语料场景都没逐像素比。

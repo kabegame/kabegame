@@ -17,6 +17,7 @@ import {
   type TargetKey,
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
+import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
@@ -316,6 +317,12 @@ export interface ScenePass {
   textures: Record<number, number>;
   /** 运行时提供的槽位：`_rt_FullFrameBuffer`（场景快照）或本 effect 的 fbo 名（材质 textures 或着色器注解默认值写的）。 */
   runtime: Record<number, string>;
+  /**
+   * 别的图层的独占 RT（P8 步骤 4，rea-p8-render 2.1）：槽位 → 被依赖图层的 `objects` 下标。材质 `textures` 或注解 `default` 写的
+   * `_rt_imageLayerComposite_<id>_a` 指向被依赖的图像层时记在这里（不进 `runtime`），渲染图给出纹理来源 `{ kind: "layer", object }`。
+   * 解析不到的名字绑棋盘格（`textures` 里的静态纹理，`compile/dependencies.ts` 的 `checkerTexture`）。没有这种槽时不写这个键。
+   */
+  layerComposites?: Record<number, number>;
   uniforms: Record<string, number[]>;
   /** 是否需要 `_rt_FullFrameBuffer` 快照（`needsFramebuffer`，决定快照时机）。 */
   framebuffer: boolean;
@@ -475,7 +482,10 @@ export interface SceneLayer {
   /** 0 普通；31 上屏改 additive；其它值走 passthrough（B7 / B8）。 */
   colorBlendMode: number;
   effects: SceneEffect[];
-  /** colorBlendMode ∉ {0, 31} 时的上屏 pass（`PASSTHROUGH_MATERIAL`）。 */
+  /**
+   * colorBlendMode ∉ {0, 31} 时的上屏 pass（`passthroughMaterial`，`BLENDMODE` = colorBlendMode）；被依赖的图层（P8 步骤 4，`dependedOn`）
+   * 也编，colorBlendMode ∈ {0, 31} 时 `BLENDMODE` 0（rea-p8-render 第 1 节 `FUN_1401ebbc0`）。
+   */
   passthrough: ScenePass | null;
   /**
    * 粒子对象解析出的粒子系统（`particles.ts`）；其它对象、或粒子 JSON 读不到时为 null。粒子材质的 pass 在
@@ -507,6 +517,15 @@ export interface SceneLayer {
    * 有值的图层上（`script/api.ts`）。其它对象不填；可选同 `text`：不动各处手写的测试图层。
    */
   alignment?: number;
+  /**
+   * 被依赖（P8 步骤 4，rea-p8-render 第 1、2 节，p8-REPORT 结论 7–9）：图像层（走到 `compileImageModel` 的对象）的 JSON `id` 在全部对象
+   * `dependencies` 的并集里（`compile/dependencies.ts` 的 `dependencyIds`），即 WPE 的 `+0x304 |= 0x1010`。编译期定下、运行中不变：
+   * - 渲染图（`render/graph.ts` 的 `planLayer`）：强制走合成路径，全部 effect 留在合成链，`passthrough` 上屏，最后一次写入落在合成 RT 0；
+   * - 渲染器（`render/scene.ts`）：合成 RT 0 是本层独占、跨帧保留的 RT，引用方的 `{ kind: "layer" }` 解析到它；不可见（自身或祖先）
+   *   也建资源、照画进 RT，只跳过画到场景的那一步上屏。
+   * 只有图像层填；可选同 `alignment`：不动各处手写的测试图层。
+   */
+  dependedOn?: boolean;
 }
 /** 形状对象（P8 步骤 2，rea-p8-layer §1，p8-REPORT 结论 4、5）：图层的 `passes` 为空，没有合成 RT，渲染图只画最后一个 effect（`planShapeLayer`）。 */
 export interface SceneShape {
@@ -787,6 +806,36 @@ const asNumber = (value: SceneScalar | undefined, fallback: number): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+/** 解析后的 `colorBlendMode` → 图层字段的值（缺省 0、取整）。图层字段与依赖的名字表（P8 步骤 4）共用。 */
+const colorBlendModeOf = (value: SceneScalar | undefined): number => Math.trunc(asNumber(value, 0));
+
+/**
+ * 走到 `compileImageModel` 的对象（P8 步骤 4 的名字表用）：判定与 `compileScene` 的对象循环逐条一致——不是粒子、模型、声音、形状、文本，
+ * 有 `image`。改循环的分派时这里跟着改。
+ */
+function isImageLayerObject(object: SceneObject): boolean {
+  const kind = objectKind(object);
+  return (
+    kind !== "particle" &&
+    kind !== "model" &&
+    !isSoundObject(object) &&
+    !isShapeObject(object) &&
+    !isTextObject(object) &&
+    !!object.image
+  );
+}
+
+/** 对象 JSON 的 `id`（P8 步骤 4）：非负整数才算（WPE 的 id 是 64 位无符号整数，`dependencies` 也只收这种）；别的写法为 null。 */
+function jsonId(object: SceneObject): number | null {
+  const id: unknown = object.id;
+  return typeof id === "number" && Number.isInteger(id) && id >= 0 ? id : null;
+}
+
+/** pass 稳定键里的对象下标（`objects/<i>/…`）；不是对象的 pass（泛光等）为 null。依赖的 `dependency:self` 与格式规则用（P8 步骤 4）。 */
+function passObject(key: TargetKey): number | null {
+  const match = /^objects\/(\d+)\//.exec(key);
+  return match ? Number(match[1]) : null;
+}
 function texturePath(name: string): string {
   if (name.startsWith("_rt_")) return name;
   const path = name.endsWith(".tex") ? name : `${name}.tex`;
@@ -994,6 +1043,38 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     ));
   // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
   const { parents } = resolveParents(scene.objects);
+  // 图层依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：WPE 在全部对象加载完之后才按并集给图像层置 `0x1010`、建独占 RT，材质却在创建时就按
+  // 名字绑纹理表里的对象（RT 建立时接管同名对象），所以引用方排在被依赖者前后都绑得上。我们在开头一次定下并集与名字表，编到哪个 pass 都查得到
+  const dependedIds = dependencyIds(scene.objects);
+  const isDepended = (object: SceneObject): boolean => {
+    const id = jsonId(object);
+    return id !== null && dependedIds.has(id);
+  };
+  /**
+   * 名字表：每个图像层（`isImageLayerObject`）的 `_rt_imageLayerComposite_<id>_a` → `objects` 下标、是否被依赖、自己有没有 `0x10`
+   * （`ownComposite`：colorBlendMode ∉ {0, 31}，按属性当前值求、不登记绑定——字段本身在对象循环里已登记成重编译）。id 重复时后面的胜出
+   * （WPE 后建的 RT 再次接管同名对象，rea-p8-render 2.1）。
+   */
+  const layerComposites = new Map<string, { object: number; depended: boolean; ownComposite: boolean }>();
+  scene.objects.forEach((object, index) => {
+    const id = jsonId(object);
+    if (id === null || !isImageLayerObject(object)) return;
+    const cbm = colorBlendModeOf(resolveValue(object.colorBlendMode as SceneValue, properties));
+    layerComposites.set(layerCompositeName(id), {
+      object: index,
+      depended: dependedIds.has(id),
+      ownComposite: cbm !== 0 && cbm !== 31,
+    });
+  });
+  /** 棋盘格（`checkerTexture`）在 `bundle.textures` 里的下标：第一次用到时加，各处共用。 */
+  let checker: number | null = null;
+  const checkerIndex = (): number => {
+    if (checker === null) {
+      checker = bundle.textures.length;
+      bundle.textures.push(checkerTexture());
+    }
+    return checker;
+  };
   // 粒子字段的缺省值按正交 / 透视选两套（`rea-p4a.md`「基础」），读上面的 `orthographic`
   const textureIndex = new Map<string, number>();
   /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
@@ -1365,8 +1446,39 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       else return false;
       return true;
     };
+    /** 别的图层的独占 RT（P8 步骤 4）：槽位 → 被依赖图层的 `objects` 下标。 */
+    const composites: Record<number, number> = {};
+    const owner = passObject(context.key);
+    /**
+     * `_rt_imageLayerComposite_*`（P8 步骤 4，rea-p8-render 2.1、2.6，p8-REPORT 结论 7、8、12）：返回 false 表示不是这种名字。
+     * - 名字表里有、被依赖：记进 `layerComposites`，渲染器绑那张独占 RT；被依赖者就是本 pass 所属的对象时照报 `dependency:self`
+     *   （读写同一张，WPE 怎么处理没测，语料 0 处）；
+     * - 其余（没被依赖、id 不存在、不是图像层、`_b`）：绑棋盘格（WPE 的占位文件纹理）；名字表里有、没被依赖、自己却有 `0x10` 时照报
+     *   `dependency:passthrough-undeclared`（WPE 绑得上它自己的 `_a`，我们只给独占 RT 给被依赖的图层，语料 0 处）。
+     * `TEX<n>FORMAT`（只在 `formatcombo` 槽上起作用，`withFormat` 为假时不加，同注解缺省的静态纹理）：取材质创建那一刻纹理表里那个对象的格式。
+     * 经 `dependencies` 置位的 RT 在全部材质之后才建，那一刻是占位的 0；被依赖者自己就有 `0x10` 且排在本对象前面时 RT 已经建好，HDR 下是
+     * RGBA16F 的 14、LDR 是 0（核对表最后一行，语料都是 0）。棋盘格是 0。
+     */
+    const bindLayerComposite = (slot: number, name: string, withFormat: boolean): boolean => {
+      if (!name.startsWith(LAYER_COMPOSITE_PREFIX)) return false;
+      const entry = layerComposites.get(name);
+      let format = FBO_FORMATS.rgba8888.tex;
+      if (entry?.depended) {
+        composites[slot] = entry.object;
+        if (entry.object === owner) issues.add("dependency:self");
+        if (postprocess.hdr && entry.ownComposite && owner !== null && entry.object < owner)
+          format = FBO_FORMATS.rgba16161616f.tex;
+      } else {
+        if (entry?.ownComposite) issues.add("dependency:passthrough-undeclared");
+        slots[slot] = checkerIndex();
+      }
+      if (withFormat) formats.push({ slot, format });
+      return true;
+    };
     for (const [slot, name] of names.entries()) {
       if (!name || planned.has(slot)) continue;
+      // 别的图层的合成 RT（P8 步骤 4）：排在 `_rt_*` 之前（前缀相同），`planned` 的槽（`bind` 胜出，rea-p8-render 第 3 节）上面已跳过
+      if (bindLayerComposite(slot, name, true)) continue;
       if (name.startsWith("_rt_")) {
         if (bindRuntime(slot, name))
           formats.push({ slot, format: FBO_FORMATS[context.fbos?.get(name)?.format ?? "rgba8888"].tex });
@@ -1434,7 +1546,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       for (const binding of result.textures ?? []) {
         const fallback = binding.meta?.default;
         if (typeof fallback !== "string" || !fallback) continue;
-        if (planned.has(binding.slot) || binding.slot in slots || binding.slot in runtime) continue;
+        if (planned.has(binding.slot) || binding.slot in slots || binding.slot in runtime || binding.slot in composites)
+          continue;
+        // 注解缺省写的别的图层的合成 RT（P8 步骤 4）：同材质 `textures` 的规则；着色器已经编好，不再加格式（同下面的静态纹理）
+        if (bindLayerComposite(binding.slot, fallback, false)) continue;
         if (fallback.startsWith("_rt_")) {
           if (!bindRuntime(binding.slot, fallback)) issues.add(`texture:rendertarget:${fallback}`);
           continue;
@@ -1452,6 +1567,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ...normalizeDepthKeys(pass),
       textures: slots,
       runtime,
+      ...(Object.keys(composites).length ? { layerComposites: composites } : {}),
       uniforms: {
         ...shaderUniforms(result, pass, properties, context.key, bindings, issues),
         ...(result?.ok && usesLighting(result) ? sceneLights() : {}),
@@ -1746,14 +1862,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       fullscreen: false,
       fullscreenSize: null,
       passes: [],
-      colorBlendMode: Math.trunc(
-        asNumber(
-          bindings.bind(
-            object.colorBlendMode as SceneValue,
-            properties,
-            recompile("layer-structure", `objects/${index}/colorBlendMode`),
-          ),
-          0,
+      colorBlendMode: colorBlendModeOf(
+        bindings.bind(
+          object.colorBlendMode as SceneValue,
+          properties,
+          recompile("layer-structure", `objects/${index}/colorBlendMode`),
         ),
       ),
       effects: [],
@@ -1788,9 +1901,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 文本对象（P6b 1d）：没有模型，基础 pass 换成文本表里的宿主材质（排版在宿主主线程）；effect 与 colorBlendMode passthrough
     // 走下面图像层那段，文本表在它们之后编（`padding` 看启用的 effect 个数）
     const textObject = isTextObject(object);
+    // 被依赖的文本层（P8 步骤 4）：WPE 同样置 `0x1010`（rea-p8-render 1.2 认类型 1 与 4），但文本层的合成 RT 随重排换尺寸，引用方的绑定要
+    // 跟着换，没做（语料 0 个），照报
+    if (textObject && isDepended(object)) unsupported.add("dependency:text");
     if (!textObject) {
       // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
       if (!object.image) continue;
+      // 被依赖（P8 步骤 4）：图像层才填，判定同名字表（`isImageLayerObject`）
+      layer.dependedOn = isDepended(object);
       if (!(await compileImageModel(index, object, layer))) continue;
     }
     // 组（P5b 步骤 4）：有对象的父指向这个组合层。子孙由它按局部正交画进合成 RT、不在顶层画（`assignGroups` 在全部对象之后定归属）
@@ -1831,17 +1949,25 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
 
     const cbm = layer.colorBlendMode;
-    // 带 effect 或走 passthrough 时，WPE 把光照挪到基础 pass（PRELIGHTING=1，世界坐标改用 g_Alt*），上屏 pass 关光照（FUN_140209540）
+    const blended = cbm !== 0 && cbm !== 31;
+    // 被依赖（P8 步骤 4）：WPE 的 `0x10` 同 colorBlendMode 混合，全部 effect 留在合成链、passthrough 上屏
+    const depended = !!layer.dependedOn;
+    // 带 effect 或走 passthrough 时，WPE 把光照挪到基础 pass（PRELIGHTING=1，世界坐标改用 g_Alt*），上屏 pass 关光照（FUN_140209540）；
+    // 被依赖的图层同样是 `0x10`（P8 步骤 4，rea-p8-render 第 1 节）
     const lit = layer.passes.some((pass) => pass.program !== null && usesLighting(bundle.programs[pass.program]));
-    if (lit && (layer.effects.length > 0 || (cbm !== 0 && cbm !== 31))) unsupported.add("lighting:prelighting");
-    if (cbm !== 0 && cbm !== 31) {
+    if (lit && (layer.effects.length > 0 || blended || depended)) unsupported.add("lighting:prelighting");
+    // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
+    if (depended && hasChildren) unsupported.add("dependency:group");
+    if (blended || depended) {
       const path = passthroughMaterial(scene.version);
       const text = await fs.text(path);
       const pass = text ? parseMaterial(text).passes[0] : undefined;
       if (!pass) unsupported.add(`material:missing:${path}`);
       else {
+        // `BLENDMODE` = colorBlendMode ∉ {0, 31} ? colorBlendMode : 0（rea-p8-render 第 1 节 `FUN_1401ebbc0`：被依赖、cbm 0 / 31 时编法同
+        // 组的上屏 `groupUpload`）
         layer.passthrough = await compilePass(
-          { ...pass, combos: { ...pass.combos, ...passthroughCombos(cbm) } },
+          { ...pass, combos: { ...pass.combos, ...passthroughCombos(blended ? cbm : 0) } },
           { key: `objects/${index}/passthrough`, planned: [{ slot: 0 }] },
         );
         // passthrough 上屏颜色置 (1, 1, 1, 1)（B8 / B10）

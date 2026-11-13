@@ -63,6 +63,15 @@
  * - **深度与剔除**（P5d 步骤 1，p5-REPORT「P5d 语义的实测核对」）：每个绘制步骤带 `raster`（`rasterState`），全部对象一套规则、不分投影。
  *   上屏角色（`final` / `passthrough`，含无 effect 组的上屏）深度借图层基础 pass、剔除用自己；形状层两项都取自己；其余都取自己。
  *   深度只在画进场景目标、不在组里时起作用（`render/scene.ts` 按需建深度附件），剔除对所有目标都起作用。
+ * - **被依赖**（P8 步骤 4，`SceneLayer.dependedOn`，rea-p8-render 第 1、2 节，p8-REPORT「图层依赖」与结论 7–9）：WPE 的 `0x10`，同
+ *   colorBlendMode 混合一样走合成路径——没有启用的 effect 也走（组合层没有 effect 也画：compose → 合成 RT 0 → 上屏，`p8-dep` 的 7、
+ *   `p8-misc` 的 A13），最后一个 effect 不上屏、留在合成链，最后用 `layer.passthrough` 上屏（角色 `passthrough`，UV 内缩同末 pass、混合是
+ *   colorBlendMode 31 时 additive、否则基础材质的，`p8-dep` 的 A2、A9）。WPE 按写入次数的奇偶选起点，让最后一次写入落在合成 RT 0（独占的
+ *   `_a`）：我们排完后若落在 1，就把整份计划里合成 RT 的 0、1 对调（`swapCompositeIndices`；0 / 1 / 2 个 effect 的写入顺序同 `p8-dep` 的
+ *   A9 / A2 / A11）。快照规则 1 不变（看 colorBlendMode 与基础材质，不看 `0x10`，rea-p8-render 2.4）；合成 RT 张数仍是 min(2, 写入次数)。
+ *   不可见时照画、只跳过上屏，在渲染器里（`render/scene.ts` 的 `layerOpsToRun`）。
+ *   引用方材质里 `_rt_imageLayerComposite_<id>_a` 的槽（`ScenePass.layerComposites`）给出纹理来源 `{ kind: "layer", object }`，各种图层的
+ *   计划都认（`passInputs`）。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
@@ -77,7 +86,12 @@ export type TextureRef =
    * 文本层的字形图集（P6b 1d）：本层排版结果所在的 R8 主图集（`color: false`）或 RGBA8 彩色图集（`true`），按字体键共享，渲染器建场景时
    * 整张上传。线性过滤、repeat、没有 mip（rea-p6b-raster 3.2，p6b 抓帧的采样器是 Wrap）。
    */
-  | { kind: "atlas"; color: boolean };
+  | { kind: "atlas"; color: boolean }
+  /**
+   * 别的图层的独占 RT（P8 步骤 4，`ScenePass.layerComposites`，rea-p8-render 2.1）：被依赖图层（`objects` 下标 `object`）合成链的第 0 张，
+   * 跨帧保留。采样器随那张 RT（同它自己的合成 RT，`compositeSampling`），`g_Texture<n>Resolution` 是 RT 的尺寸。
+   */
+  | { kind: "layer"; object: number };
 export type TargetRef =
   { kind: "scene" } | { kind: "composite"; index: number } | { kind: "fbo"; effect: number; name: string };
 
@@ -352,6 +366,43 @@ export function isPassthroughBlend(colorBlendMode: number): boolean {
 }
 
 /**
+ * 一个 pass 的静态输入：材质静态纹理，与别的图层的独占 RT（P8 步骤 4，`ScenePass.layerComposites` → `{ kind: "layer" }`）。图像层、形状、
+ * 粒子、模型的计划都从这里起，运行时纹理（快照、fbo）各自再加。
+ */
+function passInputs(pass: Pick<ScenePass, "textures" | "layerComposites">): Record<number, TextureRef> {
+  const inputs: Record<number, TextureRef> = {};
+  for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+  for (const [slot, object] of Object.entries(pass.layerComposites ?? {}))
+    inputs[Number(slot)] = { kind: "layer", object };
+  return inputs;
+}
+
+/**
+ * 合成 RT 引用的 0 ↔ 1 对调（P8 步骤 4）：被依赖图层排完后最后一次写入落在 1 时，整份计划对调，让它落在 0（独占的 `_a`，rea-p8-render 2.3）。
+ * 覆盖每一种带合成 RT 引用的步骤：绘制的目标与输入、`copy` 的来源与目标、`clear`、`subtree`、文本的目标与输入。合成 RT 只有 0、1 两张。
+ */
+export function swapCompositeIndices(steps: readonly LayerStep[]): LayerStep[] {
+  const flip = <R extends TextureRef | TargetRef>(ref: R): R =>
+    ref.kind === "composite" ? ({ ...ref, index: 1 - (ref as { index: number }).index } as R) : ref;
+  const flipInputs = (inputs: Record<number, TextureRef>): Record<number, TextureRef> =>
+    Object.fromEntries(Object.entries(inputs).map(([slot, ref]) => [slot, flip(ref)]));
+  return steps.map((step): LayerStep => {
+    switch (step.kind) {
+      case "draw":
+      case "text":
+        return { ...step, target: flip(step.target), inputs: flipInputs(step.inputs) };
+      case "copy":
+        return { ...step, source: flip(step.source), target: flip(step.target) };
+      case "clear":
+      case "subtree":
+        return { ...step, target: flip(step.target) };
+      default:
+        return step;
+    }
+  });
+}
+
+/**
  * 粒子层的计划（P4a 步骤 4）：每个要画的模板一个 `particles` 步骤，直接画到场景目标。其余运行时纹理（fbo 名）粒子没有，报不支持。
  * 没有 pass（粒子 JSON 读不到、材质缺失）时为空计划。
  *
@@ -375,8 +426,7 @@ export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPla
     if (!pass) return false;
     // 编译期已报 `particle:material:passes`；渲染器只画第一个
     if (system.passes.length > 1) reasons.push("render:multi-pass");
-    const inputs: Record<number, TextureRef> = {};
-    for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+    const inputs = passInputs(pass);
     for (const [slot, name] of Object.entries(pass.runtime)) {
       if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
       else reasons.push(`render:texture-rt:${name}`);
@@ -458,8 +508,7 @@ export function planModelLayer(layer: Pick<SceneLayer, "model">): LayerPlan {
     const pass = mesh?.passes[0];
     if (!pass) continue;
     if (mesh.passes.length > 1) reasons.push("render:multi-pass");
-    const inputs: Record<number, TextureRef> = {};
-    for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+    const inputs = passInputs(pass);
     for (const [slot, name] of Object.entries(pass.runtime)) {
       if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
       else reasons.push(`render:texture-rt:${name}`);
@@ -494,8 +543,7 @@ export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan {
   if (!effect || effect.steps.length !== 1 || step?.kind !== "draw" || effect.fbos.length > 0)
     return { composite: null, steps, reasons: ["render:shape"] };
   const { pass } = step;
-  const inputs: Record<number, TextureRef> = {};
-  for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+  const inputs = passInputs(pass);
   for (const [slot, name] of Object.entries(pass.runtime)) {
     if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
     else reasons.push(`render:texture-rt:${name}`);
@@ -562,6 +610,10 @@ export function planLayer(
   const finalInset = flat ? NO_INSET : uvInset(size, baseTexture);
   const additive = layer.colorBlendMode === 31;
   const passthrough = isPassthroughBlend(layer.colorBlendMode);
+  // 被依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：WPE 的 `0x10`，全部 effect 留在合成链、passthrough 上屏，同 colorBlendMode 混合；
+  // 快照规则 1 仍只看 `passthrough`（colorBlendMode）
+  const depended = !!layer.dependedOn;
+  const composited = passthrough || depended;
   let snapped = false;
   const snapshot = () => {
     if (snapped) return;
@@ -570,8 +622,7 @@ export function planLayer(
   };
   const fboNames = layer.effects.map((effect) => new Set(effect.fbos.map((fbo) => fbo.name)));
   const staticInputs = (pass: ScenePass, effect: number | null): Record<number, TextureRef> => {
-    const inputs: Record<number, TextureRef> = {};
-    for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
+    const inputs = passInputs(pass);
     for (const [slot, name] of Object.entries(pass.runtime)) {
       if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
       else if (effect !== null && fboNames[effect].has(name)) inputs[Number(slot)] = { kind: "fbo", effect, name };
@@ -602,7 +653,8 @@ export function planLayer(
 
   // 组（P5b 步骤 4）：带子层的组合层。没有 effect、colorBlendMode ∈ {0, 31} 时也要画：基础 pass → 子树 → `groupUpload` 上屏
   const group = layer.passthroughModel && layer.subtree.length > 0;
-  if (!needsComposite(layer, enabled) && !group) {
+  // 被依赖的图层一律走合成路径（P8 步骤 4）：没有启用的 effect 也是，组合层这时同样要画（`p8-dep` 的 7、`p8-misc` 的 A13）
+  if (!needsComposite(layer, enabled) && !group && !depended) {
     // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl` 的 CL3、CL5）：没有启用的 effect、colorBlendMode ∈ {0, 31}、没有子层时整层不画。
     // WPE 在图层开始时照拷一次快照，没人读，不拷。带子层的是组，走下面的合成路径（步骤 4）。
     // fullscreenlayer 也是组合层，同样不画（P5b 步骤 3，`p5b-fsnofx` 没有 draw）
@@ -727,10 +779,11 @@ export function planLayer(
   // 组画子树（P5b 步骤 4，`p5b-grp-*`：子层画进基础 pass 写的那张合成 RT）：不占合成链的写入，之后的 effect 读的就是这张
   if (group) steps.push({ kind: "subtree", target: { kind: "composite", index: current } });
 
-  // 上屏的那一步：最后一个启用 effect 的最后一个绘制 pass（passthrough 时没有）
+  // 上屏的那一步：最后一个启用 effect 的最后一个绘制 pass（passthrough 或被依赖时没有：WPE `(+0x304 >> 4) & 1` 为 1 时永远不进 final，
+  // rea-p8-render 2.3）
   let finalEffect = -1,
     finalStep = -1;
-  if (!passthrough)
+  if (!composited)
     for (let e = layer.effects.length - 1; e >= 0 && finalEffect < 0; e--) {
       if (!enabled(e)) continue;
       for (let s = layer.effects[e].steps.length - 1; s >= 0; s--)
@@ -794,13 +847,16 @@ export function planLayer(
     });
   });
 
-  if (passthrough) {
+  if (composited) {
     const pass = layer.passthrough;
     if (!pass) reasons.push("render:no-passthrough");
     else {
       const inputs = staticInputs(pass, null);
       inputs[0] = { kind: "composite", index: current };
       if (pass.framebuffer) snapshot();
+      // 混合：基础材质的；被依赖、colorBlendMode 31 时 additive（rea-p8-render 2.3 `FUN_1401e8aa0` 的上屏块：cbm 31 ? 2 : 基础材质混合）。
+      // colorBlendMode 混合（∉ {0, 31}）时 `additive` 本来就是假，和以前一样
+      const blending = additive ? "additive" : base.blending;
       steps.push({
         kind: "draw",
         role: "passthrough",
@@ -811,10 +867,11 @@ export function planLayer(
         // fullscreen 同末 pass，画 NDC 四边形（P5b 步骤 3；colorBlendMode 混合的 fullscreen 没有实测，按同一条规则）
         geometry: screenGeometry,
         uv: [1, 1],
+        // 被依赖时同样内缩（P8 步骤 4 核对表第 1 行：`p8-dep` 的 A2 上屏 UV 0.00234375–0.99765625 = 0.15 / 64，组合层 A7 是 0–1）
         inset: finalInset,
-        blending: base.blending,
+        blending,
         // 上屏：深度借基础 pass，剔除用 passthrough 材质自己的
-        raster: rasterState(base, pass, base.blending),
+        raster: rasterState(base, pass, blending),
       });
     }
   } else if (finalEffect < 0 && group) {
@@ -847,7 +904,10 @@ export function planLayer(
 
   // 文本层的合成 RT 取排版的 `compositeSize` 再两维 `max(4, ·)`（P6b 1e，`textCompositeSize`）
   const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(layer, baseTexture, sceneSize);
-  return { composite: { count: Math.min(2, writes), width, height }, steps, reasons };
+  // 被依赖（P8 步骤 4）：最后一次写入要落在合成 RT 0（独占的 `_a`，rea-p8-render 2.3 按奇偶选起点；`p8-dep` 的 A2：基础 pass → 池化、
+  // effect → 独占）。落在 1 时整份计划对调
+  const planned = depended && current === 1 ? swapCompositeIndices(steps) : steps;
+  return { composite: { count: Math.min(2, writes), width, height }, steps: planned, reasons };
 }
 
 /**

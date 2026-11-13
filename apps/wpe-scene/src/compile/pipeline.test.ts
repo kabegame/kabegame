@@ -16,11 +16,22 @@ interface FetchTally {
   misses: number;
   bytes: number;
   singleByteRanges: number;
+  /** 请求过的「路径 + Range」，含没找到的。 */
+  requested: Set<string>;
+  /** 同一路径、同一区间第二次及以后的请求次数。 */
+  repeated: number;
+}
+function newTally(): FetchTally {
+  return { calls: 0, misses: 0, bytes: 0, singleByteRanges: 0, requested: new Set(), repeated: 0 };
 }
 function nodeFetch(tally: FetchTally): typeof fetch {
   return async (input, init) => {
     tally.calls++;
     const path = String(input);
+    const header = new Headers(init?.headers).get("Range");
+    const key = `${path} ${header ?? ""}`;
+    if (tally.requested.has(key)) tally.repeated++;
+    else tally.requested.add(key);
     let size: number;
     try {
       size = statSync(path).size;
@@ -28,7 +39,7 @@ function nodeFetch(tally: FetchTally): typeof fetch {
       tally.misses++;
       throw new TypeError("Failed to fetch");
     }
-    const range = new Headers(init?.headers).get("Range")?.match(/^bytes=(\d+)-(\d+)$/);
+    const range = header?.match(/^bytes=(\d+)-(\d+)$/);
     const start = range ? Number(range[1]) : 0;
     const end = range ? Number(range[2]) + 1 : size;
     if (range && end - start === 1) tally.singleByteRanges++;
@@ -404,7 +415,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
     try {
       for (const dir of projects) {
         // 运行时的形态：确定退回就停（统计请求与读取量）
-        const tally: FetchTally = { calls: 0, misses: 0, bytes: 0, singleByteRanges: 0 };
+        const tally = newTally();
         vi.stubGlobal("fetch", nodeFetch(tally));
         // 后处理固定为关闭，结果不随本机 WPE 设置变化（档位裁决另有单测）
         const fast = await compileScene({
@@ -415,7 +426,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
           postprocess: "disabled",
         });
         // 列全不支持项（能力表统计）
-        vi.stubGlobal("fetch", nodeFetch({ calls: 0, misses: 0, bytes: 0, singleByteRanges: 0 }));
+        vi.stubGlobal("fetch", nodeFetch(newTally()));
         const bundle = await compileScene({
           projectDir: dir,
           sceneAssets: [join(root!, "assets")],
@@ -456,11 +467,14 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
           check(texture?.width === width && texture.height === height, `${sample}: ${path} 尺寸`);
           check(texture?.mips.length === mipCount, `${sample}: ${path} mip 数`);
         }
-        check(tally.bytes < 64 * 1024 * 1024, `${sample}: 读取 ${tally.bytes} 字节`);
         check(tally.singleByteRanges === 0, `${sample}: 单字节探测`);
-        // P4b 步骤 1 放开 R8 / RG88 后，快速路径要编到更后面才遇到第一个不支持项：3820104696 先编完 7 个 effect 和
-        // 15 张纹理（每级 mip 一次区间读）才到粒子，169 次，每个资源只按「散文件 → pkg → assets」各查一次，没有重复
-        check(tally.calls <= 200, `${sample}: ${tally.calls} 次请求`);
+        // 每个资源只按「散文件 → pkg → assets」各查一次：同一路径、同一区间不请求第二次（P8 步骤 4 起直接断言，下面的上限只兜底）
+        check(tally.repeated === 0, `${sample}: ${tally.repeated} 次重复请求`);
+        // 上限随场景编得更远而放宽：P4b 步骤 1 放开 R8 / RG88 后，3820104696 先编完 7 个 effect 和 15 张纹理（每级 mip 一次区间读）
+        // 才到粒子，169 次；P8 步骤 4 起 2251857160 不再在图层依赖处退回，要编到 P10a 的临时键 `value:animation:pending` 才停，
+        // 404 次（161 次是逐级查找的未命中）、读 73,995,846 字节，都不重复
+        check(tally.bytes < 80 * 1024 * 1024, `${sample}: 读取 ${tally.bytes} 字节`);
+        check(tally.calls <= 450, `${sample}: ${tally.calls} 次请求`);
       }
     } finally {
       vi.unstubAllGlobals();

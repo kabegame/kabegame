@@ -23,6 +23,7 @@ import {
 } from "./model";
 import { generalValue, isKeyframedValue, isScriptValue, isUserBinding, userBindingOf } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
+import { hasNonNumericDependency } from "./dependencies";
 import { resolveParents } from "./hierarchy";
 import {
   INSTANCE_FIELDS,
@@ -222,6 +223,10 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  *   `SceneLayer.clampUVs` / `noInterpolation`、`render/graph.ts` 的 `compositeSampling`）。JSON 布尔值已实现（null 同没写，取缺省）；
  *   绑属性、挂脚本或别的取值报 `object:clampuvs` / `object:nointerpolation`：WPE 运行中改这两位不重建合成 RT（rea-p8-layer §3，
  *   推断），和就地写的语义对不上，没有实测（语料 0 个）。
+ * - `dependencies`：图层依赖（P8 步骤 4，rea-p8-render 第 1 节，`compile/dependencies.ts`）。各种对象上都中性：只进全部对象的并集
+ *   （`dependencyIds`），命中的图像层被依赖（`SceneLayer.dependedOn`），写法不合规的元素 WPE 跳过。粒子对象另有一套同名键（元素是
+ *   `{id, type, …}` 对象，发射图与碰撞模型，`FUN_14022af30`），有不是数字的元素时报 `particle:dependencies`。被依赖的文本层、组、
+ *   读自己的 `_a` 等照报的用法由 `bundle.ts` 报 `dependency:*`。
  */
 const SUPPORTED_OBJECT = new Set([
   "id",
@@ -708,7 +713,8 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * 模型对象（P5c 步骤 1）不再整个报 `object:model`：mdl 与网格的用法由 `bundle.ts` 读到文件后按 `checkMdlFeatures`、
  * `checkMeshAttributes` 与模型 pass 的 `checkPassFeatures` 报（P5c 步骤 2 接上绘制后去掉了过渡键 `model:pending`）。对象上：
  * - `MODEL_NEUTRAL_FLAGS` 中性，`perspective: true` 中性（和 P5b 的透视图层同一套，`p5c-matrix` 实测）；
- * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers`（W6）、`dependencies` 等照未知键报。
+ * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers`（W6）等照未知键报；
+ * - `dependencies` 中性（P8 步骤 4）：同别的对象只进并集，模型列的图像层照样被依赖、画进 RT（`3509243656` 的两个，模型材质没读这个名字）。
  */
 export function checkObjectFeatures(object: SceneObject, unsupported: Set<string>, parent: number | null = null): void {
   const kind = objectKind(object);
@@ -719,6 +725,8 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
     if (hasEffects) unsupported.add("particle:effects");
     for (const [key, defaults] of Object.entries(PARTICLE_OBJECT_DEFAULTS))
       if (particleObjectValueUsed(object[key], defaults)) unsupported.add(`particle:object:${key}`);
+    // 粒子自己那套 `dependencies`（P8 步骤 4，rea-p8-render 1.1：元素是对象的发射图 / 碰撞模型依赖）没做；数字元素只进并集，中性
+    if (hasNonNumericDependency(object)) unsupported.add("particle:dependencies");
   } else if (kind === "model") {
     // 模型对象的 effect（WPE 怎么画没读，语料 0 个）：`bundle.ts` 也不编译它
     if (hasEffects) unsupported.add("model:effects");
@@ -763,6 +771,8 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
         "perspective",
         "clampuvs",
         "nointerpolation",
+        // 图层依赖（P8 步骤 4）：只进并集，粒子的另判（上面）
+        "dependencies",
         "instance",
         "model",
         "particle",
