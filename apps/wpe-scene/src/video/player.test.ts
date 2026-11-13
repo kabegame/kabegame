@@ -4,7 +4,14 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flush, videoEnv } from "./fakeVideo";
-import { IDLE_FRAMES, VideoTexturePlayer, fetchVideoBlob, videoSourceKey, type SceneVideoSource } from "./player";
+import {
+  IDLE_FRAMES,
+  VideoTexturePlayer,
+  attachToDocument,
+  fetchVideoBlob,
+  videoSourceKey,
+  type SceneVideoSource,
+} from "./player";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => `file:///${path}` }));
 
@@ -559,5 +566,91 @@ describe("VideoTexturePlayer 的脚本语义（P9b）", () => {
     reading.player.play();
     expect(reading.player.isPlaying()).toBe(true);
     expect(reading.element.calls).toEqual(["pause", "load"]);
+  });
+});
+
+/**
+ * P9b 步骤 3：元素挂进宿主页面、几乎看不见。看不见的视频（不挂 DOM、`opacity: 0`）由 Chromium 后台渲染驱动，暂停一两秒后恢复的第一帧
+ * 要等约 255 ms；挂上且 1% 不透明时 3–21 ms（phase-9b「步骤 3」的对照）。
+ */
+describe("挂进页面（P9b 步骤 3）", () => {
+  it("构造时挂一次；释放（dispose 或失败）时撤下一次，之后再释放不重复撤", async () => {
+    const env = videoEnv();
+    const attached: unknown[] = [];
+    const detach = vi.fn();
+    const attach = (element: HTMLVideoElement) => {
+      attached.push(element);
+      return detach;
+    };
+    const player = new VideoTexturePlayer(pkg, 0, { ...env.factories, attach, report: env.report });
+    expect(attached).toEqual([env.elements[0]]);
+    expect(detach).not.toHaveBeenCalled();
+    await flush();
+    player.dispose();
+    expect(detach).toHaveBeenCalledOnce();
+    player.dispose();
+    expect(detach).toHaveBeenCalledOnce();
+
+    const failing = videoEnv();
+    const detachFailed = vi.fn();
+    const broken = new VideoTexturePlayer(pkg, 0, {
+      ...failing.factories,
+      attach: () => detachFailed,
+      report: failing.report,
+    });
+    await flush();
+    failing.elements[0].fail();
+    expect(detachFailed).toHaveBeenCalledOnce();
+    broken.dispose();
+    expect(detachFailed).toHaveBeenCalledOnce();
+  });
+
+  it("attachToDocument：左上角 2 px、1% 不透明、最上层、不接收指针，按已挂的个数错开 2 px；撤下即 remove；没有 body 时什么都不做", () => {
+    const appended: { attributes: Record<string, string> }[] = [];
+    vi.stubGlobal("document", {
+      body: {
+        appendChild: (node: { attributes: Record<string, string> }) => appended.push(node),
+        querySelectorAll: (selector: string) =>
+          appended.filter(
+            (node) => selector === "[data-kb-video-texture]" && "data-kb-video-texture" in node.attributes,
+          ),
+      },
+    });
+    const make = () => ({
+      style: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      disablePictureInPicture: false,
+      setAttribute(name: string, value: string) {
+        this.attributes[name] = value;
+      },
+      remove: vi.fn(),
+    });
+    const first = make();
+    const detach = attachToDocument(first as unknown as HTMLVideoElement);
+    expect(first.style).toEqual({
+      position: "fixed",
+      left: "0px",
+      top: "0px",
+      width: "2px",
+      height: "2px",
+      opacity: "0.01",
+      pointerEvents: "none",
+      zIndex: "2147483647",
+    });
+    expect(first.attributes).toEqual({ "data-kb-video-texture": "", "aria-hidden": "true" });
+    expect(first.disablePictureInPicture).toBe(true);
+    expect(appended).toEqual([first]);
+    // 第二段错开 2 px，不叠在第一段上
+    const second = make();
+    attachToDocument(second as unknown as HTMLVideoElement);
+    expect(second.style.left).toBe("2px");
+    detach();
+    expect(first.remove).toHaveBeenCalledOnce();
+
+    vi.stubGlobal("document", {});
+    const bare = { style: {}, remove: vi.fn() };
+    attachToDocument(bare as unknown as HTMLVideoElement)();
+    expect(bare.style).toEqual({});
+    expect(bare.remove).not.toHaveBeenCalled();
   });
 });

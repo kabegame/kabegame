@@ -1,12 +1,13 @@
 /**
- * 场景视频纹理的播放器（P9a 步骤 1）：一段视频一个 `VideoTexturePlayer`，管 Blob、不挂 DOM 的 `<video>`、新帧标志与「最近一次被画到的帧号」。
+ * 场景视频纹理的播放器（P9a 步骤 1）：一段视频一个 `VideoTexturePlayer`，管 Blob、`<video>`、新帧标志与「最近一次被画到的帧号」。
  * 场景级的复用、帧号与宿主暂停在 `sceneVideos.ts`；GPU 一侧只经 `VideoSink` 拿元素，不知道播放器的存在。WPE 语义见 p9-REPORT
  * 「结论」与 rea-p9-video 第 3、4、6、7 节。
  *
  * - **字节**：按磁盘上的绝对区间 `fetch(file:, Range)` 再 `Response.blob()`。不读成 ArrayBuffer：最大一段 674 MiB，Blob 由 Chromium 换到
  *   磁盘、不经过 JS 堆（p9-REPORT 结论 10）。`file:` 的区间请求实测回 200 而不是 206，但只给区间，所以只核对长度。
  * - **元素**：`muted`（WPE 带 `FORCEMUTE` 创建，视频纹理不出声，rea 第 5 节）、`playsInline`、`loop` 缺省为真、`preload = "auto"`；
- *   用元素自己的时钟（WPE 用媒体引擎的实时时钟，不读 `g_Time`，rea 第 3 节）。
+ *   用元素自己的时钟（WPE 用媒体引擎的实时时钟，不读 `g_Time`，rea 第 3 节）。挂进宿主页面的最上层、几乎看不见（`attachToDocument`，P9b 步骤 3）：
+ *   看不见的视频由 Chromium 后台渲染驱动，暂停后恢复的第一帧要等约 255 ms。
  * - **新帧**：`requestVideoFrameCallback` 每次回调置 `fresh` 并重新登记（没有这个方法时只靠事件），`loadeddata`、`seeked` 也置位。
  *   GpuScene 画到这张纹理时才拷，对应 WPE「绑定纹理时有新帧才 `TransferVideoFrame`」（rea 第 2 节）。
  * - **该不该在放**：`wantPlay && !宿主暂停 && !失败 && 帧号 ≤ lastDrawn + 30`，对应 WPE 工作线程的「应当在放」
@@ -36,6 +37,8 @@ export interface VideoReport {
 /** 浏览器对象的工厂：测试注入替身，缺省用浏览器的。 */
 export interface VideoFactories {
   createElement?: () => HTMLVideoElement;
+  /** 把元素挂进页面，返回撤下它的函数（缺省 `attachToDocument`）。 */
+  attach?: (element: HTMLVideoElement) => () => void;
   readBlob?: (source: SceneVideoSource) => Promise<Blob>;
   createObjectUrl?: (blob: Blob) => string;
   revokeObjectUrl?: (url: string) => void;
@@ -76,6 +79,44 @@ const HAVE_CURRENT_DATA = 2;
 /** 复用播放器的键：同一文件的同一区间就是同一段视频。 */
 export function videoSourceKey(source: SceneVideoSource): string {
   return `${source.path}\n${source.start}\n${source.end}`;
+}
+
+/** 挂进页面的视频元素的标记（`attachToDocument` 按它数已挂的个数、错开位置）。 */
+const ATTACHED_MARK = "data-kb-video-texture";
+
+/**
+ * 把视频元素挂进宿主页面：左上角 2 px、1% 不透明度、放在最上层、不接收指针（P9b 步骤 3）。
+ *
+ * 看不见的视频由 Chromium 视频合成器的后台渲染驱动，约 250 ms 才更新一次当前帧：暂停一两秒后恢复播放，第一帧要等约 255 ms，这期间纹理
+ * 停在暂停时的那一帧，之后一下跳到跟上的位置。WPE 恢复时是连续接着放的。多段视频的脚本切换、P9a 的「30 帧没画到就暂停、再画到时恢复」
+ * 都会碰到。「看不见」包括三种（phase-9b「步骤 3」的对照，同一段视频暂停 2 s 再放、量到第一次 `requestVideoFrameCallback`）：
+ * - 不挂 DOM（P9a 起的做法）：252–257 ms；
+ * - `opacity: 0`：多数 253–257 ms；
+ * - 挂上、1% 不透明但被场景的 WebGPU 画布整个盖住（合成器把被不透明图层盖住的图层裁掉不画）：宿主里 12 次恢复 6 次约 255 ms。
+ * 放到画布上面之后 12 次都是 6–28 ms。
+ *
+ * 混进画面的只有左上角 2×2 像素、1% 不透明：8 位输出里最多差 3 级。多段视频按已挂的个数横向错开 2 px，不叠在一起加深。
+ * 没有 `document.body` 时（Node 单测、宿主测试替身）不挂。
+ */
+export function attachToDocument(element: HTMLVideoElement): () => void {
+  const body = typeof document === "undefined" ? undefined : document.body;
+  if (!body) return () => {};
+  const index = body.querySelectorAll(`[${ATTACHED_MARK}]`).length;
+  Object.assign(element.style, {
+    position: "fixed",
+    left: `${2 * index}px`,
+    top: "0px",
+    width: "2px",
+    height: "2px",
+    opacity: "0.01",
+    pointerEvents: "none",
+    zIndex: "2147483647",
+  });
+  element.setAttribute(ATTACHED_MARK, "");
+  element.setAttribute("aria-hidden", "true");
+  element.disablePictureInPicture = true;
+  body.appendChild(element);
+  return () => element.remove();
 }
 
 /** 缺省的读法：按区间 `fetch(file:)` 直接取 Blob。CEF 的 `file:` 响应是 200、不带 Content-Range，所以只认长度。 */
@@ -119,6 +160,8 @@ export class VideoTexturePlayer {
   /** Blob 的对象地址；读完之前为 null，这期间不碰元素的 play / pause。 */
   private url: string | null = null;
   private frameHandle: number | null = null;
+  /** 把元素从页面撤下（`attachToDocument` 的返回值），释放时调一次。 */
+  private detach: () => void;
   private disposed = false;
   /** 已出过第一帧（`loadeddata`）。 */
   private loaded = false;
@@ -162,6 +205,8 @@ export class VideoTexturePlayer {
       if (!this.disposed && !this.failed) this.fresh = true;
     });
     element.addEventListener("error", () => this.fail("场景视频解码失败", describeError(element.error)));
+    // 挂进页面（P9b 步骤 3）：看不见的视频暂停后恢复要等后台渲染约 255 ms 才出第一帧
+    this.detach = (options.attach ?? attachToDocument)(element);
     this.watchFrames();
 
     const read = options.readBlob ?? fetchVideoBlob;
@@ -463,6 +508,8 @@ export class VideoTexturePlayer {
     element.pause();
     element.removeAttribute("src");
     element.load();
+    this.detach();
+    this.detach = () => {};
     if (this.url !== null) {
       this.revokeObjectUrl(this.url);
       this.url = null;
