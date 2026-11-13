@@ -128,7 +128,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | 对象 `parent`（灯除外）；没有内容的分组节点 | 层级已实现（P4a，实测），见「层级（P4a）」；不再报 `object:parent` / `object:empty` |
 | general 的 `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength` | 实测中性：同一工程只改这 5 个键，两份轨迹对解析模型最大差 6.7e-5、1.9e-5，16 个系统的 y 都不漂移；场景重力若生效每帧会偏约 0.08 像素（`proj/p4a-wind`）。读码也没找到引擎读取点 |
 | general 的 `perspectiveoverridefov` | 不是中性，解析成透视粒子的 fov（`SceneGeneral.perspectiveOverrideFov`，缺省 95°，钳到 [0.1°, 179.9°]），实测 `d` 逐位相符；绑属性时走重编译 |
-| 材质 `alphawriting: "default"` | 读码：`default` 映射成 0，绘制时 0 什么都不做（`0x140157201`），等于没写；`enabled` / `disabled` 照报 `material:alphawriting` |
+| 材质 `alphawriting` | 读码：`default` 映射成 0，绘制时 0 什么都不做（`0x140157201`），等于没写；`enabled` / `disabled` 自 P8 步骤 5 起实现（见「图像层与材质补全（P8）」的写入状态），只有这三个以外的取值报 `material:alphawriting` |
 | 粒子 `instanceoverride` 的 `alpha` / `size` / `count` / `speed` / `lifetime` / `rate` / `colorn` / `color` 与 `id`；`controlpoint0..7` / `controlpointangle0..7` 的静态值 | 已实现、就地生效（见「粒子（P4a）」，`colorn` 见「粒子（P4b）」）；控制点的静态值在建系统时生效（P4c，见「粒子（P4c）」的「控制点」，绑了属性报 `particle:instance:controlpoint:user`）；`id` 是编辑器键。`brightness` 只在 HDR 且系统 `flags` 没有 bit3 时生效，那时取非默认值才报 |
 | `.tex` 头标志 alpha-priority（`0x80000`） | P4b 实测中性：同一张 RG88 纹理有无这个标志，图像层与粒子整帧逐像素相同；读码看全二进制只把它放进采样器缓存的哈希键 |
 
@@ -1760,6 +1760,121 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 - 读数：`c0/rdc_dump_c.py` 在 `qrenderdoc --python` 下导出每次绘制的输入布局、顶点 / 索引、深度与光栅状态、混合与常量，`ana_c.py` 逐个核对，`sim_sort.py` 复现排序，`ana_frustum3.py` 看视锥剔除；
 - 各步的快照、补丁、变异清单、语料比较与整帧比对在 `c1/`、`c2/`，收尾的语料统计是 `c3/walk_c.py`、`c3/model_keys.py`；
 - WPE 参照在 `A:\p5c\`。
+
+## 图像层与材质补全（P8）
+
+P8 补的是图像层上几处还没对齐 WPE 的地方，五件事互不依赖，但都落在图像层的同一条渲染路径上：合成 RT 怎么采样、四边形怎么摆、effect 能读到哪些别的图层、管线写哪些通道。所以 P8 不新增图层种类，只在现有的图像层管线（P2a 的渲染图、P5b 改过的几何与合成 RT）上补规则。形状对象是唯一的例外：WPE 把它当图像类的子类，我们也把它接进图像层管线，而不是另写一套绘制。
+
+依据：
+- 读码：[rea-p8-layer](../../.claude/plans/wpe-import/3-scene/phase8/rea-p8-layer.md)（形状、对齐、采样）、[rea-p8-render](../../.claude/plans/wpe-import/3-scene/phase8/rea-p8-render.md)（依赖、自引用、写入状态）。
+- 实测：[报告](../../.claude/plans/wpe-import/3-scene/phase8/p8-REPORT.md)，11 个确定性工程加 6 张语料场景，读码覆盖到的全部吻合。推翻了三处旧说法：形状不是正方形、图像层读 `alignment`、`clampuvs` 缺省为真。
+- 逐步的验收数据：[子计划](../../.claude/plans/wpe-import/3-scene/phase8/phase-8-image-material.md)「实施记录」。下面每条只点出依据，数字和例外以子计划为准。
+
+验收：确定性工程按 WPE 日志回放到抓到的那一帧，和 WPE 抓帧整帧逐像素比（`kbp cmp frame`，屏蔽 FR / CLK）；几何类（形状、对齐）另比四角，限值 0.01 像素；写入状态另用探针的逐 draw 轨迹读每次绘制的管线状态。
+
+### 合成 RT 的采样（步骤 1）
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 寻址 | 只看对象的 `clampuvs`（`SceneLayer.clampUVs`）：不是 `false` 就钳制，缺键、`true`、`null` 都钳制；和基础纹理 `.tex` 的 ClampUVs 无关（原来跟着纹理，是 LWE 的做法） | 读码 §3；实测 `p8-clamp`、`p8-clamp2` |
+| 过滤 | 对象 `nointerpolation: true` 或基础纹理带 NoInterpolation 时最近邻，否则线性（`graph.ts` 的 `compositeSampling`） | 同上 |
+| 范围 | 池化的合成 RT 与被依赖图层的独占 RT 同一套；文本层、形状、组合层没有基础纹理，只看对象。文本的 `clampuvs` 按同一规则放行 | 读码 §3（文本、形状的虚表 +0x128 给 0） |
+| 基础纹理 | 采样器不变，仍按 `.tex` 标志。WPE 用 8 倍各向异性，我们线性，只记不补 | `p8-align2` 的 F1：竖直缩放的纹理在两色交界处差到 11 |
+
+语料里只有 `3832772446` 的一个图层因此从重复变成钳制。
+
+### 形状对象（步骤 2）
+
+`shape: "quad"` 的对象（`features.ts` 的 `isShapeObject`）没有基础 pass、没有合成 RT，只画最后一个 effect 的唯一绘制 pass、直接上屏（`graph.ts` 的 `planShapeLayer`）。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 几何 | 第一个 effect 第一个 pass 的材质常量 `point0`–`point3`（含实例覆盖，`bundle.ts` 的 `shapePoints`）：顶点 `(Sx·p.x − Sx/2, Sy·(1 − p.y) − Sy/2, 0)`，uv = p，索引 (0, 2, 1, 0, 3, 2)（`layout.ts` 的 `shapeQuad`）。`Sx×Sy` 是对象 `size`，缺省是正交高 × 正交高（`shapeLayerSize`）。四个点找不到时退回以原点为中心的方块 | 读码 §1；实测 `p8-shape`、`p8-shape2`（推翻 sample-gaps §2.1 的「正方形」） |
+| 画哪个 | 最后一个 effect 的那个 pass，不看 effect 的 `visible`；前面的 effect 永远不画，不预备变体 | `p8-shape2`：SA 几何取第一个、画第二个；SB 第二个写死不可见照画 |
+| 强制改写 | 每个绘制 pass 的组合键在实例覆盖之后写 `DIRECTDRAW = 1`，最后一个 pass 混合强制 additive。槽 0 不预留：形状没有当前合成 RT，`previous` 等 bind 跳过，其余槽照材质的纹理与注解缺省编 | 读码 §1.5–1.7；`p8-shape` 的 S9 实例写 0 也被改成 1 |
+| 矩阵 | MVP = 场景视图投影 · 视差（根对象）· 世界矩阵，不带对齐偏移；效果矩阵按读码（单位阵，`g_EffectTextureProjectionMatrix = diag(Sx/2, Sy/2, 1, 1)`） | 四角对 RenderDoc `vs_out`，最大差 8.1e-5 像素 |
+| 中性 | 对象的 `alpha`、`color`、`brightness`、`colorBlendMode`、`clampuvs`、`nointerpolation`，值为 false 的 `castshadow` / `disablepropagation` | 读码；语料 24 个形状都没写前三个 |
+| 照报（`features.ts` 的 `shapeIssues`，语料都是 0） | `shape:effects`（没有 effect）；`shape:effect-passes`（最后一个 effect 不是恰好一个绘制步骤，或有 fbo；WPE 的非末 pass 会解引用空指针）；`shape:uniform:<名字>`（画的程序读 `g_Color4` / `g_Alpha` / `g_Color`，WPE 不写，读到的是上一次绘制留下的值）；`shape:texture0`（读槽 0 而没有静态纹理）；透视场景里的形状 | 读码 §1.4–1.8 |
+
+`shape:texture0` 看输出的 WGSL 判断槽有没有被读（`features.ts` 的 `textureSlotRead`）：翻译器的纹理反射不带 `unused`，`lightshafts` 在 `DIRECTDRAW = 1` 时只剩声明的 `g_Texture0` 照样列出。
+
+### 对齐（步骤 3）
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 取值 | 9 种字符串（`compile/alignment.ts`，下标同 WPE 的跳转表）；不是字符串（含 `{user, value}`）按 `center` | 读码 §2 |
+| 偏移 | `a = (±trunc(w)/2, ±trunc(h)/2)`，left +、right −、top −、bottom +（场景 y 向上，四个角两个分量都有），`size` 取 autosize / fullscreen 之后的尺寸（`layout.ts` 的 `alignmentOffset`）。偏移在模型空间：图层画自己的矩阵在本地矩阵之后右乘 `T(a)`（`drawMatrixOf`），所以 `scale` 放大它、旋转带着它转 | 实测 `p8-align`（9 种 × 有无 effect、旋转、非均匀缩放），四角最大差 1.9e-4 像素 |
+| 作用到 | 上屏的模型矩阵（直接上屏、末 pass、passthrough、compose、文本）、效果矩阵与 `g_LayerModelMatrix`（缩放按浮点 `size / 2`）、组的局部正交（组的裁剪窗口跟着偏）、图像层 `perspective` | `p8-align2` 的 F2、组 G |
+| 不作用到 | 子层（`worldMatrixOf` 不带它，子层只认父的变换）、视差、画进合成 RT 的基础 pass、粒子与模型；文本的子层也不带文本自己的排版偏移 | `p8-align` 的子层、`p8-align2` 的 Xc |
+| 四边形边长 | 图像层按 `trunc(size)`（`layout.ts` 的 `screenQuadSize`），文本层按排版尺寸原样 | `p8-align2` 的 F3：101.7 × 50.5 上屏是 ±50.5 / ±25 |
+| 运行中改 | 脚本读写 `layer.alignment`（字符串，读回字符串；写数字等落 `center`），同帧生效，重编译后重放写入 | 实测：`p8-par` 的 T 第 8 帧写数字读回 `center string`，日志和 WPE 逐字相同 |
+| 照报 | `object:alignment:script`（`alignment` 挂 `{script}`，字段脚本写回枚举没做，语料 0 个） | — |
+
+### 图层依赖（步骤 4）
+
+WPE 的图层依赖是两件事，各自独立：一个图层「被依赖」时，它的合成链第 0 张换成按图层独占、跨帧保留的 RT；材质槽里写的 `_rt_imageLayerComposite_<id>_a` 按名字绑到这张 RT 上。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 被依赖 | 全部对象（含模型对象）的 `dependencies` 取并集（`compile/dependencies.ts` 的 `dependencyIds`）：值是数组或对象才遍历，元素是非负整数才收。命中的图像层 `SceneLayer.dependedOn` | 读码第 1 节；`3509243656` 的两个模型对象就给图像层置了位 |
+| 合成路径 | 被依赖的图层一律走合成路径（组合层没有 effect 也画），最后一个 effect 不上屏、留在合成链，最后用 passthrough 上屏：`BLENDMODE` 取 cbm ∉ {0, 31} 时的值、否则 0，混合是 cbm 31 时 additive、否则基础材质的，UV 内缩同末 pass，`g_Color4` = 1。排完后最后一次写入落在合成 RT 1 时整份计划的 0、1 对调（`graph.ts` 的 `swapCompositeIndices`），让它落在第 0 张 | 实测 `p8-dep` 的 A2、A9、A11；`p8-dep` 的上屏 UV 是 0.15 / 64，读码 2.4 写的「不内缩」不对 |
+| 独占 RT | 建场景时每个被依赖的图层建一张（`scene.ts` 的 `layerTargets`，尺寸、格式、采样同它的合成 RT），跨帧、跨 effect 开关的重建都保留、不清；它就是本层的合成 RT 0，其余张照旧从池里借 | 读码 2.2；实测 `p8-dep` |
+| 不可见 | 自身或祖先不可见时照画进 RT、只跳过画到「场景」的那一步上屏，在组里也一样（`scene.ts` 的 `layerOpsToRun`）；写死不可见也建资源（`buildableLayers` 的例外）；不做视锥剔除 | 实测 `p8-dep2` 的 A11 / A12、`p8-misc` 的 A13（隐藏的组合层）/ A14（放在画面外） |
+| 绘制顺序 | 不改。被依赖者排在引用方后面时，引用方读到的是上一帧 | 实测 `p8-dep` 的 B3：第 160 帧读到第 159 帧的颜色 |
+| 引用 | 编译期一次定下名字表（每个图像层的 `_rt_imageLayerComposite_<id>_a`），材质 `textures` 或注解 `default` 写的名字指向被依赖图层时记进 `ScenePass.layerComposites`，渲染图给出纹理来源 `{ kind: "layer", object }`，四种计划（图层、形状、粒子、网格）都认。`bind` 占了的槽 `bind` 胜出 | 读码 2.1、第 3 节 |
+| 棋盘格 | 解析不到的名字（没被依赖、id 不存在、不是图像层、`_b`）绑 6×6 黄黑棋盘格（`checkerTexture`：第一格黑，点采样、重复） | 实测 `p8-dep` 的 B4–B6 逐格对上 |
+| 格式 | 引用槽的 `TEX<n>FORMAT` 取材质创建那一刻纹理表里的格式：经依赖置位的 RT 在全部材质之后才建，是 0；被依赖者自己就有 cbm 混合、排在引用方前面时，HDR 下是 14；LDR 一律 0 | 读码 2.2；语料里都是 0 |
+| 照报（语料都是 0） | `dependency:text`（被依赖的是文本层，合成 RT 随重排换尺寸）、`dependency:group`（被依赖的是组）、`dependency:self`（被依赖的图层在自己的 pass 里读自己的 `_a`）、`dependency:passthrough-undeclared`（名字指向没被依赖、但自己有 cbm 混合的图层，WPE 绑得上）、`particle:dependencies`（粒子对象另一套同名键，元素是发射图与碰撞模型） | 读码 |
+
+dev 探针的回放只编码读回那一帧，独占 RT 里没有上一帧的内容，和「排在后面读上一帧」对照时要先用 `profile: 1` 在上一帧的时刻编码一帧。
+
+### 写入状态（步骤 5）
+
+WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成路径时打开、上屏前关掉；材质 pass 的 `alphawriting` 在绑定时改它。`alphatocoverage`（混合模式 3）是混合关、`AlphaToCoverageEnable` 开，写掩码与深度照 `normal`。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 写不写 alpha | 在 `stepPipeline` 按目标、组与上屏角色算出的缺省值上叠材质的取值（`render/writeState.ts` 的 `writesAlpha`）：上屏角色（`final` / `passthrough`）不看材质，WPE 绑定后强制改回；`copybackground: false` 的组里强制写；其余 `enabled` 写、`disabled` 不写、`default` 与没写一样。`ScenePass.alphaWriting` 只在 `enabled` / `disabled` 时有 | 读码 4.3–4.4；`p8-alpha` 九种组合、`p8-misc` 的 W1，逐 draw 的写掩码全部对上 |
+| `disabled` 的结果 | 不写的 alpha 保留目标原值：fbo 是上一帧或清屏值，合成 RT 是上一个用这张池化 RT 的图层写的 | 实测 `p8-alpha` 的 Z |
+| A2C 的状态 | 混合关（`blendState` 对它返回不混合）、写掩码同 `normal`、深度写同 `normal`（`rasterState`） | 读码 4.1、5.2–5.3 |
+| A2C 的组合键 | 混合是 `alphatocoverage` 的材质 pass 编译时加 `ALPHATOCOVERAGE = 1`（`compile/writeState.ts` 的 `materialCombos`），`genericimage4` 等据此把 alpha 锐化成以 0.5 为中心的阶跃。WPE 上屏时把基础材质的混合拷给最后一个 effect pass，组合键可能也带上，但 WPE 自带 effect 与语料的着色器没有一处读它，所以只按 pass 自己的混合加 | 读码 5.4 |
+| A2C 的覆盖 | WPE 用户设置 `msaa: none` 时场景目标单采样，A2C 实测是「alpha > 0.5 才写入」的硬阈值。WebGPU 只能在多重采样目标上开 A2C，所以在片元着色器里丢弃：给程序的片元模块追加入口 `kb_a2c_<入口>`（`programs.ts` 的 `alphaToCoverageEntry`，原入口的逐字副本，每个 `return X;` 前判断位置 0 输出的 alpha，`!(a > 0.5)` 就 `discard`），主体不动、丢弃在导数之后 | 实测 `p8-a2c`：alpha 0.4995 不画、0.5005 画，对象 alpha 0.5 的一列都没画；三条渐变逐像素相同 |
+| 哪一步开 | 步骤的实际混合是 `alphatocoverage` 就开（`alphaToCoverage`），包括借基础材质混合的上屏 pass 与 passthrough、粒子、网格；画进合成 RT 的基础 pass 混合是 null，不开，写的是锐化后的 RGBA。上屏的是哪个 effect pass 要到运行时才定，所以按管线开关：A2C 模块按程序在第一次需要时才建（`GpuProgram.alphaToCoverage()`），管线键加 `\|a2c`，别的管线与模块逐字节不变 | 实测 `p8-misc` 的 W2（整帧 0 差异）；语料 `3783690410` 的 `xray` 末 pass |
+| 照报 | `material:alphawriting`：`default` / `enabled` / `disabled` 以外的取值（WPE 映射表只有这三个，语料 0 个）；改写认不出入口结构时 `render:program:<下标>:a2c`（语料与默认工程 522 个片元程序全部认得出） | — |
+
+### 已知差异与只记不补
+
+- **基础纹理的各向异性**：WPE 用 8 倍各向异性，我们线性；只在竖直方向缩小的纹理的颜色交界处有差（`p8-align2` 的 F1，最大 11）。
+- **effect 中间 pass 的 MVP**：我们给单位阵（P2a 的做法），WPE 给的值不同。WPE 自带的 effect 中间 pass 都直接用 NDC 坐标、不读它，只有自写的测试工程乘了它（`p8-alpha` 的 X 组：WPE 的 fbo 里一个像素都没画，我们铺满）。
+- **被依赖图层的 effect 开关**：WPE 切换时销毁重建独占 RT、新 RT 不清（读码，没实测）；我们跨重建保留。
+- **A2C**：`msaa: x2`（WPE 的缺省）下 A2C 按 alpha 分样本，我们没有多重采样，只做单采样的硬阈值；组的 alpha MAX 与 A2C 并存、粒子 A2C 语料都是 0 张，只有单测。
+- **形状**：多 pass 的 effect、透视场景照报，没测。
+
+### 语料与解锁
+
+| 步骤 | 去掉的键 | 新增的键 | 能渲染 | 新解锁 |
+|---|---|---|---|---|
+| 1 合成 RT 的采样 | `object:clampuvs` 15 张、`object:nointerpolation` 3 | — | 47 → 48 | `3668499717` |
+| 2 形状对象 | `object:shape` 18 | — | 48 → 53 | `3656079027`、`3811764016`、`3812887609`、`3819646765`、`3821678218` |
+| 3 对齐 | `object:alignment` 24、`script:api:layer.alignment` 3 | — | 57 → 57 | — |
+| 4 图层依赖 | `object:dependencies` 9、21 个 `texture:rendertarget:_rt_imageLayerComposite_<id>_a`（9 张） | — | 66 → 66 | — |
+| 5 写入状态 | `material:alphawriting` 7、`blend:alphatocoverage` 2 | — | 87 → 87 | — |
+
+- 各步的起点不同，是同期别的 Phase 也在解锁；语料从 173 张变成 183 张。没有场景因 P8 不再能渲染。
+- 收尾时（2026-11-14，183 张）用到 P8 任一项的 57 张场景里，能渲染 10 张，和 P8 有关的键一个都不剩；其余 47 张还差场景脚本的回调与 API（三十多张）、关键帧动画（25）、用户纹理（20）、木偶动画（15）、图像层帧动画（13）等。`3812487163` 去掉对齐后还差 P6 的 `thisScene.createLayer` / `sortLayer`。
+- **和 WPE 比**：
+  - 确定性工程：`p8-clamp`、`p8-clamp2`、`p8-dep2`、`p8-misc` 0 差异；`p8-dep` 只差 B3（探针只编码读回那一帧，先编码上一帧后相同）；`p8-align` 最大差 1，`p8-align2` 只差 F1 一行（各向异性）；`p8-shape` 最大差 6，`p8-shape2` 最大差 2；`p8-a2c` 三条渐变 0 差异；`p8-alpha` 除 X 组（见上）都是 0。
+  - 解锁的 6 张各解包加日志、抓一帧按日志回放比：差 > 32 的像素占 0.02%–0.65%，在随机粒子与 4K 缩放的轮廓上；形状光束按 WPE 的 `vs_out` 分里外算，没有缺失或错位。
+  - 语料里有依赖的 9 张：引用 pass 全部绑到对应的独占 RT、没有一处是棋盘格；`2251857160`、`3554161528`、`3276911872`（打开引用方后用逐 draw 轨迹核对）强制渲染没有校验错误。A2C 的 `3611425904`、`3783690410` 强制渲染没有校验错误。
+
+### 对比台
+
+在 `ignore/p8/` 下：
+- 确定性工程：`gen_p8.py`（自写 `.tex` 与 effect，没走 `kbp gen`），工程在 `proj/`；
+- 读数：`rdc_dump_p8.py` 在 `qrenderdoc --python` 下导出每次绘制（含直接读 D3D11 输出合并状态的 `AlphaToCoverage`），`show.py`、`ana_align.py`、`check_align.py` 摘要；
+- 语料：`scan_p8.py` → `out/scan.json`（P8 各项的逐条清单），`sum_p8.py`、`ana_p8.py`、`rtref.py`；收尾的覆盖数是 `s5/coverage.py`；
+- 各步的快照、补丁、变异清单、语料回归与整帧比对在 `s1/`–`s5/`；
+- WPE 参照在 `A:\p8\`。
 
 ## 声音（P6a）
 

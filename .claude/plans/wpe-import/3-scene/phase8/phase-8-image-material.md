@@ -1316,3 +1316,18 @@ export function alphaToCoverageEntry(wgsl: string, entryPoint: string): { code: 
 
     两张都渲染完成、A2C 管线建成，没有校验错误。
 - **没覆盖的**：组的 alpha MAX 与 A2C 并存、粒子 A2C（语料都是 0 张）只有单测；`msaa: x2` 的 A2C 不做（WPE 缺省 `x2`，我们没有多重采样，本来就对不上）。
+
+### P8 收尾（2026-11-14）
+
+- **覆盖数**（`ignore/p8/s5/coverage.py`：步骤 0 的语料细分，对步骤 5 回归时的语料扫描，183 张）：
+  - 用到 P8 任一项的 57 张：对齐 24、形状 18、非文本 `clampuvs` 15、依赖 9、`alphawriting` 7、`nointerpolation` 3、`alphatocoverage` 2。
+  - 能渲染 10 张：P8 解锁的 6 张（步骤 1 的 `3668499717`，步骤 2 的 `3656079027`、`3811764016`、`3812887609`、`3819646765`、`3821678218`），加上 P8 与同期别的 Phase 合起来解锁的 `3585875739`、`3812007032`、`3812113986`、`3825170583`。
+  - 和 P8 有关的键一个都不剩。其余 47 张还差（按场景数）：脚本回调 32、脚本 API 31、关键帧动画 25、用户纹理 20、木偶动画与 `animationlayers` 各 15、图像层帧动画 13、`SPRITESHEET` 13、工坊 `blendgradient` effect 11 等。
+  - 总计划「P4–P7 先做完时 P8 解锁 9 张」的口径里，步骤 3 的 `3812487163` 还差 P6 的 `thisScene.createLayer` / `sortLayer`；步骤 4、5 本来就解锁不了场景。
+- **文档**：
+  - `cocs/wpe/WPE_SCENE.md` 新增「图像层与材质补全（P8）」一节（五步的规则表、已知差异、语料与解锁、对比台），能力表的 `alphawriting` 一行更正；
+  - `cocs/README.md` 的场景文档条目加 P8 一条与对应的适用场景；
+  - `versions/latest/regression.md` 加 P8 一节（Q0–Q12，Q10 解锁场景的实时运行、Q11 其它显卡上的 A2C、Q12 被依赖图层的 effect 开关待测）；
+  - `versions/latest/changelog.md` 用户侧与开发侧各一条；
+  - `PLAN.md` 的 P8 标完成。
+- **发现、不在 P8**：`3243449890` 的工坊 effect `auto_sway` 顶点输出超过 WebGPU 的 16 个阶段间变量，建管线失败（varying 布局由 P7e 处理）。

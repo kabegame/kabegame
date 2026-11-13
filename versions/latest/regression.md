@@ -259,6 +259,26 @@
 | [x] | T6 黑字层合成 RT 对 WPE RT 7128 | 同 T5 | `trace.readback` 选黑字层的合成 pass，`pass-<下标>.png` 和 WPE 的 RT 逐像素比 | 能比；差异落到具体的 draw | 2026-11-14 Claude：pass 2（黑字层画字形）读回和 WPE RT 7128（事件 59）RGBA 逐像素 0 差异，差异因此只在上屏的 draw |
 | [ ] | T7 护栏 | 同 T2 | 读回很多个 4K 浮点 pass（超过 64 MB）；旧宿主产物带 `trace` | 413 不取；409 `[host]` | |
 
+## 场景壁纸 P8：图像层与材质补全（合成 RT 的采样、形状、对齐、图层依赖、写入状态）
+
+2026-11-13–14。图像层上五处对齐 WPE：合成 RT 按对象的 `clampuvs` / `nointerpolation` 采样；形状对象按第一个 effect 的四个点画四边形；图像层 `alignment` 的偏移只进图层画自己的矩阵；`dependencies` 让被依赖的图层出独占的合成 RT、材质按名字 `_rt_imageLayerComposite_<id>_a` 引用；材质的 `alphawriting` 与 `alphatocoverage`（单采样下在着色器里丢弃 alpha ≤ 0.5 的片元）。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase8/p8-REPORT.md`，逐步的验收数据见 `phase-8-image-material.md`「实施记录」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Q0 单测与检查 | Windows | 每步在 HEAD 快照与合并后的工作区跑 `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error；除已知失败外全过 | 2026-11-14 Claude：步骤 5 的快照 127 个文件 3082 个用例全过（`pipeline.test.ts` 的请求上限步骤 4 已放宽，另断言同一路径同一区间不请求第二次） |
+| [x] | Q1 语料 | Node，173 → 183 个工程 | 每步前后重扫 `unsupported`（`kbp regress --corpus`） | 只去掉本步的键，没有新增的键，原来能渲染的不掉出 | 2026-11-14 Claude：五步分别去掉 `object:clampuvs` / `object:nointerpolation`、`object:shape`、`object:alignment` / `script:api:layer.alignment`、`object:dependencies` / `texture:rendertarget:_rt_imageLayerComposite_*`、`material:alphawriting` / `blend:alphatocoverage`；解锁 `3668499717`、`3656079027`、`3811764016`、`3812887609`、`3819646765`、`3821678218`；用到 P8 的 57 张能渲染 10 张，P8 的键清零 |
+| [x] | Q2 回放案例 | Node | 每步 `kbp regress` 两份源码 | 粒子回放案例逐字节相同 | 2026-11-14 Claude：每步都相同；步骤 3 的 `f1`、步骤 4 的 `f3`、步骤 5 的 `e4` 两边同样失败，是别的会话新加的案例或基线就有 |
+| [x] | Q3 合成 RT 的采样 | Windows dev + WPE 抓帧 | `p8-clamp`、`p8-clamp2` 按日志回放，和 WPE 比 | 0 差异 | 2026-11-13 Claude：0 差异（改前 `p8-clamp` 差 106776 个像素）；`3832772446` 受影响的图层从重复变钳制，和 WPE 比差 > 32 的占 0.21%，在缩放轮廓上 |
+| [x] | Q4 形状 | Windows dev + WPE 抓帧 | `p8-shape`、`p8-shape2` 比整帧；形状的四角对 RenderDoc `vs_out`；解锁的 5 张各抓一帧按日志回放比 | 整帧最大差 ≤ 6；四角 < 0.01 像素；光束没有缺失或错位 | 2026-11-13 Claude：`p8-shape` 最大差 6、`p8-shape2` 2；四角最大差 8.1e-5；5 张差 > 32 的占 0.02%–0.65%，在随机粒子与缩放轮廓上 |
+| [x] | Q5 对齐 | Windows dev + WPE 抓帧 | `p8-align`、`p8-align2` 比整帧与四角；`p8-par` 的脚本 `layer.alignment` 在应用预览里实测 | 四角 < 0.01 像素；脚本读写与 WPE 日志逐字相同 | 2026-11-13 Claude：`p8-align` 最大差 1；`p8-align2` 只差 F1 一行（各向异性）；四角最大差 1.9e-4；预览里跑满 495 帧，脚本日志与 WPE 相同 |
+| [x] | Q6 图层依赖 | Windows dev + WPE 抓帧 | `p8-dep`、`p8-dep2`、`p8-misc` 按日志回放比；`p8-dep` 的 B3（排在被依赖者前面）用探针 `profile: 1` 先编码上一帧 | 0 差异；B3 是上一帧的颜色 | 2026-11-14 Claude：`p8-dep2` 0 差异；`p8-dep` B3 = (246, 8, 127)，同 WPE 第 160 帧；`p8-misc` 的 A13（隐藏组合层）、A14（画面外）相同 |
+| [x] | Q7 依赖的语料场景 | Windows dev | 9 张有依赖的场景编译后查绑定；强制渲染 `2251857160`、`3554161528`、`3276911872`（打开 4 个引用方的可见性属性，逐 draw 轨迹核对） | 引用 pass 都绑独占 RT、没有棋盘格；没有 WebGPU 校验错误 | 2026-11-14 Claude：45 个引用 pass 全部绑对；三张都没有校验错误；`3243449890` 另有工坊 effect 超过 16 个阶段间变量建不出管线，和 P8 无关 |
+| [x] | Q8 写入状态 | Windows dev + WPE 抓帧 | `p8-a2c`、`p8-misc`、`p8-alpha` 按日志回放比；逐 draw 轨迹读每次绘制的写掩码与 A2C | A2C 渐变与 W2 0 差异；写掩码对上 p8-REPORT 的实测表 | 2026-11-14 Claude：`p8-a2c` 只有 CLK 差 1、`p8-misc` 0 差异；`p8-alpha` 除 X 组都是 0（X 组是测试工程的 fbo pass 乘了 MVP，见实施记录）；九种写掩码与 W1 / W2 全部对上 |
+| [x] | Q9 A2C 的语料场景 | Windows dev | 强制渲染 `3611425904`、`3783690410` | A2C 管线建成、没有校验错误 | 2026-11-14 Claude：成立；`3783690410` 是 effect 末 pass 借基础材质的 A2C 上屏 |
+| [ ] | Q10 解锁场景实时运行 | Windows dev | 把 6 张解锁场景分别在图库预览里打开、设为桌面壁纸 | 画面与作者预览一致、不卡、不退回预览图；形状光束随时间流动 | 只做过屏外宿主的回放比图，没在实时预览与桌面看 |
+| [ ] | Q11 A2C 在其它显卡上 | 其它 Windows 机器（AMD / Intel） | 打开 `3611425904`，看 A2C 图层边缘 | 和 WPE 在同一台机器上一致 | 单采样 A2C 的覆盖由驱动决定，阈值是在本机 NVIDIA 上实测的 |
+| [ ] | Q12 被依赖图层的 effect 开关 | Windows dev | 找一张被依赖图层带可开关 effect 的场景（语料暂无），运行中切换 | 引用方画面跟着变、没有闪烁或残留 | 语料 0 张；WPE 切换时销毁重建独占 RT（读码，没实测），我们跨重建保留 |
+
 ## 场景壁纸 P5c：静态网格（mdl 模型对象）
 
 2026-11-13 Windows dev。P5c 分 3 步加收尾：
