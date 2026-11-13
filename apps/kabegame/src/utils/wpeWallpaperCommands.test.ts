@@ -7,9 +7,9 @@ const success = vi.hoisted(() => vi.fn());
 const failure = vi.hoisted(() => vi.fn());
 const invoke = vi.hoisted(() => vi.fn());
 
-vi.mock("@kabegame/element-plus", () => ({
-  ElMessage: { success, error: failure },
-  ElMessageBox: { confirm },
+vi.mock("@/components/ui/toast", () => ({ toast: { success, error: failure } }));
+vi.mock("@/components/ui/messageBox", () => ({
+  messageBox: { confirm },
 }));
 vi.mock("@/api", () => ({ invoke }));
 

@@ -1,21 +1,15 @@
 <template>
-  <el-switch :model-value="switchOn" @update:model-value="(v) => onSwitch(v === true)" />
+  <Switch :model-value="modelValue === true" @update:model-value="(v) => emit('update:modelValue', v === true)" />
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import Switch from "@/components/ui/Switch.vue";
 
-const props = defineProps<{
+defineProps<{
   modelValue: unknown;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
 }>();
-
-const switchOn = computed(() => props.modelValue === true);
-
-function onSwitch(val: boolean) {
-  emit("update:modelValue", val);
-}
 </script>

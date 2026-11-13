@@ -62,7 +62,7 @@ const handleChange = (event: Event) => {
   width: 100%;
   margin: 0;
   cursor: pointer;
-  accent-color: #ff5fb8;
+  accent-color: var(--kb-accent);
 
   &.vertical {
     width: 104px;

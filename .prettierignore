@@ -10,11 +10,6 @@ packages/kabegame-plugin-sdk
 packages/kabegame-types
 packages/photoswipe-vue
 
-# ---- vendored fork（普通目录）：保持与上游 diff 可比 ----
-# 这两个包是 fork 上游并手工维护的，整包格式化会让后续跟上游同步无法阅读 diff。
-packages/kabegame-element-plus
-packages/kabegame-element-plus-icons
-
 # ---- 生成物：由代码生成，改了也会被下次生成覆盖 ----
 packages/kabegame-pathql-client/index.ts
 

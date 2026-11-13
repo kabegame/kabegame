@@ -1,5 +1,5 @@
 <template>
-  <el-input
+  <Input
     ref="inputRef"
     :model-value="valueForInput"
     :placeholder="placeholder"
@@ -11,7 +11,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { InputInstance } from "@kabegame/element-plus";
+import Input from "@/components/ui/Input.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -26,7 +26,7 @@ defineEmits<{
   "update:modelValue": [value: string];
 }>();
 
-const inputRef = ref<InputInstance>();
+const inputRef = ref<InstanceType<typeof Input>>();
 
 const valueForInput = computed(() => {
   return typeof props.modelValue === "string" ? props.modelValue : "";

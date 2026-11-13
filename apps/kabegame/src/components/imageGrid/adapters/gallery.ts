@@ -1,4 +1,4 @@
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
@@ -28,7 +28,7 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
 
   const resetGalleryRouteAfterLoadError = async () => {
     if (isDefaultGalleryRoute()) return;
-    ElMessage.warning(t("gallery.galleryPathLoadFailedClearFilters"));
+    kameMessage.warning(t("gallery.galleryPathLoadFailedClearFilters"));
     await resetGalleryRouteToDefault();
   };
 

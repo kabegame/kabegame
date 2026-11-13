@@ -1,31 +1,40 @@
 <template>
-  <div class="page-header" :class="{ sticky: props.sticky, 'is-compact': uiStore.isCompact }">
-    <div class="left">
-      <el-button v-if="showBack" circle @click="$emit('back')">
-        <el-icon>
-          <ArrowLeft />
-        </el-icon>
-      </el-button>
-      <div v-if="$slots.icon" class="icon-slot">
+  <!-- 类名 page-header / title / subtitle / left / right 保留：外部样式与测试按它们定位 -->
+  <header
+    class="page-header box-border flex h-16 shrink-0 items-center justify-between gap-4 mb-5 px-4 border border-solid border-kb-line bg-kb-surface backdrop-blur-xl backdrop-saturate-150"
+    :class="[
+      props.sticky ? 'sticky top-0 z-100' : '',
+      uiStore.isCompact ? 'is-compact rounded-none border-x-0 border-t-0' : 'rounded-kb-lg shadow-kb-sm',
+    ]"
+  >
+    <div class="left flex min-w-0 flex-1 items-center gap-3">
+      <Tooltip v-if="showBack" :content="t('header.back')">
+        <Button variant="ghost" size="icon" class="-ml-1.5" :aria-label="t('header.back')" @click="$emit('back')">
+          <ChevronLeft />
+        </Button>
+      </Tooltip>
+      <div
+        v-if="$slots.icon"
+        class="box-border flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-kb-md border border-solid border-kb-line bg-kb-surface-raised"
+      >
         <slot name="icon" />
       </div>
-      <div class="text">
-        <div class="title" :class="{ 'has-slot': $slots.title }">
-          <slot name="title">
-            <span class="title-text">{{ title }}</span>
-          </slot>
-        </div>
-        <div class="subtitle" v-if="subtitle || $slots.subtitle">
-          <slot name="subtitle">
-            {{ subtitle }}
-          </slot>
+      <div class="flex min-w-0 flex-col gap-0.5">
+        <h1 class="title m-0 truncate text-[17px] font-600 leading-6 tracking-[-0.01em] text-kb-fg">
+          <slot name="title">{{ title }}</slot>
+        </h1>
+        <div
+          v-if="subtitle || $slots.subtitle"
+          class="subtitle truncate text-[12.5px] leading-[18px] text-kb-fg-muted tabular-nums"
+        >
+          <slot name="subtitle">{{ subtitle }}</slot>
         </div>
       </div>
-      <div v-if="$slots.left" class="left-slot">
+      <div v-if="$slots.left" class="ml-auto flex items-center gap-2">
         <slot name="left" />
       </div>
     </div>
-    <div class="right">
+    <div class="right flex shrink-0 items-center gap-1">
       <slot name="extra" />
       <!-- 自定义 slot 优先 -->
       <slot v-if="$slots.default" />
@@ -39,36 +48,41 @@
             @action="(data: any) => $emit('action', { id: featureId, data })"
           />
         </template>
-        <!-- fold overflow dropdown -->
-        <el-dropdown
-          v-if="fold && fold.length > 0"
-          trigger="click"
-          placement="bottom-end"
-          @command="(id: string) => $emit('action', { id, data: { type: 'click' } })"
-        >
-          <el-button circle>
-            <el-icon>
-              <MoreFilled />
-            </el-icon>
-          </el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item v-for="featureId in fold" :key="featureId" :command="featureId">
-                <el-icon v-if="getFoldIcon(featureId)" style="margin-right: 8px; vertical-align: middle">
-                  <component :is="getFoldIcon(featureId)" />
-                </el-icon>
-                <span>{{ getFoldLabel(featureId) }}</span>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <DropdownMenu v-if="fold && fold.length > 0">
+          <Tooltip :content="t('header.more')">
+            <DropdownMenuTrigger as-child>
+              <Button variant="ghost" size="icon" :aria-label="t('header.more')">
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+          </Tooltip>
+          <DropdownMenuContent>
+            <DropdownMenuItem
+              v-for="featureId in fold"
+              :key="featureId"
+              @select="$emit('action', { id: featureId, data: { type: 'click' } })"
+            >
+              <component :is="getFoldIcon(featureId)" v-if="getFoldIcon(featureId)" />
+              <span>{{ getFoldLabel(featureId) }}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </template>
     </div>
-  </div>
+  </header>
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, MoreFilled } from "@kabegame/element-plus-icons";
+import { ChevronLeft, Ellipsis } from "@lucide/vue";
+import { useI18n } from "@kabegame/i18n";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Tooltip,
+} from "@/components/ui";
 import { useHeaderStore } from "../../stores/header";
 import { useUiStore } from "../../stores/ui";
 import HeaderActionButton from "./HeaderActionButton.vue";
@@ -94,6 +108,7 @@ defineEmits<{
   action: [payload: { id: string; data: { type: string; [key: string]: any } }];
 }>();
 
+const { t } = useI18n();
 const headerStore = useHeaderStore();
 const uiStore = useUiStore();
 
@@ -127,128 +142,11 @@ const getFoldIcon = (featureId: string) => {
 const getFoldLabel = (featureId: string) => headerStore.getFoldLabel(featureId);
 </script>
 
-<style scoped lang="scss">
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-  padding: 16px;
-  height: 64px;
-  background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(12px) saturate(180%);
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
-  border-radius: 12px;
-  box-shadow: var(--anime-shadow);
-
-  &.sticky {
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-
-  &.is-compact {
-    width: 100vw;
-    margin-right: calc(50% - 50vw);
-    margin-left: calc(50% - 50vw);
-  }
-
-  .left {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .left-slot {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-left: auto;
-
-    & > * {
-      margin: 0;
-    }
-  }
-
-  .right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    & > * {
-      margin: 0;
-    }
-  }
-
-  .text {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .title {
-    font-size: 22px;
-    font-weight: 700;
-    line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-
-    // 默认渐变文字效果（仅应用于默认的 title-text）
-    .title-text {
-      background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-
-    // 当使用插槽时，重置样式，让插槽内容自己控制
-    &.has-slot {
-      background: none;
-      -webkit-background-clip: unset;
-      -webkit-text-fill-color: unset;
-      background-clip: unset;
-    }
-  }
-
-  .subtitle {
-    color: var(--anime-text-muted);
-    font-size: 13px;
-    line-height: 1.2;
-  }
-
-  .icon-slot {
-    width: 64px;
-    height: 64px;
-    border-radius: 12px;
-    overflow: hidden;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--anime-bg-secondary);
-    border: 2px solid var(--anime-border);
-  }
-
-  // fold dropdown 样式
-  :deep(.el-dropdown-menu__item) {
-    display: flex;
-    align-items: center;
-    padding: 10px 16px;
-    font-size: 14px;
-    color: var(--anime-text-primary);
-
-    &:hover {
-      background-color: var(--el-fill-color-light);
-    }
-
-    .el-icon {
-      font-size: 16px;
-    }
-  }
+<style scoped>
+/* 紧凑布局下顶栏贴满视口宽度（父容器有左右内边距） */
+.page-header.is-compact {
+  width: 100vw;
+  margin-right: calc(50% - 50vw);
+  margin-left: calc(50% - 50vw);
 }
 </style>

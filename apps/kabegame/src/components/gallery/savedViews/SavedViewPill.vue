@@ -10,7 +10,7 @@
     <!-- 细边框：白色、黑色的色块不会融进 chip 背景 -->
     <span
       v-if="pill.swatch"
-      class="box-border h-2.5 w-2.5 flex-none rounded-[3px] border border-solid border-[var(--anime-border)]"
+      class="box-border h-2.5 w-2.5 flex-none rounded-[3px] border border-solid border-[var(--kb-line-strong)]"
       :style="{ backgroundColor: pill.swatch }"
     />
     <span v-if="pill.swatchLabel" class="truncate">{{ pill.swatchLabel }}</span>
@@ -31,15 +31,15 @@ const props = withDefaults(
 
 const variantClass = computed(() => {
   if (props.variant === "new") {
-    return "border-[var(--anime-primary)] bg-[color-mix(in_srgb,var(--anime-primary)_16%,var(--anime-bg-card))] text-[var(--anime-text-primary)]";
+    return "border-[var(--kb-accent)] bg-[color-mix(in_srgb,var(--kb-accent)_16%,var(--kb-surface-raised))] text-[var(--kb-fg)]";
   }
   if (props.variant === "removed") {
-    return "border-[var(--anime-border)] bg-transparent text-[var(--anime-text-secondary)] line-through";
+    return "border-[var(--kb-line-strong)] bg-transparent text-[var(--kb-fg-muted)] line-through";
   }
-  return "border-[var(--anime-border)] bg-[var(--anime-bg-card)] text-[var(--anime-text-primary)]";
+  return "border-[var(--kb-line-strong)] bg-[var(--kb-surface-raised)] text-[var(--kb-fg)]";
 });
 
 const iconClass = computed(() =>
-  props.variant === "removed" ? "text-[var(--anime-text-secondary)]" : "text-[var(--anime-primary)]",
+  props.variant === "removed" ? "text-[var(--kb-fg-muted)]" : "text-[var(--kb-accent)]",
 );
 </script>

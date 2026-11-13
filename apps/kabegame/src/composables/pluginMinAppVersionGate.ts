@@ -1,7 +1,7 @@
 import { i18n } from "@kabegame/i18n";
 import { openExternalLink } from "@/utils/openExternalLink";
-import { ElMessageBox } from "@kabegame/element-plus";
 import { useApp } from "@/stores/app";
+import { messageBox } from "@/components/ui/messageBox";
 
 const KABEGAME_RELEASES_LATEST = "https://github.com/kabegame/kabegame/releases/latest";
 
@@ -36,7 +36,7 @@ export function createMinAppVersionBeforeAddTaskGuard(pluginStore: PluginStoreLi
 
     const t = i18n.global.t;
     try {
-      await ElMessageBox.confirm(
+      await messageBox.confirm(
         t("plugins.minAppVersionBlockedMessage", { required: minV, current: cur }),
         t("plugins.minAppVersionBlockedTitle"),
         {

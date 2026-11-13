@@ -1,6 +1,7 @@
-import { ElMessage, ElMessageBox } from "@kabegame/element-plus";
 import { invoke } from "@/api";
 import type { CoverRegionScope } from "@/components/wallpaper/WallpaperPreviewCanvas.vue";
+import { messageBox } from "@/components/ui/messageBox";
+import { toast } from "@/components/ui/toast";
 
 type Translate = (key: string) => string;
 
@@ -11,10 +12,10 @@ type Translate = (key: string) => string;
 export async function captureWpeCover(imageId: string, source: CoverRegionScope, t: Translate): Promise<boolean> {
   try {
     await source((region) => invoke<string>("capture_wallpaper_cover", { imageId, region }));
-    ElMessage.success(t("gallery.wpeSetCoverDone"));
+    toast.success(t("gallery.wpeSetCoverDone"));
     return true;
   } catch (failure) {
-    ElMessage.error(`${t("gallery.wpeSetCoverFailed")}: ${String(failure)}`);
+    toast.error(`${t("gallery.wpeSetCoverFailed")}: ${String(failure)}`);
     return false;
   }
 }
@@ -25,14 +26,14 @@ export async function captureWpeCover(imageId: string, source: CoverRegionScope,
  */
 export async function clearWpeSceneStorage(imageId: string, t: Translate): Promise<void> {
   try {
-    await ElMessageBox.confirm(t("gallery.wpeClearStorageConfirm"), t("gallery.wpeClearStorage"), { type: "warning" });
+    await messageBox.confirm(t("gallery.wpeClearStorageConfirm"), t("gallery.wpeClearStorage"), { type: "warning" });
   } catch {
     return;
   }
   try {
     await invoke("wpe_scene_clear_storage", { imageId });
-    ElMessage.success(t("gallery.wpeClearStorageDone"));
+    toast.success(t("gallery.wpeClearStorageDone"));
   } catch (failure) {
-    ElMessage.error(`${t("gallery.wpeClearStorageFailed")}: ${String(failure)}`);
+    toast.error(`${t("gallery.wpeClearStorageFailed")}: ${String(failure)}`);
   }
 }

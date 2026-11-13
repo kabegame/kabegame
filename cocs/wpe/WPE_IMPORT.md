@@ -300,7 +300,7 @@ Rust 不解析场景）推导不出来，只有缓存里才有。
 壁纸窗口与主窗口加载同一个 `index.html`，URL 为 `index.html?window=wallpaper&slot=<label 在池里的序号>`（`slot` 页面不读，
 只为让调试工具按 URL 分清窗口）。
 `main.ts` 只做分发：按 `windowKind.ts` 的 `WINDOW_KIND` 动态导入 `bootstrap/app.ts`（主界面，原 `main.ts` 全部内容）
-或 `bootstrap/wallpaper.ts`（只装 pinia、i18n、UnoCSS 与主题变量，不装 router / 组件库 / vant，不 `loadAll` 设置）。
+或 `bootstrap/wallpaper.ts`（只装 pinia、i18n、UnoCSS 与主题变量，不装 router 与主界面组件，不 `loadAll` 设置）。
 Web 发布版与 Android 硬门控为主窗口。
 
 - `views/WallpaperWindow.vue`：壁纸窗口根，负责 init 看门狗（`sessionStorage.wallpaperInitRetry` + reload）、挂载即监听并按 label 应答 `wallpaper-ping`、`setting-change`

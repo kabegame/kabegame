@@ -1,34 +1,32 @@
 <template>
   <!-- 收藏视图编辑：改名、用当前视图更新（先预览差异），确定才写库。点一行只是应用，改收藏只走这里。 -->
   <div class="flex min-w-0 flex-col gap-3">
-    <div v-if="showTitle" class="text-sm font-medium text-[var(--anime-text-primary)]">
+    <div v-if="showTitle" class="px-0.5 text-[14px] font-600 text-kb-fg">
       {{ t("gallery.savedViewEditorTitle") }}
     </div>
 
     <div>
-      <el-input
+      <Input
         ref="nameInputRef"
         v-model="nameDraft"
-        size="small"
+        size="sm"
         :placeholder="targetPath"
         :aria-label="t('gallery.savedViewName')"
+        :invalid="!!nameError"
         maxlength="80"
         @keydown.enter.prevent="confirm"
       />
-      <p
-        class="m-0 mt-1 px-0.5 text-[11px]"
-        :class="nameError ? 'text-[var(--anime-danger)]' : 'text-[var(--anime-text-secondary)] opacity-80'"
-      >
+      <p class="m-0 mt-1 px-0.5 text-[11.5px]" :class="nameError ? 'text-kb-danger' : 'text-kb-fg-muted'">
         {{ nameError || t("gallery.savedViewNameHint") }}
       </p>
     </div>
 
     <!-- 用当前视图更新：相同 / 当前视图已被别的收藏占用 / 可更新（再点撤销） -->
     <div class="flex flex-wrap items-center gap-2">
-      <p v-if="currentSavedAs && !useCurrent" class="m-0 text-xs text-[var(--anime-danger)]">
+      <p v-if="currentSavedAs && !useCurrent" class="m-0 text-[12px] text-kb-danger">
         {{ t("gallery.savedViewPathConflict", { name: savedViewDisplayName(currentSavedAs) }) }}
       </p>
-      <el-button v-else size="small" :disabled="sameAsCurrent && !useCurrent" @click="useCurrent = !useCurrent">
+      <Button v-else size="sm" :disabled="sameAsCurrent && !useCurrent" @click="useCurrent = !useCurrent">
         {{
           useCurrent
             ? t("gallery.savedViewUndoUpdate")
@@ -36,11 +34,11 @@
               ? t("gallery.savedViewSameAsCurrent")
               : t("gallery.savedViewUpdateFromCurrent")
         }}
-      </el-button>
+      </Button>
     </div>
     <p
       v-if="useCurrent"
-      class="m-0 rounded-lg bg-[color-mix(in_srgb,var(--anime-primary)_10%,transparent)] px-2.5 py-1.5 text-xs text-[var(--anime-text-primary)]"
+      class="m-0 rounded-kb-md bg-[color-mix(in_srgb,var(--kb-accent)_8%,transparent)] px-2.5 py-1.5 text-[12px] text-kb-fg"
     >
       {{ t("gallery.savedViewPreviewHint") }}
     </p>
@@ -48,10 +46,11 @@
     <SavedViewCombination :query="shown.query" :sort="shown.sort" :path="shown.path" :base="base" />
 
     <div class="flex justify-end gap-2">
-      <el-button size="small" @click="emit('cancel')">{{ t("common.cancel") }}</el-button>
-      <el-button size="small" type="primary" :loading="saving" :disabled="!!nameConflict" @click="confirm">
+      <Button size="sm" @click="emit('cancel')">{{ t("common.cancel") }}</Button>
+      <Button size="sm" variant="primary" :disabled="!!nameConflict || saving" @click="confirm">
+        <Spinner v-if="saving" :size="12" />
         {{ t("common.ok") }}
-      </el-button>
+      </Button>
     </div>
   </div>
 </template>
@@ -59,6 +58,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
+import { Button, Input, Spinner } from "@/components/ui";
 import { parseComposablePath, type GallerySort } from "@/utils/galleryPath";
 import type { GalleryQuery } from "@/utils/galleryQuery";
 import {
@@ -69,7 +69,7 @@ import {
   type SavedView,
 } from "@/utils/savedViews";
 import { SavedViewConflictError, updateSavedView } from "@/services/savedViews";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { logger } from "@/utils/logger";
 import SavedViewCombination from "./SavedViewCombination.vue";
 
@@ -148,7 +148,7 @@ async function confirm() {
           : t("gallery.savedViewPathConflict", { name });
     } else {
       logger.error("更新收藏视图失败:", error);
-      ElMessage.error(t("gallery.savedViewSaveFailed"));
+      kameMessage.error(t("gallery.savedViewSaveFailed"));
     }
   } finally {
     saving.value = false;

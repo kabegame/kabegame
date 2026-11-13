@@ -1,18 +1,16 @@
 <template>
-  <el-dialog
-    append-to-body
-    :model-value="open"
-    :z-index="zIndex"
+  <Dialog
+    :open="open"
     :title="$t('albums.addToAlbumTitle')"
-    width="420px"
-    @update:model-value="
+    :width="420"
+    @update:open="
       (v: boolean) => {
         if (!v) emit('close');
       }
     "
   >
-    <el-form label-width="80px">
-      <el-form-item :label="$t('albums.selectAlbum')">
+    <div class="flex flex-col gap-4 [--kb-field-label-width:100px]">
+      <Field :label="$t('albums.selectAlbum')" orientation="horizontal">
         <AlbumPicker
           v-model="selectedAlbumId"
           :scope="albumScope"
@@ -21,54 +19,57 @@
           :placeholder="$t('albums.chooseAlbumPlaceholder')"
           :picker-title="$t('albums.selectAlbum')"
         />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
+      </Field>
+      <Field v-if="isCreatingNewAlbum" :label="$t('albums.placeholderName')" orientation="horizontal" required>
+        <Input
+          ref="newAlbumNameInputRef"
           v-model="newAlbumName"
           :placeholder="$t('albums.placeholderName')"
           maxlength="50"
-          show-word-limit
           @keyup.enter="handleCreateAndAddAlbum"
-          ref="newAlbumNameInputRef"
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.parentAlbum')">
+        >
+          <template #suffix>
+            <span class="text-[11.5px] tabular-nums">{{ newAlbumName.length }}/50</span>
+          </template>
+        </Input>
+      </Field>
+      <Field v-if="isCreatingNewAlbum" :label="$t('albums.parentAlbum')" orientation="horizontal">
         <AlbumPicker
           v-model="newAlbumParentId"
           :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')"
         />
-      </el-form-item>
-    </el-form>
+      </Field>
+    </div>
     <template #footer>
-      <el-button @click="emit('close')">{{ $t("common.cancel") }}</el-button>
-      <el-button
+      <Button @click="emit('close')">{{ $t("common.cancel") }}</Button>
+      <Button
         v-if="isCreatingNewAlbum"
-        type="primary"
+        variant="primary"
         :disabled="!newAlbumName.trim()"
         @click="handleCreateAndAddAlbum"
       >
         {{ $t("common.confirm") }}
-      </el-button>
-      <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">
+      </Button>
+      <Button v-else variant="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">
         {{ $t("common.confirm") }}
-      </el-button>
+      </Button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, addTaskImagesToAlbum, createAlbum } from "@/services/albums";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
+import { Button, Dialog, Field, Input } from "@/components/ui";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
 
 interface Props {
   open: boolean;
-  zIndex: number;
   /** 要加入画册的图片 id；在任务一键加入时可不传，改传 taskId 由后端取任务全部图片 */
   imageIds: string[];
   /**
@@ -99,7 +100,7 @@ const albumScope = computed(() => ({
 const selectedAlbumId = ref<string | null>(null);
 const newAlbumName = ref<string>("");
 const newAlbumParentId = ref<string | null>(null);
-const newAlbumNameInputRef = ref<any>(null);
+const newAlbumNameInputRef = ref<InstanceType<typeof Input> | null>(null);
 
 // 是否正在创建新画册
 const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
@@ -155,7 +156,7 @@ const handleCreateAndAddAlbum = async () => {
   }
 
   if (!newAlbumName.value.trim()) {
-    ElMessage.warning(t("albums.enterAlbumNameFirst"));
+    kameMessage.warning(t("albums.enterAlbumNameFirst"));
     return;
   }
 
@@ -168,10 +169,10 @@ const handleCreateAndAddAlbum = async () => {
 
     if (isTaskMode) {
       const result = await runMutation(() => addTaskImagesToAlbum(props.taskId!, created.id));
-      ElMessage.success(t("albums.createAlbumAndAddTask", { name: created.name, count: result.added }));
+      kameMessage.success(t("albums.createAlbumAndAddTask", { name: created.name, count: result.added }));
     } else {
       const result = await runMutation(() => addImagesToAlbum(created.id, props.imageIds));
-      ElMessage.success(t("albums.createAlbumAndAdd", { name: created.name, count: result.added }));
+      kameMessage.success(t("albums.createAlbumAndAdd", { name: created.name, count: result.added }));
     }
 
     emit("close");
@@ -179,7 +180,7 @@ const handleCreateAndAddAlbum = async () => {
   } catch (error: any) {
     console.error("创建画册并加入图片失败:", error);
     const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "操作失败";
-    ElMessage.error(errorMessage);
+    kameMessage.error(errorMessage);
   }
 };
 
@@ -192,7 +193,7 @@ const confirmAddToAlbum = async () => {
 
   const albumId = selectedAlbumId.value;
   if (!albumId) {
-    ElMessage.warning(t("albums.selectAlbumFirst"));
+    kameMessage.warning(t("albums.selectAlbumFirst"));
     return;
   }
 
@@ -200,9 +201,9 @@ const confirmAddToAlbum = async () => {
     if (isTaskMode) {
       const result = await runMutation(() => addTaskImagesToAlbum(props.taskId!, albumId));
       if (result.added === 0) {
-        ElMessage.info(t("albums.allInAlbum"));
+        kameMessage.info(t("albums.allInAlbum"));
       } else {
-        ElMessage.success(t("albums.addedToAlbum", { count: result.added }));
+        kameMessage.success(t("albums.addedToAlbum", { count: result.added }));
       }
       emit("close");
       emit("added");
@@ -212,19 +213,19 @@ const confirmAddToAlbum = async () => {
     const result = await runMutation(() => addImagesToAlbum(albumId, props.imageIds));
     const skippedCount = result.attempted - result.added;
     if (result.added === 0) {
-      ElMessage.info(t("albums.allInAlbum"));
+      kameMessage.info(t("albums.allInAlbum"));
     } else {
       if (skippedCount > 0) {
-        ElMessage.warning(t("albums.skippedInAlbum", { count: skippedCount }));
+        kameMessage.warning(t("albums.skippedInAlbum", { count: skippedCount }));
       }
-      ElMessage.success(t("albums.addedToAlbum", { count: result.added }));
+      kameMessage.success(t("albums.addedToAlbum", { count: result.added }));
     }
     emit("close");
     emit("added");
   } catch (error: any) {
     console.error("加入画册失败:", error);
     const errorMessage = error?.message || String(error);
-    ElMessage.error(errorMessage || "加入画册失败");
+    kameMessage.error(errorMessage || "加入画册失败");
   }
 };
 </script>

@@ -5,6 +5,19 @@
   "decrease": "减少",
   "increase": "增加",
   "close": "关闭",
+  "imagePreview": "看图",
+  "previousImage": "上一张",
+  "nextImage": "下一张",
+  "zoomIn": "放大",
+  "zoomOut": "缩小",
+  "resetZoom": "复位缩放",
+  "clear": "清空",
+  "selectAll": "全选",
+  "deselectAll": "取消全选",
+  "moveUp": "向上移动",
+  "moveDown": "向下移动",
+  "moveLeft": "向左移动",
+  "moveRight": "向右移动",
   "save": "保存",
   "refresh": "刷新",
   "exit": "退出",
@@ -114,5 +127,11 @@
     "analyze": "正在优化数据库…",
     "services": "正在启动服务…",
     "failed": "启动失败"
-  }
+  },
+  "prevYear": "上一年",
+  "prevMonth": "上个月",
+  "nextMonth": "下个月",
+  "nextYear": "下一年",
+  "today": "今天",
+  "addCustom": "添加「{value}」"
 }

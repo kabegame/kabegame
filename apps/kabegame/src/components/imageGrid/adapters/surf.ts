@@ -1,4 +1,4 @@
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
@@ -28,7 +28,7 @@ export function createSurfImagesAdapter(params: {
     onCountError: (_error, ctx) => ctx.images.value.length,
     onLoadError: (error) => {
       const e = error as { message?: string } | null;
-      ElMessage.error(e?.message || String(error) || t("surf.loadImagesFailed"));
+      kameMessage.error(e?.message || String(error) || t("surf.loadImagesFailed"));
     },
     refreshOn: [
       addedTrigger(view, (image) => !!params.recordId() && image.surfRecordId === params.recordId()),

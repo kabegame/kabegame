@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="title || t('gallery.wpePropsTitle')" width="min(620px, 94vw)" append-to-body>
+  <Dialog v-model:open="visible" :title="title || t('gallery.wpePropsTitle')" :width="620">
     <!-- 限高后由面板内容区滚动（Slideshow 这类壁纸有上百项） -->
     <WpeWebPropertiesPanel
       v-if="imageId"
@@ -9,13 +9,13 @@
       :collapsible="false"
       :fill-when-expanded="false"
     />
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "@/composables/useModalBack";
+import { Dialog } from "@/components/ui";
 import WpeWebPropertiesPanel from "./WpeWebPropertiesPanel.vue";
 
 /**
@@ -34,5 +34,4 @@ const props = withDefaults(
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
 const { t } = useI18n();
 const visible = computed({ get: () => props.modelValue, set: (value) => emit("update:modelValue", value) });
-useModalBack(visible);
 </script>

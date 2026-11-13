@@ -1,6 +1,6 @@
 import { onScopeDispose, ref, shallowRef, watch, type Ref, type ShallowRef } from "vue";
-import { ElMessage } from "@kabegame/element-plus";
 import { invoke } from "@/api";
+import { toast } from "@/components/ui/toast";
 import { kbEvent$ } from "@/services/kbEvents/eventSource";
 import { useI18n } from "@kabegame/i18n";
 
@@ -110,7 +110,7 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
         accept(id, request, saved);
       }
     } catch (failure) {
-      ElMessage.error(`${t("gallery.wpePropsSaveFailed")}: ${String(failure)}`);
+      toast.error(`${t("gallery.wpePropsSaveFailed")}: ${String(failure)}`);
       if (activeId === id) {
         for (const [key, value] of Object.entries(changes))
           if (Object.is(draft.value[key], value)) delete draft.value[key];

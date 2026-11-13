@@ -1,26 +1,26 @@
 import {
-  Brush,
   Camera,
-  InfoFilled,
-  DocumentCopy,
-  FolderOpened,
-  Folder,
-  Monitor,
-  Picture,
-  Star,
-  StarFilled,
-  VideoPause,
-  VideoPlay,
-  FolderAdd,
+  Copy,
   Download,
-  Delete,
-  More,
-  Share,
-  Hide,
-  View,
-  PriceTag,
-} from "@kabegame/element-plus-icons";
-import type { ActionItem, ActionContext } from "@/actions/types";
+  Ellipsis,
+  Eye,
+  EyeOff,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Image as ImageIcon,
+  Info,
+  Monitor,
+  Paintbrush,
+  Pause,
+  Play,
+  Share2,
+  Star,
+  Tag,
+  Trash2,
+} from "@lucide/vue";
+import { StarFilled } from "@/components/ui/icons";
+import { iconBy, type ActionItem, type ActionContext } from "@/actions/types";
 import type { ImageInfo } from "@/types/image";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { i18n } from "@kabegame/i18n";
@@ -44,7 +44,7 @@ export interface ImageActionContext extends ActionContext<ImageInfo> {
 }
 
 /** 设为壁纸：桌面与 Android 设的是系统壁纸，Web 版设的是应用背景 */
-const WALLPAPER_ICON = IS_WEB ? Picture : Monitor;
+const WALLPAPER_ICON = IS_WEB ? ImageIcon : Monitor;
 
 export interface CreateImageActionsOptions {
   /** Custom text for remove action (e.g., "删除" | "从画册移除") */
@@ -96,7 +96,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       // 排第一：预览壁纸时最常用
       key: "pauseWallpaper",
       label: (ctx) => (wallpaperPreviewOf(ctx)?.paused ? t("gallery.wpeResume") : t("gallery.wpePause")),
-      icon: (ctx: ActionContext<ImageInfo>) => (wallpaperPreviewOf(ctx)?.paused ? VideoPlay : VideoPause),
+      icon: iconBy<ImageInfo>((ctx) => (wallpaperPreviewOf(ctx)?.paused ? Play : Pause)),
       command: "pauseWallpaper",
       // 暂停的是预览里这一份实例，画廊里没有
       visible: (ctx) => !hideSet.has("pauseWallpaper") && isSingle(ctx) && !!wallpaperPreviewOf(ctx),
@@ -106,28 +106,28 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       key: "favorite",
       label: (ctx: ActionContext<ImageInfo>) =>
         ctx.target?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"),
-      icon: (ctx: ActionContext<ImageInfo>) => (ctx.target?.favorite ? StarFilled : Star),
+      icon: iconBy<ImageInfo>((ctx) => (ctx.target?.favorite ? StarFilled : Star)),
       command: "favorite",
       visible: () => !hideSet.has("favorite"),
     },
     {
       key: "detail",
       label: t("contextMenu.detail"),
-      icon: InfoFilled,
+      icon: Info,
       command: "detail",
       visible: (ctx) => canDetail() && !uiStore.isCompact && isSingle(ctx),
     },
     {
       key: "share",
       label: t("contextMenu.share"),
-      icon: Share,
+      icon: Share2,
       command: "share",
       visible: (ctx) => canShare() && !uiStore.isCompact && isSingle(ctx) && !isWpeTarget(ctx),
     },
     {
       key: "copy",
       label: IS_WEB ? t("contextMenu.downloadImage") : t("contextMenu.copyImage"),
-      icon: IS_WEB ? Download : DocumentCopy,
+      icon: IS_WEB ? Download : Copy,
       command: IS_WEB ? "download" : "copy",
       visible: (ctx) => {
         if (hideSet.has("copy") || isWpeTarget(ctx)) return false;
@@ -145,7 +145,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "copyLabels",
       label: t("contextMenu.copyLabels"),
-      icon: PriceTag,
+      icon: Tag,
       command: "copyLabels",
       // 单选桌面端：标签需异步查询，无标签时点击后提示而非预先禁用
       visible: (ctx) =>
@@ -154,7 +154,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "open",
       label: t("contextMenu.open"),
-      icon: FolderOpened,
+      icon: FolderOpen,
       command: "open",
       visible: (ctx) => !hideSet.has("open") && (!ctx.selectedCount || ctx.selectedCount === 1),
     },
@@ -196,7 +196,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "clearStorage",
       label: t("gallery.wpeClearStorage"),
-      icon: Brush,
+      icon: Paintbrush,
       command: "clearStorage",
       // 清空由后端广播给正在运行的场景宿主，没有实例时没人收、不生效
       visible: (ctx) =>
@@ -205,7 +205,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "addToAlbum",
       label: t("contextMenu.addToAlbum"),
-      icon: FolderAdd,
+      icon: FolderPlus,
       command: "addToAlbum",
       // On Android single-select: only in more submenu
       visible: (ctx) =>
@@ -217,7 +217,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       key: "addToHidden",
       label: (ctx: ActionContext<ImageInfo>) =>
         ctx.target?.isHidden ? t("contextMenu.unhide") : t("contextMenu.hide"),
-      icon: (ctx: ActionContext<ImageInfo>) => (ctx.target?.isHidden ? View : Hide),
+      icon: iconBy<ImageInfo>((ctx) => (ctx.target?.isHidden ? Eye : EyeOff)),
       command: "addToHidden",
       // On Android single-select: only in more submenu
       visible: (ctx) =>
@@ -227,7 +227,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "more",
       label: t("contextMenu.more"),
-      icon: More,
+      icon: Ellipsis,
       command: "more",
       visible: (ctx) => {
         if (hideSet.has("more")) return false;
@@ -239,35 +239,35 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
             {
               key: "detail",
               label: t("contextMenu.detail"),
-              icon: InfoFilled,
+              icon: Info,
               command: "detail",
               visible: canDetail,
             },
             {
               key: "share",
               label: t("contextMenu.share"),
-              icon: Share,
+              icon: Share2,
               command: "share",
               visible: (ctx) => canShare() && !isWpeTarget(ctx),
             },
             {
               key: "copy",
               label: IS_WEB ? t("contextMenu.downloadImage") : t("contextMenu.copyImage"),
-              icon: IS_WEB ? Download : DocumentCopy,
+              icon: IS_WEB ? Download : Copy,
               command: IS_WEB ? "download" : "copy",
               visible: (ctx) => !hideSet.has("copy") && !isWpeTarget(ctx),
             },
             {
               key: "copyLabels",
               label: t("contextMenu.copyLabels"),
-              icon: PriceTag,
+              icon: Tag,
               command: "copyLabels",
               visible: () => !hideSet.has("copyLabels"),
             },
             {
               key: "addToAlbum",
               label: t("contextMenu.addToAlbum"),
-              icon: FolderAdd,
+              icon: FolderPlus,
               command: "addToAlbum",
               visible: () => !hideSet.has("addToAlbum"),
             },
@@ -275,14 +275,14 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
               key: "addToHidden",
               label: (ctx: ActionContext<ImageInfo>) =>
                 ctx.target?.isHidden ? t("contextMenu.unhide") : t("contextMenu.hide"),
-              icon: (ctx: ActionContext<ImageInfo>) => (ctx.target?.isHidden ? View : Hide),
+              icon: iconBy<ImageInfo>((ctx) => (ctx.target?.isHidden ? Eye : EyeOff)),
               command: "addToHidden",
               visible: () => !hideSet.has("addToHidden"),
             },
             {
               key: "remove",
               label: removeText,
-              icon: Delete,
+              icon: Trash2,
               command: "remove",
               dividerBefore: true,
               visible: () => !hideSet.has("remove"),
@@ -290,7 +290,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
             {
               key: "deleteFile",
               label: deleteText,
-              icon: Delete,
+              icon: Trash2,
               command: "deleteFile",
               dividerBefore: () => hideSet.has("remove"),
               visible: () => showDelete && !hideSet.has("deleteFile"),
@@ -301,7 +301,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "remove",
       label: removeText,
-      icon: Delete,
+      icon: Trash2,
       command: "remove",
       dividerBefore: true,
       // On Android single-select: only in more submenu
@@ -315,7 +315,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "deleteFile",
       label: deleteText,
-      icon: Delete,
+      icon: Trash2,
       command: "deleteFile",
       dividerBefore: (ctx) => {
         const removeVisible =
@@ -342,10 +342,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
         const target = ctx.target as ImageInfo | null;
         return target?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite");
       },
-      icon: (ctx: ActionContext<ImageInfo>) => {
-        const target = ctx.target as ImageInfo | null;
-        return target?.favorite ? StarFilled : Star;
-      },
+      icon: iconBy<ImageInfo>((ctx) => (ctx.target?.favorite ? StarFilled : Star)),
       command: "favorite",
       visible: (ctx) => {
         if (hideSet.has("favorite") || multiHideSet.has("favorite")) return false;
@@ -356,7 +353,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "addToAlbum",
       label: t("contextMenu.addToAlbum"),
-      icon: FolderAdd,
+      icon: FolderPlus,
       command: "addToAlbum",
       visible: (ctx) => {
         if (hideSet.has("addToAlbum") || multiHideSet.has("addToAlbum")) return false;
@@ -370,10 +367,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
         const target = ctx.target as ImageInfo | null;
         return target?.isHidden ? t("contextMenu.unhide") : t("contextMenu.hide");
       },
-      icon: (ctx: ActionContext<ImageInfo>) => {
-        const target = ctx.target as ImageInfo | null;
-        return target?.isHidden ? View : Hide;
-      },
+      icon: iconBy<ImageInfo>((ctx) => (ctx.target?.isHidden ? Eye : EyeOff)),
       command: "addToHidden",
       visible: (ctx) => {
         if (hideSet.has("addToHidden") || multiHideSet.has("addToHidden")) return false;
@@ -394,7 +388,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "remove",
       label: removeText,
-      icon: Delete,
+      icon: Trash2,
       command: "remove",
       dividerBefore: true,
       visible: (ctx) => {
@@ -406,7 +400,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
     {
       key: "deleteFile",
       label: deleteText,
-      icon: Delete,
+      icon: Trash2,
       command: "deleteFile",
       dividerBefore: (ctx) => {
         if (hideSet.has("remove")) return true;

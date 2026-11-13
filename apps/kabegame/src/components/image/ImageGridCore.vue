@@ -175,7 +175,8 @@
 
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
-import { FolderOpened, ZoomIn } from "@kabegame/element-plus-icons";
+import { FolderOpen, ZoomIn } from "@lucide/vue";
+import { isInAnyLayer } from "@/components/ui/layer";
 import { useI18n } from "@kabegame/i18n";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
@@ -192,6 +193,7 @@ import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 import { Plugin } from "@/stores/plugins";
 import type { ImagePrefer } from "@/types/image";
+import { vLoading } from "@/components/ui/loading";
 
 defineOptions({ name: "ImageGridCore" });
 
@@ -814,9 +816,9 @@ const handleRootClick = (event: MouseEvent) => {
     return;
   }
 
-  // 如果点击的是预览对话框相关元素（遮罩、对话框等），不处理清除选择
-  // Element Plus dialog 使用 teleport 渲染到 body，但点击遮罩关闭时可能事件仍会传播
-  if (target?.closest(".el-overlay") || target?.closest(".el-dialog") || target?.closest(".image-preview-dialog")) {
+  // 如果点击的是预览对话框或其它浮层（遮罩、对话框、菜单等），不处理清除选择
+  // 浮层 teleport 到 body，但点击遮罩关闭时事件仍可能沿组件树冒泡到这里
+  if (isInAnyLayer(target) || target?.closest(".image-preview-dialog")) {
     return;
   }
 
@@ -846,7 +848,7 @@ const resolveImageClickAction = () =>
         id: "open",
         title: t('common["imageClick.open.title"]'),
         desc: t('common["imageClick.open.desc"]'),
-        icon: markRaw(FolderOpened),
+        icon: markRaw(FolderOpen),
       },
     ],
   });
@@ -1100,7 +1102,7 @@ const handleSmoothWheel = (event: WheelEvent) => {
   // 预览 / 弹窗 / 抽屉打开时不接管滚动（避免底层 grid 跟着滚）
   if (isPreviewOpen.value) return;
   const target = event.target as HTMLElement | null;
-  if (target?.closest(".image-preview-dialog,.el-dialog,.el-drawer,.el-popper,.el-overlay,.pswp")) return;
+  if (isInAnyLayer(target) || target?.closest(".image-preview-dialog,.pswp")) return;
   // 事件目标不在当前 scrollEl 内部（例如冒泡自 teleport 的弹层）也不处理
   if (target && !el.contains(target)) return;
   // 嵌套滚动区（aside 树列、面包屑横滚等）优先消费 wheel：目标到 scrollEl 之间
@@ -1204,7 +1206,7 @@ onMounted(async () => {
         if (isPreviewOpen.value) return;
         // 检查事件是否来自预览对话框内部（双重保险）
         const target = e.target as HTMLElement | null;
-        if (target?.closest(".image-preview-dialog") || target?.closest(".el-dialog")) {
+        if (target?.closest(".image-preview-dialog") || isInAnyLayer(target)) {
           return;
         }
         const delta = e.deltaY > 0 ? 1 : -1;

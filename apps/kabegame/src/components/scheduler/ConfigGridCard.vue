@@ -1,11 +1,11 @@
 <template>
-  <!-- 与 PluginGridCard 同一套边框 / 圆角 / 悬停；固定三行：标题+动作、定时、结果或描述 -->
+  <!-- 与插件卡片同一套外框（细线、圆角、悬停加深与阴影）；固定三行：标题+动作、定时、结果或描述 -->
   <article
-    class="flex min-w-0 cursor-pointer flex-col gap-2.25 rounded-[14px] border-2 border-solid bg-[var(--anime-bg-card)] px-3 pb-2.5 pt-3 transition-[box-shadow,border-color] duration-300 hover:shadow-[var(--anime-shadow-hover)]"
+    class="box-border flex min-w-0 cursor-pointer flex-col gap-2.5 rounded-kb-lg border border-solid bg-kb-surface-raised px-3 pb-2.5 pt-3 outline-none transition-[border-color,box-shadow] duration-150 hover:shadow-kb-md focus-visible:ring-2 focus-visible:ring-kb-ring"
     :class="
       failed
-        ? 'border-[color-mix(in_srgb,var(--el-color-danger)_55%,transparent)] hover:border-[var(--el-color-danger)]'
-        : 'border-[var(--anime-border)] hover:border-[var(--anime-primary-light)]'
+        ? 'border-[color-mix(in_srgb,var(--kb-danger)_40%,transparent)] hover:border-[color-mix(in_srgb,var(--kb-danger)_65%,transparent)]'
+        : 'border-kb-line hover:border-kb-line-strong'
     "
     role="button"
     tabindex="0"
@@ -25,7 +25,7 @@
       <slot name="schedule" />
     </div>
     <div
-      class="flex min-h-[26px] min-w-0 items-center gap-1.75 border-0 border-t border-dashed border-[color-mix(in_srgb,var(--anime-primary)_16%,transparent)] pt-2 text-xs tabular-nums"
+      class="flex min-h-[26px] min-w-0 items-center gap-1.75 border-0 border-t border-solid border-kb-line pt-2 text-xs tabular-nums"
     >
       <slot name="footer" />
     </div>

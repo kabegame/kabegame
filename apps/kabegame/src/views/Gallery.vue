@@ -47,12 +47,10 @@
             <template #empty>
               <div v-if="!isRefreshing" :key="'empty-' + refreshKey" class="empty fade-in">
                 <EmptyState />
-                <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
-                  <el-icon>
-                    <Plus />
-                  </el-icon>
+                <Button variant="primary" class="-mt-4" @click="handleEmptyStateCollect">
+                  <Plus />
                   {{ $t("gallery.startCollect") }}
-                </el-button>
+                </Button>
               </div>
             </template>
           </ImageGrid>
@@ -80,42 +78,29 @@
     />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
-    <el-dialog
-      :model-value="collectMenuDialog.isOpen.value"
-      :z-index="collectMenuDialog.zIndex.value"
+    <Dialog
+      :open="collectMenuDialog.isOpen.value"
       :title="$t('gallery.chooseCollectMethod')"
-      width="360px"
-      destroy-on-close
-      class="collect-menu-dialog"
-      @update:model-value="collectMenuDialog.close"
+      :width="360"
+      @update:open="(v: boolean) => !v && collectMenuDialog.close()"
     >
-      <div class="collect-menu-options">
-        <div v-if="!IS_WEB" class="collect-menu-option" @click="onDesktopCollectLocal">
-          <el-icon>
-            <FolderOpened />
-          </el-icon>
-          <span>{{ $t("gallery.local") }}</span>
-        </div>
-        <div class="collect-menu-option" @click="onDesktopCollectNetwork">
-          <el-icon>
-            <Connection />
-          </el-icon>
-          <span>{{ $t("gallery.network") }}</span>
-        </div>
-        <div v-if="!IS_WEB" class="collect-menu-option" @click="onDesktopCollectWebpage">
-          <el-icon>
-            <Link />
-          </el-icon>
-          <span>{{ $t("gallery.webpage") }}</span>
-        </div>
-        <div v-if="!IS_WEB && !IS_ANDROID" class="collect-menu-option" @click="onDesktopCollectWallpaper">
-          <el-icon>
-            <Picture />
-          </el-icon>
-          <span>{{ $t("gallery.wallpaper") }}</span>
-        </div>
+      <div class="flex flex-col gap-2">
+        <button
+          v-for="item in collectMenuItems"
+          :key="item.key"
+          type="button"
+          class="box-border flex w-full cursor-pointer items-center gap-3 rounded-kb-lg border border-solid border-kb-line-strong bg-transparent px-3.5 py-3 text-left [font:inherit] text-[13.5px] font-500 text-kb-fg outline-none transition-[background-color,border-color] duration-150 hover:border-kb-fg-subtle hover:bg-kb-hover focus-visible:ring-2 focus-visible:ring-kb-ring"
+          @click="item.run"
+        >
+          <span
+            class="grid size-9 shrink-0 place-items-center rounded-kb-md bg-kb-fill text-kb-fg-muted [&_svg]:size-[18px]"
+          >
+            <component :is="item.icon" />
+          </span>
+          {{ item.label }}
+        </button>
       </div>
-    </el-dialog>
+    </Dialog>
 
     <!-- Android：收集方式选择器（本地 → MediaPicker，远程 → 收集 drawer） -->
     <CollectSourcePicker
@@ -138,8 +123,9 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { Plus, FolderOpened, Connection, Link, Picture } from "@kabegame/element-plus-icons";
+import { kameMessage } from "@/utils/kameMessage";
+import { FolderOpen, Globe, Link2, Monitor, Plus } from "@lucide/vue";
+import { Button, Dialog } from "@/components/ui";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useUiStore } from "@/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
@@ -283,6 +269,22 @@ const onDesktopCollectWallpaper = () => {
   wallpaperImportDialog.open();
 };
 
+/** 选择收集方式对话框的选项（Web 只有网络；Android 没有壁纸） */
+const collectMenuItems = computed(() =>
+  [
+    { key: "local", show: !IS_WEB, icon: FolderOpen, label: t("gallery.local"), run: onDesktopCollectLocal },
+    { key: "network", show: true, icon: Globe, label: t("gallery.network"), run: onDesktopCollectNetwork },
+    { key: "webpage", show: !IS_WEB, icon: Link2, label: t("gallery.webpage"), run: onDesktopCollectWebpage },
+    {
+      key: "wallpaper",
+      show: !IS_WEB && !IS_ANDROID,
+      icon: Monitor,
+      label: t("gallery.wallpaper"),
+      run: onDesktopCollectWallpaper,
+    },
+  ].filter((item) => item.show),
+);
+
 // 紧凑布局：收集方式选择器选「本地」→ MediaPicker，「远程」→ 收集 drawer，「网页」→ 网页收集 drawer
 const handleCollectSourceSelect = (source: "local" | "remote" | "webpage" | "wallpaper") => {
   analytics.track("gallery_import_entry", {
@@ -323,7 +325,7 @@ const handleAndroidMediaSelection = async (type: "image" | "folder" | "video", f
         paths: uris,
         recursive: false,
       });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
+      kameMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === "video") {
       const uris = await pickVideos();
       if (!uris || uris.length === 0) {
@@ -333,7 +335,7 @@ const handleAndroidMediaSelection = async (type: "image" | "folder" | "video", f
         paths: uris,
         recursive: false,
       });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
+      kameMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === "folder" && folderResult) {
       const folderPath = folderResult.uri ?? folderResult.path;
       if (!folderPath) return;
@@ -341,12 +343,12 @@ const handleAndroidMediaSelection = async (type: "image" | "folder" | "video", f
         paths: [folderPath],
         recursive: true,
       });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
+      kameMessage.success(t("gallery.localImportTaskAdded"));
     }
   } catch (error) {
     console.error("[Gallery] 安卓媒体选择失败:", error);
     if (error !== "cancel" && error !== "close") {
-      ElMessage.error(t("gallery.selectFailed") + ": " + (error instanceof Error ? error.message : String(error)));
+      kameMessage.error(t("gallery.selectFailed") + ": " + (error instanceof Error ? error.message : String(error)));
     }
   }
 };
@@ -444,34 +446,12 @@ onMounted(async () => {
     margin-top: 24px;
   }
 
-  /* 图片路径 tooltip 样式 */
-  :deep(.image-path-tooltip) {
-    max-width: 400px;
-    padding: 8px 12px;
-  }
-
-  .tooltip-content {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    line-height: 1.4;
-  }
-
-  .tooltip-line {
-    word-break: break-all;
-    font-size: 12px;
-  }
-
   .empty {
     display: flex;
     flex-direction: column;
     align-items: center;
     padding: 40px;
     text-align: center;
-
-    .empty-action-btn {
-      margin-top: -16px; // EmptyState 自带 padding，调整按钮位置
-    }
   }
 
   .fade-in {
@@ -489,186 +469,5 @@ onMounted(async () => {
       transform: translateY(0);
     }
   }
-
-  .plugin-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .plugin-option-icon {
-    width: 20px;
-    height: 20px;
-    object-fit: contain;
-    flex-shrink: 0;
-  }
-
-  .plugin-option-icon-placeholder {
-    width: 20px;
-    height: 20px;
-    flex-shrink: 0;
-    color: var(--anime-text-secondary);
-  }
-}
-
-/* Dialog 样式需要全局作用域才能正确应用 */
-</style>
-
-<style lang="scss">
-/* "开始导入图片"->"选择导入源"下拉框：下拉面板是 teleport 到 body 的，所以必须用全局样式 */
-.crawl-plugin-select-dropdown {
-  .el-select-dropdown__item {
-    padding: 8px 12px;
-  }
-
-  .plugin-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 24px;
-  }
-
-  .plugin-option-icon {
-    width: 18px;
-    height: 18px;
-    object-fit: contain;
-    flex-shrink: 0;
-    border-radius: 4px;
-  }
-
-  .plugin-option-icon-placeholder {
-    width: 18px;
-    height: 18px;
-    flex-shrink: 0;
-    font-size: 18px;
-    /* 控制 el-icon 的 svg 大小 */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--anime-text-secondary);
-  }
-
-  .plugin-option span {
-    line-height: 1.2;
-    color: var(--anime-text-primary);
-  }
-}
-
-.run-config-select-dropdown {
-  .el-select-dropdown__item {
-    padding: 6px 12px;
-    min-height: 40px;
-  }
-
-  .run-config-option {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-height: 32px;
-    width: 100%;
-  }
-
-  .run-config-info {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-
-    .name {
-      font-weight: 600;
-      color: var(--el-text-color-primary);
-      line-height: 1.4;
-      display: flex;
-      align-items: center;
-      font-size: 14px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-
-      .incompatible-badge {
-        color: var(--el-color-warning);
-        font-weight: 600;
-        margin-right: 4px;
-      }
-
-      .incompatible-reason {
-        margin-top: 4px;
-        font-size: 12px;
-      }
-
-      .error-text {
-        color: var(--el-color-error);
-      }
-
-      .warning-text {
-        color: var(--el-color-warning);
-      }
-
-      .desc {
-        font-size: 12px;
-        color: var(--el-text-color-secondary);
-        font-weight: normal;
-        margin-left: 4px;
-      }
-    }
-  }
-
-  .run-config-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-    align-self: flex-start;
-    padding-top: 2px;
-  }
-}
-
-/* 图片路径 tooltip 样式 */
-:deep(.image-path-tooltip) {
-  max-width: 400px;
-  padding: 8px 12px;
-}
-
-.tooltip-content {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  line-height: 1.4;
-}
-
-.tooltip-line {
-  word-break: break-all;
-  font-size: 12px;
-}
-
-/* 选择收集方式对话框（teleport 到 body） */
-.collect-menu-dialog .collect-menu-options {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.collect-menu-dialog .collect-menu-option {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 2px solid var(--anime-border);
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.collect-menu-dialog .collect-menu-option:hover {
-  border-color: var(--anime-primary);
-  background: var(--el-fill-color-light);
-}
-
-.collect-menu-dialog .collect-menu-option .el-icon {
-  font-size: 20px;
-  color: var(--anime-primary);
 }
 </style>

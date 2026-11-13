@@ -31,7 +31,7 @@
           @view-vd="openVirtualDrive"
           @refresh="handleRefresh"
           @create-album="openCreateDialogWithParent(null)"
-          @open-tree="treeDrawer.open()"
+          @open-tree="treeDrawerOpen = true"
           @toggle-detail="toggleDetailPanel"
         />
       </template>
@@ -77,14 +77,25 @@
       </template>
 
       <template #before-grid="{ totalCount, currentPage, pageSize: gridPageSize, jumpToPage }">
-        <nav v-if="selectedAlbumId" class="album-breadcrumb-wrap" aria-label="breadcrumb">
-          <el-breadcrumb>
-            <el-breadcrumb-item v-for="crumb in selectedAlbumAncestorCrumbs" :key="crumb.id">
-              <a class="album-breadcrumb-link" @click="selectAlbum(crumb.id)">{{ crumb.name }}</a>
-            </el-breadcrumb-item>
-            <el-breadcrumb-item>
-              <span class="album-breadcrumb-current">{{ selectedAlbumName || "…" }}</span>
-              <span class="album-breadcrumb-stats">
+        <nav
+          v-if="selectedAlbumId"
+          class="mb-3 min-w-0 overflow-x-auto pb-0.5 [scrollbar-width:thin]"
+          :aria-label="t('albums.breadcrumbLabel')"
+        >
+          <ol class="m-0 flex list-none items-center gap-1 whitespace-nowrap p-0 text-[13px] leading-5">
+            <li v-for="crumb in selectedAlbumAncestorCrumbs" :key="crumb.id" class="flex items-center gap-1">
+              <button
+                type="button"
+                class="cursor-pointer rounded-kb-sm border-0 bg-transparent px-1 py-0.5 text-kb-fg-muted outline-none transition-colors [font:inherit] hover:bg-kb-hover hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring"
+                @click="selectAlbum(crumb.id)"
+              >
+                {{ crumb.name }}
+              </button>
+              <ChevronRight class="size-3.5 shrink-0 text-kb-fg-subtle" aria-hidden="true" />
+            </li>
+            <li class="flex items-center gap-1.5 px-1" aria-current="page">
+              <span class="font-600 text-kb-fg">{{ selectedAlbumName || "…" }}</span>
+              <span class="tabular-nums text-kb-fg-subtle">
                 {{
                   t("albums.detailCrumbStats", {
                     images: selectedAlbumStats.imageCount,
@@ -92,8 +103,8 @@
                   })
                 }}
               </span>
-            </el-breadcrumb-item>
-          </el-breadcrumb>
+            </li>
+          </ol>
         </nav>
 
         <GalleryQueryBar
@@ -123,16 +134,14 @@
       </template>
     </ImageGrid>
 
-    <!-- 紧凑模式：左树收进抽屉（useModal 已接 modalStack → Android 返回键可关） -->
-    <el-drawer
+    <!-- 紧凑模式：左树收进左侧面板（Sheet 自己接 Esc、点遮罩与 Android 返回键） -->
+    <Sheet
       v-if="isCompact"
-      :model-value="treeDrawer.isOpen.value"
-      :z-index="treeDrawer.zIndex.value"
-      direction="ltr"
+      v-model:open="treeDrawerOpen"
+      side="left"
       size="min(80vw, 320px)"
-      :with-header="false"
-      class="albums-tree-drawer"
-      @update:model-value="treeDrawer.close"
+      hide-close
+      body-class="flex flex-col px-1 py-2"
     >
       <AlbumTreePanel
         ref="compactAlbumTreePanelRef"
@@ -140,41 +149,39 @@
         @select="
           (id, album) => {
             onTreeSelect(id, album);
-            treeDrawer.close();
+            treeDrawerOpen = false;
           }
         "
         @create-album="
           (pid) => {
             openCreateDialogWithParent(pid);
-            treeDrawer.close();
+            treeDrawerOpen = false;
           }
         "
         @create-label="
           (pid, directory) => {
             openCreateDialogWithParent(pid, directory ? 'label_dir' : 'label');
-            treeDrawer.close();
+            treeDrawerOpen = false;
           }
         "
         @contextmenu="onTreeContextMenu"
         @dblclick="
           (id) => {
             onTreeDblclick(id);
-            treeDrawer.close();
+            treeDrawerOpen = false;
           }
         "
       />
-    </el-drawer>
+    </Sheet>
 
-    <!-- 紧凑模式：画册信息面板收进右侧抽屉 -->
-    <el-drawer
+    <!-- 紧凑模式：画册信息面板收进右侧面板（面板自带关闭按钮） -->
+    <Sheet
       v-if="isCompact"
-      :model-value="detailDrawer.isOpen.value"
-      :z-index="detailDrawer.zIndex.value"
-      direction="rtl"
+      v-model:open="detailDrawerOpen"
+      side="right"
       size="min(85vw, 340px)"
-      :with-header="false"
-      class="albums-detail-drawer"
-      @update:model-value="detailDrawer.close"
+      hide-close
+      body-class="flex flex-col px-1 py-2"
     >
       <AlbumDetailPanel
         :album="selectedAlbum"
@@ -186,11 +193,11 @@
         :can-create-sub-album="canCreateSubAlbumForSelected"
         :can-rename="selectedAlbumId !== HIDDEN_ALBUM_ID"
         :cover="albumCover"
-        @close="detailDrawer.close()"
+        @close="detailDrawerOpen = false"
         @more="(e: MouseEvent) => selectedAlbum && albumMenu.show(selectedAlbum, e)"
         @command="(cmd) => runAlbumCommand(cmd, selectedAlbum)"
       />
-    </el-drawer>
+    </Sheet>
 
     <ActionRenderer
       :visible="albumMenu.visible.value"
@@ -202,99 +209,88 @@
       @command="(cmd) => runAlbumCommand(cmd as AlbumCommand, albumMenuContext.target)"
     />
 
-    <el-dialog
-      :model-value="createDialog.isOpen.value"
-      :z-index="createDialog.zIndex.value"
+    <Dialog
+      v-model:open="createOpen"
       :title="$t('albums.newAlbum')"
-      width="420px"
-      @update:model-value="createDialog.close"
-      @closed="resetCreateAlbumDialog"
+      :width="440"
+      body-class="flex flex-col gap-3"
+      @open-auto-focus="focusFirstInput"
+      @close-auto-focus="resetCreateAlbumDialog"
     >
-      <el-form label-width="0" @submit.prevent>
-        <el-radio-group v-model="newAlbumKind" size="small" class="mb-3">
-          <el-radio-button value="normal">{{ $t("albums.kindNormal") }}</el-radio-button>
-          <el-radio-button value="label">{{ $t("albums.kindLabel") }}</el-radio-button>
-          <el-radio-button value="label_dir">{{ $t("albums.kindLabelDir") }}</el-radio-button>
-          <el-radio-button v-if="!IS_ANDROID" value="local_folder">{{ $t("albums.kindLocalFolder") }}</el-radio-button>
-        </el-radio-group>
+      <SegmentedControl v-model="newAlbumKind" :options="albumKindOptions" class="w-full" />
 
-        <template v-if="isNewLabelForestAlbum">
-          <el-input
+      <template v-if="isNewLabelForestAlbum">
+        <Field :error="newLabelKey && !newLabelKeyValid ? $t('albums.labelKeyInvalidHint') : undefined">
+          <Input
             v-model="newLabelKey"
             :placeholder="$t('albums.labelKeyPlaceholder')"
-            @keyup.enter="handleCreateAlbum"
+            @keydown.enter="(e: KeyboardEvent) => !e.isComposing && handleCreateAlbum()"
           />
-          <p v-if="newLabelKey && !newLabelKeyValid" class="local-folder-error">
-            {{ $t("albums.labelKeyInvalidHint") }}
-          </p>
-          <el-input
-            v-model="newAlbumName"
-            class="mt-3"
-            :placeholder="$t('albums.labelNamePlaceholder')"
-            @keyup.enter="handleCreateAlbum"
-          />
-        </template>
-        <el-input
-          v-else
+        </Field>
+        <Input
           v-model="newAlbumName"
-          :placeholder="$t('albums.placeholderName')"
-          @keyup.enter="handleCreateAlbum"
+          :placeholder="$t('albums.labelNamePlaceholder')"
+          @keydown.enter="(e: KeyboardEvent) => !e.isComposing && handleCreateAlbum()"
         />
+      </template>
+      <Input
+        v-else
+        v-model="newAlbumName"
+        :placeholder="$t('albums.placeholderName')"
+        @keydown.enter="(e: KeyboardEvent) => !e.isComposing && handleCreateAlbum()"
+      />
 
-        <AlbumPicker
-          v-if="newAlbumKind !== 'local_folder'"
-          v-model="newAlbumParentId"
-          class="mt-3"
-          :scope="createAlbumParentScope"
-          :placeholder="isNewLabelForestAlbum ? $t('albums.selectParentLabelDir') : $t('albums.selectParentAlbum')"
-          :picker-title="$t('albums.parentAlbum')"
-        />
+      <AlbumPicker
+        v-if="newAlbumKind !== 'local_folder'"
+        v-model="newAlbumParentId"
+        :scope="createAlbumParentScope"
+        :placeholder="isNewLabelForestAlbum ? $t('albums.selectParentLabelDir') : $t('albums.selectParentAlbum')"
+        :picker-title="$t('albums.parentAlbum')"
+      />
 
-        <div v-if="newAlbumIsLocalFolder" class="mt-2 flex flex-col gap-2">
-          <div class="flex items-center gap-2">
-            <el-button size="small" @click="pickLocalFolder">
+      <div v-if="newAlbumIsLocalFolder" class="flex flex-col gap-2">
+        <Field :error="syncFolderDuplicate ? $t('albums.localFolder.duplicatePathHint') : undefined">
+          <div class="flex min-w-0 items-center gap-2">
+            <Button size="sm" class="shrink-0" @click="pickLocalFolder">
+              <FolderOpen />
               {{ $t("albums.localFolder.choosePath") }}
-            </el-button>
-            <span class="local-folder-path" :title="newAlbumSyncFolder">
+            </Button>
+            <span
+              class="min-w-0 flex-1 truncate text-[12px] leading-[1.4]"
+              :class="newAlbumSyncFolder ? 'kb-selectable text-[var(--kb-fg-regular)]' : 'text-kb-fg-subtle'"
+              :title="newAlbumSyncFolder"
+            >
               {{ newAlbumSyncFolder || $t("albums.localFolder.noPathSelected") }}
             </span>
           </div>
-          <p v-if="syncFolderDuplicate" class="local-folder-error">
-            {{ $t("albums.localFolder.duplicatePathHint") }}
-          </p>
-          <el-checkbox v-model="newAlbumRecursive">
-            {{ $t("albums.localFolder.recursive") }}
-          </el-checkbox>
-          <p class="local-folder-hint">
-            {{ $t("albums.localFolder.recursiveHint") }}
-          </p>
-          <p v-if="newAlbumRecursive" class="local-folder-hint">
+        </Field>
+        <Checkbox v-model="newAlbumRecursive" :label="$t('albums.localFolder.recursive')" />
+        <div class="flex flex-col gap-1 text-[12px] leading-[1.5] text-kb-fg-muted">
+          <p class="m-0">{{ $t("albums.localFolder.recursiveHint") }}</p>
+          <p v-if="newAlbumRecursive" class="m-0">
             {{ $t("albums.localFolder.recursiveLimits", { maxDepth: 16 }) }}
           </p>
-          <p class="local-folder-hint">
-            {{ $t("albums.localFolder.skipNotice") }}
-          </p>
+          <p class="m-0">{{ $t("albums.localFolder.skipNotice") }}</p>
         </div>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialog.close()">{{ $t("common.cancel") }}</el-button>
-        <el-button type="primary" :disabled="!canSubmitCreateAlbum" :loading="creatingAlbum" @click="handleCreateAlbum">
-          {{ $t("albums.create") }}
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      :model-value="moveDialog.isOpen.value"
-      :z-index="moveDialog.zIndex.value"
-      :title="$t('albums.moveToTitle')"
-      width="420px"
-      @update:model-value="moveDialog.close"
-      @closed="onMoveAlbumDialogClosed"
-    >
-      <div class="mb-3">
-        <el-checkbox v-model="moveToRoot">{{ $t("albums.moveToRoot") }}</el-checkbox>
       </div>
+
+      <template #footer>
+        <Button @click="createOpen = false">{{ $t("common.cancel") }}</Button>
+        <Button variant="primary" :disabled="!canSubmitCreateAlbum" @click="handleCreateAlbum">
+          <Spinner v-if="creatingAlbum" />
+          {{ $t("albums.create") }}
+        </Button>
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:open="moveOpen"
+      :title="$t('albums.moveToTitle')"
+      :width="440"
+      body-class="flex flex-col gap-3"
+      @close-auto-focus="onMoveAlbumDialogClosed"
+    >
+      <Checkbox v-model="moveToRoot" :label="$t('albums.moveToRoot')" />
       <AlbumPicker
         v-show="!moveToRoot"
         v-model="moveTargetParentId"
@@ -303,10 +299,10 @@
         :placeholder="$t('albums.selectTargetAlbum')"
       />
       <template #footer>
-        <el-button @click="moveDialog.close()">{{ $t("common.cancel") }}</el-button>
-        <el-button type="primary" @click="confirmMoveAlbum">{{ $t("common.ok") }}</el-button>
+        <Button @click="moveOpen = false">{{ $t("common.cancel") }}</Button>
+        <Button variant="primary" @click="confirmMoveAlbum">{{ $t("common.ok") }}</Button>
       </template>
-    </el-dialog>
+    </Dialog>
   </DragFileZone>
 </template>
 
@@ -325,8 +321,7 @@ import {
 } from "@/composables/useWallpaperTarget";
 import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { ref, computed, watch } from "vue";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
@@ -351,7 +346,6 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
-import { useModal } from "@/composables/useModal";
 import { useI18n } from "@kabegame/i18n";
 import {
   querySearchTerm,
@@ -395,6 +389,9 @@ import {
   type Album,
   type AlbumNode,
 } from "@/services/albums";
+import { messageBox } from "@/components/ui/messageBox";
+import { ChevronRight, FolderOpen } from "@lucide/vue";
+import { Button, Checkbox, Dialog, Field, Input, SegmentedControl, Sheet, Spinner } from "@/components/ui";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
@@ -425,7 +422,7 @@ const TREE_DEFAULT_WIDTH = 248;
 const treeWidth = useLocalStorage("kabegame-albums-tree-width", TREE_DEFAULT_WIDTH, {
   mergeDefaults: true,
 });
-const treeDrawer = useModal();
+const treeDrawerOpen = ref(false);
 
 // ---------- 右栏（画册信息面板）宽度 / 开合 / 紧凑抽屉 ----------
 const DETAIL_DEFAULT_WIDTH = 288;
@@ -435,9 +432,9 @@ const detailWidth = useLocalStorage("kabegame-albums-detail-width", DETAIL_DEFAU
 const detailOpen = useLocalStorage("kabegame-albums-detail-open", true, {
   mergeDefaults: true,
 });
-const detailDrawer = useModal();
+const detailDrawerOpen = ref(false);
 const toggleDetailPanel = () => {
-  if (isCompact.value) detailDrawer.open();
+  if (isCompact.value) detailDrawerOpen.value = true;
   else detailOpen.value = !detailOpen.value;
 };
 
@@ -637,7 +634,7 @@ const openVirtualDrive = async () => {
     await invoke("open_path", { path: albumDriveMountPoint.value });
   } catch (e) {
     console.error("打开虚拟磁盘失败:", e);
-    ElMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
+    kameMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
   }
 };
 
@@ -655,17 +652,23 @@ const fullRotationAlbumIds = computed(() =>
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
 // ---------- 新建画册弹窗 ----------
-const createDialog = useModal();
+const createOpen = ref(false);
+const albumKindOptions = computed(() => [
+  { value: "normal" as AlbumKind, label: t("albums.kindNormal") },
+  { value: "label" as AlbumKind, label: t("albums.kindLabel") },
+  { value: "label_dir" as AlbumKind, label: t("albums.kindLabelDir") },
+  ...(IS_ANDROID ? [] : [{ value: "local_folder" as AlbumKind, label: t("albums.kindLocalFolder") }]),
+]);
 
 /** 树三点菜单 /「+」按钮入口：预填父级与类型后打开创建弹窗。 */
 const openCreateDialogWithParent = (parentId: string | null, kind: AlbumKind = "normal") => {
   newAlbumKind.value = kind;
   newAlbumParentId.value = parentId;
-  createDialog.open();
+  createOpen.value = true;
 };
 
 const moveDlgAlbum = ref<Album | null>(null);
-const moveDialog = useModal();
+const moveOpen = ref(false);
 const moveToRoot = ref(false);
 const moveTargetParentId = ref<string | null>(null);
 
@@ -678,7 +681,7 @@ const moveAlbumScope = computed<AlbumTreeViewScope>(() => {
     : { sections: ["normal"], excludeSubtreeOf: [a.id] };
 });
 
-watch(moveDialog.isOpen, (open) => {
+watch(moveOpen, (open) => {
   if (open) {
     moveToRoot.value = false;
     moveTargetParentId.value = null;
@@ -694,18 +697,18 @@ const confirmMoveAlbum = async () => {
   if (!album) return;
   const pid = moveToRoot.value ? null : moveTargetParentId.value?.trim() || null;
   if (!moveToRoot.value && !pid) {
-    ElMessage.warning(t("albums.selectTargetAlbum"));
+    kameMessage.warning(t("albums.selectTargetAlbum"));
     return;
   }
   try {
     await moveAlbum(album.id, pid);
-    moveDialog.close();
+    moveOpen.value = false;
     moveDlgAlbum.value = null;
-    ElMessage.success(t("albums.moveSuccess"));
+    kameMessage.success(t("albums.moveSuccess"));
   } catch (e: unknown) {
     const msg =
       typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e);
-    ElMessage.error(msg || t("albums.moveFailed"));
+    kameMessage.error(msg || t("albums.moveFailed"));
   }
 };
 const newAlbumName = ref("");
@@ -734,7 +737,7 @@ const normalizeSyncPath = (p: string): string => {
   return stripped || trimmed;
 };
 const localFolderAlbums = ref<Album[]>([]);
-watch([createDialog.isOpen, newAlbumKind], async ([open, kind]) => {
+watch([createOpen, newAlbumKind], async ([open, kind]) => {
   if (open && kind === "local_folder") localFolderAlbums.value = await fetchLocalFolderAlbums();
 });
 const existingSyncFolders = computed(
@@ -779,18 +782,26 @@ const handleRefresh = async () => {
 
     const selected = selectedAlbum.value;
     if (IS_ANDROID || IS_WEB || selected?.type !== "local_folder") {
-      ElMessage.success(t("albums.refreshSuccess"));
+      kameMessage.success(t("albums.refreshSuccess"));
     } else {
       void syncLocalFolderAlbum(selected.id).catch((error) => {
-        ElMessage.error(error?.message || String(error));
+        kameMessage.error(error?.message || String(error));
       });
     }
   } catch (error) {
     console.error("刷新失败:", error);
-    ElMessage.error(t("albums.refreshFailed"));
+    kameMessage.error(t("albums.refreshFailed"));
   } finally {
     isRefreshing.value = false;
   }
+};
+
+/** 打开时焦点落在第一个输入框（key 或名称），而不是最上面的类型切换 */
+const focusFirstInput = (e: Event) => {
+  const input = (e.target as HTMLElement | null)?.querySelector<HTMLInputElement>("input");
+  if (!input) return;
+  e.preventDefault();
+  input.focus();
 };
 
 const resetCreateAlbumDialog = () => {
@@ -812,7 +823,7 @@ const pickLocalFolder = async () => {
     }
   } catch (error) {
     console.warn("pick local folder failed", error);
-    ElMessage.error(t("albums.selectFolderFailed"));
+    kameMessage.error(t("albums.selectFolderFailed"));
   }
 };
 
@@ -846,14 +857,14 @@ const handleCreateAlbum = async () => {
     } else {
       await createAlbum(newAlbumName.value.trim(), { parentId, reload: false });
     }
-    createDialog.close();
-    ElMessage.success(t("albums.albumCreated"));
+    createOpen.value = false;
+    kameMessage.success(t("albums.albumCreated"));
   } catch (error: any) {
     console.error("创建画册失败:", error);
     // 提取友好的错误信息
     const errorMessage =
       typeof error === "string" ? error : error?.message || String(error) || t("albums.createAlbumFailed");
-    ElMessage.error(errorMessage);
+    kameMessage.error(errorMessage);
   } finally {
     creatingAlbum.value = false;
   }
@@ -948,7 +959,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       await invoke("open_path", { path: folder });
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -956,18 +967,18 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "convertToNormal") {
     const descendantCount = await fetchDescendantCount(id);
     try {
-      await ElMessageBox.confirm(
+      await messageBox.confirm(
         t("albums.localFolder.convertToNormalConfirm", { count: descendantCount }),
         t("albums.localFolder.convertToNormalTitle"),
         { type: "warning" },
       );
       await convertLocalFolderAlbumToNormal(id);
       await refreshSelectedAlbum();
-      ElMessage.success(t("albums.localFolder.convertToNormalSuccess"));
+      kameMessage.success(t("albums.localFolder.convertToNormalSuccess"));
     } catch (error) {
       if (error !== "cancel") {
         const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
-        ElMessage.error(t("albums.localFolder.convertToNormalFailed", { error: errorMessage }));
+        kameMessage.error(t("albums.localFolder.convertToNormalFailed", { error: errorMessage }));
       }
     }
     return;
@@ -985,18 +996,18 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "setLabelKey") {
     try {
-      const { value } = await ElMessageBox.prompt(t("albums.labelKeyPlaceholder"), t("contextMenu.setLabelKey"), {
+      const { value } = await messageBox.prompt(t("albums.labelKeyPlaceholder"), t("contextMenu.setLabelKey"), {
         inputValue: album.labelKey ?? "",
         inputValidator: (v) => isLabelKey(String(v || "").trim()) || t("albums.labelKeyInvalidHint"),
       });
       const newKey = String(value || "").trim();
       if (!newKey || newKey === album.labelKey) return;
       await setLabelKey(id, newKey);
-      ElMessage.success(t("albums.labelKeyUpdated"));
+      kameMessage.success(t("albums.labelKeyUpdated"));
     } catch (error) {
       if (error !== "cancel" && error !== "close") {
         const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
-        ElMessage.error(errorMessage);
+        kameMessage.error(errorMessage);
       }
     }
     return;
@@ -1007,7 +1018,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       await invoke("open_album_virtual_drive_folder", { albumId: id });
     } catch (e: any) {
       console.error("打开画册虚拟盘失败:", e);
-      ElMessage.error(`${e?.message || String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
+      kameMessage.error(`${e?.message || String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
     }
     return;
   }
@@ -1018,7 +1029,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     try {
       await setAlbumSyncMode(id, mode);
     } catch (e: any) {
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -1027,7 +1038,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     try {
       await syncLocalFolderAlbum(id, "none");
     } catch (e: any) {
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -1036,7 +1047,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     try {
       await syncLocalFolderAlbum(id, command === "syncNowRecursiveFull" ? "createMissing" : "existing");
     } catch (e: any) {
-      ElMessage.error(e?.message || String(e));
+      kameMessage.error(e?.message || String(e));
     }
     return;
   }
@@ -1051,12 +1062,12 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       if (!wallpaperRotationEnabled.value) await setWallpaperRotationEnabled(true);
       // 有多个壁纸目标时提示里带上是哪块屏
       const screen = pickedScreenName(target);
-      ElMessage.success(
+      kameMessage.success(
         screen ? t("albums.rotationStartedOn", { name, screen }) : t("albums.rotationStarted", { name }),
       );
     } catch (error) {
       console.error("设置轮播画册失败:", error);
-      ElMessage.error(t("albums.setFailed"));
+      kameMessage.error(t("albums.setFailed"));
     }
     return;
   }
@@ -1064,10 +1075,10 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "stopWallpaperRotation") {
     try {
       await setWallpaperRotationEnabled(false);
-      ElMessage.success(t("albums.detailStopRotation"));
+      kameMessage.success(t("albums.detailStopRotation"));
     } catch (error) {
       console.error("停止桌面轮播失败:", error);
-      ElMessage.error(t("albums.setFailed"));
+      kameMessage.error(t("albums.setFailed"));
     }
     return;
   }
@@ -1075,7 +1086,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "rename") {
     // 树上改名走 prompt
     try {
-      const { value } = await ElMessageBox.prompt(t("albums.placeholderName"), t("albums.title"), {
+      const { value } = await messageBox.prompt(t("albums.placeholderName"), t("albums.title"), {
         inputValue: name,
         inputValidator: (v) => {
           if (!String(v || "").trim()) return t("albums.albumNameCannotBeEmpty");
@@ -1085,11 +1096,11 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       const newName = String(value || "").trim();
       if (!newName || newName === name) return;
       await renameAlbum(id, newName);
-      ElMessage.success(t("albums.renameSuccess"));
+      kameMessage.success(t("albums.renameSuccess"));
     } catch (error) {
       if (error !== "cancel") {
         const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
-        ElMessage.error(errorMessage || t("albums.renameFailed"));
+        kameMessage.error(errorMessage || t("albums.renameFailed"));
       }
     }
     return;
@@ -1097,18 +1108,18 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "moveTo") {
     moveDlgAlbum.value = album;
-    moveDialog.open();
+    moveOpen.value = true;
     return;
   }
 
   // 检查是否为"收藏"画册（使用固定ID）
   if (id === FAVORITE_ALBUM_ID) {
-    ElMessage.warning(t("albums.cannotDeleteFavorite"));
+    kameMessage.warning(t("albums.cannotDeleteFavorite"));
     return;
   }
 
   try {
-    await ElMessageBox.confirm(
+    await messageBox.confirm(
       album.type === "local_folder"
         ? t("albums.deleteLocalFolderAlbumConfirm", { name })
         : t("albums.deleteAlbumConfirm", { name }),
@@ -1117,11 +1128,11 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     );
     // 删的若是某个壁纸目标的轮播画册，后端把该目标的轮播路径退回默认并发 setting-change
     await deleteAlbum(id);
-    ElMessage.success(t("albums.albumDeleted"));
+    kameMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {
       console.error("删除画册失败:", error);
-      ElMessage.error(t("albums.deleteFailed"));
+      kameMessage.error(t("albums.deleteFailed"));
     }
   }
 };
@@ -1196,7 +1207,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--anime-border, rgba(120, 140, 180, 0.14));
+  border-right: 1px solid var(--kb-line);
 }
 
 /* 右栏（画册信息面板）：对称于 .albums-tree-pane，把手在左 */
@@ -1207,82 +1218,10 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--anime-border, rgba(120, 140, 180, 0.14));
+  border-left: 1px solid var(--kb-line);
 }
 
 .album-empty {
   padding: 48px 0;
-}
-
-.albums-tree-drawer :deep(.el-drawer__body),
-.albums-detail-drawer :deep(.el-drawer__body) {
-  padding: 8px 4px;
-  display: flex;
-  flex-direction: column;
-}
-
-.album-breadcrumb-wrap {
-  margin-bottom: 12px;
-  min-width: 0;
-  overflow-x: auto;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
-
-  :deep(.el-breadcrumb) {
-    font-size: 13px;
-    line-height: 1.4;
-    white-space: nowrap;
-  }
-
-  :deep(.el-breadcrumb__separator) {
-    color: var(--anime-text-muted);
-    margin: 0 6px;
-  }
-
-  .album-breadcrumb-link {
-    color: var(--anime-text-muted);
-    text-decoration: none;
-    cursor: pointer;
-    transition: color 0.15s ease;
-
-    &:hover {
-      color: var(--el-color-primary);
-    }
-  }
-
-  .album-breadcrumb-current {
-    color: var(--anime-text-primary);
-    font-weight: 500;
-  }
-
-  .album-breadcrumb-stats {
-    margin-left: 6px;
-    color: var(--anime-text-muted);
-  }
-}
-
-.local-folder-path {
-  flex: 1;
-  min-width: 0;
-  color: var(--anime-text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.local-folder-hint {
-  margin: 0;
-  color: var(--anime-text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.local-folder-error {
-  margin: 0;
-  color: var(--el-color-danger);
-  font-size: 12px;
-  line-height: 1.45;
 }
 </style>

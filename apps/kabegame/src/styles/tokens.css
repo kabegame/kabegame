@@ -1,0 +1,175 @@
+/*
+ * 新界面的设计 token（UI 重构，组件在 src/components/ui/）。
+ *
+ * 规则：中性外框 + 一个强调色。壁纸本身是彩色的，外框越中性，图越突出；
+ * 强调色只用在计数、选中、焦点这类需要被看见的地方。
+ *
+ * 与旧主题的关系：中性的 --anime-*（文字、边框、底色、阴影）在 anime-theme.css 里改指向这里，
+ * 业务组件 scoped 样式里残留的 --anime-* 因此也是中性外观。
+ * 品牌色 --anime-primary / --anime-secondary 不动：强调色与危险色挂在它们上，插件详情运行时
+ * 局部改写 --anime-* 换肤时也能波及新组件。
+ *
+ * UnoCSS 里以 `kb` 色板 / `kb-*` 圆角与阴影引用（uno.config.pub.ts）。颜色是 CSS 变量，
+ * `text-kb-fg/50` 这类透明度修饰不生效，需要半透明就在这里加一个 token。
+ */
+:root {
+  /* 文字 */
+  --kb-fg: #4a154b;
+  --kb-fg-muted: #7c3aed;
+  --kb-fg-subtle: #a78bfa;
+  /* 正文与说明之间的一档（长段正文、代码）；新写的界面优先用上面三档 */
+  --kb-fg-regular: #5e2a63;
+
+  /* 字体：系统 UI 字体优先（macOS 苹方、Windows Segoe + 雅黑） */
+  --kb-font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
+    "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+
+  /* 页面底与侧栏底：不透明的浅灰，内容面（卡片、顶栏、弹层）是白 */
+  --kb-bg: linear-gradient(135deg, #fef3f8 0%, #f0e9ff 100%);
+  --kb-bg-sidebar: linear-gradient(180deg, #fff0f5 0%, #f5f0ff 100%);
+  /* 开着应用背景（壁纸作底）时外框的毛玻璃面 */
+  --kb-glass: rgba(255, 255, 255, 0.28);
+  --kb-glass-strong: rgba(255, 255, 255, 0.6);
+
+  /* 表面：surface 是浮在壁纸 / 背景之上的毛玻璃面（顶栏），raised 是弹出层 */
+  --kb-surface: rgba(255, 255, 255, 0.74);
+  --kb-surface-raised: #ffffff;
+  --kb-hover: rgba(255, 107, 157, 0.08);
+  --kb-pressed: rgba(255, 107, 157, 0.14);
+  /* 不透明填充：输入框底、分段控件轨道、进度条轨道 */
+  --kb-fill: #fbe9f2;
+  --kb-fill-light: #fdf2f8;
+  --kb-fill-lighter: #fef7fb;
+  --kb-fill-dark: #f5dbea;
+
+  /* 分隔线 */
+  --kb-line: rgba(255, 107, 157, 0.16);
+  --kb-line-strong: rgba(255, 107, 157, 0.3);
+
+  /* 主操作：墨色实心。想换回品牌粉只改这三行（primary 指向 --anime-primary） */
+  --kb-primary: var(--anime-primary);
+  --kb-primary-hover: var(--anime-primary-dark);
+  --kb-primary-fg: #ffffff;
+
+  /* 强调与状态 */
+  --kb-accent: var(--anime-primary);
+  --kb-danger: var(--anime-danger);
+  --kb-success: var(--anime-success);
+  --kb-warning: var(--anime-warning);
+  --kb-ring: color-mix(in srgb, var(--anime-primary) 45%, transparent);
+
+  /* 形状 */
+  --kb-radius-sm: 6px;
+  --kb-radius-md: 8px;
+  --kb-radius-lg: 12px;
+  --kb-shadow-sm: 0 1px 3px rgba(255, 107, 157, 0.1);
+  --kb-shadow-md: 0 4px 20px rgba(255, 107, 157, 0.15);
+  --kb-shadow-lg: 0 0 0 1px rgba(255, 107, 157, 0.12), 0 24px 56px -12px rgba(124, 58, 237, 0.3);
+  --kb-shadow-pop:
+    0 0 0 1px rgba(255, 107, 157, 0.14), 0 12px 32px -8px rgba(124, 58, 237, 0.22), 0 2px 6px -2px rgba(255, 107, 157, 0.14);
+
+  /* 模态遮罩 */
+  --kb-overlay: rgba(74, 21, 75, 0.3);
+
+  /* 动效 */
+  --kb-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 层级：浮层（下拉、气泡、提示、对话框、提示消息）不用固定 z-index，打开时由 components/ui/layer.ts
+     的 useLayerZIndex 向全局计数器（从 3000 起递增）取号，后打开的总在上面。 */
+}
+
+/* 浮层进出场（Reka 的 Presence 会等 closed 态的动画播完再卸载） */
+@keyframes kb-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes kb-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* 遮罩淡入淡出（对话框、侧边面板的遮罩） */
+@keyframes kb-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes kb-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* 侧边面板（Sheet）滑入滑出：方向由元素上的 --kb-slide-x / --kb-slide-y 给（100%、-100%） */
+@keyframes kb-slide-in {
+  from {
+    transform: translate(var(--kb-slide-x, 0), var(--kb-slide-y, 0));
+  }
+}
+
+@keyframes kb-slide-out {
+  to {
+    transform: translate(var(--kb-slide-x, 0), var(--kb-slide-y, 0));
+  }
+}
+
+/* 提示消息：从上方落下；关闭时淡出上移 */
+@keyframes kb-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+@keyframes kb-toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+
+@keyframes kb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 骨架屏的呼吸 */
+@keyframes kb-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* 不定进度条：一段 40% 宽的条从左流到右 */
+@keyframes kb-progress-flow {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+/* 系统要求减少动效时去掉浮层动画；工具类带 [data-state] 属性选择器、特异性更高，只能用 !important */
+@media (prefers-reduced-motion: reduce) {
+  [data-reka-popper-content-wrapper] > *,
+  [data-kb-motion] {
+    animation: none !important;
+  }
+}

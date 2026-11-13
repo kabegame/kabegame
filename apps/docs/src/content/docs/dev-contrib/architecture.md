@@ -38,7 +38,7 @@ Kabegame 是一个由 Deno 构建系统编排的 monorepo。Vue 前端、Tauri �
 
 | 层级 | 技术 |
 |---|---|
-| 前端 | Vue 3、TypeScript、Element Plus、UnoCSS、Pinia、Vue Router、Vite |
+| 前端 | Vue 3、TypeScript、Reka UI、UnoCSS、Pinia、Vue Router、Vite |
 | 后端 | Rust、Tauri 2、Kotlin |
 | 插件脚本 | JavaScript / TypeScript（V8 / `deno_core`）与 WebView |
 | 构建系统 | Deno 2.9.0、Tapable |

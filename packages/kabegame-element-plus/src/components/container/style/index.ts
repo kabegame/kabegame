@@ -1,6 +1,0 @@
-import '@kabegame/element-plus/components/base/style'
-import '@kabegame/element-plus/theme-chalk/src/container.scss'
-import '@kabegame/element-plus/theme-chalk/src/aside.scss'
-import '@kabegame/element-plus/theme-chalk/src/footer.scss'
-import '@kabegame/element-plus/theme-chalk/src/header.scss'
-import '@kabegame/element-plus/theme-chalk/src/main.scss'

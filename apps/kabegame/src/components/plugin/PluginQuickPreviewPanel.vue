@@ -3,7 +3,7 @@
     <div class="qp-header">
       <div class="qp-icon">
         <img v-if="iconSrc" :src="iconSrc" alt="" />
-        <el-icon v-else><Grid /></el-icon>
+        <Puzzle v-else />
       </div>
       <div class="qp-header-text">
         <div class="qp-name-row">
@@ -33,7 +33,7 @@
       </span>
       <span v-if="showDetailHint" class="qp-footer-hint">
         {{ t("plugins.quickPreview.viewDetails") }}
-        <el-icon><ArrowRight /></el-icon>
+        <ChevronRight class="size-3.5" />
       </span>
     </div>
   </div>
@@ -41,8 +41,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElIcon } from "@kabegame/element-plus";
-import { ArrowRight, Grid } from "@kabegame/element-plus-icons";
+import { ChevronRight, Puzzle } from "@lucide/vue";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import PluginLabelTags from "./PluginLabelTags.vue";
 import PluginQuickPreviewCarousel, { type PluginQuickPreviewImage } from "./PluginQuickPreviewCarousel.vue";
@@ -99,12 +98,10 @@ const metaLine = computed(() => {
 <style scoped lang="scss">
 .qp-panel {
   width: 320px;
-  border-radius: 18px;
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
-  box-shadow:
-    0 18px 44px rgba(0, 0, 0, 0.18),
-    0 2px 6px rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
+  background: var(--kb-surface-raised);
+  border: 1px solid var(--kb-line);
+  box-shadow: var(--kb-shadow-pop);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -125,14 +122,18 @@ const metaLine = computed(() => {
   width: 44px;
   height: 44px;
   border-radius: 12px;
-  background: var(--el-fill-color-light);
+  background: var(--kb-fill-light);
   flex: none;
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 19px;
-  color: var(--el-text-color-placeholder);
+  color: var(--kb-fg-subtle);
+}
+
+.qp-icon svg {
+  width: 20px;
+  height: 20px;
 }
 
 .qp-icon img {
@@ -154,7 +155,7 @@ const metaLine = computed(() => {
 
 .qp-name {
   font: 600 14.5px/1.35 var(--kb-font-sans, sans-serif);
-  color: var(--el-text-color-primary);
+  color: var(--kb-fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -165,7 +166,7 @@ const metaLine = computed(() => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--el-color-danger);
+  background: var(--kb-accent);
 }
 
 .qp-meta {
@@ -174,13 +175,13 @@ const metaLine = computed(() => {
     400 11.5px/1.3 ui-monospace,
     Menlo,
     monospace;
-  color: var(--el-text-color-secondary);
+  color: var(--kb-fg-muted);
 }
 
 .qp-desc {
   padding: 0 16px 12px;
   font: 400 12.5px/1.6 var(--kb-font-sans, sans-serif);
-  color: var(--el-text-color-regular);
+  color: var(--kb-fg-regular);
   text-wrap: pretty;
 }
 
@@ -195,17 +196,17 @@ const metaLine = computed(() => {
 .qp-footer {
   margin-top: 14px;
   padding: 11px 16px;
-  border-top: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-lighter);
+  border-top: 1px solid var(--kb-line);
+  background: var(--kb-fill-lighter);
   display: flex;
   align-items: center;
   gap: 8px;
   font: 400 12px/1 var(--kb-font-sans, sans-serif);
-  color: var(--el-text-color-secondary);
+  color: var(--kb-fg-muted);
 }
 
 .qp-footer-update {
-  color: var(--el-color-danger);
+  color: var(--kb-accent);
 }
 
 .qp-footer-hint {

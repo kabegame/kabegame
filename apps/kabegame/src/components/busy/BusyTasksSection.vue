@@ -1,7 +1,7 @@
 <template>
-  <section class="flex flex-col gap-2 px-1 py-1">
-    <div class="flex items-center justify-between gap-2 px-1">
-      <span class="text-[13px] font-700 text-[var(--anime-text-primary)]">
+  <section class="flex flex-col gap-2 p-1">
+    <div class="flex h-6 items-center justify-between gap-2 px-1">
+      <span class="text-[12px] font-600 text-kb-fg-muted">
         {{ t("header.busyTitle") }}
       </span>
       <!-- 宿主可在标题右侧放操作（如活动条面板的「全部取消」） -->

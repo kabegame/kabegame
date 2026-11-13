@@ -15,41 +15,32 @@
         @select="handleMenuSelect"
       >
         <template v-if="presets.length" #footer>
-          <button
-            type="button"
-            class="mt-3 border border-dashed border-[color-mix(in_srgb,var(--anime-primary)_50%,transparent)] rounded-12px py-2 px-2.5 text-center font-500 text-14px leading-[1.5] text-[var(--anime-text-secondary)] bg-transparent cursor-pointer hover:border-[var(--anime-primary)] hover:bg-[color-mix(in_srgb,white_50%,transparent)]"
-            @click="emit('import-all-presets', presets)"
-          >
+          <Button class="mt-3 w-full" @click="emit('import-all-presets', presets)">
+            <Download />
             {{ t("plugins.detail.importAllPresets") }}
-          </button>
+          </Button>
         </template>
       </KbMenuList>
     </KbResizable>
 
     <div class="flex-1 min-w-0 min-h-0 flex flex-col">
       <div class="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] py-4 px-5.5">
-        <el-empty v-if="!vars.length" :description="t('plugins.detail.noConfigVars')" :image-size="80" />
+        <Empty v-if="!vars.length" :title="t('plugins.detail.noConfigVars')">
+          <template #icon><SlidersHorizontal /></template>
+        </Empty>
         <template v-else>
-          <div class="text-13.5px text-[var(--anime-text-muted)] mb-3">
+          <div class="mb-3 text-[12.5px] text-kb-fg-muted">
             {{ t("plugins.detail.configVarsHint", { n: vars.length }) }}
           </div>
-          <el-form ref="formRef" :model="{ vars: formVars }" label-position="top">
-            <PluginVarsForm v-model="formVars" :plugin-vars="visibleVars" />
-          </el-form>
+          <PluginVarsForm v-model="formVars" :plugin-vars="visibleVars" />
         </template>
       </div>
 
-      <div
-        class="flex-none flex items-center justify-end py-3 px-5.5 border-t border-t-solid border-[var(--anime-border)]"
-      >
-        <button
-          type="button"
-          class="h-9 px-5 border-none rounded-12px kb-grad text-white font-600 text-14.5px shadow-[var(--anime-shadow)] cursor-pointer hover:brightness-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100"
-          :disabled="isRemote || vars.length === 0"
-          @click="handleStartTask"
-        >
+      <div class="flex flex-none items-center justify-end border-t border-t-solid border-kb-line px-5.5 py-3">
+        <Button variant="primary" :disabled="isRemote || vars.length === 0" @click="handleStartTask">
+          <Play />
           {{ t("plugins.detail.startTaskWithSource") }}
-        </button>
+        </Button>
       </div>
     </div>
   </div>
@@ -62,6 +53,8 @@ import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";
 import PluginVarsForm from "../crawler/PluginVarsForm.vue";
+import { Download, Play, SlidersHorizontal } from "@lucide/vue";
+import { Button, Empty, useForm } from "@/components/ui";
 import type { Plugin } from "../../stores/plugins";
 import { type PluginRecommendedPreset } from "../../stores/crawler";
 import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "../../utils/pluginVarForm";
@@ -130,7 +123,8 @@ function presetTitle(preset: PluginRecommendedPreset): string {
 // ---- 表单状态 ----
 const formVars = ref<Record<string, any>>({});
 const presetHeaders = ref<Record<string, string> | undefined>();
-const formRef = ref<any>();
+/** 插件变量的校验（PluginVarsForm 的 Field 注册在这里） */
+const varsForm = useForm();
 
 watch(
   [() => props.plugin?.id, () => props.initialVars],
@@ -166,11 +160,7 @@ function handleMenuSelect(name: string) {
 
 async function handleStartTask() {
   if (!props.plugin) return;
-  try {
-    await formRef.value?.validate();
-  } catch {
-    return;
-  }
+  if (!varsForm.validate()) return;
   emit("start-task", {
     pluginId: props.plugin.id,
     vars: expandVarsForBackend(

@@ -57,16 +57,16 @@ interface GridViewContext {
   - 当前视图已收藏时，这一行换成「当前视图已收藏为「X」」，点它让那一行闪一下。
 - **行**：
   - 显示名字；没起名的行用等宽小字显示路径，悬停 title 也是路径。
-  - 当前视图那一行左侧有粉色竖条。
+  - 当前视图那一行左侧有强调色竖条、淡强调底。
   - 轮播来源那一行有 ↻：轮播开着，且 `viewRotationPath(pathFor(...))` 与任一活跃壁纸目标的轮播路径（`useActiveWallpaperRotationPaths()`，见 [壁纸轮播](../wallpaper/ROTATION_PATHQL.md)）相同即是。随机排序的行跳过，因为种子不可比。
   - 编辑、× 两个按钮悬停才出现；紧凑档常显，正在编辑或确认的那一行也常显。
-- **移除**：× 弹出与任务抽屉「停止任务」同款的 `el-popconfirm`（`bottom-end`、`danger`，按钮为确认 / 取消）。受控，同一时刻只开一个，接 `useModalBack`。
+- **移除**：× 弹出气泡确认（`@/components/ui` 的 `Popconfirm`，右对齐、危险色确定按钮）。受控，同一时刻只开一个；返回栈由 `Popconfirm` 自己接。
 - **编辑**（`SavedViewEditor`）：
   - 名称输入框：留空即用路径。
   - 「用当前视图更新」：
     - 与当前相同时置灰；
     - 当前视图已被别的收藏占用时，红字提示是哪一条；
-    - 否则点了进入预览：组合切到当前视图，相对原组合新增的条件画粉底，原有而没有的列进「将移除」，再点撤销。
+    - 否则点了进入预览：组合切到当前视图，相对原组合新增的条件画淡强调底，原有而没有的列进「将移除」，再点撤销。
   - 底部只有「确定 / 取消」，确定才写库。
 - **组合展示**（`SavedViewCombination` / `SavedViewQueryTree`，只读）：
   - 排序两颗；随机排序不出方向。
@@ -76,20 +76,13 @@ interface GridViewContext {
   - 差异对比把整棵查询摊平成「维度 + 取值」的键集合，不分位置。
   - 不复用高级查询的条件行组件：它们没有只读档，删除、取非、+ 条件都是常驻渲染的。
 
-## 嵌套弹层与 `clickOutsideIgnore`
+## 嵌套弹层
 
-⋯ 面板是 `el-tooltip`，打开时用 vueuse `onClickOutside` 点外部关闭。编辑浮层（`el-popover`，`virtual-ref` 锚在行上、`left-start`）和移除确认（`el-popconfirm`）都 teleport 到 body，点它们原本算「外部」，会连带关掉面板。
+⋯ 面板是过滤 chip 下拉（`KbFilterDropdown`）的 `#panel`，桌面是 Reka `Popover`。编辑浮层（`Popover` + `PopoverContent :anchor`，锚在那一行左侧）和移除确认（`Popconfirm`）都 Portal 到 body，但它们也是 Reka 层：Reka 按层在 DOM 里的先后判断，后打开的子层算外层面板的「层内」，点它们不会关掉面板，不需要豁免类。（EP 时代为此给组件库补的 `clickOutsideIgnore` 与 popconfirm `popperClass`、本目录的 `savedViewLayer.ts` 已在界面重构 P3 删除。）
 
-做法是给 vendored 组件库补两个口子，见 `packages/kabegame-element-plus/README.md`：
+编辑浮层用 Portal 而不是就地渲染：它锚在可滚动列表的行上，就地渲染会被裁掉。
 
-- tooltip 内容组件的 `clickOutsideIgnore`（CSS 选择器数组，透传给 `onClickOutside` 的 `ignore`），`KbFilterDropdown` 透传同名 prop；
-- popconfirm 可追加的 `popperClass`。
-
-查询行给 ⋯ 面板传 `[".kb-saved-view-layer"]`，两个子层的 popper 都挂这个类（`savedViews/savedViewLayer.ts`）。
-
-不用 `:teleported="false"`：编辑浮层锚在可滚动列表的行上，不 teleport 会被裁掉。
-
-**紧凑档（Android）**：⋯ 面板本身是居中 `el-dialog`，没有点外部关闭。编辑改为叠加的 `el-dialog`，确认框与桌面相同，都接 `useModalBack`，返回键先关子层。
+**紧凑档（Android）**：⋯ 面板本身是居中 `Dialog`。编辑改为叠加的 `Dialog`，确认框与桌面相同；各层自己接返回栈，返回键先关子层。
 
 ## 画廊不再恢复上次浏览路径
 
@@ -106,11 +99,11 @@ interface GridViewContext {
 ## 涉及文件
 
 - `apps/kabegame/src/components/gallery/GalleryQueryBar.vue`
-- `apps/kabegame/src/components/gallery/savedViews/`（`SavedViewsSection.vue`、`SavedViewEditor.vue`、`SavedViewCombination.vue`、`SavedViewQueryTree.vue`、`SavedViewPill.vue`、`savedViewPills.ts`、`savedViewLayer.ts`）
+- `apps/kabegame/src/components/gallery/savedViews/`（`SavedViewsSection.vue`、`SavedViewEditor.vue`、`SavedViewCombination.vue`、`SavedViewQueryTree.vue`、`SavedViewPill.vue`、`savedViewPills.ts`）
 - `apps/kabegame/src/components/gallery/galleryChipIcons.ts`（查询行与组合展示共用的图标表）
 - `apps/kabegame/src/utils/savedViews.ts`、`apps/kabegame/src/services/savedViews.ts`
 - `apps/kabegame/src/components/imageGrid/gridViewPath.ts`、`components/ImageGrid.vue`、`components/imageGrid/types.ts`
 - `apps/kabegame/src/utils/galleryPath.ts`（`omitRandomSeed`）
 - `apps/kabegame/src/stores/galleryRoute.ts`、`stores/settings.ts`、`stores/settingsDescriptors.ts`、`stores/localSettingsMigrations.ts`
 - `apps/docs/src/content/docs/guide/gallery.md`（用户文档「收藏视图」一节与截图 `saved-views.png`）
-- `packages/kabegame-element-plus/src/components/{tooltip,kb-filter-dropdown,popconfirm}/src/*`
+- `apps/kabegame/src/components/ui/`（`FilterDropdown.vue`、`Popconfirm.vue`、`PopoverContent.vue` 的 `anchor`）

@@ -8,29 +8,29 @@
     :disabled="props.disabled || wallpaperModeSwitching || busy"
     @update:model-value="(v) => handleChange(v ?? 'none')"
   />
-  <el-select
+  <!-- 选项行自带原生 title（长文案截断时悬停看全） -->
+  <Select
     v-else
-    v-model="localValue"
+    :model-value="localValue"
+    :options="options"
     :placeholder="t('settings.transitionPlaceholder')"
-    style="min-width: 180px"
+    class="!w-[200px]"
     :disabled="props.disabled || wallpaperModeSwitching || busy"
-    @change="handleChange"
-  >
-    <!-- 下拉宽度已统一为输入框宽度，长文案会被 ellipsis 截断；补原生 title 让鼠标能看全 -->
-    <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" :title="opt.label" />
-  </el-select>
+    @update:model-value="onSelect"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, toRef, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { IS_ANDROID } from "@/env";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
 import { logger } from "@/utils/logger";
 import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
+import Select from "@/components/ui/Select.vue";
 
 const props = defineProps<{
   disabled?: boolean;
@@ -75,7 +75,7 @@ watch(
 const handleChange = async (transition: string) => {
   if (saving.value) return;
   if (!rotationEnabled.value) {
-    ElMessage.info(t("settings.transitionRotationRequired"));
+    kameMessage.info(t("settings.transitionRotationRequired"));
   }
   saving.value = true;
   try {
@@ -88,4 +88,11 @@ const handleChange = async (transition: string) => {
     saving.value = false;
   }
 };
+
+/** 桌面下拉：先把选中框挪过去（同原 el-select 的 v-model），失败由 handleChange 回滚 */
+function onSelect(v: string | undefined) {
+  if (!v || v === localValue.value) return;
+  localValue.value = v;
+  void handleChange(v);
+}
 </script>

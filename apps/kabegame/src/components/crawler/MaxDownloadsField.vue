@@ -1,9 +1,9 @@
 <template>
   <div class="flex flex-wrap items-center gap-3">
-    <el-switch
-      v-model="followGlobal"
-      :active-text="$t('plugins.maxConcurrentDownloadsFollowGlobal', { n: globalMax })"
-    />
+    <label class="inline-flex cursor-pointer items-center gap-2 text-[13px] text-kb-fg">
+      <Switch v-model="followGlobal" />
+      {{ $t("plugins.maxConcurrentDownloadsFollowGlobal", { n: globalMax }) }}
+    </label>
     <KbNumber
       v-if="!followGlobal"
       v-model="inputValue"
@@ -19,6 +19,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import KbNumber from "@/components/common/form/KbNumber.vue";
+import Switch from "@/components/ui/Switch.vue";
 import { useSettingsStore } from "@/stores/settings";
 
 /** 任务最大并发下载：null = 跟随全局 */

@@ -2,22 +2,12 @@
 
 import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import KbIntegerInput from "./KbIntegerInput.vue";
-
-const validate = vi.hoisted(() => vi.fn(async () => undefined));
-
-vi.mock("@kabegame/element-plus", () => ({
-  useFormItem: () => ({ formItem: { validate } }),
-}));
 
 vi.mock("@kabegame/i18n", () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }));
-
-beforeEach(() => {
-  validate.mockClear();
-});
 
 describe("KbIntegerInput", () => {
   it("在上下限处禁用对应按钮，并通过按钮按 1 步进", async () => {
@@ -55,16 +45,15 @@ describe("KbIntegerInput", () => {
     expect(input.element.value).toBe("1.5");
   });
 
-  it("modelValue 每次变化只触发一次 change 校验", async () => {
+  it("外部改 modelValue 时输入框跟随", async () => {
     const wrapper = mount(KbIntegerInput, {
       props: { modelValue: 2, min: 1, max: 10 },
     });
 
-    await wrapper.setProps({ modelValue: "bad" });
+    await wrapper.setProps({ modelValue: 7 });
     await nextTick();
 
-    expect(validate).toHaveBeenCalledTimes(1);
-    expect(validate).toHaveBeenCalledWith("change");
+    expect(wrapper.get("input").element.value).toBe("7");
   });
 
   it("按 step 步进并 clamp 到边界，同时发出 change", async () => {

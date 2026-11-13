@@ -7,12 +7,15 @@
 
     <template v-else>
       <!-- 骨架覆盖层：delayed 防止快速解码时闪烁 -->
-      <div v-if="showLoading" class="ic-loading-overlay absolute inset-0 z-3 pointer-events-none">
-        <el-skeleton :rows="0" animated class="absolute inset-0">
-          <template #template>
-            <el-skeleton-item :variant="isVideo ? 'rect' : 'image'" :style="{ width: '100%', height: '100%' }" />
-          </template>
-        </el-skeleton>
+      <!-- 不用 ui/Skeleton：它带圆角，网格格子是直角铺满的 -->
+      <div
+        v-if="showLoading"
+        data-kb-motion
+        class="ic-loading-overlay absolute inset-0 z-3 pointer-events-none grid place-items-center bg-kb-fill animate-[kb-pulse_1.6s_ease-in-out_infinite]"
+        aria-hidden="true"
+      >
+        <Film v-if="isVideo" class="size-7 text-kb-fg-subtle opacity-60" />
+        <ImageIcon v-else class="size-7 text-kb-fg-subtle opacity-60" />
       </div>
 
       <!-- 图片：双图层（缩略层打底；prefer=original 或缩略链死亡时叠加原图层） -->
@@ -109,6 +112,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch, watchEffect, type ComponentPublicInstance } from "vue";
 import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
+import { Film, Image as ImageIcon } from "@lucide/vue";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import WpeWallpaperContent from "../wallpaper/WpeWallpaperContent.vue";
 import type { ViewportPoint } from "../wallpaper/wpeContextMenu";

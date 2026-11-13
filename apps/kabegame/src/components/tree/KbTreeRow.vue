@@ -25,9 +25,7 @@
       data-kb-tree-twistie
       @click.stop="$emit('toggle')"
     >
-      <el-icon>
-        <ArrowRight />
-      </el-icon>
+      <ChevronRight class="kb-tree-row__twistie-icon" />
     </button>
     <span v-else class="kb-tree-row__twistie kb-tree-row__twistie--blank" />
     <!-- 行主体：消费者全权（名称/图标/计数/装饰） -->
@@ -36,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowRight } from "@kabegame/element-plus-icons";
+import { ChevronRight } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -83,7 +81,7 @@ function onRowDblclick() {
 </script>
 
 <style scoped>
-/* 行观感全部走 token，缺省值 = 画廊过滤树的既有样式（宿主不设 token 即原样）。
+/* 行观感全部走 token，缺省值是中性外框：悬停浅灰底、选中浅强调色底（宿主不设 token 即此样）。
  * 画册树等新 UI 通过在面板根上覆写这些变量对齐各自设计稿，
  * 而不是在宿主侧写 `.kb-tree-row { ... }` 覆盖。 */
 .kb-tree-row {
@@ -94,7 +92,7 @@ function onRowDblclick() {
   font-size: var(--kb-tree-row-font-size, inherit);
   /* 折叠三角与行主体之间的间距（画廊树历来是紧贴，缺省 0） */
   gap: var(--kb-tree-row-gap, 0);
-  color: var(--anime-text-primary);
+  color: var(--kb-tree-row-color, var(--kb-fg));
 }
 
 .kb-tree-row--clickable {
@@ -103,24 +101,24 @@ function onRowDblclick() {
 
 /* 原有的整行 hover 底色对所有节点保留。 */
 .kb-tree-row:hover {
-  background: var(--kb-tree-row-hover-bg, rgba(255, 107, 157, 0.07));
+  background: var(--kb-tree-row-hover-bg, var(--kb-hover));
 }
 
 /* 只有点击会选择 / 应用节点的行才额外改变文字色。展开按钮是独立操作，
  * 指针进入按钮时只撤销文字提示，整行 hover 底色保持不变。 */
 .kb-tree-row--clickable:hover:not(:has(> .kb-tree-row__twistie:hover)) {
-  color: var(--kb-tree-row-hover-color, var(--anime-primary));
+  color: var(--kb-tree-row-hover-color, var(--kb-fg));
 }
 
 .kb-tree-row--muted {
-  color: var(--anime-text-muted);
+  color: var(--kb-tree-row-muted-color, var(--kb-fg-subtle));
 }
 
 /* active 排在 hover 之后：同特异度下后写者胜，悬停不夺走选中底色 */
 .kb-tree-row--active,
 .kb-tree-row--active:hover {
-  background: var(--kb-tree-row-active-bg, rgba(255, 107, 157, 0.14));
-  color: var(--kb-tree-row-active-color, var(--anime-primary));
+  background: var(--kb-tree-row-active-bg, color-mix(in srgb, var(--kb-accent) 10%, transparent));
+  color: var(--kb-tree-row-active-color, var(--kb-fg));
   font-weight: var(--kb-tree-row-active-weight, inherit);
 }
 
@@ -135,9 +133,9 @@ function onRowDblclick() {
 /* 落点高亮要压过 :hover（拖拽时指针本就悬在目标行上） */
 .kb-tree-row--drop,
 .kb-tree-row--drop:hover {
-  outline: 1px dashed var(--anime-primary);
+  outline: 1px dashed var(--kb-accent);
   outline-offset: -1px;
-  background: rgba(124, 58, 237, 0.06);
+  background: color-mix(in srgb, var(--kb-accent) 6%, transparent);
 }
 
 .kb-tree-row__twistie {
@@ -152,9 +150,15 @@ function onRowDblclick() {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  /* el-icon 的字形是 1em，用字号收口三角大小 */
+  /* 图标按 1em 画，用字号收口箭头大小 */
   font-size: var(--kb-tree-twistie-icon-size, 1em);
   transition: transform 0.15s ease;
+}
+
+.kb-tree-row__twistie-icon {
+  width: 1em;
+  height: 1em;
+  color: var(--kb-fg-subtle);
 }
 
 .kb-tree-row__twistie--blank {

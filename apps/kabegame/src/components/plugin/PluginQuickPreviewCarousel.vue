@@ -2,7 +2,7 @@
   <div class="qp-carousel">
     <!-- 加载态：仅在数据尚未就绪时短暂出现（已安装插件的 assets 本就在内存中，通常不会显示） -->
     <div v-if="loading" class="qp-carousel-box qp-carousel-state">
-      <el-icon class="qp-spin"><Loading /></el-icon>
+      <Spinner :size="16" class="text-kb-fg-subtle" />
       <span class="qp-carousel-state-text">{{ t("plugins.quickPreview.loadingSamples") }}</span>
     </div>
 
@@ -17,7 +17,7 @@
           :aria-label="t('plugins.quickPreview.prevImage')"
           @click.stop="goTo((activeIndex - 1 + images.length) % images.length)"
         >
-          <el-icon><ArrowLeft /></el-icon>
+          <ChevronLeft />
         </button>
         <button
           v-if="images.length > 1"
@@ -26,7 +26,7 @@
           :aria-label="t('plugins.quickPreview.nextImage')"
           @click.stop="goTo((activeIndex + 1) % images.length)"
         >
-          <el-icon><ArrowRight /></el-icon>
+          <ChevronRight />
         </button>
       </div>
 
@@ -57,8 +57,8 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
-import { ElIcon } from "@kabegame/element-plus";
-import { ArrowLeft, ArrowRight, Loading } from "@kabegame/element-plus-icons";
+import { ChevronLeft, ChevronRight } from "@lucide/vue";
+import { Spinner } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 
 export interface PluginQuickPreviewImage {
@@ -136,7 +136,7 @@ onBeforeUnmount(clearTimer);
   height: 180px;
   border-radius: 12px;
   overflow: hidden;
-  background: var(--kb-qp-carousel-bg, #f4eff7);
+  background: var(--kb-fill-light);
 }
 
 .qp-carousel-state {
@@ -147,21 +147,9 @@ onBeforeUnmount(clearTimer);
   gap: 9px;
 }
 
-.qp-spin {
-  font-size: 16px;
-  color: var(--el-color-primary-light-5);
-  animation: qp-spin 1.1s linear infinite;
-}
-
-@keyframes qp-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .qp-carousel-state-text {
   font-size: 12px;
-  color: var(--el-text-color-placeholder);
+  color: var(--kb-fg-subtle);
   text-align: center;
   white-space: pre-line;
   line-height: 1.5;
@@ -199,14 +187,18 @@ onBeforeUnmount(clearTimer);
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.86);
-  color: #4a3f52;
+  color: var(--kb-fg);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
   transition: background 0.15s;
+}
+
+.qp-carousel-arrow svg {
+  width: 15px;
+  height: 15px;
 }
 
 .qp-carousel-arrow:hover {
@@ -232,7 +224,7 @@ onBeforeUnmount(clearTimer);
   height: 6px;
   width: 6px;
   border-radius: 3px;
-  background: var(--el-border-color-darker);
+  background: var(--kb-fill-dark);
   cursor: pointer;
   transition:
     width 0.15s,
@@ -241,7 +233,7 @@ onBeforeUnmount(clearTimer);
 
 .qp-carousel-dot--active {
   width: 16px;
-  background: var(--el-color-primary);
+  background: var(--kb-fg);
 }
 
 .qp-carousel-thumbs {
@@ -255,7 +247,7 @@ onBeforeUnmount(clearTimer);
   border-radius: 7px;
   overflow: hidden;
   cursor: pointer;
-  background: var(--kb-qp-carousel-bg, #f4eff7);
+  background: var(--kb-fill-light);
   box-shadow: 0 0 0 1.5px transparent;
   opacity: 0.45;
   transition:
@@ -265,7 +257,7 @@ onBeforeUnmount(clearTimer);
 
 .qp-carousel-thumb--active {
   opacity: 1;
-  box-shadow: 0 0 0 1.5px var(--el-color-primary);
+  box-shadow: 0 0 0 1.5px var(--kb-fg);
 }
 
 .qp-carousel-thumb img {

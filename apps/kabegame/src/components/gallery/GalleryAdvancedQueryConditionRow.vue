@@ -1,23 +1,21 @@
 <template>
   <div
-    class="relative rounded-xl border border-solid bg-[var(--el-bg-color)] p-3 shadow-[0_1px_3px_rgba(124,58,237,0.06)]"
-    :class="
-      negated
-        ? 'border-[color-mix(in_srgb,var(--el-color-error)_35%,transparent)]'
-        : 'border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)]'
-    "
+    class="group relative box-border rounded-kb-lg border border-solid bg-kb-surface-raised p-3 shadow-kb-sm"
+    :class="negated ? 'border-[color-mix(in_srgb,var(--kb-danger)_35%,transparent)]' : 'border-kb-line-strong'"
   >
-    <div v-if="compact" class="mb-2 text-xs font-medium text-[var(--anime-text-secondary)]">
+    <div v-if="compact" class="mb-2 text-[12px] font-500 text-kb-fg-muted">
       {{ title }}
     </div>
     <div class="flex items-start gap-2">
+      <!-- 取非开关：关时是虚线幽灵按钮，开时转危险色实底 -->
       <button
         type="button"
-        class="h-9 flex-none rounded-lg border border-dashed border-[var(--anime-border)] bg-transparent px-3 text-sm text-[var(--anime-text-secondary)] transition-colors cursor-pointer"
-        :class="{
-          '!border-solid !border-[color-mix(in_srgb,var(--el-color-error)_45%,transparent)] !bg-[color-mix(in_srgb,var(--el-color-error)_10%,transparent)] !font-bold !text-[var(--el-color-error)]':
-            negated,
-        }"
+        class="box-border h-8 flex-none cursor-pointer rounded-kb-md border border-solid px-3 text-[13px] [font-family:inherit] outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-kb-ring"
+        :class="
+          negated
+            ? 'border-[color-mix(in_srgb,var(--kb-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--kb-danger)_10%,transparent)] font-600 text-kb-danger'
+            : 'border-dashed border-kb-line-strong bg-transparent text-kb-fg-muted hover:border-kb-fg-subtle hover:text-kb-fg'
+        "
         :aria-pressed="negated"
         @click="toggleNegation"
       >
@@ -64,14 +62,14 @@
       </div>
     </div>
 
-    <!-- 删除条件:浮在卡片右上角的圆形徽章(设计稿) -->
+    <!-- 删除条件：浮在卡片右上角的圆形徽章，悬停转危险色 -->
     <button
       type="button"
-      class="absolute -right-2 -top-2 z-1 inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-[var(--anime-bg-card)] bg-[var(--anime-primary)] p-0 text-xs text-white shadow-[0_2px_7px_rgba(255,107,157,0.45)] hover:bg-[var(--el-color-error)] cursor-pointer"
+      class="absolute -right-2 -top-2 z-1 box-border grid size-6 cursor-pointer place-items-center rounded-full border-2 border-solid border-kb-surface-raised bg-kb-fg-muted p-0 text-white outline-none transition-colors duration-150 hover:bg-kb-danger focus-visible:bg-kb-danger"
       :aria-label="t('common.delete')"
       @click="removeCondition"
     >
-      <el-icon><Close /></el-icon>
+      <X class="size-3" :stroke-width="2.5" />
     </button>
   </div>
 </template>
@@ -79,8 +77,9 @@
 <script setup lang="ts">
 import { computed, markRaw, ref, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElIcon, KbFilterDropdown } from "@kabegame/element-plus";
-import { Close, FilterAspect, FilterDate, FilterMedia, FilterPlugin, FilterSize } from "@kabegame/element-plus-icons";
+import { X } from "@lucide/vue";
+import { KbFilterDropdown } from "@/components/ui";
+import { FilterAspect, FilterDate, FilterMedia, FilterPlugin, FilterSize } from "@/components/icons/filterIcons";
 import { facetValueLabel, type FacetDimension } from "@/composables/useAdvancedQueryFacets";
 import { usePluginStore } from "@/stores/plugins";
 import {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { shallowMount } from "@vue/test-utils";
+import { mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import KbLabel from "./KbLabel.vue";
 
@@ -8,15 +8,31 @@ vi.mock("@kabegame/i18n", () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }));
 
-describe("KbLabel", () => {
-  it("Android 用立即生效的 click Tooltip，避免触摸抬起触发 mouseleave 后消失", () => {
-    const wrapper = shallowMount(KbLabel, {
-      props: { label: { id: "auth.needProxy" } },
-    });
+// vi.mock 会被提升到导入之前，桩的构造放进 vi.hoisted
+const { slotStub } = vi.hoisted(() => ({
+  slotStub: (name: string) => ({ name, template: "<div><slot /></div>" }),
+}));
 
-    const tooltip = wrapper.getComponent({ name: "ElTooltip" });
-    expect(tooltip.props("trigger")).toBe("click");
-    expect(tooltip.props("showAfter")).toBe(0);
+vi.mock("@/components/ui", () => ({
+  Popover: slotStub("Popover"),
+  PopoverContent: slotStub("PopoverContent"),
+  Tooltip: slotStub("Tooltip"),
+}));
+vi.mock("reka-ui", () => ({ PopoverTrigger: slotStub("PopoverTrigger") }));
+
+describe("KbLabel", () => {
+  it("Android 点按弹出说明气泡（Reka 的 Tooltip 不响应点按），触发器是可点的按钮", () => {
+    const wrapper = mount(KbLabel, { props: { label: { id: "auth.needProxy" } } });
+
+    expect(wrapper.findComponent({ name: "Popover" }).exists()).toBe(true);
+    expect(wrapper.findComponent({ name: "Tooltip" }).exists()).toBe(false);
+    expect(wrapper.find("button.kb-label").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("没有标签时渲染等宽空槽", () => {
+    const wrapper = mount(KbLabel, { props: { label: null } });
+    expect(wrapper.find(".kb-label-empty").exists()).toBe(true);
     wrapper.unmount();
   });
 });

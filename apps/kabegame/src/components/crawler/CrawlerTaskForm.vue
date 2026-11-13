@@ -1,21 +1,12 @@
 <template>
-  <el-form ref="formRef" :model="formModel" label-position="top" class="crawl-form">
+  <div class="flex flex-col gap-4 pb-1">
     <!-- 任务设置（最上）：输出目录 / 输出画册。未选源时同样显示，选到源后并入 taskConfig -->
-    <el-divider content-position="left">{{ $t("plugins.taskSettings") }}</el-divider>
-    <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
-      <el-input v-model="outputDirValue" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
-        <template #append>
-          <el-button @click="selectOutputDir">
-            <el-icon>
-              <FolderOpened />
-            </el-icon>
-            {{ $t("common.chooseFolder") }}
-          </el-button>
-        </template>
-      </el-input>
-    </el-form-item>
+    <SectionTitle>{{ $t("plugins.taskSettings") }}</SectionTitle>
+    <Field v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
+      <OutputDirSelect v-model="outputDirValue" :placeholder="$t('plugins.outputDirPlaceholder')" />
+    </Field>
 
-    <el-form-item :label="$t('albums.outputAlbum')">
+    <Field :label="$t('albums.outputAlbum')">
       <AlbumPicker
         v-model="albumValue"
         :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
@@ -26,76 +17,78 @@
         :compact-presentation="IS_ANDROID ? 'dialog' : 'overlay'"
         clearable
       />
-    </el-form-item>
-    <div class="flex flex-wrap gap-x-6">
-      <el-form-item class="min-w-56 flex-1" :label="$t('plugins.maxConcurrentDownloads')">
+    </Field>
+    <template v-if="isCreatingNewOutputAlbum">
+      <Field
+        :label="$t('albums.placeholderName')"
+        required
+        :validator="() => (newOutputAlbumName.trim() ? undefined : $t('albums.enterAlbumNameFirst'))"
+      >
+        <Input
+          ref="newOutputAlbumNameInputRef"
+          v-model="newOutputAlbumName"
+          :placeholder="$t('albums.placeholderName')"
+          maxlength="50"
+          @keyup.enter="handleCreateOutputAlbum"
+        >
+          <template #suffix>
+            <span class="text-[11.5px] tabular-nums">{{ newOutputAlbumName.length }}/50</span>
+          </template>
+        </Input>
+      </Field>
+      <Field :label="$t('albums.parentAlbum')">
+        <AlbumPicker
+          v-model="newOutputAlbumParentId"
+          :scope="{ sections: ['normal'] }"
+          :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')"
+        />
+      </Field>
+    </template>
+    <div class="flex flex-wrap gap-x-6 gap-y-4">
+      <Field class="min-w-56 flex-1" :label="$t('plugins.maxConcurrentDownloads')">
         <MaxDownloadsField v-model="maxDownloadsValue" />
-      </el-form-item>
-      <el-form-item class="min-w-56 flex-1" :label="$t('plugins.dryRun')">
-        <div class="flex items-center gap-2">
-          <el-switch v-model="isDryRunValue" />
-          <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
-        </div>
-      </el-form-item>
-      <el-form-item class="min-w-56 flex-1" :label="$t('plugins.retryOnFail')">
+      </Field>
+      <Field class="min-w-56 flex-1" :label="$t('plugins.dryRun')">
+        <label class="inline-flex min-h-8 cursor-pointer items-center gap-2 text-[12.5px] text-kb-fg-muted">
+          <Switch v-model="isDryRunValue" />
+          {{ $t("plugins.dryRunDesc") }}
+        </label>
+      </Field>
+      <Field class="min-w-56 flex-1" :label="$t('plugins.retryOnFail')">
         <RetryCountField v-model="retryCountValue" />
-      </el-form-item>
+      </Field>
     </div>
-    <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-      <el-input
-        ref="newOutputAlbumNameInputRef"
-        v-model="newOutputAlbumName"
-        :placeholder="$t('albums.placeholderName')"
-        maxlength="50"
-        show-word-limit
-        @keyup.enter="handleCreateOutputAlbum"
-      />
-    </el-form-item>
-    <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-      <AlbumPicker
-        v-model="newOutputAlbumParentId"
-        :scope="{ sections: ['normal'] }"
-        :placeholder="$t('albums.selectParentAlbum')"
-        :picker-title="$t('albums.parentAlbum')"
-      />
-    </el-form-item>
 
     <!-- 插件设置（中间）：选择源 + 插件变量 -->
-    <el-divider content-position="left">{{ $t("plugins.pluginSettings") }}</el-divider>
-    <el-form-item :label="$t('plugins.selectSource')">
-      <div class="plugin-source-field">
-        <div class="flex w-full min-w-0 items-start gap-2">
-          <PluginPickerField
-            class="min-w-0 flex-1"
-            :model-value="tc?.pluginId || null"
-            :plugins="plugins"
-            :placeholder="$t('plugins.selectSourcePlaceholder')"
-            :select-trigger="IS_ANDROID"
-            :popper-class="uiStore.isCompact ? undefined : 'crawl-plugin-select-dropdown'"
-            show-labels
-            @update:model-value="onPluginChange"
-          />
-          <el-tooltip :content="$t('plugins.detail.goSurfLogin')" placement="top">
-            <span class="inline-flex flex-none">
-              <el-button
-                class="!m-0 h-32px w-40px !p-0"
-                :aria-label="$t('plugins.detail.goSurfLogin')"
-                :disabled="!selectedPluginSurfUrl"
-                @click="openSelectedPluginInSurf"
-              >
-                <span class="inline-flex items-center gap-0.5">
-                  <Compass class="h-18px w-18px" />
-                  <TopRight class="h-11px w-11px" />
-                </span>
-              </el-button>
-            </span>
-          </el-tooltip>
-        </div>
-        <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
-          {{ crawlDialogMinAppErrorText }}
-        </div>
+    <SectionTitle>{{ $t("plugins.pluginSettings") }}</SectionTitle>
+    <Field :label="$t('plugins.selectSource')" :error="crawlDialogMinAppErrorText || undefined">
+      <div class="flex w-full min-w-0 items-start gap-2">
+        <PluginPickerField
+          class="min-w-0 flex-1"
+          :model-value="tc?.pluginId || null"
+          :plugins="plugins"
+          :placeholder="$t('plugins.selectSourcePlaceholder')"
+          :select-trigger="IS_ANDROID"
+          show-labels
+          @update:model-value="onPluginChange"
+        />
+        <Tooltip :content="$t('plugins.detail.goSurfLogin')">
+          <!-- 包一层 span：按钮禁用时悬停提示照样能弹 -->
+          <span class="inline-flex shrink-0">
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('plugins.detail.goSurfLogin')"
+              :disabled="!selectedPluginSurfUrl"
+              @click="openSelectedPluginInSurf"
+            >
+              <Compass />
+            </Button>
+          </span>
+        </Tooltip>
       </div>
-    </el-form-item>
+    </Field>
 
     <PluginConfigForm
       v-if="tc"
@@ -106,44 +99,32 @@
     />
 
     <!-- 高级设置（最下）：HTTP 头 -->
-    <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
-    <el-form-item :label="$t('plugins.httpHeaders')">
+    <SectionTitle>{{ $t("plugins.advancedSettings") }}</SectionTitle>
+    <Field :label="$t('plugins.httpHeaders')">
       <HttpHeadersEditor v-model="headersValue" />
-    </el-form-item>
-  </el-form>
+    </Field>
+  </div>
 
   <!-- 保存为配置弹窗 -->
-  <ElDialog
-    :model-value="saveConfigModal.isOpen.value"
-    :z-index="saveConfigModal.zIndex.value"
-    :title="$t('plugins.saveAsConfig')"
-    width="400px"
-    :close-on-click-modal="false"
-    @update:model-value="saveConfigModal.close"
-  >
-    <el-form label-width="80px">
-      <el-form-item :label="$t('common.name')" required>
-        <el-input
+  <Dialog v-model:open="saveConfigOpen" :title="$t('plugins.saveAsConfig')" :width="400" :close-on-overlay="false">
+    <div class="flex flex-col gap-4">
+      <Field :label="$t('common.name')" required>
+        <Input
           v-model="saveConfigName"
           :placeholder="$t('common.configNamePlaceholder')"
           maxlength="80"
-          show-word-limit
+          @keyup.enter="confirmSaveConfig"
         />
-      </el-form-item>
-      <el-form-item :label="$t('common.description')">
-        <el-input
-          v-model="saveConfigDescription"
-          type="textarea"
-          :placeholder="$t('common.configDescPlaceholder')"
-          :rows="2"
-        />
-      </el-form-item>
-    </el-form>
+      </Field>
+      <Field :label="$t('common.description')">
+        <Textarea v-model="saveConfigDescription" :placeholder="$t('common.configDescPlaceholder')" :rows="2" />
+      </Field>
+    </div>
     <template #footer>
-      <el-button @click="saveConfigModal.close()">{{ $t("common.cancel") }}</el-button>
-      <el-button type="primary" @click="confirmSaveConfig">{{ $t("common.save") }}</el-button>
+      <Button variant="outline" @click="saveConfigOpen = false">{{ $t("common.cancel") }}</Button>
+      <Button variant="primary" @click="confirmSaveConfig">{{ $t("common.save") }}</Button>
     </template>
-  </ElDialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -154,9 +135,8 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
-import { Compass, FolderOpened, TopRight } from "@kabegame/element-plus-icons";
-import { ElDialog } from "@kabegame/element-plus";
-import { open } from "@tauri-apps/plugin-dialog";
+import { Compass } from "@lucide/vue";
+import { Button, Dialog, Field, Input, SectionTitle, Switch, Textarea, Tooltip, useForm } from "@/components/ui";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useApp } from "@/stores/app";
@@ -165,16 +145,15 @@ import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import PluginConfigForm from "@/components/crawler/PluginConfigForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
+import OutputDirSelect from "@/components/crawler/OutputDirSelect.vue";
 import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
 import RetryCountField from "@/components/crawler/RetryCountField.vue";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
-import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { useSurfStore } from "@/stores/surf";
 import type { PluginVarDef } from "@/utils/pluginVarForm";
-import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { enqueueTask, guardPluginPlatform } from "@/composables/useCrawlTaskLauncher";
 import { buildSubmitUserConfig, writeTaskConfig } from "@/composables/taskConfig";
 
@@ -194,11 +173,9 @@ const surfStore = useSurfStore();
 /** 全局唯一的 task config；Dialog 只响应式编辑它，不判断来源 */
 const tc = computed(() => crawlerStore.taskConfig);
 const plugins = computed(() => pluginStore.plugins);
-const formRef = ref<any>(null);
 const pluginConfigFormRef = ref<InstanceType<typeof PluginConfigForm> | null>(null);
-
-/** el-form 的 model：PluginVarsForm 的 prop 路径是 `vars.<key>` */
-const formModel = computed(() => ({ vars: tc.value?.userConfig ?? {} }));
+/** 表单校验：插件变量（PluginVarsForm 的 Field）与新建画册名都注册在这里 */
+const form = useForm();
 
 function pluginDefs(pluginId: string): PluginVarDef[] {
   return (pluginStore.plugins.find((p) => p.id === pluginId)?.config?.vars as PluginVarDef[] | undefined) ?? [];
@@ -227,9 +204,9 @@ async function openSelectedPluginInSurf() {
   if (!url) return;
   try {
     await surfStore.startSession(url);
-    ElMessage.success(t("surf.sessionStartSuccess"));
+    kameMessage.success(t("surf.sessionStartSuccess"));
   } catch (error: any) {
-    ElMessage.error(error?.message || String(error) || t("surf.sessionStartFailed"));
+    kameMessage.error(error?.message || String(error) || t("surf.sessionStartFailed"));
   }
 }
 
@@ -312,18 +289,6 @@ const retryCountValue = computed<number>({
   },
 });
 
-const selectOutputDir = async () => {
-  if (await guardDesktopOnly("openLocal")) return;
-  try {
-    const selected = await open({ directory: true, multiple: false });
-    if (selected && typeof selected === "string") {
-      outputDirValue.value = selected;
-    }
-  } catch (error) {
-    console.error("选择目录失败:", error);
-  }
-};
-
 /* ---------- 新建输出画册 ---------- */
 
 const newOutputAlbumName = ref<string>("");
@@ -342,7 +307,7 @@ watch(albumValue, (newValue) => {
 
 const createOutputAlbum = async (showSuccess = true) => {
   if (!newOutputAlbumName.value.trim()) {
-    ElMessage.warning(t("albums.enterAlbumNameFirst"));
+    kameMessage.warning(t("albums.enterAlbumNameFirst"));
     return null;
   }
   try {
@@ -350,12 +315,12 @@ const createOutputAlbum = async (showSuccess = true) => {
     const created = await createAlbum(newOutputAlbumName.value.trim(), { parentId });
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
-    if (showSuccess) ElMessage.success(t("albums.albumCreated"));
+    if (showSuccess) kameMessage.success(t("albums.albumCreated"));
     return created;
   } catch (error: any) {
     console.error("创建画册失败:", error);
     const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
-    ElMessage.error(errorMessage);
+    kameMessage.error(errorMessage);
     return null;
   }
 };
@@ -367,30 +332,30 @@ const handleCreateOutputAlbum = async () => {
 
 /* ---------- 保存为配置 ---------- */
 
-const saveConfigModal = useModal();
+const saveConfigOpen = ref(false);
 const saveConfigName = ref("");
 const saveConfigDescription = ref("");
 
 function openSaveConfigDialog() {
   const cfg = tc.value;
   if (!cfg?.pluginId) {
-    ElMessage.warning(t("plugins.selectSourceBeforeSave"));
+    kameMessage.warning(t("plugins.selectSourceBeforeSave"));
     return;
   }
   saveConfigName.value = pluginStore.pluginLabel(cfg.pluginId);
   saveConfigDescription.value = "";
-  saveConfigModal.open();
+  saveConfigOpen.value = true;
 }
 
 async function confirmSaveConfig() {
   const cfg = tc.value;
   if (!cfg?.pluginId) {
-    ElMessage.warning(t("plugins.selectSourceBeforeSave"));
+    kameMessage.warning(t("plugins.selectSourceBeforeSave"));
     return;
   }
   const name = saveConfigName.value.trim();
   if (!name) {
-    ElMessage.warning(t("common.configNamePlaceholder"));
+    kameMessage.warning(t("common.configNamePlaceholder"));
     return;
   }
   try {
@@ -409,11 +374,11 @@ async function confirmSaveConfig() {
       // Dialog 恒为手动任务：保存出来的配置默认不定时
       scheduleEnabled: false,
     });
-    ElMessage.success(t("tasks.saveConfigSuccess"));
-    saveConfigModal.close();
+    kameMessage.success(t("tasks.saveConfigSuccess"));
+    saveConfigOpen.value = false;
   } catch (error) {
     console.error("保存为配置失败:", error);
-    ElMessage.error(t("tasks.saveFailed"));
+    kameMessage.error(t("tasks.saveFailed"));
   }
 }
 
@@ -423,7 +388,13 @@ async function submit() {
   const cfg = tc.value;
   if (!(await guardPluginPlatform())) return;
   if (!cfg?.pluginId) {
-    ElMessage.warning(t("plugins.selectSourcePlaceholder"));
+    kameMessage.warning(t("plugins.selectSourcePlaceholder"));
+    return;
+  }
+
+  // 先校验再建画册：画册名为空时直接在字段上标红，不先弹「请先输入画册名」
+  if (!form.validate()) {
+    kameMessage.warning(t("plugins.fillRequired"));
     return;
   }
 
@@ -433,18 +404,9 @@ async function submit() {
     albumValue.value = created.id;
   }
 
-  if (formRef.value) {
-    try {
-      await formRef.value.validate();
-    } catch {
-      ElMessage.warning(t("plugins.fillRequired"));
-      return;
-    }
-  }
-
   const invalid = pluginConfigFormRef.value?.firstInvalidVar();
   if (invalid) {
-    ElMessage.warning(t("plugins.fillRequiredField", { name: varDisplayName(invalid) }));
+    kameMessage.warning(t("plugins.fillRequiredField", { name: varDisplayName(invalid) }));
     return;
   }
 
@@ -486,68 +448,3 @@ async function submit() {
 
 defineExpose({ submit, openSaveConfigDialog });
 </script>
-
-<style lang="scss" scoped>
-.crawl-form {
-  margin-bottom: 20px;
-
-  :deep(.el-form-item__label) {
-    color: var(--anime-text-primary);
-    font-weight: 500;
-  }
-
-  :deep(.el-form-item__content) {
-    width: 100%;
-  }
-}
-
-.plugin-source-field {
-  width: 100%;
-}
-
-.plugin-min-app-error {
-  color: var(--el-color-danger);
-  font-size: 12px;
-  line-height: 1.45;
-  margin-top: 6px;
-}
-</style>
-
-<style lang="scss">
-.crawl-plugin-select-dropdown {
-  .el-select-dropdown__item {
-    padding: 8px 12px;
-  }
-
-  .plugin-picker-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 24px;
-  }
-
-  .plugin-picker-option__icon {
-    width: 18px;
-    height: 18px;
-    object-fit: contain;
-    flex-shrink: 0;
-    border-radius: 4px;
-  }
-
-  .plugin-picker-option__icon-placeholder {
-    width: 18px;
-    height: 18px;
-    flex-shrink: 0;
-    font-size: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--anime-text-secondary);
-  }
-
-  .plugin-picker-option span {
-    line-height: 1.2;
-    color: var(--anime-text-primary);
-  }
-}
-</style>

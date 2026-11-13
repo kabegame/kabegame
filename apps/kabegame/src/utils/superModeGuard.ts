@@ -1,6 +1,6 @@
-import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "../env";
+import { messageBox } from "@/components/ui/messageBox";
 
 /**
  * 拦截 web mode 下非 super 用户修改需要管理员权限的设置项，
@@ -11,7 +11,7 @@ export async function guardSuperRequired(): Promise<boolean> {
   if (!IS_WEB) return false;
   const t = i18n.global.t;
   try {
-    await ElMessageBox.alert(t("web.superRequiredDesc"), t("web.superRequiredTitle"), {
+    await messageBox.alert(t("web.superRequiredDesc"), t("web.superRequiredTitle"), {
       confirmButtonText: t("common.ok"),
       type: "warning",
       center: true,

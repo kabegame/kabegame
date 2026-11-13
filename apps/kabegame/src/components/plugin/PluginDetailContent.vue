@@ -1,48 +1,47 @@
 <template>
-  <div v-if="showSkeleton" class="p-10">
-    <el-skeleton :rows="5" animated />
+  <div v-if="showSkeleton" class="flex flex-col gap-3 p-10">
+    <Skeleton class="h-5 w-2/5" />
+    <Skeleton v-for="i in 4" :key="i" class="h-3.5" :class="i === 4 ? 'w-3/5' : 'w-full'" />
   </div>
 
-  <div v-else-if="!loading && !plugin" class="p-10 text-center">
-    <el-empty :description="t('common.pluginNotExist')" />
-  </div>
+  <Empty v-else-if="!loading && !plugin" :title="t('common.pluginNotExist')">
+    <template #icon><Puzzle /></template>
+  </Empty>
 
   <!-- 桌面：1a 三栏工作台（标题栏由宿主页面的 PageHeader 承载，这里只管主体） -->
   <div v-else-if="plugin && !uiStore.isCompact" class="flex flex-col h-full min-h-0">
     <div
       v-if="plugin.minAppIncompatible"
-      class="flex items-center gap-2 py-2 px-4 flex-none border-b border-b-solid border-[var(--anime-border)] text-13.5px"
-      style="background: rgba(239, 68, 68, 0.08)"
+      class="flex flex-none items-center gap-2 border-b border-b-solid border-kb-line bg-[color-mix(in_srgb,var(--kb-danger)_7%,white)] px-4 py-2 text-[13px] text-kb-fg-regular"
     >
-      <span
-        class="kb-chip text-white whitespace-nowrap"
-        style="background: linear-gradient(135deg, #ef4444 0%, #f87171 100%)"
-      >
+      <TriangleAlert class="size-4 flex-none text-kb-danger" />
+      <Tag tone="danger" size="sm" class="whitespace-nowrap">
         {{ t("plugins.detail.requireAppVersion", { version: plugin.minAppVersion }) }}
-      </span>
+      </Tag>
       <span>{{ t("plugins.detail.appVersionBad", { app: appVersionText ?? "?", min: plugin.minAppVersion }) }}</span>
       <div class="flex-1" />
-      <a href="#" class="underline whitespace-nowrap" @click.prevent="handleOpenReleaseLink">
+      <a href="#" class="whitespace-nowrap text-kb-fg underline" @click.prevent="handleOpenReleaseLink">
         {{ t("plugins.docReleaseLinkText") }}
       </a>
     </div>
 
     <div class="flex items-center gap-3 px-4 pt-2.5 pb-2 flex-none">
-      <KbTab v-model="activeTab" :items="tabItems" />
+      <Tabs v-model="activeTab" :items="tabItems" />
       <div class="flex-1" />
       <a
         v-if="plugin.baseUrl"
         href="#"
-        class="text-13.5px underline font-mono whitespace-nowrap text-[var(--anime-text-secondary)]"
+        class="inline-flex items-center gap-1 whitespace-nowrap font-mono text-[12.5px] text-kb-fg-muted no-underline hover:text-kb-fg hover:underline"
         @click.prevent="handleOpenBaseUrl"
       >
-        {{ plugin.baseUrl }} ↗
+        {{ plugin.baseUrl }}
+        <ExternalLink class="size-3.5" />
       </a>
     </div>
 
     <!-- 两侧栏用 flex-none + 自身 width：grid 的 auto 列会按 min/max-content 收缩，
          把 KbResizable clamp 出来的宽度压掉（拖到下限会塌成 0） -->
-    <div class="plugin-detail-panes flex-1 min-h-0 flex border-t border-t-solid border-[var(--anime-border)]">
+    <div class="plugin-detail-panes flex-1 min-h-0 flex border-t border-t-solid border-kb-line">
       <PluginDocToc
         v-if="isMarkdownTab && tocOpen"
         v-model:width="menuWidth"
@@ -53,16 +52,16 @@
         @select="handleTocSelect"
         @collapse="tocOpen = false"
       />
-      <button
-        v-else-if="isMarkdownTab"
-        type="button"
-        :title="t('plugins.detail.tocExpand')"
-        :aria-label="t('plugins.detail.tocExpand')"
-        class="flex-none w-26px border-none border-r border-r-solid border-[var(--anime-border)] bg-[color-mix(in_srgb,white_35%,transparent)] text-[var(--anime-text-muted)] flex items-center justify-center cursor-pointer hover:text-[var(--anime-primary)]"
-        @click="tocOpen = true"
-      >
-        <el-icon :size="14"><ArrowRight /></el-icon>
-      </button>
+      <Tooltip v-else-if="isMarkdownTab" :content="t('plugins.detail.tocExpand')" side="right">
+        <button
+          type="button"
+          :aria-label="t('plugins.detail.tocExpand')"
+          class="flex w-[26px] flex-none cursor-pointer items-center justify-center border-0 border-r border-r-solid border-kb-line bg-transparent p-0 text-kb-fg-subtle outline-none transition-colors hover:bg-kb-hover hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-kb-ring"
+          @click="tocOpen = true"
+        >
+          <ChevronRight class="size-3.5" />
+        </button>
+      </Tooltip>
 
       <div class="relative flex-1 min-w-0 min-h-0">
         <div v-show="activeTab === 'doc'" class="absolute inset-0">
@@ -127,36 +126,28 @@
   <!-- 紧凑端：单列（Android / 窄视口），不做三栏与走马灯。标题栏同样由宿主页面承载 -->
   <div v-else-if="plugin" class="p-4 flex flex-col gap-4 h-full overflow-y-auto [scrollbar-width:none]">
     <div class="flex flex-wrap items-center gap-1.5">
-      <span class="kb-chip bg-[#ecf5ff] text-[#409eff]">v{{ plugin.version }}</span>
-      <span
-        v-if="plugin.minAppVersion"
-        class="kb-chip text-white"
-        :style="{
-          background: plugin.minAppIncompatible
-            ? 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)'
-            : 'linear-gradient(135deg, #10b981 0%, #34d399 100%)',
-        }"
-      >
+      <Tag size="sm" class="font-mono">v{{ plugin.version }}</Tag>
+      <Tag v-if="plugin.minAppVersion" size="sm" :tone="plugin.minAppIncompatible ? 'danger' : 'success'">
         {{ t("plugins.detail.requireAppVersion", { version: plugin.minAppVersion }) }}
-      </span>
-      <span class="kb-chip" :class="actionState === 'installed' ? 'text-white kb-grad' : 'bg-[#f4f4f5] text-[#909399]'">
+      </Tag>
+      <Tag size="sm" :tone="actionState === 'installed' ? 'success' : 'neutral'">
         {{ actionState === "installed" ? t("plugins.installed") : t("plugins.notInstalled") }}
-      </span>
+      </Tag>
     </div>
 
-    <div v-if="displayDesc" class="text-14px text-[var(--anime-text-secondary)]">{{ displayDesc }}</div>
+    <div v-if="displayDesc" class="text-[13.5px] leading-[1.65] text-kb-fg-regular">{{ displayDesc }}</div>
     <PluginLabelTags v-if="plugin.labels?.length" :labels="plugin.labels" />
     <a
       v-if="plugin.baseUrl"
       href="#"
-      class="text-13.5px underline font-mono break-all"
+      class="break-all font-mono text-[12.5px] text-kb-fg-muted underline"
       @click.prevent="handleOpenBaseUrl"
     >
       {{ plugin.baseUrl }}
     </a>
 
     <div>
-      <KbTab v-if="hasChangelog" v-model="compactTab" :items="compactTabItems" class="mb-3" />
+      <Tabs v-if="hasChangelog" v-model="compactTab" :items="compactTabItems" class="mb-3" />
       <PluginDocRenderer
         v-if="compactDocText || compactLoading"
         :markdown="compactDocText"
@@ -167,7 +158,9 @@
         @image-preview-open="emit('doc-image-preview-open', $event)"
         @image-preview-close="emit('doc-image-preview-close', $event)"
       />
-      <el-empty v-else :description="t('common.pluginNoDoc')" :image-size="100" />
+      <Empty v-else :title="t('common.pluginNoDoc')">
+        <template #icon><FileText /></template>
+      </Empty>
     </div>
   </div>
 </template>
@@ -175,9 +168,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useLocalStorage, useThrottleFn } from "@vueuse/core";
-import { ArrowRight } from "@kabegame/element-plus-icons";
+import { ChevronRight, ExternalLink, FileText, Puzzle, TriangleAlert } from "@lucide/vue";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
-import { KbTab, type KbTabItem } from "@kabegame/element-plus";
+import { Empty, Skeleton, Tabs, Tag, Tooltip, type TabItem } from "@/components/ui";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginDocPanel from "./PluginDocPanel.vue";
 import PluginDocToc from "./PluginDocToc.vue";
@@ -272,8 +265,8 @@ const configVarsCount = computed(() => {
   return Array.isArray(vars) ? vars.length : null;
 });
 
-const tabItems = computed<KbTabItem<DesktopTab>[]>(() => {
-  const items: KbTabItem<DesktopTab>[] = [
+const tabItems = computed<TabItem<DesktopTab>[]>(() => {
+  const items: TabItem<DesktopTab>[] = [
     { name: "doc", label: t("plugins.detail.tabDoc") },
     { name: "config", label: t("plugins.detail.tabConfig"), count: configVarsCount.value },
     { name: "pathql", label: t("plugins.detail.tabPathql"), count: pathqlCount.value },
@@ -372,7 +365,7 @@ const hasChangelog = computed(
 );
 const compactLoading = computed(() => (compactTab.value === "changelog" ? changelogLoading.value : docLoading.value));
 
-const compactTabItems = computed<KbTabItem<CompactTab>[]>(() => [
+const compactTabItems = computed<TabItem<CompactTab>[]>(() => [
   { name: "doc", label: t("plugins.detail.tabDoc") },
   { name: "changelog", label: t("plugins.detail.tabChangelog") },
 ]);

@@ -1,54 +1,59 @@
 <template>
   <section
-    class="relative w-full overflow-hidden rounded-[18px] border border-[color-mix(in_srgb,var(--anime-primary)_26%,transparent)] bg-[color-mix(in_srgb,var(--anime-bg-card,#1c1c28)_88%,transparent)] px-6 py-[22px] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--anime-primary)_8%,transparent)]"
-    :class="enabled ? '!border-[color-mix(in_srgb,#22d3ee_40%,transparent)]' : ''"
+    class="box-border w-full rounded-kb-lg border border-solid border-kb-line bg-kb-surface-raised px-5 py-[18px]"
   >
-    <div class="relative z-1 flex items-center justify-between gap-4">
-      <div class="flex items-center gap-3.5">
+    <div class="flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <!-- 运行状态点：运行中成功色，停止时灰 -->
         <span
-          class="h-3 w-3 rounded-full bg-[var(--anime-text-muted)] shadow-[0_0_0_4px_color-mix(in_srgb,var(--anime-text-muted)_18%,transparent)]"
-          :class="enabled ? '!bg-[#22d3ee] !shadow-[0_0_0_4px_color-mix(in_srgb,#22d3ee_22%,transparent)]' : ''"
+          class="size-2.5 shrink-0 rounded-full"
+          :class="
+            enabled
+              ? 'bg-kb-success shadow-[0_0_0_4px_color-mix(in_srgb,var(--kb-success)_18%,transparent)]'
+              : 'bg-kb-fg-subtle shadow-[0_0_0_4px_var(--kb-fill)]'
+          "
         ></span>
         <div class="flex flex-col gap-0.5">
-          <span class="text-[18px] font-700 tracking-[0.02em] text-[var(--anime-text-primary)]">
+          <span class="text-[15px] font-600 text-kb-fg">
             {{ $t("settings.webServerSectionTitle") }}
           </span>
-          <span class="font-mono text-[12px] text-[var(--anime-text-muted)]">
+          <span class="font-mono text-[12px] text-kb-fg-muted">
             {{ enabled ? $t("settings.webServerRunning") : $t("settings.webServerStopped") }}
           </span>
         </div>
       </div>
-      <el-switch size="large" :model-value="enabled" :loading="toggling" :before-change="onBeforeToggle" />
+      <!-- 开关不乐观切换：写入成功后由设置值带过来 -->
+      <Switch :model-value="enabled" :disabled="toggling" @update:model-value="onToggle" />
     </div>
 
-    <p class="relative z-1 mb-0 mt-3 text-[12px] leading-[1.6] text-[var(--anime-text-muted)]">
+    <p class="mb-0 mt-3 text-[12px] leading-[1.6] text-kb-fg-muted">
       {{ $t("settings.webServerDesc") }}
     </p>
 
-    <div class="relative z-1 mt-4 flex flex-col gap-4">
+    <div class="mt-4 flex flex-col gap-4">
       <div class="grid min-w-0 gap-2 md:grid-cols-2">
         <button
           v-for="endpoint in endpoints"
           :key="endpoint.key"
           type="button"
-          class="flex min-w-0 items-center gap-2.5 rounded-[10px] border border-[color-mix(in_srgb,var(--anime-primary)_22%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_8%,transparent)] px-3 py-2 text-left transition-colors hover:border-[color-mix(in_srgb,var(--anime-primary)_45%,transparent)] hover:bg-[color-mix(in_srgb,var(--anime-primary)_14%,transparent)]"
+          class="m-0 box-border flex min-w-0 cursor-pointer items-center gap-2.5 rounded-kb-md border border-solid border-kb-line bg-kb-fill-lighter px-3 py-2 text-left [font-family:inherit] outline-none transition-colors duration-150 hover:border-kb-line-strong hover:bg-kb-hover focus-visible:ring-2 focus-visible:ring-kb-ring"
           @click="copyText(endpoint.url)"
         >
           <span class="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span class="text-[11px] text-[var(--anime-primary)]">{{ endpoint.label }}</span>
-            <span class="break-all font-mono text-[13px] text-[var(--anime-text-primary)]">{{ endpoint.url }}</span>
-            <span class="text-[11px] leading-[1.5] text-[var(--anime-text-muted)]">{{ endpoint.desc }}</span>
+            <span class="text-[11px] font-500 text-kb-fg-muted">{{ endpoint.label }}</span>
+            <span class="break-all font-mono text-[13px] text-kb-fg">{{ endpoint.url }}</span>
+            <span class="text-[11px] leading-[1.5] text-kb-fg-muted">{{ endpoint.desc }}</span>
           </span>
-          <el-icon class="shrink-0 text-[14px] text-[var(--anime-text-muted)]"><DocumentCopy /></el-icon>
+          <Copy class="size-3.5 shrink-0 text-kb-fg-subtle" />
         </button>
-        <p v-if="lanAccess && !lanIp" class="col-span-full m-0 text-[11px] text-[var(--anime-warning,#e6a23c)]">
+        <p v-if="lanAccess && !lanIp" class="col-span-full m-0 text-[11px] text-kb-warning">
           {{ $t("settings.webServerLanIpUnknown") }}
         </p>
       </div>
 
       <div class="flex flex-col gap-3">
         <div class="flex items-center justify-between gap-3">
-          <span class="text-[13px] text-[var(--anime-text-muted)]">{{ $t("settings.webServerPort") }}</span>
+          <span class="text-[13px] text-kb-fg-muted">{{ $t("settings.webServerPort") }}</span>
           <KbNumber
             v-model="localPort"
             type="int"
@@ -59,23 +64,20 @@
             @change="onPortChange"
           />
         </div>
-        <p v-if="enabled" class="m-0 text-[11px] text-[var(--anime-warning,#e6a23c)]">
+        <p v-if="enabled" class="m-0 text-[11px] text-kb-warning">
           {{ $t("settings.webServerRuntimeSettingsDisabledHint") }}
         </p>
-        <div
-          class="flex items-center justify-between gap-3 border-t border-[color-mix(in_srgb,var(--anime-primary)_15%,transparent)] pt-3"
-        >
+        <div class="flex items-center justify-between gap-3 border-0 border-t border-solid border-kb-line pt-3">
           <div class="min-w-0">
-            <div class="text-[13px] text-[var(--anime-text-primary)]">{{ $t("settings.webServerLanAccess") }}</div>
-            <p class="m-0 mt-1 max-w-[320px] text-[11px] leading-[1.5] text-[var(--anime-warning,#e6a23c)]">
+            <div class="text-[13px] text-kb-fg">{{ $t("settings.webServerLanAccess") }}</div>
+            <p class="m-0 mt-1 max-w-[320px] text-[11px] leading-[1.5] text-kb-warning">
               {{ $t("settings.webServerLanAccessDesc") }}
             </p>
           </div>
-          <el-switch
+          <Switch
             :model-value="lanAccess"
-            :loading="lanToggling"
             :disabled="enabled || toggling || lanToggling"
-            :before-change="onBeforeLanToggle"
+            @update:model-value="onLanToggle"
           />
         </div>
       </div>
@@ -87,11 +89,12 @@
 import { computed, ref, watch } from "vue";
 import { invoke } from "@/api/rpc";
 import { useI18n } from "@kabegame/i18n";
-import { DocumentCopy } from "@kabegame/element-plus-icons";
+import { Copy } from "@lucide/vue";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import KbNumber from "@/components/common/form/KbNumber.vue";
+import Switch from "@/components/ui/Switch.vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 
 const { t } = useI18n();
 const { settingValue: enabledValue, set: setEnabledValue } = useSettingKeyState("webServerEnabled");
@@ -136,12 +139,14 @@ const endpoints = computed(() => {
 });
 
 const toggling = ref(false);
-async function onBeforeToggle(): Promise<boolean> {
+/** 返回是否写入成功（测试据此断言）；开关的显示值始终跟随设置 */
+async function onToggle(): Promise<boolean> {
+  if (toggling.value) return false;
   toggling.value = true;
   try {
     return await setEnabledValue(!enabled.value);
   } catch {
-    ElMessage.error(t("settings.webServerPortInUse"));
+    kameMessage.error(t("settings.webServerPortInUse"));
     return false;
   } finally {
     toggling.value = false;
@@ -174,7 +179,7 @@ async function onPortChange(value: number | undefined) {
   try {
     await setPortValue(next);
   } catch {
-    ElMessage.error(t("settings.webServerPortInUse"));
+    kameMessage.error(t("settings.webServerPortInUse"));
     localPort.value = port.value;
   } finally {
     portSaving.value = false;
@@ -182,13 +187,13 @@ async function onPortChange(value: number | undefined) {
 }
 
 const lanToggling = ref(false);
-async function onBeforeLanToggle(): Promise<boolean> {
-  if (toggling.value || enabled.value) return false;
+async function onLanToggle(): Promise<boolean> {
+  if (toggling.value || enabled.value || lanToggling.value) return false;
   lanToggling.value = true;
   try {
     return await setLanValue(!lanAccess.value);
   } catch {
-    ElMessage.error(t("common.operationFailed"));
+    kameMessage.error(t("common.operationFailed"));
     return false;
   } finally {
     lanToggling.value = false;
@@ -198,9 +203,9 @@ async function onBeforeLanToggle(): Promise<boolean> {
 async function copyText(text: string) {
   try {
     await writeText(text);
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch {
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 </script>

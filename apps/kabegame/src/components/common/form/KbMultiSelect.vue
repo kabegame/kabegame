@@ -1,40 +1,110 @@
 <template>
-  <div class="var-multi">
-    <span
-      v-for="(item, idx) in currentList"
-      :key="`${item}-${idx}`"
-      class="var-multi__pill"
-      :class="{ 'is-custom': !knownValues.has(item) }"
-      :title="item"
+  <ComboboxRoot
+    v-model="selected"
+    v-model:open="open"
+    multiple
+    ignore-filter
+    reset-search-term-on-select
+    reset-search-term-on-blur
+  >
+    <ComboboxAnchor
+      class="kb-control h-auto min-h-8 cursor-text flex-wrap gap-1 px-1.5 py-1"
+      :data-invalid="field.invalid.value || undefined"
+      @click="inputRef?.$el?.focus()"
     >
-      {{ item }}
-      <span class="var-multi__pill-x" @click="removeAt(idx)">×</span>
-    </span>
-    <el-select
-      v-model="addSelectValue"
-      class="var-multi__add"
-      filterable
-      :focus-on-open="!IS_ANDROID"
-      allow-create
-      default-first-option
-      :placeholder="currentList.length ? '' : placeholder"
-      clearable
-      @change="onAddSelect"
-    >
-      <el-option
-        v-for="opt in normalizedOptions"
-        :key="opt.value"
-        :label="opt.label"
-        :value="opt.value"
-        :title="opt.label"
+      <!-- 已选项：插件预设的选项实底，用户手打新增的虚线框 -->
+      <span
+        v-for="(item, idx) in currentList"
+        :key="`${item}-${idx}`"
+        class="box-border inline-flex h-6 max-w-full items-center gap-1 rounded-kb-sm pl-2 pr-0.5 text-[12px] font-500"
+        :class="
+          knownValues.has(item)
+            ? 'bg-[color-mix(in_srgb,var(--kb-accent)_10%,transparent)] text-kb-fg'
+            : 'border border-dashed border-kb-line-strong text-kb-fg-muted'
+        "
+        :title="labelOf(item)"
+      >
+        <span class="min-w-0 truncate">{{ labelOf(item) }}</span>
+        <button
+          type="button"
+          tabindex="-1"
+          class="grid size-4.5 shrink-0 cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent p-0 text-current opacity-70 hover:bg-kb-hover hover:opacity-100"
+          :aria-label="t('common.remove')"
+          @click.stop="removeAt(idx)"
+        >
+          <X class="size-3" />
+        </button>
+      </span>
+      <ComboboxInput
+        ref="inputRef"
+        v-model="searchTerm"
+        :id="field.id.value"
+        :aria-invalid="field.invalid.value || undefined"
+        :aria-describedby="field.describedBy.value"
+        :placeholder="currentList.length ? '' : placeholder"
+        class="h-6 min-w-20 flex-1 border-0 bg-transparent px-1 text-inherit outline-none [font:inherit] placeholder:text-kb-fg-subtle"
+        @focus="open = true"
+        @keydown.backspace="onBackspace"
       />
-    </el-select>
-  </div>
+    </ComboboxAnchor>
+    <ComboboxPortal>
+      <ComboboxContent
+        position="popper"
+        :side-offset="4"
+        :collision-padding="8"
+        class="kb-menu-panel max-h-[min(var(--reka-combobox-content-available-height),320px)] min-w-[var(--reka-combobox-trigger-width)] overflow-y-auto"
+        :style="{ zIndex }"
+        @focus-outside="keepOpenOnToast"
+        @interact-outside="keepOpenOnToast"
+      >
+        <ComboboxViewport>
+          <!-- 打的字不在选项里：第一项是「添加」，回车即加（同 el-select 的 allow-create + default-first-option） -->
+          <ComboboxItem v-if="createValue" :value="createValue" class="kb-menu-item">
+            <Plus />
+            <span class="min-w-0 flex-1 truncate">{{ t("common.addCustom", { value: createValue }) }}</span>
+          </ComboboxItem>
+          <ComboboxItem
+            v-for="opt in visibleOptions"
+            :key="opt.value"
+            :value="opt.value"
+            :title="opt.label"
+            class="kb-menu-item pr-8"
+          >
+            <span class="min-w-0 flex-1 truncate">{{ opt.label }}</span>
+            <ComboboxItemIndicator class="absolute right-2.5 inline-flex">
+              <Check class="!text-kb-fg" />
+            </ComboboxItemIndicator>
+          </ComboboxItem>
+          <div v-if="!createValue && visibleOptions.length === 0" class="px-2.5 py-2 text-[12.5px] text-kb-fg-subtle">
+            {{ t("common.noData") }}
+          </div>
+        </ComboboxViewport>
+      </ComboboxContent>
+    </ComboboxPortal>
+  </ComboboxRoot>
 </template>
 
 <script setup lang="ts">
+/**
+ * 多值列表（插件变量 list 型）：已选项排成标签，输入框里打字筛选预设选项；
+ * 打的字不在选项里时可直接回车添加。再点一次已选的选项即取消（Combobox 多选的语义）。
+ */
 import { computed, ref } from "vue";
-import { IS_ANDROID } from "../../../env";
+import {
+  ComboboxAnchor,
+  ComboboxContent,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxItemIndicator,
+  ComboboxPortal,
+  ComboboxRoot,
+  ComboboxViewport,
+} from "reka-ui";
+import { Check, Plus, X } from "@lucide/vue";
+import { useI18n } from "@kabegame/i18n";
+import { useModalBack } from "@/composables/useModalBack";
+import { useLayerZIndex, keepOpenOnToast } from "@/components/ui/layer";
+import { useFieldControl } from "@/components/ui/field";
 
 type VarOption = string | { name: string | Record<string, string>; variable: string };
 
@@ -52,7 +122,13 @@ const emit = defineEmits<{
   "update:modelValue": [value: string[]];
 }>();
 
-const addSelectValue = ref<string | null>(null);
+const { t } = useI18n();
+const field = useFieldControl({});
+const open = ref(false);
+const searchTerm = ref("");
+const inputRef = ref<{ $el?: HTMLInputElement } | null>(null);
+useModalBack(open);
+const zIndex = useLayerZIndex(open);
 
 function optionLabel(o: VarOption): string {
   if (typeof o === "string") return o;
@@ -77,8 +153,35 @@ const currentList = computed<string[]>(() => {
     : [];
 });
 
-/** 区分「插件预设选项」与「用户手打新增」，后者用虚线 pill 标出 */
+/** 区分「插件预设选项」与「用户手打新增」，后者用虚线标出 */
 const knownValues = computed(() => new Set(normalizedOptions.value.map((o) => o.value)));
+const labelOf = (value: string) => normalizedOptions.value.find((o) => o.value === value)?.label ?? value;
+
+/** Combobox 多选的 v-model：去重后写回 */
+const selected = computed<string[]>({
+  get: () => currentList.value,
+  set: (next) => {
+    const seen = new Set<string>();
+    const list = next.map((v) => `${v}`.trim()).filter((v) => v && !seen.has(v) && seen.add(v));
+    emit("update:modelValue", list);
+  },
+});
+
+const visibleOptions = computed(() => {
+  const term = searchTerm.value.trim().toLowerCase();
+  if (!term) return normalizedOptions.value;
+  return normalizedOptions.value.filter(
+    (o) => o.label.toLowerCase().includes(term) || o.value.toLowerCase().includes(term),
+  );
+});
+
+/** 打的字既不是某个选项、也还没加过时，可作为新值添加 */
+const createValue = computed(() => {
+  const term = searchTerm.value.trim();
+  if (!term) return "";
+  const exists = normalizedOptions.value.some((o) => o.value === term || o.label === term);
+  return exists || currentList.value.includes(term) ? "" : term;
+});
 
 function removeAt(index: number) {
   const next = currentList.value.slice();
@@ -86,78 +189,8 @@ function removeAt(index: number) {
   emit("update:modelValue", next);
 }
 
-function onAddSelect(value: string | null) {
-  if (value == null || String(value).trim() === "") return;
-  const trimmed = String(value).trim();
-  const next = [...currentList.value];
-  if (!next.includes(trimmed)) {
-    next.push(trimmed);
-    emit("update:modelValue", next);
-  }
-  addSelectValue.value = null;
+/** 输入框为空时退格删掉最后一项 */
+function onBackspace() {
+  if (searchTerm.value === "" && currentList.value.length > 0) removeAt(currentList.value.length - 1);
 }
 </script>
-
-<style scoped>
-.var-multi {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 4px 8px;
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
-  background: #fff;
-  transition:
-    border-color 0.3s ease,
-    box-shadow 0.3s ease;
-}
-.var-multi:focus-within {
-  border-color: var(--anime-primary);
-  box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.2);
-}
-
-/* 与下拉面板里 el-select 的多选 tag 同源：同一组 --el-select-option-* 配色，
-   只是这里的 pill 渲染在触发器外面 */
-.var-multi__pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 5px 0 9px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--anime-primary) 10%, transparent);
-  color: var(--anime-primary-dark);
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  max-width: 100%;
-}
-.var-multi__pill.is-custom {
-  border: 1px dashed var(--anime-secondary);
-  background: rgba(167, 139, 250, 0.14);
-  color: var(--anime-text-secondary);
-}
-.var-multi__pill-x {
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  color: inherit;
-  opacity: 0.75;
-}
-.var-multi__pill-x:hover {
-  opacity: 1;
-}
-
-.var-multi__add {
-  flex: 1;
-  min-width: 80px;
-}
-.var-multi__add :deep(.el-select__wrapper) {
-  box-shadow: none !important;
-  padding: 0 4px;
-  min-height: 24px;
-  background: transparent;
-}
-</style>

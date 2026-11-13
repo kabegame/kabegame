@@ -30,46 +30,26 @@ vi.mock("@kabegame/i18n", () => {
   const t = (key: string, params?: Record<string, unknown>) => (params ? `${key}:${JSON.stringify(params)}` : key);
   return { i18n: { global: { t } }, useI18n: () => ({ t }) };
 });
-// 模态栈要 pinia，这里只关心开关：与真实 useModal 同语义（重复 open / close 无副作用，close 时回调一次）
-vi.mock("@/composables/useModal", async () => {
-  const { ref, computed } = await import("vue");
-  return {
-    useModal: (options: { onClose?: () => void } = {}) => {
-      const open = ref(false);
-      return {
-        isOpen: computed(() => open.value),
-        zIndex: computed(() => 2000),
-        open: () => {
-          open.value = true;
-        },
-        close: () => {
-          if (!open.value) return;
-          open.value = false;
-          options.onClose?.();
-        },
-      };
-    },
-  };
-});
-vi.mock("@kabegame/element-plus", async () => {
+vi.mock("@/components/ui", async () => {
   const { defineComponent, h } = await import("vue");
   return {
-    ElDialog: defineComponent({
-      name: "ElDialog",
-      props: { modelValue: Boolean, title: String },
-      emits: ["update:modelValue", "opened"],
+    Dialog: defineComponent({
+      name: "Dialog",
+      props: { open: Boolean, title: String },
+      emits: ["update:open", "openAutoFocus"],
       setup(props, { slots }) {
         return () =>
-          props.modelValue
+          props.open
             ? h("div", { class: "dialog", "data-title": props.title }, [slots.default?.(), slots.footer?.()])
             : null;
       },
     }),
-    ElButton: defineComponent({
-      name: "ElButton",
-      props: { disabled: Boolean, type: String },
+    Button: defineComponent({
+      name: "Button",
+      props: { disabled: Boolean, variant: String },
       setup(props, { slots, attrs }) {
-        return () => h("button", { ...attrs, class: `btn-${props.type ?? "plain"}`, disabled: props.disabled }, slots);
+        return () =>
+          h("button", { ...attrs, class: `btn-${props.variant ?? "outline"}`, disabled: props.disabled }, slots);
       },
     }),
   };
@@ -280,14 +260,14 @@ describe("WallpaperTargetPickerHost", () => {
     mountHost();
     const byCancel = pickWallpaperTarget({ action: "setWallpaper" });
     await flushPromises();
-    await host!.find(".btn-plain").trigger("click");
+    await host!.find(".btn-outline").trigger("click");
     expect(await byCancel).toBeNull();
     await flushPromises();
     expect(host!.find(".dialog").exists()).toBe(false);
 
     const byClose = pickWallpaperTarget({ action: "setWallpaper" });
     await flushPromises();
-    host!.findComponent({ name: "ElDialog" }).vm.$emit("update:modelValue", false);
+    host!.findComponent({ name: "Dialog" }).vm.$emit("update:open", false);
     expect(await byClose).toBeNull();
     await flushPromises();
     expect(host!.find(".dialog").exists()).toBe(false);

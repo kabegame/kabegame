@@ -3,7 +3,7 @@
 import { listen, type UnlistenFn } from "@/api/rpc";
 import { cancelFolderSync } from "@/api/syncLocalFolder";
 import { IS_ANDROID, IS_WEB } from "@/env";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import { type FolderSyncFinished, useFolderSyncStore } from "@/stores/folderSync";
 import { busyPoller } from "@/services/busyTasks";
@@ -23,11 +23,11 @@ export async function init(): Promise<void> {
     store.applyFinished(payload);
     if (payload.preempted) return;
     if (payload.error) {
-      ElMessage.error(i18n.global.t("albums.syncFailedToast", { name: payload.albumName }));
+      kameMessage.error(i18n.global.t("albums.syncFailedToast", { name: payload.albumName }));
       return;
     }
     if (payload.canceled) {
-      ElMessage.info(
+      kameMessage.info(
         i18n.global.t("albums.syncCanceledToast", {
           name: payload.albumName,
         }),
@@ -35,7 +35,7 @@ export async function init(): Promise<void> {
       return;
     }
     if (payload.removedAlbum) {
-      ElMessage.warning(
+      kameMessage.warning(
         i18n.global.t("albums.folderRemovedToast", {
           name: payload.albumName,
         }),
@@ -43,13 +43,13 @@ export async function init(): Promise<void> {
       return;
     }
     if (payload.manual && payload.skippedUnchanged) {
-      ElMessage.info(i18n.global.t("albums.localFolder.syncSkippedUnchanged"));
+      kameMessage.info(i18n.global.t("albums.localFolder.syncSkippedUnchanged"));
       return;
     }
     const changed = payload.added + payload.deleted + payload.reimported + payload.createdAlbums;
     // 手动触发的任务即使无变化也要给反馈；自动任务只在有变化时提示
     if (changed > 0 || payload.manual) {
-      ElMessage.success(
+      kameMessage.success(
         i18n.global.t("albums.localFolder.syncDone", {
           added: payload.added,
           deleted: payload.deleted,
@@ -75,6 +75,6 @@ export async function cancel(albumId?: string): Promise<void> {
     await cancelFolderSync(albumId);
   } catch (error) {
     console.error("[folderSync] cancel_folder_sync failed:", error);
-    ElMessage.error(i18n.global.t("albums.syncCancelFailedToast"));
+    kameMessage.error(i18n.global.t("albums.syncCancelFailedToast"));
   }
 }

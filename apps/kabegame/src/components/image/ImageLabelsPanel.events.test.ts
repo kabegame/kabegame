@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { flushPromises, shallowMount } from "@vue/test-utils";
-import { ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImageLabelsPanel from "./ImageLabelsPanel.vue";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
@@ -21,9 +20,6 @@ vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/composables/useAlbumIdPathState", () => ({ useAlbumIdPathState: () => ({ set: vi.fn() }) }));
 vi.mock("@/components/albums/AlbumPicker.vue", () => ({ default: { render: () => null } }));
 vi.mock("@/components/common/CollapsibleDrawerPanel.vue", () => ({ default: { template: "<div><slot /></div>" } }));
-vi.mock("@/composables/useModal", () => ({
-  useModal: () => ({ isOpen: ref(false), zIndex: ref(1), open: vi.fn(), close: vi.fn() }),
-}));
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 const emit = (name: string, payload: unknown) => listeners.get(name)?.({ payload });
 beforeEach(() => {

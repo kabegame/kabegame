@@ -1,6 +1,6 @@
 import { markRaw, type Component } from "vue";
+import { Clock, Hash, ListOrdered, Shuffle } from "@lucide/vue";
 import {
-  Clock,
   FilterAspect,
   FilterColor,
   FilterDate,
@@ -9,10 +9,7 @@ import {
   FilterPlugin,
   FilterSize,
   FilterWallpaper,
-  List,
-  MagicStick,
-  Rank,
-} from "@kabegame/element-plus-icons";
+} from "@/components/icons/filterIcons";
 import type { GalleryBrowseDimension, GallerySortField } from "@/utils/galleryPath";
 
 /**
@@ -33,14 +30,14 @@ export const FILTER_DIMENSION_ICONS: Record<GalleryBrowseDimension, Component> =
  * 所以每个维度用它自己那张脸——与同名过滤维度共用一张，认过一次就都认得。
  */
 export const SORT_FIELD_ICONS: Record<GallerySortField, Component> = {
-  "by-id": markRaw(Rank),
+  "by-id": markRaw(Hash),
   "by-time": markRaw(Clock),
   "by-size": markRaw(FilterSize),
   "by-name": markRaw(FilterName),
   "by-aspect": markRaw(FilterAspect),
   "by-set-time": markRaw(FilterWallpaper),
-  "by-album-order": markRaw(List),
-  random: markRaw(MagicStick),
+  "by-album-order": markRaw(ListOrdered),
+  random: markRaw(Shuffle),
   // 两个颜色字段在界面上是同一个维度，共用调色板
   "by-color": markRaw(FilterColor),
   "by-any-color": markRaw(FilterColor),

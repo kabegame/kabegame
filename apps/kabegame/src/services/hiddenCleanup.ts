@@ -5,7 +5,7 @@
 
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { i18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useHiddenCleanupStore, type HiddenCleanupFinished } from "@/stores/hiddenCleanup";
 import { busyPoller } from "@/services/busyTasks";
 
@@ -24,19 +24,19 @@ export async function init(): Promise<void> {
     busyPoller.invalidate();
     store.applyFinished(payload);
     if (payload.error) {
-      ElMessage.error(i18n.global.t("gallery.hiddenCleanupFailed"));
+      kameMessage.error(i18n.global.t("gallery.hiddenCleanupFailed"));
     } else if (payload.canceled) {
-      ElMessage.info(i18n.global.t("gallery.hiddenCleanupCanceled"));
+      kameMessage.info(i18n.global.t("gallery.hiddenCleanupCanceled"));
     } else if ((payload.keptFiles ?? 0) > 0) {
       // 源文件没删干净时如实说明，不要用「完成」盖过去
-      ElMessage.warning(
+      kameMessage.warning(
         i18n.global.t("gallery.hiddenCleanupDonePartial", {
           removed: payload.removed ?? 0,
           kept: payload.keptFiles ?? 0,
         }),
       );
     } else {
-      ElMessage.success(i18n.global.t("gallery.hiddenCleanupDone", { removed: payload.removed ?? 0 }));
+      kameMessage.success(i18n.global.t("gallery.hiddenCleanupDone", { removed: payload.removed ?? 0 }));
     }
   });
 }
@@ -62,7 +62,7 @@ export async function start(total: number): Promise<void> {
       canceled: false,
       error: errorMessage(error),
     });
-    ElMessage.error(i18n.global.t("gallery.startHiddenCleanupFailed"));
+    kameMessage.error(i18n.global.t("gallery.startHiddenCleanupFailed"));
   } finally {
     store.endStarting();
     busyPoller.invalidate();
@@ -76,6 +76,6 @@ export async function cancel(): Promise<void> {
     await invoke<boolean>("cancel_hidden_cleanup");
   } catch (error) {
     console.error("[hiddenCleanup] cancel_hidden_cleanup failed:", error);
-    ElMessage.error(i18n.global.t("gallery.cancelHiddenCleanupFailed"));
+    kameMessage.error(i18n.global.t("gallery.cancelHiddenCleanupFailed"));
   }
 }

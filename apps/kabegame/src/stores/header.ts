@@ -23,7 +23,7 @@ export enum HeaderFeatureId {
   OpenTaskWebview = "openTaskWebview",
   FailedImages = "failedImages",
   AddToAlbum = "addToAlbum",
-  /** 画廊「全部」下按时间排序（仅 Android 放入 fold，点击后打开 van-picker） */
+  /** 画廊「全部」下按时间排序（仅 Android 放入 fold，点击后打开底部滚轮 PickerSheet） */
   GallerySort = "gallerySort",
   /** 画廊每页条数（仅 Android 放入 fold） */
   GalleryPageSize = "galleryPageSize",

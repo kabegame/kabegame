@@ -1,24 +1,26 @@
 import {
-  Refresh,
+  AppWindow,
+  ArrowUpDown,
+  CircleStop,
+  CircleX,
+  EyeOff,
+  FileText,
+  FolderOpen,
+  FolderPlus,
+  Funnel,
+  HardDrive,
+  Info,
+  LayoutGrid,
+  PanelLeft,
   Plus,
-  FolderOpened,
-  FolderAdd,
-  Delete,
+  RefreshCw,
+  RotateCw,
+  Rows3,
+  SlidersHorizontal,
+  Trash2,
+  TriangleAlert,
   Upload,
-  Grid,
-  VideoPause,
-  Sort,
-  Filter,
-  Monitor,
-  Histogram,
-  CircleClose,
-  WarningFilled,
-  Document,
-  InfoFilled,
-  Hide,
-  Expand,
-  RefreshRight,
-} from "@kabegame/element-plus-icons";
+} from "@lucide/vue";
 import { useHeaderStore, HeaderFeatureId } from "@/stores/header";
 import { i18n } from "@kabegame/i18n";
 
@@ -39,27 +41,27 @@ export function registerHeaderFeatures() {
     {
       id: HeaderFeatureId.Refresh,
       label: t("header.refresh"),
-      icon: Refresh,
+      icon: RefreshCw,
     },
     {
       id: HeaderFeatureId.AlbumTree,
       label: t("header.albumTree"),
-      icon: Expand,
+      icon: PanelLeft,
     },
     {
       id: HeaderFeatureId.AlbumInfo,
       label: t("header.albumInfo"),
-      icon: InfoFilled,
+      icon: Info,
     },
     {
       id: HeaderFeatureId.StopTask,
       label: t("header.stopTask"),
-      icon: VideoPause,
+      icon: CircleStop,
     },
     {
       id: HeaderFeatureId.DeleteTask,
       label: t("header.deleteTask"),
-      icon: Delete,
+      icon: Trash2,
     },
     {
       id: HeaderFeatureId.Collect,
@@ -70,17 +72,17 @@ export function registerHeaderFeatures() {
     {
       id: HeaderFeatureId.CreateAlbum,
       label: t("header.createAlbum"),
-      icon: Plus,
+      icon: FolderPlus,
     },
     {
       id: HeaderFeatureId.OpenVirtualDrive,
       label: t("header.openVirtualDrive"),
-      icon: FolderOpened,
+      icon: HardDrive,
     },
     {
       id: HeaderFeatureId.AddToAlbum,
       label: t("header.addToAlbum"),
-      icon: FolderAdd,
+      icon: FolderPlus,
     },
     {
       id: HeaderFeatureId.ImportSource,
@@ -90,7 +92,7 @@ export function registerHeaderFeatures() {
     {
       id: HeaderFeatureId.ManageSources,
       label: t("header.manageSources"),
-      icon: Grid,
+      icon: LayoutGrid,
     },
     {
       id: HeaderFeatureId.TaskDrawer,
@@ -99,69 +101,69 @@ export function registerHeaderFeatures() {
     {
       id: HeaderFeatureId.TaskViewLog,
       label: t("tasks.drawerViewLog"),
-      icon: Document,
+      icon: FileText,
     },
     {
       id: HeaderFeatureId.TaskViewParams,
       label: t("tasks.drawerViewParams"),
-      icon: InfoFilled,
+      icon: SlidersHorizontal,
     },
     {
       id: HeaderFeatureId.TaskRerun,
       label: t("contextMenu.rerunTask"),
-      icon: RefreshRight,
+      icon: RotateCw,
     },
     {
       id: HeaderFeatureId.OpenTaskWebview,
       label: t("tasks.openTaskWebview"),
-      icon: Monitor,
+      icon: AppWindow,
     },
     {
       id: HeaderFeatureId.FailedImages,
       label: t("header.failedImages"),
-      icon: WarningFilled,
+      icon: TriangleAlert,
       comp: FailedImagesHeaderButton,
     },
     {
       id: HeaderFeatureId.GallerySort,
       label: t("header.gallerySort"),
-      icon: Sort,
+      icon: ArrowUpDown,
       comp: GallerySortControl,
     },
     {
       id: HeaderFeatureId.GalleryPageSize,
       label: t("header.galleryPageSize"),
-      icon: Histogram,
+      icon: Rows3,
     },
     {
       id: HeaderFeatureId.FailedImagesCancelWaiting,
       label: t("header.failedImagesCancelWaiting"),
-      icon: CircleClose,
+      icon: CircleX,
     },
     {
       id: HeaderFeatureId.FailedImagesRetryAll,
       label: t("header.failedImagesRetryAll"),
-      icon: Refresh,
+      icon: RefreshCw,
     },
     {
       id: HeaderFeatureId.FailedImagesDeleteAll,
       label: t("header.failedImagesDeleteAll"),
-      icon: Delete,
+      icon: Trash2,
     },
     {
       id: HeaderFeatureId.FailedImagesFilter,
       label: t("header.failedImagesFilter"),
-      icon: Filter,
+      icon: Funnel,
     },
     {
       id: HeaderFeatureId.ToggleShowHidden,
       label: t("header.hideHidden"),
-      icon: Hide,
+      icon: EyeOff,
     },
     {
       id: HeaderFeatureId.ToggleShowAlbumImages,
       label: t("header.hideAlbumImages"),
-      icon: FolderOpened,
+      icon: FolderOpen,
     },
   ]);
 }

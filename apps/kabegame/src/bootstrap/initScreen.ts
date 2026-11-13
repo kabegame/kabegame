@@ -6,7 +6,6 @@
 // 刻意不 app.use(i18n)：vue-i18n 在 app.unmount 时会 dispose 全局 composer 的 effect scope，
 // 共用同一个 i18n 实例的主界面随后会失去语言响应性。这里直接用 i18n.global.t。
 import { createApp, shallowRef } from "vue";
-import { ElProgress } from "@kabegame/element-plus";
 import { invoke, listen } from "@/api/rpc";
 import { resolveBrowserLanguage, setLocale, tryResolveStoredLanguage } from "@kabegame/i18n";
 import InitScreen from "@/views/InitScreen.vue";
@@ -53,7 +52,6 @@ export async function runInitScreen(): Promise<void> {
   }
 
   const app = createApp(InitScreen, { phase });
-  app.component("ElProgress", ElProgress);
   app.mount("#app");
   await ready;
   unlisten();

@@ -1,104 +1,105 @@
 <template>
   <slot name="trigger" :open="onTriggerClick">
-    <div class="android-picker-select" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
-      <span class="android-picker-select__value" :class="{ 'is-placeholder': !displayLabel }">
+    <button
+      type="button"
+      class="android-picker-select kb-control h-8 cursor-pointer justify-between gap-2 px-2.5 text-left [font:inherit]"
+      :data-disabled="disabled || undefined"
+      :aria-disabled="disabled || undefined"
+      @click="onTriggerClick"
+    >
+      <span
+        class="android-picker-select__value min-w-0 flex-1 truncate"
+        :class="displayLabel ? '' : 'text-kb-fg-subtle'"
+      >
         {{ displayLabel || resolvedPlaceholder }}
       </span>
-      <el-icon class="android-picker-select__arrow">
-        <ArrowDown />
-      </el-icon>
-    </div>
+      <ChevronDown class="android-picker-select__arrow size-4 shrink-0 text-kb-fg-subtle" />
+    </button>
   </slot>
 
-  <Teleport to="body">
-    <!-- 有 option 插槽：屏幕居中磨玻璃弹窗（方案 1c）。可渲染图标 / 描述 / 标签 / 警告 -->
-    <Transition v-if="useOptionSlot" name="apk-modal">
-      <div v-if="isOpen" class="apk-modal-mask" :style="{ zIndex }" @click.self="close()">
-        <div class="apk-modal-card">
-          <header class="apk-modal-header">
-            <div class="apk-modal-title">{{ resolvedTitle }}</div>
-            <div v-if="subtitle" class="apk-modal-subtitle">{{ subtitle }}</div>
-          </header>
-          <div class="apk-modal-list">
-            <!-- 推荐来源 -->
-            <div v-if="primaryGroupLabel && restrictedOptions.length" class="apk-section-title">
-              {{ primaryGroupLabel }}
-            </div>
-            <div
-              v-for="opt in primaryOptions"
-              :key="String(opt.value)"
-              class="apk-row"
-              :class="{ 'is-selected': opt.value === modelValue }"
-              @click="onSelectOption(opt)"
-            >
-              <div v-if="opt.value === modelValue" class="apk-row__sel" />
-              <div class="apk-row__body">
-                <slot name="option" :option="opt" />
-              </div>
-              <div v-if="opt.value === modelValue" class="apk-row__check">
-                <svg
-                  viewBox="0 0 24 24"
-                  width="12"
-                  height="12"
-                  fill="none"
-                  stroke="#fff"
-                  stroke-width="3"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-            </div>
+  <!-- 有 option 插槽：居中对话框，可渲染图标 / 描述 / 标签 / 警告 -->
+  <Dialog
+    v-if="useOptionSlot"
+    v-model:open="isOpen"
+    :title="resolvedTitle"
+    :description="subtitle"
+    :width="720"
+    body-class="!px-2.5 !pt-1 !pb-3"
+  >
+    <div class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] content-start gap-x-2 gap-y-0.5">
+      <!-- 推荐来源 -->
+      <div
+        v-if="primaryGroupLabel && restrictedOptions.length"
+        class="col-span-full px-2 pb-1.5 pt-1 text-[11.5px] font-600 tracking-wide text-kb-fg-subtle"
+      >
+        {{ primaryGroupLabel }}
+      </div>
+      <button
+        v-for="opt in primaryOptions"
+        :key="String(opt.value)"
+        type="button"
+        class="relative flex cursor-pointer items-center gap-3 rounded-kb-lg border-0 p-3 text-left text-kb-fg [font:inherit] transition-colors duration-100"
+        :class="
+          opt.value === modelValue
+            ? 'bg-[color-mix(in_srgb,var(--kb-accent)_9%,transparent)]'
+            : 'bg-transparent hover:bg-kb-hover'
+        "
+        :aria-pressed="opt.value === modelValue"
+        @click="onSelectOption(opt)"
+      >
+        <div class="min-w-0 flex-1">
+          <slot name="option" :option="opt" />
+        </div>
+        <span
+          v-if="opt.value === modelValue"
+          class="grid size-5 shrink-0 place-items-center rounded-full bg-kb-accent text-white"
+        >
+          <Check class="size-3" :stroke-width="3" />
+        </span>
+      </button>
 
-            <!-- 受限来源（Webview 插件），移动端不可选 -->
-            <template v-if="restrictedOptions.length">
-              <div v-if="restrictedGroupLabel" class="apk-section-title apk-section-title--restricted">
-                {{ restrictedGroupLabel }}
-                <span v-if="restrictedGroupNote" class="apk-section-note">· {{ restrictedGroupNote }}</span>
-              </div>
-              <div v-for="opt in restrictedOptions" :key="String(opt.value)" class="apk-row apk-row--disabled">
-                <div class="apk-row__body">
-                  <slot name="option" :option="opt" />
-                </div>
-              </div>
-            </template>
+      <!-- 受限来源（Webview 插件），移动端不可选 -->
+      <template v-if="restrictedOptions.length">
+        <div
+          v-if="restrictedGroupLabel"
+          class="col-span-full flex items-center gap-1.5 px-2 pb-1.5 pt-3 text-[11.5px] font-600 tracking-wide text-kb-fg-subtle"
+        >
+          {{ restrictedGroupLabel }}
+          <span v-if="restrictedGroupNote" class="font-400 tracking-normal text-kb-warning">
+            · {{ restrictedGroupNote }}
+          </span>
+        </div>
+        <div
+          v-for="opt in restrictedOptions"
+          :key="String(opt.value)"
+          class="flex cursor-not-allowed items-center gap-3 rounded-kb-lg p-3 opacity-55"
+          aria-disabled="true"
+        >
+          <div class="min-w-0 flex-1">
+            <slot name="option" :option="opt" />
           </div>
         </div>
-      </div>
-    </Transition>
+      </template>
+    </div>
+  </Dialog>
 
-    <!-- 无 option 插槽：底部抽屉（保持现状） -->
-    <van-popup
-      v-else
-      :show="isOpen"
-      position="bottom"
-      round
-      :z-index="zIndex"
-      @update:show="
-        (v) => {
-          if (!v) close();
-        }
-      "
-    >
-      <van-picker
-        v-model="pickerSelectedValues"
-        :title="resolvedTitle"
-        :columns="pickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onPickerConfirm"
-        @cancel="close()"
-      />
-    </van-popup>
-  </Teleport>
+  <!-- 无 option 插槽：底部滚轮 -->
+  <PickerSheet
+    v-else
+    v-model:open="isOpen"
+    v-model="pickerSelectedValues"
+    :title="resolvedTitle"
+    :columns="pickerColumns"
+    @confirm="onPickerConfirm"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, useSlots, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ArrowDown } from "@kabegame/element-plus-icons";
-import { useModal } from "../composables/useModal";
+import { Check, ChevronDown } from "@lucide/vue";
+import Dialog from "@/components/ui/Dialog.vue";
+import PickerSheet from "@/components/ui/PickerSheet.vue";
 import type { PluginLabel } from "../stores/pluginLabels";
 
 export interface AndroidPickerSelectOption {
@@ -161,7 +162,7 @@ const emit = defineEmits<{
 const slots = useSlots();
 const useOptionSlot = computed(() => !!slots.option);
 
-const { isOpen, zIndex, open, close } = useModal();
+const isOpen = ref(false);
 
 /** 「清除」行的私有值：不能用 ""，那是插件 options 可声明的合法取值 */
 const CLEAR_VALUE = "\u0000kb-picker-clear";
@@ -215,11 +216,10 @@ watch(
 
 function onTriggerClick() {
   if (props.disabled) return;
-  open();
+  isOpen.value = true;
 }
 
 function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
-  close();
   const raw = selectedValues[0];
   const value = raw === CLEAR_VALUE || raw === null || raw === undefined ? null : String(raw);
   emit("update:modelValue", value);
@@ -228,200 +228,8 @@ function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)
 function onSelectOption(opt: AndroidPickerSelectOption) {
   // 受限项（Webview 插件）在移动端不可选，点击无反馈
   if (opt.warning) return;
-  close();
+  isOpen.value = false;
   const value = opt.value === CLEAR_VALUE || opt.value === null || opt.value === undefined ? null : opt.value;
   emit("update:modelValue", value);
 }
 </script>
-
-<style scoped lang="scss">
-.android-picker-select {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 32px;
-  padding: 6px 12px;
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-  background: var(--el-fill-color-blank);
-  cursor: pointer;
-  user-select: none;
-
-  &.is-disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-}
-
-.android-picker-select__value {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  color: var(--anime-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  &.is-placeholder {
-    color: var(--anime-text-muted);
-  }
-}
-
-.android-picker-select__arrow {
-  flex-shrink: 0;
-  margin-left: 8px;
-  font-size: 14px;
-  color: var(--anime-text-secondary);
-}
-
-/* ============ 居中磨玻璃弹窗（方案 1c，仅 option 插槽场景） ============ */
-.apk-modal-mask {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 16px;
-  background: rgba(46, 16, 54, 0.28);
-}
-
-.apk-modal-card {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-height: 82%;
-  border: 1px solid rgba(255, 255, 255, 0.75);
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.68);
-  box-shadow: 0 26px 64px rgba(74, 21, 75, 0.3);
-  overflow: hidden;
-  backdrop-filter: blur(26px) saturate(1.6);
-  -webkit-backdrop-filter: blur(26px) saturate(1.6);
-  animation: apk-pop-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
-}
-
-.apk-modal-header {
-  padding: 18px 20px 14px;
-}
-
-.apk-modal-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--anime-text-primary);
-}
-
-.apk-modal-subtitle {
-  margin-top: 3px;
-  font-size: 11.5px;
-  color: var(--anime-text-muted);
-}
-
-.apk-modal-list {
-  flex: 1;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-  align-content: start;
-  column-gap: 8px;
-  row-gap: 2px;
-  overflow-y: auto;
-  padding: 0 10px 12px;
-  scrollbar-width: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-.apk-section-title {
-  grid-column: 1 / -1;
-  padding: 4px 8px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: #b58fb8;
-
-  &--restricted {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 12px 8px 8px;
-  }
-}
-
-.apk-section-note {
-  font-weight: 500;
-  letter-spacing: 0;
-  color: #c8a76b;
-}
-
-.apk-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  padding: 12px;
-  border-radius: 18px;
-  cursor: pointer;
-
-  &:not(.apk-row--disabled):hover {
-    background: rgba(255, 255, 255, 0.55);
-  }
-
-  &--disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-}
-
-/* 选中态叠加层：粉紫渐变 + 左侧强调条 */
-.apk-row__sel {
-  position: absolute;
-  inset: 0;
-  border-radius: 18px;
-  pointer-events: none;
-  background: linear-gradient(90deg, rgba(255, 107, 157, 0.16), rgba(167, 139, 250, 0.08));
-  box-shadow: inset 3px 0 0 var(--anime-primary);
-}
-
-.apk-row__body {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-}
-
-.apk-row__check {
-  position: relative;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, var(--anime-primary), var(--anime-secondary));
-  box-shadow: 0 3px 8px rgba(255, 107, 157, 0.45);
-}
-
-@keyframes apk-pop-in {
-  from {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* 遮罩淡入淡出（卡片自身走 apk-pop-in 缩放） */
-.apk-modal-enter-active,
-.apk-modal-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.apk-modal-enter-from,
-.apk-modal-leave-to {
-  opacity: 0;
-}
-</style>

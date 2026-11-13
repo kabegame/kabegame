@@ -20,11 +20,11 @@
         </span>
         <span
           v-if="counts.hasCountOf(keyOf(element))"
-          class="flex-none text-[var(--anime-text-secondary)] text-xs"
+          class="flex-none text-[var(--kb-tree-row-count-color,var(--anime-text-secondary))] text-xs"
           :class="{
-            '!text-[var(--el-color-error)]': counts.deltaSignOf(keyOf(element)) < 0,
-            '!text-[var(--el-color-success)]': counts.deltaSignOf(keyOf(element)) > 0,
-            '!text-[var(--anime-text-muted)]': counts.isEmptyOf(keyOf(element)),
+            '!text-[var(--kb-danger)]': counts.deltaSignOf(keyOf(element)) < 0,
+            '!text-[var(--kb-success)]': counts.deltaSignOf(keyOf(element)) > 0,
+            '!text-[var(--kb-tree-row-muted-color,var(--anime-text-muted))]': counts.isEmptyOf(keyOf(element)),
           }"
         >
           ({{ counts.displayOf(keyOf(element)) }})

@@ -4,7 +4,7 @@
     style="
       --provider-tree-row-height: 32px;
       --provider-tree-sticky-offset: 0px;
-      --kb-tree-sticky-bg: var(--el-kb-filter-dropdown-panel-bg-color);
+      --kb-tree-sticky-bg: var(--kb-surface-raised);
       --kb-tree-sticky-backdrop: blur(10px);
     "
   >

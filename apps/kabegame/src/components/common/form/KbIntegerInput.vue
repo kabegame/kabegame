@@ -1,21 +1,21 @@
 <template>
-  <div
-    class="flex h-9 w-full min-w-0 items-stretch overflow-hidden rounded-xl border border-solid border-[var(--anime-border)] bg-[var(--anime-bg-card)] transition-colors"
-    :class="{ 'opacity-60': disabled }"
-  >
+  <div class="kb-control h-8 min-w-0 overflow-hidden" :data-disabled="disabled || undefined">
     <button
       type="button"
-      class="flex h-full w-9 flex-none cursor-pointer items-center justify-center border-0 border-r border-r-solid border-r-[var(--anime-border)] bg-transparent p-0 text-[var(--anime-secondary)] text-base leading-none hover:text-[var(--anime-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+      class="grid h-full w-8 shrink-0 cursor-pointer place-items-center border-0 border-r border-r-solid border-r-kb-line bg-transparent p-0 text-kb-fg-muted hover:bg-kb-hover hover:text-kb-fg disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
       :disabled="decreaseDisabled"
       :aria-label="t('common.decrease')"
       @click="step(-1)"
     >
-      −
+      <Minus class="size-3.5" />
     </button>
     <input
-      class="h-full min-w-0 flex-1 border-0 bg-transparent px-2 text-center text-[var(--anime-text-primary)] text-sm tabular-nums outline-none"
+      class="h-full min-w-0 flex-1 border-0 bg-transparent px-2 text-center text-inherit tabular-nums outline-none [font:inherit] placeholder:text-kb-fg-subtle"
       type="text"
       inputmode="numeric"
+      :id="field.id.value"
+      :aria-invalid="field.invalid.value || undefined"
+      :aria-describedby="field.describedBy.value"
       :value="inputText"
       :placeholder="placeholder"
       :title="placeholder"
@@ -26,20 +26,21 @@
     />
     <button
       type="button"
-      class="flex h-full w-9 flex-none cursor-pointer items-center justify-center border-0 border-l border-l-solid border-l-[var(--anime-border)] bg-transparent p-0 text-[var(--anime-secondary)] text-base leading-none hover:text-[var(--anime-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+      class="grid h-full w-8 shrink-0 cursor-pointer place-items-center border-0 border-l border-l-solid border-l-kb-line bg-transparent p-0 text-kb-fg-muted hover:bg-kb-hover hover:text-kb-fg disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
       :disabled="increaseDisabled"
       :aria-label="t('common.increase')"
       @click="step(1)"
     >
-      +
+      <Plus class="size-3.5" />
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
-import { useFormItem } from "@kabegame/element-plus";
+import { computed, ref, watch } from "vue";
+import { Minus, Plus } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
+import { useFieldControl } from "@/components/ui/field";
 
 const props = withDefaults(
   defineProps<{
@@ -65,7 +66,8 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { formItem } = useFormItem();
+// 放在 Field 里时拿 id / 出错状态（描红由外框的 data-invalid 负责）；校验由 Field 的 validator 随值实时跟随
+const field = useFieldControl({});
 const inputText = ref(formatValue(props.modelValue));
 
 const numberValue = computed(() =>
@@ -77,15 +79,11 @@ const hasMin = computed(() => typeof props.min === "number" && Number.isFinite(p
 const hasMax = computed(() => typeof props.max === "number" && Number.isFinite(props.max));
 const decreaseDisabled = computed(
   () =>
-    props.disabled ||
-    numberValue.value === undefined ||
-    (hasMin.value && numberValue.value <= (props.min as number)),
+    props.disabled || numberValue.value === undefined || (hasMin.value && numberValue.value <= (props.min as number)),
 );
 const increaseDisabled = computed(
   () =>
-    props.disabled ||
-    numberValue.value === undefined ||
-    (hasMax.value && numberValue.value >= (props.max as number)),
+    props.disabled || numberValue.value === undefined || (hasMax.value && numberValue.value >= (props.max as number)),
 );
 
 function clamp(value: number): number {
@@ -130,10 +128,8 @@ function commit() {
 
 watch(
   () => [props.modelValue, props.min, props.max] as const,
-  async ([value], [previousValue]) => {
+  ([value], [previousValue]) => {
     if (!Object.is(value, previousValue)) inputText.value = formatValue(value);
-    await nextTick();
-    await formItem?.validate("change").catch(() => undefined);
   },
 );
 </script>

@@ -18,7 +18,7 @@
     <template #icon><Search /></template>
     <template #panel="{ close }">
       <!-- 宽度不写死：由勾选框网格的自然宽度决定（20rem 兜底，免得输入框太窄）。输入框与说明文字都要
-           w-0!+min-w-full 退出宽度测量（el-input 的固有宽度有 440px、整段说明的
+           w-0!+min-w-full 退出宽度测量（输入框的固有宽度有 440px、整段说明的
            max-content 更宽，任一个都会把 w-max 撑回去），定完宽再撑满。 -->
       <div class="w-max min-w-[min(20rem,calc(100vw-48px))] max-w-[calc(100vw-48px)] p-3">
         <!-- 第一行：输入框 + 全选。外层 w-0!+min-w-full 退出宽度测量，同上。 -->
@@ -32,42 +32,33 @@
             @update:model-value="onInput"
             @keyup.enter="close"
           />
-          <el-checkbox
+          <Checkbox
             class="flex-none"
-            :model-value="allChecked"
-            :indeterminate="someChecked"
+            :model-value="someChecked ? 'indeterminate' : allChecked"
             :label="t('gallery.searchModesSelectAll')"
             @update:model-value="onSelectAll"
           />
         </div>
 
-        <div class="mt-3 text-xs text-[var(--anime-text-secondary)]">{{ t("gallery.searchModesLabel") }}</div>
+        <div class="mt-3 text-[12px] text-kb-fg-muted">{{ t("gallery.searchModesLabel") }}</div>
         <!-- 各维度的说明收进「?」：面板只留勾选本身，读说明是按需的事。 -->
-        <el-checkbox-group
-          :model-value="checkedModes"
-          class="mt-1 grid grid-cols-2 gap-x-5"
-          @update:model-value="onModesChange"
-        >
-          <div v-for="mode in visibleModes" :key="mode" class="flex items-center gap-1">
-            <el-checkbox :value="mode" :label="searchModeLabel(mode)" />
-            <el-tooltip :content="searchModeHelp(mode)" placement="top" :trigger="IS_ANDROID ? 'click' : 'hover'">
-              <el-icon
-                class="flex-none cursor-help text-sm text-[var(--anime-text-muted)] hover:text-[var(--anime-secondary)]"
-              >
-                <QuestionFilled />
-              </el-icon>
-            </el-tooltip>
+        <CheckboxGroup :model-value="checkedModes" @update:model-value="onModesChange">
+          <div class="mt-2 grid grid-cols-2 gap-x-5 gap-y-2">
+            <div v-for="mode in visibleModes" :key="mode" class="flex items-center gap-1.5">
+              <Checkbox :value="mode" :label="searchModeLabel(mode)" />
+              <HelpTip :content="searchModeHelp(mode)" />
+            </div>
           </div>
-        </el-checkbox-group>
+        </CheckboxGroup>
 
         <!-- 底部：这一次搜索会做什么（随输入与勾选实时变化） + 通用语法提示 -->
         <p
           class="mb-0 mt-3 w-0! min-w-full text-xs leading-5"
-          :class="parsedDraft.ok ? 'text-[var(--anime-text-primary)]' : 'text-[var(--anime-danger)]'"
+          :class="parsedDraft.ok ? 'text-kb-fg' : 'text-kb-danger'"
         >
           {{ summary }}
         </p>
-        <p class="mb-0 mt-1 w-0! min-w-full text-xs leading-5 text-[var(--anime-text-secondary)]">
+        <p class="mb-0 mt-1 w-0! min-w-full text-xs leading-5 text-kb-fg-muted">
           {{ t("gallery.searchSyntaxHint") }}
         </p>
       </div>
@@ -78,8 +69,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElCheckbox, ElCheckboxGroup, ElIcon, ElTooltip, KbFilterDropdown } from "@kabegame/element-plus";
-import { QuestionFilled, Search } from "@kabegame/element-plus-icons";
+import { Search } from "@lucide/vue";
+import { Checkbox, CheckboxGroup, HelpTip, KbFilterDropdown } from "@/components/ui";
 import KbText from "@/components/common/form/KbText.vue";
 import { IS_ANDROID } from "@/env";
 import { canonicalSearchModes, GALLERY_SEARCH_MODES, type GallerySearchPathMode } from "@/utils/galleryPath";
@@ -184,7 +175,7 @@ async function focusSearchInput() {
 
 // ---------- 维度勾选 ----------
 
-/** el-checkbox-group 要可变数组，props 是只读的，拷一份给它。 */
+/** CheckboxGroup 要可变数组，props 是只读的，拷一份给它。 */
 const checkedModes = computed<GallerySearchPathMode[]>(() => [...props.selectedModes]);
 
 /** 可勾选列表 = 允许集合 ∪ 当前勾选，按规范顺序。 */
@@ -203,12 +194,12 @@ function emitModes(modes: readonly GallerySearchPathMode[]) {
 }
 
 /** 可以全部取消：一个维度都不勾 = 不做搜索过滤。 */
-function onModesChange(value: Array<string | number | boolean>) {
+function onModesChange(value: Array<string | number>) {
   emitModes(value.filter((mode): mode is GallerySearchPathMode => typeof mode === "string"));
 }
 
-function onSelectAll(checked: string | number | boolean) {
-  emitModes(checked ? visibleModes.value : []);
+function onSelectAll(checked: boolean | "indeterminate" | undefined) {
+  emitModes(checked === true ? visibleModes.value : []);
 }
 
 function searchModeLabel(mode: GallerySearchPathMode): string {

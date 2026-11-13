@@ -1,48 +1,46 @@
 <template>
-  <el-dialog
-    :model-value="open"
-    :z-index="zIndex"
+  <Dialog
+    :open="open"
     :title="title ?? t('albums.confirmDelete')"
     :width="width"
-    destroy-on-close
-    @update:model-value="
+    @update:open="
       (v: boolean) => {
         if (!v) emit('close');
       }
     "
   >
-    <div style="margin-bottom: 16px">
-      <p style="margin-bottom: 8px">{{ message }}</p>
-    </div>
+    <p class="m-0 text-[13px] leading-[1.65] text-kb-fg">{{ message }}</p>
     <template #footer>
-      <el-button @click="emit('close')">{{ cancelText ?? t("common.cancel") }}</el-button>
-      <el-button type="primary" :loading="confirmLoading" @click="emitConfirm">
+      <Button @click="emit('close')">{{ cancelText ?? t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="confirmLoading" @click="emitConfirm">
+        <Spinner v-if="confirmLoading" :size="14" />
         {{ confirmText ?? t("common.ok") }}
-      </el-button>
+      </Button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { Button, Dialog, Spinner } from "@/components/ui";
 
 interface Props {
   open: boolean;
-  zIndex: number;
   message: string;
   /** 以下文案缺省时取当前语言的通用文案 */
   title?: string;
   confirmText?: string;
   cancelText?: string;
   confirmLoading?: boolean;
-  width?: string;
+  /** 最大宽度：数字是 px，也可以给 CSS 长度 */
+  width?: number | string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   confirmLoading: false,
-  width: "420px",
+  width: 420,
 });
 
 const emit = defineEmits<{
@@ -90,5 +88,3 @@ onBeforeUnmount(() => {
   removeKeyHandler();
 });
 </script>
-
-<style scoped lang="scss"></style>

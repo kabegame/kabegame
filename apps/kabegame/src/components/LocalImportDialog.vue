@@ -1,17 +1,7 @@
 <template>
-  <ElDialog
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
-    :title="$t('albums.localImport')"
-    width="560px"
-    class="local-import-dialog"
-    :show-close="true"
-    @update:model-value="modal.close"
-    @open="handleOpen"
-    @closed="handleClosed"
-  >
-    <el-form label-width="110px" class="local-import-form">
-      <el-form-item :label="$t('albums.outputAlbum')">
+  <Dialog v-model:open="open" :title="$t('albums.localImport')" :width="560">
+    <div class="flex flex-col gap-4 [--kb-field-label-width:110px]">
+      <Field :label="$t('albums.outputAlbum')" orientation="horizontal">
         <AlbumPicker
           v-model="selectedOutputAlbumId"
           :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
@@ -21,84 +11,92 @@
           :picker-title="$t('albums.outputAlbum')"
           clearable
         />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
+      </Field>
+      <Field v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" orientation="horizontal" required>
+        <Input
           v-model="newOutputAlbumName"
           :placeholder="$t('albums.placeholderName')"
           maxlength="50"
-          show-word-limit
           @keyup.enter="handleCreateOutputAlbum"
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+        >
+          <template #suffix>
+            <span class="text-[11.5px] tabular-nums">{{ newOutputAlbumName.length }}/50</span>
+          </template>
+        </Input>
+      </Field>
+      <Field v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')" orientation="horizontal">
         <AlbumPicker
           v-model="newOutputAlbumParentId"
           :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')"
         />
-      </el-form-item>
+      </Field>
 
-      <el-form-item :label="$t('albums.selectPath')">
-        <div class="path-picker-actions">
-          <el-button @click="handleAddFiles">
-            <el-icon><Document /></el-icon>
+      <Field :label="$t('albums.selectPath')" orientation="horizontal">
+        <div class="flex flex-wrap gap-2">
+          <Button @click="handleAddFiles">
+            <FileText />
             {{ $t("common.addFiles") }}
-          </el-button>
-          <el-button @click="handleAddFolder">
-            <el-icon><FolderOpened /></el-icon>
+          </Button>
+          <Button @click="handleAddFolder">
+            <FolderOpen />
             {{ $t("common.addFolder") }}
-          </el-button>
+          </Button>
         </div>
-      </el-form-item>
+      </Field>
 
-      <el-form-item v-if="displayItems.length > 0" :label="$t('common.selectedPaths')">
-        <div class="paths-list">
-          <div v-for="(label, idx) in displayItems" :key="idx" class="path-item">
-            <span class="path-text">{{ label }}</span>
-            <el-button type="danger" link size="small" @click="removeItem(idx)">
-              {{ $t("common.remove") }}
-            </el-button>
-          </div>
-        </div>
-      </el-form-item>
+      <Field v-if="displayItems.length > 0" :label="$t('common.selectedPaths')" orientation="horizontal">
+        <ul
+          class="m-0 box-border max-h-[200px] list-none overflow-y-auto rounded-kb-md border border-solid border-kb-line p-0"
+        >
+          <li
+            v-for="(label, idx) in displayItems"
+            :key="label"
+            class="flex items-center gap-2 border-0 border-b border-solid border-kb-line py-1 pl-3 pr-1 last:border-b-0"
+          >
+            <span class="min-w-0 flex-1 break-all text-[12.5px] leading-[1.5] text-kb-fg">{{ label }}</span>
+            <Tooltip :content="$t('common.remove')">
+              <Button variant="ghost-danger" size="icon-sm" :aria-label="$t('common.remove')" @click="removeItem(idx)">
+                <X />
+              </Button>
+            </Tooltip>
+          </li>
+        </ul>
+      </Field>
 
-      <el-form-item :label="$t('albums.recursiveSubdirsLabel')">
-        <el-checkbox v-model="recursive">
-          {{ $t("albums.recursiveSubdirs") }}
-        </el-checkbox>
-      </el-form-item>
-      <el-form-item :label="$t('tasks.dryRunBadge')">
-        <div class="flex items-center gap-2">
-          <el-switch v-model="isDryRun" />
-          <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
+      <Field :label="$t('albums.recursiveSubdirsLabel')" orientation="horizontal">
+        <div class="flex min-h-8 items-center">
+          <Checkbox v-model="recursive">{{ $t("albums.recursiveSubdirs") }}</Checkbox>
         </div>
-      </el-form-item>
-    </el-form>
+      </Field>
+      <Field :label="$t('tasks.dryRunBadge')" orientation="horizontal">
+        <label class="flex min-h-8 cursor-pointer items-center gap-2.5">
+          <Switch v-model="isDryRun" />
+          <span class="text-[12.5px] text-kb-fg-muted">{{ $t("plugins.dryRunDesc") }}</span>
+        </label>
+      </Field>
+    </div>
 
     <template #footer>
-      <div class="dialog-footer">
-        <el-button @click="modal.close()">{{ $t("common.cancel") }}</el-button>
-        <el-button type="primary" :disabled="displayItems.length === 0" @click="handleSubmit">
-          {{ $t("albums.startImport") }}
-        </el-button>
-      </div>
+      <Button @click="open = false">{{ $t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="displayItems.length === 0" @click="handleSubmit">
+        {{ $t("albums.startImport") }}
+      </Button>
     </template>
-  </ElDialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Document, FolderOpened } from "@kabegame/element-plus-icons";
-import { ElDialog } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { open } from "@tauri-apps/plugin-dialog";
+import { FileText, FolderOpen, X } from "@lucide/vue";
+import { Button, Checkbox, Dialog, Field, Input, Switch, Tooltip } from "@/components/ui";
+import { kameMessage } from "@/utils/kameMessage";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useCrawlerStore } from "@/stores/crawler";
 import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
 import { useImageTypes } from "@/composables/useImageTypes";
-import { useModal } from "@/composables/useModal";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import type { LocalImportInitialConfig } from "@/stores/collectDialogs";
@@ -113,12 +111,11 @@ const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
 }>();
 
-const modal = useModal({ onClose: () => emit("update:modelValue", false) });
-watch(
-  () => props.modelValue,
-  (v) => (v ? modal.open() : modal.close()),
-  { immediate: true },
-);
+/** 开关只跟随 v-model；层级与 Android 返回栈由 Dialog 自己接（useModalBack） */
+const open = computed({
+  get: () => props.modelValue,
+  set: (v: boolean) => emit("update:modelValue", v),
+});
 
 const crawlerStore = useCrawlerStore();
 const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
@@ -144,7 +141,7 @@ async function handleAddFiles() {
     const exts = imageExtensions.value.length
       ? imageExtensions.value
       : ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "mp4", "mov"];
-    const selected = await open({
+    const selected = await openFileDialog({
       directory: false,
       multiple: true,
       filters: [{ name: t("common.media"), extensions: exts }],
@@ -161,14 +158,14 @@ async function handleAddFiles() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件失败:", e);
-      ElMessage.error(t("albums.selectFileFailed"));
+      kameMessage.error(t("albums.selectFileFailed"));
     }
   }
 }
 
 async function handleAddFolder() {
   try {
-    const selected = await open({
+    const selected = await openFileDialog({
       directory: true,
       multiple: false,
     });
@@ -182,7 +179,7 @@ async function handleAddFolder() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件夹失败:", e);
-      ElMessage.error(t("albums.selectFolderFailed"));
+      kameMessage.error(t("albums.selectFolderFailed"));
     }
   }
 }
@@ -194,7 +191,7 @@ function removeItem(idx: number) {
 async function createOutputAlbum(showSuccess = true) {
   const name = newOutputAlbumName.value.trim();
   if (!name) {
-    ElMessage.warning(t("albums.enterAlbumNameFirst"));
+    kameMessage.warning(t("albums.enterAlbumNameFirst"));
     return null;
   }
   try {
@@ -203,12 +200,12 @@ async function createOutputAlbum(showSuccess = true) {
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
     if (showSuccess) {
-      ElMessage.success(t("albums.albumCreated"));
+      kameMessage.success(t("albums.albumCreated"));
     }
     return album;
   } catch (e) {
     console.error("创建画册失败:", e);
-    ElMessage.error(t("albums.createAlbumFailed"));
+    kameMessage.error(t("albums.createAlbumFailed"));
     return null;
   }
 }
@@ -222,7 +219,7 @@ async function handleCreateOutputAlbum() {
 
 async function handleSubmit() {
   if (displayItems.value.length === 0) {
-    ElMessage.warning(t("albums.addPathFirst"));
+    kameMessage.warning(t("albums.addPathFirst"));
     return;
   }
 
@@ -259,12 +256,18 @@ async function handleSubmit() {
     isDryRun.value,
   );
 
-  modal.close();
+  open.value = false;
   paths.value = [];
-  ElMessage.success(t("gallery.localImportTaskAdded"));
+  kameMessage.success(t("gallery.localImportTaskAdded"));
 }
 
-function handleOpen() {
+/** 每次打开先清空上次的草稿，再套用「再次执行」带来的初始配置（递归开关不清，沿用上次的选择） */
+function resetForOpen() {
+  paths.value = [];
+  newOutputAlbumName.value = "";
+  newOutputAlbumParentId.value = null;
+  selectedOutputAlbumId.value = null;
+  isDryRun.value = false;
   if (props.initialConfig) {
     paths.value = [...(props.initialConfig.paths ?? [])];
     recursive.value = props.initialConfig.recursive ?? true;
@@ -273,57 +276,11 @@ function handleOpen() {
   }
 }
 
-function handleClosed() {
-  paths.value = [];
-  newOutputAlbumName.value = "";
-  newOutputAlbumParentId.value = null;
-  selectedOutputAlbumId.value = null;
-  isDryRun.value = false;
-}
+watch(
+  () => props.modelValue,
+  (v) => {
+    if (v) resetForOpen();
+  },
+  { immediate: true },
+);
 </script>
-
-<style lang="scss" scoped>
-.local-import-form {
-  padding: 0 8px;
-}
-
-.path-picker-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.paths-list {
-  max-height: 200px;
-  overflow-y: auto;
-  padding: 8px;
-  background: var(--el-fill-color-light);
-  border-radius: 8px;
-}
-
-.path-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.path-text {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  word-break: break-all;
-  color: var(--el-text-color-regular);
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
-</style>

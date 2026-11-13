@@ -1,35 +1,34 @@
 <template>
-  <el-dialog
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
-    :title="title"
-    width="360px"
-    destroy-on-close
-    class="setting-choice-dialog"
-    @update:model-value="modal.close"
-  >
-    <div class="setting-choice-options">
-      <div v-for="opt in options" :key="opt.id" class="setting-choice-option" @click="handleSelect(opt.id)">
-        <el-icon>
+  <Dialog :open="modelValue" :title="title" :width="360" @update:open="(v: boolean) => emit('update:modelValue', v)">
+    <div class="flex flex-col gap-2">
+      <button
+        v-for="opt in options"
+        :key="opt.id"
+        type="button"
+        class="group box-border flex w-full cursor-pointer items-center gap-3 rounded-kb-lg border border-solid border-kb-line-strong bg-transparent px-3.5 py-3 text-left [font:inherit] text-kb-fg outline-none transition-[background-color,border-color] duration-150 hover:border-kb-fg-subtle hover:bg-kb-hover focus-visible:ring-2 focus-visible:ring-kb-ring"
+        @click="handleSelect(opt.id)"
+      >
+        <span
+          class="grid size-9 shrink-0 place-items-center rounded-kb-md bg-kb-fill text-kb-fg-muted [&_svg]:size-[18px]"
+        >
           <component :is="opt.icon" />
-        </el-icon>
-        <div class="setting-choice-option-content">
-          <div class="setting-choice-option-title">{{ opt.title }}</div>
-          <div v-if="opt.desc" class="setting-choice-option-desc">{{ opt.desc }}</div>
-        </div>
-      </div>
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-[13.5px] font-500 leading-5">{{ opt.title }}</span>
+          <span v-if="opt.desc" class="mt-0.5 block text-[12px] leading-[1.45] text-kb-fg-muted">{{ opt.desc }}</span>
+        </span>
+      </button>
     </div>
-    <el-checkbox v-model="keepChecked" class="setting-choice-keep">
+    <Checkbox v-model="keepChecked" class="mt-4">
       {{ t("common.keepChoiceNextTime") }}
-    </el-checkbox>
-  </el-dialog>
+    </Checkbox>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
-import { ElCheckbox, ElDialog, ElIcon } from "@kabegame/element-plus";
 import { ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModal } from "../../composables/useModal";
+import { Checkbox, Dialog } from "@/components/ui";
 import type { OptionItem } from "./OptionPickerDrawer.vue";
 
 interface Props {
@@ -48,16 +47,11 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const keepChecked = ref(false);
 
-const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+// 每次打开都从「不记住」开始
 watch(
   () => props.modelValue,
   (visible) => {
-    if (visible) {
-      keepChecked.value = false;
-      modal.open();
-    } else {
-      modal.close();
-    }
+    if (visible) keepChecked.value = false;
   },
   { immediate: true },
 );
@@ -66,52 +60,3 @@ function handleSelect(id: string) {
   emit("select", { id, persist: keepChecked.value });
 }
 </script>
-
-<style scoped>
-.setting-choice-options {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.setting-choice-option {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 2px solid var(--anime-border);
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.setting-choice-option:hover {
-  border-color: var(--anime-primary);
-  background: var(--el-fill-color-light);
-}
-
-.setting-choice-option .el-icon {
-  flex-shrink: 0;
-  font-size: 20px;
-  color: var(--anime-primary);
-}
-
-.setting-choice-option-content {
-  min-width: 0;
-}
-
-.setting-choice-option-title {
-  line-height: 1.4;
-}
-
-.setting-choice-option-desc {
-  margin-top: 2px;
-  color: var(--anime-text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.setting-choice-keep {
-  margin-top: 16px;
-}
-</style>

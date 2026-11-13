@@ -1,7 +1,14 @@
 <template>
-  <div class="settings-container" :class="{ 'settings-container--embedded': embedded }">
-    <div class="settings-content">
-      <!-- embedded（桌面弹窗）时标题与关闭按钮由 el-dialog 自带 header 提供，这里不再自绘 -->
+  <!-- embedded：弹窗正文去掉了内边距，左导航 + 右面板贴边，底部两角跟随对话框的圆角裁切；
+       固定高度，切换分类时弹窗不跳动 -->
+  <div
+    class="box-border w-full overflow-hidden"
+    :class="
+      embedded ? 'h-[min(620px,72dvh)] rounded-b-kb-lg border-0 border-t border-solid border-kb-line' : 'h-full p-5'
+    "
+  >
+    <div class="flex h-full flex-col">
+      <!-- embedded（桌面弹窗）时标题与关闭按钮由 Dialog 自带的标题栏提供，这里不再自绘 -->
       <PageHeader
         v-if="!embedded"
         :title="mobileDetailOpen ? mobileCategoryLabel : $t('settings.title')"
@@ -14,52 +21,66 @@
         @action="handleSettingsAction"
       />
 
-      <div class="settings-layout">
-        <nav v-if="!isCompact" class="settings-category-nav" :aria-label="$t('settings.title')">
+      <div class="flex min-h-0 flex-1">
+        <!-- 左导航：中性选中（压暗的底 + 正文色），强调色只落在选中项的图标上 -->
+        <nav
+          v-if="!isCompact"
+          class="box-border flex w-[200px] flex-none flex-col gap-0.5 overflow-y-auto border-0 border-r border-solid border-kb-line px-2 py-2.5"
+          :aria-label="$t('settings.title')"
+        >
           <button
             v-for="category in settingsCategories"
             :key="category.name"
             type="button"
-            class="settings-category-button"
-            :class="{ 'is-active': activeTab === category.name }"
+            class="m-0 box-border flex h-9 w-full flex-none cursor-pointer items-center gap-2.5 rounded-kb-md border-0 px-3 text-left text-[13.5px] [font-family:inherit] outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-kb-ring [&_svg]:size-[17px] [&_svg]:shrink-0"
+            :class="
+              activeTab === category.name
+                ? 'bg-kb-pressed font-600 text-kb-fg [&_svg]:text-kb-accent'
+                : 'bg-transparent font-400 text-kb-fg-muted hover:bg-kb-hover hover:text-kb-fg'
+            "
             :aria-current="activeTab === category.name ? 'page' : undefined"
             @click="activeTab = category.name"
           >
-            <el-icon class="settings-category-icon">
-              <component :is="category.icon" />
-            </el-icon>
-            <span>{{ category.label }}</span>
+            <component :is="category.icon" />
+            <span class="min-w-0 truncate">{{ category.label }}</span>
           </button>
-          <div class="settings-category-nav-spacer" />
-          <div class="settings-category-nav-version">Kabegame {{ appVersion }}</div>
+          <div class="flex-1" />
+          <div class="px-3 pb-1.5 text-[11px] text-kb-fg-subtle">Kabegame {{ appVersion }}</div>
         </nav>
 
-        <div v-if="isCompact && !mobileDetailOpen" class="settings-mobile-category-list">
+        <div v-if="isCompact && !mobileDetailOpen" class="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3">
           <button
-            v-for="(category, index) in settingsCategories"
+            v-for="category in settingsCategories"
             :key="category.name"
             type="button"
-            class="settings-mobile-category-card"
+            class="m-0 box-border flex w-full cursor-pointer items-center gap-3.5 rounded-kb-lg border border-solid border-kb-line bg-kb-surface-raised px-4 py-3.5 text-left [font-family:inherit] transition-transform duration-100 active:scale-[0.99]"
             @click="activeTab = category.name"
           >
-            <span class="settings-mobile-category-icon" :class="{ 'is-alt': index % 2 === 1 }">
-              <el-icon><component :is="category.icon" /></el-icon>
+            <span
+              class="grid size-9.5 flex-none place-items-center rounded-kb-md bg-kb-fill text-kb-fg-muted [&_svg]:size-5"
+            >
+              <component :is="category.icon" />
             </span>
-            <span class="settings-mobile-category-text">
-              <span class="settings-mobile-category-title">{{ category.label }}</span>
-              <span class="settings-mobile-category-summary">{{ category.summary }}</span>
+            <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span class="text-[15px] font-600 text-kb-fg">{{ category.label }}</span>
+              <span class="truncate text-[12.5px] text-kb-fg-muted">{{ category.summary }}</span>
             </span>
-            <el-icon class="settings-mobile-category-chevron"><ArrowRight /></el-icon>
+            <ChevronRight class="size-4 flex-none text-kb-fg-subtle" />
           </button>
         </div>
 
         <main
           v-if="!isCompact || mobileDetailOpen"
           v-loading="showLoading"
-          element-loading-text=""
-          class="settings-panel"
+          class="settings-panel min-h-[120px] min-w-0 flex-1 overflow-auto"
+          :class="embedded ? 'px-9 pb-7 pt-5.5' : 'px-4 pb-6 pt-0'"
         >
-          <div class="settings-panel-inner" v-if="!loading">
+          <!-- 行内的长路径按面板宽度的比例封顶（见 .setting-rotation-path），需要面板作容器 -->
+          <div
+            v-if="!loading"
+            class="flex flex-col [container-type:inline-size]"
+            :class="embedded ? 'max-w-[660px]' : ''"
+          >
             <SettingsSection
               v-show="activeTab === 'general'"
               :title="$t('settings.categoryGeneral')"
@@ -228,25 +249,22 @@
 
                 <!-- 第二层：显示器布局图，点一块屏选中要设置的目标。没有屏幕信息的平台不显示 -->
                 <!-- 上边线与 SettingRow 的分隔线同色 -->
-                <div
-                  v-if="showScreenLayout"
-                  class="min-w-0 border-0 border-t border-solid border-[color-mix(in_srgb,var(--anime-primary)_15%,transparent)] py-[15px]"
-                >
+                <div v-if="showScreenLayout" class="min-w-0 border-0 border-t border-solid border-kb-line py-[15px]">
                   <div class="flex items-center justify-between gap-3">
-                    <div class="min-w-0 text-[14px] font-600 leading-5 text-[var(--anime-text-primary)]">
+                    <div class="min-w-0 text-[14px] font-600 leading-5 text-kb-fg">
                       {{ $t("settings.screenLayout") }}
                     </div>
                     <!-- 逐屏独立下：把选中的屏设为默认屏 -->
-                    <el-button
+                    <Button
                       v-if="selectedScreenCanBeDefault"
-                      size="small"
+                      size="sm"
                       :disabled="defaultScreenBusy"
                       @click="setSelectedScreenAsDefault"
                     >
                       {{ $t("settings.screenSetDefault") }}
-                    </el-button>
+                    </Button>
                   </div>
-                  <p class="m-0 mb-3 mt-1 text-[12px] leading-[1.55] text-[var(--anime-text-muted)]">
+                  <p class="m-0 mb-3 mt-1 text-[12px] leading-[1.55] text-kb-fg-muted">
                     {{ screenLayoutDescription }}
                   </p>
                   <WallpaperScreenLayout
@@ -262,17 +280,25 @@
                   :label="$t('settings.wallpaperRotationPath')"
                   :description="$t('settings.wallpaperRotationPathDesc')"
                 >
-                  <code class="setting-rotation-path" :title="wallpaperRotationPathDisplay">
+                  <code
+                    class="setting-rotation-path block overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-kb-fg-muted kb-selectable"
+                    :title="wallpaperRotationPathDisplay"
+                  >
                     {{ wallpaperRotationPathDisplay }}
                   </code>
                 </SettingRow>
                 <SettingRow v-if="currentWallpaperPath" :label="$t('settings.wallpaperCurrent')">
-                  <button type="button" class="setting-current-wallpaper-path" @click="openCurrentWallpaperPath">
+                  <button
+                    type="button"
+                    class="setting-current-wallpaper-path m-0 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap border-0 bg-transparent p-0 text-left text-[12px] text-kb-fg [font-family:inherit] hover:underline"
+                    :title="currentWallpaperPath"
+                    @click="openCurrentWallpaperPath"
+                  >
                     {{ currentWallpaperPath }}
                   </button>
-                  <el-button v-if="currentWallpaperHasProps" size="small" @click="wpePropsOpen = true">
+                  <Button v-if="currentWallpaperHasProps" size="sm" class="ml-2" @click="wpePropsOpen = true">
                     {{ $t("settings.wallpaperCurrentProperties") }}
-                  </el-button>
+                  </Button>
                 </SettingRow>
                 <WpeWebPropertiesDialog
                   v-model="wpePropsOpen"
@@ -435,8 +461,8 @@
               </SettingRow>
               <!-- 画册盘自带两行（开关 + 挂载点），不再套外层 SettingRow -->
               <AlbumDriveSetting v-if="!IS_WEB && !isLightMode" />
-              <WebServerSettingsPanel v-if="!IS_WEB" class="settings-web-server-panel" />
-              <McpSettingsPanel v-if="!IS_WEB" class="settings-mcp-panel" />
+              <WebServerSettingsPanel v-if="!IS_WEB" />
+              <McpSettingsPanel v-if="!IS_WEB" class="mx-[-8px] mb-1 mt-[18px]" />
             </SettingsSection>
           </div>
         </main>
@@ -447,18 +473,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onActivated, computed, watch } from "vue";
-import {
-  ArrowRight,
-  Brush,
-  Connection,
-  Download,
-  Operation,
-  PictureRounded,
-  Tools,
-} from "@kabegame/element-plus-icons";
+import { ChevronRight, Download, Image as ImageIcon, Palette, Puzzle, SlidersHorizontal, Wrench } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
@@ -501,6 +519,8 @@ import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
 import SettingsSection from "@/components/settings/SettingsSection.vue";
 import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
+import { vLoading } from "@/components/ui/loading";
+import Button from "@/components/ui/Button.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -575,13 +595,13 @@ const settingsCategories = computed(() => [
   {
     name: "general" as const,
     label: t("settings.categoryGeneral"),
-    icon: Operation,
+    icon: SlidersHorizontal,
     summary: t("settings.categoryGeneralSummary"),
   },
   {
     name: "appearance" as const,
     label: t("settings.categoryAppearance"),
-    icon: Brush,
+    icon: Palette,
     summary: t("settings.categoryAppearanceSummary"),
   },
   ...(!IS_WEB
@@ -589,7 +609,7 @@ const settingsCategories = computed(() => [
         {
           name: "wallpaper" as const,
           label: t("settings.categoryWallpaper"),
-          icon: PictureRounded,
+          icon: ImageIcon,
           summary: t("settings.categoryWallpaperSummary"),
         },
       ]
@@ -603,7 +623,7 @@ const settingsCategories = computed(() => [
   {
     name: "plugins" as const,
     label: t("settings.categoryPlugins"),
-    icon: Connection,
+    icon: Puzzle,
     summary: t("settings.categoryPluginsSummary"),
   },
   ...(!IS_ANDROID
@@ -611,7 +631,7 @@ const settingsCategories = computed(() => [
         {
           name: "advanced" as const,
           label: t("settings.categoryAdvanced"),
-          icon: Tools,
+          icon: Wrench,
           summary: t("settings.categoryAdvancedSummary"),
         },
       ]
@@ -712,7 +732,7 @@ async function setSelectedScreenAsDefault() {
   try {
     await setDefaultScreen(selectedScreenId.value);
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e));
+    kameMessage.error(e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -761,7 +781,7 @@ async function openCurrentWallpaperPath() {
   try {
     await invoke("open_path", { path: currentWallpaperPath.value });
   } catch (e) {
-    ElMessage.error(t("settings.messageOpenFailed"));
+    kameMessage.error(t("settings.messageOpenFailed"));
   }
 }
 // 当前壁纸换了、或换了要看的目标，都重新取路径
@@ -776,7 +796,7 @@ const wallpaperDisabled = computed(() => settingsStore.values.wallpaperEnabled =
 // native 模式下关掉「打开壁纸」时提示用户系统壁纸保持现状、无法自动还原
 watch(wallpaperDisabled, (disabled, prev) => {
   if (disabled && !prev && wallpaperMode.value === "native") {
-    ElMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
+    kameMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
   }
 });
 const isLightMode = IS_LIGHT_MODE;
@@ -801,245 +821,15 @@ onActivated(async () => {
 });
 </script>
 
-<style scoped lang="scss">
-.settings-container {
-  width: 100%;
-  height: 100%;
-  padding: 20px;
-  overflow: hidden;
-
-  // 弹窗内 el-dialog 高度为 auto，这里给一个固定高度，避免切换分类时弹窗高度跳动；
-  // 圆角 + 描边让「左导航 + 右面板」在 el-dialog 自带内边距里成为一块完整面板
-  &--embedded {
-    height: min(620px, 72dvh);
-    padding: 0;
-    border: 1px solid var(--anime-border);
-    border-radius: 14px;
-  }
-}
-
-.settings-content {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.settings-layout {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-.settings-category-nav {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  width: 200px;
-  gap: 2px;
-  padding: 10px 8px;
-  overflow-y: auto;
-  border-right: 1px solid var(--anime-border);
-  background: var(--anime-bg-sidebar);
-}
-
-.settings-category-button {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  height: 42px;
-  padding: 0 14px;
-  border: none;
-  border-radius: 12px;
-  margin: 0;
-  font: inherit;
-  font-size: 14px;
-  color: var(--anime-text-primary);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  transition:
-    color 0.2s ease,
-    background-color 0.2s ease,
-    box-shadow 0.2s ease;
-
-  &:hover {
-    background: color-mix(in srgb, var(--anime-primary) 8%, transparent);
-  }
-
-  &.is-active {
-    color: #fff;
-    font-weight: 600;
-    background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-    box-shadow: var(--anime-shadow);
-  }
-}
-
-.settings-category-icon {
-  flex: none;
-  font-size: 17px;
-}
-
-.settings-category-nav-spacer {
-  flex: 1;
-}
-
-.settings-category-nav-version {
-  padding: 0 14px 6px;
-  color: var(--anime-text-muted);
-  font-size: 11px;
-}
-
-.settings-mobile-category-list {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-  padding: 12px;
-  overflow-y: auto;
-}
-
-.settings-mobile-category-card {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 15px 16px;
-  border: 1px solid var(--anime-border);
-  border-radius: 18px;
-  margin: 0;
-  background: var(--anime-bg-card);
-  box-shadow: var(--anime-shadow);
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-
-  &:active {
-    transform: scale(0.99);
-  }
-}
-
-.settings-mobile-category-icon {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--anime-primary), var(--anime-secondary));
-  box-shadow: 0 4px 12px rgba(255, 107, 157, 0.25);
-  color: #fff;
-  font-size: 20px;
-
-  &.is-alt {
-    background: linear-gradient(135deg, var(--anime-primary-light), var(--anime-secondary-light));
-  }
-}
-
-.settings-mobile-category-text {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.settings-mobile-category-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--anime-text-primary);
-}
-
-.settings-mobile-category-summary {
-  overflow: hidden;
-  color: var(--anime-text-muted);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-mobile-category-chevron {
-  flex: none;
-  color: color-mix(in srgb, var(--anime-secondary) 45%, transparent);
-  font-size: 15px;
+<style scoped>
+/* 路径很长，不封顶会把左边的标题列挤成一个字宽（窗口缩到最窄时面板只有四百多像素） */
+.setting-rotation-path,
+.setting-current-wallpaper-path {
+  max-width: min(460px, 70cqw);
 }
 
 .settings-panel {
-  flex: 1;
-  min-width: 0;
-  min-height: 120px;
-  padding: 22px 36px 28px;
-  overflow: auto;
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--anime-text-muted) 30%, transparent) transparent;
-}
-
-.settings-panel-inner {
-  display: flex;
-  flex-direction: column;
-  max-width: 660px;
-  // 行内的长路径按面板宽度的比例封顶（见 .setting-rotation-path），需要面板作容器
-  container-type: inline-size;
-}
-
-:deep(.setting-control .el-input__wrapper),
-:deep(.setting-control .el-select .el-input__wrapper),
-:deep(.setting-control .android-picker-select) {
-  min-height: 34px;
-}
-
-// 路径很长，不封顶会把左边的标题列挤成一个字宽（窗口缩到最窄时面板只有四百多像素）
-.setting-rotation-path {
-  display: block;
-  max-width: min(460px, 70cqw);
-  overflow: hidden;
-  color: var(--anime-text-secondary);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  user-select: text;
-  white-space: nowrap;
-}
-
-.setting-current-wallpaper-path {
-  appearance: none;
-  max-width: min(460px, 70cqw);
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-  margin: 0;
-  color: var(--anime-primary);
-  background: none;
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.settings-mcp-panel {
-  margin: 18px -8px 4px;
-}
-
-:deep(.setting-control > .setting-slider-wrap) {
-  width: min(280px, 100%);
-}
-
-// 紧凑布局（安卓 / 窄视口 web）恒为非 embedded 全屏页：取消侧栏后内容区不设 max-width。
-.settings-container:not(.settings-container--embedded) {
-  .settings-panel {
-    padding: 0 16px 24px;
-  }
-
-  .settings-panel-inner {
-    max-width: none;
-  }
+  scrollbar-color: color-mix(in srgb, var(--kb-fg-subtle) 40%, transparent) transparent;
 }
 </style>

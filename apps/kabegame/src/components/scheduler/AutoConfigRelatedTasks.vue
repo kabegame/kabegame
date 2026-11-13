@@ -1,15 +1,11 @@
 <template>
   <!-- 首屏在途：先留白，超过延迟才转圈，快速返回时不闪「暂无」 -->
   <div v-if="tasks.length === 0 && loading" v-loading="showLoading" class="h-10" />
-  <span v-else-if="tasks.length === 0" class="config-no-tasks">{{ t("autoConfig.noRelatedTasks") }}</span>
+  <span v-else-if="tasks.length === 0" class="text-[12px] text-kb-fg-muted">{{ t("autoConfig.noRelatedTasks") }}</span>
   <template v-else>
-    <div
-      v-bind="containerProps"
-      class="config-tasks-scroll config-tasks-scroll--virtual config-tasks-scroll--virtual--desktop"
-      @scroll="handleScroll"
-    >
+    <div v-bind="containerProps" class="h-40 w-full overflow-x-auto" @scroll="handleScroll">
       <div v-bind="wrapperProps">
-        <div v-for="item in virtualList" :key="item.data.id" class="config-task-virtual-item">
+        <div v-for="item in virtualList" :key="item.data.id" class="box-border h-[60px] shrink-0 overflow-hidden">
           <TaskSummaryRow
             :task="item.data"
             layout="inline"
@@ -23,10 +19,9 @@
       </div>
     </div>
     <TaskParamsDialog
-      :open="runParamsDialog.isOpen.value"
-      :z-index="runParamsDialog.zIndex.value"
+      :open="runParamsOpen"
       :task="runParamsTask"
-      @close="runParamsDialog.close()"
+      @close="runParamsOpen = false"
       @closed="runParamsTask = null"
     />
   </template>
@@ -34,7 +29,6 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { useModal } from "@/composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import TaskSummaryRow from "@/components/task/TaskSummaryRow.vue";
@@ -42,6 +36,7 @@ import TaskParamsDialog from "@/components/task/TaskParamsDialog.vue";
 import type { CrawlTask } from "@/stores/crawler";
 import { usePagedTaskList } from "@/composables/usePagedTaskList";
 import { encodeSeg } from "@kabegame/pathql-client";
+import { vLoading } from "@/components/ui/loading";
 
 const props = defineProps<{ configId: string }>();
 
@@ -75,12 +70,12 @@ const {
   overscan: 6,
 });
 
-const runParamsDialog = useModal();
+const runParamsOpen = ref(false);
 const runParamsTask = ref<CrawlTask | null>(null);
 
 function openRunParams(task: CrawlTask) {
   runParamsTask.value = task;
-  runParamsDialog.open();
+  runParamsOpen.value = true;
 }
 
 function handleScroll(event: Event) {
@@ -89,27 +84,3 @@ function handleScroll(event: Event) {
   if (element.scrollTop + element.clientHeight >= element.scrollHeight - 40) void loadMore();
 }
 </script>
-
-<style scoped lang="scss">
-.config-no-tasks {
-  font-size: 12px;
-  color: var(--anime-text-secondary);
-}
-
-.config-tasks-scroll--virtual {
-  width: 100%;
-  overflow-x: auto;
-}
-
-.config-tasks-scroll--virtual--desktop {
-  height: 160px;
-  max-height: 160px;
-}
-
-.config-task-virtual-item {
-  height: 60px;
-  box-sizing: border-box;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-</style>

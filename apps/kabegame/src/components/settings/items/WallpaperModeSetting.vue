@@ -11,12 +11,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useUiStore } from "@/stores/ui";
 import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
 import KbSegmentedControl from "@/components/common/form/KbSegmentedControl.vue";
+import { messageBox } from "@/components/ui/messageBox";
 
 const { t, locale } = useI18n();
 const capabilities = useWallpaperCapabilities();
@@ -46,7 +46,7 @@ const handleChange = async (mode: string) => {
 
   if (mode === "native") {
     try {
-      await ElMessageBox.confirm(t("settings.wallpaperModeConfirmMessage"), t("settings.wallpaperModeConfirmTitle"), {
+      await messageBox.confirm(t("settings.wallpaperModeConfirmMessage"), t("settings.wallpaperModeConfirmTitle"), {
         confirmButtonText: t("settings.wallpaperModeConfirmOk"),
         cancelButtonText: t("common.cancel"),
         type: "warning",
@@ -58,7 +58,7 @@ const handleChange = async (mode: string) => {
   }
   if (mode === "plasma-plugin") {
     try {
-      await ElMessageBox.confirm(
+      await messageBox.confirm(
         t("settings.wallpaperModePluginConfirmMessage"),
         t("settings.wallpaperModeConfirmTitle"),
         {
@@ -79,10 +79,10 @@ const handleChange = async (mode: string) => {
 
   try {
     await set(mode);
-    ElMessage.success(t("settings.wallpaperModeSwitchSuccess"));
+    kameMessage.success(t("settings.wallpaperModeSwitchSuccess"));
   } catch (e: any) {
     const msg = e?.message || String(e);
-    ElMessage.error(`${t("settings.wallpaperModeSwitchFailed")}: ${msg}`);
+    kameMessage.error(`${t("settings.wallpaperModeSwitchFailed")}: ${msg}`);
     // 回滚
     localValue.value = prevMode;
     // eslint-disable-next-line no-console

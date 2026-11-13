@@ -32,7 +32,7 @@
 import { computed, watch } from "vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import ActionSheet from "./ActionSheet.vue";
-import type { ActionItem, ActionContext } from "../actions/types";
+import { resolveActionIcon, type ActionItem, type ActionContext } from "../actions/types";
 import { useUiStore } from "../stores/ui";
 import { useModal } from "../composables/useModal";
 
@@ -84,8 +84,7 @@ const renderMode = computed<"contextmenu" | "actionsheet">(() => {
 const resolveAction = (action: ActionItem<any>): ActionItem<any> => ({
   ...action,
   label: typeof action.label === "function" ? action.label(props.context) : action.label,
-  //@ts-expect-error ActionItem 的函数型 icon 是基于当前上下文的解析器
-  icon: typeof action.icon === "function" ? action.icon(props.context) : action.icon,
+  icon: resolveActionIcon(action.icon, props.context),
   suffix: typeof action.suffix === "function" ? action.suffix(props.context) : action.suffix,
   disabled: typeof action.disabled === "function" ? action.disabled(props.context) : (action.disabled ?? false),
   dividerBefore:
@@ -121,8 +120,7 @@ const menuItems = computed<MenuItem[]>(() => {
     // Resolve label
     const label = typeof action.label === "function" ? action.label(props.context) : action.label;
 
-    //@ts-expect-error Resolve icon
-    const icon = typeof action.icon === "function" ? action.icon(props.context) : action.icon;
+    const icon = resolveActionIcon(action.icon, props.context);
 
     // Resolve suffix
     const suffix = typeof action.suffix === "function" ? action.suffix(props.context) : action.suffix;
@@ -135,8 +133,7 @@ const menuItems = computed<MenuItem[]>(() => {
             key: child.key,
             type: "item" as const,
             label: typeof child.label === "function" ? child.label(props.context) : child.label,
-            //@ts-expect-error Resolve icon
-            icon: typeof child.icon === "function" ? child.icon(props.context) : child.icon,
+            icon: resolveActionIcon(child.icon, props.context),
             command: child.command,
             disabled: typeof child.disabled === "boolean" ? child.disabled : false,
             className: child.className,

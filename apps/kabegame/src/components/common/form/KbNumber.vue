@@ -21,26 +21,28 @@
     @update:model-value="$emit('update:modelValue', $event)"
   />
   <!-- float 上下限都给了：滑杆直观展示范围内的位置，右侧数字框可直接输入 -->
-  <div v-else-if="hasFiniteMin && hasFiniteMax" class="kb-number">
-    <div class="kb-number__slider-col">
-      <el-slider
-        class="kb-number__slider"
+  <div v-else-if="hasFiniteMin && hasFiniteMax" class="flex min-w-0 items-start gap-2.5">
+    <div class="flex min-w-15 flex-1 flex-col pt-1.5">
+      <Slider
         :model-value="numberValue ?? effectiveMin"
         :min="effectiveMin"
         :max="effectiveMax"
         :step="sliderStep"
-        :show-tooltip="false"
-        @input="(v) => onSliderInput(Array.isArray(v) ? v[0] : v)"
+        :disabled="disabled"
+        :label="placeholder"
+        @update:model-value="(v) => v !== undefined && onSliderInput(v)"
       />
       <!-- 两端刻度：让用户不用拖到底也知道可选范围 -->
-      <div class="kb-number__bounds">
+      <div class="flex justify-between text-[11.5px] tabular-nums text-kb-fg-subtle">
         <span>{{ formatNumber(effectiveMin) }}</span>
         <span>{{ formatNumber(effectiveMax) }}</span>
       </div>
     </div>
-    <el-input
-      class="kb-number__input"
+    <Input
+      class="w-19 flex-none"
+      input-class="text-center tabular-nums"
       :model-value="inputText"
+      :disabled="disabled"
       @update:model-value="onInputText"
       @blur="onInputCommit"
       @keyup.enter="onInputCommit"
@@ -62,6 +64,8 @@
 import { computed, ref, watch } from "vue";
 import { useUiStore } from "../../../stores/ui";
 import AndroidPickerNumber from "../../AndroidPickerNumber.vue";
+import Input from "@/components/ui/Input.vue";
+import Slider from "@/components/ui/Slider.vue";
 import KbIntegerInput from "./KbIntegerInput.vue";
 import KbStepper from "./KbStepper.vue";
 
@@ -116,7 +120,7 @@ const sliderStep = computed(() => {
   const span = effectiveMax.value - effectiveMin.value;
   const raw = span > 0 ? Math.max(span / 100, 0.01) : 0.01;
   // 截到 6 位：span / 100 常带浮点噪声（0.8 / 100 → 0.008000000000000002），
-  // el-slider 按 step 的小数位数推 precision，噪声会把它推到 18 位并污染滑杆输出
+  // 滑杆按 step 的小数位数推精度，噪声会把它推到 18 位并污染滑杆输出
   return Number(raw.toFixed(6));
 });
 
@@ -181,47 +185,3 @@ function onInputCommit() {
   inputText.value = formatNumber(clamp(parsed));
 }
 </script>
-
-<style scoped>
-.kb-number {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-}
-
-.kb-number__slider-col {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 60px;
-}
-
-.kb-number__slider :deep(.el-slider__runway) {
-  background: color-mix(in srgb, var(--anime-primary) 18%, transparent);
-}
-.kb-number__slider :deep(.el-slider__bar) {
-  background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-}
-.kb-number__slider :deep(.el-slider__button) {
-  border-color: var(--anime-primary);
-}
-
-.kb-number__bounds {
-  display: flex;
-  justify-content: space-between;
-  margin-top: -4px;
-  color: var(--anime-text-muted);
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.kb-number__input {
-  flex: none;
-  width: 76px;
-}
-.kb-number__input :deep(.el-input__inner) {
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-</style>

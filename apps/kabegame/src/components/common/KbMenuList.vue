@@ -1,9 +1,9 @@
 <template>
   <div
-    class="flex flex-col overflow-y-auto py-3.5 px-3 [scrollbar-width:none] bg-[color-mix(in_srgb,white_35%,transparent)] border-r border-r-solid border-[var(--anime-border)]"
+    class="flex flex-col overflow-y-auto py-3.5 px-3 [scrollbar-width:none] bg-[color-mix(in_srgb,white_35%,transparent)] border-0 border-r border-r-solid border-kb-line"
   >
     <div v-if="title || $slots.title || $slots.actions" class="flex items-center gap-1.5 pb-3 pl-2.5 pr-1">
-      <div class="min-w-0 text-13px font-600 text-[var(--anime-text-muted)] break-all">
+      <div class="min-w-0 text-13px font-600 text-kb-fg-muted break-all">
         <slot name="title">{{ title }}</slot>
       </div>
       <div class="flex-1" />
@@ -16,11 +16,7 @@
       class="flex flex-col gap-1"
       :class="gi > 0 && !group.title ? 'mt-3' : ''"
     >
-      <div
-        v-if="group.title"
-        class="text-13px font-600 text-[var(--anime-text-muted)] px-2.5 pb-1.5"
-        :class="gi > 0 ? 'pt-3' : ''"
-      >
+      <div v-if="group.title" class="text-13px font-600 text-kb-fg-muted px-2.5 pb-1.5" :class="gi > 0 ? 'pt-3' : ''">
         {{ group.title }}
         <template v-if="group.count != null">· {{ group.count }}</template>
       </div>
@@ -28,18 +24,19 @@
         v-for="item in group.items"
         :key="item.name"
         type="button"
-        class="flex items-baseline gap-1.5 text-left border-none rounded-10px py-2 text-14px leading-[1.5] cursor-pointer transition-colors"
+        class="m-0 flex items-baseline gap-1.5 text-left border-0 rounded-kb-md py-2 text-14px leading-[1.5] [font-family:inherit] cursor-pointer outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-kb-ring"
         :class="[
           /* 缩进项（如文档目录三级标题）只换左内边距；padding 二选一，避免与 px-2.5 争优先级 */
           item.indent ? 'pl-4.5 pr-2.5' : 'px-2.5',
+          /* 与设置页左导航同一套中性选中：压暗的底 + 正文色，不用强调色 */
           item.name === active
-            ? 'bg-[color-mix(in_srgb,var(--anime-primary)_10%,transparent)] text-[var(--anime-text-primary)] font-600'
-            : 'bg-transparent font-400 text-[var(--anime-text-primary)] hover:bg-[color-mix(in_srgb,var(--anime-primary)_6%,transparent)]',
+            ? 'bg-kb-pressed text-kb-fg font-600'
+            : 'bg-transparent font-400 text-kb-fg hover:bg-kb-hover',
         ]"
         @click="select(item)"
       >
         <span class="min-w-0" :class="item.mono ? 'font-mono break-all' : ''">{{ item.label }}</span>
-        <span v-if="item.count != null" class="flex-none text-12px font-600 font-mono text-[var(--anime-text-muted)]">
+        <span v-if="item.count != null" class="flex-none text-12px font-600 font-mono text-kb-fg-muted">
           {{ item.count }}
         </span>
       </button>

@@ -1,5 +1,11 @@
+/*
+ * 旧主题变量。界面重构 P1 起：
+ * - 品牌色（primary / secondary 及其深浅档）与状态色保持原值，--kb-accent 等挂在它们上；
+ * - 中性的文字、边框、底色、阴影改指向 tokens.css 的 --kb-*，还没迁的组件也跟着换成中性外观；
+ * - 原来对 element-plus 的全局覆盖已删除，element-plus 本身也在界面重构 P9 删除。
+ */
 :root {
-  /* 主色调 - 粉紫色系 */
+  /* 主色调 - 粉紫色系（品牌色，不随 P1 变） */
   --anime-primary: #ff6b9d;
   --anime-primary-light: #ff8fb3;
   --anime-primary-dark: #e8557f;
@@ -9,22 +15,22 @@
   --anime-secondary-light: #c4b5fd;
   --anime-secondary-dark: #8b5cf6;
 
-  /* 背景色 - 柔和的渐变 */
-  --anime-bg-main: linear-gradient(135deg, #fef3f8 0%, #f0e9ff 100%);
+  /* 背景色（P1 起中性） */
+  --anime-bg-main: var(--kb-bg);
   --anime-bg-card: rgba(255, 255, 255, 0.9);
-  --anime-bg-sidebar: linear-gradient(180deg, #fff0f5 0%, #f5f0ff 100%);
+  --anime-bg-sidebar: var(--kb-bg-sidebar);
 
-  /* 文字颜色 */
-  --anime-text-primary: #4a154b;
-  --anime-text-secondary: #7c3aed;
-  --anime-text-muted: #a78bfa;
+  /* 文字颜色（P1 起中性） */
+  --anime-text-primary: var(--kb-fg);
+  --anime-text-secondary: var(--kb-fg-muted);
+  --anime-text-muted: var(--kb-fg-subtle);
 
-  /* 边框和阴影 */
-  --anime-border: rgba(255, 107, 157, 0.3);
-  --anime-shadow: 0 4px 20px rgba(255, 107, 157, 0.15);
-  --anime-shadow-hover: 0 8px 30px rgba(255, 107, 157, 0.25);
+  /* 边框和阴影（P1 起中性） */
+  --anime-border: var(--kb-line-strong);
+  --anime-shadow: var(--kb-shadow-md);
+  --anime-shadow-hover: var(--kb-shadow-lg);
 
-  /* 成功/警告/错误 - 二次元风格 */
+  /* 成功/警告/错误 */
   --anime-success: #10b981;
   --anime-warning: #f59e0b;
   --anime-danger: #ef4444;
@@ -33,9 +39,10 @@
 
 /* 全局样式 */
 body {
-  font-family: "Microsoft YaHei UI", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif;
-  background: var(--anime-bg-main);
-  background-attachment: fixed;
+  font-family: var(--kb-font-sans);
+  color: var(--kb-fg);
+  background: var(--kb-bg);
+  -webkit-font-smoothing: antialiased;
   user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
@@ -45,175 +52,15 @@ body {
 /* 允许输入框和可编辑内容选择文本 */
 input,
 textarea,
-[contenteditable="true"],
-.el-input__inner,
-.el-textarea__inner {
+[contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
   -moz-user-select: text;
   -ms-user-select: text;
 }
 
-/* Element Plus 主题覆盖 */
-.el-button--primary {
-  background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-  border: none;
-  box-shadow: var(--anime-shadow);
-  transition: all 0.3s ease;
-}
-
-.el-button--primary:hover {
-  background: linear-gradient(135deg, var(--anime-primary-dark) 0%, var(--anime-secondary-dark) 100%);
-  box-shadow: var(--anime-shadow-hover);
-  transform: translateY(-2px);
-}
-
-.el-button {
-  border-radius: 12px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-}
-
-.el-button:hover {
-  transform: translateY(-2px);
-}
-
-.el-card {
-  border-radius: 20px;
-  border: 1px solid var(--anime-border);
-  box-shadow: var(--anime-shadow);
-  background: var(--anime-bg-card);
-  backdrop-filter: blur(10px);
-  transition: all 0.3s ease;
-}
-
-.el-card:hover {
-  box-shadow: var(--anime-shadow-hover);
-  transform: translateY(-2px);
-}
-
-.el-input__wrapper {
-  border-radius: 12px;
-  border-color: var(--anime-border);
-  transition: all 0.3s ease;
-}
-
-.el-input__wrapper:hover {
-  border-color: var(--anime-primary-light);
-  box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.1);
-}
-
-.el-input__wrapper.is-focus {
-  border-color: var(--anime-primary);
-  box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.2);
-}
-
-.el-menu {
-  border: none;
-  background: transparent;
-}
-
-.el-menu-item {
-  border-radius: 12px;
-  margin: 4px 8px;
-  transition: all 0.3s ease;
-}
-
-.el-menu-item:hover {
-  background: linear-gradient(90deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
-  color: var(--anime-primary);
-}
-
-.el-menu-item.is-active {
-  background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-  color: white;
-  box-shadow: var(--anime-shadow);
-}
-
-.el-tag {
-  border-radius: 8px;
-  border: none;
-  font-weight: 500;
-}
-
-.el-tag--success {
-  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-  color: white;
-}
-
-.el-tag--warning {
-  background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
-  color: white;
-}
-
-.el-tag--danger {
-  background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
-  color: white;
-}
-
-.el-tag--info {
-  background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
-  color: white;
-}
-
-.el-progress-bar__outer {
-  border-radius: 10px;
-  background: rgba(255, 107, 157, 0.1);
-}
-
-.el-progress-bar__inner {
-  background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-  border-radius: 10px;
-}
-
-.el-switch.is-checked .el-switch__core {
-  background-color: var(--anime-primary);
-}
-
-.el-table {
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.el-table th {
-  background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
-  color: var(--anime-text-primary);
-  font-weight: 600;
-}
-
-.el-table tr:hover {
-  background: rgba(255, 107, 157, 0.05);
-}
-
-.el-dialog {
-  border-radius: 20px;
-  background: var(--anime-bg-card);
-  box-shadow: var(--anime-shadow-hover);
-}
-
-.el-dialog__header {
-  background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
-  border-radius: 20px 20px 0 0;
-  padding: 20px;
-}
-
-.el-form-item__label {
-  color: var(--anime-text-primary);
-  font-weight: 500;
-}
-
-.el-empty {
-  color: var(--anime-text-muted);
-}
-
-.el-skeleton {
-  --el-skeleton-color: rgba(255, 107, 157, 0.1);
-  --el-skeleton-to-color: rgba(167, 139, 250, 0.1);
-}
-
 /* 隐藏滚动条（仍可滚动）
- * 说明：你现在看到“没生效”，通常是因为滚动条不在 `.el-tabs` 上，
- * 而是在 `.app-main` 或各页面根容器（它们有 overflow-y: auto）上。
+ * 滚动条在 `.app-main` 或各页面根容器（它们有 overflow-y: auto）上。
  * 另外在 Windows WebView2（Tauri）下，`display:none` 有时不如 `width/height:0` 稳定。
  */
 
@@ -225,13 +72,7 @@ textarea,
 .albums-page .albums-scroll-container,
 .task-detail .detail-body,
 .downloads-container,
-.settings-container,
-/* 2) Element Plus 常见滚动容器（表格/Tab 内容） */
-.el-table__body-wrapper,
-.el-tabs,
-.el-tabs__content,
-.el-tab-pane,
-.el-tabs__wrap {
+.settings-container {
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* IE and Edge */
 }
@@ -243,25 +84,7 @@ textarea,
 .albums-page .albums-scroll-container::-webkit-scrollbar,
 .task-detail .detail-body::-webkit-scrollbar,
 .downloads-container::-webkit-scrollbar,
-.settings-container::-webkit-scrollbar,
-.el-table__body-wrapper::-webkit-scrollbar,
-.el-tabs::-webkit-scrollbar,
-.el-tabs__content::-webkit-scrollbar,
-.el-tab-pane::-webkit-scrollbar,
-.el-tabs__wrap::-webkit-scrollbar {
-  width: 0 !important;
-  height: 0 !important;
-}
-
-/* 3) Element Plus 的自定义滚动条（不是浏览器原生 scrollbar）：
-   只隐藏 wrap 上的原生条，EP 自绘的 __bar 保持可用——它本来就只在 hover 时出现，
-   一律 display:none 会让所有需要横向滚动的行（如画廊过滤 chip 行）失去唯一的滚动提示。 */
-.el-scrollbar__wrap {
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE and Edge */
-}
-
-.el-scrollbar__wrap::-webkit-scrollbar {
+.settings-container::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
 }

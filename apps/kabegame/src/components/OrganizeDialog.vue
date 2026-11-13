@@ -1,182 +1,73 @@
 <template>
-  <!-- Android：自研全宽抽屉，不显示右上角关闭按钮，关闭靠遮罩/返回 -->
-  <AndroidDrawer v-if="uiStore.isCompact" v-model="visible" show-close-button class="organize-dialog">
-    <template #header>
-      <div class="organize-drawer-header">
-        <h3>{{ $t("gallery.organizeGallery") }}</h3>
-      </div>
-    </template>
-    <div class="organize-form">
-      <div class="organize-options">
-        <div class="option-item">
-          <el-checkbox v-model="options.dedupe" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.dedupe") }}</div>
-            <div class="option-desc">{{ $t("gallery.dedupeDesc") }}</div>
-            <el-radio-group v-if="options.dedupe" v-model="options.dedupeKeepNew" class="option-sub-block" size="small">
-              <el-radio-button :value="true">{{ $t("gallery.dedupeKeepNew") }}</el-radio-button>
-              <el-radio-button :value="false">{{ $t("gallery.dedupeKeepOld") }}</el-radio-button>
-            </el-radio-group>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.removeMissing" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.removeMissing") }}</div>
-            <div class="option-desc">{{ $t("gallery.removeMissingDesc") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.removeUnrecognized" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.removeUnrecognized") }}</div>
-            <div class="option-desc">{{ $t("gallery.removeUnrecognizedDesc") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.removeUnrecognizedSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.regenThumbnails" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.regenThumbnails") }}</div>
-            <div class="option-desc">{{ $t("gallery.regenThumbnailsDesc") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.regenCompatible" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.regenCompatible") }}</div>
-            <div class="option-desc">{{ $t("gallery.regenCompatibleDesc") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.regenCompatibleSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.backfillNativeMetadata" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.organizeBackfillNativeMetadata") }}</div>
-            <div class="option-desc">{{ $t("gallery.organizeBackfillNativeMetadataDesc") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.organizeBackfillNativeMetadataSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.recomputePalette" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.organizeRecomputePalette") }}</div>
-            <div class="option-desc">{{ $t("gallery.organizeRecomputePaletteDesc") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.organizeRecomputePaletteSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.deleteSourceFiles" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.deleteSourceFiles") }}</div>
-            <div class="option-desc">{{ $t("gallery.deleteSourceFilesDesc") }}</div>
-          </div>
-        </div>
-      </div>
-      <div v-if="showRangeSlider" class="organize-range">
-        <div class="option-title">{{ $t("gallery.organizeRange") }}</div>
-        <div class="option-desc organize-range-desc">{{ $t("gallery.organizeRangeDesc", { total: totalCount }) }}</div>
-        <el-slider v-model="rangeValue" range :min="0" :max="totalCount" :step="1000" @change="onRangeChange" />
-      </div>
-      <div class="organize-dialog-footer">
-        <el-button @click="visible = false">{{ $t("common.cancel") }}</el-button>
-        <el-button type="primary" @click="handleConfirm" :loading="loading">
-          {{ $t("gallery.startOrganize") }}
-        </el-button>
+  <!-- 紧凑端从底部滑出，桌面是对话框；内容同一份 -->
+  <component
+    :is="uiStore.isCompact ? Sheet : Dialog"
+    v-model:open="visible"
+    :title="$t('gallery.organizeGallery')"
+    v-bind="uiStore.isCompact ? { side: 'bottom', bodyClass: 'px-4 py-1' } : { width: 480 }"
+  >
+    <div class="flex flex-col">
+      <div
+        v-for="item in optionItems"
+        :key="item.key"
+        class="border-0 border-b border-solid border-kb-line py-3.5 last:border-b-0"
+      >
+        <!-- 整行（标题、说明）都能点着勾选；分段控件放在 label 外，点它不会顺带切换勾选 -->
+        <Checkbox v-model="options[item.key]" class="w-full">
+          <span class="block text-[13.5px] font-500 leading-5">{{ item.title }}</span>
+          <span class="mt-0.5 block text-[12.5px] leading-[1.5] text-kb-fg-muted">{{ item.desc }}</span>
+          <span v-if="item.slowHint" class="mt-1 block text-[12px] leading-[1.45] text-kb-fg-subtle">
+            {{ item.slowHint }}
+          </span>
+        </Checkbox>
+        <SegmentedControl
+          v-if="item.key === 'dedupe' && options.dedupe"
+          v-model="options.dedupeKeepNew"
+          class="ml-6 mt-2"
+          size="sm"
+          :options="[
+            { label: $t('gallery.dedupeKeepNew'), value: true },
+            { label: $t('gallery.dedupeKeepOld'), value: false },
+          ]"
+        />
       </div>
     </div>
-  </AndroidDrawer>
-
-  <!-- 桌面端：标准对话框 -->
-  <el-dialog v-else v-model="visible" :title="$t('gallery.organizeGallery')" width="480px" destroy-on-close>
-    <div class="organize-form">
-      <div class="organize-options">
-        <div class="option-item">
-          <el-checkbox v-model="options.dedupe" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.dedupe") }}</div>
-            <div class="option-desc">{{ $t("gallery.dedupeDescDesktop") }}</div>
-            <el-radio-group v-if="options.dedupe" v-model="options.dedupeKeepNew" class="option-sub-block" size="small">
-              <el-radio-button :value="true">{{ $t("gallery.dedupeKeepNew") }}</el-radio-button>
-              <el-radio-button :value="false">{{ $t("gallery.dedupeKeepOld") }}</el-radio-button>
-            </el-radio-group>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.removeMissing" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.removeMissing") }}</div>
-            <div class="option-desc">{{ $t("gallery.removeMissingDescDesktop") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.removeUnrecognized" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.removeUnrecognized") }}</div>
-            <div class="option-desc">{{ $t("gallery.removeUnrecognizedDescDesktop") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.removeUnrecognizedSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.regenThumbnails" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.regenThumbnails") }}</div>
-            <div class="option-desc">{{ $t("gallery.regenThumbnailsDesc") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.regenCompatible" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.regenCompatible") }}</div>
-            <div class="option-desc">{{ $t("gallery.regenCompatibleDesc") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.regenCompatibleSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.backfillNativeMetadata" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.organizeBackfillNativeMetadata") }}</div>
-            <div class="option-desc">{{ $t("gallery.organizeBackfillNativeMetadataDescDesktop") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.organizeBackfillNativeMetadataSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.recomputePalette" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.organizeRecomputePalette") }}</div>
-            <div class="option-desc">{{ $t("gallery.organizeRecomputePaletteDesc") }}</div>
-            <div class="option-slow-hint">{{ $t("gallery.organizeRecomputePaletteSlowHint") }}</div>
-          </div>
-        </div>
-        <div class="option-item">
-          <el-checkbox v-model="options.deleteSourceFiles" />
-          <div class="option-content">
-            <div class="option-title">{{ $t("gallery.deleteSourceFiles") }}</div>
-            <div class="option-desc">{{ $t("gallery.deleteSourceFilesDescDesktop") }}</div>
-          </div>
-        </div>
+    <div v-if="showRangeSlider" class="mt-1 border-0 border-t border-solid border-kb-line pb-1 pt-3.5">
+      <div class="text-[13.5px] font-500 leading-5 text-kb-fg">{{ $t("gallery.organizeRange") }}</div>
+      <div class="mb-3 mt-0.5 text-[12.5px] leading-[1.5] text-kb-fg-muted">
+        {{ $t("gallery.organizeRangeDesc", { total: totalCount }) }}
       </div>
-      <div v-if="showRangeSlider" class="organize-range">
-        <div class="option-title">{{ $t("gallery.organizeRange") }}</div>
-        <div class="option-desc organize-range-desc">{{ $t("gallery.organizeRangeDesc", { total: totalCount }) }}</div>
-        <el-slider v-model="rangeValue" range :min="0" :max="totalCount" :step="1000" @change="onRangeChange" />
+      <RangeSlider
+        v-model="rangeValue"
+        :min="0"
+        :max="totalCount"
+        :step="1000"
+        :label="$t('gallery.organizeRange')"
+        @commit="onRangeChange"
+      />
+      <div class="mt-1.5 flex justify-between text-[11.5px] tabular-nums text-kb-fg-subtle">
+        <span>{{ rangeValue[0].toLocaleString() }}</span>
+        <span>{{ rangeValue[1].toLocaleString() }}</span>
       </div>
     </div>
     <template #footer>
-      <el-button @click="visible = false">{{ $t("common.cancel") }}</el-button>
-      <el-button type="primary" @click="handleConfirm" :loading="loading">{{ $t("gallery.startOrganize") }}</el-button>
+      <Button @click="visible = false">{{ $t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="loading" @click="handleConfirm">
+        <Spinner v-if="loading" :size="14" />
+        {{ $t("gallery.startOrganize") }}
+      </Button>
     </template>
-  </el-dialog>
+  </component>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from "vue";
 import { invoke } from "@/api/rpc";
-import AndroidDrawer from "@/components/AndroidDrawer.vue";
+import { Button, Checkbox, Dialog, RangeSlider, SegmentedControl, Sheet, Spinner } from "@/components/ui";
+import { useI18n } from "@kabegame/i18n";
 import { useApp } from "@/stores/app";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useUiStore } from "@/stores/ui";
-import { Arrayable } from "@kabegame/element-plus/utils";
 
 interface Props {
   modelValue: boolean;
@@ -211,6 +102,7 @@ const totalCount = ref(0);
 const rangeValue = ref<[number, number]>([0, 0]);
 const appStore = useApp();
 const uiStore = useUiStore();
+const { t } = useI18n();
 
 const options = reactive({
   dedupe: true, // 默认开启去重
@@ -225,6 +117,45 @@ const options = reactive({
 });
 
 const showRangeSlider = computed(() => totalCount.value > 4000);
+
+type OptionKey = Exclude<keyof typeof options, "dedupeKeepNew">;
+
+/** 选项行：紧凑端（Android）与桌面的说明文案有几项不同（桌面版带「源文件」等字样） */
+const optionItems = computed(() => {
+  const compact = uiStore.isCompact;
+  const desc = (key: string, hasDesktop: boolean) => t(`gallery.${key}${hasDesktop && !compact ? "Desktop" : ""}`);
+  const rows: { key: OptionKey; title: string; desc: string; slowHint?: string }[] = [
+    { key: "dedupe", title: t("gallery.dedupe"), desc: desc("dedupeDesc", true) },
+    { key: "removeMissing", title: t("gallery.removeMissing"), desc: desc("removeMissingDesc", true) },
+    {
+      key: "removeUnrecognized",
+      title: t("gallery.removeUnrecognized"),
+      desc: desc("removeUnrecognizedDesc", true),
+      slowHint: t("gallery.removeUnrecognizedSlowHint"),
+    },
+    { key: "regenThumbnails", title: t("gallery.regenThumbnails"), desc: t("gallery.regenThumbnailsDesc") },
+    {
+      key: "regenCompatible",
+      title: t("gallery.regenCompatible"),
+      desc: t("gallery.regenCompatibleDesc"),
+      slowHint: t("gallery.regenCompatibleSlowHint"),
+    },
+    {
+      key: "backfillNativeMetadata",
+      title: t("gallery.organizeBackfillNativeMetadata"),
+      desc: desc("organizeBackfillNativeMetadataDesc", true),
+      slowHint: t("gallery.organizeBackfillNativeMetadataSlowHint"),
+    },
+    {
+      key: "recomputePalette",
+      title: t("gallery.organizeRecomputePalette"),
+      desc: t("gallery.organizeRecomputePaletteDesc"),
+      slowHint: t("gallery.organizeRecomputePaletteSlowHint"),
+    },
+    { key: "deleteSourceFiles", title: t("gallery.deleteSourceFiles"), desc: desc("deleteSourceFilesDesc", true) },
+  ];
+  return rows;
+});
 
 function clampRangePair(val: [number, number]): [number, number] {
   const max = totalCount.value;
@@ -247,9 +178,8 @@ function clampRangePair(val: [number, number]): [number, number] {
   return [a, b];
 }
 
-function onRangeChange(val: Arrayable<number>) {
-  if (!Array.isArray(val)) return;
-  rangeValue.value = clampRangePair([val[0], val[1]]);
+function onRangeChange(val: [number, number]) {
+  rangeValue.value = clampRangePair(val);
 }
 
 // 同步 visible 与 modelValue
@@ -303,85 +233,3 @@ const handleConfirm = async () => {
   emit("confirm", payload);
 };
 </script>
-
-<style scoped lang="scss">
-.organize-dialog {
-  --el-drawer-padding-primary: 20px;
-}
-
-.organize-drawer-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--el-border-color-light);
-  margin: -20px -20px 20px -20px;
-
-  h3 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--el-text-color-primary);
-  }
-}
-
-.organize-form {
-  .organize-range {
-    padding: 12px 0 8px;
-    border-top: 1px solid var(--el-border-color-lighter);
-
-    .organize-range-desc {
-      margin-bottom: 12px;
-    }
-  }
-
-  .organize-options {
-    .option-sub-block {
-      padding-left: 28px;
-      margin-top: -8px;
-      margin-bottom: 8px;
-    }
-
-    .option-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 16px 0;
-      border-bottom: 1px solid var(--el-border-color-lighter);
-
-      &:last-child {
-        border-bottom: none;
-      }
-
-      .option-content {
-        flex: 1;
-
-        .option-title {
-          font-weight: 500;
-          color: var(--el-text-color-primary);
-          margin-bottom: 4px;
-        }
-
-        .option-desc {
-          font-size: 14px;
-          color: var(--el-text-color-regular);
-          line-height: 1.4;
-        }
-
-        .option-slow-hint {
-          font-size: 13px;
-          color: var(--el-text-color-secondary);
-          line-height: 1.4;
-          margin-top: 6px;
-        }
-      }
-    }
-  }
-
-  .organize-dialog-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-    padding-top: 20px;
-    border-top: 1px solid var(--el-border-color-lighter);
-    margin-top: 20px;
-  }
-}
-</style>

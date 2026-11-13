@@ -10,7 +10,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
@@ -79,7 +79,7 @@ const handleChange = async (mode: string) => {
   } catch (error) {
     logger.warn("切换显示器模式失败:", error);
     // 后端的错误信息就是不可用的原因
-    ElMessage.error(error instanceof Error ? error.message : String(error));
+    kameMessage.error(error instanceof Error ? error.message : String(error));
     localValue.value = previous;
   } finally {
     saving.value = false;

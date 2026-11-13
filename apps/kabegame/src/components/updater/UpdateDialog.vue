@@ -1,52 +1,49 @@
 <template>
-  <el-dialog
-    :model-value="store.dialogOpen"
-    :z-index="modal.zIndex.value"
-    :title="t('updater.dialogTitle')"
-    width="640px"
-    append-to-body
-    class="update-dialog"
-    @update:model-value="modal.close"
-  >
+  <Dialog v-model:open="open" :title="t('updater.dialogTitle')" :width="640">
     <template v-if="releases.length">
-      <KbTab v-model="activeTab" :items="tabItems" class="update-tabs" />
+      <Tabs v-model="activeTab" :items="tabItems" class="mb-3 max-w-full" />
       <div v-if="active" class="changelog" v-html="renderedBody(active)" @click="onBodyClick"></div>
     </template>
 
     <template #footer>
-      <div class="update-footer">
-        <span class="footer-info">
-          <span v-if="store.currentVersion" class="current-version">
+      <div class="flex w-full items-center justify-between gap-3">
+        <div class="flex min-w-0 flex-1 flex-col gap-0.5 text-left text-[12px] text-kb-fg-muted">
+          <span v-if="store.currentVersion">
             {{ t("updater.currentVersion", { version: store.currentVersion }) }}
           </span>
-          <span v-if="store.lastDownloadError" class="download-error">{{ store.lastDownloadError }}</span>
-          <span v-else-if="showNoAssetHint" class="no-asset-hint">{{ t("updater.noAssetHint") }}</span>
-        </span>
-        <span class="footer-actions">
-          <el-button text @click="active && openRelease(active)">{{ t("updater.viewOnGithub") }}</el-button>
-          <el-button
+          <span v-if="store.lastDownloadError" class="break-words text-kb-danger">{{ store.lastDownloadError }}</span>
+          <span v-else-if="showNoAssetHint">{{ t("updater.noAssetHint") }}</span>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <Button variant="ghost" @click="active && openRelease(active)">
+            <ExternalLink />
+            {{ t("updater.viewOnGithub") }}
+          </Button>
+          <Button
             v-if="active && canDownload(active)"
-            type="primary"
-            :loading="store.busy"
+            variant="primary"
+            :disabled="store.busy"
             @click="onDownload(active)"
           >
+            <Spinner v-if="store.busy" :size="14" />
+            <Download v-else />
             {{ t("updater.download") }}
-          </el-button>
-          <el-button v-else type="primary" @click="active && openRelease(active)">
+          </Button>
+          <Button v-else variant="primary" @click="active && openRelease(active)">
             {{ t("updater.openReleasePage") }}
-          </el-button>
-        </span>
+          </Button>
+        </div>
       </div>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ElButton, ElDialog, KbTab, type KbTabItem } from "@kabegame/element-plus";
+import { Download, ExternalLink } from "@lucide/vue";
+import { Button, Dialog, Spinner, Tabs, type TabItem } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import { IS_LINUX } from "@/env";
-import { useModal } from "@/composables/useModal";
 import { renderBasicMarkdown } from "@/utils/renderMarkdown";
 import { openExternalLink } from "@/utils/openExternalLink";
 import * as updaterService from "@/services/updater";
@@ -55,12 +52,11 @@ import { useUpdaterStore, type ReleaseInfo } from "@/stores/updater";
 const { t } = useI18n();
 const store = useUpdaterStore();
 
-const modal = useModal({ onClose: () => store.closeDialog() });
-watch(
-  () => store.dialogOpen,
-  (v) => (v ? modal.open() : modal.close()),
-  { immediate: true },
-);
+// 开合以 store 为准：服务层 / 侧栏按钮打开，对话框里关闭（Esc、遮罩、×、Android 返回）写回 store
+const open = computed({
+  get: () => store.dialogOpen,
+  set: (value: boolean) => (value ? store.openDialog() : store.closeDialog()),
+});
 
 const releases = computed(() => store.releases);
 const activeTab = ref("");
@@ -68,8 +64,8 @@ const activeTab = ref("");
 // 打开时 / 列表变化时，默认选中最新（第一个）版本
 watch(
   [() => store.dialogOpen, releases],
-  ([open, list]: [boolean, ReleaseInfo[]]) => {
-    if (open && list.length && !list.some((r) => r.tag === activeTab.value)) {
+  ([isOpen, list]: [boolean, ReleaseInfo[]]) => {
+    if (isOpen && list.length && !list.some((r) => r.tag === activeTab.value)) {
       activeTab.value = list[0].tag;
     }
   },
@@ -78,7 +74,7 @@ watch(
 
 const active = computed(() => releases.value.find((r) => r.tag === activeTab.value) ?? releases.value[0] ?? null);
 
-const tabItems = computed<KbTabItem[]>(() => releases.value.map((r) => ({ name: r.tag, label: r.tag })));
+const tabItems = computed<TabItem[]>(() => releases.value.map((r) => ({ name: r.tag, label: r.tag })));
 
 // changelog 渲染缓存：按 tag 缓存，但 body 变化（如发布后编辑了 release notes）时失效重渲染
 const bodyCache = new Map<string, { body: string; html: string }>();
@@ -128,92 +124,57 @@ function onBodyClick(e: MouseEvent) {
 }
 </script>
 
-<style scoped lang="scss">
-.update-tabs {
-  margin-bottom: 12px;
-  max-width: 100%;
-}
-
+<style scoped>
+/* 更新日志是 v-html 渲染的 markdown，元素不在模板里，只能用 :deep 给样式 */
 .changelog {
   max-height: 50vh;
   overflow-y: auto;
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.6;
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
   word-break: break-word;
-
-  :deep(h1),
-  :deep(h2),
-  :deep(h3) {
-    font-size: 16px;
-    font-weight: 600;
-    margin: 12px 0 6px;
-  }
-
-  :deep(ul),
-  :deep(ol) {
-    padding-left: 20px;
-    margin: 6px 0;
-  }
-
-  :deep(a) {
-    color: var(--anime-primary);
-    cursor: pointer;
-  }
-
-  :deep(code) {
-    background: rgba(167, 139, 250, 0.12);
-    padding: 1px 5px;
-    border-radius: 4px;
-  }
-
-  :deep(pre) {
-    background: rgba(0, 0, 0, 0.05);
-    padding: 10px;
-    border-radius: 8px;
-    overflow-x: auto;
-  }
-
-  :deep(img) {
-    max-width: 100% !important;
-    height: auto;
-  }
 }
 
-.update-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.changelog :deep(h1),
+.changelog :deep(h2),
+.changelog :deep(h3) {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
 
-  .footer-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-    min-width: 0;
-    text-align: left;
-  }
+.changelog :deep(ul),
+.changelog :deep(ol) {
+  padding-left: 20px;
+  margin: 6px 0;
+}
 
-  .current-version {
-    font-size: 12px;
-    color: var(--anime-text-secondary);
-  }
+.changelog :deep(a) {
+  color: var(--kb-accent);
+  cursor: pointer;
+}
 
-  .no-asset-hint {
-    font-size: 12px;
-    color: var(--anime-text-secondary);
-  }
+.changelog :deep(code) {
+  background: var(--kb-fill);
+  padding: 1px 5px;
+  border-radius: var(--kb-radius-sm);
+  font-size: 12.5px;
+}
 
-  .download-error {
-    font-size: 12px;
-    color: var(--el-color-danger);
-    word-break: break-word;
-  }
+.changelog :deep(pre) {
+  background: var(--kb-fill-light);
+  padding: 10px;
+  border-radius: var(--kb-radius-md);
+  overflow-x: auto;
+}
 
-  .footer-actions {
-    margin-left: auto;
-    flex-shrink: 0;
-  }
+.changelog :deep(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.changelog :deep(img) {
+  max-width: 100% !important;
+  height: auto;
 }
 </style>

@@ -1,55 +1,50 @@
 <template>
-  <el-dialog
-    :model-value="isOpen"
-    :z-index="zIndex"
+  <Dialog
+    v-model:open="open"
     :title="t('updater.downloadingTitle')"
-    width="420px"
-    append-to-body
-    :close-on-click-modal="false"
-    :show-close="!store.isDownloading"
-    class="download-progress-dialog"
-    @update:model-value="
-      (v) => {
-        if (!v) close();
-      }
-    "
+    :width="420"
+    :close-on-overlay="false"
+    :hide-close="store.isDownloading"
   >
-    <div class="dl-body">
-      <el-progress
-        :percentage="store.downloadPercent"
-        :status="store.lastDownloadError ? 'exception' : undefined"
-        :stroke-width="14"
-      />
-      <div class="dl-meta">
+    <div class="pt-1">
+      <Progress :value="percent" :tone="store.lastDownloadError ? 'danger' : 'accent'" :height="6" />
+      <div class="mt-2.5 flex items-baseline justify-between gap-3 text-[12px] text-kb-fg-muted tabular-nums">
         <span>{{ sizeText }}</span>
-        <span v-if="store.lastDownloadError" class="dl-error">{{ store.lastDownloadError }}</span>
+        <span v-if="percent != null">{{ percent }}%</span>
+      </div>
+      <div v-if="store.lastDownloadError" class="mt-1.5 break-words text-[12px] text-kb-danger">
+        {{ store.lastDownloadError }}
       </div>
     </div>
 
     <template #footer>
-      <el-button v-if="store.isDownloading" @click="onCancel">{{ t("common.cancel") }}</el-button>
-      <el-button v-else type="primary" @click="close()">{{ t("common.close") }}</el-button>
+      <Button v-if="store.isDownloading" @click="onCancel">{{ t("common.cancel") }}</Button>
+      <Button v-else variant="primary" @click="open = false">{{ t("common.close") }}</Button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from "vue";
-import { ElButton, ElDialog, ElMessageBox, ElProgress } from "@kabegame/element-plus";
+import { computed, ref, watch } from "vue";
+import { Button, Dialog, Progress } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
-import { useModal } from "@/composables/useModal";
 import * as updaterService from "@/services/updater";
 import { useUpdaterStore } from "@/stores/updater";
+import { messageBox } from "@/components/ui/messageBox";
 
 const { t } = useI18n();
 const store = useUpdaterStore();
 
-const { isOpen, zIndex, open, close } = useModal();
+/** 由后端 phase 驱动开合（见下）；下载中隐藏 ×、点遮罩不关，Esc / Android 返回只收起弹窗、不取消下载 */
+const open = ref(false);
 
 function formatBytes(n: number): string {
   if (n <= 0) return "0 MB";
   return `${(n / 1_048_576).toFixed(1)} MB`;
 }
+
+/** 下载中还不知道总大小时是不定进度（原来显示成一直 0%） */
+const percent = computed(() => (store.isDownloading && !store.totalBytes ? null : store.downloadPercent));
 
 const sizeText = computed(() => {
   const total = store.totalBytes;
@@ -62,16 +57,16 @@ watch(
   () => store.phase,
   (now, prev) => {
     if (now === "downloading") {
-      open();
+      open.value = true;
       return;
     }
     if (prev === "downloading") {
       if (now === "restartable") {
-        close();
+        open.value = false;
         void promptRestart();
       } else if (now === "updateAvailable") {
         // 失败：留弹窗展示错误；取消：直接关
-        if (!store.lastDownloadError) close();
+        if (!store.lastDownloadError) open.value = false;
       }
     }
   },
@@ -87,7 +82,7 @@ async function onCancel() {
 
 async function promptRestart() {
   try {
-    await ElMessageBox.confirm(t("updater.restartReadyMessage"), t("updater.restartReadyTitle"), {
+    await messageBox.confirm(t("updater.restartReadyMessage"), t("updater.restartReadyTitle"), {
       confirmButtonText: t("updater.restartNow"),
       cancelButtonText: t("updater.restartLater"),
       type: "success",
@@ -102,23 +97,3 @@ async function promptRestart() {
   }
 }
 </script>
-
-<style scoped lang="scss">
-.dl-body {
-  padding: 4px 2px 0;
-}
-
-.dl-meta {
-  margin-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--anime-text-secondary);
-
-  .dl-error {
-    color: var(--el-color-danger);
-    word-break: break-word;
-  }
-}
-</style>

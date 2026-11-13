@@ -69,11 +69,7 @@
       @close="hideMenu"
       @command="handleCommand"
     />
-    <KamechanHistoryDialog
-      :open="historyModal.isOpen.value"
-      :z-index="historyModal.zIndex.value"
-      @close="historyModal.close()"
-    />
+    <KamechanHistoryDialog v-model:open="historyOpen" />
   </Teleport>
 </template>
 
@@ -82,7 +78,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSPro
 import { useModal } from "@/composables/useModal";
 import { useModalStackStore } from "@/stores/modalStack";
 import { storeToRefs } from "pinia";
-import { Clock, FullScreen, Hide, Minus } from "@kabegame/element-plus-icons";
+import { EyeOff, History, Maximize2, Minus } from "@lucide/vue";
 import ActionRenderer from "@/components/ActionRenderer.vue";
 import { useActionMenu } from "@/composables/useActionMenu";
 import { useKameMessageStore } from "@/stores/kameMessage";
@@ -112,7 +108,8 @@ const minimized = ref(false);
 const KAMECHAN_MODAL_OWNER = "kamechan";
 /** 没有任何其它弹层时的常驻层级（与原样式一致） */
 const KAMECHAN_BASE_Z_INDEX = 1600;
-const historyModal = useModal({ owner: KAMECHAN_MODAL_OWNER });
+/** 历史对话框：新 Dialog 自己接 Android 返回栈、向层级计数器取号（总在立绘之上），不再占 kamechan 的栈位 */
+const historyOpen = ref(false);
 /** kamechan 开着时它就是全局工具箱的入口（方案 2a），点击 toggle 气泡 */
 const toolboxModal = useModal({ owner: KAMECHAN_MODAL_OWNER });
 const modalStack = useModalStackStore();
@@ -170,7 +167,7 @@ const actions = computed<ActionItem<"kamechan">[]>(() => [
     key: "history",
     command: "history",
     label: t("kamechan.history"),
-    icon: Clock,
+    icon: History,
   },
   // 点击已让位给工具箱气泡，「恢复立绘」改由右键菜单承载
   ...(minimized.value
@@ -179,7 +176,7 @@ const actions = computed<ActionItem<"kamechan">[]>(() => [
           key: "restore",
           command: "restore",
           label: t("kamechan.restore"),
-          icon: FullScreen,
+          icon: Maximize2,
         } as ActionItem<"kamechan">,
       ]
     : [
@@ -194,7 +191,7 @@ const actions = computed<ActionItem<"kamechan">[]>(() => [
     key: "disable",
     command: "disable",
     label: t("kamechan.disable"),
-    icon: Hide,
+    icon: EyeOff,
     dividerBefore: true,
   },
 ]);
@@ -279,7 +276,7 @@ function handleOpenSettings() {
 function handleCommand(command: string) {
   hideMenu();
   if (command === "history") {
-    historyModal.open();
+    historyOpen.value = true;
     return;
   }
   if (command === "restore") {

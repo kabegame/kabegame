@@ -1,9 +1,7 @@
 <template>
   <div v-if="screens.length > 0" class="flex min-w-0 flex-col gap-2">
     <!-- 画布：宽度随容器，布局图等比缩进去并水平居中 -->
-    <div
-      class="box-border flex w-full flex-col items-center rounded-12px bg-[color-mix(in_srgb,var(--anime-secondary)_8%,transparent)] px-3 py-3"
-    >
+    <div class="box-border flex w-full flex-col items-center rounded-kb-lg bg-kb-fill-light px-3 py-3">
       <!-- 只用来量可用宽度：高度恒为 0，不随布局图变。直接量画布的话，布局图撑高画布又会触发一次测量
            （在对话框里挂载时初始宽度为 0，浏览器会报 ResizeObserver loop） -->
       <div ref="measureRef" class="h-0 w-full" aria-hidden="true" />
@@ -17,7 +15,7 @@
           v-for="item in items"
           :key="item.screen.id"
           type="button"
-          class="absolute m-0 box-border flex flex-col appearance-none items-center justify-center overflow-hidden rounded-8px border-[1.5px] border-solid p-0 font-inherit outline-none transition-[background-color,border-color,box-shadow] duration-200 cursor-pointer focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--anime-primary)_30%,transparent)]"
+          class="absolute m-0 box-border flex flex-col appearance-none items-center justify-center overflow-hidden rounded-8px border-[1.5px] border-solid p-0 font-inherit outline-none transition-[background-color,border-color,box-shadow] duration-200 cursor-pointer focus-visible:shadow-[0_0_0_2px_var(--kb-ring)]"
           :class="item.selected ? BOX_SELECTED : BOX_IDLE"
           :style="item.style"
           :aria-pressed="item.selected"
@@ -47,15 +45,12 @@
           >
             {{ item.index }}
           </span>
-          <span
-            v-if="item.roomy"
-            class="mt-1 max-w-full truncate px-2 text-12px font-500 leading-[1.3] text-[var(--anime-text-primary)]"
-          >
+          <span v-if="item.roomy" class="mt-1 max-w-full truncate px-2 text-12px font-500 leading-[1.3] text-kb-fg">
             {{ item.name }}
           </span>
           <span
             v-if="item.showResolution"
-            class="max-w-full truncate px-2 text-11px leading-[1.3] tabular-nums text-[var(--anime-text-muted)]"
+            class="max-w-full truncate px-2 text-11px leading-[1.3] tabular-nums text-kb-fg-muted"
           >
             {{ item.resolution }}
           </span>
@@ -63,26 +58,26 @@
         <!-- 跨屏拼接：所有屏是一整块画布，外接矩形描边 -->
         <div
           v-if="displayMode === 'span'"
-          class="pointer-events-none absolute inset-0 rounded-10px border-2 border-dashed border-[var(--anime-primary)]"
+          class="pointer-events-none absolute inset-0 rounded-10px border-2 border-dashed border-kb-accent"
         />
       </div>
     </div>
 
-    <p v-if="screens.length === 1" class="m-0 text-12px leading-[1.55] text-[var(--anime-text-muted)]">
+    <p v-if="screens.length === 1" class="m-0 text-12px leading-[1.55] text-kb-fg-muted">
       {{ t("settings.screenOnlyOne") }}
     </p>
 
     <!-- 已断开的屏：配置还留着，接回来就恢复；用不上了可以忘记 -->
     <div
       v-if="showDisconnected && displayMode === 'single' && disconnected.length"
-      class="flex flex-wrap items-center gap-x-3 gap-y-1 text-12px leading-[1.55] text-[var(--anime-text-muted)]"
+      class="flex flex-wrap items-center gap-x-3 gap-y-1 text-12px leading-[1.55] text-kb-fg-muted"
     >
       <span>{{ t("settings.screenDisconnected") }}</span>
       <span v-for="targetId in disconnected" :key="targetId" class="inline-flex items-center gap-1">
         <code class="kb-selectable text-11px">{{ shortScreenId(targetId) }}</code>
-        <el-button link type="primary" size="small" @click="forget(targetId)">
+        <Button variant="ghost" size="sm" data-testid="screen-forget" @click="forget(targetId)">
           {{ t("settings.screenForget") }}
-        </el-button>
+        </Button>
       </span>
     </div>
   </div>
@@ -93,9 +88,10 @@ import { computed, ref } from "vue";
 import { useElementSize } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
+import Button from "@/components/ui/Button.vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useWallpaperScreens } from "@/composables/useWallpaperScreens";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { logger } from "@/utils/logger";
 import { layoutScreens } from "@/utils/wallpaperScreenLayout";
 import {
@@ -149,14 +145,14 @@ const ROOMY_HEIGHT = 62;
 /** 分辨率一行另需的高度 */
 const RESOLUTION_HEIGHT = 80;
 
+// 中性外框，选中的那块用强调色描边与淡底（强调色只给「选中」）
 const BOX_SELECTED =
-  "border-[var(--anime-primary)] bg-[color-mix(in_srgb,var(--anime-primary)_15%,var(--anime-bg-card))] shadow-[0_3px_12px_color-mix(in_srgb,var(--anime-primary)_22%,transparent)]";
-const BOX_IDLE =
-  "border-[color-mix(in_srgb,var(--anime-secondary)_38%,transparent)] bg-[var(--anime-bg-card)] hover:border-[var(--anime-primary-light)] hover:bg-[color-mix(in_srgb,var(--anime-primary)_7%,var(--anime-bg-card))]";
-const TEXT_SELECTED = "text-[var(--anime-primary)]";
-const TEXT_IDLE = "text-[var(--anime-text-secondary)]";
-const BADGE_STRONG = "kb-grad text-white";
-const BADGE_PLAIN = "bg-[color-mix(in_srgb,var(--anime-secondary)_18%,transparent)] text-[var(--anime-text-secondary)]";
+  "border-kb-accent bg-[color-mix(in_srgb,var(--kb-accent)_8%,var(--kb-surface-raised))] shadow-kb-sm";
+const BOX_IDLE = "border-kb-line-strong bg-kb-surface-raised hover:border-kb-fg-subtle";
+const TEXT_SELECTED = "text-kb-accent";
+const TEXT_IDLE = "text-kb-fg-muted";
+const BADGE_STRONG = "bg-kb-primary text-kb-primary-fg";
+const BADGE_PLAIN = "bg-kb-fill text-kb-fg-muted";
 
 const measureRef = ref<HTMLElement | null>(null);
 // 画布内容区宽度（不含内边距）：布局图能用的宽度
@@ -227,7 +223,7 @@ async function forget(targetId: string) {
     await invoke<void>("forget_wallpaper_target", { targetId });
   } catch (error) {
     logger.warn("忘记显示器失败:", error);
-    ElMessage.error(error instanceof Error ? error.message : String(error));
+    kameMessage.error(error instanceof Error ? error.message : String(error));
   }
 }
 </script>

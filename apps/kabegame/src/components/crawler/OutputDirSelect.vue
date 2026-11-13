@@ -1,19 +1,27 @@
 <template>
-  <el-input :model-value="modelValue || ''" :placeholder="placeholder" clearable @update:model-value="onInput">
-    <template #append>
-      <el-button @click="pickDir">
-        <el-icon><FolderOpened /></el-icon>
-        {{ $t("common.chooseFolder") }}
-      </el-button>
-    </template>
-  </el-input>
+  <div class="flex min-w-0 items-center gap-2">
+    <Input
+      class="min-w-0 flex-1"
+      :model-value="modelValue || ''"
+      :placeholder="placeholder"
+      clearable
+      @update:model-value="onInput"
+    />
+    <Button variant="outline" size="md" class="shrink-0" @click="pickDir">
+      <FolderOpen />
+      {{ $t("common.chooseFolder") }}
+    </Button>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpened } from "@kabegame/element-plus-icons";
+import { FolderOpen } from "@lucide/vue";
+import Button from "@/components/ui/Button.vue";
+import Input from "@/components/ui/Input.vue";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     modelValue?: string;
     placeholder?: string;
@@ -30,6 +38,7 @@ const onInput = (v: string) => {
 };
 
 const pickDir = async () => {
+  if (await guardDesktopOnly("openLocal")) return;
   try {
     const selected = await open({ directory: true, multiple: false });
     if (selected && typeof selected === "string") {

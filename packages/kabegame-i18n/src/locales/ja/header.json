@@ -1,6 +1,8 @@
 {
   "refresh": "更新",
   "tasks": "タスク",
+  "back": "戻る",
+  "more": "その他",
   "toolbox": "ツールボックス",
   "toolboxApp": "アプリ",
   "toolboxMaintenance": "メンテナンス",

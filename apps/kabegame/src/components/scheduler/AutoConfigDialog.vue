@@ -1,25 +1,13 @@
 <template>
-  <el-dialog
-    :model-value="dialogStore.visible"
-    :z-index="modal.zIndex.value"
-    :title="dialogTitle"
-    width="600px"
-    :append-to-body="true"
-    class="auto-config-dialog task-params-dialog"
-    destroy-on-close
-    @update:model-value="modal.close"
-    @closed="onDialogClosed"
-  >
-    <div v-if="showMissing" class="acd-missing">
+  <Dialog v-model:open="open" :title="dialogTitle" :width="600" @close-auto-focus="onDialogClosed">
+    <div v-if="showMissing" class="p-6 text-center text-[13px] text-kb-fg-muted">
       {{ t("autoConfig.configDeleted") }}
     </div>
 
-    <div v-else-if="panelMode === 'view' && viewConfig" class="flex flex-col gap-4">
-      <el-alert
+    <div v-else-if="panelMode === 'view' && viewConfig" ref="panelRootRef" class="flex flex-col gap-4">
+      <Alert
         v-if="viewConfig.lastResult === 'failed'"
-        type="error"
-        show-icon
-        :closable="false"
+        tone="danger"
         :title="t('autoConfig.lastRunFailed')"
         :description="viewConfig.lastTask?.error"
       />
@@ -30,7 +18,7 @@
         :output-album-name="viewAlbumName"
       />
       <section>
-        <h3 class="mb-2 mt-0 text-sm font-semibold">{{ t("autoConfig.recentTasks") }}</h3>
+        <h4 class="m-0 mb-1.5 text-[12.5px] font-600 text-kb-fg-muted">{{ t("autoConfig.recentTasks") }}</h4>
         <AutoConfigRelatedTasks
           :config-id="viewConfig.id"
           @open-task-images="openTaskImages"
@@ -40,37 +28,40 @@
       <TaskLogDialog ref="taskLogDialogRef" />
     </div>
 
-    <el-form v-else ref="formRef" :model="form" label-position="top" class="acd-edit-form">
-      <el-divider content-position="left">{{ t("autoConfig.basicInfo") }}</el-divider>
-      <el-form-item :label="t('common.name')" required>
-        <el-input v-model="name" maxlength="80" />
-      </el-form-item>
-      <el-form-item :label="t('common.description')">
-        <el-input v-model="description" type="textarea" :rows="2" />
-      </el-form-item>
+    <div v-else-if="open" ref="panelRootRef" class="flex flex-col gap-4 pb-1">
+      <SectionTitle>{{ t("autoConfig.basicInfo") }}</SectionTitle>
+      <Field
+        :label="t('common.name')"
+        required
+        :validator="() => (name.trim() ? undefined : t('common.configNamePlaceholder'))"
+      >
+        <Input v-model="name" maxlength="80" />
+      </Field>
+      <Field :label="t('common.description')">
+        <Textarea v-model="description" :rows="2" />
+      </Field>
 
-      <el-divider content-position="left">{{ t("autoConfig.pluginAndParams") }}</el-divider>
-      <el-form-item :label="t('plugins.selectSource')" required>
-        <el-select
-          v-model="form.pluginId"
-          filterable
+      <SectionTitle>{{ t("autoConfig.pluginAndParams") }}</SectionTitle>
+      <Field
+        :label="t('plugins.selectSource')"
+        required
+        :validator="() => (form.pluginId ? undefined : t('plugins.selectSourcePlaceholder'))"
+      >
+        <PluginPickerField
+          :model-value="form.pluginId || null"
+          :plugins="pluginStore.visiblePlugins"
           :placeholder="t('plugins.selectSourcePlaceholder')"
-          @change="onPluginChange"
-        >
-          <el-option
-            v-for="plugin in pluginStore.visiblePlugins"
-            :key="plugin.id"
-            :label="pluginName(plugin.id)"
-            :value="plugin.id"
-          />
-        </el-select>
-      </el-form-item>
+          :select-trigger="IS_ANDROID"
+          show-labels
+          @update:model-value="(id) => onPluginChange(id ?? '')"
+        />
+      </Field>
 
-      <el-form-item v-if="!IS_ANDROID" :label="t('plugins.outputDir')">
+      <Field v-if="!IS_ANDROID" :label="t('plugins.outputDir')">
         <OutputDirSelect v-model="form.outputDir" :placeholder="t('plugins.outputDirPlaceholder')" />
-      </el-form-item>
+      </Field>
 
-      <el-form-item :label="t('albums.outputAlbum')">
+      <Field :label="t('albums.outputAlbum')">
         <AlbumPicker
           v-model="outputAlbumId"
           :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
@@ -79,63 +70,72 @@
           :picker-title="t('albums.outputAlbum')"
           clearable
         />
-      </el-form-item>
+      </Field>
 
-      <div class="flex flex-wrap gap-x-6">
-        <el-form-item class="min-w-56 flex-1" :label="t('plugins.maxConcurrentDownloads')">
+      <div class="flex flex-wrap gap-x-6 gap-y-4">
+        <Field class="min-w-56 flex-1" :label="t('plugins.maxConcurrentDownloads')">
           <MaxDownloadsField v-model="maxConcurrentDownloads" />
-        </el-form-item>
-        <el-form-item class="min-w-56 flex-1" :label="t('plugins.dryRun')">
-          <div class="flex items-center gap-2">
-            <el-switch v-model="isDryRun" />
-            <span class="text-sm text-[var(--anime-text-secondary)]">{{ t("plugins.dryRunDesc") }}</span>
-          </div>
-        </el-form-item>
-        <el-form-item class="min-w-56 flex-1" :label="t('plugins.retryOnFail')">
+        </Field>
+        <Field class="min-w-56 flex-1" :label="t('plugins.dryRun')">
+          <label class="inline-flex min-h-8 cursor-pointer items-center gap-2 text-[12.5px] text-kb-fg-muted">
+            <Switch v-model="isDryRun" />
+            {{ t("plugins.dryRunDesc") }}
+          </label>
+        </Field>
+        <Field class="min-w-56 flex-1" :label="t('plugins.retryOnFail')">
           <RetryCountField v-model="retryCount" />
-        </el-form-item>
+        </Field>
       </div>
 
       <PluginVarsForm v-if="visiblePluginVars.length > 0" v-model="form.vars" :plugin-vars="visiblePluginVars" />
 
-      <el-form-item :label="t('plugins.httpHeaders')">
+      <Field :label="t('plugins.httpHeaders')">
         <HttpHeadersEditor v-model="headersModel" />
-      </el-form-item>
+      </Field>
 
-      <section ref="scheduleSectionRef" class="acd-schedule-section">
-        <el-divider content-position="left">{{ t("autoConfig.schedule") }}</el-divider>
-        <el-form-item :label="t('autoConfig.scheduleEnabled')">
-          <el-switch v-model="scheduleEnabled" />
-        </el-form-item>
+      <section ref="scheduleSectionRef" class="flex scroll-mt-2 flex-col gap-4">
+        <SectionTitle>{{ t("autoConfig.schedule") }}</SectionTitle>
+        <Field :label="t('autoConfig.scheduleEnabled')">
+          <div class="flex min-h-8 items-center"><Switch v-model="scheduleEnabled" /></div>
+        </Field>
         <ScheduleSpecEditor
           v-if="scheduleEnabled || scheduleSpec"
           v-model="scheduleSpec"
           :disabled="!scheduleEnabled"
         />
       </section>
-    </el-form>
+    </div>
 
     <template #footer>
       <template v-if="showMissing">
-        <el-button @click="dialogStore.close()">{{ t("common.close") }}</el-button>
+        <Button variant="outline" @click="dialogStore.close()">{{ t("common.close") }}</Button>
       </template>
       <template v-else-if="panelMode === 'view' && viewConfig">
-        <el-button @click="copyFullJson">{{ t("autoConfig.detailCopyFullJson") }}</el-button>
-        <el-button type="primary" @click="enterEdit">{{ t("autoConfig.edit") }}</el-button>
+        <Button variant="outline" @click="copyFullJson">
+          <Copy />
+          {{ t("autoConfig.detailCopyFullJson") }}
+        </Button>
+        <Button variant="primary" @click="enterEdit">
+          <Pencil />
+          {{ t("autoConfig.edit") }}
+        </Button>
       </template>
       <template v-else-if="panelMode === 'edit' || dialogStore.isCreate">
-        <el-button @click="handleEditCancel">
+        <Button variant="outline" @click="handleEditCancel">
           {{ dialogStore.isCreate ? t("common.cancel") : t("autoConfig.detailBackToView") }}
-        </el-button>
-        <el-button type="primary" @click="handleSave">{{ t("common.save") }}</el-button>
+        </Button>
+        <Button variant="primary" :disabled="saving" @click="handleSave">
+          <Spinner v-if="saving" :size="14" />
+          {{ t("common.save") }}
+        </Button>
       </template>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import AutoConfigDetailContent from "@/components/scheduler/AutoConfigDetailContent.vue";
@@ -144,12 +144,14 @@ import TaskLogDialog from "@/components/task/TaskLogDialog.vue";
 import ScheduleSpecEditor from "@/components/scheduler/ScheduleSpecEditor.vue";
 import OutputDirSelect from "@/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
+import { Alert, Button, Dialog, Field, Input, SectionTitle, Spinner, Switch, Textarea, useForm } from "@/components/ui";
+import { Copy, Pencil } from "@lucide/vue";
+import PluginPickerField from "@/components/PluginPickerField.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
 import RetryCountField from "@/components/crawler/RetryCountField.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { HIDDEN_ALBUM_ID, fetchAlbum } from "@/services/albums";
-import { useModal } from "@/composables/useModal";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
@@ -172,11 +174,20 @@ const dialogStore = useAutoConfigDialogStore();
 const router = useRouter();
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
-const { form, formRef, pluginVars, loadPluginVarDefs, loadPluginVars } = usePluginConfig();
+const { form, pluginVars, loadPluginVarDefs, loadPluginVars } = usePluginConfig();
+/** 编辑表单的校验：名称、源与插件变量（PluginVarsForm 的 Field）都注册在这里 */
+const editForm = useForm();
+const saving = ref(false);
 
 const panelMode = ref<"view" | "edit">("view");
 const detailRef = ref<InstanceType<typeof AutoConfigDetailContent> | null>(null);
 const scheduleSectionRef = ref<HTMLElement | null>(null);
+const panelRootRef = ref<HTMLElement | null>(null);
+// 查看 / 编辑切换时回到顶部（两者共用对话框的滚动容器，否则沿用上一个面板的滚动位置）
+watch(panelMode, async () => {
+  await nextTick();
+  if (!dialogStore.scrollSchedule) panelRootRef.value?.scrollIntoView({ block: "start" });
+});
 const config = ref<RunConfig | null>(null);
 const configKey = computed(() =>
   dialogStore.visible && !dialogStore.isCreate && dialogStore.configId
@@ -225,12 +236,13 @@ const retryCount = ref(0);
 
 const viewAlbumName = ref("");
 
-const modal = useModal({ onClose: () => dialogStore.close() });
-watch(
-  () => dialogStore.visible,
-  (v) => (v ? modal.open() : modal.close()),
-  { immediate: true },
-);
+// 开关由 store 持有；Dialog 自己接返回栈与层级
+const open = computed({
+  get: () => dialogStore.visible,
+  set: (value: boolean) => {
+    if (!value) dialogStore.close();
+  },
+});
 
 const viewConfig = computed(() => config.value);
 
@@ -391,7 +403,7 @@ watch(
       if (panelMode.value === "view") {
         detailRef.value?.scrollScheduleIntoView();
       } else {
-        scheduleSectionRef.value?.scrollIntoView({ block: "start", behavior: "smooth" });
+        scheduleSectionRef.value?.scrollIntoView({ block: "start" });
       }
       dialogStore.clearScrollSchedule();
     }
@@ -400,20 +412,22 @@ watch(
 
 function onDialogClosed() {
   panelMode.value = "view";
+  editForm.reset();
 }
 
 const enterEdit = async () => {
   const id = dialogStore.configId;
   const cfg = id ? config.value : null;
   if (!cfg) {
-    ElMessage.error(t("autoConfig.configDeleted"));
+    kameMessage.error(t("autoConfig.configDeleted"));
     return;
   }
   panelMode.value = "edit";
+  editForm.reset();
   await loadFromConfig(cfg);
   await nextTick();
   if (dialogStore.scrollSchedule) {
-    scheduleSectionRef.value?.scrollIntoView({ block: "start", behavior: "smooth" });
+    scheduleSectionRef.value?.scrollIntoView({ block: "start" });
     dialogStore.clearScrollSchedule();
   }
 };
@@ -428,27 +442,24 @@ const handleEditCancel = () => {
 
 const handleSave = async () => {
   if (await guardDesktopOnly("saveRunConfig", { needSuper: true })) return;
-  if (!name.value.trim()) {
-    ElMessage.warning(t("common.configNamePlaceholder"));
-    return;
-  }
-  if (!form.value.pluginId) {
-    ElMessage.warning(t("plugins.selectSourcePlaceholder"));
+  // 名称、源、插件变量一起检查：出错的字段标红并滚进视野
+  if (!editForm.validate()) {
+    kameMessage.warning(t("plugins.fillRequired"));
     return;
   }
   if (scheduleEnabled.value && !scheduleSpec.value) {
-    ElMessage.warning(t("autoConfig.needScheduleMode"));
+    kameMessage.warning(t("autoConfig.needScheduleMode"));
     return;
   }
-  if (formRef.value) {
-    try {
-      await formRef.value.validate();
-    } catch {
-      ElMessage.warning(t("plugins.fillRequired"));
-      return;
-    }
+  saving.value = true;
+  try {
+    await save();
+  } finally {
+    saving.value = false;
   }
+};
 
+const save = async () => {
   const visible = visiblePluginVars.value;
   const userConfig = expandVarsForBackend(
     Object.fromEntries(visible.map((def) => [def.key, form.value.vars[def.key]])),
@@ -473,9 +484,9 @@ const handleSave = async () => {
   if (dialogStore.isCreate) {
     config.value = await crawlerStore.addRunConfig(payload);
     if (scheduleEnabled.value) {
-      ElMessage.success(t("autoConfig.keepRunningHint"));
+      kameMessage.success(t("autoConfig.keepRunningHint"));
     } else {
-      ElMessage.success(t("common.save"));
+      kameMessage.success(t("common.save"));
     }
     dialogStore.close();
     return;
@@ -484,7 +495,7 @@ const handleSave = async () => {
   const id = String(dialogStore.configId || "");
   const current = config.value?.id === id ? config.value : null;
   if (!current) {
-    ElMessage.error(t("autoConfig.configDeleted"));
+    kameMessage.error(t("autoConfig.configDeleted"));
     dialogStore.close();
     return;
   }
@@ -494,9 +505,9 @@ const handleSave = async () => {
   });
 
   if (scheduleEnabled.value) {
-    ElMessage.success(t("autoConfig.keepRunningHint"));
+    kameMessage.success(t("autoConfig.keepRunningHint"));
   } else {
-    ElMessage.success(t("common.save"));
+    kameMessage.success(t("common.save"));
   }
   panelMode.value = "view";
 };
@@ -511,10 +522,10 @@ async function copyFullJson() {
     } else {
       await navigator.clipboard.writeText(text);
     }
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (e) {
     console.error(e);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 }
 
@@ -527,35 +538,3 @@ async function openTaskLog(taskId: string) {
   await taskLogDialogRef.value?.openTaskLog(taskId);
 }
 </script>
-
-<style scoped lang="scss">
-.acd-missing {
-  padding: 24px;
-  text-align: center;
-  color: var(--anime-text-muted);
-}
-
-.acd-edit-form {
-  padding: 2px 0 4px;
-}
-
-.acd-schedule-fields--readonly {
-  opacity: 0.72;
-  padding-bottom: 4px;
-  border-radius: 8px;
-}
-
-.acd-schedule-progress {
-  margin-top: 12px;
-}
-
-.mode-line {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-}
-
-.mode-line > * {
-  flex: 1;
-}
-</style>

@@ -1,23 +1,14 @@
 // @vitest-environment happy-dom
 
-import { shallowMount } from "@vue/test-utils";
+import { flushPromises, shallowMount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import KbNumber from "@/components/common/form/KbNumber.vue";
+import Switch from "@/components/ui/Switch.vue";
 import WebServerSettingsPanel from "./WebServerSettingsPanel.vue";
 
 const settings = vi.hoisted(() => ({ enabled: false, port: 7490, lanAccess: false }));
 const setPort = vi.hoisted(() => vi.fn(async () => true));
 const setLanAccess = vi.hoisted(() => vi.fn(async () => true));
-
-const ElSwitchStub = {
-  props: {
-    modelValue: Boolean,
-    loading: Boolean,
-    disabled: Boolean,
-    beforeChange: Function,
-  },
-  template: '<button class="el-switch-stub" :disabled="disabled"></button>',
-};
 
 vi.mock("@/composables/useSettingKeyState", () => ({
   useSettingKeyState: (key: string) => {
@@ -63,7 +54,6 @@ function mountPanel() {
   const wrapper = shallowMount(WebServerSettingsPanel, {
     global: {
       mocks: { $t: (key: string) => key },
-      stubs: { "el-switch": ElSwitchStub },
     },
   });
   wrappers.push(wrapper);
@@ -86,19 +76,21 @@ describe("WebServerSettingsPanel", () => {
     const wrapper = mountPanel();
 
     expect(wrapper.findComponent(KbNumber).props("disabled")).toBe(false);
-    expect(wrapper.findAllComponents(ElSwitchStub)[1]?.props("disabled")).toBe(false);
+    expect(wrapper.findAllComponents(Switch)[1]?.props("disabled")).toBe(false);
   });
 
   it("服务器开启时禁用端口与局域网访问修改", async () => {
     settings.enabled = true;
     const wrapper = mountPanel();
     const input = wrapper.findComponent(KbNumber);
-    const lanSwitch = wrapper.findAllComponents(ElSwitchStub)[1]!;
+    const lanSwitch = wrapper.findAllComponents(Switch)[1]!;
 
     expect(input.props("disabled")).toBe(true);
     expect(lanSwitch.props("disabled")).toBe(true);
     await input.vm.$emit("change", 7599);
-    expect(await (lanSwitch.props("beforeChange") as () => Promise<boolean>)()).toBe(false);
+    // 禁用时即使收到切换事件（如绕过禁用态）也不写入
+    lanSwitch.vm.$emit("update:modelValue", true);
+    await flushPromises();
     expect(setPort).not.toHaveBeenCalled();
     expect(setLanAccess).not.toHaveBeenCalled();
   });

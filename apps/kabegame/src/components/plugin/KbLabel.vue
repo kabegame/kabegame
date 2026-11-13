@@ -2,31 +2,37 @@
   <!-- 空槽：只占位不画任何东西，让同一枚标签在列表各行落在同一列 -->
   <span v-if="!label" class="kb-label-empty flex-none" :class="sizeClass" aria-hidden="true" />
 
-  <el-tooltip
-    v-else
-    placement="top"
-    :trigger="tooltipTrigger"
-    :show-after="tooltipShowAfter"
-    :disabled="!resolved.desc"
-  >
-    <template #content>{{ tooltipText }}</template>
-    <span
-      class="kb-label inline-flex items-center justify-center flex-none box-border"
-      :class="sizeClass"
-      :style="tileStyle"
-      role="img"
-      :aria-label="tooltipText"
-      tabindex="0"
-    >
+  <!-- 触屏没有悬停：Android 点一下弹出同样的说明（Reka 的 Tooltip 不响应点按） -->
+  <Popover v-else-if="IS_ANDROID && resolved.desc">
+    <PopoverTrigger as-child>
+      <button
+        type="button"
+        :class="[TILE_CLASS, sizeClass]"
+        class="cursor-pointer p-0"
+        :style="tileStyle"
+        :aria-label="tooltipText"
+      >
+        <component :is="resolved.icon" v-if="resolved.icon" :class="iconClass" />
+        <span v-else class="font-700 text-kb-fg-subtle" :class="fallbackTextClass">{{ fallbackChar }}</span>
+      </button>
+    </PopoverTrigger>
+    <PopoverContent side="top" :width="240">
+      <p class="m-0 px-1.5 py-1 text-[12.5px] leading-[1.6] text-kb-fg-muted">{{ tooltipText }}</p>
+    </PopoverContent>
+  </Popover>
+
+  <Tooltip v-else :content="resolved.desc ? tooltipText : ''" side="top" :delay="200">
+    <span :class="[TILE_CLASS, sizeClass]" :style="tileStyle" role="img" :aria-label="tooltipText" tabindex="0">
       <component :is="resolved.icon" v-if="resolved.icon" :class="iconClass" />
-      <span v-else class="font-700 text-[#909399]" :class="fallbackTextClass">{{ fallbackChar }}</span>
+      <span v-else class="font-700 text-kb-fg-subtle" :class="fallbackTextClass">{{ fallbackChar }}</span>
     </span>
-  </el-tooltip>
+  </Tooltip>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElTooltip } from "@kabegame/element-plus";
+import { PopoverTrigger } from "reka-ui";
+import { Popover, PopoverContent, Tooltip } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID } from "@/env";
 import { resolvePluginLabel, type PluginLabel, type ResolvedPluginLabel } from "../../stores/pluginLabels";
@@ -42,10 +48,8 @@ const props = withDefaults(
 
 const { t } = useI18n();
 
-// Android WebView 会把一次触摸合成为 mouseenter → click → mouseleave；hover 提示会在抬手时立刻关闭。
-// 改用 click 后，点标签负责开关，点外部由 ElTooltip 自己关闭；桌面仍保持悬停行为。
-const tooltipTrigger = IS_ANDROID ? "click" : "hover";
-const tooltipShowAfter = IS_ANDROID ? 0 : 200;
+const TILE_CLASS =
+  "kb-label inline-flex flex-none box-border items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-kb-ring";
 
 const EMPTY: ResolvedPluginLabel = { text: "", desc: "" };
 
@@ -102,6 +106,6 @@ const tileStyle = computed(() => {
   const tile = resolved.value.tile;
   return tile
     ? { background: tile.bg, border: `1px solid ${tile.border}` }
-    : { background: "#f4f4f5", border: "1px dashed rgba(144,147,153,0.6)" };
+    : { background: "var(--kb-fill-light)", border: "1px dashed var(--kb-line-strong)" };
 });
 </script>

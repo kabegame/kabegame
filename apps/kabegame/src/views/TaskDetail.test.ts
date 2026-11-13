@@ -43,16 +43,13 @@ vi.mock("@/stores/crawler", () => ({ useCrawlerStore: () => ({}) }));
 vi.mock("@/stores/plugins", () => ({ usePluginStore: () => ({ plugins: [], pluginLabel: (id: string) => id }) }));
 vi.mock("@/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
 vi.mock("@/stores/failedImages", () => ({ useFailedImagesStore: () => ({ byTaskId: () => [], loadAll: vi.fn() }) }));
-vi.mock("@/composables/useModal", () => ({
-  useModal: () => ({ isOpen: ref(false), zIndex: ref(1), open: vi.fn(), close: vi.fn() }),
-}));
 vi.mock("@/composables/useGithubIssueUrl", () => ({ useGithubIssueUrl: () => ({ openIssue: vi.fn() }) }));
 vi.mock("@/composables/useTaskRerun", () => ({ useTaskRerun: () => ({ canRerun: () => false, rerunTask: vi.fn() }) }));
 vi.mock("@/components/imageGrid/adapters/task", () => ({ createTaskDetailAdapter: () => ({}) }));
 vi.mock("@/track/imageAnalytics", () => ({ createImageAnalytics: () => ({ track: vi.fn() }) }));
 vi.mock("@/utils/webpageCollect", () => ({ canOpenTaskWebview: () => false }));
 vi.mock("@/utils/kameMessage", () => ({ kameMessage: {} }));
-vi.mock("@kabegame/element-plus", () => ({ ElMessageBox: {} }));
+vi.mock("@/components/ui/messageBox", () => ({ messageBox: {} }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("@/components/ImageGrid.vue", () => ({ default: { name: "ImageGrid", render: () => null } }));
 vi.mock("@/components/common/EmptyState.vue", () => ({ default: {} }));

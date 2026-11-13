@@ -1,36 +1,23 @@
 <template>
-  <main class="h-full flex flex-col items-center justify-center gap-5 px-6 text-[var(--anime-text-primary)]">
-    <img :src="appLogoUrl" alt="" class="h-16 w-16 rounded-2xl shadow-[var(--anime-shadow)]" />
-    <div class="text-lg font-700">Kabegame</div>
+  <main class="h-full flex flex-col items-center justify-center gap-5 bg-kb-bg px-6 text-kb-fg">
+    <img :src="appLogoUrl" alt="" class="h-16 w-16 rounded-2xl shadow-kb-md" />
+    <div class="text-[17px] font-600 tracking-[-0.01em]">Kabegame</div>
 
     <template v-if="current.phase === 'failed'">
       <div class="w-full max-w-120 flex flex-col items-center gap-3">
-        <div class="text-base font-700 text-[var(--anime-danger)]">{{ t("common.startup.failed") }}</div>
+        <div class="text-[14px] font-600 text-kb-danger">{{ t("common.startup.failed") }}</div>
         <pre
-          class="m-0 max-h-60 w-full overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[var(--anime-bg-card)] p-3 text-xs text-[var(--anime-text-primary)] select-text"
+          class="m-0 box-border max-h-60 w-full overflow-auto whitespace-pre-wrap break-all rounded-kb-md border border-solid border-kb-line bg-kb-surface-raised p-3 text-xs text-kb-fg select-text"
           >{{ current.message }}</pre>
-        <button
-          type="button"
-          class="cursor-pointer rounded-lg border-none bg-[var(--anime-primary)] px-6 py-2 text-sm font-700 text-white hover:bg-[var(--anime-primary-dark)]"
-          @click="exitApp"
-        >
-          {{ t("common.exit") }}
-        </button>
+        <Button variant="primary" @click="exitApp">{{ t("common.exit") }}</Button>
       </div>
     </template>
 
     <template v-else>
       <div class="w-full max-w-90 flex flex-col gap-2">
-        <div class="min-h-5 truncate text-center text-sm text-[var(--anime-text-secondary)]">{{ label }}</div>
-        <el-progress
-          :percentage="percent ?? 100"
-          :indeterminate="percent === null"
-          :duration="2"
-          :show-text="false"
-          :stroke-width="6"
-          color="var(--anime-primary)"
-        />
-        <div v-if="countText" class="text-center font-mono text-xs text-[var(--anime-text-muted)]">
+        <div class="min-h-5 truncate text-center text-[13px] text-kb-fg-muted">{{ label }}</div>
+        <Progress :value="percent" tone="neutral" />
+        <div v-if="countText" class="text-center text-xs tabular-nums text-kb-fg-subtle">
           {{ countText }}
         </div>
       </div>
@@ -43,6 +30,7 @@ import { computed, type ShallowRef } from "vue";
 import { i18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
 import appLogoUrl from "@/assets/icon-small.png";
+import { Button, Progress } from "@/components/ui";
 import type { StartupPhase } from "@/bootstrap/initScreen";
 import { backfillName } from "@/utils/backfillName";
 

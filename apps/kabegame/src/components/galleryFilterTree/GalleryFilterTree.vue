@@ -89,7 +89,7 @@ defineExpose({ refresh });
   --provider-tree-row-height: 32px;
   --provider-tree-sticky-offset: 0px;
   /* sticky 行与下拉面板同底色（不要独立的白条观感） */
-  --kb-tree-sticky-bg: var(--el-kb-filter-dropdown-panel-bg-color);
+  --kb-tree-sticky-bg: var(--kb-surface-raised);
   --kb-tree-sticky-backdrop: blur(10px);
   max-height: var(--gallery-filter-tree-max-height);
   min-height: 0;

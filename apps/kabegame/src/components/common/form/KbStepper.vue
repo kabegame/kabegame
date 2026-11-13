@@ -1,29 +1,30 @@
 <template>
-  <div class="setting-stepper" :class="{ 'is-disabled': disabled }">
+  <div class="kb-control h-8 overflow-hidden" :data-disabled="disabled || undefined">
     <button
       type="button"
-      class="setting-stepper-btn"
+      class="grid h-full w-8 shrink-0 cursor-pointer place-items-center border-0 bg-transparent p-0 text-kb-fg-muted hover:bg-kb-hover hover:text-kb-fg disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent border-r border-r-solid border-r-kb-line"
       :disabled="disabled || modelValue <= min"
       :aria-label="t('common.decrease')"
       @click="step(-1)"
     >
-      −
+      <Minus class="size-3.5" />
     </button>
-    <span class="setting-stepper-value">{{ displayValue }}</span>
+    <span class="min-w-11 flex-1 text-center tabular-nums">{{ displayValue }}</span>
     <button
       type="button"
-      class="setting-stepper-btn"
+      class="grid h-full w-8 shrink-0 cursor-pointer place-items-center border-0 bg-transparent p-0 text-kb-fg-muted hover:bg-kb-hover hover:text-kb-fg disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent border-l border-l-solid border-l-kb-line"
       :disabled="disabled || modelValue >= max"
       :aria-label="t('common.increase')"
       @click="step(1)"
     >
-      +
+      <Plus class="size-3.5" />
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { Minus, Plus } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 
 const props = withDefaults(
@@ -59,64 +60,3 @@ function step(direction: 1 | -1) {
   emit("update:modelValue", Number(next.toFixed(6)));
 }
 </script>
-
-<style scoped>
-.setting-stepper {
-  display: flex;
-  align-items: center;
-  height: 34px;
-  overflow: hidden;
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
-  background: var(--anime-bg-card);
-}
-
-.setting-stepper.is-disabled {
-  opacity: 0.6;
-}
-
-.setting-stepper-btn {
-  appearance: none;
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 100%;
-  padding: 0;
-  border: none;
-  margin: 0;
-  color: var(--anime-secondary);
-  background: transparent;
-  cursor: pointer;
-  font: inherit;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.setting-stepper-btn:first-child {
-  border-right: 1px solid color-mix(in srgb, var(--anime-primary) 18%, transparent);
-}
-
-.setting-stepper-btn:last-child {
-  border-left: 1px solid color-mix(in srgb, var(--anime-primary) 18%, transparent);
-}
-
-.setting-stepper-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-.setting-stepper-btn:not(:disabled):hover {
-  color: var(--anime-primary);
-}
-
-.setting-stepper-value {
-  flex: 1;
-  min-width: 44px;
-  text-align: center;
-  color: var(--anime-text-primary);
-  font-size: 13.5px;
-  font-variant-numeric: tabular-nums;
-}
-</style>

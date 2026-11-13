@@ -1,17 +1,24 @@
 <template>
-  <el-tooltip :content="t('header.failedImages')" placement="bottom">
-    <el-button v-corner-badge="failedCount" class="failed-images-trigger" circle @click="openDialog">
-      <el-icon><WarningFilled /></el-icon>
-    </el-button>
-  </el-tooltip>
+  <Tooltip :content="t('header.failedImages')">
+    <Button
+      variant="ghost"
+      size="icon"
+      :aria-label="failedCount > 0 ? `${t('header.failedImages')} (${failedCount})` : t('header.failedImages')"
+      @click="openDialog"
+    >
+      <TriangleAlert />
+      <CountBadge :count="failedCount" tone="danger" />
+    </Button>
+  </Tooltip>
   <FailedImagesDialog ref="dialogRef" />
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useRoute } from "vue-router";
-import { WarningFilled } from "@kabegame/element-plus-icons";
+import { TriangleAlert } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
+import { Button, CountBadge, Tooltip } from "@/components/ui";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 
@@ -43,15 +50,3 @@ defineEmits<{
   action: [];
 }>();
 </script>
-
-<style scoped lang="scss">
-.failed-images-trigger {
-  box-shadow: var(--anime-shadow);
-  transition: all 0.3s ease;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--anime-shadow-hover);
-  }
-}
-</style>

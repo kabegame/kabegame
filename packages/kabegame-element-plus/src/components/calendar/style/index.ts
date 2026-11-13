@@ -1,5 +1,0 @@
-import '@kabegame/element-plus/components/base/style'
-import '@kabegame/element-plus/theme-chalk/src/calendar.scss'
-import '@kabegame/element-plus/components/button/style'
-import '@kabegame/element-plus/components/button-group/style'
-import '@kabegame/element-plus/components/select/style'

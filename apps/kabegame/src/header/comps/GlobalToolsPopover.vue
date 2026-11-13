@@ -1,304 +1,67 @@
 <template>
-  <el-popover
-    :visible="modal.isOpen.value"
-    trigger="manual"
-    :placement="variant === 'sidebar' ? 'top-start' : 'top'"
-    :offset="6"
-    :width="variant === 'sidebar' ? 260 : 280"
-    popper-class="global-tools-popover-popper"
-    @update:visible="(v: boolean) => (v ? modal.open() : modal.close())"
-  >
-    <template #reference>
-      <div
-        v-if="variant === 'sidebar'"
-        class="global-tools-trigger global-tools-trigger--sidebar"
-        :class="{ 'is-active': modal.isOpen.value, 'is-collapsed': collapsed }"
-        :title="collapsed ? t('header.toolbox') : undefined"
-        :aria-label="collapsed ? t('header.toolbox') : undefined"
-        @click="modal.toggle()"
-      >
-        <el-icon class="trigger-icon"><Tools /></el-icon>
-        <span v-if="!collapsed" class="trigger-label">{{ t("header.toolbox") }}</span>
-      </div>
-      <div
-        v-else
-        class="global-tools-trigger global-tools-trigger--compact relative"
-        :class="{ 'is-active': modal.isOpen.value }"
-        @click="modal.toggle()"
-      >
-        <el-icon class="trigger-icon"><Tools /></el-icon>
-        <span
-          v-if="busyCount > 0 || hasUnseenFailure"
-          class="absolute left-[calc(50%+7px)] top-1 min-w-4 h-4 px-1 grid place-items-center rounded-full text-[9px] font-800 leading-none text-white"
-          :class="hasUnseenFailure ? 'bg-[var(--el-color-danger)]' : 'bg-[var(--anime-primary)]'"
-        >
-          {{ busyCount > 0 ? busyCount : "" }}
-        </span>
-        <span class="trigger-label">{{ t("header.toolbox") }}</span>
-      </div>
-    </template>
-
-    <div class="global-tools-content">
-      <template v-if="busyCount > 0 || hasUnseenFailure">
-        <BusyTasksSection @close="modal.close()" />
-        <div class="tool-divider" />
-      </template>
-      <template v-if="variant === 'compact'">
-        <!-- 任务入口不进工具箱：各页 header 已常驻 TaskDrawerButton -->
-        <div class="tool-group-title">{{ t("header.toolboxApp") }}</div>
-        <div class="tool-row" @click="handleOpenSettings">
-          <el-icon class="row-icon"><Setting /></el-icon>
-          <span class="row-label">{{ t("route.settings") }}</span>
-        </div>
-        <div v-if="!IS_WEB" class="tool-row" @click="handleOpenSurf">
-          <el-icon class="row-icon"><Compass /></el-icon>
-          <span class="row-label">{{ t("route.surf") }}</span>
-        </div>
-        <div v-if="groups.length > 0" class="tool-divider" />
-      </template>
-
-      <template v-for="(group, gi) in groups" :key="group.id">
-        <div class="tool-group-title">{{ group.title }}</div>
-        <template v-for="item in group.items" :key="item.id">
-          <div v-if="item.comp" class="tool-row-comp">
-            <component :is="item.comp" />
-          </div>
-          <div v-else class="tool-row" @click="handleItemClick(item)">
-            <el-icon class="row-icon"><component :is="item.icon" /></el-icon>
-            <span class="row-label">{{ item.label }}</span>
-            <span v-if="item.shortcut" class="row-shortcut">{{ item.shortcut }}</span>
-            <el-switch
-              v-if="item.kind === 'toggle'"
-              :model-value="item.toggleGet?.()"
-              class="row-switch"
-              @click.stop
-              @change="(v: string | number | boolean) => item.toggleSet?.(!!v)"
+  <Popover v-model:open="open">
+    <Tooltip :content="variant === 'sidebar' && !open ? t('header.toolbox') : ''" side="right">
+      <PopoverTrigger as-child>
+        <button v-if="variant === 'sidebar'" type="button" :class="SIDEBAR_TRIGGER" :aria-label="t('header.toolbox')">
+          <Wrench />
+        </button>
+        <button v-else type="button" :class="COMPACT_TRIGGER">
+          <span class="relative">
+            <Wrench />
+            <CountBadge
+              v-if="busyCount > 0 || hasUnseenFailure"
+              :count="Math.max(busyCount, 1)"
+              :tone="hasUnseenFailure ? 'danger' : 'accent'"
             />
-          </div>
-        </template>
-        <div v-if="gi < groups.length - 1" class="tool-divider" />
-      </template>
-    </div>
-  </el-popover>
+          </span>
+          <span class="max-w-full truncate text-[11px] leading-[1.2]">{{ t("header.toolbox") }}</span>
+        </button>
+      </PopoverTrigger>
+    </Tooltip>
+    <PopoverContent
+      :side="variant === 'sidebar' ? 'right' : 'top'"
+      :align="variant === 'sidebar' ? 'end' : 'center'"
+      :side-offset="variant === 'sidebar' ? 10 : 6"
+      :width="variant === 'sidebar' ? 272 : 288"
+    >
+      <GlobalToolsList :compact="variant === 'compact'" @close="open = false" @open-settings="handleOpenSettings" />
+    </PopoverContent>
+  </Popover>
 </template>
 
 <script setup lang="ts">
-import { watch } from "vue";
-import { useRouter } from "vue-router";
-import { Tools, Setting, Compass } from "@kabegame/element-plus-icons";
+import { ref, watch } from "vue";
+import { Wrench } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModal } from "@/composables/useModal";
-import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";
+import { CountBadge, Popover, PopoverContent, PopoverTrigger, Tooltip } from "@/components/ui";
 import { useBusyTasks } from "@/composables/useBusyTasks";
-import BusyTasksSection from "@/components/busy/BusyTasksSection.vue";
-import { IS_WEB } from "@/env";
+import GlobalToolsList from "./GlobalToolsList.vue";
 
-withDefaults(defineProps<{ variant: "sidebar" | "compact"; collapsed?: boolean }>(), {
-  collapsed: false,
-});
+defineProps<{ variant: "sidebar" | "compact" }>();
 const emit = defineEmits<{ "open-settings": [] }>();
 
 const { t } = useI18n();
-const router = useRouter();
-const modal = useModal();
-const { groups } = useGlobalTools();
+const open = ref(false);
 const { count: busyCount, hasUnseenFailure, markFailuresSeen } = useBusyTasks();
 
-watch(
-  () => modal.isOpen.value,
-  (open) => {
-    if (open) markFailuresSeen();
-  },
-);
+watch(open, (value) => {
+  if (value) markFailuresSeen();
+});
 
 const handleOpenSettings = () => {
   emit("open-settings");
-  modal.close();
-};
-const handleOpenSurf = () => {
-  void router.push("/surf");
-  modal.close();
-};
-const handleItemClick = (item: GlobalToolItem) => {
-  if (item.kind === "toggle") return;
-  item.action?.();
-  modal.close();
+  open.value = false;
 };
 
-defineExpose({ close: () => modal.close() });
+defineExpose({ close: () => (open.value = false) });
+
+// 侧栏底部的图标按钮，与 App.vue 侧栏导航项同一套尺寸与状态色
+const SIDEBAR_TRIGGER =
+  "box-border grid size-10 cursor-pointer place-items-center rounded-kb-md border-0 bg-transparent p-0 text-kb-fg-muted " +
+  "outline-none transition-colors duration-150 hover:bg-kb-hover hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring " +
+  "data-[state=open]:bg-kb-pressed data-[state=open]:text-kb-fg [&_svg]:size-5";
+// 紧凑端底部 tab 里的一格，与 App.vue 的路由 tab 同排
+const COMPACT_TRIGGER =
+  "box-border flex size-full min-w-0 cursor-pointer flex-col items-center justify-center gap-1 border-0 bg-transparent px-0.5 py-2 " +
+  "[font-family:inherit] text-kb-fg-muted outline-none transition-colors duration-150 data-[state=open]:text-kb-fg [&_svg]:size-[22px]";
 </script>
-
-<style scoped lang="scss">
-.global-tools-trigger {
-  cursor: pointer;
-  color: var(--anime-text-secondary);
-  transition: all 0.2s ease;
-
-  &--sidebar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 40px;
-    padding: 0 12px;
-    border-radius: 11px;
-    color: var(--anime-text-primary);
-
-    &:hover,
-    &.is-active {
-      background: rgba(255, 107, 157, 0.1);
-      border: 1px solid rgba(255, 107, 157, 0.3);
-    }
-
-    &.is-collapsed {
-      justify-content: center;
-      padding: 0;
-    }
-
-    .trigger-icon {
-      font-size: 17px;
-    }
-
-    .trigger-label {
-      font-size: 13px;
-      font-weight: 600;
-    }
-  }
-
-  &--compact {
-    height: 100%;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 9px 2px;
-
-    &.is-active {
-      color: var(--anime-primary);
-    }
-
-    .trigger-icon {
-      font-size: 22px;
-    }
-
-    .trigger-label {
-      font-size: 11px;
-      line-height: 1.2;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 100%;
-    }
-  }
-
-  .trigger-icon {
-    flex-shrink: 0;
-  }
-}
-
-.global-tools-content {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
-.tool-group-title {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  color: var(--anime-text-muted);
-  padding: 8px 12px 6px;
-  font-family: ui-monospace, Menlo, monospace;
-
-  &:first-child {
-    padding-top: 4px;
-  }
-}
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  height: 42px;
-  padding: 0 12px;
-  border-radius: 10px;
-  cursor: pointer;
-  color: var(--anime-text-primary);
-  transition: background 0.15s ease;
-
-  &:hover {
-    background: rgba(255, 107, 157, 0.08);
-  }
-
-  .row-icon {
-    font-size: 17px;
-    color: var(--anime-secondary);
-    flex-shrink: 0;
-  }
-
-  .row-label {
-    font-size: 14px;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .row-shortcut {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--anime-text-muted);
-    font-family: ui-monospace, Menlo, monospace;
-  }
-
-  .row-switch {
-    margin-left: auto;
-    flex-shrink: 0;
-  }
-}
-
-.tool-row-comp {
-  display: flex;
-  align-items: center;
-
-  :deep(.organize-header-control),
-  :deep(.hidden-cleanup-control) {
-    display: flex;
-    width: 100%;
-  }
-
-  :deep(.el-button) {
-    width: 100%;
-    justify-content: flex-start;
-    gap: 11px;
-    height: 42px;
-    padding: 0 12px;
-    border: none;
-    background: transparent;
-    box-shadow: none;
-    color: var(--anime-text-primary);
-    font-size: 14px;
-    font-weight: 400;
-
-    &:hover {
-      background: rgba(255, 107, 157, 0.08);
-      transform: none;
-      box-shadow: none;
-    }
-
-    .el-icon {
-      font-size: 17px;
-      color: var(--anime-secondary);
-      margin: 0 !important;
-    }
-  }
-}
-
-.tool-divider {
-  height: 1px;
-  background: var(--anime-border);
-  margin: 7px 12px;
-}
-</style>

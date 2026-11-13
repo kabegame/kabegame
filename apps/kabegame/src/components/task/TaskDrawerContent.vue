@@ -1,126 +1,126 @@
 <template>
-  <div class="tasks-drawer-content">
-    <div class="drawer-accordion">
+  <div class="flex h-full min-w-0 flex-col overflow-x-hidden">
+    <div class="flex min-h-0 flex-1 flex-col gap-2 px-2.5 pb-2.5 pt-2">
       <CollapsibleDrawerPanel storage-key="kabegame-task-drawer-downloads-open">
-        <template #title>
-          <span class="drawer-panel-title">{{ t("tasks.drawerDownloading") }}</span>
-        </template>
+        <template #title>{{ t("tasks.drawerDownloading") }}</template>
         <template #trailing>
-          <el-tag type="warning" size="small">{{ activeDownloadsRunningCount }}</el-tag>
+          <Tag size="sm" :tone="activeDownloadsRunningCount > 0 ? 'accent' : 'neutral'">
+            {{ activeDownloadsRunningCount }}
+          </Tag>
         </template>
-        <div class="drawer-panel-body drawer-panel-body--downloads">
-          <div class="downloads-section">
-            <div v-if="orderedActiveDownloads.length === 0" class="downloads-empty">
-              <el-empty :description="t('tasks.drawerNoDownloads')" :image-size="60" />
-            </div>
-            <div v-else class="downloads-content">
-              <div class="downloads-list">
-                <transition-group name="download-fade" tag="div" class="downloads-list-inner">
-                  <div v-for="download in orderedActiveDownloads" :key="downloadKey(download)" class="download-item">
-                    <div class="download-info">
-                      <div class="download-url" :title="download.url">{{ download.url }}</div>
-                      <div class="download-meta">
-                        <el-tag size="small" type="info">{{ getPluginName(download.pluginId) }}</el-tag>
-                        <el-tag size="small" :type="downloadStateTagType(download)">
-                          {{ downloadStateText(download) }}
-                        </el-tag>
-                      </div>
-                      <div
-                        v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
-                        class="download-progress"
-                      >
-                        <el-progress
-                          :percentage="downloadProgressPercent(download)"
-                          :format="() => downloadProgressText(download)!"
-                          :stroke-width="10"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </transition-group>
+        <div class="flex min-h-0 flex-1 flex-col px-3 pb-3">
+          <Empty v-if="orderedActiveDownloads.length === 0" :description="t('tasks.drawerNoDownloads')">
+            <template #icon><Download /></template>
+          </Empty>
+          <div v-else class="min-h-0 flex-1 overflow-y-auto">
+            <transition-group name="download-fade" tag="div" class="flex flex-col gap-2">
+              <div
+                v-for="download in orderedActiveDownloads"
+                :key="downloadKey(download)"
+                class="box-border flex min-w-0 flex-col gap-1.5 rounded-kb-md border border-solid border-kb-line bg-kb-surface-raised px-3 py-2"
+              >
+                <div class="truncate text-[12px] text-kb-fg" :title="download.url">{{ download.url }}</div>
+                <div class="flex min-w-0 items-center gap-2">
+                  <Tag size="sm">{{ getPluginName(download.pluginId) }}</Tag>
+                  <Tag size="sm" :tone="downloadStateTone(download)">{{ downloadStateText(download) }}</Tag>
+                </div>
+                <div
+                  v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
+                  class="mt-0.5 flex items-center gap-2"
+                >
+                  <Progress :value="downloadProgressPercent(download)" :height="6" />
+                  <span class="shrink-0 text-[11px] tabular-nums text-kb-fg-muted">
+                    {{ downloadProgressText(download) }}
+                  </span>
+                </div>
               </div>
-            </div>
+            </transition-group>
           </div>
         </div>
       </CollapsibleDrawerPanel>
 
-      <CollapsibleDrawerPanel storage-key="kabegame-task-drawer-tasks-open" class="drawer-panel--tasks">
-        <template #title>
-          <span class="drawer-panel-title">{{ t("tasks.taskList") }}</span>
-        </template>
+      <CollapsibleDrawerPanel storage-key="kabegame-task-drawer-tasks-open">
+        <template #title>{{ t("tasks.taskList") }}</template>
         <template #trailing>
-          <el-tag type="info" size="small">{{ displayTaskCount }}</el-tag>
+          <Tag size="sm">{{ displayTaskCount }}</Tag>
         </template>
-        <div class="drawer-panel-body drawer-panel-body--tasks">
-          <div class="tasks-summary">
-            <el-input
+        <div class="flex min-h-0 flex-1 flex-col">
+          <div class="flex items-center gap-2 border-0 border-b border-solid border-kb-line px-3 pb-2.5">
+            <Input
               :model-value="search"
-              size="small"
+              size="sm"
               clearable
-              class="tasks-search"
-              :prefix-icon="Search"
+              class="min-w-0 flex-1"
               :placeholder="t('tasks.drawerSearchPlaceholder')"
               @update:model-value="$emit('update:search', String($event ?? ''))"
-            />
-            <el-button
-              text
-              size="small"
-              class="clear-completed-btn"
+            >
+              <template #prefix><Search /></template>
+            </Input>
+            <Button
+              variant="ghost"
+              size="sm"
               :disabled="nonRunningTasksCount === 0"
               @click.stop="$emit('clear-finished-tasks')"
             >
               {{ t("tasks.drawerClearAll", { n: nonRunningTasksCount }) }}
-            </el-button>
+            </Button>
           </div>
-          <div class="tasks-list-col">
-            <el-empty
-              v-if="!loading && search.trim() && tasks.length === 0"
-              :description="t('tasks.drawerSearchEmpty')"
-              :image-size="60"
-            />
+          <div class="flex min-h-0 min-w-0 flex-1 flex-col px-3 pb-3 pt-2.5">
+            <Empty v-if="!loading && search.trim() && tasks.length === 0" :description="t('tasks.drawerSearchEmpty')">
+              <template #icon><SearchX /></template>
+            </Empty>
             <div
               v-loading="showLoading && tasks.length === 0"
-              class="tasks-list tasks-list--virtual"
+              class="min-h-0 w-full min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-hidden"
               v-bind="containerProps"
               @scroll="handleTasksListScroll"
             >
               <div v-bind="wrapperProps">
-                <div v-for="item in virtualList" :key="item.data.id" class="task-drawer-virtual-item">
+                <!-- 行高须与 TASK_DRAWER_ITEM_HEIGHT 相同 -->
+                <div
+                  v-for="item in virtualList"
+                  :key="item.data.id"
+                  class="box-border h-[166px] min-w-0 max-w-full px-1 pb-2.5"
+                >
                   <div
-                    class="task-item task-item--fixed"
-                    :class="{ 'task-item-failed': item.data.status === 'failed' }"
+                    class="relative box-border h-full min-w-0 max-w-full overflow-hidden rounded-kb-lg border border-solid py-2.5 pl-3.5 pr-8 transition-colors duration-200"
+                    :class="item.data.status === 'failed' ? CARD_FAILED : CARD_NORMAL"
                     @contextmenu="(e) => handleTaskContextMenu(e, item.data)"
                   >
-                    <div class="task-close">
-                      <el-button
-                        text
-                        circle
-                        size="small"
-                        class="close-btn"
+                    <!-- 禁用的按钮不响应指针，说明文字挂在外层 -->
+                    <div
+                      class="absolute right-1.5 top-1.5 z-[3]"
+                      :title="
+                        isTaskRunning(item.data) ? t('tasks.drawerDeleteTaskRunning') : t('tasks.drawerDeleteTask')
+                      "
+                    >
+                      <Button
+                        variant="ghost-danger"
+                        size="icon-sm"
                         :disabled="isTaskRunning(item.data)"
-                        :title="isTaskRunning(item.data) ? t('tasks.drawerDeleteTaskRunning') : t('tasks.drawerDeleteTask')"
+                        :aria-label="t('tasks.drawerDeleteTask')"
                         @click="$emit('delete-task', item.data.id)"
                       >
-                        <el-icon>
-                          <Close />
-                        </el-icon>
-                      </el-button>
+                        <Trash2 />
+                      </Button>
                     </div>
-                    <div class="task-item-body task-item-body--drawer">
-                      <div class="task-drawer-grid-icon" aria-hidden="true">
-                        <div class="task-drawer-plugin-icon-box">
-                          <el-image
+                    <div
+                      class="grid h-full min-h-0 min-w-0 grid-cols-[52px_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 overflow-hidden"
+                    >
+                      <div class="col-start-1 row-start-1 self-start pt-0.5" aria-hidden="true">
+                        <div
+                          class="grid size-9 place-items-center overflow-hidden rounded-kb-md border border-solid border-kb-line bg-kb-fill-light text-kb-fg-subtle [&_svg]:size-5"
+                        >
+                          <img
                             v-if="drawerPluginIconSrc(item.data.pluginId)"
                             :src="String(drawerPluginIconSrc(item.data.pluginId))"
-                            fit="contain"
-                            class="task-drawer-plugin-img"
+                            alt=""
+                            class="size-full object-contain"
                           />
-                          <el-icon v-else class="task-drawer-plugin-fallback">
-                            <Grid />
-                          </el-icon>
+                          <LayoutGrid v-else />
                         </div>
                       </div>
-                      <div class="task-drawer-grid-summary">
+                      <div class="col-start-2 row-start-1 min-w-0">
                         <TaskSummaryRow
                           :task="item.data"
                           layout="stacked"
@@ -133,50 +133,37 @@
                           @open-schedule-config="handleOpenTaskScheduleConfig($event)"
                         />
                       </div>
-                      <div class="task-drawer-grid-footer">
-                        <div class="task-drawer-footer-progress-slot">
-                          <div v-if="shouldShowTaskProgressBar(item.data)" class="task-drawer-running-block">
-                            <div
-                              class="task-progress task-progress--compact"
-                              :class="{
-                                'task-progress--canceled-bar': isCanceledTaskStatus(item.data.status),
-                                'task-progress--failed-bar': item.data.status === 'failed',
-                              }"
+                      <!-- 三行：进度条（无进度时也占高，按钮行不跳）、并发与百分比、按钮 -->
+                      <div
+                        class="col-span-full row-start-2 grid h-full min-h-0 min-w-0 grid-rows-[20px_16px_auto] gap-y-1"
+                      >
+                        <div class="row-start-1 flex min-w-0 flex-col justify-center overflow-hidden">
+                          <div v-if="shouldShowTaskProgressBar(item.data)" class="flex min-w-0 items-center gap-1">
+                            <Progress
+                              :value="taskProgressPercent(item.data)"
+                              :tone="taskProgressTone(item.data.status)"
+                            />
+                            <Popconfirm
+                              v-if="isTaskRunning(item.data)"
+                              :title="t('tasks.drawerStopConfirm')"
+                              :confirm-text="t('common.confirm')"
+                              side="bottom"
+                              align="end"
+                              @confirm="$emit('cancel-task', item.data.id)"
                             >
-                              <el-progress
-                                :percentage="taskProgressPercent(item.data)"
-                                :stroke-width="4"
-                                :color="taskProgressBarColor(item.data.status)"
-                                :show-text="false"
-                              />
-                              <el-popconfirm
-                                v-if="item.data.status === 'running' || item.data.status === 'waiting_downloads'"
-                                placement="bottom-end"
-                                :title="t('tasks.drawerStopConfirm')"
-                                :confirm-button-text="t('common.confirm')"
-                                :cancel-button-text="t('common.cancel')"
-                                confirm-button-type="danger"
-                                :visible="stopConfirmTaskId === item.data.id"
-                                @update:visible="(v: boolean) => setStopConfirmVisible(item.data.id, v)"
-                                @confirm="$emit('cancel-task', item.data.id)"
+                              <Button
+                                variant="ghost-danger"
+                                size="icon-xs"
+                                :title="t('tasks.drawerStop')"
+                                :aria-label="t('tasks.drawerStop')"
+                                @click.stop
                               >
-                                <template #reference>
-                                  <el-button
-                                    text
-                                    circle
-                                    size="small"
-                                    class="progress-cancel-btn"
-                                    :title="t('tasks.drawerStop')"
-                                    @click.stop
-                                  >
-                                    <el-icon><Close /></el-icon>
-                                  </el-button>
-                                </template>
-                              </el-popconfirm>
-                            </div>
+                                <X />
+                              </Button>
+                            </Popconfirm>
                           </div>
                         </div>
-                        <div class="task-drawer-footer-percent-slot">
+                        <div class="row-start-2 flex min-w-0 items-center justify-between overflow-hidden">
                           <TaskConcurrencyControl
                             v-if="shouldShowTaskConcurrency(item.data)"
                             :task-id="item.data.id"
@@ -185,57 +172,46 @@
                             :editable="item.data.status === 'pending' || item.data.status === 'running'"
                             @updated="$emit('task-patched', $event)"
                           />
-                          <span v-if="shouldShowTaskProgressBar(item.data)" class="task-drawer-footer-percent">
+                          <span
+                            v-if="shouldShowTaskProgressBar(item.data)"
+                            class="ml-auto text-[11px] leading-[1.2] tabular-nums text-kb-fg-subtle"
+                          >
                             {{ taskProgressText(item.data) }}
                           </span>
                         </div>
-                        <div class="task-drawer-footer-actions">
-                          <div class="task-drawer-action-btns">
-                            <el-button
-                              plain
-                              size="small"
-                              type="info"
-                              class="task-drawer-action-btn"
+                        <div
+                          class="row-start-3 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1 overflow-hidden"
+                        >
+                          <div class="flex min-w-0 flex-[1_1_0] flex-wrap items-center gap-1">
+                            <Button
+                              size="sm"
                               :title="t('tasks.openRunParams')"
                               @click.stop="openRunParamsDialog(item.data)"
                             >
                               {{ t("tasks.drawerTaskActionParams") }}
-                            </el-button>
-                            <el-button
-                              plain
-                              size="small"
-                              type="success"
-                              class="task-drawer-action-btn"
+                            </Button>
+                            <Button
+                              size="sm"
                               :title="t('tasks.drawerViewImages')"
                               @click.stop="$emit('open-task-images', item.data.id)"
                             >
                               {{ t("tasks.drawerTaskActionImages") }}
-                            </el-button>
-                            <el-button
-                              plain
-                              size="small"
-                              type="warning"
-                              class="task-drawer-action-btn"
-                              :title="t('tasks.drawerViewLog')"
-                              @click.stop="openTaskLog(item.data.id)"
-                            >
+                            </Button>
+                            <Button size="sm" :title="t('tasks.drawerViewLog')" @click.stop="openTaskLog(item.data.id)">
                               {{ t("tasks.drawerTaskActionLog") }}
-                            </el-button>
-                            <el-button
+                            </Button>
+                            <Button
                               v-if="shouldShowTaskWebviewButton(item.data)"
-                              plain
-                              size="small"
-                              type="primary"
-                              class="task-drawer-action-btn"
+                              size="sm"
                               :title="t('tasks.openTaskWebview')"
                               @click.stop="openTaskWindow(item.data.id)"
                             >
                               {{ t("tasks.drawerTaskActionWebview") }}
-                            </el-button>
+                            </Button>
                           </div>
                           <div
                             v-if="item.data.startTime != null && Number(item.data.startTime) > 0"
-                            class="task-drawer-start-time"
+                            class="min-w-0 max-w-full shrink truncate text-right text-[11px] leading-[1.2] text-kb-fg-subtle"
                             :title="formatDrawerTaskStartFull(item.data.startTime)"
                           >
                             {{ formatDrawerTaskStart(item.data.startTime) }}
@@ -247,10 +223,11 @@
                 </div>
               </div>
             </div>
-            <div v-if="hasMore && showLoading && tasks.length > 0" class="load-more-indicator">
-              <el-icon class="is-loading">
-                <Loading />
-              </el-icon>
+            <div
+              v-if="hasMore && showLoading && tasks.length > 0"
+              class="flex shrink-0 items-center justify-center gap-2 pt-2 text-[13px] text-kb-fg-muted"
+            >
+              <Spinner :size="14" />
               <span>{{ t("common.loading") }}</span>
             </div>
           </div>
@@ -259,10 +236,9 @@
     </div>
 
     <TaskParamsDialog
-      :open="runParamsDialog.isOpen.value"
-      :z-index="runParamsDialog.zIndex.value"
+      :open="runParamsOpen"
       :task="runParamsTask"
-      @close="runParamsDialog.close()"
+      @close="runParamsOpen = false"
       @closed="runParamsTask = null"
     />
     <TaskLogDialog ref="taskLogDialogRef" />
@@ -271,11 +247,9 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useModal } from "../../composables/useModal";
-import { useModalBack } from "../../composables/useModalBack";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { Close, Grid, Loading, Search } from "@kabegame/element-plus-icons";
+import { Download, LayoutGrid, Search, SearchX, Trash2, X } from "@lucide/vue";
 import { invoke } from "../../api";
 import CollapsibleDrawerPanel from "../common/CollapsibleDrawerPanel.vue";
 import TaskLogDialog from "./TaskLogDialog.vue";
@@ -287,8 +261,16 @@ import { usePluginStore } from "../../stores/plugins";
 import type { PluginManifestText } from "../../stores/plugins";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
 import { trackEvent } from "../../track/umami";
-import { kameMessage as ElMessage } from "../../utils/kameMessage";
+import { kameMessage } from "../../utils/kameMessage";
 import { downloadPoller, useDownloadStateStore, type ActiveDownloadInfo } from "../../stores/downloadState";
+import { vLoading } from "@/components/ui/loading";
+import Button from "@/components/ui/Button.vue";
+import Empty from "@/components/ui/Empty.vue";
+import Input from "@/components/ui/Input.vue";
+import Popconfirm from "@/components/ui/Popconfirm.vue";
+import Progress from "@/components/ui/Progress.vue";
+import Spinner from "@/components/ui/Spinner.vue";
+import Tag from "@/components/ui/Tag.vue";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -387,11 +369,17 @@ function taskProgressText(task: ScriptTask): string {
   return `${taskProgressPercent(task).toFixed(2)}%`;
 }
 
-/** failed：外层 .task-progress--failed-bar 强制红条；running：默认主色；canceled：.task-progress--canceled-bar 灰条 */
-function taskProgressBarColor(status: string): string | undefined {
-  if (status === "failed") return "var(--el-color-danger)";
-  return undefined;
+/** failed：红条；canceled：灰条；其余（运行中）强调色 */
+function taskProgressTone(status: string): "accent" | "danger" | "muted" {
+  if (status === "failed") return "danger";
+  if (isCanceledTaskStatus(status)) return "muted";
+  return "accent";
 }
+
+/** 任务卡片外框：失败的铺一层淡危险色 */
+const CARD_NORMAL = "border-kb-line bg-kb-surface-raised hover:bg-kb-fill-lighter";
+const CARD_FAILED =
+  "border-[color-mix(in_srgb,var(--kb-danger)_22%,transparent)] bg-[color-mix(in_srgb,var(--kb-danger)_4%,transparent)] hover:bg-[color-mix(in_srgb,var(--kb-danger)_8%,transparent)]";
 
 /** 抽屉任务行图标：统一读 pluginStore 缓存。 */
 function drawerPluginIconSrc(pluginId: string): string | undefined {
@@ -399,27 +387,8 @@ function drawerPluginIconSrc(pluginId: string): string | undefined {
   return pluginStore.pluginIconSrc(pluginId);
 }
 
-/** 与虚拟列表行高一致（须与 .task-drawer-virtual-item height 相同） */
+/** 与虚拟列表行高一致（须与模板里每行的 h-[166px] 相同） */
 const TASK_DRAWER_ITEM_HEIGHT = 166;
-
-/**
- * 停止确认小框：同一时刻最多一个任务的确认框打开，接入 Android 返回栈。
- * 模板里 placement 用 bottom-end：叉号贴着抽屉右缘，居中的 bottom 会右溢出，
- * flip 的横轴检查随之否掉 bottom/top，最终翻到左侧盖住卡片。
- */
-const stopConfirmTaskId = ref<string | null>(null);
-function setStopConfirmVisible(taskId: string, visible: boolean) {
-  if (visible) stopConfirmTaskId.value = taskId;
-  else if (stopConfirmTaskId.value === taskId) stopConfirmTaskId.value = null;
-}
-useModalBack(
-  computed({
-    get: () => stopConfirmTaskId.value !== null,
-    set: (open) => {
-      if (!open) stopConfirmTaskId.value = null;
-    },
-  }),
-);
 
 /** 运行中（含等待下载收尾）的任务不能直接删除，须先停止 */
 const isTaskRunning = (task: ScriptTask) => task.status === "running" || task.status === "waiting_downloads";
@@ -430,17 +399,20 @@ const {
   containerProps,
   wrapperProps,
   scrollTo: scrollTasksTo,
-} = useVirtualList(computed(() => props.tasks), {
-  itemHeight: TASK_DRAWER_ITEM_HEIGHT,
-  overscan: 6,
-});
+} = useVirtualList(
+  computed(() => props.tasks),
+  {
+    itemHeight: TASK_DRAWER_ITEM_HEIGHT,
+    overscan: 6,
+  },
+);
 // 搜索词变化后回到顶部：否则沿用旧 scrollTop，结果比原列表短时可视区落在结果之外，整列空白
 watch(
   () => props.search,
   () => scrollTasksTo(0),
 );
 
-const runParamsDialog = useModal();
+const runParamsOpen = ref(false);
 const runParamsTask = ref<TaskRunParamsTask | null>(null);
 
 function currentUrl() {
@@ -465,7 +437,7 @@ function trackTaskDrawerAction(action: "view_params" | "view_log" | "open_webvie
 function openRunParamsDialog(task: ScriptTask) {
   trackTaskDrawerAction("view_params", task);
   runParamsTask.value = task;
-  runParamsDialog.open();
+  runParamsOpen.value = true;
 }
 
 async function loadMoreTasks() {
@@ -524,13 +496,12 @@ const downloadStateText = (d: DownloadItem) => {
   return keyMap[st] ? t(keyMap[st]) : st;
 };
 
-const downloadStateTagType = (d: DownloadItem) => {
+const downloadStateTone = (d: DownloadItem): "neutral" | "accent" | "success" | "danger" => {
   const st = d.state ?? "";
   if (st === "failed") return "danger";
-  if (st === "canceled" || st === "preparing") return "info";
   if (st === "completed" || st === "processing") return "success";
-  if (st === "extracting" || st === "downloading") return "warning";
-  return "info";
+  if (st === "extracting" || st === "downloading") return "accent";
+  return "neutral";
 };
 
 const formatBytes = (n: number) => {
@@ -578,9 +549,9 @@ async function openTaskWindow(taskId: string) {
   if (task) trackTaskDrawerAction("open_webview", task);
   try {
     await invoke("show_crawler_window", { taskId: id });
-    ElMessage.success(t("tasks.openTaskWebviewSuccess"));
+    kameMessage.success(t("tasks.openTaskWebviewSuccess"));
   } catch (error) {
-    ElMessage.error(String(error));
+    kameMessage.error(String(error));
   }
 }
 
@@ -654,481 +625,20 @@ watch(
 );
 </script>
 
-<style scoped lang="scss">
-.tasks-drawer-content {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-width: 0;
-  overflow-x: hidden;
+<style scoped>
+/* 下载条目进入 / 退出动画（completed 0.2s 展示 + 列表更新） */
+.download-fade-enter-active,
+.download-fade-leave-active {
+  transition: all 0.2s ease;
+}
 
-  .drawer-accordion {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px 10px 10px;
-  }
+.download-fade-enter-from,
+.download-fade-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
 
-  .drawer-panel-title {
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  .drawer-panel-body--downloads,
-  .drawer-panel-body--tasks {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .downloads-section {
-    flex: 1;
-    min-height: 0;
-    padding: 0 12px 12px;
-    display: flex;
-    flex-direction: column;
-
-    .downloads-empty {
-      padding: 20px 0;
-    }
-
-    .downloads-content {
-      flex: 1;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-
-      .downloads-list {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        flex: 1;
-        min-height: 0;
-        overflow-y: auto;
-        margin-bottom: 12px;
-
-        .downloads-list-inner {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-
-        .download-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 8px 12px;
-          background: var(--anime-bg-card);
-          border-radius: 6px;
-          border: 1px solid var(--anime-border);
-
-          .download-info {
-            flex: 1;
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-
-            .download-url {
-              font-size: 12px;
-              color: var(--anime-text-primary);
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-            }
-
-            .download-meta {
-              display: flex;
-              align-items: center;
-              gap: 8px;
-            }
-
-            .download-progress {
-              margin-top: 6px;
-            }
-          }
-        }
-      }
-
-      .queue-info {
-        padding: 8px 0;
-      }
-    }
-
-    .downloads-substatus {
-      flex-shrink: 0;
-      margin-top: 8px;
-      font-size: 12px;
-      line-height: 1.4;
-      color: var(--anime-text-muted);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  /* 下载条目进入/退出动画（completed 0.2s 展示 + 列表更新） */
-  .download-fade-enter-active,
-  .download-fade-leave-active {
-    transition: all 0.2s ease;
-  }
-
-  .download-fade-enter-from,
-  .download-fade-leave-to {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-
-  .download-fade-move {
-    transition: transform 0.2s ease;
-  }
-
-  .tasks-summary {
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--anime-border);
-    font-size: 13px;
-    color: var(--anime-text-secondary);
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-
-    .tasks-search {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .clear-completed-btn {
-      flex-shrink: 0;
-    }
-  }
-
-  .tasks-list-col {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    padding: 10px 12px 12px;
-  }
-
-  .tasks-list--virtual {
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
-  .task-drawer-virtual-item {
-    box-sizing: border-box;
-    height: 166px;
-    max-width: 100%;
-    min-width: 0;
-    padding: 0 4px 10px;
-  }
-
-  .load-more-indicator {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 8px 0 0;
-    font-size: 13px;
-    color: var(--anime-text-secondary);
-    flex-shrink: 0;
-  }
-
-  .task-item.task-item--fixed {
-    box-sizing: border-box;
-    height: 100%;
-    max-width: 100%;
-    min-width: 0;
-    padding: 10px 32px 8px 14px;
-    overflow: hidden;
-    background: var(--anime-bg-card);
-    border-radius: 8px;
-    border: 1px solid var(--anime-border);
-    position: relative;
-    transition:
-      background-color 0.2s ease,
-      border-color 0.2s ease;
-
-    &.task-item-failed {
-      background: rgba(239, 68, 68, 0.05);
-      border-color: rgba(239, 68, 68, 0.2);
-
-      &:hover {
-        background: rgba(239, 68, 68, 0.1);
-        border-color: rgba(239, 68, 68, 0.3);
-      }
-    }
-
-    &:hover {
-      background: rgba(0, 0, 0, 0.02);
-      border-color: var(--anime-border);
-    }
-  }
-
-  .task-item-body {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .task-item-body.task-item-body--drawer {
-    --task-drawer-progress-slot-h: 20px;
-    --task-drawer-percent-slot-h: 16px;
-    display: grid;
-    grid-template-columns: 52px minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: 2px 10px;
-    align-items: start;
-  }
-
-  .task-drawer-grid-icon {
-    grid-column: 1;
-    grid-row: 1;
-    align-self: start;
-    padding-top: 2px;
-  }
-
-  .task-drawer-plugin-icon-box {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    overflow: hidden;
-    background: var(--el-fill-color-light, var(--anime-bg-secondary));
-    border: 1px solid var(--el-border-color-lighter, var(--anime-border));
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .task-drawer-plugin-img {
-    width: 100%;
-    height: 100%;
-  }
-
-  .task-drawer-plugin-fallback {
-    font-size: 20px;
-    color: var(--el-text-color-secondary, var(--anime-text-muted));
-  }
-
-  .task-drawer-grid-summary {
-    grid-column: 2;
-    grid-row: 1;
-    min-width: 0;
-  }
-
-  /* 纵向 grid：第一行进度条（无进度时也占高，避免按钮行跳动）；第二行百分比；第三行按钮 */
-  .task-drawer-grid-footer {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    min-width: 0;
-    min-height: 0;
-    height: 100%;
-    display: grid;
-    grid-template-rows: var(--task-drawer-progress-slot-h) var(--task-drawer-percent-slot-h) auto;
-    row-gap: 4px;
-    padding-top: 0;
-  }
-
-  .task-drawer-footer-progress-slot {
-    grid-row: 1;
-    min-width: 0;
-    min-height: var(--task-drawer-progress-slot-h);
-    max-height: var(--task-drawer-progress-slot-h);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: stretch;
-    box-sizing: border-box;
-    overflow: hidden;
-
-    :deep(.el-progress--line) {
-      margin: 0;
-    }
-
-    :deep(.el-progress-bar__outer) {
-      margin: 0;
-    }
-  }
-
-  .task-drawer-footer-percent-slot {
-    grid-row: 2;
-    min-width: 0;
-    min-height: var(--task-drawer-percent-slot-h);
-    max-height: var(--task-drawer-percent-slot-h);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    box-sizing: border-box;
-    overflow: hidden;
-  }
-
-  .task-drawer-footer-percent {
-    margin-left: auto;
-    font-size: 11px;
-    line-height: 1.2;
-    color: var(--anime-text-muted, var(--el-text-color-secondary));
-    font-variant-numeric: tabular-nums;
-  }
-
-  .task-drawer-running-block {
-    flex-shrink: 0;
-    min-width: 0;
-    width: 100%;
-  }
-
-  .task-drawer-footer-actions {
-    grid-row: 3;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    min-width: 0;
-    flex-wrap: wrap;
-    row-gap: 4px;
-    overflow: hidden;
-  }
-
-  .task-drawer-action-btns {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 4px;
-    min-width: 0;
-    flex: 1 1 0;
-  }
-
-  .task-drawer-action-btn {
-    margin: 0;
-    padding: 2px 6px;
-    height: auto;
-    min-height: 22px;
-    font-size: 11px;
-    line-height: 1.2;
-    flex-shrink: 1;
-  }
-
-  .task-drawer-footer-actions .task-drawer-start-time {
-    flex: 0 1 auto;
-    margin: 0;
-    max-width: 100%;
-    min-width: 0;
-    text-align: right;
-  }
-
-  :deep(.task-summary-row--stacked) {
-    margin-bottom: 2px;
-  }
-
-  :deep(.task-summary-actions--stacked) {
-    gap: 4px;
-  }
-
-  .task-drawer-start-time {
-    font-size: 11px;
-    line-height: 1.2;
-    color: var(--anime-text-muted, var(--el-text-color-secondary));
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .task-drawer-footer-progress-slot .task-progress--compact {
-    flex-shrink: 0;
-    margin: 0;
-    min-width: 0;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 4px;
-
-    :deep(.el-progress) {
-      flex: 1;
-      min-width: 0;
-    }
-
-    &.task-progress--failed-bar {
-      :deep(.el-progress-bar__inner) {
-        background-color: var(--el-color-danger, #f56c6c) !important;
-        background-image: none !important;
-      }
-    }
-
-    &.task-progress--canceled-bar {
-      :deep(.el-progress-bar__outer) {
-        background-color: var(--el-fill-color-light, #e4e7ed) !important;
-      }
-
-      :deep(.el-progress-bar__inner) {
-        background-color: var(--el-color-info, #909399) !important;
-        background-image: none !important;
-      }
-    }
-
-    .progress-cancel-btn {
-      flex-shrink: 0;
-      width: 18px;
-      height: 18px;
-      padding: 0;
-      color: var(--anime-text-muted, var(--el-text-color-secondary));
-
-      &:hover {
-        color: var(--el-color-danger, #f56c6c);
-      }
-
-      .el-icon {
-        font-size: 12px;
-      }
-    }
-  }
-
-  .task-close {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    z-index: 3;
-
-    .close-btn {
-      width: 28px;
-      height: 28px;
-      padding: 0;
-      color: var(--anime-text-secondary);
-      border-radius: 50%;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-      background: var(--el-bg-color-overlay, #fff);
-      border: 1px solid var(--el-border-color, #dcdfe6);
-
-      &:hover {
-        color: var(--anime-primary);
-        background: #fff;
-      }
-
-      &.is-disabled {
-        opacity: 0.4;
-        box-shadow: none;
-        cursor: not-allowed;
-
-        &:hover {
-          color: var(--anime-text-secondary);
-          background: var(--el-bg-color-overlay, #fff);
-        }
-      }
-    }
-  }
+.download-fade-move {
+  transition: transform 0.2s ease;
 }
 </style>

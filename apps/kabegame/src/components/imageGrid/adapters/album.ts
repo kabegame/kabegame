@@ -1,5 +1,5 @@
 import { invoke } from "@/api/rpc";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
@@ -44,12 +44,12 @@ export function createAlbumDetailAdapter(params: {
         const imageIds = images.map((img) => img.id);
         await ctx.mutate(() => invoke("batch_delete_images", { imageIds }));
         await clearWebBackgroundIfRemoved(imageIds);
-        ElMessage.success(
+        kameMessage.success(
           count > 1 ? t("gallery.deletedAndRemovedCountSuccess", { count }) : t("gallery.deletedAndRemovedSuccess"),
         );
       } catch (error) {
         console.error("操作失败:", error);
-        ElMessage.error(t("common.deleteFail"));
+        kameMessage.error(t("common.deleteFail"));
       }
     },
   };
@@ -123,12 +123,12 @@ export function createAlbumDetailAdapter(params: {
               images.map((img) => img.id),
             ),
           );
-          ElMessage.success(
+          kameMessage.success(
             count > 1 ? t("gallery.removedFromAlbumCountSuccess", { count }) : t("gallery.removedFromAlbumSuccess"),
           );
         } catch (error) {
           console.error("操作失败:", error);
-          ElMessage.error(t("common.removeFail"));
+          kameMessage.error(t("common.removeFail"));
         }
       },
     },
@@ -136,7 +136,7 @@ export function createAlbumDetailAdapter(params: {
     // 上划手势：直接从画册移除（不删文件、无确认框）
     swipeRemove: async (images, ctx) => {
       if (params.isLocalFolder()) {
-        ElMessage.info(t("albums.localFolder.readOnlyHint"));
+        kameMessage.info(t("albums.localFolder.readOnlyHint"));
         return;
       }
       const id = params.albumId();
@@ -150,7 +150,7 @@ export function createAlbumDetailAdapter(params: {
         );
       } catch (error) {
         console.error("移除图片失败:", error);
-        ElMessage.error(t("gallery.removeImageFailed"));
+        kameMessage.error(t("gallery.removeImageFailed"));
       }
     },
     analytics: params.analytics,

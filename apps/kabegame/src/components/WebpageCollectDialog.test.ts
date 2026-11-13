@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { shallowMount } from "@vue/test-utils";
 import { createPinia } from "pinia";
-import { nextTick, ref } from "vue";
+import { nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebpageCollectDialog from "./WebpageCollectDialog.vue";
 
@@ -16,12 +16,6 @@ vi.mock("@/env", async (importOriginal) => ({
   IS_WEB: false,
 }));
 vi.mock("@/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
-vi.mock("@/composables/useModal", () => ({
-  useModal: () => {
-    const isOpen = ref(false);
-    return { isOpen, zIndex: ref(2000), open: () => (isOpen.value = true), close: () => (isOpen.value = false) };
-  },
-}));
 vi.mock("@kabegame/i18n", () => ({
   useI18n: () => ({ t: (key: string) => key, locale: { value: "zh" } }),
   usePluginConfigI18n: () => ({

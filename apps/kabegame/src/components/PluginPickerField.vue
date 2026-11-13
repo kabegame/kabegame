@@ -27,18 +27,20 @@
               @keydown.enter.prevent="open()"
               @keydown.space.prevent="open()"
             >
-              <!-- 复用桌面 el-select 展示当前值；实际选择交给 Android 弹窗，避免同时打开两个面板。 -->
-              <el-select
-                class="pointer-events-none w-full"
-                :model-value="modelValue ?? undefined"
-                :placeholder="placeholder || $t('common.selectPlaceholder')"
-                :disabled="disabled"
-                :size="size"
-                :tabindex="-1"
+              <!-- 外观同桌面的选择框，只展示当前值；实际选择交给 Android 弹窗 -->
+              <div
+                :class="[
+                  'kb-control cursor-pointer justify-between gap-2 px-2.5',
+                  controlSize === 'sm' ? 'h-7' : 'h-8',
+                ]"
+                :data-disabled="disabled || undefined"
                 aria-hidden="true"
               >
-                <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value" />
-              </el-select>
+                <span class="min-w-0 flex-1 truncate" :class="selectedTriggerLabel ? '' : 'text-kb-fg-subtle'">
+                  {{ selectedTriggerLabel || placeholder || $t("common.selectPlaceholder") }}
+                </span>
+                <ChevronDown class="size-4 shrink-0 text-kb-fg-subtle" />
+              </div>
             </div>
           </slot>
         </template>
@@ -65,43 +67,55 @@
         </template>
       </AndroidPickerSelect>
 
-      <el-select
+      <Combobox
         v-else
+        class="w-full"
         :model-value="modelValue ?? undefined"
+        :options="options"
+        :filter="filterable ? matchOption : undefined"
         :placeholder="placeholder || $t('common.selectPlaceholder')"
         :clearable="clearable"
         :disabled="disabled"
-        :filterable="filterable"
-        :filter-method="filterable ? onFilter : undefined"
-        :size="size"
-        :popper-class="popperClass"
-        style="width: 100%"
+        :size="controlSize"
         @update:model-value="emitValue"
       >
-        <el-option v-for="option in filteredOptions" :key="option.value" :label="option.label" :value="option.value">
+        <template #option="{ option }">
           <!-- 悬浮时在整行右侧弹出插件快捷预览（与「源」页面同一张面板）；
                「全部」这类没有插件实体的行不弹 -->
-          <HoverRevealPanel :disabled="!option.plugin">
-            <div class="plugin-picker-option">
-              <template v-if="showIcons && option.pluginId">
-                <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
-                <el-icon v-else class="plugin-picker-option__icon-placeholder">
-                  <Grid />
-                </el-icon>
+          <HoverRevealPanel class="min-w-0 flex-1" :disabled="!optionOf(option.value)?.plugin">
+            <div class="flex w-full min-w-0 items-center gap-2">
+              <template v-if="showIcons && optionOf(option.value)?.pluginId">
+                <img
+                  v-if="optionOf(option.value)?.iconSrc"
+                  :src="optionOf(option.value)?.iconSrc"
+                  class="size-5 shrink-0 rounded-[4px] object-contain"
+                  alt=""
+                />
+                <LayoutGrid v-else class="size-5 shrink-0 text-kb-fg-subtle" />
               </template>
-              <span class="plugin-picker-option__label">{{ option.label }}</span>
-              <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
-              <!-- 尾部整体右对齐：让各行的标签落在同一条右边线上，便于纵向对比 -->
-              <span class="plugin-picker-option__trailing">
-                <PluginLabelTags v-if="showLabels" :labels="labelsFor(option.plugin)" size="small" fixed-slots />
+              <span class="min-w-0 truncate">{{ option.label }}</span>
+              <span v-if="optionOf(option.value)?.count !== undefined" class="shrink-0 text-[12px] text-kb-fg-subtle">
+                ({{ optionOf(option.value)?.count }})
+              </span>
+              <!-- 尾部整体右对齐：让各行的标签落在同一条右边线上，便于纵向对比；挤压时先省略插件名 -->
+              <span class="ml-auto flex shrink-0 items-center gap-2">
+                <PluginLabelTags
+                  v-if="showLabels"
+                  :labels="labelsFor(optionOf(option.value)?.plugin)"
+                  size="small"
+                  fixed-slots
+                />
               </span>
             </div>
-            <template v-if="option.plugin" #panel>
-              <PluginQuickPreviewPanel v-bind="quickPreviewProps(option.plugin)" :show-detail-hint="false" />
+            <template v-if="optionOf(option.value)?.plugin" #panel>
+              <PluginQuickPreviewPanel
+                v-bind="quickPreviewProps(optionOf(option.value)!.plugin!)"
+                :show-detail-hint="false"
+              />
             </template>
           </HoverRevealPanel>
-        </el-option>
-      </el-select>
+        </template>
+      </Combobox>
     </div>
 
     <PluginLabelTags v-if="showLabels && modelValue" :labels="labelsFor(selectedPluginObj)" />
@@ -109,11 +123,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { Grid } from "@kabegame/element-plus-icons";
+import { computed } from "vue";
+import { ChevronDown, LayoutGrid } from "@lucide/vue";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
 import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
+import Combobox from "@/components/ui/Combobox.vue";
 import PluginLabelTags from "@/components/plugin/PluginLabelTags.vue";
 import PluginQuickPreviewPanel, { type QuickPreviewPluginLike } from "@/components/plugin/PluginQuickPreviewPanel.vue";
 import { bannerPreviewImages } from "@/utils/assetPath";
@@ -150,7 +165,6 @@ const props = withDefaults(
     showIcons?: boolean;
     showLabels?: boolean;
     size?: PluginPickerSize;
-    popperClass?: string;
   }>(),
   {
     valueKey: "id",
@@ -163,7 +177,6 @@ const props = withDefaults(
     showIcons: true,
     showLabels: false,
     size: "default",
-    popperClass: undefined,
   },
 );
 
@@ -268,21 +281,18 @@ const selectedTriggerLabel = computed(
   () => options.value.find((option) => option.value === props.modelValue)?.label ?? "",
 );
 
+/** 桌面档只有 sm / md 两档：small → sm，其余（含 Surf 地址栏的 large）→ md */
+const controlSize = computed(() => (props.size === "small" ? "sm" : "md"));
+
+const optionByValue = computed(() => new Map(options.value.map((o) => [o.value, o])));
+const optionOf = (value: string) => optionByValue.value.get(value);
+
 // 桌面下拉的搜索：同时匹配显示名与插件 id（不区分大小写）。
-// 传了 filter-method 后 el-select 不再按 label 自行隐藏选项，展开时会以空串回调重置。
-const filterQuery = ref("");
-
-function onFilter(query: string) {
-  filterQuery.value = query;
+function matchOption(option: { label: string; value: string }, term: string): boolean {
+  const q = term.trim().toLowerCase();
+  if (!q) return true;
+  return option.label.toLowerCase().includes(q) || !!optionOf(option.value)?.pluginId?.toLowerCase().includes(q);
 }
-
-const filteredOptions = computed((): PluginPickerOption[] => {
-  const q = filterQuery.value.trim().toLowerCase();
-  if (!q) return options.value;
-  return options.value.filter(
-    (option) => option.label.toLowerCase().includes(q) || !!option.pluginId?.toLowerCase().includes(q),
-  );
-});
 
 const androidOptions = computed(() =>
   options.value.map((option) => ({
@@ -333,44 +343,6 @@ const selectedPluginObj = computed<Plugin | undefined>(() => {
   min-width: 0;
 }
 
-.plugin-picker-option__icon,
-.plugin-picker-option__icon-placeholder {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-}
-
-.plugin-picker-option__icon {
-  object-fit: contain;
-  border-radius: 4px;
-}
-
-.plugin-picker-option__icon-placeholder {
-  color: var(--anime-text-secondary);
-}
-
-.plugin-picker-option__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plugin-picker-option__count {
-  flex-shrink: 0;
-  color: var(--anime-text-muted);
-  font-size: 12px;
-}
-
-/* 右推尾部标签；flex-shrink:0 保证挤压时先省略插件名而不是压扁标签。 */
-.plugin-picker-option__trailing {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
 /* ============ 移动端居中弹窗行内容（方案 1c 图标 + 名称 + 描述 + 标签） ============ */
 .plugin-picker-option:has(.plugin-picker-option__tile) {
   gap: 13px;
@@ -409,7 +381,7 @@ const selectedPluginObj = computed<Plugin | undefined>(() => {
 .plugin-picker-option__name {
   font-size: 15.5px;
   font-weight: 600;
-  color: var(--anime-text-primary);
+  color: var(--kb-fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -418,7 +390,7 @@ const selectedPluginObj = computed<Plugin | undefined>(() => {
 .plugin-picker-option__desc {
   margin-top: 2px;
   font-size: 12.5px;
-  color: #8a6d8b;
+  color: var(--kb-fg-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

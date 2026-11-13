@@ -1,6 +1,6 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue";
 import type { ImageInfo } from "@/types/image";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { withPaged } from "@/utils/galleryPath";
 
 type PagedRouteStore = {
@@ -106,7 +106,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
   // 到达页面边界，尝试加载下一页或上一页
   const handlePreviewPageBoundary = async (payload: { direction: "prev" | "next"; image: ImageInfo }) => {
     if (pendingPreviewBoundary.value) {
-      ElMessage({
+      kameMessage({
         type: "info",
         message: messages.loading,
       });
@@ -150,7 +150,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
         return;
       params.viewRef.value?.openPreviewById?.(image.id);
       pendingPreviewBoundary.value = null;
-      ElMessage.info(pending.direction === "next" ? messages.next : messages.prev);
+      kameMessage.info(pending.direction === "next" ? messages.next : messages.prev);
     },
     { flush: "post" },
   );

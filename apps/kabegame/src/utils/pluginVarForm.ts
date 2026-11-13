@@ -228,11 +228,7 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
     }
 
     // 兼容：Pixiv 等旧配置 date_range（天）+ start_date -> end_date
-    if (
-      def.type === "date" &&
-      def.key === "end_date" &&
-      (rawVars[def.key] === undefined || rawVars[def.key] === "")
-    ) {
+    if (def.type === "date" && def.key === "end_date" && (rawVars[def.key] === undefined || rawVars[def.key] === "")) {
       const legacyRange = rawVars["date_range"];
       const start = rawVars["start_date"];
       if (typeof legacyRange === "number" && legacyRange >= 1 && typeof start === "string" && start.trim() !== "") {
@@ -298,115 +294,46 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
 }
 
 /**
- * 获取验证规则。displayName 为已按 locale 解析好的展示名（由调用方通过 i18n composable 解析后传入）。
- * `ignoreRequired`：编辑默认配置等不提交任务的场景，必填字段也允许为空。
+ * 单个插件变量的校验：返回要显示的错误文字，通过时返回 undefined。
+ * displayName 为已按 locale 解析好的展示名（由调用方通过 i18n composable 解析后传入）。
+ * `ignoreRequired`：编辑默认配置等不提交任务的场景，必填字段也允许为空（填了仍校验范围与格式）。
+ * 表单层（`components/ui/Field` 的 validator）决定何时显示：值变过或提交过之后。
  */
-export function getValidationRules(
+export function varFieldError(
   varDef: PluginVarDef,
+  value: unknown,
   displayName: string,
   options: { ignoreRequired?: boolean } = {},
-) {
+): string | undefined {
   const label = displayName;
   const required = !options.ignoreRequired && isRequired(varDef);
   const min = finiteBound(varDef.min);
   const max = finiteBound(varDef.max);
 
+  if (isEmptyVarValue(varDef, value)) {
+    if (!required) return undefined;
+    return varDef.type === "list" || varDef.type === "checkbox" ? `请选择${label}` : `请输入${label}`;
+  }
+
   if (varDef.type === "int") {
-    return [
-      {
-        required,
-        trigger: "change",
-        validator: (_rule: any, value: any, callback: any) => {
-          if (isEmptyVarValue(varDef, value)) {
-            if (required) callback(new Error(`请输入${label}`));
-            else callback();
-            return;
-          }
-          if (typeof value !== "number" || !Number.isInteger(value)) {
-            callback(new Error(`${label}必须是整数`));
-            return;
-          }
-          if (min !== undefined && value < min) {
-            callback(new Error(`${label}不能小于 ${min}`));
-            return;
-          }
-          if (max !== undefined && value > max) {
-            callback(new Error(`${label}不能大于 ${max}`));
-            return;
-          }
-          callback();
-        },
-      },
-    ];
+    if (typeof value !== "number" || !Number.isInteger(value)) return `${label}必须是整数`;
   }
-
-  if (!required) {
-    return [];
+  if ((varDef.type === "int" || varDef.type === "float") && typeof value === "number") {
+    if (min !== undefined && value < min) return `${label}不能小于 ${min}`;
+    if (max !== undefined && value > max) return `${label}不能大于 ${max}`;
   }
-
-  if (varDef.type === "list" || varDef.type === "checkbox") {
-    return [
-      {
-        required: true,
-        message: `请选择${label}`,
-        trigger: "change",
-        validator: (_rule: any, value: any, callback: any) => {
-          if (isEmptyVarValue(varDef, value)) {
-            callback(new Error(`请选择${label}`));
-          } else {
-            callback();
-          }
-        },
-      },
-    ];
-  } else if (varDef.type === "boolean") {
-    return [];
-  } else {
-    return [
-      {
-        required: true,
-        trigger: varDef.type === "options" || varDef.type === "date" ? "change" : "blur",
-        validator: (_rule: any, value: any, callback: any) => {
-          if (isEmptyVarValue(varDef, value)) {
-            callback(new Error(`请输入${label}`));
-            return;
-          }
-          if (varDef.type === "float" && typeof value === "number") {
-            if (min !== undefined && value < min) {
-              callback(new Error(`${label}不能小于 ${min}`));
-              return;
-            }
-            if (max !== undefined && value > max) {
-              callback(new Error(`${label}不能大于 ${max}`));
-              return;
-            }
-          }
-          if (varDef.type === "date" && typeof value === "string") {
-            const vd = varDef as PluginVarDef;
-            const fmt = vd.format && vd.format.trim() !== "" ? vd.format.trim() : "YYYY-MM-DD";
-            const d = parsePluginDateStored(value, fmt);
-            if (!d) {
-              callback(new Error(`请输入有效的${label}`));
-              return;
-            }
-            if (vd.dateMin?.trim()) {
-              const minD = parsePluginDateBound(vd.dateMin);
-              if (minD && d.startOf("day").isBefore(minD, "day")) {
-                callback(new Error(`${label}不能早于 ${vd.dateMin}`));
-                return;
-              }
-            }
-            if (vd.dateMax?.trim()) {
-              const maxD = parsePluginDateBound(vd.dateMax);
-              if (maxD && d.startOf("day").isAfter(maxD, "day")) {
-                callback(new Error(`${label}不能晚于 ${vd.dateMax}`));
-                return;
-              }
-            }
-          }
-          callback();
-        },
-      },
-    ];
+  if (varDef.type === "date" && typeof value === "string") {
+    const fmt = varDef.format && varDef.format.trim() !== "" ? varDef.format.trim() : "YYYY-MM-DD";
+    const d = parsePluginDateStored(value, fmt);
+    if (!d) return `请输入有效的${label}`;
+    if (varDef.dateMin?.trim()) {
+      const minD = parsePluginDateBound(varDef.dateMin);
+      if (minD && d.startOf("day").isBefore(minD, "day")) return `${label}不能早于 ${varDef.dateMin}`;
+    }
+    if (varDef.dateMax?.trim()) {
+      const maxD = parsePluginDateBound(varDef.dateMax);
+      if (maxD && d.startOf("day").isAfter(maxD, "day")) return `${label}不能晚于 ${varDef.dateMax}`;
+    }
   }
+  return undefined;
 }

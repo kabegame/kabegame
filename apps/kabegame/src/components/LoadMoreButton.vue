@@ -1,30 +1,21 @@
 <template>
-  <div class="load-more-container">
-    <template v-if="hasMore">
-      <el-button type="primary" @click.stop.prevent="$emit('loadMore')" :loading="loading" size="large">
-        <el-icon v-if="!loading">
-          <Plus />
-        </el-icon>
-        {{ $t("common.loadMore") }}
-      </el-button>
-    </template>
-    <template v-else-if="showNextPage">
-      <el-button type="primary" @click.stop.prevent="$emit('nextPage')" size="large">
-        <el-icon>
-          <ArrowRight />
-        </el-icon>
-        {{ $t("common.enterNextPage") }}
-      </el-button>
-    </template>
-    <template v-else>
-      <div class="load-more-placeholder">{{ $t("common.noMore") }}</div>
-    </template>
+  <div class="load-more-container flex items-center justify-center pt-8 mt-6">
+    <Button v-if="hasMore" :disabled="loading" @click.stop.prevent="$emit('loadMore')">
+      <Spinner v-if="loading" :size="14" />
+      <Plus v-else />
+      {{ $t("common.loadMore") }}
+    </Button>
+    <Button v-else-if="showNextPage" @click.stop.prevent="$emit('nextPage')">
+      {{ $t("common.enterNextPage") }}
+      <ArrowRight />
+    </Button>
+    <div v-else class="h-10 text-[13px] leading-10 text-kb-fg-subtle">{{ $t("common.noMore") }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Plus, ArrowRight } from "@kabegame/element-plus-icons";
-import { useI18n } from "@kabegame/i18n";
+import { ArrowRight, Plus } from "@lucide/vue";
+import { Button, Spinner } from "@/components/ui";
 
 interface Props {
   hasMore: boolean;
@@ -41,21 +32,3 @@ defineEmits<{
   nextPage: [];
 }>();
 </script>
-
-<style scoped lang="scss">
-.load-more-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 32px 0 0;
-  margin-top: 24px;
-}
-
-.load-more-placeholder {
-  height: 40px;
-  line-height: 40px;
-  color: #999;
-  font-size: 14px;
-  opacity: 0.7;
-}
-</style>

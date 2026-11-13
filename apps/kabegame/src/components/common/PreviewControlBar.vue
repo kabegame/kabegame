@@ -180,6 +180,10 @@ defineExpose({
   svg {
     width: 18px;
     height: 18px;
+  }
+
+  /* 内联的实心路径图标要填色；lucide 是描边图标（带 stroke 属性），不能填 */
+  svg:not([stroke]) {
     fill: currentColor;
   }
 }

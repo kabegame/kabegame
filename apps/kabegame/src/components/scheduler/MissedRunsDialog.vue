@@ -1,20 +1,20 @@
 <template>
-  <el-dialog
-    :model-value="open"
-    :z-index="zIndex"
+  <Dialog
+    :open="open"
     :title="$t('autoConfig.missedRuns.title')"
-    width="560px"
-    :close-on-click-modal="false"
-    :before-close="handleBeforeClose"
-    @update:model-value="$event || $emit('close')"
+    :description="systemSleep ? $t('autoConfig.missedRuns.sleepDesc') : $t('autoConfig.missedRuns.desc')"
+    :width="560"
+    @update:open="onUpdateOpen"
+    :close-on-overlay="false"
   >
-    <div class="missed-runs-desc">
-      {{ systemSleep ? $t("autoConfig.missedRuns.sleepDesc") : $t("autoConfig.missedRuns.desc") }}
-    </div>
-    <div class="missed-runs-list">
-      <div v-for="item in items" :key="item.configId" class="missed-runs-item">
-        <div class="name">{{ item.configName || item.configId }}</div>
-        <div class="meta">
+    <div class="flex max-h-80 flex-col gap-2 overflow-y-auto">
+      <div
+        v-for="item in items"
+        :key="item.configId"
+        class="rounded-kb-md border border-solid border-kb-line bg-kb-surface-raised px-3 py-2.5"
+      >
+        <div class="truncate text-[13.5px] font-600 text-kb-fg">{{ item.configName || item.configId }}</div>
+        <div class="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[12px] tabular-nums text-kb-fg-muted">
           <span>{{ modeText(item.scheduleMode) }}</span>
           <span>{{ $t("autoConfig.missedRuns.missedCount", { n: item.missedCount }) }}</span>
           <span>{{ $t("autoConfig.missedRuns.lastDueAt", { time: formatTime(item.lastDueAt) }) }}</span>
@@ -22,19 +22,19 @@
       </div>
     </div>
     <template #footer>
-      <el-button @click="$emit('dismiss')">{{ $t("autoConfig.missedRuns.dismiss") }}</el-button>
-      <el-button type="primary" @click="$emit('run-now')">{{ $t("autoConfig.missedRuns.runNow") }}</el-button>
+      <Button variant="outline" @click="$emit('dismiss')">{{ $t("autoConfig.missedRuns.dismiss") }}</Button>
+      <Button variant="primary" @click="$emit('run-now')">{{ $t("autoConfig.missedRuns.runNow") }}</Button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from "@kabegame/i18n";
+import { Button, Dialog } from "@/components/ui";
 import type { MissedRunItem } from "@/stores/crawler";
 
 defineProps<{
   open: boolean;
-  zIndex: number;
   items: MissedRunItem[];
   /** 触发来源为「系统休眠期间漏跑」时为 true，用于切换提示文案 */
   systemSleep?: boolean;
@@ -48,10 +48,12 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-const handleBeforeClose = (done: () => void) => {
+// 点 × / Esc / 返回键关闭 = 稍后再说（原 before-close 也是先 dismiss 再关）；点遮罩不关
+function onUpdateOpen(value: boolean) {
+  if (value) return;
   emit("dismiss");
-  done();
-};
+  emit("close");
+}
 
 const modeText = (mode: MissedRunItem["scheduleMode"]) => {
   if (mode === "interval") return t("autoConfig.modeInterval");
@@ -66,40 +68,3 @@ const formatTime = (ts: number) => {
   return new Date(ms).toLocaleString();
 };
 </script>
-
-<style scoped lang="scss">
-.missed-runs-desc {
-  margin-bottom: 12px;
-  color: var(--anime-text-secondary);
-  font-size: 14px;
-}
-
-.missed-runs-list {
-  max-height: 320px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.missed-runs-item {
-  border: 1px solid var(--anime-border);
-  border-radius: 8px;
-  padding: 10px;
-}
-
-.name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--anime-text-primary);
-}
-
-.meta {
-  margin-top: 6px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  color: var(--anime-text-secondary);
-  font-size: 12px;
-}
-</style>

@@ -55,19 +55,32 @@ shortcuts: [
 <button class="btn-icon">...</button>
 ```
 
-## 组件库样式：不要写 `.el-*` 覆盖
+## 组件库：`components/ui/`（reka-ui + 设计 token）
 
-本仓的 element-plus 是 **vendored 自有组件库**（`packages/kabegame-element-plus/`），不是第三方依赖。
-所以上面「仅在第三方覆盖时才写 CSS」这条**不适用于它**：
+前端只有这一套组件库（界面重构 P9 起 element-plus / Vant 已删除，不要再引入任何组件库；缺组件就在 `components/ui/`
+里用 Reka 原语写）。
 
-- **给组件加主题** → 改 `packages/kabegame-element-plus/src/theme-chalk/src/common/var.scss` 的
-  token map，让 `--anime-*` 作为唯一色彩真源（方向恒为 `--kb-el-* ← --anime-*`）。
-- **改组件形状/布局** → 改 `theme-chalk/src/<组件>.scss`。
-- **自己新写的组件** → SFC `<style scoped>`，不要进 theme-chalk。
-- ❌ **业务侧不要再出现 `.el-*` 选择器**。存量 208 行正在清理，清零后才能把 namespace 开关翻成 `kb-el`；
-  新增一行就是给那次切换加一份债。
-
-细节与踩坑见 [cocs/ui/COMPONENT_LIBRARY.md](../../cocs/ui/COMPONENT_LIBRARY.md)。
+- 界面一律用 `apps/kabegame/src/components/ui/`（`reka-ui` + UnoCSS，从 `@/components/ui` 导入），图标用 `@lucide/vue`。
+- 颜色、圆角、阴影取 `apps/kabegame/src/styles/tokens.css` 的 `--kb-*`：`text-kb-fg`、`bg-kb-hover`、
+  `border-kb-line`、`rounded-kb-md`、`shadow-kb-pop`……透明度修饰（`/50`）对它们不生效。
+- 没有 Tailwind reset：`border` 配 `border-solid`；没有 tailwind-merge：不要在调用处叠同类工具类去覆盖组件变体，要不同就加变体。
+- `anime-theme.css` 只剩旧主题变量（中性的已指向 `--kb-*`）与功能性规则；新代码直接用 `--kb-*`。
+- 提示用 `toast`（`@/components/ui/toast`）、确认 / 输入框用 `messageBox`（`@/components/ui/messageBox`，调用方式同
+  `ElMessageBox`，自己实现、渲染在 `MessageBoxHost`）、加载遮罩在 `<script setup>` 里导入 `vLoading`。
+- 浮层的 z-index 不写死：用 `components/ui/layer.ts` 的 `useLayerZIndex`（打开时向全局计数器取号），层的点外部事件接
+  `keepOpenOnToast`；已有组件都接好了，直接用 Reka 原语写新弹层时照做。页面级处理给浮层让路用 `isInAnyLayer`。
+- 表单校验用 `components/ui/form.ts` 的 `useForm()` 与 `Field` 的 `validator`（返回错误文字）；
+  Reka 的 `Select` / `Combobox` 选项值不能是空字符串（需要时编码，见 `KbSelect`）。
+- 「从选项里选一个值」用 `Combobox`；值就是输入的文字、候选只是捷径（地址栏）用 `Autocomplete`（回车提交原文，方向键选中才选候选）。
+- 过滤 chip 下拉用 `@/components/ui` 的 `KbFilterDropdown`；面板里的子层用 Reka 组件（`Popconfirm`、`Popover`……）就算层内。
+- 底部滚轮选择用 `PickerSheet`（单列 / 多列 / 级联，自写的 scroll-snap 滚轮）。
+- 动作菜单项要按上下文换图标时用 `iconBy(ctx => …)`，渲染处用 `resolveActionIcon`；lucide 图标本身是函数，
+  不能用 `typeof icon === "function"` 判断是不是解析器。
+- 桌面看图用 `Lightbox`；触屏的 photoswipe 在对话框里打开时 `append-to` 那个对话框
+  （Reka 模态打开时 body 不可点、焦点被锁）。
+- 时刻输入用 `TimeField`（v-model `HH:mm`，固定 24 小时制）；原生 `type=time` 在 CEF 下按系统 locale 显示成 12 小时制。
+- `Switch` 没有 `before-change` / `loading`：需要先校验或等后端时传受控的 `:model-value`，在 `@update:model-value` 里写入，进行中用 `disabled`。
+- 详见 [cocs/ui/COMPONENT_LIBRARY.md](../../cocs/ui/COMPONENT_LIBRARY.md)。
 
 ## 与现有样式共存
 

@@ -3,7 +3,6 @@
     :model-value="modelValue"
     :title="resolvedTitle"
     :options="mediaOptions"
-    class="media-picker-drawer"
     @update:model-value="$emit('update:modelValue', $event)"
     @select="handleSelect"
   />
@@ -12,7 +11,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Picture, FolderOpened, VideoPlay } from "@kabegame/element-plus-icons";
+import { FolderOpen, Image as ImageIcon, Video } from "@lucide/vue";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
 import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";
@@ -43,13 +42,13 @@ const mediaOptions = computed<OptionItem[]>(() => [
     id: "image",
     title: t("gallery.selectImage"),
     desc: t("gallery.selectImageDesc"),
-    icon: Picture,
+    icon: ImageIcon,
   },
   {
     id: "video",
     title: t("gallery.selectVideo"),
     desc: t("gallery.selectVideoDesc"),
-    icon: VideoPlay,
+    icon: Video,
   },
   ...(IS_WEB
     ? []
@@ -58,7 +57,7 @@ const mediaOptions = computed<OptionItem[]>(() => [
           id: "folder",
           title: t("gallery.selectFolder"),
           desc: t("gallery.selectFolderDesc"),
-          icon: FolderOpened,
+          icon: FolderOpen,
         },
       ]),
 ]);
@@ -78,22 +77,3 @@ const handleSelect = async (id: string) => {
   emit("select", type);
 };
 </script>
-
-<style lang="scss" scoped>
-.media-picker-drawer {
-  :deep(.el-drawer__header) {
-    margin-bottom: 20px;
-    padding: 20px 20px 0;
-  }
-
-  :deep(.el-drawer__body) {
-    padding: 20px;
-  }
-
-  &:deep(.el-drawer.btt) {
-    .el-drawer__body {
-      padding-bottom: calc(20px + var(--sab, env(safe-area-inset-bottom, 0px)));
-    }
-  }
-}
-</style>

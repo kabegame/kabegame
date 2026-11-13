@@ -1,47 +1,42 @@
 <template>
-  <!-- 安卓：单按钮打开「本地/网络/网页」选择 picker，无下拉箭头 -->
-  <el-button v-if="uiStore.isCompact" type="primary" class="collect-btn" @click="emit('action', { type: 'openMenu' })">
-    <el-icon>
-      <Plus />
-    </el-icon>
+  <!-- 紧凑布局：单按钮打开「本地 / 网络 / 网页」选择 picker，无下拉箭头 -->
+  <Button v-if="uiStore.isCompact" variant="primary" class="ml-1.5" @click="emit('action', { type: 'openMenu' })">
+    <Plus />
     {{ t("gallery.startCollect") }}
-  </el-button>
-  <el-dropdown v-else trigger="click" @command="handleCommand">
-    <el-button type="primary" class="collect-btn">
-      <el-icon>
+  </Button>
+  <DropdownMenu v-else>
+    <DropdownMenuTrigger as-child>
+      <Button variant="primary" class="ml-1.5 pr-2">
         <Plus />
-      </el-icon>
-      {{ t("gallery.startCollect") }}
-      <el-icon class="el-icon--right">
-        <ArrowDown />
-      </el-icon>
-    </el-button>
-    <template #dropdown>
-      <el-dropdown-menu>
-        <el-dropdown-item v-if="!IS_WEB" command="local">
-          <el-icon><FolderOpened /></el-icon>
-          {{ t("gallery.local") }}
-        </el-dropdown-item>
-        <el-dropdown-item command="network">
-          <el-icon><Connection /></el-icon>
-          {{ t("gallery.network") }}
-        </el-dropdown-item>
-        <el-dropdown-item v-if="!IS_WEB" command="webpage">
-          <el-icon><Link /></el-icon>
-          {{ t("gallery.webpage") }}
-        </el-dropdown-item>
-        <el-dropdown-item v-if="!IS_WEB && !IS_ANDROID" command="wallpaper">
-          <el-icon><Picture /></el-icon>
-          {{ t("gallery.wallpaper") }}
-        </el-dropdown-item>
-      </el-dropdown-menu>
-    </template>
-  </el-dropdown>
+        {{ t("gallery.startCollect") }}
+        <ChevronDown class="opacity-70" />
+      </Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent>
+      <DropdownMenuItem v-if="!IS_WEB" @select="select('local')">
+        <FolderOpen />
+        {{ t("gallery.local") }}
+      </DropdownMenuItem>
+      <DropdownMenuItem @select="select('network')">
+        <Globe />
+        {{ t("gallery.network") }}
+      </DropdownMenuItem>
+      <DropdownMenuItem v-if="!IS_WEB" @select="select('webpage')">
+        <Link2 />
+        {{ t("gallery.webpage") }}
+      </DropdownMenuItem>
+      <DropdownMenuItem v-if="!IS_WEB && !IS_ANDROID" @select="select('wallpaper')">
+        <Monitor />
+        {{ t("gallery.wallpaper") }}
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>
 </template>
 
 <script setup lang="ts">
+import { ChevronDown, FolderOpen, Globe, Link2, Monitor, Plus } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
-import { Plus, ArrowDown, FolderOpened, Connection, Link, Picture } from "@kabegame/element-plus-icons";
+import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui";
 import { useUiStore } from "@/stores/ui";
 import { IS_ANDROID, IS_WEB } from "@/env";
 
@@ -53,18 +48,7 @@ const emit = defineEmits<{
 
 const uiStore = useUiStore();
 
-const handleCommand = (command: string) => {
-  emit("action", { type: "select", value: command });
+const select = (value: string) => {
+  emit("action", { type: "select", value });
 };
 </script>
-
-<style scoped lang="scss">
-.collect-btn {
-  box-shadow: var(--anime-shadow);
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--anime-shadow-hover);
-  }
-}
-</style>

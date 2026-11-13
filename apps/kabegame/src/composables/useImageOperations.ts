@@ -1,7 +1,6 @@
 import { type Ref } from "vue";
 import { invoke } from "@/api/rpc";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import type { ImageInfo } from "@/types/image";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/services/albums";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
@@ -52,7 +51,7 @@ export function useImageOperations(
       await openLocalImage(localPath);
     } catch (error) {
       console.error("打开文件失败:", error);
-      ElMessage.error(i18n.global.t("common.openFileFailed"));
+      kameMessage.error(i18n.global.t("common.openFileFailed"));
     }
   };
 
@@ -73,12 +72,12 @@ export function useImageOperations(
   // web 模式：先转成同源 blob URL 再 download，避免跨域直链忽略 download 后跳转到图片页。
   const handleDownloadImage = async (image: ImageInfo) => {
     if (isWpeImage(image)) {
-      ElMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
+      kameMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
       return;
     }
     const url = getImageDownloadUrl(image);
     if (!url) {
-      ElMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
+      kameMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
       return;
     }
     let objectUrl = "";
@@ -96,7 +95,7 @@ export function useImageOperations(
       document.body.removeChild(a);
     } catch (error) {
       console.error("下载图片失败:", error);
-      ElMessage.error(i18n.global.t("common.operationFailed"));
+      kameMessage.error(i18n.global.t("common.operationFailed"));
     } finally {
       if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     }
@@ -105,7 +104,7 @@ export function useImageOperations(
   // 复制图片到剪贴板（不依赖 Tauri 剪贴板插件：本地文件用后端 copy_image_to_clipboard，否则用 navigator.clipboard）
   const handleCopyImage = async (image: ImageInfo) => {
     if (isWpeImage(image)) {
-      ElMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
+      kameMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
       return;
     }
     try {
@@ -202,25 +201,25 @@ export function useImageOperations(
       if (!IS_WEB && localPath) {
         try {
           await invoke("copy_image_to_clipboard", { imageId: image.id });
-          ElMessage.success(i18n.global.t("common.copyImageSuccess"));
+          kameMessage.success(i18n.global.t("common.copyImageSuccess"));
           return;
         } catch (error) {
           console.error("复制图片失败:", error);
-          ElMessage.error(i18n.global.t("common.copyImageFailed"));
+          kameMessage.error(i18n.global.t("common.copyImageFailed"));
           return;
         }
       }
 
       if (!imageUrl) {
-        ElMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
+        kameMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
         return;
       }
 
       await tryCopyByLoadedUrl(imageUrl);
-      ElMessage.success(i18n.global.t("common.copyImageSuccess"));
+      kameMessage.success(i18n.global.t("common.copyImageSuccess"));
     } catch (error) {
       console.error("复制图片失败:", error);
-      ElMessage.error(i18n.global.t("common.copyImageFailed"));
+      kameMessage.error(i18n.global.t("common.copyImageFailed"));
     }
   };
 
@@ -238,11 +237,11 @@ export function useImageOperations(
       await mutate(() => invoke("batch_delete_images", { imageIds }));
       await clearWebBackgroundIfRemoved(imageIds);
 
-      ElMessage.success(i18n.global.t("common.deletedCountSuccess", { count }));
+      kameMessage.success(i18n.global.t("common.deletedCountSuccess", { count }));
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
       console.error("删除失败:", error);
-      ElMessage.error(i18n.global.t("common.deleteFail"));
+      kameMessage.error(i18n.global.t("common.deleteFail"));
     }
   };
 
@@ -257,13 +256,13 @@ export function useImageOperations(
       const imageIds = imagesToProcess.map((img) => img.id);
       await mutate(() => addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds));
 
-      ElMessage.success(
+      kameMessage.success(
         count > 1 ? i18n.global.t("contextMenu.hiddenCount", { count }) : i18n.global.t("contextMenu.hiddenOne"),
       );
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
       console.error("隐藏失败:", error);
-      ElMessage.error(i18n.global.t("contextMenu.hideFailed"));
+      kameMessage.error(i18n.global.t("contextMenu.hideFailed"));
     }
   };
 
@@ -276,7 +275,7 @@ export function useImageOperations(
     const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
     const toChange = imagesToProcess.filter((img) => (img.favorite ?? false) !== desiredFavorite);
     if (toChange.length === 0) {
-      ElMessage.info(desiredFavorite ? i18n.global.t("common.favorited") : i18n.global.t("common.unfavorited"));
+      kameMessage.info(desiredFavorite ? i18n.global.t("common.favorited") : i18n.global.t("common.unfavorited"));
       return;
     }
 
@@ -290,7 +289,7 @@ export function useImageOperations(
     );
     const succeeded = toChange.filter((_, idx) => results[idx]?.status === "fulfilled");
     if (succeeded.length === 0) {
-      ElMessage.error(i18n.global.t("common.operationFailed"));
+      kameMessage.error(i18n.global.t("common.operationFailed"));
       return;
     }
     patch(
@@ -298,7 +297,7 @@ export function useImageOperations(
       { favorite: desiredFavorite },
     );
 
-    ElMessage.success(
+    kameMessage.success(
       desiredFavorite
         ? i18n.global.t("common.favoritedCount", { count: succeeded.length })
         : i18n.global.t("common.unfavoritedCount", { count: succeeded.length }),
@@ -310,13 +309,13 @@ export function useImageOperations(
   // 分享单张图片（Android share sheet / 桌面系统分享）
   const shareImage = async (image: ImageInfo) => {
     if (isWpeImage(image)) {
-      ElMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
+      kameMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
       return;
     }
     try {
       const filePath = image.localPath;
       if (!filePath) {
-        ElMessage.error(i18n.global.t("common.imagePathMissing"));
+        kameMessage.error(i18n.global.t("common.imagePathMissing"));
         return;
       }
       const ext = filePath.split(".").pop()?.toLowerCase() || "";
@@ -326,7 +325,7 @@ export function useImageOperations(
       await invoke("share_file", { filePath, mimeType });
     } catch (error) {
       console.error("分享失败:", error);
-      ElMessage.error(i18n.global.t("common.shareFailed"));
+      kameMessage.error(i18n.global.t("common.shareFailed"));
     }
   };
 
@@ -340,7 +339,7 @@ export function useImageOperations(
       await invoke("open_file_folder", { filePath: image.localPath });
     } catch (error) {
       console.error("打开文件夹失败:", error);
-      ElMessage.error(i18n.global.t("common.openFolderFailed"));
+      kameMessage.error(i18n.global.t("common.openFolderFailed"));
     }
   };
 
@@ -349,7 +348,7 @@ export function useImageOperations(
     try {
       if (IS_WEB && imagesToProcess.length > 0) {
         await setWallpaperOrBackground(imagesToProcess[0].id);
-        ElMessage.success(i18n.global.t("common.wallpaperSetSuccess"));
+        kameMessage.success(i18n.global.t("common.wallpaperSetSuccess"));
         galleryViewRef.value?.clearSelection?.();
         return;
       }
@@ -382,7 +381,7 @@ export function useImageOperations(
             typeof error === "string"
               ? error
               : error?.message || String(error) || i18n.global.t("common.addToAlbumFailed");
-          ElMessage.error(errorMessage);
+          kameMessage.error(errorMessage);
           throw error;
         }
 
@@ -395,7 +394,7 @@ export function useImageOperations(
         // 有多个壁纸目标时提示里带上是哪块屏
         const screen = pickedScreenName(target);
         const params = { name: albumName, count: imageIds.length };
-        ElMessage.success(
+        kameMessage.success(
           screen
             ? i18n.global.t("gallery.rotationStartedWithCountOn", { ...params, screen })
             : i18n.global.t("gallery.rotationStartedWithCount", params),
@@ -404,7 +403,7 @@ export function useImageOperations(
         // 单选：直接设置壁纸。这张图需要别的壁纸模式时会先引导切换，切换后原目标可能不再活跃，
         // 以实际设到的目标为准
         const screen = pickedScreenName(await setWallpaperOrBackground(imagesToProcess[0].id, target));
-        ElMessage.success(
+        kameMessage.success(
           screen
             ? i18n.global.t("common.wallpaperSetSuccessOn", { screen })
             : i18n.global.t("common.wallpaperSetSuccess"),
@@ -418,7 +417,7 @@ export function useImageOperations(
       console.error("设置壁纸失败:", error);
       // 提取友好的错误信息
       const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "未知错误";
-      ElMessage.error(`${i18n.global.t("common.wallpaperSetFailed")}: ${errorMessage}`);
+      kameMessage.error(`${i18n.global.t("common.wallpaperSetFailed")}: ${errorMessage}`);
     }
   };
 

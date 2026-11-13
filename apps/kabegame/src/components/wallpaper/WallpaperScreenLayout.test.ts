@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { mount } from "@vue/test-utils";
-import { defineComponent, h, nextTick, reactive, ref } from "vue";
+import { nextTick, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WallpaperDisplayMode, WallpaperScreen, WallpaperTargets } from "@/utils/wallpaperTargets";
 import WallpaperScreenLayout from "./WallpaperScreenLayout.vue";
@@ -48,13 +48,6 @@ function screen(id: string, overrides: Partial<WallpaperScreen> = {}): Wallpaper
 const MAIN = screen("main", { primary: true });
 const SIDE = screen("side", { x: 1512, y: 82, width: 1440, height: 900, pixelWidth: 2880, pixelHeight: 1800 });
 
-/** 「忘记」按钮的替身（组件库按钮是全局注册的，测试里没有） */
-const ElButton = defineComponent({
-  setup(_props, { slots }) {
-    return () => h("button", { class: "forget" }, slots.default?.());
-  },
-});
-
 const wrappers: ReturnType<typeof mount>[] = [];
 function mountLayout(props: {
   displayMode: WallpaperDisplayMode;
@@ -62,10 +55,7 @@ function mountLayout(props: {
   defaultScreen?: string | null;
   showDisconnected?: boolean;
 }) {
-  const wrapper = mount(WallpaperScreenLayout, {
-    props,
-    global: { components: { ElButton } },
-  });
+  const wrapper = mount(WallpaperScreenLayout, { props });
   wrappers.push(wrapper);
   return wrapper;
 }
@@ -185,8 +175,8 @@ describe("WallpaperScreenLayout", () => {
     const wrapper = mountLayout({ displayMode: "single", selected: "screen:main", showDisconnected: true });
     expect(wrapper.text()).toContain("settings.screenDisconnected");
     expect(wrapper.text()).toContain("01234567");
-    expect(wrapper.findAll(".forget")).toHaveLength(1);
-    await wrapper.find(".forget").trigger("click");
+    expect(wrapper.findAll('[data-testid="screen-forget"]')).toHaveLength(1);
+    await wrapper.find('[data-testid="screen-forget"]').trigger("click");
     expect(env.invoke).toHaveBeenCalledWith("forget_wallpaper_target", { targetId: "screen:0123456789ABCDEF" });
   });
 });

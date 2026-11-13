@@ -14,15 +14,16 @@
       @select="emit('select', $event)"
     >
       <template #actions>
-        <button
-          type="button"
-          :title="t('plugins.detail.tocCollapse')"
-          :aria-label="t('plugins.detail.tocCollapse')"
-          class="w-22px h-22px border-none rounded-8px bg-transparent text-[var(--anime-text-muted)] flex items-center justify-center cursor-pointer hover:bg-[color-mix(in_srgb,var(--anime-primary)_10%,transparent)] hover:text-[var(--anime-primary)]"
-          @click="emit('collapse')"
-        >
-          <el-icon :size="14"><ArrowLeft /></el-icon>
-        </button>
+        <Tooltip :content="t('plugins.detail.tocCollapse')">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            :aria-label="t('plugins.detail.tocCollapse')"
+            @click="emit('collapse')"
+          >
+            <ChevronLeft />
+          </Button>
+        </Tooltip>
       </template>
     </KbMenuList>
   </KbResizable>
@@ -30,7 +31,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ArrowLeft } from "@kabegame/element-plus-icons";
+import { ChevronLeft } from "@lucide/vue";
+import { Button, Tooltip } from "@/components/ui";
 import { useI18n } from "@kabegame/i18n";
 import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";

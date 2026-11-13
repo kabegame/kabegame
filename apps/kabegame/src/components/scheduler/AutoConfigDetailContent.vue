@@ -1,194 +1,146 @@
 <template>
-  <div class="auto-config-detail">
-    <el-descriptions
-      :title="t('autoConfig.detailSectionMeta')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item :label="t('autoConfig.detailColConfigId')" :span="2">
-        <span class="break-all mono">{{ config.id }}</span>
-      </el-descriptions-item>
-      <el-descriptions-item :label="t('common.name')" :span="2">
-        <span class="break-all">{{ resolveText(config.name) }}</span>
-      </el-descriptions-item>
-      <el-descriptions-item v-if="config.description" :label="t('common.description')" :span="2">
-        <span class="break-all">{{ config.description }}</span>
-      </el-descriptions-item>
-      <el-descriptions-item v-if="showCreatedAtRow" :label="t('autoConfig.detailColCreatedAt')" :span="2">
-        {{ formatTs(config.createdAt) }}
-      </el-descriptions-item>
-      <el-descriptions-item v-if="config.url" :label="t('autoConfig.detailColUrl')" :span="2">
-        <span class="break-all">{{ config.url }}</span>
-      </el-descriptions-item>
-    </el-descriptions>
+  <div class="flex flex-col gap-4 pb-1">
+    <section>
+      <h4 :class="SECTION_TITLE">{{ t("autoConfig.detailSectionMeta") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList>
+          <DescriptionItem :label="t('autoConfig.detailColConfigId')">
+            <span class="break-all font-mono text-[12px]">{{ config.id }}</span>
+          </DescriptionItem>
+          <DescriptionItem :label="t('common.name')">
+            <span class="break-all">{{ resolveText(config.name) }}</span>
+          </DescriptionItem>
+          <DescriptionItem v-if="config.description" :label="t('common.description')">
+            <span class="break-all">{{ config.description }}</span>
+          </DescriptionItem>
+          <DescriptionItem v-if="showCreatedAtRow" :label="t('autoConfig.detailColCreatedAt')">
+            {{ formatTs(config.createdAt) }}
+          </DescriptionItem>
+          <DescriptionItem v-if="config.url" :label="t('autoConfig.detailColUrl')">
+            <span class="break-all">{{ config.url }}</span>
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
 
-    <el-descriptions
-      :title="t('tasks.taskRunParamsSectionPlugin')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item :label="t('tasks.taskRunParamsColSource')" :span="2">
-        <div class="plugin-source-cell">
-          <div class="plugin-icon-box" aria-hidden="true">
-            <el-image v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" fit="contain" class="plugin-icon-img" />
-            <el-icon v-else class="plugin-icon-fallback">
-              <Grid />
-            </el-icon>
-          </div>
-          <span class="plugin-name-text">{{ getPluginName(config.pluginId) }}</span>
+    <section>
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionPlugin") }}</h4>
+      <!-- 来源只有一行，不套键值列表：标签与图标基线对不齐（同 TaskRunParamsContent） -->
+      <div :class="SECTION_BOX" class="flex min-w-0 items-center gap-3">
+        <div
+          class="grid size-11 shrink-0 place-items-center overflow-hidden rounded-kb-md border border-solid border-kb-line bg-kb-fill-light text-kb-fg-subtle [&_svg]:size-5"
+          aria-hidden="true"
+        >
+          <img v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" alt="" class="size-full object-contain" />
+          <Puzzle v-else />
         </div>
-      </el-descriptions-item>
-    </el-descriptions>
+        <span class="min-w-0 break-words text-[14px] font-600 text-kb-fg">{{ getPluginName(config.pluginId) }}</span>
+      </div>
+    </section>
 
-    <el-descriptions
+    <section
       v-if="
         config.outputDir ||
         config.outputAlbumId ||
         config.maxConcurrentDownloads != null ||
         config.isDryRun !== undefined
       "
-      :title="t('tasks.taskRunParamsSectionOutput')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
     >
-      <el-descriptions-item v-if="config.outputDir" :label="t('tasks.taskRunParamsColOutputDir')" :span="2">
-        <span class="break-all">{{ config.outputDir }}</span>
-      </el-descriptions-item>
-      <el-descriptions-item v-if="config.outputAlbumId" :label="t('albums.outputAlbum')" :span="2">
-        <span class="break-all">{{ outputAlbumName || config.outputAlbumId }}</span>
-      </el-descriptions-item>
-      <el-descriptions-item
-        v-if="config.maxConcurrentDownloads != null"
-        :label="t('tasks.taskRunParamsColMaxConcurrentDownloads')"
-        :span="2"
-      >
-        {{ config.maxConcurrentDownloads }}
-      </el-descriptions-item>
-      <el-descriptions-item :label="t('tasks.taskRunParamsColDryRun')" :span="2">
-        {{ config.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
-      </el-descriptions-item>
-      <el-descriptions-item :label="t('tasks.taskRunParamsColRetry')" :span="2">
-        {{
-          (config.retryCount ?? 0) > 0
-            ? t("tasks.taskRunParamsRetryTimes", { n: config.retryCount })
-            : t("autoConfig.disabled")
-        }}
-      </el-descriptions-item>
-    </el-descriptions>
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionOutput") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList>
+          <DescriptionItem v-if="config.outputDir" :label="t('tasks.taskRunParamsColOutputDir')">
+            <span class="break-all">{{ config.outputDir }}</span>
+          </DescriptionItem>
+          <DescriptionItem v-if="config.outputAlbumId" :label="t('albums.outputAlbum')">
+            <span class="break-all">{{ outputAlbumName || config.outputAlbumId }}</span>
+          </DescriptionItem>
+          <DescriptionItem
+            v-if="config.maxConcurrentDownloads != null"
+            :label="t('tasks.taskRunParamsColMaxConcurrentDownloads')"
+          >
+            {{ config.maxConcurrentDownloads }}
+          </DescriptionItem>
+          <DescriptionItem :label="t('tasks.taskRunParamsColDryRun')">
+            {{ config.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
+          </DescriptionItem>
+          <DescriptionItem :label="t('tasks.taskRunParamsColRetry')">
+            {{
+              (config.retryCount ?? 0) > 0
+                ? t("tasks.taskRunParamsRetryTimes", { n: config.retryCount })
+                : t("autoConfig.disabled")
+            }}
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
 
-    <div
-      ref="scheduleSectionRef"
-      :class="{
-        'schedule-detail--schedule-off':
-          !config.scheduleEnabled &&
-          (config.scheduleSpec?.mode === 'interval' ||
-            config.scheduleSpec?.mode === 'hourly' ||
-            config.scheduleSpec?.mode === 'daily' ||
-            config.scheduleSpec?.mode === 'weekly'),
-      }"
-    >
-      <el-descriptions :title="t('autoConfig.schedule')" :column="1" border size="small" class="params-desc-block">
-        <el-descriptions-item :label="t('autoConfig.scheduleEnabled')" :span="2">
-          {{ config.scheduleEnabled ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
-        </el-descriptions-item>
-        <template
-          v-if="
-            config.scheduleEnabled ||
-            config.scheduleSpec?.mode === 'interval' ||
-            config.scheduleSpec?.mode === 'hourly' ||
-            config.scheduleSpec?.mode === 'daily' ||
-            config.scheduleSpec?.mode === 'weekly'
-          "
-        >
-          <el-descriptions-item :label="t('autoConfig.mode')" :span="2">
-            {{ scheduleModeTitle }}
-          </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.scheduleSpec?.mode === 'hourly'"
-            :label="t('autoConfig.modeHourly')"
-            :span="2"
-          >
-            {{ t("autoConfig.hourlyAt", { minute: String(config.scheduleSpec.minute).padStart(2, "0") }) }}
-          </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.scheduleSpec?.mode === 'interval'"
-            :label="t('autoConfig.modeInterval')"
-            :span="2"
-          >
-            {{ intervalSummary }}
-          </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.scheduleSpec?.mode === 'daily'"
-            :label="t('autoConfig.modeDaily')"
-            :span="2"
-          >
-            {{ dailySummary }}
-          </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.scheduleSpec?.mode === 'weekly'"
-            :label="t('autoConfig.modeWeekly')"
-            :span="2"
-          >
-            {{ weeklySummary }}
-          </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.schedulePlannedAt != null"
-            :label="t('autoConfig.detailColPlannedAt')"
-            :span="2"
-          >
-            {{ formatTs(config.schedulePlannedAt) }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="showScheduleLastRun" :label="t('autoConfig.lastRunAt')" :span="2">
-            {{ formatTs(config.scheduleLastRunAt) }}
-          </el-descriptions-item>
-        </template>
-      </el-descriptions>
-      <ScheduleProgressBar v-if="config.scheduleEnabled" :config="config" class="acd-detail-schedule-progress" />
-    </div>
+    <section ref="scheduleSectionRef" class="scroll-mt-2">
+      <h4 :class="SECTION_TITLE">{{ t("autoConfig.schedule") }}</h4>
+      <div :class="[SECTION_BOX, { 'opacity-70': scheduleOff }]">
+        <DescriptionList>
+          <DescriptionItem :label="t('autoConfig.scheduleEnabled')">
+            {{ config.scheduleEnabled ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
+          </DescriptionItem>
+          <template v-if="config.scheduleEnabled || hasTimedSpec">
+            <DescriptionItem :label="t('autoConfig.mode')">{{ scheduleModeTitle }}</DescriptionItem>
+            <DescriptionItem v-if="config.scheduleSpec?.mode === 'hourly'" :label="t('autoConfig.modeHourly')">
+              {{ t("autoConfig.hourlyAt", { minute: String(config.scheduleSpec.minute).padStart(2, "0") }) }}
+            </DescriptionItem>
+            <DescriptionItem v-if="config.scheduleSpec?.mode === 'interval'" :label="t('autoConfig.modeInterval')">
+              {{ intervalSummary }}
+            </DescriptionItem>
+            <DescriptionItem v-if="config.scheduleSpec?.mode === 'daily'" :label="t('autoConfig.modeDaily')">
+              {{ dailySummary }}
+            </DescriptionItem>
+            <DescriptionItem v-if="config.scheduleSpec?.mode === 'weekly'" :label="t('autoConfig.modeWeekly')">
+              {{ weeklySummary }}
+            </DescriptionItem>
+            <DescriptionItem v-if="config.schedulePlannedAt != null" :label="t('autoConfig.detailColPlannedAt')">
+              {{ formatTs(config.schedulePlannedAt) }}
+            </DescriptionItem>
+            <DescriptionItem v-if="showScheduleLastRun" :label="t('autoConfig.lastRunAt')">
+              {{ formatTs(config.scheduleLastRunAt) }}
+            </DescriptionItem>
+          </template>
+        </DescriptionList>
+        <ScheduleProgressBar v-if="config.scheduleEnabled" :config="config" class="mt-2.5" />
+      </div>
+    </section>
 
-    <el-descriptions
-      v-if="visibleConfigEntries.length > 0"
-      :title="t('tasks.taskRunParamsSectionConfig')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item
-        v-for="[key, value] in visibleConfigEntries"
-        :key="key"
-        :label="getVarDisplayName(config.pluginId, String(key))"
-        :span="2"
-      >
-        <span class="break-all">{{ formatConfigValue(config.pluginId, String(key), value) }}</span>
-      </el-descriptions-item>
-    </el-descriptions>
+    <section v-if="visibleConfigEntries.length > 0">
+      <h4 :class="SECTION_TITLE">{{ t("tasks.taskRunParamsSectionConfig") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList>
+          <DescriptionItem
+            v-for="[key, value] in visibleConfigEntries"
+            :key="key"
+            :label="getVarDisplayName(config.pluginId, String(key))"
+          >
+            <span class="break-all">{{ formatConfigValue(config.pluginId, String(key), value) }}</span>
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
 
-    <el-descriptions
-      v-if="headerEntries.length > 0"
-      :title="t('autoConfig.detailSectionHeaders')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item v-for="[k, v] in headerEntries" :key="k" :label="k" :span="2">
-        <span class="break-all">{{ v }}</span>
-      </el-descriptions-item>
-    </el-descriptions>
+    <section v-if="headerEntries.length > 0">
+      <h4 :class="SECTION_TITLE">{{ t("autoConfig.detailSectionHeaders") }}</h4>
+      <div :class="SECTION_BOX">
+        <DescriptionList>
+          <DescriptionItem v-for="[k, v] in headerEntries" :key="k" :label="k">
+            <span class="break-all">{{ v }}</span>
+          </DescriptionItem>
+        </DescriptionList>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { Grid } from "@kabegame/element-plus-icons";
+import { Puzzle } from "@lucide/vue";
+import { DescriptionItem, DescriptionList } from "@/components/ui";
 import ScheduleProgressBar from "./ScheduleProgressBar.vue";
 import { buildVarMetaMapFromPluginConfig, usePluginStore } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
@@ -212,11 +164,22 @@ const pluginStore = usePluginStore();
 
 const scheduleSectionRef = ref<HTMLElement | null>(null);
 
+// 分节外观与任务运行参数（TaskRunParamsContent）一致
+const SECTION_TITLE = "m-0 mb-1.5 text-[12.5px] font-600 text-kb-fg-muted";
+const SECTION_BOX = "box-border rounded-kb-md border border-solid border-kb-line px-3 py-2.5";
+
+const hasTimedSpec = computed(() => {
+  const mode = props.config.scheduleSpec?.mode;
+  return mode === "interval" || mode === "hourly" || mode === "daily" || mode === "weekly";
+});
+/** 定时关着但还留着规则：整块淡一点 */
+const scheduleOff = computed(() => !props.config.scheduleEnabled && hasTimedSpec.value);
+
 /** 插件推荐预设预览（虚拟 RunConfig，`preset:pluginId:filename`）无创建时间 */
 const showCreatedAtRow = computed(() => !props.config.id.startsWith("preset:"));
 
 function scrollScheduleIntoView() {
-  scheduleSectionRef.value?.scrollIntoView({ block: "start", behavior: "smooth" });
+  scheduleSectionRef.value?.scrollIntoView({ block: "start" });
 }
 
 defineExpose({ scrollScheduleIntoView });
@@ -372,83 +335,3 @@ const formatConfigValue = (pluginId: string, key: string, value: any): string =>
   return resolveConfigText(map[s], locale.value) || s;
 };
 </script>
-
-<style scoped lang="scss">
-.auto-config-detail {
-  padding: 2px 0 4px;
-}
-
-.acd-detail-schedule-progress {
-  margin-top: 10px;
-}
-
-.schedule-detail--schedule-off {
-  opacity: 0.72;
-}
-
-.params-desc-block {
-  margin-bottom: 14px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
-}
-
-.plugin-source-cell {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.plugin-icon-box {
-  flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--el-fill-color-light, var(--anime-bg-secondary, #f5f7fa));
-  border: 1px solid var(--el-border-color-lighter, var(--anime-border));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.plugin-icon-img {
-  width: 100%;
-  height: 100%;
-}
-
-.plugin-icon-fallback {
-  font-size: 22px;
-  color: var(--el-text-color-secondary, var(--anime-text-muted));
-}
-
-.plugin-name-text {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--anime-text-primary, var(--el-text-color-primary));
-  word-break: break-word;
-  min-width: 0;
-}
-
-.break-all {
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-.mono {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-}
-
-:deep(.params-desc-block .el-descriptions__label) {
-  width: 112px;
-  font-weight: 500;
-  color: var(--anime-text-secondary, var(--el-text-color-secondary));
-}
-
-:deep(.params-desc-block .el-descriptions__content) {
-  color: var(--anime-text-primary, var(--el-text-color-primary));
-}
-</style>

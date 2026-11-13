@@ -1,107 +1,36 @@
 <template>
-  <!-- 紧凑单行：自动配置卡片侧栏等 -->
-  <div v-if="layout === 'inline'" class="task-summary-row task-summary-row--inline">
-    <div class="task-inline-main-row">
-      <div class="task-summary-inline-grow">
-        <el-tooltip v-if="tooltipContent" placement="top" :show-after="400">
-          <template #content>
-            <div class="task-summary-tooltip">{{ tooltipContent }}</div>
-          </template>
-          <div class="task-inline-inner">
-            <span class="task-inline-name">{{ pluginDisplayName }}</span>
-            <div class="task-inline-stats" @click.stop>
+  <!-- 紧凑单行：自动配置卡片侧栏、重试记录弹出层 -->
+  <div
+    v-if="layout === 'inline'"
+    class="task-summary-row box-border flex w-full min-w-[min(100%,360px)] flex-col gap-1.5 rounded-kb-md border border-solid border-kb-line bg-kb-surface-raised px-2.5 py-2"
+  >
+    <div class="flex w-full min-w-0 items-center gap-2">
+      <div class="min-w-0 flex-1 overflow-hidden">
+        <!-- content 为空时不弹 -->
+        <Tooltip :content="tooltipContent" side="top" multiline>
+          <div class="flex w-full min-w-0 items-center gap-2 overflow-hidden">
+            <span class="min-w-0 max-w-full flex-[1_1_120px] truncate text-[13px] font-500 text-kb-fg">
+              {{ pluginDisplayName }}
+            </span>
+            <div class="inline-flex flex-none items-center text-[12px] leading-none tabular-nums" @click.stop>
               <span
                 v-if="task.isDryRun"
-                class="task-inline-stat count-dedup"
-                :class="{ 'is-zero': dedupN === 0 }"
+                :class="['text-kb-fg-subtle', { 'opacity-40': dedupN === 0 }]"
                 :title="t('tasks.dryRunSkippedCount', { n: dedupN })"
               >
                 {{ dedupN }}
               </span>
               <template v-else>
-                <span
-                  class="task-inline-stat count-success"
-                  :class="{ 'is-zero': successN === 0 }"
-                  :title="t('tasks.totalCount', { n: successN })"
-                >
-                  {{ successN }}
-                </span>
-                <span class="task-inline-sep" aria-hidden="true">/</span>
-                <span
-                  class="task-inline-stat count-failed"
-                  :class="{ 'is-zero': failedN === 0 }"
-                  :title="t('tasks.failedCount', { n: failedN })"
-                >
-                  {{ failedN }}
-                </span>
-                <span class="task-inline-sep" aria-hidden="true">/</span>
-                <span
-                  class="task-inline-stat count-deleted"
-                  :class="{ 'is-zero': deletedN === 0 }"
-                  :title="t('tasks.deletedCount', { n: deletedN })"
-                >
-                  {{ deletedN }}
-                </span>
-                <span class="task-inline-sep" aria-hidden="true">/</span>
-                <span
-                  class="task-inline-stat count-dedup"
-                  :class="{ 'is-zero': dedupN === 0 }"
-                  :title="t('tasks.dedupCount', { n: dedupN })"
-                >
-                  {{ dedupN }}
-                </span>
+                <template v-for="(stat, index) in inlineStats" :key="stat.key">
+                  <span v-if="index > 0" class="select-none px-[3px] text-kb-fg-subtle" aria-hidden="true">/</span>
+                  <span :class="[stat.tone, { 'opacity-40': stat.n === 0 }]" :title="stat.title">{{ stat.n }}</span>
+                </template>
               </template>
             </div>
           </div>
-        </el-tooltip>
-        <div v-else class="task-inline-inner">
-          <span class="task-inline-name">{{ pluginDisplayName }}</span>
-          <div class="task-inline-stats">
-            <span
-              v-if="task.isDryRun"
-              class="task-inline-stat count-dedup"
-              :class="{ 'is-zero': dedupN === 0 }"
-              :title="t('tasks.dryRunSkippedCount', { n: dedupN })"
-            >
-              {{ dedupN }}
-            </span>
-            <template v-else>
-              <span
-                class="task-inline-stat count-success"
-                :class="{ 'is-zero': successN === 0 }"
-                :title="t('tasks.totalCount', { n: successN })"
-              >
-                {{ successN }}
-              </span>
-              <span class="task-inline-sep" aria-hidden="true">/</span>
-              <span
-                class="task-inline-stat count-failed"
-                :class="{ 'is-zero': failedN === 0 }"
-                :title="t('tasks.failedCount', { n: failedN })"
-              >
-                {{ failedN }}
-              </span>
-              <span class="task-inline-sep" aria-hidden="true">/</span>
-              <span
-                class="task-inline-stat count-deleted"
-                :class="{ 'is-zero': deletedN === 0 }"
-                :title="t('tasks.deletedCount', { n: deletedN })"
-              >
-                {{ deletedN }}
-              </span>
-              <span class="task-inline-sep" aria-hidden="true">/</span>
-              <span
-                class="task-inline-stat count-dedup"
-                :class="{ 'is-zero': dedupN === 0 }"
-                :title="t('tasks.dedupCount', { n: dedupN })"
-              >
-                {{ dedupN }}
-              </span>
-            </template>
-          </div>
-        </div>
+        </Tooltip>
       </div>
-      <div class="task-summary-actions">
+      <div class="ml-auto flex shrink-0 items-center gap-0.5">
         <TaskRetryChainPopover
           v-if="retryChain && retryCountN > 0"
           :root-id="retryRootId"
@@ -109,93 +38,67 @@
           @open-task-images="emit('open-task-images', $event)"
           @open-task-log="emit('open-task-log', $event)"
         >
-          <el-button text circle size="small" class="task-action-icon" :title="t('tasks.retryChainTitle')">
-            <el-icon>
-              <RefreshRight />
-            </el-icon>
-          </el-button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            :title="t('tasks.retryChainTitle')"
+            :aria-label="t('tasks.retryChainTitle')"
+          >
+            <History />
+          </Button>
         </TaskRetryChainPopover>
-        <el-button
+        <Button
           v-if="showRunParamsButton"
-          text
-          circle
-          size="small"
-          class="task-action-icon"
+          variant="ghost"
+          size="icon-sm"
           :title="t('tasks.openRunParams')"
+          :aria-label="t('tasks.openRunParams')"
           @click.stop="emit('open-run-params')"
         >
-          <el-icon>
-            <InfoFilled />
-          </el-icon>
-        </el-button>
-        <el-button
-          text
-          circle
-          size="small"
-          class="task-action-icon"
+          <Info />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
           :title="t('tasks.drawerViewImages')"
+          :aria-label="t('tasks.drawerViewImages')"
           @click.stop="emit('open-task-images', task.id)"
         >
-          <el-icon>
-            <Picture />
-          </el-icon>
-        </el-button>
-        <el-button
-          text
-          circle
-          size="small"
-          class="task-action-icon"
+          <ImageIcon />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
           :title="t('tasks.drawerViewLog')"
+          :aria-label="t('tasks.drawerViewLog')"
           @click.stop="emit('open-task-log', task.id)"
         >
-          <el-icon>
-            <Document />
-          </el-icon>
-        </el-button>
-        <el-tag v-if="showStatusTag" :type="statusTagType(task.status)" size="small">
+          <FileText />
+        </Button>
+        <Tag v-if="showStatusTag" :tone="statusTone(task.status)" size="sm" class="ml-1">
           {{ statusLabel(task.status) }}
-        </el-tag>
+        </Tag>
       </div>
     </div>
-    <div
-      v-if="shouldShowInlineProgressBar"
-      class="task-inline-progress"
-      :class="{
-        'task-progress--canceled-bar': isCanceledTaskStatus(task.status),
-        'task-progress--failed-bar': task.status === 'failed',
-      }"
-    >
-      <el-progress
-        :percentage="inlineProgressPercent"
-        :stroke-width="3"
-        :show-text="false"
-        :color="inlineProgressColor"
-      />
-    </div>
+    <Progress v-if="shouldShowInlineProgressBar" :value="inlineProgressPercent" :tone="progressTone" :height="3" />
   </div>
 
-  <!-- 与任务抽屉条目头部一致：双行 + 可选定时按钮 -->
-  <div v-else class="task-summary-row task-summary-row--stacked">
-    <div class="task-summary-stacked-left">
-      <div class="task-name-row">
-        <el-button
+  <!-- 任务抽屉条目头部：双行 + 可选定时按钮 -->
+  <div v-else class="task-summary-row flex items-start justify-between gap-2">
+    <div class="flex min-w-0 flex-1 flex-col gap-1">
+      <div class="flex min-w-0 items-center gap-1.5">
+        <Button
           v-if="showScheduleButton"
-          text
-          circle
-          size="small"
-          class="task-schedule-btn"
+          variant="ghost"
+          size="icon-xs"
           :aria-label="scheduledTaskAriaLabel"
           :title="scheduledTaskAriaLabel"
           @click.stop="emit('open-schedule-config', task)"
         >
-          <el-icon>
-            <AlarmClock />
-          </el-icon>
-        </el-button>
-        <div class="task-name">{{ pluginDisplayName }}</div>
-        <el-tag v-if="task.isDryRun" size="small" type="warning" effect="plain">
-          {{ t("tasks.dryRunBadge") }}
-        </el-tag>
+          <AlarmClock />
+        </Button>
+        <div class="min-w-0 truncate text-[14px] font-500 text-kb-fg">{{ pluginDisplayName }}</div>
+        <Tag v-if="task.isDryRun" tone="warning" size="sm">{{ t("tasks.dryRunBadge") }}</Tag>
         <template v-if="retryCountN > 0">
           <TaskRetryChainPopover
             v-if="retryChain"
@@ -204,114 +107,60 @@
             @open-task-images="emit('open-task-images', $event)"
             @open-task-log="emit('open-task-log', $event)"
           >
-            <el-tag size="small" effect="plain" class="cursor-pointer" :title="t('tasks.retryChainTitle')">
-              {{ retryBadge }}
-            </el-tag>
+            <button
+              type="button"
+              class="inline-flex cursor-pointer rounded-kb-sm border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-kb-ring"
+              :title="t('tasks.retryChainTitle')"
+            >
+              <Tag size="sm">
+                <template #icon><History /></template>
+                {{ retryBadge }}
+              </Tag>
+            </button>
           </TaskRetryChainPopover>
-          <el-tag v-else size="small" effect="plain">{{ retryBadge }}</el-tag>
+          <Tag v-else size="sm">{{ retryBadge }}</Tag>
         </template>
       </div>
-      <div class="task-counts">
-        <span
-          v-if="task.isDryRun"
-          class="count-item count-dedup"
-          :class="{ 'is-zero': dedupN === 0 }"
-          :title="t('tasks.dryRunSkippedCount', { n: dedupN })"
-        >
-          <el-icon>
-            <DArrowRight />
-          </el-icon>
-          <span>{{ dedupN }}</span>
-        </span>
-        <template v-else>
-          <span
-            class="count-item count-success"
-            :class="{ 'is-zero': successN === 0 }"
-            :title="t('tasks.totalCount', { n: successN })"
-          >
-            <el-icon>
-              <CircleCheck />
-            </el-icon>
-            <span>{{ successN }}</span>
-          </span>
-          <span
-            class="count-item count-failed"
-            :class="{ 'is-zero': failedN === 0 }"
-            :title="t('tasks.failedCount', { n: failedN })"
-          >
-            <el-icon>
-              <WarningFilled />
-            </el-icon>
-            <span>{{ failedN }}</span>
-          </span>
-          <span
-            class="count-item count-deleted"
-            :class="{ 'is-zero': deletedN === 0 }"
-            :title="t('tasks.deletedCount', { n: deletedN })"
-          >
-            <el-icon>
-              <Delete />
-            </el-icon>
-            <span>{{ deletedN }}</span>
-          </span>
-          <span
-            class="count-item count-dedup"
-            :class="{ 'is-zero': dedupN === 0 }"
-            :title="t('tasks.dedupCount', { n: dedupN })"
-          >
-            <el-icon>
-              <CopyDocument />
-            </el-icon>
-            <span>{{ dedupN }}</span>
-          </span>
-        </template>
-      </div>
+      <TaskCountsInline
+        :success="successN"
+        :failed="failedN"
+        :deleted="deletedN"
+        :dedup="dedupN"
+        :dry-run="task.isDryRun"
+      />
     </div>
-    <div class="task-summary-actions task-summary-actions--stacked">
-      <el-button
+    <div class="ml-auto flex shrink-0 items-center gap-1">
+      <Button
         v-if="showRunParamsButton"
-        text
-        circle
-        size="small"
-        class="task-action-icon"
+        variant="ghost"
+        size="icon-sm"
         :title="t('tasks.openRunParams')"
+        :aria-label="t('tasks.openRunParams')"
         @click.stop="emit('open-run-params')"
       >
-        <el-icon>
-          <InfoFilled />
-        </el-icon>
-      </el-button>
-      <el-button
+        <Info />
+      </Button>
+      <Button
         v-if="!stackedOmitImageLogActions"
-        text
-        circle
-        size="small"
-        class="task-action-icon"
+        variant="ghost"
+        size="icon-sm"
         :title="t('tasks.drawerViewImages')"
+        :aria-label="t('tasks.drawerViewImages')"
         @click.stop="emit('open-task-images', task.id)"
       >
-        <el-icon>
-          <Picture />
-        </el-icon>
-      </el-button>
-      <el-button
+        <ImageIcon />
+      </Button>
+      <Button
         v-if="!stackedOmitImageLogActions"
-        text
-        circle
-        size="small"
-        class="task-action-icon"
+        variant="ghost"
+        size="icon-sm"
         :title="t('tasks.drawerViewLog')"
+        :aria-label="t('tasks.drawerViewLog')"
         @click.stop="emit('open-task-log', task.id)"
       >
-        <el-icon>
-          <Document />
-        </el-icon>
-      </el-button>
-      <div v-if="showStatusTag" class="task-status-wrap">
-        <el-tag :type="statusTagType(task.status)" size="small">
-          {{ statusLabel(task.status) }}
-        </el-tag>
-      </div>
+        <FileText />
+      </Button>
+      <Tag v-if="showStatusTag" :tone="statusTone(task.status)" size="sm">{{ statusLabel(task.status) }}</Tag>
     </div>
   </div>
 </template>
@@ -319,19 +168,13 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import {
-  AlarmClock,
-  CircleCheck,
-  CopyDocument,
-  DArrowRight,
-  Delete,
-  Document,
-  InfoFilled,
-  Picture,
-  RefreshRight,
-  WarningFilled,
-} from "@kabegame/element-plus-icons";
+import { AlarmClock, FileText, History, Image as ImageIcon, Info } from "@lucide/vue";
 import { usePluginStore } from "../../stores/plugins";
+import Button from "@/components/ui/Button.vue";
+import Progress from "@/components/ui/Progress.vue";
+import Tag from "@/components/ui/Tag.vue";
+import Tooltip from "@/components/ui/Tooltip.vue";
+import TaskCountsInline from "./TaskCountsInline.vue";
 
 // 弹出层里也渲染任务行：异步引入，避免两个组件互相 import
 const TaskRetryChainPopover = defineAsyncComponent(() => import("./TaskRetryChainPopover.vue"));
@@ -427,22 +270,37 @@ const inlineProgressPercent = computed(() => {
   return Math.round(Math.min(100, Math.max(0, p)));
 });
 
-const inlineProgressColor = computed((): string | undefined => {
+const progressTone = computed(() => {
   const s = props.task.status;
-  if (s === "failed") return "var(--el-color-danger)";
-  return undefined;
+  if (s === "failed") return "danger";
+  if (isCanceledTaskStatus(s)) return "muted";
+  return "accent";
 });
 
-function statusTagType(s: string): "info" | "warning" | "success" | "danger" | "primary" {
-  const map: Record<string, "info" | "warning" | "success" | "danger" | "primary"> = {
-    pending: "info",
-    running: "warning",
-    waiting_downloads: "warning",
+/** 单行布局的四项计数：成功 / 失败 / 已删除 / 去重，以「/」隔开 */
+const inlineStats = computed(() => [
+  { key: "success", n: successN.value, tone: "text-kb-success", title: t("tasks.totalCount", { n: successN.value }) },
+  { key: "failed", n: failedN.value, tone: "text-kb-danger", title: t("tasks.failedCount", { n: failedN.value }) },
+  {
+    key: "deleted",
+    n: deletedN.value,
+    tone: "text-kb-fg-muted",
+    title: t("tasks.deletedCount", { n: deletedN.value }),
+  },
+  { key: "dedup", n: dedupN.value, tone: "text-kb-fg-subtle", title: t("tasks.dedupCount", { n: dedupN.value }) },
+]);
+
+type StatusTone = "neutral" | "accent" | "success" | "danger";
+
+/** 状态色：运行中强调色、完成成功色、失败危险色，其余中性 */
+function statusTone(s: string): StatusTone {
+  const map: Record<string, StatusTone> = {
+    running: "accent",
+    waiting_downloads: "accent",
     completed: "success",
     failed: "danger",
-    canceled: "primary",
   };
-  return map[s] || "info";
+  return map[s] ?? "neutral";
 }
 
 function statusLabel(s: string): string {
@@ -458,242 +316,3 @@ function statusLabel(s: string): string {
   return key ? t(key) : s;
 }
 </script>
-
-<style scoped lang="scss">
-.task-summary-row {
-  box-sizing: border-box;
-}
-
-.task-summary-row--inline {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  min-width: min(100%, 360px);
-  width: 100%;
-  padding: 8px 10px;
-  background: var(--anime-bg-card, var(--el-fill-color-blank));
-  border: 1px solid var(--anime-border, var(--el-border-color));
-  border-radius: 8px;
-}
-
-.task-inline-main-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  width: 100%;
-}
-
-.task-inline-progress {
-  width: 100%;
-  min-width: 0;
-
-  :deep(.el-progress-bar__outer) {
-    border-radius: 2px;
-  }
-
-  &.task-progress--failed-bar {
-    :deep(.el-progress-bar__inner) {
-      background-color: var(--el-color-danger, #f56c6c) !important;
-      background-image: none !important;
-    }
-  }
-
-  &.task-progress--canceled-bar {
-    :deep(.el-progress-bar__outer) {
-      background-color: var(--el-fill-color-light, #e4e7ed) !important;
-    }
-
-    :deep(.el-progress-bar__inner) {
-      background-color: var(--el-color-info, #909399) !important;
-      background-image: none !important;
-    }
-  }
-}
-
-.task-summary-inline-grow {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.task-inline-inner {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 6px 8px;
-  min-width: 0;
-  width: 100%;
-  overflow: hidden;
-}
-
-.task-inline-name {
-  flex: 1 1 120px;
-  min-width: 0;
-  max-width: 100%;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--anime-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-inline-stats {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.task-inline-stat {
-  flex-shrink: 0;
-  font-size: 12px;
-  line-height: 1;
-  transition: opacity 0.15s ease;
-
-  &.is-zero {
-    opacity: 0.38;
-  }
-
-  &.count-success {
-    color: #67c23a;
-  }
-
-  &.count-failed {
-    color: #f56c6c;
-  }
-
-  &.count-deleted {
-    color: var(--el-text-color-secondary, #909399);
-  }
-
-  &.count-dedup {
-    color: var(--anime-text-muted, var(--el-text-color-secondary));
-  }
-}
-
-.task-inline-sep {
-  flex-shrink: 0;
-  padding: 0 3px;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--anime-text-muted, var(--el-text-color-placeholder));
-  user-select: none;
-}
-
-.task-summary-row--stacked {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.task-summary-stacked-left {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
-}
-
-.task-name-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.task-schedule-btn {
-  color: var(--el-color-warning);
-  flex-shrink: 0;
-}
-
-.task-name {
-  font-weight: 500;
-  color: var(--anime-text-primary);
-  font-size: 15px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-counts {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--anime-text-secondary);
-
-  .count-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-    transition: opacity 0.15s ease;
-
-    .el-icon {
-      font-size: 14px;
-    }
-
-    &.is-zero {
-      opacity: 0.38;
-    }
-  }
-
-  .count-success {
-    color: #67c23a;
-  }
-
-  .count-failed {
-    color: #f56c6c;
-  }
-
-  .count-deleted {
-    color: var(--el-text-color-secondary, #909399);
-
-    .el-icon,
-    span {
-      color: inherit;
-    }
-  }
-
-  .count-dedup {
-    color: var(--anime-text-muted);
-  }
-}
-
-.task-summary-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.task-summary-actions--stacked {
-  gap: 8px;
-}
-
-.task-action-icon {
-  flex-shrink: 0;
-}
-
-.task-status-wrap {
-  display: flex;
-  align-items: center;
-}
-
-.task-summary-tooltip {
-  white-space: pre-wrap;
-  max-width: 300px;
-  line-height: 1.45;
-  font-size: 12px;
-}
-</style>

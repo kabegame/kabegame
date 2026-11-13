@@ -1,23 +1,20 @@
 <template>
-  <!-- Android：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化 -->
-  <AndroidDrawer
-    v-if="uiStore.isCompact"
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
-    @update:model-value="modal.close"
-  >
+  <!-- 紧凑布局（Android / 窄屏 Web）：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化；
+       不传 z-index，由它自己占栈位（层级与 Android 返回键） -->
+  <AndroidDrawer v-if="uiStore.isCompact" :model-value="drawerOpen" @update:model-value="setDrawerOpen">
     <template #header>
-      <div class="task-drawer-android-header">
-        <h3 class="task-drawer-android-title">{{ $t("tasks.taskList") }}</h3>
-        <el-tooltip
-          v-if="IS_ANDROID && isOptimized"
-          :content="$t('common.batteryOptimizationTooltip')"
-          placement="bottom"
-        >
-          <el-button link type="warning" class="!p-1 shrink-0" @click="onBatteryIconClick">
-            <el-icon :size="18"><Lightning /></el-icon>
-          </el-button>
-        </el-tooltip>
+      <div class="flex w-full items-center justify-between gap-2">
+        <h3 class="m-0 text-[17px] font-600 text-kb-fg">{{ $t("tasks.taskList") }}</h3>
+        <Tooltip v-if="IS_ANDROID && isOptimized" :content="$t('common.batteryOptimizationTooltip')">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            :aria-label="$t('common.batteryOptimizationTooltip')"
+            @click="onBatteryIconClick"
+          >
+            <Zap class="text-kb-warning" />
+          </Button>
+        </Tooltip>
       </div>
     </template>
     <TaskDrawerContent
@@ -29,7 +26,7 @@
       :show-loading="showLoading"
       :search="taskDrawerStore.search"
       :plugins="plugins"
-      :active="modal.isOpen.value"
+      :active="drawerOpen"
       :can-open-webview="canOpenWebview"
       @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById"
@@ -42,18 +39,14 @@
       @task-patched="(task) => patch(task.id, task)"
     />
   </AndroidDrawer>
-  <el-drawer
+  <!-- 宽屏：右侧面板（Sheet 自己接 Esc、点遮罩与 Android 返回键） -->
+  <Sheet
     v-else
-    :model-value="modal.isOpen.value"
-    :z-index="modal.zIndex.value"
+    :open="drawerOpen"
     :title="$t('tasks.taskList')"
-    size="460px"
-    direction="rtl"
-    :with-header="true"
-    :append-to-body="true"
-    :modal-class="'task-drawer-modal'"
-    class="task-drawer drawer-max-width"
-    @update:model-value="modal.close"
+    :size="460"
+    body-class="flex flex-col"
+    @update:open="setDrawerOpen"
   >
     <TaskDrawerContent
       ref="drawerContentRef"
@@ -64,7 +57,7 @@
       :show-loading="showLoading"
       :search="taskDrawerStore.search"
       :plugins="plugins"
-      :active="modal.isOpen.value"
+      :active="drawerOpen"
       :can-open-webview="canOpenWebview"
       @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById"
@@ -76,33 +69,25 @@
       @update:search="taskDrawerStore.search = $event"
       @task-patched="(task) => patch(task.id, task)"
     />
-  </el-drawer>
+  </Sheet>
 
-  <el-dialog
-    :model-value="saveConfigModal.isOpen.value"
-    :z-index="saveConfigModal.zIndex.value"
-    :title="$t('tasks.saveAsConfig')"
-    width="520px"
-    :close-on-click-modal="false"
-    class="save-config-dialog"
-    @update:model-value="saveConfigModal.close"
-    @close="resetSaveConfigForm"
-  >
-    <el-form label-width="80px">
-      <el-form-item :label="$t('common.name')" required>
-        <el-input v-model="saveConfigName" :placeholder="$t('common.configNamePlaceholder')" />
-      </el-form-item>
-      <el-form-item :label="$t('common.description')">
-        <el-input v-model="saveConfigDescription" :placeholder="$t('common.configDescPlaceholder')" />
-      </el-form-item>
-    </el-form>
+  <Dialog v-model:open="saveConfigOpen" :title="$t('tasks.saveAsConfig')" :width="520" :close-on-overlay="false">
+    <div class="flex flex-col gap-4">
+      <Field :label="$t('common.name')" required>
+        <Input v-model="saveConfigName" :placeholder="$t('common.configNamePlaceholder')" />
+      </Field>
+      <Field :label="$t('common.description')">
+        <Input v-model="saveConfigDescription" :placeholder="$t('common.configDescPlaceholder')" />
+      </Field>
+    </div>
     <template #footer>
-      <el-button @click="saveConfigModal.close()">{{ $t("common.cancel") }}</el-button>
-      <el-button type="primary" :loading="savingConfig" @click="confirmSaveTaskAsConfig">
+      <Button @click="saveConfigOpen = false">{{ $t("common.cancel") }}</Button>
+      <Button variant="primary" :disabled="savingConfig" @click="confirmSaveTaskAsConfig">
+        <Spinner v-if="savingConfig" :size="14" />
         {{ $t("common.save") }}
-      </el-button>
+      </Button>
     </template>
-  </el-dialog>
+  </Dialog>
 
   <Teleport to="body">
     <TaskContextMenu
@@ -122,9 +107,8 @@ import { canOpenTaskWebview } from "@/utils/webpageCollect";
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { Lightning } from "@kabegame/element-plus-icons";
+import { kameMessage } from "@/utils/kameMessage";
+import { Zap } from "@lucide/vue";
 import { invoke } from "@/api/rpc";
 import { useRoute, useRouter } from "vue-router";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
@@ -143,6 +127,14 @@ import { useTaskRerun } from "@/composables/useTaskRerun";
 import { usePagedTaskList } from "@/composables/usePagedTaskList";
 import { taskSearchPath } from "@/services/tasks";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
+import { messageBox } from "@/components/ui/messageBox";
+import Button from "@/components/ui/Button.vue";
+import Dialog from "@/components/ui/Dialog.vue";
+import Field from "@/components/ui/Field.vue";
+import Input from "@/components/ui/Input.vue";
+import Sheet from "@/components/ui/Sheet.vue";
+import Spinner from "@/components/ui/Spinner.vue";
+import Tooltip from "@/components/ui/Tooltip.vue";
 
 interface Props {
   modelValue: boolean;
@@ -177,17 +169,16 @@ const taskList = usePagedTaskList({
 });
 const { items: tasks, total, hasMore, loading, showLoading, loadMore, patch, refresh, start, stop } = taskList;
 
-const modal = useModal({ onClose: () => emit("update:modelValue", false) });
-watch(
-  () => props.modelValue,
-  (v) => (v ? modal.open() : modal.close()),
-  { immediate: true },
-);
+// 开关状态只有 props.modelValue 一份；两种承载（AndroidDrawer / Sheet）各自接返回栈与层级，这里不再占栈位
+const drawerOpen = computed(() => props.modelValue);
+function setDrawerOpen(open: boolean) {
+  if (!open && props.modelValue) emit("update:modelValue", false);
+}
 
 const batteryStore = useBatteryOptimizationStore();
 const { isOptimized } = storeToRefs(batteryStore);
 
-watch(modal.isOpen, (open) => {
+watch(drawerOpen, (open) => {
   if (open) void start();
   else stop();
   if (open && IS_ANDROID) {
@@ -210,7 +201,10 @@ const contextMenuTask = ref<CrawlTask | null>(null);
 const drawerContentRef = ref<InstanceType<typeof TaskDrawerContent> | null>(null);
 
 // 保存为运行配置弹窗
-const saveConfigModal = useModal();
+const saveConfigOpen = ref(false);
+watch(saveConfigOpen, (open) => {
+  if (!open) resetSaveConfigForm();
+});
 const savingConfig = ref(false);
 const saveConfigTask = ref<CrawlTask | null>(null);
 const saveConfigName = ref("");
@@ -297,7 +291,7 @@ const openSaveConfigDialog = (task: CrawlTask) => {
   saveConfigTask.value = task;
   saveConfigName.value = pluginName;
   saveConfigDescription.value = "";
-  saveConfigModal.open();
+  saveConfigOpen.value = true;
 };
 
 const confirmSaveTaskAsConfig = async () => {
@@ -305,7 +299,7 @@ const confirmSaveTaskAsConfig = async () => {
   if (!task) return;
   const name = saveConfigName.value.trim();
   if (!name) {
-    ElMessage.warning(t("tasks.enterConfigName"));
+    kameMessage.warning(t("tasks.enterConfigName"));
     return;
   }
   savingConfig.value = true;
@@ -324,12 +318,12 @@ const confirmSaveTaskAsConfig = async () => {
       retryCount: task.retryCount,
       scheduleEnabled: false,
     });
-    ElMessage.success(t("tasks.saveConfigSuccess"));
-    saveConfigModal.close();
+    kameMessage.success(t("tasks.saveConfigSuccess"));
+    saveConfigOpen.value = false;
     resetSaveConfigForm();
   } catch (error) {
     console.error("保存为配置失败:", error);
-    ElMessage.error(t("tasks.saveFailed"));
+    kameMessage.error(t("tasks.saveFailed"));
   } finally {
     savingConfig.value = false;
   }
@@ -354,7 +348,7 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
   () => taskDrawerStore.search,
   () => {
-    if (!modal.isOpen.value) return;
+    if (!drawerOpen.value) return;
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       searchTimer = null;
@@ -370,7 +364,7 @@ const handleStopTaskById = async (taskId: string) => {
   if (!task) return;
   try {
     await crawlerStore.stopTask(task.id);
-    ElMessage.info(t("tasks.taskStopRequested"));
+    kameMessage.info(t("tasks.taskStopRequested"));
   } catch (error) {
     // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
     console.error("停止任务失败:", error);
@@ -380,7 +374,7 @@ const handleStopTaskById = async (taskId: string) => {
 /** 右键菜单「停止」没有可挂靠的叉号，仍用确认弹窗 */
 const handleCancelTaskById = async (taskId: string) => {
   try {
-    await ElMessageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
+    await messageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
   } catch {
     return;
   }
@@ -392,20 +386,20 @@ const handleDeleteTaskById = async (taskId: string) => {
   if (!task) return;
   // 运行中的任务须先停止，抽屉不再提供「停止并删除」
   if (task.status === "running" || task.status === "waiting_downloads") {
-    ElMessage.warning(t("tasks.drawerDeleteTaskRunning"));
+    kameMessage.warning(t("tasks.drawerDeleteTaskRunning"));
     return;
   }
   trackTaskDrawerAction("delete_task", task);
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
-    await ElMessageBox.confirm(t("tasks.deleteTaskConfirm"), t("tasks.confirmDelete"), { type: "warning" });
+    await messageBox.confirm(t("tasks.deleteTaskConfirm"), t("tasks.confirmDelete"), { type: "warning" });
     await crawlerStore.deleteTask(task.id);
     refresh();
     taskDrawerStore.refreshCounts();
-    ElMessage.success(t("tasks.taskDeleted"));
+    kameMessage.success(t("tasks.taskDeleted"));
   } catch (error) {
     if (error !== "cancel") {
-      ElMessage.error(t("tasks.deleteFailed"));
+      kameMessage.error(t("tasks.deleteFailed"));
     }
   }
 };
@@ -426,18 +420,18 @@ const handleOpenTaskImagesById = (taskId: string) => {
     });
   }
   requestAnimationFrame(() => {
-    modal.close();
+    setDrawerOpen(false);
   });
 };
 
 const handleOpenTaskScheduleConfig = (task: any) => {
   const runConfigId = String(task?.runConfigId ?? "").trim();
   if (!runConfigId) {
-    ElMessage.warning(t("autoConfig.configDeleted"));
+    kameMessage.warning(t("autoConfig.configDeleted"));
     return;
   }
   if (task.runConfigName == null) {
-    ElMessage.warning(t("autoConfig.configDeleted"));
+    kameMessage.warning(t("autoConfig.configDeleted"));
     return;
   }
   autoConfigDialog.openExisting(runConfigId, "view", { scrollSchedule: true });
@@ -445,7 +439,7 @@ const handleOpenTaskScheduleConfig = (task: any) => {
 
 const handleDeleteAllTasks = async () => {
   if (nonRunningTasksCount.value === 0) {
-    ElMessage.warning(t("tasks.noTasksToClear"));
+    kameMessage.warning(t("tasks.noTasksToClear"));
     return;
   }
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
@@ -463,73 +457,18 @@ const handleDeleteAllTasks = async () => {
             running: runningCount,
           })
         : t("tasks.clearAllTasksConfirm", { count: deletableCount });
-    await ElMessageBox.confirm(msg, t("tasks.clearAllTasksTitle"), { type: "warning" });
+    await messageBox.confirm(msg, t("tasks.clearAllTasksTitle"), { type: "warning" });
 
     // 调用后端命令批量清除
     const result = await invoke<{ taskIds: string[]; count: number }>("clear_finished_tasks");
     refresh();
     taskDrawerStore.refreshCounts();
-    ElMessage.success(t("tasks.tasksCleared", { count: result.count }));
+    kameMessage.success(t("tasks.tasksCleared", { count: result.count }));
   } catch (error) {
     if (error !== "cancel") {
       console.error("清除任务失败:", error);
-      ElMessage.error(t("tasks.clearFailed"));
+      kameMessage.error(t("tasks.clearFailed"));
     }
   }
 };
 </script>
-
-<style lang="scss">
-/* 图片路径 tooltip 样式 */
-.image-path-tooltip {
-  max-width: 400px;
-  padding: 8px 12px;
-}
-
-.tooltip-content {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  line-height: 1.4;
-}
-
-.tooltip-line {
-  word-break: break-all;
-  font-size: 12px;
-}
-
-/* 防止 drawer 遮罩闪烁 */
-.task-drawer-modal {
-  /* 确保遮罩层有稳定的初始状态，避免闪烁 */
-  will-change: opacity;
-  backface-visibility: hidden;
-}
-
-.task-drawer-android-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-}
-
-.task-drawer-android-title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-/* 让抽屉主体参与 flex 高度传递，TaskDrawerContent 内「正在下载」列表才能 overflow 滚动 */
-.task-drawer.el-drawer {
-  display: flex;
-  flex-direction: column;
-}
-
-.task-drawer :deep(.el-drawer__body) {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-</style>

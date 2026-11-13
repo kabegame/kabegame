@@ -43,7 +43,6 @@
   <ImageDetailDialog
     v-if="IS_ANDROID"
     :open="imageDetailDialog.isOpen.value"
-    :z-index="imageDetailDialog.zIndex.value"
     :image="detailImage"
     :plugins="plugins"
     @close="imageDetailDialog.close()"
@@ -56,7 +55,6 @@
   <!-- remove / deleteFile 确认框：文案与执行语义由 adapter 决定 -->
   <RemoveImagesConfirmDialog
     :open="removeDialog.isOpen.value"
-    :z-index="removeDialog.zIndex.value"
     :message="removeDialogText?.message ?? ''"
     :title="removeDialogText?.title"
     :confirm-text="removeDialogText?.confirmText"
@@ -67,7 +65,6 @@
   <!-- 加入画册（右键菜单 imageIds / header 一键加入 taskId） -->
   <AddToAlbumDialog
     :open="addToAlbumDialog.isOpen.value"
-    :z-index="addToAlbumDialog.zIndex.value"
     :image-ids="addToAlbumImageIds"
     :task-id="addToAlbumTaskId"
     :exclude-album-ids="addToAlbumExcludeIds"
@@ -121,7 +118,7 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useActiveWallpaperImageIds } from "@/composables/useWallpaperTarget";
 import { useSettingsStore } from "@/stores/settings";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { rowToImageInfo } from "@/utils/imageRow";
 import { withGalleryPrefix } from "@/utils/path";
 import { diffById } from "@/utils/listDiff";
@@ -1050,7 +1047,7 @@ function handlePreviewSwitch(payload: { direction: "prev" | "next"; source: "man
  */
 function handlePreviewResolveFailed(payload: { id: string; reason: "missing" | "error" }) {
   if (previewedId.value !== payload.id) return; // 过期回报
-  ElMessage.warning(
+  kameMessage.warning(
     payload.reason === "missing" ? t("gallery.previewImageMissing") : t("gallery.previewImageLoadFailed"),
   );
   previewedId.value = null;
@@ -1161,14 +1158,14 @@ const copyImageLabels = async (image: ImageInfo) => {
       ),
     );
     if (!text) {
-      ElMessage.info(t("albums.imageLabelsEmpty"));
+      kameMessage.info(t("albums.imageLabelsEmpty"));
       return;
     }
     await writeClipboardText(text);
-    ElMessage.success(t("common.copySuccess"));
+    kameMessage.success(t("common.copySuccess"));
   } catch (error) {
     console.error("复制标签失败:", error);
-    ElMessage.error(t("common.copyFailed"));
+    kameMessage.error(t("common.copyFailed"));
   }
 };
 
@@ -1249,10 +1246,10 @@ const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCo
       try {
         if (isUnhide) {
           await refreshCtx.mutate(() => removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids));
-          ElMessage.success(t("contextMenu.unhideSuccess"));
+          kameMessage.success(t("contextMenu.unhideSuccess"));
         } else {
           await refreshCtx.mutate(() => addImagesToAlbum(HIDDEN_ALBUM_ID, ids));
-          ElMessage.success(
+          kameMessage.success(
             ids.length > 1 ? t("contextMenu.hiddenCount", { count: ids.length }) : t("contextMenu.hiddenOne"),
           );
         }
@@ -1261,7 +1258,7 @@ const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCo
       } catch (e) {
         clearPreviewAnchor();
         console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
-        ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
+        kameMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
       }
       break;
     }

@@ -1,19 +1,17 @@
 <template>
   <SettingRow :label="$t('settings.albumDrive')" :description="$t('settings.albumDriveDesc')">
-    <el-switch
+    <Switch
       v-model="enabled"
-      :loading="showEnabledLoading"
-      :disabled="enabledDisabled"
-      @change="(v) => handleToggle(v === true)"
+      :disabled="enabledDisabled || showEnabledLoading"
+      @update:model-value="(v) => handleToggle(v === true)"
     />
   </SettingRow>
 
   <!-- 挂载点是独立一项：盘已挂载时不能改，必须先关掉画册盘 -->
   <SettingRow :label="$t('settings.albumDriveMountPoint')" :description="$t('settings.albumDriveMountPointDesc')">
-    <el-input
+    <Input
       v-model="mountPoint"
-      class="mount-point-input"
-      size="default"
+      class="!w-[220px]"
       :disabled="enabled || showEnabledLoading || showMountPointLoading"
       :placeholder="$t('settings.albumDriveMountPointPlaceholder')"
       @blur="handleMountPointBlur"
@@ -23,14 +21,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { ElMessageBox } from "@kabegame/element-plus";
 import { invoke } from "@/api/rpc";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { kameMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@/env";
 import { useSettingsStore } from "@/stores/settings";
 import SettingRow from "@/components/settings/SettingRow.vue";
+import { messageBox } from "@/components/ui/messageBox";
+import Input from "@/components/ui/Input.vue";
+import Switch from "@/components/ui/Switch.vue";
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
@@ -94,7 +94,7 @@ const installDriver = async () => {
     installingDriver.value = true;
     try {
       await invoke("install_album_drive_driver");
-      ElMessage.info(t("settings.albumDriveInstallDriverStarted"));
+      kameMessage.info(t("settings.albumDriveInstallDriverStarted"));
       for (let i = 0; i < 3; i += 1) {
         await delay(3000);
         await refreshDriverStatus();
@@ -102,7 +102,7 @@ const installDriver = async () => {
       }
     } catch (e) {
       console.error(e);
-      ElMessage.error(String(e));
+      kameMessage.error(String(e));
     } finally {
       installingDriver.value = false;
     }
@@ -114,7 +114,7 @@ const installDriver = async () => {
       ? "settings.albumDriveInstallDriverManualMac"
       : "settings.albumDriveInstallDriverManualLinux";
     try {
-      await ElMessageBox.alert(t(messageKey), t("settings.albumDriveInstallDriverManualTitle"));
+      await messageBox.alert(t(messageKey), t("settings.albumDriveInstallDriverManualTitle"));
     } finally {
       await refreshDriverStatus();
     }
@@ -132,7 +132,7 @@ const handleMountPointBlur = async () => {
     await setMountPoint(mp);
   } catch (e) {
     console.error(e);
-    ElMessage.error(String(e));
+    kameMessage.error(String(e));
   }
 };
 
@@ -140,7 +140,7 @@ const handleToggle = async (val: boolean) => {
   const mp = normalizedMountPoint.value;
   if (val && !mp) {
     enabled.value = false;
-    ElMessage.error(t("settings.albumDriveMessageMountPointRequired"));
+    kameMessage.error(t("settings.albumDriveMessageMountPointRequired"));
     return;
   }
 
@@ -158,21 +158,15 @@ const handleToggle = async (val: boolean) => {
     const ok = await setEnabled(val);
     if (ok) {
       if (val) {
-        ElMessage.success(t("settings.albumDriveMessageEnabled"));
+        kameMessage.success(t("settings.albumDriveMessageEnabled"));
       } else {
-        ElMessage.success(t("settings.albumDriveMessageDisabled"));
+        kameMessage.success(t("settings.albumDriveMessageDisabled"));
       }
     }
   } catch (e) {
     console.error(e);
     // 错误时 enabled.value 会由 watch 回滚
-    ElMessage.error(String(e));
+    kameMessage.error(String(e));
   }
 };
 </script>
-
-<style scoped>
-.mount-point-input {
-  width: 220px;
-}
-</style>
