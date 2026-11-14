@@ -1,0 +1,11 @@
+[project]
+name = "wpe-input-driver"
+version = "0.1.0"
+description = "按帧给 WPE 测试窗口喂光标与左键的 Frida 子进程（由 wpe-renderdoc MCP 拉起）"
+requires-python = ">=3.10"
+dependencies = [
+    "frida>=17,<18",
+]
+
+[tool.uv]
+package = false

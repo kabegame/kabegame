@@ -302,6 +302,10 @@ def close_wallpaper(window: str) -> dict[str, Any]:
     with _op_lock:
         entry = _own_entry(window)
         result = {"window": window, "project": entry.get("project"), "size": entry.get("size")}
+        from . import input as winput  # 延迟导入：input 反过来用本模块的窗口检查
+
+        if winput.stop_window(window):
+            result["input_driver_stopped"] = True
         result.update(_close_by_name(window))
         if result.get("window_existed") and not result.get("gone"):
             raise WpeError(f"发了 closeWallpaper，但 {window} 10 s 内没消失；表项保留")

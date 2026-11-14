@@ -26,6 +26,7 @@ from .replay import (
 )
 from .wpe import capture as wpe_capture
 from .wpe import ensure as wpe_ensure
+from .wpe import input as wpe_input
 from .wpe import log as wpe_log
 from .wpe import registry as wpe_registry
 from .wpe import session as wpe_session
@@ -77,6 +78,7 @@ close_wallpaper / apply_properties 只对自己的窗口。别的会话的窗口
 - 设置：get_settings 只读 config.json。WPE 只在启动时读这个文件，改设置只能 restart_wpe(settings)：\
 正常退出 → 改文件 → 启动 → 注入，桌面空几秒；只在没有别的会话的窗口、没有外来窗口、设置界面没开着时做。\
 设置不还原，改了哪些键结果里逐项报出；例外是 capture_sweep，它自己改的设置跑完会改回扫描开始时的值。
+- 输入（光标与左键）：用 Frida 只在本会话测试窗口的渲染线程上按帧喂光标位置与左键（input_play 一步做完、input_start / input_status / input_stop 分步），或 input_start(mode="record") 录下人在窗口上的操作得到同格式的时间线。桌面壁纸与别的窗口不受影响，不动真实鼠标。时间线 [[x, y, down(, n)], …]，x / y 是客户区归一化坐标，第 i 项就是场景第 i 帧；详见各工具说明。
 - 日志：log_mark 取游标，log_since 读之后的新行。log.txt 各会话共用、行里不带窗口名；游标失效（日志被重写）\
 会报出来，不静默从头读。
 - cleanup_project 只删仓库 ignore/ 下测试工程里 WPE 写的 shaders/blobsSM40。
@@ -660,6 +662,76 @@ def apply_properties(window: str, props: dict[str, Any]) -> dict:
     return wpe_session.apply_properties(window, props)
 
 
+# ==================== 输入（光标与左键） ====================
+
+@mcp.tool
+def input_play(window: str, timeline: list[list[Any]], tail: float = 1.0, log_grep: str | None = None,
+               out: str | None = None) -> dict:
+    """
+    一步做完：取日志游标 → 按时间线给本会话测试窗口喂光标与左键 → 等放完再等 tail 秒 → 停 → 读日志。
+
+    只在这个窗口的渲染线程上改 GetCursorPos / GetKeyState(VK_LBUTTON) / WindowFromPoint 的返回值（WindowFromPoint
+    一律返回渲染窗口，免得盖在上面的别的窗口让按下登记不上）；桌面壁纸、别的测试窗口、真实鼠标不受影响。
+    第一次用会经 uv 下载 Frida。窗口要在渲染（WPE 暂停时认不出渲染线程）。
+
+    Args:
+        window: 本会话的窗口名
+        timeline: [[x, y, down] 或 [x, y, down, n], …]。x / y 是渲染窗口客户区的归一化坐标
+            （左上原点、y 向下，0…1 在窗口内，超出就是窗口外），down 是左键是否按下，n 是重复帧数（缺省 1）。
+            第 i 帧给目标线程的第 i 次 GetCursorPos，即场景的第 i 帧（WPE 暂停时帧不前进）；放完停在最后一项。
+            WPE 一帧内完整的按下抬起会被丢掉，按下至少持续 1 帧。展开后 1…100000 帧。
+        tail: 放完后多等几秒再停（让场景把最后几帧的回调跑完、日志写出来）
+        log_grep: 日志只要匹配这个正则的行（如 "kbp6c"）
+        out: 绝对路径，给了就把逐帧的应用值 [帧, 屏幕 x, 屏幕 y, down] 写成 JSON（不能在 WPE / Steam 目录下）
+
+    返回帧数、首末几帧的应用值、耗时、日志（log.lines；各会话共用，行里不带窗口名）。
+    """
+    return wpe_input.play(window, timeline, tail, log_grep, out)
+
+
+@mcp.tool
+def input_start(window: str, mode: Literal["play", "record"] = "play",
+                timeline: list[list[Any]] | None = None) -> dict:
+    """
+    拉起本会话测试窗口的输入驱动（每个窗口至多一个），读到 ready（认出渲染线程）才返回。
+
+    - play：按 timeline 喂光标与左键，放完停在最后一项，直到 input_stop；
+    - record：不改任何返回值，逐帧记下真实的光标（换成客户区归一化坐标）与左键。人在测试窗口上操作一遍，
+      input_stop 得到同格式的时间线，之后 input_play 回放。
+
+    Args:
+        window: 本会话的窗口名
+        mode: play 或 record
+        timeline: play 必填。[[x, y, down] 或 [x, y, down, n], …]。x / y 是渲染窗口客户区的归一化坐标
+            （左上原点、y 向下，0…1 在窗口内，超出就是窗口外），down 是左键是否按下，n 是重复帧数（缺省 1）。
+            第 i 帧给目标线程的第 i 次 GetCursorPos，即场景的第 i 帧（WPE 暂停时帧不前进）；放完停在最后一项。
+            WPE 一帧内完整的按下抬起会被丢掉，按下至少持续 1 帧。展开后 1…100000 帧。
+    """
+    return wpe_input.start(window, mode, timeline)
+
+
+@mcp.tool
+def input_status(window: str) -> dict:
+    """本会话窗口的输入驱动状态：有没有在跑、模式、已处理的帧数、play 是否放完。"""
+    return wpe_input.status(window)
+
+
+@mcp.tool
+def input_stop(window: str, out: str | None = None) -> dict:
+    """
+    停掉输入驱动（卸载钩子、结束子进程）并取结果。
+
+    Args:
+        window: 本会话的窗口名
+        out: 绝对路径，给了就把完整记录写成 JSON（不能在 WPE / Steam 目录下）：record 写时间线
+            （连续相同的帧压成 [x, y, down, n]，可直接当 timeline 回放），play 写逐帧应用值 [帧, 屏幕 x, 屏幕 y, down]
+
+    返回帧数与摘要：play 是首末几帧的应用值；record 是时间线（项数多时只内联前几项，完整的要给 out）。
+    close_wallpaper 会先停掉该窗口的驱动。
+    """
+    return wpe_input.stop(window, out)
+
+
 @mcp.tool
 def windows() -> dict:
     """
@@ -841,6 +913,10 @@ def _on_exit() -> None:
         if _exited:
             return
         _exited = True
+    try:
+        wpe_input.stop_all()
+    except Exception:
+        pass
     try:
         wpe_session.close_all_mine()
     except Exception:

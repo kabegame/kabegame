@@ -28,8 +28,31 @@
 | | `open_wallpaper` / `close_wallpaper` / `apply_properties` / `windows` | 本会话的测试窗口；`open_wallpaper`、`capture_wallpaper` 与 sweep 的 job 收 `borderless`、`x`、`y`，见「无边框窗口」 |
 | | `status(target?)` | 进程、注入、窗口表、外来窗口、抓帧锁由谁持有；`target=True` 另读 RenderDoc 目标的 API 与可抓窗口数 |
 | | `get_settings` / `restart_wpe(settings?)` | 只读 `config.json`；改设置只能重启 |
+| | `input_play` / `input_start` / `input_status` / `input_stop` | 给本会话测试窗口按帧喂光标与左键，或录下真实光标，见「输入（光标与左键）」 |
 | | `log_mark` / `log_since` / `cleanup_project` | 日志游标与增量；清测试工程里的 `shaders/blobsSM40` |
 | 回放 | `open_capture`、`get_*`、`find_draws_*`、`save_texture`、`pick_pixel`…… | 19 个工具照旧 `renderdoc` MCP，后端是本会话私有的无界面回放进程；另有 `close_capture`、`show_in_renderdoc`（会弹界面） |
+
+### 输入（光标与左键）
+
+测试窗口里的场景每帧在渲染线程上调一次 `GetCursorPos`、一次 `GetKeyState(VK_LBUTTON)`，左键刚按下时再调 `WindowFromPoint`。
+用 Frida 给本会话的测试窗口按帧喂光标与左键，不动真实鼠标：
+
+- **原理：** 驱动是个子进程（`frida_input/driver.py`，独立的小 uv 工程，依赖 `frida>=17,<18`；不放进 MCP 自己的依赖，免得改依赖让
+  `uv run` 重装项目本身、覆盖别的会话正在运行的入口 exe），经 stdin / stdout 的 JSON 行和 MCP 通信。它挂进 WPE，**只在「对本窗口
+  渲染窗口（类名 `WPEDesktopDX11Window`）调 `ScreenToClient` 的那条线程」上**改这三个函数的返回值。线程按这个认、不按窗口所属线程认：
+  桌面壁纸的轮询线程和它渲染窗口的所属线程不是同一条。桌面壁纸、别的测试窗口不受影响；子进程退出时 Frida 自动卸脚本，钩子随之撤销。
+  `WindowFromPoint` 在这条线程上一律返回渲染窗口（测试窗口不一定在最上面，否则按下登记不上）。
+- **时间线：** `[[x, y, down] 或 [x, y, down, n], …]`，x / y 是渲染窗口客户区的归一化坐标（左上原点、y 向下），down 是左键是否按下，
+  n 是重复帧数（缺省 1），展开后 1…100000 帧。第 i 项就是目标线程的第 i 次 `GetCursorPos`，即场景的第 i 帧；放完停在最后一项。
+  屏幕坐标每帧按 `ClientToScreen` / `GetClientRect` 现算（窗口被拖动也对）。
+- **`input_play(window, timeline, tail?, log_grep?, out?)`：** 一步做完「取日志游标 → 放时间线 → 等放完再等 `tail` 秒 → 停 → 读日志」，
+  等待上限「帧数 ÷ 5 帧/秒 + 30 s」。`out` 给了就写逐帧应用值 `[帧, 屏幕 x, 屏幕 y, down]`。
+- **`input_start(window, mode="play"|"record", timeline?)` / `input_status(window)` / `input_stop(window, out?)`：** 分步。`record` 不改返回值，
+  逐帧记下真实的光标（换成归一化坐标）与左键；人在测试窗口上操作一遍后 `input_stop` 得到同格式的时间线（连续相同的帧压成 `[x, y, down, n]`，
+  可直接给 `input_play`），之后 WPE 与我们的 dev 探针都用这一份。每个窗口至多一个驱动；`close_wallpaper` 先停掉它；MCP 退出时停掉全部。
+- **注意：** WPE 暂停时帧不前进（`ready` 前 2 s 内认不出渲染线程就报错）；WPE 一帧内完整的按下抬起会被丢掉，所以按下至少持续 1 帧；
+  日志各会话共用，真实鼠标在测试窗口上动时也会混进挂钩期间之外的事件，只看挂钩期间的帧；第一次用会经 uv 下载 Frida（`ready` 最多等 60 s）。
+  只能操作本会话自己的窗口（同 `apply_properties`）。内部函数（`mcp_server/wpe/input.py` 的 `launch` / `run_play`）只认 pid 与渲染窗口 hwnd，不依赖窗口表。
 
 ### `out` 的约定
 
@@ -127,7 +150,9 @@ mcp_server/          MCP 服务端（uv 的 Python ≥ 3.10）
   paths.py           仓库根、状态目录、qrenderdoc / WPE 位置
   wpe/               第 2 批：常驻共享的 WPE（ensure_running、restart_wpe）、本会话的测试窗口与机器级窗口表、
                      config.json 读写、log.txt 游标（计划见 wpe-renderdoc-mcp-p2.md）
+    input.py         输入驱动：拉起 frida_input 子进程（play / record），窗口表检查的薄层
     capture.py       第 3 批：capture、capture_wallpaper、capture_sweep，抓帧锁里调工作进程的 target_*
+frida_input/         输入驱动子进程的独立 uv 工程（driver.py、pyproject.toml、uv.lock；不进 MCP 依赖）
 renderdoc_worker/    在 qrenderdoc --python 里跑（RenderDoc 内嵌的 Python 3.8）
   worker.py          常驻循环
   context.py         ctx 垫片：服务层用到的 CaptureContext 子集，背后是裸 ReplayController

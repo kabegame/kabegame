@@ -4,7 +4,8 @@ WPE 的 log.txt：游标与增量。
 - 日志各会话共用，行里不带窗口名，log_since 只能按时间段截；多个会话同时开窗时会混进别人的行。
 - 游标 `{size, created, head, head_len}`：
   - size：读到哪里（只算到最后一个完整行）；
-  - created：文件创建时刻（ns）；
+  - created：文件创建时刻（ns，十进制字符串：19 位整数超过 JS 的安全整数，经 MCP 客户端来回会丢精度；
+    比较时两边转成整数、差超过 1 ms 才算变了，兼容旧的整数游标）；
   - head：文件开头 head_len 个字节的摘要。
   文件变小、创建时刻变了或开头变了，就是日志被重写了（WPE 重启后重写、被删掉重建、被截断）：
   报出来，不静默从头读。创建时刻有 NTFS 的「隧道」效应（删掉后 15 s 内同名重建会沿用旧的创建时刻），
@@ -31,6 +32,19 @@ def _created_ns(st: os.stat_result) -> int:
     return getattr(st, "st_birthtime_ns", None) or st.st_ctime_ns
 
 
+CREATED_TOLERANCE_NS = 1_000_000  # 1 ms
+
+
+def created_changed(old, new) -> bool:
+    """两个游标的 created 是不是不同的文件：转成整数比，差超过 1 ms 才算（旧游标是整数、可能丢了末几位精度）。"""
+    if old is None or new is None:
+        return False
+    try:
+        return abs(int(old) - int(new)) > CREATED_TOLERANCE_NS
+    except (TypeError, ValueError):
+        return str(old) != str(new)
+
+
 def _head(f, length: int) -> str:
     f.seek(0)
     return hashlib.sha256(f.read(length)).hexdigest()[:16]
@@ -50,7 +64,7 @@ def mark(path: str | None = None) -> dict[str, Any]:
             cut = tail.rfind(b"\n")
             end = tail_start + cut + 1 if cut >= 0 else tail_start if tail_start else 0
             head_len = min(HEAD_BYTES, size)
-            return {"path": path, "size": end, "created": _created_ns(st), "head": _head(f, head_len),
+            return {"path": path, "size": end, "created": str(_created_ns(st)), "head": _head(f, head_len),
                     "head_len": head_len}
     except FileNotFoundError:
         return {"path": path, "size": 0, "created": None, "head": None, "head_len": 0}
@@ -85,7 +99,7 @@ def since(cursor: dict[str, Any], grep: str | None = None, errors: bool = False,
     if now["created"] is None:
         reasons.append("log.txt 不在了")
     else:
-        if cursor.get("created") is not None and now["created"] != cursor["created"]:
+        if created_changed(cursor.get("created"), now["created"]):
             reasons.append("文件创建时刻变了")
         if now["size"] < cursor["size"]:
             reasons.append(f"文件变小了（{cursor['size']} → {now['size']} 字节）")

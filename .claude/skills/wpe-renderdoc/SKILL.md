@@ -66,6 +66,23 @@ close_wallpaper(window)
 
 **只读已有的抓帧：** `open_capture(绝对路径)` → 各回放工具 → `close_capture()`；`list_captures(目录, recursive)` 列目录。
 
+## 输入（光标与左键）
+
+测试窗口的场景脚本要测光标回调（`cursorEnter` / `cursorMove` / `cursorDown` / `cursorUp` / `cursorClick` / `cursorLeave`）时，用
+`input_play` 按帧喂光标与左键，不动用户的真实鼠标：
+
+```
+input_play(window, timeline=[[0.1,0.1,0,10],[0.5,0.5,0,5],[0.5,0.5,1,5],[0.5,0.5,0,5],[0.1,0.1,0]], log_grep="kbp6c")
+```
+
+- 时间线 `[[x, y, down] 或 [x, y, down, n], …]`：x / y 是渲染窗口客户区的归一化坐标（左上原点、y 向下），down 是左键，n 是重复帧数；
+  第 i 项就是场景第 i 帧，放完停在最后一项。按下至少持续 1 帧（一帧内的完整按下抬起会被 WPE 丢掉）；WPE 暂停时帧不前进。
+- 原理：Frida 只在本窗口渲染线程（对渲染窗口调 `ScreenToClient` 的那条）上改 `GetCursorPos` / `GetKeyState` / `WindowFromPoint` 的返回值，
+  桌面壁纸、别的窗口不受影响，停止后钩子随子进程撤销。第一次用会经 uv 下载 Frida。
+- 录制：`input_start(window, mode="record")` → 人在测试窗口上操作 → `input_stop(window, out="…json")` 得到同格式时间线，再 `input_play`。
+  `input_status` 看帧数；`close_wallpaper` 会先停驱动。
+- 返回里的 `log` 是挂钩期间的 `log.txt` 新行（各会话共用）；真实鼠标在窗口上动时会混进别的事件，对帧号（场景帧 = 第一条事件帧 + 时间线偏移）判断。
+
 ## `out` 的约定
 
 - 必须给，绝对路径，约定 `A:\<项目>\<用途>\`：项目根下散落的抓帧不算数（少于两级目录拒绝）。
@@ -146,4 +163,5 @@ close_wallpaper(window)
 | 注入失败、打不开进程 | WPE 可能以管理员权限运行，只报给用户 |
 | `gaps` 非空、`first_frame` 绘制数不对 | 场景还在加载（加大 `wait`）或抓到了别的内容，重抓 |
 | `worker_restarted` / `capture_lost` | 回放进程被重启过，重新 `open_capture` |
-| `log_since` 报 `rewritten` | WPE 重启过、日志被重写，重新 `log_mark` |
+| `log_since` 报 `rewritten` | WPE 重启过、日志被重写，重新 `log_mark`（游标的 `created` 是字符串、比较容忍 1 ms，经客户端回传不再误判） |
+| `input_*` 报「没认出渲染线程」 | 窗口没在渲染（WPE 暂停了）或刚开窗，稍等再试 |
