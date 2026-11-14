@@ -66,6 +66,49 @@
 
 这几条实测没覆盖，以读码为准。
 
+## P11b 补测：槽 0、instanced、RT 缺省、精灵表、GIF、视频、解码（2026-11-14）
+
+**工程**（`ignore/p11/defs/p11b2.py`，`kbp gen p11b2 --data ignore/p11`）：
+- `p11b-npot`：两个图像层，槽 0 缺省是自写的 `kbt/npot.tex`（300×200 放在 512×256 里，RGBA8888、1 级 mip）。`np-auto` 带 `autosize`、`scale 2`，`np-size` 是 `size 600 400`、不带。
+- `p11b-inst`：instanced 纯色层，模型 `instanced` + `solidlayer`，材质 `util/solidlayer_instance_4`。对象 `size 600 400`、`color 1 0.5 0.25`，`instance.usertextures: ["ut"]`。`inst-fx` 挂一个 tint，`inst-plain` 不挂。
+- `p11b-rt`：组合层 `dep`（500×300、不可见、被依赖）。图像层 `user` 的 blend 槽 1 缺省是 `_rt_imageLayerComposite_10_a`，`usertextures: [null, "ut"]`。
+- `p11b-sheet`：粒子材质槽 0 缺省是精灵表 `particle/nature/leaves7`（512×512、6×5 帧、标志 `0x4`）。
+- GIF、视频、解码样本用步骤 0 的 `p11-ut`。
+
+抓帧在 `A:\p11b\`，测试窗口 1600×900（另一个会话占着 1920×1080）。
+
+| # | 情形 | 结果 |
+|---|---|---|
+| M1 | 非 2 的幂的槽 0 换图（`ut-b.jpg` → 540×360） | 两个图层的顶点 UV 都从缺省纹理的 `0.000293 – 0.585645`、`0.000586 – 0.780664` 变成 `0.000278 – 0.999722`、`0.000417 – 0.999583`：上界跟着当前纹理变成 1，内缩按新纹理的 `0.15 / 尺寸`（0.15/540、0.15/360）。带不带 `autosize` 一样。图层尺寸不变（`np-auto` 仍是 300×200）。清空后回到缺省纹理的 UV |
+| M2 | instanced 换图 | 合成 RT 从 32×32（`util/white`）变成用户纹理的尺寸：`ut-a.png` → 300×200，`ut-c.png` → 100×66。裁切比例取对象 `size`（600×400 → 1.5），不是 `util/white` 的 1:1：`ut-c` 的 100×400 裁成 `trunc(100 / 1.5)` = 66 行，同读码 rea-p5-modelflags §6.2「把对象 `size` 写进 `instance.usertexturereference`」。`g_Color4` 从 `(1, 0.5, 0.25, 1)` 变成 `(1, 1, 1, 1)`，带 effect 的基础 pass 和直接上屏的 `inst-plain` 都变 |
+| M3 | effect 槽的缺省是被依赖图层的合成 RT | 空值时槽 1 绑那张 500×300 的 RT；换成 `ut-b.jpg` 后是 600×360 的普通纹理，比例取 RT 的 500×300（`trunc(360 · 5/3)` = 600）。采样器夹取、线性 |
+| M4 | 精灵表槽换图 | 纹理按帧比例裁（帧 85.3×102.4 → `ut-a` 裁成 166×200）。几何着色器输出的 UV 仍是缺省精灵表的帧（如 `u 0.3333–0.5`、`v 0–0.2`），用户纹理被当成 6×5 的帧表采样 |
+| M5 | GIF（`ut-anim2.gif`：4 帧 300×200，延时 100 / 200 / 50 / 300 ms，第 3 帧左半透明，`loop 0`、disposal 2） | 纹理 200×200（按 1:1 裁），R8G8B8A8、1 级 mip，采样器**点采样**（缺省纹理是线性），寻址跟缺省纹理（Wrap）。20 帧里按帧延时换帧：红约 100 ms、绿约 200 ms、蓝只出现在一帧、黄约 300 ms，650 ms 一圈；透明区画出来是背景色，不叠上一帧。第一版测试图被 PIL 量化坏了（主色成了透明下标），改用共享调色板重做 |
+| M6 | 视频（`ut-video.mp4`：320×240、每秒一种颜色） | 槽上是 240×240 的 Render Target（按 1:1 裁后的尺寸），线性、寻址跟缺省纹理。UV 内缩 `0.15/240`。6 帧里从红换到绿，在播放 |
+| M7 | 解码（WPE 导出的槽纹理对浏览器的解码） | 浏览器这一路：`createImageBitmap(blob, { premultiplyAlpha: "none", colorSpaceConversion: "none", imageOrientation: "from-image" })` → `copyExternalImageToTexture`（`premultipliedAlpha: false`）→ 读回，照 WPE 裁切（脚本 `ignore/p11/b/dec_browser.js`）。下面几种和 WPE **逐像素相同**：16 位 RGBA PNG（都取高字节，不四舍五入）、调色板 + `tRNS`、灰度 + alpha、24 位 BMP、ICO。EXIF 方向 6 的 JPEG 两边都按 EXIF 转，方向一致；6043 / 40000 个像素有差，最大 47 / 18 / 66，在色块边界上，是 JPEG 解码库的色度上采样不同（PIL 与浏览器的结果相同，WPE 的 FreeImage 不同）。带 `gAMA` 的那张也是 0 差，但它只有 0 / 255 两种值，gamma 校正改不动，**测不出**，见 M9 |
+| M8 | 读码 R5 的加载时情形：`p11b-rt-init`（`ignore/p11/b/make_rt_init.py`，属性 `ut` 的缺省值就是 `ut-b.jpg`） | 槽 1 仍是那张 500×300 的 RT，用户图**没生效**。M3 那种运行中改值才生效 |
+| M9 | gamma 与 16 位灰度（`ignore/p11/b/make_gamma.py`：256×256 渐变，`gAMA` 1.0 / 0.6 / 1/2.2 / 没有；16 位灰度值 `0x1000 + 0xC000·x/255 + y`） | 拟合脚本 `ignore/p11/b/gamma_fit.py`。`gAMA` 1.0、0.6 的 RGB 和 libpng 的 8 位表 `floor(255 · (i/255)^(1/(2.2·文件 gamma)) + 0.5)` **逐像素相同**，alpha 不动；1/2.2 与没有 `gAMA` 时不变（`|2.2·文件 gamma − 1| < 0.05` 不校正）。16 位灰度按 `floor((v − min(255, 最小值)) · 255 / (最大值 − min(255, 最小值)) + 0.5)` 拉伸，0 差；取高字节最大差 47 |
+
+**结论：**
+1. **槽 0 换图后，图层的 UV 上界与内缩按当前纹理重算。** 图层尺寸不变，`autosize` 取参考尺寸。
+2. **instanced 的参考尺寸是对象 `size`。** 换图后：
+   - 合成 RT 是用户纹理的尺寸；
+   - `g_Color4` 在用户纹理生效时是白、回到缺省纹理时是对象色。
+3. **缺省是 RT 的槽**：运行中改值时，参考尺寸取 RT 的尺寸，采样器夹取；加载时就有值则不生效（M8）。
+4. **粒子精灵表**：运行中换图时帧表仍按缺省纹理，只换纹理。
+5. **GIF 按帧延时随时间换帧、点采样**；视频的纹理是裁后尺寸的 RT。
+6. **解码**：
+   - 浏览器的 `createImageBitmap`（上面的参数）在 8 位 PNG、BMP、ICO 上和 FreeImage 逐像素相同。
+   - 有两处要宿主自己补：PNG 的 `gAMA` 照 libpng 的表校正；16 位灰度按 `[min(255, 最小值), 最大值]` 拉伸，浏览器只给 8 位，补不出来。
+   - JPEG 只差在色度上采样。
+
+**和读码对照（`rea-p11b.md`）**：M1–M9 与读码逐条吻合。读码另外查明、实测没覆盖的：
+- 过滤串只有 `*.jpg;*.jpeg;*.jfif;*.png;*.gif;*.mp4`；值是 `/` 分隔的绝对路径。
+- 强制为 1 的还有 `g_Alpha`；任一槽的用户纹理生效都算，不限槽 0。
+- GIF 的推进与合成规则：只在被绘制时用当帧 `g_Frametime` 推进，一帧最多前进一帧，无限循环。解码器是 stb 派生的，disposal 与背景色有怪处（背景色 R、B 互换）。
+- 视频与 P9a 是同一个播放器类，裁切写在拷贝的源矩形上。
+- 精灵表在加载时就是用户图时，每个粒子画整张。
+
 ## 媒体回调与封面（2026-11-13）
 
 **工具：**

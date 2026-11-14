@@ -396,4 +396,4 @@ fn host_scope_for(
 
 **快捷方式：** 门禁要在测试窗口里点鼠标，MCP 没有给 WPE 窗口发点击的工具，注入鼠标事件会动用户的光标，所以没测；P11d 动工时请用户手动点一次。
 
-**仍是【未知】的：** GIF / 视频那几个虚函数的函数体（P11b 子计划再查）。
+**仍是【未知】的：** GIF / 视频那几个虚函数的函数体（P11b 子计划再查）。2026-11-14 已由 P11b 的步骤 0b 查清（[rea-p11b.md](rea-p11b.md)、p11-REPORT「P11b 补测」），子计划见 [phase-11b-usertextures.md](phase-11b-usertextures.md)。
