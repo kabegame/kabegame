@@ -4,10 +4,11 @@
  * - **灯数不看灯对象**：`LIGHTS_*` 直接取 `general.lightconfig`（`FUN_140186c90`），每种灯 4 位，缺这个键时全 0。灯对象只负责
  *   填数组（`FUN_140190c80`）：多出来的灯丢掉，少了的槽位保持全 0（半径 0，不发光）。所以没有 `lightconfig` 的场景里，
  *   `lpoint` 这类灯对象对画面没有影响，开了 `LIGHTING` 的材质只剩环境光。
- * - **`"light": "point"` 是遗留灯**，不进这里的数组：它写 `g_LightsPosition` 等，只有 `generic` / `generic2` 读。
+ * - **`"light": "point"` 是遗留灯**，不进这里的数组：它写 `g_LightsPosition` 等，由 `legacyLightUniforms` 照 WPE 的槽位规则算。
  * - 这些值是编译期算好的常量：绑了 `{user}` 的字段登记重编译，脚本改灯还不支持（宿主没有灯对象）。
  */
 import type { BindingCollector, BindingTarget } from "./bindings";
+import type { TranslateResult } from "../wpesl2wgsl";
 import { numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 
 export interface LightCounts {
@@ -183,6 +184,76 @@ export function lightUniforms(
     }
   });
   return values;
+}
+
+/** 遗留灯的三个数组（rea-p13-lights 1.4）：着色器声明了哪个就写哪个，不看 `LIGHTING`。 */
+export const LEGACY_LIGHT_UNIFORMS: ReadonlySet<string> = new Set([
+  "g_LightsPosition",
+  "g_LightsColorRadius",
+  "g_LightsColorPremultiplied",
+]);
+
+/** 程序读到遗留灯数组之一（没标 `unused`、不是作者自己的材质常量，口径同 `readsAudioUniforms`）。 */
+export function readsLegacyLights(result: Pick<TranslateResult, "uniforms">): boolean {
+  return (result.uniforms ?? []).some(
+    (uniform) =>
+      !uniform.unused && typeof uniform.meta?.material !== "string" && LEGACY_LIGHT_UNIFORMS.has(uniform.name),
+  );
+}
+
+const LEGACY_SLOTS = 4;
+
+/**
+ * 遗留灯（`"light": "point"`）→ 三个数组（rea-p13-lights 第 1 节，`FUN_14018ff60` 分槽、`FUN_14025d1f0` 写入）：
+ * - 每个灯对象（`light` 是字符串，不分类型，`lpoint` 等也算）按 `objects` 顺序取第一个空槽，4 个都占时取槽 0；
+ * - 遗留灯写自己的槽：位置 = 世界平移（挂父对象的灯照报 `object:parent`，这里取本地 `origin`；P13f 改成父链），
+ *   颜色半径 = 可见 ? `(color·intensity, radius)` : `(0, 0, 0, 1)`，隐藏时位置照写；同槽后写的覆盖先写的；
+ * - 没人写的槽：位置 `(0, 100, 0)`、颜色半径 `(0, 0, 0, 1)`（渲染上下文的初值）；
+ * - `g_LightsColorPremultiplied[i].rgb = c_i · r_i²`（i = 0..2），`[i].w = c_3[i] · r_3²`（c、r 取颜色半径）。
+ * 颜色乘强度、半径平方、两者相乘都逐步按单精度舍入（`Math.fround`，p13-REPORT「P13a 的实测」A5：WPE 的 `108000.0078`）。
+ * 位置是 `vec3[4]`，按声明分量展平（12 个数，`UniformBlock.set` 按 16 字节步长写）。
+ */
+export function legacyLightUniforms(
+  objects: readonly SceneObject[],
+  read: (value: SceneValue | undefined, path: string) => SceneScalar | undefined,
+): Record<string, number[]> {
+  const position: number[][] = Array.from({ length: LEGACY_SLOTS }, () => [0, 100, 0]);
+  const colorRadius: number[][] = Array.from({ length: LEGACY_SLOTS }, () => [0, 0, 0, 1]);
+  const taken = new Array<boolean>(LEGACY_SLOTS).fill(false);
+  const f = Math.fround;
+  objects.forEach((object, index) => {
+    if (typeof object.light !== "string") return;
+    const free = taken.indexOf(false);
+    const slot = free < 0 ? 0 : free;
+    if (free >= 0) taken[free] = true;
+    if (object.light !== "point") return;
+    const at = (field: string) => `objects/${index}/${field}`;
+    const vector = (key: string, fallback: readonly number[]) =>
+      numbers(read(object[key] as SceneValue | undefined, at(key)), [...fallback]);
+    const origin = vector("origin", [0, 0, 0]);
+    position[slot] = [0, 1, 2].map((k) => f(origin[k] ?? 0));
+    if (read(object.visible, at("visible")) === false) {
+      colorRadius[slot] = [0, 0, 0, 1];
+      return;
+    }
+    const intensity = f(numbers(read(object.intensity as SceneValue | undefined, at("intensity")), [0])[0] ?? 0);
+    const color = vector("color", DEFAULTS.color);
+    const radius = f(numbers(read(object.radius as SceneValue | undefined, at("radius")), [1])[0] ?? 1);
+    colorRadius[slot] = [...[0, 1, 2].map((k) => f(f(color[k] ?? 0) * intensity)), radius];
+  });
+  const premultiplied: number[] = [];
+  for (let i = 0; i < LEGACY_SLOTS - 1; i++) {
+    const [r, g, b, radius] = colorRadius[i];
+    const square = f(radius * radius);
+    premultiplied.push(f(r * square), f(g * square), f(b * square));
+    const last = colorRadius[LEGACY_SLOTS - 1];
+    premultiplied.push(f(last[i] * f(last[3] * last[3])));
+  }
+  return {
+    g_LightsPosition: position.flat(),
+    g_LightsColorRadius: colorRadius.flat(),
+    g_LightsColorPremultiplied: premultiplied,
+  };
 }
 
 /** `lightUniforms` 里 `read` 的标准实现：解析 `{user}` 并登记成 `target`。 */

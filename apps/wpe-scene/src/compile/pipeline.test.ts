@@ -400,6 +400,8 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
       "dna_fragment",
       "neon_sunset",
       "techno",
+      // 遗留灯（P13a）：自带着色器读 g_LightsPosition / g_LightsColorRadius
+      "demon_core",
     ];
     // 工坊样本：用户真机确认过（2026-11-07）。不是每台机器都订阅，所以不要求存在
     const workshopUnlocked = ["2077883354", "2077888249", "2418800402", "2833452727", "2961807954"];

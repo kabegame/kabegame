@@ -26,7 +26,16 @@ import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } fro
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
-import { bindingReader, engineDefines, lightConfigIssues, lightCounts, lightUniforms, litDefines } from "./lights";
+import {
+  bindingReader,
+  engineDefines,
+  legacyLightUniforms,
+  lightConfigIssues,
+  lightCounts,
+  lightUniforms,
+  litDefines,
+  readsLegacyLights,
+} from "./lights";
 import {
   checkEffectFeatures,
   checkInstanceFeatures,
@@ -1140,6 +1149,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       counts,
       bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
     ));
+  /** 遗留灯（P13a）：程序读到三个数组之一才算；同 `sceneLights` 只解析一次。 */
+  let legacy: Record<string, number[]> | null = null;
+  const legacyLights = () =>
+    (legacy ??= legacyLightUniforms(
+      scene.objects,
+      bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
+    ));
   // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
   const { parents } = resolveParents(scene.objects);
   // 图层依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：WPE 在全部对象加载完之后才按并集给图像层置 `0x1010`、建独占 RT，材质却在创建时就按
@@ -1715,6 +1731,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       uniforms: {
         ...shaderUniforms(result, pass, properties, context.key, bindings, issues),
         ...(result?.ok && usesLighting(result) ? sceneLights() : {}),
+        ...(result?.ok && readsLegacyLights(result) ? legacyLights() : {}),
       },
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),
     };

@@ -379,3 +379,7 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
   - `transparentsorting` 按局部 origin 在 `normalize(center − eye)` 上的投影降序、稳定，`fullscreen` / `projectlayer` 排最后；
   - 文本的 `_depth` 等于测深度、不写。
 - **覆盖**：分节累计不变。按用户现在的 WPE 设置，平面反射与屏幕空间反射在跟随时只需要「关」的路径，P13b、P13g 的第一步成本很低。
+
+### P13a — 能力表纠错、遗留灯与采样器宏别名（2026-11-14）
+
+子计划与实施记录见 [phase-13a-legacy-lights.md](phase-13a-legacy-lights.md)。`REFLECTION` 移出引擎 COMBO；遗留灯按 WPE 的槽位规则在编译期写三个数组（步骤 0 的确定性工程 6 条预测全部成立，另需逐步按单精度算）；翻译器沿对象宏找采样器别名。语料只去掉预期的键，干净 +3 张（`3413921910`、`3498150384`、demon_core，另加测试工程）；arsenal 只差 `_rt_Reflection`（P13b1）。

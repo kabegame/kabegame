@@ -309,7 +309,7 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
      - `texSample3D`、`texSample2DBackBuffer` 改成 `texture`；
      - `texLoad2D(t, uv, res)` 改成 `texelFetch(…, ivec2(uv * res), 0)`。
 
-     参数里嵌套的调用一并改写，第一个参数必须是已声明的纹理。
+     参数里嵌套的调用一并改写，第一个参数必须是已声明的纹理，或按正文顺序 `#define` 成已声明纹理的对象宏（追多层，`#undef` 生效）。
    - **内建**：`gl_FragColor` → `kb_FragColor`（`layout(location = 0) out vec4`），`gl_VertexID / gl_InstanceID` → `gl_VertexIndex / gl_InstanceIndex`。
      与 GLSL 450 保留字冲突的标识符改名为 `kb_<名字>`：`sample`、`input`、`output`、`texture`、`smooth`、`flat`、`common`、`buffer` 等，完整列表见 `RESERVED_RENAMES`。精度限定符去掉。
    - **HLSL 风格内建**由宏头补上（`MACRO_HEADER`）：`mul(a, b) → ((b) * (a))`（行向量左乘）、`frac`、`lerp`、`atan2`、`saturate`、`ddx / ddy`、`rsqrt`、`fmod`、`log10`、`clip`、`CAST*`。

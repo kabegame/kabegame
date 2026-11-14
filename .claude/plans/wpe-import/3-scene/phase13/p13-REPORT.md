@@ -42,6 +42,21 @@ WPE 2.8.42，窗口 1920×1080。用户设置（`config.json` 的 `general.user`
 - `transparentsorting`、透视场景里的文本 `_depth`、透视场景里带子层的组合层；
 - 正交场景的反射（语料里读反射图的三张都是透视）。
 
+## P13a 的实测（2026-11-14）
+
+工程 `ignore/p13/proj/p13a-slots`（`ignore/p13/a0/gen_a13.py` 生成）：正交，左边 `generic` 网格、右边 `genericimage2` 图像层（`LIGHTING: 1`、不带法线图）。灯按 `objects` 顺序：`lpoint`（没有 `lightconfig`）、`point` A、B（隐藏）、C、D、E（`visible` 绑属性 `p_f`，缺省 false）。抓帧 `A:\p13a\slots\off-frame155.rdc`、`on-frame289.rdc`（`apply_properties` 把 `p_f` 改成 true 之后），常量 `ignore/p13/out/wpe-p13a-slots-consts.json`（`kbp rdc consts --no-clock`）。
+
+| # | 预测 | 抓帧 | 结果 |
+|---|---|---|---|
+| A1 | `lpoint` 占槽 0、不写；A 1、B 2、C 3、D 0、E 0，同槽后写的覆盖先写的 | 槽 1 / 2 / 3 = A / B / C 的 origin；槽 0 的位置是 E 的 (1600, 300, 150)，D 被盖掉 | 成立 |
+| A2 | 隐藏的遗留灯写 `(0, 0, 0, 1)`，位置照写 | 槽 2 = B 的 origin + (0, 0, 0, 1)；`p_f` false 时槽 0 = E 的 origin + (0, 0, 0, 1) | 成立 |
+| A3 | `visible` 绑属性，运行中改了就跟 | `p_f` true 后槽 0 = (0.75, 0.075, 0.75, 650) = (1, 0.1, 1) × 0.75、半径 650 | 成立 |
+| A4 | 颜色半径 = (color × intensity, radius)，不乘 scale | A：(1.5, 0.3, 0.15, 600) = (1, 0.2, 0.1) × 1.5；C：(0.25, 0.375, 1.25, 700) | 成立 |
+| A5 | `g_LightsColorPremultiplied[i].rgb = c_i·r_i²`，`[i].w = c_3[i]·r_3²` | `[1].rgb` = (540000, 108000.0078, 54000.0039)，`[0..2].w` = (122500, 183750, 612500) = C 的 (0.25, 0.375, 1.25) × 700² | 成立 |
+| A6 | `genericimage2` 也读 `g_LightsPosition`（顶点段），与 `generic` 同值 | event 65 与 48 的 `g_LightsPosition` 相同 | 成立 |
+
+**单精度**：`108000.0078` 是 `0.2f × 1.5f = 0.30000001f` 再乘 `360000` 后舍入到单精度的结果；按双精度算再存成单精度得 `108000.0`，差 1 ulp。所以颜色乘强度、半径平方、两者相乘都要逐步按单精度舍入（`Math.fround`）。
+
 **两条读码更正**（读码代理顺带查出）：
 - rea-p5-mesh 第 5 节：`FUN_14017e180` 是剔除状态栈的 push，不是镜像视图；反射 pass 的触发位是 `G+0xe0` bit0，不是 `0x20000`；渲染标志 bit0 在壁纸进程里一直置位。
 - rea-p5-mesh 4.1 的「作用未知」`FUN_140198d00` 是体积光的模糊与合成。

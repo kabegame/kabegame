@@ -269,18 +269,20 @@ describe("能力表裁决", () => {
         { name: "g_Time", type: "f32", offset: 0, size: 4 },
         { name: "g_Texture3Resolution", type: "vec4<f32>", offset: 16, size: 16 },
         { name: "g_Brightness", type: "f32", offset: 32, size: 4, meta: { material: "brightness" } },
-        // 遗留灯的数组（P13 才写）：没实现的引擎 uniform 照报
-        { name: "g_LightsPosition", type: "array<vec4<f32>, 4>", offset: 48, size: 64 },
+        // 雾的参数（P13f 才写）：没实现的引擎 uniform 照报
+        { name: "g_FogDistanceParams", type: "vec4<f32>", offset: 48, size: 16 },
       ],
       combos: [
         { name: "HUEMODE", value: 1, source: "request" },
         { name: "VERSION", value: 2, source: "request" },
         { name: "SPRITESHEET", value: 1, source: "request" },
         { name: "LIGHTING", value: 0, source: "default" },
+        // P13a：REFLECTION 不再按名字报（cursorripple 的同名选项只是着色器分支）
+        { name: "REFLECTION", value: 1, source: "default" },
       ],
     } as TranslateResult;
     checkProgramFeatures(result, keys);
-    expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_LightsPosition"]);
+    expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_FogDistanceParams"]);
   });
   it("音频频谱 uniform（P11a）：六个都是引擎 uniform、不报；readsAudioUniforms 只认被读、不是材质常量的", () => {
     const names = ["16", "32", "64"].flatMap((n) => [`g_AudioSpectrum${n}Left`, `g_AudioSpectrum${n}Right`]);
@@ -311,7 +313,7 @@ describe("能力表裁决", () => {
         ok: true,
         uniforms: [
           { name: "g_FrameTime", type: "f32", offset: 0, size: 4, ...unread },
-          { name: "g_LightsPosition", type: "array<vec4<f32>, 4>", offset: 16, size: 64, ...unread },
+          { name: "g_FogDistanceParams", type: "vec4<f32>", offset: 16, size: 16, ...unread },
           { name: "g_Unknown", type: "f32", offset: 272, size: 4 },
           { name: "g_Time", type: "f32", offset: 276, size: 4, ...unread },
         ],

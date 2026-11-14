@@ -7,7 +7,7 @@
 //!   与 GLSL 450 保留字冲突的标识符改名；精度限定符去掉；其余 HLSL 风格内建由 [`MACRO_HEADER`] 的宏补上
 //!   （照 WPE 自己翻 HLSL 时的宏头一一对应）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::pack;
 use crate::preprocess::{parse_json_object, split_ident, Line};
@@ -1505,7 +1505,65 @@ fn rewrite_identifiers(stage: Stage, body: &str, renames: &BTreeMap<String, Stri
 }
 
 /// `texSample2D(t, uv)` 系列 → `texture(sampler2D(t, kb_sampler_t), uv)` 等；参数里嵌套的调用一并改写。
+///
+/// 第一个参数可以是 `#define 别名 g_TextureN` 这样的对象宏（P13a）：WPE 先预处理再编译，别名本来就成立；
+/// 预处理器把 `#define` 行留给 naga，这一步在 naga 之前，所以按正文顺序自己记别名（`#undef` 删掉，最多追 8 层）。
+/// 第一个参数本来就是纹理的调用输出与没有别名表时逐字节相同。
 fn rewrite_texture_calls(body: &str, textures: &[TextureDecl]) -> Result<String, String> {
+    rewrite_texture_calls_with(body, textures, &mut HashMap::new())
+}
+
+/// 行首（前面只有空白）的 `#define` / `#undef` 指令：返回整条指令（含续行）的长度，并更新别名表。
+fn scan_alias_directive(rest: &str, aliases: &mut HashMap<String, String>) -> usize {
+    // 续行（行尾 `\`）并入同一条指令
+    let mut end = 0;
+    loop {
+        let line_end = rest[end..]
+            .find('\n')
+            .map(|i| end + i)
+            .unwrap_or(rest.len());
+        let line = rest[end..line_end].trim_end_matches('\r');
+        if line.ends_with('\\') && line_end < rest.len() {
+            end = line_end + 1;
+        } else {
+            end = line_end;
+            break;
+        }
+    }
+    let directive = rest[1..end].trim_start();
+    let (word, tail) = split_ident(directive);
+    match word {
+        "define" => {
+            let tail = tail.trim_start();
+            let (name, after) = split_ident(tail);
+            // 函数宏 `NAME(` 不记；名字后要有空白才是对象宏
+            let is_object = !name.is_empty() && after.starts_with(|c: char| c == ' ' || c == '\t');
+            let value = after.split("//").next().unwrap_or("").trim();
+            let (ident, remaining) = split_ident(value);
+            if is_object
+                && !ident.is_empty()
+                && remaining.is_empty()
+                && ident.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            {
+                aliases.insert(name.to_string(), ident.to_string());
+            } else {
+                aliases.remove(name);
+            }
+        }
+        "undef" => {
+            let (name, _) = split_ident(tail.trim_start());
+            aliases.remove(name);
+        }
+        _ => {}
+    }
+    end
+}
+
+fn rewrite_texture_calls_with(
+    body: &str,
+    textures: &[TextureDecl],
+    aliases: &mut HashMap<String, String>,
+) -> Result<String, String> {
     const FUNCTIONS: &[&str] = &[
         "texSample2DBackBuffer",
         "texSample2DCompare",
@@ -1518,6 +1576,10 @@ fn rewrite_texture_calls(body: &str, textures: &[TextureDecl]) -> Result<String,
     let mut rest = body;
     while !rest.is_empty() {
         let c = rest.chars().next().expect("non-empty");
+        if c == '#' && out.rsplit('\n').next().is_some_and(|l| l.trim().is_empty()) {
+            // 行首的 #define / #undef：先记别名；这一行照旧逐字符输出（宏体里的纹理调用仍按原样改写，输出与改动前逐字节相同）
+            scan_alias_directive(rest, aliases);
+        }
         if !(c.is_ascii_alphabetic() || c == '_') {
             out.push(c);
             rest = &rest[c.len_utf8()..];
@@ -1539,10 +1601,21 @@ fn rewrite_texture_calls(body: &str, textures: &[TextureDecl]) -> Result<String,
             split_call_args(&open[1..]).ok_or_else(|| format!("{function} 的括号没有闭合"))?;
         let args = args
             .iter()
-            .map(|arg| rewrite_texture_calls(arg, textures))
+            .map(|arg| rewrite_texture_calls_with(arg, textures, &mut aliases.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         let texture_name = args.first().map(|a| a.trim()).unwrap_or_default();
-        let Some(texture) = textures.iter().find(|t| t.name == texture_name) else {
+        // 不是已声明的纹理时沿别名表追，最多 8 层
+        let mut resolved = texture_name;
+        for _ in 0..8 {
+            if textures.iter().any(|t| t.name == resolved) {
+                break;
+            }
+            match aliases.get(resolved) {
+                Some(next) => resolved = next.as_str(),
+                None => break,
+            }
+        }
+        let Some(texture) = textures.iter().find(|t| t.name == resolved) else {
             return Err(format!(
                 "{function} 的第一个参数不是已声明的纹理：{texture_name}"
             ));
@@ -1796,6 +1869,72 @@ pub(crate) mod tests {
             "textureLod(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv + texture(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv).xy, 0.0) + texture(sampler2DShadow(g_Texture6, kb_sampler_g_Texture6), vec3(uv, d))"
         );
         assert!(rewrite_texture_calls("texSample2D(tex, uv)", &textures).is_err());
+    }
+
+    fn alias_textures() -> [TextureDecl; 2] {
+        [
+            TextureDecl {
+                slot: 1,
+                name: "g_Texture1".into(),
+                kind: TextureKind::D2,
+                meta: None,
+            },
+            TextureDecl {
+                slot: 2,
+                name: "g_Texture2".into(),
+                kind: TextureKind::D2,
+                meta: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn texture_call_follows_object_macro_alias() {
+        let textures = alias_textures();
+        let src =
+            "#define g_NormalMapSampler g_Texture1\nvec4 n = texSample2D(g_NormalMapSampler, uv);";
+        let out = rewrite_texture_calls(src, &textures).unwrap();
+        // #define 行原样保留，调用按 g_Texture1 改写
+        assert_eq!(
+            out,
+            "#define g_NormalMapSampler g_Texture1\nvec4 n = texture(sampler2D(g_Texture1, kb_sampler_g_Texture1), uv);"
+        );
+    }
+
+    #[test]
+    fn texture_alias_chains_and_undef_and_errors() {
+        let textures = alias_textures();
+        // 两层别名
+        let chained = "  #define A B\n#define B g_Texture2\ntexSample2D(A, uv)";
+        let out = rewrite_texture_calls(chained, &textures).unwrap();
+        assert!(
+            out.ends_with("texture(sampler2D(g_Texture2, kb_sampler_g_Texture2), uv)"),
+            "{out}"
+        );
+        // #undef 之后再用，报原来的错误
+        let undef = "#define A g_Texture1\n#undef A\ntexSample2D(A, uv)";
+        let err = rewrite_texture_calls(undef, &textures).unwrap_err();
+        assert!(err.contains("不是已声明的纹理：A"), "{err}");
+        // 别名指向未声明名
+        let missing = "#define A nope\ntexSample2D(A, uv)";
+        assert!(rewrite_texture_calls(missing, &textures).is_err());
+        // 函数宏不当别名
+        let function_macro = "#define A(x) g_Texture1\ntexSample2D(A, uv)";
+        assert!(rewrite_texture_calls(function_macro, &textures).is_err());
+        // 环不会死循环
+        let cycle = "#define A B\n#define B A\ntexSample2D(A, uv)";
+        assert!(rewrite_texture_calls(cycle, &textures).is_err());
+    }
+
+    #[test]
+    fn texture_call_without_alias_is_unchanged_by_other_directives() {
+        let textures = alias_textures();
+        let src = "#if X\n#define V 1\n#endif\ntexSample2D(g_Texture1, uv)";
+        let out = rewrite_texture_calls(src, &textures).unwrap();
+        assert_eq!(
+            out,
+            "#if X\n#define V 1\n#endif\ntexture(sampler2D(g_Texture1, kb_sampler_g_Texture1), uv)"
+        );
     }
 
     #[test]
