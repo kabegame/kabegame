@@ -53,6 +53,9 @@ tag 缺省取 out 的末级目录名；out 里已有同 tag 的抓帧时拒绝�
 结果里报出探测次数（probes）。
 - 结果看 gaps（帧号不连续）、backbuffer（实际的后备缓冲，和请求的不同时带 size_note）和 first_frame（绘制数）。\
 被抓的帧本身是长帧；帧号在每次开窗后重新计数。
+- 窗口尺寸：size 是客户区（= 交换链）。带边框的窗口放不进显示器时（如 4K 屏上要 3840x2160），borderless 不给就自动\
+改用 WPE 的 -borderless 无边框窗口，按 DPI 扣掉 WPE 多加的边框，客户区正好是 size（结果的 placement 写明）。\
+borderless=false 强制带边框（会被系统压小），x / y 指定左上角。
 
 回放：
 - 和旧的 `renderdoc` MCP 的区别：不用开 RenderDoc 界面，也不经界面里的扩展。每个会话的 MCP 自己拉起\
@@ -614,7 +617,8 @@ def ensure_running() -> dict:
 
 
 @mcp.tool
-def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20) -> dict:
+def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20, borderless: bool | None = None,
+                   x: int | None = None, y: int | None = None) -> dict:
     """
     在本会话自己的测试窗口里打开一个工程（-playInWindow），先 ensure_running。
 
@@ -622,11 +626,15 @@ def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20) -> di
         project: 工程目录、project.json、工坊 ID、默认工程名（如 shimmering_particles）或 myprojects 里的名字
         size: 客户区尺寸「宽x高」，物理像素。已有同尺寸的测试窗口（别的会话的或外来的）时拒绝，并报出是谁
         wait: 等窗口出现的秒数
+        borderless: 无边框窗口（WPE 的 -borderless，窗口 = 客户区 = size）。不给时自动：带边框的窗口放不进显示器
+            工作区（如 4K 屏上要 3840x2160）就用无边框，否则带边框（系统会把放不下的窗口压小，客户区跟着变小）
+        x, y: 窗口左上角（物理像素，两个都给或都不给）。无边框时缺省为显示器左上角
 
-    返回窗口名（kb-<MCP 进程号>-<序号>）、hwnd、窗口与客户区矩形（物理像素）、开窗前的日志游标（给 log_since），
-    以及前台有没有被它拿走。
+    返回窗口名（kb-<MCP 进程号>-<序号>）、hwnd、窗口与客户区矩形（物理像素）、开窗前的日志游标（给 log_since）、
+    placement（用没用无边框、是不是自动选的、扣掉的边框厚度与 DPI、实际发给 WPE 的尺寸），以及前台有没有被它拿走。
     """
-    return wpe_session.open_wallpaper(project, size, wait, ensure=wpe_ensure.ensure_running)
+    return wpe_session.open_wallpaper(project, size, wait, ensure=wpe_ensure.ensure_running, borderless=borderless,
+                                      x=x, y=y)
 
 
 @mcp.tool
@@ -739,7 +747,8 @@ def capture(window: str, out: str, frames: int = 3, tag: str | None = None, time
 
 @mcp.tool
 def capture_wallpaper(project: str, out: str, frames: int = 3, size: str = "1280x720", wait: float = 8,
-                      tag: str | None = None, log_grep: str | None = None, open_first: bool = True) -> dict:
+                      tag: str | None = None, log_grep: str | None = None, open_first: bool = True,
+                      borderless: bool | None = None, x: int | None = None, y: int | None = None) -> dict:
     """
     一步抓一张壁纸的对照帧：ensure_running → 开本会话的测试窗口 → 等 wait 秒让场景加载 → capture → 关窗 →
     截日志 → open_first 时在本会话的回放进程里打开第一张（之后直接调 get_draw_calls 等回放工具）。
@@ -754,12 +763,13 @@ def capture_wallpaper(project: str, out: str, frames: int = 3, size: str = "1280
         tag: 文件名前缀，缺省取 out 的末级目录名
         log_grep: 日志只要匹配这个正则的行（如 "\\[kbp\\]"）
         open_first: 抓完在本会话回放进程里打开第一张
+        borderless, x, y: 同 open_wallpaper（不给 borderless 时放不下就自动用无边框）
 
     返回窗口、capture 的结果、关窗结果、日志（从开窗前截起，含加载期的报错；各会话共用，同时开着别的窗口时会混进
     别人的行）、打开的抓帧。
     """
     return wpe_capture.capture_wallpaper(worker, project, out, frames, size, wait, tag, log_grep, open_first,
-                                         ensure=wpe_ensure.ensure_running)
+                                         ensure=wpe_ensure.ensure_running, borderless=borderless, x=x, y=y)
 
 
 @mcp.tool
@@ -767,8 +777,10 @@ def capture_sweep(jobs: list[dict[str, Any]], out_root: str, log_dir: str | None
     """
     一组「工程 × 帧数 × 设置」依次抓完（每个 job 一次 capture_wallpaper，不打开抓帧），抓帧放 out_root\\<tag>。
 
-    - jobs：[{project, frames?=3, size?="1280x720", wait?=8, settings?, tag?}]。settings 是 get_settings 列出的键
-      （如 {"fps": 60}），没给的键取扫描开始时的值；tag 缺省为「工程名-键值…[-尺寸]」，如 p4c-attract-fps60。
+    - jobs：[{project, frames?=3, size?="1280x720", wait?=8, settings?, tag?, borderless?, x?, y?}]。settings 是
+      get_settings 列出的键（如 {"fps": 60}），没给的键取扫描开始时的值；tag 缺省为「工程名-键值…[-尺寸]」，如
+      p4c-attract-fps60。borderless / x / y 同 open_wallpaper（不给 borderless 时放不下就自动用无边框，结果里的
+      borderless 项列出扣掉的边框）。
     - 按 settings 分组、相同的连在一起；和当前设置一样的那组先跑。要改设置时调 restart_wpe（有别的会话的窗口、外来窗口
       或设置界面开着就拒绝，整次扫描停下报告）；全部跑完后，改过的再 restart_wpe 改回扫描开始时的值。
     - log_dir 给了就照 ignore/p4/sweep_b.py 写 <tag>-log.txt（含 [kbp] 的行）和 <tag>-errors.txt（含 error、不含 [kbp]

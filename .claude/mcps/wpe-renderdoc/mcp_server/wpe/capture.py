@@ -378,10 +378,12 @@ def target_status(worker) -> dict[str, Any]:
 
 def _capture_wallpaper(worker, project: str, out: str, frames: int = 3, size: str = "1280x720", wait: float = 8,
                        tag: str | None = None, log_grep: str | None = None, open_first: bool = True,
-                       ensure=None, overwrite: bool = False) -> tuple[dict[str, Any], list[str]]:
+                       ensure=None, overwrite: bool = False, borderless: bool | None = None, x: int | None = None,
+                       y: int | None = None) -> tuple[dict[str, Any], list[str]]:
     """返回 (结果, 开窗前到关窗后的全部日志行)。日志行给 capture_sweep 写文件用。"""
     t_all = time.monotonic()
     # 先校验，免得开了窗才发现 out 不对
+    session.check_placement(borderless, x, y)
     out_dir = check_out(out)
     tag = check_tag(tag or os.path.basename(out_dir))
     if not isinstance(wait, (int, float)) or wait < 0:
@@ -390,11 +392,12 @@ def _capture_wallpaper(worker, project: str, out: str, frames: int = 3, size: st
     if existing and not overwrite:
         raise WpeError(f"{out_dir} 里已有 {len(existing)} 张 {tag}-frame*.rdc，没有开窗。换一个 out / tag")
 
-    opened = session.open_wallpaper(project, size, 20, ensure=ensure)
+    opened = session.open_wallpaper(project, size, 20, ensure=ensure, borderless=borderless, x=x, y=y)
     window = opened["window"]
     result: dict[str, Any] = {"window": window, "project": opened["project"], "size": opened["size"],
                               "open": {k: opened.get(k) for k in ("hwnd", "client", "appeared_after_s", "wpe_pid",
-                                                                  "foreground", "foreground_taken", "warning")}}
+                                                                  "foreground", "foreground_taken", "warning",
+                                                                  "placement")}}
     error: BaseException | None = None
     try:
         time.sleep(wait)
@@ -430,8 +433,10 @@ def _capture_wallpaper(worker, project: str, out: str, frames: int = 3, size: st
 
 def capture_wallpaper(worker, project: str, out: str, frames: int = 3, size: str = "1280x720", wait: float = 8,
                       tag: str | None = None, log_grep: str | None = None, open_first: bool = True,
-                      ensure=None) -> dict[str, Any]:
-    result, _ = _capture_wallpaper(worker, project, out, frames, size, wait, tag, log_grep, open_first, ensure)
+                      ensure=None, borderless: bool | None = None, x: int | None = None,
+                      y: int | None = None) -> dict[str, Any]:
+    result, _ = _capture_wallpaper(worker, project, out, frames, size, wait, tag, log_grep, open_first, ensure,
+                                   borderless=borderless, x=x, y=y)
     return result
 
 
@@ -492,8 +497,13 @@ def capture_sweep(worker, jobs: list[dict[str, Any]], out_root: str, log_dir: st
         frames = job.get("frames", 3)
         if not isinstance(frames, int) or isinstance(frames, bool) or not 1 <= frames <= MAX_FRAMES:
             problems.append(f"第 {i + 1} 个 job 的 frames 要是 1…{MAX_FRAMES} 的整数")
+        try:
+            session.check_placement(job.get("borderless"), job.get("x"), job.get("y"))
+        except WpeError as e:
+            problems.append(f"第 {i + 1} 个 job：{e}")
         normal.append({"index": i, "project": job["project"], "frames": frames, "size": size or "1280x720",
-                       "wait": job.get("wait", 8), "settings": clean, "tag": tag})
+                       "wait": job.get("wait", 8), "settings": clean, "tag": tag,
+                       "borderless": job.get("borderless"), "x": job.get("x"), "y": job.get("y")})
     tags = [j["tag"] for j in normal]
     dup = sorted({t for t in tags if tags.count(t) > 1})
     if dup:
@@ -574,7 +584,7 @@ def _sweep_job(worker, j: dict[str, Any], root: str, log_dir: str | None, ensure
                             "frames_requested": j["frames"], "settings": j["settings"], "out": out}
     try:
         res, lines = _capture_wallpaper(worker, j["project"], out, j["frames"], j["size"], j["wait"], j["tag"],
-                                        None, False, ensure)
+                                        None, False, ensure, borderless=j["borderless"], x=j["x"], y=j["y"])
     except WpeError as e:
         item["error"] = str(e)
         return item
@@ -586,6 +596,11 @@ def _sweep_job(worker, j: dict[str, Any], root: str, log_dir: str | None, ensure
                 backbuffer=cap.get("backbuffer"), **({"size_note": cap["size_note"]} if cap.get("size_note") else {}),
                 probes=cap["probes"], lock_wait_s=cap["lock_wait_s"], log_lines=len(kbp), error_lines=len(errors),
                 total_log_lines=len(lines), took_s=res["took_s"])
+    placement = (res.get("open") or {}).get("placement") or {}
+    if placement.get("borderless"):
+        item["borderless"] = {k: placement.get(k) for k in ("auto", "x", "y", "sent_size", "frame_extra", "dpi")}
+    if (res.get("open") or {}).get("warning"):
+        item["open_warning"] = res["open"]["warning"]
     if log_dir:
         os.makedirs(log_dir, exist_ok=True)
         for suffix, rows in (("log", kbp), ("errors", errors)):

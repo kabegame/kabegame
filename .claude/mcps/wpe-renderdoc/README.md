@@ -22,10 +22,10 @@
 | 类 | 工具 | 做什么 |
 |---|---|---|
 | 抓帧 | `capture_wallpaper` | 见上；中途出错也关掉自己开的窗口。日志从开窗前截起（含加载期的报错） |
-| | `capture_sweep(jobs, out_root, log_dir?)` | `jobs`：`[{project, frames?, size?, wait?, settings?, tag?}]`，抓帧放 `out_root\<tag>`。按 `settings` 分组，要改设置时 `restart_wpe`，跑完改回扫描开始时的值；`log_dir` 给了就写 `<tag>-log.txt`（`[kbp]` 行）与 `<tag>-errors.txt` |
+| | `capture_sweep(jobs, out_root, log_dir?)` | `jobs`：`[{project, frames?, size?, wait?, settings?, tag?, borderless?, x?, y?}]`，抓帧放 `out_root\<tag>`。按 `settings` 分组，要改设置时 `restart_wpe`，跑完改回扫描开始时的值；`log_dir` 给了就写 `<tag>-log.txt`（`[kbp]` 行）与 `<tag>-errors.txt` |
 | | `capture(window, out, frames, tag?, timeout?, overwrite?)` | 在本会话开着的窗口上抓 N 帧，文件 `<tag>-frame<帧号>.rdc`；`out` 里已有同 tag 的抓帧时拒绝，除非 `overwrite` |
 | WPE | `ensure_running` | 在跑且已注入就不动；在跑没注入就原地注入；没在跑就 `-silent` 普通启动再注入（崩溃标记为 1 先清） |
-| | `open_wallpaper` / `close_wallpaper` / `apply_properties` / `windows` | 本会话的测试窗口 |
+| | `open_wallpaper` / `close_wallpaper` / `apply_properties` / `windows` | 本会话的测试窗口；`open_wallpaper`、`capture_wallpaper` 与 sweep 的 job 收 `borderless`、`x`、`y`，见「无边框窗口」 |
 | | `status(target?)` | 进程、注入、窗口表、外来窗口、抓帧锁由谁持有；`target=True` 另读 RenderDoc 目标的 API 与可抓窗口数 |
 | | `get_settings` / `restart_wpe(settings?)` | 只读 `config.json`；改设置只能重启 |
 | | `log_mark` / `log_since` / `cleanup_project` | 日志游标与增量；清测试工程里的 `shaders/blobsSM40` |
@@ -53,7 +53,12 @@
   - 交换链（后备缓冲）总等于窗口客户区，客户区总等于请求的尺寸（除非窗口超出屏幕被系统缩小，见下一条）；偏差为 0；
   - 缩略图不一定等于后备缓冲：宽 = min(后备缓冲宽, 2048) 向下对齐到 8 的倍数，高 = 宽 × 后备缓冲高 ÷ 后备缓冲宽（向下取整）。如 900×500 → 896×497、1366×768 → 1360×764、3840×2130 → 2048×1136；
   - 两个窗口的缩略图可能撞上（比如 2048×1136 的窗口和 3840×2130 的窗口），这时靠回放分开。
-- **窗口加上标题栏后超出屏幕时会被系统缩小：** 本机屏幕 3840×2160 物理像素，开 3840×2160 的窗口，客户区实际是 3840×2130，WPE 的交换链跟着客户区走。`capture` 按客户区认，结果里带 `expect_note`。
+- **窗口加上标题栏后超出屏幕时会被系统缩小：** 本机屏幕 3840×2160 物理像素，带边框开 3840×2160 的窗口，客户区实际是 3840×2130，WPE 的交换链跟着客户区走。`capture` 按客户区认，结果里带 `expect_note`。要准确的客户区用无边框窗口（下一条），`borderless` 不给时放不下会自动用。
+- **无边框窗口（2026-11-14）：** `openWallpaper` 还认 `-x`、`-y`、`-borderless`（`wallpaper64.exe` 里和 `-width` / `-height` 排在一起）。
+  - `-borderless` 把窗口换成 `WS_POPUP`（样式 `0x94000000`），窗口 = 客户区；但 WPE 仍按带边框窗口（`WS_OVERLAPPEDWINDOW`）算尺寸，整个窗口是「请求尺寸 + 边框厚度」：144 DPI 下请求 3840×2160 实得 3862×2216，请求 3818×2104 实得 3840×2160，请求 1280×720 实得 1302×776。
+  - 所以 `borderless` 时 MCP 按目标显示器的 DPI 用 `AdjustWindowRectExForDpi(WS_OVERLAPPEDWINDOW)` 算边框厚度（144 DPI 是 22×56，和实测相同），从 `-width` / `-height` 里先减掉；`x`、`y` 缺省为显示器左上角。开窗后照常核对客户区，对不上报 `warning`。
+  - `borderless` 不给（`None`）时自动：带边框的窗口（请求尺寸 + 边框）放不进显示器工作区就用无边框，否则照旧带边框。结果的 `placement` 写明用没用、是不是自动选的、扣掉的边框、DPI、实际发给 WPE 的尺寸；sweep 的 job 结果里是 `borderless` 项。
+  - 无边框窗口盖住它那块屏幕（4K 全屏时连任务栏一起），和带边框的测试窗口一样会拿到前台。
 - **探测的代价：** 探测会让别人的窗口多一次被抓的帧。fps 20（正常 dt 50 ms）下三次实测：对方的探测落在自己窗口上时 dt 最多 66–70 ms；自己被抓时 dt 最多 77–249 ms，各次差别不小；fps 越高越明显。结果里报出探测次数（`probes`）。
 
 ### 设置

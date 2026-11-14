@@ -30,7 +30,13 @@ get_draw_calls() / get_mesh_data(event_id, "gs_out") / get_pipeline_state(event_
 
 `capture_wallpaper` 做完「`ensure_running` → 开本会话的测试窗口 → 等 `wait` 秒让场景加载 → 抓帧 → 关窗 → 截日志 → 在本会话的
 回放进程里打开第一张」，中途出错也会关掉自己开的窗口。其余参数：`tag`（文件名前缀）、`log_grep`（日志只要匹配的行，如
-`"\[kbp\]"`）、`open_first`（缺省 true）。`project` 可以是工程目录、`project.json`、工坊 ID、默认工程名或 `myprojects` 里的名字。
+`"\[kbp\]"`）、`open_first`（缺省 true）、`borderless` / `x` / `y`（见下面「窗口尺寸」）。`project` 可以是工程目录、
+`project.json`、工坊 ID、默认工程名或 `myprojects` 里的名字。
+
+**窗口尺寸：** `size` 是客户区（= WPE 的交换链）。要和场景尺寸相同（比如 4K 场景开 `size="3840x2160"`）时什么都不用多给：
+带边框的窗口放不进显示器就自动换成无边框（WPE 的 `-borderless`，MCP 按 DPI 扣掉 WPE 多加的边框厚度），客户区正好是 `size`，
+结果的 `placement` 写明。`borderless=False` 强制带边框（放不下时系统压小窗口，4K 屏上 3840×2160 只剩 3840×2130），
+`borderless=True` 强制无边框；`x`、`y` 是窗口左上角，两个一起给。
 
 **一组「工程 × 帧数 × 设置」（比较 fps、后处理档位）：**
 
@@ -40,7 +46,7 @@ capture_sweep(jobs=[{"project": "D:\Codes\kabegame\ignore\p4\proj\p4c-attract", 
               out_root="A:\p4c", log_dir="D:\Codes\kabegame\ignore\p4\out")
 ```
 
-- `jobs` 每项 `{project, frames?=3, size?="1280x720", wait?=8, settings?, tag?}`；`tag` 缺省是「工程名-键值…[-尺寸]」
+- `jobs` 每项 `{project, frames?=3, size?="1280x720", wait?=8, settings?, tag?, borderless?, x?, y?}`；`tag` 缺省是「工程名-键值…[-尺寸]」
   （如 `p4c-attract-fps60`），抓帧放 `out_root\<tag>`。
 - 按 `settings` 分组；要改设置时 `restart_wpe`，跑完把它改过的设置改回扫描开始时的值。
 - `log_dir` 给了就写 `<tag>-log.txt`（`[kbp]` 行，kbp-tools 的时间线读它）和 `<tag>-errors.txt`。
@@ -72,7 +78,9 @@ close_wallpaper(window)
 - `gaps`：帧号不连续的地方，非空就是漏帧。
 - `first_frame`：回放第一张的绘制数、各绘制的索引数、后备缓冲尺寸、`backbuffer_ok`。**绘制数和预期对不上就是抓错了内容**，
   文件名和大小看不出这一点。
-- `backbuffer`：实际的后备缓冲；和请求的尺寸不同时带 `size_note`（窗口超出屏幕被系统缩小时会这样，另有 `expect_note`）。
+- `backbuffer`：实际的后备缓冲；和请求的尺寸不同时带 `size_note`（强制带边框的窗口超出屏幕被系统缩小时会这样，另有 `expect_note`）。
+- `open.placement`（sweep 里是每个 job 的 `borderless`）：用没用无边框、是不是自动选的、扣掉的边框厚度、DPI、实际发给 WPE 的尺寸；
+  开窗后客户区和 `size` 对不上时另有 `open.warning`。
 - `identified_by`（怎么认出本窗口）、`probes`（探测次数）、`lock_wait_s`（等抓帧锁的时间）、`windows`（可抓窗口数）。
 
 ## 常驻共享的规则
@@ -118,7 +126,9 @@ close_wallpaper(window)
 - **测试窗口左上角有 RenderDoc 的叠加文字：** 约 340×40 像素，不进 `.rdc`，但 PrintWindow 采样能看到，判读点要避开。
 - **回放读到的常量里 `referenced: false` 的是着色器没读的，值是缓冲里的垃圾，** 不能当数据。
 - **缩略图不一定等于后备缓冲：** 宽按 8 对齐、最宽 2048（如 900×500 → 896×497），交换链总等于窗口客户区。
-- **窗口加上标题栏后超出屏幕会被系统缩小：** 本机开 3840×2160 实际客户区是 3840×2130，看 `size_note` / `expect_note`。
+- **窗口加上标题栏后超出屏幕会被系统缩小：** 带边框开 3840×2160 实际客户区是 3840×2130，看 `size_note` / `expect_note`。
+  2026-11-14 起 `borderless` 不给时自动换无边框，客户区就是 `size`；之前按 3840×2130 抓的帧和场景尺寸不同，比较时要注意。
+- **无边框窗口盖住整块屏幕：** 4K 全屏的测试窗口连任务栏一起盖住，抓帧期间要人动鼠标时在它上面划即可，关窗后恢复。
 - **桌面壁纸被重建后可能被挂上：** 注入后用户换壁纸或显示器变化，新的桌面设备也会被挂上，桌面左上角出现叠加文字、可抓窗口数多一个；
   WPE 重启后恢复。
 - **测试窗口会在开窗几秒后拿到前台：** 用户接受；WPE 的主窗口（浏览界面、安全启动提示）不会弹。

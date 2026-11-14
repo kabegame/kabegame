@@ -132,6 +132,58 @@ def client_rect(hwnd: int) -> list[int] | None:
     return [p.x, p.y, r.right - r.left, r.bottom - r.top]
 
 
+# ==================== 显示器与边框（无边框测试窗口用） ====================
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+
+
+user32.MonitorFromPoint.argtypes = [wt.POINT, wt.DWORD]
+user32.MonitorFromPoint.restype = ctypes.c_void_p
+user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)]
+
+# WPE 的测试窗口是 WS_OVERLAPPEDWINDOW（标题栏 + 粗边框）
+WS_OVERLAPPEDWINDOW = 0x00CF0000
+
+
+def monitor_at(x: int, y: int) -> dict[str, Any]:
+    """点 (x, y) 所在（或最近）的显示器：rect / work 是 [左, 上, 右, 下]，物理像素；dpi 是有效 DPI。"""
+    handle = user32.MonitorFromPoint(wt.POINT(int(x), int(y)), 2)  # MONITOR_DEFAULTTONEAREST
+    info = _MONITORINFO()
+    info.cbSize = ctypes.sizeof(_MONITORINFO)
+    if not handle or not user32.GetMonitorInfoW(handle, ctypes.byref(info)):
+        raise OSError(f"取不到 ({x}, {y}) 所在显示器的信息")
+    dpi_x, dpi_y = wt.UINT(), wt.UINT()
+    try:
+        if ctypes.WinDLL("shcore").GetDpiForMonitor(ctypes.c_void_p(handle), 0, ctypes.byref(dpi_x),
+                                                    ctypes.byref(dpi_y)) != 0:
+            dpi_x.value = 96
+    except (AttributeError, OSError):
+        dpi_x.value = 96
+    m, w = info.rcMonitor, info.rcWork
+    return {"rect": [m.left, m.top, m.right, m.bottom], "work": [w.left, w.top, w.right, w.bottom],
+            "dpi": int(dpi_x.value)}
+
+
+def frame_extra(dpi: int) -> tuple[int, int]:
+    """WS_OVERLAPPEDWINDOW 在这个 DPI 下比客户区多出的宽、高（边框 + 标题栏，AdjustWindowRectExForDpi）。
+
+    WPE 的 -borderless 窗口照样按带边框窗口算尺寸，只是换成无边框样式：请求 -width W -height H 得到的整个窗口
+    （= 客户区）是 (W + 宽, H + 高)。2026-11-14 实测 144 DPI 下多出 22×56，和这里算的相同。
+    """
+    r = wt.RECT(0, 0, 100, 100)
+    try:
+        user32.AdjustWindowRectExForDpi.argtypes = [ctypes.POINTER(wt.RECT), wt.DWORD, wt.BOOL, wt.DWORD, wt.UINT]
+        ok = user32.AdjustWindowRectExForDpi(ctypes.byref(r), WS_OVERLAPPEDWINDOW, False, 0, int(dpi))
+    except AttributeError:
+        user32.AdjustWindowRectEx.argtypes = [ctypes.POINTER(wt.RECT), wt.DWORD, wt.BOOL, wt.DWORD]
+        ok = user32.AdjustWindowRectEx(ctypes.byref(r), WS_OVERLAPPEDWINDOW, False, 0)
+    if not ok:
+        raise OSError("AdjustWindowRectExForDpi 失败")
+    return r.right - r.left - 100, r.bottom - r.top - 100
+
+
 def image_of(pid: int) -> str | None:
     from ..replay import open_process, process_image  # 进程句柄工具在 replay.py
     handle = open_process(pid)

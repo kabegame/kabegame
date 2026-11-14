@@ -159,12 +159,59 @@ def _size_conflicts(view: dict[str, Any], size: tuple[int, int]) -> list[dict[st
     return conflicts
 
 
-def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ensure=None) -> dict[str, Any]:
+def check_placement(borderless: Any = None, x: Any = None, y: Any = None) -> None:
+    """borderless 是 None（自动）或布尔；x、y 是整数，要么都给、要么都不给。不对就报错（开窗前校验）。"""
+    if borderless is not None and not isinstance(borderless, bool):
+        raise WpeError(f"borderless 要是 true / false，或者不给（自动），收到 {borderless!r}")
+    for key, value in (("x", x), ("y", y)):
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise WpeError(f"{key} 要是整数（物理像素），收到 {value!r}")
+    if (x is None) != (y is None):
+        raise WpeError("x、y 要同时给，或者都不给")
+
+
+def _placement(w: int, h: int, borderless: bool | None, x: int | None, y: int | None) -> dict[str, Any]:
+    """决定发给 openWallpaper 的尺寸与位置参数。
+
+    带边框（缺省）：-width / -height 就是客户区；窗口加上边框放不进显示器时，系统会把窗口压小，客户区跟着变小
+    （4K 屏上请求 3840x2160 实得 3840x2130）。
+    无边框（-borderless）：WPE 仍按带边框窗口算尺寸，整个窗口 = 客户区 = 请求尺寸 + 边框厚度（frame_extra），
+    所以请求时先减掉边框；位置用 -x / -y，缺省放在显示器左上角。
+    borderless 为 None 时自动：带边框放不进显示器的工作区就用无边框。
+    """
+    mon = win.monitor_at(x if x is not None else 0, y if y is not None else 0)
+    fx, fy = win.frame_extra(mon["dpi"])
+    work = mon["work"]
+    fits = w + fx <= work[2] - work[0] and h + fy <= work[3] - work[1]
+    auto = borderless is None
+    use = (not fits) if auto else borderless
+    info: dict[str, Any] = {"borderless": use, "auto": auto, "fits_with_frame": fits, "frame_extra": [fx, fy],
+                            "dpi": mon["dpi"], "monitor": mon["rect"], "work": work}
+    if use:
+        sent = (w - fx, h - fy)
+        if sent[0] < 16 or sent[1] < 16:
+            raise WpeError(f"无边框窗口 {w}x{h} 扣掉边框 {fx}x{fy} 后太小，换一个尺寸")
+        px = x if x is not None else mon["rect"][0]
+        py = y if y is not None else mon["rect"][1]
+        info.update(x=px, y=py, sent_size=list(sent))
+        info["args"] = f"-width {sent[0]} -height {sent[1]} -x {px} -y {py} -borderless"
+    else:
+        info["sent_size"] = [w, h]
+        info["args"] = f"-width {w} -height {h}" + (f" -x {x} -y {y}" if x is not None else "")
+        if x is not None:
+            info.update(x=x, y=y)
+    return info
+
+
+def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ensure=None,
+                   borderless: bool | None = None, x: int | None = None, y: int | None = None) -> dict[str, Any]:
     with _op_lock:
+        check_placement(borderless, x, y)
         ensured = ensure() if ensure else None
         path = projects.resolve_project(project)
         w, h = parse_size(size)
         size_text = f"{w}x{h}"
+        placement = _placement(w, h, borderless, x, y)
         with registry.windows_lock.held(60) as lock:
             view = survey()
             conflicts = _size_conflicts(view, (w, h))
@@ -183,7 +230,7 @@ def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ens
         fg_before = win.foreground()
         t0 = time.monotonic()
         try:
-            sent = ctl.control(f'openWallpaper -file "{path}" -playInWindow "{name}" -width {w} -height {h}')
+            sent = ctl.control(f'openWallpaper -file "{path}" -playInWindow "{name}" {placement["args"]}')
             info = win.wait_test_window(name, wait, _main_pids())
         except BaseException:
             registry.delete(name)
@@ -219,10 +266,15 @@ def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ens
             "window": name, "hwnd": info["hwnd"], "project": path, "size": size_text,
             "rect": info["rect"], "client": info["client"], "wpe_pid": sent["wpe_pid"],
             "appeared_after_s": appeared, "log_mark": cursor, "registry_lock_wait_s": lock_wait,
-            "foreground": fg,
+            "foreground": fg, "placement": {k: v for k, v in placement.items() if k != "args"},
         }
         if info["size"] != size_text:
-            result["warning"] = f"客户区是 {info['size']}，和请求的 {size_text} 不同"
+            if placement["borderless"]:
+                result["warning"] = (f"客户区是 {info['size']}，和请求的 {size_text} 不同：无边框窗口按边框厚度 "
+                                     f"{placement['frame_extra']}（{placement['dpi']} DPI）扣过，WPE 实际加的不一样")
+            else:
+                result["warning"] = (f"客户区是 {info['size']}，和请求的 {size_text} 不同（窗口加边框放不进显示器时系统会"
+                                     "压小窗口；要准确的客户区用 borderless）")
         if fg["changed"]:
             after = fg["after"] or {}
             result["foreground_taken"] = after.get("hwnd") == info["hwnd"]
