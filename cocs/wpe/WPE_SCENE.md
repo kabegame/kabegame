@@ -428,7 +428,8 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
   - 绑定的属性不存在（`project.json` 没声明、也不是 WPE 的内置项）时一律保持 `value`、不比 condition（`model.ts` 的 `resolveValue`；可见性、数值字段、脚本属性都实测过），绑定照样登记。
   - WPE 注入的 14 个内置属性（`alignment*`、`rate`、`wcc_*`、`wec_*`，`compile/builtinProperties.ts`）算存在：编译期全集、宿主首包、`init` 里的 `engine.userProperties` 与首次 `applyUserProperties` 都带着，值是 WPE 默认值，工程声明了同名属性时以工程的为准。`alignment` 照视频壁纸已有的样式对应取（fill / tile 0、fit 1、stretch 2、center 3），运行中改样式作为一条增量走应用函数；其余没有对应设置，取默认值。我们不实现对齐与颜色校正，这些只是数据。
   - 图层标量 `alpha` / `brightness` 照 WPE 的 float setter 不收布尔（条件换成的、布尔属性本身、JSON 里直接写的布尔）：编译期留 `value`（它也是布尔就是 1），就地写不写、不标脏；图层向量字段与材质常量本来就是这样。
-  - 没修的两处偏差（`p3am-empty` 实测）：空串 condition WPE 当成没写条件；图层 `visible` 的布尔 setter 不收字符串、留 `value`，我们按「不是 `false` 就显示」。语料里前者 0 处、后者 1 处（3276911872 的 objects/158）。
+  - 空串 condition 算没写条件（`model.ts` 的 `userCondition`，编译期取值与绑定登记都经它，`p3am-empty` 实测）。
+  - 图层与 effect 的 `visible` 是同一个 bool setter，只收布尔：不带条件、属性值是数字或字符串时写不进，保持 `value`（编译期 `boolFieldValue`，就地写不写、不标脏；`p3am-empty`、`p3am-num` 实测）。`solid` 没有依据，照旧按「不是 `false` 就算真」。
 - **重编译原因**：
 
   | 原因键 | 触发 | 为什么要重编译 |

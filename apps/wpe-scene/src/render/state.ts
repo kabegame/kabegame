@@ -545,8 +545,9 @@ export class SceneState {
       return this.bloomMissing && !this.bloomEnabled && bloomFlagOf(binding, raw) === true;
     if (target.kind !== "effect") return false;
     const effect = this.effects.get(effectKey(target.object, target.effect));
-    const enabled = bindingValue(raw, binding.condition, "bool") !== false;
-    if (!effect || enabled === effect.enabled) return false;
+    // bool setter 不收数字、字符串属性（同 `write`）
+    const enabled = conditioned(binding, raw);
+    if (!effect || typeof enabled !== "boolean" || enabled === effect.enabled) return false;
     return (effect.unsupported && enabled) || this.frozenLayers.has(target.object);
   }
 
@@ -562,9 +563,9 @@ export class SceneState {
     if (target.kind === "effect") {
       const effect = this.effects.get(effectKey(target.object, target.effect));
       if (!effect) return "applied";
-      // 值换算同编译期（`enabled = 解析值 !== false`）
-      const enabled = bindingValue(raw, binding.condition, "bool") !== false;
-      if (enabled === effect.enabled) return "applied";
+      // 同编译期（`boolFieldValue`）：WPE 的 bool setter 只收布尔，数字、字符串属性写不进、开关不变（phase-3a「补测」`p3am-num` F1–F3）
+      const enabled = conditioned(binding, raw);
+      if (typeof enabled !== "boolean" || enabled === effect.enabled) return "applied";
       if (this.needsRecompile(binding, raw)) return "recompile";
       effect.enabled = enabled;
       this.dirtyStructures.add(target.object);
@@ -635,7 +636,9 @@ export class SceneState {
         this.writeAlignment(target.object, layer, bindingValue(raw, binding.condition, field));
         return "applied";
       }
-      // 光标命中的开关（P6c）：只改状态，不标脏（不影响绘制）；非布尔的属性值同 `visible`（`!== false`），脚本只收布尔（`script/api.ts`）
+      // 光标命中的开关（P6c）：只改状态，不标脏（不影响绘制）；脚本只收布尔（`script/api.ts`）
+      // TODO:[WPE_SCENE] 没实测：`solid` 绑数字、字符串属性时 WPE 收不收。`visible` 的 bool setter 不收、留 value（phase-3a「补测」
+      // `p3am-num`），`solid` 是不是同一个 setter 没有读码依据，这里照旧按「不是 false 就算真」
       if (layer && field === "solid") {
         layer.solid = bindingValue(raw, binding.condition, field) !== false;
         return "applied";
@@ -652,6 +655,9 @@ export class SceneState {
           // 的 `scalar`，P3a 补测 NC1–NC5、`p3am-bright`）
           if ((field === "alpha" || field === "brightness") && typeof conditioned(binding, raw) === "boolean")
             return "applied";
+          // `visible` 照 WPE 的 bool setter 只收布尔：数字、字符串属性不写、不标脏，同编译期（`boolFieldValue`，phase-3a「补测」
+          // `p3am-empty` W5、`p3am-num` U1–U3）
+          if (field === "visible" && typeof conditioned(binding, raw) !== "boolean") return "applied";
           writeLayer(layer, field, bindingValue(raw, binding.condition, field));
         }
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的

@@ -9,7 +9,7 @@
  * **漏登记的后果是「改了没反应」**：既不就地写、也不重编译。新增读取用户属性的编译点时必须同时登记
  * （单测用 `Proxy` 记录编译期读过的属性名，断言都在绑定表里）。
  */
-import { numbers, resolveValue, type SceneScalar, type SceneValue } from "./model";
+import { numbers, resolveValue, userCondition, type SceneScalar, type SceneValue } from "./model";
 import { setterValue, type MaterialMember } from "./materialValues";
 import type { InstanceKey } from "./particles";
 import type { BloomParams } from "./postprocess";
@@ -277,7 +277,9 @@ export function userBindingOf(value: SceneValue | undefined): { property: string
   if (typeof user !== "object") return null;
   const name = typeof user.name === "string" ? user.name : "";
   if (!name) return null;
-  return user.condition === undefined ? { property: name } : { property: name, condition: String(user.condition) };
+  // 空串 condition 算没写（`userCondition`）
+  const condition = userCondition(user);
+  return condition === undefined ? { property: name } : { property: name, condition };
 }
 
 /**

@@ -73,6 +73,7 @@ import {
   usesPerspectiveParticles,
 } from "./features";
 import {
+  boolFieldValue,
   currentProperties,
   numbers,
   parseEffect,
@@ -2223,7 +2224,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       alpha: scalar("alpha"),
       color: vector("color", [1, 1, 1]),
       brightness: scalar("brightness"),
-      visible: bindings.bind(object.visible, properties, at("visible")) !== false,
+      // bool setter 不收数字、字符串属性，留 `value`（`boolFieldValue`，运行时同 `SceneState.write`）
+      visible: boolFieldValue(object.visible, bindings.bind(object.visible, properties, at("visible"))),
       visibleBound: isUserBinding(object.visible),
       parallaxDepth: vector("parallaxDepth", [1, 1]),
       solidLayer: false,
@@ -2329,8 +2331,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (settled()) break;
       const instance = (raw ?? {}) as SceneEffectInstance;
       const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);
-      const enabled =
-        bindings.bind(instance.visible, properties, { kind: "effect", object: index, effect: source }) !== false;
+      // 同图层 `visible` 的 bool setter（`p3am-num` F1–F3 实测）：数字、字符串属性写不进，留 `value`
+      const enabled = boolFieldValue(
+        instance.visible as SceneValue | undefined,
+        bindings.bind(instance.visible, properties, { kind: "effect", object: index, effect: source }),
+      );
       // 写死关闭、没有绑定的整步跳过（B11），也不检查它的能力
       if (!enabled && !visibleBound) continue;
       const issues = new EffectIssues(enabled ? unsupported : null);

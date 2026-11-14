@@ -221,11 +221,31 @@ export function resolveValue(
     // （phase-3a「补测：绑定的属性不存在时」）。绑定照样由 `BindingCollector.bind` 登记
     if (current === undefined || current === null) return value.value;
     // condition 按字符串比（WPE 的值换字符串再与 condition 比；condition 写成数字时同样成立），见 `bindings.ts`
-    if (typeof value.user === "object" && value.user.condition !== undefined)
-      return String(current) === String(value.user.condition);
+    const condition = userCondition(value.user);
+    if (condition !== undefined) return String(current) === condition;
     return current;
   }
   return value;
+}
+
+/**
+ * `{user}` 的 condition：没写、或写成空串时都算没有条件（WPE 把空串当成没写，phase-3a「补测」的 `p3am-empty` W2 / W3），
+ * 其余换成字符串。编译期取值、绑定登记（`bindings.ts` 的 `userBindingOf`、脚本属性）都经这里，运行时拿到的绑定已是规整过的。
+ */
+export function userCondition(user: unknown): string | undefined {
+  if (!user || typeof user !== "object") return undefined;
+  const condition = (user as { condition?: unknown }).condition;
+  return condition === undefined || condition === "" ? undefined : String(condition);
+}
+
+/**
+ * 布尔字段（图层与 effect 的 `visible`）照 WPE 的 bool setter：解析值不是布尔（数字、字符串属性）时写不进，保持 JSON 的 `value`；
+ * `value` 也不是布尔时按缺省显示。带条件的绑定解析出来本就是布尔。依据 phase-3a「补测」的 `p3am-empty` W5 与 `p3am-num`。
+ */
+export function boolFieldValue(value: SceneValue | undefined, resolved: SceneScalar | undefined): boolean {
+  if (typeof resolved === "boolean") return resolved;
+  const own = value && typeof value === "object" ? (value as { value?: unknown }).value : value;
+  return own !== false;
 }
 
 /**

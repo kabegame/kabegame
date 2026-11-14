@@ -371,7 +371,7 @@ describe("effect 开关（3c）", () => {
     expect(state.takeDirty().structures.size).toBe(0);
   });
 
-  it("值换算同编译期：有条件比字符串，没条件只有 false 算关", () => {
+  it("值换算同编译期：有条件比字符串；没条件时只收布尔，数字、字符串属性不改开关（phase-3a 补测 p3am-num F1–F3）", () => {
     const state = stateOf({});
     state.write(binding("1"), 1);
     expect(state.effectEnabled(0, 2)).toBe(true);
@@ -381,6 +381,15 @@ describe("effect 开关（3c）", () => {
     expect(state.effectEnabled(0, 2)).toBe(true);
     state.write(binding(), false);
     expect(state.effectEnabled(0, 2)).toBe(false);
+    // 没条件的数字、字符串：WPE 的 bool setter 写不进，开关保持关；同样不触发重编译、不记脏
+    state.takeDirty();
+    expect(state.write(binding(), 0)).toBe("applied");
+    expect(state.write(binding(), 1)).toBe("applied");
+    expect(state.write(binding(), "1")).toBe("applied");
+    expect(state.effectEnabled(0, 2)).toBe(false);
+    expect(state.takeDirty().structures.size).toBe(0);
+    state.write(binding(), true);
+    expect(state.effectEnabled(0, 2)).toBe(true);
     state.write(binding(), 0);
     expect(state.effectEnabled(0, 2)).toBe(true);
   });

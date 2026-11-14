@@ -10,7 +10,14 @@ import {
   type ValueType,
 } from "./bindings";
 import { isCameraObject, isMixedCameraObject, isSoundObject, isTextObject, objectKind } from "./features";
-import { resolveValue, type SceneJson, type SceneObject, type SceneScalar, type SceneValue } from "./model";
+import {
+  resolveValue,
+  userCondition,
+  type SceneJson,
+  type SceneObject,
+  type SceneScalar,
+  type SceneValue,
+} from "./model";
 import { registrationKeys } from "./registration";
 import { instanceControlPoint, SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
 import { BLOOM_FIELDS } from "./postprocess";
@@ -197,9 +204,11 @@ export async function collectScripts(
         if (source && typeof source === "object" && "user" in source) {
           const user = source.user;
           const name = typeof user === "string" ? user : user.name;
+          // 空串 condition 算没写（`userCondition`）
+          const condition = userCondition(user);
           bindings.push({
             property: name,
-            ...(typeof user === "object" && user.condition !== undefined ? { condition: String(user.condition) } : {}),
+            ...(condition !== undefined ? { condition } : {}),
             target: { kind: "script-property", script: path, key: property },
           });
         }

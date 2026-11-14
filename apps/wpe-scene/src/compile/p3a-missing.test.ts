@@ -11,7 +11,14 @@ import { BindingCollector, type SceneBinding } from "./bindings";
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./builtinProperties";
 import { compileScene, type SceneBundle } from "./bundle";
 import type { SceneReader } from "./fs";
-import { currentProperties, observePropertyReads, resolveValue, type SceneScalar, type SceneValue } from "./model";
+import {
+  boolFieldValue,
+  currentProperties,
+  observePropertyReads,
+  resolveValue,
+  type SceneScalar,
+  type SceneValue,
+} from "./model";
 import { SceneState } from "../render/state";
 import { probeUserProperties } from "../dev/probeScripts";
 
@@ -417,5 +424,112 @@ describe("3. WPE 注入的内置属性", () => {
     expect(properties.get("alignment")).toEqual({ type: "combo", value: 0 });
     expect(properties.get("wcc_v")).toEqual({ type: "combo", value: "" });
     expect([...properties.keys()].filter((key) => key in WPE_BUILTIN_PROPERTIES)).toHaveLength(14);
+  });
+});
+
+describe("4. 空串 condition 算没写；可见性只收布尔（p3am-empty、p3am-num）", () => {
+  /** `p3am-empty` 的 `kbp3a_empty`，`p3am-num` 的两个滑块。 */
+  const extra = {
+    ...PROPERTIES,
+    kbp3a_empty: { type: "combo", value: "" },
+    kbp3a_s0: { type: "slider", value: 0 },
+    kbp3a_s1: { type: "slider", value: 1 },
+  };
+  const objects = [
+    // p3am-empty（`out/wpe-judge-empty.txt`）
+    square("W1", { visible: cond("kbp3a_empty", "", false) }),
+    square("W2", { visible: cond("kbp3a_combo", "", true) }),
+    square("W3", { visible: cond("wcc_v", "", true) }),
+    square("W4", { visible: { user: "wcc_v", value: true } }),
+    square("W5", { visible: { user: "kbp3a_combo", value: false } }),
+    square("W6", { visible: { user: "kbp3a_combo", value: true } }),
+    square("W7", { visible: cond("wcc_v", "x", true) }),
+    square("W8", { visible: cond("kbp3a_empty", "x", true) }),
+    // p3am-num（`out/wpe-judge-num.txt`）
+    square("U1", { visible: { user: "kbp3a_s0", value: true } }),
+    square("U2", { visible: { user: "kbp3a_s1", value: false } }),
+    square("U3", { visible: { user: "kbp3a_slider", value: false } }),
+    square("U4", { visible: { user: "kbp3a_bool", value: false } }),
+  ];
+  const wpe: Record<string, boolean> = {
+    W1: false,
+    W2: true,
+    W3: true,
+    W4: true,
+    W5: false,
+    W6: true,
+    W7: false,
+    W8: false,
+    U1: true,
+    U2: false,
+    U3: false,
+    U4: true,
+  };
+
+  it("编译期：空串条件不比较；不带条件的数字、字符串属性写不进可见性，留 value", async () => {
+    const bundle = await compileObjects(objects, { properties: extra });
+    for (const [name, visible] of Object.entries(wpe))
+      expect(layerOf(bundle, objects, name).visible, name).toBe(visible);
+    // 空串条件登记成没有条件的绑定
+    const w2 = objects.findIndex((object) => object.name === "W2");
+    expect(bundle.bindings.find((item) => item.target.kind === "layer" && item.target.object === w2)).toEqual({
+      property: "kbp3a_combo",
+      target: { kind: "layer", object: w2, field: "visible" },
+    });
+  });
+
+  it("就地写：数字、字符串属性不改可见性、不标脏；布尔照写", async () => {
+    const bundle = await compileObjects(objects, { properties: extra });
+    const state = SceneState.fromBundle(bundle);
+    state.takeDirty();
+    const indexOf = (name: string) => objects.findIndex((object) => object.name === name);
+    const bindingOf = (name: string): SceneBinding => {
+      const found = bundle.bindings.find(
+        (item) => item.target.kind === "layer" && item.target.object === indexOf(name),
+      );
+      if (!found) throw new Error(`没有绑定 ${name}`);
+      return found;
+    };
+    // U1（当前显示）收数字 0、字符串 "0"，U2（当前隐藏）收 1、"1"：都不改
+    for (const raw of [0, "0", 0.5]) expect(state.write(bindingOf("U1"), raw)).toBe("applied");
+    for (const raw of [1, "1", "true"]) expect(state.write(bindingOf("U2"), raw)).toBe("applied");
+    expect(state.layers.get(indexOf("U1"))?.visible).toBe(true);
+    expect(state.layers.get(indexOf("U2"))?.visible).toBe(false);
+    expect([...state.takeDirty().layers]).toEqual([]);
+    // 空串条件的 W2 绑定没有条件：字符串 "1" 同样写不进
+    expect(state.write(bindingOf("W2"), "1")).toBe("applied");
+    expect(state.layers.get(indexOf("W2"))?.visible).toBe(true);
+    // 布尔照写、标脏
+    state.write(bindingOf("U4"), false);
+    expect(state.layers.get(indexOf("U4"))?.visible).toBe(false);
+    expect([...state.takeDirty().layers]).toEqual([indexOf("U4")]);
+  });
+
+  it("脚本属性的空串条件同样算没写", async () => {
+    const scripted = [
+      square("S", {
+        alpha: {
+          script: "export function update(value) { return value; }",
+          value: 1,
+          scriptproperties: { sa: cond("kbp3a_combo", "", false), sb: cond("kbp3a_combo", "0", false) },
+        },
+      }),
+    ];
+    const bundle = await compileObjects(scripted, { properties: extra });
+    expect(bundle.scripts.list[0].scriptProperties).toEqual({ sa: "0", sb: true });
+    const scriptBindings = bundle.bindings.filter((item) => item.target.kind === "script-property");
+    expect(scriptBindings.map((item) => item.condition)).toEqual([undefined, "0"]);
+  });
+
+  it("effect 可见性同一个 bool setter（p3am-num F1–F4）：boolFieldValue 只收布尔", () => {
+    const props: Record<string, SceneScalar> = { kbp3a_combo: "0", kbp3a_s0: 0, kbp3a_s1: 1, kbp3a_bool: true };
+    const field = (value: SceneValue) => boolFieldValue(value, resolveValue(value, props));
+    expect(field({ user: "kbp3a_combo", value: false })).toBe(false); // F1
+    expect(field({ user: "kbp3a_s0", value: true })).toBe(true); // F2
+    expect(field({ user: "kbp3a_s1", value: false })).toBe(false); // F3
+    expect(field({ user: "kbp3a_bool", value: false })).toBe(true); // F4
+    // 条件换成的布尔照收；字面布尔照收
+    expect(field({ user: { name: "kbp3a_combo", condition: "0" }, value: false })).toBe(true);
+    expect(boolFieldValue(false, false)).toBe(false);
   });
 });

@@ -699,7 +699,7 @@ WPE 九格只和 H1 一致（V1、V6 排除 H2，V2、V4、V5 与 E4 排除三�
   - 测试行 14866–14870 已 `projects_remove`，`imagesGone` / `tasksGone` 都为真。
 - 语料（`fields.test.ts`，选项同 `kbp corpus scan`：exhaustive、超高档；`fields_diff.py` → `out/fields-diff.txt`）：192 张，`unsupported` 一张都没变，能渲染 130 → 130。字段变化只有图层 `visible`：4 张 7 处由 false 变 true，3351072238 的 objects/1（id 291，背景视频）在内。另外 2833017810 两个 effect `visible`、3660962877 的 `general.cameraparallax` 也改按 `value`（转储没收这两类）。缺失属性带 condition 的 13 处逐处核对，现在都等于 `value`。
 
-**没修的偏差**（`p3am-empty` 实测，留作后续，不在这三件事里）：
+**没修的偏差**（`p3am-empty` 实测，留作后续，不在这三件事里；两条都已在下一节「修复：空串条件、可见性只收布尔」修好）：
 - 空串 condition WPE 当成没写条件，我们照常比较。语料 0 处。
 - 图层 `visible` 不带条件时，WPE 的 bool setter 不收字符串（应当也不收数字，没测），留 `value`；我们按「不是 `false` 就显示」。语料 1 处：3276911872 的 objects/158（textinput `"A3"`、value false，WPE 不画，我们画）。
 
@@ -710,3 +710,52 @@ WPE 九格只和 H1 一致（V1、V6 排除 H2，V2、V4、V5 与 E4 排除三�
 - WPE 给内置项的 `type` 字符串（`builtinProperties.ts` 标了 `TODO:[WPE_SCENE]`）。
 
 **环境**：没改 WPE 设置；测试窗口 `kb-509904-5`、`-6`、`-7` 已关；三次抓帧在 `A:\p3a-missing\{builtin,empty,bright}\`；三个工程里 WPE 写的 `shaders/blobsSM40` 已用 `cleanup_project` 删掉。
+
+### 修复：空串条件、可见性只收布尔（2026-11-14，Claude）
+
+上一节留下的两处偏差。派出的代理开工时撞上用量上限、没留下改动，由主会话自己做。
+
+**WPE 补测**（`p3am-num`，`defs/p3am.py`；抓帧 `A:\p3a-missing\num\`，常量 `out/wpe-p3amn-consts.json`，判读 `out/wpe-judge-num.txt`）：
+
+| 用例 | 绑定（不带条件） | value | WPE | 结论 |
+|---|---|---|---|---|
+| U1 | 图层 `visible` ← 滑块 0 | true | 画 | 数字写不进（按真假写会不画） |
+| U2 | 图层 `visible` ← 滑块 1 | false | 不画 | 同上 |
+| U3 | 图层 `visible` ← 滑块 0.25 | false | 不画 | 同上 |
+| U4 | 图层 `visible` ← 布尔 true | false | 画 | 对照：布尔照写 |
+| F1 | effect `visible` ← 下拉 `"0"` | false | effect 没跑（图层直接上屏） | 字符串写不进，同图层 |
+| F2 | effect `visible` ← 滑块 0 | true | effect 跑了（走合成 RT） | 数字写不进 |
+| F3 | effect `visible` ← 滑块 1 | false | effect 没跑 | 同上 |
+| F4 | effect `visible` ← 布尔 true | false | effect 跑了 | 对照 |
+
+结论：图层与 effect 的 `visible` 是同一个 bool setter，只收布尔；数字、字符串属性都写不进、保持 `value`。带条件的绑定解析出来本就是布尔，不受影响。日志里有 `materials/effects/tint.json` 打不开的报错，effect 仍照常画了（F2、F4 走了合成 RT）；推断是 WPE 先在工程里找材质、找不到再从 `assets` 读，没有核对。
+
+**改动**（只在 `apps/wpe-scene/src/`）：
+- `compile/model.ts`：
+  - 新增 `userCondition`：condition 没写或写成空串都返回 undefined，其余换成字符串。`resolveValue`、`bindings.ts` 的 `userBindingOf`、`compile/scripts.ts` 登记脚本属性绑定都经它，运行时拿到的绑定已规整过，所以运行时不另判空串。
+  - 新增 `boolFieldValue`：解析值不是布尔就取 JSON 的 `value`，`value` 也不是布尔时按缺省显示。
+- `compile/bundle.ts`：图层 `visible` 与 effect `enabled` 改用 `boolFieldValue`。
+- `render/state.ts`：
+  - 就地写的图层 `visible` 收到非布尔时返回 `applied`，不写、不标脏；
+  - effect 的 `write` 与 `needsRecompile` 同样只收布尔；
+  - `solid`（P6c）没有读码依据说明它是同一个 setter，照旧按「不是 false 就算真」，标了 `TODO:[WPE_SCENE] 没实测`。
+- 单测：
+  - `compile/p3a-missing.test.ts` 新增第 4 组 4 条：编译期 `p3am-empty` W1–W8 与 `p3am-num` U1–U4 照 WPE、空串条件登记成无条件绑定；就地写数字 / 字符串不改可见性不标脏、布尔照写；脚本属性空串条件；effect 用 `boolFieldValue` 的 F1–F4。
+  - `render/p3a.test.ts` 的「值换算同编译期」改成新规则：没条件时数字、字符串不改开关、不重编译、不记脏。
+
+**验证**：
+- 单测与变异：宿主 tsc 0 error；vitest 全过，相关目录 46 个文件 1358 条；Prettier 通过。变异 4 / 4 抓到（去掉空串规整、编译期布尔拦截、运行时图层拦截、运行时 effect 拦截），都按原字节还原。
+  - 中途跑全量时出现过 3 条 `host.script.test.ts` 失败。换回原版的五个文件重跑同样通过，换回本次改动再跑也通过，所以是别的会话改 `host.ts`、`script/runtime.ts` 到一半时的瞬时状态。
+- 真机：用 `buildSceneHost.ts` 重建 dev 宿主产物（`index-CgSm8i1v.js`，产物里核到了空串规整），导入 `p3am-empty`、`p3am-builtin`、`p3am-num`（14960、14959、14961），`render_scene` 后用 `judge_pos.py` 判读（`out/ours-judge-*-fix2.txt`）。与 WPE 逐项比较：
+  - `p3am-empty` 8 / 8 相同，之前 W1、W2、W5 不同；
+  - `p3am-builtin` 17 / 17 相同，之前 B5 不同；
+  - `p3am-num` 8 / 8 相同。F2、F4 在我们这边也走了合成 RT（轨迹里有 `layer 15 F2 base`、`layer 17 F4 base`），F1、F3 直接上屏。
+  - 测试行已用 `projects_remove` 移除，`imagesGone` / `tasksGone` 为真。
+- 语料：`fields.test.ts` → `out/fields-fix2.json`，与上一笔修复后的 `out/fields-after.json` 比（`out/fields-diff-fix2.txt`）：192 张，`unsupported` 不变，能渲染 130 → 130，编译期字段 0 处变化。
+  - 3276911872 的 objects/158 同时挂了脚本，编译期本来就取 `value`（false）。差别在运行时：加载时套属性全集，`"A3"` 过去被就地写成显示，现在被 `render/state.ts` 拦下。这张场景还有 `script:api:layer.getAnimationLayer` 等不支持项，目前退回预览图，看不到画面差别。
+
+**没测到的**：
+- `solid` 绑数字、字符串（标了 TODO）；
+- 脚本属性的空串条件：按「没写条件」推断，取属性原值。
+
+**环境**：没改 WPE 设置；测试窗口 `kb-509904-8` 已关；`p3am-num` 里 WPE 写的 `shaders/blobsSM40` 已用 `cleanup_project` 删掉。
