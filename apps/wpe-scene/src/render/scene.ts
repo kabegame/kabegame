@@ -207,6 +207,7 @@ import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextu
 import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
+import type { CursorCamera } from "./cursor";
 import { oneLine, SceneRenderError } from "./errors";
 import {
   compositeSampling,
@@ -3165,6 +3166,32 @@ export class GpuScene {
       return mulAffine(projection, translateGlm(view, [x, y, 0]));
     }
     return multiply(base, translation(x, y, 0));
+  }
+
+  /**
+   * 光标命中用的本帧相机（P6c，`render/cursor.ts`）：场景级的 `P·V`（`setCamera` 交来的，带抖动、缩放、相机对象）、眼位、视线方向，以及正交场景里
+   * `perspective: true` 图层的透视覆盖输入（V、P 与 `perspectiveoverridefov`，`window` 是窗口客户区像素，投影宽高比取它）。渲染器在
+   * `setCamera` 之后、脚本之前取（WPE 命中在相机更新之后、脚本之前）。
+   */
+  cursorCamera(window: readonly [number, number]): CursorCamera {
+    const general = this.bundle.general;
+    const perspective = !!general.perspective;
+    return {
+      viewProjection: this.viewProjection,
+      eye: this.eye,
+      perspective,
+      forward: this.viewVectors.forward,
+      override: perspective
+        ? null
+        : {
+            view: this.sceneCamera.view,
+            projection: this.sceneCamera.projection,
+            fov: general.perspectiveOverrideFov,
+            width: general.width,
+            height: general.height,
+            window,
+          },
+    };
   }
 
   /**

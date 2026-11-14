@@ -106,13 +106,13 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
   ],
   /** `requestFeatures` 声明里没有，DLL 有（报告 C）；`isObjectValid`、`clearTimeout` 已实现。 */
   engine: methods("root", ["registerAsset", "openUserShortcut", "requestFeatures"]),
-  /** 整个 `input` 都没有（W4）。 */
-  input: fields(["cursorWorldPosition", "cursorScreenPosition", "cursorLeftDown"]),
+  /** `input` 的三个只读成员（`cursorWorldPosition` / `cursorScreenPosition` / `cursorLeftDown`）P6c 已实现（`script/api.ts` 的 `installInput`）。 */
+  input: [],
   localStorage: [],
   console: [],
   /**
    * 已实现：`name`、`id`、`size`（只读）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`
-   * （P5a 步骤 2）；声音层（`ISoundLayer`）的 `play` / `pause` / `stop` / `isPlaying` 与 `volume`（P6a 步骤 2，只在声音层上）；
+   * （P5a 步骤 2）、`solid`（P6c，所有图层，只收布尔）；声音层（`ISoundLayer`）的 `play` / `pause` / `stop` / `isPlaying` 与 `volume`（P6a 步骤 2，只在声音层上）；
    * `getVideoTexture`（P9b，所有图层上都有，非视频图层返回 null；返回的 `IVideoTexture` 的成员见 `script/api.ts`）。
    * 粒子层（`IParticleSystem`）的 `play` / `pause` / `stop` / `isPlaying` / `emitParticles` 与只读的 `instance`（P4f 步骤 3，只在粒子层上）。
    */
@@ -168,7 +168,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     // `script/api.ts`）；别的图层上 WPE 读回什么由脚本 dll 决定，没查，不再静态报。粒子层的 `instance` 已实现（P4f 步骤 3）
     ...fields([
       "perspective",
-      "solid",
       "rootmotion",
       "fov",
       "zoom",
@@ -504,14 +503,7 @@ export const MISSING_SCRIPT_CALLBACKS: readonly string[] = [
   // 屏幕尺寸变化、general 设置变化 → 后续
   "resizeScreen",
   "applyGeneralSettings",
-  // 光标命中与事件 → P6c
-  "cursorHitTest",
-  "cursorEnter",
-  "cursorLeave",
-  "cursorMove",
-  "cursorClick",
-  "cursorDown",
-  "cursorUp",
+  // 光标回调已在 P6c 实现（`script/runtime.ts` 的 `cursorEvent`；`cursorHitTest` WPE 自己也不调，导出它只打开拾取）
   // 系统媒体集成 → P11
   "mediaStatusChanged",
   "mediaPlaybackChanged",

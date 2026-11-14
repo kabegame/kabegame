@@ -93,6 +93,11 @@ export interface LayerState {
    * `offset`（`SceneState.write`）。
    */
   alignment?: number;
+  /**
+   * 光标命中的开关（P6c，`SceneLayer.solid`；缺省真，`undefined` 也当真）：命中测试每帧现读，没有改值回调（p6-REPORT 0c）。对所有对象类型
+   * 都能读写，但只有图像层与文本层参与命中。脚本写 `thisLayer.solid`、字段脚本写回、用户属性绑定都落在这里，不标脏（不影响绘制）。
+   */
+  solid?: boolean;
   /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中不变。 */
   readonly parent: number | null;
 }
@@ -186,6 +191,7 @@ function layerStateOf(layer: SceneLayer): LayerState {
     brightness: layer.brightness,
     visible: layer.visible,
     parallaxDepth: [...layer.parallaxDepth],
+    solid: layer.solid !== false,
     parent: layer.parent,
   };
   // 图像层的对齐（P8 步骤 3）：`layer.size` 已是 autosize / fullscreen 之后的尺寸；偏移为 0 时不写，没有对齐的图层字节不变
@@ -223,7 +229,7 @@ export function writeBloomParam(
 }
 
 /** 图层字段的缺省值（与编译期 `numbers(resolveValue(…), 缺省)` 同一套：解析不出分量时退回）。`alignment` 另写（`writeAlignment`）。 */
-const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment">, number[]> = {
+const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment" | "solid">, number[]> = {
   origin: [0, 0, 0],
   scale: [1, 1, 1],
   angles: [0, 0, 0],
@@ -234,7 +240,11 @@ const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment">, numbe
   parallaxDepth: [1, 1],
 };
 
-function writeLayer(layer: LayerState, field: Exclude<LayerField, "alignment">, value: number[] | boolean): void {
+function writeLayer(
+  layer: LayerState,
+  field: Exclude<LayerField, "alignment" | "solid">,
+  value: number[] | boolean,
+): void {
   if (field === "visible") {
     layer.visible = value !== false;
     return;
@@ -625,7 +635,12 @@ export class SceneState {
         this.writeAlignment(target.object, layer, bindingValue(raw, binding.condition, field));
         return "applied";
       }
-      if (layer && field !== "alignment") {
+      // 光标命中的开关（P6c）：只改状态，不标脏（不影响绘制）；非布尔的属性值同 `visible`（`!== false`），脚本只收布尔（`script/api.ts`）
+      if (layer && field === "solid") {
+        layer.solid = bindingValue(raw, binding.condition, field) !== false;
+        return "applied";
+      }
+      if (layer && field !== "alignment" && field !== "solid") {
         // 向量字段（origin / scale / color / parallaxDepth）照 WPE 的向量 setter，同编译期（`layerVectorValue`，P6b 1e-3 复核）：
         // 数字铺满、字符串少写的分量为 0；写不进（布尔）时 WPE 不改字段，这里也不写、不标脏
         if (isLayerVectorField(field)) {

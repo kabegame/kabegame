@@ -11,6 +11,7 @@ import {
   type ScriptApiGroup,
 } from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
+import type { CursorInputSnapshot } from "../render/cursor";
 import { SceneState, scriptWriteValue } from "../render/state";
 import { TEXT_DEFAULTS } from "../text/fields";
 import {
@@ -219,6 +220,8 @@ function setup(
   let bundle = scene(!!sound, !!particle, text);
   let state = SceneState.fromBundle(bundle);
   let resolution: [number, number] = [800, 600];
+  /** 全局 `input` 读到的光标快照（P6c）：测试里直接改它。 */
+  const cursor: CursorInputSnapshot = { world: [0, 0, 0], screen: [0, 0], leftDown: false };
   const recompiles: { path: string; value: number[] | boolean | string }[] = [];
   const api = new ScriptApi(realm, {
     bundle: () => bundle,
@@ -239,6 +242,7 @@ function setup(
       return true;
     },
     audioRegistered,
+    cursorInput: () => cursor,
     ...(sound ? { sound: (object: number) => (object === 2 ? sound.target : null) } : {}),
     ...(particle ? { particles: (object: number) => (object === 3 ? particle.target : null) } : {}),
   });
@@ -246,6 +250,7 @@ function setup(
     realm,
     api,
     recompiles,
+    cursor,
     get bundle() {
       return bundle;
     },
@@ -331,7 +336,8 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(engine.userProperties).toEqual({ tint: new Vec3(0, 1, 0), speed: 2 });
     for (const name of ["registerAsset", "openUserShortcut", "requestFeatures"])
       expect(() => (engine[name] as () => void)()).toThrow(TypeError);
-    expect(h.realm.global.input).toBeUndefined();
+    // `input`（P6c）已装上：成员见下面的「光标交互」一节
+    expect(h.realm.global.input).toBeDefined();
   });
 
   it("图层查询、对象身份、向量复制、角度和只读 size", () => {
@@ -1698,5 +1704,98 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
     const missing = new Set(MISSING_SCRIPT_CALLBACKS);
     expect(MISSING_SCRIPT_CALLBACKS).toHaveLength(missing.size);
     expect(new Set([...wpe].filter((name) => !missing.has(name)))).toEqual(runtime);
+  });
+});
+
+describe("光标交互：input 与 solid（P6c）", () => {
+  it("input 的三个成员每次读都现取：cursorWorldPosition 是 Vec3、cursorScreenPosition 是 Vec2（float32）、cursorLeftDown 是布尔，每次都是新对象", () => {
+    const h = setup();
+    const input = h.realm.global.input as Record<string, unknown>;
+    expect(Object.keys(input)).toEqual(["cursorWorldPosition", "cursorScreenPosition", "cursorLeftDown"]);
+    h.cursor.world = [450, 799.5001220703125, 0];
+    h.cursor.screen = [300, 187];
+    h.cursor.leftDown = true;
+    const world = input.cursorWorldPosition as Vec3;
+    expect(world).toBeInstanceOf(Vec3);
+    expect(world).toEqual(new Vec3(450, 799.5001220703125, 0));
+    expect(input.cursorWorldPosition).not.toBe(world);
+    expect(input.cursorScreenPosition).toEqual(new Vec2(300, 187));
+    expect(input.cursorScreenPosition).toBeInstanceOf(Vec2);
+    expect(input.cursorLeftDown).toBe(true);
+    // 现取：快照变了下一次读就变
+    h.cursor.world = [1, 2, 0];
+    h.cursor.leftDown = false;
+    expect(input.cursorWorldPosition).toEqual(new Vec3(1, 2, 0));
+    expect(input.cursorLeftDown).toBe(false);
+  });
+
+  it("世界坐标取单精度（脚本看到的和 WPE 一样是 f32 展开的值）", () => {
+    const h = setup();
+    h.cursor.world = [100.1, 0, 0];
+    const world = (h.realm.global.input as Record<string, unknown>).cursorWorldPosition as Vec3;
+    expect(world.x).toBe(Math.fround(100.1));
+  });
+
+  it("模块顶层（求值期间）读抛 realm 的 SyntaxError，消息同 WPE：<成员名> cannot be accessed from global scope.；init、回调里能读", () => {
+    const h = setup();
+    const input = h.realm.global.input as Record<string, unknown>;
+    h.api.setModuleEvaluating(true);
+    for (const name of ["cursorWorldPosition", "cursorScreenPosition", "cursorLeftDown"])
+      expect(() => input[name], name).toThrow(new SyntaxError(`${name} cannot be accessed from global scope.`));
+    // 抛的是 realm 的 SyntaxError（FakeRealm 的全局没有 SyntaxError，退回宿主的）
+    try {
+      void input.cursorLeftDown;
+    } catch (error) {
+      expect(error).toBeInstanceOf(SyntaxError);
+    }
+    h.api.setModuleEvaluating(false);
+    expect(() => input.cursorLeftDown).not.toThrow();
+  });
+
+  it("成员只读：严格模式赋值抛 TypeError，读回的值不变", () => {
+    const h = setup();
+    const input = h.realm.global.input as Record<string, unknown>;
+    h.cursor.leftDown = true;
+    expect(() => {
+      "use strict";
+      input.cursorLeftDown = false;
+    }).toThrow(TypeError);
+    expect(input.cursorLeftDown).toBe(true);
+  });
+
+  it("thisLayer.solid：所有图层都有，缺省读回 true；写入只收布尔（别的类型不写、不报错），写 false 后读回 false", () => {
+    const h = setup();
+    const layer = h.api.layer(0)!;
+    expect(layer.solid).toBe(true);
+    layer.solid = false;
+    expect(layer.solid).toBe(false);
+    expect(h.state.layers.get(0)!.solid).toBe(false);
+    for (const ignored of [1, 0, "true", null, undefined, {}, new Vec3(1, 1, 1)]) {
+      layer.solid = ignored;
+      expect(layer.solid, String(ignored)).toBe(false);
+    }
+    layer.solid = true;
+    expect(layer.solid).toBe(true);
+    // 别的图层不受影响
+    expect(h.api.layer(1)!.solid).toBe(true);
+  });
+
+  it("solid 在声音层、粒子层、文本层上同样能读写（拾取只对图像层与文本层起作用）", () => {
+    const h = setup(undefined, { target: null }, { target: null }, true);
+    for (const object of [2, 3, 4]) {
+      const layer = h.api.layer(object)!;
+      expect(layer.solid, `对象 ${object}`).toBe(true);
+      layer.solid = false;
+      expect(layer.solid, `对象 ${object}`).toBe(false);
+    }
+  });
+
+  it("solid 的写入不标脏（不影响绘制），也不触发重编译", () => {
+    const h = setup();
+    h.state.takeDirty();
+    h.api.layer(0)!.solid = false;
+    const dirty = h.state.takeDirty();
+    expect(dirty.layers.size).toBe(0);
+    expect(h.recompiles).toEqual([]);
   });
 });

@@ -33,10 +33,10 @@ describe("未实现脚本 API 的扫描", () => {
       "thisScene.sortLayer",
     ]);
     expect(scan("const asset = engine.registerAsset('materials/x.json', true);")).toEqual(["engine.registerAsset"]);
-    expect(scan("export function update() { return input.cursorWorldPosition.x + input?.cursorLeftDown; }")).toEqual([
-      "input.cursorLeftDown",
-      "input.cursorWorldPosition",
-    ]);
+    // `input` 的三个成员 P6c 已实现，不再报
+    expect(scan("export function update() { return input.cursorWorldPosition.x + input?.cursorLeftDown; }")).toEqual(
+      [],
+    );
     // 场景字段（L1）只认 thisScene
     expect(scan("export function update() { thisScene.fogdistance = 2; }")).toEqual(["thisScene.fogdistance"]);
   });
@@ -270,11 +270,13 @@ describe("导出回调的扫描", () => {
       "export function update() {}",
       "export function applyUserProperties() {}",
       "export function destroy() {}",
+      // 光标回调 P6c 已实现（`cursorHitTest` 也算：导出它只打开拾取）
       "export function cursorClick() {}",
+      "export function cursorHitTest() {}",
       "export const resizeScreen = () => {}, helper = 1;",
       "export { mediaPlaybackChanged } from './m.js';",
     ].join("\n");
-    expect(scanScriptCallbacks(source)).toEqual(["cursorClick", "mediaPlaybackChanged", "resizeScreen"]);
+    expect(scanScriptCallbacks(source)).toEqual(["mediaPlaybackChanged", "resizeScreen"]);
     expect(scanScriptCallbacks("export function update() { return value; }")).toEqual([]);
   });
 });
@@ -309,12 +311,12 @@ describe("能力表：script:api:*", () => {
     const unsupported = new Set<string>();
     checkScriptFeatures(
       [
-        script("export function init() {} export function cursorDown(event) {}"),
-        script("export function cursorClick(event) {}", ["不支持的模块说明符：./x.js"]),
+        script("export function init() {} export function mediaStatusChanged(event) {}"),
+        script("export function mediaTimelineChanged(event) {}", ["不支持的模块说明符：./x.js"]),
       ],
       unsupported,
     );
-    expect([...unsupported]).toEqual(["script:callback:cursorDown"]);
+    expect([...unsupported]).toEqual(["script:callback:mediaStatusChanged"]);
   });
 
   it("编译：用到未实现 API 的场景整张退回，只用已实现 API 的照常", async () => {

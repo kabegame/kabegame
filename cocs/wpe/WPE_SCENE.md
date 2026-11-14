@@ -2347,6 +2347,46 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **dev 探针**：`renderFrame` 有 `particles.dts` 时动画沿同一串 dt 逐帧推进（每帧在粒子与相机之后、第二次 `sync` 之前），没有时 `seek(time)` 再写一次；结果的 `animations` 给每条的 `id`、时钟主人、`t`、帧号、`playing`、标志与最后写入的值；`host.animations()` 报宿主正在播的那份与最近 600 次 `frame()` 的耗时。跑脚本（`scripts`）时播放器在 `init` 之前建好、交给探针的脚本环境，事件派发给探针的脚本；每帧推进动画之前先 `enterFrame` 把本帧时间交给脚本时钟，事件回调读到本帧的 `engine.runtime`。
 
+## 交互（P6c）
+
+场景脚本的光标交互：六个导出回调 `cursorEnter` / `Leave` / `Move` / `Down` / `Up` / `Click`、全局 `input`、图层 `solid`。规则读码在 `.claude/plans/wpe-import/3-scene/phase6/rea-p6c-dispatch.md` 与 `rea-p6c-script.md`（含 REA 重核），0c 用 wpe-renderdoc 的 `input_play` 逐帧喂光标实测，结论全部成立。实现是纯逻辑的 `render/cursor.ts`（命中、追踪器、可拾取对象表），渲染器每个实时帧在相机更新之后、脚本之前调一次（`SceneRenderer.stepCursor`），把回调交给宿主，宿主调 `ScriptRuntime.cursorEvent`。
+
+### 规则（和 WPE 一致的怪处）
+
+- 只有图像层与文本层参与命中（`SceneLayer.pick`，`cursorPickKind`）；粒子、形状、声音、分组节点、灯、相机不参与。模型（类型 5）不做命中：模型上有脚本导出光标回调、或模型可见且 `disablepropagation` 为真时报 `cursor:model`（语料 0 张）。`cursorHitTest` WPE 自己也不调用，导出它只打开拾取（`ScriptRuntime.hasCursorCallbacks`），返回值没人解释。
+- **不看可见性**：`visible: false`、父层隐藏、`alpha` 为 0 的图层照样收事件，语料靠隐藏图层当按钮。`solid` 缺省真，`solid: false` 的对象什么事件都没有；运行中改 `solid` 下一帧的命中才生效。
+- 命中是射线对平行四边形（双面，不看纹理 alpha，不要求 `u + v ≤ 1`）；四边形取画自己的矩阵（含对齐、文字框偏移、父链）；`fullscreen` 图层恒命中、不发 `cursorLeave`，`localPosition` 是窗口像素。
+- `localPosition` 以四边形左上角为原点、y 向下、单位是 `size`（不乘缩放）；没命中也算（外推到 `[0, size]` 之外），射线平行或交点在后方时是 0。`worldPosition` 是本帧相机下光标的反投影（正交 z 置 0，透视落在远平面）。
+- 层叠时全部命中的对象都收事件（自上而下，同一帧里按对象依次）；只有命中一个「自身与父链都可见且 `disablepropagation` 为真」的对象才挡住下面的，被挡住的这一帧不处理，也不发 `cursorLeave` / `cursorUp`。
+- `cursorMove` 比的是**世界坐标**：光标不动、相机在动（抖动、视差、缩放）时每帧都发；第一帧上一次是 (0, 0)。
+- 子层的视差命中用自己的本地 `origin` 与自己的 `parallaxDepth`（绘制用根对象的），命中区和画出来的位置可以错开。
+- 按下只登记命中的对象；按住期间只给按下集合里的对象发 `cursorMove`（外推坐标），不发进出；`cursorClick` 要松开那一帧命中、且按下那一帧在它上面；松开处命中的全部对象收 `cursorUp`，另加按下集合里没命中的；按下集合在每个松开帧末清空。一帧里同一对象的顺序：`Enter → Move → Down`、`Enter → Move → Up → Click`、没命中时 `Up → Leave`。
+- 一帧只采一次左键：两帧之间完整的一次按下抬起整个丢掉。暂停时不采样、不派发。
+
+### 帧内位置与数值
+
+渲染器一帧：相机（`setCamera`）→ 光标命中派发 → 声音 → 关键帧动画 → 计时器 → `update`。所以同一帧的回调先于 `update`，回调里写的字段当帧画出。数值逐步 float32：反投影用 WPE 的 float32 求逆（`render/inverseF32.ts`，从反汇编 `0x14005f730` 生成，`ignore/p6/c1/gen_inv.py`；double 余子式的 `invert` 在正交矩阵上差 1 ulp），射线对四边形照 `FUN_14019d5a0`。`perspective: true` 的图层用透视覆盖相机的射线（`perspectiveLayerRay`，`FUN_14018fc40`）。`GpuScene.cursorCamera` 交出本帧的 `P·V`、眼位与覆盖输入。
+
+### `input`
+
+全局对象，三个只读成员，每次读现取、建新对象：`cursorWorldPosition`（`Vec3`，同回调的 `worldPosition`）、`cursorScreenPosition`（`Vec2`，`ptr × 窗口像素`，左上原点、y 向下、不钳制，和 `engine.screenResolution` 同一套单位）、`cursorLeftDown`（登记的左键）。模块顶层读抛 realm 的 `SyntaxError: <成员名> cannot be accessed from global scope.`；`init`、回调、计时器里都能读。快照由渲染器每个实时帧给（没有脚本导出光标回调时也算）。
+
+### `solid`
+
+所有图层都有，读回布尔，写入只收布尔（别的类型不写、不报错），没有改值回调、不标脏。JSON 的 `{user}` 绑定走就地路径（`LayerField` 的 `solid`），`solid` 上的字段脚本写回到它。`disablepropagation` 只认 JSON 布尔，绑属性、挂脚本报 `object:disablepropagation`。事件对象每个接收者各建一个 `{ button: 0, worldPosition, localPosition }`（`Vec3`，没有 `hitBox`，木偶命中框是 P12）。
+
+### 宿主左键
+
+`main.ts` 的 `pointerdown` / `pointerup`（只认主键，`pointercancel` 与窗口失焦当抬起）→ `SceneHost.setButton` → `SceneRenderer.setButton`。桌面的按下门（只在光标下是桌面或图标时转发）由后端 `wallpaper/input_forward.rs` 负责，宿主不另加；应用背景不交互。
+
+### dev 探针
+
+`renderFrame` 新增 `inputTimeline`（wpe-renderdoc 的时间线格式 `[x, y, down, n]`，要同时给 `window`，指针按 WPE 的取法量化到整数像素，`expandInputTimeline`）与 `buttons`（逐帧左键）；要有 `particles.dts` 与 `scripts`，每帧在设好相机之后、脚本之前命中派发（`ProbeScripts.cursor`）。`scripts: { consoleGrep }` 收脚本 `console` 里匹配的全部行（`console.matched`，不带 `error: ` 前缀，同 WPE 日志）。对比工具：`ignore/p6/c0/cmp_logs.py`（我们的 `[kbp6c]` 行对 WPE 日志，自动找帧偏移）、`ignore/p6/c1/run_ours.py`（经 vite REST 回放）。
+
+### 对比结果与已知差异
+
+五个确定性工程（`ignore/p6/c0/proj/p6c-*`）：`hit` 回调 98 / 98 与 `upd` 169 / 169 逐字相同，`par` 13 / 13；`shake` 回调序列 42 / 42 相同，数值差 ≤ 0.13（WPE 当时的 `g_Time` 取不到，用 `(帧 + 偏移) × 0.05`）；`zoom`（`perspective: true` 图层）35 / 49 逐字相同，其余 `localPosition` 差 ≤ 4.6e-5（覆盖相机的 float32 链没有逐步搬）；`persp` 序列相同，世界坐标差 ≤ 1e-3（远平面上 1 ulp，来自透视相机矩阵的 float32 组合）。已知没做：模型命中、木偶 `hitBox`、`openUserShortcut`（P11）、透视场景里 bit9 层的命中排序（`TODO:[WPE_SCENE]`）。语料能渲染 +11（`3146703458`、`3173418061`、`3340707146`、`3451555874`、`3460973721`、`3605722997`、`3637191856`、`3809965824`、`3810092560`、`3817779853`、`3832004152`）。
+
 ## 字体引擎 `wpefont`（P6b 1b 起）
 
 文本对象（P6b）照 WPE 的画法：FreeType 栅格化、HarfBuzz 排字，逐字四边形加图集。WPE 的字形位置和位图由这两个库的具体版本与加载参数决定，自己写栅格化器对不上像素，所以直接把同版本的库编成 wasm 放进场景宿主，排版规则（回退链、断行、对齐、图集装箱）另在 TS 里照读码写（1c 起）。静态文本 1d 起照 WPE 画，文字随脚本或属性变化 1e 起就地重排（见下一节「文本对象」）。完整接口契约见 [src-tauri/wpefont/README.md](../../src-tauri/wpefont/README.md)，计划与实测见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「步骤 1a」「1b」。

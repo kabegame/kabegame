@@ -25,6 +25,7 @@ import {
   type ScenePostprocessSetting,
 } from "./compile/postprocess";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
+import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
 import type { SceneStyle } from "./render/layout";
 import { uploadableTextures, visibleObjects } from "./render/scene";
 import { SceneState } from "./render/state";
@@ -130,6 +131,11 @@ export class SceneHost {
    * 父页面交来的开场初值往往早于渲染器，丢了的话加载时的预热与第一帧都只能按场景中心算。
    */
   private pointer: [number, number] | null = null;
+  /**
+   * 左键（P6c，`setButton`）与脚本 `input.*` 的本帧光标快照：渲染器建好前先存着左键、建好时带进去；快照由渲染器每个实时帧给、`input` 每次现读。
+   */
+  private button = false;
+  private cursorInput: CursorInputSnapshot = emptyCursorInput();
   private renderer: SceneRenderer | null = null;
   private rendererTask: Promise<SceneRenderer> | null = null;
   private controller: AbortController | null = null;
@@ -658,6 +664,8 @@ export class SceneHost {
         },
         // 粒子层的 play / pause / stop / isPlaying / emitParticles（P4f 步骤 3）：同样每次现取
         particles: (object) => this.particleTarget(object),
+        // 全局 `input`（P6c）：每次读都取渲染器最近一帧给的光标快照
+        cursorInput: () => this.cursorInput,
         // 关键帧动画的 IAnimation（P10b）：待用播放器属于脚本当前看到的 bundle 时取它（首次加载的 init），否则取正在播的那份；每次现取，
         // 重编译换了播放器也接得上
         animation: (id) => {
@@ -977,6 +985,15 @@ export class SceneHost {
     this.renderer?.setPointer(x, y);
   }
 
+  /**
+   * 左键按下 / 抬起（P6c，`main.ts` 的 `pointerdown` / `pointerup`，桌面是鼠标转发注入的）：渲染器每个实时帧采一次（一帧里完整的按下抬起会丢，
+   * 同 WPE）。桌面的按下门（只在光标下是桌面或图标时转发）由后端的鼠标转发负责，这里不另加。
+   */
+  setButton(down: boolean): void {
+    this.button = down;
+    this.renderer?.setButton(down);
+  }
+
   setStyle(style: SceneStyle): void {
     this.style = style;
     this.renderer?.setStyle(style);
@@ -1001,6 +1018,16 @@ export class SceneHost {
       // 场景频谱的输入（P4e 步骤 4）：Hub 最近一次的原值，渲染器每帧开头取一次
       audioFrame: () => this.lastAudioFrame,
       stepObjects: (dt) => this.sceneSounds?.step(dt, this.soundVolumeOf),
+      // 光标交互（P6c）：有脚本导出光标回调才命中；回调交给脚本运行时（同一对象上导出了它的全部脚本）
+      cursor: {
+        active: () => this.state !== "fallback" && (this.runtime?.hasCursorCallbacks ?? false),
+        input: (snapshot) => {
+          this.cursorInput = snapshot;
+        },
+        events: (dispatches) => {
+          for (const item of dispatches) this.runtime?.cursorEvent(item.object, item.callback, item.world, item.local);
+        },
+      },
       // puppet（P12a 步骤 4）：用户属性写进状态后这一帧就读到（读的是渲染器正在画的那份状态）
       stepPuppets: (dt) => {
         const drawn = this.drawnState;
@@ -1055,6 +1082,7 @@ export class SceneHost {
         created.setStyle(this.style);
         // 先于 load：加载时的预热与第一帧用它（渲染器按新场景的铺放换算，见 `SceneRenderer.load`）
         if (this.pointer) created.setPointer(...this.pointer);
+        if (this.button) created.setButton(true);
         // 音频订阅在渲染器建好之前就被拒了（P4e 步骤 4）：场景频谱同样关掉
         if (this.audioError !== null) created.disableAudio();
         created.setBackground(schemeColor(this.properties));

@@ -482,7 +482,8 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
         // 才到粒子，169 次；P8 步骤 4 起 2251857160 不再在图层依赖处退回，要编到 P10a 的临时键 `value:animation:pending` 才停，
         // 404 次（161 次是逐级查找的未命中）、读 73,995,846 字节，都不重复；P10a 步骤 3 删掉临时键后它整张编完、能渲染，553 次（252 次未命中）、
         // 读 82,208,839 字节（离字节上限只差约 2%），仍都不重复
-        check(tally.bytes < 80 * 1024 * 1024, `${sample}: 读取 ${tally.bytes} 字节`);
+        // P6c 起光标回调不再让 3293687972 提前退回（它还差别的键），多编出一段：读 125,501,007 字节，单列上限
+        check(tally.bytes < (sample === "3293687972" ? 130 : 80) * 1024 * 1024, `${sample}: 读取 ${tally.bytes} 字节`);
         check(tally.calls <= 600, `${sample}: ${tally.calls} 次请求`);
       }
     } finally {

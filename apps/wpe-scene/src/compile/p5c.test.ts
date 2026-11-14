@@ -599,7 +599,7 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
     return [...out].sort();
   };
 
-  it("不再报 object:model；skin、castshadow、reflected、disablepropagation、perspective: true 中性", () => {
+  it("不再报 object:model；skin、castshadow、reflected、perspective: true 中性", () => {
     expect(keys({ id: 1, model: "models/a.mdl" })).toEqual([]);
     expect(
       keys({
@@ -608,7 +608,7 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
         skin: 1,
         castshadow: true,
         reflected: true,
-        disablepropagation: true,
+        disablepropagation: false,
         solid: true,
         locktransforms: true,
         parallaxDepth: "1 1",
@@ -620,7 +620,7 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
   it("这几个键在图像层上照报；模型上 perspective 绑属性、attachment、animationlayers 照报", () => {
     expect(
       keys({ id: 1, image: "models/i.json", castshadow: true, reflected: true, skin: 1, disablepropagation: true }),
-    ).toEqual(["object:castshadow", "object:disablepropagation", "object:reflected", "object:skin"]);
+    ).toEqual(["object:castshadow", "object:reflected", "object:skin"]);
     expect(keys({ id: 1, model: "models/a.mdl", perspective: { user: "p", value: true } })).toEqual([
       "object:perspective",
     ]);
@@ -628,6 +628,13 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
     expect(keys({ id: 1, model: "models/a.mdl", animationlayers: [{ animation: 1 }] })).toEqual([
       "object:animationlayers",
     ]);
+  });
+
+  it("模型对象可见且 disablepropagation 为真时报 cursor:model（P6c 不做模型命中，它会挡住下面的对象）；隐藏的不报", () => {
+    expect(keys({ id: 1, model: "models/a.mdl", disablepropagation: true })).toEqual(["cursor:model"]);
+    expect(keys({ id: 1, model: "models/a.mdl", disablepropagation: true, visible: true })).toEqual(["cursor:model"]);
+    expect(keys({ id: 1, model: "models/a.mdl", disablepropagation: true, visible: false })).toEqual([]);
+    expect(keys({ id: 1, model: "models/a.mdl", disablepropagation: false })).toEqual([]);
   });
 
   it("effects 非空报 model:effects，空数组不报", () => {

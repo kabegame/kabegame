@@ -34,6 +34,7 @@ import { injectedR } from "../particles/random";
 import type { ParticleSystem } from "../particles/system";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
+import type { CursorStepInput } from "../render/cursor";
 import { acquireGpu } from "../render/device";
 import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
 import {
@@ -556,7 +557,14 @@ export interface ReadbackReplayOptions {
     enterFrame?(dt: number, time: number): void;
     /** 动画事件（P10b）：推进动画时越过的事件在写完那一条之后、下一条之前同步派发（同宿主 `beforeFrame` 的 `event` 钩子）。 */
     animationEvent?(object: number | null, json: string): void;
+    /** 光标（P6c，`ProbeScripts.cursor`）：每一帧设好相机之后、动画与脚本之前调，只在每一帧都画的回放里（`encodeFrame`）。 */
+    cursor?(input: CursorStepInput): void;
   };
+  /**
+   * 光标交互（P6c）：每一帧的左键（和 `dts` 等长，缺的项按松开）与窗口客户区像素（`input.cursorScreenPosition`、`fullscreen` 的 `localPosition` 用）。
+   * 光标位置取 `pointers`（窗口归一化），要同时给 `scripts.cursor`。只在每一帧都画的回放里生效（`replayEncoded`）。
+   */
+  cursor?: { buttons: readonly boolean[]; window: readonly [number, number] };
   /**
    * 每一帧的 `g_Daytime`（按这一帧的 `g_Time` 算；第 7 批：跑脚本时跟着脚本的时钟）；缺省 0.5。只画读回帧时只有读回帧用它，每帧都画时
    * 每一帧都用。
@@ -672,7 +680,7 @@ export function replayReadback(
  */
 function replayEncoded(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
-    Partial<Pick<GpuScene, "particleAudio">>,
+    Partial<Pick<GpuScene, "particleAudio" | "cursorCamera">>,
   state: SceneState,
   options: ReadbackReplayOptions,
   encodeFrame: (index: number) => void,
@@ -702,6 +710,22 @@ function replayEncoded(
     // puppet（P12a 步骤 4 点 5）：粒子之后、相机之前，同渲染器 `stepPuppets`
     options.puppets?.frame(frametime, stateSink(state));
     const eye = shake.apply(time);
+    // 光标命中与派发（P6c）：相机更新之后、动画与脚本之前（同渲染器的 `stepCursor`）；视差点要先推进到这一帧（渲染器在帧开头推进），这里算一份给命中用，
+    // 帧末照旧推进一次（跑脚本时输入是帧开头的 general，两处相同）
+    if (scripts?.cursor && options.cursor && scene.cursorCamera) {
+      const early = advanceParallax(
+        parallax,
+        parallaxInput(general, { pointer: pointers.pointers[i], width, height, frametime, eye }),
+      );
+      scripts.cursor({
+        camera: scene.cursorCamera(options.cursor.window),
+        cursor: pointers.cursors[i],
+        pointer: pointers.pointers[i],
+        window: options.cursor.window,
+        down: options.cursor.buttons[i] ?? false,
+        parallax: drawParallax(early, general, !!options.perspective),
+      });
+    }
     // 先把本帧时间交给脚本时钟（P10b），同 `replayReadback`
     scripts?.enterFrame?.(frametime, time);
     if (animations) {

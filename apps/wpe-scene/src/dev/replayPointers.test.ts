@@ -20,7 +20,14 @@ import {
 import type { SceneState } from "../render/state";
 import { silentParticleAudio } from "../particles/audio";
 import { frameCamera, replayParticles, replayReadback, type ParticleReplay } from "./particleCorners";
-import { checkCanvas, pointerWindow, replayPointers, sceneCursors, windowPointer } from "./replayPointers";
+import {
+  checkCanvas,
+  expandInputTimeline,
+  pointerWindow,
+  replayPointers,
+  sceneCursors,
+  windowPointer,
+} from "./replayPointers";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -549,5 +556,36 @@ describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
     expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1], audio: [frame(1)] })).toThrow("应等长");
     expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1], audio: [frame(1), null] })).toThrow("粒子频谱");
     expect(() => replayParticles(scene, {} as never, { dts: [0.1, 0.1], audio: [null, null] })).not.toThrow();
+  });
+});
+
+describe("expandInputTimeline（P6c：wpe-renderdoc 的输入时间线）", () => {
+  it("[x, y, down, n] 重复 n 帧，缺省 1；down 接受布尔与 0 / 1", () => {
+    const { pointers, buttons } = expandInputTimeline(
+      [
+        [0.5, 0.5, 0, 2],
+        [0.25, 0.75, true],
+        [0.25, 0.75, 1, 1],
+      ],
+      [1280, 720],
+    );
+    expect(pointers).toHaveLength(4);
+    expect(buttons).toEqual([false, false, true, true]);
+  });
+
+  it("指针按 WPE 的取法量化：round(x · 宽) 个整数像素，再除以宽取 float32", () => {
+    const { pointers } = expandInputTimeline([[0.234375, 0.259259, 0]], [1280, 720]);
+    expect(pointers[0]).toEqual([Math.fround(300 / 1280), Math.fround(187 / 720)]);
+    // 窗外照样（不钳制）
+    expect(expandInputTimeline([[-0.052083, -0.092593, 0]], [1280, 720]).pointers[0][0]).toBeLessThan(0);
+  });
+
+  it("形状不对抛错", () => {
+    const bad = (timeline: unknown) => () => expandInputTimeline(timeline as never, [1280, 720]);
+    expect(bad([])).toThrow();
+    expect(bad([[0, 0]])).toThrow();
+    expect(bad([[0, 0, 2]])).toThrow();
+    expect(bad([[0, 0, 0, 0]])).toThrow();
+    expect(bad([[Number.NaN, 0, 0]])).toThrow();
   });
 });

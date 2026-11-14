@@ -140,3 +140,52 @@ export function replayPointers(
   const cursors = converted.map((item) => item.cursor);
   return { pointers: converted.map((item) => item.pointer), cursors, warmup: cursors[0] };
 }
+
+/** wpe-renderdoc 的输入时间线（`input_play` / `input_start` 的格式）：`[x, y, down]` 或 `[x, y, down, n]`（重复 n 帧），x / y 是窗口客户区归一化坐标。 */
+export type InputTimelineEntry = readonly [number, number, boolean | number, number?];
+
+/** 展开后的最大帧数（同 wpe-renderdoc 的 `validate_timeline`）。 */
+export const MAX_INPUT_FRAMES = 100000;
+
+/**
+ * 展开输入时间线（P6c，dev 探针的 `inputTimeline`）：每项 `[x, y, down, n]` 重复 n 帧（缺省 1），得到逐帧的窗口指针与左键。指针按 WPE 的
+ * 取法量化：wpe-renderdoc 把归一化坐标换成屏幕整数像素 `round(x · 宽)`、WPE 再 `ScreenToClient` 后除以窗口宽高得 `ptr`（float32），所以这里同样取
+ * `fround(round(x · 宽) / 宽)`，世界坐标才能和 WPE 的日志逐位对上（`Math.round` 同 Frida 脚本里的 `Math.round`）。`window` 是窗口客户区像素。
+ */
+export function expandInputTimeline(
+  timeline: readonly InputTimelineEntry[],
+  window: readonly [number, number],
+): { pointers: [number, number][]; buttons: boolean[] } {
+  checkWindow(window);
+  if (!Array.isArray(timeline) || !timeline.length)
+    throw new Error("inputTimeline 要是非空数组（每项 [x, y, down, n?]）");
+  const pointers: [number, number][] = [];
+  const buttons: boolean[] = [];
+  timeline.forEach((item, index) => {
+    const entry = item as readonly unknown[];
+    const ok =
+      Array.isArray(entry) &&
+      (entry.length === 3 || entry.length === 4) &&
+      typeof entry[0] === "number" &&
+      Number.isFinite(entry[0]) &&
+      typeof entry[1] === "number" &&
+      Number.isFinite(entry[1]) &&
+      (typeof entry[2] === "boolean" || entry[2] === 0 || entry[2] === 1) &&
+      (entry.length === 3 || (typeof entry[3] === "number" && Number.isInteger(entry[3]) && entry[3] >= 1));
+    if (!ok)
+      throw new Error(
+        `inputTimeline[${index}] 要是 [x, y, down] 或 [x, y, down, n]（x / y 有限数，down 布尔或 0 / 1，n 正整数），收到 ${JSON.stringify(item)}`,
+      );
+    const count = entry.length === 4 ? (entry[3] as number) : 1;
+    if (pointers.length + count > MAX_INPUT_FRAMES) throw new Error(`inputTimeline 展开后超过 ${MAX_INPUT_FRAMES} 帧`);
+    const point: [number, number] = [
+      Math.fround(Math.round((entry[0] as number) * window[0]) / window[0]),
+      Math.fround(Math.round((entry[1] as number) * window[1]) / window[1]),
+    ];
+    for (let i = 0; i < count; i++) {
+      pointers.push([point[0], point[1]]);
+      buttons.push(entry[2] === true || entry[2] === 1);
+    }
+  });
+  return { pointers, buttons };
+}

@@ -51,7 +51,7 @@ import type { TranslateResult } from "../wpesl2wgsl";
 import type { SceneEffect, SceneLayer } from "./bundle";
 import type { SceneParticle } from "./particles";
 import type { SceneScript } from "./scripts";
-import { scanScriptApi, scanScriptCallbacks } from "./scriptApi";
+import { scanScriptApi, scanScriptCallbacks, scriptExports } from "./scriptApi";
 import { SOUND_MODES, soundFlag } from "./sounds";
 import { TEXTURE_FORMATS } from "./tex";
 import {
@@ -228,7 +228,7 @@ const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
  * - `colorBlendMode`：0 普通，31 改成 additive，其它值走 passthrough 上屏（B7 / B8）。
  * - `copybackground`：只对组合层（passthrough 模型）生效（B9），普通图像模型上没有渲染效果。组合层已实现（P5b 步骤 2，
  *   `SceneLayer.copyBackground`）：缺省 true，基础 pass 从快照铺进合成 RT；JSON false 时合成 RT 0 清成透明（p5-REPORT `p5b-cl`）。
- * - `solid`：渲染路径不读（B9，推断与鼠标命中有关）。
+ * - `solid`：渲染路径不读；光标命中的开关（P6c，`SceneLayer.solid`、`LayerState.solid`，缺省真）。绑属性、挂脚本的运行时就地改。
  * - `ledsource`：Razer Chroma 外设灯效的取色来源，不参与渲染。
  * - `brightness`：只在 HDR 下乘进颜色（B10，`render/uniforms.ts` 的 `colorScale`），LDR 下不生效。
  * - `locktransforms`：编辑器锁定。
@@ -282,24 +282,17 @@ const SUPPORTED_OBJECT = new Set([
  * `perspective` 也不在这里（P5b 步骤 1）：图像层的 JSON `true` 已实现，其余在 `checkObjectFeatures` 里另判。
  * 这里的 `fullscreen`、`passthrough` 是对象上的键，和模型 JSON 的同名标志（P5b 步骤 2、3 已实现，见 `SUPPORTED_MODEL`）不是一回事。
  */
-const OBJECT_FLAGS = [
-  "fullscreen",
-  "passthrough",
-  "attachment",
-  "castshadow",
-  "disablepropagation",
-  "reflected",
-  "skin",
-];
+const OBJECT_FLAGS = ["fullscreen", "passthrough", "attachment", "castshadow", "reflected", "skin"];
 /**
  * 模型对象上中性的 `OBJECT_FLAGS`（P5c 步骤 1，rea-p5-mesh 2.2，p5-REPORT「P5c 语义的实测核对」）：
  * - `skin`：选材质（`mdl.ts` 的 `meshSkin`，`p5c-skin` 实测）；
  * - `castshadow`、`reflected`：只决定是不是阴影 pass 的投射者、在不在反射 pass 的名单里。没有消费者时不改变画面，而消费者现在都照报
  *   （读 `_rt_Reflection` 报 `texture:rendertarget:_rt_Reflection`，`REFLECTION` 非 0 报 `combo:REFLECTION`，投影灯报 `lightconfig:*`）；
- * - `disablepropagation`：渲染侧没有读取点（p2 I6）。
  * 图像、粒子等对象上这几个键照旧报。
+ * `disablepropagation`（P6c）不在这两张表里：任何对象上它都是光标命中的开关（`SceneLayer.disablePropagation`，只认 JSON 布尔），
+ * 见 `checkObjectFeatures`；模型对象（P6c 不做命中）上可见且为真时报 `cursor:model`。
  */
-const MODEL_NEUTRAL_FLAGS = ["skin", "castshadow", "reflected", "disablepropagation"];
+const MODEL_NEUTRAL_FLAGS = ["skin", "castshadow", "reflected"];
 /**
  * 支持或中性的模型键。
  * - `autosize`：纹理就绪时覆盖对象 `size` 与模型 `width` / `height`（P5b 步骤 1，`bundle.ts` 的 `imageLayerSize`，p5-REPORT
@@ -510,12 +503,46 @@ export function usesPerspectiveParticles(system: SceneParticle): boolean {
  * 脚本运行期的普通错误不在这里，仍只进脚本诊断（3b）。
  * 粒子层与声音层的 `play` / `pause` / `stop` / `isPlaying` 都实现了（P6a 步骤 2、P4f 步骤 3），不再按场景里有没有粒子层多报。
  */
-export function checkScriptFeatures(scripts: readonly SceneScript[], unsupported: Set<string>): void {
+export function checkScriptFeatures(
+  scripts: readonly SceneScript[],
+  unsupported: Set<string>,
+  objects: readonly SceneObject[] = [],
+): void {
   for (const script of scripts) {
     if (script.errors.length) continue;
     for (const key of scanScriptApi(script)) unsupported.add(`script:api:${key}`);
     for (const name of scanScriptCallbacks(script.source)) unsupported.add(`script:callback:${name}`);
+    // 光标回调（P6c）：模型对象（类型 5）的命中没做，挂在它上面的光标回调不会被调，照报 `cursor:model`
+    const object = script.layer === null ? undefined : objects[script.layer];
+    if (
+      object &&
+      objectKind(object) === "model" &&
+      scriptExports(script.source).some((name) => CURSOR_CALLBACKS.has(name))
+    )
+      unsupported.add("cursor:model");
   }
+}
+
+/** 光标回调名（`compile/scriptApi.ts` 的 `WPE_SCRIPT_CALLBACKS` 编号 7–13）。 */
+const CURSOR_CALLBACKS: ReadonlySet<string> = new Set([
+  "cursorHitTest",
+  "cursorEnter",
+  "cursorLeave",
+  "cursorMove",
+  "cursorClick",
+  "cursorDown",
+  "cursorUp",
+]);
+
+/**
+ * 参与光标命中的对象类别（P6c，rea-p6c-dispatch 3.2）：图像层（`image` 键，类型 1）与文本层（类型 4）；模型（类型 5）P6c 不做；
+ * 粒子、形状、声音、灯、相机、没有内容的分组节点不参与。`compileScene` 与能力表共用。
+ */
+export function cursorPickKind(object: SceneObject): "image" | "text" | undefined {
+  const kind = objectKind(object);
+  if (kind === "image") return "image";
+  if (kind === "text" || (kind === undefined && isTextObject(object))) return "text";
+  return undefined;
 }
 
 /**
@@ -820,6 +847,11 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   const cameraKey = (key: string) => camera && CAMERA_KEYS.has(key);
   for (const key of OBJECT_FLAGS)
     if (active(object[key]) && !lightKey(key) && !modelKey(key)) unsupported.add(`object:${key}`);
+  // 光标命中（P6c）：`disablepropagation` 只认 JSON 布尔（任何对象类型都读它，只有图像层与文本层参与命中，别的类型上中性）；绑属性、挂脚本
+  // 的取值运行中会变，没有就地路径，照报。模型对象（类型 5）P6c 不做命中：可见（JSON 不是 false）且为真时它会挡住下面的对象，照报 `cursor:model`
+  const stop = object.disablepropagation;
+  if (stop !== undefined && stop !== null && typeof stop !== "boolean") unsupported.add("object:disablepropagation");
+  if (kind === "model" && stop === true && object.visible !== false) unsupported.add("cursor:model");
   // 对齐（P8 步骤 3）：图像层已实现，JSON 的任何写法都按 WPE 的 setter 取值（字符串查表，别的是 center），别的对象中性。图像层上挂
   // `{script}` 的字段脚本：写回目标是枚举，运行时没有实现（`compile/scripts.ts` 落成 unsupported），照报
   if (kind === "image" && isScriptValue(object.alignment)) unsupported.add("object:alignment:script");
@@ -839,6 +871,7 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !SUPPORTED_OBJECT.has(key) &&
       !OBJECT_FLAGS.includes(key) &&
       ![
+        "disablepropagation",
         "alignment",
         "perspective",
         "clampuvs",

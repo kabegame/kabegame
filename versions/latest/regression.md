@@ -2689,6 +2689,20 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | Y6 解锁场景 | 同上 | `2861028294`、`3429479356` 各抓 WPE 一帧，探针按同一时刻渲染并排看 | 文字内容与位置一致 | 2026-11-14 Claude：`2861028294` 的日期、星期、时间与位置一致（差异是随机粒子）。`3429479356` 带 4K 视频纹理（约 700 MB），探针等第一帧超过 10 s 上限（三次都超时）。改做复制工程 `ignore/p6/b2/real/3429-text`（`kbp content isolate` 去掉视频层，留文字、logo、音频控制器）：时钟文字「12:01 PM」与位置和 WPE 一致，脚本没有报错；1920×1080 窗口下剩的差异在两个挂 `blurprecise` 的图层（时钟发光层 1493 个像素、logo 阴影 9059 个像素，最大差 58 / 50）。逐 draw 查下去，阴影层的合成 RT 与横向模糊和 WPE 都是 0 差异，WPE 最后一步按 1920×1080 的视口直接画、我们按场景 3840×2160 画再缩。改用 3840×2130 窗口（`A:\p6b\p6b2-3429-text-4k\`）比，整帧 0 差异，所以这些是 FINAL_CHECK 已登记的「先按场景分辨率画再缩」，不是模糊 effect 的问题 |
 | [ ] | Y7 解锁场景实时运行 | Windows dev，预览与桌面 | `3429479356`、`2861028294`、`3824424509` 在图库预览里打开、设为桌面壁纸 | 时钟走、日历是当天、提示文字轮换，没有脚本错误 | 待测 |
 
+## 场景壁纸 P6c 交互
+
+2026-11-14。场景壁纸的光标交互：命中测试、六个光标回调、全局 `input`、图层 `solid`，宿主接左键，放开能力表（`render/cursor.ts`、`script/api.ts`、`script/runtime.ts`）。规则全部照 WPE 实测（`ignore/p6/c0`，`input_play` 逐帧喂光标与左键），文档见 `cocs/wpe/WPE_SCENE.md`「交互（P6c）」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | C1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error，全过 | 新增 `render/cursor.test.ts`、`script/cursorEvent.test.ts`、`compile/p6c.test.ts`，`script/api.test.ts` 加 `input` / `solid` |
+| [x] | C2 对 WPE 日志逐行比 | Windows dev 屏外宿主 | `p6c-hit`、`p6c-par`、`p6c-shake`、`p6c-zoom`、`p6c-persp` 用 `inputTimeline` 回放，`ignore/p6/c0/cmp_logs.py` 比 `[kbp6c]` 行 | 回调序列与 `w` / `l` 逐字相同 | hit 98 / 98、par 13 / 13（`upd` 全部相同）；shake 回调序列 42 / 42 相同、数值差 ≤ 0.13（WPE 的 `g_Time` 未知）；zoom 49 条里 35 条逐字相同、其余 `l` 差 ≤ 4.6e-5（透视覆盖图层）；persp 序列相同、数值差 ≤ 1e-3（远平面 float32） |
+| [x] | C3 语料 | Node，192 个工程 | 前后重扫 `unsupported` | 只去掉 `script:callback:cursor*`、`script:api:input.*`，没有新增键 | 干净场景 +17（含预期的 11 张），没有掉出 |
+| [ ] | C4 预览里点击 | Windows dev，图库预览 | 打开 `3637191856`、`3810092560` | 悬停、点击有响应，和 WPE 一致 | 待真机 |
+| [ ] | C5 桌面壁纸点击 | Windows，窗口模式壁纸 | 把上面两张设为桌面壁纸，点桌面 | 点在桌面或图标上有响应，点在别的窗口上没有 | 待真机 |
+| [ ] | C6 应用背景不交互 | Windows dev | 同一张场景设为应用背景 | 鼠标点击没有回调 | 待真机 |
+| [ ] | C7 非 Windows | macOS / Linux | 同 C4 | 同 Windows | 本机不能测 |
+
 ## 场景壁纸反射设置与「反射关」（P13b1）
 
 2026-11-14。设置「场景反射」（`wpeSceneReflection`，跟随 WPE 的 `reflection`）；反射关时 `_rt_Reflection` 每帧清成清屏色、`_rt_MipMappedFrameBuffer` 加载时清成 (0, 0, 0, 1)。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md` 第 1、4 节与 `p13-REPORT.md`「P13b1 的实测」，计划、实施记录与走查见同目录 `phase-13b1-reflection-off.md`，测试工程 `ignore/p13/proj/p13b1-*`（`ignore/p13/b1/gen_b1.py`），走查工程 `ignore/p13/proj/{arsenal,audiophile,fantasticcar}-kbp`。

@@ -48,6 +48,8 @@ const layerTypes: Record<string, ValueType> = {
   visible: "bool",
   // P5a 步骤 2：字段脚本写回到视差深度（语料 2582765611、2896608544）
   parallaxDepth: "vec2",
+  // P6c：字段脚本写回到光标命中的开关（布尔，只改状态）
+  solid: "bool",
 };
 
 /**

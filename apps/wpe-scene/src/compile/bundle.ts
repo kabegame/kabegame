@@ -50,6 +50,7 @@ import {
   checkProgramFeatures,
   checkSceneFeatures,
   checkScriptFeatures,
+  cursorPickKind,
   EFFECT_UNIFORMS,
   effectNeedsFramebuffer,
   GROUP_CHILD_FRAMEBUFFER,
@@ -453,6 +454,21 @@ export interface SceneLayer {
   visible: boolean;
   /** `visible` 绑了用户属性（含 condition）：运行时可能变，当前不可见也要建 GPU 资源（P3a）。 */
   visibleBound: boolean;
+  /**
+   * 光标命中（P6c，`render/cursor.ts`）：参与命中测试的对象类别。WPE 只对图像层（类型 1）与文本层（4）做射线对四边形的命中，粒子、
+   * 形状、声音、分组节点、灯、相机都不参与（模型是类型 5，P6c 不做，照报 `cursor:model`）。不参与的图层没有这个字段。
+   */
+  pick?: "image" | "text";
+  /**
+   * 对象 `solid`（P6c，缺省真）：绑属性、挂脚本的取当时的值（运行时在 `LayerState.solid`，命中每帧现读）。`false` 的对象不收任何光标事件。
+   * 只在 `false` 时写（缺省真不占字段）。
+   */
+  solid?: boolean;
+  /**
+   * 对象 `disablepropagation`（P6c，JSON 布尔，缺省假）：命中它、且它自身与父链都可见时，下面的对象这一帧不再处理（隐藏的不挡）。
+   * 只在 `true` 时写。绑属性、挂脚本的取值照报（`checkObjectFeatures`）。
+   */
+  disablePropagation?: boolean;
   /**
    * 视差深度（P5a 步骤 2），两个分量：缺键 (1, 1)（WPE 基础构造写 1.0，rea-p5-camera.md 6.3；`p5a-static` 不写该键的方块按 (1, 1)
    * 移动）。绘制时只用根对象的值（`render/parallax.ts`），子对象自己的不参与；只在 `general.cameraparallax` 打开时起作用。
@@ -1121,7 +1137,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   // 由宿主每帧写（P10a 步骤 3，`animation/player.ts`）
   const animations = collectAnimations(scene);
   for (const key of animations.unsupported) unsupported.add(key);
-  checkScriptFeatures(scripts.list, unsupported);
+  checkScriptFeatures(scripts.list, unsupported, scene.objects);
   checkSceneFeatures(scene, unsupported);
   const general = scene.general ?? {};
   // 后处理档位：每次加载都解析（设置变了由调用方重新编译）
@@ -2231,6 +2247,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       shape: null,
       camera: null,
     };
+    // 光标命中（P6c）：只写不是缺省的值（`solid` 缺省真、`disablepropagation` 缺省假），没有光标信息的图层字节不变；`solid` 绑了属性时登记就地目标
+    const pick = cursorPickKind(object);
+    if (pick) layer.pick = pick;
+    if (bindings.bind(object.solid as SceneValue | undefined, properties, at("solid")) === false) layer.solid = false;
+    if (object.disablepropagation === true) layer.disablePropagation = true;
     // 每个对象都进 `layers`（分组节点、灯、粒子是没有 pass 的图层），子孙算世界矩阵与可见性时父的状态都在
     bundle.layers.push(layer);
     // 相机对象（P5d 步骤 3）：`fov` / `zoom` 进图层并登记就地目标；`path` 的条目动画没做，读出非空 `paths` 或读不到报 `camera:path`。

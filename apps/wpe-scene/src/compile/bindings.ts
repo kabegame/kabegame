@@ -24,9 +24,19 @@ export type ValueType = "float" | "vec2" | "vec3" | "vec4" | "bool" | "angles";
  * 图层的就地字段。`parallaxDepth`（P5a 步骤 2）只改字段、没有回调（p3-script-REPORT I3），视差每次绘制都重读。
  * `alignment`（P8 步骤 3）只给脚本写（图像层的 `thisLayer.alignment`，`script/api.ts`）：值是 `compile/alignment.ts` 的下标（脚本侧已按
  * `alignmentIndex` 换好），`SceneState` 据此重算图层的自身偏移；没有属性绑定（WPE 的 JSON setter 不认 `{user}`）。
+ * `solid`（P6c）：光标命中的开关（布尔，缺省真），只改状态、不画东西；命中测试每帧现读，没有改值回调（p6-REPORT 0c）。
  */
 export type LayerField =
-  "origin" | "scale" | "angles" | "alpha" | "color" | "brightness" | "visible" | "parallaxDepth" | "alignment";
+  | "origin"
+  | "scale"
+  | "angles"
+  | "alpha"
+  | "color"
+  | "brightness"
+  | "visible"
+  | "parallaxDepth"
+  | "alignment"
+  | "solid";
 
 /**
  * 图层的向量字段与分量数（P6b 1e-3 复核）：WPE 的对象描述符表（`ignore/p3-userprops/notes/descriptors-decomp.txt`，`FUN_1401e0530` /
@@ -307,7 +317,7 @@ export function bindingValue(
   type: ValueType | LayerField,
 ): number[] | boolean {
   const value: SceneScalar = condition === undefined ? raw : String(raw) === condition;
-  if (type === "bool" || type === "visible") return value !== false;
+  if (type === "bool" || type === "visible" || type === "solid") return value !== false;
   return numbers(value);
 }
 

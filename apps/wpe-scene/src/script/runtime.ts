@@ -1,6 +1,7 @@
 import { type TargetKey, type UserProperty } from "../compile/bindings";
 import { scriptToString } from "../text/fields";
 import { type SceneScript, type SceneScripts, type ScriptOwner } from "../compile/scripts";
+import { type CursorCallback } from "../render/cursor";
 import { type SceneReporter } from "../report";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 
@@ -25,8 +26,32 @@ export type ScriptValue = number[] | boolean | string;
  * 运行时会调用的导出回调。WPE 的其余回调（`compile/scriptApi.ts` 的 `MISSING_SCRIPT_CALLBACKS`）编译期报
  * `script:callback:*`；实现一个就加到这里、从那张表删掉（`api.test.ts` 核对两者）。
  */
-export const RUNTIME_CALLBACKS = ["init", "update", "applyUserProperties", "destroy", "animationEvent"] as const;
+export const RUNTIME_CALLBACKS = [
+  "init",
+  "update",
+  "applyUserProperties",
+  "destroy",
+  "animationEvent",
+  // 光标回调（P6c）：`cursorHitTest` 只登记在这里，从不调用（WPE 的 exe 里没有调用点，导出它只打开拾取，p6-REPORT 0b）
+  "cursorHitTest",
+  "cursorEnter",
+  "cursorLeave",
+  "cursorMove",
+  "cursorClick",
+  "cursorDown",
+  "cursorUp",
+] as const;
 type Callback = (typeof RUNTIME_CALLBACKS)[number];
+/** 打开拾取的导出：六个光标回调加 `cursorHitTest`（WPE 绑定时 `mask & 0x3f80`，rea-p6c-dispatch 3.1）。 */
+const CURSOR_EXPORTS = [
+  "cursorHitTest",
+  "cursorEnter",
+  "cursorLeave",
+  "cursorMove",
+  "cursorClick",
+  "cursorDown",
+  "cursorUp",
+] as const;
 /**
  * 宿主代为调用的回调类别（不是导出回调）：`timer` 是 `engine.setTimeout` / `setInterval`，`ended` 是视频纹理的结束回调（P9b，
  * `callFor`）。出错只记诊断、不禁用所属脚本的任何导出回调；统计照常记在 `calls[类别]` 下。
@@ -210,9 +235,6 @@ export class ScriptRuntime {
     return this.invoke(record, callback, () => (record.exports![callback] as (...args: unknown[]) => unknown)(...args));
   }
 
-  private value(record: ScriptRecord): unknown {
-    const raw = this.options.read(record.script.target);
-    const input = raw ?? record.script.initial;
   /**
    * `init` / `update` 的入参：状态里的当前值（没有时取编译期初值）。数取单精度、角度按 WPE 的 f32 算法换成度（`f32.ts`，
    * P3b 补测 `ignore/p3b-f32`）；存储不动，每次读都取一次。布尔、字符串原样。
@@ -220,6 +242,9 @@ export class ScriptRuntime {
    * TODO:[WPE_SCENE] 没逐个实测：入参取单精度不分目标，实测只覆盖图层字段与材质常量；general、泛光、声音 `volume`、相机、文本、
    * 粒子实例覆盖的字段脚本入参是照同一规则推的，vec4 目标语料里没有样本（P3b 补测「没测到的项」）。
    */
+  private value(record: ScriptRecord): unknown {
+    const raw = this.options.read(record.script.target);
+    const input = raw ?? record.script.initial;
     const type = record.script.valueType;
     if (type === "bool" || type === "string") return input;
     const values = Array.isArray(input)
@@ -441,6 +466,43 @@ export class ScriptRuntime {
       this.writeReturn(record, result);
       if (this.halted) break;
     }
+  }
+
+  /**
+   * 光标回调（P6c，rea-p6c-dispatch 4.1、rea-p6c-script 1、2）：交给同一对象（`object`）上导出了 `callback` 的全部脚本，按记录顺序
+   * （= WPE 的登记顺序：该对象各字段上的脚本各一段）。只发给已跑完 `init`、没被禁用这个回调的脚本；`world` / `local` 是 float32 展开的
+   * 三个分量，每个接收者各建一个事件对象 `{ button: 0, worldPosition, localPosition }`（向量原型是 realm 的 `Vec3`，值是单精度，没有
+   * `hitBox`：木偶命中框是 P12，没有 `screenPosition`），改它不影响同一次派发里别的脚本。回调的返回值丢弃（WPE 只写回 `init` /
+   * `update` / `animationEvent`）；出错只禁用这个回调（`invoke`）。同 `animationEvent`，在渲染器帧内同步调用，回调里写的字段当帧画出。
+   */
+  cursorEvent(object: number, callback: CursorCallback, world: readonly number[], local: readonly number[]): void {
+    if (this.halted) return;
+    for (const record of this.records) {
+      if (record.state !== "inited" || scriptObject(record.script.owner) !== object) continue;
+      if (record.disabled.has(callback) || typeof record.exports?.[callback] !== "function") continue;
+      this.call(record, callback, this.cursorEventObject(world, local));
+      if (this.halted) break;
+    }
+  }
+
+  /** 光标事件对象（见 `cursorEvent`）：普通对象，成员顺序 `button`、`worldPosition`、`localPosition`，两个向量是 realm 的 `Vec3`。 */
+  private cursorEventObject(world: readonly number[], local: readonly number[]): unknown {
+    const prototype = this.realm.prototypes.Vec3;
+    const Vec3 = (prototype as { constructor: new (...values: number[]) => unknown }).constructor;
+    const vector = (values: readonly number[]) => new Vec3(...scriptNumbers(values.slice(0, 3)));
+    const event = new (this.realm.global.Object as ObjectConstructor)() as Record<string, unknown>;
+    event.button = 0;
+    event.worldPosition = vector(world);
+    event.localPosition = vector(local);
+    return event;
+  }
+
+  /** 某个对象上有没有脚本导出了光标回调（`cursorHitTest` 也算：它只打开拾取）：渲染器据此决定每帧要不要做命中测试。 */
+  get hasCursorCallbacks(): boolean {
+    return this.records.some(
+      (record) =>
+        record.state === "inited" && CURSOR_EXPORTS.some((name) => typeof record.exports?.[name] === "function"),
+    );
   }
 
   replayWrites(): void {

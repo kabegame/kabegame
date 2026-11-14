@@ -18,6 +18,7 @@ import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlP
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import { TEXT_ANCHORS } from "../compile/texts";
+import type { CursorInputSnapshot } from "../render/cursor";
 import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
 import type { VideoTexturePlayer } from "../video/player";
@@ -103,6 +104,11 @@ export interface ScriptApiState {
    * 不传或返回 null（语料诊断、播放器还没建）时方法空操作，只读成员取 bundle 里这一条的定义。
    */
   animation?(id: string): AnimationControl | null;
+  /**
+   * 全局 `input` 读到的本帧光标（P6c，宿主存渲染器每个实时帧给的 `CursorInputSnapshot`）：每次读都现取，所以回调里读到的和 `update` 里同一帧的相同。
+   * 不传（语料诊断、`realmCheck`）时读到全 0、左键松开。
+   */
+  cursorInput?(): CursorInputSnapshot;
 }
 
 /** `IVideoTexture` 的落点（P9b，`VideoTexturePlayer` 满足它）。 */
@@ -151,7 +157,18 @@ const TEXT_API_TYPES: Record<TextRuntimeField, ValueType | "string"> = {
 /** 路径的最后一段（`script.id` / 动画 `id` 的属性名）。 */
 const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
 
-const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness", "parallaxDepth"] as const;
+const LAYER_FIELDS = [
+  "origin",
+  "scale",
+  "angles",
+  "alpha",
+  "color",
+  "visible",
+  "brightness",
+  "parallaxDepth",
+  // 光标命中的开关（P6c）：所有图层都有，读回布尔，写入只收布尔（别的类型不写、不报错），没有改值回调，命中每帧现读
+  "solid",
+] as const;
 
 /**
  * 脚本 realm 里的 WPE API。WPE 有、这里还没实现的成员登记在 `compile/scriptApi.ts` 的 `MISSING_SCRIPT_API`，
@@ -191,6 +208,7 @@ export class ScriptApi {
     this.thisScene = this.object();
     this.general = this.object();
     this.installEngine();
+    this.installInput();
     this.installScene();
     // general 字段在 `thisScene` 上也有（K5），和挂在 general 上的脚本的 `thisObject` 读写同一份
     this.installGeneral(this.general);
@@ -262,6 +280,8 @@ export class ScriptApi {
         field,
         () => {
           const value = this.access.state().layers.get(index)?.[field];
+          // `solid` 缺省真（P6c）
+          if (field === "solid") return value !== false;
           // `parallaxDepth` 是 Vec2（P5a 步骤 2，WPE 声明 `parallaxDepth: Vec2`），其余向量是 Vec3
           if (Array.isArray(value))
             return this.vector(
@@ -277,7 +297,7 @@ export class ScriptApi {
             value,
             field === "angles"
               ? "angles"
-              : field === "visible"
+              : field === "visible" || field === "solid"
                 ? "bool"
                 : field === "alpha" || field === "brightness"
                   ? "float"
@@ -773,6 +793,31 @@ export class ScriptApi {
       },
       true,
     );
+  }
+
+  /**
+   * 全局 `input`（P6c，rea-p6c-script.md 3、p6-REPORT 0c）：三个只读成员，每次读都现取、建新对象（`input.cursorWorldPosition ===
+   * input.cursorWorldPosition` 为假）：`cursorWorldPosition` 是 `Vec3`（同回调的 `worldPosition`，正交 z = 0）、`cursorScreenPosition` 是
+   * `Vec2`（窗口客户区像素，左上原点、y 向下，和 `engine.screenResolution` 同一套单位）、`cursorLeftDown` 是布尔。模块求值期间（顶层）读
+   * 抛 realm 的 `SyntaxError: <成员名> cannot be accessed from global scope.`，`init`、`update`、回调、计时器里都能读。成员只有 getter：严格模式
+   * 下赋值抛 `TypeError`（WPE 是只读数据属性）。
+   */
+  private installInput(): void {
+    const input = this.object();
+    const snapshot = (): CursorInputSnapshot =>
+      this.access.cursorInput?.() ?? { world: [0, 0, 0], screen: [0, 0], leftDown: false };
+    const scoped = (name: string, get: () => unknown) =>
+      this.define(input, name, () => {
+        if (this.evaluating) {
+          const Ctor = (this.realm.global.SyntaxError as ErrorConstructor | undefined) ?? SyntaxError;
+          throw new Ctor(`${name} cannot be accessed from global scope.`);
+        }
+        return get();
+      });
+    scoped("cursorWorldPosition", () => this.vector(scriptNumbers(snapshot().world), 3));
+    scoped("cursorScreenPosition", () => this.vector(scriptNumbers(snapshot().screen), 2));
+    scoped("cursorLeftDown", () => snapshot().leftDown);
+    this.realm.global.input = input;
   }
 
   /** 模块求值期间调 `getAnimation` 抛 realm 的 SyntaxError，消息照 WPE（P10b 步骤 0 Q5）。 */

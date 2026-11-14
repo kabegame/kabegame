@@ -45,6 +45,15 @@ syncHidden();
 document.addEventListener("pointermove", (event) => {
   pointer.move(event.clientX / innerWidth, event.clientY / innerHeight);
 });
+// 左键（P6c）：只认主键（WPE 只有 `GetKeyState(VK_LBUTTON)`；声明里 `button` 总是 0）。`pointercancel` 当抬起，页面失焦 / 隐藏时松开，免得按下状态卡住
+document.addEventListener("pointerdown", (event) => {
+  if (event.button === 0) host.setButton(true);
+});
+document.addEventListener("pointerup", (event) => {
+  if (event.button === 0) host.setButton(false);
+});
+document.addEventListener("pointercancel", () => host.setButton(false));
+window.addEventListener("blur", () => host.setButton(false));
 window.addEventListener("pagehide", () => host.dispose(), { once: true });
 
 if (__SCENE_DEV__) installSceneDevProbe(host);

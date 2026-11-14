@@ -534,3 +534,14 @@ describe("createProbeScripts", () => {
     expect(scripts.result()).toMatchObject({ diagnostics: [], recompile: [], frames: 1 });
   });
 });
+
+describe("scripts.consoleGrep（P6c）", () => {
+  it("给了正则源码就编译；不给时结果里没有这个键；非字符串与坏正则抛错", () => {
+    expect(probeScriptsOptionsOf(true)).not.toHaveProperty("consoleGrep");
+    const resolved = probeScriptsOptionsOf({ consoleGrep: "kbp6c" });
+    expect(resolved?.consoleGrep).toBeInstanceOf(RegExp);
+    expect(resolved?.consoleGrep?.test("[kbp6c] f=1")).toBe(true);
+    expect(() => probeScriptsOptionsOf({ consoleGrep: 5 })).toThrow("consoleGrep 要是正则源码");
+    expect(() => probeScriptsOptionsOf({ consoleGrep: "(" })).toThrow("不是合法的正则");
+  });
+});

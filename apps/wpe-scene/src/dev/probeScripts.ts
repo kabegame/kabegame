@@ -22,6 +22,7 @@ import type { SceneBundle } from "../compile/bundle";
 import { SceneFs, type SceneReader } from "../compile/fs";
 import { parseProject, type ProjectJson } from "../compile/model";
 import { mulberry32 } from "../particles/random";
+import { CursorSession, emptyCursorInput, type CursorInputSnapshot, type CursorStepInput } from "../render/cursor";
 import type { SceneState } from "../render/state";
 import { daytimeOf } from "../render/uniforms";
 import type { SceneReporter } from "../report";
@@ -41,6 +42,11 @@ import { readScriptState, recordRecompileWrite, writeScriptState } from "../scri
 export interface ProbeScriptsOptions {
   clock?: number;
   seed?: number;
+  /**
+   * 脚本 `console` 输出的全量收集（P6c，对 WPE 日志逐行比用）：正则源码（`new RegExp(source)`），匹配的行全部留在结果的 `console.matched`
+   * （`console.error` 的行不带 `error: ` 前缀，同 WPE 的 `log.txt`），不受 `MAX_CONSOLE_TAIL` 限制（上限 `MAX_MATCHED`）。不给时不收。
+   */
+  consoleGrep?: string;
 }
 
 /** 不给 `clock` 时的起点：2026-01-01T00:00:00Z（固定值，结果里写明用的是缺省）。 */
@@ -55,6 +61,8 @@ export const MAX_PROBE_SEED = 0xffffffff;
 const MAX_MESSAGES = 100;
 /** 结果里脚本 `console` 输出最多留这么多条（最后的）。 */
 const MAX_CONSOLE_TAIL = 50;
+/** `consoleGrep` 命中的行最多留这么多条（前面的）。 */
+const MAX_MATCHED = 200_000;
 
 /** 校验并补全后的 `scripts` 选项。 */
 export interface ResolvedProbeScripts {
@@ -62,6 +70,8 @@ export interface ResolvedProbeScripts {
   clockDefault: boolean;
   seed: number;
   seedDefault: boolean;
+  /** `consoleGrep` 的正则；不给时没有这个键。 */
+  consoleGrep?: RegExp;
 }
 
 const shown = (value: unknown) => JSON.stringify(value) ?? String(value);
@@ -77,13 +87,14 @@ export function probeScriptsOptionsOf(value: unknown): ResolvedProbeScripts | nu
     clockDefault: options.clock === undefined,
     seed: options.seed ?? DEFAULT_PROBE_SEED,
     seedDefault: options.seed === undefined,
+    ...(options.consoleGrep === undefined ? {} : { consoleGrep: grepOf(options.consoleGrep) }),
   });
   if (value === true) return resolved({});
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error(`scripts 要是 true，或 { clock?, seed? }，收到 ${shown(value)}`);
   const object = value as Record<string, unknown>;
-  const unknown = Object.keys(object).filter((key) => key !== "clock" && key !== "seed");
-  if (unknown.length) throw new Error(`scripts.${unknown[0]} 不认识（scripts 只收 clock / seed）`);
+  const unknown = Object.keys(object).filter((key) => key !== "clock" && key !== "seed" && key !== "consoleGrep");
+  if (unknown.length) throw new Error(`scripts.${unknown[0]} 不认识（scripts 只收 clock / seed / consoleGrep）`);
   const { clock, seed } = object;
   if (
     clock !== undefined &&
@@ -95,7 +106,21 @@ export function probeScriptsOptionsOf(value: unknown): ResolvedProbeScripts | nu
     !(typeof seed === "number" && Number.isInteger(seed) && seed >= 0 && seed <= MAX_PROBE_SEED)
   )
     throw new Error(`scripts.seed 要是 0–${MAX_PROBE_SEED} 的整数，收到 ${shown(seed)}`);
-  return resolved({ clock: clock as number | undefined, seed: seed as number | undefined });
+  return resolved({
+    clock: clock as number | undefined,
+    seed: seed as number | undefined,
+    consoleGrep: object.consoleGrep as string | undefined,
+  });
+}
+
+/** `consoleGrep`：要是能编译的正则源码（字符串），否则抛错。 */
+function grepOf(source: unknown): RegExp {
+  if (typeof source !== "string") throw new Error(`scripts.consoleGrep 要是正则源码（字符串），收到 ${shown(source)}`);
+  try {
+    return new RegExp(source);
+  } catch (error) {
+    throw new Error(`scripts.consoleGrep 不是合法的正则：${String(error)}`);
+  }
 }
 
 /** 脚本时钟在回放时间 `time`（秒）的时刻（毫秒时间戳）：起点加回放时间。 */
@@ -192,8 +217,11 @@ export interface ProbeScriptsResult {
   audioResolutions: number[];
   /** 运行时的告警与错误（脚本出错、写回目标不支持……），最多 `MAX_MESSAGES` 条（前面的）。 */
   messages: string[];
-  /** 脚本 `console` 输出的条数与最后 `MAX_CONSOLE_TAIL` 条（`console.error` 的带 `error: ` 前缀）。 */
-  console: { count: number; tail: string[] };
+  /**
+   * 脚本 `console` 输出的条数与最后 `MAX_CONSOLE_TAIL` 条（`console.error` 的带 `error: ` 前缀）；给了 `consoleGrep` 时 `matched` 是匹配的全部行
+   * （按输出顺序，不带前缀，最多 `MAX_MATCHED` 条，超出的计进 `matchedDropped`）。
+   */
+  console: { count: number; tail: string[]; matched?: string[]; matchedDropped?: number };
 }
 
 /** 建 realm 用的回调：同 `createIframeRealm` 的 `console` 与 `localStorage`。 */
@@ -234,6 +262,11 @@ export interface ProbeScripts {
   /** 动画事件（P10b）：回放推进动画时越过的事件在这里派发给脚本，同宿主 `runtime.animationEvent`；没有脚本时什么都不做（可选：单测的替身可以不给）。 */
   animationEvent?(object: number | null, json: string): void;
   result(): ProbeScriptsResult;
+  /**
+   * 光标（P6c，`render/cursor.ts`）：这一帧在设好相机之后、动画与脚本（`enterFrame` / `frame`）之前调一次，同渲染器的 `stepCursor`：更新脚本
+   * `input.*` 读到的快照，场景里有脚本导出了光标回调时命中、派发给运行时。可选：单测的替身可以不给。
+   */
+  cursor?(input: CursorStepInput): void;
   /** 调各段的 `destroy`、释放 realm；可以重复调。 */
   dispose(): void;
 }
@@ -255,6 +288,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
   const messages: string[] = [];
   const consoleTail: string[] = [];
   let consoleCount = 0;
+  const matched: string[] = [];
+  let matchedDropped = 0;
+  /** 光标会话与最近一帧的 `input.*` 快照（P6c）：同宿主，快照由 `cursor` 每帧更新、`input` 每次现读。 */
+  const cursorSession = new CursorSession();
+  let cursorInput: CursorInputSnapshot = emptyCursorInput();
 
   const message = (level: string, text: string, detail?: unknown) => {
     if (messages.length >= MAX_MESSAGES) return;
@@ -269,10 +307,14 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     warn: (text, detail) => message("warn", text, detail),
     error: (text, detail) => message("error", text, detail),
   };
-  const output = (text: string) => {
+  const output = (text: string, raw = text) => {
     consoleCount++;
     consoleTail.push(text);
     if (consoleTail.length > MAX_CONSOLE_TAIL) consoleTail.shift();
+    if (options.consoleGrep?.test(raw)) {
+      if (matched.length < MAX_MATCHED) matched.push(raw);
+      else matchedDropped++;
+    }
   };
 
   /** 写回：写进状态的规则同宿主（`writeScriptState`）；要整场重编译的值变了才记一条（同宿主的 `overrideAndReload`）。 */
@@ -308,7 +350,10 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     async load() {
       if (!bundle.scripts.list.length || disposed) return;
       const created = await createRealm({
-        console: { log: (text) => output(String(text)), error: (text) => output(`error: ${String(text)}`) },
+        console: {
+          log: (text) => output(String(text)),
+          error: (text) => output(`error: ${String(text)}`, String(text)),
+        },
         // 只在内存：不给后端（同宿主没有图片 id 时）
         localStorage: (global) =>
           createWpeLocalStorage({
@@ -350,6 +395,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         },
         // 关键帧动画（P10b）：探针自己的播放器，每次现取
         animation: (id) => input.animations?.control(id) ?? null,
+        // 全局 `input`（P6c）：最近一帧的光标快照
+        cursorInput: () => cursorInput,
       }));
       runtime = new ScriptRuntime(created, {
         report,
@@ -380,6 +427,13 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       if (disposed) return;
       runtime?.animationEvent(object, json);
     },
+    cursor(frameInput) {
+      if (disposed) return;
+      const active = runtime?.hasCursorCallbacks ?? false;
+      const { snapshot, dispatches } = cursorSession.frame(frameInput, { layers: bundle.layers, state }, active);
+      cursorInput = snapshot;
+      for (const item of dispatches) runtime?.cursorEvent(item.object, item.callback, item.world, item.local);
+    },
     result() {
       return {
         clock: options.clock,
@@ -393,7 +447,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         unconnected: { ...unconnected },
         audioResolutions: api?.audioResolutions ?? [],
         messages: [...messages],
-        console: { count: consoleCount, tail: [...consoleTail] },
+        console: {
+          count: consoleCount,
+          tail: [...consoleTail],
+          ...(options.consoleGrep ? { matched: [...matched], matchedDropped } : {}),
+        },
       };
     },
     dispose() {

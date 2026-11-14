@@ -105,7 +105,14 @@ import {
 } from "./probeScripts";
 import { prepareProbeTexts } from "./probeTexts";
 import { checkGifDts, prepareProbeUserTextures, userVideoValues } from "./probeUserTextures";
-import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
+import {
+  checkCanvas,
+  expandInputTimeline,
+  pointerWindow,
+  replayPointers,
+  sceneCursors,
+  type InputTimelineEntry,
+} from "./replayPointers";
 import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
 import {
   checkVideoTime,
@@ -249,6 +256,18 @@ export interface RenderFrameOptions {
    * 一项、`g_PointerPositionLast` 是倒数第二项（只有一帧时取自己）；`profile` 帧用第 0 项。
    */
   pointers?: [number, number][];
+  /**
+   * 逐帧的左键（P6c，场景光标交互）：和 `particles.dts` 等长（第 i 项是第 i + 1 帧），要有 `particles` 与 `scripts`；缺的项按松开。每帧按
+   * `pointers` 的位置在相机更新之后、脚本之前命中、派发光标回调（`render/cursor.ts`），脚本的 `input.cursorLeftDown` 读到它。
+   * 不和 `inputTimeline` 同给。
+   */
+  buttons?: boolean[];
+  /**
+   * wpe-renderdoc 的输入时间线（P6c）：`[x, y, down]` 或 `[x, y, down, n]`（重复 n 帧），x / y 是抓帧窗口客户区归一化坐标，展开后等于 `particles.dts`
+   * 的帧数。同时给 `pointers` 与 `buttons`：指针按 WPE 的取法量化到整数像素（`expandInputTimeline`，`window ?? canvas` 是窗口像素，必须给），
+   * 所以和 WPE 日志里的世界坐标 / 局部坐标逐位相同。不和 `pointer` / `pointers` / `buttons` 同给。
+   */
+  inputTimeline?: InputTimelineEntry[];
   /**
    * 抓帧窗口尺寸 `[宽, 高]`（像素）：和场景不同尺寸时，光标（`pointer` / `pointers`）按壁纸样式 `fill` 换到场景上推出 cursor
    * （`sceneCursor`，同渲染器与 kbp replay），`g_PointerPosition` 仍是窗口坐标；缺省或同尺寸时原样。没给时取 `canvas`；两个都给
@@ -488,8 +507,24 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const perspective = target && probePerspective(bundle, target);
     // 每一帧的 g_PointerPosition 与 cursor（P5a 收尾）：只给 pointer（或都不给）时每帧相同，同加逐帧指针之前。
     // 换算窗口是 `window ?? canvas`（第 5 批）：读回画布就是模拟的壁纸窗口
+    // 输入时间线（P6c）：展开成逐帧指针与左键；左键另交给脚本的光标命中
+    if (options.inputTimeline !== undefined && (options.pointer || options.pointers || options.buttons))
+      throw new Error("inputTimeline 不能和 pointer / pointers / buttons 同给（它自己展开成逐帧指针与左键）");
+    if (options.inputTimeline !== undefined && !cursorWindow)
+      throw new Error("inputTimeline 要同时给 window（或 canvas）：指针按窗口像素量化，和 WPE 的整数像素一致");
+    const timeline =
+      options.inputTimeline && cursorWindow ? expandInputTimeline(options.inputTimeline, cursorWindow) : null;
+    const buttons = timeline?.buttons ?? options.buttons;
+    if (buttons) {
+      if (!options.particles?.dts.length)
+        throw new Error("buttons / inputTimeline 要和 particles 一起给（逐帧左键是回放的每一帧）");
+      if (buttons.length !== options.particles.dts.length)
+        throw new Error(
+          `buttons / inputTimeline 有 ${buttons.length} 帧，应和 particles.dts 等长（${options.particles.dts.length} 项）`,
+        );
+    }
     const pointers = replayPointers(
-      { pointer: options.pointer, pointers: options.pointers, window: cursorWindow },
+      { pointer: options.pointer, pointers: timeline?.pointers ?? options.pointers, window: cursorWindow },
       target ?? [sceneWidth, sceneHeight],
       options.particles?.dts.length,
     );
@@ -650,6 +685,15 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         puppets: replayed ? (puppets ?? undefined) : undefined,
         perspective: perspective && { ...perspective, path: profileCamera.path },
         cameraObjects,
+        // 光标交互（P6c）：脚本在跑才有（命中派发给脚本运行时）；窗口像素同脚本的 `engine.screenResolution`
+        ...(probeScripts
+          ? {
+              cursor: {
+                buttons: buttons ?? [],
+                window: [...(canvas ?? cursorWindow ?? [1920, 1080])] as [number, number],
+              },
+            }
+          : {}),
         // 回放时前 n − 1 帧每帧都在 GPU 上画（P10a 走查）：被依赖图层的合成 RT、`clearenabled: false` 的累加等跨帧状态同渲染器；
         // 只画场景目标，读回画布与读回只在最后一帧。轨迹从读回帧起记，这些帧只进登记表
         encodeFrame: () => {

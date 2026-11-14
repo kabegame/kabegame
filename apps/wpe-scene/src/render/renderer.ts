@@ -64,6 +64,7 @@ import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, typ
 import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame, type CameraPathState } from "./camera";
 import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
 import type { SceneGeneral, SceneLayer } from "../compile/bundle";
+import { CursorSession, type CursorDispatch, type CursorInputSnapshot } from "./cursor";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
@@ -121,6 +122,16 @@ export interface SceneRendererOptions {
    * 宿主走整场重新加载（场景目标、深度、快照、泛光、fullscreen 合成 RT 都跟尺寸有关，不写 resize）。正交场景不调。
    */
   onRenderSizeChange?: () => void;
+  /**
+   * 光标交互（P6c，`render/cursor.ts`）：每个实时帧在相机更新之后、脚本之前，渲染器按本帧的光标世界坐标与左键算出 `input.*` 的快照
+   * （`input`，总是给：脚本可能只读 `input`），`active()` 为真（有脚本导出了光标回调）时再按 WPE 的规则命中、派发（`events`）。
+   * 补画帧、暂停期间不调（WPE 暂停时不采样、不派发）。
+   */
+  cursor?: {
+    active(): boolean;
+    input(snapshot: CursorInputSnapshot): void;
+    events(dispatches: readonly CursorDispatch[]): void;
+  };
 }
 
 export interface SceneLoadOptions {
@@ -193,6 +204,12 @@ export class SceneRenderer {
    * 桌面是鼠标转发时），之外保持最后的值；WPE 每帧读全局光标、窗口外也跟踪，这点差别不处理。
    */
   private canvasPointer: [number, number] | null = null;
+  /**
+   * 登记的左键（P6c，`setButton`）：宿主按 `pointerdown` / `pointerup` 交来，每个实时帧采一次（WPE 每帧 `GetKeyState`，两帧之间完整的一次按下
+   * 抬起会丢）。光标会话（悬停与按下集合、上一帧的世界坐标）归渲染器，整场重编译保留（WPE 的集合在场景上，改属性不重建）。
+   */
+  private button = false;
+  private readonly cursorSession = new CursorSession();
   /** `g_Time` / `g_Frametime`：钳过的帧时间与它的累加（T2）。换场景不重置。 */
   private readonly frameClock = new FrameClock();
   /**
@@ -220,6 +237,8 @@ export class SceneRenderer {
   private cameraLayers: SceneLayer[] = [];
   /** 当前场景的 general（相机对象的正交帧要 W、H 与透视覆盖的 fov），加载时取。 */
   private sceneGeneral: SceneGeneral | null = null;
+  /** 当前场景的全部图层（P6c，光标命中的可拾取对象从它与状态现算），加载时取。 */
+  private pickLayers: readonly SceneLayer[] = [];
   /** 透视场景建场景时的画布分辨率（`GpuScene.build` 的 `size`）；正交场景为 null。 */
   private renderSize: [number, number] | null = null;
   /** 分辨率变化的去抖计时器（`RENDER_SIZE_SETTLE_MS`）与它在等的那个分辨率。 */
@@ -415,6 +434,7 @@ export class SceneRenderer {
     this.camera = perspective ? (bundle.general.camera ?? { ...DEFAULT_CAMERA, paths: [] }) : null;
     this.cameraLayers = cameraObjectLayers(bundle);
     this.sceneGeneral = bundle.general;
+    this.pickLayers = bundle.layers;
     this.renderSize = size ?? null;
     // 视差点：新场景回到场景中心（WPE 加载末尾写初值，rea-p5-camera.md 6.2；透视场景是 (0, 0)），重编译（换下的是同一张场景）保留。
     // 透视相机的路径状态同样（P5d 步骤 2）
@@ -473,6 +493,14 @@ export class SceneRenderer {
     }
     this.syncPlacement(this.scene);
     this.pointer = scenePointer(this.placementStyle, this.placement, this.canvas.width, this.canvas.height, x, y);
+  }
+
+  /**
+   * 左键（P6c）：按下 / 抬起的当前状态，渲染器每个实时帧开头的光标命中里采一次。暂停时照常记（WPE 恢复后第一帧按「当前 vs 暂停前」比较，
+   * 左键变了就当作一次按下或松开）。
+   */
+  setButton(down: boolean): void {
+    this.button = down;
   }
 
   /** 壁纸样式：只影响上屏，场景本身不重画。 */
@@ -656,6 +684,30 @@ export class SceneRenderer {
     return sceneCursor(style, placement, this.canvas.width, this.canvas.height, pointer[0], pointer[1]);
   }
 
+  /**
+   * 一个实时帧的光标（P6c）：算 `input.*` 的快照，有脚本导出光标回调时命中、派发。窗口指针是画布上的原始归一化坐标（没收到过时取中心），
+   * 光标下的场景点按壁纸样式换算（`cursorOf`，`fill` 与窗口指针相同）。
+   */
+  private stepCursor(scene: GpuScene, state: SceneState, cursor: [number, number]): void {
+    const options = this.options.cursor;
+    if (!options) return;
+    const window = this.fullResolution;
+    const { snapshot, dispatches } = this.cursorSession.frame(
+      {
+        camera: scene.cursorCamera(window),
+        cursor,
+        pointer: this.canvasPointer ?? [0.5, 0.5],
+        window,
+        down: this.button,
+        parallax: drawParallax(this.parallax, state.general, this.perspective),
+      },
+      { layers: this.pickLayers, state },
+      options.active(),
+    );
+    options.input(snapshot);
+    if (dispatches.length) options.events(dispatches);
+  }
+
   private render(runScripts = false): void {
     const scene = this.scene;
     const state = this.state;
@@ -723,6 +775,9 @@ export class SceneRenderer {
     // 这一帧就读到，脚本写回在 puppet 之后、晚一帧。在 try 外，宿主回调的问题不让画面退回
     if (live) this.options.stepPuppets?.(frametime);
     scene.setCamera(camera);
+    // 光标命中与派发（P6c）：相机更新之后、脚本（关键帧动画、计时器、`update`）之前（WPE `FUN_14017fa70` 的 `0x1401802af`）；只在实时帧，
+    // 同样在 try 外：回调里的脚本错误不走 `render:frame` 退回
+    if (live) this.stepCursor(scene, state, cursor);
     // 声音（P6a 步骤 1）：粒子之后、脚本之前；同脚本在 try 外，声音的问题不让画面退回
     if (live) this.options.stepObjects?.(frametime);
     // 脚本在 try 外（同以前）：脚本自己的错误不走 `render:frame` 退回

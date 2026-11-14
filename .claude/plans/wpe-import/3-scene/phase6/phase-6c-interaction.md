@@ -181,8 +181,6 @@ if cursor.get("created") is not None and now["created"] != cursor["created"]:   
 - 桌面壁纸线程的 `GetCursorPos` 返回值不变（另起只读计数核对）。
 - MCP 重连后 `input_play` 走一遍；`close_wallpaper` 停驱动；`log_since` 用经客户端回传的游标不再误判。
 
-## 实施记录
-
 ### 0c-1 实施记录（2026-11-14）
 
 sonnet 代理按上面的计划实现，我核对后验收。
@@ -201,3 +199,160 @@ sonnet 代理按上面的计划实现，我核对后验收。
 - 播放进行中另挂只读脚本（`ignore/p6/c0/frida/check_desktop.py`）：测试窗口的线程 40 次全是喂进去的 (1145, 899)，桌面壁纸的线程 40 次全是真实光标。
 - 没有残留的 `driver.py` 进程；测试窗口已关。
 - 还没做：MCP 重连后经工具本身走一遍；人点一遍录下来再回放（record 只录过静止 / 用户自己在动的光标，格式对）。
+
+### 0c 实测记录（2026-11-14，wpe-renderdoc `input_play`）
+
+四个确定性工程（场景 1920×1080 正交，测试窗口 1280×720），生成脚本 `ignore/p6/c0/make_hit.py`、`make_cam.py`，时间线 `ignore/p6/c0/frida/tl-*.json`（段落表 `tl-*-segs.json`），WPE 日志截在 `ignore/p6/c0/out/wpe-{hit,par,shake,zoom}.log`（`cut_log.py`），按段落归组用 `by_seg.py`。每段脚本导出全部光标回调，日志 `[kbp6c] f=<本段 update 次数> <层.字段> <回调> w=… l=…`。**读码（含 REA 更正）全部成立**，下面是逐项结果。
+
+**`p6c-hit`**（时间线 169 帧，回调帧 = 时间线帧 + 409，所有回调都落在段首那一帧）：
+- 重叠的 A（上）、B（下）：两个都收到，先 A 后 B；A 身上的两段脚本（`origin`、`scale`）每个回调都各调一次、按登记顺序；同一帧里按对象依次派发（A 的 enter、move 都发完才轮到 B）。
+- 按下 / 抬起 / 点击：A、B 都收到 `down`、`up`、`click`。
+- 隐藏的 H：`enter`、`move`、`down`、`up`、`click` 全有。`solid: false` 的 NS：什么都没有。
+- 可见且 `disablepropagation` 的 D1 挡住 D0；移到只在 D0 上：D1 `leave`、D0 `enter`；回到重叠处：D1 `enter`，D0 **不收** `leave`（被挡住的这一帧不处理）；移出去两个都 `leave`。隐藏的 D2 开了 `disablepropagation` 也不挡，D2、D3 都 `enter`。
+- R（`scale 1.5 1 1`、z 转 30°）、AL（`alignment: topleft`）、C（父层 `scale 2`）：命中区跟着变换走，没旋转 / 居中 / 不乘父缩放的对照点都不中；`localPosition` 以四边形左上为原点、y 向下、单位是 `size`（不乘缩放），离开时是外推值。
+- 拖动：只在 A 上按下：同一帧 `enter → move → down`；按住拖出去只有 A 的 `move`（外推）、没有 `leave`；拖回来松开：`up`、`click`。在 A 上按住拖到只在 B 上松开：同一帧 A `up`、A `leave`、B `enter`、B `up`，A 没有 `click`、B 没有 `down`；拖动期间 B 没有 `enter`。
+- 事件对象：每次回调新建（`same=false`），`worldPosition instanceof Vec3`，改了它不影响同一回调里别的脚本拿到的对象。`input.cursorLeftDown` 在 `cursorDown` 里是 true。
+- 模块顶层访问 `input.cursorWorldPosition` 抛 `SyntaxError: cursorWorldPosition cannot be accessed from global scope.`
+- 帧内顺序：同一帧的回调都在这一帧的 `update` 之前。`input.cursorScreenPosition` 是窗口客户区像素（如 (200, 187)），光标在窗口外时是负数、不钳制；回调的 `worldPosition` 与同帧 `input.cursorWorldPosition` 相同。世界坐标带 float32 的痕迹（`799.5001220703125`），实现要照 f32 反投影才能逐值对上。
+
+**`p6c-par`**（视差 amount 1、delay 0、mouseinfluence 1）：深度 0 的 L2 命中在原位（x 1150–1450）；深度 1 的 L1 命中区随视差点移动（光标 x 时中心约 1200 − x，命中 x 550–700），即偏移 `amount·(origin − P)·parallaxDepth`。L1 的子层 L3（本地 `origin 0 250`、自己的 `parallaxDepth 3 3`）在它画出来的位置一次都没命中：命中用对象**自己的本地** `origin` 与自己的深度（读码 3.2），偏移把命中区推出画面；绘制用根对象的深度，两者不一致，照 WPE。
+
+**`p6c-shake`**：光标停在图层上 40 帧，收到 40 次 `move`；世界坐标每帧随抖动变，图层本身的命中区不抖（`localPosition` = 世界坐标 − 左上角）。
+
+**`p6c-zoom`**（缩放 1.5、`perspective: true` 的图层 PL、`fullscreen` 图层 FS）：
+- 光标在 Z1 缩放后的位置命中，世界坐标是未缩放的场景坐标 (1300, 700)、`local` (100, 100)；同一场景坐标在不缩放时的屏幕位置不中。
+- FS 第一帧就 `enter`，之后从不 `leave`，光标在窗口外照样每帧 `move`（世界坐标变就发）。
+- PL 的 5×5 网格命中与 `localPosition` 记为真值，实现时逐值比。
+
+**对实现的影响：**
+1. 命中与派发照读码与上面的实测写，包括 WPE 的几处怪处：隐藏图层收事件、子层视差命中用自己的本地 `origin` 与深度、`fullscreen` 恒命中、被挡住的对象不发 `leave`、`moved` 比世界坐标。
+2. 世界坐标要 f32 反投影（同 P4c 的指针反投影、用本帧相机），日志才能逐值对上。
+3. 桌面的鼠标转发（`wallpaper/input_forward.rs`）已经照 WPE：移动在壁纸窗口范围内都转发（被别的窗口盖住也转发），按下只在光标下是桌面或图标时转发，抬起成对；宿主只差把按下 / 抬起交给场景。
+4. 验收：同一份时间线在我们这边经 dev 探针回放，日志和上面四份逐行比。
+
+## 步骤 1 — 命中与派发（含 dev 探针回放；能力表不动）
+
+### 总体设计思路
+
+命中与派发是一个不依赖 GPU 的纯逻辑模块：每个实时帧，渲染器在相机定好之后、`beforeFrame`（关键帧动画、计时器、`update`）之前，把「本帧的光标世界坐标与射线、左键、可拾取对象表」交给它，它按读码 3.2–4.4 的规则更新悬停集合与按下集合，返回本帧要派发的回调序列；宿主按序列交给脚本运行时，运行时照 P10b 的 `animationEvent` 把回调派给该对象上的全部脚本。这一步不改能力表，场景照样因 `script:callback:cursor*` 退回，验收靠 dev 探针强制跑脚本、按 WPE 的同一份时间线回放，脚本日志和 0c 的四份 WPE 日志逐行比（含 float 值）。
+
+可拾取对象表从 bundle 与 `SceneState` 现算，不从 GPU 的 draw 取：隐藏图层、写死不可见的祖先下面的图层（`buildableLayers` 不建资源）照样要参与命中。每个对象给出：绘制矩阵（`drawMatrixOf`，带对齐 / 文本框偏移，文本再乘 `anchor`）、`size`（文本是排版后的文字框）、自己的本地 `origin` 与 `parallaxDepth`（视差偏移用）、`solid`（状态里现读）、`perspective`、`fullscreen`、`disablepropagation` 与父链可见性。遍历顺序：正交场景按 `objects` 顺序倒序；透视场景按 `transparentSortKey(本地 origin, 视线)` 降序稳定排序后倒序（`fullscreen` / `projectlayer` 的键 −∞），同 WPE `FUN_1401865c0`。
+
+数值照 WPE 的 float32 运算顺序写（反投影用 P4c 的 `pointerScenePoint`，射线与四边形求交、视差偏移、`localPosition` 照 REA 反编译 `ignore/p6/rea/cursor/exe/dec-rea/functions/` 逐步 `Math.fround`），日志里的值才能逐位对上（WPE 打出来的是 `799.5001220703125` 这种 f32 痕迹）。
+
+### 现状锚点
+
+**a. 运行时的按对象派发样板**（`script/runtime.ts` 的 `animationEvent`，P10b）
+```ts
+animationEvent(object: number | null, json: string): void {
+  if (this.halted) return;
+  for (const record of this.records) {
+    if (record.state !== "inited" || scriptObject(record.script.owner) !== object) continue;   // 同一对象上的全部脚本、按记录顺序
+    if (record.disabled.has("animationEvent") || typeof record.exports?.animationEvent !== "function") continue;
+    const result = this.call(record, "animationEvent", parse(json), this.value(record));
+    this.writeReturn(record, result);   // 现状：动画事件写回；光标回调 WPE 丢弃返回值
+    …
+```
+
+**b. 一帧的顺序**（`render/renderer.ts` 的 `render`）
+```ts
+scene.setCamera(camera);                                    // 本帧相机（含抖动、缩放）
+if (live) this.options.stepObjects?.(frametime);            // 声音
+if (live) this.options.beforeFrame?.(frametime, this.spectrum); // 宿主：关键帧动画 → 动画事件 → runtime.frame（计时器、update）
+// 现状：没有光标命中与派发
+```
+
+**c. 反投影**（`particles/controlpoints.ts:123`）：`pointerScenePoint(viewProjection, cursor)` 是 WPE 的 f32 反投影到 z = 0，`cursor` 是光标下的场景纹理坐标（`renderer.cursorOf`），P4c 已和 WPE 逐位对上（粒子跟随）。
+
+**d. 探针**（`dev/probe.ts`）：`renderFrame` 收逐帧 `pointers`（窗口归一化）与 `window`；脚本 `console` 只留最后 `MAX_CONSOLE_TAIL` 条；没有逐帧左键。
+
+### 点 1 — 命中与派发模块（新增 `render/cursor.ts`）
+- **新增** 纯函数与状态机，不 import GPU：
+```ts
+/** 一个可拾取对象（类型 1 图像 / 4 文本；模型见待定 2）。 */
+export interface Pickable {
+  object: number;
+  matrix: Mat4;                       // drawMatrixOf（文本再乘 anchor）
+  size: readonly [number, number];
+  origin: readonly [number, number];  // 对象自己的本地 origin（视差偏移用，子层也是本地值，0c p6c-par）
+  parallaxDepth: readonly [number, number];
+  solid: boolean;
+  perspective: boolean;               // 图层 perspective：用透视覆盖相机的射线
+  fullscreen: boolean;                // 恒命中，local = 窗口像素
+  blocks: boolean;                    // disablepropagation && 自身可见 && 父链可见
+}
+export interface CursorFrame {
+  world: Vec3;                        // 反投影到 NDC z = 0；正交 z 置 0
+  ray: Ray; perspectiveRay: Ray | null;
+  down: boolean;
+  parallax: { amount: number; point: [number, number] } | null;   // 只在正交 + 视差开
+  windowPixels: [number, number];     // fullscreen 的 local
+}
+export type CursorCallback = "cursorEnter" | "cursorLeave" | "cursorMove" | "cursorDown" | "cursorUp" | "cursorClick";
+export interface CursorDispatch { object: number; callback: CursorCallback; world: Vec3; local: Vec3 }
+export class CursorTracker {
+  /** 照读码 3.2–4.4：悬停集合、按下集合、lastWorld（初值 (0, 0)，第一帧几乎必 moved）、lastDown、停止传播的 break。 */
+  step(frame: CursorFrame, pickables: readonly Pickable[] /* 已是命中顺序，最上面的在前 */): CursorDispatch[];
+}
+export function hitQuad(ray: Ray, p: Pickable, offset: [number, number]): { hit: boolean; local: Vec3 };
+```
+  - 四边形与求交照读码 2.3 / 3.3 与 REA 重核的更正（`t < 0` 或平行时 `local` 保持 0、越界照写外推值、`fullscreen` 恒命中）。
+  - `cursorHitTest` 不调用（WPE 没有调用点），导出它只打开拾取。
+- **单测** `render/cursor.test.ts`：把 0c 的 `p6c-hit` 段落（重叠、隐藏、`solid`、停止传播可见 / 隐藏、旋转缩放、对齐、父子、拖出拖回、拖到别的层上松开）写成纯数据用例，预期序列照 0c 记录。
+
+### 点 2 — 渲染器接上（修改 `render/renderer.ts`、`render/scene.ts` 或新增的拾取表构建函数）
+- **新增** 每个实时帧在 `scene.setCamera(camera)` 之后、`beforeFrame` 之前：只在本场景有脚本导出光标回调时（编译期由 `compile/scripts.ts` 扫出，放进 bundle）建拾取表、算 `CursorFrame`、`tracker.step`，把派发序列交给宿主的新回调 `cursorEvents(dispatches)`；补画帧（暂停、隐藏）不做。
+- 世界坐标与射线：正交用当帧 `viewProjection` 反投影（世界点 z = 0；射线起点 `(p.x, p.y, eye.z)`、方向 `(0, 0, −1)`，`p` 是 NDC z = 0.5 的反投影）；透视场景起点 eye、方向 `normalize(p − eye)`；`perspective` 图层用 `perspectiveViewProjection` 的相机。
+- `input.*` 的本帧快照（世界坐标、屏幕坐标 = 画布指针 × `engine.screenResolution`、左键）也在这里定，交给脚本 API。
+
+### 点 3 — 运行时与脚本 API（修改 `script/runtime.ts`、`script/api.ts`、`render/state.ts`）
+- **新增** `runtime.cursorEvent(object, callback, world, local)`：同 `animationEvent` 的遍历（同一对象上的全部脚本、按记录顺序、只调 `inited` 且导出了这个回调、没被禁用的），参数是 realm 里新建的 `{ button: 0, worldPosition: new Vec3(…), localPosition: new Vec3(…) }`（每个接收者各建一个），**不写回返回值**；出错只禁用这个回调。`RUNTIME_CALLBACKS` 加上六个光标回调与 `cursorHitTest`（后者从不调用）。
+- **新增** 全局 `input`：三个只读 getter，每次读新建 `Vec3` / `Vec2`、读本帧快照；模块求值期间读抛 realm 的 `SyntaxError`，消息照 WPE `cursorWorldPosition cannot be accessed from global scope.`（另两个同式）。
+- **新增** 图层字段 `solid`：状态 `LayerState.solid`（初值取 JSON，缺省 true；JSON 的 `{user}` 绑定走 P3a 就地路径），脚本读回布尔、写入只收布尔、别的类型不写不报错；命中时现读。
+- **新增** 编译期读对象的 `disablepropagation`（JSON 布尔，缺省 false）进 bundle。
+
+### 点 4 — dev 探针（修改 `dev/probe.ts`、`dev/probeScripts.ts`）
+- `renderFrame` 新增 `buttons?: boolean[]`（和 `pointers` 等长、逐帧左键）与 `inputTimeline?`（直接收 wpe-renderdoc 的时间线格式 `[x, y, down, n]`，展开成 `pointers` / `buttons`）；脚本 `console` 新增全量收集选项（`consoleGrep` 正则，命中的全留，不受 `MAX_CONSOLE_TAIL` 限制）。
+
+### 验收（Claude）
+- 宿主 tsc 0 error，vitest 全过，Prettier；变异检查（去掉隐藏图层参与、去掉停止传播、`moved` 改比屏幕坐标、按下集合不清、子层视差改用根层的深度等）。
+- 0c 的四个工程（`p6c-hit`、`p6c-par`、`p6c-shake`、`p6c-zoom`）导入 dev 库，探针 `scripts: true` 按同一份时间线（`ignore/p6/c0/frida/tl-*.json`）、dt = 1/20 s 回放，`[kbp6c]` 行按时间线帧对齐后和 `ignore/p6/c0/out/wpe-*.log` 逐行比：回调名、对象、顺序、`w` / `l` 的值都相同（`upd` 行的 `input.*` 也比）。抖动与视差两份的数值依赖 P5a 的视差点与抖动，已和 WPE 逐位对上，这里一起核。
+- 新增透视场景工程 `p6c-persp`（P5d 的透视相机，两层前后错开），WPE 用 `input_play` 抓日志、我们回放比。
+- 测试行用 `projects_remove` 移除。
+
+## 步骤 2 — 输入通路、放开能力表、走查
+
+### 点 1 — 宿主收左键（修改 `main.ts`、`host.ts`、`render/renderer.ts`）
+- `pointerdown` / `pointerup`（只认 `button === 0`）→ `host.setButton(down)` → 渲染器记下当前状态，每个实时帧开头采一次（同 WPE 每帧 `GetKeyState`：一帧里完整的按下抬起会丢，照 WPE）。`pointercancel` 当抬起。
+- 桌面：`wallpaper/input_forward.rs` 已照 WPE 注入 `LeftDown` / `LeftUp`（按下只在桌面或图标上），宿主不另加门。
+- 预览：`interactive` 时 iframe 收指针事件；核对预览弹窗在画布上的点击有没有被别的交互（工具条显隐、拖动）吃掉，必要时按场景有无光标回调决定。应用背景不交互。
+
+### 点 2 — 能力表（修改 `compile/scriptApi.ts`、`compile/features.ts`）
+- `MISSING_SCRIPT_CALLBACKS` 删掉七个光标回调；`MISSING_SCRIPT_API` 删掉 `input` 三个字段与 `layer.solid`；`OBJECT_FLAGS` 删掉 `disablepropagation`。
+- 模型对象见待定 2。
+
+### 点 3 — 走查与文档
+- 语料：183 张，能渲染 92 → 103（只差 P6c 的 11 张），没有掉出的。
+- 按 FINAL_CHECK 走查两张解锁场景（`3637191856`、`3810092560`），WPE 用 `input_play` 点同一串、我们用探针回放，比日志与画面。
+- `cocs/wpe/WPE_SCENE.md` 加「交互（P6c）」一节、索引同步；回归文档加用例；changelog 照 P6b 的约定不加（待用户确认）。
+
+## 已定（2026-11-14 用户按推荐；changelog 不加）
+1. **照 WPE 的怪处：** 隐藏图层收事件、子层的视差命中用自己的本地 `origin` 与深度（命中区和画出来的位置不一致）、`fullscreen` 图层恒命中且不发 `leave`、被停止传播挡住的对象不发 `leave`、一帧里完整的按下抬起丢掉。推荐全部照 WPE（作者是对着 WPE 调的，语料 75 段脚本靠隐藏图层当按钮）。
+2. **模型对象的命中：** 语料里挂光标回调的模型 0 个、`disablepropagation` 全是 false，模型被命中不会改变任何派发。推荐不实现模型命中，只在「模型对象上有脚本导出光标回调」或「可见且 `disablepropagation`」时照报 `cursor:model`（0 张受影响）；读码与 REA 更正已记在 rea-p6c-dispatch 3.4，要做时直接照写。
+3. **木偶模型的 `hitBox`：** 事件对象没有 `hitBox`（puppet 是 P12，别的会话在做），P6c 不做。
+
+**`p6c-persp`**（2026-11-14 补，`make_persp.py`，透视相机 eye (0, 0, 10) 看原点，PB 最远、PA、PC 最近，网格 9×6 每点 3 帧）：世界坐标落在远平面上（z = −9990 = 10 − 10000），重叠处最近的 PC 先处理；日志 `ignore/p6/c0/out/wpe-persp.log`，时间线 `frida/tl-p6c-persp.json`。
+
+## 实施记录
+
+- 2026-11-14 用户：步骤 1、2 一次做完，最后的走查单独做；待定 1–3 按推荐，changelog 不加。
+- 2026-11-14 步骤 1、2（不含走查）由 sonnet 代理实现，Claude 验收：
+  - **改动：** 新增 `render/cursor.ts`（求交、命中、反投影、两种射线、`CursorTracker`、`pickablesOf`、`CursorSession`）、`render/inverseF32.ts`（WPE 的 float32 4×4 求逆 `0x14005f730`，由 `ignore/p6/c1/gen_inv.py` 从反汇编生成；P4c 的 `pointerScenePoint` 用 double 余子式，正交矩阵上差 1 ulp，日志对不上）；`compile/` 里 `SceneLayer.pick / solid / disablePropagation`、`solid` 成就地绑定目标、能力表放开、新增 `cursor:model`（模型对象上有光标回调或可见且 `disablepropagation`）；`render/renderer.ts` 的 `stepCursor`（`setCamera` 之后、`stepObjects` 之前，只在实时帧）；`script/runtime.ts` 的 `cursorEvent` / `hasCursorCallbacks`；`script/api.ts` 的全局 `input` 与图层 `solid`；`host.ts` / `main.ts` 的左键（`pointerdown/up/cancel`、`blur` 当抬起）；探针的 `inputTimeline` / `buttons` / `scripts.consoleGrep`；文档 `WPE_SCENE.md`「交互（P6c）」、索引、回归 C1–C7。
+  - **代理自己定的：** 拾取开关看运行时（已 init 的脚本导出光标回调，`cursorHitTest` 也算），`input` 快照每个实时帧都算；`inputTimeline` 把指针量化成整数像素（同 Frida 驱动）；`solid` 的属性绑定同 `visible` 的规则。
+  - **我核对的：** 改动范围（别的会话的块没动；`bundle.ts` / `features.ts` 中途出现过对方的冲突标记，已由对方解决，现在全仓库没有冲突标记）；读了 `cursor.ts` 的求交、命中、状态机与拾取表，和读码一致；tsc 0 error、vitest 161 个文件 3833 条全过。
+  - **变异检查**（快照 `ignore/p6/c1/mut`，`ignore/p6/c1/mutate.py`）：12 处，第一轮漏掉「拾取表的视差深度不取对象自己的」「t < 0 也写 local」两处，补了两条单测（`render/cursor.test.ts`）后 12 / 12 抓到。
+  - **对 WPE 日志：** 代理的比对（`ignore/p6/c0/cmp_logs.py`，我们这边 `ignore/p6/c1/run_ours.py`）：`p6c-hit` 回调 98 / 98、`upd` 169 / 169 逐字相同；`p6c-par` 13 / 13、464 / 464 逐字相同；`p6c-shake` 回调序列 42 / 42 相同，数值差 ≤ 0.13（WPE 当时的 `g_Time` 未知，抖动是它的函数）；`p6c-zoom` 49 条里 35 条逐字相同，其余 14 条是 `perspective` 图层 PL 的 `l` 差 ≤ 4.6e-5（覆盖相机的 float32 链没逐步搬）；`p6c-persp` 序列 20 / 20 相同，`w` 的 z 是 −9990.0009765625 对 WPE 的 −9990、x / y 差 1 ulp（透视相机矩阵的 float32 组合不同，远平面放大）。命中与否、回调序列五份全部相同。
+  - **我补比的文本层：** `p6c-probe`（被点的是文本层 s2）按 `tl-probe.json` 回放，`w` / `l` 和 0c-1 验收那次的 WPE 日志逐位相同（`w.y = 499.5000305175781`、`l = (474.5, 70.49996948242188)`），序列相同。最早手写探针那次 WPE 的 `w.y` 是 `499.5001220703125`（窗口被人拖动过），`l` 两次相同。
+  - **语料**（192 个工程）：干净场景里因 P6c 新增 17 张（预期的 11 张加上 `3336377291`、`3354880265`、`3427691867`、`3560102937`、`3611425904`、`3714324957`，它们之前只被光标键挡着），没有新增键、没有掉出的；另 3 张是别的会话 P13b1 带来的。
+  - **已知差异：** `perspective` 图层与透视场景的光标坐标差 1–3 ulp（不影响命中与序列）；抖动场景的数值没法逐位比（WPE 的时间未知）。
+  - **没做：** 走查（单独做）；预览弹窗里画布点击会不会被工具条或拖动吃掉、桌面真机点击，留在回归 C4–C7。
