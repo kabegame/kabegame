@@ -2002,6 +2002,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 带 effect 或走 passthrough 时，WPE 把光照挪到基础 pass（PRELIGHTING=1，世界坐标改用 g_Alt*），上屏 pass 关光照（FUN_140209540）；
     // 被依赖的图层同样是 `0x10`（P8 步骤 4，rea-p8-render 第 1 节）
     const lit = layer.passes.some((pass) => pass.program !== null && usesLighting(bundle.programs[pass.program]));
+    // TODO:[WPE_SCENE] PRELIGHTING 没实现，照报：要给基础 pass 加 `PRELIGHTING=1` 并写 `g_AltModelMatrix` / `g_AltNormalModelMatrix` /
+    // `g_AltViewProjectionMatrix`（现在在 `features.ts` 的 `UNREAD_UNIFORMS` 里放行、渲染器不写），上屏 pass 关光照。语料 0 张，P13 总计划定为
+    // 按需实现（phase13/phase-13-3d-lighting.md「决定」4）
     if (lit && (layer.effects.length > 0 || blended || depended)) unsupported.add("lighting:prelighting");
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
     if (depended && hasChildren) unsupported.add("dependency:group");

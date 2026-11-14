@@ -781,6 +781,8 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 ## P13 — 3D 反射、光照与阴影
 
+总计划见 [phase-13-3d-lighting.md](phase13/phase-13-3d-lighting.md)（2026-11-14）。按 183 张重算：15 张用到，HEAD 上只差 P13 的 8 张；只做 P13 能渲染 88 → 96，P4–P12 先做完时 165 → 180（含 P5d 照报、并进 P13h 的透视余项）。`combo:REFLECTION` 7 张里 5 张只是误报（工坊 `cursorripple` 的同名选项、`genericimage2` 不带法线图）；真正的反射分平面反射（`_rt_Reflection`）与屏幕空间反射（`_rt_MipMappedFrameBuffer`）两种；`PRELIGHTING` 与 effect 光照语料 0 张，不做（照报处标 `TODO:[WPE_SCENE]`）。分八节：能力表纠错与遗留灯、平面反射、sprite 对象、阴影、体积光、雾与灯的运行时、屏幕空间反射、透视场景的余项；阴影 / 体积光 / 反射的画质档位缺省跟随 WPE。下面是写总计划之前的原始范围。
+
 - dna_fragment、techno、mdl 的全部静态版本、`skin` 都已在 P5；`camerashake` 在 P5a；audiophile 的音频在 P11。
 - **反射（旧 P7）：** 对象 `reflected` 与反射 RT、`REFLECTION` COMBO。audiophile 的 grid 还缺 `materials/grid/grid.tex`，开工时核实。
 - **光照（旧 P8）：**
