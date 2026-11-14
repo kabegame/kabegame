@@ -710,6 +710,9 @@ function replayEncoded(
     // puppet（P12a 步骤 4 点 5）：粒子之后、相机之前，同渲染器 `stepPuppets`
     options.puppets?.frame(frametime, stateSink(state));
     const eye = shake.apply(time);
+    // 先把本帧时间交给脚本时钟（P10b）：必须在光标派发之前。宿主渲染器 `render` 帧开头就 `frameClock.advance`（`renderer.ts`），
+    // 之后才 `stepCursor`，光标回调里的 `engine.runtime` / `frametime` / `Date` 是当帧的值（P6c 走查 `3810092560` 发现这里曾反过来）
+    scripts?.enterFrame?.(frametime, time);
     // 光标命中与派发（P6c）：相机更新之后、动画与脚本之前（同渲染器的 `stepCursor`）；视差点要先推进到这一帧（渲染器在帧开头推进），这里算一份给命中用，
     // 帧末照旧推进一次（跑脚本时输入是帧开头的 general，两处相同）
     if (scripts?.cursor && options.cursor && scene.cursorCamera) {
@@ -726,8 +729,6 @@ function replayEncoded(
         parallax: drawParallax(early, general, !!options.perspective),
       });
     }
-    // 先把本帧时间交给脚本时钟（P10b），同 `replayReadback`
-    scripts?.enterFrame?.(frametime, time);
     if (animations) {
       animations.frame(frametime, state, animationHooks);
       // 跑脚本时不另 sync：同渲染器 `beforeFrame` 里动画、脚本连着跑，脚本之后的 `sync` 一起刷

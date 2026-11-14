@@ -428,3 +428,27 @@ export function hitQuad(ray: Ray, p: Pickable, offset: [number, number]): { hit:
 - 我核对的：只动了 `host.ts`（+11）、`runtime.ts`（+4）、`probeScripts.ts`（+3）、新模块与两个测试文件、文档；工作区里 `bindings.ts` / `bundle.ts` / `model.ts` / `scripts.ts` / `state.ts` 等的改动是别的会话的（布尔字段只收布尔）。tsc 0 error；`host.script.test.ts`、`probeScripts.test.ts`、`render/p3a.test.ts` 126 条全过（代理跑时 `p3a.test.ts` 有 1 条失败，是别的会话改 `state.ts` 时测试还没跟上，现在已过）。
 - 对 WPE：`3637191856-iso-clock`（「Show」= true）第 1689、1932 帧：修之前各 2121 个像素（整块时钟）、最大 77；修之后 861 / 968 个像素、最大 26 / 29，没有 > 32 的块，只在字形边缘（同 `clockv` 变体在 1080p 下的已登记字形差异）；kbp6w 的 `visible` 列 1930 帧 0 帧不同（修之前全不同）；其余不同只有 `origin` 的 1 ulp（走查已记的 fill 裁切）。报告 `ignore/p6/cw/cmp/clockfix.txt`。
 - 语料：HEAD 快照与工作区各 192 个场景，`corpus diff` 无变化（`ignore/p6/fix1/`）。
+- 2026-11-14 提交 `f47cb409`（文档与 `host.ts` 里别的会话的 P13b2 改动没收；第一次用 0 行上下文的补丁拼树时插错了位置，快照测试抓到，改用「工作区去掉别人的块」重拼）。
+
+**修复 2 — `fill` 裁切时光标世界坐标差 1 ulp（2026-11-14 用户：「开始」）**
+
+总体设计思路：WPE 渲染到窗口，`fill` 的居中盖满裁切做进投影（抓帧里 FR 的 MVP `m0 = 2 / 3925.33`，场景 3936×2208、窗口 1920×1080），直接用窗口归一化指针反投影；我们渲染到场景目标、`P·V` 不裁，先用 `sceneCursor`（double）把窗口指针换成场景纹理坐标再反投影，float32 舍入不同（走查 `crop_world.ts`：WPE 日志 968 / 968 帧由「裁切做进 `P·V`」逐位复现，我们的 319 / 319 由现在的写法复现）。修法：样式是 `fill` 时，反投影改用照 WPE 构造的「裁过的 `P·V`」和窗口归一化指针；窗口与场景同比例时结果不变（裁切量为 0）。用到的地方是 P6c 的光标世界坐标与射线（`render/cursor.ts` 的 `CursorSession`）和 P4c 的粒子跟随指针点（`particles/controlpoints.ts` 的 `pointerScenePoint`，用上一帧的相机）。其余样式（`fit` / `center` / `tile` 是 Kabegame 的，WPE 没有）照旧。
+- 裁过的投影怎么构造（`ortho(l, r)`、`ortho(f32 l, f32 r)`、「`S(sx)·P` 绕中心」三种候选在这组数据上都复现 968 帧，`m12` 的末位不同）要照 WPE 的代码定：读 `.claude/plans/wpe-import/3-scene/rea-matrix-order.md`、`phase5/rea-p5-camera.md` 里正交投影与缩放的构造，必要时读 REA 反编译；再用 WPE 抓帧 `A:\p6c\walk\clockv-drag` 里 FR 那个 draw 的 MVP 常量（wpe-renderdoc MCP 的 `open_capture` + `get_draw_call_details` / `get_buffer_contents`）核对 `m0`、`m12`、`m5`、`m13` 逐位相同。
+- 验收：单测把走查的数据（`ignore/p6/cw/out/clockv-wpe.log` 的光标与 `origin`）做成用例，`fill`、1920×1080、场景 3936×2208 下逐位复现 WPE 的 968 帧；同比例窗口与 `p6c-*` 五个工程、P4c 的 `kbp regress` 案例逐字节不变；宿主 tsc / vitest / Prettier；我这边用 `ignore/p6/cw/run_frame.py` 重放 `clockv` 的几帧，`origin` 和 WPE 逐位相同。
+
+**修复 3 — 探针的光标回调读到上一帧的时钟**：`dev/particleCorners.ts` 的 `replayEncoded` 先调 `scripts.cursor` 再调 `enterFrame`，光标回调里的 `Date`、`engine.runtime`、`frametime` 是上一帧的（宿主没有这个问题：渲染器在 `stepCursor` 之前已经进了这一帧）。改成先 `enterFrame` 再派发光标；单测：回调里读到的 `engine.frametime` / `Date.now()` 是当帧的。
+
+**工具 4 — 回放入口收输入**：kabegame-dev MCP 的 `render_scene`（`apps/kabegame-dev-mcp/`）、vite 插件的 REST `render`（`scripts/kabegame-dev/`）、`renderFrames.ts` 都把 `inputTimeline` / `buttons` 透传给探针 `renderFrame`（参数校验、文档、单测照各自现有的写法）。MCP 要用户重连、REST 要用户重启 dev 才生效，代码与单测先做。
+
+**文档 5**：`cocs/wpe/WPE_SCENE.md` 里 P11a 的「片元的零星舍入差」补「P6c 走查 `3810092560` 的水波 effect 在陡边上见到 2 级」；`FINAL_CHECK.md` 的工具表更新（输入已有 wpe-renderdoc `input_*` 与探针 `inputTimeline` / `buttons`；仍缺：探针每帧只有一个 `Date`、WPE 每次调用都是真时钟；FR 与日志对象每 10 帧一刷）；`WPE_SCENE.md` 的「交互（P6c）」已知差异随修复 2 更新（由修复 2 的代理改）。
+
+**修复 2–5 的实施与验收（2026-11-14，两个 sonnet 代理并行，Claude 验收）**
+- **修复 2（裁切 1 ulp）**：`fill` 且窗口与场景比例不同时（`render/layout.ts` 的 `fillCropEdges`，整数交叉相乘判），光标反投影改用 WPE 的裁切投影 `croppedCursorViewProjection`：复用渲染尺寸阶段的 `alignEdges(0, …)` + `orthoWpe`（`ortho(E0, W − E2, E3, H − E1)`，每步 f32）+ zoom 三步，再 `mulAffine(P裁, V)`（V 不带视差），即 `crop_world.ts` 的「`ortho(f32 l, f32 r)`」候选。抓帧 `A:\p6c\walk\clockv-drag\clockv-drag-frame759.rdc` event 34（FR，`T(−100000, −100000)`）的 MVP 四个元素 `m0` / `m5` / `m12` / `m13` 和 WPE 逐位相同；`render/cursorCrop.test.ts`（夹具 969 帧）逐位复现 WPE 的 968 帧。P6c 的光标世界坐标与射线、P4c 粒子跟随的指针点（`GpuScene.cursorViewProjection`）都走它；探针与 kbp `replayLib` 同步。`kbp regress`：只有窗口与场景比例不同的 c2、c4 变了（1e-5 量级，`ignore/p6/fix2/regress*`），其余逐字节相同。
+  - **依赖：** `alignEdges` / `orthoWpe` / `zoomed` / `sceneViewProjection` 的 `edges` 参数是别的会话「渲染尺寸」阶段（`phase-render-size.md`）还没提交的代码，修复 2 要等它提交后才能提交。
+  - **没接：** 裁切下 `perspective: true` 图层的覆盖相机射线（仍按铺放换算的场景坐标与不裁的投影）；探针里独立的 `particleCorners` 回放没带 `cursorCrop`；`pointerScenePoint` 仍是 double 求逆（改 f32 会动同比例的字节）。
+- **修复 3（探针时钟）**：`dev/particleCorners.ts` 的 `replayEncoded` 改成先 `enterFrame` 再派发光标；`replayEncoded.test.ts` 加用例。
+- **工具 4**：`render_scene` / `host_render`（MCP）、REST `render`、`renderFrames.ts`（`--input-timeline` / `--buttons`）透传 `inputTimeline` / `buttons`，校验先报 `[local]`；`kabegame-chromium/SKILL.md` 加「光标输入」。MCP 重连、dev 重启后才生效。
+- **文档 5**：`WPE_SCENE.md` P11a「片元的零星舍入差」补陡边 2 级；`FINAL_CHECK.md` 工具表更新。
+- **我核对的：** tsc 0 error；相关 7 个测试文件 240 条全过；`scripts/kabegame-dev` 26 个、`apps/kabegame-dev-mcp` 29 个 deno 测试全过；变异（快照 `ignore/p6/fix2/mut`，`ignore/p6/fix2/mutate.py`）「裁切恒不启用」「探针先派发光标再进帧」都抓到；重建宿主产物后 `p6c-hit` 重放对 WPE 日志仍是回调 98 / 98、`upd` 169 / 169 逐字相同，测试行已移除。
+- **提交：** `particleCorners.ts`、`dev/probe.ts`、`replayPointers.ts`、REST 与 MCP 的几个文件里混着渲染尺寸阶段的块，修复 2 又依赖它的函数；等那个会话提交后再提交这批。
+- **提交（2026-11-14 用户：「强行提交你的就行了，我没那么在乎这些差别，只在乎卡点」）：** 这次只提交修复 3 与文档 5 里 P11a 那一条——它们能和别的会话的块干净分开。留在工作区、等别的会话提交后再提交：修复 2（依赖渲染尺寸阶段没提交的 `alignEdges` / `orthoWpe`）、工具 4（REST / MCP / `renderFrames.ts` 的块和渲染尺寸、P11c 的块逐行交错）、`FINAL_CHECK.md` 与 `kabegame-chromium/SKILL.md` 的更新（写的是工具 4，跟它一起提交）。两项都不是卡点。

@@ -249,3 +249,42 @@ describe("每一帧都画时跑场景脚本（kabegame-chromium 第 7 批）", (
     expect(encoded.result).toEqual(plain.result);
   });
 });
+
+describe("每一帧都画时光标回调读到当帧的时钟（P6c 走查修复 3）", () => {
+  it("scripts.cursor 在 scripts.enterFrame 之后派发：回调里的 frametime / runtime / Date 是当帧的", () => {
+    // 假脚本时钟：enterFrame 写当前值，光标回调读它（同真实脚本里 engine.frametime / engine.runtime / Date.now()）
+    const clock = { frametime: -1, runtime: -1, date: -1 };
+    const seen: { frametime: number; runtime: number; date: number }[] = [];
+    const scene = {
+      stepParticles: () => {},
+      setCamera: () => {},
+      sync: () => {},
+      setParallax: () => {},
+      update: () => {},
+      cursorCamera: () => ({}),
+      particleAudio: { left: new Float32Array(16), right: new Float32Array(16) },
+    };
+    const pointers = replayPointers({ pointers: POINTERS }, SCENE, PARTICLES.dts.length);
+    replayReadback(scene as never, fakeState(), {
+      particles: PARTICLES,
+      time: 0,
+      pointers,
+      parallax: initialParallaxState(...SCENE),
+      size: SCENE,
+      encodeFrame: () => {},
+      cursor: { buttons: [false, true, false, false], window: SCENE },
+      scripts: {
+        enterFrame: (dt: number, at: number) => {
+          clock.frametime = dt;
+          clock.runtime = at;
+          clock.date = Math.round(at * 1000);
+        },
+        cursor: () => void seen.push({ ...clock }),
+        frame: () => {},
+      },
+    });
+    expect(seen.map((s) => s.frametime)).toEqual(PARTICLES.dts);
+    expect(seen.map((s) => s.runtime)).toEqual(PARTICLES.times);
+    expect(seen.map((s) => s.date)).toEqual(PARTICLES.times!.map((t) => Math.round(t * 1000)));
+  });
+});
