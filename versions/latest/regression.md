@@ -2613,6 +2613,17 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 真实场景观感 | Windows dev，图库预览与桌面 | 开几张带旋转、视差、文字的场景壁纸 | 画面无缝线、无半像素偏移、不闪烁 | |
 | [ ] | macOS / Linux 三角形带 | macOS / Linux dev | 开一张图层边缘有双线性采样的场景壁纸，与 Windows 同帧对比 | 边缘像素一致；若有末位差别，确认是奇数三角形顶点轮换所致 | 代码里 `layerQuad` 带 `TODO:[WPE_SCENE]` |
 
+## 场景壁纸视差点 float32 与布尔字段绑非布尔属性（P5a 补修）
+
+2026-11-14。视差点的平滑推进改成逐步 float32（汇编 `0x140189b67`–`0x140189cea` 的结合顺序）；`cameraparallax` 等布尔 general 字段（以及 `bloom` / `hdr`）写成 `{user, value}` 而属性值不是布尔时，取 JSON 的 `value`（WPE 实测：属性值只有布尔才改位）。计划与实施记录见 `phase-5a-parallax.md`「补修：视差点 float32 与布尔字段绑属性」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 视差平滑途中的帧 | Windows dev，屏外宿主（`renderFrames.ts`） | P10b `clk61-w0`（3840×2160，日志逐帧光标）第 76–78 帧对 WPE | 逐像素相同；逐 draw MVP 0 ulp | 2026-11-14 Claude：3 帧 0 差（改前第 76 帧 181 个像素 ±1）；`clk61-w2` 第 64–66 帧也 0 差 |
+| [x] | 布尔字段绑滑块 / 复选框 / 下拉 | Windows dev，屏外宿主 | `p5a-pb-e1`…`e5`（`ignore/p5/pb/gen_pb.py`）渲染，看方块 B 的位置 | 与 WPE 相同：E1、E2 视差开（B 在 1710），E3、E4、E5 关（1460） | 2026-11-14 Claude：5 个全部与 WPE 抓帧 `A:\p5a\pb\` 一致 |
+| [x] | 真实壁纸 3253330537 | Windows dev，屏外宿主 | 复制工程 `cameraparallax` 绑 `newproperty16`（滑块 −0.22），对 WPE 抓帧（ultra、日志逐帧光标） | 逐像素相同 | 2026-11-14 Claude：第 220、221 帧 0 差 |
+| [ ] | 真实场景观感 | Windows dev，图库预览与桌面 | 开 3253330537 等开着视差的场景，来回移动鼠标 | 视差跟随平滑、和以前观感相同；3253330537 现在跟随鼠标 | |
+
 ## 场景壁纸音频频谱 uniform（P11a）
 
 2026-11-14。六个 `g_AudioSpectrum*` 读场景频谱（P4e 的 `SceneSpectrum`），读它们的程序也让宿主订阅音频。WPE 的语义见

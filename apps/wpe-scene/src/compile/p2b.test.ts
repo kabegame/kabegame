@@ -110,7 +110,9 @@ describe("泛光参数", () => {
       expect(scenePostprocessState(level, {}).hdrFlag).toBe(false);
       expect(scenePostprocessState(level, undefined).hdrFlag).toBe(false);
       expect(scenePostprocessState(level, { hdr: 1 }).hdrFlag).toBe(false);
-      expect(scenePostprocessState(level, { hdr: { user: "h", value: true } }, { h: "1" }).hdrFlag).toBe(false);
+      // 属性值不是 bool 时不改位，留 JSON 的 `value`（P5a 补修 2026-11-14 实测 `ignore/p5/pb/` E1、E2；原先按静态推断为 false）
+      expect(scenePostprocessState(level, { hdr: { user: "h", value: true } }, { h: "1" }).hdrFlag).toBe(true);
+      expect(scenePostprocessState(level, { hdr: { user: "h", value: false } }, { h: 1 }).hdrFlag).toBe(false);
       expect(scenePostprocessState(level, { hdr: { user: "h", value: false } }, { h: true }).hdrFlag).toBe(true);
     }
     // ctl-nobloom：场景位 true，实际渲染是 LDR（K5）

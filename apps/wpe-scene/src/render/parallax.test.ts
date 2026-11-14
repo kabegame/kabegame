@@ -320,6 +320,109 @@ describe("视差公式（p5-REPORT 实测）", () => {
   });
 });
 
+/** 按汇编 `0x140189b67`–`0x140189cea` 的结合顺序手写的逐步 float32 参考实现（独立于 parallax.ts）。 */
+function refStep(
+  prev: [number, number],
+  p: { mi: number; ptr: [number, number]; delay: number; dt: number; eye: [number, number]; w: number; h: number },
+): [number, number] {
+  const f = Math.fround;
+  const mi = f(p.mi);
+  const w = f(p.w);
+  const h = f(p.h);
+  const mx = Math.min(1, Math.max(0, f(p.ptr[0])));
+  const my = Math.min(1, Math.max(0, f(1 - f(p.ptr[1]))));
+  const tx = f(f(f(f(w * 0.5) * f(1 - mi)) + f(f(w * mx) * mi)) + f(p.eye[0]));
+  const ty = f(f(f(f(h * 0.5) * f(1 - mi)) + f(f(my * h) * mi)) + f(p.eye[1]));
+  if (!(p.delay > 0)) return [tx, ty];
+  const x = f(f(f(1 - f(f(p.delay) / 3)) * 10) * f(p.dt));
+  const k = 1 > x ? x : 1;
+  return [f(f(f(tx - f(prev[0])) * k) + f(prev[0])), f(f(f(ty - f(prev[1])) * k) + f(prev[1]))];
+}
+
+describe("视差点逐步 float32（汇编 0x140189b67–0x140189cea）", () => {
+  const cases: { mi: number; ptr: [number, number]; delay: number; dt: number; eye: [number, number] }[] = [];
+  for (const mi of [-2, 0, 0.5, 1])
+    for (const ptr of [
+      [0.3, 0.7],
+      [1.9382, 1.7249],
+      [-0.4, 0.123456],
+    ] as [number, number][])
+      for (const delay of [0, 0.18, 2.9])
+        for (const dt of [0, 0.05, 0.25]) cases.push({ mi, ptr, delay, dt, eye: [1.7, -0.3333] });
+
+  it("目标点、平滑系数、一步推进与参考实现逐分量 Object.is 相等", () => {
+    for (const c of cases) {
+      const prev: [number, number] = [962.123456789, 541.987654321];
+      const got = stepParallaxPoint(prev, {
+        ...c,
+        mouseInfluence: c.mi,
+        pointer: c.ptr,
+        frametime: c.dt,
+        width: W,
+        height: H,
+      });
+      const want = refStep(prev, { ...c, w: W, h: H });
+      expect(Object.is(got[0], want[0]), `x ${JSON.stringify(c)} ${got[0]} vs ${want[0]}`).toBe(true);
+      expect(Object.is(got[1], want[1]), `y ${JSON.stringify(c)} ${got[1]} vs ${want[1]}`).toBe(true);
+      // 结果本身就是 float32
+      expect(got[0]).toBe(Math.fround(got[0]));
+      expect(got[1]).toBe(Math.fround(got[1]));
+    }
+  });
+
+  it("目标点的结合顺序：展开写法 (W·0.5)·(1−mi) + (W·mx)·mi，y 项先取 f(my·H)（写死期望值，独立于参考实现）", () => {
+    // mi −0.22（3253330537 的取值）时合并写法 eye + W·(0.5(1−mi) + mx·mi) 的 x 是 978.2899169921875，
+    // y 项不先取 f(my·H) 的是 474.25604248046875，都差 1 ulp
+    const target = parallaxTarget({
+      mouseInfluence: -0.22,
+      pointer: [0.4567, 0.2233],
+      eye: [0, 0],
+      width: W,
+      height: H,
+    });
+    expect(target).toEqual([978.2899780273438, 474.2560729980469]);
+  });
+
+  it("k：NaN 时 WPE 的 `1 > x ? x : 1` 得 1；delay 为 NaN / ≤ 0 返回 null", () => {
+    expect(parallaxSmoothing(2.9, Number.NaN)).toBe(1);
+    expect(parallaxSmoothing(Number.NaN, 0.05)).toBeNull();
+    expect(parallaxSmoothing(0, 0.05)).toBeNull();
+  });
+
+  it("多帧链：与参考实现逐帧相等，且和 double 版的结果确实不同（差 ≥ 1 ulp）", () => {
+    // double 版（改前的写法）
+    const doubleStep = (prev: [number, number], dt: number): [number, number] => {
+      const mi = 0.5;
+      const mx = 1;
+      const my = 0;
+      const base = 0.5 * (1 - mi);
+      const t: [number, number] = [W * (base + mx * mi), H * (base + my * mi)];
+      const k = Math.min(1, (1 - 2.9 / 3) * 10 * dt);
+      return [prev[0] + (t[0] - prev[0]) * k, prev[1] + (t[1] - prev[1]) * k];
+    };
+    let a: [number, number] = [962, 542];
+    let b: [number, number] = [962, 542];
+    let c: [number, number] = [962, 542];
+    let differs = false;
+    for (const dt of [0.05506, 0.07111, 0.05175, 0.0577, 0.05449, 0.0551, 0.0166, 0.0167, 0.0166]) {
+      a = stepParallaxPoint(a, {
+        delay: 2.9,
+        mouseInfluence: 0.5,
+        pointer: [1, 0],
+        eye: [0, 0],
+        width: W,
+        height: H,
+        frametime: dt,
+      });
+      b = refStep(b, { mi: 0.5, ptr: [1, 0], delay: 2.9, dt, eye: [0, 0], w: W, h: H });
+      c = doubleStep(c, dt);
+      expect(Object.is(a[0], b[0]) && Object.is(a[1], b[1])).toBe(true);
+      if (Math.fround(c[0]) !== a[0] || Math.fround(c[1]) !== a[1] || c[0] !== a[0] || c[1] !== a[1]) differs = true;
+    }
+    expect(differs).toBe(true);
+  });
+});
+
 describe("rootObject", () => {
   const layers = new Map<number, { parent: number | null }>([
     [0, { parent: null }],
@@ -1425,8 +1528,8 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     frames.at(-1)!(now);
     // k = (1 − 0.9) · 10 · 0.05 = 0.05
     const after = parallaxOf(renderer);
-    expect(after.point[0]).toBeCloseTo(before[0] + (1920 - before[0]) * 0.05, 9);
-    expect(after.point[1]).toBeCloseTo(before[1] + (1080 - before[1]) * 0.05, 9);
+    expect(after.point[0]).toBeCloseTo(before[0] + (1920 - before[0]) * 0.05, 3);
+    expect(after.point[1]).toBeCloseTo(before[1] + (1080 - before[1]) * 0.05, 3);
     expect(update.mock.lastCall![0].parallax).toEqual(parallaxUniform(after.point, W, H));
     expect(sceneParallax(renderer)).toEqual({ point: after.point, amount: 0.5 });
     renderer.setPaused(true);
@@ -1543,7 +1646,11 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     expect(shake[0]).not.toBe(0);
     expect(spies.setCamera.mock.lastCall![0]).toEqual({ shake, zoom: 1 });
     // delay 0、mouseinfluence 0：P = eye.xy + 场景中心
-    expect(sceneParallax(renderer)).toEqual({ point: [960 + shake[0], 540 + shake[1]], amount: 0.5 });
+    // P 是 float32（视差点逐步 fround）
+    const sp = sceneParallax(renderer)!;
+    expect(sp.amount).toBe(0.5);
+    expect(sp.point[0]).toBe(Math.fround(Math.fround(960) + Math.fround(shake[0])));
+    expect(sp.point[1]).toBe(Math.fround(Math.fround(540) + Math.fround(shake[1])));
     script = null;
     now += 50;
     frames.at(-1)!(now);

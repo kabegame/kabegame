@@ -1038,6 +1038,93 @@ buffer.push(frame + ',' + engine.frametime.toFixed(6) + ',' + engine.runtime.toF
 - changelog、回归文档；
 - 总计划 P5a 节补上完成情况。
 
+## 补修：视差点 float32 与布尔字段绑属性（2026-11-14 用户「好，开始」）
+
+两处问题都是别的阶段走查时发现、转给 P5 的：
+- **视差点 float32**：P10b 全屏走查（`phase-10b-script.md`「步骤 4b 补录：全屏窗口」）。
+- **视差开关绑数值属性**：P11b 走查 3253330537。
+
+### 总体设计思路
+
+视差点 P 是跨帧累积的状态，WPE 每一步都在 float32 里算、存成 float32；我们的 `parallaxTarget` / `parallaxSmoothing` / `stepParallaxPoint` 还在 double 里算，平滑跟随途中会差 1 ulp，落到画面上是 ±1 像素（P10b 第 76 帧 181 个像素）。`phase-f32-matrix.md` 点 3 只改了 `parallaxOffset`。这次把三个函数按汇编 `0x140189b67`–`0x140189cea` 的结合顺序逐步 `Math.fround`，输入（指针、`1 − ptr.y`、dt、eye、W、H、mi、delay）进来先转 float32。`g_ParallaxPosition` 不改：P 是 float32 时 double 除再存成 float32 等于 float32 除。
+
+布尔类 general 字段（`cameraparallax` 等）写成 `{user, value}` 时，WPE 的 JSON 读取函数（`0x14019b4e0` 一族，各位同一套写法）先按 `value` 的布尔设位，再登记属性绑定；我们直接拿属性当前值取布尔，属性是滑块数字时判成不合法、字段停在缺省 false，`value` 丢了。修法分两半：加载时先取 `value`（同 WPE），属性值再按 WPE 的转换规则改位。转换规则读码没追完（属性写回走的绑定对象虚函数），用步骤 0 的实验定：(A) 不是布尔不改位；(B) 数字非 0 为真。
+
+### 现状锚点
+
+**a. 视差点在 double 里算**（`render/parallax.ts:106`）
+```ts
+const base = 0.5 * (1 - mi);   // 现状：分配律合并后的写法，WPE 是展开的 (W·0.5)·(1−mi) + (W·mx)·mi
+return [input.eye[0] + input.width * (base + mx * mi), input.eye[1] + input.height * (base + my * mi)];
+// parallaxSmoothing / stepParallaxPoint 同样全 double
+```
+
+**b. 布尔字段取属性当前值**（`compile/bundle.ts:1084`、`compile/bindings.ts:127`）
+```ts
+const raw = GENERAL_FIELDS[key].type === "bool"
+  ? flagValue(general[key], properties, bindings, target)   // 现状：绑属性时返回属性当前值（如 −0.22）
+  : bindings.bind(...);
+const value = generalValue(key, raw);                       // 现状：bool 只认 boolean，−0.22 → undefined，字段留缺省 false
+```
+
+### 步骤 0 — WPE 实验（`ignore/p5/pb/`）
+
+正交 1920×1080，骨架用 `ignore/p5/a0/gen_a.py`（`base_objects`，amount 0.5、delay 0、mouseinfluence 0：P 恒为场景中心，方块 B 在 1460 处开视差时右移 250 像素，不看光标）。判读：抓一帧，按 B 的上屏位置判视差开没开。
+
+| # | `cameraparallax` | 属性 `p` | 区分 |
+|---|---|---|---|
+| E1 | `{user: p, value: true}` | 滑块 −0.22 | 复现 3253330537（两种规则都开） |
+| E2 | `{user: p, value: true}` | 滑块 0 | (A) 开、(B) 关 |
+| E3 | `{user: p, value: false}` | 滑块 0.5 | (A) 关、(B) 开 |
+| E4 | `{user: p, value: true}` | 复选框 false | 属性布尔能关（对照） |
+| E5 | `{user: p, value: false}` | 下拉 `"1"` | 字符串怎么转 |
+| E6 | E2 的工程运行中 `apply_properties` p → 0.5 → 0 | | 运行中的转换与加载时是否同一规则 |
+
+**步骤 0 结果（2026-11-14，`ignore/p5/pb/gen_pb.py`，抓帧 `A:\p5a\pb\`，1920×1080，读 B 的 vs_out 中心）：**
+
+| # | 结果 | B 中心 |
+|---|---|---|
+| E1 | 开 | 1710 |
+| E2 | **开** | 1710 |
+| E3 | **关** | 1460 |
+| E4 | 关 | 1460 |
+| E5 | 关 | 1460 |
+| E6 | p → 0.5 开、→ 布尔 false 关、→ 1 **仍关** | 1710 / 1460 / 1460 |
+
+结论是 (A)：加载时先按 `value` 的布尔设位；属性值只有布尔才改位，数字、字符串加载与运行中都不改（运行中保持上一次的位）。读码佐证：JSON 读取函数 `0x14019b4e0`（bit1，各位同一写法）对 jsoncpp 类型 5（布尔）直接设位，类型 7（对象）只读 `value` 且是布尔才设位，之后调 `0x1401a4db0` 登记绑定。我们运行中的写入（`generalValue` 非布尔返回 undefined）已经符合，只有加载丢了 `value`；`flagValue` 一处改动覆盖全部布尔 general 字段与 `bloom` / `hdr`。顺带：E6 说明属性值是数字时运行中改值不会让位回到 `value`。
+
+图层 `visible` 绑非布尔属性走的是 `bindingValue` 的 `value !== false`（数字算真），和这里的规则不同，没有实测，不在本次范围。
+
+### 点 1 — 视差点 float32（`render/parallax.ts`）
+- **修改** `parallaxTarget`、`parallaxSmoothing`、`stepParallaxPoint`：照汇编顺序逐步 `Math.fround`（目标 `f(f(f(f(W·0.5)·f(1−mi)) + f(f(W·mx)·mi)) + eye.x)`，y 项是 `f(my·H)`；`k = min(1, f(f(f(1 − f(delay/3))·10)·dt))`；`P = f(f(f(目标 − P)·k) + P)`）。
+- 文件头的公式说明补一句 float32 与出处。
+
+### 点 2 — 布尔字段绑属性（`compile/bundle.ts`、`compile/bindings.ts`、`render/state.ts`，范围按步骤 0 定）
+- 加载：`{user, value}` 先取 `value` 的布尔，再按属性值的转换规则覆盖。
+- 运行中：`SceneState.write` 的 general 布尔分支用同一个转换函数（「就地 = 重编译」）。
+- `flagValue`（`bloom` / `hdr`）共用同一转换。
+
+### 验收
+- 单测：`parallax.test.ts` 加逐步 float32 的对照；`p3c.test.ts` / `p3a.test.ts` 加布尔字段绑滑块 / 复选框 / 下拉的加载与就地写。
+- 数值：P10b 录像 `A:\p10b\s4b\clk61-w0-fps20-3840x2160\` 第 76–78 帧逐像素 0 差（`ignore/p10/b4b/draws_at.py`、`walk.py`）。
+- 3253330537：wpe p11 的复制工程 `ignore/p11/proj/3253330537-iso-ut-blend` 改回绑定写法，和 `A:\p11b\s5\3253330537-iso-ut-blend-fps20-3840x2160` 比。
+- E1–E6 工程在 Kabegame 渲染，结论与 WPE 相同。
+
+### 实施记录（2026-11-14）
+
+子代理（Sonnet）直接在工作区改（`parallax.ts`、`parallax.test.ts` 没有别人的改动；`postprocess.ts` 只动 `flagValue` 一个函数，别的会话的未提交块不在附近），Claude 独立验收。
+- **`render/parallax.ts`**：三个函数按汇编顺序逐步 `fround`；`parallaxSmoothing` 的 min 照 WPE 写 `1 > x ? x : 1`（x 为 NaN 得 1）。
+- **`compile/postprocess.ts` 的 `flagValue`**：`{user}` 先照旧调 `bindings.bind`（登记绑定），解析结果是布尔就用，否则退回对象自己的 `value`（是布尔才用）。
+- **测试**：`parallax.test.ts` 加独立的逐步 f32 参考实现与 108 组输入、9 帧链；Claude 补一条写死期望值的结合顺序用例（mi −0.22，合并写法与「y 项不先取 f」各差 1 ulp）。两个旧用例因 P 变成 float32 放宽到 `toBeCloseTo(…, 3)` / 按 f32 算期望。新建 `compile/p5a-flag.test.ts`（E1–E5、条件绑定、绑定照登记、经 `compileScene` 的 `cameraparallax`）。`p2b.test.ts` 第 113 行（P3c `75293ab1` 按静态推断写的「`hdr` 绑字符串属性、`value: true` → `hdrFlag` false」）按本次实测改成 true，另加一条 `value: false` + 数字 → false。
+- **检查（Claude 复跑）**：宿主 tsc 0；vitest `parallax` / `p5a-flag` / `p3c` / `p3a`（compile、render）/ `p2b` / `replayEncoded` / `replayPointers` / `p5d-camera` / `p5d3-camera` / `renderer` / `host` 全过；Prettier（改动的 5 个文件；`postprocess.ts` 只检查、没整文件格式化）。
+- **变异**（`ignore/p5/pb/mutate_pb.py`，按原字节还原）：目标 x 改回合并写法、y 项不先取 f、k 去掉 fround、平滑步去掉 fround、`flagValue` 退回旧逻辑，5 个全被抓住（补那条写死期望值的用例之前，前两个没抓住）。
+- **端到端**（`buildSceneHost.ts` 重建 dev 宿主产物 `index-0KeAvZOE.js`）：
+  - P10b `clk61-w0`（3840×2160，`ignore/p5/pb/walk10.py`，读 `ignore/p10/b4b/out` 已导出的 WPE 帧）：第 76–78 帧逐像素相同（改之前第 76 帧 181 个像素 ±1），读回帧逐 draw 0 ulp；`clk61-w2` 第 64–66 帧同样相同。
+  - E1–E5：E1、E2 画面相同、B 在 1710；E3、E4、E5 画面相同、B 在 1460。和 WPE 一致。
+  - 3253330537：p11 的复制工程拷到 `ignore/p5/pb/3253330537-plx`，`cameraparallax` 改回 `{user: newproperty16, value: true}`、用户纹理路径改到副本自己的 `kbp-ut.png`；和 `A:\p11b\s5\3253330537-iso-ut-blend-fps20-3840x2160` 第 220、221 帧（日志逐帧光标、ultra）逐像素 0 差。这张场景的鼠标影响是 −0.22、画面随光标动，0 差也说明这次录制的日志光标（144 DPI、无边框 3840×2160）按「屏幕光标 ÷ 窗口尺寸」换算是对的。
+  - 测试工程 14835–14842 已用 `projects_remove` 移除。
+- **已知差异**：运行中属性在布尔与非布尔之间换类型（只有 `apply_properties` 这类外部写法能做到）之后再遇到整场重编译，我们按「当前属性值 → 否则 `value`」重新求值，WPE 保留运行中的位。语料不会出现。
+
 ## 决定
 
 **已定：**

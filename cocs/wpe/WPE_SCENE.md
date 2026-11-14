@@ -1626,6 +1626,8 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 - **`alignmentfliph`**：水平镜像时 WPE 把 `mx` 换成 `1 − mx`、`g_ParallaxPosition.x` 翻转。没实现，语料 0 张。
 - **命中测试的视差偏移**：WPE 按对象自身（不按根）算，没做，归 W4 的按图层命中。
 - **透视场景开视差**：WPE 不移动对象（读码，语料 0 张）。P5d 步骤 2 已核对：不移动对象，`g_ParallaxPosition` 开视差时是 NaN（不是钳成 0，推翻读码的推断），见「透视相机、相机对象与深度（P5d）」。
+| 精度 | 目标点、k、P 的推进都逐步 float32，结合顺序照汇编：目标 x = `((W·0.5)·(1 − mi) + (W·mx)·mi) + eye.x`（y 项是 `my·H`），`k = ((1 − delay/3)·10)·dt` 再 `1 > k ? k : 1`，`P = ((P* − P)·k) + P`，每步 `fround`（`render/parallax.ts`） | 汇编 `0x140189b67`–`0x140189cea`，常量 0.5、3、1、10 从可执行文件读出；P10b 全屏走查 `clk61-w0` 第 76 帧（平滑途中）在 double 里算时文字 MVP 差 1 ulp、181 个像素 ±1，改后第 76–78 帧逐像素相同 |
+| 开关绑属性 | `cameraparallax` 等布尔 general 字段（及 `bloom` / `hdr`）写成 `{user, value}` 时，加载先按 `value` 的布尔设位，属性值只有布尔才改位，数字、字符串加载与运行中都不改（`compile/postprocess.ts` 的 `flagValue`） | 读码 `0x14019b4e0`（JSON 布尔直接设位、对象读 `value`）；实测 `ignore/p5/pb/` E1–E6（滑块 −0.22 / 0 不关、`value: false` 时滑块 0.5 不开、复选框 false 能关、下拉 `"1"` 不改、运行中改成数字保持原位）；真实样本 3253330537（`newproperty16` 滑块 −0.22，WPE 视差开），复制工程逐像素相同 |
 - **壁纸属性 `cameraparallax`**：WPE 设置里给单张壁纸的开关，只把 `mouseinfluence` 归零，静止偏移不变。Kabegame 没有这个开关，按缺省（开）处理。
 - **首帧的 `g_PointerPositionLast`**：开场指针之后，首帧的 `g_PointerPositionLast` 仍是 (0.5, 0.5)，和初值之间有一次跳变；WPE 首帧没有核对。
 - **P 的精度**：我们用 double 算 P，WPE 存 float32；按 float32 复算差为 0（`fit_delay.py`），接受。

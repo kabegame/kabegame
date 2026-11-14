@@ -17,6 +17,9 @@
  *   函数开头写的缺省 (2, 2, 2)（`0x140186db3`）；之后每帧的目标点用真实的 eye，这 2 像素按 k 衰减（P5a 收尾 `p5a-wk-prop` 实测，
  *   开场残差折回第 0 帧四次都是 (2.00, 2.00)，p5-REPORT「收尾走查」）。透视场景 WPE 的初值是 (0, 0)（6.2，P5d 步骤 2）。
  *
+ * 视差点逐步 float32、结合顺序照汇编 `0x140189b67`–`0x140189cea`（2026-11-14，P10b 全屏走查第 76 帧发现的 1 ulp 差）：
+ * 输入先转 float32，每次乘加都 `Math.fround`；`g_ParallaxPosition` 不改（P 已是 float32，double 除再存成 float32 等于 float32 除）。
+ *
  * W、H 是场景的正交尺寸（`SceneGeneral.width/height`，不是可能被缩小的渲染目标），偏移是场景单位（`2381978484`：8192×5479 的场景
  * 放进 16:9 窗口，偏移仍按场景单位）。eye 是正交相机的 eye.xy，就是本帧的抖动偏移 s（P5a 步骤 3，`shake.ts`），没有抖动时为 0；
  * `3830255100` 的 `g_EyePosition` 与视差点按「抖动 + 视差点」核对过（p5-REPORT）。加载时的初值不带抖动，也不看场景的 eye，
@@ -106,16 +109,24 @@ export function initialParallaxPoint(width: number, height: number, perspective 
 export function parallaxTarget(
   input: Pick<ParallaxInput, "mouseInfluence" | "pointer" | "eye" | "width" | "height">,
 ): [number, number] {
-  const mi = input.mouseInfluence;
-  const mx = clamp01(input.pointer[0]);
-  const my = clamp01(1 - input.pointer[1]);
-  const base = 0.5 * (1 - mi);
-  return [input.eye[0] + input.width * (base + mx * mi), input.eye[1] + input.height * (base + my * mi)];
+  const f = Math.fround;
+  const mi = f(input.mouseInfluence);
+  const w = f(input.width);
+  const h = f(input.height);
+  const mx = clamp01(f(input.pointer[0]));
+  const my = clamp01(f(1 - f(input.pointer[1])));
+  const keep = f(1 - mi);
+  const x = f(f(f(f(w * 0.5) * keep) + f(f(w * mx) * mi)) + f(input.eye[0]));
+  const y = f(f(f(f(h * 0.5) * keep) + f(f(my * h) * mi)) + f(input.eye[1]));
+  return [x, y];
 }
 
-/** 一帧的平滑系数 `k = min(1, (1 − delay/3)·10·dt)`；`delay ≤ 0` 时为 null（P 直接取目标）。 */
+/** 一帧的平滑系数 `k = min(1, (1 − delay/3)·10·dt)`（逐步 float32，min 照 WPE 写 `1 > x ? x : 1`）；`delay ≤ 0` 时为 null（P 直接取目标）。 */
 export function parallaxSmoothing(delay: number, frametime: number): number | null {
-  return delay > 0 ? Math.min(1, (1 - delay / 3) * 10 * frametime) : null;
+  if (!(delay > 0)) return null;
+  const f = Math.fround;
+  const x = f(f(f(1 - f(f(delay) / 3)) * 10) * f(frametime));
+  return 1 > x ? x : 1;
 }
 
 /** 一帧：`delay > 0` 时 `P ← P + (目标 − P)·k`，否则 P = 目标。P 不钳制。 */
@@ -126,7 +137,12 @@ export function stepParallaxPoint(
   const target = parallaxTarget(input);
   const k = parallaxSmoothing(input.delay, input.frametime);
   if (k === null) return target;
-  return [previous[0] + (target[0] - previous[0]) * k, previous[1] + (target[1] - previous[1]) * k];
+  const f = Math.fround;
+  const step = (p: number, t: number) => {
+    const old = f(p);
+    return f(f(f(t - old) * k) + old);
+  };
+  return [step(previous[0], target[0]), step(previous[1], target[1])];
 }
 
 /** `g_ParallaxPosition = clamp(P / (W, H), 0, 1)`。 */

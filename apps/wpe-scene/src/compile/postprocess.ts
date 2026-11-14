@@ -137,8 +137,12 @@ function fileFlag(value: unknown): boolean | undefined {
 }
 
 /**
- * `general.bloom` / `general.hdr` 的生效值（setter `FUN_14019b4e0` / `FUN_14019b6f0`）：bool 原样；带 `user` 的对象取属性当前值，
- * 否则取对象的 `value`；结果不是 bool 时 WPE 不改位，返回 undefined（泛光保留默认开、HDR 保留默认关）。
+ * `general.bloom` / `general.hdr` 的生效值（setter `FUN_14019b4e0` / `FUN_14019b6f0`）：bool 原样；对象先按自己的 `value`
+ * 设位（是 bool 才用），带 `user` 时属性当前值（绑定解析结果）只在它是 bool 时才改位；属性值是数字（−0.22、0、0.5、1）、
+ * 字符串（"1"）一律不改，退回对象的 `value`，加载与运行中相同。两处都不是 bool 时 WPE 不改位，返回 undefined（泛光保留默认开、
+ * HDR 保留默认关）。带 `condition` 的绑定解析结果恒为 bool，不受影响。
+ * 出处：WPE JSON 读取函数 `0x14019b4e0` 一族（JSON 布尔直接设位，对象先读 `value` 的布尔）；实测工程 `ignore/p5/pb/` E1–E6
+ * （2026-11-14，P5a 补修）。
  * 带 `bindings` 时登记成 `target`：`bloom` 运行时就地改，`hdr` 决定目标格式，改值走整场重编译。
  * `GENERAL_FIELDS` 里的 bool 字段同样走这里（`compileScene`）。
  */
@@ -150,13 +154,14 @@ export function flagValue(
 ): boolean | undefined {
   if (typeof value === "boolean") return value;
   if (!value || typeof value !== "object") return undefined;
-  const resolved =
-    "user" in value
-      ? bindings
-        ? bindings.bind(value as SceneValue, properties, target)
-        : resolveValue(value as SceneValue, properties)
-      : (value as { value?: unknown }).value;
-  return typeof resolved === "boolean" ? resolved : undefined;
+  const own = (value as { value?: unknown }).value;
+  if (!("user" in value)) return typeof own === "boolean" ? own : undefined;
+  // bind 照旧调用（它登记绑定）；属性值非 bool 时退回对象自己的 value
+  const resolved = bindings
+    ? bindings.bind(value as SceneValue, properties, target)
+    : resolveValue(value as SceneValue, properties);
+  if (typeof resolved === "boolean") return resolved;
+  return typeof own === "boolean" ? own : undefined;
 }
 
 /** 场景 `general` 里的泛光参数（已取生效值、缺键补默认值），原值，不做 HDR 换算（换算在 `render/bloom.ts`）。 */
